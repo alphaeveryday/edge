@@ -1,0 +1,374 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Electron">
+  <diagram name="Analysis v2 storage">
+    <mxGraphModel page="0" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading-title" value="Analysis v2 - outputs and audit" vertex="1" parent="1" style="text;html=0;fontSize=25;fontStyle=1;align=left;">
+          <mxGeometry as="geometry" x="70" y="25" width="1000" height="40" />
+        </mxCell>
+        <mxCell id="heading-subtitle" value="Solid lines: foreign keys. Evidence ID arrays are validated by storage code." vertex="1" parent="1" style="text;html=0;fontSize=13;align=left;">
+          <mxGeometry as="geometry" x="70" y="75" width="1200" height="30" />
+        </mxCell>
+        <mxCell id="movement_analyses" value="movement_analyses" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#dbeafe;fontSize=15;">
+          <mxGeometry as="geometry" x="70" y="140" width="350" height="300" />
+        </mxCell>
+        <mxCell id="movement_analyses-analysis_id" value="analysis_id : text" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-etf_code" value="etf_code : text" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-analysis_at" value="analysis_at : timestamptz" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-previous_analysis_id" value="previous_analysis_id : text" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-status" value="status : text" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-published_at" value="published_at : timestamptz" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-error_message" value="error_message : text" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="170" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-trading_date" value="trading_date : date" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="191" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-summary" value="summary : text" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="212" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_analyses-selected_item_ids" value="selected_item_ids : text[]" vertex="1" parent="movement_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="233" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items" value="movement_items" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#dbeafe;fontSize=15;">
+          <mxGeometry as="geometry" x="70" y="590" width="350" height="300" />
+        </mxCell>
+        <mxCell id="movement_items-item_id" value="item_id : text" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-analysis_id" value="analysis_id : text" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-type" value="type : text" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-title_keyword" value="title_keyword : text" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-sentence" value="sentence : text" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-sentiment" value="sentiment : text" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-source_as_of" value="source_as_of : timestamptz" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="170" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-tool_run_ids" value="tool_run_ids : text[]" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="191" width="330" height="21" />
+        </mxCell>
+        <mxCell id="movement_items-created_at" value="created_at : timestamptz" vertex="1" parent="movement_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="212" width="330" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses" value="outlook_analyses" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
+          <mxGeometry as="geometry" x="1000" y="140" width="410" height="400" />
+        </mxCell>
+        <mxCell id="outlook_analyses-analysis_id" value="analysis_id : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-etf_code" value="etf_code : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-analysis_at" value="analysis_at : timestamptz" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-previous_analysis_id" value="previous_analysis_id : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-status" value="status : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-published_at" value="published_at : timestamptz" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-error_message" value="error_message : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="170" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-outlook_sticker" value="outlook_sticker : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="191" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-summary_title" value="summary_title : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="212" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-summary" value="summary : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="233" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-detail_title" value="detail_title : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="254" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-detail_mode" value="detail_mode : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="275" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-conclusion_title" value="conclusion_title : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="296" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-conclusion_sentence" value="conclusion_sentence : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="317" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_analyses-change_condition" value="change_condition : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="338" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items" value="outlook_items" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
+          <mxGeometry as="geometry" x="1000" y="680" width="410" height="330" />
+        </mxCell>
+        <mxCell id="outlook_items-row_id" value="row_id : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-analysis_id" value="analysis_id : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-item_id" value="item_id : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-section" value="section : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-change_type" value="change_type : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-position" value="position : int" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-title_keyword" value="title_keyword : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="170" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-bullets" value="bullets : jsonb" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="191" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-sentence" value="sentence : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="212" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-source_as_of" value="source_as_of : timestamptz" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="233" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-tool_run_ids" value="tool_run_ids : text[]" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="254" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factors" value="outlook_factors" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
+          <mxGeometry as="geometry" x="1530" y="140" width="370" height="200" />
+        </mxCell>
+        <mxCell id="outlook_factors-row_id" value="row_id : text" vertex="1" parent="outlook_factors" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factors-analysis_id" value="analysis_id : text" vertex="1" parent="outlook_factors" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factors-type" value="type : text" vertex="1" parent="outlook_factors" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factors-sticker" value="sticker : text" vertex="1" parent="outlook_factors" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factors-sentence" value="sentence : text" vertex="1" parent="outlook_factors" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords" value="outlook_conclusion_keywords" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
+          <mxGeometry as="geometry" x="1530" y="510" width="370" height="240" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords-row_id" value="row_id : text" vertex="1" parent="outlook_conclusion_keywords" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords-analysis_id" value="analysis_id : text" vertex="1" parent="outlook_conclusion_keywords" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords-kind" value="kind : text" vertex="1" parent="outlook_conclusion_keywords" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords-position" value="position : int" vertex="1" parent="outlook_conclusion_keywords" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords-label" value="label : text" vertex="1" parent="outlook_conclusion_keywords" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="350" height="21" />
+        </mxCell>
+        <mxCell id="outlook_conclusion_keywords-tool_run_ids" value="tool_run_ids : text[]" vertex="1" parent="outlook_conclusion_keywords" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="350" height="21" />
+        </mxCell>
+        <mxCell id="tool_definitions" value="tool_definitions" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#fef3c7;fontSize=15;">
+          <mxGeometry as="geometry" x="540" y="140" width="350" height="260" />
+        </mxCell>
+        <mxCell id="tool_definitions-tool_id" value="tool_id : text" vertex="1" parent="tool_definitions" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_definitions-function_name" value="function_name : text" vertex="1" parent="tool_definitions" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_definitions-version" value="version : text" vertex="1" parent="tool_definitions" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_definitions-formula_latex" value="formula_latex : text" vertex="1" parent="tool_definitions" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_definitions-description" value="description : text" vertex="1" parent="tool_definitions" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_definitions-source_names" value="source_names : text[]" vertex="1" parent="tool_definitions" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs" value="tool_runs" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#fef3c7;fontSize=15;">
+          <mxGeometry as="geometry" x="540" y="660" width="350" height="350" />
+        </mxCell>
+        <mxCell id="tool_runs-tool_run_id" value="tool_run_id : text" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-tool_id" value="tool_id : text" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-movement_analysis_id" value="movement_analysis_id : text" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-outlook_analysis_id" value="outlook_analysis_id : text" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-arguments" value="arguments : jsonb" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-context" value="context : jsonb" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-output" value="output : jsonb" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="170" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-status" value="status : text" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="191" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-error_message" value="error_message : text" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="212" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-started_at" value="started_at : timestamptz" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="233" width="330" height="21" />
+        </mxCell>
+        <mxCell id="tool_runs-finished_at" value="finished_at : timestamptz" vertex="1" parent="tool_runs" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="254" width="330" height="21" />
+        </mxCell>
+        <mxCell id="relation-0" source="movement_items" target="movement_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-0-child" value="0..N" vertex="1" parent="relation-0" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-0-parent" value="1" vertex="1" parent="relation-0" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-1" source="movement_analyses" target="movement_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="460" y="200" />
+              <mxPoint x="460" y="245" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-1-child" value="0..N" vertex="1" parent="relation-1" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-1-parent" value="0..1" vertex="1" parent="relation-1" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-2" source="outlook_items" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-2-child" value="0..N" vertex="1" parent="relation-2" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-2-parent" value="1" vertex="1" parent="relation-2" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-3" source="outlook_factors" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-3-child" value="0..N" vertex="1" parent="relation-3" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-3-parent" value="1" vertex="1" parent="relation-3" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-4" source="outlook_conclusion_keywords" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1460" y="570" />
+              <mxPoint x="1460" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-4-child" value="0..N" vertex="1" parent="relation-4" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-4-parent" value="1" vertex="1" parent="relation-4" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-5" source="outlook_analyses" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="960" y="200" />
+              <mxPoint x="960" y="245" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-5-child" value="0..N" vertex="1" parent="relation-5" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-5-parent" value="0..1" vertex="1" parent="relation-5" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-6" source="tool_runs" target="tool_definitions" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-6-child" value="0..N" vertex="1" parent="relation-6" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-6-parent" value="1" vertex="1" parent="relation-6" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-7" source="tool_runs" target="movement_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="490" y="740" />
+              <mxPoint x="490" y="370" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-7-child" value="0..N" vertex="1" parent="relation-7" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-7-parent" value="0..1" vertex="1" parent="relation-7" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="relation-8" source="tool_runs" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="930" y="740" />
+              <mxPoint x="930" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-8-child" value="0..N" vertex="1" parent="relation-8" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-8-parent" value="0..1" vertex="1" parent="relation-8" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
