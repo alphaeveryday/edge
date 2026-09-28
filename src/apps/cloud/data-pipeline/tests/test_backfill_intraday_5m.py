@@ -916,28 +916,84 @@ def test_fmp_closing_auction_bar_survives_a_merge_rerun():
     assert {r["ts"].strftime("%H:%M") for r in rows if r["ticker"] == "069500"} == {"15:25"}
 
 
-def test_fmp_source_with_a_shifted_availability_axis_is_refused(monkeypatch):
-    """원천의 available_at 이 ts+5분이 아니면 옮기지 않고 죽는다(복사 시각·다른 축 유입 차단)."""
+def _source(monkeypatch, rows: list[dict]):
+    """스테이징 원천 parquet 을 흉내낸다. 행은 (ts, trade_date, available_at) 만 바꾼다."""
     import io
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    tbl = pa.table({"symbol": ["069500.KS"], "ticker": ["069500"],
-                    "ts": ["2024-03-04 09:00:00"], "trade_date": ["2024-03-04"],
-                    "open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0],
-                    "volume": [1], "source_vendor": ["fmp_backfill"],
-                    "available_at": ["2026-08-05 13:19:00"]})           # 업로드 시각
+    base = {"symbol": "069500.KS", "ticker": "069500", "open": 1.0, "high": 1.0,
+            "low": 1.0, "close": 1.0, "volume": 1, "source_vendor": "fmp_backfill"}
     buf = io.BytesIO()
-    pq.write_table(tbl, buf)
+    pq.write_table(pa.Table.from_pylist([base | r for r in rows]), buf)
 
     class _S3:
         def get_object(self, Bucket, Key):  # noqa: N803
             return {"Body": io.BytesIO(buf.getvalue()), "ETag": '"e"'}
 
     monkeypatch.setattr(backfill.boto3, "client", lambda _n: _S3())
-    with pytest.raises(ValueError, match="available_at"):
+
+
+def _src_row(ts: str, day: str | None = None, avail: str | None = None) -> dict:
+    t = datetime.fromisoformat(ts)
+    return {"ts": ts, "trade_date": day or ts[:10],
+            "available_at": avail or str(t + timedelta(minutes=5))}
+
+
+@pytest.mark.parametrize("rows, reason", [
+    ([_src_row("2024-03-04 09:00:00", avail="2026-08-05 13:19:00")], "available_at"),  # 업로드 시각
+    ([_src_row("2024-03-04 09:00:00", day="2024-03-05")], "trade_date"),               # 파티션이 갈린다
+    ([_src_row("2024-03-04 08:00:00")], "정규장 밖"),                                    # 장전 봉 = 가짜 시가
+    ([_src_row("2024-03-04 09:00:00"), _src_row("2024-03-04 09:00:00")], "중복"),       # 두 번 센다
+])
+def test_fmp_source_that_breaks_the_canonical_contract_is_refused(monkeypatch, rows, reason):
+    """원천이 정본 계약을 어기면 한 행도 옮기지 않고 죽는다.
+
+    WHY: 거르면 회계(착지+건너뜀=원천)가 맞은 채 행이 사라지고, 실으면 정본이 오염된다.
+    넷 다 회계 검사를 통과하는 결함이다 — 검사는 수를 세지 값의 계약을 안 본다.
+    """
+    _source(monkeypatch, rows)
+    with pytest.raises(ValueError, match=reason):
         backfill._load_local_source("s3://b/k.parquet")
+
+
+def test_fmp_source_keeps_the_closing_auction_bar(monkeypatch):
+    """15:30 종가 봉은 정규장 안이다 — 위 거부가 그 봉까지 잘라 내면 안 된다."""
+    _source(monkeypatch, [_src_row("2024-03-04 15:30:00")])
+    src = backfill._load_local_source("s3://b/k.parquet")
+    assert [r["ts"].strftime("%H:%M") for r in src["by_day"]["2024-03-04"]] == ["15:30"]
+
+
+def test_fmp_failure_mid_run_still_leaves_the_ledger(monkeypatch, tmp_path):
+    """이틀째 쓰기가 죽어도 첫날 착지분과 error 상태가 대장에 남고, 예외는 그대로 올라간다.
+
+    WHY: 대장이 루프 정상 종료 뒤에만 쓰이면, 재실행은 첫날을 '이미 가진 칸'으로 세므로
+    그 런이 무엇을 옮겼는지 되살릴 길이 없다.
+    """
+    days = ["2024-03-04", "2024-03-05"]
+    monkeypatch.setattr(backfill, "_s3", lambda: None)
+    monkeypatch.setattr(backfill, "_trading_days", lambda _s3, _b: days)
+    monkeypatch.setattr(backfill, "_read_day", lambda _s3, _b, _d, name="part-0.parquet": None)
+    monkeypatch.setattr(backfill, "_configured_universe", lambda: set())
+    monkeypatch.setattr(backfill, "_load_local_source",
+                        lambda uri: {"uri": uri, "etag": "e", "sha256": "h", "rows": 2,
+                                     "by_day": {d: [_fmp_row("069500", d)] for d in days}})
+
+    def _write(_s3, _b, d, rows, _dry, _name):
+        if d == days[1]:
+            raise OSError("PUT 실패")
+        return len(rows)
+    monkeypatch.setattr(backfill, "_write_day", _write)
+    report = tmp_path / "r.json"
+    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--dry-run",
+                                     "--source-parquet", "s3://b/k", "--report", str(report)])
+    with pytest.raises(OSError):
+        backfill.main()
+    import json
+    got = json.loads(report.read_text())
+    assert got["status"] == "error" and "PUT 실패" in got["error"]
+    assert [x["trade_date"] for x in got["landed"]] == [days[0]]
 
 
 def test_fmp_main_fails_when_source_rows_are_not_all_accounted_for(monkeypatch, tmp_path):

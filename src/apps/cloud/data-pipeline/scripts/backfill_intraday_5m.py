@@ -533,9 +533,11 @@ def _load_local_source(uri: str) -> dict:
     """스테이징 parquet 하나 → {day: [row]} + 원천 식별(키·ETag·sha256·행 수).
 
     원천 행을 **변형하지 않는다** — 벤더 봉 시각(`ts`=구간 시작)과 원천의 `available_at`
-    을 그대로 옮긴다. 복사 시각으로 바꾸지 않는 것이 이 이관의 계약이다. 대신 그 값이
-    롤업 계약(`ts + 5분`)과 다르면 **옮기지 않고 죽는다** — 섞인 축을 정본에 싣는 것보다
-    이관이 멈추는 편이 낫다.
+    을 그대로 옮긴다. 복사 시각으로 바꾸지 않는 것이 이 이관의 계약이다. 대신 원천이
+    정본 계약을 어기면 **한 행도 옮기지 않고 죽는다** — 거르면 회계가 맞은 채 행이
+    사라지고, 싣으면 정본이 오염된다. 넷을 본다: `available_at = ts + 5분` · `trade_date`
+    = `ts` 의 날짜(파티션을 가른다) · 정규장 봉(09:00~15:30, 장전 봉은 `interval._gap`
+    의 시가가 된다) · (ticker, ts) 유일(소비자 글롭은 파티션 내 중복을 안 걷는다).
     """
     import hashlib
 
@@ -543,12 +545,21 @@ def _load_local_source(uri: str) -> dict:
     obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
     body = obj["Body"].read()
     by_day: dict[str, list[dict]] = defaultdict(list)
+    seen: set[tuple[str, datetime]] = set()
     for r in pq.read_table(io.BytesIO(body)).to_pylist():
         ts = datetime.fromisoformat(str(r["ts"]))
         avail = datetime.fromisoformat(str(r["available_at"]))
+        day = ts.date().isoformat()
         if avail != ts + timedelta(minutes=BUCKET_MINUTES):
             raise ValueError(f"available_at 이 ts+5분이 아니다: {r['ticker']} {ts} {avail}")
-        by_day[str(r["trade_date"])[:10]].append({
+        if str(r["trade_date"])[:10] != day:
+            raise ValueError(f"trade_date 가 ts 의 날짜가 아니다: {r['ticker']} {ts} {r['trade_date']}")
+        if not _in_session(ts.time(), close_inclusive=True):
+            raise ValueError(f"정규장 밖 봉: {r['ticker']} {ts}")
+        if (r["ticker"], ts) in seen:
+            raise ValueError(f"(ticker, ts) 중복: {r['ticker']} {ts}")
+        seen.add((r["ticker"], ts))
+        by_day[day].append({
             "ticker": r["ticker"], "source_symbol": r["symbol"], "ts": ts,
             "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"],
             "volume": r["volume"], "source_vendor": VENDORS["fmp"]["vendor"],
@@ -707,10 +718,28 @@ def main() -> int:
     # 섞여 들어간다 — 중간에 전역 실패가 올라와도 이미 착지한 날은 남고, 다음 실행이
     # `covered` 로 그날들을 걸러 이어받는다. 모아서 쓰던 판은 ~46분짜리 런이 마지막에
     # 죽으면 전부 잃었다.
-    total = days_written = 0
     collect = {"kis": _collect_kis, "toss": _collect_toss, "fmp": _collect_fmp_local}[a.vendor]
     landed: list[dict] = []
-    for d, rows in collect(days, targets, covered, a):
+    try:
+        total, days_written = _consume(s3, a, spec, collect(days, targets, covered, a), landed)
+    except Exception as e:
+        # 이미 착지한 날이 있을 수 있다 — 대장을 남기고 올린다. 안 남기면 재실행이 그날을
+        # `skipped_covered` 로 세어 이 런의 원천 해시·착지 내역을 되살릴 길이 없다.
+        if a.vendor == "fmp":
+            _fmp_report(a, targets, landed, sum(x["rows_added"] for x in landed), error=e)
+        raise
+    log.info("완료 — %d일 · %d행 추가%s", days_written, total,
+             " (dry-run)" if a.dry_run else "")
+    if a.vendor == "fmp":
+        return _fmp_report(a, targets, landed, total)
+    return 0
+
+
+def _consume(s3, a, spec, stream, landed: list[dict]) -> tuple[int, int]:
+    """수집기가 내는 (날짜, 행)을 하루씩 병합해 쓴다. 착지한 날은 `landed` 에 즉시 쌓는다."""
+    backfill_name = spec["file"]
+    total = days_written = 0
+    for d, rows in stream:
         existing = _tickers_present(_read_day(s3, a.bucket, d))
         prior = _read_day(s3, a.bucket, d, backfill_name)
         payload = _day_payload(prior.to_pylist() if prior is not None else [],
@@ -725,14 +754,10 @@ def main() -> int:
                        "rows_added": fresh, "file_rows": n})
         log.info("%s ← %d행 (파일 총 %d행)%s", d, fresh, n,
                  " (dry-run)" if a.dry_run else "")
-    log.info("완료 — %d일 · %d행 추가%s", days_written, total,
-             " (dry-run)" if a.dry_run else "")
-    if a.vendor == "fmp":
-        return _fmp_report(a, targets, landed, total)
-    return 0
+    return total, days_written
 
 
-def _fmp_report(a, targets, landed, total) -> int:
+def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> int:
     """이관 대장을 남기고 **원천 행이 전부 설명되는지** 판정한다 — 안 되면 exit 1.
 
     원천 행 = 착지 + 건너뜀(달력 밖 · 이미 가진 칸 · 대상 밖). 착지 수는 수집기가 낸 행과
@@ -741,11 +766,13 @@ def _fmp_report(a, targets, landed, total) -> int:
     """
     st, src = dict(a.fmp_stats), a.fmp_source
     accounted = st.get("yielded", 0) + sum(v for k, v in st.items() if k.startswith("skipped_"))
-    ok = accounted == src["rows"] and st.get("yielded", 0) == total
+    ok = error is None and accounted == src["rows"] and st.get("yielded", 0) == total
+    status = (("dry_run_ok" if a.dry_run else "success") if ok
+              else "error" if error is not None else "unaccounted_rows")
     report = {
         "job_name": "backfill_intraday_5m --vendor fmp", "ticket": "ALPHA-1104",
         "dry_run": a.dry_run, "bucket": a.bucket,
-        "status": ("dry_run_ok" if a.dry_run else "success") if ok else "unaccounted_rows",
+        "status": status, "error": f"{type(error).__name__}: {error}"[:300] if error else None,
         "source": {k: src[k] for k in ("uri", "etag", "sha256", "rows")},
         "targets": targets, "rows_added": total, "stats": st, "accounted": accounted,
         "landed": landed,

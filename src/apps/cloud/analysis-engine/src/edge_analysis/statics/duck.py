@@ -179,10 +179,12 @@ S3_SETS: tuple[tuple[str, str, str], ...] = (
     # 충돌로 뷰 전체가 조회 불가였다 - 아무도 안 써서 안 걸렸다.
     # 두 뷰는 **표준 raw 의 이관 스냅샷**을 읽는다(ALPHA-1104). 옛 애드혹 프리픽스
     # (`raw/kr_intraday/fmp_5min/`·`raw/fmp_5min_us/`)와 바이트가 같다(ETag·MD5 전건 대조,
-    # 행 수 47,117,315 · 500,047,949 동일). US 는 run_id 까지 짚는다 - 같은 시장 아래
-    # gap 이관분(`gap_*.parquet`)이 따로 있어 글롭을 넓히면 옛 뷰에 없던 행이 딸려 온다.
+    # 행 수 47,117,315 · 500,047,949 동일). **둘 다 run 까지 짚는다** - 같은 시장 아래
+    # gap 이관분(`gap_*.parquet`)이나 같은 원천의 다른 이관 run 이 생기면, 글롭을 넓힌
+    # 뷰는 옛 뷰에 없던 행이나 같은 행 두 벌을 읽는다.
     # 운영 조회 정본은 이 raw 가 아니라 `bars_5m`·`s3_intraday_5m` 이다.
-    ("s3_kr_5min",          "glob", "raw/source=fmp/dataset=price_5min/market=KR/*/*/*.KS.parquet"),
+    ("s3_kr_5min",          "glob", "raw/source=fmp/dataset=price_5min/market=KR/"
+                                    "ingest_date=2026-07-29/run_id=run_8645481c2c1d4451af227c1633f1030d/*.KS.parquet"),
     ("s3_us_5min",          "glob", "raw/source=fmp/dataset=price_5min/market=US/"
                                     "ingest_date=2026-07-25/run_id=run_39e89ffcdce8500e9d8507b051751c4e/*.parquet"),
     ("s3_statement_line",   "ice",  "draft/canonical/financials/statement_line"),
