@@ -38,3 +38,14 @@
 - 연속은 최신 확정일부터 역순. 0·반대 부호에서 중단. 조회 구간 전부 같은 부호이면 `exact=false`와 `streak_days` 하한을 반환. 결측은 중단 신호가 아님.
 - 가중 금액은 Decimal로 계산하고 결과 표시 시에만 JSON 숫자로 변환. 방향 판정 전 반올림하지 않음.
 - 두 도구 모두 최종 근거 가능. ETF 자체 순매수라고 표현하지 않음.
+
+## 차트
+
+- `calculate_chart_indicators()`: ETF RSI14·반전 Williams%R14와 관측시각. 최종 근거 가능.
+- `evaluate_indicator_transition(indicator)`: momentum/bottom. 최근 가격 스냅샷 최대5개에서 계산한 지수의 상하단 진입·이탈·유지. 최종 근거 가능.
+- 원자료: `prices`의 instrument_id,date,high,low,close,volume,turnover,available_at와 `price_snapshots`의 instrument_id,price,high,low,observed_at,available_at. 단일 `price_snapshot`도 허용.
+- 초기 채택: RSI14 Wilder. 15확정 종가의 14변화로 상승·하락 평균 시드, 이후 RMA. 장중값은 전일 확정 RMA에서 오늘 변화만 반영. 평탄 분모는 null.
+- 바닥 $100(H_{14}-P)/(H_{14}-L_{14})$. 오늘 고저+이전13일. 0분모 null. 반등확률 아님.
+- 상단 ≥80, 하단 ≤20. 유지에는 서로 다른 최근5개 관측 전부 필요.
+- 5요인 카드: 현재가 반영 MA20 이격·MA60 방향, 확정20일 신고가(40일 필요), 364일 최고종가 대비, 전일 거래대금/이전20일 평균, Wilder ATR14/전일종가.
+- 거래대금은 실제 필드. 현재가×거래량 대체 없음. 52주 데이터 시작일이 부족하면 해당 카드 제외. 모든 필수 거래일 누락은 계산 실패.
