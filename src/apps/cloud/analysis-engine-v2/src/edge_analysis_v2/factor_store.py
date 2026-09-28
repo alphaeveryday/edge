@@ -81,6 +81,29 @@ def prepare_metrics(metrics: dict) -> list[dict]:
     return sorted(rows, key=lambda r: (list(METRICS).index(r['factor_type']), r['position']))
 
 
+def _matches_calculation(row, run):
+    """Require the final factor calculation to contain this exact card."""
+    if (run['function_name'] != 'get_factor_metrics'
+            or run['arguments'].get('type') != row['factor_type']):
+        return False
+    output = run['output']
+    if not isinstance(output, dict) or output.get('tool_run_id') != run['tool_run_id']:
+        return False
+    result = output.get('result')
+    if not isinstance(result, dict) or result.get('type') != row['factor_type']:
+        return False
+    cards = result.get('metrics')
+    if not isinstance(cards, list):
+        return False
+    try:
+        calculated = prepare_metrics({row['factor_type']: [
+            dict(card, tool_run_ids=[run['tool_run_id']]) for card in cards]})
+    except (ValueError, TypeError, KeyError):
+        return False
+    fields = ('metric_key', 'numeric_value', 'text_value', 'observed_date', 'observed_at', 'subject')
+    return any(all(card[field] == row[field] for field in fields) for card in calculated)
+
+
 def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict) -> None:
     """Replace details atomically inside the caller's publication transaction.
 
@@ -112,7 +135,7 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
             if ((row['observed_at'] and row['observed_at'] > parent['analysis_at']) or
                     (row['observed_date'] and row['observed_date'] > parent['analysis_at'].astimezone(ZoneInfo('Asia/Seoul')).date())):
                 raise ValueError('Future observation')
-        cur.execute('''SELECT r.tool_run_id, d.function_name, r.arguments
+        cur.execute('''SELECT r.tool_run_id, d.function_name, r.arguments, r.output
             FROM tool_runs r JOIN tool_definitions d USING (tool_id)
             WHERE r.tool_run_id=ANY(%s) AND r.outlook_analysis_id=%s AND r.status='completed' ''',
                     (list(references), analysis_id))
@@ -122,6 +145,9 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
         for run in evidence.values():
             if run['function_name'] == 'get_issue_evidence' and run['arguments'].get('include_body') is not False:
                 raise ValueError('Final news evidence must exclude body')
+        for row in rows:
+            if not any(_matches_calculation(row, evidence[identity]) for identity in row['tool_run_ids']):
+                raise ValueError('Metric must match its final factor calculation')
         cur.execute('DELETE FROM outlook_factor_metrics WHERE analysis_id=%s', (analysis_id,))
         cur.execute('DELETE FROM outlook_issue_items WHERE analysis_id=%s', (analysis_id,))
         for row in rows:

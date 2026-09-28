@@ -7,6 +7,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
+from psycopg.types.json import Jsonb
 
 from edge_analysis_v2.factor_store import METRICS, read_factor_details, save_factor_details
 
@@ -26,7 +27,13 @@ def factor_db():
             connection.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'get_issue_evidence',%s,'Test')", (key,key))
             connection.execute('''INSERT INTO tool_runs(tool_run_id,tool_id,outlook_analysis_id,arguments,output,status,finished_at)
                 VALUES (%s,%s,%s,'{"include_body":false}','{}','completed',now())''', (key,key,key))
-            metrics = {'차트': [dict(key='ma20_distance_pct',value=8.2,observed_at='2026-09-18',tool_run_ids=[key])]}
+            metric = dict(key='ma20_distance_pct',value=8.2,observed_at='2026-09-18')
+            metric_run = key + '-metrics'
+            connection.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'get_factor_metrics',%s,'Test')", (metric_run,key))
+            connection.execute('''INSERT INTO tool_runs(tool_run_id,tool_id,outlook_analysis_id,arguments,output,status,finished_at)
+                VALUES (%s,%s,%s,%s,%s,'completed',now())''', (metric_run,metric_run,key,
+                    Jsonb({'type':'차트'}), Jsonb({'tool_run_id':metric_run,'result':{'type':'차트','metrics':[metric]}})))
+            metrics = {'차트': [dict(metric,tool_run_ids=[metric_run])]}
             issue = dict(headline='계약 물량 확보',items=[dict(title_keyword='계약',sentence='설비 물량 확보',sentiment='positive',tool_run_ids=[key])])
             yield connection, key, metrics, issue
             raise psycopg.Rollback()
@@ -71,6 +78,28 @@ def test_publication_rollback_includes_factor_details(factor_db):
             raise RuntimeError('Publication failed')
     assert conn.execute('SELECT count(*) FROM outlook_factor_metrics WHERE analysis_id=%s',(key,)).fetchone()[0] == 0
     assert conn.execute('SELECT issue_headline FROM outlook_analyses WHERE analysis_id=%s',(key,)).fetchone()[0] is None
+
+
+@pytest.mark.parametrize('fault', ['value','observation','subject','key','news_instead_of_calculation','factor'])
+def test_metric_must_match_its_final_calculation_result(factor_db,fault):
+    conn,key,metrics,issue = factor_db
+    metric = metrics['차트'][0]
+    if fault == 'value':
+        metric['value'] = 99
+    elif fault == 'observation':
+        metric['observed_at'] = '2026-09-17'
+    elif fault == 'subject':
+        metric['subject'] = 'different instrument'
+    elif fault == 'key':
+        metric['key'] = 'atr14_pct'
+    elif fault == 'news_instead_of_calculation':
+        metric['tool_run_ids'] = [key]
+    else:
+        conn.execute('UPDATE tool_runs SET arguments=%s WHERE tool_run_id=%s',
+                     (Jsonb({'type':'매크로'}),key+'-metrics'))
+    with pytest.raises(ValueError,match='calculation'):
+        save_factor_details(conn,key,metrics,issue)
+    assert conn.execute('SELECT count(*) FROM outlook_factor_metrics WHERE analysis_id=%s',(key,)).fetchone()[0] == 0
 
 
 @pytest.mark.parametrize('values', [
