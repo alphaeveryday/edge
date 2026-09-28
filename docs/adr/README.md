@@ -62,3 +62,4 @@
 | [0052](0052-sync-two-module-standard-reaffirmed.md) | Sync 온프렘 토폴로지 재검토 — 클라우드 사상에서도 2모듈 표준 유지, 근거 재정초 | 승인됨 |
 | [0053](0053-widget-direct-serving-no-personalization.md) | 고객 컨텍스트 제거 — MTS 위젯 직접 호출, Exposure Log 은퇴 | 승인됨 (응답 형상·204 수렴 문면 대체 → [0054](0054-publication-explanations-uniform-response.md)) |
 | [0054](0054-publication-explanations-uniform-response.md) | publication-api 설명 조회 응답을 공통 응답 포맷으로 통일 — 설명 없음 204 폐지 | 승인됨 |
+| [0057](0057-lake-dataset-canonical-consumption-and-retirement.md) | 레이크 데이터셋 정본과 운영 소비 경로, 승격·폐기 절차 | 제안됨 (적용 보류) |
