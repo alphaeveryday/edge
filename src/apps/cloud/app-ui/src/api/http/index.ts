@@ -1,7 +1,7 @@
 import type { ApiClient } from '../client';
 import { HINTS } from '../mock/analysis';
 import { ApiError } from '../error';
-import type { ChartData, DailyAnalysis, EtfDetailData, EtfSummary, FactorPage, HomeBrief, IssueDetail, IssueRow, MetricPage, MoveInfo, Notification, PollChoice, RankRow, Story, ThemeSheet, WatchGroup } from '../types';
+import type { ChartData, DailyAnalysis, EtfDetailData, EtfSummary, FactorPage, HomeBrief, IssueDetail, IssueRow, MetricPage, MoveInfo, Notification, PollChoice, RankRow, WatchGroup } from '../types';
 import { request } from './fetch';
 import * as m from './map';
 import { tokens } from './storage';
@@ -43,10 +43,6 @@ export const httpClient: ApiClient = {
   },
   theme: {
     list: async () => (await request<m.WireTheme[]>('GET', '/themes', { auth: false })).map(m.theme),
-    sheet: async (theme) => {
-      const s = await request<Omit<ThemeSheet, 'rows'> & { rows: { etf: m.WireEtfSummary; tag?: string }[] }>('GET', `/themes/${encodeURIComponent(theme)}/sheet`);
-      return { ...s, rows: s.rows.map((r) => ({ ...r, etf: m.etf(r.etf) })) };
-    },
     // 앱 파라미터명 sort 는 계약의 방향 필터 dir
     feed: async (sort) => (await request<m.WireThemeFeedItem[]>('GET', '/themes/feed', { query: { dir: sort || 'all' }, auth: false })).map(m.themeFeedItem),
     detail: async (key) => m.themeDetail(await request<m.WireThemeDetail>('GET', `/themes/${encodeURIComponent(key)}`, { auth: false })),
@@ -128,9 +124,6 @@ export const httpClient: ApiClient = {
     logout: async () => {
       try { await request<void>('POST', '/auth/logout'); } finally { await tokens.clear(); }
     },
-  },
-  story: {
-    queue: async () => (await request<(Omit<Story, 'etf'> & { etf: m.WireEtfSummary })[]>('GET', '/stories')).map((s) => ({ ...s, etf: m.etf(s.etf) })),
   },
   notification: {
     list: async (kind) => (await request<m.WirePage<Notification>>('GET', '/notifications', { query: { kind: kind === 'all' ? undefined : kind } })).items.map((n) => ({ ...n, time: m.ago(n.time) })),

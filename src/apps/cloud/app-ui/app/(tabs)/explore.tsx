@@ -1,11 +1,14 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { isApiError } from '@/api';
 import { TOP_BAR_H, TopBar } from '@/components/TopBar';
 import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
+import { DailySheet } from '@/features/analysis/DailySheet';
+import { useDaily } from '@/features/analysis/queries';
 import { useRank } from '@/features/explore/queries';
-import { ThemeSheet } from '@/features/explore/ThemeSheet';
+import { useToast } from '@/store/toast';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
@@ -13,9 +16,19 @@ import { fam } from '@/theme/typography';
 export default function Explore() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
+  const toast = useToast((s) => s.show);
   const q = useRank();
-  const data = q.data;
-  const [theme, setTheme] = useState<string | null>(null);
+  const rows = q.data ?? [];
+  // 행 클릭 → 분석 상세 시트. 다음 ETF 는 순위 순환
+  const [sel, setSel] = useState<number | null>(null);
+  const cur = sel === null ? undefined : rows[sel];
+  const daily = useDaily(cur?.etf.code ?? '', undefined, !!cur);
+  useEffect(() => {
+    if (!daily.error) return;
+    toast(isApiError(daily.error, 'NOT_READY') ? '아직 AI 분석이 준비되지 않았어요' : '불러오지 못했어요');
+    setSel(null);
+  }, [daily.error, toast]);
+  const nextIdx = sel === null || rows.length < 2 ? null : (sel + 1) % rows.length;
   return (
     <View style={styles.root}>
       <TopBar />
@@ -27,16 +40,14 @@ export default function Explore() {
         <Text style={styles.lead}>재료가 확인된 ETF부터 위에 있어요.</Text>
         {q.isPending && <Loading rows={5} />}
         <View style={{ paddingTop: 4, paddingHorizontal: PAGE_X }}>
-          {data?.map((r) => {
+          {rows.map((r, i) => {
             const top3 = r.rank <= 3;
             return (
-              <Pressable key={r.etf.code} onPress={() => router.push(`/etf/${r.etf.code}/brief`)} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>
+              <Pressable key={r.etf.code} onPress={() => setSel(i)} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>
                 <View style={styles.rowHead}>
                   <Text style={[styles.rank, top3 ? styles.rankTop : styles.rankPlain]}>{top3 ? `${r.rank}위` : String(r.rank)}</Text>
-                  <Pressable onPress={() => setTheme(r.etf.theme)} hitSlop={6} style={styles.themeBtn}>
-                    <SectorIcon theme={r.etf.theme} bg={r.etf.logoBg} size={20} />
-                    <Text numberOfLines={1} style={styles.name}>{r.etf.name}</Text>
-                  </Pressable>
+                  <SectorIcon theme={r.etf.theme} bg={r.etf.logoBg} size={20} />
+                  <Text numberOfLines={1} style={styles.name}>{r.etf.name}</Text>
                   <View style={{ flex: 1 }} />
                   <Sticker signal={r.etf.signal} size={24} radius={8} />
                 </View>
@@ -49,7 +60,17 @@ export default function Explore() {
           })}
         </View>
       </ScrollView>
-      <ThemeSheet theme={theme} onClose={() => setTheme(null)} />
+      {cur && (
+        <DailySheet
+          code={cur.etf.code}
+          daily={daily.data}
+          open={!!cur}
+          onClose={() => setSel(null)}
+          poll
+          next={nextIdx === null ? undefined : { code: rows[nextIdx].etf.code, name: rows[nextIdx].etf.name }}
+          onNext={nextIdx === null ? undefined : () => setSel(nextIdx)}
+        />
+      )}
     </View>
   );
 }
@@ -62,7 +83,6 @@ const styles = StyleSheet.create({
   rank: { fontFamily: fam.monoExtraBold, fontSize: 12, textAlign: 'center', overflow: 'hidden' },
   rankTop: { color: colors.white, backgroundColor: colors.text, borderRadius: 7, paddingVertical: 3, paddingHorizontal: 7 },
   rankPlain: { color: colors.textFaint, width: 20 },
-  themeBtn: { flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1 },
   name: { fontFamily: fam.bold, fontSize: 12, color: colors.textFaint, flexShrink: 1 },
   title: { fontFamily: fam.extrabold, fontSize: 18, lineHeight: 25, letterSpacing: -0.5, color: colors.text },
   chips: { flexDirection: 'row', gap: 6 },

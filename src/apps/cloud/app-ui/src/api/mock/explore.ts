@@ -10,11 +10,6 @@ export const RANK_META: Record<string, { title: string; chips: string[]; ready: 
   MEDX: { title: '바이오 임상 3상 발표 연기, 셀트리온 3분기 실적 하향', chips: ['임상 지연', '실적 하향'], ready: false },
 };
 
-export const THEME_SHEET: Record<string, { why: string; tags: Record<string, string> }> = {
-  'AI·반도체': { why: '메모리 값 3개월째 상승, SK하이닉스 이익률 49%', tags: { AXAI: '재료 확인', GRID: '' } },
-  '방산': { why: '유럽 무기 주문 3분기 연속 증가, 한화에어로 5년치 일감', tags: { DEFN: '재료 확인' } },
-};
-
 export const THEME_FEED: ThemeFeedItem[] = [
   { key: 'AI·반도체', bg: '#3D34E0', count: 4, headline: 'AI 데이터센터 설비투자가 41%까지 올라왔어요', dir: 'help' },
   { key: '배당·인프라', bg: '#0E8A6C', count: 3, headline: '배당·인프라: 요금 인상은 승인됐고, 이제 금리 인하만 남았어요', dir: 'neutral' },

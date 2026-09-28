@@ -36,7 +36,6 @@ export const DAILY: Record<string, DailyAnalysis> = {
     neg: ['주가가 먼저 올랐어요', '양산 수율 공개 전'],
     pos: ['메모리 값 3개월 상승', '이익률 49%', '외국인 매수'],
     close: '수요는 확인됐지만 주가가 먼저 올라, 9월 12일 수율이 80%를 넘는지에 달렸어요.',
-    next: { code: 'DEFN', name: 'PLUS K방산' },
   },
   DEFN: {
     date: '2026-09-05', dates: DATES, headTitle: '오늘 발행',
@@ -62,7 +61,6 @@ export const DAILY: Record<string, DailyAnalysis> = {
     neg: ['주가가 먼저 올랐어요', '유럽 예산 표결 전'],
     pos: ['수주 5년 치', '이익률 11.4%', '기관 사흘 매수'],
     close: '수주와 이익률은 좋아졌지만, 주가가 먼저 올라 9월 10일 표결 결과에 달렸어요.',
-    next: { code: 'GRID', name: 'KODEX 미국AI전력핵심인프라' },
   },
 };
 

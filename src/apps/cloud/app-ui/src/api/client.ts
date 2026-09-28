@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, Story, IssueDetail, IssueRow, Me, Reply, RankRow, ThemeDetail, ThemeFeedItem, ThemeSheet, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, IssueDetail, IssueRow, Me, Reply, RankRow, ThemeDetail, ThemeFeedItem, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -22,7 +22,6 @@ export interface WatchApi {
 
 export interface ThemeApi {
   list(): Promise<Theme[]>;
-  sheet(theme: string): Promise<ThemeSheet>;
   feed(sort: string): Promise<ThemeFeedItem[]>;
   detail(key: string): Promise<ThemeDetail>;
 }
@@ -81,10 +80,6 @@ export interface AuthApi {
   logout(): Promise<void>;
 }
 
-export interface StoryApi {
-  queue(): Promise<Story[]>;
-}
-
 export interface NotificationApi {
   list(kind: NotiKind | 'all'): Promise<Notification[]>;
   unread(): Promise<number>;
@@ -104,6 +99,5 @@ export interface ApiClient {
   issue: IssueApi;
   user: UserApi;
   auth: AuthApi;
-  story: StoryApi;
   notification: NotificationApi;
 }

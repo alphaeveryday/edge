@@ -2,8 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api';
 import type { Axis } from '@/api';
 
-export const useDaily = (code: string, date?: string) =>
-  useQuery({ queryKey: ['analysis', 'daily', code, date ?? 'latest'], queryFn: () => api.analysis.daily(code, date) });
+export const useDaily = (code: string, date?: string, enabled = true) =>
+  useQuery({ queryKey: ['analysis', 'daily', code, date ?? 'latest'], queryFn: () => api.analysis.daily(code, date), enabled });
 export const useFactor = (code: string, axis: Axis) =>
   useQuery({ queryKey: ['analysis', 'factor', code, axis], queryFn: () => api.analysis.factor(code, axis) });
 export const useMetric = (code: string, axis: Axis) =>

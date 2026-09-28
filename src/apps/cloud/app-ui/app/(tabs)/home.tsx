@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -9,7 +10,8 @@ import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
 import { useHomeBrief } from '@/features/home/queries';
-import { useStories } from '@/features/story/queries';
+import { api, isApiError } from '@/api';
+import { useToast } from '@/store/toast';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useWatchGroup } from '@/store/watch';
@@ -21,8 +23,18 @@ export default function Home() {
   const [showAll, setShowAll] = useState(false);
   const brief = useHomeBrief(group);
   const posts = useHotPosts();
-  const { data: stories } = useStories();
-  const hasStory = (code: string) => (stories ?? []).some((s) => s.etf.code === code);
+  const qc = useQueryClient();
+  const toast = useToast((s) => s.show);
+  // 오늘 움직임 발행본이 있을 때만 상세로. 없으면 토스트
+  const open = async (code: string) => {
+    try {
+      await qc.fetchQuery({ queryKey: ['etf', 'move', code], queryFn: () => api.etf.move(code) });
+      router.push(`/etf/${code}/summary`);
+    } catch (e) {
+      if (isApiError(e, 'NOT_READY')) toast('아직 AI 분석이 준비되지 않았어요');
+      else toast('불러오지 못했어요');
+    }
+  };
   const b = brief.data;
   const rows = b ? (showAll ? b.etfs : b.etfs.slice(0, 3)) : [];
   const more = (b?.etfs.length ?? 0) > 3;
@@ -39,7 +51,7 @@ export default function Home() {
         {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
 
         <View style={styles.rows}>
-          {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={hasStory(e.code) ? () => router.push(`/story/${e.code}`) : undefined} />)}
+          {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={() => open(e.code)} />)}
           {more && (
             <View style={{ marginTop: 12 }}>
               <LinkRow variant="card" muted label={showAll ? '접기' : `${b!.etfs.length - 3}개 더 보기`} open={showAll} onPress={() => setShowAll((v) => !v)} />

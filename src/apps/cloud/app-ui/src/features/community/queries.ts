@@ -13,7 +13,7 @@ export const useEtfPosts = (code: string) => useQuery({ queryKey: ['community', 
 export const useFeed = (scope: 'all' | 'mine') => useQuery({ queryKey: ['community', 'feed', scope], queryFn: () => api.community.feed(scope) });
 export const usePost = (id: string) => useQuery({ queryKey: ['community', 'post', id], queryFn: () => api.community.get(id) });
 export const useReplies = (id: string) => useQuery({ queryKey: ['community', 'replies', id], queryFn: () => api.community.replies(id) });
-export const usePoll = (code: string) => useQuery({ queryKey: ['community', 'poll', code], queryFn: () => api.community.poll(code) });
+export const usePoll = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'poll', code], queryFn: () => api.community.poll(code), enabled });
 
 const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ['community', 'feed'] });

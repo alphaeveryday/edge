@@ -5,9 +5,9 @@ import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
-import { RANK_META, THEME_DETAILS, THEME_FEED, THEME_SHEET } from './explore';
+import { RANK_META, THEME_DETAILS, THEME_FEED } from './explore';
 import { genericIssue, ISSUE_DETAILS, ISSUE_ROWS } from './issues';
-import { NOTIFICATIONS, STORY_CARDS } from './story';
+import { NOTIFICATIONS } from './notifications';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -105,11 +105,6 @@ export const mockClient: ApiClient = {
   },
   theme: {
     list: () => delay(THEMES),
-    sheet: (theme) => {
-      const meta = THEME_SHEET[theme];
-      const rows = ETFS.filter((e) => e.theme === theme || (theme === 'AI·반도체' && e.code === 'GRID')).sort((a, b) => SIGNAL_ORDER.indexOf(b.signal) - SIGNAL_ORDER.indexOf(a.signal));
-      return delay({ theme, title: `${theme} ETF ${rows.length}종`, why: meta?.why ?? '', rows: rows.map((e) => ({ etf: e, tag: meta?.tags[e.code] || undefined })) });
-    },
     feed: (sort) => {
       const list = sort === 'up' ? THEME_FEED.filter((t) => t.dir === 'help') : sort === 'down' ? THEME_FEED.filter((t) => t.dir === 'burden') : THEME_FEED;
       return delay(list);
@@ -194,17 +189,6 @@ export const mockClient: ApiClient = {
     },
     requestPasswordReset: (email) => (ACCOUNTS[email] ? delay(undefined) : Promise.reject(new ApiError('NOT_FOUND', '가입되지 않은 이메일이에요'))),
     logout: () => delay(undefined, 20),
-  },
-  story: {
-    queue: () =>
-      delay(
-        (members.base ?? [])
-          .filter((c) => STORY_CARDS[c])
-          .map((c) => {
-            const e = etfOf(c);
-            return { etf: e, sub: STORY_CARDS[c].sub, prev: c === 'AXAI' ? ('up' as const) : undefined, cards: STORY_CARDS[c].cards };
-          }),
-      ),
   },
   notification: {
     list: (kind) => delay(notis.filter((n) => kind === 'all' || n.kind === kind).map((n) => ({ ...n }))),

@@ -4,7 +4,10 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { DailyAnalysis } from '@/api';
 import { Chevron, IconButton, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
+import { PollCard } from '@/features/community/PollCard';
+import { usePoll } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
+import { Loading } from '@/components/state';
 import { colors, signal as SIG } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { dirSignal } from './dir';
@@ -13,15 +16,21 @@ import { HintSheet } from './HintSheet';
 
 interface Props {
   code: string;
-  daily: DailyAnalysis | null;
+  daily: DailyAnalysis | undefined;
+  open: boolean;
   onClose: () => void;
+  // 탐색에서 열 때. 투표 카드와 다음 ETF 순환
+  poll?: boolean;
+  next?: { code: string; name: string };
+  onNext?: () => void;
 }
 
-// 분석 상세: 화면을 거의 다 덮는 시트
-export function DailySheet({ code, daily: d, onClose }: Props) {
+// 분석 상세. 화면을 거의 다 덮는 시트
+export function DailySheet({ code, daily: d, open, onClose, poll, next, onNext }: Props) {
   const router = useRouter();
   const { top, bottom } = useSafeAreaInsets();
   const { data: etf } = useEtf(code);
+  const { data: pollData } = usePoll(code, !!poll && open);
   const [axisOpen, setAxisOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const goMetric = (axis: string) => {
@@ -29,7 +38,7 @@ export function DailySheet({ code, daily: d, onClose }: Props) {
     router.push(`/metric/${code}/${axis}`);
   };
   return (
-    <Modal visible={!!d} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} />
         <View style={[styles.sheet, { marginTop: top + 46 }]}>
@@ -45,8 +54,10 @@ export function DailySheet({ code, daily: d, onClose }: Props) {
               <IconButton icon="close" size={32} color={colors.textFaint} onPress={onClose} />
             </View>
           </View>
+          {!d && <Loading rows={3} />}
           {d && (
             <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
+              {poll && pollData && <View style={{ marginBottom: 20 }}><PollCard poll={pollData} /></View>}
               <Text style={styles.title}>{d.title}</Text>
               {d.today.length > 0 && (
                 <View style={styles.today}>
@@ -114,9 +125,9 @@ export function DailySheet({ code, daily: d, onClose }: Props) {
               </Pressable>
             </ScrollView>
           )}
-          {d?.next && (
+          {next && onNext && (
             <View style={[styles.foot, { paddingBottom: Math.max(bottom, 12) + 8 }]}>
-              <LinkRow variant="accent" label={`다음 · ${d.next.name}`} onPress={() => { onClose(); router.replace(`/etf/${d.next!.code}/brief`); }} />
+              <LinkRow variant="accent" label={`다음 · ${next.name}`} onPress={onNext} />
             </View>
           )}
           <HintSheet hintKey={hint} onClose={() => setHint(null)} />

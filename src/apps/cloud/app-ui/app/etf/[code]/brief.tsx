@@ -72,7 +72,7 @@ export default function EtfBrief() {
           </View>
         </Pressable>
       </View>
-      <DailySheet code={code} daily={open ? d : null} onClose={() => setOpen(false)} />
+      <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} />
       <DisclaimerSheet />
     </ScrollView>
       ); }}
