@@ -781,20 +781,31 @@ def _fmp_report(a, targets, landed, total, error: Exception | None = None) -> in
         "landed": landed,
     }
     body = json.dumps(report, ensure_ascii=False, indent=1, default=str)
-    if a.report:
-        with open(a.report, "w", encoding="utf-8") as f:
-            f.write(body)
+    # 두 기록은 서로를 막지 않는다 — 로컬 사본이 실패해도 S3 대장은 남아야 하고, 반대도 같다.
+    # 어느 쪽이든 실패하면 exit 1(대장 없는 이관은 성공이 아니다).
+    recorded = True
     if not a.dry_run:
         from data_pipeline.lake.storage import collection_log_key
         now = datetime.now(timezone.utc)
         key = collection_log_key(source="fmp", dataset="intraday_5m",
                                  started_date=now.date().isoformat(),
                                  run_id=f"backfill-fmp-local-{now:%Y%m%dT%H%M%SZ}")
-        _s3().put_object(Bucket=a.bucket, Key=key, Body=body.encode("utf-8"))
-        log.info("이관 대장 기록: %s", key)
+        try:
+            _s3().put_object(Bucket=a.bucket, Key=key, Body=body.encode("utf-8"))
+            log.info("이관 대장 기록: %s", key)
+        except Exception as e:  # noqa: BLE001 - 아래 로컬 사본을 살리고 실패로 끝낸다
+            log.error("이관 대장 S3 기록 실패 — %s: %s", type(e).__name__, e)
+            recorded = False
+    if a.report:
+        try:
+            with open(a.report, "w", encoding="utf-8") as f:
+                f.write(body)
+        except OSError as e:
+            log.error("이관 대장 로컬 사본 실패 — %s", e)
+            recorded = False
     log.info("이관 대장: 원천 %d행 = 착지 %d + 건너뜀 %s → %s", src["rows"], total,
              {k: v for k, v in st.items() if k.startswith("skipped_")}, report["status"])
-    return 0 if ok else 1
+    return 0 if ok and recorded else 1
 
 
 if __name__ == "__main__":

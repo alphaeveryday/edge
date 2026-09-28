@@ -1012,3 +1012,21 @@ def test_fmp_main_fails_when_source_rows_are_not_all_accounted_for(monkeypatch, 
                                      "--source-parquet", "s3://b/k", "--report", str(report)])
     assert backfill.main() == 1
     assert '"unaccounted_rows"' in report.read_text()
+
+
+def test_fmp_ledger_reaches_s3_even_when_the_local_copy_fails(monkeypatch, tmp_path):
+    """로컬 `--report` 경로가 죽어도 S3 대장은 기록되고, 런은 exit 1 로 끝난다."""
+    import argparse
+    from collections import defaultdict
+
+    put: list[str] = []
+
+    class _S3:
+        def put_object(self, Bucket, Key, Body):  # noqa: N803
+            put.append(Key)
+    monkeypatch.setattr(backfill, "_s3", lambda: _S3())
+    a = argparse.Namespace(fmp_stats=defaultdict(int, yielded=1), dry_run=False, bucket="b",
+                           fmp_source={"uri": "s3://b/k", "etag": "e", "sha256": "h", "rows": 1},
+                           report=str(tmp_path / "없는-폴더" / "r.json"))
+    assert backfill._fmp_report(a, ["069500"], [], 1) == 1
+    assert len(put) == 1 and "dataset=intraday_5m" in put[0]
