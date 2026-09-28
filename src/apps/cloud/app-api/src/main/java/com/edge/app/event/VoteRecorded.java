@@ -2,5 +2,5 @@ package com.edge.app.event;
 
 import com.edge.app.entity.VoteChoice;
 
-public record VoteRecorded(Long forecastId, Long userId, VoteChoice choice) {
+public record VoteRecorded(String etfCode, Long memberId, VoteChoice choice) {
 }

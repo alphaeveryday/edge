@@ -17,18 +17,18 @@ import java.util.Map;
 public class VoteFlushRepository {
     private final JdbcTemplate jdbcTemplate;
 
-    public void upsertAll(Long forecastId, Map<Long, VoteChoice> votes) {
+    public void upsertAll(String etfCode, Map<Long, VoteChoice> votes) {
         if (votes.isEmpty()) {
             return;
         }
         String rows = String.join(", ", Collections.nCopies(votes.size(), "(?, ?, ?)"));
         List<Object> args = new ArrayList<>();
-        votes.forEach((userId, choice) -> {
-            args.add(forecastId);
-            args.add(userId);
-            args.add(choice.name());
+        votes.forEach((memberId, choice) -> {
+            args.add(etfCode);
+            args.add(memberId);
+            args.add(choice.value());
         });
-        jdbcTemplate.update("insert into forecast_vote(forecast_id, user_id, choice) values " + rows
-                + " on conflict (forecast_id, user_id) do update set choice = excluded.choice", args.toArray());
+        jdbcTemplate.update("insert into vote(etf_code, member_id, choice) values " + rows
+                + " on conflict (etf_code, member_id) do update set choice = excluded.choice", args.toArray());
     }
 }

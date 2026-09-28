@@ -30,36 +30,36 @@ class VoteBufferRepositoryTests extends ContainerTests {
 
     @Test
     void newVoteCountsAndMarksDirty() {
-        long etf = 101;
+        String etf = "000101";
         assertTrue(buffer.record(etf, 1L, VoteChoice.BUY));
-        assertEquals(1, counts.counts(etf).buy());
+        assertEquals(1, counts.counts(etf).buys());
         assertEquals(Map.of(1L, VoteChoice.BUY), buffer.readDirty(etf, 10));
-        assertTrue(buffer.dirtyForecasts().contains(etf));
+        assertTrue(buffer.dirtyEtfs().contains(etf));
     }
 
     @Test
     void changedVoteMovesCounterAndOverwritesDirty() {
-        long etf = 102;
+        String etf = "000102";
         buffer.record(etf, 1L, VoteChoice.BUY);
         assertTrue(buffer.record(etf, 1L, VoteChoice.SELL));
-        assertEquals(0, counts.counts(etf).buy());
-        assertEquals(1, counts.counts(etf).sell());
+        assertEquals(0, counts.counts(etf).buys());
+        assertEquals(1, counts.counts(etf).sells());
         assertEquals(Map.of(1L, VoteChoice.SELL), buffer.readDirty(etf, 10));
     }
 
     @Test
     void sameChoiceIsNoOpAndDoesNotRedirty() {
-        long etf = 103;
-        buffer.record(etf, 1L, VoteChoice.HOLD);
-        assertTrue(buffer.clearDirtyIfUnchanged(etf, 1L, VoteChoice.HOLD));
-        assertFalse(buffer.record(etf, 1L, VoteChoice.HOLD));
-        assertEquals(1, counts.counts(etf).hold());
+        String etf = "000103";
+        buffer.record(etf, 1L, VoteChoice.WAIT);
+        assertTrue(buffer.clearDirtyIfUnchanged(etf, 1L, VoteChoice.WAIT));
+        assertFalse(buffer.record(etf, 1L, VoteChoice.WAIT));
+        assertEquals(1, counts.counts(etf).waits());
         assertEquals(Map.of(), buffer.readDirty(etf, 10));
     }
 
     @Test
     void clearKeepsDirtyChangedDuringFlush() {
-        long etf = 104;
+        String etf = "000104";
         buffer.record(etf, 1L, VoteChoice.BUY);
         var snapshot = buffer.readDirty(etf, 10);
         buffer.record(etf, 1L, VoteChoice.SELL);
@@ -68,14 +68,14 @@ class VoteBufferRepositoryTests extends ContainerTests {
         assertFalse(buffer.releaseIfClean(etf));
         assertTrue(buffer.clearDirtyIfUnchanged(etf, 1L, VoteChoice.SELL));
         assertTrue(buffer.releaseIfClean(etf));
-        assertFalse(buffer.dirtyForecasts().contains(etf));
+        assertFalse(buffer.dirtyEtfs().contains(etf));
     }
 
     @Test
     void readDirtyHonoursBatchSize() {
-        long etf = 105;
-        for (long user = 1; user <= 5; user++) {
-            buffer.record(etf, user, VoteChoice.BUY);
+        String etf = "000105";
+        for (long member = 1; member <= 5; member++) {
+            buffer.record(etf, member, VoteChoice.BUY);
         }
         assertEquals(2, buffer.readDirty(etf, 2).size());
         assertEquals(5, buffer.readDirty(etf, 10).size());
@@ -83,7 +83,7 @@ class VoteBufferRepositoryTests extends ContainerTests {
 
     @Test
     void concurrentRecordsKeepCountersConsistent() throws Exception {
-        long etf = 106;
+        String etf = "000106";
         try (var pool = Executors.newFixedThreadPool(8)) {
             List<Callable<Boolean>> jobs = new ArrayList<>();
             for (int i = 0; i < 32; i++) {
@@ -95,7 +95,7 @@ class VoteBufferRepositoryTests extends ContainerTests {
             }
         }
         var c = counts.counts(etf);
-        assertEquals(1, c.buy() + c.hold() + c.sell());
+        assertEquals(1, c.buys() + c.waits() + c.sells());
         assertEquals(1, buffer.readDirty(etf, 10).size());
     }
 }

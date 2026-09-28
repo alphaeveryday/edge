@@ -14,6 +14,6 @@ public class VoteCacheListener {
 
     @TransactionalEventListener
     public void applyToCache(VoteRecorded event) {
-        voteCountRepository.vote(event.forecastId(), event.userId(), event.choice());
+        voteCountRepository.vote(event.etfCode(), event.memberId(), event.choice());
     }
 }

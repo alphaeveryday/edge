@@ -21,7 +21,7 @@ const hotShare = Number(__ENV.HOT_SHARE || '0.5');
 if (!__ENV.FORECAST_BASE) throw new Error('FORECAST_BASE required');
 const forecastBase = Number(__ENV.FORECAST_BASE);
 
-// Redis CLUSTER KEYSLOT 과 동일: CRC16-CCITT(XMODEM) % 16384. 키는 vote:{forecastId}:* 라 해시태그 = forecastId.
+// Redis CLUSTER KEYSLOT 과 동일: CRC16-CCITT(XMODEM) % 16384. 키는 vote:{etfCode}:* 라 해시태그 = etfCode.
 function crc16(s) {
   let crc = 0;
   for (let i = 0; i < s.length; i++) {
@@ -30,14 +30,15 @@ function crc16(s) {
   }
   return crc;
 }
-export function slotOf(forecastId) { return crc16(String(forecastId)) % 16384; }
+export function slotOf(etfCode) { return crc16(String(etfCode)) % 16384; }
 function shardOf(slot) { return slotRanges.findIndex(([lo, hi]) => slot >= lo && slot <= hi); }
 
-// 샤드마다 perShard 개씩 채워질 때까지 forecastBase 부터 순차 탐색. 첫 원소가 그 샤드의 인기 종목.
+// 샤드마다 perShard 개씩 채워질 때까지 forecastBase 부터 순차 탐색. 첫 원소가 그 샤드의 인기 종목. 종목 코드는 6자리라 하위 6자리를 쓴다.
 const shards = slotRanges.map(() => []);
 for (let id = forecastBase; shards.some(s => s.length < perShard); id++) {
-  const s = shardOf(slotOf(id));
-  if (s >= 0 && shards[s].length < perShard) shards[s].push(id);
+  const code = String(id % 1000000).padStart(6, '0');
+  const s = shardOf(slotOf(code));
+  if (s >= 0 && shards[s].length < perShard) shards[s].push(code);
 }
 const hot = shards[hotShard][0];
 // cold 는 샤드 라운드로빈으로 섞는다 — 샤드별로 연달아 돌면 장애 샤드 요청이 뭉쳐 서킷 창(20건) 안 실패율이 실제 비중을 넘긴다.
@@ -64,7 +65,7 @@ export function vote() {
   const i = exec.scenario.iterationInTest;
   const [forecast, t] = pick(i);
   const user = 1 + i;
-  const choice = ['BUY', 'HOLD', 'SELL'][i % 3];
+  const choice = ['buy', 'wait', 'sell'][i % 3];
   const r = http.post(`${base}/api/v1/forecasts/${forecast}/votes`, JSON.stringify({choice}), {
     headers: {'Content-Type':'application/json', 'X-User-Id': String(user)}, timeout: '10s',
   });

@@ -31,7 +31,7 @@ public class VoteFlusher {
 
     @PostConstruct
     void registerGauge() {
-        Gauge.builder("vote.dirty.size", buffer, b -> b.dirtyForecasts().stream().mapToLong(b::dirtySize).sum())
+        Gauge.builder("vote.dirty.size", buffer, b -> b.dirtyEtfs().stream().mapToLong(b::dirtySize).sum())
                 .register(meterRegistry);
     }
 
@@ -40,28 +40,28 @@ public class VoteFlusher {
     public void flush() {
         long start = System.nanoTime();
         try {
-            for (Long forecastId : buffer.dirtyForecasts()) {
-                flushForecast(forecastId);
+            for (String etfCode : buffer.dirtyEtfs()) {
+                flushEtf(etfCode);
             }
         } catch (Exception ex) {
             meterRegistry.counter("vote.flush.failures").increment();
-            log.warn("Flush run failed before any forecast; retry next run", ex);
+            log.warn("Flush run failed before any etf; retry next run", ex);
         } finally {
             meterRegistry.timer("vote.flush.duration").record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
         }
     }
 
     // 전망 하나의 실패(DB 장애·손상 dirty)가 다른 전망의 flush 를 막지 않도록 전망 단위로 격리한다.
-    private void flushForecast(Long forecastId) {
+    private void flushEtf(String etfCode) {
         try {
-            Map<Long, VoteChoice> batch = buffer.readDirty(forecastId, batchSize);
-            flushRepository.upsertAll(forecastId, batch);
-            batch.forEach((userId, choice) -> buffer.clearDirtyIfUnchanged(forecastId, userId, choice));
-            buffer.releaseIfClean(forecastId);
+            Map<Long, VoteChoice> batch = buffer.readDirty(etfCode, batchSize);
+            flushRepository.upsertAll(etfCode, batch);
+            batch.forEach((memberId, choice) -> buffer.clearDirtyIfUnchanged(etfCode, memberId, choice));
+            buffer.releaseIfClean(etfCode);
             meterRegistry.counter("vote.flush.size").increment(batch.size());
         } catch (Exception ex) {
             meterRegistry.counter("vote.flush.failures").increment();
-            log.warn("Flush failed forecast={}; dirty votes retry next run", forecastId, ex);
+            log.warn("Flush failed etf={}; dirty votes retry next run", etfCode, ex);
         }
     }
 }

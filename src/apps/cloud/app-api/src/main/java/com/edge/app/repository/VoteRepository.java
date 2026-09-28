@@ -18,14 +18,14 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
     // 신규/변경을 DB 원자 upsert 로 판정한다 — SELECT 선검사는 동시 요청 레이스가 있다.
     @Modifying
     @Query(value = """
-            insert into forecast_vote(forecast_id, user_id, choice) values (:forecast, :user, :choice)
-            on conflict (forecast_id, user_id) do update set choice = excluded.choice
+            insert into vote(etf_code, member_id, choice) values (:etf, :member, :choice)
+            on conflict (etf_code, member_id) do update set choice = excluded.choice
             """, nativeQuery = true)
-    void upsert(@Param("forecast") Long forecastId, @Param("user") Long userId, @Param("choice") String choice);
+    void upsert(@Param("etf") String etfCode, @Param("member") Long memberId, @Param("choice") String choice);
 
     @Query("""
             select v.choice as choice, count(v) as total from Vote v
-            where v.forecastId = :forecast group by v.choice
+            where v.etfCode = :etf group by v.choice
             """)
-    List<ChoiceCount> countByChoice(@Param("forecast") Long forecastId);
+    List<ChoiceCount> countByChoice(@Param("etf") String etfCode);
 }

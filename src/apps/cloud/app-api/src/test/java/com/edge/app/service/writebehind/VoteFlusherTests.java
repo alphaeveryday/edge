@@ -40,40 +40,40 @@ class VoteFlusherTests extends ContainerTests {
     @Autowired
     StringRedisTemplate redis;
 
-    Map<Long, VoteChoice> dbVotes(long etf) {
-        return voteRepository.findAll().stream().filter(v -> v.getForecastId() == etf)
-                .collect(java.util.stream.Collectors.toMap(Vote::getUserId, Vote::getChoice));
+    Map<Long, VoteChoice> dbVotes(String etf) {
+        return voteRepository.findAll().stream().filter(v -> v.getEtfCode().equals(etf))
+                .collect(java.util.stream.Collectors.toMap(Vote::getMemberId, Vote::getChoice));
     }
 
     @Test
     void flushWritesDirtyVotesToDbAndReleasesForecast() {
-        long etf = 201;
+        String etf = "000201";
         buffer.record(etf, 1L, VoteChoice.BUY);
         buffer.record(etf, 2L, VoteChoice.SELL);
         flusher.flush();
         assertEquals(Map.of(1L, VoteChoice.BUY, 2L, VoteChoice.SELL), dbVotes(etf));
         assertEquals(Map.of(), buffer.readDirty(etf, 10));
-        assertFalse(buffer.dirtyForecasts().contains(etf));
+        assertFalse(buffer.dirtyEtfs().contains(etf));
     }
 
     @Test
     void flushDrainsMoreThanOneBatchAcrossRuns() {
-        long etf = 202;
-        for (long user = 1; user <= 5; user++) {
-            buffer.record(etf, user, VoteChoice.HOLD);
+        String etf = "000202";
+        for (long member = 1; member <= 5; member++) {
+            buffer.record(etf, member, VoteChoice.WAIT);
         }
         flusher.flush();
         assertEquals(2, dbVotes(etf).size());
-        assertTrue(buffer.dirtyForecasts().contains(etf));
+        assertTrue(buffer.dirtyEtfs().contains(etf));
         flusher.flush();
         flusher.flush();
         assertEquals(5, dbVotes(etf).size());
-        assertFalse(buffer.dirtyForecasts().contains(etf));
+        assertFalse(buffer.dirtyEtfs().contains(etf));
     }
 
     @Test
     void voteChangedDuringFlushStaysDirtyAndLandsNextRun() {
-        long etf = 203;
+        String etf = "000203";
         buffer.record(etf, 1L, VoteChoice.BUY);
         doAnswer(invocation -> {
             invocation.callRealMethod();
@@ -83,49 +83,49 @@ class VoteFlusherTests extends ContainerTests {
         flusher.flush();
         assertEquals(Map.of(1L, VoteChoice.BUY), dbVotes(etf));
         assertEquals(Map.of(1L, VoteChoice.SELL), buffer.readDirty(etf, 10));
-        assertTrue(buffer.dirtyForecasts().contains(etf));
+        assertTrue(buffer.dirtyEtfs().contains(etf));
         doAnswer(invocation -> invocation.callRealMethod()).when(flushRepository).upsertAll(eq(etf), any());
         flusher.flush();
         assertEquals(Map.of(1L, VoteChoice.SELL), dbVotes(etf));
-        assertFalse(buffer.dirtyForecasts().contains(etf));
+        assertFalse(buffer.dirtyEtfs().contains(etf));
     }
 
     @Test
     void reflushAfterCrashBetweenUpsertAndClearIsIdempotent() {
-        long etf = 204;
+        String etf = "000204";
         buffer.record(etf, 1L, VoteChoice.BUY);
         flushRepository.upsertAll(etf, Map.of(1L, VoteChoice.BUY));
         flusher.flush();
-        assertEquals(1, voteRepository.findAll().stream().filter(v -> v.getForecastId() == etf).count());
+        assertEquals(1, voteRepository.findAll().stream().filter(v -> v.getEtfCode().equals(etf)).count());
         assertEquals(Map.of(1L, VoteChoice.BUY), dbVotes(etf));
-        assertFalse(buffer.dirtyForecasts().contains(etf));
+        assertFalse(buffer.dirtyEtfs().contains(etf));
     }
 
     @Test
     void corruptForecastDoesNotBlockOtherForecasts() {
-        long bad = 206, good = 207;
-        redis.opsForHash().put("vote:{" + bad + "}:dirty", "not-a-user", "BUY");
-        redis.opsForSet().add("vote:dirty-forecasts", Long.toString(bad));
+        String bad = "000206", good = "000207";
+        redis.opsForHash().put("vote:{" + bad + "}:dirty", "not-a-user", "buy");
+        redis.opsForSet().add("vote:dirty-etfs", bad);
         buffer.record(good, 1L, VoteChoice.SELL);
         double before = meterRegistry.counter("vote.flush.failures").count();
         flusher.flush();
         assertEquals(Map.of(1L, VoteChoice.SELL), dbVotes(good));
-        assertFalse(buffer.dirtyForecasts().contains(good));
+        assertFalse(buffer.dirtyEtfs().contains(good));
         assertEquals(before + 1, meterRegistry.counter("vote.flush.failures").count());
         redis.delete("vote:{" + bad + "}:dirty");
-        redis.opsForSet().remove("vote:dirty-forecasts", Long.toString(bad));
+        redis.opsForSet().remove("vote:dirty-etfs", bad);
     }
 
     @Test
     void dbFailureKeepsDirtyForNextRun() {
-        long etf = 205;
+        String etf = "000205";
         buffer.record(etf, 1L, VoteChoice.BUY);
         doThrow(new RuntimeException("db down")).when(flushRepository).upsertAll(eq(etf), any());
         double before = meterRegistry.counter("vote.flush.failures").count();
         flusher.flush();
         assertEquals(before + 1, meterRegistry.counter("vote.flush.failures").count());
         assertEquals(Map.of(1L, VoteChoice.BUY), buffer.readDirty(etf, 10));
-        assertTrue(buffer.dirtyForecasts().contains(etf));
+        assertTrue(buffer.dirtyEtfs().contains(etf));
         assertEquals(Map.of(), dbVotes(etf));
         doAnswer(invocation -> invocation.callRealMethod()).when(flushRepository).upsertAll(eq(etf), any());
         flusher.flush();

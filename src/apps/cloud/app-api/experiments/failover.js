@@ -23,7 +23,7 @@ export const options = {
 export function vote() {
   const i = exec.scenario.iterationInTest;
   const user = runId + (userPool ? i % userPool : i);
-  const choice = ['BUY', 'HOLD', 'SELL'][(userPool ? Math.floor(i / userPool) + i % userPool : i) % 3];
+  const choice = ['buy', 'wait', 'sell'][(userPool ? Math.floor(i / userPool) + i % userPool : i) % 3];
   const r = http.post(`${base}/api/v1/forecasts/${etf}/votes`, JSON.stringify({choice}), {
     headers: {'Content-Type':'application/json', 'X-User-Id': String(user)}, timeout: '10s',
   });

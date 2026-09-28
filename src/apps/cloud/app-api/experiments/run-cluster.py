@@ -130,19 +130,19 @@ for _ in range(120):
 forecasts = json.loads((out / 'summary.json').read_text())['forecasts']['shards']
 forecast_ids = [str(i) for s in forecasts for i in s]
 db = {}
-for line in sql("select forecast_id,choice,count(*) from forecast_vote where forecast_id in (" + ','.join(forecast_ids) + ") group by forecast_id,choice;").splitlines():
+for line in sql("select etf_code,choice,count(*) from vote where etf_code in (" + ','.join("'" + i + "'" for i in forecast_ids) + ") group by etf_code,choice;").splitlines():
     fid, choice, cnt = line.split('\t'); db.setdefault(fid, {})[choice.lower()] = int(cnt)
 # C1 은 부하 종료 후에도 버퍼링된 명령이 60s 타임아웃까지 스레드를 잡는다 — 조회 실패는 불일치로 보고 재시도.
 # choices 해시(사용자→선택)도 DB 사용자 수와 맞아야 한다 — count 만 같고 해시가 비면 다음 재투표가 잘못 차감된다.
 db_users = {}
-for line in sql("select forecast_id,count(*) from forecast_vote where forecast_id in (" + ','.join(forecast_ids) + ") group by forecast_id;").splitlines():
+for line in sql("select etf_code,count(*) from vote where etf_code in (" + ','.join("'" + i + "'" for i in forecast_ids) + ") group by etf_code;").splitlines():
     fid, cnt = line.split('\t'); db_users[fid] = int(cnt)
 def consistent():
     bad = []
     for fid in forecast_ids:
         try:
             r = json.loads(get(f'/api/v1/forecasts/{fid}/votes/count'))['result']
-            if r['source'] != 'redis' or any(r[c] != db.get(fid, {}).get(c, 0) for c in ('buy', 'hold', 'sell')): bad.append(fid); continue
+            if r['source'] != 'redis' or any(r[c + 's'] != db.get(fid, {}).get(c, 0) for c in ('buy', 'wait', 'sell')): bad.append(fid); continue
             if int(cli('hlen', 'vote:{' + fid + '}:choices').strip() or 0) != db_users.get(fid, 0): bad.append(fid)
         except Exception: bad.append(fid)
     return bad
@@ -154,7 +154,7 @@ for _ in range(120):
     mismatch = consistent()
     if not mismatch: break
     time.sleep(2)
-duplicates = sql('select forecast_id,user_id,count(*) from forecast_vote group by forecast_id,user_id having count(*)>1;').strip()
+duplicates = sql('select etf_code,member_id,count(*) from vote group by etf_code,member_id having count(*)>1;').strip()
 (out / 'app.log').write_text(dc('logs', '--timestamps', 'app'))
 (out / 'redis.log').write_text(dc('logs', '--timestamps', *[f'redis-{n}' for n in range(1, 7)]))
 

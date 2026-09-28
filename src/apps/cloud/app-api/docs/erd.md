@@ -198,7 +198,7 @@ PK `(post_id, member_id)`. PUT 은 `INSERT ... ON CONFLICT DO NOTHING`, DELETE �
 | choice | varchar(5) | `buy` \| `wait` \| `sell` (구 BUY/HOLD/SELL) |
 | created_at, updated_at | timestamptz | |
 
-제약 `UNIQUE(etf_code, member_id)`, `CHECK (choice IN ('buy','wait','sell'))`. V3 는 `DROP TABLE forecast_vote` 후 생성(실험 데이터 폐기). 함께 바꿀 것: `Vote` 엔티티·`VoteChoice` enum·Lua 키(`forecast:{id}` → `poll:{code}`)·실험 스크립트의 경로와 값. 분포 `pct` 는 집계, `mine` 은 요청자 행.
+제약 `UNIQUE(etf_code, member_id)`, `CHECK (choice IN ('buy','wait','sell'))`. V3 는 `DROP TABLE forecast_vote` 후 생성(실험 데이터 폐기). 함께 바꾼 것: `Vote` 엔티티·`VoteChoice`(값은 소문자, JPA 컨버터)·집계 필드 `buys/waits/sells`·dirty 집합 `vote:dirty-etfs`·실험 스크립트. Redis 키 `vote:{code}:*` 형식은 그대로다. 분포 `pct` 는 집계, `mine` 은 요청자 행.
 
 ## 읽기 전용 동기화
 

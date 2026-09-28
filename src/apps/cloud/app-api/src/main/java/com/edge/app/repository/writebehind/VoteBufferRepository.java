@@ -27,65 +27,65 @@ import java.util.stream.Collectors;
 public class VoteBufferRepository {
     private final StringRedisTemplate redisTemplate;
     private final RedisConnectionFactory connectionFactory;
-    private static final String DIRTY_FORECASTS = "vote:dirty-forecasts";
+    private static final String DIRTY_FORECASTS = "vote:dirty-etfs";
     private static final DefaultRedisScript<Long> RECORD = script("writebehind/vote-buffer.lua");
     private static final DefaultRedisScript<Long> CLEAR = script("writebehind/clear-dirty.lua");
     private static final DefaultRedisScript<Long> RELEASE = script("writebehind/release-dirty.lua");
     private static final DefaultRedisScript<Long> WARM = script("writebehind/warm.lua");
 
-    // 전망별 키({forecastId})와 전역 dirty 집합이 다른 슬롯이라 Cluster 에선 다중 키 Lua 가 CROSSSLOT 으로 전건 실패한다.
+    // 전망별 키({etfCode})와 전역 dirty 집합이 다른 슬롯이라 Cluster 에선 다중 키 Lua 가 CROSSSLOT 으로 전건 실패한다.
     @PostConstruct
     void rejectCluster() {
         if (connectionFactory instanceof LettuceConnectionFactory lettuce && lettuce.isClusterAware()) {
-            throw new IllegalStateException("vote.mode=write-behind does not support Redis Cluster (CROSSSLOT on vote:dirty-forecasts)");
+            throw new IllegalStateException("vote.mode=write-behind does not support Redis Cluster (CROSSSLOT on vote:dirty-etfs)");
         }
     }
 
-    public boolean record(Long forecastId, Long userId, VoteChoice choice) {
-        List<String> keys = List.of(key(forecastId, "choices"), key(forecastId, "count"), key(forecastId, "dirty"), DIRTY_FORECASTS);
-        return redisTemplate.execute(RECORD, keys, userId.toString(), choice.name(), forecastId.toString()) == 1;
+    public boolean record(String etfCode, Long memberId, VoteChoice choice) {
+        List<String> keys = List.of(key(etfCode, "choices"), key(etfCode, "count"), key(etfCode, "dirty"), DIRTY_FORECASTS);
+        return redisTemplate.execute(RECORD, keys, memberId.toString(), choice.value(), etfCode) == 1;
     }
 
-    public Set<Long> dirtyForecasts() {
+    public Set<String> dirtyEtfs() {
         Set<String> members = redisTemplate.opsForSet().members(DIRTY_FORECASTS);
-        return members == null ? Set.of() : members.stream().map(Long::valueOf).collect(Collectors.toSet());
+        return members == null ? Set.of() : Set.copyOf(members);
     }
 
-    public Map<Long, VoteChoice> readDirty(Long forecastId, int batchSize) {
+    public Map<Long, VoteChoice> readDirty(String etfCode, int batchSize) {
         Map<Long, VoteChoice> batch = new HashMap<>();
         try (Cursor<Map.Entry<String, String>> cursor = redisTemplate.<String, String>opsForHash()
-                .scan(key(forecastId, "dirty"), ScanOptions.scanOptions().count(batchSize).build())) {
+                .scan(key(etfCode, "dirty"), ScanOptions.scanOptions().count(batchSize).build())) {
             while (cursor.hasNext() && batch.size() < batchSize) {
                 var entry = cursor.next();
-                batch.put(Long.valueOf(entry.getKey()), VoteChoice.valueOf(entry.getValue()));
+                batch.put(Long.valueOf(entry.getKey()), VoteChoice.of(entry.getValue()));
             }
         }
         return batch;
     }
 
-    public boolean clearDirtyIfUnchanged(Long forecastId, Long userId, VoteChoice choice) {
-        return redisTemplate.execute(CLEAR, List.of(key(forecastId, "dirty")), userId.toString(), choice.name()) == 1;
+    public boolean clearDirtyIfUnchanged(String etfCode, Long memberId, VoteChoice choice) {
+        return redisTemplate.execute(CLEAR, List.of(key(etfCode, "dirty")), memberId.toString(), choice.value()) == 1;
     }
 
-    public boolean releaseIfClean(Long forecastId) {
-        return redisTemplate.execute(RELEASE, List.of(key(forecastId, "dirty"), DIRTY_FORECASTS), forecastId.toString()) == 1;
+    public boolean releaseIfClean(String etfCode) {
+        return redisTemplate.execute(RELEASE, List.of(key(etfCode, "dirty"), DIRTY_FORECASTS), etfCode) == 1;
     }
 
-    public long mergeMissing(Long forecastId, List<Vote> votes) {
+    public long mergeMissing(String etfCode, List<Vote> votes) {
         List<String> args = new ArrayList<>();
         votes.forEach(v -> {
-            args.add(v.getUserId().toString());
-            args.add(v.getChoice().name());
+            args.add(v.getMemberId().toString());
+            args.add(v.getChoice().value());
         });
-        return redisTemplate.execute(WARM, List.of(key(forecastId, "choices"), key(forecastId, "count")), args.toArray());
+        return redisTemplate.execute(WARM, List.of(key(etfCode, "choices"), key(etfCode, "count")), args.toArray());
     }
 
-    public long dirtySize(Long forecastId) {
-        return redisTemplate.opsForHash().size(key(forecastId, "dirty"));
+    public long dirtySize(String etfCode) {
+        return redisTemplate.opsForHash().size(key(etfCode, "dirty"));
     }
 
-    private static String key(Long forecastId, String suffix) {
-        return "vote:{%s}:%s".formatted(forecastId, suffix);
+    private static String key(String etfCode, String suffix) {
+        return "vote:{%s}:%s".formatted(etfCode, suffix);
     }
 
     private static DefaultRedisScript<Long> script(String path) {

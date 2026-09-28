@@ -19,16 +19,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class VoteController {
     private final VoteService voteService;
 
-    @PostMapping("/api/v1/forecasts/{forecastId}/votes")
-    public ApiResponse<Void> vote(@PathVariable Long forecastId,
-            @RequestHeader("X-User-Id") @Positive Long userId,
+    @PostMapping("/api/v1/forecasts/{etfCode}/votes")
+    public ApiResponse<Void> vote(@PathVariable String etfCode,
+            @RequestHeader("X-User-Id") @Positive Long memberId,
             @RequestBody @Valid VoteRequest request) {
-        voteService.vote(forecastId, userId, request.choice());
+        voteService.vote(etfCode, memberId, request.choice());
         return ApiResponse.onSuccess(null);
     }
 
-    @GetMapping("/api/v1/forecasts/{forecastId}/votes/count")
-    public ApiResponse<VoteCountResponse> counts(@PathVariable Long forecastId) {
-        return ApiResponse.onSuccess(voteService.counts(forecastId));
+    @GetMapping("/api/v1/forecasts/{etfCode}/votes/count")
+    public ApiResponse<VoteCountResponse> counts(@PathVariable String etfCode) {
+        return ApiResponse.onSuccess(voteService.counts(etfCode));
     }
 }

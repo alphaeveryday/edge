@@ -52,7 +52,7 @@ for _ in range(180):
     time.sleep(1)
 else: raise SystemExit('App did not become ready')
 master = dc('ps', '-q', 'redis-master').strip()
-etf = str(int(time.time()))
+etf = str(int(time.time()))[-6:]
 env.update(ETF_ID=etf, SCENARIO=scenario, SUMMARY_PATH=str(out / 'summary.json'))
 threads = []
 start = time.monotonic()
@@ -77,19 +77,19 @@ def master_cli(*args):
 if mode == 'write-behind':
     # DB snapshot 은 flush 가 dirty 를 비운 뒤에 떠야 한다 — 미flush 분은 지연이지 유실이 아니다.
     for _ in range(60):
-        if master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0': break
+        if master_cli('SCARD', 'vote:dirty-etfs').strip() == '0': break
         time.sleep(1)
-    (out / 'dirty-after-load.txt').write_text(master_cli('SCARD', 'vote:dirty-forecasts'))
-drain_complete = mode != 'write-behind' or master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0'
+    (out / 'dirty-after-load.txt').write_text(master_cli('SCARD', 'vote:dirty-etfs'))
+drain_complete = mode != 'write-behind' or master_cli('SCARD', 'vote:dirty-etfs').strip() == '0'
 (out / 'before-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
-(out / 'db.tsv').write_text(sql("select choice,count(*) from forecast_vote where forecast_id='" + etf + "' group by choice;"))
-(out / 'duplicates.tsv').write_text(sql('select forecast_id,user_id,count(*) from forecast_vote group by forecast_id,user_id having count(*)>1;'))
+(out / 'db.tsv').write_text(sql("select choice,count(*) from vote where etf_code='" + etf + "' group by choice;"))
+(out / 'duplicates.tsv').write_text(sql('select etf_code,member_id,count(*) from vote group by etf_code,member_id having count(*)>1;'))
 # Observe automatic reconciliation for up to five minutes after the load.
 expected = dict(line.split('\t') for line in (out / 'db.tsv').read_text().splitlines())
 for _ in range(300):
     try:
         result = json.loads(get('/api/v1/forecasts/' + etf + '/votes/count'))['result']
-        if result['source'] == 'redis' and all(result[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL')): break
+        if result['source'] == 'redis' and all(result[c + 's'] == int(expected.get(c, 0)) for c in ('buy', 'wait', 'sell')): break
     except Exception: pass
     time.sleep(1)
 (out / 'after-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
@@ -104,7 +104,7 @@ with (out / 'samples.json').open() as samples:
             if user not in acked or stamp > acked[user][0]:
                 acked[user] = (stamp, point['data']['tags']['choice'])
 acked = {user: choice for user, (_, choice) in acked.items()}
-db_choices = dict(line.split('\t') for line in sql("select user_id,choice from forecast_vote where forecast_id='" + etf + "';").splitlines())
+db_choices = dict(line.split('\t') for line in sql("select member_id,choice from vote where etf_code='" + etf + "';").splitlines())
 redis_pairs = master_cli('HGETALL', 'vote:{' + etf + '}:choices').split()
 redis_choices = dict(zip(redis_pairs[::2], redis_pairs[1::2]))
 per_user = {'acked': len(acked), 'db': len(db_choices), 'redis': len(redis_choices),
@@ -116,7 +116,7 @@ per_user = {'acked': len(acked), 'db': len(db_choices), 'redis': len(redis_choic
 (out / 'app.log').write_text(dc('logs', '--timestamps', 'app'))
 final = json.loads((out / 'after-reconcile.json').read_text())['result']
 correct = (final['source'] == 'redis'
-           and all(final[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL'))
+           and all(final[c + 's'] == int(expected.get(c, 0)) for c in ('buy', 'wait', 'sell'))
            and int((out / 'master-voted.txt').read_text()) == sum(map(int, expected.values()))
            and not (out / 'duplicates.tsv').read_text().strip()
            and drain_complete and not per_user['db_redis_mismatch'] and not per_user['ack_db_mismatch'])

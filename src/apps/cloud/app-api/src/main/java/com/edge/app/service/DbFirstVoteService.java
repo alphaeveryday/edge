@@ -33,29 +33,29 @@ public class DbFirstVoteService implements VoteService {
     // VoteCacheListener(AFTER_COMMIT)가 캐시를 따라 갱신한다(실패는 repository 폴백이 삼킴).
     @Override
     @Transactional
-    public void vote(Long forecastId, Long userId, VoteChoice choice) {
-        voteRepository.upsert(forecastId, userId, choice.name());
-        eventPublisher.publishEvent(new VoteRecorded(forecastId, userId, choice));
+    public void vote(String etfCode, Long memberId, VoteChoice choice) {
+        voteRepository.upsert(etfCode, memberId, choice.value());
+        eventPublisher.publishEvent(new VoteRecorded(etfCode, memberId, choice));
     }
 
     // source(redis/db)는 어느 경로로 읽었는지의 표식 — 폴백 정책을 아는 이 계층이 붙인다.
     @Override
-    public VoteCountResponse counts(Long forecastId) {
+    public VoteCountResponse counts(String etfCode) {
         try {
-            return circuit.of(forecastId).executeSupplier(
-                    () -> VoteCountResponse.from(voteCountRepository.counts(forecastId), "redis"));
+            return circuit.of(etfCode).executeSupplier(
+                    () -> VoteCountResponse.from(voteCountRepository.counts(etfCode), "redis"));
         } catch (Exception ex) {
-            return countsFromDb(forecastId, ex);
+            return countsFromDb(etfCode, ex);
         }
     }
 
-    private VoteCountResponse countsFromDb(Long forecastId, Throwable ex) {
+    private VoteCountResponse countsFromDb(String etfCode, Throwable ex) {
         meterRegistry.counter("vote.redis.read.failures").increment();
-        log.warn("Redis count failed forecast={}; using DB", forecastId, ex);
+        log.warn("Redis count failed etf={}; using DB", etfCode, ex);
         Map<VoteChoice, Long> counts = new EnumMap<>(VoteChoice.class);
-        voteRepository.countByChoice(forecastId).forEach(row -> counts.put(row.getChoice(), row.getTotal()));
+        voteRepository.countByChoice(etfCode).forEach(row -> counts.put(row.getChoice(), row.getTotal()));
         return VoteCountResponse.from(new VoteCounts(counts.getOrDefault(VoteChoice.BUY, 0L),
-                counts.getOrDefault(VoteChoice.HOLD, 0L),
+                counts.getOrDefault(VoteChoice.WAIT, 0L),
                 counts.getOrDefault(VoteChoice.SELL, 0L)), "db");
     }
 }

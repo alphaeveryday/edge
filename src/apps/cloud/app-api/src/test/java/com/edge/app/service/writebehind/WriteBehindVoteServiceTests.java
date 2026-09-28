@@ -37,37 +37,37 @@ class WriteBehindVoteServiceTests extends ContainerTests {
         return RestClient.builder().baseUrl("http://localhost:" + port)
                 .defaultStatusHandler(s -> true, (r, s) -> {}).build();
     }
-    int vote(long etf, long user, String choice) {
-        return client().post().uri("/api/v1/forecasts/" + etf + "/votes").header("X-User-Id", Long.toString(user))
+    int vote(String etf, long member, String choice) {
+        return client().post().uri("/api/v1/forecasts/" + etf + "/votes").header("X-User-Id", Long.toString(member))
                 .body(Map.of("choice", choice)).retrieve().toBodilessEntity().getStatusCode().value();
     }
-    long dbRows(long etf) {
-        return voteRepository.findAll().stream().filter(v -> v.getForecastId() == etf).count();
+    long dbRows(String etf) {
+        return voteRepository.findAll().stream().filter(v -> v.getEtfCode().equals(etf)).count();
     }
 
     @Test
     void voteLandsInBufferWithoutDbTransactionOrRow() {
-        long etf = 301;
+        String etf = "000301";
         doAnswer(invocation -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return invocation.callRealMethod();
         }).when(buffer).record(etf, 1L, VoteChoice.BUY);
-        assertEquals(200, vote(etf, 1, "BUY"));
+        assertEquals(200, vote(etf, 1, "buy"));
         assertEquals(0, dbRows(etf));
         Map<?, ?> result = (Map<?, ?>) client().get().uri("/api/v1/forecasts/" + etf + "/votes/count")
                 .retrieve().body(Map.class).get("result");
-        assertEquals(Map.of("buy", 1, "hold", 0, "sell", 0, "source", "redis"), result);
+        assertEquals(Map.of("buys", 1, "waits", 0, "sells", 0, "source", "redis"), result);
     }
 
     @Test
     void redisOutageFailsFastWith503() throws Exception {
-        long etf = 302;
-        assertEquals(200, vote(etf, 9, "HOLD"));
+        String etf = "000302";
+        assertEquals(200, vote(etf, 9, "wait"));
         double before = meterRegistry.counter("vote.redis.write.failures").count();
         REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
         try {
             long start = System.nanoTime();
-            assertEquals(503, vote(etf, 1, "BUY"));
+            assertEquals(503, vote(etf, 1, "buy"));
             assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) < 1000);
         } finally {
             REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();

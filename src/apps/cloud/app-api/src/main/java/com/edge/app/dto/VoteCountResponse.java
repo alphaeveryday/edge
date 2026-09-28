@@ -1,8 +1,8 @@
 package com.edge.app.dto;
 
-public record VoteCountResponse(long buy, long hold, long sell, String source) {
+public record VoteCountResponse(long buys, long waits, long sells, String source) {
 
     public static VoteCountResponse from(VoteCounts counts, String source) {
-        return new VoteCountResponse(counts.buy(), counts.hold(), counts.sell(), source);
+        return new VoteCountResponse(counts.buys(), counts.waits(), counts.sells(), source);
     }
 }

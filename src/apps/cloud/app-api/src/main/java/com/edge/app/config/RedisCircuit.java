@@ -26,11 +26,11 @@ public class RedisCircuit {
                 && lettuce.getNativeClient() instanceof RedisClusterClient cluster ? cluster : null;
     }
 
-    public CircuitBreaker of(Long forecastId) {
+    public CircuitBreaker of(String etfCode) {
         if (client == null) {
             return registry.circuitBreaker("redis");
         }
-        int slot = SlotHash.getSlot("vote:{" + forecastId + "}:count");
+        int slot = SlotHash.getSlot("vote:{" + etfCode + "}:count");
         var partitions = client.getPartitions();
         // 빈 Partitions 는 getMasterBySlot 이 빈 캐시 배열을 인덱싱해 예외를 낸다 — null 가드 앞에서 걸러 전역으로.
         RedisClusterNode master = partitions.isEmpty() ? null : partitions.getMasterBySlot(slot);

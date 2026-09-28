@@ -1,12 +1,12 @@
 package com.edge.app.dto;
 
-public record VoteReconcileResult(long buyDelta, long holdDelta, long sellDelta) {
+public record VoteReconcileResult(long buyDelta, long waitDelta, long sellDelta) {
 
     public long missing() {
-        return Math.max(0, buyDelta) + Math.max(0, holdDelta) + Math.max(0, sellDelta);
+        return Math.max(0, buyDelta) + Math.max(0, waitDelta) + Math.max(0, sellDelta);
     }
 
     public long excess() {
-        return Math.max(0, -buyDelta) + Math.max(0, -holdDelta) + Math.max(0, -sellDelta);
+        return Math.max(0, -buyDelta) + Math.max(0, -waitDelta) + Math.max(0, -sellDelta);
     }
 }

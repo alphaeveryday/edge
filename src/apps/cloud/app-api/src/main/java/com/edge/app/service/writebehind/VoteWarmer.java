@@ -68,12 +68,12 @@ public class VoteWarmer {
 
     public void warm() {
         try {
-            Map<Long, List<Vote>> byForecast = voteRepository.findAll().stream()
-                    .collect(Collectors.groupingBy(Vote::getForecastId));
-            long loaded = byForecast.entrySet().stream()
+            Map<String, List<Vote>> byEtf = voteRepository.findAll().stream()
+                    .collect(Collectors.groupingBy(Vote::getEtfCode));
+            long loaded = byEtf.entrySet().stream()
                     .mapToLong(entry -> buffer.mergeMissing(entry.getKey(), entry.getValue())).sum();
             meterRegistry.counter("vote.warm.loaded").increment(loaded);
-            log.info("Warm finished forecasts={} loaded={}", byForecast.size(), loaded);
+            log.info("Warm finished etfs={} loaded={}", byEtf.size(), loaded);
         } catch (Exception ex) {
             meterRegistry.counter("vote.warm.failures").increment();
             log.warn("Warm failed; next trigger will retry", ex);
