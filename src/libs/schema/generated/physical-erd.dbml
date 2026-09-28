@@ -727,6 +727,31 @@ Table "minute_window_artifact_commit" {
   }
 }
 
+Table "movement_analyses" {
+  "analysis_id" text [pk]
+  "etf_code" text [not null]
+  "analysis_at" timestamptz [not null]
+  "previous_analysis_id" text
+  "status" text [not null]
+  "published_at" timestamptz
+  "error_message" text
+  "trading_date" date [not null]
+  "summary" text
+  "selected_item_ids" text[] [not null]
+}
+
+Table "movement_items" {
+  "item_id" text [pk]
+  "analysis_id" text [not null]
+  "type" text [not null]
+  "title_keyword" text [not null]
+  "sentence" text [not null]
+  "sentiment" text [not null]
+  "source_as_of" timestamptz
+  "tool_run_ids" text[] [not null]
+  "created_at" timestamptz [not null]
+}
+
 Table "news_document" {
   "document_id" text [pk]
   "document_type" varchar(20)
@@ -862,6 +887,9 @@ Table "ops_pipeline_run" {
   "orchestration_status" text
   "created_at" timestamptz [not null]
   "updated_at" timestamptz [not null]
+  "orchestrator" text [not null]
+  "orchestrator_run_ref" text
+  "orchestration_reported_at" timestamptz
 }
 
 Table "ops_reconciliation_issue" {
@@ -899,6 +927,56 @@ Table "ops_task_attempt" {
   "entity_resolution_arguments_total" bigint
   "entity_resolution_arguments_resolved" bigint
   "quality_diagnostics" jsonb
+  "orchestrator_attempt_ref" text
+}
+
+Table "outlook_analyses" {
+  "analysis_id" text [pk]
+  "etf_code" text [not null]
+  "analysis_at" timestamptz [not null]
+  "previous_analysis_id" text
+  "status" text [not null]
+  "published_at" timestamptz
+  "error_message" text
+  "outlook_sticker" text
+  "summary_title" text
+  "summary" text
+  "detail_title" text
+  "detail_mode" text
+  "conclusion_title" text
+  "conclusion_sentence" text
+  "change_condition" text
+}
+
+Table "outlook_conclusion_keywords" {
+  "row_id" text [pk]
+  "analysis_id" text [not null]
+  "kind" text [not null]
+  "position" int [not null]
+  "label" text [not null]
+  "tool_run_ids" text[] [not null]
+}
+
+Table "outlook_factors" {
+  "row_id" text [pk]
+  "analysis_id" text [not null]
+  "type" text [not null]
+  "sticker" text [not null]
+  "sentence" text [not null]
+}
+
+Table "outlook_items" {
+  "row_id" text [pk]
+  "analysis_id" text [not null]
+  "item_id" text [not null]
+  "section" text [not null]
+  "change_type" text
+  "position" int [not null]
+  "title_keyword" text [not null]
+  "bullets" jsonb
+  "sentence" text
+  "source_as_of" timestamptz
+  "tool_run_ids" text[] [not null]
 }
 
 Table "price_daily" {
@@ -1087,6 +1165,29 @@ Table "thread_discovery_snapshot" {
   "evaluated_at" timestamptz [not null]
 }
 
+Table "tool_definitions" {
+  "tool_id" text [pk]
+  "function_name" text [not null]
+  "version" text [not null]
+  "formula_latex" text
+  "description" text [not null]
+  "source_names" text[] [not null]
+}
+
+Table "tool_runs" {
+  "tool_run_id" text [pk]
+  "tool_id" text [not null]
+  "movement_analysis_id" text
+  "outlook_analysis_id" text
+  "arguments" jsonb [not null]
+  "context" jsonb [not null]
+  "output" jsonb
+  "status" text [not null]
+  "error_message" text
+  "started_at" timestamptz [not null]
+  "finished_at" timestamptz
+}
+
 Ref: "actor".("actor_id", "entity_type") > "entity".("entity_id", "entity_type")
 Ref: "assertion_argument"."assertion_id" > "document_assertion"."assertion_id"
 Ref: "assertion_argument"."entity_id" > "entity"."entity_id"
@@ -1155,6 +1256,8 @@ Ref: "minute_price_trigger"."session_id" > "minute_ingestion_session"."session_i
 Ref: "minute_session_open"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_trigger_anchor"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_window_artifact_commit".("session_id", "window_start") > "minute_ingestion_window".("session_id", "window_start")
+Ref: "movement_analyses"."previous_analysis_id" > "movement_analyses"."analysis_id"
+Ref: "movement_items"."analysis_id" > "movement_analyses"."analysis_id"
 Ref: "news_document"."representative_document_id" > "news_document"."document_id"
 Ref: "news_document"."theme_concept_id" > "concept"."concept_id"
 Ref: "news_document".("document_id", "document_type") > "document".("document_id", "document_type")
@@ -1162,6 +1265,10 @@ Ref: "news_poll_anchor"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "ops_expected_task"."pipeline_run_id" > "ops_pipeline_run"."pipeline_run_id"
 Ref: "ops_expected_task"."expectation_snapshot_id" > "ops_expectation_snapshot"."expectation_snapshot_id"
 Ref: "ops_task_attempt"."expected_task_id" > "ops_expected_task"."expected_task_id"
+Ref: "outlook_analyses"."previous_analysis_id" > "outlook_analyses"."analysis_id"
+Ref: "outlook_conclusion_keywords"."analysis_id" > "outlook_analyses"."analysis_id"
+Ref: "outlook_factors"."analysis_id" > "outlook_analyses"."analysis_id"
+Ref: "outlook_items"."analysis_id" > "outlook_analyses"."analysis_id"
 Ref: "price_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "price_decomposition"."price_observation_id" > "price_observation"."price_observation_id"
 Ref: "price_decomposition"."sector_series_id" > "market_series"."market_series_id"
@@ -1181,3 +1288,6 @@ Ref: "tenant_release_history"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_sync_cursor"."tenant_id" > "tenant"."tenant_id"
 Ref: "thread_discovery_snapshot"."source_event_id" > "source_event"."source_event_id"
 Ref: "thread_discovery_snapshot"."thread_id" > "event_thread"."thread_id"
+Ref: "tool_runs"."movement_analysis_id" > "movement_analyses"."analysis_id"
+Ref: "tool_runs"."outlook_analysis_id" > "outlook_analyses"."analysis_id"
+Ref: "tool_runs"."tool_id" > "tool_definitions"."tool_id"

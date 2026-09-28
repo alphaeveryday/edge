@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: analysis_v2
+      POSTGRES_USER: v2_local
+      POSTGRES_PASSWORD: local_only
+    ports:
+      - "127.0.0.1:55439:5432"
+    volumes:
+      - v2-local-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U v2_local -d analysis_v2"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  flyway:
+    image: flyway/flyway:10.21.0
+    profiles: ["migration"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/analysis_v2
+      FLYWAY_USER: v2_local
+      FLYWAY_PASSWORD: local_only
+      FLYWAY_CLEAN_DISABLED: "true"
+      FLYWAY_VALIDATE_MIGRATION_NAMING: "true"
+    volumes:
+      - ./src/libs/schema/migrations-cloud:/flyway/sql:ro
+volumes:
+  v2-local-data:

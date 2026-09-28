@@ -13,8 +13,14 @@ raw investor_flow_daily(KIS)를 읽어 **표준 투자자 순매수 행으로 �
 
 게이트를 통과한 행은 `canonical/market_data/investor_flow_daily` 에 **(market,ticker,trade_date)
 정체성 키로 멱등 병합** 한다 — canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가
-같다. 같은 벤더 재적재는 최신 fetched_at 이 이기고, 벤더 교차 같은 키 충돌은 fail-loud 한다
-(현재 KR·KIS 단독이라 교차는 없지만 가격과 같은 안전장치를 유지한다).
+같다. 같은 벤더 재적재는 **그 거래일 정규장 마감(15:30 KST) 뒤 가장 이른 수집분**이 이기고
+(`_winner_rank`, ALPHA-1107), 벤더 교차 같은 키 충돌은 fail-loud 한다(현재 KR·KIS 단독이라
+교차는 없지만 가격과 같은 안전장치를 유지한다).
+
+왜 최신이 아닌가: EOD 수집(15:41)은 매일 5일 창을 다시 받는다. 다음 날 받은 값은 시간외 체결이
+더해진 값이라(2026-09-22 실측 408종목 중 346 변경·전부 거래량 증가·종가 불변), 최신 승이면 D일
+정규장 값이 다음 날 조용히 덮이고 마트의 `available_at` 도 따라 밀려 과거 시점 조회에서 행이
+사라진다. 시간외 체결은 종가 뒤라 D일 가격의 설명 축은 정규장이다.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ import hashlib
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from ..lake import (
     Storage,
@@ -235,6 +241,8 @@ def _write_parquet_rows(rows: list[dict]) -> bytes:
 
 
 _OLDEST = datetime.min.replace(tzinfo=timezone.utc)
+_KST = timezone(timedelta(hours=9))
+_REGULAR_CLOSE = time(15, 30)  # 정규장 마감. 이 뒤 수집분은 그날 정규장이 다 반영된 값이다.
 
 
 def _fetched_at(row: dict) -> datetime:
@@ -250,9 +258,33 @@ def _fetched_at(row: dict) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _winner_rank(row: dict) -> tuple[int, float]:
+    """같은 (market,ticker,trade_date) 후보 중 승자 순위 — **작을수록 이긴다**(ALPHA-1107).
+
+    0순위: 그 거래일 15:30 KST 이후 수집분 중 **가장 이른 것** — 정규장이 다 반영됐고 시간외
+           체결이 가장 적게 섞인 값. 뒤에 받은 값이 이기지 못하므로 수집 시각이 서로 다르면
+           재수집·재실행 순서와 무관하게 승자가 고정된다(마트 `available_at` 도 고정 → 과거 시점
+           조회 재현). 같은 수집 시각의 동률만 나중 적용분이 이긴다(`_merge_partition`).
+           당일 수집이 실패해 다음 날 수집분만 있으면 그중 가장 이른 것이 이긴다(시간외 포함 —
+           canonical `fetched_at` 이 날짜로 그 사실을 남긴다).
+    1순위: 마감 전 수집분(장중 부분값)은 어떤 마감 후 값에도 지고, 그들끼리는 최신이 이긴다.
+    ⚠️ 트레이드오프: 첫 마감 후 수집분 **뒤에 온 벤더 정정은 자동 반영되지 않는다**. 09-22 실측에서
+    값이 바뀐 346종목은 전부 거래량도 늘었다(시간외 체결 추가). 08-26 표본에선 42종목 중 4종목이
+    거래량 불변으로 바뀌었다 — 정정인지는 미확인이다. 정정 원본은 raw 에 남는다 — 반영하려면 그
+    파티션 canonical 을 지우고 해당 raw 만 재정제한다.
+    `fetched_at` 은 UTC 로 저장되므로 마감 시각을 KST 로 만들어 실제 시각끼리 비교한다.
+    """
+    fetched = _fetched_at(row)
+    close = datetime.combine(date.fromisoformat(row["trade_date"]), _REGULAR_CLOSE, _KST)
+    if fetched >= close:
+        return (0, fetched.timestamp())
+    return (1, -fetched.timestamp())
+
+
 def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: list[dict]) -> list[dict]:
-    """한 (market,trade_date) 파티션을 ticker 키로 병합. 기존→신규 순으로 적용해 신규가 같은
-    벤더면 최신 fetched_at 로 이기고, 벤더 교차 충돌은 fail-loud 로 제외한다(가격과 동형)."""
+    """한 (market,trade_date) 파티션을 ticker 키로 병합. 기존→신규 순으로 적용해 같은 벤더면
+    `_winner_rank` 가 작은 쪽이 이기고(동률이면 나중 적용분), 벤더 교차 충돌은 fail-loud 로
+    제외한다(가격과 동형)."""
     acc: dict[str, dict] = {}
     conflicted: set[str] = set()
     for row in [*existing, *new_rows]:
@@ -272,7 +304,7 @@ def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: lis
                 "vendors": sorted({prev["source_vendor"], row["source_vendor"]}),
             })
             continue
-        if _fetched_at(row) >= _fetched_at(prev):
+        if _winner_rank(row) <= _winner_rank(prev):
             acc[ticker] = row
     return [acc[t] for t in sorted(acc)]
 

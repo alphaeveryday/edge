@@ -767,6 +767,12 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				null);
 		insertAttempt("a1", "t1");
 		insertAttempt("a2", "t1");
+		/* 업무를 실행하지 않은 중복 재시도 컨테이너(ALPHA-1088) — 시도 수(R16 재시도 소진)에 넣지 않는다 */
+		jdbc.update("""
+				INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,
+				       execution_status, exit_code, record_source)
+				VALUES ('a3', 't1', 'arn:aws:ecs:task/a3', 'SUCCEEDED', 0, 'DUPLICATE_SKIP')
+				""");
 
 		assertThat(repository.facts(DAY).tasks()).satisfiesExactly(
 				t -> {

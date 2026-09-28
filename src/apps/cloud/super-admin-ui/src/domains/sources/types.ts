@@ -55,7 +55,8 @@ export interface PipelineRun {
 }
 
 /** 원장 기록 출처. 사후 복구를 정상 계측과 뭉개면 "원장이 스스로 메운 행"이 관측된 실행처럼 보인다. */
-export type RecordSource = 'WRAPPER' | 'RECONCILER_BACKFILL';
+/* DUPLICATE_SKIP(ALPHA-1088): 이미 성공한 작업의 재시도 컨테이너가 업무 없이 끝난 흔적 — 실행으로 읽히면 안 된다. */
+export type RecordSource = 'WRAPPER' | 'RECONCILER_BACKFILL' | 'DUPLICATE_SKIP';
 
 export interface QualityDiagnosticIssue {
   reason: string;

@@ -106,6 +106,8 @@ function clock(iso: string | null) {
 /* 정상 계측(WRAPPER)과 사후 복구를 가른다 — 뭉개면 "원장이 스스로 메운 행"이 실제로 관측된
  * 실행처럼 보인다. 관대해지는 방향이라 화면에서 반드시 구분한다. */
 const BACKFILL = 'RECONCILER_BACKFILL';
+/* 업무를 실행하지 않은 중복 재시도(ALPHA-1088). 성공 줄과 모양이 같아 라벨이 없으면 실행 한 번으로 읽힌다. */
+const DUPLICATE_SKIP = 'DUPLICATE_SKIP';
 
 /**
  * 상세 줄을 펼칠 가치가 있는 작업인가.
@@ -142,6 +144,7 @@ function AttemptLine({ attempt, index }: { attempt: Attempt; index: number }) {
         {/* exit_code 는 null 이면 "모름"이다 — 0(성공)으로 메우지 않는다 */}
         {attempt.exitCode !== null && ` · exit ${attempt.exitCode}`}
         {attempt.recordSource === BACKFILL && ' · 사후 복구 기록'}
+        {attempt.recordSource === DUPLICATE_SKIP && ' · 업무 미실행(이미 성공 — 중복 재시도)'}
         {attempt.failureReason && ` · ${attempt.failureReason}`}
         {id && ` · task ${id}`}
       </span>

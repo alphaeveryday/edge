@@ -3,7 +3,9 @@
 등록 작업(카탈로그 24개)의 `run()` 을 감싸 pipeline run·
 task key·SFN state/execution·ECS Task ARN·시각·exit code·execution status·data status·failure
 reason 를 남긴다. **원장 기록 실패가 본 작업을 실패시키지 않는다**(스펙 §3.4) — 모든 원장 호출은
-예외를 삼키고 진행한다.
+예외를 삼키고 진행한다. 예외는 Airflow 경로의 `OPS_EXCLUSIVE_STEP=1` 뿐이다: 실행 전 판단 재료(실행권·
+기대 작업·실행 이력·시작 기록)를 원장에서 확인하지 못하면 실행하지 않고 STEP_NOT_RUN_EXIT(75)로 끝난다
+(ALPHA-1088 — 재시도가 이미 끝난 업무를 다시 부르는 중복 실행을 막는다).
 
 성공 exit code 를 자동으로 VALID 로 바꾸지 않는다(스펙 §6·§3.3). 신호가 부족하면 UNKNOWN 이다.
 
@@ -210,6 +212,14 @@ def derive_data_status(signals: dict) -> str:
     return states.DATA_VALID if completeness_known else states.DATA_UNKNOWN
 
 
+# 실행권·실행 이력을 확인하지 못해 **업무를 실행하지 않고** 끝났다(EX_TEMPFAIL). 오케스트레이터가
+# 인프라 실패처럼 재시도할 수 있는 값이다 — 업무 실패(1)·부분 실패(2)와 섞이지 않는다.
+STEP_NOT_RUN_EXIT = 75
+# 같은 작업의 앞선 실행이 끝났는지 확인하지 못해 **업무를 시작하지 않고 보류**했다(ALPHA-1088). 75 와 달리
+# 자동 재시도 대상이 아니다 — 운영자가 기존 작업 종료를 확인해야 한다(원장: EXECUTION_HOLD 이슈).
+STEP_HELD_EXIT = 76
+
+
 def instrument(
     run_fn: Callable[[], int],
     *,
@@ -224,11 +234,127 @@ def instrument(
     """run_fn(실제 스텝)을 원장 계측으로 감싼다. run_fn 의 exit code 를 **그대로** 반환한다.
 
     ledger=None(원장 미설정) 또는 expected_task 부재(미등록)면 계측 없이 run_fn 만 돈다.
-    """
-    if ledger is None:
-        return run_fn()
 
-    expected = _safe(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key))
+    `OPS_EXCLUSIVE_STEP=1`(Airflow 경로가 주입)이면 실행 전에 작업의 실행권(StepLock)을 잡고, 원장을
+    읽지 못하면 **실행하지 않는다**(STEP_NOT_RUN_EXIT). 실행권을 얻어도 같은 작업의 앞선 실행이 끝났다는
+    것이 원장에 확인되지 않으면 보류한다(STEP_HELD_EXIT) — lock 은 잡은 연결이 끊기면 풀리므로 "lock 을
+    얻었다"가 "앞 실행이 끝났다"를 뜻하지 않는다. env 가 없는 SFN·수동 경로는 종전 그대로 원장 장애에도
+    작업을 진행한다(스펙 §3.4).
+    """
+    kwargs = dict(task_key=task_key, run_id=run_id, ledger=ledger, ecs_task_arn=ecs_task_arn,
+                  sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
+                  observe_data_fn=observe_data_fn)
+    exclusive = os.environ.get("OPS_EXCLUSIVE_STEP") == "1"
+    if ledger is None:
+        if exclusive:
+            # 원장이 없으면 실행권도 이력도 확인할 수 없다 — 배선 누락(task-def DB env)을 드러낸다.
+            logger.error("OPS_EXCLUSIVE_STEP=1 인데 원장 미설정 — 실행하지 않는다(task=%s)", task_key)
+            return STEP_NOT_RUN_EXIT
+        return run_fn()
+    if not exclusive:
+        return _instrument(run_fn, strict=False, **kwargs)
+    wait_seconds = float(os.environ.get("OPS_STEP_LOCK_WAIT_SECONDS", "600"))
+    lock = ledger.step_lock(task_key)
+    acquired = False
+    try:
+        try:
+            acquired = lock.acquire(wait_seconds=wait_seconds)
+        except Exception:
+            # 실행권을 판단할 수 없다 — 이미 다른 실행이 돌고 있을 수도, 이미 끝났을 수도 있다.
+            logger.exception("실행권 확인 불가(원장 접근 실패) — 실행하지 않는다(task=%s)", task_key)
+            return STEP_NOT_RUN_EXIT
+        if not acquired:
+            logger.warning("다른 실행이 %.0f초 넘게 이 작업을 잡고 있다 — 실행하지 않는다(task=%s run_id=%s)",
+                           wait_seconds, task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        return _instrument(run_fn, strict=True, lock=lock, **kwargs)
+    finally:
+        lock.release(acquired)
+
+
+# 한 run 안에서 선행 단계 판정 순서(카탈로그 stage). normalize 는 depends_on 이 없지만(raw 부분 실패여도
+# 도는 계약) 입력은 raw 다 — 성공 skip 의 "입력 불변" 판정은 depends_on 이 아니라 단계로 한다.
+_STAGE_ORDER = {"raw": 0, "normalize": 1, "feature": 2}
+
+
+def _upstream_ran_after(ledger: Ledger, run_id: str, task_key: str, since_attempt_id: str) -> bool:
+    """같은 run 의 앞 단계 작업에 since 이후 만들어진 attempt 가 있는가(판정은 DB 시계)."""
+    entry = catalog.get(task_key)
+    order = _STAGE_ORDER.get(entry.stage) if entry is not None else None
+    if not order:
+        return False
+    stages = [stage for stage, rank in _STAGE_ORDER.items() if rank < order]
+    return ledger.attempt_created_after(pipeline_run_id=run_id, stages=stages,
+                                        attempt_id=since_attempt_id)
+
+
+def _record_duplicate_skip(ledger: Ledger, expected_task_id: str) -> None:
+    """업무를 건너뛴 이 컨테이너를 추적 가능한 시도로 남긴다(DUPLICATE_SKIP). best-effort —
+    기록 실패가 skip 판단(이미 끝난 업무)을 바꾸지 않는다. ECS ARN 을 못 얻으면 남기지 않는다."""
+    arn = _detect_ecs_task_arn()
+    if not arn:
+        return
+    _safe(lambda: ledger.record_duplicate_skip(
+        expected_task_id=expected_task_id, ecs_task_arn=arn,
+        orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None,
+    ))
+
+
+def _hold(ledger: Ledger, *, task_key: str, run_id: str, expected: dict, blocking: list[dict]) -> int:
+    """업무를 시작하지 않고 보류한다. 원장엔 결손·업무 실패와 다른 사유(EXECUTION_HOLD)로 남긴다 — 기록은
+    best-effort 다(보류 판단 자체는 이미 끝났다). 이미 결론 난 작업(예: 성공한 슬롯의 재처리)의 결과는
+    덮지 않는다."""
+    logger.error("앞선 실행의 종료가 확인되지 않았다 — 업무를 시작하지 않고 보류(task=%s run_id=%s "
+                 "blocking=%s)", task_key, run_id, blocking)
+    if expected.get("task_outcome") in (None, states.OUTCOME_PENDING):
+        _safe(lambda: ledger.update_task_outcome(
+            expected["expected_task_id"], task_outcome=states.OUTCOME_FAILED,
+            outcome_reason=states.REASON_EXECUTION_HOLD))
+    _safe(lambda: ledger.open_or_bump_issue(
+        issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"execution_hold:{task_key}",
+        scope="task", scope_key=expected["expected_task_id"],
+        evidence={"kind": states.HOLD_OPEN_ATTEMPT, "run_id": run_id, "blocking": blocking}))
+    return STEP_HELD_EXIT
+
+
+class _LedgerUnavailable(Exception):
+    """strict 모드에서 실행 전 판단 재료(기대 작업·실행 이력)를 읽지 못했다."""
+
+
+def _read(fn: Callable, *, strict: bool):
+    """strict 면 실패를 _LedgerUnavailable 로 올리고, 아니면 종전처럼 삼킨다(_safe)."""
+    if not strict:
+        return _safe(fn)
+    try:
+        return fn()
+    except Exception as exc:
+        raise _LedgerUnavailable() from exc
+
+
+def _instrument(
+    run_fn: Callable[[], int],
+    *,
+    strict: bool,
+    task_key: str,
+    run_id: str,
+    ledger: Ledger,
+    ecs_task_arn: str | None,
+    sfn_execution_arn: str | None,
+    sfn_state_name: str | None,
+    observe_data_fn: Callable[[int], dict] | None,
+    lock=None,
+) -> int:
+    try:
+        expected = _read(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key),
+                         strict=strict)
+    except _LedgerUnavailable:
+        logger.exception("기대 작업 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+        return STEP_NOT_RUN_EXIT
+    if strict and not expected:
+        # 실행 주체가 계획한 run 인데 기대 작업이 없다 = run_id 불일치·계획 누락. 원장 밖에서 돌면 다음
+        # 재시도가 이 실행을 볼 수 없어 중복이 된다(비-strict 경로의 투명 통과와 다른 이유).
+        logger.error("기대 작업 없음 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+        return STEP_NOT_RUN_EXIT
     if not expected:
         # 미등록 작업 또는 원장 조회 실패 — 본 작업만 돌린다(투명 통과, 스펙 §6).
         # ⚠️ 여기엔 세 가지가 섞인다: ① 미등록(의도) ② 조회 실패(_safe 가 logger.exception 남김)
@@ -244,6 +370,63 @@ def instrument(
         # 실행되더라도, 계획상 SKIP 된 작업에 실행 이력을 붙이면 축이 오염된다(edge-review).
         return run_fn()
     expected_task_id = expected["expected_task_id"]
+    if lock is not None:
+        # 실행권을 얻었어도 앞선 실행이 끝났다는 증거가 원장에 없으면 시작하지 않는다(성공 skip 판단보다
+        # 먼저 — 아직 도는 실행의 이력은 판단 재료가 못 된다).
+        try:
+            blocking = lock.blocking()
+        except Exception:
+            logger.exception("앞선 실행 확인 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        if blocking:
+            return _hold(ledger, task_key=task_key, run_id=run_id, expected=expected, blocking=blocking)
+        # 막던 시도가 닫혔다 — 작업 단위 보류 기록을 닫는다(운영자 해제가 필요한 ECS 보류는 여기서 닫지 않는다).
+        _safe(lambda: ledger.resolve_issue(f"execution_hold:{task_key}",
+                                           resolution_reason="no_open_attempt", resolution_source="wrapper"))
+    if os.environ.get("OPS_SKIP_IF_SUCCEEDED") == "1":
+        # 오케스트레이터 재시도가 이미 끝난 업무를 다시 부르는 경로다(Airflow 는 ECS 가 끝난 뒤 응답을
+        # 잃으면 새 태스크를 띄운다 — provider 의 reattach 는 RUNNING 태스크만 찾는다). 최신 물리
+        # 시도가 exit 0 이면 외부 호출·쓰기를 반복하지 않는다. exit 2(부분)는 복구 재시도가 정당해
+        # 건너뛰지 않는다. 의도한 재처리는 이 env 없이 돌린다(Airflow 재처리 run — conf reprocess_slot).
+        # 이 확인은 StepLock 안에서 해야 원자적이다(확인과 실행 사이에 같은 작업이 끼어들지 못한다).
+        # 실행권 없이 이 env 만 켜면 "아직 끝나지 않은 같은 작업"은 못 막는다.
+        # 조회 실패: strict(Airflow)면 실행하지 않고, 아니면 종전처럼 실행 쪽으로 연다(§3.4).
+        try:
+            attempts = _read(lambda: ledger.attempts_for(expected_task_id), strict=strict) or []
+        except _LedgerUnavailable:
+            logger.exception("실행 이력 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        # 판정은 업무를 실제로 한 시도만 본다 — 앞선 중복 skip 행이 "최신 시도"가 되면 건수·exit 가
+        # 어긋나(current_attempt_id 불일치) 다음 재시도가 멀쩡한 성공을 다시 돌린다.
+        attempts = [a for a in attempts if a.get("record_source") != states.SOURCE_DUPLICATE_SKIP]
+        latest_exit = attempts[-1].get("exit_code") if attempts else None
+        try:
+            upstream_newer = (
+                latest_exit == 0 and not isinstance(latest_exit, bool)
+                and _read(lambda: _upstream_ran_after(ledger, run_id, task_key,
+                                                      attempts[-1]["attempt_id"]), strict=strict)
+            )
+        except _LedgerUnavailable:
+            logger.exception("선행 작업 이력 조회 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        if upstream_newer:
+            # 선행 단계가 이 성공 뒤에 다시 돌았다(예: 수집 실패 → 빈 입력 정제 성공 → 수집 복구). 입력이
+            # 바뀌었으니 성공 이력이 있어도 다시 실행한다 — skip 하면 복구한 raw 가 영영 적재되지 않는다.
+            logger.info("선행 작업이 마지막 성공 뒤에 다시 돌았다 — 다시 실행한다(task=%s)", task_key)
+        elif latest_exit == 0 and expected.get("current_attempt_id") != str(attempts[-1]["attempt_id"]):
+            # 건수(expected_task)와 exit(최신 attempt)가 다른 시도의 것이다 — attempt 종료는 기록됐는데
+            # outcome 갱신이 실패한 경우. 섞어 판단하지 않고 다시 실행한다(최소 한 번 쪽으로).
+            logger.info("건수와 최신 시도가 어긋난다 — 다시 실행한다(task=%s)", task_key)
+        elif latest_exit == 0 and not (isinstance(expected.get("records_out"), int)
+                                       and expected["records_out"] > 0):
+            # 0건 성공(소스 비활성·자격증명 결측 skip 등)은 다시 불러도 반복될 외부 부수효과가 없다 —
+            # skip 근거로 삼으면 설정을 고친 뒤의 재수집이 영영 막힌다.
+            logger.info("최신 성공이 0건 — 다시 실행한다(task=%s)", task_key)
+        elif latest_exit == 0 and not isinstance(latest_exit, bool):
+            logger.warning("이미 성공한 작업 — 다시 실행하지 않는다(task=%s run_id=%s attempts=%d)",
+                           task_key, run_id, len(attempts))
+            _record_duplicate_skip(ledger, expected_task_id)
+            return 0
     # 기대값은 Planner가 실행 전에 고정한 snapshot만 정본이다. observer가 expected_count를
     # 자기신고하도록 두면 수집기가 빠뜨린 대상을 분모에서도 줄여 스스로 만점 처리할 수 있다.
     expected_count = _counter(expected.get("expected_count"))
@@ -255,10 +438,30 @@ def instrument(
     arn = ecs_task_arn or _detect_ecs_task_arn()
     sfn_exec = sfn_execution_arn or os.environ.get("OPS_SFN_EXECUTION_ARN")
     sfn_state = sfn_state_name or os.environ.get("OPS_SFN_STATE_NAME")
-    attempt_id = _safe(lambda: ledger.record_attempt_start(
-        expected_task_id=expected_task_id, ecs_task_arn=arn or "",
-        sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
-    ))
+    if lock is not None:
+        # 시작 기록을 lock 세션에서 커밋한다 — 커밋됐다면 그 순간 lock 을 쥐고 있었다. 세션이 이미 끊겼으면
+        # 실패하고(재시도 없음) 아래에서 실행하지 않는다. 다음 실행이 이 기록을 못 본 채 들어오는 틈이 없다.
+        attempt_id = None
+        if arn:
+            try:
+                attempt_id = lock.start_attempt(
+                    expected_task_id=expected_task_id, ecs_task_arn=arn,
+                    orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None)
+            except Exception:
+                logger.exception("실행권 세션에 시작 기록 실패 — 실행하지 않는다(task=%s)", task_key)
+    else:
+        attempt_id = _safe(lambda: ledger.record_attempt_start(
+            expected_task_id=expected_task_id, ecs_task_arn=arn or "",
+            sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
+            orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None,
+        ))
+    if strict and attempt_id is None:
+        # 시작 기록 없이 실행하면 원장에 흔적 없는 실행이 생긴다 — 다음 재시도의 성공 skip 이 더 오래된
+        # 성공을 믿고, Reconciler 는 hard deadline 뒤 실제로 돈 작업을 MISSED 로 찍는다. 아직 아무 일도
+        # 하지 않았으므로 실행하지 않고 재시도에 맡긴다(ECS ARN 을 못 얻은 경우도 여기로 온다).
+        logger.error("attempt 시작 기록 실패 — 실행하지 않는다(task=%s run_id=%s arn=%s)",
+                     task_key, run_id, arn)
+        return STEP_NOT_RUN_EXIT
 
     def run_with_attempt_marker():
         """OPS_LEDGER_ATTEMPT_ID env 를 이 시도의 것으로 바꿔 본 작업을 돌리고 원복한다."""

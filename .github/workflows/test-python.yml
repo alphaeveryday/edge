@@ -4,9 +4,8 @@
 # 기계 게이트는 이 워크플로가 유일하다(ALPHA-534). 어떤 secret 도 쓰지 않고 실제
 # dev/prod 자원(AWS·RDS)에 접속하지 않는다 — DB 는 ephemeral 컨테이너, S3·LLM 은 fake.
 #
-# 이 레포(private, free 플랜)는 branch protection 을 쓸 수 없어 이 체크가 required 가
-# 아니므로 paths 필터가 안전하다. required 도입 시 필터를 걷어낼 것 — path 로 스킵된
-# required check 는 Pending 으로 남아 PR 을 영구 차단한다(schema-validate.yml 헤더 참고).
+# 변경 경로로 작업별 범위를 선택한다. 문서 PR도 가벼운 감지·최종 체크만 실행하며,
+# 선택한 작업이 실패·취소·예상 밖 생략되면 python-result가 실패한다.
 #
 # 주의: 두 앱 테스트를 한 pytest 호출로 합치면 같은 basename(test_config.py)이 충돌한다
 # (tests/ 에 __init__.py 없음) — 반드시 앱별로 실행한다.
@@ -15,15 +14,6 @@ name: test-python
 on:
   pull_request:
     branches: [dev, main]
-    paths:
-      - "src/apps/cloud/analysis-engine/**"
-      - "src/apps/cloud/data-pipeline/**"
-      - "src/pyproject.toml"
-      - "src/uv.lock"
-      - "src/.dockerignore"   # 이미지 컨텍스트 규칙 변경도 스모크 대상(deploy-* paths 와 일치)
-      - "src/libs/ontology/**"   # 공유 명부/역할 변경도 두 앱 회귀 검증
-      - "src/libs/schema/migrations-cloud/**"   # e2e 가 실 스키마를 적용한다 — 스키마 변경도 게이트 대상
-      - ".github/workflows/test-python.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다.
 permissions:
@@ -35,8 +25,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      legacy: ${{ steps.select.outputs.legacy }}
+      images: ${{ steps.select.outputs.images }}
+      optional: ${{ steps.select.outputs.optional }}
+      e2e: ${{ steps.select.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify job selection rules
+        run: python -m unittest discover -s .github/tests -p test_python_job_selection.py
+      - name: Select dependent checks
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/python-paths"
+          python .github/scripts/select_python_jobs.py "$RUNNER_TEMP/python-paths" >> "$GITHUB_OUTPUT"
+
+  optional-tests:
+    needs: changes
+    if: needs.changes.outputs.optional != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.optional) }}
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "src/uv.lock"
+          cache-local-path: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.package }}
+      - name: Install selected package
+        working-directory: src
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: uv sync --locked --python 3.12 --package "$PACKAGE"
+      - name: Test selected package offline
+        working-directory: src
+        env:
+          PACKAGE: ${{ matrix.package }}
+          PACKAGE_PATH: ${{ matrix.path }}
+        run: uv run --locked --package "$PACKAGE" pytest -c "$PACKAGE_PATH/pyproject.toml" "$PACKAGE_PATH/tests" -q
+
   # ── 단위 테스트 (앱별 분리 실행) ─────────────────────────────
   pytest:
+    needs: changes
+    if: needs.changes.outputs.legacy != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # 러너 종류 왕복 이력(무료분 소진 시 self-hosted 복귀) 대비: 잡별 사설 캐시 경로는
@@ -46,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [analysis-engine, data-pipeline]
+        app: ${{ fromJSON(needs.changes.outputs.legacy) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -77,12 +123,14 @@ jobs:
   # 머지 후 deploy-* 에서야 첫 docker build 가 도는 구멍을 막는다 — 패키징·Dockerfile
   # 파손(예: 모듈 트리 개편)이 PR 단계에서 잡힌다.
   image-smoke:
+    needs: changes
+    if: needs.changes.outputs.images != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        app: [analysis-engine, data-pipeline]
+        app: ${{ fromJSON(needs.changes.outputs.images) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +144,8 @@ jobs:
   # 두 코드베이스의 결정적 ID 수렴과 실 스키마 SQL 정합이 검증 대상이다(ALPHA-534).
   # sync 는 무스코프다 — 이 테스트만 의도적으로 두 워크스페이스 멤버를 함께 쓴다.
   e2e:
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -162,9 +212,23 @@ jobs:
           uv run pytest
           apps/cloud/analysis-engine/tests/e2e
           apps/cloud/data-pipeline/tests/e2e
+          apps/cloud/analysis-engine/tests/statics/test_evidence_save.py
+          apps/cloud/data-pipeline/tests/minute/test_schema_vocab.py
           -q
 
       # 영속 러너에 컨테이너·포트를 남기지 않는다.
       - name: Tear down ephemeral Postgres
         if: always()
         run: docker rm -f edge-e2e-pg >/dev/null 2>&1 || true
+
+  python-result:
+    needs: [changes, optional-tests, pytest, image-smoke, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require every selected check to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python .github/scripts/select_python_jobs.py --check-results

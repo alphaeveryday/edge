@@ -13,6 +13,7 @@
 - [시장 데이터와 수집 상태](domains/market/)
 - [이벤트와 근거](domains/events/)
 - [설명 생성과 계보](domains/explanation/)
+- [v2 분석 결과와 툴 감사](domains/analysis-v2/)
 - [테넌트 전송](domains/delivery/)
 - [운영 원장](domains/operations/)
 

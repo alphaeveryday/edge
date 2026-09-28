@@ -426,7 +426,7 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
-# etf_map, 현재 KR 38종 — 국내 반도체 30종 + KODEX 200 + 섹터 2종 + 은행 + 테마 4종,
+# etf_map, 현재 KR 37종 — 국내 반도체 29종(488210 상장폐지 제외, ALPHA-1114) + KODEX 200 + 섹터 2종 + 은행 + 테마 4종,
 # ALPHA-454·624·927·936). 날짜창 미지정이면 그날(trdDd), 과거 복구는 같은 거래일을
 # --from/--to 양쪽에 지정해 그날 PDF 전량을 append한다. KRX PDF는 한 날짜 snapshot이라
 # 다일 범위와 한쪽만 지정한 창은 거부한다. 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
@@ -443,7 +443,7 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 
 # 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
 # KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
-# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 38종)을 그대로 공유한다
+# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 37종)을 그대로 공유한다
 # — 구성종목과 NAV 가 다른 목록을 보면 안 되기 때문. KIS 는 ISIN 이 아니라 6자리 단축코드로
 # 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 38종 중 8종 — 숫자로만 거르면 샌다).
 # 창(--from/--to)을 그대로 받아 1콜로 구간 거래일 NAV 를 받으므로 백필도 같은 명령이다.
@@ -1400,7 +1400,9 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
 - **canonical(EOD 투자자 수급, 정제 Step2)** — `normalize-investor`는 현재 input run에서 gate를
   통과한 모든 `(market,ticker,trade_date)` winner를 직접 parquet key·SHA-256과 함께
   `dataset=investor_flow_daily` canonical run manifest에 기록한다(ALPHA-1040). 같은 값 재확정도
-  winner이고 같은 vendor 중복은 최신 `fetched_at`이 이기며, 교차 vendor 충돌은 winner에서 제외해
+  winner이고 같은 vendor 중복은 **그 거래일 정규장 마감(15:30 KST) 뒤 가장 이른 수집분**이 이기며
+  (장중 수집분은 최후순위 — ALPHA-1107: 다음 날 재수집분은 시간외 체결이 더해진 값이라 최신 승이면
+  D일 값이 매일 덮인다), 교차 vendor 충돌은 winner에서 제외해
   quality와 exit 2에 남긴다. canonical→quality→completed manifest 순으로 공개하고, 빈 입력도
   유효한 빈 completed manifest다. 저장·무결성 실패는 incomplete manifest와 exit 1로 fail-closed한다.
 - **적재(EOD 투자자 수급)** — 정상 `load-etf-flow --input-run-id`는 같은 run의 completed
@@ -1408,7 +1410,8 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   (ALPHA-1041). 결손·손상 때 LIST/fullscan으로 넓히지 않으며 빈 manifest는 canonical LIST/GET 없이
   성공한다. 물리 parquet 행과 논리 winner 처리량을 분리하고, 개별 DB 행 실패는 savepoint로
   격리해 다른 winner를 commit하되 exit 2와 최종 SFN Failed를 보존한다. 날짜 창과 `--all`은
-  명시 복구 전용이다.
+  명시 복구 전용이다. 마트 행은 순매수 값이 바뀌거나 **`available_at` 이 앞당겨질 때만** 갱신한다 —
+  옛 raw 재정제로 canonical 승자가 D일 수집분으로 돌아오면 값이 같아도 시각이 복구된다(ALPHA-1107).
 - **canonical(장중 투자자 추정, 정제 Step2)** — `canonical/market_data/investor_flow_intraday/
   market=…/trade_date=…/part-*.parquet` 에 게이트 통과 행을 **(market,ticker,trade_date,asof_slot)
   키로 멱등 병합**(ALPHA-768). EOD 확정(`investor_flow_daily`)과 파티션 축은 같지만 **행 키가
@@ -1776,7 +1779,26 @@ EventBridge(daily·news×2(00:10·08:10)·장중수급×5) → Planner(plan-run)
                                                 (레인은 OPS_PIPELINE_TYPE — 자기 레인 카탈로그만 계획)
 각 ECS 태스크(catalog 26작업) → wrapper instrument : attempt 시작/종료·data_status 관측(원장 장애 시 통과)
 EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조(MISSED/BLOCKED/STALLED/…)
+
+(Airflow 주체 레인, ALPHA-1088 — 현재 장중 수급만, 활성화 전)
+Airflow DAG → plan(OPS_ORCHESTRATOR=AIRFLOW) : 같은 원장 계획, SFN 미시작
+            → 업무 ECS 태스크(OPS_EXCLUSIVE_STEP) → wrapper : 작업별 실행권 획득 후 실행, 원장 불명이면 미실행(75),
+                                                         같은 작업의 미종료 시도·ECS 보류가 있으면 보류(76)
+            → report(reconcile, OPS_RUN_KEY+OPS_ORCHESTRATION_STATUS+OPS_EXECUTION_HOLDS)
+                                                       : DAG 판정을 orchestration_status 로, 보류를 EXECUTION_HOLD 로
+Reconciler(Airflow 런) : SFN 대신 원장 attempt·ECS 로 대조, 보고가 없으면 원장에서 상태 투영
+Reconciler(모든 레인)  : ECS STOPPED 확인 → RUNNING 시도를 닫는다(실행권 게이트 해제). exit 가 없거나 신호 종료
+                         (≥128)·외부 종료 stopCode 의 비0 이면 FAILED + outcome_reason stopped_result_unknown
+                         (업무 결과 아님 — 산출·선행 완료로 세지 않는다). 판정 규칙은 Airflow 와 공용 사례표로 대조
+Reconciler(주기, Airflow): sweep_airflow_runs — 끝나지 않은 시도가 남은 Airflow 런을 대조하고, 원장에 없이 DAG
+                         수명보다 오래 도는 ECS 태스크를 EXECUTION_HOLD 로 남긴다(report·callback 없이도)
 ```
+
+**실행 주체(ALPHA-1088).** `ops_pipeline_run.orchestrator`(SFN|AIRFLOW)가 슬롯의 주체다. 다른 주체가
+이미 계획한 run_key 를 다시 계획하면 Planner 가 실행하지 않고 LAUNCH_CONFLICT 로 드러낸다(두 주체의
+같은 run_id 이중 실행 방지). Airflow 경로의 중복 실행 방지·exit 75·보류(exit 76, `EXECUTION_HOLD`)·재처리(`OPS_REPROCESS`)·
+전환·롤백·보류 해제 절차는 [`src/apps/cloud/airflow/README.md`](../airflow/README.md)가 정본이다. env 가 없는 SFN·수동
+경로의 wrapper 동작은 종전 그대로다(원장 장애에도 작업 진행).
 
 Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도 "실행 자체가 안 됐다"를 잡기
 위함(ECS 안에서 자기 expected_task 를 만들면 불가능). `ExecutionAlreadyExists` 는 즉시 LAUNCHED
@@ -1797,7 +1819,9 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM`·`OPS_DISCLOSURE_SCHED_HHMM`·
   `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 각 스케줄 cron 에서
   뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시와
-  장중 수급 것만 **스케줄이 ENABLED 일 때만 주입한다**(ALPHA-722·769) — 슬롯 기준은 Reconciler
+  장중 수급 것만 **스케줄이 ENABLED 일 때만 주입한다**(ALPHA-722·769, 장중 수급은
+  `investor_intraday_orchestrator = "AIRFLOW"` 일 때도 주입 — 스케줄은 꺼져도 Airflow 가 그 슬롯을
+  돌리므로, ALPHA-1088) — 슬롯 기준은 Reconciler
   에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
   판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(현재 공시는 19:30·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).
@@ -2308,8 +2332,10 @@ edge-review 4라운드로 실질 결함은 수렴했고, 아래는 **의도적�
   대신 **BLOCKED** 로 마감한다 — 방향이 안전(BLOCKED 가 "선행 때문"을 더 정확히)하고, 매 dep 마다
   ECS 콜을 더하는 대가가 이 사소한 불일치보다 커서 두었다(Rule 2).
 - **SFN 통합 실패(TaskFailed) 를 실패로 인정** — exit code 를 못 얻고 ECS 도 미확정일 때 SFN
-  TaskFailed 를 FAILED 로 본다. runTask.sync 의 TaskFailed 는 컨테이너 exit≠0 이 아니라 **작업
-  자체가 실패**한 신호라 이게 맞다(exit code 는 우선 조회한다).
+  TaskFailed 를 FAILED 로 본다. ⚠️ runTask.sync 는 **컨테이너 exit≠0 도 TaskFailed 로 올린다**
+  (cause JSON 의 `Containers[].ExitCode` 에 종료 코드가 실린다 — 2026-09-28 실측 exit 2). 그래서
+  exit code 를 우선 조회하는 순서가 중요하고, SFN 브랜치 꼬리도 같은 cause 에서 exit code 를
+  풀어 부분 성공(exit 2) 계속 조건에 쓴다(ALPHA-1113).
 - **완전성(VALID)의 부분 배선** — ETF 3작업은 정적 `etf_map` snapshot과 `received_count`가
   연결됐다(ALPHA-611). 반면 가격·수급·공시처럼 런타임 holdings에서 종목 유니버스를 파생하는
   작업은 계획 시점의 독립 정본이 없어 여전히 `UNKNOWN`이다(false-VALID 를 내느니 UNKNOWN —

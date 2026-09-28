@@ -83,3 +83,15 @@ variable "admin_api_domain" {
   type        = string
   default     = "admin-api-dev.edgesignal.dev"
 }
+
+# ── ETF Orca 앱 API (ADR-0056) ─────────────────────────
+variable "app_api_image" {
+  description = "app-api ECR 이미지 URI(:태그 포함). TF 소유 baseline — 실행 태그는 CD 소유"
+  type        = string
+}
+
+variable "app_api_domain" {
+  description = "app-api 공개 호스트 (ALB 1:1, 와일드카드 ACM 범위 안이어야 한다)"
+  type        = string
+  default     = "etforca.edgesignal.dev"
+}

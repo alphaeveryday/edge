@@ -1,0 +1,25 @@
+# 마이그레이션 순서 검증 (2026-09-28, 경로 B 확정) — Flyway 10.21.0 + PostgreSQL 16, dev 세트 = origin/dev(65개, 최고 202609202030)
+# dev 실측 flyway_schema_history 최고 버전: 202609202030 (2026-09-28 17:09 KST, 읽기 전용 조회). #948 미적용.
+== B(선택): dev → Airflow(1100대) → #948 나중
+  [dev] rc=0 Successfully applied 65 migrations to schema "public", now at version v202609202030 (execution time 00:00.336s) 
+  [dev+ours] rc=0 Successfully applied 3 migrations to schema "public", now at version v202609271120 (execution time 00:00.007s) 
+  [dev+ours+m948] rc=0 Successfully applied 1 migration to schema "public", now at version v202609271200 (execution time 00:00.008s) 
+  history: 202609202030,202609271100,202609271110,202609271120,202609271200
+== 참고: dev → #948 먼저 → Airflow(1100대)
+  [dev] rc=0 Successfully applied 65 migrations to schema "public", now at version v202609202030 (execution time 00:00.393s) 
+  [dev+m948] rc=0 Successfully applied 1 migration to schema "public", now at version v202609271200 (execution time 00:00.010s) 
+  [dev+m948+ours] rc=1 ERROR: Validate failed: Migrations have failed validation Detected resolved migration not applied to database: 202609271100. 
+  history: 202609202030,202609271200
+
+# ── 이전 기록(2026-09-27, 1500대 번호 기준) ──
+[A_948_then_airflow] +[V202609271200] => Successfully applied 66 migrations to schema "public", now at version v202609271200 (execution time 00:00.385s) 
+[A_948_then_airflow] +[V202609271500 V202609271510 V202609271520] => Successfully applied 3 migrations to schema "public", now at version v202609271520 (execution time 00:00.006s) 
+[A_948_then_airflow] 결과: call_budget=7열 orchestrator=4열 check_valid=t 이력=202609271200,202609271500,202609271510,202609271520
+[A_airflow_only] +[V202609271500 V202609271510 V202609271520] => Successfully applied 68 migrations to schema "public", now at version v202609271520 (execution time 00:00.331s) 
+[A_airflow_only] 결과: call_budget=0열 orchestrator=4열 check_valid=t 이력=202609271500,202609271510,202609271520
+[X_airflow_first_unrenamed_then_948] +[V202609271500 V202609271510 V202609271520] => Successfully applied 68 migrations to schema "public", now at version v202609271520 (execution time 00:00.336s) 
+[X_airflow_first_unrenamed_then_948] +[V202609271200] => ERROR: Validate failed: Migrations have failed validation Detected resolved migration not applied to database: 202609271200. 
+[X_airflow_first_unrenamed_then_948] 결과: call_budget=0열 orchestrator=4열 check_valid=t 이력=202609271500,202609271510,202609271520
+[B_airflow_first_renamed_then_948] +[V202609271100 V202609271110 V202609271120] => Successfully applied 68 migrations to schema "public", now at version v202609271120 (execution time 00:00.351s) 
+[B_airflow_first_renamed_then_948] +[V202609271200] => Successfully applied 1 migration to schema "public", now at version v202609271200 (execution time 00:00.009s) 
+[B_airflow_first_renamed_then_948] 결과: call_budget=7열 orchestrator=4열 check_valid=t 이력=202609271100,202609271110,202609271120,202609271200

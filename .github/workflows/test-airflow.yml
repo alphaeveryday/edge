@@ -1,0 +1,65 @@
+# PR 검증 — Airflow DAG(src/apps/cloud/airflow) 계약 테스트.
+#
+# 업무 이미지·uv 워크스페이스에 Airflow 를 넣지 않는다. 대신 **공식 Airflow 이미지(다이제스트 고정)** 안에서
+# 실제 Airflow·amazon provider 클래스로 테스트한다(requirements.txt 의 3.3.2 / 9.36.0 과 같은 조합).
+# AWS 자격증명·외부 API 없이 돈다 — DAG 파싱 테스트가 소켓 연결을 막아 파싱 중 외부 접속을 실패시킨다.
+# 테스트가 0개 수집되거나 skip 되면 실패로 본다(의존성 부재로 조용히 통과하지 않게).
+#
+# branch protection 을 쓸 수 없어 required 가 아니므로 paths 필터가 안전하다(test-python.yml 헤더 참고).
+name: test-airflow
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "src/apps/cloud/airflow/**"
+      # DAG 테스트가 슬롯·명령을 terraform 원본과 대조한다 — tf 가 바뀌면 드리프트를 여기서 잡는다.
+      - "infra/terraform/modules/data-pipeline/**"
+      - ".github/workflows/test-airflow.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-airflow-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # apache/airflow:3.3.2-python3.12 (Airflow 3.3.2, providers-amazon 9.36.0)
+  AIRFLOW_IMAGE: apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1
+
+jobs:
+  dag-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: DAG 계약 테스트 (Airflow 이미지)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/airflow-test"
+          chmod a+rwx "${RUNNER_TEMP}/airflow-test"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/repo:ro" -v "${RUNNER_TEMP}/airflow-test:/out" \
+            -e PYTHONDONTWRITEBYTECODE=1 -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
+            --entrypoint bash "${AIRFLOW_IMAGE}" -c '
+              set -euo pipefail
+              python -c "import airflow, airflow.providers.amazon as a; print(\"airflow\", airflow.__version__, \"amazon\", a.__version__)"
+              pip install --quiet --no-cache-dir -r /repo/src/apps/cloud/airflow/requirements-test.txt
+              cd /tmp
+              python -m pytest -p no:cacheprovider -rA --junitxml=/out/junit.xml /repo/src/apps/cloud/airflow/tests
+            '
+
+      - name: 실행 수·skip 확인
+        run: |
+          python3 - "${RUNNER_TEMP}/airflow-test/junit.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          suite = ET.parse(sys.argv[1]).getroot()
+          suite = suite if suite.tag == "testsuite" else suite.find("testsuite")
+          tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+          failures, errors = int(suite.get("failures")), int(suite.get("errors"))
+          print(f"tests={tests} skipped={skipped} failures={failures} errors={errors}")
+          if tests == 0 or skipped or failures or errors:
+              sys.exit("DAG 테스트가 실행되지 않았거나 skip·실패가 있다")
+          PY

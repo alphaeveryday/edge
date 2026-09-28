@@ -8,3 +8,8 @@ dc4471e5ac6acc6fc7b8b934aef1e5a69f3f1304:src/apps/cloud/app-api/README.md:curl-a
 
 # PR #933 squash 후 같은 로컬 curl 예시 — 기존 dc4471e5 예외와 동일한 비밀이 아닌 입력.
 5b4cd967a4486e55771c4710527a2860faa96884:src/apps/cloud/app-api/README.md:curl-auth-header:8
+
+# app-api 브랜치(feature/app-ui-screens)의 상수 3건 — base36 알파벳 상수와 테스트 전용 고정 JWT 시크릿, 비밀 아님.
+a8aab42232f1410f5b8711afa5ff326d5c226093:src/apps/cloud/app-api/src/main/java/com/edge/app/watch/service/WatchService.java:generic-api-key:39
+ab9119ac424886d46f0de300aca6dc5c586be6be:src/apps/cloud/app-api/src/test/java/com/edge/app/AppApplicationTests.java:generic-api-key:36
+ab9119ac424886d46f0de300aca6dc5c586be6be:src/apps/cloud/app-api/src/test/java/com/edge/app/common/auth/AccessTokensTests.java:generic-api-key:15

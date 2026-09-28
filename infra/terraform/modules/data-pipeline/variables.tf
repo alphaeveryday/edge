@@ -410,6 +410,19 @@ variable "investor_intraday_schedule_state" {
   default     = "ENABLED"
 }
 
+variable "investor_intraday_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1088). AIRFLOW 로 바꾸면 이 레인의 EventBridge 스케줄이 꺼지고
+  # (SFN 미시작) Reconciler 슬롯 대조는 유지된다. 바꾸기 전에 README 의 종료 확인 절차를 따른다 —
+  # 이 값은 새 실행 생성만 바꾸고 이미 뜬 ECS 태스크를 멈추지 않는다.
+  description = "장중 수급 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.investor_intraday_orchestrator)
+    error_message = "investor_intraday_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 variable "investor_intraday_state_machine_timeout_seconds" {
   # **최소 슬롯 간격(09:35→10:05 = 1800s)보다 짧아야** 한 실행이 다음 실행과 겹치지 않는다.
   # 겹치면 두 실행이 같은 canonical 파티션을 동시에 병합한다.
