@@ -71,6 +71,13 @@ data "aws_secretsmanager_secret" "admin_bootstrap_operator" {
   name = "${local.prefix}-super-admin-api/bootstrap-operator/password"
 }
 
+# app-api 액세스 JWT 서명 키(ADR-0056) — 같은 규율: 그릇+값을 TF 밖 CLI 로 선생성, data 조회.
+# HS256 이라 32바이트 이상. 값 교체는 전 토큰 무효화와 같다:
+# aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"secret":"..."}'.
+data "aws_secretsmanager_secret" "app_api_jwt" {
+  name = "${local.prefix}-app-api/jwt/secret"
+}
+
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
 module "network" {
   source             = "../../modules/network"
@@ -720,6 +727,9 @@ module "app_rds" {
   db_name         = "app"
   master_username = "app"
 
+  # dev 최소 사양(상시 과금). 부하 실측 전까지 가장 작은 클래스.
+  instance_class = "db.t4g.micro"
+
   alarm_topic_arn = module.data_pipeline.alarm_topic_arn
 }
 
@@ -729,6 +739,10 @@ module "app_redis" {
   name       = "${local.prefix}-app"
   vpc_id     = module.network.vpc_id
   subnet_ids = module.network.data_subnet_ids
+
+  # dev 는 단일 노드(자동 페일오버 없음). 프라이머리+레플리카 Multi-AZ(ADR-0056 결정 1)는
+  # 페일오버 실측이 필요해질 때 2 로 올린다. 투표 캐시는 DB 에서 재조정되므로 유실은 복구된다.
+  num_cache_clusters = 1
 }
 
 # 공개 엣지, 호스트 1:1(ADR-0034). 모바일 앱은 쿠키·same-origin 이 없어 CloudFront 프록시 불필요.
@@ -787,8 +801,12 @@ module "app_api" {
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
+    APP_JWT_SECRET             = "${data.aws_secretsmanager_secret.app_api_jwt.arn}:secret::"
   }
-  secret_arns = [module.app_rds.master_user_secret_arn]
+  secret_arns = [
+    module.app_rds.master_user_secret_arn,
+    data.aws_secretsmanager_secret.app_api_jwt.arn,
+  ]
 
   depends_on = [module.app_alb]
 }
