@@ -79,6 +79,8 @@ operations_archive/canonical_run_artifacts/dataset={dataset}/run_id={run_id}/rep
 operations_archive/data_quality_logs/dataset={dataset}/checked_date={date}/run_id={run_id}/log.json
 ```
 
+⚠️ `operations_archive/canonical_run_artifacts/`에는 현재 **30일 만료** lifecycle이 걸려 있다(`infra/terraform/modules/pipeline/storage.tf` — 공시 재시도용 스냅샷 전제). §4의 과거 시점 조회가 이 artifact를 버전의 근거로 삼으려면, 신규 데이터셋의 artifact를 만료 없는 프리픽스에 두거나 보존 정책을 먼저 바꿔야 한다. 이는 미결정이다.
+
 archive의 `report_date`는 현행 helper 명칭이다. 신규 데이터셋은 위 표의 거래일·관측일·회계기간말 등
 어떤 날짜를 넣는지 manifest의 파티션 정의에 명시한다. 공개시각으로 간주하지 않는다.
 기존 helper가 있다고 신규 데이터셋 지원까지 완료된 것은 아니다. dataset 등록·manifest 검증·소비자 연결은 구현 작업이다.
