@@ -1,10 +1,11 @@
 import type { ApiClient } from './client';
+import { httpClient } from './http';
 import { mockClient } from './mock';
 
-// 백엔드 연결 시 EXPO_PUBLIC_API_MODE=http 와 ./http 구현을 추가하고 여기서만 택일한다
+// EXPO_PUBLIC_API_MODE=http 면 실서버(EXPO_PUBLIC_API_URL), 아니면 mock
 const mode = process.env.EXPO_PUBLIC_API_MODE ?? 'mock';
 
-export const api: ApiClient = mode === 'mock' ? mockClient : mockClient;
+export const api: ApiClient = mode === 'http' ? httpClient : mockClient;
 export type { ApiClient } from './client';
 export * from './types';
 export { ApiError, isApiError } from './error';
