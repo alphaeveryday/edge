@@ -96,9 +96,14 @@ class PublicationStore:
             if analysis["status"] == "completed":
                 return self._movement(cur, identity)
             schemas.movement(response)
-            cur.execute("""SELECT i.* FROM movement_items i JOIN movement_analyses a USING(analysis_id)
+            cur.execute("""WITH RECURSIVE history AS (
+                SELECT analysis_id,previous_analysis_id FROM movement_analyses WHERE analysis_id=%s
+                UNION ALL SELECT a.analysis_id,a.previous_analysis_id FROM movement_analyses a
+                JOIN history h ON a.analysis_id=h.previous_analysis_id
+                ) SELECT i.* FROM movement_items i JOIN history h USING(analysis_id)
+                JOIN movement_analyses a USING(analysis_id)
                 WHERE a.etf_code=%s AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<=%s""",
-                        (analysis["etf_code"], analysis["trading_date"], analysis["analysis_at"]))
+                        (analysis["previous_analysis_id"], analysis["etf_code"], analysis["trading_date"], analysis["analysis_at"]))
             existing = {row["item_id"] for row in cur.fetchall()}
             mapped = {}
             for item in response["new_items"]:
@@ -114,9 +119,8 @@ class PublicationStore:
             if any(ref not in existing and ref not in mapped for ref in response["selected_item_ids"]):
                 raise ValueError("Selection contains unknown or other-day item")
             selected = [mapped.get(ref, ref) for ref in response["selected_item_ids"]]
-            cur.execute("""SELECT * FROM movement_analyses WHERE etf_code=%s AND trading_date=%s
-                AND status='completed' AND analysis_at<=%s ORDER BY analysis_at DESC,analysis_id DESC LIMIT 1""",
-                        (analysis["etf_code"], analysis["trading_date"], analysis["analysis_at"]))
+            cur.execute("""SELECT * FROM movement_analyses WHERE analysis_id=%s AND trading_date=%s
+                AND status='completed'""", (analysis["previous_analysis_id"], analysis["trading_date"]))
             previous = cur.fetchone()
             unchanged = previous and (selected == previous["selected_item_ids"] or not selected)
             if unchanged:
@@ -187,6 +191,8 @@ class PublicationStore:
                         VALUES(%s,%s,%s,%s,%s,%s)""", (uuid4().hex, identity, kind, position, item["label"], item["tool_run_ids"]))
             if factor_details is not None:
                 from .factor_store import save_factor_details
+                for item in factor_details['issue']['items']:
+                    self._evidence(cur, item['tool_run_ids'], analysis)
                 save_factor_details(self.connection, identity, **factor_details)
             cur.execute("""UPDATE outlook_analyses SET status='completed',published_at=%s,outlook_sticker=%s,
                 summary_title=%s,summary=%s,detail_title=%s,detail_mode=%s,conclusion_title=%s,

@@ -92,3 +92,55 @@ def test_a_restored_topic_deleted_again_is_last_in_deletion_order():
     editor.apply([{"action":"add", **topic("0")}])
     editor.apply([{"action":"remove", "id":"0"}])
     assert [i["id"] for i in editor.result()["updates"]["items"]] == ["1", "0"]
+
+
+def test_rewrite_highlights_only_explicit_new_information_in_retained_topic():
+    editor = BodyEditor(base(), NOW)
+    result = editor.write('rewritten', [{**topic('0', 'new'), 'updated_sentence_numbers':[1]}])
+    assert result['items'][0]['id'] == '0'
+    assert result['items'][0]['sentences'][0]['is_updated'] is True
+    assert result['updates']['items'][0]['sentence'] == 'new'
+    # A wording-only change is recorded but is not invented as new information.
+    result = BodyEditor(base(),NOW).write('rewritten',[topic('0','reworded')])
+    assert result['items'][0]['sentences'][0]['is_updated'] is False
+    assert result['updates']['items'][0]['change_type'] == 'modified'
+    assert result['updates']['items'][0]['sentence'] is None
+
+
+@pytest.mark.parametrize('operation', ['apply', 'write'])
+def test_unchanged_text_cannot_be_newly_highlighted(operation):
+    editor = BodyEditor(base(), NOW)
+    unchanged = {**topic('0'), 'updated_sentence_numbers': [1]}
+    result = (editor.apply([{'action': 'update', **unchanged}]) if operation == 'apply'
+              else editor.write('title', [unchanged]))
+    assert result['items'][0]['sentences'][0]['is_updated'] is False
+    assert result['updates']['items'] == []
+
+
+@pytest.mark.parametrize('operation', ['apply', 'write'])
+def test_unchanged_text_preserves_only_its_same_day_highlight(operation):
+    editor = BodyEditor(base(), NOW)
+    editor.apply([{'action': 'update', **topic('0', 'new'), 'updated_sentence_numbers': [1]}])
+    def unchanged(target, mark):
+        item = {**topic('0', 'new'), 'updated_sentence_numbers': mark}
+        return (target.apply([{'action': 'update', **item}]) if operation == 'apply'
+                else target.write('title', [item]))
+    same_day = unchanged(editor, [])
+    assert same_day['items'][0]['sentences'][0]['is_updated'] is True
+    next_day = unchanged(BodyEditor(same_day, NOW.replace(day=29)), [1])
+    assert next_day['items'][0]['sentences'][0]['is_updated'] is False
+    assert next_day['updates']['items'] == []
+
+
+def test_reordering_duplicate_sentences_does_not_spread_highlights():
+    original = base()
+    original['items'][0]['sentences'] = [
+        {'sentence': 'same', 'is_updated': True},
+        {'sentence': 'other', 'is_updated': False},
+        {'sentence': 'same', 'is_updated': False},
+    ]
+    editor = BodyEditor(original, NOW)
+    result = editor.apply([{'action': 'update', 'id': '0', 'sentences': ['other', 'same', 'same'],
+                           'updated_sentence_numbers': [1, 2, 3], 'tool_run_ids': ['run-1']}])
+    assert [s['is_updated'] for s in result['items'][0]['sentences']] == [False, True, False]
+    assert result['updates']['items'] == []

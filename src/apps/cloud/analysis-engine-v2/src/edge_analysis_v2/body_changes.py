@@ -125,6 +125,14 @@ class BodyEditor:
         if mode == "update" and len(changed) >= 10:
             raise ValueError("Ten changed topics require rewrite")
         previous = {item["id"]: item for item in self.draft["items"]}
+        for identity in previous.keys() & current.keys():
+            flags = {}
+            for sentence in previous[identity]["sentences"]:
+                flags.setdefault(sentence["sentence"], []).append(sentence["is_updated"])
+            for sentence in current[identity]["sentences"]:
+                if sentence["sentence"] in flags:
+                    retained = flags[sentence["sentence"]]
+                    sentence["is_updated"] = retained.pop(0) if retained else False
         updates = {item["id"]: deepcopy(item) for item in self.updates}
         if self.base is not None:
             for identity, item in previous.items():
