@@ -30,11 +30,21 @@ def make_server(schemas: list[dict], call):
         SDK MCP server and its allowed tool names.
     """
     registered, allowed = [], []
+    gate = asyncio.Lock()
     for schema in schemas:
         function = schema['function']
         name = function['name']
         async def handler(arguments, tool_name=name):
-            result = call(tool_name, arguments)
+            async with gate:
+                # Cancellation must not leave a database write racing publication failure.
+                pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
+                try:
+                    result = await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    try:
+                        await pending
+                    finally:
+                        raise
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
         registered.append(tool(name, function['description'], function['parameters'])(handler))
         allowed.append('mcp__analysis__' + name)

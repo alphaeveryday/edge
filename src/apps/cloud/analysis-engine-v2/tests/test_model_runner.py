@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import json
+import time
 
 import pytest
 from jsonschema import ValidationError
@@ -74,3 +75,21 @@ def test_mcp_returns_callback_output_without_recomputing(monkeypatch):
     assert json.loads(result['content'][0]['text']) == expected
     assert called == [('sum',{'days':5})]
     assert allowed == ['mcp__analysis__sum']
+
+
+def test_cancelled_tool_finishes_audit_before_caller_observes_failure(monkeypatch):
+    from edge_analysis_v2 import model_runner
+    monkeypatch.setattr(model_runner, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
+    finished=[]
+    def call(name,args):
+        time.sleep(0.05)
+        finished.append(True)
+        return {'tool_run_id':'stored','result':{}}
+    schema={'function':{'name':'slow','description':'test','parameters':{'type':'object'}}}
+    async def check():
+        server,_=make_server([schema],call)
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.01):
+                await server['tools'][0].handler({})
+        assert finished == [True]
+    asyncio.run(check())
