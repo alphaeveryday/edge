@@ -205,7 +205,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 | fx·지수·금리 canonical에 생산자가 없어 2026-08-01부터 공백이다. `macro_z`·`fx_beta`가 오류 없이 빈 입력으로 돈다 | §1·§2 [실측] | ALPHA-1105 |
 | `fx_usdkrw`와 `fx_daily`의 `change_pct`는 같은 이름에 정의가 다르다 | §2 [실측] | 전환 시 호환 뷰 (ALPHA-1105) |
 | `collect.intraday`가 채워진 파티션의 `part-0`을 덮는다 | [코드] (실제 발생 흔적은 없음) | #953 (ALPHA-1106) |
-| `CausalLake` 13개 생성 지점이 08-05에 멈춘 Glue 표를 정본으로 써서 이후 5분봉을 못 본다 | `iceberg_covers`가 `asked_day`가 비면 최신일 유무만 본다 [코드]. Glue 최신 2026-08-05 [실측] | 별도 작업 (§7) |
+| `CausalLake` 13개 생성 지점이 08-05에 멈춘 Glue 표를 정본으로 써서 이후 5분봉을 못 본다 | `iceberg_covers`가 `asked_day`가 비면 최신일 유무만 본다 [코드]. Glue 최신 2026-08-05 [실측] | ALPHA-1108 |
 | 16종 543,281행이 canonical에 없어, canonical 폴백으로 도는 운영 분석이 그 이력을 못 본다 | §3.3 [실측] | 적재 보류 (§7) |
 | KR canonical 250 파티션이 레포 밖 배치로 재작성됐고, 그 코드·기록이 없다 | §3.2 [실측] | ALPHA-901에 기록 |
 
@@ -222,7 +222,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 |---|---|---|
 | 로컬 이력 16종 → canonical 적재 | §3.3의 1~4. 적재 직전 dry-run을 다시 해 계획을 고정하고, 적재 후 대조, 파일 목록 기준 롤백 | ALPHA-1104 (보존 브랜치) |
 | `bars_5m` Glue → canonical 소비 전환 | 위 적재·대조. 64,883 격리 키를 복구하지 않는 결정 확인. Glue 전 키 집합과 canonical 대조 | 신규 발번 필요 |
-| 13개 생성 지점의 낡은 Glue 사용 | 위 전환 또는 신선도 판정을 기준일 없이도 적용 | 신규 발번 필요 |
+| 13개 생성 지점의 낡은 Glue 사용 | 위 전환 또는 신선도 판정을 기준일 없이도 적용 | [ALPHA-1108](https://alphaeveryday.atlassian.net/browse/ALPHA-1108) |
 | `s3_kr_5min`·`s3_us_5min`을 표준 raw로 전환 | 없음(바이트 동일). 코드는 보존 브랜치 | ALPHA-1104 |
 | FX·지수·금리 생산자 | FMP bandwidth 확인. 입력: FMP stable EOD(FX 4 · 지수 6 · 미 국채 금리). 산출: 기존 `canonical/market_data/{fx_daily,index_daily,rates_daily}` 경로와 파일 스키마. 주기: 거래일 1회(미국장 마감 뒤). 준비 기준: 2026-08-01~ 공백 소급과 신선도 계약(ADR-0043) | ALPHA-1105 |
 | `fx_usdkrw`·`us_market` 호환 뷰 전환 | 위 생산자. `change_pct`는 일중 정의를 재현(§2) | ALPHA-1105 |
