@@ -78,9 +78,9 @@ class AnalysisFlowTests extends ContainerTests {
         Map<String, Object> old = result(call(port, "GET", "/api/v1/etfs/950001/analysis?date=2026-09-24", null));
         assertEquals("up", old.get("now"));
         assertNull(old.get("prev"));
-        assertEquals("ANALYSIS4041", call(port, "GET", "/api/v1/etfs/950001/analysis?date=2026-09-01", null).getBody().get("code"));
-        assertEquals("ANALYSIS4041", call(port, "GET", "/api/v1/etfs/950002/analysis", null).getBody().get("code"));
-        assertEquals("ETF4040", call(port, "GET", "/api/v1/etfs/000000/analysis", null).getBody().get("code"));
+        assertEquals("ANALYSIS4001", call(port, "GET", "/api/v1/etfs/950001/analysis?date=2026-09-01", null).getBody().get("code"));
+        assertEquals("ANALYSIS4001", call(port, "GET", "/api/v1/etfs/950002/analysis", null).getBody().get("code"));
+        assertEquals("ETF4001", call(port, "GET", "/api/v1/etfs/000000/analysis", null).getBody().get("code"));
     }
 
     @Test
@@ -102,7 +102,7 @@ class AnalysisFlowTests extends ContainerTests {
         assertEquals("SK하이닉스 · 9/24", tile.get("note"));
         assertEquals(false, m.get("hasDetail"));
 
-        assertEquals("ANALYSIS4041", call(port, "GET", "/api/v1/etfs/950001/analysis/metrics/chart", null).getBody().get("code"));
+        assertEquals("ANALYSIS4001", call(port, "GET", "/api/v1/etfs/950001/analysis/metrics/chart", null).getBody().get("code"));
         assertEquals(400, call(port, "GET", "/api/v1/etfs/950001/analysis/metrics/sideways", null).getStatusCode().value());
     }
 }

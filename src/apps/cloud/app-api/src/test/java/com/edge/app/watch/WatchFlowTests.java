@@ -61,7 +61,7 @@ class WatchFlowTests extends ContainerTests {
         assertEquals(0, groups.get(0).get("count"));
         var res = call("w1", "DELETE", "/api/v1/watch-groups/base", null);
         assertEquals(400, res.getStatusCode().value());
-        assertEquals("WATCH4000", res.getBody().get("code"));
+        assertEquals("WATCH4001", res.getBody().get("code"));
     }
 
     @Test
@@ -71,7 +71,7 @@ class WatchFlowTests extends ContainerTests {
         }
         var res = call("w2", "POST", "/api/v1/watch-groups", Map.of("label", "g10"));
         assertEquals(400, res.getStatusCode().value());
-        assertEquals("WATCH4001", res.getBody().get("code"));
+        assertEquals("WATCH4002", res.getBody().get("code"));
         List<?> groups = result(call("w2", "GET", "/api/v1/watch-groups", null));
         assertEquals(11, groups.size());
     }
@@ -92,7 +92,7 @@ class WatchFlowTests extends ContainerTests {
 
         var unknown = call("w3", "PUT", "/api/v1/watch-groups/base/etfs", Map.of("codes", List.of("000000")));
         assertEquals(404, unknown.getStatusCode().value());
-        assertEquals("ETF4040", unknown.getBody().get("code"));
+        assertEquals("ETF4001", unknown.getBody().get("code"));
     }
 
     @Test

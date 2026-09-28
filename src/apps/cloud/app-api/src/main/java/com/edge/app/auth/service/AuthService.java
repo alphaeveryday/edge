@@ -77,7 +77,7 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 동시 가입은 선검사를 같이 통과하므로 uq_member_email 위반도 MEMBER4090 이다.
+    // 동시 가입은 선검사를 같이 통과하므로 uq_member_email 위반도 MEMBER4002 이다.
     @Transactional
     public AuthResponse signup(SignupRequest request, String deviceKey) {
         if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isPresent()) {

@@ -57,6 +57,6 @@ class OnboardingFlowTests extends ContainerTests {
 
         var bad = call("POST", "/api/v1/onboarding/complete", Map.of("themes", List.of(), "etfs", List.of("999999")));
         assertEquals(404, bad.getStatusCode().value());
-        assertEquals("ETF4040", bad.getBody().get("code"));
+        assertEquals("ETF4001", bad.getBody().get("code"));
     }
 }

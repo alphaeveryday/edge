@@ -80,7 +80,7 @@ class ThemeFlowTests extends ContainerTests {
         Map<String, Object> none = result(call(port, "GET", "/api/v1/themes/tt-none/sheet", null, "X-Device-Id", "t1"));
         assertEquals("", none.get("title"));
         assertEquals(List.of(), none.get("rows"));
-        assertEquals("THEME4040", call(port, "GET", "/api/v1/themes/nope/sheet", null, "X-Device-Id", "t1").getBody().get("code"));
+        assertEquals("THEME4001", call(port, "GET", "/api/v1/themes/nope/sheet", null, "X-Device-Id", "t1").getBody().get("code"));
     }
 
     @Test
@@ -90,7 +90,7 @@ class ThemeFlowTests extends ContainerTests {
         assertEquals("2026-09-25T00:00:00Z", detail.get("updated"));
         assertEquals("2종", ((List<Map<String, Object>>) detail.get("stocks")).get(0).get("etfs"));
         assertEquals(List.of(1.0, 2.5), ((Map<String, Object>) detail.get("metric")).get("vals"));
-        assertEquals("ANALYSIS4041", call(port, "GET", "/api/v1/themes/tt-none", null).getBody().get("code"));
-        assertEquals("THEME4040", call(port, "GET", "/api/v1/themes/nope", null).getBody().get("code"));
+        assertEquals("ANALYSIS4001", call(port, "GET", "/api/v1/themes/tt-none", null).getBody().get("code"));
+        assertEquals("THEME4001", call(port, "GET", "/api/v1/themes/nope", null).getBody().get("code"));
     }
 }

@@ -21,7 +21,7 @@ public interface WatchItemRepository extends JpaRepository<WatchItem, WatchItem.
             """)
     List<String> groupKeysOf(@Param("p") long principalId, @Param("code") String etfCode);
 
-    /** principal 이 어느 그룹에든 담은 종목(관심 ETF). 커뮤니티 POST4000·scope=mine 이 읽는다. */
+    /** principal 이 어느 그룹에든 담은 종목(관심 ETF). 커뮤니티 POST4002·scope=mine 이 읽는다. */
     @Query("""
             select distinct i.etfCode from WatchItem i join WatchGroup g on g.id = i.groupId
             where g.principalId = :p and i.etfCode in :codes

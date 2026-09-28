@@ -78,6 +78,6 @@ class IssueFlowTests extends ContainerTests {
         assertEquals(1, affected.size(), "동기화에 없는 999999 는 숨긴다");
         assertEquals("up", affected.get(0).get("signal"));
         assertEquals("down", affected.get(0).get("prev"));
-        assertEquals("ISSUE4040", call(port, "GET", "/api/v1/issues/nope", null).getBody().get("code"));
+        assertEquals("ISSUE4001", call(port, "GET", "/api/v1/issues/nope", null).getBody().get("code"));
     }
 }

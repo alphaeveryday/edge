@@ -61,7 +61,7 @@ class EtfFlowTests extends ContainerTests {
         assertEquals("neutral", one.get("signal"));
         var missing = call(port, "GET", "/api/v1/etfs/000000", null, "X-Device-Id", "e1");
         assertEquals(404, missing.getStatusCode().value());
-        assertEquals("ETF4040", missing.getBody().get("code"));
+        assertEquals("ETF4001", missing.getBody().get("code"));
     }
 
     @Test
@@ -103,8 +103,8 @@ class EtfFlowTests extends ContainerTests {
     void moveWithoutSummaryIsNotReady() {
         var res = call(port, "GET", "/api/v1/etfs/910002/move", null, "X-Device-Id", "e1");
         assertEquals(404, res.getStatusCode().value());
-        assertEquals("ANALYSIS4041", res.getBody().get("code"));
-        assertEquals("ETF4040", call(port, "GET", "/api/v1/etfs/000000/move", null, "X-Device-Id", "e1").getBody().get("code"));
+        assertEquals("ANALYSIS4001", res.getBody().get("code"));
+        assertEquals("ETF4001", call(port, "GET", "/api/v1/etfs/000000/move", null, "X-Device-Id", "e1").getBody().get("code"));
     }
 
     @Test
@@ -113,7 +113,7 @@ class EtfFlowTests extends ContainerTests {
         assertEquals("help", ((Map<String, Object>) detail.get("insight")).get("dir"));
         assertEquals(10, detail.get("stockCount"));
         assertEquals("SK하이닉스", ((List<Map<String, Object>>) detail.get("stocks")).get(0).get("name"));
-        assertEquals("ANALYSIS4041", call(port, "GET", "/api/v1/etfs/910002/detail", null, "X-Device-Id", "e1").getBody().get("code"));
+        assertEquals("ANALYSIS4001", call(port, "GET", "/api/v1/etfs/910002/detail", null, "X-Device-Id", "e1").getBody().get("code"));
         assertTrue(call(port, "GET", "/api/v1/etfs/910001/detail", null).getStatusCode().is4xxClientError(), "익명은 COMMON401");
     }
 }

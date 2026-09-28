@@ -69,7 +69,7 @@ public class EtfService {
                 visible.stream().map(c -> AXIS.format(c.getTradeDate())).toList());
     }
 
-    /** 발행본이 없거나 summary 가 null 이면 ANALYSIS4041(2026-09-28 결정). */
+    /** 발행본이 없거나 summary 가 null 이면 ANALYSIS4001(2026-09-28 결정). */
     @Transactional(readOnly = true)
     public MoveResponse move(String code) {
         requireEtf(code);
@@ -90,7 +90,7 @@ public class EtfService {
                 groups.entrySet().stream().map(e -> new MoveResponse.Group(e.getKey(), e.getValue())).toList());
     }
 
-    /** payload 는 EtfDetailData 전체(erd.md). 없으면 ANALYSIS4041. */
+    /** payload 는 EtfDetailData 전체(erd.md). 없으면 ANALYSIS4001. */
     @Transactional(readOnly = true)
     public EtfDetailResponse detail(String code) {
         requireEtf(code);

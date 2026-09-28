@@ -41,7 +41,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** PRD 커뮤니티 정책: 쓰기는 회원, 관심 ETF 에 대해서만(POST4000), 태그 3개(POST4001). 삭제는 소프트. */
+/** PRD 커뮤니티 정책: 쓰기는 회원, 관심 ETF 에 대해서만(POST4002), 태그 3개(POST4003). 삭제는 소프트. */
 @Service
 @RequiredArgsConstructor
 public class PostService {

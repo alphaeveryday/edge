@@ -73,10 +73,10 @@ class PostFlowTests extends ContainerTests {
         String a = member("p1@example.com", "A", List.of("069500", "133690", "305720"));
         var unwatched = call("POST", "/api/v1/posts", Map.of("body", "b", "tags", List.of("091160")), a);
         assertEquals(400, unwatched.getStatusCode().value());
-        assertEquals("POST4000", unwatched.getBody().get("code"));
+        assertEquals("POST4002", unwatched.getBody().get("code"));
         var tooMany = call("POST", "/api/v1/posts", Map.of("body", "b", "tags", List.of("069500", "133690", "305720", "091160")), a);
-        assertEquals("POST4001", tooMany.getBody().get("code"));
-        assertEquals("ETF4040", call("POST", "/api/v1/posts", Map.of("body", "b", "tags", List.of("000000")), a).getBody().get("code"));
+        assertEquals("POST4003", tooMany.getBody().get("code"));
+        assertEquals("ETF4001", call("POST", "/api/v1/posts", Map.of("body", "b", "tags", List.of("000000")), a).getBody().get("code"));
         assertEquals(400, call("POST", "/api/v1/posts", Map.of("body", "b", "tags", List.of()), a).getStatusCode().value());
         assertEquals(401, call("POST", "/api/v1/posts", Map.of("body", "b", "tags", List.of("069500")), "dev:g1").getStatusCode().value());
 
@@ -137,7 +137,7 @@ class PostFlowTests extends ContainerTests {
 
         List<Map<String, Object>> top = items(result(call("GET", "/api/v1/posts?scope=hot&size=1", null, "dev:g3")));
         assertEquals(hot, top.get(0).get("id"));
-        assertEquals("POST4040", call("PUT", "/api/v1/posts/999999/like", null, b).getBody().get("code"));
+        assertEquals("POST4001", call("PUT", "/api/v1/posts/999999/like", null, b).getBody().get("code"));
         assertEquals(cold, result(call("GET", "/api/v1/posts/" + cold, null, null)).get("id"));
     }
 
@@ -151,7 +151,7 @@ class PostFlowTests extends ContainerTests {
         Map<String, Object> asAuthor = result(call("GET", "/api/v1/posts/" + id, null, a));
         assertEquals(2, asAuthor.get("views"));
         assertEquals(true, asAuthor.get("mine"));
-        assertEquals("POST4040", call("GET", "/api/v1/posts/abc", null, null).getBody().get("code"));
+        assertEquals("POST4001", call("GET", "/api/v1/posts/abc", null, null).getBody().get("code"));
     }
 
     @Test

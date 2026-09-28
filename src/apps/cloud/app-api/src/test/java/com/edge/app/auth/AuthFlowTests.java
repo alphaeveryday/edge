@@ -87,12 +87,12 @@ class AuthFlowTests extends ContainerTests {
         signup("b@example.com");
         var bad = call("POST", "/api/v1/auth/login", Map.of("email", "b@example.com", "password", "nope"));
         assertEquals(401, bad.getStatusCode().value());
-        assertEquals("AUTH4010", bad.getBody().get("code"));
+        assertEquals("AUTH4001", bad.getBody().get("code"));
         assertEquals(401, call("POST", "/api/v1/auth/login", Map.of("email", "nobody@example.com", "password", "x")).getStatusCode().value());
         assertEquals(200, call("POST", "/api/v1/auth/login", Map.of("email", "b@example.com", "password", "pw123456")).getStatusCode().value());
         var dup = call("POST", "/api/v1/auth/signup", Map.of("email", "b@example.com", "password", "x", "nick", "n"));
         assertEquals(409, dup.getStatusCode().value());
-        assertEquals("MEMBER4090", dup.getBody().get("code"));
+        assertEquals("MEMBER4002", dup.getBody().get("code"));
     }
 
     @Test
@@ -101,7 +101,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", "c@example.com")).getStatusCode().value());
         var missing = call("POST", "/api/v1/auth/password-reset", Map.of("email", "zz@example.com"));
         assertEquals(404, missing.getStatusCode().value());
-        assertEquals("MEMBER4040", missing.getBody().get("code"));
+        assertEquals("MEMBER4001", missing.getBody().get("code"));
     }
 
     @Test
