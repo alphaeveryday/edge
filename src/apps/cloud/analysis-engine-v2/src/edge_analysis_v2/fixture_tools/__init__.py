@@ -3,7 +3,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from .common import available, holdings, instant, table
-from . import chart, flow, news
+from . import chart, flow, macro, news
 
 
 class FixtureTools:
@@ -13,7 +13,7 @@ class FixtureTools:
         fixture: Raw observations and a fixed context; copied at construction.
     """
 
-    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition"}
+    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations"}
 
     def __init__(self, fixture):
         self.fixture = deepcopy(fixture)
@@ -27,6 +27,9 @@ class FixtureTools:
             self._register(name, "확정 거래일의 순매수 합계·빈도·최신일부터 연속을 계산합니다. sum은 direction=none. 가중 수급은 ETF 구성종목 기준이며 ETF 자체 거래가 아닙니다. exact=false인 연속은 최소 일수입니다.", parameters | extra, lambda **args: flow.calculate(self.fixture, **args), r"F_d=\sum_iw_{i,d}x_{i,d};\ S=\sum_dF_d;\ M=\sum_d[sF_d>0]", ["투자자별 확정 순매수", "일별 ETF 구성종목 비중"])
         self._register("calculate_chart_indicators", "ETF 가격으로 RSI14 모멘텀과 반전 Williams14 바닥지수를 계산합니다. 높은 바닥지수는 과매도 관찰이며 반등확률이 아닙니다.", {}, lambda: chart.indicators(self.fixture), r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})", ["ETF 일봉과 장중 가격"])
         self._register("evaluate_indicator_transition", "최근 지수 관측의 80/20 진입·이탈을 확인합니다. 구간 유지에는 최근5개 관측이 모두 필요합니다.", {"indicator": {"type": "string", "enum": ["momentum", "bottom"]}}, lambda **args: chart.transition(self.fixture, **args), r"U(x)=[x\ge80];\ L(x)=[x\le20]", ["ETF 일봉과 장중 가격"])
+        series = {"type": "string", "enum": list(macro.SERIES)}
+        self._register("get_macro_observations", "거시지표의 공개된 최근21개 관측값을 탐색합니다. 수치 비교 근거는 compare_macro_observations로 확정합니다.", {"series": series}, lambda **args: macro.read(self.fixture, **args), "", ["목 거시경제 관측"])
+        self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"])
 
     def _register(self, name, description, parameters, callback, formula, sources):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources}

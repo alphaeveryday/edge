@@ -49,3 +49,17 @@
 - 상단 ≥80, 하단 ≤20. 유지에는 서로 다른 최근5개 관측 전부 필요.
 - 5요인 카드: 현재가 반영 MA20 이격·MA60 방향, 확정20일 신고가(40일 필요), 364일 최고종가 대비, 전일 거래대금/이전20일 평균, Wilder ATR14/전일종가.
 - 거래대금은 실제 필드. 현재가×거래량 대체 없음. 52주 데이터 시작일이 부족하면 해당 카드 제외. 모든 필수 거래일 누락은 계산 실패.
+
+## 매크로
+
+| 도구 | 인수 | 결과 |
+|---|---|---|
+| `get_macro_observations` | `series` | 공개된 최근21개 관측의 columns/rows. 탐색용 |
+| `compare_macro_observations` | `series, previous_at, current_at, operation` | 두 정확한 관측의 difference 또는 percent_change. 최종 근거 |
+
+- 등록 계열: usd_krw(KRW_per_USD), kr_10y_yield/us_10y_yield/kr_cpi_yoy(percent), brent_spot_usd(USD_per_barrel), commodity(지정 원자재 지수).
+- 원자료: `macro`의 series,value,unit,observed_at,available_at,subject(선택). 관측 단위는 등록 단위와 일치해야 함.
+- 차이 $C-P$: 금리·물가는 %p. 상대변화 $100(C/P-1)$: %. 상대변화의 이전값은 양수여야 함.
+- 카드: 환율·국고채10년·미국채10년·브렌트 최신값. 원자재20관측 변화에는 `macro_trading_dates.commodity`의 정확한21개 거래일 필요.
+- 금리 일정은 `policy_decisions`의 decision_at,available_at,subject. 미래 행사일은 허용하지만 일정의 공개시각은 분석시각 이전. 날짜 차이는 KST.
+- 비어 있거나 자료가 부족한 카드는 제외. 금리·환율의 ETF 영향 방향은 계산하지 않음.
