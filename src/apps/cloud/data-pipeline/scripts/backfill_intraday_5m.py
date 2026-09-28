@@ -645,11 +645,13 @@ def main() -> int:
 
     spec = VENDORS[a.vendor]
     backfill_name = spec["file"]
-    if a.vendor == "fmp" and not a.source_parquet:
+    # 원천은 이관에만 쓴다 — 정규장 복구(--repair-session-hours)는 이미 쓴 파일만 보므로 필요 없다.
+    migrating_fmp = a.vendor == "fmp" and not a.repair_session_hours
+    if migrating_fmp and not a.source_parquet:
         ap.error("--vendor fmp 는 --source-parquet 가 필요하다")
     s3 = _s3()
     days = _trading_days(s3, a.bucket)[-a.days:]
-    if a.vendor == "fmp":
+    if migrating_fmp:
         # 원천이 가진 날만 본다 — 정본 파티션을 날마다 읽어 커버리지를 세므로, 원천에 없는
         # 날까지 읽는 것은 순수 비용이다(~900일 × part-0 ~700KB). 달력 밖 원천 날짜는
         # 수집기가 `skipped_outside_calendar` 로 센다.

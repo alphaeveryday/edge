@@ -1043,3 +1043,19 @@ def test_fmp_off_grid_rows_are_set_aside_and_counted_not_migrated(monkeypatch):
     assert [r["ts"].strftime("%H:%M") for r in src["by_day"]["2024-03-04"]] == ["09:00"]
     assert [x["ts"] for x in src["off_grid"]] == ["2024-03-04 09:01:00"]
     assert src["rows"] == 2
+
+
+def test_fmp_session_repair_needs_no_source_and_scans_the_whole_window(monkeypatch):
+    """정규장 복구는 원천 없이 돌고, 원천 날짜로 창이 좁혀지지 않는다(이미 쓴 파일 전부가 대상)."""
+    days = ["2024-03-04", "2024-03-05"]
+    seen: list[str] = []
+    monkeypatch.setattr(backfill, "_s3", lambda: None)
+    monkeypatch.setattr(backfill, "_trading_days", lambda _s3, _b: days)
+    monkeypatch.setattr(backfill, "_read_day",
+                        lambda _s3, _b, d, name="part-0.parquet": seen.append(d) or None)
+    monkeypatch.setattr(backfill, "_load_local_source",
+                        lambda uri: pytest.fail("복구 경로가 원천을 읽었다"))
+    monkeypatch.setattr("sys.argv", ["backfill", "--vendor", "fmp", "--repair-session-hours",
+                                     "--dry-run"])
+    assert backfill.main() == 0
+    assert seen == days
