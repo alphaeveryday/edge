@@ -2,6 +2,7 @@
 
 - `BodyEditor(base, analysis_at)`: 이전 `detail` 또는 `None`. `write(title, items)`는 전체 작성, `apply(changes, title=None, item_order=None)`는 여러 논점의 원자적 편집.
 - 편집 결과: `title`, `items`, `updates`, `mode`. 불릿은 `sentence`와 `is_updated`. 최초 업데이트는 비우고 이후 같은 날의 변경 기록을 이어받음.
+- 같은 논점의 동일 문장은 새 정보로 강조하지 않음. 당일 기존 강조만 유지하며 날짜가 바뀌면 해제. 새 문장의 강조 여부는 에이전트가 지정.
 - 수정·삭제·추가된 서로 다른 논점이 이전 발행본 대비 10개 이상이면 전체 작성 필요. 순서·근거·강조만의 변경은 제외.
 - 삭제 기록은 삭제 전 제목·근거, 문장은 `null`. 표현 변경도 수정이며 문장 순서만 바뀌면 수정 아님.
 - `PublicationStore.begin`은 실행 부모 행 생성. 툴 기록은 독립 커밋. `save_movement`와 `save_outlook`은 완성 결과를 원자적으로 저장.
