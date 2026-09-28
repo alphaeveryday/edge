@@ -550,6 +550,9 @@ def _load_local_source(uri: str) -> dict:
         ts = datetime.fromisoformat(str(r["ts"]))
         avail = datetime.fromisoformat(str(r["available_at"]))
         day = ts.date().isoformat()
+        if ts.tzinfo is not None or avail.tzinfo is not None:
+            # canonical 은 KST naive 다. 시간대 붙은 값은 pyarrow 가 UTC naive 로 접어 9시간 민다.
+            raise ValueError(f"시간대가 붙은 시각: {r['ticker']} {r['ts']} {r['available_at']}")
         if avail != ts + timedelta(minutes=BUCKET_MINUTES):
             raise ValueError(f"available_at 이 ts+5분이 아니다: {r['ticker']} {ts} {avail}")
         if str(r["trade_date"])[:10] != day:

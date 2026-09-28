@@ -20,7 +20,8 @@ ponytail: server-side copy(boto3 copy_object)만 쓴다 — parquet을 내려받
 복사 시각으로 바꾸지 않는다). 그래서 재실행은 같은 키를 다시 보고, 이미 같은 바이트가
 있으면 복사 없이 `already_identical` 로 넘어간다. 중간에 죽으면 다시 돌리면 된다.
 2026-07-29 에 이미 돈 KR 복사(`run_8645…`, ingest_date=복사일)는 `--run-id`·`--ingest-date`
-로 그 자리를 짚어 **검증만** 할 수 있다(다시 복사하지 않는다).
+로 그 자리를 짚어 대조할 수 있다 — 같은 바이트는 다시 복사하지 않는다. `--dry-run` 이면
+쓰기가 전혀 없고, 빼면 빠진 객체를 채우고 검증 로그를 남긴다.
 
 **체크섬.** 버킷은 SSE-S3(AES256)라 단일 파트 객체의 ETag 가 곧 MD5 다. 원본이 단일
 파트면 ETag 를 대조하고, 멀티파트(ETag 에 `-N`)면 원본을 스트리밍해 MD5 를 구해
@@ -36,7 +37,7 @@ version_id 는 기록할 값이 없다(null 로 남긴다).
     AWS_PROFILE=edge python scripts/migrate_fmp_5min_raw.py --preset us --dry-run
     AWS_PROFILE=edge python scripts/migrate_fmp_5min_raw.py --preset kr-gap
     AWS_PROFILE=edge python scripts/migrate_fmp_5min_raw.py --preset kr \\
-        --run-id run_8645481c2c1d4451af227c1633f1030d --ingest-date 2026-07-29   # 기존 복사 검증
+        --run-id run_8645481c2c1d4451af227c1633f1030d --ingest-date 2026-07-29 --dry-run  # 기존 복사 대조(쓰기 없음)
 """
 from __future__ import annotations
 

@@ -946,6 +946,7 @@ def _src_row(ts: str, day: str | None = None, avail: str | None = None) -> dict:
     ([_src_row("2024-03-04 09:00:00", day="2024-03-05")], "trade_date"),               # 파티션이 갈린다
     ([_src_row("2024-03-04 08:00:00")], "정규장 밖"),                                    # 장전 봉 = 가짜 시가
     ([_src_row("2024-03-04 09:00:00"), _src_row("2024-03-04 09:00:00")], "중복"),       # 두 번 센다
+    ([_src_row("2024-03-04T09:00:00+09:00", avail="2024-03-04T09:05:00+09:00")], "시간대"),  # 9시간 밀린다
 ])
 def test_fmp_source_that_breaks_the_canonical_contract_is_refused(monkeypatch, rows, reason):
     """원천이 정본 계약을 어기면 한 행도 옮기지 않고 죽는다.
