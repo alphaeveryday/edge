@@ -3,7 +3,7 @@
     python verify/run.py setup                 # 재생 입력·검증 DB·스키마·종목 등록(한 번)
     python verify/run.py reset                 # 검증 원장 레인 행·버킷 state/lake 비우기(시나리오마다)
     python verify/run.py trigger --slot 10:05 [--conf '{"faults": ...}']
-    python verify/run.py evidence --slot 10:05 # ECS 태스크 수·업무 실행 수·원장·산출물 쓰기를 한 번에
+    python verify/run.py evidence --slot 10:05 --dag-run <dag_run_id>   # ECS 태스크 수·업무 실행 수·원장·산출물 쓰기
 
 성공 기준은 Airflow 상태가 아니라 **네 가지 대조**다: 실제 ECS 태스크 수(검증 클러스터, 이 run 의 --run-id),
 업무 실행 수(shim 의 business_starts — wrapper 가 보류·skip 하면 0), 원장 상태(검증 DB), 산출물 쓰기(partition_writes).
@@ -58,11 +58,16 @@ def _one_off(family: str, command: list[str] | None, container: str = "data-pipe
         time.sleep(10)
     code = t["containers"][0].get("exitCode")
     stream = f"{'migrate' if container == 'migrate' else 'ops'}/{container}/{arn.rsplit('/', 1)[1]}"
-    try:
-        text = "\n".join(e["message"] for e in logs.get_log_events(
-            logGroupName=f"/ecs/{PREFIX}-verify", logStreamName=stream, startFromHead=True)["events"])
-    except logs.exceptions.ResourceNotFoundException:
-        text = ""
+    text = ""
+    for _ in range(6):                  # awslogs 전달은 STOPPED 보다 늦을 수 있다
+        try:
+            text = "\n".join(e["message"] for e in logs.get_log_events(
+                logGroupName=f"/ecs/{PREFIX}-verify", logStreamName=stream, startFromHead=True)["events"])
+        except logs.exceptions.ResourceNotFoundException:
+            text = ""
+        if text:
+            break
+        time.sleep(5)
     print(f"{family} {command} → exit={code} stop={t.get('stopCode')} {t.get('stoppedReason', '')}")
     return code, text
 
@@ -148,21 +153,20 @@ def trigger(args) -> int:
 
 
 def evidence(args) -> int:
+    # 슬롯이 같으면 run_id 가 같다(결정적) — 같은 슬롯을 여러 시나리오에서 쓰므로 DAG run 으로 거른다. 모든 EdgeStep
+    # 태스크는 env OPS_ORCHESTRATOR_ATTEMPT_REF=airflow:<dag>/<dag_run_id>/<task>/<try> 를 싣고, shim 기록도 그 값을 남긴다.
     run_id = _run_id(_slot(args.slot))
+    ref = f"airflow:{DAG}/{args.dag_run}/"
     tasks = []
     for status in ("RUNNING", "STOPPED"):
         arns = [a for page in ecs.get_paginator("list_tasks").paginate(cluster=CLUSTER, desiredStatus=status)
                 for a in page["taskArns"]]
         for i in range(0, len(arns), 100):
             tasks += ecs.describe_tasks(cluster=CLUSTER, tasks=arns[i:i + 100])["tasks"]
-    slot = _slot(args.slot)
-    marks = {f"{LANE}:{slot.strftime('%Y-%m-%dT%H:%M')}", slot.isoformat()}   # report 의 OPS_RUN_KEY, plan 의 슬롯
-
     def ours(t: dict) -> bool:
-        # 업무 스텝은 --run-id 로, plan·report 는 env(OPS_SCHEDULED_TIME·OPS_RUN_KEY)로 이 슬롯을 가리킨다.
         override = (t.get("overrides", {}).get("containerOverrides") or [{}])[0]
-        env = {e.get("value") for e in override.get("environment") or []}
-        return run_id in (override.get("command") or []) or bool(marks & env)
+        return any(e.get("name") == "OPS_ORCHESTRATOR_ATTEMPT_REF" and str(e.get("value", "")).startswith(ref)
+                   for e in override.get("environment") or [])
     mine = [t for t in tasks if ours(t)]
     bucket = _bucket()
     state = {}
@@ -170,7 +174,7 @@ def evidence(args) -> int:
         objs = [o["Key"] for page in s3.get_paginator("list_objects_v2").paginate(
             Bucket=bucket, Prefix=f"state/{kind}/") for o in page.get("Contents", [])]
         records = [json.loads(s3.get_object(Bucket=bucket, Key=k)["Body"].read()) for k in objs]
-        state[kind] = [r for r in records if r.get("run_id") == run_id]
+        state[kind] = [r for r in records if str(r.get("attempt_ref") or "").startswith(ref)]
     print(json.dumps({
         "pipeline_run_id": run_id,
         "ecs_tasks": [{"arn": t["taskArn"].rsplit("/", 1)[1], "cmd": t["overrides"]["containerOverrides"][0]["command"][0],
@@ -205,6 +209,7 @@ def main() -> int:
     t.add_argument("--conf", default="{}")
     e = sub.add_parser("evidence")
     e.add_argument("--slot", required=True)
+    e.add_argument("--dag-run", required=True, help="trigger 가 출력한 dag_run_id")
     args = p.parse_args()
     return {"setup": setup, "reset": reset, "trigger": trigger, "evidence": evidence}[args.cmd](args)
 

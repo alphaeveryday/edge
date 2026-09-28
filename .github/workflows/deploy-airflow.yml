@@ -25,6 +25,10 @@ on:
         description: "배포할 기존 이미지 태그(롤백). 비우면 이 커밋을 빌드한다"
         required: false
         default: ""
+      start_service:
+        description: "서비스가 desired 0 이면 1 로 켠다(최초 구축·운영자 정지 해제). 끄면 현재 desired 를 그대로 둔다"
+        type: boolean
+        default: false
       allow_market_hours:
         description: "평일 장중(KST 09:20~15:00) 배포 허용 — 이미 도는 업무 ECS 는 멈추지 않지만 그 슬롯의 Airflow task 가 재시작된다"
         type: boolean
@@ -102,6 +106,7 @@ jobs:
       - name: 마이그레이션 → 서비스 교체
         env:
           IMAGE: ${{ steps.ecr.outputs.registry }}/edge/airflow:${{ inputs.image_tag || github.sha }}
+          START_SERVICE: ${{ inputs.start_service }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -140,7 +145,16 @@ jobs:
           [ "${code}" = 0 ] || { echo "::error::마이그레이션 실패 — 서비스를 바꾸지 않는다. 로그 /ecs/${CLUSTER} migrate/*"; exit 1; }
 
           # 2) 서비스 교체 — 세 구성요소가 같은 이미지로 함께 바뀐다. 실패하면 circuit breaker 가 이전 리비전으로 되돌린다.
+          #    desired 는 운영자 소유다: 0 이면(최초 구축 전·장애 대응 정지) start_service 를 명시해야만 켠다.
+          #    머지가 멈춰 둔 Airflow 를 되살려 슬롯을 돌리게 하지 않는다.
           service_def="$(register "${FAMILY}")"
+          desired="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].desiredCount' --output text)"
+          if [ "${desired}" = 0 ] && [ "${START_SERVICE}" != true ]; then
+            aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" --task-definition "${service_def}" >/dev/null
+            echo "::warning::서비스 desired 0 — 리비전만 ${service_def} 로 바꾸고 켜지 않았다(start_service 로 켠다)."
+            exit 0
+          fi
           aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" \
             --task-definition "${service_def}" --desired-count 1 >/dev/null
           echo "서비스 갱신 요청: ${service_def}"

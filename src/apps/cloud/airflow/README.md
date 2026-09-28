@@ -296,12 +296,12 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
    import json, secrets; print(json.dumps({"jwt_secret": secrets.token_urlsafe(48),
      "api_secret_key": secrets.token_urlsafe(32), "admin_password": secrets.token_urlsafe(18)}))')"
    ```
-4. `deploy-airflow` 를 workflow_dispatch 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable.
+4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable.
 5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
 
 ### 배포·롤백
 
-- 평시 배포: `src/apps/cloud/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
+- 평시 배포: `src/apps/cloud/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 서비스 desired 가 0(운영자 정지)이면 리비전만 바꾸고 켜지 않는다 — 켜는 것은 `start_service=true` 뿐이다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
 - 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다.
 - Airflow **버전을 내리는** 롤백은 이 경로로 하지 않는다. 새 버전의 `db migrate` 가 스키마를 올렸기 때문이다. 업그레이드 전에 메타DB 스냅샷을 찍고, 되돌릴 때는 그 스냅샷으로 복원한 뒤 옛 이미지를 배포한다.
 - Terraform 이 태스크 정의(환경·자원·역할)를 바꾸면 **다음 배포부터** 반영된다. 서비스의 리비전과 desired 는 CD 가 소유한다(`ignore_changes`). 바로 반영하려면 workflow_dispatch 로 같은 태그를 다시 배포한다.
@@ -398,7 +398,7 @@ cd src/apps/cloud/airflow
 docker build --build-arg BASE=<배포된 data-pipeline 이미지 다이제스트> -t <ecr>/edge/airflow:verify verify && docker push <ecr>/edge/airflow:verify
 EDGE_LAKE_BUCKET=<레이크(읽기)> python verify/run.py setup
 AIRFLOW_PASSWORD=... python verify/run.py trigger --slot 10:05 --conf '{"faults": {"collect": {"runtask_response_lost": [1]}}}'
-python verify/run.py evidence --slot 10:05
+python verify/run.py evidence --slot 10:05 --dag-run <trigger 가 출력한 dag_run_id>
 ```
 
 ## 운영 전환·롤백 절차(장중 수급, 아직 실행하지 않았다)

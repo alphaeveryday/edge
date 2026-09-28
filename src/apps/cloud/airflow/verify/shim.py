@@ -45,7 +45,8 @@ def _arg(argv: list[str], name: str) -> str | None:
 def _record(kind: str, record: dict) -> None:
     """S3 는 append 가 없다 — 사건 하나 = 객체 하나. 개수가 곧 횟수다."""
     now = datetime.now(timezone.utc)
-    record = {**record, "ecs_task_arn": _task_arn(), "at": now.isoformat()}
+    record = {**record, "ecs_task_arn": _task_arn(), "at": now.isoformat(),
+              "attempt_ref": os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF")}   # airflow:<dag>/<dag_run>/<task>/<try>
     _s3.put_object(Bucket=BUCKET, Key=f"state/{kind}/{now:%Y%m%dT%H%M%S%f}-{uuid.uuid4().hex[:8]}.json",
                    Body=json.dumps(record).encode())
 
@@ -212,8 +213,7 @@ def main(argv: list[str]) -> int:
     step, run_id = argv[0], _arg(argv, "--run-id")
     fault = json.loads(os.environ.get("VERIFY_FAULT") or "{}")
     _record("invocations", {"step": step, "run_id": run_id, "argv": argv, "fault": fault,
-                            "skip_if_succeeded": os.environ.get("OPS_SKIP_IF_SUCCEEDED"),
-                            "attempt_ref": os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF")})
+                            "skip_if_succeeded": os.environ.get("OPS_SKIP_IF_SUCCEEDED")})
     if "sleep_before" in fault:
         time.sleep(fault["sleep_before"])
     _instrument(step, run_id, fault)
