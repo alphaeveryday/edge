@@ -241,7 +241,7 @@ def main() -> int:
         # 로그 run_id 에 실행 시각을 붙인다 — 같은 목적지 재실행(검증)이 앞선 로그를 덮지 않게.
         log_key = collection_log_key(source=SOURCE_VENDOR, dataset=DATASET,
                                      started_date=started_at.date().isoformat(),
-                                     run_id=f"{run_id}-{started_at:%Y%m%dT%H%M%SZ}")
+                                     run_id=f"{run_id}-{started_at:%Y%m%dT%H%M%S%fZ}")
         try:
             s3.put_object(Bucket=args.bucket, Key=log_key, Body=body)
             print(f"collection_log: {log_key}")
