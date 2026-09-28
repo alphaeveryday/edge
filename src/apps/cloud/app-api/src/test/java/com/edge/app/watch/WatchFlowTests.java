@@ -29,7 +29,8 @@ class WatchFlowTests extends ContainerTests {
     static void seedEtfs(@Autowired JdbcTemplate jdbc) {
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, sub, hot) values "
                 + "('069500','i1','XKRX','KODEX 200','kospi',null,false), ('133690','i2','XKRX','TIGER 나스닥100','us',null,true), "
-                + "('305720','i3','XKRX','KODEX 2차전지','battery','부제',false) on conflict (code) do nothing");
+                + "('305720','i3','XKRX','KODEX 2차전지','battery','부제',false) "
+                + "on conflict (code) do update set sub = excluded.sub, hot = excluded.hot");   // 테스트 클래스끼리 DB 를 공유한다
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('069500', 41230.5, 1.23, now()) on conflict do nothing");
         jdbc.update("insert into etf_analysis(etf_code, as_of, published_at, signal, payload) values "
                 + "('069500', '2026-09-26', now(), 'down', '{}'), ('069500', '2026-09-27', now(), 'strongUp', '{}') on conflict do nothing");

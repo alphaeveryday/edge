@@ -107,12 +107,13 @@ class AuthFlowTests extends ContainerTests {
     void deleteAccountKeepsRowButFreesEmailAndInvalidatesSession() {
         var auth = signup("d@example.com");
         String bearer = "Bearer " + auth.get("accessToken");
+        String handle = (String) ((Map<?, ?>) auth.get("me")).get("handle");
         assertEquals(200, call("DELETE", "/api/v1/me", null, "Authorization", bearer).getStatusCode().value());
         // 토큰은 만료 전이지만 회원이 없으므로 COMMON401, 리프레시도 막힌다.
         assertEquals(401, call("GET", "/api/v1/me", null, "Authorization", bearer).getStatusCode().value());
         assertEquals(400, call("POST", "/api/v1/auth/refresh", Map.of("refreshToken", auth.get("refreshToken"))).getStatusCode().value());
         // 행은 남고 식별 정보만 비어 같은 이메일로 재가입할 수 있다.
-        assertEquals(1, jdbc.queryForObject("select count(*) from member where deleted_at is not null and email is null and provider = 'email'", Integer.class));
+        assertEquals(1, jdbc.queryForObject("select count(*) from member where deleted_at is not null and email is null and handle = ?", Integer.class, handle));
         signup("d@example.com");
     }
 
