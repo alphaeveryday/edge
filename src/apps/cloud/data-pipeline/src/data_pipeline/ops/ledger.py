@@ -370,34 +370,44 @@ class Ledger:
         self, *, expected_task_id: str, ecs_task_arn: str, sfn_execution_arn: str | None,
         sfn_state_name: str | None, record_source: str, orchestrator_attempt_ref: str | None = None,
     ) -> str:
-        new_id = domain_id("att")
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            # attempt_number 는 표시용 — 조회+1(멱등 수단 아님, 경쟁은 표시 부정확만 유발).
-            # 업무를 실행한 시도만 센다 — 중복 skip 행이 번호를 건너뛰게 하지 않는다(ALPHA-1088).
-            cur.execute(
-                "SELECT count(*) FROM ops_task_attempt WHERE expected_task_id=%s"
-                " AND record_source <> %s",
-                (expected_task_id, states.SOURCE_DUPLICATE_SKIP),
-            )
-            number = int(cur.fetchone()[0]) + 1
-            cur.execute(
-                "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, attempt_number,"
-                " ecs_task_arn, execution_status, started_at, sfn_execution_arn, sfn_state_name,"
-                " record_source, orchestrator_attempt_ref) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s)"
-                " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
-                " RETURNING attempt_id",
-                (new_id, expected_task_id, number, ecs_task_arn, states.EXEC_RUNNING,
-                 sfn_execution_arn, sfn_state_name, record_source, orchestrator_attempt_ref),
-            )
-            row = cur.fetchone()
-            if row is not None:
-                return str(row[0])
-            cur.execute(
-                "SELECT attempt_id FROM ops_task_attempt"
-                " WHERE expected_task_id=%s AND ecs_task_arn=%s",
-                (expected_task_id, ecs_task_arn),
-            )
-            return str(cur.fetchone()[0])
+            return self._insert_attempt_tx(
+                cur, expected_task_id=expected_task_id, ecs_task_arn=ecs_task_arn,
+                sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
+                record_source=record_source, orchestrator_attempt_ref=orchestrator_attempt_ref)
+
+    @staticmethod
+    def _insert_attempt_tx(
+        cur, *, expected_task_id: str, ecs_task_arn: str, sfn_execution_arn: str | None,
+        sfn_state_name: str | None, record_source: str, orchestrator_attempt_ref: str | None,
+    ) -> str:
+        new_id = domain_id("att")
+        # attempt_number 는 표시용 — 조회+1(멱등 수단 아님, 경쟁은 표시 부정확만 유발).
+        # 업무를 실행한 시도만 센다 — 중복 skip 행이 번호를 건너뛰게 하지 않는다(ALPHA-1088).
+        cur.execute(
+            "SELECT count(*) FROM ops_task_attempt WHERE expected_task_id=%s"
+            " AND record_source <> %s",
+            (expected_task_id, states.SOURCE_DUPLICATE_SKIP),
+        )
+        number = int(cur.fetchone()[0]) + 1
+        cur.execute(
+            "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, attempt_number,"
+            " ecs_task_arn, execution_status, started_at, sfn_execution_arn, sfn_state_name,"
+            " record_source, orchestrator_attempt_ref) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s)"
+            " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
+            " RETURNING attempt_id",
+            (new_id, expected_task_id, number, ecs_task_arn, states.EXEC_RUNNING,
+             sfn_execution_arn, sfn_state_name, record_source, orchestrator_attempt_ref),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return str(row[0])
+        cur.execute(
+            "SELECT attempt_id FROM ops_task_attempt"
+            " WHERE expected_task_id=%s AND ecs_task_arn=%s",
+            (expected_task_id, ecs_task_arn),
+        )
+        return str(cur.fetchone()[0])
 
     def record_attempt_end(
         self, attempt_id: str, *, execution_status: str, exit_code: int | None = None,
@@ -700,8 +710,11 @@ class StepLock:
 
     잡은 커넥션을 작업이 끝날 때까지 열어 둔다. 프로세스·컨테이너가 죽으면 커넥션이 끊겨 lock 이
     **스스로 풀린다** — 만료 시각을 추정해야 하는 lease 행과 달리 죽은 실행이 실행권을 쥐고 남지 않는다.
-    한계: 커넥션만 끊기고 프로세스는 계속 쓰는 경우(네트워크 분리)엔 lock 이 풀려 다음 실행이 들어올 수
-    있다 — 쓰기 자체를 막는 fencing 이 아니다(canonical 병합 CAS 부재는 ALPHA-1057).
+    한계: 커넥션만 끊기고 프로세스는 계속 쓰는 경우(네트워크 분리)엔 lock 이 풀려 다음 실행이 lock 을 얻을
+    수 있다. 그래서 lock 만으로 업무를 시작하지 않는다 — `blocking()` 으로 종료가 확인되지 않은 시도·보류를
+    먼저 보고, 시작 기록은 `start_attempt()` 로 **lock 을 쥔 이 세션에서** 커밋한다. 세션이 살아 있을 때 커밋된
+    시작 기록은 lock 이 풀리기 전에 보이므로, 다음 실행은 lock 을 얻어도 그 RUNNING 시도를 보고 멈춘다. 이미
+    돌고 있는 오래된 실행의 쓰기를 막지는 못한다 — 저장소 쪽 fencing 이 아니다(canonical 병합 CAS 는 ALPHA-1057).
 
     키가 task_key 만인 이유: 장중 수급처럼 여러 슬롯이 같은 거래일 파티션을 병합하는 레인은 **다른 슬롯의
     같은 스텝**도 겹치면 안 된다. 슬롯 간 간격이 스텝 시간보다 길어 정상 흐름은 기다리지 않는다.
@@ -711,14 +724,15 @@ class StepLock:
 
     def __init__(self, ledger: "Ledger", task_key: str):
         self.ledger = ledger
+        self.task_key = task_key
         digest = hashlib.sha256(f"ops-step:{task_key}".encode("utf-8")).digest()
         self.key = int.from_bytes(digest[:8], "big", signed=True)
-        self._cm = self._cur_cm = self._cur = None
+        self._cm = self._cur_cm = self._cur = self._conn = None
 
     def acquire(self, *, wait_seconds: float) -> bool:
         """wait_seconds 동안 기다려 잡으면 True, 못 잡으면 False. DB 에 못 닿으면 **예외**(판단 불가)."""
         self._cm = self.ledger.connect_fn(self.ledger.db)
-        conn = self._cm.__enter__()
+        conn = self._conn = self._cm.__enter__()
         self._cur_cm = conn.cursor()
         self._cur = self._cur_cm.__enter__()
         deadline = self.ledger.clock_fn() + wait_seconds
@@ -729,6 +743,44 @@ class StepLock:
             if self.ledger.clock_fn() >= deadline:
                 return False
             self.ledger.sleep_fn(self._POLL_SECONDS)
+
+    def blocking(self) -> list[dict]:
+        """이 작업의 새 업무 시작을 막는 기록(lock 세션에서 조회). 비었을 때만 시작할 수 있다.
+
+        - 같은 task_key(모든 run·모든 실행 주체)의 업무 시도 중 RUNNING — 종료가 원장에 확인되지 않았다.
+          run 이 아니라 작업 단위인 이유: 다른 슬롯·재처리·SFN 도 같은 거래일 파티션을 병합한다. 닫히는 길은
+          그 실행 자신의 종료 기록 또는 Reconciler 의 ECS STOPPED 증거뿐이다(시간 경과로 닫지 않는다).
+        - OPEN 인 EXECUTION_HOLD(ECS_STATE_UNKNOWN) — ECS 태스크 생성·종료를 확인하지 못해 Airflow 가 보류한
+          실행. 운영자가 종료를 확인하고 RESOLVED 로 바꿔야 풀린다.
+        조회 실패는 예외로 올린다(판단 불가 → 호출부가 실행하지 않는다)."""
+        self._cur.execute(
+            "SELECT a.attempt_id, a.ecs_task_arn, et.pipeline_run_id, a.started_at::text"
+            " FROM ops_task_attempt a JOIN ops_expected_task et USING (expected_task_id)"
+            " WHERE et.task_key=%s AND a.execution_status=%s ORDER BY a.created_at",
+            (self.task_key, states.EXEC_RUNNING),
+        )
+        found = [{"kind": states.HOLD_OPEN_ATTEMPT, "attempt_id": str(r[0]), "ecs_task_arn": r[1],
+                  "pipeline_run_id": r[2], "started_at": r[3]} for r in self._cur.fetchall()]
+        self._cur.execute(
+            "SELECT i.dedupe_key, et.pipeline_run_id FROM ops_reconciliation_issue i"
+            " JOIN ops_expected_task et ON i.scope='task' AND et.expected_task_id=i.scope_key"
+            " WHERE i.issue_type=%s AND i.status='OPEN' AND et.task_key=%s"
+            " AND i.evidence->>'kind'=%s ORDER BY i.first_seen_at",
+            (states.ISSUE_EXECUTION_HOLD, self.task_key, states.HOLD_ECS_STATE_UNKNOWN),
+        )
+        found += [{"kind": states.HOLD_ECS_STATE_UNKNOWN, "dedupe_key": r[0], "pipeline_run_id": r[1]}
+                  for r in self._cur.fetchall()]
+        return found
+
+    def start_attempt(self, *, expected_task_id: str, ecs_task_arn: str,
+                      orchestrator_attempt_ref: str | None) -> str:
+        """시작 기록을 lock 을 쥔 세션에서 커밋한다. 세션이 끊겼으면 예외 — 그때는 실행하지 않는다."""
+        attempt_id = Ledger._insert_attempt_tx(
+            self._cur, expected_task_id=expected_task_id, ecs_task_arn=ecs_task_arn,
+            sfn_execution_arn=None, sfn_state_name=None, record_source=states.SOURCE_WRAPPER,
+            orchestrator_attempt_ref=orchestrator_attempt_ref)
+        self._conn.commit()
+        return attempt_id
 
     def release(self, acquired: bool) -> None:
         """풀고 커넥션을 닫는다. 실패해도 예외를 올리지 않는다 — 커넥션이 닫히면 lock 도 풀리고,

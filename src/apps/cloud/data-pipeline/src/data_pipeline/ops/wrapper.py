@@ -215,6 +215,9 @@ def derive_data_status(signals: dict) -> str:
 # 실행권·실행 이력을 확인하지 못해 **업무를 실행하지 않고** 끝났다(EX_TEMPFAIL). 오케스트레이터가
 # 인프라 실패처럼 재시도할 수 있는 값이다 — 업무 실패(1)·부분 실패(2)와 섞이지 않는다.
 STEP_NOT_RUN_EXIT = 75
+# 같은 작업의 앞선 실행이 끝났는지 확인하지 못해 **업무를 시작하지 않고 보류**했다(ALPHA-1088). 75 와 달리
+# 자동 재시도 대상이 아니다 — 운영자가 기존 작업 종료를 확인해야 한다(원장: EXECUTION_HOLD 이슈).
+STEP_HELD_EXIT = 76
 
 
 def instrument(
@@ -233,8 +236,10 @@ def instrument(
     ledger=None(원장 미설정) 또는 expected_task 부재(미등록)면 계측 없이 run_fn 만 돈다.
 
     `OPS_EXCLUSIVE_STEP=1`(Airflow 경로가 주입)이면 실행 전에 작업의 실행권(StepLock)을 잡고, 원장을
-    읽지 못하면 **실행하지 않는다**(STEP_NOT_RUN_EXIT). env 가 없는 SFN·수동 경로는 종전 그대로
-    원장 장애에도 작업을 진행한다(스펙 §3.4).
+    읽지 못하면 **실행하지 않는다**(STEP_NOT_RUN_EXIT). 실행권을 얻어도 같은 작업의 앞선 실행이 끝났다는
+    것이 원장에 확인되지 않으면 보류한다(STEP_HELD_EXIT) — lock 은 잡은 연결이 끊기면 풀리므로 "lock 을
+    얻었다"가 "앞 실행이 끝났다"를 뜻하지 않는다. env 가 없는 SFN·수동 경로는 종전 그대로 원장 장애에도
+    작업을 진행한다(스펙 §3.4).
     """
     kwargs = dict(task_key=task_key, run_id=run_id, ledger=ledger, ecs_task_arn=ecs_task_arn,
                   sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
@@ -262,7 +267,7 @@ def instrument(
             logger.warning("다른 실행이 %.0f초 넘게 이 작업을 잡고 있다 — 실행하지 않는다(task=%s run_id=%s)",
                            wait_seconds, task_key, run_id)
             return STEP_NOT_RUN_EXIT
-        return _instrument(run_fn, strict=True, **kwargs)
+        return _instrument(run_fn, strict=True, lock=lock, **kwargs)
     finally:
         lock.release(acquired)
 
@@ -295,6 +300,23 @@ def _record_duplicate_skip(ledger: Ledger, expected_task_id: str) -> None:
     ))
 
 
+def _hold(ledger: Ledger, *, task_key: str, run_id: str, expected: dict, blocking: list[dict]) -> int:
+    """업무를 시작하지 않고 보류한다. 원장엔 결손·업무 실패와 다른 사유(EXECUTION_HOLD)로 남긴다 — 기록은
+    best-effort 다(보류 판단 자체는 이미 끝났다). 이미 결론 난 작업(예: 성공한 슬롯의 재처리)의 결과는
+    덮지 않는다."""
+    logger.error("앞선 실행의 종료가 확인되지 않았다 — 업무를 시작하지 않고 보류(task=%s run_id=%s "
+                 "blocking=%s)", task_key, run_id, blocking)
+    if expected.get("task_outcome") in (None, states.OUTCOME_PENDING):
+        _safe(lambda: ledger.update_task_outcome(
+            expected["expected_task_id"], task_outcome=states.OUTCOME_FAILED,
+            outcome_reason=states.REASON_EXECUTION_HOLD))
+    _safe(lambda: ledger.open_or_bump_issue(
+        issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"execution_hold:{task_key}",
+        scope="task", scope_key=expected["expected_task_id"],
+        evidence={"kind": states.HOLD_OPEN_ATTEMPT, "run_id": run_id, "blocking": blocking}))
+    return STEP_HELD_EXIT
+
+
 class _LedgerUnavailable(Exception):
     """strict 모드에서 실행 전 판단 재료(기대 작업·실행 이력)를 읽지 못했다."""
 
@@ -320,6 +342,7 @@ def _instrument(
     sfn_execution_arn: str | None,
     sfn_state_name: str | None,
     observe_data_fn: Callable[[int], dict] | None,
+    lock=None,
 ) -> int:
     try:
         expected = _read(lambda: ledger.find_expected_task(run_id=run_id, task_key=task_key),
@@ -347,6 +370,19 @@ def _instrument(
         # 실행되더라도, 계획상 SKIP 된 작업에 실행 이력을 붙이면 축이 오염된다(edge-review).
         return run_fn()
     expected_task_id = expected["expected_task_id"]
+    if lock is not None:
+        # 실행권을 얻었어도 앞선 실행이 끝났다는 증거가 원장에 없으면 시작하지 않는다(성공 skip 판단보다
+        # 먼저 — 아직 도는 실행의 이력은 판단 재료가 못 된다).
+        try:
+            blocking = lock.blocking()
+        except Exception:
+            logger.exception("앞선 실행 확인 실패 — 실행하지 않는다(task=%s run_id=%s)", task_key, run_id)
+            return STEP_NOT_RUN_EXIT
+        if blocking:
+            return _hold(ledger, task_key=task_key, run_id=run_id, expected=expected, blocking=blocking)
+        # 막던 시도가 닫혔다 — 작업 단위 보류 기록을 닫는다(운영자 해제가 필요한 ECS 보류는 여기서 닫지 않는다).
+        _safe(lambda: ledger.resolve_issue(f"execution_hold:{task_key}",
+                                           resolution_reason="no_open_attempt", resolution_source="wrapper"))
     if os.environ.get("OPS_SKIP_IF_SUCCEEDED") == "1":
         # 오케스트레이터 재시도가 이미 끝난 업무를 다시 부르는 경로다(Airflow 는 ECS 가 끝난 뒤 응답을
         # 잃으면 새 태스크를 띄운다 — provider 의 reattach 는 RUNNING 태스크만 찾는다). 최신 물리
@@ -402,11 +438,23 @@ def _instrument(
     arn = ecs_task_arn or _detect_ecs_task_arn()
     sfn_exec = sfn_execution_arn or os.environ.get("OPS_SFN_EXECUTION_ARN")
     sfn_state = sfn_state_name or os.environ.get("OPS_SFN_STATE_NAME")
-    attempt_id = _safe(lambda: ledger.record_attempt_start(
-        expected_task_id=expected_task_id, ecs_task_arn=arn or "",
-        sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
-        orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None,
-    ))
+    if lock is not None:
+        # 시작 기록을 lock 세션에서 커밋한다 — 커밋됐다면 그 순간 lock 을 쥐고 있었다. 세션이 이미 끊겼으면
+        # 실패하고(재시도 없음) 아래에서 실행하지 않는다. 다음 실행이 이 기록을 못 본 채 들어오는 틈이 없다.
+        attempt_id = None
+        if arn:
+            try:
+                attempt_id = lock.start_attempt(
+                    expected_task_id=expected_task_id, ecs_task_arn=arn,
+                    orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None)
+            except Exception:
+                logger.exception("실행권 세션에 시작 기록 실패 — 실행하지 않는다(task=%s)", task_key)
+    else:
+        attempt_id = _safe(lambda: ledger.record_attempt_start(
+            expected_task_id=expected_task_id, ecs_task_arn=arn or "",
+            sfn_execution_arn=sfn_exec, sfn_state_name=sfn_state,
+            orchestrator_attempt_ref=os.environ.get("OPS_ORCHESTRATOR_ATTEMPT_REF") or None,
+        ))
     if strict and attempt_id is None:
         # 시작 기록 없이 실행하면 원장에 흔적 없는 실행이 생긴다 — 다음 재시도의 성공 skip 이 더 오래된
         # 성공을 믿고, Reconciler 는 hard deadline 뒤 실제로 돈 작업을 MISSED 로 찍는다. 아직 아무 일도

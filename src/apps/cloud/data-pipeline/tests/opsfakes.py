@@ -25,6 +25,7 @@ class FakeOpsDB:
         self.issues: list[dict] = []
         self.advisory_grants = advisory_grants
         self.fail = False                         # True 면 커넥션이 예외(원장 장애 시뮬)
+        self.commits = 0                          # 명시 commit 횟수(실행권 세션의 시작 기록)
 
     @contextmanager
     def connect(self, _db):
@@ -44,6 +45,9 @@ class _Conn:
     @contextmanager
     def cursor(self):
         yield _Cursor(self.db)
+
+    def commit(self):
+        self.db.commits += 1
 
 
 class _Cursor:
@@ -171,6 +175,26 @@ class _Cursor:
             self._upd_attempt(p)
         elif s.startswith("UPDATE ops_task_attempt SET started_at"):
             self._correct_backfill_started_at(p)
+        elif ("SELECT a.attempt_id, a.ecs_task_arn, et.pipeline_run_id, a.started_at::text" in s
+              and "WHERE et.task_key=%s AND a.execution_status=%s" in s):
+            # StepLock.blocking — 같은 task_key(모든 run) 의 RUNNING 시도. 조건이 바뀐 SQL 은 미처리로 떨어진다.
+            task_key, running = p
+            self._rows = [(a["attempt_id"], a["arn"], self.db.etasks_by_id[a["etid"]]["pipeline_run_id"],
+                           str(a.get("started_at")))
+                          for a in self.db.attempts
+                          if a["status"] == running
+                          and self.db.etasks_by_id.get(a["etid"], {}).get("task_key") == task_key]
+        elif "SELECT i.dedupe_key, et.pipeline_run_id FROM ops_reconciliation_issue i" in s:
+            # 보류 종류 조건은 **SQL 에 그 조건이 있을 때만** 흉내 낸다 — 조건이 빠지거나 뒤집힌 변이를 대역이
+            # 대신 막아 주지 않게(결과 미확정 보류가 새 실행을 막으면 안 된다).
+            issue_type, task_key, kind = p
+            by_kind = "i.evidence->>'kind'=%s" in s
+            self._rows = [(i["dedupe_key"], self.db.etasks_by_id[i["scope_key"]]["pipeline_run_id"])
+                          for i in self.db.issues
+                          if i["issue_type"] == issue_type and i["status"] == "OPEN"
+                          and i["scope"] == "task" and i["scope_key"] in self.db.etasks_by_id
+                          and self.db.etasks_by_id[i["scope_key"]]["task_key"] == task_key
+                          and (not by_kind or (i.get("evidence") or {}).get("kind") == kind)]
         elif "INSERT INTO ops_reconciliation_issue" in s:
             self._upsert_issue(p)
         elif s.startswith("UPDATE ops_reconciliation_issue SET status='RESOLVED'"):
@@ -433,6 +457,9 @@ class FakeEcs:
         for arn in tasks:
             t = self._tasks.get(arn)
             if t:
-                out.append({"lastStatus": t.get("lastStatus", "RUNNING"),
-                            "containers": [{"exitCode": t.get("exitCode")}]})
+                task = {"lastStatus": t.get("lastStatus", "RUNNING"),
+                        "containers": [{"exitCode": t.get("exitCode")}]}
+                if "stopCode" in t:
+                    task["stopCode"] = t["stopCode"]
+                out.append(task)
         return {"tasks": out}

@@ -1753,15 +1753,20 @@ EventBridge(reconcile) → Reconciler : SFN/ECS 증거로 예정↔실제 대조
 
 (Airflow 주체 레인, ALPHA-1088 — 현재 장중 수급만, 활성화 전)
 Airflow DAG → plan(OPS_ORCHESTRATOR=AIRFLOW) : 같은 원장 계획, SFN 미시작
-            → 업무 ECS 태스크(OPS_EXCLUSIVE_STEP) → wrapper : 작업별 실행권 획득 후 실행, 원장 불명이면 미실행(75)
-            → report(reconcile, OPS_RUN_KEY+OPS_ORCHESTRATION_STATUS) : DAG 판정을 orchestration_status 로
+            → 업무 ECS 태스크(OPS_EXCLUSIVE_STEP) → wrapper : 작업별 실행권 획득 후 실행, 원장 불명이면 미실행(75),
+                                                         같은 작업의 미종료 시도·ECS 보류가 있으면 보류(76)
+            → report(reconcile, OPS_RUN_KEY+OPS_ORCHESTRATION_STATUS+OPS_EXECUTION_HOLDS)
+                                                       : DAG 판정을 orchestration_status 로, 보류를 EXECUTION_HOLD 로
 Reconciler(Airflow 런) : SFN 대신 원장 attempt·ECS 로 대조, 보고가 없으면 원장에서 상태 투영
+Reconciler(모든 레인)  : ECS STOPPED 확인 → RUNNING 시도를 닫는다(실행권 게이트 해제). exit 가 없거나 외부 종료
+                         (stopCode≠EssentialContainerExited 인 비0)면 FAILED + outcome_reason stopped_result_unknown
+                         (업무 결과 아님 — 산출·선행 완료로 세지 않는다)
 ```
 
 **실행 주체(ALPHA-1088).** `ops_pipeline_run.orchestrator`(SFN|AIRFLOW)가 슬롯의 주체다. 다른 주체가
 이미 계획한 run_key 를 다시 계획하면 Planner 가 실행하지 않고 LAUNCH_CONFLICT 로 드러낸다(두 주체의
-같은 run_id 이중 실행 방지). Airflow 경로의 중복 실행 방지·exit 75·재처리(`OPS_REPROCESS`)·전환·롤백
-절차는 [`src/apps/cloud/airflow/README.md`](../airflow/README.md)가 정본이다. env 가 없는 SFN·수동
+같은 run_id 이중 실행 방지). Airflow 경로의 중복 실행 방지·exit 75·보류(exit 76, `EXECUTION_HOLD`)·재처리(`OPS_REPROCESS`)·
+전환·롤백·보류 해제 절차는 [`src/apps/cloud/airflow/README.md`](../airflow/README.md)가 정본이다. env 가 없는 SFN·수동
 경로의 wrapper 동작은 종전 그대로다(원장 장애에도 작업 진행).
 
 Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도 "실행 자체가 안 됐다"를 잡기

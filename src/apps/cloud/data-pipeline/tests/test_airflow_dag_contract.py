@@ -10,8 +10,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import ast
+
 from data_pipeline import db
-from data_pipeline.ops import wrapper
+from data_pipeline.ops import catalog, states, wrapper
 
 DAGS = Path(__file__).resolve().parents[2] / "airflow" / "dags"
 EDGE_BATCH = (DAGS / "edge_batch.py").read_text(encoding="utf-8")
@@ -30,6 +32,21 @@ def test_step_not_run_exit_matches_wrapper():
     assert int(_const("STEP_NOT_RUN_EXIT", EDGE_BATCH)) == wrapper.STEP_NOT_RUN_EXIT
 
 
+def test_hold_contract_matches_the_ledger():
+    # 76 을 업무 실패로 읽으면 보류가 "실패"로 접히고, 종류 이름이 어긋나면 report 가 원장 기록을 거부하거나
+    # (entry 검증) 원장 게이트가 ECS 보류를 못 본다(StepLock.blocking 의 kind 조건).
+    assert int(_const("STEP_HELD_EXIT", EDGE_BATCH)) == wrapper.STEP_HELD_EXIT
+    for name in ("HOLD_OPEN_ATTEMPT", "HOLD_ECS_STATE_UNKNOWN", "HOLD_RESULT_UNKNOWN"):
+        assert _const(name, EDGE_BATCH).strip('"') == getattr(states, name)
+
+
+def test_dag_task_keys_are_catalog_keys_of_the_lane():
+    # report 가 보류를 원장에 옮길 때 쓰는 이름 — 틀리면 entry 가 거부해 report 가 실패한다.
+    keys = ast.literal_eval(re.search(r"^TASK_KEYS = (\{.*?\})$", DAG, re.M | re.S).group(1))
+    assert sorted(keys.values()) == sorted(
+        e.task_key for e in catalog.entries(catalog.INVESTOR_INTRADAY_PIPELINE_TYPE))
+
+
 def test_pipeline_run_id_material_matches_stable_domain_id():
     # 구분자(\x01)는 화면에 안 보인다 — 손으로 옮기다 틀린 전력이 있다(학습 문서 §32).
     assert _const("_PIPELINE_ID", EDGE_BATCH).strip('"') == db.PIPELINE_ID
@@ -43,6 +60,6 @@ def test_env_names_the_dag_sends_are_the_ones_the_pipeline_reads():
         assert f'"{name}"' in EDGE_BATCH, f"DAG 가 {name} 을 보내지 않는다"
         assert f'"{name}"' in WRAPPER, f"wrapper 가 {name} 을 읽지 않는다"
     for name in ("OPS_ORCHESTRATOR", "OPS_ORCHESTRATOR_RUN_REF", "OPS_SCHEDULED_TIME", "OPS_REPROCESS",
-                 "OPS_RUN_KEY", "OPS_ORCHESTRATION_STATUS", "OPS_CLUSTER_ARN"):
+                 "OPS_RUN_KEY", "OPS_ORCHESTRATION_STATUS", "OPS_CLUSTER_ARN", "OPS_EXECUTION_HOLDS"):
         assert f'"{name}"' in DAG, f"DAG 가 {name} 을 보내지 않는다"
         assert f'"{name}"' in ENTRY, f"entry 가 {name} 을 읽지 않는다"

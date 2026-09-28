@@ -544,3 +544,188 @@ def test_skip_row_after_a_report_does_not_reopen_it(monkeypatch):
     assert db.attempts[-1]["source"] == states.SOURCE_DUPLICATE_SKIP
     reconcile_run(_ledger(db), **kw)
     assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED
+
+
+# ── 실행 상태 불명 시 보류(ALPHA-1088 초기 운영 정책) ──
+# lock 은 잡은 연결이 끊기면 풀린다. 그래서 "lock 을 얻었다"는 "앞 실행이 끝났다"가 아니다 — 원장에 종료가
+# 확인되지 않은 같은 작업의 시도가 있으면 업무를 시작하지 않고 보류한다. 보류는 시간이 지나도 풀리지 않고,
+# 그 시도가 스스로 끝을 기록하거나 Reconciler 가 ECS STOPPED 를 확인해야 풀린다.
+_NORMALIZE = "NORMALIZE_INVESTOR_INTRADAY"
+
+
+def _plan_slot(db, slot, ref):
+    return plan_run(_ledger(db), state_machine_arn=None, scheduled_time=slot, pipeline_type=_LANE,
+                    sfn_client=_NoSfn(), orchestrator=states.ORCHESTRATOR_AIRFLOW,
+                    orchestrator_run_ref=ref)
+
+
+def test_lock_alone_does_not_start_work_while_an_earlier_attempt_is_unconfirmed(monkeypatch):
+    # A(09:35 슬롯 정제)가 시작 기록만 남긴 채 lock 연결을 잃었다 — B(10:05 슬롯)는 lock 을 얻는다.
+    # 두 슬롯은 같은 거래일 canonical 파티션을 병합하므로 run 이 달라도 겹치면 안 된다.
+    db = FakeOpsDB()
+    a_run = _plan_airflow(db).pipeline_run_id
+    _start_only(db, a_run, _NORMALIZE, "arn:ecs/a")
+    b_run = _plan_slot(db, _SLOT + timedelta(minutes=30), "b").pipeline_run_id
+    _exclusive(monkeypatch, skip=False)
+    calls = []
+    assert _run(db, b_run, calls, arn="arn:ecs/b") == wrapper.STEP_HELD_EXIT
+    assert calls == []                                             # 업무 실행 0
+    assert [a["arn"] for a in db.attempts] == ["arn:ecs/a"]        # B 는 시도 행도 남기지 않는다
+    b_task = db.etasks[(b_run, _NORMALIZE)]
+    assert (b_task["task_outcome"], b_task["outcome_reason"]) == (states.OUTCOME_FAILED,
+                                                                   states.REASON_EXECUTION_HOLD)
+    [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
+    assert issue["evidence"]["kind"] == states.HOLD_OPEN_ATTEMPT
+    assert [b["ecs_task_arn"] for b in issue["evidence"]["blocking"]] == ["arn:ecs/a"]
+
+
+def test_hold_is_released_by_ecs_stop_evidence_not_by_elapsed_time(monkeypatch):
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    a_run = result.pipeline_run_id
+    _start_only(db, a_run, _NORMALIZE, "arn:ecs/a")
+    _exclusive(monkeypatch, skip=False)
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn())
+    # 7시간 뒤라도 ECS 를 못 읽거나 아직 돌면 닫지 않는다 — 보류 유지.
+    for ecs in (_EcsDown(), FakeEcs(tasks={"arn:ecs/a": {"lastStatus": "RUNNING"}})):
+        reconcile_run(_ledger(db), ecs_client=ecs, now=_SLOT + timedelta(hours=7), **kw)
+        assert _run(db, a_run, [], arn="arn:ecs/b") == wrapper.STEP_HELD_EXIT
+    # 강제 종료로 exit code 없이 STOPPED — 종료가 확인됐으니 시도는 닫히고(결과는 미확정) 보류가 풀린다.
+    reconcile_run(_ledger(db), ecs_client=FakeEcs(tasks={"arn:ecs/a": {"lastStatus": "STOPPED"}}),
+                  now=_SLOT + timedelta(hours=7), **kw)
+    a = db.attempts[0]
+    assert (a["status"], a["exit_code"]) == (states.EXEC_FAILED, None)
+    calls = []
+    assert _run(db, a_run, calls, arn="arn:ecs/b") == 0 and calls == ["arn:ecs/b"]
+    assert not db.open_issues(states.ISSUE_EXECUTION_HOLD)         # 작업 단위 보류 기록이 닫혔다
+
+
+@pytest.mark.parametrize("ecs_task, exit_code, reason", [
+    ({"lastStatus": "STOPPED"}, None, "stopped_result_unknown"),                         # exit 없음
+    ({"lastStatus": "STOPPED", "exitCode": 137, "stopCode": "UserInitiated"}, 137,
+     "stopped_result_unknown"),                                                          # 외부 종료
+    ({"lastStatus": "STOPPED", "exitCode": 1, "stopCode": "EssentialContainerExited"}, 1,
+     "attempt_failed"),                                                                  # 업무 실패
+    ({"lastStatus": "STOPPED", "exitCode": 2, "stopCode": "UserInitiated"}, 2,
+     "stopped_result_unknown"),         # 외부 종료의 2 를 "부분 성공(산출 있음)"으로 읽지 않는다
+])
+def test_stop_is_closed_but_an_external_stop_is_not_a_business_result(ecs_task, exit_code, reason):
+    # 종료 확인(시도 닫힘)과 업무 결과는 다른 축이다 — 강제 종료를 업무 실패 사유로 적지 않고, 런을 결론 내지 않는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _record(db, run_id, "INVESTOR_INTRADAY_COLLECTION_KIS", arn="arn:ecs/c", exit_code=0)
+    _start_only(db, run_id, _NORMALIZE, "arn:ecs/n")
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(),
+                  ecs_client=FakeEcs(tasks={"arn:ecs/n": ecs_task}), now=_SLOT + timedelta(hours=1))
+    task = db.etasks[(run_id, _NORMALIZE)]
+    assert (task["task_outcome"], task["outcome_reason"]) == (states.OUTCOME_FAILED, reason)
+    assert (db.attempts[-1]["status"], db.attempts[-1]["exit_code"]) == (states.EXEC_FAILED, exit_code)
+    if reason != "attempt_failed":
+        assert db.runs[result.run_key]["orchestration_status"] is None
+
+
+def test_start_record_is_committed_on_the_lock_session(monkeypatch):
+    db = FakeOpsDB()
+    run_id = _plan_airflow(db).pipeline_run_id
+    _exclusive(monkeypatch, skip=False)
+    calls = []
+    assert _run(db, run_id, calls) == 0 and calls == ["arn:ecs/next"]
+    assert db.commits == 1 and db.attempts[0]["arn"] == "arn:ecs/next"
+
+
+@pytest.mark.parametrize("method", ["blocking", "start_attempt"])
+def test_lock_session_failure_does_not_start_work(monkeypatch, method):
+    # 판단 재료를 lock 세션에서 못 읽거나(blocking) 시작 기록을 lock 세션에 못 남기면(연결 상실) 실행하지 않는다.
+    from data_pipeline.ops.ledger import StepLock
+    db = FakeOpsDB()
+    run_id = _plan_airflow(db).pipeline_run_id
+    _exclusive(monkeypatch, skip=False)
+    monkeypatch.setattr(StepLock, method, lambda self, **_: (_ for _ in ()).throw(OSError("closed")))
+    calls = []
+    assert _run(db, run_id, calls) == wrapper.STEP_NOT_RUN_EXIT and calls == []
+
+
+def test_sfn_path_is_not_gated_by_open_attempts(monkeypatch):
+    # 코드 보호 범위의 경계를 고정한다: env 없는 SFN·수동 경로는 종전 그대로 돈다. 두 실행 주체의 겹침은
+    # 전환 절차(한 주체만 켬)가 막는다 — 이 테스트가 깨지면 README 의 보호 범위 표를 같이 고쳐야 한다.
+    db = FakeOpsDB()
+    run_id = _plan_airflow(db).pipeline_run_id
+    _start_only(db, run_id, _NORMALIZE, "arn:ecs/a")
+    for key in ("OPS_EXCLUSIVE_STEP", "OPS_SKIP_IF_SUCCEEDED"):
+        monkeypatch.delenv(key, raising=False)
+    calls = []
+    assert _run(db, run_id, calls, arn="arn:ecs/b") == 0 and calls == ["arn:ecs/b"]
+
+
+def test_airflow_ecs_hold_blocks_reprocess_until_the_operator_resolves_it(monkeypatch):
+    # Airflow 가 ECS 태스크 생성·종료를 확인 못 해 보류 → report 가 원장에 남긴다. 그 태스크는 원장에 시도가
+    # 없을 수 있다(컨테이너가 wrapper 전에 있다) — 재처리·수동 trigger 가 새 run 으로 우회하지 못해야 한다.
+    from data_pipeline.ops import reconciler
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    reconciler.record_execution_holds(_ledger(db), run_key=result.run_key, holds={
+        _NORMALIZE: {"kind": states.HOLD_ECS_STATE_UNKNOWN, "reason": "제출 응답 유실"},
+        "LOAD_INVESTOR_INTRADAY": {"kind": states.HOLD_RESULT_UNKNOWN, "reason": "강제 종료"}})
+    task = db.etasks[(run_id, _NORMALIZE)]
+    assert (task["task_outcome"], task["outcome_reason"]) == (states.OUTCOME_FAILED,
+                                                               states.REASON_EXECUTION_HOLD)
+    # MISSED(미실행)로 바뀌지 않는다 — 실행 여부를 모르는 것이지 안 돈 것이 아니다.
+    late = reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(),
+                         ecs_client=FakeEcs(), now=_SLOT + timedelta(hours=7))
+    assert _NORMALIZE not in late["missed"]
+    _exclusive(monkeypatch, skip=False)
+    other = _plan_slot(db, _SLOT + timedelta(minutes=30), "reprocess").pipeline_run_id
+    assert _run(db, other, [], arn="arn:ecs/b") == wrapper.STEP_HELD_EXIT
+    # 결과 미확정(RESULT_UNKNOWN)은 종료가 확인된 것이라 새 실행을 막지 않는다.
+    load = wrapper.instrument(lambda: 0, task_key="LOAD_INVESTOR_INTRADAY", run_id=other,
+                              ledger=_ledger(db), ecs_task_arn="arn:ecs/l")
+    assert load == 0
+    # 운영자가 종료를 확인하고 해제한다(삭제가 아니라 RESOLVED 전이).
+    _ledger(db).resolve_issue(f"execution_hold:{run_id}:{_NORMALIZE}",
+                              resolution_reason="operator_confirmed_stopped", resolution_source="operator")
+    calls = []
+    assert _run(db, other, calls, arn="arn:ecs/c") == 0 and calls == ["arn:ecs/c"]
+
+
+def test_hold_does_not_overwrite_a_settled_outcome(monkeypatch):
+    # 이미 성공한 슬롯의 재처리가 보류됐다 — 슬롯의 데이터는 그대로이므로 FULFILLED 를 FAILED 로 덮지 않는다.
+    db = FakeOpsDB()
+    run_id = _fulfilled(db, exit_code=0)
+    other = _plan_slot(db, _SLOT + timedelta(minutes=30), "b").pipeline_run_id
+    _start_only(db, other, _NORMALIZE, "arn:ecs/running")
+    _exclusive(monkeypatch, skip=False)
+    assert _run(db, run_id, [], arn="arn:ecs/x") == wrapper.STEP_HELD_EXIT
+    assert db.etasks[(run_id, _NORMALIZE)]["task_outcome"] == states.OUTCOME_FULFILLED
+    assert db.open_issues(states.ISSUE_EXECUTION_HOLD)
+
+
+@pytest.mark.parametrize("raw", [
+    "not json",
+    '{"UNKNOWN_TASK": {"kind": "ECS_STATE_UNKNOWN"}}',
+    '{"NORMALIZE_INVESTOR_INTRADAY": {"kind": "OPEN_ATTEMPT"}}',     # 컨테이너 보류는 report 경로가 아니다
+    '{"NORMALIZE_INVESTOR_INTRADAY": "ECS_STATE_UNKNOWN"}',
+])
+def test_malformed_hold_report_fails_loud(monkeypatch, raw):
+    # 보류가 원장에 안 남으면 재처리가 그 작업을 우회한다 — 버리지 않고 report 를 실패시킨다(verdict 가 드러낸다).
+    db = FakeOpsDB()
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda _s: _ledger(db))
+    monkeypatch.setenv("OPS_RUN_KEY", "investor-intraday:2026-09-22T09:35")
+    monkeypatch.setenv("OPS_EXECUTION_HOLDS", raw)
+    with pytest.raises(SystemExit):
+        entry.reconcile_cli(object())
+
+
+def test_hold_report_is_recorded_before_the_run_is_reconciled(monkeypatch):
+    from data_pipeline.ops import reconciler
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    seen = []
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda _s: _ledger(db))
+    monkeypatch.setattr(reconciler, "reconcile_run",
+                        lambda ledger, **kw: seen.append(len(db.open_issues(states.ISSUE_EXECUTION_HOLD))) or {})
+    monkeypatch.setenv("OPS_RUN_KEY", result.run_key)
+    monkeypatch.setenv("OPS_EXECUTION_HOLDS", '{"NORMALIZE_INVESTOR_INTRADAY": '
+                                              '{"kind": "ECS_STATE_UNKNOWN", "reason": "r"}}')
+    assert entry.reconcile_cli(object()) == 0 and seen == [1]

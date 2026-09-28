@@ -6,6 +6,7 @@ Ledger 를 만들지 않고(instrument 는 투명 통과), plan-run·reconcile �
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, time, timedelta, timezone
@@ -506,6 +507,25 @@ def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
     return slots
 
 
+def _execution_holds(run_key: str | None) -> dict[str, dict]:
+    """`OPS_EXECUTION_HOLDS` — Airflow DAG report 가 넘기는 보류 스텝 {task_key: {"kind", "reason"}}(JSON).
+    형식이 틀리면 조용히 버리지 않고 실패한다 — 보류가 원장에 안 남으면 재처리가 그 작업을 우회한다."""
+    raw = os.environ.get("OPS_EXECUTION_HOLDS") or ""
+    if not raw:
+        return {}
+    try:
+        holds = json.loads(raw)
+    except ValueError as exc:
+        raise SystemExit(f"OPS_EXECUTION_HOLDS 가 JSON 이 아니다: {exc}") from exc
+    if not run_key or not isinstance(holds, dict) or not all(
+            catalog.get(k) is not None and isinstance(v, dict) and v.get("kind") in (
+                states.HOLD_ECS_STATE_UNKNOWN, states.HOLD_RESULT_UNKNOWN)
+            for k, v in holds.items()):
+        raise SystemExit("OPS_EXECUTION_HOLDS 는 OPS_RUN_KEY 와 함께, {카탈로그 task_key: "
+                         "{kind: ECS_STATE_UNKNOWN|RESULT_UNKNOWN, reason}} 만")
+    return holds
+
+
 def reconcile_cli(settings) -> int:
     """주기 Reconciler. advisory lock 으로 중복 실행 방지. 예정 지난 슬롯만 PLANNER_MISSING."""
     ledger = ledger_from_settings(settings)
@@ -519,6 +539,7 @@ def reconcile_cli(settings) -> int:
     if reported is not None and (not override or reported not in (states.ORCH_SUCCEEDED,
                                                                     states.ORCH_FAILED)):
         raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
+    holds = _execution_holds(override)
     with ledger.advisory_lock(_RECONCILE_LOCK) as acquired:
         if not acquired:
             if reported is not None:
@@ -528,6 +549,9 @@ def reconcile_cli(settings) -> int:
                 return wrapper.STEP_NOT_RUN_EXIT
             logger.info("reconcile: 다른 인스턴스가 락 보유 — skip")
             return 0
+        if holds:
+            # 대조보다 먼저 — 시도 없는 보류 작업이 MISSED(미실행)로 찍히기 전에 보류로 남긴다.
+            reconciler.record_execution_holds(ledger, run_key=override, holds=holds)
         if override:
             # override 는 특정 런을 reconcile 하려는 수동 지정이라(미래 슬롯일 수 있다) 결측
             # 판정 대상이 아니다(edge-review).
