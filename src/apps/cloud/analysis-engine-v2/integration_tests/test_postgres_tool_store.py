@@ -9,6 +9,7 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict
 
 from edge_analysis_v2.tool_store import ToolStore
+from edge_analysis_v2.audited_execution import AuditedExecution, ToolExecutionError
 
 
 @pytest.fixture
@@ -94,3 +95,23 @@ def test_missing_analysis_is_rejected_without_orphan_evidence(audit):
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         store.save_run(**(args | {"analysis_id": "does-not-exist"}))
     assert store.get_run(args["tool_run_id"]) is None
+
+
+def test_execution_boundary_returns_committed_response_and_records_failure(audit):
+    store, args, definition, dsn = audit
+    def calculate(name, arguments):
+        if arguments["days"] != 5:
+            raise ValueError("private diagnostic")
+        return args["output"]
+    executor = AuditedExecution(calculate, store, definitions=[definition],
+                                analysis_kind="movement", analysis_id=args["analysis_id"],
+                                context=args["context"])
+    response = executor.call(definition["function_name"], {"days": 5})
+    with psycopg.connect(dsn, autocommit=True) as reader:
+        assert ToolStore(reader).get_run(response["tool_run_id"])["output"] == response
+    with pytest.raises(ToolExecutionError) as raised:
+        executor.call(definition["function_name"], {"days": 999})
+    failure = store.get_run(raised.value.tool_run_id)
+    assert failure["status"] == "failed"
+    assert failure["arguments"] == {"days": 999}
+    assert "private" not in failure["error_message"]
