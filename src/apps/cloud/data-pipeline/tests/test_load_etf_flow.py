@@ -13,6 +13,7 @@ WIDE 테이블(13 투자자 × 수량·대금 26 컬럼)이라 canonical 컬럼�
 import hashlib
 import io
 import json
+from datetime import datetime
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -113,7 +114,8 @@ def _flow_row(ticker="005930", trade_date="2026-07-16", **over):
 
 
 class _FakeCursor:
-    """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
+    """ON CONFLICT DO UPDATE … WHERE (net distinct OR available_at 앞당김) 시맨틱 흉내 +
+    instrument 조회 응답. 실 SQL 은 e2e(test_etf_flow_row_isolation)가 PostgreSQL 위에서 본다."""
 
     def __init__(self, log, instrument_rows, existing, fail_instruments):
         self._log = log
@@ -133,18 +135,20 @@ class _FakeCursor:
         elif upper.startswith("INSERT INTO INVESTOR_FLOW_DAILY"):
             if params[0] in self._fail_instruments:
                 raise ValueError("의도된 개별 행 DB 실패")
-            # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신=(True,) /
-            # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
+            # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신·available_at 앞당김=(True,) /
+            # 같은 값이고 시각도 안 앞당겨지면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key = (params[0], params[1])
             value = tuple(params[2:2 + len(_NET)])  # 26 net 값이 distinct 판정 대상
+            available_at = datetime.fromisoformat(params[2 + len(_NET)])
             prev = self._existing.get(key)
             if prev is None:
                 self._returning, self.rowcount = (False,), 1
-            elif prev == value:
+            elif prev[0] == value and not prev[1] > available_at:
                 self._returning, self.rowcount = None, 0
+                return
             else:
                 self._returning, self.rowcount = (True,), 1
-            self._existing[key] = value
+            self._existing[key] = (value, available_at)
 
     def fetchall(self):
         return self._rows
@@ -387,6 +391,30 @@ def test_같은_키가_여러_part_에_있으면_canonical_과_같은_승자를_
     [params] = _inserts(conn)
     assert params[2] == -1000                          # 사전순 마지막 part 도 최신도 아니다
     assert params[-2] == "2026-07-16T06:41:00+00:00"   # available_at 도 D일 수집 시각
+
+
+def test_값이_같아도_available_at_이_앞당겨지면_마트를_갱신한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1107): 옛 raw 재정제로 canonical 승자가 D일 수집분으로 돌아오면 값은 같아도
+    #      "언제 알았나"가 앞당겨진다. 값만 비교해 걸러내면 마트 available_at 이 D+1 에 남아
+    #      D일 시점 조회에서 행이 계속 사라진다 — 복구가 절반만 된다. 반대로 늦은 시각으로는
+    #      밀지 않는다(PIT 는 이른 쪽이 사실이다).
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_flow, "connect", _fake_connect(conn))
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_flow_row(fetched_at="2026-07-17T06:41:00+00:00")])
+    assert load_etf_flow.run(storage, "R1", db=_db()) == 0
+
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_flow_row(fetched_at="2026-07-16T06:41:00+00:00")])
+    assert load_etf_flow.run(storage, "R2", db=_db()) == 0
+    assert _log(storage, "R2")["updated"] == 1
+    assert _inserts(conn)[-1][-2] == "2026-07-16T06:41:00+00:00"
+
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_flow_row(fetched_at="2026-07-18T06:41:00+00:00")])
+    assert load_etf_flow.run(storage, "R3", db=_db()) == 0
+    assert _log(storage, "R3")["already_present"] == 1   # 늦은 시각으로는 안 민다
 
 
 def test_창으로_적재_대상_거래일을_좁힌다(tmp_path, monkeypatch):

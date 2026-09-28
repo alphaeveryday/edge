@@ -77,6 +77,9 @@ _CREATED_SAMPLE_LIMIT = 5
 # INSERT/UPSERT SQL 은 26 net 컬럼을 세 번(컬럼·SET·DISTINCT) 손으로 쓰면 어긋나기 쉬워
 # 컬럼 튜플에서 생성한다. 정정만 UPDATE 하도록 DISTINCT 비교는 net 값 26컬럼만 본다
 # (available_at·data_version 은 메타라 값 변화 판정에서 뺀다 — load_price_daily 와 같은 규약).
+# 단 **available_at 이 앞당겨지는 경우는 값이 같아도 갱신한다**(ALPHA-1107): 옛 raw 재정제로
+# canonical 승자가 D일 수집분으로 돌아오면 값은 같아도 "언제 알았나"가 앞당겨진다. 뒤로 미는
+# 방향(늦은 수집분)은 canonical 승자가 고정돼 오지 않고, 와도 받지 않는다(PIT 는 이른 쪽이 사실).
 _ALL_INSERT_COLUMNS = ("instrument_id", "trade_date", *_NET_COLUMNS, "available_at", "data_version")
 _UPSERT_SQL = (
     f"INSERT INTO investor_flow_daily ({', '.join(_ALL_INSERT_COLUMNS)})"
@@ -87,7 +90,8 @@ _UPSERT_SQL = (
     + ", ".join(f"investor_flow_daily.{c}" for c in _NET_COLUMNS)
     + ") IS DISTINCT FROM ("
     + ", ".join(f"EXCLUDED.{c}" for c in _NET_COLUMNS)
-    + ") RETURNING (xmax <> 0) AS was_update"
+    + ") OR investor_flow_daily.available_at > EXCLUDED.available_at"
+    + " RETURNING (xmax <> 0) AS was_update"
 )
 
 
