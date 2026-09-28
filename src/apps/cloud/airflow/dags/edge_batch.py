@@ -242,15 +242,21 @@ class EdgeStep(EcsRunTaskOperator):
                  partial_exit_codes: tuple[int, ...] = (), same_day_only: bool = False,
                  noop_on_reprocess: bool = False, exclusive: bool = True,
                  skip_if_succeeded: bool = False, reprocess_env: dict[str, str] | None = None,
-                 stop_on_upstream_hold: bool = True, **kwargs):
+                 stop_on_upstream_hold: bool = True, cluster: str | None = None,
+                 taskdef_prefix: str | None = None, security_groups: list[str] | None = None,
+                 log_group: str | None = None, **kwargs):
         # 이 ECS 태스크를 띄운 Airflow 시도 — wrapper 가 attempt 에 남긴다(원장 → Airflow 역추적).
         # try_number 는 렌더링 시점(=이 시도)의 값이다. 재접속한 시도는 새 attempt 를 만들지 않는다.
         env = {"OPS_ORCHESTRATOR_ATTEMPT_REF":
                "airflow:{{ dag.dag_id }}/{{ run_id }}/{{ task.task_id }}/{{ ti.try_number }}", **(env or {})}
         environment = [{"name": k, "value": v} for k, v in env.items()]
         super().__init__(
-            cluster=CLUSTER, task_definition=f"{TASKDEF_PREFIX}-{taskdef_key}",
-            launch_type="FARGATE", network_configuration=NETWORK,
+            # 기본은 배포 환경값. 검증 DAG 만 격리된 클러스터·태스크 정의·보안그룹·로그 그룹을 넘긴다.
+            cluster=cluster or CLUSTER, task_definition=f"{taskdef_prefix or TASKDEF_PREFIX}-{taskdef_key}",
+            launch_type="FARGATE",
+            network_configuration=({"awsvpcConfiguration": {**NETWORK["awsvpcConfiguration"],
+                                                            "securityGroups": security_groups}}
+                                   if security_groups else NETWORK),
             overrides={"containerOverrides": [
                 {"name": CONTAINER, "command": command, "environment": environment}]},
             reattach=True,                  # 제출 전 확인(_try_reattach_task)을 provider 가 부르게 한다
@@ -261,9 +267,9 @@ class EdgeStep(EcsRunTaskOperator):
             # 끊겨 결과 미상이 된다. 태스크는 그대로 두고 다음 시도가 재접속한다.
             stop_task_on_failure=False,
             container_name=CONTAINER,       # 로그 스트림 이름을 위해 provider 가 기동 뒤 조회·대기하지 않게
-            awslogs_group=LOG_GROUP,
+            awslogs_group=log_group or LOG_GROUP,
             awslogs_stream_prefix=(f"{_LOG_PREFIX.get(taskdef_key, 'raw-ingest')}/{CONTAINER}"
-                                   if LOG_GROUP else None),
+                                   if log_group or LOG_GROUP else None),
             **kwargs,
         )
         self.partial_exit_codes = partial_exit_codes
