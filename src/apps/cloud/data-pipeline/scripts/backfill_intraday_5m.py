@@ -108,6 +108,14 @@ PRICE_DAILY_PREFIX = "canonical/market_data/price_daily/market=KR"
 VENDORS = {
     "toss": {"file": "part-toss-backfill.parquet", "vendor": "toss_backfill"},
     "kis": {"file": "part-kis-backfill.parquet", "vendor": "kis_backfill"},
+    # **수집이 아니라 이관이다**(ALPHA-1104). 노트북에만 있던 fmp 깊은 재수집 5분봉(16종 ·
+    # 2022-11~2026-08)이 레포 밖 Glue 적재용으로 올라간 스테이징 파일 하나를 원천으로 읽는다
+    # (`--source-parquet`). 벤더 5분봉 그대로라 롤업을 안 타고, 봉 시각도 벤더 것이다 —
+    # fmp 시대 `part-0` 처럼 **15:30 종가 단일가 봉을 포함한다**(`close_inclusive`). 롤업
+    # 계약(구간 시작 < 15:30)으로 거르면 같은 시대 개별주엔 있는 종가 봉이 ETF 에만 빠진다.
+    # `source_vendor` 는 duck 로컬 합집합이 쓰던 표기(`fmp_backfill`)를 그대로 받는다.
+    "fmp": {"file": "part-fmp-backfill.parquet", "vendor": "fmp_backfill",
+            "close_inclusive": True},
 }
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
 KIS_SECRET = "edge-dev-data-pipeline/kis/oauth"
@@ -278,8 +286,14 @@ SCHEMA = pa.schema([
 ])
 
 
+def _in_session(t: time, close_inclusive: bool = False) -> bool:
+    """정규장 봉인가. 롤업 벤더는 구간 시작 < 15:30, fmp 벤더 봉은 15:30 종가 봉까지."""
+    return SESSION_OPEN <= t and (t <= SESSION_CLOSE if close_inclusive else t < SESSION_CLOSE)
+
+
 def _day_payload(prior_rows: list[dict], existing: set[str],
-                 candidates: list[dict]) -> tuple[list[dict], int] | None:
+                 candidates: list[dict],
+                 close_inclusive: bool = False) -> tuple[list[dict], int] | None:
     """그날 쓸 행과 **새로 추가되는 수**. 새 행이 없으면 `None` — 쓰지 않는다는 뜻이다.
 
     **새 행이 0 이면 안 쓴다**(ALPHA-836). 예전엔 남길 행(`keep`)이 비지 않으면 그대로
@@ -302,7 +316,7 @@ def _day_payload(prior_rows: list[dict], existing: set[str],
     # 한 겹뿐이므로 그 겹이 과거분까지 봐야 한다.
     keep = [r for r in prior_rows
             if r["ticker"] not in mine and r["ticker"] not in existing
-            and SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
+            and _in_session(r["ts"].time(), close_inclusive)]
     return keep + rows, len(rows)
 
 
@@ -515,6 +529,62 @@ def _collect_kis(days, targets, covered, a):
                         "0이라 다음 실행도 같은 자리에서 콜을 태운다", failed)
 
 
+def _load_local_source(uri: str) -> dict:
+    """스테이징 parquet 하나 → {day: [row]} + 원천 식별(키·ETag·sha256·행 수).
+
+    원천 행을 **변형하지 않는다** — 벤더 봉 시각(`ts`=구간 시작)과 원천의 `available_at`
+    을 그대로 옮긴다. 복사 시각으로 바꾸지 않는 것이 이 이관의 계약이다. 대신 그 값이
+    롤업 계약(`ts + 5분`)과 다르면 **옮기지 않고 죽는다** — 섞인 축을 정본에 싣는 것보다
+    이관이 멈추는 편이 낫다.
+    """
+    import hashlib
+
+    bucket, key = uri.removeprefix("s3://").split("/", 1)
+    obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+    body = obj["Body"].read()
+    by_day: dict[str, list[dict]] = defaultdict(list)
+    for r in pq.read_table(io.BytesIO(body)).to_pylist():
+        ts = datetime.fromisoformat(str(r["ts"]))
+        avail = datetime.fromisoformat(str(r["available_at"]))
+        if avail != ts + timedelta(minutes=BUCKET_MINUTES):
+            raise ValueError(f"available_at 이 ts+5분이 아니다: {r['ticker']} {ts} {avail}")
+        by_day[str(r["trade_date"])[:10]].append({
+            "ticker": r["ticker"], "source_symbol": r["symbol"], "ts": ts,
+            "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"],
+            "volume": r["volume"], "source_vendor": VENDORS["fmp"]["vendor"],
+            "available_at": avail,
+        })
+    return {"uri": uri, "etag": obj["ETag"].strip('"'),
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "rows": sum(len(v) for v in by_day.values()), "by_day": dict(by_day)}
+
+
+def _collect_fmp_local(days, targets, covered, a):
+    """날짜-major — 스테이징 원천에서 그날 **아직 아무도 안 가진** 종목의 봉만 낸다.
+
+    호출 없음. 서로소는 다른 벤더와 같은 한 겹이다: `covered`(정본 ∪ 모든 벤더 백필)에 있는
+    (종목, 날짜)는 건너뛴다 — 원천이 그 칸에 다른 값을 갖고 있어도 **먼저 착지한 쪽이
+    이긴다**(운영이 지금 읽는 값을 이관이 갈아치우지 않는다). 건너뛴 행은 사유별로 센다:
+    ① 달력 밖(롤업 소유일·`--days` 창 밖 — `_trading_days` 가 이미 잘라 `days` 에 없다)
+    ② 이미 가진 칸 ③ 대상 밖 종목. 합은 원천 행 수와 같아야 한다(`a.fmp_stats`).
+    """
+    src = a.fmp_source["by_day"]
+    stats = a.fmp_stats
+    in_window = set(days)
+    for d, rows in src.items():
+        if d not in in_window:
+            stats["skipped_outside_calendar"] += len(rows)
+    for d in days:
+        rows = src.get(d, [])
+        out = [r for r in rows if r["ticker"] in targets and r["ticker"] not in covered[d]]
+        stats["skipped_covered"] += sum(1 for r in rows if r["ticker"] in covered[d])
+        stats["skipped_not_target"] += sum(1 for r in rows if r["ticker"] not in targets
+                                           and r["ticker"] not in covered[d])
+        if out:
+            stats["yielded"] += len(out)
+            yield d, out
+
+
 def main() -> int:
     """장중 5분봉 백필 CLI 엔트리포인트 — 종료 코드 반환."""
     ap = argparse.ArgumentParser()
@@ -544,12 +614,26 @@ def main() -> int:
                     help="**쓰기만** 건너뛴다. 수집은 그대로 돌아 콜을 다 태운다")
     ap.add_argument("--repair-session-hours", action="store_true",
                     help="이미 쓴 백필 파일에서 정규장 밖 봉을 걷어낸다(재수집 없음)")
+    ap.add_argument("--source-parquet", default="",
+                    help="fmp 전용 — 이관 원천 parquet 의 s3:// 경로(ALPHA-1104 스테이징 파일)")
+    ap.add_argument("--report", default="",
+                    help="fmp 전용 — 이관 대장 JSON 을 이 로컬 경로에 쓴다(원천 해시·날짜별 착지·건너뜀 사유)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    backfill_name = VENDORS[a.vendor]["file"]
+    spec = VENDORS[a.vendor]
+    backfill_name = spec["file"]
+    if a.vendor == "fmp" and not a.source_parquet:
+        ap.error("--vendor fmp 는 --source-parquet 가 필요하다")
     s3 = _s3()
     days = _trading_days(s3, a.bucket)[-a.days:]
+    if a.vendor == "fmp":
+        # 원천이 가진 날만 본다 — 정본 파티션을 날마다 읽어 커버리지를 세므로, 원천에 없는
+        # 날까지 읽는 것은 순수 비용이다(~900일 × part-0 ~700KB). 달력 밖 원천 날짜는
+        # 수집기가 `skipped_outside_calendar` 로 센다.
+        a.fmp_source = _load_local_source(a.source_parquet)
+        a.fmp_stats = defaultdict(int)
+        days = [d for d in days if d in a.fmp_source["by_day"]]
     if not days:
         log.error("파티션이 없다 — 버킷/프리픽스를 확인해라")
         return 1
@@ -564,7 +648,7 @@ def main() -> int:
             if t is None:
                 continue
             rows = [r for r in t.to_pylist()
-                    if SESSION_OPEN <= r["ts"].time() < SESSION_CLOSE]
+                    if _in_session(r["ts"].time(), spec.get("close_inclusive", False))]
             if len(rows) == t.num_rows:
                 continue
             cut += t.num_rows - len(rows)
@@ -602,7 +686,11 @@ def main() -> int:
         # 여기만 무음이면 정상 실행과 구분이 안 된다.
         log.warning("창 %d일에 5분봉 정본이 하나도 없다 — 설정 선언분만 대상이 된다", len(days))
     universe = (present[latest] if latest else set()) | _configured_universe()
-    if a.tickers:
+    if a.vendor == "fmp" and not a.tickers:
+        # 이관은 원천 전량이 대상이다 — `--min-days` 는 수집 결손 축이라 여기선 뜻이 없고,
+        # 걸면 다른 벤더가 20일 넘게 채운 ETF(069500 등)가 통째로 빠진다.
+        targets = sorted({r["ticker"] for rows in a.fmp_source["by_day"].values() for r in rows})
+    elif a.tickers:
         # **명시 요청은 명시 대상이다.** 교집합을 걸면 아직 안 받아 본 종목을 지정해도
         # 조용히 0건으로 끝난다 — 백필에서 그건 결손을 성공으로 위장하는 길이다.
         # 교집합이 하던 공백·빈 값 스크러빙은 여기서 명시적으로 한다.
@@ -620,23 +708,63 @@ def main() -> int:
     # `covered` 로 그날들을 걸러 이어받는다. 모아서 쓰던 판은 ~46분짜리 런이 마지막에
     # 죽으면 전부 잃었다.
     total = days_written = 0
-    for d, rows in (_collect_kis if a.vendor == "kis" else _collect_toss)(
-            days, targets, covered, a):
+    collect = {"kis": _collect_kis, "toss": _collect_toss, "fmp": _collect_fmp_local}[a.vendor]
+    landed: list[dict] = []
+    for d, rows in collect(days, targets, covered, a):
         existing = _tickers_present(_read_day(s3, a.bucket, d))
         prior = _read_day(s3, a.bucket, d, backfill_name)
         payload = _day_payload(prior.to_pylist() if prior is not None else [],
-                               existing, rows)
+                               existing, rows, spec.get("close_inclusive", False))
         if payload is None:
             continue
         keep_and_new, fresh = payload
         n = _write_day(s3, a.bucket, d, keep_and_new, a.dry_run, backfill_name)
         total += fresh
         days_written += 1
+        landed.append({"trade_date": d, "dest_key": f"{PREFIX}/trade_date={d}/{backfill_name}",
+                       "rows_added": fresh, "file_rows": n})
         log.info("%s ← %d행 (파일 총 %d행)%s", d, fresh, n,
                  " (dry-run)" if a.dry_run else "")
     log.info("완료 — %d일 · %d행 추가%s", days_written, total,
              " (dry-run)" if a.dry_run else "")
+    if a.vendor == "fmp":
+        return _fmp_report(a, targets, landed, total)
     return 0
+
+
+def _fmp_report(a, targets, landed, total) -> int:
+    """이관 대장을 남기고 **원천 행이 전부 설명되는지** 판정한다 — 안 되면 exit 1.
+
+    원천 행 = 착지 + 건너뜀(달력 밖 · 이미 가진 칸 · 대상 밖). 착지 수는 수집기가 낸 행과
+    쓰기 쪽이 실제로 더한 행이 같아야 한다. 어긋나면 어딘가에서 행이 조용히 사라졌거나
+    두 번 셌다는 뜻이라 성공으로 접지 않는다(Rule 12).
+    """
+    st, src = dict(a.fmp_stats), a.fmp_source
+    accounted = st.get("yielded", 0) + sum(v for k, v in st.items() if k.startswith("skipped_"))
+    ok = accounted == src["rows"] and st.get("yielded", 0) == total
+    report = {
+        "job_name": "backfill_intraday_5m --vendor fmp", "ticket": "ALPHA-1104",
+        "dry_run": a.dry_run, "bucket": a.bucket,
+        "status": ("dry_run_ok" if a.dry_run else "success") if ok else "unaccounted_rows",
+        "source": {k: src[k] for k in ("uri", "etag", "sha256", "rows")},
+        "targets": targets, "rows_added": total, "stats": st, "accounted": accounted,
+        "landed": landed,
+    }
+    body = json.dumps(report, ensure_ascii=False, indent=1, default=str)
+    if a.report:
+        with open(a.report, "w", encoding="utf-8") as f:
+            f.write(body)
+    if not a.dry_run:
+        from data_pipeline.lake.storage import collection_log_key
+        now = datetime.now(timezone.utc)
+        key = collection_log_key(source="fmp", dataset="intraday_5m",
+                                 started_date=now.date().isoformat(),
+                                 run_id=f"backfill-fmp-local-{now:%Y%m%dT%H%M%SZ}")
+        _s3().put_object(Bucket=a.bucket, Key=key, Body=body.encode("utf-8"))
+        log.info("이관 대장 기록: %s", key)
+    log.info("이관 대장: 원천 %d행 = 착지 %d + 건너뜀 %s → %s", src["rows"], total,
+             {k: v for k, v in st.items() if k.startswith("skipped_")}, report["status"])
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
