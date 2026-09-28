@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { Toast } from '@/components/Toast';
 import { LoginGateSheet } from '@/features/auth/LoginGateSheet';
+import { useSession } from '@/store/session';
 import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
@@ -14,6 +15,8 @@ const queryClient = new QueryClient();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts(fontAssets);
+  const restore = useSession((s) => s.restore);
+  useEffect(() => { restore(); }, [restore]);
   useEffect(() => {
     if (loaded || error) SplashScreen.hideAsync();
   }, [loaded, error]);
