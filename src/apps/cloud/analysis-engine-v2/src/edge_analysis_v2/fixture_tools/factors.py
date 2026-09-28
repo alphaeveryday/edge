@@ -1,5 +1,5 @@
 """Assemble deterministic detail cards independently from agent judgments."""
-from . import chart, flow, macro, valuation
+from . import chart, etf, flow, macro, valuation
 from .common import available, instant
 
 FORMULA_LATEX = (
@@ -13,6 +13,7 @@ FORMULA_LATEX = (
     r"PER_i=P_i/\sum_{q=1}^{4}EPS_{i,q};\ PBR_i=P_i/BPS_i;\ "
     r"\bar x=\sum_iw_ix_i;\ F_d=\sum_iw_{i,d}f_{i,d};\ S_{20}=\sum_{d=D-19}^{D}F_d;\ "
     r"streak=\max\{k:\forall j\in[0,k),F_{D-j}>0\}"
+    r";\ distribution\%=100\sum_{T-1y<t\le T}cash_t/P;\ units\%=100(U_D/U_{D-20}-1)"
 )
 
 
@@ -20,7 +21,12 @@ def metrics(fixture, type):
     """Return one factor's numerical cards without assigning a sticker."""
     readers = {"차트": chart.metrics, "매크로": macro.metrics, "밸류": valuation.metrics}
     if type in readers:
-        return {"type": type, "metrics": readers[type](fixture)}
+        cards = readers[type](fixture)
+        if type == "밸류":
+            distribution = etf.distribution_yield(fixture)
+            if distribution:
+                cards.append(distribution)
+        return {"type": type, "metrics": cards}
     if type != "수급":
         raise ValueError("unknown factor type")
     context = fixture["context"]
@@ -36,4 +42,7 @@ def metrics(fixture, type):
         # A lower bound must not be displayed as an exact streak card.
         if streak["exact"]:
             cards.append({"key": f"weighted_{investor}_net_buy_streak", "value": streak["streak_days"], "observed_at": observed})
+    units = etf.units_change(fixture)
+    if units:
+        cards.append(units)
     return {"type": type, "metrics": cards}

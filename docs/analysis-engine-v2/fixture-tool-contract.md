@@ -81,8 +81,15 @@
 
 ## 실행용 시나리오
 
-- `build_demo_fixture(scenario, analysis_at)`: baseline / unusual_flow / competing_signals / followup. 모든 기사·가격·재무는 가상 자료이며 실제 KODEX 반도체 분석으로 표시하지 않음.
+- `make_fixture(scenario, analysis_at)`: baseline / quiet / unusual_flow / competing_signals / followup. 모든 기사·가격·재무는 가상 자료이며 실제 KODEX 반도체 분석으로 표시하지 않음.
 - 달력은 테스트용 평일 달력. 실제 한국 휴장일 연결은 원천 연결 작업.
 - 초기 입력: 최근40개 일봉(대상별), 최근30확정일 수급, 전체 최신 편입, 뉴스제목100개, 거시계열별최근21개, 공개재무최근4분기, 최근가격5개, 이전분석. 원자료는 계산 도구와 같은 snapshot에서 읽음.
 - 도구는 전체 준비 이력으로 계산. 모델에게 주는 이력 길이가 계산 이력 길이를 제한하지 않음.
-- 현재 미구현: 5년 밴드, ETF 분배율·발행좌수 카드. 이들 값은 생성하거나 0으로 채우지 않음.
+- 현재 미구현: 5년 밴드(계약 미정). 값을 생성하거나 0으로 채우지 않음.
+
+## ETF 분배금·발행좌수
+
+- `distributions`: `instrument_id,paid_at,amount_per_unit,available_at`. 실제 지급된 세전 KRW/좌. 현재 ETF 가격과 같은 분할 단위.
+- `distribution_history_start`: 완전한 지급 이력을 보장하는 시작 날짜. 분석시점의 1년 전 동일 날짜 이후~현재 지급액 합 / 현재가격 ×100. 윤년2월29일의 직전연도는2월28일. 자료범위 부족이면 카드 제외, 완전이력에서 지급0건은0%.
+- `etf_units`: `instrument_id,date,units,available_at`. `trading_dates`의 최근21확정거래일 모두 필요. 좌수는 양의 정수. 변화율 $100(U_D/U_{D-20}-1)$.
+- 시각·누락 검사는 다른 자료와 동일. 오늘 장중 좌수를 전일 확정값 대신 쓰지 않음.

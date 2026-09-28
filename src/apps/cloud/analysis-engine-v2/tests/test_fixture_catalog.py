@@ -31,3 +31,11 @@ def test_preopen_never_uses_current_day_provisional_price():
     fixture = build_demo_fixture(analysis_at="2026-09-21T08:30:00+09:00")
     assert fixture["price_snapshots"] == []
     assert FixtureTools(fixture).call("calculate_chart_indicators", {})["result"]["momentum"] is not None
+
+
+def test_quiet_scenario_has_no_new_news_or_indicator_extreme():
+    fixture = build_demo_fixture("quiet")
+    result = FixtureTools(fixture).call("calculate_chart_indicators", {})["result"]
+    assert 20 < result["momentum"] < 80
+    assert all(r["published_at"] < "2026-09-15" for r in fixture["news"])
+    assert max(abs(r["net_amount_krw"]) for r in fixture["flow"]) <= 15000
