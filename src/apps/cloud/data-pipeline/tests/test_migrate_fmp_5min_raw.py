@@ -85,6 +85,15 @@ def test_every_source_object_is_accounted_for():
     assert all(e["status"] == "excluded" for e in excluded)
 
 
+def test_range_limits_leave_every_skipped_data_file_in_the_log():
+    """--match·--limit 로 잘린 데이터 파일도 사유와 함께 남는다 — 부분 이관의 나머지를 기록에서 안다."""
+    objs = [_obj("A.parquet"), _obj("B.parquet"), _obj("C.parquet"), _obj("X.parquet")]
+    todo, excluded = mig.plan(objs, "us", "run_x", None, "[ABC]*", 2)
+    assert [t["src_key"] for t in todo] == [_US + "A.parquet", _US + "B.parquet"]
+    assert {e["src_key"]: e["reason"] for e in excluded} == {
+        _US + "X.parquet": "범위 제한 밖(--match)", _US + "C.parquet": "범위 제한 밖(--limit)"}
+
+
 def test_kr_preset_keeps_only_ticker_files():
     """KR 본체 프리픽스의 kospi200_proxy.parquet 은 가격 raw 가 아니다(duck 글롭 사고와 같은 자리)."""
     kr = "raw/kr_intraday/fmp_5min/"

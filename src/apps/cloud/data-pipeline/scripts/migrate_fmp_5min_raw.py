@@ -83,12 +83,17 @@ def plan(objects: list[dict], preset: str, run_id: str, ingest_date: str | None,
             excluded.append(item | {"status": "excluded", "reason": "데이터 파일 아님"})
             continue
         if match and not fnmatch.fnmatch(rel, match):
+            excluded.append(item | {"status": "excluded", "reason": "범위 제한 밖(--match)"})
             continue
         day = ingest_date or o["LastModified"].astimezone(timezone.utc).date().isoformat()
         dest = raw_price_5min_partition(source=SOURCE_VENDOR, market=market,
                                         ingest_date=day, run_id=run_id)
         todo.append(item | {"dest_key": f"{dest}/{rel}"})
-    return (todo[:limit] if limit else todo), excluded
+    if limit:
+        # 잘린 데이터 파일도 로그에 남긴다 — 부분 이관의 나머지가 무엇인지 기록에서 알 수 있어야 한다.
+        excluded += [t | {"status": "excluded", "reason": "범위 제한 밖(--limit)"} for t in todo[limit:]]
+        todo = todo[:limit]
+    return todo, excluded
 
 
 def _md5(s3, bucket: str, key: str) -> str:
