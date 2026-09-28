@@ -834,7 +834,7 @@ def test_sweep_finds_an_untracked_ecs_task_after_the_dag_is_gone_and_the_gate_ho
         "arn:ecs/young": {"lastStatus": "PENDING", "command": cmd, "createdAt": now - timedelta(minutes=2)},
         "arn:ecs/other-lane": {"lastStatus": "RUNNING", "command": ["load-price-daily"], "createdAt": _SLOT},
     })
-    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c", now=now)
+    summary = _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn="c", now=now)
     assert [u["ecs_task_arn"] for u in summary["unrecorded"]] == ["arn:ecs/orphan"]
     [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
     assert issue["evidence"]["kind"] == states.HOLD_ECS_STATE_UNKNOWN
@@ -852,7 +852,7 @@ def test_sweep_reconciles_old_slot_runs_and_does_not_guess_when_ecs_listing_fail
     ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "STOPPED", "exitCode": 0, "stopCode": "EssentialContainerExited"}},
                     list_error=True)
     # 주기 슬롯 대조는 최근 예정일만 본다 — 이 런은 하루 전 슬롯이어도 끝나지 않은 시도가 있으면 훑는다.
-    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c", now=_SLOT + timedelta(days=1))
+    summary = _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn="c", now=_SLOT + timedelta(days=1))
     assert summary["reconciled"] == [result.run_key] and db.attempts[-1]["status"] == states.EXEC_SUCCEEDED
     assert summary["ecs_listing"] == "failed" and not db.open_issues(states.ISSUE_EXECUTION_HOLD)
 
@@ -864,7 +864,7 @@ def test_sfn_run_tasks_are_not_swept():
                       sfn_client=FakeSfn())
     cmd = ["normalize-investor-estimate", "--run-id", result.pipeline_run_id]
     ecs = _SweepEcs({"arn:ecs/x": {"lastStatus": "RUNNING", "command": cmd, "createdAt": _SLOT}})
-    assert _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c",
+    assert _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn="c",
                                    now=_SLOT + timedelta(hours=1))["unrecorded"] == []
 
 
@@ -891,6 +891,7 @@ def test_late_report_of_an_older_dag_run_does_not_overwrite_the_newer_state():
 
 
 def test_periodic_reconcile_sweeps_even_without_due_slots(monkeypatch):
+    monkeypatch.setattr(entry.aws, "ecs_client", lambda: _SweepEcs())   # CI 엔 AWS 리전이 없다 — 실제 클라이언트 금지
     # 야간·휴장일에도 돈다 — 시간 초과된 run 의 미확정 실행은 슬롯 일정과 무관하다.
     db = FakeOpsDB()
     swept = []
@@ -919,7 +920,7 @@ def test_a_later_hold_of_another_kind_does_not_lift_the_gate(monkeypatch):
     result = _plan_airflow(db)
     run_id = result.pipeline_run_id
     cmd = ["normalize-investor-estimate", "--run-id", run_id]
-    _rec.sweep_airflow_runs(_ledger(db), ecs=_SweepEcs({"arn:ecs/o": {"lastStatus": "PENDING", "command": cmd,
+    _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=_SweepEcs({"arn:ecs/o": {"lastStatus": "PENDING", "command": cmd,
                                                                       "createdAt": _SLOT}}),
                             cluster_arn="c", now=_SLOT + timedelta(minutes=45))
     _rec.record_execution_holds(_ledger(db), run_key=result.run_key, holds={
@@ -949,11 +950,11 @@ def test_unfinished_record_is_closed_even_when_the_attempt_ended_by_itself():
     _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
     _age(db, "arn:ecs/n", _SLOT)
     ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}})
-    _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(minutes=40))
+    _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(minutes=40))
     assert db.open_issues(states.ISSUE_EXECUTION_HOLD)
     a = db.attempts[-1]
     a["status"], a["exit_code"] = states.EXEC_SUCCEEDED, 0          # wrapper 가 스스로 끝을 기록
-    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(days=1))
+    summary = _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(days=1))
     assert summary["reconciled"] == [result.run_key] and not db.open_issues(states.ISSUE_EXECUTION_HOLD)
 
 
@@ -961,7 +962,7 @@ def test_sweep_skips_runs_the_slot_reconcile_already_saw():
     db = FakeOpsDB()
     result = _plan_airflow(db)
     _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
-    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=_SweepEcs(), cluster_arn=None, now=_SLOT,
+    summary = _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=_SweepEcs(), cluster_arn=None, now=_SLOT,
                                       skip_run_keys=frozenset({result.run_key}))
     assert summary["reconciled"] == []
 
@@ -995,12 +996,13 @@ def test_sweep_reads_every_page_and_describes_in_chunks_of_100():
              for i in range(230)}
     tasks["arn:ecs/zz-orphan"] = {"lastStatus": "RUNNING", "command": cmd, "createdAt": _SLOT}   # 둘째 쪽 끝
     ecs = _PagedEcs(tasks)
-    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c", now=_SLOT + timedelta(hours=1))
+    summary = _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn="c", now=_SLOT + timedelta(hours=1))
     assert [u["ecs_task_arn"] for u in summary["unrecorded"]] == ["arn:ecs/zz-orphan"]
     assert sorted(ecs.describe_sizes) == [31, 100, 100]
 
 
 def test_sweep_failure_fails_the_periodic_run_after_slot_reconciliation(monkeypatch):
+    monkeypatch.setattr(entry.aws, "ecs_client", lambda: _SweepEcs())   # CI 엔 AWS 리전이 없다 — 실제 클라이언트 금지
     # 슬롯 대조는 끝난 뒤다 — 원장 밖 실행을 확인하지 못한 것을 exit 0 으로 숨기지 않는다.
     db = FakeOpsDB()
     reconciled = []
