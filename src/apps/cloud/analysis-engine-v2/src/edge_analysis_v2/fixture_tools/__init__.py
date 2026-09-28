@@ -5,6 +5,7 @@ from uuid import uuid4
 from .common import available, holdings, instant, table
 from . import chart, factors, flow, macro, news, valuation
 from .demo import make_fixture
+from .replay import make_replay_fixture
 
 
 class FixtureTools:
