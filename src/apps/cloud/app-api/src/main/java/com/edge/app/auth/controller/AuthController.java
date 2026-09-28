@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -20,21 +21,27 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
 public class AuthController {
+    private static final String DEVICE_HEADER = "X-Device-Id";
+
     private final AuthService authService;
 
+    // X-Device-Id 는 선택. 있으면 게스트 데이터를 계정으로 매핑한다(guestMapped).
     @PostMapping("/login")
-    public ApiResponse<AuthResponse> authLogin(@RequestBody @Valid LoginRequest request) {
-        return ApiResponse.onSuccess(authService.login(request));
+    public ApiResponse<AuthResponse> authLogin(@RequestBody @Valid LoginRequest request,
+            @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
+        return ApiResponse.onSuccess(authService.login(request, deviceKey));
     }
 
     @PostMapping("/social")
-    public ApiResponse<AuthResponse> authSocial(@RequestBody @Valid SocialLoginRequest request) {
-        return ApiResponse.onSuccess(authService.social(request));
+    public ApiResponse<AuthResponse> authSocial(@RequestBody @Valid SocialLoginRequest request,
+            @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
+        return ApiResponse.onSuccess(authService.social(request, deviceKey));
     }
 
     @PostMapping("/signup")
-    public ApiResponse<AuthResponse> authSignup(@RequestBody @Valid SignupRequest request) {
-        return ApiResponse.onSuccess(authService.signup(request));
+    public ApiResponse<AuthResponse> authSignup(@RequestBody @Valid SignupRequest request,
+            @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
+        return ApiResponse.onSuccess(authService.signup(request, deviceKey));
     }
 
     @PostMapping("/password-reset")
@@ -45,7 +52,7 @@ public class AuthController {
 
     @PostMapping("/logout")
     public ApiResponse<Void> authLogout(AppPrincipal principal) {
-        authService.logout();
+        authService.logout(principal);
         return ApiResponse.onSuccess(null);
     }
 

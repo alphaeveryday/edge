@@ -29,6 +29,9 @@ app:
   jwt:
     secret: ${APP_JWT_SECRET}   # 필수, 기본값 없음. HS256 이라 32바이트 이상
     access-ttl: ${APP_JWT_ACCESS_TTL:PT1H}
+  social:   # 소셜 idToken 의 audience(앱 client id). 비어 있으면 그 provider 로그인은 전부 거절
+    apple-client-id: ${APP_APPLE_CLIENT_ID:}
+    google-client-id: ${APP_GOOGLE_CLIENT_ID:}
 vote:
   redis:
     disconnected-behavior: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:REJECT_COMMANDS}

@@ -28,6 +28,8 @@ dependencies {
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-api:3.1.1'
 	// 액세스 JWT(HS256) 발급·검증. 소셜 idToken 검증(JWKS)까지 한 라이브러리로 덮는다.
 	implementation 'com.nimbusds:nimbus-jose-jwt:10.3'
+	// 비밀번호 bcrypt 해시만. 웹 보안 자동설정은 쓰지 않는다(인증은 common/auth 필터).
+	implementation 'org.springframework.security:spring-security-crypto'
 	// Boot 4 는 AOP starter 가 없다 — 서킷 애노테이션 프록시에 필요한 weaver 만 직접 추가.
 	implementation 'org.aspectj:aspectjweaver'
 	implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.3.0'
