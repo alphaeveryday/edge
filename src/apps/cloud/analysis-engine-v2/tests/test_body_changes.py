@@ -92,3 +92,16 @@ def test_a_restored_topic_deleted_again_is_last_in_deletion_order():
     editor.apply([{"action":"add", **topic("0")}])
     editor.apply([{"action":"remove", "id":"0"}])
     assert [i["id"] for i in editor.result()["updates"]["items"]] == ["1", "0"]
+
+
+def test_rewrite_highlights_only_explicit_new_information_in_retained_topic():
+    editor = BodyEditor(base(), NOW)
+    result = editor.write('rewritten', [{**topic('0', 'new'), 'updated_sentence_numbers':[1]}])
+    assert result['items'][0]['id'] == '0'
+    assert result['items'][0]['sentences'][0]['is_updated'] is True
+    assert result['updates']['items'][0]['sentence'] == 'new'
+    # A wording-only change is recorded but is not invented as new information.
+    result = BodyEditor(base(),NOW).write('rewritten',[topic('0','reworded')])
+    assert result['items'][0]['sentences'][0]['is_updated'] is False
+    assert result['updates']['items'][0]['change_type'] == 'modified'
+    assert result['updates']['items'][0]['sentence'] is None
