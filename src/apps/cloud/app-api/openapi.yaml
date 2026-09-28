@@ -37,8 +37,6 @@ tags:
     description: 첫 진입 테마·ETF 선택 저장
   - name: home
     description: 홈 화면 전용 조합 응답
-  - name: story
-    description: 홈 스토리 카드
   - name: etf
     description: ETF 마스터·시세·차트·장중 설명
   - name: watch
@@ -240,7 +238,7 @@ paths:
         '200': { $ref: '#/components/responses/Empty' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
 
-  # ── home / story ─────────────────────────────────────
+  # ── home ─────────────────────────────────────────────
   /home/brief:
     get:
       tags: [home]
@@ -251,22 +249,6 @@ paths:
         - { name: group, in: query, schema: { type: string }, description: 관심 그룹 key. 없으면 기본 그룹 }
       responses:
         '200': { $ref: '#/components/responses/HomeBrief' }
-        '401': { $ref: '#/components/responses/Error' }   # COMMON401
-  /stories:
-    get:
-      tags: [story]
-      operationId: storyQueue
-      summary: 스토리 큐
-      responses:
-        '200':
-          description: 스토리 큐
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result: { type: array, items: { $ref: '#/components/schemas/Story' } }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
 
   # ── etf ──────────────────────────────────────────────
@@ -496,8 +478,6 @@ paths:
       operationId: themeFeed
       summary: 테마 피드
       security: []
-      parameters:
-        - { name: dir, in: query, schema: { type: string, enum: [all, up, down], default: all }, description: 방향 필터(전체·상승·하락). 앱 화면의 탭 3개와 1:1. 정렬은 서버가 인기순 고정. 앱 파라미터명 sort 는 연결 때 dir 로 바꾼다 }
       responses:
         '200':
           description: 테마 피드
@@ -509,24 +489,6 @@ paths:
                   - properties:
                       result: { type: array, items: { $ref: '#/components/schemas/ThemeFeedItem' } }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
-  /themes/{key}/sheet:
-    get:
-      tags: [theme]
-      operationId: themeSheet
-      summary: 테마 ETF 시트
-      description: 화면 전용. 테마 ETF N종 시트.
-      parameters: [{ $ref: '#/components/parameters/ThemeKey' }]
-      responses:
-        '200':
-          description: 테마 시트
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result: { $ref: '#/components/schemas/ThemeSheet' }
-        '404': { $ref: '#/components/responses/Error' }   # THEME4001
   /themes/{key}:
     get:
       tags: [theme]
@@ -1276,12 +1238,6 @@ components:
         neg: { type: array, items: { type: string } }
         pos: { type: array, items: { type: string } }
         close: { type: string }
-        next:
-          type: object
-          required: [code, name]
-          properties:
-            code: { $ref: '#/components/schemas/EtfCode' }
-            name: { type: string }
     FactorPage:
       type: object
       required: [axis, dir, headline]
@@ -1336,21 +1292,6 @@ components:
         title: { type: string }
         chips: { type: array, items: { type: string } }
         ready: { type: boolean }
-    ThemeSheet:
-      type: object
-      required: [theme, title, why, rows]
-      properties:
-        theme: { type: string }
-        title: { type: string }
-        why: { type: string }
-        rows:
-          type: array
-          items:
-            type: object
-            required: [etf]
-            properties:
-              etf: { $ref: '#/components/schemas/EtfSummary' }
-              tag: { type: string }
     ThemeFeedItem:
       type: object
       required: [key, count, headline, dir]
@@ -1448,57 +1389,6 @@ components:
               - type: object
                 properties:
                   prev: { $ref: '#/components/schemas/Signal' }
-
-    # ── 스토리 ──
-    StoryCard:
-      oneOf:
-        - type: object
-          required: [kind, badge, changePct, headline, noteTitle, notes, news]
-          properties:
-            kind: { type: string, const: ai }
-            sec: { type: string }
-            badge: { type: string }
-            changePct: { type: number }
-            headline: { type: string }
-            noteTitle: { type: string }
-            notes: { type: array, items: { type: string } }
-            news:
-              type: array
-              items:
-                type: object
-                required: [issueId, t, phase, kw, dir]
-                properties:
-                  issueId: { type: string }
-                  t: { type: string }
-                  phase: { type: string }
-                  kw: { type: string }
-                  dir: { $ref: '#/components/schemas/Dir' }
-        - type: object
-          required: [kind, issueId, t, kw, b]
-          properties:
-            kind: { type: string, const: news }
-            sec: { type: string }
-            issueId: { type: string }
-            t: { type: string }
-            kw: { type: string }
-            b: { type: string }
-        - type: object
-          required: [kind, big, capPre, capB, capPost]
-          properties:
-            kind: { type: string, const: hook }
-            sec: { type: string }
-            big: { type: string }
-            capPre: { type: string }
-            capB: { type: string }
-            capPost: { type: string }
-    Story:
-      type: object
-      required: [etf, sub, cards]
-      properties:
-        etf: { $ref: '#/components/schemas/EtfSummary' }
-        sub: { type: string }
-        prev: { $ref: '#/components/schemas/Signal' }
-        cards: { type: array, items: { $ref: '#/components/schemas/StoryCard' } }
 
     # ── 알림 ──
     Notification:
