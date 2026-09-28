@@ -6,10 +6,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-/** 스텁. */
+/** 스토리 뷰어는 폐기된 화면(2026-09-28 확인). 생산자 없음, 빈 큐. 라우트·계약·etf_story 정리는 후속. */
 @Service
 public class StoryService {
     public List<StoryResponse> queue(AppPrincipal principal) {
-        return List.of(StoryExamples.story());
+        return List.of();
     }
 }
