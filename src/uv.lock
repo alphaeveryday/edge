@@ -67,13 +67,22 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
 ]
 
+[package.optional-dependencies]
+cloud = [
+    { name = "boto3" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.1" }]
+requires-dist = [
+    { name = "boto3", marker = "extra == 'cloud'", specifier = ">=1.34" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
+]
+provides-extras = ["cloud"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]
