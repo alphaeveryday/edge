@@ -156,7 +156,7 @@ server-side copy만 하므로 값 변형이 없다.
 | 소비 경로 | 지금 | 목표 | 상태 |
 |---|---|---|---|
 | `duck.s3_kr_5min`·`s3_us_5min` | 애드혹 프리픽스 | 표준 raw 이관 스냅샷 (같은 바이트) | 코드 완료(ALPHA-1104 PR) · 배포 전 |
-| `duck._bars` (`bars_5m`) | Glue 표 우선, 신선도 미달이면 canonical 합집합 + 로컬 가지 | canonical 단일 경로 | **미착수** — §3.3 실행·검증 뒤 별도 PR |
+| `duck._bars` (`bars_5m`) | Glue 표 우선, 신선도 미달이면 canonical 합집합 + 로컬 가지 | canonical 단일 경로 | **미착수** — 선행 조건 셋: ① §3.3 실행·검증 ② §3.2의 Glue 전용 KR 64,883 키 복구(raw→canonical — `part-0` 소유 칸이라 ALPHA-1106에서 의도 판정 후 방법 결정) ③ Glue 표 **전 키 집합**(fmp·fmp_backfill·1m_rollup)과 canonical의 (ticker, ts) 대조에서 canonical 쪽 누락 0 또는 사유 기록 |
 | `collect/intraday.py` | 구 gap 프리픽스와 canonical `part-0`에 직접 쓴다 | 표준 raw · 소유권 가드 | ALPHA-1106 |
 
 - `CausalLake` 생성 지점 15곳 중 `day=`를 주는 곳은 `pipeline.py`·`window_batch.py` 둘뿐이다. 나머지 13곳(CLI·실험)은

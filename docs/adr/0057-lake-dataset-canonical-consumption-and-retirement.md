@@ -37,7 +37,7 @@ Iceberg, 애드혹 raw(`raw/kr_intraday/…`·`raw/fmp_5min_us/…`), 다른 버
 | 존 | 담는 것 | 규칙 |
 |---|---|---|
 | `raw/source=…/dataset=…` | 공급자 응답 원본 | 실행 단위로 불변이다. 수신일(`ingest_date`)은 실제 수신일이고 복사일로 바꾸지 않는다 |
-| `canonical/…` | 결정론적으로 정규화한 관측값의 **현재 상태** | 데이터셋·파티션마다 writer를 하나로 정한다. raw에서 재생성할 수 있어야 한다 |
+| `canonical/…` | 결정론적으로 정규화한 관측값. 날짜 파티션 Parquet 시장 데이터셋은 **현재 상태**다. `canonical/tables.py`에 선언된 Iceberg 표는 **추가 전용 이력**이다(현재값은 `latest_view`, 시점 조회는 `as_of_sql`) | 데이터셋·파티션마다 writer를 하나로 정한다. raw에서 재생성할 수 있어야 한다. 두 형식의 계약은 서로 바꾸지 않는다. draft Iceberg 표를 승격할 때도 추가 전용 이력 계약을 유지한다 |
 | `feature/…` | **비결정적 모델 추론 결과**(LLM 태깅 등) | 결정적 집계(예: 구성종목 수급 가중합)는 여기 두지 않는다 |
 | `operations_archive/…` | 실행 증거(manifest·실행별 불변 artifact·수집/품질 로그) | 과거 시점 재현과 재처리의 계보다 |
 | RDB·Glue/Iceberg 표 | 조회용 복제 | 정본 존에서 파생한다. 복제의 생산자가 레포에 없으면 정본으로 부르지 않는다 |
@@ -69,7 +69,7 @@ Iceberg, 애드혹 raw(`raw/kr_intraday/…`·`raw/fmp_5min_us/…`), 다른 버
 
 ### 4. 최신 조회와 과거 시점 조회
 
-- canonical과 RDB upsert는 **현재 상태**다. 과거 시점 T의 재현은 실행별 불변 artifact·manifest와
+- 날짜 파티션 Parquet canonical과 RDB upsert는 **현재 상태**다(Iceberg canonical 표는 §1대로 이력을 보존하고 `as_of_sql`로 시점 조회한다). 그 밖의 과거 시점 T의 재현은 실행별 불변 artifact·manifest와
   `available_at`(또는 수신 시각) ≤ T 조건으로 한다. 날짜 파티션만으로 시점 재현을 보장했다고 판정하지 않는다.
 - 이관은 원본의 관측·공개·가용·수신 시각을 보존한다. 원천에 가용 시각이 없어 유도해야 하면
   (예: `ts + 5분`) 유도 규칙이 정본 writer와 같을 때만 옮기고, 다르면 멈춘다.
