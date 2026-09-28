@@ -209,7 +209,7 @@ class Ledger:
             cur.execute(
                 "SELECT et.expected_task_id, et.plan_status, et.task_outcome, et.data_status,"
                 " et.required, snap.expected_entity_count, et.dataset_contract_key,"
-                " et.expected_as_of_date, et.records_out"
+                " et.expected_as_of_date, et.records_out, et.current_attempt_id"
                 " FROM ops_expected_task et"
                 " LEFT JOIN ops_expectation_snapshot snap"
                 " ON snap.expectation_snapshot_id=et.expectation_snapshot_id"
@@ -222,7 +222,8 @@ class Ledger:
             return {"expected_task_id": str(row[0]), "plan_status": row[1],
                     "task_outcome": row[2], "data_status": row[3], "required": row[4],
                     "expected_count": row[5], "dataset_contract_key": row[6],
-                    "expected_as_of_date": row[7], "records_out": row[8]}
+                    "expected_as_of_date": row[7], "records_out": row[8],
+                    "current_attempt_id": None if row[9] is None else str(row[9])}
 
     def update_task_outcome(
         self, expected_task_id: str, *, task_outcome: str | None = None,

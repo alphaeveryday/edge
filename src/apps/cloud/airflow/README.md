@@ -24,6 +24,8 @@
 
 - **run_id.** `plan`이 `plan-run`을 부를 때 `OPS_ORCHESTRATOR=AIRFLOW`, `OPS_SCHEDULED_TIME=<슬롯>`, `OPS_ORCHESTRATOR_RUN_REF=<dag_id>/<run_id>`를 넘긴다. Planner는 SFN 경로와 **같은 run_key·run_id**로 계획만 남기고 SFN은 시작하지 않는다. 스텝은 모두 `--run-id <그 run_id>`로 돈다.
 - **런 상태.** SFN 런은 DescribeExecution이 `orchestration_status`를 채운다. Airflow 런은 Reconciler가 원장에서 투영한다. 판정은 DAG verdict와 같다. 전부 FULFILLED이고 최신 exit가 0이면 SUCCEEDED, 열린 작업이 있으면 RUNNING(hard deadline 뒤엔 FAILED), 나머지는 FAILED다. 비워 두면 콘솔 R02가 정상 완료 런을 "미귀결"로 올린다.
+  - Airflow가 끝나며 `report` task(ops `reconcile`, `OPS_RUN_KEY`+`OPS_ORCHESTRATION_STATUS`)로 자기 판정을 원장에 보고한다. 원장 투영은 보고가 없을 때만 NULL·RUNNING을 채우고, 보고된 확정값은 덮지 않는다.
+  - 주기 Reconciler가 락을 쥔 동안 온 보고는 0이 아니라 75로 끝나 재시도된다. 보고가 끝내 실패하면 `verdict`가 런을 실패로 닫는다.
 - **Airflow run과 원장의 연결.** 두 개의 키로 잇는다.
   - `ops_pipeline_run.orchestrator_run_ref`는 Airflow run을 가리킨다.
   - `ops_task_attempt.ecs_task_arn`은 Airflow task 로그와 XCom `ecs_task_arn`의 ARN과 같다.

@@ -514,8 +514,18 @@ def reconcile_cli(settings) -> int:
     now = _scheduled_time()
     override = os.environ.get("OPS_RUN_KEY")
     cluster_arn = os.environ.get("OPS_CLUSTER_ARN")
+    # Airflow DAG 가 끝나며 자기 run_key 를 지목해 부를 때만 판정을 함께 넘긴다(주기 실행은 없음).
+    reported = os.environ.get("OPS_ORCHESTRATION_STATUS") or None
+    if reported is not None and (not override or reported not in (states.ORCH_SUCCEEDED,
+                                                                    states.ORCH_FAILED)):
+        raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
     with ledger.advisory_lock(_RECONCILE_LOCK) as acquired:
         if not acquired:
+            if reported is not None:
+                # 보고는 이 호출이 유일한 전달 경로다 — 주기 대조가 락을 쥔 동안 0 으로 끝내면 판정이
+                # 유실되고, 주기 투영은 확정값을 덮지 않아 영영 고쳐지지 않는다. 재시도하게 한다.
+                logger.warning("reconcile: 락 경합 — 보고(%s)를 재시도 대상으로 돌린다", reported)
+                return wrapper.STEP_NOT_RUN_EXIT
             logger.info("reconcile: 다른 인스턴스가 락 보유 — skip")
             return 0
         if override:
@@ -537,11 +547,6 @@ def reconcile_cli(settings) -> int:
             if grace_passed:
                 reconciler.detect_planner_missing(ledger, expected_run_keys=grace_passed)
             run_keys = [key for key, _ in due]
-        # Airflow DAG 가 끝나며 자기 run_key 를 지목해 부를 때만 판정을 함께 넘긴다(주기 실행은 없음).
-        reported = os.environ.get("OPS_ORCHESTRATION_STATUS") or None
-        if reported is not None and (not override or reported not in (states.ORCH_SUCCEEDED,
-                                                                        states.ORCH_FAILED)):
-            raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
         for run_key in run_keys:
             summary = reconciler.reconcile_run(
                 ledger, run_key=run_key, cluster_arn=cluster_arn, now=now,

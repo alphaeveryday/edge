@@ -230,3 +230,22 @@ def test_log_prefix_follows_task_definition(monkeypatch):
         == "ops/data-pipeline"
     assert EdgeStep(task_id="c", taskdef_key="kis", command=["x"]).awslogs_stream_prefix \
         == "raw-ingest/data-pipeline"
+
+
+def test_verdict_fails_when_the_status_report_did_not_land(dag_module):
+    # 업무 3스텝이 0 이어도 원장 보고(report)가 실패하면 런을 성공으로 닫지 않는다.
+    from airflow.sdk.exceptions import AirflowFailException
+    verdict = dag_module.dag.get_task("verdict").python_callable
+
+    class Ti:
+        def __init__(self, report):
+            self.codes = {"collect": 0, "normalize": 0, "load": 0, "report": report}
+
+        def xcom_pull(self, task_ids, key):
+            return self.codes[task_ids]
+
+    run = SimpleNamespace(conf={})
+    assert verdict(ti=Ti(0), dag_run=run) == {"collect": 0, "normalize": 0, "load": 0}
+    for report in (None, 1, 75):
+        with pytest.raises(AirflowFailException, match="판정 보고 실패"):
+            verdict(ti=Ti(report), dag_run=run)

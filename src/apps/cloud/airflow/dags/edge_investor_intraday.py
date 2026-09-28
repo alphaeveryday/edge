@@ -124,6 +124,11 @@ with DAG(
         codes = {step: ti.xcom_pull(task_ids=step, key="exit_code") for step in _judged_steps(dag_run)}
         if run_status(codes) != "SUCCEEDED":
             raise AirflowFailException(f"런 실패 마감 exit_codes={codes}")
+        # 판정 보고가 원장에 닿지 않았으면 성공으로 닫지 않는다 — 재처리 run 은 뒤에 이 run_key 를 다시
+        # 대조할 주기 실행이 없을 수 있어, 여기서 성공하면 원장의 낡은 상태가 영영 남는다.
+        report_code = ti.xcom_pull(task_ids="report", key="exit_code")
+        if report_code != 0:
+            raise AirflowFailException(f"업무는 성공했으나 원장 판정 보고 실패(report exit={report_code})")
         return codes
 
     plan >> collect >> normalize >> load >> report >> verdict()

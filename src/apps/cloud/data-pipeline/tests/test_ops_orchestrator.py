@@ -403,3 +403,30 @@ def test_reported_airflow_verdict_is_not_overwritten_by_projection():
     assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED
     reconcile_run(_ledger(db), reported_status=states.ORCH_SUCCEEDED, **kw)   # 이후 성공 재처리 보고
     assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED
+
+
+def test_status_report_losing_the_reconcile_lock_is_retried_not_dropped(monkeypatch):
+    # 주기 대조가 락을 쥔 동안 온 보고를 0 으로 끝내면 판정이 유실된다(확정값은 투영이 안 덮는다).
+    db = FakeOpsDB(advisory_grants=False)
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda _s: _ledger(db))
+    monkeypatch.setenv("OPS_RUN_KEY", "investor-intraday:2026-09-22T09:35")
+    monkeypatch.setenv("OPS_ORCHESTRATION_STATUS", states.ORCH_FAILED)
+    assert entry.reconcile_cli(object()) == wrapper.STEP_NOT_RUN_EXIT
+    monkeypatch.delenv("OPS_ORCHESTRATION_STATUS")          # 보고 없는 주기 실행은 종전대로 skip(0)
+    assert entry.reconcile_cli(object()) == 0
+
+
+def test_success_skip_requires_count_and_exit_from_the_same_attempt(monkeypatch):
+    # attempt 종료(exit 0)는 기록됐는데 outcome 갱신(건수·current_attempt_id)이 실패한 상태.
+    db = FakeOpsDB()
+    run_id = _plan_airflow(db).pipeline_run_id
+    _record(db, run_id, "INVESTOR_INTRADAY_COLLECTION_KIS", arn="arn:ecs/c1", exit_code=0)
+    ledger = _ledger(db)
+    monkeypatch.setattr(Ledger, "update_task_outcome", lambda self, *a, **k: None)
+    _record(db, run_id, "INVESTOR_INTRADAY_COLLECTION_KIS", arn="arn:ecs/c2", exit_code=0, records_out=0)
+    monkeypatch.undo()
+    _exclusive(monkeypatch)
+    calls = []
+    rc = wrapper.instrument(lambda: calls.append(1) or 0, task_key="INVESTOR_INTRADAY_COLLECTION_KIS",
+                            run_id=run_id, ledger=ledger, ecs_task_arn="arn:ecs/c3")
+    assert rc == 0 and calls == [1]       # 앞 시도의 건수로 최신 시도를 skip 하지 않는다

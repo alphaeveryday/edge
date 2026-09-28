@@ -96,6 +96,7 @@ class _Cursor:
                     row.get("dataset_contract_key"),
                     row.get("expected_as_of_date"),
                     row.get("records_out"),
+                    row.get("current_attempt_id"),
                 )]
         elif "SELECT expected_task_id, task_key, stage, plan_status" in s:  # expected_tasks_for
             self._etasks_for(p)

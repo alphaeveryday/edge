@@ -362,7 +362,12 @@ def _instrument(
             # 선행 단계가 이 성공 뒤에 다시 돌았다(예: 수집 실패 → 빈 입력 정제 성공 → 수집 복구). 입력이
             # 바뀌었으니 성공 이력이 있어도 다시 실행한다 — skip 하면 복구한 raw 가 영영 적재되지 않는다.
             logger.info("선행 작업이 마지막 성공 뒤에 다시 돌았다 — 다시 실행한다(task=%s)", task_key)
-        elif not (isinstance(expected.get("records_out"), int) and expected["records_out"] > 0):
+        elif latest_exit == 0 and expected.get("current_attempt_id") != str(attempts[-1]["attempt_id"]):
+            # 건수(expected_task)와 exit(최신 attempt)가 다른 시도의 것이다 — attempt 종료는 기록됐는데
+            # outcome 갱신이 실패한 경우. 섞어 판단하지 않고 다시 실행한다(최소 한 번 쪽으로).
+            logger.info("건수와 최신 시도가 어긋난다 — 다시 실행한다(task=%s)", task_key)
+        elif latest_exit == 0 and not (isinstance(expected.get("records_out"), int)
+                                       and expected["records_out"] > 0):
             # 0건 성공(소스 비활성·자격증명 결측 skip 등)은 다시 불러도 반복될 외부 부수효과가 없다 —
             # skip 근거로 삼으면 설정을 고친 뒤의 재수집이 영영 막힌다.
             logger.info("최신 성공이 0건 — 다시 실행한다(task=%s)", task_key)
