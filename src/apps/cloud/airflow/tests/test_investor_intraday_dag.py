@@ -707,3 +707,14 @@ def test_report_names_its_dag_run_and_the_run_lifetime_fits_the_reconciler(dag_m
     assert env["OPS_REPORT_RUN_REF"] == "{{ dag.dag_id }}/{{ run_id }}"
     # 운영 기본값. 주기 Reconciler 의 수명 기준(1800초)보다 짧아야 살아 있는 run 을 보류로 올리지 않는다.
     assert dag_module.dag.dagrun_timeout == timedelta(seconds=1500)
+
+
+def test_reprocess_slot_without_timezone_is_refused():
+    # 오프셋 없는 슬롯을 worker 로컬(UTC)로 읽으면 10:05 KST 가 19:05 KST 가 된다 — 추측하지 않고 거부한다.
+    from airflow.sdk.exceptions import AirflowFailException
+    from edge_batch import reprocess_slot, run_key
+    naive = {"dag_run": SimpleNamespace(conf={"reprocess_slot": "2026-09-22T10:05:00"})}
+    with pytest.raises(AirflowFailException, match="시간대"):
+        reprocess_slot(naive)
+    aware = {"dag_run": SimpleNamespace(conf={"reprocess_slot": "2026-09-22T10:05:00+09:00"})}
+    assert run_key("investor-intraday", reprocess_slot(aware)) == "investor-intraday:2026-09-22T10:05"

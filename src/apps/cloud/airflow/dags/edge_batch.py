@@ -51,9 +51,18 @@ HOLD_RESULT_UNKNOWN = "RESULT_UNKNOWN"
 
 
 def reprocess_slot(context) -> datetime | None:
-    """재처리 run 이 지목한 기존 업무 슬롯(conf `reprocess_slot`, ISO). 없으면 None."""
+    """재처리 run 이 지목한 기존 업무 슬롯(conf `reprocess_slot`, 오프셋 있는 ISO). 없으면 None.
+
+    오프셋 없는 값(`2026-09-22T10:05:00`)은 거부한다 — worker 로컬 시간대(보통 UTC)로 읽히면 10:05 KST 가 19:05 KST
+    슬롯이 되어 엉뚱한 run_key 를 재처리하려 한다. 운영자가 뜻한 시간대를 추측하지 않는다."""
     raw = (context["dag_run"].conf or {}).get("reprocess_slot")
-    return datetime.fromisoformat(raw) if raw else None
+    if not raw:
+        return None
+    slot = datetime.fromisoformat(raw)
+    if slot.tzinfo is None:
+        raise AirflowFailException(
+            f"reprocess_slot 에 시간대가 없다: {raw!r} — 예: 2026-09-22T10:05:00+09:00")
+    return slot
 
 
 def slot_time(context) -> datetime:
