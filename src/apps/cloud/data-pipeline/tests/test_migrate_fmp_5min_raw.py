@@ -45,8 +45,10 @@ class _FakeS3:
             raise _Err("404")
         return {"ETag": f'"{self.objects[Key][0]}"'}
 
-    def copy_object(self, Bucket, Key, CopySource):  # noqa: N803
-        body = self.objects[CopySource["Key"]][1]
+    def copy_object(self, Bucket, Key, CopySource, CopySourceIfMatch):  # noqa: N803
+        etag, body = self.objects[CopySource["Key"]]
+        if CopySourceIfMatch.strip('"') != etag:
+            raise _Err("PreconditionFailed")
         self.objects[Key] = (hashlib.md5(body).hexdigest(), body)  # noqa: S324
         self.copies.append(Key)
 
@@ -140,3 +142,22 @@ def test_dry_run_writes_nothing():
     todo, _ = mig.plan([_obj("A.parquet", etag="aaa")], "us", "run_x", None, "", 0)
     assert mig.migrate_one(s3, "b", todo[0], dry_run=True)["status"] == "would_copy"
     assert s3.copies == []
+
+
+def test_source_changed_after_listing_is_not_copied():
+    """목록 뒤에 원본이 바뀌면 복사하지 않고 error — 불변 raw 에 다른 리비전을 쓰지 않는다."""
+    s3 = _FakeS3({_US + "A.parquet": ("new", b"v2")})
+    todo, _ = mig.plan([_obj("A.parquet", etag="old")], "us", "run_x", None, "", 0)
+    r = mig.migrate_one(s3, "b", todo[0], dry_run=False)
+    assert r["status"] == "error" and s3.copies == [] and todo[0]["dest_key"] not in s3.objects
+
+
+def test_limit_and_ingest_date_reject_malformed_values():
+    """음수 limit(파이썬 음수 슬라이스)과 경로가 섞인 날짜는 인자 단계에서 거부한다."""
+    import argparse
+    import pytest
+    with pytest.raises(argparse.ArgumentTypeError):
+        mig._non_negative("-1")
+    with pytest.raises(argparse.ArgumentTypeError):
+        mig._iso_date_or_empty("2026-07-25/run_id=other")
+    assert mig._iso_date_or_empty("2026-07-25") == "2026-07-25" and mig._iso_date_or_empty("") == ""

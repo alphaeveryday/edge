@@ -129,8 +129,11 @@ def migrate_one(s3, bucket: str, item: dict, dry_run: bool) -> dict:
                            "status": "already_identical" if ok else "mismatch"}
         if dry_run:
             return item | {"dest_etag": None, "status": "would_copy"}
+        # 목록을 뜬 뒤 원본이 바뀌었으면 복사하지 않는다 — raw 목적지는 불변이라 틀린 바이트를
+        # 한 번 쓰면 재실행으로 못 고친다. 조건 실패(412)는 아래 except 가 error 로 남긴다.
         s3.copy_object(Bucket=bucket, Key=item["dest_key"],
-                       CopySource={"Bucket": bucket, "Key": item["src_key"]})
+                       CopySource={"Bucket": bucket, "Key": item["src_key"]},
+                       CopySourceIfMatch=f'"{item["src_etag"]}"')
         copied = _dest_etag(s3, bucket, item["dest_key"])
         ok = copied is not None and verdict(item["src_etag"], copied, src_md5)
         return item | {"dest_etag": copied, "status": "copied" if ok else "mismatch"}
@@ -146,6 +149,26 @@ def summarize(results: list[dict]) -> str:
     return "partial" if len(bad) < len(results) else "error"
 
 
+def _non_negative(text: str) -> int:
+    """음수 --limit 는 거부한다 — 파이썬 음수 슬라이스가 '마지막 N개 빼고 전부'가 된다."""
+    n = int(text)
+    if n < 0:
+        raise argparse.ArgumentTypeError("0 이상이어야 한다")
+    return n
+
+
+def _iso_date_or_empty(text: str) -> str:
+    """--ingest-date 는 YYYY-MM-DD 만 — 경로 조각이 섞이면 raw 파티션 규약 밖에 쓴다."""
+    if text:
+        from datetime import date
+        try:
+            if date.fromisoformat(text).isoformat() != text:
+                raise ValueError
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"YYYY-MM-DD 가 아니다: {text!r}") from exc
+    return text
+
+
 def main() -> int:
     """FMP 5분봉 raw 마이그레이션 CLI — 종료 코드 반환."""
     parser = argparse.ArgumentParser(description=__doc__,
@@ -153,10 +176,10 @@ def main() -> int:
     parser.add_argument("--preset", choices=sorted(PRESETS), required=True)
     parser.add_argument("--bucket", default="edge-dev-pipeline-lake")
     parser.add_argument("--run-id", default="", help="비우면 원본 프리픽스 해시")
-    parser.add_argument("--ingest-date", default="",
+    parser.add_argument("--ingest-date", default="", type=_iso_date_or_empty,
                         help="비우면 객체별 원본 LastModified 날짜(UTC)")
     parser.add_argument("--match", default="", help="파일명 글롭으로 범위 제한 (예: 'A*.parquet')")
-    parser.add_argument("--limit", type=int, default=0, help="앞에서 N개만 (0=전부)")
+    parser.add_argument("--limit", type=_non_negative, default=0, help="앞에서 N개만 (0=전부)")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--dry-run", action="store_true", help="복사·로그 PUT 없음. 대조는 한다")
     parser.add_argument("--report", default="", help="로컬에 전체 로그 JSON 을 쓴다")
