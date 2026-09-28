@@ -41,10 +41,12 @@ const tryRefresh = () => {
   return refreshing;
 };
 
-export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; auth?: boolean; retry?: boolean } = {}): Promise<T> {
+// auth: 기본은 Bearer(없으면 X-Device-Id), 'device' 는 X-Device-Id 만(로그인·가입, 서버가 게스트 데이터를 계정에 매핑), false 는 헤더 없음
+export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; auth?: boolean | 'device'; retry?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (opts.auth !== false) {
+  if (opts.auth === 'device') headers['X-Device-Id'] = await deviceId();
+  else if (opts.auth !== false) {
     const access = await tokens.access();
     if (access) headers.Authorization = `Bearer ${access}`;
     else headers['X-Device-Id'] = await deviceId();

@@ -87,14 +87,15 @@ export const httpClient: ApiClient = {
     posts: async (code) => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code } })).items.map(m.post),
     feed: async (scope) => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope } })).items.map(m.post),
     mine: async () => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine' } })).items.map(m.post),
-    get: async (id) => m.post(await request<m.WirePost>('GET', `/posts/${id}`, { auth: false })),
+    // 공개 조회지만 요청자를 보내야 liked·mine 이 채워진다
+    get: async (id) => m.post(await request<m.WirePost>('GET', `/posts/${id}`)),
     replies: async (id) => (await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`, { auth: false })).items.map(m.reply),
     reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
     create: async (input) => m.post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
     // 계약은 PUT/DELETE 두 개. 현재 liked 를 모르는 호출자라 조회 후 분기
     toggleLike: async (id) => {
-      const cur = await request<m.WirePost>('GET', `/posts/${id}`, { auth: false });
+      const cur = await request<m.WirePost>('GET', `/posts/${id}`);
       return m.post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
     },
     poll: async (code) => m.poll(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVotes[code] ?? null),
@@ -119,10 +120,10 @@ export const httpClient: ApiClient = {
     deleteAccount: async () => { await request<void>('DELETE', '/me'); await tokens.clear(); },
   },
   auth: {
-    login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: false })),
+    login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' })),
     // 플랫폼 idToken 발급(expo-apple-authentication 등)은 아직 없다. 스텁 서버는 값을 보지 않는다
-    social: async (provider) => signIn(await request<WireAuth>('POST', '/auth/social', { body: { provider, idToken: 'todo' }, auth: false })),
-    signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: false })),
+    social: async (provider) => signIn(await request<WireAuth>('POST', '/auth/social', { body: { provider, idToken: 'todo' }, auth: 'device' })),
+    signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' })),
     requestPasswordReset: (email) => request<void>('POST', '/auth/password-reset', { body: { email }, auth: false }),
     logout: async () => {
       try { await request<void>('POST', '/auth/logout'); } finally { await tokens.clear(); }
