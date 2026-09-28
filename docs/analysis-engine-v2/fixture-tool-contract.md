@@ -63,3 +63,18 @@
 - 카드: 환율·국고채10년·미국채10년·브렌트 최신값. 원자재20관측 변화에는 `macro_trading_dates.commodity`의 정확한21개 거래일 필요.
 - 금리 일정은 `policy_decisions`의 decision_at,available_at,subject. 미래 행사일은 허용하지만 일정의 공개시각은 분석시각 이전. 날짜 차이는 KST.
 - 비어 있거나 자료가 부족한 카드는 제외. 금리·환율의 ETF 영향 방향은 계산하지 않음.
+
+## 밸류·요인 카드
+
+| 도구 | 인수 | 결과 |
+|---|---|---|
+| `calculate_valuation` | `instrument_id` | 개별 PER·PBR, 사용 가격·EPS·BPS·공개시각 |
+| `calculate_weighted_valuation` | 없음 | 전 구성종목 비중 가중 PER·PBR과 개별 계산 |
+| `get_factor_metrics` | `type`: 차트/매크로/밸류/수급 | `{type, metrics:[{key,value,observed_at,subject?}]}` |
+
+- 세 도구 모두 최종 근거 가능. 요인 상태·스티커는 반환하지 않음.
+- `financials`: instrument_id,period(YYYY-Qn),eps,bps,available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화.
+- 최근 공개된 연속4분기 EPS 합으로 PER, 최신 공개 분기 BPS로 PBR. 동일 분기 여러 공개본이면 분석시각 이전 최신본을 사용.
+- 양수 TTM EPS·BPS, 완전한 주식 구성비중 합1만 계산. 미확정 손실·현금·누락 정책을 중립값이나 재정규화로 숨기지 않음.
+- $PER_i=P_i/\sum_{q=1}^{4}EPS_{i,q}$, $PBR_i=P_i/BPS_i$, $\bar x=\sum_iw_ix_i$.
+- 5년 밴드는 계약 미정으로 제외. ETF 분배율은 12개월 완전 지급 이력이 명시된 경우만 표시. 다른 결측 카드는 0 대신 제외.

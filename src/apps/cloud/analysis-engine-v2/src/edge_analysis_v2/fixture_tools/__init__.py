@@ -3,7 +3,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from .common import available, holdings, instant, table
-from . import chart, flow, macro, news
+from . import chart, factors, flow, macro, news, valuation
 
 
 class FixtureTools:
@@ -13,7 +13,7 @@ class FixtureTools:
         fixture: Raw observations and a fixed context; copied at construction.
     """
 
-    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations"}
+    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_factor_metrics"}
 
     def __init__(self, fixture):
         self.fixture = deepcopy(fixture)
@@ -30,6 +30,9 @@ class FixtureTools:
         series = {"type": "string", "enum": list(macro.SERIES)}
         self._register("get_macro_observations", "거시지표의 공개된 최근21개 관측값을 탐색합니다. 수치 비교 근거는 compare_macro_observations로 확정합니다.", {"series": series}, lambda **args: macro.read(self.fixture, **args), "", ["목 거시경제 관측"])
         self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"])
+        self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"])
+        self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"])
+        self._register("get_factor_metrics", "요인 상세 화면의 계산 가능한 지표와 관측시각을 확정합니다. 상태·스티커·전망 판단은 포함하지 않습니다. 누락 카드는 숨기며 0으로 채우지 않습니다.", {"type": {"type": "string", "enum": ["차트", "매크로", "밸류", "수급"]}}, lambda **args: factors.metrics(self.fixture, **args), r"\text{각 카드의 등록 수식으로 계산}", ["ETF 가격", "거시 관측", "공개 재무", "확정 수급", "구성종목 비중"])
 
     def _register(self, name, description, parameters, callback, formula, sources):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources}
