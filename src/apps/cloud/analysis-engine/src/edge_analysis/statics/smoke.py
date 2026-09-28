@@ -32,7 +32,8 @@ def _kst_naive(ts) -> datetime:
 
 def run(ticker: str, instrument_id: str, day: str) -> str:
     lake = CausalLake(day=day)          # 기준일로 원천 판정 (ALPHA-1108)
-    gate_bars(lake, day, block=False)
+    # 이 스모크는 그 종목의 5분봉 분해가 본체다 — 봉이 없으면 트레이스백 대신 보류한다.
+    gate_bars(lake, day, block=True, ticker=ticker)
     print(lake.coverage(), file=sys.stderr)
 
     d = datetime.strptime(day, "%Y-%m-%d")

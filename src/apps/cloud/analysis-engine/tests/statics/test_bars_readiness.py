@@ -201,3 +201,26 @@ def test_lake_without_a_bars_view_is_not_ready_rather_than_crashing(tmp_path, mo
     assert not r.day_ready and "bars_readiness" in lk.unbound
     with pytest.raises(SystemExit):
         gate_bars(lk, "2026-09-28", block=True)
+
+
+def test_smoke_holds_on_the_requested_tickers_bars(monkeypatch):
+    """smoke 는 그 종목의 5분봉 분해가 본체다 — 그 종목 봉이 없으면 분해 전에 보류한다."""
+    from edge_analysis.statics import smoke
+
+    seen = {}
+
+    class _Lake:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def bars_readiness(self, day, since="", ticker=""):
+            seen["ticker"] = ticker
+            return BarsReadiness(day, day, "S3 canonical", day, (), (day,), ())
+
+        def coverage(self):                          # 보류가 이보다 먼저여야 한다
+            raise AssertionError("보류 전에 분석이 진행됐다")
+
+    monkeypatch.setattr(smoke, "CausalLake", _Lake)
+    with pytest.raises(SystemExit) as e:
+        smoke.run("069500", "iid", "2026-09-28")
+    assert e.value.code == 2 and seen == {"day": "2026-09-28", "ticker": "069500"}
