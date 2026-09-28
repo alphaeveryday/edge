@@ -21,7 +21,7 @@ infra/terraform/
     ├── ecs-service/        # 재사용 상시 서비스: task def + service + SG + IAM + 로그
     ├── alb/                # 공개 엣지 ALB (호스트 단위 1:1, mTLS verify 옵션 — ADR-0034. 호출자: sync·super-admin ALB)
     ├── rds/                # PostgreSQL(private·관리형 비밀번호·로테이션 창 고정) + 관측(FreeableMemory 경보·Performance Insights — 경보는 data-pipeline 토픽으로, ALPHA-919)
-    ├── elasticache/        # Redis(클러스터 모드 끔, 프라이머리 1+레플리카, Multi-AZ, TLS), app-api 투표 캐시 (ADR-0056)
+    ├── elasticache/        # Redis(클러스터 모드 끔, TLS, 노드 수 입력 — 2 이상이면 Multi-AZ 페일오버, dev 는 1), app-api 투표 캐시 (ADR-0056)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
