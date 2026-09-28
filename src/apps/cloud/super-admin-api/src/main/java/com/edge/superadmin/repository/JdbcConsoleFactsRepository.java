@@ -147,8 +147,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			       (t.completeness ->> 'expected')::bigint AS completeness_expected,
 			       (t.completeness ->> 'received')::bigint AS completeness_received,
 			       (t.completeness ->> 'missing')::bigint AS completeness_missing,
+			       -- 업무를 실행한 시도만 센다 — DUPLICATE_SKIP 은 이미 성공한 작업의 재시도 컨테이너가
+			       -- 업무 없이 끝난 흔적이라(ALPHA-1088) 세면 재시도 소진(R16)이 부풀려진다.
 			       (SELECT count(*) FROM ops_task_attempt a
-			         WHERE a.expected_task_id = t.expected_task_id) AS attempts,
+			         WHERE a.expected_task_id = t.expected_task_id
+			           AND a.record_source <> 'DUPLICATE_SKIP') AS attempts,
 			       t.dataset_contract_key, t.expected_as_of_date, t.actual_as_of_date,
 			       t.collected_at, t.freshness_status, t.freshness_reason
 			  FROM ops_expected_task t

@@ -1,0 +1,6 @@
+# Airflow 실행 환경 고정(로컬 검증 이미지 apache/airflow:3.3.2-python3.12 에 동봉된 버전과 같다).
+# 설치는 공식 constraints 와 함께: pip install -r requirements.txt \
+#   --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt
+# 업무 패키지(data_pipeline)는 설치하지 않는다 — 업무 코드는 ECS 컨테이너에서만 돈다.
+apache-airflow==3.3.2
+apache-airflow-providers-amazon==9.36.0

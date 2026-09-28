@@ -110,6 +110,14 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             selection.check_results({"changes": {"result": "failure"}})
 
+    def test_airflow_changes_preserve_pipeline_contract_checks(self):
+        for path in ("src/apps/cloud/airflow/dags/investor.py",
+                     "src/apps/cloud/airflow/tests/ecs_stop_cases.json"):
+            with self.subTest(path=path):
+                result = self.select(path)
+                self.assertEqual(result["legacy"], ["data-pipeline"])
+                self.assertTrue(result["e2e"])
+
     def test_schema_reading_tests_remain_in_real_database_job(self):
         workflow = (Path(__file__).parents[1] / "workflows/test-python.yml").read_text(encoding="utf-8")
         e2e = workflow.split("\n  e2e:\n", 1)[1].split("\n  python-result:\n", 1)[0]
