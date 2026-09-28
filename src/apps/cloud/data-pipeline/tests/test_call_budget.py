@@ -4,6 +4,8 @@ DB 함수(call_budget_acquire) 자체와 모의 벤더 도착 시각 판정은 �
 맡는다. 여기는 CI 에서 도는 **시간 계약·장애 분류**의 회귀 방어다.
 """
 
+import threading
+import time
 import urllib.error
 
 import pytest
@@ -346,8 +348,72 @@ def test_socket_error_while_connecting_is_a_budget_outage(monkeypatch):
     monkeypatch.setattr(pq, "PGconn", FakePGconn)
     monkeypatch.setattr(cb, "_wait_socket", boom)
     from data_pipeline.config import DbConfig
-    store = cb.PgBudgetStore(DbConfig(host="h", port=1, name="d", user="u", password="p"), CallBudgetConfig(enabled=True))
+    store = cb.PgBudgetStore(DbConfig(host="127.0.0.1", port=1, name="d", user="u", password="p"),
+                             CallBudgetConfig(enabled=True))
     with pytest.raises(cb.CallBudgetUnavailable, match="OSError"):
         store.acquire("kis", 0, timeout=1.0)
     assert finished == [True] and store._pg is None
     assert store._lock.acquire(blocking=False)                 # 잠금도 풀렸다
+
+
+def test_slow_dns_stays_inside_the_call_deadline_and_does_not_pile_up(monkeypatch):
+    """libpq 는 호스트 이름을 connect_start 안에서 동기로 푼다(실측: 무응답 DNS 20초) — 그대로 두면 저장소 호출이
+    기한을 넘겨 pace 의 max_wait·장애 판정이 무력해진다. 이름 해석도 기한 안에서 끝나야 하고, 기한을 넘긴 조회가
+    호출마다 새 스레드로 쌓이면 안 된다(취소할 수 없는 조회는 하나만 돌고 다음 호출이 이어받는다)."""
+    import socket as _socket
+
+    from psycopg import pq
+
+    from data_pipeline.config import DbConfig
+
+    release, calls, seen = threading.Event(), [], []
+
+    def slow_getaddrinfo(host, port, *a, **k):
+        calls.append(host)
+        release.wait(5)
+        return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("10.0.0.7", port)),
+                (_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("10.0.0.7", port))]
+
+    class Stop(Exception):
+        pass
+
+    class FakePGconn:
+        @staticmethod
+        def connect_start(conninfo):
+            seen.append(conninfo.decode())
+            raise Stop                           # 주소가 libpq 로 넘어가는지만 본다
+
+    monkeypatch.setattr(cb.socket, "getaddrinfo", slow_getaddrinfo)
+    monkeypatch.setattr(pq, "PGconn", FakePGconn)
+    store = cb.PgBudgetStore(DbConfig(host="db.example", port=5432, name="d", user="u", password="p"),
+                             CallBudgetConfig(enabled=True))
+    for _ in range(3):
+        t = time.monotonic()
+        with pytest.raises(cb.CallBudgetUnavailable, match="DnsTimeout"):
+            store.acquire("kis", 0, timeout=0.1)
+        assert time.monotonic() - t < 0.5
+    assert calls == ["db.example"]               # 기한을 넘긴 조회를 기다릴 뿐 새로 쌓지 않는다
+    release.set()
+    with pytest.raises(cb.CallBudgetUnavailable, match="Stop"):
+        store.acquire("kis", 0, timeout=1.0)     # 끝난 조회를 이어받아 연결을 시작한다
+    assert calls == ["db.example"]
+    assert "hostaddr=10.0.0.7" in seen[0] and "host=db.example" in seen[0]   # 이름은 TLS·인증 검사용으로 남는다
+
+
+def test_failed_dns_is_a_budget_outage_and_the_next_connect_resolves_again(monkeypatch):
+    """이름 해석 실패는 발신 금지(CallBudgetUnavailable)다. 실패 결과를 붙잡아 두면 복구 뒤에도 못 붙는다."""
+    from data_pipeline.config import DbConfig
+
+    calls = []
+
+    def fail(host, *a, **k):
+        calls.append(host)
+        raise OSError("Name or service not known")
+
+    monkeypatch.setattr(cb.socket, "getaddrinfo", fail)
+    store = cb.PgBudgetStore(DbConfig(host="db.example", port=5432, name="d", user="u", password="p"),
+                             CallBudgetConfig(enabled=True))
+    for _ in range(2):
+        with pytest.raises(cb.CallBudgetUnavailable, match="DnsFailed"):
+            store.acquire("kis", 0, timeout=1.0)
+    assert calls == ["db.example", "db.example"]

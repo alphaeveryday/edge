@@ -25,8 +25,10 @@ psycopg 는 지연 import 한다(db.py 관례).
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import select
+import socket
 import threading
 import time
 
@@ -84,20 +86,25 @@ class PgBudgetStore:
     호출 1건 = `call_budget_acquire` 한 번 = 짧은 트랜잭션 하나(잠금→시각→판정→예약). 대기·HTTP 는
     트랜잭션 밖이다. 커넥션 오류는 버리고 다음 호출에 다시 연다.
 
-    시간 상한(ALPHA-1087). 호출 1회(저장소 잠금 대기+연결+질의)는 `min(timeout, statement_timeout + 0.5s)` 안에
-    끝난다. `timeout` 은 pace 의 남은 시간이다. 서버 상한(statement_timeout·lock_timeout)은 서버 실행만 막는다.
-    psycopg 3 는 두 경계를 못 막는다 — `execute` 는 응답 수신에 전체 기한이 없고(`Connection.wait` 가 기한 없이
-    소켓을 기다린다), `connect_timeout` 은 정수 초·최소 2초다. 그래서 연결·질의 모두 libpq 비동기 API
-    (`psycopg.pq`)로 하고 소켓을 기한까지만 기다린다. 기한을 넘기면 **서버가 예약을 확정했을 수 있다** —
-    그래도 허용을 못 받았으니 발신하지 않고, 상태를 모르는 커넥션은 버린다(재사용·반환 없음. 그 슬롯은
-    예산 손실로 센다).
-    ⚠️ 막지 못하는 것: 호스트 이름 해석(DNS). libpq 가 연결 시작 시 동기로 푼다.
+    시간 상한(ALPHA-1087). 호출 1회(저장소 잠금 대기+이름 해석+연결·TLS+질의)는 `acquire`/`ensure_connected`
+    진입부터 `min(timeout, statement_timeout + 0.5s)` 안에 끝난다. `timeout` 은 pace 의 남은 시간이다. 서버 상한
+    (statement_timeout·lock_timeout)은 서버 실행만 막는다. psycopg 3 는 두 경계를 못 막는다 — `execute` 는 응답
+    수신에 전체 기한이 없고(`Connection.wait` 가 기한 없이 소켓을 기다린다), `connect_timeout` 은 정수 초·최소
+    2초다. 그래서 연결·질의 모두 libpq 비동기 API(`psycopg.pq`)로 하고 소켓을 기한까지만 기다린다. 기한을 넘기면
+    **서버가 예약을 확정했을 수 있다** — 그래도 허용을 못 받았으니 발신하지 않고, 상태를 모르는 커넥션은
+    버린다(재사용·반환 없음. 그 슬롯은 예산 손실로 센다).
+    DNS: libpq 는 호스트 이름을 `connect_start` 안에서 **동기로** 푼다(libpq 18 `connectDBStart`, 실측 무응답
+    DNS 20초). 그래서 이름은 여기서 기한까지만 기다려 풀고 주소를 `hostaddr` 로 넘긴다(`host` 는 그대로 —
+    TLS SNI·인증서 이름 검사·비밀번호 조회가 쓴다). 조회는 취소할 수 없어 기한을 넘기면 스레드가 끝까지 돌지만,
+    저장소당 **하나만** 돌고 다음 연결이 그 결과를 이어받는다(조회가 쌓이지 않는다).
+    ⚠️ 기한 밖: 이 함수들이 돌아온 뒤 HTTP 발신까지(`SharedBudgetPacer` 가 슬롯까지 자는 시간은 max_wait 안이다).
     """
 
     def __init__(self, db: DbConfig, cfg: CallBudgetConfig):
         self.db, self.cfg = db, cfg
         self._pg = None                     # psycopg.pq.PGconn — 이 저장소 전용, autocommit(libpq 기본)
         self._lock = threading.Lock()
+        self._lookup: _Lookup | None = None  # 진행 중이거나 결과를 아직 안 쓴 이름 해석(저장소당 최대 1개)
 
     def _begin(self, timeout: float | None) -> float:
         """이 호출의 단조 기한을 정하고 저장소 잠금을 그 기한까지만 기다린다(다른 스레드의 호출도 기한이 있다)."""
@@ -114,10 +121,13 @@ class PgBudgetStore:
         if self._pg is not None and self._pg.status == pq.ConnStatus.OK:
             return
         self.close()
+        addrs = self._resolve(end)
         timeouts = f"-c statement_timeout={self.cfg.statement_timeout_ms} -c lock_timeout={self.cfg.statement_timeout_ms}"
         try:
+            # 주소마다 같은 host 를 짝지운다 — libpq 가 주소를 차례로 시도하는 종전 동작을 유지한다.
             pg = pq.PGconn.connect_start(make_conninfo(
-                host=self.db.host, port=self.db.port, dbname=self.db.name, user=self.db.user,
+                host=",".join([self.db.host] * len(addrs)), hostaddr=",".join(addrs), port=self.db.port,
+                dbname=self.db.name, user=self.db.user,
                 password=self.db.password, sslmode=self.db.sslmode, application_name="call-budget",
                 options=timeouts).encode())
         except Exception as exc:  # noqa: BLE001 — 원문은 접속 정보를 담을 수 있다
@@ -139,6 +149,21 @@ class PgBudgetStore:
             pg.finish()
             raise CallBudgetUnavailable(type(exc).__name__) from None
         self._pg = pg
+
+    def _resolve(self, end: float) -> list[str]:
+        """호스트 이름을 기한까지만 기다려 주소 목록으로 푼다. 숫자 주소는 그대로. 실패·기한 초과는 발신 금지."""
+        try:
+            return [str(ipaddress.ip_address(self.db.host))]
+        except ValueError:
+            pass
+        if self._lookup is None:                    # 기한을 넘긴 조회가 있으면 새로 시작하지 않고 그걸 기다린다
+            self._lookup = _Lookup(self.db.host, self.db.port)
+        if not self._lookup.done.wait(timeout=max(0.0, end - time.monotonic())):
+            raise CallBudgetUnavailable("DnsTimeout")
+        lookup, self._lookup = self._lookup, None   # 결과는 한 번만 쓴다 — 다음 연결은 새로 푼다(주소 변경 반영)
+        if not lookup.addrs:
+            raise CallBudgetUnavailable("DnsFailed")
+        return lookup.addrs
 
     def ensure_connected(self, timeout: float | None = None) -> None:
         """커넥션을 미리 연다 — 연결 수립(TCP·인증)이 허용 왕복 측정에 섞여 첫 허용이 폐기되지 않게."""
@@ -171,6 +196,8 @@ class PgBudgetStore:
         from psycopg import pq
 
         pg = self._pg
+        if time.monotonic() >= end:             # 남은 시간이 없으면 보내지 않는다 — 받지 못할 예약이 슬롯만 차지한다
+            raise CallBudgetUnavailable("ResponseTimeout")
         pg.send_query_params(_ACQUIRE_SQL, [budget_id.encode(), str(call_class).encode(), str(cost).encode()])
         while pg.flush():                   # 1 = 아직 다 못 보냄(비차단 커넥션)
             # libpq 계약: 읽기·쓰기 어느 쪽이든 기다리고, 읽을 게 오면 먼저 소비해야 서버 송신이 풀린다.
@@ -202,6 +229,24 @@ class PgBudgetStore:
             except Exception:  # noqa: BLE001 — 닫기 실패는 다음 연결로 대체된다
                 pass
             self._pg = None
+
+
+class _Lookup:
+    """`getaddrinfo` 한 번을 데몬 스레드에서 돌린다 — 취소할 수 없는 동기 호출을 기한 밖으로 빼는 그릇.
+    데몬이라 프로세스 종료를 붙잡지 않는다."""
+
+    def __init__(self, host: str, port: int):
+        self.done, self.addrs = threading.Event(), []
+        threading.Thread(target=self._run, args=(host, port), name="call-budget-dns", daemon=True).start()
+
+    def _run(self, host: str, port: int) -> None:
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            self.addrs = list(dict.fromkeys(info[4][0] for info in infos))   # 순서 유지·중복 제거
+        except OSError:
+            pass                                # 빈 목록 = 실패(원문은 호스트 이름을 담는다)
+        finally:
+            self.done.set()
 
 
 _ACQUIRE_SQL = b"SELECT outcome, wait_sec, lock_wait_sec FROM call_budget_acquire($1, $2::smallint, $3::integer)"

@@ -1016,6 +1016,8 @@ class CallBudgetConfig(BaseModel):
     # 거절 뒤 재질의 간격 상한(DB 질의량을 묶는다).
     deny_poll_cap_sec: float = Field(default=0.5, gt=0, le=5)
     # 저장소 장애 시 발신 없이 재연결을 시도하는 최대 시간. 넘기면 CallBudgetUnavailable(fail-closed).
+    # 첫 실패를 관측한 시각부터 센다 — 첫 실패 호출 1회와 마지막 호출 1회·재시도 간격만큼 늦게 끝날 수 있다
+    # (기본값 최대 12.2s, 그래도 max_wait_sec 안).
     store_outage_max_sec: float = Field(default=10.0, ge=0, le=300)
     # 서버 실행 상한(statement_timeout·lock_timeout). 저장소 호출 1회(연결+질의)의 **클라이언트** 상한은
     # 이 값 + 0.5s 다 — 응답 유실도 그 안에서 끝난다(call_budget.PgBudgetStore).
