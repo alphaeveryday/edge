@@ -75,7 +75,9 @@ def _take_api_fault(api: str, **match) -> dict | None:
 
 # ── ECS ──────────────────────────────────────────────────────────────
 def _public(task: dict) -> dict:
-    return {k: v for k, v in task.items() if not k.startswith("_")}
+    # 실제 DescribeTasks 처럼 overrides(명령)를 돌려준다 — Reconciler 주기 점검이 명령의 --run-id 로 레인·런을 찾는다.
+    return {**{k: v for k, v in task.items() if not k.startswith("_")},
+            "overrides": {"containerOverrides": [{"name": "data-pipeline", "command": task.get("_command") or []}]}}
 
 
 def _take_start_fault(step: str) -> bool:

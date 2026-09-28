@@ -94,6 +94,16 @@
 - 새 업무 시작이 다시 허용되는 길은 셋뿐이다. ① 그 시도가 스스로 종료를 기록한다. ② Reconciler가 ECS `STOPPED`를 확인해 시도를 닫는다. 컨테이너가 스스로 끝냈으면 그 exit로(비0이면 FAILED·`attempt_failed`) 닫는다. exit가 없거나 외부 종료(`stopCode`가 `EssentialContainerExited`가 아닌 비0, 예: StopTask 137)면 FAILED로 닫되 `outcome_reason=stopped_result_unknown`으로 업무 실패와 가른다(exit 값은 있으면 그대로 남긴다). 이 변경은 SFN 레인의 Reconciler에도 같이 적용된다. ③ 운영자가 종료를 확인하고 ECS 보류 이슈를 RESOLVED로 바꾼다. **시간이 지났다는 이유로는 풀리지 않는다.** 이슈 행 자체의 정리는 ⑥ 설명을 따른다.
 - ECS 조회가 늦게 반영되거나 만료될 수 있다(멈춘 태스크는 최소 약 1시간 조회된다). 그래서 확정적인 종료 증거가 없으면 가용성보다 보류를 택한다.
 
+**미확정 실행을 원장이 스스로 찾는다(DAG 의 마지막 task·callback 이 돌지 않아도).**
+- **결말 없이 끝난 스텝(worker 사망·수동 failed).** 모든 시도는 시작할 때 XCom `edge_started`를 남긴다. 시작했는데 결말(`exit_code`·`hold`·`no_ecs_task`)이 없으면 verdict·report는 그 스텝을 `ECS_STATE_UNKNOWN` 보류로 읽는다. 확정된 업무 실패(exit 1)는 보류가 아니다. report가 원장에 옮긴다.
+- **report 도 못 도는 경우(`dagrun_timeout`).** 주기 Reconciler(EventBridge 15분, 야간·휴장일 포함)가 슬롯 대조와 별개로 `sweep_airflow_runs`를 돈다.
+  - ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함 — 슬롯 대조는 최근 예정일만 본다)을 대조한다. ECS 종료 증거로 닫고, 수명(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초 > dagrun_timeout)을 넘도록 안 끝난 시도는 `OPEN_ATTEMPT` 보류로 남긴다(종료 증거로 닫히면 자동 해결). 결과 미상으로 닫힌 시도는 `RESULT_UNKNOWN`으로 남긴다.
+  - ② ECS에서 이 레인 명령(`--run-id <Airflow 런>`)으로 수명보다 오래 살아 있는데 원장에 시도가 없는 태스크(시간 초과 당시 PENDING)를 찾아 `ECS_STATE_UNKNOWN` 보류로 남긴다. 그 태스크가 늦게 떠도 게이트에서 자기 보류를 보고 76으로 멈춘다. ECS 조회 실패는 "없음"으로 읽지 않고 기록 없이 드러낸다.
+  - 권한: Reconciler 역할에 `ecs:ListTasks`(같은 클러스터 한정)를 더했다.
+- **늦게 도착한 옛 보고.** report는 자기 DAG run(`OPS_REPORT_RUN_REF`)을 함께 넘긴다. 이 런의 최신 업무 시도가 다른 DAG run의 것이면 판정을 기록하지 않는다(보류 기록은 사실이라 남긴다).
+- **같은 증거에 같은 결론.** ECS 종료 증거 분류(`ecs_stop_evidence` ↔ `reconciler._ecs_stop_evidence`)는 한 규칙이고, 공용 사례표 `tests/ecs_stop_cases.json`으로 두 쪽 테스트가 대조한다. exit 0이면 업무 완료다. exit가 없거나, 128 이상(신호: SIGKILL·OOM 137, SIGTERM 143)이거나, 외부 종료 stopCode의 비0이면 결과 미상이다. 그 밖의 비0(stopCode 없음 포함)은 스스로 끝난 업무 결과다. stopCode가 없다는 것만으로 재시도·보류를 정하지 않는다.
+- **남는 경계.** ②는 수명(30분) + 주기(최대 15분) 뒤에야 기록한다. 그 사이 PENDING이던 태스크가 먼저 떠서 원장 게이트를 통과하면(다른 끝나지 않은 시도가 없을 때) 늦게 한 번 실행된다(동시 실행은 아니다 — lock·게이트가 직렬화한다). 과거 슬롯 수집은 그 전에 `same_day_only`가 막지만 같은 날의 늦은 수집은 그 슬롯 run_id로 저장된다. 저장소 쪽 차단(fencing·CAS)이 없어서 남는 한계다.
+
 **보호 범위 — 장중 수급 canonical 파티션(`canonical/…/investor_flow_intraday/market=KR/trade_date=…`)에 쓰는 경로.** 쓰는 코드는 `normalize-investor-estimate` 하나다. 적재(`load-investor-intraday`)는 그 파티션을 읽어 DB에 쓴다.
 
 | 쓰기 경로 | 코드가 막는 것 | 운영 절차에 맡기는 것 |
@@ -177,6 +187,7 @@ python3 lab.py scenario-report      # DAG 판정 보고 → orchestration_status
 python3 lab.py scenario-trace       # attempt ↔ Airflow try 참조, 응답 유실 뒤 DUPLICATE_SKIP
 python3 lab.py scenario-lockloss    # 실행권 커넥션 상실 중 다른 실행 진입(경계 재현)
 python3 lab.py scenario-hold        # 실행 상태 불명 시 보류(V1~V8, 16개 확인) — 결과: results/hold-summary.md
+python3 lab.py scenario-unsettled   # 결말 없는 실행(수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거) — 결과: results/hold-summary.md
 # DAG 계약 테스트 — CI(test-airflow.yml)와 같은 이미지·명령
 docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro --entrypoint bash \
   apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1 \
@@ -257,7 +268,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 ### 전환(SFN → Airflow)
 
 전제:
-- 원장 마이그레이션(`V202609271500`·`1510`·`1520`)이 dev에 **적용 완료**(schema-migrate 초록 + `flyway_schema_history` 확인)이고 data-pipeline 이미지가 배포돼 있다.
+- 원장 마이그레이션(`V202609271100`·`1110`·`1120`)이 dev에 **적용 완료**(schema-migrate 초록 + `flyway_schema_history` 확인)이고 data-pipeline 이미지가 배포돼 있다.
 - DAG는 **pause 상태**로 배포돼 있다.
 - 아래 "활성화 전 결정·미해결 조건"이 모두 해결됐고 "실제 환경 검증"의 성공 기준을 충족했다.
 
@@ -333,8 +344,8 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 3. **알려진 한계(팀 확인).**
    - **전날 이전 슬롯의 재처리는 주기 대조를 받지 않는다.** 주기 Reconciler는 가장 최근 예정일의 슬롯만 본다(ALPHA-565 사각). 그래서 과거 슬롯 재처리 run이 `report` 전에 죽으면 앞 판정이 남는다. 그 run_key를 `OPS_RUN_KEY`로 지정해 `reconcile`을 한 번 돌려야 한다.
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.
-4. **결말 없이 끝난 task와 보류 기록(미해결 — 최종 검증 리뷰에서 발견, 이번 PR에서 고치지 않았다).** 마지막 시도 중 worker가 죽거나 운영자가 도는 task를 failed로 표시하면 그 스텝은 exit_code·hold 없이 끝난다(`on_kill`은 ECS를 멈추지 않는다). 하류는 결말 미확인으로 skip하지만, `verdict`는 "런 실패 마감"(업무 실패와 같은 문구)으로 닫고 `report`는 이 스텝을 원장 보류로 옮기지 않는다. 아직 PENDING이던 태스크면 원장 흔적도 없어, 나중에 떠서 다음 슬롯 뒤에 게이트를 통과할 수 있다. 해결 방향: provider가 제출 직후 남기는 XCom `ecs_task_arn`이 있는데 exit_code·hold가 없으면 verdict·report가 ECS_STATE_UNKNOWN으로 다룬다. 그 전까지는 이런 run을 보류로 보고 "보류 해제와 수동 복구"를 따른다. 같은 성격으로, Reconciler는 비0 exit에 `stopCode`가 없으면 업무 결과로 읽지만 Airflow `ecs_verdict`는 결과 미상으로 읽는다(드문 응답 형태, 판정 불일치 — 함께 고친다).
-5. **run 시간 상한과 보류 기록.** `dagrun_timeout`(1500초)이 먼저 오면 scheduler가 남은 task를 skipped로 두어 `report`·`verdict`가 돌지 않는다. 그때 보류는 원장에 남지 않고 Airflow 화면(timed_out)·SNS로만 보인다. 컨테이너가 시작 기록을 남겼으면 그 RUNNING 시도가 게이트로 막지만, 아직 PENDING이던 태스크는 원장에 흔적이 없어 나중에 떠서 게이트를 통과할 수 있다(옛 슬롯 run_id로 "지금" 수집). 활성화 전에 실제 환경에서 스텝별 소요를 재고, 스텝 `execution_timeout`(시간 초과를 보류로 기록)과 `dagrun_timeout`의 배분을 정한다. 그 전까지는 timed_out run을 보류로 다루고 "보류 해제와 수동 복구"를 따른다.
+4. **결말 없이 끝난 실행의 보류 기록 — 해결(ALPHA-1088 후속, 아래 "미확정 실행을 원장이 스스로 찾는다").** worker 사망·수동 failed·`dagrun_timeout`으로 report·verdict·callback이 돌지 못해도 원장에 보류가 남는다. 남는 경계(탐지 지연)는 그 절에 적었다.
+5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
 6. **Airflow 실행 환경.** MWAA(3.3.1까지 지원) 또는 자체 운영. 그에 따른 `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 연결과 DAG 배포 경로를 정한다.
 7. **아래 "실제 환경 검증"의 성공 기준 충족.**
 
@@ -361,20 +372,13 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 ## 머지 순서와 선행 조건
 
 세 PR이 마이그레이션 버전 순서로 묶여 있다.
-- #948 공유 호출 제어: `V202609271200__add_call_budget`
-- #949 이 레인 스키마: `V202609271500`·`1510`·`1520`
-- #950 이 레인 코드: #949와 같은 스키마 커밋을 포함
+- #948 공유 호출 제어: `V202609271200__add_call_budget`(draft·미머지)
+- #949 이 레인 스키마: `V202609271100`·`1110`·`1120`
+- #950 이 레인 코드: #949 머지 뒤 최신 dev로 갱신
 
 Flyway는 이미 적용된 버전보다 낮은 새 버전을 거부한다(`outOfOrder` 미사용). 그래서 **나중에 머지하는 쪽이 높은 번호여야 한다.**
 
-- **경로 A — #948 → #949 → #950(현재 번호 그대로).**
-  - #948이 준비돼 먼저 머지되는 경우다. **#948을 순서 때문에 서둘러 머지하지 않는다.**
-  - #949 rebase → `physical-erd.dbml` 재생성(두 PR이 모두 고친다) → 머지 → dev `schema-migrate` 초록 확인 → `flyway_schema_history`에 1500·1510·1520 적용 확인.
-  - 그 뒤 #950을 rebase(스키마 커밋은 사라진다)해 머지한다.
-- **경로 B — #949·#950을 #948보다 먼저 머지해야 할 때.**
-  - **#949(과 #950의 같은 커밋)의 파일 이름만** 1200보다 낮고 dev 최고 버전(`202609202030`)보다 높게 바꾼다: `V202609271100__add_pipeline_run_orchestrator`, `V202609271110__validate_pipeline_run_orchestrator`, `V202609271120__add_orchestrator_trace`. 내용은 그대로다.
-  - 미적용 파일의 PR 내부 리네임이라 allowlist가 필요 없다. dev에 들어가면 이 번호로 적용된다.
-  - #948은 손대지 않는다. 뒤에 머지될 때 1200 > 1120이라 그대로 적용되고, ERD만 rebase 뒤 재생성한다.
-- 두 경로 모두 로컬 PostgreSQL 16 + Flyway 10.21.0으로 결합 검증했다(`local/results/migration-matrix-948-949-950.txt`).
-  - 번호를 안 바꾼 채 Airflow를 먼저 넣으면 #948이 "resolved migration not applied: 202609271200"으로 거부된다.
+- **경로 B로 확정(2026-09-28).** dev `flyway_schema_history` 실측 최고 버전이 `202609202030`이고 #948은 미적용·미머지였다. #948을 서둘러 머지하지 않고, 어느 공유 환경에도 적용된 적 없던 #949의 세 파일 **이름만** `1500·1510·1520` → `1100·1110·1120`으로 낮췄다(내용 동일). 적용된 마이그레이션은 건드리지 않았다.
+- #948은 손대지 않는다. 뒤에 머지될 때 1200 > 1120이라 그대로 적용된다. #948이 rebase할 때 ERD를 재생성한다.
+- 검증: 실제 Flyway 10.21.0 + PostgreSQL 16, dev 세트 위에서 "dev → 1100대 → #948(1200) 나중" 적용, "dev → #948 먼저 → 1100대"는 `resolved migration not applied: 202609271100`으로 거부(`local/results/migration-matrix-948-949-950.txt`).
 - **스키마 PR의 CI 통과는 적용 완료가 아니다.** CI는 임시 DB에 적용한다. dev 적용은 머지 뒤 `schema-migrate` 워크플로 결과와 `flyway_schema_history`로 따로 확인한다.

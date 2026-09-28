@@ -74,6 +74,7 @@ services:
       EDGE_ECS_SECURITY_GROUPS: sg-lab
       EDGE_ALARM_TOPIC_ARN: arn:aws:sns:ap-northeast-2:000000000000:edge-lab-alarms
       EDGE_LAB_TODAY_KST: ${EDGE_LAB_TODAY_KST:-}
+      EDGE_LAB_DAGRUN_TIMEOUT_SECONDS: ${EDGE_LAB_DAGRUN_TIMEOUT_SECONDS:-1500}
     healthcheck: {test: [CMD-SHELL, "curl -fs localhost:8080/api/v2/monitor/health"], interval: 3s, retries: 80}
 
 volumes:

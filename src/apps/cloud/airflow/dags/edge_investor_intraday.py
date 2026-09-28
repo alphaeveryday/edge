@@ -29,7 +29,7 @@ from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 
 from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, EdgeStep, pipeline_run_id,
-                        reprocess_slot, run_key, run_status, slot_time)
+                        reprocess_slot, run_key, run_status, settlement, slot_time)
 
 LANE = "investor-intraday"
 # variables.tf `investor_intraday_schedule_expressions` 와 같은 슬롯(드리프트는 tests 가 대조).
@@ -55,9 +55,10 @@ def _status(ti, dag_run) -> str:
 
 
 def _holds(ti, steps=("plan", *STEPS, "report")) -> dict:
-    """이 run 에서 Airflow 가 보류한 스텝 {task_id: {"kind","reason"}}(XCom `hold`). plan·report 보류도 런 판정에
-    드러낸다(원장 기록은 업무 스텝만 — plan·report 는 카탈로그 작업이 아니다)."""
-    return {s: h for s in steps if (h := ti.xcom_pull(task_ids=s, key="hold"))}
+    """이 run 에서 보류로 끝난 스텝 {task_id: {"kind","reason"}} — XCom `hold`, 그리고 시작했는데 결말 없이 끝난
+    스텝(worker 사망·수동 failed: `settlement`). plan·report 보류도 런 판정에 드러낸다(원장 기록은 업무 스텝만 —
+    plan·report 는 카탈로그 작업이 아니다). report 를 렌더링하는 시점엔 report 자신은 아직 시작 전이다."""
+    return {s: h for s in steps if (h := settlement(ti, s))}
 
 
 def _holds_env(ti) -> str:
@@ -93,7 +94,10 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     # SFN TimeoutSeconds(1500)와 같다: 최소 슬롯 간격(30분)보다 짧아 다음 슬롯과 겹치지 않는다.
-    dagrun_timeout=timedelta(seconds=1500),
+    # 로컬 검증만 `EDGE_LAB_DAGRUN_TIMEOUT_SECONDS` 로 줄인다(시간 초과 경로 재현) — 운영 환경엔 두지 않는다.
+    # 시간 초과로 report·verdict 가 돌지 못해도 주기 Reconciler 가 원장·ECS 로 미확정 실행을 찾아 보류로 남긴다
+    # (reconciler.sweep_airflow_runs). 그 수명 기준(OPS_AIRFLOW_RUN_LIFETIME_SECONDS)은 이 값보다 커야 한다.
+    dagrun_timeout=timedelta(seconds=int(os.environ.get("EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "1500"))),
     params={"reprocess_slot": Param("", type="string", description=(
         "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-09-22T10:05:00+09:00)을 주면 그 슬롯의 raw 를 "
         "다시 정제·적재한다(수집 안 함, 성공 스텝 가드 해제)."))},
@@ -147,6 +151,8 @@ with DAG(
              "OPS_ORCHESTRATION_STATUS": "{{ edge_run_status(ti, dag_run) }}",
              # 보류를 원장에 남겨야 재처리·수동 trigger 가 그 작업을 우회하지 못한다(원장 게이트).
              "OPS_EXECUTION_HOLDS": "{{ edge_holds(ti) }}",
+             # 이 보고가 어느 DAG run 의 것인지 — 늦게 도착한 옛 run 의 보고가 새 run 의 판정을 덮지 않게 한다.
+             "OPS_REPORT_RUN_REF": "{{ dag.dag_id }}/{{ run_id }}",
              "OPS_CLUSTER_ARN": CLUSTER},
     )
 

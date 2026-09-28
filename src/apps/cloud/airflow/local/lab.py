@@ -87,6 +87,12 @@ def idle_ecs(timeout: float = 300) -> None:
 
 
 def reset() -> None:
+    # 도는 DAG run 이 있으면 아무것도 지우지 않고 먼저 실패한다 — ECS 대역만 비우고 DAG 삭제가 실패하면 남은 task 가
+    # 사라진 ECS 태스크를 영영 기다린다(로컬 관찰).
+    active = [r["run_id"] for r in json.loads(airflow("dags", "list-runs", DAG, "-o", "json", check=False) or "[]")
+              if r["state"] in ("running", "queued")]
+    if active:
+        raise RuntimeError(f"초기화 전 도는 DAG run: {active}")
     idle_ecs()
     fake("/_lab/reset", {})
     compose("exec", "-T", "fake-aws", "sh", "-c",
@@ -886,6 +892,203 @@ def scenario_hold() -> None:
         raise SystemExit(f"기대와 다름: {failed}")
 
 
+# ── 결말 없는 실행: 수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거 같은 결론 ──────────────
+def af_rest(method: str, path: str, body: dict | None = None) -> dict:
+    token = json.loads(urllib.request.urlopen("http://127.0.0.1:58100/auth/token").read())["access_token"]
+    req = urllib.request.Request(f"http://127.0.0.1:58100/api/v2/dags/{DAG}{path}",
+                                 data=None if body is None else json.dumps(body).encode(), method=method,
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def mark_failed(run_id: str, task_id: str) -> None:
+    """운영자가 도는 task 를 failed 로 표시(REST). on_kill 이 불린다 — EdgeStep 은 ECS 를 멈추지 않는다."""
+    af_rest("PATCH", f"/dagRuns/{urllib.parse.quote(run_id, safe='')}/taskInstances/{task_id}",
+         {"new_state": "failed"})
+    note("marked_failed", run_id=run_id, task_id=task_id)
+
+
+def wait_task_state(run_id: str, task_id: str, states: tuple, timeout: float = 600) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = af_tasks(run_id).get(task_id)
+        if state in states:
+            return state
+        time.sleep(2)
+    raise TimeoutError(f"{run_id}/{task_id} -> {states}")
+
+
+def periodic_reconcile(lifetime: int) -> int | None:
+    """EventBridge 주기 Reconciler(OPS_RUN_KEY 없음) — 슬롯 대조 + Airflow sweep."""
+    code = ecs_wait(ecs_run(["reconcile"], {"OPS_CLUSTER_ARN": "lab",
+                                            "OPS_AIRFLOW_RUN_LIFETIME_SECONDS": str(lifetime)},
+                            "edge-dev-data-pipeline-ops"))
+    note("periodic_reconcile", exit=code, lifetime=lifetime)
+    return code
+
+
+def open_holds(run_id: str | None = None) -> list[dict]:
+    rows = psql("SELECT i.dedupe_key, i.evidence->>'kind', et.task_key, et.pipeline_run_id FROM ops_reconciliation_issue i"
+                " JOIN ops_expected_task et ON et.expected_task_id=i.scope_key"
+                " WHERE i.issue_type='EXECUTION_HOLD' AND i.status='OPEN' ORDER BY i.first_seen_at").splitlines()
+    out = [dict(zip(("dedupe_key", "kind", "task_key", "run_id"), r.split("|"))) for r in rows]
+    return [h for h in out if run_id in (None, h["run_id"])]
+
+
+def resolve_holds(note_text: str) -> None:
+    psql("UPDATE ops_reconciliation_issue SET status='RESOLVED', resolution_source='operator',"
+         f" resolution_reason='operator_confirmed_stopped:{note_text}', updated_at=now()"
+         " WHERE issue_type='EXECUTION_HOLD' AND status='OPEN'")
+
+
+def run_status(day: str, hhmm: str) -> list[str]:
+    return psql("SELECT coalesce(orchestration_status,'NULL'), coalesce(orchestration_reported_at::text,'-')"
+                f" FROM ops_pipeline_run WHERE run_key='{LANE}:{day}T{hhmm}'").strip().split("|")
+
+
+def scenario_unsettled() -> None:
+    import threading
+    d1 = "2026-09-22"
+    set_today(d1)
+    reset()
+
+    # U1 운영자가 도는 정제를 failed 로 표시 — ECS 는 계속 돈다. report 가 결말 없음을 보류로 원장에 남긴다.
+    r1 = f"lab__{d1}T09:35"
+    faults([{"step": NORMALIZE, "action": "sleep_in_step", "seconds": 45, "run_id": rid(d1, "09:35")}])
+    af_trigger(r1, slot_iso(d1, "09:35"))
+    wait_task_state(r1, "normalize", ("running",))
+    time.sleep(12)
+    mark_failed(r1, "normalize")
+    af_wait(r1)
+    t1 = af_tasks(r1)
+    held1 = open_holds(rid(d1, "09:35"))
+    check("U1 수동 failed → 보류 원장 기록, 하류 skip, verdict 보류", t1.get("normalize") == "failed"
+          and t1.get("load") in ("skipped", "upstream_failed") and t1.get("report") == "success"
+          and any(h["kind"] == "ECS_STATE_UNKNOWN" and h["task_key"] == "NORMALIZE_INVESTOR_INTRADAY" for h in held1),
+          tasks=t1, holds=held1)
+    # 보류 중: 다른 슬롯·재처리의 정제는 업무 0(원장 게이트). 표시된 태스크는 끝까지 돈다(업무 1).
+    before = counts(NORMALIZE)
+    af_slot(d1, "10:05")
+    rep = af_slot(d1, "09:35", conf={"reprocess_slot": slot_iso(d1, "09:35")}, run_id="lab__u1_reprocess",
+                  logical=False)
+    idle_ecs()
+    after = counts(NORMALIZE)
+    check("U1 보류 중 다른 슬롯·재처리 정제 업무 0(표시된 태스크만 1회 완료)",
+          after["business"] - before["business"] == 1 and after["partition_writes"] - before["partition_writes"] == 1
+          and rep["tasks"].get("normalize") == "failed", before=before, after=after, reprocess=rep["tasks"])
+    # clear 는 표시된 태스크가 이미 끝났으므로(자동 재시도가 아닌 clear) 새로 띄운다 — 원장 게이트가 76 으로 막는다.
+    before = counts(NORMALIZE)
+    try_before = ti_rest(r1, "report")["try_number"]
+    af_clear_run(r1, ["normalize"])
+    wait_task_done(r1, "report", try_before)
+    after = counts(NORMALIZE)
+    check("U1 보류 중 clear 도 업무 0", after["business"] == before["business"], before=before, after=after,
+          tasks=af_tasks(r1))
+    # 복구: 운영자가 ECS 종료를 확인하고 해제 → 재처리 1회.
+    resolve_holds("u1")
+    rec = af_slot(d1, "09:35", conf={"reprocess_slot": slot_iso(d1, "09:35")}, run_id="lab__u1_recovered",
+                  logical=False)
+    check("U1 해제 뒤 재처리 정상 1회", rec["state"] == "success"
+          and counts(NORMALIZE)["business"] == after["business"] + 1, tasks=rec["tasks"])
+    snapshot("unsettled-u1")
+
+    # U2 마지막 시도까지 worker 가 죽는다 — 매 시도는 도는 ECS 에 재접속(새 태스크 0), 마지막엔 결말 없이 끝난다.
+    r2 = f"lab__{d1}T11:25"
+    faults([{"step": NORMALIZE, "action": "sleep_in_step", "seconds": 240, "run_id": rid(d1, "11:25")}])
+    af_trigger(r2, slot_iso(d1, "11:25"))
+    kills = []
+    for _ in range(3):
+        wait_task_state(r2, "normalize", ("running",))
+        time.sleep(8)
+        kill_task_process(0)
+        kills.append(ti_rest(r2, "normalize")["try_number"])
+        wait_task_state(r2, "normalize", ("up_for_retry", "failed"))
+    af_wait(r2)
+    idle_ecs()
+    t2 = af_tasks(r2)
+    n2 = counts(NORMALIZE, rid(d1, "11:25"))
+    held2 = open_holds(rid(d1, "11:25"))
+    check("U2 worker 사망(마지막 시도) → 보류 원장 기록, 새 태스크 0, 업무 1", t2.get("normalize") == "failed"
+          and n2["ecs_tasks"] == 1 and n2["business"] == 1
+          and any(h["kind"] == "ECS_STATE_UNKNOWN" for h in held2), tasks=t2, normalize=n2, kills=kills, holds=held2)
+    resolve_holds("u2")
+    snapshot("unsettled-u2")
+
+    # U3 DAG 시간 초과 — report·verdict 가 안 돈다. 수집 컨테이너는 wrapper 앞에서 대기 중(원장 흔적 없음).
+    compose("up", "-d", "--wait", "airflow", env={"EDGE_LAB_TODAY_KST": d1, "EDGE_LAB_DAGRUN_TIMEOUT_SECONDS": "90"})
+    airflow("dags", "reserialize")
+    r3 = f"lab__{d1}T13:25"
+    faults([{"step": COLLECT, "action": "sleep_before", "seconds": 160, "run_id": rid(d1, "13:25")}])
+    af_trigger(r3, slot_iso(d1, "13:25"))
+    run3 = af_wait(r3)
+    t3 = af_tasks(r3)
+    ledger_holds_before = open_holds(rid(d1, "13:25"))
+    time.sleep(10)
+    code = periodic_reconcile(lifetime=60)
+    held3 = open_holds(rid(d1, "13:25"))
+    check("U3 DAG 시간 초과 → report 없이 주기 점검이 원장 밖 태스크를 보류로 기록", run3["state"] == "failed"
+          and t3.get("report") not in ("success",) and not ledger_holds_before and code == 0
+          and any(h["kind"] == "ECS_STATE_UNKNOWN" and h["task_key"] == "INVESTOR_INTRADAY_COLLECTION_KIS"
+                  for h in held3), tasks=t3, holds=held3)
+    # 그 태스크가 늦게 깨어나도 업무 0(자기 작업의 보류를 본다). 다른 슬롯 수집도 업무 0.
+    af_slot(d1, "14:35")
+    idle_ecs()
+    c3 = counts(COLLECT)
+    kis = sum(c["calls"] for c in state_rows("external_calls.jsonl") if c["run_id"] in (rid(d1, "13:25"), rid(d1, "14:35")))
+    check("U3 늦게 뜬 원장 밖 태스크·다른 슬롯 수집 모두 업무 0·외부 호출 0", kis == 0
+          and counts(COLLECT, rid(d1, "13:25"))["business"] == 0 and counts(COLLECT, rid(d1, "14:35"))["business"] == 0,
+          collect=c3, kis=kis)
+    compose("up", "-d", "--wait", "airflow", env={"EDGE_LAB_TODAY_KST": d1})
+    airflow("dags", "reserialize")
+    # 복구: 종료 확인(ECS STOPPED) → 해제 → 다음 슬롯 수집 정상.
+    resolve_holds("u3")
+    d2 = "2026-09-23"
+    set_today(d2)
+    rec3 = af_slot(d2, "09:35")
+    check("U3 해제 뒤 다음 수집 정상", rec3["state"] == "success" and counts(COLLECT, rid(d2, "09:35"))["business"] == 1,
+          tasks=rec3["tasks"])
+    snapshot("unsettled-u3")
+
+    # U4 늦게 도착한 옛 run 의 보고가 새 run 의 판정을 덮지 않는다. 새 재처리 run 은 정제 업무 실패(FAILED)로
+    # 보고하고, 그 뒤 옛 run 의 보고(SUCCEEDED)가 다시 도착한다(clear — max_active_runs=1 이라 재처리 뒤에 돈다).
+    r4 = f"lab__{d2}T10:05"
+    af_slot(d2, "10:05")
+    first = run_status(d2, "10:05")
+    faults([{"step": NORMALIZE, "action": "exit", "code": 1, "run_id": rid(d2, "10:05")}])
+    af_slot(d2, "10:05", conf={"reprocess_slot": slot_iso(d2, "10:05")}, run_id="lab__u4_reprocess", logical=False)
+    newer = run_status(d2, "10:05")
+    try_before = ti_rest(r4, "report")["try_number"]
+    af_clear_run(r4, ["report"])
+    wait_task_done(r4, "report", try_before)
+    final = run_status(d2, "10:05")
+    check("U4 옛 run 의 늦은 보고가 새 run 판정을 덮지 않음", first[0] == "SUCCEEDED" and newer[0] == "FAILED"
+          and final == newer and af_tasks(r4).get("report") == "success", first=first, newer=newer, final=final)
+
+    # U5 같은 증거 같은 결론: 도는 정제를 StopTask(외부 종료) → Airflow 보류(RESULT_UNKNOWN), 원장 stopped_result_unknown.
+    faults([{"step": NORMALIZE, "action": "sleep_in_step", "seconds": 60, "run_id": rid(d2, "11:25")}])
+    r5 = f"lab__{d2}T11:25"
+    af_trigger(r5, slot_iso(d2, "11:25"))
+    wait_task_state(r5, "normalize", ("running",))
+    time.sleep(10)
+    arn = next(t["taskArn"] for t in fake("/_lab/state")["tasks"]
+               if t["command"][:1] == [NORMALIZE] and rid(d2, "11:25") in t["command"] and t["lastStatus"] == "RUNNING")
+    fake("/", {"cluster": "lab", "task": arn, "reason": "lab stop"}, target="AmazonEC2ContainerServiceV20141113.StopTask")
+    af_wait(r5)
+    hold5 = xcom(r5, "normalize", "hold") or {}
+    ledger5 = psql(f"SELECT et.task_outcome, coalesce(et.outcome_reason,'-'), a.execution_status, coalesce(a.exit_code::text,'-')"
+                   f" FROM ops_expected_task et JOIN ops_task_attempt a USING (expected_task_id)"
+                   f" WHERE et.pipeline_run_id='{rid(d2, '11:25')}' AND et.task_key='NORMALIZE_INVESTOR_INTRADAY'").split("|")
+    check("U5 외부 종료: Airflow RESULT_UNKNOWN = 원장 stopped_result_unknown", hold5.get("kind") == "RESULT_UNKNOWN"
+          and ledger5[:2] == ["FAILED", "stopped_result_unknown"], airflow=hold5, ledger=ledger5,
+          holds=open_holds(rid(d2, "11:25")))
+    snapshot("unsettled-u4-u5")
+    failed = [c["check"] for c in CHECKS if not c["ok"]]
+    note("unsettled_summary", passed=len(CHECKS) - len(failed), failed=failed)
+    if failed:
+        raise SystemExit(f"기대와 다름: {failed}")
+
+
 def scenario_partial() -> None:
     """정제 부분 실패 — 벤더 응답에 깨진 행 1개(거래일 결측)가 섞인 슬롯. 실제 정제 게이트가 그 행만
     탈락시키고 나머지 winner 를 commit 한 뒤 exit 2 를 낸다. 두 경로의 exit 2 해석 대조."""
@@ -927,13 +1130,13 @@ if __name__ == "__main__":
         snapshot(*rest)
     elif cmd in ("scenario-legacy", "scenario-airflow", "scenario-partial", "scenario-guard",
                  "scenario-holiday", "scenario-report", "scenario-trace", "scenario-lockloss",
-                 "scenario-hold"):
+                 "scenario-hold", "scenario-unsettled"):
         try:
             {"scenario-legacy": scenario_legacy, "scenario-airflow": scenario_airflow,
              "scenario-partial": scenario_partial, "scenario-guard": scenario_guard,
              "scenario-holiday": scenario_holiday, "scenario-report": scenario_report,
              "scenario-trace": scenario_trace, "scenario-lockloss": scenario_lockloss,
-             "scenario-hold": scenario_hold}[cmd]()
+             "scenario-hold": scenario_hold, "scenario-unsettled": scenario_unsettled}[cmd]()
         finally:
             RESULTS.mkdir(parents=True, exist_ok=True)
             (RESULTS / f"{cmd}.events.jsonl").write_text(

@@ -104,33 +104,69 @@ ALIVE, SUCCESS, PARTIAL, FAILED, NOT_RUN, HELD, RESULT_UNKNOWN = (
     "ALIVE", "SUCCESS", "PARTIAL", "FAILED", "NOT_RUN", "HELD", "RESULT_UNKNOWN")
 
 
-def ecs_verdict(task: dict, partial_exit_codes=()) -> str:
-    """DescribeTasks 의 태스크 하나 → 판정. 모르는 것은 모른다고 판정한다(성공·미실행으로 접지 않는다).
+def ecs_stop_evidence(task: dict) -> tuple[str, int | None]:
+    """DescribeTasks 의 태스크 하나 → 종료 증거 (종류, exit). data-pipeline `reconciler._ecs_stop_evidence` 와
+    **같은 규칙**이다(두 쪽 테스트가 `tests/ecs_stop_cases.json` 한 표로 대조한다).
 
-    - STOPPED 가 아니면 ALIVE — StopTask 요청 뒤 종료 중(desiredStatus STOPPED)도 아직 살아 있다.
-    - stopCode TaskFailedToStart: 컨테이너가 뜨지 않았다 → NOT_RUN.
-    - exit 0: 업무가 끝났다 → SUCCESS(종료 경위와 무관 — wrapper 는 끝까지 간 뒤에만 0 을 낸다).
-    - 컨테이너가 스스로 끝난(EssentialContainerExited) 비0 만 업무 exit 로 읽는다: 75 NOT_RUN · 76 HELD(업무
-      미시작, 원장 보류) ·
-      부분 실패 PARTIAL · 그 밖 FAILED. 외부 종료(StopTask·호스트 중단 등)의 비0·exit 없음은 업무 도중에
-      끊겼을 수 있어 RESULT_UNKNOWN 이다.
+    - ALIVE: STOPPED 가 아니다(StopTask 요청 뒤 종료 중 포함).
+    - NOT_STARTED: stopCode TaskFailedToStart — 컨테이너가 뜨지 않았다.
+    - EXITED: 컨테이너가 스스로 끝났다 — exit 0, 또는 128 미만 비0 이면서 stopCode 가 없거나
+      EssentialContainerExited. 이 exit 는 업무 결과다.
+    - KILLED: 끝났지만 스스로 끝났다는 증거가 없다 — exit 없음, exit ≥ 128(신호로 죽음: SIGKILL·OOM 137,
+      SIGTERM 143), 또는 외부 종료 stopCode(UserInitiated·SpotInterruption·ServiceSchedulerInitiated…)의 비0.
+      업무 도중 끊겼을 수 있어 결과 미상이다. stopCode 가 없다는 것만으로 판정하지 않는다 — exit 가 신호
+      범위인지가 증거다.
     """
     if task.get("lastStatus") != "STOPPED":
-        return ALIVE
+        return "ALIVE", None
     if task.get("stopCode") == "TaskFailedToStart":
-        return NOT_RUN
+        return "NOT_STARTED", None
     code = (task.get("containers") or [{}])[0].get("exitCode")
     if not isinstance(code, int) or isinstance(code, bool):
+        return "KILLED", None
+    if code == 0:
+        return "EXITED", 0
+    if code >= 128 or task.get("stopCode") not in (None, "EssentialContainerExited"):
+        return "KILLED", code
+    return "EXITED", code
+
+
+def ecs_verdict(task: dict, partial_exit_codes=()) -> str:
+    """종료 증거(`ecs_stop_evidence`) → 이 스텝의 판정. 모르는 것은 모른다고 판정한다.
+    ALIVE·NOT_STARTED(→ NOT_RUN)·KILLED(→ RESULT_UNKNOWN) 는 그대로, EXITED 는 업무 exit 로 읽는다:
+    0 SUCCESS · 75 NOT_RUN(업무 미시작) · 76 HELD(업무 미시작, 원장 보류) · 부분 실패 PARTIAL · 그 밖 FAILED."""
+    kind, code = ecs_stop_evidence(task)
+    if kind == "ALIVE":
+        return ALIVE
+    if kind == "NOT_STARTED":
+        return NOT_RUN
+    if kind == "KILLED":
         return RESULT_UNKNOWN
     if code == 0:
         return SUCCESS
-    if task.get("stopCode") != "EssentialContainerExited":
-        return RESULT_UNKNOWN
     if code == STEP_NOT_RUN_EXIT:
         return NOT_RUN
     if code == STEP_HELD_EXIT:
         return HELD
     return PARTIAL if code in partial_exit_codes else FAILED
+
+
+def settlement(ti, task_id: str) -> dict | None:
+    """스텝의 결말 — verdict·report 가 쓰는 보류 판단. hold 가 있으면 그것, 시작했는데 결말(exit_code·no_ecs_task·
+    hold)이 없으면 ECS_STATE_UNKNOWN 보류(worker 사망·수동 failed — 제출한 ECS 가 아직 돌 수 있다), 그 밖은 None.
+    시작 표시가 없으면(skip·upstream_failed·큐 대기 중 종료) 그 스텝은 아무것도 제출하지 않았다."""
+    hold = ti.xcom_pull(task_ids=task_id, key="hold")
+    if hold:
+        return hold
+    if not ti.xcom_pull(task_ids=task_id, key="edge_started"):
+        return None
+    if ti.xcom_pull(task_ids=task_id, key="exit_code") is not None:
+        return None
+    if ti.xcom_pull(task_ids=task_id, key="no_ecs_task"):
+        return None
+    arn = ti.xcom_pull(task_ids=task_id, key="ecs_task_arn")
+    return {"kind": HOLD_ECS_STATE_UNKNOWN,
+            "reason": f"결말 없이 끝남(worker 중단·수동 종료·시간 초과) — ECS {arn or '제출 여부 미상'}"}
 
 
 def _unsettled(ti, task_id: str) -> str | None:
@@ -244,6 +280,9 @@ class EdgeStep(EcsRunTaskOperator):
         return hashlib.sha256(material.encode("utf-8")).hexdigest()[:64]
 
     def execute(self, context):
+        # 시작 표시 — 이 시도가 결말(exit_code·hold·no_ecs_task)을 남기기 전에 worker 가 죽거나 운영자가 failed 로
+        # 표시하면, 이 표시만 남는다. verdict·report 는 그것을 "결말 없음 = 보류"로 읽는다(`settlement`).
+        context["ti"].xcom_push(key="edge_started", value=True)
         try:
             return self._execute(context)
         except HoldExecution as hold:
@@ -280,6 +319,7 @@ class EdgeStep(EcsRunTaskOperator):
             # 선행 스텝이 보류됐거나 결말을 남기지 못했다(마지막 시도 중 worker 사망·수동 failed 표시) — 그 ECS
             # 태스크가 아직 입력을 쓰고 있을 수 있다. trigger rule(부분 실패여도 정제)과 별개로 시작하지 않는다.
             # skip 이라 하류도 멈추고, report(ALL_DONE)는 돌아 보류를 원장에 옮긴다.
+            self._no_task()
             raise AirflowSkipException(f"선행 스텝의 결말 미확인으로 시작하지 않는다: {unsettled}")
         environment = self.overrides["containerOverrides"][0]["environment"]
         if self.exclusive:

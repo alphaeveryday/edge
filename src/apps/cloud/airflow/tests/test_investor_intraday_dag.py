@@ -646,3 +646,64 @@ def test_steps_that_start_no_task_say_so(monkeypatch, path):
         with pytest.raises(AirflowFailException):
             op.execute(ctx)
     assert ctx["ti"].pushed.get("no_ecs_task") is True and ecs.run_calls == []
+
+
+def test_stop_evidence_matches_the_shared_table_the_reconciler_also_uses():
+    # 같은 ECS 증거에 Airflow 는 보류, Reconciler 는 업무 실패로 결론 내면 원장과 화면이 어긋난다 — 한 표로 묶는다.
+    import json
+    from edge_batch import ecs_stop_evidence
+    cases = json.loads((ROOT / "tests" / "ecs_stop_cases.json").read_text())["cases"]
+    for case in cases:
+        assert list(ecs_stop_evidence(case["task"])) == [case["kind"], case["exit"]], case["name"]
+
+
+class _Pulls:
+    def __init__(self, values):
+        self.values = values
+
+    def xcom_pull(self, task_ids, key):
+        return self.values.get((task_ids, key))
+
+
+@pytest.mark.parametrize("values, expected_kind", [
+    ({("collect", "edge_started"): True}, "ECS_STATE_UNKNOWN"),      # worker 사망·수동 failed — 결말 없음
+    ({("collect", "edge_started"): True, ("collect", "ecs_task_arn"): "arn:x"}, "ECS_STATE_UNKNOWN"),
+    ({("collect", "edge_started"): True, ("collect", "exit_code"): 1}, None),     # 확정된 업무 실패는 보류가 아니다
+    ({("collect", "edge_started"): True, ("collect", "no_ecs_task"): True}, None),
+    ({}, None),                                                        # 시작도 안 함(skip·upstream_failed)
+    ({("collect", "hold"): {"kind": "RESULT_UNKNOWN", "reason": "r"}}, "RESULT_UNKNOWN"),
+])
+def test_a_step_that_ended_without_a_conclusion_is_a_hold(values, expected_kind):
+    from edge_batch import settlement
+    got = settlement(_Pulls(values), "collect")
+    assert (got or {}).get("kind") == expected_kind
+
+
+def test_result_less_step_reaches_verdict_and_ledger_as_a_hold(dag_module):
+    import json
+    from airflow.sdk.exceptions import AirflowFailException
+    pulls = _Pulls({("plan", "edge_started"): True, ("plan", "exit_code"): 0,
+                    ("collect", "edge_started"): True, ("collect", "ecs_task_arn"): "arn:x"})
+    assert json.loads(dag_module._holds_env(pulls))["INVESTOR_INTRADAY_COLLECTION_KIS"]["kind"] == \
+        "ECS_STATE_UNKNOWN"
+    verdict = dag_module.dag.get_task("verdict").python_callable
+    with pytest.raises(AirflowFailException, match="실행 보류"):
+        verdict(ti=pulls, dag_run=SimpleNamespace(conf={}))
+
+
+def test_every_attempt_marks_its_start_and_a_skipped_step_says_it_ran_nothing(dag_module, monkeypatch):
+    from airflow.sdk.exceptions import AirflowSkipException
+    hold = {("collect", "hold"): {"kind": "ECS_STATE_UNKNOWN", "reason": "r"}}
+    ti = _Ti(pulled=hold)
+    ctx = {"ti": ti, "logical_date": NOW, "dag_run": SimpleNamespace(conf={}, run_after=NOW)}
+    with pytest.raises(AirflowSkipException):
+        dag_module.dag.get_task("normalize").execute(ctx)
+    assert ti.pushed.get("edge_started") is True and ti.pushed.get("no_ecs_task") is True
+
+
+def test_report_names_its_dag_run_and_the_run_lifetime_fits_the_reconciler(dag_module):
+    report = dag_module.dag.get_task("report")
+    env = {e["name"]: e["value"] for e in report.overrides["containerOverrides"][0]["environment"]}
+    assert env["OPS_REPORT_RUN_REF"] == "{{ dag.dag_id }}/{{ run_id }}"
+    # 운영 기본값. 주기 Reconciler 의 수명 기준(1800초)보다 짧아야 살아 있는 run 을 보류로 올리지 않는다.
+    assert dag_module.dag.dagrun_timeout == timedelta(seconds=1500)
