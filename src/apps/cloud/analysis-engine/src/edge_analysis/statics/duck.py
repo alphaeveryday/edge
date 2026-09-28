@@ -273,10 +273,10 @@ def iceberg_covers(newest, asked_day: str, day_tickers: int = 0,
     DuckDB 폴백은 실측 376.4MB × 최대 6회 ≈ **2.26GB/런**이다. 둘 다 정확성을 사는
     대가이고, 사는 것은 '13종으로 세운 층을 하루의 설명으로 인쇄하지 않음' 이다.
 
-    ⚠️ **범위**: 이 판정은 `CausalLake(day=…)` 로 기준일을 받은 레이크에만 선다 -
-    실측 23개 생성 지점 중 둘(`pipeline.py`·`window_batch.py`)뿐이고, 나머지 21곳
-    은 `asked_day` 가 비어 판정 자체가 없다. "이제 부분 착지한
-    정본은 안 쓴다" 는 그 21곳에는 참이 아니다.
+    ⚠️ **범위**: 이 판정은 `CausalLake(day=…)` 로 기준일을 받은 레이크에만 선다.
+    2026-09-28 실측 생성 지점 15곳 중 운영 둘(`pipeline.py`·`window_batch.py`)과 연구·점검
+    CLI 10곳이 기준일을 준다(ALPHA-1108 — CLI 는 `gate_bars` 로 요청 구간 준비도 드러낸다).
+    기준일 없는 셋(`pit`·`fin`·`flowhist`)은 5분봉을 안 읽는다.
     """
     if newest is None:
         return False
@@ -520,7 +520,7 @@ class CausalLake:
             # 날(ALPHA-796 되살리기)에 이 줄이 없으면 가드가 조용히 무력해진다.
             # ⚠️ 필터를 집계마다 붙이지 않고 **스캔 전체**에 건다. `max(trade_date)` 를
             # 안 거르면 표에 업종지수 행만 있을 때 `newest` 가 non-NULL 이 되는데,
-            # `asked_day` 가 빈 호출(23개 생성 지점 중 21곳)은 `iceberg_covers` 가
+            # `asked_day` 가 빈 호출(기준일 없는 생성 — ALPHA-1108 이후 5분봉 비소비 셋)은 `iceberg_covers` 가
             # 거기서 곧장 True 라 **가격 봉이 하나도 없는 표를 정본으로 승인**한다.
             # 판정 대상이 "가격 표면"이면 분모·분자·최신일이 전부 그 집합이어야 한다.
             day_pred = f"DATE '{self.asked_day}'" if self.asked_day else "NULL"
