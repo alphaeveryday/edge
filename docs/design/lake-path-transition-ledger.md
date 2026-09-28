@@ -11,6 +11,9 @@ S3 `list-objects-v2`·Glue `get-tables`·DuckDB 읽기로 쟀다. 코드 위치�
 
 상태 열은 ADR-0057 §6의 넷을 따로 적는다: **코드** / **이관** / **소비 전환** / **폐기**.
 
+⚠️ §3의 두 도구(`migrate_fmp_5min_raw.py`, `backfill_intraday_5m.py --vendor fmp`)는 [#952](https://github.com/alphaeveryday/edge/pull/952)(ALPHA-1104)가 들여온다.
+그 PR이 머지되기 전의 `dev`에는 이 인자들이 없다. 적힌 dry-run·이관은 그 브랜치 코드로 실행한 결과다.
+
 ## 1. 대장
 
 | 데이터셋 | 현재 경로·포맷 | 객체·용량 | 기간 (최신) | 행 키·단위·시각 | writer | 주요 reader | 목적 표면 | 상태 |
@@ -115,7 +118,7 @@ server-side copy만 하므로 값 변형이 없다.
 
 ### 3.3 로컬 이력 → canonical (코드 완료 · dry-run만 · **미실행**)
 
-도구: `backfill_intraday_5m.py --vendor fmp`(기존 벤더 축 확장). 원천은 스테이징 parquet 하나다.
+도구: `backfill_intraday_5m.py --vendor fmp`(기존 벤더 축 확장, #952 이후). 원천은 스테이징 parquet 하나다.
 목적은 파티션별 `part-fmp-backfill.parquet`(추가 전용, `source_vendor=fmp_backfill`)이다.
 
 - **보존 규칙**: `writer_owns` 소유일(2026-08-03, ≥2026-08-10)에는 쓰지 않는다. 그날 정본·다른 벤더가 가진
