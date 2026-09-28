@@ -577,6 +577,41 @@ class Ledger:
             )
             return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
 
+    def latest_business_attempt_ref(self, pipeline_run_id: str) -> str | None:
+        """이 런의 가장 최근 업무 시도(중복 skip 제외)를 띄운 오케스트레이터 시도 참조. 없으면 None.
+        늦게 도착한 옛 DAG run 의 보고를 가려낸다(보고한 run 이 최신 업무 시도의 run 이 아니면 옛 보고다)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.orchestrator_attempt_ref FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND a.record_source <> %s"
+                " ORDER BY a.created_at DESC LIMIT 1",
+                (pipeline_run_id, states.SOURCE_DUPLICATE_SKIP),
+            )
+            row = cur.fetchone()
+            return None if row is None else row[0]
+
+    def airflow_run_keys_with_open_attempts(self) -> list[str]:
+        """원장상 끝나지 않은 업무 시도가 남은 Airflow 런 — 주기 점검이 슬롯 대조와 별개로 훑는다(과거 슬롯
+        재처리 런도 포함: 주기 슬롯 대조는 최근 예정일만 본다)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT r.run_key FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " JOIN ops_pipeline_run r ON r.pipeline_run_id = et.pipeline_run_id"
+                " WHERE a.execution_status=%s AND r.orchestrator=%s ORDER BY r.run_key",
+                (states.EXEC_RUNNING, states.ORCHESTRATOR_AIRFLOW),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+    def pipeline_run_by_id(self, pipeline_run_id: str) -> dict | None:
+        """pipeline_run_id → {run_key, orchestrator}. 없으면 None."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute("SELECT run_key, orchestrator FROM ops_pipeline_run WHERE pipeline_run_id=%s",
+                        (pipeline_run_id,))
+            row = cur.fetchone()
+            return None if row is None else {"run_key": row[0], "orchestrator": row[1]}
+
     def record_orchestration_report(self, pipeline_run_id: str, *, status: str) -> None:
         """오케스트레이터가 보고한 런 판정을 적고 보고 시각을 남긴다(Reconciler 투영의 기준선)."""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:

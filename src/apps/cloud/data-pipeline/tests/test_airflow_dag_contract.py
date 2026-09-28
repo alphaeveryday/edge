@@ -60,6 +60,25 @@ def test_env_names_the_dag_sends_are_the_ones_the_pipeline_reads():
         assert f'"{name}"' in EDGE_BATCH, f"DAG 가 {name} 을 보내지 않는다"
         assert f'"{name}"' in WRAPPER, f"wrapper 가 {name} 을 읽지 않는다"
     for name in ("OPS_ORCHESTRATOR", "OPS_ORCHESTRATOR_RUN_REF", "OPS_SCHEDULED_TIME", "OPS_REPROCESS",
-                 "OPS_RUN_KEY", "OPS_ORCHESTRATION_STATUS", "OPS_CLUSTER_ARN", "OPS_EXECUTION_HOLDS"):
+                 "OPS_RUN_KEY", "OPS_ORCHESTRATION_STATUS", "OPS_CLUSTER_ARN", "OPS_EXECUTION_HOLDS",
+                 "OPS_REPORT_RUN_REF"):
         assert f'"{name}"' in DAG, f"DAG 가 {name} 을 보내지 않는다"
         assert f'"{name}"' in ENTRY, f"entry 가 {name} 을 읽지 않는다"
+
+
+def test_reconciler_reads_ecs_stop_evidence_like_airflow():
+    # Airflow(edge_batch.ecs_stop_evidence)와 같은 사례표 — 같은 증거에 같은 결론(보류 vs 업무 결과)을 낸다.
+    import json
+    from data_pipeline.ops.reconciler import _ecs_stop_evidence
+    cases = json.loads((DAGS.parent / "tests" / "ecs_stop_cases.json").read_text(encoding="utf-8"))["cases"]
+    assert len(cases) >= 10
+    for case in cases:
+        assert list(_ecs_stop_evidence(case["task"])) == [case["kind"], case["exit"]], case["name"]
+
+
+def test_dag_run_timeout_is_shorter_than_the_reconciler_lifetime():
+    # Reconciler 는 수명(1800초)을 넘긴 미확정 실행만 보류로 올린다 — DAG 시간 초과가 더 길면 살아 있는 run 을
+    # 보류로, 더 짧아야 죽은 run 을 놓치지 않는다.
+    from data_pipeline.ops import reconciler
+    default = int(re.search(r'EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "(\d+)"', DAG).group(1))
+    assert default < reconciler.AIRFLOW_RUN_LIFETIME_SECONDS

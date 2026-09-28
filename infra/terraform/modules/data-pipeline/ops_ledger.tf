@@ -150,8 +150,10 @@ resource "aws_iam_role_policy" "ops_task" {
       },
       {
         # Reconciler 가 ECS 실제 종료를 확인한다(증거 없이 RUNNING 을 뒤집지 않기 위해, 스펙 §7).
+        # ListTasks: 주기 점검이 원장에 흔적 없이 도는 Airflow 런의 태스크를 찾는다(ALPHA-1088 — DAG 시간 초과 뒤
+        # PENDING 이던 태스크). 같은 클러스터로 한정한다.
         Effect    = "Allow"
-        Action    = ["ecs:DescribeTasks"]
+        Action    = ["ecs:DescribeTasks", "ecs:ListTasks"]
         Resource  = ["*"]
         Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } }
       },

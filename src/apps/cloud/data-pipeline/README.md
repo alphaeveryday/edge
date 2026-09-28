@@ -1758,9 +1758,11 @@ Airflow DAG → plan(OPS_ORCHESTRATOR=AIRFLOW) : 같은 원장 계획, SFN 미�
             → report(reconcile, OPS_RUN_KEY+OPS_ORCHESTRATION_STATUS+OPS_EXECUTION_HOLDS)
                                                        : DAG 판정을 orchestration_status 로, 보류를 EXECUTION_HOLD 로
 Reconciler(Airflow 런) : SFN 대신 원장 attempt·ECS 로 대조, 보고가 없으면 원장에서 상태 투영
-Reconciler(모든 레인)  : ECS STOPPED 확인 → RUNNING 시도를 닫는다(실행권 게이트 해제). exit 가 없거나 외부 종료
-                         (stopCode≠EssentialContainerExited 인 비0)면 FAILED + outcome_reason stopped_result_unknown
-                         (업무 결과 아님 — 산출·선행 완료로 세지 않는다)
+Reconciler(모든 레인)  : ECS STOPPED 확인 → RUNNING 시도를 닫는다(실행권 게이트 해제). exit 가 없거나 신호 종료
+                         (≥128)·외부 종료 stopCode 의 비0 이면 FAILED + outcome_reason stopped_result_unknown
+                         (업무 결과 아님 — 산출·선행 완료로 세지 않는다). 판정 규칙은 Airflow 와 공용 사례표로 대조
+Reconciler(주기, Airflow): sweep_airflow_runs — 끝나지 않은 시도가 남은 Airflow 런을 대조하고, 원장에 없이 DAG
+                         수명보다 오래 도는 ECS 태스크를 EXECUTION_HOLD 로 남긴다(report·callback 없이도)
 ```
 
 **실행 주체(ALPHA-1088).** `ops_pipeline_run.orchestrator`(SFN|AIRFLOW)가 슬롯의 주체다. 다른 주체가

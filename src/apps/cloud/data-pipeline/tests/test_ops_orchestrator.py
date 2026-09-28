@@ -597,7 +597,8 @@ def test_hold_is_released_by_ecs_stop_evidence_not_by_elapsed_time(monkeypatch):
     assert (a["status"], a["exit_code"]) == (states.EXEC_FAILED, None)
     calls = []
     assert _run(db, a_run, calls, arn="arn:ecs/b") == 0 and calls == ["arn:ecs/b"]
-    assert not db.open_issues(states.ISSUE_EXECUTION_HOLD)         # 작업 단위 보류 기록이 닫혔다
+    # 컨테이너 보류 기록은 닫히고, ECS 가 결과 미상 종료로 닫은 시도는 RESULT_UNKNOWN 으로 남는다(새 실행은 안 막는다).
+    assert [i["evidence"]["kind"] for i in db.open_issues(states.ISSUE_EXECUTION_HOLD)] == [states.HOLD_RESULT_UNKNOWN]
 
 
 @pytest.mark.parametrize("ecs_task, exit_code, reason", [
@@ -729,3 +730,178 @@ def test_hold_report_is_recorded_before_the_run_is_reconciled(monkeypatch):
     monkeypatch.setenv("OPS_EXECUTION_HOLDS", '{"NORMALIZE_INVESTOR_INTRADAY": '
                                               '{"kind": "ECS_STATE_UNKNOWN", "reason": "r"}}')
     assert entry.reconcile_cli(object()) == 0 and seen == [1]
+
+
+# ── DAG 의 마지막 task·callback 없이도 미확정 실행을 원장에 남긴다(시간 초과·worker 사망) ──
+from data_pipeline.ops import reconciler as _rec  # noqa: E402
+
+
+class _SweepEcs:
+    """ListTasks·DescribeTasks 대역 — 태스크 {arn: {lastStatus, exitCode?, stopCode?, command, createdAt}}."""
+
+    def __init__(self, tasks=None, list_error=False):
+        self.tasks = tasks or {}
+        self.list_error = list_error
+
+    def list_tasks(self, **kw):
+        if self.list_error:
+            raise OSError("ecs list unavailable")
+        return {"taskArns": [a for a, t in self.tasks.items() if t.get("lastStatus") != "STOPPED"]}
+
+    def describe_tasks(self, **kw):
+        out = []
+        for arn in kw["tasks"]:
+            t = self.tasks.get(arn)
+            if t is None:
+                continue
+            c = {k: t[k] for k in ("exitCode",) if k in t}
+            task = {"taskArn": arn, "lastStatus": t.get("lastStatus", "RUNNING"), "containers": [c],
+                    "createdAt": t.get("createdAt"),
+                    "overrides": {"containerOverrides": [{"command": t.get("command", [])}]}}
+            if "stopCode" in t:
+                task["stopCode"] = t["stopCode"]
+            out.append(task)
+        return {"tasks": out, "failures": []}
+
+
+def _age(db, arn, started):
+    next(a for a in db.attempts if a["arn"] == arn)["started_at"] = started
+
+
+def test_unfinished_attempt_past_dag_lifetime_is_recorded_and_released_by_ecs_evidence():
+    # DAG 시간 초과로 report 가 돌지 못했다 — 끝나지 않은 시도가 수명(1800초)을 넘으면 원장이 스스로 보류로 남기고,
+    # ECS 종료 증거로 닫히면 그 기록도 닫는다(시간이 지났다고 닫지 않는다).
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _start_only(db, run_id, _NORMALIZE, "arn:ecs/n")
+    _age(db, "arn:ecs/n", _SLOT)
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(minutes=40))
+    ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}})
+    reconcile_run(_ledger(db), ecs_client=ecs, **kw)
+    [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
+    assert issue["dedupe_key"].endswith(":unfinished") and issue["evidence"]["kind"] == states.HOLD_OPEN_ATTEMPT
+    ecs.tasks["arn:ecs/n"] = {"lastStatus": "STOPPED", "exitCode": 0, "stopCode": "EssentialContainerExited"}
+    reconcile_run(_ledger(db), ecs_client=ecs, **kw)
+    assert not db.open_issues(states.ISSUE_EXECUTION_HOLD)
+    assert db.attempts[-1]["status"] == states.EXEC_SUCCEEDED
+
+
+def test_young_unfinished_attempt_is_not_recorded_as_a_hold():
+    # DAG run 이 아직 살아 있을 수 있다(수명 안) — 도는 중인 정상 실행을 보류로 올리지 않는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
+    _age(db, "arn:ecs/n", _SLOT)
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(),
+                  ecs_client=_SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}}), now=_SLOT + timedelta(minutes=10))
+    assert not db.open_issues(states.ISSUE_EXECUTION_HOLD)
+
+
+@pytest.mark.parametrize("ecs_task", [
+    {"lastStatus": "STOPPED", "exitCode": 137},        # stopCode 없음 + 신호 — exit 가 원장에 남는다
+    {"lastStatus": "STOPPED"},                         # exit 없음 — 다음 대조도 ECS 를 다시 본다
+])
+def test_killed_attempt_is_recorded_once_as_result_unknown(ecs_task):
+    # 매 주기 같은 사실로 재발 카운트를 올리지 않는다 — 이번 대조가 닫은 시도만 기록한다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
+    ecs = _SweepEcs({"arn:ecs/n": ecs_task})
+    for _ in range(2):
+        reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=ecs,
+                      now=_SLOT + timedelta(minutes=40))
+    [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
+    assert issue["evidence"]["kind"] == states.HOLD_RESULT_UNKNOWN and issue["occurrence_count"] == 1
+    assert db.attempts[-1]["exit_code"] == ecs_task.get("exitCode")
+
+
+def test_sweep_finds_an_untracked_ecs_task_after_the_dag_is_gone_and_the_gate_honours_it(monkeypatch):
+    # 시간 초과 당시 PENDING 이던 태스크는 원장에 흔적이 없다 — 주기 점검이 ECS 에서 찾아 ECS_STATE_UNKNOWN 으로
+    # 남기고, 같은 작업의 다른 run·그 태스크 자신이 늦게 떠도 업무를 시작하지 않는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    now = _SLOT + timedelta(minutes=45)
+    cmd = ["normalize-investor-estimate", "--run-id", run_id, "--input-run-id", run_id]
+    ecs = _SweepEcs({
+        "arn:ecs/orphan": {"lastStatus": "PENDING", "command": cmd, "createdAt": _SLOT},
+        "arn:ecs/young": {"lastStatus": "PENDING", "command": cmd, "createdAt": now - timedelta(minutes=2)},
+        "arn:ecs/other-lane": {"lastStatus": "RUNNING", "command": ["load-price-daily"], "createdAt": _SLOT},
+    })
+    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c", now=now)
+    assert [u["ecs_task_arn"] for u in summary["unrecorded"]] == ["arn:ecs/orphan"]
+    [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
+    assert issue["evidence"]["kind"] == states.HOLD_ECS_STATE_UNKNOWN
+    _exclusive(monkeypatch, skip=False)
+    other = _plan_slot(db, _SLOT + timedelta(minutes=30), "b").pipeline_run_id
+    for rid, arn in ((other, "arn:ecs/b"), (run_id, "arn:ecs/orphan")):
+        calls = []
+        assert _run(db, rid, calls, arn=arn) == wrapper.STEP_HELD_EXIT and calls == []
+
+
+def test_sweep_reconciles_old_slot_runs_and_does_not_guess_when_ecs_listing_fails():
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
+    ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "STOPPED", "exitCode": 0, "stopCode": "EssentialContainerExited"}},
+                    list_error=True)
+    # 주기 슬롯 대조는 최근 예정일만 본다 — 이 런은 하루 전 슬롯이어도 끝나지 않은 시도가 있으면 훑는다.
+    summary = _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c", now=_SLOT + timedelta(days=1))
+    assert summary["reconciled"] == [result.run_key] and db.attempts[-1]["status"] == states.EXEC_SUCCEEDED
+    assert summary["ecs_listing"] == "failed" and not db.open_issues(states.ISSUE_EXECUTION_HOLD)
+
+
+def test_sfn_run_tasks_are_not_swept():
+    # 원장 밖 태스크 보류는 Airflow 런만 — SFN 은 자기 실행을 기다리고 시도를 원장에 남긴다.
+    db = FakeOpsDB()
+    result = plan_run(_ledger(db), state_machine_arn=_ARN, scheduled_time=_SLOT, pipeline_type=_LANE,
+                      sfn_client=FakeSfn())
+    cmd = ["normalize-investor-estimate", "--run-id", result.pipeline_run_id]
+    ecs = _SweepEcs({"arn:ecs/x": {"lastStatus": "RUNNING", "command": cmd, "createdAt": _SLOT}})
+    assert _rec.sweep_airflow_runs(_ledger(db), ecs=ecs, cluster_arn="c",
+                                   now=_SLOT + timedelta(hours=1))["unrecorded"] == []
+
+
+def _attempt_by(db, run_id, task_key, arn, dag_run):
+    _start_only(db, run_id, task_key, arn)
+    next(a for a in db.attempts if a["arn"] == arn)["orchestrator_attempt_ref"] = \
+        f"airflow:edge_investor_intraday/{dag_run}/normalize/1"
+
+
+def test_late_report_of_an_older_dag_run_does_not_overwrite_the_newer_state():
+    # 재처리 run B 가 업무를 다시 돌리는 중 옛 run A 의 report(재시도)가 늦게 도착했다 — B 의 미귀결을 덮지 않는다.
+    db = FakeOpsDB()
+    result = _plan_airflow(db)
+    run_id = result.pipeline_run_id
+    _attempt_by(db, run_id, _NORMALIZE, "arn:ecs/a", "A")
+    _attempt_by(db, run_id, _NORMALIZE, "arn:ecs/b", "B")
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(), now=_SLOT + timedelta(minutes=30))
+    summary = reconcile_run(_ledger(db), reported_status=states.ORCH_SUCCEEDED,
+                            reported_ref="edge_investor_intraday/A", **kw)
+    assert summary["stale_report"]["reported"] == "edge_investor_intraday/A"
+    assert db.runs[result.run_key]["orchestration_status"] is None
+    reconcile_run(_ledger(db), reported_status=states.ORCH_FAILED, reported_ref="edge_investor_intraday/B", **kw)
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED
+
+
+def test_periodic_reconcile_sweeps_even_without_due_slots(monkeypatch):
+    # 야간·휴장일에도 돈다 — 시간 초과된 run 의 미확정 실행은 슬롯 일정과 무관하다.
+    db = FakeOpsDB()
+    swept = []
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda _s: _ledger(db))
+    monkeypatch.setattr(entry, "_due_slots", lambda _now: [])
+    monkeypatch.setattr(_rec, "sweep_airflow_runs", lambda ledger, **kw: swept.append(kw) or {})
+    monkeypatch.delenv("OPS_RUN_KEY", raising=False)
+    monkeypatch.setenv("OPS_CLUSTER_ARN", "c")
+    assert entry.reconcile_cli(object()) == 0
+    assert len(swept) == 1 and swept[0]["cluster_arn"] == "c"
+
+
+def test_hold_report_losing_the_reconcile_lock_is_retried(monkeypatch):
+    db = FakeOpsDB(advisory_grants=False)
+    monkeypatch.setattr(entry, "ledger_from_settings", lambda _s: _ledger(db))
+    monkeypatch.setenv("OPS_RUN_KEY", "investor-intraday:2026-09-22T09:35")
+    monkeypatch.delenv("OPS_ORCHESTRATION_STATUS", raising=False)
+    monkeypatch.setenv("OPS_EXECUTION_HOLDS", '{"NORMALIZE_INVESTOR_INTRADAY": {"kind": "ECS_STATE_UNKNOWN"}}')
+    assert entry.reconcile_cli(object()) == wrapper.STEP_NOT_RUN_EXIT

@@ -262,10 +262,16 @@ def reconcile_run(
     now: datetime | None = None,
     stalled_after_seconds: int | None = None,
     reported_status: str | None = None,
+    reported_ref: str | None = None,
+    lifetime_seconds: int | None = None,
 ) -> dict:
     """한 run 을 대조한다. 관측·판정 요약 dict 반환.
 
     reported_status: Airflow DAG 가 끝나며 넘긴 자기 판정(SUCCEEDED|FAILED). Airflow 런에만 쓴다.
+    reported_ref: 그 보고를 낸 DAG run(`<dag_id>/<run_id>`). 이 런의 최신 업무 시도가 다른 DAG run 의 것이면
+      늦게 도착한 옛 보고라 판정을 기록하지 않는다.
+    lifetime_seconds: Airflow DAG run 이 살아 있을 수 있는 최대 시간(dagrun_timeout + 여유). 이보다 오래 끝나지
+      않은 시도는 결말 보고를 받을 수 없으므로 원장에 보류로 남긴다.
     """
     sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
     ecs = ecs_client if ecs_client is not None else aws.ecs_client()
@@ -364,8 +370,20 @@ def reconcile_run(
         # ③ 투영은 **결론이 난 증거로만** 한다. 열린 작업(미실행·종료 코드 미확인)이 있으면 값을 바꾸지
         #    않는다 — 일시적 조회 실패를 종료로 단정하지 않고, hard deadline 뒤에도 비어 있으면 R02 가
         #    "마감 초과 미귀결"로 드러낸다(그게 정확한 상태다).
+        _record_unfinished(ledger, run_id, tasks, evidence, now=now, summary=summary,
+                           lifetime_seconds=lifetime_seconds or AIRFLOW_RUN_LIFETIME_SECONDS)
         status = run["orchestration_status"]
-        if reported_status in (states.ORCH_SUCCEEDED, states.ORCH_FAILED):
+        accepted = reported_status in (states.ORCH_SUCCEEDED, states.ORCH_FAILED)
+        if accepted and reported_ref:
+            latest_ref = ledger.latest_business_attempt_ref(run_id)
+            if latest_ref and not latest_ref.startswith(f"airflow:{reported_ref}/"):
+                # 이 보고를 낸 run 보다 뒤에 다른 run 이 업무를 돌렸다 — 늦게 도착한 옛 보고다. 새 run 의 판정
+                # (또는 미귀결)을 덮지 않는다. 보류 기록은 사실이라 entry 에서 따로 남는다.
+                logger.warning("옛 DAG run 의 보고(%s) — 최신 업무 시도는 %s. 판정을 기록하지 않는다",
+                               reported_ref, latest_ref)
+                summary["stale_report"] = {"reported": reported_ref, "latest": latest_ref}
+                accepted = False
+        if accepted:
             ledger.record_orchestration_report(run_id, status=reported_status)
             status = reported_status
         elif ledger.business_attempt_after(run_id, run.get("orchestration_reported_at")):
@@ -386,6 +404,126 @@ def reconcile_run(
 
 
 _STAGE_RANK = {"raw": 0, "normalize": 1, "feature": 2}
+
+# Airflow DAG run 이 살아 있을 수 있는 최대 시간 — dagrun_timeout(1500초) + 여유. 이보다 오래 결말이 없는 실행은
+# 그 run 의 report·verdict 가 돌 수 없으므로(시간 초과·worker 사망) 원장이 스스로 보류로 남긴다.
+AIRFLOW_RUN_LIFETIME_SECONDS = 1800
+
+
+def _record_unfinished(ledger, run_id: str, tasks: list[dict], evidence: dict[str, list[dict]], *,
+                       now: datetime, lifetime_seconds: int, summary: dict) -> None:
+    """Airflow 런의 미확정 실행을 원장에 보류로 남긴다 — DAG 의 마지막 task·callback 이 돌지 않아도 된다.
+
+    - 결과 미상 종료(ECS STOPPED, 스스로 끝났다는 증거 없음)로 이번에 닫은 시도 → RESULT_UNKNOWN(새 실행은 막지
+      않는다 — 종료는 확인됐다. 산출물 확인 뒤 운영자가 닫는다).
+    - DAG 수명이 지나도록 끝나지 않은 시도(ECS 가 아직 돌거나 조회 불가) → OPEN_ATTEMPT(막는 것은 그 RUNNING
+      시도 자체다). ECS 종료 증거로 닫히면 자동으로 해결된다.
+    dedupe 는 report 의 보류(`execution_hold:{run}:{task}`)와 겹치지 않게 접미사를 붙인다."""
+    for task in tasks:
+        entry = catalog.get(task["task_key"])
+        if entry is None or task["plan_status"] == states.PLAN_SKIPPED:
+            continue
+        base = f"execution_hold:{run_id}:{task['task_key']}"
+        occs = [o for o in evidence.get(entry.sfn_state_name, []) if o.get("ecs_task_arn")]
+        for occ in occs:
+            if occ.get("_closed_now") and occ.get("_stopped_without_exit"):
+                ledger.open_or_bump_issue(
+                    issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"{base}:result", scope="task",
+                    scope_key=task["expected_task_id"],
+                    evidence={"kind": states.HOLD_RESULT_UNKNOWN, "ecs_task_arn": occ["ecs_task_arn"],
+                              "exit_code": occ.get("exit_code"),
+                              "reason": "ECS 종료 확인 — 스스로 끝났다는 증거 없음(강제 종료·신호), 업무 결과 미상"})
+                summary.setdefault("result_unknown", []).append(task["task_key"])
+        latest = occs[-1] if occs else None
+        started = _parse_ts(latest.get("_entered_at")) if latest else None
+        if latest is not None and latest.get("_terminal") is None:
+            if started is not None and (now - started).total_seconds() > lifetime_seconds:
+                ledger.open_or_bump_issue(
+                    issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"{base}:unfinished", scope="task",
+                    scope_key=task["expected_task_id"],
+                    evidence={"kind": states.HOLD_OPEN_ATTEMPT, "ecs_task_arn": latest["ecs_task_arn"],
+                              "started_at": str(started),
+                              "reason": "DAG 수명이 지났는데 끝나지 않은 시도 — 결말 보고를 받을 수 없다"})
+                summary.setdefault("unfinished", []).append(task["task_key"])
+        elif latest is not None:
+            ledger.resolve_issue(f"{base}:unfinished", resolution_reason="attempt_closed_with_ecs_evidence",
+                                 resolution_source="reconciler")
+
+
+def _alive_lane_tasks(ecs, cluster_arn: str) -> list[dict]:
+    """클러스터에서 살아 있는(desiredStatus RUNNING — PENDING 포함) 태스크 전부를 describe 한다. 실패는 예외."""
+    arns, token = [], None
+    while True:
+        kwargs = {"cluster": cluster_arn, "desiredStatus": "RUNNING"}
+        if token:
+            kwargs["nextToken"] = token
+        resp = ecs.list_tasks(**kwargs)
+        arns += resp.get("taskArns") or []
+        token = resp.get("nextToken")
+        if not token:
+            break
+    tasks = []
+    for i in range(0, len(arns), 100):
+        resp = ecs.describe_tasks(cluster=cluster_arn, tasks=arns[i:i + 100])
+        if resp.get("failures"):
+            raise RuntimeError(f"DescribeTasks 불완전: {resp['failures']}")
+        tasks += resp.get("tasks") or []
+    return tasks
+
+
+def _command_arg(command: list[str], name: str) -> str | None:
+    return command[command.index(name) + 1] if name in command and command.index(name) + 1 < len(command) else None
+
+
+def sweep_airflow_runs(ledger: Ledger, *, ecs, cluster_arn: str | None, now: datetime,
+                       lifetime_seconds: int = AIRFLOW_RUN_LIFETIME_SECONDS, sfn_client=None) -> dict:
+    """주기 점검 — DAG 의 report·verdict·callback 이 돌지 못한 Airflow 런의 미확정 실행을 찾아 원장에 남긴다.
+
+    ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함)을 대조한다 — ECS 증거로 닫거나 보류 기록.
+    ② ECS 에 이 카탈로그 명령(`--run-id <Airflow 런>`)으로 DAG 수명보다 오래 도는데 원장에 시도가 없는 태스크 →
+       ECS_STATE_UNKNOWN 보류(해제 전까지 같은 작업의 새 업무를 막는다 — 그 태스크가 늦게 떠도 스스로 멈춘다).
+    ECS 조회 실패는 기록하지 않고 드러낸다(모르는 것을 없는 것으로 읽지 않는다)."""
+    summary: dict = {"reconciled": [], "unrecorded": [], "ecs_listing": "skipped"}
+    for run_key in ledger.airflow_run_keys_with_open_attempts():
+        reconcile_run(ledger, run_key=run_key, ecs_client=ecs, sfn_client=sfn_client,
+                      cluster_arn=cluster_arn, now=now, lifetime_seconds=lifetime_seconds)
+        summary["reconciled"].append(run_key)
+    if not cluster_arn:
+        return summary
+    try:
+        alive = _alive_lane_tasks(ecs, cluster_arn)
+    except Exception:
+        logger.exception("ECS 살아 있는 태스크 조회 실패 — 원장 밖 실행을 확인하지 못했다")
+        summary["ecs_listing"] = "failed"
+        return summary
+    summary["ecs_listing"] = "ok"
+    for task in alive:
+        command = ((task.get("overrides") or {}).get("containerOverrides") or [{}])[0].get("command") or []
+        run_id = _command_arg(command, "--run-id")
+        entry = catalog.by_cli(command[0], _command_arg(command, "--source")) if command else None
+        created = task.get("createdAt")
+        if entry is None or not run_id or not isinstance(created, datetime):
+            continue
+        if (now - created).total_seconds() <= lifetime_seconds:
+            continue                     # 살아 있는 DAG run 의 태스크일 수 있다
+        run = ledger.pipeline_run_by_id(run_id)
+        if run is None or run["orchestrator"] != states.ORCHESTRATOR_AIRFLOW:
+            continue
+        expected = ledger.find_expected_task(run_id=run_id, task_key=entry.task_key)
+        if expected is None:
+            continue
+        if any(a.get("ecs_task_arn") == task.get("taskArn")
+               for a in ledger.attempts_for(expected["expected_task_id"])):
+            continue                     # 원장에 있다 — ①의 대조가 다룬다
+        ledger.open_or_bump_issue(
+            issue_type=states.ISSUE_EXECUTION_HOLD, dedupe_key=f"execution_hold:{run_id}:{entry.task_key}",
+            scope="task", scope_key=expected["expected_task_id"],
+            evidence={"kind": states.HOLD_ECS_STATE_UNKNOWN, "run_key": run["run_key"],
+                      "ecs_task_arn": task.get("taskArn"), "last_status": task.get("lastStatus"),
+                      "reason": "원장에 흔적 없이 DAG 수명보다 오래 살아 있는 ECS 태스크"})
+        summary["unrecorded"].append({"run_key": run["run_key"], "task_key": entry.task_key,
+                                      "ecs_task_arn": task.get("taskArn")})
+    return summary
 
 
 def _stale_tasks(latest: dict[str, tuple[str, object]]) -> set[str]:
@@ -617,6 +755,7 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
     if terminal is not None and matching["execution_status"] == states.EXEC_RUNNING:
         ledger.record_attempt_end(matching["attempt_id"], execution_status=terminal,
                                   exit_code=exit_code)
+        occ["_closed_now"] = True       # 이번 대조가 ECS 증거로 닫았다(결과 미상 보류 기록의 근거)
     elif terminal is not None and matching.get("exit_code") is None and has_integer_exit:
         # 구버전 reconciler가 terminal/NULL로 backfill한 행은 실제 정수 exit를 찾았을 때만 보정한다.
         # SFN terminal만 있고 exit가 계속 없으면 매 polling마다 finished_at을 다시 찍지 않는다.
@@ -687,10 +826,35 @@ def _judge_outcome(ledger, task, latest, *, outcome, run_id, summary):
               run_id, task, summary, "evidence_lost")
 
 
+def _ecs_stop_evidence(task: dict) -> tuple[str, int | None]:
+    """DescribeTasks 의 태스크 하나 → 종료 증거 (ALIVE|NOT_STARTED|EXITED|KILLED, exit).
+
+    Airflow `edge_batch.ecs_stop_evidence` 와 **같은 규칙**이다 — 두 쪽 테스트가 같은 사례표
+    (`src/apps/cloud/airflow/tests/ecs_stop_cases.json`)로 대조한다. 같은 증거에 한쪽은 보류, 한쪽은 업무 실패로
+    결론 내면 원장과 Airflow 가 어긋난다.
+    - EXITED: 컨테이너가 스스로 끝났다 — exit 0, 또는 128 미만 비0 이면서 stopCode 없음·EssentialContainerExited.
+    - KILLED: 스스로 끝났다는 증거가 없다 — exit 없음, exit ≥ 128(신호: SIGKILL·OOM 137, SIGTERM 143), 외부 종료
+      stopCode 의 비0. 결과 미상.
+    """
+    if task.get("lastStatus") != "STOPPED":
+        return "ALIVE", None
+    if task.get("stopCode") == "TaskFailedToStart":
+        return "NOT_STARTED", None
+    containers = task.get("containers") or []
+    code = containers[0].get("exitCode") if containers else None
+    if not isinstance(code, int) or isinstance(code, bool):
+        return "KILLED", None
+    if code == 0:
+        return "EXITED", 0
+    if code >= 128 or task.get("stopCode") not in (None, "EssentialContainerExited"):
+        return "KILLED", code
+    return "EXITED", code
+
+
 def _ecs_stop(ecs, task_arn: str, cluster_arn: str | None) -> tuple[bool, int | None, bool]:
-    """DescribeTasks로 실제 종료 확인 → (STOPPED 확인 여부, 정수 exit code 또는 None, 외부 종료로 끝난 비0 여부).
-    조회 실패·미발견·아직 안 끝남은 (False, None, False) — 끝났다고 단정하지 않는다. 외부 종료 판정은 Airflow
-    `ecs_verdict` 와 같다: 컨테이너가 스스로 끝난 것(EssentialContainerExited)이 아닌 비0 exit.
+    """DescribeTasks로 실제 종료 확인 → (STOPPED 확인 여부, 정수 exit code 또는 None, 결과 미상 종료 여부).
+    조회 실패·미발견·아직 안 끝남은 (False, None, False) — 끝났다고 단정하지 않는다. 판정은
+    `_ecs_stop_evidence`(KILLED = 결과 미상).
 
     **cluster 를 반드시 넘긴다** — 생략하면 default 클러스터를 조회해 실제 태스크를 못 찾는다.
     """
@@ -703,14 +867,12 @@ def _ecs_stop(ecs, task_arn: str, cluster_arn: str | None) -> tuple[bool, int | 
         logger.exception("ECS describe_tasks 실패 — 상태 미확정")
         return False, None, False
     tasks = resp.get("tasks") or []
-    if not tasks or tasks[0].get("lastStatus") != "STOPPED":
+    if not tasks:
         return False, None, False
-    containers = tasks[0].get("containers") or []
-    exit_code = containers[0].get("exitCode") if containers else None
-    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
-        return True, None, False   # STOPPED 인데 exit code 미상 — 종료만 확인, 성패는 단정하지 않는다
-    stop_code = tasks[0].get("stopCode")
-    return True, exit_code, exit_code != 0 and stop_code not in (None, "EssentialContainerExited")
+    kind, code = _ecs_stop_evidence(tasks[0])
+    if kind == "ALIVE":
+        return False, None, False
+    return True, code, kind == "KILLED"
 
 
 def _open(ledger, issue_type, dedupe_key, run_id, task, summary, bucket):

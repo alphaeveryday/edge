@@ -195,6 +195,24 @@ class _Cursor:
                           and i["scope"] == "task" and i["scope_key"] in self.db.etasks_by_id
                           and self.db.etasks_by_id[i["scope_key"]]["task_key"] == task_key
                           and (not by_kind or (i.get("evidence") or {}).get("kind") == kind)]
+        elif "SELECT a.orchestrator_attempt_ref FROM ops_task_attempt a" in s:   # latest_business_attempt_ref
+            run_id, skip_source = p
+            rows = [a for a in self.db.attempts
+                    if self.db.etasks_by_id.get(a["etid"], {}).get("pipeline_run_id") == run_id
+                    and a["source"] != skip_source]
+            self._rows = [(rows[-1].get("orchestrator_attempt_ref"),)] if rows else []   # 삽입 순서 = created_at
+        elif "SELECT DISTINCT r.run_key FROM ops_task_attempt a" in s:   # airflow_run_keys_with_open_attempts
+            running, orchestrator = p
+            keys = set()
+            for a in self.db.attempts:
+                et = self.db.etasks_by_id.get(a["etid"])
+                run = et and self.db.runs_by_id.get(et["pipeline_run_id"])
+                if a["status"] == running and run and run.get("orchestrator") == orchestrator:
+                    keys.add(run["run_key"])
+            self._rows = [(k,) for k in sorted(keys)]
+        elif "SELECT run_key, orchestrator FROM ops_pipeline_run WHERE pipeline_run_id" in s:
+            run = self.db.runs_by_id.get(p[0])
+            self._rows = [(run["run_key"], run.get("orchestrator", "SFN"))] if run else []
         elif "INSERT INTO ops_reconciliation_issue" in s:
             self._upsert_issue(p)
         elif s.startswith("UPDATE ops_reconciliation_issue SET status='RESOLVED'"):

@@ -13,7 +13,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from ..failures import validated_failure
 from ..lake import Storage, collection_log_prefix, quality_log_prefix
-from . import catalog, planner, reconciler, states, wrapper
+from . import aws, catalog, planner, reconciler, states, wrapper
 from . import contracts
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
@@ -540,10 +540,13 @@ def reconcile_cli(settings) -> int:
                                                                     states.ORCH_FAILED)):
         raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
     holds = _execution_holds(override)
+    reported_ref = os.environ.get("OPS_REPORT_RUN_REF") or None
+    lifetime = int(os.environ.get("OPS_AIRFLOW_RUN_LIFETIME_SECONDS")
+                   or reconciler.AIRFLOW_RUN_LIFETIME_SECONDS)
     with ledger.advisory_lock(_RECONCILE_LOCK) as acquired:
         if not acquired:
-            if reported is not None:
-                # 보고는 이 호출이 유일한 전달 경로다 — 주기 대조가 락을 쥔 동안 0 으로 끝내면 판정이
+            if reported is not None or holds:
+                # 보고·보류는 이 호출이 유일한 전달 경로다 — 주기 대조가 락을 쥔 동안 0 으로 끝내면 판정이
                 # 유실되고, 주기 투영은 확정값을 덮지 않아 영영 고쳐지지 않는다. 재시도하게 한다.
                 logger.warning("reconcile: 락 경합 — 보고(%s)를 재시도 대상으로 돌린다", reported)
                 return wrapper.STEP_NOT_RUN_EXIT
@@ -559,13 +562,13 @@ def reconcile_cli(settings) -> int:
         else:
             due = _due_slots(now.astimezone(planner.KST))
             if not due:
-                logger.info("reconcile: 예정 지난 슬롯 없음 — skip")
-                return 0
+                logger.info("reconcile: 예정 지난 슬롯 없음 — 슬롯 대조 skip")
             # ⚠️ 알려진 사각(ALPHA-565): 주기 reconcile 은 **`_due_slots` 가 만드는 스케줄 슬롯**만
             # 본다. ALPHA-564 로 수동·백필 실행이 자기 슬롯을 갖게 됐는데, 그 키는 `_due_slots` 가
             # 절대 만들지 않으므로 `OPS_RUN_KEY` 로 명시 지정하지 않으면 **영영 대조되지 않는다** —
             # 수동 런이 초기에 죽으면 기대작업이 DUE 로 남은 채 이슈 없이 조용히 통과한다(관대한 쪽).
             # 제대로 된 해소는 "종료되지 않은 런"을 원장에서 훑는 것이고, 그건 새 쿼리라 별건이다.
+            # (Airflow 런은 아래 sweep 이 "끝나지 않은 시도가 남은 런"을 훑는다 — ALPHA-1088.)
             # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다.
             grace_passed = [key for key, grace in due if grace]
             if grace_passed:
@@ -574,6 +577,12 @@ def reconcile_cli(settings) -> int:
         for run_key in run_keys:
             summary = reconciler.reconcile_run(
                 ledger, run_key=run_key, cluster_arn=cluster_arn, now=now,
-                reported_status=reported)
+                reported_status=reported, reported_ref=reported_ref, lifetime_seconds=lifetime)
             logger.info("reconcile: %s", summary)
+        if not override:
+            # DAG 의 report·verdict·callback 이 돌지 못한(시간 초과·worker 사망) Airflow 런의 미확정 실행을 찾는다 —
+            # 슬롯 대조와 별개로 매 주기(휴장일·야간 포함) 돈다. 슬롯 대조 뒤에 둔다(실패가 대조를 막지 않게).
+            swept = reconciler.sweep_airflow_runs(ledger, ecs=aws.ecs_client(), cluster_arn=cluster_arn,
+                                                  now=now, lifetime_seconds=lifetime)
+            logger.info("reconcile: airflow sweep %s", swept)
     return 0
