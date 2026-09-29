@@ -168,7 +168,10 @@ locals {
   # 거래일 PDF 를 주므로 그 날짜로 라벨해야 한다. Planner 와 **같은** 휴장일 집합을 받아야
   # "Planner 는 비거래일로 건너뛴 날을 수집은 거래일로 라벨"하는 모순이 안 생긴다.
   env_sets = {
-    rds    = local.db_env
+    # 가격 마트 적재(load-price-daily)가 canonical 파트가 여럿일 때 정제와 **같은** 승자 규칙
+    # (`normalize_price._pick_winner`)으로 다시 고른다 — 그 규칙의 휴장일 판정이 정제 컨테이너
+    # (bigkinds)와 같은 달력을 봐야 두 계층이 갈리지 않는다(ALPHA-1120).
+    rds    = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
     events = local.db_env
     # iNAV(ALPHA-557)는 거래일·개장 이후에만 수집한다 — 응답에 날짜가 없어 거래일을 수집
     # 시각으로 붙이는데 KIS 가 휴장일에도 직전 거래일 값을 주기 때문. 그 판정이 KRX 와 **같은**
