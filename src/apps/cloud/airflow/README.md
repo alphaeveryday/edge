@@ -212,10 +212,10 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 |---|---|---|
 | 실행 방식 | 일반 ECS on EC2(ASG + Capacity Provider) | ECS Managed Instances 가 아니다(별도 관리 요금). MWAA 는 SCP 거부 |
 | 클러스터 | 전용 `edge-dev-airflow` | worker 클러스터의 capacity provider 목록은 `aws_ecs_cluster_capacity_providers` 가 통째로 소유한다. EC2 용량을 더하면 기존 리소스를 고치게 된다. 클러스터는 무료다 |
-| 호스트 | t4g.medium(arm64, 2 vCPU·4 GiB) 1대, ASG min 1·max 2 | 로컬 실측(아래 표)으로 구성요소 합이 약 1.2 GB. t4g.small(2 GiB)은 헬스체크 CLI 가 겹칠 때 여유가 없다. max 2 는 호스트 교체 때만 쓴다 |
+| 호스트 | t4g.small(arm64, 2 vCPU·2 GiB) 1대, ASG min 1·max 2 | 아래 "사양 검증(로컬 합산 상한)". t4g.micro 는 호스트 몫을 뺀 768MiB 에서 OOM 이었다. medium 은 small 이 모자란 근거가 없다. max 2 는 호스트 교체 때만 쓴다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
-| Executor | LocalExecutor, `parallelism=4` | 장중 수급은 직렬이다(`max_active_runs=1`). Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
+| Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1 | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
 | Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
 | 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
 | 메타DB | 별도 RDS `edge-dev-airflow`(db.t4g.micro, PostgreSQL 16, 백업 7일) | 아래 "메타DB" |
@@ -223,25 +223,126 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | UI 접근 | SSM 포트 포워딩만 | ALB·공인 IP 없음. 태스크 SG 는 호스트 SG 에서 온 8080 만 받는다 |
 | 인증 | Airflow 3 기본 SimpleAuthManager, 사용자 `admin` 1명 | 비밀번호는 Secrets Manager. ⚠️ Airflow 문서는 SimpleAuthManager 를 개발·테스트용으로 분류한다. 여기서는 네트워크 경로가 SSM 뿐이고 사용자가 1명이라 받아들였다. 사용자가 늘면 FAB auth manager 로 바꾼다 |
 
-**구성요소별 자원(태스크 정의 상한).** 로컬 리허설(`deploy/compose.local.yaml`, arm64) 실측 뒤 정했다.
+**자원(태스크 정의).** 태스크 메모리 **1536MiB 하나**를 세 컨테이너와 그 자식(LocalExecutor task 프로세스)이 함께 쓴다(태스크 cgroup). 컨테이너별 hard 상한은 두지 않고 예약(`memoryReservation`)만 둔다 — api 300·scheduler 300·dag-processor 250, CPU unit 512·1024·256. 근거는 바로 아래 "사양 검증".
 
-| 컨테이너 | 상한 MiB | CPU unit | 실측(유휴) | 실측(task 1개 실행 중) |
-|---|---|---|---|---|
-| api-server(workers 1) | 900 | 512 | 230 MiB | — |
-| scheduler(+LocalExecutor task 프로세스) | 1600 | 1024 | 270 MiB | 최대 464 MiB. task 1개 약 200 MiB → parallelism 4 면 약 1.1 GiB |
-| dag-processor | 600 | 256 | 190 MiB | — |
-| 합(태스크 메모리 3100) | | | 약 690 MiB | |
+**헬스체크.** 파이썬을 띄우지 않는다. 각 컨테이너가 api-server `/api/v2/monitor/health` 의 자기 구성요소 status(`metadatabase`·`scheduler`·`dag_processor`)가 `healthy` 인지 본다. 응답 코드는 부분 장애에도 200 이라 본문을 본다. 판정 재료는 `airflow jobs check` 와 같은 heartbeat(메타DB job 표, 30초 임계)다. `jobs check` 는 한 번에 약 110MiB 인 프로세스라 60초마다 둘이 겹치면 순간 228MiB 가 늘었다(로컬 실측).
+- ⚠️ 대가: 헬스체크가 새 DB 연결을 열지 않는다. 메타DB 비밀번호 로테이션(토 09:00~12:00) 뒤에도 기존 풀 연결로 한동안 healthy 이고, 새 연결이 필요해지는 시점(풀 재활용 `sql_alchemy_pool_recycle` 기본 1800초 등)에 구성요소가 실패하며 그때 교체된다. 실제 AWS 검증 항목이다.
 
 - 배포 때 추가 용량은 필요 없다. 서비스는 min 0 / max 100 으로 옛 태스크를 멈춘 뒤 새 태스크를 띄운다. scheduler 가 둘 뜨는 순간이 없고, 대가로 1~3분 Airflow 가 멈춘다. 그래서 `deploy-airflow` 는 평일 장중(KST 09:20~15:00)에 명시 허용 없이 배포하지 않는다.
 - 마이그레이션 작업(`airflow db migrate`)은 **Fargate ARM64** one-off 다. 서비스 태스크가 호스트 메모리를 거의 쓰므로 같은 호스트에 자리를 요구하지 않는다.
 
+### 사양 검증(로컬 합산 상한, 2026-09-29) — 실제 EC2 검증이 아니다
+
+질문: "기존 RDS 재사용 + t4g.micro"를 첫 배치 운영 후보로 삼을 수 있는가. 도구는 `local/micro/`, 기준은 측정 전에 고정했다(`local/micro/criteria.json`). 판정 결과는 `local/results/micro/<실험>/verdict.json`에 있다(원시 샘플·로그는 로컬에만 보존).
+
+**환경.**
+- **합산 상한:** 세 구성요소를 한 컨테이너 = 한 cgroup 에 띄워 합산 상한 하나를 건다. 구성요소 셋, LocalExecutor task 프로세스, 헬스체크 exec 가 모두 그 안이다. ECS 태스크 수준 memory 와 같은 경계다.
+- **상한 적용 확인:** cgroup 파일에서 `memory.max`·`memory.swap.max=0`(swap 금지)·`cpu.max=200000/100000`(2 CPU)을 확인했다. Docker VM 에 swap 1GiB 가 있어도 이 cgroup 은 swap 을 쓰지 못한다.
+- **상한 밖에 둔 것:** 업무 처리(ECS 대역 fake-aws 의 서브프로세스 = 실제 `data_pipeline` 코드), 업무 DB, 메타DB. 운영에서 Fargate·RDS 인 것과 같은 경계다.
+- **관측:** 상한 밖의 특권 관측기가 2초마다 cgroup(`memory.current·peak·events·stat`, `cpu.stat`), 프로세스별 PSS, 메타DB 연결(구성요소별 `application_name`), heartbeat·파싱 경과를 읽는다. Airflow 는 REST 로만 부른다 — CLI 를 exec 하면 측정 대상에 150MB 급 프로세스가 끼어든다.
+- **입력:** 보존된 dev raw(2026-09-22, 5슬롯)를 재생한다. KIS·토스 등 외부 API 는 부르지 않는다.
+- **ECS 대역인 것:** RunTask·ListTasks·DescribeTasks·StopTask 는 대역이다.
+- **실제 코드인 것:** EdgeStep 의 제출·대기·판정·보류, 원장 wrapper·Planner·Reconciler, 정제·적재, Airflow 3.3.2·amazon 9.36.0(arm64 네이티브, 에뮬레이션 없음, Apple M5 Pro).
+- **CPU 결과의 한계:** T4g CPU 크레딧(버스트·기준선)은 재현하지 않았다. CPU 는 이 개발기 코어 기준이라 Graviton2 의 수치가 아니다.
+
+**스위트(실험마다 같다).**
+- 기동 → 유휴 5분 → **B1** 정상 5회(각 정제 120초 외부 대기, 3번째 대기 중 API 30건 + DAG 파일 touch).
+- **B2** 다섯 가지를 차례로 돌린다.
+  - 적재 exit 1(확정 실패, 재시도 없음)
+  - 수집 기동 실패 1회 → 재시도
+  - 정제 대기 중 StopTask → 결과 미상 HOLD
+  - 정제 대기 중 Airflow 재시작 → 재접속·결과 재사용
+  - 재시작 뒤 정상
+- 유휴 5분 → **B3** B1 반복 → 유휴 5분 → 재시작 2회.
+
+**판정 기준(요지).**
+- OOM·자발 재시작 0
+- heartbeat ≤ 30초, 파싱 경과 ≤ 360초, touch 뒤 재파싱 ≤ 90초
+- 지연 p95: 앞 task 종료→queued ≤ 15초, queued→시작 ≤ 15초, 시작→ECS 생성 ≤ 20초, ECS 종료→task 종료 ≤ 20초
+- 시나리오 결과·원장 상태가 기대와 같다
+- 업무 실행 중복 0, canonical 이 dev 와 같다
+- 풀 대기·연결 오류 0
+- B3 뒤 유휴 anon ≤ B1 뒤 × 1.10, UI 30건 2xx·p95 ≤ 2초
+
+**설정.**
+- **C0(#981 원안):** parallelism 4, 파싱 프로세스 2, 풀 3/5, 헬스체크 `airflow jobs check` CLI.
+- **C1(조정):** parallelism 1, 파싱 1, 풀 2/3, 헬스체크 `/monitor/health`.
+- C1 은 C0 측정(E1)의 원인별 분해로 정했다: 미리 뜬 워커 4개 119MiB, 헬스체크 CLI 순간 228MiB, 실제 연결 최대 6. 기능은 빼지 않았다 — serve-logs·API 워커 1·재시도·보류·보고 모두 그대로다.
+
+| 실험 | 합산 상한 | 설정 | 결과 | 최대 memory.current / anon | 비고 |
+|---|---|---|---|---|---|
+| E1 | 2048 | C0 | 전 기준 통과(**오염** — 아래) | 1155 / 1122 MiB | small 참조. 유휴 anon 662→796→833→851(배치마다), 재시작 뒤 634 |
+| E2 | 1024 | C0 | **실패** — 기동 중 api-server OOM(137) 재시작 3회, B1 첫 run failed | 1014 / 942 | 중단(판정 확정) |
+| E3 | 1024 | C1 | **전 기준 통과** | 968 / 875 | anon 이 768 을 넘은 샘플 54% |
+| E4 | 768 | C1 | **실패** — dag-processor OOM(137) 2회, B1 첫 run 미완료 | 767 / 740 | memory.events max 118 |
+| E6 | 768 | C1 + `MALLOC_ARENA_MAX=2` | **실패** — 유휴부터 상한 도달, B1 중 api-server OOM | 744 / 677 | 설정으로 구제되지 않음 |
+| E5 | 1792 | C1 | **전 기준 통과** | 940 / 879 | 연결 최대 5(활성 1), heartbeat 최대 11.8초 |
+
+- **통과 실험의 공통값(E3·E5).**
+  - 지연 p95: 앞 task 종료→queued 1.0초, queued→시작 0.0초, 시작→ECS 생성 0.2초, ECS 종료→task 종료 5.7초(E1 과 같다).
+  - 재시작 복구 run 은 heartbeat 타임아웃(300초, 운영 기본) 뒤 재시도가 끝난 ECS 결과를 재사용했다. 업무 실행 1회, ECS 태스크 1개였다.
+  - HOLD 는 원장 `EXECUTION_HOLD`(RESULT_UNKNOWN)로 남았다.
+  - B1·B3 의 canonical 행 sha 는 dev 와 같았다.
+- **메모리 구성(유휴 PSS, C1).** api-server 220~280, dag-processor 180~210, scheduler 70~140, serve-logs 60~115, LocalExecutor 워커 1개 약 70MiB.
+  - 유휴 anon 은 배치를 돌수록 늘다가(E5: 676→750→789→791) 증가 폭이 준다. 재시작하면 약 615 로 돌아간다.
+  - 한 시간 남짓의 관찰이라 **며칠 단위의 증가는 확인하지 않았다**(실제 AWS 검증 항목).
+- **micro 가 모자란 원인.** 기본 상주(유휴 anon 약 610~680MiB)만으로 768 의 대부분을 쓴다. 여기에 업무 실행·API 응답 뒤 늘어난 상주(약 +100~180)와 기동·파싱 순간 증가가 겹쳐 상한에 닿는다. 불필요한 프로세스(미리 뜬 워커·CLI 헬스체크)는 C1 에서 이미 뺐다.
+  - 더 줄이려면 기능을 건드려야 한다. serve-logs(실행 중 로그 조회)를 빼는 안은 CloudWatch 실시간 로그로 대체되는지 확인해야 해서 이번에 하지 않았다.
+- **호스트 몫 가정(미실측).**
+  - t4g.micro·small 은 1·2 GiB 전체를 태스크에 줄 수 없다. 커널·systemd·journald, dockerd·containerd, ECS 에이전트, SSM 에이전트가 쓴다.
+  - 이 합을 **200~350MiB 로 가정**하고 768(micro)·1792(small)를 검증했다. AWS 실측이 아니다.
+  - 실제 값은 단기 검증에서 호스트 `free -m`, ECS `RegisteredResources`(MEMORY)로 확정한다.
+  - 태스크 정의 1536 은 small 의 등록 메모리 안쪽을 노린 값이다. E3 의 C1 이 1024 에서 통과해 1536 은 그보다 넉넉하다.
+- **CPU(개발기 코어 기준, 참고).**
+  - C1 평균 0.03~0.04 코어(유휴·배치), C0 0.06~0.08 코어(CLI 헬스체크 몫).
+  - 2 CPU 상한에서 스로틀은 거의 없다(C1 0~1%).
+  - t4g 기준선(인스턴스 전체)은 micro 0.2·small 0.4 vCPU 다. 개발기와 Graviton2 의 코어 성능 차이를 몇 배로 잡아도 small 기준선 안쪽으로 보이지만, 실측이 아니다.
+- **오염·무효 기록(판정에서 제외, 보존).**
+  - E1 첫 시도: JWT 서명키 미설정으로 task 인증 실패 → 측정 환경 결함(운영 태스크 정의에는 있다). `invalid/`에 보존.
+  - E1: 실행 중 마운트된 `healthcheck.sh`를 고쳤다(cli 분기 명령은 같다) → `E1.TAINTED`. 이후 실험은 시작·끝 코드 해시가 같아야 유효(`C0_valid_run`)로 본다. E1 재실행(E1b)은 하지 않았다. small 참조는 E5 로 갈음했다.
+  - 판정기 결함 셋을 고쳤다(`p95 0.0` 을 거짓으로 읽음, 부모 cgroup OOM 을 Airflow 로 귀속, 중단 실험의 재시작 누락). 결과가 바뀐 것은 E3 의 C1(부모 OOM 오귀속 → 통과)뿐이다.
+- **판단.** micro 는 실제 AWS 단기 검증 후보가 아니다(호스트 몫을 뺀 768 에서 두 설정 모두 OOM). **small 을 실제 AWS 단기 검증 후보로 한다.** medium 이 필요하다는 근거는 없다(small 차감 조건 E5 통과). 로컬 통과는 EC2 운영 안정성의 검증이 아니다.
+
 ### 메타DB
 
-- 업무 DB `edge-dev` 와 **인스턴스를 나눴다.** `edge-dev` 는 2026-08-10 메모리 고갈로 하루 다섯 번 죽었다. 최근 2주(09-14~09-27) 여유 메모리는 최저 574 MB, CPU 는 최고 96% 였다(CloudWatch 일 단위). scheduler 는 매초 DB 를 폴링하고 구성요소마다 커넥션 풀을 쥔다(풀 3 + overflow 5). 같은 인스턴스에 두면 그 부하가 업무 레인 전체의 장애 범위에 들어간다. `app_rds` 를 분리한 것과 같은 이유다.
+- **현재 Terraform 은 별도 인스턴스(`edge-dev-airflow`, db.t4g.micro)다.** 기존 업무 RDS(`edge-dev`) 재사용은 아래 평가대로 **아직 검증하지 않은 후보**라 코드에 반영하지 않았다.
+- scheduler 는 쉬지 않고 메타DB 를 조회한다. 로컬 유휴 실측은 초당 트랜잭션 약 28, 버퍼 적중 약 246, 쓰기 0.4행이고, DB 크기는 10MiB 다(업무 실행 중은 더 많다).
+
+**기존 RDS 재사용 평가(2026-09-29, 읽기 전용 지표·기존 기록 — 실제 부하를 주지 않았다)**
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 과거 메모리 사고 | 2026-08-10 db.t4g.micro(1GiB)에서 하루 5회 다운. 커넥션 32→49 로 늘며 메모리가 먼저 끊겼다(연결 상한 79 는 도달 전) | ALPHA-919·924. 조치: db.t4g.small 상향, FreeableMemory 알람, RDS 이벤트 구독, 로테이션 창 고정 |
+| 현재 사양 | db.t4g.small(2GiB), PostgreSQL 16, gp3 20GB(여유 15.1GB), `max_connections` = 메모리 파생(약 150~200) | describe-db-instances·파라미터 그룹(default.postgres16) |
+| 여유 메모리 | 5분 최저 548MiB(09-18 09:20), p1 567 · p50 605. 상향 뒤 일 최저 575~604 로 평탄(감소 추세 없음) | CloudWatch 14일·60일 |
+| 연결 | 5분 최대 35(09-22 09:45), p50 20, 장중 중앙값 22 | CloudWatch 14일 |
+| CPU | 5분 최대 96.5%(09-22 09:25, 장 시작), p99 76%, p50 5.5%. 크레딧 잔고 최저 528/576, 초과 과금 0 | CloudWatch 14일 |
+| 지연·스왑 | 쓰기 지연 최대 84ms(p99 9ms), 읽기 최대 12ms, Swap 최대 38MiB | CloudWatch 14일 |
+| Airflow 가 더할 것(로컬 실측) | 연결 합계 3~5개(scheduler 1·dag-processor 1·api 1~2, 조정 설정 C1). 풀 설정값 합(3 × (2+3) = 15)이 아니다. 유휴 초당 약 28 트랜잭션 | local/micro E3·E5 |
+
+- **판단: 현재 정보로는 재사용 가능·불가를 확정하지 않는다.**
+  - 연결 수는 제약이 아니다(35 + 5 ≪ 상한).
+  - 제약은 메모리와 장 시작 CPU 다. 여유 메모리 548MiB 에서 Postgres 백엔드 3~5개(백엔드당 수 MB + 조회 때 work_mem)와 Airflow 메타 페이지(수십 MB 이하)를 더하는 것은 수치상 작다. 그러나 이 DB 는 08-10 에 메모리로 죽은 이력이 있다. 추가량의 **실제 크기는 로컬 Postgres 로는 잴 수 없다**(RDS 의 FreeableMemory 는 OS·캐시 회수를 포함한다).
+  - 장 시작(09:25 전후) CPU 96% 구간에 Airflow 09:35 슬롯의 조회가 더해진다.
+- **DB·계정을 나눠도 자원은 격리되지 않는다.** 같은 인스턴스의 메모리·CPU·IOPS·`max_connections`·파라미터 그룹을 나눠 쓴다. 재부팅·유지보수·마이너 업그레이드·PITR(인스턴스 단위 복원)도 함께 겪는다. `modules/rds` 변경은 머지 즉시 재부팅이다.
+- **재사용한다면(제안, 미적용).**
+  - 전용 DB `airflow`·전용 역할 `airflow`(마스터 아님), `ALTER ROLE airflow CONNECTION LIMIT 10`·`SET statement_timeout = '30s'`·`SET idle_in_transaction_session_timeout = '60s'`.
+  - 비밀번호는 Airflow 앱 시크릿에 둔다(RDS 관리형 로테이션을 타지 않는다).
+  - Airflow 풀 2/3 유지.
+- **관측 항목:** FreeableMemory 5분 최저, SwapUsage, DatabaseConnections(역할별 `pg_stat_activity`), CPUUtilization·CPUCreditBalance, Read/WriteLatency, 업무 레인 실패·지연.
+- **중단 기준(하나라도):**
+  - FreeableMemory 5분 최저 < 400MiB(현재 최저 548 에서 150MiB 이상 감소)
+  - SwapUsage > 100MiB
+  - Airflow 역할 연결 > 10
+  - 장중 쓰기 지연 p99 > 50ms
+  - 업무 레인에 DB 원인 실패가 1건이라도 생김
+  - → Airflow 를 desired 0 으로 멈추고 별도 인스턴스로 옮긴다.
+- **실제 검증 과제:** 장 마감 뒤 Airflow on/off 를 번갈아 FreeableMemory·연결·CPU 차이를 잰다. 이어서 장중 1일을 관측한다. 그 결과로 재사용을 정한다.
+
 - 나눠도 공유하는 것: VPC·data 서브넷, 알람 SNS 토픽. 메타DB 장애는 Airflow 만 멈춘다. 반대로 업무 DB 장애는 여전히 Airflow 런의 원장 스텝(plan·report·wrapper)을 실패시킨다. 원장이 업무 DB 에 있기 때문이다.
 - 백업: RDS 자동 백업 7일(PITR). 복구는 PITR 로 새 인스턴스를 만든 뒤 `module "airflow_rds"` 를 그 인스턴스로 바꾸고 `deploy-airflow` 를 다시 돌린다.
 - 메타DB 를 잃으면 사라지는 것: DAG run·task 이력, XCom(보류 사유 포함), pause 상태. **업무 상태의 정본은 원장(업무 DB)이다.** 보류는 `report` 가 원장 `EXECUTION_HOLD` 로 옮기고, 결말 없는 실행은 주기 Reconciler 의 sweep 이 찾는다. 새 메타DB 에서 DAG 는 pause 로 다시 생긴다(`dags_are_paused_at_creation`). 잃은 이력 구간의 보류는 원장으로 판단한다.
-- 비밀번호 로테이션: `modules/rds` 가 토 09:00~12:00 KST 에 돌린다. 연결 문자열은 태스크 기동 때 한 번 만들어진다. 로테이션 뒤에는 새 연결이 실패하고, 헬스체크가 태스크를 교체하며, 새 태스크가 새 비밀번호를 받는다. 장이 없는 시간이다.
+- 비밀번호 로테이션: `modules/rds` 가 토 09:00~12:00 KST 에 돌린다. 연결 문자열은 태스크 기동 때 한 번 만들어진다. 로테이션 뒤에는 **새** 연결부터 실패한다 — 헬스체크는 새 연결을 열지 않으므로(위 "헬스체크") 풀 재활용 시점까지 healthy 일 수 있고, 구성요소가 새 연결에서 실패해야 태스크가 교체된다. 장이 없는 시간이지만 실제 AWS 검증 항목이다.
 
 ### 장애 범위와 호스트 교체
 
@@ -279,7 +380,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | 업무 컨테이너 로그 | 기존 `/ecs/edge-dev-data-pipeline`. `EdgeStep` 이 task 로그로 끌어온다 | 14일(기존) |
 | 검증 태스크 로그 | `/ecs/edge-dev-airflow-verify` | 14일 |
 
-- 헬스체크: api-server `curl /api/v2/monitor/health`, scheduler·dag-processor `airflow jobs check --local`(60초 간격, 3회 실패면 ECS 가 태스크를 교체한다).
+- 헬스체크: 세 컨테이너 모두 `/api/v2/monitor/health` 의 자기 구성요소 status(위 "헬스체크", 60초 간격, 3회 실패면 ECS 가 태스크를 교체한다).
 - 알림(모두 기존 파이프라인 SNS 토픽):
   - `edge-dev-airflow-service-down`: 서비스의 ECS CPU 지표가 10분 끊기면 울린다(태스크 없음·교체 실패·호스트 사망).
   - 메타DB 여유 메모리 알람·RDS 이벤트 구독: `modules/rds` 가 붙인다.
@@ -320,45 +421,44 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 
 로컬에 Session Manager 플러그인이 필요하다. 태스크 IP 는 태스크가 바뀔 때마다 달라진다.
 
-### 월 비용(서울 리전, 2026-09-28 공개 단가, 730시간)
+### 월 비용(서울 리전 공개 단가 2026-09-25 게시판, 730시간 상시 가동)
 
-**이번에 늘어나는 비용**
+**늘어나는 비용 — 안별 비교(USD/월)**
 
-| 항목 | 계산 | USD/월 |
-|---|---|---|
-| EC2 t4g.medium 온디맨드 | 0.0416 × 730 | 30.37 |
-| EBS gp3 30 GiB(루트) | 30 × 0.0912 | 2.74 |
-| RDS db.t4g.micro Single-AZ | 0.025 × 730 | 18.25 |
-| RDS gp3 20 GiB | 20 × 0.131 | 2.62 |
-| RDS 백업(7일, 할당량 이내) | 할당 스토리지만큼 무료 | 0 |
-| Secrets Manager 2개(RDS 관리형·앱) | 2 × 0.40 | 0.80 |
-| CloudWatch Logs 수집(추정 2~4 GB) | × 0.76/GB. 보관 비용은 소액 | 1.5~3.0 |
-| CloudWatch 알람 2개(서비스 중단·메타DB 메모리) | 2 × 0.10 | 0.20 |
-| ECR 저장(베이스 레이어 공유, 약 0.7 GB + 검증 이미지) | × 0.10/GB | ≈ 0.1 |
-| NAT 처리량(이미지 pull 약 0.66 GB × 월 10회 + API) | × 0.059/GB | 0.4~1.0 |
-| **합계** | | **약 57~59** |
+| 항목 | 단가 | #981 원안: medium + 별도 RDS | **현재 Terraform: small + 별도 RDS** | 검증 후보: small + 기존 RDS | (불통과) micro + 기존 RDS |
+|---|---|---|---|---|---|
+| EC2 | medium 0.0416·small 0.0208·micro 0.0104 /h | 30.37 | 15.18 | 15.18 | 7.59 |
+| EBS gp3 30GiB(ECS AMI 루트 최소) | 0.0912 /GB·월 | 2.74 | 2.74 | 2.74 | 2.74 |
+| RDS db.t4g.micro + gp3 20GB | 0.025 /h · 0.131 /GB·월 | 20.87 | 20.87 | 0(기존 인스턴스) | 0 |
+| Secrets Manager | 0.40 /개 | 0.80(2개) | 0.80 | 0.40(앱 1개 — DB 비밀번호 포함) | 0.40 |
+| CloudWatch Logs 수집(추정 2~4GB) | 0.76 /GB | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 |
+| CloudWatch 알람 | 0.10 /개 | 0.20 | 0.20 | 0.10 | 0.10 |
+| ECR·NAT 처리량 | 0.10 /GB·0.059 /GB | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 |
+| **합계** | | **약 57~59** | **약 42~44** | **약 20~23** | 약 13~15 |
 
-**늘지 않는 것(0원)과 그 근거:** 공인 IPv4 0개(private 서브넷·EIP 없음), ALB 없음, VPC 엔드포인트 추가 없음, SSM Session Manager 무료. ECS 자체 관리 요금도 없다. ECS on EC2 는 EC2·EBS 만 과금한다(Managed Instances 가 아니다).
+- **CPU 크레딧:** 이 계정의 t4g 기본 크레딧 방식은 **unlimited** 다(`get-default-credit-specification` 확인). 평균 CPU 가 기준선을 넘으면 넘은 만큼 **0.04 USD/vCPU·시간**을 낸다(서울 가격표 `APN2-CPUCredits:t4g`).
+  - 기준선(인스턴스 전체)은 micro 0.2·small 0.4 vCPU 다(AWS 버스터블 문서 값).
+  - 예: small 에서 평균 0.5 vCPU 면 (0.5 − 0.4) × 730 × 0.04 ≈ 2.9 USD/월.
+  - 로컬 C1 평균은 0.03~0.04 개발기 코어였다. Graviton2 에서의 값은 실제 AWS 검증에서 `CPUCreditUsage`·`CPUSurplusCreditsCharged`로 확인한다.
+- **할인·무료 혜택:** 반영하지 않았다(계정 적용을 확인하지 않았다).
+- **늘지 않는 것(0원):** 공인 IPv4 0개(private 서브넷·EIP 없음), ALB 없음, VPC 엔드포인트 추가 없음, SSM Session Manager 무료. ECS 관리 요금도 없다(ECS on EC2 는 EC2·EBS 만 과금한다, Managed Instances 아님).
+- **기존 RDS 재사용 안의 숨은 비용:** 인스턴스 요금은 0이지만, 영향이 크면 `edge-dev` 를 상향해야 할 수 있다. db.t4g.small → medium 이면 +37.23 USD/월(0.051 → 0.102 /h, 서울 공개 단가). 그러면 별도 micro(20.87)보다 비싸다. 그래서 재사용은 위 "기존 RDS 재사용 평가"의 실제 검증 뒤에 정한다.
 
 **일시적으로 늘어나는 것**
-
-- 호스트 교체 때 두 번째 t4g.medium: 약 15분 × 0.0416 ≈ 0.01/회.
+- 호스트 교체 때 두 번째 small: 약 15분 × 0.0208 ≈ 0.005/회.
 - 배포마다 마이그레이션 Fargate ARM64 약 1분: 0.01 미만.
-- 격리 검증 기간의 검증 태스크(Fargate x86 0.25 vCPU·0.5 GB, 수백 회 × 1~2분): 약 0.1~0.5 합계. 검증 버킷 S3 는 소액이다(30일 만료).
+- 격리 검증 태스크(Fargate x86 0.25 vCPU·0.5GB, 수백 회 × 1~2분): 합계 약 0.1~0.5.
 
-**이미 지출 중인 것(이번 작업과 무관하게 계속)**
+**이미 지출 중인 것(이번 작업과 무관):**
+- NAT 게이트웨이 시간 요금(약 43.07).
+- 업무 DB `edge-dev`.
+- worker 클러스터의 업무 Fargate 태스크. 실행 주체가 SFN 이든 Airflow 든 같은 태스크가 돈다.
+- 전환 뒤에는 이 레인의 SFN 상태 전이 요금이 사라진다(소액).
 
-- NAT 게이트웨이 시간 요금: 0.059 × 730 ≈ 43.07. 기존 게이트웨이를 그대로 쓴다.
-- 업무 DB `edge-dev`, worker 클러스터의 업무 Fargate 태스크: 실행 주체가 SFN 이든 Airflow 든 같은 태스크가 돈다.
-- 전환 뒤에는 이 레인의 SFN 상태 전이 요금이 사라진다(하루 5회 × 수 전이, 소액).
-
-**고려했으나 택하지 않은 절감안**
-
-| 안 | 절감(USD/월) | 택하지 않은 이유 |
-|---|---|---|
-| 메타DB 를 `edge-dev` 에 같이(별도 DB·계정) | 약 21 | 위 "메타DB" — 메모리 고갈 이력이 있는 업무 DB 의 장애 범위를 넓힌다 |
-| t4g.small | 약 15 | 로컬 실측 합 약 1.2 GB(parallelism 4 기준) + 헬스체크 CLI 가 겹친다. 등록 메모리 약 1.9 GB 로는 여유가 없다. 실제 AWS 실측 뒤 다시 본다 |
-| Savings Plan·RI | 약 30% | 도입 초기라 약정하지 않는다 |
+**실제 AWS 단기 검증의 최소 비용(small + 별도 RDS 로 1주일 가정):**
+- EC2 약 3.5 · EBS 0.6 · RDS 4.8 · 시크릿·로그·알람 약 1 · 검증 태스크 약 0.5 → **약 10 USD**.
+- 기존 RDS 를 쓰는 비교 측정(on/off)을 더해도 인스턴스 추가 요금은 없다.
+- 검증 뒤 멈추려면 ASG desired 0 + RDS 삭제(또는 중지 — RDS 중지는 7일 뒤 자동 재시작).
 
 ### 실제 AWS 검증(격리)
 
