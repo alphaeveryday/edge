@@ -180,7 +180,10 @@ locals {
       OPS_KR_HOLIDAYS       = join(",", var.kr_holidays)
       KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
     })
-    bigkinds = local.db_env
+    # 가격 정제(normalize-price)가 이 컨테이너에서 돈다. KR 승자 규칙이 평일 휴장일 수집분을
+    # 가려내려면 KRX·KIS 와 **같은** 휴장일 집합이 필요하다(ALPHA-1120 — 휴장일 런이 직전 거래일
+    # 종가를 공식 종가가 아닌 값으로 돌려준다). 안 주면 is_trading_day 가 주말만 알아 조용히 퇴화한다.
+    bigkinds = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
     rds_dart = local.db_env
     krx      = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
     # 워터마크 창(ALPHA-987, `disclosure_watermark.py`)은 배치 레인이 공시를 소유할 때만
