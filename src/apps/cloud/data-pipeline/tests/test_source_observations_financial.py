@@ -239,8 +239,9 @@ def test_malformed_filing_list_fails_one_company_and_keeps_the_rest(tmp_path):
              HYNIX["corp_code"]: json.dumps({"status": "000", "total_page": "x", "list": [None]}).encode()}
     dart = DartFake([SAMSUNG, HYNIX], full_responses(SAMSUNG), lists)
     storage, code = chain(tmp_path, dart)
-    assert code == 0            # 파손 행은 계획에서 빠지고, 회사 수집은 계속된다
-    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 0
+    assert code == 0            # 파손 행이 수집을 멈추지 않는다(페이지 수 검증은 _source 기반 테스트가 본다)
+    # 파손 행은 거부로 드러난다(부분 실패) — 정상 회사는 그대로 적재된다.
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
     assert ("005930", 2026, "Q2", "revenue", "QUARTER", "CFS") in rows_by(storage)
 
 
@@ -308,3 +309,24 @@ def test_damaged_share_rows_and_foreign_period_responses_are_rejected_not_fatal(
     rows = rows_by(storage)
     assert ("005930", 2026, "Q2", "bps", "POINT", "CFS") in rows         # 합계 행은 그대로 읽힌다
     assert ("005930", 2026, "Q1", "revenue", "QUARTER", "CFS") not in rows
+
+
+def test_damaged_filing_list_rows_are_reported_and_page_counts_must_be_positive_integers(tmp_path):
+    # WHY(검증 라운드 잔여): 파손 목록 행을 조용히 빼면 "그 기간 보고서 없음"처럼 보이고, 문자열이 아닌
+    # 접수번호는 정제 전체를 멈추며, 0·소수 페이지 수는 뒤 페이지 누락을 완료로 확정한다.
+    good = json.loads(filing_list(SAMSUNG))
+    good["list"] += [None, {"rcept_no": ["20260930000001"], "rcept_dt": "20260930", "report_nm": "x"}]
+    storage, code = chain(tmp_path, DartFake([SAMSUNG], full_responses(SAMSUNG),
+                                             {SAMSUNG["corp_code"]: json.dumps(good).encode()}),
+                          holdings=("005930",))
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/data_quality_logs/")
+                                            if "run_id=run_fn/" in k)))
+    reasons = {r for f in log["failures"] for r in f["reasons"]}
+    assert {"malformed_list_row", "bad_rcept_no"} <= reasons
+    assert ("005930", 2026, "Q2", "revenue", "QUARTER", "CFS") in rows_by(storage)   # 나머지는 적재된다
+    for total in (0, 1.5, -1, True):
+        body = json.dumps({"status": "000", "total_page": total, "list": [{"rcept_no": "1"}]}).encode()
+        src, _ = _source({1: body})
+        pages = src.filings("00126380", datetime(2026, 1, 1).date(), datetime(2026, 1, 31).date())
+        assert pages[-1].detail == "bad_total_page", total

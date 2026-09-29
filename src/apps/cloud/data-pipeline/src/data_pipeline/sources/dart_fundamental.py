@@ -42,7 +42,7 @@ KST = timezone(timedelta(hours=9))
 REPORT_CODES = {"Q1": "11013", "Q2": "11012", "Q3": "11014", "FY": "11011"}
 _PERIOD_BY_CODE = {v: k for k, v in REPORT_CODES.items()}
 _PERIOD_END = {"11013": (3, 31), "11012": (6, 30), "11014": (9, 30), "11011": (12, 31)}
-_RCEPT_NO = re.compile(r"[0-9]{14}")
+RCEPT_NO = re.compile(r"[0-9]{14}")
 _TICKER = re.compile(r"[0-9A-Z]{6}")
 _REPORT_NAME = re.compile(r"(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)")
 _FLOW_ACCOUNTS = {
@@ -131,9 +131,12 @@ class DartFundamentalSource:
                 pages.append(result)
                 return pages
             try:
-                total = int(json.loads(result.body.decode("utf-8"))["total_page"])
+                total = json.loads(result.body.decode("utf-8"))["total_page"]
             except (TypeError, ValueError, AttributeError, KeyError):
-                # 뒤 페이지가 있는지 모른다 — 받은 본문은 남기되 완전한 목록이라 하지 않는다.
+                total = None
+            if not isinstance(total, int) or isinstance(total, bool) or total < page:
+                # 뒤 페이지가 있는지 모른다(없음·문자열·소수·0·현재 쪽보다 작음) — 받은 본문은 남기되
+                # 완전한 목록이라 하지 않는다.
                 pages.append(dataclasses.replace(result, status="error", detail="bad_total_page"))
                 return pages
             pages.append(result)
@@ -170,8 +173,10 @@ def report_of(report_nm: str) -> tuple[str, str, int] | None:
 def plan_reports(list_rows: list[dict], window_from: date, window_to: date) -> tuple[set, list[dict]]:
     """접수일이 창 안인 정기보고서 → 수집할 (bsns_year, reprt_code). 사업보고서면 같은 해 3분기도 붙인다
     (Q4 = FY − 9M 유도의 입력). 비12월 결산은 거부로 돌려준다."""
-    targets, rejects = set(), []
+    targets = set()
     rows = [row for row in list_rows if isinstance(row, dict)]
+    # 파손 행을 조용히 빼면 파손 목록이 "그 기간 정기보고서 없음"처럼 보인다 — 거부로 남긴다.
+    rejects = [{"reasons": ["malformed_list_row"]} for row in list_rows if not isinstance(row, dict)]
     fy_years = {p[0] for row in rows if (p := report_of(row.get("report_nm"))) and p[1] == "11011"}
     for row in rows:
         parsed = report_of(row.get("report_nm"))
@@ -233,7 +238,7 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
     lines = [ln for ln in statement["body_json"]["list"] if isinstance(ln, dict)]
     if not _TICKER.fullmatch(str(corp.get("stock_code"))):
         return [], [{"corp_code": corp.get("corp_code"), "reprt_code": code, "reasons": ["bad_instrument_code"]}]
-    bad = [ln for ln in lines if not _RCEPT_NO.fullmatch(str(ln.get("rcept_no")))]
+    bad = [ln for ln in lines if not RCEPT_NO.fullmatch(str(ln.get("rcept_no")))]
     if bad:
         rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
                         "reasons": ["bad_rcept_no"], "lines": len(bad)})
@@ -288,7 +293,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     treasury = _amount(total.get("tesstk_co")) if total else None
     if total is not None and treasury is None and (total.get("tesstk_co") or "").strip() == "-":
         treasury = Decimal(0)   # 주식 총수 표의 '-' 는 자기주식 없음이다(금액 칸의 '-' 와 다르다)
-    if total is not None and not _RCEPT_NO.fullmatch(str(total.get("rcept_no"))):
+    if total is not None and not RCEPT_NO.fullmatch(str(total.get("rcept_no"))):
         # 분모 쪽 접수번호도 DB CHECK 대상이다 — 형식이 틀리면 그 실행의 적재 전체가 롤백된다.
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bad_rcept_no"]})
         return []

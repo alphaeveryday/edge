@@ -750,15 +750,22 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         if not isinstance(items, list):
             rejects.append({"raw_key": obj["key"], "reasons": ["unexpected_shape"]})
             continue
+        malformed = sum(1 for item in items if not isinstance(item, dict))
+        if malformed:
+            rejects.append({"raw_key": obj["key"], "reasons": ["malformed_list_row"], "rows": malformed})
         items = [item for item in items if isinstance(item, dict)]
         if kind == "list":
             for item in items:
+                rcept_no = item.get("rcept_no")
+                if not (isinstance(rcept_no, str) and dart_fundamental.RCEPT_NO.fullmatch(rcept_no)):
+                    # 접수번호가 문자열이 아니면 사전 키로도 못 쓴다 — 그 행만 거부한다(정제 전체를 멈추지 않게).
+                    rejects.append({"raw_key": obj["key"], "reasons": ["bad_rcept_no"]})
+                    continue
                 try:
                     day = datetime.strptime(str(item.get("rcept_dt")), "%Y%m%d").date().isoformat()
                 except ValueError:
                     continue            # 접수일을 못 읽으면 그 접수번호는 "모름" — 수신 기준으로 떨어진다
-                if item.get("rcept_no"):
-                    rcept_dates[item["rcept_no"]] = day
+                rcept_dates[rcept_no] = day
             continue
         # 요청한 회사·연도·보고서의 응답인지 본다 — 다른 기간의 값을 요청 기간으로 라벨하지 않게.
         if any(ln.get("corp_code") not in (None, request["corp_code"])
