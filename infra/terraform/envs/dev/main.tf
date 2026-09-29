@@ -699,7 +699,7 @@ module "airflow" {
   ami_id = "ami-0c15069e7568e5f41"
   # 실제 AWS 단기 검증(ALPHA-1119): micro 부터. 로컬에서는 호스트 몫을 가정(200~350MiB)해 768 에서 OOM 이었다 —
   # 실제 호스트 몫·등록 메모리를 여기서 잰다. 부족이 확인되면 같은 조건으로 t4g.small 로 바꿔 비교한다.
-  instance_type = "t4g.micro"
+  instance_type = "t4g.small"
   task_memory   = 1024 # 로컬 조정 설정(C1)이 전 기준을 통과한 합산 상한. 등록 메모리보다 크면 배치되지 않는다(그것도 결과)
   # 검증을 마치면 0 으로 내린다(호스트·서비스 중단 알람 제거). 상시 운영으로 자동 연장하지 않는다.
   host_count    = 1
