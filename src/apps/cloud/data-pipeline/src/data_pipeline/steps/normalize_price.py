@@ -257,7 +257,9 @@ def _pick_winner(rows: list[dict]) -> dict:
       * 벤더 정정은 OHLC 를 바꾼다(08-25 0177X0: D일 15:41 가격 스냅샷 9,670 → 다음 날 9,645,
         같은 시각 NAV 응답은 이미 9,645). 기준이 정정값이라 정정분이 이기고, 그 행만 거래량·
         수집 시각(=available_at)이 정정 시각 축이 된다 — 실제로 그때 안 값이다.
-    기준은 **전체 후보를 한꺼번에** 봐야 맞게 고른다 — 재정제는 `--input-run-id` 없이 돈다.
+    SFN 증분 병합(기존 canonical 승자 1행 + 이번 런 raw)도 위 세 경우엔 전체 재정제와 같은 답이다.
+    ⚠️ 한계: 정정이 되돌려지면(A→B→A) 증분은 원래 D일 A 를 이미 잃어 **나중 A** 를 고른다 — 값은
+    같고 거래량·available_at 만 뒤 축이 된다. 전체 raw 재정제(`--input-run-id` 없이)는 D일 A 를 고른다.
     거래일 마감 후 수집분이 없으면 수급 규칙(`normalize_investor._winner_rank`)으로 떨어진다.
     거래일 판정은 `OPS_KR_HOLIDAYS` 를 쓴다 — 없으면 평일 휴장일을 거래일로 본다(quality_log
     `kr_holidays_loaded` 가 드러낸다).
@@ -272,7 +274,7 @@ def _pick_winner(rows: list[dict]) -> dict:
     ]
     if not reference_pool:
         return min(reversed(rows), key=_kr_winner_rank)
-    reference = _ohlc(max(reference_pool, key=_fetched_at))
+    reference = _ohlc(max(reversed(reference_pool), key=_fetched_at))
     return min(reversed([r for r in post_close if _ohlc(r) == reference]), key=_fetched_at)
 
 

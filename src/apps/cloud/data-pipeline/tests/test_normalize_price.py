@@ -190,15 +190,23 @@ _D2 = "2026-07-03T06:41:00+00:00"   # D+2
 
 
 def _kr_candidates_all_orders(tmp_path, rows):
-    """두 런으로 나눠 기존 canonical→새 raw 적용 순서를 양쪽으로 돌리고 각 결과 행을 돌려준다."""
+    """같은 후보를 세 경로로 정제해 각 결과 행을 돌려준다 — SFN 증분(런마다 `--input-run-id`,
+    기존 canonical 승자 1행 + 이번 런 raw) 정순·역순, 그리고 전체 raw 재정제. 규칙이 증분에서
+    과거 후보를 잃어 답이 달라지면 여기서 갈린다."""
     results = []
     for i, ordered in enumerate((rows, list(reversed(rows)))):
-        storage = LocalStorage(tmp_path / f"lake-{i}")
+        storage = LocalStorage(tmp_path / f"lake-inc-{i}")
         for j, row in enumerate(ordered):
             _write_raw(storage, _raw_key("kis", "KR", run_id=f"R{j}"), [row])
-            assert normalize_price.run(storage, f"N{j}") in (0, 2)
+            assert normalize_price.run(storage, f"N{j}", input_run_id=f"R{j}") == 0
         [row] = _canonical_rows(storage, "KR", "2026-07-01")
         results.append(row)
+    storage = LocalStorage(tmp_path / "lake-full")
+    for j, row in enumerate(rows):
+        _write_raw(storage, _raw_key("kis", "KR", run_id=f"R{j}"), [row])
+    assert normalize_price.run(storage, "NF") == 0
+    [row] = _canonical_rows(storage, "KR", "2026-07-01")
+    results.append(row)
     return results
 
 
