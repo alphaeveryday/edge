@@ -9,6 +9,8 @@ from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, create_sdk_mcp
 from jsonschema import Draft202012Validator
 import yaml
 
+from .tool_surface import agent_tool_schemas
+
 
 def load_prompt(path: Path) -> str:
     """Load a nonempty system_prompt from an explicit YAML file."""
@@ -31,10 +33,12 @@ def make_server(schemas: list[dict], call):
     """
     registered, allowed = [], []
     gate = asyncio.Lock()
-    for schema in schemas:
+    for schema, visible in zip(schemas, agent_tool_schemas(schemas)):
         function = schema['function']
         name = function['name']
-        async def handler(arguments, tool_name=name):
+        validator = Draft202012Validator(function['parameters'])
+        async def handler(arguments, tool_name=name, validator=validator):
+            validator.validate(arguments)
             async with gate:
                 # Cancellation must not leave a database write racing publication failure.
                 pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
@@ -46,7 +50,7 @@ def make_server(schemas: list[dict], call):
                     finally:
                         raise
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
-        registered.append(tool(name, function['description'], function['parameters'])(handler))
+        registered.append(tool(name, function['description'], visible['function']['parameters'])(handler))
         allowed.append('mcp__analysis__' + name)
     return create_sdk_mcp_server(name='analysis', version='1.0.0', tools=registered), allowed
 
@@ -95,7 +99,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
              'ANTHROPIC_MODEL': model, 'ANTHROPIC_DEFAULT_HAIKU_MODEL': model,
              'ANTHROPIC_DEFAULT_SONNET_MODEL': model, 'ANTHROPIC_DEFAULT_OPUS_MODEL': model,
              'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0'})
-    for name, value in [('input.json', initial), ('tool_schemas.json', schemas),
+    for name, value in [('input.json', initial), ('tool_schemas.json', agent_tool_schemas(schemas)),
                         ('output_schema.json', output_schema)]:
         (artifacts / name).write_text(encode(value), encoding='utf-8')
     (artifacts / 'system_prompt.txt').write_text(prompt.replace(key, '[redacted]'), encoding='utf-8')
