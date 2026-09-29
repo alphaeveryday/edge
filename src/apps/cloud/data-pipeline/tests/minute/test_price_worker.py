@@ -933,6 +933,21 @@ class TestCollectorSelection:
         # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
         assert collector.client.client.min_interval == pytest.approx(0.08)
 
+    def test_fetch_concurrency_needs_the_shared_budget(self):
+        """동시 요청은 공유 허용과 함께일 때만 켠다(ALPHA-1087) — 허용 없이 켜면 로컬 간격 안에서 실제 발신률만 올라
+        이미 한도에 닿는 합산을 더 나쁘게 만든다."""
+        from data_pipeline.minute.worker import make_price_collector
+
+        cfg = self._config(source="kis", app_key="k", app_secret="s", fetch_concurrency=2)
+        collector, _ = make_price_collector(cfg, session_date=TODAY)
+        assert collector.concurrency == 1
+
+        class Pacer:
+            def pace(self, cost=1):
+                pass
+        collector, _ = make_price_collector(cfg, session_date=TODAY, pacer_for=lambda backfill: Pacer())
+        assert collector.concurrency == 2
+
     def test_past_session_date_builds_historical_kis_client(self):
         """지난 거래일이면 **다른 TR** 이다(ALPHA-846).
 
@@ -984,7 +999,7 @@ class TestCollectorSelection:
 
         seen: dict[str, object] = {}
 
-        def capture(options, *, session_date):
+        def capture(options, *, session_date, pacer_for=None):
             seen["session_date"] = session_date
             raise SystemExit("여기서 멈춘다 — 이 뒤는 DB·S3 가 필요하다")
 
@@ -1033,7 +1048,7 @@ class TestCollectorSelection:
 
         monkeypatch.setattr(models_module, "load_universe_uri", lambda _: UNIVERSE)
         monkeypatch.setattr(worker_module, "make_price_collector",
-                            lambda options, *, session_date: (object(), session_date < TODAY))
+                            lambda options, *, session_date, pacer_for=None: (object(), session_date < TODAY))
         monkeypatch.setattr(worker_module, "MinuteLedger", lambda db=None: SimpleNamespace(
             session_snapshot=lambda **_: {"phase": "ACTIVE"}))
         monkeypatch.setattr(worker_module, "MinuteCommitter", lambda db=None: object())

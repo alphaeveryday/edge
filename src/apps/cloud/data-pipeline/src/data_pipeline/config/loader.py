@@ -23,6 +23,7 @@ from pydantic_settings import (
 )
 
 from .models import (
+    CallBudgetConfig,
     DbConfig,
     BigKindsNewsSource,
     CollectionTargets,
@@ -109,6 +110,8 @@ class Settings(BaseSettings):
     # DB(Cloud Event Store)는 적재 스텝(load-*)만 쓴다 — 수집·정제만 돌리는 환경은 생략
     # 가능하고, 미설정이면 load-* 진입점이 fail-loud 한다.
     db: DbConfig | None = None
+    # 외부 API 공유 호출 허용(ALPHA-1087). 기본 비활성 — 켜면 KIS 호출자가 db 의 call_budget 행을 쓴다.
+    call_budget: CallBudgetConfig = CallBudgetConfig()
     # ETF 가격변동 트리거(ALPHA-406)는 load-price-triggers 만 쓴다 — 미설정이면 그 진입점이
     # fail-loud 한다(트리거를 안 돌리는 환경은 생략 가능).
     price_triggers: PriceTriggersConfig | None = None

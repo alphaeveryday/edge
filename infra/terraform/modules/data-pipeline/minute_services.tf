@@ -111,7 +111,13 @@ locals {
         # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
-      })
+        },
+        # 한 window 안 동시 요청 수(ALPHA-1087). 공유 호출 허용과 **같은 변수에서 유도**한다 —
+        # 허용 없이 동시성만 켜지면 로컬 간격 안에서 실제 발신률만 올라 합산이 더 나빠진다(코드도 1로 강제).
+        # 꺼져 있으면 변수를 **싣지 않는다**(코드 기본 1) — 이 필드를 모르는 이전 이미지는 extra_forbidden 으로
+        # 기동을 거부하므로, 머지 배포에서 terraform-apply 가 새 이미지보다 먼저 끝나면 워커가 죽는다.
+        var.call_budget_enabled ? { DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = "2" } : {}
+      )
       # 선택된 source 의 자격증명 쌍**만** 주입한다 — ECS 는 기동 시 secrets 전부를
       # 해석하므로, 미사용 벤더 쌍을 같이 걸면 그 시크릿에 값이 없는 환경(신규 환경·
       # 그릇만 있는 toss)에서 ResourceInitializationError 로 워커가 아예 못 뜬다.

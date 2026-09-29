@@ -525,6 +525,8 @@ class MinutePriceWorkerConfig(BaseModel):
     # 아니다. 1분 레인에 EGW00201 이 보이기 시작하면 여기(0.08)를 먼저 늘려라 — 장중 수급은
     # 하루 5회뿐이라 그쪽 간격을 늘리는 것보다 값이 크다.
     min_interval_sec: float = Field(default=0.08, gt=0, le=5)
+    # 한 window 안 동시 요청 수(KIS 당일 경로만). 1 = 종전 순차. 발신률 한도가 아니다 — 간격·공유 허용이 정한다(ALPHA-1087).
+    fetch_concurrency: int = Field(default=1, ge=1, le=4)
     # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
     # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
     # 안 드러난다.
@@ -980,6 +982,53 @@ class StorageConfig(BaseModel):
         # bucket 없이 s3 로 부팅하면 첫 put 에서야 죽는다 — 로드 시점에 fail loud.
         if self.backend == "s3" and not (self.bucket or "").strip():
             raise ValueError("storage.backend=s3 인데 storage.bucket 이 없다")
+        return self
+
+
+class CallBudgetConfig(BaseModel):
+    """외부 API 공유 호출 허용(ALPHA-1087) — **기본 비활성**.
+
+    켜면 KIS 앱키를 쓰는 호출자가 프로세스별 간격(`PoliteClient.min_interval`) 대신 DB 의
+    `call_budget` 행에서 발신 슬롯을 예약한다. 속도·등급 정책은 DB 행이 권위이고 여기는 **이 프로세스의
+    대기·폐기 규칙**만 둔다(프로세스마다 속도가 갈리면 합산 한도가 깨진다).
+
+        DATA_PIPELINE_CALL_BUDGET__ENABLED=true
+
+    ⚠️ 켜고 끄는 단위는 프로세스가 아니라 **그 예산을 쓰는 호출자 전체**다 — 일부만 켜면 켠 쪽은 공유
+    예산을, 끈 쪽은 자기 간격을 각자 다 써서 합이 한도를 넘는다(전환 절차는 ALPHA-1087).
+
+    `rtt_max_sec`·`send_window_sec` 기본값은 로컬 실험값이다(ALPHA-1087). 운영 워커→DB 왕복을 재기 전까지
+    최적값이 아니다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    # 비밀값이 아닌 운영 이름(appkey·토큰 금지). DB CHECK 와 같은 패턴.
+    budget_id: str = Field(default="kis", pattern=r"^[a-z][a-z0-9-]{0,62}$")
+    # 허용 요청→응답 왕복이 이보다 길면 그 허용을 버린다 — DB 처리 시각을 이 폭 안에서만 안다.
+    rtt_max_sec: float = Field(default=0.025, gt=0, le=1)
+    # 예약 슬롯부터 이 시간 안에 발신하지 못하면 버린다(늦은 발신이 다음 슬롯과 뭉치지 않게).
+    # 상한 1.0 은 call_budget.MAX_SEND_WINDOW_SEC(일시정지 소진 판정)와 같아야 한다.
+    send_window_sec: float = Field(default=0.05, gt=0, le=1.0)
+    # 한 발신의 허용을 얻기까지 최대 대기. 넘기면 CallBudgetDeadlineExceeded(무한 대기 금지).
+    max_wait_sec: float = Field(default=30.0, gt=0, le=600)
+    # 거절 뒤 재질의 간격 상한(DB 질의량을 묶는다).
+    deny_poll_cap_sec: float = Field(default=0.5, gt=0, le=5)
+    # 저장소 장애 시 발신 없이 재연결을 시도하는 최대 시간. 넘기면 CallBudgetUnavailable(fail-closed).
+    # 첫 실패를 관측한 시각부터 센다 — 첫 실패 호출 1회와 마지막 호출 1회·재시도 간격만큼 늦게 끝날 수 있다
+    # (기본값 최대 12.2s, 그래도 max_wait_sec 안).
+    store_outage_max_sec: float = Field(default=10.0, ge=0, le=300)
+    # 서버 실행 상한(statement_timeout·lock_timeout). 저장소 호출 1회(연결+질의)의 **클라이언트** 상한은
+    # 이 값 + 0.5s 다 — 응답 유실도 그 안에서 끝난다(call_budget.PgBudgetStore).
+    statement_timeout_ms: int = Field(default=500, ge=50, le=10000)
+
+    @model_validator(mode="after")
+    def _window_must_exist(self) -> CallBudgetConfig:
+        # 발신 가능 구간 = [t_resp + wait, t_req + wait + send_window]. 왕복이 send_window 이상이면
+        # 구간이 비어 모든 허용이 폐기된다 — 설정 단계에서 막는다.
+        if self.rtt_max_sec >= self.send_window_sec:
+            raise ValueError("rtt_max_sec 는 send_window_sec 보다 작아야 한다(발신 가능 구간이 비지 않게)")
         return self
 
 

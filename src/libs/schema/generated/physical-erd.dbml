@@ -67,6 +67,29 @@ Table "business_segment_fact" {
   "concept_link_confidence" float8
 }
 
+Table "call_budget" {
+  "budget_id" text [pk]
+  "rate_per_sec" float8 [not null]
+  "next_slot_at" float8 [not null]
+  "active_window_sec" float8 [not null]
+  "paused" boolean [not null]
+  "created_at" timestamptz [not null]
+  "updated_at" timestamptz [not null]
+}
+
+Table "call_budget_class" {
+  "budget_id" text [not null]
+  "call_class" smallint [not null]
+  "horizon_sec" float8 [not null]
+  "floor_rate" float8 [not null]
+  "floor_next_at" float8 [not null]
+  "last_grant_at" float8 [not null]
+
+  indexes {
+    ("budget_id", "call_class") [pk]
+  }
+}
+
 Table "company_profile" {
   "actor_id" text [pk]
   "actor_type" varchar(30)
@@ -1202,6 +1225,7 @@ Ref: "assertion_argument"."entity_id" > "entity"."entity_id"
 Ref: "assertion_metric"."assertion_id" > "document_assertion"."assertion_id"
 Ref: "business_segment_fact"."concept_id" > "concept"."concept_id"
 Ref: "business_segment_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")
+Ref: "call_budget_class"."budget_id" > "call_budget"."budget_id"
 Ref: "company_profile".("actor_id", "actor_type") > "actor".("actor_id", "actor_type")
 Ref: "concept".("concept_id", "entity_type") > "entity".("entity_id", "entity_type")
 Ref: "concept"."parent_concept_id" > "concept"."concept_id"

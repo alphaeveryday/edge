@@ -1151,8 +1151,43 @@ settings.targets.keywords            # ["금리", ...]
 - **파일 경로**: `load_settings(path)` 인자 > `DATA_PIPELINE_CONFIG_FILE` env > 동봉 기본 설정.
   배포 환경(dev/prod)은 보통 env로 외부 설정 파일을 가리켜 동봉 기본값을 대체한다.
 - **명시적 실패**: 필수값 누락·알 수 없는 키·대상 0개·공백 값·파일 없음은 조용한 기본값 대신
-  `ConfigError`로 드러난다(AGENTS Rule 12). 단, `extra="forbid"`는 **TOML 파일 키에만** 적용된다 —
-  `DATA_PIPELINE_*` env의 오타 키는 pydantic-settings 표준 동작상 조용히 무시된다.
+  `ConfigError`로 드러난다(AGENTS Rule 12). 단, 최상위 섹션이 없는 `DATA_PIPELINE_*` env 키(오타 포함)는
+  pydantic-settings 표준 동작상 조용히 무시된다. **있는 섹션 아래의 모르는 키**(예: 이전 이미지에
+  `DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY`)는 `extra="forbid"`로 기동을 거부한다(ALPHA-1087 실측).
+
+### KIS 공유 호출 예산 (ALPHA-1087, 기본 비활성)
+
+KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으로 **프로세스마다 따로** 간격을 둔다
+(`KIS_MIN_INTERVAL_SEC`). 그래서 합계가 앱키 한도를 넘을 수 있다. 공유 예산을 켜면 모든 호출이 PostgreSQL
+`call_budget`·`call_budget_class` 표에서 발신 슬롯을 받는다. 클래스 우선순위도 적용된다:
+0 분 가격 워커 > 1 발화 보충(아직 호출자 없음) > 2 장중 레인(iNAV·업종지수·장중 수급) > 3 EOD 배치·과거일 백필. 허용 저장소에 닿지 못하거나 대기 상한을 넘기면 호출하지 않는다.
+이때 `CallBudgetError`(`StopFetch` 계열 — 소스 수집 중단)를 낸다. 오류 문자열은 `CALL_BUDGET_UNAVAILABLE`·
+`CALL_BUDGET_DEADLINE`·`CALL_BUDGET_MISCONFIGURED` 로 시작한다. `failures.http_failure()` 로 분류하는 경로에서는 실패 코드가
+`CALL_BUDGET_BLOCKED`(TRANSIENT)이고, `StopFetch` 를 직접 기록하는 경로(일봉 가격·수급 등)는 `status='stopped'` 와 그 오류 문자열만 남긴다.
+저장소 호출 1회(잠금 대기·이름 해석·연결·TLS·질의)는 `statement_timeout_ms` + 0.5s 안에 끝난다. DNS 도 이 기한 안에서
+풀어 libpq 에 주소로 넘긴다(libpq 는 이름을 동기로 푼다 — 무응답 DNS 에서 20초 실측). 응답을 못 받으면 서버가 예약을
+확정했어도 발신하지 않고, 그 커넥션은 버린다. `pace()` 전체는 `max_wait_sec` 안에 끝나고, `pace()` 가 돌아온 뒤 HTTP
+연결까지의 지연은 이 기한에 들지 않는다. 결정과 검증 범위는 [ADR-0055](../../../../docs/adr/0055-kis-shared-call-budget-on-postgres.md)에 있다.
+
+- 켜기: `DATA_PIPELINE_CALL_BUDGET__ENABLED=true`(terraform `call_budget_enabled`, 기본 `false`).
+  그 밖의 키(`BUDGET_ID`·`RTT_MAX_SEC`·`SEND_WINDOW_SEC`·`MAX_WAIT_SEC` 등)는 `CallBudgetConfig` 가
+  정본이다. 기본값 25ms·50ms 는 **로컬 실험 설정**이고, 운영 측정으로 확정한 값이 아니다.
+- 분봉 워커 동시 요청 `DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY`(기본 1, 최대 4)는
+  공유 예산이 켜졌을 때만 적용된다. 꺼져 있으면 경고를 남기고 1로 돈다. terraform 은 같은 변수가
+  `true`일 때만 2를 싣고, `false`면 변수를 싣지 않는다(코드 기본 1). 이 필드를 모르는 이전 이미지가
+  기동을 거부하지 않게 하기 위해서다 — 머지 배포에서 terraform-apply 가 이미지 배포보다 먼저 끝날 수 있다.
+- 운영 CLI(DB env 필요):
+  ```bash
+  python -m data_pipeline.sources.call_budget init kis 15     # 표·클래스 시드(이미 있으면 그대로)
+  python -m data_pipeline.sources.call_budget pause kis       # 신규 허용 중단 + 예약 소진까지 대기
+  python -m data_pipeline.sources.call_budget resume kis
+  python -m data_pipeline.sources.call_budget status kis      # (id, rate, paused, 다음 슬롯까지 초; 음수=예약 없음)
+  ```
+  전환·롤백은 **세션 밖(야간)** 에 하고, 켠 상태에서 문제가 나면 `pause` 를 쓴다.
+  `false` 로 되돌리면 호출자가 다시 제각각 간격을 두므로, 앱키 한도 준수는 보장되지 않는다(전환 전 상태와 같다).
+- 수동 5분 백필(`scripts/backfill_intraday_5m.py`)은 KIS 태스크 정의에 공유 예산이 켜져 있으면
+  시작하지 않는다. 이 스크립트는 예산 밖에서 호출하기 때문이다. 다만 이 가드가 완전한 차단은 아니며,
+  1차 통제는 운영 절차다.
 
 ## 레이크 저장 계약
 

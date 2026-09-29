@@ -58,6 +58,7 @@ from .commit import (
     MinuteCommitter,
 )
 from .models import KST, CollectionRequest, Universe
+from ..sources.call_budget import CLASS_BATCH, CLASS_LANE, CLASS_MONITOR, kis_http_client, make_pacer
 from .repository import MinuteLedger
 from .rollup import maybe_rollup
 
@@ -821,7 +822,7 @@ def _require_credentials(pair: tuple[str | None, str | None], env_names: str) ->
         )
 
 
-def make_price_collector(options, *, session_date) -> tuple[object, bool]:
+def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[object, bool]:
     """설정 `source` + 세션 날짜 → `(collector, is_backfill)`. **미지 소스는 기동 거부**(ALPHA-735).
 
     조용한 폴백을 두지 않는다: 오타 source 로 토스가 끼워지면 원장 source_group 과 갈린
@@ -858,13 +859,22 @@ def make_price_collector(options, *, session_date) -> tuple[object, bool]:
             "DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET",
         )
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
-        http = PoliteClient(min_interval=options.min_interval_sec)
+        # 공유 호출 허용(ALPHA-1087): pacer_for(is_backfill) 가 None 이 아니면 로컬 간격 대신 call_budget 을 쓴다.
+        http = PoliteClient(min_interval=options.min_interval_sec,
+                            pacer=pacer_for(is_backfill) if pacer_for else None)
         if is_backfill:
             return KisPriceCollector(client=KisHistoricalMinuteClient(
                 options.app_key, options.app_secret, http, session_date=session_date,
             )), is_backfill
+        concurrency = options.fetch_concurrency
+        if concurrency > 1 and http.pacer is None:
+            # 공유 허용 없이 동시 요청을 켜면 로컬 간격(0.08초) 안에서 실제 발신률만 올라간다 — 합산이 이미
+            # 한도에 닿는 기존 방식을 더 나쁘게 만든다(ALPHA-1087). 동시성은 공유 허용과 함께일 때만 쓴다.
+            logger.warning("fetch_concurrency=%d 무시 — 공유 호출 허용이 꺼져 있다(동시성 1로 수집)", concurrency)
+            concurrency = 1
         return KisPriceCollector(
-            client=KisMinuteClient(options.app_key, options.app_secret, http)
+            client=KisMinuteClient(options.app_key, options.app_secret, http),
+            concurrency=concurrency,
         ), is_backfill
     if options.source == "toss":
         from ..sources.toss import TossOpenApiClient
@@ -949,7 +959,13 @@ def price_worker_cli(settings, *, session_date: str | None, universe: str | None
     # 자정 경계에서 collector 는 당일 TR 인데 게이트는 소급으로 판정해 정상 재기동이
     # 그 순간에만 거부된다. 무엇을 골랐는지는 collector 를 뜯어 되묻지 않고 같이 받는다
     # (ALPHA-863 — 되물으면 배선 변경이 판정을 조용히 뒤집는다).
-    collector, is_backfill = make_price_collector(options, session_date=parsed_day)
+    collector, is_backfill = make_price_collector(
+        options, session_date=parsed_day,
+        # 현재 window 는 ETF·구성종목을 한 순회로 모은다 — 등급을 종목별로 나눌 수 없어 워커 전체가 한 등급이다.
+        pacer_for=lambda backfill: make_pacer(
+            settings, caller="minute-price-backfill" if backfill else "minute-price",
+            call_class=CLASS_BATCH if backfill else CLASS_MONITOR),
+    )
     universe_model = load_universe_uri(universe)
     if is_backfill and options.source == "kis" and universe_model.extended_hours_ids:
         # ⚠️ 이 게이트만은 **벤더 축이 남아 있다**(ALPHA-863). 백필 판정 자체는 날짜
@@ -1127,7 +1143,6 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
 
     from ..db import stable_domain_id
     from ..lake.storage import make_storage
-    from ..sources.http import PoliteClient
     from ..sources.kis_sector_index import KisSectorIndexClient
     from .models import config_set_identity
     from .sector_index_collect import KisSectorIndexCollector
@@ -1213,7 +1228,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
         client = KisSectorIndexClient(
             settings.kis_nav.source.app_key, settings.kis_nav.source.app_secret,
             # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
-            PoliteClient(min_interval=0.5),
+            kis_http_client(settings, min_interval=0.5, caller="sector-index", call_class=CLASS_LANE),
             index_map,
             # ⚠️ `env` 는 **자격증명과 한 몸이다** — vps 키를 prod 도메인에 던지면 토큰
             # 발급부터 실패한다. 빌려 온 섹션의 이 축은 반드시 같이 가져와야 한다
@@ -1315,7 +1330,6 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
 
     from ..db import stable_domain_id
     from ..lake.storage import make_storage
-    from ..sources.http import PoliteClient
     from ..sources.kis_inav import DEFAULT_INTERVAL_SEC, SKIP_BEFORE_OPEN, KisInavSource
     from .inav_collect import KisInavCollector
     from .models import load_universe_uri
@@ -1347,7 +1361,7 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
         settings.kis_nav.source,
         settings.krx_etf.source.etf_map,
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
-        PoliteClient(min_interval=0.5),
+        kis_http_client(settings, min_interval=0.5, caller="inav", call_class=CLASS_LANE),
         interval_sec=DEFAULT_INTERVAL_SEC,
     )
     # ⚠️ **수집 전에 막는다.** 틀린 날짜·휴장일에 돌면 지금 값이 그 날짜의 **불변**
