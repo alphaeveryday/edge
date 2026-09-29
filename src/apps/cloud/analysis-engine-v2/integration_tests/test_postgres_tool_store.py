@@ -10,6 +10,7 @@ from psycopg.conninfo import conninfo_to_dict
 
 from edge_analysis_v2.tool_store import ToolStore
 from edge_analysis_v2.audited_execution import AuditedExecution, ToolExecutionError
+from edge_analysis_v2.audit_reader import read_analysis_evidence
 
 
 @pytest.fixture
@@ -80,6 +81,27 @@ def test_failure_is_visible_without_a_fabricated_result(audit):
     assert record["status"] == "failed"
     assert record["output"] is None
     assert record["error_message"] == "Missing finalized data"
+
+
+def test_reader_separates_analysis_kinds_and_keeps_failed_evidence(audit):
+    store, args, definition, dsn = audit
+    store.save_run(**args)
+    failed_id = args["tool_run_id"] + "-failed"
+    store.save_run(**(args | {"tool_run_id": failed_id, "output": None,
+                             "error_message": "Missing data"}))
+    with psycopg.connect(dsn, autocommit=True) as reader:
+        result = read_analysis_evidence(reader, "movement", args["analysis_id"])
+        outlook = read_analysis_evidence(reader, "outlook", args["analysis_id"])
+        assert read_analysis_evidence(reader, "movement", "missing") is None
+    assert result["storage"] == "postgresql"
+    assert result["analysis"]["analysis_id"] == args["analysis_id"]
+    assert len(result["tool_runs"]) == 2
+    assert result["tool_runs"][0]["output"] == args["output"]
+    assert result["tool_runs"][1]["status"] == "failed"
+    assert result["tool_runs"][1]["output"] is None
+    assert result["tool_runs"][1]["error_message"] == "Missing data"
+    assert outlook["tool_runs"] == []
+    assert result["definitions"][definition["tool_id"]]["formula_latex"] == definition["formula_latex"]
 
 
 def test_duplicate_execution_cannot_overwrite_evidence(audit):

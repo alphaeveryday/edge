@@ -368,6 +368,95 @@
         <mxCell id="relation-8-parent" value="0..1" vertex="1" parent="relation-8" style="edgeLabel;html=0;fontSize=12;">
           <mxGeometry as="geometry" relative="1" x="0.6" />
         </mxCell>
+        <mxCell id="outlook_analyses-issue_headline" value="issue_headline : text" vertex="1" parent="outlook_analyses" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="359" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics" value="outlook_factor_metrics" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
+          <mxGeometry as="geometry" x="2040" y="140" width="410" height="300" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-analysis_id" value="analysis_id : text" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-factor_type" value="factor_type : text" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-metric_key" value="metric_key : text" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-numeric_value" value="numeric_value : numeric" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-text_value" value="text_value : text" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-observed_date" value="observed_date : date" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-observed_at" value="observed_at : timestamptz" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="170" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-subject" value="subject : text" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="191" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-position" value="position : int" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="212" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_factor_metrics-tool_run_ids" value="tool_run_ids : text[]" vertex="1" parent="outlook_factor_metrics" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="233" width="390" height="21" />
+        </mxCell>
+        <mxCell id="relation-9" source="outlook_factor_metrics" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="2000" y="190" />
+              <mxPoint x="2000" y="115" />
+              <mxPoint x="1450" y="115" />
+              <mxPoint x="1450" y="180" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-9-child" value="0..N" vertex="1" parent="relation-9" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-9-parent" value="1" vertex="1" parent="relation-9" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
+        <mxCell id="outlook_issue_items" value="outlook_issue_items" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
+          <mxGeometry as="geometry" x="2040" y="590" width="410" height="300" />
+        </mxCell>
+        <mxCell id="outlook_issue_items-analysis_id" value="analysis_id : text" vertex="1" parent="outlook_issue_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="44" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_issue_items-position" value="position : int" vertex="1" parent="outlook_issue_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="65" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_issue_items-title_keyword" value="title_keyword : text" vertex="1" parent="outlook_issue_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="86" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_issue_items-sentence" value="sentence : text" vertex="1" parent="outlook_issue_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="107" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_issue_items-sentiment" value="sentiment : text" vertex="1" parent="outlook_issue_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="128" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_issue_items-tool_run_ids" value="tool_run_ids : text[]" vertex="1" parent="outlook_issue_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="149" width="390" height="21" />
+        </mxCell>
+        <mxCell id="relation-10" source="outlook_issue_items" target="outlook_analyses" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=0;endArrow=block;strokeColor=#64748b;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="2000" y="640" />
+              <mxPoint x="2000" y="560" />
+              <mxPoint x="1450" y="560" />
+              <mxPoint x="1450" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="relation-10-child" value="0..N" vertex="1" parent="relation-10" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="-0.6" />
+        </mxCell>
+        <mxCell id="relation-10-parent" value="1" vertex="1" parent="relation-10" style="edgeLabel;html=0;fontSize=12;">
+          <mxGeometry as="geometry" relative="1" x="0.6" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>

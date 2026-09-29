@@ -8,12 +8,16 @@ from uuid import uuid4
 from .tool_store import ToolStore
 
 
+class ToolInputError(ValueError):
+    """A trusted, safe validation message that the caller can correct."""
+
+
 class ToolExecutionError(RuntimeError):
     """A failed calculation whose audit record can be retrieved by execution ID."""
 
-    def __init__(self, tool_run_id: str):
+    def __init__(self, tool_run_id: str, message: str = "Tool execution failed"):
         self.tool_run_id = tool_run_id
-        super().__init__(f"Tool execution failed; tool_run_id={tool_run_id}")
+        super().__init__(f"{message}; tool_run_id={tool_run_id}")
 
 
 class AuditedExecution:
@@ -66,12 +70,13 @@ class AuditedExecution:
                      started_at=datetime.now(timezone.utc))
         try:
             output = self._call(name, deepcopy(arguments))
-        except Exception:
+        except Exception as error:
             run_id = uuid4().hex
+            message = str(error) if isinstance(error, ToolInputError) else "Tool execution failed"
             self._store.save_run(**saved, tool_run_id=run_id, output=None,
                                  finished_at=datetime.now(timezone.utc),
-                                 error_message="Tool execution failed")
-            raise ToolExecutionError(run_id) from None
+                                 error_message=message)
+            raise ToolExecutionError(run_id, message) from None
         if not isinstance(output, dict) or not isinstance(output.get("tool_run_id"), str):
             raise ValueError("Tool response requires an execution identifier")
         return self._store.save_run(**saved, tool_run_id=output["tool_run_id"], output=output,

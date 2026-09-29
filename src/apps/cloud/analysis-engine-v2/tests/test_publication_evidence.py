@@ -1,0 +1,42 @@
+"""Check final evidence authorization independently of database availability."""
+
+from datetime import datetime
+
+import pytest
+
+from edge_analysis_v2.publication_store import PublicationStore
+
+
+class Cursor:
+    def __init__(self, row):
+        self.row = row
+
+    def execute(self, query, arguments):
+        assert arguments == ("run-1",)
+
+    def fetchone(self):
+        return self.row
+
+
+@pytest.mark.parametrize("include_body", [True, None, "false", 0])
+def test_only_explicit_false_news_lookup_can_be_used_as_final_evidence(include_body):
+    store = object.__new__(PublicationStore)
+    store.final_tool_names = frozenset({"get_issue_evidence"})
+    now = datetime.fromisoformat("2026-09-28T08:30:00+09:00")
+    analysis = {"analysis_id":"a", "etf_code":"ETF", "analysis_at":now}
+    run = {"function_name":"get_issue_evidence", "status":"completed", "etf_code":"ETF", "analysis_at":now,
+           "movement_analysis_id":"a", "outlook_analysis_id":None, "arguments":{"include_body":include_body}}
+    with pytest.raises(ValueError, match="exclude article body"):
+        store._evidence(Cursor(run), ["run-1"], analysis)
+    run["arguments"]["include_body"] = False
+    store._evidence(Cursor(run), ["run-1"], analysis)
+
+
+def test_another_etfs_successful_run_is_not_evidence_for_this_etf():
+    store = object.__new__(PublicationStore)
+    store.final_tool_names = frozenset({"sum"})
+    now = datetime.fromisoformat("2026-09-28T08:30:00+09:00")
+    analysis = {"analysis_id":"a", "etf_code":"ETF", "analysis_at":now}
+    run = {"function_name":"sum", "status":"completed", "etf_code":"OTHER", "analysis_at":now}
+    with pytest.raises(ValueError, match="foreign"):
+        store._evidence(Cursor(run), ["run-1"], analysis)

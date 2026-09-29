@@ -5,7 +5,8 @@ DO $$
 DECLARE
     r record;
     results text[] := ARRAY['movement_analyses','movement_items','outlook_analyses',
-        'outlook_items','outlook_factors','outlook_conclusion_keywords'];
+        'outlook_items','outlook_factors','outlook_conclusion_keywords',
+        'outlook_factor_metrics','outlook_issue_items'];
     audit text[] := ARRAY['tool_definitions','tool_runs'];
 BEGIN
     SELECT * INTO STRICT r FROM pg_roles WHERE rolname = 'edge_analysis_v2_writer';

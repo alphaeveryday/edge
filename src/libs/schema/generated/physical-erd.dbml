@@ -946,6 +946,7 @@ Table "outlook_analyses" {
   "conclusion_title" text
   "conclusion_sentence" text
   "change_condition" text
+  "issue_headline" text
 }
 
 Table "outlook_conclusion_keywords" {
@@ -957,12 +958,42 @@ Table "outlook_conclusion_keywords" {
   "tool_run_ids" text[] [not null]
 }
 
+Table "outlook_factor_metrics" {
+  "analysis_id" text [not null]
+  "factor_type" text [not null]
+  "metric_key" text [not null]
+  "numeric_value" numeric
+  "text_value" text
+  "observed_date" date
+  "observed_at" timestamptz
+  "subject" text
+  "position" int [not null]
+  "tool_run_ids" text[] [not null]
+
+  indexes {
+    ("analysis_id", "factor_type", "metric_key") [pk]
+  }
+}
+
 Table "outlook_factors" {
   "row_id" text [pk]
   "analysis_id" text [not null]
   "type" text [not null]
   "sticker" text [not null]
   "sentence" text [not null]
+}
+
+Table "outlook_issue_items" {
+  "analysis_id" text [not null]
+  "position" int [not null]
+  "title_keyword" text [not null]
+  "sentence" text [not null]
+  "sentiment" text [not null]
+  "tool_run_ids" text[] [not null]
+
+  indexes {
+    ("analysis_id", "position") [pk]
+  }
 }
 
 Table "outlook_items" {
@@ -1267,7 +1298,9 @@ Ref: "ops_expected_task"."expectation_snapshot_id" > "ops_expectation_snapshot".
 Ref: "ops_task_attempt"."expected_task_id" > "ops_expected_task"."expected_task_id"
 Ref: "outlook_analyses"."previous_analysis_id" > "outlook_analyses"."analysis_id"
 Ref: "outlook_conclusion_keywords"."analysis_id" > "outlook_analyses"."analysis_id"
+Ref: "outlook_factor_metrics"."analysis_id" > "outlook_analyses"."analysis_id"
 Ref: "outlook_factors"."analysis_id" > "outlook_analyses"."analysis_id"
+Ref: "outlook_issue_items"."analysis_id" > "outlook_analyses"."analysis_id"
 Ref: "outlook_items"."analysis_id" > "outlook_analyses"."analysis_id"
 Ref: "price_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "price_decomposition"."price_observation_id" > "price_observation"."price_observation_id"
