@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-// 토큰·디바이스 ID·온보딩 완료 보관. 네이티브는 키체인, 웹 미리보기는 localStorage
+// 키체인과 웹 저장소에 두는 토큰·디바이스 ID·온보딩 완료
 const KEYS = { access: 'etforca.access', refresh: 'etforca.refresh', device: 'etforca.device', onboarded: 'etforca.onboarded' } as const;
 type Key = keyof typeof KEYS;
 
@@ -19,7 +19,7 @@ const set = async (k: Key, v: string | null) => {
   else await SecureStore.setItemAsync(KEYS[k], v);
 };
 
-// 동시 첫 호출이 한 번의 읽기를 공유. 따로 읽으면 디바이스 ID 가 둘 생긴다
+// 디바이스 ID 중복 생성을 막는 첫 읽기 공유
 let loading: Promise<Record<Key, string | null>> | null = null;
 const load = () => (loading ??= (async () => ({ access: await get('access'), refresh: await get('refresh'), device: await get('device'), onboarded: await get('onboarded') }))());
 
@@ -51,7 +51,7 @@ export const onboarding = {
   },
 };
 
-// 게스트 식별자. 처음 요청할 때 만들어 영구 보관
+// 첫 요청 때 만들어 영구 보관하는 게스트 식별자
 export const deviceId = async () => {
   const c = await load();
   if (!c.device) {

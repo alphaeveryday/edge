@@ -19,13 +19,13 @@ interface Props {
   daily: DailyAnalysis | undefined;
   open: boolean;
   onClose: () => void;
-  // 탐색에서 열 때. 투표 카드와 다음 ETF 순환
+  // 탐색에서 열 때의 투표 카드와 다음 ETF
   withVote?: boolean;
   next?: { code: string; name: string };
   onNext?: () => void;
 }
 
-// 분석 상세. 화면을 거의 다 덮는 시트
+// 화면을 거의 다 덮는 분석 상세 시트
 export function DailySheet({ code, daily: d, open, onClose, withVote, next, onNext }: Props) {
   const router = useRouter();
   const { top, bottom } = useSafeAreaInsets();

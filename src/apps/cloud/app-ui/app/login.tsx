@@ -9,7 +9,7 @@ import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-// 로그인 진입 화면. CTA 3개, 이메일은 폼 화면으로
+// 소셜 둘과 이메일 진입 버튼의 로그인 첫 화면
 export default function Login() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();

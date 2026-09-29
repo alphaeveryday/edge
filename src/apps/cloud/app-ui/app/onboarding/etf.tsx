@@ -18,7 +18,7 @@ export default function EtfPick() {
   const { data } = useEtfList();
   const { data: themeList } = useThemes();
   const { themes, etfs, toggleEtf } = useOnboarding();
-  // 고른 테마는 key, ETF 의 theme 은 라벨
+  // ETF 테마 표기에 맞춘 고른 테마의 라벨
   const picked = useMemo(() => (themeList ?? []).filter((t) => themes.includes(t.key)).map((t) => t.label), [themeList, themes]);
   const finishOnboarding = useSession((s) => s.finishOnboarding);
   const [q, setQ] = useState('');

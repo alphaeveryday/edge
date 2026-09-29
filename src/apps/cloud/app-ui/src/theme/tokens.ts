@@ -23,7 +23,7 @@ export const colors = {
   positive: '#0E8A6C',
 } as const;
 
-// 전망 스티커 5단계 (Sticker.dc.html 의 color/labelColor/bg 값)
+// 전망 스티커 5단계 색
 export const signal = {
   strongUp: { label: '강력 상승', mark: '▲', double: true, color: '#F04452', labelColor: '#D22F3D', bg: 'rgba(240,68,82,0.18)', line: 'rgba(240,68,82,0.18)' },
   up: { label: '상승', mark: '▲', double: false, color: '#F04452', labelColor: '#D22F3D', bg: 'rgba(240,68,82,0.18)', line: 'rgba(240,68,82,0.18)' },

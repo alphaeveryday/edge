@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnreadCount } from '@/features/notification/queries';
 import { IconButton } from './ui';
 
-// 홈 등 탭 화면 우상단의 떠 있는 검색·알림·메뉴 버튼
+// 탭 화면 우상단의 검색·알림·메뉴 버튼
 export function TopBar() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();

@@ -12,7 +12,7 @@ import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
-// 인메모리 쓰기 상태. 앱 재시작 시 초기화
+// 앱 재시작 시 초기화되는 인메모리 쓰기 상태
 const posts = [...POSTS, ...ETF_POSTS].map((p) => ({ ...p }));
 const votes: Record<string, VoteChoice | null> = {};
 const ME: Me = { nick: '지수', handle: '@me', avatarBg: '#3D34E0', email: 'jisoo.kim@gmail.com' };
@@ -34,7 +34,7 @@ const etfOf = (code: string) => ETFS.find((e) => e.code === code)!;
 const groupList = (): WatchGroup[] => groups.map((g) => ({ ...g, count: (members[g.key] ?? []).length }));
 
 const hash = (str: string) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 16777619) >>> 0; } return h; };
-// 투표 분포: 종목 코드 시드 + 내 표 1
+// 종목 코드 시드 분포에 내 표를 더한 투표 현황
 const voteStatOf = (code: string): VoteStat => {
   const h = hash(code);
   const buy = 30 + (h % 23), sell = 18 + ((h >> 5) % 17);

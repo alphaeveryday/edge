@@ -19,7 +19,7 @@ export default function Explore() {
   const toast = useToast((s) => s.show);
   const q = useRank();
   const rows = q.data ?? [];
-  // 행 클릭 → 분석 상세 시트. 다음 ETF 는 순위 순환
+  // 순위 순서로 넘기는 분석 상세 시트
   const [sel, setSel] = useState<number | null>(null);
   const cur = sel === null ? undefined : rows[sel];
   const daily = useDaily(cur?.etf.code ?? '', undefined, !!cur);

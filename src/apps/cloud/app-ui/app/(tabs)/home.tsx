@@ -25,7 +25,7 @@ export default function Home() {
   const posts = useHotPosts();
   const qc = useQueryClient();
   const toast = useToast((s) => s.show);
-  // 오늘 움직임 발행본이 있을 때만 상세로. 없으면 토스트
+  // 발행본이 없으면 이동 대신 토스트
   const open = async (code: string) => {
     try {
       await qc.fetchQuery({ queryKey: ['etf', 'move', code], queryFn: () => api.etf.move(code) });

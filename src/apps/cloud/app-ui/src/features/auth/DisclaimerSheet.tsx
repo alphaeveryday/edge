@@ -12,7 +12,7 @@ const LINES = [
   '분석은 매일 새벽 갱신되고, 장중 변동은 반영되지 않을 수 있어요.',
 ];
 
-// AI 분석에 처음 들어올 때 한 번 동의를 받는다. 동의 시각은 사용자 프로필에 저장
+// AI 분석 첫 진입 시 한 번 받는 면책 동의
 export function DisclaimerSheet() {
   const qc = useQueryClient();
   const { data: me } = useMe();

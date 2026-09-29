@@ -12,7 +12,7 @@ import { fam } from '@/theme/typography';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// 이메일 폼. 가입과 로그인을 한 화면에서 전환
+// 가입과 로그인을 오가는 이메일 폼
 export default function EmailAuth() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
@@ -33,7 +33,7 @@ export default function EmailAuth() {
   const ready = EMAIL.test(email) && (signup ? pw.length >= 8 && pw === pw2 && nick.trim().length >= 2 : pw.length > 0);
   const done = () => {
     login();
-    // 폼과 로그인 진입 화면을 함께 닫고 원래 화면으로
+    // 폼과 로그인 화면을 함께 닫고 원래 화면으로 복귀
     if (router.canDismiss()) router.dismiss(2);
     else router.replace('/(tabs)/home');
     toast(signup ? '가입을 마쳤어요' : '로그인했어요');

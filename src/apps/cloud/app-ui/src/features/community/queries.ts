@@ -25,7 +25,7 @@ const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ['community', 'hot'] });
 };
 
-// 좋아요는 회원만. 비로그인이면 유도 시트
+// 비로그인 시 유도 시트로 가는 회원 전용 좋아요
 export const useToggleLike = () => {
   const qc = useQueryClient();
   const requireLogin = useRequireLogin();

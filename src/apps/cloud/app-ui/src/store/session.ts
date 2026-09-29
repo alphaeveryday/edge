@@ -26,9 +26,9 @@ export const useSession = create<SessionState>((set) => ({
   finishOnboarding: () => { onboarding.save(true); set({ onboarded: true }); },
   login: () => set({ loggedIn: true, gateOpen: false }),
   logout: () => { onboarding.save(false); set({ loggedIn: false, onboarded: false }); },
-  // 토큰이 서버에서 거부된 뒤. 온보딩 상태는 유지
+  // 서버의 토큰 거부 시 온보딩 상태를 둔 로그아웃
   expire: () => set({ loggedIn: false }),
-  // 기동 시 온보딩 완료 복원. 보관된 토큰으로 /me 가 통하면 로그인 상태 복원, 거부되면 토큰 폐기
+  // 기동 시 온보딩 완료와 회원 확인 기반 로그인 상태 복원
   restore: async () => {
     const onboarded = await onboarding.done();
     let loggedIn = false;
@@ -46,7 +46,7 @@ export const useSession = create<SessionState>((set) => ({
   closeGate: () => set({ gateOpen: false }),
 }));
 
-// 로그인이 필요한 동작을 감싼다. 비로그인이면 유도 시트를 띄우고 동작은 실행하지 않는다
+// 비로그인 시 동작 대신 유도 시트를 띄우는 래퍼
 export const useRequireLogin = () => {
   const loggedIn = useSession((s) => s.loggedIn);
   const openGate = useSession((s) => s.openGate);

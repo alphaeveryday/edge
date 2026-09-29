@@ -4,7 +4,7 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useHint } from './queries';
 
-// 용어·기준 설명 카드 (화면 하단 떠 있는 카드)
+// 화면 하단에 뜨는 용어와 기준 설명 카드
 export function HintSheet({ hintKey, onClose }: { hintKey: string | null; onClose: () => void }) {
   const { data: h } = useHint(hintKey);
   return (

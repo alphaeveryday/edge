@@ -6,7 +6,7 @@ export const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:808
 interface Envelope<T> { isSuccess: boolean; code: string; message: string; result?: T }
 type Query = Record<string, string | number | undefined>;
 
-// 서버 code → 앱 ApiErrorCode. 코드별 명시 매핑, 없으면 INVALID
+// 서버 코드의 앱 오류 코드 명시 매핑
 const CODE_MAP: Record<string, ApiErrorCode> = {
   COMMON401: 'UNAUTHORIZED',
   AUTH4001: 'UNAUTHORIZED',
@@ -26,7 +26,7 @@ const qs = (q?: Query) => {
 };
 
 let refreshing: Promise<boolean> | null = null;
-// 액세스 만료 시 리프레시 1회. 동시 요청은 한 번의 갱신을 공유한다
+// 액세스 만료 시 동시 요청이 공유하는 리프레시 1회
 const tryRefresh = () => {
   refreshing ??= (async () => {
     const refresh = await tokens.refresh();
@@ -46,7 +46,7 @@ const tryRefresh = () => {
   return refreshing;
 };
 
-// auth: 기본은 Bearer(없으면 X-Device-Id), 'device' 는 X-Device-Id 만(로그인·가입, 서버가 게스트 데이터를 계정에 매핑), false 는 헤더 없음
+// 로그인과 가입은 게스트 데이터 매핑용 디바이스 헤더만 전송
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; auth?: boolean | 'device'; retry?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';

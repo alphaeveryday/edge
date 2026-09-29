@@ -8,7 +8,7 @@ interface Props {
   onEdit?: () => void;
 }
 
-// 관심 그룹 칩 줄. 홈·관심·관심 편집이 공유
+// 홈·관심·관심 편집 공용 그룹 칩 줄
 export function GroupChips({ onAdd, onEdit }: Props) {
   const { data } = useWatchGroups();
   const { group, setGroup } = useWatchGroup();

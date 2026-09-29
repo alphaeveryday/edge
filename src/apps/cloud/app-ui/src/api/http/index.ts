@@ -9,11 +9,11 @@ import { tokens } from './storage';
 interface WireAuth { accessToken: string; refreshToken: string; me: m.WireMe; guestMapped?: boolean }
 const signIn = async (r: WireAuth) => { await tokens.save(r.accessToken, r.refreshToken); return m.me(r.me); };
 
-// 서버가 없는 것: 최근 본 ETF(기기 보관), 용어 힌트(앱 번들), 내 투표 선택(응답에 없음)
+// 서버에 없는 최근 본 ETF와 내 투표 선택의 메모리 보관
 let recent: EtfSummary[] = [];
 const myVotes: Record<string, VoteChoice | null> = {};
 
-// 와이어의 theme 은 key. 화면은 라벨을 쓰므로 테마 목록을 한 번 받아 바꿔 준다(색은 key 기준 유지)
+// 와이어 테마 key 의 화면용 라벨 변환
 let themeLabels: Promise<Record<string, string>> | null = null;
 const labels = () => (themeLabels ??= request<m.WireTheme[]>('GET', '/themes', { auth: false }).then((l) => Object.fromEntries(l.map((t) => [t.key, t.label]))));
 const labelOf = async (key: string) => (await labels())[key] ?? key;
@@ -90,19 +90,19 @@ export const httpClient: ApiClient = {
     posts: async (code) => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code } })).items),
     feed: async (scope) => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope } })).items),
     mine: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine' } })).items),
-    // 공개 조회지만 요청자를 보내야 liked·mine 이 채워진다
+    // 내 좋아요와 내 글 판정용 요청자 동봉
     get: async (id) => post(await request<m.WirePost>('GET', `/posts/${id}`)),
     replies: async (id) => (await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`, { auth: false })).items.map(m.reply),
     reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
     create: async (input) => post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
-    // 계약은 PUT/DELETE 두 개. 현재 liked 를 모르는 호출자라 조회 후 분기
+    // 현재 좋아요 여부 조회 후 추가와 취소 분기
     toggleLike: async (id) => {
       const cur = await request<m.WirePost>('GET', `/posts/${id}`);
       return post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
     },
     voteStat: async (code) => m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVotes[code] ?? null),
-    // 응답에 현황이 없어 성공 후 count 를 다시 읽는다
+    // 현황 없는 응답이라 성공 후 집계 재조회
     vote: async (code, choice) => {
       await request<void>('PUT', `/etfs/${code}/vote`, { body: { choice } });
       myVotes[code] = choice;
@@ -124,7 +124,7 @@ export const httpClient: ApiClient = {
   },
   auth: {
     login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' })),
-    // 플랫폼 idToken 발급(expo-apple-authentication 등)은 아직 없다. 스텁 서버는 값을 보지 않는다
+    // 플랫폼 로그인 SDK 도입 전 임시 토큰 값
     social: async (provider) => signIn(await request<WireAuth>('POST', '/auth/social', { body: { provider, idToken: 'todo' }, auth: 'device' })),
     signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' })),
     requestPasswordReset: (email) => request<void>('POST', '/auth/password-reset', { body: { email }, auth: false }),

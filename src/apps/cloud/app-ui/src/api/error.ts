@@ -1,6 +1,6 @@
 export type ApiErrorCode = 'NOT_READY' | 'NOT_FOUND' | 'NETWORK' | 'UNAUTHORIZED' | 'INVALID';
 
-// 화면이 상태를 갈라 보여줄 수 있도록 실패 원인을 코드로 싣는다
+// 화면 분기용 실패 원인 코드
 export class ApiError extends Error {
   constructor(public code: ApiErrorCode, message?: string) {
     super(message ?? code);

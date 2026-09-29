@@ -1,6 +1,6 @@
 import type { ThemeDetail, ThemeFeedItem } from '../types';
 
-// 탐색 순위 행의 헤드라인(경제기사 제목형)과 키워드 칩
+// 탐색 순위 행의 헤드라인과 키워드 칩
 export const RANK_META: Record<string, { title: string; chips: string[]; ready: boolean }> = {
   AXAI: { title: '메모리 값 3개월째 상승, SK하이닉스 이익률 49%', chips: ['환가 상승 지속', '고부가 비중 확대'], ready: true },
   DEFN: { title: '유럽 무기 주문 3분기 연속 증가, 한화에어로 5년치 일감', chips: ['수주 잔고 확대', '수익성 개선'], ready: true },

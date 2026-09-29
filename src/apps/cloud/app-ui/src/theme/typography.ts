@@ -17,7 +17,7 @@ export const fontAssets = {
   JetBrainsMono_800ExtraBold,
 };
 
-// RN 은 커스텀 폰트에 fontWeight 를 적용하지 않으므로 굵기별 패밀리명을 직접 고른다
+// 커스텀 폰트 굵기 미적용 대응용 굵기별 패밀리
 export const fam = {
   regular: 'Pretendard-Regular',
   medium: 'Pretendard-Medium',

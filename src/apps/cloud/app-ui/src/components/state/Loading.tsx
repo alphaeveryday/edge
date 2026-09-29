@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
 import { colors } from '@/theme/tokens';
 
-// 목록·본문 공용 스켈레톤. rows 줄 수만 조절한다
+// 목록과 본문 공용 스켈레톤
 export function Loading({ rows = 4 }: { rows?: number }) {
   const op = useRef(new Animated.Value(0.5)).current;
   useEffect(() => {

@@ -15,7 +15,7 @@ interface Props {
   children: ReactNode;
 }
 
-// 테마 선택 · ETF 선택 공통 틀: 네비 + 제목 + 본문 + 하단 CTA
+// 테마 선택과 ETF 선택 공통 틀
 export function PickShell({ navTitle = '', title, sub, cta, ctaDisabled, onBack, onNext, children }: Props) {
   const { top, bottom } = useSafeAreaInsets();
   return (

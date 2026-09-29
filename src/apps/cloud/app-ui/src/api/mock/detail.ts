@@ -1,6 +1,6 @@
 import type { Candle, ChartData, EtfDetailData, MoveInfo, Post } from '../types';
 
-// 결정적 의사난수 (시드 = 종목 코드)
+// 종목 코드 시드의 결정적 의사난수
 const hash = (s: string) => {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }

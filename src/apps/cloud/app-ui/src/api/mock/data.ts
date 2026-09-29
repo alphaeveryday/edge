@@ -1,6 +1,6 @@
 import type { EtfSummary, Post, Theme, WatchGroup } from '../types';
 
-// 디자인 스크립트 ETFS 의 name·theme·logoBg·price·dayChange 값
+// 디자인 원본의 ETF 표시 값
 export const ETFS: EtfSummary[] = [
   { code: 'AXAI', name: 'TIGER 반도체TOP10', theme: 'AI·반도체', logoBg: '#3D34E0', price: 12845, changePct: 3.2, signal: 'strongUp', hot: true, sub: '미래에셋 · 국내 반도체 상위 10종' },
   { code: 'DEFN', name: 'PLUS K방산', theme: '방산', logoBg: '#131318', price: 21480, changePct: 2.1, signal: 'strongUp', hot: true, sub: '한화 · 국내 방산 대표 10종' },

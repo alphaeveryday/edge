@@ -12,7 +12,7 @@ interface Props<T> {
   children: (data: T) => ReactNode;
 }
 
-// 로딩 → 스켈레톤, NOT_READY → 준비 중, 그 외 실패 → 오류+재시도, 성공 → children
+// 조회 상태별 스켈레톤·준비 중·오류 화면 분기
 export function QueryState<T>({ query, rows, pending, children }: Props<T>) {
   if (query.isPending) return <Loading rows={rows} />;
   if (query.isError) {

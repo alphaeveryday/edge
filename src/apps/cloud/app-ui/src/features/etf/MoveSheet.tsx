@@ -12,7 +12,7 @@ interface Props {
   onClose: () => void;
 }
 
-// 오늘 움직임 → 왜 움직였을까 상세 시트
+// 오늘 움직임의 원인 상세 시트
 export function MoveSheet({ etf, move, onClose }: Props) {
   const router = useRouter();
   return (

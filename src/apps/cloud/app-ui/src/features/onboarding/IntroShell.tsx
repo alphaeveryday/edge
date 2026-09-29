@@ -15,7 +15,7 @@ interface Props {
   children: ReactNode;
 }
 
-// 온보딩 1~3 공통 틀: 상단 일러스트 영역 + 문구 + 점 + CTA
+// 온보딩 소개 세 화면 공통 틀
 export function IntroShell({ step, title, body, accent, cta, onNext, children }: Props) {
   const { top, bottom } = useSafeAreaInsets();
   return (

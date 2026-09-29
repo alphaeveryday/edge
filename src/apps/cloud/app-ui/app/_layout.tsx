@@ -12,7 +12,7 @@ import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
-// 쓰기 요청이 401 로 끝나면 세션을 풀고 로그인 유도 시트
+// 쓰기 요청 401 시 세션 해제와 로그인 유도 시트
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (e) => {

@@ -19,7 +19,7 @@ export default function Community() {
   const { top } = useSafeAreaInsets();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const { data: posts } = useFeed(scope);
-  // 오늘의 투표는 탐색 1위 ETF
+  // 탐색 1위 ETF 대상의 오늘의 투표
   const voteCode = useRank().data?.[0]?.etf.code ?? '';
   const { data: stat } = useVoteStat(voteCode, !!voteCode);
   const { data: voteEtf } = useEtf(voteCode);

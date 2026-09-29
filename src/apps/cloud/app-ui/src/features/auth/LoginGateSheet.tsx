@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useSession } from '@/store/session';
 
-// 비로그인 상태에서 관심·투표·글쓰기를 누르면 뜨는 유도 시트
+// 비로그인 상태의 투표·글쓰기·답글·좋아요에 뜨는 로그인 유도 시트
 export function LoginGateSheet() {
   const router = useRouter();
   const { gateOpen, gateReason, closeGate } = useSession();

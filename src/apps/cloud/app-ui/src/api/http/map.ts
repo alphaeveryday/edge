@@ -1,7 +1,7 @@
 import type { Signal } from '@/theme/tokens';
 import type { Axis, Dir, EtfSummary, Me, VoteStat, VoteChoice, Post, Reply, Theme, ThemeDetail, ThemeFeedItem } from '../types';
 
-// 계약 응답 → 앱 타입. 계약에는 표시용 색·상대 시각·한글 축 라벨이 없어 여기서 만든다
+// 계약 응답의 앱 타입 변환과 표시용 값 생성
 
 const PALETTE = ['#3D34E0', '#131318', '#0E8A6C', '#E0562B', '#8B34E0', '#E8A13D', '#C9820E', '#1B64DA', '#6C5CF5'];
 const hash = (s: string) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; } return h; };
@@ -12,7 +12,7 @@ const AXIS_CODE: Record<Axis, string> = { 이슈: 'issue', 차트: 'chart', 매�
 export const axisLabel = (code: string): Axis => AXIS_LABEL[code] ?? '이슈';
 export const axisCode = (axis: Axis) => AXIS_CODE[axis];
 
-// ISO 시각 → "3분 전" 류. 서버는 시각만 준다
+// ISO 시각의 상대 시각 표기
 export const ago = (iso: string, now = Date.now()) => {
   const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
   if (s < 60) return '방금';
@@ -61,7 +61,7 @@ export interface WireReply { id: string; author: { name: string; handle: string 
 export const reply = (r: WireReply): Reply => ({ id: r.id, author: { name: r.author.name, avatarBg: bgOf(r.author.handle) }, time: ago(r.time), body: r.body });
 
 export interface WireVoteCount { buys: number; waits: number; sells: number; source: string }
-// 서버는 인원만 준다. 비율은 여기서, 내 선택은 앱이 기억한 마지막 투표
+// 서버 인원 수 기반 비율과 앱이 기억한 내 선택
 export const voteStat = (code: string, c: WireVoteCount, mine: VoteChoice | null): VoteStat => {
   const n = c.buys + c.waits + c.sells;
   const p = (x: number) => (n ? Math.round((x / n) * 100) : 0);
