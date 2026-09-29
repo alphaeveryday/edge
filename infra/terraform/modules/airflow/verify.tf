@@ -267,6 +267,8 @@ resource "aws_ecs_task_definition" "dbadmin" {
       { name = "PGPASSWORD", valueFrom = "${var.master_db_secret_arn}:password::" },
       { name = "META_PW", valueFrom = "${aws_secretsmanager_secret.airflow.arn}:meta_db_password::" },
       { name = "VERIFY_PW", valueFrom = "${aws_secretsmanager_secret.verify[0].arn}:verify_db_password::" },
+      { name = "META_SCRAM", valueFrom = "${aws_secretsmanager_secret.airflow.arn}:meta_db_password_scram::" },
+      { name = "VERIFY_SCRAM", valueFrom = "${aws_secretsmanager_secret.verify[0].arn}:verify_db_password_scram::" },
     ]
     logConfiguration = {
       logDriver = "awslogs"

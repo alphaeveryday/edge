@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 검증 관리 태스크(dbadmin, postgres:16) 명령 — 업무 RDS 인스턴스 안에 Airflow 전용 DB·역할을 만들고 지운다(ALPHA-1119).
 # run.py 가 이 파일을 gzip+base64 로 접어 RunTask override(bash -c)로 넘긴다 — 원문 그대로는 override 8,192자 제한을 넘는다.
-# 비밀번호는 ECS secrets 로만 들어온다(META_PW·VERIFY_PW·PGPASSWORD) — 명령행·로그에 찍지 않는다(psql -e 금지, set -x 금지).
+# 비밀번호는 ECS secrets 로만 들어온다(META_PW·VERIFY_PW·PGPASSWORD, 역할 생성용 SCRAM 검증자 META_SCRAM·VERIFY_SCRAM) — 명령행·로그에 찍지 않는다(psql -e 금지, set -x 금지).
 #
 # 권한 분리:
 # - airflow_meta: DB `airflow` 소유. 업무 DB(edge)의 테이블 권한 없음(PUBLIC 에도 테이블 권한이 없다 — privcheck 로 확인).
@@ -15,10 +15,12 @@ set -euo pipefail
 q() { psql -X -v ON_ERROR_STOP=1 -At "$@"; }
 
 create() {
+  case "${META_SCRAM:-}${VERIFY_SCRAM:-}" in SCRAM-SHA-256*SCRAM-SHA-256*) ;; *) echo "DBADMIN create: SCRAM 검증자 없음(run.py secrets)"; exit 1 ;; esac
   # 비밀번호는 명령행(-v)으로 넘기지 않는다(프로세스 목록에 보인다) — psql 안에서 환경변수를 읽는다(\getenv, psql 15+).
+  # SQL 에는 평문이 아니라 SCRAM 검증자(run.py secrets 가 만든 *_scram)를 넣는다 — 문장이 실패하면 서버 오류 로그에 남는다.
   q -v meta_user="$META_USER" -v verify_user="$VERIFY_USER" -v master="$PGUSER" <<'SQL'
-\getenv meta_pw META_PW
-\getenv verify_pw VERIFY_PW
+\getenv meta_pw META_SCRAM
+\getenv verify_pw VERIFY_SCRAM
 SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE CONNECTION LIMIT 10 PASSWORD %L', u, p)
   FROM (VALUES (:'meta_user', :'meta_pw'), (:'verify_user', :'verify_pw')) v(u, p)
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = u) \gexec

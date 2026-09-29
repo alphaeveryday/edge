@@ -316,7 +316,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 **구성(이번 검증).**
 - 일반 ECS on EC2 t4g.micro 1대(전용 클러스터, 업무 클러스터와 분리). 태스크 합산 메모리 1024(로컬 C1 통과값) — 등록 메모리보다 크면 배치되지 않고, 그것도 결과로 적는다(억지로 줄여 넣지 않는다).
 - 메타DB: **기존 업무 RDS 인스턴스 안의 전용 DB `airflow`·전용 역할 `airflow_meta`**. 검증 원장: 같은 인스턴스의 전용 DB `edge_verify`·역할 `airflow_verify`(업무 DB 스키마만 복제, 행 없음). 새 RDS·사양 변경·전역 파라미터 변경 없음.
-- 두 역할: 슈퍼유저·DB 생성·역할 생성 권한 없음, CONNECTION LIMIT 10, 역할 수준 `statement_timeout` 30초·`idle_in_transaction_session_timeout` 60초, 업무 DB 테이블 권한 0(관리 태스크 `privcheck` 로 확인), 새 DB 에 PUBLIC 접속 불가. 비밀번호는 Secrets Manager 에만(Terraform·로그·코드에 없음 — `run.py secrets` 가 만들고 찍지 않는다).
+- 두 역할: 슈퍼유저·DB 생성·역할 생성 권한 없음, CONNECTION LIMIT 10, 역할 수준 `statement_timeout` 30초·`idle_in_transaction_session_timeout` 60초, 업무 DB 테이블 권한 0(관리 태스크 `privcheck` 로 확인), 새 DB 에 PUBLIC 접속 불가. 비밀번호는 Secrets Manager 에만(Terraform·로그·코드에 없음 — `run.py secrets` 가 만들고 찍지 않는다). 역할 생성 SQL 에는 평문 대신 SCRAM 검증자(`*_scram`)를 넣는다 — 문장이 실패해도 RDS 오류 로그(`log_min_error_statement=error`)에 평문이 남지 않게. 관리 태스크의 소유자 권한 문장(PUBLIC 접속 회수·DB 삭제)은 `SET ROLE` 로 소유 역할이 되어 실행한다(RDS 마스터는 슈퍼유저가 아니고 두 역할을 `INHERIT FALSE` 로만 받는다).
 - DB·역할 생성·정리는 관리 태스크(`verify/dbadmin.sh`, postgres:16, 마스터 시크릿은 이 태스크의 execution 역할만 읽는다).
 - 호스트 관측기(`host_observer`): 5초마다 호스트 메모리·모든 cgroup(태스크·ECS·SSM·docker)·상위 프로세스, 커널 로그(OOM), docker 이벤트(종료 코드)를 **호스트 디스크에 append** — 대상이 죽어도 남는다. SSM 으로 수거.
 - 정기 DAG 는 모두 pause, `investor_intraday_orchestrator = "SFN"`·SFN 스케줄 그대로.

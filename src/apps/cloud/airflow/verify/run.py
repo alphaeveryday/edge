@@ -22,9 +22,11 @@ import argparse
 import base64
 import gzip
 import hashlib
+import hmac
 import io
 import json
 import os
+import re
 import secrets as pysecrets
 import subprocess
 import sys
@@ -74,19 +76,33 @@ def _bucket() -> str:
 
 
 # ── 시크릿(값은 어디에도 찍지 않는다) ──
+def scram(password: str) -> str:
+    """PostgreSQL SCRAM-SHA-256 검증자(RFC 5802/7677) — 역할 생성 SQL 에 평문 대신 넣는다.
+    CREATE/ALTER ROLE 이 실패하면 서버가 문장을 오류 로그에 남긴다(log_min_error_statement=error) — 평문이 거기 남지 않게."""
+    salt, it = os.urandom(16), 4096
+    salted = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, it)
+    client = hmac.new(salted, b"Client Key", "sha256").digest()
+    server = hmac.new(salted, b"Server Key", "sha256").digest()
+    b64 = lambda b: base64.b64encode(b).decode()  # noqa: E731
+    return f"SCRAM-SHA-256${it}:{b64(salt)}${b64(hashlib.sha256(client).digest())}:{b64(server)}"
+
+
 def secrets(_args) -> int:
-    def ensure(sid: str, keys: list[str]) -> None:
+    def ensure(sid: str, keys: list[str], db_pw: str) -> None:
         try:
             cur = json.loads(sm.get_secret_value(SecretId=sid)["SecretString"])
         except sm.exceptions.ResourceNotFoundException:
             cur = {}
         missing = [k for k in keys if not cur.get(k)]
+        cur.update({k: pysecrets.token_urlsafe(32) for k in missing})
+        if db_pw in missing or not cur.get(f"{db_pw}_scram"):     # 비밀번호가 바뀌면 검증자도 다시 만든다
+            cur[f"{db_pw}_scram"] = scram(cur[db_pw])
+            missing.append(f"{db_pw}_scram")
         if missing:
-            cur.update({k: pysecrets.token_urlsafe(32) for k in missing})
             sm.put_secret_value(SecretId=sid, SecretString=json.dumps(cur))
         print(f"{sid}: 키 {sorted(cur)} (새로 만든 키 {missing})")
-    ensure(f"{PREFIX}/app", ["jwt_secret", "api_secret_key", "admin_password", "meta_db_password"])
-    ensure(f"{PREFIX}/verify", ["verify_db_password"])
+    ensure(f"{PREFIX}/app", ["jwt_secret", "api_secret_key", "admin_password", "meta_db_password"], "meta_db_password")
+    ensure(f"{PREFIX}/verify", ["verify_db_password"], "verify_db_password")
     return 0
 
 
@@ -301,7 +317,26 @@ def trigger(exp: str, batch: str, hhmm: str, conf: dict | None = None) -> str:
     code, body, _ = api("POST", f"/api/v2/dags/{DAG}/dagRuns",
                         {"dag_run_id": rid, "logical_date": _slot(hhmm).isoformat(), "conf": conf or {}})
     mark(exp, "trigger", run=rid, code=code, conf=conf, detail=None if code == 200 else body)
+    if code != 200:
+        raise RuntimeError(f"run 생성 거절 {rid}: {code} {body}")
     return rid
+
+
+def clear_runs(exp: str) -> None:
+    """앞 배치의 검증 DAG run 을 지운다 — (dag_id, logical_date) 가 유일 키(3.3.2)라 배치마다 같은 슬롯을 다시 못 만든다.
+    그 배치의 증거(<batch>.json)가 이미 저장된 run 만 지운다 — 증거 없는 run 은 남기고 중단한다."""
+    _, body, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns?limit=100")
+    for r in body.get("dag_runs", []):
+        rid = r["dag_run_id"]
+        if r["state"] in ("running", "queued"):
+            raise RuntimeError(f"초기화 전 도는 run: {rid}")
+        m = re.match(r"aws__(.+)__(B\d)__\d{4}$", rid)
+        if not m or not (out_dir(m[1]) / f"{m[2]}.json").exists():
+            raise RuntimeError(f"증거가 저장되지 않은 run 은 지우지 않는다: {rid}")
+        code, _, _ = api("DELETE", f"/api/v2/dags/{DAG}/dagRuns/{urllib.parse.quote(rid, safe='')}")
+        if code not in (200, 204):
+            raise RuntimeError(f"run 삭제 실패 {rid}: {code}")
+    mark(exp, "runs_cleared", n=len(body.get("dag_runs", [])))
 
 
 def wait_run(exp: str, rid: str, timeout: float = 2400) -> str:
@@ -427,6 +462,7 @@ def _batch(args) -> int:
     exp, b = args.exp, args.batch
     spec = CRIT["scenarios"][b]
     mark(exp, "reset_begin", batch=b)
+    clear_runs(exp)
     if ops(["verify-reset"])[0] != 0:
         return 1
     mark(exp, "batch_begin", batch=b)

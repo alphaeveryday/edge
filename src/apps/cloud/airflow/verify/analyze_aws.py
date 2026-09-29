@@ -172,6 +172,8 @@ def latency(batch: dict, restart_windows) -> dict:
             continue
         if ts(tr["start_date"]) and ts(e["createdAt"]):
             submit.append(ts(e["createdAt"]) - ts(tr["start_date"]))
+        else:
+            expected_missing.append((e["arn"], tr["task_id"], tr["try_number"], "submit"))
         if ts(e["stoppedAt"]) and ts(tr["end_date"]):
             detect.append(ts(tr["end_date"]) - ts(e["stoppedAt"]))
         else:
@@ -186,7 +188,10 @@ def latency(batch: dict, restart_windows) -> dict:
     for rid, rows in by_run.items():
         for i, step in enumerate(order):
             t = rows.get((step, 1))
-            if not t or not ts(t["queued_when"]) or not ts(t["start_date"]):
+            if not t:
+                continue
+            if not ts(t["queued_when"]) or not ts(t["start_date"]):
+                expected_missing.append((rid, step, 1, "queue"))   # try 는 있는데 시각이 없다 = 표본 누락
                 continue
             queue.append(ts(t["start_date"]) - ts(t["queued_when"]))
             prev = rows.get((order[i - 1], 1)) if i else None
@@ -346,6 +351,17 @@ def analyze(exp: str) -> dict:
              not (h["health"].get("scheduler", {}).get("status") == "healthy"
                   and h["health"].get("dag_processor", {}).get("status") == "healthy")]
     last_deploy = deploys[-1] if deploys else {}
+    # RDS 관측이 실험 전 구간(첫 배포 확인 ~ 마지막 표시)을 덮어야 A8 을 판정한다 — 빈 구간이 2분 넘으면 판정 불가.
+    spans = sorted((datetime.fromisoformat(r["from"]).timestamp(), datetime.fromisoformat(r["to"]).timestamp())
+                   for r in rdss)
+    need = (min(m["t"] for m in marks), max(m["t"] for m in marks)) if marks else None
+    covered_to, rds_uncovered = (need[0] if need else 0), []
+    for a, b in spans:
+        if need and a > covered_to + 120:
+            rds_uncovered.append((covered_to, a))
+        covered_to = max(covered_to, b)
+    if need and covered_to < need[1] - 120:
+        rds_uncovered.append((covered_to, need[1]))
     db_roles = [max((sum(s["n"] for s in (st.get("sessions") or []) if s["usename"] == u) for r in rdss
                      for st in r.get("dbadmin_stats", [])), default=None) for u in ("airflow_meta", "airflow_verify")]
     out = {
@@ -359,7 +375,7 @@ def analyze(exp: str) -> dict:
                    "import_errors_max": max((h["import_errors"] for h in ok_h if h.get("import_errors") is not None),
                                             default=None)},
         "burst": {"n": len(burst), "non_2xx": [x for x in burst if not 200 <= x[1] < 300], "p95_s": p95([x[2] for x in burst])},
-        "rds": {"checks": len(rdss), "any_stop": any(any(r["stop"].values()) for r in rdss),
+        "rds": {"checks": len(rdss), "uncovered": rds_uncovered, "any_stop": any(any(r["stop"].values()) for r in rdss),
                 "business_failed_sfn": sorted({x for r in rdss for x in r.get("business_failed_sfn", [])}),
                 "data_gap": any(r.get("data_gap") for r in rdss),
                 "freeable_min": min((r["FreeableMemory"]["min"] for r in rdss if r["FreeableMemory"]["min"] is not None), default=None),
@@ -397,8 +413,10 @@ def analyze(exp: str) -> dict:
                                     for dep in deploys for t in dep.get("running_tasks", []))),
         # OOM(커널·docker·cgroup) 0, 그리고 주입 재시작 창 밖의 Airflow 컨테이너 종료 0.
         # 관측이 온전해야 판정한다 — 태스크 cgroup 미관측·커널/docker 로그 부재·샘플 공백(5초 주기의 6배 초과)은 판정 불가.
-        "A2_no_oom_restart": None if (host is None or not all(obs_files.values()) or not host["task_paths_seen"]
-                                      or (host["max_gap_s"] or 0) > 30) else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
+        # 실패 증거가 하나라도 있으면 관측 공백과 무관하게 실패다 — 공백이 확인된 OOM 을 판정 불가로 덮지 않는다.
+        "A2_no_oom_restart": False if (kern or dock["oom"] or unexpected_die or (host and host["task_oom_kill"])) else
+        None if (host is None or not all(obs_files.values()) or not host["task_paths_seen"]
+                 or (host["max_gap_s"] or 0) > 30) else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
                                                          and not unexpected_die),
         "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
         "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60
@@ -409,7 +427,7 @@ def analyze(exp: str) -> dict:
             out_come[b]["ok"] for b in ("B1", "B2", "B3")),
         "A7_business": None if not all(b in out_come and out_come[b] for b in ("B1", "B3")) else all(
             out_come[b]["ok"] for b in ("B1", "B3")),
-        "A8_db": None if (not rdss or out["rds"]["data_gap"] or None in out["rds"]["role_sessions_max"].values()
+        "A8_db": None if (not rdss or rds_uncovered or out["rds"]["data_gap"] or None in out["rds"]["role_sessions_max"].values()
                           or out["rds"]["airflow_db_error_logs"] is None) else (
             not out["rds"]["any_stop"] and not out["rds"]["business_failed_sfn"]
             and not out["rds"]["airflow_db_error_logs"]
