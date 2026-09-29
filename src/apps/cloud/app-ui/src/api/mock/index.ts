@@ -1,6 +1,6 @@
 import type { ApiClient } from '../client';
 import { ApiError } from '../error';
-import type { Me, Poll, PollChoice, Post, Reply, WatchGroup } from '../types';
+import type { Me, VoteStat, VoteChoice, Post, Reply, WatchGroup } from '../types';
 import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
@@ -14,7 +14,7 @@ const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v
 
 // 인메모리 쓰기 상태. 앱 재시작 시 초기화
 const posts = [...POSTS, ...ETF_POSTS].map((p) => ({ ...p }));
-const votes: Record<string, PollChoice | null> = {};
+const votes: Record<string, VoteChoice | null> = {};
 const ME: Me = { nick: '지수', handle: '@me', avatarBg: '#3D34E0', email: 'jisoo.kim@gmail.com' };
 const ACCOUNTS: Record<string, string> = { 'jisoo.kim@gmail.com': 'password' };
 const notis = NOTIFICATIONS.map((n) => ({ ...n }));
@@ -35,13 +35,13 @@ const groupList = (): WatchGroup[] => groups.map((g) => ({ ...g, count: (members
 
 const hash = (str: string) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 16777619) >>> 0; } return h; };
 // 투표 분포: 종목 코드 시드 + 내 표 1
-const pollOf = (code: string): Poll => {
+const voteStatOf = (code: string): VoteStat => {
   const h = hash(code);
   const buy = 30 + (h % 23), sell = 18 + ((h >> 5) % 17);
   const base = [buy, 100 - buy - sell, sell].map((n) => Math.max(6, n));
   const n0 = 180 + (h % 900);
   const mine = votes[code] ?? null;
-  const keys: PollChoice[] = ['buy', 'wait', 'sell'];
+  const keys: VoteChoice[] = ['buy', 'wait', 'sell'];
   const counts = base.map((p, i) => Math.round((p * n0) / 100) + (mine === keys[i] ? 1 : 0));
   const n = counts.reduce((a, b) => a + b, 0);
   const pct = counts.map((c) => Math.round((c / n) * 100));
@@ -155,7 +155,7 @@ export const mockClient: ApiClient = {
       return delay({ ...d, affected });
     },
   },
-  user: {
+  member: {
     me: () => delay({ ...ME }, 20),
     update: (patch) => {
       Object.assign(ME, patch);
@@ -245,10 +245,10 @@ export const mockClient: ApiClient = {
       return delay(undefined, 40);
     },
     posts: (code) => delay(posts.filter((p) => p.etf.code === code && !p.id.startsWith('p')).map((p) => ({ ...p }))),
-    poll: (code) => delay(pollOf(code)),
+    voteStat: (code) => delay(voteStatOf(code)),
     vote: (code, choice) => {
       votes[code] = votes[code] === choice ? null : choice;
-      return delay(pollOf(code), 40);
+      return delay(voteStatOf(code), 40);
     },
     toggleLike: (id) => {
       const p = posts.find((x) => x.id === id);

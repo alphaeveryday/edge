@@ -16,7 +16,7 @@ const LINES = [
 export function DisclaimerSheet() {
   const qc = useQueryClient();
   const { data: me } = useMe();
-  const accept = useMutation({ mutationFn: () => api.user.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['user', 'me'], m) });
+  const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
   const open = !!me && !me.disclaimerAcceptedAt;
   return (
     <BottomSheet open={open} onClose={() => {}}>

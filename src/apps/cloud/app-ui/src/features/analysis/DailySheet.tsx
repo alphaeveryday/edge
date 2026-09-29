@@ -4,8 +4,8 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { DailyAnalysis } from '@/api';
 import { Chevron, IconButton, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
-import { PollCard } from '@/features/community/PollCard';
-import { usePoll } from '@/features/community/queries';
+import { VoteCard } from '@/features/community/VoteCard';
+import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { Loading } from '@/components/state';
 import { colors, signal as SIG } from '@/theme/tokens';
@@ -20,17 +20,17 @@ interface Props {
   open: boolean;
   onClose: () => void;
   // 탐색에서 열 때. 투표 카드와 다음 ETF 순환
-  poll?: boolean;
+  withVote?: boolean;
   next?: { code: string; name: string };
   onNext?: () => void;
 }
 
 // 분석 상세. 화면을 거의 다 덮는 시트
-export function DailySheet({ code, daily: d, open, onClose, poll, next, onNext }: Props) {
+export function DailySheet({ code, daily: d, open, onClose, withVote, next, onNext }: Props) {
   const router = useRouter();
   const { top, bottom } = useSafeAreaInsets();
   const { data: etf } = useEtf(code);
-  const { data: pollData } = usePoll(code, !!poll && open);
+  const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const goMetric = (axis: string) => {
@@ -57,7 +57,7 @@ export function DailySheet({ code, daily: d, open, onClose, poll, next, onNext }
           {!d && <Loading rows={3} />}
           {d && (
             <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
-              {poll && pollData && <View style={{ marginBottom: 20 }}><PollCard poll={pollData} /></View>}
+              {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} /></View>}
               <Text style={styles.title}>{d.title}</Text>
               {d.today.length > 0 && (
                 <View style={styles.today}>

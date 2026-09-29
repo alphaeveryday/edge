@@ -5,8 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOP_BAR_H, TopBar } from '@/components/TopBar';
 import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
-import { PollCard } from '@/features/community/PollCard';
-import { useFeed, usePoll } from '@/features/community/queries';
+import { VoteCard } from '@/features/community/VoteCard';
+import { useFeed, useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { useRank } from '@/features/explore/queries';
 import { useRequireLogin } from '@/store/session';
@@ -20,9 +20,9 @@ export default function Community() {
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const { data: posts } = useFeed(scope);
   // 오늘의 투표는 탐색 1위 ETF
-  const pollCode = useRank().data?.[0]?.etf.code ?? '';
-  const { data: poll } = usePoll(pollCode, !!pollCode);
-  const { data: pollEtf } = useEtf(pollCode);
+  const voteCode = useRank().data?.[0]?.etf.code ?? '';
+  const { data: stat } = useVoteStat(voteCode, !!voteCode);
+  const { data: voteEtf } = useEtf(voteCode);
   return (
     <View style={styles.root}>
       <TopBar />
@@ -32,13 +32,13 @@ export default function Community() {
           <Chip label="추천" on={scope === 'all'} onPress={() => setScope('all')} />
           <Chip label="내 관심" on={scope === 'mine'} onPress={() => setScope('mine')} />
         </View>
-        {poll && pollEtf && (
-          <View style={styles.pollWrap}>
-            <View style={styles.pollHead}>
-              <SectorIcon theme={pollEtf.theme} bg={pollEtf.logoBg} size={18} />
-              <Text style={styles.pollHeadText}>{pollEtf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} · 오늘의 투표</Text>
+        {stat && voteEtf && (
+          <View style={styles.voteWrap}>
+            <View style={styles.voteHead}>
+              <SectorIcon theme={voteEtf.theme} bg={voteEtf.logoBg} size={18} />
+              <Text style={styles.voteHeadText}>{voteEtf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} · 오늘의 투표</Text>
             </View>
-            <PollCard poll={poll} />
+            <VoteCard stat={stat} />
           </View>
         )}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} showTag />)}
@@ -54,9 +54,9 @@ export default function Community() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   chips: { flexDirection: 'row', gap: 6, paddingTop: 12, paddingHorizontal: PAGE_X },
-  pollWrap: { marginTop: 16, marginHorizontal: 16, marginBottom: 6 },
-  pollHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10, paddingHorizontal: 2 },
-  pollHeadText: { fontFamily: fam.extrabold, fontSize: 12.5, color: colors.textSub },
+  voteWrap: { marginTop: 16, marginHorizontal: 16, marginBottom: 6 },
+  voteHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10, paddingHorizontal: 2 },
+  voteHeadText: { fontFamily: fam.extrabold, fontSize: 12.5, color: colors.textSub },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textSub, paddingVertical: 44 },
   fab: { position: 'absolute', right: 18, bottom: 18 },
 });

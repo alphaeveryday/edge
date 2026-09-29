@@ -26,7 +26,7 @@ export default function Profile() {
   const [notif, setNotif] = useState(true);
   const [delOpen, setDelOpen] = useState(false);
   const del = useMutation({
-    mutationFn: () => api.user.deleteAccount(),
+    mutationFn: () => api.member.deleteAccount(),
     onSuccess: () => { setDelOpen(false); leave('계정을 지웠어요'); },
   });
   return (

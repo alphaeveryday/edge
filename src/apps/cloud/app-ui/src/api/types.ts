@@ -102,13 +102,13 @@ export interface EtfDetailData {
   blurb: string;
 }
 
-export type PollChoice = 'buy' | 'wait' | 'sell';
+export type VoteChoice = 'buy' | 'wait' | 'sell';
 
-export interface Poll {
+export interface VoteStat {
   code: EtfCode;
   count: number;
-  pct: Record<PollChoice, number>;
-  mine: PollChoice | null;
+  pct: Record<VoteChoice, number>;
+  mine: VoteChoice | null;
 }
 
 

@@ -1,7 +1,7 @@
 import type { ApiClient } from '../client';
 import { HINTS } from '../mock/analysis';
 import { ApiError } from '../error';
-import type { ChartData, DailyAnalysis, EtfDetailData, EtfSummary, FactorPage, HomeBrief, IssueDetail, IssueRow, MetricPage, MoveInfo, Notification, PollChoice, RankRow, WatchGroup } from '../types';
+import type { ChartData, DailyAnalysis, EtfDetailData, EtfSummary, FactorPage, HomeBrief, IssueDetail, IssueRow, MetricPage, MoveInfo, Notification, VoteChoice, RankRow, WatchGroup } from '../types';
 import { request } from './fetch';
 import * as m from './map';
 import { tokens } from './storage';
@@ -11,7 +11,7 @@ const signIn = async (r: WireAuth) => { await tokens.save(r.accessToken, r.refre
 
 // 서버가 없는 것: 최근 본 ETF(기기 보관), 용어 힌트(앱 번들), 내 투표 선택(응답에 없음)
 let recent: EtfSummary[] = [];
-const myVotes: Record<string, PollChoice | null> = {};
+const myVotes: Record<string, VoteChoice | null> = {};
 
 // 와이어의 theme 은 key. 화면은 라벨을 쓰므로 테마 목록을 한 번 받아 바꿔 준다(색은 key 기준 유지)
 let themeLabels: Promise<Record<string, string>> | null = null;
@@ -101,12 +101,12 @@ export const httpClient: ApiClient = {
       const cur = await request<m.WirePost>('GET', `/posts/${id}`);
       return post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
     },
-    poll: async (code) => m.poll(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVotes[code] ?? null),
+    voteStat: async (code) => m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVotes[code] ?? null),
     // 응답에 현황이 없어 성공 후 count 를 다시 읽는다
     vote: async (code, choice) => {
       await request<void>('PUT', `/etfs/${code}/vote`, { body: { choice } });
       myVotes[code] = choice;
-      return m.poll(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), choice);
+      return m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), choice);
     },
   },
   issue: {
@@ -116,7 +116,7 @@ export const httpClient: ApiClient = {
       return { ...d, affected: await Promise.all(d.affected.map(async (a) => ({ ...(await summary(a)), prev: a.prev }))) };
     },
   },
-  user: {
+  member: {
     me: async () => m.me(await request<m.WireMe>('GET', '/me')),
     update: async (patch) => m.me(await request<m.WireMe>('PATCH', '/me', { body: { nick: patch.nick, handle: patch.handle } })),
     acceptDisclaimer: async () => m.me(await request<m.WireMe>('POST', '/me/disclaimer')),

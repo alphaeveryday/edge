@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, IssueDetail, IssueRow, Me, Reply, RankRow, ThemeDetail, ThemeFeedItem, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, Poll, PollChoice, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, IssueDetail, IssueRow, Me, Reply, RankRow, ThemeDetail, ThemeFeedItem, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -56,8 +56,8 @@ export interface CommunityApi {
   mine(): Promise<Post[]>;
   remove(id: string): Promise<void>;
   toggleLike(id: string): Promise<Post>;
-  poll(code: EtfCode): Promise<Poll>;
-  vote(code: EtfCode, choice: PollChoice): Promise<Poll>;
+  voteStat(code: EtfCode): Promise<VoteStat>;
+  vote(code: EtfCode, choice: VoteChoice): Promise<VoteStat>;
 }
 
 export interface IssueApi {
@@ -65,7 +65,7 @@ export interface IssueApi {
   get(id: string): Promise<IssueDetail>;
 }
 
-export interface UserApi {
+export interface MemberApi {
   me(): Promise<Me>;
   update(patch: Partial<Me>): Promise<Me>;
   acceptDisclaimer(): Promise<Me>;
@@ -97,7 +97,7 @@ export interface ApiClient {
   home: HomeApi;
   community: CommunityApi;
   issue: IssueApi;
-  user: UserApi;
+  member: MemberApi;
   auth: AuthApi;
   notification: NotificationApi;
 }

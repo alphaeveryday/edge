@@ -2,20 +2,20 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { IconButton } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
-import { PollCard } from '@/features/community/PollCard';
-import { useEtfPosts, usePoll } from '@/features/community/queries';
+import { VoteCard } from '@/features/community/VoteCard';
+import { useEtfPosts, useVoteStat } from '@/features/community/queries';
 import { useRequireLogin } from '@/store/session';
 
 export default function EtfCommunity() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
   const requireLogin = useRequireLogin();
-  const { data: poll } = usePoll(code);
+  const { data: stat } = useVoteStat(code);
   const { data: posts } = useEtfPosts(code);
   return (
     <View style={{ flex: 1 }}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
-        {poll && <View style={styles.poll}><PollCard poll={poll} /></View>}
+        {stat && <View style={styles.vote}><VoteCard stat={stat} /></View>}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </ScrollView>
       <View style={styles.fab}>
@@ -26,6 +26,6 @@ export default function EtfCommunity() {
 }
 
 const styles = StyleSheet.create({
-  poll: { marginTop: 14, marginHorizontal: 16, marginBottom: 6 },
+  vote: { marginTop: 14, marginHorizontal: 16, marginBottom: 6 },
   fab: { position: 'absolute', right: 18, bottom: 26 },
 });

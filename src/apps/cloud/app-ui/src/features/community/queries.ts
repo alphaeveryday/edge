@@ -1,23 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
-import type { Me, Poll, PollChoice, Post } from '@/api';
+import type { Me, VoteStat, VoteChoice, Post } from '@/api';
 import { useRequireLogin, useSession } from '@/store/session';
 
 export const useMyPosts = () => useQuery({ queryKey: ['community', 'mine'], queryFn: () => api.community.mine() });
 export const useUpdateMe = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (patch: Partial<Me>) => api.user.update(patch), onSuccess: (me) => qc.setQueryData(['user', 'me'], me) });
+  return useMutation({ mutationFn: (patch: Partial<Me>) => api.member.update(patch), onSuccess: (me) => qc.setQueryData(['member', 'me'], me) });
 };
 export const useMe = () => {
   const loggedIn = useSession((s) => s.loggedIn);
-  return useQuery({ queryKey: ['user', 'me'], queryFn: () => api.user.me(), staleTime: Infinity, enabled: loggedIn });
+  return useQuery({ queryKey: ['member', 'me'], queryFn: () => api.member.me(), staleTime: Infinity, enabled: loggedIn });
 };
 export const useHotPosts = () => useQuery({ queryKey: ['community', 'hot'], queryFn: () => api.community.hot() });
 export const useEtfPosts = (code: string) => useQuery({ queryKey: ['community', 'posts', code], queryFn: () => api.community.posts(code) });
 export const useFeed = (scope: 'all' | 'mine') => useQuery({ queryKey: ['community', 'feed', scope], queryFn: () => api.community.feed(scope) });
 export const usePost = (id: string) => useQuery({ queryKey: ['community', 'post', id], queryFn: () => api.community.get(id) });
 export const useReplies = (id: string) => useQuery({ queryKey: ['community', 'replies', id], queryFn: () => api.community.replies(id) });
-export const usePoll = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'poll', code], queryFn: () => api.community.poll(code), enabled });
+export const useVoteStat = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'voteStat', code], queryFn: () => api.community.voteStat(code), enabled });
 
 const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ['community', 'feed'] });
@@ -42,8 +42,8 @@ export const useToggleLike = () => {
 export const useVote = (code: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (choice: PollChoice) => api.community.vote(code, choice),
-    onSuccess: (poll) => qc.setQueryData<Poll>(['community', 'poll', code], poll),
+    mutationFn: (choice: VoteChoice) => api.community.vote(code, choice),
+    onSuccess: (stat) => qc.setQueryData<VoteStat>(['community', 'voteStat', code], stat),
   });
 };
 

@@ -1,5 +1,5 @@
 import type { Signal } from '@/theme/tokens';
-import type { Axis, Dir, EtfSummary, Me, Poll, PollChoice, Post, Reply, Theme, ThemeDetail, ThemeFeedItem } from '../types';
+import type { Axis, Dir, EtfSummary, Me, VoteStat, VoteChoice, Post, Reply, Theme, ThemeDetail, ThemeFeedItem } from '../types';
 
 // 계약 응답 → 앱 타입. 계약에는 표시용 색·상대 시각·한글 축 라벨이 없어 여기서 만든다
 
@@ -62,7 +62,7 @@ export const reply = (r: WireReply): Reply => ({ id: r.id, author: { name: r.aut
 
 export interface WireVoteCount { buys: number; waits: number; sells: number; source: string }
 // 서버는 인원만 준다. 비율은 여기서, 내 선택은 앱이 기억한 마지막 투표
-export const poll = (code: string, c: WireVoteCount, mine: PollChoice | null): Poll => {
+export const voteStat = (code: string, c: WireVoteCount, mine: VoteChoice | null): VoteStat => {
   const n = c.buys + c.waits + c.sells;
   const p = (x: number) => (n ? Math.round((x / n) * 100) : 0);
   return { code, count: n, pct: { buy: p(c.buys), wait: p(c.waits), sell: p(c.sells) }, mine };

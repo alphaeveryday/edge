@@ -34,7 +34,7 @@ export const useSession = create<SessionState>((set) => ({
     let loggedIn = false;
     if (process.env.EXPO_PUBLIC_API_MODE === 'http' && (await tokens.access())) {
       try {
-        await api.user.me();
+        await api.member.me();
         loggedIn = true;
       } catch {
         await tokens.clear();

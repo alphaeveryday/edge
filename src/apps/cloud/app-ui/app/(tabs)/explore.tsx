@@ -66,7 +66,7 @@ export default function Explore() {
           daily={daily.data}
           open={!!cur}
           onClose={() => setSel(null)}
-          poll
+          withVote
           next={nextIdx === null ? undefined : { code: rows[nextIdx].etf.code, name: rows[nextIdx].etf.name }}
           onNext={nextIdx === null ? undefined : () => setSel(nextIdx)}
         />
