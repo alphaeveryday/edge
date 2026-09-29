@@ -274,18 +274,20 @@ def test_kr_intraday_fetch_loses_to_post_close_fetch(tmp_path):
     assert row["close"] == 10.0
 
 
-def test_us_keeps_latest_fetched_at_wins(tmp_path):
+def test_us_keeps_latest_fetched_at_wins(tmp_path, monkeypatch):
     # WHY: 15:30 KST 마감은 KR 전용이다. US 에 걸면 둘 다 "마감 뒤"로 분류돼 이른 수집분(US
     #      장중일 수 있다)이 영구 승자가 된다. US 는 최신 승을 유지한다 — 두 수집 시각을 모두
-    #      07-01 15:30 KST 뒤에 둬서 KR 규칙이면 답이 달라지게 했다.
+    #      07-01 15:30 KST 뒤·거래일에 두고 OHLC 는 같게, 거래량만 다르게 해 KR 규칙이면(이른
+    #      수집분) 답이 달라지게 했다. 종가를 다르게 두면 KR 규칙도 정정으로 보고 최신을 고른다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "")
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("fmp", "US", run_id="R1"),
-               [_fmp_row(close=10.0, fetched_at="2026-07-01T14:00:00+00:00")])
+               [_fmp_row(volume=100, fetched_at="2026-07-01T14:00:00+00:00")])
     _write_raw(storage, _raw_key("fmp", "US", run_id="R2"),
-               [_fmp_row(close=10.5, fetched_at="2026-07-01T22:00:00+00:00")])
+               [_fmp_row(volume=130, fetched_at="2026-07-01T22:00:00+00:00")])
     assert normalize_price.run(storage, "N1") == 0
     [row] = _canonical_rows(storage, "US", "2026-07-01")
-    assert row["close"] == 10.5
+    assert row["volume"] == 130
 
 
 def test_cross_vendor_collision_fail_loud(tmp_path):
