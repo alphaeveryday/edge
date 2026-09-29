@@ -173,6 +173,20 @@ def test_airflow_plan_cli_refuses_without_slot_identity(monkeypatch, env, messag
         entry.plan_run_cli(object())
 
 
+def test_airflow_only_lane_refuses_sfn_planning_and_passes_to_airflow_checks(monkeypatch):
+    # WHY(ALPHA-1130): source-daily 는 SFN 이 없다. SFN 경로로 계획하면 기대 작업만 생기고 실행 주체가 없다 —
+    # ARN 을 찾다 조용히 다른 레인으로 떨어지지 않고 거부해야 한다. Airflow 경로는 일반 검사로 넘어간다.
+    for key in ("OPS_ORCHESTRATOR_RUN_REF", "OPS_SCHEDULED_TIME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPS_PIPELINE_TYPE", "source-daily")
+    monkeypatch.setenv("OPS_ORCHESTRATOR", states.ORCHESTRATOR_SFN)
+    with pytest.raises(SystemExit, match="Airflow 전용"):
+        entry.plan_run_cli(object())
+    monkeypatch.setenv("OPS_ORCHESTRATOR", states.ORCHESTRATOR_AIRFLOW)
+    with pytest.raises(SystemExit, match="OPS_ORCHESTRATOR_RUN_REF"):
+        entry.plan_run_cli(object())
+
+
 # ── 실행권(StepLock)과 원장 장애 — Airflow 경로(OPS_EXCLUSIVE_STEP)만 fail-closed ──
 def _exclusive(monkeypatch, *, skip=True):
     monkeypatch.setenv("OPS_EXCLUSIVE_STEP", "1")

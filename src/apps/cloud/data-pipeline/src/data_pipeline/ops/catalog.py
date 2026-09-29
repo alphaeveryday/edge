@@ -526,12 +526,79 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         pipeline_type="investor-intraday",
         fulfilled_exit_codes=(0, 2),  # 일부 DB 행 실패여도 성공 winner는 commit된다
     ),
+    # ══ 원천 관측 레인 9작업 (pipeline_type="source-daily" — **Airflow 전용**, SFN 없음, ALPHA-1130) ══
+    # 매크로 5계열·KIS 지수업종·DART 재무 지표. DAG `edge_source_daily` 가 하루 한 슬롯(09:10 KST)을 돈다.
+    # SFN 이 없으므로 `sfn_state_name` 은 빈 값이다 — `by_sfn_state` 는 빈 이름을 매칭하지 않고,
+    # ASL 대조 테스트는 이 레인을 Airflow 전용으로 따로 센다(test_ops_catalog).
+    # 세 계열은 서로 기다리지 않는다(한 공급자 장애가 다른 원천을 막지 않게). 정제 의존을 비우는 이유는
+    # 다른 레인과 같다 — 수집 부분 실패 뒤에도 받은 것은 정제한다.
+    # ⚠️ MACRO_COLLECTION 만 instrumented=False 다: 매크로 키(ECOS·KOSIS·EIA + FMP)를 가진 `macro`
+    # 태스크 정의가 아직 없다(인프라 인계 — 설계 §10). 배선이 먼저 배포된 뒤 True 로 올린다(ALPHA-596 순서).
+    CatalogEntry(
+        task_key="MACRO_COLLECTION", stage="raw", dataset="macro_observation", required=True,
+        cli_command=("ingest-raw-macro",), sfn_state_name="", ecs_task_definition="macro",
+        source_vendor="multi", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        instrumented=False, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_MACRO", stage="normalize", dataset="macro_observation", required=True,
+        cli_command=("normalize-macro",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, pipeline_type="source-daily",
+        fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_MACRO", stage="feature", dataset="macro_observation_load", required=True,
+        cli_command=("load-macro",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_MACRO",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        pipeline_type="source-daily",
+    ),
+    # 업종 마스터는 휴장일에 새로 받을 이유가 없다(분류 변경은 상장·변경 공시 뒤 거래일에 반영).
+    CatalogEntry(
+        task_key="SECTOR_COLLECTION_KIS", stage="raw", dataset="sector_classification", required=True,
+        cli_command=("ingest-raw-sector",), sfn_state_name="", ecs_task_definition="bigkinds",
+        source_vendor="kis", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        kr_trading_calendar=True, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_SECTOR", stage="normalize", dataset="sector_classification", required=True,
+        cli_command=("normalize-sector",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, kr_trading_calendar=True,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_SECTOR", stage="feature", dataset="sector_classification_load", required=True,
+        cli_command=("load-sector",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_SECTOR",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        kr_trading_calendar=True, pipeline_type="source-daily",
+    ),
+    # DART 키·DB env 는 기존 `dart` 태스크 정의에 이미 있다(CollectDartFinancial 과 같은 키).
+    # 창 안에 새 정기보고서가 없는 날은 목록만 받고 재무 호출 0건이다 — 정상이다(empty_allowed).
+    CatalogEntry(
+        task_key="FINANCIAL_METRIC_COLLECTION_DART", stage="raw", dataset="financial_metric", required=True,
+        cli_command=("ingest-raw-financial-metric",), sfn_state_name="", ecs_task_definition="dart",
+        source_vendor="dart", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_FINANCIAL_METRIC", stage="normalize", dataset="financial_metric", required=True,
+        cli_command=("normalize-financial-metric",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, empty_allowed=True,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_FINANCIAL_METRIC", stage="feature", dataset="financial_metric_load", required=True,
+        cli_command=("load-financial-metric",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_FINANCIAL_METRIC",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        empty_allowed=True, pipeline_type="source-daily",
+    ),
 )
 
 CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
+# 원천 관측 레인(ALPHA-1130) — SFN 이 없는 Airflow 전용 레인이다(ops.entry._AIRFLOW_ONLY_LANES).
+SOURCE_DAILY_PIPELINE_TYPE = "source-daily"
 # 공시 마감 보충 배치. 장중 minute 원장과 별도 정체성을 유지한다(ALPHA-1073).
 # 활성 스케줄은 OPS_DISCLOSURE_SCHED_HHMM에서만 기대하므로 앱 선행 배포가 가능하다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
@@ -599,6 +666,8 @@ def by_cli(step: str, source: str | None = None) -> CatalogEntry | None:
 
 def by_sfn_state(state_name: str) -> CatalogEntry | None:
     """SFN state 이름 → 카탈로그 엔트리(Reconciler 의 history 매핑). 없으면 None(미등록 state)."""
+    if not state_name:
+        return None     # Airflow 전용 레인의 빈 state 이름은 SFN 이력과 짝이 될 수 없다
     for entry in _ENTRIES:
         if entry.sfn_state_name == state_name:
             return entry
