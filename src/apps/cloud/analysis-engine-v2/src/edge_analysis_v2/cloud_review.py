@@ -102,7 +102,8 @@ def render_job(detail):
               'response.json':'에이전트 최종 응답', 'screen.json':'저장 후 조립된 화면',
               'factor_details.json':'5요인 상세 화면', 'tool_schemas.json':'에이전트가 읽는 툴 명세',
               'output_schema.json':'에이전트 최종 응답 스키마', 'quality_review.md':'문장 품질 검수 기록'}
-    parts = ['<h2>로컬 실행 기록</h2><p class="muted">입력은 목자료입니다. 툴 저장과 모델 호출은 실제 실행입니다. 완료는 실행·저장 성공이며 문장 품질 합격과는 별개입니다.</p>',
+    source = '실제 DB 자료' if detail['job'].get('data_source') == 'database' else '목자료'
+    parts = [f'<h2>로컬 실행 기록</h2><p class="muted">입력은 {source}입니다. 툴 저장과 모델 호출은 실제 실행입니다. 완료는 실행·저장 성공이며 문장 품질 합격과는 별개입니다.</p>',
              '<pre>'+html.escape(json.dumps(detail['job'],ensure_ascii=False,indent=2))+'</pre>']
     for name, value in detail['artifacts'].items():
         if name.endswith('.json'):

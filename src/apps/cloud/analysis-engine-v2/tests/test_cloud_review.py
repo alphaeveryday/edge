@@ -135,3 +135,12 @@ def test_raw_model_artifacts_are_pretty_and_escaped_without_losing_integer_preci
     assert '<script>' not in page
     assert '\n  &quot;value&quot;' in page
     assert 'unfinished' in page
+
+
+def test_execution_provenance_distinguishes_real_sources_from_default_fixtures():
+    real = render_job({'job':{'data_source':'database'}, 'artifacts':{}})
+    fixture = render_job({'job':{}, 'artifacts':{}})
+    assert '입력은 실제 DB 자료입니다.' in real
+    assert '입력은 목자료입니다.' not in real
+    assert '입력은 목자료입니다.' in fixture
+    assert '문장 품질 합격과는 별개' in real
