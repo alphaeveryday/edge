@@ -296,22 +296,26 @@ def analyze(exp: str) -> dict:
     out_come = outcomes(batches)
     burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
     # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
-    ok_h = [h for h in health if "health" in h]
-    gaps = [b["t"] - a["t"] for a, b in zip(health, health[1:]) if not any(x <= a["t"] <= y for x, y in rw)]
+    ok_h = [h for h in health if "health" in h and h.get("code") == 200]
+    # 공백은 **성공한** 표본 사이로 잰다 — 실패 행이 촘촘해도 heartbeat 를 확인한 것이 아니다.
+    gaps = [b["t"] - a["t"] for a, b in zip(ok_h, ok_h[1:]) if not any(x <= a["t"] <= y for x, y in rw)]
+    err_outside = [h for h in health if h not in ok_h and not any(x <= h["t"] <= y for x, y in rw)]
     bad_h = [h for h in ok_h if not any(x <= h["t"] <= y for x, y in rw) and
              not (h["health"].get("scheduler", {}).get("status") == "healthy"
                   and h["health"].get("dag_processor", {}).get("status") == "healthy")]
     last_deploy = deploys[-1] if deploys else {}
-    db_roles = [max((sum(s["n"] for s in (st.get("sessions") or []) if s["usename"] in (u,)) for r in rdss
+    db_roles = [max((sum(s["n"] for s in (st.get("sessions") or []) if s["usename"] == u) for r in rdss
                      for st in r.get("dbadmin_stats", [])), default=None) for u in ("airflow_meta", "airflow_verify")]
     out = {
         "exp": exp, "deploy": {k: last_deploy.get(k) for k in ("task_memory", "hosts", "health_matches_plan",
                                                                 "settings_match_plan", "airflow_version",
                                                                 "running_image_digests")},
         "host": host, "kernel_oom_lines": kern, "docker": dock, "latency": lat, "outcomes": out_come,
-        "health": {"samples": len(health), "errors": len(health) - len(ok_h), "unhealthy_outside_restart": len(bad_h),
-                   "max_gap_s": max(gaps, default=None),
-                   "import_errors_max": max((h.get("import_errors") or 0 for h in ok_h), default=None)},
+        "health": {"samples": len(health), "errors": len(health) - len(ok_h), "errors_outside_restart": len(err_outside),
+                   "unhealthy_outside_restart": len(bad_h), "max_gap_s": max(gaps, default=None),
+                   "import_errors_missing": sum(1 for h in ok_h if h.get("import_errors") is None),
+                   "import_errors_max": max((h["import_errors"] for h in ok_h if h.get("import_errors") is not None),
+                                            default=None)},
         "burst": {"n": len(burst), "non_2xx": [x for x in burst if not 200 <= x[1] < 300], "p95_s": p95([x[2] for x in burst])},
         "rds": {"checks": len(rdss), "any_stop": any(any(r["stop"].values()) for r in rdss),
                 "business_failed_sfn": sorted({x for r in rdss for x in r.get("business_failed_sfn", [])}),
@@ -319,9 +323,16 @@ def analyze(exp: str) -> dict:
                 "freeable_min": min((r["FreeableMemory"]["min"] for r in rdss if r["FreeableMemory"]["min"] is not None), default=None),
                 "connections_max": max((r["DatabaseConnections"]["max"] or 0 for r in rdss), default=None),
                 "cpu_max": max((r["CPUUtilization"]["max"] or 0 for r in rdss), default=None),
-                "role_sessions_max": {"airflow_meta": db_roles[0], "airflow_verify": db_roles[1]}},
+                "role_sessions_max": {"airflow_meta": db_roles[0], "airflow_verify": db_roles[1]},
+                "airflow_db_error_logs": (None if any(r.get("airflow_db_error_logs") is None for r in rdss)
+                                          else [x for r in rdss for x in r["airflow_db_error_logs"]])},
         "stopped": [m for m in marks if m["event"] in ("abort", "unplaceable")],
     }
+    unplaceable = [e for dep in deploys for e in dep.get("service", {}).get("events", [])
+                   if "unable to place" in e or "insufficient memory" in e or "insufficient CPU" in e]
+    out["unplaceable_events"] = unplaceable
+    unexpected_die = [d for d in dock["die"] if d[2] and not any(x <= float(d[2]) <= y for x, y in rw)]
+    out["unexpected_airflow_container_exits"] = unexpected_die
     lim = CRIT
     def lat_ok():
         if not lat:
@@ -338,20 +349,27 @@ def analyze(exp: str) -> dict:
     out["pass"] = {
         "A0_deploy_matches_plan": (None if not deploys else bool(last_deploy.get("health_matches_plan")
                                                                    and last_deploy.get("settings_match_plan"))),
-        "A1_placement": None if not deploys else any(m["event"] == "healthy" for m in marks),
+        # 배치·기동: 실제 서비스 태스크가 RUNNING·HEALTHY 로 조회된 적이 있는가(deployinfo). 미배치 이벤트는 실패.
+        "A1_placement": None if not deploys else (
+            not unplaceable and any(t.get("health") == "HEALTHY" and all(v == "HEALTHY" for v in t["containers"].values())
+                                    for dep in deploys for t in dep.get("running_tasks", []))),
+        # OOM(커널·docker·cgroup) 0, 그리고 주입 재시작 창 밖의 Airflow 컨테이너 종료 0.
         "A2_no_oom_restart": None if host is None else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
-                                                         and not any(m["event"] == "unexpected_restart" for m in marks)),
+                                                         and not unexpected_die),
         "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
-        "A4_heartbeat_parse": None if not health or (out["health"]["max_gap_s"] or 999) > 60 else (
+        "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60
+                                       or err_outside or out["health"]["import_errors_missing"]) else (
             out["health"]["unhealthy_outside_restart"] == 0 and out["health"]["import_errors_max"] == 0),
         "A5_latency": lat_ok(),
         "A6_outcomes": None if not all(b in out_come and out_come[b] for b in ("B1", "B2", "B3")) else all(
             out_come[b]["ok"] for b in ("B1", "B2", "B3")),
         "A7_business": None if not all(b in out_come and out_come[b] for b in ("B1", "B3")) else all(
             out_come[b]["ok"] for b in ("B1", "B3")),
-        "A8_db": None if not rdss or out["rds"]["data_gap"] else (
+        "A8_db": None if (not rdss or out["rds"]["data_gap"] or None in out["rds"]["role_sessions_max"].values()
+                          or out["rds"]["airflow_db_error_logs"] is None) else (
             not out["rds"]["any_stop"] and not out["rds"]["business_failed_sfn"]
-            and all((x or 0) <= 10 for x in out["rds"]["role_sessions_max"].values())),
+            and not out["rds"]["airflow_db_error_logs"]
+            and all(x <= 10 for x in out["rds"]["role_sessions_max"].values())),
         "A9_no_growth": None if host is None or None in (host["idle_task_anon_mib"].get("after_B1"),
                                                          host["idle_task_anon_mib"].get("after_B3")) else (
             host["idle_task_anon_mib"]["after_B3"] <= host["idle_task_anon_mib"]["after_B1"] * 1.10

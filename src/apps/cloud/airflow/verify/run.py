@@ -9,7 +9,7 @@
     python verify/run.py idle <exp> <tag> <초>     # 유휴 관찰 창(표시만 — 관측은 호스트 관측기·CloudWatch)
     python verify/run.py rds <exp> [--since epoch] # 기존 RDS 지표를 중단 기준과 대조 + dbadmin stats
     python verify/run.py obs <exp>                # 호스트 관측 기록 수거(SSM → 검증 버킷 → 로컬)
-    python verify/run.py backup                   # 검증 원장 백업(검증 버킷)
+    python verify/run.py backup <exp>             # 검증 원장 백업(검증 버킷 → 로컬)
 
 증거는 local/results/aws/<exp>/ 에 쌓인다. 판정은 verify/analyze_aws.py 가 한다(드라이버는 판정하지 않는다).
 성공 기준은 Airflow 상태 표시가 아니라 **실제 ECS 태스크 수·업무 시작 수·원장 상태·산출물 쓰기**의 대조다.
@@ -158,8 +158,21 @@ def setup(_args) -> int:
     return 0 if ops(["verify-seed"])[0] == 0 else 1
 
 
-def backup(_args) -> int:
-    return 0 if ops(["verify-backup"])[0] == 0 else 1
+def backup(args) -> int:
+    """검증 원장 백업 → 검증 버킷 → **로컬로 내려받는다**(정리 때 검증 버킷은 지워진다)."""
+    if ops(["verify-backup"])[0] != 0:
+        return 1
+    bucket = _bucket()
+    dest = out_dir(args.exp) / "ledger-backup"
+    n = 0
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="backup/"):
+        for o in page.get("Contents", []):
+            path = dest / o["Key"].removeprefix("backup/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, o["Key"], str(path))
+            n += 1
+    print(f"백업 {n}개 → {dest}")
+    return 0 if n else 1
 
 
 # ── Airflow API(SSM 포트 포워딩) ──
@@ -241,7 +254,11 @@ def deployinfo(args) -> int:
                                   if a["name"] in ("ecs.instance-type", "ecs.cpu-architecture", "ecs.ami-id")}}
                   for i in inst],
         "service": {"desired": svc["desiredCount"], "running": svc["runningCount"], "pending": svc["pendingCount"],
-                    "events": [f"{e['createdAt']} {e['message']}" for e in svc["events"][:15]]},
+                    "events": [f"{e['createdAt']} {e['message']}" for e in svc["events"][:30]]},
+        # 실제 배치·기동 상태 — A1 은 이것으로 판정한다(태스크 health·컨테이너별 health·시작 시각).
+        "running_tasks": [{"arn": t["taskArn"].rsplit("/", 1)[1], "health": t.get("healthStatus"),
+                           "created": t.get("createdAt"), "started": t.get("startedAt"),
+                           "containers": {c["name"]: c.get("healthStatus") for c in t["containers"]}} for t in running],
     }
     info["airflow_version"] = api("GET", "/api/v2/version")[1] if running else None
     want = CRIT["deploy"]["health"]
@@ -526,7 +543,19 @@ def rds(args) -> int:
         "latency": sustained(lat, lambda v: v > stops["latency_ms_above"], 3),
         "connections": sustained(out["DatabaseConnections"]["series"], lambda v: v > stops["connections_above"], 2),
     }
-    out["data_gap"] = any(out[m]["n"] == 0 for m in ("FreeableMemory", "CPUUtilization", "DatabaseConnections"))
+    # 창의 분 수 대비 90% 미만인 지표가 하나라도 있으면 계측 공백(= 판정 불가) — 빈 지표가 "중단 없음"이 되지 않게.
+    minutes = max(1, int((end - since).total_seconds() // 60) - 2)
+    out["coverage"] = {m: round(out[m]["n"] / minutes, 2) for m in ("FreeableMemory", "SwapUsage", "CPUUtilization",
+                                                                    "DatabaseConnections", "WriteLatency", "ReadLatency")}
+    out["data_gap"] = any(v < 0.9 for v in out["coverage"].values())
+    # Airflow 쪽 연결 오류·풀 대기 초과(구성요소 로그)
+    pattern = '?OperationalError ?QueuePool ?"too many clients" ?"password authentication failed" ?"connection refused"'
+    try:
+        ev = logs.filter_log_events(logGroupName=f"/ecs/{PREFIX}", startTime=int(since.timestamp() * 1000),
+                                    endTime=int(end.timestamp() * 1000), filterPattern=pattern, limit=50)["events"]
+        out["airflow_db_error_logs"] = [e["message"][:200] for e in ev]
+    except logs.exceptions.ResourceNotFoundException:
+        out["airflow_db_error_logs"] = None
     if not args.no_stats:
         _, lines = dbadmin_run("stats")
         out["dbadmin_stats"] = [json.loads(line.removeprefix("DBADMIN stats ")) for line in lines
@@ -548,7 +577,7 @@ def rds(args) -> int:
     print(json.dumps(brief, ensure_ascii=False, default=str))
     if out.get("dbadmin_stats"):
         print(json.dumps(out["dbadmin_stats"][-1].get("sessions"), ensure_ascii=False))
-    return 2 if any(out["stop"].values()) or failed or out["data_gap"] else 0
+    return 2 if any(out["stop"].values()) or failed or out["data_gap"] or out.get("airflow_db_error_logs") else 0
 
 
 # ── 호스트 관측 기록 수거 ──
@@ -589,8 +618,9 @@ def obs(args) -> int:
 def main() -> int:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="name", required=True)
-    for name in ("secrets", "setup", "forward", "backup"):
+    for name in ("secrets", "setup", "forward"):
         sub.add_parser(name)
+    sub.add_parser("backup").add_argument("exp")
     d = sub.add_parser("dbadmin")
     d.add_argument("cmd")
     for name in ("deployinfo", "obs"):

@@ -14,8 +14,10 @@ set -euo pipefail
 q() { psql -X -v ON_ERROR_STOP=1 -At "$@"; }
 
 create() {
-  q -v meta_user="$META_USER" -v meta_pw="$META_PW" -v verify_user="$VERIFY_USER" -v verify_pw="$VERIFY_PW" \
-    -v master="$PGUSER" <<'SQL'
+  # 비밀번호는 명령행(-v)으로 넘기지 않는다(프로세스 목록에 보인다) — psql 안에서 환경변수를 읽는다(\getenv, psql 15+).
+  q -v meta_user="$META_USER" -v verify_user="$VERIFY_USER" -v master="$PGUSER" <<'SQL'
+\getenv meta_pw META_PW
+\getenv verify_pw VERIFY_PW
 SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE CONNECTION LIMIT 10 PASSWORD %L', u, p)
   FROM (VALUES (:'meta_user', :'meta_pw'), (:'verify_user', :'verify_pw')) v(u, p)
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = u) \gexec
@@ -39,12 +41,14 @@ SQL
 # 검증 원장 스키마: 업무 DB 의 **스키마만** 복제한다(행 없음). 같은 인스턴스라 migrations-cloud 를 다시 적용하면
 # 인스턴스 전역 역할 생성(V202609282100)이 "이미 있음"으로 실패한다. 소유·권한 구문은 빼고 airflow_verify 로 만든다.
 clone_schema() {
-  local errs
+  # 한 트랜잭션·첫 오류에서 중단 — 일부만 만들어진 원장으로 검증을 시작하지 않는다(실패는 exit≠0 으로 드러난다).
+  local rc=0
   pg_dump -s --no-owner --no-privileges -d "$PGDATABASE" > /tmp/schema.sql
-  PGUSER="$VERIFY_USER" PGPASSWORD="$VERIFY_PW" psql -X -q -d "$VERIFY_DB" -f /tmp/schema.sql > /dev/null 2> /tmp/schema.err || true
-  errs=$(grep -c ERROR /tmp/schema.err || true)
-  grep ERROR /tmp/schema.err | sed 's/.*ERROR: *//' | sort | uniq -c | head -20 | sed 's/^/DBADMIN clone_schema error: /' || true
-  echo "DBADMIN clone_schema tables=$(PGUSER="$VERIFY_USER" PGPASSWORD="$VERIFY_PW" q -d "$VERIFY_DB" -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'") errors=$errs"
+  PGUSER="$VERIFY_USER" PGPASSWORD="$VERIFY_PW" psql -X -q -v ON_ERROR_STOP=1 --single-transaction -d "$VERIFY_DB" \
+    -f /tmp/schema.sql > /dev/null 2> /tmp/schema.err || rc=$?
+  grep -E "ERROR|FATAL" /tmp/schema.err | sed 's/^/DBADMIN clone_schema error: /' | head -5 || true
+  [ "$rc" = 0 ] || { echo "DBADMIN clone_schema failed rc=$rc"; exit 1; }
+  echo "DBADMIN clone_schema ok tables=$(PGUSER="$VERIFY_USER" PGPASSWORD="$VERIFY_PW" q -d "$VERIFY_DB" -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")"
 }
 
 # 권한 분리 확인 — 두 역할이 업무 DB 테이블을 읽지 못하는지, 새 DB 에 다른 역할이 못 붙는지.
