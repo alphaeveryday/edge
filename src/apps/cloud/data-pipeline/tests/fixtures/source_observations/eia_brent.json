@@ -1,0 +1,5 @@
+{"response": {"total": 3, "dateFormat": "YYYY-MM-DD", "frequency": "daily", "data": [
+  {"period": "2026-07-22", "series": "RBRTE", "series-description": "Europe Brent Spot Price FOB (Dollars per Barrel)", "value": "71.84", "units": "$/BBL"},
+  {"period": "2026-07-23", "series": "RBRTE", "series-description": "Europe Brent Spot Price FOB (Dollars per Barrel)", "value": "72.1", "units": "$/BBL"},
+  {"period": "2026-07-24", "series": "RBRTE", "series-description": "Europe Brent Spot Price FOB (Dollars per Barrel)", "value": "71.56", "units": "$/BBL"}
+]}}

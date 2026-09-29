@@ -1,0 +1,168 @@
+"""DART 재무 지표 수집·정제 계약 (ALPHA-1130). 기준시각 조회는 e2e(PostgreSQL)가 본다."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from data_pipeline.lake import LocalStorage
+from data_pipeline.sources import dart_fundamental
+from data_pipeline.steps import source_observations as so
+from source_observation_fakes import (FILINGS, HYNIX, NO_DATA, SAMSUNG, DartFake, filing_list, shares, statement,
+                                      write_holdings)
+
+NOW = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+
+
+def full_responses(corp, *, cfs=True):
+    responses = {}
+    for year, code in FILINGS:
+        responses[("statement", corp["corp_code"], year, code, "OFS")] = statement(corp, year, code, "OFS")
+        if cfs:
+            responses[("statement", corp["corp_code"], year, code, "CFS")] = statement(corp, year, code, "CFS")
+        responses[("shares", corp["corp_code"], year, code)] = shares(corp, year, code, treasury=50)
+    return responses
+
+
+def chain(tmp_path, dart, *, from_date="2025-10-01", to_date="2026-08-20", holdings=("005930", "000660", "005935")):
+    storage = LocalStorage(tmp_path)
+    write_holdings(storage, "2026-08-14", list(holdings))
+    code = so.collect_financial(storage, dart, "run_f", etf_ids=["091160"], from_date=from_date, to_date=to_date,
+                                now=NOW)
+    return storage, code
+
+
+def rows_by(storage, run_id="run_fn"):
+    manifest = json.loads(storage.get_bytes(
+        f"operations_archive/canonical_run_manifests/dataset=financial_metric/run_id={run_id}/manifest.json"))
+    rows = so.read_rows(so.FINANCIAL, storage.get_bytes(manifest["artifact"]["key"]))
+    return {(r["instrument_code"], r["fiscal_year"], r["fiscal_period"], r["metric"], r["period_kind"],
+             r["fs_basis"]): r for r in rows}
+
+
+def default_dart():
+    return DartFake([SAMSUNG, HYNIX], {**full_responses(SAMSUNG), **full_responses(HYNIX, cfs=False)},
+                    {SAMSUNG["corp_code"]: filing_list(SAMSUNG), HYNIX["corp_code"]: filing_list(HYNIX)})
+
+
+def test_quarterly_values_q4_derivation_and_bps_with_evidence(tmp_path):
+    # WHY: v2 PER 는 '해당 분기 EPS 4개 합'이다. 누적을 분기로, 4분기를 공시값처럼 다루면 TTM 이 틀린다.
+    # Q4 는 FY−9M 유도임을 행에 남기고, BPS 는 계산식·입력 접수번호를 남긴다.
+    storage, code = chain(tmp_path, default_dart())
+    assert code == 0
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 0
+    rows = rows_by(storage)
+    q2 = rows[("005930", 2026, "Q2", "revenue", "QUARTER", "CFS")]
+    assert q2["value"] == "90000" and q2["derivation"] == "REPORTED" and q2["unit"] == "KRW"
+    assert rows[("005930", 2026, "Q2", "revenue", "CUMULATIVE", "CFS")]["value"] == "175000"
+    q4 = rows[("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS")]
+    assert q4["value"] == "1100" and q4["derivation"] == "FY_MINUS_9M" and q4["formula"] == dart_fundamental.Q4_FORMULA
+    assert {i["rcept_no"] for i in json.loads(q4["inputs"])} == {"20260310000202", "20251114000101"}
+    assert rows[("005930", 2025, "Q4", "revenue", "QUARTER", "CFS")]["value"] == "90000"   # 330000−240000
+    bps = rows[("005930", 2026, "Q2", "bps", "POINT", "CFS")]
+    # 계약: 지배지분 ÷ (합계 발행 − 자기주식), 소수 6자리 반올림.
+    assert bps["value"] == str((Decimal("3200000") / Decimal(1000 - 50)).quantize(Decimal("0.000001")))
+    inputs = json.loads(bps["inputs"])
+    assert inputs[1]["istc_totqy"] == "1000" and inputs[1]["tesstk_co"] == "50"
+    assert bps["derivation"] == "EQUITY_OVER_SHARES" and "합계" in bps["formula"]
+    # 사업보고서 기말 BPS 는 Q4 시점이다(연간 누적과 가른다).
+    assert ("005930", 2025, "Q4", "bps", "POINT", "CFS") in rows
+
+
+def test_release_date_sets_visibility_without_inventing_a_time(tmp_path):
+    # WHY: DART 는 접수일만 준다. 접수 당일 몇 시에 보였는지 모르므로 다음날 00:00 KST 부터 보이게 한다
+    # (2026-09-30 결정). 실제 수신이 더 이르면 그때부터다.
+    storage, _ = chain(tmp_path, default_dart())
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    fy = rows_by(storage)[("005930", 2025, "FY", "revenue", "CUMULATIVE", "CFS")]
+    assert fy["rcept_date"] == "2026-03-10" and fy["availability_basis"] == "provider_release_date"
+    assert datetime.fromisoformat(fy["available_at"]) == datetime(2026, 3, 10, 15, 0, tzinfo=timezone.utc)
+    q4 = rows_by(storage)[("005930", 2025, "Q4", "revenue", "QUARTER", "CFS")]
+    assert q4["rcept_date"] == "2026-03-10"          # 유도값은 입력 중 늦은 공개일
+
+
+def test_unknown_release_date_falls_back_to_receipt(tmp_path):
+    # WHY: 목록에서 접수일을 못 찾은 판본(정정 직후 목록 창 밖 등)의 공개일을 추정하지 않는다.
+    lists = {SAMSUNG["corp_code"]: filing_list(SAMSUNG), HYNIX["corp_code"]: filing_list(HYNIX)}
+    responses = full_responses(SAMSUNG)
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = statement(
+        SAMSUNG, "2026", "11012", "CFS", rcept_no="20260901000999")        # 목록에 없는 접수번호
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG, HYNIX], {**responses, **full_responses(HYNIX, cfs=False)}, lists))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    row = rows_by(storage)[("005930", 2026, "Q2", "revenue", "QUARTER", "CFS")]
+    assert row["availability_basis"] == "received" and row["rcept_date"] is None
+    assert row["available_at"] == row["received_at"]
+
+
+def test_company_without_consolidated_statements_keeps_standalone_only(tmp_path):
+    # WHY: 연결이 없는 회사(013 조회 데이터 없음)는 수집 실패가 아니다. 별도만 남기고 연결 행을 만들지 않는다.
+    storage, code = chain(tmp_path, default_dart())
+    assert code == 0
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    hynix = {k for k in rows_by(storage) if k[0] == "000660"}
+    assert hynix and {k[5] for k in hynix} == {"OFS"}
+    manifest = json.loads(storage.get_bytes(
+        "operations_archive/raw_run_manifests/dataset=financial_metric/run_id=run_f/manifest.json"))
+    assert manifest["counts"]["error"] == 0 and manifest["counts"]["empty"] >= 4
+    assert manifest["request_scope"]["unmapped"] == ["005935"]   # 우선주는 DART 공시 주체가 아니다
+
+
+def test_constituents_come_from_snapshots_of_the_period_not_the_current_list(tmp_path):
+    # WHY: 현재 구성종목을 과거 전체 기간에 적용하면 그때 없던 종목의 재무를 소비자가 편입 종목으로 읽는다.
+    storage = LocalStorage(tmp_path)
+    write_holdings(storage, "2026-06-01", ["005930"])
+    write_holdings(storage, "2026-09-01", ["005930", "000660"])
+    tickers, coverage = so.constituents_between(storage, ["091160"], datetime(2026, 6, 10).date(),
+                                                datetime(2026, 7, 31).date())
+    assert tickers == ["005930"] and coverage == {"snapshots": ["2026-06-01"], "uncovered_before": None}
+    tickers, coverage = so.constituents_between(storage, ["091160"], datetime(2026, 1, 1).date(),
+                                                datetime(2026, 6, 30).date())
+    assert coverage["uncovered_before"] == "2026-06-01"     # 그 앞 기간 구성은 모른다고 드러낸다
+
+
+def test_no_snapshot_in_the_period_fails_without_calling_dart(tmp_path):
+    storage = LocalStorage(tmp_path)
+    dart = default_dart()
+    assert so.collect_financial(storage, dart, "run_x", etf_ids=["091160"], from_date="2025-01-01",
+                                to_date="2025-03-31", now=NOW) == 1
+    assert dart.calls == []
+
+
+def test_missing_q3_blocks_q4_derivation_and_non_krw_is_rejected(tmp_path):
+    # WHY: 9개월 누적 없이 Q4 를 만들면 연간값이 한 분기로 둔갑한다. 통화가 원이 아니면 단위가 섞인다.
+    responses = full_responses(SAMSUNG)
+    responses[("statement", SAMSUNG["corp_code"], "2025", "11014", "CFS")] = NO_DATA
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")] = statement(
+        SAMSUNG, "2026", "11013", "CFS", currency="USD")
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    rows = rows_by(storage)
+    assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS") not in rows
+    assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "OFS") in rows          # 별도는 3분기가 있다
+    assert ("005930", 2026, "Q1", "revenue", "QUARTER", "CFS") not in rows
+    log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/data_quality_logs/")
+                                            if "run_id=run_fn/" in k)))
+    reasons = {r for f in log["failures"] for r in f["reasons"]}
+    assert {"q4_derivation_input_missing", "non_krw_currency"} <= reasons
+
+
+def test_report_names_map_to_periods_and_reject_non_december_years():
+    assert dart_fundamental.report_of("[기재정정]반기보고서 (2026.06)") == ("2026", "11012", 6)
+    assert dart_fundamental.report_of("분기보고서 (2026.09)") == ("2026", "11014", 9)
+    targets, rejects = dart_fundamental.plan_reports(
+        [{"report_nm": "사업보고서 (2026.03)", "rcept_dt": "20260601", "corp_code": "1"},
+         {"report_nm": "사업보고서 (2025.12)", "rcept_dt": "20260310", "corp_code": "2"}],
+        datetime(2026, 1, 1).date(), datetime(2026, 12, 31).date())
+    assert targets == {("2025", "11011"), ("2025", "11014")}      # 사업보고서엔 같은 해 3분기를 붙인다
+    assert rejects[0]["reasons"] == ["non_december_fiscal_year"]
+
+
+def test_ambiguous_eps_lines_pick_common_share_or_refuse():
+    lines = [{"sj_div": "IS", "account_id": "ifrs-full_BasicEarningsLossPerShare", "account_nm": n}
+             for n in ("보통주 기본주당이익", "우선주 기본주당이익")]
+    line, problem = dart_fundamental._pick_line(lines, "ifrs-full_BasicEarningsLossPerShare", ("IS",))
+    assert line["account_nm"] == "보통주 기본주당이익" and problem is None
+    line, problem = dart_fundamental._pick_line(lines[:1] * 2, "ifrs-full_BasicEarningsLossPerShare", ("IS",))
+    assert line is None and problem == "ambiguous_account_line"

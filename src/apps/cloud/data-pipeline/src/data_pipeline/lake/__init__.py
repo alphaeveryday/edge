@@ -5,6 +5,10 @@ from .storage import (
     S3Storage,
     Storage,
     canonical_business_segment_fact_partition,
+    canonical_financial_metric_partition,
+    canonical_macro_observation_partition,
+    canonical_sector_classification_partition,
+    raw_observation_partition,
     canonical_run_manifest_key,
     canonical_run_partition_key,
     canonical_etf_holdings_partition,
@@ -69,6 +73,10 @@ from .storage import (
 
 __all__ = [
     "Storage",
+    "canonical_financial_metric_partition",
+    "canonical_macro_observation_partition",
+    "canonical_sector_classification_partition",
+    "raw_observation_partition",
     "LocalStorage",
     "S3Storage",
     "make_storage",

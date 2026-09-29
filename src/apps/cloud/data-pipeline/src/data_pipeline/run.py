@@ -4,7 +4,8 @@
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
-         |load-assertions|assemble-events|build-minute-universe}
+         |load-assertions|assemble-events|build-minute-universe
+         |{ingest-raw|normalize|load}-{macro|sector|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--latest-good] [--all] [--pending-only]
         [--limit N] [--window-days N]
@@ -108,8 +109,10 @@ from .steps import (
     normalize_investor_estimate,
     normalize_news,
     normalize_price,
+    source_observations,
     tag_news,
 )
+from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
@@ -280,7 +283,11 @@ def main(argv: list[str] | None = None) -> int:
                  # minute_price_worker 의 KIS 자격증명(같은 앱키). universe 없음 —
                  # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
                  # ⚠️ 하위 소비자가 없다 — window 확정에서 멈추고 job·outbox 를 안 만든다.
-                 "sector-index-worker"],
+                 "sector-index-worker",
+                 # 분석 v2 원천 관측(ALPHA-1130): 매크로 5계열·DART 재무 지표·KIS 지수업종. 수집은
+                 # raw+raw manifest, 정제는 --input-run-id(수집 run) 하나, 적재는 --input-run-id(정제 run)
+                 # 또는 --all(소비 마커 없는 완료 manifest 전부). 경로·계약은 steps/source_observations.
+                 *OBSERVATION_STEPS],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
@@ -376,6 +383,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
+    parser.add_argument("--series", default=None,
+                        help="ingest-raw-macro: 쉼표 구분 계열(미지정=전 계열 "
+                             f"{','.join(sorted(macro_series.SERIES))})")
     parser.add_argument("--max-failed-symbols", type=int, default=None,
                         help="가격·투자자 수급 수집: exit 0 으로 허용할 격리 실패 심볼 수"
                              "(미지정=0; partial·failed_records 기록은 유지)")
@@ -542,12 +552,15 @@ def main(argv: list[str] | None = None) -> int:
         # 키우는 게 아니라 명시적 --from/--to 백필이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
+    if args.series is not None and args.step != "ingest-raw-macro":
+        raise SystemExit("--series 는 ingest-raw-macro 에서만 쓴다 — 무시되므로 거부한다")
     if args.all_partitions and args.step not in (
         "load-instruments", "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
         "load-etf-nav", "load-etf-holdings", "load-etf-flow",
         "load-investor-intraday",
         "load-assertions",
         "load-disclosure",
+        *OBSERVATION_LOAD_STEPS,
     ):
         raise SystemExit(
             "--all 은 load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
@@ -638,6 +651,65 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
+# 원천 관측 세 데이터셋 × (수집·정제·적재). 스텝 이름 → (데이터셋 명세, 단계).
+OBSERVATION_STEPS = {
+    "ingest-raw-macro": ("macro", "collect"),
+    "normalize-macro": ("macro", "normalize"),
+    "load-macro": ("macro", "load"),
+    "ingest-raw-sector": ("sector", "collect"),
+    "normalize-sector": ("sector", "normalize"),
+    "load-sector": ("sector", "load"),
+    "ingest-raw-financial-metric": ("financial", "collect"),
+    "normalize-financial-metric": ("financial", "normalize"),
+    "load-financial-metric": ("financial", "load"),
+}
+OBSERVATION_LOAD_STEPS = tuple(k for k, (_, stage) in OBSERVATION_STEPS.items() if stage == "load")
+
+
+def _dispatch_observation(args, settings, storage, run_id) -> int:
+    """원천 관측 스텝. 수집 창은 스텝이 KST 로 정한다(어제까지 — 진행 중 관측 제외)."""
+    family, stage = OBSERVATION_STEPS[args.step]
+    config = settings.source_observations
+    if config is None:
+        raise SystemExit("source_observations 설정이 없다 — sources.toml 확인")
+    spec = {"macro": source_observations.MACRO, "sector": source_observations.SECTOR,
+            "financial": source_observations.FINANCIAL}[family]
+    producer = args.step.replace("-", "_")
+    if stage == "normalize":
+        return source_observations.normalize(storage, spec, run_id, args.input_run_id, producer=producer)
+    if stage == "load":
+        return source_observations.load(
+            storage, spec, db_config_from_env(settings.db), run_id,
+            input_run_id=args.input_run_id, pending=args.all_partitions, producer=producer)
+    if args.input_run_id is not None:
+        raise SystemExit(f"{args.step} 는 --input-run-id 를 쓰지 않는다")
+    # DAG 는 백필 인자를 빈 문자열로 넘길 수 있다(템플릿이 원소를 빼지 못한다) — 빈 값 = 정기 창.
+    args.from_date, args.to_date = args.from_date or None, args.to_date or None
+    if family == "sector":
+        if args.from_date or args.to_date:
+            # 마스터는 받은 날의 현재값뿐이다 — 과거 날짜를 달면 오늘 분류를 과거로 라벨한다.
+            raise SystemExit("ingest-raw-sector 는 --from/--to 를 쓸 수 없다 — 원천이 현재 분류만 준다")
+        if not config.sector.enabled:
+            raise SystemExit("source_observations.sector 가 비활성이다")
+        return source_observations.collect_sector(
+            storage, PoliteClient(min_interval=1.0, timeout=60.0), config.sector.base_url, run_id)
+    if family == "financial":
+        # DART 키는 기존 재무 수집과 같은 것(dart_financial.source)을 쓴다 — tasks.tf dart 태스크 정의에 이미 있다.
+        if settings.dart_financial is None or not settings.dart_financial.source.api_key:
+            raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
+        dart = dart_fundamental.DartFundamentalSource(settings.dart_financial.source,
+                                                      PoliteClient(min_interval=0.5, timeout=30.0))
+        return source_observations.collect_financial(
+            storage, dart, run_id, etf_ids=config.etf_ids, from_date=args.from_date, to_date=args.to_date)
+    series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
+    source = macro_series.MacroSource(
+        config.macro, fmp_api_key=settings.price.source.api_key if settings.price else None)
+    if not config.macro.enabled:
+        raise SystemExit("source_observations.macro 가 비활성이다")
+    return source_observations.collect_macro(
+        storage, source, run_id, series_ids=series, from_date=args.from_date, to_date=args.to_date)
+
+
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
     max_failed_symbols = args.max_failed_symbols or 0
@@ -646,6 +718,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # run_id 는 백업 객체 접미사로만 쓴다(`.bak-<run_id>`) — 같은 런의 산출임이 드러난다.
     if args.step == "build-minute-universe":
         return build_minute_universe.run(storage, settings, args.universe, run_id)
+    if args.step in OBSERVATION_STEPS:
+        return _dispatch_observation(args, settings, storage, run_id)
     # 정제(normalize-price)는 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 먼저 분기한다.
     # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-price":
