@@ -506,6 +506,38 @@ Table "explanation_run_event_price_observation" {
   }
 }
 
+Table "financial_metric" {
+  "corp_code" text [not null]
+  "instrument_code" text [not null]
+  "fiscal_year" smallint [not null]
+  "fiscal_period" text [not null]
+  "period_end" date [not null]
+  "metric" text [not null]
+  "period_kind" text [not null]
+  "fs_basis" text [not null]
+  "derivation" text [not null]
+  "value" numeric [not null]
+  "unit" text [not null]
+  "formula" text
+  "inputs" jsonb [not null]
+  "rcept_no" text [not null]
+  "rcept_date" date
+  "received_at" timestamptz [not null]
+  "available_at" timestamptz [not null]
+  "availability_basis" text [not null]
+  "raw_run_id" text [not null]
+  "raw_key" text [not null]
+  "raw_sha256" text [not null]
+  "canonical_run_id" text [not null]
+  "artifact_key" text [not null]
+  "artifact_sha256" text [not null]
+  "loaded_at" timestamptz [not null]
+
+  indexes {
+    ("corp_code", "fiscal_year", "fiscal_period", "metric", "period_kind", "fs_basis", "raw_run_id") [pk]
+  }
+}
+
 Table "hypothesis_trial" {
   "trial_id" text [pk]
   "minute_price_trigger_id" text [not null]
@@ -603,6 +635,29 @@ Table "investor_flow_intraday" {
 
   indexes {
     ("instrument_id", "trade_date", "asof_slot") [pk]
+  }
+}
+
+Table "macro_observation" {
+  "series_id" text [not null]
+  "observation_date" date [not null]
+  "value" numeric [not null]
+  "unit" text [not null]
+  "source_vendor" text [not null]
+  "source_series" text [not null]
+  "received_at" timestamptz [not null]
+  "available_at" timestamptz [not null]
+  "availability_basis" text [not null]
+  "raw_run_id" text [not null]
+  "raw_key" text [not null]
+  "raw_sha256" text [not null]
+  "canonical_run_id" text [not null]
+  "artifact_key" text [not null]
+  "artifact_sha256" text [not null]
+  "loaded_at" timestamptz [not null]
+
+  indexes {
+    ("series_id", "observation_date", "raw_run_id") [pk]
   }
 }
 
@@ -1105,6 +1160,39 @@ Table "release_bundle" {
   "release_notes" text
   "published_at" timestamptz
   "created_at" timestamptz [not null]
+}
+
+Table "sector_classification" {
+  "market" text [not null]
+  "instrument_code" text [not null]
+  "standard_code" text [not null]
+  "name_kr" text [not null]
+  "security_group" text [not null]
+  "as_of_date" date [not null]
+  "large_code" text
+  "large_name" text
+  "medium_code" text
+  "medium_name" text
+  "small_code" text
+  "small_name" text
+  "raw_large_code" text [not null]
+  "raw_medium_code" text [not null]
+  "raw_small_code" text [not null]
+  "taxonomy" text [not null]
+  "received_at" timestamptz [not null]
+  "available_at" timestamptz [not null]
+  "availability_basis" text [not null]
+  "raw_run_id" text [not null]
+  "raw_key" text [not null]
+  "raw_sha256" text [not null]
+  "canonical_run_id" text [not null]
+  "artifact_key" text [not null]
+  "artifact_sha256" text [not null]
+  "loaded_at" timestamptz [not null]
+
+  indexes {
+    ("market", "instrument_code", "as_of_date", "raw_run_id") [pk]
+  }
 }
 
 Table "source_event" {
