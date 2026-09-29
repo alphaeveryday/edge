@@ -47,5 +47,6 @@ def test_intraday_snapshots_are_fixed_and_prior_facts_do_not_change():
 def test_unusual_flow_is_first_visible_after_its_finalization():
     before = FixtureTools(make_replay_fixture("2026-09-15T14:00:00+09:00")).initial_input()["flow"]
     after = FixtureTools(make_replay_fixture("2026-09-16T08:30:00+09:00")).initial_input()["flow"]
-    assert not any(r[1] == "2026-09-15" for r in before["rows"])
-    assert any(r[1] == "2026-09-15" and abs(r[3]) >= 600000000 for r in after["rows"])
+    assert not any(r[0] == "2026-09-15" for body in before.values() for r in body["rows"])
+    assert any(r[0] == "2026-09-15" and any(abs(v) >= 600000000 for v in r[1:])
+               for body in after.values() for r in body["rows"])

@@ -8,6 +8,10 @@
 - `.definitions`: 함수 버전·관리자 설명·LaTeX 수식·출처 이름.
 - `.call(name, arguments)`: `{tool_run_id, result}`. 저장은 호출자를 감싸는 `AuditedExecution`이 담당.
 - `.initial_input()`: 시점 제한된 원자료. 시계열은 `columns/rows`, 뉴스는 객체 목록.
+- 여러 종목의 시계열은 종목 ID를 키로 한 객체에 각각의 표를 넣는다. 공통 대상·단위를 행마다 반복하지 않는다.
+- 수급: `flow[종목ID]`는 `unit=KRW`, `metric=net_amount`, `columns=[date,foreign,institution,individual]`. 없는 관측은 null, 실제 0은 0. 같은 종목·날짜·투자자의 중복은 거절.
+- 일봉: `prices[종목ID]`는 `date,high,low,close,volume,turnover`. 가격 스냅샷은 ETF 대상과 `at,price,high,low,available_at` 표. 가격을 지수 `value`로 바꾸지 않는다.
+- 매크로 초기 입력과 조회는 동일한 `at,value,available_at` 표. CPI는 `reference_period` 열 추가(원자료 미제공이면 null). `at`은 원자료 관측시각, `available_at`은 공개·수신시각이며 서로 대체하지 않는다.
 - `context`: `etf_code`, 명시적 시차가 있는 `analysis_at`, 확정 수급일 `flow_as_of_date`.
 - 모든 자료는 `available_at <= analysis_at`. 미래 관측·미래 발표 제외. 결측은 0으로 채우지 않는다.
 - 거래 날짜는 KST. UTC로 전달된 분석시각도 같은 한국 거래일로 해석한다.
@@ -71,6 +75,7 @@
 
 - 등록 계열: usd_krw(KRW_per_USD), kr_10y_yield/us_10y_yield/kr_cpi_yoy(percent), brent_spot_usd(USD_per_barrel), commodity(지정 원자재 지수).
 - 원자료: `macro`의 series,value,unit,observed_at,available_at,subject(선택). 관측 단위는 등록 단위와 일치해야 함.
+- 반환의 관측시각 열을 `at`으로 통일한 `get_macro_observations`는 정의 v2. 기존 v1 실행은 그대로 보존한다.
 - 차이 $C-P$: 금리·물가는 %p. 상대변화 $100(C/P-1)$: %. 상대변화의 이전값은 양수여야 함.
 - 카드: 환율·국고채10년·미국채10년·브렌트 최신값. 원자재20관측 변화에는 `macro_trading_dates.commodity`의 정확한21개 거래일 필요.
 - 금리 일정은 `policy_decisions`의 decision_at,available_at,subject. 미래 행사일은 허용하지만 일정의 공개시각은 분석시각 이전. 날짜 차이는 KST.
