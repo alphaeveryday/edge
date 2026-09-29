@@ -29,6 +29,26 @@ def test_monotone_price_and_distinct_intraday_snapshots():
     assert transition["transitions"] == []
 
 
+def test_transition_evidence_history_is_a_table_with_exact_calculated_values():
+    fixture = chart_fixture()
+    tools = FixtureTools(fixture)
+    result = tools.call("evaluate_indicator_transition", {"indicator": "momentum"})["result"]
+    assert result["observations"] == {
+        "columns": ["at", "value"],
+        "rows": [[r["observed_at"], 100] for r in fixture["price_snapshots"]],
+    }
+    assert next(d for d in tools.definitions if d['function_name'] == 'evaluate_indicator_transition')['version'] == 'v2'
+
+
+def test_missing_intraday_history_is_an_empty_table_not_a_neutral_signal():
+    fixture = chart_fixture()
+    fixture['price_snapshots'] = []
+    result = FixtureTools(fixture).call("evaluate_indicator_transition", {"indicator": "bottom"})["result"]
+    assert result["observations"] == {"columns": ["at", "value"], "rows": []}
+    assert result["transitions"] is None
+    assert result["held_zone"] is None
+
+
 def test_each_snapshot_reuses_prior_finalized_rma():
     fixture = chart_fixture()
     fixture["price_snapshots"][0]["price"] -= 10
