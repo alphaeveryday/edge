@@ -29,7 +29,7 @@ export default function Community() {
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="커뮤니티" />
         <View style={styles.chips}>
-          <Chip label="추천" on={scope === 'all'} onPress={() => setScope('all')} />
+          <Chip label="전체" on={scope === 'all'} onPress={() => setScope('all')} />
           <Chip label="내 관심" on={scope === 'mine'} onPress={() => setScope('mine')} />
         </View>
         {stat && voteEtf && (
