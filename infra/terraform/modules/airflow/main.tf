@@ -166,7 +166,9 @@ resource "aws_ecs_capacity_provider" "host" {
 
 resource "aws_ecs_cluster_capacity_providers" "this" {
   cluster_name       = aws_ecs_cluster.this.name
-  capacity_providers = [aws_ecs_capacity_provider.host.name]
+  # FARGATE 도 연결한다 — 마이그레이션 one-off 와 격리 검증 태스크가 이 클러스터에서 Fargate 로 돈다(목록은 이 리소스가
+  # 통째로 소유하므로 빠진 공급자는 연결되지 않는다). 서비스 기본 전략은 EC2 호스트 그대로다.
+  capacity_providers = [aws_ecs_capacity_provider.host.name, "FARGATE"]
 
   default_capacity_provider_strategy {
     capacity_provider = aws_ecs_capacity_provider.host.name
