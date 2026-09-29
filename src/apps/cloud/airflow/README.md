@@ -10,6 +10,7 @@
 |---|---|
 | `dags/edge_batch.py` | 레인 공통 연결 코드. `EdgeStep`(ECS 실행과 exit code 해석), 슬롯과 `pipeline_run_id` 파생 |
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
+| `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
 | `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
@@ -672,6 +673,24 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 - entry.py `_LANE_STATE_MACHINE_ARN_ENV`의 이 레인 행과 `OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN` 주입
 
 Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 제거한다.
+
+## 원천 관측 레인(source-daily, ALPHA-1130)
+
+분석 v2 원천(매크로 5계열·DART 재무 지표·KIS 지수업종)의 하루 1슬롯(09:10 KST) 배치다. **SFN 이 없는 첫 레인**이라
+원장 계획·보고를 Airflow 만 한다(`ops.entry._AIRFLOW_ONLY_LANES` — SFN 주체로 plan-run 하면 거부). 계약·일정 근거는
+`docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
+
+- 세 계열은 서로 기다리지 않는다(한 공급자 장애가 다른 원천 적재를 막지 않는다). 수집·정제 exit 2 는 받은 범위만 하류로 넘기고 런은 실패로 마감한다(장중 수급과 같은 선택 2).
+- 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다.
+- 로컬 검증: DAG 계약(`tests/test_source_daily_dag.py`, 공식 이미지), DAG 명령 그대로의 원장 통합(`data-pipeline/tests/e2e/test_source_daily_lane_pg.py` — plan-run → 9스텝 → reconcile, 실 PostgreSQL·가짜 공급자 HTTP).
+
+**활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
+1. `macro` 태스크 정의(`edge-{env}-data-pipeline-macro`): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
+   `DATA_PIPELINE_PRICE__SOURCE__API_KEY`(기존 FMP 시크릿)·`DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY`(신규 시크릿 셋 — 무료 키 발급 필요). 배포 뒤 카탈로그 `MACRO_COLLECTION.instrumented` 를 True 로 올린다(배선이 플래그보다 한 배포 앞선다).
+2. `bigkinds`·`dart`·`rds`·`ops` 태스크 정의는 기존 것을 쓴다(DART 키는 기존 `dart` 에 있다, 업종 마스터는 키가 없다). 새 이미지 배포가 필요하다(새 CLI 스텝·설정 섹션).
+3. 주기 결측 판정을 켜려면 `ops` 태스크 정의(주기 reconcile)에 `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true`. 없으면 이 레인은 PLANNER_MISSING 판정 대상이 아니다(안전 기본값).
+4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다(미확인).
+5. 마이그레이션 `V202609301200` 은 dev 머지 시 schema-migrate 가 적용한다.
 
 ## 활성화 전 결정·미해결 조건
 
