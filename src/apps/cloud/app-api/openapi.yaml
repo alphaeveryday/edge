@@ -642,9 +642,9 @@ paths:
       summary: 글 목록
       description: |
         글 목록 하나로 통합. 앱의 community.feed(all|mine)·mine·posts(code)·hot 이 함께 쓴다.
-        scope=all 추천(인기순), mine 내 관심 ETF 글(회원), hot 홈 인기글. code 를 주면 그 ETF 글만.
+        scope=all 전체 최신순, mine 요청자(회원 또는 게스트 디바이스)의 관심 ETF 글, hot 홈 인기글. code 를 주면 그 ETF 글만.
       parameters:
-        - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot], default: all }, description: mine 은 회원 필요 }
+        - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot], default: all } }
         - { name: code, in: query, schema: { $ref: '#/components/schemas/EtfCode' } }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Size' }
