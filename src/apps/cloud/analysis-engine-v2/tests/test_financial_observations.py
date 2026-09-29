@@ -61,6 +61,9 @@ def test_conditional_price_range_preserves_assumptions_and_numeric_provenance():
     assert result['eps_observation']['observation_id'] == 'new'
     assert result['per_assumptions'] == {'low':9,'high':11}
     assert result['return_high_pct'] == pytest.approx((79200 / result['current_price'] - 1) * 100)
+    assert result['current_per'] == pytest.approx(result['current_price'] / 7200)
+    # Positive scenario returns do not encode a maximum possible loss.
+    assert result['return_low_pct'] > 0
 
 
 @pytest.mark.parametrize('bounds', [(0,11), (12,9), (-1,9), (True,11)])

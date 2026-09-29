@@ -50,9 +50,66 @@
 - 관측은 고정 분석시각까지 공개·입수된 것만. 중복 ID·모호한 종목·기간·단위·역순 공개 비교 거절.
 - 실제와 예상 비교는 `kind`를 보존. 예상끼리의 차이를 실적 증가로 표현하지 않음.
 - 범위 계산은 양수 EPS, `0 < per_low <= per_high`, 양수 현재가. `price = EPS × PER`, `return_pct = 100 × (price / current_price − 1)`.
+- 범위 툴 v2는 `current_per = current_price / EPS`도 반환. `return_low_pct`가 양수면 낮은 배수 시나리오도 현재가보다 높다는 뜻이며 최대 손실·가격 지지선을 뜻하지 않음. 과거 밴드 아래라는 사실만으로 시장 미반영을 확정하지 않음.
 - 비교는 `difference = current − previous`, 양수 이전값에서 `percent_change = 100 × difference / previous`. 이전값이 0·음수면 상대변화는 null.
 - 출처·수식은 정의에, 인수·반환값은 기존 `tool_runs`에 보존. 반환과 저장은 동일 객체.
 - 조회 본문을 초기 입력에 중복해서 넣지 않음. 초기에는 공개된 관측의 종목·지표·기간 목록으로 탐색 가능 범위 안내.
+
+### 인수 형식
+
+| 인수 | 형식 | 의미 |
+|---|---|---|
+| `instrument_id` | string | 초기 구성종목에 있는 식별자 |
+| `previous_id`, `current_id` | string | 조회 결과의 관측 ID. 이전·현재는 공개시각 순 |
+| `eps_id` | string | KRW 기준 연간 EPS 관측 ID. 분기 EPS를 연간으로 간주하지 않음 |
+| `per_low`, `per_high` | number | 양수 배수. 하단 ≤ 상단. 타당성은 에이전트 판단·내용 검수 |
+| `metrics` | string[] | 차트의 요청 지표 이름. 중복 불가 |
+| `investor` | string | `foreign`, `institution`, `individual` |
+| `lookback_days` | integer | 최신 확정일부터 1~30거래일 |
+
+<details><summary>실제·예상 조회 예시</summary>
+
+```json
+{"instrument_id":"000660"}
+```
+
+```json
+{"tool_run_id":"example-read","result":{"columns":["observation_id","instrument_id","metric","value","unit","period","kind","author","published_at","available_at","news_id"],"rows":[["eps-new","000660","eps",7200,"KRW_per_share","2027","estimate","가상 증권사 3곳 평균","2026-09-17T07:30:00+09:00","2026-09-17T07:30:00+09:00","expectations"]]}}
+```
+
+</details>
+
+<details><summary>예상 수정·가격 범위 호출 예시</summary>
+
+```json
+{"previous_id":"eps-old","current_id":"eps-new"}
+```
+
+비교 반환의 `previous`, `current`는 선택한 원천 객체 전체이며 `difference=700`, `percent_change=10.76923076923077`이다. 계산값은 표시 반올림 전 값으로 저장한다.
+
+```json
+{"eps_id":"eps-new","per_low":9,"per_high":11}
+```
+
+범위 반환은 `eps_observation`(선택한 원천 객체), `per_assumptions`(`low`, `high`), `current_price`, `price_date`, `price_low=64800`, `price_high=79200`, `return_low_pct`, `return_high_pct`다. 모든 반환은 `{tool_run_id, result}`로 감싸 동일하게 저장한다.
+
+</details>
+
+<details><summary>차트·수급 호출 예시</summary>
+
+```json
+{"metrics":["ma20_distance_pct","turnover_ratio_previous_day"]}
+```
+
+차트 반환은 `instrument_id`, `price`, `price_at`, `metrics`다. 각 지표는 `key`, `value`, `observed_at`으로 구성한다. `price_at`은 장중 실제 관측시각 또는 확정 종가의 거래일이다.
+
+```json
+{"investor":"foreign","lookback_days":5}
+```
+
+가중 합계 반환은 기존 수급 계산의 `amount_krw`, 대상·시작일·종료일을 그대로 사용한다. 개별 합계 호출에는 `instrument_id`를 추가한다.
+
+</details>
 
 ## 시험과 감사
 

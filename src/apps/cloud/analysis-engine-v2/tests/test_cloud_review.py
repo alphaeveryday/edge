@@ -12,6 +12,18 @@ import pytest
 from edge_analysis_v2.cloud_review import make_handler, render_evidence, render_job
 
 
+def test_quality_case_renders_readable_bullets_and_never_implies_semantic_pass():
+    detail = {'job':{'analysis_id':'case','status':'completed'}, 'artifacts':{
+        'case_spec.json':json.dumps({'label':'일회성 개선','goal':'지속성을 구별','relation':'directional','reference_example':'검수 예시'},ensure_ascii=False),
+        'screen.json':json.dumps({'detail':{'title':'판단','items':[{'title_keyword':'원인','sentences':['<script>bad</script>','짧은 불릿입니다.'],'tool_run_ids':['run-1']}]}}),
+        'verification.json':json.dumps({'mechanical_status':'passed','semantic_status':'pending_review','call_count':0,'failed_call_count':0,'checks':[]})}}
+    page = render_job(detail)
+    assert '<li>짧은 불릿입니다.</li>' in page
+    assert '<script>bad</script>' not in page
+    assert '내용 검수 대기' in page
+    assert '일회성 개선' in page
+
+
 @contextmanager
 def server(reader, **kwargs):
     instance = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(reader, **kwargs))
@@ -144,3 +156,19 @@ def test_execution_provenance_distinguishes_real_sources_from_default_fixtures()
     assert '입력은 목자료입니다.' not in real
     assert '입력은 목자료입니다.' in fixture
     assert '문장 품질 합격과는 별개' in real
+
+
+def test_review_shows_summary_and_rejection_before_raw_artifacts():
+    page = render_job({'job': {}, 'artifacts': {
+        'screen.json': json.dumps({'outlook': {'direction': '중립'},
+            'summary_card': {'title': '조건부 전망', 'summary': '고객이 먼저 읽는 결론'},
+            'detail': {'items': []},
+            'conclusion': {'sentence': '최종 판단'}}),
+        'quality_review.md': '불합격: 비교 근거 없음',
+        'verification.json': json.dumps({'mechanical_status': 'passed',
+            'call_count': 10, 'failed_call_count': 0}),
+    }})
+    assert '<h2>조건부 전망</h2>' in page
+    assert '<p>고객이 먼저 읽는 결론</p>' in page
+    assert '<p>최종 판단</p>' in page
+    assert page.index('불합격: 비교 근거 없음') < page.index('실제 저장된 분석글')

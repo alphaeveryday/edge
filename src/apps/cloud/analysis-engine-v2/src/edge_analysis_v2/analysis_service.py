@@ -38,7 +38,7 @@ def _previous(connection, kind, etf_code, cutoff):
 
 def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     artifacts: Path, analysis_id: str, model='deepseek-flash',
-                    model_call=run_model, previous_analysis_id=_LATEST) -> dict:
+                    model_call=run_model, previous_analysis_id=_LATEST, tool_mode='focused') -> dict:
     """Run one idempotent request with independently committed tool evidence.
 
     Args:
@@ -52,6 +52,7 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
         model_call: Async model runner; replaced only by offline tests.
         previous_analysis_id: Explicit predecessor; None starts independently.
             Omit to use the latest completed analysis before the cutoff.
+        tool_mode: Focused domain tools, or card tools for paired evaluation.
 
     Returns:
         Final screen objects reassembled from committed database rows.
@@ -62,6 +63,8 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
     """
     if kind not in ('movement', 'outlook'):
         raise ValueError('Unknown analysis kind')
+    if tool_mode not in ('focused', 'cards'):
+        raise ValueError('Unknown tool interface')
     context = fixture['context']
     cutoff = datetime.fromisoformat(context['analysis_at'])
     if cutoff.utcoffset() is None:
@@ -102,7 +105,15 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                         ORDER BY i.created_at,i.item_id''', (previous_id,context['etf_code'],cutoff.astimezone(KST).date(),cutoff))
                     initial['previous_items'] = json.loads(json.dumps(cur.fetchall(), default=str))
             definitions = list(tools.definitions)
-            schemas = list(tools.schemas)
+            schemas = deepcopy(tools.schemas)
+            excluded = {'get_factor_metrics'} if tool_mode == 'focused' else {'get_chart_metrics'}
+            schemas = [s for s in schemas if s['function']['name'] not in excluded]
+            for schema in schemas:
+                function = schema['function']
+                if function['name'] in ('calculate_investor_flow','calculate_weighted_flow'):
+                    function['parameters']['properties']['operation']['enum'] = ['frequency','streak']
+                    function['parameters']['properties']['direction']['enum'] = ['net_buy','net_sell']
+                    function['description'] = '[최종 근거 가능] 확정 순매수 이력의 빈도 또는 최신일부터의 연속을 계산합니다. frequency는 N일 중 해당 방향 일수, streak는 마지막 날까지 이어진 일수입니다. exact=false는 최소 일수입니다. 금액 합계는 sum_investor_net_flow 또는 sum_weighted_net_flow를 사용하세요.'
             if kind == 'outlook':
                 schemas += EDIT_SCHEMAS
                 definitions += [dict(tool_id=s['function']['name']+':v1',function_name=s['function']['name'],
@@ -131,6 +142,9 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     raise
                 records.append((name, deepcopy(arguments), deepcopy(output)))
                 return output
+            if kind == 'outlook':
+                for factor in ('차트','매크로','밸류','수급'):
+                    call('get_factor_metrics',{'type':factor})
             response = asyncio.run(model_call(initial=initial,prompt=load_prompt(Path(__file__).with_name('prompts')/(kind+'.yaml')),
                 schemas=schemas,call=call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
                 artifacts=artifacts,key=key,model=model))
