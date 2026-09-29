@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { api } from '@/api';
-import { tokens } from '@/api/http/storage';
+import { onboarding, tokens } from '@/api/http/storage';
 
 interface SessionState {
+  restored: boolean;
   onboarded: boolean;
   loggedIn: boolean;
   gateOpen: boolean;
@@ -17,25 +18,29 @@ interface SessionState {
 }
 
 export const useSession = create<SessionState>((set) => ({
+  restored: false,
   onboarded: false,
   loggedIn: false,
   gateOpen: false,
   gateReason: '',
-  finishOnboarding: () => set({ onboarded: true }),
+  finishOnboarding: () => { onboarding.save(true); set({ onboarded: true }); },
   login: () => set({ loggedIn: true, gateOpen: false }),
-  logout: () => set({ loggedIn: false, onboarded: false }),
+  logout: () => { onboarding.save(false); set({ loggedIn: false, onboarded: false }); },
   // 토큰이 서버에서 거부된 뒤. 온보딩 상태는 유지
   expire: () => set({ loggedIn: false }),
-  // 기동 시 보관된 토큰으로 /me 가 통하면 로그인 상태 복원. 거부되면 토큰 폐기
+  // 기동 시 온보딩 완료 복원. 보관된 토큰으로 /me 가 통하면 로그인 상태 복원, 거부되면 토큰 폐기
   restore: async () => {
-    if (process.env.EXPO_PUBLIC_API_MODE !== 'http') return;
-    if (!(await tokens.access())) return;
-    try {
-      await api.user.me();
-      set({ loggedIn: true });
-    } catch {
-      await tokens.clear();
+    const onboarded = await onboarding.done();
+    let loggedIn = false;
+    if (process.env.EXPO_PUBLIC_API_MODE === 'http' && (await tokens.access())) {
+      try {
+        await api.user.me();
+        loggedIn = true;
+      } catch {
+        await tokens.clear();
+      }
     }
+    set({ restored: true, onboarded, loggedIn });
   },
   openGate: (gateReason) => set({ gateOpen: true, gateReason }),
   closeGate: () => set({ gateOpen: false }),

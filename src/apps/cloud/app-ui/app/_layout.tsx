@@ -27,10 +27,11 @@ const queryClient = new QueryClient({
 export default function RootLayout() {
   const [loaded, error] = useFonts(fontAssets);
   const restore = useSession((s) => s.restore);
+  const restored = useSession((s) => s.restored);
   useEffect(() => { restore(); }, [restore]);
   useEffect(() => {
-    if (loaded || error) SplashScreen.hideAsync();
-  }, [loaded, error]);
+    if ((loaded || error) && restored) SplashScreen.hideAsync();
+  }, [loaded, error, restored]);
   if (!loaded && !error) return null;
   return (
     <QueryClientProvider client={queryClient}>
