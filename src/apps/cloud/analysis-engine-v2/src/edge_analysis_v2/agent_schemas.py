@@ -30,7 +30,7 @@ OUTLOOK = obj({
         'type': {'enum': ['이슈', '차트', '매크로', '밸류', '수급']}, 'sticker': STICKER, 'sentence': TEXT})},
     'conclusion': obj({'title': TEXT, 'supports': KEYWORDS, 'burdens': KEYWORDS, 'sentence': TEXT,
                        'change_condition': TEXT}, ['title', 'supports', 'burdens', 'sentence']),
-    'issue_detail': obj({'type': {'const': '이슈'}, 'sticker': STICKER, 'headline': TEXT,
+    'issue_detail': obj({'headline': TEXT,
                          'items': {'type': 'array', 'items': ITEM}}),
 })
 EDIT_SCHEMAS = [

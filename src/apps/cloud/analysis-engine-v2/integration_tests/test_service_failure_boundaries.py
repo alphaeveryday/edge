@@ -56,7 +56,7 @@ def final_response(reference):
         'factors': [{'type': factor, 'sticker': '중립', 'sentence': '관측 자료를 확인했어요.'}
                     for factor in ('이슈', '차트', '매크로', '밸류', '수급')],
         'conclusion': {'title': '공급 계획', 'supports': [], 'burdens': [], 'sentence': '계약 이행을 확인해요.'},
-        'issue_detail': {'type': '이슈', 'sticker': '중립', 'headline': '공급 일정 확인', 'items': [
+        'issue_detail': {'headline': '공급 일정 확인', 'items': [
             {'title_keyword': '공급 계약', 'sentence': '물량을 확보했어요.',
              'sentiment': 'positive', 'tool_run_ids': [reference]}]}}
 
