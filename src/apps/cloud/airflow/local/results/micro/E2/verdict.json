@@ -70,9 +70,9 @@
  "conns_max_active": 1,
  "conns_max_by_app": {
   "af-healthcheck": 2,
-  "af-dagproc": 1,
+  "af-api": 2,
   "af-scheduler": 1,
-  "af-api": 2
+  "af-dagproc": 1
  },
  "heartbeat_age_max_s": 11.8,
  "parse_age_max_s": 30.4,
@@ -99,6 +99,7 @@
  "cgroups_seen": 1,
  "parent_oom_kill_delta_info": null,
  "db_errors_in_samples": 0,
+ "latency_reference_valid": false,
  "latency_vs_E1_max_delta_s": null,
  "pass": {
   "C0_valid_run": false,
@@ -106,7 +107,7 @@
   "C2_parse": false,
   "C3_heartbeat": true,
   "C4_latency_abs": false,
-  "C4_latency_rel": false,
+  "C4_latency_rel": null,
   "C5_outcomes": false,
   "C6_business": false,
   "C7_db": true,

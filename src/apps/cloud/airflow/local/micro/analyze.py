@@ -152,7 +152,7 @@ def ecs_count(batch, step_task, hhmm_run_id):
                 and hhmm_run_id in t["command"]])
 
 
-def outcomes(batches):
+def outcomes(batches, marks=()):
     import hashlib
 
     def pid(hhmm):   # edge_batch.pipeline_run_id 와 같은 재료
@@ -186,8 +186,10 @@ def outcomes(batches):
             and ecs_count(d, "collect", pid("10:05")) == 2 and business(d, "collect", lambda r: r.get("run_id") == pid("10:05")) == 1,
             "1125_hold_recorded": run_state(d, "T11:25") == "failed" and (s("11:25").get("normalize") or ("",))[0] == "failed"
             and business(d, "load", lambda r: r.get("run_id") == pid("11:25")) == 0
-            and any(h.get("kind") == "RESULT_UNKNOWN" for h in holds),
-            "1325_restart_recovered_no_dup": run_state(d, "T13:25") == "success"
+            and any(h.get("kind") == "RESULT_UNKNOWN" and pid("11:25") in (h.get("dedupe_key") or "") for h in holds),
+            # 재시작이 실제로 그 run 의 정제 대기 중에 주입됐어야 한다(주입이 빠진 run 의 성공은 복구 검증이 아니다).
+            "1325_restart_recovered_no_dup": any(m["event"] == "restart_airflow_begin" and m.get("arn") for m in marks)
+            and run_state(d, "T13:25") == "success"
             and business(d, "normalize", lambda r: r.get("run_id") == pid("13:25")) == 1
             and ecs_count(d, "normalize", pid("13:25")) == 1,
             "1435_after_restart_success": run_state(d, "T14:35") == "success",
@@ -252,7 +254,7 @@ def analyze(exp: str) -> dict:
         "import_errors_max": max((i or 0) for i in imports) if imports else None, "reparse_after_touch_s": reparse,
         "burst": {"n": len(burst), "non_2xx": [b for b in burst if not 200 <= b[1] < 300],
                   "p95_s": p95([b[2] for b in burst])},
-        "pool_errors_in_log": pool_errors, "latency": lat, "outcomes": outcomes(batches),
+        "pool_errors_in_log": pool_errors, "latency": lat, "outcomes": outcomes(batches, marks),
         # 배치 덤프가 없는 중단 실험(E2·E4·E6)은 중단 기록의 재시작 수로 센다 — 덤프만 보면 재시작이 없어 보인다.
         "restart_count": {**{b: d.get("restart_count") for b, d in batches.items()},
                           **{"aborted": m["restart_count"] for m in marks if m["event"] == "suite_aborted"}},
@@ -275,8 +277,11 @@ def analyze(exp: str) -> dict:
     out["parent_oom_kill_delta_info"] = (parent[-1].get("oom_kill", 0) - parent[0].get("oom_kill", 0)) if parent else None
     out["db_errors_in_samples"] = db_errors
     # criteria C4 의 상대 기준: 작은 상한의 p95 가 2GiB 기준(E1)보다 10초 넘게 크지 않다.
+    # 참조 실험이 무효(오염·중단)면 상대 기준은 판정 불가다 — 무효 실험을 기준값으로 쓰지 않는다.
     ref_path = ROOT / "E1" / "verdict.json"
-    ref = json.loads(ref_path.read_text())["latency"] if ref_path.exists() and exp != "E1" else None
+    ref_v = json.loads(ref_path.read_text()) if ref_path.exists() and exp != "E1" else None
+    out["latency_reference_valid"] = bool(ref_v and ref_v["pass"].get("C0_valid_run"))
+    ref = ref_v["latency"] if out["latency_reference_valid"] else None
     out["latency_vs_E1_max_delta_s"] = None if ref is None else max(
         ((lat[b][k] or 0) - (ref.get(b, {}).get(k) or 0) for b in lat if b in ref for k in lat[b] if k != "n"),
         default=None)
@@ -297,8 +302,9 @@ def analyze(exp: str) -> dict:
             and (b["start_to_ecs_created_p95"] or 0) <= 20 and (b["ecs_stopped_to_end_p95"] or 0) <= 20
             for b in lat.values()),
         # 참조(E1) 자신만 비교 없이 통과. 지연 자료가 없는 실험(중단)은 판정 불가 = 통과 아님.
-        "C4_latency_rel": exp == "E1" or (out["latency_vs_E1_max_delta_s"] is not None
-                                          and out["latency_vs_E1_max_delta_s"] <= 10),
+        # None = 판정 불가(참조 무효). 통과로 세지 않는다.
+        "C4_latency_rel": True if exp == "E1" else (None if not out["latency_reference_valid"] else (
+            out["latency_vs_E1_max_delta_s"] is not None and out["latency_vs_E1_max_delta_s"] <= 10)),
         "C5_outcomes": bool(b2) and all(v for k, v in b2.items() if k not in ("detail", "holds"))
         and all(isinstance(oc.get(b), dict) and oc[b]["all_success"] for b in ("B1", "B3")),
         "C6_business": all(isinstance(oc.get(b), dict) and oc[b]["no_duplicate"] and oc[b]["canonical_matches_dev"]
