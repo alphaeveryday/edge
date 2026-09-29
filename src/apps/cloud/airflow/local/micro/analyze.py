@@ -110,6 +110,8 @@ def latency(batch):
     for ti in tis:
         runs.setdefault(ti["run_id"], []).append(ti)
     gap, queue, submit, detect = [], [], [], []
+    ti_keys = {(r["run_id"], r["task_id"], r["try_number"]) for r in tis}
+    unmatched = sum(len(v) for k, v in by_try.items() if k not in ti_keys)
     for rid, rows in runs.items():
         final = {r["task_id"]: r for r in rows if r["src"] == "ti"}
         for i, step in enumerate(STEPS):
@@ -129,7 +131,8 @@ def latency(batch):
                     detect.append(ts(r["end_date"]) - ts(t["stoppedAt"]))
     return {"prev_end_to_queued_p95": p95(gap), "queued_to_start_p95": p95(queue),
             "start_to_ecs_created_p95": p95(submit), "ecs_stopped_to_end_p95": p95(detect),
-            "n": {"gap": len(gap), "queue": len(queue), "submit": len(submit), "detect": len(detect)}}
+            "n": {"gap": len(gap), "queue": len(queue), "submit": len(submit), "detect": len(detect)},
+            "ecs_tasks_total": sum(len(v) for v in by_try.values()), "ecs_tasks_unmatched": unmatched}
 
 
 def ti_state(batch, rid_suffix):
@@ -251,7 +254,9 @@ def analyze(exp: str) -> dict:
         "conns_max_by_app": {app: max(c["by_app"].get(app, 0) for c in all_conns)
                              for app in {a for c in all_conns for a in c["by_app"]}},
         "heartbeat_age_max_s": max(hb) if hb else None, "parse_age_max_s": max(parse) if parse else None,
-        "import_errors_max": max((i or 0) for i in imports) if imports else None, "reparse_after_touch_s": reparse,
+        # 조회 실패(None)는 0 이 아니다 — 한 샘플이라도 None 이면 판정 불가로 본다.
+        "import_errors_max": (None if not imports or any(i is None for i in imports) else max(imports)),
+        "reparse_after_touch_s": reparse,
         "burst": {"n": len(burst), "non_2xx": [b for b in burst if not 200 <= b[1] < 300],
                   "p95_s": p95([b[2] for b in burst])},
         "pool_errors_in_log": pool_errors, "latency": lat, "outcomes": outcomes(batches, marks),
@@ -283,12 +288,12 @@ def analyze(exp: str) -> dict:
     out["latency_reference_valid"] = bool(ref_v and ref_v["pass"].get("C0_valid_run"))
     ref = ref_v["latency"] if out["latency_reference_valid"] else None
     out["latency_vs_E1_max_delta_s"] = None if ref is None else max(
-        ((lat[b][k] or 0) - (ref.get(b, {}).get(k) or 0) for b in lat if b in ref for k in lat[b] if k != "n"),
+        ((lat[b][k] or 0) - (ref.get(b, {}).get(k) or 0) for b in lat if b in ref for k in lat[b] if k.endswith("_p95")),
         default=None)
     ev = out["memory_events"] or {}
     oc = out["outcomes"]
     b2 = oc.get("B2") if isinstance(oc.get("B2"), dict) else {}
-    lat_all = [v for b in lat.values() for k, v in b.items() if k != "n"]
+    lat_all = [v for b in lat.values() for k, v in b.items() if k.endswith("_p95")]
     out["pass"] = {
         "C0_valid_run": out["suite_done"] and out["code_unchanged"] and not out["suite_error"],
         "C1_start": out["health"] == "healthy" and out["healthy_after_s"] <= 300 and ev.get("oom", 1) == 0
@@ -297,7 +302,9 @@ def analyze(exp: str) -> dict:
         "C2_parse": out["import_errors_max"] == 0 and out["parse_age_max_s"] is not None and out["parse_age_max_s"] <= 360
         and reparse is not None and reparse <= 90,
         "C3_heartbeat": out["heartbeat_age_max_s"] is not None and out["heartbeat_age_max_s"] <= 30,
-        "C4_latency_abs": bool(lat_all) and all(v is not None for v in lat_all) and all(
+        # 모든 ECS 태스크가 Airflow try 와 짝지어져야 한다(짝 못 찾은 태스크를 빼고 남은 값만으로 통과시키지 않는다).
+        "C4_latency_abs": bool(lat_all) and all(v is not None for v in lat_all)
+        and all(b["ecs_tasks_unmatched"] == 0 and b["n"]["submit"] >= b["ecs_tasks_total"] for b in lat.values()) and all(
             (b["prev_end_to_queued_p95"] or 0) <= 15 and (b["queued_to_start_p95"] or 0) <= 15
             and (b["start_to_ecs_created_p95"] or 0) <= 20 and (b["ecs_stopped_to_end_p95"] or 0) <= 20
             for b in lat.values()),
@@ -317,7 +324,17 @@ def analyze(exp: str) -> dict:
         "C9_ui": len(burst) == 30 and not out["burst"]["non_2xx"] and out["burst"]["p95_s"] is not None
         and out["burst"]["p95_s"] <= 2,
     }
-    del crit
+    # 실험 조건이 사전 계획(criteria.limits)과 같은가 — 이름만 E3 인 다른 조건의 결과를 E3 으로 보고하지 않는다.
+    started = next(m for m in marks if m["event"] == "start_airflow")["settings"]
+    planned = crit["limits"].get(exp)
+    out["planned"] = planned
+    out["ran_with"] = {k: started.get(k) for k in ("mem", "parallelism", "parsing", "pool", "overflow", "health",
+                                                   "malloc_arena_max")}
+    c0 = {"parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5}
+    c1 = {"parallelism": 1, "parsing": 1, "pool": 2, "overflow": 3}
+    want = None if planned is None else {**(c0 if planned["settings"] == "C0" else c1)}
+    out["pass"]["C0_matches_plan"] = None if planned is None else (
+        started.get("mem") == planned["mem"] and all(started.get(k) == v for k, v in want.items()))
     (ROOT / exp / "verdict.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
     return out
 

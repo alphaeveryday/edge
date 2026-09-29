@@ -276,7 +276,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | E2 | 1024 | C0 | **실패** — 기동 중 api-server OOM(137) 재시작 3회, B1 첫 run failed | 1014 / 942 | 중단(판정 확정) |
 | E3 | 1024 | C1 | **통과**(실패 기준 0, 상대 지연은 판정 불가 — 아래) | 968 / 875 | anon 이 768 을 넘은 샘플 54% |
 | E4 | 768 | C1 | **실패** — dag-processor OOM(137) 2회, B1 첫 run 미완료 | 767 / 740 | memory.events max 118 |
-| E6 | 768 | C1 + `MALLOC_ARENA_MAX=2` | **실패** — 유휴부터 상한 도달, B1 중 api-server OOM | 744 / 677 | 설정으로 구제되지 않음 |
+| E6 | 768 | C1 + `MALLOC_ARENA_MAX=2` | **실패** — 유휴부터 상한 도달, B1 중 api-server OOM | 744 / 677 | 설정으로 구제되지 않음. 사전 계획(criteria)에 없던 추가 실험(E4 실패 뒤 "설정으로 해결되는가" 확인) |
 | E5 | 1792 | C1 | **통과**(실패 기준 0, 상대 지연은 판정 불가) | 940 / 879 | 연결 최대 5(활성 1), heartbeat 최대 11.8초 |
 
 - **통과 실험의 공통값(E3·E5).**

@@ -197,10 +197,10 @@
  "conns_max_active": 1,
  "conns_max_by_app": {
   "": 1,
-  "af-api": 2,
   "af-scheduler": 1,
+  "af-dagproc": 1,
   "af-healthcheck": 2,
-  "af-dagproc": 1
+  "af-api": 2
  },
  "heartbeat_age_max_s": 11.7,
  "parse_age_max_s": 30.4,
@@ -223,7 +223,9 @@
     "queue": 30,
     "submit": 25,
     "detect": 25
-   }
+   },
+   "ecs_tasks_total": 25,
+   "ecs_tasks_unmatched": 0
   },
   "B2": {
    "prev_end_to_queued_p95": 1.0,
@@ -235,7 +237,9 @@
     "queue": 27,
     "submit": 25,
     "detect": 23
-   }
+   },
+   "ecs_tasks_total": 25,
+   "ecs_tasks_unmatched": 0
   },
   "B3": {
    "prev_end_to_queued_p95": 0.9,
@@ -247,7 +251,9 @@
     "queue": 30,
     "submit": 25,
     "detect": 25
-   }
+   },
+   "ecs_tasks_total": 25,
+   "ecs_tasks_unmatched": 0
   }
  },
  "outcomes": {
@@ -479,6 +485,21 @@
   "C6_business": true,
   "C7_db": true,
   "C8_no_growth": true,
-  "C9_ui": true
+  "C9_ui": true,
+  "C0_matches_plan": true
+ },
+ "planned": {
+  "mem": "2048m",
+  "settings": "C0",
+  "why": "small 참조(2GiB 전체)"
+ },
+ "ran_with": {
+  "mem": "2048m",
+  "parallelism": 4,
+  "parsing": 2,
+  "pool": 3,
+  "overflow": 5,
+  "health": null,
+  "malloc_arena_max": null
  }
 }

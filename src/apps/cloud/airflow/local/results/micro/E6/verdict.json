@@ -68,8 +68,8 @@
  "conns_max_active": 1,
  "conns_max_by_app": {
   "af-api": 1,
-  "af-scheduler": 1,
-  "af-dagproc": 1
+  "af-dagproc": 1,
+  "af-scheduler": 1
  },
  "heartbeat_age_max_s": 11.4,
  "parse_age_max_s": 30.3,
@@ -109,6 +109,17 @@
   "C6_business": false,
   "C7_db": true,
   "C8_no_growth": false,
-  "C9_ui": false
+  "C9_ui": false,
+  "C0_matches_plan": null
+ },
+ "planned": null,
+ "ran_with": {
+  "mem": "768m",
+  "parallelism": 1,
+  "parsing": 1,
+  "pool": 2,
+  "overflow": 3,
+  "health": "light",
+  "malloc_arena_max": "2"
  }
 }

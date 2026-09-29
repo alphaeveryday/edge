@@ -109,6 +109,21 @@
   "C6_business": false,
   "C7_db": true,
   "C8_no_growth": false,
-  "C9_ui": false
+  "C9_ui": false,
+  "C0_matches_plan": true
+ },
+ "planned": {
+  "mem": "768m",
+  "settings": "C1",
+  "why": "micro 호스트 차감(가정: OS·docker·ECS·SSM 에이전트 약 256MiB)"
+ },
+ "ran_with": {
+  "mem": "768m",
+  "parallelism": 1,
+  "parsing": 1,
+  "pool": 2,
+  "overflow": 3,
+  "health": "light",
+  "malloc_arena_max": null
  }
 }

@@ -186,8 +186,8 @@
  "conns_max_total": 5,
  "conns_max_active": 1,
  "conns_max_by_app": {
-  "af-scheduler": 1,
   "": 1,
+  "af-scheduler": 1,
   "af-api": 2,
   "af-dagproc": 1
  },
@@ -212,7 +212,9 @@
     "queue": 30,
     "submit": 25,
     "detect": 25
-   }
+   },
+   "ecs_tasks_total": 25,
+   "ecs_tasks_unmatched": 0
   },
   "B2": {
    "prev_end_to_queued_p95": 1.0,
@@ -224,7 +226,9 @@
     "queue": 27,
     "submit": 25,
     "detect": 23
-   }
+   },
+   "ecs_tasks_total": 25,
+   "ecs_tasks_unmatched": 0
   },
   "B3": {
    "prev_end_to_queued_p95": 1.0,
@@ -236,7 +240,9 @@
     "queue": 30,
     "submit": 25,
     "detect": 25
-   }
+   },
+   "ecs_tasks_total": 25,
+   "ecs_tasks_unmatched": 0
   }
  },
  "outcomes": {
@@ -468,6 +474,21 @@
   "C6_business": true,
   "C7_db": true,
   "C8_no_growth": true,
-  "C9_ui": true
+  "C9_ui": true,
+  "C0_matches_plan": true
+ },
+ "planned": {
+  "mem": "1792m",
+  "settings": "C1",
+  "why": "small 호스트 차감(같은 가정) — micro 가 부족할 때만"
+ },
+ "ran_with": {
+  "mem": "1792m",
+  "parallelism": 1,
+  "parsing": 1,
+  "pool": 2,
+  "overflow": 3,
+  "health": "light",
+  "malloc_arena_max": ""
  }
 }

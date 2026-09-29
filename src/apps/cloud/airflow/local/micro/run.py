@@ -69,7 +69,8 @@ def compose_env(args) -> dict:
 def code_hash() -> dict:
     """컨테이너에 마운트되는 실행 코드의 해시 — 실험 시작·끝이 다르면 그 실험은 무효다(실행 중 수정 금지)."""
     import hashlib
-    files = [*sorted(HERE.glob("*.sh")), HERE / "compose.micro.yaml", LOCAL / "compose.yaml", LOCAL / "fake_aws.py",
+    files = [*sorted(HERE.glob("*.sh")), HERE / "compose.micro.yaml", HERE / "run.py", HERE / "criteria.json",
+             HERE / "observe.py", LOCAL / "compose.yaml", LOCAL / "fake_aws.py",
              LOCAL / "step_shim.py", *sorted((LOCAL.parent / "dags").glob("*.py"))]
     return {str(f.relative_to(LOCAL.parent)): hashlib.sha256(f.read_bytes()).hexdigest()[:12] for f in files}
 
