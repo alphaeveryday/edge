@@ -85,7 +85,7 @@ def transition(fixture, indicator):
         raise ValueError("unknown indicator")
     rows = history(fixture)
     values = [indicator_values(rows, point) for point in snapshots(fixture)]
-    observations = [{"observed_at": v["observed_at"], "value": v[indicator]} for v in values]
+    observations = {"columns": ["at", "value"], "rows": [[v["observed_at"], v[indicator]] for v in values]}
     changes = None
     if len(values) >= 2 and all(v[indicator] is not None for v in values[-2:]):
         previous, current = [v[indicator] for v in values[-2:]]

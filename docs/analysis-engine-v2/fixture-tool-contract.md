@@ -55,6 +55,7 @@
 
 - `calculate_chart_indicators()`: ETF RSI14·반전 Williams%R14와 관측시각. 최종 근거 가능.
 - `evaluate_indicator_transition(indicator)`: momentum/bottom. 최근 가격 스냅샷 최대5개에서 계산한 지수의 상하단 진입·이탈·유지. 최종 근거 가능.
+- 반환은 `indicator, observations, transitions, held_zone`. `observations`는 `columns=[at,value]`와 `rows` 표다. 빈 이력은 빈 rows, 계산 불가 값은 null. 상태 판정은 객체형으로 유지하며 이 반환 형식은 정의 v2로 저장한다.
 - 원자료: `prices`의 instrument_id,date,high,low,close,volume,turnover,available_at와 `price_snapshots`의 instrument_id,price,high,low,observed_at,available_at. 단일 `price_snapshot`도 허용.
 - 초기 채택: RSI14 Wilder. 15확정 종가의 14변화로 상승·하락 평균 시드, 이후 RMA. 장중값은 전일 확정 RMA에서 오늘 변화만 반영. 평탄 분모는 null.
 - 바닥 $100(H_{14}-P)/(H_{14}-L_{14})$. 오늘 고저+이전13일. 0분모 null. 반등확률 아님.
