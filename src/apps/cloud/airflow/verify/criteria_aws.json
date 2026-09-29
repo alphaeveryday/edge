@@ -1,0 +1,80 @@
+{
+  "_note": "실제 AWS 단기 검증(ALPHA-1119, t4g.micro + 기존 RDS) — 실행 전에 고정(2026-09-29 19:45 KST). 실행 도중 이 파일을 바꾸면 그 전 결과는 최종 판정에 쓰지 않는다. 판정: verify/analyze_aws.py.",
+  "window": {
+    "start_not_before_kst": "2026-09-29T19:50 (공시 19:30 배치 종료 확인 뒤)",
+    "hard_end_kst": "2026-09-30T06:30 — 이 시각 전에 신규 실행 중지·정리 시작(프리마켓 07:00·분 세션 07:45 전)",
+    "avoid_kst": ["23:58~00:45 (뉴스 00:10 배치 전후 — 새 run 을 시작하지 않는다)"],
+    "max_total_hours": 24,
+    "small_comparison": "micro 가 중단 기준·실패 기준에 걸린 경우에만. 같은 창 안에서, 같은 시나리오"
+  },
+  "deploy": {
+    "settings": {
+      "AIRFLOW__CORE__PARALLELISM": "1",
+      "AIRFLOW__DAG_PROCESSOR__PARSING_PROCESSES": "1",
+      "AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE": "2",
+      "AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW": "3",
+      "AIRFLOW__API__WORKERS": "1"
+    },
+    "health": {
+      "api-server": "\"metadatabase\":{\"status\":\"healthy\"",
+      "scheduler": "\"scheduler\":{\"status\":\"healthy\"",
+      "dag-processor": "\"dag_processor\":{\"status\":\"healthy\""
+    }
+  },
+  "scenarios": {
+    "normalize_wait_seconds": 120,
+    "S0_start": "deploy-airflow(start_service) → 세 컨테이너 HEALTHY, 두 DAG pause, import 오류 0, 예제 DAG 없음",
+    "S1_idle": {"seconds": 1800, "why": "Airflow 연결만 붙은 상태의 기존 RDS 영향 확인 — 통과해야 수동 검증으로 넘어간다"},
+    "B1": {"slots": ["09:35", "10:05", "11:25", "13:25", "14:35"], "burst_on": 3,
+           "what": "정상 수동 실행 5회(각 정제 120초 외부 대기) + 3번째 대기 중 API 30건·DAG 재파싱 요청"},
+    "idle_after_B1": 900,
+    "B2": {"slots": {"fail_confirmed": "09:35", "retry_not_run": "10:05", "hold_result_unknown": "11:25",
+                     "restart_tracking": "13:25", "hold_state_unknown": "14:35", "blocked_before_release": "15:00",
+                     "after_release": "15:30"},
+           "what": "확정 실패(적재 exit 1) · 업무 미시작 재시도(수집 exit 75) · 정제 대기 중 StopTask(결과 미상 HOLD) · 정제 대기 중 Airflow 서비스 강제 재배포(추적·재사용) · 제출 응답 유실+추적 조회 실패 주입(ECS_STATE_UNKNOWN HOLD) · 보류 중 새 run 차단 확인 · 앞 태스크 STOPPED 확인 뒤 해제 · 해제 뒤 정상 run"},
+    "idle_after_B2": 900,
+    "B3": {"slots": ["09:35", "10:05", "11:25", "13:25", "14:35"], "what": "B1 반복(버스트 제외)"},
+    "idle_after_B3": 900,
+    "restarts_after_B3": {"count": 2, "idle_each_seconds": 300}
+  },
+  "real_vs_injected": {
+    "real_aws": ["ECS RunTask·DescribeTasks·ListTasks·StopTask", "Fargate 기동·종료·exitCode·stopCode", "CloudWatch 로그", "Airflow 서비스 재배포(재시작)", "기존 RDS 연결·부하", "EC2 호스트 메모리·CPU"],
+    "injected": ["컨테이너 exit 1·75·정제 대기(shim VERIFY_FAULT)", "RunTask 응답 유실·제출 뒤 ListTasks 실패(VerifyStep, Airflow 쪽 — 태스크는 실제로 생성)"],
+    "not_called": ["KIS·토스 등 외부 업무 API(수집은 보존 raw 재생)"]
+  },
+  "pass": {
+    "A1_placement": "서비스 태스크가 배치되고 세 컨테이너 HEALTHY(10분 안). 배치 불가(용량 부족 이벤트)는 실패로 기록한다 — 예약을 줄여 억지로 넣지 않는다",
+    "A2_no_oom_restart": "호스트 커널 로그·docker 이벤트·태스크 cgroup 어디에도 Airflow OOM 0, 주입하지 않은 서비스 태스크 교체 0. 관측이 불완전하면(태스크 cgroup 미관측·kmsg/docker 로그 부재·샘플 공백 30초 초과) 판정 불가",
+    "A3_host_memory": "호스트 MemAvailable 최소 ≥ 64MiB 이고 swap 사용 0(SwapTotal 이 0 이 아니고 사용이 있으면 판정 불가 — swap 덕분의 통과를 인정하지 않는다)",
+    "A4_heartbeat_parse": "health 샘플(15초)에서 scheduler·dag_processor healthy, import 오류 0. 샘플 공백(주입 재시작 창 제외) 60초 초과면 판정 불가",
+    "A5_latency": "p95 — 앞 task 종료→queued ≤ 15초, queued→시작 ≤ 15초, task 시작→ECS 생성 ≤ 20초, ECS 종료→task 종료 ≤ 30초(실제 ECS 조회 주기). 모든 업무 ECS 태스크가 try 와 짝지어지고 표본이 기대 수와 같아야 한다 — 부족하면 판정 불가",
+    "A6_outcomes": "시나리오별 기대 결과(run·task 상태, try 수, 원장 orchestration_status·EXECUTION_HOLD kind, 차단 run 의 수집 exit 76, 해제 뒤 성공, 원장 orchestration_status, 산출물 쓰기 유무). 원장이 없으면 판정 불가",
+    "A7_business": "업무 시작 수(business_starts, 주입 exit 제외) = 기대값(중복 0), exit 0 으로 끝난 업무 = 스텝마다 1, 파티션 쓰기 ≥ 1, 원장 AIRFLOW·SUCCEEDED·전 작업 FULFILLED, ECS 태스크 수 = 기대값. 원장이 없으면 판정 불가",
+    "A8_db": "Airflow·검증 역할 연결 ≤ 10(역할 상한), Airflow 로그에 연결 오류·풀 대기 초과 0, RDS 중단 기준 미발동, 같은 창 안에 끝난 업무 SFN 실패 0",
+    "A9_no_growth": "B3 뒤 유휴의 Airflow 태스크 cgroup anon ≤ B1 뒤 유휴 × 1.10, 호스트 MemAvailable ≥ B1 뒤 × 0.90",
+    "A10_ui": "버스트 30건 전부 2xx, p95 ≤ 2초"
+  },
+  "airflow_stop": {
+    "oom": "Airflow 태스크 cgroup OOM kill 1건 — 즉시 중단(증거 보존), micro 실패",
+    "restart_loop": "주입하지 않은 서비스 태스크 교체 2회(30분 안) — 중단",
+    "unplaceable": "서비스 태스크가 10분 넘게 PENDING/미배치(용량 부족) — 중단, micro 배치 불가",
+    "latency": "연속 3개 task 에서 queued→시작 > 60초 또는 ECS 종료→task 종료 > 90초 — 중단(지속 지연)"
+  },
+  "rds_stop": {
+    "_basis": "edge-dev 14일 1분 지표의 장외(20:00~06:30 KST) 분포(2026-09-29 조회): FreeableMemory 최소 559·p1 588·p50 606MiB, Swap 최대 38MiB, CPU p99 6.6%·최대 19.2%, 연결 p99 22·최대 30, 쓰기 지연 p99 5.8ms·최대 60ms(단발), 읽기 p99 6.7ms. 로컬 실측 Airflow 추가분: 연결 3~5, 유휴 초당 약 28 트랜잭션. 기준은 '장외 관측 범위 밖 + 여유' 로 잡았다 — 넘으면 Airflow 쪽을 먼저 멈추고 원인을 본다.",
+    "freeable_mib_below": 500,
+    "swap_mib_above": 60,
+    "cpu_pct_above": 30,
+    "latency_ms_above": 20,
+    "connections_above": 42,
+    "sustain_minutes": {"freeable": 3, "swap": 3, "cpu": 5, "latency": 3, "connections": 2},
+    "business": "창 안에 업무 SFN FAILED 1건 — 원인 확인 전 Airflow 정지"
+  },
+  "cleanup": [
+    "새 run 중지(DAG pause) · 도는 검증 ECS 태스크 STOPPED 확인",
+    "증거 수거(호스트 관측·배치 증거·deployinfo·RDS) · 검증 원장 백업(verify-backup) · 이미지 digest 기록",
+    "서비스 desired 0 → Terraform host_count=0·verify_enabled=false 머지(자동 apply 가 호스트·검증 자원·알람을 걷는다)",
+    "dbadmin teardown(전용 DB·역할 삭제) — verify_enabled=false 머지 전에(관리 태스크 정의가 사라지기 전)",
+    "남는 것: ECR 이미지·앱 시크릿·로그 그룹·클러스터(무료)·SG — 월 잔여 비용 보고"
+  ]
+}

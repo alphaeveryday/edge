@@ -74,3 +74,19 @@ output "alarm_topic_arn" {
   description = "파이프라인 알람 SNS 토픽. 감시 대상이 다른 모듈에 있는 알람(예: RDS)도 이 토픽 하나로 모은다 — 알림 채널을 쪼개면 구독을 두 번 확인해야 한다"
   value       = aws_sns_topic.alarms.arn
 }
+
+# ── Airflow 실행 환경(ALPHA-1119)이 이 레인의 ECS 태스크를 띄우는 데 쓰는 값 ──
+# Airflow 역할의 iam:PassRole 대상 — 배치 태스크 정의(tasks.tf·ops_ledger.tf)가 쓰는 역할 셋.
+output "batch_pass_role_arns" {
+  description = "배치 태스크 정의의 execution·task·ops task 역할 ARN — RunTask 호출자의 iam:PassRole 대상"
+  value       = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.ops_task.arn]
+}
+
+output "ops_task_definition_family" {
+  value = aws_ecs_task_definition.ops.family
+}
+
+output "kr_holidays" {
+  description = "Planner·수집이 쓰는 휴장일 — 같은 판정을 해야 하는 격리 검증 태스크가 그대로 받는다"
+  value       = var.kr_holidays
+}

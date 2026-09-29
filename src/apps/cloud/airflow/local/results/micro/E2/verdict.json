@@ -1,0 +1,132 @@
+{
+ "exp": "E2",
+ "limits": {
+  "memory.max": 1073741824,
+  "memory.swap.max": 0,
+  "cpu.max": "200000 100000"
+ },
+ "healthy_after_s": 17.5,
+ "health": "healthy",
+ "memory_events": {
+  "low": 0,
+  "high": 0,
+  "max": 0,
+  "oom": 0,
+  "oom_kill": 0,
+  "oom_group_kill": 0
+ },
+ "memory_peak_mib": 906,
+ "swap_current_max": 0,
+ "memory_all": {
+  "max_current_mib": 1014,
+  "max_anon_mib": 942,
+  "mean_anon_mib": 649,
+  "max_pss_by_component_mib": {
+   "supervisor": 1,
+   "api": 266,
+   "scheduler": 128,
+   "dag_processor": 210,
+   "serve_logs": 106,
+   "executor_worker": 129,
+   "healthcheck": 228
+  },
+  "max_total_pss_mib": 936
+ },
+ "memory_by_phase": {
+  "start": {
+   "max_current_mib": 887,
+   "max_anon_mib": 824,
+   "mean_anon_mib": 646,
+   "max_pss_by_component_mib": {
+    "supervisor": 1,
+    "api": 224,
+    "scheduler": 101,
+    "dag_processor": 185,
+    "serve_logs": 44,
+    "executor_worker": 119,
+    "healthcheck": 228
+   },
+   "max_total_pss_mib": 841
+  }
+ },
+ "memory_batches": {},
+ "cpu_idle_start": {
+  "avg_cores": 0.055,
+  "throttled_periods_ratio": 0.0093,
+  "throttled_s": 0.04
+ },
+ "cpu_all": {
+  "avg_cores": 0.005,
+  "throttled_periods_ratio": 0.1696,
+  "throttled_s": 1.16
+ },
+ "idle_anon_mib": {
+  "start": 663
+ },
+ "idle_conns": {
+  "start": 3
+ },
+ "conns_max_total": 5,
+ "conns_max_active": 1,
+ "conns_max_by_app": {
+  "af-scheduler": 1,
+  "af-api": 2,
+  "af-dagproc": 1,
+  "af-healthcheck": 2
+ },
+ "heartbeat_age_max_s": 11.8,
+ "parse_age_max_s": 30.4,
+ "import_errors_max": 0,
+ "reparse_after_touch_s": null,
+ "burst": {
+  "n": 0,
+  "non_2xx": [],
+  "p95_s": null
+ },
+ "pool_errors_in_log": 0,
+ "latency": {},
+ "outcomes": {
+  "B1": "missing",
+  "B3": "missing"
+ },
+ "restart_count": {
+  "aborted": 3
+ },
+ "suite_done": false,
+ "code_unchanged": false,
+ "suite_error": null,
+ "oom_kill_in_airflow": 0,
+ "cgroups_seen": 1,
+ "parent_oom_kill_delta_info": null,
+ "db_errors_in_samples": 0,
+ "latency_reference_valid": false,
+ "latency_vs_E1_max_delta_s": null,
+ "pass": {
+  "C0_valid_run": false,
+  "C1_start": false,
+  "C2_parse": false,
+  "C3_heartbeat": true,
+  "C4_latency_abs": false,
+  "C4_latency_rel": null,
+  "C5_outcomes": false,
+  "C6_business": false,
+  "C7_db": true,
+  "C8_no_growth": false,
+  "C9_ui": false,
+  "C0_matches_plan": true
+ },
+ "planned": {
+  "mem": "1024m",
+  "settings": "C0",
+  "why": "micro 참조(1GiB 전체) — #981 설정 그대로"
+ },
+ "ran_with": {
+  "mem": "1024m",
+  "parallelism": 4,
+  "parsing": 2,
+  "pool": 3,
+  "overflow": 5,
+  "health": "cli",
+  "malloc_arena_max": null
+ }
+}

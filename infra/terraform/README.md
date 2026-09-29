@@ -25,6 +25,7 @@ infra/terraform/
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
+    ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 격리 검증 자원) — ALPHA-1119, 메타DB 는 envs/dev `airflow_rds`
     ├── data-pipeline/      # Step Functions 배치 4종 — 시장 + 뉴스 + 공시(rollback-only) + 장중 수급 — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
@@ -97,6 +98,7 @@ cd ../envs/dev  && terraform apply
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
+- Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../src/apps/cloud/airflow/README.md) "최초 구축")
 
 ### 🔮 미구축 (후속 증분)
 

@@ -1,0 +1,42 @@
+{
+  "_note": "측정 전에 고정한 판정 기준(ALPHA-1119 micro·small 검증, 2026-09-29). 실행 도중 이 파일을 바꾸면 그 전 결과는 최종 판정에 쓰지 않는다.",
+  "suite": {
+    "idle_seconds": 300,
+    "B1_normal_runs": ["09:35", "10:05", "11:25", "13:25", "14:35"],
+    "B1_normalize_wait_seconds": 120,
+    "B1_burst_during_run": "11:25",
+    "B1_burst": {"api_requests": 30, "touch_dag_files": true},
+    "B2": {
+      "09:35": "load exit 1 (확정 업무 실패)",
+      "10:05": "collect fail_to_start 1회 (기동 실패 → 재시도)",
+      "11:25": "normalize 90초 대기 중 StopTask (결과 미상 → HOLD)",
+      "13:25": "normalize 150초 대기 중 30초에 Airflow 컨테이너 재시작 (추적·복구)",
+      "14:35": "정상 (재시작 뒤 정상 실행)"
+    },
+    "B3_soak": "B1 과 같은 5회(버스트 제외) + 유휴 300초 + Airflow 재시작 2회(각 뒤 유휴 180초)",
+    "day": "2026-09-22"
+  },
+  "pass": {
+    "C1_start": "시작 후 300초 안에 healthy, 주입하지 않은 재시작 0, memory.events oom·oom_kill 0(전 구간)",
+    "C2_parse": "import 오류 0, DAG 파싱 경과 ≤ 360초(기동 뒤 전 샘플), DAG 파일 touch 뒤 90초 안에 재파싱",
+    "C3_heartbeat": "scheduler·dag-processor heartbeat 경과 ≤ 30초(주입 재시작 창 제외 전 샘플)",
+    "C4_latency": "p95 — 앞 task 종료→queued ≤ 15초, queued→시작 ≤ 15초, task 시작→ECS 생성 ≤ 20초, ECS 종료→task 종료 ≤ 20초. 작은 상한의 p95 는 2GiB 기준(E1)보다 10초 넘게 크지 않다",
+    "C5_outcomes": "시나리오별 기대 결과 전부(run 상태·task 상태·try 수·원장 orchestration_status·EXECUTION_HOLD)",
+    "C6_business": "스텝별 업무 실행 수(business_runs) = 기대값(중복 0), canonical 행 sha 가 dev 참조와 같다(B1·B3)",
+    "C7_db": "로그에 연결 풀 대기 초과·연결 오류 0(QueuePool limit·TimeoutError·too many clients·OperationalError)",
+    "C8_no_growth": "B3 뒤 유휴 anon ≤ B1 뒤 유휴 anon × 1.10, 유휴 연결 수 차이 ≤ 1",
+    "C9_ui": "버스트 30건 전부 2xx, p95 ≤ 2초"
+  },
+  "report_only": ["memory.events max·high 증가(상한 도달 = 회수 발생)", "CPU throttled 비율", "유휴 평균 CPU(크레딧 추정용)", "구성요소별 PSS"],
+  "limits": {
+    "E1": {"mem": "2048m", "settings": "C0", "why": "small 참조(2GiB 전체)"},
+    "E2": {"mem": "1024m", "settings": "C0", "why": "micro 참조(1GiB 전체) — #981 설정 그대로"},
+    "E3": {"mem": "1024m", "settings": "C1", "why": "micro 참조 — 조정 설정"},
+    "E4": {"mem": "768m", "settings": "C1", "why": "micro 호스트 차감(가정: OS·docker·ECS·SSM 에이전트 약 256MiB)"},
+    "E5": {"mem": "1792m", "settings": "C1", "why": "small 호스트 차감(같은 가정) — micro 가 부족할 때만"}
+  },
+  "settings": {
+    "C0": {"parallelism": 4, "parsing_processes": 2, "pool_size": 3, "max_overflow": 5, "api_workers": 1},
+    "C1": "C0 측정 뒤 원인별로 정한다(정한 값과 근거를 이 파일이 아니라 학습 문서에 기록하고, E3 시작 전에 확정)"
+  }
+}

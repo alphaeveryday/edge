@@ -65,3 +65,4 @@
 | [0055](0055-kis-shared-call-budget-on-postgres.md) | KIS 호출 한도를 PostgreSQL 공유 예산으로 통제 — 기본 비활성, 응답 불확실 시 발신 중단 | 제안됨 |
 | [0056](0056-etforca-app-api-infra.md) | ETF Orca 앱 API(app-api) 클라우드 인프라 — 별도 PostgreSQL·ElastiCache·N 인스턴스·단일 호스트 | 승인됨 |
 | [0057](0057-lake-dataset-canonical-consumption-and-retirement.md) | 레이크 데이터셋 정본과 운영 소비 경로, 승격·폐기 절차 | 제안됨 (적용 보류) |
+| [0058](0058-airflow-on-ecs-ec2.md) | 유한 배치의 Airflow 실행 환경 — ECS on EC2 자체 운영 | 제안됨 |

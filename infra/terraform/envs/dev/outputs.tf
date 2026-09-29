@@ -142,3 +142,20 @@ output "super_admin_ui_distribution_id" {
   description = "→ vars.SUPER_ADMIN_UI_DISTRIBUTION_ID"
   value       = module.super_admin_site.distribution_id
 }
+
+# ── Airflow 실행 환경(ALPHA-1119) — deploy-airflow·검증 절차가 쓰는 이름 ──
+output "airflow_cluster_name" {
+  value = module.airflow.cluster_name
+}
+
+output "airflow_service_name" {
+  value = module.airflow.service_name
+}
+
+output "airflow_autoscaling_group_name" {
+  value = module.airflow.autoscaling_group_name
+}
+
+output "airflow_verify_bucket" {
+  value = module.airflow.verify_bucket
+}

@@ -1,0 +1,61 @@
+{"t": 1790657510.3, "event": "start_airflow", "mem": "2048m", "settings": {"name": "E1", "mem": "2048m", "parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5, "smoke": false}}
+{"t": 1790657527.8, "event": "healthy", "health": "healthy"}
+{"t": 1790657527.9, "event": "dag_loaded", "code": 200}
+{"t": 1790657527.9, "event": "idle_begin", "tag": "start", "seconds": 300}
+{"t": 1790657827.9, "event": "idle_end", "tag": "start"}
+{"t": 1790657828.2, "event": "reset", "tag": "B1"}
+{"t": 1790657828.3, "event": "trigger", "run": "micro__B1__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790657988.4, "event": "run_done", "run": "micro__B1__2026-09-22T09:35", "state": "success"}
+{"t": 1790657988.5, "event": "trigger", "run": "micro__B1__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790658148.6, "event": "run_done", "run": "micro__B1__2026-09-22T10:05", "state": "success"}
+{"t": 1790658148.7, "event": "trigger", "run": "micro__B1__2026-09-22T11:25", "code": 200, "detail": null}
+{"t": 1790658183.8, "event": "touch_dags"}
+{"t": 1790658184.1, "event": "burst", "arn": "arn:aws:ecs:ap-northeast-2:000000000000:task/edge-lab/23b6fd673a194971b1cf8c5de47369ab", "results": [["/api/v2/dags/edge_investor_intraday", 200, 0.014], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.018], ["/api/v2/monitor/health", 200, 0.006], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.023], ["/api/v2/dags?limit=20", 200, 0.011], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.012], ["/api/v2/importErrors", 200, 0.01], ["/api/v2/version", 200, 0.007], ["/api/v2/dags/edge_investor_intraday", 200, 0.007], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.011], ["/api/v2/monitor/health", 200, 0.004], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.015], ["/api/v2/dags?limit=20", 200, 0.01], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.007], ["/api/v2/importErrors", 200, 0.007], ["/api/v2/version", 200, 0.003], ["/api/v2/dags/edge_investor_intraday", 200, 0.006], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.01], ["/api/v2/monitor/health", 200, 0.004], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.014], ["/api/v2/dags?limit=20", 200, 0.008], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.009], ["/api/v2/importErrors", 200, 0.007], ["/api/v2/version", 200, 0.004], ["/api/v2/dags/edge_investor_intraday", 200, 0.005], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.01], ["/api/v2/monitor/health", 200, 0.005], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.013], ["/api/v2/dags?limit=20", 200, 0.008], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.009]]}
+{"t": 1790658305.7, "event": "run_done", "run": "micro__B1__2026-09-22T11:25", "state": "success"}
+{"t": 1790658305.8, "event": "trigger", "run": "micro__B1__2026-09-22T13:25", "code": 200, "detail": null}
+{"t": 1790658462.8, "event": "run_done", "run": "micro__B1__2026-09-22T13:25", "state": "success"}
+{"t": 1790658462.9, "event": "trigger", "run": "micro__B1__2026-09-22T14:35", "code": 200, "detail": null}
+{"t": 1790658620.0, "event": "run_done", "run": "micro__B1__2026-09-22T14:35", "state": "success"}
+{"t": 1790658621.1, "event": "dump", "batch": "B1"}
+{"t": 1790658621.1, "event": "idle_begin", "tag": "after_B1", "seconds": 300}
+{"t": 1790658921.1, "event": "idle_end", "tag": "after_B1"}
+{"t": 1790658921.4, "event": "reset", "tag": "B2"}
+{"t": 1790658921.5, "event": "trigger", "run": "micro__B2__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790658957.8, "event": "run_done", "run": "micro__B2__2026-09-22T09:35", "state": "failed"}
+{"t": 1790658957.9, "event": "trigger", "run": "micro__B2__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790659024.5, "event": "run_done", "run": "micro__B2__2026-09-22T10:05", "state": "success"}
+{"t": 1790659024.6, "event": "trigger", "run": "micro__B2__2026-09-22T11:25", "code": 200, "detail": null}
+{"t": 1790659069.7, "event": "stop_task", "arn": "arn:aws:ecs:ap-northeast-2:000000000000:task/edge-lab/e0b873bb92e34e9881d85188a21fc640"}
+{"t": 1790659085.0, "event": "run_done", "run": "micro__B2__2026-09-22T11:25", "state": "failed"}
+{"t": 1790659085.1, "event": "trigger", "run": "micro__B2__2026-09-22T13:25", "code": 200, "detail": null}
+{"t": 1790659130.2, "event": "restart_airflow_begin", "arn": "arn:aws:ecs:ap-northeast-2:000000000000:task/edge-lab/ea9b58c9e6f045dd9ed401f4f95e9b00"}
+{"t": 1790659130.5, "event": "restart_airflow_end"}
+{"t": 1790659451.4, "event": "run_done", "run": "micro__B2__2026-09-22T13:25", "state": "success"}
+{"t": 1790659451.4, "event": "trigger", "run": "micro__B2__2026-09-22T14:35", "code": 200, "detail": null}
+{"t": 1790659487.8, "event": "run_done", "run": "micro__B2__2026-09-22T14:35", "state": "success"}
+{"t": 1790659488.7, "event": "dump", "batch": "B2"}
+{"t": 1790659488.7, "event": "idle_begin", "tag": "after_B2", "seconds": 300}
+{"t": 1790659788.7, "event": "idle_end", "tag": "after_B2"}
+{"t": 1790659789.2, "event": "reset", "tag": "B3"}
+{"t": 1790659789.3, "event": "trigger", "run": "micro__B3__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790659946.4, "event": "run_done", "run": "micro__B3__2026-09-22T09:35", "state": "success"}
+{"t": 1790659946.5, "event": "trigger", "run": "micro__B3__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790660103.6, "event": "run_done", "run": "micro__B3__2026-09-22T10:05", "state": "success"}
+{"t": 1790660103.7, "event": "trigger", "run": "micro__B3__2026-09-22T11:25", "code": 200, "detail": null}
+{"t": 1790660260.7, "event": "run_done", "run": "micro__B3__2026-09-22T11:25", "state": "success"}
+{"t": 1790660260.8, "event": "trigger", "run": "micro__B3__2026-09-22T13:25", "code": 200, "detail": null}
+{"t": 1790660417.8, "event": "run_done", "run": "micro__B3__2026-09-22T13:25", "state": "success"}
+{"t": 1790660417.9, "event": "trigger", "run": "micro__B3__2026-09-22T14:35", "code": 200, "detail": null}
+{"t": 1790660574.9, "event": "run_done", "run": "micro__B3__2026-09-22T14:35", "state": "success"}
+{"t": 1790660575.8, "event": "dump", "batch": "B3"}
+{"t": 1790660575.8, "event": "idle_begin", "tag": "after_B3", "seconds": 300}
+{"t": 1790660875.8, "event": "idle_end", "tag": "after_B3"}
+{"t": 1790660875.8, "event": "restart_airflow_begin", "arn": null}
+{"t": 1790660876.1, "event": "restart_airflow_end"}
+{"t": 1790660876.1, "event": "idle_begin", "tag": "after_restart_1", "seconds": 180}
+{"t": 1790661056.1, "event": "idle_end", "tag": "after_restart_1"}
+{"t": 1790661056.1, "event": "restart_airflow_begin", "arn": null}
+{"t": 1790661056.3, "event": "restart_airflow_end"}
+{"t": 1790661056.3, "event": "idle_begin", "tag": "after_restart_2", "seconds": 180}
+{"t": 1790661236.4, "event": "idle_end", "tag": "after_restart_2"}
+{"t": 1790661236.4, "event": "suite_done"}

@@ -1,0 +1,180 @@
+# Airflow 실행 환경 배포(ALPHA-1119) — 이미지(DAG 포함) 빌드 → 메타DB 마이그레이션(단일 one-off 작업) → 서비스 교체.
+#
+# 버전 정합: 구성요소 셋(api-server·scheduler·dag-processor)은 한 태스크 정의 리비전의 **같은 이미지 태그**
+# (= 커밋)로 함께 교체된다. DAG 를 서버에 복사하지 않는다.
+# 순서: 마이그레이션이 exit 0 으로 끝나야 서비스를 바꾼다. 서비스는 한 번에 한 태스크(min 0 / max 100) —
+# 교체 중 1~3분 Airflow 가 멈춘다. 그래서 평일 장중(KST 09:20~15:00)에는 수동 허용 없이 배포하지 않는다.
+# 롤백: workflow_dispatch 에 이전 커밋의 image_tag 를 주면 빌드 없이 그 이미지로 같은 경로를 탄다
+# (같은 Airflow 버전 안에서만 — 버전을 내리는 롤백은 README "배포·롤백"의 DB 복원 절차).
+# 최초 구축: terraform-apply 가 클러스터·서비스(desired 0)를 만든 **뒤** workflow_dispatch 로 한 번 돌린다 —
+# 같은 머지에서 둘이 동시에 뜨면 이 워크플로가 "서비스 없음"으로 멈춘다(의도 — 순서를 추측하지 않는다).
+name: deploy-airflow
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/cloud/airflow/dags/**"
+      - "src/apps/cloud/airflow/deploy/entrypoint.sh"
+      - "src/apps/cloud/airflow/Dockerfile"
+      - "src/apps/cloud/airflow/.dockerignore"
+      - ".github/workflows/deploy-airflow.yml"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "배포할 기존 이미지 태그(롤백). 비우면 이 커밋을 빌드한다"
+        required: false
+        default: ""
+      start_service:
+        description: "서비스가 desired 0 이면 1 로 켠다(최초 구축·운영자 정지 해제). 끄면 현재 desired 를 그대로 둔다"
+        type: boolean
+        default: false
+      task_memory:
+        description: "서비스 태스크 합산 메모리(MiB) 조정 — 비우면 Terraform 리비전 값. 검증에서 호스트 등록 메모리에 맞출 때만"
+        required: false
+        default: ""
+      allow_market_hours:
+        description: "평일 장중(KST 09:20~15:00) 배포 허용 — 이미 도는 업무 ECS 는 멈추지 않지만 그 슬롯의 Airflow task 가 재시작된다"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-airflow
+  cancel-in-progress: false
+
+env:
+  CLUSTER: edge-dev-airflow
+  SERVICE: edge-dev-airflow
+  FAMILY: edge-dev-airflow
+  MIGRATE_FAMILY: edge-dev-airflow-migrate
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 장중 배포 차단
+        if: ${{ !inputs.allow_market_hours }}
+        run: |
+          set -euo pipefail
+          dow=$(TZ=Asia/Seoul date +%u); hm=$(TZ=Asia/Seoul date +%H%M)
+          if [ "${dow}" -le 5 ] && [ "${hm}" -ge 0920 ] && [ "${hm}" -lt 1500 ]; then
+            echo "::error::평일 장중(KST ${hm}) 배포 차단 — 장 마감 뒤 재실행하거나 allow_market_hours 로 명시 허용한다."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 서비스 존재 확인
+        run: |
+          set -euo pipefail
+          status="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].status' --output text 2>/dev/null || true)"
+          if [ "${status}" != "ACTIVE" ]; then
+            echo "::error::${CLUSTER}/${SERVICE} 가 없다(status=${status:-none}). terraform-apply 완료 뒤 workflow_dispatch 로 다시 돌린다."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: ${{ !inputs.image_tag }}
+
+      - name: Build & push (linux/arm64)
+        if: ${{ !inputs.image_tag }}
+        env:
+          REPO: ${{ steps.ecr.outputs.registry }}/edge/airflow
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images --repository-name edge/airflow --image-ids "imageTag=${TAG}" >/dev/null 2>&1; then
+            echo "이미지 ${REPO}:${TAG} 이미 존재 — 빌드 생략"
+          else
+            # Dockerfile 에 RUN 이 없어 arm64 빌드에 에뮬레이션이 필요 없다.
+            docker buildx build --platform linux/arm64 --provenance=false --push \
+              -t "${REPO}:${TAG}" src/apps/cloud/airflow
+          fi
+
+      - name: 정지 상태 확인
+        id: state
+        env:
+          START_SERVICE: ${{ inputs.start_service }}
+        run: |
+          set -euo pipefail
+          desired="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].desiredCount' --output text)"
+          # desired 0 = 운영자 정지 또는 검증 종료(메타DB 를 지웠을 수 있다). 명시 기동이 아니면 마이그레이션도 하지 않는다.
+          if [ "${desired}" = 0 ] && [ "${START_SERVICE}" != true ]; then
+            echo "::notice::서비스 desired 0 — 배포를 건너뛴다(start_service=true 로만 켠다)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 마이그레이션 → 서비스 교체
+        if: steps.state.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/edge/airflow:${{ inputs.image_tag || github.sha }}
+          TASK_MEMORY: ${{ inputs.task_memory }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          aws ecr describe-images --repository-name edge/airflow --image-ids "imageTag=${IMAGE##*:}" >/dev/null
+
+          # TF 가 만든 최신 리비전(환경·자원·역할)을 복사해 이미지만 바꾼다. null 필드는 register 가 거부한다.
+          register() {
+            local def
+            def="$(aws ecs describe-task-definition --task-definition "$1" --query taskDefinition --output json \
+              | jq --arg IMG "${IMAGE}" --arg MEM "${TASK_MEMORY}" --arg FAMILY "${FAMILY}" '
+                  .containerDefinitions |= map(.image = $IMG)
+                  | if ($MEM != "" and .family == $FAMILY) then .memory = $MEM else . end
+                  | {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions,
+                     requiresCompatibilities, cpu, memory, runtimePlatform}
+                  | with_entries(select(.value != null))')"
+            aws ecs register-task-definition --cli-input-json "${def}" \
+              --query taskDefinition.taskDefinitionArn --output text
+          }
+
+          # 1) 메타DB 마이그레이션 — 서비스와 같은 서브넷·SG 로 Fargate one-off 1회. exit 0 이 아니면 멈춘다.
+          migrate_def="$(register "${MIGRATE_FAMILY}")"
+          net="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].networkConfiguration' --output json)"
+          task="$(aws ecs run-task --cluster "${CLUSTER}" --task-definition "${migrate_def}" --launch-type FARGATE \
+            --network-configuration "${net}" --started-by "gha-${RUN_ID}" --query 'tasks[0].taskArn' --output text)"
+          [ -n "${task}" ] && [ "${task}" != "None" ] || { echo "::error::마이그레이션 태스크 시작 실패"; exit 1; }
+          echo "마이그레이션 태스크: ${task} (${migrate_def})"
+          deadline=$(( SECONDS + 900 ))
+          until [ "$(aws ecs describe-tasks --cluster "${CLUSTER}" --tasks "${task}" \
+                    --query 'tasks[0].lastStatus' --output text 2>/dev/null || true)" = STOPPED ]; do
+            [ "${SECONDS}" -lt "${deadline}" ] || { echo "::error::마이그레이션 15분 초과 — ${task} 확인"; exit 1; }
+            sleep 15
+          done
+          read -r code reason <<<"$(aws ecs describe-tasks --cluster "${CLUSTER}" --tasks "${task}" \
+            --query 'tasks[0].[containers[0].exitCode, stoppedReason]' --output text)"
+          echo "마이그레이션 exit=${code} reason=${reason}"
+          [ "${code}" = 0 ] || { echo "::error::마이그레이션 실패 — 서비스를 바꾸지 않는다. 로그 /ecs/${CLUSTER} migrate/*"; exit 1; }
+
+          # 2) 서비스 교체 — 세 구성요소가 같은 이미지로 함께 바뀐다. 실패하면 circuit breaker 가 이전 리비전으로 되돌린다.
+          #    desired 는 운영자 소유다: 0 이면(최초 구축 전·장애 대응 정지·검증 종료) 위 단계에서 이미 건너뛰었다.
+          service_def="$(register "${FAMILY}")"
+          aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" \
+            --task-definition "${service_def}" --desired-count 1 >/dev/null
+          echo "서비스 갱신 요청: ${service_def}"
+          aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
+          state="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].deployments[?status==`PRIMARY`].[taskDefinition,rolloutState]' --output text)"
+          echo "PRIMARY: ${state}"
+          case "${state}" in
+            "${service_def}"*COMPLETED) echo "배포 완료: ${IMAGE}" ;;
+            *) echo "::error::배포가 새 리비전으로 끝나지 않았다(롤백됐을 수 있다): ${state}"; exit 1 ;;
+          esac
