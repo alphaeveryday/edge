@@ -12,12 +12,12 @@ import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
-// 쓰기 요청 401 시 세션 해제와 로그인 유도 시트
+// 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 유도 시트. 로그인 실패 401 은 폼이 처리
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (e) => {
-      if (!isApiError(e, 'UNAUTHORIZED')) return;
       const s = useSession.getState();
+      if (!isApiError(e, 'UNAUTHORIZED') || !s.loggedIn) return;
       s.expire();
       s.openGate('로그인');
     },
@@ -39,6 +39,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
         <Stack.Screen name="community/write" options={{ presentation: 'modal' }} />
         <Stack.Screen name="menu" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="login" options={{ presentation: 'modal' }} />
         <Stack.Screen name="auth/signup" options={{ presentation: 'modal' }} />
         <Stack.Screen name="auth/reset" options={{ presentation: 'modal' }} />
       </Stack>
