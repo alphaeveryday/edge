@@ -57,7 +57,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, next, onNe
           {!d && <Loading rows={3} />}
           {d && (
             <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
-              {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} /></View>}
+              {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={onClose} /></View>}
               <Text style={styles.title}>{d.title}</Text>
               {d.today.length > 0 && (
                 <View style={styles.today}>

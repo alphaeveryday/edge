@@ -11,7 +11,7 @@ const META: { k: VoteChoice; label: string; c: string; bg: string }[] = [
   { k: 'sell', label: '판다', c: colors.down, bg: '#EAF2FF' },
 ];
 
-export function VoteCard({ stat }: { stat: VoteStat }) {
+export function VoteCard({ stat, onGate }: { stat: VoteStat; onGate?: () => void }) {
   const vote = useVote(stat.code);
   const requireLogin = useRequireLogin();
   const top = META.reduce((a, b) => (stat.pct[b.k] > stat.pct[a.k] ? b : a));
@@ -41,7 +41,7 @@ export function VoteCard({ stat }: { stat: VoteStat }) {
           return (
             <Pressable
               key={m.k}
-              onPress={() => requireLogin('투표', () => vote.mutate(m.k))}
+              onPress={() => requireLogin('투표', () => vote.mutate(m.k), onGate)}
               style={({ pressed }) => [styles.btn, voted ? { backgroundColor: on ? m.c : colors.white, borderWidth: 1.5, borderColor: on ? m.c : colors.line } : { backgroundColor: m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
             >
               <Text style={[styles.btnText, { color: voted && on ? colors.white : m.c }]}>{m.label}</Text>

@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { create } from 'zustand';
 import { api } from '@/api';
 import { onboarding, tokens } from '@/api/http/storage';
@@ -6,25 +7,19 @@ interface SessionState {
   restored: boolean;
   onboarded: boolean;
   loggedIn: boolean;
-  gateOpen: boolean;
-  gateReason: string;
   finishOnboarding: () => void;
   login: () => void;
   logout: () => void;
   expire: () => void;
   restore: () => Promise<void>;
-  openGate: (reason: string) => void;
-  closeGate: () => void;
 }
 
 export const useSession = create<SessionState>((set) => ({
   restored: false,
   onboarded: false,
   loggedIn: false,
-  gateOpen: false,
-  gateReason: '',
   finishOnboarding: () => { onboarding.save(true); set({ onboarded: true }); },
-  login: () => set({ loggedIn: true, gateOpen: false }),
+  login: () => set({ loggedIn: true }),
   logout: () => { onboarding.save(false); set({ loggedIn: false, onboarded: false }); },
   // 서버의 토큰 거부 시 온보딩 상태를 둔 로그아웃
   expire: () => set({ loggedIn: false }),
@@ -42,13 +37,15 @@ export const useSession = create<SessionState>((set) => ({
     }
     set({ restored: true, onboarded, loggedIn });
   },
-  openGate: (gateReason) => set({ gateOpen: true, gateReason }),
-  closeGate: () => set({ gateOpen: false }),
 }));
 
-// 비로그인 시 동작 대신 유도 시트를 띄우는 래퍼
+// 비로그인 시 동작 대신 로그인 화면으로 보내는 래퍼. 이유는 로그인 화면의 안내 한 줄, before 는 이동 전 모달 닫기용
 export const useRequireLogin = () => {
   const loggedIn = useSession((s) => s.loggedIn);
-  const openGate = useSession((s) => s.openGate);
-  return (reason: string, fn: () => void) => (loggedIn ? fn() : openGate(reason));
+  const router = useRouter();
+  return (reason: string, fn: () => void, before?: () => void) => {
+    if (loggedIn) return fn();
+    before?.();
+    router.push({ pathname: '/login', params: { reason } });
+  };
 };

@@ -1,25 +1,24 @@
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
-import { LoginGateSheet } from '@/features/auth/LoginGateSheet';
 import { useSession } from '@/store/session';
 import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
-// 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 유도 시트. 로그인 실패 401 은 폼이 처리
+// 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 화면 이동. 로그인 실패 401 은 폼이 처리
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (e) => {
       const s = useSession.getState();
       if (!isApiError(e, 'UNAUTHORIZED') || !s.loggedIn) return;
       s.expire();
-      s.openGate('로그인');
+      router.push({ pathname: '/login', params: { reason: '만료' } });
     },
   }),
 });
@@ -43,7 +42,6 @@ export default function RootLayout() {
         <Stack.Screen name="auth/signup" options={{ presentation: 'modal' }} />
         <Stack.Screen name="auth/reset" options={{ presentation: 'modal' }} />
       </Stack>
-      <LoginGateSheet />
       <Toast />
     </QueryClientProvider>
   );

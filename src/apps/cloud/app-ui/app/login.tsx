@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,9 +11,20 @@ import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
+// 로그인이 필요한 동작에서 들어왔을 때의 안내
+const REASON: Record<string, string> = {
+  투표: '투표하려면 로그인이 필요해요',
+  글쓰기: '글을 쓰려면 로그인이 필요해요',
+  답글: '답글을 달려면 로그인이 필요해요',
+  좋아요: '좋아요를 누르려면 로그인이 필요해요',
+  만료: '로그인이 풀렸어요. 다시 로그인해 주세요',
+};
+
 // 이메일 로그인. 성공 시 원래 화면으로
 export default function Login() {
   const router = useRouter();
+  const { reason } = useLocalSearchParams<{ reason?: string }>();
+  const hint = reason ? REASON[reason] : undefined;
   const { top } = useSafeAreaInsets();
   const login = useSession((s) => s.login);
   const toast = useToast((s) => s.show);
@@ -33,6 +44,7 @@ export default function Login() {
     <ScrollView style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
       <NavBar title="" onBack={null} rightIcon="close" onRight={close} />
       <Text style={styles.brand}>ETF Orca</Text>
+      {!!hint && <Text style={styles.hint}>{hint}</Text>}
       <View style={styles.form}>
         <AuthField value={email} onChangeText={clear(setEmail)} placeholder="이메일" keyboardType="email-address" textContentType="emailAddress" autoComplete="email" returnKeyType="next" />
         <AuthField value={pw} onChangeText={clear(setPw)} placeholder="비밀번호" secure invalid={!!err} textContentType="password" autoComplete="password" returnKeyType="go" onSubmitEditing={send} />
@@ -53,6 +65,7 @@ export default function Login() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   brand: { alignSelf: 'center', marginTop: 48, fontFamily: fam.extrabold, fontSize: 32, letterSpacing: -1, color: colors.primary },
+  hint: { alignSelf: 'center', marginTop: 10, fontFamily: fam.medium, fontSize: 14, color: colors.textMuted },
   form: { gap: 12, marginTop: 40, paddingHorizontal: 24 },
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
   links: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 20 },
