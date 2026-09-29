@@ -242,6 +242,16 @@ def test_kr_vendor_correction_wins_from_the_earliest_corrected_fetch(tmp_path, m
         assert row["close"] == 10.0 and row["fetched_at"] == _D1
 
 
+def test_kr_holiday_fetch_never_wins_when_a_business_day_fetch_exists(tmp_path, monkeypatch):
+    # WHY: D일 수집이 없고 휴장일 수집분의 OHLC 가 다음 거래일 값과 우연히 같아도, 휴장일 수집분이
+    #      (더 이르다는 이유로) 이기면 휴장일 거래량·수집 시각이 canonical 에 실린다 — 휴장일
+    #      수집분을 기준에서 뺀 이유가 승자 선택에서 새어 나간다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-02")
+    rows = [_kis_row(acml_vol="120", fetched_at=_D1), _kis_row(acml_vol="130", fetched_at=_D2)]
+    for row in _kr_candidates_all_orders(tmp_path, rows):
+        assert row["volume"] == 130 and row["fetched_at"] == _D2
+
+
 def test_kr_only_holiday_fetch_is_still_used_when_trade_day_fetch_is_missing(tmp_path, monkeypatch):
     # WHY: D일 수집이 실패하고 다음 수집이 휴장일이면 기준이 없다. 그래도 행을 버리지 않고 수급
     #      규칙(마감 후 가장 이른 수집분)으로 둔다 — 다음 거래일 재수집이 기준이 되어 바로잡는다.

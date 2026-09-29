@@ -253,7 +253,8 @@ def _pick_winner(rows: list[dict]) -> dict:
       * 영업일 재수집은 거래량만 늘린다(시간외 체결). OHLC 가 같으니 D일 수집분이 이겨 거래량이
         분석 시점과 같은 D일 축에 남는다(최신 승이면 과거 거래량만 시간외 포함 축이 된다).
       * 평일 휴장일 런은 직전 거래일 종가를 공식 종가가 아닌 값으로 돌려준다(09-24 실측
-        315/408종목). 휴장일 수집분은 기준에서 빠지고, 값이 달라 승자도 못 된다.
+        315/408종목). 휴장일 수집분은 기준에서도 승자 후보에서도 빠진다 — 값이 우연히 같아도
+        휴장일 거래량·수집 시각이 실리지 않게.
       * 벤더 정정은 OHLC 를 바꾼다(08-25 0177X0: D일 15:41 가격 스냅샷 9,670 → 다음 날 9,645,
         같은 시각 NAV 응답은 이미 9,645). 기준이 정정값이라 정정분이 이기고, 그 행만 거래량·
         수집 시각(=available_at)이 정정 시각 축이 된다 — 실제로 그때 안 값이다.
@@ -275,7 +276,7 @@ def _pick_winner(rows: list[dict]) -> dict:
     if not reference_pool:
         return min(reversed(rows), key=_kr_winner_rank)
     reference = _ohlc(max(reversed(reference_pool), key=_fetched_at))
-    return min(reversed([r for r in post_close if _ohlc(r) == reference]), key=_fetched_at)
+    return min(reversed([r for r in reference_pool if _ohlc(r) == reference]), key=_fetched_at)
 
 
 def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: list[dict]) -> list[dict]:
