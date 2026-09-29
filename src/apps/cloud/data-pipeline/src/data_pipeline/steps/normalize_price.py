@@ -7,8 +7,8 @@ raw price_daily(FMP·KIS 두 벤더, 이형 스키마)를 읽어 **표준 OHLCV 
 
 게이트를 통과한 행은 `canonical/market_data/price_daily` 에 **(market,ticker,trade_date)
 정체성 키로 멱등 병합** 한다 — canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가
-같다. 같은 벤더 재적재는 `_winner_rank` 가 고르고(KR: 거래일 15:30 KST 뒤 가장 이른 수집분,
-ALPHA-1120 / 비KR: 최신 fetched_at), **벤더 교차 같은 키 충돌은 fail-loud**
+같다. 같은 벤더 재적재는 `_pick_winner` 가 고르고(KR: 최근 거래일 수집분과 OHLC 가 같은 마감 후
+수집분 중 가장 이른 것, ALPHA-1120 / 비KR: 최신 fetched_at), **벤더 교차 같은 키 충돌은 fail-loud**
 (통화 오염 방지 — 조용히 하나 고르지 않고 quality_log 에 드러낸다). 탈락 행은 quality_log 에
 사유와 함께 남긴다 — 잘못된 가격이 조용히 사라지거나 canonical 을 오염시키지 않게 한다.
 
@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 from datetime import datetime, timezone
 
 from ..lake import (
@@ -33,7 +34,9 @@ from ..lake import (
     parse_raw_price_key,
     quality_log_key,
 )
+from ..ops.trading_calendar import is_trading_day
 from ..quality import validate_ohlcv
+from .normalize_investor import _KST
 from .normalize_investor import _winner_rank as _kr_winner_rank
 
 logger = logging.getLogger(__name__)
@@ -238,31 +241,47 @@ def _fetched_at(row: dict) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _winner_rank(row: dict) -> tuple[int, float]:
-    """같은 (market,ticker,trade_date) 후보 중 승자 순위 — **작을수록 이긴다**(ALPHA-1120).
+def _ohlc(row: dict) -> tuple:
+    return (row.get("open"), row.get("high"), row.get("low"), row.get("close"))
 
-    KR 은 수급과 같은 규칙이다(`normalize_investor._winner_rank`): 그 거래일 15:30 KST 뒤 가장
-    이른 수집분. 수집은 매일 5일 창을 다시 받는데, 다음 날 값은 거래량에 시간외 체결이 더해져
-    있고 평일 휴장일 런은 직전 거래일 종가를 공식 종가가 아닌 값으로 돌려준다(09-24 실측
-    315/408종목) — 최신 승이면 둘 다 D일 값을 덮는다.
-    ⚠️ 트레이드오프(1107 과 같다): 첫 마감 후 수집분 뒤에 온 벤더 정정은 자동 반영되지 않는다.
-    09월 영업일 재수집에서 종가·시고저가 바뀐 건은 0건이었고, 원주가 수집(FID_ORG_ADJ_PRC=1)이라
-    분할도 과거 종가를 바꾸지 않는다. 정정이 생기면 그 파티션 canonical 을 지우고 **정정분 수집
-    런만** `--input-run-id` 로 재정제한다 — 전체 raw 를 재정제하면 이 순위가 이른 수집분을 다시 고른다.
-    비KR(FMP, 현재 토글 off)은 기존 최신 승을 유지한다 — 15:30 KST 마감은 KR 전용이라 US 에
-    걸면 US 장중 수집분이 영구 승자가 된다.
+
+def _pick_winner(rows: list[dict]) -> dict:
+    """같은 (market,ticker,trade_date)·같은 벤더 후보 중 승자(ALPHA-1120). rows 는 적용 순서다.
+
+    KR: **가장 최근 거래일 마감 후 수집분과 시가·고가·저가·종가가 같은 마감 후 수집분 중 가장
+    이른 것**. 수집은 매일 5일 창을 다시 받는데 세 가지가 섞여 온다 —
+      * 영업일 재수집은 거래량만 늘린다(시간외 체결). OHLC 가 같으니 D일 수집분이 이겨 거래량이
+        분석 시점과 같은 D일 축에 남는다(최신 승이면 과거 거래량만 시간외 포함 축이 된다).
+      * 평일 휴장일 런은 직전 거래일 종가를 공식 종가가 아닌 값으로 돌려준다(09-24 실측
+        315/408종목). 휴장일 수집분은 기준에서 빠지고, 값이 달라 승자도 못 된다.
+      * 벤더 정정은 OHLC 를 바꾼다(08-25 0177X0: D일 15:41 가격 스냅샷 9,670 → 다음 날 9,645,
+        같은 시각 NAV 응답은 이미 9,645). 기준이 정정값이라 정정분이 이기고, 그 행만 거래량·
+        수집 시각(=available_at)이 정정 시각 축이 된다 — 실제로 그때 안 값이다.
+    기준은 **전체 후보를 한꺼번에** 봐야 맞게 고른다 — 재정제는 `--input-run-id` 없이 돈다.
+    거래일 마감 후 수집분이 없으면 수급 규칙(`normalize_investor._winner_rank`)으로 떨어진다.
+    거래일 판정은 `OPS_KR_HOLIDAYS` 를 쓴다 — 없으면 평일 휴장일을 거래일로 본다(quality_log
+    `kr_holidays_loaded` 가 드러낸다).
+    비KR(FMP, 현재 토글 off)은 최신 승이다 — 15:30 KST 마감은 KR 전용이라 US 에 걸면 US 장중
+    수집분이 영구 승자가 된다. 동률(같은 수집 시각)은 나중 적용분이 이긴다(멱등 재실행).
     """
-    if row["market"] == "KR":
-        return _kr_winner_rank(row)
-    return (0, -_fetched_at(row).timestamp())
+    if rows[0]["market"] != "KR":
+        return max(reversed(rows), key=_fetched_at)
+    post_close = [r for r in rows if _kr_winner_rank(r)[0] == 0]
+    reference_pool = [
+        r for r in post_close if is_trading_day(_fetched_at(r).astimezone(_KST).date())
+    ]
+    if not reference_pool:
+        return min(reversed(rows), key=_kr_winner_rank)
+    reference = _ohlc(max(reference_pool, key=_fetched_at))
+    return min(reversed([r for r in post_close if _ohlc(r) == reference]), key=_fetched_at)
 
 
 def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: list[dict]) -> list[dict]:
-    """한 (market,trade_date) 파티션을 ticker 키로 병합. 기존→신규 순으로 적용해 같은 벤더면
-    `_winner_rank` 가 작은 쪽이 이기고(동률이면 나중 적용분), 벤더 교차 충돌은 fail-loud 로 제외한다(§6b).
+    """한 (market,trade_date) 파티션을 ticker 키로 병합. 같은 벤더 후보를 모아 `_pick_winner` 로
+    고르고, 벤더 교차 충돌은 fail-loud 로 제외한다(§6b).
 
     collisions 에 교차 충돌을 append(호출부가 quality_log·exit_code 에 반영)."""
-    acc: dict[str, dict] = {}
+    acc: dict[str, list[dict]] = {}
     conflicted: set[str] = set()
     for row in [*existing, *new_rows]:
         ticker = row["ticker"]
@@ -270,22 +289,20 @@ def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: lis
             continue
         prev = acc.get(ticker)
         if prev is None:
-            acc[ticker] = row
+            acc[ticker] = [row]
             continue
-        if prev["source_vendor"] != row["source_vendor"]:
+        if prev[0]["source_vendor"] != row["source_vendor"]:
             # 벤더 교차 같은 키 — 조용히 하나 고르면 USD 를 KRW 로 태깅하는 오염이 된다.
             # 둘 다 canonical 에서 빼고 충돌로 드러낸다(§6b fail-loud, Rule 12).
             conflicted.add(ticker)
             acc.pop(ticker, None)
             collisions.append({
                 "market": row["market"], "ticker": ticker, "trade_date": row["trade_date"],
-                "vendors": sorted({prev["source_vendor"], row["source_vendor"]}),
+                "vendors": sorted({prev[0]["source_vendor"], row["source_vendor"]}),
             })
             continue
-        # 같은 벤더 재적재 → `_winner_rank` 우선. 동률이면 신규(멱등 재실행).
-        if _winner_rank(row) <= _winner_rank(prev):
-            acc[ticker] = row
-    return [acc[t] for t in sorted(acc)]
+        prev.append(row)
+    return [_pick_winner(acc[t]) for t in sorted(acc)]
 
 
 def _write_canonical(
@@ -473,6 +490,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 winner 제외", len(collisions))
 
     manifest_winners = sum(len(part["winner_ids"]) for part in partitions)
+    kr_holidays_loaded = bool(os.environ.get("OPS_KR_HOLIDAYS", "").strip())
+    if not kr_holidays_loaded and any(row["market"] == "KR" for row in passing):
+        logger.warning("OPS_KR_HOLIDAYS 미주입 — KR 승자 규칙이 평일 휴장일을 거래일로 본다")
 
     quality_written = True
     try:
@@ -483,6 +503,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "job_name": JOB_NAME,
                 "dataset": DATASET,
                 "input_run_id": input_run_id,
+                # KR 승자 규칙의 휴장일 판정 근거(ALPHA-1120). False 면 평일 휴장일 수집분이
+                # 기준에 섞일 수 있다 — 태스크 env 주입 누락이다.
+                "kr_holidays_loaded": kr_holidays_loaded,
                 "raw_files": len(raw_keys),
                 "records_read": read,
                 "records_passed": len(passing),
