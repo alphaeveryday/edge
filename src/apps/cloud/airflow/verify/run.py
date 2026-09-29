@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import io
 import json
@@ -123,7 +124,10 @@ def _one_off(family: str, command: list[str], container: str, stream_prefix: str
 
 
 def dbadmin_run(cmd: str) -> tuple[int | None, list[str]]:
-    script = (HERE / "dbadmin.sh").read_text() + f"\nmain {cmd}\n"
+    # 원문은 RunTask override 8,192자 제한을 넘는다 — 접어서 넘기고 컨테이너 안에서 편다.
+    packed = base64.b64encode(gzip.compress((HERE / "dbadmin.sh").read_bytes())).decode()
+    script = f"echo {packed} | base64 -d | gunzip > /tmp/dbadmin.sh && source /tmp/dbadmin.sh && main {cmd}"
+    assert len(script) < 7000, len(script)
     code, text = _one_off(f"{PREFIX}-dbadmin", [script], "dbadmin", "dbadmin")
     return code, [line for line in text.splitlines() if line.startswith("DBADMIN")]
 
@@ -565,7 +569,7 @@ def rds(args) -> int:
         if smn["name"].startswith("edge-dev-data-pipeline"):
             failed += [e["name"] for e in sfn.list_executions(stateMachineArn=smn["stateMachineArn"],
                                                                statusFilter="FAILED", maxResults=20)["executions"]
-                       if e["startDate"] >= since]
+                       if (e.get("stopDate") or e["startDate"]) >= since]  # 창 안에 끝난 실패(창 전에 시작한 것 포함)
     out["business_failed_sfn"] = failed
     (out_dir(args.exp) / f"rds-{datetime.now(KST):%H%M%S}.json").write_text(
         json.dumps(out, ensure_ascii=False, indent=1, default=str))

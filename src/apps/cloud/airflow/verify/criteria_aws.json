@@ -44,13 +44,13 @@
   },
   "pass": {
     "A1_placement": "서비스 태스크가 배치되고 세 컨테이너 HEALTHY(10분 안). 배치 불가(용량 부족 이벤트)는 실패로 기록한다 — 예약을 줄여 억지로 넣지 않는다",
-    "A2_no_oom_restart": "호스트 커널 로그·docker 이벤트·태스크 cgroup 어디에도 Airflow OOM 0, 주입하지 않은 서비스 태스크 교체 0",
+    "A2_no_oom_restart": "호스트 커널 로그·docker 이벤트·태스크 cgroup 어디에도 Airflow OOM 0, 주입하지 않은 서비스 태스크 교체 0. 관측이 불완전하면(태스크 cgroup 미관측·kmsg/docker 로그 부재·샘플 공백 30초 초과) 판정 불가",
     "A3_host_memory": "호스트 MemAvailable 최소 ≥ 64MiB 이고 swap 사용 0(SwapTotal 이 0 이 아니고 사용이 있으면 판정 불가 — swap 덕분의 통과를 인정하지 않는다)",
     "A4_heartbeat_parse": "health 샘플(15초)에서 scheduler·dag_processor healthy, import 오류 0. 샘플 공백(주입 재시작 창 제외) 60초 초과면 판정 불가",
     "A5_latency": "p95 — 앞 task 종료→queued ≤ 15초, queued→시작 ≤ 15초, task 시작→ECS 생성 ≤ 20초, ECS 종료→task 종료 ≤ 30초(실제 ECS 조회 주기). 모든 업무 ECS 태스크가 try 와 짝지어지고 표본이 기대 수와 같아야 한다 — 부족하면 판정 불가",
-    "A6_outcomes": "시나리오별 기대 결과(run·task 상태, try 수, 원장 orchestration_status·EXECUTION_HOLD kind, 차단 run 의 수집 exit 76, 해제 뒤 성공)",
-    "A7_business": "업무 시작 수(business_starts, 주입 exit 제외) = 기대값(중복 0), ECS 태스크 수 = 기대값",
-    "A8_db": "Airflow·검증 역할 연결 ≤ 10(역할 상한), Airflow 로그에 연결 오류·풀 대기 초과 0, RDS 중단 기준 미발동, 같은 창 업무 SFN 실패 0",
+    "A6_outcomes": "시나리오별 기대 결과(run·task 상태, try 수, 원장 orchestration_status·EXECUTION_HOLD kind, 차단 run 의 수집 exit 76, 해제 뒤 성공, 원장 orchestration_status, 산출물 쓰기 유무). 원장이 없으면 판정 불가",
+    "A7_business": "업무 시작 수(business_starts, 주입 exit 제외) = 기대값(중복 0), exit 0 으로 끝난 업무 = 스텝마다 1, 파티션 쓰기 ≥ 1, 원장 AIRFLOW·SUCCEEDED·전 작업 FULFILLED, ECS 태스크 수 = 기대값. 원장이 없으면 판정 불가",
+    "A8_db": "Airflow·검증 역할 연결 ≤ 10(역할 상한), Airflow 로그에 연결 오류·풀 대기 초과 0, RDS 중단 기준 미발동, 같은 창 안에 끝난 업무 SFN 실패 0",
     "A9_no_growth": "B3 뒤 유휴의 Airflow 태스크 cgroup anon ≤ B1 뒤 유휴 × 1.10, 호스트 MemAvailable ≥ B1 뒤 × 0.90",
     "A10_ui": "버스트 30건 전부 2xx, p95 ≤ 2초"
   },

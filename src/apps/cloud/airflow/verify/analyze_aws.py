@@ -132,6 +132,7 @@ def host_summary(samples, windows):
         "idle_task_anon_mib": {t: window_mean(t, "anon") for t in windows},
         "idle_mem_available_mib": {t: window_mean(t, "avail") for t in windows},
         "samples": len(samples),
+        "task_paths_seen": len(task_paths),
         "max_gap_s": max((b["t"] - a["t"] for a, b in zip(samples, samples[1:])), default=None),
     }
 
@@ -215,6 +216,28 @@ def starts(batch, rid, step):
                 and r.get("step") == BUSINESS[step] and r.get("injected_exit") is None])
 
 
+def ok_runs(batch, rid, step):
+    """끝까지 간 업무 실행(주입 exit 아님) 중 exit 0 인 수."""
+    return len([r for r in batch["state"]["business_runs"] if f"/{rid}/" in (r.get("attempt_ref") or "")
+                and r.get("step") == BUSINESS[step] and r.get("exit") == 0])
+
+
+def writes(batch, rid):
+    return len([r for r in batch["state"]["partition_writes"] if f"/{rid}/" in (r.get("attempt_ref") or "")])
+
+
+def ledger_run(batch, hhmm):
+    """검증 원장(verify-ledger) 의 그 슬롯 행 — (orchestrator, orchestration_status, {task_key: outcome}).
+    원장이 없으면 None(판정 불가). 배치마다 verify-reset 으로 비우므로 슬롯 시각으로 짝짓는다."""
+    led = batch.get("ledger")
+    if not led:
+        return None
+    run = next((r for r in led.get("runs", []) if r[0].endswith("T" + hhmm)), None)
+    if run is None:
+        return ("MISSING", None, {})
+    return (run[2], run[4], {t[1]: t[2] for t in led.get("tasks", []) if t[0] == run[1]})
+
+
 def holds(batch, rid):
     return [h["hold"] for h in batch.get("airflow_holds", []) if h["dag_run_id"] == rid]
 
@@ -232,17 +255,34 @@ def outcomes(batches) -> dict:
             rid = r["dag_run_id"] if r else None
             rows.append({"slot": hhmm, "state": r and r["state"],
                          "starts": {s: starts(d, rid, s) for s in BUSINESS} if rid else None,
+                         "ok_runs": {s: ok_runs(d, rid, s) for s in BUSINESS} if rid else None,
+                         "writes": writes(d, rid) if rid else None,
+                         "ledger": ledger_run(d, hhmm),
                          "ecs": len([e for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")]) if rid else None})
-        res[b] = {"runs": rows, "ok": all(x["state"] == "success" and x["starts"] == {s: 1 for s in BUSINESS}
-                                          and x["ecs"] == 5 for x in rows)}
+        one = {s: 1 for s in BUSINESS}
+        # Airflow 가 성공이라 말한 것만이 아니라, 업무가 정확히 한 번 끝났고(exit 0) 산출물이 쓰였고
+        # 원장이 AIRFLOW·SUCCEEDED·전 작업 FULFILLED 로 닫았는지까지 본다. 원장이 없으면 판정 불가.
+        res[b] = None if any(x["ledger"] is None for x in rows) else {
+            "runs": rows,
+            "ok": all(x["state"] == "success" and x["starts"] == one and x["ok_runs"] == one and x["writes"]
+                      and x["ecs"] == 5 and x["ledger"][:2] == ("AIRFLOW", "SUCCEEDED") and x["ledger"][2]
+                      and set(x["ledger"][2].values()) == {"FULFILLED"} for x in rows)}
     if "B2" in batches:
         d = batches["B2"]
         s = CRIT["scenarios"]["B2"]["slots"]
         rid = lambda k: (run_of(d, s[k]) or {}).get("dag_run_id")  # noqa: E731
         st = lambda k: (run_of(d, s[k]) or {}).get("state")  # noqa: E731
-        led = {r[0][-5:]: r for r in (d["ledger"] or {}).get("runs", [])}
-        holds_l = (d["ledger"] or {}).get("holds", [])
+        if not d.get("ledger"):
+            res["B2"] = None                     # 원장 없음 = 판정 불가
+            return res
+        led = lambda k: ledger_run(d, s[k])[1]  # noqa: E731 — orchestration_status
+        holds_l = d["ledger"].get("holds", [])
         chk = {
+            "ledger_status": led("fail_confirmed") == "FAILED" and led("retry_not_run") == "SUCCEEDED"
+            and led("restart_tracking") == "SUCCEEDED" and led("after_release") == "SUCCEEDED"
+            and led("hold_result_unknown") != "SUCCEEDED" and led("hold_state_unknown") != "SUCCEEDED",
+            "outputs": writes(d, rid("after_release")) > 0 and writes(d, rid("restart_tracking")) > 0
+            and writes(d, rid("fail_confirmed")) == 0 and writes(d, rid("hold_result_unknown")) == 0,
             "fail_confirmed": st("fail_confirmed") == "failed"
             and [t["state"] for t in tries_of(d, rid("fail_confirmed"), "load")] == ["failed"]
             and len(ecs_of(d, rid("fail_confirmed"), BUSINESS["load"])) == 1,
@@ -265,7 +305,7 @@ def outcomes(batches) -> dict:
             "after_release": st("after_release") == "success" and starts(d, rid("after_release"), "collect") == 1,
             "ledger_holds_recorded": {h[2] for h in holds_l} >= {"RESULT_UNKNOWN", "ECS_STATE_UNKNOWN"},
         }
-        res["B2"] = {"checks": chk, "ok": all(chk.values()), "ledger_runs": list(led)}
+        res["B2"] = {"checks": chk, "ok": all(chk.values()), "ledger_runs": [r[0] for r in d["ledger"].get("runs", [])]}
     return res
 
 
@@ -291,6 +331,8 @@ def analyze(exp: str) -> dict:
     samples = host_samples(d)
     host = host_summary(samples, windows)
     kern = kernel_ooms(d)
+    obs_files = {n: bool(glob.glob(str(d / "host-obs" / "*" / "edge-obs" / n)))
+                 for n in ("samples.log", "kmsg.log", "docker-events.log")}
     dock = docker_events(d)
     lat = {b: latency(x, rw) for b, x in batches.items()}
     out_come = outcomes(batches)
@@ -310,7 +352,7 @@ def analyze(exp: str) -> dict:
         "exp": exp, "deploy": {k: last_deploy.get(k) for k in ("task_memory", "hosts", "health_matches_plan",
                                                                 "settings_match_plan", "airflow_version",
                                                                 "running_image_digests")},
-        "host": host, "kernel_oom_lines": kern, "docker": dock, "latency": lat, "outcomes": out_come,
+        "host": host, "host_obs_files": obs_files, "kernel_oom_lines": kern, "docker": dock, "latency": lat, "outcomes": out_come,
         "health": {"samples": len(health), "errors": len(health) - len(ok_h), "errors_outside_restart": len(err_outside),
                    "unhealthy_outside_restart": len(bad_h), "max_gap_s": max(gaps, default=None),
                    "import_errors_missing": sum(1 for h in ok_h if h.get("import_errors") is None),
@@ -354,7 +396,9 @@ def analyze(exp: str) -> dict:
             not unplaceable and any(t.get("health") == "HEALTHY" and all(v == "HEALTHY" for v in t["containers"].values())
                                     for dep in deploys for t in dep.get("running_tasks", []))),
         # OOM(커널·docker·cgroup) 0, 그리고 주입 재시작 창 밖의 Airflow 컨테이너 종료 0.
-        "A2_no_oom_restart": None if host is None else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
+        # 관측이 온전해야 판정한다 — 태스크 cgroup 미관측·커널/docker 로그 부재·샘플 공백(5초 주기의 6배 초과)은 판정 불가.
+        "A2_no_oom_restart": None if (host is None or not all(obs_files.values()) or not host["task_paths_seen"]
+                                      or (host["max_gap_s"] or 0) > 30) else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
                                                          and not unexpected_die),
         "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
         "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60

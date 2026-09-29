@@ -202,7 +202,7 @@ resource "aws_ecs_task_definition" "verify" {
 }
 
 # ── 관리 태스크(dbadmin) — 업무 RDS 마스터로 전용 DB·역할을 만들고 정리한다 ──
-# 하는 일은 verify/dbadmin.sh 의 명령 목록뿐이다(명령을 RunTask override 로 넘긴다): 역할·DB 생성, 검증 원장 스키마 복제
+# 하는 일은 verify/dbadmin.sh 의 명령 목록뿐이다(스크립트를 접어 RunTask override 로 넘긴다): 역할·DB 생성, 검증 원장 스키마 복제
 # (업무 DB 의 스키마만 pg_dump -s → edge_verify, 행은 복사하지 않는다), 연결·부하 조회, 백업, 정리. 마스터 비밀번호를 읽는
 # 유일한 역할이라 execution 역할을 따로 둔다. 검증이 끝나면 verify_enabled=false 로 태스크 정의·역할이 사라진다.
 resource "aws_iam_role" "dbadmin_execution" {
