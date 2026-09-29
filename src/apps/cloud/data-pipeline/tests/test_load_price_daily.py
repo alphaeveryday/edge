@@ -578,21 +578,21 @@ def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):
 
 def test_같은_키가_여러_part_에_있으면_canonical_과_같은_승자를_고른다(tmp_path, monkeypatch):
     # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 가격이 마트에 고착될 수 있다. 후보 선정은
-    #      canonical 병합과 같은 순위여야 한다(ALPHA-1120) — 거래일 정규장 마감 뒤 가장 이른
-    #      수집분. 휴장일 재수집분이 이기면 공식 종가가 아닌 값이 마트에 실린다(09-24 실측).
+    #      canonical 병합과 같은 규칙이어야 한다(ALPHA-1120) — 종가가 같으면 D일 수집분(거래량 D일
+    #      축), 다음 날 재수집분의 시간외 포함 거래량이 이기면 available_at 도 밀린다.
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_price_row(close=100.0, fetched_at="2026-07-16T06:41:00+00:00")],
+                     [_price_row(volume=100, fetched_at="2026-07-16T06:41:00+00:00")],
                      part="part-00000")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_price_row(close=101.0, fetched_at="2026-07-17T06:41:00+00:00")],
+                     [_price_row(volume=130, fetched_at="2026-07-17T06:41:00+00:00")],
                      part="part-00001")
     conn = _FakeConn()
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
     assert load_price_daily.run(storage, "R1", db=_db()) == 0
-    [(_, _, close, _, _, available_at, _)] = _inserts(conn)
-    assert close == pytest.approx(100.0)                    # 사전순 마지막 part 도 최신도 아니다
+    [(_, _, _, _, volume, available_at, _)] = _inserts(conn)
+    assert volume == 100                                    # 사전순 마지막 part 도 최신도 아니다
     assert available_at == "2026-07-16T06:41:00+00:00"      # available_at 도 D일 수집 시각
 
 

@@ -462,8 +462,9 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SE
 # 가격 정제(Step2) — raw price_daily(FMP·KIS) → 표준 OHLCV 정규화 + 정합성 게이트.
 # 벤더는 raw 키의 source= 로 판별한다(수집 날짜창 없음). 통과/탈락 집계·탈락 사유는
 # data_quality_logs 로 남기고, 통과 행은 canonical/market_data/price_daily 에 (market,ticker,
-# trade_date) 로 멱등 병합 적재한다(같은 벤더는 KR=거래일 15:30 KST 뒤 첫 수집분·비KR=최신
-# fetched_at 우선, 벤더 교차 충돌 fail-loud). --input-run-id 로 그 수집 런의 raw 만 읽어 적재한다(SFN 이 도는 경로, ALPHA-389).
+# trade_date) 로 멱등 병합 적재한다(같은 벤더는 KR=최근 거래일 수집분과 OHLC 가 같은 마감 후
+# 수집분 중 가장 이른 것·비KR=최신 fetched_at 우선, 벤더 교차 충돌 fail-loud). OPS_KR_HOLIDAYS 가
+# 휴장일 판정 근거다. --input-run-id 로 그 수집 런의 raw 만 읽어 적재한다(SFN 이 도는 경로, ALPHA-389).
 # 미지정=raw price 전체 = 백필·복구 수단. 어느 쪽이든 적재는 멱등이다.
 uv run --package data-pipeline python -m data_pipeline.run normalize-price
 #   그 런만: ... run normalize-price --input-run-id 20260701T000000Z
@@ -1410,9 +1411,11 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
 - **canonical(가격, 정제 Step2)** — `canonical/market_data/price_daily/market=…/trade_date=…/part-*.parquet`
   에 게이트 통과 행을 **(market,ticker,trade_date) 키로 멱등 병합**. raw 와 달리 run_id·source_vendor
   파티션이 없다(멱등 — 같은 raw 를 몇 번 정제해도 결과 동일). market·trade_date 가 파티션, ticker 는
-  파티션 내 행 키다. 같은 벤더 재적재는 KR 이면 **그 거래일 정규장 마감(15:30 KST) 뒤 가장 이른
-  수집분**이 이기고(장중 수집분은 최후순위 — ALPHA-1120: 매일 5일 창을 다시 받는데 다음 날 거래량엔
-  시간외 체결이 더해지고 평일 휴장일 런은 직전 거래일 종가를 공식 종가가 아닌 값으로 돌려준다),
+  파티션 내 행 키다. 같은 벤더 재적재는 KR 이면 **최근 거래일 마감 후 수집분과 OHLC 가 같은 마감 후
+  수집분 중 가장 이른 것**이 이긴다(ALPHA-1120: 매일 5일 창을 다시 받는데 영업일 재수집은 시간외
+  체결로 거래량만 늘리고, 평일 휴장일 런은 직전 거래일 종가를 공식 종가가 아닌 값으로 돌려주며,
+  벤더 정정은 OHLC 를 바꾼다 — 그래서 평상시는 D일 수집분, 휴장일 수집분은 제외, 정정은 정정분이
+  이긴다. 휴장일 판정은 `OPS_KR_HOLIDAYS`, 런마다 quality_log `kr_holidays_loaded` 로 남는다).
   비KR 은 최신 fetched_at 이 이긴다. **벤더 교차 같은 키 충돌은
   fail-loud**(둘 다 제외 + quality_log·비0 종료 — USD 를 KRW 로 태깅하는 통화 오염 방지). 통화는
   market 별 태깅만 하고 FX 환산하지 않는다. `load-price-daily` 마트는 값이 바뀌거나 `available_at` 이

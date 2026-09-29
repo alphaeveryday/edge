@@ -183,21 +183,108 @@ def test_cross_run_correction_updates_canonical(tmp_path):
     assert len(rows) == 1 and rows[0]["close"] == 10.5  # 기존 canonical 위에 정정 반영
 
 
-def test_kr_holiday_refetch_does_not_overwrite_trade_day_close(tmp_path):
-    # WHY(ALPHA-1120): KIS 수집은 매일 5일 창을 다시 받고, 평일 휴장일 런은 직전 거래일 행을
-    #      공식 종가가 아닌 값으로 돌려준다(09-24 실측 315/408종목). 최신 승이면 그 값이
-    #      canonical 을 덮는다. KR 은 거래일 15:30 KST 뒤 가장 이른 수집분이 이겨야 하고,
-    #      적용 순서(기존 canonical → 새 raw, 그 반대)와 무관해야 한다.
-    d_day = _kis_row(stck_clpr="10", fetched_at="2026-07-01T06:41:00+00:00")   # 07-01 15:41 KST
-    holiday = _kis_row(stck_clpr="10.5", fetched_at="2026-07-02T06:41:00+00:00")
-    for first, second in ((d_day, holiday), (holiday, d_day)):
-        storage = LocalStorage(tmp_path / f"lake-{first['stck_clpr']}")
-        _write_raw(storage, _raw_key("kis", "KR", run_id="R1"), [first])
-        assert normalize_price.run(storage, "N1") == 0
-        _write_raw(storage, _raw_key("kis", "KR", run_id="R2"), [second])
-        assert normalize_price.run(storage, "N2") == 0
+# KR 승자 규칙(ALPHA-1120) 픽스처: 07-01(수) 거래일 행을 여러 날 다시 받는다. 15:41 KST 수집.
+_D0 = "2026-07-01T06:41:00+00:00"   # D일
+_D1 = "2026-07-02T06:41:00+00:00"   # D+1
+_D2 = "2026-07-03T06:41:00+00:00"   # D+2
+
+
+def _kr_candidates_all_orders(tmp_path, rows):
+    """같은 후보를 세 경로로 정제해 각 결과 행을 돌려준다 — SFN 증분(런마다 `--input-run-id`,
+    기존 canonical 승자 1행 + 이번 런 raw) 정순·역순, 그리고 전체 raw 재정제. 규칙이 증분에서
+    과거 후보를 잃어 답이 달라지면 여기서 갈린다."""
+    results = []
+    for i, ordered in enumerate((rows, list(reversed(rows)))):
+        storage = LocalStorage(tmp_path / f"lake-inc-{i}")
+        for j, row in enumerate(ordered):
+            _write_raw(storage, _raw_key("kis", "KR", run_id=f"R{j}"), [row])
+            assert normalize_price.run(storage, f"N{j}", input_run_id=f"R{j}") == 0
         [row] = _canonical_rows(storage, "KR", "2026-07-01")
-        assert row["close"] == 10.0 and row["fetched_at"] == d_day["fetched_at"]
+        results.append(row)
+    storage = LocalStorage(tmp_path / "lake-full")
+    for j, row in enumerate(rows):
+        _write_raw(storage, _raw_key("kis", "KR", run_id=f"R{j}"), [row])
+    assert normalize_price.run(storage, "NF") == 0
+    [row] = _canonical_rows(storage, "KR", "2026-07-01")
+    results.append(row)
+    return results
+
+
+def test_kr_business_day_refetch_keeps_trade_day_volume(tmp_path, monkeypatch):
+    # WHY(ALPHA-1120): 영업일 재수집은 시간외 체결로 거래량만 늘린다(09월 OHLC 변경 0건). 최신 승이면
+    #      과거 거래량만 시간외 포함 축이 되어 분석 시점의 당일 거래량(D일 스냅샷)과 비교가 어긋난다.
+    #      OHLC 가 같으면 D일 수집분이 이겨야 한다 — 적용 순서와 무관하게.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "")
+    rows = [_kis_row(acml_vol="100", fetched_at=_D0), _kis_row(acml_vol="130", fetched_at=_D1)]
+    for row in _kr_candidates_all_orders(tmp_path, rows):
+        assert row["volume"] == 100 and row["fetched_at"] == _D0
+
+
+def test_kr_holiday_refetch_does_not_overwrite_trade_day_close(tmp_path, monkeypatch):
+    # WHY(ALPHA-1120): 평일 휴장일 런은 직전 거래일 행을 공식 종가가 아닌 값으로 돌려준다(09-24 실측
+    #      315/408종목). 휴장일 수집분은 기준(최근 거래일 수집분)에서 빠지고 값이 달라 승자도 못 된다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-02")
+    rows = [_kis_row(stck_clpr="10", fetched_at=_D0), _kis_row(stck_clpr="10.5", fetched_at=_D1)]
+    for row in _kr_candidates_all_orders(tmp_path, rows):
+        assert row["close"] == 10.0 and row["fetched_at"] == _D0
+
+
+def test_kr_vendor_correction_wins_from_the_earliest_corrected_fetch(tmp_path, monkeypatch):
+    # WHY(ALPHA-1120): 가격은 정정과 시간외가 필드로 갈린다 — 시간외는 거래량만, 정정은 OHLC 를 바꾼다.
+    #      08-25 0177X0 실측: D일 15:41 가격 스냅샷 9,670, 다음 날부터 9,645(같은 시각 NAV 응답도
+    #      9,645). D일 고정이면 틀린 종가가 영구히 남아 다음 날 수익률 분모까지 오염된다. 정정값을
+    #      처음 받은 수집분이 이겨야 한다 — 그 뒤 재수집분(D+2)이 아니라(available_at 이 밀리지 않게).
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "")
+    rows = [_kis_row(stck_clpr="10.5", fetched_at=_D0),
+            _kis_row(stck_clpr="10", fetched_at=_D1),
+            _kis_row(stck_clpr="10", fetched_at=_D2)]
+    for row in _kr_candidates_all_orders(tmp_path, rows):
+        assert row["close"] == 10.0 and row["fetched_at"] == _D1
+
+
+def test_kr_holiday_fetch_never_wins_when_a_business_day_fetch_exists(tmp_path, monkeypatch):
+    # WHY: D일 수집이 없고 휴장일 수집분의 OHLC 가 다음 거래일 값과 우연히 같아도, 휴장일 수집분이
+    #      (더 이르다는 이유로) 이기면 휴장일 거래량·수집 시각이 canonical 에 실린다 — 휴장일
+    #      수집분을 기준에서 뺀 이유가 승자 선택에서 새어 나간다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-02")
+    rows = [_kis_row(acml_vol="120", fetched_at=_D1), _kis_row(acml_vol="130", fetched_at=_D2)]
+    for row in _kr_candidates_all_orders(tmp_path, rows):
+        assert row["volume"] == 130 and row["fetched_at"] == _D2
+
+
+def test_kr_only_holiday_fetch_is_still_used_when_trade_day_fetch_is_missing(tmp_path, monkeypatch):
+    # WHY: D일 수집이 실패하고 다음 수집이 휴장일이면 기준이 없다. 그래도 행을 버리지 않고 수급
+    #      규칙(마감 후 가장 이른 수집분)으로 둔다 — 다음 거래일 재수집이 기준이 되어 바로잡는다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-02")
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R1"),
+               [_kis_row(stck_clpr="10.5", fetched_at=_D1)])
+    assert normalize_price.run(storage, "N1") == 0
+    assert _canonical_rows(storage, "KR", "2026-07-01")[0]["close"] == 10.5
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R2"),
+               [_kis_row(stck_clpr="10", fetched_at=_D2)])
+    assert normalize_price.run(storage, "N2") == 0
+    assert _canonical_rows(storage, "KR", "2026-07-01")[0]["close"] == 10.0
+
+
+def test_quality_log_reports_whether_kr_holidays_were_loaded(tmp_path, monkeypatch):
+    # WHY: 휴장일 목록이 없거나 그 연도를 안 덮으면 is_trading_day 가 주말만 알아 휴장일 수집분이
+    #      정정으로 둔갑한다. 가드가 조용히 퇴화하지 않도록 런마다 판정 근거를 남긴다 — "주입됐다"가
+    #      아니라 "이번 수집 연도를 덮는다"여야 한다(연도별 정적 목록이라 해가 바뀌면 퇴화한다).
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R1"), [_kis_row(fetched_at=_D0)])
+    monkeypatch.delenv("OPS_KR_HOLIDAYS", raising=False)
+    assert normalize_price.run(storage, "N1") == 0
+    assert _quality_log(storage, "N1")["kr_holidays_loaded"] is False
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-02")
+    assert normalize_price.run(storage, "N2") == 0
+    assert _quality_log(storage, "N2")["kr_holidays_loaded"] is True
+    # 목록이 수집 연도를 안 덮으면(2026 목록으로 2027 raw 재정제) 주입돼 있어도 False 다.
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R2"),
+               [_kis_row(stck_bsop_date="20270104", fetched_at="2027-01-04T06:41:00+00:00")])
+    assert normalize_price.run(storage, "N3", input_run_id="R2") == 0
+    log = _quality_log(storage, "N3")
+    assert log["kr_holidays_loaded"] is False and log["kr_holidays_uncovered_years"] == ["2027"]
 
 
 def test_kr_intraday_fetch_loses_to_post_close_fetch(tmp_path):
@@ -212,18 +299,20 @@ def test_kr_intraday_fetch_loses_to_post_close_fetch(tmp_path):
     assert row["close"] == 10.0
 
 
-def test_us_keeps_latest_fetched_at_wins(tmp_path):
+def test_us_keeps_latest_fetched_at_wins(tmp_path, monkeypatch):
     # WHY: 15:30 KST 마감은 KR 전용이다. US 에 걸면 둘 다 "마감 뒤"로 분류돼 이른 수집분(US
     #      장중일 수 있다)이 영구 승자가 된다. US 는 최신 승을 유지한다 — 두 수집 시각을 모두
-    #      07-01 15:30 KST 뒤에 둬서 KR 규칙이면 답이 달라지게 했다.
+    #      07-01 15:30 KST 뒤·거래일에 두고 OHLC 는 같게, 거래량만 다르게 해 KR 규칙이면(이른
+    #      수집분) 답이 달라지게 했다. 종가를 다르게 두면 KR 규칙도 정정으로 보고 최신을 고른다.
+    monkeypatch.setenv("OPS_KR_HOLIDAYS", "")
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("fmp", "US", run_id="R1"),
-               [_fmp_row(close=10.0, fetched_at="2026-07-01T14:00:00+00:00")])
+               [_fmp_row(volume=100, fetched_at="2026-07-01T14:00:00+00:00")])
     _write_raw(storage, _raw_key("fmp", "US", run_id="R2"),
-               [_fmp_row(close=10.5, fetched_at="2026-07-01T22:00:00+00:00")])
+               [_fmp_row(volume=130, fetched_at="2026-07-01T22:00:00+00:00")])
     assert normalize_price.run(storage, "N1") == 0
     [row] = _canonical_rows(storage, "US", "2026-07-01")
-    assert row["close"] == 10.5
+    assert row["volume"] == 130
 
 
 def test_cross_vendor_collision_fail_loud(tmp_path):

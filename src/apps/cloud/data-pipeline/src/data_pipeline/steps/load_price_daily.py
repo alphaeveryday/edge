@@ -10,9 +10,9 @@ canonical 전체 스캔으로 넓히지 않고 실패한다. 날짜창·전체 �
 반환하지 않고 already 로 세어진다. 다만 현재 manifest에서 성공 재확정됐음을 downstream이
 구분하도록 `data_version`만 현재 run으로 stamp한다. canonical 승자가 실제로 바뀐 경우(값
 변경)만 값 UPDATE 로 흐른다 — 마트가 DO NOTHING 이면 두 계층이 영구 불일치한다(load_etf_nav 와
-같은 근거). canonical 승자는 KR 이면 정규장 마감 뒤 가장 이른 수집분으로 고정되므로
-(`normalize_price._winner_rank`, ALPHA-1120) 다음 날·휴장일 재수집이 값과 `available_at` 을
-밀어내지 않는다. 단 **`available_at` 이 앞당겨지는 경우는 값이 같아도 갱신한다** — 옛 raw
+같은 근거). canonical 승자는 KR 이면 최근 거래일 수집분과 OHLC 가 같은 마감 후 수집분 중 가장 이른 것이라
+(`normalize_price._pick_winner`, ALPHA-1120) 다음 날·휴장일 재수집이 값과 `available_at` 을
+밀어내지 않고, 벤더 정정(OHLC 변경)만 값과 시각을 옮긴다. 단 **`available_at` 이 앞당겨지는 경우는 값이 같아도 갱신한다** — 옛 raw
 재정제로 승자가 D일 수집분으로 돌아오면 "언제 알았나"가 앞당겨진다(load_etf_flow 와 같은 규약).
 
 **instrument_id 해소**: canonical 의 `(market, ticker)` → `instrument` 조회다. 시장별 MIC
@@ -51,7 +51,7 @@ from ..lake import (
     canonical_run_manifest_key,
     quality_log_key,
 )
-from .normalize_price import _winner_rank
+from .normalize_price import _pick_winner
 
 logger = logging.getLogger(__name__)
 
@@ -326,8 +326,8 @@ def run(
         if (from_date is None) != (to_date is None):
             raise ValueError("from_date와 to_date는 함께 써야 한다")
         # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면
-        # canonical 병합과 **같은 순위**(`_winner_rank`)로 고른다 — 규칙이 둘이면 두 계층이 갈린다.
-        candidates: dict[tuple[str, str, str], dict] = {}
+        # canonical 병합과 **같은 규칙**(`_pick_winner`)으로 고른다 — 규칙이 둘이면 두 계층이 갈린다.
+        grouped: dict[tuple[str, str, str], list[dict]] = {}
         (
             manifest_partitions_total,
             manifest_partitions_selected,
@@ -350,20 +350,17 @@ def run(
             if row.get("market") != market or trade_date != partition_date:
                 skipped_missing_identity += 1
                 continue
-            fetched_at = row.get("fetched_at")
-            cand_key = (market, ticker, trade_date)
-            prev = candidates.get(cand_key)
-            rank = _winner_rank(row)
-            if prev is not None and rank > prev["rank"]:
-                continue
+            grouped.setdefault((market, ticker, trade_date), []).append(row)
+        candidates: dict[tuple[str, str, str], dict] = {}
+        for cand_key, rows in grouped.items():
+            row = _pick_winner(rows)
             candidates[cand_key] = {
                 "close_price": row.get("close"),
                 "adjusted_close_price": row.get("adj_close"),
                 "volume": row.get("volume"),
                 # available_at = '우리가 이 관측을 쓸 수 있게 된 시각'. 수집 시각이
                 # 가장 보수적인 근사다(load-etf-nav 와 같은 규약).
-                "available_at": fetched_at or started_at.isoformat(),
-                "rank": rank,
+                "available_at": row.get("fetched_at") or started_at.isoformat(),
             }
 
         with connect(db) as conn:
