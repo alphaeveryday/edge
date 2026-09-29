@@ -8,10 +8,12 @@ canonical 전체 스캔으로 넓히지 않고 실패한다. 날짜창·전체 �
 **멱등**: PK `(instrument_id, trade_date)` 가 곧 멱등의 근거다 — 같은 값 재적재는
 `ON CONFLICT … DO UPDATE … WHERE (…) IS DISTINCT FROM (…)` 의 WHERE 가 걸러내 아무 행도
 반환하지 않고 already 로 세어진다. 다만 현재 manifest에서 성공 재확정됐음을 downstream이
-구분하도록 `data_version`만 현재 run으로 stamp한다. 벤더 정정(값이 실제로 바뀐 경우)만 값
-UPDATE 로 흐른다 —
-canonical 이 최신 fetched_at 으로 수렴시키므로(normalize 의 _merge_partition) 마트가 DO
-NOTHING 이면 두 계층이 영구 불일치한다(load_etf_nav 와 같은 근거).
+구분하도록 `data_version`만 현재 run으로 stamp한다. canonical 승자가 실제로 바뀐 경우(값
+변경)만 값 UPDATE 로 흐른다 — 마트가 DO NOTHING 이면 두 계층이 영구 불일치한다(load_etf_nav 와
+같은 근거). canonical 승자는 KR 이면 최근 거래일 수집분과 OHLC 가 같은 마감 후 수집분 중 가장 이른 것이라
+(`normalize_price._pick_winner`, ALPHA-1120) 다음 날·휴장일 재수집이 값과 `available_at` 을
+밀어내지 않고, 벤더 정정(OHLC 변경)만 값과 시각을 옮긴다. 단 **`available_at` 이 앞당겨지는 경우는 값이 같아도 갱신한다** — 옛 raw
+재정제로 승자가 D일 수집분으로 돌아오면 "언제 알았나"가 앞당겨진다(load_etf_flow 와 같은 규약).
 
 **instrument_id 해소**: canonical 의 `(market, ticker)` → `instrument` 조회다. 시장별 MIC
 매핑을 거쳐 `(market_code, ticker)` 로 찾는다 — ETF·개별주식 **양쪽 다**(NAV 로더와 달리
@@ -49,6 +51,7 @@ from ..lake import (
     canonical_run_manifest_key,
     quality_log_key,
 )
+from .normalize_price import _pick_winner
 
 logger = logging.getLogger(__name__)
 
@@ -322,9 +325,9 @@ def run(
             raise ValueError("input_run_id와 from/to는 함께 쓸 수 없다")
         if (from_date is None) != (to_date is None):
             raise ValueError("from_date와 to_date는 함께 써야 한다")
-        # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면 최신
-        # fetched_at 이 이긴다 — canonical 병합(_merge_partition)과 같은 규칙이다.
-        candidates: dict[tuple[str, str, str], dict] = {}
+        # (market, ticker, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면
+        # canonical 병합과 **같은 규칙**(`_pick_winner`)으로 고른다 — 규칙이 둘이면 두 계층이 갈린다.
+        grouped: dict[tuple[str, str, str], list[dict]] = {}
         (
             manifest_partitions_total,
             manifest_partitions_selected,
@@ -347,19 +350,17 @@ def run(
             if row.get("market") != market or trade_date != partition_date:
                 skipped_missing_identity += 1
                 continue
-            fetched_at = row.get("fetched_at")
-            cand_key = (market, ticker, trade_date)
-            prev = candidates.get(cand_key)
-            if prev is not None and (fetched_at or "") < prev["fetched_at_raw"]:
-                continue
+            grouped.setdefault((market, ticker, trade_date), []).append(row)
+        candidates: dict[tuple[str, str, str], dict] = {}
+        for cand_key, rows in grouped.items():
+            row = _pick_winner(rows)
             candidates[cand_key] = {
                 "close_price": row.get("close"),
                 "adjusted_close_price": row.get("adj_close"),
                 "volume": row.get("volume"),
                 # available_at = '우리가 이 관측을 쓸 수 있게 된 시각'. 수집 시각이
                 # 가장 보수적인 근사다(load-etf-nav 와 같은 규약).
-                "available_at": fetched_at or started_at.isoformat(),
-                "fetched_at_raw": fetched_at or "",
+                "available_at": row.get("fetched_at") or started_at.isoformat(),
             }
 
         with connect(db) as conn:
@@ -404,6 +405,7 @@ def run(
                             " WHERE (price_daily.close_price, price_daily.adjusted_close_price,"
                             "        price_daily.volume) IS DISTINCT FROM"
                             "       (EXCLUDED.close_price, EXCLUDED.adjusted_close_price, EXCLUDED.volume)"
+                            "    OR price_daily.available_at > EXCLUDED.available_at"
                             " RETURNING (xmax <> 0) AS was_update",
                             (instrument_id, trade_date, fact["close_price"],
                              fact["adjusted_close_price"], fact["volume"],
