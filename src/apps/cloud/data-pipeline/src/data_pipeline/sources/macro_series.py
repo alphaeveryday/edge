@@ -155,16 +155,21 @@ class MacroSource:
         """한 요청. 4xx·재시도 소진은 error 로 돌려준다 — 한 계열 실패가 다른 계열을 막지 않게."""
         series = SERIES[series_id]
         url, public = self._url(series, start, end)
-        fetched_at = datetime.now(timezone.utc).isoformat()
         try:
             body = self.client.request("GET", url, headers={"Accept": "application/json"}, decode=False)
         except StopFetch as exc:
             # 본문에 키가 되돌아올 수 있어 원문을 남기지 않는다 — 상태코드만.
-            return FetchResult(series_id, public, "error", f"http_{exc.status}", None, fetched_at)
+            return FetchResult(series_id, public, "error", f"http_{exc.status}", None, _now())
         except SafeFailureError as exc:
-            return FetchResult(series_id, public, "error", str(exc), None, fetched_at)
+            return FetchResult(series_id, public, "error", str(exc), None, _now())
+        # 수신시각은 응답을 다 받은 뒤 — 이 값이 곧 가시시각이라 요청 전에 찍으면 받기 전부터 보인다.
+        fetched_at = _now()
         status, detail = classify(series_id, body)
         return FetchResult(series_id, public, status, detail, body, fetched_at)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _json(body: bytes):

@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import urllib.parse
@@ -68,6 +69,7 @@ class DartResult:
     detail: str | None
     body: bytes | None
     fetched_at: str
+    stop: bool = False         # 키·IP·한도·점검 — 이 응답은 남기고 남은 호출을 멈춘다
 
 
 def classify(body: bytes) -> tuple[str, str | None]:
@@ -103,20 +105,20 @@ class DartFundamentalSource:
         return self._corp._load_corp_map()
 
     def _get(self, kind: str, path: str, params: dict) -> DartResult:
-        fetched_at = datetime.now(timezone.utc).isoformat()
         public = {"endpoint": path, **params}
         url = f"{self.base_url}/{path}?" + urllib.parse.urlencode({"crtfc_key": self.api_key or "", **params})
         try:
             body = self.client.request("GET", url, headers={"Accept": "application/json"}, decode=False)
         except StopFetch as exc:
-            return DartResult(kind, public, "error", f"http_{exc.status}", None, fetched_at)
+            return DartResult(kind, public, "error", f"http_{exc.status}", None, _now())
         except SafeFailureError as exc:
-            return DartResult(kind, public, "error", str(exc), None, fetched_at)
+            return DartResult(kind, public, "error", str(exc), None, _now())
+        # 수신시각은 응답을 다 받은 뒤다 — 요청 전에 찍으면 재시도·지연만큼 받기 전부터 보이게 된다.
+        fetched_at = _now()
         status, detail = classify(body)
-        if status == "error" and detail and detail.removeprefix("dart_") in STOP_STATUS_CODES:
-            # 키·IP·한도·점검은 한 회사 문제가 아니다 — 남은 호출을 두드리지 않는다.
-            raise StopFetch(f"DART {detail} {STATUS_MESSAGES.get(detail.removeprefix('dart_'), '')}")
-        return DartResult(kind, public, status, detail, body, fetched_at)
+        # 키·IP·한도·점검은 한 회사 문제가 아니다 — 응답은 남기고 호출자가 남은 호출을 멈춘다.
+        stop = status == "error" and bool(detail) and detail.removeprefix("dart_") in STOP_STATUS_CODES
+        return DartResult(kind, public, status, detail, body, fetched_at, stop)
 
     def filings(self, corp_code: str, start: date, end: date) -> list[DartResult]:
         """정기공시 목록(모든 페이지). 정정 전 원본도 포함한다(접수번호→접수일 대조용)."""
@@ -125,13 +127,16 @@ class DartFundamentalSource:
             result = self._get("list", "list.json", {
                 "corp_code": corp_code, "bgn_de": start.strftime("%Y%m%d"), "end_de": end.strftime("%Y%m%d"),
                 "pblntf_ty": "A", "page_no": str(page), "page_count": "100"})
-            pages.append(result)
             if result.status != "ok":
+                pages.append(result)
                 return pages
             try:
-                total = int(json.loads(result.body.decode("utf-8")).get("total_page") or 1)
-            except (TypeError, ValueError, AttributeError):
-                total = page        # 페이지 수를 못 읽으면 더 넘기지 않는다(받은 페이지는 남는다)
+                total = int(json.loads(result.body.decode("utf-8"))["total_page"])
+            except (TypeError, ValueError, AttributeError, KeyError):
+                # 뒤 페이지가 있는지 모른다 — 받은 본문은 남기되 완전한 목록이라 하지 않는다.
+                pages.append(dataclasses.replace(result, status="error", detail="bad_total_page"))
+                return pages
+            pages.append(result)
             if page >= total:
                 return pages
             page += 1
@@ -145,6 +150,10 @@ class DartFundamentalSource:
         """한 보고서의 주식의 총수 현황(BPS 분모)."""
         return self._get("shares", "stockTotqySttus.json", {
             "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code})
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def report_of(report_nm: str) -> tuple[str, str, int] | None:
@@ -274,7 +283,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         return []
     equity = _amount(line.get("thstrm_amount"))
     total = next((r for r in (shares or {}).get("list", [])
-                  if isinstance(r, dict) and (r.get("se") or "").strip() == "합계"), None)
+                  if isinstance(r, dict) and str(r.get("se") or "").strip() == "합계"), None)
     issued = _amount(total.get("istc_totqy")) if total else None
     treasury = _amount(total.get("tesstk_co")) if total else None
     if total is not None and treasury is None and (total.get("tesstk_co") or "").strip() == "-":

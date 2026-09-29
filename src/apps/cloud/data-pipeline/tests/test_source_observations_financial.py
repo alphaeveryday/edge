@@ -250,3 +250,61 @@ def test_q3_correction_refetches_the_annual_report_to_rederive_q4():
             {"report_nm": "[기재정정]분기보고서 (2025.09)", "rcept_dt": "20260915", "rcept_no": "2"}]
     targets, _ = dart_fundamental.plan_reports(rows, datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date())
     assert targets == {("2025", "11014"), ("2025", "11011")}
+
+
+class _PagedClient:
+    """DartFundamentalSource 운반 대역 — page_no 별 응답. 요청 시작 시각을 남긴다."""
+
+    def __init__(self, pages):
+        self.pages, self.started = pages, []
+
+    def request(self, method, url, *, headers=None, data=None, decode=True):
+        self.started.append(datetime.now(timezone.utc))
+        page = int(url.split("page_no=")[1].split("&")[0]) if "page_no=" in url else 1
+        return self.pages[page]
+
+
+def _source(pages):
+    from data_pipeline.config import DartFinancialSource
+
+    client = _PagedClient(pages)
+    return dart_fundamental.DartFundamentalSource(DartFinancialSource(api_key="k"), client), client
+
+
+def test_filing_list_paging_keeps_received_pages_and_never_calls_a_broken_count_complete():
+    # WHY(리뷰 3차): 페이지 수를 못 읽었는데 마지막 페이지로 치면 뒤 보고서가 빠진 채 "완료"가 된다.
+    # 한도 초과(020) 같은 중단 응답이 2쪽에서 오면 이미 받은 1쪽까지 버리면 안 된다.
+    ok = lambda total: json.dumps({"status": "000", "total_page": total, "list": [{"rcept_no": "1"}]}).encode()
+    src, _ = _source({1: ok("broken")})
+    pages = src.filings("00126380", datetime(2026, 1, 1).date(), datetime(2026, 1, 31).date())
+    assert [(p.status, p.detail) for p in pages] == [("error", "bad_total_page")] and pages[0].body
+    stop = json.dumps({"status": "020", "message": "한도 초과"}).encode()
+    src, _ = _source({1: ok(2), 2: stop})
+    pages = src.filings("00126380", datetime(2026, 1, 1).date(), datetime(2026, 1, 31).date())
+    assert [p.status for p in pages] == ["ok", "error"] and pages[1].stop and pages[1].body
+
+
+def test_receipt_time_is_taken_after_the_response_arrives():
+    # WHY(리뷰 3차): received_at 이 곧 가시시각이다. 요청 전에 찍으면 재시도·지연 동안 받기 전부터 보인다.
+    src, client = _source({1: json.dumps({"status": "000", "list": []}).encode()})
+    result = src.statement("00126380", "2026", "11012", "CFS")
+    assert datetime.fromisoformat(result.fetched_at) >= client.started[-1]
+
+
+def test_damaged_share_rows_and_foreign_period_responses_are_rejected_not_fatal(tmp_path):
+    # WHY(리뷰 3차): 한 보고서의 파손(se 숫자)이 정제 전체를 죽이면 다른 회사도 적재되지 않는다. 요청과 다른
+    # 연도·보고서의 행을 요청 기간으로 라벨하면 연간값이 분기값이 된다.
+    responses = full_responses(SAMSUNG)
+    share = json.loads(shares(SAMSUNG, "2026", "11012"))
+    share["list"].append({"se": 123})
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(share).encode()
+    wrong = json.loads(statement(SAMSUNG, "2026", "11013", "CFS"))
+    for line in wrong["list"]:
+        line["bsns_year"], line["reprt_code"] = "2025", "11011"
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")] = json.dumps(wrong).encode()
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    rows = rows_by(storage)
+    assert ("005930", 2026, "Q2", "bps", "POINT", "CFS") in rows         # 합계 행은 그대로 읽힌다
+    assert ("005930", 2026, "Q1", "revenue", "QUARTER", "CFS") not in rows

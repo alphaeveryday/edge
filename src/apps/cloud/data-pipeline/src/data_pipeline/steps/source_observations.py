@@ -665,14 +665,15 @@ def collect_sector(storage: Storage, client, base_url: str, run_id: str, *, now:
     objects = []
     for file_name in (*kis_sector_master.MASTER_FILES, kis_sector_master.SECTOR_NAME_FILE):
         market = kis_sector_master.MASTER_FILES.get(file_name, ("KR", 0))[0]
-        fetched_at = datetime.now(timezone.utc).isoformat()
         request = {"vendor": "kis", "file": file_name}
         try:
             data = client.request("GET", f"{base_url}/{file_name}", headers={}, decode=False)
             status, detail = "ok", None
+            fetched_at = datetime.now(timezone.utc).isoformat()   # 받은 뒤 — as_of_date·가시시각의 근거
         except (StopFetch, SafeFailureError) as exc:
             data, status = None, "error"
             detail = f"http_{exc.status}" if isinstance(exc, StopFetch) else str(exc)
+            fetched_at = datetime.now(timezone.utc).isoformat()
         objects.append(RawObject("kis", "market", market, file_name.removesuffix(".zip").replace(".", "_"),
                                  "zip", data, request, status, detail, fetched_at))
     return write_raw_run(storage, SECTOR, run_id, producer=producer, objects=objects, started_at=started_at,
@@ -759,7 +760,11 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                 if item.get("rcept_no"):
                     rcept_dates[item["rcept_no"]] = day
             continue
-        if any(ln.get("corp_code") not in (None, request["corp_code"]) for ln in items):
+        # 요청한 회사·연도·보고서의 응답인지 본다 — 다른 기간의 값을 요청 기간으로 라벨하지 않게.
+        if any(ln.get("corp_code") not in (None, request["corp_code"])
+               or str(ln.get("bsns_year") or request["bsns_year"]) != request["bsns_year"]
+               or str(ln.get("reprt_code") or request["reprt_code"]) != request["reprt_code"]
+               for ln in items):
             rejects.append({**{k: request.get(k) for k in ("corp_code", "bsns_year", "reprt_code")},
                             "raw_key": obj["key"], "reasons": ["response_identity_mismatch"]})
             continue
@@ -789,9 +794,15 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
     by_report: dict[tuple, list[tuple[dict, list[dict]]]] = {}
     for (corp_code, year, code, fs_div), statement in sorted(statements.items()):
         share = shares.get((corp_code, year, code))
-        extracted, bad = dart_fundamental.extract(
-            {"corp_code": corp_code, "stock_code": corps[corp_code]["stock_code"]},
-            year, code, fs_div, statement, share["body_json"] if share else None)
+        try:
+            extracted, bad = dart_fundamental.extract(
+                {"corp_code": corp_code, "stock_code": corps[corp_code]["stock_code"]},
+                year, code, fs_div, statement, share["body_json"] if share else None)
+        except Exception as exc:
+            # 한 보고서의 응답 파손이 다른 회사·보고서의 정제를 막지 않게 그 보고서만 거부한다.
+            rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
+                            "raw_key": statement["key"], "reasons": ["extract_error"], "error": type(exc).__name__})
+            continue
         rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
         for row in extracted:
             sources = [statement] + ([share] if share and row["metric"] == "bps" else [])
@@ -862,9 +873,11 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
     objects: list[RawObject] = []
 
     def keep(kind: str, stem: str, result) -> None:
-        """DART 응답 하나를 raw 객체로 남긴다(상태·요청 서술 포함)."""
+        """DART 응답 하나를 raw 객체로 남긴다(상태·요청 서술 포함). 중단 응답이면 남긴 뒤 수집을 멈춘다."""
         objects.append(RawObject("dart", "market", "KR", stem, "json", result.body,
                                  {"kind": kind, **result.request}, result.status, result.detail, result.fetched_at))
+        if getattr(result, "stop", False):
+            raise StopFetch(f"DART {result.detail}")
     try:
         corp_map = source.corp_map()
     except StopFetch as exc:
