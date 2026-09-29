@@ -111,10 +111,13 @@ class PostFlowTests extends ContainerTests {
         Map<String, Object> byCode = result(call("GET", "/api/v1/posts?code=305720", null, "dev:g2"));
         assertEquals(List.of(p2), items(byCode).stream().map(i -> i.get("id")).toList());
 
-        // mine 은 내 관심 ETF 글. 게스트는 COMMON401.
+        // mine 은 요청자(회원 또는 게스트 디바이스)의 관심 ETF 글
         Map<String, Object> mine = result(call("GET", "/api/v1/posts?scope=mine", null, b));
         assertEquals(List.of(p3), items(mine).stream().map(i -> i.get("id")).toList());
-        assertEquals(401, call("GET", "/api/v1/posts?scope=mine", null, "dev:g2").getStatusCode().value());
+        call("PUT", "/api/v1/etfs/305720/watch-groups", Map.of("groups", List.of("base")), "dev:pf-mine");
+        List<Object> guestMine = items(result(call("GET", "/api/v1/posts?scope=mine", null, "dev:pf-mine"))).stream().map(i -> i.get("id")).toList();
+        assertTrue(guestMine.contains(p2) && !guestMine.contains(p1) && !guestMine.contains(p3), "게스트 관심 ETF 글만");
+        assertEquals(List.of(), items(result(call("GET", "/api/v1/posts?scope=mine", null, "dev:pf-none"))), "관심 없는 게스트는 빈 목록");
         assertEquals(400, call("GET", "/api/v1/posts?scope=random", null, "dev:g2").getStatusCode().value());
         assertEquals(400, call("GET", "/api/v1/posts?cursor=not-a-cursor", null, "dev:g2").getStatusCode().value());
     }

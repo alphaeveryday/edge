@@ -70,10 +70,7 @@ public class PostService {
         boolean byCodes = false;
         List<String> codes = List.of("");
         if (scope == PostScope.MINE) {
-            if (!principal.isMember()) {
-                throw new GeneralException(ErrorStatus._UNAUTHORIZED);
-            }
-            codes = watchItemRepository.watchedCodes(principalRepository.upsertMember(requester));
+            codes = watchItemRepository.watchedCodes(principalRepository.resolve(principal));
             if (codes.isEmpty()) {
                 return new PageResponse<>(List.of(), null);
             }
