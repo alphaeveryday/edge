@@ -56,8 +56,6 @@ function ThemeBody({ d, sheet, setSheet }: { d: ThemeDetailT; sheet: boolean; se
           <View style={styles.todayHead}>
             <View style={styles.todayDot} />
             <Text style={styles.todayCap}>오늘 반영된 것</Text>
-            <View style={{ flex: 1 }} />
-            <Text style={styles.todayTime}>08:30 기준</Text>
           </View>
           <Text style={styles.todayLine}>{d.todayLine}</Text>
           <Text style={styles.todayEffect}>{d.todayEffect}</Text>
@@ -134,7 +132,6 @@ const styles = StyleSheet.create({
   todayHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   todayDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: colors.down },
   todayCap: { fontFamily: fam.bold, fontSize: 13, color: colors.downDeep },
-  todayTime: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
   todayLine: { fontFamily: fam.semibold, fontSize: 15, lineHeight: 25, color: colors.text, marginTop: 10 },
   todayEffect: { fontFamily: fam.regular, fontSize: 14, lineHeight: 24, color: colors.textSub, marginTop: 7 },
   h2Row: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 34, marginHorizontal: PAGE_X, paddingTop: 22, borderTopWidth: 1, borderTopColor: colors.line },

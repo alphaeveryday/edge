@@ -33,7 +33,7 @@ export default function Explore() {
     <View style={styles.root}>
       <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
-        <PageTitle title="탐색" meta="오늘 08:30 기준" />
+        <PageTitle title="탐색" />
         <View style={{ paddingTop: 22 }}>
           <SectionHead title="AI가 보는 오늘 순위" actionLabel="테마" onAction={() => router.push('/themes')} />
         </View>

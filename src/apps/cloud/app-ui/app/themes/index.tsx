@@ -16,7 +16,7 @@ export default function Themes() {
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="테마" onBack={() => router.back()} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
-        <PageTitle title="테마" sub="코스피 3,412 +0.8% · 환율 1,318원 -0.4%" />
+        <PageTitle title="테마" />
         <View style={{ paddingTop: 26 }}><SectionHead title="테마 분석" meta={`${data?.length ?? 0}개 테마`} /></View>
         <View style={styles.sorts}>
           <View style={[styles.sort, styles.sortOn]}><Text style={styles.sortText}>전체</Text></View>

@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SearchField, SectorIcon } from '@/components/ui';
-import { useEtfList } from '@/features/etf/queries';
+import { useEtfList, useThemes } from '@/features/etf/queries';
 import { PickCircle } from '@/features/onboarding/PickCircle';
 import { PickShell } from '@/features/onboarding/PickShell';
 import { api } from '@/api';
@@ -16,15 +16,18 @@ const short = (name: string) => name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/
 export default function EtfPick() {
   const router = useRouter();
   const { data } = useEtfList();
+  const { data: themeList } = useThemes();
   const { themes, etfs, toggleEtf } = useOnboarding();
+  // 고른 테마는 key, ETF 의 theme 은 라벨
+  const picked = useMemo(() => (themeList ?? []).filter((t) => themes.includes(t.key)).map((t) => t.label), [themeList, themes]);
   const finishOnboarding = useSession((s) => s.finishOnboarding);
   const [q, setQ] = useState('');
   const list = useMemo(() => {
     const all = data ?? [];
-    const ranked = [...all].sort((a, b) => Number(themes.includes(b.theme)) - Number(themes.includes(a.theme)));
+    const ranked = [...all].sort((a, b) => Number(picked.includes(b.theme)) - Number(picked.includes(a.theme)));
     const k = q.trim();
     return k ? ranked.filter((e) => e.name.includes(k) || e.theme.includes(k)) : ranked;
-  }, [data, themes, q]);
+  }, [data, picked, q]);
   const n = etfs.length;
   const done = async () => {
     await api.onboarding.complete({ themes, etfs });
@@ -35,7 +38,7 @@ export default function EtfPick() {
     <PickShell
       navTitle=""
       title="지켜볼 ETF를 골라주세요"
-      sub={themes.length ? `${themes.slice(0, 2).join(' · ')} ETF를 먼저 보여드려요.` : '전망이 좋은 ETF부터 보여드려요.'}
+      sub={picked.length ? `${picked.slice(0, 2).join(' · ')} ETF를 먼저 보여드려요.` : '전망이 좋은 ETF부터 보여드려요.'}
       cta={`${n}개 선택`}
       ctaDisabled={n === 0}
       onBack={() => router.back()}

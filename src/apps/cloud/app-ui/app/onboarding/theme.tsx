@@ -8,10 +8,7 @@ import { useOnboarding } from '@/store/onboarding';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-const GROUPS = [
-  { key: 'industry', title: '산업', sub: '무엇이 성장하나' },
-  { key: 'asset', title: '자산', sub: '어디에 돈을 두나' },
-] as const;
+const GROUPS = [{ key: 'industry', title: '산업', sub: '무엇이 성장하나' }] as const;
 
 export default function ThemePick() {
   const router = useRouter();
