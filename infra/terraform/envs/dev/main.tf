@@ -845,6 +845,10 @@ module "app_api" {
   container_port   = 8080
   cpu_architecture = "X86_64"
 
+  # Service Connect 사이드카 몫(AWS 권장 256 CPU·64MiB 이상)과 JVM 여유를 둔 크기
+  cpu    = "512"
+  memory = "1024"
+
   vpc_id        = module.network.vpc_id
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
