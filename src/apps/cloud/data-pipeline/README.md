@@ -1160,7 +1160,9 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
 (`KIS_MIN_INTERVAL_SEC`). 그래서 합계가 앱키 한도를 넘을 수 있다. 공유 예산을 켜면 모든 호출이 PostgreSQL
 `call_budget`·`call_budget_class` 표에서 발신 슬롯을 받는다. 클래스 우선순위도 적용된다:
 0 분 가격 워커 > 1 발화 보충(아직 호출자 없음) > 2 장중 레인(iNAV·업종지수·장중 수급) > 3 EOD 배치·과거일 백필. 허용 저장소에 닿지 못하거나 대기 상한을 넘기면 호출하지 않는다.
-이때 `CallBudgetError`를 내고, 실패 코드는 `CALL_BUDGET_BLOCKED`(TRANSIENT)다.
+이때 `CallBudgetError`(`StopFetch` 계열 — 소스 수집 중단)를 낸다. 오류 문자열은 `CALL_BUDGET_UNAVAILABLE`·
+`CALL_BUDGET_DEADLINE`·`CALL_BUDGET_MISCONFIGURED` 로 시작한다. `failures.http_failure()` 로 분류하는 경로에서는 실패 코드가
+`CALL_BUDGET_BLOCKED`(TRANSIENT)이고, `StopFetch` 를 직접 기록하는 경로(일봉 가격·수급 등)는 `status='stopped'` 와 그 오류 문자열만 남긴다.
 저장소 호출 1회(잠금 대기·이름 해석·연결·TLS·질의)는 `statement_timeout_ms` + 0.5s 안에 끝난다. DNS 도 이 기한 안에서
 풀어 libpq 에 주소로 넘긴다(libpq 는 이름을 동기로 푼다 — 무응답 DNS 에서 20초 실측). 응답을 못 받으면 서버가 예약을
 확정했어도 발신하지 않고, 그 커넥션은 버린다. `pace()` 전체는 `max_wait_sec` 안에 끝나고, `pace()` 가 돌아온 뒤 HTTP
