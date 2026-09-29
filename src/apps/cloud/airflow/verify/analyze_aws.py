@@ -133,6 +133,7 @@ def host_summary(samples, windows):
         "idle_mem_available_mib": {t: window_mean(t, "avail") for t in windows},
         "samples": len(samples),
         "task_paths_seen": len(task_paths),
+        "first_t": min(s["t"] for s in samples), "last_t": max(s["t"] for s in samples),
         "max_gap_s": max((b["t"] - a["t"] for a, b in zip(samples, samples[1:])), default=None),
     }
 
@@ -416,7 +417,9 @@ def analyze(exp: str) -> dict:
         # 실패 증거가 하나라도 있으면 관측 공백과 무관하게 실패다 — 공백이 확인된 OOM 을 판정 불가로 덮지 않는다.
         "A2_no_oom_restart": False if (kern or dock["oom"] or unexpected_die or (host and host["task_oom_kill"])) else
         None if (host is None or not all(obs_files.values()) or not host["task_paths_seen"]
-                 or (host["max_gap_s"] or 0) > 30) else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
+                 or host["max_gap_s"] is None or host["max_gap_s"] > 30
+                 # 관측이 실험 처음~끝을 덮어야 한다(수거가 중간에 끊기면 뒤쪽 OOM·종료를 못 본다)
+                 or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
                                                          and not unexpected_die),
         "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
         "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60
