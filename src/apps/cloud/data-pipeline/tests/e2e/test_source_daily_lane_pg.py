@@ -107,7 +107,7 @@ def vendor(tmp_path):
     server.shutdown()
 
 
-def test_dag_commands_run_the_lane_end_to_end_with_the_ledger(tmp_path, vendor, monkeypatch):
+def test_dag_commands_run_the_lane_end_to_end_with_the_ledger(tmp_path, vendor, monkeypatch, request):
     import psycopg
 
     from data_pipeline import db as dp_db
@@ -145,10 +145,15 @@ def test_dag_commands_run_the_lane_end_to_end_with_the_ledger(tmp_path, vendor, 
     rid = dp_db.stable_domain_id("run", run_key)
     write_holdings(LocalStorage(tmp_path / "lake"), slot.date().isoformat(), ["005930"])
 
+    def cleanup():
+        """이 run 의 판본 행만 지운다 — 같은 DB 를 쓰는 다른 e2e 의 기준시각 조회를 오염시키지 않게."""
+        with psycopg.connect(**pg, autocommit=True) as conn:
+            for table in ("macro_observation", "financial_metric", "sector_classification"):
+                conn.execute(f"DELETE FROM {table} WHERE raw_run_id=%s", (rid,))
+
+    cleanup()
+    request.addfinalizer(cleanup)
     with psycopg.connect(**pg, autocommit=True) as conn:
-        for sql in ("DELETE FROM macro_observation WHERE raw_run_id=%s", "DELETE FROM financial_metric WHERE raw_run_id=%s",
-                    "DELETE FROM sector_classification WHERE raw_run_id=%s"):
-            conn.execute(sql, (rid,))
         conn.execute("DELETE FROM ops_pipeline_run WHERE run_key=%s", (run_key,))
 
     for key, value in {"OPS_PIPELINE_TYPE": "source-daily", "OPS_ORCHESTRATOR": "AIRFLOW",

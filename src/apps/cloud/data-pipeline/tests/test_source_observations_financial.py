@@ -115,7 +115,8 @@ def test_constituents_come_from_snapshots_of_the_period_not_the_current_list(tmp
     write_holdings(storage, "2026-09-01", ["005930", "000660"])
     tickers, coverage = so.constituents_between(storage, ["091160"], datetime(2026, 6, 10).date(),
                                                 datetime(2026, 7, 31).date())
-    assert tickers == ["005930"] and coverage == {"snapshots": ["2026-06-01"], "uncovered_before": None}
+    assert tickers == ["005930"] and coverage["snapshots"] == ["2026-06-01"]
+    assert coverage["uncovered_before"] is None
     tickers, coverage = so.constituents_between(storage, ["091160"], datetime(2026, 1, 1).date(),
                                                 datetime(2026, 6, 30).date())
     assert coverage["uncovered_before"] == "2026-06-01"     # 그 앞 기간 구성은 모른다고 드러낸다
@@ -166,3 +167,54 @@ def test_ambiguous_eps_lines_pick_common_share_or_refuse():
     assert line["account_nm"] == "보통주 기본주당이익" and problem is None
     line, problem = dart_fundamental._pick_line(lines[:1] * 2, "ifrs-full_BasicEarningsLossPerShare", ("IS",))
     assert line is None and problem == "ambiguous_account_line"
+
+
+def test_in_force_snapshot_is_chosen_per_etf(tmp_path):
+    # WHY(리뷰): 다른 ETF 만 갱신된 날짜를 대상 ETF 의 스냅샷으로 쓰면 대상 구성종목이 빈 목록이 되고
+    # 재무 수집이 "스냅샷 없음"으로 실패한다(완료 manifest 라 재실행도 회복하지 못한다).
+    storage = LocalStorage(tmp_path)
+    write_holdings(storage, "2026-06-01", ["005930"])
+    write_holdings(storage, "2026-06-02", ["035420"], etf_id="069500")
+    tickers, coverage = so.constituents_between(storage, ["091160"], datetime(2026, 6, 3).date(),
+                                                datetime(2026, 6, 4).date())
+    assert tickers == ["005930"] and coverage["snapshots"] == ["2026-06-01"]
+    assert coverage["etfs_without_snapshot_at_start"] == []
+
+
+def test_bps_refuses_non_krw_equity_and_bad_receipt_numbers():
+    # WHY(리뷰): 달러 자본을 원/주로 적으면 단위가 조용히 틀린다. 형식이 틀린 접수번호 한 줄은 DB CHECK 에서
+    # 그 실행의 적재 전체(다른 회사 포함)를 롤백시킨다 — 정제에서 걸러야 한다.
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+    body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    for line in body["list"]:
+        if line["sj_div"] == "BS":
+            line["currency"] = "USD"
+    rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body},
+                                             json.loads(shares(SAMSUNG, "2026", "11012")))
+    assert not [r for r in rows if r["metric"] == "bps"]
+    assert any("non_krw_currency" in r["reasons"] and r["metric"] == "bps" for r in rejects)
+    body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS", rcept_no="bad"))
+    rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body}, None)
+    assert rows == [] and any("bad_rcept_no" in r["reasons"] for r in rejects)
+
+
+def test_bps_with_an_unverifiable_share_filing_is_not_backdated(tmp_path):
+    # WHY(리뷰): 계산 입력 하나의 접수일을 모르면 공개일 기준으로 과거에 보이게 할 근거가 없다.
+    responses = full_responses(SAMSUNG)
+    body = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    for row in body["list"]:
+        row["rcept_no"] = None
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(body).encode()
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    bps = rows_by(storage)[("005930", 2026, "Q2", "bps", "POINT", "CFS")]
+    assert bps["availability_basis"] == "received" and bps["available_at"] == bps["received_at"]
+
+
+def test_unsupported_fiscal_calendar_is_reported_not_silently_skipped(tmp_path):
+    # WHY(리뷰, Rule 12): 비12월 결산을 계획에서 빼기만 하면 수집·정제가 exit 0 으로 끝나 누락이 안 보인다.
+    march = {("2026", "11011"): ("사업보고서 (2026.03)", "20260601000505", "20260601")}
+    dart = DartFake([SAMSUNG], {}, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, march)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2

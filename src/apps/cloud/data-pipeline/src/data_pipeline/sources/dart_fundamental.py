@@ -41,6 +41,8 @@ KST = timezone(timedelta(hours=9))
 REPORT_CODES = {"Q1": "11013", "Q2": "11012", "Q3": "11014", "FY": "11011"}
 _PERIOD_BY_CODE = {v: k for k, v in REPORT_CODES.items()}
 _PERIOD_END = {"11013": (3, 31), "11012": (6, 30), "11014": (9, 30), "11011": (12, 31)}
+_RCEPT_NO = re.compile(r"[0-9]{14}")
+_TICKER = re.compile(r"[0-9A-Z]{6}")
 _REPORT_NAME = re.compile(r"(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)")
 _FLOW_ACCOUNTS = {
     "revenue": "ifrs-full_Revenue",
@@ -208,8 +210,16 @@ def _period_end(year: str, code: str) -> str:
 def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shares: dict | None,
             ) -> tuple[list[dict], list[dict]]:
     """한 보고서·한 기준의 전체 재무제표 → 지표 행(공시 원값·BPS). 입력 근거를 행마다 남긴다."""
-    lines = statement["body_json"]["list"]
     rows, rejects = [], []
+    # 접수번호·종목코드 형식이 틀린 판본은 DB CHECK 에서 그 실행의 적재 전체를 롤백시킨다 — 여기서 거른다.
+    lines = [ln for ln in statement["body_json"]["list"] if isinstance(ln, dict)]
+    if not _TICKER.fullmatch(str(corp.get("stock_code"))):
+        return [], [{"corp_code": corp.get("corp_code"), "reprt_code": code, "reasons": ["bad_instrument_code"]}]
+    bad = [ln for ln in lines if not _RCEPT_NO.fullmatch(str(ln.get("rcept_no")))]
+    if bad:
+        rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
+                        "reasons": ["bad_rcept_no"], "lines": len(bad)})
+        lines = [ln for ln in lines if ln not in bad]
     base = {"corp_code": corp["corp_code"], "instrument_code": corp["stock_code"], "fiscal_year": int(year),
             "fs_basis": fs_div, "period_end": _period_end(year, code)}
     period = _PERIOD_BY_CODE[code]
@@ -249,8 +259,13 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     if line is None:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
         return []
+    if line.get("currency") not in (None, "KRW"):
+        # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
+        return []
     equity = _amount(line.get("thstrm_amount"))
-    total = next((r for r in (shares or {}).get("list", []) if (r.get("se") or "").strip() == "합계"), None)
+    total = next((r for r in (shares or {}).get("list", [])
+                  if isinstance(r, dict) and (r.get("se") or "").strip() == "합계"), None)
     issued = _amount(total.get("istc_totqy")) if total else None
     treasury = _amount(total.get("tesstk_co")) if total else None
     if total is not None and treasury is None and (total.get("tesstk_co") or "").strip() == "-":

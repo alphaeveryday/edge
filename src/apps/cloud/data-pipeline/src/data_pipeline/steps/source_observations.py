@@ -27,6 +27,7 @@ import hashlib
 import io
 import json
 import logging
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -160,6 +161,15 @@ class RawObject:
     fetched_at: str
 
 
+def _collection_status(counts: dict, skipped_reason: str | None) -> tuple[str, int]:
+    """수집 결과 → (collection_log status, exit). 첫 실행과 완료 manifest 재사용이 같은 판정을 내게 한 곳에 둔다."""
+    if skipped_reason:
+        return "skipped", 0
+    if counts.get("error"):
+        return ("error", 1) if not (counts.get("ok") or counts.get("empty")) else ("partial", PARTIAL_EXIT)
+    return "success", 0
+
+
 def existing_raw_manifest(storage: Storage, dataset: str, run_id: str) -> dict | None:
     """이 run_id 의 완료된 raw manifest. 있으면 수집을 다시 하지 않는다(재시도가 공급자를 부르지 않게)."""
     data, _ = storage.get_bytes_with_version(raw_run_manifest_key(dataset, run_id))
@@ -210,11 +220,10 @@ def write_raw_run(
         except Exception:
             logger.exception("raw run manifest 저장 실패")
             exit_code = 1
-    if exit_code == 0 and counts["error"]:
-        exit_code = 1 if counts["ok"] + counts["empty"] == 0 else PARTIAL_EXIT
-
-    status = ("skipped" if skipped_reason else
-              {0: "success", PARTIAL_EXIT: "partial"}.get(exit_code, "error"))
+    if exit_code == 0:
+        status, exit_code = _collection_status(counts, skipped_reason)
+    else:
+        status = "error"
     saved_rows = counts["ok"]
     log = {"run_id": run_id, "job_name": producer, "source_vendor": spec.collection_vendor,
            "dataset": spec.dataset, "status": status, "reason": skipped_reason,
@@ -241,8 +250,10 @@ def record_already_collected(storage: Storage, spec: DatasetSpec, run_id: str, p
     counts = manifest.get("counts") or {}
     logger.info("%s run_id=%s 는 이미 수집 완료 — 공급자 재호출 없음", spec.dataset, run_id)
     started = datetime.now(timezone.utc)
+    # 원래 결과(부분 실패·전부 실패·건너뜀)를 그대로 다시 보고한다 — 재실행이 실패를 성공으로 바꾸지 않게.
+    status, exit_code = _collection_status(counts, manifest.get("skipped_reason"))
     log = {"run_id": run_id, "job_name": producer, "source_vendor": spec.collection_vendor,
-           "dataset": spec.dataset, "status": "success", "reason": "already_collected",
+           "dataset": spec.dataset, "status": status, "reason": "already_collected",
            "counts": counts, "records_saved": counts.get("ok", 0),
            "started_at": started.isoformat(), "finished_at": started.isoformat(),
            "ops": {"records_out": counts.get("ok", 0), "failed_records": counts.get("error", 0),
@@ -250,7 +261,7 @@ def record_already_collected(storage: Storage, spec: DatasetSpec, run_id: str, p
     storage.put_bytes(collection_log_key(spec.collection_vendor, spec.dataset,
                                          started.date().isoformat(), run_id),
                       json.dumps(log, ensure_ascii=False).encode("utf-8"))
-    return PARTIAL_EXIT if counts.get("error") else 0
+    return exit_code
 
 
 # ── 정제 ─────────────────────────────────────────────────────────────────────
@@ -472,7 +483,13 @@ def _normalize_macro(objects: list[dict], raw_manifest: dict) -> tuple[list[dict
         series_id = obj["series_id"]
         series = macro_series.SERIES[series_id]
         window = raw_manifest["request_scope"]["windows"][series_id]
-        good, bad = macro_series.parse(series_id, obj["body"])
+        try:
+            good, bad = macro_series.parse(series_id, obj["body"])
+        except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError) as exc:
+            # 한 응답의 파손이 다른 계열의 정제를 막지 않게 그 응답만 거부한다.
+            rejects.append({"series_id": series_id, "raw_key": obj["key"], "reasons": ["unparseable_response"],
+                            "error": type(exc).__name__})
+            continue
         for item in bad:
             rejects.append({"series_id": series_id, "raw_key": obj["key"], **item})
         for item in good:
@@ -573,7 +590,11 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
     rejects: list[dict] = []
     name_files = [o for o in objects if o["request"].get("file") == kis_sector_master.SECTOR_NAME_FILE]
     if name_files:
-        names, warnings = kis_sector_master.parse_sector_names(name_files[0]["body"])
+        try:
+            names, warnings = kis_sector_master.parse_sector_names(name_files[0]["body"])
+        except (zipfile.BadZipFile, UnicodeDecodeError, ValueError) as exc:
+            # 업종명 표가 깨져도 코드는 싣는다(이름만 비운다) — HTTP 실패 때와 같은 부분 처리.
+            names, warnings = {}, [f"sector_name_file_unreadable:{type(exc).__name__}"]
         rejects.extend({"reasons": [w]} for w in warnings)
     else:
         rejects.append({"reasons": ["sector_name_file_missing"]})
@@ -582,7 +603,11 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
         file_name = obj["request"].get("file")
         if file_name not in kis_sector_master.MASTER_FILES:
             continue
-        parsed, bad = kis_sector_master.parse_master(file_name, obj["body"])
+        try:
+            parsed, bad = kis_sector_master.parse_master(file_name, obj["body"])
+        except (zipfile.BadZipFile, UnicodeDecodeError, ValueError) as exc:
+            rejects.append({"raw_key": obj["key"], "reasons": ["master_file_unreadable"], "error": type(exc).__name__})
+            continue
         rejects.extend({**b, "raw_key": obj["key"]} for b in bad)
         as_of = datetime.fromisoformat(obj["fetched_at"]).astimezone(KST).date().isoformat()
         for item in parsed:
@@ -666,17 +691,35 @@ def constituents_between(storage: Storage, etf_ids: list[str], start: date, end:
     marker = canonical_etf_holdings_partition("KR", "")
     dates = sorted({d for key in storage.list_keys(marker)
                     if _is_calendar_date(d := key[len(marker):].split("/", 1)[0])})
-    in_force = [d for d in dates if d <= start.isoformat()]
-    used = ([in_force[-1]] if in_force else []) + [d for d in dates if start.isoformat() < d <= end.isoformat()]
-    tickers: set[str] = set()
-    for as_of in used:
+
+    def rows_of(as_of: str) -> list[dict]:
+        """그 날짜 파티션에서 대상 ETF 들의 구성종목 행."""
         prefix = canonical_etf_holdings_partition("KR", as_of)
-        for key in storage.list_keys(prefix + "/"):
-            if key.endswith(".parquet"):
-                for row in _read_parquet_rows(storage.get_bytes(key)):
-                    if row.get("etf_id") in etf_ids and (code := krx_short_code(row.get("constituent_ticker"))):
-                        tickers.add(code)
-    coverage = {"snapshots": used, "uncovered_before": None if in_force else (used[0] if used else end.isoformat())}
+        return [row for key in storage.list_keys(prefix + "/") if key.endswith(".parquet")
+                for row in _read_parquet_rows(storage.get_bytes(key)) if row.get("etf_id") in etf_ids]
+
+    tickers: set[str] = set()
+    used: set[str] = set()
+    # start 시점에 유효한 스냅샷은 **ETF 마다** 다르다 — 다른 ETF 만 갱신된 날짜를 대상 ETF 의 스냅샷으로 쓰지 않는다.
+    pending = set(etf_ids)
+    for as_of in reversed([d for d in dates if d <= start.isoformat()]):
+        if not pending:
+            break
+        found = [row for row in rows_of(as_of) if row["etf_id"] in pending]
+        if found:
+            used.add(as_of)
+            pending -= {row["etf_id"] for row in found}
+            tickers.update(c for row in found if (c := krx_short_code(row.get("constituent_ticker"))))
+    for as_of in (d for d in dates if start.isoformat() < d <= end.isoformat()):
+        found = rows_of(as_of)
+        if found:
+            used.add(as_of)
+            tickers.update(c for row in found if (c := krx_short_code(row.get("constituent_ticker"))))
+    ordered = sorted(used)
+    # start 에 유효한 스냅샷이 없는 ETF 가 있으면 그 앞 기간의 구성은 모른다 — 추정하지 않고 드러낸다.
+    coverage = {"snapshots": ordered,
+                "uncovered_before": None if not pending else (ordered[0] if ordered else end.isoformat()),
+                "etfs_without_snapshot_at_start": sorted(pending)}
     return sorted(tickers), coverage
 
 
@@ -690,32 +733,42 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
     corps = raw_manifest["request_scope"]["corps"]
     rcept_dates: dict[str, str] = {}
     statements, shares = {}, {}
-    rows, rejects = [], []
+    rows = []
+    # 수집이 계획에서 뺀 보고서(비12월 결산)는 여기서 거부로 드러낸다 — 조용한 누락이 성공이 되지 않게.
+    rejects = list(raw_manifest["request_scope"].get("unsupported_reports", []))
     for obj in objects:
-        body = json.loads(obj["body"].decode("utf-8"))
         request = obj["request"]
         kind = request["kind"]
-        if kind == "list":
-            for item in body.get("list", []):
-                if item.get("rcept_no") and item.get("rcept_dt"):
-                    rcept_dates[item["rcept_no"]] = date(int(item["rcept_dt"][:4]), int(item["rcept_dt"][4:6]),
-                                                         int(item["rcept_dt"][6:8])).isoformat()
+        body = json.loads(obj["body"].decode("utf-8"))
+        items = body.get("list") if isinstance(body, dict) else None
+        if not isinstance(items, list):
+            rejects.append({"raw_key": obj["key"], "reasons": ["unexpected_shape"]})
             continue
-        lines = body.get("list", [])
-        if any(ln.get("corp_code") not in (None, request["corp_code"]) for ln in lines):
+        items = [item for item in items if isinstance(item, dict)]
+        if kind == "list":
+            for item in items:
+                try:
+                    day = datetime.strptime(str(item.get("rcept_dt")), "%Y%m%d").date().isoformat()
+                except ValueError:
+                    continue            # 접수일을 못 읽으면 그 접수번호는 "모름" — 수신 기준으로 떨어진다
+                if item.get("rcept_no"):
+                    rcept_dates[item["rcept_no"]] = day
+            continue
+        if any(ln.get("corp_code") not in (None, request["corp_code"]) for ln in items):
             rejects.append({**{k: request.get(k) for k in ("corp_code", "bsns_year", "reprt_code")},
                             "raw_key": obj["key"], "reasons": ["response_identity_mismatch"]})
             continue
         target = (request["corp_code"], request["bsns_year"], request["reprt_code"])
         if kind == "statement":
-            statements[(*target, request["fs_div"])] = {**obj, "body_json": body}
+            statements[(*target, request["fs_div"])] = {**obj, "body_json": {**body, "list": items}}
         else:
-            shares[target] = {**obj, "body_json": body}
+            shares[target] = {**obj, "body_json": {**body, "list": items}}
 
     def finish(row: dict, sources: list[dict]) -> dict:
         """수신·가시시각·근거 키를 채운다. 접수일을 모두 확인한 행만 공개일 기준 가시시각을 갖는다."""
         received = max(src["fetched_at"] for src in sources)
-        release = [rcept_dates.get(i["rcept_no"]) for i in row["inputs"] if i.get("rcept_no")]
+        # 입력 전부의 접수일을 확인해야 공개일 기준이다 — 접수번호 없는 입력은 "모름"으로 센다.
+        release = [rcept_dates.get(i.get("rcept_no")) for i in row["inputs"]]
         row.update({"received_at": received, "raw_key": sources[0]["key"], "raw_sha256": sources[0]["sha256"],
                     "inputs": json.dumps(row["inputs"], ensure_ascii=False, sort_keys=True)})
         if release and all(release):
@@ -821,7 +874,8 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
                 keep("list", f"{corp_code}-list-p{number}", page)
             listed = [item for page in pages if page.status == "ok"
                       for item in json.loads(page.body.decode("utf-8")).get("list", [])]
-            targets, _ = dart_fundamental.plan_reports(listed, start, end)
+            targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
+            scope.setdefault("unsupported_reports", []).extend(unsupported)
             for year, code in sorted(targets):
                 for fs_div in ("CFS", "OFS"):
                     keep("statement", f"{corp_code}-{year}-{code}-{fs_div}", source.statement(corp_code, year, code, fs_div))

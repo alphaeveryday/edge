@@ -168,7 +168,8 @@ class MacroSource:
 
 
 def _json(body: bytes):
-    return json.loads(body.decode("utf-8"))
+    # 숫자를 float 로 먼저 읽으면 공급자 소수 자릿수가 사라진다 — Decimal 로 바로 읽는다.
+    return json.loads(body.decode("utf-8"), parse_float=Decimal)
 
 
 def classify(series_id: str, body: bytes) -> tuple[str, str | None]:
@@ -177,18 +178,28 @@ def classify(series_id: str, body: bytes) -> tuple[str, str | None]:
     빈 응답(정상 0건)과 수집 실패를 가르는 곳이 여기다. 모르는 형태는 error 로 둔다 — empty 로 두면
     오류가 "그 기간엔 관측이 없었다"로 위장된다(휴장·공표 지연과 구분이 안 된다).
     """
-    vendor = SERIES[series_id].vendor
     try:
-        data = _json(body)
+        return _classify(SERIES[series_id].vendor, _json(body))
     except (ValueError, UnicodeDecodeError):
         return "error", "unparseable_json"
+    except (AttributeError, TypeError, KeyError):
+        # 기대와 다른 중첩(RESULT 가 목록 등) — 수집을 죽이지 않고 이 응답만 오류로 둔다.
+        return "error", "unexpected_shape"
+
+
+def _classify(vendor: str, data) -> tuple[str, str | None]:
+    """classify 의 공급자별 판정(형태 예외는 호출부가 unexpected_shape 로 접는다)."""
     if vendor == "fmp":
         if isinstance(data, list):
             return ("ok", None) if data else ("empty", None)
         return "error", "unexpected_shape"            # {"Error Message": …} 등
     if vendor == "ecos":
         if isinstance(data, dict) and isinstance(data.get("StatisticSearch"), dict):
-            return "ok", None
+            rows = data["StatisticSearch"].get("row")
+            # 데이터 없음은 INFO-200 으로 온다. row 가 없거나 목록이 아니면 파손이지 정상 0건이 아니다.
+            if isinstance(rows, list):
+                return ("ok", None) if rows else ("empty", "no_rows")
+            return "error", "missing_rows"
         code = (data.get("RESULT") or {}).get("CODE") if isinstance(data, dict) else None
         if code == "INFO-200":                        # 해당하는 데이터가 없습니다
             return "empty", code
@@ -231,27 +242,42 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
     월별 관측일은 기준월 1일이다. 계열 정체성(항목명·계열 ID)과 단위 문자열이 기대와 다르면 거부한다.
     """
     data = _json(body)
-    rows: list[tuple[str | None, object, dict]] = []   # (관측일, 값, 검사할 필드)
+    rows: list[tuple[str | None, object, dict | None]] = []   # (관측일, 값, 검사할 필드) — 필드 None = 행 형태 불량
     if series_id == "usd_krw":
         for item in data:
+            if not isinstance(item, dict):
+                rows.append((None, None, None))
+                continue
             rows.append((_iso(item.get("date"), "%Y-%m-%d"), item.get("close"),
                          {"symbol": item.get("symbol")}))
     elif series_id == "us_10y_yield":
         for item in data:
+            if not isinstance(item, dict):
+                rows.append((None, None, None))
+                continue
             rows.append((_iso(item.get("date"), "%Y-%m-%d"), item.get("year10"), {}))
     elif series_id == "kr_10y_yield":
-        for item in data["StatisticSearch"].get("row") or []:
+        for item in data["StatisticSearch"]["row"]:
+            if not isinstance(item, dict):
+                rows.append((None, None, None))
+                continue
             rows.append((_iso(item.get("TIME"), "%Y%m%d"), item.get("DATA_VALUE"),
                          {"unit": item.get("UNIT_NAME"), "identity": item.get("ITEM_CODE1"),
                           "identity_name": item.get("ITEM_NAME1")}))
     elif series_id == "kr_cpi_yoy":
         for item in data:
+            if not isinstance(item, dict):
+                rows.append((None, None, None))
+                continue
             prd = item.get("PRD_DE")
             rows.append((_iso(f"{prd}01", "%Y%m%d") if isinstance(prd, str) else None, item.get("DT"),
                          {"unit": item.get("UNIT_NM"), "identity": item.get("ITM_ID"),
                           "identity_name": item.get("ITM_NM"), "c1": item.get("C1")}))
     elif series_id == "brent_spot_usd":
         for item in data["response"]["data"]:
+            if not isinstance(item, dict):
+                rows.append((None, None, None))
+                continue
             rows.append((_iso(item.get("period"), "%Y-%m-%d"), item.get("value"),
                          {"unit": item.get("units"), "identity": item.get("series")}))
     else:
@@ -259,6 +285,9 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
 
     good, rejects = [], []
     for observation_date, value, fields in rows:
+        if fields is None:
+            rejects.append({"observation_date": None, "reasons": ["malformed_row"]})
+            continue
         reasons = []
         if observation_date is None:
             reasons.append("bad_observation_date")

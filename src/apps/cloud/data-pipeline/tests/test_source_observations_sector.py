@@ -94,3 +94,12 @@ def test_non_trading_day_downloads_nothing_and_downstream_is_a_clean_no_op(tmp_p
     manifest = json.loads(storage.get_bytes(
         "operations_archive/canonical_run_manifests/dataset=sector_classification/run_id=run_hn/manifest.json"))
     assert manifest["rows"] == 0 and manifest["rejected"] == 0
+
+
+def test_corrupt_name_table_keeps_codes_and_other_markets(tmp_path):
+    # WHY(리뷰): 업종명 ZIP 하나가 깨졌다고 두 시장 분류 적재가 통째로 멈추면 안 된다(HTTP 실패와 같은 부분 처리).
+    storage, code = run_chain(tmp_path, {**ROUTES, "idxcode.mst.zip": b"not a zip"})
+    assert code == 0
+    assert so.normalize(storage, so.SECTOR, "run_sn", "run_s", producer="normalize_sector") == so.PARTIAL_EXIT
+    samsung = rows_of(storage, "KOSPI")["005930"]
+    assert samsung["large_code"] == "0013" and samsung["large_name"] is None

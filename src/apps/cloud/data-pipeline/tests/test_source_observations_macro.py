@@ -221,3 +221,39 @@ def test_request_record_never_contains_credentials(tmp_path):
     assert collect(storage, "run_s", src) == 0
     for key in storage.list_keys("operations_archive/"):
         assert b"SECRET-" not in storage.get_bytes(key), key
+
+
+def test_malformed_rows_and_missing_ecos_rows_are_visible_not_fatal(tmp_path):
+    # WHY(리뷰): 응답 속 null 한 칸이 정제 전체를 죽이면 정상 계열까지 적재되지 않고, 완료 manifest 때문에
+    # 재실행으로도 회복되지 않는다. ECOS row 누락은 "데이터 없음"(INFO-200)이 아니라 파손이다.
+    storage = LocalStorage(tmp_path)
+    routes = {**ALL_ROUTES,
+              "historical-price-eod": json.dumps([None, *json.loads(body("fmp_usdkrw.json"))]).encode(),
+              "StatisticSearch": json.dumps({"StatisticSearch": {}}).encode(),
+              "statisticsParameterData": json.dumps({"RESULT": [1]}).encode()}
+    src, _ = source(routes)
+    assert collect(storage, "run_m", src) == so.PARTIAL_EXIT
+    manifest = json.loads(storage.get_bytes(raw_run_manifest_key("macro_observation", "run_m")))
+    status = {o["series_id"]: (o["status"], o["detail"]) for o in manifest["objects"]}
+    assert status["kr_10y_yield"] == ("error", "missing_rows")
+    assert status["kr_cpi_yoy"][0] == "error"
+    assert so.normalize(storage, so.MACRO, "run_mn", "run_m", producer="normalize_macro") == so.PARTIAL_EXIT
+    assert canonical_rows(storage, "usd_krw", "2026-07-27")[0]["value"] == "1464.671"
+
+
+def test_vendor_decimals_survive_json_parsing():
+    # WHY(리뷰): JSON 숫자를 float 로 먼저 읽으면 "공급자 자릿수 그대로" 계약이 저장 전에 깨진다.
+    raw = b'[{"symbol": "USDKRW", "date": "2026-07-27", "close": 1461.1234567890123456789}]'
+    good, _ = macro_series.parse("usd_krw", raw)
+    assert good[0]["value"] == "1461.1234567890123456789"
+
+
+def test_rerun_reports_the_original_failure_instead_of_success(tmp_path):
+    # WHY(리뷰): 완료 manifest 재사용이 status=success 로 쓰면 전부 실패한 수집이 재실행 한 번으로 성공이 된다.
+    storage = LocalStorage(tmp_path)
+    src, _ = source({k: StopFetch("HTTP 500", status=500) for k in ALL_ROUTES})
+    assert collect(storage, "run_e", src) == 1
+    assert collect(storage, "run_e", src) == 1
+    logs = [json.loads(storage.get_bytes(k)) for k in storage.list_keys("operations_archive/collection_logs/")
+            if "run_id=run_e/" in k]
+    assert {log["status"] for log in logs} == {"error"}

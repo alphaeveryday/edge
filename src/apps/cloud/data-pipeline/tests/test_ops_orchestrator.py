@@ -381,6 +381,37 @@ def test_reconciler_projects_airflow_run_status_like_the_dag_verdict(normalize_e
     assert db.runs[result.run_key]["orchestration_status"] == expected
 
 
+def test_airflow_only_lane_keeps_each_tasks_evidence_separate():
+    # WHY(ALPHA-1130 리뷰): source-daily 9작업은 SFN state 이름이 없다. Reconciler 가 증거를 빈 이름 하나로
+    # 모으면 한 작업의 exit 0 이 다른 작업의 판정을 덮는다(매크로 정제 부분 실패 + 업종 성공 → 런 "성공").
+    db = FakeOpsDB()
+    result = plan_run(_ledger(db), state_machine_arn=None, scheduled_time=_SLOT,
+                      pipeline_type=catalog.SOURCE_DAILY_PIPELINE_TYPE, sfn_client=_NoSfn(),
+                      orchestrator=states.ORCHESTRATOR_AIRFLOW, orchestrator_run_ref="edge_source_daily/r")
+    exits = {e.task_key: (f"arn:ecs/{e.task_key}", 0) for e in catalog.entries(catalog.SOURCE_DAILY_PIPELINE_TYPE)}
+    exits["NORMALIZE_MACRO"] = ("arn:ecs/NORMALIZE_MACRO", 2)     # 부분 실패 — FULFILLED 지만 런은 실패
+    # DAG 처럼 흐름이 엇갈려 끝난다 — 매크로가 먼저 다 끝나고 업종·재무 수집이 그 뒤에 돈다.
+    _finish(db, result.pipeline_run_id, exits)
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+                  now=_SLOT + timedelta(minutes=30))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED
+    assert len({e.evidence_key for e in catalog.entries()}) == len(catalog.entries())
+
+
+def test_parallel_flows_in_one_lane_do_not_make_each_other_stale():
+    # WHY(ALPHA-1130 리뷰): 다른 흐름의 늦은 수집을 "앞 단계 재실행"으로 읽으면 끝난 적재가 stale 이 되어
+    # 모든 흐름이 성공해도 런 판정이 영영 안 난다(콘솔 R02 미귀결).
+    db = FakeOpsDB()
+    result = plan_run(_ledger(db), state_machine_arn=None, scheduled_time=_SLOT,
+                      pipeline_type=catalog.SOURCE_DAILY_PIPELINE_TYPE, sfn_client=_NoSfn(),
+                      orchestrator=states.ORCHESTRATOR_AIRFLOW, orchestrator_run_ref="edge_source_daily/r")
+    _finish(db, result.pipeline_run_id,
+            {e.task_key: (f"arn:ecs/{e.task_key}", 0) for e in catalog.entries(catalog.SOURCE_DAILY_PIPELINE_TYPE)})
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+                  now=_SLOT + timedelta(minutes=30))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED
+
+
 def test_unconcluded_airflow_run_stays_unresolved_after_hard_deadline():
     # 증거가 없으면 종료로 단정하지 않는다 — NULL 로 남아 콘솔 R02(마감 초과 미귀결)가 드러낸다.
     db = FakeOpsDB()

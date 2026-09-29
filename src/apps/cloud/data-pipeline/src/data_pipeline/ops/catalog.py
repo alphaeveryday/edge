@@ -150,6 +150,18 @@ class CatalogEntry:
     fulfilled_exit_codes: tuple[int, ...] = (0,)
     # 데이터 전달 계약은 별도 typed registry가 소유한다(ADR-0043). Catalog는 stable key만 참조.
     contract_key: str | None = None
+    # 한 레인 안의 독립 흐름(ALPHA-1130). Reconciler 의 "앞 단계가 뒤에 다시 돌았다(stale)" 판정은 같은 흐름
+    # 안에서만 비교한다. 빈 값 = 레인 전체가 한 흐름(기존 레인). 흐름이 여럿인 레인에서 레인 전체로 비교하면
+    # 다른 흐름의 늦은 수집이 이미 끝난 적재를 stale 로 만들어 런 판정이 영영 안 난다.
+    flow: str = ""
+
+    @property
+    def evidence_key(self) -> str:
+        """Reconciler 가 이 작업의 실행 증거(occurrence)를 모으는 키. SFN 작업은 state 이름(SFN 이력과
+        같은 키), SFN 이 없는 Airflow 전용 작업은 `airflow:<task_key>` — 빈 이름을 공유하면 레인의 모든
+        작업 증거가 한 목록에 섞여 서로의 exit·ARN 으로 판정된다(ALPHA-1130 리뷰). SFN state 이름에는
+        콜론이 없어 두 공간이 겹치지 않는다."""
+        return self.sfn_state_name or f"airflow:{self.task_key}"
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
@@ -535,38 +547,38 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     # ⚠️ MACRO_COLLECTION 만 instrumented=False 다: 매크로 키(ECOS·KOSIS·EIA + FMP)를 가진 `macro`
     # 태스크 정의가 아직 없다(인프라 인계 — 설계 §10). 배선이 먼저 배포된 뒤 True 로 올린다(ALPHA-596 순서).
     CatalogEntry(
-        task_key="MACRO_COLLECTION", stage="raw", dataset="macro_observation", required=True,
+        task_key="MACRO_COLLECTION", flow="macro", stage="raw", dataset="macro_observation", required=True,
         cli_command=("ingest-raw-macro",), sfn_state_name="", ecs_task_definition="macro",
         source_vendor="multi", deadline_offset_seconds=1200, stalled_after_seconds=1500,
         instrumented=False, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
-        task_key="NORMALIZE_MACRO", stage="normalize", dataset="macro_observation", required=True,
+        task_key="NORMALIZE_MACRO", flow="macro", stage="normalize", dataset="macro_observation", required=True,
         cli_command=("normalize-macro",), sfn_state_name="", ecs_task_definition="bigkinds",
         deadline_offset_seconds=1500, stalled_after_seconds=1500, pipeline_type="source-daily",
         fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
-        task_key="LOAD_MACRO", stage="feature", dataset="macro_observation_load", required=True,
+        task_key="LOAD_MACRO", flow="macro", stage="feature", dataset="macro_observation_load", required=True,
         cli_command=("load-macro",), sfn_state_name="", ecs_task_definition="rds",
         depends_on=("NORMALIZE_MACRO",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
         pipeline_type="source-daily",
     ),
     # 업종 마스터는 휴장일에 새로 받을 이유가 없다(분류 변경은 상장·변경 공시 뒤 거래일에 반영).
     CatalogEntry(
-        task_key="SECTOR_COLLECTION_KIS", stage="raw", dataset="sector_classification", required=True,
+        task_key="SECTOR_COLLECTION_KIS", flow="sector", stage="raw", dataset="sector_classification", required=True,
         cli_command=("ingest-raw-sector",), sfn_state_name="", ecs_task_definition="bigkinds",
         source_vendor="kis", deadline_offset_seconds=1200, stalled_after_seconds=1500,
         kr_trading_calendar=True, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
-        task_key="NORMALIZE_SECTOR", stage="normalize", dataset="sector_classification", required=True,
+        task_key="NORMALIZE_SECTOR", flow="sector", stage="normalize", dataset="sector_classification", required=True,
         cli_command=("normalize-sector",), sfn_state_name="", ecs_task_definition="bigkinds",
         deadline_offset_seconds=1500, stalled_after_seconds=1500, kr_trading_calendar=True,
         pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
-        task_key="LOAD_SECTOR", stage="feature", dataset="sector_classification_load", required=True,
+        task_key="LOAD_SECTOR", flow="sector", stage="feature", dataset="sector_classification_load", required=True,
         cli_command=("load-sector",), sfn_state_name="", ecs_task_definition="rds",
         depends_on=("NORMALIZE_SECTOR",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
         kr_trading_calendar=True, pipeline_type="source-daily",
@@ -574,19 +586,19 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     # DART 키·DB env 는 기존 `dart` 태스크 정의에 이미 있다(CollectDartFinancial 과 같은 키).
     # 창 안에 새 정기보고서가 없는 날은 목록만 받고 재무 호출 0건이다 — 정상이다(empty_allowed).
     CatalogEntry(
-        task_key="FINANCIAL_METRIC_COLLECTION_DART", stage="raw", dataset="financial_metric", required=True,
+        task_key="FINANCIAL_METRIC_COLLECTION_DART", flow="financial", stage="raw", dataset="financial_metric", required=True,
         cli_command=("ingest-raw-financial-metric",), sfn_state_name="", ecs_task_definition="dart",
         source_vendor="dart", deadline_offset_seconds=1200, stalled_after_seconds=1500,
         pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
-        task_key="NORMALIZE_FINANCIAL_METRIC", stage="normalize", dataset="financial_metric", required=True,
+        task_key="NORMALIZE_FINANCIAL_METRIC", flow="financial", stage="normalize", dataset="financial_metric", required=True,
         cli_command=("normalize-financial-metric",), sfn_state_name="", ecs_task_definition="bigkinds",
         deadline_offset_seconds=1500, stalled_after_seconds=1500, empty_allowed=True,
         pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
-        task_key="LOAD_FINANCIAL_METRIC", stage="feature", dataset="financial_metric_load", required=True,
+        task_key="LOAD_FINANCIAL_METRIC", flow="financial", stage="feature", dataset="financial_metric_load", required=True,
         cli_command=("load-financial-metric",), sfn_state_name="", ecs_task_definition="rds",
         depends_on=("NORMALIZE_FINANCIAL_METRIC",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
         empty_allowed=True, pipeline_type="source-daily",
@@ -700,6 +712,7 @@ def content_hash() -> str:
             "pipeline_type": e.pipeline_type,
             "fulfilled_exit_codes": list(e.fulfilled_exit_codes),
             "contract_key": e.contract_key,
+            "flow": e.flow,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
     ]
