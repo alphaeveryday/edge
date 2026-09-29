@@ -157,7 +157,10 @@ class PgBudgetStore:
         except ValueError:
             pass
         if self._lookup is None:                    # 기한을 넘긴 조회가 있으면 새로 시작하지 않고 그걸 기다린다
-            self._lookup = _Lookup(self.db.host, self.db.port)
+            try:
+                self._lookup = _Lookup(self.db.host, self.db.port)
+            except RuntimeError:                    # 스레드를 못 띄웠다 — RuntimeError 로 새면 종목 단위 격리로 접힌다
+                raise CallBudgetUnavailable("DnsThread") from None
         if not self._lookup.done.wait(timeout=max(0.0, end - time.monotonic())):
             raise CallBudgetUnavailable("DnsTimeout")
         lookup, self._lookup = self._lookup, None   # 결과는 한 번만 쓴다 — 다음 연결은 새로 푼다(주소 변경 반영)
@@ -348,7 +351,7 @@ class SharedBudgetPacer:
                 if t_resp + wait > deadline:
                     self._count("deadline_exceeded")
                     raise CallBudgetDeadlineExceeded(self.caller)
-                self._sleep(min(max(wait, 0.005), self.cfg.deny_poll_cap_sec))
+                self._sleep(min(max(wait, 0.005), self.cfg.deny_poll_cap_sec, max(0.0, deadline - self._clock())))
                 continue
             if outcome.startswith("DENIED"):
                 self._count("denied")
@@ -359,8 +362,10 @@ class SharedBudgetPacer:
                 if t_resp + wait > deadline:
                     self._count("deadline_exceeded")
                     raise CallBudgetDeadlineExceeded(self.caller)
-                self._sleep(min(max(wait, 0.005), self.cfg.deny_poll_cap_sec))
+                self._sleep(min(max(wait, 0.005), self.cfg.deny_poll_cap_sec, max(0.0, deadline - self._clock())))
                 continue
+            if outcome != "GRANTED":                # 모르는 판정은 허용이 아니다 — 코드·DB 함수 계약 불일치
+                raise CallBudgetMisconfigured(f"알 수 없는 판정 {outcome!r} budget={self.cfg.budget_id}")
             rtt = t_resp - t_req
             self._observe(rtt, lock_wait)
             if rtt > self.cfg.rtt_max_sec:
@@ -535,7 +540,10 @@ if __name__ == "__main__":
             set_paused(c, budget, False)
             print("resumed")
         elif cmd == "status":
-            print(c.execute("SELECT budget_id, rate_per_sec, paused, next_slot_at - extract(epoch FROM clock_timestamp()) "
-                            "FROM call_budget WHERE budget_id = %s", (budget,)).fetchone())
+            row = c.execute("SELECT budget_id, rate_per_sec, paused, next_slot_at - extract(epoch FROM clock_timestamp()) "
+                            "FROM call_budget WHERE budget_id = %s", (budget,)).fetchone()
+            if row is None:
+                raise SystemExit(f"budget {budget} 없음")
+            print(row)
         else:
             raise SystemExit("init|set-rate|pause|resume|status")

@@ -82,6 +82,37 @@ def test_grant_that_goes_stale_while_waiting_is_discarded():
     assert p.stats.c["discard_late"] == 1 and p.stats.c["granted"] == 1
 
 
+def test_unknown_outcome_is_not_a_grant():
+    """DB 함수가 코드가 모르는 판정을 내면(계약 불일치) 허용으로 읽으면 예산 밖 발신이다 — 발신 없이 크게 실패한다."""
+    p, store, _ = pacer([("THROTTLED", 0.0)])
+    with pytest.raises(cb.CallBudgetMisconfigured, match="THROTTLED"):
+        p.pace()
+    assert p.stats.c["granted"] == 0
+
+
+def test_denied_poll_never_sleeps_past_the_deadline():
+    """거절 재질의의 최소 간격(5ms)도 max_wait 를 넘기면 안 된다 — pace() 는 진입부터 max_wait 안에 끝난다는 계약."""
+    p, store, clock = pacer([("DENIED", 0.0)] * 1000, max_wait_sec=0.0125)
+    t0 = clock.t
+    with pytest.raises(cb.CallBudgetDeadlineExceeded):
+        p.pace()
+    assert clock.t - t0 <= 0.0125 + 0.001 + 1e-9     # 마지막 허용 왕복(1ms)만큼만 넘을 수 있다
+
+
+def test_dns_thread_start_failure_is_a_budget_outage(monkeypatch):
+    """조회 스레드를 못 띄우면(자원 고갈) RuntimeError 가 아니라 발신 금지로 — RuntimeError 는 종목 격리로 접힌다."""
+    from data_pipeline.config import DbConfig
+
+    def no_thread(*a, **k):
+        raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(cb, "_Lookup", no_thread)
+    store = cb.PgBudgetStore(DbConfig(host="db.example", port=5432, name="d", user="u", password="p"),
+                             CallBudgetConfig(enabled=True))
+    with pytest.raises(cb.CallBudgetUnavailable, match="DnsThread"):
+        store.acquire("kis", 0, timeout=1.0)
+    assert store._lock.acquire(blocking=False)
+
+
 def test_denied_polls_again_with_capped_wait():
     p, store, clock = pacer([("DENIED", 5.0), ("GRANTED", 0.0)], deny_poll_cap_sec=0.5)
     t0 = clock.t
