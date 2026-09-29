@@ -257,3 +257,11 @@ def test_rerun_reports_the_original_failure_instead_of_success(tmp_path):
     logs = [json.loads(storage.get_bytes(k)) for k in storage.list_keys("operations_archive/collection_logs/")
             if "run_id=run_e/" in k]
     assert {log["status"] for log in logs} == {"error"}
+
+
+def test_monthly_window_starts_on_the_first_so_the_first_requested_month_is_kept():
+    # WHY(리뷰 2차): KOSIS 요청은 월 단위인데 창 시작이 월 중간이면 요청한 첫 달(관측일=1일)이 정제에서
+    # "창 밖"으로 떨어져 정기 실행이 매번 부분 실패가 된다.
+    start, end = so.macro_window("kr_cpi_yoy", date(2026, 9, 30), None, None)
+    assert start.day == 1 and start <= date(2026, 5, 29)
+    assert so.macro_window("kr_cpi_yoy", date(2026, 9, 30), "2026-02-15", "2026-06-30")[0] == date(2026, 2, 1)

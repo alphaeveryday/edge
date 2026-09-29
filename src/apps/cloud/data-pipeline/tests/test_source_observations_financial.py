@@ -203,7 +203,7 @@ def test_bps_with_an_unverifiable_share_filing_is_not_backdated(tmp_path):
     responses = full_responses(SAMSUNG)
     body = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
     for row in body["list"]:
-        row["rcept_no"] = None
+        row["rcept_no"] = "20260901000999"      # 형식은 맞지만 목록에 없는 접수번호 — 공개일을 확인할 수 없다
     responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(body).encode()
     storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
                        holdings=("005930",))
@@ -218,3 +218,35 @@ def test_unsupported_fiscal_calendar_is_reported_not_silently_skipped(tmp_path):
     dart = DartFake([SAMSUNG], {}, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, march)})
     storage, _ = chain(tmp_path, dart, holdings=("005930",))
     assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+
+
+def test_bad_share_receipt_number_is_rejected_not_loaded():
+    # WHY(리뷰 2차): BPS 분모의 접수번호도 DB CHECK 대상이다 — 통과시키면 그 실행의 적재 전체가 롤백된다.
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+    share_body = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for row in share_body["list"]:
+        row["rcept_no"] = "bad"
+    rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS",
+                                             {"body_json": json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))},
+                                             share_body)
+    assert not [r for r in rows if r["metric"] == "bps"]
+    assert any(r["metric"] == "bps" and "bad_rcept_no" in r["reasons"] for r in rejects)
+
+
+def test_malformed_filing_list_fails_one_company_and_keeps_the_rest(tmp_path):
+    # WHY(리뷰 2차): 목록의 파손 행 하나가 수집을 죽이면 앞 회사에서 받은 raw 까지 저장되지 않는다.
+    lists = {SAMSUNG["corp_code"]: filing_list(SAMSUNG),
+             HYNIX["corp_code"]: json.dumps({"status": "000", "total_page": "x", "list": [None]}).encode()}
+    dart = DartFake([SAMSUNG, HYNIX], full_responses(SAMSUNG), lists)
+    storage, code = chain(tmp_path, dart)
+    assert code == 0            # 파손 행은 계획에서 빠지고, 회사 수집은 계속된다
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 0
+    assert ("005930", 2026, "Q2", "revenue", "QUARTER", "CFS") in rows_by(storage)
+
+
+def test_q3_correction_refetches_the_annual_report_to_rederive_q4():
+    # WHY(리뷰 2차): 3분기만 정정되면 FY 를 다시 받지 않아 Q4=FY−9M 이 옛 9M 으로 남는다.
+    rows = [{"report_nm": "사업보고서 (2025.12)", "rcept_dt": "20260310", "rcept_no": "1"},
+            {"report_nm": "[기재정정]분기보고서 (2025.09)", "rcept_dt": "20260915", "rcept_no": "2"}]
+    targets, _ = dart_fundamental.plan_reports(rows, datetime(2026, 9, 1).date(), datetime(2026, 9, 30).date())
+    assert targets == {("2025", "11014"), ("2025", "11011")}

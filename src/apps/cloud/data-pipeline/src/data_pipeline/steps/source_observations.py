@@ -533,12 +533,17 @@ def macro_window(series_id: str, today_kst: date, from_date: str | None, to_date
     series = macro_series.SERIES[series_id]
     yesterday = today_kst - timedelta(days=1)
     if from_date is None and to_date is None:
-        return yesterday - timedelta(days=series.lookback_days - 1), yesterday
-    if from_date is None or to_date is None:
+        start, end = yesterday - timedelta(days=series.lookback_days - 1), yesterday
+    elif from_date is None or to_date is None:
         raise SystemExit("백필은 --from 과 --to 를 함께 준다")
-    start, end = date.fromisoformat(from_date), date.fromisoformat(to_date)
-    if end > yesterday:
-        raise SystemExit(f"--to({end})가 어제({yesterday}) 이후다 — 진행 중·미래 관측은 수집하지 않는다")
+    else:
+        start, end = date.fromisoformat(from_date), date.fromisoformat(to_date)
+        if end > yesterday:
+            raise SystemExit(f"--to({end})가 어제({yesterday}) 이후다 — 진행 중·미래 관측은 수집하지 않는다")
+    # 월별 계열은 월 단위로 요청·검사한다(관측일=기준월 1일). 창 시작을 월초로 맞추지 않으면 요청에 포함된
+    # 첫 달이 정제의 창 검사에서 떨어진다.
+    if series.frequency == "M":
+        start = start.replace(day=1)
     return start, end
 
 
@@ -862,24 +867,41 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
                                  {"kind": kind, **result.request}, result.status, result.detail, result.fetched_at))
     try:
         corp_map = source.corp_map()
-        for ticker in tickers:
+    except StopFetch as exc:
+        corp_map = {}
+        objects.append(RawObject("dart", "market", "KR", "corpcode", "json", None, {"kind": "corp_map"}, "error",
+                                 str(exc)[:200], datetime.now(timezone.utc).isoformat()))
+    try:
+        for ticker in tickers if corp_map else []:
             corp = corp_map.get(ticker)
             if corp is None:
                 scope["unmapped"].append(ticker)       # 우선주·비신고 종목 — DART 공시 주체가 아니다
                 continue
             corp_code = corp["corp_code"]
             scope["corps"][corp_code] = {"stock_code": ticker, "corp_name": corp.get("corp_name")}
-            pages = source.filings(corp_code, start - timedelta(days=LIST_LOOKBACK_DAYS), end)
-            for number, page in enumerate(pages, start=1):
-                keep("list", f"{corp_code}-list-p{number}", page)
-            listed = [item for page in pages if page.status == "ok"
-                      for item in json.loads(page.body.decode("utf-8")).get("list", [])]
-            targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
-            scope.setdefault("unsupported_reports", []).extend(unsupported)
-            for year, code in sorted(targets):
-                for fs_div in ("CFS", "OFS"):
-                    keep("statement", f"{corp_code}-{year}-{code}-{fs_div}", source.statement(corp_code, year, code, fs_div))
-                keep("shares", f"{corp_code}-{year}-{code}-shares", source.shares(corp_code, year, code))
+            try:
+                pages = source.filings(corp_code, start - timedelta(days=LIST_LOOKBACK_DAYS), end)
+                for number, page in enumerate(pages, start=1):
+                    keep("list", f"{corp_code}-list-p{number}", page)
+                listed = []
+                for page in (p for p in pages if p.status == "ok"):
+                    body = json.loads(page.body.decode("utf-8"))
+                    items = body.get("list") if isinstance(body, dict) else None
+                    listed.extend(items if isinstance(items, list) else [])
+                targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
+                scope.setdefault("unsupported_reports", []).extend(unsupported)
+                for year, code in sorted(targets):
+                    for fs_div in ("CFS", "OFS"):
+                        keep("statement", f"{corp_code}-{year}-{code}-{fs_div}",
+                             source.statement(corp_code, year, code, fs_div))
+                    keep("shares", f"{corp_code}-{year}-{code}-shares", source.shares(corp_code, year, code))
+            except StopFetch:
+                raise
+            except Exception as exc:
+                # 한 회사의 응답 파손이 다른 회사 수집과 이미 받은 raw 저장을 막지 않게 그 회사만 실패로 남긴다.
+                objects.append(RawObject("dart", "market", "KR", f"{corp_code}-error", "json", None,
+                                         {"kind": "corp", "corp_code": corp_code}, "error", type(exc).__name__,
+                                         datetime.now(timezone.utc).isoformat()))
     except StopFetch as exc:
         # 키·한도·점검 — 남은 호출을 멈추고 받은 것까지만 남긴다(부분 실패로 드러난다).
         objects.append(RawObject("dart", "market", "KR", "stopped", "json", None, {"kind": "stop"}, "error",

@@ -128,8 +128,11 @@ class DartFundamentalSource:
             pages.append(result)
             if result.status != "ok":
                 return pages
-            total = json.loads(result.body.decode("utf-8")).get("total_page") or 1
-            if page >= int(total):
+            try:
+                total = int(json.loads(result.body.decode("utf-8")).get("total_page") or 1)
+            except (TypeError, ValueError, AttributeError):
+                total = page        # 페이지 수를 못 읽으면 더 넘기지 않는다(받은 페이지는 남는다)
+            if page >= total:
                 return pages
             page += 1
 
@@ -159,7 +162,9 @@ def plan_reports(list_rows: list[dict], window_from: date, window_to: date) -> t
     """접수일이 창 안인 정기보고서 → 수집할 (bsns_year, reprt_code). 사업보고서면 같은 해 3분기도 붙인다
     (Q4 = FY − 9M 유도의 입력). 비12월 결산은 거부로 돌려준다."""
     targets, rejects = set(), []
-    for row in list_rows:
+    rows = [row for row in list_rows if isinstance(row, dict)]
+    fy_years = {p[0] for row in rows if (p := report_of(row.get("report_nm"))) and p[1] == "11011"}
+    for row in rows:
         parsed = report_of(row.get("report_nm"))
         if parsed is None:
             continue
@@ -171,8 +176,12 @@ def plan_reports(list_rows: list[dict], window_from: date, window_to: date) -> t
         rcept_dt = row.get("rcept_dt") or ""
         if window_from.strftime("%Y%m%d") <= rcept_dt <= window_to.strftime("%Y%m%d"):
             targets.add((year, code))
+            # Q4 = FY − 9M 은 두 보고서가 한 실행에 있어야 다시 유도된다 — 어느 쪽이 새로(정정 포함) 접수되든
+            # 짝을 함께 받는다. 사업보고서가 아직 없는 해의 3분기는 짝이 없다.
             if code == "11011":
                 targets.add((year, "11014"))
+            if code == "11014" and year in fy_years:
+                targets.add((year, "11011"))
     return targets, rejects
 
 
@@ -270,11 +279,15 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     treasury = _amount(total.get("tesstk_co")) if total else None
     if total is not None and treasury is None and (total.get("tesstk_co") or "").strip() == "-":
         treasury = Decimal(0)   # 주식 총수 표의 '-' 는 자기주식 없음이다(금액 칸의 '-' 와 다르다)
+    if total is not None and not _RCEPT_NO.fullmatch(str(total.get("rcept_no"))):
+        # 분모 쪽 접수번호도 DB CHECK 대상이다 — 형식이 틀리면 그 실행의 적재 전체가 롤백된다.
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bad_rcept_no"]})
+        return []
     if equity is None or issued is None or treasury is None or issued - treasury <= 0:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
         return []
     value = (equity / (issued - treasury)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-    rcept_nos = sorted({line["rcept_no"], total.get("rcept_no") or line["rcept_no"]})
+    rcept_nos = sorted({line["rcept_no"], total["rcept_no"]})
     return [{**base, "fiscal_period": fiscal_period, "metric": "bps", "period_kind": "POINT",
              "derivation": "EQUITY_OVER_SHARES", "value": str(value), "unit": "KRW_per_share",
              "formula": BPS_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]), "rcept_no": rcept_nos[-1],
