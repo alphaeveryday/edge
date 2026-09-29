@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar, SearchField, SectionHead, SectorIcon } from '@/components/ui';
@@ -16,6 +16,9 @@ export default function Search() {
   const searching = q.trim().length > 0;
   const results = useEtfSearch(q);
   const recent = useRecentEtfs();
+  // ETF 상세에서 돌아올 때 최근 목록 재조회
+  const { refetch } = recent;
+  useFocusEffect(useCallback(() => { refetch(); }, [refetch]));
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="검색" onBack={() => router.back()} />

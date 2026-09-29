@@ -27,7 +27,7 @@ export default function Post() {
     if (!t) return;
     requireLogin('답글', () => reply.mutate(t, { onSuccess: () => setDraft('') }));
   };
-  const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); router.back(); toast('글을 지웠어요'); } });
+  const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); if (router.canGoBack()) router.back(); else router.replace('/(tabs)/community'); toast('글을 지웠어요'); } });
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.navWrap}>
