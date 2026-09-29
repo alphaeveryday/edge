@@ -19,6 +19,9 @@ USER spring
 
 COPY --from=build /workspace/apps/cloud/app-api/build/libs/*.jar app.jar
 
+# 스레드별 malloc 아레나 상한. 512MiB 태스크의 JVM 밖 네이티브 메모리 억제
+ENV MALLOC_ARENA_MAX=2
+
 # Spring Boot 기본 포트. ECS target group / Service Connect 도 8080 으로 맞춘다.
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
