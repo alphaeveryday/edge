@@ -8,11 +8,14 @@ import secrets
 from threading import Lock, Thread
 from uuid import uuid4
 
+from .quality_cases import CASES, case_spec, make_quality_fixture
+
 
 SCENARIOS = {'baseline':'기본', 'unusual_flow':'특이 수급', 'competing_signals':'상충 지표',
              'followup':'후속 기사', 'quiet':'변화 없음'}
 SCENARIOS.update({f'replay_{day}':f'연속 재생 {day}/5' for day in range(1,6)})
-ARTIFACTS = ('quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
+SCENARIOS.update({name:values[0] for name,values in CASES.items()})
+ARTIFACTS = ('case_spec.json', 'verification.json', 'quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
              'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json')
 
 
@@ -31,6 +34,8 @@ def read_settings(path: Path) -> dict:
 
 def scenario_cutoff(kind: str, scenario: str) -> str:
     """Choose a fixed historical cutoff for repeatable intraday/daily checks."""
+    if scenario in CASES:
+        return '2026-09-21T08:30:00+09:00' if kind == 'outlook' else '2026-09-21T10:00:00+09:00'
     index = int(scenario[-1])-1 if scenario.startswith('replay_') else list(SCENARIOS).index(scenario)
     return f'2026-09-{14+index:02d}T08:30:00+09:00' if kind == 'outlook' else f'2026-09-14T{10+index:02d}:00:00+09:00'
 
@@ -71,7 +76,8 @@ class ExecutionDashboard:
 
     def start(self, body: dict) -> dict:
         """Validate a fixed request and start it without accepting paths or code."""
-        if (not isinstance(body, dict) or set(body) != {'kind','scenario'}
+        if (not isinstance(body, dict) or not {'kind','scenario'} <= set(body) or not set(body) <= {'kind','scenario','tool_mode'}
+                or body.get('tool_mode','focused') not in ('focused','cards')
                 or body['kind'] not in ('movement','outlook') or body['scenario'] not in SCENARIOS):
             raise ValueError('Choose a supported kind and scenario')
         with self.lock:
@@ -85,7 +91,7 @@ class ExecutionDashboard:
                 if previous is None:
                     raise ValueError('Complete the preceding replay step first')
                 previous_id = previous['analysis_id']
-            job = body | {'analysis_id':uuid4().hex, 'status':'running', 'previous_analysis_id':previous_id,
+            job = body | {'tool_mode':body.get('tool_mode','focused'), 'analysis_id':uuid4().hex, 'status':'running', 'previous_analysis_id':previous_id,
                           'analysis_at':scenario_cutoff(body['kind'],body['scenario']),
                           'started_at':datetime.now(timezone.utc).isoformat()}
             self._save(job)
@@ -100,15 +106,22 @@ class ExecutionDashboard:
                 from .analysis_service import execute_request
                 runner = execute_request
             factory = self.fixture_factory
+            if job['scenario'] in CASES and factory is None:
+                factory = make_quality_fixture
+                (self.runs_dir/job['analysis_id']/'case_spec.json').write_text(json.dumps(case_spec(job['scenario']),ensure_ascii=False,indent=2),encoding='utf-8')
             if factory is None:
                 from .fixture_tools import make_fixture, make_replay_fixture
                 fixture = make_replay_fixture(job['analysis_at']) if job['scenario'].startswith('replay_') else make_fixture(job['scenario'], job['analysis_at'])
             else:
                 fixture = factory(job['scenario'], analysis_at=job['analysis_at'])
-            runner(kind=job['kind'], fixture=fixture,
+            screen = runner(kind=job['kind'], fixture=fixture,
                    connection_factory=self.connection_factory, key=self.key,
                    artifacts=self.runs_dir/job['analysis_id'], analysis_id=job['analysis_id'], model=self.model,
-                   previous_analysis_id=job['previous_analysis_id'])
+                   previous_analysis_id=job['previous_analysis_id'],tool_mode=job.get('tool_mode','focused'))
+            if job['scenario'] in CASES and self.runner is None:
+                from .quality_audit import verify_execution
+                verification = verify_execution(self.connection_factory, fixture, job['kind'], job['analysis_id'], screen, self.runs_dir/job['analysis_id'])
+                job = job | {'verification_status':verification['mechanical_status'], 'quality_status':'pending_review'}
             job = job | {'status':'completed'}
         except Exception as exc:
             detail = str(exc)[:1500].replace(self.key,'[redacted]') if isinstance(exc, ValueError) else '실행 실패. 아래 모델 기록과 DB 상태를 확인하세요.'

@@ -11,6 +11,7 @@ import pytest
 from edge_analysis_v2.analysis_service import execute_request
 from edge_analysis_v2.fixture_tools import make_fixture
 from edge_analysis_v2.factor_store import HEADLINES, read_factor_details
+from edge_analysis_v2.audited_execution import ToolExecutionError
 
 
 @pytest.fixture
@@ -43,6 +44,19 @@ def run_context(tmp_path):
 
 def news_reference(kwargs):
     return kwargs['call']('get_issue_evidence',{'news_ids':[kwargs['initial']['news'][0]['news_id']], 'include_body':False})['tool_run_id']
+
+
+def test_missing_screen_data_fails_before_paying_for_model(run_context):
+    request, factory = run_context
+    fixture = make_fixture()
+    fixture['financials'] = []
+    calls = []
+    async def model(**kwargs):
+        calls.append(True)
+        raise AssertionError('Model must not run when required screen data is absent')
+    with pytest.raises(ToolExecutionError):
+        request('outlook',model,fixture)
+    assert not calls
 
 
 def test_movement_calls_commit_before_final_publication_and_retry_does_not_call_model(run_context):

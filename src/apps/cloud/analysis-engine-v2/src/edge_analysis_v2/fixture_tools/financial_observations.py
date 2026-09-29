@@ -92,6 +92,7 @@ def valuation_range(fixture, eps_id, per_low, per_high):
     price = decimal(rows[-1]['close'])
     return {'eps_observation':eps, 'per_assumptions':{'low':number(low),'high':number(high)},
             'current_price':number(price), 'price_date':rows[-1]['date'],
+            'current_per':number(price/value),
             'price_low':number(value*low), 'price_high':number(value*high),
             'return_low_pct':number(100*(value*low/price-1)),
             'return_high_pct':number(100*(value*high/price-1))}

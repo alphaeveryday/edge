@@ -3,6 +3,17 @@ from datetime import date, timedelta
 
 from .common import available, decimal, instant, number
 
+METRIC_FORMULAS = (
+    r"M_n(D)=\frac1n\sum_{j=0}^{n-1}C_{D-j};\ d_{20}=100(P/M_{20}-1);\ "
+    r"direction_{60}=sign(M_{60}(D)-M_{60}(D-1));\ "
+    r"N_{20}=\sum_{d=D-19}^{D}[C_d>\max(C_{d-20},\ldots,C_{d-1})];\ "
+    r"d_{52w}=100(P/\max C_{[T-364d,T)}-1);\ "
+    r"A_{ratio}=A_D/(\frac1{20}\sum_{j=1}^{20}A_{D-j});\ "
+    r"TR_d=\max(H_d-L_d,|H_d-C_{d-1}|,|L_d-C_{d-1}|);\ "
+    r"ATR_{14}=\frac1{14}\sum_{d=1}^{14}TR_d;\ "
+    r"ATR_d=(13ATR_{d-1}+TR_d)/14;\ ATR\%=100ATR_D/C_D"
+)
+
 
 def history(fixture, instrument_id=None):
     """Read continuous completed daily prices from the registered calendar."""

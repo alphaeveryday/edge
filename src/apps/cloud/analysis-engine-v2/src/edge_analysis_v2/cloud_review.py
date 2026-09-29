@@ -97,14 +97,51 @@ def read_screen(ca_path, kind, identity, feature):
 
 def render_job(detail):
     """Show only fixed artifacts, escaping model-controlled text."""
-    labels = {'input.json':'에이전트 초기 입력', 'system_prompt.txt':'시스템 프롬프트',
+    labels = {'case_spec.json':'이 사례의 목표 · 가까운 가능세계', 'verification.json':'계산·근거·저장 검증 · 의미 검수와 별개',
+              'input.json':'에이전트 초기 입력', 'system_prompt.txt':'시스템 프롬프트',
               'events.jsonl':'모델 이벤트 · 텍스트와 툴 호출', 'raw_response.txt':'모델 출력 원문',
               'response.json':'에이전트 최종 응답', 'screen.json':'저장 후 조립된 화면',
               'factor_details.json':'5요인 상세 화면', 'tool_schemas.json':'에이전트가 읽는 툴 명세',
               'output_schema.json':'에이전트 최종 응답 스키마', 'quality_review.md':'문장 품질 검수 기록'}
     source = '실제 DB 자료' if detail['job'].get('data_source') == 'database' else '목자료'
-    parts = [f'<h2>로컬 실행 기록</h2><p class="muted">입력은 {source}입니다. 툴 저장과 모델 호출은 실제 실행입니다. 완료는 실행·저장 성공이며 문장 품질 합격과는 별개입니다.</p>',
-             '<pre>'+html.escape(json.dumps(detail['job'],ensure_ascii=False,indent=2))+'</pre>']
+    parts = [f'<h2>실행 결과와 내용 검수</h2><p class="muted">입력은 {source}입니다. 툴 저장과 모델 호출은 실제 실행입니다. 완료는 실행·저장 성공이며 문장 품질 합격과는 별개입니다.</p>']
+    if 'case_spec.json' in detail['artifacts']:
+        spec = json.loads(detail['artifacts']['case_spec.json'])
+        parts.append('<article><h2>'+html.escape(spec['label'])+'</h2><p>'+html.escape(spec['goal'])+'</p>')
+        parts.append('<details><summary>검수용 예시 · 사용자 승인 답안 아님</summary><p>'+html.escape(spec.get('reference_example','')).replace('\n','<br>')+'</p></details></article>')
+        parts.append('<p class="saved">'+('내용 검수 기록 있음 · 아래 판단 이유와 미해결 항목 확인' if 'quality_review.md' in detail['artifacts'] else '내용 검수 대기 · 계산 통과는 글의 합격이 아닙니다.')+'</p>')
+    if 'verification.json' in detail['artifacts']:
+        verification = json.loads(detail['artifacts']['verification.json'])
+        state = '통과' if verification['mechanical_status'] == 'passed' else '실패 항목 있음'
+        parts.append('<p>계산·저장 검사: '+state+' · 전체 호출 '+str(verification['call_count'])
+                     +'회 · 실패 호출 '+str(verification['failed_call_count'])+'회</p>')
+    if 'quality_review.md' in detail['artifacts']:
+        parts.append('<article><h2>내용 검수 · JTB와 가까운 가능세계</h2><pre>'
+                     +html.escape(detail['artifacts']['quality_review.md'])+'</pre></article>')
+    if 'screen.json' in detail['artifacts']:
+        screen = json.loads(detail['artifacts']['screen.json'])
+        body = screen.get('detail',screen)
+        parts.append('<article><h2>실제 저장된 분석글</h2>')
+        summary = screen.get('summary_card',{})
+        if summary:
+            parts.append('<h2>'+html.escape(summary.get('title',''))+'</h2><p>'
+                         +html.escape(summary.get('summary',''))+'</p>')
+        if screen.get('outlook'):
+            parts.append('<p>종합 전망: '+html.escape(screen['outlook']['direction'])+'</p>')
+        if body.get('title'):
+            parts.append('<h2>'+html.escape(body['title'])+'</h2>')
+        for item in body.get('items',[]):
+            parts.append('<h2>'+html.escape(item.get('title_keyword',''))+'</h2><ul>')
+            for sentence in item.get('sentences',[item.get('sentence','')]):
+                if isinstance(sentence,dict):
+                    sentence = sentence['sentence']
+                parts.append('<li>'+html.escape(sentence)+'</li>')
+            parts.append('</ul><p class="muted">근거: '+html.escape(', '.join(item.get('tool_run_ids',[])))+'</p>')
+        if screen.get('conclusion'):
+            parts.append('<h2>최종 판단</h2><p>'+html.escape(screen['conclusion'].get('sentence',''))
+                         +'</p><p>'+html.escape(screen['conclusion'].get('change_condition',''))+'</p>')
+        parts.append('</article>')
+    parts.append('<h3>실행 상태 원문</h3><pre>'+html.escape(json.dumps(detail['job'],ensure_ascii=False,indent=2))+'</pre>')
     for name, value in detail['artifacts'].items():
         if name.endswith('.json'):
             try:
