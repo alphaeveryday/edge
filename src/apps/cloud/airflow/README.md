@@ -436,7 +436,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 1. `foundation` apply(수동) — `edge/airflow` ECR 저장소.
 2. 이 PR 머지 → `terraform-apply` 가 클러스터·호스트·서비스(desired 0)·검증 자원을 만든다(새 RDS 없음). 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 desired 0 이면 배포를 건너뛴다.
-3. 시크릿 값과 전용 DB·역할: `python3 verify/run.py secrets`(없는 키만 만든다, 값은 찍지 않는다) → `python3 verify/run.py setup`(관리 태스크가 전용 DB·역할 생성, 검증 원장 스키마 복제, 권한 분리 확인).
+3. 시크릿 값과 전용 DB·역할: `python3 verify/run.py secrets`(boto3 가 있는 인터프리터 — 예: `src/.venv/bin/python`)(없는 키만 만든다, 값은 찍지 않는다) → `python3 verify/run.py setup`(관리 태스크가 전용 DB·역할 생성, 검증 원장 스키마 복제, 권한 분리 확인).
 4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable.
 5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
 
@@ -465,7 +465,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 
 **늘어나는 비용 — 안별 비교(USD/월)**
 
-| 항목 | 단가 | #981 원안: medium + 별도 RDS | **현재 Terraform: small + 별도 RDS** | 검증 후보: small + 기존 RDS | (불통과) micro + 기존 RDS |
+| 항목 | 단가 | #981 원안: medium + 별도 RDS | #981 2차안: small + 별도 RDS | small + 기존 RDS | **현재 Terraform(검증 구성): micro + 기존 RDS**(로컬 가정으로는 불통과 — 실제 AWS 로 판정) |
 |---|---|---|---|---|---|
 | EC2 | medium 0.0416·small 0.0208·micro 0.0104 /h | 30.37 | 15.18 | 15.18 | 7.59 |
 | EBS gp3 30GiB(ECS AMI 루트 최소) | 0.0912 /GB·월 | 2.74 | 2.74 | 2.74 | 2.74 |
@@ -495,10 +495,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 - worker 클러스터의 업무 Fargate 태스크. 실행 주체가 SFN 이든 Airflow 든 같은 태스크가 돈다.
 - 전환 뒤에는 이 레인의 SFN 상태 전이 요금이 사라진다(소액).
 
-**실제 AWS 단기 검증의 최소 비용(small + 별도 RDS 로 1주일 가정):**
-- EC2 약 3.5 · EBS 0.6 · RDS 4.8 · 시크릿·로그·알람 약 1 · 검증 태스크 약 0.5 → **약 10 USD**.
-- 기존 RDS 를 쓰는 비교 측정(on/off)을 더해도 인스턴스 추가 요금은 없다.
-- 검증 뒤 멈추려면 ASG desired 0 + RDS 삭제(또는 중지 — RDS 중지는 7일 뒤 자동 재시작).
+**실제 AWS 단기 검증 비용:** 위 "실제 AWS 단기 검증(t4g.micro + 기존 RDS)"의 예상 비용 표.
 
 ### 실제 AWS 검증(격리)
 
