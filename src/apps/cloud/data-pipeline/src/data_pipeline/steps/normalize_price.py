@@ -7,7 +7,8 @@ raw price_daily(FMP·KIS 두 벤더, 이형 스키마)를 읽어 **표준 OHLCV 
 
 게이트를 통과한 행은 `canonical/market_data/price_daily` 에 **(market,ticker,trade_date)
 정체성 키로 멱등 병합** 한다 — canonical 은 run_id 가 없어 같은 raw 를 몇 번 정제해도 결과가
-같다. 같은 벤더 재적재는 최신 fetched_at 이 이기고, **벤더 교차 같은 키 충돌은 fail-loud**
+같다. 같은 벤더 재적재는 `_winner_rank` 가 고르고(KR: 거래일 15:30 KST 뒤 가장 이른 수집분,
+ALPHA-1120 / 비KR: 최신 fetched_at), **벤더 교차 같은 키 충돌은 fail-loud**
 (통화 오염 방지 — 조용히 하나 고르지 않고 quality_log 에 드러낸다). 탈락 행은 quality_log 에
 사유와 함께 남긴다 — 잘못된 가격이 조용히 사라지거나 canonical 을 오염시키지 않게 한다.
 
@@ -33,6 +34,7 @@ from ..lake import (
     quality_log_key,
 )
 from ..quality import validate_ohlcv
+from .normalize_investor import _winner_rank as _kr_winner_rank
 
 logger = logging.getLogger(__name__)
 
@@ -236,9 +238,24 @@ def _fetched_at(row: dict) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _winner_rank(row: dict) -> tuple[int, float]:
+    """같은 (market,ticker,trade_date) 후보 중 승자 순위 — **작을수록 이긴다**(ALPHA-1120).
+
+    KR 은 수급과 같은 규칙이다(`normalize_investor._winner_rank`): 그 거래일 15:30 KST 뒤 가장
+    이른 수집분. 수집은 매일 5일 창을 다시 받는데, 다음 날 값은 거래량에 시간외 체결이 더해져
+    있고 평일 휴장일 런은 직전 거래일 종가를 공식 종가가 아닌 값으로 돌려준다(09-24 실측
+    315/408종목) — 최신 승이면 둘 다 D일 값을 덮는다.
+    비KR(FMP, 현재 토글 off)은 기존 최신 승을 유지한다 — 15:30 KST 마감은 KR 전용이라 US 에
+    걸면 US 장중 수집분이 영구 승자가 된다.
+    """
+    if row["market"] == "KR":
+        return _kr_winner_rank(row)
+    return (0, -_fetched_at(row).timestamp())
+
+
 def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: list[dict]) -> list[dict]:
-    """한 (market,trade_date) 파티션을 ticker 키로 병합. 기존→신규 순으로 적용해 신규가
-    같은 벤더면 최신 fetched_at 로 이기고, 벤더 교차 충돌은 fail-loud 로 제외한다(§6b).
+    """한 (market,trade_date) 파티션을 ticker 키로 병합. 기존→신규 순으로 적용해 같은 벤더면
+    `_winner_rank` 가 작은 쪽이 이기고(동률이면 나중 적용분), 벤더 교차 충돌은 fail-loud 로 제외한다(§6b).
 
     collisions 에 교차 충돌을 append(호출부가 quality_log·exit_code 에 반영)."""
     acc: dict[str, dict] = {}
@@ -261,8 +278,8 @@ def _merge_partition(existing: list[dict], new_rows: list[dict], collisions: lis
                 "vendors": sorted({prev["source_vendor"], row["source_vendor"]}),
             })
             continue
-        # 같은 벤더 재적재 → 최신 fetched_at 우선(정정 반영). 동률이면 신규(멱등 재실행).
-        if _fetched_at(row) >= _fetched_at(prev):
+        # 같은 벤더 재적재 → `_winner_rank` 우선. 동률이면 신규(멱등 재실행).
+        if _winner_rank(row) <= _winner_rank(prev):
             acc[ticker] = row
     return [acc[t] for t in sorted(acc)]
 

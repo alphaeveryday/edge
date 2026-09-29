@@ -183,6 +183,49 @@ def test_cross_run_correction_updates_canonical(tmp_path):
     assert len(rows) == 1 and rows[0]["close"] == 10.5  # 기존 canonical 위에 정정 반영
 
 
+def test_kr_holiday_refetch_does_not_overwrite_trade_day_close(tmp_path):
+    # WHY(ALPHA-1120): KIS 수집은 매일 5일 창을 다시 받고, 평일 휴장일 런은 직전 거래일 행을
+    #      공식 종가가 아닌 값으로 돌려준다(09-24 실측 315/408종목). 최신 승이면 그 값이
+    #      canonical 을 덮는다. KR 은 거래일 15:30 KST 뒤 가장 이른 수집분이 이겨야 하고,
+    #      적용 순서(기존 canonical → 새 raw, 그 반대)와 무관해야 한다.
+    d_day = _kis_row(stck_clpr="10", fetched_at="2026-07-01T06:41:00+00:00")   # 07-01 15:41 KST
+    holiday = _kis_row(stck_clpr="10.5", fetched_at="2026-07-02T06:41:00+00:00")
+    for first, second in ((d_day, holiday), (holiday, d_day)):
+        storage = LocalStorage(tmp_path / f"lake-{first['stck_clpr']}")
+        _write_raw(storage, _raw_key("kis", "KR", run_id="R1"), [first])
+        assert normalize_price.run(storage, "N1") == 0
+        _write_raw(storage, _raw_key("kis", "KR", run_id="R2"), [second])
+        assert normalize_price.run(storage, "N2") == 0
+        [row] = _canonical_rows(storage, "KR", "2026-07-01")
+        assert row["close"] == 10.0 and row["fetched_at"] == d_day["fetched_at"]
+
+
+def test_kr_intraday_fetch_loses_to_post_close_fetch(tmp_path):
+    # WHY: 마감 전 수집분은 장중 부분값이다. 더 늦게 받았어도 마감 뒤 값에 져야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R1"),
+               [_kis_row(stck_clpr="10", fetched_at="2026-07-01T06:41:00+00:00")])
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R2"),
+               [_kis_row(stck_clpr="10.5", fetched_at="2026-07-01T05:00:00+00:00")])  # 14:00 KST
+    assert normalize_price.run(storage, "N1") == 0
+    [row] = _canonical_rows(storage, "KR", "2026-07-01")
+    assert row["close"] == 10.0
+
+
+def test_us_keeps_latest_fetched_at_wins(tmp_path):
+    # WHY: 15:30 KST 마감은 KR 전용이다. US 에 걸면 둘 다 "마감 뒤"로 분류돼 이른 수집분(US
+    #      장중일 수 있다)이 영구 승자가 된다. US 는 최신 승을 유지한다 — 두 수집 시각을 모두
+    #      07-01 15:30 KST 뒤에 둬서 KR 규칙이면 답이 달라지게 했다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R1"),
+               [_fmp_row(close=10.0, fetched_at="2026-07-01T14:00:00+00:00")])
+    _write_raw(storage, _raw_key("fmp", "US", run_id="R2"),
+               [_fmp_row(close=10.5, fetched_at="2026-07-01T22:00:00+00:00")])
+    assert normalize_price.run(storage, "N1") == 0
+    [row] = _canonical_rows(storage, "US", "2026-07-01")
+    assert row["close"] == 10.5
+
+
 def test_cross_vendor_collision_fail_loud(tmp_path):
     # WHY: 같은 정체성 키가 서로 다른 벤더에서 오면 조용히 하나 고르는 건 USD 를 KRW 로
     #      태깅하는 통화 오염이다 — 둘 다 canonical 에서 빼고 fail-loud(비0 종료 + quality_log
