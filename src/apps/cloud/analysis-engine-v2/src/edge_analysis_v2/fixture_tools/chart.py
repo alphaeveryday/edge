@@ -99,33 +99,63 @@ def transition(fixture, indicator):
     return {"indicator": indicator, "observations": observations, "transitions": changes, "held_zone": held}
 
 
-def metrics(fixture):
+METRICS = ('ma20_distance_pct', 'ma60_direction', 'new_closing_high_count_20d',
+           'distance_from_52w_closing_high_pct', 'turnover_ratio_previous_day', 'atr14_pct')
+
+
+def selected_metrics(fixture, selected):
+    """Return requested chart values and the exact price used to interpret them."""
+    values = metrics(fixture, selected)
+    points = snapshots(fixture)
+    latest = points[-1] if points else history(fixture)[-1]
+    return {'instrument_id':fixture['context']['etf_code'],
+            'price':latest['price'] if points else latest['close'],
+            'price_at':latest['observed_at'] if points else latest['date'], 'metrics':values}
+
+
+def metrics(fixture, selected=None):
     """Calculate detailed chart cards using each card's explicit observation time."""
     rows, points = history(fixture), snapshots(fixture)
-    if len(rows) < 60:
+    if selected is None and len(rows) < 60:
         raise ValueError("missing sixty completed prices")
+    requested = set(METRICS if selected is None else selected)
+    if not requested or not requested <= set(METRICS) or (selected is not None and len(requested) != len(selected)):
+        raise ValueError('choose unique supported chart metrics')
     closes = [decimal(r["close"]) for r in rows]
     price = decimal(points[-1]["price"]) if points else closes[-1]
     observed = points[-1]["observed_at"] if points else rows[-1]["available_at"]
     # Before market open the latest close is already in the finalized window.
     current_window = closes+[price] if points else closes
-    average20 = sum(current_window[-20:])/20
-    average60 = sum(current_window[-60:])/60
-    previous60 = sum(current_window[-61:-1])/60 if len(current_window) >= 61 else None
-    result = [{"key": "ma20_distance_pct", "value": number(100*(price/average20-1)), "observed_at": observed}]
-    if previous60 is not None:
+    result = []
+    if 'ma20_distance_pct' in requested:
+        if len(current_window) < 20:
+            raise ValueError('twenty prices required for 20-day average')
+        average20 = sum(current_window[-20:])/20
+        result.append({"key": "ma20_distance_pct", "value": number(100*(price/average20-1)), "observed_at": observed})
+    if 'ma60_direction' in requested and len(current_window) >= 61:
+        average60 = sum(current_window[-60:])/60
+        previous60 = sum(current_window[-61:-1])/60
         result.append({"key": "ma60_direction", "value": "상승" if average60 > previous60 else "하락" if average60 < previous60 else "횡보", "observed_at": observed})
-    count = sum(closes[i] > max(closes[i-20:i]) for i in range(len(closes)-20, len(closes)))
-    result.append({"key": "new_closing_high_count_20d", "value": count, "observed_at": rows[-1]["available_at"]})
+    if 'new_closing_high_count_20d' in requested:
+        if len(closes) < 40:
+            raise ValueError('forty completed prices required for twenty high comparisons')
+        count = sum(closes[i] > max(closes[i-20:i]) for i in range(len(closes)-20, len(closes)))
+        result.append({"key": "new_closing_high_count_20d", "value": count, "observed_at": rows[-1]["available_at"]})
     start = instant(fixture["context"]["analysis_at"]).date()-timedelta(days=364)
-    if date.fromisoformat(rows[0]["date"]) <= start:
+    if 'distance_from_52w_closing_high_pct' in requested and date.fromisoformat(rows[0]["date"]) <= start:
         high = max(decimal(r["close"]) for r in rows if date.fromisoformat(r["date"]) >= start)
         result.append({"key": "distance_from_52w_closing_high_pct", "value": number(100*(price/high-1)), "observed_at": observed})
-    amounts = [decimal(r["turnover"]) for r in rows[-21:]]
-    if any(v < 0 for v in amounts):
-        raise ValueError("negative turnover")
-    if sum(amounts[:-1]) > 0:
-        result.append({"key": "turnover_ratio_previous_day", "value": number(amounts[-1]/(sum(amounts[:-1])/20)), "observed_at": rows[-1]["available_at"]})
-    ranges = [max(decimal(r["high"])-decimal(r["low"]), abs(decimal(r["high"])-closes[i-1]), abs(decimal(r["low"])-closes[i-1])) for i, r in enumerate(rows) if i]
-    result.append({"key": "atr14_pct", "value": number(100*rma(ranges)/closes[-1]), "observed_at": rows[-1]["available_at"]})
+    if 'turnover_ratio_previous_day' in requested:
+        if len(rows) < 21:
+            raise ValueError('twenty-one completed turnover observations required')
+        amounts = [decimal(r['turnover']) for r in rows[-21:]]
+        if any(v < 0 for v in amounts):
+            raise ValueError('negative turnover')
+        if sum(amounts[:-1]) > 0:
+            result.append({'key':'turnover_ratio_previous_day', 'value':number(amounts[-1]/(sum(amounts[:-1])/20)), 'observed_at':rows[-1]['available_at']})
+    if 'atr14_pct' in requested:
+        ranges = [max(decimal(r["high"])-decimal(r["low"]), abs(decimal(r["high"])-closes[i-1]), abs(decimal(r["low"])-closes[i-1])) for i, r in enumerate(rows) if i]
+        result.append({"key": "atr14_pct", "value": number(100*rma(ranges)/closes[-1]), "observed_at": rows[-1]["available_at"]})
+    if selected is not None and requested != {r['key'] for r in result}:
+        raise ValueError('requested metric lacks sufficient history or a valid denominator')
     return result

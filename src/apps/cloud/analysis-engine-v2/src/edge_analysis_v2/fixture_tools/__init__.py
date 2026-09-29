@@ -3,7 +3,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from .common import available, holdings, instant, table
-from . import chart, factors, flow, macro, news, valuation
+from . import chart, factors, flow, macro, news, valuation, financial_observations
 from .demo import make_fixture
 from .replay import make_replay_fixture
 
@@ -15,16 +15,23 @@ class FixtureTools:
         fixture: Raw observations and a fixed context; copied at construction.
     """
 
-    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_factor_metrics"}
+    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_factor_metrics", "get_chart_metrics", "compare_financial_observations", "calculate_valuation_range"}
 
     def __init__(self, fixture):
         self.fixture = deepcopy(fixture)
         instant(self.fixture["context"]["analysis_at"])
         self._tools = {}
+        self._register('get_financial_observations', '기업의 공개 실적·예상 이력을 표로 읽습니다. 실제/예상, 대상 연도, 작성자와 기사 ID를 보존합니다. 비어 있으면 전망을 만들어 채우지 마세요. 비교는 compare_financial_observations, 조건부 가격 계산은 calculate_valuation_range를 사용합니다.', {'instrument_id':{'type':'string'}}, lambda **args:financial_observations.read(self.fixture, **args), '', ['공개 실적·예상 자료'])
+        self._register('compare_financial_observations', '같은 기업·지표·단위·대상 기간의 두 원천 값을 비교합니다. get_financial_observations의 ID를 사용하세요. 예상 수정은 실제 실적 증가가 아닙니다. 예: previous_id=eps-old, current_id=eps-new.', {'previous_id':{'type':'string'},'current_id':{'type':'string'}}, lambda **args:financial_observations.compare(self.fixture, **args), r'\Delta=C-P;\ r=100(C-P)/P\quad(P>0)', ['공개 실적·예상 자료'])
+        self._register('calculate_valuation_range', '공개 연간 EPS와 선택한 PER 배수로 개별 종목의 조건부 가격 범위를 계산합니다. eps_id는 get_financial_observations에서 선택하고, per_low/high는 원문으로 정당화한 가정입니다. 배수 근거도 함께 인용하세요. 확정 목표가·ETF 수익률·한 달 도달 확률이 아닙니다.', {'eps_id':{'type':'string'},'per_low':{'type':'number','exclusiveMinimum':0},'per_high':{'type':'number','exclusiveMinimum':0}}, lambda **args:financial_observations.valuation_range(self.fixture, **args), r'P_{lo}=EPS\times PER_{lo};\ P_{hi}=EPS\times PER_{hi};\ r=100(P/P_{close}-1)', ['공개 연간 EPS 자료','종목 확정 종가','분석자가 선택한 PER 가정'])
+        self._register('get_chart_metrics', 'ETF 차트에서 필요한 값만 선택합니다. ma20_distance_pct는 20일선 대비 %, ma60_direction은 60일선 방향, new_closing_high_count_20d는 최근20확정일 종가 신고가 수, distance_from_52w_closing_high_pct는 이전52주 최고종가 대비 %, turnover_ratio_previous_day는 전일 거래대금/직전20일 평균, atr14_pct는 변동성입니다. 양수 이격은 기준 위입니다. 예: metrics=["ma20_distance_pct","turnover_ratio_previous_day"].', {'metrics':{'type':'array','minItems':1,'uniqueItems':True,'items':{'type':'string','enum':list(chart.METRICS)}}}, lambda metrics:chart.selected_metrics(self.fixture,metrics), factors.FORMULA_LATEX, ['ETF 일봉과 장중 가격'])
         self._register("search_news_threads", "공개된 뉴스의 단계별 사건과 중복 보도 수를 탐색합니다. 기사 근거는 get_issue_evidence로 확보하세요.", {}, lambda: news.search(self.fixture), "", ["뉴스 기사"])
         self._register("get_issue_evidence", "기사 ID로 원문을 읽습니다. include_body=true는 탐색, false는 최종 문장의 기사 근거입니다.", {"news_ids": {"type": "array", "items": {"type": "string"}}, "include_body": {"type": "boolean"}}, lambda **args: news.evidence(self.fixture, **args), "", ["뉴스 기사"])
         self._register("get_etf_holdings", "분석 시각까지 공개된 전체 구성종목과 비중을 확인합니다. 일부 종목을 전체로 환산하지 않습니다.", {}, lambda: holdings(self.fixture), r"\sum_i w_i=1", ["ETF 구성종목 비중"])
         parameters = {"investor": {"type": "string", "enum": ["foreign", "institution", "individual"]}, "lookback_days": {"type": "integer", "minimum": 1, "maximum": 30}, "operation": {"type": "string", "enum": ["sum", "frequency", "streak"]}, "direction": {"type": "string", "enum": ["net_buy", "net_sell", "none"]}}
+        for name, extra in (('sum_investor_net_flow',{'instrument_id':{'type':'string'}}), ('sum_weighted_net_flow',{})):
+            self._register(name, '확정된 최근 N거래일의 순매수 금액을 부호 그대로 합산합니다. 양수 순매수, 음수 순매도. 매수일만 골라 더하지 않습니다. weighted는 전체 구성종목 비중을 반영한 값입니다. 예: investor=foreign, lookback_days=5.', {k:parameters[k] for k in ('investor','lookback_days')} | extra, lambda **args:flow.calculate(self.fixture,operation='sum',direction='none',**args), r'S=\sum_d x_d;\ S_w=\sum_d\sum_iw_{i,d}x_{i,d}', ['투자자별 확정 순매수','일별 ETF 구성종목 비중'])
+        self.final_tool_names = self.final_tool_names | {'sum_investor_net_flow','sum_weighted_net_flow'}
         for name, extra in (("calculate_investor_flow", {"instrument_id": {"type": "string"}}), ("calculate_weighted_flow", {})):
             self._register(name, "확정 거래일의 순매수 합계·빈도·최신일부터 연속을 계산합니다. sum은 direction=none. 가중 수급은 ETF 구성종목 기준이며 ETF 자체 거래가 아닙니다. exact=false인 연속은 최소 일수입니다.", parameters | extra, lambda **args: flow.calculate(self.fixture, **args), r"F_d=\sum_iw_{i,d}x_{i,d};\ S=\sum_dF_d;\ M=\sum_d[sF_d>0]", ["투자자별 확정 순매수", "일별 ETF 구성종목 비중"])
         self._register("calculate_chart_indicators", "ETF 가격으로 RSI14 모멘텀과 반전 Williams14 바닥지수를 계산합니다. 높은 바닥지수는 과매도 관찰이며 반등확률이 아닙니다.", {}, lambda: chart.indicators(self.fixture), r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})", ["ETF 일봉과 장중 가격"])
@@ -84,4 +91,6 @@ class FixtureTools:
         snapshots = {"instrument_id": context["etf_code"],
                      **table([r | {"at": r["observed_at"]} for r in chart.snapshots(self.fixture)],
                              ["at", "price", "high", "low", "available_at"])}
-        return {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow.input_tables(rows), "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
+        catalog = sorted({(r['instrument_id'],r['metric'],r['period']) for r in financial_observations.visible(self.fixture)})
+        exploration = {'financial_observation_catalog':table([dict(zip(['instrument_id','metric','period'],r)) for r in catalog], ['instrument_id','metric','period'])} if 'financial_observations' in self.fixture else {}
+        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow.input_tables(rows), "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
