@@ -17,6 +17,28 @@ variable "subnet_ids" {
 }
 
 # ── EC2 용량 ────────────────────────────────────────────
+variable "host_count" {
+  description = "Airflow 호스트 수. 1 = 가동, 0 = 호스트·서비스 중단 알람을 모두 내린다(검증 종료·중단). 콘솔로 내리면 다음 자동 apply 가 되돌린다"
+  type        = number
+  default     = 1
+  validation {
+    condition     = contains([0, 1], var.host_count)
+    error_message = "host_count 는 0 또는 1."
+  }
+}
+
+variable "task_memory" {
+  description = "서비스 태스크의 합산 메모리 상한(MiB) — 세 구성요소와 자식 프로세스가 함께 쓴다. 호스트 등록 메모리보다 크면 배치되지 않는다"
+  type        = number
+  default     = 1024
+}
+
+variable "host_observer" {
+  description = "검증 기간 호스트 관측기(systemd, host-observer.sh.tftpl) 설치. 상시 운영에서는 끈다"
+  type        = bool
+  default     = false
+}
+
 variable "instance_type" {
   description = "Airflow 호스트 EC2 타입. arm64(Graviton) — ami_id 와 아키텍처가 같아야 한다. t4g.micro 는 로컬 사양 검증에서 불가(README)"
   type        = string
@@ -42,6 +64,8 @@ variable "image" {
   type        = string
 }
 
+# 메타DB — 기존 업무 RDS 인스턴스 안의 전용 DB(db_name)·전용 역할(db_user). 비밀번호는 이 모듈의 앱 시크릿
+# `meta_db_password`. DB·역할은 TF 가 아니라 검증 절차의 관리 태스크(verify/dbadmin.sh)가 만든다(README "메타DB").
 variable "db_host" {
   type = string
 }
@@ -56,11 +80,6 @@ variable "db_name" {
 
 variable "db_user" {
   type = string
-}
-
-variable "db_password_secret_arn" {
-  description = "메타DB RDS 관리형 시크릿({username,password})"
-  type        = string
 }
 
 variable "db_security_group_id" {
@@ -132,6 +151,23 @@ variable "verify_enabled" {
 
 variable "verify_image" {
   description = "검증 태스크 이미지 — 배포된 data-pipeline 이미지 + 검증 shim(src/apps/cloud/airflow/verify)"
+  type        = string
+  default     = ""
+}
+
+variable "master_db_secret_arn" {
+  description = "업무 RDS 마스터 시크릿 — 검증 관리 태스크(dbadmin)만 쓴다: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제"
+  type        = string
+  default     = ""
+}
+
+variable "master_db_user" {
+  type    = string
+  default = ""
+}
+
+variable "business_db_name" {
+  description = "검증 원장(edge_verify) 스키마의 복제 원본(pg_dump -s, 스키마만) — 업무 DB 이름"
   type        = string
   default     = ""
 }

@@ -18,9 +18,9 @@ locals {
   # awsvpc 태스크 안의 컨테이너 셋은 localhost 를 공유한다.
   api_port = 8080
   # 서비스 태스크 메모리(MiB) — 세 컨테이너와 그 자식(task 프로세스)이 **함께** 쓰는 단일 상한(태스크 cgroup).
-  # 로컬 합산 상한 실측(ALPHA-1119, README "사양 검증"): 조정 설정으로 1024 에서 전 기준 통과, 최대 968(anon 875).
-  # 768 에서는 OOM. t4g.small(2GiB)에서 OS·ECS·SSM 에이전트 몫(가정 200~350MiB)을 빼고 남는 안쪽 값이다.
-  task_memory = 1536
+  # 로컬 합산 상한 실측(README "사양 검증"): 조정 설정으로 1024 에서 전 기준 통과, 768 에서 OOM. 호스트가 이만큼을
+  # 등록하지 못하면 ECS 가 태스크를 배치하지 않는다 — 그것도 검증 결과다(억지로 줄여 넣지 않는다).
+  task_memory = var.task_memory
 }
 
 # ── 클러스터와 EC2 용량 ─────────────────────────────────
@@ -104,7 +104,7 @@ resource "aws_launch_template" "host" {
     }
   }
 
-  user_data = base64encode(<<-EOT
+  user_data = base64encode(join("\n", concat([<<-EOT
     #!/bin/bash
     cat >> /etc/ecs/ecs.config <<'CFG'
     ECS_CLUSTER=${aws_ecs_cluster.this.name}
@@ -112,7 +112,11 @@ resource "aws_launch_template" "host" {
     ECS_ENABLE_CONTAINER_METADATA=true
     CFG
   EOT
-  )
+    ],
+    # 검증 기간만: 호스트 관측기(systemd). 대상 프로세스·컨테이너가 죽어도 남도록 호스트 디스크에 append 한다 —
+    # 메모리·cgroup(태스크·에이전트)·커널 OOM 로그·docker 종료 이벤트. 수거는 SSM(검증 버킷).
+    var.host_observer ? [templatefile("${path.module}/host-observer.sh.tftpl", {})] : [],
+  )))
 
   tag_specifications {
     resource_type = "instance"
@@ -120,12 +124,14 @@ resource "aws_launch_template" "host" {
   }
 }
 
-# 평시 1대. 최대 2대는 호스트 교체(instance refresh) 때 새 호스트를 먼저 띄우는 자리다 — 평시 과금 없음.
+# host_count 1: 평시 1대, 최대 2대는 호스트 교체(instance refresh) 때 새 호스트를 먼저 띄우는 자리(평시 과금 없음).
+# host_count 0: 호스트를 모두 내린다 — 검증을 마치거나 멈출 때. 콘솔·CLI 로 0 을 만들면 다음 dev 머지의 자동 apply 가
+# 1 로 되돌리므로, 내리는 것도 이 변수(코드)로 한다.
 resource "aws_autoscaling_group" "host" {
   name                = "${var.name}-host"
-  min_size            = 1
-  max_size            = 2
-  desired_capacity    = 1
+  min_size            = var.host_count
+  max_size            = var.host_count * 2
+  desired_capacity    = var.host_count
   vpc_zone_identifier = var.subnet_ids
   health_check_type   = "EC2"
 
@@ -191,7 +197,7 @@ resource "aws_cloudwatch_log_group" "tasks" {
 
 # ── 비밀값 ──────────────────────────────────────────────
 # 값은 TF 가 만들지 않는다(state 에 평문을 남기지 않는다 — pipeline 시크릿과 같은 관례, ALPHA-312).
-# 최초 1회 README "최초 구축" 절차로 넣는다: {"jwt_secret","api_secret_key","admin_password"}.
+# 최초 1회 README "최초 구축" 절차로 넣는다: {"jwt_secret","api_secret_key","admin_password","meta_db_password"}.
 resource "aws_secretsmanager_secret" "airflow" {
   name        = "${var.name}/app"
   description = "Airflow API 서명키(jwt)·세션키·UI admin 비밀번호"
@@ -261,7 +267,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [var.db_password_secret_arn, aws_secretsmanager_secret.airflow.arn]
+      Resource = [aws_secretsmanager_secret.airflow.arn]
     }]
   })
 }
@@ -414,7 +420,8 @@ locals {
   }]...)
 
   airflow_secrets = {
-    EDGE_AIRFLOW_DB_PASSWORD      = "${var.db_password_secret_arn}:password::"
+    # 메타DB 전용 역할(airflow_meta)의 비밀번호 — 업무 DB 마스터가 아니다(README "메타DB").
+    EDGE_AIRFLOW_DB_PASSWORD      = "${aws_secretsmanager_secret.airflow.arn}:meta_db_password::"
     AIRFLOW__API_AUTH__JWT_SECRET = "${aws_secretsmanager_secret.airflow.arn}:jwt_secret::"
     AIRFLOW__API__SECRET_KEY      = "${aws_secretsmanager_secret.airflow.arn}:api_secret_key::"
     EDGE_AIRFLOW_ADMIN_PASSWORD   = "${aws_secretsmanager_secret.airflow.arn}:admin_password::"
@@ -574,6 +581,7 @@ resource "aws_ecs_service" "airflow" {
 # 구성요소 하나가 헬스체크에 떨어지면 ECS 가 태스크를 교체하고, 교체가 10분 안에 안 끝나면 여기서 울린다.
 # 업무 실패는 이 알람이 아니라 DAG on_failure_callback(SNS)과 원장이 알린다.
 resource "aws_cloudwatch_metric_alarm" "service_down" {
+  count               = var.host_count > 0 ? 1 : 0 # 호스트를 내린 동안은 "태스크 없음"이 정상이다 — 알람을 두지 않는다
   alarm_name          = "${var.name}-service-down"
   alarm_description   = "Airflow 서비스 태스크가 10분 이상 돌지 않는다. 장중 수급이 Airflow 로 전환된 뒤라면 슬롯이 비고 있다. ① ECS 서비스 이벤트·중지된 태스크의 stoppedReason ② ASG 활동(호스트 교체) ③ /ecs/${var.name} 로그. 복구 불가면 README 롤백(Airflow → SFN)."
   namespace           = "AWS/ECS"

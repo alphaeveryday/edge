@@ -682,24 +682,11 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 # 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README src/apps/cloud/airflow
 # "실행 환경"). 실행 주체 전환은 이 블록이 아니라 data_pipeline 의 investor_intraday_orchestrator 가 한다.
 #
-# 메타DB 는 업무 DB(edge-dev)와 인스턴스를 나눈다 — app_rds 와 같은 이유(폭발 반경). edge-dev 는 메모리 고갈로
-# 죽은 이력(2026-08-10)이 있고 최근 2주 여유 메모리 최저 574MB·CPU 최고 96% 다. Airflow scheduler 는 매초 DB 를
-# 폴링하고 구성요소마다 커넥션 풀을 쥔다. 같은 인스턴스에 두면 그 부하가 업무 레인 전체의 장애 범위에 들어간다.
-# 나눠도 공유하는 것: VPC·data 서브넷, 알람 SNS 토픽. Airflow 메타DB 장애는 Airflow 만 멈춘다(업무 DB 무관).
-# 업무 DB 장애는 여전히 Airflow 런의 원장 스텝을 실패시킨다(원장이 업무 DB 에 있으므로).
-module "airflow_rds" {
-  source     = "../../modules/rds"
-  name       = "${local.prefix}-airflow"
-  vpc_id     = module.network.vpc_id
-  subnet_ids = module.network.data_subnet_ids
-
-  db_name         = "airflow"
-  master_username = "airflow"
-  instance_class  = "db.t4g.micro"
-
-  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
-}
-
+# 메타DB — **기존 업무 RDS(edge-dev) 인스턴스 안의 전용 DB `airflow`·전용 역할 `airflow_meta`**(검증 구성, ALPHA-1119).
+# 새 RDS 를 만들지 않고 인스턴스 사양·파라미터 그룹도 바꾸지 않는다. DB·역할은 TF 가 아니라 검증 절차의 관리
+# 태스크(src/apps/cloud/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
+# DB·역할을 나눠도 인스턴스 자원(메모리·CPU·IOPS·연결 상한·재부팅)은 공유한다. 재사용 가부는 이 검증(장외)의
+# 관측·중단 기준으로 판단한다(README "기존 RDS 재사용 검증"). 장중 재사용은 미검증이다.
 module "airflow" {
   source = "../../modules/airflow"
 
@@ -709,18 +696,23 @@ module "airflow" {
   subnet_ids = module.network.private_subnet_ids
 
   # al2023-ami-ecs-hvm-2023.0.20260922-kernel-6.1-arm64 (2026-09-28 recommended). 교체는 README "호스트 교체".
-  ami_id        = "ami-0c15069e7568e5f41"
-  instance_type = "t4g.small" # 로컬 합산 상한 검증(ALPHA-1119): micro(1GiB)는 호스트 몫을 빼면 OOM
+  ami_id = "ami-0c15069e7568e5f41"
+  # 실제 AWS 단기 검증(ALPHA-1119): micro 부터. 로컬에서는 호스트 몫을 가정(200~350MiB)해 768 에서 OOM 이었다 —
+  # 실제 호스트 몫·등록 메모리를 여기서 잰다. 부족이 확인되면 같은 조건으로 t4g.small 로 바꿔 비교한다.
+  instance_type = "t4g.micro"
+  task_memory   = 1024 # 로컬 조정 설정(C1)이 전 기준을 통과한 합산 상한. 등록 메모리보다 크면 배치되지 않는다(그것도 결과)
+  # 검증을 마치면 0 으로 내린다(호스트·서비스 중단 알람 제거). 상시 운영으로 자동 연장하지 않는다.
+  host_count    = 1
+  host_observer = true
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
   image = "${local.airflow_ecr_repository_url}:bootstrap"
 
-  db_host                = module.airflow_rds.address
-  db_port                = module.airflow_rds.port
-  db_name                = module.airflow_rds.db_name
-  db_user                = module.airflow_rds.master_username
-  db_password_secret_arn = module.airflow_rds.master_user_secret_arn
-  db_security_group_id   = module.airflow_rds.security_group_id
+  db_host              = module.rds.address
+  db_port              = module.rds.port
+  db_name              = "airflow"
+  db_user              = "airflow_meta"
+  db_security_group_id = module.rds.security_group_id # 기존 SG 에 인그레스 규칙만 더한다(SG 자체는 불변)
 
   alarm_topic_arn = module.data_pipeline.alarm_topic_arn
 
@@ -744,6 +736,10 @@ module "airflow" {
   verify_enabled = true
   verify_image   = "${local.airflow_ecr_repository_url}:verify"
   kr_holidays    = module.data_pipeline.kr_holidays
+  # 관리 태스크(dbadmin)만: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제(업무 DB 스키마만).
+  master_db_secret_arn = module.rds.master_user_secret_arn
+  master_db_user       = module.rds.master_username
+  business_db_name     = module.rds.db_name
 }
 
 # analysis-engine 모듈은 ALPHA-408 에서 data-pipeline 의 analyze 페이즈로 흡수돼 삭제됐다.
