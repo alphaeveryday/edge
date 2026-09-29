@@ -17,9 +17,10 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   # awsvpc 태스크 안의 컨테이너 셋은 localhost 를 공유한다.
   api_port = 8080
-  # 서비스 태스크 메모리(MiB). t4g.medium 등록 메모리(약 3.8GiB) 안에서 호스트·ECS 에이전트 몫을 남긴다.
-  # 컨테이너 합 = api 900 + scheduler 1600 + dag-processor 600 = 3100. 로컬 실측 근거는 README "구성요소별 자원".
-  task_memory = 3100
+  # 서비스 태스크 메모리(MiB) — 세 컨테이너와 그 자식(task 프로세스)이 **함께** 쓰는 단일 상한(태스크 cgroup).
+  # 로컬 합산 상한 실측(ALPHA-1119, README "사양 검증"): 조정 설정으로 1024 에서 전 기준 통과, 최대 968(anon 875).
+  # 768 에서는 OOM. t4g.small(2GiB)에서 OS·ECS·SSM 에이전트 몫(가정 200~350MiB)을 빼고 남는 안쪽 값이다.
+  task_memory = 1536
 }
 
 # ── 클러스터와 EC2 용량 ─────────────────────────────────
@@ -165,7 +166,7 @@ resource "aws_ecs_capacity_provider" "host" {
 }
 
 resource "aws_ecs_cluster_capacity_providers" "this" {
-  cluster_name       = aws_ecs_cluster.this.name
+  cluster_name = aws_ecs_cluster.this.name
   # FARGATE 도 연결한다 — 마이그레이션 one-off 와 격리 검증 태스크가 이 클러스터에서 Fargate 로 돈다(목록은 이 리소스가
   # 통째로 소유하므로 빠진 공급자는 연결되지 않는다). 서비스 기본 전략은 EC2 호스트 그대로다.
   capacity_providers = [aws_ecs_capacity_provider.host.name, "FARGATE"]
@@ -373,27 +374,30 @@ locals {
     AIRFLOW__CORE__DAGS_FOLDER                 = "/opt/edge/dags"
     AIRFLOW__CORE__LOAD_EXAMPLES               = "False"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION = "True"
-    # 동시 task 상한. 장중 수급은 직렬(max_active_runs=1)이고 검증 DAG 가 따로 돌 수 있어 4.
-    AIRFLOW__CORE__PARALLELISM                        = "4"
+    # 동시 task 상한 1 — 장중 수급은 직렬(max_active_runs=1). LocalExecutor 는 이 수만큼 워커를 미리 띄운다(4 면 약 120MiB).
+    # 검증 DAG 와 겹치면 차례로 돈다. 다른 레인을 옮길 때 다시 잰다.
+    AIRFLOW__CORE__PARALLELISM                        = "1"
+    AIRFLOW__DAG_PROCESSOR__PARSING_PROCESSES         = "1"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL           = "http://localhost:${local.api_port}/execution/"
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS          = "admin:admin"
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE = "/opt/airflow/simple_auth_manager_passwords.json"
     AIRFLOW__API__WORKERS                             = "1"
     AIRFLOW__API__EXPOSE_CONFIG                       = "False"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE          = "3"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW       = "5"
-    AIRFLOW__LOGGING__REMOTE_LOGGING                  = "True"
-    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER          = "cloudwatch://${aws_cloudwatch_log_group.tasks.arn}"
-    AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID              = "aws_default"
+    # 프로세스별 풀(scheduler·dag-processor·api-server 각각). 실측 연결은 합계 3~5(최대 5)였다 — 설정값 합이 아니다.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE    = "2"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW = "3"
+    AIRFLOW__LOGGING__REMOTE_LOGGING            = "True"
+    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER    = "cloudwatch://${aws_cloudwatch_log_group.tasks.arn}"
+    AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID        = "aws_default"
     # 자격증명은 태스크 역할(컨테이너 자격증명 엔드포인트)에서 온다 — 연결에는 리전만.
     AIRFLOW_CONN_AWS_DEFAULT = jsonencode({ conn_type = "aws", extra = { region_name = var.region } })
     # entrypoint.sh 가 아래 넷 + 비밀번호로 연결 문자열 파일을 만들고, Airflow 는 _CMD 로 읽는다(헬스체크처럼
     # entrypoint 를 거치지 않는 exec 프로세스도 같은 연결을 본다).
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD = "cat /opt/airflow/sql_alchemy_conn"
-    EDGE_AIRFLOW_DB_HOST = var.db_host
-    EDGE_AIRFLOW_DB_PORT = tostring(var.db_port)
-    EDGE_AIRFLOW_DB_NAME = var.db_name
-    EDGE_AIRFLOW_DB_USER = var.db_user
+    EDGE_AIRFLOW_DB_HOST                    = var.db_host
+    EDGE_AIRFLOW_DB_PORT                    = tostring(var.db_port)
+    EDGE_AIRFLOW_DB_NAME                    = var.db_name
+    EDGE_AIRFLOW_DB_USER                    = var.db_user
     # EdgeStep(dags/edge_batch.py) 배포 환경값.
     EDGE_ECS_CLUSTER         = var.batch_cluster_arn
     EDGE_ECS_TASKDEF_PREFIX  = var.batch_task_definition_prefix
@@ -423,28 +427,34 @@ locals {
     secrets     = [for k, v in local.airflow_secrets : { name = k, valueFrom = v }]
   }
 
-  # 구성요소별 자원(MiB·CPU unit). 상한(memory)을 넘으면 그 컨테이너가 OOM 으로 죽고 태스크 전체가 교체된다.
+  # 구성요소별 CPU unit 과 메모리 예약(soft). 컨테이너별 hard 상한은 두지 않는다 — 한 구성요소의 일시 증가를 태스크 상한
+  # 안에서 흡수하게 한다(로컬 검증도 합산 상한 하나로 했다). 예약값은 로컬 유휴 PSS(api 220·scheduler 70~130·
+  # dag-processor 180, 구성요소 합 약 650)에 여유를 둔 값이다.
+  # 헬스체크는 파이썬을 띄우지 않는다 — `airflow jobs check` 는 한 번에 약 110MiB 인 프로세스라 60초마다 둘이 겹치면 순간
+  # 228MiB 가 늘었다(로컬 실측). api-server 의 /monitor/health 가 같은 heartbeat(job 표)로 구성요소별 상태를 준다.
+  # 응답 코드는 부분 장애에도 200 이라 본문의 구성요소 status 를 본다.
+  health_url = "http://localhost:${local.api_port}/api/v2/monitor/health"
   components = {
     api-server = {
       command = ["api-server", "--port", tostring(local.api_port)]
       cpu     = 512
-      memory  = 900
-      health  = "curl -fs http://localhost:${local.api_port}/api/v2/monitor/health"
+      reserve = 300
+      health  = "curl -fs --max-time 20 ${local.health_url} | grep -q '\"metadatabase\":{\"status\":\"healthy\"'"
       ports   = [{ containerPort = local.api_port, protocol = "tcp" }]
     }
-    # LocalExecutor 의 task 프로세스가 이 컨테이너 안에서 돈다 — 상한에 task 몫(parallelism 만큼)을 넣었다.
+    # LocalExecutor 의 task 프로세스가 이 컨테이너 안에서 돈다.
     scheduler = {
       command = ["scheduler"]
       cpu     = 1024
-      memory  = 1600
-      health  = "airflow jobs check --job-type SchedulerJob --local"
+      reserve = 300
+      health  = "curl -fs --max-time 20 ${local.health_url} | grep -q '\"scheduler\":{\"status\":\"healthy\"'"
       ports   = []
     }
     dag-processor = {
       command = ["dag-processor"]
       cpu     = 256
-      memory  = 600
-      health  = "airflow jobs check --job-type DagProcessorJob --local"
+      reserve = 250
+      health  = "curl -fs --max-time 20 ${local.health_url} | grep -q '\"dag_processor\":{\"status\":\"healthy\"'"
       ports   = []
     }
   }
@@ -465,11 +475,11 @@ resource "aws_ecs_task_definition" "airflow" {
 
   container_definitions = jsonencode([
     for name, c in local.components : merge(local.container_base, {
-      name         = name
-      command      = c.command
-      cpu          = c.cpu
-      memory       = c.memory
-      portMappings = c.ports
+      name              = name
+      command           = c.command
+      cpu               = c.cpu
+      memoryReservation = c.reserve
+      portMappings      = c.ports
       healthCheck = {
         command     = ["CMD-SHELL", c.health]
         interval    = 60

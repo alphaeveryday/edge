@@ -710,7 +710,7 @@ module "airflow" {
 
   # al2023-ami-ecs-hvm-2023.0.20260922-kernel-6.1-arm64 (2026-09-28 recommended). 교체는 README "호스트 교체".
   ami_id        = "ami-0c15069e7568e5f41"
-  instance_type = "t4g.medium"
+  instance_type = "t4g.small" # 로컬 합산 상한 검증(ALPHA-1119): micro(1GiB)는 호스트 몫을 빼면 OOM
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
   image = "${local.airflow_ecr_repository_url}:bootstrap"

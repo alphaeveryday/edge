@@ -18,9 +18,9 @@ variable "subnet_ids" {
 
 # ── EC2 용량 ────────────────────────────────────────────
 variable "instance_type" {
-  description = "Airflow 호스트 EC2 타입. arm64(Graviton) — ami_id 와 아키텍처가 같아야 한다"
+  description = "Airflow 호스트 EC2 타입. arm64(Graviton) — ami_id 와 아키텍처가 같아야 한다. t4g.micro 는 로컬 사양 검증에서 불가(README)"
   type        = string
-  default     = "t4g.medium"
+  default     = "t4g.small"
 }
 
 # 고정한다. SSM 공개 파라미터(recommended)를 data 로 읽으면 AMI 가 나올 때마다 launch template 이 바뀌고,
