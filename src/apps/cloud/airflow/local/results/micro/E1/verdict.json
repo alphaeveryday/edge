@@ -197,10 +197,10 @@
  "conns_max_active": 1,
  "conns_max_by_app": {
   "": 1,
-  "af-scheduler": 1,
   "af-dagproc": 1,
-  "af-healthcheck": 2,
-  "af-api": 2
+  "af-scheduler": 1,
+  "af-api": 2,
+  "af-healthcheck": 2
  },
  "heartbeat_age_max_s": 11.7,
  "parse_age_max_s": 30.4,
@@ -214,6 +214,7 @@
  "pool_errors_in_log": 0,
  "latency": {
   "B1": {
+   "missing_detect": 0,
    "prev_end_to_queued_p95": 1.0,
    "queued_to_start_p95": 0.0,
    "start_to_ecs_created_p95": 0.3,
@@ -228,6 +229,7 @@
    "ecs_tasks_unmatched": 0
   },
   "B2": {
+   "missing_detect": 1,
    "prev_end_to_queued_p95": 1.0,
    "queued_to_start_p95": 0.0,
    "start_to_ecs_created_p95": 0.2,
@@ -242,6 +244,7 @@
    "ecs_tasks_unmatched": 0
   },
   "B3": {
+   "missing_detect": 0,
    "prev_end_to_queued_p95": 0.9,
    "queued_to_start_p95": 0.0,
    "start_to_ecs_created_p95": 0.2,
@@ -479,7 +482,7 @@
   "C1_start": true,
   "C2_parse": true,
   "C3_heartbeat": true,
-  "C4_latency_abs": true,
+  "C4_latency_abs": null,
   "C4_latency_rel": true,
   "C5_outcomes": true,
   "C6_business": true,
@@ -501,5 +504,6 @@
   "overflow": 5,
   "health": null,
   "malloc_arena_max": null
- }
+ },
+ "kernel_oom_lines": null
 }

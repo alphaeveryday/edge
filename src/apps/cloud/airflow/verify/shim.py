@@ -11,11 +11,11 @@
    실패 attempt 를 남긴다) · {"sleep_in_step": 초} 실행권을 잡은 뒤 스텝 안에서 대기 후 정상 진행 ·
    {"sleep_before": 초} wrapper 전에 대기.
 
-관리 명령(검증 절차 run.sh 가 ops 태스크 정의로 띄운다):
-- `verify-setup-db`: 관리 DB(VERIFY_ADMIN_DB)에 붙어 검증 DB(DATA_PIPELINE_DB__NAME)가 없으면 만든다.
+관리 명령(검증 절차 run.py 가 ops 태스크 정의로 띄운다. DB·역할 생성과 스키마는 dbadmin.sh 가 한다):
 - `verify-seed`: 재생 입력에 나오는 종목만 instrument 로 등록한다(종목 마스터는 비교 대상이 아니다).
 - `verify-reset`: 검증 원장의 레인 행과 버킷의 state·lake 를 지운다. 검증 DB 가 아니면 거부한다.
 - `verify-ledger`: 검증 원장의 레인 행(런·기대 작업·시도·보류·적재 행 수)을 로그에 JSON 한 줄로 낸다.
+- `verify-resolve-holds`: 종료 확인 뒤 보류 해제(README 절차 6). `verify-backup`: 검증 원장 표별 백업.
 """
 
 from __future__ import annotations
@@ -146,17 +146,6 @@ def _verify_db() -> str:
     return name
 
 
-def setup_db() -> int:
-    name = _verify_db()
-    with _connect(os.environ["VERIFY_ADMIN_DB"]) as conn:
-        if conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone():
-            print(f"verify: {name} 이미 있음")
-        else:
-            conn.execute(f'CREATE DATABASE "{name}"')
-            print(f"verify: {name} 생성")
-    return 0
-
-
 def seed() -> int:
     tickers = sorted({row["our_ticker"] for row in _fixture_rows()})
     with _connect(_verify_db()) as conn:
@@ -204,7 +193,39 @@ def ledger() -> int:
     return 0
 
 
-ADMIN = {"verify-setup-db": setup_db, "verify-seed": seed, "verify-reset": reset, "verify-ledger": ledger}
+def resolve_holds() -> int:
+    """README "보류 해제와 수동 복구" 6 — 운영자가 종료를 확인한 뒤에만 부른다(검증 절차가 ECS STOPPED 를 먼저 확인한다).
+    검증 원장의 OPEN EXECUTION_HOLD 를 RESOLVED 로, 끝나지 않은 시도는 확인된 종료로 닫는다. VERIFY_EVIDENCE 에 근거."""
+    evidence = os.environ.get("VERIFY_EVIDENCE") or "verify: ecs stopped confirmed"
+    with _connect(_verify_db()) as conn:
+        n_att = conn.execute("UPDATE ops_task_attempt SET execution_status='FAILED', finished_at=now(),"
+                             " failure_reason=%s WHERE execution_status='RUNNING'",
+                             (f"OPERATOR_CONFIRMED_STOPPED: {evidence}",)).rowcount
+        n_hold = conn.execute("UPDATE ops_reconciliation_issue SET status='RESOLVED', resolution_source='operator',"
+                              " resolution_reason=%s, updated_at=now() WHERE issue_type='EXECUTION_HOLD'"
+                              " AND status='OPEN'", (f"operator_confirmed_stopped: {evidence}",)).rowcount
+    print(f"verify: 보류 해제 holds={n_hold} attempts={n_att}")
+    return 0
+
+
+def backup() -> int:
+    """검증 원장 전체(표별 COPY csv.gz)를 검증 버킷 backup/ 에 둔다 — DB 를 지우기 전 재현 근거."""
+    import gzip
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    with _connect(_verify_db()) as conn:
+        tables = [r[0] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY 1")]
+        for t in tables:
+            buf = bytearray()
+            with conn.cursor().copy(f'COPY public."{t}" TO STDOUT WITH (FORMAT csv, HEADER)') as cp:
+                for chunk in cp:
+                    buf += chunk
+            _s3.put_object(Bucket=BUCKET, Key=f"backup/{stamp}/edge_verify/{t}.csv.gz", Body=gzip.compress(bytes(buf)))
+    print(f"verify: 백업 {len(tables)}표 → s3://{BUCKET}/backup/{stamp}/edge_verify/")
+    return 0
+
+
+ADMIN = {"verify-seed": seed, "verify-reset": reset, "verify-ledger": ledger, "verify-resolve-holds": resolve_holds,
+         "verify-backup": backup}
 
 
 def main(argv: list[str]) -> int:

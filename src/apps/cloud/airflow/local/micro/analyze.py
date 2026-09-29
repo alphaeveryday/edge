@@ -129,7 +129,9 @@ def latency(batch):
                     submit.append(ts(t["createdAt"]) - ts(r["start_date"]))
                 if r["src"] == "ti" and ts(r["end_date"]) and t.get("stoppedAt") and r["state"] in ("success", "failed"):
                     detect.append(ts(r["end_date"]) - ts(t["stoppedAt"]))
-    return {"prev_end_to_queued_p95": p95(gap), "queued_to_start_p95": p95(queue),
+    stopped = sum(1 for v in by_try.values() for t in v if t.get("stoppedAt"))
+    return {"missing_detect": stopped - len(detect) - unmatched,
+            "prev_end_to_queued_p95": p95(gap), "queued_to_start_p95": p95(queue),
             "start_to_ecs_created_p95": p95(submit), "ecs_stopped_to_end_p95": p95(detect),
             "n": {"gap": len(gap), "queue": len(queue), "submit": len(submit), "detect": len(detect)},
             "ecs_tasks_total": sum(len(v) for v in by_try.values()), "ecs_tasks_unmatched": unmatched}
@@ -303,6 +305,7 @@ def analyze(exp: str) -> dict:
         and reparse is not None and reparse <= 90,
         "C3_heartbeat": out["heartbeat_age_max_s"] is not None and out["heartbeat_age_max_s"] <= 30,
         # 모든 ECS 태스크가 Airflow try 와 짝지어져야 한다(짝 못 찾은 태스크를 빼고 남은 값만으로 통과시키지 않는다).
+        # 표본 공백(짝 없는 태스크·종료 감지 표본 부족)은 통과가 아니라 판정 불가(None) — 아래에서 덮어쓴다.
         "C4_latency_abs": bool(lat_all) and all(v is not None for v in lat_all)
         and all(b["ecs_tasks_unmatched"] == 0 and b["n"]["submit"] >= b["ecs_tasks_total"] for b in lat.values()) and all(
             (b["prev_end_to_queued_p95"] or 0) <= 15 and (b["queued_to_start_p95"] or 0) <= 15
@@ -324,17 +327,28 @@ def analyze(exp: str) -> dict:
         "C9_ui": len(burst) == 30 and not out["burst"]["non_2xx"] and out["burst"]["p95_s"] is not None
         and out["burst"]["p95_s"] <= 2,
     }
+    # 종료 감지 표본이 기대보다 적은 배치가 있으면(주입 재시작으로 끝을 못 본 try 포함) 절대 지연은 판정 불가다.
+    if any(b.get("missing_detect", 0) > 0 for b in lat.values()):
+        out["pass"]["C4_latency_abs"] = None
     # 실험 조건이 사전 계획(criteria.limits)과 같은가 — 이름만 E3 인 다른 조건의 결과를 E3 으로 보고하지 않는다.
     started = next(m for m in marks if m["event"] == "start_airflow")["settings"]
     planned = crit["limits"].get(exp)
     out["planned"] = planned
     out["ran_with"] = {k: started.get(k) for k in ("mem", "parallelism", "parsing", "pool", "overflow", "health",
                                                    "malloc_arena_max")}
-    c0 = {"parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5}
-    c1 = {"parallelism": 1, "parsing": 1, "pool": 2, "overflow": 3}
+    c0 = {"parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5, "health": "cli", "malloc_arena_max": ""}
+    c1 = {"parallelism": 1, "parsing": 1, "pool": 2, "overflow": 3, "health": "light", "malloc_arena_max": ""}
     want = None if planned is None else {**(c0 if planned["settings"] == "C0" else c1)}
+    # 헬스체크 방식·malloc 도 계획 조건이다(메모리 측정에 직접 영향). 기록이 없는 옛 실험은 기본값(cli·"")으로 돌았다.
+    ran = {**{"health": "cli", "malloc_arena_max": ""}, **{k: v for k, v in started.items() if v is not None}}
     out["pass"]["C0_matches_plan"] = None if planned is None else (
-        started.get("mem") == planned["mem"] and all(started.get(k) == v for k, v in want.items()))
+        ran.get("mem") == planned["mem"] and all(ran.get(k) == v for k, v in want.items()))
+    # 커널 OOM 기록(재시작을 넘어 남는다) — 관측기가 기록을 시작한 뒤의 실험에만 있다. 없으면 이력은 cgroup 카운터뿐.
+    kmsg = ROOT / exp / "kmsg-oom.log"
+    out["kernel_oom_lines"] = [x for x in kmsg.read_text().splitlines() if "Killed process" in x or "oom-kill" in x] \
+        if kmsg.exists() else None
+    if out["kernel_oom_lines"]:
+        out["pass"]["C1_start"] = False
     (ROOT / exp / "verdict.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
     return out
 

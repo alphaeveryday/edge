@@ -109,8 +109,31 @@ def _db(cur) -> dict:
     return out
 
 
+def _kmsg_tail(path: Path) -> None:
+    """커널 로그(OOM killer 기록)를 별도 파일에 이어 쓴다 — 컨테이너 재시작으로 cgroup 카운터가 사라져도 남는다."""
+    import threading
+
+    def go():
+        try:
+            with open("/dev/kmsg", "rb", buffering=0) as k, path.open("ab") as fp:
+                import os as _os
+                _os.lseek(k.fileno(), 0, _os.SEEK_END)
+                while True:
+                    try:
+                        line = k.read(8192)
+                    except OSError:
+                        continue
+                    if b"oom" in line.lower() or b"killed process" in line.lower():
+                        fp.write(str(round(time.time(), 1)).encode() + b" " + line)
+                        fp.flush()
+        except OSError as exc:
+            path.write_text(f"kmsg unavailable: {exc}\n")
+    threading.Thread(target=go, daemon=True).start()
+
+
 def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    _kmsg_tail(OUT.parent / "kmsg-oom.log")
     conn = None
     while True:
         rec: dict = {"t": round(time.time(), 1)}

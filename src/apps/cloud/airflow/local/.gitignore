@@ -7,3 +7,7 @@ results/micro/**/samples.jsonl
 results/micro/**/airflow.log
 results/micro/**/B?.json
 results/micro/*.console
+# 실제 AWS 단기 검증 원자료(로컬 보존) — 레포에는 판정(verdict.json)·사건 기록(marks.jsonl)·배포 정보만 둔다.
+results/aws/**/host-obs/
+results/aws/**/B?.json
+results/aws/forward.log
