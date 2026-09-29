@@ -169,7 +169,9 @@ def outcomes(batches):
         dup = {s: [business(d, s, lambda r, h=h: r.get("run_id") == pid(h)) for h in slots] for s in BUSINESS}
         canon = d["snapshot"]["canonical"]
         ref = d["snapshot"]["dev_canonical"]
-        canon_ok = all(v["rows_sha"] == ref.get(k, {}).get("rows_sha") for k, v in canon.items()) and bool(canon)
+        # 재생한 거래일의 dev 파티션이 결과에 **있고** 같아야 한다 — 결과 쪽 키만 돌면 빠진 파티션을 못 본다.
+        want = [k for k in ref if "2026-09-22" in k]
+        canon_ok = bool(want) and all(k in canon and canon[k]["rows_sha"] == ref[k]["rows_sha"] for k in want)
         checks[b] = {"all_success": ok, "business_per_slot": dup,
                      "no_duplicate": all(n == 1 for ns in dup.values() for n in ns), "canonical_matches_dev": canon_ok}
     if "B2" in batches:
@@ -202,7 +204,9 @@ def analyze(exp: str) -> dict:
     healthy = next((m for m in marks if m["event"] in ("healthy", "not_healthy")), {})
     after = [s for s in samples if s["t"] >= start_t + 60 and not in_any(s["t"], rw)]
     last = [s for s in samples if "memory.events" in s][-1] if any("memory.events" in s for s in samples) else {}
-    hb = [max((s.get("db", {}).get("heartbeat_age_s") or {"x": 999}).values()) for s in after if s.get("db")]
+    # 두 구성요소가 **모두** 보여야 한다 — 한쪽 job 이 사라진 샘플을 다른 쪽 값으로 통과시키지 않는다(빠지면 999).
+    hb = [max((s.get("db", {}).get("heartbeat_age_s") or {}).get(k, 999) for k in ("SchedulerJob", "DagProcessorJob"))
+          for s in after if s.get("db")]
     parse = [v[0] for s in after if s.get("db") for v in (s["db"].get("dag_parse_age_s") or {}).values() if v[0] is not None]
     imports = [s["db"].get("import_errors") for s in after if s.get("db")]
     touch = next((m["t"] for m in marks if m["event"] == "touch_dags"), None)
@@ -223,6 +227,7 @@ def analyze(exp: str) -> dict:
                  for tag in idle}
     all_conns = [conns(s) for s in samples if s.get("db")]
     pool_errors = len(re.findall(r"QueuePool limit|TimeoutError|too many clients|OperationalError", log))
+    db_errors = sum(1 for s in samples if s.get("db_error"))
     lat = {b: latency(d) for b, d in batches.items()}
     out = {
         "exp": exp,
@@ -268,6 +273,13 @@ def analyze(exp: str) -> dict:
     out["cgroups_seen"] = len(per_cg)
     parent = [s_["parent.memory.events"] for s_ in samples if "parent.memory.events" in s_]
     out["parent_oom_kill_delta_info"] = (parent[-1].get("oom_kill", 0) - parent[0].get("oom_kill", 0)) if parent else None
+    out["db_errors_in_samples"] = db_errors
+    # criteria C4 의 상대 기준: 작은 상한의 p95 가 2GiB 기준(E1)보다 10초 넘게 크지 않다.
+    ref_path = ROOT / "E1" / "verdict.json"
+    ref = json.loads(ref_path.read_text())["latency"] if ref_path.exists() and exp != "E1" else None
+    out["latency_vs_E1_max_delta_s"] = None if ref is None else max(
+        ((lat[b][k] or 0) - (ref.get(b, {}).get(k) or 0) for b in lat if b in ref for k in lat[b] if k != "n"),
+        default=None)
     ev = out["memory_events"] or {}
     oc = out["outcomes"]
     b2 = oc.get("B2") if isinstance(oc.get("B2"), dict) else {}
@@ -280,15 +292,19 @@ def analyze(exp: str) -> dict:
         "C2_parse": out["import_errors_max"] == 0 and out["parse_age_max_s"] is not None and out["parse_age_max_s"] <= 360
         and reparse is not None and reparse <= 90,
         "C3_heartbeat": out["heartbeat_age_max_s"] is not None and out["heartbeat_age_max_s"] <= 30,
-        "C4_latency_abs": all(v is not None for v in lat_all) and all(
+        "C4_latency_abs": bool(lat_all) and all(v is not None for v in lat_all) and all(
             (b["prev_end_to_queued_p95"] or 0) <= 15 and (b["queued_to_start_p95"] or 0) <= 15
             and (b["start_to_ecs_created_p95"] or 0) <= 20 and (b["ecs_stopped_to_end_p95"] or 0) <= 20
             for b in lat.values()),
+        # 참조(E1) 자신만 비교 없이 통과. 지연 자료가 없는 실험(중단)은 판정 불가 = 통과 아님.
+        "C4_latency_rel": exp == "E1" or (out["latency_vs_E1_max_delta_s"] is not None
+                                          and out["latency_vs_E1_max_delta_s"] <= 10),
         "C5_outcomes": bool(b2) and all(v for k, v in b2.items() if k not in ("detail", "holds"))
         and all(isinstance(oc.get(b), dict) and oc[b]["all_success"] for b in ("B1", "B3")),
         "C6_business": all(isinstance(oc.get(b), dict) and oc[b]["no_duplicate"] and oc[b]["canonical_matches_dev"]
                            for b in ("B1", "B3")),
-        "C7_db": pool_errors == 0,
+        # 로그가 없으면 "오류 없음"이 아니라 판정 불가다. 관측기의 메타DB 접속 실패도 본다.
+        "C7_db": bool(log.strip()) and pool_errors == 0 and db_errors == 0,
         "C8_no_growth": None not in (idle_mem.get("after_B1"), idle_mem.get("after_B3"))
         and idle_mem["after_B3"] <= idle_mem["after_B1"] * 1.10
         and abs((idle_conn.get("after_B3") or 0) - (idle_conn.get("after_B1") or 0)) <= 1,

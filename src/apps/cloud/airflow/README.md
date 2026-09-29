@@ -226,6 +226,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 **자원(태스크 정의).** 태스크 메모리 **1536MiB 하나**를 세 컨테이너와 그 자식(LocalExecutor task 프로세스)이 함께 쓴다(태스크 cgroup). 컨테이너별 hard 상한은 두지 않고 예약(`memoryReservation`)만 둔다 — api 300·scheduler 300·dag-processor 250, CPU unit 512·1024·256. 근거는 바로 아래 "사양 검증".
 
 **헬스체크.** 파이썬을 띄우지 않는다. 각 컨테이너가 api-server `/api/v2/monitor/health` 의 자기 구성요소 status(`metadatabase`·`scheduler`·`dag_processor`)가 `healthy` 인지 본다. 응답 코드는 부분 장애에도 200 이라 본문을 본다. 판정 재료는 `airflow jobs check` 와 같은 heartbeat(메타DB job 표, 30초 임계)다. `jobs check` 는 한 번에 약 110MiB 인 프로세스라 60초마다 둘이 겹치면 순간 228MiB 가 늘었다(로컬 실측).
+- ⚠️ 전제: 메타DB 하나에 scheduler·dag-processor 가 하나씩뿐이다(서비스 desired 1, 배포 min 0 / max 100). `jobs check --local` 과 달리 이 판정은 호스트를 가리지 않는다 — 같은 메타DB 에 다른 scheduler 가 붙으면(예: 수동으로 띄운 두 번째 태스크) 그쪽 heartbeat 가 이 태스크의 멈춤을 가린다.
 - ⚠️ 대가: 헬스체크가 새 DB 연결을 열지 않는다. 메타DB 비밀번호 로테이션(토 09:00~12:00) 뒤에도 기존 풀 연결로 한동안 healthy 이고, 새 연결이 필요해지는 시점(풀 재활용 `sql_alchemy_pool_recycle` 기본 1800초 등)에 구성요소가 실패하며 그때 교체된다. 실제 AWS 검증 항목이다.
 
 - 배포 때 추가 용량은 필요 없다. 서비스는 min 0 / max 100 으로 옛 태스크를 멈춘 뒤 새 태스크를 띄운다. scheduler 가 둘 뜨는 순간이 없고, 대가로 1~3분 Airflow 가 멈춘다. 그래서 `deploy-airflow` 는 평일 장중(KST 09:20~15:00)에 명시 허용 없이 배포하지 않는다.
