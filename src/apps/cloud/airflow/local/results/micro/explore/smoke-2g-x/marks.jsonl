@@ -1,0 +1,7 @@
+{"t": 1790657354.3, "event": "start_airflow", "mem": "2048m", "settings": {"name": "smoke-2g-x", "mem": "2048m", "parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5, "smoke": true}}
+{"t": 1790657371.7, "event": "healthy", "health": "healthy"}
+{"t": 1790657371.8, "event": "dag_loaded", "code": 200}
+{"t": 1790657372.0, "event": "reset", "tag": "smoke"}
+{"t": 1790657372.0, "event": "trigger", "run": "micro__smoke__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790657411.3, "event": "run_done", "run": "micro__smoke__2026-09-22T09:35", "state": "success"}
+{"t": 1790657412.0, "event": "suite_error", "error": "JSONDecodeError('Expecting value: line 2 column 1 (char 1)')"}

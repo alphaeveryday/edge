@@ -1,0 +1,63 @@
+{"t": 1790667458.1, "event": "code_hash_start", "files": {"local/micro/healthcheck.sh": "41e5a976517f", "local/micro/supervisor.sh": "6b453ded4cb1", "local/micro/compose.micro.yaml": "3f5ea326cf31", "local/compose.yaml": "4a6ac202f4d1", "local/fake_aws.py": "f2fe25877dbb", "local/step_shim.py": "9be728283da1", "dags/edge_batch.py": "7b5b0fbfd590", "dags/edge_investor_intraday.py": "9becc68698dd", "dags/edge_investor_intraday_verify.py": "cf09ecc26e6d"}}
+{"t": 1790667468.3, "event": "start_airflow", "mem": "1792m", "settings": {"name": "E5", "mem": "1792m", "parallelism": 1, "parsing": 1, "pool": 2, "overflow": 3, "health": "light", "malloc_arena_max": "", "smoke": false}}
+{"t": 1790667485.8, "event": "healthy", "health": "healthy"}
+{"t": 1790667485.8, "event": "dag_loaded", "code": 200}
+{"t": 1790667485.8, "event": "idle_begin", "tag": "start", "seconds": 300}
+{"t": 1790667785.8, "event": "idle_end", "tag": "start"}
+{"t": 1790667786.1, "event": "reset", "tag": "B1"}
+{"t": 1790667786.2, "event": "trigger", "run": "micro__B1__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790667946.2, "event": "run_done", "run": "micro__B1__2026-09-22T09:35", "state": "success"}
+{"t": 1790667946.3, "event": "trigger", "run": "micro__B1__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790668103.3, "event": "run_done", "run": "micro__B1__2026-09-22T10:05", "state": "success"}
+{"t": 1790668103.4, "event": "trigger", "run": "micro__B1__2026-09-22T11:25", "code": 200, "detail": null}
+{"t": 1790668138.5, "event": "touch_dags"}
+{"t": 1790668138.8, "event": "burst", "arn": "arn:aws:ecs:ap-northeast-2:000000000000:task/edge-lab/8062e8c0b94341b3bba2c6237b315dcc", "results": [["/api/v2/dags/edge_investor_intraday", 200, 0.02], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.023], ["/api/v2/monitor/health", 200, 0.006], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.024], ["/api/v2/dags?limit=20", 200, 0.013], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.014], ["/api/v2/importErrors", 200, 0.008], ["/api/v2/version", 200, 0.004], ["/api/v2/dags/edge_investor_intraday", 200, 0.006], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.011], ["/api/v2/monitor/health", 200, 0.004], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.014], ["/api/v2/dags?limit=20", 200, 0.009], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.008], ["/api/v2/importErrors", 200, 0.008], ["/api/v2/version", 200, 0.004], ["/api/v2/dags/edge_investor_intraday", 200, 0.007], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.015], ["/api/v2/monitor/health", 200, 0.007], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.021], ["/api/v2/dags?limit=20", 200, 0.011], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.014], ["/api/v2/importErrors", 200, 0.01], ["/api/v2/version", 200, 0.003], ["/api/v2/dags/edge_investor_intraday", 200, 0.008], ["/api/v2/dags/edge_investor_intraday/dagRuns?limit=20", 200, 0.012], ["/api/v2/monitor/health", 200, 0.005], ["/api/v2/dags/edge_investor_intraday/dagRuns/~/taskInstances?limit=50", 200, 0.014], ["/api/v2/dags?limit=20", 200, 0.009], ["/api/v2/dags/edge_investor_intraday/details", 200, 0.008]]}
+{"t": 1790668260.4, "event": "run_done", "run": "micro__B1__2026-09-22T11:25", "state": "success"}
+{"t": 1790668260.5, "event": "trigger", "run": "micro__B1__2026-09-22T13:25", "code": 200, "detail": null}
+{"t": 1790668417.5, "event": "run_done", "run": "micro__B1__2026-09-22T13:25", "state": "success"}
+{"t": 1790668417.6, "event": "trigger", "run": "micro__B1__2026-09-22T14:35", "code": 200, "detail": null}
+{"t": 1790668574.6, "event": "run_done", "run": "micro__B1__2026-09-22T14:35", "state": "success"}
+{"t": 1790668575.6, "event": "dump", "batch": "B1"}
+{"t": 1790668575.6, "event": "idle_begin", "tag": "after_B1", "seconds": 300}
+{"t": 1790668875.6, "event": "idle_end", "tag": "after_B1"}
+{"t": 1790668875.9, "event": "reset", "tag": "B2"}
+{"t": 1790668876.0, "event": "trigger", "run": "micro__B2__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790668915.3, "event": "run_done", "run": "micro__B2__2026-09-22T09:35", "state": "failed"}
+{"t": 1790668915.4, "event": "trigger", "run": "micro__B2__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790668981.8, "event": "run_done", "run": "micro__B2__2026-09-22T10:05", "state": "success"}
+{"t": 1790668982.0, "event": "trigger", "run": "micro__B2__2026-09-22T11:25", "code": 200, "detail": null}
+{"t": 1790669027.1, "event": "stop_task", "arn": "arn:aws:ecs:ap-northeast-2:000000000000:task/edge-lab/c881be81963a406bbd622dddf316d7f3"}
+{"t": 1790669042.3, "event": "run_done", "run": "micro__B2__2026-09-22T11:25", "state": "failed"}
+{"t": 1790669042.5, "event": "trigger", "run": "micro__B2__2026-09-22T13:25", "code": 200, "detail": null}
+{"t": 1790669087.6, "event": "restart_airflow_begin", "arn": "arn:aws:ecs:ap-northeast-2:000000000000:task/edge-lab/c6d74634374e4f258e213734c0921a4a"}
+{"t": 1790669087.9, "event": "restart_airflow_end"}
+{"t": 1790669408.7, "event": "run_done", "run": "micro__B2__2026-09-22T13:25", "state": "success"}
+{"t": 1790669408.8, "event": "trigger", "run": "micro__B2__2026-09-22T14:35", "code": 200, "detail": null}
+{"t": 1790669445.0, "event": "run_done", "run": "micro__B2__2026-09-22T14:35", "state": "success"}
+{"t": 1790669446.0, "event": "dump", "batch": "B2"}
+{"t": 1790669446.0, "event": "idle_begin", "tag": "after_B2", "seconds": 300}
+{"t": 1790669746.0, "event": "idle_end", "tag": "after_B2"}
+{"t": 1790669746.5, "event": "reset", "tag": "B3"}
+{"t": 1790669746.6, "event": "trigger", "run": "micro__B3__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790669903.6, "event": "run_done", "run": "micro__B3__2026-09-22T09:35", "state": "success"}
+{"t": 1790669903.7, "event": "trigger", "run": "micro__B3__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790670060.7, "event": "run_done", "run": "micro__B3__2026-09-22T10:05", "state": "success"}
+{"t": 1790670060.8, "event": "trigger", "run": "micro__B3__2026-09-22T11:25", "code": 200, "detail": null}
+{"t": 1790670217.8, "event": "run_done", "run": "micro__B3__2026-09-22T11:25", "state": "success"}
+{"t": 1790670217.9, "event": "trigger", "run": "micro__B3__2026-09-22T13:25", "code": 200, "detail": null}
+{"t": 1790670374.9, "event": "run_done", "run": "micro__B3__2026-09-22T13:25", "state": "success"}
+{"t": 1790670375.0, "event": "trigger", "run": "micro__B3__2026-09-22T14:35", "code": 200, "detail": null}
+{"t": 1790670532.0, "event": "run_done", "run": "micro__B3__2026-09-22T14:35", "state": "success"}
+{"t": 1790670533.1, "event": "dump", "batch": "B3"}
+{"t": 1790670533.1, "event": "idle_begin", "tag": "after_B3", "seconds": 300}
+{"t": 1790670833.1, "event": "idle_end", "tag": "after_B3"}
+{"t": 1790670833.1, "event": "restart_airflow_begin", "arn": null}
+{"t": 1790670833.4, "event": "restart_airflow_end"}
+{"t": 1790670833.4, "event": "idle_begin", "tag": "after_restart_1", "seconds": 180}
+{"t": 1790671013.4, "event": "idle_end", "tag": "after_restart_1"}
+{"t": 1790671013.4, "event": "restart_airflow_begin", "arn": null}
+{"t": 1790671013.7, "event": "restart_airflow_end"}
+{"t": 1790671013.7, "event": "idle_begin", "tag": "after_restart_2", "seconds": 180}
+{"t": 1790671193.7, "event": "idle_end", "tag": "after_restart_2"}
+{"t": 1790671193.8, "event": "code_hash_end", "files": {"local/micro/healthcheck.sh": "41e5a976517f", "local/micro/supervisor.sh": "6b453ded4cb1", "local/micro/compose.micro.yaml": "3f5ea326cf31", "local/compose.yaml": "4a6ac202f4d1", "local/fake_aws.py": "f2fe25877dbb", "local/step_shim.py": "9be728283da1", "dags/edge_batch.py": "7b5b0fbfd590", "dags/edge_investor_intraday.py": "9becc68698dd", "dags/edge_investor_intraday_verify.py": "cf09ecc26e6d"}}
+{"t": 1790671193.8, "event": "suite_done"}

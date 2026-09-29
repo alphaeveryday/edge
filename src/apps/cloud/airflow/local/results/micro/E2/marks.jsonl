@@ -1,0 +1,11 @@
+{"t": 1790661269.0, "event": "code_hash_start", "files": {"local/micro/healthcheck.sh": "41e5a976517f", "local/micro/supervisor.sh": "9508c4235094", "local/micro/compose.micro.yaml": "dad4177f7b17", "local/compose.yaml": "4a6ac202f4d1", "local/fake_aws.py": "f2fe25877dbb", "local/step_shim.py": "9be728283da1", "dags/edge_batch.py": "7b5b0fbfd590", "dags/edge_investor_intraday.py": "9becc68698dd", "dags/edge_investor_intraday_verify.py": "cf09ecc26e6d"}}
+{"t": 1790661279.3, "event": "start_airflow", "mem": "1024m", "settings": {"name": "E2", "mem": "1024m", "parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5, "health": "cli", "smoke": false}}
+{"t": 1790661296.8, "event": "healthy", "health": "healthy"}
+{"t": 1790661296.8, "event": "dag_loaded", "code": 200}
+{"t": 1790661296.8, "event": "idle_begin", "tag": "start", "seconds": 300}
+{"t": 1790661596.8, "event": "idle_end", "tag": "start"}
+{"t": 1790661597.1, "event": "reset", "tag": "B1"}
+{"t": 1790661597.3, "event": "trigger", "run": "micro__B1__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790662217.3, "event": "run_done", "run": "micro__B1__2026-09-22T09:35", "state": "failed"}
+{"t": 1790662217.4, "event": "trigger", "run": "micro__B1__2026-09-22T10:05", "code": 200, "detail": null}
+{"t": 1790662531.1, "event": "suite_aborted", "why": "C1(자발 재시작 3회: api-server 137 Killed)·C5(B1 첫 정상 run failed, 620초) 실패 확정 — 남은 구간은 판정을 바꾸지 않는다", "restart_count": 3}

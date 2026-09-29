@@ -1,0 +1,8 @@
+{"t": 1790657435.4, "event": "start_airflow", "mem": "2048m", "settings": {"name": "smoke-2g-y", "mem": "2048m", "parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5, "smoke": true}}
+{"t": 1790657452.9, "event": "healthy", "health": "healthy"}
+{"t": 1790657453.0, "event": "dag_loaded", "code": 200}
+{"t": 1790657453.2, "event": "reset", "tag": "smoke"}
+{"t": 1790657453.2, "event": "trigger", "run": "micro__smoke__2026-09-22T09:35", "code": 200, "detail": null}
+{"t": 1790657492.5, "event": "run_done", "run": "micro__smoke__2026-09-22T09:35", "state": "success"}
+{"t": 1790657493.4, "event": "dump", "batch": "B1"}
+{"t": 1790657493.4, "event": "smoke_done"}
