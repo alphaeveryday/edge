@@ -303,6 +303,10 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
   - E1: 실행 중 마운트된 `healthcheck.sh`를 고쳤다(cli 분기 명령은 같다) → `E1.TAINTED`. 이후 실험은 시작·끝 코드 해시가 같아야 유효(`C0_valid_run`)로 본다.
   - E1 재실행(E1b)은 하지 않았다. 그래서 criteria 의 **상대 지연 기준(E1 대비 +10초)은 판정 불가**다. 절대 기준은 통과했고, E3·E5 의 지연 p95 수치(1.0·0.0·0.2·5.7초)는 오염된 E1 과 같다. small 참조는 E5 로 갈음했다.
   - 판정기 결함을 고쳤다: `p95 0.0` 을 거짓으로 읽음, 부모 cgroup OOM 을 Airflow 로 귀속, 중단 실험의 재시작 누락. 리뷰에서 누락을 통과로 읽는 경로도 막았다(heartbeat 한쪽 누락·빠진 파티션·로그 없음·주입 안 된 재시작·다른 슬롯의 보류·무효 참조). 재판정 뒤에도 E3·E5 의 실패 기준은 0 이다.
+- **검증 도구의 남은 한계(리뷰 검증 라운드, 수정하지 않고 기록).**
+  - **OOM 근거:** 컨테이너가 재시작하면 cgroup 이 새로 생겨 `memory.events` 의 oom·oom_kill 이 0 으로 돌아간다. 그래서 E2·E4·E6 의 OOM 근거는 이 카운터가 아니다. supervisor 로그의 `Killed` 137 과 재시작 수, 상한 도달 횟수(`memory.events max`)가 근거다. kill 없이 끝난 OOM 이 재시작 앞에 있었다면 판정기가 놓칠 수 있다.
+  - **계획 대조 범위:** 계획 대조(`C0_matches_plan`)는 상한·parallelism·파싱·풀만 비교한다. 헬스체크 방식·malloc 설정은 `verdict.json` 의 `ran_with` 로 사람이 확인한다(E3·E5 는 light·기본).
+  - **지연 짝짓기:** 지연 짝짓기는 시도 참조 env 가 있는 ECS 태스크만 센다. EdgeStep 은 모든 태스크에 붙인다. 종료 감지 표본 수는 강제하지 않는다(E3·E5 는 배치당 25·23·25).
 - **판단.** micro 는 실제 AWS 단기 검증 후보가 아니다(호스트 몫을 뺀 768 에서 두 설정 모두 OOM). **small 을 실제 AWS 단기 검증 후보로 한다.** medium 이 필요하다는 근거는 없다(small 차감 조건 E5 통과). 로컬 통과는 EC2 운영 안정성의 검증이 아니다.
 
 ### 메타DB
