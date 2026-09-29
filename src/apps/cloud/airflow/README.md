@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태: 첫 레인인 장중 수급(`edge_investor_intraday`)을 로컬에서 검증했다. 실행 환경은 **ECS on EC2 자체 운영**으로 정했고 Terraform·배포 워크플로·격리 검증 경로를 만들었다(ALPHA-1119, 아래 "실행 환경"). **실제 리소스 생성·배포·실제 AWS 검증·운영 전환은 아직 하지 않았다** — 비용·plan 승인 대기. MWAA 는 조직 SCP 가 거부한다(ALPHA-1086 조사).
+현재 상태: 첫 레인인 장중 수급(`edge_investor_intraday`)을 로컬에서 검증했다. 실행 환경은 ECS on EC2 자체 운영으로 정했다(ALPHA-1119, 아래 "실행 환경"). **2026-09-29 밤, t4g.micro + 기존 RDS 로 실제 AWS 단기 검증을 한다**(아래 "실제 AWS 단기 검증"). 장중 수급 정기 DAG 활성화와 SFN → Airflow 전환은 하지 않았다(별도 승인).
 
 ## 구성
 
@@ -212,13 +212,13 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 |---|---|---|
 | 실행 방식 | 일반 ECS on EC2(ASG + Capacity Provider) | ECS Managed Instances 가 아니다(별도 관리 요금). MWAA 는 SCP 거부 |
 | 클러스터 | 전용 `edge-dev-airflow` | worker 클러스터의 capacity provider 목록은 `aws_ecs_cluster_capacity_providers` 가 통째로 소유한다. EC2 용량을 더하면 기존 리소스를 고치게 된다. 클러스터는 무료다 |
-| 호스트 | t4g.small(arm64, 2 vCPU·2 GiB) 1대, ASG min 1·max 2 | 아래 "사양 검증(로컬 합산 상한)". t4g.micro 는 호스트 몫을 뺀 768MiB 에서 OOM 이었다. medium 은 small 이 모자란 근거가 없다. max 2 는 호스트 교체 때만 쓴다 |
+| 호스트 | **검증 중: t4g.micro**(arm64, 2 vCPU·1 GiB) 1대, ASG `host_count`(1/0) | 로컬은 호스트 몫을 가정해 micro 를 불가로 봤다(아래 "사양 검증") — 실제 EC2 로 다시 잰다("실제 AWS 단기 검증"). 모자라면 같은 조건의 t4g.small. medium 은 small 이 모자란 근거가 없다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
 | Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1 | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
 | Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
 | 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
-| 메타DB | 별도 RDS `edge-dev-airflow`(db.t4g.micro, PostgreSQL 16, 백업 7일) | 아래 "메타DB" |
+| 메타DB | **검증 중: 기존 업무 RDS 안의 전용 DB `airflow`·역할 `airflow_meta`** | 아래 "메타DB"·"실제 AWS 단기 검증". 재사용 확정은 그 결과 뒤 |
 | DAG 배포 | 이미지에 굽는다(`Dockerfile`) | 세 구성요소와 마이그레이션 작업이 한 이미지 태그(커밋)를 쓴다. 서버에 파일을 복사하지 않는다 |
 | UI 접근 | SSM 포트 포워딩만 | ALB·공인 IP 없음. 태스크 SG 는 호스트 SG 에서 온 8080 만 받는다 |
 | 인증 | Airflow 3 기본 SimpleAuthManager, 사용자 `admin` 1명 | 비밀번호는 Secrets Manager. ⚠️ Airflow 문서는 SimpleAuthManager 를 개발·테스트용으로 분류한다. 여기서는 네트워크 경로가 SSM 뿐이고 사용자가 1명이라 받아들였다. 사용자가 늘면 FAB auth manager 로 바꾼다 |
@@ -309,9 +309,48 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
   - **지연 짝짓기:** 지연 짝짓기는 시도 참조 env 가 있는 ECS 태스크만 센다. EdgeStep 은 모든 태스크에 붙인다. 종료 감지 표본 수는 강제하지 않는다(E3·E5 는 배치당 25·23·25).
 - **판단.** micro 는 실제 AWS 단기 검증 후보가 아니다(호스트 몫을 뺀 768 에서 두 설정 모두 OOM). **small 을 실제 AWS 단기 검증 후보로 한다.** medium 이 필요하다는 근거는 없다(small 차감 조건 E5 통과). 로컬 통과는 EC2 운영 안정성의 검증이 아니다.
 
+### 실제 AWS 단기 검증(t4g.micro + 기존 RDS) — 실행 전 고정(2026-09-29 19:50 KST)
+
+로컬에서는 호스트 몫을 200~350MiB 로 **가정**해 micro 를 불가로 봤다. 여기서는 실제 EC2 에서 호스트 전체 사용량과 Airflow 동작을 잰다. 기준·반복 횟수·중단 조건·종료 시각은 `verify/criteria_aws.json` 에 고정했다(실행 도중 바꾸면 그 전 결과는 판정에 쓰지 않는다). 판정은 `verify/analyze_aws.py`(통과·실패·**판정 불가** 셋 — 표본 부족·계측 공백은 성공이 아니다).
+
+**구성(이번 검증).**
+- 일반 ECS on EC2 t4g.micro 1대(전용 클러스터, 업무 클러스터와 분리). 태스크 합산 메모리 1024(로컬 C1 통과값) — 등록 메모리보다 크면 배치되지 않고, 그것도 결과로 적는다(억지로 줄여 넣지 않는다).
+- 메타DB: **기존 업무 RDS 인스턴스 안의 전용 DB `airflow`·전용 역할 `airflow_meta`**. 검증 원장: 같은 인스턴스의 전용 DB `edge_verify`·역할 `airflow_verify`(업무 DB 스키마만 복제, 행 없음). 새 RDS·사양 변경·전역 파라미터 변경 없음.
+- 두 역할: 슈퍼유저·DB 생성·역할 생성 권한 없음, CONNECTION LIMIT 10, 역할 수준 `statement_timeout` 30초·`idle_in_transaction_session_timeout` 60초, 업무 DB 테이블 권한 0(관리 태스크 `privcheck` 로 확인), 새 DB 에 PUBLIC 접속 불가. 비밀번호는 Secrets Manager 에만(Terraform·로그·코드에 없음 — `run.py secrets` 가 만들고 찍지 않는다).
+- DB·역할 생성·정리는 관리 태스크(`verify/dbadmin.sh`, postgres:16, 마스터 시크릿은 이 태스크의 execution 역할만 읽는다).
+- 호스트 관측기(`host_observer`): 5초마다 호스트 메모리·모든 cgroup(태스크·ECS·SSM·docker)·상위 프로세스, 커널 로그(OOM), docker 이벤트(종료 코드)를 **호스트 디스크에 append** — 대상이 죽어도 남는다. SSM 으로 수거.
+- 정기 DAG 는 모두 pause, `investor_intraday_orchestrator = "SFN"`·SFN 스케줄 그대로.
+
+**수명주기(되살아나지 않게).** 호스트 수는 Terraform `host_count`(1/0)가 정한다 — 콘솔로 0 을 만들면 다음 dev 머지의 자동 apply 가 1 로 되돌리므로 내리는 것도 코드로 한다. 서비스 desired 는 CD 소유(`deploy-airflow` 는 desired 0 이면 마이그레이션까지 건너뛴다 — 지운 DB 에 붙지 않는다). 서비스 중단 알람은 `host_count=1` 일 때만. 검증 자원(버킷·태스크 정의·관리 역할·검증 시크릿)은 `verify_enabled=false` 로 걷는다.
+
+**시간.** 시작은 19:30 공시 배치 종료 확인 뒤, 23:58~00:45(뉴스 00:10)에는 새 run 을 시작하지 않는다, **06:30 KST 전에 신규 실행 중지·정리 시작**(프리마켓 07:00·분 세션 07:45 전). 최대 24시간, 상시 운영으로 자동 연장하지 않는다.
+
+**시나리오·반복(고정).** S0 기동·DAG 로딩 → S1 유휴 30분(기존 RDS 영향 확인 — 통과해야 다음으로) → B1 정상 5회(각 정제 120초 대기, 3번째 대기 중 API 30건·재파싱) → 유휴 15분 → B2(확정 실패·업무 미시작 재시도·StopTask HOLD·실행 중 Airflow 재시작 추적·응답 유실+조회 실패 HOLD·보류 중 차단·종료 확인 뒤 해제·해제 뒤 정상) → 유휴 15분 → B3 정상 5회 → 유휴 15분 → 재시작 2회(각 5분). 실제 AWS 와 모의 주입의 경계는 `criteria_aws.json` `real_vs_injected`.
+
+**중단 기준.**
+- Airflow: 태스크 OOM 1건, 주입하지 않은 서비스 태스크 교체 2회(30분 안), 10분 넘는 미배치, 연속 3개 task 에서 queued→시작 > 60초 또는 ECS 종료→task 종료 > 90초. 걸리면 증거를 보존하고 micro 를 멈춘다(재시작을 반복하지 않는다) → 같은 환경을 t4g.small 로 바꿔 같은 시나리오.
+- 기존 RDS(14일 1분 지표의 장외 분포에서 정했다 — FreeableMemory 최소 559·p1 588MiB, Swap 최대 38MiB, CPU 최대 19.2%, 연결 최대 30, 지연 p99 5.8~6.7ms): FreeableMemory < 500MiB 3분, Swap > 60MiB 3분, CPU > 30% 5분, 지연 > 20ms 3분, 연결 > 42 2분, 창 안의 업무 SFN FAILED 1건. 걸리면 Airflow 서비스를 desired 0 으로 멈추고 원인을 본다.
+- 장외만 검증했으므로 **장중 재사용은 미검증**으로 남긴다. SFN 이 아직 실행 주체라는 사실이 공유 RDS 영향의 안전을 뜻하지 않는다.
+
+**예상 비용(서울 공개 단가).**
+
+| 항목 | micro 검증(약 10시간) | + small 비교(약 5시간) |
+|---|---|---|
+| EC2(0.0104 / 0.0208 /h) | 0.10 | +0.10 |
+| EBS gp3 30GiB(종료 시 삭제) | 0.04 | +0.02 |
+| CPU 크레딧 초과(unlimited, 최악: 2 vCPU 상시 사용) | 0~0.72 | +0~0.29 |
+| Fargate 검증 태스크(0.25 vCPU·0.5GB, 약 150회 × 2분) | 약 0.07 | +0.07 |
+| NAT 처리량(검증 이미지 176MB × 약 150회 pull + Airflow 이미지·postgres 이미지) | 약 1.7~2.0 | +1.6~1.8 |
+| 로그·시크릿(시간 비례)·S3·SSM | 약 0.3 | +0.1 |
+| **합계** | **약 2.2~3.2 USD** | **약 4.1~5.5 USD** |
+
+- 무료 혜택은 넣지 않았다(계정 적용 미확인). 검증 뒤 남는 월 비용: 앱 시크릿 0.40, ECR 이미지 약 0.1~0.2, 로그 보관 소액 → **약 0.6 USD/월**(호스트·검증 버킷·검증 시크릿·알람은 정리).
+
+**정리 순서.** DAG pause → 도는 검증 ECS 태스크 STOPPED 확인 → 증거 수거(호스트 관측·배치·deployinfo·RDS)·검증 원장 백업·이미지 digest 기록 → 서비스 desired 0 → 관리 태스크 `teardown`(전용 DB·역할 삭제, 업무 데이터·계정은 건드리지 않는다) → Terraform `host_count = 0`·`verify_enabled = false` 머지(자동 apply 가 호스트·검증 자원·알람을 걷는다).
+
 ### 메타DB
 
-- **현재 Terraform 은 별도 인스턴스(`edge-dev-airflow`, db.t4g.micro)다.** 기존 업무 RDS(`edge-dev`) 재사용은 아래 평가대로 **아직 검증하지 않은 후보**라 코드에 반영하지 않았다.
+- **현재 Terraform(검증 구성)은 기존 업무 RDS(`edge-dev`) 안의 전용 DB·역할이다**(위 "실제 AWS 단기 검증"). 상시 운영에 쓸지는 그 검증 결과와 아래 평가로 정한다 — 재사용은 아직 확정이 아니다.
 - scheduler 는 쉬지 않고 메타DB 를 조회한다. 로컬 유휴 실측은 초당 트랜잭션 약 28, 버퍼 적중 약 246, 쓰기 0.4행이고, DB 크기는 10MiB 다(업무 실행 중은 더 많다).
 
 **기존 RDS 재사용 평가(2026-09-29, 읽기 전용 지표·기존 기록 — 실제 부하를 주지 않았다)**
@@ -396,13 +435,8 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 ### 최초 구축(한 번)
 
 1. `foundation` apply(수동) — `edge/airflow` ECR 저장소.
-2. 이 PR 머지 → `terraform-apply` 가 메타DB·클러스터·호스트·서비스(desired 0)·검증 자원을 만든다. 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 아직 없으면 "서비스 없음"으로 실패한다. 의도한 동작이다.
-3. 앱 시크릿 값 넣기:
-   ```bash
-   aws secretsmanager put-secret-value --secret-id edge-dev-airflow/app --secret-string "$(python3 -c '
-   import json, secrets; print(json.dumps({"jwt_secret": secrets.token_urlsafe(48),
-     "api_secret_key": secrets.token_urlsafe(32), "admin_password": secrets.token_urlsafe(18)}))')"
-   ```
+2. 이 PR 머지 → `terraform-apply` 가 클러스터·호스트·서비스(desired 0)·검증 자원을 만든다(새 RDS 없음). 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 desired 0 이면 배포를 건너뛴다.
+3. 시크릿 값과 전용 DB·역할: `python3 verify/run.py secrets`(없는 키만 만든다, 값은 찍지 않는다) → `python3 verify/run.py setup`(관리 태스크가 전용 DB·역할 생성, 검증 원장 스키마 복제, 권한 분리 확인).
 4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable.
 5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
 
