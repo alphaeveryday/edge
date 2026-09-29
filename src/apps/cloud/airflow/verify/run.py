@@ -334,7 +334,8 @@ def clear_runs(exp: str) -> None:
         f = out_dir(m[1]) / f"{m[2]}.json" if m else None
         doc = json.loads(f.read_text()) if f and f.exists() else {}
         # 파일이 있는 것만으로는 부족하다(재실행이 남긴 옛 파일·조회 실패로 빈 증거) — 이 run 의 try 와 원장이 담겼는지 본다.
-        if not (any(x["dag_run_id"] == rid for x in doc.get("runs", []))
+        # 같은 run id 를 재실행이 다시 쓰므로 시작 시각까지 같아야 "그 run" 의 증거다.
+        if not (any(x["dag_run_id"] == rid and x.get("start_date") == r.get("start_date") for x in doc.get("runs", []))
                 and any(x.get("dag_run_id") == rid for x in doc.get("task_tries", [])) and doc.get("ledger")):
             raise RuntimeError(f"증거가 저장되지 않은 run 은 지우지 않는다: {rid}")
         code, _, _ = api("DELETE", f"/api/v2/dags/{DAG}/dagRuns/{urllib.parse.quote(rid, safe='')}")
