@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
 import { LoginGateSheet } from '@/features/auth/LoginGateSheet';
 import { useSession } from '@/store/session';
@@ -11,7 +12,17 @@ import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
-const queryClient = new QueryClient();
+// 쓰기 요청이 401 로 끝나면 세션을 풀고 로그인 유도 시트
+const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onError: (e) => {
+      if (!isApiError(e, 'UNAUTHORIZED')) return;
+      const s = useSession.getState();
+      s.expire();
+      s.openGate('로그인');
+    },
+  }),
+});
 
 export default function RootLayout() {
   const [loaded, error] = useFonts(fontAssets);

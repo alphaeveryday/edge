@@ -8,7 +8,7 @@ const invalidate = (qc: ReturnType<typeof useQueryClient>) => {
 
 export const useWatchGroups = () => useQuery({ queryKey: ['watch', 'groups'], queryFn: () => api.watch.groups() });
 export const useWatchList = (group: string) => useQuery({ queryKey: ['watch', 'list', group], queryFn: () => api.watch.list(group) });
-export const useMembership = (code: string) => useQuery({ queryKey: ['watch', 'membership', code], queryFn: () => api.watch.membership(code) });
+export const useMembership = (code: string) => useQuery({ queryKey: ['watch', 'membership', code], queryFn: () => api.watch.membership(code), enabled: !!code });
 
 export const useCreateGroup = () => {
   const qc = useQueryClient();

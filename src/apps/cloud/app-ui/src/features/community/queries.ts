@@ -1,13 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
 import type { Me, Poll, PollChoice, Post } from '@/api';
+import { useRequireLogin, useSession } from '@/store/session';
 
 export const useMyPosts = () => useQuery({ queryKey: ['community', 'mine'], queryFn: () => api.community.mine() });
 export const useUpdateMe = () => {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (patch: Partial<Me>) => api.user.update(patch), onSuccess: (me) => qc.setQueryData(['user', 'me'], me) });
 };
-export const useMe = () => useQuery({ queryKey: ['user', 'me'], queryFn: () => api.user.me(), staleTime: Infinity });
+export const useMe = () => {
+  const loggedIn = useSession((s) => s.loggedIn);
+  return useQuery({ queryKey: ['user', 'me'], queryFn: () => api.user.me(), staleTime: Infinity, enabled: loggedIn });
+};
 export const useHotPosts = () => useQuery({ queryKey: ['community', 'hot'], queryFn: () => api.community.hot() });
 export const useEtfPosts = (code: string) => useQuery({ queryKey: ['community', 'posts', code], queryFn: () => api.community.posts(code) });
 export const useFeed = (scope: 'all' | 'mine') => useQuery({ queryKey: ['community', 'feed', scope], queryFn: () => api.community.feed(scope) });
@@ -21,15 +25,18 @@ const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ['community', 'hot'] });
 };
 
+// 좋아요는 회원만. 비로그인이면 유도 시트
 export const useToggleLike = () => {
   const qc = useQueryClient();
-  return useMutation({
+  const requireLogin = useRequireLogin();
+  const m = useMutation({
     mutationFn: (id: string) => api.community.toggleLike(id),
     onSuccess: (updated) => {
-      qc.setQueriesData<Post[]>({ queryKey: ['community'] }, (old) => (Array.isArray(old) ? old.map((p) => (p.id === updated.id ? updated : p)) : old));
+      qc.setQueriesData<Post[]>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'replies' }, (old) => (Array.isArray(old) ? old.map((p) => (p.id === updated.id ? updated : p)) : old));
       qc.setQueryData<Post>(['community', 'post', updated.id], (old) => (old ? { ...old, like: updated.like, liked: updated.liked } : old));
     },
   });
+  return { ...m, mutate: (id: string) => requireLogin('좋아요', () => m.mutate(id)) };
 };
 
 export const useVote = (code: string) => {

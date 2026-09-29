@@ -10,7 +10,7 @@ export function LoginGateSheet() {
   const go = () => { closeGate(); router.push('/login'); };
   return (
     <BottomSheet open={gateOpen} onClose={closeGate}>
-      <SheetHead title="로그인하면 이어서 할 수 있어요" sub={`${gateReason}은 로그인 뒤에 열려요. 관심 종목과 알림도 함께 저장돼요.`} onClose={closeGate} />
+      <SheetHead title="로그인하면 이어서 할 수 있어요" sub={`${gateReason} 기능은 로그인 뒤에 열려요. 관심 종목과 알림도 함께 저장돼요.`} onClose={closeGate} />
       <View style={styles.btns}>
         <CtaButton label="로그인하기" tone="dark" onPress={go} />
         <CtaButton label="나중에 할게요" tone="soft" onPress={closeGate} />

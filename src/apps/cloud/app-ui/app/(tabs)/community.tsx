@@ -8,11 +8,10 @@ import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { PollCard } from '@/features/community/PollCard';
 import { useFeed, usePoll } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
+import { useRank } from '@/features/explore/queries';
 import { useRequireLogin } from '@/store/session';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
-
-const POLL_ETF = 'AXAI';
 
 export default function Community() {
   const router = useRouter();
@@ -20,8 +19,10 @@ export default function Community() {
   const { top } = useSafeAreaInsets();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const { data: posts } = useFeed(scope);
-  const { data: poll } = usePoll(POLL_ETF);
-  const { data: pollEtf } = useEtf(POLL_ETF);
+  // 오늘의 투표는 탐색 1위 ETF
+  const pollCode = useRank().data?.[0]?.etf.code ?? '';
+  const { data: poll } = usePoll(pollCode, !!pollCode);
+  const { data: pollEtf } = useEtf(pollCode);
   return (
     <View style={styles.root}>
       <TopBar />

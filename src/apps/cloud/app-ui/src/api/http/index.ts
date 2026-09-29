@@ -13,12 +13,20 @@ const signIn = async (r: WireAuth) => { await tokens.save(r.accessToken, r.refre
 let recent: EtfSummary[] = [];
 const myVotes: Record<string, PollChoice | null> = {};
 
-const summaries = (list: m.WireEtfSummary[]) => list.map(m.etf);
+// 와이어의 theme 은 key. 화면은 라벨을 쓰므로 테마 목록을 한 번 받아 바꿔 준다(색은 key 기준 유지)
+let themeLabels: Promise<Record<string, string>> | null = null;
+const labels = () => (themeLabels ??= request<m.WireTheme[]>('GET', '/themes', { auth: false }).then((l) => Object.fromEntries(l.map((t) => [t.key, t.label]))));
+const labelOf = async (key: string) => (await labels())[key] ?? key;
+const relabel = async <T extends { theme: string }>(x: T): Promise<T> => ({ ...x, theme: await labelOf(x.theme) });
+const summary = async (e: m.WireEtfSummary) => relabel(m.etf(e));
+const summaries = (list: m.WireEtfSummary[]) => Promise.all(list.map(summary));
+const post = async (p: m.WirePost) => { const x = m.post(p); return { ...x, etf: await relabel(x.etf) }; };
+const posts = (list: m.WirePost[]) => Promise.all(list.map(post));
 
 export const httpClient: ApiClient = {
   etf: {
     get: async (code) => {
-      const e = m.etf(await request<m.WireEtfSummary>('GET', `/etfs/${code}`));
+      const e = await summary(await request<m.WireEtfSummary>('GET', `/etfs/${code}`));
       recent = [e, ...recent.filter((r) => r.code !== code)].slice(0, 5);
       return e;
     },
@@ -43,11 +51,11 @@ export const httpClient: ApiClient = {
   },
   theme: {
     list: async () => (await request<m.WireTheme[]>('GET', '/themes', { auth: false })).map(m.theme),
-    feed: async () => (await request<m.WireThemeFeedItem[]>('GET', '/themes/feed', { auth: false })).map(m.themeFeedItem),
-    detail: async (key) => m.themeDetail(await request<m.WireThemeDetail>('GET', `/themes/${encodeURIComponent(key)}`, { auth: false })),
+    feed: async () => Promise.all((await request<m.WireThemeFeedItem[]>('GET', '/themes/feed', { auth: false })).map(async (t) => m.themeFeedItem(t, await labelOf(t.key)))),
+    detail: async (key) => m.themeDetail(await request<m.WireThemeDetail>('GET', `/themes/${encodeURIComponent(key)}`, { auth: false }), await labelOf(key)),
   },
   explore: {
-    rank: async () => (await request<(Omit<RankRow, 'etf'> & { etf: m.WireEtfSummary })[]>('GET', '/explore/rank', { auth: false })).map((r) => ({ ...r, etf: m.etf(r.etf) })),
+    rank: async () => Promise.all((await request<(Omit<RankRow, 'etf'> & { etf: m.WireEtfSummary })[]>('GET', '/explore/rank', { auth: false })).map(async (r) => ({ ...r, etf: await summary(r.etf) }))),
   },
   onboarding: {
     complete: (input) => request<void>('POST', '/onboarding/complete', { body: input }),
@@ -74,24 +82,24 @@ export const httpClient: ApiClient = {
   home: {
     brief: async (group) => {
       const b = await request<Omit<HomeBrief, 'etfs'> & { etfs: m.WireEtfSummary[] }>('GET', '/home/brief', { query: { group } });
-      return { ...b, asOf: m.asOfLabel(b.asOf), etfs: summaries(b.etfs) };
+      return { ...b, asOf: m.asOfLabel(b.asOf), etfs: await summaries(b.etfs) };
     },
   },
   community: {
-    hot: async () => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'hot' } })).items.map(m.post),
-    posts: async (code) => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code } })).items.map(m.post),
-    feed: async (scope) => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope } })).items.map(m.post),
-    mine: async () => (await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine' } })).items.map(m.post),
+    hot: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'hot' } })).items),
+    posts: async (code) => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code } })).items),
+    feed: async (scope) => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope } })).items),
+    mine: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine' } })).items),
     // 공개 조회지만 요청자를 보내야 liked·mine 이 채워진다
-    get: async (id) => m.post(await request<m.WirePost>('GET', `/posts/${id}`)),
+    get: async (id) => post(await request<m.WirePost>('GET', `/posts/${id}`)),
     replies: async (id) => (await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`, { auth: false })).items.map(m.reply),
     reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
-    create: async (input) => m.post(await request<m.WirePost>('POST', '/posts', { body: input })),
+    create: async (input) => post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
     // 계약은 PUT/DELETE 두 개. 현재 liked 를 모르는 호출자라 조회 후 분기
     toggleLike: async (id) => {
       const cur = await request<m.WirePost>('GET', `/posts/${id}`);
-      return m.post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
+      return post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
     },
     poll: async (code) => m.poll(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVotes[code] ?? null),
     // 응답에 현황이 없어 성공 후 count 를 다시 읽는다
@@ -102,10 +110,10 @@ export const httpClient: ApiClient = {
     },
   },
   issue: {
-    list: async (tab) => (await request<m.WirePage<IssueRow>>('GET', '/issues', { query: { tab } })).items.map((r) => ({ ...r, etf: r.etf ? { ...r.etf, logoBg: m.bgOf(r.etf.theme) } : undefined })),
+    list: async (tab) => Promise.all((await request<m.WirePage<IssueRow>>('GET', '/issues', { query: { tab } })).items.map(async (r) => ({ ...r, etf: r.etf ? await relabel({ ...r.etf, logoBg: m.bgOf(r.etf.theme) }) : undefined }))),
     get: async (id) => {
       const d = await request<Omit<IssueDetail, 'affected'> & { affected: (m.WireEtfSummary & { prev?: IssueDetail['affected'][number]['prev'] })[] }>('GET', `/issues/${id}`, { auth: false });
-      return { ...d, affected: d.affected.map((a) => ({ ...m.etf(a), prev: a.prev })) };
+      return { ...d, affected: await Promise.all(d.affected.map(async (a) => ({ ...(await summary(a)), prev: a.prev }))) };
     },
   },
   user: {

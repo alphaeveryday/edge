@@ -192,6 +192,7 @@ export interface RankRow {
 
 export interface ThemeFeedItem {
   key: string;
+  label: string;
   bg: string;
   count: number;
   headline: string;
@@ -200,6 +201,7 @@ export interface ThemeFeedItem {
 
 export interface ThemeDetail {
   key: string;
+  label: string;
   headline: string;
   stocks: { name: string; logoBg: string; etfs: string }[];
   intro: string;

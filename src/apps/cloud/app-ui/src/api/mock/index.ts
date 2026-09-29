@@ -105,10 +105,10 @@ export const mockClient: ApiClient = {
   },
   theme: {
     list: () => delay(THEMES),
-    feed: () => delay(THEME_FEED),
+    feed: () => delay(THEME_FEED.map((t) => ({ ...t, label: t.key }))),
     detail: (key) => {
       const d = THEME_DETAILS[key];
-      return d ? delay(d) : Promise.reject(new ApiError('NOT_READY', `no theme detail ${key}`));
+      return d ? delay({ ...d, label: d.key }) : Promise.reject(new ApiError('NOT_READY', `no theme detail ${key}`));
     },
   },
   explore: {

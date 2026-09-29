@@ -49,6 +49,8 @@ export function IconButton({ icon, size = 38, circled, floating, fab, soft, colo
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={icon}
       hitSlop={6}
       style={({ pressed }) => [
         styles.btn,

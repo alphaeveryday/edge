@@ -10,7 +10,7 @@ export const RANK_META: Record<string, { title: string; chips: string[]; ready: 
   MEDX: { title: '바이오 임상 3상 발표 연기, 셀트리온 3분기 실적 하향', chips: ['임상 지연', '실적 하향'], ready: false },
 };
 
-export const THEME_FEED: ThemeFeedItem[] = [
+export const THEME_FEED: Omit<ThemeFeedItem, 'label'>[] = [
   { key: 'AI·반도체', bg: '#3D34E0', count: 4, headline: 'AI 데이터센터 설비투자가 41%까지 올라왔어요', dir: 'help' },
   { key: '배당·인프라', bg: '#0E8A6C', count: 3, headline: '배당·인프라: 요금 인상은 승인됐고, 이제 금리 인하만 남았어요', dir: 'neutral' },
   { key: '친환경', bg: '#E8A13D', count: 3, headline: '친환경: 원료 값은 바닥인데, 중국이 아직 덜 만들겠다고 안 했어요', dir: 'neutral' },
@@ -20,7 +20,7 @@ export const THEME_FEED: ThemeFeedItem[] = [
   { key: '바이오', bg: '#8B34E0', count: 1, headline: '바이오: 임상 3상 발표가 미뤄져 실적 전망을 낮췄어요', dir: 'burden' },
 ];
 
-export const THEME_DETAILS: Record<string, ThemeDetail> = {
+export const THEME_DETAILS: Record<string, Omit<ThemeDetail, 'label'>> = {
   'AI·반도체': {
     key: 'AI·반도체',
     headline: 'AI·반도체: 데이터센터 설비투자가 41%까지 올라왔어요',

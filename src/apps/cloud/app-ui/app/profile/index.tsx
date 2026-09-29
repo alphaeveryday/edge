@@ -21,7 +21,8 @@ export default function Profile() {
   const resetOnboarding = useOnboarding((s) => s.reset);
   const toast = useToast((s) => s.show);
   // 로그아웃·탈퇴 공통. 온보딩으로 돌아간다
-  const leave = (msg: string) => { qc.clear(); logout(); resetOnboarding(); router.dismissAll(); router.replace('/onboarding/how'); toast(msg); };
+  const leave = (msg: string) => { qc.clear(); logout(); resetOnboarding(); if (router.canDismiss()) router.dismissAll();
+    router.replace('/onboarding/how'); toast(msg); };
   const [notif, setNotif] = useState(true);
   const [delOpen, setDelOpen] = useState(false);
   const del = useMutation({

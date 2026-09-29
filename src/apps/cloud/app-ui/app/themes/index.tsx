@@ -28,7 +28,7 @@ export default function Themes() {
               <View style={[styles.thumb, { backgroundColor: t.bg }]}><SectorIcon theme={t.key} bg={t.bg} size={44} /></View>
               <View style={{ flex: 1 }}>
                 <View style={styles.nameRow}>
-                  <Text style={styles.name}>{t.key}</Text>
+                  <Text style={styles.name}>{t.label}</Text>
                   <Text style={styles.count}>ETF {t.count}종</Text>
                 </View>
                 <Text numberOfLines={2} style={styles.headline}>{t.headline}</Text>

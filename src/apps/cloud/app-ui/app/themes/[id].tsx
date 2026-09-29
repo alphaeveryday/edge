@@ -39,7 +39,7 @@ function ThemeBody({ d, sheet, setSheet }: { d: ThemeDetailT; sheet: boolean; se
   return (
     <>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 44 }}>
-        <Text style={styles.kicker}>테마 분석 · {d.key}</Text>
+        <Text style={styles.kicker}>테마 분석 · {d.label}</Text>
         <Text style={styles.headline}>{d.headline}</Text>
         <Pressable onPress={() => setSheet(true)} style={({ pressed }) => [styles.stockPill, pressed && { opacity: 0.6 }]}>
           <View style={styles.dots}>
@@ -101,7 +101,7 @@ function ThemeBody({ d, sheet, setSheet }: { d: ThemeDetailT; sheet: boolean; se
         </View>
       </ScrollView>
       <BottomSheet open={sheet} onClose={() => setSheet(false)}>
-        <SheetHead title={`${d.key} 편입 종목`} sub={`${d.stocks.length}개`} onClose={() => setSheet(false)} />
+        <SheetHead title={`${d.label} 편입 종목`} sub={`${d.stocks.length}개`} onClose={() => setSheet(false)} />
         <ScrollView style={{ marginTop: 8 }} showsVerticalScrollIndicator={false}>
           {d.stocks.map((s) => (
             <View key={s.name} style={styles.stockRow}>

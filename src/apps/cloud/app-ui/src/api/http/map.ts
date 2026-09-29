@@ -27,6 +27,8 @@ export const asOfLabel = (iso: string) => {
   return `오늘 ${hh}:${mm} 기준`;
 };
 
+const updatedLabel = (iso: string) => { const d = new Date(iso); return `${d.getMonth() + 1}월 ${d.getDate()}일 업데이트`; };
+
 export interface WireEtfSummary { code: string; name: string; theme: string; price: number; changePct: number; signal: Signal; hot?: boolean; sub?: string }
 export const etf = (e: WireEtfSummary): EtfSummary => ({ ...e, logoBg: bgOf(e.theme) });
 
@@ -34,10 +36,10 @@ export interface WireTheme { key: string; label: string; group: 'industry' | 'as
 export const theme = (t: WireTheme): Theme => ({ ...t, bg: bgOf(t.key) });
 
 export interface WireThemeFeedItem { key: string; count: number; headline: string; dir: Dir }
-export const themeFeedItem = (t: WireThemeFeedItem): ThemeFeedItem => ({ ...t, bg: bgOf(t.key) });
+export const themeFeedItem = (t: WireThemeFeedItem, label: string): ThemeFeedItem => ({ ...t, label, bg: bgOf(t.key) });
 
-export type WireThemeDetail = Omit<ThemeDetail, 'stocks'> & { stocks: { name: string; etfs: string }[] };
-export const themeDetail = (t: WireThemeDetail): ThemeDetail => ({ ...t, stocks: t.stocks.map((s) => ({ ...s, logoBg: bgOf(s.name) })) });
+export type WireThemeDetail = Omit<ThemeDetail, 'stocks' | 'label'> & { stocks: { name: string; etfs: string }[] };
+export const themeDetail = (t: WireThemeDetail, label: string): ThemeDetail => ({ ...t, label, updated: updatedLabel(t.updated), stocks: t.stocks.map((s) => ({ ...s, logoBg: bgOf(s.name) })) });
 
 export interface WireMe { nick: string; handle: string; email?: string; disclaimerAcceptedAt?: string }
 export const me = (m: WireMe): Me => ({ ...m, avatarBg: bgOf(m.handle) });

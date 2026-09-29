@@ -6,16 +6,18 @@ import { LinkRow } from '@/components/ui';
 import { CandleChart } from '@/features/etf/CandleChart';
 import { MoveSheet } from '@/features/etf/MoveSheet';
 import { useChart, useEtf, useMove } from '@/features/etf/queries';
-import { Loading } from '@/components/state';
+import { ErrorView, Loading } from '@/components/state';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export default function EtfSummary() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const { data: etf } = useEtf(code);
-  const { data: chart } = useChart(code);
+  const chartQ = useChart(code);
+  const chart = chartQ.data;
   const { data: move } = useMove(code);
   const [open, setOpen] = useState(false);
+  if (chartQ.isError) return <ErrorView onRetry={() => chartQ.refetch()} />;
   if (!etf || !chart) return <Loading rows={3} />;
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>

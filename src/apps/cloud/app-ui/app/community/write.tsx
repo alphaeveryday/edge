@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, CtaButton, IconButton, SectorIcon } from '@/components/ui';
 import { useCreatePost, useMe } from '@/features/community/queries';
 import { useEtfList } from '@/features/etf/queries';
+import { isApiError } from '@/api';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -26,7 +27,7 @@ export default function CommunityWrite() {
   const tags = useMemo(() => (etfs ?? []).filter((e) => draft.includes(`#${short(e.name)}`)).map((e) => e.code), [draft, etfs]);
   const pick = (name: string) => setDraft((d) => d.replace(/#([^\s#]*)$/, `#${short(name)} `));
   const submit = () =>
-    create.mutate({ body: draft.trim(), tags }, { onSuccess: () => { router.back(); toast('글을 올렸어요'); } });
+    create.mutate({ body: draft.trim(), tags }, { onSuccess: () => { router.back(); toast('글을 올렸어요'); }, onError: (e) => toast(isApiError(e) ? e.message : '글을 올리지 못했어요') });
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.nav}>
