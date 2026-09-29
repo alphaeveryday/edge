@@ -4,6 +4,32 @@ from datetime import date
 from .common import available, decimal, holdings, instant, number
 
 
+def input_tables(rows):
+    """Pivot finalized observations by stock and date without filling missing facts.
+
+    Args:
+        rows: Time-filtered individual investor observations.
+
+    Returns:
+        Stock-keyed KRW tables; absent investor cells remain null.
+
+    Raises:
+        ValueError: Duplicate date/investor or unsupported investor.
+    """
+    columns = ["date", "foreign", "institution", "individual"]
+    grouped = {}
+    for row in rows:
+        days = grouped.setdefault(row["instrument_id"], {})
+        values = days.setdefault(row["date"], {})
+        investor = row["investor"]
+        if investor not in columns[1:] or investor in values:
+            raise ValueError("duplicate or unknown investor observation")
+        values[investor] = row["net_amount_krw"]
+    return {target: {"unit": "KRW", "metric": "net_amount", "columns": columns.copy(),
+                     "rows": [[day] + [days[day].get(key) for key in columns[1:]] for day in sorted(days)]}
+            for target, days in sorted(grouped.items())}
+
+
 def calculate(fixture, investor, lookback_days, operation, direction, instrument_id=None):
     """Aggregate exact sessions before computing temporal facts.
 

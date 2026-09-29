@@ -24,7 +24,9 @@ def observations(fixture, series):
 
 def read(fixture, series):
     """Expose the latest twenty-one raw same-series observations for exploration."""
-    return {"series": series, "unit": SERIES.get(series), **table(observations(fixture, series)[-21:], ["observed_at", "value", "available_at"])}
+    rows = [r | {"at": r["observed_at"]} for r in observations(fixture, series)[-21:]]
+    columns = ["at", "value", "available_at"] + (["reference_period"] if series == "kr_cpi_yoy" else [])
+    return {"series": series, "unit": SERIES[series], **table(rows, columns)}
 
 
 def compare(fixture, series, previous_at, current_at, operation):
