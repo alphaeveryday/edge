@@ -262,8 +262,8 @@ def _pick_winner(rows: list[dict]) -> dict:
     ⚠️ 한계: 정정이 되돌려지면(A→B→A) 증분은 원래 D일 A 를 이미 잃어 **나중 A** 를 고른다 — 값은
     같고 거래량·available_at 만 뒤 축이 된다. 전체 raw 재정제(`--input-run-id` 없이)는 D일 A 를 고른다.
     거래일 마감 후 수집분이 없으면 수급 규칙(`normalize_investor._winner_rank`)으로 떨어진다.
-    거래일 판정은 `OPS_KR_HOLIDAYS` 를 쓴다 — 없으면 평일 휴장일을 거래일로 본다(quality_log
-    `kr_holidays_loaded` 가 드러낸다).
+    거래일 판정은 `OPS_KR_HOLIDAYS` 를 쓴다 — 없거나 수집 연도를 안 덮으면 평일 휴장일을 거래일로
+    본다(quality_log `kr_holidays_loaded`·`kr_holidays_uncovered_years` 가 드러낸다).
     비KR(FMP, 현재 토글 off)은 최신 승이다 — 15:30 KST 마감은 KR 전용이라 US 에 걸면 US 장중
     수집분이 영구 승자가 된다. 동률(같은 수집 시각)은 나중 적용분이 이긴다(멱등 재실행).
     """
@@ -493,9 +493,19 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
         logger.error("canonical 벤더 교차 충돌 %d건 — 해당 키 winner 제외", len(collisions))
 
     manifest_winners = sum(len(part["winner_ids"]) for part in partitions)
-    kr_holidays_loaded = bool(os.environ.get("OPS_KR_HOLIDAYS", "").strip())
-    if not kr_holidays_loaded and any(row["market"] == "KR" for row in passing):
-        logger.warning("OPS_KR_HOLIDAYS 미주입 — KR 승자 규칙이 평일 휴장일을 거래일로 본다")
+    # 휴장일 목록은 연도별 정적 집합이다 — 이번 런 KR 수집 연도가 목록에 없으면 그해 평일 휴장일을
+    # 거래일로 본다(전체 재정제가 목록 밖 연도 raw 를 읽을 때 특히). 주입 여부가 아니라 **덮는지**를 남긴다.
+    holiday_years = {
+        d.strip()[:4] for d in os.environ.get("OPS_KR_HOLIDAYS", "").split(",") if d.strip()
+    }
+    kr_fetch_years = {
+        str(_fetched_at(row).astimezone(_KST).year) for row in passing if row["market"] == "KR"
+    }
+    kr_holidays_uncovered_years = sorted(kr_fetch_years - holiday_years)
+    kr_holidays_loaded = not kr_holidays_uncovered_years
+    if kr_holidays_uncovered_years:
+        logger.warning("OPS_KR_HOLIDAYS 가 KR 수집 연도 %s 를 덮지 않는다 — 그해 평일 휴장일을 거래일로 본다",
+                       kr_holidays_uncovered_years)
 
     quality_written = True
     try:
@@ -507,8 +517,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 "dataset": DATASET,
                 "input_run_id": input_run_id,
                 # KR 승자 규칙의 휴장일 판정 근거(ALPHA-1120). False 면 평일 휴장일 수집분이
-                # 기준에 섞일 수 있다 — 태스크 env 주입 누락이다.
+                # 기준에 섞일 수 있다 — env 주입 누락이거나 목록이 그 연도를 안 덮는다.
                 "kr_holidays_loaded": kr_holidays_loaded,
+                "kr_holidays_uncovered_years": kr_holidays_uncovered_years,
                 "raw_files": len(raw_keys),
                 "records_read": read,
                 "records_passed": len(passing),

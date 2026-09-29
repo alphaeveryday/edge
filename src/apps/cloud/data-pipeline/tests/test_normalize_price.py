@@ -268,8 +268,9 @@ def test_kr_only_holiday_fetch_is_still_used_when_trade_day_fetch_is_missing(tmp
 
 
 def test_quality_log_reports_whether_kr_holidays_were_loaded(tmp_path, monkeypatch):
-    # WHY: 휴장일 목록이 없으면 is_trading_day 가 주말만 알아 휴장일 수집분이 정정으로 둔갑한다.
-    #      가드가 조용히 퇴화하지 않도록 런마다 판정 근거를 남긴다.
+    # WHY: 휴장일 목록이 없거나 그 연도를 안 덮으면 is_trading_day 가 주말만 알아 휴장일 수집분이
+    #      정정으로 둔갑한다. 가드가 조용히 퇴화하지 않도록 런마다 판정 근거를 남긴다 — "주입됐다"가
+    #      아니라 "이번 수집 연도를 덮는다"여야 한다(연도별 정적 목록이라 해가 바뀌면 퇴화한다).
     storage = LocalStorage(tmp_path / "lake")
     _write_raw(storage, _raw_key("kis", "KR", run_id="R1"), [_kis_row(fetched_at=_D0)])
     monkeypatch.delenv("OPS_KR_HOLIDAYS", raising=False)
@@ -278,6 +279,12 @@ def test_quality_log_reports_whether_kr_holidays_were_loaded(tmp_path, monkeypat
     monkeypatch.setenv("OPS_KR_HOLIDAYS", "2026-07-02")
     assert normalize_price.run(storage, "N2") == 0
     assert _quality_log(storage, "N2")["kr_holidays_loaded"] is True
+    # 목록이 수집 연도를 안 덮으면(2026 목록으로 2027 raw 재정제) 주입돼 있어도 False 다.
+    _write_raw(storage, _raw_key("kis", "KR", run_id="R2"),
+               [_kis_row(stck_bsop_date="20270104", fetched_at="2027-01-04T06:41:00+00:00")])
+    assert normalize_price.run(storage, "N3", input_run_id="R2") == 0
+    log = _quality_log(storage, "N3")
+    assert log["kr_holidays_loaded"] is False and log["kr_holidays_uncovered_years"] == ["2027"]
 
 
 def test_kr_intraday_fetch_loses_to_post_close_fetch(tmp_path):
