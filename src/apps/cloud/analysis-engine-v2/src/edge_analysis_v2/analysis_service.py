@@ -138,9 +138,6 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                 result = store.save_movement(analysis_id,response)
             else:
                 issue = response['issue_detail']
-                issue_sticker = next(f['sticker'] for f in response['factors'] if f['type']=='이슈')
-                if issue['sticker'] != issue_sticker:
-                    raise ValueError('Issue sticker must match its factor')
                 metrics = {}
                 for factor in ('차트','매크로','밸류','수급'):
                     matches = [output for name,args,output in records if name=='get_factor_metrics' and args.get('type')==factor]

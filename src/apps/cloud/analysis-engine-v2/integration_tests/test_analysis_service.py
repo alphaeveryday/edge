@@ -10,6 +10,7 @@ import pytest
 
 from edge_analysis_v2.analysis_service import execute_request
 from edge_analysis_v2.fixture_tools import make_fixture
+from edge_analysis_v2.factor_store import HEADLINES, read_factor_details
 
 
 @pytest.fixture
@@ -85,10 +86,24 @@ def test_outlook_body_and_independent_features_publish_with_factor_cards(run_con
         return {'outlook':{'direction':'상승'},'summary_card':{'title':'공급 확대','summary':'계약 이행을 확인해요.'},
             'factors':[{'type':f,'sticker':'중립','sentence':'기간별 관측값을 확인했어요.'} for f in ('이슈','차트','매크로','밸류','수급')],
             'conclusion':{'title':'계약 이행 확인','supports':[{'label':'계약','tool_run_ids':[reference]}],'burdens':[],'sentence':'공급 이행을 지켜봐요.'},
-            'issue_detail':{'type':'이슈','sticker':'중립','headline':'공급 일정 확인','items':[dict(title_keyword='공급 계약',sentence='물량을 확보했어요.',sentiment='positive',tool_run_ids=[reference])]}}
+            'issue_detail':{'headline':'공급 일정 확인','items':[dict(title_keyword='공급 계약',sentence='물량을 확보했어요.',sentiment='positive',tool_run_ids=[reference])]}}
     result,identity=request('outlook',model)
     assert set(result)=={'outlook','summary_card','detail','factors','conclusion'}
     assert result['detail']['items'][0]['sentences'][0]['is_updated'] is False
     with factory() as connection:
         assert connection.execute('SELECT count(*) FROM outlook_factor_metrics WHERE analysis_id=%s',(identity,)).fetchone()[0]>10
         assert connection.execute('SELECT status FROM outlook_analyses WHERE analysis_id=%s',(identity,)).fetchone()==('completed',)
+        screens = read_factor_details(connection, identity)
+        assert set(screens) == {'이슈', '차트', '매크로', '밸류', '수급'}
+        for factor in result['factors']:
+            screen = screens[factor['type']]
+            assert screen['sticker'] == factor['sticker']
+            if factor['type'] == '이슈':
+                assert set(screen) == {'type', 'sticker', 'headline', 'items'}
+            else:
+                assert set(screen) == {'type', 'sticker', 'headline', 'analysis_at', 'metrics'}
+                assert screen['headline'] == HEADLINES[factor['sticker']]
+                assert screen['metrics']
+                for metric in screen['metrics']:
+                    assert {'key', 'value', 'observed_at'} <= set(metric)
+                    assert set(metric) <= {'key', 'value', 'observed_at', 'subject'}
