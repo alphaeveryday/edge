@@ -69,9 +69,14 @@ def host_samples(d: Path) -> list[dict]:
     return out
 
 
+# ECS 태스크 cgroup — systemd 드라이버(ECS AMI 실측: ecstasks.slice/ecstasks-<id>.slice)와 cgroupfs(ecstasks/<id>) 둘 다.
+# 컨테이너 하위(docker-<id>.scope 등)는 제외한다(합이 태스크 값이다).
+TASK_CG = re.compile(r"/ecstasks\.slice/ecstasks-[0-9a-f]+\.slice$|/ecstasks/[^/]+$")
+
+
 def classify(path: str) -> str:
     if "/ecstasks" in path:
-        return "airflow_task" if re.search(r"/ecstasks/[^/]+$", path) else "airflow_task_child"
+        return "airflow_task" if TASK_CG.search(path) else "airflow_task_child"
     for key, name in (("ecs.service", "ecs_agent"), ("docker.service", "dockerd"), ("containerd.service", "containerd"),
                       ("amazon-ssm-agent", "ssm_agent"), ("edge-obs", "observer"), ("system.slice", "system_other"),
                       ("user.slice", "user")):
@@ -87,9 +92,8 @@ def host_summary(samples, windows):
     avail = [s["mem"].get("MemAvailable") for s in samples]
     swap_total = samples[0]["mem"].get("SwapTotal", 0)
     swap_used = max(s["mem"].get("SwapTotal", 0) - s["mem"].get("SwapFree", 0) for s in samples)
-    # Airflow 태스크 cgroup(ecstasks/<task>) — 경로별 최댓값, OOM 은 경로별 최댓값의 합(재시작으로 새 경로가 생긴다)
-    # ECS 가 태스크마다 만드는 cgroup(…/ecstasks/<task-id>) — 컨테이너 하위 cgroup 은 제외(합이 태스크 값이다).
-    task_paths = {p for s in samples for p in s["cg"] if re.search(r"/ecstasks/[^/]+$", p)}
+    # Airflow 태스크 cgroup(TASK_CG) — 경로별 최댓값, OOM 은 경로별 최댓값의 합(재시작으로 새 경로가 생긴다)
+    task_paths = {p for s in samples for p in s["cg"] if TASK_CG.search(p)}
     oom = sum(max((s["cg"].get(p, {}).get("ev_oom_kill", 0) or 0) for s in samples) for p in task_paths)
     comp_max: dict[str, int] = {}
     comp_mean: dict[str, list] = {}
