@@ -204,6 +204,7 @@ paths:
       tags: [member]
       operationId: memberDeleteAccount
       summary: 회원 탈퇴
+      description: 리프레시 토큰은 즉시 폐기. 이미 발급된 액세스 토큰은 만료까지 서명 검증만으로 통과하며 회원 조회가 있는 엔드포인트만 COMMON401
       security: [{ bearerAuth: [] }]
       responses:
         '200': { $ref: '#/components/responses/Empty' }

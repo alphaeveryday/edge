@@ -59,7 +59,7 @@
 
 회원 테이블은 `member`. `user` 는 PostgreSQL 예약어이기도 하다.
 
-탈퇴(`DELETE /me`): `deleted_at` 을 채우고 같은 트랜잭션에서 `email`·`password_hash`·`provider_subject` 를 NULL 로 지운다. 행은 남겨 글·답글·투표의 작성자 참조를 유지하고, `nick`·`handle` 은 그대로 둔다(익명 표시는 `deleted_at` 으로 판단). 식별 정보를 비우므로 같은 이메일·소셜 계정으로 다시 가입할 수 있다. `UNIQUE(email)`·`UNIQUE(provider, provider_subject)` 는 NULL 을 중복으로 보지 않는다. 함께 `refresh_token` 전부 revoke, `device.member_id` NULL.
+탈퇴(`DELETE /me`): `deleted_at` 을 채우고 같은 트랜잭션에서 `email`·`password_hash`·`provider_subject` 를 NULL 로 지운다. 행은 남겨 글·답글·투표의 작성자 참조를 유지하고, `nick`·`handle` 은 그대로 둔다(익명 표시는 `deleted_at` 으로 판단). 식별 정보를 비우므로 같은 이메일·소셜 계정으로 다시 가입할 수 있다. `UNIQUE(email)`·`UNIQUE(provider, provider_subject)` 는 NULL 을 중복으로 보지 않는다. 함께 `refresh_token` 전부 revoke, `device.member_id` NULL. 액세스 토큰은 서명만 검증하므로 만료(1시간)까지 좋아요·투표 같은 쓰기가 통과한다. 투표 경로에 회원 조회를 붙이지 않기 위한 허용.
 
 ### device
 | 컬럼 | 타입 | 비고 |
