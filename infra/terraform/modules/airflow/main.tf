@@ -340,6 +340,14 @@ resource "aws_iam_role_policy" "task" {
         "logs:FilterLogEvents"]
         Resource = ["${aws_cloudwatch_log_group.tasks.arn}:*"]
       },
+      {
+        # 원격 로그 핸들러(watchtower)가 기동 때 이 그룹에 CreateLogGroup 을 부른다 — 이미 있으면(Terraform 소유) 무시하지만
+        # 권한이 없으면 AccessDenied 로 dag-processor 가 exit 1 로 죽는다(2026-09-29 실측). 이 그룹 하나만.
+        Sid      = "AirflowTaskLogGroupEnsure"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup"]
+        Resource = [aws_cloudwatch_log_group.tasks.arn, "${aws_cloudwatch_log_group.tasks.arn}:*"]
+      },
       ], flatten([for _ in aws_iam_role.verify_execution : [
         {
           # 격리 검증 DAG — 검증 태스크 정의만, 검증 전용 클러스터(이 클러스터)에서만.
