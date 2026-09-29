@@ -181,6 +181,22 @@ def test_dag_commands_run_the_lane_end_to_end_with_the_ledger(tmp_path, vendor, 
     for key, value in {"OPS_RUN_KEY": run_key, "OPS_ORCHESTRATION_STATUS": "SUCCEEDED",
                        "OPS_REPORT_RUN_REF": "edge_source_daily/manual__e2e"}.items():
         monkeypatch.setenv(key, value)
+
+    class NoEcs:
+        """AWS 에 닿지 않는 ECS 대역. 모든 시도의 exit 가 원장에 있으므로 조회가 필요 없어야 한다."""
+
+        def describe_tasks(self, **kwargs):
+            raise AssertionError(f"원장에 종료 증거가 있는데 ECS 를 조회했다: {kwargs}")
+
+    class NoSfn:
+        """이 레인은 SFN 이 없다 — 어떤 SFN 호출도 결함이다."""
+
+        def __getattr__(self, name):
+            raise AssertionError(f"Airflow 전용 레인 대조가 SFN.{name} 을 불렀다")
+
+    from data_pipeline.ops import aws as ops_aws
+    monkeypatch.setattr(ops_aws, "ecs_client", lambda: NoEcs())
+    monkeypatch.setattr(ops_aws, "stepfunctions_client", lambda: NoSfn())
     assert dp_run.main(["reconcile"]) == 0
 
     now = datetime.now(timezone.utc)
