@@ -11,6 +11,7 @@
 import hashlib
 import io
 import json
+from datetime import datetime
 
 import pytest
 
@@ -41,6 +42,10 @@ def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
     pq.write_table(table, buf)
     storage.put_bytes(
         f"{canonical_price_daily_partition(market, trade_date)}/{part}.parquet", buf.getvalue())
+
+
+# 기존 마트 행의 available_at — `_price_row` 기본 fetched_at 과 같다(앞당김 없음).
+_AT = datetime.fromisoformat("2026-07-20T06:00:00+00:00")
 
 
 def _price_row(ticker: str = "005930", trade_date: str = "2026-07-16", **over) -> dict:
@@ -102,7 +107,8 @@ class _FailingQualityStorage(_TrackingStorage):
 
 
 class _FakeCursor:
-    """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
+    """ON CONFLICT DO UPDATE … WHERE (값 distinct OR available_at 앞당김) 시맨틱 흉내 +
+    instrument 조회 응답."""
 
     def __init__(self, log: list, instrument_rows: list, existing: dict,
                  fail_instruments: set[str], fail_confirmations: set[str]):
@@ -124,18 +130,20 @@ class _FakeCursor:
         elif upper.startswith("INSERT INTO PRICE_DAILY"):
             if params[0] in self._fail_instruments:
                 raise ValueError("의도된 개별 행 DB 실패")
-            # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신=(True,) /
-            # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
+            # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신·available_at 앞당김=(True,) /
+            # 같은 값이고 시각도 안 앞당겨지면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key = (params[0], params[1])
             value = (params[2], params[3], params[4])  # close, adj_close, volume
+            available_at = datetime.fromisoformat(params[5])
             prev = self._existing.get(key)
             if prev is None:
                 self._returning, self.rowcount = (False,), 1
-            elif prev == value:
+            elif prev[0] == value and not prev[1] > available_at:
                 self._returning, self.rowcount = None, 0
+                return
             else:
                 self._returning, self.rowcount = (True,), 1
-            self._existing[key] = value
+            self._existing[key] = (value, available_at)
         elif upper.startswith("UPDATE PRICE_DAILY SET DATA_VERSION"):
             if params[1] in self._fail_confirmations:
                 raise ValueError("의도된 재확정 stamp DB 실패")
@@ -364,7 +372,7 @@ def test_실패한_winner는_현재_run_version으로_stamp하지_않는다(tmp_
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [_price_row()])
     conn = _FakeConn(
-        existing={("inst_samsung", "2026-07-16"): (70000.0, 70000.0, 1)},
+        existing={("inst_samsung", "2026-07-16"): ((70000.0, 70000.0, 1), _AT)},
         fail_instruments={"inst_samsung"},
     )
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
@@ -384,7 +392,7 @@ def test_재확정_stamp_실패도_다른_winner를_보존하고_exit2(tmp_path,
     same = (71500.0, 71500.0, 12_345_678)
     conn = _FakeConn(
         instruments={"005930": "inst_samsung", "000660": "inst_hynix"},
-        existing={("inst_samsung", "2026-07-16"): same},
+        existing={("inst_samsung", "2026-07-16"): (same, _AT)},
         fail_confirmations={"inst_samsung"},
     )
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
@@ -568,23 +576,47 @@ def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):
     assert _inserts(conn)[-1][2] == pytest.approx(101.0)
 
 
-def test_같은_키가_여러_part_에_있으면_최신_fetched_at_이_이긴다(tmp_path, monkeypatch):
-    # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 마지막 값이 남아 오래된 가격이 마트에
-    #      고착될 수 있다. canonical 병합과 같은 규칙(최신 fetched_at 우선)을 후보 선정에 적용한다.
+def test_같은_키가_여러_part_에_있으면_canonical_과_같은_승자를_고른다(tmp_path, monkeypatch):
+    # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 가격이 마트에 고착될 수 있다. 후보 선정은
+    #      canonical 병합과 같은 순위여야 한다(ALPHA-1120) — 거래일 정규장 마감 뒤 가장 이른
+    #      수집분. 휴장일 재수집분이 이기면 공식 종가가 아닌 값이 마트에 실린다(09-24 실측).
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_price_row(close=101.0, fetched_at="2026-07-21T06:00:00+00:00")],
+                     [_price_row(close=100.0, fetched_at="2026-07-16T06:41:00+00:00")],
                      part="part-00000")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_price_row(close=100.0, fetched_at="2026-07-20T06:00:00+00:00")],
+                     [_price_row(close=101.0, fetched_at="2026-07-17T06:41:00+00:00")],
                      part="part-00001")
     conn = _FakeConn()
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
     assert load_price_daily.run(storage, "R1", db=_db()) == 0
     [(_, _, close, _, _, available_at, _)] = _inserts(conn)
-    assert close == pytest.approx(101.0)                    # 사전순 마지막 part 가 아니라 최신
-    assert available_at == "2026-07-21T06:00:00+00:00"
+    assert close == pytest.approx(100.0)                    # 사전순 마지막 part 도 최신도 아니다
+    assert available_at == "2026-07-16T06:41:00+00:00"      # available_at 도 D일 수집 시각
+
+
+def test_값이_같아도_available_at_이_앞당겨지면_마트를_갱신한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1120): 옛 raw 재정제로 canonical 승자가 D일 수집분으로 돌아오면 값은 같아도
+    #      "언제 알았나"가 앞당겨진다. 값만 비교해 걸러내면 마트 available_at 이 D+1 에 남아
+    #      복구가 절반만 된다. 반대로 늦은 시각으로는 밀지 않는다(PIT 는 이른 쪽이 사실이다).
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row(fetched_at="2026-07-17T06:41:00+00:00")])
+    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row(fetched_at="2026-07-16T06:41:00+00:00")])
+    assert load_price_daily.run(storage, "R2", db=_db()) == 0
+    assert _log(storage, "R2")["updated"] == 1
+    assert _inserts(conn)[-1][5] == "2026-07-16T06:41:00+00:00"
+
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row(fetched_at="2026-07-18T06:41:00+00:00")])
+    assert load_price_daily.run(storage, "R3", db=_db()) == 0
+    assert _log(storage, "R3")["already_present"] == 1   # 늦은 시각으로는 안 민다
 
 
 def test_적재_실패는_롤백되고_로그에_남는다(tmp_path, monkeypatch):
