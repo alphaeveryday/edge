@@ -1675,7 +1675,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
   시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 보충 배치(`disclosure`) 4
-  + 장중 수급 레인(`investor-intraday`) 3**
+  + 장중 수급 레인(`investor-intraday`) 3**, 여기에 **SFN 없는 Airflow 전용 원천 관측 레인(`source-daily`) 9**
+  (ALPHA-1130 — `sfn_state_name` 이 비어 SFN 셈 밖이고, Reconciler 는 작업별 `evidence_key` 로 증거를 모은다)
   (ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 SFN 원장 밖 1분 세션으로 보낸 몫이었고
@@ -1702,7 +1703,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 30작업이 전부 자기
+  **TagNews 도 ALPHA-610 이 올려 SFN 작업의 `instrumented=False` 는 0개다**(예외: Airflow 전용
+  `MACRO_COLLECTION` — `macro` task-def 미존재, ALPHA-1130 인프라 인계) — SFN 등록 30작업이 전부 자기
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1

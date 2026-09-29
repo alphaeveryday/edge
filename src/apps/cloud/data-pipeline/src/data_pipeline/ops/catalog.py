@@ -47,8 +47,9 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 
 **레인(pipeline_type) 축**(ALPHA-591·724·769·875·987): 카탈로그는 시장 레인(`etf-daily`, 17작업)·
 뉴스 레인(`news`, 6작업)·공시 레인(`disclosure`, 4작업 — 875 가 1분 세션으로 보냈던 것을
-987이 저녁 배치로 되돌렸고, 1068에서 빠진 4작업을 1073이 보충 배치로 복원했다)·장중 수급 레인(`investor-intraday`, 3작업)을 함께
-담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
+987이 저녁 배치로 되돌렸고, 1068에서 빠진 4작업을 1073이 보충 배치로 복원했다)·장중 수급 레인(`investor-intraday`, 3작업)·
+원천 관측 레인(`source-daily`, 9작업 — **SFN 없는 Airflow 전용**, ALPHA-1130)을 함께 담는다. 아래 "등록 30"·
+"제외 5"는 SFN state 가 있는 작업의 셈이고, Airflow 전용 9작업은 `sfn_state_name` 이 비어 그 셈 밖이다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
@@ -61,8 +62,8 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 | `fmp` task-def | CollectFmpNews·CollectFmpPrice·CollectFmpFinancial·CollectFmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 
-**등록 30작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
-ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
+**SFN 등록 30작업은 전부 `instrumented=True` 다**(ALPHA-596 이 krx·dart 를, ALPHA-610 이 TagNews 를
+승격). 예외 하나는 Airflow 전용 `MACRO_COLLECTION`(ALPHA-1130) — 키를 가진 `macro` task-def 가 아직 없다. `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
 **배선이 플래그보다 한 배포 앞선다**(ALPHA-596 #359→#362, ALPHA-610 #379→이 PR). 이미지 CD 와
@@ -168,7 +169,7 @@ class CatalogEntry:
         return self.log_dataset or self.dataset
 
 
-# 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3). 공시 4작업은 875 가 1분 레인으로
+# SFN 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3) + Airflow 전용 9작업(원천 관측, 맨 끝). 공시 4작업은 875 가 1분 레인으로
 # 보냈다가 ALPHA-987이 저녁 배치로 되돌렸고, 1068의 제거 뒤 1073이 보충 배치로 복원했다.
 # sfn_state_name·cli_command·ecs_task_definition 은
 # statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf·investor_intraday_pipeline.tf 의 실제
