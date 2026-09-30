@@ -48,6 +48,7 @@ from .models import (
     NewsConfig,
     PriceConfig,
     PriceTriggersConfig,
+    SourceObservationsConfig,
     StorageConfig,
     YahooPriceConfig,
 )
@@ -91,6 +92,8 @@ class Settings(BaseSettings):
     # OpenDART 공시(disclosure) 는 재무와 별개 잡·별개 API(list.json/document.xml)다. 미설정이면
     # ingest-raw-disclosure 진입점이 fail-loud 한다(공시를 안 돌리는 환경은 생략 가능).
     dart_disclosure: DartDisclosureConfig | None = None
+    # 분석 v2 원천 관측(ALPHA-1130). 미설정이면 그 스텝들이 fail-loud 한다.
+    source_observations: SourceObservationsConfig | None = None
     # BigKinds(국내 뉴스)는 news.sources dict 밖의 독립 벤더다. 미설정이면 ingest-raw
     # --source bigkinds 진입점이 fail-loud 한다(FMP 뉴스만 돌리는 환경은 생략 가능).
     bigkinds_news: BigKindsNewsSource | None = None

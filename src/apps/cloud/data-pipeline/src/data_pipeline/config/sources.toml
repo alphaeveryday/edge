@@ -524,3 +524,10 @@ sector_etf_ids = [
 "2075" = "1030"   # 운송장비·부품 · 78종목
 "2114" = "1032"   # 통신 · 9종목
 "2118" = "1033"   # IT 서비스 · 229종목
+
+# 분석 v2 원천 관측(ALPHA-1130) — 매크로 5계열. 계약 정본은 docs/design/etf-data-storage-plan.md §10.
+# 인증키는 env 로만 주입한다(ECOS·KOSIS·EIA 는 DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__*_API_KEY, FMP 는 price.source).
+[source_observations]
+
+[source_observations.macro]
+enabled = true

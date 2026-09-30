@@ -275,6 +275,35 @@ class DartFinancialSource(BaseModel):
     )
 
 
+class MacroObservationSource(BaseModel):
+    """매크로 5계열 원천(ALPHA-1130, 계약은 설계 §10). 인증키는 env 로만 주입한다:
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=...
+    FMP(USD/KRW·미 국채)는 새 키를 두지 않고 `price.source.api_key`(FMP 공용키 하나, ALPHA-558)를
+    쓴다 — 같은 계정 한도를 두 이름으로 나눠 들고 있으면 소진 판단이 갈린다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    fmp_base_url: NonBlankStr = "https://financialmodelingprep.com/stable"
+    ecos_base_url: NonBlankStr = "https://ecos.bok.or.kr/api"
+    kosis_base_url: NonBlankStr = "https://kosis.kr/openapi"
+    eia_base_url: NonBlankStr = "https://api.eia.gov/v2"
+    ecos_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    kosis_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    eia_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+
+
+class SourceObservationsConfig(BaseModel):
+    """분석 v2 원천 관측 데이터셋(ALPHA-1130)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    macro: MacroObservationSource = MacroObservationSource()
+
+
 class DartDisclosureSource(BaseModel):
     """OpenDART 국내 공시(disclosure filing) 소스 (disclosures raw).
 
