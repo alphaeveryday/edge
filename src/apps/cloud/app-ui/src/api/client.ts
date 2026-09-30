@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, Me, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, Me, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -56,6 +56,8 @@ export interface CommunityApi {
   toggleLike(id: string): Promise<Post>;
   voteStat(code: EtfCode): Promise<VoteStat>;
   vote(code: EtfCode, choice: VoteChoice): Promise<VoteStat>;
+  report(target: { type: 'post' | 'reply'; id: string }, reason: ReportReason): Promise<void>;
+  block(handle: string): Promise<void>;
 }
 
 export interface MemberApi {

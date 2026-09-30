@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
-import { useDeletePost, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
+import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
+import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { useRequireLogin } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { colors, PAGE_X } from '@/theme/tokens';
@@ -21,20 +22,31 @@ export default function Post() {
   const toast = useToast((s) => s.show);
   const [draft, setDraft] = useState('');
   const [more, setMore] = useState(false);
+  const [target, setTarget] = useState<ReportTarget | null>(null);
+  const [reveal, setReveal] = useState(false);
+  const { data: me } = useMe();
   const requireLogin = useRequireLogin();
+  const openReport = (t: ReportTarget) => requireLogin('신고', () => setTarget(t));
   const send = () => {
     const t = draft.trim();
     if (!t) return;
     requireLogin('답글', () => reply.mutate(t, { onSuccess: () => setDraft('') }));
   };
-  const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); if (router.canGoBack()) router.back(); else router.replace('/(tabs)/community'); toast('글을 지웠어요'); } });
+  const leave = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/community'));
+  const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); leave(); toast('글을 지웠어요'); } });
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.navWrap}>
-        <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : toast('신고를 접수했어요'))} />
+        <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle }))} />
       </View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
-        {p && (
+        {p?.blocked && !reveal && (
+          <View style={[styles.post, styles.cover]}>
+            <Text style={styles.coverText}>차단한 사용자의 글이에요</Text>
+            <Pressable onPress={() => setReveal(true)} hitSlop={8}><Text style={styles.coverLink}>보기</Text></Pressable>
+          </View>
+        )}
+        {p && (!p.blocked || reveal) && (
           <View style={styles.post}>
             <View style={styles.head}>
               <Avatar label={p.author.name} bg={p.author.avatarBg} size={42} />
@@ -73,6 +85,12 @@ export default function Post() {
               <View style={styles.replyHead}>
                 <Text numberOfLines={1} style={styles.replyName}>{r.author.name}</Text>
                 <Text style={styles.replyTime}>{r.time}</Text>
+                <View style={{ flex: 1 }} />
+                {r.author.handle !== me?.handle && (
+                  <Pressable onPress={() => openReport({ type: 'reply', id: r.id, handle: r.author.handle })} hitSlop={10} accessibilityLabel="답글 신고">
+                    <Text style={styles.replyMore}>⋯</Text>
+                  </Pressable>
+                )}
               </View>
               <Text style={styles.replyBody}>{r.body}</Text>
             </View>
@@ -85,6 +103,7 @@ export default function Post() {
           <Text style={[styles.send, { color: draft.trim() ? colors.primary : colors.textDisabled }]}>게시</Text>
         </Pressable>
       </View>
+      <ReportSheet target={target} onClose={() => setTarget(null)} onBlocked={() => target?.type === 'post' && leave()} />
       <BottomSheet open={more} onClose={() => setMore(false)}>
         <SheetHead title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." />
         <View style={styles.sheetBtns}>
@@ -117,6 +136,10 @@ const styles = StyleSheet.create({
   replyHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   replyName: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, maxWidth: 110 },
   replyTime: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
+  replyMore: { fontFamily: fam.bold, fontSize: 16, color: colors.textFaint, paddingHorizontal: 4 },
+  cover: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 22 },
+  coverText: { fontFamily: fam.medium, fontSize: 15, color: colors.textMuted },
+  coverLink: { fontFamily: fam.bold, fontSize: 15, color: colors.primary },
   replyBody: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
   composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.white },
   input: { flex: 1, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 12, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },

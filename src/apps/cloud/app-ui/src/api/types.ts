@@ -52,6 +52,8 @@ export interface Post {
   liked: boolean;
   views?: number;
   mine?: boolean;
+  // 내가 차단한 작성자의 글. 글 상세에서만 옴
+  blocked?: boolean;
 }
 
 export interface Candle {
@@ -198,9 +200,11 @@ export interface Me {
   disclaimerAcceptedAt?: string;
 }
 
+export type ReportReason = 'spam' | 'abuse' | 'sexual' | 'scam' | 'etc';
+
 export interface Reply {
   id: string;
-  author: { name: string; avatarBg: string };
+  author: { name: string; handle: string; avatarBg: string };
   time: string;
   body: string;
 }

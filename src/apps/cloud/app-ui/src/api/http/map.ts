@@ -39,7 +39,7 @@ export const me = (m: WireMe): Me => ({ ...m, avatarBg: bgOf(m.handle) });
 export interface WirePost {
   id: string; etf: { code: string; theme: string; short: string }; author: { name: string; handle: string }; time: string;
   title?: string; body: string; quoteTag?: string; repostOf?: { name: string; handle: string; time: string; body: string };
-  like: number; reply: number; repost: number; liked: boolean; views?: number; mine?: boolean;
+  like: number; reply: number; repost: number; liked: boolean; views?: number; mine?: boolean; blocked?: boolean;
 }
 export const post = (p: WirePost): Post => ({
   ...p,
@@ -50,7 +50,7 @@ export const post = (p: WirePost): Post => ({
 });
 
 export interface WireReply { id: string; author: { name: string; handle: string }; time: string; body: string }
-export const reply = (r: WireReply): Reply => ({ id: r.id, author: { name: r.author.name, avatarBg: bgOf(r.author.handle) }, time: ago(r.time), body: r.body });
+export const reply = (r: WireReply): Reply => ({ id: r.id, author: { ...r.author, avatarBg: bgOf(r.author.handle) }, time: ago(r.time), body: r.body });
 
 export interface WireVoteCount { buys: number; waits: number; sells: number; source: string }
 // 서버 인원 수 기반 비율과 앱이 기억한 내 선택

@@ -19,9 +19,9 @@ const ACCOUNTS: Record<string, string> = { 'jisoo.kim@gmail.com': 'password' };
 const notis = NOTIFICATIONS.map((n) => ({ ...n }));
 const replies: Record<string, Reply[]> = {
   p1: [
-    { id: 'r1', author: { name: '분할매수중', avatarBg: '#0E8A6C' }, time: '32분', body: '반도체TOP10 저도 같은 생각이에요. 다만 강력 상승 판단이 유지되는지 한 주 더 보려고요.' },
-    { id: 'r2', author: { name: '장투합니다', avatarBg: '#8B34E0' }, time: '1시간', body: '저는 숫자가 나온 다음에 들어가요. 지금은 기대만 앞서 있어요.' },
-    { id: 'r3', author: { name: '초보투자자', avatarBg: '#E8A13D' }, time: '2시간', body: '이거 초보가 봐도 되는 건가요? 설명 감사합니다.' },
+    { id: 'r1', author: { name: '분할매수중', handle: '@split_buy', avatarBg: '#0E8A6C' }, time: '32분', body: '반도체TOP10 저도 같은 생각이에요. 다만 강력 상승 판단이 유지되는지 한 주 더 보려고요.' },
+    { id: 'r2', author: { name: '장투합니다', handle: '@long_hold', avatarBg: '#8B34E0' }, time: '1시간', body: '저는 숫자가 나온 다음에 들어가요. 지금은 기대만 앞서 있어요.' },
+    { id: 'r3', author: { name: '초보투자자', handle: '@newbie', avatarBg: '#E8A13D' }, time: '2시간', body: '이거 초보가 봐도 되는 건가요? 설명 감사합니다.' },
   ],
 };
 let seq = 100;
@@ -205,7 +205,7 @@ export const mockClient: ApiClient = {
     },
     replies: (id) => delay((replies[id] ?? []).map((r) => ({ ...r }))),
     reply: (id, body) => {
-      const r: Reply = { id: 'r' + ++seq, author: { name: ME.nick, avatarBg: ME.avatarBg }, time: '방금', body };
+      const r: Reply = { id: 'r' + ++seq, author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg }, time: '방금', body };
       replies[id] = [...(replies[id] ?? []), r];
       const p = posts.find((x) => x.id === id);
       if (p) p.reply += 1;
@@ -228,6 +228,8 @@ export const mockClient: ApiClient = {
       if (i >= 0) posts.splice(i, 1);
       return delay(undefined, 40);
     },
+    report: () => delay(undefined, 40),
+    block: () => delay(undefined, 40),
     posts: (code) => delay(posts.filter((p) => p.etf.code === code && !p.id.startsWith('p')).map((p) => ({ ...p }))),
     voteStat: (code) => delay(voteStatOf(code)),
     vote: (code, choice) => {

@@ -90,10 +90,13 @@ export const httpClient: ApiClient = {
     mine: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine' } })).items),
     // 내 좋아요와 내 글 판정용 요청자 동봉
     get: async (id) => post(await request<m.WirePost>('GET', `/posts/${id}`)),
-    replies: async (id) => (await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`, { auth: false })).items.map(m.reply),
+    // 차단한 작성자 제외용 요청자 동봉
+    replies: async (id) => (await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`)).items.map(m.reply),
     reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
     create: async (input) => post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
+    report: (target, reason) => request<void>('POST', '/reports', { body: { targetType: target.type, targetId: target.id, reason } }),
+    block: (handle) => request<void>('PUT', `/blocks/${encodeURIComponent(handle)}`),
     // 현재 좋아요 여부 조회 후 추가와 취소 분기
     toggleLike: async (id) => {
       const cur = await request<m.WirePost>('GET', `/posts/${id}`);

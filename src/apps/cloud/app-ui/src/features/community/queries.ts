@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
-import type { Me, VoteStat, VoteChoice, Post } from '@/api';
+import type { Me, VoteStat, VoteChoice, Post, ReportReason } from '@/api';
 import { useRequireLogin, useSession } from '@/store/session';
 
 export const useMyPosts = () => useQuery({ queryKey: ['community', 'mine'], queryFn: () => api.community.mine() });
@@ -67,4 +67,14 @@ export const useCreatePost = () => {
 export const useDeletePost = () => {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (id: string) => api.community.remove(id), onSuccess: () => invalidateLists(qc) });
+};
+
+export const useReport = () => useMutation({
+  mutationFn: (v: { target: { type: 'post' | 'reply'; id: string }; reason: ReportReason }) => api.community.report(v.target, v.reason),
+});
+
+// 차단한 작성자의 글·답글이 목록에서 빠지도록 커뮤니티 조회 전부 갱신
+export const useBlock = () => {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (handle: string) => api.community.block(handle), onSuccess: () => qc.invalidateQueries({ queryKey: ['community'] }) });
 };
