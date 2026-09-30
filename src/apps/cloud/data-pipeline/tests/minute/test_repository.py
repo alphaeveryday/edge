@@ -41,7 +41,7 @@ def make_ledger(db):
 def plan(ledger, **overrides):
     args = dict(
         dataset="price_minute",
-        source_group="toss",
+        source_group="kis",   # 지연 규칙(scheduled_at)은 KIS 세션 것이다 — 토스는 window_end 그대로
         session_date=SESSION_DATE,
         universe_version="univ-fixture-v1",
         universe_hash="a" * 64,
@@ -98,7 +98,7 @@ class TestPlanSession:
         # 벤더 확정 층에 들어와야 bar 가 있다 — models.scheduled_at_for)
         db = FakeMinuteDB()
         make_ledger(db).plan_session(
-            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            dataset="price_minute", source_group="kis", session_date=SESSION_DATE,
             universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
         )
         first = min(db.windows.values(), key=lambda w: w["window_start"])
@@ -115,13 +115,24 @@ class TestPlanSession:
         """
         db = FakeMinuteDB()
         make_ledger(db).plan_session(
-            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            dataset="price_minute", source_group="kis", session_date=SESSION_DATE,
             universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
         )
         rows = sorted(db.windows.values(), key=lambda w: w["window_start"])
         assert rows[-1]["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert all(w["scheduled_at"] == w["window_end"] + timedelta(seconds=WINDOW_SETTLE_SEC)
                    for w in rows)
+
+    def test_toss_session_windows_are_not_delayed(self):
+        """토스 세션은 `window_end` 그대로다 — 지연은 KIS 응답 형상(확정 층) 때문이고 토스
+        봉은 창이 닫히면 최종이다. 같은 dataset 이라 dataset 만 보면 토스 창과 그 트리거가
+        이유 없이 70초 늦어진다(봇 P2)."""
+        db = FakeMinuteDB()
+        make_ledger(db).plan_session(
+            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
+        )
+        assert all(w["scheduled_at"] == w["window_end"] for w in db.windows.values())
 
     def test_news_session_close_window_is_not_delayed(self):
         """같은 plan_session 을 쓰는 뉴스 세션엔 안 건다 — 종가 단일가는 가격 얘기고,

@@ -59,14 +59,21 @@ WINDOW_SETTLE_SEC = 70
 # 같은 `plan_session` 을 쓰지만 기다릴 이유가 없고, 지연은 뉴스 realtime 레인의 추출·조립을
 # 그만큼 늦춘다. 업종지수도 다른 TR·다른 응답 형상이라 대상이 아니다.
 PRICE_MINUTE_DATASET = "price_minute"
+# 지연이 **필요 없는** 가격 소스. 토스 `timestamp` 는 구간 끝 라벨이고 창이 닫히면 그 봉이
+# 곧 최종이라(ALPHA-682 실측) 기다릴 층이 없다 — 지연은 KIS 응답 형상의 문제다. 새 소스는
+# 실측 전까지 지연 쪽(보수)으로 둔다 — 안 기다려서 틀리는 쪽이 조용하다.
+UNSETTLED_PRICE_SOURCE_GROUPS = frozenset({"toss"})
 
 
-def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
+def scheduled_at_for(window_end: datetime, *, dataset: str,
+                     source_group: str | None = None) -> datetime:
     """window 가 claim 가능해지는 시각.
 
     가격 창은 `window_end + WINDOW_SETTLE_SEC` 다 — 구간이 닫히는 것만으로는 부족하고,
     벤더 응답의 **확정 층**에 들어와야 한다(상수 주석). 마감 창(15:29)도 예외가 아니다 —
-    종가 단일가는 세션 안에서 못 받는다(WINDOW_SETTLE_SEC 주석).
+    종가 단일가는 세션 안에서 못 받는다(WINDOW_SETTLE_SEC 주석). 토스 세션
+    (`UNSETTLED_PRICE_SOURCE_GROUPS`)은 그 층이 없어 `window_end` 그대로다 — `source_group`
+    을 안 넘기면 지연 쪽으로 둔다(모르는 소스를 안 기다리는 쪽이 조용히 틀린다).
 
     ⚠️ 이전 규칙(15:20~15:30 열 창을 통째로 15:31 로)은 "접수 구간에 벤더가 직전 봉을
     거래량째 복제한다"(08-05 실측)를 벤더 결함으로 읽은 것이었다. 실제로는 **요청 라벨 행 =
@@ -86,7 +93,7 @@ def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
         # 에서는 15:30 이 마감으로 잡히지만 UTC 호스트에선 KST 00:30 이라 안 걸린다.
         # 이 모듈의 계약(모듈 docstring)이 aware 이므로 조용히 넘기지 않는다(Rule 12).
         raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
-    if dataset != PRICE_MINUTE_DATASET:
+    if dataset != PRICE_MINUTE_DATASET or source_group in UNSETTLED_PRICE_SOURCE_GROUPS:
         return window_end
     return window_end + timedelta(seconds=WINDOW_SETTLE_SEC)
 

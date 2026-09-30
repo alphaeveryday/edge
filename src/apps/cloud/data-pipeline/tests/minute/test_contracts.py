@@ -294,6 +294,15 @@ class TestTradingHoursClass:
         assert scheduled_at_for(close, dataset="sector_index_minute") == close
         assert scheduled_at_for(close, dataset="price_minute") != close
 
+    def test_toss_price_session_is_not_delayed(self):
+        """토스 `timestamp` 는 구간 끝 라벨이고 창이 닫히면 최종이다 — 기다릴 층이 없다.
+        source_group 을 안 넘기면(모르는 소스) 지연 쪽으로 둔다 — 안 기다려서 틀리는 쪽이 조용하다."""
+        we = datetime(2026, 7, 31, 10, 30, tzinfo=KST)
+        assert scheduled_at_for(we, dataset="price_minute", source_group="toss") == we
+        assert scheduled_at_for(we, dataset="price_minute", source_group="kis") == we + timedelta(
+            seconds=WINDOW_SETTLE_SEC)
+        assert scheduled_at_for(we, dataset="price_minute") == we + timedelta(seconds=WINDOW_SETTLE_SEC)
+
     def test_naive_window_end_is_rejected(self):
         """naive 는 실행 환경 TZ 로 해석돼 호스트마다 결과가 갈린다 — KST 호스트에선
         지연되고 UTC 호스트에선 안 걸린다. 조용히 넘기면 배포 환경에 따라 결함이
