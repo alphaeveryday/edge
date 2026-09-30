@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from edge_analysis_v2.factor_store import FACTOR_KEYS, project_factor_metrics
 from edge_analysis_v2.fixture_tools import FixtureTools
 from edge_analysis_v2.fixture_tools.demo import build_demo_fixture
 
@@ -10,10 +11,10 @@ from edge_analysis_v2.fixture_tools.demo import build_demo_fixture
 @pytest.mark.parametrize("factor", ["차트", "매크로", "밸류", "수급"])
 def test_all_detail_factors_have_real_calculations(factor):
     tools = FixtureTools(build_demo_fixture())
-    result = tools.call("get_factor_metrics", {"type": factor})
-    assert result["result"]["type"] == factor
-    assert result["result"]["metrics"]
-    assert all(r["observed_at"] for r in result["result"]["metrics"])
+    result = tools.call("get_instrument_factors", {"instrument_id": tools.fixture['context']['etf_code'], "factors": [FACTOR_KEYS[factor]]})
+    cards = project_factor_metrics(result, tools.fixture['context']['etf_code'])[factor]
+    assert cards
+    assert all(r["observed_at"] for r in cards)
     json.dumps(result, allow_nan=False)
 
 
@@ -43,6 +44,6 @@ def test_quiet_scenario_has_no_new_news_or_indicator_extreme():
 
 def test_utc_cutoff_means_same_korean_trading_day():
     fixture = build_demo_fixture(analysis_at="2026-09-22T08:30:00+09:00")
-    expected = FixtureTools(fixture).call("get_factor_metrics", {"type": "차트"})["result"]
+    expected = FixtureTools(fixture).call("get_instrument_factors", {"instrument_id": fixture["context"]["etf_code"], "factors": ["chart"]})["result"]["chart"]
     fixture["context"]["analysis_at"] = "2026-09-21T23:30:00+00:00"
-    assert FixtureTools(fixture).call("get_factor_metrics", {"type": "차트"})["result"] == expected
+    assert FixtureTools(fixture).call("get_instrument_factors", {"instrument_id": fixture["context"]["etf_code"], "factors": ["chart"]})["result"]["chart"] == expected

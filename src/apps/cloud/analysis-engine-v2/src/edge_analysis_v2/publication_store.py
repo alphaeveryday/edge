@@ -86,7 +86,11 @@ class PublicationStore:
                     or (analysis["analysis_id"] not in (run["movement_analysis_id"], run["outlook_analysis_id"])
                         and run["analysis_status"] != "completed")):
                 raise ToolInputError(f"Evidence {identity!r} is missing, foreign, future, failed, or not final-eligible")
-            if run["function_name"] not in self.final_tool_names:
+            # Retired tools remain valid only as evidence from completed older publications.
+            archived = (run['function_name'] in {'get_factor_metrics', 'get_chart_metrics'}
+                and run['analysis_status'] == 'completed'
+                and analysis['analysis_id'] not in (run['movement_analysis_id'], run['outlook_analysis_id']))
+            if run["function_name"] not in self.final_tool_names and not archived:
                 hint = ("Call get_issue_evidence(include_body=false) and use its new tool_run_id."
                         if run["function_name"] == "search_news_threads"
                         else "Use a successful final calculation or evidence tool_run_id.")

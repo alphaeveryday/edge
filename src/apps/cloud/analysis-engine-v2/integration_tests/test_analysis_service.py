@@ -11,7 +11,6 @@ import pytest
 from edge_analysis_v2.analysis_service import execute_request
 from edge_analysis_v2.fixture_tools import make_fixture
 from edge_analysis_v2.factor_store import HEADLINES, read_factor_details
-from edge_analysis_v2.audited_execution import ToolExecutionError
 
 
 @pytest.fixture
@@ -46,15 +45,15 @@ def news_reference(kwargs):
     return kwargs['call']('get_issue_evidence',{'news_ids':[kwargs['initial']['news'][0]['news_id']], 'include_body':False})['tool_run_id']
 
 
-def test_missing_screen_data_fails_before_paying_for_model(run_context):
+def test_corrupt_source_data_fails_before_paying_for_model(run_context):
     request, factory = run_context
     fixture = make_fixture()
-    fixture['financials'] = []
+    fixture['macro'].append(dict(fixture['macro'][-1]))
     calls = []
     async def model(**kwargs):
         calls.append(True)
-        raise AssertionError('Model must not run when required screen data is absent')
-    with pytest.raises(ToolExecutionError):
+        raise AssertionError('Model must not run with conflicting source observations')
+    with pytest.raises(ValueError, match="duplicate macro"):
         request('outlook',model,fixture)
     assert not calls
 
@@ -89,25 +88,35 @@ def test_model_failure_keeps_committed_evidence_and_never_publishes(run_context)
         assert connection.execute('SELECT count(*) FROM movement_items WHERE analysis_id=%s',(identity,)).fetchone()==(0,)
 
 
-def test_outlook_body_and_independent_features_publish_with_factor_cards(run_context):
+@pytest.mark.parametrize("missing_financials", [False, True])
+def test_outlook_body_and_independent_features_publish_with_factor_cards(run_context, missing_financials):
     request,factory=run_context
     async def model(**kwargs):
         reference=news_reference(kwargs)
-        for factor in ('차트','매크로','밸류','수급'):
-            kwargs['call']('get_factor_metrics',{'type':factor})
+        kwargs['call']('get_instrument_factors', {'instrument_id': kwargs['initial']['context']['etf_code']})
+        kwargs['call']('get_instrument_factors', {'instrument_id': '000660', 'factors': ['valuation']})
         kwargs['call']('write_outlook_body',{'title':'물량 확대를 확인해요','items':[
             dict(id='supply',title_keyword='공급 확대',sentences=['추가 공급 계약을 확보했어요.'],tool_run_ids=[reference])]})
         return {'outlook':{'direction':'상승'},'summary_card':{'title':'공급 확대','summary':'계약 이행을 확인해요.'},
             'factors':[{'type':f,'sticker':'중립','sentence':'기간별 관측값을 확인했어요.'} for f in ('이슈','차트','매크로','밸류','수급')],
             'conclusion':{'title':'계약 이행 확인','supports':[{'label':'계약','tool_run_ids':[reference]}],'burdens':[],'sentence':'공급 이행을 지켜봐요.'},
             'issue_detail':{'headline':'공급 일정 확인','items':[dict(title_keyword='공급 계약',sentence='물량을 확보했어요.',sentiment='positive',tool_run_ids=[reference])]}}
-    result,identity=request('outlook',model)
+    fixture = make_fixture()
+    if missing_financials:
+        fixture['financials'] = []
+    result,identity=request('outlook',model,fixture)
     assert set(result)=={'outlook','summary_card','detail','factors','conclusion'}
     assert result['detail']['items'][0]['sentences'][0]['is_updated'] is False
     with factory() as connection:
         assert connection.execute('SELECT count(*) FROM outlook_factor_metrics WHERE analysis_id=%s',(identity,)).fetchone()[0]>10
         assert connection.execute('SELECT status FROM outlook_analyses WHERE analysis_id=%s',(identity,)).fetchone()==('completed',)
         screens = read_factor_details(connection, identity)
+        if missing_financials:
+            assert not {'weighted_per', 'weighted_pbr'} & {m['key'] for m in screens['밸류']['metrics']}
+        with connection.cursor() as cur:
+            cur.execute("SELECT output FROM tool_runs r JOIN tool_definitions d USING(tool_id) WHERE outlook_analysis_id=%s AND d.function_name='get_instrument_factors' ORDER BY started_at LIMIT 1", (identity,))
+            saved = cur.fetchone()[0]
+            assert saved['result']['instrument_id'] == fixture['context']['etf_code']
         assert set(screens) == {'이슈', '차트', '매크로', '밸류', '수급'}
         for factor in result['factors']:
             screen = screens[factor['type']]
