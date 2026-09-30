@@ -890,7 +890,7 @@ function PriceJudgmentLedger({ sessionId }: { sessionId: string }) {
             </thead>
             <tbody>
               {data.windows.map((w) => (
-                <tr key={`${w.windowStart}-${w.jobGeneration}`}>
+                <tr key={w.jobId}>
                   <td className="mono t-xs">{kstHhmm(w.windowStart)}</td>
                   <td className="t-xs">
                     {inputLabel(w)}

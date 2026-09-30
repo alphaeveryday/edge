@@ -214,7 +214,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 	 * jsonb 의 {@code ?} 연산자는 JDBC 자리표시자와 겹쳐 {@code jsonb_exists} 를 쓴다.
 	 */
 	private static final String PRICE_JUDGMENTS_SQL = """
-			SELECT j.window_start, w.generation AS window_generation, j.generation AS job_generation,
+			SELECT j.job_id, j.window_start, w.generation AS window_generation, j.generation AS job_generation,
 			       j.status, j.attempt_count, a.artifact_uri, a.artifact_checksum,
 			       r.attempt, r.redrive_generation, r.judged_at, r.tx_anchor_locked,
 			       r.detection_policy_version, r.summary::text AS summary,
@@ -239,7 +239,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			   AND a.generation = j.generation
 			  LEFT JOIN minute_price_judgment r ON r.job_id = j.job_id
 			 WHERE j.session_id = ?
-			 ORDER BY j.window_start, j.generation, r.redrive_generation NULLS FIRST, r.attempt NULLS FIRST
+			 ORDER BY j.window_start, j.generation, j.job_id, r.redrive_generation NULLS FIRST, r.attempt NULLS FIRST
 			""";
 
 	public JdbcMinuteStatusRepository(JdbcTemplate jdbc) {
@@ -346,7 +346,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 	@Override
 	@Transactional(readOnly = true)
 	public List<PriceJudgmentRow> priceJudgments(String sessionId) {
-		return jdbc.query(PRICE_JUDGMENTS_SQL, (rs, i) -> new PriceJudgmentRow(
+		return jdbc.query(PRICE_JUDGMENTS_SQL, (rs, i) -> new PriceJudgmentRow(rs.getString("job_id"),
 				rs.getObject("window_start", OffsetDateTime.class), rs.getInt("window_generation"),
 				rs.getInt("job_generation"), rs.getString("status"), rs.getInt("attempt_count"),
 				rs.getString("artifact_uri"), rs.getString("artifact_checksum"),

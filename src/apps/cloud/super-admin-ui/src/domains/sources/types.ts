@@ -513,6 +513,8 @@ export interface MinuteJudgmentAttempt {
 }
 
 export interface MinuteJudgmentWindow {
+  /** job 단위 — 같은 window·세대에 trigger_schema_version 이 다른 job 이 둘일 수 있다 */
+  jobId: string;
   windowStart: string;
   windowGeneration: number;
   jobGeneration: number;

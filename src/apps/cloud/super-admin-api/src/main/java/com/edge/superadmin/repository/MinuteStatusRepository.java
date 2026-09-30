@@ -96,7 +96,7 @@ public interface MinuteStatusRepository {
 	 * 나온 종목만의 기준선 스냅샷이다(363종 전체를 싣지 않는다). {@code judgedWithBaseline} 은 기준선
 	 * 집합의 종목 수다.
 	 */
-	record PriceJudgmentRow(OffsetDateTime windowStart, int windowGeneration, int jobGeneration,
+	record PriceJudgmentRow(String jobId, OffsetDateTime windowStart, int windowGeneration, int jobGeneration,
 			String jobStatus, int jobAttemptCount, String artifactUri, String artifactChecksum,
 			Integer attempt, Integer redriveGeneration, OffsetDateTime judgedAt, Boolean txAnchorLocked,
 			String detectionPolicyVersion, String summaryJson, String anchorsUsedJson, String txAnchorJson,

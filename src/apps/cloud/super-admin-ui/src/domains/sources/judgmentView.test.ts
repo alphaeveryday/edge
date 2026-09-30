@@ -47,7 +47,7 @@ test('출처 세대 미상과 이력 없음을 추정으로 채우지 않는다'
   assert.match(baseline({ value: 98, source: null, ref: null }), /출처 세대 미상/);
   assert.equal(baseline(undefined), '기준선 기록 없음');
   const w = {
-    windowStart: '2026-10-05T00:01:00Z', windowGeneration: 2, jobGeneration: 1, jobStatus: 'SUCCEEDED',
+    jobId: 'job-w1', windowStart: '2026-10-05T00:01:00Z', windowGeneration: 2, jobGeneration: 1, jobStatus: 'SUCCEEDED',
     jobAttemptCount: 1, correctedAfter: true, inputRecord: 'NO_HISTORY', artifactUri: null,
     artifactChecksum: null, sourceRecheck: 'NOT_PERFORMED', attempts: [],
   } satisfies MinuteJudgmentWindow;
@@ -57,7 +57,7 @@ test('출처 세대 미상과 이력 없음을 추정으로 채우지 않는다'
 
 test('이력 기록이 있어도 원본 검증 완료로 말하지 않는다', () => {
   const w = {
-    windowStart: '2026-10-05T00:01:00Z', windowGeneration: 1, jobGeneration: 1, jobStatus: 'SUCCEEDED',
+    jobId: 'job-w1', windowStart: '2026-10-05T00:01:00Z', windowGeneration: 1, jobGeneration: 1, jobStatus: 'SUCCEEDED',
     jobAttemptCount: 1, correctedAfter: false, inputRecord: 'RECORDED', artifactUri: 's3://x', artifactChecksum: 'a',
     sourceRecheck: 'NOT_PERFORMED', attempts: [],
   } satisfies MinuteJudgmentWindow;

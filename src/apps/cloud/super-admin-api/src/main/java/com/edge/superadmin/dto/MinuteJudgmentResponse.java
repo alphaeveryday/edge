@@ -21,6 +21,9 @@ import java.util.Map;
  *   <li>{@code sourceRecheck}: 이 조회는 현재 보관된 artifact 본문을 읽지 않는다 — 항상 NOT_PERFORMED.
  *       이력 행이 있다고 파일이 지금 존재하거나 무결하다고 말하지 않는다(INPUT_UNAVAILABLE·
  *       CHECKSUM_MISMATCH 는 본문을 실제로 읽은 경로만 낼 수 있다).</li>
+ *   <li>{@code windows} 는 <b>job 단위</b>다 — job 정체성은 session·window·세대·trigger_schema_version
+ *       ({@code uq_price_window_job_identity})이라 같은 window·세대에 job 이 둘일 수 있고, 그때 둘을 합치면
+ *       한쪽의 실패·기록 부재가 가려진다. {@code jobId} 로 묶는다.</li>
  *   <li>{@code judgedAt} 은 기록 INSERT 의 관측 시각이다. 커밋 순서·인과 순서가 아니다.</li>
  *   <li>{@code txAnchorLocked}: true 는 발화·회수 대상 앵커 행을 잠근 뒤 관측, false 는 무발화의
  *       비잠금 관측이다.</li>
@@ -30,7 +33,7 @@ import java.util.Map;
  */
 public record MinuteJudgmentResponse(String sessionId, String recomputation, List<Window> windows) {
 
-	public record Window(OffsetDateTime windowStart, int windowGeneration, int jobGeneration,
+	public record Window(String jobId, OffsetDateTime windowStart, int windowGeneration, int jobGeneration,
 			String jobStatus, int jobAttemptCount, boolean correctedAfter, String inputRecord,
 			String artifactUri, String artifactChecksum, String sourceRecheck,
 			List<Attempt> attempts) {
@@ -45,7 +48,7 @@ public record MinuteJudgmentResponse(String sessionId, String recomputation, Lis
 	public static MinuteJudgmentResponse from(String sessionId, List<PriceJudgmentRow> rows) {
 		Map<String, List<PriceJudgmentRow>> byJob = new LinkedHashMap<>();
 		for (PriceJudgmentRow r : rows) {
-			byJob.computeIfAbsent(r.windowStart() + "#" + r.jobGeneration(), k -> new ArrayList<>()).add(r);
+			byJob.computeIfAbsent(r.jobId(), k -> new ArrayList<>()).add(r);
 		}
 		List<Window> windows = new ArrayList<>();
 		for (List<PriceJudgmentRow> group : byJob.values()) {
@@ -57,7 +60,7 @@ public record MinuteJudgmentResponse(String sessionId, String recomputation, Lis
 							r.baselinesJson() == null ? "{}" : r.baselinesJson(),
 							r.judgedWithBaseline() == null ? 0 : r.judgedWithBaseline()))
 					.toList();
-			windows.add(new Window(head.windowStart(), head.windowGeneration(), head.jobGeneration(),
+			windows.add(new Window(head.jobId(), head.windowStart(), head.windowGeneration(), head.jobGeneration(),
 					head.jobStatus(), head.jobAttemptCount(),
 					head.windowGeneration() > head.jobGeneration(),
 					head.artifactChecksum() == null ? "NO_HISTORY" : "RECORDED",

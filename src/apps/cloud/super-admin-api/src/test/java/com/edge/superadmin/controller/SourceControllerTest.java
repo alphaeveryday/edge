@@ -857,15 +857,15 @@ class SourceControllerTest {
 		FakeMinuteStatusRepository minute = new FakeMinuteStatusRepository();
 		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
 		minute.judgments.put("sess-p", List.of(
-				new MinuteStatusRepository.PriceJudgmentRow(w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
+				new MinuteStatusRepository.PriceJudgmentRow("job-w0", w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
 						1, 0, w0.plusSeconds(3), true, "test-policy",
 						"{\"fired\": [\"500000\"], \"inserted\": [\"500000\"]}",
 						"{\"500000\": [\"104.000000\", \"2026-10-05T00:00:00+00:00\"]}",
 						"{\"500000\": \"2026-10-05T00:00:00+00:00\"}",
 						"{\"500000\": {\"value\": 100, \"source\": \"open_fallback\", \"ref\": \"W0@g1\"}}", 2),
-				new MinuteStatusRepository.PriceJudgmentRow(w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
+				new MinuteStatusRepository.PriceJudgmentRow("job-w0", w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
 						2, 0, w0.plusSeconds(90), false, "test-policy", "{\"fired\": []}", "{}", "{}", null, 2),
-				new MinuteStatusRepository.PriceJudgmentRow(w0.plusMinutes(1), 2, 1, "SUCCEEDED", 1, null, null,
+				new MinuteStatusRepository.PriceJudgmentRow("job-w1", w0.plusMinutes(1), 2, 1, "SUCCEEDED", 1, null, null,
 						null, null, null, null, null, null, null, null, null, null)));
 		MockMvc mvc = minuteMvc(minute);
 		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-p"))
@@ -887,6 +887,29 @@ class SourceControllerTest {
 				.andExpect(jsonPath("$.result.windows.length()").value(0));
 		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", " "))
 				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 판정_근거는_같은_창_같은_세대라도_job_별로_묶는다() throws Exception {
+		// WHY: job 정체성은 session·window·세대·trigger_schema_version 이라(uq_price_window_job_identity)
+		//      같은 window·세대에 job 이 둘일 수 있다. window·세대로 묶으면 뒤 job 의 실패·기록 부재가
+		//      앞 job 의 SUCCEEDED 뒤에 숨는다 — 두 job 은 두 행이어야 한다.
+		FakeMinuteStatusRepository minute = new FakeMinuteStatusRepository();
+		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
+		minute.judgments.put("sess-two", List.of(
+				new MinuteStatusRepository.PriceJudgmentRow("job-v1", w0, 1, 1, "SUCCEEDED", 1, "s3://lake/w0", "a".repeat(64),
+						1, 0, w0.plusSeconds(3), false, "test-policy", "{\"fired\": []}", "{}", "{}", null, 2),
+				new MinuteStatusRepository.PriceJudgmentRow("job-v2", w0, 1, 1, "DEAD", 5, "s3://lake/w0", "a".repeat(64),
+						null, null, null, null, null, null, null, null, null, null)));
+		minuteMvc(minute).perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-two"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.windows.length()").value(2))
+				.andExpect(jsonPath("$.result.windows[0].jobId").value("job-v1"))
+				.andExpect(jsonPath("$.result.windows[0].jobStatus").value("SUCCEEDED"))
+				.andExpect(jsonPath("$.result.windows[0].attempts.length()").value(1))
+				.andExpect(jsonPath("$.result.windows[1].jobId").value("job-v2"))
+				.andExpect(jsonPath("$.result.windows[1].jobStatus").value("DEAD"))
+				.andExpect(jsonPath("$.result.windows[1].attempts.length()").value(0));
 	}
 
 	private MockMvc minuteMvc(FakeMinuteStatusRepository minute) {
