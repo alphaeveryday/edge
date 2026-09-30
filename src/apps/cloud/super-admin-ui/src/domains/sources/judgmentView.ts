@@ -78,7 +78,7 @@ export function txObservation(a: MinuteJudgmentAttempt, e: string): string {
 
 export function baseline(b: MinuteJudgmentBaseline | undefined): string {
   if (!b) return '기준선 기록 없음';
-  if (b.source === null) return `${b.value} · 기록 도입 전 확정된 시가(출처 세대 미상)`;
+  if (b.ref === 'pre-record') return `${Number(b.value)} · 기록 도입 전 확정된 시가(출처 세대 미상)`;
   const src = b.source === 'prev_close' ? `전일 종가(기준일 ${b.ref})` : `시가 폴백(${b.ref})`;
   return `${Number(b.value)} · ${src}`;
 }

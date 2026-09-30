@@ -490,10 +490,10 @@ export interface MinuteDailyStatus {
 
 /* ── 가격 판정 근거(§33.12 로컬) — 서버 계약 MinuteJudgmentResponse ── */
 export interface MinuteJudgmentBaseline {
-  value: number | string | null;
-  /** null = 기록 도입 전에 확정된 시가(출처 세대 미상) */
-  source: 'prev_close' | 'open_fallback' | null;
-  ref: string | null;
+  value: number | string;
+  source: 'prev_close' | 'open_fallback';
+  /** 전일 종가 기준일 | 시가 출처 window@세대 | 'pre-record' = 기록 도입 전 확정된 시가(출처 세대 미상) */
+  ref: string;
 }
 
 export interface MinuteJudgmentAttempt {

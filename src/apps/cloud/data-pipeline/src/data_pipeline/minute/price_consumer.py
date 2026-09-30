@@ -77,6 +77,8 @@ KR_MARKET_CODES = ("XKRX", "XKOS", "XKON")
 # 저장 시 반올림돼 `anchor_price <> 기준선` 이 영구히 참이 되고, 복귀 구간 매 window 마다
 # 회수 사건이 재발행된다(회수는 구간당 1회라는 계약이 깨진다).
 ANCHOR_SCALE = Decimal("0.000001")
+# 기록 도입 전에 확정된 시가의 스냅샷 ref — 출처 window@세대를 모른다는 표식
+PRE_RECORD_REF = "pre-record"
 # Postgres NUMERIC 은 절반을 0 에서 **먼 쪽**으로 올린다. 파이썬 기본(ROUND_HALF_EVEN)
 # 으로 맞추면 정확히 절반인 값에서만 저장값과 비교값이 갈려 같은 회귀가 되살아난다.
 ANCHOR_ROUNDING = ROUND_HALF_UP
@@ -987,9 +989,13 @@ class PriceTriggerHandler:
         new_ids: set = set()
         refs = {}
         for entity_id, (source, ref, value) in sorted(judgment["baselines"].items()):
-            if source == "open_fallback":
-                refs[entity_id] = ref       # 확정 tx 가 남긴 스냅샷 ID(없으면 None=도입 전)
+            if source == "open_fallback" and ref is not None:
+                refs[entity_id] = ref       # 확정 tx 가 남긴 스냅샷 ID
                 continue
+            if ref is None:
+                # 기록 도입 전에 확정된 시가 — 출처 세대는 모르지만 **사용값은 남긴다**
+                # (출처 미상과 사용값 미상은 별개다). 다음 판정부터는 _select_opens 가 이 스냅샷을 찾는다.
+                ref = PRE_RECORD_REF
             snapshot_id = hashlib.sha256(json.dumps(
                 [session_id, entity_id, source, ref, str(value)]).encode()).hexdigest()[:32]
             if snapshot_id not in self._committed_baseline_ids:

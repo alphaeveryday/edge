@@ -1359,6 +1359,25 @@ class TestJudgmentRecord:
         snap = db.baseline_snapshots[db.baseline_sets[(fired["baseline_set_id"], "500000")]]
         assert snap["source"] == "open_fallback" and snap["ref"].endswith("@g1")
 
+    def test_open_confirmed_before_record_keeps_used_value(self, tmp_path):
+        # WHY: 장중 배포·구신 consumer 혼재로 시가가 기록 도입 전에 확정되면 스냅샷이 없다.
+        #      출처 세대를 모르는 것과 사용값을 모르는 것은 별개다 — 판정이 실제로 쓴 값은
+        #      'pre-record' 스냅샷으로 남아야 한다. 집합에 NULL 스냅샷을 두면 값이 사라진다.
+        db = FakeMinuteDB()
+        first, second = self._pipeline(db, tmp_path)
+        session_id = first["payload"]["session_id"]
+        for entity, price in (("500000", 100), ("500001", 200)):
+            db.session_opens[(session_id, entity)] = {"status": "OPEN", "open_price": Decimal(price),
+                                                      "reason": None, "source_window": None}
+        handler = build_handler(db, tmp_path)
+        claim_then_run(handler, first)
+        claim_then_run(handler, second)
+        fired = {k[0]: v for k, v in db.judgments.items()}[second["payload"]["job_id"]]
+        snap = db.baseline_snapshots[db.baseline_sets[(fired["baseline_set_id"], "500000")]]
+        assert snap["source"] == "open_fallback" and snap["ref"] == "pre-record"
+        assert Decimal(str(snap["value"])) == Decimal("100.000000")
+        assert all(v is not None for v in db.baseline_sets.values())   # 집합에 NULL 스냅샷 없음
+
     def test_superseded_attempt_leaves_no_record(self, tmp_path):
         db = FakeMinuteDB()
         first, second = self._pipeline(db, tmp_path)

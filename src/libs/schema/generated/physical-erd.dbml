@@ -672,7 +672,7 @@ Table "minute_ingestion_window" {
 Table "minute_price_baseline_set" {
   "set_id" text [not null]
   "entity_id" text [not null]
-  "snapshot_id" text
+  "snapshot_id" text [not null]
 
   indexes {
     ("set_id", "entity_id") [pk]

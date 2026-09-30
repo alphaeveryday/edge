@@ -17,7 +17,7 @@ CREATE TABLE minute_price_baseline_snapshot (
 CREATE TABLE minute_price_baseline_set (
     set_id      TEXT NOT NULL,
     entity_id   TEXT NOT NULL,
-    snapshot_id TEXT REFERENCES minute_price_baseline_snapshot (snapshot_id), -- NULL = 기록 도입 전 확정된 시가
+    snapshot_id TEXT NOT NULL REFERENCES minute_price_baseline_snapshot (snapshot_id), -- 도입 전 확정 시가도 ref='pre-record' 스냅샷을 남긴다
     PRIMARY KEY (set_id, entity_id)
 );
 

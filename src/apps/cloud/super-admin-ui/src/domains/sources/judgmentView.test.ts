@@ -44,7 +44,7 @@ test('비잠금 관측과 읽은 뒤 바뀐 앵커를 구분한다', () => {
 });
 
 test('출처 세대 미상과 이력 없음을 추정으로 채우지 않는다', () => {
-  assert.match(baseline({ value: 98, source: null, ref: null }), /출처 세대 미상/);
+  assert.match(baseline({ value: 98, source: 'open_fallback', ref: 'pre-record' }), /^98 · .*출처 세대 미상/);
   assert.equal(baseline(undefined), '기준선 기록 없음');
   const w = {
     jobId: 'job-w1', windowStart: '2026-10-05T00:01:00Z', windowGeneration: 2, jobGeneration: 1, jobStatus: 'SUCCEEDED',
