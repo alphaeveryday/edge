@@ -203,6 +203,21 @@ def test_in_force_snapshot_is_chosen_per_etf(tmp_path):
     assert coverage["etfs_without_snapshot_at_start"] == []
 
 
+@pytest.mark.parametrize("sj_divs,metric", [(("IS", "CIS"), "revenue"), (("BS",), "bps")])
+def test_lines_without_a_currency_are_rejected_not_assumed_krw(sj_divs, metric):
+    # WHY(봇 P2): 금액 단위는 응답의 currency=KRW 가 세운다. 필드가 빠진 줄을 원으로 가정하면 단위를 확인하지
+    # 않은 값이 원 단위 매출·EPS·BPS 로 적힌다 — 실 응답은 모든 줄에 KRW 를 싣는다(live 픽스처 6건 전수).
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+    body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    for line in body["list"]:
+        if line["sj_div"] in sj_divs:
+            del line["currency"]
+    rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body},
+                                             json.loads(shares(SAMSUNG, "2026", "11012")))
+    assert not [r for r in rows if r["metric"] == metric]
+    assert any("non_krw_currency" in r["reasons"] and r["metric"] == metric for r in rejects)
+
+
 def test_bps_refuses_non_krw_equity_and_bad_receipt_numbers():
     # WHY(리뷰): 달러 자본을 원/주로 적으면 단위가 조용히 틀린다. 형식이 틀린 접수번호 한 줄은 DB CHECK 에서
     # 그 실행의 적재 전체(다른 회사 포함)를 롤백시킨다 — 정제에서 걸러야 한다.
