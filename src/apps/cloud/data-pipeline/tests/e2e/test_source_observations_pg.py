@@ -247,8 +247,13 @@ def test_sector_as_of_and_constituent_coverage_at_analysis_time(tmp_path, conn):
     assert so.normalize(storage, so_sector.SECTOR, f"{RUN}s_norm", f"{RUN}s_raw", producer="normalize_sector") == 0
     assert so.load(storage, so_sector.SECTOR, _db(), f"{RUN}s_load", input_run_id=f"{RUN}s_norm", pending=False,
                    producer="load_sector") == 0
-    received = conn.execute("SELECT min(received_at) FROM sector_classification WHERE raw_run_id=%s",
-                            (f"{RUN}s_raw",)).fetchone()[0]
+    first, received = conn.execute("SELECT min(received_at), max(received_at) FROM sector_classification WHERE raw_run_id=%s",
+                                   (f"{RUN}s_raw",)).fetchone()
+    # 두 응답 사이: 이름 표에 기대지 않는 ETF 행(코드 0000)은 마스터 수신부터 보이고, 이름을 붙인 행은 아직 없다(봇 P2).
+    if first < received:
+        between = dict(conn.execute("SELECT instrument_code, found FROM sector_classification_as_of(%s, %s)",
+                                    (first, ["005930", "091160"])).fetchall())
+        assert between == {"005930": False, "091160": True}
     rows = conn.execute("SELECT instrument_code, found, large_code, large_name, small_code FROM"
                         " sector_classification_as_of(%s, %s)", (received, ["005930", "091160", "123456"])).fetchall()
     assert rows == [("005930", True, "0013", "전기·전자", None),      # 소분류 0000 → 분류 없음
