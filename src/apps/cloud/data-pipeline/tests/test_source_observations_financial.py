@@ -669,3 +669,27 @@ def test_share_table_validity_is_judged_independently_of_the_equity_line():
         detail = json.loads(versions[(2026, "11012", "CFS")]["detail"])
         assert detail["shares"] == "error" and detail["shares_detail"] == "share_count_unreadable"
         assert versions[(2026, "11012", "CFS")]["status"] == "CONFIRMED"
+
+
+def test_share_sums_are_checked_per_column_and_for_empty_statement_versions(tmp_path):
+    # WHY(리뷰 19차): 자기주식 한 칸 파손이 발행수 합 불일치 검사를 끄면 모순된 분모로 통상 BPS 가 나간다. 그리고
+    # 013 재무제표 판본도 분모 표 파손은 shares=error 여야 한다(재무제표 유무와 무관).
+    body = json.loads(shares(SAMSUNG, "2026", "11012", preferred=20))
+    for r in body["list"]:
+        if r["se"] == "보통주":
+            r["istc_totqy"] = "90"            # 90 + 20 ≠ 1000
+        if r["se"] == "우선주":
+            r["tesstk_co"] = "broken"
+    assert dart_fundamental.share_table_problem(body, "2026-06-30") == "share_rows_inconsistent"
+    responses = full_responses(SAMSUNG)
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = NO_DATA
+    broken = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for r in broken["list"]:
+        r["stlm_dt"] = "2025-12-31"
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(broken).encode()
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    _, versions = _versions(storage)
+    detail = json.loads(versions[(2026, "11012", "CFS")]["detail"])
+    assert detail["statement"] == "empty" and detail["shares"] == "error" and detail["shares_detail"] == "share_rows_inconsistent"

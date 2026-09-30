@@ -335,11 +335,11 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
     treasury = {se: counts[(se, "tesstk_co")] for se in rows if rows[se] is not None}
     if any(issued[se] is not None and treasury[se] is not None and treasury[se] > issued[se] for se in issued):
         return "share_rows_inconsistent"
-    if all(se in issued for se in ("합계", "보통주", "우선주")) and None not in issued.values() \
-            and None not in treasury.values() and (
-            issued["보통주"] + issued["우선주"] != issued["합계"]
-            or treasury["보통주"] + treasury["우선주"] != treasury["합계"]):
-        return "share_rows_inconsistent"
+    if all(se in issued for se in ("합계", "보통주", "우선주")):
+        # 발행수·자기주식 합계는 각각 따로 본다 — 한 열의 파손이 다른 열의 확인된 모순을 가리지 않게.
+        for column in (issued, treasury):
+            if None not in column.values() and column["보통주"] + column["우선주"] != column["합계"]:
+                return "share_rows_inconsistent"
     return None
 
 

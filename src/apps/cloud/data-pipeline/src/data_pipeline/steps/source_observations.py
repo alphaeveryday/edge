@@ -913,11 +913,6 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             if share is not None:
                 # 분모 응답을 쓴 판본의 수신시각은 두 응답 중 늦은 쪽 — bps 행과 같은 규칙.
                 version["received_at"] = max(version["received_at"], share["fetched_at"])
-                # 표 자체의 파손(접수번호·기준일·종류별 합·숫자)은 자본 계정과 무관하게 분모 미확정이다 —
-                # 손익 지표와 판본은 유지하고 BPS 만 BPS_UNCONFIRMED 로 읽히게.
-                problem = dart_fundamental.share_table_problem(share["body_json"], dart_fundamental._period_end(year, code))
-                if problem:
-                    version["detail"].update({"shares": "error", "shares_detail": problem})
             version["rcept_no"] = next((ln.get("rcept_no") for ln in statement["body_json"]["list"]
                                         if dart_fundamental.RCEPT_NO.fullmatch(str(ln.get("rcept_no")))), None)
         try:
@@ -968,6 +963,13 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             version["detail"].update({
                 "shares": "error" if rejected else (share_entry["status"] if share_entry else "missing"),
                 "shares_detail": rejected or (share_entry.get("detail") if share_entry else None)})
+        # 표 자체의 파손(접수번호·기준일·종류별 합·합계 숫자)은 자본 계정·재무제표 유무와 무관하게 분모 미확정이다 —
+        # 손익 지표와 판본은 유지하고 BPS 만 BPS_UNCONFIRMED 로 읽히게. 한 규칙(share_table_problem)을 _bps 와 같이 쓴다.
+        share = shares.get((corp_code, year, code))
+        if share is not None and version["detail"]["shares"] == "ok":
+            problem = dart_fundamental.share_table_problem(share["body_json"], dart_fundamental._period_end(year, code))
+            if problem:
+                version["detail"].update({"shares": "error", "shares_detail": problem})
         day = rcept_dates.get(version["rcept_no"]) if version["rcept_no"] else None
         received = version["received_at"]
         # 확정 못 한 시도는 수신시각부터만 보인다 — 응답에 섞인 접수번호로 실패를 공개일로 소급하면
