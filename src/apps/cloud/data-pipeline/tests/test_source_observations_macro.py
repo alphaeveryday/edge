@@ -408,3 +408,37 @@ def test_kosis_rows_without_series_identifiers_are_rejected(drop):
         row.pop(drop)
     good, bad = macro_series.parse("kr_cpi_yoy", json.dumps(rows).encode())
     assert good == [] and bad and all("series_identity_mismatch" in r["reasons"] for r in bad)
+
+
+def test_rate_limit_stops_that_vendor_only(tmp_path):
+    # WHY(봇 P2): 429·4xx 는 키·한도·차단이라 같은 공급자의 남은 창도 같은 답이다 — 계속 부르면 한도만 태우고 실패 기록만
+    # 늘어난다. 그 공급자의 남은 창·계열은 부르지 않고 오류로 남기고, 다른 공급자는 계속 받는다.
+    from data_pipeline.sources.http import StopFetch
+
+    routes = dict(ALL_ROUTES)
+    routes["treasury-rates"] = StopFetch("429", status=429)
+    src, client = source(routes)
+    storage = LocalStorage(tmp_path)
+    assert collect(storage, "run_rl", src, series=["us_10y_yield", "kr_10y_yield"], from_date="2025-01-01",
+                   to_date="2026-07-28") == 2
+    fmp_calls = [u for u in client.calls if "treasury-rates" in u]
+    assert len(fmp_calls) == 1                                           # 첫 창에서 멈춘다(90일 창이 여럿이어도)
+    assert any("817Y002" in u for u in client.calls)                     # ECOS 는 계속
+    manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("macro_observation", "run_rl")))
+    fmp = [o for o in manifest["objects"] if o["series_id"] == "us_10y_yield"]
+    assert len(fmp) > 1 and fmp[0]["detail"] == "http_429"
+    assert {o["detail"] for o in fmp[1:]} == {"vendor_stopped:http_429"} and {o["status"] for o in fmp} == {"error"}
+
+
+@pytest.mark.parametrize("step", ["ingest-raw-macro", "normalize-macro", "load-macro"])
+def test_observation_steps_refuse_the_unused_source_flag(tmp_path, step):
+    # WHY(봇 P2): `--source ecos` 로 ECOS 만 복구하려는 운영자의 인자를 조용히 버리면 다섯 공급자를 다 부른다.
+    from types import SimpleNamespace
+
+    from data_pipeline import run as run_module
+
+    args = SimpleNamespace(step=step, input_run_id="r" if step != "ingest-raw-macro" else None, from_date=None,
+                           to_date=None, series=None, all_partitions=False, source="ecos")
+    with pytest.raises(SystemExit, match="--source"):
+        run_module._dispatch_observation(args, SimpleNamespace(source_observations=SimpleNamespace()),
+                                         LocalStorage(tmp_path), "run_src")
