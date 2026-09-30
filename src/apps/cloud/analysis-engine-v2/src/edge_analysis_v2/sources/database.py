@@ -160,6 +160,55 @@ def load_flow(connection, data):
     return data
 
 
+def load_prices(connection, data):
+    """Attach available closes and actual intraday trigger observations.
+
+    Args:
+        connection: Same read-only source transaction as other observations.
+        data: Bundle with the registered trading calendar, updated in place.
+
+    Returns:
+        Price observations; absent high, low and turnover stay null.
+    """
+    at = instant(data['context']['analysis_at'])
+    if not data['trading_dates']:
+        raise ValueError('Registered trading calendar required before price reads')
+    symbols = {identity:ticker for ticker,identity in data['source_instrument_ids'].items()}
+    rows = _rows(connection, '''SELECT instrument_id,trade_date,close_price,volume,turnover_value,price_basis,available_at
+        FROM price_daily WHERE instrument_id=ANY(%s) AND trade_date>=%s AND trade_date<%s AND available_at<=%s
+        ORDER BY instrument_id,trade_date''', (list(symbols),data['trading_dates'][0],at.date(),at))
+    data['prices'] = [{'instrument_id':symbols[r['instrument_id']], 'date':r['trade_date'].isoformat(),
+        'close':number(r['close_price']), 'high':None, 'low':None,
+        'volume':number(r['volume']) if r['volume'] is not None else None,
+        'turnover':number(r['turnover_value']) if r['turnover_value'] is not None else None,
+        'available_at':r['available_at'].isoformat()} for r in rows if r['close_price'] is not None]
+    expected = [d for d in data['trading_dates'] if d < at.date().isoformat()]
+    continuous = []
+    for symbol in symbols.values():
+        history = [r for r in data['prices'] if r['instrument_id']==symbol]
+        by_date = {r['date']:r for r in history}
+        if len(by_date)!=len(history) or any(d not in expected for d in by_date):
+            raise ValueError('Duplicate price or non-session price date')
+        for day in reversed(expected):
+            if day not in by_date:
+                break
+            continuous.append(by_date[day])
+    data['prices'] = sorted(continuous,key=lambda r:(r['instrument_id'],r['date']))
+    # A source basis is not an adjusted-close guarantee. Keep its actual values.
+    data['price_basis'] = sorted({r['price_basis'] for r in rows if r['price_basis'] is not None}) or ['unverified']
+    points = _rows(connection, '''SELECT * FROM (
+        SELECT DISTINCT ON (window_start) window_start,close_price,created_at
+        FROM minute_price_trigger WHERE entity_id=%s AND trigger_kind='FIRE'
+        AND window_start>=%s AND window_start+INTERVAL '1 minute'<=%s AND created_at<=%s
+        ORDER BY window_start DESC,created_at DESC,generation DESC) observations
+        ORDER BY window_start DESC LIMIT 5''', (data['context']['etf_code'],at.replace(hour=0,minute=0,second=0,microsecond=0),at,at))
+    data['price_snapshots'] = [{'instrument_id':data['context']['etf_code'],
+        'observed_at':(r['window_start']+timedelta(minutes=1)).isoformat(),
+        'available_at':r['created_at'].isoformat(),'price':number(r['close_price']),
+        'high':None,'low':None} for r in reversed(points)]
+    return data
+
+
 class DatabaseTools(FixtureTools):
     """Use shared deterministic calculations with verified database observations only."""
 
@@ -170,15 +219,35 @@ class DatabaseTools(FixtureTools):
         enabled = {'get_etf_holdings','search_news_threads','get_issue_evidence'}
         if 'flow' in source:
             enabled |= {'calculate_investor_flow','calculate_weighted_flow','sum_investor_net_flow','sum_weighted_net_flow'}
+        if 'prices' in source:
+            enabled |= {'calculate_chart_indicators','evaluate_indicator_transition','get_instrument_factors'}
         self._tools = {name:tool for name,tool in self._tools.items() if name in enabled}
         self._tools['get_etf_holdings'].update(
             callback=lambda:holdings(self.fixture, require_complete=False),
             description='조회 시점에 확보된 구성종목과 원래 비중입니다. coverage=partial이면 전체 포트폴리오가 확인되지 않았으며 가중 계산에 사용할 수 없습니다.',
             formula=r'W=\sum_i w_i\quad\text{(observed weights; no renormalization)}')
         self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. false는 최종 근거용 ID·제목입니다. null인 본문을 추측하지 마세요.'
+        if 'prices' in source:
+            self._tools['calculate_chart_indicators']['description'] += ' 고가·저가 미확보 시 바닥지수는 null입니다.'
+            self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
             tool['version'] = 'database-v1'
-            if 'flow' in name:
+            if name == 'get_instrument_factors':
+                tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot']
+            elif name in ('calculate_chart_indicators','evaluate_indicator_transition'):
+                tool['sources'] = ['price_daily','minute_price_trigger']
+            elif 'flow' in name:
                 tool['sources'] = ['investor_flow_daily','etf_holding_snapshot','etf_holding_snapshot_status']
             else:
                 tool['sources'] = ['etf_holding_snapshot','etf_holding_snapshot_status'] if name=='get_etf_holdings' else ['document','news_document','source_event','event_thread_link']
+
+    def initial_input(self):
+        """Expose raw observations and material source limitations to the agent."""
+        result = super().initial_input()
+        result['source_notes'] = [
+            '구성종목 coverage=partial이면 전체 ETF 가중 수급·밸류를 계산할 수 없습니다.',
+            '뉴스 본문은 확보 발췌입니다. 스레드는 현존 관계이며 과거 정정·삭제까지 복원하지 않습니다.',
+            '가격 조정 방식 미확인. 고가·저가 미확보로 바닥지수·ATR은 미제공. 장중 관측은 실제 트리거 가격이며 연속 분봉이 아닙니다.',
+            '2026년 거래일만 검증되어 52주 지표는 미제공. 매크로·재무는 아직 연결하지 않았습니다.',
+        ]
+        return result
