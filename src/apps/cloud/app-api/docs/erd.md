@@ -94,6 +94,17 @@
 
 재설정 성공 시 행 삭제와 회원 `refresh_token` 전부 revoke.
 
+### signup_code
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| email | varchar(255) PK | 이메일당 1행, 재요청 시 덮어쓰기 |
+| code_hash | varchar(64) | 6자리 코드의 sha-256 |
+| attempts | smallint | 틀린 시도 수, 5회면 무효 |
+| expires_at | timestamptz | 발송 후 10분 |
+| created_at | timestamptz | 마지막 발송 시각, 60초 재발송 간격 판정 |
+
+가입 요청의 코드 확인은 별도 트랜잭션(틀린 시도 수 확정 저장), 행 삭제는 회원 저장과 같은 트랜잭션. 회원이 되기 전이라 member 참조 없음.
+
 ### watch_group
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
