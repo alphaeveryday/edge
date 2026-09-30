@@ -63,6 +63,8 @@
 발번했다. 막힌 이유는 공급자 결정이다. FMP 공용키 한도로 US 수집 토글이 꺼져 있어(ALPHA-558) 소량 일봉 수집이
 그 한도에 드는지 먼저 확인해야 한다.
 
+분석 v2 매크로(ALPHA-1130)는 이 두 경로를 쓰지 않고 새 `macro_observation`에 둔다 — `available_at`이 규칙값이라 수신·가시시각 계약과 섞이지 않게 했다([설계 §10.1](etf-data-storage-plan.md)). 그래서 `fx_daily`·`index_daily`의 생산자 공백은 그대로다.
+
 생산자가 서면 기존 이름을 유지한 채 입력만 바꾼다. 호환 뷰 초안은 아래와 같다(구 스키마 `date VARCHAR, open, close, prev_close, change_pct`).
 
 ```sql

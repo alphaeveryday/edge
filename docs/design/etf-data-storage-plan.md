@@ -1,6 +1,7 @@
 # ETF 데이터 저장 경로 설계 초안
 
 상태: 팀 검토용 제안 · 2026-09-28. 저장소 코드·문서 기준이며 S3/RDB 실측, 신규 수집기·테이블 구현은 하지 않았다.
+예외: §10(분석 v2 원천 관측 — 매크로·재무·KIS 지수업종)은 2026-09-30 코드·로컬 검증까지 구현했다(미배포·미수집).
 
 ## 목적과 범위
 
@@ -49,7 +50,7 @@ ETF 자체 수급과 구성종목 수급을 모두 확보하고 구성종목 가
 | 환율·금리 | `canonical/market_data/fx_daily/`, `canonical/market_data/rates_daily/` | 계열·관측시각, 통화쌍 또는 국가·만기·단위 | 기존 백필 경로 재사용. 기존 파일 스키마·파티션 실측 후 상시 수집 연결 |
 | 원자재 | `canonical/market_data/commodity_daily/series_id={series_id}/observation_date={date}/` | 계열·관측일, 현물/선물 구분·통화·단위 | 신규 제안. `commodity_daily` |
 | 정책 일정 | `canonical/reference/policy_calendar/authority={authority}/as_of_date={date}/` | 기관·행사 ID·일정 버전, 예정시각·공개/수신시각 | 신규 제안. `policy_calendar` |
-| 재무 관측 | `canonical/financials/financial_metric/market={market}/period_end={date}/` | 발행사·지표·회계기간·회계기준·공시/정정 버전, 통화·주식 단위 | 신규 제안. `financial_metric`. 기존 raw·draft 재무와 매핑 |
+| 재무 관측 | `canonical/financials/financial_metric/market={market}/period_end={date}/` | 발행사·지표·회계기간·회계기준·공시/정정 버전, 통화·주식 단위 | **구현(§10)**. DB `financial_metric`. 기존 draft `statement_line`을 쓰지 않은 이유는 §10.1 |
 | ETF 분배금 | `canonical/market_data/etf_distribution/market={market}/payment_date={date}/` | ETF·지급 건 식별자·지급일·정정 버전, 실제 지급 세전 1좌 금액 | 신규 제안. `etf_distribution` |
 | ETF 발행좌수 | `canonical/market_data/etf_units_daily/market={market}/trade_date={date}/` | ETF·거래일, 좌수·분할/병합 기준 | 신규 제안. `etf_units_daily` |
 | 가격 단위 변경 | `canonical/reference/corporate_action/market={market}/effective_date={date}/` | 종목·행사 ID·효력일·정정 버전, 분할/병합 비율 | 신규 제안. 기존 관련 원천·스키마 재사용 여부 조사 후 확정 |
@@ -57,6 +58,7 @@ ETF 자체 수급과 구성종목 수급을 모두 확보하고 구성종목 가
 
 뉴스·공시는 기존 `canonical/news/news_articles`·`canonical/disclosures/*`와 문서 저장 경로를 재사용한다.
 환율·금리는 기존 경로가 있다는 뜻이며 현재까지 수집됐다는 뜻이 아니다. 기존 문서에는 일회성 백필로 기록되어 있다.
+분석 v2의 매크로 5계열은 이 경로가 아니라 §10의 `macro_observation`에 둔다(시각 정의가 달라 재사용하지 않은 이유 §10.1).
 총매수·총매도는 원천에서 제공할 때 별도 필드로 추가하며 순매수로 역산하지 않는다.
 
 ## 3. 실행별 저장 경로
@@ -245,3 +247,213 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 | 조회·담당 | raw는 소스별 수집기가 쓰고, canonical은 데이터셋별 정제기(데이터 파이프라인)가 쓴다. RDB는 로더가 적재한다. 소비자(분석·서버)는 canonical 최신 조회나 RDB를 읽고, 과거 시점 조회는 실행별 artifact와 가시시각 조건으로 한다. 모델 산식·예측 기간·연속일수·표시 정책은 소비 측 책임이다 |
 | ETF 수급·편입비중 보존 | ETF 자체 수급과 구성종목 수급은 기존 `investor_flow_daily`에 종목 유형으로 구분해 둔다. 투자자별 순매수 수량·금액을 보존하고, 총매수·총매도는 원천이 줄 때만 둔다(역산 금지). 편입비중은 `etf_holdings`에 `as_of_date`별 스냅샷을 전부 보존하고 덮지 않는다. 화면 조회 기간이나 연속일수 계산 범위에 맞춰 이력을 잘라내지 않는다. 구성종목 가중합은 §5의 계약이며, 저장 위치는 미정이고 feature 존이 아니다 |
 
+
+## 10. 분석 v2 원천 관측의 저장·소비 계약 (ALPHA-1130)
+
+상태: **구현(코드·로컬 검증) — 미배포·미수집·정기 비활성.** §9를 적용한 첫 데이터셋 셋이다. 입력 요구는
+"v2 필요 데이터와 확보 현황"(2026-09-26 조사): KODEX 반도체(091160)와 **각 분석 시점의** 전체 구성종목, 매크로 5계열.
+결정(2026-09-30 확인): ① 과거 가시시각은 공급자 공개일 증거가 있는 자료(DART 접수일)만 재구성하고 매크로 백필은 수신시각 기준,
+② 재무 Q4 = FY − 9개월 누적(유도 표시), ③ 연결 우선·연결 재무제표가 없는 회사만 별도.
+
+코드: 공급자 해석 `sources/macro_series.py`·`dart_fundamental.py`·`kis_sector_master.py`, 저장·계보 `steps/source_observations.py`,
+경로 빌더 `lake/storage.py`, DB `V202609301200__add_source_observations.sql`, DAG `airflow/dags/edge_source_daily.py`.
+
+### 10.1 기존 표면을 쓰지 않은 이유
+
+| 기존 표면 | 확인한 사실 | 판정 |
+|---|---|---|
+| `canonical/market_data/fx_daily`·`rates_daily` | [실측 2026-09-30] 레포 밖 일회성 적재(07-31 정지). `available_at`이 **시간대 없는 규칙값**(fx 다음날 06:00, rates 05:00)이고 수신시각이 없다. 값은 double, rates는 만기별 wide 형식. 레포에 writer·빌더 없음 | 재사용하지 않는다. 같은 열 이름에 다른 시각 정의를 섞게 된다(§9 "이름이 같아도 정의가 다르면 가른다"). v1 소비자(`paneltest`)용 생산자는 여전히 ALPHA-1105 몫이다. USD/KRW 공급자도 다르다(fx_daily는 FMP, 이 계약은 ECOS 15:30 종가 — §10.8) |
+| `draft/canonical/financials/statement_line`(Iceberg) | 임시 존(ADR-0057 §1). writer가 Athena MERGE이고 스케줄 없음·dartlab 파티션만 읽음. `available_at`=접수번호 앞 8자리(목록 `rcept_dt`와 다를 수 있다 — `dart_disclosure` 주석). 주식총수(BPS 분모) 없음 | 재사용하지 않는다. 계정 원문 전체 보존은 raw가 한다 |
+| DB `instrument_classification` | FMP 업종 텍스트 2열, PK `(instrument_id, as_of_date)`라 판본·출처를 못 가른다. 실데이터 사실상 빈 표(`tool_peer` 주석) | 재사용하지 않는다. KIS 지수업종은 다른 분류 체계다 |
+| `analysis/backfill/sector_member` | pykrx KRX 업종지수 1단계, 분기 스냅샷 | 대·중·소 3단계 KIS 체계와 다르다. 섞지 않는다 |
+
+### 10.2 데이터셋 요약
+
+| | `macro_observation` | `financial_metric` | `sector_classification` |
+|---|---|---|---|
+| 공급자·계열 | ECOS `731Y003/D/0000003` 원/달러 종가 15:30(원, 1달러당 — FMP USDKRW는 현재 구독에서 402, §10.8) · FMP `treasury-rates` `year10`(%) · ECOS `817Y002/D/010210000` 국고채 10년(연%) · KOSIS `101/DT_1J22042` `T03` 총지수 전년동월비(%) · EIA `petroleum/pri/spt` `RBRTE` Europe Brent Spot FOB($/bbl) | OpenDART `list.json`(정기공시, 접수일) · `fnlttSinglAcntAll.json`(전체 재무제표, CFS·OFS) · `stockTotqySttus.json`(주식총수) | KIS 공개 마스터 ZIP `kospi_code.mst`·`kosdaq_code.mst`(지수업종 대·중·소 4자리) · `idxcode.mst`(업종명). KIS Open API 아님(키·토큰 없음) |
+| 대상 | 5계열. 브렌트는 현물(선물 대체 금지), CPI는 공급자 공표 전년동월비(지수 수준 자체 계산 금지) | 구성종목(ETF 스냅샷에서 **기간별** 파생, §10.5) × 12월 결산 정기보고서. EPS 기본·희석, BPS, 매출액, 영업이익 | KOSPI·KOSDAQ 전 종목(ETF·ETN 포함, `security_group`로 구분) |
+| 한 행 | (계열, 관측일)의 한 수집 실행 판본 | (회사, 사업연도, 기간, 지표, 기간 종류, 연결/별도)의 한 수집 실행 판본 | (시장, 종목, 받은 날)의 한 수집 실행 판본 |
+| 논리 키 | `series_id, observation_date` | `corp_code, fiscal_year, fiscal_period, metric, period_kind, fs_basis` | `market, instrument_code, as_of_date` |
+| DB 판본 키 | 논리 키 + `raw_run_id` | 논리 키 + `raw_run_id` | 논리 키 + `raw_run_id` |
+| 단위 | 계열별 고정(DB CHECK): `KRW_per_USD`·`percent`·`USD_per_barrel`. 공급자 10진 문자열 그대로(반올림 없음) | 금액 `KRW`(원, 환산 없음 — `currency`≠KRW 행 거부), 주당 `KRW_per_share`. BPS만 소수 6자리 반올림 | 코드 원문 4자리 |
+| 결측·0 | 값 행이 없음 = 미수집·미공표. 공급자 "데이터 없음" 응답은 `empty`(정상 0건)로 raw manifest에 남고, 오류는 `error` | 빈 칸·`-`는 결측(0 아님). 주식총수 표의 `-`만 0(자기주식 없음). 연결 없는 회사의 013은 `empty` | `0000` = 분류 없음 → 코드 NULL, 원문 `raw_*_code`에 보존 |
+| 관측 시점 | 일별=관측일, 월별=기준월 1일(`reference_period` YYYY-MM) | `period_end`(분기말·기말), `fiscal_period` Q1~Q4·FY | `as_of_date`=받은 KST 날짜(원천이 기준일을 주지 않는다) |
+| 공개시각 | 없음(다섯 공급자 모두 API로 주지 않는다) | `rcept_date`=목록 접수일(날짜만). 시각은 만들지 않는다 | 없음 |
+| 수신시각 | `received_at`=응답 본문을 다 받은 시각(요청 시각이 아니다 — 응답이 오기 전엔 아무것도 보이지 않는다. 코드 `MacroSource.fetch`·`DartClient._get`은 응답 뒤에 `_now()`) | 같음 | 같음 |
+| 가시시각 `available_at` | `received_at`(basis `received`만 허용 — DB CHECK) | `provider_release_date`: min(수신, 접수일 다음날 00:00 KST). 목록에서 접수일을 못 찾으면 `received` | `received_at` |
+| 정정 선택 | 관측일마다 `available_at ≤ T`인 판본 중 가장 늦게 보인 것 | 같음. DART는 최신 제출본만 주므로 정정 전 원값은 복원하지 않는다 | 가장 늦게 보인 스냅샷 |
+| 과거 이력 | 수집 시작 이후만(백필 값은 수신 이후에만 보인다 — 결정 ①) | 백필도 접수일 기준으로 과거에 보인다(결정 ①). 정정 전 값은 없음 | **현재값만.** 받기 전 날짜의 분류는 없다(복원 주장 없음) |
+
+### 10.3 경로·파일·계보
+
+| | raw (원본 형식) | canonical 현재 상태 (Parquet) | 실행별 artifact |
+|---|---|---|---|
+| 매크로 | `raw/source={fmp,ecos,kosis,eia}/dataset=macro_observation/series_id={id}/ingest_date=/run_id=/{id}-{from}-{to}-{sha16}.json` | `canonical/market_data/macro_observation/series_id=/observation_date=/part-00000.parquet` | `operations_archive/canonical_run_artifacts/dataset=macro_observation/run_id=/report_date={ingest_date}/part-00000.parquet` |
+| 재무 | `raw/source=dart/dataset=financial_metric/market=KR/ingest_date=/run_id=/{corp}-{종류}-{sha16}.json` (종류: 목록 `list-pN` · 재무제표 `{연도}-{보고서}-{CFS·OFS}` · 주식총수 `…-shares`) | `canonical/financials/financial_metric/market=KR/period_end=/part-00000.parquet` | 같은 규칙(`dataset=financial_metric`) |
+| 업종 | `raw/source=kis/dataset=sector_classification/market={KOSPI,KOSDAQ,KR}/ingest_date=/run_id=/{파일}-{sha16}.zip` | `canonical/reference/sector_classification/market=/as_of_date=/part-00000.parquet` | 같은 규칙 |
+
+- raw 객체 이름에 내용 해시가 있어 불변이다(같은 바이트 재기록 no-op, 다른 바이트는 다른 키). **raw run manifest**
+  (`operations_archive/raw_run_manifests/dataset=/run_id=/manifest.json`)에 오른 객체만 입력이다 — 키·sha256·바이트 수·
+  인증키 없는 요청 서술·상태(`ok`·`empty`·`error`)·요청 창·구성종목 커버리지. 완료 manifest가 있으면 같은 run_id 재수집은
+  공급자를 부르지 않는다.
+- 정제는 raw manifest의 직접 키만 읽고 sha256을 대조한다. canonical 병합은 논리 키마다 `(received_at, raw_run_id)`가 큰
+  판본을 남긴다 — **늦게 끝난 옛 실행이 최신값을 덮지 못한다**(적재 순서가 아니라 수신 순서). CAS(`put_bytes_if_version`)로
+  파티션 경합을 막는다. **canonical run manifest**에 입력 raw manifest sha256·artifact 키/sha256·쓴 파티션 키/sha256·거부 수가 있다.
+- 적재는 canonical manifest의 artifact를 sha256 대조 후 `INSERT … ON CONFLICT DO NOTHING`. 성공 커밋 뒤에만 소비 마커
+  (`…/run_id=/consumed/load_source_observations.json`)를 쓴다. 저장 뒤 적재 전에 멈춘 실행은 `--all`이 이어 싣는다.
+- 같은 실행 안의 중복 논리 키: 값이 같으면 접고(`collapsed_duplicates`), 다르면 그 키를 격리한다(`conflicting_duplicate`).
+- DB 행마다 `raw_run_id·raw_key·raw_sha256·canonical_run_id·artifact_key·artifact_sha256`이 있어 조회 결과에서 원문까지 간다.
+  재무는 `inputs`(JSONB)에 근거 줄(접수번호·보고서·계정 ID·금액 필드·값·raw 키)과 `formula`를 둔다.
+
+**보존.** 과거 재현의 근거로 약속하는 것은 **만료가 없는 raw·manifest와 DB 판본 이력**이다. 실행별 artifact는
+`canonical_run_artifacts/` 30일 만료(terraform `pipeline/storage.tf`) 아래라 **재처리 캐시**로만 쓴다 — 만료된 실행을
+다시 적재하려면 같은 raw로 정제를 다시 돈다(결정적 정규화). 그래서 기존 lifecycle을 바꾸지 않는다.
+**같은 raw 의 재정제는 같은 내용일 때만 다시 실린다** — 판본·지표 정체성이 raw 실행이라, 규칙이 바뀐 재정제(artifact sha256 이 이미 실린 행의 것과 다름 — 값·근거·가시시각까지 덮는 내용 정체성)는 적재가 거부한다(exit 1, 소비 마커 없음; raw 실행 단위 advisory lock 으로 동시 적재도 직렬화). 세 데이터셋 모두 같은 규칙이다. 규칙을 바꿔 다시 싣는 것은 새 수집 실행으로만 한다. **재현 범위는 코드 판이 정한다** — raw·canonical run manifest에 `code_version`(이미지가 주입한 `GIT_SHA` — 카탈로그 버전
+`OPS_CATALOG_VERSION`은 코드 판이 아니라 쓰지 않는다)을 적는다. 같은 raw + 같은 `code_version` + 같은 스키마 버전이면 같은 artifact·DB 행이 나온다고 말할 수 있고,
+그중 하나라도 다르면(정규화 규칙·CHECK 변경) "같은 입력으로 다시 정제한 결과"이지 "그때 그 행"이 아니다. 지금 이미지는
+`GIT_SHA`를 주입하지 않아 `unknown`으로 적힌다 — 그동안은 정확 재현을 주장하지 않는다(주입은 배포 워크플로 변경이라 이 PR 밖).
+DB 행은 `raw_run_id`로 그 manifest에 닿으므로, 만료된 artifact 없이도 "어느 raw·어느 코드"까지는 항상 답할 수 있다. artifact 자체를
+장기 보존하려면 새 프리픽스(예: `operations_archive/canonical_run_history/`)를 만료 없이 두는 좁은 변경을 제안한다 — 미결정·미적용.
+
+### 10.4 DB와 소비 조회
+
+테이블: `macro_observation`·`financial_metric`·`sector_classification`(추가 전용 판본). 소비 계약은 아래 함수다
+(함수가 판본 선택 규칙의 정본이고, 소비자는 테이블을 직접 거르지 않는다).
+
+| 함수 | 반환 | 규칙 |
+|---|---|---|
+| `macro_observations_as_of(T, series, n=21)` | 최근 n개 관측(관측일·`reference_period`·값·단위·수신·가시·근거 키) | 관측일마다 `available_at ≤ T` 판본 중 최신. 문서의 "최근 공개 2관측일"은 n=2, 툴 탐색 한도 21과 섞지 않는다 |
+| `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말, 보통주 기준 `bps`·통상 `bps_total_shares`·`bps_note`)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결. **행 단위는 확정 보고서 판본이다**(`financial_report_version` — 회사·연도·보고기간·기준마다 `available_at ≤ T` 인 CONFIRMED 판본 중 가장 늦게 **받은** 것). 그 실행이 만든 지표만 값이 있고 빠진 지표는 NULL 이지 옛 실행의 값이 아니다 — 지표가 0개인 정정 판본도 한 줄이라 옛 값이 최신처럼 남지 않는다(리뷰 5~9차 잔여 ⑥ 해소). UNCONFIRMED 판본(HTTP 오류·파손·다른 보고서 응답)은 선택에 끼지 않아 일시 실패가 확정값을 무효화하지 않고, 확정 판본보다 늦은 실패는 `latest_unconfirmed_at` 으로만 드러난다. 늦게 끝난 옛 실행은 수신시각이 앞서 최신 확정을 덮지 못한다. 같은 접수번호의 재수집은 모두 원 공개일부터 보이고(결정 ①) 그중 가장 늦게 받은 것이 이긴다; 새 접수번호(정정)는 그 접수일부터만 보인다. 확정이 한 번도 없는 보고서는 가장 늦은 UNCONFIRMED 시도가 값 NULL·`version_status=UNCONFIRMED` 행으로 나온다(어댑터 gap `REPORT_UNCONFIRMED`) — 소비자가 실패한 확인 시도를 본다. 진행 중·중단된 실행은 판본이 없다(아무것도 바꾸지 않는다). 연결/별도 기준은 **지표가 있는 확정 연결 판본 이력**으로 정한다 — 최신 연결 판본이 비어도 별도 값으로 갈아타지 않는다. 파손 행이 섞인 응답(malformed)·정제가 거부한 분모 응답은 확인된 응답이 아니다(판본 UNCONFIRMED / `shares=error`). Q4 행은 사업보고서 판본의 것이다. 주식수 표는 한 표여야 한다 — 같은 종류 행이 둘 이상이고 서로 다르거나, 종류별 행의 접수번호·기준일이 다르거나, 기준일이 보고기간 말과 다르거나, 수가 정수가 아니면 거부. `version_rejected` 에 그 판본이 못 만든 지표와 사유가 있다. `bps_note`: 정제가 `bps_total_shares` 근거 줄에 남긴 판정 `common_bps`(`computed`·`bps_blocked_preferred_shares`·`bps_share_rows_unreadable`·`bps_input_missing` — 파손이 정책보다 먼저)를 조회가 그대로 읽는다: `PREFERRED_SHARES_PRESENT`(정책 차단, §10.9 ①) / `COMMON_SHARE_BPS_UNAVAILABLE`(주식수 파손) / `BPS_ABSENT_IN_LATEST_VERSION`(분모 응답은 정상(ok·013)인데 BPS 없음 — 확정된 부재) / `BPS_UNCONFIRMED`(분모 응답 실패 — 확정 못 함, 재수집 대상) |
+| `sector_classification_as_of(T, codes[])` | 종목별 최신 스냅샷의 대·중·소 코드·이름 | `found=false`(그 시점 스냅샷에 없음) ≠ 코드 NULL(원천 `0000`) |
+| `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다. **한계**: holdings 표는 ETF·날짜당 한 판본(기존 적재가 덮어쓴다)이라 정정 스냅샷 뒤엔 그 날짜의 이전 구성을 복원하지 못한다(정정 전 T 는 그 날짜를 건너뛴다) — 구성종목 판본 이력은 holdings 레인 소관 |
+
+예제(로컬 PostgreSQL 검증, `tests/e2e/test_source_observations_pg.py`):
+
+```sql
+-- 사업보고서 접수일 2026-03-10: 당일 23:59 에는 2025-Q4 가 없고, 다음날 00:00 부터 Q4(FY−9M) 가 보인다
+SELECT period, eps, eps_derivation FROM financial_quarters_as_of('2026-03-10 23:59+09', '005930');  -- 2025-Q3 만
+SELECT period, eps, eps_derivation FROM financial_quarters_as_of('2026-03-11 00:00+09', '005930');  -- + 2025-Q4 1100 FY_MINUS_9M
+-- 정정: 새 값은 그 판본의 수신 이후에만, 그 전 기준시각은 옛 값
+SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
+```
+
+| `financial_report_version` (표) | 회사·연도·보고서(11013/11012/11014/11011)·연결/별도 × 수집 실행 = 한 줄: `status`(CONFIRMED·UNCONFIRMED), `metrics`(만든 지표), `rejected`(못 만든 지표·사유), `detail`(statement·shares 응답 상태), 접수번호·가시시각·근거 | 정제(`normalize-financial-metric`)가 지표 artifact 와 함께 둘째 artifact(`companion`)로 만들고, 적재가 **같은 트랜잭션**으로 싣는다(소비 마커는 커밋 뒤) — 한쪽만 실린 상태가 없다. 현재 상태 파티션은 없다(실행마다 새 사실). 조회 함수만 읽는다(테이블 권한 0) |
+| `source_observation_freshness()` | 데이터셋(매크로는 계열)별 최신 관측일·마지막 수신·마지막 적재 성공(원장 `LOAD_*` FULFILLED)·상태 — 재무는 판본 표로 센다(지표 0개 판본도 적재 사실) | 상태는 항상 `UNKNOWN`/`NO_PROVIDER_CALENDAR`(§10.6). 행 없음 = 적재 0건 |
+
+**권한**: v2 쓰기 역할(`edge_analysis_v2_writer`)의 테이블 권한은 그대로 0이다. 읽기는 위 다섯 함수의 EXECUTE만 — 함수는
+`SECURITY DEFINER`(`search_path=public` 고정)로 소유자 권한에서 테이블을 읽고, PUBLIC의 EXECUTE는 회수했다.
+`tests/analysis_v2_writer.sql`이 셋을 따로 검사한다: ① 다섯 함수 실행 가능, ② PUBLIC에 열린 DEFINER 함수 없음·다른 DEFINER
+함수 실행 불가, ③ 네 테이블(판본 표 포함) SELECT·INSERT 거부(변이 4종으로 확인: EXECUTE 회수·PUBLIC 부여·테이블 SELECT 부여·INVOKER 전환 모두 실패). `search_path = public, pg_temp`.
+
+**v2 어댑터**: `edge_analysis_v2/source_inputs.py` — `macro_inputs(conn, T)`·`financial_inputs(conn, T, codes)`·`freshness(conn)`가
+함수 결과를 fixture 행 형태로 만든다. 매크로 `observed_at`은 **관측일 문자열 그대로**(경계 시각으로 바꾸지 않는다 — 소비 코드
+`fixture_tools/common.observed()`가 그 한국 날짜가 끝난 뒤부터 관측된 것으로 센다). 결측은 행이 아니라 `gaps`로 돌아온다
+(`no_observation_visible`·`no_release_visible`·`EPS_ABSENT_IN_LATEST_VERSION`·`bps_note` 세 값) — 0으로 채우지 않는다. 결손 분기는 행에서 빼지 않고 `None` 으로 남긴다 — 빼면 `valuation.calculate` 가 그 앞 4분기로 미끄러져 옛 비율을 현재값처럼 낸다.
+재무 행마다 `version`(권위 판본 run·수신시각·`latest_unconfirmed_at`·분모 응답 상태)이 붙어 소비자가 "옛 판본을 읽고 있고 그 뒤 확인이 실패했다"를 안다. 통합 테스트 `integration_tests/test_source_inputs_postgres.py`(로컬 PG, `V2_SOURCE_TEST_DSN`, 14건)가 writer 역할로 함수를 읽어
+`macro.compare`·`valuation.calculate`까지 돌린다(접수일 다음날 00:00 경계, 우선주 회사의 BPS gap, 지표 0개 판본·미확정 확인·분모 실패, 테이블 직접 읽기 거부 포함). 실 파이프라인 경로는 `data-pipeline/tests/e2e/test_source_observations_pg.py`(수집→정제→적재→조회: 지표 0개 정정·일부 지표·공급자 실패 vs 013·늦은 옛 실행·중단 후 `--all` 복구·중복 정제).
+
+**소비 정책(2026-09-30 적용)**: ① 우선주 회사의 보통주 BPS 차단 유지 — `bps_total_shares` 는 근거와 함께 보존만, 자동 대체 없음. `valuation.weighted` 는 구성종목 하나라도 BPS 가 없으면 전체 가중 PBR 을 내지 않는다(부분 커버리지 ETF PBR 없음 — 기존 계약 "결측 종목을 빼거나 재정규화하지 않음" 그대로; 커버리지 하한은 계약에 없어 만들지 않았다) 하고, 결과에 `coverage{constituents, weight}` 를 싣는다. ② Q4 EPS: `FY_MINUS_9M` 값·근거는 보존, `valuation.calculate/weighted` 결과가 `approximate`·`derived_periods`·`derived_constituents` 로 근사 여부를 싣는다(툴 결과는 에이전트에 그대로 전달·감사 저장). 요인 화면 `get_instrument_factors`(dev #1002 로 카드 툴을 대체)도 `eps_approximate`·`eps_derived_periods`·`weighted_per_approximate` 를 싣는다 — 근사 표시 없이 PER 을 내는 소비 경로는 없다(옛 카드 함수 `valuation.metrics` 는 유도 분기가 있으면 PER 카드를 뺀다). TTM 은 연속 4분기 인덱스로 고정 — 같은 분기 재공개는 한 기간, 결손 분기(EPS·BPS None)는 오류(앞 4분기로 미끄러지지 않음). ③ USD/KRW = ECOS `731Y003/0000003`(종가 15:30) 고정 — 02:00 계열(`0000013`)로 전환·혼합하지 않는다(DB CHECK 가 계열·공급자 쌍을 강제).
+
+### 10.5 수집 주기·백필·재시도·writer
+
+- **writer**: 데이터셋·파티션마다 정제 스텝 하나(`normalize-{macro,sector,financial-metric}`). raw는 수집 스텝, DB는 적재 스텝.
+- **정기**: DAG `edge_source_daily` 매일 09:10 KST 한 슬롯(근거는 DAG 도크스트링). 매크로 창 = 어제 − 소급일 ~ 어제
+  (USD/KRW·금리 14일, CPI 124일, 브렌트 28일 — 늦은 게시·정정 흡수). 재무 창 = 접수일 오늘−14 ~ 오늘. 업종 = 거래일만.
+- **백필**: 같은 DAG를 수동 trigger + `macro_from/to`·`financial_from/to`(CLI `--from/--to`). 매크로 `to`≤어제, 재무 `to`≤오늘 —
+  미래·진행 중 관측은 스텝이 거부한다. 업종은 현재값만이라 백필 인자가 없다(`ingest-raw-sector`가 `--from/--to` 거부).
+  한 run은 1500초 안이어야 한다 — 긴 기간은 1년 단위로 나눈다. **실제 확보 기간은 확정하지 않았다**: 평가 날짜가 정해지면
+  그 기간을 인자로 준다(최소 이력: EPS 4분기·BPS 1분기·매출/영업이익 2분기 + 재생 준비기간).
+- **재무 대상 종목**: 접수일 창 [from, to]에 유효했던 구성종목 스냅샷(from 시점 유효 스냅샷 + 창 안 스냅샷)의 합집합.
+  from 이전 스냅샷이 없으면 raw manifest `holdings_coverage.uncovered_before`로 드러내고 추정하지 않는다. 우선주 등
+  corpCode에 없는 종목은 `unmapped`로 남는다(DART 공시 주체가 아님).
+- **재시도**: 공급자 일시 오류는 HTTP 클라이언트(5xx·네트워크 3회). 4xx·DART 키/한도/점검(010·011·012·020·800·901)은 즉시 중단.
+  Airflow는 업무 미시작(exit 75)만 재시도. 정제·적재 재시도·재처리(`reprocess_slot`)는 raw·artifact만 읽는다.
+- **호출 한도**: 벤더마다 따로다. KIS 공유 예산(ADR-0055, 현재 비활성)은 KIS API 전용이고 KIS 마스터 다운로드는 대상이
+  아니다. DART는 공시 레인과 같은 키의 일 한도를 나눠 쓴다(요청 간격 0.5초). FMP는 공용키 bandwidth(ALPHA-558) 안이다.
+
+### 10.6 신선도·완전성
+
+- 원장: 레인 `source-daily`(Airflow 전용, SFN 없음) 9작업이 계획·계측된다. 수집 성공 단위는 응답 객체, `empty`는 실패가 아니다.
+  `data_status`는 기존 작업들처럼 완전성 집합 배선 전까지 UNKNOWN이다(ALPHA-611 축).
+- 신선도: **API 성공·적재 성공은 최신 관측이 있다는 증거가 아니다.** `source_observation_freshness()`가 판정 재료만 나란히
+  낸다 — 원장의 마지막 `LOAD_*` FULFILLED 시각·`data_status`(기존 `ops_expected_task` 재사용), 데이터의 마지막 `received_at`,
+  최신 관측일과 그 근거(`basis`). 상태는 **항상 UNKNOWN(`NO_PROVIDER_CALENDAR`)** — ECOS는 KRX 휴장일(09-24·25)에도 값을
+  냈고(§10.8), DART 접수는 회사마다, KIS 마스터의 공식 게시 캘린더는 미확보라 "어제 값이 있어야 한다"는 기대를 코드가 만들
+  근거가 없다. FRESH/STALE 판정은 공급자 캘린더를 둔 뒤 ADR-0043 Dataset Contract로 붙인다. `MACRO_COLLECTION`은
+  미계측(taskdef 없음)이라 수집 단계의 원장 증거는 없고 적재 단계만 있다 — 함수도 적재 작업만 본다.
+- 재무 판본 상태: `financial_quarters_as_of` 가 행마다 권위 판본(run·수신시각)과 `latest_unconfirmed_at` 을 준다 — "확정값이 있는데 최근 확인이 실패했다"와 "확인했는데 지표가 없다"(NULL 행)와 "아직 확인 안 됨"(판본 없음)이 갈린다.
+- 재무 완전성: `etf_constituent_source_coverage(etf, T)`의 `eps_quarters`<4·`latest_bps_period` 결측이 종목별 부족이다.
+- 업종 완전성: 같은 함수의 `has_sector_classification=false`.
+
+### 10.7 소비 쪽과 맞출 것 (v2 fixture 계약과의 차이)
+
+| 항목 | v2 fixture 계약 | 이 계약 | 제안 |
+|---|---|---|---|
+| 매크로 관측 시각 | `observed_at` 오프셋 있는 순간값 필수 | 관측일(DATE)만 있다 | **반영됨** — `common.observed()`가 날짜형을 그 한국 날짜의 끝으로 읽고(`fixture-tool-contract.md` 매크로 절), 어댑터는 관측일 문자열을 그대로 싣는다. 시각을 지어내지 않는다 |
+| `available_at` 의미 | "공개·수신시각" | 수신 기준(매크로·업종), 공개일 다음날 00:00과 수신 중 이른 쪽(재무) + `availability_basis` | 판본마다 근거를 싣는다. 과거 fx_daily의 규칙값(다음날 06:00)은 이 정의가 아니다 |
+| 재무 `published_at`(#995 `financial_observations`) | 순간값 필수 | 접수일(DATE)만 | 같은 이유로 날짜형을 받거나 `available_at`만 쓴다 |
+| Q4 EPS | 해당 분기 EPS | `FY_MINUS_9M` 유도(근사) | 유도는 적재(결정 ②). 소비 정책 적용(§10.4 소비 정책 ②): 계산 결과에 `approximate` 표시, 표시 없는 카드에선 PER 결측 |
+| 구성종목 없는 시점 | 불완전 비중 거절 | 0행 | 일치 |
+
+### 10.8 소량 실응답 검증 (2026-09-30, 읽기 전용)
+
+**계획(호출 전에 고정).** 기존 키만 쓴다: FMP·DART = dev 파이프라인 시크릿(`edge-dev-data-pipeline/{fmp,dart}/api-key`),
+KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘플 키(`sample`, 계정 없음). **KOSIS·EIA 는 키가 없어 보류**
+(무료 발급이 필요 — 신규 가입이라 이번 범위 밖). 재시도 상한은 어댑터의 HTTP 클라이언트 그대로(5xx·네트워크 3회, 4xx 즉시 중단).
+운영 DB·S3·클라우드 리소스는 건드리지 않는다. 응답 원문은 `.dev/alpha-1130-live/`(미추적)에 두고, 구조를 보존한 축약본만 fixture 로 커밋한다.
+
+| 공급자 | 요청 | 예상 호출 | 확인할 것 |
+|---|---|---|---|
+| FMP | `historical-price-eod/full?symbol=USDKRW` 2026-09-15~26 · `treasury-rates` 같은 기간 | 2 | 계열·관측일·close/year10 의미와 단위, dev `fx_daily`(07-31 이전) 값과 겹치는 날 대조 불가 → 형태만 |
+| ECOS(샘플 키) | `817Y002/D/…/010210000` 2026-09-01~26 | 1 | ITEM_NAME1 = 국고채(10년), UNIT_NAME, TIME 형식 |
+| KIS 마스터 | `kospi_code.mst.zip`·`kosdaq_code.mst.zip`·`idxcode.mst.zip` | 3 | 고정폭 뒷부분 길이(227·221), 업종명 파일 이름 위치(헤더 `[5:45]` vs 샘플 `[3:43]`), `0000` 의 실제 분포 |
+| DART | 삼성전자(우선주 있음)·SK하이닉스: `list.json`(정기공시 2025-01-01~2026-09-30) 2 · `fnlttSinglAcntAll` 삼성 2026/11012 CFS·OFS, 2025/11011 CFS, 2025/11014 CFS, 하이닉스 2026/11012 CFS · `stockTotqySttus` 삼성 2026/11012 · 정정본 표본(목록에 `[기재정정]` 이 있으면 그 보고서 1건) | ≤ 10 | 3개월/누적 필드, currency·단위, 연결/별도, EPS 계정 줄(보통주·우선주), 주식총수 행(se), 정정본 접수번호 ↔ 목록 접수일 |
+
+합계 예상 ≤ 16회. 실제 호출 수와 결과는 아래 "실측"에 적는다.
+
+**실측(2026-09-30).** 실제 호출 FMP 2(+USDKRW 402 진단 1) · ECOS 4(817Y002 1/10000 실패 → 1/10 재요청, 항목표 731Y001·731Y003, 731Y003 데이터)
+· KIS 3 · DART 13(corpCode.xml 1·목록 4·재무제표 6·주식총수 2 — 계획 ≤10 초과분은 정정본 표본을 찾은 시장 목록 1 + 고려제강 목록·재무제표 2).
+합계 23(계획 ≤16). 원문은 `.dev/alpha-1130-live/`(미추적), 구조를 보존한 축약본 17개는 `tests/fixtures/source_observations/live/`
+(`test_source_observations_live.py`가 공식 필드 설명과 대조). 운영 DB·S3·클라우드 변경 0.
+
+| 공급자 | 확인된 사실 | 코드에 반영 |
+|---|---|---|
+| FMP USDKRW | `historical-price-eod/full?symbol=USDKRW` → **HTTP 402** "not available under your current subscription" | 계열 공급자를 ECOS로 교체(아래). FMP FX는 유료 구독 없이는 없다 |
+| FMP treasury | `treasury-rates` 2026-09-15~25 9행, `year10` 5.17(09-25), % 단위, `date` YYYY-MM-DD | 그대로 |
+| ECOS 817Y002 | `ITEM_NAME1`=국고채(10년), `UNIT_NAME`=연%, `TIME`=YYYYMMDD, 09-15~23 7행(09-24·25 없음). 샘플 키는 **10건 상한**(ERROR-301) — 운영 키는 필요 | 그대로. 파싱은 `Decimal` |
+| ECOS 731Y003 | 항목 `0000003` 원/달러(종가 15:30, 1990~) · `0000013` 원/달러(종가, 2024-07~). 09-15~28 **10행 — KRX 휴장일 09-24·25에도 값이 있다**(출처 미확인) | `usd_krw`=`731Y003/D/0000003`, 단위 `KRW_per_USD`, vendor `ecos`(DB CHECK 갱신). 종가 15:30 vs 02:00 종가 선택은 §10.9 ③ |
+| KIS 마스터 | 고정폭 뒷부분 227·221 맞음. 업종명 파일 이름 위치는 헤더대로 `[5:45]`(샘플 `[3:43]`은 틀림). **소분류는 전부 0000**. 삼성전자 대 0027(제조)·중 0013(전기·전자). KOSDAQ ST 248종 미분류 | `parse_sector_names` `[5:45]`. 소분류 NULL이 정상값이라 "분류 없음"과 구분 안 됨 — 소비자는 대·중만 신뢰 |
+| DART 재무제표 | `thstrm_amount`=해당 3개월(분기·반기 보고서), `thstrm_add_amount`=누적. `currency` KRW. 삼성 IS 주당 계정은 `thstrm_amount` 없이 CIS에 있음, SK하이닉스는 CIS `기본주당반기순이익` 한 줄만 | `_pick_line` IS→CIS 순서, 누적/3개월 필드 분리, KRW 외 거부 |
+| DART 주식총수 | 삼성 `se` 보통주 5,846,278,608 · 우선주 802,371,203 · 자기주식 82,086,705, `stlm_dt` 2026-06-30. 하이닉스 우선주 `-` | `_share_count` `-`→0. 우선주>0이면 보통주 BPS 차단(§10.9 ①) |
+| DART 정정본 | 고려제강 반기(2026.06): 목록에 `20260814004051`[첨부추가]·`20260929000540`[기재정정] 둘, **API는 최신 `20260929000540`만** 반환. 접수일 09-29 → 가시 09-30 00:00 | 정정본 값은 정정 접수일로 보인다 — `finish()`가 재무 API 가 돌려준 `rcept_no` 로 목록 접수일을 찾는다(`test_dart_live_correction_receipt_is_the_one_the_api_returns`). 원본 접수일에 붙이지 않고, 정정 전 값은 복원 불가 |
+| KOSIS·EIA | **미검증** — 키 없음(무료 발급이나 신규 가입 필요) | fixture는 공식 문서 기반 합성본. 운영 전 실응답 1회 필요(§10.9 ④) |
+
+### 10.9 팀 결정 대기
+
+| # | 쟁점 | 선택지 | 영향 |
+|---|---|---|---|
+| ① BPS 분모 — **A 적용(2026-09-30 지시)** | 우선주가 있는 회사(삼성전자 — 091160 최대 비중)의 BPS 를 무엇으로 두나. 코드: 보통주 기준 `bps` 는 우선주 0인 회사만, 통상 관행(보통주+우선주) `bps_total_shares` 는 근거와 함께 보존만, 우선주 회사는 `bps_note=PREFERRED_SHARES_PRESENT` 로 **계산 차단**·가중 PBR 은 전체 결측(부분 커버리지 표시 없음). B·C 로 바꾸려면 팀 결정 | A. 지금대로(우선주 회사는 PBR 결측 → `weighted_pbr` 카드 전체 결측 — 가중 계산은 결측 종목을 빼지 않는다) · B. `bps_total_shares` 를 PBR 분모로 허용(관행. 보통주 가격 ÷ 전체 주식 기준 BPS — 분모 주식수가 늘어 BPS 가 작아지므로 삼성(우선주 12%)은 보통주 기준보다 PBR 이 약 14% **높게** 나온다) · C. 우선주 자본을 분리해 보통주 기준 계산(DART 단일계정에 우선주 자본 항목 없음 — 원천 추가 필요) | A는 정직하되 KODEX 반도체 PBR 카드가 안 나온다. B는 한 줄(어댑터가 `bps_total_shares` 를 `bps` 로 넘김)이나 문구에 "전체 주식 기준"을 달아야 한다. C는 이 트랙 밖 |
+| ② Q4 EPS 유도값 사용 — **적용(2026-09-30 지시)**: 유도값 보존 + 결과에 `approximate` 전달, 표시 못 하는 카드(`weighted_per`)는 결측 | `FY_MINUS_9M` 은 가중평균 주식수 차이로 근사다. 남은 선택은 카드 UI 가 근사 표시를 갖출 때 PER 카드를 되살릴지 | A. 그대로 합산(근사 허용, 카드에 "Q4 유도" 표시) · B. 유도 분기가 4분기 안에 있으면 TTM PER 결측 · C. 유도 분기가 있으면 카드에 각주만 | 12월 결산 회사는 매년 3~5월 사이 Q4 유도가 TTM 에 반드시 들어간다 — B 는 그 기간 PER 전멸 |
+| ③ USD/KRW 계열 — **15:30 확정(2026-09-30 지시)** | ECOS `0000003`(종가 15:30, 장기 이력) vs `0000013`(종가 — 야간 거래 포함 02:00, 2024-07~) — 전환·혼합 안 함 | 15:30 은 국내 장 마감 기준으로 주가와 시각이 맞다. 02:00 은 더 늦은 정보지만 2024-07 이전 이력이 없다 | 지금 `0000003`. 바꾸면 계열 정의(`_ECOS`) 한 줄 + 기존 행 없음(미수집)이라 이력 충돌 없음 |
+| ④ KOSIS·EIA·ECOS 키 — **발급됨(2026-09-30, 로컬 검증에 사용)** | 운영 보관 위치는 미정 | `edge-dev-data-pipeline/{ecos,kosis,eia}/api-key` 시크릿 신설(Airflow 담당) | 시크릿·taskdef 전까지 `macro` 스텝은 운영에서 못 돈다 |
+| ⑥ 전 지표 거부 판본 — **해소(A 적용, 2026-09-30)** | 정정 실행이 한 보고서의 지표를 하나도 만들지 못하면 옛 값이 최신처럼 남던 결함 | `financial_report_version` 표(§10.4): 정제가 보고서·실행마다 판본을 만들고 같은 트랜잭션으로 적재, 조회는 확정 판본 단위. 선택 이유: 거부는 행이 아니라서 지표 표만으로는 표현 불가 → 판본 사실을 지표와 독립으로 두되 **같은 정제·같은 manifest·같은 트랜잭션**에 묶어 새 파이프라인 단계·새 소비 마커를 만들지 않았다(B 의 적재 실패 게이트는 "옛 값이 보인다"를 못 없앤다) | 검증: 실 PG e2e(지표 0개·일부·공급자 실패 vs 013·늦은 옛 실행·중단 복구·중복)와 v2 통합(미확정 확인 노출, 정정 공개 전후) |
+| ⑤ ALPHA-643 겹침 — 담당자 미확정(합의 없음, 2026-09-30 재확인: 여전히 '해야 할 일'·코드 0) | ALPHA-643(해야 할 일, 코드 0줄)의 `security_fundamental_quarterly`(revenue·cost_of_sales·sga, `available_date`, `revision_ord`)와 이 PR 의 `financial_metric`(eps·bps·revenue·operating_income, `available_at`, `raw_run_id` 판본) | A. **재사용** — 643 이 `financial_metric` 에 지표 행(`cost_of_sales`·`sga`)만 CHECK 로 추가하고 `segment_revenue`·`analyst_estimate` 는 별도 표 · B. 643 설계대로 별도 표(같은 DART 원천을 두 표에 두 번 정제) · C. 병합 후 643 폐기 | A 권장: 643 의 PIT 요구(`rcept_dt`→가시일·정정 append-only)는 `available_at`·`rcept_no`·판본 행이 이미 충족. 643 완료 조건(코스피200 95%·연결/별도 혼용 0)은 그대로 643 몫. 다른 사람 작업은 지우지 않는다 — 643 본문에 선택지만 남긴다 |
+
+### 10.10 과거 평가 입력의 확보 범위
+
+평가일은 v2 재생 계약이 쓰는 **2026-09-14~18**(`fixture-tool-contract.md` "시간순 재생")로 잡았다 — 다른 평가일이 있으면 알려주면
+표만 다시 계산한다. "함수 구현"과 "입력 확보"는 다르다: 아래 다섯 함수는 모두 구현·로컬 검증됐고, **DB 에는 아직 한 행도 없다**(미배포·미수집).
+
+| 데이터셋 | 평가에 필요한 범위 | 공급자 이력 | 계약대로 보이는 범위(수집 뒤) | 결손과 소비자가 보는 모양 |
+|---|---|---|---|---|
+| USD/KRW·국고채 10y | 9-14~18 각 시점의 최근 2관측 → 09-10~17 관측일 | ECOS 1990~·1995~ 전량 | 백필 값은 **수신시각(수집일) 이후**에만 보인다(결정 ①). 평가시각 T=09-14~18 < 수집일이면 `macro_observations_as_of(T)` 는 **0행** | `macro_inputs` gap `no_observation_visible`. 과거 평가를 하려면 T 를 "그때 알았을 것"이 아니라 "지금 아는 것"으로 두는 별도 모드가 필요하다 — 계약이 금지하는 소급이 아니라 **평가 설계의 선택**이므로 팀 결정(가시성 무시 플래그를 어댑터 인자로 두는 안) |
+| 미국채 10y | 같음 | FMP treasury 이력 있음 | 같음 | 같음 |
+| CPI YoY | 8월분(9월 초 공표) | KOSIS 이력 있음, **키 없음** | 키 발급 뒤. 같은 수신시각 규칙 | 같음 + ④ |
+| 브렌트 | 09-10~17 | EIA 이력 있음, **키 없음** | 같음 | 같음 |
+| 재무(EPS·BPS) | 구성종목별 최근 4분기(2025-Q3~2026-Q2) | DART 최신 제출본만. 2026-Q2 반기보고서 접수 08-14 | 백필해도 **접수일 기준으로 과거에 보인다**(결정 ①): T=09-14 에 2026-Q2 까지 보인다. 단 09-29 정정본(고려제강 등 49건/955 중)은 정정 값이 원본 접수일에 붙지 않으므로 **T=09-14 에는 그 회사의 2026-Q2 가 없다**(정정 전 값은 API 가 안 준다) | `financial_inputs` 는 그 분기 행을 안 낸다(공개 자체가 없음) → `valuation.calculate` "four consecutive released quarters required". 우선주 회사는 ① 전까지 gap `PREFERRED_SHARES_PRESENT` |
+| 업종 | 09-14~18 구성종목의 대·중 분류 | KIS 마스터 **현재값만** | 첫 수집일 이후만. **09-14~18 시점의 업종은 없다**(복원 주장 안 함) | `sector_classification_as_of(T)` `found=false` 전건. 과거 평가에서 업종 축은 "현재 분류를 소급 적용"을 명시적으로 택해야만 가능 — 같은 별도 모드 |
+| 구성종목 | 09-14~18 각 날의 스냅샷 | 기존 `etf_holding_snapshot` | 기존 표 그대로(`etf_constituent_source_coverage`) | 스냅샷 없는 날 0행 |
+
+요약: 과거 평가는 **재무만** 계약 안에서 과거 가시성이 복원되고, 매크로·업종은 수집 시작 이후부터다. 2026-09 평가를 지금 하려면
+"현재 지식으로 평가" 모드를 팀이 택해야 하고, 그 경우 결과에 그 사실을 적어야 한다.
