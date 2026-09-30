@@ -232,3 +232,27 @@ def test_a_later_version_without_any_bps_does_not_inherit_the_older_pair(db):
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v3,))
+
+
+def test_a_newer_annual_report_run_without_q4_rows_invalidates_the_old_q4(db):
+    # Q4 rows are derived from the annual (FY) report run. If a later FY run could not derive Q4
+    # (9M input missing, shares broken) it stores FY cumulative rows only — the old Q4 must not survive.
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_metric (corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric,
+        period_kind, fs_basis, derivation, value, unit, formula, inputs, rcept_no, rcept_date, received_at, available_at,
+        availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
+        SELECT corp_code, instrument_code, 2025, 'FY', '2025-12-31', 'eps_basic', 'CUMULATIVE', fs_basis, 'REPORTED',
+        3300, unit, NULL, inputs, '20260930000002', '2026-09-30', received_at + interval '200 days',
+        received_at + interval '200 days', 'received', raw_run_id || '-v4', raw_key, raw_sha256, canonical_run_id,
+        artifact_key, artifact_sha256
+        FROM financial_metric WHERE instrument_code = 'TST001' AND metric = 'eps_basic' AND fiscal_period = 'Q4'""")
+    run_v4 = db.execute("SELECT raw_run_id FROM financial_metric WHERE raw_run_id LIKE %s", ("v2-source-test-%-v4",)).fetchone()[0]
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        rows, gaps = financial_inputs(db, datetime(2026, 12, 20, tzinfo=KST), ["TST001"])
+        assert "2025-Q4" not in [r["period"] for r in rows]   # FY rows are never returned; the old Q4 is gone with them
+        rows, _ = financial_inputs(db, datetime(2026, 9, 10, tzinfo=KST), ["TST001"])
+        assert [r["period"] for r in rows] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"]
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v4,))

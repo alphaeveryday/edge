@@ -328,9 +328,13 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
         return []
+    exceeds = any(i is not None and t is not None and t > i
+                  for i, t in ((issued_common, treasury_common), (issued_preferred, treasury_preferred)))
     if (None not in (issued_common, issued_preferred) and issued_common + issued_preferred != issued_total) or \
-            (None not in (treasury_common, treasury_preferred) and treasury_common + treasury_preferred != treasury_total):
-        # 종류별 합(발행·자기주식 모두)이 합계와 다르면 어느 분모도 믿을 수 없다 — 두 지표 모두 만들지 않는다.
+            (None not in (treasury_common, treasury_preferred) and treasury_common + treasury_preferred != treasury_total) \
+            or exceeds:
+        # 종류별 합(발행·자기주식 모두)이 합계와 다르거나 자기주식이 그 종류의 발행수를 넘으면 어느 분모도
+        # 믿을 수 없다 — 두 지표 모두 만들지 않는다.
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
                         "istc_totqy": str(issued_total), "common": str(issued_common), "preferred": str(issued_preferred),
                         "tesstk_co": str(treasury_total), "common_treasury": str(treasury_common),

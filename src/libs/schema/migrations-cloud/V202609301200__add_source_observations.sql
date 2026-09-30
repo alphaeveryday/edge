@@ -218,28 +218,32 @@ BEGIN
     END IF;
     RETURN QUERY
     WITH visible AS (
-        SELECT DISTINCT ON (f.corp_code, f.fiscal_year, f.fiscal_period, f.metric, f.period_kind, f.fs_basis) f.*
+        -- 실행 안에서는 논리 키가 유일하다(정제가 중복을 접거나 격리) — 판본 선택은 아래 latest 가 실행 단위로 한다.
+        SELECT f.*,
+               -- Q4 행(FY−9M 유도·기말 BPS)은 사업보고서(FY) 실행이 만든다 — 같은 보고서로 묶는다.
+               CASE WHEN f.fiscal_period = 'FY' THEN 'Q4' ELSE f.fiscal_period END AS report_period
         FROM financial_metric f
         WHERE f.instrument_code = p_instrument_code AND f.available_at <= p_analysis_at
-        ORDER BY f.corp_code, f.fiscal_year, f.fiscal_period, f.metric, f.period_kind, f.fs_basis,
-                 f.available_at DESC, f.received_at DESC, f.raw_run_id DESC
     ), basis AS (
         -- 연결 우선. 그 시점까지 연결 재무제표가 한 번도 보이지 않은 회사만 별도(2026-09-30 결정).
         -- 한 회사 안에서 분기마다 기준을 바꾸지 않는다.
         SELECT CASE WHEN bool_or(v.fs_basis = 'CFS') THEN 'CFS' ELSE 'OFS' END AS fs_basis FROM visible v
     ), latest AS (
-        -- 한 보고서(회사·연도·기간·기준)의 지표는 한 실행이 통째로 만든다. 판본 선택을 지표별로 두면 새 실행이
-        -- 어떤 지표를 "만들지 않은" 결정(우선주 확인·주식수 파손·계정 줄 모호)을 옛 실행의 값이 덮는다.
-        -- 그래서 그 보고서의 가장 늦게 보인 실행 하나를 고르고, 그 실행이 만든 지표만 돌려준다 — 빠진 지표는 NULL.
-        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.fiscal_period, v.fs_basis)
-               v.corp_code, v.fiscal_year, v.fiscal_period, v.fs_basis, v.raw_run_id
+        -- 한 보고서(회사·연도·보고기간·기준)의 지표는 한 실행이 통째로 만든다. 판본 선택을 지표별로 두면 새 실행이
+        -- 어떤 지표를 "만들지 않은" 결정(우선주 확인·주식수 파손·계정 줄 모호·Q4 유도 입력 부족)을 옛 실행의 값이
+        -- 덮는다. 그래서 보이는 행이 있는 실행 중 **가장 늦게 받은** 실행 하나를 고르고 그 실행의 지표만 돌려준다 —
+        -- 빠진 지표는 NULL. 실행 순서는 수신시각으로 잰다(가시시각은 지표마다 접수일 확인 여부로 달라질 수 있다).
+        -- 한계: 새 실행이 그 보고서의 지표를 하나도 만들지 못하면(전 지표 거부) 행이 없어 옛 실행이 남는다 —
+        -- 거부는 정제 manifest·품질 로그에만 있다(§10.9 ⑥).
+        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.report_period, v.fs_basis)
+               v.corp_code, v.fiscal_year, v.report_period, v.fs_basis, v.raw_run_id
         FROM visible v
-        ORDER BY v.corp_code, v.fiscal_year, v.fiscal_period, v.fs_basis,
-                 v.available_at DESC, v.received_at DESC, v.raw_run_id DESC
+        ORDER BY v.corp_code, v.fiscal_year, v.report_period, v.fs_basis,
+                 v.received_at DESC, v.raw_run_id DESC
     ), picked AS (
         SELECT v.* FROM visible v JOIN basis b ON b.fs_basis = v.fs_basis
         JOIN latest l ON l.corp_code = v.corp_code AND l.fiscal_year = v.fiscal_year
-                     AND l.fiscal_period = v.fiscal_period AND l.fs_basis = v.fs_basis AND l.raw_run_id = v.raw_run_id
+                     AND l.report_period = v.report_period AND l.fs_basis = v.fs_basis AND l.raw_run_id = v.raw_run_id
         WHERE v.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
           AND ((v.metric IN ('eps_basic', 'revenue', 'operating_income') AND v.period_kind = 'QUARTER')
                OR v.metric IN ('bps', 'bps_total_shares'))

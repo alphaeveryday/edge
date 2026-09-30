@@ -415,3 +415,16 @@ def test_preferred_treasury_damage_also_blocks_common_bps():
     rows, rejects = _extract_bps(body)
     assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
     assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
+
+
+def test_treasury_above_issued_within_a_share_class_rejects_both_denominators():
+    # WHY(리뷰 7차): 합계는 맞는데 우선주 0주에 우선주 자기주식 5주 같은 종류별 모순은 두 합 검사를 다 통과했다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012", treasury=55))
+    for r in body["list"]:
+        if r["se"] == "보통주":
+            r["tesstk_co"] = "50"
+        if r["se"] == "우선주":
+            r["tesstk_co"] = "5"           # 발행 0, 자기주식 5
+    rows, rejects = _extract_bps(body)
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
