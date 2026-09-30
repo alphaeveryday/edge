@@ -64,8 +64,9 @@ def test_quarterly_values_q4_derivation_and_bps_with_evidence(tmp_path):
     # 계약: 지배지분 ÷ (합계 발행 − 자기주식), 소수 6자리 반올림.
     assert bps["value"] == str((Decimal("3200000") / Decimal(1000 - 50)).quantize(Decimal("0.000001")))
     inputs = json.loads(bps["inputs"])
-    assert inputs[1]["istc_totqy"] == "1000" and inputs[1]["tesstk_co"] == "50"
-    assert bps["derivation"] == "EQUITY_OVER_SHARES" and "합계" in bps["formula"]
+    assert inputs[1]["istc_totqy"] == "1000" and inputs[1]["tesstk_co"] == "50" and inputs[1]["se"] == "보통주"
+    assert bps["derivation"] == "EQUITY_OVER_SHARES" and "보통주" in bps["formula"]
+    assert rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS")]["value"] == bps["value"]
     # 사업보고서 기말 BPS 는 Q4 시점이다(연간 누적과 가른다).
     assert ("005930", 2025, "Q4", "bps", "POINT", "CFS") in rows
 

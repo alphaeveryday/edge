@@ -44,9 +44,9 @@ class FakeClient:
 
 
 ALL_ROUTES = {
-    "historical-price-eod": body("fmp_usdkrw.json"),
+    "731Y003": body("ecos_usdkrw.json"),
     "treasury-rates": body("fmp_treasury.json"),
-    "StatisticSearch": body("ecos_kr10y.json"),
+    "817Y002": body("ecos_kr10y.json"),
     "statisticsParameterData": body("kosis_cpi.json"),
     "petroleum/pri/spt": body("eia_brent.json"),
 }
@@ -78,7 +78,8 @@ def test_regular_run_lands_every_series_with_receipt_as_visibility(tmp_path):
 
     usd = canonical_rows(storage, "usd_krw", "2026-07-27")
     assert [r["value"] for r in usd] == ["1464.671"]            # 공급자 소수 자릿수 그대로
-    assert usd[0]["unit"] == "KRW_per_USD" and usd[0]["availability_basis"] == "received"
+    assert usd[0]["unit"] == "KRW_per_USD" and usd[0]["source_vendor"] == "ecos"
+    assert usd[0]["availability_basis"] == "received"
     assert usd[0]["available_at"] == usd[0]["received_at"]
     cpi = canonical_rows(storage, "kr_cpi_yoy", "2026-06-01")
     assert cpi[0]["value"] == "2.3" and cpi[0]["source_vendor"] == "kosis"   # 공표 전년동월비 그대로
@@ -104,7 +105,7 @@ def test_vendor_no_data_is_empty_not_failure_and_one_vendor_failure_is_partial(t
     # 휴장일마다 거짓 경보가 난다. 한 공급자 장애가 다른 계열 적재를 막아서도 안 된다.
     storage = LocalStorage(tmp_path)
     routes = {**ALL_ROUTES,
-              "StatisticSearch": json.dumps({"RESULT": {"CODE": "INFO-200", "MESSAGE": "해당하는 데이터가 없습니다."}}).encode(),
+              "817Y002": json.dumps({"RESULT": {"CODE": "INFO-200", "MESSAGE": "해당하는 데이터가 없습니다."}}).encode(),
               "petroleum/pri/spt": StopFetch("HTTP 503", status=503)}
     src, _ = source(routes)
     assert collect(storage, "run_p", src) == so.PARTIAL_EXIT
@@ -121,10 +122,11 @@ def test_missing_key_fails_that_series_without_calling_it(tmp_path):
     storage = LocalStorage(tmp_path)
     src, client = source(keys={"ecos_api_key": None, "kosis_api_key": "K", "eia_api_key": "A"})
     assert collect(storage, "run_k", src) == so.PARTIAL_EXIT
-    assert not any("StatisticSearch" in url for url in client.calls)
+    assert not any("ecos" in url for url in client.calls)
     log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/collection_logs/")
                                             if "run_id=run_k/" in k)))
-    assert log["ops"]["failed_records"] == 1 and log["failures"][0]["detail"] == "missing_credentials"
+    # ECOS 키 하나가 두 계열(국고채 10년·원/달러)을 막는다.
+    assert log["ops"]["failed_records"] == 2 and {f["detail"] for f in log["failures"]} == {"missing_credentials"}
 
 
 def test_value_revised_in_a_later_run_wins_even_if_the_old_run_normalizes_last(tmp_path):
@@ -133,9 +135,9 @@ def test_value_revised_in_a_later_run_wins_even_if_the_old_run_normalizes_last(t
     storage = LocalStorage(tmp_path)
     old_src, _ = source()
     assert collect(storage, "run_old", old_src, series=["usd_krw"]) == 0
-    revised = json.loads(body("fmp_usdkrw.json"))
-    revised[1]["close"] = 1465.0
-    new_src, _ = source({**ALL_ROUTES, "historical-price-eod": json.dumps(revised).encode()})
+    revised = json.loads(body("ecos_usdkrw.json"))
+    revised["StatisticSearch"]["row"][1]["DATA_VALUE"] = "1465.0"
+    new_src, _ = source({**ALL_ROUTES, "731Y003": json.dumps(revised).encode()})
     assert collect(storage, "run_new", new_src, series=["usd_krw"]) == 0
     assert so.normalize(storage, so.MACRO, "run_new_n", "run_new", producer="normalize_macro") == 0
     assert so.normalize(storage, so.MACRO, "run_old_n", "run_old", producer="normalize_macro") == 0
@@ -153,10 +155,11 @@ def test_incomplete_and_out_of_window_observations_are_rejected_with_reasons(tmp
     # 요청하지 않은 기간을 섞으면 백필 범위 감사가 거짓이 된다.
     storage = LocalStorage(tmp_path)
     today = datetime.now(KST).date().isoformat()
-    rows = json.loads(body("fmp_usdkrw.json")) + [
-        {"symbol": "USDKRW", "date": today, "close": 1470.0},
-        {"symbol": "USDKRW", "date": "2026-01-02", "close": 1400.0}]
-    src, _ = source({**ALL_ROUTES, "historical-price-eod": json.dumps(rows).encode()})
+    doc = json.loads(body("ecos_usdkrw.json"))
+    tmpl = doc["StatisticSearch"]["row"][0]
+    doc["StatisticSearch"]["row"] += [{**tmpl, "TIME": today.replace("-", ""), "DATA_VALUE": "1470"},
+                                      {**tmpl, "TIME": "20260102", "DATA_VALUE": "1400"}]
+    src, _ = source({**ALL_ROUTES, "731Y003": json.dumps(doc).encode()})
     real_now = datetime.now(timezone.utc)
     assert so.collect_macro(storage, src, "run_i", series_ids=["usd_krw"],
                             from_date="2026-07-20", to_date=(real_now.astimezone(KST).date() - timedelta(days=1)).isoformat(),
@@ -173,9 +176,10 @@ def test_duplicate_rows_collapse_but_conflicting_duplicates_are_quarantined(tmp_
     # WHY: 같은 관측이 두 번 오면 하나로 접으면 된다. 값이 다른 중복은 어느 쪽이 맞는지 모른다 —
     # 조용히 하나를 고르면 틀린 값이 현재값이 될 수 있어 격리해 드러낸다.
     storage = LocalStorage(tmp_path)
-    rows = json.loads(body("fmp_usdkrw.json"))
-    rows += [dict(rows[0]), {**rows[1], "close": 1.0}]
-    src, _ = source({**ALL_ROUTES, "historical-price-eod": json.dumps(rows).encode()})
+    doc = json.loads(body("ecos_usdkrw.json"))
+    rows = doc["StatisticSearch"]["row"]
+    rows += [dict(rows[0]), {**rows[1], "DATA_VALUE": "1.0"}]
+    src, _ = source({**ALL_ROUTES, "731Y003": json.dumps(doc).encode()})
     assert collect(storage, "run_d", src, series=["usd_krw"]) == 0
     assert so.normalize(storage, so.MACRO, "run_dn", "run_d", producer="normalize_macro") == so.PARTIAL_EXIT
     manifest = json.loads(storage.get_bytes(
@@ -227,9 +231,11 @@ def test_malformed_rows_and_missing_ecos_rows_are_visible_not_fatal(tmp_path):
     # WHY(리뷰): 응답 속 null 한 칸이 정제 전체를 죽이면 정상 계열까지 적재되지 않고, 완료 manifest 때문에
     # 재실행으로도 회복되지 않는다. ECOS row 누락은 "데이터 없음"(INFO-200)이 아니라 파손이다.
     storage = LocalStorage(tmp_path)
+    doc = json.loads(body("ecos_usdkrw.json"))
+    doc["StatisticSearch"]["row"].insert(0, None)
     routes = {**ALL_ROUTES,
-              "historical-price-eod": json.dumps([None, *json.loads(body("fmp_usdkrw.json"))]).encode(),
-              "StatisticSearch": json.dumps({"StatisticSearch": {}}).encode(),
+              "731Y003": json.dumps(doc).encode(),
+              "817Y002": json.dumps({"StatisticSearch": {}}).encode(),
               "statisticsParameterData": json.dumps({"RESULT": [1]}).encode()}
     src, _ = source(routes)
     assert collect(storage, "run_m", src) == so.PARTIAL_EXIT
@@ -243,9 +249,9 @@ def test_malformed_rows_and_missing_ecos_rows_are_visible_not_fatal(tmp_path):
 
 def test_vendor_decimals_survive_json_parsing():
     # WHY(리뷰): JSON 숫자를 float 로 먼저 읽으면 "공급자 자릿수 그대로" 계약이 저장 전에 깨진다.
-    raw = b'[{"symbol": "USDKRW", "date": "2026-07-27", "close": 1461.1234567890123456789}]'
-    good, _ = macro_series.parse("usd_krw", raw)
-    assert good[0]["value"] == "1461.1234567890123456789"
+    raw = b'[{"date": "2026-07-27", "year10": 4.1234567890123456789}]'
+    good, _ = macro_series.parse("us_10y_yield", raw)
+    assert good[0]["value"] == "4.1234567890123456789"
 
 
 def test_rerun_reports_the_original_failure_instead_of_success(tmp_path):

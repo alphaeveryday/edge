@@ -5,20 +5,24 @@
 
 | series_id | 공급자 · 계열 | 단위 | 주기 |
 |---|---|---|---|
-| usd_krw | FMP `historical-price-eod/full?symbol=USDKRW` 의 `close` — 1달러당 원(현물 환율) | KRW_per_USD | 일 |
+| usd_krw | ECOS `731Y003`(원화의 대미달러 환율) 항목 `0000003` 원/달러(종가 15:30) — 서울외환시장 현물 종가 | KRW_per_USD | 일 |
 | us_10y_yield | FMP `treasury-rates` 의 `year10` — 미 재무부 par yield 10년 | percent | 일 |
 | kr_10y_yield | ECOS `817Y002`(시장금리 일별) 항목 `010210000` 국고채(10년) | percent | 일 |
 | kr_cpi_yoy | KOSIS `101/DT_1J22042`(월별 소비자물가 등락률) `T03` 전년동월비 · 총지수(`objL1=0`) | percent | 월 |
 | brent_spot_usd | EIA `petroleum/pri/spt` 계열 `RBRTE` — Europe Brent Spot Price FOB | USD_per_barrel | 일 |
 
-**실제 응답 미확인 (2026-09-30)**: 이 모듈의 응답 필드명·빈 응답 표현·단위 문자열은 공식 문서와 공개
-사용 사례로 정했고 실호출로 확인하지 않았다(작업 지침상 실호출 금지). 그래서 파서는 기대와 다른
-형태를 **조용히 넘기지 않고** 사유와 함께 거부한다 — 첫 실수집에서 어긋남이 드러나게 하는 것이
-의도다. 특히 KOSIS `T03`=전년동월비는 공개 사례로만 확인했으므로 `ITM_NM` 에 '전년동월'이 없으면 거부한다.
+**실응답 확인 상태 (2026-09-30 소량 실호출, 설계 §10.8)**: ECOS 두 계열(817Y002·731Y003)과 FMP treasury-rates 는
+실응답으로 필드·단위·날짜 형식을 확인했다(fixture `tests/fixtures/source_observations/*_live.json` 이 그 원문 축약본).
+FMP USD/KRW(`historical-price-eod/full?symbol=USDKRW`)는 현재 구독에서 **HTTP 402(심볼 미제공)** 라 쓸 수 없어 ECOS 로 바꿨다.
+KOSIS·EIA 는 키가 없어 **미확인**이다 — 파서는 기대와 다른 형태를 조용히 넘기지 않고 사유와 함께 거부한다. 특히 KOSIS
+`T03`=전년동월비는 공개 사례로만 확인했으므로 `ITM_NM` 에 '전년동월'이 없으면 거부한다.
+⚠️ ECOS 731Y003 은 KRX 휴장일(2026-09-24·25 추석)에도 행이 있었다 — 그 값의 출처(휴일 거래 여부)는 미확인이다.
+소비자는 이 계열을 KR 거래일 달력과 같은 것으로 전제하지 않는다.
 
 **값을 바꾸지 않는다.** 한국 CPI 는 공급자가 공표한 전년동월비를 그대로 쓴다 — 지수 수준에서 자체
-계산하지 않는다. USD/KRW 는 1달러당 원 방향 그대로다(역수 금지). 브렌트는 현물(Spot FOB)이며 선물
-(FMP `BZUSD` 등)으로 대체하지 않는다. 미 국채 FMP `treasury-rates` 는 재무부 par yield curve 이며 시장
+계산하지 않는다. USD/KRW 는 1달러당 원 방향 그대로다(역수 금지). ECOS 731Y003 에는 `0000013` 원/달러(종가, 2024-07
+익일 02:00 마감 체제)도 있으나 이력이 짧아 15:30 종가(`0000003`, 1990~)를 쓴다 — 바꾸려면 계열을 갈라야 한다.
+브렌트는 현물(Spot FOB)이며 선물(FMP `BZUSD` 등)으로 대체하지 않는다. 미 국채 FMP `treasury-rates` 는 재무부 par yield curve 이며 시장
 종가 수익률과 다를 수 있다(계열 정의는 공급자 문서 기준, 값 대조 미확인).
 
 **시각**: 다섯 공급자 모두 API 로 공표 시각을 주지 않는다. 그래서 공개시각 열을 만들지 않고, 분석
@@ -54,8 +58,8 @@ class MacroSeries:
 
 
 SERIES: dict[str, MacroSeries] = {s.series_id: s for s in (
-    MacroSeries("usd_krw", "fmp", "D", "KRW_per_USD",
-                "FMP historical-price-eod/full USDKRW close", 14, 1800),
+    MacroSeries("usd_krw", "ecos", "D", "KRW_per_USD",
+                "ECOS 731Y003/D/0000003", 14, 3650),
     # FMP treasury-rates 는 한 요청 기간이 짧게 제한된다고 문서화돼 있다(3개월) — 백필은 잘라 부른다.
     MacroSeries("us_10y_yield", "fmp", "D", "percent",
                 "FMP treasury-rates year10", 14, 90),
@@ -70,7 +74,10 @@ SERIES: dict[str, MacroSeries] = {s.series_id: s for s in (
 )}
 
 # 응답이 단위를 줄 때 기대하는 문자열(문서 기준, 실응답 미확인). 다르면 값을 버리지 않고 거부로 드러낸다.
-_VENDOR_UNITS = {"kr_10y_yield": "연%", "kr_cpi_yoy": "%", "brent_spot_usd": "$/BBL"}
+_VENDOR_UNITS = {"usd_krw": "원", "kr_10y_yield": "연%", "kr_cpi_yoy": "%", "brent_spot_usd": "$/BBL"}
+# ECOS 계열 → (통계표, 항목). 요청 URL 과 응답 정체성 검사가 같은 표를 본다.
+_ECOS = {"usd_krw": ("731Y003", "0000003", "원/달러(종가 15:30)"),
+         "kr_10y_yield": ("817Y002", "010210000", "국고채(10년)")}
 
 
 @dataclass(frozen=True)
@@ -114,22 +121,18 @@ class MacroSource:
     def _url(self, series: MacroSeries, start: date, end: date) -> tuple[str, dict]:
         key = self._keys[series.vendor]
         c = self.config
-        if series.series_id == "usd_krw":
-            public = {"endpoint": "historical-price-eod/full", "symbol": "USDKRW",
-                      "from": start.isoformat(), "to": end.isoformat()}
-            url = f"{c.fmp_base_url}/historical-price-eod/full?" + urllib.parse.urlencode(
-                {"symbol": "USDKRW", "from": public["from"], "to": public["to"], "apikey": key})
-        elif series.series_id == "us_10y_yield":
+        if series.series_id == "us_10y_yield":
             public = {"endpoint": "treasury-rates", "from": start.isoformat(), "to": end.isoformat()}
             url = f"{c.fmp_base_url}/treasury-rates?" + urllib.parse.urlencode(
                 {"from": public["from"], "to": public["to"], "apikey": key})
-        elif series.series_id == "kr_10y_yield":
-            public = {"endpoint": "StatisticSearch", "stat_code": "817Y002", "cycle": "D",
-                      "item_code1": "010210000", "start": start.strftime("%Y%m%d"),
-                      "end": end.strftime("%Y%m%d")}
+        elif series.vendor == "ecos":
+            stat, item, _ = _ECOS[series.series_id]
+            public = {"endpoint": "StatisticSearch", "stat_code": stat, "cycle": "D", "item_code1": item,
+                      "start": start.strftime("%Y%m%d"), "end": end.strftime("%Y%m%d")}
             # 키가 경로에 들어가는 API 다 — 공개 기록(public)에는 경로를 남기지 않는다.
+            # 행 상한 10000 = 일별 약 40년. 공개 샘플 키는 10행까지만 받는다(검증용).
             url = (f"{c.ecos_base_url}/StatisticSearch/{urllib.parse.quote(key or '', safe='')}"
-                   f"/json/kr/1/10000/817Y002/D/{public['start']}/{public['end']}/010210000")
+                   f"/json/kr/1/10000/{stat}/D/{public['start']}/{public['end']}/{item}")
         elif series.series_id == "kr_cpi_yoy":
             public = {"endpoint": "statisticsParameterData", "org_id": "101", "tbl_id": "DT_1J22042",
                       "itm_id": "T03", "obj_l1": "0", "prd_se": "M",
@@ -248,20 +251,13 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
     """
     data = _json(body)
     rows: list[tuple[str | None, object, dict | None]] = []   # (관측일, 값, 검사할 필드) — 필드 None = 행 형태 불량
-    if series_id == "usd_krw":
-        for item in data:
-            if not isinstance(item, dict):
-                rows.append((None, None, None))
-                continue
-            rows.append((_iso(item.get("date"), "%Y-%m-%d"), item.get("close"),
-                         {"symbol": item.get("symbol")}))
-    elif series_id == "us_10y_yield":
+    if series_id == "us_10y_yield":
         for item in data:
             if not isinstance(item, dict):
                 rows.append((None, None, None))
                 continue
             rows.append((_iso(item.get("date"), "%Y-%m-%d"), item.get("year10"), {}))
-    elif series_id == "kr_10y_yield":
+    elif series_id in _ECOS:
         for item in data["StatisticSearch"]["row"]:
             if not isinstance(item, dict):
                 rows.append((None, None, None))
@@ -302,10 +298,8 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
         expected_unit = _VENDOR_UNITS.get(series_id)
         if expected_unit and fields.get("unit") != expected_unit:
             reasons.append("unit_mismatch")
-        if series_id == "usd_krw" and fields.get("symbol") not in (None, "USDKRW"):
-            reasons.append("series_identity_mismatch")
-        if series_id == "kr_10y_yield" and (fields.get("identity") != "010210000"
-                                            or "10년" not in str(fields.get("identity_name"))):
+        if series_id in _ECOS and (fields.get("identity") != _ECOS[series_id][1]
+                                   or str(fields.get("identity_name")) != _ECOS[series_id][2]):
             reasons.append("series_identity_mismatch")
         if series_id == "kr_cpi_yoy" and (fields.get("identity") not in (None, "T03")
                                           or "전년동월" not in str(fields.get("identity_name"))

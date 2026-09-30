@@ -371,3 +371,19 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 | 재무 `published_at`(#995 `financial_observations`) | 순간값 필수 | 접수일(DATE)만 | 같은 이유로 날짜형을 받거나 `available_at`만 쓴다 |
 | Q4 EPS | 해당 분기 EPS | `FY_MINUS_9M` 유도(근사) | 유도 행을 쓸지 소비 규칙에서 결정(결정 ②로 유도는 적재) |
 | 구성종목 없는 시점 | 불완전 비중 거절 | 0행 | 일치 |
+
+### 10.8 소량 실응답 검증 (2026-09-30, 읽기 전용)
+
+**계획(호출 전에 고정).** 기존 키만 쓴다: FMP·DART = dev 파이프라인 시크릿(`edge-dev-data-pipeline/{fmp,dart}/api-key`),
+KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘플 키(`sample`, 계정 없음). **KOSIS·EIA 는 키가 없어 보류**
+(무료 발급이 필요 — 신규 가입이라 이번 범위 밖). 재시도 상한은 어댑터의 HTTP 클라이언트 그대로(5xx·네트워크 3회, 4xx 즉시 중단).
+운영 DB·S3·클라우드 리소스는 건드리지 않는다. 응답 원문은 `.dev/alpha-1130-live/`(미추적)에 두고, 구조를 보존한 축약본만 fixture 로 커밋한다.
+
+| 공급자 | 요청 | 예상 호출 | 확인할 것 |
+|---|---|---|---|
+| FMP | `historical-price-eod/full?symbol=USDKRW` 2026-09-15~26 · `treasury-rates` 같은 기간 | 2 | 계열·관측일·close/year10 의미와 단위, dev `fx_daily`(07-31 이전) 값과 겹치는 날 대조 불가 → 형태만 |
+| ECOS(샘플 키) | `817Y002/D/…/010210000` 2026-09-01~26 | 1 | ITEM_NAME1 = 국고채(10년), UNIT_NAME, TIME 형식 |
+| KIS 마스터 | `kospi_code.mst.zip`·`kosdaq_code.mst.zip`·`idxcode.mst.zip` | 3 | 고정폭 뒷부분 길이(227·221), 업종명 파일 이름 위치(헤더 `[5:45]` vs 샘플 `[3:43]`), `0000` 의 실제 분포 |
+| DART | 삼성전자(우선주 있음)·SK하이닉스: `list.json`(정기공시 2025-01-01~2026-09-30) 2 · `fnlttSinglAcntAll` 삼성 2026/11012 CFS·OFS, 2025/11011 CFS, 2025/11014 CFS, 하이닉스 2026/11012 CFS · `stockTotqySttus` 삼성 2026/11012 · 정정본 표본(목록에 `[기재정정]` 이 있으면 그 보고서 1건) | ≤ 10 | 3개월/누적 필드, currency·단위, 연결/별도, EPS 계정 줄(보통주·우선주), 주식총수 행(se), 정정본 접수번호 ↔ 목록 접수일 |
+
+합계 예상 ≤ 16회. 실제 호출 수와 결과는 아래 "실측"에 적는다.

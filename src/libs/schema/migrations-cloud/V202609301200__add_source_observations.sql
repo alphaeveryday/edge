@@ -35,7 +35,7 @@ CREATE TABLE macro_observation (
     PRIMARY KEY (series_id, observation_date, raw_run_id),
     -- 계열·단위·공급자는 한 쌍이다. 단위가 다른 값이 같은 계열에 섞이면 비교 툴의 %p·% 판정이 틀린다.
     CONSTRAINT ck_macro_observation_series CHECK ((series_id, unit, source_vendor) IN (
-        ('usd_krw', 'KRW_per_USD', 'fmp'),
+        ('usd_krw', 'KRW_per_USD', 'ecos'),
         ('us_10y_yield', 'percent', 'fmp'),
         ('kr_10y_yield', 'percent', 'ecos'),
         ('kr_cpi_yoy', 'percent', 'kosis'),
@@ -95,16 +95,16 @@ CREATE TABLE financial_metric (
         ('eps_diluted', 'KRW_per_share', 'QUARTER'), ('eps_diluted', 'KRW_per_share', 'CUMULATIVE'),
         ('revenue', 'KRW', 'QUARTER'), ('revenue', 'KRW', 'CUMULATIVE'),
         ('operating_income', 'KRW', 'QUARTER'), ('operating_income', 'KRW', 'CUMULATIVE'),
-        ('bps', 'KRW_per_share', 'POINT'))),
+        ('bps', 'KRW_per_share', 'POINT'), ('bps_total_shares', 'KRW_per_share', 'POINT'))),
     CONSTRAINT ck_financial_metric_fy CHECK (fiscal_period <> 'FY' OR period_kind = 'CUMULATIVE'),
     CONSTRAINT ck_financial_metric_basis CHECK (fs_basis IN ('CFS', 'OFS')),
     -- 공시 원값에 없는 Q4 3개월 값은 유도만 가능하고, 유도는 그 형태로만 존재한다.
     CONSTRAINT ck_financial_metric_derivation CHECK (
-        (derivation = 'REPORTED' AND metric <> 'bps'
+        (derivation = 'REPORTED' AND metric NOT IN ('bps', 'bps_total_shares')
             AND NOT (fiscal_period = 'Q4' AND period_kind = 'QUARTER'))
         OR (derivation = 'FY_MINUS_9M' AND fiscal_period = 'Q4' AND period_kind = 'QUARTER'
             AND formula IS NOT NULL)
-        OR (derivation = 'EQUITY_OVER_SHARES' AND metric = 'bps' AND formula IS NOT NULL)),
+        OR (derivation = 'EQUITY_OVER_SHARES' AND metric IN ('bps', 'bps_total_shares') AND formula IS NOT NULL)),
     CONSTRAINT ck_financial_metric_availability CHECK (
         (availability_basis = 'received' AND available_at = received_at)
         OR (availability_basis = 'provider_release_date' AND rcept_date IS NOT NULL
@@ -207,8 +207,8 @@ COMMENT ON FUNCTION macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER) IS
 CREATE FUNCTION financial_quarters_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_code TEXT)
 RETURNS TABLE (
     instrument_code TEXT, corp_code TEXT, fiscal_year SMALLINT, period TEXT, period_end DATE,
-    fs_basis TEXT, eps NUMERIC, eps_derivation TEXT, bps NUMERIC, revenue NUMERIC,
-    revenue_derivation TEXT, operating_income NUMERIC, operating_income_derivation TEXT,
+    fs_basis TEXT, eps NUMERIC, eps_derivation TEXT, bps NUMERIC, bps_total_shares NUMERIC, bps_note TEXT,
+    revenue NUMERIC, revenue_derivation TEXT, operating_income NUMERIC, operating_income_derivation TEXT,
     available_at TIMESTAMPTZ, rcept_nos TEXT[], raw_run_ids TEXT[])
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
@@ -230,13 +230,18 @@ BEGIN
         SELECT v.* FROM visible v JOIN basis b ON b.fs_basis = v.fs_basis
         WHERE v.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
           AND ((v.metric IN ('eps_basic', 'revenue', 'operating_income') AND v.period_kind = 'QUARTER')
-               OR v.metric = 'bps')
+               OR v.metric IN ('bps', 'bps_total_shares'))
     )
     SELECT p_instrument_code, min(p.corp_code), p.fiscal_year,
            p.fiscal_year::text || '-' || p.fiscal_period, min(p.period_end), min(p.fs_basis),
            max(p.value) FILTER (WHERE p.metric = 'eps_basic'),
            max(p.derivation) FILTER (WHERE p.metric = 'eps_basic'),
            max(p.value) FILTER (WHERE p.metric = 'bps'),
+           max(p.value) FILTER (WHERE p.metric = 'bps_total_shares'),
+           -- bps 가 비고 통상 BPS 만 있으면 우선주 때문에 보통주 기준을 못 만든 회사다(§10.9 팀 결정 전 사용 금지).
+           CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps') IS NULL
+                 AND max(p.value) FILTER (WHERE p.metric = 'bps_total_shares') IS NOT NULL
+                THEN 'PREFERRED_SHARES_PRESENT' END,
            max(p.value) FILTER (WHERE p.metric = 'revenue'),
            max(p.derivation) FILTER (WHERE p.metric = 'revenue'),
            max(p.value) FILTER (WHERE p.metric = 'operating_income'),
@@ -250,7 +255,7 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) IS
-'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도, *_derivation 으로 표시), BPS는 분기말 시점. 누적값은 반환하지 않는다. 빈 칸(NULL)=그 시점에 미공개·미수집.';
+'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=그 시점에 미공개·미수집, bps_note=PREFERRED_SHARES_PRESENT 는 보통주 기준 BPS 를 만들 수 없는 회사.';
 
 CREATE FUNCTION sector_classification_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_codes TEXT[])
 RETURNS TABLE (

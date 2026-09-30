@@ -53,9 +53,11 @@ _FLOW_ACCOUNTS = {
 }
 _EQUITY_ACCOUNT = {"CFS": "ifrs-full_EquityAttributableToOwnersOfParent", "OFS": "ifrs-full_Equity"}
 _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_share",
-          "eps_diluted": "KRW_per_share", "bps": "KRW_per_share"}
+          "eps_diluted": "KRW_per_share", "bps": "KRW_per_share", "bps_total_shares": "KRW_per_share"}
 BPS_FORMULA = ("bps = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
-               "주식수 = stockTotqySttus se=합계(보통주+우선주); 소수 6자리 ROUND_HALF_UP")
+               "주식수 = stockTotqySttus se=보통주(우선주 없는 회사만); 소수 6자리 ROUND_HALF_UP")
+BPS_TOTAL_FORMULA = ("bps_total_shares = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
+                     "주식수 = stockTotqySttus se=합계(보통주+우선주, 통상 관행); 소수 6자리 ROUND_HALF_UP")
 Q4_FORMULA = "Q4 = FY(사업보고서 thstrm_amount) - 9M(3분기보고서 thstrm_add_amount)"
 
 
@@ -277,7 +279,31 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
     return rows, rejects
 
 
+def _share_row(shares: dict | None, se: str) -> dict | None:
+    return next((r for r in (shares or {}).get("list", [])
+                 if isinstance(r, dict) and str(r.get("se") or "").strip() == se), None)
+
+
+def _share_count(row: dict | None, field: str) -> Decimal | None:
+    """주식총수 표의 수. `-` 는 0 이다(자기주식 없음·우선주 없음) — 금액 칸의 `-`(결측)와 다르다."""
+    if row is None:
+        return None
+    text = str(row.get(field) or "").replace(",", "").strip()
+    if text == "-":
+        return Decimal(0)
+    return _amount(text)
+
+
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
+    """BPS 두 지표 (실응답 2026-09-30 확인 — 삼성전자 우선주 802,371,203주, 자기주식은 보통주에만).
+
+    - `bps`(보통주 1주 기준, v2 밸류 계약 `가격도 같은 주식단위`): 지배기업 소유주지분 ÷ (보통주 발행 − 보통주 자기주식).
+      **우선주가 있으면 만들지 않는다** — 지분을 주식 종류별로 나눌 근거가 공시에 없어 보통주 순수 BPS 를 계산할 수 없다.
+      그 회사는 `bps_blocked_preferred_shares` 로 거부 기록에 남는다(조용히 통상 BPS 로 대체하지 않는다).
+    - `bps_total_shares`(통상 관행): 지배기업 소유주지분 ÷ (보통주+우선주 발행 합계 − 자기주식 합계). 항상 만든다.
+      소비 쪽이 우선주 있는 회사에 이 값을 쓸지는 팀 결정(설계 §10.9)이다.
+    기준시점은 주식총수 표의 `stlm_dt`(보고기간 말)이고 inputs 에 남긴다.
+    """
     line, problem = _pick_line(lines, _EQUITY_ACCOUNT[fs_div], ("BS",))
     if line is None:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
@@ -286,30 +312,46 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
         return []
+    total, common, preferred = _share_row(shares, "합계"), _share_row(shares, "보통주"), _share_row(shares, "우선주")
+    for row in (total, common):
+        if row is not None and not RCEPT_NO.fullmatch(str(row.get("rcept_no"))):
+            # 분모 쪽 접수번호도 DB CHECK 대상이다 — 형식이 틀리면 그 실행의 적재 전체가 롤백된다.
+            rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bad_rcept_no"]})
+            return []
     equity = _amount(line.get("thstrm_amount"))
-    total = next((r for r in (shares or {}).get("list", [])
-                  if isinstance(r, dict) and str(r.get("se") or "").strip() == "합계"), None)
-    issued = _amount(total.get("istc_totqy")) if total else None
-    treasury = _amount(total.get("tesstk_co")) if total else None
-    if total is not None and treasury is None and (total.get("tesstk_co") or "").strip() == "-":
-        treasury = Decimal(0)   # 주식 총수 표의 '-' 는 자기주식 없음이다(금액 칸의 '-' 와 다르다)
-    if total is not None and not RCEPT_NO.fullmatch(str(total.get("rcept_no"))):
-        # 분모 쪽 접수번호도 DB CHECK 대상이다 — 형식이 틀리면 그 실행의 적재 전체가 롤백된다.
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bad_rcept_no"]})
-        return []
-    if equity is None or issued is None or treasury is None or issued - treasury <= 0:
+    issued_total, treasury_total = _share_count(total, "istc_totqy"), _share_count(total, "tesstk_co")
+    issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
+    issued_preferred = _share_count(preferred, "istc_totqy") if preferred is not None else Decimal(0)
+    if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
         return []
-    value = (equity / (issued - treasury)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-    rcept_nos = sorted({line["rcept_no"], total["rcept_no"]})
-    return [{**base, "fiscal_period": fiscal_period, "metric": "bps", "period_kind": "POINT",
-             "derivation": "EQUITY_OVER_SHARES", "value": str(value), "unit": "KRW_per_share",
-             "formula": BPS_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]), "rcept_no": rcept_nos[-1],
-             "inputs": [{"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": "BS",
-                         "account_id": _EQUITY_ACCOUNT[fs_div], "account_nm": line.get("account_nm"),
-                         "field": "thstrm_amount", "value": str(equity)},
-                        {"rcept_no": total.get("rcept_no"), "reprt_code": code, "se": "합계",
-                         "istc_totqy": str(issued), "tesstk_co": str(treasury)}]}]
+    equity_input = {"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": "BS",
+                    "account_id": _EQUITY_ACCOUNT[fs_div], "account_nm": line.get("account_nm"),
+                    "field": "thstrm_amount", "value": str(equity)}
+    shares_input = {"rcept_no": total.get("rcept_no"), "reprt_code": code, "se": "합계",
+                    "istc_totqy": str(issued_total), "tesstk_co": str(treasury_total),
+                    "preferred_istc_totqy": str(issued_preferred) if issued_preferred is not None else "unknown",
+                    "stlm_dt": total.get("stlm_dt")}
+    common_fields = {**base, "fiscal_period": fiscal_period, "period_kind": "POINT", "unit": "KRW_per_share",
+                     "derivation": "EQUITY_OVER_SHARES", "rcept_no": max(line["rcept_no"], total["rcept_no"])}
+    rows = [{**common_fields, "metric": "bps_total_shares",
+             "value": str((equity / (issued_total - treasury_total)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+             "formula": BPS_TOTAL_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
+             "inputs": [equity_input, shares_input]}]
+    if issued_preferred is None or issued_preferred > 0 or None in (issued_common, treasury_common):
+        # 우선주가 있거나 종류별 주식수를 못 읽었다 — 보통주 순수 BPS 를 만들 수 없다.
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_blocked_preferred_shares"],
+                        "preferred_istc_totqy": str(issued_preferred)})
+        return rows
+    if issued_common - treasury_common <= 0:
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
+        return rows
+    rows.append({**common_fields, "metric": "bps",
+                 "value": str((equity / (issued_common - treasury_common)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+                 "formula": BPS_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
+                 "inputs": [equity_input, {**shares_input, "se": "보통주", "istc_totqy": str(issued_common),
+                                           "tesstk_co": str(treasury_common)}]})
+    return rows
 
 
 def derive_q4(fy_rows: list[dict], q3_rows: list[dict]) -> tuple[list[dict], list[dict]]:

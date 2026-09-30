@@ -59,10 +59,11 @@ def _vendor_routes(today) -> dict:
     for row in share_body["list"]:
         row["rcept_no"] = rcept_no
     return {
-        "/fmp/historical-price-eod/full": json.dumps(
-            [{"symbol": "USDKRW", "date": d, "close": 1400 + i} for i, d in enumerate(days)]).encode(),
+        "/ecos/StatisticSearch/E/json/kr/1/10000/731Y003": json.dumps({"StatisticSearch": {"row": [
+            {"ITEM_CODE1": "0000003", "ITEM_NAME1": "원/달러(종가 15:30)", "UNIT_NAME": "원",
+             "TIME": d.replace("-", ""), "DATA_VALUE": str(1400 + i)} for i, d in enumerate(days)]}}).encode(),
         "/fmp/treasury-rates": json.dumps([{"date": d, "year10": 4.1 + i / 100} for i, d in enumerate(days)]).encode(),
-        "/ecos/StatisticSearch": json.dumps({"StatisticSearch": {"row": [
+        "/ecos/StatisticSearch/E/json/kr/1/10000/817Y002": json.dumps({"StatisticSearch": {"row": [
             {"ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%",
              "TIME": d.replace("-", ""), "DATA_VALUE": "2.9"} for d in days]}}).encode(),
         "/kosis/Param/statisticsParameterData.do": json.dumps([

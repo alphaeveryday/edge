@@ -61,11 +61,13 @@ def statement(corp, year, code, fs_div, *, flows=None, equity=None, currency="KR
     return json.dumps({"status": "000", "message": "정상", "list": lines}, ensure_ascii=False).encode()
 
 
-def shares(corp, year, code, *, issued=1_000, treasury=0) -> bytes:
+def shares(corp, year, code, *, issued=1_000, treasury=0, preferred=0) -> bytes:
+    """주식총수 표(실응답 형태: 보통주·우선주·합계·비고, 없는 수는 '-'). `issued` 는 합계, 우선주는 그 안의 몫."""
     rcept_no = FILINGS[(year, code)][1]
-    rows = [{"rcept_no": rcept_no, "corp_code": corp["corp_code"], "se": se, "istc_totqy": fmt(i),
-             "tesstk_co": fmt(t) if t else "-"}
-            for se, i, t in (("보통주", issued - 100, treasury), ("우선주", 100, 0), ("합계", issued, treasury))]
+    rows = [{"rcept_no": rcept_no, "corp_code": corp["corp_code"], "se": se, "istc_totqy": fmt(i) if i else "-",
+             "tesstk_co": fmt(t) if t else "-", "stlm_dt": "2026-06-30"}
+            for se, i, t in (("보통주", issued - preferred, treasury), ("우선주", preferred, 0),
+                             ("합계", issued, treasury), ("비고", 0, 0))]
     return json.dumps({"status": "000", "message": "정상", "list": rows}, ensure_ascii=False).encode()
 
 
@@ -86,13 +88,14 @@ class DartFake:
         from data_pipeline.sources import dart_fundamental as df
 
         self._df, self._corps, self.responses, self.lists, self.calls = df, corps, responses, lists, []
+        self.fetched_at = "2026-08-20T00:00:00+00:00"     # 수신시각 대역 — 테스트가 바꿀 수 있다
 
     def corp_map(self):
         return {c["stock_code"]: {"corp_code": c["corp_code"], "corp_name": c["corp_name"]} for c in self._corps}
 
     def _result(self, kind, request, body):
         status, detail = self._df.classify(body)
-        return self._df.DartResult(kind, request, status, detail, body, "2026-08-20T00:00:00+00:00")
+        return self._df.DartResult(kind, request, status, detail, body, self.fetched_at)
 
     def filings(self, corp_code, start, end):
         self.calls.append(("list", corp_code))

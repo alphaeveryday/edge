@@ -63,9 +63,9 @@ def _macro_source(usd_body: bytes):
     from data_pipeline.config import MacroObservationSource
     from data_pipeline.sources import macro_series
 
-    routes = {"historical-price-eod": usd_body,
+    routes = {"731Y003": usd_body,
               "treasury-rates": (FIXTURES / "fmp_treasury.json").read_bytes()}
-    return macro_series.MacroSource(MacroObservationSource(), fmp_api_key="F", client=_Client(routes))
+    return macro_series.MacroSource(MacroObservationSource(ecos_api_key="E"), fmp_api_key="F", client=_Client(routes))
 
 
 def _macro_run(storage, tag: str, usd_body: bytes) -> str:
@@ -90,7 +90,7 @@ def test_macro_chain_lands_versions_and_the_as_of_query_respects_receipt(tmp_pat
     from data_pipeline.steps import source_observations as so
 
     storage = LocalStorage(tmp_path)
-    usd = (FIXTURES / "fmp_usdkrw.json").read_bytes()
+    usd = (FIXTURES / "ecos_usdkrw.json").read_bytes()
     first = _macro_run(storage, "a", usd)
 
     # 저장 뒤 적재 전에 멈췄다가 복구: 마커 없는 완료 manifest 를 --all 이 싣는다.
@@ -114,7 +114,7 @@ def test_macro_chain_lands_versions_and_the_as_of_query_respects_receipt(tmp_pat
     # DB 행이 manifest·원천 근거로 이어진다.
     manifest = json.loads(storage.get_bytes(
         f"operations_archive/canonical_run_manifests/dataset=macro_observation/run_id={first}/manifest.json"))
-    assert {r[4] for r in rows} == {first} and rows[0][3].startswith("raw/source=fmp/dataset=macro_observation/")
+    assert {r[4] for r in rows} == {first} and rows[0][3].startswith("raw/source=ecos/dataset=macro_observation/")
     assert storage.get_bytes(rows[0][3])     # raw 원문이 그 키에 있다
     assert manifest["artifact"]["rows"] == 6
     # "최근 공개 2관측일" 요구는 limit 로 고른다 — 툴 기본 21 과 섞지 않는다.
@@ -122,7 +122,7 @@ def test_macro_chain_lands_versions_and_the_as_of_query_respects_receipt(tmp_pat
 
     # 공급자 정정: 새 실행의 값은 그 수신 이후에만 보이고, 이전 기준시각은 옛 값을 그대로 본다.
     revised = json.loads(usd)
-    revised[1]["close"] = 1465.0
+    revised["StatisticSearch"]["row"][1]["DATA_VALUE"] = "1465.0"
     second = _macro_run(storage, "b", json.dumps(revised).encode())
     assert so.load(storage, so.MACRO, _db(), f"{RUN}load3", input_run_id=second, pending=False,
                    producer="load_macro") == 0
