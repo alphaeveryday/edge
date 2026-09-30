@@ -246,9 +246,14 @@ def shutdown() -> int:
     def running_verify() -> list[dict]:
         arns = [a for p in ecs.get_paginator("list_tasks").paginate(cluster=cluster, desiredStatus="RUNNING")
                 for a in p["taskArns"] if a != me]
-        return [t for i in range(0, len(arns), 100) for t in ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])["tasks"]
-                # 자기 자신은 ARN 조회가 실패해도 startedBy 로 뺀다
-                if "-verify-" in t["taskDefinitionArn"] and t.get("startedBy") != "verify-shutdown"]
+        out = []
+        for i in range(0, len(arns), 100):
+            resp = ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])
+            if resp.get("failures"):          # 일부라도 못 읽었으면 "남은 태스크 없음"이 아니라 조회 실패다
+                raise RuntimeError(f"describe_tasks failures: {resp['failures']}")
+            # 자기 자신은 ARN 조회가 실패해도 startedBy 로 뺀다
+            out += [t for t in resp["tasks"] if "-verify-" in t["taskDefinitionArn"] and t.get("startedBy") != "verify-shutdown"]
+        return out
 
     try:
         step("service_desired_0_at", lambda: ecs.update_service(cluster=cluster, service=os.environ["VERIFY_SERVICE"],

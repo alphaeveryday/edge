@@ -510,7 +510,10 @@ def analyze(exp: str) -> dict:
             "A9_no_growth": "n/a(V)", "A10_ui": "n/a(V)",
             # 상한 도달이 관측됐으면 누락 표본과 무관하게 실패다.
             "A11_task_headroom": False if host and host["task_hit_limit_events"] else
-            None if host is None or not host["task_paths_seen"] or host["task_events_missing"] else True,
+            # 관측이 실험 전 구간을 덮고 공백이 없어야 "도달 0" 을 말할 수 있다(A2 와 같은 조건).
+            None if (host is None or not host["task_paths_seen"] or host["task_events_missing"]
+                     or host["max_gap_s"] is None or host["max_gap_s"] > 30
+                     or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else True,
             "A12_deploy_fixed": None if not fps or any('"tasks": []' in f for f in fps) else len(tds) == 1,
         })
     del lim, placement
