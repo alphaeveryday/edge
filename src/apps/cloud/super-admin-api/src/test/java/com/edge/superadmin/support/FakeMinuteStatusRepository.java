@@ -17,6 +17,8 @@ public class FakeMinuteStatusRepository implements MinuteStatusRepository {
 	private static final JobCounts NO_JOBS = new JobCounts(0, 0, 0, 0, 0, 0);
 
 	private final Map<LocalDate, MinuteStatus> byDate;
+	/** 세션별 판정 근거 — 세션 ID 를 무시하면 "sessionId 가 전달되는가"를 검증할 수 없다. */
+	public final Map<String, List<PriceJudgmentRow>> judgments = new HashMap<>();
 
 	public FakeMinuteStatusRepository() {
 		this(Map.of());
@@ -52,5 +54,10 @@ public class FakeMinuteStatusRepository implements MinuteStatusRepository {
 			}
 		});
 		return new DailyStatus(sessions, news);
+	}
+
+	@Override
+	public List<PriceJudgmentRow> priceJudgments(String sessionId) {
+		return judgments.getOrDefault(sessionId, List.of());
 	}
 }

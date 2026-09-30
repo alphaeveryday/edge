@@ -849,6 +849,46 @@ class SourceControllerTest {
 
 	/* ---------- 장중 1분 파이프라인 (ALPHA-651) ---------- */
 
+	@Test
+	void 판정_근거는_기록_없음과_이력_없음을_추정으로_채우지_않는다() throws Exception {
+		// WHY: 판정 근거 화면은 "정상 완료한 판정이 실제로 쓴 입력"만 보여야 한다. 기록이 없는 job 을
+		//      무발화로, artifact 이력이 없는 세대를 현재 window 로 채우면 과거 판정을 최신 데이터로
+		//      설명하게 된다(§33.9). 재계산은 제공하지 않으므로 보장 불가를 명시한다.
+		FakeMinuteStatusRepository minute = new FakeMinuteStatusRepository();
+		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
+		minute.judgments.put("sess-p", List.of(
+				new MinuteStatusRepository.PriceJudgmentRow(w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
+						1, 0, w0.plusSeconds(3), true, "test-policy",
+						"{\"fired\": [\"500000\"], \"inserted\": [\"500000\"]}",
+						"{\"500000\": [\"104.000000\", \"2026-10-05T00:00:00+00:00\"]}",
+						"{\"500000\": \"2026-10-05T00:00:00+00:00\"}",
+						"{\"500000\": {\"value\": 100, \"source\": \"open_fallback\", \"ref\": \"W0@g1\"}}", 2),
+				new MinuteStatusRepository.PriceJudgmentRow(w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
+						2, 0, w0.plusSeconds(90), false, "test-policy", "{\"fired\": []}", "{}", "{}", null, 2),
+				new MinuteStatusRepository.PriceJudgmentRow(w0.plusMinutes(1), 2, 1, "SUCCEEDED", 1, null, null,
+						null, null, null, null, null, null, null, null, null, null)));
+		MockMvc mvc = minuteMvc(minute);
+		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-p"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.recomputation").value("NOT_GUARANTEED"))
+				.andExpect(jsonPath("$.result.windows[0].attempts.length()").value(2))
+				.andExpect(jsonPath("$.result.windows[0].attempts[0].summary.inserted[0]").value("500000"))
+				.andExpect(jsonPath("$.result.windows[0].attempts[0].txAnchorLocked").value(true))
+				.andExpect(jsonPath("$.result.windows[0].attempts[1].txAnchorLocked").value(false))
+				.andExpect(jsonPath("$.result.windows[0].attempts[0].baselines.500000.source").value("open_fallback"))
+				.andExpect(jsonPath("$.result.windows[0].inputRecord").value("RECORDED"))
+				.andExpect(jsonPath("$.result.windows[0].sourceRecheck").value("NOT_PERFORMED"))
+				.andExpect(jsonPath("$.result.windows[1].attempts.length()").value(0))      // 기록 없음
+				.andExpect(jsonPath("$.result.windows[1].inputRecord").value("NO_HISTORY"))
+				.andExpect(jsonPath("$.result.windows[1].sourceRecheck").value("NOT_PERFORMED"))
+				.andExpect(jsonPath("$.result.windows[1].correctedAfter").value(true));
+		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", "other"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.windows.length()").value(0));
+		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", " "))
+				.andExpect(status().isBadRequest());
+	}
+
 	private MockMvc minuteMvc(FakeMinuteStatusRepository minute) {
 		return MockMvcBuilders
 				.standaloneSetup(new SourceController(new SourceService(
