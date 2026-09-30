@@ -264,7 +264,7 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
                 continue
             rows.append((_iso(item.get("TIME"), "%Y%m%d"), item.get("DATA_VALUE"),
                          {"unit": item.get("UNIT_NAME"), "identity": item.get("ITEM_CODE1"),
-                          "identity_name": item.get("ITEM_NAME1")}))
+                          "identity_name": item.get("ITEM_NAME1"), "table": item.get("STAT_CODE")}))
     elif series_id == "kr_cpi_yoy":
         for item in data:
             if not isinstance(item, dict):
@@ -298,7 +298,8 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
         expected_unit = _VENDOR_UNITS.get(series_id)
         if expected_unit and fields.get("unit") != expected_unit:
             reasons.append("unit_mismatch")
-        if series_id in _ECOS and (fields.get("identity") != _ECOS[series_id][1]
+        if series_id in _ECOS and (fields.get("table") != _ECOS[series_id][0]
+                                   or fields.get("identity") != _ECOS[series_id][1]
                                    or str(fields.get("identity_name")) != _ECOS[series_id][2]):
             reasons.append("series_identity_mismatch")
         if series_id == "kr_cpi_yoy" and (fields.get("identity") not in (None, "T03")

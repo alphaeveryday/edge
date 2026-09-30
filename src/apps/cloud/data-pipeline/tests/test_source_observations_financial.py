@@ -466,3 +466,16 @@ def test_share_table_must_be_dated_at_the_report_period_end_and_integer():
     assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
     assert dart_fundamental._share_count({"istc_totqy": "100.5"}, "istc_totqy") is None
     assert dart_fundamental._share_count({"istc_totqy": "1,000"}, "istc_totqy") == 1000
+
+
+def test_share_counts_are_normalized_to_integer_strings_and_defect_beats_policy():
+    # WHY(리뷰 11차): "100.0" 이 inputs 에 그대로 남으면 DB 조회가 우선주 정책 차단을 파손으로 읽는다. 그리고 우선주가 있어도
+    # 종류별 수를 못 읽었으면 파손이 먼저다.
+    assert str(dart_fundamental._share_count({"istc_totqy": "100.0"}, "istc_totqy")) == "100"
+    body = json.loads(shares(SAMSUNG, "2026", "11012", preferred=100))
+    for r in body["list"]:
+        if r["se"] == "우선주":
+            r["tesstk_co"] = "-5"
+    _, rejects = _extract_bps(body)
+    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
+    assert not any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)

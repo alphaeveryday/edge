@@ -699,7 +699,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - **단건 재현(컨테이너 밖, 같은 이미지)**: `python -m data_pipeline.run ingest-raw-macro --series usd_krw --from 2026-09-15 --to 2026-09-26 --run-id manual_1` 뒤 `normalize-macro --input-run-id manual_1` → `load-macro --input-run-id <정제 run_id>`. 재무·업종도 같은 3단.
 - **교차 확인(run 뒤)**: ① raw manifest `operations_archive/raw_run_manifests/dataset=*/run_id=<run>/manifest.json` 의 `counts`(ok·empty·error)와 `code_version` ② canonical manifest 의 `rows`·`rejected`·`raw_manifest_sha256` 가 ①의 **저장된 manifest.json 바이트의 sha256**(`shasum -a 256 manifest.json` — manifest 안에 자기 해시 필드는 없다)과 같은지 ③ DB `SELECT count(*), max(received_at) FROM macro_observation WHERE raw_run_id='<run>'` 가 ②의 `rows` 와 같은지 ④ `SELECT * FROM source_observation_freshness()` 에 데이터셋 행이 생겼는지 ⑤ v2 어댑터 경로: `SELECT * FROM macro_observations_as_of(now(),'usd_krw',2)` 를 `edge_analysis_v2_writer` 로(`SET ROLE`) 실행 — 테이블 직접 SELECT 는 거부돼야 정상.
 - **재수집 없는 복구**: 정제·적재만 실패했으면 params `reprocess_slot=<그 슬롯 ISO>` 로 같은 DAG 재trigger(수집 스텝 건너뜀, raw manifest 재사용). 적재만 실패했으면 `load-* --all` 이 미소비 정제 run 을 모두 싣는다(멱등). artifact 가 30일 만료된 뒤엔 `normalize-* --input-run-id <raw run>` 으로 같은 raw 에서 다시 정제한다 — `code_version` 이 다르면 "같은 입력의 재정제"이지 그때 그 행이 아니다(§10.3).
-- **멈추기**: DAG pause(다음 슬롯 안 돎) → 실행 중 run 은 Airflow 에서 task clear 하지 말고 ECS `stop-task` 뒤 원장 보류 해제 절차(아래 "보류 해제와 수동 복구"). 수집 중 정지는 raw 를 남기고 manifest 를 안 남기므로 같은 run_id 재수집이 공급자를 다시 부른다(불변 키라 중복 저장은 없다).
+- **멈추기**: DAG pause(다음 슬롯 안 돎) → 실행 중 run 은 Airflow 에서 task clear 하지 말고 ECS `stop-task` 뒤 원장 보류 해제 절차(아래 "보류 해제와 수동 복구"). 수집 스텝은 공급자 호출을 **다 마친 뒤** raw 객체와 manifest 를 쓴다(`write_raw_run`) — 수집 중 정지하면 그때까지 받은 응답도 남지 않고, 같은 run_id 재수집이 공급자를 처음부터 다시 부른다(정정이 그 사이 있었으면 같은 원문은 못 얻는다). 정지는 정제·적재 단계에서 하는 편이 싸다.
 
 ## 활성화 전 결정·미해결 조건
 

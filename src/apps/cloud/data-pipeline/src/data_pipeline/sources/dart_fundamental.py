@@ -300,8 +300,11 @@ def _share_count(row: dict | None, field: str) -> Decimal | None:
     if text == "-":
         return Decimal(0)
     count = _amount(text)
-    # 음수·소수 주식수는 파손 응답 — 주식은 정수 단위다(DB 조회의 우선주 판정도 정수 문자열을 전제한다).
-    return None if count is not None and (count < 0 or count != count.to_integral_value()) else count
+    # 음수·소수 주식수는 파손 응답 — 주식은 정수 단위다. 정수 표기로 정규화한다("100.0"·"1E+2" 가 inputs 에 그대로
+    # 남으면 DB 조회의 우선주 판정(정수 문자열 정규식)이 정책 차단을 파손으로 읽는다).
+    if count is None or count < 0 or count != count.to_integral_value():
+        return None
+    return Decimal(int(count))
 
 
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
@@ -373,7 +376,9 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
              "inputs": [equity_input, shares_input]}]
     if issued_preferred is None or issued_preferred > 0 or None in (issued_common, treasury_common, treasury_preferred):
         # 우선주가 있으면 정책 차단(§10.9 팀 결정), 종류별 주식수를 못 읽었으면 데이터 결함 — 사유를 섞지 않는다.
-        reason = "bps_blocked_preferred_shares" if issued_preferred else "bps_share_rows_unreadable"
+        # 우선주가 있어도 종류별 수를 하나라도 못 읽었으면 파손이 먼저다 — 재수집 대상이 정책 대기로 보이면 안 된다.
+        unreadable = None in (issued_common, treasury_common, treasury_preferred)
+        reason = "bps_blocked_preferred_shares" if issued_preferred and not unreadable else "bps_share_rows_unreadable"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows

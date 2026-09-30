@@ -275,3 +275,12 @@ def test_monthly_window_starts_on_the_first_so_the_first_requested_month_is_kept
     start, end = so.macro_window("kr_cpi_yoy", date(2026, 9, 30), None, None)
     assert start.day == 1 and start <= date(2026, 5, 29)
     assert so.macro_window("kr_cpi_yoy", date(2026, 9, 30), "2026-02-15", "2026-06-30")[0] == date(2026, 2, 1)
+
+
+def test_ecos_rows_from_another_statistics_table_are_rejected():
+    # WHY(리뷰 11차): 항목 코드·이름·단위가 같아도 다른 통계표(STAT_CODE)의 행은 요청한 계열이 아니다.
+    body = json.loads((FIXTURES / "ecos_usdkrw.json").read_bytes())
+    for row in body["StatisticSearch"]["row"]:
+        row["STAT_CODE"] = "731Y001"
+    good, bad = macro_series.parse("usd_krw", json.dumps(body).encode())
+    assert good == [] and all("series_identity_mismatch" in r["reasons"] for r in bad) and bad
