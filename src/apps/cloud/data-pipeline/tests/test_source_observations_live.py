@@ -78,7 +78,7 @@ def test_fmp_treasury_live_row_is_percent_per_maturity():
 # ── KIS 업종 ─────────────────────────────────────────────────────────────
 
 def test_kis_master_live_layout_names_and_levels(monkeypatch):
-    monkeypatch.setattr(kis_sector_master, "MIN_ROWS", 1)      # 축약 fixture — 행수 게이트는 별도 테스트가 본다
+    monkeypatch.setattr(kis_sector_master, "MIN_ROWS_BY_MARKET", {"KOSPI": 1, "KOSDAQ": 1})   # 축약 fixture — 행수 게이트는 별도 테스트가 본다
     # WHY: 실파일로 확정한 사실 — 뒷부분 227/221자, 업종명은 헤더 `[5:45]`(공식 샘플 `[3:43]` 은 틀렸다),
     # 대분류=업종 그룹(제조·금융…), 중분류=제조 안의 산업, 소분류는 전 종목 0000.
     names, warnings = kis_sector_master.parse_sector_names(live("kis_idxcode.mst.zip"))

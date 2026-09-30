@@ -114,7 +114,11 @@ def test_named_rows_are_not_visible_before_the_name_table_arrives():
         {"request": {"file": "idxcode.mst.zip"}, "body": NAMES, "key": "raw/names", "sha256": "b", "fetched_at": names_at},
     ]
     rows, _ = so_sector._normalize_sector(objects, {})
-    assert rows and {(r["received_at"], r["available_at"]) for r in rows} == {(names_at, names_at)}
+    named = [r for r in rows if r["large_name"] or r["medium_name"] or r["small_name"]]
+    assert named and {(r["received_at"], r["available_at"]) for r in named} == {(names_at, names_at)}
+    # 봇 P2: 이름 표에 기대지 않는 행(코드 셋 다 0000 — KODEX 반도체)은 마스터 수신시각부터 보인다.
+    etf = next(r for r in rows if r["instrument_code"] == "091160")
+    assert (etf["received_at"], etf["available_at"]) == (master_at, master_at)
     assert {r["raw_key"] for r in rows} == {"raw/kospi"}                       # 근거는 행을 만든 마스터
     assert any(r["large_name"] for r in rows)
     # 이름 표를 못 받은 실행은 마스터 수신시각 그대로다(붙인 이름이 없다).
@@ -131,7 +135,10 @@ def test_snapshot_date_follows_the_name_table_across_kst_midnight():
         {"request": {"file": "idxcode.mst.zip"}, "body": NAMES, "key": "raw/names", "sha256": "b", "fetched_at": names_at},
     ]
     rows, _ = so_sector._normalize_sector(objects, {})
-    assert rows and {(r["as_of_date"], r["received_at"]) for r in rows} == {("2026-10-01", names_at)}
+    named = [r for r in rows if r["large_name"] or r["medium_name"] or r["small_name"]]
+    assert named and {(r["as_of_date"], r["received_at"]) for r in named} == {("2026-10-01", names_at)}
+    etf = next(r for r in rows if r["instrument_code"] == "091160")      # 이름 없는 행은 마스터 날짜에 남는다
+    assert (etf["as_of_date"], etf["received_at"]) == ("2026-09-30", master_at)
 
 
 def test_an_empty_name_table_is_a_partial_failure_not_silently_blank_names():
@@ -149,3 +156,16 @@ def test_an_empty_name_table_is_a_partial_failure_not_silently_blank_names():
     assert {"reasons": ["sector_name_table_empty"]} in rejects
     # 봇 P2: 쓸 이름이 없는 표는 행의 수신시각을 늦추지 않는다(자정을 넘기면 기준일까지 바뀐다).
     assert rows and {r["available_at"] for r in rows} == {"2026-09-30T00:00:01+00:00"}
+
+
+def test_a_well_formed_but_half_size_master_is_rejected():
+    # WHY(봇 P1): 형식은 멀쩡한데 행이 절반만 온 마스터를 받으면 빠진 종목이 as-of 조회에서 found=false 가 되어
+    # "스냅샷에 없음"과 구분이 안 된다. 행수 하한은 실측(2026-09-30 KOSPI 2,578·KOSDAQ 1,827행)의 90% — 상장 종목 수가
+    # 하루에 10% 넘게 줄 수는 없다.
+    from source_observation_fakes import filler, master_line, zipped
+
+    half = zipped("kospi_code.mst", [
+        master_line("005930", "KR7005930003", "삼성전자", "ST", "0013", "0027", "0000", 227), *filler(227, n=1300)])
+    rows, rejects = kis_sector_master.parse_master("kospi_code.mst.zip", half)
+    assert rows == [] and rejects[0]["reasons"] == ["master_layout_gate"]
+    assert kis_sector_master.MIN_ROWS_BY_MARKET == {"KOSPI": 2320, "KOSDAQ": 1644}

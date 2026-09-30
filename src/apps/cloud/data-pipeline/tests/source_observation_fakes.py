@@ -165,10 +165,10 @@ def filler(tail, n=520, prefix="9"):
 KOSPI = zipped("kospi_code.mst", [
     master_line("005930", "KR7005930003", "삼성전자", "ST", "0013", "0027", "0000", 227),
     master_line("091160", "KR7091160002", "KODEX 반도체", "EF", "0000", "0000", "0000", 227),
-    *filler(227)])
+    *filler(227, n=2330)])                      # 시장별 행수 하한(실측의 90%)을 넘는 크기
 KOSDAQ = zipped("kosdaq_code.mst", [
     master_line("058470", "KR7058470006", "리노공업", "ST", "1028", "0000", "0000", 221),
-    *filler(221, prefix="8")])
+    *filler(221, n=1650, prefix="8")])
 NAMES = zipped("idxcode.mst", ["00013전기·전자", "00027제조", "11028전기·전자"])
 
 
