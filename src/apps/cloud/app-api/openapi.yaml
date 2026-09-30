@@ -42,13 +42,11 @@ tags:
   - name: watch
     description: 관심 그룹과 구성원. 게스트는 디바이스 단위 저장
   - name: theme
-    description: 테마 목록·피드·시트·분석
+    description: 테마 목록
   - name: explore
     description: 탐색 순위
   - name: analysis
     description: AI 일간 분석과 요인·지표 페이지. 미생성은 ANALYSIS4001
-  - name: issue
-    description: 이슈 목록·상세
   - name: community
     description: 글·답글·좋아요·투표. 쓰기는 회원
   - name: notification
@@ -64,8 +62,6 @@ x-error-codes:
   COMMON500: { http: 500, message: "서버 에러, 관리자에게 문의 바랍니다." }
   ETF4001: { http: 404, message: 없는 ETF 입니다. }
   ANALYSIS4001: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 앱 Pending 화면 분기. 없는 ETF(ETF4001)와 구분
-  THEME4001: { http: 404, message: 없는 테마입니다. }
-  ISSUE4001: { http: 404, message: 없는 이슈입니다. }
   POST4001: { http: 404, message: 없는 글입니다. }
   POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 커뮤니티 정책
   POST4003: { http: 400, message: 태그는 최대 3개입니다. }
@@ -473,41 +469,6 @@ paths:
                   - properties:
                       result: { type: array, items: { $ref: '#/components/schemas/Theme' } }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
-  /themes/feed:
-    get:
-      tags: [theme]
-      operationId: themeFeed
-      summary: 테마 피드
-      security: []
-      responses:
-        '200':
-          description: 테마 피드
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result: { type: array, items: { $ref: '#/components/schemas/ThemeFeedItem' } }
-        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
-  /themes/{key}:
-    get:
-      tags: [theme]
-      operationId: themeDetail
-      summary: 테마 분석
-      security: []
-      parameters: [{ $ref: '#/components/parameters/ThemeKey' }]
-      responses:
-        '200':
-          description: 테마 분석
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result: { $ref: '#/components/schemas/ThemeDetail' }
-        '404': { $ref: '#/components/responses/Error' }   # THEME4001 또는 ANALYSIS4001(mock 은 NOT_READY)
 
   # ── explore ──────────────────────────────────────────
   /explore/rank:
@@ -590,49 +551,6 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/MetricPage' }
         '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
-  # ── issue ────────────────────────────────────────────
-  /issues:
-    get:
-      tags: [issue]
-      operationId: issueList
-      summary: 이슈 목록
-      parameters:
-        - { name: tab, in: query, required: true, schema: { type: string, enum: [mine, all] } }
-        - { $ref: '#/components/parameters/Cursor' }
-        - { $ref: '#/components/parameters/Size' }
-      responses:
-        '200':
-          description: 이슈 목록
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result:
-                        allOf:
-                          - $ref: '#/components/schemas/Page'
-                          - properties:
-                              items: { type: array, items: { $ref: '#/components/schemas/IssueRow' } }
-        '401': { $ref: '#/components/responses/Error' }   # COMMON401
-  /issues/{id}:
-    get:
-      tags: [issue]
-      operationId: issueGet
-      summary: 이슈 상세
-      security: []
-      parameters: [{ $ref: '#/components/parameters/Id' }]
-      responses:
-        '200':
-          description: 이슈 상세
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - properties:
-                      result: { $ref: '#/components/schemas/IssueDetail' }
-        '404': { $ref: '#/components/responses/Error' }   # ISSUE4001
 
   # ── community ────────────────────────────────────────
   /posts:
@@ -870,7 +788,6 @@ components:
   parameters:
     EtfCode: { name: code, in: path, required: true, schema: { $ref: '#/components/schemas/EtfCode' } }
     WatchGroup: { name: group, in: path, required: true, schema: { type: string }, description: 관심 그룹 key. 기본 그룹은 base }
-    ThemeKey: { name: key, in: path, required: true, schema: { type: string } }
     Axis: { name: axis, in: path, required: true, schema: { $ref: '#/components/schemas/Axis' } }
     Id: { name: id, in: path, required: true, schema: { type: string } }
     Cursor: { name: cursor, in: query, schema: { type: string }, description: 이전 응답의 nextCursor. 첫 페이지는 생략 }
@@ -1293,105 +1210,6 @@ components:
         title: { type: string }
         chips: { type: array, items: { type: string } }
         ready: { type: boolean }
-    ThemeFeedItem:
-      type: object
-      required: [key, count, headline, dir]
-      properties:
-        key: { type: string }
-        count: { type: integer }
-        headline: { type: string }
-        dir: { $ref: '#/components/schemas/Dir' }
-    ThemeDetail:
-      type: object
-      required: [key, headline, stocks, intro, updated, countLabel, todayLine, todayEffect, importantLead, importantWhy, metric, thesis, surface, structure, structureWhy, soWhat]
-      properties:
-        key: { type: string }
-        headline: { type: string }
-        stocks:
-          type: array
-          items:
-            type: object
-            required: [name, etfs]
-            properties:
-              name: { type: string }
-              etfs: { type: string }
-        intro: { type: string }
-        updated: { type: string, format: date-time }
-        countLabel: { type: string }
-        todayLine: { type: string }
-        todayEffect: { type: string }
-        importantLead: { type: string }
-        importantWhy: { type: string }
-        metric:
-          type: object
-          required: [name, now, dir, vals, thresh, xLabels, refLabel, state]
-          properties:
-            name: { type: string }
-            now: { type: string }
-            dir: { $ref: '#/components/schemas/Dir' }
-            vals: { type: array, items: { type: number } }
-            thresh: { type: number }
-            xLabels: { type: array, items: { type: string } }
-            refLabel: { type: string }
-            state: { type: string }
-        thesis: { type: string }
-        surface: { type: string }
-        structure: { type: string }
-        structureWhy: { type: string }
-        soWhat: { type: string }
-
-    # ── 이슈 ──
-    IssueRow:
-      type: object
-      required: [id, rank, delta, title, kw]
-      properties:
-        id: { type: string }
-        rank: { type: integer }
-        delta: { type: integer, description: 순위 변동 }
-        title: { type: string }
-        kw: { type: string }
-        etf:
-          type: object
-          required: [code, name, theme]
-          properties:
-            code: { $ref: '#/components/schemas/EtfCode' }
-            name: { type: string }
-            theme: { type: string }
-            sub: { type: string }
-    IssueDetail:
-      type: object
-      required: [id, title, body, points, sources, effect, affected]
-      properties:
-        id: { type: string }
-        title: { type: string }
-        body: { type: string }
-        points: { type: array, items: { type: string } }
-        sources:
-          type: array
-          items:
-            type: object
-            required: [title, pub, url]
-            properties:
-              title: { type: string }
-              pub: { type: string }
-              url: { type: string, format: uri }
-        effect:
-          type: object
-          required: [theme, dir, body]
-          properties:
-            theme: { type: string }
-            dir: { $ref: '#/components/schemas/Dir' }
-            body: { type: string }
-        affected:
-          type: array
-          items:
-            allOf:
-              - $ref: '#/components/schemas/EtfSummary'
-              - type: object
-                properties:
-                  prev: { $ref: '#/components/schemas/Signal' }
-
-    # ── 알림 ──
     Notification:
       type: object
       required: [id, kind, time, title, body, read]

@@ -39,13 +39,13 @@ Cluster 실험은 마스터 3+replica 3 에 `cluster-require-full-coverage=no`�
 
 app-api 를 ETF Orca 앱(app-ui)의 B2C 서버로 확장한다(ADR-0056). 계약 정본은 [openapi.yaml](openapi.yaml)(계약 우선). 구현 때 springdoc 을 붙여 `/v3/api-docs` 로 나오는 구현 문서를 yaml 과 대조하는 검증용으로만 쓴다. 애노테이션으로 yaml 내용을 중복 기술하지 않는다. 아직 계획이며, 아래 규칙대로 구현한다.
 
-**패키지는 도메인 단위, 안은 layered.** 도메인은 openapi.yaml 의 태그 12개와 1:1 이라 operationId 와 클래스가 바로 대응된다.
+**패키지는 도메인 단위, 안은 layered.** 도메인은 openapi.yaml 의 태그 11개와 1:1 이라 operationId 와 클래스가 바로 대응된다.
 
 ```
 com.edge.app
   common/        AppErrorStatus, 인증 필터(Bearer + X-Device-Id), 커서 인코딩, config(Redis·ShedLock)
   auth/ member/ onboarding/ home/ etf/ watch/ theme/
-  explore/ analysis/ issue/ community/ notification/
+  explore/ analysis/ community/ notification/
 ```
 
 각 도메인 안은 계층 폴더 `controller/`·`service/`·`repository/`·`entity/`·`event/`·`dto/` 로 나눈다(없는 계층 폴더는 만들지 않는다). 도메인 안에 기능이 여럿이면 기능 하위 패키지로 먼저 묶고 그 안을 계층 폴더로 나눈다(`community/vote/controller/`, 나중의 `community/post/`). 엔티티는 접미사 없이 이름 그대로(`Post`, `Vote`). 조회 하나짜리 도메인(home·story·explore)은 Repository 없이 Service 가 다른 도메인 Repository 를 읽는다. 도메인이 작으면 파일 셋으로 끝나도 된다.
@@ -66,7 +66,7 @@ com.edge.app
 
 **구현 순서는 스텁 → 실 구현.** 계약의 operation 전부를 컨트롤러·DTO 로 먼저 만들고 서비스는 고정 예시 데이터를 반환한다. 앱은 그 시점부터 붙는다. 도메인을 구현하면 그 서비스 본문을 교체한다. mock 모드(플래그로 mock·real 병존)는 두지 않는다. 앱 쪽 mock 클라이언트가 이미 12 도메인을 덮고 있어 서버 mock 은 가짜 데이터 두 벌이 되고, 플래그·분기가 영구히 남기 때문이다. 실데이터가 아직 없는 도메인은 스텁이 예시를 주거나 준비 중 코드(`ANALYSIS4001`)를 준다. 남은 스텁은 검색으로 센다.
 
-**데이터.** 사용자·관심·게시물·투표·알림은 이 모듈이 쓰기 소유. ETF·분석·이슈·테마는 파이프라인 산출물을 앱 DB 로 동기화한 읽기 전용 테이블(방식 미결, ADR-0056 미결 항목). 스키마는 `db/etf-migration` Flyway 가 소유하며 Hibernate 는 `validate` 만 한다.
+**데이터.** 사용자·관심·게시물·투표·알림은 이 모듈이 쓰기 소유. ETF·분석·테마는 파이프라인 산출물을 앱 DB 로 동기화한 읽기 전용 테이블(방식 미결, ADR-0056 미결 항목). 스키마는 `db/etf-migration` Flyway 가 소유하며 Hibernate 는 `validate` 만 한다.
 
 ## Redis Cluster 부분 장애 실측 (2026-09-20)
 
