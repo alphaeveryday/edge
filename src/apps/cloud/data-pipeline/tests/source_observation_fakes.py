@@ -142,3 +142,48 @@ def write_holdings(storage, as_of: str, tickers: list[str], etf_id: str = "09116
     pq.write_table(pa.Table.from_pylist(rows, schema=_canonical_schema()), buf)
     storage.put_bytes(f"{canonical_etf_holdings_partition('KR', as_of)}/part-00000.parquet", buf.getvalue())
 
+
+# ── KIS 마스터 ZIP (공식 헤더의 고정폭 형식, cp949) ──
+
+def master_line(code, isin, name, group, large, medium, small, tail):
+    back = f"{group:<2}1{large}{medium}{small}".ljust(tail, "N")
+    return f"{code:<9}{isin:<12}{name}  {back}"
+
+
+def zipped(member: str, lines: list[str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr(member, ("\n".join(lines) + "\n").encode("cp949"))
+    return buf.getvalue()
+
+
+def filler(tail, n=520, prefix="9"):
+    return [master_line(f"{prefix}{i:05d}", f"KR7{prefix}{i:05d}000", f"종목{i}", "ST", "0013", "0000", "0000", tail)
+            for i in range(n)]
+
+
+KOSPI = zipped("kospi_code.mst", [
+    master_line("005930", "KR7005930003", "삼성전자", "ST", "0013", "0027", "0000", 227),
+    master_line("091160", "KR7091160002", "KODEX 반도체", "EF", "0000", "0000", "0000", 227),
+    *filler(227)])
+KOSDAQ = zipped("kosdaq_code.mst", [
+    master_line("058470", "KR7058470006", "리노공업", "ST", "1028", "0000", "0000", 221),
+    *filler(221, prefix="8")])
+NAMES = zipped("idxcode.mst", ["00013전기·전자", "00027제조", "11028전기·전자"])
+
+
+class SectorClient:
+    def __init__(self, routes):
+        self.routes, self.calls = routes, []
+
+    def request(self, method, url, *, headers=None, data=None, decode=True):
+        self.calls.append(url)
+        response = next(v for k, v in self.routes.items() if url.endswith(k))
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+
+
+SECTOR_ROUTES = {"kospi_code.mst.zip": KOSPI, "kosdaq_code.mst.zip": KOSDAQ, "idxcode.mst.zip": NAMES}

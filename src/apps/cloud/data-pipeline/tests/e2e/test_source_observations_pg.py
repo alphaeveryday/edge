@@ -42,7 +42,8 @@ def conn():
                                  password=db.password, autocommit=True)
     cleanup = ["DELETE FROM macro_observation WHERE raw_run_id LIKE %s",
                "DELETE FROM financial_metric WHERE raw_run_id LIKE %s",
-               "DELETE FROM financial_report_version WHERE raw_run_id LIKE %s"]
+               "DELETE FROM financial_report_version WHERE raw_run_id LIKE %s",
+               "DELETE FROM sector_classification WHERE raw_run_id LIKE %s"]
     for sql in cleanup:
         connection.execute(sql, (RUN + "%",))
     yield connection
@@ -205,6 +206,75 @@ def test_financial_quarters_follow_release_dates_and_never_mix_bases(tmp_path, c
     hynix = _quarters(conn, datetime(2026, 8, 15, 9, 0, tzinfo=KST), "000660")
     assert hynix and {basis for _, basis, *_ in hynix} == {"OFS"}  # 연결이 없는 회사만 별도
 
+
+def test_sector_as_of_and_constituent_coverage_at_analysis_time(tmp_path, conn):
+    from data_pipeline.lake import LocalStorage
+    from data_pipeline.steps import source_observations as so, source_observations_sector as so_sector
+    from source_observation_fakes import SECTOR_ROUTES, SectorClient
+
+    _financial_loaded(tmp_path / "fin")
+    storage = LocalStorage(tmp_path / "sector")
+    assert so_sector.collect_sector(storage, SectorClient(SECTOR_ROUTES), "https://example.invalid", f"{RUN}s_raw",
+                             now=datetime(2026, 9, 30, 0, 0, tzinfo=timezone.utc)) == 0
+    assert so.normalize(storage, so_sector.SECTOR, f"{RUN}s_norm", f"{RUN}s_raw", producer="normalize_sector") == 0
+    assert so.load(storage, so_sector.SECTOR, _db(), f"{RUN}s_load", input_run_id=f"{RUN}s_norm", pending=False,
+                   producer="load_sector") == 0
+    received = conn.execute("SELECT min(received_at) FROM sector_classification WHERE raw_run_id=%s",
+                            (f"{RUN}s_raw",)).fetchone()[0]
+    rows = conn.execute("SELECT instrument_code, found, large_code, large_name, small_code FROM"
+                        " sector_classification_as_of(%s, %s)", (received, ["005930", "091160", "123456"])).fetchall()
+    assert rows == [("005930", True, "0013", "전기·전자", None),      # 소분류 0000 → 분류 없음
+                    ("091160", True, None, None, None),                # 대분류부터 0000
+                    ("123456", False, None, None, None)]               # 스냅샷에 없는 종목 — 분류 없음과 다르다
+    # 원천이 현재값만 주므로 받기 전 시점에는 아무 분류도 없다(과거 분류를 복원하지 않는다).
+    assert conn.execute("SELECT bool_or(found) FROM sector_classification_as_of(%s, %s)",
+                        (received - timedelta(seconds=1), ["005930"])).fetchone()[0] is False
+
+    # 기준시각의 구성종목 스냅샷 × 원천 확보 여부. 스냅샷 전 시점은 0행(현재 구성으로 대신하지 않는다).
+    # 마이그레이션 시드에 있는 종목(091160·005930·000660)은 그 행을 쓰고, 없는 종목만 이 테스트가 만든다.
+    wanted = {"091160": ("ETF", "XKRX"), "005930": ("EQUITY", "XKRX"), "000660": ("EQUITY", "XKRX"),
+              "058470": ("EQUITY", "XKOS")}
+    ids, created = {}, []
+    try:
+        for ticker, (kind, mic) in wanted.items():
+            found = conn.execute("SELECT instrument_id FROM instrument WHERE market_code=%s AND ticker=%s",
+                                 (mic, ticker)).fetchone()
+            if found is None:
+                iid = f"e2e_so_{ticker}"
+                conn.execute("INSERT INTO entity (entity_id, entity_type, display_name)"
+                             " VALUES (%s,'INSTRUMENT',%s)", (iid, ticker))
+                conn.execute("INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type)"
+                             " VALUES (%s,%s,%s,%s)", (iid, mic, ticker, kind))
+                created.append(iid)
+                found = (iid,)
+            ids[ticker] = found[0]
+        etf = ids["091160"]
+        conn.execute("INSERT INTO etf_profile (instrument_id) VALUES (%s) ON CONFLICT DO NOTHING", (etf,))
+        conn.execute("INSERT INTO etf_holding_snapshot_status (etf_instrument_id, trade_date, input_row_count,"
+                     " valid_row_count, data_version) VALUES (%s,'2026-08-14',3,3,'e2e_so')", (etf,))
+        for ticker, weight in (("005930", 0.5), ("000660", 0.3), ("058470", 0.2)):
+            conn.execute("INSERT INTO etf_holding_snapshot (etf_instrument_id, constituent_instrument_id,"
+                         " trade_date, weight_ratio, available_at, data_version)"
+                         " VALUES (%s,%s,'2026-08-14',%s,'2026-08-14T18:00:00+09:00','e2e_so')",
+                         (etf, ids[ticker], weight))
+        # 두 시장 파일을 차례로 받으므로 KOSDAQ 행은 KOSPI 보다 늦게 보인다 — 실행의 마지막 수신 시각에서 본다.
+        last = conn.execute("SELECT max(received_at) FROM sector_classification WHERE raw_run_id=%s",
+                            (f"{RUN}s_raw",)).fetchone()[0]
+        coverage = conn.execute(
+            "SELECT constituent_ticker, has_sector_classification, eps_quarters, latest_eps_period"
+            " FROM etf_constituent_source_coverage('091160', %s)", (last,)).fetchall()
+        assert coverage == [("000660", False, 4, "2026-Q2"), ("005930", True, 4, "2026-Q2"),
+                            ("058470", True, 0, None)]
+        assert conn.execute("SELECT count(*) FROM etf_constituent_source_coverage('091160',"
+                            " '2026-08-14T17:00:00+09:00')").fetchone()[0] == 0
+    finally:
+        conn.execute("DELETE FROM etf_holding_snapshot WHERE data_version='e2e_so'")
+        conn.execute("DELETE FROM etf_holding_snapshot_status WHERE data_version='e2e_so'")
+        for iid in created:
+            conn.execute("DELETE FROM entity WHERE entity_id=%s", (iid,))
+
+
+# ── 보고서 판본(financial_report_version) — 실 PostgreSQL 조회 계약 ──────────────────────
 
 def _financial_run(tmp_path, tag, responses, fetched_at, *, from_date, to_date, now, load=True):
     """삼성전자 한 회사의 수집 → 정제 → (적재). 응답 표는 호출자가 고쳐 넣는다. 반환: (storage, raw, norm)."""

@@ -15,7 +15,7 @@
 ## `live/` — 2026-09-30 소량 실호출 원문(축약, 2회차 7호출 포함)
 
 설계 §10.8 의 실측이다. 구조·필드명·값은 실응답 그대로고, 줄 수만 줄였다(재무제표는 BS·IS·CIS 전부 + SCE 2줄 + CF 1줄,
-EIA 는 16행 중 4행). 인증키·요청 URL 은 없다.
+KIS 마스터는 선택 종목 줄만 재압축, 업종명 파일은 전체). 인증키·요청 URL 은 없다.
 
 | 파일 | 원천 | 확인한 것 |
 |---|---|---|
@@ -25,6 +25,7 @@ EIA 는 16행 중 4행). 인증키·요청 URL 은 없다.
 | `eia_brent_spot.json` | EIA v2 petroleum/pri/spt RBRTE 2026-09 (16행 중 4행) | series-description=Europe Brent Spot Price FOB (Dollars per Barrel), units=$/BBL, daily, 최신 09-22 |
 | `dart_shares_*_2025_11011.json` | 사업보고서 주식총수(삼성·하이닉스) | stlm_dt=2025-12-31 — 기준일=보고기간 말 검사와 일치 |
 | `fmp_treasury_rates.json` | FMP stable treasury-rates (dev 키) | 만기별 % 숫자, `year10` |
+| `kis_*.mst.zip` | KIS 공개 마스터 | 고정폭 227/221, 업종명 `[5:45]`(헤더가 맞고 공식 샘플 `[3:43]` 은 틀림), 소분류는 전 종목 0000 |
 | `dart_*` | OpenDART (dev 키) 삼성전자·SK하이닉스·고려제강 | 3개월/누적 필드, KRW, 연결/별도, IS 없는 회사(하이닉스)는 CIS, 주식총수 행·stlm_dt, 정정본 접수번호 |
 
 ### 재무제표 원문을 더 줄이지 않은 이유(2026-09-30 검토)

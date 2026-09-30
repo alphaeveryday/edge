@@ -697,8 +697,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 
-# 분석 v2 원천 관측(ALPHA-1130) — 매크로 5계열·DART 재무 지표. 계약 정본은
-# docs/design/etf-data-storage-plan.md §10. 수집(raw + raw manifest) →
+# 분석 v2 원천 관측(ALPHA-1130) — 매크로 5계열·DART 재무 지표·KIS 지수업종. 계약 정본은
+# docs/design/etf-data-storage-plan.md §10. 세 데이터셋 모두 수집(raw + raw manifest) →
 # 정제(--input-run-id = 수집 run, 실행별 artifact + canonical 현재 상태 + manifest) →
 # 적재(--input-run-id = 정제 run 또는 --all = 소비 마커 없는 완료 manifest 전부)다.
 # 매크로 창 미지정 = 계열별 소급일 ~ 어제(KST). 백필은 --from/--to(관측일, --to ≤ 어제). 키는 env 로(FMP 키는 미국채 10y 만, USD/KRW·국고채는 ECOS — FMP USDKRW 는 현재 구독에서 402.
@@ -714,6 +714,8 @@ uv run --package data-pipeline python -m data_pipeline.run load-macro --run-id r
 # 스냅샷에서 기간별로 파생한다. DART 키는 기존 재무 키를 쓴다.
 DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial-metric --run-id run_f1 --from 2025-07-01 --to 2025-12-31
+# 업종: KIS 공개 마스터 ZIP(키 없음). 현재값만 준다 — --from/--to 를 거부하고, 비거래일엔 받지 않는다.
+uv run --package data-pipeline python -m data_pipeline.run ingest-raw-sector --run-id run_s1
 # 저장 뒤 적재 전에 멈춘 실행 회수
 uv run --package data-pipeline python -m data_pipeline.run load-financial-metric --all
 ```
@@ -1682,7 +1684,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
   시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 보충 배치(`disclosure`) 4
-  + 장중 수급 레인(`investor-intraday`) 3**, 여기에 **SFN 없는 Airflow 전용 원천 관측 레인(`source-daily`) 6**
+  + 장중 수급 레인(`investor-intraday`) 3**, 여기에 **SFN 없는 Airflow 전용 원천 관측 레인(`source-daily`) 9**
   (ALPHA-1130 — `sfn_state_name` 이 비어 SFN 셈 밖이고, Reconciler 는 작업별 `evidence_key` 로 증거를 모은다)
   (ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가

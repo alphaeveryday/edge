@@ -653,6 +653,18 @@ def canonical_financial_metric_partition(market: str, period_end: str) -> str:
     )
 
 
+def canonical_sector_classification_partition(market: str, as_of_date: str) -> str:
+    """canonical KIS 지수업종 분류 스냅샷 파티션 프리픽스 (ALPHA-1130).
+
+    `market` 은 KIS 마스터 파일 구분(KOSPI·KOSDAQ)이다. as_of_date 는 마스터를 받은 KST 날짜 —
+    원천이 현재값만 주므로 그 이전 날짜의 파티션은 만들지 않는다(과거 분류 복원 아님).
+    """
+    return (
+        f"canonical/reference/sector_classification/market={_observation_segment(market)}"
+        f"/as_of_date={_observation_segment(as_of_date)}"
+    )
+
+
 def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
 

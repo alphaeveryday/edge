@@ -1,9 +1,9 @@
-"""분석 v2 원천 관측 데이터셋의 수집 → 정제 → 적재 공통 경로 (ALPHA-1130).
+"""분석 v2 원천 관측 세 데이터셋의 수집 → 정제 → 적재 공통 경로 (ALPHA-1130).
 
-데이터셋: `macro_observation`(매크로 5계열) · `financial_metric`(DART 재무 지표). 계약 정본은
-docs/design/etf-data-storage-plan.md §10 이다.
+데이터셋: `macro_observation`(매크로 5계열) · `financial_metric`(DART 재무 지표) ·
+`sector_classification`(KIS 지수업종). 계약 정본은 docs/design/etf-data-storage-plan.md §10 이다.
 공급자별 요청·해석은 `sources/` 모듈이, 데이터셋별 업무 규칙(정규화·수집 창·명세)은 `source_observations_<데이터셋>`
-모듈이 하고, 이 모듈은 데이터셋들이 같은 저장·계보 규칙을 지키게 한다.
+모듈이 하고, 이 모듈은 셋이 같은 저장·계보 규칙을 지키게 한다.
 
 단계와 산출물:
 
