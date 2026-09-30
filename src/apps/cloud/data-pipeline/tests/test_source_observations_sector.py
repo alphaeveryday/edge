@@ -120,3 +120,15 @@ def test_named_rows_are_not_visible_before_the_name_table_arrives():
     # 이름 표를 못 받은 실행은 마스터 수신시각 그대로다(붙인 이름이 없다).
     rows, _ = so_sector._normalize_sector(objects[:1], {})
     assert {r["available_at"] for r in rows} == {master_at}
+
+
+def test_snapshot_date_follows_the_name_table_across_kst_midnight():
+    # WHY(봇 P2): DB CHECK 은 as_of_date = received_at 의 KST 날짜다. 마스터는 23:59 KST, 이름 표는 00:00 KST 뒤에
+    # 받으면 received_at 만 다음날로 가고 as_of_date 가 전날에 남아 load 가 그 실행 전체를 거부한다.
+    master_at, names_at = "2026-09-30T14:59:50+00:00", "2026-09-30T15:00:05+00:00"
+    objects = [
+        {"request": {"file": "kospi_code.mst.zip"}, "body": KOSPI, "key": "raw/kospi", "sha256": "a", "fetched_at": master_at},
+        {"request": {"file": "idxcode.mst.zip"}, "body": NAMES, "key": "raw/names", "sha256": "b", "fetched_at": names_at},
+    ]
+    rows, _ = so_sector._normalize_sector(objects, {})
+    assert rows and {(r["as_of_date"], r["received_at"]) for r in rows} == {("2026-10-01", names_at)}

@@ -54,8 +54,9 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
             rejects.append({"raw_key": obj["key"], "reasons": ["master_file_unreadable"], "error": type(exc).__name__})
             continue
         rejects.extend({**b, "raw_key": obj["key"]} for b in bad)
-        as_of = datetime.fromisoformat(obj["fetched_at"]).astimezone(KST).date().isoformat()
         received = max((t for t in (obj["fetched_at"], names_fetched_at) if t), key=datetime.fromisoformat)
+        # 기준일은 합성된 수신시각에서 — 이름 표가 KST 자정을 넘겨 도착하면 마스터 날짜와 갈려 DB CHECK 가 거부한다.
+        as_of = datetime.fromisoformat(received).astimezone(KST).date().isoformat()
         for item in parsed:
             row = {**item, "as_of_date": as_of, "taxonomy": "KIS_INDEX_SECTOR",
                    "received_at": received, "available_at": received,
