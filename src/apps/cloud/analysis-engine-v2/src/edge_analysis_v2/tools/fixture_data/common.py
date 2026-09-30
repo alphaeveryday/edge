@@ -11,6 +11,19 @@ def instant(value):
     return value.astimezone(timezone(timedelta(hours=9)))
 
 
+def observed(value):
+    """Read an observation instant, or a date-only observation as the end of that Korean day.
+
+    Date-only observations (``YYYY-MM-DD``) come from sources that publish no time, such as
+    daily closes and monthly indicators (ALPHA-1130). They count as observed once that Korean
+    day has ended; no clock time is fabricated and the original string is kept for display.
+    """
+    if isinstance(value, str) and len(value) == 10:
+        day = date.fromisoformat(value)
+        return datetime.combine(day, datetime.max.time(), tzinfo=timezone(timedelta(hours=9)))
+    return instant(value)
+
+
 def decimal(value):
     """Require a finite numeric value without accepting booleans."""
     if isinstance(value, bool) or not isinstance(value, (int, float, str, Decimal)):
@@ -33,7 +46,7 @@ def available(rows, cutoff, time_key=None):
             and (time_key is None or instant(r[time_key]) <= cutoff)]
 
 
-def holdings(fixture, day=None):
+def holdings(fixture, day=None, *, require_complete=True):
     """Read one complete equity portfolio without renormalizing missing weights."""
     cutoff = instant(fixture["context"]["analysis_at"])
     if day is not None:
@@ -44,9 +57,20 @@ def holdings(fixture, day=None):
     latest = max((r["as_of_date"] for r in rows), default=None)
     rows = [r for r in rows if r["as_of_date"] == latest]
     weights = [decimal(r["weight"]) for r in rows]
-    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w <= 0 for w in weights) or sum(weights) != 1:
+    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or not 0 < sum(weights) <= 1:
         raise ValueError("complete positive equity weights summing to one required")
-    return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
+    statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
+    complete = sum(weights) == 1
+    if statuses:
+        if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
+            raise ValueError('holdings status does not match observed rows')
+        complete = complete and statuses[0]['input_count'] == len(rows)
+    if not complete and (require_complete or not statuses):
+        raise ValueError('complete positive equity weights summing to one required')
+    result = {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
+    if statuses:
+        result.update(coverage='full' if complete else 'partial', observed_weight_ratio=number(sum(weights)))
+    return result
 
 
 def table(rows, columns):

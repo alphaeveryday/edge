@@ -53,4 +53,4 @@ def test_macro_initial_input_and_tool_return_have_identical_table_contract():
         assert body == tools.call('get_macro_observations', {'series': series})['result']
         assert body['columns'] == ['at', 'value', 'available_at'] + (['reference_period'] if series == 'kr_cpi_yoy' else [])
     definition = next(d for d in tools.definitions if d['function_name'] == 'get_macro_observations')
-    assert definition['version'] == 'v2'
+    assert definition['version'] == 'v3'

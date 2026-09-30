@@ -66,7 +66,7 @@ class ExecutionDashboard:
                 path = directory / 'job.json'
                 if path.exists():
                     job = json.loads(path.read_text(encoding='utf-8'))
-                    if job.get('status') == 'running':
+                    if job.get('status') == 'running' and job.get('origin') != 'cloud':
                         self._save(job | {'status':'interrupted', 'error':'검수 서버가 재시작되어 실행이 중단됐습니다.'})
 
     def _save(self, job):

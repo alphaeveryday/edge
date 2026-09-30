@@ -1,0 +1,58 @@
+name: deploy-analysis-engine-v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/cloud/analysis-engine-v2/**"
+      - ".github/workflows/deploy-analysis-engine-v2.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-analysis-engine-v2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and check the Linux runtime
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          image="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-${GITHUB_SHA}"
+          docker build --platform linux/amd64 -f src/apps/cloud/analysis-engine-v2/Dockerfile -t "$image" src
+          docker run --rm --entrypoint python "$image" -c "from importlib.resources import files; import subprocess; subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
+          docker push "$image"
+          echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Register the immutable image as the next v2 task revision
+        run: |
+          set -euo pipefail
+          # The initial Terraform apply and this workflow can start together.
+          for attempt in $(seq 1 60); do
+            if aws ecs describe-task-definition --task-definition edge-dev-analysis-v2 > /tmp/task.json 2>/tmp/task-error; then break; fi
+            if [ "$attempt" = 60 ]; then cat /tmp/task-error; exit 1; fi
+            sleep 10
+          done
+          python - <<'PY'
+          import json, os
+          task=json.load(open('/tmp/task.json'))['taskDefinition']
+          fields=('family','taskRoleArn','executionRoleArn','networkMode','containerDefinitions','volumes','placementConstraints','requiresCompatibilities','cpu','memory','runtimePlatform','ephemeralStorage')
+          task={k:task[k] for k in fields if k in task}
+          assert task['family']=='edge-dev-analysis-v2'
+          assert len(task['containerDefinitions'])==1
+          task['containerDefinitions'][0]['image']=os.environ['ANALYSIS_IMAGE']
+          json.dump(task,open('/tmp/next-task.json','w'))
+          PY
+          aws ecs register-task-definition --cli-input-json file:///tmp/next-task.json --query taskDefinition.taskDefinitionArn --output text

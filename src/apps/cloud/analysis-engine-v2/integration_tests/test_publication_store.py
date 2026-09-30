@@ -52,6 +52,18 @@ def response(run):
             "selected_item_ids":["new"], "summary":"요약"}
 
 
+@pytest.mark.parametrize('source', ['synthetic', 'unknown'])
+def test_real_publication_rejects_other_source_evidence(publication, source):
+    """A valid old tool run is not evidence for a different data source."""
+    store, key, _ = publication
+    store.save_movement(key, response(key))
+    store.connection.execute('UPDATE movement_analyses SET data_source=%s WHERE analysis_id=%s', (source, key))
+    real = key + '-real'
+    store.begin('movement', real, key, NOW + timedelta(minutes=1), data_source='database')
+    with pytest.raises(ValueError):
+        store.save_movement(real, response(key))
+
+
 def test_movement_commit_reuses_original_publication_when_nothing_changed(publication):
     store, key, _ = publication
     first = store.save_movement(key, response(key))
