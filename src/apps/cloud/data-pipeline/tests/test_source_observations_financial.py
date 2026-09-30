@@ -331,3 +331,59 @@ def test_damaged_filing_list_rows_are_reported_and_page_counts_must_be_positive_
         src, _ = _source({1: body})
         pages = src.filings("00126380", datetime(2026, 1, 1).date(), datetime(2026, 1, 31).date())
         assert pages[-1].detail == "bad_total_page", total
+
+
+def _extract_bps(share_body):
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+    return dart_fundamental.extract(corp, "2026", "11012", "CFS",
+                                    {"body_json": json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))}, share_body)
+
+
+def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred():
+    # WHY(리뷰 4차): 우선주 행이 없거나 음수이거나 종류별 합이 합계와 다르면 "우선주 없음"이 아니라 "모름"이다 —
+    # 그때 보통주 BPS 를 만들면 파손 응답이 정상 보통주 기준값으로 적재된다. 틀리면 막는 쪽으로 틀려야 한다.
+    missing = json.loads(shares(SAMSUNG, "2026", "11012"))
+    missing["list"] = [r for r in missing["list"] if r["se"] != "우선주"]
+    rows, rejects = _extract_bps(missing)
+    assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
+    assert any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+
+    negative = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for r in negative["list"]:
+        if r["se"] == "우선주":
+            r["istc_totqy"] = "-5"
+    rows, rejects = _extract_bps(negative)
+    assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
+    assert any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+
+    inconsistent = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for r in inconsistent["list"]:
+        if r["se"] == "보통주":
+            r["istc_totqy"] = "1"
+    rows, rejects = _extract_bps(inconsistent)
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+
+
+def test_numeric_zero_share_count_is_zero_not_missing():
+    # WHY(리뷰 4차): 자기주식 없음이 문자열 '-' 대신 숫자 0 으로 오면 결측으로 읽혀 유효한 분모가 거부됐다.
+    assert dart_fundamental._share_count({"tesstk_co": 0}, "tesstk_co") == 0
+    assert dart_fundamental._share_count({"tesstk_co": None}, "tesstk_co") is None
+    assert dart_fundamental._share_count({"tesstk_co": "-3"}, "tesstk_co") is None
+
+
+def test_total_share_bps_receipt_time_includes_the_share_response(tmp_path):
+    # WHY(리뷰 4차): 두 BPS 지표의 분모는 주식총수 응답이다 — 그 응답을 받기 전 시점에 값이 보이면 안 된다.
+    dart = DartFake([SAMSUNG], full_responses(SAMSUNG), {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("financial_metric", "run_f")))
+    for obj in manifest["objects"]:
+        if obj.get("kind") == "shares" or "shares" in obj.get("key", ""):
+            obj["fetched_at"] = "2026-12-31T00:00:00+00:00"    # 주식총수만 훨씬 늦게 받은 실행
+    storage.put_bytes(so.raw_run_manifest_key("financial_metric", "run_f"),
+                      json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode())
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    assert rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS")]["received_at"] == \
+        rows[("005930", 2026, "Q2", "bps", "POINT", "CFS")]["received_at"]
+    assert rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS")]["received_at"].startswith("2026-12-31")

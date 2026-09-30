@@ -288,10 +288,12 @@ def _share_count(row: dict | None, field: str) -> Decimal | None:
     """주식총수 표의 수. `-` 는 0 이다(자기주식 없음·우선주 없음) — 금액 칸의 `-`(결측)와 다르다."""
     if row is None:
         return None
-    text = str(row.get(field) or "").replace(",", "").strip()
+    value = row.get(field)
+    text = ("" if value is None else str(value)).replace(",", "").strip()   # 숫자 0 은 결측이 아니다
     if text == "-":
         return Decimal(0)
-    return _amount(text)
+    count = _amount(text)
+    return None if count is not None and count < 0 else count             # 음수 주식수는 파손 응답
 
 
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
@@ -321,9 +323,15 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     equity = _amount(line.get("thstrm_amount"))
     issued_total, treasury_total = _share_count(total, "istc_totqy"), _share_count(total, "tesstk_co")
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
-    issued_preferred = _share_count(preferred, "istc_totqy") if preferred is not None else Decimal(0)
+    # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
+    issued_preferred = _share_count(preferred, "istc_totqy")
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
+        return []
+    if None not in (issued_common, issued_preferred) and issued_common + issued_preferred != issued_total:
+        # 종류별 합이 합계와 다르면 어느 분모도 믿을 수 없다 — 두 지표 모두 만들지 않는다.
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
+                        "istc_totqy": str(issued_total), "common": str(issued_common), "preferred": str(issued_preferred)})
         return []
     equity_input = {"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": "BS",
                     "account_id": _EQUITY_ACCOUNT[fs_div], "account_nm": line.get("account_nm"),

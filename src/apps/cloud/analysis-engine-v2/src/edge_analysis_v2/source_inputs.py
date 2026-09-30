@@ -55,9 +55,12 @@ def macro_inputs(conn, analysis_at, series=MACRO_SERIES, limit=21):
 def financial_inputs(conn, analysis_at, instrument_ids):
     """Return ``financials`` rows (quarterly EPS + quarter-end BPS) visible at ``analysis_at``.
 
-    A quarter is a usable row only when both EPS and BPS are present; otherwise it is a gap
-    that names what is missing and why (``bps_note`` = PREFERRED_SHARES_PRESENT means the
-    per-common-share BPS is deliberately blocked — a team decision, not a data error).
+    Every visible quarter is returned as a row; a missing EPS or BPS stays ``None`` in the row
+    **and** is listed in ``gaps`` with the reason (``bps_note`` PREFERRED_SHARES_PRESENT = the
+    per-common-share BPS is deliberately blocked, a team decision; COMMON_SHARE_BPS_UNAVAILABLE =
+    share rows unreadable, a data defect). Dropping an incomplete latest quarter would let the
+    valuation tool slide to the previous four quarters and report a stale ratio as current, so
+    the hole is kept in place and ``valuation.calculate`` fails on it instead.
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can
     decide whether an approximation is acceptable.
     """
@@ -77,8 +80,7 @@ def financial_inputs(conn, analysis_at, instrument_ids):
                 if missing:
                     gaps.append({"instrument_id": instrument_id, "period": period, "missing": missing,
                                  "reason": note or "not_released", "bps_total_shares": _num(bps_total)})
-                    continue
-                rows.append({"instrument_id": instrument_id, "period": period, "eps": str(eps), "bps": str(bps),
+                rows.append({"instrument_id": instrument_id, "period": period, "eps": _num(eps), "bps": _num(bps),
                              "available_at": _iso(available_at), "fs_basis": basis,
                              "eps_derivation": eps_derivation,
                              "evidence": {"rcept_nos": list(rcept_nos or []), "raw_run_ids": list(run_ids or [])}})

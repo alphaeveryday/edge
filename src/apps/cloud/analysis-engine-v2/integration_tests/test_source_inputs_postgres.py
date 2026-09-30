@@ -59,7 +59,8 @@ def _seed(conn, run):
             " %(raw_sha256)s, %(canonical_run_id)s, %(artifact_key)s, %(artifact_sha256)s)",
             prov | dict(day=day, value=value, received=received))
 
-    def metric(corp, code, year, period, end, name, kind, derivation, value, unit, rcept_no, rcept_date, formula=None):
+    def metric(corp, code, year, period, end, name, kind, derivation, value, unit, rcept_no, rcept_date, formula=None,
+               inputs="[]"):
         received = datetime.fromisoformat(rcept_date).replace(hour=9, tzinfo=KST) + timedelta(days=3)
         available = min(received, datetime.fromisoformat(rcept_date).replace(tzinfo=KST) + timedelta(days=1))
         conn.execute(
@@ -67,12 +68,12 @@ def _seed(conn, run):
             " period_kind, fs_basis, derivation, value, unit, formula, inputs, rcept_no, rcept_date, received_at,"
             " available_at, availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key,"
             " artifact_sha256) VALUES (%(corp)s, %(code)s, %(year)s, %(period)s, %(end)s, %(name)s, %(kind)s, 'CFS',"
-            " %(derivation)s, %(value)s, %(unit)s, %(formula)s, '{}', %(rcept_no)s, %(rcept_date)s, %(received)s,"
+            " %(derivation)s, %(value)s, %(unit)s, %(formula)s, %(inputs)s::jsonb, %(rcept_no)s, %(rcept_date)s, %(received)s,"
             " %(available)s, 'provider_release_date', %(raw_run_id)s, %(raw_key)s, %(raw_sha256)s,"
             " %(canonical_run_id)s, %(artifact_key)s, %(artifact_sha256)s)",
             prov | dict(corp=corp, code=code, year=year, period=period, end=end, name=name, kind=kind,
                         derivation=derivation, value=value, unit=unit, formula=formula, rcept_no=rcept_no,
-                        rcept_date=rcept_date, received=received, available=available))
+                        rcept_date=rcept_date, received=received, available=available, inputs=inputs))
 
     # 000660-like company without preferred shares: four consecutive quarters incl. derived Q4.
     quarters = [(2025, "Q3", "2025-09-30", "700", "20251114000001", "2025-11-14", "REPORTED"),
@@ -89,7 +90,8 @@ def _seed(conn, run):
     metric("00000002", "TST002", 2026, "Q2", "2026-06-30", "eps_basic", "QUARTER", "REPORTED", "1500", "KRW_per_share",
            "20260814000002", "2026-08-14")
     metric("00000002", "TST002", 2026, "Q2", "2026-06-30", "bps_total_shares", "POINT", "EQUITY_OVER_SHARES", "62000",
-           "KRW_per_share", "20260814000002", "2026-08-14", formula="equity/(common+preferred)")
+           "KRW_per_share", "20260814000002", "2026-08-14", formula="equity/(common+preferred)",
+           inputs='[{"se": "합계", "preferred_istc_totqy": "802371203"}]')   # the pipeline's evidence line shape
 
 
 def test_macro_rows_are_date_only_and_visibility_bound(db):
@@ -106,8 +108,10 @@ def test_macro_rows_are_date_only_and_visibility_bound(db):
 def test_financial_rows_feed_valuation_and_blocked_bps_is_a_gap(db):
     db.execute("SET ROLE edge_analysis_v2_writer")
     rows, gaps = financial_inputs(db, ANALYSIS_AT, ["TST001", "TST002", "TST999"])
-    assert [(r["period"], r["eps_derivation"]) for r in rows] == [
-        ("2025-Q3", "REPORTED"), ("2025-Q4", "FY_MINUS_9M"), ("2026-Q1", "REPORTED"), ("2026-Q2", "REPORTED")]
+    assert [(r["instrument_id"], r["period"], r["eps_derivation"], r["bps"]) for r in rows] == [
+        ("TST001", "2025-Q3", "REPORTED", "50000"), ("TST001", "2025-Q4", "FY_MINUS_9M", "50000"),
+        ("TST001", "2026-Q1", "REPORTED", "50000"), ("TST001", "2026-Q2", "REPORTED", "50000"),
+        ("TST002", "2026-Q2", "REPORTED", None)]   # the blocked quarter stays in place as a hole
     assert gaps == [
         {"instrument_id": "TST002", "period": "2026-Q2", "missing": ["bps"], "reason": "PREFERRED_SHARES_PRESENT",
          "bps_total_shares": "62000"},
@@ -119,6 +123,34 @@ def test_financial_rows_feed_valuation_and_blocked_bps_is_a_gap(db):
     result = valuation.calculate(fixture, "TST001")
     assert result["ttm_eps"] == 3400 and result["per"] == 20 and result["pbr"] == 1.36
     assert result["periods"] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"]
+    fixture["holdings"][0]["instrument_id"] = "TST002"
+    fixture["prices"][0]["instrument_id"] = "TST002"
+    with pytest.raises(ValueError):   # a hole in the latest quarter blocks the ratio; it never slides to older quarters
+        valuation.calculate(fixture, "TST002")
+
+
+def test_incomplete_latest_quarter_blocks_instead_of_sliding_to_older_quarters(db):
+    # Five visible quarters where the newest has EPS but no BPS at all (share table unreadable).
+    db.execute("RESET ROLE")
+    run = db.execute("SELECT raw_run_id FROM financial_metric WHERE instrument_code = 'TST001' LIMIT 1").fetchone()[0]
+    db.execute("""INSERT INTO financial_metric (corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric,
+        period_kind, fs_basis, derivation, value, unit, inputs, rcept_no, rcept_date, received_at, available_at,
+        availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
+        SELECT corp_code, instrument_code, 2026, 'Q3', '2026-09-30', 'eps_basic', 'QUARTER', fs_basis, 'REPORTED', 1200,
+        unit, inputs, '20261114000001', '2026-11-14', '2026-11-15 00:00+09', '2026-11-15 00:00+09',
+        availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256
+        FROM financial_metric WHERE instrument_code = 'TST001' AND metric = 'eps_basic' AND fiscal_period = 'Q2'""")
+    db.execute("SET ROLE edge_analysis_v2_writer")
+    rows, gaps = financial_inputs(db, datetime(2026, 11, 20, tzinfo=KST), ["TST001"])
+    assert rows[-1]["period"] == "2026-Q3" and rows[-1]["bps"] is None
+    assert gaps == [{"instrument_id": "TST001", "period": "2026-Q3", "missing": ["bps"], "reason": "not_released",
+                     "bps_total_shares": None}]
+    fixture = {"context": {"etf_code": "T", "analysis_at": "2026-11-20T10:00:00+09:00"},
+               "holdings": [{"instrument_id": "TST001", "weight": "1", "as_of_date": "2026-11-19", "available_at": "2026-11-19T18:00:00+09:00"}],
+               "prices": [{"instrument_id": "TST001", "date": "2026-11-19", "close": "68000", "available_at": "2026-11-19T16:00:00+09:00"}],
+               "financials": rows}
+    with pytest.raises(ValueError):
+        valuation.calculate(fixture, "TST001")
 
 
 def test_annual_report_is_invisible_before_the_day_after_receipt(db):

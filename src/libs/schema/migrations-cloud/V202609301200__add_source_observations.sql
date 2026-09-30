@@ -88,6 +88,7 @@ CREATE TABLE financial_metric (
     PRIMARY KEY (corp_code, fiscal_year, fiscal_period, metric, period_kind, fs_basis, raw_run_id),
     CONSTRAINT ck_financial_metric_codes CHECK (
         corp_code ~ '^[0-9]{8}$' AND instrument_code ~ '^[0-9A-Z]{6}$' AND rcept_no ~ '^[0-9]{14}$'),
+    CONSTRAINT ck_financial_metric_inputs CHECK (jsonb_typeof(inputs) = 'array'),   -- 근거 줄 목록(정제가 쓰는 형태)
     CONSTRAINT ck_financial_metric_period CHECK (fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4', 'FY')),
     -- 지표·단위·기간 종류는 한 쌍이다. 누적·분기·시점 값이 한 열에서 섞이지 않게 DB가 막는다.
     CONSTRAINT ck_financial_metric_shape CHECK ((metric, unit, period_kind) IN (
@@ -238,10 +239,16 @@ BEGIN
            max(p.derivation) FILTER (WHERE p.metric = 'eps_basic'),
            max(p.value) FILTER (WHERE p.metric = 'bps'),
            max(p.value) FILTER (WHERE p.metric = 'bps_total_shares'),
-           -- bps 가 비고 통상 BPS 만 있으면 우선주 때문에 보통주 기준을 못 만든 회사다(§10.9 팀 결정 전 사용 금지).
+           -- bps 가 비고 통상 BPS 만 있는 회사: 우선주가 있어서(§10.9 팀 결정 전 사용 금지)인지, 종류별 주식수를
+           -- 못 읽어서(응답 파손·보통주 0)인지 inputs 의 우선주 발행수로 가른다 — 파손을 정책으로 설명하지 않는다.
            CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps') IS NULL
                  AND max(p.value) FILTER (WHERE p.metric = 'bps_total_shares') IS NOT NULL
-                THEN 'PREFERRED_SHARES_PRESENT' END,
+                THEN CASE WHEN bool_or(EXISTS (
+                              SELECT 1 FROM jsonb_array_elements(p.inputs) i
+                              WHERE (i->>'preferred_istc_totqy') ~ '^[0-9]+$'
+                                AND (i->>'preferred_istc_totqy')::numeric > 0))
+                          FILTER (WHERE p.metric = 'bps_total_shares')
+                     THEN 'PREFERRED_SHARES_PRESENT' ELSE 'COMMON_SHARE_BPS_UNAVAILABLE' END END,
            max(p.value) FILTER (WHERE p.metric = 'revenue'),
            max(p.derivation) FILTER (WHERE p.metric = 'revenue'),
            max(p.value) FILTER (WHERE p.metric = 'operating_income'),
@@ -255,7 +262,7 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) IS
-'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=그 시점에 미공개·미수집, bps_note=PREFERRED_SHARES_PRESENT 는 보통주 기준 BPS 를 만들 수 없는 회사.';
+'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=그 시점에 미공개·미수집, bps_note: PREFERRED_SHARES_PRESENT=우선주가 있어 보통주 기준 BPS 를 만들지 않은 회사(팀 결정 대상), COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수를 못 읽어 못 만든 판본(데이터 결함).';
 
 CREATE FUNCTION sector_classification_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_codes TEXT[])
 RETURNS TABLE (
@@ -376,12 +383,13 @@ COMMENT ON FUNCTION source_observation_freshness() IS
 -- ── v2 읽기 경로(ALPHA-1130 §5) ─────────────────────────────────────────────────
 -- v2 는 이 다섯 함수로만 원천을 읽는다. 함수는 소유자 권한으로 돌고(SECURITY DEFINER) 테이블 자체는
 -- 열지 않는다 — writer 역할의 테이블 권한은 그대로 0 이다(tests/analysis_v2_writer.sql).
--- search_path 고정: DEFINER 함수가 호출자의 경로에서 같은 이름의 객체를 집지 않게.
-ALTER FUNCTION macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER) SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION sector_classification_as_of(TIMESTAMPTZ, TEXT[]) SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION etf_constituent_source_coverage(TEXT, TIMESTAMPTZ) SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION source_observation_freshness() SECURITY DEFINER SET search_path = public;
+-- search_path 고정: DEFINER 함수가 호출자의 경로에서 같은 이름의 객체를 집지 않게. pg_temp 를 명시적으로 뒤에 두지
+-- 않으면 임시 스키마가 먼저 검색된다(PostgreSQL 문서 'Writing SECURITY DEFINER Functions Safely').
+ALTER FUNCTION macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER) SECURITY DEFINER SET search_path = public, pg_temp;
+ALTER FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) SECURITY DEFINER SET search_path = public, pg_temp;
+ALTER FUNCTION sector_classification_as_of(TIMESTAMPTZ, TEXT[]) SECURITY DEFINER SET search_path = public, pg_temp;
+ALTER FUNCTION etf_constituent_source_coverage(TEXT, TIMESTAMPTZ) SECURITY DEFINER SET search_path = public, pg_temp;
+ALTER FUNCTION source_observation_freshness() SECURITY DEFINER SET search_path = public, pg_temp;
 REVOKE EXECUTE ON FUNCTION
     macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER), financial_quarters_as_of(TIMESTAMPTZ, TEXT),
     sector_classification_as_of(TIMESTAMPTZ, TEXT[]), etf_constituent_source_coverage(TEXT, TIMESTAMPTZ),

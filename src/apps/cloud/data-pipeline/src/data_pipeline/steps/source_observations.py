@@ -817,7 +817,8 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             continue
         rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
         for row in extracted:
-            sources = [statement] + ([share] if share and row["metric"] == "bps" else [])
+            # 두 BPS 지표의 분모는 주식총수 응답이다 — 그 수신시각이 행의 수신시각에 들어가야 한다.
+            sources = [statement] + ([share] if share and row["metric"] in ("bps", "bps_total_shares") else [])
             for item in row["inputs"]:
                 item["raw_key"] = statement["key"] if "account_id" in item else (share or statement)["key"]
             by_report.setdefault((corp_code, year, fs_div), []).append((row, sources))
