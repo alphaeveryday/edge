@@ -1164,7 +1164,7 @@ components:
                     sub: { type: string }
     HeatCell:
       type: object
-      required: [name, weight, changePct, dir]
+      required: [name, weight, changePct]
       properties:
         name: { type: string }
         weight: { type: number }
@@ -1172,7 +1172,7 @@ components:
         dir: { $ref: '#/components/schemas/Dir' }
     HoldingRow:
       type: object
-      required: [name, weight, dir, desc]
+      required: [name, weight]
       properties:
         name: { type: string }
         weight: { type: number }
@@ -1180,7 +1180,7 @@ components:
         desc: { type: string }
     EtfDetailData:
       type: object
-      required: [insight, stocks, themes, holdings, themeRows, stockCount, info, blurb]
+      required: [stocks, holdings, stockCount, info, blurb]
       properties:
         insight:
           type: object
