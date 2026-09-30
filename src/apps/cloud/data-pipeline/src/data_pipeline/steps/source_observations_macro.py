@@ -112,6 +112,9 @@ def collect_macro(storage: Storage, source, run_id: str, *, series_ids: list[str
     windows = {s: macro_window(s, today_kst, from_date, to_date) for s in series_ids}
     objects: list[RawObject] = []
     missing = set(source.missing_credentials(series_ids))
+    # 4xx·429(`http_<status>` — StopFetch 만 이 형태를 낸다)는 키·한도·차단이다. 그 공급자의 남은 창·계열도 같은 답이라
+    # 부르지 않고 오류로 남긴다 — 한 번의 한도 초과가 수십 번의 호출과 실패 기록이 되지 않게. 다른 공급자는 계속 받는다.
+    stopped: dict[str, str] = {}
     for series_id in series_ids:
         series = macro_series.SERIES[series_id]
         start, end = windows[series_id]
@@ -121,11 +124,19 @@ def collect_macro(storage: Storage, source, run_id: str, *, series_ids: list[str
                                      started_at.isoformat()))
             continue
         for w_start, w_end in macro_series.request_windows(series, start, end):
+            stem = f"{series_id}-{w_start:%Y%m%d}-{w_end:%Y%m%d}"
+            if series.vendor in stopped:
+                objects.append(RawObject(series.vendor, "series_id", series_id, stem, "json", None,
+                                         {"vendor": series.vendor, "from": w_start.isoformat(), "to": w_end.isoformat()},
+                                         "error", f"vendor_stopped:{stopped[series.vendor]}",
+                                         datetime.now(timezone.utc).isoformat()))
+                continue
             result = source.fetch(series_id, w_start, w_end)
-            objects.append(RawObject(series.vendor, "series_id", series_id,
-                                     f"{series_id}-{w_start:%Y%m%d}-{w_end:%Y%m%d}", "json",
+            objects.append(RawObject(series.vendor, "series_id", series_id, stem, "json",
                                      result.body, result.request, result.status, result.detail,
                                      result.fetched_at))
+            if result.status == "error" and str(result.detail or "").startswith("http_"):
+                stopped[series.vendor] = result.detail
     scope = {"series": series_ids,
              "windows": {s: {"from": a.isoformat(), "to": b.isoformat()} for s, (a, b) in windows.items()},
              "mode": "backfill" if from_date else "regular", "requested": requested}
