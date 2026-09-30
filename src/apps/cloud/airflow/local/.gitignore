@@ -14,3 +14,7 @@ results/aws/forward.log
 results/aws/**/ledger-backup/
 results/aws/**/stopped-tasks.json
 results/aws/verify-bucket-final/
+results/aws/**/V.json
+results/aws/**/V_invocations.json
+results/aws/**/health.jsonl
+results/aws/**/verify-bucket-final/
