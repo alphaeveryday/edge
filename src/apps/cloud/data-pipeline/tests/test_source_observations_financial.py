@@ -910,3 +910,28 @@ def test_disabled_dart_source_is_not_called_even_with_a_key(tmp_path, monkeypatc
     with pytest.raises(SystemExit, match="비활성"):
         run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_off")
     assert called == []
+
+
+def test_preferred_share_eps_candidates_through_extract_synthetic():
+    # 합성 표본(실응답에는 우선주 EPS 줄이 없었다 — 삼성·하이닉스·고려제강 모두 기본·희석 한 줄씩, §10.8).
+    # WHY: 보통주 EPS 자리에 우선주 EPS 가 들어가면 PER 이 조용히 틀린다. 보통주 줄이 있으면 그 줄, 우선주 줄만 있거나
+    # 구분 안 되는 줄이 둘이면 거부한다 — 한 줄뿐이라는 이유로 우선주 줄을 받지 않는다.
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+
+    def with_eps_lines(names_values):
+        body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+        body["list"] = [ln for ln in body["list"] if ln["account_id"] != "ifrs-full_BasicEarningsLossPerShare"]
+        rcept_no = body["list"][0]["rcept_no"]
+        body["list"] += [{"rcept_no": rcept_no, "sj_div": "IS", "account_id": "ifrs-full_BasicEarningsLossPerShare",
+                          "account_nm": n, "thstrm_amount": v, "thstrm_add_amount": v, "currency": "KRW"}
+                         for n, v in names_values]
+        rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body}, None)
+        eps = [r for r in rows if r["metric"] == "eps_basic" and r["period_kind"] == "QUARTER"]
+        return eps, [r["reasons"] for r in rejects if r.get("metric") == "eps_basic"]
+
+    eps, bad = with_eps_lines([("보통주 기본주당이익", "1000"), ("우선주 기본주당이익", "1001")])
+    assert [r["value"] for r in eps] == ["1000"] and bad == []
+    eps, bad = with_eps_lines([("우선주 기본주당이익", "1001")])
+    assert eps == [] and bad == [["preferred_share_line_only"]]
+    eps, bad = with_eps_lines([("기본주당이익", "1000"), ("기본주당이익(계속영업)", "990")])
+    assert eps == [] and bad == [["ambiguous_account_line"]]
