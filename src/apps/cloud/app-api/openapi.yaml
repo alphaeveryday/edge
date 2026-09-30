@@ -1122,7 +1122,8 @@ components:
     # ── ETF 상세 ──
     Candle:
       type: object
-      required: [o, h, l, c]
+      description: 시가·고가·저가는 원천에 없으면 생략. 종가는 항상 있음
+      required: [c]
       properties:
         o: { type: number }
         h: { type: number }

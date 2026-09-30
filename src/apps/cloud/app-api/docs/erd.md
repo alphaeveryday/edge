@@ -320,10 +320,11 @@ PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심�
 |---|---|
 | etf_code | varchar(6) → etf |
 | trade_date | date |
-| open, high, low, close | numeric(14,2) |
+| open, high, low | numeric(14,2) NULL |
+| close | numeric(14,2) |
 | volume | bigint NULL |
 
-PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있어 open·high·low 의 출처가 필요하다(열린 질문). `ChartData` 의 range(`1W..1Y`)는 trade_date 범위, `ma5`·`ma20` 은 서비스가 앞 19행을 더 읽어 계산, `axis` 라벨도 서비스. 5요인 상세의 차트 지표 계산은 파이프라인 몫이라 여기서 하지 않는다.
+PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있어 open·high·low 는 NULL 로 두고 응답에서 생략한다(앱은 종가 선 차트). `ChartData` 의 range(`1W..1Y`)는 trade_date 범위, `ma5`·`ma20` 은 서비스가 앞 19행을 더 읽어 계산, `axis` 라벨도 서비스. 5요인 상세의 차트 지표 계산은 파이프라인 몫이라 여기서 하지 않는다.
 
 ### etf_move (오늘 움직임 발행본)
 | 컬럼 | 타입 | 비고 |
