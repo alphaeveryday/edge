@@ -5,7 +5,7 @@
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe
-         |{ingest-raw|normalize|load}-macro(원천 관측 — OBSERVATION_STEPS)}
+         |{ingest-raw|normalize|load}-{macro|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--latest-good] [--all] [--pending-only]
         [--limit N] [--window-days N]
@@ -110,10 +110,11 @@ from .steps import (
     normalize_news,
     normalize_price,
     source_observations,
+    source_observations_financial,
     source_observations_macro,
     tag_news,
 )
-from .sources import macro_series
+from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
@@ -285,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                  # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
                  # ⚠️ 하위 소비자가 없다 — window 확정에서 멈추고 job·outbox 를 안 만든다.
                  "sector-index-worker",
-                 # 분석 v2 원천 관측(ALPHA-1130): 매크로 5계열. 수집은
+                 # 분석 v2 원천 관측(ALPHA-1130): 매크로 5계열·DART 재무 지표. 수집은
                  # raw+raw manifest, 정제는 --input-run-id(수집 run) 하나, 적재는 --input-run-id(정제 run)
                  # 또는 --all(소비 마커 없는 완료 manifest 전부). 경로·계약은 steps/source_observations.
                  *OBSERVATION_STEPS],
@@ -657,6 +658,9 @@ OBSERVATION_STEPS = {
     "ingest-raw-macro": ("macro", "collect"),
     "normalize-macro": ("macro", "normalize"),
     "load-macro": ("macro", "load"),
+    "ingest-raw-financial-metric": ("financial", "collect"),
+    "normalize-financial-metric": ("financial", "normalize"),
+    "load-financial-metric": ("financial", "load"),
 }
 OBSERVATION_LOAD_STEPS = tuple(k for k, (_, stage) in OBSERVATION_STEPS.items() if stage == "load")
 
@@ -670,7 +674,8 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
     config = settings.source_observations
     if config is None:
         raise SystemExit("source_observations 설정이 없다 — sources.toml 확인")
-    spec = {"macro": source_observations_macro.MACRO}[family]
+    spec = {"macro": source_observations_macro.MACRO,
+            "financial": source_observations_financial.FINANCIAL}[family]
     producer = args.step.replace("-", "_")
     if stage != "collect" and (args.from_date or args.to_date or args.series):
         # 정제·적재는 입력 실행 전체를 처리한다 — 받아 두고 버리면 요청보다 넓은 범위를 처리하고도 성공한다.
@@ -685,6 +690,18 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         raise SystemExit(f"{args.step} 는 --input-run-id 를 쓰지 않는다")
     # DAG 는 백필 인자를 빈 문자열로 넘길 수 있다(템플릿이 원소를 빼지 못한다) — 빈 값 = 정기 창.
     args.from_date, args.to_date = args.from_date or None, args.to_date or None
+    if family == "financial":
+        if not config.etf_ids:
+            raise SystemExit("source_observations.etf_ids 가 비어 있다 — 재무 수집 대상 ETF 가 없다")
+        # DART 키는 기존 재무 수집과 같은 것(dart_financial.source)을 쓴다 — tasks.tf dart 태스크 정의에 이미 있다.
+        if settings.dart_financial is None or not settings.dart_financial.source.api_key:
+            raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
+        dart = dart_fundamental.DartFundamentalSource(settings.dart_financial.source,
+                                                      PoliteClient(min_interval=0.5, timeout=30.0))
+        if not dart.enabled:     # 설정 플래그(dart_financial.source.enabled)로 끈 공급자는 부르지 않는다
+            raise SystemExit("dart_financial.source 가 비활성이다")
+        return source_observations_financial.collect_financial(
+            storage, dart, run_id, etf_ids=config.etf_ids, from_date=args.from_date, to_date=args.to_date)
     series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
     source = macro_series.MacroSource(
         config.macro, fmp_api_key=settings.price.source.api_key if settings.price else None)

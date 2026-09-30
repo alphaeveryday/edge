@@ -1,6 +1,7 @@
 """분석 v2 원천 관측 데이터셋의 수집 → 정제 → 적재 공통 경로 (ALPHA-1130).
 
-데이터셋: `macro_observation`(매크로 5계열). 계약 정본은 docs/design/etf-data-storage-plan.md §10 이다.
+데이터셋: `macro_observation`(매크로 5계열) · `financial_metric`(DART 재무 지표). 계약 정본은
+docs/design/etf-data-storage-plan.md §10 이다.
 공급자별 요청·해석은 `sources/` 모듈이, 데이터셋별 업무 규칙(정규화·수집 창·명세)은 `source_observations_<데이터셋>`
 모듈이 하고, 이 모듈은 데이터셋들이 같은 저장·계보 규칙을 지키게 한다.
 
@@ -78,6 +79,9 @@ class DatasetSpec:
     normalize: Callable[[list[dict], dict], tuple[list[dict], list[dict]]]
     table: str
     collection_vendor: str                                 # collection_log 의 source= (원장 관측 축)
+    # 같은 정제가 함께 만드는 둘째 행 집합(재무: 보고서 판본). 같은 manifest·같은 적재 트랜잭션에 실린다 —
+    # 지표 행 없이 판본만, 판본 없이 지표만 실리는 상태가 없다.
+    companion: "DatasetSpec | None" = None
 
     def names(self) -> list[str]:
         """열 이름(파일·DB 적재 순서)."""
@@ -370,9 +374,11 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         storage.put_bytes(manifest_key, json.dumps(
             {"run_id": run_id, "producer": producer, "canonical_written": False}).encode("utf-8"))
         raw_manifest, objects = _load_raw_objects(storage, spec.dataset, input_run_id)
-        rows, rejects = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
+        result = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
+        rows, rejects = result[0], result[1]
+        companion_rows = list(result[2]) if len(result) > 2 else []
         failures.extend(rejects)
-        for row in rows:
+        for row in [*rows, *companion_rows]:
             row["raw_run_id"] = input_run_id
         rows, conflicts, collapsed = _collapse(spec, rows)
         failures.extend(conflicts)
@@ -380,6 +386,13 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         artifact_key = canonical_run_partition_key(spec.dataset, run_id, raw_manifest["ingest_date"])
         artifact_sha = put_immutable(storage, artifact_key, artifact)
         partitions = _merge_canonical(storage, spec, rows)
+        companion = None
+        if spec.companion is not None:
+            # 판본 사실은 실행별 artifact 와 DB 에만 둔다(현재 상태 파티션 없음 — 실행마다 새 사실이지 갱신이 아니다).
+            data = write_rows(spec.companion, companion_rows)
+            key = canonical_run_partition_key(spec.companion.dataset, run_id, raw_manifest["ingest_date"])
+            companion = {"dataset": spec.companion.dataset, "key": key, "sha256": put_immutable(storage, key, data),
+                         "rows": len(companion_rows)}
         # 완료 manifest 는 quality_log 가 남은 뒤에 쓴다(아래) — 검증 기록 없이 완료로 보이면 `load --all` 이
         # 그 실행을 싣고 소비 마커까지 남겨 빠진 검증 기록이 영영 드러나지 않는다(normalize_price 와 같은 순서).
         completed = json.dumps({
@@ -392,6 +405,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
                          "partition_date": "ingest_date"},
             "canonical_partitions": partitions, "rows": len(rows),
             "rejected": len(failures), "collapsed_duplicates": collapsed,
+            "companion": companion,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
         log.update({"rows": len(rows), "collapsed_duplicates": collapsed,
                     "canonical_partitions": len(partitions), "artifact_key": artifact_key,
@@ -467,19 +481,25 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
             rows = read_rows(spec, data)
             params = [[*(r[c] for c in spec.names()), canonical_run_id, artifact["key"], artifact["sha256"]]
                       for r in rows]
+            companion_params = _companion_params(storage, spec, manifest, canonical_run_id)
             with connect(db) as conn, conn.cursor() as cur:
                 raw_run_id = manifest["input_run_id"]
                 # raw 실행 단위 직렬화 — 같은 raw 의 두 적재가 나란히 검사를 통과해 서로 다른 정제 결과를 섞지 않게.
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"{spec.table}:{raw_run_id}",))
-                # 같은 raw 를 다른 규칙으로 다시 정제한 결과는 싣지 않는다 — 행 정체성은 raw 실행이라, 옛 행에
+                # 같은 raw 를 다른 규칙으로 다시 정제한 결과는 싣지 않는다 — 판본·지표 정체성은 raw 실행이라, 옛 행에
                 # 새 정제의 일부만 덧붙는 혼합을 ON CONFLICT 로는 못 막는다. 같은 내용(같은 artifact 해시)의 재적재만 통과.
                 shas = {spec.table: artifact["sha256"]}
+                if spec.companion is not None:
+                    shas[spec.companion.table] = manifest["companion"]["sha256"]
                 conflicts = _reload_conflicts(cur, spec, raw_run_id, shas)
                 if conflicts:
                     raise ValueError(f"같은 raw 의 정제 결과가 이미 다른 내용으로 적재돼 있다: {conflicts}")
                 before = _count(cur, spec.table, canonical_run_id)
                 if params:
                     cur.executemany(sql, params)
+                if companion_params:
+                    # 지표 행과 판본 행은 한 트랜잭션이다 — 한쪽만 실린 상태가 조회에 보이지 않게.
+                    cur.executemany(_insert_sql(spec.companion), companion_params)
                 inserted += _count(cur, spec.table, canonical_run_id) - before
             markers.append((run_manifest_consumed_key("canonical", spec.dataset, canonical_run_id, CONSUMER),
                             json.dumps({"consumer": CONSUMER, "rows": len(rows), "loaded_by": run_id,
@@ -514,6 +534,21 @@ def _insert_sql(spec: DatasetSpec) -> str:
     columns = [*spec.names(), "canonical_run_id", "artifact_key", "artifact_sha256"]
     return (f"INSERT INTO {spec.table} ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})"
             " ON CONFLICT DO NOTHING")
+
+
+def _companion_params(storage: Storage, spec: DatasetSpec, manifest: dict, canonical_run_id: str) -> list[list]:
+    """manifest 의 companion artifact → 적재 파라미터. companion 이 있어야 하는 데이터셋에 없으면 적재하지 않는다
+    (판본 없는 지표는 조회 계약 밖이다 — 옛 형태의 manifest 를 조용히 싣지 않는다)."""
+    if spec.companion is None:
+        return []
+    companion = manifest.get("companion")
+    if not companion:
+        raise ValueError(f"{spec.dataset} manifest 에 companion({spec.companion.dataset}) artifact 가 없다")
+    data = storage.get_bytes(companion["key"])
+    if sha256(data) != companion["sha256"]:
+        raise ValueError(f"companion artifact 바이트가 manifest 와 다르다: {companion['key']}")
+    return [[*(r[c] for c in spec.companion.names()), canonical_run_id, companion["key"], companion["sha256"]]
+            for r in read_rows(spec.companion, data)]
 
 
 def _reload_conflicts(cur, spec: DatasetSpec, raw_run_id: str, shas: dict[str, str]) -> list[dict]:
