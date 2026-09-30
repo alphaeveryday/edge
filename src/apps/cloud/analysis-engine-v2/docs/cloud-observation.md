@@ -41,3 +41,20 @@
 4. 클라우드 실제 분석과 로컬 재시작·재다운로드 검증. 실패도 기록.
 
 서버 코드와 인프라만 배포하며 매크로·재무 등의 부족한 원천은 가상값으로 대체하지 않는다. 예약과 기존 v1 소비자 전환은 이 배포에서 수행하지 않는다.
+
+## 로컬 API
+
+- `POST /api/jobs`: 위 실행 요청 JSON을 그대로 받음. 로컬 Origin·CSRF 검사 후 AWS IAM으로 실행. `202` 응답은 실행 상태 객체이며 최종 화면이 아님.
+- `GET /api/jobs`: 수신한 실행 목록.
+- `GET /api/cloud-sync`: 동기화 상태·마지막 수신 시각. 연결 실패는 분석 실패와 별개.
+- `GET /api/screens/{kind}/{analysis_id}/{feature}`: DB에서 조립한 화면 파일을 그대로 반환. 기존 화면 스키마 유지.
+- 관리자 근거·저장 행·계약 검사 화면도 DB에서 내보낸 파일 사용. 캐시에 없으면 미수신으로 표시하며 가상값을 넣지 않음.
+- 동일 요청 ID 재전송은 기존 상태를 반환. 실패한 분석을 새로 실행하려면 새 ID를 사용.
+- Step Functions는 실행 시작 실패·강제 종료도 기록. 종료 관측이 없으면 `interrupted`로 표시하고 DB 발행 여부는 미확인으로 남김.
+
+## 운영
+
+- 이미지: `edge/pipeline:analysis-v2-{commit SHA}`. 전용 작업 family의 최신 등록 리비전으로 새 실행 시작. 이미 시작된 작업은 기존 리비전을 유지.
+- 롤백: 이전 이미지가 지정된 작업 정의를 새 리비전으로 등록. 기존 DB/S3 기록 삭제 없음.
+- DeepSeek 키는 `edge/analysis-v2/deepseek`의 `DEEPSEEK_API_KEY`, 모델은 `DEEPSEEK_MODEL`. 키 값은 Terraform state·Git에 넣지 않음.
+- 배포는 기존 `feature/* → dev` PR 흐름. 인프라 변경은 Terraform plan에서 기존 자원 변경·삭제를 확인한 후 적용.
