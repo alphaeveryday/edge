@@ -397,13 +397,22 @@ def wait_run(exp: str, rid: str, timeout: float = 2400) -> str:
     while time.monotonic() < deadline:
         try:
             code, body, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns/{q}", timeout=15)
-            if code == 200 and body.get("state") in ("success", "failed"):
+            if code != 200:                   # 재시작 중 503 등 — 모름. 판정하지 않고 다시 본다
+                time.sleep(5)
+                continue
+            tis_ok = False
+            if not started:
+                tcode, tis, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns/{q}/taskInstances", timeout=15)
+                tis_ok = tcode == 200
+                started = tis_ok and any(t.get("start_date") for t in tis.get("task_instances", []))
+            if body.get("state") in ("success", "failed"):
+                if not started and not tis_ok:     # 시작 여부를 확인하지 못했다 — 끝난 상태만 보고 분류하지 않는다
+                    time.sleep(5)
+                    continue
                 mark(exp, "run_done", run=rid, state=body["state"], started=started)
                 return body["state"] if started else "not_started"
-            if not started:
-                _, tis, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns/{q}/taskInstances", timeout=15)
-                started = any(t.get("start_date") for t in tis.get("task_instances", []))
-                if not started and time.monotonic() > grace:
+            if not started and tis_ok:
+                if time.monotonic() > grace:
                     _, dag, _ = api("GET", f"/api/v2/dags/{DAG}", timeout=15)
                     mark(exp, "run_not_started", run=rid, run_state=body.get("state"), run_after=body.get("run_after"),
                          logical_date=body.get("logical_date"), dag_paused=dag.get("is_paused"),
@@ -528,9 +537,9 @@ def _batch(args) -> int:
     if ops(["verify-reset"])[0] != 0:
         return 1
     mark(exp, "batch_begin", batch=b)
-    wait = CRIT["scenarios"]["normalize_wait_seconds"]
     if b == "V":
         return _batch_v(exp, spec)
+    wait = CRIT["scenarios"]["normalize_wait_seconds"]
     if b in ("B1", "B3"):
         for i, hhmm in enumerate(spec["slots"]):
             rid = trigger(exp, b, hhmm, cf("normalize", {"sleep_in_step": wait}))

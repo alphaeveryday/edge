@@ -229,35 +229,56 @@ def backup() -> int:
 def shutdown() -> int:
     """종료 장치(verify_shutdown.tf) — 스케줄러가 띄운다. 운영자 PC 와 무관하게 검증을 끝낸다.
     Airflow 서비스 desired 0(새 제출 중단) → grace 동안 검증 태스크의 자연 종료 대기 → 남은 **검증 태스크만** StopTask
-    (결과는 꾸미지 않는다 — 원장의 RUNNING 시도가 보류로 남고, 여기 목록이 종료 증거다) → 호스트 ASG 0 → 보고서."""
+    (결과는 꾸미지 않는다 — 원장의 RUNNING 시도가 보류로 남고, 여기 목록이 종료 증거다) → 호스트 ASG 0 → 보고서.
+    한 단계가 실패해도 나머지 단계와 보고서는 진행한다(실패는 보고서 errors 와 exit 1 로 드러난다)."""
     grace = int(sys.argv[2]) if len(sys.argv) > 2 else 900
     ecs, asg = boto3.client("ecs"), boto3.client("autoscaling")
     cluster, me = os.environ["OPS_CLUSTER_ARN"], _task_arn()
-    report = {"started": datetime.now(KST).isoformat(), "grace": grace, "self": me}
-    ecs.update_service(cluster=cluster, service=os.environ["VERIFY_SERVICE"], desiredCount=0)
-    report["service_desired_0_at"] = datetime.now(KST).isoformat()
-    deadline = time.time() + grace
-    while True:
+    report = {"started": datetime.now(KST).isoformat(), "grace": grace, "self": me, "stopped": [], "errors": []}
+
+    def step(name, fn):
+        try:
+            fn()
+            report[name] = datetime.now(KST).isoformat()
+        except Exception as exc:                  # 다음 단계는 계속한다
+            report["errors"].append(f"{name}: {exc!r}"[:400])
+
+    def running_verify() -> list[dict]:
         arns = [a for p in ecs.get_paginator("list_tasks").paginate(cluster=cluster, desiredStatus="RUNNING")
                 for a in p["taskArns"] if a != me]
-        tasks = [t for i in range(0, len(arns), 100) for t in ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])["tasks"]
-                 if "-verify-" in t["taskDefinitionArn"]]
-        if not tasks or time.time() >= deadline:
-            break
-        time.sleep(20)
-    report["stopped"] = []
-    for t in tasks:
-        ecs.stop_task(cluster=cluster, task=t["taskArn"], reason="verify-shutdown: 종료 시각 강제 중단 — 결과 미상")
-        env = (t.get("overrides", {}).get("containerOverrides") or [{}])[0].get("environment") or []
-        report["stopped"].append({"arn": t["taskArn"], "family": t["taskDefinitionArn"].rsplit("/", 1)[1],
-                                  "ref": next((e["value"] for e in env if e["name"] == "OPS_ORCHESTRATOR_ATTEMPT_REF"), None),
-                                  "result": "unknown"})
-    asg.update_auto_scaling_group(AutoScalingGroupName=os.environ["VERIFY_ASG"], MinSize=0, MaxSize=0, DesiredCapacity=0)
-    report["asg_0_at"] = datetime.now(KST).isoformat()
-    _s3.put_object(Bucket=BUCKET, Key=f"shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json",
-                   Body=json.dumps(report, ensure_ascii=False).encode())
-    print("VERIFY_SHUTDOWN " + json.dumps(report, ensure_ascii=False))
-    return 0
+        return [t for i in range(0, len(arns), 100) for t in ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])["tasks"]
+                # 자기 자신은 ARN 조회가 실패해도 startedBy 로 뺀다
+                if "-verify-" in t["taskDefinitionArn"] and t.get("startedBy") != "verify-shutdown"]
+
+    try:
+        step("service_desired_0_at", lambda: ecs.update_service(cluster=cluster, service=os.environ["VERIFY_SERVICE"],
+                                                                desiredCount=0))
+        deadline, tasks = time.time() + grace, []
+        while True:
+            try:
+                tasks = running_verify()
+            except Exception as exc:
+                report["errors"].append(f"list: {exc!r}"[:400])
+            if not tasks or time.time() >= deadline:
+                break
+            time.sleep(20)
+        for t in tasks:
+            env = (t.get("overrides", {}).get("containerOverrides") or [{}])[0].get("environment") or []
+            row = {"arn": t["taskArn"], "family": t["taskDefinitionArn"].rsplit("/", 1)[1], "result": "unknown",
+                   "ref": next((e["value"] for e in env if e["name"] == "OPS_ORCHESTRATOR_ATTEMPT_REF"), None)}
+            try:
+                ecs.stop_task(cluster=cluster, task=t["taskArn"], reason="verify-shutdown: 종료 시각 강제 중단 — 결과 미상")
+            except Exception as exc:
+                row["stop_error"] = repr(exc)[:300]
+                report["errors"].append(f"stop {t['taskArn']}: {exc!r}"[:400])
+            report["stopped"].append(row)
+    finally:
+        step("asg_0_at", lambda: asg.update_auto_scaling_group(AutoScalingGroupName=os.environ["VERIFY_ASG"],
+                                                                MinSize=0, MaxSize=0, DesiredCapacity=0))
+        print("VERIFY_SHUTDOWN " + json.dumps(report, ensure_ascii=False), flush=True)
+        _s3.put_object(Bucket=BUCKET, Key=f"shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json",
+                       Body=json.dumps(report, ensure_ascii=False).encode())
+    return 1 if report["errors"] else 0
 
 
 def sleep() -> int:

@@ -138,6 +138,8 @@ def host_summary(samples, windows):
         "idle_mem_available_mib": {t: window_mean(t, "avail") for t in windows},
         "samples": len(samples),
         "task_paths_seen": len(task_paths),
+        # memory.events 를 못 읽은 샘플 — 있으면 상한 도달 판정(A11)은 판정 불가
+        "task_events_missing": sum(1 for s in samples for p in task_paths if p in s["cg"] and "ev_max" not in s["cg"][p]),
         "first_t": min(s["t"] for s in samples), "last_t": max(s["t"] for s in samples),
         "max_gap_s": max((b["t"] - a["t"] for a, b in zip(samples, samples[1:])), default=None),
     }
@@ -269,7 +271,7 @@ def normal_row(d, key, hhmm):
     return row
 
 
-def outcomes_v(d) -> dict | None:
+def outcomes_v(d, marks) -> dict | None:
     """V 배치(small·1408 후속). 원장이 없으면 None(판정 불가)."""
     if not d.get("ledger"):
         return None
@@ -278,9 +280,13 @@ def outcomes_v(d) -> dict | None:
     st = lambda k: (run_of(d, s[k]) or {}).get("state")  # noqa: E731
     led = lambda k: (ledger_run(d, s[k]) or (None, None, {}))[1]  # noqa: E731
     normals = {k: normal_row(d, k, s[k]) for k in ("N1", "N2", "N3", "R1", "A1")}
+    # 재시작이 실제로 일어났는지 — 재배포 시작·끝 표시가 있고, R1 제출 때와 다음(F1) 제출 때의 서비스 태스크가 다르다.
+    trig = {m["run"]: {t["arn"] for t in (m.get("deploy") or {}).get("tasks", [])} for m in marks if m["event"] == "trigger"}
+    restarted = (any(m["event"] == "restart_airflow_begin" for m in marks) and any(m["event"] == "restart_airflow_end" for m in marks)
+                 and bool(trig.get(rid("R1"))) and bool(trig.get(rid("F1"))) and not (trig[rid("R1")] & trig[rid("F1")]))
     chk = {
         # 재시작 추적: 정제 ECS 가 새로 뜨지 않고(1개) 업무 시작 1회, 원장 성공까지(normal_row).
-        "restart_tracking": normals["R1"]["ok"] and len(ecs_of(d, rid("R1"), BUSINESS["normalize"])) == 1,
+        "restart_tracking": restarted and normals["R1"]["ok"] and len(ecs_of(d, rid("R1"), BUSINESS["normalize"])) == 1,
         "fail_confirmed": st("F1") == "failed" and [t["state"] for t in tries_of(d, rid("F1"), "load")] == ["failed"]
         and len(ecs_of(d, rid("F1"), BUSINESS["load"])) == 1 and led("F1") == "FAILED" and writes(d, rid("F1")) == 0,
         "hold_state_unknown": st("H1") == "failed"
@@ -391,7 +397,7 @@ def analyze(exp: str) -> dict:
     lat = {b: latency(x, rw) for b, x in batches.items()}
     out_come = outcomes({k: v for k, v in batches.items() if k != "V"})
     if "V" in batches:
-        out_come["V"] = outcomes_v(batches["V"])
+        out_come["V"] = outcomes_v(batches["V"], marks)
     burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
     # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
     ok_h = [h for h in health if "health" in h and h.get("code") == 200]
@@ -502,7 +508,8 @@ def analyze(exp: str) -> dict:
             "A6_outcomes": None if v is None else v["ok"],
             "A7_business": None if v is None else v["normal_ok"] >= 3 and all(v["normals"][k]["ok"] for k in ("N1", "N2", "N3")),
             "A9_no_growth": "n/a(V)", "A10_ui": "n/a(V)",
-            "A11_task_headroom": None if host is None or not host["task_paths_seen"] else host["task_hit_limit_events"] == 0,
+            "A11_task_headroom": None if host is None or not host["task_paths_seen"] or host["task_events_missing"]
+            else host["task_hit_limit_events"] == 0,
             "A12_deploy_fixed": None if not fps or any('"tasks": []' in f for f in fps) else len(tds) == 1,
         })
     del lim, placement

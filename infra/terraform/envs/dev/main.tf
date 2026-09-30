@@ -703,7 +703,8 @@ module "airflow" {
   instance_type = "t4g.small"
   task_memory   = 1408
   # small·1408 업무 실행 검증(2026-09-30 16:30~22:30 KST, README "small·1408 후속 검증")에만 1. 끝나면 0 머지.
-  host_count    = 1
+  # 종료 장치가 ASG 를 0 으로 내린 뒤 다른 머지의 자동 apply 가 호스트를 되살리지 않게, 23:00 KST 뒤 plan 은 0 이 된다.
+  host_count    = timecmp(plantimestamp(), "2026-09-30T14:00:00Z") < 0 ? 1 : 0
   host_observer = true
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
