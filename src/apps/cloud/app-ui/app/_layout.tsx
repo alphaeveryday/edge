@@ -36,11 +36,11 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <StatusBar style="dark" />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
-        <Stack.Screen name="community/write" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="menu" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="login" options={{ presentation: 'modal' }} />
-        <Stack.Screen name="auth/signup" options={{ presentation: 'modal' }} />
-        <Stack.Screen name="auth/reset" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
+        <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
+        <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
       </Stack>
       <Toast />
     </QueryClientProvider>

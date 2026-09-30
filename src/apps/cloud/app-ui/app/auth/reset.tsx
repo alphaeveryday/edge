@@ -41,7 +41,7 @@ export default function PasswordReset() {
   const resend = () => { setErr(''); req.mutate(undefined, { onSuccess: () => Alert.alert('코드를 다시 보냈어요', '메일함을 확인해 주세요. 1분 안에는 다시 보낼 수 없어요.') }); };
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-      <NavBar title="비밀번호 재설정" backIcon="close" onBack={() => router.back()} />
+      <NavBar title="비밀번호 재설정" onBack={null} rightIcon="close" onRight={() => router.back()} />
       {sent ? (
         <>
           <PageTitle title="코드를 입력해 주세요" sub={`${email.trim()} 으로 6자리 코드를 보냈어요. 10분 안에 입력해 주세요. 메일이 없으면 스팸함을 확인하고, 1분 뒤 다시 요청할 수 있어요.`} />
