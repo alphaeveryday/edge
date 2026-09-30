@@ -26,7 +26,11 @@ fix/*     ─┘
     - base가 `dev`가 아닌 동안 GitHub의 경로별 테스트 잡은 돌지 않는다. 그동안의 통과 기록은 로컬 실행이지 CI 통과가 아니다.
     - 선행 PR이 squash 머지되면 후속 브랜치에는 선행 PR의 원래 커밋이 그대로 남는다. 아래 순서로 옮긴다.
       1. `gh pr edit <N> --base dev` 로 base를 바꾼다.
-      2. 최신 `origin/dev` 를 후속 브랜치에 merge 한다. 선행 PR의 변경이 충돌로 다시 나타나면 `dev` 쪽(머지된 내용)을 받고, 후속 PR이 그 줄을 다시 고친 경우에만 후속 브랜치 쪽을 받는다.
+      2. 최신 `origin/dev` 를 후속 브랜치에 합치되, 공통 조상을 **머지된 선행 PR의 마지막 head** 로 지정한다. 그냥 `git merge origin/dev` 를 하면 공통 조상이 옛 `dev` 로 잡혀, 후속 PR이 다시 고친 선행 PR의 줄이 전부 충돌로 나타난다(ALPHA-1130 스택 모의 실측: 두 번째 후속 PR부터 충돌, 조상 지정 시 전 단계 충돌 0). 선행 head 는 머지 뒤에도 `gh pr view <선행 N> --json headRefOid` 로 얻는다. 아래 `merge-tree` 가 0이 아니면 충돌이니 멈추고 푼다. force-push 는 필요 없다.
+         ```bash
+         T=$(git merge-tree --write-tree --merge-base=<선행 head> HEAD origin/dev) && \
+           git merge --ff-only "$(git commit-tree "$T" -p HEAD -p origin/dev -m "Merge origin/dev (선행 #<선행 N> squash 반영)")"
+         ```
       3. `git diff origin/dev...HEAD` 가 base를 바꾸기 전의 PR diff(선행 브랜치 대비)와 같은지 확인한다. 후속 PR이 선행 PR 파일을 고쳤다면 그 파일은 원래 diff에도 있었다. 원래 diff에 없던 파일·헌크가 보이면 머지된 선행 내용과 어긋난 것이니 머지하지 않고 원인을 찾는다.
       4. push 뒤 GitHub CI 전건 통과를 확인하고 머지한다.
 - `dev` → **`main`에만** PR 한다.
