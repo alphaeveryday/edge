@@ -725,3 +725,20 @@ def test_version_is_visible_only_when_all_its_metrics_are(tmp_path):
     assert annual["available_at"] == q4["available_at"] and annual["rcept_no"] == FILINGS[("2025", "11011")][1]
     assert versions[(2026, "11012", "CFS")]["status"] == "UNCONFIRMED"
     assert json.loads(versions[(2026, "11012", "CFS")]["detail"])["statement_detail"] == "mixed_rcept_no"
+
+
+def test_annual_version_is_unconfirmed_when_its_q4_input_was_not_confirmed(tmp_path):
+    # WHY(리뷰 21차): FY 는 멀쩡한데 Q3 응답만 실패한 재수집이 FY 판본을 "Q4 없음"으로 확정하면, 그 판본이 옛 공개일부터
+    # 보여 과거 조회의 Q4 가 NULL 로 바뀐다. 유도 입력이 미확정이면 사업보고서 판본도 미확정이고 행을 갖지 않는다.
+    responses = full_responses(SAMSUNG)
+    responses[("statement", SAMSUNG["corp_code"], "2025", "11014", "CFS")] = b"<html>502</html>"
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    _, versions = _versions(storage)
+    annual = versions[(2025, "11011", "CFS")]
+    assert annual["status"] == "UNCONFIRMED" and json.loads(annual["detail"])["statement_detail"] == "q4_input_unconfirmed"
+    assert not any(k[1:3] in ((2025, "Q4"), (2025, "FY")) and k[5] == "CFS" for k in rows)
+    assert versions[(2025, "11011", "OFS")]["status"] == "CONFIRMED"      # 별도는 Q3 도 멀쩡 — 기준별로 따로
+    assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "OFS") in rows

@@ -975,6 +975,14 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
     for (corp_code, year, fs_div), items in by_report.items():
         fy = [r for r, _ in items if r["fiscal_period"] == "FY"]
         if fy:
+            q3_version = versions.get((corp_code, year, "11014", fs_div))
+            if q3_version is not None and q3_version["status"] == "UNCONFIRMED":
+                # Q4 유도 입력(9M)을 이 실행이 확정하지 못했다 — 사업보고서 판본을 "Q4 없음"으로 확정하면 옛 확정 Q4 가
+                # 과거 조회에서 NULL 로 바뀐다. 판본을 미확정으로 두고 이 실행의 FY·Q4 행은 싣지 않는다.
+                unconfirmed((corp_code, year, "11011", fs_div), "q4_input_unconfirmed")
+                items = [(r, s) for r, s in items if r["fiscal_period"] not in ("FY", "Q4")]
+                rows.extend(finish(dict(row), sources) for row, sources in items)
+                continue
             q3 = [r for r, _ in items if r["fiscal_period"] == "Q3"]
             derived, bad = dart_fundamental.derive_q4(fy, q3)
             rejects.extend(bad)
