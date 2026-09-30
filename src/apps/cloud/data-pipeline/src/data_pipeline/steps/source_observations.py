@@ -431,7 +431,7 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
          pending: bool, producer: str) -> int:
     """canonical manifest 의 artifact → DB 판본 행. `pending` 이면 소비 마커 없는 완료 manifest 전부.
 
-    소비 마커는 커밋이 끝난 뒤에만 쓴다 — 저장 뒤 적재 전에 죽은 실행은 마커가 없어 `--all` 이 이어 싣는다.
+    소비 마커는 커밋과 검증 기록(quality_log)이 끝난 뒤에만 쓴다 — 그 전에 죽은 실행은 마커가 없어 `--all` 이 이어 싣는다.
     """
     from ..db import connect
 
@@ -439,7 +439,7 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
     if (input_run_id is None) == (not pending):
         raise SystemExit(f"{producer} 는 --input-run-id 또는 --all 중 정확히 하나가 필요하다")
     targets = [input_run_id] if input_run_id else unconsumed_run_ids(storage, "canonical", spec.dataset, CONSUMER)
-    loaded, inserted, skipped, failures = [], 0, [], []
+    loaded, inserted, skipped, failures, markers = [], 0, [], [], []
     exit_code = 0
     sql = _insert_sql(spec)
     for canonical_run_id in targets:
@@ -474,9 +474,9 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
                 if params:
                     cur.executemany(sql, params)
                 inserted += _count(cur, spec.table, canonical_run_id) - before
-            storage.put_bytes(run_manifest_consumed_key("canonical", spec.dataset, canonical_run_id, CONSUMER),
-                              json.dumps({"consumer": CONSUMER, "rows": len(rows), "loaded_by": run_id,
-                                          "at": datetime.now(timezone.utc).isoformat()}).encode("utf-8"))
+            markers.append((run_manifest_consumed_key("canonical", spec.dataset, canonical_run_id, CONSUMER),
+                            json.dumps({"consumer": CONSUMER, "rows": len(rows), "loaded_by": run_id,
+                                        "at": datetime.now(timezone.utc).isoformat()}).encode("utf-8")))
             loaded.append({"run_id": canonical_run_id, "rows": len(rows)})
         except Exception as exc:
             logger.exception("%s 적재 실패: run_id=%s", spec.dataset, canonical_run_id)
@@ -493,7 +493,11 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
                           json.dumps(log, ensure_ascii=False).encode("utf-8"))
     except Exception:
         logger.exception("quality_log 기록 실패")
-        exit_code = exit_code or 1
+        # 소비 마커를 쓰지 않는다 — 쓰면 `--all` 이 이 실행을 빼서 검증 기록 없는 적재가 영영 남는다.
+        # 다음 회차가 같은 artifact 를 다시 싣는다(같은 내용의 재적재는 멱등이다).
+        return 1
+    for key, marker in markers:
+        storage.put_bytes(key, marker)
     logger.info("%s 적재: runs=%d rows=%d inserted=%d failures=%d",
                 spec.dataset, len(loaded), rows_in, inserted, len(failures))
     return exit_code
