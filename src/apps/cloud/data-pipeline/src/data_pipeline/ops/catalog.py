@@ -150,6 +150,18 @@ class CatalogEntry:
     fulfilled_exit_codes: tuple[int, ...] = (0,)
     # 데이터 전달 계약은 별도 typed registry가 소유한다(ADR-0043). Catalog는 stable key만 참조.
     contract_key: str | None = None
+    # 한 레인 안의 독립 흐름. Reconciler 의 "앞 단계가 뒤에 다시 돌았다(stale)" 판정은 같은 흐름
+    # 안에서만 비교한다. 빈 값 = 레인 전체가 한 흐름(기존 레인). 흐름이 여럿인 레인에서 레인 전체로 비교하면
+    # 다른 흐름의 늦은 수집이 이미 끝난 적재를 stale 로 만들어 런 판정이 영영 안 난다.
+    flow: str = ""
+
+    @property
+    def evidence_key(self) -> str:
+        """Reconciler 가 이 작업의 실행 증거(occurrence)를 모으는 키. SFN 작업은 state 이름(SFN 이력과
+        같은 키), SFN 이 없는 Airflow 전용 작업은 `airflow:<task_key>` — 빈 이름을 공유하면 레인의 모든
+        작업 증거가 한 목록에 섞여 서로의 exit·ARN 으로 판정된다. SFN state 이름에는
+        콜론이 없어 두 공간이 겹치지 않는다."""
+        return self.sfn_state_name or f"airflow:{self.task_key}"
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
@@ -599,6 +611,8 @@ def by_cli(step: str, source: str | None = None) -> CatalogEntry | None:
 
 def by_sfn_state(state_name: str) -> CatalogEntry | None:
     """SFN state 이름 → 카탈로그 엔트리(Reconciler 의 history 매핑). 없으면 None(미등록 state)."""
+    if not state_name:
+        return None     # SFN 이 없는(Airflow 전용) 작업의 빈 state 이름은 SFN 이력과 짝이 될 수 없다
     for entry in _ENTRIES:
         if entry.sfn_state_name == state_name:
             return entry
@@ -631,6 +645,7 @@ def content_hash() -> str:
             "pipeline_type": e.pipeline_type,
             "fulfilled_exit_codes": list(e.fulfilled_exit_codes),
             "contract_key": e.contract_key,
+            "flow": e.flow,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
     ]
