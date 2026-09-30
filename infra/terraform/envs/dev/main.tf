@@ -81,6 +81,13 @@ data "aws_secretsmanager_secret" "app_api_jwt" {
   name = "${local.prefix}-app-api/jwt/secret"
 }
 
+# app-api 메일 발송용 Gmail 앱 비밀번호 — 같은 규율: 그릇+값을 TF 밖 CLI 로 선생성, data 조회.
+# 값 교체(앱 비밀번호 재발급) 시:
+# aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"secret":"..."}'.
+data "aws_secretsmanager_secret" "app_api_mail" {
+  name = "${local.prefix}-app-api/mail/password"
+}
+
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
 module "network" {
   source             = "../../modules/network"
@@ -878,14 +885,20 @@ module "app_api" {
     SPRING_DATA_REDIS_HOST        = module.app_redis.primary_endpoint
     SPRING_DATA_REDIS_PORT        = tostring(module.app_redis.port)
     SPRING_DATA_REDIS_SSL_ENABLED = "true"
+    # 메일 발송(Gmail SMTP). host 가 없으면 앱은 발송 대신 로그만 남긴다
+    SPRING_MAIL_HOST     = "smtp.gmail.com"
+    SPRING_MAIL_USERNAME = "asm.alphaeveryday@gmail.com"
+    APP_MAIL_OPERATOR    = "asm.alphaeveryday@gmail.com"
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
     APP_JWT_SECRET             = "${data.aws_secretsmanager_secret.app_api_jwt.arn}:secret::"
+    SPRING_MAIL_PASSWORD       = "${data.aws_secretsmanager_secret.app_api_mail.arn}:secret::"
   }
   secret_arns = [
     module.app_rds.master_user_secret_arn,
     data.aws_secretsmanager_secret.app_api_jwt.arn,
+    data.aws_secretsmanager_secret.app_api_mail.arn,
   ]
 
   depends_on = [module.app_alb]
