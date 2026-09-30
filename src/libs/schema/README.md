@@ -172,7 +172,7 @@ PK는 `(session_id, window_start, generation)`이며 URI/checksum/최초 확정�
 `minute_price_judgment`는 가격 판정 시도(`job_id`, `redrive_generation`, `attempt`)마다 판정이
 실제로 쓴 입력과 확정 결과를 남긴다: 입력 세대(→ `minute_window_artifact_commit`), 판정 정책·임계,
 기준선 집합(`minute_price_baseline_set` → `minute_price_baseline_snapshot`, 판정이 쓴 정규화 값·출처·
-기준일 또는 시가 출처 window@세대), 읽은 앵커(`anchors_used`), 기록 tx 에서 관측한 앵커 창(`tx_anchor`,
+기준일 또는 시가 출처 window@세대 — 기록 도입 전에 확정된 시가는 `ref='pre-record'`로 출처 세대만 미상, 사용값은 남는다), 읽은 앵커(`anchors_used`), 기록 tx 에서 관측한 앵커 창(`tx_anchor`,
 `tx_anchor_locked`로 잠금 뒤/비잠금 관측 구분), 계산·확정 목록(`summary`). `judged_at`은 관측 시각이며
 커밋·인과 순서가 아니다. 단일 writer 는 data-pipeline `price_consumer`이고 발화·회수·무발화 모두
 트리거/앵커/outbox 와 같은 트랜잭션에서 claim·window 세대를 대조한 뒤 기록한다. 같은 시도 키의 다른
