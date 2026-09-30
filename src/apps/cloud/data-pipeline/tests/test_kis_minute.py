@@ -41,7 +41,7 @@ from data_pipeline.sources.kis_minute import (
     fold_closing_auction,
     parse_minute_row,
 )
-from data_pipeline.minute.price_collect import select_window_candle
+from data_pipeline.minute.price_collect import Outcome, select_window_candle
 
 KST = timezone(timedelta(hours=9))
 WINDOW_END = datetime(2026, 8, 3, 10, 30, tzinfo=KST)
@@ -362,6 +362,39 @@ class TestResponseLayers:
     def test_fold_is_a_no_op_without_the_auction_row(self):
         candles = tuple(parse_minute_row(row(h), "005930") for h in ("152900", "152800"))
         assert fold_closing_auction(candles) == candles
+
+    def test_missing_auction_row_makes_the_close_window_missing_not_flat(self):
+        """마감 창 응답에 라벨 15:30 봉이 없으면 15:29 flat 봉을 그 창으로 내지 않는다.
+
+        당일 TR 은 무거래 분도 행을 주므로 부재는 벤더 지연이다. 그대로 두면 flat 봉이
+        `no_trade` 로 **성공** 확정되고(종가 = 단일가 전 가격) INCOMPLETE 가 아니라 재청구도
+        없다 — 09-14 이후 15:29 창 전 종목 거래량 0(ALPHA-1128)이 정확히 그 모양이었다.
+        """
+        client, _ = make_client([TOKEN, ok([flat_row("152900"), row("152800")])])
+        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
+        candles = client.candles("005930", window_end=close)
+        assert select_window_candle(candles, close, "005930") is Outcome.MISSING
+        # 다른 창은 그대로다 — 마감 창만 뺀다
+        assert [c.window_end.strftime("%H%M") for c in candles] == ["1529"]
+
+    def test_historical_fold_matches_realtime_when_the_vendor_omits_the_flat_minute(self):
+        """소급 TR 은 무거래 15:29 행을 생략한다 — 접기 전에 복원해야 실시간과 같은 봉이 된다.
+
+        먼저 접으면 단일가 봉 하나가 마감 창이 되어 시가·고저가가 단일가로 굳는다.
+        재수집이 마감 봉의 시가를 바꾸면 5분봉·갭 계산이 실시간분과 갈린다(Codex 지적).
+        """
+        auction = {**row("153000", volume="7", close="110"), "stck_oprc": "110",
+                   "stck_hgpr": "110", "stck_lwpr": "110"}
+        last_trade = {**row("152800", volume="3", close="100"), "stck_oprc": "100",
+                      "stck_hgpr": "100", "stck_lwpr": "100"}
+        fake = FakeClient([TOKEN, ok([auction, last_trade]),
+                           ok([{**row("152700"), "stck_bsop_date": "20260731"}])])
+        client = KisHistoricalMinuteClient("app-key", "app-secret", fake, session_date=date(2026, 8, 3))
+        [last] = client.candles("005930", window_end=datetime(2026, 8, 3, 15, 30, tzinfo=KST))
+        # 실시간(15:29 flat 행 + 단일가 행)과 같은 봉: 시가 100(접수 구간 flat)·종가 110
+        assert (last.open, last.high, last.low, last.close) == (
+            Decimal("100"), Decimal("110"), Decimal("100"), Decimal("110"))
+        assert last.volume == Decimal("7")
 
     def test_historical_path_folds_the_auction_too(self):
         # 재수집분과 실시간분의 마지막 창이 갈리면 안 된다 — 같은 함수, 같은 결과

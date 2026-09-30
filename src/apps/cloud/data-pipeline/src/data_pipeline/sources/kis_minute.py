@@ -251,9 +251,19 @@ class KisMinuteClient:
         """
         hour = window_end.astimezone(KST).strftime("%H%M%S")
         rows = self._rows(symbol, hour)
-        return fold_closing_auction(tuple(
-            candle for row in rows
-            if (candle := parse_minute_row(row, symbol)) is not None))
+        parsed = tuple(candle for row in rows
+                       if (candle := parse_minute_row(row, symbol)) is not None)
+        folded = fold_closing_auction(parsed)
+        if hour == DAY_LAST_HHMMSS and len(folded) == len(parsed):
+            # 마감 창을 물었는데 접힌 봉이 없다 = 단일가 봉(라벨 15:30)이 응답에 없다. 당일
+            # TR 은 무거래 분도 행을 주므로 부재는 벤더 지연·장애다. 그대로 돌려주면 15:29
+            # flat 봉이 그 창의 봉으로 뽑혀 `no_trade` 로 **성공** 확정되고(종가 = 단일가
+            # 전 가격 — ALPHA-1128 의 모양), INCOMPLETE 가 아니라 재청구도 없다. 마감 창만
+            # 빼서 missing 으로 낸다 — 틀린 종가보다 없는 종가가 낫다(Rule 12).
+            logger.warning("KIS 분봉 %s 마감 응답에 종가 단일가 봉(라벨 %s)이 없다 — "
+                           "마감 창을 missing 으로 낸다", symbol, DAY_LAST_HHMMSS)
+            return tuple(c for c in folded if c.window_end != window_end)
+        return folded
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         return {
@@ -506,9 +516,12 @@ class KisHistoricalMinuteClient(KisMinuteClient):
             # 소스 전역 실패(`KisSourceError`)도 캐시하지 않는다 — 종목의 사실이 아니라
             # 설정·유량의 사실이고, 이미 window 를 통째로 세운다.
             try:
-                day = {candle.window_end: candle for candle in fill_no_trade_minutes(
-                    fold_closing_auction(self._fetch_day(symbol)),
-                    until=self._day_last_window_end)}
+                # ⚠️ 순서: 무거래 복원 **뒤에** 접는다. 소급 TR 은 무거래인 15:29 행을 주지
+                # 않으므로 먼저 접으면 단일가 봉 하나가 마감 창이 되어 시가·고저가가 단일가로
+                # 굳는다 — 실시간(벤더가 15:29 flat 행을 줌)과 다른 봉이 된다(Codex 지적).
+                day = {candle.window_end: candle for candle in fold_closing_auction(
+                    fill_no_trade_minutes(self._fetch_day(symbol),
+                                          until=self._day_last_window_end))}
             except (KisDayIncompleteError, ValueError) as error:
                 self._failures[symbol] = (type(error), str(error))
                 raise
