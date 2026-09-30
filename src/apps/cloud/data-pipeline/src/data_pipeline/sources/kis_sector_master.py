@@ -26,8 +26,11 @@ import zipfile
 MASTER_FILES = {"kospi_code.mst.zip": ("KOSPI", 227), "kosdaq_code.mst.zip": ("KOSDAQ", 221)}
 SECTOR_NAME_FILE = "idxcode.mst.zip"
 
-# 형태 게이트 — 필드가 통째로 밀린 계통적 파손을 잡는다(개별 행 이상은 행 단위로 거부).
-MIN_ROWS = 500
+# 형태 게이트 — 필드가 통째로 밀린 계통적 파손과 **형식은 멀쩡한데 잘린 파일**을 잡는다(개별 행 이상은 행 단위로 거부).
+# 시장별 행수 하한 = 실측(2026-09-30 공개 마스터: KOSPI 2,578·KOSDAQ 1,827행, 거부 0)의 90%. 상장 종목 수가 하루에
+# 10% 넘게 줄 수는 없다 — 그보다 적으면 잘린 파일로 보고 싣지 않는다(빠진 종목이 as-of 조회에서 found=false 로 보이지 않게).
+# ponytail: 고정 하한 — 상장 수가 크게 변하면 갱신한다. 더 정확한 판정은 직전 성공 스냅샷 행수와의 비교(후속).
+MIN_ROWS_BY_MARKET = {"KOSPI": 2320, "KOSDAQ": 1644}
 MIN_VALID_RATIO = 0.95
 MIN_HANGUL_NAME_RATIO = 0.8
 
@@ -97,7 +100,7 @@ def parse_master(file_name: str, data: bytes) -> tuple[list[dict], list[dict]]:
         else:
             rows.append(row)
     total = len(rows) + len(rejects)
-    if total < MIN_ROWS or len(rows) / total < MIN_VALID_RATIO:
+    if total < MIN_ROWS_BY_MARKET[market] or len(rows) / total < MIN_VALID_RATIO:
         # 고정폭이 통째로 밀리면 모든 행의 코드가 조용히 틀린다 — 반쪽 파일을 적재하지 않는다.
         return [], [{"market": market, "reasons": ["master_layout_gate"], "rows": len(rows), "total": total}]
     return rows, rejects

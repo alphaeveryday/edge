@@ -55,19 +55,23 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
             rejects.append({"raw_key": obj["key"], "reasons": ["master_file_unreadable"], "error": type(exc).__name__})
             continue
         rejects.extend({**b, "raw_key": obj["key"]} for b in bad)
-        received = max((t for t in (obj["fetched_at"], names_fetched_at) if t), key=datetime.fromisoformat)
-        # 기준일은 합성된 수신시각에서 — 이름 표가 KST 자정을 넘겨 도착하면 마스터 날짜와 갈려 DB CHECK 가 거부한다.
-        as_of = datetime.fromisoformat(received).astimezone(KST).date().isoformat()
         for item in parsed:
-            row = {**item, "as_of_date": as_of, "taxonomy": "KIS_INDEX_SECTOR",
-                   "received_at": received, "available_at": received,
-                   "availability_basis": "received", "raw_key": obj["key"], "raw_sha256": obj["sha256"]}
+            row = {**item, "taxonomy": "KIS_INDEX_SECTOR", "availability_basis": "received",
+                   "raw_key": obj["key"], "raw_sha256": obj["sha256"]}
             for level in ("large", "medium", "small"):
                 raw_code = item[f"raw_{level}_code"]
                 code = None if raw_code == "0000" else raw_code
                 row[f"{level}_code"], row[f"{level}_name"] = code, names.get(code) if code else None
                 if code and code not in names:
                     unnamed.add(code)
+            # 이름 표에서 이름을 실제로 붙인 행만 두 입력 중 늦게 받은 시각부터 보인다. 이름에 기대지 않는 행(코드 셋 다
+            # 0000·이름 없음)은 마스터 수신시각 — 두 응답 사이의 기준시각 조회에서 found=false 로 사라지지 않게(봇 P2).
+            named = any(row[f"{level}_name"] for level in ("large", "medium", "small"))
+            received = (max(obj["fetched_at"], names_fetched_at, key=datetime.fromisoformat)
+                        if named and names_fetched_at else obj["fetched_at"])
+            # 기준일은 그 행의 수신시각에서 — 이름 표가 KST 자정을 넘겨 도착하면 마스터 날짜와 갈려 DB CHECK 가 거부한다.
+            row.update({"received_at": received, "available_at": received,
+                        "as_of_date": datetime.fromisoformat(received).astimezone(KST).date().isoformat()})
             rows.append(row)
     rejects.extend({"reasons": ["sector_name_not_found"], "code": c} for c in sorted(unnamed))
     return rows, rejects

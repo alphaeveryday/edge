@@ -672,6 +672,9 @@ OBSERVATION_LOAD_STEPS = tuple(k for k, (_, stage) in OBSERVATION_STEPS.items() 
 def _dispatch_observation(args, settings, storage, run_id) -> int:
     """원천 관측 스텝. 수집 창은 스텝이 KST 로 정한다(어제까지 — 진행 중 관측 제외)."""
     family, stage = OBSERVATION_STEPS[args.step]
+    if getattr(args, "source", None):
+        # 원천 관측 스텝은 공급자를 계열·데이터셋이 정한다 — 받아 두고 버리면 운영자가 좁힌 줄 아는 복구가 전체를 부른다.
+        raise SystemExit(f"{args.step} 는 --source 를 쓰지 않는다 (매크로는 --series 로 좁힌다)")
     config = settings.source_observations
     if config is None:
         raise SystemExit("source_observations 설정이 없다 — sources.toml 확인")
@@ -700,6 +703,8 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         return source_observations_sector.collect_sector(
             storage, PoliteClient(min_interval=1.0, timeout=60.0), config.sector.base_url, run_id)
     if family == "financial":
+        if not config.etf_ids:
+            raise SystemExit("source_observations.etf_ids 가 비어 있다 — 재무 수집 대상 ETF 가 없다")
         # DART 키는 기존 재무 수집과 같은 것(dart_financial.source)을 쓴다 — tasks.tf dart 태스크 정의에 이미 있다.
         if settings.dart_financial is None or not settings.dart_financial.source.api_key:
             raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
