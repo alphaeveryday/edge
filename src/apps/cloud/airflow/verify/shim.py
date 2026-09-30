@@ -283,12 +283,42 @@ def shutdown() -> int:
                 report["errors"].append(f"stop {t['taskArn']}: {exc!r}"[:400])
             report["stopped"].append(row)
     finally:
+        # 호스트를 내리기 전에 관측 기록(/var/log/edge-obs — health·메모리·커널·docker)을 버킷으로 보낸다. 운영자 PC 가
+        # 잠들어 수거하지 못해도 A2~A4 증거가 호스트와 함께 사라지지 않게. 실패해도 호스트는 내린다.
+        step("host_obs_shipped_at", lambda: _ship_host_obs(asg, report))
         step("asg_0_at", lambda: asg.update_auto_scaling_group(AutoScalingGroupName=os.environ["VERIFY_ASG"],
                                                                 MinSize=0, MaxSize=0, DesiredCapacity=0))
         print("VERIFY_SHUTDOWN " + json.dumps(report, ensure_ascii=False), flush=True)
         _s3.put_object(Bucket=BUCKET, Key=f"shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json",
                        Body=json.dumps(report, ensure_ascii=False).encode())
     return 1 if report["errors"] else 0
+
+
+def _ship_host_obs(asg, report: dict, wait_seconds: int = 180) -> None:
+    """ASG 호스트마다 SSM 으로 edge-obs 를 tar·base64 해 검증 버킷 obs/shutdown/ 에 남긴다(run.py obs 와 같은 형식)."""
+    ssm = boto3.client("ssm")
+    groups = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[os.environ["VERIFY_ASG"]])["AutoScalingGroups"]
+    ids = [i["InstanceId"] for g in groups for i in g["Instances"]]
+    if not ids:
+        report["host_obs"] = "호스트 없음"
+        return
+    prefix = f"obs/shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
+    cid = ssm.send_command(InstanceIds=ids, DocumentName="AWS-RunShellScript", OutputS3BucketName=BUCKET,
+                           OutputS3KeyPrefix=prefix,
+                           Parameters={"commands": ["tar czf - -C /var/log edge-obs | base64 -w0"]})["Command"]["CommandId"]
+    status, deadline = {}, time.time() + wait_seconds
+    while time.time() < deadline and len(status) < len(ids):
+        time.sleep(5)
+        for iid in ids:
+            try:
+                st = ssm.get_command_invocation(CommandId=cid, InstanceId=iid)["Status"]
+            except ssm.exceptions.InvocationDoesNotExist:
+                continue
+            if st in ("Success", "Failed", "Cancelled", "TimedOut"):
+                status[iid] = st
+    report["host_obs"] = {"prefix": prefix, "command": cid, "status": status}
+    if any(status.get(i) != "Success" for i in ids):
+        raise RuntimeError(f"관측 기록 전송 미완: {status}")
 
 
 def sleep() -> int:

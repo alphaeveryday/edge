@@ -864,6 +864,7 @@ Table "movement_analyses" {
   "trading_date" date [not null]
   "summary" text
   "selected_item_ids" text[] [not null]
+  "data_source" text [not null]
 }
 
 Table "movement_items" {
@@ -1073,6 +1074,7 @@ Table "outlook_analyses" {
   "conclusion_sentence" text
   "change_condition" text
   "issue_headline" text
+  "data_source" text [not null]
 }
 
 Table "outlook_conclusion_keywords" {

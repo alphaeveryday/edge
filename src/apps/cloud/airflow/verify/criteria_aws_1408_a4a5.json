@@ -1,0 +1,100 @@
+{
+  "_note": "small·1408 A4·A5 표적 재검증(ALPHA-1119) — 실행 전 고정(2026-10-01 01:5x KST). 실행 중 이 파일·실행기·shim·이미지를 바꾸면 그 전 결과와 합산하지 않는다(새 exp 이름). 판정: verify/analyze_aws.py(L 배치). 이미 통과한 항목(재시작 추적·확정 실패·보류·해제·복구, V)은 반복하지 않는다.",
+  "_changes": [
+    "EdgeStep awslogs_fetch_interval 30→10초(#1027) — A5 실패 원인(provider 로그 수집 스레드 join)",
+    "A4 표본을 호스트 관측기 health.log(15초, nsenter)로 — 운영자 PC 포워딩과 무관. 종료 장치가 호스트를 내리기 전 관측 기록을 버킷에 보낸다",
+    "시나리오 L: 정상 run 6회를 같은 조건으로 연속(증거는 마지막 run 직후 — ListTasks 1시간 안), 뒤에 포워딩 10분 고의 단절(A4 증거 경로 확인)",
+    "A5 표본은 업무 시작·exit 0 종료·산출물·ECS 5·원장 성공이 모두 확인된 run 의 ECS 태스크만. 유효 run 5 미만이거나 종료 감지 표본 25 미만이면 판정 불가",
+    "기준값(A4·A5 문구)은 바꾸지 않는다. p95 와 함께 개별 값·최대·표본 수를 보고한다"
+  ],
+  "verify_day": "2026-10-01",
+  "window": {
+    "start_not_before_kst": "16:30 — 분 세션 stop(16:10)·일봉(15:40) 종료와 실행 중 SFN·ECS 0 을 확인한 뒤. 준비가 늦으면 시작을 미룬다",
+    "avoid_kst": [
+      "19:25~19:55 공시 19:30 배치 — 새 run 을 시작하지 않는다(실행기가 대기)"
+    ],
+    "submit_cutoff_kst": "22:00",
+    "shutdown_at_kst": "22:30 (AWS 종료 장치: 서비스 0 → 15분 grace → 남은 검증 태스크 중단 → 관측 기록 전송 → 호스트 0)",
+    "hard_stop_at_kst": "23:00 (서비스·호스트 0 직접 호출)",
+    "hard_end_kst": "23:30 — 정리 완료",
+    "max_extra_cost_usd": 3
+  },
+  "deploy": {
+    "task_memory": 1408,
+    "instance_type": "t4g.small",
+    "settings": {
+      "AIRFLOW__CORE__PARALLELISM": "1",
+      "AIRFLOW__DAG_PROCESSOR__PARSING_PROCESSES": "1",
+      "AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE": "2",
+      "AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW": "3",
+      "AIRFLOW__API__WORKERS": "1"
+    },
+    "health": {
+      "api-server": "\"metadatabase\":{\"status\":\"healthy\"",
+      "scheduler": "\"scheduler\":{\"status\":\"healthy\"",
+      "dag-processor": "\"dag_processor\":{\"status\":\"healthy\""
+    }
+  },
+  "scenarios": {
+    "start_grace_seconds": 240,
+    "S1_idle": {
+      "seconds": 600,
+      "why": "Airflow 기동 뒤 기준선(호스트·RDS)과 A4 표본 시작"
+    },
+    "shutdown_pretest": "본 실험 전 종료 장치를 짧게 시험한다(shutdown_test.py — 같은 대상·역할의 일회성 스케줄, 검증 태스크 1개 중단·관측 기록 전송 확인). 실패하면 본 실험을 시작하지 않는다",
+    "L": {
+      "slots": [
+        "09:35",
+        "10:05",
+        "11:25",
+        "13:25",
+        "14:35",
+        "15:20"
+      ],
+      "what": "정상 — plan→collect(보존 입력 재생)→normalize→load→report→verdict, 주입 없음",
+      "min_valid_runs": 5,
+      "min_detect_samples": 25,
+      "forward_cut_seconds": 600
+    },
+    "idle_after_L": 600
+  },
+  "pass": {
+    "A1_placement": "서비스 태스크 1408 로 배치·세 컨테이너 HEALTHY(10분 안)",
+    "A2_no_oom_restart": "커널·docker·태스크 cgroup 어디에도 OOM 0, 주입(R1)하지 않은 서비스 태스크 교체 0. 관측 불완전이면 판정 불가",
+    "A3_host_memory": "호스트 MemAvailable 최소 ≥ 64MiB, swap 0",
+    "A4_heartbeat_parse": "health 15초 샘플에서 scheduler·dag_processor healthy, import 오류 0, 재시작 창 밖 공백 60초 이하 — 표본은 호스트 관측기(health.log). import 오류 수는 운영자 PC 표본(실험 처음·끝 15분 안에 각 1개 이상)",
+    "A5_latency": "p95 — 앞 task 종료→queued ≤ 15초, queued→시작 ≤ 15초, task 시작→ECS 생성 ≤ 20초, ECS 종료→task 종료 ≤ 30초. 표본 누락이면 판정 불가 — L 의 유효 run 만. 유효 run ≥5·종료 감지 표본 ≥25 가 아니면 판정 불가",
+    "A7_business": "L 정상 run 중 업무 시작 1·exit 0 종료 1·파티션 쓰기 ≥1·ECS 5·원장 AIRFLOW SUCCEEDED 전 작업 FULFILLED 인 run ≥5",
+    "A8_db": "Airflow·검증 역할 연결 ≤ 10, Airflow DB 오류 로그 0, RDS 중단 기준 미발동, 창 안 업무 SFN 실패 0, RDS 관측이 전 구간을 덮음",
+    "A11_task_headroom": "태스크 cgroup memory.events max 0 — 1408 상한에 한 번도 닿지 않음",
+    "A12_deploy_fixed": "모든 run 의 서비스 태스크 정의·이미지 digest 동일(R1 재시작의 새 태스크도 같은 리비전)"
+  },
+  "airflow_stop": {
+    "oom": "OOM 1건 — 즉시 중단, 증거 보존, 실패",
+    "restart_loop": "서비스 태스크 교체 1회(이번엔 주입 재시작 없음) — 중단",
+    "not_started": "정상 run 이 start_grace_seconds 안에 시작하지 않음 — 중단, 원인 기록",
+    "host_memory": "호스트 MemAvailable < 64MiB 가 관측되면 중단(사양을 올리지 않는다), 증거 보존, 실패"
+  },
+  "rds_stop": {
+    "_basis": "criteria_aws.json 과 같다(edge-dev 14일 장외 분포). 이번 창은 16:30~22:30 — 장외지만 19:30 공시 배치가 끼므로 그 구간 업무 부하 변화를 표시한다",
+    "freeable_mib_below": 500,
+    "swap_mib_above": 60,
+    "cpu_pct_above": 30,
+    "latency_ms_above": 20,
+    "connections_above": 42,
+    "sustain_minutes": {
+      "freeable": 3,
+      "swap": 3,
+      "cpu": 5,
+      "latency": 3,
+      "connections": 2
+    },
+    "business": "창 안에 업무 SFN FAILED 1건 — 원인 확인 전 Airflow 정지"
+  },
+  "cleanup": [
+    "새 run 중지(DAG pause·서비스 0) · 이번 실행의 검증 ECS 태스크 STOPPED 확인(종료 장치 보고서 포함)",
+    "증거 수거(호스트 관측 — 호스트가 없으면 obs/shutdown/·L.json·deployinfo·RDS·shutdown 보고서) · 검증 원장 백업 · 검증 버킷 사본",
+    "dbadmin teardown(전용 DB·역할) → Terraform host_count 0·host_observer false·verify_enabled false·종료 장치 제거 머지",
+    "조회로 확인: ASG 0·EC2 0·서비스 0·검증 태스크 0·스케줄 0·전용 DB·역할 0·검증 버킷·시크릿 0·SFN 설정 그대로(investor_intraday_orchestrator=SFN)"
+  ]
+}

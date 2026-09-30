@@ -38,6 +38,11 @@ NETWORK = {"awsvpcConfiguration": {
     "assignPublicIp": "DISABLED",
 }}
 LOG_GROUP = os.environ.get("EDGE_ECS_LOG_GROUP") or None   # 없으면 CloudWatch 로그를 끌어오지 않는다
+# provider 로그 수집 스레드의 조회 간격(기본 30초). 스레드는 끊을 수 없는 sleep 을 돌고, 태스크 종료를 본 뒤
+# join 이 그 sleep 이 끝나길 기다린다 — 기본값이면 ECS 종료에서 Airflow 판정까지 최대 30초가 붙었다
+# (ALPHA-1119 aws-small-1408-v: 종료 감지가 매번 수집 시작 +90.7초, 정상 표본 20~33초). 10초면 종료 감지는
+# max(waiter_delay 6초, 이 간격) 이내로 줄고, GetLogEvents 는 깨어날 때마다 2회 이상이라 5초보다 호출이 절반이다.
+LOG_FETCH_INTERVAL = timedelta(seconds=10)
 # 태스크 정의별 awslogs-stream-prefix(tasks.tf `raw-ingest`, ops_ledger.tf `ops`).
 _LOG_PREFIX = {"ops": "ops"}
 # data_pipeline.ops.wrapper.STEP_NOT_RUN_EXIT — 실행권·이력을 확인 못 해 업무를 실행하지 않았다(재시도 대상).
@@ -268,6 +273,7 @@ class EdgeStep(EcsRunTaskOperator):
             stop_task_on_failure=False,
             container_name=CONTAINER,       # 로그 스트림 이름을 위해 provider 가 기동 뒤 조회·대기하지 않게
             awslogs_group=log_group or LOG_GROUP,
+            awslogs_fetch_interval=LOG_FETCH_INTERVAL,
             awslogs_stream_prefix=(f"{_LOG_PREFIX.get(taskdef_key, 'raw-ingest')}/{CONTAINER}"
                                    if log_group or LOG_GROUP else None),
             **kwargs,
