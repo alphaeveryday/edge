@@ -313,3 +313,43 @@ def test_quality_log_failure_leaves_the_normalize_run_incomplete(tmp_path, monke
     assert manifest["canonical_written"] is False
     # 적재의 미완료 회수 경로도 이 실행을 싣지 않는다(소비 마커 없음 → 검증 기록을 다시 만들 기회가 남는다).
     assert so._completed_manifest(storage, so_macro.MACRO, "q_norm") is None
+
+
+def test_quality_log_failure_after_rejected_rows_is_a_hard_failure(tmp_path, monkeypatch):
+    # WHY(봇 P2): 거부 행으로 이미 PARTIAL_EXIT(2)인 정제에서 검증 기록까지 실패하면 완료 manifest 가 없다.
+    # 2 는 DAG 가 '충족'으로 넘기고 `load --all` 은 미완료 실행을 건너뛰어 성공 — 받은 행이 영영 안 실린다.
+    storage = LocalStorage(tmp_path)
+    doc = json.loads(body("ecos_usdkrw.json"))
+    doc["StatisticSearch"]["row"].append({**doc["StatisticSearch"]["row"][0], "TIME": "20260102"})
+    src, _ = source({**ALL_ROUTES, "731Y003": json.dumps(doc).encode()})
+    real_now = datetime.now(timezone.utc)
+    assert so_macro.collect_macro(storage, src, "qp_raw", series_ids=["usd_krw"], from_date="2026-07-20",
+                                  to_date=(real_now.astimezone(KST).date() - timedelta(days=1)).isoformat(),
+                                  now=real_now) == 0
+    original = storage.put_bytes
+
+    def failing(key, data, *a, **k):
+        if key.startswith("operations_archive/data_quality_logs/"):
+            raise OSError("quality log write failed")
+        return original(key, data, *a, **k)
+
+    monkeypatch.setattr(storage, "put_bytes", failing)
+    assert so.normalize(storage, so_macro.MACRO, "qp_norm", "qp_raw", producer="normalize_macro") == 1
+
+
+@pytest.mark.parametrize("extra", [{"from_date": "2026-01-01"}, {"to_date": "2026-01-31"}, {"series": "usd_krw"}])
+@pytest.mark.parametrize("step", ["normalize-macro", "load-macro"])
+def test_normalize_and_load_refuse_collection_scope_arguments(tmp_path, step, extra):
+    # WHY(봇 P2): 정제·적재는 입력 실행 전체를 처리한다. 복구 창을 받아 두고 버리면 운영자가 요청한 것보다
+    # 넓은 범위를 처리하고도 성공으로 끝난다 — 쓰지 않는 인자는 거부한다.
+    from types import SimpleNamespace
+
+    from data_pipeline import run as run_module
+
+    args = SimpleNamespace(step=step, input_run_id="r", from_date=None, to_date=None, series=None,
+                           all_partitions=False)
+    for k, v in extra.items():
+        setattr(args, k, v)
+    settings = SimpleNamespace(source_observations=SimpleNamespace())  # 거부는 설정 내용을 읽기 전에 난다
+    with pytest.raises(SystemExit, match="쓰지 않는다"):
+        run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_scope")

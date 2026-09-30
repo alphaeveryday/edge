@@ -411,7 +411,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
     except Exception:
         logger.exception("quality_log 기록 실패")
         quality_written = False
-        exit_code = exit_code or 1
+        exit_code = 1
     if completed is not None and quality_written and exit_code != 1:
         try:
             storage.put_bytes(manifest_key, completed)
