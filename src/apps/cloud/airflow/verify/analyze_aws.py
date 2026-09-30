@@ -264,7 +264,8 @@ def ecs_arns(d, rid) -> set:
     """이 run 의 ECS 태스크 — ListTasks(멈춘 태스크는 약 1시간만 조회된다)와 shim invocation 기록(컨테이너가 자기 ECS
     메타데이터로 남긴 태스크 ARN, 검증 버킷에 영구)의 합집합. 수집 시각이 늦어도 태스크 수가 0 으로 읽히지 않게."""
     listed = {e["arn"] for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")}
-    invoked = {(r.get("ecs_task_arn") or "").rsplit("/", 1)[-1] for r in d.get("invocations", [])
+    rows = d.get("state", {}).get("invocations") or d.get("invocations", [])   # 실행기 수집분 · 사후 복원 파일
+    invoked = {(r.get("ecs_task_arn") or "").rsplit("/", 1)[-1] for r in rows
                if f"/{rid}/" in (r.get("attempt_ref") or "") and r.get("ecs_task_arn")}
     return listed | invoked
 
