@@ -177,7 +177,6 @@ export const mockClient: ApiClient = {
       ME.email = email;
       return delay({ ...ME });
     },
-    social: () => delay({ ...ME }),
     signup: ({ email, password, nick }) => {
       if (ACCOUNTS[email]) return Promise.reject(new ApiError('INVALID', '이미 가입된 이메일이에요'));
       ACCOUNTS[email] = password;

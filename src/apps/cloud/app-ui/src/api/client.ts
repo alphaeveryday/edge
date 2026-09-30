@@ -74,7 +74,6 @@ export interface MemberApi {
 
 export interface AuthApi {
   login(email: string, password: string): Promise<Me>;
-  social(provider: 'apple' | 'google'): Promise<Me>;
   signup(input: { email: string; password: string; nick: string }): Promise<Me>;
   requestPasswordReset(email: string): Promise<void>;
   logout(): Promise<void>;

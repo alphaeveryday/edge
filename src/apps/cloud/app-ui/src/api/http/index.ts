@@ -124,8 +124,6 @@ export const httpClient: ApiClient = {
   },
   auth: {
     login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' })),
-    // 플랫폼 로그인 SDK 도입 전 임시 토큰 값
-    social: async (provider) => signIn(await request<WireAuth>('POST', '/auth/social', { body: { provider, idToken: 'todo' }, auth: 'device' })),
     signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' })),
     requestPasswordReset: (email) => request<void>('POST', '/auth/password-reset', { body: { email }, auth: false }),
     logout: async () => {
