@@ -94,9 +94,9 @@ class NotificationFlowTests extends ContainerTests {
         long principal = jdbc.queryForObject("insert into device(device_key) values ('noti-dev') returning id", Long.class);
         principal = jdbc.queryForObject("insert into principal(kind, device_id) values ('device', ?) returning id", Long.class, principal);
         for (int i = 0; i < 3; i++) {
-            jdbc.update("insert into notification(principal_id, kind, etf_code, title, body, created_at) values (?, 'signal', '069500', 't', ?, now() + make_interval(secs => ?))", principal, "s" + i, i);
+            jdbc.update("insert into notification(principal_id, kind, etf_code, title, body, created_at) values (?, 'watch', '069500', 't', ?, now() + make_interval(secs => ?))", principal, "s" + i, i);
         }
-        jdbc.update("insert into notification(principal_id, kind, title, body, created_at) values (?, 'content', 't', 'c', now() + interval '10 seconds')", principal);
+        jdbc.update("insert into notification(principal_id, kind, title, body, created_at) values (?, 'comm', 't', 'c', now() + interval '10 seconds')", principal);
 
         Map<String, Object> page = result(call("GET", "/api/v1/notifications?size=2", null, "dev:noti-dev"));
         assertEquals(List.of("c", "s2"), items(page).stream().map(i -> i.get("body")).toList(), "최신순");
@@ -105,10 +105,11 @@ class NotificationFlowTests extends ContainerTests {
         assertEquals(List.of("s1", "s0"), items(next).stream().map(i -> i.get("body")).toList());
         assertNull(next.get("nextCursor"));
 
-        assertEquals(3, items(result(call("GET", "/api/v1/notifications?kind=signal", null, "dev:noti-dev"))).size());
+        assertEquals(3, items(result(call("GET", "/api/v1/notifications?kind=watch", null, "dev:noti-dev"))).size());
         assertEquals(4, items(result(call("GET", "/api/v1/notifications?kind=all", null, "dev:noti-dev"))).size());
-        assertEquals("069500", items(result(call("GET", "/api/v1/notifications?kind=signal", null, "dev:noti-dev"))).get(0).get("etf"));
-        assertEquals(0, items(result(call("GET", "/api/v1/notifications?kind=comm", null, "dev:noti-dev"))).size());
+        assertEquals("069500", items(result(call("GET", "/api/v1/notifications?kind=watch", null, "dev:noti-dev"))).get(0).get("etf"));
+        assertEquals(1, items(result(call("GET", "/api/v1/notifications?kind=comm", null, "dev:noti-dev"))).size());
+        assertEquals(400, call("GET", "/api/v1/notifications?kind=signal", null, "dev:noti-dev").getStatusCode().value(), "디자인에 없는 종류");
         assertEquals(400, call("GET", "/api/v1/notifications?kind=spam", null, "dev:noti-dev").getStatusCode().value());
 
         assertEquals(4, result(call("GET", "/api/v1/notifications/unread-count", null, "dev:noti-dev")).get("count"));

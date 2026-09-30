@@ -7,7 +7,7 @@ import jakarta.persistence.Converter;
 
 // 알림 종류. 와이어 값은 계약 소문자 코드
 public enum NotiKind {
-    WATCH, SIGNAL, CONTENT, COMM;
+    WATCH, COMM;
 
     @JsonValue
     public String value() {
