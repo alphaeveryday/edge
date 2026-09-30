@@ -21,9 +21,9 @@
    행이고 나머지는 버린다 — 어댑터의 `candles()` 가 창을 못 고르기 때문이다(그 함수
    도크스트링). 겹침 복구는 `_process(claim)` = window 1 계약 밖이다.
 
-⭐ **라벨 축이 주식과 반대다** — 업종지수 `stck_cntg_hour` 는 구간의 **시작**이고 주식
-당일 TR 은 **끝**이다(어댑터가 실측으로 확정). 그 변환은 `parse_index_row` 안에서 끝나
-여기 도착한 `Candle` 은 이미 `[window_start, window_end)` 축이다 — 그래서 가격과 같은
+⭐ **라벨은 구간의 시작이다** — 업종지수도 주식 당일 TR 도 같은 축이다(주식 쪽이 "끝"으로
+적혀 있던 건 ALPHA-644 의 오독, ALPHA-1127 에서 정정). 그 변환은 `parse_index_row` 안에서
+끝나 여기 도착한 `Candle` 은 이미 `[window_start, window_end)` 축이다 — 그래서 가격과 같은
 `select_window_candle` 을 그대로 쓴다.
 """
 

@@ -71,7 +71,7 @@ def env(tmp_path):
     from data_pipeline.lake import LocalStorage
     from data_pipeline.minute.commit import MinuteCommitter
     from data_pipeline.minute.jobs import JobLedger
-    from data_pipeline.minute.models import KST, Universe
+    from data_pipeline.minute.models import KST, WINDOW_SETTLE_SEC, Universe
     from data_pipeline.minute.repository import MinuteLedger
     from data_pipeline.minute.worker import PriceWorker, WorkerConfig
 
@@ -98,8 +98,10 @@ def env(tmp_path):
                                 trigger_schema_version="test", destination="q", is_backfill=False,
                                 lease_seconds=60, recovery_budget_per_tick=0,
                                 artifact_format="content_v2"))
+        # 창은 창 끝 + WINDOW_SETTLE_SEC 에야 due 다(ALPHA-1127) — 마지막 창(끝 start+N)까지
+        # 집으려면 그만큼 뒤에서 tick 한다
         for _ in range(N + 2):
-            if worker.tick(start + timedelta(minutes=N + 1)) != "PROCESSED":
+            if worker.tick(start + timedelta(minutes=N + 1, seconds=WINDOW_SETTLE_SEC)) != "PROCESSED":
                 break
         return sid
 
