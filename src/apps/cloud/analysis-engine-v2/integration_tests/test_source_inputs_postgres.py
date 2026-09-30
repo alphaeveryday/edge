@@ -452,12 +452,12 @@ def test_freshness_keeps_a_row_for_a_fulfilled_but_empty_load(db):
     # "never loaded": the row exists with no observation columns and the ledger's data_status.
     db.execute("RESET ROLE")
     run = "v2-source-test-ops-" + uuid4().hex
-    db.execute("INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type, execution_name, orchestrator)"
-               " VALUES (%s, %s, 'source-daily', %s, 'AIRFLOW')", (run, run, run))
-    db.execute("INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage, dataset, task_outcome,"
-               " data_status, fulfilled_at, idempotency_key) VALUES (%s, %s, 'LOAD_SECTOR', 'feature',"
-               " 'sector_classification_load', 'FULFILLED', 'VALID_EMPTY', '2027-02-01 09:30+09', %s)", (run + "-t", run, run + "-t"))
-    try:
+    try:   # cleanup scope starts before the first insert — a failing second insert must not leave the run behind
+        db.execute("INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, pipeline_type, execution_name, orchestrator)"
+                   " VALUES (%s, %s, 'source-daily', %s, 'AIRFLOW')", (run, run, run))
+        db.execute("INSERT INTO ops_expected_task (expected_task_id, pipeline_run_id, task_key, stage, dataset, task_outcome,"
+                   " data_status, fulfilled_at, idempotency_key) VALUES (%s, %s, 'LOAD_SECTOR', 'feature',"
+                   " 'sector_classification_load', 'FULFILLED', 'VALID_EMPTY', '2027-02-01 09:30+09', %s)", (run + "-t", run, run + "-t"))
         assert db.execute("SELECT count(*) FROM sector_classification").fetchone()[0] == 0   # this DB has no sector rows
         db.execute("SET ROLE edge_analysis_v2_writer")
         from edge_analysis_v2.storage.source_inputs import freshness
