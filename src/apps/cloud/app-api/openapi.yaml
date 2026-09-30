@@ -68,6 +68,8 @@ x-error-codes:
   WATCH4001: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
   WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 관심 정책
   MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
+  MEMBER4003: { http: 404, message: 없는 회원입니다. }
+  MEMBER4004: { http: 400, message: 자기 자신은 차단할 수 없습니다. }
   AUTH4001: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
   AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 틀림·만료·시도 초과·미가입 구분 없음
   VOTE5001: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
@@ -583,6 +585,7 @@ paths:
       description: |
         글 목록 하나로 통합. 앱의 community.feed(all|mine)·mine·posts(code)·hot 이 함께 쓴다.
         scope=all 전체 최신순, mine 요청자(회원 또는 게스트 디바이스)의 관심 ETF 글, hot 홈 인기글. code 를 주면 그 ETF 글만.
+        회원 요청이면 그 회원이 차단한 작성자의 글은 빠진다.
       parameters:
         - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot], default: all } }
         - { name: code, in: query, schema: { $ref: '#/components/schemas/EtfCode' } }
@@ -616,7 +619,7 @@ paths:
       operationId: communityGet
       summary: 글 상세
       security: []
-      description: 조회수 증가.
+      description: 조회수 증가. 회원이 차단한 작성자의 글이면 blocked=true 를 붙여 그대로 준다(앱은 가림막 뒤에 표시).
       parameters: [{ $ref: '#/components/parameters/Id' }]
       responses:
         '200': { $ref: '#/components/responses/Post' }
@@ -636,6 +639,7 @@ paths:
       operationId: communityReplies
       summary: 답글 목록
       security: []
+      description: 회원 요청이면 그 회원이 차단한 작성자의 답글은 빠진다.
       parameters:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/Cursor' }
@@ -702,6 +706,43 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Post' }
         '404': { $ref: '#/components/responses/Error' }   # POST4001
+  /reports:
+    post:
+      tags: [community]
+      operationId: communityReport
+      summary: 글·답글 신고
+      security: [{ bearerAuth: [] }]
+      description: 신고를 저장하고 운영자에게 원문을 메일로 보낸다. 같은 대상을 다시 신고해도 200 이고 저장·메일은 한 번뿐. 운영자는 24시간 안에 확인해 DB 에서 소프트 삭제한다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetType, targetId, reason]
+              properties:
+                targetType: { type: string, enum: [post, reply] }
+                targetId: { type: string }
+                reason: { type: string, enum: [spam, abuse, sexual, scam, etc], description: 스팸·욕설·음란·사기·기타 }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # POST4001 대상 없음
+  /blocks/{handle}:
+    put:
+      tags: [community]
+      operationId: communityBlock
+      summary: 회원 차단
+      security: [{ bearerAuth: [] }]
+      description: 단방향 차단. 요청 회원에게 그 회원의 글·답글이 목록에서 빠지고 새 답글 알림이 오지 않는다. 멱등. 차단 해제는 1차 범위 밖.
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string }, description: '@ 포함 handle' }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # MEMBER4004
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # MEMBER4003
   /etfs/{code}/vote:
     put:
       tags: [community]
@@ -1027,6 +1068,7 @@ components:
         liked: { type: boolean }
         views: { type: integer }
         mine: { type: boolean }
+        blocked: { type: boolean, description: 요청 회원이 차단한 작성자의 글. 글 상세에서만 true 로 온다 }
     Reply:
       type: object
       required: [id, author, time, body]

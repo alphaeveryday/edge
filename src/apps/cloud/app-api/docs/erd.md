@@ -200,6 +200,27 @@ PK `(post_id, etf_code)`. 최대 3개(POST4003)는 서비스가 센다. 인덱�
 
 PK `(post_id, member_id)`. PUT 은 `INSERT ... ON CONFLICT DO NOTHING`, DELETE 는 삭제. 둘 다 `post.like_count` 를 같은 트랜잭션에서 증감. API `liked` 는 요청자 기준 존재 여부.
 
+### report
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| id | bigint PK | |
+| reporter_member_id | bigint → member | |
+| target_type | varchar(10) | CHECK `post`·`reply` |
+| target_id | bigint | post 또는 reply id |
+| reason | varchar(10) | CHECK `spam`·`abuse`·`sexual`·`scam`·`etc` |
+| created_at | timestamptz | |
+
+UNIQUE `(reporter_member_id, target_type, target_id)`. 삽입은 `ON CONFLICT DO NOTHING`, 새 행일 때만 운영자에게 원문 메일. 처리는 운영자가 대상 행의 `deleted_at` 을 채우는 소프트 삭제(관리 화면 없음).
+
+### member_block
+| 컬럼 | 타입 |
+|---|---|
+| blocker_id | bigint → member |
+| blocked_id | bigint → member |
+| created_at | timestamptz |
+
+PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심·인기·ETF 탭)와 답글 목록에서 blocked 의 글·답글을 빼고, blocked 의 답글로 blocker 에게 가는 알림을 만들지 않는다. 글 상세는 `blocked=true` 로 그대로 준다. 차단 해제는 1차 범위 밖.
+
 ### vote (기존 forecast_vote 재정의)
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
@@ -364,6 +385,8 @@ erDiagram
     post o|--o{ post : "repost_of"
     member ||--o{ reply : "author"
     member ||--o{ post_like : ""
+    member ||--o{ report : "reporter"
+    member ||--o{ member_block : "blocker"
     member ||--o{ vote : ""
     post o|--o{ notification : "comm"
 ```
