@@ -296,7 +296,7 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                         'mode':getattr(execution,'mode','local'),
                         'csrf_token':execution.csrf_token if execution else None,
                         'scenarios':[{'id':name,'label':label,'movement_at':scenario_cutoff('movement',name),
-                                      'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()]})
+                                      'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()] if getattr(execution,'mode','local')!='cloud' else []})
                 if path == '/api/jobs':
                     return self.reply(200, execution.jobs() if execution else [])
                 if path == '/api/cloud-sync' and getattr(execution,'mode',None)=='cloud':
