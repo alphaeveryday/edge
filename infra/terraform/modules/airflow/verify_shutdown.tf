@@ -39,6 +39,18 @@ resource "aws_iam_role_policy" "verify_task_shutdown" {
         Condition = { ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn } }
       },
       { Effect = "Allow", Action = ["autoscaling:UpdateAutoScalingGroup"], Resource = [aws_autoscaling_group.host.arn] },
+      # 호스트를 내리기 전 관측 기록 전송(shim `_ship_host_obs`): ASG 인스턴스 조회 → SSM RunShellScript → 결과 확인.
+      # 출력은 호스트 역할이 검증 버킷 obs/ 에 쓴다(verify.tf host_observer_upload).
+      { Effect = "Allow", Action = ["autoscaling:DescribeAutoScalingGroups"], Resource = ["*"] },
+      {
+        Effect = "Allow"
+        Action = ["ssm:SendCommand"]
+        Resource = [
+          "arn:aws:ssm:${var.region}::document/AWS-RunShellScript",
+          "arn:aws:ec2:${var.region}:${local.account_id}:instance/*",
+        ]
+      },
+      { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = ["*"] },
     ]
   })
 }

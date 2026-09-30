@@ -752,11 +752,34 @@ def rds(args) -> int:
 
 
 # ── 호스트 관측 기록 수거 ──
+def _extract_obs(args, iid: str, raw: bytes) -> None:
+    dest = out_dir(args.exp) / "host-obs" / iid
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
+        tf.extractall(dest)
+    print(f"수거: {iid} → {dest} ({len(raw)} bytes)")
+
+
+def obs_from_shutdown(args) -> int:
+    """호스트가 이미 내려갔을 때 — 종료 장치가 내리기 직전 보낸 관측 기록(obs/shutdown/<시각>/)의 가장 최근 것을 푼다."""
+    bucket = _bucket()
+    keys = [o["Key"] for p in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="obs/shutdown/")
+            for o in p.get("Contents", []) if o["Key"].endswith("/stdout")]
+    if not keys:
+        print("종료 장치가 보낸 관측 기록 없음")
+        return 1
+    latest = max(k.split("/")[2] for k in keys)
+    for key in (k for k in keys if k.split("/")[2] == latest):
+        iid = next(part for part in key.split("/") if part.startswith("i-"))
+        _extract_obs(args, iid, base64.b64decode(s3.get_object(Bucket=bucket, Key=key)["Body"].read()))
+    return 0
+
+
 def obs(args) -> int:
     inst = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[f"{PREFIX}-host"])["AutoScalingGroups"][0]["Instances"]
     if not inst:
-        print("호스트 없음")
-        return 1
+        print("호스트 없음 — 종료 장치가 보낸 기록을 찾는다")
+        return obs_from_shutdown(args)
     iid = inst[0]["InstanceId"]
     bucket = _bucket()
     prefix = f"obs/{args.exp}/{datetime.now(KST):%H%M%S}"
@@ -777,12 +800,7 @@ def obs(args) -> int:
     if inv.get("Status") != "Success" or not keys:
         print(f"수거 실패: {inv.get('Status')} {inv.get('StandardErrorContent', '')[:300]}")
         return 1
-    raw = base64.b64decode(s3.get_object(Bucket=bucket, Key=keys[0])["Body"].read())
-    dest = out_dir(args.exp) / "host-obs" / iid
-    dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
-        tf.extractall(dest)
-    print(f"수거: {iid} → {dest} ({len(raw)} bytes)")
+    _extract_obs(args, iid, base64.b64decode(s3.get_object(Bucket=bucket, Key=keys[0])["Body"].read()))
     return 0
 
 

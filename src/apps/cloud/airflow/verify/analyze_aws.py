@@ -213,6 +213,8 @@ def latency(batch: dict, restart_windows) -> dict:
     return {"prev_end_to_queued_p95": p95(gap), "queued_to_start_p95": p95(queue),
             "start_to_ecs_created_p95": p95(submit), "ecs_stopped_to_end_p95": p95(detect),
             "n": {"gap": len(gap), "queue": len(queue), "submit": len(submit), "detect": len(detect)},
+            # 표본이 적으면 p95 만으로 판단하지 않는다 — 개별 값·최대를 함께 남긴다
+            "detect_values": sorted(round(x, 1) for x in detect), "detect_max": max(detect, default=None),
             "ecs_tasks": len(batch["ecs_tasks"]), "unmatched": unmatched, "missing_samples": expected_missing}
 
 
@@ -389,6 +391,27 @@ def outcomes(batches) -> dict:
     return res
 
 
+def host_health(d: Path) -> list[dict]:
+    """호스트 관측기의 health.log(`H <epoch> <code> <초> <본문>`) → health.jsonl 과 같은 모양의 표본.
+    호스트에서 태스크 네임스페이스로 부른 것이라 운영자 PC·포트 포워딩과 무관하다(ALPHA-1119 A4 재검증)."""
+    out = []
+    for f in sorted(glob.glob(str(d / "host-obs" / "*" / "edge-obs" / "health.log"))):
+        for line in Path(f).read_text(errors="replace").splitlines():
+            parts = line.split(" ", 4)
+            if len(parts) < 4 or parts[0] != "H":
+                continue
+            rec = {"t": int(parts[1]), "code": int(parts[2]) if parts[2].isdigit() else 0, "src": "host"}
+            try:
+                rec["health"] = json.loads(parts[4]) if rec["code"] == 200 else None
+            except (IndexError, json.JSONDecodeError):
+                rec["health"] = None
+            if rec["health"] is None:
+                rec.pop("health")
+                rec["error"] = parts[4][:200] if len(parts) > 4 else f"http {parts[2]}"
+            out.append(rec)
+    return sorted(out, key=lambda r: r["t"])
+
+
 def analyze(exp: str) -> dict:
     d = ROOT / exp
     marks = jl(d / "marks.jsonl")
@@ -421,6 +444,13 @@ def analyze(exp: str) -> dict:
     if "V" in batches:
         out_come["V"] = outcomes_v(batches["V"], marks)
     burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
+    # heartbeat 표본: 호스트 관측기 health.log 가 있으면 그것(PC·포워딩과 무관), 없으면 운영자 PC 표본(이전 회차).
+    # import 오류 수는 인증이 필요한 API 라 PC 표본에만 있다 — DAG 파일이 실험 중 바뀌지 않으므로 처음·끝 표본으로 본다.
+    import_samples = [h for h in health if h.get("code") == 200 and h.get("import_errors") is not None]
+    hh = host_health(d)
+    health_source = "host" if hh else "operator_pc"
+    if hh:
+        health = hh
     # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
     ok_h = [h for h in health if "health" in h and h.get("code") == 200]
     # 공백은 **성공한** 표본 사이로 잰다 — 실패 행이 촘촘해도 heartbeat 를 확인한 것이 아니다.
@@ -453,9 +483,13 @@ def analyze(exp: str) -> dict:
         "host": host, "host_obs_files": obs_files, "kernel_oom_lines": kern, "docker": dock, "latency": lat, "outcomes": out_come,
         "health": {"samples": len(health), "errors": len(health) - len(ok_h), "errors_outside_restart": len(err_outside),
                    "unhealthy_outside_restart": len(bad_h), "max_gap_s": max(gaps, default=None),
-                   "import_errors_missing": sum(1 for h in ok_h if h.get("import_errors") is None),
-                   "import_errors_max": max((h["import_errors"] for h in ok_h if h.get("import_errors") is not None),
-                                            default=None)},
+                   "source": health_source, "first_t": ok_h[0]["t"] if ok_h else None,
+                   "last_t": ok_h[-1]["t"] if ok_h else None,
+                   "import_errors_missing": (sum(1 for h in ok_h if h.get("import_errors") is None) if not hh else
+                                             # 호스트 표본이면: 실험 처음·끝 15분 안에 PC 표본이 하나씩은 있어야 한다
+                                             int(not (need and any(need[0] - 900 <= h["t"] <= need[0] + 900 for h in import_samples)
+                                                      and any(need[1] - 900 <= h["t"] <= need[1] + 900 for h in import_samples)))),
+                   "import_errors_max": max((h["import_errors"] for h in import_samples), default=None)},
         "burst": {"n": len(burst), "non_2xx": [x for x in burst if not 200 <= x[1] < 300], "p95_s": p95([x[2] for x in burst])},
         "rds": {"checks": len(rdss), "uncovered": rds_uncovered, "any_stop": any(any(r["stop"].values()) for r in rdss),
                 "business_failed_sfn": sorted({x for r in rdss for x in r.get("business_failed_sfn", [])}),
@@ -506,7 +540,10 @@ def analyze(exp: str) -> dict:
                                                          and not unexpected_die),
         "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
         "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60
-                                       or err_outside or out["health"]["import_errors_missing"]) else (
+                                       or err_outside or out["health"]["import_errors_missing"]
+                                       # 호스트 표본은 실험 처음~끝을 덮어야 한다(PC 표본은 이전 회차 규칙 그대로)
+                                       or (hh and (not need or ok_h[0]["t"] > need[0] + 120
+                                                   or ok_h[-1]["t"] < need[1] - 120))) else (
             out["health"]["unhealthy_outside_restart"] == 0 and out["health"]["import_errors_max"] == 0),
         "A5_latency": lat_ok(),
         "A6_outcomes": None if not all(b in out_come and out_come[b] for b in ("B1", "B2", "B3")) else all(

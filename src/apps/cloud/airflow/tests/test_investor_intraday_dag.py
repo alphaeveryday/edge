@@ -281,6 +281,17 @@ def test_log_prefix_follows_task_definition(monkeypatch):
         == "raw-ingest/data-pipeline"
 
 
+def test_ecs_end_is_seen_within_the_waiter_or_log_fetch_interval(monkeypatch):
+    # WHY(ALPHA-1119 A5): provider 로그 수집 스레드는 끊을 수 없는 sleep 을 돌고, 종료를 본 뒤 join 이 그 sleep 을
+    # 기다린다. 기본 30초면 ECS 종료→Airflow 판정이 매번 20~33초였다(기준 30초 초과). 종료 감지 상한은
+    # max(waiter_delay, 로그 조회 간격)이다 — 둘 다 기준(30초)의 절반 이하로 둔다.
+    monkeypatch.setattr("edge_batch.LOG_GROUP", "/ecs/x")
+    from edge_batch import EdgeStep
+    op = EdgeStep(task_id="c", taskdef_key="kis", command=["x"])
+    assert op.awslogs_group and op.awslogs_fetch_interval.total_seconds() == 10
+    assert max(op.awslogs_fetch_interval.total_seconds(), op.waiter_delay) <= 15
+
+
 def test_verdict_fails_when_the_status_report_did_not_land(dag_module):
     # 업무 3스텝이 0 이어도 원장 보고(report)가 실패하면 런을 성공으로 닫지 않는다.
     from airflow.sdk.exceptions import AirflowFailException
