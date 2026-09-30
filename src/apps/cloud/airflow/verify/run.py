@@ -211,6 +211,26 @@ def _task_ip_and_host() -> tuple[str, str]:
 
 def forward(_args) -> int:
     ip, iid = _task_ip_and_host()
+    _release_port()
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    log = open(RESULTS / "forward.log", "ab")
+    subprocess.Popen(["aws", "ssm", "start-session", "--region", REGION, "--target", iid,
+                      "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
+                      "--parameters", f"host={ip},portNumber=8080,localPortNumber={PORT}"],
+                     stdout=log, stderr=log, start_new_session=True)
+    for _ in range(30):
+        try:
+            urllib.request.urlopen(f"{API}/api/v2/monitor/health", timeout=3)
+            print(f"포워딩 {API} → {iid} {ip}:8080")
+            return 0
+        except OSError:
+            time.sleep(2)
+    print("포워딩 실패")
+    return 1
+
+
+def _release_port() -> None:
+    """이 실행기가 띄운 SSM 포워딩을 끝낸다(남의 프로세스가 포트를 쥐고 있으면 멈춘다)."""
     subprocess.run(["pkill", "-f", f"localPortNumber={PORT}"], check=False)
     # aws CLI 를 죽여도 그 자식 session-manager-plugin(옛 태스크 IP)이 포트를 계속 쥐고 있을 수 있다 — 포트 점유자를
     # 직접 끝낸다(2026-09-30 재시작 뒤 25분 동안 새 세션이 포트를 못 잡았다).
@@ -227,21 +247,6 @@ def forward(_args) -> int:
         subprocess.run(["kill", pid], check=False)
     if held:
         time.sleep(1)
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    log = open(RESULTS / "forward.log", "ab")
-    subprocess.Popen(["aws", "ssm", "start-session", "--region", REGION, "--target", iid,
-                      "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
-                      "--parameters", f"host={ip},portNumber=8080,localPortNumber={PORT}"],
-                     stdout=log, stderr=log, start_new_session=True)
-    for _ in range(30):
-        try:
-            urllib.request.urlopen(f"{API}/api/v2/monitor/health", timeout=3)
-            print(f"포워딩 {API} → {iid} {ip}:8080")
-            return 0
-        except OSError:
-            time.sleep(2)
-    print("포워딩 실패")
-    return 1
 
 
 _TOKEN: dict = {}
@@ -554,6 +559,8 @@ def _batch(args) -> int:
     mark(exp, "batch_begin", batch=b)
     if b == "V":
         return _batch_v(exp, spec)
+    if b == "L":
+        return _batch_l(exp, spec)
     wait = CRIT["scenarios"]["normalize_wait_seconds"]
     if b in ("B1", "B3"):
         for i, hhmm in enumerate(spec["slots"]):
@@ -631,6 +638,29 @@ def _batch_v(exp: str, spec: dict) -> int:
         run("A1")
     evidence(exp, "V")
     mark(exp, "batch_end", batch="V")
+    return 0
+
+
+def _batch_l(exp: str, spec: dict) -> int:
+    """A4·A5 표적 재검증(ALPHA-1119) — 같은 조건의 정상 run 을 slots 순서대로 반복하고, 멈춘 ECS 태스크가 조회에서
+    사라지기 전(약 1시간)에 증거를 바로 모은다. 그 뒤 유휴 구간에서 운영자 PC 포워딩을 일부러 끊었다 잇는다 —
+    호스트 health 표본이 그 사이에도 이어지는지가 A4 증거 경로의 확인이다. 정상 run 이 시작하지 않으면 멈춘다."""
+    for i, hhmm in enumerate(spec["slots"]):
+        rid = trigger(exp, "L", hhmm)
+        state = wait_run(exp, rid)
+        mark(exp, "scenario", key=f"N{i + 1}", run=rid, state=state)
+        if state in ("not_started", "timeout"):
+            evidence(exp, "L")
+            raise RuntimeError(f"N{i + 1} {rid}: {state} — 중단")
+    evidence(exp, "L")
+    mark(exp, "batch_end", batch="L")
+    cut = spec.get("forward_cut_seconds", 0)
+    if cut:
+        mark(exp, "forward_cut_begin", seconds=cut)
+        _release_port()
+        time.sleep(cut)
+        forward(None)
+        mark(exp, "forward_cut_end")
     return 0
 
 
@@ -816,7 +846,7 @@ def main() -> int:
         sub.add_parser(name).add_argument("exp")
     b = sub.add_parser("batch")
     b.add_argument("exp")
-    b.add_argument("batch", choices=("B1", "B2", "B3", "V"))
+    b.add_argument("batch", choices=("B1", "B2", "B3", "V", "L"))
     i = sub.add_parser("idle")
     i.add_argument("exp")
     i.add_argument("tag")

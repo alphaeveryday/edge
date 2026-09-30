@@ -324,6 +324,23 @@ def outcomes_v(d, marks) -> dict | None:
             and all(normals[k]["ok"] for k in ("N1", "N2", "N3"))}
 
 
+def outcomes_l(d) -> dict | None:
+    """L 배치(A4·A5 표적 재검증) — 정상 run 반복. 업무 시작·exit 0 종료·산출물·ECS 5·원장 성공이 모두 확인된 run 만
+    지연 표본이 된다(업무 증거 없는 run 을 성공 표본으로 세지 않는다). 원장이 없으면 None(판정 불가)."""
+    if not d.get("ledger"):
+        return None
+    rows = [normal_row(d, f"N{i + 1}", hhmm) for i, hhmm in enumerate(CRIT["scenarios"]["L"]["slots"])]
+    valid = [(run_of(d, hhmm) or {}).get("dag_run_id") for hhmm, r in zip(CRIT["scenarios"]["L"]["slots"], rows) if r["ok"]]
+    return {"normals": rows, "valid_runs": valid, "normal_ok": len(valid)}
+
+
+def only_runs(d: dict, run_ids: list) -> dict:
+    """배치 증거를 주어진 run 들로 좁힌다(지연 표본용)."""
+    keep = set(run_ids)
+    return {**d, "task_tries": [t for t in d["task_tries"] if t["dag_run_id"] in keep],
+            "ecs_tasks": [e for e in d["ecs_tasks"] if any(f"/{r}/" in (e["ref"] or "") for r in keep)]}
+
+
 def outcomes(batches) -> dict:
     res = {}
     for b in ("B1", "B3"):
@@ -416,7 +433,7 @@ def analyze(exp: str) -> dict:
     d = ROOT / exp
     marks = jl(d / "marks.jsonl")
     health = jl(d / "health.jsonl")
-    batches = {b: json.loads((d / f"{b}.json").read_text()) for b in ("B1", "B2", "B3", "V") if (d / f"{b}.json").exists()}
+    batches = {b: json.loads((d / f"{b}.json").read_text()) for b in ("B1", "B2", "B3", "V", "L") if (d / f"{b}.json").exists()}
     if "V" in batches and (d / "V_invocations.json").exists() and not batches["V"].get("invocations"):
         batches["V"]["invocations"] = json.loads((d / "V_invocations.json").read_text())
     deploys = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "deployinfo-*.json")))]
@@ -439,8 +456,11 @@ def analyze(exp: str) -> dict:
     obs_files = {n: bool(glob.glob(str(d / "host-obs" / "*" / "edge-obs" / n)))
                  for n in ("samples.log", "kmsg.log", "docker-events.log")}
     dock = docker_events(d)
-    lat = {b: latency(x, rw) for b, x in batches.items()}
-    out_come = outcomes({k: v for k, v in batches.items() if k != "V"})
+    out_come = outcomes({k: v for k, v in batches.items() if k not in ("V", "L")})
+    if "L" in batches:
+        out_come["L"] = outcomes_l(batches["L"])
+    lat = {b: latency(x if b != "L" else only_runs(x, (out_come["L"] or {}).get("valid_runs", [])), rw)
+           for b, x in batches.items()}
     if "V" in batches:
         out_come["V"] = outcomes_v(batches["V"], marks)
     burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
@@ -577,6 +597,21 @@ def analyze(exp: str) -> dict:
                      or host["max_gap_s"] is None or host["max_gap_s"] > 30
                      or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else True,
             "A12_deploy_fixed": None if not fps or any('"tasks": []' in f for f in fps) else len(tds) == 1,
+        })
+    if "L" in batches:
+        v, spec = out_come["L"], CRIT["scenarios"]["L"]
+        tds = {(t["td"], tuple(t["digests"])) for m in marks if m["event"] == "trigger"
+               for t in (m.get("deploy") or {}).get("tasks", [])}
+        n_detect = lat["L"]["n"]["detect"]
+        out["pass"].update({
+            "A5_latency": None if n_detect < spec["min_detect_samples"] else lat_ok(),
+            "A6_outcomes": "n/a(L)", "A9_no_growth": "n/a(L)", "A10_ui": "n/a(L)",
+            "A7_business": None if v is None else v["normal_ok"] >= spec["min_valid_runs"],
+            "A11_task_headroom": False if host and host["task_hit_limit_events"] else
+            None if (host is None or not host["task_paths_seen"] or host["task_events_missing"]
+                     or host["max_gap_s"] is None or host["max_gap_s"] > 30
+                     or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else True,
+            "A12_deploy_fixed": None if not tds else len(tds) == 1,
         })
     del lim, placement
     (d / "verdict.json").write_text(json.dumps(out, ensure_ascii=False, indent=1, default=str))
