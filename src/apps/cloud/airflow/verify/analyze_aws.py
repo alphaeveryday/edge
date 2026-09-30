@@ -260,6 +260,16 @@ def holds(batch, rid):
     return [h["hold"] for h in batch.get("airflow_holds", []) if h["dag_run_id"] == rid]
 
 
+def ecs_arns(d, rid) -> set:
+    """이 run 의 ECS 태스크 — ListTasks(멈춘 태스크는 약 1시간만 조회된다)와 shim invocation 기록(컨테이너가 자기 ECS
+    메타데이터로 남긴 태스크 ARN, 검증 버킷에 영구)의 합집합. 수집 시각이 늦어도 태스크 수가 0 으로 읽히지 않게."""
+    listed = {e["arn"] for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")}
+    rows = d.get("state", {}).get("invocations") or d.get("invocations", [])   # 실행기 수집분 · 사후 복원 파일
+    invoked = {(r.get("ecs_task_arn") or "").rsplit("/", 1)[-1] for r in rows
+               if f"/{rid}/" in (r.get("attempt_ref") or "") and r.get("ecs_task_arn")}
+    return listed | invoked
+
+
 def normal_row(d, key, hhmm):
     """정상 run 한 건의 대조 — Airflow 상태만이 아니라 업무 시작·exit 0 종료·산출물·ECS·원장까지."""
     r = run_of(d, hhmm)
@@ -269,7 +279,7 @@ def normal_row(d, key, hhmm):
            "starts": {s: starts(d, rid, s) for s in BUSINESS} if rid else None,
            "ok_runs": {s: ok_runs(d, rid, s) for s in BUSINESS} if rid else None,
            "writes": writes(d, rid) if rid else None, "ledger": ledger_run(d, hhmm),
-           "ecs": len([e for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")]) if rid else None}
+           "ecs": len(ecs_arns(d, rid)) if rid else None}
     row["ok"] = bool(row["state"] == "success" and row["starts"] == one and row["ok_runs"] == one and row["writes"]
                      and row["ecs"] == 5 and row["ledger"] and row["ledger"][:2] == ("AIRFLOW", "SUCCEEDED")
                      and row["ledger"][2] and set(row["ledger"][2].values()) == {"FULFILLED"})
@@ -293,7 +303,10 @@ def outcomes_v(d, marks) -> dict | None:
         # 재시작 추적: 정제 ECS 가 새로 뜨지 않고(1개) 업무 시작 1회, 원장 성공까지(normal_row).
         "restart_tracking": restarted and normals["R1"]["ok"] and len(ecs_of(d, rid("R1"), BUSINESS["normalize"])) == 1,
         "fail_confirmed": st("F1") == "failed" and [t["state"] for t in tries_of(d, rid("F1"), "load")] == ["failed"]
-        and len(ecs_of(d, rid("F1"), BUSINESS["load"])) == 1 and led("F1") == "FAILED" and writes(d, rid("F1")) == 0,
+        # 사후 교정(criteria _post_run_corrections): 사전 식 writes==0 은 틀린 식이었다 — 장중 canonical 파티션은
+        # 정제(normalize)가 쓰고 F1 의 정제는 성공한다. 확정 실패의 요점은 "적재 업무가 돌지 않았다"(업무 시작 0).
+        and len(ecs_of(d, rid("F1"), BUSINESS["load"])) == 1 and led("F1") == "FAILED" and starts(d, rid("F1"), "load") == 0,
+        "fail_confirmed_prefixed_predicate": st("F1") == "failed" and writes(d, rid("F1")) == 0,
         "hold_state_unknown": st("H1") == "failed"
         and any(h.get("kind") == "ECS_STATE_UNKNOWN" for h in holds(d, rid("H1")))
         and len(ecs_of(d, rid("H1"), BUSINESS["collect"])) == 1 and led("H1") != "SUCCEEDED",
@@ -304,7 +317,9 @@ def outcomes_v(d, marks) -> dict | None:
     }
     n_ok = sum(1 for k in ("N1", "N2", "N3", "R1", "A1") if normals[k]["ok"])
     return {"normals": normals, "checks": chk, "normal_ok": n_ok,
-            "ok": all(chk.values()) and all(normals[k]["ok"] for k in ("N1", "N2", "N3"))}
+            # 사전 식(보고용)은 판정에 넣지 않는다 — 교정 전 결과를 숨기지 않고 함께 남길 뿐이다.
+            "ok": all(v for k, v in chk.items() if k != "fail_confirmed_prefixed_predicate")
+            and all(normals[k]["ok"] for k in ("N1", "N2", "N3"))}
 
 
 def outcomes(batches) -> dict:
@@ -323,7 +338,7 @@ def outcomes(batches) -> dict:
                          "ok_runs": {s: ok_runs(d, rid, s) for s in BUSINESS} if rid else None,
                          "writes": writes(d, rid) if rid else None,
                          "ledger": ledger_run(d, hhmm),
-                         "ecs": len([e for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")]) if rid else None})
+                         "ecs": len(ecs_arns(d, rid)) if rid else None})
         one = {s: 1 for s in BUSINESS}
         # Airflow 가 성공이라 말한 것만이 아니라, 업무가 정확히 한 번 끝났고(exit 0) 산출물이 쓰였고
         # 원장이 AIRFLOW·SUCCEEDED·전 작업 FULFILLED 로 닫았는지까지 본다. 원장이 없으면 판정 불가.
@@ -379,6 +394,8 @@ def analyze(exp: str) -> dict:
     marks = jl(d / "marks.jsonl")
     health = jl(d / "health.jsonl")
     batches = {b: json.loads((d / f"{b}.json").read_text()) for b in ("B1", "B2", "B3", "V") if (d / f"{b}.json").exists()}
+    if "V" in batches and (d / "V_invocations.json").exists() and not batches["V"].get("invocations"):
+        batches["V"]["invocations"] = json.loads((d / "V_invocations.json").read_text())
     deploys = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "deployinfo-*.json")))]
     rdss = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "rds-*.json")))]
     windows = {}
@@ -416,7 +433,10 @@ def analyze(exp: str) -> dict:
     # RDS 관측이 실험 전 구간(첫 배포 확인 ~ 마지막 표시)을 덮어야 A8 을 판정한다 — 빈 구간이 2분 넘으면 판정 불가.
     spans = sorted((datetime.fromisoformat(r["from"]).timestamp(), datetime.fromisoformat(r["to"]).timestamp())
                    for r in rdss)
-    need = (min(m["t"] for m in marks), max(m["t"] for m in marks)) if marks else None
+    # 실험 구간 — 운영자가 손으로 남긴 주석 표시(기준선 메모·설정 변경·개입 기록)는 실험 시작·끝이 아니다.
+    notes = ("baseline_note", "config_change", "operator_intervention", "unplaceable_by_design", "infra_defect")
+    ev = [m["t"] for m in marks if m["event"] not in notes and m["event"] != "cleanup_begin"]
+    need = (min(ev), max(ev)) if ev else None
     covered_to, rds_uncovered = (need[0] if need else 0), []
     for a, b in spans:
         if need and a > covered_to + 120:

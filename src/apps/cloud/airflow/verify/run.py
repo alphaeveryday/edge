@@ -212,6 +212,21 @@ def _task_ip_and_host() -> tuple[str, str]:
 def forward(_args) -> int:
     ip, iid = _task_ip_and_host()
     subprocess.run(["pkill", "-f", f"localPortNumber={PORT}"], check=False)
+    # aws CLI 를 죽여도 그 자식 session-manager-plugin(옛 태스크 IP)이 포트를 계속 쥐고 있을 수 있다 — 포트 점유자를
+    # 직접 끝낸다(2026-09-30 재시작 뒤 25분 동안 새 세션이 포트를 못 잡았다).
+    try:
+        held = subprocess.run(["lsof", "-ti", f"tcp:{PORT}", "-sTCP:LISTEN"], capture_output=True, text=True).stdout.split()
+    except FileNotFoundError:                     # lsof 없는 환경 — 종전대로 pkill 만 한다
+        held = []
+    for pid in held:
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True).stdout
+        if not cmd.strip():                       # 그 사이 이미 끝났다
+            continue
+        if "session-manager-plugin" not in cmd:     # 남의 프로세스는 건드리지 않는다
+            raise SystemExit(f"포트 {PORT} 을 다른 프로세스가 쓴다(pid {pid}): {cmd.strip()[:120]}")
+        subprocess.run(["kill", pid], check=False)
+    if held:
+        time.sleep(1)
     RESULTS.mkdir(parents=True, exist_ok=True)
     log = open(RESULTS / "forward.log", "ab")
     subprocess.Popen(["aws", "ssm", "start-session", "--region", REGION, "--target", iid,
@@ -638,7 +653,8 @@ def evidence(exp: str, b: str) -> None:
                 holds.append({"dag_run_id": r["dag_run_id"], "task_id": ti["task_id"], "hold": xc["value"]})
     bucket = _bucket()
     state = {}
-    for kind in ("business_starts", "business_runs", "partition_writes", "external_calls"):
+    # invocations: 컨테이너가 자기 ECS 태스크 ARN 을 남긴 영구 기록 — ListTasks 는 멈춘 태스크를 약 1시간만 보여 준다.
+    for kind in ("business_starts", "business_runs", "partition_writes", "external_calls", "invocations"):
         objs = [o["Key"] for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"state/{kind}/")
                 for o in page.get("Contents", [])]
         state[kind] = [r for r in (json.loads(s3.get_object(Bucket=bucket, Key=k)["Body"].read()) for k in objs)
