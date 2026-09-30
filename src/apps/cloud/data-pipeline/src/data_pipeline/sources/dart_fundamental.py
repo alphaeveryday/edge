@@ -183,6 +183,14 @@ def plan_reports(list_rows: list[dict], window_from: date, window_to: date) -> t
     # 파손 행을 조용히 빼면 파손 목록이 "그 기간 정기보고서 없음"처럼 보인다 — 거부로 남긴다.
     rejects = [{"reasons": ["malformed_list_row"]} for row in list_rows if not isinstance(row, dict)]
     fy_years = {p[0] for row in rows if (p := report_of(row.get("report_nm"))) and p[1] == "11011"}
+    # 결산월은 회사 단위로 사업보고서가 정한다 — 분기보고서의 월만 보면 6월 결산 회사의 9월 분기(=1분기)가 3분기로
+    # 통과한다. 목록(소급 400일 — 사업보고서 한 번은 반드시 들어오는 폭)에 12월 사업보고서만 있어야 12월 결산이다.
+    annual_months = {p[2] for row in rows if (p := report_of(row.get("report_nm"))) and p[1] == "11011"}
+    if annual_months != {12}:
+        reason = "non_december_fiscal_year" if annual_months else "fiscal_calendar_unconfirmed"
+        rejects.extend({"corp_code": row.get("corp_code"), "report_nm": row.get("report_nm"), "reasons": [reason]}
+                       for row in rows if report_of(row.get("report_nm")) is not None)
+        return targets, rejects
     for row in rows:
         if not isinstance(row.get("report_nm"), str):
             rejects.append({"corp_code": row.get("corp_code"), "reasons": ["bad_report_nm"]})

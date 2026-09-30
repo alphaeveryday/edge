@@ -1146,10 +1146,16 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
                     body = json.loads(page.body.decode("utf-8"))
                     items = body.get("list") if isinstance(body, dict) else None
                     listed.extend(items if isinstance(items, list) else [])
-                targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
-                # 3분기 정정이 사업보고서보다 목록 소급 폭(LIST_LOOKBACK_DAYS)보다 늦게 오면 그 해 사업보고서가 목록에
-                # 없어 Q4 재유도를 못 한다. 그 해의 다음 해 목록을 한 번 더 받아(회사당 최대 연도 수만큼) 다시 계획한다.
-                for year in sorted({y for y, c in targets if c == "11014" and (y, "11011") not in targets}):
+                # 결산월은 사업보고서가 정하고(plan_reports), 3분기 정정은 Q4 재유도에 그 해 사업보고서가 필요하다. 창 안
+                # 분기보고서의 사업보고서가 목록 소급 폭(LIST_LOOKBACK_DAYS) 밖이면 그 해의 다음 해 목록을 한 번 더 받는다
+                # (회사당 해당 연도 수만큼) — 계획 전에 받아 결산월 확인과 Q4 재계획을 한 번에 한다.
+                lo, hi = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+                in_window = {p[0] for row in listed if isinstance(row, dict)
+                             and isinstance(row.get("rcept_dt"), str) and lo <= row["rcept_dt"] <= hi
+                             and (p := dart_fundamental.report_of(row.get("report_nm"))) and p[1] != "11011"}
+                annual_years = {p[0] for row in listed if isinstance(row, dict)
+                                and (p := dart_fundamental.report_of(row.get("report_nm"))) and p[1] == "11011"}
+                for year in sorted(in_window - annual_years):
                     fy_start = date(int(year) + 1, 1, 1)
                     if fy_start > end:
                         continue                      # 사업보고서가 아직 나올 수 없는 해
@@ -1160,7 +1166,7 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
                         body = json.loads(page.body.decode("utf-8"))
                         items = body.get("list") if isinstance(body, dict) else None
                         listed.extend(items if isinstance(items, list) else [])
-                    targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
+                targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
                 scope.setdefault("unsupported_reports", []).extend(unsupported)
                 for year, code in sorted(targets):
                     for fs_div in ("CFS", "OFS"):

@@ -156,12 +156,14 @@ def test_missing_q3_blocks_q4_derivation_and_non_krw_is_rejected(tmp_path):
 def test_report_names_map_to_periods_and_reject_non_december_years():
     assert dart_fundamental.report_of("[기재정정]반기보고서 (2026.06)") == ("2026", "11012", 6)
     assert dart_fundamental.report_of("분기보고서 (2026.09)") == ("2026", "11014", 9)
+    # plan_reports 는 한 회사의 목록을 받는다(수집이 회사별로 부른다).
+    window = (datetime(2026, 1, 1).date(), datetime(2026, 12, 31).date())
     targets, rejects = dart_fundamental.plan_reports(
-        [{"report_nm": "사업보고서 (2026.03)", "rcept_dt": "20260601", "corp_code": "1"},
-         {"report_nm": "사업보고서 (2025.12)", "rcept_dt": "20260310", "corp_code": "2"}],
-        datetime(2026, 1, 1).date(), datetime(2026, 12, 31).date())
-    assert targets == {("2025", "11011"), ("2025", "11014")}      # 사업보고서엔 같은 해 3분기를 붙인다
-    assert rejects[0]["reasons"] == ["non_december_fiscal_year"]
+        [{"report_nm": "사업보고서 (2025.12)", "rcept_dt": "20260310", "corp_code": "2"}], *window)
+    assert targets == {("2025", "11011"), ("2025", "11014")} and rejects == []   # 사업보고서엔 같은 해 3분기를 붙인다
+    targets, rejects = dart_fundamental.plan_reports(
+        [{"report_nm": "사업보고서 (2026.03)", "rcept_dt": "20260601", "corp_code": "1"}], *window)
+    assert targets == set() and rejects[0]["reasons"] == ["non_december_fiscal_year"]
 
 
 def test_ambiguous_eps_lines_pick_common_share_or_refuse():
@@ -823,7 +825,7 @@ def test_non_string_report_names_reject_the_row_not_the_company():
     from datetime import date
     rows = json.loads(filing_list(SAMSUNG))["list"]
     rows[0]["report_nm"] = 1
-    rows[1]["report_nm"] = ["사업보고서 (2025.12)"]
+    rows[2]["report_nm"] = ["분기보고서 (2026.03)"]           # 사업보고서 행(rows[1])은 남겨 결산월이 확인되게
     targets, rejects = dart_fundamental.plan_reports(rows, date(2025, 10, 1), date(2026, 8, 20))
     assert [r["reasons"] for r in rejects] == [["bad_report_nm"], ["bad_report_nm"]] and targets
     assert dart_fundamental.report_of(1) is None
@@ -843,3 +845,15 @@ def test_corp_map_transport_failure_is_recorded_as_a_collection_error(tmp_path):
     manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("financial_metric", "run_f")))
     assert manifest["completed"] is True
     assert [o["request"]["kind"] for o in manifest["objects"]] == ["corp_map"] and manifest["objects"][0]["status"] == "error"
+
+
+def test_interim_reports_of_a_non_december_company_are_rejected_even_when_months_match():
+    # WHY(봇 P2): 6월 결산 회사의 9월 분기보고서는 1분기인데 월만 보면 3분기(11014)로 통과한다 — 결산월은 사업보고서가 정한다.
+    from datetime import date
+    june = [{"corp_code": "00000009", "report_nm": "분기보고서 (2026.09)", "rcept_no": "20261114000009", "rcept_dt": "20261114"},
+            {"corp_code": "00000009", "report_nm": "사업보고서 (2026.06)", "rcept_no": "20260915000009", "rcept_dt": "20260915"}]
+    targets, rejects = dart_fundamental.plan_reports(june, date(2026, 11, 1), date(2026, 11, 20))
+    assert targets == set() and {r["reasons"][0] for r in rejects} == {"non_december_fiscal_year"} and len(rejects) == 2
+    no_annual = june[:1]
+    targets, rejects = dart_fundamental.plan_reports(no_annual, date(2026, 11, 1), date(2026, 11, 20))
+    assert targets == set() and rejects[0]["reasons"] == ["fiscal_calendar_unconfirmed"]

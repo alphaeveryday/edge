@@ -364,6 +364,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
   미래·진행 중 관측은 스텝이 거부한다. 업종은 현재값만이라 백필 인자가 없다(`ingest-raw-sector`가 `--from/--to` 거부).
   한 run은 1500초 안이어야 한다 — 긴 기간은 1년 단위로 나눈다. **실제 확보 기간은 확정하지 않았다**: 평가 날짜가 정해지면
   그 기간을 인자로 준다(최소 이력: EPS 4분기·BPS 1분기·매출/영업이익 2분기 + 재생 준비기간).
+- **결산월**: 회사 단위로 사업보고서가 정한다 — 목록(소급 400일)에 12월 사업보고서만 있어야 12월 결산으로 보고 그 회사의 정기보고서를 계획한다. 비12월 사업보고서가 있으면 `non_december_fiscal_year`, 사업보고서가 목록에 없으면(창 안 분기보고서의 다음 해 목록을 한 번 더 받은 뒤에도) `fiscal_calendar_unconfirmed` 로 그 회사 전체를 거부한다 — 6월 결산 회사의 9월 분기(=1분기)를 3분기로 싣지 않게(봇 P2).
 - **재무 대상 종목**: 접수일 창 [from, to]에 유효했던 구성종목 스냅샷(from 시점 유효 스냅샷 + 창 안 스냅샷)의 합집합.
   from 이전 스냅샷이 없으면 raw manifest `holdings_coverage.uncovered_before`로 드러내고 추정하지 않는다. 우선주 등
   corpCode에 없는 종목은 `unmapped`로 남는다(DART 공시 주체가 아님).
