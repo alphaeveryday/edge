@@ -179,6 +179,9 @@ def valuation_data(fixture, instrument_id):
     for metric in ('per', 'pbr'):
         result['weighted_' + metric] = (number(sum(decimal(row['weight']) * decimal(value[metric])
             for row, value in values)) if values and all(value and value[metric] is not None for _, value in values) else None)
+    # An approximated Q4 EPS in any constituent makes the weighted PER approximate — carried, never silent.
+    result['weighted_per_approximate'] = (any(value['eps_approximate'] for _, value in values)
+                                          if result['weighted_per'] is not None else None)
     stamps = [value['observed_at'] for _, value in values if value and value['observed_at']]
     result['observed_at'] = max(stamps, key=instant) if stamps else None
     distribution = etf.distribution_yield(fixture)
@@ -239,10 +242,13 @@ def company_valuation(fixture, instrument_id):
     bps = decimal(latest['bps']) if latest.get('bps') is not None else None
     published = max((periods[k]['available_at'] for k in selected), key=instant) if selected else None
     stamps = [stamp for stamp in (price_at, published) if stamp]
+    # Q4 EPS from DART is FY−9M (weighted-share approximation, ALPHA-1130): the screen says so rather than hiding it.
+    derived = [periods[k]['period'] for k in selected if periods[k].get('eps_derivation') == 'FY_MINUS_9M'] if eps is not None else []
     return {'scope': 'instrument', 'price_krw': number(price) if price is not None else None,
         'price_observed_at': price_at, 'financials_published_at': published,
         'ttm_period_end': latest.get('period_end') if complete else None,
         'ttm_eps_krw': number(eps) if eps is not None else None,
+        'eps_approximate': bool(derived), 'eps_derived_periods': derived,
         'bps_krw': number(bps) if bps is not None else None,
         'per': number(price/eps) if price is not None and eps is not None and eps > 0 else None,
         'pbr': number(price/bps) if price is not None and bps is not None and bps > 0 else None,
