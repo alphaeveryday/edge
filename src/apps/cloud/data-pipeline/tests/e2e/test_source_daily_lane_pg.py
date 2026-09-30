@@ -60,11 +60,11 @@ def _vendor_routes(today) -> dict:
         row["rcept_no"] = rcept_no
     return {
         "/ecos/StatisticSearch/E/json/kr/1/10000/731Y003": json.dumps({"StatisticSearch": {"row": [
-            {"ITEM_CODE1": "0000003", "ITEM_NAME1": "원/달러(종가 15:30)", "UNIT_NAME": "원",
+            {"STAT_CODE": "731Y003", "ITEM_CODE1": "0000003", "ITEM_NAME1": "원/달러(종가 15:30)", "UNIT_NAME": "원",
              "TIME": d.replace("-", ""), "DATA_VALUE": str(1400 + i)} for i, d in enumerate(days)]}}).encode(),
         "/fmp/treasury-rates": json.dumps([{"date": d, "year10": 4.1 + i / 100} for i, d in enumerate(days)]).encode(),
         "/ecos/StatisticSearch/E/json/kr/1/10000/817Y002": json.dumps({"StatisticSearch": {"row": [
-            {"ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%",
+            {"STAT_CODE": "817Y002", "ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%",
              "TIME": d.replace("-", ""), "DATA_VALUE": "2.9"} for d in days]}}).encode(),
         "/kosis/Param/statisticsParameterData.do": json.dumps([
             {"ITM_ID": "T03", "ITM_NM": "전년동월비", "C1": "0", "UNIT_NM": "%", "PRD_DE": last_month,
