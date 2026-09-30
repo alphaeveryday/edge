@@ -14,7 +14,7 @@ from psycopg.rows import dict_row
 from .agent_schemas import EDIT_SCHEMAS, MOVEMENT, OUTLOOK
 from .audited_execution import AuditedExecution
 from .body_changes import BodyEditor
-from .factor_store import read_factor_details
+from .factor_store import read_factor_details, project_factor_metrics
 from .fixture_tools import FixtureTools
 from .model_runner import load_prompt, run_model
 from .publication_store import PublicationStore
@@ -38,7 +38,7 @@ def _previous(connection, kind, etf_code, cutoff):
 
 def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     artifacts: Path, analysis_id: str, model='deepseek-flash',
-                    model_call=run_model, previous_analysis_id=_LATEST, tool_mode='focused') -> dict:
+                    model_call=run_model, previous_analysis_id=_LATEST) -> dict:
     """Run one idempotent request with independently committed tool evidence.
 
     Args:
@@ -52,7 +52,6 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
         model_call: Async model runner; replaced only by offline tests.
         previous_analysis_id: Explicit predecessor; None starts independently.
             Omit to use the latest completed analysis before the cutoff.
-        tool_mode: Focused domain tools, or card tools for paired evaluation.
 
     Returns:
         Final screen objects reassembled from committed database rows.
@@ -63,8 +62,6 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
     """
     if kind not in ('movement', 'outlook'):
         raise ValueError('Unknown analysis kind')
-    if tool_mode not in ('focused', 'cards'):
-        raise ValueError('Unknown tool interface')
     context = fixture['context']
     cutoff = datetime.fromisoformat(context['analysis_at'])
     if cutoff.utcoffset() is None:
@@ -106,8 +103,6 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     initial['previous_items'] = json.loads(json.dumps(cur.fetchall(), default=str))
             definitions = list(tools.definitions)
             schemas = deepcopy(tools.schemas)
-            excluded = {'get_factor_metrics'} if tool_mode == 'focused' else {'get_chart_metrics'}
-            schemas = [s for s in schemas if s['function']['name'] not in excluded]
             for schema in schemas:
                 function = schema['function']
                 if function['name'] in ('calculate_investor_flow','calculate_weighted_flow'):
@@ -129,7 +124,6 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                 return {'tool_run_id':uuid4().hex,'result':result}
             executor = AuditedExecution(calculate,ToolStore(audit_connection),definitions=definitions,
                 analysis_kind=kind,analysis_id=analysis_id,context=context)
-            records = []
             def call(name, arguments):
                 nonlocal editor
                 previous_editor = deepcopy(editor) if name in ('write_outlook_body', 'apply_outlook_body_changes') else None
@@ -140,11 +134,9 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                     if previous_editor is not None:
                         editor = previous_editor
                     raise
-                records.append((name, deepcopy(arguments), deepcopy(output)))
                 return output
             if kind == 'outlook':
-                for factor in ('차트','매크로','밸류','수급'):
-                    call('get_factor_metrics',{'type':factor})
+                factor_output = call('get_instrument_factors', {'instrument_id': context['etf_code']})
             response = asyncio.run(model_call(initial=initial,prompt=load_prompt(Path(__file__).with_name('prompts')/(kind+'.yaml')),
                 schemas=schemas,call=call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
                 artifacts=artifacts,key=key,model=model))
@@ -152,11 +144,7 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                 result = store.save_movement(analysis_id,response)
             else:
                 issue = response['issue_detail']
-                metrics = {}
-                for factor in ('차트','매크로','밸류','수급'):
-                    matches = [output for name,args,output in records if name=='get_factor_metrics' and args.get('type')==factor]
-                    output = matches[-1] if matches else call('get_factor_metrics',{'type':factor})
-                    metrics[factor] = [m | {'tool_run_ids':[output['tool_run_id']]} for m in output['result']['metrics']]
+                metrics = project_factor_metrics(factor_output, context['etf_code'])
                 features = {k:v for k,v in response.items() if k!='issue_detail'}
                 result = store.save_outlook(analysis_id,features,editor.result(),factor_details={
                     'metrics':metrics,'issue':{'headline':issue['headline'],'items':issue['items']}})

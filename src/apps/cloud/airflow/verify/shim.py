@@ -16,6 +16,8 @@
 - `verify-reset`: 검증 원장의 레인 행과 버킷의 state·lake 를 지운다. 검증 DB 가 아니면 거부한다.
 - `verify-ledger`: 검증 원장의 레인 행(런·기대 작업·시도·보류·적재 행 수)을 로그에 JSON 한 줄로 낸다.
 - `verify-resolve-holds`: 종료 확인 뒤 보류 해제(README 절차 6). `verify-backup`: 검증 원장 표별 백업.
+- `verify-shutdown <grace>`: 종료 장치(스케줄러가 띄움) — 서비스 0 → grace 대기 → 남은 검증 태스크 중단 → 호스트 0.
+  `verify-sleep <초>`: 종료 장치 시험용 대기 태스크.
 """
 
 from __future__ import annotations
@@ -224,8 +226,79 @@ def backup() -> int:
     return 0
 
 
+def shutdown() -> int:
+    """종료 장치(verify_shutdown.tf) — 스케줄러가 띄운다. 운영자 PC 와 무관하게 검증을 끝낸다.
+    Airflow 서비스 desired 0(새 제출 중단) → grace 동안 검증 태스크의 자연 종료 대기 → 남은 **검증 태스크만** StopTask
+    (결과는 꾸미지 않는다 — 원장의 RUNNING 시도가 보류로 남고, 여기 목록이 종료 증거다) → 호스트 ASG 0 → 보고서.
+    한 단계가 실패해도 나머지 단계와 보고서는 진행한다(실패는 보고서 errors 와 exit 1 로 드러난다)."""
+    grace = int(sys.argv[2]) if len(sys.argv) > 2 else 900
+    ecs, asg = boto3.client("ecs"), boto3.client("autoscaling")
+    cluster, me = os.environ["OPS_CLUSTER_ARN"], _task_arn()
+    report = {"started": datetime.now(KST).isoformat(), "grace": grace, "self": me, "stopped": [], "errors": []}
+
+    def step(name, fn):
+        try:
+            fn()
+            report[name] = datetime.now(KST).isoformat()
+        except Exception as exc:                  # 다음 단계는 계속한다
+            report["errors"].append(f"{name}: {exc!r}"[:400])
+
+    def running_verify() -> list[dict]:
+        arns = [a for p in ecs.get_paginator("list_tasks").paginate(cluster=cluster, desiredStatus="RUNNING")
+                for a in p["taskArns"] if a != me]
+        out = []
+        for i in range(0, len(arns), 100):
+            resp = ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])
+            if resp.get("failures"):          # 일부라도 못 읽었으면 "남은 태스크 없음"이 아니라 조회 실패다
+                raise RuntimeError(f"describe_tasks failures: {resp['failures']}")
+            # 자기 자신은 ARN 조회가 실패해도 startedBy 로 뺀다
+            out += [t for t in resp["tasks"] if "-verify-" in t["taskDefinitionArn"] and t.get("startedBy") != "verify-shutdown"]
+        return out
+
+    try:
+        step("service_desired_0_at", lambda: ecs.update_service(cluster=cluster, service=os.environ["VERIFY_SERVICE"],
+                                                                desiredCount=0))
+        # 조회 실패(None)는 "남은 태스크 없음"과 다르다 — grace 안에서 다시 보고, 끝까지 모르면 그 사실을 남긴다.
+        deadline, tasks = time.time() + grace, None
+        while True:
+            try:
+                tasks = running_verify()
+            except Exception as exc:
+                report["errors"].append(f"list: {exc!r}"[:400])
+                tasks = None
+            if tasks == [] or time.time() >= deadline:
+                break
+            time.sleep(20)
+        if tasks is None:
+            report["errors"].append("list: 남은 검증 태스크를 끝내 조회하지 못했다 — 중단 여부 미상")
+            tasks = []
+        for t in tasks:
+            env = (t.get("overrides", {}).get("containerOverrides") or [{}])[0].get("environment") or []
+            row = {"arn": t["taskArn"], "family": t["taskDefinitionArn"].rsplit("/", 1)[1], "result": "unknown",
+                   "ref": next((e["value"] for e in env if e["name"] == "OPS_ORCHESTRATOR_ATTEMPT_REF"), None)}
+            try:
+                ecs.stop_task(cluster=cluster, task=t["taskArn"], reason="verify-shutdown: 종료 시각 강제 중단 — 결과 미상")
+            except Exception as exc:
+                row["stop_error"] = repr(exc)[:300]
+                report["errors"].append(f"stop {t['taskArn']}: {exc!r}"[:400])
+            report["stopped"].append(row)
+    finally:
+        step("asg_0_at", lambda: asg.update_auto_scaling_group(AutoScalingGroupName=os.environ["VERIFY_ASG"],
+                                                                MinSize=0, MaxSize=0, DesiredCapacity=0))
+        print("VERIFY_SHUTDOWN " + json.dumps(report, ensure_ascii=False), flush=True)
+        _s3.put_object(Bucket=BUCKET, Key=f"shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json",
+                       Body=json.dumps(report, ensure_ascii=False).encode())
+    return 1 if report["errors"] else 0
+
+
+def sleep() -> int:
+    """종료 장치 시험용 — 검증 태스크 하나를 N초 살려 둔다(업무 코드를 부르지 않는다)."""
+    time.sleep(int(sys.argv[2]) if len(sys.argv) > 2 else 600)
+    return 0
+
+
 ADMIN = {"verify-seed": seed, "verify-reset": reset, "verify-ledger": ledger, "verify-resolve-holds": resolve_holds,
-         "verify-backup": backup}
+         "verify-backup": backup, "verify-shutdown": shutdown, "verify-sleep": sleep}
 
 
 def main(argv: list[str]) -> int:

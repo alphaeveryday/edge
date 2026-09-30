@@ -164,3 +164,15 @@ def test_a_late_older_result_cannot_change_the_newer_stored_publication(publicat
     assert store.get_movement(newer) == newest
     latest = store.connection.execute("SELECT analysis_id FROM movement_analyses WHERE etf_code=%s AND status='completed' ORDER BY analysis_at DESC LIMIT 1", (key,)).fetchone()[0]
     assert latest == newer
+
+
+def test_retired_factor_evidence_survives_only_in_completed_publications(publication):
+    store, key, _ = publication
+    store.save_movement(key, response(key))
+    store.connection.execute("UPDATE tool_definitions SET function_name='get_factor_metrics' WHERE tool_id=%s", (key,))
+    second = key + '-next'
+    store.begin('movement', second, key, NOW + timedelta(minutes=1), key)
+    store.save_movement(second, response(key))
+    store.connection.execute("UPDATE movement_analyses SET status='running' WHERE analysis_id=%s", (key,))
+    with pytest.raises(ValueError, match='final-eligible'):
+        store.save_movement(key, response(key))

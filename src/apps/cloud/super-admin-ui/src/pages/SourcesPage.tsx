@@ -12,7 +12,11 @@ import type {
   SourceReport,
   TaskStatus,
 } from '../domains/sources';
-import { useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
+import { useMinuteJudgments, useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
+import {
+  JUDGED_AT_NOTE, NO_RECORD, RECOMPUTATION_NOTE, SCOPE_NOTE, abbreviate, baseline, baselineSetLabel, committed,
+  computed, inputLabel, involved, judgmentErrors, kstHhmm, kstObserved, readAnchor, txObservation,
+} from '../domains/sources/judgmentView';
 import { datasetKind, gapRuns, isPollLane, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
 import {
@@ -833,6 +837,121 @@ function RealtimeLedger({
           이 데이터셋에는 이 응답이 제공하는 후속 처리 job 축이 없습니다.
         </div>
       )}
+
+      {kind === 'price' ? <PriceJudgmentLedger sessionId={session.sessionId} /> : null}
+    </div>
+  );
+}
+
+/**
+ * 가격 판정 근거(§33.12 로컬) — 정상 완료한 판정이 **실제로 쓴** 입력과 확정 결과. 세션당 수백
+ * window 라 펼칠 때만 조회한다. 새 화면을 만들지 않고 이 원장 근거 문맥에 붙인다.
+ */
+function PriceJudgmentLedger({ sessionId }: { sessionId: string }) {
+  const [open, setOpen] = useState(false);
+  const { data, isPending, isError, error } = useMinuteJudgments(sessionId, open);
+  return (
+    <div className="card">
+      <div className="card-head">
+        <button type="button" className="mn-disclosure" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          {open ? '▾' : '▸'} 판정 근거 (minute_price_judgment)
+        </button>
+        <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
+          job · 입력 세대 · 시도별 판정 기록
+        </span>
+      </div>
+      {open && (isError ? (
+        <>
+          <div className="card-pad" style={{ paddingBottom: 0 }}>
+            <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+              판정 근거 조회에 실패했습니다 — 저장된 기록이 없다는 뜻이 아닙니다. 조회가 되기 전까지 기록 유무를 판단하지 않습니다.
+            </p>
+          </div>
+          <LoadError error={error} />
+        </>
+      ) : isPending ? (
+        <PageSkeleton rows={3} />
+      ) : data.windows.length === 0 ? (
+        <div className="card-pad">
+          <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+            이 세션에는 가격 판정 job 이 없습니다 — 판정이 아직 없거나 수집 전입니다. {SCOPE_NOTE}
+          </p>
+        </div>
+      ) : (
+        <>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>window (KST)</th>
+                <th>입력</th>
+                <th>job</th>
+                <th>시도별 판정 기록</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.windows.map((w) => (
+                <tr key={w.jobId}>
+                  <td className="mono t-xs">{kstHhmm(w.windowStart)}</td>
+                  <td className="t-xs">
+                    {inputLabel(w)}
+                    {w.artifactUri && w.artifactChecksum ? (
+                      <div className="mono col-muted" title={`${w.artifactUri}\nchecksum ${w.artifactChecksum}`}>
+                        기록된 checksum {abbreviate(w.artifactChecksum)}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="mono t-xs">
+                    세대 {w.jobGeneration} · {w.jobStatus} · 시도 {w.jobAttemptCount}
+                  </td>
+                  <td className="t-xs">
+                    {w.attempts.length === 0 ? (
+                      <span className="col-muted">{NO_RECORD}</span>
+                    ) : (
+                      w.attempts.map((a) => (
+                        <div key={`${a.redriveGeneration}-${a.attempt}`} style={{ marginBottom: 6 }}>
+                          <b>시도 {a.attempt}</b>
+                          {a.redriveGeneration ? ` (redrive ${a.redriveGeneration})` : ''} · 관측 {kstObserved(a.judgedAt)} ·
+                          기준선 기록 {a.judgedWithBaseline}종 · {a.detectionPolicyVersion}
+                          <details className="t-xs">
+                            <summary>기준선 집합 {abbreviate(a.baselineSetId)} — {baselineSetLabel(data.baselineSets[a.baselineSetId])}</summary>
+                            {Object.entries(data.baselineSets[a.baselineSetId] ?? {}).map(([e, b]) => (
+                              <div key={e} className="mono" style={{ overflowWrap: 'anywhere' }}>{e}: {baseline(b)}</div>
+                            ))}
+                          </details>
+                          {judgmentErrors(a).map((err) => (
+                            <div key={err} className="mono" style={{ color: 'var(--danger)', overflowWrap: 'anywhere' }}>
+                              판정 불가: {err}
+                            </div>
+                          ))}
+                          {involved(a).length === 0 ? (
+                            <div className="col-muted">
+                              {judgmentErrors(a).length > 0
+                                ? '그 밖의 대상은 무발화 · 앵커 행 없음'
+                                : '모든 대상 무발화 · 앵커 행 없음'}
+                            </div>
+                          ) : (
+                            involved(a).map((e) => (
+                              <div key={e} className="mono" style={{ overflowWrap: 'anywhere' }}>
+                                {e}: 계산 {computed(a.summary, e)} → 반영 {committed(a.summary, e)} · 읽은 앵커{' '}
+                                {readAnchor(a, e)} · tx {txObservation(a, e)} · 기준선 {baseline(a.baselines[e])}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="card-pad" style={{ paddingTop: 0 }}>
+            <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+              {SCOPE_NOTE} {JUDGED_AT_NOTE} {RECOMPUTATION_NOTE}
+            </p>
+          </div>
+        </>
+      ))}
     </div>
   );
 }

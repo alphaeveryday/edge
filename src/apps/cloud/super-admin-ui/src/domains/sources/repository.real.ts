@@ -5,6 +5,7 @@ import type {
   HoldingsImpact,
   MinuteStatus,
   MinuteDailyStatus,
+  MinuteJudgments,
   NewsLineage,
   SourceGrid,
   SourceOverview,
@@ -41,5 +42,9 @@ export const realSourcesRepository: SourcesRepository = {
   minuteDailyStatus: (days) =>
     apiClient.get<MinuteDailyStatus>(
       days === undefined ? '/sources/minute/daily' : `/sources/minute/daily?days=${days}`,
+    ),
+  minuteJudgments: (sessionId) =>
+    apiClient.get<MinuteJudgments>(
+      `/sources/minute/judgments?sessionId=${encodeURIComponent(sessionId)}`,
     ),
 };

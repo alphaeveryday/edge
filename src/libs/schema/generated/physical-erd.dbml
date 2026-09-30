@@ -669,6 +669,48 @@ Table "minute_ingestion_window" {
   }
 }
 
+Table "minute_price_baseline_set" {
+  "set_id" text [not null]
+  "entity_id" text [not null]
+  "snapshot_id" text [not null]
+
+  indexes {
+    ("set_id", "entity_id") [pk]
+  }
+}
+
+Table "minute_price_baseline_snapshot" {
+  "snapshot_id" text [pk]
+  "session_id" text [not null]
+  "entity_id" text [not null]
+  "source" text [not null]
+  "ref" text [not null]
+  "value" numeric [not null]
+  "created_at" timestamptz [not null]
+}
+
+Table "minute_price_judgment" {
+  "job_id" text [not null]
+  "redrive_generation" int [not null]
+  "attempt" int [not null]
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
+  "generation" int [not null]
+  "detection_policy_version" text [not null]
+  "abs_threshold" numeric [not null]
+  "revert_threshold" numeric [not null]
+  "baseline_set_id" text [not null]
+  "summary" jsonb [not null]
+  "anchors_used" jsonb [not null]
+  "tx_anchor" jsonb [not null]
+  "tx_anchor_locked" boolean [not null]
+  "judged_at" timestamptz [not null]
+
+  indexes {
+    ("job_id", "redrive_generation", "attempt") [pk]
+  }
+}
+
 Table "minute_price_trigger" {
   "trigger_id" text [pk]
   "entity_id" text [not null]
@@ -1283,6 +1325,9 @@ Ref: "instrument_classification"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_intraday"."instrument_id" > "instrument"."instrument_id"
 Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_price_baseline_set"."snapshot_id" > "minute_price_baseline_snapshot"."snapshot_id"
+Ref: "minute_price_baseline_snapshot"."session_id" > "minute_ingestion_session"."session_id"
+Ref: "minute_price_judgment"."job_id" > "price_window_job"."job_id"
 Ref: "minute_price_trigger"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_session_open"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_trigger_anchor"."session_id" > "minute_ingestion_session"."session_id"
