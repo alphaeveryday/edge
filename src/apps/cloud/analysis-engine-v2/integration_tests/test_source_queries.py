@@ -7,7 +7,7 @@ from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 import pytest
 
-from edge_analysis_v2.sources.database import load_source
+from edge_analysis_v2.sources.database import load_source, load_flow
 
 
 @pytest.mark.parametrize('extra_weight,valid_count', [(0, 2), (None, 1)])
@@ -30,6 +30,7 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
             CREATE TEMP TABLE event_evidence(assertion_id text,source_event_id text);
             CREATE TEMP TABLE source_event(source_event_id text,lifecycle_stage text,available_at timestamptz,source_class text,event_status text);
             CREATE TEMP TABLE event_thread_link(source_event_id text,thread_id text,evaluated_at timestamptz,source_class text);
+            CREATE TEMP TABLE investor_flow_daily(instrument_id text,trade_date date,net_val_foreign bigint,net_val_institution_total bigint,net_val_individual bigint,available_at timestamptz);
             INSERT INTO instrument VALUES ('etf','091160','XKRX','ETF'),('stock','000001','XKOS','EQUITY');
             INSERT INTO entity VALUES ('etf','ETF'),('stock','Stock');
             INSERT INTO equity_profile VALUES ('stock','issuer');
@@ -47,6 +48,10 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         c.execute("INSERT INTO entity VALUES ('zero','Zero')")
         c.execute("INSERT INTO etf_holding_snapshot VALUES ('etf','zero','2026-09-30',%s,'2026-09-30T08:00:00+09:00','current')", (extra_weight,))
         c.execute('UPDATE etf_holding_snapshot_status SET input_row_count=3,valid_row_count=%s', (valid_count,))
+        c.execute("""INSERT INTO investor_flow_daily VALUES
+            ('stock','2026-09-28',100,NULL,-100,'2026-09-28T18:00:00+09:00'),
+            ('stock','2026-09-29',200,300,-500,'2026-09-30T13:00:00+09:00'),
+            ('stock','2026-09-30',999,999,999,'2026-09-30T09:00:00+09:00')""")
         c.autocommit = False
         c.read_only = True
         c.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
@@ -57,6 +62,10 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         assert data['holdings'][0]['weight'] == .9971
         assert data['source_instrument_ids']['000001'] == 'stock'
         assert len(data['holdings']) == valid_count
+        load_flow(c, data)
+        assert data['context']['flow_as_of_date'] == '2026-09-29'
+        assert {r['date'] for r in data['flow']} == {'2026-09-28'}
+        assert {r['investor'] for r in data['flow']} == {'foreign','individual'}
         c.rollback()
         c.read_only = False
         c.execute('UPDATE etf_holding_snapshot_status SET valid_row_count=99')

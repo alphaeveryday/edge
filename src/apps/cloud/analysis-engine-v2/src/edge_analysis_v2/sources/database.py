@@ -7,6 +7,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from edge_analysis_v2.storage.database import DB_HOST
+from edge_analysis_v2.sources.calendar import trading_dates
 from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.tools.fixture_data.common import holdings, instant, number
 
@@ -123,6 +124,42 @@ def load_source(connection, ticker, analysis_at):
     return data
 
 
+def load_flow(connection, data):
+    """Attach up to thirty prior daily sessions without filling absent investors.
+
+    Args:
+        connection: Same read-only source transaction used for holdings.
+        data: Holdings/news bundle at a fixed analysis time; updated in place.
+
+    Returns:
+        The bundle with finalized prior-day flows and an independent calendar.
+    """
+    at = instant(data['context']['analysis_at'])
+    dates = trading_dates('2026-01-01', at.date().isoformat())
+    previous = [d for d in dates if d < at.date().isoformat()]
+    if not previous:
+        raise ValueError('No prior session in the registered calendar')
+    data['trading_dates'] = dates
+    data['context']['flow_as_of_date'] = previous[-1]
+    source_ids = data['source_instrument_ids']
+    symbols = {identity:ticker for ticker,identity in source_ids.items()}
+    rows = _rows(connection, '''SELECT instrument_id,trade_date,net_val_foreign,
+        net_val_institution_total,net_val_individual,available_at
+        FROM investor_flow_daily WHERE instrument_id=ANY(%s) AND trade_date BETWEEN %s AND %s
+        AND available_at<=%s ORDER BY instrument_id,trade_date''',
+        (list(symbols),previous[-30:][0],previous[-1],at))
+    data['flow'] = []
+    for row in rows:
+        for investor,column in [('foreign','net_val_foreign'),('institution','net_val_institution_total'),('individual','net_val_individual')]:
+            if row[column] is not None:
+                if type(row[column]) is not int:
+                    raise ValueError('Flow source requires integer KRW')
+                data['flow'].append({'instrument_id':symbols[row['instrument_id']],
+                    'date':row['trade_date'].isoformat(),'investor':investor,'net_amount_krw':row[column],
+                    'finalized':True,'available_at':row['available_at'].isoformat()})
+    return data
+
+
 class DatabaseTools(FixtureTools):
     """Use shared deterministic calculations with verified database observations only."""
 
@@ -131,6 +168,8 @@ class DatabaseTools(FixtureTools):
     def __init__(self, source):
         super().__init__(source)
         enabled = {'get_etf_holdings','search_news_threads','get_issue_evidence'}
+        if 'flow' in source:
+            enabled |= {'calculate_investor_flow','calculate_weighted_flow','sum_investor_net_flow','sum_weighted_net_flow'}
         self._tools = {name:tool for name,tool in self._tools.items() if name in enabled}
         self._tools['get_etf_holdings'].update(
             callback=lambda:holdings(self.fixture, require_complete=False),
@@ -139,4 +178,7 @@ class DatabaseTools(FixtureTools):
         self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. false는 최종 근거용 ID·제목입니다. null인 본문을 추측하지 마세요.'
         for name,tool in self._tools.items():
             tool['version'] = 'database-v1'
-            tool['sources'] = ['etf_holding_snapshot','etf_holding_snapshot_status'] if name=='get_etf_holdings' else ['document','news_document','source_event','event_thread_link']
+            if 'flow' in name:
+                tool['sources'] = ['investor_flow_daily','etf_holding_snapshot','etf_holding_snapshot_status']
+            else:
+                tool['sources'] = ['etf_holding_snapshot','etf_holding_snapshot_status'] if name=='get_etf_holdings' else ['document','news_document','source_event','event_thread_link']
