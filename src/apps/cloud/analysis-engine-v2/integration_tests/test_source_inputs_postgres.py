@@ -424,3 +424,22 @@ def test_an_attempt_in_another_basis_still_shows_when_the_company_basis_has_none
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_report_version WHERE raw_run_id LIKE '%-v10'")
+
+
+def test_freshness_counts_a_metric_free_financial_load(db):
+    # A run whose only outcome is confirmed versions with no metrics is still a load — it must not vanish from freshness.
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_report_version
+        SELECT '00000004', 'TST004', 2026, '11012', 'Q2', 'CFS', 'CONFIRMED', '20260814000004', '2026-08-14', '[]'::jsonb,
+               '[{"metric": "eps_basic", "reasons": ["account_not_found"]}]'::jsonb,
+               jsonb_build_object('statement', 'ok', 'shares', 'ok'), '2027-01-05 09:00+09', '2027-01-05 09:00+09',
+               'received', raw_run_id || '-v11', raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256, now()
+        FROM financial_report_version WHERE instrument_code = 'TST001' AND report_period = 'Q2' AND raw_run_id NOT LIKE '%-v%'""")
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        from edge_analysis_v2.source_inputs import freshness
+        fin = next(r for r in freshness(db) if r["dataset"] == "financial_metric")
+        assert fin["last_received_at"].startswith("2027-01-05")      # the metric-free run is the latest receipt
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_report_version WHERE raw_run_id LIKE '%-v11'")

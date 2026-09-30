@@ -147,7 +147,9 @@ def test_db_rejects_mixed_units_and_early_receipt(conn):
     conn.execute(sql, list(base.values()))
     for bad in ({"unit": "percentage_points", "raw_run_id": f"{RUN}u"},
                 {"observation_date": "2026-07-29", "raw_run_id": f"{RUN}e"},       # 수신 당일(KST) 관측
-                {"available_at": "2026-07-28T00:00:00+00:00", "raw_run_id": f"{RUN}v"}):
+                {"available_at": "2026-07-28T00:00:00+00:00", "raw_run_id": f"{RUN}v"},
+                {"value": "NaN", "raw_run_id": f"{RUN}n"},                            # NaN 은 PG 에서 최댓값 — 유한성 CHECK
+                {"value": "Infinity", "raw_run_id": f"{RUN}i"}):
         with pytest.raises(psycopg.errors.CheckViolation):
             conn.execute(sql, list({**base, **bad}.values()))
 

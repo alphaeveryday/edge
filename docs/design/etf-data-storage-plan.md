@@ -326,7 +326,7 @@ DB 행은 `raw_run_id`로 그 manifest에 닿으므로, 만료된 artifact 없�
 | `macro_observations_as_of(T, series, n=21)` | 최근 n개 관측(관측일·`reference_period`·값·단위·수신·가시·근거 키) | 관측일마다 `available_at ≤ T` 판본 중 최신. 문서의 "최근 공개 2관측일"은 n=2, 툴 탐색 한도 21과 섞지 않는다 |
 | `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말, 보통주 기준 `bps`·통상 `bps_total_shares`·`bps_note`)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결. **행 단위는 확정 보고서 판본이다**(`financial_report_version` — 회사·연도·보고기간·기준마다 `available_at ≤ T` 인 CONFIRMED 판본 중 가장 늦게 **받은** 것). 그 실행이 만든 지표만 값이 있고 빠진 지표는 NULL 이지 옛 실행의 값이 아니다 — 지표가 0개인 정정 판본도 한 줄이라 옛 값이 최신처럼 남지 않는다(리뷰 5~9차 잔여 ⑥ 해소). UNCONFIRMED 판본(HTTP 오류·파손·다른 보고서 응답)은 선택에 끼지 않아 일시 실패가 확정값을 무효화하지 않고, 확정 판본보다 늦은 실패는 `latest_unconfirmed_at` 으로만 드러난다. 늦게 끝난 옛 실행은 수신시각이 앞서 최신 확정을 덮지 못한다. 같은 접수번호의 재수집은 모두 원 공개일부터 보이고(결정 ①) 그중 가장 늦게 받은 것이 이긴다; 새 접수번호(정정)는 그 접수일부터만 보인다. 확정이 한 번도 없는 보고서는 가장 늦은 UNCONFIRMED 시도가 값 NULL·`version_status=UNCONFIRMED` 행으로 나온다(어댑터 gap `REPORT_UNCONFIRMED`) — 소비자가 실패한 확인 시도를 본다. 진행 중·중단된 실행은 판본이 없다(아무것도 바꾸지 않는다). 연결/별도 기준은 **지표가 있는 확정 연결 판본 이력**으로 정한다 — 최신 연결 판본이 비어도 별도 값으로 갈아타지 않는다. 파손 행이 섞인 응답(malformed)·정제가 거부한 분모 응답은 확인된 응답이 아니다(판본 UNCONFIRMED / `shares=error`). Q4 행은 사업보고서 판본의 것이다. 주식수 표는 한 표여야 한다 — 같은 종류 행이 둘 이상이고 서로 다르거나, 종류별 행의 접수번호·기준일이 다르거나, 기준일이 보고기간 말과 다르거나, 수가 정수가 아니면 거부. `version_rejected` 에 그 판본이 못 만든 지표와 사유가 있다. `bps_note`: 정제가 `bps_total_shares` 근거 줄에 남긴 판정 `common_bps`(`computed`·`bps_blocked_preferred_shares`·`bps_share_rows_unreadable`·`bps_input_missing` — 파손이 정책보다 먼저)를 조회가 그대로 읽는다: `PREFERRED_SHARES_PRESENT`(정책 차단, §10.9 ①) / `COMMON_SHARE_BPS_UNAVAILABLE`(주식수 파손) / `BPS_ABSENT_IN_LATEST_VERSION`(분모 응답은 정상(ok·013)인데 BPS 없음 — 확정된 부재) / `BPS_UNCONFIRMED`(분모 응답 실패 — 확정 못 함, 재수집 대상) |
 | `sector_classification_as_of(T, codes[])` | 종목별 최신 스냅샷의 대·중·소 코드·이름 | `found=false`(그 시점 스냅샷에 없음) ≠ 코드 NULL(원천 `0000`) |
-| `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다 |
+| `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다. **한계**: holdings 표는 ETF·날짜당 한 판본(기존 적재가 덮어쓴다)이라 정정 스냅샷 뒤엔 그 날짜의 이전 구성을 복원하지 못한다(정정 전 T 는 그 날짜를 건너뛴다) — 구성종목 판본 이력은 holdings 레인 소관 |
 
 예제(로컬 PostgreSQL 검증, `tests/e2e/test_source_observations_pg.py`):
 
@@ -339,7 +339,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 ```
 
 | `financial_report_version` (표) | 회사·연도·보고서(11013/11012/11014/11011)·연결/별도 × 수집 실행 = 한 줄: `status`(CONFIRMED·UNCONFIRMED), `metrics`(만든 지표), `rejected`(못 만든 지표·사유), `detail`(statement·shares 응답 상태), 접수번호·가시시각·근거 | 정제(`normalize-financial-metric`)가 지표 artifact 와 함께 둘째 artifact(`companion`)로 만들고, 적재가 **같은 트랜잭션**으로 싣는다(소비 마커는 커밋 뒤) — 한쪽만 실린 상태가 없다. 현재 상태 파티션은 없다(실행마다 새 사실). 조회 함수만 읽는다(테이블 권한 0) |
-| `source_observation_freshness()` | 데이터셋(매크로는 계열)별 최신 관측일·마지막 수신·마지막 적재 성공(원장 `LOAD_*` FULFILLED)·상태 | 상태는 항상 `UNKNOWN`/`NO_PROVIDER_CALENDAR`(§10.6). 행 없음 = 적재 0건 |
+| `source_observation_freshness()` | 데이터셋(매크로는 계열)별 최신 관측일·마지막 수신·마지막 적재 성공(원장 `LOAD_*` FULFILLED)·상태 — 재무는 판본 표로 센다(지표 0개 판본도 적재 사실) | 상태는 항상 `UNKNOWN`/`NO_PROVIDER_CALENDAR`(§10.6). 행 없음 = 적재 0건 |
 
 **권한**: v2 쓰기 역할(`edge_analysis_v2_writer`)의 테이블 권한은 그대로 0이다. 읽기는 위 다섯 함수의 EXECUTE만 — 함수는
 `SECURITY DEFINER`(`search_path=public` 고정)로 소유자 권한에서 테이블을 읽고, PUBLIC의 EXECUTE는 회수했다.
