@@ -353,6 +353,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         raise SystemExit(f"{producer} 는 --input-run-id(수집 run_id)가 필요하다")
     exit_code = 0
     failures: list[dict] = []
+    completed: bytes | None = None
     try:
         storage.put_bytes(manifest_key, json.dumps(
             {"run_id": run_id, "producer": producer, "canonical_written": False}).encode("utf-8"))
@@ -376,7 +377,9 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             key = canonical_run_partition_key(spec.companion.dataset, run_id, raw_manifest["ingest_date"])
             companion = {"dataset": spec.companion.dataset, "key": key, "sha256": put_immutable(storage, key, data),
                          "rows": len(companion_rows)}
-        storage.put_bytes(manifest_key, json.dumps({
+        # 완료 manifest 는 quality_log 가 남은 뒤에 쓴다(아래) — 검증 기록 없이 완료로 보이면 `load --all` 이
+        # 그 실행을 싣고 소비 마커까지 남겨 빠진 검증 기록이 영영 드러나지 않는다(normalize_price 와 같은 순서).
+        completed = json.dumps({
             "run_id": run_id, "producer": producer, "dataset": spec.dataset,
             "canonical_written": True, "input_run_id": input_run_id,
             "raw_manifest_sha256": raw_manifest["manifest_sha256"],
@@ -387,7 +390,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             "canonical_partitions": partitions, "rows": len(rows),
             "rejected": len(failures), "collapsed_duplicates": collapsed,
             "companion": companion,
-        }, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        }, ensure_ascii=False, sort_keys=True).encode("utf-8")
         log.update({"rows": len(rows), "collapsed_duplicates": collapsed,
                     "canonical_partitions": len(partitions), "artifact_key": artifact_key,
                     "raw_counts": raw_manifest.get("counts")})
@@ -401,12 +404,20 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
     log.update({"failures": failures[:200], "records_failed": len(failures),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "ops": {"records_out": log.get("rows", 0), "failed_records": len(failures)}})
+    quality_written = True
     try:
         storage.put_bytes(quality_log_key(spec.dataset, started_at.date().isoformat(), run_id),
                           json.dumps(log, ensure_ascii=False, default=str).encode("utf-8"))
     except Exception:
         logger.exception("quality_log 기록 실패")
+        quality_written = False
         exit_code = exit_code or 1
+    if completed is not None and quality_written and exit_code != 1:
+        try:
+            storage.put_bytes(manifest_key, completed)
+        except Exception:
+            logger.exception("canonical run manifest 기록 실패")
+            exit_code = 1
     logger.info("%s 정제: rows=%s failures=%d exit=%d", spec.dataset, log.get("rows"), len(failures), exit_code)
     return exit_code
 
