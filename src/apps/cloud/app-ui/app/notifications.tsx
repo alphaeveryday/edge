@@ -10,11 +10,9 @@ import { fam } from '@/theme/typography';
 
 const KIND: Record<NotiKind, { label: string; c: string; bg: string; glyph: string }> = {
   watch: { label: '관심', c: '#C9820E', bg: '#E8A13D', glyph: '★' },
-  signal: { label: '시그널', c: colors.primary, bg: colors.primary, glyph: '↑' },
-  content: { label: '콘텐츠', c: '#12915B', bg: '#12915B', glyph: '+' },
   comm: { label: '커뮤니티', c: colors.downDeep, bg: colors.down, glyph: '▣' },
 };
-const TABS: { k: NotiKind | 'all'; label: string }[] = [{ k: 'all', label: '전체' }, { k: 'watch', label: '관심' }, { k: 'comm', label: '커뮤니티' }, { k: 'content', label: '콘텐츠' }];
+const TABS: { k: NotiKind | 'all'; label: string }[] = [{ k: 'all', label: '전체' }, { k: 'watch', label: '관심' }, { k: 'comm', label: '커뮤니티' }];
 
 export default function Notifications() {
   const router = useRouter();

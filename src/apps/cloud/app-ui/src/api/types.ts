@@ -205,7 +205,7 @@ export interface Reply {
   body: string;
 }
 
-export type NotiKind = 'watch' | 'signal' | 'content' | 'comm';
+export type NotiKind = 'watch' | 'comm';
 
 export interface Notification {
   id: string;
