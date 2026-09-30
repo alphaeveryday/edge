@@ -511,3 +511,58 @@ def test_value_only_renormalization_is_also_refused(tmp_path, conn, monkeypatch)
                    producer="load_financial_metric") == 1
     assert conn.execute("SELECT count(DISTINCT artifact_sha256) FROM financial_metric WHERE raw_run_id = %s",
                         (raw,)).fetchone()[0] == 1
+
+def test_artifact_expiry_recovery_paths(tmp_path, conn):
+    """실행별 artifact(`canonical_run_artifacts/`, S3 30일 만료) 가 사라진 뒤 무엇이 되고 무엇이 안 되는가(§10.3 복구 계약).
+
+    ① 만료된 artifact 를 같은 정제 run 으로 다시 싣기 → 실패(exit 1)·DB 불변. 같은 run_id 재정제(DAG reprocess_slot)는
+      "이미 정제 완료" no-op 이라 artifact 를 다시 만들지 않는다 → 이 경로로는 복구 불가.
+    ② 같은 raw·같은 코드로 **새 정제 run_id** → artifact 바이트가 같다 → 적재 성공(이미 있던 행은 그대로).
+    ③ 적재 전에 만료된 실행도 ②로 싣는다. 단 만료된 옛 정제 run 은 `load --all` 에서 계속 실패로 남는다(정리 도구 없음).
+    ④ DB 조회는 artifact 와 무관하다.
+    (다른 코드 판의 재정제는 test_renormalizing_the_same_raw_with_different_rules_is_refused 가 고정 — 적재 거부.)
+    """
+    from data_pipeline.lake import LocalStorage, canonical_run_manifest_key
+    from data_pipeline.steps import source_observations as so, source_observations_macro as so_macro
+
+    storage = LocalStorage(tmp_path)
+    usd = (FIXTURES / "ecos_usdkrw.json").read_bytes()
+    first = _macro_run(storage, "x", usd)
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}x_load", input_run_id=first, pending=False,
+                   producer="load_macro") == 0
+    count = lambda: conn.execute("SELECT count(*) FROM macro_observation WHERE raw_run_id = %s",
+                                 (f"{RUN}x_raw",)).fetchone()[0]
+    loaded = count()
+    at = datetime(2026, 7, 30, tzinfo=timezone.utc)
+    before = _as_of(conn, at)
+    manifest = json.loads(storage.get_bytes(canonical_run_manifest_key("macro_observation", first)))
+    artifact = tmp_path / manifest["artifact"]["key"]
+    artifact.unlink()                                                     # 30일 만료 흉내
+
+    # ① 같은 run 재적재는 실패, 같은 run_id 재정제는 no-op 이라 artifact 가 돌아오지 않는다
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}x_load2", input_run_id=first, pending=False,
+                   producer="load_macro") == 1
+    assert so.normalize(storage, so_macro.MACRO, first, f"{RUN}x_raw", producer="normalize_macro") == 0
+    assert not artifact.exists()
+    # ④ DB 조회는 그대로
+    assert _as_of(conn, at) == before and count() == loaded
+
+    # ② 같은 raw·같은 코드로 새 정제 run → 같은 바이트 → 적재 성공, 행 수 불변
+    assert so.normalize(storage, so_macro.MACRO, f"{RUN}x_norm_r", f"{RUN}x_raw", producer="normalize_macro") == 0
+    again = json.loads(storage.get_bytes(canonical_run_manifest_key("macro_observation", f"{RUN}x_norm_r")))
+    assert again["artifact"]["sha256"] == manifest["artifact"]["sha256"]
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}x_load3", input_run_id=f"{RUN}x_norm_r", pending=False,
+                   producer="load_macro") == 0
+    assert count() == loaded and _as_of(conn, at) == before
+
+    # ③ 적재 전에 만료: 옛 정제 run 은 --all 에서 계속 실패, 새 정제 run 으로는 싣는다
+    orphan = _macro_run(storage, "y", usd)
+    m = json.loads(storage.get_bytes(canonical_run_manifest_key("macro_observation", orphan)))
+    (tmp_path / m["artifact"]["key"]).unlink()
+    assert so.normalize(storage, so_macro.MACRO, f"{RUN}y_norm_r", f"{RUN}y_raw", producer="normalize_macro") == 0
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}y_load", input_run_id=f"{RUN}y_norm_r", pending=False,
+                   producer="load_macro") == 0
+    assert conn.execute("SELECT count(*) FROM macro_observation WHERE raw_run_id = %s",
+                        (f"{RUN}y_raw",)).fetchone()[0] > 0
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}y_all", input_run_id=None, pending=True,
+                   producer="load_macro") == 1                           # 만료된 옛 정제 run 이 --all 을 실패시킨다
