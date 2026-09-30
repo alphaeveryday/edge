@@ -23,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EtfFlowTests extends ContainerTests {
     @LocalServerPort
     int port;
+    @Autowired
+    JdbcTemplate jdbc;
 
     @BeforeAll
     static void seed(@Autowired JdbcTemplate jdbc) {
@@ -76,6 +78,20 @@ class EtfFlowTests extends ContainerTests {
         assertEquals(115.0, ma5.get(0), "113..117 평균");
         assertNull(ma20.get(0), "앞 행이 17개뿐이라 20일 평균은 아직 없다");
         assertEquals(109.5, ma20.get(2), "100..119 평균");
+    }
+
+    // 원천이 종가만 주는 일봉도 차트에 나가야 하고, 없는 시가·고가·저가를 지어내지 않는다
+    @Test
+    void chartOmitsMissingOpenHighLowButKeepsClose() {
+        jdbc.update("insert into etf_candle(etf_code, trade_date, close, volume) values ('910002', '2026-09-25', 50, 1) "
+                + "on conflict (etf_code, trade_date) do update set open = null, high = null, low = null, close = excluded.close");
+        try {
+            Map<String, Object> chart = result(call(port, "GET", "/api/v1/etfs/910002/chart?range=1W", null, "X-Device-Id", "e1"));
+            Map<String, Object> candle = ((List<Map<String, Object>>) chart.get("candles")).get(0);
+            assertEquals(Map.of("c", 50.0), candle);
+        } finally {
+            jdbc.update("delete from etf_candle where etf_code = '910002'");
+        }
     }
 
     @Test

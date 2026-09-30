@@ -63,10 +63,14 @@ public class EtfService {
         visible.forEach(c -> closes.add(c.getClose().doubleValue()));
         int offset = lead.size();
         return new ChartResponse(range.value(),
-                visible.stream().map(c -> new ChartResponse.Candle(c.getOpen().doubleValue(), c.getHigh().doubleValue(),
-                        c.getLow().doubleValue(), c.getClose().doubleValue())).toList(),
+                visible.stream().map(c -> new ChartResponse.Candle(number(c.getOpen()), number(c.getHigh()),
+                        number(c.getLow()), c.getClose().doubleValue())).toList(),
                 movingAverage(closes, offset, 5), movingAverage(closes, offset, 20),
                 visible.stream().map(c -> AXIS.format(c.getTradeDate())).toList());
+    }
+
+    private static Double number(java.math.BigDecimal value) {
+        return value == null ? null : value.doubleValue();
     }
 
     /** 오늘 움직임 조회. 발행본 없음·summary null 은 ANALYSIS4001 */

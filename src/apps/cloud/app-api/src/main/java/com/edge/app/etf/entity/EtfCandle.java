@@ -28,13 +28,10 @@ public class EtfCandle {
     @Column(name = "trade_date")
     private LocalDate tradeDate;
 
-    @Column(nullable = false)
     private BigDecimal open;
 
-    @Column(nullable = false)
     private BigDecimal high;
 
-    @Column(nullable = false)
     private BigDecimal low;
 
     @Column(nullable = false)
