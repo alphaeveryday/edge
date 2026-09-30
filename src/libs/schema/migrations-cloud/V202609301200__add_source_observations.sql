@@ -33,13 +33,15 @@ CREATE TABLE macro_observation (
     artifact_sha256    TEXT NOT NULL,
     loaded_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (series_id, observation_date, raw_run_id),
-    -- 계열·단위·공급자는 한 쌍이다. 단위가 다른 값이 같은 계열에 섞이면 비교 툴의 %p·% 판정이 틀린다.
-    CONSTRAINT ck_macro_observation_series CHECK ((series_id, unit, source_vendor) IN (
-        ('usd_krw', 'KRW_per_USD', 'ecos'),
-        ('us_10y_yield', 'percent', 'fmp'),
-        ('kr_10y_yield', 'percent', 'ecos'),
-        ('kr_cpi_yoy', 'percent', 'kosis'),
-        ('brent_spot_usd', 'USD_per_barrel', 'eia'))),
+    -- 계열·단위·공급자·공급자 계열 식별자는 한 묶음이다. 단위가 다른 값이 같은 계열에 섞이면 비교 툴의 %p·% 판정이
+    -- 틀리고, 같은 공급자의 다른 계열(예 ECOS 0000013 = 02:00 종가)이 설정 실수로 들어오면 적재에서 막혀야 한다.
+    -- 문자열은 sources/macro_series.py SERIES 의 source_series 와 같다(계열을 바꾸면 여기도 바꾼다 — 그게 의도다).
+    CONSTRAINT ck_macro_observation_series CHECK ((series_id, unit, source_vendor, source_series) IN (
+        ('usd_krw', 'KRW_per_USD', 'ecos', 'ECOS 731Y003/D/0000003'),
+        ('us_10y_yield', 'percent', 'fmp', 'FMP treasury-rates year10'),
+        ('kr_10y_yield', 'percent', 'ecos', 'ECOS 817Y002/D/010210000'),
+        ('kr_cpi_yoy', 'percent', 'kosis', 'KOSIS 101/DT_1J22042 T03 objL1=0'),
+        ('brent_spot_usd', 'USD_per_barrel', 'eia', 'EIA petroleum/pri/spt RBRTE'))),
     CONSTRAINT ck_macro_observation_month CHECK (
         series_id <> 'kr_cpi_yoy' OR extract(day FROM observation_date) = 1),
     CONSTRAINT ck_macro_observation_price CHECK (
