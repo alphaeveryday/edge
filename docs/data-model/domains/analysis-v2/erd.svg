@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2520 1120"><rect width="100%" height="100%" fill="#ffffff"/>
 <style>text{font-family:Arial,sans-serif;fill:#0f172a}.title{font-size:25px;font-weight:bold}.subtitle{font-size:13px;fill:#64748b}.relation{fill:none;stroke:#64748b;stroke-width:1.5}.cardinality{font-size:12px}</style>
-<text class="title" x="70" y="55">Analysis v2 - 10 tables / 90 columns</text><text class="subtitle" x="70" y="100">11 foreign keys. Original 8 tables + factor metrics and issue items (PR #970). ID arrays: application validation.</text>
+<text class="title" x="70" y="55">Analysis v2 - 10 tables / 92 columns</text><text class="subtitle" x="70" y="100">11 foreign keys. Original 8 tables + factor metrics and issue items (PR #970). ID arrays: application validation.</text>
 <g id="table-movement_analyses"><rect class="table" x="70" y="140" width="350" height="300" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="71" y="141" width="348" height="35" fill="#dbeafe"/><text x="82" y="164" font-size="15" font-weight="bold">movement_analyses</text>
 <text x="82" y="198" font-size="12">analysis_id : text</text>
 <text x="82" y="219" font-size="12">etf_code : text</text>
@@ -12,6 +12,7 @@
 <text x="82" y="345" font-size="12">trading_date : date</text>
 <text x="82" y="366" font-size="12">summary : text</text>
 <text x="82" y="387" font-size="12">selected_item_ids : text[]</text>
+<text x="82" y="408" font-size="12">data_source : text</text>
 </g>
 <g id="table-movement_items"><rect class="table" x="70" y="590" width="350" height="300" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="71" y="591" width="348" height="35" fill="#dbeafe"/><text x="82" y="614" font-size="15" font-weight="bold">movement_items</text>
 <text x="82" y="648" font-size="12">item_id : text</text>
@@ -41,6 +42,7 @@
 <text x="1012" y="471" font-size="12">conclusion_sentence : text</text>
 <text x="1012" y="492" font-size="12">change_condition : text</text>
 <text x="1012" y="513" font-size="12">issue_headline : text</text>
+<text x="1012" y="534" font-size="12">data_source : text</text>
 </g>
 <g id="table-outlook_items"><rect class="table" x="1000" y="680" width="410" height="330" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1001" y="681" width="408" height="35" fill="#d1fae5"/><text x="1012" y="704" font-size="15" font-weight="bold">outlook_items</text>
 <text x="1012" y="738" font-size="12">row_id : text</text>

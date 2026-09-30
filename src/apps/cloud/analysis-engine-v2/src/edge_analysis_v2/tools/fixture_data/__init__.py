@@ -15,6 +15,8 @@ class FixtureTools:
         fixture: Raw observations and a fixed context; copied at construction.
     """
 
+    data_source = "synthetic"
+
     final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_instrument_factors", "compare_financial_observations", "calculate_valuation_range"}
 
     def __init__(self, fixture):
