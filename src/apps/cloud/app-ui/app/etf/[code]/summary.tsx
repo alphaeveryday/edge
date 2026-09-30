@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { LinkRow } from '@/components/ui';
-import { CandleChart } from '@/features/etf/CandleChart';
+import { LineChart } from '@/features/etf/LineChart';
 import { MoveSheet } from '@/features/etf/MoveSheet';
 import { useChart, useEtf, useMove } from '@/features/etf/queries';
 import { ErrorView, Loading } from '@/components/state';
@@ -21,7 +21,7 @@ export default function EtfSummary() {
   if (!etf || !chart) return <Loading rows={3} />;
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
-      {chart && <CandleChart data={chart} name={etf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} price={etf.price} changePct={etf.changePct} />}
+      {chart && <LineChart data={chart} name={etf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} price={etf.price} changePct={etf.changePct} />}
       <View style={styles.divider} />
       <Pressable onPress={() => setOpen(true)} style={({ pressed }) => [styles.why, pressed && { opacity: 0.6 }]}>
         <View style={styles.whyHead}>

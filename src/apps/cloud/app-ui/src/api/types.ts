@@ -57,9 +57,9 @@ export interface Post {
 }
 
 export interface Candle {
-  o: number;
-  h: number;
-  l: number;
+  o?: number;
+  h?: number;
+  l?: number;
   c: number;
 }
 
