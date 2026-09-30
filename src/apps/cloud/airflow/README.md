@@ -481,6 +481,14 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 **A5 원인과 가장 작은 다음 변경.** provider `EcsRunTaskOperator` 는 태스크가 끝나면 로그 수집 스레드를 멈추고 `join` 한다. 그 스레드는 `awslogs_fetch_interval`(기본 30초)만큼 잔다. 그래서 스텝마다 종료 감지가 약 30초 늦는다(5스텝 run 이면 약 2.5분). 다음 변경은 EdgeStep 에 `awslogs_fetch_interval` 5~10초를 주는 것이다. DAG 코드 변경이라 A5 는 그 뒤 다시 잰다.
 
+**원인 대조와 수정(2026-10-01, #1027).**
+- **코드 대조**(provider 9.36.0 `utils/task_log_fetcher.py`): `run()` 이 `while not stopped: time.sleep(interval)` 이라 `stop()` 뒤에도 남은 sleep 을 끝까지 잔다. `execute()` 는 waiter(`DescribeTasks`, 6초 주기)가 STOPPED 를 본 뒤 `stop()`·`join()` 을 부르므로 종료 판정 = max(waiter 감지, 다음 로그 수집 깨어남)이다.
+- **실행 로그 대조**(원격 태스크 로그 `/airflow/edge-dev-airflow/tasks`, V_1520): collect·load·report 의 "ECS Task stopped, check status" 가 모두 로그 수집 시작 **+90.7초**(30초 간격 세 번째 깨어남)였다. 업무 로그 줄도 +60.3~60.4초에 한꺼번에 찍혔다. waiter 6초 주기와는 맞지 않는다.
+- **표본**: 종료 감지 21개 중 정상 스텝 19개는 6.0초 하나와 20.3~33.3초다. 음수 2개는 주입 시나리오다(R1 재시작 −40.6, H1 보류 −26.3). 업무 증거가 온전한 정상 run(A1)만 보면 26.7·29.6·29.9·31.8·31.9초(n=5)다. N1~N3 는 증거를 모을 때 ECS 조회 창(약 1시간)이 지나 표본이 없다.
+- **수정**: EdgeStep `awslogs_fetch_interval` 10초. 공식 이미지에서 provider 수집 스레드를 실측했다(태스크 수명 34/37/40초). stop→join 완료는 30초에서 26/23/20초, 10초에서 6/3/0초, 5초에서 1/3/0초였다. 태스크당 GetLogEvents 는 30초 3회, 10초 5회, 5초 8~9회였다. 5초는 호출이 약 3배인데 waiter 6초가 상한을 정해 얻는 것이 적어 10초로 정했다. ECS 상태 조회·종료 판정(`ecs_verdict`)은 바꾸지 않았다.
+
+**A4 증거 경로(#1027).** health 표본을 운영자 PC 대신 호스트 관측기가 15초마다 남긴다(`nsenter -n` 으로 api-server 네임스페이스의 `/api/v2/monitor/health`, `/var/log/edge-obs/health.log`). 종료 장치는 호스트를 내리기 전에 관측 기록을 검증 버킷 `obs/shutdown/` 으로 보낸다. 운영자 PC 가 잠들거나 포워딩이 끊겨도 A2~A4 증거가 남는다. import 오류 수는 인증 API 라 PC 표본(실험 처음·끝)으로 본다. 재검증 기준은 `verify/criteria_aws_1408_a4a5.json`, 배치는 `run.py batch <exp> L` 이다.
+
 **비용(추정).**
 - small 약 4.5시간(두 호스트 합) ≈ 0.09 USD, EBS·검증 Fargate(약 45개 × 1~3분)·이미지 pull·로그 ≈ 0.4 USD.
 - 합계 **약 0.5 USD**(상한 3). 정리 뒤 잔여는 앱 시크릿·ECR·로그 보관, 약 0.6 USD/월.

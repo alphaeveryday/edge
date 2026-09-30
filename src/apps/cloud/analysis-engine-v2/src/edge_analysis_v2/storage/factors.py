@@ -114,6 +114,10 @@ def project_factor_metrics(output: dict, etf_code: str) -> dict:
             value = values.get(metric)
             if value is None:
                 continue
+            if metric == 'weighted_per' and values.get('weighted_per_approximate'):
+                # A card carries no derivation note; a PER built on an approximated Q4 EPS (FY−9M, ALPHA-1130)
+                # is withheld from cards. It stays readable in the screen response, which says approximate.
+                continue
             stamp = values.get('observed_at')
             subject = None
             if key == 'chart':

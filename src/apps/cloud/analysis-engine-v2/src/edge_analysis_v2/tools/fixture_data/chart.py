@@ -15,6 +15,13 @@ METRIC_FORMULAS = (
 )
 
 
+def validate_price(row, key='close'):
+    """Validate available price fields without inventing a missing range."""
+    price = decimal(row[key])
+    if price <= 0 or (row.get('low') is not None and not 0 < decimal(row['low']) <= price) or (row.get('high') is not None and decimal(row['high']) < price):
+        raise ValueError('invalid price domain')
+
+
 def history(fixture, instrument_id=None):
     """Read continuous completed daily prices from the registered calendar."""
     context = fixture["context"]
@@ -27,9 +34,7 @@ def history(fixture, instrument_id=None):
     if [r["date"] for r in rows] != expected:
         raise ValueError("missing expected daily price")
     for row in rows:
-        low, close, high = [decimal(row[k]) for k in ("low", "close", "high")]
-        if not 0 < low <= close <= high:
-            raise ValueError("invalid OHLC price domain")
+        validate_price(row)
     return rows
 
 
@@ -42,8 +47,7 @@ def snapshots(fixture):
     if len({instant(r["observed_at"]) for r in rows}) != len(rows):
         raise ValueError("duplicate price snapshot")
     for row in rows:
-        if not decimal(0) < decimal(row["low"]) <= decimal(row["price"]) <= decimal(row["high"]):
-            raise ValueError("invalid snapshot price domain")
+        validate_price(row, 'price')
         if instant(row["observed_at"]).date() != cutoff.date():
             raise ValueError("snapshot must belong to analysis day")
     return rows[-5:]
@@ -70,17 +74,18 @@ def indicator_values(rows, snapshot=None):
         change = price-closes[-1]
         gain = (13*gain+max(change, decimal(0)))/14
         loss = (13*loss+max(-change, decimal(0)))/14
-        highs = [decimal(r["high"]) for r in rows[-13:]]+[decimal(snapshot["high"])]
-        lows = [decimal(r["low"]) for r in rows[-13:]]+[decimal(snapshot["low"])]
+        ranges = rows[-13:]+[snapshot]
         observed = snapshot["observed_at"]
     else:
         price = closes[-1]
-        highs = [decimal(r["high"]) for r in rows[-14:]]
-        lows = [decimal(r["low"]) for r in rows[-14:]]
+        ranges = rows[-14:]
         observed = rows[-1]["available_at"]
-    high, low = max(highs), min(lows)
+    bottom = None
+    if all(r.get('high') is not None and r.get('low') is not None for r in ranges):
+        high, low = max(decimal(r['high']) for r in ranges), min(decimal(r['low']) for r in ranges)
+        bottom = number(100*(high-price)/(high-low)) if high != low else None
     return {"momentum": number(100*gain/(gain+loss)) if gain+loss else None,
-            "bottom": number(100*(high-price)/(high-low)) if high != low else None,
+            "bottom": bottom,
             "observed_at": observed}
 
 
