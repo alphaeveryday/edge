@@ -1,11 +1,11 @@
 import type { Signal } from '@/theme/tokens';
-import type { Axis, Dir, EtfSummary, Me, VoteStat, VoteChoice, Post, Reply, Theme, ThemeDetail, ThemeFeedItem } from '../types';
+import type { Axis, Dir, EtfSummary, Me, VoteStat, VoteChoice, Post, Reply, Theme } from '../types';
 
 // 계약 응답의 앱 타입 변환과 표시용 값 생성
 
 const PALETTE = ['#3D34E0', '#131318', '#0E8A6C', '#E0562B', '#8B34E0', '#E8A13D', '#C9820E', '#1B64DA', '#6C5CF5'];
 const hash = (s: string) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; } return h; };
-export const bgOf = (key: string) => PALETTE[hash(key) % PALETTE.length];
+const bgOf = (key: string) => PALETTE[hash(key) % PALETTE.length];
 
 const AXIS_LABEL: Record<string, Axis> = { issue: '이슈', chart: '차트', macro: '매크로', value: '밸류', flow: '수급' };
 const AXIS_CODE: Record<Axis, string> = { 이슈: 'issue', 차트: 'chart', 매크로: 'macro', 밸류: 'value', 수급: 'flow' };
@@ -27,19 +27,11 @@ export const asOfLabel = (iso: string) => {
   return `오늘 ${hh}:${mm} 기준`;
 };
 
-const updatedLabel = (iso: string) => { const d = new Date(iso); return `${d.getMonth() + 1}월 ${d.getDate()}일 업데이트`; };
-
 export interface WireEtfSummary { code: string; name: string; theme: string; price: number; changePct: number; signal: Signal; hot?: boolean; sub?: string }
 export const etf = (e: WireEtfSummary): EtfSummary => ({ ...e, logoBg: bgOf(e.theme) });
 
 export interface WireTheme { key: string; label: string; group: 'industry' | 'asset'; hot?: boolean }
 export const theme = (t: WireTheme): Theme => ({ ...t, bg: bgOf(t.key) });
-
-export interface WireThemeFeedItem { key: string; count: number; headline: string; dir: Dir }
-export const themeFeedItem = (t: WireThemeFeedItem, label: string): ThemeFeedItem => ({ ...t, label, bg: bgOf(t.key) });
-
-export type WireThemeDetail = Omit<ThemeDetail, 'stocks' | 'label'> & { stocks: { name: string; etfs: string }[] };
-export const themeDetail = (t: WireThemeDetail, label: string): ThemeDetail => ({ ...t, label, updated: updatedLabel(t.updated), stocks: t.stocks.map((s) => ({ ...s, logoBg: bgOf(s.name) })) });
 
 export interface WireMe { nick: string; handle: string; email?: string; disclaimerAcceptedAt?: string }
 export const me = (m: WireMe): Me => ({ ...m, avatarBg: bgOf(m.handle) });

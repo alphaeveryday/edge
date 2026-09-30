@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, IssueDetail, IssueRow, Me, Reply, RankRow, ThemeDetail, ThemeFeedItem, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, Me, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -22,8 +22,6 @@ export interface WatchApi {
 
 export interface ThemeApi {
   list(): Promise<Theme[]>;
-  feed(): Promise<ThemeFeedItem[]>;
-  detail(key: string): Promise<ThemeDetail>;
 }
 
 export interface ExploreApi {
@@ -60,11 +58,6 @@ export interface CommunityApi {
   vote(code: EtfCode, choice: VoteChoice): Promise<VoteStat>;
 }
 
-export interface IssueApi {
-  list(tab: 'mine' | 'all'): Promise<IssueRow[]>;
-  get(id: string): Promise<IssueDetail>;
-}
-
 export interface MemberApi {
   me(): Promise<Me>;
   update(patch: Partial<Me>): Promise<Me>;
@@ -95,7 +88,6 @@ export interface ApiClient {
   analysis: AnalysisApi;
   home: HomeApi;
   community: CommunityApi;
-  issue: IssueApi;
   member: MemberApi;
   auth: AuthApi;
   notification: NotificationApi;

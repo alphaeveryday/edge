@@ -190,35 +190,6 @@ export interface RankRow {
   ready: boolean;
 }
 
-export interface ThemeFeedItem {
-  key: string;
-  label: string;
-  bg: string;
-  count: number;
-  headline: string;
-  dir: Dir;
-}
-
-export interface ThemeDetail {
-  key: string;
-  label: string;
-  headline: string;
-  stocks: { name: string; logoBg: string; etfs: string }[];
-  intro: string;
-  updated: string;
-  countLabel: string;
-  todayLine: string;
-  todayEffect: string;
-  importantLead: string;
-  importantWhy: string;
-  metric: { name: string; now: string; dir: Dir; vals: number[]; thresh: number; xLabels: string[]; refLabel: string; state: string };
-  thesis: string;
-  surface: string;
-  structure: string;
-  structureWhy: string;
-  soWhat: string;
-}
-
 export interface Me {
   nick: string;
   handle: string;
@@ -232,25 +203,6 @@ export interface Reply {
   author: { name: string; avatarBg: string };
   time: string;
   body: string;
-}
-
-export interface IssueRow {
-  id: string;
-  rank: number;
-  delta: number;
-  title: string;
-  kw: string;
-  etf?: Pick<EtfSummary, 'code' | 'name' | 'theme' | 'logoBg' | 'sub'>;
-}
-
-export interface IssueDetail {
-  id: string;
-  title: string;
-  body: string;
-  points: string[];
-  sources: { title: string; pub: string; url: string }[];
-  effect: { theme: string; dir: Dir; body: string };
-  affected: (EtfSummary & { prev?: Signal })[];
 }
 
 export type NotiKind = 'watch' | 'signal' | 'content' | 'comm';

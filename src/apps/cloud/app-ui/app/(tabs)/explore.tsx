@@ -35,7 +35,7 @@ export default function Explore() {
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="탐색" />
         <View style={{ paddingTop: 22 }}>
-          <SectionHead title="AI가 보는 오늘 순위" actionLabel="테마" onAction={() => router.push('/themes')} />
+          <SectionHead title="AI가 보는 오늘 순위" />
         </View>
         <Text style={styles.lead}>재료가 확인된 ETF부터 위에 있어요.</Text>
         {q.isPending && <Loading rows={5} />}

@@ -1,7 +1,7 @@
 import type { ApiClient } from '../client';
 import { HINTS } from '../mock/analysis';
 import { ApiError } from '../error';
-import type { ChartData, DailyAnalysis, EtfDetailData, EtfSummary, FactorPage, HomeBrief, IssueDetail, IssueRow, MetricPage, MoveInfo, Notification, VoteChoice, RankRow, WatchGroup } from '../types';
+import type { ChartData, DailyAnalysis, EtfDetailData, EtfSummary, FactorPage, HomeBrief, MetricPage, MoveInfo, Notification, VoteChoice, RankRow, WatchGroup } from '../types';
 import { request } from './fetch';
 import * as m from './map';
 import { tokens } from './storage';
@@ -51,8 +51,6 @@ export const httpClient: ApiClient = {
   },
   theme: {
     list: async () => (await request<m.WireTheme[]>('GET', '/themes', { auth: false })).map(m.theme),
-    feed: async () => Promise.all((await request<m.WireThemeFeedItem[]>('GET', '/themes/feed', { auth: false })).map(async (t) => m.themeFeedItem(t, await labelOf(t.key)))),
-    detail: async (key) => m.themeDetail(await request<m.WireThemeDetail>('GET', `/themes/${encodeURIComponent(key)}`, { auth: false }), await labelOf(key)),
   },
   explore: {
     rank: async () => Promise.all((await request<(Omit<RankRow, 'etf'> & { etf: m.WireEtfSummary })[]>('GET', '/explore/rank', { auth: false })).map(async (r) => ({ ...r, etf: await summary(r.etf) }))),
@@ -107,13 +105,6 @@ export const httpClient: ApiClient = {
       await request<void>('PUT', `/etfs/${code}/vote`, { body: { choice } });
       myVotes[code] = choice;
       return m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), choice);
-    },
-  },
-  issue: {
-    list: async (tab) => Promise.all((await request<m.WirePage<IssueRow>>('GET', '/issues', { query: { tab } })).items.map(async (r) => ({ ...r, etf: r.etf ? await relabel({ ...r.etf, logoBg: m.bgOf(r.etf.theme) }) : undefined }))),
-    get: async (id) => {
-      const d = await request<Omit<IssueDetail, 'affected'> & { affected: (m.WireEtfSummary & { prev?: IssueDetail['affected'][number]['prev'] })[] }>('GET', `/issues/${id}`, { auth: false });
-      return { ...d, affected: await Promise.all(d.affected.map(async (a) => ({ ...(await summary(a)), prev: a.prev }))) };
     },
   },
   member: {

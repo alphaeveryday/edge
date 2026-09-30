@@ -10,8 +10,8 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const GROUPS: { icon: ListIcon; label: string; href: string }[][] = [
-  [{ icon: 'chart', label: '오늘의 분석', href: '/(tabs)/home' }, { icon: 'issue', label: '이슈', href: '/issues' }],
-  [{ icon: 'star', label: '관심 종목', href: '/(tabs)/watch' }, { icon: 'search', label: '종목 찾기', href: '/search' }, { icon: 'theme', label: '테마 찾기', href: '/themes' }],
+  [{ icon: 'chart', label: '오늘의 분석', href: '/(tabs)/home' }],
+  [{ icon: 'star', label: '관심 종목', href: '/(tabs)/watch' }, { icon: 'search', label: '종목 찾기', href: '/search' }],
   [{ icon: 'comm', label: '커뮤니티', href: '/(tabs)/community' }, { icon: 'bell', label: '알림', href: '/notifications' }],
 ];
 

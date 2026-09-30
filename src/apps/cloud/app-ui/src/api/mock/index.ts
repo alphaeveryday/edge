@@ -5,8 +5,7 @@ import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
-import { RANK_META, THEME_DETAILS, THEME_FEED } from './explore';
-import { genericIssue, ISSUE_DETAILS, ISSUE_ROWS } from './issues';
+import { RANK_META } from './explore';
 import { NOTIFICATIONS } from './notifications';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
@@ -105,11 +104,6 @@ export const mockClient: ApiClient = {
   },
   theme: {
     list: () => delay(THEMES),
-    feed: () => delay(THEME_FEED.map((t) => ({ ...t, label: t.key }))),
-    detail: (key) => {
-      const d = THEME_DETAILS[key];
-      return d ? delay({ ...d, label: d.key }) : Promise.reject(new ApiError('NOT_READY', `no theme detail ${key}`));
-    },
   },
   explore: {
     rank: () =>
@@ -138,21 +132,6 @@ export const mockClient: ApiClient = {
     hint: (key) => {
       const h = HINTS[key];
       return h ? delay(h, 40) : Promise.reject(new ApiError('NOT_FOUND', `no hint ${key}`));
-    },
-  },
-  issue: {
-    list: (tab) => {
-      const mine = members.base ?? [];
-      const rows = tab === 'mine' ? ISSUE_ROWS.filter((r) => !r.etf || mine.includes(r.etf.code)) : ISSUE_ROWS;
-      return delay(rows);
-    },
-    get: (id) => {
-      const row = ISSUE_ROWS.find((r) => r.id === id);
-      if (!row) return Promise.reject(new ApiError('NOT_FOUND', `unknown issue ${id}`));
-      const d = ISSUE_DETAILS[id] ?? genericIssue(row);
-      const mine = members.base ?? [];
-      const affected = d.affectedCodes.map(etfOf).sort((a, b) => Number(mine.includes(b.code)) - Number(mine.includes(a.code)));
-      return delay({ ...d, affected });
     },
   },
   member: {
