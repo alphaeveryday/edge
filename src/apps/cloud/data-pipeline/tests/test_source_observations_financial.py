@@ -805,3 +805,14 @@ def test_http_key_or_quota_error_stops_the_collection():
             raise StopFetch("429", status=429)
     result = dart_fundamental.DartFundamentalSource(Cfg(api_key="k"), Client()).shares("00126380", "2026", "11012")
     assert result.status == "error" and result.detail == "http_429" and result.stop is True
+
+
+def test_non_string_receipt_dates_reject_the_row_not_the_company():
+    # WHY(봇 P2): 접수일이 숫자·배열인 파손 행이 비교에서 TypeError 를 내면 회사 전체 계획이 사라진다 — 행만 거부한다.
+    from datetime import date
+    rows = json.loads(filing_list(SAMSUNG))["list"]
+    rows[0]["rcept_dt"] = 20260814
+    rows[1]["rcept_dt"] = ["20260515"]
+    targets, rejects = dart_fundamental.plan_reports(rows, date(2025, 10, 1), date(2026, 8, 20))
+    assert {tuple(r["reasons"]) for r in rejects} == {("bad_rcept_dt",)} and len(rejects) == 2
+    assert targets                                                     # 나머지 행은 정상 계획된다

@@ -111,12 +111,14 @@ def freshness(conn):
 
     A successful API call or load is not evidence that the newest observation exists, so the
     row carries the last fulfilled load, the last received row and the latest observation date
-    side by side. Datasets with no rows are absent — that is "no input", distinct from stale.
+    side by side. A dataset with a fulfilled load but no rows (a legitimately empty run) is a row with
+    ``latest_observation_date`` None; a dataset that was never loaded is absent.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT dataset, series_id, latest_observation_date, last_received_at, last_load_fulfilled_at,"
                     " last_load_data_status, freshness_status, freshness_reason, basis FROM source_observation_freshness()")
-        return [{"dataset": d, "series": s, "latest_observation_date": latest.isoformat(), "last_received_at": _iso(received),
+        return [{"dataset": d, "series": s, "latest_observation_date": latest.isoformat() if latest else None,
+                 "last_received_at": _iso(received),
                  "last_load_fulfilled_at": _iso(loaded), "last_load_data_status": status, "freshness_status": fresh,
                  "freshness_reason": reason, "basis": basis}
                 for d, s, latest, received, loaded, status, fresh, reason, basis in cur.fetchall()]

@@ -190,7 +190,12 @@ def plan_reports(list_rows: list[dict], window_from: date, window_to: date) -> t
             rejects.append({"corp_code": row.get("corp_code"), "report_nm": row.get("report_nm"),
                             "reasons": ["non_december_fiscal_year"]})
             continue
-        rcept_dt = row.get("rcept_dt") or ""
+        rcept_dt = row.get("rcept_dt")
+        if not (isinstance(rcept_dt, str) and re.fullmatch(r"[0-9]{8}", rcept_dt)):
+            # 접수일이 문자열 8자리가 아닌 행(숫자·배열 등 파손)은 그 행만 거부한다 — 비교에서 터지면 회사 전체가 빠진다.
+            rejects.append({"corp_code": row.get("corp_code"), "report_nm": row.get("report_nm"),
+                            "reasons": ["bad_rcept_dt"]})
+            continue
         if window_from.strftime("%Y%m%d") <= rcept_dt <= window_to.strftime("%Y%m%d"):
             targets.add((year, code))
             # Q4 = FY − 9M 은 두 보고서가 한 실행에 있어야 다시 유도된다 — 어느 쪽이 새로(정정 포함) 접수되든
