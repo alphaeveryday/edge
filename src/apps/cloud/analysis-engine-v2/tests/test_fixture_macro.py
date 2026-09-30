@@ -1,7 +1,7 @@
 """Macro differences retain economic units and publication cutoffs."""
 import pytest
 
-from edge_analysis_v2.fixture_tools import FixtureTools
+from edge_analysis_v2.tools.fixture_data import FixtureTools
 
 
 def source():

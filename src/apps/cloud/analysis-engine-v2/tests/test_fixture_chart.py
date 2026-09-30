@@ -1,10 +1,10 @@
 """Chart calculations use finalized state once per intraday observation."""
 from datetime import date, timedelta
-from edge_analysis_v2.factor_store import project_factor_metrics
+from edge_analysis_v2.storage.factors import project_factor_metrics
 
 import pytest
 
-from edge_analysis_v2.fixture_tools import FixtureTools
+from edge_analysis_v2.tools.fixture_data import FixtureTools
 
 
 def chart_fixture():
@@ -58,7 +58,7 @@ def test_each_snapshot_reuses_prior_finalized_rma():
 
 
 def test_cards_have_20_strict_closing_highs_and_true_turnover():
-    from edge_analysis_v2.fixture_tools.chart import metrics
+    from edge_analysis_v2.tools.fixture_data.chart import metrics
     cards = {r["key"]: r["value"] for r in metrics(chart_fixture())}
     assert cards["new_closing_high_count_20d"] == 20
     assert cards["turnover_ratio_previous_day"] == 1

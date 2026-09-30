@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from edge_analysis_v2.body_changes import BodyEditor
+from edge_analysis_v2.analysis.body_editor import BodyEditor
 
 
 NOW = datetime.fromisoformat("2026-09-28T08:30:00+09:00")
@@ -23,6 +23,18 @@ def test_create_does_not_call_every_topic_an_update():
     result = base()
     assert result["updates"]["items"] == []
     assert result["items"][0]["sentences"][0]["is_updated"] is False
+
+
+def test_edits_before_first_publication_are_not_updates_to_a_published_article():
+    editor = BodyEditor(None, NOW)
+    editor.write('title', [topic()])
+    result = editor.apply([
+        {'action': 'update', **topic(sentence='corrected'), 'updated_sentence_numbers': [1]},
+        {'action': 'add', **topic('b', 'added before publication')},
+    ])
+    assert result['mode'] == 'create'
+    assert result['updates']['items'] == []
+    assert all(not sentence['is_updated'] for item in result['items'] for sentence in item['sentences'])
 
 
 def test_multiple_edits_generate_updates_and_do_not_mutate_base():

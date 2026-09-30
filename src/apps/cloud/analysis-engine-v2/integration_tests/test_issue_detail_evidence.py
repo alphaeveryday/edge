@@ -8,9 +8,9 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-from edge_analysis_v2.publication_store import PublicationStore
-from edge_analysis_v2.schemas import FACTORS
-from edge_analysis_v2.tool_store import ToolStore
+from edge_analysis_v2.storage.publications import PublicationStore
+from edge_analysis_v2.contracts.publication_validation import FACTORS
+from edge_analysis_v2.storage.tool_runs import ToolStore
 
 
 @pytest.mark.parametrize('function,arguments,accepted', [

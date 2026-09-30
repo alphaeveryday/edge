@@ -10,7 +10,7 @@ from jsonschema import ValidationError
 
 from pathlib import Path
 
-from edge_analysis_v2.model_runner import run_model, make_server, load_prompt
+from edge_analysis_v2.agent.runner import run_model, make_server, load_prompt
 
 
 SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': False,
@@ -20,9 +20,9 @@ SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': Fal
 @pytest.mark.parametrize('kind', ['movement', 'outlook'])
 def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_path, kind):
     """Keep the reviewed instructions identical to the model and audit inputs."""
-    import edge_analysis_v2.model_runner as runner
+    import edge_analysis_v2.agent.runner as runner
 
-    prompt_path = Path(runner.__file__).with_name('prompts') / f'{kind}.yaml'
+    prompt_path = Path(runner.__file__).parents[1] / 'prompts' / f'{kind}.yaml'
     prompt = load_prompt(prompt_path)
     captured = []
     base = client_for(ResultMessage(structured_output={'summary': 'ok'}))
@@ -91,7 +91,7 @@ def test_missing_failed_or_invalid_final_result_never_succeeds(tmp_path, message
 
 
 def test_mcp_returns_callback_output_without_recomputing(monkeypatch):
-    from edge_analysis_v2 import model_runner
+    from edge_analysis_v2.agent import runner as model_runner
     monkeypatch.setattr(model_runner, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
     expected = {'tool_run_id': 'stored', 'result': {'amount': 18}}
     called=[]
@@ -107,7 +107,7 @@ def test_mcp_returns_callback_output_without_recomputing(monkeypatch):
 
 
 def test_cancelled_tool_finishes_audit_before_caller_observes_failure(monkeypatch):
-    from edge_analysis_v2 import model_runner
+    from edge_analysis_v2.agent import runner as model_runner
     monkeypatch.setattr(model_runner, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
     finished=[]
     def call(name,args):

@@ -8,9 +8,69 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 import pytest
 
-from edge_analysis_v2.analysis_service import execute_request
-from edge_analysis_v2.fixture_tools import make_fixture
-from edge_analysis_v2.factor_store import HEADLINES, read_factor_details
+from edge_analysis_v2.analysis.service import execute_request
+from edge_analysis_v2.tools.fixture_data import make_fixture
+from edge_analysis_v2.storage.factors import HEADLINES, read_factor_details
+
+
+@pytest.mark.parametrize('kind', ['movement', 'outlook'])
+def test_contract_audit_reads_committed_assembly_and_detects_stored_regression(run_context, tmp_path, kind, monkeypatch):
+    from hashlib import sha256
+    from edge_analysis_v2.contracts import screen_validation
+    """A correct model response alone cannot prove the saved screen contract."""
+    from edge_analysis_v2.contracts.audit import read_contract_audit
+    from edge_analysis_v2.dashboard.server import assemble_screen
+    from edge_analysis_v2.contracts.screen_validation import contract_info
+    request, factory = run_context
+    async def model(**kwargs):
+        reference = news_reference(kwargs)
+        if kind == 'movement':
+            return {'new_items': [dict(candidate_id='new', type='이슈', title_keyword='계약',
+                    sentence='판매 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])],
+                    'selected_item_ids': ['new'], 'summary': '공급 계약을 확인해요.'}
+        kwargs['call']('get_instrument_factors', {'instrument_id': kwargs['initial']['context']['etf_code']})
+        kwargs['call']('write_outlook_body', {'title': '계약 이행을 확인해요', 'items': [
+            dict(id='contract', title_keyword='계약', sentences=['판매 물량을 확보했어요.'], tool_run_ids=[reference])]})
+        return {'outlook': {'direction': '상승'}, 'summary_card': {'title': '물량 확보', 'summary': '이행을 확인해요.'},
+                'factors': [{'type': factor, 'sticker': '중립', 'sentence': '자료를 확인했어요.'}
+                            for factor in ('이슈', '차트', '매크로', '밸류', '수급')],
+                'conclusion': {'title': '이행 확인', 'supports': [{'label': '계약', 'tool_run_ids': [reference]}],
+                               'burdens': [], 'sentence': '진행 상황을 확인해요.'},
+                'issue_detail': {'headline': '공급 계약', 'items': [dict(title_keyword='계약',
+                    sentence='판매 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])]}}
+    _, identity = request(kind, model)
+    info = contract_info()
+    for source in info['sources']:
+        target = tmp_path / 'vault' / source['vault_path']
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('test contract ' + source['vault_path'], encoding='utf-8')
+        source['sha256'] = sha256(target.read_text(encoding='utf-8').encode('utf-8')).hexdigest()
+    monkeypatch.setattr(screen_validation, 'contract_info', lambda: info)
+    with factory() as connection:
+        report = read_contract_audit(connection, kind, identity, vault=tmp_path / 'vault')
+        assert report['status'] == 'passed', report['entries']
+        assert len(report['entries']) == (3 if kind == 'movement' else 11)
+        assert report['entries'][0]['data'] == assemble_screen(connection, kind, identity, 'all')
+        # Change a persisted value that still satisfies SQL constraints. The auditor
+        # must reject it, rather than validating the earlier model/file artifact.
+        if kind == 'outlook':
+            connection.execute("UPDATE outlook_items SET bullets=jsonb_set(bullets,'{0,is_updated}','true') WHERE analysis_id=%s AND section='detail'", (identity,))
+            connection.execute("UPDATE outlook_factor_metrics SET position=200 WHERE analysis_id=%s AND metric_key='ma20_distance_pct'", (identity,))
+        else:
+            connection.execute('UPDATE movement_items SET source_as_of=NULL WHERE analysis_id=%s', (identity,))
+    with factory() as connection:
+        failed = read_contract_audit(connection, kind, identity, vault=tmp_path / 'vault')
+        assert failed['status'] == 'failed'
+        entry = failed['entries'][0]
+        if kind == 'outlook':
+            assert any(c['id'] == 'initial-body' and c['status'] == 'failed' for c in entry['checks'])
+            assert entry['data']['detail']['items'][0]['sentences'][0]['is_updated'] is True
+            detail = next(e for e in failed['entries'] if e['view'] == 'outlook-detail')
+            assert detail['status'] == 'failed'
+            cards = next(e for e in failed['entries'] if e['view'] == 'factor-details')
+            assert cards['status'] == 'failed'
+        else:
+            assert any(e['path'] == '/items/0/source_as_of' for e in entry['schema_errors'])
 
 
 @pytest.fixture
@@ -23,13 +83,13 @@ def run_context(tmp_path):
         return psycopg.connect(dsn,autocommit=True)
     with factory() as conn:
         before = {r[0] for r in conn.execute('SELECT tool_id FROM tool_definitions')}
-    def request(kind, model_call, fixture=None, identity=None):
+    def request(kind, model_call, fixture=None, identity=None, system_prompt=None):
         identity=identity or 'service-test-'+uuid4().hex
         if identity not in identities:
             identities.append(identity)
         fixture=fixture or make_fixture()
         return execute_request(kind=kind,fixture=fixture,connection_factory=factory,key='fake-key',
-            artifacts=tmp_path/identity,analysis_id=identity,model_call=model_call), identity
+            artifacts=tmp_path/identity,analysis_id=identity,model_call=model_call,system_prompt=system_prompt), identity
     yield request,factory
     with factory() as conn:
         for identity in reversed(identities):
@@ -43,6 +103,14 @@ def run_context(tmp_path):
 
 def news_reference(kwargs):
     return kwargs['call']('get_issue_evidence',{'news_ids':[kwargs['initial']['news'][0]['news_id']], 'include_body':False})['tool_run_id']
+
+
+def test_saved_prompt_snapshot_reaches_actual_model_boundary(run_context):
+    request, _ = run_context
+    async def model(**kwargs):
+        assert kwargs['prompt'] == 'version-pinned system instruction'
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    request('movement', model, system_prompt='version-pinned system instruction')
 
 
 def test_corrupt_source_data_fails_before_paying_for_model(run_context):

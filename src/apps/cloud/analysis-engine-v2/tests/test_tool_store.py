@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from psycopg.pq import TransactionStatus
 
-from edge_analysis_v2.tool_store import ToolStore
+from edge_analysis_v2.storage.tool_runs import ToolStore
 
 
 def connection(*, autocommit=True, status=TransactionStatus.IDLE):

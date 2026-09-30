@@ -1,0 +1,1839 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:edge:screen-output:2026-09-30:v1",
+  "title": "ETF ORCA 최종 화면 출력 계약",
+  "description": "에이전트 응답이 아닌 DB 조회·조립 완료 응답의 계약. 출처는 manifest.json 참조.",
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "sticker": {
+      "type": "string",
+      "enum": [
+        "강력상승",
+        "상승",
+        "중립",
+        "하락",
+        "강력하락"
+      ]
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/text"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "sentiment": {
+      "type": "string",
+      "enum": [
+        "positive",
+        "neutral",
+        "negative"
+      ]
+    },
+    "publication": {
+      "type": "object",
+      "properties": {
+        "etf_code": {
+          "$ref": "#/$defs/text"
+        },
+        "analysis_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "published_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "required": [
+        "etf_code",
+        "analysis_at",
+        "published_at"
+      ],
+      "additionalProperties": false,
+      "description": "서버가 조회한 ETF·분석 기준시각·발행시각. 모델 출력이 아님."
+    },
+    "outlookPublication": {
+      "type": "object",
+      "properties": {
+        "etf_code": {
+          "$ref": "#/$defs/text"
+        },
+        "analysis_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "published_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "forecast_period": {
+          "const": "향후 1개월"
+        }
+      },
+      "required": [
+        "etf_code",
+        "analysis_at",
+        "published_at",
+        "forecast_period"
+      ],
+      "additionalProperties": false
+    },
+    "movementItem": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "이슈",
+            "차트",
+            "수급",
+            "매크로"
+          ]
+        },
+        "title_keyword": {
+          "$ref": "#/$defs/text"
+        },
+        "sentence": {
+          "$ref": "#/$defs/text"
+        },
+        "sentiment": {
+          "$ref": "#/$defs/sentiment"
+        },
+        "tool_run_ids": {
+          "$ref": "#/$defs/references"
+        },
+        "item_id": {
+          "$ref": "#/$defs/text"
+        },
+        "source_as_of": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "added_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "required": [
+        "type",
+        "title_keyword",
+        "sentence",
+        "sentiment",
+        "tool_run_ids",
+        "item_id",
+        "source_as_of",
+        "added_at"
+      ],
+      "additionalProperties": false,
+      "description": "DB에는 nullable이어도 최종 화면은 자료 기준시각이 필요하다."
+    },
+    "movement": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/movementItem"
+          },
+          "maxItems": 5
+        },
+        "publication": {
+          "$ref": "#/$defs/publication"
+        }
+      },
+      "required": [
+        "summary",
+        "items",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "sentence": {
+      "type": "object",
+      "properties": {
+        "sentence": {
+          "$ref": "#/$defs/text"
+        },
+        "is_updated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sentence",
+        "is_updated"
+      ],
+      "additionalProperties": false
+    },
+    "topic": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "title_keyword": {
+          "$ref": "#/$defs/text"
+        },
+        "sentences": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sentence"
+          },
+          "minItems": 1
+        },
+        "tool_run_ids": {
+          "$ref": "#/$defs/references"
+        }
+      },
+      "required": [
+        "id",
+        "title_keyword",
+        "sentences",
+        "tool_run_ids"
+      ],
+      "additionalProperties": false
+    },
+    "update": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "change_type": {
+          "enum": [
+            "added",
+            "modified",
+            "deleted"
+          ]
+        },
+        "title_keyword": {
+          "$ref": "#/$defs/text"
+        },
+        "sentence": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "tool_run_ids": {
+          "$ref": "#/$defs/references"
+        }
+      },
+      "required": [
+        "id",
+        "change_type",
+        "title_keyword",
+        "sentence",
+        "tool_run_ids"
+      ],
+      "additionalProperties": false
+    },
+    "detail": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/text"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/topic"
+          },
+          "maxItems": 15
+        },
+        "updates": {
+          "type": "object",
+          "properties": {
+            "date": {
+              "$ref": "#/$defs/date"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/update"
+              }
+            }
+          },
+          "required": [
+            "date",
+            "items"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "title",
+        "items",
+        "updates"
+      ],
+      "additionalProperties": false
+    },
+    "factor": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "이슈",
+            "차트",
+            "매크로",
+            "밸류",
+            "수급"
+          ]
+        },
+        "sticker": {
+          "$ref": "#/$defs/sticker"
+        },
+        "sentence": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "sticker",
+        "sentence"
+      ],
+      "additionalProperties": false
+    },
+    "factors": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/factor"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "이슈"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/factor"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "차트"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/factor"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "매크로"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/factor"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "밸류"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/factor"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "수급"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "keyword": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/text"
+        },
+        "tool_run_ids": {
+          "$ref": "#/$defs/references"
+        }
+      },
+      "required": [
+        "label",
+        "tool_run_ids"
+      ],
+      "additionalProperties": false
+    },
+    "conclusion": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/text"
+        },
+        "supports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/keyword"
+          }
+        },
+        "burdens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/keyword"
+          }
+        },
+        "sentence": {
+          "$ref": "#/$defs/text"
+        },
+        "change_condition": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "title",
+        "supports",
+        "burdens",
+        "sentence"
+      ],
+      "additionalProperties": false
+    },
+    "outlook": {
+      "type": "object",
+      "properties": {
+        "outlook": {
+          "type": "object",
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/sticker"
+            }
+          },
+          "required": [
+            "direction"
+          ],
+          "additionalProperties": false
+        },
+        "summary_card": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "$ref": "#/$defs/text"
+            },
+            "summary": {
+              "$ref": "#/$defs/text"
+            }
+          },
+          "required": [
+            "title",
+            "summary"
+          ],
+          "additionalProperties": false
+        },
+        "detail": {
+          "$ref": "#/$defs/detail"
+        },
+        "factors": {
+          "$ref": "#/$defs/factors"
+        },
+        "conclusion": {
+          "$ref": "#/$defs/conclusion"
+        },
+        "publication": {
+          "$ref": "#/$defs/outlookPublication"
+        }
+      },
+      "required": [
+        "outlook",
+        "summary_card",
+        "detail",
+        "factors",
+        "conclusion",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "movement-summary": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "publication": {
+          "$ref": "#/$defs/publication"
+        }
+      },
+      "required": [
+        "summary",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "movement-detail": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/movementItem"
+          },
+          "maxItems": 5
+        },
+        "publication": {
+          "$ref": "#/$defs/publication"
+        }
+      },
+      "required": [
+        "items",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "outlook-summary": {
+      "type": "object",
+      "properties": {
+        "outlook": {
+          "type": "object",
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/sticker"
+            }
+          },
+          "required": [
+            "direction"
+          ],
+          "additionalProperties": false
+        },
+        "summary_card": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "$ref": "#/$defs/text"
+            },
+            "summary": {
+              "$ref": "#/$defs/text"
+            }
+          },
+          "required": [
+            "title",
+            "summary"
+          ],
+          "additionalProperties": false
+        },
+        "publication": {
+          "$ref": "#/$defs/outlookPublication"
+        }
+      },
+      "required": [
+        "outlook",
+        "summary_card",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "outlook-detail": {
+      "type": "object",
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/detail"
+        },
+        "publication": {
+          "$ref": "#/$defs/outlookPublication"
+        }
+      },
+      "required": [
+        "detail",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "outlook-factors": {
+      "type": "object",
+      "properties": {
+        "factors": {
+          "$ref": "#/$defs/factors"
+        },
+        "publication": {
+          "$ref": "#/$defs/outlookPublication"
+        }
+      },
+      "required": [
+        "factors",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "outlook-conclusion": {
+      "type": "object",
+      "properties": {
+        "conclusion": {
+          "$ref": "#/$defs/conclusion"
+        },
+        "publication": {
+          "$ref": "#/$defs/outlookPublication"
+        }
+      },
+      "required": [
+        "conclusion",
+        "publication"
+      ],
+      "additionalProperties": false
+    },
+    "issueItem": {
+      "type": "object",
+      "properties": {
+        "title_keyword": {
+          "$ref": "#/$defs/text"
+        },
+        "sentence": {
+          "$ref": "#/$defs/text"
+        },
+        "sentiment": {
+          "$ref": "#/$defs/sentiment"
+        },
+        "tool_run_ids": {
+          "$ref": "#/$defs/references"
+        }
+      },
+      "required": [
+        "title_keyword",
+        "sentence",
+        "sentiment",
+        "tool_run_ids"
+      ],
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "이슈"
+        },
+        "sticker": {
+          "$ref": "#/$defs/sticker"
+        },
+        "headline": {
+          "$ref": "#/$defs/text"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/issueItem"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sticker",
+        "headline",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "chart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "차트"
+        },
+        "sticker": {
+          "$ref": "#/$defs/sticker"
+        },
+        "headline": {
+          "$ref": "#/$defs/text"
+        },
+        "analysis_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "ma20_distance_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "ma60_direction"
+                  },
+                  "value": {
+                    "type": "string",
+                    "enum": [
+                      "상승",
+                      "횡보",
+                      "하락"
+                    ]
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "new_closing_high_count_20d"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "distance_from_52w_closing_high_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "turnover_ratio_previous_day"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "atr14_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sticker",
+        "headline",
+        "analysis_at",
+        "metrics"
+      ],
+      "additionalProperties": false,
+      "x-metric-order": [
+        "ma20_distance_pct",
+        "ma60_direction",
+        "new_closing_high_count_20d",
+        "distance_from_52w_closing_high_pct",
+        "turnover_ratio_previous_day",
+        "atr14_pct"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "중립"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "중립 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "하락 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 하락 쪽이에요"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "macro": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "매크로"
+        },
+        "sticker": {
+          "$ref": "#/$defs/sticker"
+        },
+        "headline": {
+          "$ref": "#/$defs/text"
+        },
+        "analysis_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "usd_krw"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "commodity_return_20d_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at",
+                  "subject"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "kr_treasury_10y_yield"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "us_treasury_10y_yield"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "brent_spot_usd"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "days_until_policy_decision"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at",
+                  "subject"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sticker",
+        "headline",
+        "analysis_at",
+        "metrics"
+      ],
+      "additionalProperties": false,
+      "x-metric-order": [
+        "usd_krw",
+        "commodity_return_20d_pct",
+        "kr_treasury_10y_yield",
+        "us_treasury_10y_yield",
+        "brent_spot_usd",
+        "days_until_policy_decision"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "중립"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "중립 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "하락 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 하락 쪽이에요"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "valuation": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "밸류"
+        },
+        "sticker": {
+          "$ref": "#/$defs/sticker"
+        },
+        "headline": {
+          "$ref": "#/$defs/text"
+        },
+        "analysis_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_per"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_pbr"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_per_band_5y_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "distribution_yield_12m_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sticker",
+        "headline",
+        "analysis_at",
+        "metrics"
+      ],
+      "additionalProperties": false,
+      "x-metric-order": [
+        "weighted_per",
+        "weighted_pbr",
+        "weighted_per_band_5y_pct",
+        "distribution_yield_12m_pct"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "중립"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "중립 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "하락 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 하락 쪽이에요"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "flow": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "수급"
+        },
+        "sticker": {
+          "$ref": "#/$defs/sticker"
+        },
+        "headline": {
+          "$ref": "#/$defs/text"
+        },
+        "analysis_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_institution_net_amount_20d"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_foreign_net_amount_20d"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_institution_net_buy_streak"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "weighted_foreign_net_buy_streak"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "const": "etf_units_change_20d_pct"
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "observed_at": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/date"
+                      },
+                      {
+                        "$ref": "#/$defs/timestamp"
+                      }
+                    ]
+                  },
+                  "subject": {
+                    "$ref": "#/$defs/text"
+                  }
+                },
+                "required": [
+                  "key",
+                  "value",
+                  "observed_at"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "type",
+        "sticker",
+        "headline",
+        "analysis_at",
+        "metrics"
+      ],
+      "additionalProperties": false,
+      "x-metric-order": [
+        "weighted_institution_net_amount_20d",
+        "weighted_foreign_net_amount_20d",
+        "weighted_institution_net_buy_streak",
+        "weighted_foreign_net_buy_streak",
+        "etf_units_change_20d_pct"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "상승"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "상승 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "중립"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "중립 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "하락 쪽이에요"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "sticker": {
+                "const": "강력하락"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "headline": {
+                "const": "강한 하락 쪽이에요"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "factor-details": {
+      "type": "object",
+      "properties": {
+        "이슈": {
+          "$ref": "#/$defs/issue"
+        },
+        "차트": {
+          "$ref": "#/$defs/chart"
+        },
+        "매크로": {
+          "$ref": "#/$defs/macro"
+        },
+        "밸류": {
+          "$ref": "#/$defs/valuation"
+        },
+        "수급": {
+          "$ref": "#/$defs/flow"
+        },
+        "publication": {
+          "$ref": "#/$defs/outlookPublication"
+        }
+      },
+      "required": [
+        "이슈",
+        "차트",
+        "매크로",
+        "밸류",
+        "수급",
+        "publication"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
