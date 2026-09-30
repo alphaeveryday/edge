@@ -367,3 +367,44 @@ def test_same_run_id_with_a_different_backfill_window_fails_instead_of_skipping(
     assert len(client.calls) == calls
     # 같은 범위의 재시도는 그대로 '이미 수집'이다(재호출 없음).
     assert collect(storage, "run_bf", src, series=["usd_krw"], from_date="2025-01-01", to_date="2025-12-31") == 0
+
+
+def test_collection_log_failure_after_partial_collection_is_a_hard_failure(tmp_path, monkeypatch):
+    # WHY(봇 P2): 이미 PARTIAL(2)인 수집에서 수집 로그 기록까지 실패하면, 카탈로그가 2 를 '충족'으로 보아
+    # 감사 기록 없는 수집 위에서 정제·적재가 돈다. 기록 실패는 무조건 1 이다.
+    storage = LocalStorage(tmp_path)
+    src, _ = source({**ALL_ROUTES, "petroleum/pri/spt": StopFetch("HTTP 503", status=503)})
+    original = storage.put_bytes
+
+    def failing(key, data, *a, **k):
+        if key.startswith("operations_archive/collection_logs/"):
+            raise OSError("collection log write failed")
+        return original(key, data, *a, **k)
+
+    monkeypatch.setattr(storage, "put_bytes", failing)
+    assert collect(storage, "run_cl", src) == 1
+
+
+def test_rerunning_a_completed_normalization_keeps_its_manifest(tmp_path):
+    # WHY(봇 P2): 끝난 정제의 run_id 로 다시 돌면(재처리·재시도) 먼저 미완료 표지로 manifest 를 덮는다. 그 뒤
+    # 불변 artifact 쓰기가 실패하면 유효했던 결과가 `load --all` 에서 영영 빠진다. 끝난 정제는 덮지 않는다.
+    storage = LocalStorage(tmp_path)
+    src, _ = source()
+    assert collect(storage, "rn_raw", src) == 0
+    assert collect(storage, "rn_raw2", src, now=NOW + timedelta(hours=1)) == 0
+    assert so.normalize(storage, so_macro.MACRO, "rn_norm", "rn_raw", producer="normalize_macro") == 0
+    before = so._completed_manifest(storage, so_macro.MACRO, "rn_norm")
+    assert so.normalize(storage, so_macro.MACRO, "rn_norm", "rn_raw", producer="normalize_macro") == 0
+    with pytest.raises(SystemExit, match="다른 입력"):
+        so.normalize(storage, so_macro.MACRO, "rn_norm", "rn_raw2", producer="normalize_macro")
+    assert so._completed_manifest(storage, so_macro.MACRO, "rn_norm") == before
+
+
+@pytest.mark.parametrize("drop", ["ITM_ID", "C1"])
+def test_kosis_rows_without_series_identifiers_are_rejected(drop):
+    # WHY(봇 P2): 항목명 '전년동월비'만 남고 ITM_ID·C1 이 빠진 줄은 요청한 T03·총지수라는 근거가 없다.
+    rows = json.loads(body("kosis_cpi.json"))
+    for row in rows:
+        row.pop(drop)
+    good, bad = macro_series.parse("kr_cpi_yoy", json.dumps(rows).encode())
+    assert good == [] and bad and all("series_identity_mismatch" in r["reasons"] for r in bad)

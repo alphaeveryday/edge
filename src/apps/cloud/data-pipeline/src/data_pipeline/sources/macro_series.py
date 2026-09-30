@@ -306,9 +306,10 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
                                    or fields.get("identity") != _ECOS[series_id][1]
                                    or str(fields.get("identity_name")) != _ECOS[series_id][2]):
             reasons.append("series_identity_mismatch")
-        if series_id == "kr_cpi_yoy" and (fields.get("identity") not in (None, "T03")
+        # 식별자가 빠진 줄은 요청한 T03·총지수라는 근거가 없다 — 이름만 보고 받지 않는다.
+        if series_id == "kr_cpi_yoy" and (fields.get("identity") != "T03"
                                           or "전년동월" not in str(fields.get("identity_name"))
-                                          or fields.get("c1") not in (None, "0")):
+                                          or fields.get("c1") != "0"):
             reasons.append("series_identity_mismatch")
         if series_id == "brent_spot_usd" and fields.get("identity") != "RBRTE":
             reasons.append("series_identity_mismatch")
