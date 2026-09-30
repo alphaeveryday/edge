@@ -48,7 +48,7 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
         # ALPHA-1130: 원천 관측 수집의 2 = 받은 응답만 담은 완료 raw manifest 확정, 정제의 2 = 거부 행을
         # 뺀 artifact·canonical manifest 확정. 둘 다 확정한 범위만 하류가 읽는다.
-        "MACRO_COLLECTION", "NORMALIZE_MACRO",
+        "MACRO_COLLECTION", "NORMALIZE_MACRO", "SECTOR_COLLECTION_KIS", "NORMALIZE_SECTOR",
         "FINANCIAL_METRIC_COLLECTION_DART", "NORMALIZE_FINANCIAL_METRIC",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
@@ -220,7 +220,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # ALPHA-1073: 보충 배치 4작업을 복원한다. 장중 직접 함수 호출은 minute 원장에,
     # 배치 CLI는 ops 원장에 남으며 실제 기대 슬롯은 스케줄 env에서만 생긴다.
     assert len(registered) == 30
-    assert len(catalog.entries("source-daily")) == 6
+    assert len(catalog.entries("source-daily")) == 9
     assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
     assert len(catalog.entries("disclosure")) == 4

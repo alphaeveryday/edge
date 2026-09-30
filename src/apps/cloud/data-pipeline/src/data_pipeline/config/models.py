@@ -296,8 +296,18 @@ class MacroObservationSource(BaseModel):
     eia_api_key: str | None = None  # 비밀값: env 오버라이드 전용
 
 
+class SectorMasterSource(BaseModel):
+    """KIS 종목 마스터 파일(지수업종 대·중·소분류, ALPHA-1130). 공개 다운로드라 인증이 없다 —
+    KIS API(앱키·토큰)가 아니므로 KIS 공유 호출 예산(ADR-0055) 대상이 아니다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    base_url: NonBlankStr = "https://new.real.download.dws.co.kr/common/master"
+
+
 class SourceObservationsConfig(BaseModel):
-    """분석 v2 원천 관측 데이터셋(ALPHA-1130). 재무는 `dart_financial.source` 의 DART 키를 쓴다."""
+    """분석 v2 원천 관측 세 데이터셋(ALPHA-1130). 재무는 `dart_financial.source` 의 DART 키를 쓴다."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -306,6 +316,7 @@ class SourceObservationsConfig(BaseModel):
     # 설정 전체의 필수값이 아니다 — 매크로만 쓰는 설정도 로드된다. 비어 있으면 재무 수집 스텝만 거부한다(run.py).
     etf_ids: list[NonBlankStr] = []
     macro: MacroObservationSource = MacroObservationSource()
+    sector: SectorMasterSource = SectorMasterSource()
 
 
 class DartDisclosureSource(BaseModel):

@@ -5,7 +5,7 @@
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
          |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe
-         |{ingest-raw|normalize|load}-{macro|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
+         |{ingest-raw|normalize|load}-{macro|sector|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--latest-good] [--all] [--pending-only]
         [--limit N] [--window-days N]
@@ -112,6 +112,7 @@ from .steps import (
     source_observations,
     source_observations_financial,
     source_observations_macro,
+    source_observations_sector,
     tag_news,
 )
 from .sources import dart_fundamental, macro_series
@@ -286,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
                  # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
                  # ⚠️ 하위 소비자가 없다 — window 확정에서 멈추고 job·outbox 를 안 만든다.
                  "sector-index-worker",
-                 # 분석 v2 원천 관측(ALPHA-1130): 매크로 5계열·DART 재무 지표. 수집은
+                 # 분석 v2 원천 관측(ALPHA-1130): 매크로 5계열·DART 재무 지표·KIS 지수업종. 수집은
                  # raw+raw manifest, 정제는 --input-run-id(수집 run) 하나, 적재는 --input-run-id(정제 run)
                  # 또는 --all(소비 마커 없는 완료 manifest 전부). 경로·계약은 steps/source_observations.
                  *OBSERVATION_STEPS],
@@ -653,11 +654,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
-# 원천 관측 데이터셋 × (수집·정제·적재). 스텝 이름 → (데이터셋 명세, 단계).
+# 원천 관측 세 데이터셋 × (수집·정제·적재). 스텝 이름 → (데이터셋 명세, 단계).
 OBSERVATION_STEPS = {
     "ingest-raw-macro": ("macro", "collect"),
     "normalize-macro": ("macro", "normalize"),
     "load-macro": ("macro", "load"),
+    "ingest-raw-sector": ("sector", "collect"),
+    "normalize-sector": ("sector", "normalize"),
+    "load-sector": ("sector", "load"),
     "ingest-raw-financial-metric": ("financial", "collect"),
     "normalize-financial-metric": ("financial", "normalize"),
     "load-financial-metric": ("financial", "load"),
@@ -674,7 +678,7 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
     config = settings.source_observations
     if config is None:
         raise SystemExit("source_observations 설정이 없다 — sources.toml 확인")
-    spec = {"macro": source_observations_macro.MACRO,
+    spec = {"macro": source_observations_macro.MACRO, "sector": source_observations_sector.SECTOR,
             "financial": source_observations_financial.FINANCIAL}[family]
     producer = args.step.replace("-", "_")
     if stage != "collect" and (args.from_date or args.to_date or args.series):
@@ -690,6 +694,14 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         raise SystemExit(f"{args.step} 는 --input-run-id 를 쓰지 않는다")
     # DAG 는 백필 인자를 빈 문자열로 넘길 수 있다(템플릿이 원소를 빼지 못한다) — 빈 값 = 정기 창.
     args.from_date, args.to_date = args.from_date or None, args.to_date or None
+    if family == "sector":
+        if args.from_date or args.to_date:
+            # 마스터는 받은 날의 현재값뿐이다 — 과거 날짜를 달면 오늘 분류를 과거로 라벨한다.
+            raise SystemExit("ingest-raw-sector 는 --from/--to 를 쓸 수 없다 — 원천이 현재 분류만 준다")
+        if not config.sector.enabled:
+            raise SystemExit("source_observations.sector 가 비활성이다")
+        return source_observations_sector.collect_sector(
+            storage, PoliteClient(min_interval=1.0, timeout=60.0), config.sector.base_url, run_id)
     if family == "financial":
         if not config.etf_ids:
             raise SystemExit("source_observations.etf_ids 가 비어 있다 — 재무 수집 대상 ETF 가 없다")

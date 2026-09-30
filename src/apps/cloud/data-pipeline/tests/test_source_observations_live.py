@@ -2,7 +2,7 @@
 
 기대값은 fixture 에서 베끼지 않고 공식 설명과 대조했다: DART 개발가이드(분·반기 손익 `thstrm_amount`=[3개월],
 `thstrm_add_amount`=누적), 삼성전자 주식총수 표(보통주 5,846,278,608 / 우선주 802,371,203 / 자기주식 82,086,705),
-ECOS 항목명, KOSIS 항목 메타, EIA series-description, FMP treasury-rates 필드. 실응답 모듈 도크스트링(설계 §10.8)이 근거다.
+KIS 헤더(`bstp_larg/medm/smal_div_code`), ECOS 항목명. 실응답 모듈 도크스트링(설계 §10.8)이 근거다.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from data_pipeline.lake import LocalStorage
-from data_pipeline.sources import dart_fundamental, macro_series
+from data_pipeline.sources import dart_fundamental, kis_sector_master, macro_series
 from data_pipeline.steps import source_observations as so, source_observations_financial as so_fin
 from source_observation_fakes import DartFake, write_holdings
 
@@ -73,6 +73,27 @@ def test_fmp_treasury_live_row_is_percent_per_maturity():
     good, bad = macro_series.parse("us_10y_yield", live("fmp_treasury_rates.json"))
     assert bad == [] and good[0] == {"observation_date": "2026-09-25", "value": "5.17"}
     assert macro_series.SERIES["us_10y_yield"].unit == "percent"
+
+
+# ── KIS 업종 ─────────────────────────────────────────────────────────────
+
+def test_kis_master_live_layout_names_and_levels(monkeypatch):
+    monkeypatch.setattr(kis_sector_master, "MIN_ROWS_BY_MARKET", {"KOSPI": 1, "KOSDAQ": 1})   # 축약 fixture — 행수 게이트는 별도 테스트가 본다
+    # WHY: 실파일로 확정한 사실 — 뒷부분 227/221자, 업종명은 헤더 `[5:45]`(공식 샘플 `[3:43]` 은 틀렸다),
+    # 대분류=업종 그룹(제조·금융…), 중분류=제조 안의 산업, 소분류는 전 종목 0000.
+    names, warnings = kis_sector_master.parse_sector_names(live("kis_idxcode.mst.zip"))
+    assert warnings == [] and names["0027"] == "제조" and names["0013"] == "전기·전자" and names["1028"] == "전기·전자"
+    rows, rejects = kis_sector_master.parse_master("kospi_code.mst.zip", live("kis_kospi_code.mst.zip"))
+    assert rejects == []
+    by = {r["instrument_code"]: r for r in rows}
+    assert (by["005930"]["raw_large_code"], by["005930"]["raw_medium_code"], by["005930"]["raw_small_code"]) == ("0027", "0013", "0000")
+    assert by["005930"]["security_group"] == "ST" and by["005930"]["standard_code"] == "KR7005930003"
+    assert by["091160"]["security_group"] == "EF" and by["091160"]["raw_large_code"] == "0000"
+    assert by["004970"]["security_group"] == "ST" and by["004970"]["raw_large_code"] == "0000"     # 분류 없는 주식
+    rows, rejects = kis_sector_master.parse_master("kosdaq_code.mst.zip", live("kis_kosdaq_code.mst.zip"))
+    by = {r["instrument_code"]: r for r in rows}
+    assert rejects == [] and (by["058470"]["raw_large_code"], by["058470"]["raw_medium_code"]) == ("1009", "1028")
+    assert by["0001A0"]["raw_large_code"] == "0000"            # 새 형식 단축코드, 미분류
 
 
 # ── DART 재무 ─────────────────────────────────────────────────────────────
