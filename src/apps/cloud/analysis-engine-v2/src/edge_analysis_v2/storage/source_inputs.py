@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 MACRO_SERIES = ("usd_krw", "kr_10y_yield", "us_10y_yield", "kr_cpi_yoy", "brent_spot_usd")
 
 
+def _instant(analysis_at):
+    if not isinstance(analysis_at, datetime) or analysis_at.utcoffset() is None:
+        raise ValueError("analysis_at requires timezone")
+
+
 def _iso(value):
     return value.astimezone(timezone.utc).isoformat() if isinstance(value, datetime) else value
 
@@ -33,6 +38,7 @@ def macro_inputs(conn, analysis_at, series=MACRO_SERIES, limit=21):
         reference_period,evidence`` (observed_at is the observation day), and gaps
         ``{series, reason}`` for series with nothing visible.
     """
+    _instant(analysis_at)
     rows, gaps = [], []
     with conn.cursor() as cur:
         for series_id in series:
@@ -70,6 +76,7 @@ def financial_inputs(conn, analysis_at, instrument_ids):
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can
     decide whether an approximation is acceptable.
     """
+    _instant(analysis_at)
     rows, gaps = [], []
     with conn.cursor() as cur:
         for instrument_id in instrument_ids:

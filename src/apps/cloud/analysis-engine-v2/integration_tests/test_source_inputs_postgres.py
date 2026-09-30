@@ -24,8 +24,10 @@ ANALYSIS_AT = datetime(2026, 9, 29, 10, 0, tzinfo=KST)
 
 def _dsn():
     dsn = os.environ["V2_SOURCE_TEST_DSN"]
-    if conninfo_to_dict(dsn).get("host") not in ("localhost", "127.0.0.1"):
-        raise ValueError("Integration tests require a local database")
+    config = conninfo_to_dict(dsn)
+    if (config.get("host") not in ("localhost", "127.0.0.1") or config.get("port") != "55445"
+            or config.get("dbname") != "edge" or config.get("hostaddr") not in (None, "127.0.0.1")):
+        raise ValueError("Integration tests require the local edge test database on port 55445")
     return dsn
 
 
@@ -466,3 +468,10 @@ def test_freshness_keeps_a_row_for_a_fulfilled_but_empty_load(db):
         db.execute("RESET ROLE")
         db.execute("DELETE FROM ops_expected_task WHERE pipeline_run_id = %s", (run,))
         db.execute("DELETE FROM ops_pipeline_run WHERE pipeline_run_id = %s", (run,))
+
+
+def test_dsn_guard_refuses_the_rds_tunnel_port(monkeypatch):
+    # The documented EdgeV2-RdsWriterTunnel is also loopback (15433); host alone would let this test mutate RDS.
+    monkeypatch.setenv("V2_SOURCE_TEST_DSN", "postgresql://edge:x@127.0.0.1:15433/edge")
+    with pytest.raises(ValueError, match="55445"):
+        _dsn()
