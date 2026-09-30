@@ -48,7 +48,7 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 **레인(pipeline_type) 축**(ALPHA-591·724·769·875·987): 카탈로그는 시장 레인(`etf-daily`, 17작업)·
 뉴스 레인(`news`, 6작업)·공시 레인(`disclosure`, 4작업 — 875 가 1분 세션으로 보냈던 것을
 987이 저녁 배치로 되돌렸고, 1068에서 빠진 4작업을 1073이 보충 배치로 복원했다)·장중 수급 레인(`investor-intraday`, 3작업)·
-원천 관측 레인(`source-daily`, 3작업 — **SFN 없는 Airflow 전용**, ALPHA-1130)을 함께 담는다. 아래 "등록 30"·
+원천 관측 레인(`source-daily`, 6작업 — **SFN 없는 Airflow 전용**, ALPHA-1130)을 함께 담는다. 아래 "등록 30"·
 "제외 5"는 SFN state 가 있는 작업의 셈이고, Airflow 전용 작업은 `sfn_state_name` 이 비어 그 셈 밖이다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
@@ -540,7 +540,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         fulfilled_exit_codes=(0, 2),  # 일부 DB 행 실패여도 성공 winner는 commit된다
     ),
     # ══ 원천 관측 레인 (pipeline_type="source-daily" — **Airflow 전용**, SFN 없음, ALPHA-1130) ══
-    # 매크로 5계열. SFN 이 없으므로 `sfn_state_name` 은 빈 값이다 — `by_sfn_state` 는 빈 이름을 매칭하지 않고,
+    # 매크로 5계열·DART 재무 지표. SFN 이 없으므로 `sfn_state_name` 은 빈 값이다 — `by_sfn_state` 는 빈 이름을 매칭하지 않고,
     # ASL 대조 테스트는 이 레인을 Airflow 전용으로 따로 센다(test_ops_catalog). 흐름(flow)은 데이터셋마다 하나다.
     # 정제 의존을 비우는 이유는 다른 레인과 같다 — 수집 부분 실패 뒤에도 받은 것은 정제한다.
     # ⚠️ MACRO_COLLECTION 만 instrumented=False 다: 매크로 키(ECOS·KOSIS·EIA + FMP)를 가진 `macro`
@@ -562,6 +562,26 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         cli_command=("load-macro",), sfn_state_name="", ecs_task_definition="rds",
         depends_on=("NORMALIZE_MACRO",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
         pipeline_type="source-daily",
+    ),
+    # DART 키·DB env 는 기존 `dart` 태스크 정의에 이미 있다(CollectDartFinancial 과 같은 키).
+    # 창 안에 새 정기보고서가 없는 날은 목록만 받고 재무 호출 0건이다 — 정상이다(empty_allowed).
+    CatalogEntry(
+        task_key="FINANCIAL_METRIC_COLLECTION_DART", flow="financial", stage="raw", dataset="financial_metric", required=True,
+        cli_command=("ingest-raw-financial-metric",), sfn_state_name="", ecs_task_definition="dart",
+        source_vendor="dart", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_FINANCIAL_METRIC", flow="financial", stage="normalize", dataset="financial_metric", required=True,
+        cli_command=("normalize-financial-metric",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, empty_allowed=True,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_FINANCIAL_METRIC", flow="financial", stage="feature", dataset="financial_metric_load", required=True,
+        cli_command=("load-financial-metric",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_FINANCIAL_METRIC",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        empty_allowed=True, pipeline_type="source-daily",
     ),
 )
 

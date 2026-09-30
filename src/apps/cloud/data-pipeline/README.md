@@ -697,7 +697,7 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 
-# 분석 v2 원천 관측(ALPHA-1130) — 매크로 5계열. 계약 정본은
+# 분석 v2 원천 관측(ALPHA-1130) — 매크로 5계열·DART 재무 지표. 계약 정본은
 # docs/design/etf-data-storage-plan.md §10. 수집(raw + raw manifest) →
 # 정제(--input-run-id = 수집 run, 실행별 artifact + canonical 현재 상태 + manifest) →
 # 적재(--input-run-id = 정제 run 또는 --all = 소비 마커 없는 완료 manifest 전부)다.
@@ -710,6 +710,12 @@ DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-macro --run-id run_m1 [--series usd_krw,us_10y_yield]
 uv run --package data-pipeline python -m data_pipeline.run normalize-macro --run-id run_m1n --input-run-id run_m1
 uv run --package data-pipeline python -m data_pipeline.run load-macro --run-id run_m1l --input-run-id run_m1n
+# 재무: 창 미지정 = 접수일 오늘−14 ~ 오늘. 대상 종목은 [source_observations].etf_ids 의 canonical 구성종목
+# 스냅샷에서 기간별로 파생한다. DART 키는 기존 재무 키를 쓴다.
+DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-financial-metric --run-id run_f1 --from 2025-07-01 --to 2025-12-31
+# 저장 뒤 적재 전에 멈춘 실행 회수
+uv run --package data-pipeline python -m data_pipeline.run load-financial-metric --all
 ```
 
 > **thread 재계산(ALPHA-457 등 thread_key 산식 변경 시)** — `thread_id = f(thread_key)` 라
@@ -1676,7 +1682,7 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
   시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 보충 배치(`disclosure`) 4
-  + 장중 수급 레인(`investor-intraday`) 3**, 여기에 **SFN 없는 Airflow 전용 원천 관측 레인(`source-daily`) 3**
+  + 장중 수급 레인(`investor-intraday`) 3**, 여기에 **SFN 없는 Airflow 전용 원천 관측 레인(`source-daily`) 6**
   (ALPHA-1130 — `sfn_state_name` 이 비어 SFN 셈 밖이고, Reconciler 는 작업별 `evidence_key` 로 증거를 모은다)
   (ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가

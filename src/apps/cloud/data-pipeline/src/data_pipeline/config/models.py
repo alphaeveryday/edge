@@ -297,10 +297,13 @@ class MacroObservationSource(BaseModel):
 
 
 class SourceObservationsConfig(BaseModel):
-    """분석 v2 원천 관측 데이터셋(ALPHA-1130)."""
+    """분석 v2 원천 관측 데이터셋(ALPHA-1130). 재무는 `dart_financial.source` 의 DART 키를 쓴다."""
 
     model_config = ConfigDict(extra="forbid")
 
+    # 재무 수집 대상 뿌리 ETF. 대상 종목은 이 ETF 들의 canonical 구성종목 스냅샷에서 **기간별로**
+    # 파생한다 — 현재 구성을 과거 전체에 적용하지 않는다(steps/source_observations).
+    etf_ids: list[NonBlankStr] = Field(min_length=1)
     macro: MacroObservationSource = MacroObservationSource()
 
 

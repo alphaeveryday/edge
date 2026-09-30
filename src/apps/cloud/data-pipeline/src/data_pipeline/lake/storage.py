@@ -641,6 +641,18 @@ def canonical_macro_observation_partition(series_id: str, observation_date: str)
     )
 
 
+def canonical_financial_metric_partition(market: str, period_end: str) -> str:
+    """canonical 재무 지표 파티션 프리픽스 (ALPHA-1130, 설계 §2 `financial_metric`).
+
+    회계기간말로 가른다 — 한 파티션 = 같은 기말의 모든 회사·지표·기준(연결/별도)·기간 종류.
+    공개시각이 아니다(그건 행의 rcept_date·available_at). 현재 상태 규칙은 매크로와 같다.
+    """
+    return (
+        f"canonical/financials/financial_metric/market={_observation_segment(market)}"
+        f"/period_end={_observation_segment(period_end)}"
+    )
+
+
 def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
 
