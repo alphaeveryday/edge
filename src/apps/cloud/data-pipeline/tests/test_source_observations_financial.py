@@ -442,3 +442,14 @@ def test_conflicting_duplicate_share_class_rows_reject_instead_of_taking_the_fir
     body["list"][-1] = dict(next(r for r in body["list"] if r["se"] == "우선주"))   # 같은 내용의 중복은 허용
     rows, _ = _extract_bps(body)
     assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares", "bps"]
+
+
+def test_share_class_rows_with_different_receipts_are_one_table_or_none():
+    # WHY(리뷰 9차): 보통주 행의 접수번호가 합계 행과 다르면 보통주 BPS 의 근거·공개일이 합계 행 것으로 적혔다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for r in body["list"]:
+        if r["se"] == "보통주":
+            r["rcept_no"] = "20260929000001"
+    rows, rejects = _extract_bps(body)
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)

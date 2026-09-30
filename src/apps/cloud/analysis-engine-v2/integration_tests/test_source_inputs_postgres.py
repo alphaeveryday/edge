@@ -259,3 +259,26 @@ def test_a_newer_annual_report_run_without_q4_rows_invalidates_the_old_q4(db):
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v4,))
+
+
+def test_a_newer_quarter_run_with_only_cumulative_rows_keeps_the_quarter_as_a_hole(db):
+    # Q3 re-extraction stores only the 9M cumulative EPS (3-month field missing, shares broken).
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_metric (corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric,
+        period_kind, fs_basis, derivation, value, unit, formula, inputs, rcept_no, rcept_date, received_at, available_at,
+        availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
+        SELECT corp_code, instrument_code, 2026, 'Q2', '2026-06-30', 'eps_basic', 'CUMULATIVE', fs_basis, 'REPORTED',
+        1900, unit, NULL, inputs, '20260930000003', '2026-09-30', received_at + interval '200 days',
+        received_at + interval '200 days', 'received', raw_run_id || '-v5', raw_key, raw_sha256, canonical_run_id,
+        artifact_key, artifact_sha256
+        FROM financial_metric WHERE instrument_code = 'TST001' AND metric = 'eps_basic' AND fiscal_period = 'Q2'""")
+    run_v5 = db.execute("SELECT raw_run_id FROM financial_metric WHERE raw_run_id LIKE %s", ("v2-source-test-%-v5",)).fetchone()[0]
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        rows, gaps = financial_inputs(db, datetime(2027, 4, 1, tzinfo=KST), ["TST001"])
+        q2 = next(r for r in rows if r["period"] == "2026-Q2")
+        assert q2["eps"] is None and q2["bps"] is None and q2["evidence"]["raw_run_ids"] == [run_v5]
+        assert any(g["period"] == "2026-Q2" and g["missing"] == ["eps", "bps"] for g in gaps)
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v5,))

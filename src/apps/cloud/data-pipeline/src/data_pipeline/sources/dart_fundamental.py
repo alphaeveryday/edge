@@ -322,9 +322,13 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
         return []
     total, common, preferred = _share_row(shares, "합계"), _share_row(shares, "보통주"), _share_row(shares, "우선주")
-    if any(row is not None and row.get("conflict") for row in (total, common, preferred)):
+    present = [row for row in (total, common, preferred) if row is not None]
+    if any(row.get("conflict") for row in present) or \
+            len({(str(row.get("rcept_no")), str(row.get("stlm_dt"))) for row in present}) > 1:
+        # 같은 종류 행이 서로 다르거나, 종류별 행의 접수번호·기준일이 다르면 한 표가 아니다 — 합계 행의 메타데이터를
+        # 보통주 값에 붙이면 공개일이 틀린다.
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
-                        "detail": "duplicate_share_class_rows_disagree"})
+                        "detail": "share_class_rows_disagree"})
         return []
     for row in (total, common):
         if row is not None and not RCEPT_NO.fullmatch(str(row.get("rcept_no"))):

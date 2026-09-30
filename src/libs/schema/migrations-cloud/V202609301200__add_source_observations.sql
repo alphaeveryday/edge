@@ -244,17 +244,14 @@ BEGIN
         SELECT v.* FROM visible v JOIN basis b ON b.fs_basis = v.fs_basis
         JOIN latest l ON l.corp_code = v.corp_code AND l.fiscal_year = v.fiscal_year
                      AND l.report_period = v.report_period AND l.fs_basis = v.fs_basis AND l.raw_run_id = v.raw_run_id
-        -- FY 행(누적)도 남긴다 — 값은 돌려주지 않지만, 최신 사업보고서 실행이 Q4 를 못 만들었을 때 그 분기가
-        -- 행째 사라지지 않고 "Q4 는 있어야 하는데 값이 없다"로 보이게(소비 툴은 없는 분기를 건너뛰고 앞 4분기를 쓴다).
-        WHERE (v.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
-               AND ((v.metric IN ('eps_basic', 'revenue', 'operating_income') AND v.period_kind = 'QUARTER')
-                    OR v.metric IN ('bps', 'bps_total_shares')))
-           OR v.fiscal_period = 'FY'
+        -- 최신 실행의 행은 지표·기간 종류를 가리지 않고 다 남긴다(누적 행·FY 행 포함). 값은 아래 FILTER 가 분기
+        -- 3개월값·기말 BPS 만 고르지만, 최신 실행에 그것이 없어도 그 보고기간 행이 "있어야 하는데 값이 없다"로
+        -- 나와야 한다 — 행째 사라지면 소비 툴이 없는 분기를 건너뛰고 앞 4분기로 미끄러진다.
     )
     SELECT p_instrument_code, min(p.corp_code), p.fiscal_year,
            p.fiscal_year::text || '-' || p.report_period, min(p.period_end), min(p.fs_basis),
-           max(p.value) FILTER (WHERE p.metric = 'eps_basic' AND p.fiscal_period <> 'FY'),
-           max(p.derivation) FILTER (WHERE p.metric = 'eps_basic' AND p.fiscal_period <> 'FY'),
+           max(p.value) FILTER (WHERE p.metric = 'eps_basic' AND p.period_kind = 'QUARTER'),
+           max(p.derivation) FILTER (WHERE p.metric = 'eps_basic' AND p.period_kind = 'QUARTER'),
            max(p.value) FILTER (WHERE p.metric = 'bps'),
            max(p.value) FILTER (WHERE p.metric = 'bps_total_shares'),
            -- bps 가 빈 이유를 가른다: 통상 BPS 만 있으면 우선주가 있어서(§10.9 팀 결정 전 사용 금지)인지 종류별 주식수를
@@ -269,10 +266,10 @@ BEGIN
                                 AND (i->>'preferred_istc_totqy')::numeric > 0))
                           FILTER (WHERE p.metric = 'bps_total_shares')
                      THEN 'PREFERRED_SHARES_PRESENT' ELSE 'COMMON_SHARE_BPS_UNAVAILABLE' END END,
-           max(p.value) FILTER (WHERE p.metric = 'revenue' AND p.fiscal_period <> 'FY'),
-           max(p.derivation) FILTER (WHERE p.metric = 'revenue' AND p.fiscal_period <> 'FY'),
-           max(p.value) FILTER (WHERE p.metric = 'operating_income' AND p.fiscal_period <> 'FY'),
-           max(p.derivation) FILTER (WHERE p.metric = 'operating_income' AND p.fiscal_period <> 'FY'),
+           max(p.value) FILTER (WHERE p.metric = 'revenue' AND p.period_kind = 'QUARTER'),
+           max(p.derivation) FILTER (WHERE p.metric = 'revenue' AND p.period_kind = 'QUARTER'),
+           max(p.value) FILTER (WHERE p.metric = 'operating_income' AND p.period_kind = 'QUARTER'),
+           max(p.derivation) FILTER (WHERE p.metric = 'operating_income' AND p.period_kind = 'QUARTER'),
            max(p.available_at),
            array_agg(DISTINCT p.rcept_no ORDER BY p.rcept_no),
            array_agg(DISTINCT p.raw_run_id ORDER BY p.raw_run_id)
@@ -282,7 +279,7 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) IS
-'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=최신 판본이 그 지표를 만들지 못함(사업보고서만 있고 Q4 유도가 없으면 값이 전부 NULL 인 Q4 행이 나온다 — 분기가 사라지지 않는다), 한 보고서의 지표는 가장 늦게 보인 실행 하나에서만 온다(옛 실행 값으로 빈 지표를 채우지 않는다). bps_note: PREFERRED_SHARES_PRESENT=우선주가 있어 보통주 기준 BPS 를 만들지 않은 회사(팀 결정 대상), COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수를 못 읽어 못 만든 판본, BPS_ABSENT_IN_LATEST_VERSION=최신 판본에 BPS 가 아예 없음(둘 다 데이터 결함·재수집 대상).';
+'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=최신 판본이 그 지표를 만들지 못함(최신 실행에 누적 행만 있으면 값이 전부 NULL 인 분기 행이 나온다 — 분기가 사라지지 않는다), 한 보고서의 지표는 가장 늦게 보인 실행 하나에서만 온다(옛 실행 값으로 빈 지표를 채우지 않는다). bps_note: PREFERRED_SHARES_PRESENT=우선주가 있어 보통주 기준 BPS 를 만들지 않은 회사(팀 결정 대상), COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수를 못 읽어 못 만든 판본, BPS_ABSENT_IN_LATEST_VERSION=최신 판본에 BPS 가 아예 없음(둘 다 데이터 결함·재수집 대상).';
 
 CREATE FUNCTION sector_classification_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_codes TEXT[])
 RETURNS TABLE (
