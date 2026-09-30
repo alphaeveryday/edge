@@ -73,6 +73,7 @@ x-error-codes:
   MEMBER4005: { http: 404, message: 가입되지 않은 이메일입니다. }   # 가입 응답(MEMBER4002)이 이미 가입 여부를 드러내 재설정에서도 숨기지 않음
   AUTH4001: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
   AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 가입 인증·비밀번호 재설정 공용. 틀림·만료·시도 초과 구분 없음
+  AUTH4003: { http: 429, message: 오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요. }   # 이메일당 24시간 5회 또는 전체 하루 300통 초과
   VOTE5001: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
 
 security:
@@ -115,7 +116,7 @@ paths:
       tags: [auth]
       operationId: authSendSignupCode
       summary: 가입 인증 코드 발송
-      description: 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 발송은 비동기. 테스트용 예약 도메인 example.com 은 발송하지 않고 서버 로그에 남긴다.
+      description: 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 이메일당 24시간 5회, 전체 하루 300통을 넘으면 AUTH4003. 발송은 비동기. 테스트용 예약 도메인 example.com 은 발송하지 않고 서버 로그에 남긴다.
       security: []
       requestBody:
         required: true
@@ -130,6 +131,7 @@ paths:
         '200': { $ref: '#/components/responses/Empty' }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 이메일 형식
         '409': { $ref: '#/components/responses/Error' }   # MEMBER4002
+        '429': { $ref: '#/components/responses/Error' }   # AUTH4003
   /auth/signup:
     post:
       tags: [auth]
@@ -146,9 +148,9 @@ paths:
               required: [email, password, nick, code]
               properties:
                 email: { type: string, format: email }
-                password: { type: string }
+                password: { type: string, minLength: 8 }
                 nick: { type: string }
-                code: { type: string, description: 가입 인증 코드 6자리 }
+                code: { type: string, pattern: '^\d{6}$', description: 가입 인증 코드 6자리 }
       responses:
         '200': { $ref: '#/components/responses/AuthResult' }
         '400': { $ref: '#/components/responses/Error' }   # AUTH4002, COMMON400
@@ -158,7 +160,7 @@ paths:
       tags: [auth]
       operationId: authRequestPasswordReset
       summary: 비밀번호 재설정 코드 발송
-      description: 가입된 이메일이면 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 미가입 이메일은 MEMBER4005. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 발송은 비동기.
+      description: 가입된 이메일이면 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 미가입 이메일은 MEMBER4005. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 이메일당 24시간 5회, 전체 하루 300통을 넘으면 AUTH4003. 발송은 비동기.
       security: []
       requestBody:
         required: true
@@ -173,6 +175,7 @@ paths:
         '200': { $ref: '#/components/responses/Empty' }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 이메일 형식
         '404': { $ref: '#/components/responses/Error' }   # MEMBER4005
+        '429': { $ref: '#/components/responses/Error' }   # AUTH4003
   /auth/password-reset/confirm:
     post:
       tags: [auth]
@@ -189,8 +192,8 @@ paths:
               required: [email, code, newPassword]
               properties:
                 email: { type: string, format: email }
-                code: { type: string }
-                newPassword: { type: string }
+                code: { type: string, pattern: '^\d{6}$' }
+                newPassword: { type: string, minLength: 8 }
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '400': { $ref: '#/components/responses/Error' }   # AUTH4002, COMMON400

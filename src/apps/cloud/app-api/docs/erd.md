@@ -91,6 +91,8 @@
 | attempts | smallint | 틀린 시도 수, 5회면 무효 |
 | expires_at | timestamptz | 발송 후 10분 |
 | created_at | timestamptz | 마지막 발송 시각, 60초 재발송 간격 판정 |
+| sent_count | smallint | 24시간 창 안의 발송 수, 5회면 429 |
+| window_started_at | timestamptz | 24시간 창 시작 시각 |
 
 재설정 성공 시 행 삭제와 회원 `refresh_token` 전부 revoke.
 
@@ -102,8 +104,18 @@
 | attempts | smallint | 틀린 시도 수, 5회면 무효 |
 | expires_at | timestamptz | 발송 후 10분 |
 | created_at | timestamptz | 마지막 발송 시각, 60초 재발송 간격 판정 |
+| sent_count | smallint | 24시간 창 안의 발송 수, 5회면 429 |
+| window_started_at | timestamptz | 24시간 창 시작 시각 |
 
-가입 요청의 코드 확인은 별도 트랜잭션(틀린 시도 수 확정 저장), 행 삭제는 회원 저장과 같은 트랜잭션. 회원이 되기 전이라 member 참조 없음.
+가입 요청의 코드 확인은 가입 트랜잭션 전에 따로(틀린 시도 수 확정 저장), 행 삭제는 회원 저장과 같은 트랜잭션. 회원이 되기 전이라 member 참조 없음. 두 코드 표 모두 확인·재발송 때 행 잠금.
+
+### mail_daily
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| day | date PK | KST 날짜 |
+| sent | integer | 그날 메일 발송 수 |
+
+코드 메일은 300통 초과 시 429, 신고 운영자 메일은 세기만 한다. Gmail 하루 한도(약 500통) 보호용.
 
 ### watch_group
 | 컬럼 | 타입 | 비고 |
