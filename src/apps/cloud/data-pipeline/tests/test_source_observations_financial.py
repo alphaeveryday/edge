@@ -816,3 +816,14 @@ def test_non_string_receipt_dates_reject_the_row_not_the_company():
     targets, rejects = dart_fundamental.plan_reports(rows, date(2025, 10, 1), date(2026, 8, 20))
     assert {tuple(r["reasons"]) for r in rejects} == {("bad_rcept_dt",)} and len(rejects) == 2
     assert targets                                                     # 나머지 행은 정상 계획된다
+
+
+def test_non_string_report_names_reject_the_row_not_the_company():
+    # WHY(봇 P2): 보고서명이 숫자·배열인 파손 행이 정규식에서 TypeError 를 내면 회사 전체 계획이 사라진다 — 행만 거부한다.
+    from datetime import date
+    rows = json.loads(filing_list(SAMSUNG))["list"]
+    rows[0]["report_nm"] = 1
+    rows[1]["report_nm"] = ["사업보고서 (2025.12)"]
+    targets, rejects = dart_fundamental.plan_reports(rows, date(2025, 10, 1), date(2026, 8, 20))
+    assert [r["reasons"] for r in rejects] == [["bad_report_nm"], ["bad_report_nm"]] and targets
+    assert dart_fundamental.report_of(1) is None
