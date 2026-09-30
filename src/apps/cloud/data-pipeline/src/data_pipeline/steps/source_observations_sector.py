@@ -26,13 +26,17 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
 
     as_of_date 는 그 파일을 받은 KST 날짜다(원천이 기준일을 주지 않는다 — 현재값). 이름을 못 찾은 코드는
     코드를 남기고 이름만 비우며 사유를 센다. 업종코드 표를 못 받은 실행도 코드는 적재한다.
+    이름을 붙인 행의 수신·가시시각은 마스터와 업종명 표 중 **늦게 받은 쪽**이다 — 이름 표를 받기 전 시각의 조회가
+    아직 받지 않은 이름을 보지 않게. 근거 키(raw_key)는 행을 만든 마스터 파일이다.
     """
     names: dict[str, str] = {}
+    names_fetched_at: str | None = None
     rejects: list[dict] = []
     name_files = [o for o in objects if o["request"].get("file") == kis_sector_master.SECTOR_NAME_FILE]
     if name_files:
         try:
             names, warnings = kis_sector_master.parse_sector_names(name_files[0]["body"])
+            names_fetched_at = name_files[0]["fetched_at"]
         except (zipfile.BadZipFile, UnicodeDecodeError, ValueError) as exc:
             # 업종명 표가 깨져도 코드는 싣는다(이름만 비운다) — HTTP 실패 때와 같은 부분 처리.
             names, warnings = {}, [f"sector_name_file_unreadable:{type(exc).__name__}"]
@@ -51,9 +55,10 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
             continue
         rejects.extend({**b, "raw_key": obj["key"]} for b in bad)
         as_of = datetime.fromisoformat(obj["fetched_at"]).astimezone(KST).date().isoformat()
+        received = max((t for t in (obj["fetched_at"], names_fetched_at) if t), key=datetime.fromisoformat)
         for item in parsed:
             row = {**item, "as_of_date": as_of, "taxonomy": "KIS_INDEX_SECTOR",
-                   "received_at": obj["fetched_at"], "available_at": obj["fetched_at"],
+                   "received_at": received, "available_at": received,
                    "availability_basis": "received", "raw_key": obj["key"], "raw_sha256": obj["sha256"]}
             for level in ("large", "medium", "small"):
                 raw_code = item[f"raw_{level}_code"]

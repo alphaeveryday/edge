@@ -103,3 +103,20 @@ def test_corrupt_name_table_keeps_codes_and_other_markets(tmp_path):
     assert so.normalize(storage, so_sector.SECTOR, "run_sn", "run_s", producer="normalize_sector") == so.PARTIAL_EXIT
     samsung = rows_of(storage, "KOSPI")["005930"]
     assert samsung["large_code"] == "0013" and samsung["large_name"] is None
+
+
+def test_named_rows_are_not_visible_before_the_name_table_arrives():
+    # WHY: 업종명은 마스터와 따로 받는 표에서 온다. 행의 가시시각이 마스터 수신시각이면, 이름 표를 받기 전 시각의
+    # 기준시각 조회가 아직 받지 않은 이름을 보게 된다. 이름을 붙인 행은 두 입력 중 늦게 받은 시각부터 보여야 한다.
+    master_at, names_at = "2026-09-30T00:00:01+00:00", "2026-09-30T00:00:09+00:00"
+    objects = [
+        {"request": {"file": "kospi_code.mst.zip"}, "body": KOSPI, "key": "raw/kospi", "sha256": "a", "fetched_at": master_at},
+        {"request": {"file": "idxcode.mst.zip"}, "body": NAMES, "key": "raw/names", "sha256": "b", "fetched_at": names_at},
+    ]
+    rows, _ = so_sector._normalize_sector(objects, {})
+    assert rows and {(r["received_at"], r["available_at"]) for r in rows} == {(names_at, names_at)}
+    assert {r["raw_key"] for r in rows} == {"raw/kospi"}                       # 근거는 행을 만든 마스터
+    assert any(r["large_name"] for r in rows)
+    # 이름 표를 못 받은 실행은 마스터 수신시각 그대로다(붙인 이름이 없다).
+    rows, _ = so_sector._normalize_sector(objects[:1], {})
+    assert {r["available_at"] for r in rows} == {master_at}
