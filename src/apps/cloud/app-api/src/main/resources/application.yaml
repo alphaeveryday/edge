@@ -25,6 +25,11 @@ spring:
       connect-timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
       ssl:
         enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache 는 전송 암호화 필수(ADR-0056), 로컬 compose 는 평문
+  mail:   # host 는 SPRING_MAIL_HOST 로만 설정. 없으면 발송기 미생성으로 로그 기록
+    port: 587
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
 app:
   jwt:
     secret: ${APP_JWT_SECRET}   # 필수, 기본값 없음. HS256 이라 32바이트 이상
@@ -59,6 +64,9 @@ management:
     web:
       exposure:
         include: health,metrics
+  health:
+    mail:
+      enabled: false   # 헬스 조회마다 SMTP 접속 방지
   endpoint:
     health:
       # ALB 가 보는 readiness 는 Kubernetes 밖에선 명시적으로 켜야 노출된다.

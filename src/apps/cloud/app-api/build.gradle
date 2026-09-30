@@ -24,6 +24,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	implementation 'org.springframework.boot:spring-boot-starter-mail'
 	// 구현 문서 /v3/api-docs 를 openapi.yaml 과 대조하는 검증용. UI 없음, 애노테이션으로 계약을 중복 기술하지 않는다.
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-api:3.1.1'
 	// 액세스 JWT(HS256) 발급·검증. 소셜 idToken 검증(JWKS)까지 한 라이브러리로 덮는다.
