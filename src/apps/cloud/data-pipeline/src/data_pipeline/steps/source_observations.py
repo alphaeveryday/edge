@@ -976,9 +976,10 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         fy = [r for r, _ in items if r["fiscal_period"] == "FY"]
         if fy:
             q3_version = versions.get((corp_code, year, "11014", fs_div))
-            if q3_version is not None and q3_version["status"] == "UNCONFIRMED":
-                # Q4 유도 입력(9M)을 이 실행이 확정하지 못했다 — 사업보고서 판본을 "Q4 없음"으로 확정하면 옛 확정 Q4 가
-                # 과거 조회에서 NULL 로 바뀐다. 판본을 미확정으로 두고 이 실행의 FY·Q4 행은 싣지 않는다.
+            if q3_version is None or q3_version["status"] == "UNCONFIRMED":
+                # Q4 유도 입력(9M)을 이 실행이 확정하지 못했다(응답 실패, 또는 수집이 Q3 요청 전에 멈춰 판본 자체가 없음 —
+                # 수집은 FY 를 계획하면 Q3 도 함께 요청하므로 부재는 중단이다). 사업보고서 판본을 "Q4 없음"으로 확정하면
+                # 옛 확정 Q4 가 과거 조회에서 NULL 로 바뀐다. 판본을 미확정으로 두고 이 실행의 FY·Q4 행은 싣지 않는다.
                 unconfirmed((corp_code, year, "11011", fs_div), "q4_input_unconfirmed")
                 items = [(r, s) for r, s in items if r["fiscal_period"] not in ("FY", "Q4")]
                 rows.extend(finish(dict(row), sources) for row, sources in items)

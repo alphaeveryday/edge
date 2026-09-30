@@ -600,8 +600,9 @@ def test_rejected_responses_feed_nothing_downstream(tmp_path):
     assert not any(k[1:3] == (2026, "Q1") and k[5] == "CFS" for k in rows)
     assert versions[(2025, "11014", "CFS")]["status"] == "UNCONFIRMED"
     assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS") not in rows            # 미확정 9M → Q4 유도 없음
-    assert "eps_basic/QUARTER/Q4" not in json.loads(versions[(2025, "11011", "CFS")]["metrics"])
-    assert ("005930", 2025, "Q4", "bps", "POINT", "CFS") in rows                          # 사업보고서 자체의 BPS 는 있다
+    # 유도 입력이 미확정이면 사업보고서 판본도 미확정 — 그 실행의 FY·Q4 행(BPS 포함)은 싣지 않는다(리뷰 21차)
+    assert versions[(2025, "11011", "CFS")]["status"] == "UNCONFIRMED"
+    assert ("005930", 2025, "Q4", "bps", "POINT", "CFS") not in rows
 
 
 def test_unconfirmed_attempts_are_visible_from_receipt_and_empty_statements_keep_share_status(tmp_path):
@@ -742,3 +743,28 @@ def test_annual_version_is_unconfirmed_when_its_q4_input_was_not_confirmed(tmp_p
     assert not any(k[1:3] in ((2025, "Q4"), (2025, "FY")) and k[5] == "CFS" for k in rows)
     assert versions[(2025, "11011", "OFS")]["status"] == "CONFIRMED"      # 별도는 Q3 도 멀쩡 — 기준별로 따로
     assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "OFS") in rows
+
+
+def test_annual_version_is_unconfirmed_when_the_q3_request_never_happened(tmp_path):
+    # WHY(리뷰 22차): 수집이 사업보고서(11011)를 받은 뒤 한도로 멈추면 Q3(11014) 판본 자체가 없다 — 그 부분 실행이
+    # FY 판본을 "Q4 없음"으로 확정하면 옛 Q4 가 과거 조회에서 사라진다. 부재도 미확정 입력이다.
+    from data_pipeline.sources.dart_fundamental import DartResult
+
+    responses = full_responses(SAMSUNG)
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    real_statement = dart.statement
+
+    def stopping(corp_code, year, code, fs_div):
+        result = real_statement(corp_code, year, code, fs_div)
+        if (year, code) == ("2025", "11014"):     # Q3 요청에서 한도 초과 — 이후 호출 중단
+            return DartResult(result.kind, result.request, "error", "dart_020", None, result.fetched_at, stop=True)
+        return result
+    dart.statement = stopping
+    storage, code = chain(tmp_path, dart, holdings=("005930",))
+    assert code == 2
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    _, versions = _versions(storage)
+    annual = versions[(2025, "11011", "CFS")]
+    assert annual["status"] == "UNCONFIRMED" and json.loads(annual["detail"])["statement_detail"] == "q4_input_unconfirmed"
+    assert not any(k[1:3] in ((2025, "Q4"), (2025, "FY")) for k in rows)
