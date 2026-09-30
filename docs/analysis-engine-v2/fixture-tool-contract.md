@@ -1,6 +1,6 @@
 # 목데이터 도구 계약
 
-실제 계산 도구가 목데이터를 조회하고 근거 ID를 반환한다. 도구 결과는 감사 저장 후 그대로 에이전트에게 전달한다. 원천 DB 연결은 `source_inputs.py`(ALPHA-1130 — 매크로·재무를 `*_as_of` 함수에서 이 fixture 행 형태로 읽는 어댑터, 통합 테스트 `integration_tests/test_source_inputs_postgres.py`)까지 있고, 실행 경로에 붙이는 것은 별도 작업이다.
+실제 계산 도구가 목데이터를 조회하고 근거 ID를 반환한다. 도구 결과는 감사 저장 후 그대로 에이전트에게 전달한다. 원천 DB 연결은 `storage/source_inputs.py`(ALPHA-1130 — 매크로·재무를 `*_as_of` 함수에서 이 fixture 행 형태로 읽는 어댑터, 통합 테스트 `integration_tests/test_source_inputs_postgres.py`)까지 있고, 실행 경로에 붙이는 것은 별도 작업이다.
 
 ## 공통
 

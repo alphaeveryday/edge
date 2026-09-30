@@ -14,8 +14,8 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-from edge_analysis_v2.fixture_tools import macro, valuation
-from edge_analysis_v2.source_inputs import financial_inputs, macro_inputs
+from edge_analysis_v2.tools.fixture_data import macro, valuation
+from edge_analysis_v2.storage.source_inputs import financial_inputs, macro_inputs
 
 KST = timezone(timedelta(hours=9))
 SHA = "0" * 64
@@ -210,7 +210,7 @@ def test_writer_cannot_read_source_tables_directly(db):
 
 def test_freshness_exposes_facts_without_judging(db):
     db.execute("SET ROLE edge_analysis_v2_writer")
-    from edge_analysis_v2.source_inputs import freshness
+    from edge_analysis_v2.storage.source_inputs import freshness
     rows = {(r["dataset"], r["series"]): r for r in freshness(db)}
     usd = rows[("macro_observation", "usd_krw")]
     assert usd["latest_observation_date"] >= "2026-09-26"  # the row received after the analysis instant still counts here
@@ -437,7 +437,7 @@ def test_freshness_counts_a_metric_free_financial_load(db):
         FROM financial_report_version WHERE instrument_code = 'TST001' AND report_period = 'Q2' AND raw_run_id NOT LIKE '%-v%'""")
     try:
         db.execute("SET ROLE edge_analysis_v2_writer")
-        from edge_analysis_v2.source_inputs import freshness
+        from edge_analysis_v2.storage.source_inputs import freshness
         fin = next(r for r in freshness(db) if r["dataset"] == "financial_metric")
         assert fin["last_received_at"].startswith("2027-01-05")      # the metric-free run is the latest receipt
     finally:
@@ -458,7 +458,7 @@ def test_freshness_keeps_a_row_for_a_fulfilled_but_empty_load(db):
     try:
         assert db.execute("SELECT count(*) FROM sector_classification").fetchone()[0] == 0   # this DB has no sector rows
         db.execute("SET ROLE edge_analysis_v2_writer")
-        from edge_analysis_v2.source_inputs import freshness
+        from edge_analysis_v2.storage.source_inputs import freshness
         sector = next(r for r in freshness(db) if r["dataset"] == "sector_classification")
         assert sector["latest_observation_date"] is None and sector["last_load_data_status"] == "VALID_EMPTY"
         assert sector["last_load_fulfilled_at"].startswith("2027-02-01")

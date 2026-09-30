@@ -1,11 +1,7 @@
 """Published macro observations with exact comparison instants and units."""
 from datetime import timedelta, timezone
 
-<<<<<<< HEAD:src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/fixture_tools/macro.py
-from .common import available, decimal, instant, number, observed, table
-=======
-from edge_analysis_v2.tools.fixture_data.common import available, decimal, instant, number, table
->>>>>>> origin/dev:src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/tools/fixture_data/macro.py
+from edge_analysis_v2.tools.fixture_data.common import available, decimal, instant, number, observed, table
 
 SERIES = {"usd_krw": "KRW_per_USD", "kr_10y_yield": "percent", "us_10y_yield": "percent", "kr_cpi_yoy": "percent", "brent_spot_usd": "USD_per_barrel", "commodity": "index"}
 

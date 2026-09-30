@@ -2,8 +2,8 @@
 
 Reads only the point-in-time functions that are the storage contract
 (docs/design/etf-data-storage-plan.md §10.4): ``macro_observations_as_of`` and
-``financial_quarters_as_of``. The rows come back in the shapes ``fixture_tools`` already
-consume, so the same calculation tools run on stored data and on synthetic fixtures.
+``financial_quarters_as_of``. The rows come back in the shapes the fixture tools already
+consume (`tools/fixture_data`), so the same calculation tools run on stored data and on synthetic fixtures.
 
 What is *not* done here: no timestamp is invented for date-only observations (``observed_at``
 carries the observation day, which the tools read as "observed once that Korean day ended"),
