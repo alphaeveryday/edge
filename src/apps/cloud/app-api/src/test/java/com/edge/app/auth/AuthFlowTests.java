@@ -2,8 +2,10 @@ package com.edge.app.auth;
 
 import com.edge.app.ContainerTests;
 import com.edge.app.auth.service.IdTokenVerifier;
+import com.edge.app.common.mail.Mailer;
 import com.edge.app.member.entity.Provider;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -21,7 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** 계약의 auth 흐름과 PRD 게스트 데이터 정책. 소셜 검증기는 외부 JWKS 라 대체한다. */
@@ -33,6 +39,8 @@ class AuthFlowTests extends ContainerTests {
     JdbcTemplate jdbc;
     @MockitoBean
     IdTokenVerifier idTokenVerifier;
+    @MockitoBean
+    Mailer mailer;
 
     @SuppressWarnings("unchecked")
     ResponseEntity<Map> call(String method, String uri, Object body, String... headers) {
@@ -95,13 +103,64 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("MEMBER4002", dup.getBody().get("code"));
     }
 
+    String requestResetCode(String email) {
+        assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", email)).getStatusCode().value());
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        verify(mailer).send(eq(email), anyString(), text.capture());
+        return text.getValue().replaceAll("(?s).*?(\\d{6}).*", "$1");
+    }
+
+    ResponseEntity<Map> confirmReset(String email, String code, String newPassword) {
+        return call("POST", "/api/v1/auth/password-reset/confirm", Map.of("email", email, "code", code, "newPassword", newPassword));
+    }
+
+    // 응답과 발송 여부로 가입 여부가 드러나지 않아야 하고, 재요청 폭주가 메일 폭탄이 되지 않아야 한다
     @Test
-    void passwordResetChecksExistence() {
+    void passwordResetHidesExistenceAndThrottlesResend() {
+        assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", "zz@example.com")).getStatusCode().value());
+        verify(mailer, never()).send(eq("zz@example.com"), anyString(), anyString());
+
         signup("c@example.com");
+        requestResetCode("c@example.com");
         assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", "c@example.com")).getStatusCode().value());
-        var missing = call("POST", "/api/v1/auth/password-reset", Map.of("email", "zz@example.com"));
-        assertEquals(404, missing.getStatusCode().value());
-        assertEquals("MEMBER4001", missing.getBody().get("code"));
+        verify(mailer, times(1)).send(eq("c@example.com"), anyString(), anyString());
+    }
+
+    // 재설정은 탈취된 세션을 끊는 수단이라 옛 비밀번호와 옛 리프레시가 모두 무효여야 한다
+    @Test
+    void passwordResetConfirmChangesPasswordAndRevokesSessions() {
+        var auth = signup("r1@example.com");
+        String code = requestResetCode("r1@example.com");
+        String wrong = code.equals("000000") ? "111111" : "000000";
+
+        var bad = confirmReset("r1@example.com", wrong, "newpw1234");
+        assertEquals(400, bad.getStatusCode().value());
+        assertEquals("AUTH4002", bad.getBody().get("code"));
+        assertEquals("AUTH4002", confirmReset("nobody@example.com", code, "newpw1234").getBody().get("code"));
+
+        assertEquals(200, confirmReset("r1@example.com", code, "newpw1234").getStatusCode().value());
+        assertEquals(401, call("POST", "/api/v1/auth/login", Map.of("email", "r1@example.com", "password", "pw123456")).getStatusCode().value());
+        assertEquals(200, call("POST", "/api/v1/auth/login", Map.of("email", "r1@example.com", "password", "newpw1234")).getStatusCode().value());
+        assertEquals(400, call("POST", "/api/v1/auth/refresh", Map.of("refreshToken", auth.get("refreshToken"))).getStatusCode().value());
+        assertEquals("AUTH4002", confirmReset("r1@example.com", code, "again1234").getBody().get("code"));
+    }
+
+    // 6자리 코드는 시도 제한과 만료가 없으면 대입으로 뚫린다
+    @Test
+    void passwordResetCodeLocksAfterFiveFailuresAndExpires() {
+        signup("r2@example.com");
+        String code = requestResetCode("r2@example.com");
+        String wrong = code.equals("000000") ? "111111" : "000000";
+        for (int i = 0; i < 5; i++) {
+            confirmReset("r2@example.com", wrong, "newpw1234");
+        }
+        assertEquals("AUTH4002", confirmReset("r2@example.com", code, "newpw1234").getBody().get("code"));
+
+        signup("r3@example.com");
+        String fresh = requestResetCode("r3@example.com");
+        jdbc.update("update password_reset_code set expires_at = now() - interval '1 second' "
+                + "where member_id = (select id from member where email = 'r3@example.com')");
+        assertEquals("AUTH4002", confirmReset("r3@example.com", fresh, "newpw1234").getBody().get("code"));
     }
 
     @Test

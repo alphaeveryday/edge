@@ -2,6 +2,7 @@ package com.edge.app.auth.controller;
 
 import com.edge.app.auth.dto.AuthResponse;
 import com.edge.app.auth.dto.LoginRequest;
+import com.edge.app.auth.dto.PasswordResetConfirmRequest;
 import com.edge.app.auth.dto.PasswordResetRequest;
 import com.edge.app.auth.dto.RefreshRequest;
 import com.edge.app.auth.dto.SignupRequest;
@@ -47,6 +48,12 @@ public class AuthController {
     @PostMapping("/password-reset")
     public ApiResponse<Void> authRequestPasswordReset(@RequestBody @Valid PasswordResetRequest request) {
         authService.requestPasswordReset(request);
+        return ApiResponse.onSuccess(null);
+    }
+
+    @PostMapping("/password-reset/confirm")
+    public ApiResponse<Void> authConfirmPasswordReset(@RequestBody @Valid PasswordResetConfirmRequest request) {
+        authService.confirmPasswordReset(request);
         return ApiResponse.onSuccess(null);
     }
 

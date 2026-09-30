@@ -72,6 +72,10 @@ public class Member {
         }
     }
 
+    public void changePassword(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
     public void acceptDisclaimer(Instant at) {
         this.disclaimerAcceptedAt = at;
     }

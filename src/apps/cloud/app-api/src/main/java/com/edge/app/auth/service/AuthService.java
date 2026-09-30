@@ -2,6 +2,7 @@ package com.edge.app.auth.service;
 
 import com.edge.app.auth.dto.AuthResponse;
 import com.edge.app.auth.dto.LoginRequest;
+import com.edge.app.auth.dto.PasswordResetConfirmRequest;
 import com.edge.app.auth.dto.PasswordResetRequest;
 import com.edge.app.auth.dto.RefreshRequest;
 import com.edge.app.auth.dto.SignupRequest;
@@ -9,12 +10,15 @@ import com.edge.app.auth.dto.SocialLoginRequest;
 import com.edge.app.common.AppErrorStatus;
 import com.edge.app.common.auth.AccessTokens;
 import com.edge.app.common.auth.AppPrincipal;
+import com.edge.app.common.mail.Mailer;
 import com.edge.app.member.dto.MeResponse;
 import com.edge.app.member.entity.Member;
+import com.edge.app.member.entity.PasswordResetCode;
 import com.edge.app.member.entity.Provider;
 import com.edge.app.member.entity.RefreshToken;
 import com.edge.app.member.repository.DeviceRepository;
 import com.edge.app.member.repository.MemberRepository;
+import com.edge.app.member.repository.PasswordResetCodeRepository;
 import com.edge.app.member.repository.PrincipalRepository;
 import com.edge.app.member.repository.RefreshTokenRepository;
 import com.edge.common.apipayload.code.status.ErrorStatus;
@@ -41,6 +45,7 @@ import java.util.HexFormat;
 @RequiredArgsConstructor
 public class AuthService {
     private static final Duration REFRESH_TTL = Duration.ofDays(30);
+    private static final Duration RESET_RESEND_GAP = Duration.ofSeconds(60);
     private static final String HANDLE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -50,6 +55,8 @@ public class AuthService {
     private final PrincipalRepository principalRepository;
     private final DeviceRepository deviceRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PasswordResetCodeRepository resetCodeRepository;
+    private final Mailer mailer;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @Transactional
@@ -93,12 +100,44 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 발송 수단 부재. 계정 존재 확인만
-    @Transactional(readOnly = true)
+    // 미가입 이메일과 60초 내 재요청도 같은 응답
+    @Transactional
     public void requestPasswordReset(PasswordResetRequest request) {
-        if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isEmpty()) {
-            throw new GeneralException(AppErrorStatus.MEMBER_NOT_FOUND);
+        Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email()).orElse(null);
+        if (member == null) {
+            return;
         }
+        Instant now = Instant.now();
+        PasswordResetCode current = resetCodeRepository.findById(member.getId()).orElse(null);
+        if (current != null && current.getCreatedAt().plus(RESET_RESEND_GAP).isAfter(now)) {
+            return;
+        }
+        String code = "%06d".formatted(RANDOM.nextInt(1_000_000));
+        if (current == null) {
+            resetCodeRepository.save(PasswordResetCode.issue(member.getId(), hash(code), now));
+        } else {
+            current.reissue(hash(code), now);
+        }
+        mailer.send(member.getEmail(), "[ETF Orca] 비밀번호 재설정 코드",
+                "비밀번호 재설정 코드는 " + code + " 입니다.\n10분 안에 앱에 입력해 주세요.\n요청하지 않았다면 이 메일을 무시해 주세요.");
+    }
+
+    // 성공 시 코드 삭제와 리프레시 전부 폐기
+    @Transactional(noRollbackFor = GeneralException.class)
+    public void confirmPasswordReset(PasswordResetConfirmRequest request) {
+        Instant now = Instant.now();
+        Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
+                .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID));
+        PasswordResetCode code = resetCodeRepository.findById(member.getId())
+                .filter(c -> c.usable(now))
+                .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID));
+        if (!MessageDigest.isEqual(code.getCodeHash().getBytes(), hash(request.code()).getBytes())) {
+            code.fail();
+            throw new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID);
+        }
+        member.changePassword(passwordEncoder.encode(request.newPassword()));
+        resetCodeRepository.delete(code);
+        refreshTokenRepository.revokeAll(member.getId(), now);
     }
 
     // 요청에 디바이스 정보가 없어 회원 리프레시 전부 폐기
