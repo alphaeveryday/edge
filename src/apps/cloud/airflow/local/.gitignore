@@ -11,3 +11,6 @@ results/micro/*.console
 results/aws/**/host-obs/
 results/aws/**/B?.json
 results/aws/forward.log
+results/aws/**/ledger-backup/
+results/aws/**/stopped-tasks.json
+results/aws/verify-bucket-final/
