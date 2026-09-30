@@ -174,6 +174,11 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle | None:
                         span_seconds=INTERVAL_SECONDS, values=values, volume=volume)
 
 
+def is_closing_auction(candle: Candle) -> bool:
+    """라벨 15:30(KST 벽시계) 봉인가 — 입력 tz 로 비교하면 UTC aware 봉이 마감을 못 만난다."""
+    return candle.window_start.astimezone(KST).strftime("%H%M%S") == DAY_LAST_HHMMSS
+
+
 def fold_closing_auction(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
     """라벨 15:30 봉(종가 단일가 체결)을 15:30 에 **끝나는** 봉(15:29 창)에 합친다.
 
@@ -188,13 +193,10 @@ def fold_closing_auction(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
     15:30 봉만 있고 15:29 창이 없으면(첫 페이지가 잘린 소급 응답 등) 15:30 봉을 그 창으로
     옮긴다 — 버리면 그 종목의 종가가 없다.
     """
-    def hhmmss(moment: datetime) -> str:
-        """KST 벽시계 라벨 — 입력 tz 로 비교하면 UTC aware 봉이 마감을 못 만난다."""
-        return moment.astimezone(KST).strftime("%H%M%S")
-    auction = [c for c in candles if hhmmss(c.window_start) == DAY_LAST_HHMMSS]
+    auction = [c for c in candles if is_closing_auction(c)]
     if not auction:
         return candles
-    rest = [c for c in candles if hhmmss(c.window_start) != DAY_LAST_HHMMSS]
+    rest = [c for c in candles if not is_closing_auction(c)]
     folded = []
     for auc in auction:
         end = auc.window_start
@@ -253,17 +255,24 @@ class KisMinuteClient:
         rows = self._rows(symbol, hour)
         parsed = tuple(candle for row in rows
                        if (candle := parse_minute_row(row, symbol)) is not None)
-        folded = fold_closing_auction(parsed)
-        if hour == DAY_LAST_HHMMSS and len(folded) == len(parsed):
-            # 마감 창을 물었는데 접힌 봉이 없다 = 단일가 봉(라벨 15:30)이 응답에 없다. 당일
-            # TR 은 무거래 분도 행을 주므로 부재는 벤더 지연·장애다. 그대로 돌려주면 15:29
-            # flat 봉이 그 창의 봉으로 뽑혀 `no_trade` 로 **성공** 확정되고(종가 = 단일가
-            # 전 가격 — ALPHA-1128 의 모양), INCOMPLETE 가 아니라 재청구도 없다. 마감 창만
-            # 빼서 missing 으로 낸다 — 틀린 종가보다 없는 종가가 낫다(Rule 12).
+        if hour != DAY_LAST_HHMMSS:
+            # 접기는 **정규장 마감 창**(15:30 에 끝남)을 물을 때만이다. 시간외 세션(720창,
+            # 08-02 결정으로 현재 비활성)은 15:30~15:31 창이 따로 있어 단일가 봉이 제 창에
+            # 앉는다 — 거기까지 접으면 그 창은 missing, 15:29 창은 중복이다. ⚠️ 시간외를
+            # 다시 켜면 같은 세션의 15:29 창(이 분기 밖)이 접혀 5분 롤업이 단일가를 두 번
+            # 센다 — 그때는 계획기가 15:30 창을 빼거나 접기를 세션 종류로 갈라야 한다.
+            return parsed
+        if not any(is_closing_auction(c) for c in parsed):
+            # 단일가 봉(라벨 15:30)이 응답에 없다. 당일 TR 은 무거래 분도 행을 주므로 부재는
+            # 벤더 지연·장애다. 그대로 돌려주면 15:29 flat 봉이 그 창의 봉으로 뽑혀 `no_trade`
+            # 로 **성공** 확정되고(종가 = 단일가 전 가격 — ALPHA-1128 의 모양), INCOMPLETE
+            # 가 아니라 재청구도 없다. 마감 창만 빼서 missing 으로 낸다 — 틀린 종가보다
+            # 없는 종가가 낫다(Rule 12). 판정은 접기 전후 길이가 아니라 **행 존재**다 —
+            # 15:29 행이 없으면 접기가 단일가 봉을 옮기기만 해 길이가 안 변한다(Codex 지적).
             logger.warning("KIS 분봉 %s 마감 응답에 종가 단일가 봉(라벨 %s)이 없다 — "
                            "마감 창을 missing 으로 낸다", symbol, DAY_LAST_HHMMSS)
-            return tuple(c for c in folded if c.window_end != window_end)
-        return folded
+            return tuple(c for c in parsed if c.window_end != window_end)
+        return fold_closing_auction(parsed)
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         return {

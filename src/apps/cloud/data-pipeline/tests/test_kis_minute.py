@@ -377,6 +377,27 @@ class TestResponseLayers:
         # 다른 창은 그대로다 — 마감 창만 뺀다
         assert [c.window_end.strftime("%H%M") for c in candles] == ["1529"]
 
+    def test_auction_only_response_is_not_mistaken_for_an_absent_auction(self):
+        # 15:29 행이 없고 단일가 행만 있으면 접기는 봉을 **옮기기만** 해 길이가 안 변한다 —
+        # 길이로 부재를 판정하면 정상 단일가까지 버린다(Codex 지적). 존재로 판정한다.
+        auction = {**row("153000", volume="7", close="72500"), "stck_oprc": "72500",
+                   "stck_hgpr": "72500", "stck_lwpr": "72500"}
+        client, _ = make_client([TOKEN, ok([auction, row("152800")])])
+        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
+        chosen = select_window_candle(client.candles("005930", window_end=close), close, "005930")
+        assert (chosen.volume, chosen.close) == (Decimal("7"), Decimal("72500"))
+
+    def test_fold_applies_only_to_the_regular_session_close_window(self):
+        # 시간외 세션은 15:30~15:31 창이 따로 있다 — 그 창을 물면 단일가 봉을 옮기지 않는다
+        auction = {**row("153000", volume="7", close="72500"), "stck_oprc": "72500",
+                   "stck_hgpr": "72500", "stck_lwpr": "72500"}
+        client, _ = make_client([TOKEN, ok([row("153100"), auction, flat_row("152900")])])
+        after_close = datetime(2026, 8, 3, 15, 31, tzinfo=KST)
+        chosen = select_window_candle(client.candles("005930", window_end=after_close),
+                                      after_close, "005930")
+        assert chosen.window_start == datetime(2026, 8, 3, 15, 30, tzinfo=KST)
+        assert chosen.volume == Decimal("7")
+
     def test_historical_fold_matches_realtime_when_the_vendor_omits_the_flat_minute(self):
         """소급 TR 은 무거래 15:29 행을 생략한다 — 접기 전에 복원해야 실시간과 같은 봉이 된다.
 
