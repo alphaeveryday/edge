@@ -23,7 +23,7 @@ python -m pytest tests -q
 node --test integration_tests/test_review_refresh.cjs integration_tests/test_prompt_drafts.cjs
 ```
 
-DB 통합 테스트는 Flyway 마이그레이션이 적용된 로컬 테스트 DB가 필요하다. `V2_TEST_DSN`은 `127.0.0.1:55439/analysis_v2`, `V2_FACTOR_TEST_DSN`은 `127.0.0.1:55440/analysis_v2`를 가리켜야 한다. 실제 분석 DB를 테스트 대상으로 허용하지 않는다.
+DB 통합 테스트는 Flyway 마이그레이션이 적용된 로컬 테스트 DB가 필요하다. `V2_TEST_DSN`은 `127.0.0.1:55439/analysis_v2`, `V2_FACTOR_TEST_DSN`은 `127.0.0.1:55440/analysis_v2`, `V2_SOURCE_TEST_DSN`은 `127.0.0.1:55445/edge`(cloud 스키마)를 가리켜야 한다. 실제 분석 DB를 테스트 대상으로 허용하지 않는다.
 
 ```sh
 python -m pytest tests integration_tests -q

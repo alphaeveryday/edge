@@ -12,12 +12,13 @@ from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.tools.fixture_data.common import holdings, instant, number
 
 
-def connect_sources(ca_path: Path, *, session=None):
+def connect_sources(ca_path: Path, *, session=None, cloud=False):
     """Open a dedicated TLS-verified, read-only source transaction.
 
     Args:
         ca_path: Regional RDS CA bundle.
         session: Optional AWS session; default uses the restricted reader profile.
+        cloud: Use the ECS task role and direct VPC connection instead of local SSM.
 
     Returns:
         Caller-owned repeatable-read psycopg connection with dictionary rows.
@@ -25,13 +26,14 @@ def connect_sources(ca_path: Path, *, session=None):
     ca = Path(ca_path).resolve(strict=True)
     if session is None:
         import boto3
-        session = boto3.Session(profile_name='edge-v2-readonly', region_name='ap-northeast-2')
+        session = boto3.Session(region_name='ap-northeast-2', **({} if cloud else {'profile_name':'edge-v2-readonly'}))
     secret = json.loads(session.client('secretsmanager').get_secret_value(
         SecretId='edge/analysis-v2/readonly')['SecretString'])
     expected = dict(username='edge_analysis_v2_reader', host=DB_HOST, port=5432, dbname='edge')
     if any(secret.get(k) != v for k,v in expected.items()) or not isinstance(secret.get('password'), str) or not secret['password']:
         raise ValueError('Dedicated source reader identity required')
-    connection = psycopg.connect(host=DB_HOST, hostaddr='127.0.0.1', port=15432,
+    address = {'port':5432} if cloud else {'hostaddr':'127.0.0.1','port':15432}
+    connection = psycopg.connect(host=DB_HOST, **address,
         user=expected['username'], password=secret['password'], dbname='edge',
         sslmode='verify-full', sslrootcert=str(ca), connect_timeout=10,
         row_factory=dict_row, options='-c default_transaction_read_only=on -c statement_timeout=15000')
@@ -231,7 +233,8 @@ class DatabaseTools(FixtureTools):
             self._tools['calculate_chart_indicators']['description'] += ' 고가·저가 미확보 시 바닥지수는 null입니다.'
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
-            tool['version'] = 'database-v1'
+            # get_instrument_factors 는 근사 EPS 표시(ALPHA-1130)로 응답 모양이 바뀌어 v2 — 불변 툴 ID 아래 섞이지 않게.
+            tool['version'] = 'database-v2' if name == 'get_instrument_factors' else 'database-v1'
             if name == 'get_instrument_factors':
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot']
             elif name in ('calculate_chart_indicators','evaluate_indicator_transition'):

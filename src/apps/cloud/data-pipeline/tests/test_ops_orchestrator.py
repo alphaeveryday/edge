@@ -367,6 +367,71 @@ def test_reconciler_projects_airflow_run_status_like_the_dag_verdict(normalize_e
     assert db.runs[result.run_key]["orchestration_status"] == expected
 
 
+def _airflow_only_lane(monkeypatch) -> str:
+    """SFN 없는 다흐름 레인(테스트 전용) — 흐름 a·b 가 각각 수집→정제→적재, SFN state 이름이 없다."""
+    lane, extra = "test-airflow-only", []
+    for flow in ("a", "b"):
+        up = flow.upper()
+        extra += [
+            catalog.CatalogEntry(task_key=f"{up}_COLLECTION", flow=flow, stage="raw", dataset=f"{flow}_obs",
+                                 required=True, cli_command=(f"ingest-raw-{flow}",), sfn_state_name="",
+                                 ecs_task_definition="bigkinds", deadline_offset_seconds=1200,
+                                 stalled_after_seconds=1500, pipeline_type=lane, fulfilled_exit_codes=(0, 2)),
+            catalog.CatalogEntry(task_key=f"NORMALIZE_{up}", flow=flow, stage="normalize", dataset=f"{flow}_obs",
+                                 required=True, cli_command=(f"normalize-{flow}",), sfn_state_name="",
+                                 ecs_task_definition="bigkinds", deadline_offset_seconds=1500,
+                                 stalled_after_seconds=1500, pipeline_type=lane, fulfilled_exit_codes=(0, 2)),
+            catalog.CatalogEntry(task_key=f"LOAD_{up}", flow=flow, stage="feature", dataset=f"{flow}_obs_load",
+                                 required=True, cli_command=(f"load-{flow}",), sfn_state_name="",
+                                 ecs_task_definition="rds", depends_on=(f"NORMALIZE_{up}",),
+                                 deadline_offset_seconds=1800, stalled_after_seconds=1500, pipeline_type=lane),
+        ]
+    monkeypatch.setattr(catalog, "_ENTRIES", catalog._ENTRIES + tuple(extra))
+    monkeypatch.setattr(catalog, "CATALOG", {**catalog.CATALOG, **{e.task_key: e for e in extra}})
+    return lane
+
+
+def _plan_airflow_only(db, lane):
+    return plan_run(_ledger(db), state_machine_arn=None, scheduled_time=_SLOT, pipeline_type=lane,
+                    sfn_client=_NoSfn(), orchestrator=states.ORCHESTRATOR_AIRFLOW,
+                    orchestrator_run_ref="edge_test_lane/r")
+
+
+def test_tasks_without_sfn_state_keep_their_own_evidence(monkeypatch):
+    # WHY: SFN 이 없는 작업은 state 이름이 비어 있다. Reconciler 가 증거를 빈 이름 하나로 모으면 한 작업의
+    # exit 0 이 다른 작업의 판정을 덮는다(흐름 a 정제 부분 실패 + 흐름 b 성공 → 런 "성공").
+    lane = _airflow_only_lane(monkeypatch)
+    db = FakeOpsDB()
+    result = _plan_airflow_only(db, lane)
+    exits = {e.task_key: (f"arn:ecs/{e.task_key}", 0) for e in catalog.entries(lane)}
+    exits["NORMALIZE_A"] = ("arn:ecs/NORMALIZE_A", 2)     # 부분 실패 — FULFILLED 지만 런은 실패
+    _finish(db, result.pipeline_run_id, exits)
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+                  now=_SLOT + timedelta(minutes=30))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED
+    assert len({e.evidence_key for e in catalog.entries()}) == len(catalog.entries())
+    assert catalog.by_sfn_state("") is None
+
+
+def test_parallel_flows_in_one_lane_do_not_make_each_other_stale(monkeypatch):
+    # WHY: 다른 흐름의 늦은 수집을 "앞 단계 재실행"으로 읽으면 끝난 적재가 stale 이 되어 모든 흐름이
+    # 성공해도 런 판정이 영영 안 난다(콘솔 R02 미귀결). 흐름 a 가 다 끝난 뒤 흐름 b 수집이 돈다.
+    lane = _airflow_only_lane(monkeypatch)
+    db = FakeOpsDB()
+    result = _plan_airflow_only(db, lane)
+    _finish(db, result.pipeline_run_id, {e.task_key: (f"arn:ecs/{e.task_key}", 0) for e in catalog.entries(lane)})
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+                  now=_SLOT + timedelta(minutes=30))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED
+
+
+def test_existing_lanes_keep_sfn_state_names_as_evidence_keys():
+    # WHY: 증거 키 교체가 SFN 레인의 동작을 바꾸면 안 된다 — SFN 이력은 state 이름으로 들어온다.
+    sfn_entries = [e for e in catalog.entries() if e.sfn_state_name]
+    assert all(e.evidence_key == e.sfn_state_name for e in sfn_entries)
+    assert all(e.flow == "" for e in sfn_entries)       # SFN 레인은 레인 전체가 한 흐름 그대로
+
+
 def test_unconcluded_airflow_run_stays_unresolved_after_hard_deadline():
     # 증거가 없으면 종료로 단정하지 않는다 — NULL 로 남아 콘솔 R02(마감 초과 미귀결)가 드러낸다.
     db = FakeOpsDB()
