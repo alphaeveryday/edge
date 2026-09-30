@@ -139,7 +139,12 @@ def host_summary(samples, windows):
         "samples": len(samples),
         "task_paths_seen": len(task_paths),
         # memory.events 를 못 읽은 샘플 — 있으면 상한 도달 판정(A11)은 판정 불가
-        "task_events_missing": sum(1 for s in samples for p in task_paths if p in s["cg"] and "ev_max" not in s["cg"][p]),
+        # 태스크 cgroup 이 처음~마지막으로 보인 사이의 샘플에서 행 자체가 빠진 것도 누락이다(memory.events 는 누적
+        # 카운터라 마지막 읽기까지의 도달은 잡히지만, 중간 공백이 있으면 그 구간을 봤다고 말할 수 없다).
+        "task_events_missing": sum(
+            1 for p in task_paths
+            for idx in [[i for i, s in enumerate(samples) if p in s["cg"]]]
+            for i in range(idx[0], idx[-1] + 1) if p not in samples[i]["cg"] or "ev_max" not in samples[i]["cg"][p]),
         "first_t": min(s["t"] for s in samples), "last_t": max(s["t"] for s in samples),
         "max_gap_s": max((b["t"] - a["t"] for a, b in zip(samples, samples[1:])), default=None),
     }
