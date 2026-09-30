@@ -4,9 +4,11 @@
 그 드리프트를 canonical 이 그대로 받는다 — **무엇을 유효한 봉으로 보는가**는 여기 한 곳이고,
 각 어댑터는 자기 응답 필드를 이 형으로 옮기는 매핑만 갖는다.
 
-⚠️ 두 벤더 다 timestamp 가 **구간의 끝**이다(토스 `timestamp`·KIS `stck_cntg_hour` 실측).
-원장 window 는 `[window_start, window_end)` 라 `window_start = 끝 − interval` 로 잡는다 —
-뒤집으면 전 구간이 한 칸 밀린 채 조용히 커밋된다(봉 수는 그대로라 어떤 게이트도 안 걸린다).
+⚠️ 라벨 축은 벤더마다 다르다 — 토스 `timestamp` 는 **구간의 끝**, KIS `stck_cntg_hour` 는
+**구간의 시작**이다(ALPHA-1127 실측 — 끝으로 읽던 동안 창 w 에 w+1 분 형성 중 봉이 실렸다).
+`build_candle` 은 `window_end` 를 받으므로 각 어댑터가 자기 축을 `window_end` 로 옮겨 온다.
+원장 window 는 `[window_start, window_end)` 다 — 축을 뒤집으면 전 구간이 한 칸 밀린 채
+조용히 커밋된다(봉 수는 그대로라 어떤 게이트도 안 걸린다).
 """
 
 from __future__ import annotations
@@ -109,7 +111,7 @@ def build_candle(
         raise ValueError(f"{symbol} 캔들 OHLC 정합 위반: {values}")
     return Candle(
         symbol=symbol,
-        # ts 는 구간의 **끝**이다 — window_start 는 그 interval 만큼 앞이다
+        # window_end 기준 — window_start 는 그 interval 만큼 앞이다(라벨 축 변환은 어댑터가 끝낸다)
         window_start=window_end.__class__.fromtimestamp(
             window_end.timestamp() - span_seconds, tz=window_end.tzinfo
         ),

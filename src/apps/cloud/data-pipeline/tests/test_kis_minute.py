@@ -363,11 +363,13 @@ class TestResponseLayers:
         candles = tuple(parse_minute_row(row(h), "005930") for h in ("152900", "152800"))
         assert fold_closing_auction(candles) == candles
 
-    def test_historical_fold_matches_realtime_when_the_vendor_omits_the_flat_minute(self):
-        """소급 TR 은 무거래 15:29 행을 생략한다 — 접기 전에 복원해야 실시간과 같은 봉이 된다.
+    def test_historical_fold_restores_the_flat_minute_before_folding(self):
+        """소급 TR 은 무거래 15:29 행을 생략한다 — 접기 **전에** 복원해야 마감 봉의 시가가
+        접수 구간 가격(=실시간 15:29 창의 종가)이 된다.
 
-        먼저 접으면 단일가 봉 하나가 마감 창이 되어 시가·고저가가 단일가로 굳는다.
-        재수집이 마감 봉의 시가를 바꾸면 5분봉·갭 계산이 실시간분과 갈린다(Codex 지적).
+        먼저 접으면 단일가 봉 하나가 마감 창이 되어 시가·고저가가 단일가로 굳는다(Codex
+        지적). ⚠️ 실시간 경로는 접지 않으므로(vol 0 봉) 두 경로의 마감 봉은 **다르다** —
+        재수집이 정본이고 이 테스트는 그 정본의 모양만 고정한다.
         """
         auction = {**row("153000", volume="7", close="110"), "stck_oprc": "110",
                    "stck_hgpr": "110", "stck_lwpr": "110"}
@@ -377,13 +379,13 @@ class TestResponseLayers:
                            ok([{**row("152700"), "stck_bsop_date": "20260731"}])])
         client = KisHistoricalMinuteClient("app-key", "app-secret", fake, session_date=date(2026, 8, 3))
         [last] = client.candles("005930", window_end=datetime(2026, 8, 3, 15, 30, tzinfo=KST))
-        # 실시간(15:29 flat 행 + 단일가 행)과 같은 봉: 시가 100(접수 구간 flat)·종가 110
+        # 시가 100(접수 구간 flat = 실시간 15:29 창 종가)·종가 110(단일가)
         assert (last.open, last.high, last.low, last.close) == (
             Decimal("100"), Decimal("110"), Decimal("100"), Decimal("110"))
         assert last.volume == Decimal("7")
 
-    def test_historical_path_folds_the_auction_too(self):
-        # 재수집분과 실시간분의 마지막 창이 갈리면 안 된다 — 같은 함수, 같은 결과
+    def test_historical_path_folds_the_auction(self):
+        # 재수집 마감 봉 = 단일가가 접힌 봉(정본). 실시간 마감 봉은 접수 구간 봉이라 다르다
         auction = {**row("153000", volume="1497751", close="285500"), "stck_oprc": "285500",
                    "stck_hgpr": "285500", "stck_lwpr": "285500"}
         fake = FakeClient([TOKEN, ok([auction, row("152900", volume="0", close="72500")]),
