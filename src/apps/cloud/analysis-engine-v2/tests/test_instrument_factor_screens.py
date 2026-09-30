@@ -43,3 +43,18 @@ def test_development_mode_is_no_longer_an_execution_option(tmp_path):
     manager = ExecutionDashboard(tmp_path, key='test', model='test', connection_factory=lambda: None)
     with pytest.raises(ValueError):
         manager.start({'kind': 'movement', 'scenario': 'baseline', 'tool_mode': 'cards'})
+
+
+def test_approximate_weighted_per_is_withheld_from_cards_but_kept_in_the_screen():
+    # Policy (ALPHA-1130): FY−9M Q4 EPS is an approximation. The screen response says so
+    # (weighted_per_approximate); the projected card cannot, so the PER card is withheld while PBR stays.
+    fixture = make_fixture()
+    etf = fixture['context']['etf_code']
+    rows = [r for r in fixture['financials'] if r['period'].endswith('-Q4')]
+    assert rows, 'fixture must contain a Q4 quarter'
+    for r in rows:
+        r['eps_derivation'] = 'FY_MINUS_9M'
+    output = FixtureTools(fixture).call('get_instrument_factors', {'instrument_id': etf, 'factors': ['valuation']})
+    assert output['result']['valuation']['weighted_per_approximate'] is True
+    keys = [c['key'] for c in project_factor_metrics(output, etf)['밸류']]
+    assert 'weighted_per' not in keys and 'weighted_pbr' in keys

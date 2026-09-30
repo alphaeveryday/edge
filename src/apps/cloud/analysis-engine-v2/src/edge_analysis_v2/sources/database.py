@@ -233,7 +233,8 @@ class DatabaseTools(FixtureTools):
             self._tools['calculate_chart_indicators']['description'] += ' 고가·저가 미확보 시 바닥지수는 null입니다.'
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
-            tool['version'] = 'database-v1'
+            # get_instrument_factors 는 근사 EPS 표시(ALPHA-1130)로 응답 모양이 바뀌어 v2 — 불변 툴 ID 아래 섞이지 않게.
+            tool['version'] = 'database-v2' if name == 'get_instrument_factors' else 'database-v1'
             if name == 'get_instrument_factors':
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot']
             elif name in ('calculate_chart_indicators','evaluate_indicator_transition'):
