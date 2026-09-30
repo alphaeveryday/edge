@@ -57,7 +57,7 @@ class NotificationFlowTests extends ContainerTests {
 
     String member(String email) {
         signupCode(email);
-        String token = (String) result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw", "nick", "n", "code", SIGNUP_CODE), "dev:none")).get("accessToken");
+        String token = (String) result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "n", "code", SIGNUP_CODE), "dev:none")).get("accessToken");
         result(call("PUT", "/api/v1/watch-groups/base/etfs", Map.of("codes", List.of("069500")), token));
         return token;
     }

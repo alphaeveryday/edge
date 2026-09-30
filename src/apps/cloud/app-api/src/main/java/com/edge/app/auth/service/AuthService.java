@@ -10,6 +10,7 @@ import com.edge.app.auth.dto.SocialLoginRequest;
 import com.edge.app.common.AppErrorStatus;
 import com.edge.app.common.auth.AccessTokens;
 import com.edge.app.common.auth.AppPrincipal;
+import com.edge.app.common.mail.MailQuota;
 import com.edge.app.common.mail.Mailer;
 import com.edge.app.member.dto.MeResponse;
 import com.edge.app.member.entity.Member;
@@ -57,9 +58,9 @@ public class AuthService {
     private final DeviceRepository deviceRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordResetCodeRepository resetCodeRepository;
-    private final SignupCodeService signupCodeService;
     private final SignupCodeRepository signupCodeRepository;
     private final Mailer mailer;
+    private final MailQuota mailQuota;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @Transactional
@@ -87,13 +88,9 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 인증 코드 확인 후 가입. 동시 가입의 유니크 위반도 MEMBER4002 로 응답
+    // 인증 코드 확인(SignupCodeService.verify) 뒤 호출. 동시 가입의 유니크 위반도 MEMBER4002 로 응답
     @Transactional
     public AuthResponse signup(SignupRequest request, String deviceKey) {
-        if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isPresent()) {
-            throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
-        }
-        signupCodeService.verify(request.email(), request.code());
         Member member;
         try {
             member = memberRepository.saveAndFlush(Member.email(request.email(),
@@ -111,10 +108,14 @@ public class AuthService {
         Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.MEMBER_EMAIL_NOT_FOUND));
         Instant now = Instant.now();
-        PasswordResetCode current = resetCodeRepository.findById(member.getId()).orElse(null);
+        PasswordResetCode current = resetCodeRepository.findForUpdate(member.getId()).orElse(null);
         if (current != null && current.getCreatedAt().plus(RESET_RESEND_GAP).isAfter(now)) {
             return;
         }
+        if (current != null && current.dailyLimitReached(now)) {
+            throw new GeneralException(AppErrorStatus.AUTH_MAIL_LIMIT);
+        }
+        mailQuota.take();
         String code = newCode();
         if (current == null) {
             resetCodeRepository.save(PasswordResetCode.issue(member.getId(), hash(code), now));
@@ -131,7 +132,7 @@ public class AuthService {
         Instant now = Instant.now();
         Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID));
-        PasswordResetCode code = resetCodeRepository.findById(member.getId())
+        PasswordResetCode code = resetCodeRepository.findForUpdate(member.getId())
                 .filter(c -> c.usable(now))
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID));
         if (!MessageDigest.isEqual(code.getCodeHash().getBytes(), hash(request.code()).getBytes())) {

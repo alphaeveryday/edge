@@ -51,6 +51,8 @@ public class AuthController {
     @PostMapping("/signup")
     public ApiResponse<AuthResponse> authSignup(@RequestBody @Valid SignupRequest request,
             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
+        // 코드 확인은 가입 트랜잭션 밖에서 먼저. 요청당 DB 연결 두 개 점유 방지
+        signupCodeService.verify(request.email(), request.code());
         return ApiResponse.onSuccess(authService.signup(request, deviceKey));
     }
 

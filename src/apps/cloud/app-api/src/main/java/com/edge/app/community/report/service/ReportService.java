@@ -1,6 +1,7 @@
 package com.edge.app.community.report.service;
 
 import com.edge.app.common.AppErrorStatus;
+import com.edge.app.common.mail.MailQuota;
 import com.edge.app.common.mail.Mailer;
 import com.edge.app.community.post.repository.PostRepository;
 import com.edge.app.community.post.repository.ReplyRepository;
@@ -23,6 +24,7 @@ public class ReportService {
     private final ReplyRepository replyRepository;
     private final MemberRepository memberRepository;
     private final Mailer mailer;
+    private final MailQuota mailQuota;
 
     @Value("${app.mail.operator}")
     private String operator;
@@ -43,6 +45,8 @@ public class ReportService {
         if (reportRepository.insertIfAbsent(memberId, request.targetType(), targetId, request.reason()) == 0) {
             return;
         }
+        // 운영자 메일은 상한과 무관하게 발송, 발송 수에만 반영
+        mailQuota.count();
         mailer.send(operator, "[ETF Orca 신고] " + request.reason() + " " + request.targetType() + " " + targetId,
                 "사유: " + request.reason() + "\n대상: " + request.targetType() + " " + targetId
                         + "\n작성자: " + handle(target.authorId()) + "\n신고자: " + handle(memberId)

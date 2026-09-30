@@ -23,6 +23,7 @@ public enum AppErrorStatus implements BaseErrorCode {
     MEMBER_EMAIL_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER4005", "가입되지 않은 이메일입니다."),
     AUTH_BAD_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH4001", "이메일 또는 비밀번호가 맞지 않습니다."),
     AUTH_RESET_CODE_INVALID(HttpStatus.BAD_REQUEST, "AUTH4002", "코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요."),
+    AUTH_MAIL_LIMIT(HttpStatus.TOO_MANY_REQUESTS, "AUTH4003", "오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요."),
     VOTE_STORE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "VOTE5001", "투표 저장소를 사용할 수 없습니다.");
 
     private final HttpStatus httpStatus;

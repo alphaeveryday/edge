@@ -14,6 +14,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.client.RestClient;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -99,7 +101,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("AUTH4001", bad.getBody().get("code"));
         assertEquals(401, call("POST", "/api/v1/auth/login", Map.of("email", "nobody@example.com", "password", "x")).getStatusCode().value());
         assertEquals(200, call("POST", "/api/v1/auth/login", Map.of("email", "b@example.com", "password", "pw123456")).getStatusCode().value());
-        var dup = call("POST", "/api/v1/auth/signup", Map.of("email", "b@example.com", "password", "x", "nick", "n", "code", SIGNUP_CODE));
+        var dup = call("POST", "/api/v1/auth/signup", Map.of("email", "b@example.com", "password", "pw123456", "nick", "n", "code", SIGNUP_CODE));
         assertEquals(409, dup.getStatusCode().value());
         assertEquals("MEMBER4002", dup.getBody().get("code"));
     }
@@ -202,6 +204,85 @@ class AuthFlowTests extends ContainerTests {
         jdbc.update("update password_reset_code set expires_at = now() - interval '1 second' "
                 + "where member_id = (select id from member where email = 'r3@example.com')");
         assertEquals("AUTH4002", confirmReset("r3@example.com", fresh, "newpw1234").getBody().get("code"));
+    }
+
+    // 동시 오답이 시도 수를 덮어쓰면 5회 제한을 넘어 대입된다
+    @Test
+    void concurrentWrongCodesStillLockAfterFive() throws Exception {
+        signup("r4@example.com");
+        String code = requestResetCode("r4@example.com");
+        String wrong = code.equals("000000") ? "111111" : "000000";
+        int n = 10;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(n);
+        var gate = new java.util.concurrent.CountDownLatch(1);
+        List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            futures.add(pool.submit(() -> {
+                gate.await();
+                return confirmReset("r4@example.com", wrong, "newpw1234");
+            }));
+        }
+        gate.countDown();
+        for (var f : futures) {
+            f.get();
+        }
+        pool.shutdown();
+        assertEquals(5, jdbc.queryForObject("select attempts from password_reset_code "
+                + "where member_id = (select id from member where email = 'r4@example.com')", Integer.class));
+        assertEquals("AUTH4002", confirmReset("r4@example.com", code, "newpw1234").getBody().get("code"));
+    }
+
+    // 재발송마다 시도 수가 초기화되므로 이메일당 하루 발송 수가 추측 누적의 상한
+    @Test
+    void codeMailStopsAfterFiveSendsADay() {
+        signup("r6@example.com");
+        String member = "(select id from member where email = 'r6@example.com')";
+        for (int i = 0; i < 5; i++) {
+            assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", "r6@example.com")).getStatusCode().value());
+            jdbc.update("update password_reset_code set created_at = created_at - interval '61 seconds' where member_id = " + member);
+        }
+        var limited = call("POST", "/api/v1/auth/password-reset", Map.of("email", "r6@example.com"));
+        assertEquals(429, limited.getStatusCode().value());
+        assertEquals("AUTH4003", limited.getBody().get("code"));
+        verify(mailer, times(5)).send(eq("r6@example.com"), anyString(), anyString());
+        jdbc.update("update password_reset_code set window_started_at = now() - interval '25 hours' where member_id = " + member);
+        assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", "r6@example.com")).getStatusCode().value());
+
+        for (int i = 0; i < 5; i++) {
+            assertEquals(200, call("POST", "/api/v1/auth/signup/code", Map.of("email", "v3@example.com")).getStatusCode().value());
+            jdbc.update("update signup_code set created_at = created_at - interval '61 seconds' where email = 'v3@example.com'");
+        }
+        assertEquals("AUTH4003", call("POST", "/api/v1/auth/signup/code", Map.of("email", "v3@example.com")).getBody().get("code"));
+    }
+
+    // Gmail 하루 한도가 소진되면 그날 가입·재설정이 전부 막히므로 코드 메일을 먼저 끊는다
+    @Test
+    void codeMailStopsAtGlobalDailyLimit() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Seoul"));
+        jdbc.update("insert into mail_daily (day, sent) values (?, 300) on conflict (day) do update set sent = 300", today);
+        try {
+            var limited = call("POST", "/api/v1/auth/signup/code", Map.of("email", "g1@example.com"));
+            assertEquals(429, limited.getStatusCode().value());
+            assertEquals("AUTH4003", limited.getBody().get("code"));
+            verify(mailer, never()).send(eq("g1@example.com"), anyString(), anyString());
+        } finally {
+            jdbc.update("delete from mail_daily where day = ?", today);
+        }
+    }
+
+    // 형식이 틀린 코드가 시도 수를 깎으면 장난 요청 5번으로 정상 코드가 무효가 된다
+    @Test
+    void malformedCodeAndShortPasswordAreRejectedBeforeCounting() {
+        signup("r5@example.com");
+        String code = requestResetCode("r5@example.com");
+        for (int i = 0; i < 5; i++) {
+            assertEquals("COMMON400", confirmReset("r5@example.com", "abcdef", "newpw1234").getBody().get("code"));
+        }
+        assertEquals("COMMON400", confirmReset("r5@example.com", code, "short").getBody().get("code"));
+        assertEquals(200, confirmReset("r5@example.com", code, "newpw1234").getStatusCode().value());
+        signupCode("r7@example.com");
+        assertEquals("COMMON400", call("POST", "/api/v1/auth/signup",
+                Map.of("email", "r7@example.com", "password", "short", "nick", "n", "code", SIGNUP_CODE)).getBody().get("code"));
     }
 
     @Test
