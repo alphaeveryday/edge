@@ -15,6 +15,7 @@ from .source_observations import (
     Column,
     DatasetSpec,
     RawObject,
+    ensure_same_request,
     existing_raw_manifest,
     record_already_collected,
     write_raw_run,
@@ -98,8 +99,10 @@ def collect_macro(storage: Storage, source, run_id: str, *, series_ids: list[str
                   from_date: str | None, to_date: str | None, now: datetime | None = None) -> int:
     """계열별 요청 창을 부르고 응답을 그대로 남긴다. 키 없는 계열은 부르지 않고 실패로 드러낸다."""
     producer = "ingest_raw_macro"
+    requested = {"from": from_date, "to": to_date, "series": sorted(series_ids)}
     done = existing_raw_manifest(storage, MACRO.dataset, run_id)
     if done is not None:
+        ensure_same_request(MACRO.dataset, run_id, done, requested)
         return record_already_collected(storage, MACRO, run_id, producer, done)
     started_at = now or datetime.now(timezone.utc)
     today_kst = started_at.astimezone(KST).date()
@@ -125,6 +128,6 @@ def collect_macro(storage: Storage, source, run_id: str, *, series_ids: list[str
                                      result.fetched_at))
     scope = {"series": series_ids,
              "windows": {s: {"from": a.isoformat(), "to": b.isoformat()} for s, (a, b) in windows.items()},
-             "mode": "backfill" if from_date else "regular"}
+             "mode": "backfill" if from_date else "regular", "requested": requested}
     return write_raw_run(storage, MACRO, run_id, producer=producer, objects=objects,
                          started_at=started_at, request_scope=scope)
