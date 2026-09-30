@@ -27,7 +27,7 @@ fix/*     ─┘
     - 선행 PR이 squash 머지되면 후속 브랜치에는 선행 PR의 원래 커밋이 그대로 남는다. 아래 순서로 옮긴다.
       1. `gh pr edit <N> --base dev` 로 base를 바꾼다.
       2. 최신 `origin/dev` 를 후속 브랜치에 merge 한다. 선행 PR의 변경이 충돌로 다시 나타나면 `dev` 쪽(머지된 내용)을 받고, 후속 PR이 그 줄을 다시 고친 경우에만 후속 브랜치 쪽을 받는다.
-      3. `git diff origin/dev...HEAD --stat` 에 후속 PR 자신의 파일만 남았는지 확인한다. 선행 PR 파일이 보이면 머지된 내용과 다른 것이니 머지하지 않고 원인을 찾는다.
+      3. `git diff origin/dev...HEAD` 가 base를 바꾸기 전의 PR diff(선행 브랜치 대비)와 같은지 확인한다. 후속 PR이 선행 PR 파일을 고쳤다면 그 파일은 원래 diff에도 있었다. 원래 diff에 없던 파일·헌크가 보이면 머지된 선행 내용과 어긋난 것이니 머지하지 않고 원인을 찾는다.
       4. push 뒤 GitHub CI 전건 통과를 확인하고 머지한다.
 - `dev` → **`main`에만** PR 한다.
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
