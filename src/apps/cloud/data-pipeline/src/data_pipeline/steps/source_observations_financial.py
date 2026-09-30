@@ -17,6 +17,7 @@ from .source_observations import (
     Column,
     DatasetSpec,
     RawObject,
+    ensure_same_request,
     existing_raw_manifest,
     record_already_collected,
     write_raw_run,
@@ -363,15 +364,17 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
     from ..sources.http import StopFetch
 
     producer = "ingest_raw_financial_metric"
+    requested = {"from": from_date, "to": to_date, "etf_ids": sorted(etf_ids)}
     done = existing_raw_manifest(storage, FINANCIAL.dataset, run_id)
     if done is not None:
+        ensure_same_request(FINANCIAL.dataset, run_id, done, requested)
         return record_already_collected(storage, FINANCIAL, run_id, producer, done)
     started_at = now or datetime.now(timezone.utc)
     start, end = filing_window(started_at.astimezone(KST).date(), from_date, to_date)
     tickers, coverage = constituents_between(storage, etf_ids, start, end)
     scope = {"etf_ids": etf_ids, "filing_window": {"from": start.isoformat(), "to": end.isoformat()},
              "constituents": tickers, "holdings_coverage": coverage, "corps": {}, "unmapped": [],
-             "mode": "backfill" if from_date else "regular"}
+             "mode": "backfill" if from_date else "regular", "requested": requested}
     if not tickers:
         # 그 기간의 구성종목 스냅샷이 없다 — 현재 구성으로 대신하지 않는다.
         return write_raw_run(storage, FINANCIAL, run_id, producer=producer, objects=[
