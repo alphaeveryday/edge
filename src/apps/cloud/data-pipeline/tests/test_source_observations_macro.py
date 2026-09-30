@@ -290,3 +290,26 @@ def test_reversed_monthly_backfill_is_rejected_before_month_alignment():
     # WHY(봇 P2): 월초 맞춤 뒤에 검사하면 02-20~02-01 같은 역전 창이 2월 한 달 수집으로 바뀐다.
     with pytest.raises(SystemExit, match="역전"):
         so_macro.macro_window("kr_cpi_yoy", date(2026, 9, 30), "2026-02-20", "2026-02-01")
+
+
+def test_quality_log_failure_leaves_the_normalize_run_incomplete(tmp_path, monkeypatch):
+    # WHY: 완료 manifest 가 검증 기록(quality_log)보다 먼저 서면, 기록이 실패한 실행도 `load --all` 이 싣고 소비
+    # 마커를 남긴다 — 빠진 검증 기록이 영영 드러나지 않는다. 기록이 실패하면 그 정제는 미완료로 남아야 한다.
+    storage = LocalStorage(tmp_path)
+    src, _ = source()
+    assert collect(storage, "q_raw", src) == 0
+    original = storage.put_bytes
+
+    def failing(key, data, *a, **k):
+        if key.startswith("operations_archive/data_quality_logs/"):
+            raise OSError("quality log write failed")
+        return original(key, data, *a, **k)
+
+    monkeypatch.setattr(storage, "put_bytes", failing)
+    assert so.normalize(storage, so_macro.MACRO, "q_norm", "q_raw", producer="normalize_macro") == 1
+    monkeypatch.setattr(storage, "put_bytes", original)
+    manifest = json.loads(storage.get_bytes(
+        "operations_archive/canonical_run_manifests/dataset=macro_observation/run_id=q_norm/manifest.json"))
+    assert manifest["canonical_written"] is False
+    # 적재의 미완료 회수 경로도 이 실행을 싣지 않는다(소비 마커 없음 → 검증 기록을 다시 만들 기회가 남는다).
+    assert so._completed_manifest(storage, so_macro.MACRO, "q_norm") is None

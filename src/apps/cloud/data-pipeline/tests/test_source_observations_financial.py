@@ -857,3 +857,25 @@ def test_interim_reports_of_a_non_december_company_are_rejected_even_when_months
     no_annual = june[:1]
     targets, rejects = dart_fundamental.plan_reports(no_annual, date(2026, 11, 1), date(2026, 11, 20))
     assert targets == set() and rejects[0]["reasons"] == ["fiscal_calendar_unconfirmed"]
+
+
+def test_disabled_dart_source_is_not_called_even_with_a_key(tmp_path, monkeypatch):
+    # WHY: 운영자가 dart_financial.source.enabled=false 로 끈 공급자를 새 재무 수집이 키만 보고 부르면
+    # 끄는 스위치가 이 경로에서 무력하다(한도·장애 대응). 비활성은 호출 없이 거부한다.
+    from types import SimpleNamespace
+
+    import pytest
+
+    from data_pipeline import run as run_module
+    from data_pipeline.config import DartFinancialSource, SourceObservationsConfig
+
+    called = []
+    monkeypatch.setattr(so_fin, "collect_financial", lambda *a, **k: called.append(1) or 0)
+    settings = SimpleNamespace(
+        source_observations=SourceObservationsConfig(etf_ids=["091160"]),
+        dart_financial=SimpleNamespace(source=DartFinancialSource(enabled=False, api_key="k")))
+    args = SimpleNamespace(step="ingest-raw-financial-metric", input_run_id=None, from_date=None, to_date=None,
+                           series=None, all_partitions=False)
+    with pytest.raises(SystemExit, match="비활성"):
+        run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_off")
+    assert called == []

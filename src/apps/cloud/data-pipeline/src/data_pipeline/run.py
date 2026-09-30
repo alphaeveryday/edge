@@ -702,6 +702,8 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
             raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
         dart = dart_fundamental.DartFundamentalSource(settings.dart_financial.source,
                                                       PoliteClient(min_interval=0.5, timeout=30.0))
+        if not dart.enabled:     # 설정 플래그(dart_financial.source.enabled)로 끈 공급자는 부르지 않는다
+            raise SystemExit("dart_financial.source 가 비활성이다")
         return source_observations_financial.collect_financial(
             storage, dart, run_id, etf_ids=config.etf_ids, from_date=args.from_date, to_date=args.to_date)
     series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
