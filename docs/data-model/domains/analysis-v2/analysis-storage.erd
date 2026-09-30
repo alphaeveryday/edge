@@ -1,0 +1,3012 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dineug/erd-editor/main/json-schema/schema.json",
+  "version": "3.0.0",
+  "settings": {
+    "width": 5500,
+    "height": 3000,
+    "scrollTop": 0,
+    "scrollLeft": 0,
+    "originX": 30,
+    "originY": 30,
+    "zoomLevel": 0.3,
+    "show": 423,
+    "database": 16,
+    "databaseName": "ETF ORCA — 분석 결과와 툴 감사",
+    "canvasType": "ERD",
+    "language": 4096,
+    "tableNameCase": 8,
+    "columnNameCase": 8,
+    "bracketType": 2,
+    "relationshipDataTypeSync": true,
+    "relationshipOptimization": false,
+    "columnOrder": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "maxWidthComment": 310,
+    "ignoreSaveSettings": 0
+  },
+  "doc": {
+    "tableIds": [
+      "movement_analyses",
+      "movement_items",
+      "outlook_analyses",
+      "outlook_items",
+      "outlook_factors",
+      "tool_runs",
+      "tool_definitions",
+      "outlook_conclusion_keywords",
+      "outlook_factor_metrics",
+      "outlook_issue_items"
+    ],
+    "relationshipIds": [
+      "fk_movement_items_analysis_id",
+      "fk_outlook_items_analysis_id",
+      "fk_outlook_factors_analysis_id",
+      "fk_outlook_conclusion_keywords_analysis_id",
+      "fk_tool_runs_movement_analysis_id",
+      "fk_tool_runs_outlook_analysis_id",
+      "fk_tool_runs_tool_id",
+      "fk_movement_analyses_previous_analysis_id",
+      "fk_outlook_analyses_previous_analysis_id",
+      "fk_outlook_factor_metrics_analysis_id",
+      "fk_outlook_issue_items_analysis_id"
+    ],
+    "indexIds": [
+      "uq_outlook_items_analysis_id_section_item_id",
+      "uq_outlook_items_analysis_id_section_position",
+      "uq_outlook_factors_analysis_id_type",
+      "uq_outlook_conclusion_keywords_analysis_id_kind_position",
+      "uq_tool_definitions_function_name_version",
+      "uq_outlook_factor_metrics_analysis_id_factor_type_position"
+    ],
+    "memoIds": [
+      "overview",
+      "movement_rules",
+      "outlook_rules",
+      "section_rules",
+      "conclusion_rules",
+      "audit_rules",
+      "integrity",
+      "editing_tool",
+      "scope"
+    ]
+  },
+  "collections": {
+    "tableEntities": {
+      "movement_analyses": {
+        "id": "movement_analyses",
+        "name": "movement_analyses",
+        "comment": "오늘 움직임 | 요약과 선택 순서",
+        "columnIds": [
+          "movement_analyses.analysis_id",
+          "movement_analyses.etf_code",
+          "movement_analyses.analysis_at",
+          "movement_analyses.previous_analysis_id",
+          "movement_analyses.status",
+          "movement_analyses.published_at",
+          "movement_analyses.error_message",
+          "movement_analyses.trading_date",
+          "movement_analyses.summary",
+          "movement_analyses.selected_item_ids"
+        ],
+        "seqColumnIds": [
+          "movement_analyses.analysis_id",
+          "movement_analyses.etf_code",
+          "movement_analyses.analysis_at",
+          "movement_analyses.previous_analysis_id",
+          "movement_analyses.status",
+          "movement_analyses.published_at",
+          "movement_analyses.error_message",
+          "movement_analyses.trading_date",
+          "movement_analyses.summary",
+          "movement_analyses.selected_item_ids"
+        ],
+        "ui": {
+          "x": 80,
+          "y": 200,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#dbeafe"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items": {
+        "id": "movement_items",
+        "name": "movement_items",
+        "comment": "오늘 움직임 | 새 설명 누적",
+        "columnIds": [
+          "movement_items.item_id",
+          "movement_items.analysis_id",
+          "movement_items.type",
+          "movement_items.title_keyword",
+          "movement_items.sentence",
+          "movement_items.sentiment",
+          "movement_items.source_as_of",
+          "movement_items.tool_run_ids",
+          "movement_items.created_at"
+        ],
+        "seqColumnIds": [
+          "movement_items.item_id",
+          "movement_items.analysis_id",
+          "movement_items.type",
+          "movement_items.title_keyword",
+          "movement_items.sentence",
+          "movement_items.sentiment",
+          "movement_items.source_as_of",
+          "movement_items.tool_run_ids",
+          "movement_items.created_at"
+        ],
+        "ui": {
+          "x": 80,
+          "y": 740,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#dbeafe"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses": {
+        "id": "outlook_analyses",
+        "name": "outlook_analyses",
+        "comment": "전망 | 발행별 요약·본문 제목·결론",
+        "columnIds": [
+          "outlook_analyses.analysis_id",
+          "outlook_analyses.etf_code",
+          "outlook_analyses.analysis_at",
+          "outlook_analyses.previous_analysis_id",
+          "outlook_analyses.status",
+          "outlook_analyses.published_at",
+          "outlook_analyses.error_message",
+          "outlook_analyses.outlook_sticker",
+          "outlook_analyses.summary_title",
+          "outlook_analyses.summary",
+          "outlook_analyses.detail_title",
+          "outlook_analyses.detail_mode",
+          "outlook_analyses.conclusion_title",
+          "outlook_analyses.conclusion_sentence",
+          "outlook_analyses.change_condition",
+          "outlook_analyses.issue_headline"
+        ],
+        "seqColumnIds": [
+          "outlook_analyses.analysis_id",
+          "outlook_analyses.etf_code",
+          "outlook_analyses.analysis_at",
+          "outlook_analyses.previous_analysis_id",
+          "outlook_analyses.status",
+          "outlook_analyses.published_at",
+          "outlook_analyses.error_message",
+          "outlook_analyses.outlook_sticker",
+          "outlook_analyses.summary_title",
+          "outlook_analyses.summary",
+          "outlook_analyses.detail_title",
+          "outlook_analyses.detail_mode",
+          "outlook_analyses.conclusion_title",
+          "outlook_analyses.conclusion_sentence",
+          "outlook_analyses.change_condition",
+          "outlook_analyses.issue_headline"
+        ],
+        "ui": {
+          "x": 2180,
+          "y": 200,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#d1fae5"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items": {
+        "id": "outlook_items",
+        "name": "outlook_items",
+        "comment": "전망 | 본문과 오늘 업데이트",
+        "columnIds": [
+          "outlook_items.row_id",
+          "outlook_items.analysis_id",
+          "outlook_items.item_id",
+          "outlook_items.section",
+          "outlook_items.change_type",
+          "outlook_items.position",
+          "outlook_items.title_keyword",
+          "outlook_items.bullets",
+          "outlook_items.sentence",
+          "outlook_items.source_as_of",
+          "outlook_items.tool_run_ids"
+        ],
+        "seqColumnIds": [
+          "outlook_items.row_id",
+          "outlook_items.analysis_id",
+          "outlook_items.item_id",
+          "outlook_items.section",
+          "outlook_items.change_type",
+          "outlook_items.position",
+          "outlook_items.title_keyword",
+          "outlook_items.bullets",
+          "outlook_items.sentence",
+          "outlook_items.source_as_of",
+          "outlook_items.tool_run_ids"
+        ],
+        "ui": {
+          "x": 2180,
+          "y": 960,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#d1fae5"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factors": {
+        "id": "outlook_factors",
+        "name": "outlook_factors",
+        "comment": "전망 | 5요인 상태와 설명",
+        "columnIds": [
+          "outlook_factors.row_id",
+          "outlook_factors.analysis_id",
+          "outlook_factors.type",
+          "outlook_factors.sticker",
+          "outlook_factors.sentence"
+        ],
+        "seqColumnIds": [
+          "outlook_factors.row_id",
+          "outlook_factors.analysis_id",
+          "outlook_factors.type",
+          "outlook_factors.sticker",
+          "outlook_factors.sentence"
+        ],
+        "ui": {
+          "x": 2180,
+          "y": 1500,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#d1fae5"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs": {
+        "id": "tool_runs",
+        "name": "tool_runs",
+        "comment": "툴 감사 | 호출 인수와 실제 반환값",
+        "columnIds": [
+          "tool_runs.tool_run_id",
+          "tool_runs.tool_id",
+          "tool_runs.movement_analysis_id",
+          "tool_runs.outlook_analysis_id",
+          "tool_runs.arguments",
+          "tool_runs.context",
+          "tool_runs.output",
+          "tool_runs.status",
+          "tool_runs.error_message",
+          "tool_runs.started_at",
+          "tool_runs.finished_at"
+        ],
+        "seqColumnIds": [
+          "tool_runs.tool_run_id",
+          "tool_runs.tool_id",
+          "tool_runs.movement_analysis_id",
+          "tool_runs.outlook_analysis_id",
+          "tool_runs.arguments",
+          "tool_runs.context",
+          "tool_runs.output",
+          "tool_runs.status",
+          "tool_runs.error_message",
+          "tool_runs.started_at",
+          "tool_runs.finished_at"
+        ],
+        "ui": {
+          "x": 1130,
+          "y": 740,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#fef3c7"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions": {
+        "id": "tool_definitions",
+        "name": "tool_definitions",
+        "comment": "툴 감사 | 고정 수식과 출처",
+        "columnIds": [
+          "tool_definitions.tool_id",
+          "tool_definitions.function_name",
+          "tool_definitions.version",
+          "tool_definitions.formula_latex",
+          "tool_definitions.description",
+          "tool_definitions.source_names"
+        ],
+        "seqColumnIds": [
+          "tool_definitions.tool_id",
+          "tool_definitions.function_name",
+          "tool_definitions.version",
+          "tool_definitions.formula_latex",
+          "tool_definitions.description",
+          "tool_definitions.source_names"
+        ],
+        "ui": {
+          "x": 1130,
+          "y": 1360,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#fef3c7"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords": {
+        "id": "outlook_conclusion_keywords",
+        "name": "outlook_conclusion_keywords",
+        "comment": "전망 결론 | 도움·부담 키워드",
+        "columnIds": [
+          "outlook_conclusion_keywords.row_id",
+          "outlook_conclusion_keywords.analysis_id",
+          "outlook_conclusion_keywords.kind",
+          "outlook_conclusion_keywords.position",
+          "outlook_conclusion_keywords.label",
+          "outlook_conclusion_keywords.tool_run_ids"
+        ],
+        "seqColumnIds": [
+          "outlook_conclusion_keywords.row_id",
+          "outlook_conclusion_keywords.analysis_id",
+          "outlook_conclusion_keywords.kind",
+          "outlook_conclusion_keywords.position",
+          "outlook_conclusion_keywords.label",
+          "outlook_conclusion_keywords.tool_run_ids"
+        ],
+        "ui": {
+          "x": 3230,
+          "y": 960,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#d1fae5"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics": {
+        "id": "outlook_factor_metrics",
+        "name": "outlook_factor_metrics",
+        "comment": "요인 상세 수치",
+        "columnIds": [
+          "outlook_factor_metrics.analysis_id",
+          "outlook_factor_metrics.factor_type",
+          "outlook_factor_metrics.metric_key",
+          "outlook_factor_metrics.numeric_value",
+          "outlook_factor_metrics.text_value",
+          "outlook_factor_metrics.observed_date",
+          "outlook_factor_metrics.observed_at",
+          "outlook_factor_metrics.subject",
+          "outlook_factor_metrics.position",
+          "outlook_factor_metrics.tool_run_ids"
+        ],
+        "seqColumnIds": [
+          "outlook_factor_metrics.analysis_id",
+          "outlook_factor_metrics.factor_type",
+          "outlook_factor_metrics.metric_key",
+          "outlook_factor_metrics.numeric_value",
+          "outlook_factor_metrics.text_value",
+          "outlook_factor_metrics.observed_date",
+          "outlook_factor_metrics.observed_at",
+          "outlook_factor_metrics.subject",
+          "outlook_factor_metrics.position",
+          "outlook_factor_metrics.tool_run_ids"
+        ],
+        "ui": {
+          "x": 4300,
+          "y": 200,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#d1fae5"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items": {
+        "id": "outlook_issue_items",
+        "name": "outlook_issue_items",
+        "comment": "이슈 상세 문단",
+        "columnIds": [
+          "outlook_issue_items.analysis_id",
+          "outlook_issue_items.position",
+          "outlook_issue_items.title_keyword",
+          "outlook_issue_items.sentence",
+          "outlook_issue_items.sentiment",
+          "outlook_issue_items.tool_run_ids"
+        ],
+        "seqColumnIds": [
+          "outlook_issue_items.analysis_id",
+          "outlook_issue_items.position",
+          "outlook_issue_items.title_keyword",
+          "outlook_issue_items.sentence",
+          "outlook_issue_items.sentiment",
+          "outlook_issue_items.tool_run_ids"
+        ],
+        "ui": {
+          "x": 4300,
+          "y": 900,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#d1fae5"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      }
+    },
+    "tableColumnEntities": {
+      "movement_analyses.analysis_id": {
+        "id": "movement_analyses.analysis_id",
+        "tableId": "movement_analyses",
+        "name": "analysis_id",
+        "comment": "소속 분석 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.etf_code": {
+        "id": "movement_analyses.etf_code",
+        "tableId": "movement_analyses",
+        "name": "etf_code",
+        "comment": "대상 ETF",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.analysis_at": {
+        "id": "movement_analyses.analysis_at",
+        "tableId": "movement_analyses",
+        "name": "analysis_at",
+        "comment": "자료 조회 상한",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.previous_analysis_id": {
+        "id": "movement_analyses.previous_analysis_id",
+        "tableId": "movement_analyses",
+        "name": "previous_analysis_id",
+        "comment": "기반인 이전 완료 결과 FK",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.status": {
+        "id": "movement_analyses.status",
+        "tableId": "movement_analyses",
+        "name": "status",
+        "comment": "running / completed / failed",
+        "dataType": "text",
+        "default": "'running'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.published_at": {
+        "id": "movement_analyses.published_at",
+        "tableId": "movement_analyses",
+        "name": "published_at",
+        "comment": "고객 표시 발행시각",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.error_message": {
+        "id": "movement_analyses.error_message",
+        "tableId": "movement_analyses",
+        "name": "error_message",
+        "comment": "실패 사유",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.trading_date": {
+        "id": "movement_analyses.trading_date",
+        "tableId": "movement_analyses",
+        "name": "trading_date",
+        "comment": "KST 거래일",
+        "dataType": "date",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.summary": {
+        "id": "movement_analyses.summary",
+        "tableId": "movement_analyses",
+        "name": "summary",
+        "comment": "완성 요약",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_analyses.selected_item_ids": {
+        "id": "movement_analyses.selected_item_ids",
+        "tableId": "movement_analyses",
+        "name": "selected_item_ids",
+        "comment": "표시할 ID · 중요도순 최대 5개",
+        "dataType": "text[]",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.item_id": {
+        "id": "movement_items.item_id",
+        "tableId": "movement_items",
+        "name": "item_id",
+        "comment": "같은 항목의 고정 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.analysis_id": {
+        "id": "movement_items.analysis_id",
+        "tableId": "movement_items",
+        "name": "analysis_id",
+        "comment": "소속 분석 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.type": {
+        "id": "movement_items.type",
+        "tableId": "movement_items",
+        "name": "type",
+        "comment": "유형",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.title_keyword": {
+        "id": "movement_items.title_keyword",
+        "tableId": "movement_items",
+        "name": "title_keyword",
+        "comment": "항목 제목",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.sentence": {
+        "id": "movement_items.sentence",
+        "tableId": "movement_items",
+        "name": "sentence",
+        "comment": "완성 설명 문장",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.sentiment": {
+        "id": "movement_items.sentiment",
+        "tableId": "movement_items",
+        "name": "sentiment",
+        "comment": "positive / neutral / negative",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.source_as_of": {
+        "id": "movement_items.source_as_of",
+        "tableId": "movement_items",
+        "name": "source_as_of",
+        "comment": "내용을 마지막 확인한 분석 기준시각",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.tool_run_ids": {
+        "id": "movement_items.tool_run_ids",
+        "tableId": "movement_items",
+        "name": "tool_run_ids",
+        "comment": "최종 근거 실행 ID",
+        "dataType": "text[]",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_items.created_at": {
+        "id": "movement_items.created_at",
+        "tableId": "movement_items",
+        "name": "created_at",
+        "comment": "추가시각",
+        "dataType": "timestamptz",
+        "default": "now()",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.analysis_id": {
+        "id": "outlook_analyses.analysis_id",
+        "tableId": "outlook_analyses",
+        "name": "analysis_id",
+        "comment": "소속 분석 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.etf_code": {
+        "id": "outlook_analyses.etf_code",
+        "tableId": "outlook_analyses",
+        "name": "etf_code",
+        "comment": "대상 ETF",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.analysis_at": {
+        "id": "outlook_analyses.analysis_at",
+        "tableId": "outlook_analyses",
+        "name": "analysis_at",
+        "comment": "자료 조회 상한",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.previous_analysis_id": {
+        "id": "outlook_analyses.previous_analysis_id",
+        "tableId": "outlook_analyses",
+        "name": "previous_analysis_id",
+        "comment": "기반인 이전 완료 결과 FK",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.status": {
+        "id": "outlook_analyses.status",
+        "tableId": "outlook_analyses",
+        "name": "status",
+        "comment": "running / completed / failed",
+        "dataType": "text",
+        "default": "'running'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.published_at": {
+        "id": "outlook_analyses.published_at",
+        "tableId": "outlook_analyses",
+        "name": "published_at",
+        "comment": "고객 표시 발행시각",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.error_message": {
+        "id": "outlook_analyses.error_message",
+        "tableId": "outlook_analyses",
+        "name": "error_message",
+        "comment": "실패 사유",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.outlook_sticker": {
+        "id": "outlook_analyses.outlook_sticker",
+        "tableId": "outlook_analyses",
+        "name": "outlook_sticker",
+        "comment": "ETF 종합 전망 · 강력상승/상승/중립/하락/강력하락",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.summary_title": {
+        "id": "outlook_analyses.summary_title",
+        "tableId": "outlook_analyses",
+        "name": "summary_title",
+        "comment": "요약 카드 제목",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.summary": {
+        "id": "outlook_analyses.summary",
+        "tableId": "outlook_analyses",
+        "name": "summary",
+        "comment": "완성 요약",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.detail_title": {
+        "id": "outlook_analyses.detail_title",
+        "tableId": "outlook_analyses",
+        "name": "detail_title",
+        "comment": "상세 본문 제목",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.detail_mode": {
+        "id": "outlook_analyses.detail_mode",
+        "tableId": "outlook_analyses",
+        "name": "detail_mode",
+        "comment": "create / update / rewrite",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.conclusion_title": {
+        "id": "outlook_analyses.conclusion_title",
+        "tableId": "outlook_analyses",
+        "name": "conclusion_title",
+        "comment": "결론 제목",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.conclusion_sentence": {
+        "id": "outlook_analyses.conclusion_sentence",
+        "tableId": "outlook_analyses",
+        "name": "conclusion_sentence",
+        "comment": "최종 판단",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.change_condition": {
+        "id": "outlook_analyses.change_condition",
+        "tableId": "outlook_analyses",
+        "name": "change_condition",
+        "comment": "선택적인 판단 변경 조건",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.row_id": {
+        "id": "outlook_items.row_id",
+        "tableId": "outlook_items",
+        "name": "row_id",
+        "comment": "저장 행 PK",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.analysis_id": {
+        "id": "outlook_items.analysis_id",
+        "tableId": "outlook_items",
+        "name": "analysis_id",
+        "comment": "소속 분석 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.item_id": {
+        "id": "outlook_items.item_id",
+        "tableId": "outlook_items",
+        "name": "item_id",
+        "comment": "같은 항목의 고정 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.section": {
+        "id": "outlook_items.section",
+        "tableId": "outlook_items",
+        "name": "section",
+        "comment": "detail 본문 / update 갱신",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.change_type": {
+        "id": "outlook_items.change_type",
+        "tableId": "outlook_items",
+        "name": "change_type",
+        "comment": "update만: added / modified / deleted",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.position": {
+        "id": "outlook_items.position",
+        "tableId": "outlook_items",
+        "name": "position",
+        "comment": "목록 내 표시 순서 · 1부터",
+        "dataType": "integer",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.title_keyword": {
+        "id": "outlook_items.title_keyword",
+        "tableId": "outlook_items",
+        "name": "title_keyword",
+        "comment": "항목 제목",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.bullets": {
+        "id": "outlook_items.bullets",
+        "tableId": "outlook_items",
+        "name": "bullets",
+        "comment": "detail만: [{sentence, is_updated}]",
+        "dataType": "jsonb",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.sentence": {
+        "id": "outlook_items.sentence",
+        "tableId": "outlook_items",
+        "name": "sentence",
+        "comment": "완성 설명 문장",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.source_as_of": {
+        "id": "outlook_items.source_as_of",
+        "tableId": "outlook_items",
+        "name": "source_as_of",
+        "comment": "내용을 마지막 확인한 분석 기준시각",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.tool_run_ids": {
+        "id": "outlook_items.tool_run_ids",
+        "tableId": "outlook_items",
+        "name": "tool_run_ids",
+        "comment": "최종 근거 실행 ID",
+        "dataType": "text[]",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factors.row_id": {
+        "id": "outlook_factors.row_id",
+        "tableId": "outlook_factors",
+        "name": "row_id",
+        "comment": "저장 행 PK",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factors.analysis_id": {
+        "id": "outlook_factors.analysis_id",
+        "tableId": "outlook_factors",
+        "name": "analysis_id",
+        "comment": "소속 분석 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factors.type": {
+        "id": "outlook_factors.type",
+        "tableId": "outlook_factors",
+        "name": "type",
+        "comment": "유형",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factors.sticker": {
+        "id": "outlook_factors.sticker",
+        "tableId": "outlook_factors",
+        "name": "sticker",
+        "comment": "강력상승 / 상승 / 중립 / 하락 / 강력하락",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factors.sentence": {
+        "id": "outlook_factors.sentence",
+        "tableId": "outlook_factors",
+        "name": "sentence",
+        "comment": "완성 설명 문장",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.tool_run_id": {
+        "id": "tool_runs.tool_run_id",
+        "tableId": "tool_runs",
+        "name": "tool_run_id",
+        "comment": "에이전트가 받은 실행 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.tool_id": {
+        "id": "tool_runs.tool_id",
+        "tableId": "tool_runs",
+        "name": "tool_id",
+        "comment": "함수 정의·버전 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.movement_analysis_id": {
+        "id": "tool_runs.movement_analysis_id",
+        "tableId": "tool_runs",
+        "name": "movement_analysis_id",
+        "comment": "오늘 움직임 실행 FK · 둘 중 하나",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.outlook_analysis_id": {
+        "id": "tool_runs.outlook_analysis_id",
+        "tableId": "tool_runs",
+        "name": "outlook_analysis_id",
+        "comment": "전망 실행 FK · 둘 중 하나",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.arguments": {
+        "id": "tool_runs.arguments",
+        "tableId": "tool_runs",
+        "name": "arguments",
+        "comment": "호출 인수 그대로",
+        "dataType": "jsonb",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.context": {
+        "id": "tool_runs.context",
+        "tableId": "tool_runs",
+        "name": "context",
+        "comment": "자료 상한·확정일 등 실제 적용 문맥",
+        "dataType": "jsonb",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.output": {
+        "id": "tool_runs.output",
+        "tableId": "tool_runs",
+        "name": "output",
+        "comment": "에이전트에 반환한 객체 그대로",
+        "dataType": "jsonb",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.status": {
+        "id": "tool_runs.status",
+        "tableId": "tool_runs",
+        "name": "status",
+        "comment": "running / succeeded / failed",
+        "dataType": "text",
+        "default": "'running'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.error_message": {
+        "id": "tool_runs.error_message",
+        "tableId": "tool_runs",
+        "name": "error_message",
+        "comment": "실패 사유",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.started_at": {
+        "id": "tool_runs.started_at",
+        "tableId": "tool_runs",
+        "name": "started_at",
+        "comment": "실행 시작시각",
+        "dataType": "timestamptz",
+        "default": "now()",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_runs.finished_at": {
+        "id": "tool_runs.finished_at",
+        "tableId": "tool_runs",
+        "name": "finished_at",
+        "comment": "실행 종료시각",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions.tool_id": {
+        "id": "tool_definitions.tool_id",
+        "tableId": "tool_definitions",
+        "name": "tool_id",
+        "comment": "함수 정의·버전 ID",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions.function_name": {
+        "id": "tool_definitions.function_name",
+        "tableId": "tool_definitions",
+        "name": "function_name",
+        "comment": "호출 함수명",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions.version": {
+        "id": "tool_definitions.version",
+        "tableId": "tool_definitions",
+        "name": "version",
+        "comment": "함수 정의 버전",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions.formula_latex": {
+        "id": "tool_definitions.formula_latex",
+        "tableId": "tool_definitions",
+        "name": "formula_latex",
+        "comment": "수학적 정의 · 뉴스는 NULL",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions.description": {
+        "id": "tool_definitions.description",
+        "tableId": "tool_definitions",
+        "name": "description",
+        "comment": "함수와 변수의 뜻",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "tool_definitions.source_names": {
+        "id": "tool_definitions.source_names",
+        "tableId": "tool_definitions",
+        "name": "source_names",
+        "comment": "출처 데이터명",
+        "dataType": "text[]",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords.row_id": {
+        "id": "outlook_conclusion_keywords.row_id",
+        "tableId": "outlook_conclusion_keywords",
+        "name": "row_id",
+        "comment": "저장 행 PK",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords.analysis_id": {
+        "id": "outlook_conclusion_keywords.analysis_id",
+        "tableId": "outlook_conclusion_keywords",
+        "name": "analysis_id",
+        "comment": "소속 전망 발행 FK",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 2,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords.kind": {
+        "id": "outlook_conclusion_keywords.kind",
+        "tableId": "outlook_conclusion_keywords",
+        "name": "kind",
+        "comment": "support 도움 / burden 부담",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords.position": {
+        "id": "outlook_conclusion_keywords.position",
+        "tableId": "outlook_conclusion_keywords",
+        "name": "position",
+        "comment": "도움·부담 각각의 표시 순서 · 1부터",
+        "dataType": "integer",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords.label": {
+        "id": "outlook_conclusion_keywords.label",
+        "tableId": "outlook_conclusion_keywords",
+        "name": "label",
+        "comment": "결론 키워드",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_conclusion_keywords.tool_run_ids": {
+        "id": "outlook_conclusion_keywords.tool_run_ids",
+        "tableId": "outlook_conclusion_keywords",
+        "name": "tool_run_ids",
+        "comment": "키워드의 최종 근거 실행 ID",
+        "dataType": "text[]",
+        "default": "'{}'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_analyses.issue_headline": {
+        "id": "outlook_analyses.issue_headline",
+        "tableId": "outlook_analyses",
+        "name": "issue_headline",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.analysis_id": {
+        "id": "outlook_factor_metrics.analysis_id",
+        "tableId": "outlook_factor_metrics",
+        "name": "analysis_id",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.factor_type": {
+        "id": "outlook_factor_metrics.factor_type",
+        "tableId": "outlook_factor_metrics",
+        "name": "factor_type",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.metric_key": {
+        "id": "outlook_factor_metrics.metric_key",
+        "tableId": "outlook_factor_metrics",
+        "name": "metric_key",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.numeric_value": {
+        "id": "outlook_factor_metrics.numeric_value",
+        "tableId": "outlook_factor_metrics",
+        "name": "numeric_value",
+        "comment": "",
+        "dataType": "numeric",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.text_value": {
+        "id": "outlook_factor_metrics.text_value",
+        "tableId": "outlook_factor_metrics",
+        "name": "text_value",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.observed_date": {
+        "id": "outlook_factor_metrics.observed_date",
+        "tableId": "outlook_factor_metrics",
+        "name": "observed_date",
+        "comment": "",
+        "dataType": "date",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.observed_at": {
+        "id": "outlook_factor_metrics.observed_at",
+        "tableId": "outlook_factor_metrics",
+        "name": "observed_at",
+        "comment": "",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.subject": {
+        "id": "outlook_factor_metrics.subject",
+        "tableId": "outlook_factor_metrics",
+        "name": "subject",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.position": {
+        "id": "outlook_factor_metrics.position",
+        "tableId": "outlook_factor_metrics",
+        "name": "position",
+        "comment": "",
+        "dataType": "int",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_factor_metrics.tool_run_ids": {
+        "id": "outlook_factor_metrics.tool_run_ids",
+        "tableId": "outlook_factor_metrics",
+        "name": "tool_run_ids",
+        "comment": "",
+        "dataType": "text[]",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items.analysis_id": {
+        "id": "outlook_issue_items.analysis_id",
+        "tableId": "outlook_issue_items",
+        "name": "analysis_id",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items.position": {
+        "id": "outlook_issue_items.position",
+        "tableId": "outlook_issue_items",
+        "name": "position",
+        "comment": "",
+        "dataType": "int",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items.title_keyword": {
+        "id": "outlook_issue_items.title_keyword",
+        "tableId": "outlook_issue_items",
+        "name": "title_keyword",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items.sentence": {
+        "id": "outlook_issue_items.sentence",
+        "tableId": "outlook_issue_items",
+        "name": "sentence",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items.sentiment": {
+        "id": "outlook_issue_items.sentiment",
+        "tableId": "outlook_issue_items",
+        "name": "sentiment",
+        "comment": "",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_issue_items.tool_run_ids": {
+        "id": "outlook_issue_items.tool_run_ids",
+        "tableId": "outlook_issue_items",
+        "name": "tool_run_ids",
+        "comment": "",
+        "dataType": "text[]",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      }
+    },
+    "relationshipEntities": {
+      "fk_movement_items_analysis_id": {
+        "id": "fk_movement_items_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "movement_analyses",
+          "columnIds": [
+            "movement_analyses.analysis_id"
+          ],
+          "x": 495.0,
+          "y": 565,
+          "direction": 8
+        },
+        "end": {
+          "tableId": "movement_items",
+          "columnIds": [
+            "movement_items.analysis_id"
+          ],
+          "x": 495.0,
+          "y": 740,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_outlook_items_analysis_id": {
+        "id": "fk_outlook_items_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 2595.0,
+          "y": 715,
+          "direction": 8
+        },
+        "end": {
+          "tableId": "outlook_items",
+          "columnIds": [
+            "outlook_items.analysis_id"
+          ],
+          "x": 2595.0,
+          "y": 960,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_outlook_factors_analysis_id": {
+        "id": "fk_outlook_factors_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 3010,
+          "y": 457.5,
+          "direction": 2
+        },
+        "end": {
+          "tableId": "outlook_factors",
+          "columnIds": [
+            "outlook_factors.analysis_id"
+          ],
+          "x": 3010,
+          "y": 1607.5,
+          "direction": 2
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_outlook_conclusion_keywords_analysis_id": {
+        "id": "fk_outlook_conclusion_keywords_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 3010,
+          "y": 457.5,
+          "direction": 2
+        },
+        "end": {
+          "tableId": "outlook_conclusion_keywords",
+          "columnIds": [
+            "outlook_conclusion_keywords.analysis_id"
+          ],
+          "x": 3645.0,
+          "y": 960,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_tool_runs_movement_analysis_id": {
+        "id": "fk_tool_runs_movement_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 1,
+        "start": {
+          "tableId": "movement_analyses",
+          "columnIds": [
+            "movement_analyses.analysis_id"
+          ],
+          "x": 910,
+          "y": 382.5,
+          "direction": 2
+        },
+        "end": {
+          "tableId": "tool_runs",
+          "columnIds": [
+            "tool_runs.movement_analysis_id"
+          ],
+          "x": 1545.0,
+          "y": 740,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_tool_runs_outlook_analysis_id": {
+        "id": "fk_tool_runs_outlook_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 1,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 2180,
+          "y": 457.5,
+          "direction": 1
+        },
+        "end": {
+          "tableId": "tool_runs",
+          "columnIds": [
+            "tool_runs.outlook_analysis_id"
+          ],
+          "x": 1545.0,
+          "y": 740,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_tool_runs_tool_id": {
+        "id": "fk_tool_runs_tool_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "tool_definitions",
+          "columnIds": [
+            "tool_definitions.tool_id"
+          ],
+          "x": 1545.0,
+          "y": 1360,
+          "direction": 4
+        },
+        "end": {
+          "tableId": "tool_runs",
+          "columnIds": [
+            "tool_runs.tool_id"
+          ],
+          "x": 1545.0,
+          "y": 1135,
+          "direction": 8
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_movement_analyses_previous_analysis_id": {
+        "id": "fk_movement_analyses_previous_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 1,
+        "start": {
+          "tableId": "movement_analyses",
+          "columnIds": [
+            "movement_analyses.analysis_id"
+          ],
+          "x": 80,
+          "y": 382.5,
+          "direction": 1
+        },
+        "end": {
+          "tableId": "movement_analyses",
+          "columnIds": [
+            "movement_analyses.previous_analysis_id"
+          ],
+          "x": 495.0,
+          "y": 200,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_outlook_analyses_previous_analysis_id": {
+        "id": "fk_outlook_analyses_previous_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 1,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 3010,
+          "y": 457.5,
+          "direction": 2
+        },
+        "end": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.previous_analysis_id"
+          ],
+          "x": 2595.0,
+          "y": 200,
+          "direction": 4
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_outlook_factor_metrics_analysis_id": {
+        "id": "fk_outlook_factor_metrics_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 3010,
+          "y": 457.5,
+          "direction": 2
+        },
+        "end": {
+          "tableId": "outlook_factor_metrics",
+          "columnIds": [
+            "outlook_factor_metrics.analysis_id"
+          ],
+          "x": 4300,
+          "y": 200,
+          "direction": 2
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "fk_outlook_issue_items_analysis_id": {
+        "id": "fk_outlook_issue_items_analysis_id",
+        "identification": false,
+        "relationshipType": 4,
+        "startRelationshipType": 2,
+        "start": {
+          "tableId": "outlook_analyses",
+          "columnIds": [
+            "outlook_analyses.analysis_id"
+          ],
+          "x": 3010,
+          "y": 457.5,
+          "direction": 2
+        },
+        "end": {
+          "tableId": "outlook_issue_items",
+          "columnIds": [
+            "outlook_issue_items.analysis_id"
+          ],
+          "x": 4300,
+          "y": 900,
+          "direction": 2
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      }
+    },
+    "indexEntities": {
+      "uq_outlook_items_analysis_id_section_item_id": {
+        "id": "uq_outlook_items_analysis_id_section_item_id",
+        "name": "uq_outlook_items_analysis_id_section_item_id",
+        "tableId": "outlook_items",
+        "indexColumnIds": [
+          "uq_outlook_items_analysis_id_section_item_id.analysis_id",
+          "uq_outlook_items_analysis_id_section_item_id.section",
+          "uq_outlook_items_analysis_id_section_item_id.item_id"
+        ],
+        "seqIndexColumnIds": [
+          "uq_outlook_items_analysis_id_section_item_id.analysis_id",
+          "uq_outlook_items_analysis_id_section_item_id.section",
+          "uq_outlook_items_analysis_id_section_item_id.item_id"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_items_analysis_id_section_position": {
+        "id": "uq_outlook_items_analysis_id_section_position",
+        "name": "uq_outlook_items_analysis_id_section_position",
+        "tableId": "outlook_items",
+        "indexColumnIds": [
+          "uq_outlook_items_analysis_id_section_position.analysis_id",
+          "uq_outlook_items_analysis_id_section_position.section",
+          "uq_outlook_items_analysis_id_section_position.position"
+        ],
+        "seqIndexColumnIds": [
+          "uq_outlook_items_analysis_id_section_position.analysis_id",
+          "uq_outlook_items_analysis_id_section_position.section",
+          "uq_outlook_items_analysis_id_section_position.position"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factors_analysis_id_type": {
+        "id": "uq_outlook_factors_analysis_id_type",
+        "name": "uq_outlook_factors_analysis_id_type",
+        "tableId": "outlook_factors",
+        "indexColumnIds": [
+          "uq_outlook_factors_analysis_id_type.analysis_id",
+          "uq_outlook_factors_analysis_id_type.type"
+        ],
+        "seqIndexColumnIds": [
+          "uq_outlook_factors_analysis_id_type.analysis_id",
+          "uq_outlook_factors_analysis_id_type.type"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_conclusion_keywords_analysis_id_kind_position": {
+        "id": "uq_outlook_conclusion_keywords_analysis_id_kind_position",
+        "name": "uq_outlook_conclusion_keywords_analysis_id_kind_position",
+        "tableId": "outlook_conclusion_keywords",
+        "indexColumnIds": [
+          "uq_outlook_conclusion_keywords_analysis_id_kind_position.analysis_id",
+          "uq_outlook_conclusion_keywords_analysis_id_kind_position.kind",
+          "uq_outlook_conclusion_keywords_analysis_id_kind_position.position"
+        ],
+        "seqIndexColumnIds": [
+          "uq_outlook_conclusion_keywords_analysis_id_kind_position.analysis_id",
+          "uq_outlook_conclusion_keywords_analysis_id_kind_position.kind",
+          "uq_outlook_conclusion_keywords_analysis_id_kind_position.position"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_tool_definitions_function_name_version": {
+        "id": "uq_tool_definitions_function_name_version",
+        "name": "uq_tool_definitions_function_name_version",
+        "tableId": "tool_definitions",
+        "indexColumnIds": [
+          "uq_tool_definitions_function_name_version.function_name",
+          "uq_tool_definitions_function_name_version.version"
+        ],
+        "seqIndexColumnIds": [
+          "uq_tool_definitions_function_name_version.function_name",
+          "uq_tool_definitions_function_name_version.version"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factor_metrics_analysis_id_factor_type_position": {
+        "id": "uq_outlook_factor_metrics_analysis_id_factor_type_position",
+        "name": "uq_outlook_factor_metrics_analysis_id_factor_type_position",
+        "tableId": "outlook_factor_metrics",
+        "indexColumnIds": [
+          "uq_outlook_factor_metrics_analysis_id_factor_type_position.analysis_id",
+          "uq_outlook_factor_metrics_analysis_id_factor_type_position.factor_type",
+          "uq_outlook_factor_metrics_analysis_id_factor_type_position.position"
+        ],
+        "seqIndexColumnIds": [
+          "uq_outlook_factor_metrics_analysis_id_factor_type_position.analysis_id",
+          "uq_outlook_factor_metrics_analysis_id_factor_type_position.factor_type",
+          "uq_outlook_factor_metrics_analysis_id_factor_type_position.position"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      }
+    },
+    "indexColumnEntities": {
+      "uq_outlook_items_analysis_id_section_item_id.analysis_id": {
+        "id": "uq_outlook_items_analysis_id_section_item_id.analysis_id",
+        "indexId": "uq_outlook_items_analysis_id_section_item_id",
+        "columnId": "outlook_items.analysis_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_items_analysis_id_section_item_id.section": {
+        "id": "uq_outlook_items_analysis_id_section_item_id.section",
+        "indexId": "uq_outlook_items_analysis_id_section_item_id",
+        "columnId": "outlook_items.section",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_items_analysis_id_section_item_id.item_id": {
+        "id": "uq_outlook_items_analysis_id_section_item_id.item_id",
+        "indexId": "uq_outlook_items_analysis_id_section_item_id",
+        "columnId": "outlook_items.item_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_items_analysis_id_section_position.analysis_id": {
+        "id": "uq_outlook_items_analysis_id_section_position.analysis_id",
+        "indexId": "uq_outlook_items_analysis_id_section_position",
+        "columnId": "outlook_items.analysis_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_items_analysis_id_section_position.section": {
+        "id": "uq_outlook_items_analysis_id_section_position.section",
+        "indexId": "uq_outlook_items_analysis_id_section_position",
+        "columnId": "outlook_items.section",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_items_analysis_id_section_position.position": {
+        "id": "uq_outlook_items_analysis_id_section_position.position",
+        "indexId": "uq_outlook_items_analysis_id_section_position",
+        "columnId": "outlook_items.position",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factors_analysis_id_type.analysis_id": {
+        "id": "uq_outlook_factors_analysis_id_type.analysis_id",
+        "indexId": "uq_outlook_factors_analysis_id_type",
+        "columnId": "outlook_factors.analysis_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factors_analysis_id_type.type": {
+        "id": "uq_outlook_factors_analysis_id_type.type",
+        "indexId": "uq_outlook_factors_analysis_id_type",
+        "columnId": "outlook_factors.type",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_conclusion_keywords_analysis_id_kind_position.analysis_id": {
+        "id": "uq_outlook_conclusion_keywords_analysis_id_kind_position.analysis_id",
+        "indexId": "uq_outlook_conclusion_keywords_analysis_id_kind_position",
+        "columnId": "outlook_conclusion_keywords.analysis_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_conclusion_keywords_analysis_id_kind_position.kind": {
+        "id": "uq_outlook_conclusion_keywords_analysis_id_kind_position.kind",
+        "indexId": "uq_outlook_conclusion_keywords_analysis_id_kind_position",
+        "columnId": "outlook_conclusion_keywords.kind",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_conclusion_keywords_analysis_id_kind_position.position": {
+        "id": "uq_outlook_conclusion_keywords_analysis_id_kind_position.position",
+        "indexId": "uq_outlook_conclusion_keywords_analysis_id_kind_position",
+        "columnId": "outlook_conclusion_keywords.position",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_tool_definitions_function_name_version.function_name": {
+        "id": "uq_tool_definitions_function_name_version.function_name",
+        "indexId": "uq_tool_definitions_function_name_version",
+        "columnId": "tool_definitions.function_name",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_tool_definitions_function_name_version.version": {
+        "id": "uq_tool_definitions_function_name_version.version",
+        "indexId": "uq_tool_definitions_function_name_version",
+        "columnId": "tool_definitions.version",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factor_metrics_analysis_id_factor_type_position.analysis_id": {
+        "id": "uq_outlook_factor_metrics_analysis_id_factor_type_position.analysis_id",
+        "indexId": "uq_outlook_factor_metrics_analysis_id_factor_type_position",
+        "columnId": "outlook_factor_metrics.analysis_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factor_metrics_analysis_id_factor_type_position.factor_type": {
+        "id": "uq_outlook_factor_metrics_analysis_id_factor_type_position.factor_type",
+        "indexId": "uq_outlook_factor_metrics_analysis_id_factor_type_position",
+        "columnId": "outlook_factor_metrics.factor_type",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "uq_outlook_factor_metrics_analysis_id_factor_type_position.position": {
+        "id": "uq_outlook_factor_metrics_analysis_id_factor_type_position.position",
+        "indexId": "uq_outlook_factor_metrics_analysis_id_factor_type_position",
+        "columnId": "outlook_factor_metrics.position",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      }
+    },
+    "memoEntities": {
+      "overview": {
+        "id": "overview",
+        "value": "ETF ORCA | 분석 저장 구조 — 10개 테이블 · 90개 컬럼 · 11개 FK\n파랑: 오늘 움직임 / 초록: 전망 / 노랑: 툴 감사\n기존 8개 + 수치 카드·이슈 상세 2개 (PR #970). 불릿과 툴 인수·문맥·결과는 JSONB.",
+        "ui": {
+          "x": 80,
+          "y": 20,
+          "zIndex": 0,
+          "width": 4020,
+          "height": 125,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "movement_rules": {
+        "id": "movement_rules",
+        "value": "오늘 움직임\n1. 새 설명만 movement_items에 추가. 기존 설명은 불변.\n2. selected_item_ids에 당일 상위 5개와 순서를 저장.\n3. 선택·순서가 같으면 이전 summary·published_at 유지.\n4. 숨겨진 설명도 보존. 다음 날은 후보 목록을 새로 시작.",
+        "ui": {
+          "x": 80,
+          "y": 1220,
+          "zIndex": 0,
+          "width": 830,
+          "height": 220,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "outlook_rules": {
+        "id": "outlook_rules",
+        "value": "전망 수정: 이전 발행 → 수정 적용 → 새 발행 저장\n• 새 발행에 유지·수정된 항목을 모두 저장. 삭제 논점은 본문에서 제외하고 update에는 삭제 기록 보존.\n• analysis_id가 버전 역할. 이전 결과를 덮어쓰지 않음.\n• 같은 논점은 item_id 유지. 제목과 불릿을 함께 교체.\n• 순서 변경은 position. 별도 항목 버전표·최종 JSON 중복 저장 없음.\n• 불릿: [{\"sentence\":\"설명 문장\", \"is_updated\":false}]\n• 같은 날 유지 문장의 강조는 보존. 다음 KST 날짜에 초기화.",
+        "ui": {
+          "x": 2180,
+          "y": 1870,
+          "zIndex": 0,
+          "width": 830,
+          "height": 295,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "section_rules": {
+        "id": "section_rules",
+        "value": "outlook_items의 두 목록\ndetail: 에이전트의 title_keyword + bullets\nupdate: 서버가 만든 논점 변경 기록\nchange_type: added / modified / deleted (update만 필수)\nitem_id: 원본 논점 ID. deleted는 현재 본문에 없어도 됨.\n제목·근거: 현재 본문에서 복사. 삭제면 삭제 직전 값 보존.\nupdate.title_keyword는 필수. sentence는 보충 설명 없으면 NULL.\n문장 일부 삭제는 modified, 논점 전체 삭제는 deleted.\n같은 날 논점별 최신 변경 유지. 다음 날 초기화.\n상세 규칙: 화면 출력 — 전망 > 오늘 업데이트의 수정 방식",
+        "ui": {
+          "x": 2180,
+          "y": 2200,
+          "zIndex": 0,
+          "width": 830,
+          "height": 370,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "conclusion_rules": {
+        "id": "conclusion_rules",
+        "value": "결론 키워드는 별도 테이블\nkind=support → conclusion.supports[]\nkind=burden → conclusion.burdens[]\n반환 항목: {label, tool_run_ids}, position순.\n같은 발행의 결론과 함께 전체 목록 저장.\n본문 항목과 1:1로 연결하지 않음. 과거 발행은 보존.",
+        "ui": {
+          "x": 3230,
+          "y": 1370,
+          "zIndex": 0,
+          "width": 830,
+          "height": 250,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "audit_rules": {
+        "id": "audit_rules",
+        "value": "툴 감사\n• 실행은 movement 또는 outlook 중 정확히 하나에 소속 (CHECK).\n• output은 반환 객체와 동일. 원천 raw 데이터 별도 복제 없음.\n• arguments와 context로 당시 대상·기간·자료시점 추적.\n• 함수 정의는 덮어쓰지 않고 새 버전 등록.\n• 항목의 tool_run_ids → tool_runs → tool_definitions 조회.",
+        "ui": {
+          "x": 1130,
+          "y": 1780,
+          "zIndex": 0,
+          "width": 830,
+          "height": 250,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "integrity": {
+        "id": "integrity",
+        "value": "저장 규칙\n• 실선만 실제 FK. selected_item_ids·tool_run_ids 배열은 코드가 존재·소속·시점 확인.\n• 근거는 성공한 최종 근거용 실행만 연결. 유지 항목은 이전 실행 근거 참조 가능.\n• previous_analysis_id는 같은 ETF의 완료 결과. update ID는 KST 날짜 안에서 해석.\n• 본문·자동 생성 업데이트·요인·요약을 한 트랜잭션으로 저장하고 completed로 전환. 실패는 발행하지 않음.\n• 완료 전망에는 필수 요약·본문·결론과 5요인이 있어야 함.\n• previous는 같은 ETF의 더 이른 완료 결과인지 코드가 확인. 최신 기반에 대한 배타적 발행 보장은 이 ERD의 제약이 아님.\n• 실제 관측일·기간은 툴 기록에 보존. source_as_of는 관측일이 아님.\n• 조회 인덱스: analyses(etf_code, analysis_at DESC), items(analysis_id), tool_runs(소속 분석 ID).",
+        "ui": {
+          "x": 80,
+          "y": 2180,
+          "zIndex": 0,
+          "width": 1900,
+          "height": 330,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "editing_tool": {
+        "id": "editing_tool",
+        "value": "본문 편집 툴: apply_outlook_body_changes\n• running 분석의 초안에 여러 변경을 원자적으로 적용. 후속 호출도 같은 analysis_id.\n• 이전 발행본 대비 변경 논점 10개 이상이면 rewrite 필수.\n• 반영된 detail 전체·오늘 업데이트를 에이전트에게 반환하고 tool_runs.output에 동일 저장.\n• 편집 ID는 사실 근거로 사용하지 않음. 후속 편집은 메모리의 마지막 성공 초안에 적용.\n• 요약·요인·결론까지 준비된 결과만 발행. 완료 발행본은 수정하지 않음.",
+        "ui": {
+          "x": 3230,
+          "y": 1700,
+          "zIndex": 0,
+          "width": 830,
+          "height": 270,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      },
+      "scope": {
+        "id": "scope",
+        "value": "구현 기준: V202609281600(기존 8개) + V202609282200(2개·issue_headline 추가).\n수치 카드: outlook_factor_metrics / 이슈 문단: outlook_issue_items. 계산 원천 적재는 별도 도메인.\n에이전트 최종 텍스트와 계산 툴 수치, 서버 생성 업데이트를 구분해 저장하고 화면 JSON을 조립.\n2026-09-30: DDL·생성 DBML 대조. 이번 수정은 ERD 문서만 변경하며 DB 재접속 검증은 미완료.",
+        "ui": {
+          "x": 80,
+          "y": 2640,
+          "zIndex": 0,
+          "width": 2940,
+          "height": 190,
+          "color": "#f1f5f9"
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
+      }
+    }
+  }
+}

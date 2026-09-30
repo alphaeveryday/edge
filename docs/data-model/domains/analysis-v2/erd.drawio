@@ -5,10 +5,10 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="heading-title" value="Analysis v2 - outputs and audit" vertex="1" parent="1" style="text;html=0;fontSize=25;fontStyle=1;align=left;">
+        <mxCell id="heading-title" value="Analysis v2 - 10 tables / 90 columns" vertex="1" parent="1" style="text;html=0;fontSize=25;fontStyle=1;align=left;">
           <mxGeometry as="geometry" x="70" y="25" width="1000" height="40" />
         </mxCell>
-        <mxCell id="heading-subtitle" value="Solid lines: foreign keys. Evidence ID arrays are validated by storage code." vertex="1" parent="1" style="text;html=0;fontSize=13;align=left;">
+        <mxCell id="heading-subtitle" value="11 foreign keys. Original 8 tables + factor metrics and issue items (PR #970). ID arrays: application validation." vertex="1" parent="1" style="text;html=0;fontSize=13;align=left;">
           <mxGeometry as="geometry" x="70" y="75" width="1200" height="30" />
         </mxCell>
         <mxCell id="movement_analyses" value="movement_analyses" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#dbeafe;fontSize=15;">
@@ -445,8 +445,8 @@
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
               <mxPoint x="2000" y="640" />
-              <mxPoint x="2000" y="560" />
-              <mxPoint x="1450" y="560" />
+              <mxPoint x="2000" y="480" />
+              <mxPoint x="1450" y="480" />
               <mxPoint x="1450" y="500" />
             </Array>
           </mxGeometry>
