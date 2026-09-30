@@ -70,9 +70,10 @@ def chart_data(fixture, instrument_id):
         raise ValueError('duplicate trading date')
     by_date = {r['date']: r for r in eligible}
     for row in eligible:
-        if decimal(row['turnover']) < 0:
+        if row.get('turnover') is not None and decimal(row['turnover']) < 0:
             raise ValueError('negative turnover')
-        if row['date'] not in expected or not 0 < decimal(row['low']) <= decimal(row['close']) <= decimal(row['high']):
+        chart.validate_price(row)
+        if row['date'] not in expected:
             raise ValueError('invalid daily price')
     rows = []
     for day in reversed(expected):
@@ -90,7 +91,8 @@ def chart_data(fixture, instrument_id):
     count = len(rows)
     requirements = {'ma20_distance_pct': count + bool(points) >= 20, 'ma60_direction': count + bool(points) >= 61,
                     'new_closing_high_count_20d': count >= 40, 'distance_from_52w_closing_high_pct': (cutoff.date() - date.fromisoformat(rows[0]['date'])).days >= 364,
-                    'turnover_ratio_previous_day': count >= 21, 'atr14_pct': count >= 15}
+                    'turnover_ratio_previous_day': count >= 21 and all(r.get('turnover') is not None for r in rows[-21:]),
+                    'atr14_pct': count >= 15 and all(r.get('high') is not None and r.get('low') is not None for r in rows)}
     for key, sufficient in requirements.items():
         if sufficient:
             cards = chart.metrics(target, [key]) if key != 'turnover_ratio_previous_day' or sum(decimal(r['turnover']) for r in rows[-21:-1]) > 0 else []
@@ -119,19 +121,26 @@ def flow_data(fixture, instrument_id):
     if not dates or dates[-1] != end:
         return None, 'Finalized flow date is absent from the trading calendar.'
     weighted = instrument_id == context['etf_code']
+    if weighted and fixture.get('holdings_status') and holdings(fixture, require_complete=False).get('coverage') == 'partial':
+        return None, 'Constituent coverage is incomplete; whole-ETF weighted flow unavailable.'
     source = available(fixture.get('flow', []), cutoff)
     investors = ('foreign', 'institution', 'individual')
     history, observed = [], []
     for day in reversed(dates):
         if weighted and not any(r['as_of_date'] <= day for r in available(fixture.get('holdings', []), min(cutoff, instant(day + 'T23:59:59.999999+09:00')))):
             break
-        weights = holdings(fixture, day)['holdings'] if weighted else [{'instrument_id': instrument_id, 'weight': 1}]
+        portfolio = holdings(fixture, day, require_complete=False) if weighted else None
+        if portfolio and portfolio.get('coverage') == 'partial':
+            break
+        weights = portfolio['holdings'] if weighted else [{'instrument_id': instrument_id, 'weight': 1}]
         values = []
         day_times = []
         complete = True
         for investor in investors:
             total = decimal(0)
             for weight in weights:
+                if decimal(weight['weight']) == 0:
+                    continue
                 rows = [r for r in source if r['date'] == day and r['instrument_id'] == weight['instrument_id'] and r['investor'] == investor]
                 if len(rows) > 1:
                     raise ValueError('duplicate investor flow observation')
@@ -173,7 +182,9 @@ def valuation_data(fixture, instrument_id):
         value = company_valuation(fixture, instrument_id)
         return value, None if value else 'No price or released financial observations are available.'
     published_holdings = [r for r in available(fixture.get('holdings', []), instant(fixture['context']['analysis_at'])) if r['as_of_date'] <= instant(fixture['context']['analysis_at']).date().isoformat()]
-    portfolio = holdings(fixture) if published_holdings else {'as_of_date': None, 'holdings': []}
+    portfolio = holdings(fixture, require_complete=False) if published_holdings else {'as_of_date': None, 'holdings': []}
+    if portfolio.get('coverage') == 'partial':
+        return None, 'Constituent coverage is incomplete; whole-ETF weighted valuation unavailable.'
     values = [(row, company_valuation(fixture, row['instrument_id'])) for row in portfolio['holdings']]
     result = {'scope': 'holdings_weighted', 'holdings_as_of': portfolio['as_of_date']}
     for metric in ('per', 'pbr'):

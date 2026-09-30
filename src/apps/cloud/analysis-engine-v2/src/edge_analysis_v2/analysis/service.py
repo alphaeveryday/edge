@@ -24,10 +24,10 @@ KST = timezone(timedelta(hours=9))
 _LATEST = object()
 
 
-def _previous(connection, kind, etf_code, cutoff):
+def _previous(connection, kind, etf_code, cutoff, data_source="synthetic"):
     with connection.cursor(row_factory=dict_row) as cur:
-        query = sql.SQL('SELECT analysis_id FROM {} WHERE etf_code=%s AND status=\'completed\' AND analysis_at<%s').format(sql.Identifier(kind + '_analyses'))
-        args = [etf_code, cutoff]
+        query = sql.SQL('SELECT analysis_id FROM {} WHERE etf_code=%s AND status=\'completed\' AND analysis_at<%s AND data_source=%s').format(sql.Identifier(kind + '_analyses'))
+        args = [etf_code, cutoff, data_source]
         if kind == 'movement':
             query += sql.SQL(' AND trading_date=%s')
             args.append(cutoff.astimezone(KST).date())
@@ -36,14 +36,15 @@ def _previous(connection, kind, etf_code, cutoff):
         return row['analysis_id'] if row else None
 
 
-def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
+def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None, connection_factory, key: str,
                     artifacts: Path, analysis_id: str, model='deepseek-flash',
                     model_call=run_model, previous_analysis_id=_LATEST, system_prompt=None) -> dict:
     """Run one idempotent request with independently committed tool evidence.
 
     Args:
         kind: Movement or outlook.
-        fixture: Fixed-time raw fixture observations.
+        fixture: Synthetic observations; mutually exclusive with source_tools.
+        source_tools: Real-source tools prepared at the fixed analysis time.
         connection_factory: Creates a fresh idle autocommit result DB connection.
         key: DeepSeek API key, excluded from persisted artifacts.
         artifacts: Local run folder.
@@ -63,12 +64,15 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
     """
     if kind not in ('movement', 'outlook'):
         raise ValueError('Unknown analysis kind')
-    context = fixture['context']
+    if (fixture is None) == (source_tools is None):
+        raise ValueError('Provide either synthetic fixture or real source tools')
+    tools = FixtureTools(fixture) if source_tools is None else source_tools
+    data_source = tools.data_source
+    context = tools.fixture['context']
     cutoff = datetime.fromisoformat(context['analysis_at'])
     if cutoff.utcoffset() is None:
         raise ValueError('Analysis cutoff requires timezone')
     artifacts.mkdir(parents=True, exist_ok=True)
-    tools = FixtureTools(fixture)
     with connection_factory() as connection, connection_factory() as audit_connection:
         locked = connection.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0))', (kind + ':' + analysis_id,)).fetchone()[0]
         if not locked:
@@ -78,8 +82,8 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
             cur.execute(sql.SQL('SELECT previous_analysis_id FROM {} WHERE analysis_id=%s').format(sql.Identifier(kind+'_analyses')), (analysis_id,))
             existing = cur.fetchone()
         previous_id = existing['previous_analysis_id'] if existing else (
-            _previous(connection, kind, context['etf_code'], cutoff) if previous_analysis_id is _LATEST else previous_analysis_id)
-        parent = store.begin(kind, analysis_id, context['etf_code'], cutoff, previous_id)
+            _previous(connection, kind, context['etf_code'], cutoff, data_source) if previous_analysis_id is _LATEST else previous_analysis_id)
+        parent = store.begin(kind, analysis_id, context['etf_code'], cutoff, previous_id, data_source=data_source)
         read = store.get_movement if kind == 'movement' else store.get_outlook
         if parent['status'] == 'completed':
             return read(analysis_id)
@@ -99,8 +103,8 @@ def execute_request(*, kind: str, fixture: dict, connection_factory, key: str,
                         i.sentiment,i.tool_run_ids,i.source_as_of FROM movement_items i
                         JOIN history h ON h.analysis_id=i.analysis_id
                         JOIN movement_analyses a ON a.analysis_id=i.analysis_id WHERE a.etf_code=%s
-                        AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<%s
-                        ORDER BY i.created_at,i.item_id''', (previous_id,context['etf_code'],cutoff.astimezone(KST).date(),cutoff))
+                        AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<%s AND a.data_source=%s
+                        ORDER BY i.created_at,i.item_id''', (previous_id,context['etf_code'],cutoff.astimezone(KST).date(),cutoff,data_source))
                     initial['previous_items'] = json.loads(json.dumps(cur.fetchall(), default=str))
             definitions = list(tools.definitions)
             schemas = deepcopy(tools.schemas)
