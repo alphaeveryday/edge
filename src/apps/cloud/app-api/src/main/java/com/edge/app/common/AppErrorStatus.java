@@ -12,8 +12,6 @@ import org.springframework.http.HttpStatus;
 public enum AppErrorStatus implements BaseErrorCode {
     ETF_NOT_FOUND(HttpStatus.NOT_FOUND, "ETF4001", "없는 ETF 입니다."),
     ANALYSIS_NOT_READY(HttpStatus.NOT_FOUND, "ANALYSIS4001", "분석이 아직 준비되지 않았습니다."),
-    THEME_NOT_FOUND(HttpStatus.NOT_FOUND, "THEME4001", "없는 테마입니다."),
-    ISSUE_NOT_FOUND(HttpStatus.NOT_FOUND, "ISSUE4001", "없는 이슈입니다."),
     POST_NOT_FOUND(HttpStatus.NOT_FOUND, "POST4001", "없는 글입니다."),
     POST_NOT_WATCHED_ETF(HttpStatus.BAD_REQUEST, "POST4002", "관심 ETF 에 대해서만 글을 쓸 수 있습니다."),
     POST_TOO_MANY_TAGS(HttpStatus.BAD_REQUEST, "POST4003", "태그는 최대 3개입니다."),
