@@ -41,7 +41,7 @@ from data_pipeline.sources.kis_minute import (
     fold_closing_auction,
     parse_minute_row,
 )
-from data_pipeline.minute.price_collect import Outcome, select_window_candle
+from data_pipeline.minute.price_collect import select_window_candle
 
 KST = timezone(timedelta(hours=9))
 WINDOW_END = datetime(2026, 8, 3, 10, 30, tzinfo=KST)
@@ -330,27 +330,27 @@ class TestResponseLayers:
         # 형성 중 봉은 아직 아무 창의 것도 아니다(10:31~10:32 창은 10:33 뒤에나 묻는다)
         assert chosen.window_start == datetime(2026, 8, 3, 10, 30, tzinfo=KST)
 
-    def test_closing_auction_is_folded_into_the_last_window(self):
-        """라벨 15:30 봉(종가 단일가 체결)은 계획 창 밖이다 — 15:29 창(15:30 에 끝남)에 접는다.
+    def test_realtime_path_does_not_fold_the_closing_auction(self):
+        """당일 경로는 라벨 15:30 봉을 접지 않는다 — 세션 안에는 그 봉이 확정 층으로 안 온다.
 
-        안 접으면 공식 종가와 그 체결(005930 09-29: 1,907,055주 = 하루의 12%)이 canonical
-        에서 사라지고, 5분봉 15:25 버킷 종가·갭 계산의 전일 종가가 단일가 전 가격이 된다
-        (ALPHA-1128 의 증상). 391번째 창을 만들지 않는 이유는 소스 주석.
+        09-30 프로브: 체결값은 15:30:03~32 에 요청 라벨 행에만 잠깐 실렸다가 15:31:00 에
+        0 자리표시로 리셋되고 15:57 까지 0 이다. 그 자리표시를 접으면 15:29 창이 vol 0·
+        단일가 전 가격으로 VALID 확정된다(09-14 이후 ALPHA-1128 의 모양). 실시간 15:29 창은
+        접수 구간 봉 그대로 두고, 단일가는 마감 뒤 재수집(소급 경로의 접기)이 정본이다.
         """
-        auction = {**row("153000", volume="1907055", close="272500"),
-                   "stck_oprc": "272500", "stck_hgpr": "272500", "stck_lwpr": "272500"}
+        placeholder = {**flat_row("153000"), "stck_prpr": "272000", "stck_oprc": "272000",
+                       "stck_hgpr": "272000", "stck_lwpr": "272000"}
         accumulating = {**flat_row("152900"), "stck_prpr": "272000", "stck_oprc": "272000",
                         "stck_hgpr": "272000", "stck_lwpr": "272000"}
-        client, _ = make_client([TOKEN, ok([auction, accumulating, row("152800")])])
+        client, _ = make_client([TOKEN, ok([placeholder, accumulating, row("152800")])])
         close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
         candles = client.candles("005930", window_end=close)
-        [last] = [c for c in candles if c.window_end == close]
-        assert last.volume == Decimal("1907055")
-        assert last.close == Decimal("272500")   # 공식 종가 = 단일가 체결가
-        assert last.open == Decimal("272000")    # 창의 시가는 접수 구간 flat 그대로
-        assert (last.high, last.low) == (Decimal("272500"), Decimal("272000"))
-        # 15:31 에 끝나는 봉은 남기지 않는다 — 남기면 391번째 창이 조용히 생긴다
-        assert all(c.window_end <= close for c in candles)
+        chosen = select_window_candle(candles, close, "005930")
+        assert chosen.window_start == datetime(2026, 8, 3, 15, 29, tzinfo=KST)
+        assert chosen.traded is False
+        # 15:30 봉은 버리지 않고 그대로 — 정규장 계획엔 그 창이 없어 안 뽑히고, 시간외
+        # 세션(15:30~15:31 창 있음)에선 제 창이 된다
+        assert [c.window_end.strftime("%H%M") for c in candles] == ["1531", "1530", "1529"]
 
     def test_fold_moves_the_auction_when_the_last_window_is_absent(self):
         # 15:29 봉이 응답에 없으면(잘린 페이지) 단일가 봉을 그 창으로 옮긴다 — 버리면 종가가 없다
@@ -362,56 +362,6 @@ class TestResponseLayers:
     def test_fold_is_a_no_op_without_the_auction_row(self):
         candles = tuple(parse_minute_row(row(h), "005930") for h in ("152900", "152800"))
         assert fold_closing_auction(candles) == candles
-
-    def test_missing_auction_row_makes_the_close_window_missing_not_flat(self):
-        """마감 창 응답에 라벨 15:30 봉이 없으면 15:29 flat 봉을 그 창으로 내지 않는다.
-
-        당일 TR 은 무거래 분도 행을 주므로 부재는 벤더 지연이다. 그대로 두면 flat 봉이
-        `no_trade` 로 **성공** 확정되고(종가 = 단일가 전 가격) INCOMPLETE 가 아니라 재청구도
-        없다 — 09-14 이후 15:29 창 전 종목 거래량 0(ALPHA-1128)이 정확히 그 모양이었다.
-        """
-        client, _ = make_client([TOKEN, ok([flat_row("152900"), row("152800")])])
-        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
-        candles = client.candles("005930", window_end=close)
-        assert select_window_candle(candles, close, "005930") is Outcome.MISSING
-        # 다른 창은 그대로다 — 마감 창만 뺀다
-        assert [c.window_end.strftime("%H%M") for c in candles] == ["1529"]
-
-    def test_zero_volume_auction_row_is_a_placeholder_not_a_close(self):
-        """라벨 15:30 행이 있어도 거래량 0 이면 아직 확정 전이다 — 마감 창을 내지 않는다.
-
-        09-30 프로브: 체결값이 15:30:03~32 에 잠깐 실렸다가 15:31:00 에 0 으로 리셋되고
-        ≥6분 그대로다. 0 봉을 접으면 15:29 창이 vol 0·단일가 전 가격으로 VALID 확정된다 —
-        09-14 이후 전 종목 15:29 창 거래량 0(ALPHA-1128)이 정확히 이 모양이었다.
-        """
-        placeholder = {**flat_row("153000"), "stck_prpr": "72500", "stck_oprc": "72500",
-                       "stck_hgpr": "72500", "stck_lwpr": "72500"}
-        client, _ = make_client([TOKEN, ok([placeholder, flat_row("152900"), row("152800")])])
-        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
-        candles = client.candles("005930", window_end=close)
-        assert select_window_candle(candles, close, "005930") is Outcome.MISSING
-        assert [c.window_end.strftime("%H%M") for c in candles] == ["1529"]
-
-    def test_auction_only_response_is_not_mistaken_for_an_absent_auction(self):
-        # 15:29 행이 없고 단일가 행만 있으면 접기는 봉을 **옮기기만** 해 길이가 안 변한다 —
-        # 길이로 부재를 판정하면 정상 단일가까지 버린다(Codex 지적). 존재로 판정한다.
-        auction = {**row("153000", volume="7", close="72500"), "stck_oprc": "72500",
-                   "stck_hgpr": "72500", "stck_lwpr": "72500"}
-        client, _ = make_client([TOKEN, ok([auction, row("152800")])])
-        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
-        chosen = select_window_candle(client.candles("005930", window_end=close), close, "005930")
-        assert (chosen.volume, chosen.close) == (Decimal("7"), Decimal("72500"))
-
-    def test_fold_applies_only_to_the_regular_session_close_window(self):
-        # 시간외 세션은 15:30~15:31 창이 따로 있다 — 그 창을 물면 단일가 봉을 옮기지 않는다
-        auction = {**row("153000", volume="7", close="72500"), "stck_oprc": "72500",
-                   "stck_hgpr": "72500", "stck_lwpr": "72500"}
-        client, _ = make_client([TOKEN, ok([row("153100"), auction, flat_row("152900")])])
-        after_close = datetime(2026, 8, 3, 15, 31, tzinfo=KST)
-        chosen = select_window_candle(client.candles("005930", window_end=after_close),
-                                      after_close, "005930")
-        assert chosen.window_start == datetime(2026, 8, 3, 15, 30, tzinfo=KST)
-        assert chosen.volume == Decimal("7")
 
     def test_historical_fold_matches_realtime_when_the_vendor_omits_the_flat_minute(self):
         """소급 TR 은 무거래 15:29 행을 생략한다 — 접기 전에 복원해야 실시간과 같은 봉이 된다.

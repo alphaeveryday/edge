@@ -18,7 +18,6 @@ from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
 from data_pipeline.minute.models import (
-    FINAL_WINDOW_SETTLE_SEC,
     WINDOW_SETTLE_SEC,
     KST,
     plan_session_windows,
@@ -106,12 +105,13 @@ class TestPlanSession:
         assert first["data_status"] == "DUE"
         assert first["scheduled_at"] == first["window_end"] + timedelta(seconds=WINDOW_SETTLE_SEC)
 
-    def test_close_window_row_is_scheduled_after_the_auction(self):
-        """마감 window 행이 **원장에** 늦춰져 들어가는지 — `scheduled_at_for` 배선 검증.
+    def test_every_window_row_is_scheduled_after_the_settle(self):
+        """window 행이 **원장에** 늦춰져 들어가는지 — `scheduled_at_for` 배선 검증.
 
         helper 단위 테스트만 두면 INSERT 가 `scheduled_at=window_end` 로 회귀해도
-        전부 통과한다(그러면 미완성 봉 커밋 결함이 그대로 돌아온다). 여기서 원장에
-        저장된 값을 직접 본다.
+        전부 통과한다(그러면 형성 중 봉 커밋 결함이 그대로 돌아온다). 여기서 원장에
+        저장된 값을 직접 본다. 마감 창(15:29)도 예외가 아니다 — 종가 단일가는 세션 안에서
+        못 받으므로 더 밀 이유가 없다(ALPHA-1127·1128).
         """
         db = FakeMinuteDB()
         make_ledger(db).plan_session(
@@ -119,15 +119,9 @@ class TestPlanSession:
             universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
         )
         rows = sorted(db.windows.values(), key=lambda w: w["window_start"])
-        close_row = rows[-1]
-        assert close_row["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
-        settled = close_row["window_end"] + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
-        # 마감 창(15:29)만 더 민다 — 종가 단일가 봉(라벨 15:30, 15:31 에 끝남)을 접어 넣어야
-        # 하므로 그 봉까지 확정될 시각이다(ALPHA-1127·1128)
-        assert close_row["scheduled_at"] == settled
-        # 나머지 389개는 일반 지연 — 창 끝 + WINDOW_SETTLE_SEC(벤더 확정 층 진입)
+        assert rows[-1]["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
         assert all(w["scheduled_at"] == w["window_end"] + timedelta(seconds=WINDOW_SETTLE_SEC)
-                   for w in rows[:-1])
+                   for w in rows)
 
     def test_news_session_close_window_is_not_delayed(self):
         """같은 plan_session 을 쓰는 뉴스 세션엔 안 건다 — 종가 단일가는 가격 얘기고,

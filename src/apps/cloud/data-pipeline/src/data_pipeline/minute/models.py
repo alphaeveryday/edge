@@ -52,9 +52,9 @@ CLOSING_AUCTION_OPEN = time(15, 20)
 # + 60초 뒤에 묻는다. 확정 자체는 분 끝 뒤 ≤8초였지만(005930·462870 실측), 자리표시 0 은
 # 진짜 무거래 봉과 모양이 같아 몇 초의 시차에 걸리면 **조용히** 틀린다 — 여유를 분 단위로 둔다.
 WINDOW_SETTLE_SEC = 70
-# 마감 창(15:29, 15:30 에 끝남)만 더 기다린다. 이 창은 종가 단일가 봉(라벨 15:30, 15:31 에
-# 끝남)을 접어 넣으므로(`kis_minute.fold_closing_auction`) 그 봉까지 확정 층에 있어야 한다.
-FINAL_WINDOW_SETTLE_SEC = 130
+# 마감 창(15:29)도 같은 규칙이다. 종가 단일가 봉(라벨 15:30)은 세션 안에 확정 층으로 안
+# 오므로(09-30 실측: 15:31:00 리셋 뒤 15:57 까지 0) 기다려서 얻을 수 없다 — 실시간 15:29
+# 창은 접수 구간 봉 그대로이고 단일가는 마감 뒤 재수집이 접는다(`kis_minute` 주석·ALPHA-1128).
 # 그 지연이 걸리는 dataset. **가격 캔들 얘기**라 뉴스 세션(news_minute)에는 안 건다 —
 # 같은 `plan_session` 을 쓰지만 기다릴 이유가 없고, 지연은 뉴스 realtime 레인의 추출·조립을
 # 그만큼 늦춘다. 업종지수도 다른 TR·다른 응답 형상이라 대상이 아니다.
@@ -65,9 +65,8 @@ def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
     """window 가 claim 가능해지는 시각.
 
     가격 창은 `window_end + WINDOW_SETTLE_SEC` 다 — 구간이 닫히는 것만으로는 부족하고,
-    벤더 응답의 **확정 층**에 들어와야 한다(상수 주석). 15:30 에 끝나는 마감 창은
-    `SESSION_CLOSE + FINAL_WINDOW_SETTLE_SEC` — 종가 단일가 봉(15:31 에 끝남)까지 확정돼야
-    접어 넣을 수 있다. 시간외 세션(720 window)에도 15:30 창이 있고 거기에도 적용된다.
+    벤더 응답의 **확정 층**에 들어와야 한다(상수 주석). 마감 창(15:29)도 예외가 아니다 —
+    종가 단일가는 세션 안에서 못 받는다(WINDOW_SETTLE_SEC 주석).
 
     ⚠️ 이전 규칙(15:20~15:30 열 창을 통째로 15:31 로)은 "접수 구간에 벤더가 직전 봉을
     거래량째 복제한다"(08-05 실측)를 벤더 결함으로 읽은 것이었다. 실제로는 **요청 라벨 행 =
@@ -89,8 +88,6 @@ def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
         raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
     if dataset != PRICE_MINUTE_DATASET:
         return window_end
-    if window_end.astimezone(KST).time() == SESSION_CLOSE:
-        return window_end + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
     return window_end + timedelta(seconds=WINDOW_SETTLE_SEC)
 
 ExecutionMode = Literal["one_shot", "resident"]
