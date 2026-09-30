@@ -349,6 +349,89 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 **정리 순서.** DAG pause → 도는 검증 ECS 태스크 STOPPED 확인 → 증거 수거(호스트 관측·배치·deployinfo·RDS)·검증 원장 백업·이미지 digest 기록 → 서비스 desired 0 → 관리 태스크 `teardown`(전용 DB·역할 삭제, 업무 데이터·계정은 건드리지 않는다) → Terraform `host_count = 0`·`verify_enabled = false` 머지(자동 apply 가 호스트·검증 자원·알람을 걷는다).
 
+### 실제 AWS 단기 검증 결과(2026-09-29 20:05 ~ 09-30 12:00 KST)
+
+**결론: t4g.micro 는 불가, t4g.small 에 태스크 1024MiB 도 불가.** 1408MiB 는 유휴·재시작만 확인했고 업무 실행은 검증하지 못했다(아래 도구 결함). 상시 운영 사양은 아직 정해지지 않았다.
+
+| 구성 | 결과 | 근거(원자료 `local/results/aws/`) |
+|---|---|---|
+| micro · 1024 | **배치 불가** | ECS 등록 메모리 916MiB < 1024 |
+| micro · 896 | **호스트 전역 OOM**(중단 기준) | Airflow 전 호스트 상주(dockerd·containerd·ECS 에이전트·SSM) 230~300MiB, 가용 약 610MiB. 기동 때 컨테이너마다 `airflow db check`(각 약 135MiB)가 겹쳐 가용 42MiB → 약 6분 스래싱(관측기도 멈춤) → 20:40 `global_oom` 이 api-server 를 죽였다. 태스크 cgroup 은 545MiB 로 상한 아래였다. swap 없음 |
+| small · 1024 | **태스크 cgroup OOM**(중단 기준) | 등록 1846MiB. 유휴 태스크 약 770MiB(anon 730). B1 첫 run 에서 task 실행 프로세스(LocalExecutor 가 띄우는 task runner, 약 250~300MiB)가 더해져 상한 도달 → 23:16·23:22 api-server OOM 2회, 태스크 교체 |
+| small · 1408 | 유휴·재시작만 확인 | 약 12시간 OOM 0, 태스크 최대 1011MiB(p50 930, 페이지 캐시 포함), 호스트 가용 최소 415MiB, 재시작 1회 정상. **B1~B3 는 무효** — 아래 도구 결함 |
+
+- **로컬 측정과의 차이.** 로컬 C1 은 1024 에서 전 기준을 통과했지만, 실제 EC2 에서는 유휴만 약 770MiB 였다. 로컬 가정(호스트 몫 200~350MiB)은 맞았지만 태스크 자체가 더 컸다. 사양은 실제 환경 실측으로 정한다.
+- **실제 장애 중 정확성(주입 아님).** small·1024 의 B1 첫 run 은 api-server OOM 두 번과 Airflow 태스크 교체를 겪고도 성공했다. plan·normalize 는 try 1 이 실패하고 try 2 가 성공했다. 업무 ECS 태스크는 5개, 스텝마다 업무 시작 1회(중복 0), 파티션 쓰기 1회, 원장 `AIRFLOW · SUCCEEDED` 였다(`aws-small/B1.json`). 이 한 건만으로 exactly-once 를 주장하지는 않는다.
+- **기존 RDS 영향.** 전 구간 중단 기준 밖. Airflow 연결은 유휴 4개(총 20~22 → 24~26), FreeableMemory 약 −30MiB(최소 557MiB). 계획 밖으로 09-30 장중(09:00~11:48)에도 Airflow 가 유휴로 붙어 있었다 — 그 구간 CPU 최대 33.4%(5분 지속 아님), 연결 최대 29, 쓰기 지연 최대 8.6ms, 업무 SFN 실패 0. 장중 부하 중 Airflow 실행은 여전히 미검증이다.
+
+**검증 중 드러난 결함(모두 수정)**
+- 원격 로그 핸들러(watchtower)가 기동 때 `logs:CreateLogGroup` 을 부른다. 권한이 없어 dag-processor 가 exit 1 로 죽었고, 서비스가 약 90초마다 재기동했다. circuit breaker 가 이전 리비전으로 롤백해서 새 `task_memory` 리비전 대신 옛 리비전 태스크가 떴다(21:14~22:31). 태스크 역할에 그 그룹 하나만 허용했다(#993). 로컬 하네스는 원격 로그를 쓰지 않아 못 봤다.
+- 판정기가 ECS AMI 의 systemd cgroup 경로(`ecstasks.slice/ecstasks-<id>.slice`)를 태스크로 읽지 못했다(#992).
+- 검증 실행기가 슬롯을 오늘 날짜로 만들어서, 자정을 넘긴 배치는 `logical_date` 가 미래가 됐다. Airflow 는 그 시각까지 run 을 시작하지 않고 `dagrun_timeout`(900초)으로 실패시켰다 → small·1408 의 B1~B3 전부 무효. 이제 미래 슬롯을 거부한다. 수집은 `same_day_only` 라 **검증 창은 같은 날 14:35 뒤 ~ 자정 전**이다.
+- 스위트가 06:30 종료 시각을 코드로 지키지 않아, 로컬 기기 수면 뒤 09-30 11:16 장중에 Airflow 재시작 1회를 했다(업무 영향 없음 — Airflow 는 격리 DAG 만 가진 별도 클러스터). 발견 즉시 desired 0 으로 멈췄다.
+- ASG 첫 기동 "Authentication Failure"(새 인스턴스 프로파일 전파 지연 — 1분 뒤 자동 성공). terraform 은 이를 실패로 보고 ASG 를 taint 해서 `untaint` 뒤 apply 를 다시 돌렸다.
+
+**비용(실측·추정).** micro 약 1시간·small 약 15시간, CPU 크레딧 초과는 micro 6.04(약 0.24 USD)·small 0. EC2·EBS·크레딧·이미지 pull·로그를 합쳐 **약 1 USD**(추정 — Cost Explorer 확정 전). 정리 뒤 잔여: 앱 시크릿·ECR 이미지·로그 보관, **약 0.6 USD/월**.
+
+**정리 상태.** 서비스 desired 0 · 검증 ECS 태스크 0 · 검증 원장 백업(87개 표) · 검증 버킷 사본 로컬 보존 · 전용 DB·역할 삭제(`roles_left=0 dbs_left=0`) · `host_count = 0`·`verify_enabled = false`(#998). 정기 DAG 는 pause 그대로, SFN·`investor_intraday_orchestrator = "SFN"` 변경 없음.
+
+**다시 한다면.**
+- small 에 1408 로, 같은 날 15:00~23:30 창 안에서 B1~B3 를 다시 돈다.
+- 스위트가 종료 시각을 코드로 지키게 한다.
+
+### small·1408 후속 검증 — 실행 전 고정(2026-09-30 14:10 KST)
+
+위 small·1408 의 B1~B3 는 실행기 결함으로 무효였다(결과는 그대로 둔다). 이번에는 그 결함과 종료 방식을 먼저 고치고, 업무 실행·복구만 다시 본다. 기준·순서·시각은 `verify/criteria_aws_1408.json`(실행 전 고정, `VERIFY_CRITERIA` 로 고른다).
+
+**고친 것(실행 전).**
+- 실행기: 검증일(`verify_day`)과 슬롯을 기준 파일로 고정하고, 다른 날·미래 슬롯·제출 마감(22:15) 뒤 제출을 **제출 전에** 거부한다(`run.py slotcheck` 가 자정 전후를 가상 시각으로 확인). run 이 제출 뒤 240초 안에 어떤 task 도 시작하지 않으면 `not_started` 로 즉시 멈추고 run·DAG 상태를 남긴다. 트리거마다 서비스 태스크 리비전·이미지 digest 를 기록해, 회차 도중 배포가 바뀌면 판정(A12)이 실패한다.
+- 종료 장치(`infra/terraform/modules/airflow/verify_shutdown.tf`): 운영자 PC 와 무관하게 AWS 가 끝낸다.
+  - 22:30 EventBridge Scheduler 가 verify-ops 태스크로 `shim.py verify-shutdown 900` 을 띄운다. 순서: Airflow 서비스 desired 0(새 제출 중단) → 15분 동안 검증 업무 태스크의 자연 종료 대기 → 남은 **검증 태스크만** StopTask → 호스트 ASG 0.
+  - 멈춘 태스크는 결과 미상으로 보고서(검증 버킷 `shutdown/`)에 남긴다. 원장의 RUNNING 시도는 보류로 남는다.
+  - 23:00 두 스케줄이 서비스 desired 0·ASG 0 을 직접 호출한다(종료 태스크가 실패한 경우 대비).
+  - 분 세션 스케줄과 같은 방식(universal target `aws-sdk:ecs:runTask`)을 재사용했다.
+  - 본 실험 전에 같은 역할·같은 대상으로 몇 분 뒤 시각의 시험 스케줄을 만들어 실제 동작(서비스 0·대기 태스크 중단·ASG 0)을 확인한다. 확인되지 않으면 본 실험을 하지 않는다.
+- 검증 시크릿 `recovery_window_in_days = 0`: 어제 정리한 같은 이름이 복구 대기로 남아 생성이 막혔다(즉시 삭제로 풀었다).
+
+**구성(고정).** t4g.small 1대 · 태스크 합산 1408MiB · parallelism 1·파싱 1·풀 2/3·API workers 1 · 이미지 `edge/airflow:7bb0c196…`(digest `sha256:9e1c1f86…`) · 검증 업무 이미지 = 배포된 data-pipeline(`sha256:8b8c2a60…`) + shim(이번 커밋으로 다시 빌드) · 기존 RDS 안의 전용 DB `airflow`·`edge_verify`와 최소 권한 역할 · 입력은 업무 레이크의 장중 수급 raw 1개를 읽기만 해서 검증 버킷에 복사 · 산출물은 검증 버킷·검증 DB 에만.
+
+**시나리오(V 배치, 순서 고정).**
+
+| 순서 | 슬롯 | 내용 |
+|---|---|---|
+| N1·N2·N3 | 09:35·10:05·11:25 | 정상 |
+| R1 | 13:25 | 정상 + 정제 150초 대기 중 Airflow 서비스 강제 재배포 → 기존 ECS 추적 |
+| F1 | 14:35 | 적재 exit 1 확정 실패 |
+| H1 | 15:00 | 수집 제출 응답 유실 + 조회 실패 → ECS_STATE_UNKNOWN 보류 |
+| X1 | 15:10 | 보류 중 새 run → 수집 exit 76 |
+| 해제 | — | H1 태스크 STOPPED 확인 뒤에만 `verify-resolve-holds` |
+| A1 | 15:20 | 해제 뒤 정상 |
+
+앞뒤로 S1 유휴 20분(Airflow 연결 직후 기존 RDS·호스트 기준선)과 V 뒤 유휴 15분을 둔다. 판정 항목은 A1~A8·A11(1408 상한 도달 0)·A12(배포 고정)이다.
+
+**시각(KST).**
+- 시작은 16:30 이후다. 분 세션 stop 16:10·일봉 15:40 종료와 실행 중 SFN·ECS 0 을 확인한 뒤 시작한다.
+- 19:25~19:55(공시 19:30)에는 새 run 을 시작하지 않는다.
+- 제출 마감 22:15, 종료 장치 22:30, 강제 23:00, 정리 완료 23:30.
+- 준비가 늦으면 다른 날로 미룬다. 그때는 `verify_day`·종료 시각을 새로 고정한다.
+
+**예상 추가 비용.**
+- 항목:
+  - small 약 9시간: 0.19.
+  - EBS: 0.03.
+  - 검증 Fargate 약 50회 × 2분: 약 0.1.
+  - 이미지 pull(검증 이미지 약 176MB × 50 + Airflow): NAT 약 0.6.
+  - 로그·시크릿·스케줄: 약 0.1.
+- 합계 **약 1 USD**, 상한 3 USD.
+
+**정리 대상.**
+- 검증 버킷·태스크 정의·역할·검증 시크릿·검증 SG·RDS SG 규칙.
+- 종료 장치 스케줄 3개와 그 역할.
+- 호스트(ASG 0).
+- 전용 DB·역할(dbadmin teardown).
+- 서비스 0.
+
+
 ### 메타DB
 
 - **현재 Terraform(검증 구성)은 기존 업무 RDS(`edge-dev`) 안의 전용 DB·역할이다**(위 "실제 AWS 단기 검증"). 상시 운영에 쓸지는 그 검증 결과와 아래 평가로 정한다 — 재사용은 아직 확정이 아니다.

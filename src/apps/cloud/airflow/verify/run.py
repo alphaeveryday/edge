@@ -52,7 +52,8 @@ API = f"http://127.0.0.1:{PORT}"
 LAKE = os.environ.get("EDGE_LAKE_BUCKET", "")
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE.parent / "local" / "results" / "aws"
-CRIT = json.loads((HERE / "criteria_aws.json").read_text())
+# 회차 기준 파일 — 실행 전에 고정한다(small·1408 후속은 VERIFY_CRITERIA=criteria_aws_1408.json).
+CRIT = json.loads((HERE / os.environ.get("VERIFY_CRITERIA", "criteria_aws.json")).read_text())
 _c = lambda n: boto3.client(n, region_name=REGION)  # noqa: E731
 ecs, s3, logs, sm, cw, ssm, asg, ec2, sfn = (_c(n) for n in (
     "ecs", "s3", "logs", "secretsmanager", "cloudwatch", "ssm", "autoscaling", "ec2", "stepfunctions"))
@@ -295,16 +296,50 @@ def deployinfo(args) -> int:
 
 
 # ── 시나리오 ──
-def _slot(hhmm: str) -> datetime:
+def _slot(hhmm: str, now: datetime | None = None) -> datetime:
+    """검증 슬롯 시각. 날짜는 기준 파일의 verify_day(없으면 오늘)이고, 제출 **전에** 거부한다:
+    - 다른 날: 수집은 same_day_only 라 verify_day 가 오늘(KST)이 아니면 업무가 돌지 않는다.
+    - 미래 슬롯: logical_date 가 미래면 Airflow 는 그 시각까지 run 을 시작하지 않다가 dagrun_timeout 으로 실패시킨다
+      (2026-09-30 자정을 넘긴 배치 전부가 이렇게 실패했다).
+    - 제출 마감(window.submit_cutoff_kst) 뒤."""
+    now = now or datetime.now(KST)
+    day = CRIT.get("verify_day") or now.date().isoformat()
+    if day != now.date().isoformat():
+        raise RuntimeError(f"검증일 {day} 이 오늘({now.date()})이 아니다 — 수집은 당일만 돈다")
     h, m = map(int, hhmm.split(":"))
-    return datetime.now(KST).replace(hour=h, minute=m, second=0, microsecond=0)
+    slot = datetime.fromisoformat(day).replace(hour=h, minute=m, tzinfo=KST)
+    if slot > now:
+        raise RuntimeError(f"슬롯 {slot:%Y-%m-%d %H:%M} 이 미래다")
+    cutoff = (CRIT.get("window") or {}).get("submit_cutoff_kst")
+    if cutoff and now.strftime("%H:%M") >= cutoff[:5]:
+        raise RuntimeError(f"제출 마감 {cutoff} 이 지났다")
+    return slot
+
+
+def slotcheck(_args) -> int:
+    """_slot 자기 점검 — 자정 전후·미래·마감을 가상 시각으로 확인한다(네트워크 없음)."""
+    d = CRIT.get("verify_day") or datetime.now(KST).date().isoformat()
+    at = lambda hm, day=d: datetime.fromisoformat(f"{day}T{hm}:00+09:00")  # noqa: E731
+    ok = _slot("15:20", at("16:40")) == datetime.fromisoformat(f"{d}T15:20:00+09:00")
+    for hm, now in (("15:20", at("15:10")),                                              # 미래 슬롯
+                    ("09:35", at("00:30", (datetime.fromisoformat(d) + timedelta(days=1)).date().isoformat())),  # 자정 뒤
+                    ("09:35", at("23:59"))):                                             # 마감 뒤(있으면)
+        try:
+            _slot(hm, now)
+            ok = ok and hm == "09:35" and now.hour == 23 and not (CRIT.get("window") or {}).get("submit_cutoff_kst")
+        except RuntimeError as e:
+            print(f"거부 {hm} @ {now:%m-%d %H:%M}: {e}")
+    print("slotcheck", "ok" if ok else "FAIL")
+    return 0 if ok else 1
 
 
 def _news_window_wait(exp: str) -> None:
     """뉴스 배치(00:10 KST) 전후에는 새 run 을 시작하지 않는다 — 업무 배치와 겹치지 않게."""
     while True:
         now = datetime.now(KST)
-        if not ((now.hour == 0 and now.minute < 45) or (now.hour == 23 and now.minute >= 58)):
+        hm = now.strftime("%H:%M")
+        # 뉴스 00:10 전후, 공시 19:30 전후 — 새 run 을 시작하지 않는다.
+        if not ((now.hour == 0 and now.minute < 45) or hm >= "23:58" or "19:25" <= hm < "19:55"):
             return
         mark(exp, "wait_news_window")
         time.sleep(60)
@@ -316,10 +351,18 @@ def trigger(exp: str, batch: str, hhmm: str, conf: dict | None = None) -> str:
     rid = f"aws__{exp}__{batch}__{hhmm.replace(':', '')}"
     code, body, _ = api("POST", f"/api/v2/dags/{DAG}/dagRuns",
                         {"dag_run_id": rid, "logical_date": _slot(hhmm).isoformat(), "conf": conf or {}})
-    mark(exp, "trigger", run=rid, code=code, conf=conf, detail=None if code == 200 else body)
+    mark(exp, "trigger", run=rid, code=code, conf=conf, detail=None if code == 200 else body, deploy=_fingerprint())
     if code != 200:
         raise RuntimeError(f"run 생성 거절 {rid}: {code} {body}")
     return rid
+
+
+def _fingerprint() -> dict:
+    """지금 도는 서비스 태스크의 리비전·이미지 digest — 회차 도중 배포가 바뀌면 판정기가 합산하지 않는다."""
+    arns = ecs.list_tasks(cluster=CLUSTER, serviceName=PREFIX, desiredStatus="RUNNING")["taskArns"]
+    ts = ecs.describe_tasks(cluster=CLUSTER, tasks=arns)["tasks"] if arns else []
+    return {"tasks": [{"arn": t["taskArn"].rsplit("/", 1)[1], "td": t["taskDefinitionArn"].rsplit("/", 1)[1],
+                       "digests": sorted({c.get("imageDigest") for c in t["containers"]})} for t in ts]}
 
 
 def clear_runs(exp: str) -> None:
@@ -330,7 +373,7 @@ def clear_runs(exp: str) -> None:
         rid = r["dag_run_id"]
         if r["state"] in ("running", "queued"):
             raise RuntimeError(f"초기화 전 도는 run: {rid}")
-        m = re.match(r"aws__(.+)__(B\d)__\d{4}$", rid)
+        m = re.match(r"aws__(.+)__(B\d|V)__\d{4}$", rid)
         f = out_dir(m[1]) / f"{m[2]}.json" if m else None
         doc = json.loads(f.read_text()) if f and f.exists() else {}
         # 파일이 있는 것만으로는 부족하다(재실행이 남긴 옛 파일·조회 실패로 빈 증거) — 이 run 의 try 와 원장이 담겼는지 본다.
@@ -345,13 +388,36 @@ def clear_runs(exp: str) -> None:
 
 
 def wait_run(exp: str, rid: str, timeout: float = 2400) -> str:
+    """끝날 때까지 기다린다. 제출 뒤 start_grace_seconds 안에 어떤 task 도 시작하지 않으면 긴 타임아웃까지 기다리지 않고
+    not_started 로 끝낸다(원인 조회에 쓸 run·DAG 상태를 함께 남긴다) — run 생성은 성공이 아니다."""
+    q = urllib.parse.quote(rid, safe="")
     deadline = time.monotonic() + timeout
+    grace = time.monotonic() + CRIT["scenarios"].get("start_grace_seconds", 240)
+    started = False
     while time.monotonic() < deadline:
         try:
-            code, body, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns/{urllib.parse.quote(rid, safe='')}", timeout=15)
-            if code == 200 and body.get("state") in ("success", "failed"):
-                mark(exp, "run_done", run=rid, state=body["state"])
-                return body["state"]
+            code, body, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns/{q}", timeout=15)
+            if code != 200:                   # 재시작 중 503 등 — 모름. 판정하지 않고 다시 본다
+                time.sleep(5)
+                continue
+            tis_ok = False
+            if not started:
+                tcode, tis, _ = api("GET", f"/api/v2/dags/{DAG}/dagRuns/{q}/taskInstances", timeout=15)
+                tis_ok = tcode == 200
+                started = tis_ok and any(t.get("start_date") for t in tis.get("task_instances", []))
+            if body.get("state") in ("success", "failed"):
+                if not started and not tis_ok:     # 시작 여부를 확인하지 못했다 — 끝난 상태만 보고 분류하지 않는다
+                    time.sleep(5)
+                    continue
+                mark(exp, "run_done", run=rid, state=body["state"], started=started)
+                return body["state"] if started else "not_started"
+            if not started and tis_ok:
+                if time.monotonic() > grace:
+                    _, dag, _ = api("GET", f"/api/v2/dags/{DAG}", timeout=15)
+                    mark(exp, "run_not_started", run=rid, run_state=body.get("state"), run_after=body.get("run_after"),
+                         logical_date=body.get("logical_date"), dag_paused=dag.get("is_paused"),
+                         tis=[(t["task_id"], t.get("state")) for t in tis.get("task_instances", [])])
+                    return "not_started"
         except (OSError, ValueError):
             time.sleep(10)
             try:
@@ -471,6 +537,8 @@ def _batch(args) -> int:
     if ops(["verify-reset"])[0] != 0:
         return 1
     mark(exp, "batch_begin", batch=b)
+    if b == "V":
+        return _batch_v(exp, spec)
     wait = CRIT["scenarios"]["normalize_wait_seconds"]
     if b in ("B1", "B3"):
         for i, hhmm in enumerate(spec["slots"]):
@@ -506,6 +574,48 @@ def _batch(args) -> int:
             mark(exp, "hold_not_released", why="앞선 태스크 종료를 확인하지 못했다 — 해제하지 않는다")
     evidence(exp, b)
     mark(exp, "batch_end", batch=b)
+    return 0
+
+
+def _batch_v(exp: str, spec: dict) -> int:
+    """small·1408 후속 — 정상 3회 + 재시작 추적 + 확정 실패 + 상태 불명 보류·차단·해제·복구. 정상 run 이 시작조차 안 하면
+    원인을 남기고 멈춘다(뒤 시나리오는 의미가 없다)."""
+    s = spec["slots"]
+
+    def run(key: str, conf: dict | None = None, during=None) -> str:
+        rid = trigger(exp, "V", s[key], conf)
+        if during:
+            during(rid)
+        state = wait_run(exp, rid)
+        mark(exp, "scenario", key=key, run=rid, state=state)
+        if state in ("not_started", "timeout"):
+            raise RuntimeError(f"{key} {rid}: {state} — 중단")
+        return rid
+
+    for key in ("N1", "N2", "N3"):
+        run(key)
+    run("R1", cf("normalize", {"sleep_in_step": 150}),
+        lambda rid: when_running(exp, rid, "normalize-investor-estimate", 30, lambda a: restart_airflow(exp, a)))
+    run("F1", cf("load", {"exit": 1}))
+    rid_hold = run("H1", {"faults": {"collect": {"runtask_response_lost": [1], "list_tasks_error_after_submit": [1]}}})
+    run("X1")
+    held = [t for t in verify_tasks() if _ref(t).startswith(f"airflow:{DAG}/{rid_hold}/")]
+    for _ in range(30):                     # 보류된 수집 태스크는 실제로 돈다 — 스스로 끝날 때까지 기다린다(최대 10분)
+        if held and all(t["lastStatus"] == "STOPPED" for t in held):
+            break
+        time.sleep(20)
+        held = [t for t in verify_tasks() if _ref(t).startswith(f"airflow:{DAG}/{rid_hold}/")]
+    stopped = bool(held) and all(t["lastStatus"] == "STOPPED" for t in held)
+    mark(exp, "release_check", held_tasks=[(t["taskArn"].rsplit("/", 1)[1], _cmd(t), t["lastStatus"],
+                                           t["containers"][0].get("exitCode")) for t in held], all_stopped=stopped)
+    if not stopped:
+        mark(exp, "hold_not_released", why="보류된 태스크 종료를 확인하지 못했다 — 해제하지 않는다")
+    else:
+        ops(["verify-resolve-holds"])
+        mark(exp, "hold_released")
+        run("A1")
+    evidence(exp, "V")
+    mark(exp, "batch_end", batch="V")
     return 0
 
 
@@ -663,7 +773,7 @@ def obs(args) -> int:
 def main() -> int:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="name", required=True)
-    for name in ("secrets", "setup", "forward"):
+    for name in ("secrets", "setup", "forward", "slotcheck"):
         sub.add_parser(name)
     sub.add_parser("backup").add_argument("exp")
     d = sub.add_parser("dbadmin")
@@ -672,7 +782,7 @@ def main() -> int:
         sub.add_parser(name).add_argument("exp")
     b = sub.add_parser("batch")
     b.add_argument("exp")
-    b.add_argument("batch", choices=("B1", "B2", "B3"))
+    b.add_argument("batch", choices=("B1", "B2", "B3", "V"))
     i = sub.add_parser("idle")
     i.add_argument("exp")
     i.add_argument("tag")
@@ -683,7 +793,8 @@ def main() -> int:
     r.add_argument("--no-stats", action="store_true")
     args = p.parse_args()
     return {"secrets": secrets, "dbadmin": dbadmin, "setup": setup, "forward": forward, "backup": backup,
-            "deployinfo": deployinfo, "obs": obs, "batch": batch, "idle": idle, "rds": rds}[args.name](args)
+            "deployinfo": deployinfo, "obs": obs, "batch": batch, "idle": idle, "rds": rds,
+            "slotcheck": slotcheck}[args.name](args)
 
 
 if __name__ == "__main__":

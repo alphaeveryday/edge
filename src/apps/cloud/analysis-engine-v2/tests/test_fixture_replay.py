@@ -1,5 +1,6 @@
 """Replay advances visibility without rewriting previously observed market facts."""
 import pytest
+from edge_analysis_v2.factor_store import project_factor_metrics
 
 from edge_analysis_v2.fixture_tools import FixtureTools, make_replay_fixture
 
@@ -27,8 +28,8 @@ def test_all_factors_work_each_morning_without_future_observations(day):
     fixture = make_replay_fixture(at)
     tools = FixtureTools(fixture)
     assert fixture["price_snapshots"] == []
-    for factor in ("차트", "매크로", "밸류", "수급"):
-        cards = tools.call("get_factor_metrics", {"type": factor})["result"]["metrics"]
+    result = tools.call('get_instrument_factors', {'instrument_id': fixture['context']['etf_code']})
+    for cards in project_factor_metrics(result, fixture['context']['etf_code']).values():
         assert cards
         assert all(r["observed_at"] <= at for r in cards)
 

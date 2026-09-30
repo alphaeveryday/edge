@@ -61,11 +61,11 @@
 - 바닥 $100(H_{14}-P)/(H_{14}-L_{14})$. 오늘 고저+이전13일. 0분모 null. 반등확률 아님.
 - 상단 ≥80, 하단 ≤20. 유지에는 서로 다른 최근5개 관측 전부 필요.
 - 5요인 카드: 현재가 반영 MA20 이격·MA60 방향, 확정20일 신고가(40일 필요), 364일 최고종가 대비, 전일 거래대금/이전20일 평균, Wilder ATR14/전일종가.
-- 거래대금은 실제 필드. 현재가×거래량 대체 없음. 52주 데이터 시작일이 부족하면 해당 카드 제외. 모든 필수 거래일 누락은 계산 실패.
+- 거래대금은 실제 필드. 현재가×거래량 대체 없음. 52주 데이터 시작일이 부족하면 해당 카드 제외. 전용 계산은 필수 거래일 누락 시 실패. 공통 조회는 최신 연속 구간으로 계산 가능한 값만 반환하고 부족한 지표는 null.
 - `distance_from_52w_closing_high_pct = 100(P/H-1)`: 양수는 이전52주 최고 종가보다 높음(돌파), 음수는 그보다 낮음, 0은 같음. +1.1%를 '고점보다1.1% 아래'로 읽지 않음. 절댓값·음수 고정·0상한 처리 없음.
 - `ma20_distance_pct = 100(P/MA20-1)`: 양수는20일선 위, 음수는 아래, 0은 같음. 장중 두 이격률은 현재 관측T의 가격, 장전은 최신 확정 종가를 사용.
 - `new_closing_high_count_20d`는 완료일D까지 최근20확정거래일의 신고가 일수이며 오늘 장중 돌파 횟수가 아님. `turnover_ratio_previous_day`도 완료일D 거래대금 기준.
-- 부호·시점 설명을 보강한 `get_factor_metrics`는 정의v2로 저장. 과거v1 감사 정의는 변경하지 않음.
+- 공통 조회는 아래 종목별 요인 조회 사용. 과거 툴의 감사 정의·발행 근거는 보존.
 
 ## 매크로
 
@@ -89,8 +89,10 @@
 |---|---|---|
 | `calculate_valuation` | `instrument_id` | 개별 PER·PBR, 사용 가격·EPS·BPS·공개시각 |
 | `calculate_weighted_valuation` | 없음 | 전 구성종목 비중 가중 PER·PBR과 개별 계산 |
-| `get_factor_metrics` | `type`: 차트/매크로/밸류/수급 | `{type, metrics:[{key,value,observed_at,subject?}]}` |
+| `get_instrument_factors` | 필수 `instrument_id`, 선택 `factors` | 요청 종목의 요인별 자료. 생략 시 네 요인 전체, 이력은 `columns/rows` |
 
+- [종목별 요인 조회 상세 계약](../../src/apps/cloud/analysis-engine-v2/docs/instrument-factors.md): 전체·부분 조회, 결측 처리, 반환 JSON 예시. 에이전트가 읽은 동일 결과에서 서버가 화면 수치를 조립.
+- 공통 조회는 계산 가능한 값만 반환하며 PER 불가가 PBR을 막지 않음. 아래 두 전용 밸류 계산은 기존 양수 분모·완전 구성 조건 유지.
 - 세 도구 모두 최종 근거 가능. 요인 상태·스티커는 반환하지 않음.
 - `financials`: instrument_id,period(YYYY-Qn),eps,bps,eps_derivation(선택),available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화. 초기 입력 표도 `eps_derivation` 열을 싣는다(원자료에 없으면 null).
 - 최근 공개된 연속4분기 EPS 합으로 PER, 최신 공개 분기 BPS로 PBR. 동일 분기 여러 공개본이면 분석시각 이전 최신본을 사용.

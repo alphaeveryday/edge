@@ -697,12 +697,15 @@ module "airflow" {
 
   # al2023-ami-ecs-hvm-2023.0.20260922-kernel-6.1-arm64 (2026-09-28 recommended). 교체는 README "호스트 교체".
   ami_id = "ami-0c15069e7568e5f41"
-  # 실제 AWS 단기 검증(ALPHA-1119): micro 부터. 로컬에서는 호스트 몫을 가정(200~350MiB)해 768 에서 OOM 이었다 —
-  # 실제 호스트 몫·등록 메모리를 여기서 잰다. 부족이 확인되면 같은 조건으로 t4g.small 로 바꿔 비교한다.
+  # 실제 AWS 단기 검증(ALPHA-1119, 2026-09-29~30) 결과: micro 는 등록 916MiB·호스트 전역 OOM 으로 불가, small·1024 는
+  # 업무 task 실행 중 태스크 cgroup OOM 으로 불가. 1408 은 유휴·재시작만 확인했다(업무 실행은 검증 도구 결함으로 미검증).
+  # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
-  task_memory   = 1024 # 로컬 조정 설정(C1)이 전 기준을 통과한 합산 상한. 등록 메모리보다 크면 배치되지 않는다(그것도 결과)
-  # 검증을 마치면 0 으로 내린다(호스트·서비스 중단 알람 제거). 상시 운영으로 자동 연장하지 않는다.
-  host_count    = 1
+  task_memory   = 1408
+  # small·1408 업무 실행 검증(2026-09-30 16:30~22:30 KST, README "small·1408 후속 검증")에만 1. 끝나면 0 머지.
+  # 종료 장치가 ASG 를 0 으로 내린 뒤 다른 머지의 자동 apply 가 호스트를 되살리지 않게, 종료 시각(22:30 KST) 뒤
+  # 계산한 plan 은 0 이다. 그 전에 계산해 늦게 적용된 apply 는 23:00 강제 종료가 다시 0 으로 만든다.
+  host_count    = timecmp(plantimestamp(), "2026-09-30T13:30:00Z") < 0 ? 1 : 0
   host_observer = true
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
@@ -732,10 +735,13 @@ module "airflow" {
   deploy_role_name   = element(split("/", module.gha_deploy_dev.role_arn), 1) # vars.AWS_DEPLOY_ROLE_ARN 의 역할
   ecr_repository_arn = local.airflow_ecr_repository_arn
 
-  # 격리 검증(KIS·업무 DB·레이크와 무관). 검증이 끝나면 false 로 걷는다(버킷·태스크 정의·역할).
+  # 격리 검증(KIS·업무 DB·레이크와 무관). 끝나면 false 로 걷는다(버킷·태스크 정의·역할·종료 장치).
   verify_enabled = true
-  verify_image   = "${local.airflow_ecr_repository_url}:verify"
-  kr_holidays    = module.data_pipeline.kr_holidays
+  # AWS 쪽 종료 장치(verify_shutdown.tf) — 운영자 PC 와 무관하게 이 시각에 새 제출을 막고 정리한다.
+  verify_shutdown_at  = "2026-09-30T22:30:00"
+  verify_hard_stop_at = "2026-09-30T23:00:00"
+  verify_image        = "${local.airflow_ecr_repository_url}:verify"
+  kr_holidays         = module.data_pipeline.kr_holidays
   # 관리 태스크(dbadmin)만: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제(업무 DB 스키마만).
   master_db_secret_arn = module.rds.master_user_secret_arn
   master_db_user       = module.rds.master_username

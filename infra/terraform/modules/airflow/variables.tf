@@ -176,3 +176,21 @@ variable "kr_holidays" {
   type    = list(string)
   default = []
 }
+
+variable "verify_shutdown_at" {
+  description = "검증 종료 시각(KST, 'YYYY-MM-DDTHH:MM:SS') — 새 제출 중단·grace 뒤 남은 검증 태스크 중단·호스트 0. 비우면 종료 장치 없음"
+  type        = string
+  default     = ""
+}
+
+variable "verify_hard_stop_at" {
+  description = "종료 장치가 실패해도 서비스·호스트를 0 으로 만드는 시각(KST). verify_shutdown_at + grace 보다 뒤"
+  type        = string
+  default     = ""
+}
+
+variable "verify_shutdown_grace_seconds" {
+  description = "종료 태스크가 검증 업무 태스크의 자연 종료를 기다리는 시간(초)"
+  type        = number
+  default     = 900
+}
