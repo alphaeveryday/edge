@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
 import { CtaButton, NavBar, PageTitle } from '@/components/ui';
@@ -38,7 +38,7 @@ export default function PasswordReset() {
   const clear = (fn: (v: string) => void) => (v: string) => { fn(v); setErr(''); };
   const problem = (pw && pw.length < 8 ? '비밀번호는 8자 이상이에요' : '') || (pw2 && pw !== pw2 ? '비밀번호가 서로 달라요' : '');
   const ready = /^\d{6}$/.test(code) && pw.length >= 8 && pw === pw2;
-  const resend = () => { setErr(''); req.mutate(undefined, { onSuccess: () => toast('코드를 다시 요청했어요') }); };
+  const resend = () => { setErr(''); req.mutate(undefined, { onSuccess: () => Alert.alert('코드를 다시 보냈어요', '메일함을 확인해 주세요. 1분 안에는 다시 보낼 수 없어요.') }); };
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
       <NavBar title="비밀번호 재설정" backIcon="close" onBack={() => router.back()} />
