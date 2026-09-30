@@ -37,7 +37,8 @@ class MemberFlowTests extends ContainerTests {
     }
 
     String signup(String email) {
-        return (String) result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw", "nick", "n"), null)).get("accessToken");
+        signupCode(email);
+        return (String) result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw", "nick", "n", "code", SIGNUP_CODE), null)).get("accessToken");
     }
 
     @Test

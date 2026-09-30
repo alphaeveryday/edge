@@ -21,6 +21,7 @@ import com.edge.app.member.repository.MemberRepository;
 import com.edge.app.member.repository.PasswordResetCodeRepository;
 import com.edge.app.member.repository.PrincipalRepository;
 import com.edge.app.member.repository.RefreshTokenRepository;
+import com.edge.app.member.repository.SignupCodeRepository;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import com.edge.common.exception.GeneralException;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +57,8 @@ public class AuthService {
     private final DeviceRepository deviceRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordResetCodeRepository resetCodeRepository;
+    private final SignupCodeService signupCodeService;
+    private final SignupCodeRepository signupCodeRepository;
     private final Mailer mailer;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -84,12 +87,13 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 동시 가입의 유니크 위반도 MEMBER4002 로 응답
+    // 인증 코드 확인 후 가입. 동시 가입의 유니크 위반도 MEMBER4002 로 응답
     @Transactional
     public AuthResponse signup(SignupRequest request, String deviceKey) {
         if (memberRepository.findByEmailAndDeletedAtIsNull(request.email()).isPresent()) {
             throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
         }
+        signupCodeService.verify(request.email(), request.code());
         Member member;
         try {
             member = memberRepository.saveAndFlush(Member.email(request.email(),
@@ -97,6 +101,7 @@ public class AuthService {
         } catch (DataIntegrityViolationException e) {
             throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
         }
+        signupCodeRepository.deleteByEmail(request.email());
         return signIn(member, deviceKey);
     }
 
@@ -110,7 +115,7 @@ public class AuthService {
         if (current != null && current.getCreatedAt().plus(RESET_RESEND_GAP).isAfter(now)) {
             return;
         }
-        String code = "%06d".formatted(RANDOM.nextInt(1_000_000));
+        String code = newCode();
         if (current == null) {
             resetCodeRepository.save(PasswordResetCode.issue(member.getId(), hash(code), now));
         } else {
@@ -195,7 +200,11 @@ public class AuthService {
         return sb.toString();
     }
 
-    private static String hash(String token) {
+    static String newCode() {
+        return "%06d".formatted(RANDOM.nextInt(1_000_000));
+    }
+
+    static String hash(String token) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(token.getBytes()));
         } catch (NoSuchAlgorithmException e) {

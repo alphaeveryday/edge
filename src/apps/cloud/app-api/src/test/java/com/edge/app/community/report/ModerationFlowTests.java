@@ -69,7 +69,8 @@ class ModerationFlowTests extends ContainerTests {
 
     @SuppressWarnings("unchecked")
     Member member(String email) {
-        Map<String, Object> auth = result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "회원"), null));
+        signupCode(email);
+        Map<String, Object> auth = result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "회원", "code", SIGNUP_CODE), null));
         String token = (String) auth.get("accessToken");
         result(call("PUT", "/api/v1/watch-groups/base/etfs", Map.of("codes", List.of("069500")), token));
         return new Member(token, (String) ((Map<String, Object>) auth.get("me")).get("handle"));

@@ -58,7 +58,8 @@ class PostFlowTests extends ContainerTests {
     }
 
     String member(String email, String nick, List<String> watched) {
-        Map<String, Object> auth = result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw", "nick", nick), null));
+        signupCode(email);
+        Map<String, Object> auth = result(call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw", "nick", nick, "code", SIGNUP_CODE), null));
         String token = (String) auth.get("accessToken");
         result(call("PUT", "/api/v1/watch-groups/base/etfs", Map.of("codes", watched), token));
         return token;

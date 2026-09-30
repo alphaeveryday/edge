@@ -5,9 +5,11 @@ import com.edge.app.auth.dto.LoginRequest;
 import com.edge.app.auth.dto.PasswordResetConfirmRequest;
 import com.edge.app.auth.dto.PasswordResetRequest;
 import com.edge.app.auth.dto.RefreshRequest;
+import com.edge.app.auth.dto.SignupCodeRequest;
 import com.edge.app.auth.dto.SignupRequest;
 import com.edge.app.auth.dto.SocialLoginRequest;
 import com.edge.app.auth.service.AuthService;
+import com.edge.app.auth.service.SignupCodeService;
 import com.edge.app.common.auth.AppPrincipal;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.Valid;
@@ -25,6 +27,7 @@ public class AuthController {
     private static final String DEVICE_HEADER = "X-Device-Id";
 
     private final AuthService authService;
+    private final SignupCodeService signupCodeService;
 
     // X-Device-Id 선택. 있으면 게스트 데이터의 계정 매핑
     @PostMapping("/login")
@@ -37,6 +40,12 @@ public class AuthController {
     public ApiResponse<AuthResponse> authSocial(@RequestBody @Valid SocialLoginRequest request,
             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
         return ApiResponse.onSuccess(authService.social(request, deviceKey));
+    }
+
+    @PostMapping("/signup/code")
+    public ApiResponse<Void> authSendSignupCode(@RequestBody @Valid SignupCodeRequest request) {
+        signupCodeService.send(request.email());
+        return ApiResponse.onSuccess(null);
     }
 
     @PostMapping("/signup")

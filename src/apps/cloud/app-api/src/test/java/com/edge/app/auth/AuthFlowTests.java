@@ -62,7 +62,8 @@ class AuthFlowTests extends ContainerTests {
     }
 
     Map<String, Object> signup(String email, String... headers) {
-        var res = call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "영서"), headers);
+        signupCode(email);
+        var res = call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "영서", "code", SIGNUP_CODE), headers);
         assertEquals(200, res.getStatusCode().value(), res.getBody().toString());
         return result(res);
     }
@@ -98,9 +99,47 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("AUTH4001", bad.getBody().get("code"));
         assertEquals(401, call("POST", "/api/v1/auth/login", Map.of("email", "nobody@example.com", "password", "x")).getStatusCode().value());
         assertEquals(200, call("POST", "/api/v1/auth/login", Map.of("email", "b@example.com", "password", "pw123456")).getStatusCode().value());
-        var dup = call("POST", "/api/v1/auth/signup", Map.of("email", "b@example.com", "password", "x", "nick", "n"));
+        var dup = call("POST", "/api/v1/auth/signup", Map.of("email", "b@example.com", "password", "x", "nick", "n", "code", SIGNUP_CODE));
         assertEquals(409, dup.getStatusCode().value());
         assertEquals("MEMBER4002", dup.getBody().get("code"));
+    }
+
+    String requestSignupCode(String email) {
+        assertEquals(200, call("POST", "/api/v1/auth/signup/code", Map.of("email", email)).getStatusCode().value());
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        verify(mailer).send(eq(email), anyString(), text.capture());
+        return text.getValue().replaceAll("(?s).*?(\\d{6}).*", "$1");
+    }
+
+    ResponseEntity<Map> signupWith(String email, String code) {
+        return call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "인증", "code", code));
+    }
+
+    // 남의 이메일로 가입하지 못하게 메일로 받은 코드가 있어야만 가입되고, 코드 대입은 5회에서 막혀야 한다
+    @Test
+    void signupRequiresEmailCode() {
+        String code = requestSignupCode("v1@example.com");
+        String wrong = code.equals("000000") ? "111111" : "000000";
+        assertEquals(400, call("POST", "/api/v1/auth/signup", Map.of("email", "v1@example.com", "password", "pw123456", "nick", "인증")).getStatusCode().value());
+        var bad = signupWith("v1@example.com", wrong);
+        assertEquals(400, bad.getStatusCode().value());
+        assertEquals("AUTH4002", bad.getBody().get("code"));
+        assertEquals("AUTH4002", signupWith("v1-other@example.com", code).getBody().get("code"));
+        assertEquals(200, signupWith("v1@example.com", code).getStatusCode().value());
+        assertEquals(0, jdbc.queryForObject("select count(*) from signup_code where email = 'v1@example.com'", Integer.class));
+
+        var taken = call("POST", "/api/v1/auth/signup/code", Map.of("email", "v1@example.com"));
+        assertEquals(409, taken.getStatusCode().value());
+        assertEquals("MEMBER4002", taken.getBody().get("code"));
+
+        String locked = requestSignupCode("v2@example.com");
+        String miss = locked.equals("000000") ? "111111" : "000000";
+        for (int i = 0; i < 5; i++) {
+            signupWith("v2@example.com", miss);
+        }
+        assertEquals("AUTH4002", signupWith("v2@example.com", locked).getBody().get("code"));
+        assertEquals(200, call("POST", "/api/v1/auth/signup/code", Map.of("email", "v2@example.com")).getStatusCode().value());
+        verify(mailer, times(1)).send(eq("v2@example.com"), anyString(), anyString());
     }
 
     String requestResetCode(String email) {
@@ -226,10 +265,11 @@ class AuthFlowTests extends ContainerTests {
         var pool = java.util.concurrent.Executors.newFixedThreadPool(n);
         var gate = new java.util.concurrent.CountDownLatch(1);
         List<java.util.concurrent.Future<Integer>> futures = new java.util.ArrayList<>();
+        signupCode("race@example.com");
         for (int i = 0; i < n; i++) {
             futures.add(pool.submit(() -> {
                 gate.await();
-                return call("POST", "/api/v1/auth/signup", Map.of("email", "race@example.com", "password", "pw123456", "nick", "n"))
+                return call("POST", "/api/v1/auth/signup", Map.of("email", "race@example.com", "password", "pw123456", "nick", "n", "code", SIGNUP_CODE))
                         .getStatusCode().value();
             }));
         }
