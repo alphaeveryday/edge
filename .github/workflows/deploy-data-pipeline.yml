@@ -58,6 +58,7 @@ jobs:
           image_sha="${ecr_repo}:${IMAGE_TAG}"
           image_latest="${ecr_repo}:data-pipeline-latest"
           docker build --platform linux/amd64 \
+            --build-arg "GIT_SHA=${IMAGE_TAG}" \
             -f src/apps/cloud/data-pipeline/Dockerfile \
             -t "${image_sha}" \
             -t "${image_latest}" \
