@@ -15,16 +15,21 @@ test('polling updates the list without replacing content being read; manual refr
   const calls = [];
   let poll;
   let failReads = false;
+  let executionEnabled = false;
   const context = vm.createContext({
     document:{hidden:false,getElementById:get,createElement:element},
     window:{addEventListener(){}},history:{replaceState(){}},location:{hash:''},
     setInterval(callback){poll=callback},
     async fetch(url){calls.push(url);if(failReads&&url==='/api/analyses')throw Error('DB disconnected');return {ok:true,
-      async json(){return url==='/api/execution'?{enabled:false,scenarios:[]}:url==='/api/jobs'?[]:[row]},async text(){return 'saved content'}}},
+      async json(){return url==='/api/execution'?{enabled:executionEnabled,scenarios:[]}:url==='/api/jobs'?[]:[row]},async text(){return 'saved content'}}},
   });
   const html = fs.readFileSync(path.join(__dirname,'../src/edge_analysis_v2/dashboard/static/index.html'),'utf8');
   vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
   await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(get('workspace-prompts').hidden,true,'read-only mode must not offer an unavailable editor');
+  executionEnabled=true;
+  await vm.runInContext('initialize()',context);
+  assert.equal(get('workspace-prompts').hidden,false,'execution mode must retain prompt management');
   calls.length=0;
   await vm.runInContext(`mode='execution'; config={enabled:true,scenarios:[]}; openAnalysis(${JSON.stringify(row)})`,context);
   const original = get('detail').innerHTML;
