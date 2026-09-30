@@ -300,7 +300,8 @@ def _share_count(row: dict | None, field: str) -> Decimal | None:
     if text == "-":
         return Decimal(0)
     count = _amount(text)
-    return None if count is not None and count < 0 else count             # 음수 주식수는 파손 응답
+    # 음수·소수 주식수는 파손 응답 — 주식은 정수 단위다(DB 조회의 우선주 판정도 정수 문자열을 전제한다).
+    return None if count is not None and (count < 0 or count != count.to_integral_value()) else count
 
 
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
@@ -324,7 +325,9 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     total, common, preferred = _share_row(shares, "합계"), _share_row(shares, "보통주"), _share_row(shares, "우선주")
     present = [row for row in (total, common, preferred) if row is not None]
     if any(row.get("conflict") for row in present) or \
-            len({(str(row.get("rcept_no")), str(row.get("stlm_dt"))) for row in present}) > 1:
+            len({(str(row.get("rcept_no")), str(row.get("stlm_dt"))) for row in present}) > 1 or \
+            any(str(row.get("stlm_dt")) != base["period_end"] for row in present):
+        # 기준일이 보고기간 말과 다르면 다른 기말의 주식수다(사업보고서 표는 12-31, 반기는 06-30 — 실응답 확인).
         # 같은 종류 행이 서로 다르거나, 종류별 행의 접수번호·기준일이 다르면 한 표가 아니다 — 합계 행의 메타데이터를
         # 보통주 값에 붙이면 공개일이 틀린다.
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],

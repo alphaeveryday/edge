@@ -10,6 +10,8 @@ import io
 import json
 import zipfile
 
+from data_pipeline.sources import dart_fundamental
+
 SAMSUNG = {"corp_code": "00126380", "stock_code": "005930", "corp_name": "삼성전자"}
 HYNIX = {"corp_code": "00164779", "stock_code": "000660", "corp_name": "SK하이닉스"}
 
@@ -65,7 +67,8 @@ def shares(corp, year, code, *, issued=1_000, treasury=0, preferred=0) -> bytes:
     """주식총수 표(실응답 형태: 보통주·우선주·합계·비고, 없는 수는 '-'). `issued` 는 합계, 우선주는 그 안의 몫."""
     rcept_no = FILINGS[(year, code)][1]
     rows = [{"rcept_no": rcept_no, "corp_code": corp["corp_code"], "se": se, "istc_totqy": fmt(i) if i else "-",
-             "tesstk_co": fmt(t) if t else "-", "stlm_dt": "2026-06-30"}
+             # 실응답: stlm_dt = 그 보고서의 결산 기준일(반기 06-30, 사업보고서 12-31)
+             "tesstk_co": fmt(t) if t else "-", "stlm_dt": dart_fundamental._period_end(year, code)}
             for se, i, t in (("보통주", issued - preferred, treasury), ("우선주", preferred, 0),
                              ("합계", issued, treasury), ("비고", 0, 0))]
     return json.dumps({"status": "000", "message": "정상", "list": rows}, ensure_ascii=False).encode()

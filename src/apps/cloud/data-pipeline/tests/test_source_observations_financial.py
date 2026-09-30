@@ -453,3 +453,16 @@ def test_share_class_rows_with_different_receipts_are_one_table_or_none():
     rows, rejects = _extract_bps(body)
     assert not [r for r in rows if r["metric"].startswith("bps")]
     assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+
+
+def test_share_table_must_be_dated_at_the_report_period_end_and_integer():
+    # WHY(리뷰 10차): 반기 재무제표에 12-31 기준 주식수 표가 붙어도 종류별 기준일이 서로 같으면 통과했다 —
+    # 다른 기말의 분모로 만든 BPS 가 분기값이 된다. 소수 주식수도 정상 분모로 흘렀다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for r in body["list"]:
+        r["stlm_dt"] = "2025-12-31"
+    rows, rejects = _extract_bps(body)
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+    assert dart_fundamental._share_count({"istc_totqy": "100.5"}, "istc_totqy") is None
+    assert dart_fundamental._share_count({"istc_totqy": "1,000"}, "istc_totqy") == 1000
