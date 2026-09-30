@@ -13,6 +13,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -208,6 +209,50 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 
 	private final JdbcTemplate jdbc;
 
+	/**
+	 * 판정 근거 — job 을 축으로 LEFT JOIN 한다(기록 없는 job 도 한 행). artifact 는 **그 job 의 세대**
+	 * 이력만 본다: 현재 window 행이나 최신 세대로 대체하지 않는다(이력이 없으면 NULL = NO_HISTORY).
+	 * jsonb 의 {@code ?} 연산자는 JDBC 자리표시자와 겹쳐 {@code jsonb_exists} 를 쓴다.
+	 */
+	private static final String PRICE_JUDGMENTS_SQL = """
+			SELECT j.job_id, j.window_start, w.generation AS window_generation, j.generation AS job_generation,
+			       j.status, j.attempt_count, a.artifact_uri, a.artifact_checksum,
+			       r.attempt, r.redrive_generation, r.judged_at, r.tx_anchor_locked,
+			       r.detection_policy_version, r.baseline_set_id, r.summary::text AS summary,
+			       r.anchors_used::text AS anchors_used, r.tx_anchor::text AS tx_anchor,
+			       (SELECT jsonb_object_agg(s.entity_id, jsonb_build_object(
+			                   'value', sn.value, 'source', sn.source, 'ref', sn.ref))::text
+			          FROM minute_price_baseline_set s
+			          LEFT JOIN minute_price_baseline_snapshot sn ON sn.snapshot_id = s.snapshot_id
+			         WHERE s.set_id = r.baseline_set_id
+			           AND (jsonb_exists(r.anchors_used, s.entity_id)
+			                OR jsonb_exists(r.tx_anchor, s.entity_id)
+			                OR EXISTS (SELECT 1 FROM jsonb_each(r.summary) kv
+			                            WHERE jsonb_typeof(kv.value) = 'array'
+			                              AND jsonb_exists(kv.value, s.entity_id)))) AS baselines,
+			       (SELECT count(*)::int FROM minute_price_baseline_set s
+			         WHERE s.set_id = r.baseline_set_id) AS judged_with_baseline
+			  FROM price_window_job j
+			  JOIN minute_ingestion_window w
+			    ON w.session_id = j.session_id AND w.window_start = j.window_start
+			  LEFT JOIN minute_window_artifact_commit a
+			    ON a.session_id = j.session_id AND a.window_start = j.window_start
+			   AND a.generation = j.generation
+			  LEFT JOIN minute_price_judgment r ON r.job_id = j.job_id
+			 WHERE j.session_id = ?
+			 ORDER BY j.window_start, j.generation, j.job_id, r.redrive_generation NULLS FIRST, r.attempt NULLS FIRST
+			""";
+
+	private static final String PRICE_BASELINE_SETS_SQL = """
+			SELECT s.set_id, jsonb_object_agg(s.entity_id, jsonb_build_object(
+			           'value', sn.value, 'source', sn.source, 'ref', sn.ref))::text AS entries
+			  FROM minute_price_baseline_set s
+			  JOIN minute_price_baseline_snapshot sn ON sn.snapshot_id = s.snapshot_id
+			 WHERE s.set_id IN (SELECT DISTINCT r.baseline_set_id FROM minute_price_judgment r
+			                     WHERE r.session_id = ?)
+			 GROUP BY s.set_id
+			""";
+
 	public JdbcMinuteStatusRepository(JdbcTemplate jdbc) {
 		this.jdbc = jdbc;
 	}
@@ -307,5 +352,29 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 	private static Boolean nullableBoolean(ResultSet rs, String column) throws SQLException {
 		boolean value = rs.getBoolean(column);
 		return rs.wasNull() ? null : value;
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<PriceJudgmentRow> priceJudgments(String sessionId) {
+		return jdbc.query(PRICE_JUDGMENTS_SQL, (rs, i) -> new PriceJudgmentRow(rs.getString("job_id"),
+				rs.getObject("window_start", OffsetDateTime.class), rs.getInt("window_generation"),
+				rs.getInt("job_generation"), rs.getString("status"), rs.getInt("attempt_count"),
+				rs.getString("artifact_uri"), rs.getString("artifact_checksum"),
+				rs.getObject("attempt", Integer.class), rs.getObject("redrive_generation", Integer.class),
+				rs.getObject("judged_at", OffsetDateTime.class), rs.getObject("tx_anchor_locked", Boolean.class),
+				rs.getString("detection_policy_version"), rs.getString("baseline_set_id"), rs.getString("summary"),
+				rs.getString("anchors_used"), rs.getString("tx_anchor"), rs.getString("baselines"),
+				rs.getObject("judged_with_baseline", Integer.class)), sessionId);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public Map<String, String> priceBaselineSets(String sessionId) {
+		Map<String, String> sets = new LinkedHashMap<>();
+		jdbc.query(PRICE_BASELINE_SETS_SQL, rs -> {
+			sets.put(rs.getString("set_id"), rs.getString("entries"));
+		}, sessionId);
+		return sets;
 	}
 }
