@@ -156,8 +156,11 @@ export const mockClient: ApiClient = {
       ME.email = email;
       return delay({ ...ME });
     },
-    signup: ({ email, password, nick }) => {
+    sendSignupCode: (email) => (ACCOUNTS[email] ? Promise.reject(new ApiError('INVALID', '이미 가입된 이메일이에요')) : delay(undefined)),
+    // mock 코드는 000000 고정
+    signup: ({ email, password, nick, code }) => {
       if (ACCOUNTS[email]) return Promise.reject(new ApiError('INVALID', '이미 가입된 이메일이에요'));
+      if (code !== '000000') return Promise.reject(new ApiError('INVALID', '코드가 맞지 않거나 만료되었어요. 다시 요청해 주세요'));
       ACCOUNTS[email] = password;
       Object.assign(ME, { email, nick, handle: '@' + email.split('@')[0] });
       return delay({ ...ME });

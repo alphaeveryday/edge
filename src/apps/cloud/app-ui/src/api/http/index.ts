@@ -118,6 +118,7 @@ export const httpClient: ApiClient = {
   },
   auth: {
     login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' })),
+    sendSignupCode: (email) => request<void>('POST', '/auth/signup/code', { body: { email }, auth: false }),
     signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' })),
     requestPasswordReset: (email) => request<void>('POST', '/auth/password-reset', { body: { email }, auth: false }),
     confirmPasswordReset: (email, code, newPassword) => request<void>('POST', '/auth/password-reset/confirm', { body: { email, code, newPassword }, auth: false }),

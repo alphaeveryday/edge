@@ -69,7 +69,8 @@ export interface MemberApi {
 
 export interface AuthApi {
   login(email: string, password: string): Promise<Me>;
-  signup(input: { email: string; password: string; nick: string }): Promise<Me>;
+  sendSignupCode(email: string): Promise<void>;
+  signup(input: { email: string; password: string; nick: string; code: string }): Promise<Me>;
   requestPasswordReset(email: string): Promise<void>;
   confirmPasswordReset(email: string, code: string, newPassword: string): Promise<void>;
   logout(): Promise<void>;
