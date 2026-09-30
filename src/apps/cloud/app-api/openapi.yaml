@@ -70,8 +70,9 @@ x-error-codes:
   MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
   MEMBER4003: { http: 404, message: 없는 회원입니다. }
   MEMBER4004: { http: 400, message: 자기 자신은 차단할 수 없습니다. }
+  MEMBER4005: { http: 404, message: 가입되지 않은 이메일입니다. }   # 가입 응답(MEMBER4002)이 이미 가입 여부를 드러내 재설정에서도 숨기지 않음
   AUTH4001: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
-  AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 틀림·만료·시도 초과·미가입 구분 없음
+  AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 틀림·만료·시도 초과 구분 없음
   VOTE5001: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
 
 security:
@@ -134,7 +135,7 @@ paths:
       tags: [auth]
       operationId: authRequestPasswordReset
       summary: 비밀번호 재설정 코드 발송
-      description: 가입된 이메일이면 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 미가입 이메일과 60초 안의 재요청도 같은 200 이고 메일은 보내지 않는다. 발송은 비동기.
+      description: 가입된 이메일이면 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 미가입 이메일은 MEMBER4005. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 발송은 비동기.
       security: []
       requestBody:
         required: true
@@ -148,6 +149,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 이메일 형식
+        '404': { $ref: '#/components/responses/Error' }   # MEMBER4005
   /auth/password-reset/confirm:
     post:
       tags: [auth]
