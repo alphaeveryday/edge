@@ -133,6 +133,34 @@ def test_macro_chain_lands_versions_and_the_as_of_query_respects_receipt(tmp_pat
     assert dict((d, v) for d, v, *_ in _as_of(conn, received_b))["2026-07-27"] == "1465.0"
 
 
+def test_load_without_its_quality_log_stays_pending_for_the_next_all(tmp_path, conn, monkeypatch):
+    # WHY(봇 P2): 커밋 뒤 소비 마커를 먼저 쓰고 검증 기록(quality_log)이 실패하면 `--all` 이 이 실행을 빼 버려
+    # 검증 기록 없는 적재가 영영 남는다. 기록이 실패한 적재는 마커 없이 남아 다음 회차가 (멱등하게) 다시 싣는다.
+    from data_pipeline.lake import LocalStorage, run_manifest_consumed_key
+    from data_pipeline.steps import source_observations as so, source_observations_macro as so_macro
+
+    storage = LocalStorage(tmp_path)
+    run = _macro_run(storage, "q", (FIXTURES / "ecos_usdkrw.json").read_bytes())
+    original = storage.put_bytes
+
+    def failing(key, data, *a, **k):
+        if key.startswith("operations_archive/data_quality_logs/"):
+            raise OSError("quality log write failed")
+        return original(key, data, *a, **k)
+
+    monkeypatch.setattr(storage, "put_bytes", failing)
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}qload1", input_run_id=None, pending=True,
+                   producer="load_macro") == 1
+    monkeypatch.setattr(storage, "put_bytes", original)
+    marker = run_manifest_consumed_key("canonical", "macro_observation", run, so.CONSUMER)
+    assert not storage.list_keys(marker)
+    assert so.load(storage, so_macro.MACRO, _db(), f"{RUN}qload2", input_run_id=None, pending=True,
+                   producer="load_macro") == 0
+    assert storage.list_keys(marker)
+    assert conn.execute("SELECT count(*) FROM macro_observation WHERE raw_run_id = %s",
+                        (f"{RUN}q_raw",)).fetchone()[0] == 6
+
+
 def test_db_rejects_mixed_units_and_early_receipt(conn):
     # WHY: 계열·단위·공급자 쌍과 "관측 기간이 끝난 뒤 수신"을 DB 가 강제한다 — 코드 한 곳이 틀려도 섞이지 않게.
     import psycopg
