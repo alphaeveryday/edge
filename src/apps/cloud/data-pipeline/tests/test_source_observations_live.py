@@ -151,6 +151,27 @@ def test_dart_live_bps_common_share_only_when_no_preferred(tmp_path):
     assert json.loads(hynix["inputs"])[1]["se"] == "보통주"
 
 
+def test_dart_live_standalone_bps_uses_total_equity_and_the_same_share_table(tmp_path):
+    # WHY: 별도(OFS) 재무제표엔 비지배지분이 없어 분자가 자본총계(ifrs-full_Equity)다 — 연결(CFS)은 지배기업 소유주지분.
+    # 실응답(삼성 2026 반기): 별도 자본총계 358,350,799,000,000 · 연결 자본총계 579,309,676,000,000 · 연결 지배기업
+    # 소유주지분 565,064,740,000,000. 분모는 두 기준 모두 같은 주식총수 표(합계 발행 − 자기주식). 기대값은 응답 값에서
+    # 직접 계산한다(코드의 계정 선택을 베끼지 않는다). 우선주가 있어 보통주 bps 는 두 기준 모두 막힌다.
+    code, rows, log = _normalized(tmp_path, _corp_fixtures())
+    ofs = json.loads(live("dart_stmt_samsung_2026_11012_OFS.json"))["list"]
+    equity = next(Decimal(ln["thstrm_amount"]) for ln in ofs if ln["sj_div"] == "BS" and ln["account_id"] == "ifrs-full_Equity")
+    assert equity == Decimal("358350799000000")
+    assert not any(ln["account_id"] == "ifrs-full_EquityAttributableToOwnersOfParent" for ln in ofs)   # 별도엔 없다
+    shares = Decimal(6648649811 - 82086705)
+    total = rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "OFS")]
+    assert total["value"] == str((equity / shares).quantize(Decimal("0.000001"))) == "54572.048302"
+    inputs = json.loads(total["inputs"])
+    assert inputs[0]["account_id"] == "ifrs-full_Equity" and inputs[0]["value"] == "358350799000000"
+    assert (inputs[1]["istc_totqy"], inputs[1]["tesstk_co"]) == ("6648649811", "82086705")
+    assert ("005930", 2026, "Q2", "bps", "POINT", "OFS") not in rows
+    cfs = rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS")]
+    assert json.loads(cfs["inputs"])[0]["account_id"] == "ifrs-full_EquityAttributableToOwnersOfParent"
+
+
 def test_dart_live_correction_receipt_is_the_one_the_api_returns(tmp_path):
     # WHY: 고려제강 반기보고서(2026.06)는 08-14 원본과 09-29 [기재정정]이 있고, 재무 API 는 정정본(20260929000540)만 준다.
     # 그 판본의 가시시각은 정정 접수일 기준(09-30 00:00 KST)이어야 한다 — 최초 공시일(08-14)에 붙이면 안 된다.

@@ -234,15 +234,20 @@ def _amount(value) -> Decimal | None:
 
 
 def _pick_line(lines: list[dict], account_id: str, statements: tuple[str, ...]) -> tuple[dict | None, str | None]:
-    """계정 하나의 줄. 손익은 IS 우선·없으면 CIS. 여러 줄이면 '우선주'가 없는 한 줄만 인정한다."""
+    """계정 하나의 줄. 손익은 IS 우선·없으면 CIS. '우선주' 줄은 후보가 아니다 — 남은 한 줄만 인정한다.
+
+    우선주 줄만 있으면 거부한다(한 줄뿐이라는 이유로 우선주 EPS 를 보통주 자리에 넣지 않는다). 구분 안 되는 줄이
+    둘 이상이면 모호하다.
+    """
     for sj in statements:
-        candidates = [ln for ln in lines if ln.get("sj_div") == sj and ln.get("account_id") == account_id]
-        if len(candidates) > 1:
-            candidates = [ln for ln in candidates if "우선주" not in (ln.get("account_nm") or "")]
+        found = [ln for ln in lines if ln.get("sj_div") == sj and ln.get("account_id") == account_id]
+        candidates = [ln for ln in found if "우선주" not in (ln.get("account_nm") or "")]
         if len(candidates) == 1:
             return candidates[0], None
         if candidates:
             return None, "ambiguous_account_line"
+        if found:
+            return None, "preferred_share_line_only"
     return None, "account_not_found"
 
 
