@@ -36,8 +36,8 @@ def test_invalid_financial_domain_never_becomes_neutral(mode):
 
 
 def test_derived_q4_is_declared_and_withheld_from_the_bare_card():
-    # Policy (2026-09-30): FY−9M Q4 EPS is an approximation. calculate/weighted must say so; the metrics card
-    # has no place to say so, so the PER card is withheld while PBR (no EPS) stays.
+    # Policy (2026-09-30): FY−9M Q4 EPS is an approximation. Every consumer path that shows a PER must say so:
+    # calculate/weighted (approximate·derived_periods) and the factor screen (eps_approximate·weighted_per_approximate).
     fixture = valuation_fixture()
     for row in fixture["financials"]:
         if row["period"] == "2025-Q4":
@@ -48,10 +48,13 @@ def test_derived_q4_is_declared_and_withheld_from_the_bare_card():
     weighted = tools.call("calculate_weighted_valuation", {})["result"]
     assert weighted["approximate"] is True and weighted["derived_constituents"] == ["A", "B"]
     assert weighted["coverage"] == {"constituents": 2, "weight": 1}
-    assert [m["key"] for m in tools.call("get_factor_metrics", {"type": "밸류"})["result"]["metrics"]] == ["weighted_pbr"]
+    screen = tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
+    assert screen["weighted_per"] is not None and screen["weighted_per_approximate"] is True
+    company = tools.call("get_instrument_factors", {"instrument_id": "A", "factors": ["valuation"]})["result"]["valuation"]
+    assert company["eps_approximate"] is True and company["eps_derived_periods"] == ["2025-Q4"]
     plain = FixtureTools(valuation_fixture())
     assert plain.call("calculate_valuation", {"instrument_id": "A"})["result"]["approximate"] is False
-    assert [m["key"] for m in plain.call("get_factor_metrics", {"type": "밸류"})["result"]["metrics"]] == ["weighted_per", "weighted_pbr"]
+    assert plain.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]["weighted_per_approximate"] is False
 
 
 def test_ttm_never_double_counts_or_skips_a_quarter():

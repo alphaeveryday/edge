@@ -319,7 +319,7 @@ def test_damaged_filing_list_rows_are_reported_and_page_counts_must_be_positive_
     # WHY(검증 라운드 잔여): 파손 목록 행을 조용히 빼면 "그 기간 보고서 없음"처럼 보이고, 문자열이 아닌
     # 접수번호는 정제 전체를 멈추며, 0·소수 페이지 수는 뒤 페이지 누락을 완료로 확정한다.
     good = json.loads(filing_list(SAMSUNG))
-    good["list"] += [None, {"rcept_no": ["20260930000001"], "rcept_dt": "20260930", "report_nm": "x"}]
+    good["list"] += [None, {"rcept_no": ["20260814000001"], "rcept_dt": "20260814", "report_nm": "x"}]   # 창 안의 파손 행
     storage, code = chain(tmp_path, DartFake([SAMSUNG], full_responses(SAMSUNG),
                                              {SAMSUNG["corp_code"]: json.dumps(good).encode()}),
                           holdings=("005930",))
@@ -768,3 +768,40 @@ def test_annual_version_is_unconfirmed_when_the_q3_request_never_happened(tmp_pa
     annual = versions[(2025, "11011", "CFS")]
     assert annual["status"] == "UNCONFIRMED" and json.loads(annual["detail"])["statement_detail"] == "q4_input_unconfirmed"
     assert not any(k[1:3] in ((2025, "Q4"), (2025, "FY")) for k in rows)
+
+
+def test_late_q3_correction_refetches_the_annual_report_outside_the_list_window(tmp_path):
+    # WHY(봇 P1): 3분기 정정이 사업보고서보다 LIST_LOOKBACK_DAYS(400일)보다 늦게 오면 목록에 사업보고서가 없어 Q4 를
+    # 재유도하지 못하고 옛 Q4 가 남는다. 그 해의 다음 해 목록을 한 번 더 받아 사업보고서를 다시 계획한다.
+    corrected = {**FILINGS, ("2025", "11014"): ("[기재정정]분기보고서 (2025.09)", "20270601000777", "20270601")}
+    responses = full_responses(SAMSUNG)
+    for fs in ("CFS", "OFS"):       # 정정본 재무제표·주식총수는 정정 접수번호를 싣는다
+        responses[("statement", SAMSUNG["corp_code"], "2025", "11014", fs)] = statement(SAMSUNG, "2025", "11014", fs, rcept_no="20270601000777")
+    body = json.loads(shares(SAMSUNG, "2025", "11014"))
+    for r in body["list"]:
+        r["rcept_no"] = "20270601000777"
+    responses[("shares", SAMSUNG["corp_code"], "2025", "11014")] = json.dumps(body).encode()
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, corrected)})
+    dart.fetched_at = "2027-06-05T00:00:00+00:00"
+    storage, _ = chain(tmp_path, dart, holdings=("005930",), from_date="2027-05-01", to_date="2027-06-05",
+                       now=datetime(2027, 6, 5, 1, 0, tzinfo=timezone.utc))
+    lists = [c for c in dart.calls if c[0] == "list"]
+    assert len(lists) == 2 and lists[1][2:] == ("2026-01-01", "2026-12-31")      # 사업보고서 해(2026) 목록을 한 번 더
+    assert ("statement", SAMSUNG["corp_code"], "2025", "11011", "CFS") in dart.calls
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS") in rows          # Q4 재유도
+    q4 = rows[("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS")]
+    assert q4["rcept_date"] == "2027-06-01" and q4["availability_basis"] == "provider_release_date"   # 두 입력 접수일 모두 확인
+
+
+def test_http_key_or_quota_error_stops_the_collection():
+    # WHY(봇 P2): 4xx·429 는 키·한도·차단이라 남은 호출도 같은 답이다 — 회사마다 계속 부르면 한도만 태운다.
+    from data_pipeline.config import DartFinancialSource as Cfg
+    from data_pipeline.sources.http import StopFetch
+
+    class Client:
+        def request(self, *a, **k):
+            raise StopFetch("429", status=429)
+    result = dart_fundamental.DartFundamentalSource(Cfg(api_key="k"), Client()).shares("00126380", "2026", "11012")
+    assert result.status == "error" and result.detail == "http_429" and result.stop is True

@@ -97,7 +97,7 @@
 - `financials`: instrument_id,period(YYYY-Qn),eps,bps,eps_derivation(선택),available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화. 초기 입력 표도 `eps_derivation` 열을 싣는다(원자료에 없으면 null).
 - 최근 공개된 연속4분기 EPS 합으로 PER, 최신 공개 분기 BPS로 PBR. 동일 분기 여러 공개본이면 분석시각 이전 최신본을 사용.
 - 양수 TTM EPS·BPS, 완전한 주식 구성비중 합1만 계산. 미확정 손실·현금·누락 정책을 중립값이나 재정규화로 숨기지 않음.
-- `financials` 행의 `eps_derivation`(선택, 원천 DB 어댑터가 싣는다)이 `FY_MINUS_9M`이면 그 분기 EPS는 근사다. `calculate_valuation`은 `derived_periods`·`approximate`, `calculate_weighted_valuation`은 `approximate`·`derived_constituents`·`coverage{constituents,weight}`를 함께 반환한다. 근사 표시를 실을 수 없는 `get_factor_metrics` 밸류 카드는 유도 분기가 포함되면 `weighted_per`를 내지 않는다(`weighted_pbr`만). 공개된 분기에 EPS나 BPS가 `null`이면(우선주 회사의 보통주 BPS 차단, 분모 응답 미확정) 오류 — 앞 분기로 창을 옮기지 않는다. 구성종목 하나라도 계산 불가면 가중 PER·PBR 전체가 없다(부분 커버리지 값 없음).
+- `financials` 행의 `eps_derivation`(선택, 원천 DB 어댑터가 싣는다)이 `FY_MINUS_9M`이면 그 분기 EPS는 근사다. `calculate_valuation`은 `derived_periods`·`approximate`, `calculate_weighted_valuation`은 `approximate`·`derived_constituents`·`coverage{constituents,weight}`를 함께 반환한다. `get_instrument_factors`의 밸류 화면도 `eps_approximate`·`eps_derived_periods`(종목), `weighted_per_approximate`(ETF)로 근사 여부를 싣는다 — 근사 표시 없이 PER을 내는 경로는 없다. 공개된 분기에 EPS나 BPS가 `null`이면(우선주 회사의 보통주 BPS 차단, 분모 응답 미확정) 오류 — 앞 분기로 창을 옮기지 않는다. 구성종목 하나라도 계산 불가면 가중 PER·PBR 전체가 없다(부분 커버리지 값 없음).
 - $PER_i=P_i/\sum_{q=1}^{4}EPS_{i,q}$, $PBR_i=P_i/BPS_i$, $\bar x=\sum_iw_ix_i$.
 - 5년 밴드는 계약 미정으로 제외. ETF 분배율은 12개월 완전 지급 이력이 명시된 경우만 표시. 다른 결측 카드는 0 대신 제외.
 

@@ -1142,6 +1142,20 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
                     items = body.get("list") if isinstance(body, dict) else None
                     listed.extend(items if isinstance(items, list) else [])
                 targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
+                # 3분기 정정이 사업보고서보다 목록 소급 폭(LIST_LOOKBACK_DAYS)보다 늦게 오면 그 해 사업보고서가 목록에
+                # 없어 Q4 재유도를 못 한다. 그 해의 다음 해 목록을 한 번 더 받아(회사당 최대 연도 수만큼) 다시 계획한다.
+                for year in sorted({y for y, c in targets if c == "11014" and (y, "11011") not in targets}):
+                    fy_start = date(int(year) + 1, 1, 1)
+                    if fy_start > end:
+                        continue                      # 사업보고서가 아직 나올 수 없는 해
+                    extra = source.filings(corp_code, fy_start, min(date(int(year) + 1, 12, 31), end))
+                    for number, page in enumerate(extra, start=1):
+                        keep("list", f"{corp_code}-list-fy{year}-p{number}", page)
+                    for page in (p for p in extra if p.status == "ok"):
+                        body = json.loads(page.body.decode("utf-8"))
+                        items = body.get("list") if isinstance(body, dict) else None
+                        listed.extend(items if isinstance(items, list) else [])
+                    targets, unsupported = dart_fundamental.plan_reports(listed, start, end)
                 scope.setdefault("unsupported_reports", []).extend(unsupported)
                 for year, code in sorted(targets):
                     for fs_div in ("CFS", "OFS"):

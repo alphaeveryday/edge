@@ -112,7 +112,8 @@ class DartFundamentalSource:
         try:
             body = self.client.request("GET", url, headers={"Accept": "application/json"}, decode=False)
         except StopFetch as exc:
-            return DartResult(kind, public, "error", f"http_{exc.status}", None, _now())
+            # 4xx·429 는 키·한도·차단 — 한 회사 문제가 아니라 남은 호출도 같은 답이다(본문 상태코드 STOP 과 같은 취급).
+            return DartResult(kind, public, "error", f"http_{exc.status}", None, _now(), stop=True)
         except SafeFailureError as exc:
             return DartResult(kind, public, "error", str(exc), None, _now())
         # 수신시각은 응답을 다 받은 뒤다 — 요청 전에 찍으면 재시도·지연만큼 받기 전부터 보이게 된다.

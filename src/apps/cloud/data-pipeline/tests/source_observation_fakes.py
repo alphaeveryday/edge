@@ -101,8 +101,16 @@ class DartFake:
         return self._df.DartResult(kind, request, status, detail, body, self.fetched_at)
 
     def filings(self, corp_code, start, end):
-        self.calls.append(("list", corp_code))
-        return [self._result("list", {"endpoint": "list.json", "corp_code": corp_code}, self.lists[corp_code])]
+        """실제 API 처럼 접수일 창(bgn_de~end_de) 안의 행만 돌려준다 — 창 밖 사업보고서를 재계획하는 경로가 검증되게."""
+        self.calls.append(("list", corp_code, start.isoformat(), end.isoformat()))
+        body = json.loads(self.lists[corp_code])
+        if isinstance(body, dict) and isinstance(body.get("list"), list):
+            lo, hi = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+            def inside(r):     # 파손 행·접수일 없는 행은 그대로 통과시킨다(파손 처리 테스트가 그 행을 봐야 한다)
+                return not isinstance(r, dict) or not str(r.get("rcept_dt") or "").isdigit() \
+                    or lo <= str(r.get("rcept_dt")) <= hi
+            body = {**body, "list": [r for r in body["list"] if inside(r)]}
+        return [self._result("list", {"endpoint": "list.json", "corp_code": corp_code}, json.dumps(body, ensure_ascii=False).encode())]
 
     def statement(self, corp_code, year, code, fs_div):
         self.calls.append(("statement", corp_code, year, code, fs_div))

@@ -57,7 +57,7 @@ def _seed(conn, run):
             "INSERT INTO macro_observation (series_id, observation_date, value, unit, source_vendor, source_series,"
             " received_at, available_at, availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id,"
             " artifact_key, artifact_sha256) VALUES ('usd_krw', %(day)s, %(value)s, 'KRW_per_USD', 'ecos',"
-            " '731Y003/D/0000003', %(received)s, %(received)s, 'received', %(raw_run_id)s, %(raw_key)s,"
+            " 'ECOS 731Y003/D/0000003', %(received)s, %(received)s, 'received', %(raw_run_id)s, %(raw_key)s,"
             " %(raw_sha256)s, %(canonical_run_id)s, %(artifact_key)s, %(artifact_sha256)s)",
             prov | dict(day=day, value=value, received=received))
 
