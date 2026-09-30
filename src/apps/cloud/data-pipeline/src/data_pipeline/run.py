@@ -678,6 +678,9 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
     spec = {"macro": source_observations_macro.MACRO, "sector": source_observations_sector.SECTOR,
             "financial": source_observations_financial.FINANCIAL}[family]
     producer = args.step.replace("-", "_")
+    if stage != "collect" and (args.from_date or args.to_date or args.series):
+        # 정제·적재는 입력 실행 전체를 처리한다 — 받아 두고 버리면 요청보다 넓은 범위를 처리하고도 성공한다.
+        raise SystemExit(f"{args.step} 는 --from/--to/--series 를 쓰지 않는다 (입력 실행 단위로 처리)")
     if stage == "normalize":
         return source_observations.normalize(storage, spec, run_id, args.input_run_id, producer=producer)
     if stage == "load":
