@@ -78,6 +78,7 @@
 - 원자료: `macro`의 series,value,unit,observed_at,available_at,subject(선택). 관측 단위는 등록 단위와 일치해야 함.
 - `observed_at`은 오프셋 있는 순간값 또는 관측일(`YYYY-MM-DD`). 일별 종가·월별 지표처럼 원천이 시각을 주지 않는 관측(ALPHA-1130 `macro_observations_as_of`)은 관측일 그대로 두고, 도구는 그 한국 날짜가 끝난 뒤(`23:59:59.999999+09:00`)부터 관측된 것으로 센다 — 시각을 지어내지 않고, 반환 `at`·`previous_at`은 원문 문자열이다. `compare_macro_observations`의 `previous_at`/`current_at`도 같은 형태를 받는다.
 - 반환의 관측시각 열을 `at`으로 통일한 `get_macro_observations`는 정의 v2. 기존 v1 실행은 그대로 보존한다.
+- ALPHA-1130 날짜만 있는 관측·근사 EPS 표시로 결과가 바뀐 툴은 새 정의로 저장한다: `get_macro_observations` v3, `compare_macro_observations`·`calculate_valuation`·`calculate_weighted_valuation`·`get_instrument_factors` v2. 이전 버전 실행은 그대로 보존한다.
 - 차이 $C-P$: 금리·물가는 %p. 상대변화 $100(C/P-1)$: %. 상대변화의 이전값은 양수여야 함.
 - 카드: 환율·국고채10년·미국채10년·브렌트 최신값. 원자재20관측 변화에는 `macro_trading_dates.commodity`의 정확한21개 거래일 필요.
 - 금리 일정은 `policy_decisions`의 decision_at,available_at,subject. 미래 행사일은 허용하지만 일정의 공개시각은 분석시각 이전. 날짜 차이는 KST.
