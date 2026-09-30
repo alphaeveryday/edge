@@ -686,11 +686,20 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 **활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
 1. `macro` 태스크 정의(`edge-{env}-data-pipeline-macro`): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
-   `DATA_PIPELINE_PRICE__SOURCE__API_KEY`(기존 FMP 시크릿)·`DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY`(신규 시크릿 셋 — 무료 키 발급 필요). 배포 뒤 카탈로그 `MACRO_COLLECTION.instrumented` 를 True 로 올린다(배선이 플래그보다 한 배포 앞선다).
+   `DATA_PIPELINE_PRICE__SOURCE__API_KEY`(기존 FMP 시크릿 — 미국채 10y 만)·`DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY`(신규 시크릿 셋 — ECOS 는 USD/KRW·국고채, KOSIS·EIA 는 무료 키 발급 필요). 배포 뒤 카탈로그 `MACRO_COLLECTION.instrumented` 를 True 로 올린다(배선이 플래그보다 한 배포 앞선다).
 2. `bigkinds`·`dart`·`rds`·`ops` 태스크 정의는 기존 것을 쓴다(DART 키는 기존 `dart` 에 있다, 업종 마스터는 키가 없다). 새 이미지 배포가 필요하다(새 CLI 스텝·설정 섹션).
 3. 주기 결측 판정을 켜려면 `ops` 태스크 정의(주기 reconcile)에 `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true`. 없으면 이 레인은 PLANNER_MISSING 판정 대상이 아니다(안전 기본값).
 4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다(미확인).
-5. 마이그레이션 `V202609301200` 은 dev 머지 시 schema-migrate 가 적용한다.
+5. 마이그레이션 `V202609301200` 은 dev 머지 시 schema-migrate 가 적용한다(테이블 3·조회 함수 5·writer EXECUTE 부여 — 앱 코드보다 먼저 있어야 `load-*` 가 돈다. 이미지가 먼저 배포돼도 적재 스텝만 실패하고 raw 는 남는다).
+6. USD/KRW 도 ECOS 다(FMP USDKRW 는 현재 구독에서 402) — `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY` 없이는 매크로 5계열 중 국채 10y(FMP)만 온다. ECOS 샘플 키는 10건 상한이라 운영 키가 필요하다.
+
+**첫 수동 실행 인수인계(활성화 전, dev — 이 PR 은 실행하지 않았다):**
+- **이미지**: `data-pipeline` 의 이번 PR(#997) 머지 SHA 이미지. `code_version` 은 이미지가 `GIT_SHA` 를 주입해야 manifest 에 찍힌다(지금은 `unknown`).
+- **첫 run 은 pause 유지 + 수동 trigger** — params 비움(정기 창: 매크로 어제−소급일~어제, 재무 접수일 오늘−14~오늘, 업종 오늘 거래일이면 3파일). 예상 공급자 호출: 매크로 **5**(계열당 1 — 창이 `max_window_days` 안), 업종 **3**(ZIP), 재무 **구성종목 수 ≈ 50**(`list.json` 회사당 1 페이지; 정기 창에 새 정기보고서가 있는 회사만 +재무제표 1~2·주식총수 1). 첫 실행이 8월 반기보고서를 실으려면 `financial_from=2026-08-01 financial_to=<오늘>` — 회사당 목록 1 + 반기 CFS 1(연결 없으면 OFS 1 추가) + 주식총수 1 ≈ **150**. 매크로 백필은 `macro_from/to` (`to`≤어제; 1500초 상한 안에서 1년 단위).
+- **단건 재현(컨테이너 밖, 같은 이미지)**: `python -m data_pipeline.run ingest-raw-macro --series usd_krw --from 2026-09-15 --to 2026-09-26 --run-id manual_1` 뒤 `normalize-macro --input-run-id manual_1` → `load-macro --input-run-id <정제 run_id>`. 재무·업종도 같은 3단.
+- **교차 확인(run 뒤)**: ① raw manifest `operations_archive/raw_run_manifests/dataset=*/run_id=<run>/manifest.json` 의 `counts`(ok·empty·error)와 `code_version` ② canonical manifest 의 `rows`·`rejected`·`raw_manifest_sha256` 가 ①의 `manifest_sha256` 과 같은지 ③ DB `SELECT count(*), max(received_at) FROM macro_observation WHERE raw_run_id='<run>'` 가 ②의 `rows` 와 같은지 ④ `SELECT * FROM source_observation_freshness()` 에 데이터셋 행이 생겼는지 ⑤ v2 어댑터 경로: `SELECT * FROM macro_observations_as_of(now(),'usd_krw',2)` 를 `edge_analysis_v2_writer` 로(`SET ROLE`) 실행 — 테이블 직접 SELECT 는 거부돼야 정상.
+- **재수집 없는 복구**: 정제·적재만 실패했으면 params `reprocess_slot=<그 슬롯 ISO>` 로 같은 DAG 재trigger(수집 스텝 건너뜀, raw manifest 재사용). 적재만 실패했으면 `load-* --all` 이 미소비 정제 run 을 모두 싣는다(멱등). artifact 가 30일 만료된 뒤엔 `normalize-* --input-run-id <raw run>` 으로 같은 raw 에서 다시 정제한다 — `code_version` 이 다르면 "같은 입력의 재정제"이지 그때 그 행이 아니다(§10.3).
+- **멈추기**: DAG pause(다음 슬롯 안 돎) → 실행 중 run 은 Airflow 에서 task clear 하지 말고 ECS `stop-task` 뒤 원장 보류 해제 절차(아래 "보류 해제와 수동 복구"). 수집 중 정지는 raw 를 남기고 manifest 를 안 남기므로 같은 run_id 재수집이 공급자를 다시 부른다(불변 키라 중복 저장은 없다).
 
 ## 활성화 전 결정·미해결 조건
 
