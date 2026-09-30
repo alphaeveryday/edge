@@ -40,6 +40,11 @@ def compare(fixture, series, previous_at, current_at, operation):
     rows = {observed(r["observed_at"]): r for r in observations(fixture, series)}
     if previous not in rows or current not in rows:
         raise ValueError("exact macro observation unavailable")
+    # A date-only observation is identified by its date — a caller-made end-of-day time would come back as
+    # evidence the source never gave, so only the source's own string is accepted for such rows.
+    for requested, row in ((previous_at, rows[previous]), (current_at, rows[current])):
+        if len(row["observed_at"]) == 10 and requested != row["observed_at"]:
+            raise ValueError("date-only macro observation must be requested by its date")
     p, c = decimal(rows[previous]["value"]), decimal(rows[current]["value"])
     if operation == "percent_change":
         if p <= 0:

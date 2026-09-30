@@ -45,3 +45,16 @@ def test_date_only_observation_counts_after_its_korean_day_ends():
     result = FixtureTools(fixture).call("compare_macro_observations", {"series": "kr_10y_yield", "previous_at": "2026-09-18", "current_at": "2026-09-21", "operation": "difference"})["result"]
     assert result["change"] == 0.3
     assert result["previous_at"] == "2026-09-18"
+
+
+def test_date_only_observation_cannot_be_requested_with_a_made_up_time():
+    # The source gave only a day. Accepting "that day 23:59:59.999999+09:00" would return a time the
+    # source never published as evidence — only the observation's own date string identifies it.
+    fixture = source()
+    fixture["macro"][-1] |= {"observed_at": "2026-09-21", "available_at": "2026-09-21T09:01:00+09:00"}
+    fixture["macro"][0] |= {"observed_at": "2026-09-18", "available_at": "2026-09-18T09:01:00+09:00"}
+    fixture["context"]["analysis_at"] = "2026-09-22T00:00:00+09:00"
+    with pytest.raises(ValueError, match="by its date"):
+        FixtureTools(fixture).call("compare_macro_observations", {
+            "series": "kr_10y_yield", "previous_at": "2026-09-18T23:59:59.999999+09:00", "current_at": "2026-09-21",
+            "operation": "difference"})
