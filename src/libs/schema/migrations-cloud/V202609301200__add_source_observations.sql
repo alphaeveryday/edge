@@ -254,16 +254,15 @@ BEGIN
            max(p.derivation) FILTER (WHERE p.metric = 'eps_basic' AND p.period_kind = 'QUARTER'),
            max(p.value) FILTER (WHERE p.metric = 'bps'),
            max(p.value) FILTER (WHERE p.metric = 'bps_total_shares'),
-           -- bps 가 빈 이유를 가른다: 통상 BPS 만 있으면 우선주가 있어서(§10.9 팀 결정 전 사용 금지)인지 종류별 주식수를
-           -- 못 읽어서(응답 파손)인지 inputs 의 우선주 발행수로, 둘 다 없으면 최신 판본이 BPS 를 못 만든 것(재수집 대상).
-           -- 어느 쪽도 옛 판본의 값으로 채우지 않는다.
+           -- bps 가 빈 이유: 정제가 통상 BPS 의 근거 줄에 남긴 판정(common_bps)을 그대로 읽는다 — 우선주 수만 보고
+           -- 다시 추론하지 않는다(파손과 정책 차단이 겹치면 정제는 파손을 먼저 적는다). 통상 BPS 도 없으면 최신 판본이
+           -- BPS 를 아예 못 만든 것. 어느 쪽도 옛 판본의 값으로 채우지 않는다.
            CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps') IS NULL THEN
                 CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps_total_shares') IS NULL
                      THEN 'BPS_ABSENT_IN_LATEST_VERSION'
                      WHEN bool_or(EXISTS (
                               SELECT 1 FROM jsonb_array_elements(p.inputs) i
-                              WHERE (i->>'preferred_istc_totqy') ~ '^[0-9]+$'
-                                AND (i->>'preferred_istc_totqy')::numeric > 0))
+                              WHERE i->>'common_bps' = 'bps_blocked_preferred_shares'))
                           FILTER (WHERE p.metric = 'bps_total_shares')
                      THEN 'PREFERRED_SHARES_PRESENT' ELSE 'COMMON_SHARE_BPS_UNAVAILABLE' END END,
            max(p.value) FILTER (WHERE p.metric = 'revenue' AND p.period_kind = 'QUARTER'),

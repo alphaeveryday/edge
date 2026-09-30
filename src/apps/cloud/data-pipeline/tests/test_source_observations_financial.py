@@ -479,3 +479,19 @@ def test_share_counts_are_normalized_to_integer_strings_and_defect_beats_policy(
     _, rejects = _extract_bps(body)
     assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
     assert not any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+
+
+def test_common_bps_verdict_is_stored_on_the_total_shares_evidence_line():
+    # WHY(리뷰 12차): DB 조회가 우선주 수만 보고 사유를 다시 추론하면 "우선주 있음 + 종류별 수 파손"이 정책 차단으로
+    # 읽힌다. 정제가 내린 판정 하나를 근거 줄에 남기고 조회는 그것만 읽는다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012", preferred=100))
+    for r in body["list"]:
+        if r["se"] == "우선주":
+            r["tesstk_co"] = "-5"
+    rows, _ = _extract_bps(body)
+    total = next(r for r in rows if r["metric"] == "bps_total_shares")
+    assert total["inputs"][1]["common_bps"] == "bps_share_rows_unreadable"
+    rows, _ = _extract_bps(json.loads(shares(SAMSUNG, "2026", "11012", preferred=100)))
+    assert next(r for r in rows if r["metric"] == "bps_total_shares")["inputs"][1]["common_bps"] == "bps_blocked_preferred_shares"
+    rows, _ = _extract_bps(json.loads(shares(SAMSUNG, "2026", "11012")))
+    assert next(r for r in rows if r["metric"] == "bps_total_shares")["inputs"][1]["common_bps"] == "computed"

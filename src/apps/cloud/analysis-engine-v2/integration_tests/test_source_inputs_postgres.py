@@ -91,7 +91,7 @@ def _seed(conn, run):
            "20260814000002", "2026-08-14")
     metric("00000002", "TST002", 2026, "Q2", "2026-06-30", "bps_total_shares", "POINT", "EQUITY_OVER_SHARES", "62000",
            "KRW_per_share", "20260814000002", "2026-08-14", formula="equity/(common+preferred)",
-           inputs='[{"se": "합계", "preferred_istc_totqy": "802371203"}]')   # the pipeline's evidence line shape
+           inputs='[{"se": "합계", "preferred_istc_totqy": "802371203", "common_bps": "bps_blocked_preferred_shares"}]')   # the pipeline's evidence line shape
 
 
 def test_macro_rows_are_date_only_and_visibility_bound(db):
@@ -188,7 +188,7 @@ def test_a_later_version_that_blocks_bps_is_not_overridden_by_an_older_bps(db):
         availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
         SELECT corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric, period_kind, fs_basis,
         derivation, CASE metric WHEN 'bps_total_shares' THEN 48000 ELSE value END, unit, formula,
-        CASE metric WHEN 'bps_total_shares' THEN '[{"se": "합계", "preferred_istc_totqy": "100"}]'::jsonb ELSE inputs END,
+        CASE metric WHEN 'bps_total_shares' THEN '[{"se": "합계", "preferred_istc_totqy": "100", "common_bps": "bps_blocked_preferred_shares"}]'::jsonb ELSE inputs END,
         '20260930000001', '2026-09-30', received_at + interval '30 days', received_at + interval '30 days',
         'received', raw_run_id || '-v2', raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256
         FROM financial_metric WHERE instrument_code = 'TST001' AND metric IN ('eps_basic', 'bps_total_shares')

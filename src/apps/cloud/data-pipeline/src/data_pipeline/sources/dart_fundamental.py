@@ -361,29 +361,33 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
                         "tesstk_co": str(treasury_total), "common_treasury": str(treasury_common),
                         "preferred_treasury": str(treasury_preferred)})
         return []
+    # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
+    # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
+    # 못 읽었으면 파손이 먼저다 — 재수집 대상이 정책 대기로 보이면 안 된다.
+    if None in (issued_common, treasury_common, issued_preferred, treasury_preferred):
+        common_bps = "bps_share_rows_unreadable"
+    elif issued_preferred > 0:
+        common_bps = "bps_blocked_preferred_shares"        # 정책 차단(§10.9 팀 결정)
+    elif issued_common - treasury_common <= 0:
+        common_bps = "bps_input_missing"
+    else:
+        common_bps = "computed"
     equity_input = {"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": "BS",
                     "account_id": _EQUITY_ACCOUNT[fs_div], "account_nm": line.get("account_nm"),
                     "field": "thstrm_amount", "value": str(equity)}
     shares_input = {"rcept_no": total.get("rcept_no"), "reprt_code": code, "se": "합계",
                     "istc_totqy": str(issued_total), "tesstk_co": str(treasury_total),
                     "preferred_istc_totqy": str(issued_preferred) if issued_preferred is not None else "unknown",
-                    "stlm_dt": total.get("stlm_dt")}
+                    "stlm_dt": total.get("stlm_dt"), "common_bps": common_bps}
     common_fields = {**base, "fiscal_period": fiscal_period, "period_kind": "POINT", "unit": "KRW_per_share",
                      "derivation": "EQUITY_OVER_SHARES", "rcept_no": max(line["rcept_no"], total["rcept_no"])}
     rows = [{**common_fields, "metric": "bps_total_shares",
              "value": str((equity / (issued_total - treasury_total)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
              "formula": BPS_TOTAL_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
              "inputs": [equity_input, shares_input]}]
-    if issued_preferred is None or issued_preferred > 0 or None in (issued_common, treasury_common, treasury_preferred):
-        # 우선주가 있으면 정책 차단(§10.9 팀 결정), 종류별 주식수를 못 읽었으면 데이터 결함 — 사유를 섞지 않는다.
-        # 우선주가 있어도 종류별 수를 하나라도 못 읽었으면 파손이 먼저다 — 재수집 대상이 정책 대기로 보이면 안 된다.
-        unreadable = None in (issued_common, treasury_common, treasury_preferred)
-        reason = "bps_blocked_preferred_shares" if issued_preferred and not unreadable else "bps_share_rows_unreadable"
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
+    if common_bps != "computed":
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [common_bps],
                         "preferred_istc_totqy": str(issued_preferred)})
-        return rows
-    if issued_common - treasury_common <= 0:
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
         return rows
     rows.append({**common_fields, "metric": "bps",
                  "value": str((equity / (issued_common - treasury_common)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
