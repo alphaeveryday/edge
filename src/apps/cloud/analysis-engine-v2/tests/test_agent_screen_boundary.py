@@ -1,7 +1,7 @@
 """The model decides content once; the server owns screen-derived fields."""
 from jsonschema import Draft202012Validator
 
-from edge_analysis_v2.agent_schemas import MOVEMENT, OUTLOOK, EDIT_SCHEMAS
+from edge_analysis_v2.agent.output_schema import MOVEMENT, OUTLOOK, EDIT_SCHEMAS
 
 
 def test_issue_detail_does_not_ask_model_to_repeat_parent_sticker():

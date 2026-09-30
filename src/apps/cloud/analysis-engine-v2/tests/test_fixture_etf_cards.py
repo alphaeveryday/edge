@@ -1,8 +1,8 @@
 """ETF-specific cards require complete actual distributions and units history."""
 import pytest
-from edge_analysis_v2.factor_store import FACTOR_KEYS
+from edge_analysis_v2.storage.factors import FACTOR_KEYS
 
-from edge_analysis_v2.fixture_tools import FixtureTools, make_fixture
+from edge_analysis_v2.tools.fixture_data import FixtureTools, make_fixture
 
 
 def card(fixture, factor, key):

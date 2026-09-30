@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-from edge_analysis_v2.factor_store import FACTOR_KEYS, project_factor_metrics
-from edge_analysis_v2.fixture_tools import FixtureTools
-from edge_analysis_v2.fixture_tools.demo import build_demo_fixture
+from edge_analysis_v2.storage.factors import FACTOR_KEYS, project_factor_metrics
+from edge_analysis_v2.tools.fixture_data import FixtureTools
+from edge_analysis_v2.tools.fixture_data.demo import build_demo_fixture
 
 
 @pytest.mark.parametrize("factor", ["차트", "매크로", "밸류", "수급"])

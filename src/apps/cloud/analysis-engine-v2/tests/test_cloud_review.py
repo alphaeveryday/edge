@@ -9,7 +9,16 @@ from unittest.mock import Mock
 
 import pytest
 
-from edge_analysis_v2.cloud_review import make_handler, render_evidence, render_job
+from edge_analysis_v2.dashboard.server import make_handler, render_evidence, render_job
+
+
+def test_job_view_renders_new_audit_and_prompt_artifacts():
+    page = render_job({'job':{'status':'completed'}, 'artifacts':{
+        'system_prompt.yaml':'system_prompt: hello', 'prompt_version.json':'{"version":"v1"}',
+        'contract_audit.json':'{"status":"passed"}'}})
+    assert '실행 시 고정된 프롬프트 YAML' in page
+    assert '실행 프롬프트 버전' in page
+    assert '출력 계약 검사 결과' in page
 
 
 def test_quality_case_renders_readable_bullets_and_never_implies_semantic_pass():
@@ -140,6 +149,81 @@ def test_feature_routes_return_only_the_requested_backend_contract():
     reader.assert_called_once_with('outlook','example','summary')
 
 
+def test_preview_reads_same_completed_edition_and_escapes_model_text():
+    reader = Mock(return_value={'summary': '<script>bad</script>', 'items': [
+        {'type':'이슈','title_keyword':'사건','sentence':'설명','sentiment':'positive'}]})
+    with server(Mock(), screen_reader=reader) as port:
+        code, body = request(port, '/view/screens/movement/example/summary')
+    assert code == 200
+    assert '왜 움직였을까?' in body and '<script>' not in body
+    reader.assert_called_once_with('movement', 'example', 'all')
+
+
+def test_old_review_address_serves_the_same_unified_dashboard():
+    with server(Mock()) as port:
+        code, body = request(port, '/')
+        assert code == 200 and 'ORCA / ANALYSIS ENGINE V2' in body
+        assert request(port, '/review') == request(port, '/')
+
+
+def test_observation_uses_persisted_job_without_requiring_database():
+    execution = Mock()
+    execution.detail.return_value = {'job':{'status':'completed'}, 'artifacts':{'raw_response.txt':'<raw>'}}
+    reader = Mock(side_effect=RuntimeError('DB unavailable'))
+    with server(reader, execution=execution) as port:
+        for level in ('summary','calls','raw'):
+            code, body = request(port, '/view/observation/example/' + level)
+            assert code == 200 and '에이전트 관측' in body
+        assert request(port, '/view/observation/example/invalid')[0] == 404
+    reader.assert_not_called()
+
+
+def test_prompt_edit_requires_csrf_valid_yaml_and_current_version(tmp_path):
+    from edge_analysis_v2.prompts.versions import PromptVersions
+    sources = tmp_path/'prompts'
+    sources.mkdir()
+    (sources/'outlook.yaml').write_text('system_prompt: original', encoding='utf-8')
+    prompts = PromptVersions(sources, tmp_path/'history')
+    execution = Mock(csrf_token='token')
+    with server(Mock(), execution=execution, prompt_versions=prompts) as port:
+        current = json.loads(request(port, '/api/prompts/outlook')[1])
+        def save(body, token='token'):
+            connection = HTTPConnection('127.0.0.1', port)
+            connection.request('POST','/api/prompts/outlook',body=json.dumps(body),headers={
+                'Content-Type':'application/json','Origin':f'http://127.0.0.1:{port}','X-CSRF-Token':token})
+            response=connection.getresponse()
+            result=response.status,json.loads(response.read())
+            connection.close()
+            return result
+        body={'yaml':'system_prompt: changed','expected_version':current['version'],'note':'test'}
+        assert save(body, 'wrong')[0] == 403
+        assert save(body | {'yaml':'system_prompt: []'})[0] == 400
+        assert save(body)[0] == 200
+        assert save(body)[0] == 409
+        assert request(port, '/api/prompts/../outlook')[0] == 404
+    assert prompts.read('outlook')['system_prompt'] == 'changed'
+
+
+def test_database_view_reads_stored_rows_and_escapes_them():
+    storage = Mock(return_value={'tables': {'outlook_items': [{'sentence':'<script>bad</script>', 'value':9007199254740993}]}})
+    with server(Mock(), storage_reader=storage) as port:
+        code, body = request(port, '/view/storage/outlook/example')
+    assert code == 200 and 'outlook_items' in body
+    assert '<script>' not in body and '9007199254740993' in body
+    assert '<table>' in body and '<th scope="col">sentence</th>' in body
+    assert '<td>9007199254740993</td>' in body
+    storage.assert_called_once_with('outlook', 'example')
+
+
+def test_agent_response_view_does_not_substitute_assembled_screen():
+    execution = Mock()
+    execution.detail.return_value = {'job':{}, 'artifacts':{
+        'response.json':'{"summary":"agent-final"}', 'screen.json':'{"summary":"db-screen"}'}}
+    with server(Mock(), execution=execution) as port:
+        code, body = request(port, '/view/responses/example')
+    assert code == 200 and 'agent-final' in body and 'db-screen' not in body
+
+
 def test_raw_model_artifacts_are_pretty_and_escaped_without_losing_integer_precision():
     page = render_job({'job':{},'artifacts':{'input.json':'{"value":9007199254740993,"text":"<script>x</script>"}',
                                            'events.jsonl':'{"text":"model"}\n{"unfinished"'}})
@@ -172,3 +256,20 @@ def test_review_shows_summary_and_rejection_before_raw_artifacts():
     assert '<p>고객이 먼저 읽는 결론</p>' in page
     assert '<p>최종 판단</p>' in page
     assert page.index('불합격: 비교 근거 없음') < page.index('실제 저장된 분석글')
+
+
+def test_audit_api_returns_failures_as_inspectable_results_not_transport_errors():
+    auditor = Mock(return_value={'status': 'failed', 'entries': [{'view': 'outlook', 'schema_errors': [{'path': '/detail'}]}]})
+    with server(Mock(), audit_reader=auditor) as port:
+        code, body = request(port, '/api/contract-audit/outlook/example')
+        assert code == 200 and json.loads(body)['status'] == 'failed'
+        assert request(port, '/api/contract-audit/outlook/example', {'Origin': 'https://evil.example'})[0] == 403
+    auditor.assert_called_once_with('outlook', 'example')
+
+
+def test_audit_unavailable_is_not_reported_as_contract_pass():
+    with server(Mock(), audit_reader=Mock(return_value=None)) as port:
+        assert request(port, '/api/contract-audit/movement/missing')[0] == 404
+    with server(Mock(), audit_reader=Mock(side_effect=RuntimeError('password=secret'))) as port:
+        code, body = request(port, '/api/contract-audit/outlook/example')
+        assert code == 503 and 'secret' not in body

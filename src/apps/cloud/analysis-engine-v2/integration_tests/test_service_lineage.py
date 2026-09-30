@@ -8,8 +8,8 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 import pytest
 
-from edge_analysis_v2.analysis_service import _previous, execute_request
-from edge_analysis_v2.fixture_tools import make_fixture
+from edge_analysis_v2.analysis.service import _previous, execute_request
+from edge_analysis_v2.tools.fixture_data import make_fixture
 
 
 @pytest.fixture

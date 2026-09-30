@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from edge_analysis_v2 import result_database as db
+from edge_analysis_v2.storage import database as db
 
 
 def secret():

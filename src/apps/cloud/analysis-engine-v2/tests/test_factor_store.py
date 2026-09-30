@@ -2,7 +2,7 @@
 
 import pytest
 
-from edge_analysis_v2.factor_store import prepare_metrics
+from edge_analysis_v2.storage.factors import prepare_metrics
 
 
 def test_cards_follow_contract_order_and_keep_date_only_precision():

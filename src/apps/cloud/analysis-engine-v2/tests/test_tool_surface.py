@@ -6,8 +6,8 @@ import json
 import pytest
 from jsonschema import ValidationError
 
-from edge_analysis_v2 import model_runner
-from edge_analysis_v2.tool_surface import agent_tool_schemas
+from edge_analysis_v2.agent import runner as model_runner
+from edge_analysis_v2.tools.model_schema import agent_tool_schemas
 
 
 def schemas():

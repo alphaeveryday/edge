@@ -114,3 +114,59 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 - **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../src/apps/cloud/data-pipeline/README.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)이 관통합니다([docs/context.md](context.md) §3) — Screening 은 활성 정책(policy_version·screening_rule)을 평가해 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 로 분기하며(ALPHA-429), 정정(CORRECTION) 전달은 폐지됐고 무효화(INVALIDATION)가 유일한 사후 조치이며([ADR-0044](adr/0044-correction-abolition.md)), 점검 Audit 은 후속(ALPHA-431)입니다.
+
+
+## 분석엔진 v2 패키지
+
+위치: `src/apps/cloud/analysis-engine-v2/`. 패키지 이름은 역할을 드러내는 소문자 이름과 snake_case를 사용한다. 일반적인 `utils`, `common` 최상위 폴더나 이전 경로의 호환 모듈을 두지 않는다.
+
+```text
+analysis-engine-v2/
+├── pyproject.toml
+├── docs/                         # 툴·데이터 계약 설명
+├── scripts/                      # 저장 결과 검사 등 관리 명령
+├── tests/                        # 단위 테스트
+├── integration_tests/            # DB·실행·화면 통합 테스트
+└── src/edge_analysis_v2/
+    ├── analysis/                 # 분석 실행 흐름과 본문 변경
+    │   ├── service.py
+    │   └── body_editor.py
+    ├── agent/                    # 모델 SDK와 에이전트 출력 계약
+    │   ├── runner.py
+    │   └── output_schema.py
+    ├── tools/                    # 툴 실행·모델 노출 스키마
+    │   ├── execution.py
+    │   ├── model_schema.py
+    │   └── fixture_data/         # 주입된 자료의 시장 데이터 툴·검증 자료
+    ├── storage/                  # PostgreSQL 연결·저장·조회
+    │   ├── database.py
+    │   ├── publications.py
+    │   ├── factors.py
+    │   ├── tool_runs.py
+    │   └── inspection.py
+    ├── contracts/                # 화면·저장 계약 및 결정적 검사
+    │   ├── publication_validation.py
+    │   ├── screen_validation.py
+    │   ├── check_catalog.py
+    │   ├── audit.py
+    │   ├── screen-output.schema.json
+    │   └── manifest.json         # 옵시디언 경로·해시만 보관, 원문 복사 없음
+    ├── quality/                  # 검증 시나리오·계산 대조
+    │   ├── scenarios.py
+    │   └── audit.py
+    ├── prompts/                  # 실제 시스템 프롬프트·버전 관리
+    │   ├── outlook.yaml
+    │   ├── movement.yaml
+    │   └── versions.py
+    └── dashboard/                # 통합 대시보드
+        ├── server.py             # HTTP 서버·API
+        ├── jobs.py               # 실행 작업 관리
+        ├── views/                # 서버 화면 렌더링
+        │   ├── analysis.py
+        │   └── observation.py
+        └── static/               # 브라우저 자산
+            ├── index.html
+            └── prompts.js
+```
+
+실행 진입점: `python -m edge_analysis_v2.dashboard.server`. 기존 `edge_analysis_v2.cloud_review` 경로는 제거했다. 필수 `--rds-ca`, 선택 `--port`, `--env-file`, `--runs-dir`, `--contract-vault` 인자는 유지한다. 패키지 기준으로 프롬프트·스키마·브라우저 자산을 찾으므로 작업 디렉터리에 의존하지 않는다.

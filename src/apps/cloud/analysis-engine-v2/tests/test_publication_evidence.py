@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from edge_analysis_v2.publication_store import PublicationStore
+from edge_analysis_v2.storage.publications import PublicationStore
 
 
 class Cursor:

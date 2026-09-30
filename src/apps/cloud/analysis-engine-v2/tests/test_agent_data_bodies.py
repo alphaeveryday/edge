@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from edge_analysis_v2.fixture_tools import FixtureTools
-from edge_analysis_v2.fixture_tools.demo import build_demo_fixture
+from edge_analysis_v2.tools.fixture_data import FixtureTools
+from edge_analysis_v2.tools.fixture_data.demo import build_demo_fixture
 
 
 def test_flow_pivot_preserves_each_investor_amount_null_and_zero():

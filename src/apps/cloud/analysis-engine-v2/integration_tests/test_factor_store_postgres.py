@@ -9,7 +9,7 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.types.json import Jsonb
 
-from edge_analysis_v2.factor_store import METRICS, read_factor_details, save_factor_details
+from edge_analysis_v2.storage.factors import METRICS, read_factor_details, save_factor_details
 
 
 @pytest.fixture

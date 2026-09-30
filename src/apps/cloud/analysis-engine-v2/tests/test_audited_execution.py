@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from edge_analysis_v2.audited_execution import AuditedExecution, ToolExecutionError
+from edge_analysis_v2.tools.execution import AuditedExecution, ToolExecutionError
 
 
 def executor(call, store):
