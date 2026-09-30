@@ -34,14 +34,14 @@
 
 ## 툴 계약 — 구현 전 명세
 
-기존 뉴스·보유종목·수급·매크로·지수 계산을 재사용한다. 새 함수는 밸류 자료 탐색·계산과 차트 탐색에 한정한다. `get_factor_metrics`는 서버의 상세 카드 조립에 유지하고, 대체 계산이 준비된 후 에이전트 목록에서 제외한다.
+기존 뉴스·보유종목·수급·매크로·지수 계산을 재사용한다. 새 함수는 밸류 자료 탐색·계산과 차트 탐색에 한정한다. 공통 자료 조회는 [종목별 요인 조회](../../src/apps/cloud/analysis-engine-v2/docs/instrument-factors.md) 하나로 통일한다. 서버는 동일 ETF 조회 결과로 상세 카드를 조립한다.
 
 | 함수 | 인수 | 반환 본문 | 최종 근거 |
 |---|---|---|---|
 | `get_financial_observations` | `instrument_id` | `columns + rows`: 관측 ID, 지표, 값, 단위, 대상 기간, 실제/예상, 작성자, 공개시각, 근거 기사 ID | 아니오 |
 | `compare_financial_observations` | `previous_id`, `current_id` | 두 원천 행, 차이, 상대변화. 같은 종목·지표·단위·대상 기간만 비교 | 예 |
 | `calculate_valuation_range` | `eps_id`, `per_low`, `per_high` | EPS 원천·배수 가정·현재가·가격 범위·현재가 대비 변화 | 예. 배수의 타당성은 내용 검수 |
-| `get_chart_metrics` | `metrics` | 요청한 지표별 값·관측시각 | 예 |
+| `get_instrument_factors` | `instrument_id`, 선택 `factors` | 요청 종목의 차트·수급·밸류·매크로 자료와 시점. 전체 또는 일부 요인 | 예. 반환값의 새로운 계산은 전용 툴 사용 |
 | `sum_investor_net_flow` | `instrument_id`, `investor`, `lookback_days` | 확정일의 부호 있는 순매수 합계·기간 | 예 |
 | `sum_weighted_net_flow` | `investor`, `lookback_days` | 전 구성종목을 일별 비중으로 반영한 순매수 합계·기간 | 예 |
 
