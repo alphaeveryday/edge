@@ -89,7 +89,7 @@ def test_latest_same_cutoff_prefers_publication_time_over_identifier(lineage):
     with factory() as connection:
         for identity, published in ((older, '10:01'), (newer, '10:02')):
             connection.execute('''INSERT INTO movement_analyses
-                (analysis_id,etf_code,analysis_at,trading_date,status,published_at)
-                VALUES (%s,%s,'2026-09-21T10:00:00+09:00','2026-09-21','completed',%s)''',
+                (analysis_id,etf_code,analysis_at,trading_date,status,published_at,data_source)
+                VALUES (%s,%s,'2026-09-21T10:00:00+09:00','2026-09-21','completed',%s,'synthetic')''',
                 (identity, etf, '2026-09-21T'+published+':00+09:00'))
         assert _previous(connection, 'movement', etf, cutoff) == newer

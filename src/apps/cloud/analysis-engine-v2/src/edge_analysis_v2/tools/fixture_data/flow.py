@@ -63,15 +63,20 @@ def calculate(fixture, investor, lookback_days, operation, direction, instrument
     if len(dates) != lookback_days or dates[-1] != end:
         raise ValueError("missing trading calendar window")
     rows = available(fixture.get("flow", []), cutoff)
+    known = {r['instrument_id'] for r in available(fixture.get('holdings', []), cutoff)
+             if r['as_of_date'] <= cutoff.date().isoformat()}
+    if instrument_id is not None and instrument_id not in known:
+        raise ValueError('individual outside constituent scope')
     values = []
     for day in dates:
-        weights = holdings(fixture, day.isoformat())["holdings"]
         if instrument_id is not None:
-            if instrument_id not in {r["instrument_id"] for r in weights}:
-                raise ValueError("individual outside constituent scope")
             weights = [{"instrument_id": instrument_id, "weight": 1}]
+        else:
+            weights = holdings(fixture, day.isoformat())["holdings"]
         total = decimal(0)
         for weight in weights:
+            if decimal(weight['weight']) == 0:
+                continue
             matches = [r for r in rows if r["instrument_id"] == weight["instrument_id"] and r["date"] == day.isoformat() and r["investor"] == investor]
             if len(matches) != 1 or matches[0].get("finalized") is not True:
                 raise ValueError("missing, duplicate or unfinalized flow")
