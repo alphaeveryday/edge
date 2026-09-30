@@ -612,6 +612,9 @@ def macro_window(series_id: str, today_kst: date, from_date: str | None, to_date
         start, end = date.fromisoformat(from_date), date.fromisoformat(to_date)
         if end > yesterday:
             raise SystemExit(f"--to({end})가 어제({yesterday}) 이후다 — 진행 중·미래 관측은 수집하지 않는다")
+        if start > end:
+            # 월초 맞춤 전에 검사한다 — 맞춘 뒤엔 역전된 월 안 창(02-20~02-01)이 유효한 창으로 바뀐다.
+            raise SystemExit(f"관측 기간이 역전됐다: {start} > {end}")
     # 월별 계열은 월 단위로 요청·검사한다(관측일=기준월 1일). 창 시작을 월초로 맞추지 않으면 요청에 포함된
     # 첫 달이 정제의 창 검사에서 떨어진다.
     if series.frequency == "M":

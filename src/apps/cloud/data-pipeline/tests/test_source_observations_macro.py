@@ -284,3 +284,9 @@ def test_ecos_rows_from_another_statistics_table_are_rejected():
         row["STAT_CODE"] = "731Y001"
     good, bad = macro_series.parse("usd_krw", json.dumps(body).encode())
     assert good == [] and all("series_identity_mismatch" in r["reasons"] for r in bad) and bad
+
+
+def test_reversed_monthly_backfill_is_rejected_before_month_alignment():
+    # WHY(봇 P2): 월초 맞춤 뒤에 검사하면 02-20~02-01 같은 역전 창이 2월 한 달 수집으로 바뀐다.
+    with pytest.raises(SystemExit, match="역전"):
+        so.macro_window("kr_cpi_yoy", date(2026, 9, 30), "2026-02-20", "2026-02-01")
