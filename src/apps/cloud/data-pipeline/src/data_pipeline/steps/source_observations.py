@@ -462,12 +462,17 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
                       for r in rows]
             companion_params = _companion_params(storage, spec, manifest, canonical_run_id)
             with connect(db) as conn, conn.cursor() as cur:
-                if companion_params:
-                    # 같은 raw 를 다른 규칙으로 다시 정제한 결과는 싣지 않는다 — 판본 정체성은 raw 실행이라, 옛 판본 행에
-                    # 새 정제의 지표만 덧붙는 혼합을 ON CONFLICT 로는 못 막는다. 같은 내용의 재적재만 멱등으로 통과.
-                    conflicts = _companion_conflicts(cur, spec.companion, companion_params)
-                    if conflicts:
-                        raise ValueError(f"같은 raw 의 판본이 이미 다른 내용으로 적재돼 있다: {conflicts[:3]}")
+                raw_run_id = manifest["input_run_id"]
+                # raw 실행 단위 직렬화 — 같은 raw 의 두 적재가 나란히 검사를 통과해 서로 다른 정제 결과를 섞지 않게.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"{spec.table}:{raw_run_id}",))
+                # 같은 raw 를 다른 규칙으로 다시 정제한 결과는 싣지 않는다 — 판본·지표 정체성은 raw 실행이라, 옛 행에
+                # 새 정제의 일부만 덧붙는 혼합을 ON CONFLICT 로는 못 막는다. 같은 내용(같은 artifact 해시)의 재적재만 통과.
+                shas = {spec.table: artifact["sha256"]}
+                if spec.companion is not None:
+                    shas[spec.companion.table] = manifest["companion"]["sha256"]
+                conflicts = _reload_conflicts(cur, spec, raw_run_id, shas)
+                if conflicts:
+                    raise ValueError(f"같은 raw 의 정제 결과가 이미 다른 내용으로 적재돼 있다: {conflicts}")
                 before = _count(cur, spec.table, canonical_run_id)
                 if params:
                     cur.executemany(sql, params)
@@ -521,23 +526,18 @@ def _companion_params(storage: Storage, spec: DatasetSpec, manifest: dict, canon
             for r in read_rows(spec.companion, data)]
 
 
-def _companion_conflicts(cur, companion: DatasetSpec, params: list[list]) -> list[dict]:
-    """이미 적재된 같은 raw 의 판본과 내용(status·metrics·rejected·detail·가시시각)이 다른 행."""
-    names = companion.names()
-    keys = ("corp_code", "fiscal_year", "reprt_code", "fs_basis", "raw_run_id")
-    compare = ("status", "metrics", "rejected", "detail", "availability_basis")
+def _reload_conflicts(cur, spec: DatasetSpec, raw_run_id: str, shas: dict[str, str]) -> list[dict]:
+    """같은 raw 실행의 행이 이미 있는데 **다른 artifact**(내용 해시가 다른 정제 결과)에서 왔으면 그 표들.
+
+    정규화는 결정적이라 같은 코드·같은 raw 는 같은 바이트다 — artifact sha256 이 곧 정제 내용의 정체성이라 값·근거·
+    가시시각까지 전부 덮는다(열 몇 개를 골라 비교하면 빠진 열이 새는 문이다).
+    """
     conflicts = []
-    for values in params:
-        row = dict(zip(names, values))
-        cur.execute(f"SELECT {', '.join(compare)} FROM {companion.table} WHERE "
-                    + " AND ".join(f"{k} = %s" for k in keys), [row[k] for k in keys])
-        found = cur.fetchone()
-        if found is None:
-            continue
-        existing = dict(zip(compare, found))
-        mine = {k: (json.loads(row[k]) if k in ("metrics", "rejected", "detail") else row[k]) for k in compare}
-        if existing != mine:
-            conflicts.append({k: row[k] for k in keys})
+    for table, sha in shas.items():
+        cur.execute(f"SELECT DISTINCT artifact_sha256 FROM {table} WHERE raw_run_id = %s", (raw_run_id,))
+        existing = {row[0] for row in cur.fetchall()}
+        if existing and existing != {sha}:
+            conflicts.append({"table": table, "loaded": sorted(existing), "incoming": sha})
     return conflicts
 
 

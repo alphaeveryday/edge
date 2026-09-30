@@ -457,3 +457,27 @@ def test_renormalizing_the_same_raw_with_different_rules_is_refused(tmp_path, co
     assert (count("financial_metric"), count("financial_report_version")) == before
     assert storage.get_bytes_with_version(so.run_manifest_consumed_key("canonical", "financial_metric", f"{RUN}r_norm2",
                                                                        so.CONSUMER))[0] is None
+
+
+def test_value_only_renormalization_is_also_refused(tmp_path, conn, monkeypatch):
+    """지표 이름·상태는 같고 값만 다른 재정제(계산식 수정)도 거부한다 — 정체성은 artifact 내용 해시다."""
+    from data_pipeline.sources import dart_fundamental
+    from data_pipeline.steps import source_observations as so
+
+    now = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+    storage, raw, norm = _financial_run(tmp_path, "v", _samsung_responses(), "2026-08-20T00:00:00+00:00",
+                                        from_date="2025-10-01", to_date="2026-08-20", now=now)
+    original = dart_fundamental.extract
+
+    def shifted(*args, **kwargs):
+        rows, bad = original(*args, **kwargs)
+        for r in rows:
+            if r["metric"] == "bps":
+                r["value"] = str(float(r["value"]) + 1)
+        return rows, bad
+    monkeypatch.setattr(dart_fundamental, "extract", shifted)
+    assert so.normalize(storage, so.FINANCIAL, f"{RUN}v_norm2", raw, producer="normalize_financial_metric") == 0
+    assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}v_load2", input_run_id=f"{RUN}v_norm2", pending=False,
+                   producer="load_financial_metric") == 1
+    assert conn.execute("SELECT count(DISTINCT artifact_sha256) FROM financial_metric WHERE raw_run_id = %s",
+                        (raw,)).fetchone()[0] == 1
