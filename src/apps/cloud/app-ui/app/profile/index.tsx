@@ -8,6 +8,7 @@ import { Avatar, BottomSheet, Chevron, CtaButton, ListRow, NavBar, SheetHead, To
 import { useMe } from '@/features/community/queries';
 import { useOnboarding } from '@/store/onboarding';
 import { useSession } from '@/store/session';
+import { openPrivacy, openTerms } from '@/lib/links';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -47,8 +48,8 @@ export default function Profile() {
         </View>
         <Text style={styles.cap}>계정</Text>
         <View style={[styles.card, { paddingHorizontal: 8 }]}>
-          <ListRow label="이용약관" divider onPress={() => toast('약관 페이지는 준비 중이에요')} />
-          <ListRow label="개인정보 처리방침" divider onPress={() => toast('처리방침 페이지는 준비 중이에요')} />
+          <ListRow label="이용약관" divider onPress={openTerms} />
+          <ListRow label="개인정보 처리방침" divider onPress={openPrivacy} />
           <ListRow label="회원 탈퇴" labelColor={colors.textMuted} onPress={() => setDelOpen(true)} />
         </View>
         <Pressable onPress={() => { api.auth.logout(); leave('로그아웃했어요'); }} style={styles.logout}>

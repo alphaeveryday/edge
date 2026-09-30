@@ -5,6 +5,7 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
 import { CtaButton, NavBar } from '@/components/ui';
+import { openPrivacy, openTerms } from '@/lib/links';
 import { AuthField } from '@/features/auth/AuthField';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
@@ -55,7 +56,7 @@ export default function Signup() {
         </View>
       </ScrollView>
       <View style={[styles.foot, { paddingBottom: Math.max(bottom, 16) + 10 }]}>
-        <Text style={styles.terms}>가입하면 이용약관과 개인정보 처리방침에 동의한 것으로 봐요.</Text>
+        <Text style={styles.terms}>가입하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의한 것으로 봐요.</Text>
         <CtaButton label="가입하기" tone="dark" disabled={!ready || submit.isPending} onPress={() => submit.mutate()} />
         <View style={styles.toLogin}>
           <Text style={styles.toLoginText}>이미 계정이 있나요?</Text>
@@ -73,6 +74,7 @@ const styles = StyleSheet.create({
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
   foot: { gap: 14, paddingTop: 12, paddingHorizontal: 24 },
   terms: { textAlign: 'center', fontFamily: fam.regular, fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  termsLink: { fontFamily: fam.semibold, color: colors.textSub, textDecorationLine: 'underline' },
   toLogin: { flexDirection: 'row', justifyContent: 'center', gap: 6 },
   toLoginText: { fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
   toLoginLink: { fontFamily: fam.bold, fontSize: 14, color: colors.primary },
