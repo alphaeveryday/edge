@@ -1,7 +1,7 @@
 """Stored source observations reach the v2 tools through the point-in-time functions (ALPHA-1130).
 
 Runs against a local PostgreSQL with the cloud Flyway set applied (V2_SOURCE_TEST_DSN, e.g.
-postgresql://edge:edge@127.0.0.1:55491/edge). Rows are tagged with a unique raw_run_id and
+postgresql://edge:edge@127.0.0.1:55445/edge — the guard accepts only this port and database). Rows are tagged with a unique raw_run_id and
 deleted afterwards; the reads run as ``edge_analysis_v2_writer`` so the test also proves the
 role's read path is the functions, not the tables.
 """
@@ -36,8 +36,8 @@ def db():
     """Insert one tagged set of version rows and remove exactly those rows afterwards."""
     run = "v2-source-test-" + uuid4().hex
     with psycopg.connect(_dsn(), autocommit=True) as conn:
-        _seed(conn, run)
         try:
+            _seed(conn, run)  # inside the cleanup scope: a seed that fails half-way must not leave tagged rows behind
             yield conn
         finally:
             conn.execute("RESET ROLE")
