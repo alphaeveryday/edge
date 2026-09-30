@@ -72,9 +72,12 @@ def _vendor_routes(today) -> dict:
         "/eia/petroleum/pri/spt/data/": json.dumps({"response": {"data": [
             {"period": d, "series": "RBRTE", "value": "70.1", "units": "$/BBL"} for d in days]}}).encode(),
         "/dart/corpCode.xml": buf.getvalue(),
+        # 실응답처럼 소급 400일 목록엔 직전 사업보고서가 있다 — 결산월(12월)은 그 행으로 확인된다.
         "/dart/list.json": json.dumps({"status": "000", "total_page": 1, "list": [
             {"corp_code": SAMSUNG["corp_code"], "report_nm": f"반기보고서 ({year}.06)", "rcept_no": rcept_no,
-             "rcept_dt": rcept_dt}]}).encode(),
+             "rcept_dt": rcept_dt},
+            {"corp_code": SAMSUNG["corp_code"], "report_nm": f"사업보고서 ({int(year) - 1}.12)",
+             "rcept_no": f"{year}0310000001", "rcept_dt": f"{year}0310"}]}).encode(),
         "/dart/fnlttSinglAcntAll.json": json.dumps(fin_statement).encode(),
         "/dart/stockTotqySttus.json": json.dumps(share_body).encode(),
         "/kis/kospi_code.mst.zip": KOSPI, "/kis/kosdaq_code.mst.zip": KOSDAQ, "/kis/idxcode.mst.zip": NAMES,
