@@ -913,8 +913,15 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             if share is not None:
                 # 분모 응답을 쓴 판본의 수신시각은 두 응답 중 늦은 쪽 — bps 행과 같은 규칙.
                 version["received_at"] = max(version["received_at"], share["fetched_at"])
-            version["rcept_no"] = next((ln.get("rcept_no") for ln in statement["body_json"]["list"]
-                                        if dart_fundamental.RCEPT_NO.fullmatch(str(ln.get("rcept_no")))), None)
+            numbers = {ln.get("rcept_no") for ln in statement["body_json"]["list"]
+                       if dart_fundamental.RCEPT_NO.fullmatch(str(ln.get("rcept_no")))}
+            if len(numbers) > 1:
+                # 한 재무제표 응답은 접수번호 하나다 — 원본·정정 줄이 섞이면 어느 공개일의 값인지 정할 수 없다.
+                rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
+                                "raw_key": statement["key"], "reasons": ["mixed_rcept_no"]})
+                unconfirmed((corp_code, year, code, fs_div), "mixed_rcept_no")
+                continue
+            version["rcept_no"] = next(iter(numbers), None)
         try:
             extracted, bad = dart_fundamental.extract(
                 {"corp_code": corp_code, "stock_code": corps[corp_code]["stock_code"]},
@@ -953,8 +960,23 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             q3_src = {r["metric"]: src for r, src in items if r["fiscal_period"] == "Q3"}
             items = items + [(r, fy_src[r["metric"]] + q3_src[r["metric"]]) for r in derived]
         rows.extend(finish(dict(row), sources) for row, sources in items)
+    # 판본은 자기 지표가 다 보일 때부터 보인다 — 유도 Q4 처럼 다른 보고서(정정 Q3)의 공개일이 섞인 지표가 있으면
+    # 판본 가시시각을 그 뒤로 미룬다. 앞당기면 정정 전 기준시각에서 새 판본이 뽑히고 지표는 걸러져 NULL 이 된다.
+    owned: dict[tuple, list[dict]] = {}
+    code_of = {"Q1": "11013", "Q2": "11012", "Q3": "11014", "Q4": "11011", "FY": "11011"}
+    for row in rows:
+        owned.setdefault((row["corp_code"], str(row["fiscal_year"]), code_of[row["fiscal_period"]], row["fs_basis"]),
+                         []).append(row)
     version_rows = []
     for (corp_code, year, code, fs_div), version in versions.items():
+        mine = owned.get((corp_code, year, code, fs_div), [])
+        if mine:
+            version["received_at"] = max([version["received_at"], *(r["received_at"] for r in mine)],
+                                         key=datetime.fromisoformat)
+            if any(r["availability_basis"] == "received" for r in mine):
+                version["rcept_no_for_release"] = None            # 입력 하나라도 접수일을 모르면 수신 기준
+            else:
+                version["release_day"] = max(r["rcept_date"] for r in mine)
         if version["detail"]["shares"] is None:
             # 재무제표가 empty(013)·오류라 추출 루프에 안 들어간 판본도 분모 응답 상태는 있어야 한다 —
             # 없으면 조회가 정상 확인된 부재를 "분모 미확정"으로 읽는다.
@@ -971,6 +993,12 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             if problem:
                 version["detail"].update({"shares": "error", "shares_detail": problem})
         day = rcept_dates.get(version["rcept_no"]) if version["rcept_no"] else None
+        if "rcept_no_for_release" in version:
+            day = None
+        elif version.get("release_day") and day:
+            day = max(day, version["release_day"])
+        version.pop("rcept_no_for_release", None)
+        version.pop("release_day", None)
         received = version["received_at"]
         # 확정 못 한 시도는 수신시각부터만 보인다 — 응답에 섞인 접수번호로 실패를 공개일로 소급하면
         # 과거 기준시각 조회에 아직 일어나지 않은 실패가 나타난다.

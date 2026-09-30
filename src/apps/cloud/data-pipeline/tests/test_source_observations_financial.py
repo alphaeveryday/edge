@@ -27,11 +27,12 @@ def full_responses(corp, *, cfs=True):
     return responses
 
 
-def chain(tmp_path, dart, *, from_date="2025-10-01", to_date="2026-08-20", holdings=("005930", "000660", "005935")):
+def chain(tmp_path, dart, *, from_date="2025-10-01", to_date="2026-08-20", holdings=("005930", "000660", "005935"),
+          now=None):
     storage = LocalStorage(tmp_path)
     write_holdings(storage, "2026-08-14", list(holdings))
     code = so.collect_financial(storage, dart, "run_f", etf_ids=["091160"], from_date=from_date, to_date=to_date,
-                                now=NOW)
+                                now=now or NOW)
     return storage, code
 
 
@@ -693,3 +694,34 @@ def test_share_sums_are_checked_per_column_and_for_empty_statement_versions(tmp_
     _, versions = _versions(storage)
     detail = json.loads(versions[(2026, "11012", "CFS")]["detail"])
     assert detail["statement"] == "empty" and detail["shares"] == "error" and detail["shares_detail"] == "share_rows_inconsistent"
+
+
+def test_version_is_visible_only_when_all_its_metrics_are(tmp_path):
+    # WHY(리뷰 20차): Q3 정정(새 접수번호)으로 재유도한 Q4 는 정정 공개일부터 보이는데 사업보고서 판본이 원 공개일부터
+    # 보이면, 정정 전 기준시각에서 새 판본이 뽑히고 Q4 는 걸러져 NULL 이 된다 — 판본 가시시각은 자기 지표의 최대다.
+    # 그리고 한 재무제표에 접수번호가 둘 섞이면 어느 공개일의 값인지 정할 수 없어 UNCONFIRMED 다.
+    corrected = {**FILINGS, ("2025", "11014"): ("[기재정정]분기보고서 (2025.09)", "20260901000777", "20260901")}
+    responses = full_responses(SAMSUNG)
+    for fs in ("CFS", "OFS"):
+        responses[("statement", SAMSUNG["corp_code"], "2025", "11014", fs)] = statement(SAMSUNG, "2025", "11014", fs, rcept_no="20260901000777")
+    responses[("shares", SAMSUNG["corp_code"], "2025", "11014")] = shares(SAMSUNG, "2025", "11014")
+    body = json.loads(responses[("shares", SAMSUNG["corp_code"], "2025", "11014")])
+    for r in body["list"]:
+        r["rcept_no"] = "20260901000777"
+    responses[("shares", SAMSUNG["corp_code"], "2025", "11014")] = json.dumps(body).encode()
+    mixed = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    mixed["list"][0]["rcept_no"] = "20260929000540"
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = json.dumps(mixed).encode()
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, corrected)})
+    dart.fetched_at = "2026-09-20T00:00:00+00:00"
+    storage, _ = chain(tmp_path, dart, holdings=("005930",), from_date="2025-10-01", to_date="2026-09-20",
+                       now=datetime(2026, 9, 20, 1, 0, tzinfo=timezone.utc))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    _, versions = _versions(storage)
+    q4 = rows[("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS")]
+    annual = versions[(2025, "11011", "CFS")]
+    assert q4["rcept_date"] == "2026-09-01" and annual["rcept_date"] == "2026-09-01"
+    assert annual["available_at"] == q4["available_at"] and annual["rcept_no"] == FILINGS[("2025", "11011")][1]
+    assert versions[(2026, "11012", "CFS")]["status"] == "UNCONFIRMED"
+    assert json.loads(versions[(2026, "11012", "CFS")]["detail"])["statement_detail"] == "mixed_rcept_no"
