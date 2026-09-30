@@ -271,9 +271,13 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
                 rows.append((None, None, None))
                 continue
             prd = item.get("PRD_DE")
+            # 단위 근거(실응답 2026-09-30): T03 행과 공식 항목 메타(getMeta ITM) 모두 UNIT_NM 이 없고 항목명
+            # "전년동월비(%)" 끝에 단위가 있다(T02 전월비만 UNIT_NM=%). UNIT_NM 이 있으면 그것을, 없으면 이름의
+            # "(%)" 만 단위 증거로 본다 — 둘 다 없으면 거부(임의 보정 없음).
+            name = item.get("ITM_NM")
+            unit = item.get("UNIT_NM") or ("%" if isinstance(name, str) and name.endswith("(%)") else None)
             rows.append((_iso(f"{prd}01", "%Y%m%d") if isinstance(prd, str) else None, item.get("DT"),
-                         {"unit": item.get("UNIT_NM"), "identity": item.get("ITM_ID"),
-                          "identity_name": item.get("ITM_NM"), "c1": item.get("C1")}))
+                         {"unit": unit, "identity": item.get("ITM_ID"), "identity_name": name, "c1": item.get("C1")}))
     elif series_id == "brent_spot_usd":
         for item in data["response"]["data"]:
             if not isinstance(item, dict):

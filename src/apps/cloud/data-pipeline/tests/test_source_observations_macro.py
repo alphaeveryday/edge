@@ -82,7 +82,7 @@ def test_regular_run_lands_every_series_with_receipt_as_visibility(tmp_path):
     assert usd[0]["availability_basis"] == "received"
     assert usd[0]["available_at"] == usd[0]["received_at"]
     cpi = canonical_rows(storage, "kr_cpi_yoy", "2026-06-01")
-    assert cpi[0]["value"] == "2.3" and cpi[0]["source_vendor"] == "kosis"   # 공표 전년동월비 그대로
+    assert cpi[0]["value"] == "3.2" and cpi[0]["source_vendor"] == "kosis"   # 공표 전년동월비 그대로(실응답 2026-06)
     manifest = json.loads(storage.get_bytes(
         "operations_archive/canonical_run_manifests/dataset=macro_observation/run_id=run_norm1/manifest.json"))
     assert manifest["canonical_written"] is True and manifest["input_run_id"] == "run_raw1"
@@ -198,7 +198,7 @@ def test_unit_or_series_identity_mismatch_is_rejected_not_relabelled(tmp_path):
     ecos = json.loads(body("ecos_kr10y.json"))
     ecos["StatisticSearch"]["row"][0]["UNIT_NAME"] = "%"
     kosis = json.loads(body("kosis_cpi.json"))
-    kosis[0]["ITM_NM"] = "전월비"
+    kosis[0]["ITM_NM"] = "전월비(%)"      # 단위 표기는 같고 항목만 다른 행 — 실응답엔 UNIT_NM 이 없다
     good, bad = macro_series.parse("kr_10y_yield", json.dumps(ecos).encode())
     assert len(good) == 2 and bad[0]["reasons"] == ["unit_mismatch"]
     good, bad = macro_series.parse("kr_cpi_yoy", json.dumps(kosis).encode())

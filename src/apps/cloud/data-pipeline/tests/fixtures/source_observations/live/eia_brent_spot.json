@@ -5,7 +5,7 @@
   "frequency": "daily",
   "data": [
    {
-    "period": "2026-07-01",
+    "period": "2026-09-01",
     "duoarea": "ZEU",
     "area-name": "NA",
     "product": "EPCBRENT",
@@ -18,7 +18,7 @@
     "units": "$/BBL"
    },
    {
-    "period": "2026-07-02",
+    "period": "2026-09-02",
     "duoarea": "ZEU",
     "area-name": "NA",
     "product": "EPCBRENT",
@@ -31,7 +31,7 @@
     "units": "$/BBL"
    },
    {
-    "period": "2026-07-03",
+    "period": "2026-09-03",
     "duoarea": "ZEU",
     "area-name": "NA",
     "product": "EPCBRENT",
@@ -44,7 +44,7 @@
     "units": "$/BBL"
    },
    {
-    "period": "2026-07-22",
+    "period": "2026-09-22",
     "duoarea": "ZEU",
     "area-name": "NA",
     "product": "EPCBRENT",
