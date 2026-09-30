@@ -124,11 +124,12 @@ def query_of(url: str) -> dict[str, str]:
 
 
 class TestParse:
-    def test_hour_label_is_window_start_unlike_stock(self):
-        """⭐ 라벨이 구간의 **시작**이다 — 주식 파서와 정확히 1분 어긋나야 한다.
+    def test_hour_label_is_window_start_same_axis_as_stock(self):
+        """⭐ 라벨이 구간의 **시작**이다 — 주식 파서와 같은 칸에 앉아야 한다(ALPHA-1127).
 
-        같은 행을 두 파서에 넣어 대조한다. 한쪽만 단언하면 "우연히 맞는 값"을 고정할 수
-        있는데, 두 파서의 **차이**는 이 축이 뒤집힐 때만 사라진다.
+        예전엔 "주식과 정확히 1분 어긋난다"를 고정했다 — 주식 TR 의 끝 라벨 실측(ALPHA-644)
+        이 요청 라벨 행(형성 중 봉)만 본 오독이라 그 차이가 사라졌다. 같은 행을 두 파서에
+        넣어 대조한다: 한쪽만 단언하면 "우연히 맞는 값"을 고정할 수 있다.
         """
         candle = parse_index_row(row("103000"), UNIT_ID, interval_sec=LANE_INTERVAL_SEC)
         assert candle.window_start == datetime(2026, 8, 7, 10, 30, tzinfo=KST)
@@ -138,8 +139,8 @@ class TestParse:
             {"stck_bsop_date": DAY, "stck_cntg_hour": "103000", "stck_prpr": "100",
              "stck_oprc": "100", "stck_hgpr": "100", "stck_lwpr": "100",
              "cntg_vol": "1"}, "005930")
-        # 같은 라벨인데 지수 봉이 주식 봉보다 정확히 한 칸 뒤에 앉는다
-        assert candle.window_end - stock.window_end == timedelta(seconds=LANE_INTERVAL_SEC)
+        # 같은 라벨이면 지수 봉과 주식 봉이 같은 창이다 — 한쪽이 뒤집히면 1분 어긋난다
+        assert (candle.window_start, candle.window_end) == (stock.window_start, stock.window_end)
 
     def test_values_are_decimal_from_index_fields(self):
         candle = parse_index_row(row(close="5047.39"), UNIT_ID,

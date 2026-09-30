@@ -9,13 +9,28 @@ TR 이 둘이고 **계약이 갈린다** — 클래스가 둘인 이유가 그�
 
 당일 형상은 ALPHA-644 스파이크(2026-08-03 실전 도메인 프로브)가 확정한 것이다:
 
-- 한 콜 = **30분치**, `FID_INPUT_HOUR_1`(HHMMSS)이 창의 **끝**이고 응답은 최신→과거 역순.
+- 한 콜 = **30분치**, `FID_INPUT_HOUR_1`(HHMMSS)이 응답의 가장 늦은 라벨이고 최신→과거 역순.
 - 필드: `stck_bsop_date`·`stck_cntg_hour`·`stck_prpr`(종가)·`stck_oprc`·`stck_hgpr`·
   `stck_lwpr`·`cntg_vol`. 전부 문자열.
-- `stck_cntg_hour` 는 **구간 끝 라벨**(토스 `timestamp` 와 같은 규약) — `window_start =
-  라벨 − 1분`. 이 축을 뒤집으면 전 구간이 한 칸 밀린 채 조용히 커밋된다.
+- `stck_cntg_hour` 는 **구간 시작 라벨** — `window_end = 라벨 + 1분`. 업종지수 TR
+  (`kis_sector_index`)과 같은 축이다. 이 축을 뒤집으면 전 구간이 한 칸 밀린 채 조용히
+  커밋된다(ALPHA-1127 — 08-04~09-29 실시간 수집분이 그렇게 커밋됐다).
+- ⚠️ **당일 TR 응답은 세 층이다**(2026-09-30 장중 프로브, ALPHA-1127). 시각 T(분 M 진행
+  중)에 라벨 R 로 물으면:
+    · 라벨 R 행 = **지금 형성 중인 봉** — 라벨과 무관하게 요청한 시각이 그대로 찍힌다.
+      12:05:30 에 1205 로 물으면 1205 행에, 1206 으로 물으면 1206 행에 같은 값이 온다.
+      ALPHA-644 가 "끝 라벨"로 실측한 것이 이 행이다 — 형성 중 봉만 보면 그렇게 보인다.
+      체결 전이면 **직전 확정 봉을 거래량째 복제**한다(저유동 종목 부풀림의 원인).
+    · 라벨 M ~ R−1 행 = **0 자리표시**(아직 끝나지 않은 분). 진짜 무거래 봉과 모양이 같다.
+    · 라벨 ≤ M−1 행 = **확정 봉**. 분이 끝난 뒤 ~6초 안에 확정되고 그 뒤 바뀌지 않았다.
+  그래서 창 w(라벨 w) 를 안전하게 읽는 길은 하나다 — **w+1 분이 끝난 뒤**(T ≥ w+2:00)
+  라벨 w+2 이상으로 물어 w 행을 읽는다. 그러면 w 는 확정 층에 있고 자리표시와 섞이지
+  않는다. claim 시각은 `minute.models.scheduled_at_for`(WINDOW_SETTLE_SEC)가 맞춘다.
 - **무거래 분도 행이 온다**(`cntg_vol=0`, OHLC 는 직전가 flat) — 토스와 같은 형태라
   4분류(received/no_trade/missing/invalid) 판정 로직을 벤더별로 나눌 필요가 없다.
+- **종가 단일가**(15:30:00 체결)는 라벨 `153000` 봉에 온다 — 계획 창(09:00~15:29) 밖이라
+  `fold_closing_auction` 이 15:29 창에 합친다. 안 합치면 공식 종가와 하루 거래량의 ~10%
+  가 canonical 에서 빠진다(ALPHA-1128).
 - **멀티종목 단일콜 불가**(구분자는 rt_cd=2, 12자리 연접은 조용히 잘림) → 종목당 1콜.
 
 유량 실측 **14.8 req/s**(20콜 1.35s, 실패 0) — 363종 1 window 가 24.5초라 토스(72.6초)로는
@@ -98,8 +113,8 @@ class KisDayIncompleteError(KisUnitError):
 def parse_minute_row(raw: dict, symbol: str) -> Candle | None:
     """`output2` 행 하나 → `Candle` 또는 벤더의 데이터 없음이면 `None`.
 
-    ⚠️ `stck_cntg_hour` 는 **구간의 끝**이다(실측) — window_start 는 1분 앞이다.
-    응답에 시간대 표기가 없어 **KST 로 고정**한다(KRX 로컬 시장 전용 TR).
+    ⚠️ `stck_cntg_hour` 는 **구간의 시작**이다(모듈 docstring 의 세 층) — window_end 는
+    1분 뒤다. 응답에 시간대 표기가 없어 **KST 로 고정**한다(KRX 로컬 시장 전용 TR).
     """
     if not isinstance(raw, dict):
         raise ValueError(f"{symbol} 분봉 행이 객체가 아니다: {type(raw).__name__}")
@@ -130,7 +145,7 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle | None:
         # 세어 보고 "가드가 오작동했다"로 읽으면 진짜 원인(포맷 변경)을 놓친다.
         raise ValueError(f"{symbol} 분봉 날짜·시각 형상이 아니다: {day!r} {hour!r}")
     try:
-        end = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
+        start = datetime.strptime(day + hour, "%Y%m%d%H%M%S").replace(tzinfo=KST)
     except ValueError as error:
         raise ValueError(f"{symbol} 분봉 시각 형식 오류: {day!r} {hour!r}") from error
     # ⛔ 분 격자 가드는 **여기 두지 마라**(`_fetch_day` 에 있다). 형제
@@ -155,8 +170,45 @@ def parse_minute_row(raw: dict, symbol: str) -> Candle | None:
     volume = to_decimal(raw_volume, "cntg_vol", symbol)
     # currency 는 KIS 가 주지 않는다 — 지어내지 않고 None 으로 둔다(KRX 전용이라 KRW 지만,
     # 관측하지 않은 값을 artifact 에 싣지 않는다는 규약이 더 중요하다)
-    return build_candle(symbol, window_end=end, span_seconds=INTERVAL_SECONDS,
-                        values=values, volume=volume)
+    return build_candle(symbol, window_end=start + timedelta(seconds=INTERVAL_SECONDS),
+                        span_seconds=INTERVAL_SECONDS, values=values, volume=volume)
+
+
+def fold_closing_auction(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
+    """라벨 15:30 봉(종가 단일가 체결)을 15:30 에 **끝나는** 봉(15:29 창)에 합친다.
+
+    KRX 종가 단일가는 15:20~15:30 접수 뒤 15:30:00 에 한 번 체결되고, KIS 는 그것을
+    시작 라벨 `153000` 봉으로 준다. 계획 창은 15:29 까지라 그대로 두면 공식 종가와 그
+    체결(005930 09-29: 1,907,055주 = 하루의 12%)이 canonical 에서 사라진다. 391번째 창을
+    만들지 않고 15:29 창에 접는 이유: 소비자(5분 롤업의 15:25 버킷·갭 계산의 전일 종가)가
+    "마지막 창의 종가 = 공식 종가"를 전제하고, 창 수를 바꾸면 계획기·롤업·소비자가 다 같이
+    바뀌기 때문이다. 접힌 봉: 시가·고가·저가는 둘을 아우르고, 종가는 단일가, 거래량은 합.
+
+    당일·소급 두 경로가 같은 함수를 쓴다 — 갈리면 재수집분과 실시간분의 마지막 창이 다르다.
+    15:30 봉만 있고 15:29 창이 없으면(첫 페이지가 잘린 소급 응답 등) 15:30 봉을 그 창으로
+    옮긴다 — 버리면 그 종목의 종가가 없다.
+    """
+    def hhmmss(moment: datetime) -> str:
+        """KST 벽시계 라벨 — 입력 tz 로 비교하면 UTC aware 봉이 마감을 못 만난다."""
+        return moment.astimezone(KST).strftime("%H%M%S")
+    auction = [c for c in candles if hhmmss(c.window_start) == DAY_LAST_HHMMSS]
+    if not auction:
+        return candles
+    rest = [c for c in candles if hhmmss(c.window_start) != DAY_LAST_HHMMSS]
+    folded = []
+    for auc in auction:
+        end = auc.window_start
+        regular = next((c for c in rest if c.symbol == auc.symbol and c.window_end == end), None)
+        if regular is None:
+            values = {"open": auc.open, "high": auc.high, "low": auc.low, "close": auc.close}
+        else:
+            rest.remove(regular)
+            values = {"open": regular.open, "high": max(regular.high, auc.high),
+                      "low": min(regular.low, auc.low), "close": auc.close}
+        folded.append(build_candle(auc.symbol, window_end=end, span_seconds=INTERVAL_SECONDS,
+                                   values=values, volume=(regular.volume if regular else 0) + auc.volume,
+                                   currency=auc.currency))
+    return tuple(rest + folded)
 
 
 _token_expired = token_expired  # 이 모듈의 기존 호출부 이름을 유지한다
@@ -187,16 +239,21 @@ class KisMinuteClient:
         self._counter_lock = threading.Lock()
 
     def candles(self, symbol: str, *, window_end: datetime) -> tuple[Candle, ...]:
-        """`window_end` 로 끝나는 30분치 봉(최신→과거).
+        """`window_end` 에 끝나는 창을 포함한 30분치 봉(최신→과거).
 
-        ⚠️ **요청 window 를 끝으로 고정한다.** 최신 기준으로 부르면 400종을 도는 사이
-        최신 봉이 다음 분으로 넘어가 뒤쪽 종목이 통째로 missing 이 되고, 과거 window
-        재시도도 영영 복구되지 않는다.
+        ⚠️ **요청 라벨은 `window_end`(= 창 시작 + 1분) 다** — 창 시작 라벨보다 뒤에 둬야
+        그 창이 "형성 중 봉" 층(요청 라벨 행)에 앉지 않는다(모듈 docstring 의 세 층).
+        확정 층에 있으려면 묻는 **시각**도 w+1 분이 끝난 뒤여야 하는데, 그건 이 함수가
+        아니라 `scheduled_at_for` 가 지킨다 — 여기서 자면 lease 검증이 깨진다.
+        ⚠️ 요청 라벨을 **창 기준으로 고정**한다(최신 기준 금지). 최신으로 부르면 400종을
+        도는 사이 최신 봉이 다음 분으로 넘어가 뒤쪽 종목이 통째로 missing 이 되고, 과거
+        window 재시도도 영영 복구되지 않는다.
         """
         hour = window_end.astimezone(KST).strftime("%H%M%S")
         rows = self._rows(symbol, hour)
-        return tuple(candle for row in rows
-                     if (candle := parse_minute_row(row, symbol)) is not None)
+        return fold_closing_auction(tuple(
+            candle for row in rows
+            if (candle := parse_minute_row(row, symbol)) is not None))
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         return {
@@ -302,8 +359,9 @@ class KisMinuteClient:
 
 # ── 소급(과거 거래일) 분봉 ────────────────────────────────────────────────
 
-# 페이징 시작·종료 라벨. 정규장 window 는 09:00–15:30 이고 라벨은 구간의 **끝**이라
-# 09:01–15:30 이 계획 대상이다. 09:00 봉은 계획 밖이지만 09:01 의 직전가 씨앗이라 받는다.
+# 페이징 시작·종료 라벨. 정규장 window 는 09:00–15:30 이고 라벨은 구간의 **시작**이라
+# 09:00–15:29 가 계획 대상이다. 15:30 봉(종가 단일가)은 계획 밖이지만 15:29 창에 접는다
+# (`fold_closing_auction`). 09:00 봉은 개장 단일가 — 첫 창의 실체다.
 DAY_LAST_HHMMSS = "153000"
 DAY_FIRST_HHMMSS = "090000"
 # 페이징 예산. 하루 391분 ÷ 120 = 4콜이면 끝난다 — 그 두 배를 넘겼다면 응답 형상이
@@ -449,7 +507,8 @@ class KisHistoricalMinuteClient(KisMinuteClient):
             # 설정·유량의 사실이고, 이미 window 를 통째로 세운다.
             try:
                 day = {candle.window_end: candle for candle in fill_no_trade_minutes(
-                    self._fetch_day(symbol), until=self._day_last_window_end)}
+                    fold_closing_auction(self._fetch_day(symbol)),
+                    until=self._day_last_window_end)}
             except (KisDayIncompleteError, ValueError) as error:
                 self._failures[symbol] = (type(error), str(error))
                 raise
@@ -545,7 +604,9 @@ class KisHistoricalMinuteClient(KisMinuteClient):
                 # 예산까지 다시 물은 뒤 실패로 나가야 한다.
                 break
             if same_day:
-                earliest = min(c.window_end for c in same_day).strftime("%H%M%S")
+                # 라벨(=창 시작) 기준 — window_end 로 보면 09:00 봉이 "090100" 이라 09:00
+                # 도달을 못 보고 한 페이지를 더 물은 뒤 경계 arm 으로만 끝난다
+                earliest = min(c.window_start for c in same_day).strftime("%H%M%S")
                 if earliest <= DAY_FIRST_HHMMSS:
                     break
                 hour = (datetime.strptime(earliest, "%H%M%S")

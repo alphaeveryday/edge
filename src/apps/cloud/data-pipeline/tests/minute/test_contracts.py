@@ -20,6 +20,7 @@ from data_pipeline.minute.models import (
     CLOSING_AUCTION_OPEN,
     FINAL_WINDOW_SETTLE_SEC,
     KST,
+    WINDOW_SETTLE_SEC,
     SESSION_CLOSE,
     WINDOWS_PER_EXTENDED_SESSION,
     WINDOWS_PER_SESSION,
@@ -284,9 +285,11 @@ class TestTradingHoursClass:
             seconds=FINAL_WINDOW_SETTLE_SEC)
         # 상수를 양쪽에 쓰면 값이 1초로 바뀌어도 위 단언이 통과한다 — 계약은 "늦춘다"가
         # 아니라 "**벤더 캔들이 확정될 만큼** 늦춘다"이므로 의미 있는 하한을 건다.
-        assert FINAL_WINDOW_SETTLE_SEC >= 30, (
-            f"{FINAL_WINDOW_SETTLE_SEC}초로는 종가 단일가 반영 시차를 못 덮는다 — "
-            "짧게 두면 미완성 봉(vol 0·직전가)이 다시 커밋된다")
+        # 종가 단일가는 라벨 15:30 봉(15:31 에 끝남)에 실리고 15:29 창에 접힌다 — 그 봉이
+        # 확정 층(라벨 ≤ 진행 분 − 1)에 있으려면 15:31 분이 끝난 뒤여야 한다(ALPHA-1127).
+        assert FINAL_WINDOW_SETTLE_SEC >= 60 + WINDOW_SETTLE_SEC, (
+            f"{FINAL_WINDOW_SETTLE_SEC}초로는 종가 단일가 봉이 확정 층에 못 든다 — "
+            "짧게 두면 0 자리표시(vol 0·직전가)가 종가로 커밋된다(ALPHA-1128 의 모양)")
 
     def test_news_sessions_are_not_delayed(self):
         """종가 단일가는 **가격 캔들** 얘기다 — 같은 plan_session 을 쓰는 뉴스 세션에
@@ -305,45 +308,51 @@ class TestTradingHoursClass:
         with pytest.raises(ValueError, match="naive"):
             scheduled_at_for(datetime(2026, 7, 31, 15, 30), dataset="price_minute")
 
-    def test_closing_auction_windows_all_wait_for_the_print(self):
-        """단일가 접수 구간(15:20~15:30) window 는 **전부** 마감 확정 뒤로 민다.
+    def test_closing_auction_windows_follow_the_regular_rule(self):
+        """단일가 접수 구간(15:20~15:29) 창은 **일반 규칙**이다 — 마감 창(15:29)만 더 민다.
 
-        그 구간은 주문만 받고 체결이 없는데 벤더는 직전 체결 봉을 **거래량째 복제**해서
-        준다(08-05 실측 362/362 종목). 복제 봉은 `volume != 0` 이라 `received`(정상)로
-        접히고, 5분봉 롤업이 거래량을 합산해 마지막 버킷이 부푼다(중앙 1.37배·최대 60배).
-        마감 창 하나만 미루면 나머지 아홉 창이 그 회귀를 그대로 들고 있는다.
+        옛 규칙은 열 창을 통째로 15:31 로 밀었다. "접수 구간에 벤더가 직전 봉을 거래량째
+        복제한다"(08-05 실측)를 벤더 결함으로 읽어서였는데, 실제는 **요청 라벨 행 = 형성 중
+        봉**이라는 응답 형상이었다(ALPHA-1127) — 창 끝을 라벨로 묻던 옛 수집기만 그 행을
+        봤다. 지금은 창 시작 라벨을 확정 층에서 읽으므로 접수 구간 창은 제 시각에 0 봉이
+        맞게 온다. 여기까지 미루면 살아 있는 아홉 창을 이유 없이 늦게 본다.
         """
-        settled = datetime(2026, 7, 31, 15, 30, tzinfo=KST) + timedelta(
-            seconds=FINAL_WINDOW_SETTLE_SEC)
-        auction = [we for _, we in plan_session_windows(SESSION_DATE, universe=None, extended_hours=False)
-                   if CLOSING_AUCTION_OPEN < we.astimezone(KST).time() <= SESSION_CLOSE]
-        assert len(auction) == 10, "15:21~15:30 으로 끝나는 창 10개"
-        # 기준은 각 window_end 가 아니라 **마감 시각**이다 — 구간 전체가 같은 한 번의
-        # 체결을 기다리므로 15:21 창을 15:22 에 물어도 답은 여전히 복제 봉이다.
-        assert all(scheduled_at_for(we, dataset="price_minute") == settled for we in auction)
+        windows = plan_session_windows(SESSION_DATE, universe=None, extended_hours=False)
+        auction = [we for _, we in windows
+                   if CLOSING_AUCTION_OPEN < we.astimezone(KST).time() < SESSION_CLOSE]
+        assert len(auction) == 9, "15:21~15:29 로 끝나는 창 9개"
+        assert all(scheduled_at_for(we, dataset="price_minute") == we + timedelta(seconds=WINDOW_SETTLE_SEC)
+                   for we in auction)
 
     def test_the_rule_is_judged_on_the_kst_clock_not_the_input_tz(self):
         """판정 축은 **KST 벽시계**다 — 입력 tz 로 비교하면 규칙이 통째로 빗나간다.
 
         naive 거부(아래)는 tzinfo 유무만 본다. aware UTC 는 그 가드를 통과하므로,
-        `astimezone(KST)` 가 빠져도 KST 입력 테스트만으로는 전부 초록이다. 06:21Z 는
-        KST 15:21(접수 구간)인데 UTC 시각으로 보면 어느 경계에도 안 걸려 지연 없이
-        claim 되고, 그 창은 다시 벤더 복제 봉을 싣는다.
+        `astimezone(KST)` 가 빠져도 KST 입력 테스트만으로는 전부 초록이다. 06:30Z 는
+        KST 15:30(마감 창)인데 UTC 시각으로 보면 마감에 안 걸려 일반 지연만 받고, 그
+        창은 종가 단일가 봉이 확정되기 전에 0 자리표시를 종가로 싣는다.
         """
-        utc_end = datetime(2026, 7, 31, 6, 21, tzinfo=timezone.utc)  # = KST 15:21
+        utc_end = datetime(2026, 7, 31, 6, 30, tzinfo=timezone.utc)  # = KST 15:30
         assert scheduled_at_for(utc_end, dataset="price_minute") == datetime(
             2026, 7, 31, 15, 30, tzinfo=KST) + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
 
-    def test_last_trading_minute_is_not_delayed(self):
-        """반열림이라 `window_end == 15:20` 은 접수 **직전**의 마지막 실거래 분이다 —
-        여기까지 미루면 살아 있는 체결 정보를 이유 없이 10분 늦게 본다."""
+    def test_last_trading_minute_gets_only_the_regular_settle(self):
+        """`window_end == 15:20` 은 접수 직전의 마지막 실거래 분이다 — 마감 지연이 아니라
+        일반 지연만 받는다. 마감까지 미루면 살아 있는 체결 정보를 이유 없이 10분 늦게 본다."""
         last_traded = datetime(2026, 7, 31, 15, 20, tzinfo=KST)
-        assert scheduled_at_for(last_traded, dataset="price_minute") == last_traded
+        assert scheduled_at_for(last_traded, dataset="price_minute") == last_traded + timedelta(
+            seconds=WINDOW_SETTLE_SEC)
 
-    def test_non_close_windows_are_scheduled_at_window_end(self):
-        """접수 구간 밖 window 는 그대로 `window_end` — 장중 지연을 만들면 안 된다."""
+    def test_non_close_windows_wait_one_more_minute(self):
+        """마감 창 밖 window 는 `window_end + WINDOW_SETTLE_SEC` — 창 w(라벨 w) 는 w+1 분이
+        끝나야 벤더 응답의 확정 층에 든다(그 전엔 라벨 w 행이 0 자리표시일 수 있고, 그건
+        진짜 무거래 봉과 모양이 같아 **조용히** 틀린다). 09-30 실측 확정은 분 끝 뒤 ≤8초였지만
+        자리표시와 갈리는 경계는 분이라 여유를 분 단위로 둔다.
+        """
         windows = plan_session_windows(SESSION_DATE, universe=None, extended_hours=False)
-        assert all(scheduled_at_for(we, dataset="price_minute") == we for _, we in windows[:-10])
+        assert all(scheduled_at_for(we, dataset="price_minute") == we + timedelta(seconds=WINDOW_SETTLE_SEC)
+                   for _, we in windows[:-1])
+        assert 60 < WINDOW_SETTLE_SEC < 120, "다음 분이 끝난 뒤, 그러나 두 분을 넘기지 않는다"
 
     def test_extended_session_also_defers_its_1530_window(self):
         """시간외 세션(720)에도 15:30 로 끝나는 window 가 있고 거기에도 걸린다 —
@@ -357,7 +366,7 @@ class TestTradingHoursClass:
         # 않은 봉을 수집한다 — 접수 구간 밖은 전부 그대로여야 한다.
         after_close = [we for we in by_end if we.astimezone(KST).time() > SESSION_CLOSE]
         assert len(after_close) == 270, "15:31~20:00"
-        assert all(by_end[we] == we for we in after_close)
+        assert all(by_end[we] == we + timedelta(seconds=WINDOW_SETTLE_SEC) for we in after_close)
 
     def test_extended_universe_plans_720_windows(self):
         windows = plan_session_windows(SESSION_DATE, universe=self._universe(("C1",)), extended_hours=True)

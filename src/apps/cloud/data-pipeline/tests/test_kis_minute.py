@@ -6,8 +6,10 @@
 형상)은 테스트가 증명하지 않는다.
 
 고정하는 계약:
-1. **`stck_cntg_hour` 는 구간의 끝** — `window_start = 라벨 − 1분`, 시간대는 KST 고정.
-   뒤집히면 전 구간이 한 칸 밀린 채 커밋되는데 봉 수는 그대로라 어떤 게이트도 안 걸린다.
+1. **`stck_cntg_hour` 는 구간의 시작** — `window_end = 라벨 + 1분`, 시간대는 KST 고정.
+   뒤집히면 전 구간이 한 칸 밀린 채 커밋되는데 봉 수는 그대로라 어떤 게이트도 안 걸린다
+   (ALPHA-1127: 끝으로 읽던 08-04~09-29 실시간 수집분이 그렇게 커밋됐다 — 그것도 봉이
+   아니라 **다음 분의 형성 중 봉**이었다. `TestResponseLayers` 가 그 형상을 고정한다).
 2. **무거래 분도 행이 온다**(`cntg_vol=0`) — 행 부재(missing)와 다른 축이다.
    ⚠️ 이건 **당일 TR 한정**이다. 소급 TR(`FHKST03010230`)은 그 분을 아예 안 주고,
    어댑터가 직전 종가 flat 으로 채워 같은 축으로 만든다(`TestHistoricalCandles`).
@@ -36,8 +38,10 @@ from data_pipeline.sources.kis_minute import (
     KisMinuteClient,
     KisSourceError,
     KisUnitError,
+    fold_closing_auction,
     parse_minute_row,
 )
+from data_pipeline.minute.price_collect import select_window_candle
 
 KST = timezone(timedelta(hours=9))
 WINDOW_END = datetime(2026, 8, 3, 10, 30, tzinfo=KST)
@@ -109,11 +113,13 @@ def make_client(responses, **kwargs):
 
 
 class TestParse:
-    def test_hour_label_is_window_end(self):
-        # 실측: stck_cntg_hour 는 구간의 **끝**이다. window_start 는 1분 앞.
+    def test_hour_label_is_window_start(self):
+        # 실측(09-29 확정 데이터): stck_cntg_hour 는 구간의 **시작**이다 — `152000~152900`
+        # 이 거래량 0(단일가 접수 구간)·`153000` 이 종가 단일가·`090000` 이 개장 단일가.
+        # 끝 라벨이면 `152000` 은 15:19~15:20 연속매매라 005930 이 무거래일 수 없다.
         candle = parse_minute_row(row("103000"), "005930")
-        assert candle.window_end == datetime(2026, 8, 3, 10, 30, tzinfo=KST)
-        assert candle.window_start == datetime(2026, 8, 3, 10, 29, tzinfo=KST)
+        assert candle.window_start == datetime(2026, 8, 3, 10, 30, tzinfo=KST)
+        assert candle.window_end == datetime(2026, 8, 3, 10, 31, tzinfo=KST)
 
     def test_values_are_decimal_not_float(self):
         candle = parse_minute_row(row(close="72500.5"), "005930")
@@ -134,7 +140,7 @@ class TestParse:
         다르므로 가드가 `_fetch_day` 에 있다(`TestHistoricalCandles` 가 잰다).
         """
         candle = parse_minute_row({**row(), "stck_cntg_hour": "103030"}, "005930")
-        assert candle.window_end == datetime(2026, 8, 3, 10, 30, 30, tzinfo=KST)
+        assert candle.window_end == datetime(2026, 8, 3, 10, 31, 30, tzinfo=KST)
 
     def test_zero_volume_row_is_not_traded(self):
         # 무거래 분: 행은 있고 거래량만 0 — collector 가 no_trade 로 센다(missing 아님)
@@ -246,8 +252,10 @@ class TestParse:
 
 class TestCandles:
     def test_requests_window_end_as_hour(self):
-        # ⚠️ 요청 window 를 창의 끝으로 고정한다 — '최신'으로 부르면 400종 도는 사이
-        # 최신 봉이 다음 분으로 넘어가 뒤쪽 종목이 통째로 missing 이 된다
+        # ⚠️ 요청 라벨은 창의 **끝**(= 창 시작 라벨 + 1분)이다 — 요청 라벨 행은 벤더가
+        # "형성 중 봉"을 싣는 자리라(`TestResponseLayers`), 창 시작 라벨로 물으면 그 창이
+        # 형성 중 봉을 받는다. '최신'으로 부르면 400종 도는 사이 최신 봉이 다음 분으로
+        # 넘어가 뒤쪽 종목이 통째로 missing 이 된다
         client, fake = make_client([TOKEN, ok([row()])])
         client.candles("005930", window_end=WINDOW_END)
         url, headers = fake.calls[-1]
@@ -259,13 +267,13 @@ class TestCandles:
         # 한 콜이 30분치라 collector 가 그중 자기 window 만 고른다
         client, _ = make_client([TOKEN, ok([row("103000"), row("102900")])])
         candles = client.candles("005930", window_end=WINDOW_END)
-        assert [c.window_end.strftime("%H%M") for c in candles] == ["1030", "1029"]
+        assert [c.window_end.strftime("%H%M") for c in candles] == ["1031", "1030"]
 
     def test_omits_int64_min_volume_sentinel_row(self):
         missing = {**row("103000"), "cntg_vol": "-9223372036854775808"}
         client, _ = make_client([TOKEN, ok([missing, row("102900")])])
         candles = client.candles("0220W0", window_end=WINDOW_END)
-        assert [c.window_end.strftime("%H%M") for c in candles] == ["1029"]
+        assert [c.window_end.strftime("%H%M") for c in candles] == ["1030"]
 
     def test_empty_output2_is_empty_result(self):
         # 빈 list 는 정상 — 그 창에 봉이 없다(collector 가 missing 으로 센다)
@@ -295,6 +303,75 @@ class TestCandles:
         client, _ = make_client([TOKEN, RuntimeError("GET 재시도 소진: timeout")])
         with pytest.raises(KisUnitError, match="요청 실패"):
             client.candles("005930", window_end=WINDOW_END)
+
+
+class TestResponseLayers:
+    """당일 TR 응답의 세 층(2026-09-30 장중 프로브, ALPHA-1127) — 창 w 를 어느 행에서 읽나.
+
+    시각 T(분 M 진행 중)에 라벨 R 로 물으면: 라벨 R 행 = **형성 중 봉**(요청 라벨이 그대로
+    찍힌다 — 12:05:30 에 1205 로 물으면 1205 행에, 1206 으로 물으면 1206 행에 같은 값),
+    라벨 M~R−1 = 0 자리표시, 라벨 ≤ M−1 = 확정 봉. 옛 수집기는 창 끝 라벨로 묻고 그 행을
+    창으로 삼아 **다음 분의 형성 중 봉**을 실었다(005930 09-29 거래량 합 0.42, 저유동은
+    직전 봉 복제로 2.6배). 지금은 창 시작 라벨 행을 고르고, 묻는 시각은 `scheduled_at_for`
+    가 확정 층 뒤로 맞춘다.
+    """
+
+    def test_window_is_the_start_label_row_not_the_requested_label_row(self):
+        # 10:31 분 진행 중(T ≥ 10:31:10)에 창 10:30~10:31 을 묻는다: 요청 라벨 103100 행은
+        # 형성 중 봉(10:31 분 앞 몇 초), 103000 행이 확정된 창이다.
+        forming = row("103100", volume="96", close="72450")
+        settled = row("103000", volume="14029", close="72500")
+        client, fake = make_client([TOKEN, ok([forming, settled, row("102900")])])
+        window_end = datetime(2026, 8, 3, 10, 31, tzinfo=KST)
+        candles = client.candles("005930", window_end=window_end)
+        assert "FID_INPUT_HOUR_1=103100" in fake.calls[-1][0]
+        chosen = select_window_candle(candles, window_end, "005930")
+        assert chosen.volume == Decimal("14029") and chosen.close == Decimal("72500")
+        # 형성 중 봉은 아직 아무 창의 것도 아니다(10:31~10:32 창은 10:33 뒤에나 묻는다)
+        assert chosen.window_start == datetime(2026, 8, 3, 10, 30, tzinfo=KST)
+
+    def test_closing_auction_is_folded_into_the_last_window(self):
+        """라벨 15:30 봉(종가 단일가 체결)은 계획 창 밖이다 — 15:29 창(15:30 에 끝남)에 접는다.
+
+        안 접으면 공식 종가와 그 체결(005930 09-29: 1,907,055주 = 하루의 12%)이 canonical
+        에서 사라지고, 5분봉 15:25 버킷 종가·갭 계산의 전일 종가가 단일가 전 가격이 된다
+        (ALPHA-1128 의 증상). 391번째 창을 만들지 않는 이유는 소스 주석.
+        """
+        auction = {**row("153000", volume="1907055", close="272500"),
+                   "stck_oprc": "272500", "stck_hgpr": "272500", "stck_lwpr": "272500"}
+        accumulating = {**flat_row("152900"), "stck_prpr": "272000", "stck_oprc": "272000",
+                        "stck_hgpr": "272000", "stck_lwpr": "272000"}
+        client, _ = make_client([TOKEN, ok([auction, accumulating, row("152800")])])
+        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
+        candles = client.candles("005930", window_end=close)
+        [last] = [c for c in candles if c.window_end == close]
+        assert last.volume == Decimal("1907055")
+        assert last.close == Decimal("272500")   # 공식 종가 = 단일가 체결가
+        assert last.open == Decimal("272000")    # 창의 시가는 접수 구간 flat 그대로
+        assert (last.high, last.low) == (Decimal("272500"), Decimal("272000"))
+        # 15:31 에 끝나는 봉은 남기지 않는다 — 남기면 391번째 창이 조용히 생긴다
+        assert all(c.window_end <= close for c in candles)
+
+    def test_fold_moves_the_auction_when_the_last_window_is_absent(self):
+        # 15:29 봉이 응답에 없으면(잘린 페이지) 단일가 봉을 그 창으로 옮긴다 — 버리면 종가가 없다
+        auction = parse_minute_row(row("153000", volume="7", close="72500"), "005930")
+        [moved] = fold_closing_auction((auction,))
+        assert moved.window_end == datetime(2026, 8, 3, 15, 30, tzinfo=KST)
+        assert (moved.volume, moved.close) == (Decimal("7"), Decimal("72500"))
+
+    def test_fold_is_a_no_op_without_the_auction_row(self):
+        candles = tuple(parse_minute_row(row(h), "005930") for h in ("152900", "152800"))
+        assert fold_closing_auction(candles) == candles
+
+    def test_historical_path_folds_the_auction_too(self):
+        # 재수집분과 실시간분의 마지막 창이 갈리면 안 된다 — 같은 함수, 같은 결과
+        auction = {**row("153000", volume="1497751", close="285500"), "stck_oprc": "285500",
+                   "stck_hgpr": "285500", "stck_lwpr": "285500"}
+        fake = FakeClient([TOKEN, ok([auction, row("152900", volume="0", close="72500")]),
+                           ok([{**row("152800"), "stck_bsop_date": "20260731"}])])
+        client = KisHistoricalMinuteClient("app-key", "app-secret", fake, session_date=date(2026, 8, 3))
+        [last] = client.candles("005930", window_end=datetime(2026, 8, 3, 15, 30, tzinfo=KST))
+        assert (last.volume, last.close) == (Decimal("1497751"), Decimal("285500"))
 
 
 class TestRateLimit:
@@ -465,7 +542,7 @@ class TestHistoricalCandles:
         """
         broken_foreign = {**self.other_day("152900"), "stck_lwpr": "99999"}
         client, _ = self.hist([TOKEN, ok([row("091000"), broken_foreign])])
-        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+        assert len(client.candles("005930", window_end=self.at("0911"))) == 1
 
     def test_duplicate_minute_is_a_shape_error(self):
         """같은 분이 두 번 오면 실패한다 — 조용히 마지막 것을 고르지 않는다.
@@ -484,7 +561,7 @@ class TestHistoricalCandles:
         client, _ = self.hist([
             TOKEN, ok([row("103000"), row("103000")]), ok([self.other_day("102900")]),
         ])
-        assert len(client.candles("005930", window_end=self.at("1030"))) == 1
+        assert len(client.candles("005930", window_end=self.at("1031"))) == 1
 
     def test_extended_hours_window_fails_loud(self):
         # 페이징이 09:00–15:30 고정이라 시간외 window 는 구조적으로 안 나온다.
@@ -507,7 +584,7 @@ class TestHistoricalCandles:
         # ⚠️ 갭의 **모든** 분을 묻는다. 하나만 묻으면 끝 경계(`range` 상한)가 단언 표면
         # 밖이라, 갭마다 마지막 1분이 안 채워져도 초록이다 — 176행 종목이면 하루
         # ~175 window 가 그 한 분 때문에 INCOMPLETE 로 남는다.
-        for hhmm in ("1028", "1029"):
+        for hhmm in ("1029", "1030"):
             filled = client.candles("005930", window_end=self.at(hhmm))
             assert len(filled) == 1, hhmm
             candle = filled[0]
@@ -517,7 +594,7 @@ class TestHistoricalCandles:
             assert (candle.open, candle.high, candle.low, candle.close) == (
                 Decimal("72500"), Decimal("72500"), Decimal("72500"), Decimal("72500")), hhmm
         # 관측된 봉은 그대로다 — 합성이 실측을 덮어쓰지 않는다
-        assert client.candles("005930", window_end=self.at("1027"))[0].volume == Decimal("1200")
+        assert client.candles("005930", window_end=self.at("1028"))[0].volume == Decimal("1200")
 
     def test_fill_does_not_reach_before_the_first_observation(self):
         # 첫 체결 앞은 그 종목의 그날 가격을 아직 모른다(직전가가 없다) — 채우면 없는
@@ -525,7 +602,7 @@ class TestHistoricalCandles:
         client, _ = self.hist([
             TOKEN, ok([row("103000"), row("102700")]), ok([self.other_day("102600")]),
         ])
-        assert client.candles("005930", window_end=self.at("1026")) == ()
+        assert client.candles("005930", window_end=self.at("1027")) == ()
 
     def test_fill_reaches_the_session_close(self):
         """마지막 관측 뒤는 **채운다** — 마감된 하루에선 "그 위에 봉이 없다"가 관측이다.
@@ -536,7 +613,7 @@ class TestHistoricalCandles:
         (08-03 실측: 3종이 15:15·15:17·15:19 에 끝나 합계 39분).
         """
         client, _ = self.hist([
-            TOKEN, ok([row("152800"), row("152700")]), ok([self.other_day("152600")]),
+            TOKEN, ok([row("152700"), row("152600")]), ok([self.other_day("152500")]),
         ])
         for hhmm in ("1529", "1530"):
             [candle] = client.candles("005930", window_end=self.at(hhmm))
@@ -548,8 +625,8 @@ class TestHistoricalCandles:
         client, _ = self.hist([
             TOKEN, ok([row("091000")]), ok([self.other_day("090900"), self.other_day("090800")]),
         ])
-        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
-        assert client.candles("005930", window_end=self.at("0909")) == ()
+        assert len(client.candles("005930", window_end=self.at("0911"))) == 1
+        assert client.candles("005930", window_end=self.at("0910")) == ()
 
     def test_boundary_page_ends_paging(self):
         """경계를 넘은 응답이 곧 "그 날은 다 받았다"는 신호다 — 한 페이지에 두 날이
@@ -559,7 +636,7 @@ class TestHistoricalCandles:
         구분되지 않는다). 안 멈추면 09:00 아래로 계속 물어 예산까지 헛돈다.
         """
         client, fake = self.hist([TOKEN, ok([row("091000"), self.other_day("090900")])])
-        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+        assert len(client.candles("005930", window_end=self.at("0911"))) == 1
         assert len(fake.calls) == 2  # 토큰 1 + 페이지 1
 
     def test_historical_sentinel_is_missing_not_synthetic_no_trade(self):
@@ -611,8 +688,12 @@ class TestHistoricalCandles:
         경로라, 깨지면 362종 전건이 예산 소진 실패로 나간다.
         """
         client, fake = self.hist([TOKEN, ok([row("091000"), row("090000")])])
-        assert len(client.candles("005930", window_end=self.at("0910"))) == 1
+        assert len(client.candles("005930", window_end=self.at("0911"))) == 1
         assert len(fake.calls) == 2  # 토큰 1 + 페이지 1 — 09:00 을 봤으니 더 안 묻는다
+        # 09:00 봉은 개장 단일가 — 첫 창(09:00~09:01)의 실체다. 옛 끝 라벨 해석은 이 봉을
+        # "09:01 의 직전가 씨앗"으로 버렸다(개장 단일가 거래량이 canonical 에 없었다).
+        [opening] = client.candles("005930", window_end=self.at("0901"))
+        assert opening.volume == Decimal("1200")
 
     def test_failed_day_is_cached_so_it_does_not_reprice_every_window(self):
         """실패한 하루도 캐시한다 — 안 하면 window 마다 페이징을 처음부터 다시 태운다.
