@@ -1,5 +1,6 @@
 """Chart calculations use finalized state once per intraday observation."""
 from datetime import date, timedelta
+from edge_analysis_v2.factor_store import project_factor_metrics
 
 import pytest
 
@@ -77,8 +78,8 @@ def test_high_distance_preserves_breakthrough_sign_without_clipping(ratio, expec
     high = max(row["close"] for row in fixture["prices"])
     current = fixture["price_snapshots"][-1]
     current.update(price=high*ratio, high=high*ratio+1, low=high*ratio-1)
-    result = FixtureTools(fixture).call("get_factor_metrics", {"type": "차트"})["result"]
-    cards = {row["key"]: row for row in result["metrics"]}
+    result = FixtureTools(fixture).call("get_instrument_factors", {"instrument_id": fixture['context']['etf_code'], "factors": ["chart"]})
+    cards = {row["key"]: row for row in project_factor_metrics(result, fixture['context']['etf_code'])['차트']}
     assert cards["distance_from_52w_closing_high_pct"]["value"] == pytest.approx(expected)
     assert cards["distance_from_52w_closing_high_pct"]["observed_at"] == current["observed_at"]
     assert cards["new_closing_high_count_20d"]["observed_at"] == fixture["prices"][-1]["available_at"]

@@ -76,8 +76,7 @@ class ExecutionDashboard:
 
     def start(self, body: dict) -> dict:
         """Validate a fixed request and start it without accepting paths or code."""
-        if (not isinstance(body, dict) or not {'kind','scenario'} <= set(body) or not set(body) <= {'kind','scenario','tool_mode'}
-                or body.get('tool_mode','focused') not in ('focused','cards')
+        if (not isinstance(body, dict) or not {'kind','scenario'} <= set(body) or not set(body) <= {'kind','scenario'}
                 or body['kind'] not in ('movement','outlook') or body['scenario'] not in SCENARIOS):
             raise ValueError('Choose a supported kind and scenario')
         with self.lock:
@@ -91,7 +90,7 @@ class ExecutionDashboard:
                 if previous is None:
                     raise ValueError('Complete the preceding replay step first')
                 previous_id = previous['analysis_id']
-            job = body | {'tool_mode':body.get('tool_mode','focused'), 'analysis_id':uuid4().hex, 'status':'running', 'previous_analysis_id':previous_id,
+            job = body | {'analysis_id':uuid4().hex, 'status':'running', 'previous_analysis_id':previous_id,
                           'analysis_at':scenario_cutoff(body['kind'],body['scenario']),
                           'started_at':datetime.now(timezone.utc).isoformat()}
             self._save(job)
@@ -117,7 +116,7 @@ class ExecutionDashboard:
             screen = runner(kind=job['kind'], fixture=fixture,
                    connection_factory=self.connection_factory, key=self.key,
                    artifacts=self.runs_dir/job['analysis_id'], analysis_id=job['analysis_id'], model=self.model,
-                   previous_analysis_id=job['previous_analysis_id'],tool_mode=job.get('tool_mode','focused'))
+                   previous_analysis_id=job['previous_analysis_id'])
             if job['scenario'] in CASES and self.runner is None:
                 from .quality_audit import verify_execution
                 verification = verify_execution(self.connection_factory, fixture, job['kind'], job['analysis_id'], screen, self.runs_dir/job['analysis_id'])

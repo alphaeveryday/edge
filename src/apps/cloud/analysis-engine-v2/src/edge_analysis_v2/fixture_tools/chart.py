@@ -114,16 +114,6 @@ METRICS = ('ma20_distance_pct', 'ma60_direction', 'new_closing_high_count_20d',
            'distance_from_52w_closing_high_pct', 'turnover_ratio_previous_day', 'atr14_pct')
 
 
-def selected_metrics(fixture, selected):
-    """Return requested chart values and the exact price used to interpret them."""
-    values = metrics(fixture, selected)
-    points = snapshots(fixture)
-    latest = points[-1] if points else history(fixture)[-1]
-    return {'instrument_id':fixture['context']['etf_code'],
-            'price':latest['price'] if points else latest['close'],
-            'price_at':latest['observed_at'] if points else latest['date'], 'metrics':values}
-
-
 def metrics(fixture, selected=None):
     """Calculate detailed chart cards using each card's explicit observation time."""
     rows, points = history(fixture), snapshots(fixture)

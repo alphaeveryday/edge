@@ -76,10 +76,9 @@ def test_twenty_day_average_does_not_require_sixty_day_chart_card_history():
     fixture = data()
     cutoff = fixture['trading_dates'][-20]
     fixture['prices'] = [r for r in fixture['prices'] if r['date'] >= cutoff]
-    result = FixtureTools(fixture).call('get_chart_metrics', {'metrics':['ma20_distance_pct']})['result']
-    assert [r['key'] for r in result['metrics']] == ['ma20_distance_pct']
-    with pytest.raises(ValueError):
-        FixtureTools(fixture).call('get_chart_metrics', {'metrics':['ma60_direction']})
+    result = FixtureTools(fixture).call('get_instrument_factors', {'instrument_id': fixture['context']['etf_code'], 'factors': ['chart']})['result']['chart']
+    assert result['ma20_distance_pct'] is not None
+    assert result['ma60_direction'] is None
 
 
 def test_sum_interface_needs_no_direction_and_preserves_negative_days():
@@ -111,6 +110,6 @@ def test_duplicate_source_id_is_not_resolved_by_incidental_row_order():
 
 def test_chart_result_exposes_price_for_an_auditable_price_sentence():
     fixture = data()
-    result = FixtureTools(fixture).call('get_chart_metrics',{'metrics':['ma20_distance_pct']})['result']
-    assert result['price'] == fixture['price_snapshots'][-1]['price']
-    assert result['price_at'] == fixture['price_snapshots'][-1]['observed_at']
+    result = FixtureTools(fixture).call('get_instrument_factors', {'instrument_id': fixture['context']['etf_code'], 'factors': ['chart']})['result']['chart']
+    assert result['price_krw'] == fixture['price_snapshots'][-1]['price']
+    assert result['observed_at'] == fixture['price_snapshots'][-1]['observed_at']

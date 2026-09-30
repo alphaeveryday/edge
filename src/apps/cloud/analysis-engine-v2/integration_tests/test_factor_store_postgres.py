@@ -29,10 +29,10 @@ def factor_db():
                 VALUES (%s,%s,%s,'{"include_body":false}','{}','completed',now())''', (key,key,key))
             metric = dict(key='ma20_distance_pct',value=8.2,observed_at='2026-09-18')
             metric_run = key + '-metrics'
-            connection.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'get_factor_metrics',%s,'Test')", (metric_run,key))
+            connection.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'get_instrument_factors',%s,'Test')", (metric_run,key))
             connection.execute('''INSERT INTO tool_runs(tool_run_id,tool_id,outlook_analysis_id,arguments,output,status,finished_at)
                 VALUES (%s,%s,%s,%s,%s,'completed',now())''', (metric_run,metric_run,key,
-                    Jsonb({'type':'차트'}), Jsonb({'tool_run_id':metric_run,'result':{'type':'차트','metrics':[metric]}})))
+                    Jsonb({'instrument_id':'TEST','factors':['chart']}), Jsonb({'tool_run_id':metric_run,'result':{'instrument_id':'TEST','chart':{'ma20_distance_pct':8.2,'observed_at':'2026-09-18'}}})))
             metrics = {'차트': [dict(metric,tool_run_ids=[metric_run])]}
             issue = dict(headline='계약 물량 확보',items=[dict(title_keyword='계약',sentence='설비 물량 확보',sentiment='positive',tool_run_ids=[key])])
             yield connection, key, metrics, issue
@@ -96,7 +96,7 @@ def test_metric_must_match_its_final_calculation_result(factor_db,fault):
         metric['tool_run_ids'] = [key]
     else:
         conn.execute('UPDATE tool_runs SET arguments=%s WHERE tool_run_id=%s',
-                     (Jsonb({'type':'매크로'}),key+'-metrics'))
+                     (Jsonb({'instrument_id':'TEST','factors':['macro']}),key+'-metrics'))
     with pytest.raises(ValueError,match='calculation'):
         save_factor_details(conn,key,metrics,issue)
     assert conn.execute('SELECT count(*) FROM outlook_factor_metrics WHERE analysis_id=%s',(key,)).fetchone()[0] == 0

@@ -81,26 +81,74 @@ def prepare_metrics(metrics: dict) -> list[dict]:
     return sorted(rows, key=lambda r: (list(METRICS).index(r['factor_type']), r['position']))
 
 
-def _matches_calculation(row, run):
-    """Require the final factor calculation to contain this exact card."""
-    if (run['function_name'] != 'get_factor_metrics'
-            or run['arguments'].get('type') != row['factor_type']):
+FACTOR_KEYS = {'차트': 'chart', '매크로': 'macro', '밸류': 'valuation', '수급': 'flow'}
+
+
+def project_factor_metrics(output: dict, etf_code: str) -> dict:
+    """Assemble screen cards from the unchanged instrument-tool response.
+
+    Args:
+        output: Stored response including its successful tool run ID.
+        etf_code: The publication ETF, never an arbitrary queried constituent.
+
+    Returns:
+        Existing screen-card lists for the factors present in the response.
+
+    Raises:
+        ValueError: The response belongs to another instrument or aggregation.
+    """
+    result = output['result']
+    if result.get('instrument_id') != etf_code:
+        raise ValueError('Factor instrument must match the publication ETF')
+    projected = {}
+    for factor, key in FACTOR_KEYS.items():
+        if key not in result:
+            continue
+        values = result[key]
+        projected[factor] = cards = []
+        if values is None:
+            continue
+        if key in ('flow', 'valuation') and values.get('scope') != 'holdings_weighted':
+            raise ValueError('ETF cards require complete holdings-weighted observations')
+        for metric in METRICS[factor]:
+            value = values.get(metric)
+            if value is None:
+                continue
+            stamp = values.get('observed_at')
+            subject = None
+            if key == 'chart':
+                if metric in ('new_closing_high_count_20d', 'turnover_ratio_previous_day', 'atr14_pct'):
+                    stamp = values['finalized_observed_at']
+                if metric == 'ma60_direction':
+                    value = {'rising': '상승', 'flat': '횡보', 'falling': '하락'}[value]
+            elif key == 'macro':
+                stamp = values['metric_observed_at'][metric]
+                subject = values.get('metric_subjects', {}).get(metric)
+            elif metric == 'distribution_yield_12m_pct':
+                stamp = values['distribution_observed_at']
+            elif metric == 'etf_units_change_20d_pct':
+                stamp = values['units_observed_at']
+            card = dict(key=metric, value=value, observed_at=stamp, tool_run_ids=[output['tool_run_id']])
+            if subject is not None:
+                card['subject'] = subject
+            cards.append(card)
+    return projected
+
+
+def _matches_calculation(row, run, etf_code):
+    """Require the requested ETF, factor, value and time to match the saved run."""
+    if (run['function_name'] != 'get_instrument_factors'
+            or run['arguments'].get('instrument_id') != etf_code
+            or FACTOR_KEYS[row['factor_type']] not in run['arguments'].get('factors', list(FACTOR_KEYS.values()))):
         return False
     output = run['output']
     if not isinstance(output, dict) or output.get('tool_run_id') != run['tool_run_id']:
         return False
-    result = output.get('result')
-    if not isinstance(result, dict) or result.get('type') != row['factor_type']:
-        return False
-    cards = result.get('metrics')
-    if not isinstance(cards, list):
-        return False
     try:
-        calculated = prepare_metrics({row['factor_type']: [
-            dict(card, tool_run_ids=[run['tool_run_id']]) for card in cards]})
+        calculated = prepare_metrics(project_factor_metrics(output, etf_code))
     except (ValueError, TypeError, KeyError):
         return False
-    fields = ('metric_key', 'numeric_value', 'text_value', 'observed_date', 'observed_at', 'subject')
+    fields = ('factor_type', 'metric_key', 'numeric_value', 'text_value', 'observed_date', 'observed_at', 'subject')
     return any(all(card[field] == row[field] for field in fields) for card in calculated)
 
 
@@ -127,7 +175,7 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
         _references(item['tool_run_ids'])
     references = {r for item in rows + items for r in item['tool_run_ids']}
     with connection.transaction(), connection.cursor(row_factory=dict_row) as cur:
-        cur.execute('SELECT status, analysis_at FROM outlook_analyses WHERE analysis_id=%s FOR UPDATE', (analysis_id,))
+        cur.execute('SELECT status, analysis_at, etf_code FROM outlook_analyses WHERE analysis_id=%s FOR UPDATE', (analysis_id,))
         parent = cur.fetchone()
         if not parent or parent['status'] != 'running':
             raise ValueError('Running outlook required')
@@ -146,7 +194,7 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
             if run['function_name'] == 'get_issue_evidence' and run['arguments'].get('include_body') is not False:
                 raise ValueError('Final news evidence must exclude body')
         for row in rows:
-            if not any(_matches_calculation(row, evidence[identity]) for identity in row['tool_run_ids']):
+            if not any(_matches_calculation(row, evidence[identity], parent['etf_code']) for identity in row['tool_run_ids']):
                 raise ValueError('Metric must match its final factor calculation')
         cur.execute('DELETE FROM outlook_factor_metrics WHERE analysis_id=%s', (analysis_id,))
         cur.execute('DELETE FROM outlook_issue_items WHERE analysis_id=%s', (analysis_id,))
