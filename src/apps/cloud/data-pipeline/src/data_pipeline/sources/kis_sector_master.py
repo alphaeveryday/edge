@@ -58,6 +58,9 @@ def parse_sector_names(data: bytes) -> tuple[dict[str, str], list[str]]:
     warnings = [f"ambiguous_sector_code:{c}" for c in sorted(ambiguous)]
     for code in ambiguous:
         names.pop(code)
+    if not names:
+        # 열리지만 비어 있거나 잘린 표 — 조용히 모든 행의 이름을 비우지 않고 부분 실패로 드러낸다.
+        return {}, [*warnings, "sector_name_table_empty"]
     if names and sum(_hangul(n) for n in names.values()) / len(names) < MIN_HANGUL_NAME_RATIO:
         # 헤더·샘플 어긋남이 실파일에서 이름을 밀어낸 경우다. 틀린 이름을 붙이느니 비운다.
         return {}, [*warnings, "sector_name_layout_mismatch"]

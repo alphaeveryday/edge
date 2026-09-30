@@ -132,3 +132,18 @@ def test_snapshot_date_follows_the_name_table_across_kst_midnight():
     ]
     rows, _ = so_sector._normalize_sector(objects, {})
     assert rows and {(r["as_of_date"], r["received_at"]) for r in rows} == {("2026-10-01", names_at)}
+
+
+def test_an_empty_name_table_is_a_partial_failure_not_silently_blank_names():
+    # WHY(봇 P2): 열리지만 비어 있거나 잘린 업종명 표는 경고가 없으면 모든 행이 이름 없이 '성공'으로 실린다.
+    # 수집은 그 파일을 ok 로 기록했으니, 정제가 비었음을 부분 실패로 드러내야 한다.
+    names, warnings = kis_sector_master.parse_sector_names(zipped("idxcode.mst", []))
+    assert names == {} and warnings == ["sector_name_table_empty"]
+    objects = [
+        {"request": {"file": "kospi_code.mst.zip"}, "body": KOSPI, "key": "raw/kospi", "sha256": "a",
+         "fetched_at": "2026-09-30T00:00:01+00:00"},
+        {"request": {"file": "idxcode.mst.zip"}, "body": zipped("idxcode.mst", []), "key": "raw/names",
+         "sha256": "b", "fetched_at": "2026-09-30T00:00:09+00:00"},
+    ]
+    _, rejects = so_sector._normalize_sector(objects, {})
+    assert {"reasons": ["sector_name_table_empty"]} in rejects
