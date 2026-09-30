@@ -16,7 +16,7 @@ build-backend = "hatchling.build"
 packages = ["src/edge_analysis_v2"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "boto3>=1.34"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
