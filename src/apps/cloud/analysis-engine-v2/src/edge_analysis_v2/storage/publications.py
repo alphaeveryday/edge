@@ -35,22 +35,24 @@ class PublicationStore:
             raise ValueError("Unknown analysis kind")
         return sql.Identifier(kind + "_analyses")
 
-    def begin(self, kind, analysis_id, etf_code, analysis_at, previous_id=None):
+    def begin(self, kind, analysis_id, etf_code, analysis_at, previous_id=None, *, data_source="synthetic"):
         """Create an idempotent execution parent before any audited tool call."""
         self._idle()
         table = self._table(kind)
         schemas.text(analysis_id)
         schemas.text(etf_code)
+        if data_source not in ("synthetic", "database"):
+            raise ValueError("Explicit synthetic or database source required")
         if not isinstance(analysis_at, datetime) or analysis_at.utcoffset() is None:
             raise ValueError("analysis_at requires timezone")
         with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
             if previous_id:
                 cur.execute(sql.SQL("SELECT * FROM {} WHERE analysis_id=%s").format(table), (previous_id,))
                 previous = cur.fetchone()
-                if not previous or previous["status"] != "completed" or previous["etf_code"] != etf_code or previous["analysis_at"] >= analysis_at:
+                if not previous or previous["status"] != "completed" or previous["etf_code"] != etf_code or previous["analysis_at"] >= analysis_at or previous["data_source"] != data_source:
                     raise ValueError("Invalid previous publication")
-            columns = ["analysis_id", "etf_code", "analysis_at", "previous_analysis_id"]
-            values = [analysis_id, etf_code, analysis_at, previous_id]
+            columns = ["analysis_id", "etf_code", "analysis_at", "previous_analysis_id", "data_source"]
+            values = [analysis_id, etf_code, analysis_at, previous_id, data_source]
             if kind == "movement":
                 columns.append("trading_date")
                 values.append(analysis_at.astimezone(KST).date())
@@ -75,13 +77,14 @@ class PublicationStore:
         for identity in schemas.references(ids):
             cur.execute("""SELECT r.*, d.function_name, COALESCE(m.etf_code,o.etf_code) AS etf_code,
                 COALESCE(m.analysis_at,o.analysis_at) AS analysis_at,
-                COALESCE(m.status,o.status) AS analysis_status
+                COALESCE(m.status,o.status) AS analysis_status, COALESCE(m.data_source,o.data_source) AS data_source
                 FROM tool_runs r JOIN tool_definitions d USING(tool_id)
                 LEFT JOIN movement_analyses m ON r.movement_analysis_id=m.analysis_id
                 LEFT JOIN outlook_analyses o ON r.outlook_analysis_id=o.analysis_id
                 WHERE r.tool_run_id=%s""", (identity,))
             run = cur.fetchone()
             if (not run or run["status"] != "completed"
+                    or run["data_source"] != analysis["data_source"] or analysis["data_source"] == "unknown"
                     or run["etf_code"] != analysis["etf_code"] or run["analysis_at"] > analysis["analysis_at"]
                     or (analysis["analysis_id"] not in (run["movement_analysis_id"], run["outlook_analysis_id"])
                         and run["analysis_status"] != "completed")):
@@ -133,8 +136,8 @@ class PublicationStore:
                 JOIN history h ON a.analysis_id=h.previous_analysis_id
                 ) SELECT i.* FROM movement_items i JOIN history h USING(analysis_id)
                 JOIN movement_analyses a USING(analysis_id)
-                WHERE a.etf_code=%s AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<=%s""",
-                        (analysis["previous_analysis_id"], analysis["etf_code"], analysis["trading_date"], analysis["analysis_at"]))
+                WHERE a.etf_code=%s AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<=%s AND a.data_source=%s""",
+                        (analysis["previous_analysis_id"], analysis["etf_code"], analysis["trading_date"], analysis["analysis_at"], analysis["data_source"]))
             existing = {row["item_id"] for row in cur.fetchall()}
             mapped = {}
             for item in response["new_items"]:
