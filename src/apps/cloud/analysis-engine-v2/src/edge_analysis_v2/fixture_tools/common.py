@@ -11,6 +11,19 @@ def instant(value):
     return value.astimezone(timezone(timedelta(hours=9)))
 
 
+def observed(value):
+    """Read an observation instant, or a date-only observation as the end of that Korean day.
+
+    Date-only observations (``YYYY-MM-DD``) come from sources that publish no time, such as
+    daily closes and monthly indicators (ALPHA-1130). They count as observed once that Korean
+    day has ended; no clock time is fabricated and the original string is kept for display.
+    """
+    if isinstance(value, str) and len(value) == 10:
+        day = date.fromisoformat(value)
+        return datetime.combine(day, datetime.max.time(), tzinfo=timezone(timedelta(hours=9)))
+    return instant(value)
+
+
 def decimal(value):
     """Require a finite numeric value without accepting booleans."""
     if isinstance(value, bool) or not isinstance(value, (int, float, str, Decimal)):

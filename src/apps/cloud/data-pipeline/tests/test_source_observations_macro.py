@@ -87,6 +87,10 @@ def test_regular_run_lands_every_series_with_receipt_as_visibility(tmp_path):
         "operations_archive/canonical_run_manifests/dataset=macro_observation/run_id=run_norm1/manifest.json"))
     assert manifest["canonical_written"] is True and manifest["input_run_id"] == "run_raw1"
     assert manifest["artifact"]["partition_date"] == "ingest_date"
+    # 복구 계약: 어떤 코드 판이 이 정본을 만들었는지 manifest 가 말해야 재현 범위를 주장할 수 있다.
+    assert manifest["code_version"] == "unknown"   # 테스트는 GIT_SHA 미주입
+    raw_manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("macro_observation", "run_raw1")))
+    assert raw_manifest["code_version"] == "unknown"
 
 
 def test_rerun_with_the_same_run_id_does_not_call_vendors_again(tmp_path):

@@ -332,3 +332,63 @@ END $$;
 
 COMMENT ON FUNCTION etf_constituent_source_coverage(TEXT, TIMESTAMPTZ) IS
 '기준시각에 유효했던 ETF 구성종목 스냅샷의 종목별 업종·재무 확보 여부. 스냅샷이 없으면 0행이다(현재 구성으로 대체하지 않는다).';
+
+-- 신선도(§6): API 성공은 신선의 증거가 아니다. 판정에 쓸 사실만 나란히 내놓는다 — 원장의 마지막 적재 성공,
+-- 데이터 자체의 마지막 수신·최신 관측일. 공급자 게시 캘린더가 없으므로(ECOS 는 KRX 휴장일에도 값을 내고,
+-- DART 접수는 회사마다, KIS 마스터는 거래일 기준이나 공식 캘린더 미확보) status 는 항상 UNKNOWN 이다 —
+-- '어제 값이 있어야 한다'는 기대는 여기서 만들지 않는다. 판정은 호출자가 basis 를 보고 한다.
+CREATE FUNCTION source_observation_freshness()
+RETURNS TABLE (
+    dataset TEXT, series_id TEXT, latest_observation_date DATE, last_received_at TIMESTAMPTZ,
+    last_load_fulfilled_at TIMESTAMPTZ, last_load_data_status TEXT,
+    freshness_status TEXT, freshness_reason TEXT, basis TEXT)
+LANGUAGE sql STABLE AS $$
+    WITH loads AS (
+        SELECT t.task_key, max(t.fulfilled_at) AS fulfilled_at,
+               (array_agg(t.data_status ORDER BY t.fulfilled_at DESC))[1] AS data_status
+        FROM ops_expected_task t
+        WHERE t.task_key IN ('LOAD_MACRO', 'LOAD_FINANCIAL_METRIC', 'LOAD_SECTOR') AND t.task_outcome = 'FULFILLED'
+        GROUP BY t.task_key
+    ), facts AS (
+        SELECT 'macro_observation'::text AS dataset, m.series_id, max(m.observation_date) AS latest,
+               max(m.received_at) AS received, 'LOAD_MACRO'::text AS task_key,
+               'observation_date=공급자 관측일(일별) 또는 기준월 1일(CPI). 캘린더 없음: ECOS 는 휴장일에도 값이 있다'::text AS basis
+        FROM macro_observation m GROUP BY m.series_id
+        UNION ALL
+        SELECT 'financial_metric', NULL, max(f.period_end), max(f.received_at), 'LOAD_FINANCIAL_METRIC',
+               'period_end=가장 늦은 보고 기말. 접수 시점은 회사·보고서마다 달라 기대 관측일이 없다'
+        FROM financial_metric f
+        UNION ALL
+        SELECT 'sector_classification', NULL, max(s.as_of_date), max(s.received_at), 'LOAD_SECTOR',
+               'as_of_date=마스터를 받은 KST 날짜(원천은 현재값만). 공식 게시 캘린더 미확보'
+        FROM sector_classification s
+    )
+    SELECT f.dataset, f.series_id, f.latest, f.received, l.fulfilled_at, l.data_status,
+           'UNKNOWN', 'NO_PROVIDER_CALENDAR', f.basis
+    FROM facts f LEFT JOIN loads l ON l.task_key = f.task_key
+    WHERE f.latest IS NOT NULL
+    ORDER BY f.dataset, f.series_id
+$$;
+
+COMMENT ON FUNCTION source_observation_freshness() IS
+'원천 관측 데이터셋별 신선도 사실(마지막 적재 성공·마지막 수신·최신 관측일). status 는 공급자 캘린더가 없어 항상 UNKNOWN — 판정은 호출자 몫. 행이 없는 데이터셋=적재 0건.';
+
+-- ── v2 읽기 경로(ALPHA-1130 §5) ─────────────────────────────────────────────────
+-- v2 는 이 다섯 함수로만 원천을 읽는다. 함수는 소유자 권한으로 돌고(SECURITY DEFINER) 테이블 자체는
+-- 열지 않는다 — writer 역할의 테이블 권한은 그대로 0 이다(tests/analysis_v2_writer.sql).
+-- search_path 고정: DEFINER 함수가 호출자의 경로에서 같은 이름의 객체를 집지 않게.
+ALTER FUNCTION macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER) SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION sector_classification_as_of(TIMESTAMPTZ, TEXT[]) SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION etf_constituent_source_coverage(TEXT, TIMESTAMPTZ) SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION source_observation_freshness() SECURITY DEFINER SET search_path = public;
+REVOKE EXECUTE ON FUNCTION
+    macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER), financial_quarters_as_of(TIMESTAMPTZ, TEXT),
+    sector_classification_as_of(TIMESTAMPTZ, TEXT[]), etf_constituent_source_coverage(TEXT, TIMESTAMPTZ),
+    source_observation_freshness()
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+    macro_observations_as_of(TIMESTAMPTZ, TEXT, INTEGER), financial_quarters_as_of(TIMESTAMPTZ, TEXT),
+    sector_classification_as_of(TIMESTAMPTZ, TEXT[]), etf_constituent_source_coverage(TEXT, TIMESTAMPTZ),
+    source_observation_freshness()
+TO edge_analysis_v2_writer;

@@ -41,6 +41,24 @@ BEGIN
             RAISE EXCEPTION 'Unexpected source access: %',r.relname;
         END IF;
     END LOOP;
+    -- 원천 읽기는 다섯 함수(SECURITY DEFINER)로만. 다른 DEFINER 함수를 실행할 수 있으면 테이블 권한 0 이 무의미하다.
+    FOR r IN SELECT p.oid, p.proname, p.proacl FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname='public' AND p.prosecdef LOOP
+        IF r.proname IN ('macro_observations_as_of','financial_quarters_as_of',
+                         'sector_classification_as_of','etf_constituent_source_coverage',
+                         'source_observation_freshness') THEN
+            IF NOT has_function_privilege('edge_analysis_v2_writer',r.oid,'EXECUTE') THEN
+                RAISE EXCEPTION 'Missing source read function: %',r.proname;
+            END IF;
+            -- proacl NULL = 기본 권한(PUBLIC EXECUTE), grantee 0 = PUBLIC
+            IF r.proacl IS NULL OR EXISTS (SELECT FROM aclexplode(r.proacl) a
+                                           WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE') THEN
+                RAISE EXCEPTION 'Source read function is open to PUBLIC: %',r.proname;
+            END IF;
+        ELSIF has_function_privilege('edge_analysis_v2_writer',r.oid,'EXECUTE') THEN
+            RAISE EXCEPTION 'Unexpected definer function: %',r.proname;
+        END IF;
+    END LOOP;
     IF has_schema_privilege('edge_analysis_v2_writer','public','CREATE')
        OR has_database_privilege('edge_analysis_v2_writer',current_database(),'CREATE') THEN
         RAISE EXCEPTION 'Writer can create permanent objects';
@@ -77,6 +95,28 @@ BEGIN
     BEGIN
         DELETE FROM instrument WHERE false;
         RAISE EXCEPTION 'Source write was permitted';
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    -- 원천 관측(ALPHA-1130): 시점 조회 함수는 되고, 그 뒤 테이블은 직접 못 읽는다.
+    PERFORM * FROM macro_observations_as_of(now(),'usd_krw',1);
+    PERFORM * FROM financial_quarters_as_of(now(),'005930');
+    PERFORM * FROM sector_classification_as_of(now(),ARRAY['005930']);
+    PERFORM * FROM etf_constituent_source_coverage('091160',now());
+    PERFORM * FROM source_observation_freshness();
+    BEGIN
+        PERFORM 1 FROM macro_observation LIMIT 1;
+        RAISE EXCEPTION 'Macro table read was permitted';
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN
+        PERFORM 1 FROM financial_metric LIMIT 1;
+        RAISE EXCEPTION 'Financial table read was permitted';
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN
+        PERFORM 1 FROM sector_classification LIMIT 1;
+        RAISE EXCEPTION 'Sector table read was permitted';
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN
+        INSERT INTO macro_observation SELECT * FROM macro_observation WHERE false;
+        RAISE EXCEPTION 'Macro table write was permitted';
     EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $$;
 ROLLBACK;

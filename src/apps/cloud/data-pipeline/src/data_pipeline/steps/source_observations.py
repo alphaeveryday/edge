@@ -48,6 +48,7 @@ from ..lake import (
     unconsumed_run_ids,
 )
 from ..minute.artifacts import put_immutable
+from ..ops import catalog
 from ..parse import krx_short_code
 from ..sources import dart_fundamental, kis_sector_master, macro_series
 
@@ -213,7 +214,10 @@ def write_raw_run(
         manifest = {"run_id": run_id, "producer": producer, "dataset": spec.dataset,
                     "ingest_date": ingest_date, "completed": True, "request_scope": request_scope,
                     "objects": entries, "counts": counts, "skipped_reason": skipped_reason,
-                    "started_at": started_at.isoformat()}
+                    "started_at": started_at.isoformat(),
+                    # 복구 계약(§10.6): 같은 raw 를 이 코드 판으로 정제해야 같은 정본이 나온다.
+                    # 이미지가 GIT_SHA 를 주입하기 전엔 'unknown' — 그때는 정확 재현을 주장하지 않는다.
+                    "code_version": catalog.version()}
         try:
             put_immutable(storage, raw_run_manifest_key(spec.dataset, run_id),
                           json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -365,6 +369,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             "run_id": run_id, "producer": producer, "dataset": spec.dataset,
             "canonical_written": True, "input_run_id": input_run_id,
             "raw_manifest_sha256": raw_manifest["manifest_sha256"],
+            "code_version": catalog.version(),
             # artifact 의 report_date 는 raw 수집일(ingest_date)이다 — 관측일·공개일이 아니다.
             "artifact": {"key": artifact_key, "sha256": artifact_sha, "rows": len(rows),
                          "partition_date": "ingest_date"},
