@@ -23,6 +23,12 @@ fix/*     ─┘
 **PR 규칙 (엄격한 사다리)**
 - `feature/*`·`fix/*` → **`dev`에만** PR 한다.
   - 예외는 쌓인 PR(stacked PR) 하나다. 선행 PR과 나눈 후속 PR은 리뷰 diff를 좁히려고 base를 선행 PR 브랜치로 **열어 둘 수** 있다. 그래도 feature 브랜치로 머지하지 않는다 — 선행 PR이 `dev`에 머지된 뒤 base를 `dev`로 바꾸고, CI를 거쳐 `dev`로 머지한다.
+    - base가 `dev`가 아닌 동안 GitHub의 경로별 테스트 잡은 돌지 않는다. 그동안의 통과 기록은 로컬 실행이지 CI 통과가 아니다.
+    - 선행 PR이 squash 머지되면 후속 브랜치에는 선행 PR의 원래 커밋이 그대로 남는다. 아래 순서로 옮긴다.
+      1. `gh pr edit <N> --base dev` 로 base를 바꾼다.
+      2. 최신 `origin/dev` 를 후속 브랜치에 merge 한다. 선행 PR의 변경이 충돌로 다시 나타나면 `dev` 쪽(머지된 내용)을 받고, 후속 PR이 그 줄을 다시 고친 경우에만 후속 브랜치 쪽을 받는다.
+      3. `git diff origin/dev...HEAD --stat` 에 후속 PR 자신의 파일만 남았는지 확인한다. 선행 PR 파일이 보이면 머지된 내용과 다른 것이니 머지하지 않고 원인을 찾는다.
+      4. push 뒤 GitHub CI 전건 통과를 확인하고 머지한다.
 - `dev` → **`main`에만** PR 한다.
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
 
