@@ -935,3 +935,20 @@ def test_preferred_share_eps_candidates_through_extract_synthetic():
     assert eps == [] and bad == [["preferred_share_line_only"]]
     eps, bad = with_eps_lines([("기본주당이익", "1000"), ("기본주당이익(계속영업)", "990")])
     assert eps == [] and bad == [["ambiguous_account_line"]]
+
+
+def test_macro_only_config_loads_and_financial_collection_requires_etf_ids(tmp_path):
+    # WHY(봇 P2): 재무 대상 ETF 를 설정 전체의 필수값으로 두면 매크로만 쓰는 설정이 로드부터 실패한다(무관한 스텝까지).
+    # 비어 있어도 설정은 로드되고, 재무 수집 스텝만 대상이 없다고 거부한다.
+    from types import SimpleNamespace
+
+    from data_pipeline import run as run_module
+    from data_pipeline.config.models import SourceObservationsConfig
+
+    config = SourceObservationsConfig.model_validate({"macro": {}})
+    assert config.etf_ids == []
+    args = SimpleNamespace(step="ingest-raw-financial-metric", input_run_id=None, from_date=None, to_date=None,
+                           series=None, all_partitions=False, source=None)
+    settings = SimpleNamespace(source_observations=config, dart_financial=None)
+    with pytest.raises(SystemExit, match="etf_ids"):
+        run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_etf")

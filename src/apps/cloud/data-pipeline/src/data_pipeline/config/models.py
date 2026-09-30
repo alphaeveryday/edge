@@ -303,7 +303,8 @@ class SourceObservationsConfig(BaseModel):
 
     # 재무 수집 대상 뿌리 ETF. 대상 종목은 이 ETF 들의 canonical 구성종목 스냅샷에서 **기간별로**
     # 파생한다 — 현재 구성을 과거 전체에 적용하지 않는다(steps/source_observations).
-    etf_ids: list[NonBlankStr] = Field(min_length=1)
+    # 설정 전체의 필수값이 아니다 — 매크로만 쓰는 설정도 로드된다. 비어 있으면 재무 수집 스텝만 거부한다(run.py).
+    etf_ids: list[NonBlankStr] = []
     macro: MacroObservationSource = MacroObservationSource()
 
 

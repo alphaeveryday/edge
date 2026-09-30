@@ -691,6 +691,8 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
     # DAG 는 백필 인자를 빈 문자열로 넘길 수 있다(템플릿이 원소를 빼지 못한다) — 빈 값 = 정기 창.
     args.from_date, args.to_date = args.from_date or None, args.to_date or None
     if family == "financial":
+        if not config.etf_ids:
+            raise SystemExit("source_observations.etf_ids 가 비어 있다 — 재무 수집 대상 ETF 가 없다")
         # DART 키는 기존 재무 수집과 같은 것(dart_financial.source)을 쓴다 — tasks.tf dart 태스크 정의에 이미 있다.
         if settings.dart_financial is None or not settings.dart_financial.source.api_key:
             raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
