@@ -83,6 +83,17 @@
 
 인덱스 `(member_id)`. 탈퇴 시 전부 revoke.
 
+### password_reset_code
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| member_id | bigint PK → member | 회원당 1행, 재요청 시 덮어쓰기 |
+| code_hash | varchar(64) | 6자리 코드의 sha-256 |
+| attempts | smallint | 틀린 시도 수, 5회면 무효 |
+| expires_at | timestamptz | 발송 후 10분 |
+| created_at | timestamptz | 마지막 발송 시각, 60초 재발송 간격 판정 |
+
+재설정 성공 시 행 삭제와 회원 `refresh_token` 전부 revoke.
+
 ### watch_group
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
@@ -340,6 +351,7 @@ erDiagram
     member ||--o{ device : "매핑 후"
     member ||--o{ refresh_token : ""
     device ||--o{ refresh_token : ""
+    member ||--o| password_reset_code : ""
     principal ||--o{ watch_group : ""
     watch_group ||--o{ watch_item : ""
     principal ||--o{ principal_theme : ""
