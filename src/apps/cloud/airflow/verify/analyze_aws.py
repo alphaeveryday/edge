@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import re
 import statistics
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent / "local" / "results" / "aws"
-CRIT = json.loads((HERE / "criteria_aws.json").read_text())
+CRIT = json.loads((HERE / os.environ.get("VERIFY_CRITERIA", "criteria_aws.json")).read_text())
 DAG = "edge_investor_intraday_verify"
 MiB = 2 ** 20
 BUSINESS = {"collect": "ingest-raw-investor-estimate", "normalize": "normalize-investor-estimate",
@@ -252,6 +253,49 @@ def holds(batch, rid):
     return [h["hold"] for h in batch.get("airflow_holds", []) if h["dag_run_id"] == rid]
 
 
+def normal_row(d, key, hhmm):
+    """정상 run 한 건의 대조 — Airflow 상태만이 아니라 업무 시작·exit 0 종료·산출물·ECS·원장까지."""
+    r = run_of(d, hhmm)
+    rid = r and r["dag_run_id"]
+    one = {s: 1 for s in BUSINESS}
+    row = {"key": key, "state": r and r["state"],
+           "starts": {s: starts(d, rid, s) for s in BUSINESS} if rid else None,
+           "ok_runs": {s: ok_runs(d, rid, s) for s in BUSINESS} if rid else None,
+           "writes": writes(d, rid) if rid else None, "ledger": ledger_run(d, hhmm),
+           "ecs": len([e for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")]) if rid else None}
+    row["ok"] = bool(row["state"] == "success" and row["starts"] == one and row["ok_runs"] == one and row["writes"]
+                     and row["ecs"] == 5 and row["ledger"] and row["ledger"][:2] == ("AIRFLOW", "SUCCEEDED")
+                     and row["ledger"][2] and set(row["ledger"][2].values()) == {"FULFILLED"})
+    return row
+
+
+def outcomes_v(d) -> dict | None:
+    """V 배치(small·1408 후속). 원장이 없으면 None(판정 불가)."""
+    if not d.get("ledger"):
+        return None
+    s = CRIT["scenarios"]["V"]["slots"]
+    rid = lambda k: (run_of(d, s[k]) or {}).get("dag_run_id")  # noqa: E731
+    st = lambda k: (run_of(d, s[k]) or {}).get("state")  # noqa: E731
+    led = lambda k: (ledger_run(d, s[k]) or (None, None, {}))[1]  # noqa: E731
+    normals = {k: normal_row(d, k, s[k]) for k in ("N1", "N2", "N3", "R1", "A1")}
+    chk = {
+        # 재시작 추적: 정제 ECS 가 새로 뜨지 않고(1개) 업무 시작 1회, 원장 성공까지(normal_row).
+        "restart_tracking": normals["R1"]["ok"] and len(ecs_of(d, rid("R1"), BUSINESS["normalize"])) == 1,
+        "fail_confirmed": st("F1") == "failed" and [t["state"] for t in tries_of(d, rid("F1"), "load")] == ["failed"]
+        and len(ecs_of(d, rid("F1"), BUSINESS["load"])) == 1 and led("F1") == "FAILED" and writes(d, rid("F1")) == 0,
+        "hold_state_unknown": st("H1") == "failed"
+        and any(h.get("kind") == "ECS_STATE_UNKNOWN" for h in holds(d, rid("H1")))
+        and len(ecs_of(d, rid("H1"), BUSINESS["collect"])) == 1 and led("H1") != "SUCCEEDED",
+        "blocked_while_held": st("X1") == "failed"
+        and [e["exit"] for e in ecs_of(d, rid("X1"), BUSINESS["collect"])] == [76] and starts(d, rid("X1"), "collect") == 0,
+        "ledger_hold_recorded": "ECS_STATE_UNKNOWN" in {h[2] for h in d["ledger"].get("holds", [])},
+        "recovered_after_release": normals["A1"]["ok"],
+    }
+    n_ok = sum(1 for k in ("N1", "N2", "N3", "R1", "A1") if normals[k]["ok"])
+    return {"normals": normals, "checks": chk, "normal_ok": n_ok,
+            "ok": all(chk.values()) and all(normals[k]["ok"] for k in ("N1", "N2", "N3"))}
+
+
 def outcomes(batches) -> dict:
     res = {}
     for b in ("B1", "B3"):
@@ -323,7 +367,7 @@ def analyze(exp: str) -> dict:
     d = ROOT / exp
     marks = jl(d / "marks.jsonl")
     health = jl(d / "health.jsonl")
-    batches = {b: json.loads((d / f"{b}.json").read_text()) for b in ("B1", "B2", "B3") if (d / f"{b}.json").exists()}
+    batches = {b: json.loads((d / f"{b}.json").read_text()) for b in ("B1", "B2", "B3", "V") if (d / f"{b}.json").exists()}
     deploys = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "deployinfo-*.json")))]
     rdss = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "rds-*.json")))]
     windows = {}
@@ -345,7 +389,9 @@ def analyze(exp: str) -> dict:
                  for n in ("samples.log", "kmsg.log", "docker-events.log")}
     dock = docker_events(d)
     lat = {b: latency(x, rw) for b, x in batches.items()}
-    out_come = outcomes(batches)
+    out_come = outcomes({k: v for k, v in batches.items() if k != "V"})
+    if "V" in batches:
+        out_come["V"] = outcomes_v(batches["V"])
     burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
     # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
     ok_h = [h for h in health if "health" in h and h.get("code") == 200]
@@ -394,7 +440,9 @@ def analyze(exp: str) -> dict:
     unplaceable = [e for dep in deploys for e in dep.get("service", {}).get("events", [])
                    if "unable to place" in e or "insufficient memory" in e or "insufficient CPU" in e]
     out["unplaceable_events"] = unplaceable
-    unexpected_die = [d for d in dock["die"] if d[2] and not any(x <= float(d[2]) <= y for x, y in rw)]
+    # 정리 시작(서비스 0) 뒤의 종료는 의도한 종료다.
+    end_t = next((m["t"] for m in marks if m["event"] in ("cleanup_begin", "abort")), float("inf"))
+    unexpected_die = [d for d in dock["die"] if d[2] and float(d[2]) < end_t and not any(x <= float(d[2]) <= y for x, y in rw)]
     out["unexpected_airflow_container_exits"] = unexpected_die
     lim = CRIT
     def lat_ok():
@@ -445,6 +493,18 @@ def analyze(exp: str) -> dict:
             and host["idle_mem_available_mib"]["after_B3"] >= host["idle_mem_available_mib"]["after_B1"] * 0.90),
         "A10_ui": None if len(burst) != 30 else (not out["burst"]["non_2xx"] and out["burst"]["p95_s"] <= 2),
     }
+    if "V" in batches:
+        v = out_come["V"]
+        fps = [json.dumps(m.get("deploy"), sort_keys=True) for m in marks if m["event"] == "trigger"]
+        tds = {(t["td"], tuple(t["digests"])) for m in marks if m["event"] == "trigger"
+               for t in (m.get("deploy") or {}).get("tasks", [])}
+        out["pass"].update({
+            "A6_outcomes": None if v is None else v["ok"],
+            "A7_business": None if v is None else v["normal_ok"] >= 3 and all(v["normals"][k]["ok"] for k in ("N1", "N2", "N3")),
+            "A9_no_growth": "n/a(V)", "A10_ui": "n/a(V)",
+            "A11_task_headroom": None if host is None or not host["task_paths_seen"] else host["task_hit_limit_events"] == 0,
+            "A12_deploy_fixed": None if not fps or any('"tasks": []' in f for f in fps) else len(tds) == 1,
+        })
     del lim, placement
     (d / "verdict.json").write_text(json.dumps(out, ensure_ascii=False, indent=1, default=str))
     return out

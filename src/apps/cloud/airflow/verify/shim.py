@@ -16,6 +16,8 @@
 - `verify-reset`: 검증 원장의 레인 행과 버킷의 state·lake 를 지운다. 검증 DB 가 아니면 거부한다.
 - `verify-ledger`: 검증 원장의 레인 행(런·기대 작업·시도·보류·적재 행 수)을 로그에 JSON 한 줄로 낸다.
 - `verify-resolve-holds`: 종료 확인 뒤 보류 해제(README 절차 6). `verify-backup`: 검증 원장 표별 백업.
+- `verify-shutdown <grace>`: 종료 장치(스케줄러가 띄움) — 서비스 0 → grace 대기 → 남은 검증 태스크 중단 → 호스트 0.
+  `verify-sleep <초>`: 종료 장치 시험용 대기 태스크.
 """
 
 from __future__ import annotations
@@ -224,8 +226,48 @@ def backup() -> int:
     return 0
 
 
+def shutdown() -> int:
+    """종료 장치(verify_shutdown.tf) — 스케줄러가 띄운다. 운영자 PC 와 무관하게 검증을 끝낸다.
+    Airflow 서비스 desired 0(새 제출 중단) → grace 동안 검증 태스크의 자연 종료 대기 → 남은 **검증 태스크만** StopTask
+    (결과는 꾸미지 않는다 — 원장의 RUNNING 시도가 보류로 남고, 여기 목록이 종료 증거다) → 호스트 ASG 0 → 보고서."""
+    grace = int(sys.argv[2]) if len(sys.argv) > 2 else 900
+    ecs, asg = boto3.client("ecs"), boto3.client("autoscaling")
+    cluster, me = os.environ["OPS_CLUSTER_ARN"], _task_arn()
+    report = {"started": datetime.now(KST).isoformat(), "grace": grace, "self": me}
+    ecs.update_service(cluster=cluster, service=os.environ["VERIFY_SERVICE"], desiredCount=0)
+    report["service_desired_0_at"] = datetime.now(KST).isoformat()
+    deadline = time.time() + grace
+    while True:
+        arns = [a for p in ecs.get_paginator("list_tasks").paginate(cluster=cluster, desiredStatus="RUNNING")
+                for a in p["taskArns"] if a != me]
+        tasks = [t for i in range(0, len(arns), 100) for t in ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])["tasks"]
+                 if "-verify-" in t["taskDefinitionArn"]]
+        if not tasks or time.time() >= deadline:
+            break
+        time.sleep(20)
+    report["stopped"] = []
+    for t in tasks:
+        ecs.stop_task(cluster=cluster, task=t["taskArn"], reason="verify-shutdown: 종료 시각 강제 중단 — 결과 미상")
+        env = (t.get("overrides", {}).get("containerOverrides") or [{}])[0].get("environment") or []
+        report["stopped"].append({"arn": t["taskArn"], "family": t["taskDefinitionArn"].rsplit("/", 1)[1],
+                                  "ref": next((e["value"] for e in env if e["name"] == "OPS_ORCHESTRATOR_ATTEMPT_REF"), None),
+                                  "result": "unknown"})
+    asg.update_auto_scaling_group(AutoScalingGroupName=os.environ["VERIFY_ASG"], MinSize=0, MaxSize=0, DesiredCapacity=0)
+    report["asg_0_at"] = datetime.now(KST).isoformat()
+    _s3.put_object(Bucket=BUCKET, Key=f"shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json",
+                   Body=json.dumps(report, ensure_ascii=False).encode())
+    print("VERIFY_SHUTDOWN " + json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+def sleep() -> int:
+    """종료 장치 시험용 — 검증 태스크 하나를 N초 살려 둔다(업무 코드를 부르지 않는다)."""
+    time.sleep(int(sys.argv[2]) if len(sys.argv) > 2 else 600)
+    return 0
+
+
 ADMIN = {"verify-seed": seed, "verify-reset": reset, "verify-ledger": ledger, "verify-resolve-holds": resolve_holds,
-         "verify-backup": backup}
+         "verify-backup": backup, "verify-shutdown": shutdown, "verify-sleep": sleep}
 
 
 def main(argv: list[str]) -> int:

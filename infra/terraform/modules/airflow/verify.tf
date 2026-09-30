@@ -21,6 +21,8 @@ resource "aws_secretsmanager_secret" "verify" {
   count       = var.verify_enabled ? 1 : 0
   name        = "${var.name}/verify"
   description = "검증 원장 전용 역할 airflow_verify 비밀번호(verify_db_password)"
+  # 검증 때마다 만들고 걷는다 — 복구 대기(기본 30일)가 있으면 다음 검증의 같은 이름 생성이 막힌다(2026-09-30 실측).
+  recovery_window_in_days = 0
 }
 
 resource "aws_s3_bucket" "verify" {
@@ -161,6 +163,9 @@ locals {
     # dagrun_timeout(900초)보다 길어야 한다(sweep 이 시간 초과 run 을 판정하는 기준).
     OPS_CLUSTER_ARN                  = aws_ecs_cluster.this.arn
     OPS_AIRFLOW_RUN_LIFETIME_SECONDS = "1200"
+    # 종료 장치(verify_shutdown.tf)가 내리는 대상.
+    VERIFY_SERVICE = aws_ecs_service.airflow.name
+    VERIFY_ASG     = aws_autoscaling_group.host.name
   })
 }
 
