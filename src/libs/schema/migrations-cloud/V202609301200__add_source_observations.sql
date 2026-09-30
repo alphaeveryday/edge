@@ -44,6 +44,9 @@ CREATE TABLE macro_observation (
         series_id <> 'kr_cpi_yoy' OR extract(day FROM observation_date) = 1),
     CONSTRAINT ck_macro_observation_price CHECK (
         series_id NOT IN ('usd_krw', 'brent_spot_usd') OR value > 0),
+    -- 유한성 관용구(V202607150001 주석): NaN 은 PostgreSQL 에서 최댓값이라 부등호 하나로는 안 막힌다.
+    CONSTRAINT ck_macro_observation_finite CHECK (
+        value > '-Infinity'::NUMERIC AND value < 'Infinity'::NUMERIC),
     CONSTRAINT ck_macro_observation_basis CHECK (
         availability_basis = 'received' AND available_at = received_at),
     -- 관측 기간이 끝나기 전에 받은 값(진행 중 세션·미완 월)은 확정 관측이 아니다.
@@ -90,6 +93,12 @@ CREATE TABLE financial_metric (
         corp_code ~ '^[0-9]{8}$' AND instrument_code ~ '^[0-9A-Z]{6}$' AND rcept_no ~ '^[0-9]{14}$'),
     CONSTRAINT ck_financial_metric_inputs CHECK (jsonb_typeof(inputs) = 'array'),   -- 근거 줄 목록(정제가 쓰는 형태)
     CONSTRAINT ck_financial_metric_period CHECK (fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4', 'FY')),
+    CONSTRAINT ck_financial_metric_finite CHECK (
+        value > '-Infinity'::NUMERIC AND value < 'Infinity'::NUMERIC),
+    -- 12월 결산만 싣는다(수집이 비12월 결산을 unsupported_reports 로 거른다) — 기말은 회계연도·기간에서 정해진다.
+    CONSTRAINT ck_financial_metric_period_end CHECK (period_end = CASE fiscal_period
+        WHEN 'Q1' THEN make_date(fiscal_year, 3, 31) WHEN 'Q2' THEN make_date(fiscal_year, 6, 30)
+        WHEN 'Q3' THEN make_date(fiscal_year, 9, 30) ELSE make_date(fiscal_year, 12, 31) END),
     -- 지표·단위·기간 종류는 한 쌍이다. 누적·분기·시점 값이 한 열에서 섞이지 않게 DB가 막는다.
     CONSTRAINT ck_financial_metric_shape CHECK ((metric, unit, period_kind) IN (
         ('eps_basic', 'KRW_per_share', 'QUARTER'), ('eps_basic', 'KRW_per_share', 'CUMULATIVE'),
@@ -308,8 +317,10 @@ BEGIN
     -- 옛 판본의 값으로 채우지 않는다(지표가 0개인 정정 판본이 옛 값을 최신처럼 남기지 않는다).
     SELECT p_instrument_code, c.corp_code, c.fiscal_year,
            c.fiscal_year::text || '-' || c.report_period,
-           CASE c.report_period WHEN 'Q1' THEN make_date(c.fiscal_year, 3, 31) WHEN 'Q2' THEN make_date(c.fiscal_year, 6, 30)
-                                WHEN 'Q3' THEN make_date(c.fiscal_year, 9, 30) ELSE make_date(c.fiscal_year, 12, 31) END,
+           -- 기말은 저장된 지표 행의 것을 쓰고, 지표가 없는 판본만 12월 결산 달력으로(ck_financial_metric_period_end 가 같은 규칙).
+           COALESCE(min(m.period_end) FILTER (WHERE m.fiscal_period <> 'FY'),
+                    CASE c.report_period WHEN 'Q1' THEN make_date(c.fiscal_year, 3, 31) WHEN 'Q2' THEN make_date(c.fiscal_year, 6, 30)
+                                         WHEN 'Q3' THEN make_date(c.fiscal_year, 9, 30) ELSE make_date(c.fiscal_year, 12, 31) END),
            c.fs_basis,
            max(m.value) FILTER (WHERE m.metric = 'eps_basic' AND m.period_kind = 'QUARTER'),
            max(m.derivation) FILTER (WHERE m.metric = 'eps_basic' AND m.period_kind = 'QUARTER'),
@@ -426,7 +437,7 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION etf_constituent_source_coverage(TEXT, TIMESTAMPTZ) IS
-'기준시각에 유효했던 ETF 구성종목 스냅샷의 종목별 업종·재무 확보 여부. 스냅샷이 없으면 0행이다(현재 구성으로 대체하지 않는다).';
+'기준시각에 유효했던 ETF 구성종목 스냅샷의 종목별 업종·재무 확보 여부. 스냅샷이 없으면 0행이다(현재 구성으로 대체하지 않는다). 한계: etf_holding_snapshot(_status) 는 ETF·날짜당 한 판본이라(기존 적재가 같은 키를 덮어쓴다) 정정 스냅샷이 오면 그 날짜의 이전 구성은 복원되지 않고 available_at 이 뒤로 밀린다 — 정정 전 기준시각은 그 날짜를 건너뛰어 앞 스냅샷을 본다. 구성종목 판본 이력은 이 계약 밖(holdings 레인 소관).';
 
 -- 신선도(§6): API 성공은 신선의 증거가 아니다. 판정에 쓸 사실만 나란히 내놓는다 — 원장의 마지막 적재 성공,
 -- 데이터 자체의 마지막 수신·최신 관측일. 공급자 게시 캘린더가 없으므로(ECOS 는 KRX 휴장일에도 값을 내고,
@@ -450,9 +461,14 @@ LANGUAGE sql STABLE AS $$
                'observation_date=공급자 관측일(일별) 또는 기준월 1일(CPI). 캘린더 없음: ECOS 는 휴장일에도 값이 있다'::text AS basis
         FROM macro_observation m GROUP BY m.series_id
         UNION ALL
-        SELECT 'financial_metric', NULL, max(f.period_end), max(f.received_at), 'LOAD_FINANCIAL_METRIC',
-               'period_end=가장 늦은 보고 기말. 접수 시점은 회사·보고서마다 달라 기대 관측일이 없다'
-        FROM financial_metric f
+        -- 재무는 판본 표로 센다 — 확인했지만 지표가 0개인 실행도 "적재됨"이다(지표 표만 보면 그 실행이 사라진다).
+        SELECT 'financial_metric', NULL,
+               max(CASE v.report_period WHEN 'Q1' THEN make_date(v.fiscal_year, 3, 31) WHEN 'Q2' THEN make_date(v.fiscal_year, 6, 30)
+                                        WHEN 'Q3' THEN make_date(v.fiscal_year, 9, 30) ELSE make_date(v.fiscal_year, 12, 31) END)
+                   FILTER (WHERE v.status = 'CONFIRMED'),
+               max(v.received_at), 'LOAD_FINANCIAL_METRIC',
+               'period_end=확정 판본 중 가장 늦은 보고 기말(지표 0개 판본 포함). 접수 시점은 회사·보고서마다 달라 기대 관측일이 없다'
+        FROM financial_report_version v
         UNION ALL
         SELECT 'sector_classification', NULL, max(s.as_of_date), max(s.received_at), 'LOAD_SECTOR',
                'as_of_date=마스터를 받은 KST 날짜(원천은 현재값만). 공식 게시 캘린더 미확보'
