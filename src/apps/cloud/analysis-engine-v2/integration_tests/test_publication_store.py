@@ -8,10 +8,10 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-from edge_analysis_v2.publication_store import PublicationStore
-from edge_analysis_v2.tool_store import ToolStore
-from edge_analysis_v2.body_changes import BodyEditor
-from edge_analysis_v2.schemas import FACTORS
+from edge_analysis_v2.storage.publications import PublicationStore
+from edge_analysis_v2.storage.tool_runs import ToolStore
+from edge_analysis_v2.analysis.body_editor import BodyEditor
+from edge_analysis_v2.contracts.publication_validation import FACTORS
 
 
 NOW = datetime.fromisoformat("2026-09-28T10:00:00+09:00")
@@ -61,6 +61,31 @@ def test_movement_commit_reuses_original_publication_when_nothing_changed(public
     rows = store.connection.execute("SELECT published_at FROM movement_analyses WHERE etf_code=%s", (key,)).fetchall()
     assert rows[0] == rows[1]
     assert store.save_movement(key, {}) == first
+
+
+def test_dashboard_exposes_original_item_and_publication_times(publication, monkeypatch):
+    from contextlib import nullcontext
+    from edge_analysis_v2.dashboard import server as cloud_review
+
+    store, key, _ = publication
+    store.save_movement(key, response(key))
+    second = key + '-later'
+    store.begin('movement', second, key, NOW + timedelta(minutes=30), key)
+    store.save_movement(second, {'new_items': [], 'selected_item_ids': [], 'summary': None})
+    monkeypatch.setattr(cloud_review, 'connect_results', lambda _: nullcontext(store.connection))
+    first = cloud_review.read_screen(None, 'movement', key, 'all')
+    later = cloud_review.read_screen(None, 'movement', second, 'all')
+    assert later['items'] == first['items']
+    assert datetime.fromisoformat(later['items'][0]['source_as_of']) == NOW
+    assert later['items'][0]['item_id'] and later['items'][0]['added_at']
+    assert later['publication']['published_at'] == first['publication']['published_at']
+    assert later['publication']['analysis_at'] != first['publication']['analysis_at']
+    from edge_analysis_v2.storage.inspection import read_storage
+    saved = read_storage(store.connection, 'movement', second)['tables']
+    assert saved['movement_analyses'][0]['analysis_id'] == second
+    assert saved['movement_items'][0]['analysis_id'] == key
+    assert saved['movement_items'][0]['item_id'] == later['items'][0]['item_id']
+    assert saved['tool_runs'][0]['movement_analysis_id'] == key
 
 
 def test_invalid_selection_rolls_back_new_items_but_keeps_tool_evidence(publication):

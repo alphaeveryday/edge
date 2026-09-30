@@ -51,7 +51,7 @@ def lane(request, tmp_path):
     from data_pipeline.db import connect
     from data_pipeline.lake import LocalStorage
     from data_pipeline.minute.commit import MinuteCommitter
-    from data_pipeline.minute.models import KST, Universe
+    from data_pipeline.minute.models import KST, WINDOW_SETTLE_SEC, Universe
     from data_pipeline.minute.repository import MinuteLedger
     from data_pipeline.minute.worker import (
         PriceWorker, WorkerConfig, InavWorker, InavWorkerConfig,
@@ -85,8 +85,11 @@ def lane(request, tmp_path):
     storage, collector = LocalStorage(tmp_path), ChangingCollector()
     worker = cls(session_id=sid, ledger=ledger, committer=MinuteCommitter(db=db),
                  storage=storage, collector=collector, config=config)
+    # 창은 창 끝 + WINDOW_SETTLE_SEC 에야 due 다(ALPHA-1127 — 벤더 확정 층 진입 대기).
+    # 창 끝 시각으로 tick 하면 claim 할 창이 없어 IDLE 이고 모든 시나리오가 첫 줄에서 죽는다.
     h = SimpleNamespace(db=db, connect=connect, sid=sid, start=start,
-                        now=start + timedelta(minutes=1), worker=worker, ledger=ledger,
+                        now=start + timedelta(minutes=1, seconds=WINDOW_SETTLE_SEC),
+                        worker=worker, ledger=ledger,
                         storage=storage, collector=collector, dataset=ds)
     try:
         yield h

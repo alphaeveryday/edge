@@ -487,3 +487,59 @@ export interface MinuteDailyStatus {
   to: string;
   dates: MinuteDailyDay[];
 }
+
+/* ── 가격 판정 근거(§33.12 로컬) — 서버 계약 MinuteJudgmentResponse ── */
+export interface MinuteJudgmentBaseline {
+  value: number | string;
+  source: 'prev_close' | 'open_fallback';
+  /** 전일 종가 기준일 | 시가 출처 window@세대 | 'pre-record' = 기록 도입 전 확정된 시가(출처 세대 미상) */
+  ref: string;
+}
+
+export interface MinuteJudgmentAttempt {
+  attempt: number;
+  redriveGeneration: number;
+  /** 기록 INSERT 의 관측 시각 — 커밋 순서·인과 순서가 아니다 */
+  judgedAt: string;
+  /** true = 발화·회수 대상 앵커 행을 잠근 뒤 관측, false = 무발화의 비잠금 관측 */
+  txAnchorLocked: boolean;
+  detectionPolicyVersion: string;
+  /** 판정이 쓴 기준선 집합 — 전체는 MinuteJudgments.baselineSets[baselineSetId] */
+  baselineSetId: string;
+  summary: Record<string, string[]>;
+  /** 판정이 실제로 읽은 앵커 [가격, anchor_window] — 키가 없으면 앵커 행이 없었다(기준선=앵커) */
+  anchorsUsed: Record<string, [string, string]>;
+  txAnchor: Record<string, string | null>;
+  /** 요약·앵커에 등장한 종목만 — 집합 전체는 baselineSets 에 */
+  baselines: Record<string, MinuteJudgmentBaseline>;
+  judgedWithBaseline: number;
+}
+
+export interface MinuteJudgmentWindow {
+  /** job 단위 — 같은 window·세대에 trigger_schema_version 이 다른 job 이 둘일 수 있다 */
+  jobId: string;
+  windowStart: string;
+  windowGeneration: number;
+  jobGeneration: number;
+  jobStatus: string;
+  jobAttemptCount: number;
+  /** 이 job 세대 뒤에 window 가 정정됐다(기록은 커밋 당시 세대를 가리킨다) */
+  correctedAfter: boolean;
+  /** 판정 당시 입력의 artifact 이력 **기록** 유무 — NO_HISTORY 는 이력 부재이지 원본 삭제·손상이 아니다 */
+  inputRecord: 'RECORDED' | 'NO_HISTORY';
+  artifactUri: string | null;
+  artifactChecksum: string | null;
+  /** 이 조회는 현재 원본 본문을 읽지 않는다 */
+  sourceRecheck: 'NOT_PERFORMED';
+  /** 비어 있으면 기록 없음 */
+  attempts: MinuteJudgmentAttempt[];
+}
+
+export interface MinuteJudgments {
+  sessionId: string;
+  /** 정정 후 재계산은 제공하지 않는다 */
+  recomputation: 'NOT_GUARANTEED';
+  windows: MinuteJudgmentWindow[];
+  /** set_id → {entity: 기준선}. 집합 단위로 한 번 — 앵커 행이 없는 무발화도 무엇을 봤는지 여기서 답한다. 빈 집합은 키 없음 */
+  baselineSets: Record<string, Record<string, MinuteJudgmentBaseline>>;
+}

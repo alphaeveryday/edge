@@ -28,6 +28,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -848,6 +849,78 @@ class SourceControllerTest {
 	}
 
 	/* ---------- 장중 1분 파이프라인 (ALPHA-651) ---------- */
+
+	@Test
+	void 판정_근거는_기록_없음과_이력_없음을_추정으로_채우지_않는다() throws Exception {
+		// WHY: 판정 근거 화면은 "정상 완료한 판정이 실제로 쓴 입력"만 보여야 한다. 기록이 없는 job 을
+		//      무발화로, artifact 이력이 없는 세대를 현재 window 로 채우면 과거 판정을 최신 데이터로
+		//      설명하게 된다(§33.9). 재계산은 제공하지 않으므로 보장 불가를 명시한다.
+		FakeMinuteStatusRepository minute = new FakeMinuteStatusRepository();
+		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
+		minute.judgments.put("sess-p", List.of(
+				new MinuteStatusRepository.PriceJudgmentRow("job-w0", w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
+						1, 0, w0.plusSeconds(3), true, "test-policy", "set-1",
+						"{\"fired\": [\"500000\"], \"inserted\": [\"500000\"]}",
+						"{\"500000\": [\"104.000000\", \"2026-10-05T00:00:00+00:00\"]}",
+						"{\"500000\": \"2026-10-05T00:00:00+00:00\"}",
+						"{\"500000\": {\"value\": 100, \"source\": \"open_fallback\", \"ref\": \"W0@g1\"}}", 2),
+				new MinuteStatusRepository.PriceJudgmentRow("job-w0", w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
+						2, 0, w0.plusSeconds(90), false, "test-policy", "set-1", "{\"fired\": []}", "{}", "{}", null, 2),
+				new MinuteStatusRepository.PriceJudgmentRow("job-w1", w0.plusMinutes(1), 2, 1, "SUCCEEDED", 1, null, null,
+						null, null, null, null, null, null, null, null, null, null, null)));
+		// WHY: 앵커 행이 아직 없는 무발화 시도(시도 2)는 요약·앵커에 종목이 없어 attempts[].baselines 가
+		//      비지만, 판정이 본 기준선은 집합 단위로 답해야 한다 — 그게 무발화 근거 조회의 목적이다(#999 봇 P2).
+		minute.baselineSets.put("sess-p", Map.of("set-1",
+				"{\"500000\": {\"value\": 100, \"source\": \"open_fallback\", \"ref\": \"W0@g1\"},"
+						+ " \"500001\": {\"value\": 200, \"source\": \"prev_close\", \"ref\": \"2026-10-02\"}}"));
+		MockMvc mvc = minuteMvc(minute);
+		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-p"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.recomputation").value("NOT_GUARANTEED"))
+				.andExpect(jsonPath("$.result.windows[0].attempts[1].baselines").isEmpty())
+				.andExpect(jsonPath("$.result.windows[0].attempts[1].baselineSetId").value("set-1"))
+				.andExpect(jsonPath("$.result.baselineSets.set-1.500001.source").value("prev_close"))
+				.andExpect(jsonPath("$.result.baselineSets.set-1.500001.value").value(200))
+				.andExpect(jsonPath("$.result.windows[0].attempts.length()").value(2))
+				.andExpect(jsonPath("$.result.windows[0].attempts[0].summary.inserted[0]").value("500000"))
+				.andExpect(jsonPath("$.result.windows[0].attempts[0].txAnchorLocked").value(true))
+				.andExpect(jsonPath("$.result.windows[0].attempts[1].txAnchorLocked").value(false))
+				.andExpect(jsonPath("$.result.windows[0].attempts[0].baselines.500000.source").value("open_fallback"))
+				.andExpect(jsonPath("$.result.windows[0].inputRecord").value("RECORDED"))
+				.andExpect(jsonPath("$.result.windows[0].sourceRecheck").value("NOT_PERFORMED"))
+				.andExpect(jsonPath("$.result.windows[1].attempts.length()").value(0))      // 기록 없음
+				.andExpect(jsonPath("$.result.windows[1].inputRecord").value("NO_HISTORY"))
+				.andExpect(jsonPath("$.result.windows[1].sourceRecheck").value("NOT_PERFORMED"))
+				.andExpect(jsonPath("$.result.windows[1].correctedAfter").value(true));
+		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", "other"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.windows.length()").value(0));
+		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", " "))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 판정_근거는_같은_창_같은_세대라도_job_별로_묶는다() throws Exception {
+		// WHY: job 정체성은 session·window·세대·trigger_schema_version 이라(uq_price_window_job_identity)
+		//      같은 window·세대에 job 이 둘일 수 있다. window·세대로 묶으면 뒤 job 의 실패·기록 부재가
+		//      앞 job 의 SUCCEEDED 뒤에 숨는다 — 두 job 은 두 행이어야 한다.
+		FakeMinuteStatusRepository minute = new FakeMinuteStatusRepository();
+		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
+		minute.judgments.put("sess-two", List.of(
+				new MinuteStatusRepository.PriceJudgmentRow("job-v1", w0, 1, 1, "SUCCEEDED", 1, "s3://lake/w0", "a".repeat(64),
+						1, 0, w0.plusSeconds(3), false, "test-policy", "set-1", "{\"fired\": []}", "{}", "{}", null, 2),
+				new MinuteStatusRepository.PriceJudgmentRow("job-v2", w0, 1, 1, "DEAD", 5, "s3://lake/w0", "a".repeat(64),
+						null, null, null, null, null, null, null, null, null, null, null)));
+		minuteMvc(minute).perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-two"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.windows.length()").value(2))
+				.andExpect(jsonPath("$.result.windows[0].jobId").value("job-v1"))
+				.andExpect(jsonPath("$.result.windows[0].jobStatus").value("SUCCEEDED"))
+				.andExpect(jsonPath("$.result.windows[0].attempts.length()").value(1))
+				.andExpect(jsonPath("$.result.windows[1].jobId").value("job-v2"))
+				.andExpect(jsonPath("$.result.windows[1].jobStatus").value("DEAD"))
+				.andExpect(jsonPath("$.result.windows[1].attempts.length()").value(0));
+	}
 
 	private MockMvc minuteMvc(FakeMinuteStatusRepository minute) {
 		return MockMvcBuilders

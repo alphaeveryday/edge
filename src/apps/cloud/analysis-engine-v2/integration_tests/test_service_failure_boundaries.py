@@ -7,10 +7,10 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 import pytest
 
-from edge_analysis_v2 import analysis_service
-from edge_analysis_v2.fixture_tools import make_fixture
-from edge_analysis_v2.tool_store import ToolStore
-from edge_analysis_v2.audited_execution import ToolExecutionError
+from edge_analysis_v2.analysis import service as analysis_service
+from edge_analysis_v2.tools.fixture_data import make_fixture
+from edge_analysis_v2.storage.tool_runs import ToolStore
+from edge_analysis_v2.tools.execution import ToolExecutionError
 
 
 @pytest.fixture

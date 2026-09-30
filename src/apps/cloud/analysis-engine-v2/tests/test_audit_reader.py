@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 from psycopg.pq import TransactionStatus
 
-from edge_analysis_v2.audit_reader import read_analysis_evidence
+from edge_analysis_v2.storage.inspection import read_analysis_evidence
 
 
 def test_unknown_kind_never_reaches_sql():

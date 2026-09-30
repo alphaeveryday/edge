@@ -1,7 +1,7 @@
 """Valuation uses released earnings and complete holdings, never subset averages."""
 import pytest
 
-from edge_analysis_v2.fixture_tools import FixtureTools
+from edge_analysis_v2.tools.fixture_data import FixtureTools
 
 
 def valuation_fixture():

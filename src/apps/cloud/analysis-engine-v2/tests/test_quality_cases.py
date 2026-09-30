@@ -2,9 +2,9 @@
 import json
 import pytest
 
-from edge_analysis_v2.fixture_tools import FixtureTools
-from edge_analysis_v2.quality_cases import CASES, make_quality_fixture
-from edge_analysis_v2.execution_dashboard import scenario_cutoff
+from edge_analysis_v2.tools.fixture_data import FixtureTools
+from edge_analysis_v2.quality.scenarios import CASES, make_quality_fixture
+from edge_analysis_v2.dashboard.jobs import scenario_cutoff
 
 
 def initial(name):

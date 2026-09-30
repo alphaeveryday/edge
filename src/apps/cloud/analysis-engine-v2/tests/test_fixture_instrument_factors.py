@@ -1,7 +1,7 @@
 """A common-factor view preserves scope, partial coverage and source time."""
 import pytest
 
-from edge_analysis_v2.fixture_tools import FixtureTools, make_fixture
+from edge_analysis_v2.tools.fixture_data import FixtureTools, make_fixture
 
 
 def read(fixture, instrument_id='091160', **kwargs):
@@ -103,7 +103,7 @@ def test_weighted_flow_uses_the_whole_portfolio_without_renormalizing():
     fixture = make_fixture()
     result = read(fixture, factors=['flow'])['flow']
     day = result['history']['rows'][-1][0]
-    from edge_analysis_v2.fixture_tools.common import holdings
+    from edge_analysis_v2.tools.fixture_data.common import holdings
     weights = holdings(fixture, day)['holdings']
     expected = sum(w['weight'] * next(r['net_amount_krw'] for r in fixture['flow']
         if r['date'] == day and r['instrument_id'] == w['instrument_id'] and r['investor'] == 'foreign')

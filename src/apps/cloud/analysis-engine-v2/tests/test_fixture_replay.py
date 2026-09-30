@@ -1,8 +1,8 @@
 """Replay advances visibility without rewriting previously observed market facts."""
 import pytest
-from edge_analysis_v2.factor_store import project_factor_metrics
+from edge_analysis_v2.storage.factors import project_factor_metrics
 
-from edge_analysis_v2.fixture_tools import FixtureTools, make_replay_fixture
+from edge_analysis_v2.tools.fixture_data import FixtureTools, make_replay_fixture
 
 
 def test_raw_history_and_article_identity_are_immutable_between_cutoffs():

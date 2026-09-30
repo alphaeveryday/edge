@@ -8,9 +8,9 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-from edge_analysis_v2.tool_store import ToolStore
-from edge_analysis_v2.audited_execution import AuditedExecution, ToolExecutionError
-from edge_analysis_v2.audit_reader import read_analysis_evidence
+from edge_analysis_v2.storage.tool_runs import ToolStore
+from edge_analysis_v2.tools.execution import AuditedExecution, ToolExecutionError
+from edge_analysis_v2.storage.inspection import read_analysis_evidence
 
 
 @pytest.fixture

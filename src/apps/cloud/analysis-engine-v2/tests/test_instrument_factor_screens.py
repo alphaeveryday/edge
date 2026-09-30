@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from edge_analysis_v2.factor_store import project_factor_metrics, _matches_calculation, prepare_metrics
-from edge_analysis_v2.fixture_tools import FixtureTools, make_fixture
+from edge_analysis_v2.storage.factors import project_factor_metrics, _matches_calculation, prepare_metrics
+from edge_analysis_v2.tools.fixture_data import FixtureTools, make_fixture
 
 
 def test_flat_factor_results_keep_card_values_times_and_run_reference():
@@ -39,7 +39,7 @@ def test_individual_or_partial_query_cannot_impersonate_whole_etf_cards():
 
 
 def test_development_mode_is_no_longer_an_execution_option(tmp_path):
-    from edge_analysis_v2.execution_dashboard import ExecutionDashboard
+    from edge_analysis_v2.dashboard.jobs import ExecutionDashboard
     manager = ExecutionDashboard(tmp_path, key='test', model='test', connection_factory=lambda: None)
     with pytest.raises(ValueError):
         manager.start({'kind': 'movement', 'scenario': 'baseline', 'tool_mode': 'cards'})

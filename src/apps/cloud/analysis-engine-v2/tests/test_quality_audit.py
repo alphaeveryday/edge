@@ -3,7 +3,7 @@ from contextlib import nullcontext
 
 import pytest
 
-from edge_analysis_v2 import quality_audit
+from edge_analysis_v2.quality import audit as quality_audit
 
 
 @pytest.fixture
