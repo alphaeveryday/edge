@@ -8,11 +8,37 @@ import time
 import pytest
 from jsonschema import ValidationError
 
-from edge_analysis_v2.model_runner import run_model, make_server
+from pathlib import Path
+
+from edge_analysis_v2.model_runner import run_model, make_server, load_prompt
 
 
 SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': False,
           'properties': {'summary': {'type': 'string'}}}
+
+
+@pytest.mark.parametrize('kind', ['movement', 'outlook'])
+def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_path, kind):
+    """Keep the reviewed instructions identical to the model and audit inputs."""
+    import edge_analysis_v2.model_runner as runner
+
+    prompt_path = Path(runner.__file__).with_name('prompts') / f'{kind}.yaml'
+    prompt = load_prompt(prompt_path)
+    captured = []
+    base = client_for(ResultMessage(structured_output={'summary': 'ok'}))
+
+    class Client(base):
+        def __init__(self, *, options):
+            super().__init__(options=options)
+            captured.append(options.system_prompt)
+
+    result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
+        call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path,
+        key='test-secret', model='deepseek-flash', client_factory=Client))
+
+    assert result == {'summary': 'ok'}
+    assert captured == [prompt]
+    assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == prompt
 
 
 @dataclass
