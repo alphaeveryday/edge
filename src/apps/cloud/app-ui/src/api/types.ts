@@ -83,22 +83,22 @@ export interface HeatCell {
   name: string;
   weight: number;
   changePct: number;
-  dir: Dir;
+  dir?: Dir;
 }
 
 export interface HoldingRow {
   name: string;
   weight: number;
-  dir: Dir;
-  desc: string;
+  dir?: Dir;
+  desc?: string;
 }
 
 export interface EtfDetailData {
-  insight: { dir: Dir; text: string };
+  insight?: { dir: Dir; text: string };
   stocks: HeatCell[];
-  themes: HeatCell[];
+  themes?: HeatCell[];
   holdings: HoldingRow[];
-  themeRows: HoldingRow[];
+  themeRows?: HoldingRow[];
   stockCount: number;
   info: { k: string; v: string }[];
   blurb: string;

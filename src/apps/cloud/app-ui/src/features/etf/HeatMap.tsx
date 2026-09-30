@@ -29,12 +29,12 @@ export function HeatMap({ cells, mode }: { cells: HeatCell[]; mode: Mode }) {
             {r.map((c) => {
               const big = c.weight >= 15;
               return (
-                <View key={c.name} style={[styles.cell, { flex: c.weight, backgroundColor: mode === 'temp' ? TEMP_BG[c.dir] : chgBg(c.changePct), padding: big ? 10 : 6 }]}>
+                <View key={c.name} style={[styles.cell, { flex: c.weight, backgroundColor: mode === 'temp' ? TEMP_BG[c.dir ?? 'neutral'] : chgBg(c.changePct), padding: big ? 10 : 6 }]}>
                   <Text numberOfLines={2} style={[styles.name, { fontSize: big ? 14 : 12 }]}>{c.name}</Text>
                   <Text style={[styles.num, { fontSize: big ? 20 : 15, color: mode === 'chg' ? (c.changePct < 0 ? colors.downDeep : colors.upDeep) : colors.text }]}>
                     {mode === 'temp' ? c.weight : (c.changePct > 0 ? '+' : '') + c.changePct.toFixed(1)}<Text style={styles.unit}>%</Text>
                   </Text>
-                  {mode === 'temp' && big && <Text style={[styles.tag, { backgroundColor: TEMP_TAG[c.dir] }]}>{dirLabel[c.dir]}</Text>}
+                  {mode === 'temp' && big && c.dir && <Text style={[styles.tag, { backgroundColor: TEMP_TAG[c.dir] }]}>{dirLabel[c.dir]}</Text>}
                 </View>
               );
             })}

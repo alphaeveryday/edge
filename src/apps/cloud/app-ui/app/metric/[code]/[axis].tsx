@@ -31,11 +31,13 @@ export default function MetricPage() {
             <Sticker signal={dirSignal[m.dir]} size={30} radius={11} label={m.axis} />
             <Text style={styles.verdict}>{m.verdict}</Text>
           </View>
-          <View style={styles.legend}>
-            <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.up }]} /><Text style={styles.legendText}>도움</Text></View>
-            <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.surface, borderWidth: 1, borderColor: '#D5DAE0' }]} /><Text style={styles.legendText}>중립</Text></View>
-            <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.down }]} /><Text style={styles.legendText}>부담</Text></View>
-          </View>
+          {m.tiles.some((t) => t.dir) && (
+            <View style={styles.legend}>
+              <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.up }]} /><Text style={styles.legendText}>도움</Text></View>
+              <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.surface, borderWidth: 1, borderColor: '#D5DAE0' }]} /><Text style={styles.legendText}>중립</Text></View>
+              <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.down }]} /><Text style={styles.legendText}>부담</Text></View>
+            </View>
+          )}
           <View style={styles.grid}>
             {m.tiles.map((t) => {
               const s = TILE[t.dir ?? 'none'];
