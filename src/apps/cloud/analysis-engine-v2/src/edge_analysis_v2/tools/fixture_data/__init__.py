@@ -15,6 +15,8 @@ class FixtureTools:
         fixture: Raw observations and a fixed context; copied at construction.
     """
 
+    data_source = "synthetic"
+
     final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_instrument_factors", "compare_financial_observations", "calculate_valuation_range"}
 
     def __init__(self, fixture):
@@ -100,4 +102,4 @@ class FixtureTools:
                              ["at", "price", "high", "low", "available_at"])}
         catalog = sorted({(r['instrument_id'],r['metric'],r['period']) for r in financial_observations.visible(self.fixture)})
         exploration = {'financial_observation_catalog':table([dict(zip(['instrument_id','metric','period'],r)) for r in catalog], ['instrument_id','metric','period'])} if 'financial_observations' in self.fixture else {}
-        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow.input_tables(rows), "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "eps_derivation", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
+        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture, require_complete=False), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow.input_tables(rows), "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "eps_derivation", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}

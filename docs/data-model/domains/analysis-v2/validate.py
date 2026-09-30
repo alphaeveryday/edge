@@ -24,7 +24,8 @@ def validate(path):
     columns = entities["tableColumnEntities"]
     ddl = "\n".join((ROOT / "src/libs/schema/migrations-cloud" / name).read_text(encoding="utf-8")
                     for name in ("V202609281600__create_v2_analysis_storage.sql",
-                                 "V202609282200__add_v2_factor_details.sql"))
+                                 "V202609282200__add_v2_factor_details.sql",
+                                 "V202609301400__isolate_analysis_source.sql"))
     expected, refs, uniques = {}, set(), set()
     for table, body in re.findall(r"CREATE TABLE (\w+) \((.*?)^\);", ddl, re.M | re.S):
         primary = re.search(r"PRIMARY KEY \(([^)]+)\)", body)
@@ -44,6 +45,9 @@ def validate(path):
             uniques.add((table, tuple(key.replace(" ", "").split(","))))
     for table, name, kind in re.findall(r"ALTER TABLE (\w+) ADD COLUMN (\w+) (\w+);", ddl):
         expected[f"{table}.{name}"] = (normalized_type(kind), False, False, "")
+
+    for table, name, kind, default in re.findall(r"ALTER TABLE (\w+)\s+ADD COLUMN (\w+) (TEXT) NOT NULL DEFAULT ('[^']*')", ddl):
+        expected[f"{table}.{name}"] = (normalized_type(kind.lower()), True, False, default)
 
     actual = {key: (normalized_type(col["dataType"]), bool(col["options"] & 8),
                     bool(col["options"] & 2), col["default"])
