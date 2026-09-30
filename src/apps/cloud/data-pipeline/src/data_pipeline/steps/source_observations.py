@@ -1120,7 +1120,9 @@ def collect_financial(storage: Storage, source, run_id: str, *, etf_ids: list[st
             raise StopFetch(f"DART {result.detail}")
     try:
         corp_map = source.corp_map()
-    except StopFetch as exc:
+    except Exception as exc:
+        # 키·한도(StopFetch)뿐 아니라 재시도 소진·파싱 실패도 수집 실패로 기록한다 — 예외가 새면 raw manifest 도
+        # collection_log 도 없어 품질 경로에서 안 보이고 재처리 입력도 없다.
         corp_map = {}
         objects.append(RawObject("dart", "market", "KR", "corpcode", "json", None, {"kind": "corp_map"}, "error",
                                  str(exc)[:200], datetime.now(timezone.utc).isoformat()))

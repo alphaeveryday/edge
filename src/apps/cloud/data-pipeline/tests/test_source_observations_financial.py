@@ -827,3 +827,19 @@ def test_non_string_report_names_reject_the_row_not_the_company():
     targets, rejects = dart_fundamental.plan_reports(rows, date(2025, 10, 1), date(2026, 8, 20))
     assert [r["reasons"] for r in rejects] == [["bad_report_nm"], ["bad_report_nm"]] and targets
     assert dart_fundamental.report_of(1) is None
+
+
+def test_corp_map_transport_failure_is_recorded_as_a_collection_error(tmp_path):
+    # WHY(봇 P2): corpCode.xml 재시도 소진(SafeFailureError)이 새면 raw manifest·collection_log 없이 죽는다.
+    from data_pipeline.sources.http import SafeFailureError
+
+    dart = DartFake([SAMSUNG], full_responses(SAMSUNG), {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+
+    def broken():
+        raise SafeFailureError("corpCode.xml retries exhausted")
+    dart.corp_map = broken
+    storage, code = chain(tmp_path, dart, holdings=("005930",))
+    assert code == 1
+    manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("financial_metric", "run_f")))
+    assert manifest["completed"] is True
+    assert [o["request"]["kind"] for o in manifest["objects"]] == ["corp_map"] and manifest["objects"][0]["status"] == "error"
