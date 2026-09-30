@@ -280,8 +280,15 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
 
 
 def _share_row(shares: dict | None, se: str) -> dict | None:
-    return next((r for r in (shares or {}).get("list", [])
-                 if isinstance(r, dict) and str(r.get("se") or "").strip() == se), None)
+    """주식 종류 한 행. 같은 종류 행이 둘 이상이고 수가 서로 다르면 어느 쪽도 고르지 않는다(첫 행 선택은 순서 운이다)."""
+    rows = [r for r in (shares or {}).get("list", [])
+            if isinstance(r, dict) and str(r.get("se") or "").strip() == se]
+    if not rows:
+        return None
+    keys = ("istc_totqy", "tesstk_co", "rcept_no", "stlm_dt")
+    if any(tuple(str(r.get(k)) for k in keys) != tuple(str(rows[0].get(k)) for k in keys) for r in rows[1:]):
+        return {"se": se, "conflict": True, "rcept_no": rows[0].get("rcept_no")}
+    return rows[0]
 
 
 def _share_count(row: dict | None, field: str) -> Decimal | None:
@@ -315,6 +322,10 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
         return []
     total, common, preferred = _share_row(shares, "합계"), _share_row(shares, "보통주"), _share_row(shares, "우선주")
+    if any(row is not None and row.get("conflict") for row in (total, common, preferred)):
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
+                        "detail": "duplicate_share_class_rows_disagree"})
+        return []
     for row in (total, common):
         if row is not None and not RCEPT_NO.fullmatch(str(row.get("rcept_no"))):
             # 분모 쪽 접수번호도 DB CHECK 대상이다 — 형식이 틀리면 그 실행의 적재 전체가 롤백된다.

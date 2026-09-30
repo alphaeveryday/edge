@@ -428,3 +428,17 @@ def test_treasury_above_issued_within_a_share_class_rejects_both_denominators():
     rows, rejects = _extract_bps(body)
     assert not [r for r in rows if r["metric"].startswith("bps")]
     assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+
+
+def test_conflicting_duplicate_share_class_rows_reject_instead_of_taking_the_first():
+    # WHY(리뷰 8차): 우선주 0주 행과 50주 행이 함께 오면 첫 행만 골라 정상 보통주 BPS 가 나갔다 — 순서가 판정을 갈랐다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012"))
+    extra = dict(next(r for r in body["list"] if r["se"] == "우선주"))
+    extra["istc_totqy"] = "50"
+    body["list"].append(extra)
+    rows, rejects = _extract_bps(body)
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+    body["list"][-1] = dict(next(r for r in body["list"] if r["se"] == "우선주"))   # 같은 내용의 중복은 허용
+    rows, _ = _extract_bps(body)
+    assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares", "bps"]

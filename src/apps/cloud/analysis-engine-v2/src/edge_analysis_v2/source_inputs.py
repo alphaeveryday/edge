@@ -58,8 +58,8 @@ def financial_inputs(conn, analysis_at, instrument_ids):
     Every visible quarter is returned as a row; a missing EPS or BPS stays ``None`` in the row
     **and** is listed in ``gaps`` with the reason (``bps_note`` PREFERRED_SHARES_PRESENT = the
     per-common-share BPS is deliberately blocked, a team decision; COMMON_SHARE_BPS_UNAVAILABLE /
-    BPS_ABSENT_IN_LATEST_VERSION = data defects in the newest version, never filled from an older
-    one; ``not_released`` = EPS itself missing). Dropping an incomplete latest quarter would let the
+    BPS_ABSENT_IN_LATEST_VERSION / EPS_ABSENT_IN_LATEST_VERSION = the newest version of that report
+    lacks the value; never filled from an older version). Dropping an incomplete latest quarter would let the
     valuation tool slide to the previous four quarters and report a stale ratio as current, so
     the hole is kept in place and ``valuation.calculate`` fails on it instead.
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can
@@ -80,7 +80,8 @@ def financial_inputs(conn, analysis_at, instrument_ids):
                 missing = [name for name, value in (("eps", eps), ("bps", bps)) if value is None]
                 if missing:
                     gaps.append({"instrument_id": instrument_id, "period": period, "missing": missing,
-                                 "reason": note or "not_released", "bps_total_shares": _num(bps_total)})
+                                 "reason": "EPS_ABSENT_IN_LATEST_VERSION" if eps is None else note,
+                                 "bps_total_shares": _num(bps_total)})
                 rows.append({"instrument_id": instrument_id, "period": period, "eps": _num(eps), "bps": _num(bps),
                              "available_at": _iso(available_at), "fs_basis": basis,
                              "eps_derivation": eps_derivation,

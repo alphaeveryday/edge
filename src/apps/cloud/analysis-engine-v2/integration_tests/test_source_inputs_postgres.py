@@ -250,7 +250,10 @@ def test_a_newer_annual_report_run_without_q4_rows_invalidates_the_old_q4(db):
     try:
         db.execute("SET ROLE edge_analysis_v2_writer")
         rows, gaps = financial_inputs(db, datetime(2026, 12, 20, tzinfo=KST), ["TST001"])
-        assert "2025-Q4" not in [r["period"] for r in rows]   # FY rows are never returned; the old Q4 is gone with them
+        q4 = next(r for r in rows if r["period"] == "2025-Q4")   # the quarter stays as a hole, evidenced by the FY run
+        assert q4["eps"] is None and q4["bps"] is None and q4["evidence"]["raw_run_ids"] == [run_v4]
+        assert {"instrument_id": "TST001", "period": "2025-Q4", "missing": ["eps", "bps"],
+                "reason": "EPS_ABSENT_IN_LATEST_VERSION", "bps_total_shares": None} in gaps
         rows, _ = financial_inputs(db, datetime(2026, 9, 10, tzinfo=KST), ["TST001"])
         assert [r["period"] for r in rows] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"]
     finally:
