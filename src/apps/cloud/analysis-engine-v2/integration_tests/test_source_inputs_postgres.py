@@ -379,3 +379,28 @@ def test_share_count_failure_is_unconfirmed_not_a_confirmed_absence(db):
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_metric WHERE raw_run_id LIKE '%-v8'")
         db.execute("DELETE FROM financial_report_version WHERE raw_run_id LIKE '%-v8'")
+
+
+def test_a_report_that_was_only_ever_attempted_shows_as_unconfirmed(db):
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_report_version
+        SELECT corp_code, instrument_code, 2026, '11014', 'Q3', fs_basis, 'UNCONFIRMED', NULL, NULL, '[]'::jsonb, '[]'::jsonb,
+               jsonb_build_object('statement', 'error', 'statement_detail', 'http_502'), '2026-11-20 00:00+09',
+               '2026-11-20 00:00+09', 'received', raw_run_id || '-v9', raw_key, raw_sha256, canonical_run_id, artifact_key,
+               artifact_sha256, now()
+        FROM financial_report_version WHERE instrument_code = 'TST001' AND report_period = 'Q2' AND raw_run_id NOT LIKE '%-v%'""")
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        rows, gaps = financial_inputs(db, datetime(2026, 11, 21, tzinfo=KST), ["TST001"])
+        q3 = next(r for r in rows if r["period"] == "2026-Q3")
+        assert q3["eps"] is None and q3["version"]["status"] == "UNCONFIRMED" and q3["version"]["raw_run_id"].endswith("-v9")
+        assert next(g for g in gaps if g["period"] == "2026-Q3")["reasons"] == {"eps": "REPORT_UNCONFIRMED", "bps": "REPORT_UNCONFIRMED"}
+        fixture = {"context": {"etf_code": "T", "analysis_at": "2026-11-21T10:00:00+09:00"},
+                   "holdings": [{"instrument_id": "TST001", "weight": "1", "as_of_date": "2026-11-20", "available_at": "2026-11-20T18:00:00+09:00"}],
+                   "prices": [{"instrument_id": "TST001", "date": "2026-11-20", "close": "68000", "available_at": "2026-11-20T16:00:00+09:00"}],
+                   "financials": rows}
+        with pytest.raises(ValueError):          # the failed attempt blocks the ratio; no slide to the older four quarters
+            valuation.calculate(fixture, "TST001")
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_report_version WHERE raw_run_id LIKE '%-v9'")

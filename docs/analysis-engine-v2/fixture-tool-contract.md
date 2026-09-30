@@ -92,7 +92,7 @@
 | `get_factor_metrics` | `type`: 차트/매크로/밸류/수급 | `{type, metrics:[{key,value,observed_at,subject?}]}` |
 
 - 세 도구 모두 최종 근거 가능. 요인 상태·스티커는 반환하지 않음.
-- `financials`: instrument_id,period(YYYY-Qn),eps,bps,available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화.
+- `financials`: instrument_id,period(YYYY-Qn),eps,bps,eps_derivation(선택),available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화. 초기 입력 표도 `eps_derivation` 열을 싣는다(원자료에 없으면 null).
 - 최근 공개된 연속4분기 EPS 합으로 PER, 최신 공개 분기 BPS로 PBR. 동일 분기 여러 공개본이면 분석시각 이전 최신본을 사용.
 - 양수 TTM EPS·BPS, 완전한 주식 구성비중 합1만 계산. 미확정 손실·현금·누락 정책을 중립값이나 재정규화로 숨기지 않음.
 - `financials` 행의 `eps_derivation`(선택, 원천 DB 어댑터가 싣는다)이 `FY_MINUS_9M`이면 그 분기 EPS는 근사다. `calculate_valuation`은 `derived_periods`·`approximate`, `calculate_weighted_valuation`은 `approximate`·`derived_constituents`·`coverage{constituents,weight}`를 함께 반환한다. 근사 표시를 실을 수 없는 `get_factor_metrics` 밸류 카드는 유도 분기가 포함되면 `weighted_per`를 내지 않는다(`weighted_pbr`만). 공개된 분기에 EPS나 BPS가 `null`이면(우선주 회사의 보통주 BPS 차단, 분모 응답 미확정) 오류 — 앞 분기로 창을 옮기지 않는다. 구성종목 하나라도 계산 불가면 가중 PER·PBR 전체가 없다(부분 커버리지 값 없음).

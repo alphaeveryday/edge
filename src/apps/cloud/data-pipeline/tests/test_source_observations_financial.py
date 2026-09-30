@@ -552,3 +552,24 @@ def test_companion_artifact_is_required_at_load_time(tmp_path):
     storage.put_bytes(key, json.dumps(manifest).encode())
     with pytest.raises(ValueError, match="companion"):
         so._companion_params(storage, so.FINANCIAL, manifest, "run_fn")
+
+
+def test_malformed_rows_and_rejected_share_responses_are_not_confirmed(tmp_path):
+    # WHY(리뷰 14차): 파손 행이 섞인 재무제표를 남은 행으로 정제하면 "확인했는데 지표 없음"이 되어 정상 확정값을 NULL 로
+    # 갈아치운다. 정제가 거부한 분모 응답(다른 회사 응답)을 ok 로 적으면 분모 부재가 "확정된 부재"로 읽힌다.
+    responses = full_responses(SAMSUNG)
+    body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    body["list"].append(42)
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = json.dumps(body).encode()
+    other = json.loads(shares(SAMSUNG, "2026", "11013"))
+    for row in other["list"]:
+        row["corp_code"] = "00000009"          # 다른 회사의 주식총수 응답이 온 경우
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11013")] = json.dumps(other).encode()
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    _, versions = _versions(storage)
+    assert versions[(2026, "11012", "CFS")]["status"] == "UNCONFIRMED"
+    assert json.loads(versions[(2026, "11012", "CFS")]["detail"])["statement_detail"] == "malformed_list_row"
+    q1 = json.loads(versions[(2026, "11013", "CFS")]["detail"])
+    assert q1["shares"] == "error" and q1["shares_detail"] == "response_identity_mismatch"

@@ -62,7 +62,9 @@ def financial_inputs(conn, analysis_at, instrument_ids):
     EPS_ABSENT_IN_LATEST_VERSION = the confirmed version lacks the value; BPS_UNCONFIRMED = the
     share-count response failed, so absence is not confirmed). ``version`` carries which run the
     values come from and ``latest_unconfirmed_at`` when a later check failed — the caller sees it
-    is reading an older confirmed version, and nothing is filled from older versions. Dropping an incomplete latest quarter would let the
+    is reading an older confirmed version, and nothing is filled from older versions. A report that
+    was never confirmed but was attempted appears as an all-``None`` row with
+    ``version.status == "UNCONFIRMED"`` (gap reason REPORT_UNCONFIRMED). Dropping an incomplete latest quarter would let the
     valuation tool slide to the previous four quarters and report a stale ratio as current, so
     the hole is kept in place and ``valuation.calculate`` fails on it instead.
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can
@@ -74,18 +76,21 @@ def financial_inputs(conn, analysis_at, instrument_ids):
             cur.execute(
                 "SELECT period, eps, eps_derivation, bps, bps_total_shares, bps_note, fs_basis, available_at,"
                 " rcept_nos, raw_run_ids, version_raw_run_id, version_received_at, version_rejected, shares_status,"
-                " latest_unconfirmed_at FROM financial_quarters_as_of(%s, %s) ORDER BY period",
+                " latest_unconfirmed_at, version_status FROM financial_quarters_as_of(%s, %s) ORDER BY period",
                 (analysis_at, instrument_id))
             found = cur.fetchall()
             if not found:
                 gaps.append({"instrument_id": instrument_id, "period": None, "missing": ["all"],
                              "reasons": {"all": "no_release_visible"}})
             for (period, eps, eps_derivation, bps, bps_total, note, basis, available_at, rcept_nos, run_ids,
-                 version_run, version_received, rejected, shares_status, unconfirmed_at) in found:
-                version = {"raw_run_id": version_run, "received_at": _iso(version_received),
+                 version_run, version_received, rejected, shares_status, unconfirmed_at, status) in found:
+                version = {"status": status, "raw_run_id": version_run, "received_at": _iso(version_received),
                            "latest_unconfirmed_at": _iso(unconfirmed_at), "shares_status": shares_status}
-                reasons = {name: reason for name, value, reason in (("eps", eps, "EPS_ABSENT_IN_LATEST_VERSION"),
-                                                                     ("bps", bps, note)) if value is None}
+                if status == "UNCONFIRMED":   # a report never confirmed: only failed attempts exist
+                    reasons = {"eps": "REPORT_UNCONFIRMED", "bps": "REPORT_UNCONFIRMED"}
+                else:
+                    reasons = {name: reason for name, value, reason in (("eps", eps, "EPS_ABSENT_IN_LATEST_VERSION"),
+                                                                         ("bps", bps, note)) if value is None}
                 if reasons:   # one reason per missing metric — a policy block on BPS must survive an EPS gap
                     gaps.append({"instrument_id": instrument_id, "period": period, "missing": sorted(reasons),
                                  "reasons": reasons, "bps_total_shares": _num(bps_total),

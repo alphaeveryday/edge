@@ -390,3 +390,46 @@ def test_interrupted_load_recovers_both_tables_and_duplicates_do_not_multiply(tm
     assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}i_load2", input_run_id=f"{RUN}i_norm2", pending=False,
                    producer="load_financial_metric") == 0
     assert (count("financial_metric"), count("financial_report_version")) == (metrics, versions)
+
+
+def test_consolidated_basis_survives_empty_latest_cfs_and_never_confirmed_reports_show_as_attempts(tmp_path, conn):
+    """연결 이력이 있는 회사의 최신 CFS 판본이 전부 비어도 별도 값으로 갈아타지 않는다. 확정이 한 번도 없는 보고서는
+    UNCONFIRMED 시도 행으로 보인다."""
+    from source_observation_fakes import SAMSUNG, statement
+
+    corp = SAMSUNG["corp_code"]
+    now = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+    _financial_run(tmp_path, "h", _samsung_responses(), "2026-08-20T00:00:00+00:00",
+                   from_date="2025-10-01", to_date="2026-08-20", now=now)
+    empty_cfs = _samsung_responses()
+    for (kind, c, year, code, *fs) in list(empty_cfs):
+        if kind == "statement" and fs == ["CFS"]:
+            body = json.loads(statement(SAMSUNG, year, code, "CFS"))
+            for line in body["list"]:
+                line["account_id"] = "x_unknown"
+            empty_cfs[(kind, c, year, code, "CFS")] = json.dumps(body).encode()
+    _financial_run(tmp_path, "h2", empty_cfs, "2026-09-20T00:00:00+00:00",
+                   from_date="2025-10-01", to_date="2026-09-20", now=datetime(2026, 9, 20, 1, 0, tzinfo=timezone.utc))
+    rows = conn.execute("SELECT period, fs_basis, eps::text, version_status FROM financial_quarters_as_of(%s, %s)",
+                        (datetime(2026, 9, 21, tzinfo=KST), "005930")).fetchall()
+    assert rows and {basis for _, basis, *_ in rows} == {"CFS"}                # OFS 값으로 갈아타지 않는다
+    assert all(eps is None and status == "CONFIRMED" for _, _, eps, status in rows)
+
+    # 확정이 한 번도 없는 보고서: 다른 회사(하이닉스)의 반기 CFS 만 HTTP 파손, OFS 는 013 → CFS UNCONFIRMED·OFS 빈 확정
+    from source_observation_fakes import HYNIX, DartFake, filing_list, write_holdings
+    from data_pipeline.lake import LocalStorage
+    from data_pipeline.steps import source_observations as so
+    dart = DartFake([HYNIX], {("statement", HYNIX["corp_code"], "2026", "11012", "CFS"): b"<html>502</html>"},
+                    {HYNIX["corp_code"]: filing_list(HYNIX)})
+    dart.fetched_at = "2026-09-22T00:00:00+00:00"
+    storage = LocalStorage(tmp_path / "hx")
+    write_holdings(storage, "2026-08-14", ["000660"])
+    so.collect_financial(storage, dart, f"{RUN}hx_raw", etf_ids=["091160"], from_date="2026-08-01", to_date="2026-09-22",
+                         now=datetime(2026, 9, 22, 1, 0, tzinfo=timezone.utc))
+    so.normalize(storage, so.FINANCIAL, f"{RUN}hx_norm", f"{RUN}hx_raw", producer="normalize_financial_metric")
+    assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}hx_load", input_run_id=f"{RUN}hx_norm", pending=False,
+                   producer="load_financial_metric") == 0
+    hynix = conn.execute("SELECT period, fs_basis, eps::text, version_status, latest_unconfirmed_at FROM"
+                         " financial_quarters_as_of(%s, %s)", (datetime(2026, 9, 23, tzinfo=KST), "000660")).fetchall()
+    # 연결 지표 이력이 없으니 기준은 OFS — OFS 는 013(빈 확정), CFS 시도 실패는 기준 밖이라 행이 없다
+    assert [(p, b, e, s) for p, b, e, s, _ in hynix] == [("2026-Q2", "OFS", None, "CONFIRMED")]

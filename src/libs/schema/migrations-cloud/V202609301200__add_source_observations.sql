@@ -261,7 +261,7 @@ RETURNS TABLE (
     revenue NUMERIC, revenue_derivation TEXT, operating_income NUMERIC, operating_income_derivation TEXT,
     available_at TIMESTAMPTZ, rcept_nos TEXT[], raw_run_ids TEXT[],
     version_raw_run_id TEXT, version_received_at TIMESTAMPTZ, version_rejected JSONB, shares_status TEXT,
-    latest_unconfirmed_at TIMESTAMPTZ)
+    latest_unconfirmed_at TIMESTAMPTZ, version_status TEXT)
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
     IF p_analysis_at IS NULL OR p_instrument_code IS NULL THEN
@@ -279,13 +279,24 @@ BEGIN
         FROM versions v WHERE v.status = 'CONFIRMED'
         ORDER BY v.corp_code, v.fiscal_year, v.report_period, v.fs_basis, v.received_at DESC, v.raw_run_id DESC
     ), basis AS (
-        -- 연결 우선. 그 시점까지 지표가 있는 연결 판본이 한 번도 없던 회사만 별도(2026-09-30 결정).
-        -- 빈 연결 판본(013 = 연결 재무제표 없음)은 연결이 있다는 증거가 아니다.
-        SELECT CASE WHEN bool_or(c.fs_basis = 'CFS' AND jsonb_array_length(c.metrics) > 0) THEN 'CFS' ELSE 'OFS' END
-               AS fs_basis
-        FROM confirmed c
+        -- 연결 우선. 그 시점까지 지표가 있는 연결 판본이 **한 번이라도** 있던 회사는 연결(2026-09-30 결정) — 최신 판본이
+        -- 비어도 이력이 기준을 정한다(빈 최신 CFS 가 별도 값으로 갈아타지 않게). 빈 연결 판본(013)만 있으면 연결 증거가 아니다.
+        SELECT CASE WHEN bool_or(v.status = 'CONFIRMED' AND v.fs_basis = 'CFS' AND jsonb_array_length(v.metrics) > 0)
+                    THEN 'CFS' ELSE 'OFS' END AS fs_basis
+        FROM versions v
+    ), attempted AS (
+        -- 확정 판본이 한 번도 없는 보고서: 확정 못 한 시도(UNCONFIRMED)만 있어도 소비자가 "확인 시도가 실패했다"를
+        -- 보게 가장 늦은 시도를 행으로 낸다(값은 전부 NULL). 시도 자체가 없으면 행이 없다.
+        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.report_period, v.fs_basis) v.*
+        FROM versions v
+        WHERE v.status = 'UNCONFIRMED' AND NOT EXISTS (
+            SELECT 1 FROM confirmed c WHERE c.corp_code = v.corp_code AND c.fiscal_year = v.fiscal_year
+              AND c.report_period = v.report_period AND c.fs_basis = v.fs_basis)
+        ORDER BY v.corp_code, v.fiscal_year, v.report_period, v.fs_basis, v.received_at DESC, v.raw_run_id DESC
     ), chosen AS (
         SELECT c.* FROM confirmed c JOIN basis b ON b.fs_basis = c.fs_basis
+        UNION ALL
+        SELECT a.* FROM attempted a JOIN basis b ON b.fs_basis = a.fs_basis
     ), metric AS (
         SELECT f.*, CASE WHEN f.fiscal_period = 'FY' THEN 'Q4' ELSE f.fiscal_period END AS report_period
         FROM financial_metric f
@@ -322,19 +333,21 @@ BEGIN
            array_agg(DISTINCT m.raw_run_id ORDER BY m.raw_run_id) FILTER (WHERE m.raw_run_id IS NOT NULL),
            c.raw_run_id, c.received_at, c.rejected, c.detail->>'shares',
            -- 확정 판본 뒤에 확정 못 한 확인이 있었으면 그 시각 — 옛 값을 주고 있음을 소비자가 안다.
+           -- 확정이 한 번도 없는 보고서(status=UNCONFIRMED 행)는 그 시도 자체의 시각.
            (SELECT max(u.received_at) FROM versions u
              WHERE u.status = 'UNCONFIRMED' AND u.corp_code = c.corp_code AND u.fiscal_year = c.fiscal_year
-               AND u.report_period = c.report_period AND u.fs_basis = c.fs_basis AND u.received_at > c.received_at)
+               AND u.report_period = c.report_period AND u.fs_basis = c.fs_basis AND u.received_at >= c.received_at),
+           c.status
     FROM chosen c
     LEFT JOIN metric m ON m.corp_code = c.corp_code AND m.fiscal_year = c.fiscal_year
                        AND m.report_period = c.report_period AND m.fs_basis = c.fs_basis AND m.raw_run_id = c.raw_run_id
     GROUP BY c.corp_code, c.fiscal_year, c.report_period, c.fs_basis, c.raw_run_id, c.received_at, c.available_at,
-             c.rejected, c.detail
+             c.rejected, c.detail, c.status
     ORDER BY c.fiscal_year, c.report_period;
 END $$;
 
 COMMENT ON FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) IS
-'기준시각에 보였던 분기 재무. 행 단위는 **확정 보고서 판본**(financial_report_version, 보고서마다 가장 늦게 받은 CONFIRMED) — 그 실행이 만든 지표만 값이 있고 빠진 지표는 NULL(옛 판본 값으로 채우지 않는다). 확정 못 한 뒤 실행은 latest_unconfirmed_at 으로만 드러난다. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도, *_derivation), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행. bps_note: PREFERRED_SHARES_PRESENT=정책 차단(팀 결정 대상) · COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수 파손 · BPS_ABSENT_IN_LATEST_VERSION=분모 응답은 정상인데 BPS 없음 · BPS_UNCONFIRMED=분모 응답 실패(재수집 대상). version_rejected 에 그 판본이 못 만든 지표와 사유가 있다.';
+'기준시각에 보였던 분기 재무. 행 단위는 **확정 보고서 판본**(financial_report_version, 보고서마다 가장 늦게 받은 CONFIRMED) — 그 실행이 만든 지표만 값이 있고 빠진 지표는 NULL(옛 판본 값으로 채우지 않는다). 확정 못 한 뒤 실행은 latest_unconfirmed_at 으로만 드러난다. 확정이 한 번도 없는 보고서는 가장 늦은 UNCONFIRMED 시도가 값 NULL·version_status=UNCONFIRMED 행으로 나온다(시도가 없으면 행 없음). EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도, *_derivation), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행. bps_note: PREFERRED_SHARES_PRESENT=정책 차단(팀 결정 대상) · COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수 파손 · BPS_ABSENT_IN_LATEST_VERSION=분모 응답은 정상인데 BPS 없음 · BPS_UNCONFIRMED=분모 응답 실패(재수집 대상). version_rejected 에 그 판본이 못 만든 지표와 사유가 있다.';
 
 CREATE FUNCTION sector_classification_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_codes TEXT[])
 RETURNS TABLE (

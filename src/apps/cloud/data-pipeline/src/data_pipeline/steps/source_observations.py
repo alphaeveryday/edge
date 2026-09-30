@@ -820,11 +820,20 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                 "raw_key": entry.get("key") or manifest_key,
                 "raw_sha256": entry.get("sha256") or raw_manifest["manifest_sha256"]}
 
+    share_rejects: dict[tuple, str] = {}
+
     def unconfirmed(target: tuple, reason: str) -> None:
         """이 실행이 그 보고서를 확정하지 못했다고 표시한다(응답 파손·다른 보고서 응답·추출 실패)."""
         if target in versions:
             versions[target]["status"] = "UNCONFIRMED"
             versions[target]["detail"]["statement_detail"] = reason
+
+    def reject_response(kind: str, target: tuple, reason: str) -> None:
+        """응답 하나를 정제가 거부했다 — 재무제표면 판본 미확정, 주식총수면 분모 미확정으로 남긴다."""
+        if kind == "statement":
+            unconfirmed(target, reason)
+        elif kind == "shares":
+            share_rejects[target[:3]] = reason
 
     for obj in objects:
         request = obj["request"]
@@ -834,12 +843,13 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         items = body.get("list") if isinstance(body, dict) else None
         if not isinstance(items, list):
             rejects.append({"raw_key": obj["key"], "reasons": ["unexpected_shape"]})
-            if kind == "statement":
-                unconfirmed(target, "unexpected_shape")
+            reject_response(kind, target, "unexpected_shape")
             continue
         malformed = sum(1 for item in items if not isinstance(item, dict))
         if malformed:
             rejects.append({"raw_key": obj["key"], "reasons": ["malformed_list_row"], "rows": malformed})
+            # 파손 행이 섞인 응답은 확인된 응답이 아니다 — 남은 행으로 만든 결과를 "확정된 부재"로 두지 않는다.
+            reject_response(kind, target, "malformed_list_row")
         items = [item for item in items if isinstance(item, dict)]
         if kind == "list":
             for item in items:
@@ -861,8 +871,7 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                for ln in items):
             rejects.append({**{k: request.get(k) for k in ("corp_code", "bsns_year", "reprt_code")},
                             "raw_key": obj["key"], "reasons": ["response_identity_mismatch"]})
-            if kind == "statement":
-                unconfirmed(target, "response_identity_mismatch")
+            reject_response(kind, target, "response_identity_mismatch")
             continue
         target = (request["corp_code"], request["bsns_year"], request["reprt_code"])
         if kind == "statement":
@@ -893,8 +902,11 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         version = versions.get((corp_code, year, code, fs_div))
         if version is not None:
             share_entry = share_entries.get((corp_code, year, code))
-            version["detail"].update({"shares": share_entry["status"] if share_entry else "missing",
-                                      "shares_detail": share_entry.get("detail") if share_entry else None})
+            rejected = share_rejects.get((corp_code, year, code))
+            # 수집은 ok 였어도 정제가 거부한 분모 응답은 "확인된 응답"이 아니다 — 분모 부재를 확정으로 읽지 않게.
+            version["detail"].update({
+                "shares": "error" if rejected else (share_entry["status"] if share_entry else "missing"),
+                "shares_detail": rejected or (share_entry.get("detail") if share_entry else None)})
             if share is not None:
                 # 분모 응답을 쓴 판본의 수신시각은 두 응답 중 늦은 쪽 — bps 행과 같은 규칙.
                 version["received_at"] = max(version["received_at"], share["fetched_at"])
