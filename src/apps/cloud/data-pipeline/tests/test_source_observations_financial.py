@@ -404,3 +404,14 @@ def test_treasury_share_rows_must_also_reconcile_and_damage_is_not_a_policy_bloc
     _, rejects = _extract_bps(missing)
     assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
     assert not any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+
+
+def test_preferred_treasury_damage_also_blocks_common_bps():
+    # WHY(리뷰 6차): 우선주 자기주식이 결측·음수면 종류별 대조를 건너뛰고 보통주 BPS 가 정상으로 나갔다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    for r in body["list"]:
+        if r["se"] == "우선주":
+            r["tesstk_co"] = "-5"
+    rows, rejects = _extract_bps(body)
+    assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
+    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)

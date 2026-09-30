@@ -227,17 +227,22 @@ BEGIN
         -- 연결 우선. 그 시점까지 연결 재무제표가 한 번도 보이지 않은 회사만 별도(2026-09-30 결정).
         -- 한 회사 안에서 분기마다 기준을 바꾸지 않는다.
         SELECT CASE WHEN bool_or(v.fs_basis = 'CFS') THEN 'CFS' ELSE 'OFS' END AS fs_basis FROM visible v
+    ), latest AS (
+        -- 한 보고서(회사·연도·기간·기준)의 지표는 한 실행이 통째로 만든다. 판본 선택을 지표별로 두면 새 실행이
+        -- 어떤 지표를 "만들지 않은" 결정(우선주 확인·주식수 파손·계정 줄 모호)을 옛 실행의 값이 덮는다.
+        -- 그래서 그 보고서의 가장 늦게 보인 실행 하나를 고르고, 그 실행이 만든 지표만 돌려준다 — 빠진 지표는 NULL.
+        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.fiscal_period, v.fs_basis)
+               v.corp_code, v.fiscal_year, v.fiscal_period, v.fs_basis, v.raw_run_id
+        FROM visible v
+        ORDER BY v.corp_code, v.fiscal_year, v.fiscal_period, v.fs_basis,
+                 v.available_at DESC, v.received_at DESC, v.raw_run_id DESC
     ), picked AS (
         SELECT v.* FROM visible v JOIN basis b ON b.fs_basis = v.fs_basis
+        JOIN latest l ON l.corp_code = v.corp_code AND l.fiscal_year = v.fiscal_year
+                     AND l.fiscal_period = v.fiscal_period AND l.fs_basis = v.fs_basis AND l.raw_run_id = v.raw_run_id
         WHERE v.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
           AND ((v.metric IN ('eps_basic', 'revenue', 'operating_income') AND v.period_kind = 'QUARTER')
-               OR v.metric = 'bps_total_shares'
-               -- bps 는 판본마다 "만들지 않는다"는 결정이 있을 수 있다(우선주 확인·주식수 파손). 판본 선택이 지표별이라
-               -- 옛 판본의 bps 가 새 판본의 차단을 덮지 않게, 같은 실행이 만든 bps_total_shares 가 선택된 경우만 쓴다.
-               OR (v.metric = 'bps' AND EXISTS (
-                     SELECT 1 FROM visible t
-                     WHERE t.metric = 'bps_total_shares' AND t.corp_code = v.corp_code AND t.fiscal_year = v.fiscal_year
-                       AND t.fiscal_period = v.fiscal_period AND t.fs_basis = v.fs_basis AND t.raw_run_id = v.raw_run_id)))
+               OR v.metric IN ('bps', 'bps_total_shares'))
     )
     SELECT p_instrument_code, min(p.corp_code), p.fiscal_year,
            p.fiscal_year::text || '-' || p.fiscal_period, min(p.period_end), min(p.fs_basis),
@@ -245,11 +250,13 @@ BEGIN
            max(p.derivation) FILTER (WHERE p.metric = 'eps_basic'),
            max(p.value) FILTER (WHERE p.metric = 'bps'),
            max(p.value) FILTER (WHERE p.metric = 'bps_total_shares'),
-           -- bps 가 비고 통상 BPS 만 있는 회사: 우선주가 있어서(§10.9 팀 결정 전 사용 금지)인지, 종류별 주식수를
-           -- 못 읽어서(응답 파손·보통주 0)인지 inputs 의 우선주 발행수로 가른다 — 파손을 정책으로 설명하지 않는다.
-           CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps') IS NULL
-                 AND max(p.value) FILTER (WHERE p.metric = 'bps_total_shares') IS NOT NULL
-                THEN CASE WHEN bool_or(EXISTS (
+           -- bps 가 빈 이유를 가른다: 통상 BPS 만 있으면 우선주가 있어서(§10.9 팀 결정 전 사용 금지)인지 종류별 주식수를
+           -- 못 읽어서(응답 파손)인지 inputs 의 우선주 발행수로, 둘 다 없으면 최신 판본이 BPS 를 못 만든 것(재수집 대상).
+           -- 어느 쪽도 옛 판본의 값으로 채우지 않는다.
+           CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps') IS NULL THEN
+                CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps_total_shares') IS NULL
+                     THEN 'BPS_ABSENT_IN_LATEST_VERSION'
+                     WHEN bool_or(EXISTS (
                               SELECT 1 FROM jsonb_array_elements(p.inputs) i
                               WHERE (i->>'preferred_istc_totqy') ~ '^[0-9]+$'
                                 AND (i->>'preferred_istc_totqy')::numeric > 0))
@@ -268,7 +275,7 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) IS
-'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=그 시점에 미공개·미수집, bps_note: PREFERRED_SHARES_PRESENT=우선주가 있어 보통주 기준 BPS 를 만들지 않은 회사(팀 결정 대상), COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수를 못 읽어 못 만든 판본(데이터 결함).';
+'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=그 시점에 미공개·미수집, 한 보고서의 지표는 가장 늦게 보인 실행 하나에서만 온다(옛 실행 값으로 빈 지표를 채우지 않는다). bps_note: PREFERRED_SHARES_PRESENT=우선주가 있어 보통주 기준 BPS 를 만들지 않은 회사(팀 결정 대상), COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수를 못 읽어 못 만든 판본, BPS_ABSENT_IN_LATEST_VERSION=최신 판본에 BPS 가 아예 없음(둘 다 데이터 결함·재수집 대상).';
 
 CREATE FUNCTION sector_classification_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_codes TEXT[])
 RETURNS TABLE (

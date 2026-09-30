@@ -57,8 +57,9 @@ def financial_inputs(conn, analysis_at, instrument_ids):
 
     Every visible quarter is returned as a row; a missing EPS or BPS stays ``None`` in the row
     **and** is listed in ``gaps`` with the reason (``bps_note`` PREFERRED_SHARES_PRESENT = the
-    per-common-share BPS is deliberately blocked, a team decision; COMMON_SHARE_BPS_UNAVAILABLE =
-    share rows unreadable, a data defect). Dropping an incomplete latest quarter would let the
+    per-common-share BPS is deliberately blocked, a team decision; COMMON_SHARE_BPS_UNAVAILABLE /
+    BPS_ABSENT_IN_LATEST_VERSION = data defects in the newest version, never filled from an older
+    one; ``not_released`` = EPS itself missing). Dropping an incomplete latest quarter would let the
     valuation tool slide to the previous four quarters and report a stale ratio as current, so
     the hole is kept in place and ``valuation.calculate`` fails on it instead.
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can

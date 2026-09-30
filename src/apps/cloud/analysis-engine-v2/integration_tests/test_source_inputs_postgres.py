@@ -143,8 +143,8 @@ def test_incomplete_latest_quarter_blocks_instead_of_sliding_to_older_quarters(d
     db.execute("SET ROLE edge_analysis_v2_writer")
     rows, gaps = financial_inputs(db, datetime(2026, 11, 20, tzinfo=KST), ["TST001"])
     assert rows[-1]["period"] == "2026-Q3" and rows[-1]["bps"] is None
-    assert gaps == [{"instrument_id": "TST001", "period": "2026-Q3", "missing": ["bps"], "reason": "not_released",
-                     "bps_total_shares": None}]
+    assert gaps == [{"instrument_id": "TST001", "period": "2026-Q3", "missing": ["bps"],
+                     "reason": "BPS_ABSENT_IN_LATEST_VERSION", "bps_total_shares": None}]
     fixture = {"context": {"etf_code": "T", "analysis_at": "2026-11-20T10:00:00+09:00"},
                "holdings": [{"instrument_id": "TST001", "weight": "1", "as_of_date": "2026-11-19", "available_at": "2026-11-19T18:00:00+09:00"}],
                "prices": [{"instrument_id": "TST001", "date": "2026-11-19", "close": "68000", "available_at": "2026-11-19T16:00:00+09:00"}],
@@ -187,10 +187,12 @@ def test_a_later_version_that_blocks_bps_is_not_overridden_by_an_older_bps(db):
         period_kind, fs_basis, derivation, value, unit, formula, inputs, rcept_no, rcept_date, received_at, available_at,
         availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
         SELECT corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric, period_kind, fs_basis,
-        derivation, 48000, unit, formula, '[{"se": "합계", "preferred_istc_totqy": "100"}]'::jsonb,
+        derivation, CASE metric WHEN 'bps_total_shares' THEN 48000 ELSE value END, unit, formula,
+        CASE metric WHEN 'bps_total_shares' THEN '[{"se": "합계", "preferred_istc_totqy": "100"}]'::jsonb ELSE inputs END,
         '20260930000001', '2026-09-30', received_at + interval '30 days', received_at + interval '30 days',
         'received', raw_run_id || '-v2', raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256
-        FROM financial_metric WHERE instrument_code = 'TST001' AND metric = 'bps_total_shares' AND fiscal_period = 'Q2'""")
+        FROM financial_metric WHERE instrument_code = 'TST001' AND metric IN ('eps_basic', 'bps_total_shares')
+          AND fiscal_period = 'Q2'""")   # the correction run re-extracts the report: EPS again, total-shares BPS, no common bps
     run_v2 = db.execute("SELECT raw_run_id FROM financial_metric WHERE raw_run_id LIKE %s", ("v2-source-test-%-v2",)).fetchone()[0]
     try:
         db.execute("SET ROLE edge_analysis_v2_writer")
@@ -205,3 +207,28 @@ def test_a_later_version_that_blocks_bps_is_not_overridden_by_an_older_bps(db):
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v2,))
+
+
+def test_a_later_version_without_any_bps_does_not_inherit_the_older_pair(db):
+    # Correction run B re-extracts the quarter: EPS fine, both BPS rejected (share rows inconsistent).
+    # The quarter must show B's EPS with BPS absent — not A's BPS next to B's EPS.
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_metric (corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric,
+        period_kind, fs_basis, derivation, value, unit, formula, inputs, rcept_no, rcept_date, received_at, available_at,
+        availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
+        SELECT corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric, period_kind, fs_basis,
+        derivation, 1010, unit, formula, inputs, '20260930000001', '2026-09-30', received_at + interval '30 days',
+        received_at + interval '30 days', 'received', raw_run_id || '-v3', raw_key, raw_sha256, canonical_run_id,
+        artifact_key, artifact_sha256
+        FROM financial_metric WHERE instrument_code = 'TST001' AND metric = 'eps_basic' AND fiscal_period = 'Q2'""")
+    run_v3 = db.execute("SELECT raw_run_id FROM financial_metric WHERE raw_run_id LIKE %s", ("v2-source-test-%-v3",)).fetchone()[0]
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        rows, gaps = financial_inputs(db, datetime(2026, 11, 20, tzinfo=KST), ["TST001"])
+        assert rows[-1]["period"] == "2026-Q2" and rows[-1]["eps"] == "1010" and rows[-1]["bps"] is None
+        assert rows[-1]["evidence"]["raw_run_ids"] == [run_v3]
+        assert gaps == [{"instrument_id": "TST001", "period": "2026-Q2", "missing": ["bps"],
+                         "reason": "BPS_ABSENT_IN_LATEST_VERSION", "bps_total_shares": None}]
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v3,))

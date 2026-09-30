@@ -349,7 +349,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
              "value": str((equity / (issued_total - treasury_total)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
              "formula": BPS_TOTAL_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
              "inputs": [equity_input, shares_input]}]
-    if issued_preferred is None or issued_preferred > 0 or None in (issued_common, treasury_common):
+    if issued_preferred is None or issued_preferred > 0 or None in (issued_common, treasury_common, treasury_preferred):
         # 우선주가 있으면 정책 차단(§10.9 팀 결정), 종류별 주식수를 못 읽었으면 데이터 결함 — 사유를 섞지 않는다.
         reason = "bps_blocked_preferred_shares" if issued_preferred else "bps_share_rows_unreadable"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
