@@ -75,13 +75,13 @@ def financial_inputs(conn, analysis_at, instrument_ids):
             found = cur.fetchall()
             if not found:
                 gaps.append({"instrument_id": instrument_id, "period": None, "missing": ["all"],
-                             "reason": "no_release_visible"})
+                             "reasons": {"all": "no_release_visible"}})
             for period, eps, eps_derivation, bps, bps_total, note, basis, available_at, rcept_nos, run_ids in found:
-                missing = [name for name, value in (("eps", eps), ("bps", bps)) if value is None]
-                if missing:
-                    gaps.append({"instrument_id": instrument_id, "period": period, "missing": missing,
-                                 "reason": "EPS_ABSENT_IN_LATEST_VERSION" if eps is None else note,
-                                 "bps_total_shares": _num(bps_total)})
+                reasons = {name: reason for name, value, reason in (("eps", eps, "EPS_ABSENT_IN_LATEST_VERSION"),
+                                                                     ("bps", bps, note)) if value is None}
+                if reasons:   # one reason per missing metric — a policy block on BPS must survive an EPS gap
+                    gaps.append({"instrument_id": instrument_id, "period": period, "missing": sorted(reasons),
+                                 "reasons": reasons, "bps_total_shares": _num(bps_total)})
                 rows.append({"instrument_id": instrument_id, "period": period, "eps": _num(eps), "bps": _num(bps),
                              "available_at": _iso(available_at), "fs_basis": basis,
                              "eps_derivation": eps_derivation,

@@ -113,9 +113,9 @@ def test_financial_rows_feed_valuation_and_blocked_bps_is_a_gap(db):
         ("TST001", "2026-Q1", "REPORTED", "50000"), ("TST001", "2026-Q2", "REPORTED", "50000"),
         ("TST002", "2026-Q2", "REPORTED", None)]   # the blocked quarter stays in place as a hole
     assert gaps == [
-        {"instrument_id": "TST002", "period": "2026-Q2", "missing": ["bps"], "reason": "PREFERRED_SHARES_PRESENT",
+        {"instrument_id": "TST002", "period": "2026-Q2", "missing": ["bps"], "reasons": {"bps": "PREFERRED_SHARES_PRESENT"},
          "bps_total_shares": "62000"},
-        {"instrument_id": "TST999", "period": None, "missing": ["all"], "reason": "no_release_visible"}]
+        {"instrument_id": "TST999", "period": None, "missing": ["all"], "reasons": {"all": "no_release_visible"}}]
     fixture = {"context": {"etf_code": "T", "analysis_at": ANALYSIS_AT.isoformat()},
                "holdings": [{"instrument_id": "TST001", "weight": "1", "as_of_date": "2026-09-26", "available_at": "2026-09-26T18:00:00+09:00"}],
                "prices": [{"instrument_id": "TST001", "date": "2026-09-26", "close": "68000", "available_at": "2026-09-26T16:00:00+09:00"}],
@@ -144,7 +144,7 @@ def test_incomplete_latest_quarter_blocks_instead_of_sliding_to_older_quarters(d
     rows, gaps = financial_inputs(db, datetime(2026, 11, 20, tzinfo=KST), ["TST001"])
     assert rows[-1]["period"] == "2026-Q3" and rows[-1]["bps"] is None
     assert gaps == [{"instrument_id": "TST001", "period": "2026-Q3", "missing": ["bps"],
-                     "reason": "BPS_ABSENT_IN_LATEST_VERSION", "bps_total_shares": None}]
+                     "reasons": {"bps": "BPS_ABSENT_IN_LATEST_VERSION"}, "bps_total_shares": None}]
     fixture = {"context": {"etf_code": "T", "analysis_at": "2026-11-20T10:00:00+09:00"},
                "holdings": [{"instrument_id": "TST001", "weight": "1", "as_of_date": "2026-11-19", "available_at": "2026-11-19T18:00:00+09:00"}],
                "prices": [{"instrument_id": "TST001", "date": "2026-11-19", "close": "68000", "available_at": "2026-11-19T16:00:00+09:00"}],
@@ -200,7 +200,7 @@ def test_a_later_version_that_blocks_bps_is_not_overridden_by_an_older_bps(db):
         latest = rows[-1]
         assert latest["period"] == "2026-Q2" and latest["bps"] is None
         assert gaps == [{"instrument_id": "TST001", "period": "2026-Q2", "missing": ["bps"],
-                         "reason": "PREFERRED_SHARES_PRESENT", "bps_total_shares": "48000"}]
+                         "reasons": {"bps": "PREFERRED_SHARES_PRESENT"}, "bps_total_shares": "48000"}]
         # Before the correction was received, the old version (with bps) is still what was known.
         rows, gaps = financial_inputs(db, datetime(2026, 9, 10, 10, 0, tzinfo=KST), ["TST001"])  # v2 received 09-16
         assert rows[-1]["bps"] == "50000" and gaps == []
@@ -228,7 +228,7 @@ def test_a_later_version_without_any_bps_does_not_inherit_the_older_pair(db):
         assert rows[-1]["period"] == "2026-Q2" and rows[-1]["eps"] == "1010" and rows[-1]["bps"] is None
         assert rows[-1]["evidence"]["raw_run_ids"] == [run_v3]
         assert gaps == [{"instrument_id": "TST001", "period": "2026-Q2", "missing": ["bps"],
-                         "reason": "BPS_ABSENT_IN_LATEST_VERSION", "bps_total_shares": None}]
+                         "reasons": {"bps": "BPS_ABSENT_IN_LATEST_VERSION"}, "bps_total_shares": None}]
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v3,))
@@ -252,8 +252,9 @@ def test_a_newer_annual_report_run_without_q4_rows_invalidates_the_old_q4(db):
         rows, gaps = financial_inputs(db, datetime(2026, 12, 20, tzinfo=KST), ["TST001"])
         q4 = next(r for r in rows if r["period"] == "2025-Q4")   # the quarter stays as a hole, evidenced by the FY run
         assert q4["eps"] is None and q4["bps"] is None and q4["evidence"]["raw_run_ids"] == [run_v4]
-        assert {"instrument_id": "TST001", "period": "2025-Q4", "missing": ["eps", "bps"],
-                "reason": "EPS_ABSENT_IN_LATEST_VERSION", "bps_total_shares": None} in gaps
+        assert {"instrument_id": "TST001", "period": "2025-Q4", "missing": ["bps", "eps"],
+                "reasons": {"eps": "EPS_ABSENT_IN_LATEST_VERSION", "bps": "BPS_ABSENT_IN_LATEST_VERSION"},
+                "bps_total_shares": None} in gaps
         rows, _ = financial_inputs(db, datetime(2026, 9, 10, tzinfo=KST), ["TST001"])
         assert [r["period"] for r in rows] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"]
     finally:
@@ -278,7 +279,7 @@ def test_a_newer_quarter_run_with_only_cumulative_rows_keeps_the_quarter_as_a_ho
         rows, gaps = financial_inputs(db, datetime(2027, 4, 1, tzinfo=KST), ["TST001"])
         q2 = next(r for r in rows if r["period"] == "2026-Q2")
         assert q2["eps"] is None and q2["bps"] is None and q2["evidence"]["raw_run_ids"] == [run_v5]
-        assert any(g["period"] == "2026-Q2" and g["missing"] == ["eps", "bps"] for g in gaps)
+        assert any(g["period"] == "2026-Q2" and g["missing"] == ["bps", "eps"] for g in gaps)
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v5,))
