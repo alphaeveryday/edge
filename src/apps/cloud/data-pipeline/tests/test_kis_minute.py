@@ -377,6 +377,21 @@ class TestResponseLayers:
         # 다른 창은 그대로다 — 마감 창만 뺀다
         assert [c.window_end.strftime("%H%M") for c in candles] == ["1529"]
 
+    def test_zero_volume_auction_row_is_a_placeholder_not_a_close(self):
+        """라벨 15:30 행이 있어도 거래량 0 이면 아직 확정 전이다 — 마감 창을 내지 않는다.
+
+        09-30 프로브: 체결값이 15:30:03~32 에 잠깐 실렸다가 15:31:00 에 0 으로 리셋되고
+        ≥6분 그대로다. 0 봉을 접으면 15:29 창이 vol 0·단일가 전 가격으로 VALID 확정된다 —
+        09-14 이후 전 종목 15:29 창 거래량 0(ALPHA-1128)이 정확히 이 모양이었다.
+        """
+        placeholder = {**flat_row("153000"), "stck_prpr": "72500", "stck_oprc": "72500",
+                       "stck_hgpr": "72500", "stck_lwpr": "72500"}
+        client, _ = make_client([TOKEN, ok([placeholder, flat_row("152900"), row("152800")])])
+        close = datetime(2026, 8, 3, 15, 30, tzinfo=KST)
+        candles = client.candles("005930", window_end=close)
+        assert select_window_candle(candles, close, "005930") is Outcome.MISSING
+        assert [c.window_end.strftime("%H%M") for c in candles] == ["1529"]
+
     def test_auction_only_response_is_not_mistaken_for_an_absent_auction(self):
         # 15:29 행이 없고 단일가 행만 있으면 접기는 봉을 **옮기기만** 해 길이가 안 변한다 —
         # 길이로 부재를 판정하면 정상 단일가까지 버린다(Codex 지적). 존재로 판정한다.
