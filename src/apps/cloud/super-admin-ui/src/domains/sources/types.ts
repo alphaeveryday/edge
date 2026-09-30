@@ -487,3 +487,52 @@ export interface MinuteDailyStatus {
   to: string;
   dates: MinuteDailyDay[];
 }
+
+/* ── 가격 판정 근거(§33.12 로컬) — 서버 계약 MinuteJudgmentResponse ── */
+export interface MinuteJudgmentBaseline {
+  value: number | string | null;
+  /** null = 기록 도입 전에 확정된 시가(출처 세대 미상) */
+  source: 'prev_close' | 'open_fallback' | null;
+  ref: string | null;
+}
+
+export interface MinuteJudgmentAttempt {
+  attempt: number;
+  redriveGeneration: number;
+  /** 기록 INSERT 의 관측 시각 — 커밋 순서·인과 순서가 아니다 */
+  judgedAt: string;
+  /** true = 발화·회수 대상 앵커 행을 잠근 뒤 관측, false = 무발화의 비잠금 관측 */
+  txAnchorLocked: boolean;
+  detectionPolicyVersion: string;
+  summary: Record<string, string[]>;
+  /** 판정이 실제로 읽은 앵커 [가격, anchor_window] — 키가 없으면 앵커 행이 없었다(기준선=앵커) */
+  anchorsUsed: Record<string, [string, string]>;
+  txAnchor: Record<string, string | null>;
+  baselines: Record<string, MinuteJudgmentBaseline>;
+  judgedWithBaseline: number;
+}
+
+export interface MinuteJudgmentWindow {
+  windowStart: string;
+  windowGeneration: number;
+  jobGeneration: number;
+  jobStatus: string;
+  jobAttemptCount: number;
+  /** 이 job 세대 뒤에 window 가 정정됐다(기록은 커밋 당시 세대를 가리킨다) */
+  correctedAfter: boolean;
+  /** 판정 당시 입력의 artifact 이력 **기록** 유무 — NO_HISTORY 는 이력 부재이지 원본 삭제·손상이 아니다 */
+  inputRecord: 'RECORDED' | 'NO_HISTORY';
+  artifactUri: string | null;
+  artifactChecksum: string | null;
+  /** 이 조회는 현재 원본 본문을 읽지 않는다 */
+  sourceRecheck: 'NOT_PERFORMED';
+  /** 비어 있으면 기록 없음 */
+  attempts: MinuteJudgmentAttempt[];
+}
+
+export interface MinuteJudgments {
+  sessionId: string;
+  /** 정정 후 재계산은 제공하지 않는다 */
+  recomputation: 'NOT_GUARANTEED';
+  windows: MinuteJudgmentWindow[];
+}
