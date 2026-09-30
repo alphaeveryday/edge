@@ -697,13 +697,14 @@ module "airflow" {
 
   # al2023-ami-ecs-hvm-2023.0.20260922-kernel-6.1-arm64 (2026-09-28 recommended). 교체는 README "호스트 교체".
   ami_id = "ami-0c15069e7568e5f41"
-  # 실제 AWS 단기 검증(ALPHA-1119): micro 부터. 로컬에서는 호스트 몫을 가정(200~350MiB)해 768 에서 OOM 이었다 —
-  # 실제 호스트 몫·등록 메모리를 여기서 잰다. 부족이 확인되면 같은 조건으로 t4g.small 로 바꿔 비교한다.
+  # 실제 AWS 단기 검증(ALPHA-1119, 2026-09-29~30) 결과: micro 는 등록 916MiB·호스트 전역 OOM 으로 불가, small·1024 는
+  # 업무 task 실행 중 태스크 cgroup OOM 으로 불가. 1408 은 유휴·재시작만 확인했다(업무 실행은 검증 도구 결함으로 미검증).
+  # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
-  task_memory   = 1024 # 로컬 조정 설정(C1)이 전 기준을 통과한 합산 상한. 등록 메모리보다 크면 배치되지 않는다(그것도 결과)
-  # 검증을 마치면 0 으로 내린다(호스트·서비스 중단 알람 제거). 상시 운영으로 자동 연장하지 않는다.
-  host_count    = 1
-  host_observer = true
+  task_memory   = 1408
+  # 검증을 마쳐 0 으로 내렸다(호스트·서비스 중단 알람 제거). 다시 올리는 것도 이 값(코드)으로 한다.
+  host_count    = 0
+  host_observer = false
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
   image = "${local.airflow_ecr_repository_url}:bootstrap"
@@ -732,8 +733,8 @@ module "airflow" {
   deploy_role_name   = element(split("/", module.gha_deploy_dev.role_arn), 1) # vars.AWS_DEPLOY_ROLE_ARN 의 역할
   ecr_repository_arn = local.airflow_ecr_repository_arn
 
-  # 격리 검증(KIS·업무 DB·레이크와 무관). 검증이 끝나면 false 로 걷는다(버킷·태스크 정의·역할).
-  verify_enabled = true
+  # 격리 검증(KIS·업무 DB·레이크와 무관). 검증을 마쳐 false 로 걷었다(버킷·태스크 정의·역할).
+  verify_enabled = false
   verify_image   = "${local.airflow_ecr_repository_url}:verify"
   kr_holidays    = module.data_pipeline.kr_holidays
   # 관리 태스크(dbadmin)만: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제(업무 DB 스키마만).

@@ -296,8 +296,14 @@ def deployinfo(args) -> int:
 
 # ── 시나리오 ──
 def _slot(hhmm: str) -> datetime:
+    """오늘의 그 슬롯. 수집은 same_day_only 라 날짜는 오늘이어야 하고, logical_date 가 미래면 Airflow 는 그 시각까지 run 을
+    시작하지 않다가 dagrun_timeout 으로 실패시킨다(2026-09-30 자정을 넘긴 배치 전부가 이렇게 실패했다) — 그래서 거부한다.
+    검증 창은 같은 날 14:35(마지막 슬롯) 뒤 ~ 자정 전이다."""
     h, m = map(int, hhmm.split(":"))
-    return datetime.now(KST).replace(hour=h, minute=m, second=0, microsecond=0)
+    slot = datetime.now(KST).replace(hour=h, minute=m, second=0, microsecond=0)
+    if slot > datetime.now(KST):
+        raise RuntimeError(f"슬롯 {slot:%Y-%m-%d %H:%M} 이 미래다 — 같은 날 14:35 뒤 ~ 자정 전에만 배치를 돌린다")
+    return slot
 
 
 def _news_window_wait(exp: str) -> None:
