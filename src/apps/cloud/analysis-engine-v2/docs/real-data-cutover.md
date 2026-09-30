@@ -14,3 +14,17 @@
 1. 출처 격리 → 전체 구성·뉴스 → 수급 → 가격·차트.
 2. 각 원천의 시점·필요 컬럼·기간·결측을 먼저 확인하고 계산 및 실제 호출을 검증한다.
 3. 매크로·재무는 9월 30일 조회에서 0행. 미확보를 목자료로 채우지 않는다.
+
+## 구성종목·뉴스 조회 계약
+
+| 툴 | 실제 원천 | 반환·제한 |
+|---|---|---|
+| get_etf_holdings | etf_holding_snapshot + status + instrument/entity | 현재 시각까지 적재된 최신 구성. 원래 비중 유지. 누락 시 coverage=partial, observed_weight_ratio 표시. 가중 계산에는 불완전 구성을 사용하지 않음 |
+| search_news_threads | document → assertion → event_evidence → source_event → event_thread_link | DB 사건 ID·단계·스레드로 묶음. 같은 사건의 추가 기사만 중복 수로 표시. 연결 없는 기사도 unthreaded_news로 제공 |
+| get_issue_evidence | document + news_document | true는 확보된 발췌와 body_kind=excerpt, false는 동일 기사 ID·제목. 발췌 확보 시점이 늦으면 body=null |
+
+- 읽기 전용·repeatable read로 원천을 한 번 읽고 DB 연결을 닫은 후 에이전트 실행.
+- 조회는 DB instrument_id, 에이전트의 instrument_id와 화면 종목 코드는 KRX ticker로 통일. 종목 마스터의 일대일 매핑을 사용.
+- ETF와 상위 5개 편입종목·발행기업에 연결된 최근 30일 기사 최대 300개. 초기 제목 100개, 탐색 사건 100개. 한도 도달을 표시.
+- 스레드 관계는 현존하는 연결 중 분석 시각 이전에 확인된 것만 사용. 삭제·정정된 과거 관계까지 복원한 과거 재생은 보장하지 않음.
+- 원천이 비어 있는 다른 요인을 목자료로 채우지 않음. 반환 JSON과 저장할 툴 결과는 동일.

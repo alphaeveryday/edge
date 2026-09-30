@@ -33,7 +33,7 @@ def available(rows, cutoff, time_key=None):
             and (time_key is None or instant(r[time_key]) <= cutoff)]
 
 
-def holdings(fixture, day=None):
+def holdings(fixture, day=None, *, require_complete=True):
     """Read one complete equity portfolio without renormalizing missing weights."""
     cutoff = instant(fixture["context"]["analysis_at"])
     if day is not None:
@@ -44,9 +44,20 @@ def holdings(fixture, day=None):
     latest = max((r["as_of_date"] for r in rows), default=None)
     rows = [r for r in rows if r["as_of_date"] == latest]
     weights = [decimal(r["weight"]) for r in rows]
-    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w <= 0 for w in weights) or sum(weights) != 1:
+    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or not 0 < sum(weights) <= 1:
         raise ValueError("complete positive equity weights summing to one required")
-    return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
+    statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
+    complete = sum(weights) == 1
+    if statuses:
+        if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
+            raise ValueError('holdings status does not match observed rows')
+        complete = complete and statuses[0]['input_count'] == len(rows)
+    if not complete and (require_complete or not statuses):
+        raise ValueError('complete positive equity weights summing to one required')
+    result = {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
+    if statuses:
+        result.update(coverage='full' if complete else 'partial', observed_weight_ratio=number(sum(weights)))
+    return result
 
 
 def table(rows, columns):
