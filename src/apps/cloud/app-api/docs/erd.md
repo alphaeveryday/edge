@@ -134,7 +134,7 @@ PK `(principal_id, etf_code)`. 계약에 아직 엔드포인트가 없다(노션
 |---|---|---|
 | id | bigint PK | |
 | principal_id | bigint → principal | |
-| kind | varchar(10) | `watch` \| `signal` \| `content` \| `comm` |
+| kind | varchar(10) | `watch` \| `comm` |
 | etf_code | varchar(6) NULL | |
 | post_id | bigint → post NULL | comm |
 | title, body | text | |

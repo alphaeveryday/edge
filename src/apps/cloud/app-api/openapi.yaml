@@ -719,7 +719,7 @@ paths:
       operationId: notificationList
       summary: 알림 목록
       parameters:
-        - { name: kind, in: query, schema: { type: string, enum: [all, watch, signal, content, comm] } }
+        - { name: kind, in: query, schema: { type: string, enum: [all, watch, comm] } }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Size' }
       responses:
@@ -916,7 +916,7 @@ components:
     Dir: { type: string, enum: [help, neutral, burden] }
     Axis: { type: string, enum: [issue, chart, macro, value, flow], description: 요인 축. 라벨(이슈·차트·매크로·밸류·수급)은 앱이 가진다 }
     VoteChoice: { type: string, enum: [buy, wait, sell] }
-    NotiKind: { type: string, enum: [watch, signal, content, comm] }
+    NotiKind: { type: string, enum: [watch, comm] }
 
     EtfSummary:
       type: object
