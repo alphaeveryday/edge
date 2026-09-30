@@ -823,7 +823,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 `docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
 
 - 세 계열은 서로 기다리지 않는다(한 공급자 장애가 다른 원천 적재를 막지 않는다). 수집·정제 exit 2 는 받은 범위만 하류로 넘기고 런은 실패로 마감한다(장중 수급과 같은 선택 2).
-- 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다.
+- 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다. 청크는 1분 이상 간격으로 trigger 한다 — run_id 가 분 단위 슬롯에서 나와, 같은 분이면 두 번째 run 의 수집이 "다른 요청 범위"로 실패한다.
 - 로컬 검증: DAG 계약(`tests/test_source_daily_dag.py`, 공식 이미지), DAG 명령 그대로의 원장 통합(`data-pipeline/tests/e2e/test_source_daily_lane_pg.py` — plan-run → 9스텝 → reconcile, 실 PostgreSQL·가짜 공급자 HTTP).
 
 **활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
