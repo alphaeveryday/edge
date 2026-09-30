@@ -2146,6 +2146,9 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 # revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은
 # 파일/객체(s3://… 지원). --max-ticks 는 로컬 확인용 — 배선 오류 신호
 # (poison·misrouted·orphan·ahead)가 있으면 exit 1.
+# 판정마다 minute_price_judgment 에 실제 쓴 입력·결과를 같은 트랜잭션으로 남긴다(무발화 포함).
+# 무발화도 발화와 같은 claim·window 세대 fence 를 탄다 — 기록 실패·세대 정정·소유권 상실·같은
+# 시도 키의 다른 판정(JUDGMENT_RECORD_CONFLICT)은 성공하지 않고 커널의 재시도 절차로 간다.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL=https://sqs.../price \
 DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION=intraday-anchor-v2.1 \

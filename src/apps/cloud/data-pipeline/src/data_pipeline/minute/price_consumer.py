@@ -43,6 +43,7 @@ v1 의 2시간 쿨다운은 폐지됐다 — 재발화 조건이 시간이 아�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -107,6 +108,17 @@ def _decimal(value: object, *, entity: str, field_name: str) -> Decimal:
     if not result.is_finite():
         raise ValueError(f"{entity} 의 {field_name} 이 유한하지 않다: {value!r}")
     return result
+
+
+def _used_baseline(value: object) -> Decimal | None:
+    """판정부와 같은 규칙으로 정규화한 기준선 — 판정 기록에 남기는 '실제 사용값'."""
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite():
+            return None
+        return number.quantize(ANCHOR_SCALE, rounding=ANCHOR_ROUNDING)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 def _validated_reference(payload: object, job_id: str) -> dict:
@@ -176,6 +188,10 @@ class PriceTriggerHandler:
     # session_id → {entity: 전일 종가}. 세션 중 불변이라 세션당 1회만 조회한다.
     # 동시 실행이 같은 세션을 두 번 조회할 수는 있으나 값이 같아 무해하다.
     _prev_close_cache: dict = field(default_factory=dict, repr=False)
+    # 판정 기록(§33.12 로컬 실험): 캐시를 채운 **같은 조회**가 돌려준 전일 종가 기준일,
+    # 그리고 이 프로세스가 커밋까지 확인한 스냅샷·기준선 집합 ID(재삽입 생략용).
+    _prev_close_date: dict = field(default_factory=dict, repr=False)
+    _committed_baseline_ids: set = field(default_factory=set, repr=False)
 
     def __post_init__(self) -> None:
         if not self.etf_ids:
@@ -327,6 +343,7 @@ class PriceTriggerHandler:
         skipped_no_open: list[str] = []
         skipped_stale_anchor: list[str] = []
         errors: list[str] = []
+        error_entities: list[str] = []   # 판정 기록용 — 판정 불가 종목(오류 문자열을 파싱하지 않게)
         for entity_id in sorted(etf_rows):
             baseline = prev_closes.get(entity_id)
             if baseline is None:
@@ -364,6 +381,7 @@ class PriceTriggerHandler:
 
                 logger.error("판정 불가 — %s", error)
                 errors.append(str(error))
+                error_entities.append(entity_id)
                 continue
             open_change = abs(close_price / baseline - 1)
             if open_change <= self.revert_threshold:
@@ -394,10 +412,32 @@ class PriceTriggerHandler:
                     "change_rate": change_rate,
                 })
 
+        # 판정 기록 — 값은 전부 위 판정이 **이미 읽어 쓴** 것이다(사후 재조회 없음)
+        # 기준선 값은 **판정이 실제로 쓴** 정규화 값(ANCHOR_SCALE·ANCHOR_ROUNDING)이다 — 원본
+        # price_daily(NUMERIC 24,8)를 그대로 남기면 경계 근처에서 기록으로 판정을 재현할 수 없다.
+        # 정규화가 안 되는 값은 위 판정이 errors 로 남겼으므로 기준선 기록에서 뺀다.
+        baselines = {}
+        for e in etf_rows:
+            if e in skipped_no_open or not (e in prev_closes or e in opens):
+                continue
+            used = _used_baseline(prev_closes[e] if e in prev_closes else opens[e]["open_price"])
+            if used is None:
+                continue
+            baselines[e] = (("prev_close", str(self._prev_close_date.get(session_id)), used)
+                            if e in prev_closes else
+                            ("open_fallback", opens[e].get("snapshot_id"), used))
+        judgment = {
+            "baselines": baselines,
+            "anchors_used": {e: [str(a[0]), a[1].isoformat()] for e, a in anchors.items() if e in etf_rows},
+            "judged": sorted(etf_rows),
+            "skipped_stale_anchor": list(skipped_stale_anchor),
+            "skipped_no_open": list(skipped_no_open), "errors": list(errors),
+            "error_entities": list(error_entities),
+        }
         inserted, reverted_ids, stale_in_tx = self._persist_triggers(
             job_id=job_id, attempt=attempt, redrive_generation=redrive_generation,
             session_id=session_id, window_start=window_start,
-            generation=generation, fired=fired, reverted=reverted,
+            generation=generation, fired=fired, reverted=reverted, judgment=judgment,
         )
         # 두 축을 합쳐 하나의 사실로 보고한다 — 어느 가드가 잡았든 "이 window 는
         # 앵커보다 과거라 발화하지 않았다"가 소비자가 알아야 할 것이다
@@ -473,7 +513,7 @@ class PriceTriggerHandler:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT i.ticker, p.close_price
+                SELECT i.ticker, p.close_price, p.trade_date
                 FROM price_daily p
                 JOIN instrument i ON i.instrument_id = p.instrument_id
                 WHERE i.ticker = ANY(%s) AND i.market_code = ANY(%s)
@@ -493,6 +533,7 @@ class PriceTriggerHandler:
         prev_closes = {row[0]: row[1] for row in rows
                        if row[1] is not None and Decimal(str(row[1])) > 0}
         self._prev_close_cache[session_id] = prev_closes
+        self._prev_close_date[session_id] = rows[0][2] if rows else None
         missing = len(self.etf_ids) - len(prev_closes)
         if missing:
             logger.info("세션 %s 전일 종가 %d/%d — 결손 %d 종은 세션 시가 폴백",
@@ -632,9 +673,15 @@ class PriceTriggerHandler:
                         session_id, entity_id, status, open_price, reason, source_window
                     ) VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (session_id, entity_id) DO NOTHING
+                    RETURNING entity_id
                     """,
                     (session_id, entity_id, status, open_price, reason, first_start),
                 )
+                if cur.fetchone() is not None and status == OPEN_STATUS_OPEN:
+                    # 시가 폴백의 출처 세대는 여기서만 안다 — 확정한 tx 가 스냅샷을 함께 남긴다
+                    self._insert_snapshot(cur, session_id, entity_id, "open_fallback",
+                                          f"{first_start.isoformat()}@g{first_generation}",
+                                          _used_baseline(open_price))
         # 재조회 — 내 INSERT 가 진 경쟁에서도 확정본 하나를 모두가 본다
         return self._select_opens(session_id)
 
@@ -642,12 +689,17 @@ class PriceTriggerHandler:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT entity_id, status, open_price FROM minute_session_open
-                WHERE session_id = %s
+                SELECT o.entity_id, o.status, o.open_price, s.snapshot_id
+                FROM minute_session_open o
+                LEFT JOIN minute_price_baseline_snapshot s
+                  ON s.session_id = o.session_id AND s.entity_id = o.entity_id
+                 AND s.source = 'open_fallback'
+                WHERE o.session_id = %s
                 """,
                 (session_id,),
             )
-            return {row[0]: {"status": row[1], "open_price": row[2]}
+            # snapshot_id 가 NULL 이면 기록 도입 전에 확정된 시가다(출처 세대 미상)
+            return {row[0]: {"status": row[1], "open_price": row[2], "snapshot_id": row[3]}
                     for row in cur.fetchall()}
 
     def _first_window(self, session_id: str, session_date: str):
@@ -676,7 +728,7 @@ class PriceTriggerHandler:
     def _persist_triggers(self, *, job_id: str, attempt: int, redrive_generation: int,
                           session_id: str, window_start: datetime,
                           generation: int, fired: list[dict],
-                          reverted: list[dict],
+                          reverted: list[dict], judgment: dict | None = None,
                           ) -> tuple[list[str], list[str], list[str]]:
         """트리거·앵커·outbox 를 **한 트랜잭션**에 — 실제로 쓴 entity 만 돌려준다.
 
@@ -684,9 +736,12 @@ class PriceTriggerHandler:
         앵커를 tx 밖에서 읽었으므로, 조건부 UPDATE 의 RETURNING 이 유일한 판정자다
         (복귀 구간이 여러 window 이어져도 사건은 한 번뿐인 이유).
         """
-        if not fired and not reverted:
+        if not fired and not reverted and judgment is None:
             return [], [], []
+        # 무발화도 판정 기록을 남기므로 같은 트랜잭션·같은 fence(claim → window 세대)를 탄다.
+        # §33.12 정책: 무발화의 소유권 상실·세대 정정·기록 실패도 발화와 같은 오류 절차로 간다.
         inserted: list[str] = []
+        tx_anchor: dict[str, str | None] = {}
         reverted_ids: list[str] = []
         # tx 안에서 앵커 역전이 확인돼 접힌 종목 — 판정부 가드가 놓친 경합분이라
         # 조용히 사라지면 "발화 N(신규 0)" 이 같은-window 재판정과 구분되지 않는다
@@ -755,6 +810,11 @@ class PriceTriggerHandler:
                     (session_id, lock_ids),
                 )
                 cur.fetchall()
+                # 잠근 뒤의 앵커 창 — 판정이 읽은 스냅샷 이후 다른 실행이 바꿨는지의 관측
+                tx_anchor.update(self._observe_anchor_windows(cur, session_id, lock_ids))
+            elif judgment is not None:
+                # 무발화: 앵커 행은 잠그지 않는다(쓰지 않으므로). job·window 잠금 안의 **비잠금** 관측
+                tx_anchor.update(self._observe_anchor_windows(cur, session_id, judgment["judged"]))
             for revert in reverted:
                 entity_id = revert["entity_id"]
                 # 조건부 UPDATE 가 곧 중복 차단이다 — 행이 없거나(첫 발화 전) 이미
@@ -823,6 +883,8 @@ class PriceTriggerHandler:
                     (session_id, fire["entity_id"]),
                 )
                 anchor_row = cur.fetchone()
+                # 트랜잭션이 **재확인한** 앵커 창 — 판정이 쓴 스냅샷(anchors_used)과 다를 수 있다
+                tx_anchor[fire["entity_id"]] = None if anchor_row is None else anchor_row[0].isoformat()
                 if anchor_row is not None and anchor_row[0] > window_start:
                     stale_in_tx.append(fire["entity_id"])
                     continue
@@ -883,7 +945,125 @@ class PriceTriggerHandler:
                     },
                 )
                 inserted.append(fire["entity_id"])
+            if judgment is not None:
+                new_ids = self._insert_judgment(
+                    cur, job_id=job_id, attempt=attempt, redrive_generation=redrive_generation,
+                    session_id=session_id, window_start=window_start, generation=generation,
+                    judgment=judgment, fired=fired, reverted=reverted, inserted=inserted,
+                    reverted_ids=reverted_ids, stale_in_tx=stale_in_tx, tx_anchor=tx_anchor,
+                    tx_anchor_locked=bool(fired or reverted))
+        if judgment is not None:
+            self._committed_baseline_ids |= new_ids   # with 블록이 커밋으로 끝난 뒤에만
         return inserted, reverted_ids, stale_in_tx
+
+    # ── 판정 기록(§33.12 로컬 실험) ───────────────────────────
+    @staticmethod
+    def _insert_snapshot(cur, session_id, entity_id, source, ref, value) -> str:
+        snapshot_id = hashlib.sha256(json.dumps(
+            [session_id, entity_id, source, ref, str(value)]).encode()).hexdigest()[:32]
+        cur.execute(
+            """
+            INSERT INTO minute_price_baseline_snapshot (snapshot_id, session_id, entity_id,
+                source, ref, value) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (snapshot_id) DO NOTHING
+            """,
+            (snapshot_id, session_id, entity_id, source, ref, value),
+        )
+        return snapshot_id
+
+    @staticmethod
+    def _observe_anchor_windows(cur, session_id, entity_ids) -> dict:
+        cur.execute(
+            """
+            SELECT entity_id, anchor_window FROM minute_trigger_anchor
+            WHERE session_id = %s AND entity_id = ANY(%s)
+            """,
+            (session_id, list(entity_ids)),
+        )
+        return {row[0]: row[1].isoformat() for row in cur.fetchall()}
+
+    def _insert_judgment(self, cur, *, job_id, attempt, redrive_generation, session_id,
+                         window_start, generation, judgment, fired, reverted, inserted,
+                         reverted_ids, stale_in_tx, tx_anchor, tx_anchor_locked) -> set:
+        new_ids: set = set()
+        refs = {}
+        for entity_id, (source, ref, value) in sorted(judgment["baselines"].items()):
+            if source == "open_fallback":
+                refs[entity_id] = ref       # 확정 tx 가 남긴 스냅샷 ID(없으면 None=도입 전)
+                continue
+            snapshot_id = hashlib.sha256(json.dumps(
+                [session_id, entity_id, source, ref, str(value)]).encode()).hexdigest()[:32]
+            if snapshot_id not in self._committed_baseline_ids:
+                self._insert_snapshot(cur, session_id, entity_id, source, ref, value)
+                new_ids.add(snapshot_id)
+            refs[entity_id] = snapshot_id
+        set_id = hashlib.sha256(json.dumps(sorted(refs.items())).encode()).hexdigest()[:32]
+        if set_id not in self._committed_baseline_ids:
+            for entity_id, snapshot_id in sorted(refs.items()):
+                cur.execute(
+                    """
+                    INSERT INTO minute_price_baseline_set (set_id, entity_id, snapshot_id)
+                    VALUES (%s, %s, %s) ON CONFLICT (set_id, entity_id) DO NOTHING
+                    """,
+                    (set_id, entity_id, snapshot_id),
+                )
+            new_ids.add(set_id)
+        fired_ids = [f["entity_id"] for f in fired]
+        summary = {
+            "fired": fired_ids, "inserted": list(inserted),
+            "revert_candidates": [r["entity_id"] for r in reverted],
+            "reverted": list(reverted_ids),
+            "stale_snapshot": judgment["skipped_stale_anchor"], "stale_tx": list(stale_in_tx),
+            "skipped_no_open": judgment["skipped_no_open"], "errors": judgment["errors"],
+            "error_entities": judgment["error_entities"],
+        }
+        cur.execute(
+            """
+            INSERT INTO minute_price_judgment (
+                job_id, redrive_generation, attempt, session_id, window_start, generation,
+                detection_policy_version, abs_threshold, revert_threshold, baseline_set_id,
+                summary, anchors_used, tx_anchor, tx_anchor_locked
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
+            ON CONFLICT (job_id, redrive_generation, attempt) DO NOTHING
+            RETURNING job_id
+            """,
+            (job_id, redrive_generation, attempt, session_id, window_start, generation,
+             self.detection_policy_version, self.abs_threshold, self.revert_threshold,
+             set_id, json.dumps(summary), json.dumps(judgment["anchors_used"]),
+             json.dumps(tx_anchor), tx_anchor_locked),
+        )
+        if cur.fetchone() is None:
+            # claim·세대는 이 tx 가 이미 잠그고 대조했다 — 남는 원인은 같은 시도 키의 기록이 이미
+            # 있음뿐이다. 추정하지 않고 읽어서 **같은 판정인지** 비교한다. 비교 항목은 기록 계약의
+            # 입력(세대·기준선 집합·읽은 앵커)·규칙(정책·임계)·결과(요약 목록)이고, 호출마다 달라지는
+            # 관측값(judged_at·tx_anchor)은 뺀다. 같으면 먼저 커밋된 기록을 그 시도의 기록으로 둔다.
+            cur.execute(
+                """
+                SELECT generation, detection_policy_version, abs_threshold, revert_threshold,
+                       baseline_set_id, summary, anchors_used
+                FROM minute_price_judgment
+                WHERE job_id = %s AND redrive_generation = %s AND attempt = %s
+                """,
+                (job_id, redrive_generation, attempt),
+            )
+            existing = cur.fetchone()
+            if existing is None:
+                raise RuntimeError(f"판정 기록 INSERT 가 생략됐는데 기존 행이 없다: {job_id}")
+            mine = (generation, self.detection_policy_version, Decimal(self.abs_threshold),
+                    Decimal(self.revert_threshold), set_id, summary, judgment["anchors_used"])
+            theirs = (existing[0], existing[1], Decimal(existing[2]), Decimal(existing[3]),
+                      existing[4], existing[5], existing[6])
+            if mine != theirs:
+                # 같은 시도 키에 **다른** 판정 — 기존 기록을 덮지 않고, 저장된 기록과 다른 결과를
+                # 조용히 성공시키지도 않는다. 이 tx 의 업무 쓰기까지 함께 롤백되고 커널이 재시도로
+                # 보낸다(새 claim = 새 attempt = 새 기록 키).
+                raise TransientJobError(
+                    f"같은 시도 키의 판정 기록이 다른 내용으로 이미 있다(job={job_id}, attempt={attempt})",
+                    code="JUDGMENT_RECORD_CONFLICT",
+                )
+            logger.warning("판정 기록 유지 — 같은 시도(job=%s, attempt=%s)의 같은 판정이 이미 기록됐다",
+                           job_id, attempt)
+        return new_ids
 
 
 def price_consumer_cli(settings, *, universe: str | None,

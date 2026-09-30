@@ -524,9 +524,14 @@ class TestAnchorV2:
         # 재배달 = 같은 claim(attempt 그대로)의 두 번째 실행 — attempt fence 는 통과하고
         # window 유니크만이 막는다
         redelivered = events[1]["payload"]
-        handler(job_id=redelivered["job_id"], payload=redelivered,
-                attempt=db.jobs[("price", redelivered["job_id"])]["attempt_count"],
-                redrive_generation=0)
+        # §33.13 판정 기록 이후 **의도적으로 바뀐** 전이: 같은 시도 키의 두 번째 실행은 다른 판정
+        # (뒤 window 의 앵커를 읽음)이라 조용히 성공하지 않고 JUDGMENT_RECORD_CONFLICT 로 실패한다.
+        # 실DB 에선 같은 tx 가 통째로 롤백된다 — 이 테스트의 의도(이중 발화 없음)는 그대로다.
+        with pytest.raises(TransientJobError) as conflict:
+            handler(job_id=redelivered["job_id"], payload=redelivered,
+                    attempt=db.jobs[("price", redelivered["job_id"])]["attempt_count"],
+                    redrive_generation=0)
+        assert conflict.value.code == "JUDGMENT_RECORD_CONFLICT"
         assert len(db.triggers) == 2 and len(trigger_events(db)) == 2
         # 앵커도 되돌아가지 않는다 — 트리거 INSERT 가 막히면 앵커 이동도 없다
         assert db.trigger_anchors[(session_id, "500000")]["anchor_price"] == anchor_before
@@ -549,9 +554,12 @@ class TestAnchorV2:
         anchor_before = db.trigger_anchors[(session_id, "500000")]["anchor_price"]
         assert Decimal(str(anchor_before)) == 106  # 마지막 발화가
         stale = events[2]["payload"]  # 회수했던 window 의 재배달
-        handler(job_id=stale["job_id"], payload=stale,
-                attempt=db.jobs[("price", stale["job_id"])]["attempt_count"],
-                redrive_generation=0)
+        # 같은 시도 키의 다른 판정 → JUDGMENT_RECORD_CONFLICT(§33.13, 의도적 변경). 앵커 불변은 그대로
+        with pytest.raises(TransientJobError) as conflict:
+            handler(job_id=stale["job_id"], payload=stale,
+                    attempt=db.jobs[("price", stale["job_id"])]["attempt_count"],
+                    redrive_generation=0)
+        assert conflict.value.code == "JUDGMENT_RECORD_CONFLICT"
         assert db.trigger_anchors[(session_id, "500000")]["anchor_price"] == anchor_before
         assert len(revert_events(db)) == 1
 
@@ -1317,3 +1325,99 @@ def test_content_manifest_is_used_for_current_price_and_session_open(tmp_path, m
     assert len(result) == 64
     assert [t["entity_id"] for t in db.triggers.values()] == ["500000"]
     assert db.session_opens
+
+
+class TestJudgmentRecord:
+    """§33.12 로컬 실험 — 판정이 **실제로 쓴** 입력과 확정 결과를 시도 단위로 남긴다.
+
+    기록이 없으면 '정정 뒤 어느 판정이 옛 기준선을 썼나'를 사후 조회로 추측하게 된다
+    (§33.11: 재기동 기준선 출처 변경에서 귀속 오류 4건). 무발화도 기록돼야 '정상 무발화'와
+    '기록 누락'이 갈린다.
+    """
+
+    def _pipeline(self, db, tmp_path):
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (108, 110)],
+                    "500001": [(200, 200), (200, 201)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        assert worker.tick(NOW) == "PROCESSED"
+        return price_job_events(db)
+
+    def test_no_fire_and_fire_are_both_recorded_with_used_baseline(self, tmp_path):
+        db = FakeMinuteDB()
+        first, second = self._pipeline(db, tmp_path)
+        handler = build_handler(db, tmp_path)
+        claim_then_run(handler, first)
+        claim_then_run(handler, second)
+        rows = {k[0]: v for k, v in db.judgments.items()}
+        quiet, fired = rows[first["payload"]["job_id"]], rows[second["payload"]["job_id"]]
+        assert quiet["summary"] and '"fired": []' in quiet["summary"]   # 정상 무발화도 행이 있다
+        assert '"inserted": ["500000"]' in fired["summary"]
+        # 전일 종가가 없는 세션이라 기준선은 시가 폴백 — 출처 window@세대가 스냅샷에 남는다
+        snap = db.baseline_snapshots[db.baseline_sets[(fired["baseline_set_id"], "500000")]]
+        assert snap["source"] == "open_fallback" and snap["ref"].endswith("@g1")
+
+    def test_superseded_attempt_leaves_no_record(self, tmp_path):
+        db = FakeMinuteDB()
+        first, second = self._pipeline(db, tmp_path)
+        handler = build_handler(db, tmp_path)
+        for event in (first, second):
+            handler.jobs.claim_job(kind="price", job_id=event["payload"]["job_id"],
+                                   redrive_generation=0, worker_id="c-test",
+                                   now=datetime.now(KST), lease_seconds=600)
+        # 무발화 경로: §33.12 정책으로 **의도적으로 바뀐** 전이 — 이전에는 예외 없이 성공했다.
+        # 이제 발화와 같은 claim fence 를 타서 CLAIM_SUPERSEDED 로 끝나고 기록도 없다.
+        with pytest.raises(TransientJobError) as quiet:
+            handler(job_id=first["payload"]["job_id"], payload=first["payload"], attempt=9,
+                    redrive_generation=0)
+        assert quiet.value.code == "CLAIM_SUPERSEDED"
+        # 발화 경로: 기존 fence 가 거부 — 트리거도 기록도 없다
+        with pytest.raises(TransientJobError):
+            handler(job_id=second["payload"]["job_id"], payload=second["payload"], attempt=9,
+                    redrive_generation=0)
+        assert db.judgments == {} and db.triggers == {}
+
+    def test_retry_after_commit_keeps_each_attempt(self, tmp_path):
+        db = FakeMinuteDB()
+        _, second = self._pipeline(db, tmp_path)
+        handler = build_handler(db, tmp_path)
+        claim_then_run(handler, second)             # 도메인 커밋, SUCCEEDED 전 종료 가정
+        job = db.jobs[("price", second["payload"]["job_id"])]
+        job["attempt_count"] += 1                   # lease 만료 뒤 재claim 과 같은 효과
+        handler(job_id=second["payload"]["job_id"], payload=second["payload"],
+                attempt=job["attempt_count"], redrive_generation=0)
+        attempts = sorted(k[2] for k in db.judgments)
+        assert attempts == [1, 2] and len(db.triggers) == 1   # 업무 결과는 하나, 시도는 둘
+        assert '"inserted": []' in db.judgments[(second["payload"]["job_id"], 0, 2)]["summary"]
+
+    def test_recorded_baseline_is_the_value_the_judgment_used(self, tmp_path):
+        # price_daily 는 NUMERIC(24,8)인데 판정은 6자리 ROUND_HALF_UP 으로 정규화한 값을 쓴다.
+        # 원본을 기록하면 경계 근처(100.00000049 → 판정 100.000000)에서 기록으로 판정을 재현할
+        # 수 없다(edge-review §33.14 지적) — 기록은 '실제 사용값'이어야 한다.
+        db = FakeMinuteDB()
+        db.prev_closes.update({"500000": Decimal("100.00000049"), "500001": Decimal("200")})
+        _, second = self._pipeline(db, tmp_path)
+        handler = build_handler(db, tmp_path)
+        claim_then_run(handler, second)
+        [record] = [v for k, v in db.judgments.items() if k[0] == second["payload"]["job_id"]]
+        snap = db.baseline_snapshots[db.baseline_sets[(record["baseline_set_id"], "500000")]]
+        assert snap["source"] == "prev_close" and Decimal(str(snap["value"])) == Decimal("100.000000")
+        assert str(snap["value"]) == "100.000000"
+
+    def test_judgment_error_is_recorded_per_entity(self, tmp_path):
+        # 종목별 판정 불가(close=0)는 errors 문장만 있으면 조회가 종목을 알 수 없어 '무발화'로
+        # 보인다(edge-review §33.14). 판정 규칙은 그대로 두고 종목 ID 를 함께 남긴다.
+        db = FakeMinuteDB()
+        worker, _, _ = build_pipeline(
+            db, tmp_path,
+            prices={"500000": [(100, 100), (108, 110)],
+                    "500001": [(200, 200), (200, 0)],
+                    "100000": [(50, 50), (50, 50)]},
+        )
+        assert worker.tick(NOW) == "PROCESSED"
+        second = price_job_events(db)[1]
+        claim_then_run(build_handler(db, tmp_path), second)
+        [record] = [v for k, v in db.judgments.items() if k[0] == second["payload"]["job_id"]]
+        assert '"error_entities": ["500001"]' in record["summary"]

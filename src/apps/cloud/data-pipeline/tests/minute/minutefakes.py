@@ -63,6 +63,10 @@ class FakeMinuteDB:
         # price_daily×instrument 조인의 결과만 모델링한다: {ticker: 전일 종가}.
         # 비우면 전일 종가 결손 = 세션 시가 폴백 경로다(ALPHA-745).
         self.prev_closes: dict[str, object] = {}
+        # 판정 기록(§33.12 로컬 실험)
+        self.baseline_snapshots: dict[str, dict] = {}
+        self.baseline_sets: dict[tuple, str] = {}
+        self.judgments: dict[tuple, dict] = {}
         self._seq = 0                          # created_at 순서 흉내
         self.connect_calls = 0                 # 트랜잭션(=connect) 횟수 — 원자성 단언용
 
@@ -399,15 +403,40 @@ class _Cursor:
             row = self.db.windows.get((params[0], params[1]))
             if row is not None:
                 self._rows = [(row["generation"], row["data_status"])]
-        elif s.startswith("SELECT entity_id, status, open_price FROM minute_session_open"):
+        elif s.startswith("SELECT o.entity_id, o.status, o.open_price, s.snapshot_id"):
+            snap = {(r["session_id"], r["entity_id"]): k for k, r in self.db.baseline_snapshots.items()
+                    if r["source"] == "open_fallback"}
             self._rows = [
-                (entity, row["status"], row["open_price"])
+                (entity, row["status"], row["open_price"], snap.get((sid, entity)))
                 for (sid, entity), row in self.db.session_opens.items()
                 if sid == params[0]
             ]
+        elif s.startswith("SELECT entity_id, anchor_window FROM minute_trigger_anchor"):
+            self._rows = [(e, row["anchor_window"]) for (sid, e), row in self.db.trigger_anchors.items()
+                          if sid == params[0] and e in params[1]]
+        elif s.startswith("INSERT INTO minute_price_baseline_snapshot"):
+            self.db.baseline_snapshots.setdefault(params[0], dict(zip(
+                ("session_id", "entity_id", "source", "ref", "value"), params[1:])))
+        elif s.startswith("INSERT INTO minute_price_baseline_set"):
+            self.db.baseline_sets.setdefault((params[0], params[1]), params[2])
+        elif s.startswith("INSERT INTO minute_price_judgment"):
+            key = tuple(params[:3])
+            if key not in self.db.judgments:
+                self.db.judgments[key] = dict(zip(
+                    ("session_id", "window_start", "generation", "policy", "abs_threshold",
+                     "revert_threshold", "baseline_set_id", "summary", "anchors_used", "tx_anchor",
+                     "tx_anchor_locked"), params[3:14]))
+                self._rows = [(params[0],)]
+        elif s.startswith("SELECT generation, detection_policy_version, abs_threshold"):
+            r = self.db.judgments.get(tuple(params[:3]))
+            if r is not None:
+                self._rows = [(r["generation"], r["policy"], r["abs_threshold"], r["revert_threshold"],
+                               r["baseline_set_id"], json.loads(r["summary"]), json.loads(r["anchors_used"]))]
         elif s.startswith("INSERT INTO minute_session_open"):
             assert "ON CONFLICT (session_id, entity_id) DO NOTHING" in s
             key = (params[0], params[1])
+            if key not in self.db.session_opens and "RETURNING" in s:
+                self._rows = [(params[1],)]
             if key not in self.db.session_opens:  # 확정 후 불변
                 self.db.session_opens[key] = {
                     "status": params[2], "open_price": params[3],
@@ -424,7 +453,7 @@ class _Cursor:
             # 세션이 통째로 시가 폴백(v1)으로 되돌아간다. fake 는 날짜를 모델링하지
             # 않으니 이 결함은 문면으로만 잡을 수 있다
             assert "i2.ticker = ANY(%s)" in s and "i2.market_code = ANY(%s)" in s
-            self._rows = [(ticker, close) for ticker, close
+            self._rows = [(ticker, close, None) for ticker, close
                           in sorted(self.db.prev_closes.items())
                           if ticker in params[0]]
         elif s.startswith("SELECT entity_id, anchor_price, anchor_window "
