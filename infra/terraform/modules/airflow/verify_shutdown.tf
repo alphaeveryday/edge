@@ -7,6 +7,21 @@
 # 다음 dev 자동 apply 는 host_count 대로 되돌리므로, 검증을 마치면 host_count = 0 머지로 코드를 맞춘다.
 locals {
   verify_shutdown = var.verify_enabled && var.verify_shutdown_at != ""
+  # 종료 태스크 RunTask 요청 — grace 만 다른 두 스케줄(종료·강제)이 같이 쓴다.
+  # 검증이 꺼지면 참조 대상이 없다 — 이 값은 count 로 켜지는 스케줄 안에서만 쓰인다.
+  verify_shutdown_run = {
+    Cluster        = aws_ecs_cluster.this.arn
+    TaskDefinition = try(aws_ecs_task_definition.verify["ops"].arn, null)
+    LaunchType     = "FARGATE"
+    StartedBy      = "verify-shutdown"
+    NetworkConfiguration = {
+      AwsvpcConfiguration = {
+        Subnets        = var.subnet_ids
+        SecurityGroups = aws_security_group.verify[*].id
+        AssignPublicIp = "DISABLED"
+      }
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "verify_task_shutdown" {
@@ -78,22 +93,31 @@ resource "aws_scheduler_schedule" "verify_shutdown" {
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
     role_arn = aws_iam_role.verify_scheduler[0].arn
-    input = jsonencode({
-      Cluster        = aws_ecs_cluster.this.arn
-      TaskDefinition = aws_ecs_task_definition.verify["ops"].arn
-      LaunchType     = "FARGATE"
-      StartedBy      = "verify-shutdown"
-      NetworkConfiguration = {
-        AwsvpcConfiguration = {
-          Subnets        = var.subnet_ids
-          SecurityGroups = [aws_security_group.verify[0].id]
-          AssignPublicIp = "DISABLED"
-        }
-      }
-      Overrides = {
-        ContainerOverrides = [{ Name = "data-pipeline", Command = ["verify-shutdown", tostring(var.verify_shutdown_grace_seconds)] }]
-      }
-    })
+    input = jsonencode(merge(local.verify_shutdown_run, {
+      Overrides = { ContainerOverrides = [{ Name = "data-pipeline", Command = ["verify-shutdown", tostring(var.verify_shutdown_grace_seconds)] }] }
+    }))
+    retry_policy {
+      maximum_event_age_in_seconds = 900
+      maximum_retry_attempts       = 3
+    }
+  }
+}
+
+# 강제 시각에 종료 태스크를 한 번 더(grace 0) — 첫 종료 태스크가 기동 실패·조회 실패로 검증 태스크를 못 멈췄을 때.
+# 이것마저 실패해도 남는 검증 업무 태스크는 스스로 끝난다(재제출하는 Airflow 가 없고, 각 스텝은 수 분 안에 끝난다).
+resource "aws_scheduler_schedule" "verify_hard_stop_tasks" {
+  count                        = local.verify_shutdown ? 1 : 0
+  name                         = "${var.name}-verify-hard-stop-tasks"
+  schedule_expression          = "at(${var.verify_hard_stop_at})"
+  schedule_expression_timezone = "Asia/Seoul"
+  flexible_time_window { mode = "OFF" }
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
+    role_arn = aws_iam_role.verify_scheduler[0].arn
+    input = jsonencode(merge(local.verify_shutdown_run, {
+      Overrides = { ContainerOverrides = [{ Name = "data-pipeline", Command = ["verify-shutdown", "0"] }] }
+    }))
     retry_policy {
       maximum_event_age_in_seconds = 900
       maximum_retry_attempts       = 3

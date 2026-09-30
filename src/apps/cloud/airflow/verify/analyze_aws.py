@@ -508,8 +508,9 @@ def analyze(exp: str) -> dict:
             "A6_outcomes": None if v is None else v["ok"],
             "A7_business": None if v is None else v["normal_ok"] >= 3 and all(v["normals"][k]["ok"] for k in ("N1", "N2", "N3")),
             "A9_no_growth": "n/a(V)", "A10_ui": "n/a(V)",
-            "A11_task_headroom": None if host is None or not host["task_paths_seen"] or host["task_events_missing"]
-            else host["task_hit_limit_events"] == 0,
+            # 상한 도달이 관측됐으면 누락 표본과 무관하게 실패다.
+            "A11_task_headroom": False if host and host["task_hit_limit_events"] else
+            None if host is None or not host["task_paths_seen"] or host["task_events_missing"] else True,
             "A12_deploy_fixed": None if not fps or any('"tasks": []' in f for f in fps) else len(tds) == 1,
         })
     del lim, placement

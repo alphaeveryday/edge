@@ -253,15 +253,20 @@ def shutdown() -> int:
     try:
         step("service_desired_0_at", lambda: ecs.update_service(cluster=cluster, service=os.environ["VERIFY_SERVICE"],
                                                                 desiredCount=0))
-        deadline, tasks = time.time() + grace, []
+        # 조회 실패(None)는 "남은 태스크 없음"과 다르다 — grace 안에서 다시 보고, 끝까지 모르면 그 사실을 남긴다.
+        deadline, tasks = time.time() + grace, None
         while True:
             try:
                 tasks = running_verify()
             except Exception as exc:
                 report["errors"].append(f"list: {exc!r}"[:400])
-            if not tasks or time.time() >= deadline:
+                tasks = None
+            if tasks == [] or time.time() >= deadline:
                 break
             time.sleep(20)
+        if tasks is None:
+            report["errors"].append("list: 남은 검증 태스크를 끝내 조회하지 못했다 — 중단 여부 미상")
+            tasks = []
         for t in tasks:
             env = (t.get("overrides", {}).get("containerOverrides") or [{}])[0].get("environment") or []
             row = {"arn": t["taskArn"], "family": t["taskDefinitionArn"].rsplit("/", 1)[1], "result": "unknown",
