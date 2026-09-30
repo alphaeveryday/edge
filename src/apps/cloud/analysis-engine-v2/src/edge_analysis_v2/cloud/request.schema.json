@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["analysis_id", "kind", "etf_code", "analysis_at"],
+  "properties": {
+    "analysis_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "kind": {"enum": ["outlook", "movement"]},
+    "etf_code": {"type": "string", "pattern": "^[0-9]{6}$"},
+    "analysis_at": {"type": "string", "format": "date-time"}
+  }
+}
