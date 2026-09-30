@@ -36,10 +36,10 @@ class FixtureTools:
         self._register("calculate_chart_indicators", "ETF 가격으로 RSI14 모멘텀과 반전 Williams14 바닥지수를 계산합니다. 높은 바닥지수는 과매도 관찰이며 반등확률이 아닙니다.", {}, lambda: chart.indicators(self.fixture), r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})", ["ETF 일봉과 장중 가격"])
         self._register("evaluate_indicator_transition", "최근 지수 관측의 80/20 진입·이탈을 확인합니다. 구간 유지에는 최근5개 관측이 모두 필요합니다.", {"indicator": {"type": "string", "enum": ["momentum", "bottom"]}}, lambda **args: chart.transition(self.fixture, **args), r"U(x)=[x\ge80];\ L(x)=[x\le20]", ["ETF 일봉과 장중 가격"], version="v2")
         series = {"type": "string", "enum": list(macro.SERIES)}
-        self._register("get_macro_observations", "거시지표의 공개된 최근21개 관측값을 탐색합니다. 수치 비교 근거는 compare_macro_observations로 확정합니다.", {"series": series}, lambda **args: macro.read(self.fixture, **args), "", ["목 거시경제 관측"], version="v2")
-        self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"])
-        self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"])
-        self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"])
+        self._register("get_macro_observations", "거시지표의 공개된 최근21개 관측값을 탐색합니다. 수치 비교 근거는 compare_macro_observations로 확정합니다.", {"series": series}, lambda **args: macro.read(self.fixture, **args), "", ["목 거시경제 관측"], version="v3")
+        self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"], version="v2")
+        self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"], version="v2")
+        self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"], version="v2")
 
         self._register('get_instrument_factors',
             '종목의 차트·확정 수급·밸류·공통 매크로를 읽고 다음 조사 대상을 고릅니다. instrument_id는 초기 종목 목록에서 선택합니다. factors를 생략하면 전체, 지정하면 해당 요인만 반환합니다. 예: factors=["flow","valuation"]. 이력은 columns/rows, 시점은 이번 분석에 고정됩니다. ETF 수급·밸류는 구성종목 가중값입니다. null은 미확보입니다. 반환값은 근거로 사용 가능하고 이력의 새 계산은 해당 계산 툴로 확인합니다.',
@@ -48,7 +48,7 @@ class FixtureTools:
                          'items': {'type': 'string', 'enum': list(instrument_factors.FACTORS)}}},
             lambda **args: instrument_factors.read(self.fixture, **args),
             instrument_factors.FORMULA_LATEX, ['종목 가격', '확정 수급', '구성종목 비중', '공개 재무', '거시 관측', 'ETF 분배금·좌수'],
-            required=['instrument_id'])
+            required=['instrument_id'], version='v2')
 
     def _register(self, name, description, parameters, callback, formula, sources, *, version="v1", required=None):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources, "version": version, "required": list(parameters) if required is None else required}

@@ -71,3 +71,14 @@ def test_ttm_never_double_counts_or_skips_a_quarter():
     fixture["financials"].append({"instrument_id": "A", "period": "2026-Q2", "eps": 9, "bps": 50, "available_at": "2026-09-01T18:00:00+09:00"})
     result = FixtureTools(fixture).call("calculate_valuation", {"instrument_id": "A"})["result"]
     assert result["periods"] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"] and result["ttm_eps"] == 16.5
+
+
+def test_tools_whose_results_changed_for_alpha_1130_carry_new_definition_versions():
+    # WHY: the audit store keys immutable definitions by function:version. Approximation flags, coverage and
+    # date-only macro handling change these results, so keeping the old version would file pre- and post-change
+    # executions under one definition and make saved evidence non-reproducible.
+    versions = {d['function_name']: d['version'] for d in FixtureTools(valuation_fixture()).definitions}
+    assert {name: versions[name] for name in ('get_macro_observations', 'compare_macro_observations',
+            'calculate_valuation', 'calculate_weighted_valuation', 'get_instrument_factors')} == {
+        'get_macro_observations': 'v3', 'compare_macro_observations': 'v2', 'calculate_valuation': 'v2',
+        'calculate_weighted_valuation': 'v2', 'get_instrument_factors': 'v2'}
