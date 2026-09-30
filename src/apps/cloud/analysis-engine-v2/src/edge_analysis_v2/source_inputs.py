@@ -55,11 +55,14 @@ def macro_inputs(conn, analysis_at, series=MACRO_SERIES, limit=21):
 def financial_inputs(conn, analysis_at, instrument_ids):
     """Return ``financials`` rows (quarterly EPS + quarter-end BPS) visible at ``analysis_at``.
 
-    Every visible quarter is returned as a row; a missing EPS or BPS stays ``None`` in the row
-    **and** is listed in ``gaps`` with the reason (``bps_note`` PREFERRED_SHARES_PRESENT = the
-    per-common-share BPS is deliberately blocked, a team decision; COMMON_SHARE_BPS_UNAVAILABLE /
-    BPS_ABSENT_IN_LATEST_VERSION / EPS_ABSENT_IN_LATEST_VERSION = the newest version of that report
-    lacks the value; never filled from an older version). Dropping an incomplete latest quarter would let the
+    A row is a **confirmed report version** (the latest one the pipeline confirmed, by receipt
+    order); a missing EPS or BPS stays ``None`` in the row **and** is listed in ``gaps`` with the
+    reason (``bps_note`` PREFERRED_SHARES_PRESENT = the per-common-share BPS is deliberately
+    blocked, a team decision; COMMON_SHARE_BPS_UNAVAILABLE / BPS_ABSENT_IN_LATEST_VERSION /
+    EPS_ABSENT_IN_LATEST_VERSION = the confirmed version lacks the value; BPS_UNCONFIRMED = the
+    share-count response failed, so absence is not confirmed). ``version`` carries which run the
+    values come from and ``latest_unconfirmed_at`` when a later check failed — the caller sees it
+    is reading an older confirmed version, and nothing is filled from older versions. Dropping an incomplete latest quarter would let the
     valuation tool slide to the previous four quarters and report a stale ratio as current, so
     the hole is kept in place and ``valuation.calculate`` fails on it instead.
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can
@@ -70,21 +73,26 @@ def financial_inputs(conn, analysis_at, instrument_ids):
         for instrument_id in instrument_ids:
             cur.execute(
                 "SELECT period, eps, eps_derivation, bps, bps_total_shares, bps_note, fs_basis, available_at,"
-                " rcept_nos, raw_run_ids FROM financial_quarters_as_of(%s, %s) ORDER BY period",
+                " rcept_nos, raw_run_ids, version_raw_run_id, version_received_at, version_rejected, shares_status,"
+                " latest_unconfirmed_at FROM financial_quarters_as_of(%s, %s) ORDER BY period",
                 (analysis_at, instrument_id))
             found = cur.fetchall()
             if not found:
                 gaps.append({"instrument_id": instrument_id, "period": None, "missing": ["all"],
                              "reasons": {"all": "no_release_visible"}})
-            for period, eps, eps_derivation, bps, bps_total, note, basis, available_at, rcept_nos, run_ids in found:
+            for (period, eps, eps_derivation, bps, bps_total, note, basis, available_at, rcept_nos, run_ids,
+                 version_run, version_received, rejected, shares_status, unconfirmed_at) in found:
+                version = {"raw_run_id": version_run, "received_at": _iso(version_received),
+                           "latest_unconfirmed_at": _iso(unconfirmed_at), "shares_status": shares_status}
                 reasons = {name: reason for name, value, reason in (("eps", eps, "EPS_ABSENT_IN_LATEST_VERSION"),
                                                                      ("bps", bps, note)) if value is None}
                 if reasons:   # one reason per missing metric — a policy block on BPS must survive an EPS gap
                     gaps.append({"instrument_id": instrument_id, "period": period, "missing": sorted(reasons),
-                                 "reasons": reasons, "bps_total_shares": _num(bps_total)})
+                                 "reasons": reasons, "bps_total_shares": _num(bps_total),
+                                 "rejected": list(rejected or []), "version": version})
                 rows.append({"instrument_id": instrument_id, "period": period, "eps": _num(eps), "bps": _num(bps),
                              "available_at": _iso(available_at), "fs_basis": basis,
-                             "eps_derivation": eps_derivation,
+                             "eps_derivation": eps_derivation, "version": version,
                              "evidence": {"rcept_nos": list(rcept_nos or []), "raw_run_ids": list(run_ids or [])}})
     return rows, gaps
 

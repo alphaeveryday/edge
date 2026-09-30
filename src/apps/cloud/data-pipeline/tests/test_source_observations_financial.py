@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -495,3 +497,58 @@ def test_common_bps_verdict_is_stored_on_the_total_shares_evidence_line():
     assert next(r for r in rows if r["metric"] == "bps_total_shares")["inputs"][1]["common_bps"] == "bps_blocked_preferred_shares"
     rows, _ = _extract_bps(json.loads(shares(SAMSUNG, "2026", "11012")))
     assert next(r for r in rows if r["metric"] == "bps_total_shares")["inputs"][1]["common_bps"] == "computed"
+
+
+def _versions(storage, run_norm="run_fn"):
+    manifest = json.loads(storage.get_bytes(
+        f"operations_archive/canonical_run_manifests/dataset=financial_metric/run_id={run_norm}/manifest.json"))
+    rows = so.read_rows(so.FINANCIAL_VERSION, storage.get_bytes(manifest["companion"]["key"]))
+    return manifest, {(r["fiscal_year"], r["reprt_code"], r["fs_basis"]): r for r in rows}
+
+
+def test_report_versions_distinguish_confirmed_partial_empty_and_unconfirmed(tmp_path):
+    # WHY(리뷰 7차 잔여 → 이번 수정): 지표 행만 저장하면 "정정 보고서를 확인했는데 쓸 지표가 0개"인 실행이 흔적 없이
+    # 사라져 옛 값이 최신처럼 남는다. 판본 행은 지표와 독립으로 실행마다 남고, 확인(CONFIRMED)과 확정 실패(UNCONFIRMED)를
+    # 가른다 — 조회는 확인된 최신 판본만 권위로 본다.
+    responses = full_responses(SAMSUNG)
+    # 2026 반기 CFS: 본문은 정상이나 쓸 계정 줄이 없다(전부 거부) → CONFIRMED, metrics=[]
+    broken = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    for line in broken["list"]:
+        line["account_id"] = "x_unknown"
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = json.dumps(broken).encode()
+    # 2026 1분기 CFS: HTTP 본문 파손 → UNCONFIRMED
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")] = b"<html>502</html>"
+    # 2025 3분기: 주식총수 응답 파손 → 판본은 확정, 분모만 미확정(detail.shares=error)
+    responses[("shares", SAMSUNG["corp_code"], "2025", "11014")] = b"<html>502</html>"
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    assert so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    manifest, versions = _versions(storage)
+    assert manifest["companion"]["dataset"] == "financial_report_version" and manifest["companion"]["rows"] == len(versions)
+    empty = versions[(2026, "11012", "CFS")]
+    assert empty["status"] == "CONFIRMED" and json.loads(empty["metrics"]) == [] and json.loads(empty["rejected"])
+    assert empty["rcept_no"] == "20260814000404" and empty["availability_basis"] == "provider_release_date"
+    assert versions[(2026, "11013", "CFS")]["status"] == "UNCONFIRMED"
+    assert json.loads(versions[(2026, "11013", "CFS")]["detail"])["statement"] == "error"
+    q3 = versions[(2025, "11014", "CFS")]
+    assert q3["status"] == "CONFIRMED" and json.loads(q3["detail"])["shares"] == "error"
+    assert "eps_basic/QUARTER/Q3" in json.loads(q3["metrics"]) and not any(m.startswith("bps") for m in json.loads(q3["metrics"]))
+    annual = versions[(2025, "11011", "CFS")]
+    assert "eps_basic/QUARTER/Q4" in json.loads(annual["metrics"])          # Q4 유도 행은 사업보고서 판본의 것
+    assert json.loads(versions[(2026, "11012", "OFS")]["detail"])["statement"] == "ok"
+    assert versions[(2026, "11013", "OFS")]["status"] == "CONFIRMED"        # OFS 응답은 멀쩡했다 — 기준별로 따로 확정
+    # 판본 행의 raw 근거: 파손 본문도 raw 객체로 남아 그 키를 가리킨다(본문이 아예 없는 실패만 raw manifest)
+    assert versions[(2026, "11013", "CFS")]["raw_key"].endswith("00126380-2026-11013-CFS-39b659fd9260d48f.json")
+
+
+def test_companion_artifact_is_required_at_load_time(tmp_path):
+    # WHY: 판본 없는 지표 행은 조회 계약 밖이다 — 옛 형태(companion 없는) manifest 를 조용히 싣지 않는다.
+    dart = DartFake([SAMSUNG], full_responses(SAMSUNG), {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    key = "operations_archive/canonical_run_manifests/dataset=financial_metric/run_id=run_fn/manifest.json"
+    manifest = json.loads(storage.get_bytes(key))
+    manifest.pop("companion")
+    storage.put_bytes(key, json.dumps(manifest).encode())
+    with pytest.raises(ValueError, match="companion"):
+        so._companion_params(storage, so.FINANCIAL, manifest, "run_fn")

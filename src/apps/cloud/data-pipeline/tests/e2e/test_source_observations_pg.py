@@ -42,6 +42,7 @@ def conn():
                                  password=db.password, autocommit=True)
     cleanup = ["DELETE FROM macro_observation WHERE raw_run_id LIKE %s",
                "DELETE FROM financial_metric WHERE raw_run_id LIKE %s",
+               "DELETE FROM financial_report_version WHERE raw_run_id LIKE %s",
                "DELETE FROM sector_classification WHERE raw_run_id LIKE %s"]
     for sql in cleanup:
         connection.execute(sql, (RUN + "%",))
@@ -269,3 +270,123 @@ def test_sector_as_of_and_constituent_coverage_at_analysis_time(tmp_path, conn):
         conn.execute("DELETE FROM etf_holding_snapshot_status WHERE data_version='e2e_so'")
         for iid in created:
             conn.execute("DELETE FROM entity WHERE entity_id=%s", (iid,))
+
+
+# ── 보고서 판본(financial_report_version) — 실 PostgreSQL 조회 계약 ──────────────────────
+
+def _financial_run(tmp_path, tag, responses, fetched_at, *, from_date, to_date, now, load=True):
+    """삼성전자 한 회사의 수집 → 정제 → (적재). 응답 표는 호출자가 고쳐 넣는다. 반환: (storage, raw, norm)."""
+    from data_pipeline.lake import LocalStorage
+    from data_pipeline.steps import source_observations as so
+    from source_observation_fakes import SAMSUNG, DartFake, filing_list, write_holdings
+
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    dart.fetched_at = fetched_at
+    storage = LocalStorage(tmp_path / tag)
+    write_holdings(storage, "2026-08-14", ["005930"])
+    raw, norm = f"{RUN}{tag}_raw", f"{RUN}{tag}_norm"
+    assert so.collect_financial(storage, dart, raw, etf_ids=["091160"], from_date=from_date, to_date=to_date,
+                                now=now) in (0, 2)
+    assert so.normalize(storage, so.FINANCIAL, norm, raw, producer="normalize_financial_metric") in (0, 2)
+    if load:
+        assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}{tag}_load", input_run_id=norm, pending=False,
+                       producer="load_financial_metric") == 0
+    return storage, raw, norm
+
+
+def _samsung_responses():
+    from source_observation_fakes import FILINGS, SAMSUNG, shares, statement
+
+    responses = {}
+    for year, code in FILINGS:
+        for fs in ("CFS", "OFS"):
+            responses[("statement", SAMSUNG["corp_code"], year, code, fs)] = statement(SAMSUNG, year, code, fs)
+        responses[("shares", SAMSUNG["corp_code"], year, code)] = shares(SAMSUNG, year, code, treasury=50)
+    return responses
+
+
+def _q(conn, at, code="005930"):
+    return {p: rest for p, *rest in conn.execute(
+        "SELECT period, eps::text, bps::text, bps_note, version_raw_run_id, latest_unconfirmed_at, shares_status,"
+        " version_rejected FROM financial_quarters_as_of(%s, %s)", (at, code)).fetchall()}
+
+
+def test_zero_metric_correction_replaces_values_and_failures_do_not(tmp_path, conn):
+    """지표 0개 정정 판본 · 일부 지표 판본 · 공급자 실패 vs 정상 무자료 · 늦게 끝난 옛 실행 — 조회 계약."""
+    from source_observation_fakes import SAMSUNG, statement
+
+    corp = SAMSUNG["corp_code"]
+    now = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+    window = dict(from_date="2025-10-01", to_date="2026-08-20", now=now)
+    _financial_run(tmp_path, "a", _samsung_responses(), "2026-08-20T00:00:00+00:00", **window)
+    base = _q(conn, datetime(2026, 8, 21, tzinfo=KST))
+    eps, bps = base["2026-Q2"][:2]
+    q1 = base["2026-Q1"][:2]
+    assert eps == "1200" and bps is not None and base["2026-Q2"][3] == f"{RUN}a_raw"
+
+    # B(09-05): 반기 CFS 응답이 HTTP 파손 → UNCONFIRMED. 옛 확정값은 그대로, 실패 시각만 드러난다.
+    broken = _samsung_responses()
+    broken[("statement", corp, "2026", "11012", "CFS")] = b"<html>502</html>"
+    _financial_run(tmp_path, "b", broken, "2026-09-05T00:00:00+00:00", from_date="2026-08-01",
+                   to_date="2026-09-05", now=datetime(2026, 9, 5, 1, 0, tzinfo=timezone.utc))
+    after_b = _q(conn, datetime(2026, 9, 6, tzinfo=KST))
+    assert after_b["2026-Q2"][:2] == [eps, bps] and after_b["2026-Q2"][3] == f"{RUN}a_raw"
+    assert after_b["2026-Q2"][4] is not None                       # latest_unconfirmed_at
+    assert _q(conn, datetime(2026, 9, 4, tzinfo=KST))["2026-Q2"][4] is None   # 실패 전 시점엔 실패도 없다
+
+    # C(09-10): 정정본을 정상으로 확인했으나 쓸 계정 줄이 없다 → CONFIRMED, 지표 0 → 옛 값이 최신처럼 남지 않는다.
+    empty = _samsung_responses()
+    body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    for line in body["list"]:
+        line["account_id"] = "x_unknown"
+    empty[("statement", corp, "2026", "11012", "CFS")] = json.dumps(body).encode()
+    _financial_run(tmp_path, "c", empty, "2026-09-10T00:00:00+00:00", from_date="2026-08-01",
+                   to_date="2026-09-10", now=datetime(2026, 9, 10, 1, 0, tzinfo=timezone.utc))
+    after_c = _q(conn, datetime(2026, 9, 11, tzinfo=KST))
+    assert after_c["2026-Q2"][:4] == [None, None, "BPS_ABSENT_IN_LATEST_VERSION", f"{RUN}c_raw"]
+    assert after_c["2026-Q2"][4] is None                           # C 뒤엔 실패가 없다(B 는 C 보다 앞)
+    assert any(r["metric"] == "eps_basic" for r in after_c["2026-Q2"][6])   # 못 만든 지표와 사유가 판본에 있다
+    assert after_c["2026-Q1"][:2] == q1                           # 다른 보고서는 영향 없다
+
+    # D(09-12): 재무제표는 정상, 주식총수 응답만 파손 → 일부 지표 판본. 분모 부재는 "확정 못 함"이다.
+    part = _samsung_responses()
+    part[("shares", corp, "2026", "11012")] = b"<html>502</html>"
+    _financial_run(tmp_path, "d", part, "2026-09-12T00:00:00+00:00", from_date="2026-08-01",
+                   to_date="2026-09-12", now=datetime(2026, 9, 12, 1, 0, tzinfo=timezone.utc))
+    after_d = _q(conn, datetime(2026, 9, 13, tzinfo=KST))
+    assert after_d["2026-Q2"][:4] == ["1200", None, "BPS_UNCONFIRMED", f"{RUN}d_raw"] and after_d["2026-Q2"][5] == "error"
+    # D2(09-14): 주식총수 "조회 데이터 없음"(013) → 정상 무자료 = 확정된 부재
+    none = _samsung_responses()
+    none[("shares", corp, "2026", "11012")] = json.dumps({"status": "013", "message": "없음"}).encode()
+    _financial_run(tmp_path, "d2", none, "2026-09-14T00:00:00+00:00", from_date="2026-08-01",
+                   to_date="2026-09-14", now=datetime(2026, 9, 14, 1, 0, tzinfo=timezone.utc))
+    after_d2 = _q(conn, datetime(2026, 9, 15, tzinfo=KST))
+    assert after_d2["2026-Q2"][2:4] == ["BPS_ABSENT_IN_LATEST_VERSION", f"{RUN}d2_raw"] and after_d2["2026-Q2"][5] == "empty"
+
+    # 늦게 끝난 옛 실행(08-16 에 받았는데 지금 적재) — 최신 확정(d2)을 덮지 못한다.
+    _financial_run(tmp_path, "late", _samsung_responses(), "2026-08-16T00:00:00+00:00", from_date="2026-08-01",
+                   to_date="2026-08-16", now=datetime(2026, 8, 16, 1, 0, tzinfo=timezone.utc))
+    assert _q(conn, datetime(2026, 9, 15, tzinfo=KST))["2026-Q2"][3] == f"{RUN}d2_raw"
+    # 같은 접수번호의 재수집은 모두 원 공개일(08-15)부터 보인다(결정 ①) — 그중 가장 늦게 받은 d2 가 과거 시점에서도 이긴다.
+    # (새 접수번호를 단 정정본만 그 접수일부터 보인다 — test_financial_quarters_follow_release_dates 가 고정.)
+    assert _q(conn, datetime(2026, 8, 17, tzinfo=KST))["2026-Q2"][3] == f"{RUN}d2_raw"
+
+
+def test_interrupted_load_recovers_both_tables_and_duplicates_do_not_multiply(tmp_path, conn):
+    """저장·적재 사이 중단 후 --all 복구, 같은 raw 의 중복 정제·적재."""
+    from data_pipeline.steps import source_observations as so
+
+    now = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+    storage, raw, norm = _financial_run(tmp_path, "i", _samsung_responses(), "2026-08-20T00:00:00+00:00",
+                                        from_date="2025-10-01", to_date="2026-08-20", now=now, load=False)
+    count = lambda table: conn.execute(f"SELECT count(*) FROM {table} WHERE raw_run_id = %s", (raw,)).fetchone()[0]
+    assert count("financial_metric") == 0 and count("financial_report_version") == 0
+    assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}i_load", input_run_id=None, pending=True,
+                   producer="load_financial_metric") == 0
+    metrics, versions = count("financial_metric"), count("financial_report_version")
+    assert metrics > 0 and versions == 8                            # 4 보고서 × CFS·OFS
+    # 같은 raw 를 다시 정제(다른 run_id)해 적재해도 판본·지표가 늘지 않는다(같은 raw_run_id → PK 충돌은 무시)
+    assert so.normalize(storage, so.FINANCIAL, f"{RUN}i_norm2", raw, producer="normalize_financial_metric") == 0
+    assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}i_load2", input_run_id=f"{RUN}i_norm2", pending=False,
+                   producer="load_financial_metric") == 0
+    assert (count("financial_metric"), count("financial_report_version")) == (metrics, versions)

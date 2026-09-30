@@ -85,6 +85,9 @@ class DatasetSpec:
     normalize: Callable[[list[dict], dict], tuple[list[dict], list[dict]]]
     table: str
     collection_vendor: str                                 # collection_log 의 source= (원장 관측 축)
+    # 같은 정제가 함께 만드는 둘째 행 집합(재무: 보고서 판본). 같은 manifest·같은 적재 트랜잭션에 실린다 —
+    # 지표 행 없이 판본만, 판본 없이 지표만 실리는 상태가 없다.
+    companion: "DatasetSpec | None" = None
 
     def names(self) -> list[str]:
         """열 이름(파일·DB 적재 순서)."""
@@ -360,9 +363,11 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         storage.put_bytes(manifest_key, json.dumps(
             {"run_id": run_id, "producer": producer, "canonical_written": False}).encode("utf-8"))
         raw_manifest, objects = _load_raw_objects(storage, spec.dataset, input_run_id)
-        rows, rejects = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
+        result = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
+        rows, rejects = result[0], result[1]
+        companion_rows = list(result[2]) if len(result) > 2 else []
         failures.extend(rejects)
-        for row in rows:
+        for row in [*rows, *companion_rows]:
             row["raw_run_id"] = input_run_id
         rows, conflicts, collapsed = _collapse(spec, rows)
         failures.extend(conflicts)
@@ -370,6 +375,13 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         artifact_key = canonical_run_partition_key(spec.dataset, run_id, raw_manifest["ingest_date"])
         artifact_sha = put_immutable(storage, artifact_key, artifact)
         partitions = _merge_canonical(storage, spec, rows)
+        companion = None
+        if spec.companion is not None:
+            # 판본 사실은 실행별 artifact 와 DB 에만 둔다(현재 상태 파티션 없음 — 실행마다 새 사실이지 갱신이 아니다).
+            data = write_rows(spec.companion, companion_rows)
+            key = canonical_run_partition_key(spec.companion.dataset, run_id, raw_manifest["ingest_date"])
+            companion = {"dataset": spec.companion.dataset, "key": key, "sha256": put_immutable(storage, key, data),
+                         "rows": len(companion_rows)}
         storage.put_bytes(manifest_key, json.dumps({
             "run_id": run_id, "producer": producer, "dataset": spec.dataset,
             "canonical_written": True, "input_run_id": input_run_id,
@@ -380,6 +392,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
                          "partition_date": "ingest_date"},
             "canonical_partitions": partitions, "rows": len(rows),
             "rejected": len(failures), "collapsed_duplicates": collapsed,
+            "companion": companion,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8"))
         log.update({"rows": len(rows), "collapsed_duplicates": collapsed,
                     "canonical_partitions": len(partitions), "artifact_key": artifact_key,
@@ -428,9 +441,7 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
     targets = [input_run_id] if input_run_id else unconsumed_run_ids(storage, "canonical", spec.dataset, CONSUMER)
     loaded, inserted, skipped, failures = [], 0, [], []
     exit_code = 0
-    columns = [*spec.names(), "canonical_run_id", "artifact_key", "artifact_sha256"]
-    sql = (f"INSERT INTO {spec.table} ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})"
-           " ON CONFLICT DO NOTHING")
+    sql = _insert_sql(spec)
     for canonical_run_id in targets:
         manifest = _completed_manifest(storage, spec, canonical_run_id)
         if manifest is None:
@@ -449,10 +460,14 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
             rows = read_rows(spec, data)
             params = [[*(r[c] for c in spec.names()), canonical_run_id, artifact["key"], artifact["sha256"]]
                       for r in rows]
+            companion_params = _companion_params(storage, spec, manifest, canonical_run_id)
             with connect(db) as conn, conn.cursor() as cur:
                 before = _count(cur, spec.table, canonical_run_id)
                 if params:
                     cur.executemany(sql, params)
+                if companion_params:
+                    # 지표 행과 판본 행은 한 트랜잭션이다 — 한쪽만 실린 상태가 조회에 보이지 않게.
+                    cur.executemany(_insert_sql(spec.companion), companion_params)
                 inserted += _count(cur, spec.table, canonical_run_id) - before
             storage.put_bytes(run_manifest_consumed_key("canonical", spec.dataset, canonical_run_id, CONSUMER),
                               json.dumps({"consumer": CONSUMER, "rows": len(rows), "loaded_by": run_id,
@@ -477,6 +492,27 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
     logger.info("%s 적재: runs=%d rows=%d inserted=%d failures=%d",
                 spec.dataset, len(loaded), rows_in, inserted, len(failures))
     return exit_code
+
+
+def _insert_sql(spec: DatasetSpec) -> str:
+    columns = [*spec.names(), "canonical_run_id", "artifact_key", "artifact_sha256"]
+    return (f"INSERT INTO {spec.table} ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})"
+            " ON CONFLICT DO NOTHING")
+
+
+def _companion_params(storage: Storage, spec: DatasetSpec, manifest: dict, canonical_run_id: str) -> list[list]:
+    """manifest 의 companion artifact → 적재 파라미터. companion 이 있어야 하는 데이터셋에 없으면 적재하지 않는다
+    (판본 없는 지표는 조회 계약 밖이다 — 옛 형태의 manifest 를 조용히 싣지 않는다)."""
+    if spec.companion is None:
+        return []
+    companion = manifest.get("companion")
+    if not companion:
+        raise ValueError(f"{spec.dataset} manifest 에 companion({spec.companion.dataset}) artifact 가 없다")
+    data = storage.get_bytes(companion["key"])
+    if sha256(data) != companion["sha256"]:
+        raise ValueError(f"companion artifact 바이트가 manifest 와 다르다: {companion['key']}")
+    return [[*(r[c] for c in spec.companion.names()), canonical_run_id, companion["key"], companion["sha256"]]
+            for r in read_rows(spec.companion, data)]
 
 
 def _count(cur, table: str, canonical_run_id: str) -> int:
@@ -745,20 +781,61 @@ def _kst_midnight_after(day: str) -> str:
     return moment.astimezone(timezone.utc).isoformat()
 
 
-def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[dict], list[dict]]:
+_REPORT_PERIOD = {"11013": "Q1", "11012": "Q2", "11014": "Q3", "11011": "Q4"}   # 사업보고서 실행이 Q4 행을 만든다
+
+
+def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """재무제표 응답 → 지표 행 + 거부 + **보고서 판본**(회사·연도·보고서·기준·실행마다 한 줄).
+
+    판본은 지표 행과 독립이다 — 이번 실행이 그 보고서를 정상으로 확인했는데 쓸 지표가 없어도(CONFIRMED, metrics=[])
+    한 줄이 남아 조회가 옛 값을 "최신"으로 내지 않고, 공급자 오류·응답 파손(UNCONFIRMED)은 기존 확정값을 무효화하지
+    않으면서 "최근 확인 실패"로 드러난다. 수집·정제 중이거나 중단된 실행은 판본이 없다(아무것도 바꾸지 않는다).
+    """
     corps = raw_manifest["request_scope"]["corps"]
     rcept_dates: dict[str, str] = {}
     statements, shares = {}, {}
     rows = []
     # 수집이 계획에서 뺀 보고서(비12월 결산)는 여기서 거부로 드러낸다 — 조용한 누락이 성공이 되지 않게.
     rejects = list(raw_manifest["request_scope"].get("unsupported_reports", []))
+    versions: dict[tuple, dict] = {}
+    share_entries: dict[tuple, dict] = {}
+    manifest_key = raw_run_manifest_key(FINANCIAL.dataset, raw_manifest["run_id"])
+    for entry in raw_manifest["objects"]:
+        request = entry.get("request") or {}
+        kind, corp_code = request.get("kind"), request.get("corp_code")
+        if kind == "shares":
+            share_entries[(corp_code, request["bsns_year"], request["reprt_code"])] = entry
+        elif kind == "statement" and corp_code in corps:
+            year, code, fs_div = request["bsns_year"], request["reprt_code"], request["fs_div"]
+            versions[(corp_code, year, code, fs_div)] = {
+                "corp_code": corp_code, "instrument_code": corps[corp_code]["stock_code"], "fiscal_year": int(year),
+                "reprt_code": code, "report_period": _REPORT_PERIOD[code], "fs_basis": fs_div,
+                # ok·empty(013 = 그 기준의 재무제표 없음)는 확인된 응답이다. error 는 판본을 확정하지 못한 것.
+                "status": "CONFIRMED" if entry["status"] in ("ok", "empty") else "UNCONFIRMED",
+                "rcept_no": None, "rcept_date": None, "metrics": [], "rejected": [],
+                "detail": {"statement": entry["status"], "statement_detail": entry.get("detail"),
+                           "shares": None, "shares_detail": None},
+                "received_at": entry["fetched_at"],
+                # 본문이 없는 실패는 raw manifest 가 그 요청의 증거다.
+                "raw_key": entry.get("key") or manifest_key,
+                "raw_sha256": entry.get("sha256") or raw_manifest["manifest_sha256"]}
+
+    def unconfirmed(target: tuple, reason: str) -> None:
+        """이 실행이 그 보고서를 확정하지 못했다고 표시한다(응답 파손·다른 보고서 응답·추출 실패)."""
+        if target in versions:
+            versions[target]["status"] = "UNCONFIRMED"
+            versions[target]["detail"]["statement_detail"] = reason
+
     for obj in objects:
         request = obj["request"]
         kind = request["kind"]
+        target = (request.get("corp_code"), request.get("bsns_year"), request.get("reprt_code"), request.get("fs_div"))
         body = json.loads(obj["body"].decode("utf-8"))
         items = body.get("list") if isinstance(body, dict) else None
         if not isinstance(items, list):
             rejects.append({"raw_key": obj["key"], "reasons": ["unexpected_shape"]})
+            if kind == "statement":
+                unconfirmed(target, "unexpected_shape")
             continue
         malformed = sum(1 for item in items if not isinstance(item, dict))
         if malformed:
@@ -784,6 +861,8 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                for ln in items):
             rejects.append({**{k: request.get(k) for k in ("corp_code", "bsns_year", "reprt_code")},
                             "raw_key": obj["key"], "reasons": ["response_identity_mismatch"]})
+            if kind == "statement":
+                unconfirmed(target, "response_identity_mismatch")
             continue
         target = (request["corp_code"], request["bsns_year"], request["reprt_code"])
         if kind == "statement":
@@ -811,6 +890,16 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
     by_report: dict[tuple, list[tuple[dict, list[dict]]]] = {}
     for (corp_code, year, code, fs_div), statement in sorted(statements.items()):
         share = shares.get((corp_code, year, code))
+        version = versions.get((corp_code, year, code, fs_div))
+        if version is not None:
+            share_entry = share_entries.get((corp_code, year, code))
+            version["detail"].update({"shares": share_entry["status"] if share_entry else "missing",
+                                      "shares_detail": share_entry.get("detail") if share_entry else None})
+            if share is not None:
+                # 분모 응답을 쓴 판본의 수신시각은 두 응답 중 늦은 쪽 — bps 행과 같은 규칙.
+                version["received_at"] = max(version["received_at"], share["fetched_at"])
+            version["rcept_no"] = next((ln.get("rcept_no") for ln in statement["body_json"]["list"]
+                                        if dart_fundamental.RCEPT_NO.fullmatch(str(ln.get("rcept_no")))), None)
         try:
             extracted, bad = dart_fundamental.extract(
                 {"corp_code": corp_code, "stock_code": corps[corp_code]["stock_code"]},
@@ -819,8 +908,12 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             # 한 보고서의 응답 파손이 다른 회사·보고서의 정제를 막지 않게 그 보고서만 거부한다.
             rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
                             "raw_key": statement["key"], "reasons": ["extract_error"], "error": type(exc).__name__})
+            unconfirmed((corp_code, year, code, fs_div), f"extract_error:{type(exc).__name__}")
             continue
         rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
+        if version is not None:
+            version["metrics"].extend(f'{r["metric"]}/{r["period_kind"]}/{r["fiscal_period"]}' for r in extracted)
+            version["rejected"].extend({"metric": b.get("metric"), "reasons": b.get("reasons")} for b in bad)
         for row in extracted:
             # 두 BPS 지표의 분모는 주식총수 응답이다 — 그 수신시각이 행의 수신시각에 들어가야 한다.
             sources = [statement] + ([share] if share and row["metric"] in ("bps", "bps_total_shares") else [])
@@ -833,12 +926,41 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             q3 = [r for r, _ in items if r["fiscal_period"] == "Q3"]
             derived, bad = dart_fundamental.derive_q4(fy, q3)
             rejects.extend(bad)
+            annual = versions.get((corp_code, year, "11011", fs_div))
+            if annual is not None:      # Q4 유도 행·거부는 사업보고서 판본의 것이다
+                annual["metrics"].extend(f'{r["metric"]}/{r["period_kind"]}/Q4' for r in derived)
+                annual["rejected"].extend({"metric": b.get("metric"), "reasons": b.get("reasons")} for b in bad)
             fy_src = {r["metric"]: src for r, src in items if r["fiscal_period"] == "FY"}
             q3_src = {r["metric"]: src for r, src in items if r["fiscal_period"] == "Q3"}
             items = items + [(r, fy_src[r["metric"]] + q3_src[r["metric"]]) for r in derived]
         rows.extend(finish(dict(row), sources) for row, sources in items)
-    return rows, rejects
+    version_rows = []
+    for version in versions.values():
+        day = rcept_dates.get(version["rcept_no"]) if version["rcept_no"] else None
+        received = version["received_at"]
+        if day:
+            version.update({"rcept_date": day, "available_at": min(received, _kst_midnight_after(day),
+                                                                     key=datetime.fromisoformat),
+                            "availability_basis": "provider_release_date"})
+        else:
+            version.update({"available_at": received, "availability_basis": "received"})
+        version_rows.append({**version, **{k: json.dumps(version[k], ensure_ascii=False, sort_keys=True)
+                                           for k in ("metrics", "rejected", "detail")}})
+    return rows, rejects, version_rows
 
+
+FINANCIAL_VERSION = DatasetSpec(
+    dataset="financial_report_version",
+    columns=(Column("corp_code", "str"), Column("instrument_code", "str"), Column("fiscal_year", "int"),
+             Column("reprt_code", "str"), Column("report_period", "str"), Column("fs_basis", "str"),
+             Column("status", "str"), Column("rcept_no", "str"), Column("rcept_date", "date"),
+             Column("metrics", "str"), Column("rejected", "str"), Column("detail", "str"), *_PROVENANCE),
+    key=("corp_code", "fiscal_year", "reprt_code", "fs_basis"),
+    partition=lambda r: "",                      # 현재 상태 파티션 없음 — 실행별 artifact·DB 에만
+    normalize=lambda objects, manifest: ([], []),   # _normalize_financial 이 지표와 함께 만든다
+    table="financial_report_version",
+    collection_vendor="dart",
+)
 
 FINANCIAL = DatasetSpec(
     dataset="financial_metric",
@@ -852,6 +974,7 @@ FINANCIAL = DatasetSpec(
     normalize=_normalize_financial,
     table="financial_metric",
     collection_vendor="dart",
+    companion=FINANCIAL_VERSION,
 )
 
 

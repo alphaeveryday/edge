@@ -121,6 +121,55 @@ COMMENT ON TABLE financial_metric IS
 COMMENT ON COLUMN financial_metric.available_at IS
 'provider_release_date: DART 접수일 다음날 00:00 KST(시각 미제공 — 날짜 경계만)와 실제 수신 중 이른 쪽. received: 접수일을 확인 못 한 판본은 수신시각부터 보인다.';
 
+-- 보고서 판본(ALPHA-1130 §10.4): 회사·연도·보고서·연결/별도 × 수집 실행마다 한 줄. 지표 행과 독립이라
+-- "확인했지만 쓸 지표 없음"(CONFIRMED, metrics=[])·"일부만"(rejected≠[])·"확정 못 함"(UNCONFIRMED — HTTP 오류·
+-- 파손·다른 보고서 응답)이 갈린다. 진행 중·중단된 실행은 여기 없다. 조회는 최신 CONFIRMED 판본만 권위로 본다.
+CREATE TABLE financial_report_version (
+    corp_code          TEXT NOT NULL,
+    instrument_code    TEXT NOT NULL,
+    fiscal_year        SMALLINT NOT NULL,
+    reprt_code         TEXT NOT NULL,          -- 11013·11012·11014·11011
+    report_period      TEXT NOT NULL,          -- Q1·Q2·Q3·Q4(사업보고서 — Q4 유도 행의 판본)
+    fs_basis           TEXT NOT NULL,
+    status             TEXT NOT NULL,          -- CONFIRMED·UNCONFIRMED
+    rcept_no           TEXT,                   -- 응답이 실은 접수번호(확정 판본만)
+    rcept_date         DATE,
+    metrics            JSONB NOT NULL,         -- 이 실행이 만든 지표 "metric/period_kind/fiscal_period" 목록
+    rejected           JSONB NOT NULL,         -- 만들지 못한 지표와 사유 [{metric, reasons}]
+    detail             JSONB NOT NULL,         -- {statement, statement_detail, shares, shares_detail}
+    received_at        TIMESTAMPTZ NOT NULL,
+    available_at       TIMESTAMPTZ NOT NULL,
+    availability_basis TEXT NOT NULL,
+    raw_run_id         TEXT NOT NULL,
+    raw_key            TEXT NOT NULL,
+    raw_sha256         TEXT NOT NULL,
+    canonical_run_id   TEXT NOT NULL,
+    artifact_key       TEXT NOT NULL,
+    artifact_sha256    TEXT NOT NULL,
+    loaded_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (corp_code, fiscal_year, reprt_code, fs_basis, raw_run_id),
+    CONSTRAINT ck_financial_report_version_codes CHECK (
+        corp_code ~ '^[0-9]{8}$' AND instrument_code ~ '^[0-9A-Z]{6}$'
+        AND (rcept_no IS NULL OR rcept_no ~ '^[0-9]{14}$')),
+    CONSTRAINT ck_financial_report_version_report CHECK (
+        (reprt_code, report_period) IN (('11013', 'Q1'), ('11012', 'Q2'), ('11014', 'Q3'), ('11011', 'Q4'))),
+    CONSTRAINT ck_financial_report_version_status CHECK (status IN ('CONFIRMED', 'UNCONFIRMED')),
+    CONSTRAINT ck_financial_report_version_basis CHECK (fs_basis IN ('CFS', 'OFS')),
+    CONSTRAINT ck_financial_report_version_json CHECK (
+        jsonb_typeof(metrics) = 'array' AND jsonb_typeof(rejected) = 'array' AND jsonb_typeof(detail) = 'object'),
+    CONSTRAINT ck_financial_report_version_availability CHECK (
+        (availability_basis = 'received' AND available_at = received_at)
+        OR (availability_basis = 'provider_release_date' AND rcept_date IS NOT NULL
+            AND available_at = LEAST(received_at,
+                ((rcept_date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')))),
+    CONSTRAINT ck_financial_report_version_sha CHECK (
+        raw_sha256 ~ '^[0-9a-f]{64}$' AND artifact_sha256 ~ '^[0-9a-f]{64}$')
+);
+CREATE INDEX ix_financial_report_version_visible ON financial_report_version (instrument_code, available_at);
+
+COMMENT ON TABLE financial_report_version IS
+'DART 정기보고서 응답의 실행별 판본(ALPHA-1130). 지표 행(financial_metric)과 독립 — 지표가 0개여도 확인된 실행은 한 줄이 남고, 확정 못 한 실행(UNCONFIRMED)은 옛 확정값을 무효화하지 않는다. 지표 행과 같은 트랜잭션으로 적재된다.';
+
 CREATE TABLE sector_classification (
     market             TEXT NOT NULL,          -- KOSPI·KOSDAQ(KIS 종목 마스터 파일 구분)
     instrument_code    TEXT NOT NULL,          -- KIS 마스터 단축코드
@@ -210,75 +259,82 @@ RETURNS TABLE (
     instrument_code TEXT, corp_code TEXT, fiscal_year SMALLINT, period TEXT, period_end DATE,
     fs_basis TEXT, eps NUMERIC, eps_derivation TEXT, bps NUMERIC, bps_total_shares NUMERIC, bps_note TEXT,
     revenue NUMERIC, revenue_derivation TEXT, operating_income NUMERIC, operating_income_derivation TEXT,
-    available_at TIMESTAMPTZ, rcept_nos TEXT[], raw_run_ids TEXT[])
+    available_at TIMESTAMPTZ, rcept_nos TEXT[], raw_run_ids TEXT[],
+    version_raw_run_id TEXT, version_received_at TIMESTAMPTZ, version_rejected JSONB, shares_status TEXT,
+    latest_unconfirmed_at TIMESTAMPTZ)
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
     IF p_analysis_at IS NULL OR p_instrument_code IS NULL THEN
         RAISE EXCEPTION 'financial_quarters_as_of: analysis_at·instrument_code 필수';
     END IF;
     RETURN QUERY
-    WITH visible AS (
-        -- 실행 안에서는 논리 키가 유일하다(정제가 중복을 접거나 격리) — 판본 선택은 아래 latest 가 실행 단위로 한다.
-        SELECT f.*,
-               -- Q4 행(FY−9M 유도·기말 BPS)은 사업보고서(FY) 실행이 만든다 — 같은 보고서로 묶는다.
-               CASE WHEN f.fiscal_period = 'FY' THEN 'Q4' ELSE f.fiscal_period END AS report_period
+    WITH versions AS (
+        SELECT v.* FROM financial_report_version v
+        WHERE v.instrument_code = p_instrument_code AND v.available_at <= p_analysis_at
+    ), confirmed AS (
+        -- 보고서(회사·연도·보고기간·기준)마다 가장 늦게 **받은** 확정 판본 하나가 권위다. 확정 못 한 실행
+        -- (UNCONFIRMED)은 이 선택에 끼지 않는다 — 일시적 API 실패가 정상 확정값을 무효화하지 않는다.
+        -- 늦게 끝난 옛 실행은 수신시각이 앞서므로 최신 확정을 덮지 못한다.
+        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.report_period, v.fs_basis) v.*
+        FROM versions v WHERE v.status = 'CONFIRMED'
+        ORDER BY v.corp_code, v.fiscal_year, v.report_period, v.fs_basis, v.received_at DESC, v.raw_run_id DESC
+    ), basis AS (
+        -- 연결 우선. 그 시점까지 지표가 있는 연결 판본이 한 번도 없던 회사만 별도(2026-09-30 결정).
+        -- 빈 연결 판본(013 = 연결 재무제표 없음)은 연결이 있다는 증거가 아니다.
+        SELECT CASE WHEN bool_or(c.fs_basis = 'CFS' AND jsonb_array_length(c.metrics) > 0) THEN 'CFS' ELSE 'OFS' END
+               AS fs_basis
+        FROM confirmed c
+    ), chosen AS (
+        SELECT c.* FROM confirmed c JOIN basis b ON b.fs_basis = c.fs_basis
+    ), metric AS (
+        SELECT f.*, CASE WHEN f.fiscal_period = 'FY' THEN 'Q4' ELSE f.fiscal_period END AS report_period
         FROM financial_metric f
         WHERE f.instrument_code = p_instrument_code AND f.available_at <= p_analysis_at
-    ), basis AS (
-        -- 연결 우선. 그 시점까지 연결 재무제표가 한 번도 보이지 않은 회사만 별도(2026-09-30 결정).
-        -- 한 회사 안에서 분기마다 기준을 바꾸지 않는다.
-        SELECT CASE WHEN bool_or(v.fs_basis = 'CFS') THEN 'CFS' ELSE 'OFS' END AS fs_basis FROM visible v
-    ), latest AS (
-        -- 한 보고서(회사·연도·보고기간·기준)의 지표는 한 실행이 통째로 만든다. 판본 선택을 지표별로 두면 새 실행이
-        -- 어떤 지표를 "만들지 않은" 결정(우선주 확인·주식수 파손·계정 줄 모호·Q4 유도 입력 부족)을 옛 실행의 값이
-        -- 덮는다. 그래서 보이는 행이 있는 실행 중 **가장 늦게 받은** 실행 하나를 고르고 그 실행의 지표만 돌려준다 —
-        -- 빠진 지표는 NULL. 실행 순서는 수신시각으로 잰다(가시시각은 지표마다 접수일 확인 여부로 달라질 수 있다).
-        -- 한계: 새 실행이 그 보고서의 지표를 하나도 만들지 못하면(전 지표 거부) 행이 없어 옛 실행이 남는다 —
-        -- 거부는 정제 manifest·품질 로그에만 있다(§10.9 ⑥).
-        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.report_period, v.fs_basis)
-               v.corp_code, v.fiscal_year, v.report_period, v.fs_basis, v.raw_run_id
-        FROM visible v
-        ORDER BY v.corp_code, v.fiscal_year, v.report_period, v.fs_basis,
-                 v.received_at DESC, v.raw_run_id DESC
-    ), picked AS (
-        SELECT v.* FROM visible v JOIN basis b ON b.fs_basis = v.fs_basis
-        JOIN latest l ON l.corp_code = v.corp_code AND l.fiscal_year = v.fiscal_year
-                     AND l.report_period = v.report_period AND l.fs_basis = v.fs_basis AND l.raw_run_id = v.raw_run_id
-        -- 최신 실행의 행은 지표·기간 종류를 가리지 않고 다 남긴다(누적 행·FY 행 포함). 값은 아래 FILTER 가 분기
-        -- 3개월값·기말 BPS 만 고르지만, 최신 실행에 그것이 없어도 그 보고기간 행이 "있어야 하는데 값이 없다"로
-        -- 나와야 한다 — 행째 사라지면 소비 툴이 없는 분기를 건너뛰고 앞 4분기로 미끄러진다.
     )
-    SELECT p_instrument_code, min(p.corp_code), p.fiscal_year,
-           p.fiscal_year::text || '-' || p.report_period, min(p.period_end), min(p.fs_basis),
-           max(p.value) FILTER (WHERE p.metric = 'eps_basic' AND p.period_kind = 'QUARTER'),
-           max(p.derivation) FILTER (WHERE p.metric = 'eps_basic' AND p.period_kind = 'QUARTER'),
-           max(p.value) FILTER (WHERE p.metric = 'bps'),
-           max(p.value) FILTER (WHERE p.metric = 'bps_total_shares'),
-           -- bps 가 빈 이유: 정제가 통상 BPS 의 근거 줄에 남긴 판정(common_bps)을 그대로 읽는다 — 우선주 수만 보고
-           -- 다시 추론하지 않는다(파손과 정책 차단이 겹치면 정제는 파손을 먼저 적는다). 통상 BPS 도 없으면 최신 판본이
-           -- BPS 를 아예 못 만든 것. 어느 쪽도 옛 판본의 값으로 채우지 않는다.
-           CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps') IS NULL THEN
-                CASE WHEN max(p.value) FILTER (WHERE p.metric = 'bps_total_shares') IS NULL
-                     THEN 'BPS_ABSENT_IN_LATEST_VERSION'
+    -- 확정 판본이 한 줄이면 분기 행도 한 줄이다 — 그 실행이 만든 지표만 값이 있고 나머지는 NULL.
+    -- 옛 판본의 값으로 채우지 않는다(지표가 0개인 정정 판본이 옛 값을 최신처럼 남기지 않는다).
+    SELECT p_instrument_code, c.corp_code, c.fiscal_year,
+           c.fiscal_year::text || '-' || c.report_period,
+           CASE c.report_period WHEN 'Q1' THEN make_date(c.fiscal_year, 3, 31) WHEN 'Q2' THEN make_date(c.fiscal_year, 6, 30)
+                                WHEN 'Q3' THEN make_date(c.fiscal_year, 9, 30) ELSE make_date(c.fiscal_year, 12, 31) END,
+           c.fs_basis,
+           max(m.value) FILTER (WHERE m.metric = 'eps_basic' AND m.period_kind = 'QUARTER'),
+           max(m.derivation) FILTER (WHERE m.metric = 'eps_basic' AND m.period_kind = 'QUARTER'),
+           max(m.value) FILTER (WHERE m.metric = 'bps'),
+           max(m.value) FILTER (WHERE m.metric = 'bps_total_shares'),
+           -- bps 가 빈 이유: 정제가 통상 BPS 근거 줄에 남긴 판정(common_bps)을 읽는다(파손이 정책 차단보다 먼저).
+           -- 통상 BPS 도 없으면: 분모 응답을 정상으로 받았으면(ok·empty) 확정된 부재, 아니면 확정 못 한 것.
+           CASE WHEN max(m.value) FILTER (WHERE m.metric = 'bps') IS NULL THEN
+                CASE WHEN max(m.value) FILTER (WHERE m.metric = 'bps_total_shares') IS NULL
+                     THEN CASE WHEN c.detail->>'shares' IN ('ok', 'empty') THEN 'BPS_ABSENT_IN_LATEST_VERSION'
+                               ELSE 'BPS_UNCONFIRMED' END
                      WHEN bool_or(EXISTS (
-                              SELECT 1 FROM jsonb_array_elements(p.inputs) i
+                              SELECT 1 FROM jsonb_array_elements(m.inputs) i
                               WHERE i->>'common_bps' = 'bps_blocked_preferred_shares'))
-                          FILTER (WHERE p.metric = 'bps_total_shares')
+                          FILTER (WHERE m.metric = 'bps_total_shares')
                      THEN 'PREFERRED_SHARES_PRESENT' ELSE 'COMMON_SHARE_BPS_UNAVAILABLE' END END,
-           max(p.value) FILTER (WHERE p.metric = 'revenue' AND p.period_kind = 'QUARTER'),
-           max(p.derivation) FILTER (WHERE p.metric = 'revenue' AND p.period_kind = 'QUARTER'),
-           max(p.value) FILTER (WHERE p.metric = 'operating_income' AND p.period_kind = 'QUARTER'),
-           max(p.derivation) FILTER (WHERE p.metric = 'operating_income' AND p.period_kind = 'QUARTER'),
-           max(p.available_at),
-           array_agg(DISTINCT p.rcept_no ORDER BY p.rcept_no),
-           array_agg(DISTINCT p.raw_run_id ORDER BY p.raw_run_id)
-    FROM picked p
-    GROUP BY p.fiscal_year, p.report_period
-    ORDER BY p.fiscal_year, p.report_period;
+           max(m.value) FILTER (WHERE m.metric = 'revenue' AND m.period_kind = 'QUARTER'),
+           max(m.derivation) FILTER (WHERE m.metric = 'revenue' AND m.period_kind = 'QUARTER'),
+           max(m.value) FILTER (WHERE m.metric = 'operating_income' AND m.period_kind = 'QUARTER'),
+           max(m.derivation) FILTER (WHERE m.metric = 'operating_income' AND m.period_kind = 'QUARTER'),
+           GREATEST(c.available_at, COALESCE(max(m.available_at), c.available_at)),
+           array_agg(DISTINCT m.rcept_no ORDER BY m.rcept_no) FILTER (WHERE m.rcept_no IS NOT NULL),
+           array_agg(DISTINCT m.raw_run_id ORDER BY m.raw_run_id) FILTER (WHERE m.raw_run_id IS NOT NULL),
+           c.raw_run_id, c.received_at, c.rejected, c.detail->>'shares',
+           -- 확정 판본 뒤에 확정 못 한 확인이 있었으면 그 시각 — 옛 값을 주고 있음을 소비자가 안다.
+           (SELECT max(u.received_at) FROM versions u
+             WHERE u.status = 'UNCONFIRMED' AND u.corp_code = c.corp_code AND u.fiscal_year = c.fiscal_year
+               AND u.report_period = c.report_period AND u.fs_basis = c.fs_basis AND u.received_at > c.received_at)
+    FROM chosen c
+    LEFT JOIN metric m ON m.corp_code = c.corp_code AND m.fiscal_year = c.fiscal_year
+                       AND m.report_period = c.report_period AND m.fs_basis = c.fs_basis AND m.raw_run_id = c.raw_run_id
+    GROUP BY c.corp_code, c.fiscal_year, c.report_period, c.fs_basis, c.raw_run_id, c.received_at, c.available_at,
+             c.rejected, c.detail
+    ORDER BY c.fiscal_year, c.report_period;
 END $$;
 
 COMMENT ON FUNCTION financial_quarters_as_of(TIMESTAMPTZ, TEXT) IS
-'기준시각에 보였던 분기 재무. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도 — 가중평균 주식수 차이로 근사, *_derivation 으로 표시), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행(보통주+우선주 합계). 누적값은 반환하지 않는다. 빈 칸(NULL)=최신 판본이 그 지표를 만들지 못함(최신 실행에 누적 행만 있으면 값이 전부 NULL 인 분기 행이 나온다 — 분기가 사라지지 않는다), 한 보고서의 지표는 가장 늦게 보인 실행 하나에서만 온다(옛 실행 값으로 빈 지표를 채우지 않는다). bps_note: PREFERRED_SHARES_PRESENT=우선주가 있어 보통주 기준 BPS 를 만들지 않은 회사(팀 결정 대상), COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수를 못 읽어 못 만든 판본, BPS_ABSENT_IN_LATEST_VERSION=최신 판본에 BPS 가 아예 없음(둘 다 데이터 결함·재수집 대상).';
+'기준시각에 보였던 분기 재무. 행 단위는 **확정 보고서 판본**(financial_report_version, 보고서마다 가장 늦게 받은 CONFIRMED) — 그 실행이 만든 지표만 값이 있고 빠진 지표는 NULL(옛 판본 값으로 채우지 않는다). 확정 못 한 뒤 실행은 latest_unconfirmed_at 으로만 드러난다. EPS·매출·영업이익은 해당 분기 3개월 값(Q4는 FY−9M 유도, *_derivation), bps 는 보통주 1주 기준(우선주 없는 회사만), bps_total_shares 는 통상 관행. bps_note: PREFERRED_SHARES_PRESENT=정책 차단(팀 결정 대상) · COMMON_SHARE_BPS_UNAVAILABLE=종류별 주식수 파손 · BPS_ABSENT_IN_LATEST_VERSION=분모 응답은 정상인데 BPS 없음 · BPS_UNCONFIRMED=분모 응답 실패(재수집 대상). version_rejected 에 그 판본이 못 만든 지표와 사유가 있다.';
 
 CREATE FUNCTION sector_classification_as_of(p_analysis_at TIMESTAMPTZ, p_instrument_codes TEXT[])
 RETURNS TABLE (

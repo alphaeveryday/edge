@@ -149,7 +149,7 @@ def test_dag_commands_run_the_lane_end_to_end_with_the_ledger(tmp_path, vendor, 
     def cleanup():
         """이 run 의 판본 행만 지운다 — 같은 DB 를 쓰는 다른 e2e 의 기준시각 조회를 오염시키지 않게."""
         with psycopg.connect(**pg, autocommit=True) as conn:
-            for table in ("macro_observation", "financial_metric", "sector_classification"):
+            for table in ("macro_observation", "financial_metric", "financial_report_version", "sector_classification"):
                 conn.execute(f"DELETE FROM {table} WHERE raw_run_id=%s", (rid,))
 
     cleanup()

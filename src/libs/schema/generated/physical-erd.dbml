@@ -538,6 +538,35 @@ Table "financial_metric" {
   }
 }
 
+Table "financial_report_version" {
+  "corp_code" text [not null]
+  "instrument_code" text [not null]
+  "fiscal_year" smallint [not null]
+  "reprt_code" text [not null]
+  "report_period" text [not null]
+  "fs_basis" text [not null]
+  "status" text [not null]
+  "rcept_no" text
+  "rcept_date" date
+  "metrics" jsonb [not null]
+  "rejected" jsonb [not null]
+  "detail" jsonb [not null]
+  "received_at" timestamptz [not null]
+  "available_at" timestamptz [not null]
+  "availability_basis" text [not null]
+  "raw_run_id" text [not null]
+  "raw_key" text [not null]
+  "raw_sha256" text [not null]
+  "canonical_run_id" text [not null]
+  "artifact_key" text [not null]
+  "artifact_sha256" text [not null]
+  "loaded_at" timestamptz [not null]
+
+  indexes {
+    ("corp_code", "fiscal_year", "reprt_code", "fs_basis", "raw_run_id") [pk]
+  }
+}
+
 Table "hypothesis_trial" {
   "trial_id" text [pk]
   "minute_price_trigger_id" text [not null]

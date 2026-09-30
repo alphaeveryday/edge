@@ -115,6 +115,10 @@ BEGIN
         RAISE EXCEPTION 'Sector table read was permitted';
     EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN
+        PERFORM 1 FROM financial_report_version LIMIT 1;
+        RAISE EXCEPTION 'Report version table read was permitted';
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN
         INSERT INTO macro_observation SELECT * FROM macro_observation WHERE false;
         RAISE EXCEPTION 'Macro table write was permitted';
     EXCEPTION WHEN insufficient_privilege THEN NULL; END;
