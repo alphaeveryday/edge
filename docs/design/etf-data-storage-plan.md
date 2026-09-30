@@ -324,7 +324,7 @@ DB 행은 `raw_run_id`로 그 manifest에 닿으므로, 만료된 artifact 없�
 | 함수 | 반환 | 규칙 |
 |---|---|---|
 | `macro_observations_as_of(T, series, n=21)` | 최근 n개 관측(관측일·`reference_period`·값·단위·수신·가시·근거 키) | 관측일마다 `available_at ≤ T` 판본 중 최신. 문서의 "최근 공개 2관측일"은 n=2, 툴 탐색 한도 21과 섞지 않는다 |
-| `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말, 보통주 기준 `bps`·통상 `bps_total_shares`·`bps_note`)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결. **한 보고서(회사·연도·보고기간·기준 — Q4 행은 FY 보고서에 묶인다)의 지표는 보이는 행이 있는 실행 중 가장 늦게 받은 실행 하나에서만** — 새 판본이 어떤 지표를 만들지 않았으면(우선주 확인·주식수 파손·계정 줄 모호·Q4 유도 입력 부족) 그 지표는 NULL 이지 옛 실행의 값이 아니다(지표별 판본 선택은 옛 값이 새 차단을 덮는다 — 리뷰 5~7차). 실행 순서는 수신시각이다(가시시각은 지표마다 다를 수 있다). **남은 구멍**: 새 실행이 그 보고서의 지표를 하나도 못 만들면 행이 없어 옛 실행이 남는다 — §10.9 ⑥. `bps_note`: `PREFERRED_SHARES_PRESENT`(정책 차단, §10.9 ①) / `COMMON_SHARE_BPS_UNAVAILABLE`(주식수 파손) / `BPS_ABSENT_IN_LATEST_VERSION`(최신 판본에 BPS 없음) — 뒤 둘은 재수집 대상(정제 거부 사유 `bps_share_rows_unreadable`·`share_rows_inconsistent`) |
+| `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말, 보통주 기준 `bps`·통상 `bps_total_shares`·`bps_note`)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결. **한 보고서(회사·연도·보고기간·기준 — Q4 행은 FY 보고서에 묶인다)의 지표는 보이는 행이 있는 실행 중 가장 늦게 받은 실행 하나에서만** — 새 판본이 어떤 지표를 만들지 않았으면(우선주 확인·주식수 파손·계정 줄 모호·Q4 유도 입력 부족) 그 지표는 NULL 이지 옛 실행의 값이 아니다(지표별 판본 선택은 옛 값이 새 차단을 덮는다 — 리뷰 5~8차). 최신 사업보고서 실행에 FY 누적만 있고 Q4 유도가 없으면 값이 전부 NULL 인 Q4 행이 나온다(분기가 사라지면 소비 툴이 앞 4분기로 미끄러진다). 같은 종류의 주식수 행이 둘 이상이고 서로 다르면 거부. 실행 순서는 수신시각이다(가시시각은 지표마다 다를 수 있다). **남은 구멍**: 새 실행이 그 보고서의 지표를 하나도 못 만들면 행이 없어 옛 실행이 남는다 — §10.9 ⑥. `bps_note`: `PREFERRED_SHARES_PRESENT`(정책 차단, §10.9 ①) / `COMMON_SHARE_BPS_UNAVAILABLE`(주식수 파손) / `BPS_ABSENT_IN_LATEST_VERSION`(최신 판본에 BPS 없음) — 뒤 둘은 재수집 대상(정제 거부 사유 `bps_share_rows_unreadable`·`share_rows_inconsistent`) |
 | `sector_classification_as_of(T, codes[])` | 종목별 최신 스냅샷의 대·중·소 코드·이름 | `found=false`(그 시점 스냅샷에 없음) ≠ 코드 NULL(원천 `0000`) |
 | `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다 |
 
@@ -348,7 +348,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 **v2 어댑터**: `edge_analysis_v2/source_inputs.py` — `macro_inputs(conn, T)`·`financial_inputs(conn, T, codes)`·`freshness(conn)`가
 함수 결과를 fixture 행 형태로 만든다. 매크로 `observed_at`은 **관측일 문자열 그대로**(경계 시각으로 바꾸지 않는다 — 소비 코드
 `fixture_tools/common.observed()`가 그 한국 날짜가 끝난 뒤부터 관측된 것으로 센다). 결측은 행이 아니라 `gaps`로 돌아온다
-(`no_observation_visible`·`no_release_visible`·`not_released`(EPS 없음)·`bps_note` 세 값) — 0으로 채우지 않는다. 결손 분기는 행에서 빼지 않고 `None` 으로 남긴다 — 빼면 `valuation.calculate` 가 그 앞 4분기로 미끄러져 옛 비율을 현재값처럼 낸다.
+(`no_observation_visible`·`no_release_visible`·`EPS_ABSENT_IN_LATEST_VERSION`·`bps_note` 세 값) — 0으로 채우지 않는다. 결손 분기는 행에서 빼지 않고 `None` 으로 남긴다 — 빼면 `valuation.calculate` 가 그 앞 4분기로 미끄러져 옛 비율을 현재값처럼 낸다.
 통합 테스트 `integration_tests/test_source_inputs_postgres.py`(로컬 PG, `V2_SOURCE_TEST_DSN`)가 writer 역할로 함수를 읽어
 `macro.compare`·`valuation.calculate`까지 돌린다(접수일 다음날 00:00 경계, 우선주 회사의 BPS gap, 테이블 직접 읽기 거부 포함).
 
@@ -447,7 +447,7 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 | 미국채 10y | 같음 | FMP treasury 이력 있음 | 같음 | 같음 |
 | CPI YoY | 8월분(9월 초 공표) | KOSIS 이력 있음, **키 없음** | 키 발급 뒤. 같은 수신시각 규칙 | 같음 + ④ |
 | 브렌트 | 09-10~17 | EIA 이력 있음, **키 없음** | 같음 | 같음 |
-| 재무(EPS·BPS) | 구성종목별 최근 4분기(2025-Q3~2026-Q2) | DART 최신 제출본만. 2026-Q2 반기보고서 접수 08-14 | 백필해도 **접수일 기준으로 과거에 보인다**(결정 ①): T=09-14 에 2026-Q2 까지 보인다. 단 09-29 정정본(고려제강 등 49건/955 중)은 정정 값이 원본 접수일에 붙지 않으므로 **T=09-14 에는 그 회사의 2026-Q2 가 없다**(정정 전 값은 API 가 안 준다) | `financial_inputs` gap `not_released`(분기 결측) → `valuation.calculate` "four consecutive released quarters required". 우선주 회사는 ① 전까지 gap `PREFERRED_SHARES_PRESENT` |
+| 재무(EPS·BPS) | 구성종목별 최근 4분기(2025-Q3~2026-Q2) | DART 최신 제출본만. 2026-Q2 반기보고서 접수 08-14 | 백필해도 **접수일 기준으로 과거에 보인다**(결정 ①): T=09-14 에 2026-Q2 까지 보인다. 단 09-29 정정본(고려제강 등 49건/955 중)은 정정 값이 원본 접수일에 붙지 않으므로 **T=09-14 에는 그 회사의 2026-Q2 가 없다**(정정 전 값은 API 가 안 준다) | `financial_inputs` 는 그 분기 행을 안 낸다(공개 자체가 없음) → `valuation.calculate` "four consecutive released quarters required". 우선주 회사는 ① 전까지 gap `PREFERRED_SHARES_PRESENT` |
 | 업종 | 09-14~18 구성종목의 대·중 분류 | KIS 마스터 **현재값만** | 첫 수집일 이후만. **09-14~18 시점의 업종은 없다**(복원 주장 안 함) | `sector_classification_as_of(T)` `found=false` 전건. 과거 평가에서 업종 축은 "현재 분류를 소급 적용"을 명시적으로 택해야만 가능 — 같은 별도 모드 |
 | 구성종목 | 09-14~18 각 날의 스냅샷 | 기존 `etf_holding_snapshot` | 기존 표 그대로(`etf_constituent_source_coverage`) | 스냅샷 없는 날 0행 |
 
