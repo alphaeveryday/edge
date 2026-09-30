@@ -177,3 +177,31 @@ def test_freshness_exposes_facts_without_judging(db):
     assert usd["freshness_status"] == "UNKNOWN" and usd["freshness_reason"] == "NO_PROVIDER_CALENDAR"
     assert rows[("financial_metric", None)]["latest_observation_date"] >= "2026-06-30"
     assert ("macro_observation", "brent_spot_usd") not in rows  # never loaded = absent, not "stale"
+
+
+def test_a_later_version_that_blocks_bps_is_not_overridden_by_an_older_bps(db):
+    # A correction confirms preferred shares: the new run stores only bps_total_shares. Version choice is
+    # per metric, so the old run's bps would otherwise survive and hide the block.
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_metric (corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric,
+        period_kind, fs_basis, derivation, value, unit, formula, inputs, rcept_no, rcept_date, received_at, available_at,
+        availability_basis, raw_run_id, raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256)
+        SELECT corp_code, instrument_code, fiscal_year, fiscal_period, period_end, metric, period_kind, fs_basis,
+        derivation, 48000, unit, formula, '[{"se": "합계", "preferred_istc_totqy": "100"}]'::jsonb,
+        '20260930000001', '2026-09-30', received_at + interval '30 days', received_at + interval '30 days',
+        'received', raw_run_id || '-v2', raw_key, raw_sha256, canonical_run_id, artifact_key, artifact_sha256
+        FROM financial_metric WHERE instrument_code = 'TST001' AND metric = 'bps_total_shares' AND fiscal_period = 'Q2'""")
+    run_v2 = db.execute("SELECT raw_run_id FROM financial_metric WHERE raw_run_id LIKE %s", ("v2-source-test-%-v2",)).fetchone()[0]
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        rows, gaps = financial_inputs(db, datetime(2026, 11, 20, tzinfo=KST), ["TST001"])
+        latest = rows[-1]
+        assert latest["period"] == "2026-Q2" and latest["bps"] is None
+        assert gaps == [{"instrument_id": "TST001", "period": "2026-Q2", "missing": ["bps"],
+                         "reason": "PREFERRED_SHARES_PRESENT", "bps_total_shares": "48000"}]
+        # Before the correction was received, the old version (with bps) is still what was known.
+        rows, gaps = financial_inputs(db, datetime(2026, 9, 10, 10, 0, tzinfo=KST), ["TST001"])  # v2 received 09-16
+        assert rows[-1]["bps"] == "50000" and gaps == []
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_metric WHERE raw_run_id = %s", (run_v2,))

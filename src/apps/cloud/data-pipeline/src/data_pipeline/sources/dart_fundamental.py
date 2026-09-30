@@ -324,14 +324,17 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     issued_total, treasury_total = _share_count(total, "istc_totqy"), _share_count(total, "tesstk_co")
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
     # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
-    issued_preferred = _share_count(preferred, "istc_totqy")
+    issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
         return []
-    if None not in (issued_common, issued_preferred) and issued_common + issued_preferred != issued_total:
-        # 종류별 합이 합계와 다르면 어느 분모도 믿을 수 없다 — 두 지표 모두 만들지 않는다.
+    if (None not in (issued_common, issued_preferred) and issued_common + issued_preferred != issued_total) or \
+            (None not in (treasury_common, treasury_preferred) and treasury_common + treasury_preferred != treasury_total):
+        # 종류별 합(발행·자기주식 모두)이 합계와 다르면 어느 분모도 믿을 수 없다 — 두 지표 모두 만들지 않는다.
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
-                        "istc_totqy": str(issued_total), "common": str(issued_common), "preferred": str(issued_preferred)})
+                        "istc_totqy": str(issued_total), "common": str(issued_common), "preferred": str(issued_preferred),
+                        "tesstk_co": str(treasury_total), "common_treasury": str(treasury_common),
+                        "preferred_treasury": str(treasury_preferred)})
         return []
     equity_input = {"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": "BS",
                     "account_id": _EQUITY_ACCOUNT[fs_div], "account_nm": line.get("account_nm"),
@@ -347,8 +350,9 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
              "formula": BPS_TOTAL_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
              "inputs": [equity_input, shares_input]}]
     if issued_preferred is None or issued_preferred > 0 or None in (issued_common, treasury_common):
-        # 우선주가 있거나 종류별 주식수를 못 읽었다 — 보통주 순수 BPS 를 만들 수 없다.
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_blocked_preferred_shares"],
+        # 우선주가 있으면 정책 차단(§10.9 팀 결정), 종류별 주식수를 못 읽었으면 데이터 결함 — 사유를 섞지 않는다.
+        reason = "bps_blocked_preferred_shares" if issued_preferred else "bps_share_rows_unreadable"
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows
     if issued_common - treasury_common <= 0:

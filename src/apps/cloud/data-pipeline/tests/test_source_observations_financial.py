@@ -346,7 +346,7 @@ def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred()
     missing["list"] = [r for r in missing["list"] if r["se"] != "우선주"]
     rows, rejects = _extract_bps(missing)
     assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
-    assert any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
 
     negative = json.loads(shares(SAMSUNG, "2026", "11012"))
     for r in negative["list"]:
@@ -354,7 +354,7 @@ def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred()
             r["istc_totqy"] = "-5"
     rows, rejects = _extract_bps(negative)
     assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
-    assert any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
 
     inconsistent = json.loads(shares(SAMSUNG, "2026", "11012"))
     for r in inconsistent["list"]:
@@ -387,3 +387,20 @@ def test_total_share_bps_receipt_time_includes_the_share_response(tmp_path):
     assert rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS")]["received_at"] == \
         rows[("005930", 2026, "Q2", "bps", "POINT", "CFS")]["received_at"]
     assert rows[("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS")]["received_at"].startswith("2026-12-31")
+
+
+def test_treasury_share_rows_must_also_reconcile_and_damage_is_not_a_policy_block():
+    # WHY(리뷰 5차): 발행수 합만 맞추면 자기주식이 종류별로 모순돼도 두 분모가 다 만들어졌다. 그리고 주식수 파손을
+    # 우선주 정책 차단과 같은 사유로 적으면 운영자가 재수집할 결함을 팀 결정 대기로 오인한다.
+    body = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    for r in body["list"]:
+        if r["se"] == "보통주":
+            r["tesstk_co"] = "-"          # 합계 자기주식 50, 보통주 0, 우선주 0 → 모순
+    rows, rejects = _extract_bps(body)
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+    missing = json.loads(shares(SAMSUNG, "2026", "11012"))
+    missing["list"] = [r for r in missing["list"] if r["se"] != "우선주"]
+    _, rejects = _extract_bps(missing)
+    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
+    assert not any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)

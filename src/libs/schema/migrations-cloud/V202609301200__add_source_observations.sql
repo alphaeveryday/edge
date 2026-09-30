@@ -231,7 +231,13 @@ BEGIN
         SELECT v.* FROM visible v JOIN basis b ON b.fs_basis = v.fs_basis
         WHERE v.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
           AND ((v.metric IN ('eps_basic', 'revenue', 'operating_income') AND v.period_kind = 'QUARTER')
-               OR v.metric IN ('bps', 'bps_total_shares'))
+               OR v.metric = 'bps_total_shares'
+               -- bps 는 판본마다 "만들지 않는다"는 결정이 있을 수 있다(우선주 확인·주식수 파손). 판본 선택이 지표별이라
+               -- 옛 판본의 bps 가 새 판본의 차단을 덮지 않게, 같은 실행이 만든 bps_total_shares 가 선택된 경우만 쓴다.
+               OR (v.metric = 'bps' AND EXISTS (
+                     SELECT 1 FROM visible t
+                     WHERE t.metric = 'bps_total_shares' AND t.corp_code = v.corp_code AND t.fiscal_year = v.fiscal_year
+                       AND t.fiscal_period = v.fiscal_period AND t.fs_basis = v.fs_basis AND t.raw_run_id = v.raw_run_id)))
     )
     SELECT p_instrument_code, min(p.corp_code), p.fiscal_year,
            p.fiscal_year::text || '-' || p.fiscal_period, min(p.period_end), min(p.fs_basis),

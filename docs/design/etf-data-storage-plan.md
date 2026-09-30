@@ -324,7 +324,7 @@ DB 행은 `raw_run_id`로 그 manifest에 닿으므로, 만료된 artifact 없�
 | 함수 | 반환 | 규칙 |
 |---|---|---|
 | `macro_observations_as_of(T, series, n=21)` | 최근 n개 관측(관측일·`reference_period`·값·단위·수신·가시·근거 키) | 관측일마다 `available_at ≤ T` 판본 중 최신. 문서의 "최근 공개 2관측일"은 n=2, 툴 탐색 한도 21과 섞지 않는다 |
-| `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결 |
+| `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말, 보통주 기준 `bps`·통상 `bps_total_shares`·`bps_note`)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결. 판본 선택은 지표별이되 `bps`는 **선택된 `bps_total_shares`와 같은 실행**의 것만 — 새 판본이 우선주 확인·주식수 파손으로 `bps`를 만들지 않았으면 옛 `bps`가 살아남지 않는다. `bps_note`: `PREFERRED_SHARES_PRESENT`(정책 차단, §10.9 ①) / `COMMON_SHARE_BPS_UNAVAILABLE`(주식수 파손 — 재수집 대상; 정제 거부 사유 `bps_share_rows_unreadable`·`share_rows_inconsistent`) |
 | `sector_classification_as_of(T, codes[])` | 종목별 최신 스냅샷의 대·중·소 코드·이름 | `found=false`(그 시점 스냅샷에 없음) ≠ 코드 NULL(원천 `0000`) |
 | `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다 |
 
