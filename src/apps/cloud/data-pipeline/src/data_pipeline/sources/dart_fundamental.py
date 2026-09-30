@@ -165,7 +165,9 @@ def _now() -> str:
 def report_of(report_nm: str) -> tuple[str, str, int] | None:
     """보고서명 → (bsns_year, reprt_code, 기말 월). 정정 접두('[기재정정]')는 무시한다.
     '분기보고서 (YYYY.03)'=1분기, '(YYYY.09)'=3분기 — 월이 3·9 가 아니면 비12월 결산이다."""
-    match = _REPORT_NAME.search(report_nm or "")
+    if not isinstance(report_nm, str):
+        return None                         # 숫자·배열 등 파손 보고서명 — 호출자가 그 행만 거부한다
+    match = _REPORT_NAME.search(report_nm)
     if not match:
         return None
     kind, year, month = match.group(1), match.group(2), int(match.group(3))
@@ -182,6 +184,9 @@ def plan_reports(list_rows: list[dict], window_from: date, window_to: date) -> t
     rejects = [{"reasons": ["malformed_list_row"]} for row in list_rows if not isinstance(row, dict)]
     fy_years = {p[0] for row in rows if (p := report_of(row.get("report_nm"))) and p[1] == "11011"}
     for row in rows:
+        if not isinstance(row.get("report_nm"), str):
+            rejects.append({"corp_code": row.get("corp_code"), "reasons": ["bad_report_nm"]})
+            continue
         parsed = report_of(row.get("report_nm"))
         if parsed is None:
             continue
