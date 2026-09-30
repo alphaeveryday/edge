@@ -823,7 +823,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 `docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
 
 - 세 계열은 서로 기다리지 않는다(한 공급자 장애가 다른 원천 적재를 막지 않는다). 수집·정제 exit 2 는 받은 범위만 하류로 넘기고 런은 실패로 마감한다(장중 수급과 같은 선택 2).
-- 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다. 청크는 1분 이상 간격으로 trigger 한다 — run_id 가 분 단위 슬롯에서 나와, 같은 분이면 두 번째 run 의 수집이 "다른 요청 범위"로 실패한다.
+- 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다. 청크는 1분 이상 간격으로, 그리고 대기열까지 포함해 **슬롯 날짜(KST) 안에 끝나게** trigger 한다(`plan` 이 당일 슬롯만 받아 자정을 넘긴 run 은 전체가 실패한다 — 다음 날 다시 trigger) — run_id 가 분 단위 슬롯에서 나와, 같은 분이면 두 번째 run 의 수집이 "다른 요청 범위"로 실패한다.
 - 로컬 검증: DAG 계약(`tests/test_source_daily_dag.py`, 공식 이미지), DAG 명령 그대로의 원장 통합(`data-pipeline/tests/e2e/test_source_daily_lane_pg.py` — plan-run → 9스텝 → reconcile, 실 PostgreSQL·가짜 공급자 HTTP).
 
 **활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
@@ -837,7 +837,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 **첫 수동 실행 인수인계(활성화 전, dev — 이 PR 은 실행하지 않았다):**
 - **전제(환경 담당 확인 필요)**: ALPHA-1119 small·1408 검증이 끝나고 채택된 뒤. 그 검증은 장중 수급 **단일 배치**라 source_daily 까지 검증한 것이 아니다 — 이 DAG 를 올린 뒤 dag-processor 파싱 메모리와 첫 수동 실행의 호스트·태스크 메모리를 따로 본다.
-- **호출 상한(강제)**: 첫 실행은 매크로 `--series` 로 1~2계열·재무 대상 1~2종목으로 제한하고, 공급자 호출 수를 원장/수집 로그 `counts` 로 대조한다(정기 창 전체는 두 번째 실행에서).
+- **호출 상한(강제)**: 첫 실행은 DAG 가 아니라 아래 "단건 재현" CLI(같은 이미지, `macro`·`dart` 태스크 정의로 ECS 단건 실행)로 한다. DAG 에는 계열·대상 제한 인자가 없어 수동 trigger 는 매크로 5계열·구성종목 전체를 부른다. 매크로는 `--series` 로 1~2계열로 줄인다. 재무는 ETF 하나(`DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'`)와 하루짜리 접수일 창(`--from`=`--to`)으로 줄인다. 이렇게 해도 목록 호출은 그 ETF의 구성종목 수만큼 나간다(종목 단위 제한 인자는 없다). 공급자 호출 수는 원장·수집 로그 `counts` 로 대조한다. DAG 수동 trigger 는 두 번째 실행부터다.
 - **이미지**: `data-pipeline` 의 원천 관측 코드 PR(#1010~#1013) 머지 SHA 이미지(`deploy-data-pipeline.yml` 이 `edge/pipeline:<sha>`·`data-pipeline-latest` 로 push). `GIT_SHA` 는 **이미지에 굽는다**(#1014: Dockerfile `ARG/ENV GIT_SHA` + 워크플로 `--build-arg GIT_SHA=${github.sha}`) — taskdef 에 따로 넣을 필요 없다. manifest `code_version` 이 머지 SHA 인지 첫 실행에서 확인한다(`unknown` 이면 옛 이미지를 당긴 것). 카탈로그 `MACRO_COLLECTION.instrumented=True` 전환 조건: `macro` taskdef 가 있고 위 키 env 셋이 그 taskdef 에 들어간 배포 **뒤**의 이미지에서 플래그를 올린다(플래그가 먼저 가면 Reconciler 가 없는 시도를 결손으로 판정).
 - **첫 run 은 pause 유지 + 수동 trigger** — params 비움(정기 창: 매크로 어제−소급일~어제, 재무 접수일 오늘−14~오늘, 업종 오늘 거래일이면 3파일). 예상 공급자 호출: 매크로 **5**(계열당 1 — 창이 `max_window_days` 안), 업종 **3**(ZIP), 재무 **구성종목 수 ≈ 50**(`list.json` 회사당 1 페이지; 정기 창에 새 정기보고서가 있는 회사만 +재무제표 1~2·주식총수 1). 첫 실행이 8월 반기보고서를 실으려면 `financial_from=2026-08-01 financial_to=<오늘>` — 회사당 목록 1 + 반기 재무제표 **CFS·OFS 각 1**(`collect_financial` 은 둘 다 요청한다, 연결 없는 회사는 CFS 가 `empty`) + 주식총수 1 = 4, 구성종목 50이면 **≈ 200**(+corpCode.xml 1, 목록 2페이지 이상인 회사만 +1). 매크로 백필은 `macro_from/to` (`to`≤어제; 1500초 상한 안에서 1년 단위).
 - **단건 재현(컨테이너 밖, 같은 이미지)**: `python -m data_pipeline.run ingest-raw-macro --series usd_krw --from 2026-09-15 --to 2026-09-26 --run-id manual_1` 뒤 `normalize-macro --input-run-id manual_1` → `load-macro --input-run-id <정제 run_id>`. 재무·업종도 같은 3단.
