@@ -954,10 +954,20 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             items = items + [(r, fy_src[r["metric"]] + q3_src[r["metric"]]) for r in derived]
         rows.extend(finish(dict(row), sources) for row, sources in items)
     version_rows = []
-    for version in versions.values():
+    for (corp_code, year, code, fs_div), version in versions.items():
+        if version["detail"]["shares"] is None:
+            # 재무제표가 empty(013)·오류라 추출 루프에 안 들어간 판본도 분모 응답 상태는 있어야 한다 —
+            # 없으면 조회가 정상 확인된 부재를 "분모 미확정"으로 읽는다.
+            share_entry = share_entries.get((corp_code, year, code))
+            rejected = share_rejects.get((corp_code, year, code))
+            version["detail"].update({
+                "shares": "error" if rejected else (share_entry["status"] if share_entry else "missing"),
+                "shares_detail": rejected or (share_entry.get("detail") if share_entry else None)})
         day = rcept_dates.get(version["rcept_no"]) if version["rcept_no"] else None
         received = version["received_at"]
-        if day:
+        # 확정 못 한 시도는 수신시각부터만 보인다 — 응답에 섞인 접수번호로 실패를 공개일로 소급하면
+        # 과거 기준시각 조회에 아직 일어나지 않은 실패가 나타난다.
+        if day and version["status"] == "CONFIRMED":
             version.update({"rcept_date": day, "available_at": min(received, _kst_midnight_after(day),
                                                                      key=datetime.fromisoformat),
                             "availability_basis": "provider_release_date"})

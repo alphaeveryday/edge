@@ -601,3 +601,24 @@ def test_rejected_responses_feed_nothing_downstream(tmp_path):
     assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS") not in rows            # 미확정 9M → Q4 유도 없음
     assert "eps_basic/QUARTER/Q4" not in json.loads(versions[(2025, "11011", "CFS")]["metrics"])
     assert ("005930", 2025, "Q4", "bps", "POINT", "CFS") in rows                          # 사업보고서 자체의 BPS 는 있다
+
+
+def test_unconfirmed_attempts_are_visible_from_receipt_and_empty_statements_keep_share_status(tmp_path):
+    # WHY(리뷰 16차): 실패한 재수집에 섞인 정상 접수번호로 실패를 공시일로 소급하면 8월 기준 조회에 9월 실패가 보인다.
+    # 그리고 013(empty) 재무제표 판본에 분모 상태가 비면 정상 확인된 부재가 "분모 미확정"으로 읽힌다.
+    responses = full_responses(SAMSUNG)
+    mixed = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    mixed["list"][-1]["rcept_no"] = "bad"                 # 앞 줄들은 정상 접수번호
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = json.dumps(mixed).encode()
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")] = NO_DATA      # 013 + 주식총수 정상
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    dart.fetched_at = "2026-09-20T00:00:00+00:00"
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    _, versions = _versions(storage)
+    failed = versions[(2026, "11012", "CFS")]
+    assert failed["status"] == "UNCONFIRMED" and failed["availability_basis"] == "received"
+    assert failed["available_at"] == failed["received_at"] and failed["available_at"].startswith("2026-09-20")
+    empty = versions[(2026, "11013", "CFS")]
+    assert empty["status"] == "CONFIRMED" and json.loads(empty["metrics"]) == []
+    assert json.loads(empty["detail"]) == {"statement": "empty", "statement_detail": "013", "shares": "ok", "shares_detail": None}
