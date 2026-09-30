@@ -433,3 +433,27 @@ def test_consolidated_basis_survives_empty_latest_cfs_and_never_confirmed_report
                          " financial_quarters_as_of(%s, %s)", (datetime(2026, 9, 23, tzinfo=KST), "000660")).fetchall()
     # 연결 지표 이력이 없으니 기준은 OFS — OFS 는 013(빈 확정), CFS 시도 실패는 기준 밖이라 행이 없다
     assert [(p, b, e, s) for p, b, e, s, _ in hynix] == [("2026-Q2", "OFS", None, "CONFIRMED")]
+
+
+def test_renormalizing_the_same_raw_with_different_rules_is_refused(tmp_path, conn, monkeypatch):
+    """규칙이 바뀐 재정제(같은 raw_run_id, 다른 판본 내용)는 적재가 거부한다 — 옛 판본에 새 지표가 덧붙지 않는다."""
+    from data_pipeline.sources import dart_fundamental
+    from data_pipeline.steps import source_observations as so
+
+    now = datetime(2026, 8, 20, 1, 0, tzinfo=timezone.utc)
+    storage, raw, norm = _financial_run(tmp_path, "r", _samsung_responses(), "2026-08-20T00:00:00+00:00",
+                                        from_date="2025-10-01", to_date="2026-08-20", now=now)
+    count = lambda table: conn.execute(f"SELECT count(*) FROM {table} WHERE raw_run_id = %s", (raw,)).fetchone()[0]
+    before = (count("financial_metric"), count("financial_report_version"))
+    original = dart_fundamental.extract
+
+    def without_bps(*args, **kwargs):          # "규칙 변경": BPS 를 더 이상 만들지 않는 정제
+        rows, bad = original(*args, **kwargs)
+        return [r for r in rows if not r["metric"].startswith("bps")], bad
+    monkeypatch.setattr(dart_fundamental, "extract", without_bps)
+    assert so.normalize(storage, so.FINANCIAL, f"{RUN}r_norm2", raw, producer="normalize_financial_metric") == 0
+    assert so.load(storage, so.FINANCIAL, _db(), f"{RUN}r_load2", input_run_id=f"{RUN}r_norm2", pending=False,
+                   producer="load_financial_metric") == 1
+    assert (count("financial_metric"), count("financial_report_version")) == before
+    assert storage.get_bytes_with_version(so.run_manifest_consumed_key("canonical", "financial_metric", f"{RUN}r_norm2",
+                                                                       so.CONSUMER))[0] is None

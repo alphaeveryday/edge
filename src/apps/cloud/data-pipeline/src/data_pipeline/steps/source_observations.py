@@ -462,6 +462,12 @@ def load(storage: Storage, spec: DatasetSpec, db, run_id: str, *, input_run_id: 
                       for r in rows]
             companion_params = _companion_params(storage, spec, manifest, canonical_run_id)
             with connect(db) as conn, conn.cursor() as cur:
+                if companion_params:
+                    # 같은 raw 를 다른 규칙으로 다시 정제한 결과는 싣지 않는다 — 판본 정체성은 raw 실행이라, 옛 판본 행에
+                    # 새 정제의 지표만 덧붙는 혼합을 ON CONFLICT 로는 못 막는다. 같은 내용의 재적재만 멱등으로 통과.
+                    conflicts = _companion_conflicts(cur, spec.companion, companion_params)
+                    if conflicts:
+                        raise ValueError(f"같은 raw 의 판본이 이미 다른 내용으로 적재돼 있다: {conflicts[:3]}")
                 before = _count(cur, spec.table, canonical_run_id)
                 if params:
                     cur.executemany(sql, params)
@@ -513,6 +519,26 @@ def _companion_params(storage: Storage, spec: DatasetSpec, manifest: dict, canon
         raise ValueError(f"companion artifact 바이트가 manifest 와 다르다: {companion['key']}")
     return [[*(r[c] for c in spec.companion.names()), canonical_run_id, companion["key"], companion["sha256"]]
             for r in read_rows(spec.companion, data)]
+
+
+def _companion_conflicts(cur, companion: DatasetSpec, params: list[list]) -> list[dict]:
+    """이미 적재된 같은 raw 의 판본과 내용(status·metrics·rejected·detail·가시시각)이 다른 행."""
+    names = companion.names()
+    keys = ("corp_code", "fiscal_year", "reprt_code", "fs_basis", "raw_run_id")
+    compare = ("status", "metrics", "rejected", "detail", "availability_basis")
+    conflicts = []
+    for values in params:
+        row = dict(zip(names, values))
+        cur.execute(f"SELECT {', '.join(compare)} FROM {companion.table} WHERE "
+                    + " AND ".join(f"{k} = %s" for k in keys), [row[k] for k in keys])
+        found = cur.fetchone()
+        if found is None:
+            continue
+        existing = dict(zip(compare, found))
+        mine = {k: (json.loads(row[k]) if k in ("metrics", "rejected", "detail") else row[k]) for k in compare}
+        if existing != mine:
+            conflicts.append({k: row[k] for k in keys})
+    return conflicts
 
 
 def _count(cur, table: str, canonical_run_id: str) -> int:

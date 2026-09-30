@@ -309,7 +309,7 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 **보존.** 과거 재현의 근거로 약속하는 것은 **만료가 없는 raw·manifest와 DB 판본 이력**이다. 실행별 artifact는
 `canonical_run_artifacts/` 30일 만료(terraform `pipeline/storage.tf`) 아래라 **재처리 캐시**로만 쓴다 — 만료된 실행을
 다시 적재하려면 같은 raw로 정제를 다시 돈다(결정적 정규화). 그래서 기존 lifecycle을 바꾸지 않는다.
-**재현 범위는 코드 판이 정한다** — raw·canonical run manifest에 `code_version`(이미지가 주입한 `GIT_SHA` — 카탈로그 버전
+**같은 raw 의 재정제는 같은 내용일 때만 다시 실린다** — 판본 정체성이 raw 실행이라, 규칙이 바뀐 재정제(판본 status·metrics·rejected·가시시각이 다름)는 적재가 거부한다(exit 1, 소비 마커 없음). 규칙을 바꿔 다시 싣는 것은 새 수집 실행으로만 한다. **재현 범위는 코드 판이 정한다** — raw·canonical run manifest에 `code_version`(이미지가 주입한 `GIT_SHA` — 카탈로그 버전
 `OPS_CATALOG_VERSION`은 코드 판이 아니라 쓰지 않는다)을 적는다. 같은 raw + 같은 `code_version` + 같은 스키마 버전이면 같은 artifact·DB 행이 나온다고 말할 수 있고,
 그중 하나라도 다르면(정규화 규칙·CHECK 변경) "같은 입력으로 다시 정제한 결과"이지 "그때 그 행"이 아니다. 지금 이미지는
 `GIT_SHA`를 주입하지 않아 `unknown`으로 적힌다 — 그동안은 정확 재현을 주장하지 않는다(주입은 배포 워크플로 변경이라 이 PR 밖).
