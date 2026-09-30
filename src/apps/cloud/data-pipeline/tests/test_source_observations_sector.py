@@ -145,5 +145,7 @@ def test_an_empty_name_table_is_a_partial_failure_not_silently_blank_names():
         {"request": {"file": "idxcode.mst.zip"}, "body": zipped("idxcode.mst", []), "key": "raw/names",
          "sha256": "b", "fetched_at": "2026-09-30T00:00:09+00:00"},
     ]
-    _, rejects = so_sector._normalize_sector(objects, {})
+    rows, rejects = so_sector._normalize_sector(objects, {})
     assert {"reasons": ["sector_name_table_empty"]} in rejects
+    # 봇 P2: 쓸 이름이 없는 표는 행의 수신시각을 늦추지 않는다(자정을 넘기면 기준일까지 바뀐다).
+    assert rows and {r["available_at"] for r in rows} == {"2026-09-30T00:00:01+00:00"}

@@ -36,7 +36,8 @@ def _normalize_sector(objects: list[dict], raw_manifest: dict) -> tuple[list[dic
     if name_files:
         try:
             names, warnings = kis_sector_master.parse_sector_names(name_files[0]["body"])
-            names_fetched_at = name_files[0]["fetched_at"]
+            # 쓸 이름이 없으면(빈 표·레이아웃 불일치) 수신시각을 늦추지 않는다 — 이름 없는 행은 마스터 시각 그대로.
+            names_fetched_at = name_files[0]["fetched_at"] if names else None
         except (zipfile.BadZipFile, UnicodeDecodeError, ValueError) as exc:
             # 업종명 표가 깨져도 코드는 싣는다(이름만 비운다) — HTTP 실패 때와 같은 부분 처리.
             names, warnings = {}, [f"sector_name_file_unreadable:{type(exc).__name__}"]
