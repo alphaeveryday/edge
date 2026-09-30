@@ -427,8 +427,9 @@ def test_parallel_flows_in_one_lane_do_not_make_each_other_stale(monkeypatch):
 
 def test_existing_lanes_keep_sfn_state_names_as_evidence_keys():
     # WHY: 증거 키 교체가 SFN 레인의 동작을 바꾸면 안 된다 — SFN 이력은 state 이름으로 들어온다.
-    assert all(e.evidence_key == e.sfn_state_name for e in catalog.entries() if e.sfn_state_name)
-    assert all(e.flow == "" for e in catalog.entries())
+    sfn_entries = [e for e in catalog.entries() if e.sfn_state_name]
+    assert all(e.evidence_key == e.sfn_state_name for e in sfn_entries)
+    assert all(e.flow == "" for e in sfn_entries)       # SFN 레인은 레인 전체가 한 흐름 그대로
 
 
 def test_unconcluded_airflow_run_stays_unresolved_after_hard_deadline():
