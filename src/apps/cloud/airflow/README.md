@@ -10,6 +10,7 @@
 |---|---|
 | `dags/edge_batch.py` | 레인 공통 연결 코드. `EdgeStep`(ECS 실행과 exit code 해석), 슬롯과 `pipeline_run_id` 파생 |
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
+| `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
 | `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
@@ -822,6 +823,35 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 - entry.py `_LANE_STATE_MACHINE_ARN_ENV`의 이 레인 행과 `OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN` 주입
 
 Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 제거한다.
+
+## 원천 관측 레인(source-daily, ALPHA-1130)
+
+분석 v2 원천(매크로 5계열·DART 재무 지표·KIS 지수업종)의 하루 1슬롯(09:10 KST) 배치다. **SFN 이 없는 첫 레인**이라
+원장 계획·보고를 Airflow 만 한다(`ops.entry._AIRFLOW_ONLY_LANES` — SFN 주체로 plan-run 하면 거부). 계약·일정 근거는
+`docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
+
+- 세 계열은 서로 기다리지 않는다(한 공급자 장애가 다른 원천 적재를 막지 않는다). 수집·정제 exit 2 는 받은 범위만 하류로 넘기고 런은 실패로 마감한다(장중 수급과 같은 선택 2).
+- 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다. 청크는 1분 이상 간격으로, 그리고 대기열까지 포함해 **슬롯 날짜(KST) 안에 끝나게** trigger 한다(`plan` 이 당일 슬롯만 받아 자정을 넘긴 run 은 전체가 실패한다 — 다음 날 다시 trigger) — run_id 가 분 단위 슬롯에서 나와, 같은 분이면 두 번째 run 의 수집이 "다른 요청 범위"로 실패한다.
+- 로컬 검증: DAG 계약(`tests/test_source_daily_dag.py`, 공식 이미지), DAG 명령 그대로의 원장 통합(`data-pipeline/tests/e2e/test_source_daily_lane_pg.py` — plan-run → 9스텝 → reconcile, 실 PostgreSQL·가짜 공급자 HTTP).
+
+**활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
+1. `macro` 태스크 정의(`edge-{env}-data-pipeline-macro`): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
+   `DATA_PIPELINE_PRICE__SOURCE__API_KEY`(기존 FMP 시크릿 — 미국채 10y 만)·`DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY`(신규 시크릿 셋 — ECOS 는 USD/KRW·국고채. 세 키 모두 **발급 완료(2026-09-30), 운영 시크릿 연결은 미완료** — 값은 문서·PR 에 쓰지 않는다). 배포 뒤 카탈로그 `MACRO_COLLECTION.instrumented` 를 True 로 올린다(배선이 플래그보다 한 배포 앞선다).
+2. `bigkinds`·`dart`·`rds`·`ops` 태스크 정의는 기존 것을 쓴다(DART 키는 기존 `dart` 에 있다, 업종 마스터는 키가 없다). 새 이미지 배포가 필요하다(새 CLI 스텝·설정 섹션). **⚠️ Airflow 태스크 역할의 RunTask 허용 목록**(`infra/terraform/envs/dev/main.tf` `batch_task_definition_families`)에 지금 `kis`·`bigkinds`·`rds`·`ops` 만 있다 — `dart`(재무 수집)와 새 `macro` family 를 더하지 않으면 `financial_collect`·`macro_collect` 가 `AccessDeniedException` 으로 시작도 못 한다(Codex 봇 P1, 2026-09-30 확인). 활성화 전 필수, 인프라 PR 은 Airflow 담당.
+3. 주기 결측 판정을 켜려면 `ops` 태스크 정의(주기 reconcile)에 `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true`. 없으면 이 레인은 PLANNER_MISSING 판정 대상이 아니다(안전 기본값).
+4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다(미확인).
+5. 마이그레이션 `V202609301200` — **적용 완료(2026-09-30 17:04 KST, #1003 머지 `86743919`, schema-migrate success)**. dev RDS 실측: `flyway_schema_history` 202609301200 success, 테이블 4 존재, 함수 5 모두 `SECURITY DEFINER`·`search_path=public, pg_temp`·소유자 `edge`·`edge_analysis_v2_writer` EXECUTE·PUBLIC EXECUTE 없음, writer 의 테이블 권한 없음. 코드 PR(#1010~#1013·이 PR)은 그 뒤 머지한다(스키마는 테이블 4·조회 함수 5·writer EXECUTE 부여 — 확장 단계만). 구 스키마 위에서 새 이미지가 돌면 `load-*` 만 실패(exit 1)하고 raw·artifact 는 남아 `--all` 로 이어 싣는다. 새 스키마 위의 기존 코드는 영향 없다(추가 객체뿐 — CI e2e 전체가 새 스키마 위에서 돈다).
+6. USD/KRW 도 ECOS 다(FMP USDKRW 는 현재 구독에서 402) — `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY` 없이는 매크로 5계열 중 국채 10y(FMP)만 온다. ECOS 샘플 키는 10건 상한이라 운영 키가 필요하다.
+
+**첫 수동 실행 인수인계(활성화 전, dev — 이 PR 은 실행하지 않았다):**
+- **전제(환경 담당 확인 필요)**: ALPHA-1119 small·1408 검증이 끝나고 채택된 뒤. 그 검증은 장중 수급 **단일 배치**라 source_daily 까지 검증한 것이 아니다 — 이 DAG 를 올린 뒤 dag-processor 파싱 메모리와 첫 수동 실행의 호스트·태스크 메모리를 따로 본다.
+- **호출 상한(강제)**: 첫 실행은 DAG 가 아니라 아래 "단건 재현" CLI(같은 이미지, `macro`·`dart` 태스크 정의로 ECS 단건 실행)로 한다. DAG 에는 계열·대상 제한 인자가 없어 수동 trigger 는 매크로 5계열·구성종목 전체를 부른다. 매크로는 `--series` 로 1~2계열로 줄인다. 재무는 ETF 하나(`DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'`)와 하루짜리 접수일 창(`--from`=`--to`)으로 줄인다. 이렇게 해도 목록 호출은 그 ETF의 구성종목 수만큼 나간다(종목 단위 제한 인자는 없다). 공급자 호출 수는 원장·수집 로그 `counts` 로 대조한다. DAG 수동 trigger 는 두 번째 실행부터다.
+- **이미지**: `data-pipeline` 의 원천 관측 코드 PR(#1010~#1013) 머지 SHA 이미지(`deploy-data-pipeline.yml` 이 `edge/pipeline:<sha>`·`data-pipeline-latest` 로 push). `GIT_SHA` 는 **이미지에 굽는다**(#1014: Dockerfile `ARG/ENV GIT_SHA` + 워크플로 `--build-arg GIT_SHA=${github.sha}`) — taskdef 에 따로 넣을 필요 없다. manifest `code_version` 이 머지 SHA 인지 첫 실행에서 확인한다(`unknown` 이면 옛 이미지를 당긴 것). 카탈로그 `MACRO_COLLECTION.instrumented=True` 전환 조건: `macro` taskdef 가 있고 위 키 env 셋이 그 taskdef 에 들어간 배포 **뒤**의 이미지에서 플래그를 올린다(플래그가 먼저 가면 Reconciler 가 없는 시도를 결손으로 판정).
+- **첫 run 은 pause 유지 + 수동 trigger** — params 비움(정기 창: 매크로 어제−소급일~어제, 재무 접수일 오늘−14~오늘, 업종 오늘 거래일이면 3파일). 예상 공급자 호출: 매크로 **5**(계열당 1 — 창이 `max_window_days` 안), 업종 **3**(ZIP), 재무 **구성종목 수 ≈ 50**(`list.json` 회사당 1 페이지; 정기 창에 새 정기보고서가 있는 회사만 +재무제표 1~2·주식총수 1). 첫 실행이 8월 반기보고서를 실으려면 `financial_from=2026-08-01 financial_to=<오늘>` — 회사당 목록 1 + 반기 재무제표 **CFS·OFS 각 1**(`collect_financial` 은 둘 다 요청한다, 연결 없는 회사는 CFS 가 `empty`) + 주식총수 1 = 4, 구성종목 50이면 **≈ 200**(+corpCode.xml 1, 목록 2페이지 이상인 회사만 +1). 매크로 백필은 `macro_from/to` (`to`≤어제; 1500초 상한 안에서 1년 단위).
+- **단건 재현(컨테이너 밖, 같은 이미지)**: `python -m data_pipeline.run ingest-raw-macro --series usd_krw --from 2026-09-15 --to 2026-09-26 --run-id manual_1` 뒤 `normalize-macro --input-run-id manual_1` → `load-macro --input-run-id <정제 run_id>`. 재무·업종도 같은 3단.
+- **교차 확인(run 뒤)**: ① raw manifest `operations_archive/raw_run_manifests/dataset=*/run_id=<run>/manifest.json` 의 `counts`(ok·empty·error)와 `code_version` ② canonical manifest 의 `rows`·`rejected`·`raw_manifest_sha256` 가 ①의 **저장된 manifest.json 바이트의 sha256**(`shasum -a 256 manifest.json` — manifest 안에 자기 해시 필드는 없다)과 같은지 ③ DB `SELECT count(*), max(received_at) FROM macro_observation WHERE raw_run_id='<run>'` 가 ②의 `rows` 와 같은지(재무는 `financial_metric` 과 `financial_report_version` 둘 다 — 판본 수 = canonical manifest `companion.rows`, `status` 별 건수로 UNCONFIRMED 응답 파악) ④ `SELECT * FROM source_observation_freshness()` 에 데이터셋 행이 생겼는지 ⑤ v2 어댑터 경로: `SELECT * FROM macro_observations_as_of(now(),'usd_krw',2)` · `SELECT period, eps, bps, bps_note, version_raw_run_id, latest_unconfirmed_at FROM financial_quarters_as_of(now(),'005930')` 를 `edge_analysis_v2_writer` 로(`SET ROLE`) 실행 — 테이블 직접 SELECT 는 거부돼야 정상.
+- **재수집 없는 복구**(설계 §10.3 표 — 로컬 실측): ① 정제·적재가 실패했고 artifact 가 **살아 있으면**(30일 안) params `reprocess_slot=<그 슬롯 ISO>` 로 같은 DAG 재trigger(수집 건너뜀, 같은 run_id 로 정제는 완료분이면 no-op·적재는 멱등). 적재만 실패했으면 `load-* --all` 이 미소비 정제 run 을 싣는다. ② artifact 가 **만료된 뒤엔 `reprocess_slot` 으로 복구되지 않는다**(같은 run_id 정제는 no-op → 적재 exit 1). 같은 raw 를 **새 정제 run_id** 로 정제해 그 run 을 싣는다: `normalize-* --run-id <새 id> --input-run-id <raw run>` → `load-* --run-id <새 id> --input-run-id <새 id>`(같은 코드 판이면 같은 바이트라 멱등). 다른 코드 판이면 이미 실린 raw 는 적재가 거부된다(exit 1) — 규칙을 바꿔 다시 싣는 것은 새 수집으로만. ③ 적재 전에 만료된 옛 정제 run 은 `--all` 을 계속 실패시킨다(정리 도구 없음 — 후속). 정기 DAG 는 `--input-run-id` 만 써서 영향이 없다.
+- **멈추기**: DAG pause(다음 슬롯 안 돎) → 실행 중 run 은 Airflow 에서 task clear 하지 말고 ECS `stop-task` 뒤 원장 보류 해제 절차(아래 "보류 해제와 수동 복구"). 수집 스텝은 공급자 호출을 **다 마친 뒤** raw 객체와 manifest 를 쓴다(`write_raw_run`) — 수집 중 정지하면 그때까지 받은 응답도 남지 않고, 같은 run_id 재수집이 공급자를 처음부터 다시 부른다(정정이 그 사이 있었으면 같은 원문은 못 얻는다). 정지는 정제·적재 단계에서 하는 편이 싸다.
 
 ## 활성화 전 결정·미해결 조건
 

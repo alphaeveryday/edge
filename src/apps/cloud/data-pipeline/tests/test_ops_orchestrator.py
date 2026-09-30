@@ -173,6 +173,23 @@ def test_airflow_plan_cli_refuses_without_slot_identity(monkeypatch, env, messag
         entry.plan_run_cli(object())
 
 
+def test_airflow_only_lane_refuses_sfn_planning_and_passes_to_airflow_checks(monkeypatch):
+    # WHY(ALPHA-1130): source-daily 는 SFN 이 없다. SFN 경로로 계획하면 기대 작업만 생기고 실행 주체가 없다 —
+    # ARN 을 찾다 조용히 다른 레인으로 떨어지지 않고 거부해야 한다. Airflow 경로는 일반 검사로 넘어간다.
+    for key in ("OPS_ORCHESTRATOR_RUN_REF", "OPS_SCHEDULED_TIME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPS_PIPELINE_TYPE", "source-daily")
+    monkeypatch.setenv("OPS_ORCHESTRATOR", states.ORCHESTRATOR_SFN)
+    with pytest.raises(SystemExit, match="Airflow 전용"):
+        entry.plan_run_cli(object())
+    monkeypatch.setenv("OPS_ORCHESTRATOR", states.ORCHESTRATOR_AIRFLOW)
+    with pytest.raises(SystemExit, match="OPS_ORCHESTRATOR_RUN_REF"):
+        entry.plan_run_cli(object())
+
+
+# ── 실행권(StepLock)과 원장 장애 — Airflow 경로(OPS_EXCLUSIVE_STEP)만 fail-closed ──
+
+
 # ── 실행권(StepLock)과 원장 장애 — Airflow 경로(OPS_EXCLUSIVE_STEP)만 fail-closed ──
 def _exclusive(monkeypatch, *, skip=True):
     monkeypatch.setenv("OPS_EXCLUSIVE_STEP", "1")
@@ -365,6 +382,37 @@ def test_reconciler_projects_airflow_run_status_like_the_dag_verdict(normalize_e
     reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=ecs,
                   now=_SLOT + timedelta(minutes=30))
     assert db.runs[result.run_key]["orchestration_status"] == expected
+
+
+def test_source_daily_lane_keeps_each_tasks_evidence_separate():
+    # WHY(ALPHA-1130 리뷰): source-daily 9작업은 SFN state 이름이 없다. Reconciler 가 증거를 빈 이름 하나로
+    # 모으면 한 작업의 exit 0 이 다른 작업의 판정을 덮는다(매크로 정제 부분 실패 + 업종 성공 → 런 "성공").
+    db = FakeOpsDB()
+    result = plan_run(_ledger(db), state_machine_arn=None, scheduled_time=_SLOT,
+                      pipeline_type=catalog.SOURCE_DAILY_PIPELINE_TYPE, sfn_client=_NoSfn(),
+                      orchestrator=states.ORCHESTRATOR_AIRFLOW, orchestrator_run_ref="edge_source_daily/r")
+    exits = {e.task_key: (f"arn:ecs/{e.task_key}", 0) for e in catalog.entries(catalog.SOURCE_DAILY_PIPELINE_TYPE)}
+    exits["NORMALIZE_MACRO"] = ("arn:ecs/NORMALIZE_MACRO", 2)     # 부분 실패 — FULFILLED 지만 런은 실패
+    # DAG 처럼 흐름이 엇갈려 끝난다 — 매크로가 먼저 다 끝나고 업종·재무 수집이 그 뒤에 돈다.
+    _finish(db, result.pipeline_run_id, exits)
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+                  now=_SLOT + timedelta(minutes=30))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_FAILED
+    assert len({e.evidence_key for e in catalog.entries()}) == len(catalog.entries())
+
+
+def test_source_daily_flows_do_not_make_each_other_stale():
+    # WHY(ALPHA-1130 리뷰): 다른 흐름의 늦은 수집을 "앞 단계 재실행"으로 읽으면 끝난 적재가 stale 이 되어
+    # 모든 흐름이 성공해도 런 판정이 영영 안 난다(콘솔 R02 미귀결).
+    db = FakeOpsDB()
+    result = plan_run(_ledger(db), state_machine_arn=None, scheduled_time=_SLOT,
+                      pipeline_type=catalog.SOURCE_DAILY_PIPELINE_TYPE, sfn_client=_NoSfn(),
+                      orchestrator=states.ORCHESTRATOR_AIRFLOW, orchestrator_run_ref="edge_source_daily/r")
+    _finish(db, result.pipeline_run_id,
+            {e.task_key: (f"arn:ecs/{e.task_key}", 0) for e in catalog.entries(catalog.SOURCE_DAILY_PIPELINE_TYPE)})
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=FakeEcs(),
+                  now=_SLOT + timedelta(minutes=30))
+    assert db.runs[result.run_key]["orchestration_status"] == states.ORCH_SUCCEEDED
 
 
 def _airflow_only_lane(monkeypatch) -> str:
