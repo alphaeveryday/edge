@@ -926,10 +926,15 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             unconfirmed((corp_code, year, code, fs_div), f"extract_error:{type(exc).__name__}")
             continue
         rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
-        if any("bad_rcept_no" in (b.get("reasons") or []) for b in bad):
-            # 접수번호가 깨진 줄이 있는 응답은 파손이다 — 남은 줄로 만든 지표를 확정 판본에 싣지 않는다.
+        # 재무제표 줄의 접수번호 파손(metric 없는 거부)은 응답 파손 — 남은 줄로 만든 지표를 확정 판본에 싣지 않는다.
+        if any("bad_rcept_no" in (b.get("reasons") or []) and b.get("metric") is None for b in bad):
             unconfirmed((corp_code, year, code, fs_div), "bad_rcept_no")
             continue
+        # 주식총수 표 자체의 파손(접수번호·종류별 합 불일치)은 분모만 미확정 — 손익 지표와 판본은 유지한다.
+        share_invalid = next((r for b in bad if b.get("metric") == "bps" for r in (b.get("reasons") or [])
+                              if r in ("bad_rcept_no", "share_rows_inconsistent")), None)
+        if share_invalid and version is not None:
+            version["detail"].update({"shares": "error", "shares_detail": share_invalid})
         if version is not None:
             version["metrics"].extend(f'{r["metric"]}/{r["period_kind"]}/{r["fiscal_period"]}' for r in extracted)
             version["rejected"].extend({"metric": b.get("metric"), "reasons": b.get("reasons")} for b in bad)

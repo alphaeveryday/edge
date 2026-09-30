@@ -622,3 +622,23 @@ def test_unconfirmed_attempts_are_visible_from_receipt_and_empty_statements_keep
     empty = versions[(2026, "11013", "CFS")]
     assert empty["status"] == "CONFIRMED" and json.loads(empty["metrics"]) == []
     assert json.loads(empty["detail"]) == {"statement": "empty", "statement_detail": "013", "shares": "ok", "shares_detail": None}
+
+
+def test_broken_share_table_unconfirms_only_the_denominator(tmp_path):
+    # WHY(리뷰 17차): 주식총수 표의 접수번호·종류별 합 파손을 재무제표 파손으로 취급하면 정정된 손익 지표까지 버려
+    # 옛 값이 남는다. 분모만 미확정(shares=error → BPS_UNCONFIRMED)이고 손익·판본은 확정이다.
+    responses = full_responses(SAMSUNG)
+    body = json.loads(shares(SAMSUNG, "2026", "11012"))
+    for row in body["list"]:
+        row["rcept_no"] = "bad"
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(body).encode()
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    _, versions = _versions(storage)
+    v = versions[(2026, "11012", "CFS")]
+    assert v["status"] == "CONFIRMED" and json.loads(v["detail"])["shares"] == "error"
+    assert json.loads(v["detail"])["shares_detail"] == "bad_rcept_no"
+    assert ("005930", 2026, "Q2", "eps_basic", "QUARTER", "CFS") in rows
+    assert not any(k[1:3] == (2026, "Q2") and k[3].startswith("bps") for k in rows)
