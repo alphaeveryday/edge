@@ -185,12 +185,11 @@ class PriceTriggerHandler:
     # 판정한다. 실측(2026-08-02)상 ETF 는 전부 정규장 전용이라 기능이 아니라 가드다.
     extended_hours_ids: frozenset[str] = frozenset()
     connect_fn: object = _default_connect
-    # session_id → {entity: 전일 종가}. 세션 중 불변이라 세션당 1회만 조회한다.
-    # 동시 실행이 같은 세션을 두 번 조회할 수는 있으나 값이 같아 무해하다.
+    # session_id → ({entity: 전일 종가}, 기준일). 세션 중 불변이라 세션당 1회만 조회한다.
+    # 동시 실행이 같은 세션을 두 번 조회할 수는 있다 — 값과 기준일을 **한 조회의 결과로 묶어**
+    # 두는 이유다(따로 두면 판정 기록이 한 조회의 값에 다른 조회의 기준일을 붙일 수 있다).
     _prev_close_cache: dict = field(default_factory=dict, repr=False)
-    # 판정 기록(§33.12 로컬 실험): 캐시를 채운 **같은 조회**가 돌려준 전일 종가 기준일,
-    # 그리고 이 프로세스가 커밋까지 확인한 스냅샷·기준선 집합 ID(재삽입 생략용).
-    _prev_close_date: dict = field(default_factory=dict, repr=False)
+    # 판정 기록(§33.12 로컬 실험): 이 프로세스가 커밋까지 확인한 스냅샷·기준선 집합 ID(재삽입 생략용).
     _committed_baseline_ids: set = field(default_factory=set, repr=False)
 
     def __post_init__(self) -> None:
@@ -302,7 +301,7 @@ class PriceTriggerHandler:
         # 기준선 = 전일 종가(v2 축). **결손 종목에만** 세션 시가 폴백을 태운다 —
         # 전 종목이 전일 종가를 가진 정상 세션에서는 첫 window 미커밋이 판정을 막지
         # 않는다(realtime lane 이 backlog 착지를 기다릴 이유가 없어졌다).
-        prev_closes = self._prev_closes(session_id, session_date)
+        prev_closes, prev_close_date = self._prev_closes(session_id, session_date)
         # 폴백 시가는 **전체 결손분**에 대해 확정한다 — 현재 artifact 에 등장한 종목으로
         # 좁히면 하루 종일 안 실린 ETF 의 MISSING 사유가 영영 기록되지 않는다
         needs_open = frozenset(self.etf_ids - prev_closes.keys())
@@ -423,7 +422,7 @@ class PriceTriggerHandler:
             used = _used_baseline(prev_closes[e] if e in prev_closes else opens[e]["open_price"])
             if used is None:
                 continue
-            baselines[e] = (("prev_close", str(self._prev_close_date.get(session_id)), used)
+            baselines[e] = (("prev_close", str(prev_close_date), used)
                             if e in prev_closes else
                             ("open_fallback", opens[e].get("snapshot_id"), used))
         judgment = {
@@ -490,8 +489,8 @@ class PriceTriggerHandler:
             row = cur.fetchone()
             return None if row is None else (row[0], row[1])
 
-    def _prev_closes(self, session_id: str, session_date: str) -> dict[str, Decimal]:
-        """세션 기준선 = **전일 종가**(ALPHA-745) — 세션당 1회 조회 후 캐시.
+    def _prev_closes(self, session_id: str, session_date: str) -> tuple[dict[str, Decimal], object]:
+        """세션 기준선 = **전일 종가**(ALPHA-745) — 세션당 1회 조회 후 캐시. (종가 dict, 기준일).
 
         일 단위 `price_daily` 는 세션 중에 바뀌지 않는다(당일 행은 EOD 이후에 들어온다)
         — 매 window 마다 363종을 다시 읽을 이유가 없다. 기준일은 `trade_date <
@@ -532,13 +531,13 @@ class PriceTriggerHandler:
         # 계약 위반 값(0·음수·NULL)은 기준선으로 쓰지 않는다 — 폴백(세션 시가)이 받는다
         prev_closes = {row[0]: row[1] for row in rows
                        if row[1] is not None and Decimal(str(row[1])) > 0}
-        self._prev_close_cache[session_id] = prev_closes
-        self._prev_close_date[session_id] = rows[0][2] if rows else None
+        entry = (prev_closes, rows[0][2] if rows else None)
+        self._prev_close_cache[session_id] = entry
         missing = len(self.etf_ids) - len(prev_closes)
         if missing:
             logger.info("세션 %s 전일 종가 %d/%d — 결손 %d 종은 세션 시가 폴백",
                         session_id, len(prev_closes), len(self.etf_ids), missing)
-        return prev_closes
+        return entry
 
     def _anchors(self, session_id: str) -> dict[str, tuple[Decimal, datetime]]:
         """세션×종목의 현재 (앵커가, 앵커 창) — 행 부재 = 앵커가 기준선(첫 발화 전).
