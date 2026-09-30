@@ -339,7 +339,8 @@ BEGIN
                AND u.report_period = c.report_period AND u.fs_basis = c.fs_basis AND u.received_at >= c.received_at),
            c.status
     FROM chosen c
-    LEFT JOIN metric m ON m.corp_code = c.corp_code AND m.fiscal_year = c.fiscal_year
+    -- 미확정 시도 행은 값이 전부 NULL 이어야 한다 — 정제가 미확정 응답의 지표를 만들지 않지만 조회도 같은 규칙을 건다.
+    LEFT JOIN metric m ON c.status = 'CONFIRMED' AND m.corp_code = c.corp_code AND m.fiscal_year = c.fiscal_year
                        AND m.report_period = c.report_period AND m.fs_basis = c.fs_basis AND m.raw_run_id = c.raw_run_id
     GROUP BY c.corp_code, c.fiscal_year, c.report_period, c.fs_basis, c.raw_run_id, c.received_at, c.available_at,
              c.rejected, c.detail, c.status

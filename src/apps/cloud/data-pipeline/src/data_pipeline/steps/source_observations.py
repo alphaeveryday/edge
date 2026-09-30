@@ -848,8 +848,11 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         malformed = sum(1 for item in items if not isinstance(item, dict))
         if malformed:
             rejects.append({"raw_key": obj["key"], "reasons": ["malformed_list_row"], "rows": malformed})
-            # 파손 행이 섞인 응답은 확인된 응답이 아니다 — 남은 행으로 만든 결과를 "확정된 부재"로 두지 않는다.
+            # 파손 행이 섞인 재무제표·주식총수 응답은 확인된 응답이 아니다 — 남은 행으로 지표·분모를 만들지 않는다
+            # (만들면 미확정 값이 확정 판본에 실리거나 "확정된 부재"가 된다). 목록은 접수일 사전에만 쓰므로 남은 행을 쓴다.
             reject_response(kind, target, "malformed_list_row")
+            if kind != "list":
+                continue
         items = [item for item in items if isinstance(item, dict)]
         if kind == "list":
             for item in items:
@@ -923,6 +926,10 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             unconfirmed((corp_code, year, code, fs_div), f"extract_error:{type(exc).__name__}")
             continue
         rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
+        if any("bad_rcept_no" in (b.get("reasons") or []) for b in bad):
+            # 접수번호가 깨진 줄이 있는 응답은 파손이다 — 남은 줄로 만든 지표를 확정 판본에 싣지 않는다.
+            unconfirmed((corp_code, year, code, fs_div), "bad_rcept_no")
+            continue
         if version is not None:
             version["metrics"].extend(f'{r["metric"]}/{r["period_kind"]}/{r["fiscal_period"]}' for r in extracted)
             version["rejected"].extend({"metric": b.get("metric"), "reasons": b.get("reasons")} for b in bad)

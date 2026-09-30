@@ -573,3 +573,31 @@ def test_malformed_rows_and_rejected_share_responses_are_not_confirmed(tmp_path)
     assert json.loads(versions[(2026, "11012", "CFS")]["detail"])["statement_detail"] == "malformed_list_row"
     q1 = json.loads(versions[(2026, "11013", "CFS")]["detail"])
     assert q1["shares"] == "error" and q1["shares_detail"] == "response_identity_mismatch"
+
+
+def test_rejected_responses_feed_nothing_downstream(tmp_path):
+    # WHY(리뷰 15차): 거부한 응답의 남은 행으로 지표·분모·Q4 유도를 만들면 미확정 값이 확정 판본에 실린다.
+    # 파손 주식총수 → BPS 없음, 접수번호 파손 재무제표 → 판본 UNCONFIRMED·지표 0, 미확정 Q3 → Q4 유도 없음.
+    responses = full_responses(SAMSUNG)
+    bad_shares = json.loads(shares(SAMSUNG, "2026", "11012"))
+    bad_shares["list"].append(42)
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(bad_shares).encode()
+    bad_q1 = json.loads(statement(SAMSUNG, "2026", "11013", "CFS"))
+    bad_q1["list"][0]["rcept_no"] = "bad"
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")] = json.dumps(bad_q1).encode()
+    bad_q3 = json.loads(statement(SAMSUNG, "2025", "11014", "CFS"))
+    bad_q3["list"].append(None)
+    responses[("statement", SAMSUNG["corp_code"], "2025", "11014", "CFS")] = json.dumps(bad_q3).encode()
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    storage, _ = chain(tmp_path, dart, holdings=("005930",))
+    so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    rows = rows_by(storage)
+    _, versions = _versions(storage)
+    assert ("005930", 2026, "Q2", "bps", "POINT", "CFS") not in rows and ("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS") not in rows
+    assert json.loads(versions[(2026, "11012", "CFS")]["detail"])["shares"] == "error"
+    assert versions[(2026, "11013", "CFS")]["status"] == "UNCONFIRMED" and json.loads(versions[(2026, "11013", "CFS")]["metrics"]) == []
+    assert not any(k[1:3] == (2026, "Q1") and k[5] == "CFS" for k in rows)
+    assert versions[(2025, "11014", "CFS")]["status"] == "UNCONFIRMED"
+    assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS") not in rows            # 미확정 9M → Q4 유도 없음
+    assert "eps_basic/QUARTER/Q4" not in json.loads(versions[(2025, "11011", "CFS")]["metrics"])
+    assert ("005930", 2025, "Q4", "bps", "POINT", "CFS") in rows                          # 사업보고서 자체의 BPS 는 있다
