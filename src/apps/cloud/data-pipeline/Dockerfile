@@ -7,6 +7,9 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# 배포 워크플로가 이미지 태그(커밋 SHA)를 넣는다 — raw·canonical manifest 의 code_version(재현 계약, 설계 §10.3).
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 WORKDIR /app
 
 RUN useradd -r -u 1001 pipeline
