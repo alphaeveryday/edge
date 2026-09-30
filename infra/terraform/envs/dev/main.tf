@@ -709,9 +709,11 @@ module "airflow" {
   # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
   task_memory   = 1408
-  # small·1408 후속 검증(2026-09-30)을 마쳐 0 으로 내렸다. 다시 올리는 것도 이 값(코드)으로 한다.
-  host_count    = 0
-  host_observer = false
+  # small·1408 A4·A5 표적 재검증(2026-10-01 16:30~22:30 KST, verify/criteria_aws_1408_a4a5.json)에만 1. 끝나면 0 머지.
+  # 종료 장치가 ASG 를 0 으로 내린 뒤 다른 머지의 자동 apply 가 호스트를 되살리지 않게, 종료 시각(22:30 KST) 뒤
+  # 계산한 plan 은 0 이다. 그 전에 계산해 늦게 적용된 apply 는 23:00 강제 종료가 다시 0 으로 만든다.
+  host_count    = timecmp(plantimestamp(), "2026-10-01T13:30:00Z") < 0 ? 1 : 0
+  host_observer = true
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
   image = "${local.airflow_ecr_repository_url}:bootstrap"
@@ -740,10 +742,13 @@ module "airflow" {
   deploy_role_name   = element(split("/", module.gha_deploy_dev.role_arn), 1) # vars.AWS_DEPLOY_ROLE_ARN 의 역할
   ecr_repository_arn = local.airflow_ecr_repository_arn
 
-  # 격리 검증(KIS·업무 DB·레이크와 무관). 검증을 마쳐 false 로 걷었다(버킷·태스크 정의·역할·종료 장치).
-  verify_enabled = false
-  verify_image   = "${local.airflow_ecr_repository_url}:verify"
-  kr_holidays    = module.data_pipeline.kr_holidays
+  # 격리 검증(KIS·업무 DB·레이크와 무관). 끝나면 false 로 걷는다(버킷·태스크 정의·역할·종료 장치).
+  verify_enabled = true
+  # AWS 쪽 종료 장치(verify_shutdown.tf) — 운영자 PC 와 무관하게 이 시각에 새 제출을 막고 관측 기록을 보낸 뒤 정리한다.
+  verify_shutdown_at  = "2026-10-01T22:30:00"
+  verify_hard_stop_at = "2026-10-01T23:00:00"
+  verify_image        = "${local.airflow_ecr_repository_url}:verify"
+  kr_holidays         = module.data_pipeline.kr_holidays
   # 관리 태스크(dbadmin)만: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제(업무 DB 스키마만).
   master_db_secret_arn = module.rds.master_user_secret_arn
   master_db_user       = module.rds.master_username
