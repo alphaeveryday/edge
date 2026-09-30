@@ -345,12 +345,11 @@ def test_normalize_and_load_refuse_collection_scope_arguments(tmp_path, step, ex
     from types import SimpleNamespace
 
     from data_pipeline import run as run_module
-    from data_pipeline.config import SourceObservationsConfig
 
     args = SimpleNamespace(step=step, input_run_id="r", from_date=None, to_date=None, series=None,
                            all_partitions=False)
     for k, v in extra.items():
         setattr(args, k, v)
-    settings = SimpleNamespace(source_observations=SourceObservationsConfig())
+    settings = SimpleNamespace(source_observations=SimpleNamespace())  # 거부는 설정 내용을 읽기 전에 난다
     with pytest.raises(SystemExit, match="쓰지 않는다"):
         run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_scope")
