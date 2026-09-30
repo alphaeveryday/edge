@@ -470,21 +470,28 @@ LANGUAGE sql STABLE AS $$
                    FILTER (WHERE v.status = 'CONFIRMED'),
                max(v.received_at), 'LOAD_FINANCIAL_METRIC',
                'period_end=확정 판본 중 가장 늦은 보고 기말(지표 0개 판본 포함). 접수 시점은 회사·보고서마다 달라 기대 관측일이 없다'
-        FROM financial_report_version v
+        FROM financial_report_version v HAVING count(*) > 0
         UNION ALL
         SELECT 'sector_classification', NULL, max(s.as_of_date), max(s.received_at), 'LOAD_SECTOR',
                'as_of_date=마스터를 받은 KST 날짜(원천은 현재값만). 공식 게시 캘린더 미확보'
-        FROM sector_classification s
+        FROM sector_classification s HAVING count(*) > 0
     )
     SELECT f.dataset, f.series_id, f.latest, f.received, l.fulfilled_at, l.data_status,
            'UNKNOWN', 'NO_PROVIDER_CALENDAR', f.basis
     FROM facts f LEFT JOIN loads l ON l.task_key = f.task_key
-    WHERE f.latest IS NOT NULL
-    ORDER BY f.dataset, f.series_id
+    UNION ALL
+    -- 적재는 성공했는데 행이 없는 데이터셋(정상 0건·비거래일·지표 0개): 원장 사실만으로 행을 남긴다 —
+    -- "한 번도 적재 안 됨"과 "적재했으나 빈 결과"가 갈려야 한다(data_status 가 그 구분이다).
+    SELECT CASE l.task_key WHEN 'LOAD_MACRO' THEN 'macro_observation' WHEN 'LOAD_FINANCIAL_METRIC' THEN 'financial_metric'
+                           ELSE 'sector_classification' END,
+           NULL, NULL, NULL, l.fulfilled_at, l.data_status, 'UNKNOWN', 'NO_PROVIDER_CALENDAR',
+           '적재는 성공했으나 이 표에 행이 없다(정상 0건 또는 지표 0개 판본) — 원장 data_status 참조'
+    FROM loads l WHERE NOT EXISTS (SELECT 1 FROM facts f WHERE f.task_key = l.task_key)
+    ORDER BY 1, 2
 $$;
 
 COMMENT ON FUNCTION source_observation_freshness() IS
-'원천 관측 데이터셋별 신선도 사실(마지막 적재 성공·마지막 수신·최신 관측일). status 는 공급자 캘린더가 없어 항상 UNKNOWN — 판정은 호출자 몫. 행이 없는 데이터셋=적재 0건.';
+'원천 관측 데이터셋별 신선도 사실(마지막 적재 성공·마지막 수신·최신 관측일). status 는 공급자 캘린더가 없어 항상 UNKNOWN — 판정은 호출자 몫. 행이 없는 데이터셋=적재 성공 기록도 행도 없음. 적재는 성공했는데 행이 없으면 관측 열이 NULL 인 행(원장 data_status 로 정상 0건 구분).';
 
 -- ── v2 읽기 경로(ALPHA-1130 §5) ─────────────────────────────────────────────────
 -- v2 는 이 다섯 함수로만 원천을 읽는다. 함수는 소유자 권한으로 돌고(SECURITY DEFINER) 테이블 자체는
