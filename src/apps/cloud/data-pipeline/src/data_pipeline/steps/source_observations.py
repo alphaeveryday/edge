@@ -177,6 +177,15 @@ def existing_raw_manifest(storage: Storage, dataset: str, run_id: str) -> dict |
     return manifest if manifest.get("completed") is True else None
 
 
+def ensure_same_request(dataset: str, run_id: str, manifest: dict, requested: dict) -> None:
+    """완료된 run_id 를 **다른 요청 범위**로 다시 부르면 거부한다. 수동 백필을 같은 분에 여럿 trigger 하면 슬롯이
+    같아 run_id 가 겹친다 — 그대로 '이미 수집'으로 성공하면 뒤 범위는 영영 수집되지 않는다."""
+    recorded = (manifest.get("request_scope") or {}).get("requested")
+    if recorded != requested:
+        raise SystemExit(f"{dataset} run_id={run_id} 는 다른 요청 범위로 이미 수집됐다 "
+                         f"(기록 {recorded}, 요청 {requested}) — 1분 이상 간격을 두고 다시 trigger 한다")
+
+
 def code_version() -> str:
     """이 정제 코드의 Git SHA(이미지가 `GIT_SHA` 로 주입). 카탈로그 버전(`OPS_CATALOG_VERSION` 우선)은 코드 판이 아니다."""
     return os.environ.get("GIT_SHA") or "unknown"

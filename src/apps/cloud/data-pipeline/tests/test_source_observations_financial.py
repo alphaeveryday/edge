@@ -134,6 +134,22 @@ def test_no_snapshot_in_the_period_fails_without_calling_dart(tmp_path):
     assert dart.calls == []
 
 
+def test_same_run_id_with_a_different_filing_window_fails_instead_of_skipping(tmp_path):
+    # WHY(봇 P1): 같은 분에 trigger 한 백필 청크는 run_id 가 같다. '이미 수집'으로 성공하면 뒤 청크의 접수일
+    # 범위는 DART 를 한 번도 부르지 않은 채 끝난다 — 범위가 다르면 거부하고, 같은 범위 재시도만 건너뛴다.
+    storage = LocalStorage(tmp_path)
+    write_holdings(storage, "2026-08-14", ["005930"])
+    dart = default_dart()
+    assert so_fin.collect_financial(storage, dart, "run_x", etf_ids=["091160"], from_date="2025-01-01",
+                                    to_date="2025-03-31", now=NOW) == 1      # 스냅샷 없음 — 결과와 무관하게 완료
+    with pytest.raises(SystemExit, match="다른 요청 범위"):
+        so_fin.collect_financial(storage, dart, "run_x", etf_ids=["091160"], from_date="2024-01-01",
+                                 to_date="2024-12-31", now=NOW)
+    assert so_fin.collect_financial(storage, dart, "run_x", etf_ids=["091160"], from_date="2025-01-01",
+                                    to_date="2025-03-31", now=NOW) == 1
+    assert dart.calls == []
+
+
 def test_missing_q3_blocks_q4_derivation_and_non_krw_is_rejected(tmp_path):
     # WHY: 9개월 누적 없이 Q4 를 만들면 연간값이 한 분기로 둔갑한다. 통화가 원이 아니면 단위가 섞인다.
     responses = full_responses(SAMSUNG)

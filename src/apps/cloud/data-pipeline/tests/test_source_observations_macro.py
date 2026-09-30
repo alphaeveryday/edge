@@ -353,3 +353,17 @@ def test_normalize_and_load_refuse_collection_scope_arguments(tmp_path, step, ex
     settings = SimpleNamespace(source_observations=SimpleNamespace())  # 거부는 설정 내용을 읽기 전에 난다
     with pytest.raises(SystemExit, match="쓰지 않는다"):
         run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_scope")
+
+
+def test_same_run_id_with_a_different_backfill_window_fails_instead_of_skipping(tmp_path):
+    # WHY(봇 P1): 1년 단위 백필을 같은 분에 여럿 trigger 하면 슬롯이 같아 run_id 가 겹친다. 완료 manifest 만 보고
+    # '이미 수집'으로 성공하면 뒤 범위는 공급자를 한 번도 부르지 않은 채 DAG 가 성공한다 — 범위가 다르면 거부한다.
+    storage = LocalStorage(tmp_path)
+    src, client = source()
+    assert collect(storage, "run_bf", src, series=["usd_krw"], from_date="2025-01-01", to_date="2025-12-31") == 0
+    calls = len(client.calls)
+    with pytest.raises(SystemExit, match="다른 요청 범위"):
+        collect(storage, "run_bf", src, series=["usd_krw"], from_date="2024-01-01", to_date="2024-12-31")
+    assert len(client.calls) == calls
+    # 같은 범위의 재시도는 그대로 '이미 수집'이다(재호출 없음).
+    assert collect(storage, "run_bf", src, series=["usd_krw"], from_date="2025-01-01", to_date="2025-12-31") == 0
