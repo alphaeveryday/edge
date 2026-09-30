@@ -44,7 +44,10 @@ def test_schedule_and_guards(dag_module):
     for family in dag_module.FAMILIES:
         collect = dag.get_task(f"{family}_collect")
         # 날짜 인자가 없는 원천(업종)은 오늘 값만 준다 — 과거 슬롯 run 이 오늘 값을 과거로 라벨하지 않게 막는다.
-        assert collect.same_day_only and collect.noop_on_reprocess and collect.skip_if_succeeded
+        assert collect.same_day_only and collect.noop_on_reprocess
+        # 봇 P1: 성공 이력 skip 은 수집기의 요청 범위 검사(ensure_same_request)를 건너뛴다 — 같은 분에 trigger 한 두 백필이
+        # run_id 를 공유하면 뒤 범위가 수집 없이 성공한다. 재실행 무호출은 수집기 자신이 보장하므로 skip 을 켜지 않는다.
+        assert not collect.skip_if_succeeded
         assert dag.get_task(f"{family}_normalize").trigger_rule == "all_done_min_one_success"
 
 

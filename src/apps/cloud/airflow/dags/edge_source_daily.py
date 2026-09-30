@@ -159,7 +159,9 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
                 window = ["--from", f"{{{{ params.{start} }}}}", "--to", f"{{{{ params.{end} }}}}"]
             collect = step(
                 **ecs_target, task_id=f"{family}_collect", taskdef_key=taskdef, same_day_only=True,
-                noop_on_reprocess=True, skip_if_succeeded=True, partial_exit_codes=(2,),
+                # 성공 이력 skip 을 켜지 않는다: 수집기가 완료 run_id 재실행을 무호출로 처리하고, 다른 요청 범위면
+                # 거부한다(ensure_same_request). skip 은 그 범위 검사를 건너뛰어 같은 분의 두 백필을 한 범위로 합친다.
+                noop_on_reprocess=True, partial_exit_codes=(2,),
                 command=[cli, "--run-id", rid, *window],
             )
             _, taskdef, cli = stages["normalize"]
