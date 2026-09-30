@@ -346,9 +346,9 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 `tests/analysis_v2_writer.sql`이 셋을 따로 검사한다: ① 다섯 함수 실행 가능, ② PUBLIC에 열린 DEFINER 함수 없음·다른 DEFINER
 함수 실행 불가, ③ 네 테이블(판본 표 포함) SELECT·INSERT 거부(변이 4종으로 확인: EXECUTE 회수·PUBLIC 부여·테이블 SELECT 부여·INVOKER 전환 모두 실패). `search_path = public, pg_temp`.
 
-**v2 어댑터**: `edge_analysis_v2/source_inputs.py` — `macro_inputs(conn, T)`·`financial_inputs(conn, T, codes)`·`freshness(conn)`가
+**v2 어댑터**: `edge_analysis_v2/storage/source_inputs.py` — `macro_inputs(conn, T)`·`financial_inputs(conn, T, codes)`·`freshness(conn)`가
 함수 결과를 fixture 행 형태로 만든다. 매크로 `observed_at`은 **관측일 문자열 그대로**(경계 시각으로 바꾸지 않는다 — 소비 코드
-`fixture_tools/common.observed()`가 그 한국 날짜가 끝난 뒤부터 관측된 것으로 센다). 결측은 행이 아니라 `gaps`로 돌아온다
+`tools/fixture_data/common.observed()`가 그 한국 날짜가 끝난 뒤부터 관측된 것으로 센다). 결측은 행이 아니라 `gaps`로 돌아온다
 (`no_observation_visible`·`no_release_visible`·`EPS_ABSENT_IN_LATEST_VERSION`·`bps_note` 세 값) — 0으로 채우지 않는다. 결손 분기는 행에서 빼지 않고 `None` 으로 남긴다 — 빼면 `valuation.calculate` 가 그 앞 4분기로 미끄러져 옛 비율을 현재값처럼 낸다.
 재무 행마다 `version`(권위 판본 run·수신시각·`latest_unconfirmed_at`·분모 응답 상태)이 붙어 소비자가 "옛 판본을 읽고 있고 그 뒤 확인이 실패했다"를 안다. 통합 테스트 `integration_tests/test_source_inputs_postgres.py`(로컬 PG, `V2_SOURCE_TEST_DSN`, 14건)가 writer 역할로 함수를 읽어
 `macro.compare`·`valuation.calculate`까지 돌린다(접수일 다음날 00:00 경계, 우선주 회사의 BPS gap, 지표 0개 판본·미확정 확인·분모 실패, 테이블 직접 읽기 거부 포함). 실 파이프라인 경로는 `data-pipeline/tests/e2e/test_source_observations_pg.py`(수집→정제→적재→조회: 지표 0개 정정·일부 지표·공급자 실패 vs 013·늦은 옛 실행·중단 후 `--all` 복구·중복 정제).
