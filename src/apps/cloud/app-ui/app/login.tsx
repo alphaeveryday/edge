@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
@@ -23,7 +23,7 @@ const REASON: Record<string, string> = {
 // 이메일 로그인. 성공 시 원래 화면으로
 export default function Login() {
   const router = useRouter();
-  const { reason } = useLocalSearchParams<{ reason?: string }>();
+  const { reason, email: resetEmail } = useLocalSearchParams<{ reason?: string; email?: string }>();
   const hint = reason ? REASON[reason] : undefined;
   const { top } = useSafeAreaInsets();
   const login = useSession((s) => s.login);
@@ -31,6 +31,10 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [err, setErr] = useState('');
+  // 비밀번호 재설정 후 돌아올 때 이메일 채움
+  useEffect(() => {
+    if (resetEmail) { setEmail(resetEmail); setPw(''); }
+  }, [resetEmail]);
   const ready = email.trim().length > 0 && pw.length > 0;
   const close = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/home'));
   const submit = useMutation({

@@ -15,7 +15,6 @@ const CODE_MAP: Record<string, ApiErrorCode> = {
   THEME4001: 'NOT_FOUND',
   ISSUE4001: 'NOT_FOUND',
   POST4001: 'NOT_FOUND',
-  MEMBER4001: 'NOT_FOUND',
 };
 const toCode = (code: string): ApiErrorCode => CODE_MAP[code] ?? 'INVALID';
 

@@ -69,6 +69,7 @@ export interface AuthApi {
   login(email: string, password: string): Promise<Me>;
   signup(input: { email: string; password: string; nick: string }): Promise<Me>;
   requestPasswordReset(email: string): Promise<void>;
+  confirmPasswordReset(email: string, code: string, newPassword: string): Promise<void>;
   logout(): Promise<void>;
 }
 

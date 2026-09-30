@@ -162,7 +162,13 @@ export const mockClient: ApiClient = {
       Object.assign(ME, { email, nick, handle: '@' + email.split('@')[0] });
       return delay({ ...ME });
     },
-    requestPasswordReset: (email) => (ACCOUNTS[email] ? delay(undefined) : Promise.reject(new ApiError('NOT_FOUND', '가입되지 않은 이메일이에요'))),
+    requestPasswordReset: () => delay(undefined),
+    // mock 코드는 000000 고정
+    confirmPasswordReset: (email, code, newPassword) => {
+      if (!ACCOUNTS[email] || code !== '000000') return Promise.reject(new ApiError('INVALID', '코드가 맞지 않거나 만료되었어요. 다시 요청해 주세요'));
+      ACCOUNTS[email] = newPassword;
+      return delay(undefined);
+    },
     logout: () => delay(undefined, 20),
   },
   notification: {
