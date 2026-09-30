@@ -696,6 +696,20 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # read=0 으로 성공한다. 멱등이라 겹침 비용은 스캔뿐.
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
+
+# 분석 v2 원천 관측(ALPHA-1130) — 매크로 5계열. 계약 정본은
+# docs/design/etf-data-storage-plan.md §10. 수집(raw + raw manifest) →
+# 정제(--input-run-id = 수집 run, 실행별 artifact + canonical 현재 상태 + manifest) →
+# 적재(--input-run-id = 정제 run 또는 --all = 소비 마커 없는 완료 manifest 전부)다.
+# 매크로 창 미지정 = 계열별 소급일 ~ 어제(KST). 백필은 --from/--to(관측일, --to ≤ 어제). 키는 env 로(FMP 키는 미국채 10y 만, USD/KRW·국고채는 ECOS — FMP USDKRW 는 현재 구독에서 402.
+# raw·canonical manifest 의 code_version 은 GIT_SHA env 에서 온다, 없으면 unknown):
+DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
+DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY=... \
+DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY=... \
+DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-macro --run-id run_m1 [--series usd_krw,us_10y_yield]
+uv run --package data-pipeline python -m data_pipeline.run normalize-macro --run-id run_m1n --input-run-id run_m1
+uv run --package data-pipeline python -m data_pipeline.run load-macro --run-id run_m1l --input-run-id run_m1n
 ```
 
 > **thread 재계산(ALPHA-457 등 thread_key 산식 변경 시)** — `thread_id = f(thread_key)` 라
@@ -1662,7 +1676,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   RUNNING+시간초과로 파생하는 health(이슈로만 남김).
 - **Task Catalog**(`ops/catalog.py`) — 논리 작업의 안정적 ID·정적 의존 SSOT. **등록 30작업 =
   시장 레인(`etf-daily`) 17 + 뉴스 레인(`news`) 6 + 공시 보충 배치(`disclosure`) 4
-  + 장중 수급 레인(`investor-intraday`) 3**
+  + 장중 수급 레인(`investor-intraday`) 3**, 여기에 **SFN 없는 Airflow 전용 원천 관측 레인(`source-daily`) 3**
+  (ALPHA-1130 — `sfn_state_name` 이 비어 SFN 셈 밖이고, Reconciler 는 작업별 `evidence_key` 로 증거를 모은다)
   (ALPHA-724 가 공시 4작업의 소유 레인을 옮겼고 — 총계 불변 —
   ALPHA-769 가 장중 수급 3작업을 **신설**했다: 시장 SFN 이 돈 적 없는 스텝이라 이쪽은 총계가
   늘어난다. 30 → 26 은 ALPHA-875 가 그 공시 4작업을 SFN 원장 밖 1분 세션으로 보낸 몫이었고
@@ -1689,7 +1704,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 `instrumented=False` 는 이제 0개다** — 등록 30작업이 전부 자기
+  **TagNews 도 ALPHA-610 이 올려 SFN 작업의 `instrumented=False` 는 0개다**(예외: Airflow 전용
+  `MACRO_COLLECTION` — `macro` task-def 미존재, ALPHA-1130 인프라 인계) — SFN 등록 30작업이 전부 자기
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1

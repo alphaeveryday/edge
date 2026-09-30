@@ -601,6 +601,46 @@ def canonical_etf_holdings_partition(market: str, as_of_date: str) -> str:
     return f"canonical/holdings/etf_holdings/market={market}/as_of_date={as_of_date}"
 
 
+_OBSERVATION_SEGMENT = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _observation_segment(value: str) -> str:
+    """경로 세그먼트 하나. `/`·`=` 가 들어가면 파티션 경계가 밀려 다른 키로 읽힌다."""
+    if not isinstance(value, str) or not _OBSERVATION_SEGMENT.fullmatch(value):
+        raise ValueError(f"경로 세그먼트가 유효하지 않다: {value!r}")
+    return value
+
+
+def raw_observation_partition(
+    source: str, dataset: str, dimension: str, value: str, ingest_date: str, run_id: str
+) -> str:
+    """신규 원천 관측 raw 파티션 프리픽스 (끝 슬래시 없음, ALPHA-1130·설계 §3).
+
+    `dimension` 은 종목 시장이면 `market`, 거시 계열이면 `series_id` 다. 공급자 응답을 형식
+    그대로(JSON·ZIP) 실행 단위로 둔다 — 덮지 않고, 무엇을 받았는지는 raw run manifest 가
+    직접 키·sha256 으로 확정한다(정제는 목록 대신 그 manifest 를 읽는다).
+    """
+    if dimension not in ("market", "series_id"):
+        raise ValueError(f"raw 관측 차원은 market·series_id 뿐이다: {dimension!r}")
+    return (
+        f"raw/source={_observation_segment(source)}/dataset={_observation_segment(dataset)}"
+        f"/{dimension}={_observation_segment(value)}/ingest_date={_observation_segment(ingest_date)}"
+        f"/run_id={_observation_segment(run_id)}"
+    )
+
+
+def canonical_macro_observation_partition(series_id: str, observation_date: str) -> str:
+    """canonical 매크로 관측 파티션 프리픽스 (ALPHA-1130).
+
+    **현재 상태**다 — 같은 (계열, 관측일)은 가장 늦게 **수신된** 판본 하나만 남긴다. 덮인 옛 판본은
+    raw·실행별 artifact·DB 판본 이력에 있다. 월별 계열(kr_cpi_yoy)의 관측일은 기준월 1일이다.
+    """
+    return (
+        f"canonical/market_data/macro_observation/series_id={_observation_segment(series_id)}"
+        f"/observation_date={_observation_segment(observation_date)}"
+    )
+
+
 def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     """canonical 일봉 파티션 프리픽스 (끝 슬래시 없음).
 
