@@ -114,10 +114,12 @@ class AuthFlowTests extends ContainerTests {
         return call("POST", "/api/v1/auth/password-reset/confirm", Map.of("email", email, "code", code, "newPassword", newPassword));
     }
 
-    // 응답과 발송 여부로 가입 여부가 드러나지 않아야 하고, 재요청 폭주가 메일 폭탄이 되지 않아야 한다
+    // 미가입 이메일은 메일 없이 바로 알려 주고, 재요청 폭주가 메일 폭탄이 되지 않아야 한다
     @Test
-    void passwordResetHidesExistenceAndThrottlesResend() {
-        assertEquals(200, call("POST", "/api/v1/auth/password-reset", Map.of("email", "zz@example.com")).getStatusCode().value());
+    void passwordResetRejectsUnknownEmailAndThrottlesResend() {
+        var unknown = call("POST", "/api/v1/auth/password-reset", Map.of("email", "zz@example.com"));
+        assertEquals(404, unknown.getStatusCode().value());
+        assertEquals("MEMBER4005", unknown.getBody().get("code"));
         verify(mailer, never()).send(eq("zz@example.com"), anyString(), anyString());
 
         signup("c@example.com");

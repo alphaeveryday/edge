@@ -100,13 +100,11 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 미가입 이메일과 60초 내 재요청도 같은 응답
+    // 60초 내 재요청은 발송 없이 같은 응답. 가입 여부는 가입 응답이 이미 드러내 숨기지 않음
     @Transactional
     public void requestPasswordReset(PasswordResetRequest request) {
-        Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email()).orElse(null);
-        if (member == null) {
-            return;
-        }
+        Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
+                .orElseThrow(() -> new GeneralException(AppErrorStatus.MEMBER_EMAIL_NOT_FOUND));
         Instant now = Instant.now();
         PasswordResetCode current = resetCodeRepository.findById(member.getId()).orElse(null);
         if (current != null && current.getCreatedAt().plus(RESET_RESEND_GAP).isAfter(now)) {
