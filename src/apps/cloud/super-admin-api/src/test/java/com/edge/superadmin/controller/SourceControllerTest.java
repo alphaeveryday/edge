@@ -28,6 +28,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -858,19 +859,28 @@ class SourceControllerTest {
 		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
 		minute.judgments.put("sess-p", List.of(
 				new MinuteStatusRepository.PriceJudgmentRow("job-w0", w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
-						1, 0, w0.plusSeconds(3), true, "test-policy",
+						1, 0, w0.plusSeconds(3), true, "test-policy", "set-1",
 						"{\"fired\": [\"500000\"], \"inserted\": [\"500000\"]}",
 						"{\"500000\": [\"104.000000\", \"2026-10-05T00:00:00+00:00\"]}",
 						"{\"500000\": \"2026-10-05T00:00:00+00:00\"}",
 						"{\"500000\": {\"value\": 100, \"source\": \"open_fallback\", \"ref\": \"W0@g1\"}}", 2),
 				new MinuteStatusRepository.PriceJudgmentRow("job-w0", w0, 1, 1, "SUCCEEDED", 2, "s3://lake/w0", "a".repeat(64),
-						2, 0, w0.plusSeconds(90), false, "test-policy", "{\"fired\": []}", "{}", "{}", null, 2),
+						2, 0, w0.plusSeconds(90), false, "test-policy", "set-1", "{\"fired\": []}", "{}", "{}", null, 2),
 				new MinuteStatusRepository.PriceJudgmentRow("job-w1", w0.plusMinutes(1), 2, 1, "SUCCEEDED", 1, null, null,
-						null, null, null, null, null, null, null, null, null, null)));
+						null, null, null, null, null, null, null, null, null, null, null)));
+		// WHY: 앵커 행이 아직 없는 무발화 시도(시도 2)는 요약·앵커에 종목이 없어 attempts[].baselines 가
+		//      비지만, 판정이 본 기준선은 집합 단위로 답해야 한다 — 그게 무발화 근거 조회의 목적이다(#999 봇 P2).
+		minute.baselineSets.put("sess-p", Map.of("set-1",
+				"{\"500000\": {\"value\": 100, \"source\": \"open_fallback\", \"ref\": \"W0@g1\"},"
+						+ " \"500001\": {\"value\": 200, \"source\": \"prev_close\", \"ref\": \"2026-10-02\"}}"));
 		MockMvc mvc = minuteMvc(minute);
 		mvc.perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-p"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.recomputation").value("NOT_GUARANTEED"))
+				.andExpect(jsonPath("$.result.windows[0].attempts[1].baselines").isEmpty())
+				.andExpect(jsonPath("$.result.windows[0].attempts[1].baselineSetId").value("set-1"))
+				.andExpect(jsonPath("$.result.baselineSets.set-1.500001.source").value("prev_close"))
+				.andExpect(jsonPath("$.result.baselineSets.set-1.500001.value").value(200))
 				.andExpect(jsonPath("$.result.windows[0].attempts.length()").value(2))
 				.andExpect(jsonPath("$.result.windows[0].attempts[0].summary.inserted[0]").value("500000"))
 				.andExpect(jsonPath("$.result.windows[0].attempts[0].txAnchorLocked").value(true))
@@ -898,9 +908,9 @@ class SourceControllerTest {
 		OffsetDateTime w0 = OffsetDateTime.of(2026, 10, 5, 0, 0, 0, 0, ZoneOffset.UTC);
 		minute.judgments.put("sess-two", List.of(
 				new MinuteStatusRepository.PriceJudgmentRow("job-v1", w0, 1, 1, "SUCCEEDED", 1, "s3://lake/w0", "a".repeat(64),
-						1, 0, w0.plusSeconds(3), false, "test-policy", "{\"fired\": []}", "{}", "{}", null, 2),
+						1, 0, w0.plusSeconds(3), false, "test-policy", "set-1", "{\"fired\": []}", "{}", "{}", null, 2),
 				new MinuteStatusRepository.PriceJudgmentRow("job-v2", w0, 1, 1, "DEAD", 5, "s3://lake/w0", "a".repeat(64),
-						null, null, null, null, null, null, null, null, null, null)));
+						null, null, null, null, null, null, null, null, null, null, null)));
 		minuteMvc(minute).perform(get("/api/v1/sources/minute/judgments").param("sessionId", "sess-two"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.windows.length()").value(2))

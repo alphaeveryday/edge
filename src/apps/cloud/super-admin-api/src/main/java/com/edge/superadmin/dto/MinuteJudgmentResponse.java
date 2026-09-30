@@ -2,6 +2,8 @@ package com.edge.superadmin.dto;
 
 import com.edge.superadmin.repository.MinuteStatusRepository.PriceJudgmentRow;
 import com.fasterxml.jackson.annotation.JsonRawValue;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -24,6 +26,9 @@ import java.util.Map;
  *   <li>{@code windows} 는 <b>job 단위</b>다 — job 정체성은 session·window·세대·trigger_schema_version
  *       ({@code uq_price_window_job_identity})이라 같은 window·세대에 job 이 둘일 수 있고, 그때 둘을 합치면
  *       한쪽의 실패·기록 부재가 가려진다. {@code jobId} 로 묶는다.</li>
+ *   <li>{@code attempts[].baselines} 는 요약·앵커에 등장한 종목만의 기준선이고, 판정이 쓴 **집합 전체**는
+ *       {@code baselineSets[attempts[].baselineSetId]} 에 집합 단위로 한 번 싣는다 — 앵커 행이 아직 없는
+ *       무발화 시도도 어떤 기준선을 봤는지 여기서 답한다. 빈 집합(판정 대상 0)은 키가 없다.</li>
  *   <li>{@code judgedAt} 은 기록 INSERT 의 관측 시각이다. 커밋 순서·인과 순서가 아니다.</li>
  *   <li>{@code txAnchorLocked}: true 는 발화·회수 대상 앵커 행을 잠근 뒤 관측, false 는 무발화의
  *       비잠금 관측이다.</li>
@@ -31,7 +36,8 @@ import java.util.Map;
  *       보장된 구간이 아니면 결과를 보장할 수 없다(§33.12).</li>
  * </ul>
  */
-public record MinuteJudgmentResponse(String sessionId, String recomputation, List<Window> windows) {
+public record MinuteJudgmentResponse(String sessionId, String recomputation, List<Window> windows,
+		Map<String, JsonNode> baselineSets) {
 
 	public record Window(String jobId, OffsetDateTime windowStart, int windowGeneration, int jobGeneration,
 			String jobStatus, int jobAttemptCount, boolean correctedAfter, String inputRecord,
@@ -40,12 +46,15 @@ public record MinuteJudgmentResponse(String sessionId, String recomputation, Lis
 	}
 
 	public record Attempt(int attempt, int redriveGeneration, OffsetDateTime judgedAt,
-			boolean txAnchorLocked, String detectionPolicyVersion,
+			boolean txAnchorLocked, String detectionPolicyVersion, String baselineSetId,
 			@JsonRawValue String summary, @JsonRawValue String anchorsUsed,
 			@JsonRawValue String txAnchor, @JsonRawValue String baselines, int judgedWithBaseline) {
 	}
 
-	public static MinuteJudgmentResponse from(String sessionId, List<PriceJudgmentRow> rows) {
+	private static final JsonMapper MAPPER = JsonMapper.builder().build();
+
+	public static MinuteJudgmentResponse from(String sessionId, List<PriceJudgmentRow> rows,
+			Map<String, String> baselineSetJson) {
 		Map<String, List<PriceJudgmentRow>> byJob = new LinkedHashMap<>();
 		for (PriceJudgmentRow r : rows) {
 			byJob.computeIfAbsent(r.jobId(), k -> new ArrayList<>()).add(r);
@@ -55,7 +64,7 @@ public record MinuteJudgmentResponse(String sessionId, String recomputation, Lis
 			PriceJudgmentRow head = group.get(0);
 			List<Attempt> attempts = group.stream().filter(r -> r.attempt() != null)
 					.map(r -> new Attempt(r.attempt(), r.redriveGeneration(), r.judgedAt(),
-							Boolean.TRUE.equals(r.txAnchorLocked()), r.detectionPolicyVersion(),
+							Boolean.TRUE.equals(r.txAnchorLocked()), r.detectionPolicyVersion(), r.baselineSetId(),
 							r.summaryJson(), r.anchorsUsedJson(), r.txAnchorJson(),
 							r.baselinesJson() == null ? "{}" : r.baselinesJson(),
 							r.judgedWithBaseline() == null ? 0 : r.judgedWithBaseline()))
@@ -66,6 +75,8 @@ public record MinuteJudgmentResponse(String sessionId, String recomputation, Lis
 					head.artifactChecksum() == null ? "NO_HISTORY" : "RECORDED",
 					head.artifactUri(), head.artifactChecksum(), "NOT_PERFORMED", attempts));
 		}
-		return new MinuteJudgmentResponse(sessionId, "NOT_GUARANTEED", windows);
+		Map<String, JsonNode> sets = new LinkedHashMap<>();
+		baselineSetJson.forEach((setId, json) -> sets.put(setId, MAPPER.readTree(json)));
+		return new MinuteJudgmentResponse(sessionId, "NOT_GUARANTEED", windows, sets);
 	}
 }

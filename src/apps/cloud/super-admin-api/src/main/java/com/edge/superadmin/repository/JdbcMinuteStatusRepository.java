@@ -13,6 +13,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -217,7 +218,7 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			SELECT j.job_id, j.window_start, w.generation AS window_generation, j.generation AS job_generation,
 			       j.status, j.attempt_count, a.artifact_uri, a.artifact_checksum,
 			       r.attempt, r.redrive_generation, r.judged_at, r.tx_anchor_locked,
-			       r.detection_policy_version, r.summary::text AS summary,
+			       r.detection_policy_version, r.baseline_set_id, r.summary::text AS summary,
 			       r.anchors_used::text AS anchors_used, r.tx_anchor::text AS tx_anchor,
 			       (SELECT jsonb_object_agg(s.entity_id, jsonb_build_object(
 			                   'value', sn.value, 'source', sn.source, 'ref', sn.ref))::text
@@ -240,6 +241,16 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 			  LEFT JOIN minute_price_judgment r ON r.job_id = j.job_id
 			 WHERE j.session_id = ?
 			 ORDER BY j.window_start, j.generation, j.job_id, r.redrive_generation NULLS FIRST, r.attempt NULLS FIRST
+			""";
+
+	private static final String PRICE_BASELINE_SETS_SQL = """
+			SELECT s.set_id, jsonb_object_agg(s.entity_id, jsonb_build_object(
+			           'value', sn.value, 'source', sn.source, 'ref', sn.ref))::text AS entries
+			  FROM minute_price_baseline_set s
+			  JOIN minute_price_baseline_snapshot sn ON sn.snapshot_id = s.snapshot_id
+			 WHERE s.set_id IN (SELECT DISTINCT r.baseline_set_id FROM minute_price_judgment r
+			                     WHERE r.session_id = ?)
+			 GROUP BY s.set_id
 			""";
 
 	public JdbcMinuteStatusRepository(JdbcTemplate jdbc) {
@@ -352,8 +363,18 @@ public class JdbcMinuteStatusRepository implements MinuteStatusRepository {
 				rs.getString("artifact_uri"), rs.getString("artifact_checksum"),
 				rs.getObject("attempt", Integer.class), rs.getObject("redrive_generation", Integer.class),
 				rs.getObject("judged_at", OffsetDateTime.class), rs.getObject("tx_anchor_locked", Boolean.class),
-				rs.getString("detection_policy_version"), rs.getString("summary"),
+				rs.getString("detection_policy_version"), rs.getString("baseline_set_id"), rs.getString("summary"),
 				rs.getString("anchors_used"), rs.getString("tx_anchor"), rs.getString("baselines"),
 				rs.getObject("judged_with_baseline", Integer.class)), sessionId);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public Map<String, String> priceBaselineSets(String sessionId) {
+		Map<String, String> sets = new LinkedHashMap<>();
+		jdbc.query(PRICE_BASELINE_SETS_SQL, rs -> {
+			sets.put(rs.getString("set_id"), rs.getString("entries"));
+		}, sessionId);
+		return sets;
 	}
 }

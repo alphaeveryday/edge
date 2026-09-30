@@ -504,10 +504,13 @@ export interface MinuteJudgmentAttempt {
   /** true = 발화·회수 대상 앵커 행을 잠근 뒤 관측, false = 무발화의 비잠금 관측 */
   txAnchorLocked: boolean;
   detectionPolicyVersion: string;
+  /** 판정이 쓴 기준선 집합 — 전체는 MinuteJudgments.baselineSets[baselineSetId] */
+  baselineSetId: string;
   summary: Record<string, string[]>;
   /** 판정이 실제로 읽은 앵커 [가격, anchor_window] — 키가 없으면 앵커 행이 없었다(기준선=앵커) */
   anchorsUsed: Record<string, [string, string]>;
   txAnchor: Record<string, string | null>;
+  /** 요약·앵커에 등장한 종목만 — 집합 전체는 baselineSets 에 */
   baselines: Record<string, MinuteJudgmentBaseline>;
   judgedWithBaseline: number;
 }
@@ -537,4 +540,6 @@ export interface MinuteJudgments {
   /** 정정 후 재계산은 제공하지 않는다 */
   recomputation: 'NOT_GUARANTEED';
   windows: MinuteJudgmentWindow[];
+  /** set_id → {entity: 기준선}. 집합 단위로 한 번 — 앵커 행이 없는 무발화도 무엇을 봤는지 여기서 답한다. 빈 집합은 키 없음 */
+  baselineSets: Record<string, Record<string, MinuteJudgmentBaseline>>;
 }

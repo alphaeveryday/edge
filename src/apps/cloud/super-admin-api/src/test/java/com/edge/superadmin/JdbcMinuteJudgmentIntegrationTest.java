@@ -73,6 +73,11 @@ class JdbcMinuteJudgmentIntegrationTest extends CloudPostgresIntegrationTest {
 		assertThat(w0.artifactUri()).isEqualTo("s3://lake/w0g1");
 		assertThat(w0.baselinesJson()).contains("500000").contains("open_fallback").doesNotContain("500001");
 		assertThat(w0.judgedWithBaseline()).isEqualTo(2);
+		assertThat(w0.baselineSetId()).isEqualTo("set1");
+		// 집합 전체는 set 단위로 한 번 — 요약에 없는 500001 도 여기서 답한다
+		assertThat(repository.priceBaselineSets(sid)).containsOnlyKeys("set1");
+		assertThat(repository.priceBaselineSets(sid).get("set1")).contains("\"500001\"").contains("prev_close").contains("2026-10-02");
+		assertThat(repository.priceBaselineSets("no-such-session")).isEmpty();
 		assertThat(w0.txAnchorLocked()).isTrue();
 		assertThat(w1.attempt()).isNull();                       // 기록 없음
 		assertThat(w1.artifactChecksum()).isNull();              // 세대 1 이력 없음 — 세대 2 로 대체하지 않는다

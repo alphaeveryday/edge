@@ -8,13 +8,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  baseline, committed, computed, inputLabel, involved, judgmentErrors, txObservation,
+  baseline, baselineSetLabel, committed, computed, inputLabel, involved, judgmentErrors, txObservation,
 } from './judgmentView.ts';
 import type { MinuteJudgmentAttempt, MinuteJudgmentWindow } from './types.ts';
 
 const attempt = (over: Partial<MinuteJudgmentAttempt>): MinuteJudgmentAttempt => ({
   attempt: 1, redriveGeneration: 0, judgedAt: '2026-10-05T00:02:03Z', txAnchorLocked: true,
-  detectionPolicyVersion: 'p', summary: {}, anchorsUsed: {}, txAnchor: {}, baselines: {},
+  detectionPolicyVersion: 'p', baselineSetId: 'set-1', summary: {}, anchorsUsed: {}, txAnchor: {}, baselines: {},
   judgedWithBaseline: 2, ...over,
 });
 
@@ -41,6 +41,17 @@ test('비잠금 관측과 읽은 뒤 바뀐 앵커를 구분한다', () => {
   });
   assert.equal(txObservation(a, 'A'), '09:03 (비잠금 관측 · 읽은 뒤 바뀜)');
   assert.equal(txObservation(a, 'Z'), '관측 안 함');
+});
+
+test('기준선 집합 요약은 출처별 수를 세고, 집합 부재를 무발화로 읽지 않는다', () => {
+  // WHY: 앵커 행이 없는 무발화 시도는 attempts[].baselines 가 비어 있다 — 무엇을 봤는지는 집합이 답한다.
+  //      집합이 없는 것은 "판정 대상 0"이지 기준선 미상이 아니다.
+  assert.equal(baselineSetLabel({
+    a: { value: 1, source: 'prev_close', ref: '2026-10-02' },
+    b: { value: 2, source: 'open_fallback', ref: 'W0@g1' },
+    c: { value: 3, source: 'open_fallback', ref: 'pre-record' },
+  }), '3종 · 전일 종가 1 · 시가 폴백 1 · 도입 전 시가 1');
+  assert.equal(baselineSetLabel(undefined), '기준선 집합 없음(판정 대상 0)');
 });
 
 test('출처 세대 미상과 이력 없음을 추정으로 채우지 않는다', () => {

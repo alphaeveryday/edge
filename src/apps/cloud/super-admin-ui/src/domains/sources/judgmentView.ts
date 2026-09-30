@@ -83,6 +83,16 @@ export function baseline(b: MinuteJudgmentBaseline | undefined): string {
   return `${Number(b.value)} · ${src}`;
 }
 
+/** 기준선 집합 한 줄 요약 — 출처별 종목 수. 집합이 응답에 없으면(판정 대상 0) 그렇게 말한다 */
+export function baselineSetLabel(set: Record<string, MinuteJudgmentBaseline> | undefined): string {
+  if (!set) return '기준선 집합 없음(판정 대상 0)';
+  const entries = Object.values(set);
+  const prev = entries.filter((b) => b.source === 'prev_close').length;
+  const pre = entries.filter((b) => b.ref === 'pre-record').length;
+  const open = entries.length - prev - pre;
+  return `${entries.length}종 · 전일 종가 ${prev} · 시가 폴백 ${open}` + (pre ? ` · 도입 전 시가 ${pre}` : '');
+}
+
 export function inputLabel(w: MinuteJudgmentWindow): string {
   const rec = w.inputRecord === 'RECORDED'
     ? `판정 당시 입력: 세대 ${w.jobGeneration} · artifact 이력 기록 있음 · 원본 본문 재검증 안 함`

@@ -14,8 +14,8 @@ import type {
 } from '../domains/sources';
 import { useMinuteJudgments, useMinuteStatus, useSourceReport } from '../domains/sources/hooks';
 import {
-  JUDGED_AT_NOTE, NO_RECORD, RECOMPUTATION_NOTE, SCOPE_NOTE, abbreviate, baseline, committed, computed,
-  inputLabel, involved, judgmentErrors, kstHhmm, kstObserved, readAnchor, txObservation,
+  JUDGED_AT_NOTE, NO_RECORD, RECOMPUTATION_NOTE, SCOPE_NOTE, abbreviate, baseline, baselineSetLabel, committed,
+  computed, inputLabel, involved, judgmentErrors, kstHhmm, kstObserved, readAnchor, txObservation,
 } from '../domains/sources/judgmentView';
 import { datasetKind, gapRuns, isPollLane, liveness, segments } from '../domains/sources/minuteView';
 import { holdingsFlow } from '../domains/sources/holdingsFlow';
@@ -912,6 +912,12 @@ function PriceJudgmentLedger({ sessionId }: { sessionId: string }) {
                           <b>시도 {a.attempt}</b>
                           {a.redriveGeneration ? ` (redrive ${a.redriveGeneration})` : ''} · 관측 {kstObserved(a.judgedAt)} ·
                           기준선 기록 {a.judgedWithBaseline}종 · {a.detectionPolicyVersion}
+                          <details className="t-xs">
+                            <summary>기준선 집합 {abbreviate(a.baselineSetId)} — {baselineSetLabel(data.baselineSets[a.baselineSetId])}</summary>
+                            {Object.entries(data.baselineSets[a.baselineSetId] ?? {}).map(([e, b]) => (
+                              <div key={e} className="mono" style={{ overflowWrap: 'anywhere' }}>{e}: {baseline(b)}</div>
+                            ))}
+                          </details>
                           {judgmentErrors(a).map((err) => (
                             <div key={err} className="mono" style={{ color: 'var(--danger)', overflowWrap: 'anywhere' }}>
                               판정 불가: {err}

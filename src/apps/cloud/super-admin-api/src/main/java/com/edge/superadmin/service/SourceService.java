@@ -181,7 +181,8 @@ public class SourceService {
 		if (sessionId == null || sessionId.isBlank()) {
 			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
 		}
-		return MinuteJudgmentResponse.from(sessionId, minuteStatus.priceJudgments(sessionId));
+		return MinuteJudgmentResponse.from(sessionId, minuteStatus.priceJudgments(sessionId),
+				minuteStatus.priceBaselineSets(sessionId));
 	}
 
 	/** 최근 {@code days}일의 minute 일별 판정. 상한은 격자 한 화면 용도에 맞춰 31일이다. */

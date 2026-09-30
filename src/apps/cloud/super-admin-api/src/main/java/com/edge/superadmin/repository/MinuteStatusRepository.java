@@ -92,6 +92,13 @@ public interface MinuteStatusRepository {
 	List<PriceJudgmentRow> priceJudgments(String sessionId);
 
 	/**
+	 * 세션의 판정들이 참조한 기준선 집합 전체 — set_id → {entity: {value, source, ref}} JSON 원문.
+	 * 집합은 세션 안에서 거의 바뀌지 않아(전일 종가는 세션 불변, 시가 해소 때만 갈린다) 시도마다
+	 * 싣지 않고 집합 단위로 한 번 싣는다. 빈 집합(판정 대상 0)은 행이 없어 키가 없다.
+	 */
+	Map<String, String> priceBaselineSets(String sessionId);
+
+	/**
 	 * JSON 컬럼은 원문 그대로 싣는다. {@code baselinesJson} 은 이 판정의 요약 목록·사용 앵커·tx 관측에
 	 * 나온 종목만의 기준선 스냅샷이다(363종 전체를 싣지 않는다). {@code judgedWithBaseline} 은 기준선
 	 * 집합의 종목 수다.
@@ -99,7 +106,7 @@ public interface MinuteStatusRepository {
 	record PriceJudgmentRow(String jobId, OffsetDateTime windowStart, int windowGeneration, int jobGeneration,
 			String jobStatus, int jobAttemptCount, String artifactUri, String artifactChecksum,
 			Integer attempt, Integer redriveGeneration, OffsetDateTime judgedAt, Boolean txAnchorLocked,
-			String detectionPolicyVersion, String summaryJson, String anchorsUsedJson, String txAnchorJson,
+			String detectionPolicyVersion, String baselineSetId, String summaryJson, String anchorsUsedJson, String txAnchorJson,
 			String baselinesJson, Integer judgedWithBaseline) {
 	}
 }
