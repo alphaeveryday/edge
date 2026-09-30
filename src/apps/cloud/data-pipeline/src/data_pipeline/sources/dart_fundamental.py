@@ -272,7 +272,7 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
         if line is None:
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
-        if line.get("currency") not in (None, "KRW"):
+        if line.get("currency") != "KRW":
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": ["non_krw_currency"]})
             continue
         if code == "11011":
@@ -376,7 +376,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     if line is None:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
         return []
-    if line.get("currency") not in (None, "KRW"):
+    if line.get("currency") != "KRW":
         # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
         return []
