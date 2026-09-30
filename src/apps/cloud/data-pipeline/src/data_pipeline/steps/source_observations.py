@@ -254,7 +254,7 @@ def write_raw_run(
                           json.dumps(log, ensure_ascii=False).encode("utf-8"))
     except Exception:
         logger.exception("collection_log 기록 실패")
-        exit_code = exit_code or 1
+        exit_code = 1   # PARTIAL(2) 로 남기면 하류가 '충족'으로 넘어가 수집 감사 기록 없이 정제·적재가 돈다
     logger.info("%s 수집: status=%s counts=%s", spec.dataset, status, counts)
     return exit_code
 
@@ -360,6 +360,13 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
     if input_run_id is None:
         # 정제 입력은 raw manifest 하나다. 전체 raw 목록 스캔으로 넓히지 않는다.
         raise SystemExit(f"{producer} 는 --input-run-id(수집 run_id)가 필요하다")
+    done = _completed_manifest(storage, spec, run_id)
+    if done is not None:
+        # 이미 끝난 정제를 미완료 표지로 덮으면 유효한 결과가 `load --all` 에서 영영 빠진다 — 덮지 않는다.
+        if done.get("input_run_id") != input_run_id:
+            raise SystemExit(f"{producer} run_id={run_id} 는 다른 입력({done.get('input_run_id')})으로 이미 정제됐다")
+        logger.info("%s run_id=%s 는 이미 정제 완료 — 다시 쓰지 않는다", spec.dataset, run_id)
+        return PARTIAL_EXIT if done.get("rejected") else 0
     exit_code = 0
     failures: list[dict] = []
     completed: bytes | None = None
