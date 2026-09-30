@@ -31,6 +31,8 @@ spring:
       mail.smtp.auth: true
       mail.smtp.starttls.enable: true
 app:
+  mail:
+    operator: ${APP_MAIL_OPERATOR:operator@localhost}   # 신고 알림 수신 주소
   jwt:
     secret: ${APP_JWT_SECRET}   # 필수, 기본값 없음. HS256 이라 32바이트 이상
     access-ttl: ${APP_JWT_ACCESS_TTL:PT1H}

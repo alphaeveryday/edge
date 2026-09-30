@@ -18,6 +18,8 @@ public enum AppErrorStatus implements BaseErrorCode {
     WATCH_DEFAULT_GROUP_UNDELETABLE(HttpStatus.BAD_REQUEST, "WATCH4001", "기본 관심 그룹은 지울 수 없습니다."),
     WATCH_TOO_MANY_GROUPS(HttpStatus.BAD_REQUEST, "WATCH4002", "관심 그룹은 최대 10개입니다."),
     MEMBER_ALREADY_EXISTS(HttpStatus.CONFLICT, "MEMBER4002", "이미 가입된 이메일입니다."),
+    MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER4003", "없는 회원입니다."),
+    MEMBER_SELF_BLOCK(HttpStatus.BAD_REQUEST, "MEMBER4004", "자기 자신은 차단할 수 없습니다."),
     AUTH_BAD_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH4001", "이메일 또는 비밀번호가 맞지 않습니다."),
     AUTH_RESET_CODE_INVALID(HttpStatus.BAD_REQUEST, "AUTH4002", "코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요."),
     VOTE_STORE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "VOTE5001", "투표 저장소를 사용할 수 없습니다.");

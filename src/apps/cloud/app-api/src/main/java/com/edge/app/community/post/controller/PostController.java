@@ -56,10 +56,11 @@ public class PostController {
         return ApiResponse.onSuccess(null);
     }
 
+    // 공개 조회. 요청자 있으면 차단한 작성자 제외
     @GetMapping("/{id}/replies")
-    public ApiResponse<PageResponse<ReplyResponse>> communityReplies(@PathVariable String id,
+    public ApiResponse<PageResponse<ReplyResponse>> communityReplies(@PathVariable String id, @Nullable AppPrincipal principal,
             @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return ApiResponse.onSuccess(postService.replies(id, cursor == null ? null : Cursor.decode(cursor), size));
+        return ApiResponse.onSuccess(postService.replies(id, principal, cursor == null ? null : Cursor.decode(cursor), size));
     }
 
     @PostMapping("/{id}/replies")

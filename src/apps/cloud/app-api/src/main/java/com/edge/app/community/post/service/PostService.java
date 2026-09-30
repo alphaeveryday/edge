@@ -50,6 +50,8 @@ public class PostService {
     // 첫 페이지 sentinel. 피드는 상한, 답글은 하한
     private static final Cursor FEED_START = new Cursor(Instant.parse("9999-12-31T00:00:00Z"), Long.MAX_VALUE);
     private static final Cursor REPLY_START = new Cursor(Instant.EPOCH, 0);
+    // 차단 필터의 조회자. 게스트는 차단 행이 없는 0
+    private static final long NO_VIEWER = 0;
 
     private final PostRepository postRepository;
     private final PostTagRepository tagRepository;
@@ -64,8 +66,9 @@ public class PostService {
     @Transactional
     public PageResponse<PostResponse> feed(AppPrincipal principal, PostScope scope, String code, Cursor cursor, int size) {
         Long requester = principal.memberId();
+        long viewer = requester == null ? NO_VIEWER : requester;
         if (scope == PostScope.HOT) {
-            return new PageResponse<>(responses(postRepository.hot(Limit.of(size)), requester), null);
+            return new PageResponse<>(responses(postRepository.hot(viewer, Limit.of(size)), requester), null);
         }
         boolean byCodes = false;
         List<String> codes = List.of("");
@@ -78,7 +81,7 @@ public class PostService {
         }
         Cursor from = cursor == null ? FEED_START : cursor;
         List<Post> posts = postRepository.feed(from.createdAt(), from.id(), code != null, code == null ? "" : code,
-                byCodes, codes, Limit.of(size + 1));
+                byCodes, codes, viewer, Limit.of(size + 1));
         return page(posts, size, p -> new Cursor(p.getCreatedAt(), p.getId()), list -> responses(list, requester));
     }
 
@@ -105,13 +108,14 @@ public class PostService {
         return responses(List.of(post), memberId).get(0);
     }
 
-    // 조회수 증가와 요청자 기준 liked·mine 채움
+    // 조회수 증가와 요청자 기준 liked·mine 채움, 차단한 작성자의 글은 blocked 표시
     @Transactional
     public PostResponse get(String id, AppPrincipal principal) {
         Post post = existing(id);
         postRepository.addView(post.getId());
-        return responses(List.of(postRepository.findById(post.getId()).orElseThrow()),
-                principal == null ? null : principal.memberId()).get(0);
+        Long requester = principal == null ? null : principal.memberId();
+        PostResponse response = responses(List.of(postRepository.findById(post.getId()).orElseThrow()), requester).get(0);
+        return requester != null && postRepository.blocked(requester, post.getAuthorId()) ? response.asBlocked() : response;
     }
 
     @Transactional
@@ -126,10 +130,11 @@ public class PostService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<ReplyResponse> replies(String id, Cursor cursor, int size) {
+    public PageResponse<ReplyResponse> replies(String id, AppPrincipal principal, Cursor cursor, int size) {
         Post post = existing(id);
         Cursor from = cursor == null ? REPLY_START : cursor;
-        List<Reply> replies = replyRepository.page(post.getId(), from.createdAt(), from.id(), Limit.of(size + 1));
+        long viewer = principal == null || principal.memberId() == null ? NO_VIEWER : principal.memberId();
+        List<Reply> replies = replyRepository.page(post.getId(), from.createdAt(), from.id(), viewer, Limit.of(size + 1));
         return page(replies, size, r -> new Cursor(r.getCreatedAt(), r.getId()), this::replyResponses);
     }
 
@@ -194,7 +199,7 @@ public class PostService {
                     new PostResponse.Etf(p.getEtfCode(), etf == null ? "" : etf.getThemeKey(), etf == null ? p.getEtfCode() : etf.getName()),
                     authors.get(p.getAuthorId()), p.getCreatedAt(), p.getTitle(), p.getBody(), p.getQuoteTag(), null,
                     p.getLikeCount(), p.getReplyCount(), p.getRepostCount(), liked.contains(p.getId()), p.getViewCount(),
-                    requester != null && requester.equals(p.getAuthorId()));
+                    requester != null && requester.equals(p.getAuthorId()), null);
         }).toList();
     }
 
