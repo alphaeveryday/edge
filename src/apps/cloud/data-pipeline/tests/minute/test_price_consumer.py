@@ -943,6 +943,13 @@ class TestAdversarialInputs:
         assert Decimal(str(row["open_price"])) == 100
         [trigger] = db.triggers.values()  # 110/100 → +10% 발화
         assert trigger["entity_id"] == "500000"
+        # WHY: 08:00 창은 ETF 가 기대되지 않아 판정할 게 없지만 **판정은 했다** — 빈 기록이
+        #      남아야 콘솔의 "기록 없음"이 도입 전·실패와 이 경우를 섞지 않는다(#999 봇 P2).
+        early = [e for e in events if "T23:00" in str(e["payload"]["window_start"])][0]
+        assert claim_then_run(handler, early)
+        empty = {k[0]: v for k, v in db.judgments.items()}[early["payload"]["job_id"]]
+        assert '"fired": []' in empty["summary"] and empty["anchors_used"] == "{}"
+        assert len(db.judgments) == 2   # 09:01 발화 기록 + 08:00 빈 기록
 
     def test_open_not_frozen_from_superseded_first_window(self, monkeypatch, tmp_path):
         # 첫 window artifact 를 읽은 뒤 INSERT 전에 그 window 가 정정(gen+1)되면

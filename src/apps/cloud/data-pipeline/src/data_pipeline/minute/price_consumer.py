@@ -297,6 +297,16 @@ class PriceTriggerHandler:
                 "judged": [], "fired": [], "inserted": [], "reverted": [],
                 "skipped_no_open": [], "skipped_stale_anchor": [], "errors": [],
             }
+            # 판정할 게 없어도 **판정은 했다** — 빈 기록을 같은 fence 로 남긴다. 없으면 콘솔의
+            # "기록 없음"이 도입 전·실패·판정 대상 없음 셋을 한 라벨로 섞는다(#999 봇 P2).
+            self._persist_triggers(
+                job_id=job_id, attempt=attempt, redrive_generation=redrive_generation,
+                session_id=session_id, window_start=window_start, generation=generation,
+                fired=[], reverted=[], judgment={
+                    "baselines": {}, "anchors_used": {}, "judged": [], "skipped_stale_anchor": [],
+                    "skipped_no_open": [], "errors": [], "error_entities": [],
+                },
+            )
             logger.info("가격 판정 %s: 대상 ETF 0 — 판정 없이 성공", job_id)
             return content_checksum(result)
 
