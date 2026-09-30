@@ -307,6 +307,42 @@ def _share_count(row: dict | None, field: str) -> Decimal | None:
     return Decimal(int(count))
 
 
+def share_table_problem(shares: dict | None, period_end: str) -> str | None:
+    """주식총수 응답이 한 표로서 유효하지 않은 이유(없으면 None). 응답이 아예 없으면 None(부재는 여기서 판정하지 않는다).
+
+    분모 응답의 유효성은 자본 계정 추출과 독립이다 — 정제가 판본의 분모 상태(shares=error)를 여기로 정하고, `_bps` 도
+    같은 규칙으로 값을 막는다(두 곳이 다른 규칙을 들면 "확정된 부재"와 "파손"이 갈린다).
+    """
+    if shares is None:
+        return None
+    rows = {se: _share_row(shares, se) for se in ("합계", "보통주", "우선주")}
+    present = [row for row in rows.values() if row is not None]
+    if not present:
+        return None
+    if any(row.get("conflict") for row in present):
+        return "share_rows_inconsistent"
+    if any(not RCEPT_NO.fullmatch(str(row.get("rcept_no"))) for row in present):
+        return "bad_rcept_no"
+    if len({(str(row.get("rcept_no")), str(row.get("stlm_dt"))) for row in present}) > 1 or \
+            any(str(row.get("stlm_dt")) != period_end for row in present):
+        return "share_rows_inconsistent"
+    counts = {(se, field): _share_count(row, field) for se, row in rows.items() if row is not None
+              for field in ("istc_totqy", "tesstk_co")}
+    if rows["합계"] is not None and (counts[("합계", "istc_totqy")] is None or counts[("합계", "tesstk_co")] is None):
+        return "share_count_unreadable"           # 합계 행의 수가 숫자가 아니거나 음수·소수 — 어느 분모도 없다
+    # 종류별 행의 수 파손은 보통주 BPS 만 막고 통상 BPS 는 남긴다(`_bps`) — 표 전체의 무효는 아니다.
+    issued = {se: counts[(se, "istc_totqy")] for se in rows if rows[se] is not None}
+    treasury = {se: counts[(se, "tesstk_co")] for se in rows if rows[se] is not None}
+    if any(issued[se] is not None and treasury[se] is not None and treasury[se] > issued[se] for se in issued):
+        return "share_rows_inconsistent"
+    if all(se in issued for se in ("합계", "보통주", "우선주")) and None not in issued.values() \
+            and None not in treasury.values() and (
+            issued["보통주"] + issued["우선주"] != issued["합계"]
+            or treasury["보통주"] + treasury["우선주"] != treasury["합계"]):
+        return "share_rows_inconsistent"
+    return None
+
+
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
     """BPS 두 지표 (실응답 2026-09-30 확인 — 삼성전자 우선주 802,371,203주, 자기주식은 보통주에만).
 
@@ -325,22 +361,12 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
         return []
-    total, common, preferred = _share_row(shares, "합계"), _share_row(shares, "보통주"), _share_row(shares, "우선주")
-    present = [row for row in (total, common, preferred) if row is not None]
-    if any(row.get("conflict") for row in present) or \
-            len({(str(row.get("rcept_no")), str(row.get("stlm_dt"))) for row in present}) > 1 or \
-            any(str(row.get("stlm_dt")) != base["period_end"] for row in present):
-        # 기준일이 보고기간 말과 다르면 다른 기말의 주식수다(사업보고서 표는 12-31, 반기는 06-30 — 실응답 확인).
-        # 같은 종류 행이 서로 다르거나, 종류별 행의 접수번호·기준일이 다르면 한 표가 아니다 — 합계 행의 메타데이터를
-        # 보통주 값에 붙이면 공개일이 틀린다.
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
-                        "detail": "share_class_rows_disagree"})
+    problem = share_table_problem(shares, base["period_end"])
+    if problem:
+        # 표 자체가 유효하지 않다(접수번호 형식·기준일≠보고기간 말·종류별 합 불일치·숫자 파손) — 어느 분모도 만들지 않는다.
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
         return []
-    for row in (total, common):
-        if row is not None and not RCEPT_NO.fullmatch(str(row.get("rcept_no"))):
-            # 분모 쪽 접수번호도 DB CHECK 대상이다 — 형식이 틀리면 그 실행의 적재 전체가 롤백된다.
-            rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bad_rcept_no"]})
-            return []
+    total, common, preferred = _share_row(shares, "합계"), _share_row(shares, "보통주"), _share_row(shares, "우선주")
     equity = _amount(line.get("thstrm_amount"))
     issued_total, treasury_total = _share_count(total, "istc_totqy"), _share_count(total, "tesstk_co")
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
@@ -348,18 +374,6 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
-        return []
-    exceeds = any(i is not None and t is not None and t > i
-                  for i, t in ((issued_common, treasury_common), (issued_preferred, treasury_preferred)))
-    if (None not in (issued_common, issued_preferred) and issued_common + issued_preferred != issued_total) or \
-            (None not in (treasury_common, treasury_preferred) and treasury_common + treasury_preferred != treasury_total) \
-            or exceeds:
-        # 종류별 합(발행·자기주식 모두)이 합계와 다르거나 자기주식이 그 종류의 발행수를 넘으면 어느 분모도
-        # 믿을 수 없다 — 두 지표 모두 만들지 않는다.
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["share_rows_inconsistent"],
-                        "istc_totqy": str(issued_total), "common": str(issued_common), "preferred": str(issued_preferred),
-                        "tesstk_co": str(treasury_total), "common_treasury": str(treasury_common),
-                        "preferred_treasury": str(treasury_preferred)})
         return []
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도

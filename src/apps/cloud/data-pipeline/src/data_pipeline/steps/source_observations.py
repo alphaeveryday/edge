@@ -913,6 +913,11 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             if share is not None:
                 # 분모 응답을 쓴 판본의 수신시각은 두 응답 중 늦은 쪽 — bps 행과 같은 규칙.
                 version["received_at"] = max(version["received_at"], share["fetched_at"])
+                # 표 자체의 파손(접수번호·기준일·종류별 합·숫자)은 자본 계정과 무관하게 분모 미확정이다 —
+                # 손익 지표와 판본은 유지하고 BPS 만 BPS_UNCONFIRMED 로 읽히게.
+                problem = dart_fundamental.share_table_problem(share["body_json"], dart_fundamental._period_end(year, code))
+                if problem:
+                    version["detail"].update({"shares": "error", "shares_detail": problem})
             version["rcept_no"] = next((ln.get("rcept_no") for ln in statement["body_json"]["list"]
                                         if dart_fundamental.RCEPT_NO.fullmatch(str(ln.get("rcept_no")))), None)
         try:
@@ -930,11 +935,6 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         if any("bad_rcept_no" in (b.get("reasons") or []) and b.get("metric") is None for b in bad):
             unconfirmed((corp_code, year, code, fs_div), "bad_rcept_no")
             continue
-        # 주식총수 표 자체의 파손(접수번호·종류별 합 불일치)은 분모만 미확정 — 손익 지표와 판본은 유지한다.
-        share_invalid = next((r for b in bad if b.get("metric") == "bps" for r in (b.get("reasons") or [])
-                              if r in ("bad_rcept_no", "share_rows_inconsistent")), None)
-        if share_invalid and version is not None:
-            version["detail"].update({"shares": "error", "shares_detail": share_invalid})
         if version is not None:
             version["metrics"].extend(f'{r["metric"]}/{r["period_kind"]}/{r["fiscal_period"]}' for r in extracted)
             version["rejected"].extend({"metric": b.get("metric"), "reasons": b.get("reasons")} for b in bad)

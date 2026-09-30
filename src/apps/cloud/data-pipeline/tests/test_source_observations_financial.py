@@ -642,3 +642,30 @@ def test_broken_share_table_unconfirms_only_the_denominator(tmp_path):
     assert json.loads(v["detail"])["shares_detail"] == "bad_rcept_no"
     assert ("005930", 2026, "Q2", "eps_basic", "QUARTER", "CFS") in rows
     assert not any(k[1:3] == (2026, "Q2") and k[3].startswith("bps") for k in rows)
+
+
+def test_share_table_validity_is_judged_independently_of_the_equity_line():
+    # WHY(리뷰 18차): 분모 표의 파손 판정이 자본 계정 추출 성공에 묶이거나 특정 파손 종류만 보면, 숫자 파손·접수번호 파손이
+    # "확정된 BPS 부재"로 읽힌다. 한 규칙(share_table_problem)을 정제의 판본 상태와 _bps 가 함께 쓴다.
+    ok = json.loads(shares(SAMSUNG, "2026", "11012"))
+    assert dart_fundamental.share_table_problem(ok, "2026-06-30") is None
+    assert dart_fundamental.share_table_problem(None, "2026-06-30") is None
+    broken = json.loads(shares(SAMSUNG, "2026", "11012"))
+    next(r for r in broken["list"] if r["se"] == "합계")["istc_totqy"] = "broken"
+    assert dart_fundamental.share_table_problem(broken, "2026-06-30") == "share_count_unreadable"
+    assert dart_fundamental.share_table_problem(ok, "2025-12-31") == "share_rows_inconsistent"
+    # 자본 계정이 없는 재무제표 + 파손 분모: 판본 shares=error (자본 계정과 무관)
+    responses = full_responses(SAMSUNG)
+    body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    body["list"] = [ln for ln in body["list"] if ln["sj_div"] != "BS"]
+    responses[("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")] = json.dumps(body).encode()
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(broken).encode()
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+        storage, _ = chain(pathlib.Path(tmp), dart, holdings=("005930",))
+        so.normalize(storage, so.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+        _, versions = _versions(storage)
+        detail = json.loads(versions[(2026, "11012", "CFS")]["detail"])
+        assert detail["shares"] == "error" and detail["shares_detail"] == "share_count_unreadable"
+        assert versions[(2026, "11012", "CFS")]["status"] == "CONFIRMED"

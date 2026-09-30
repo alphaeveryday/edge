@@ -285,18 +285,20 @@ BEGIN
                     THEN 'CFS' ELSE 'OFS' END AS fs_basis
         FROM versions v
     ), attempted AS (
-        -- 확정 판본이 한 번도 없는 보고서: 확정 못 한 시도(UNCONFIRMED)만 있어도 소비자가 "확인 시도가 실패했다"를
-        -- 보게 가장 늦은 시도를 행으로 낸다(값은 전부 NULL). 시도 자체가 없으면 행이 없다.
-        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.report_period, v.fs_basis) v.*
-        FROM versions v
+        -- 확정 판본이 (회사 기준으로) 없는 보고기간: 확정 못 한 시도(UNCONFIRMED)만 있어도 소비자가 "확인 시도가
+        -- 실패했다"를 보게 가장 늦은 시도를 행으로 낸다(값 전부 NULL). 회사 기준의 시도가 없으면 다른 기준의 시도라도
+        -- 낸다(첫 연결 요청이 한도·점검으로 멈춰 별도 요청이 없던 실행). 시도 자체가 없으면 행이 없다.
+        SELECT DISTINCT ON (v.corp_code, v.fiscal_year, v.report_period) v.*
+        FROM versions v CROSS JOIN basis b
         WHERE v.status = 'UNCONFIRMED' AND NOT EXISTS (
             SELECT 1 FROM confirmed c WHERE c.corp_code = v.corp_code AND c.fiscal_year = v.fiscal_year
-              AND c.report_period = v.report_period AND c.fs_basis = v.fs_basis)
-        ORDER BY v.corp_code, v.fiscal_year, v.report_period, v.fs_basis, v.received_at DESC, v.raw_run_id DESC
+              AND c.report_period = v.report_period AND c.fs_basis = b.fs_basis)
+        ORDER BY v.corp_code, v.fiscal_year, v.report_period, (v.fs_basis = b.fs_basis) DESC,
+                 v.received_at DESC, v.raw_run_id DESC
     ), chosen AS (
         SELECT c.* FROM confirmed c JOIN basis b ON b.fs_basis = c.fs_basis
         UNION ALL
-        SELECT a.* FROM attempted a JOIN basis b ON b.fs_basis = a.fs_basis
+        SELECT a.* FROM attempted a
     ), metric AS (
         SELECT f.*, CASE WHEN f.fiscal_period = 'FY' THEN 'Q4' ELSE f.fiscal_period END AS report_period
         FROM financial_metric f

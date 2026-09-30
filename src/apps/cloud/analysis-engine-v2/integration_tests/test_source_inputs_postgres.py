@@ -404,3 +404,23 @@ def test_a_report_that_was_only_ever_attempted_shows_as_unconfirmed(db):
     finally:
         db.execute("RESET ROLE")
         db.execute("DELETE FROM financial_report_version WHERE raw_run_id LIKE '%-v9'")
+
+
+def test_an_attempt_in_another_basis_still_shows_when_the_company_basis_has_none(db):
+    # First CFS request stopped by a provider limit (UNCONFIRMED CFS, no OFS request at all): the company's basis
+    # defaults to OFS, but the only attempt must still be visible rather than silently absent.
+    db.execute("RESET ROLE")
+    db.execute("""INSERT INTO financial_report_version
+        SELECT '00000003', 'TST003', 2026, '11012', 'Q2', 'CFS', 'UNCONFIRMED', NULL, NULL, '[]'::jsonb, '[]'::jsonb,
+               jsonb_build_object('statement', 'error', 'statement_detail', 'dart_020'), '2026-08-20 00:00+09',
+               '2026-08-20 00:00+09', 'received', raw_run_id || '-v10', raw_key, raw_sha256, canonical_run_id, artifact_key,
+               artifact_sha256, now()
+        FROM financial_report_version WHERE instrument_code = 'TST001' AND report_period = 'Q2' AND raw_run_id NOT LIKE '%-v%'""")
+    try:
+        db.execute("SET ROLE edge_analysis_v2_writer")
+        rows, gaps = financial_inputs(db, datetime(2026, 8, 21, tzinfo=KST), ["TST003"])
+        assert [(r["period"], r["fs_basis"], r["version"]["status"]) for r in rows] == [("2026-Q2", "CFS", "UNCONFIRMED")]
+        assert gaps[0]["reasons"] == {"eps": "REPORT_UNCONFIRMED", "bps": "REPORT_UNCONFIRMED"}
+    finally:
+        db.execute("RESET ROLE")
+        db.execute("DELETE FROM financial_report_version WHERE raw_run_id LIKE '%-v10'")
