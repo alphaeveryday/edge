@@ -36,6 +36,13 @@ jobs:
           docker run --rm --entrypoint python "$image" -c "from importlib.resources import files; import subprocess; subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
           docker push "$image"
           echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Publish the API runtime image for infrastructure bootstrap
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          repo="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline"
+          docker build --platform linux/amd64 --provenance=false -f src/apps/cloud/analysis-engine-v2/Dockerfile.api -t "$repo:analysis-v2-api-${GITHUB_SHA}" src
+          docker push "$repo:analysis-v2-api-${GITHUB_SHA}"
       - name: Register the immutable image as the next v2 task revision
         run: |
           set -euo pipefail
