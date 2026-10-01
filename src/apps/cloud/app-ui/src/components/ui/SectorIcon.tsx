@@ -1,5 +1,6 @@
 import { View } from 'react-native';
 import Svg, { Circle, Ellipse, G, Path, Rect } from 'react-native-svg';
+import { colors, radius } from '@/theme/tokens';
 
 type Kind = 'chip' | 'bank' | 'game' | 'yield' | 'bond' | 'defense' | 'bio' | 'green' | 'commodity' | 'equity' | 'etc';
 
@@ -18,7 +19,7 @@ export function sectorKind(theme: string): Kind {
   return 'etc';
 }
 
-const W = '#FFFFFF';
+const W = colors.white;
 
 function Glyph({ kind, bg }: { kind: Kind; bg: string }) {
   switch (kind) {
@@ -118,7 +119,7 @@ function Glyph({ kind, bg }: { kind: Kind; bg: string }) {
 export function SectorIcon({ theme, bg, size = 36 }: { theme: string; bg: string; size?: number }) {
   const i = Math.round(size * 0.56);
   return (
-    <View style={{ width: size, height: size, borderRadius: 999, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: size, height: size, borderRadius: radius.pill, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
       <Svg width={i} height={i} viewBox="0 0 24 24">
         <Glyph kind={sectorKind(theme)} bg={bg} />
       </Svg>

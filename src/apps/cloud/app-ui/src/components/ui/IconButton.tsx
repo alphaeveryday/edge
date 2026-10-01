@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { colors } from '@/theme/tokens';
+import { colors, radius, shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export type IconName = 'back' | 'close' | 'search' | 'bell' | 'menu' | 'plus' | 'share' | 'prev' | 'next';
@@ -71,9 +71,9 @@ export function IconButton({ icon, size = 38, circled, floating, fab, soft, colo
 }
 
 const styles = StyleSheet.create({
-  btn: { borderRadius: 999, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
-  fabShadow: { shadowColor: '#191F28', shadowOpacity: 0.32, shadowRadius: 11, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
-  floatShadow: { shadowColor: '#1C1C1E', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  badge: { position: 'absolute', top: -2, right: -2, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: 999, backgroundColor: colors.up, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center' },
+  btn: { borderRadius: radius.pill, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  fabShadow: shadow.fab,
+  floatShadow: shadow.floating,
+  badge: { position: 'absolute', top: -2, right: -2, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: radius.pill, backgroundColor: colors.up, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center' },
   badgeText: { fontFamily: fam.extrabold, fontSize: 10.5, color: colors.white },
 });

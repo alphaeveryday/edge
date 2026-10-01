@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, Text, View } from 'react-native';
 import { signal as SIG, type Signal } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { fam, type } from '@/theme/typography';
 
 interface Props {
   signal: Signal;
@@ -39,5 +39,5 @@ const styles = StyleSheet.create({
   },
   marks: { alignItems: 'center', justifyContent: 'center' },
   mark: { fontFamily: fam.extrabold, textAlign: 'center' },
-  label: { fontFamily: fam.extrabold, fontSize: 12.5 },
+  label: type.sticker,
 });

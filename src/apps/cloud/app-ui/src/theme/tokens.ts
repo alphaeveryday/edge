@@ -4,6 +4,7 @@ export const colors = {
   surface: '#F2F4F6',
   white: '#FFFFFF',
   line: '#E5E8EB',
+  lineStrong: '#D5DAE0',
   text: '#191F28',
   textSub: '#4E5968',
   textMuted: '#6B7684',
@@ -35,5 +36,12 @@ export type Signal = keyof typeof signal;
 export const SIGNAL_ORDER: Signal[] = ['strongDown', 'down', 'neutral', 'up', 'strongUp'];
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 } as const;
-export const radius = { sm: 8, md: 14, lg: 22, pill: 999 } as const;
+export const radius = { tag: 8, control: 10, field: 12, button: 14, card: 16, sheet: 22, pill: 999 } as const;
+
+export const shadow = {
+  sheet: { shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: -10 } },
+  floating: { shadowColor: '#1C1C1E', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  fab: { shadowColor: '#191F28', shadowOpacity: 0.32, shadowRadius: 11, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
+  toast: { shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 15, shadowOffset: { width: 0, height: 10 }, elevation: 8 },
+} as const;
 export const PAGE_X = 20;

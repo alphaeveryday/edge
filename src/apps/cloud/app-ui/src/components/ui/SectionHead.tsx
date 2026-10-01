@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Chevron } from './Chevron';
 import { colors, PAGE_X } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { fam, type } from '@/theme/typography';
 
 export function SectionHead({ title, actionLabel, onAction, meta }: { title: string; actionLabel?: string; onAction?: () => void; meta?: string }) {
   return (
@@ -21,8 +21,8 @@ export function SectionHead({ title, actionLabel, onAction, meta }: { title: str
 
 const styles = StyleSheet.create({
   root: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: PAGE_X },
-  title: { flex: 1, fontFamily: fam.extrabold, fontSize: 20, color: colors.text, letterSpacing: -0.6 },
+  title: { flex: 1, ...type.sectionTitle, color: colors.text },
   action: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   actionText: { fontFamily: fam.bold, fontSize: 12.5, color: colors.primary },
-  meta: { fontFamily: fam.regular, fontSize: 12.5, color: colors.textMuted },
+  meta: { ...type.caption, color: colors.textMuted },
 });

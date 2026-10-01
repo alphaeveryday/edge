@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export function Avatar({ label, bg = colors.primary, size = 40 }: { label: string; bg?: string; size?: number }) {
@@ -11,6 +11,6 @@ export function Avatar({ label, bg = colors.primary, size = 40 }: { label: strin
 }
 
 const styles = StyleSheet.create({
-  root: { borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  root: { borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
   ch: { fontFamily: fam.extrabold, color: colors.white },
 });

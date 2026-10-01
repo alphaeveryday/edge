@@ -1,6 +1,6 @@
 import { StyleSheet, TextInput, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -31,6 +31,6 @@ export function SearchField({ value, onChangeText, placeholder = '검색', autoF
 }
 
 const styles = StyleSheet.create({
-  root: { height: 44, borderRadius: 12, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
+  root: { height: 44, borderRadius: radius.field, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
   input: { flex: 1, alignSelf: 'stretch', fontFamily: fam.regular, fontSize: 15, color: colors.text, padding: 0 },
 });

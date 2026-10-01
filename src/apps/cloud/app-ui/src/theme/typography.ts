@@ -29,3 +29,19 @@ export const fam = {
   monoBold: 'JetBrainsMono_700Bold',
   monoExtraBold: 'JetBrainsMono_800ExtraBold',
 } as const;
+
+// 역할별 글꼴 스타일
+export const type = {
+  pageTitle: { fontFamily: fam.extrabold, fontSize: 24, letterSpacing: -0.7, lineHeight: 30 },
+  sectionTitle: { fontFamily: fam.extrabold, fontSize: 20, letterSpacing: -0.6 },
+  sheetTitle: { fontFamily: fam.extrabold, fontSize: 19, letterSpacing: -0.55, lineHeight: 25 },
+  cardTitle: { fontFamily: fam.extrabold, fontSize: 17, letterSpacing: -0.5, lineHeight: 23 },
+  navTitle: { fontFamily: fam.extrabold, fontSize: 16, letterSpacing: -0.3 },
+  button: { fontFamily: fam.extrabold, fontSize: 15.5, letterSpacing: -0.15 },
+  listLabel: { fontFamily: fam.semibold, fontSize: 15.5, letterSpacing: -0.3 },
+  tab: { fontFamily: fam.semibold, fontSize: 14 },
+  sticker: { fontFamily: fam.extrabold, fontSize: 12.5 },
+  body: { fontFamily: fam.regular, fontSize: 14, lineHeight: 22 },
+  caption: { fontFamily: fam.regular, fontSize: 12.5 },
+  mono: { fontFamily: fam.monoBold, fontSize: 12.5, letterSpacing: -0.25 },
+} as const;

@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { colors } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { colors, radius } from '@/theme/tokens';
+import { fam, type } from '@/theme/typography';
 
 interface Props {
   label: string;
@@ -25,8 +25,8 @@ export function Chip({ label, on = false, variant = 'filter', onPress }: Props) 
 }
 
 const styles = StyleSheet.create({
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 13, borderWidth: 1, borderColor: 'transparent' },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.control, paddingVertical: 8, paddingHorizontal: 13, borderWidth: 1, borderColor: 'transparent' },
   on: { backgroundColor: colors.surface },
-  add: { borderStyle: 'dashed', borderColor: '#D5DAE0' },
-  label: { fontSize: 14 },
+  add: { borderStyle: 'dashed', borderColor: colors.lineStrong },
+  label: type.tab,
 });

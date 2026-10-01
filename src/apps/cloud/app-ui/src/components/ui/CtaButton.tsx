@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
-import { colors } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { colors, radius } from '@/theme/tokens';
+import { type } from '@/theme/typography';
 
 type Tone = 'primary' | 'dark' | 'danger' | 'soft';
 const T: Record<Tone | 'disabled', [string, string]> = {
@@ -33,6 +33,6 @@ export function CtaButton({ label, tone = 'primary', size = 'md', disabled, grow
 }
 
 const styles = StyleSheet.create({
-  btn: { borderRadius: 14, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' },
-  label: { fontFamily: fam.extrabold, fontSize: 15.5, letterSpacing: -0.15 },
+  btn: { borderRadius: radius.button, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' },
+  label: type.button,
 });

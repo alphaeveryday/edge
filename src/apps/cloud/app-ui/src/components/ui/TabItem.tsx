@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { colors, radius } from '@/theme/tokens';
+import { fam, type } from '@/theme/typography';
 
 export function TabItem({ label, on, dot, grow = true, onPress }: { label: string; on: boolean; dot?: boolean; grow?: boolean; onPress?: () => void }) {
   return (
@@ -16,6 +16,6 @@ const styles = StyleSheet.create({
   grow: { flex: 1 },
   fit: { paddingHorizontal: 12 },
   on: { borderBottomColor: colors.text },
-  label: { fontSize: 14 },
-  dot: { position: 'absolute', top: 8, right: 4, width: 5, height: 5, borderRadius: 999, backgroundColor: colors.up },
+  label: type.tab,
+  dot: { position: 'absolute', top: 8, right: 4, width: 5, height: 5, borderRadius: radius.pill, backgroundColor: colors.up },
 });

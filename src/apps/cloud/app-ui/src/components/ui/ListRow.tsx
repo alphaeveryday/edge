@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { Chevron } from './Chevron';
 import { colors } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { fam, type } from '@/theme/typography';
 
 export type ListIcon = 'chart' | 'star' | 'search' | 'comm' | 'bell';
 const C = '#333D4B';
@@ -47,7 +47,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 8 },
   divider: { borderBottomWidth: 1, borderBottomColor: colors.surface },
   icon: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
-  label: { fontFamily: fam.semibold, fontSize: 15.5, letterSpacing: -0.3 },
-  sub: { fontFamily: fam.regular, fontSize: 12.5, color: colors.textMuted },
+  label: type.listLabel,
+  sub: { ...type.caption, color: colors.textMuted },
   value: { fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
 });
