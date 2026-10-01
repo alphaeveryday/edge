@@ -62,7 +62,8 @@ def _vendor_routes(today) -> dict:
         "/ecos/StatisticSearch/E/json/kr/1/10000/731Y003": json.dumps({"StatisticSearch": {"row": [
             {"STAT_CODE": "731Y003", "ITEM_CODE1": "0000003", "ITEM_NAME1": "원/달러(종가 15:30)", "UNIT_NAME": "원",
              "TIME": d.replace("-", ""), "DATA_VALUE": str(1400 + i)} for i, d in enumerate(days)]}}).encode(),
-        "/fmp/treasury-rates": json.dumps([{"date": d, "year10": 4.1 + i / 100} for i, d in enumerate(days)]).encode(),
+        "/fred/series/observations": json.dumps({"units": "lin", "observations": [
+            {"date": d, "value": f"{4.1 + i / 100:.2f}"} for i, d in enumerate(days)]}).encode(),
         "/ecos/StatisticSearch/E/json/kr/1/10000/817Y002": json.dumps({"StatisticSearch": {"row": [
             {"STAT_CODE": "817Y002", "ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%",
              "TIME": d.replace("-", ""), "DATA_VALUE": "2.9"} for d in days]}}).encode(),
@@ -128,8 +129,8 @@ def test_dag_commands_run_the_lane_end_to_end_with_the_ledger(tmp_path, vendor, 
         "DATA_PIPELINE_DB__HOST": pg["host"], "DATA_PIPELINE_DB__PORT": str(pg["port"]),
         "DATA_PIPELINE_DB__NAME": pg["dbname"], "DATA_PIPELINE_DB__USER": pg["user"],
         "DATA_PIPELINE_DB__PASSWORD": pg["password"], "DATA_PIPELINE_DB__SSLMODE": "disable",
-        "DATA_PIPELINE_PRICE__SOURCE__API_KEY": "F",
-        "DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FMP_BASE_URL": f"{base}/fmp",
+        "DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY": "R",
+        "DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_BASE_URL": f"{base}/fred",
         "DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_BASE_URL": f"{base}/ecos",
         "DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_BASE_URL": f"{base}/kosis",
         "DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_BASE_URL": f"{base}/eia",

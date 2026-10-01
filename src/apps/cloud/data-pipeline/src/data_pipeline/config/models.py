@@ -280,20 +280,21 @@ class MacroObservationSource(BaseModel):
         DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY=...
         DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY=...
         DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=...
-    FMP(USD/KRW·미 국채)는 새 키를 두지 않고 `price.source.api_key`(FMP 공용키 하나, ALPHA-558)를
-    쓴다 — 같은 계정 한도를 두 이름으로 나눠 들고 있으면 소진 판단이 갈린다.
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY=...
+    FMP 는 쓰지 않는다(2026-10-01 결정, ALPHA-1136) — 미 국채 10년은 FRED `DGS10` 이다.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    fmp_base_url: NonBlankStr = "https://financialmodelingprep.com/stable"
+    fred_base_url: NonBlankStr = "https://api.stlouisfed.org/fred"
     ecos_base_url: NonBlankStr = "https://ecos.bok.or.kr/api"
     kosis_base_url: NonBlankStr = "https://kosis.kr/openapi"
     eia_base_url: NonBlankStr = "https://api.eia.gov/v2"
     ecos_api_key: str | None = None  # 비밀값: env 오버라이드 전용
     kosis_api_key: str | None = None  # 비밀값: env 오버라이드 전용
     eia_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    fred_api_key: str | None = None  # 비밀값: env 오버라이드 전용
 
 
 class SectorMasterSource(BaseModel):
