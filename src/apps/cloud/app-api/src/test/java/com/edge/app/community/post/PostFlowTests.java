@@ -190,4 +190,27 @@ class PostFlowTests extends ContainerTests {
         Map<String, Object> post = result(call("GET", "/api/v1/posts/" + id, null, null));
         assertEquals("탈퇴한 사용자", ((Map<?, ?>) post.get("author")).get("name"));
     }
+
+    // 약관 제10조: 글은 익명으로 남고 투표·좋아요·관심은 지워져 집계에서도 빠짐
+    @Test
+    void withdrawalKeepsPostsButRemovesVotesLikesAndWatch(@Autowired JdbcTemplate jdbc) {
+        String a = member("p10@example.com", "A10", List.of("069500"));
+        String b = member("p11@example.com", "B10", List.of("069500"));
+        String id = (String) post(a, "keep", List.of("069500")).get("id");
+        result(call("PUT", "/api/v1/posts/" + id + "/like", null, b));
+        result(call("PUT", "/api/v1/posts/" + id + "/like", null, a));
+        result(call("PUT", "/api/v1/etfs/305720/vote", Map.of("choice", "buy"), b));
+        long memberB = jdbc.queryForObject("select id from member where email = 'p11@example.com'", Long.class);
+
+        result(call("DELETE", "/api/v1/me", null, b));
+
+        Map<String, Object> post = result(call("GET", "/api/v1/posts/" + id, null, null));
+        assertEquals(1, post.get("like"), "탈퇴 회원 좋아요 차감");
+        assertEquals(0, jdbc.queryForObject("select count(*) from vote where member_id = ?", Integer.class, memberB));
+        assertEquals(0, jdbc.queryForObject("select count(*) from post_like where member_id = ?", Integer.class, memberB));
+        assertEquals(0, jdbc.queryForObject("select count(*) from watch_group g join principal p on p.id = g.principal_id where p.member_id = ?",
+                Integer.class, memberB));
+        Map<String, Object> count = result(call("GET", "/api/v1/etfs/305720/vote/count", null, null));
+        assertEquals(0, count.get("buys"), "남은 표가 없는 ETF 의 캐시 교체");
+    }
 }

@@ -29,4 +29,13 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
             where v.etfCode = :etf group by v.choice
             """)
     List<ChoiceCount> countByChoice(@Param("etf") String etfCode);
+
+    List<Vote> findByEtfCode(String etfCode);
+
+    @Query("select distinct v.etfCode from Vote v where v.memberId = :member")
+    List<String> etfCodesOf(@Param("member") long memberId);
+
+    @Modifying
+    @Query("delete from Vote v where v.memberId = :member")
+    void deleteByMember(@Param("member") long memberId);
 }

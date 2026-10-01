@@ -54,6 +54,17 @@ public interface PrincipalRepository extends JpaRepository<Principal, Long> {
             """, nativeQuery = true)
     void clearWatchData(@Param("p") long principalId);
 
+    /** 탈퇴 회원 principal 소유 행 삭제 */
+    @Modifying
+    @Query(value = """
+            with groups as (delete from watch_group where principal_id = :p returning id),
+                 items as (delete from watch_item where group_id in (select id from groups)),
+                 themes as (delete from principal_theme where principal_id = :p),
+                 alerts as (delete from alert_etf where principal_id = :p)
+            delete from notification where principal_id = :p
+            """, nativeQuery = true)
+    void deleteOwnedData(@Param("p") long principalId);
+
     /** 디바이스 principal 소유 행의 회원 이전 */
     @Modifying
     @Query(value = """
