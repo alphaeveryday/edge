@@ -1063,7 +1063,7 @@ components:
     # ── 커뮤니티 ──
     Post:
       type: object
-      required: [id, etf, author, time, body, like, reply, repost, liked]
+      required: [id, etf, author, time, body, like, reply, liked]
       properties:
         id: { type: string }
         etf:
@@ -1083,16 +1083,8 @@ components:
         title: { type: string }
         body: { type: string }
         quoteTag: { type: string }
-        repostOf:
-          type: object
-          properties:
-            name: { type: string }
-            handle: { type: string }
-            time: { type: string, format: date-time }
-            body: { type: string }
         like: { type: integer }
         reply: { type: integer }
-        repost: { type: integer }
         liked: { type: boolean }
         views: { type: integer }
         mine: { type: boolean }

@@ -186,8 +186,7 @@ PK `(principal_id, etf_code)`. 계약에 아직 엔드포인트가 없다(노션
 | title | varchar(100) NULL | |
 | body | varchar(280) | PRD 280자 |
 | quote_tag | varchar(30) NULL | |
-| repost_of_id | bigint → post NULL | 인용 리포스트 |
-| like_count, reply_count, repost_count, view_count | integer DEFAULT 0 | 비정규화 카운터. 갱신은 같은 트랜잭션 |
+| like_count, reply_count, view_count | integer DEFAULT 0 | 비정규화 카운터. 갱신은 같은 트랜잭션 |
 | created_at, updated_at | timestamptz | |
 | deleted_at | timestamptz NULL | 소프트 삭제 |
 
@@ -438,7 +437,6 @@ erDiagram
     post ||--o{ post_tag : ""
     post ||--o{ reply : ""
     post ||--o{ post_like : ""
-    post o|--o{ post : "repost_of"
     member ||--o{ reply : "author"
     member ||--o{ post_like : ""
     member ||--o{ report : "reporter"
@@ -463,7 +461,6 @@ erDiagram
 
 ## 열린 질문
 - `Post.etf.short`(ETF 짧은 이름)·`Post.author.name` 은 조인으로 만든다. 탈퇴 회원은 name 을 "탈퇴한 사용자" 로.
-- 리포스트 카운터(`repost_count`)는 `repost_of_id` 집계로도 되지만 피드 조회마다 세지 않으려고 카운터를 둔다.
 - 파이프라인에 요청할 것: `outlook.direction` 5단계 enum 동봉. 오늘 움직임 `summary` null 발행본을 `GET /etfs/{code}/move` 가 어떻게 답할지(404 코드 vs 빈 응답)는 계약 확인.
 - 원천 갭: `etf_candle` 의 open·high·low(`price_daily` 는 close·volume 만), `etf_quote` 의 장중 시세(마트에 없음), 구성 해석·테마 비중·구성종목 방향과 설명.
 - 상장폐지 등으로 `etf` 에 없는 코드가 관심·게시물에 남으면 조인이 빈다. 숨길지 표시할지는 서비스 규칙으로 정한다.
