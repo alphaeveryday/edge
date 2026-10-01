@@ -6,6 +6,7 @@ import { IconButton, LinkRow, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { DisclaimerSheet } from '@/features/auth/DisclaimerSheet';
 import { dirSignal } from '@/features/analysis/dir';
+import { axisHref } from '@/features/analysis/axisHref';
 import { useDaily } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
 import { colors, signal as SIG, radius } from '@/theme/tokens';
@@ -17,7 +18,7 @@ export default function EtfBrief() {
   const [date, setDate] = useState<string>();
   const [open, setOpen] = useState(false);
   const q = useDaily(code, date);
-  const openMetric = (axis: Axis) => router.push(`/metric/${code}/${axis}`);
+  const openMetric = (axis: Axis) => router.push(axisHref(code, axis));
   return (
     <QueryState query={q} rows={3} pending={{ title: '오늘 분석은 08:30에 올라와요', sub: '발행되면 여기에서 바로 볼 수 있어요' }}>
       {(d) => { const now = SIG[d.now]; return (

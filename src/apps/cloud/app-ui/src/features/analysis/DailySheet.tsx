@@ -10,6 +10,7 @@ import { useEtf } from '@/features/etf/queries';
 import { Loading } from '@/components/state';
 import { colors, signal as SIG, radius, shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { axisHref } from './axisHref';
 import { dirSignal } from './dir';
 import { FactorRow } from './FactorRow';
 import { HintSheet } from './HintSheet';
@@ -36,7 +37,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
   const [hint, setHint] = useState<string | null>(null);
   const goMetric = (axis: string) => {
     onClose();
-    router.push(`/metric/${code}/${axis}`);
+    router.push(axisHref(code, axis));
   };
   return (
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
