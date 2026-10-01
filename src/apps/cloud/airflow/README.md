@@ -501,7 +501,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 ### small·1408 A4·A5 표적 재검증 결과(2026-10-01, 실제 AWS)
 
-**결론: A4·A5 통과(사후 교정 1건 포함, 아래).** 범위는 **장중 수급 DAG 하나의 정상 실행**이다. small·1408이 전체 미래 배치를 수용한다는 근거가 아니다. 정기 DAG 활성화·SFN 전환은 하지 않았다(`investor_intraday_orchestrator = "SFN"`, 장중 수급 SFN 스케줄 ENABLED 그대로). 원자료는 `local/results/aws/aws-small-1408-a4a5/`(사전 시험은 `…-a4a5-pretest/`)에 있다. 판정 `verdict.json`, 교정 전 판정 `verdict-raw.json`.
+**결론: A4·A5 통과(사후 교정 1건 포함, 아래).** 범위는 **장중 수급 DAG 하나의 정상 실행**이다. small·1408이 전체 미래 배치를 수용한다는 근거가 아니다. 정기 DAG 활성화·SFN 전환은 하지 않았다(`investor_intraday_orchestrator = "SFN"`, 장중 수급 SFN 스케줄 ENABLED 그대로). 원자료는 `local/results/aws/aws-small-1408-a4a5/`(사전 시험은 `…-a4a5-pretest/`)에 **로컬 보존**했고 레포에는 넣지 않았다(이전 회차와 같다). 판정은 `verdict.json`, 교정 전 판정은 `verdict-raw.json`이다. 호스트 관측(`host-obs/`)·PC 표본(`health.jsonl`)·배치 증거(`L.json`, 원장 행·태스크 env 포함)·원장 백업·버킷 사본도 함께 있다. **레포만으로는 이 판정을 다시 계산할 수 없다** — 재판정에는 이 로컬 원자료가 필요하다(검증 버킷은 정리로 지웠다).
 
 **실행 시각(KST)·코드·이미지**
 
