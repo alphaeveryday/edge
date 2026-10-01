@@ -59,10 +59,30 @@ public class SyncService {
     private static final Map<String, String> AXIS = Map.of("이슈", "issue", "차트", "chart", "매크로", "macro", "밸류", "value", "수급", "flow");
     private static final List<String> SIGNALS = List.of("strongUp", "up", "neutral", "down", "strongDown");
     private static final Map<String, String> SIGNAL = Map.of("강력상승", "strongUp", "상승", "up", "중립", "neutral", "하락", "down", "강력하락", "strongDown");
-    /** 지표 키별 라벨·단위. 없는 키는 건너뜀 */
-    private static final Map<String, MetricLabel> METRICS = Map.of(
-            "ma20_distance_pct", new MetricLabel("20일선 대비", "%", true),
-            "new_closing_high_count_20d", new MetricLabel("최근 20일 종가 신고가", "회", false));
+    private static final BigDecimal EOK = new BigDecimal("100000000");
+    /** 지표 키별 라벨·단위. 엔진 대시보드 표기 기준, 없는 키는 건너뜀 */
+    private static final Map<String, MetricLabel> METRICS = Map.ofEntries(
+            Map.entry("ma20_distance_pct", new MetricLabel("20일선 대비", "%", true)),
+            Map.entry("ma60_direction", new MetricLabel("60일선 방향", "", false)),
+            Map.entry("new_closing_high_count_20d", new MetricLabel("최근 20일 종가 신고가", "회", false)),
+            Map.entry("distance_from_52w_closing_high_pct", new MetricLabel("52주 최고 종가 대비", "%", true)),
+            Map.entry("turnover_ratio_previous_day", new MetricLabel("거래대금(전일)", "배", false)),
+            Map.entry("atr14_pct", new MetricLabel("변동성(ATR)", "%", false)),
+            Map.entry("usd_krw", new MetricLabel("원·달러 환율", "원", false)),
+            Map.entry("commodity_return_20d_pct", new MetricLabel("원자재 20일 변화", "%", true)),
+            Map.entry("kr_treasury_10y_yield", new MetricLabel("한국 국고채 10년", "%", false)),
+            Map.entry("us_treasury_10y_yield", new MetricLabel("미국 국채 10년", "%", false)),
+            Map.entry("brent_spot_usd", new MetricLabel("브렌트유 현물", "달러/배럴", false)),
+            Map.entry("days_until_policy_decision", new MetricLabel("다음 금리 결정", "일 뒤", false)),
+            Map.entry("weighted_per", new MetricLabel("구성종목 PER 가중평균", "배", false)),
+            Map.entry("weighted_pbr", new MetricLabel("구성종목 PBR 가중평균", "배", false)),
+            Map.entry("distribution_yield_12m_pct", new MetricLabel("최근 12개월 분배율", "%", false)),
+            Map.entry("weighted_institution_net_amount_20d", new MetricLabel("기관 20일 가중 순매수", "억 원", true)),
+            Map.entry("weighted_foreign_net_amount_20d", new MetricLabel("외국인 20일 가중 순매수", "억 원", true)),
+            Map.entry("weighted_institution_net_buy_streak", new MetricLabel("기관 연속 순매수", "일", false)),
+            Map.entry("weighted_foreign_net_buy_streak", new MetricLabel("외국인 연속 순매수", "일", false)),
+            Map.entry("etf_units_change_20d_pct", new MetricLabel("발행좌수 20일 변화", "%", true)));
+    private static final List<String> COUNT_UNITS = List.of("회", "일", "일 뒤");
 
     private final PipelineRepository pipeline;
     private final SyncRepository sync;
@@ -234,11 +254,10 @@ public class SyncService {
         if (m.number() == null) {
             return m.text();
         }
-        if (!label.signed()) {
-            return m.number().setScale(0, RoundingMode.HALF_UP).toPlainString();
-        }
-        BigDecimal v = m.number().setScale(1, RoundingMode.HALF_UP);
-        return (v.signum() > 0 ? "+" : "") + v.toPlainString();
+        // 금액은 억 원, 횟수·일수는 정수, 나머지는 소수 한 자리
+        BigDecimal n = label.unit().equals("억 원") ? m.number().divide(EOK, 8, RoundingMode.HALF_UP) : m.number();
+        BigDecimal v = n.setScale(COUNT_UNITS.contains(label.unit()) ? 0 : 1, RoundingMode.HALF_UP);
+        return (label.signed() && v.signum() > 0 ? "+" : "") + v.toPlainString();
     }
 
     private static String observed(Metric m) {

@@ -97,10 +97,10 @@ class SyncFlowTests {
                 + "('o-syn', '091160', '2026-09-30T00:30:00Z', 'completed', '2026-09-30T00:31:00Z', '강력하락', '가상', '가상', null, null, null, null, null, 'synthetic')");
         PIPELINE.update("insert into outlook_items values ('r1', 'o-db', 'i1', 'detail', null, 0, '고정가', "
                 + "'[{\"sentence\":\"3개월 상승\",\"is_updated\":true}]', null), ('r2', 'o-db', 'i2', 'update', 'added', 0, '신규', null, '새 근거')");
-        PIPELINE.update("insert into outlook_factors values ('f1', 'o-db', '이슈', '강력상승', '재료 확인'), ('f2', 'o-db', '차트', '하락', '추세 꺾임')");
+        PIPELINE.update("insert into outlook_factors values ('f1', 'o-db', '이슈', '강력상승', '재료 확인'), ('f2', 'o-db', '차트', '하락', '추세 꺾임'), ('f3', 'o-db', '수급', '상승', '외국인 매수')");
         PIPELINE.update("insert into outlook_conclusion_keywords values ('k1', 'o-db', 'support', 0, 'HBM 공급'), ('k2', 'o-db', 'burden', 0, '환율')");
         PIPELINE.update("insert into outlook_factor_metrics(analysis_id, factor_type, metric_key, numeric_value, observed_at, position) values "
-                + "('o-db', '차트', 'ma20_distance_pct', 8.6009, '2026-09-29T06:41:00Z', 0), ('o-db', '차트', 'unmapped_key', 1, '2026-09-29T06:41:00Z', 1)");
+                + "('o-db', '차트', 'ma20_distance_pct', 8.6009, '2026-09-29T06:41:00Z', 0), ('o-db', '차트', 'unmapped_key', 1, '2026-09-29T06:41:00Z', 1), ('o-db', '수급', 'weighted_foreign_net_amount_20d', 12345678900, '2026-09-29T06:41:00Z', 0)");
         PIPELINE.update("insert into outlook_issue_items values ('o-db', 0, '고정가', '3개월 상승', 'positive')");
 
         // 손으로 넣은 옛 시드: 목록 밖 ETF 와 원천에 없는 날짜의 움직임
@@ -149,8 +149,8 @@ class SyncFlowTests {
         assertEquals("메모리 값 상승", daily.get("question"));
         assertEquals(List.of("3개월 상승"), ((List<Map<String, Object>>) daily.get("args")).getFirst().get("body"));
         List<Map<String, Object>> axes = (List<Map<String, Object>>) daily.get("axes");
-        assertEquals(List.of("issue", "chart"), axes.stream().map(a -> a.get("axis")).toList());
-        assertEquals(List.of(true, true), axes.stream().map(a -> a.get("hasPage")).toList(), "이슈 항목·지표가 있는 축만 페이지");
+        assertEquals(List.of("issue", "chart", "flow"), axes.stream().map(a -> a.get("axis")).toList());
+        assertEquals(List.of(true, true, true), axes.stream().map(a -> a.get("hasPage")).toList(), "이슈 항목·지표가 있는 축만 페이지");
 
         Map<String, Object> metric = result(call(port, "GET", "/api/v1/etfs/091160/analysis/metrics/chart", null, "X-Device-Id", "sync-1"));
         assertEquals("burden", metric.get("dir"));
@@ -159,6 +159,10 @@ class SyncFlowTests {
         assertEquals("20일선 대비", tiles.getFirst().get("label"));
         assertEquals("+8.6%", tiles.getFirst().get("value"));
         assertEquals("9월 29일", tiles.getFirst().get("note"));
+
+        Map<String, Object> flow = result(call(port, "GET", "/api/v1/etfs/091160/analysis/metrics/flow", null, "X-Device-Id", "sync-1"));
+        Map<String, Object> amount = ((List<Map<String, Object>>) flow.get("tiles")).getFirst();
+        assertEquals("+123.5억 원", amount.get("value"), "원 단위 원천 금액은 억 원으로 환산");
 
         List<Map<String, Object>> rank = result(call(port, "GET", "/api/v1/explore/rank", null, "X-Device-Id", "sync-1"));
         assertEquals("메모리 값 상승", rank.getFirst().get("title"));
