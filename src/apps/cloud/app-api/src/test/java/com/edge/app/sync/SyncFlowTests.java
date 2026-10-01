@@ -105,8 +105,8 @@ class SyncFlowTests {
 
         // 손으로 넣은 옛 시드: 목록 밖 ETF 와 원천에 없는 날짜의 움직임
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key) values "
-                + "('069500', 'fake-1', 'XKRX', 'KODEX 200', 'kospi'), ('091160', 'fake-2', 'XKRX', '옛 이름', 'semicon')");
-        jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('069500', 1, 0, now())");
+                + "('133690', 'fake-1', 'XKRX', 'TIGER 나스닥100', 'us'), ('091160', 'fake-2', 'XKRX', '옛 이름', 'semicon')");
+        jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('133690', 1, 0, now())");
         jdbc.update("insert into etf_move(etf_code, as_of, published_at, payload) values ('091160', '2026-09-20', now(), '{\"summary\":\"가짜\"}')");
         jdbc.update("insert into etf_candle(etf_code, trade_date, open, high, low, close) values "
                 + "('091160', '2026-09-20', 1, 2, 0, 1), ('091160', '2026-09-30', 1, 2, 0, 1)");
