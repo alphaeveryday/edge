@@ -155,7 +155,7 @@ export const METRICS: Record<string, Partial<Record<Axis, MetricPage>>> = {
 export const HINTS: Record<string, Hint> = {
   edge: {
     title: '분석 기준과 출처',
-    body: '매일 새벽 언론사 70곳의 뉴스·공시·리포트를 모아 다섯 기준으로 정리해요. 전망 스티커는 다섯 기준을 합쳐 정해요.',
+    body: '언론사 70곳의 뉴스·공시·리포트를 매일 모아 다섯 기준으로 정리해요. 전망 스티커는 다섯 기준을 합쳐 정해요.',
     list: [
       { k: '이슈', d: '재료가 된 사건이 진짜인가' },
       { k: '차트', d: '주가가 재료를 따라왔나' },
