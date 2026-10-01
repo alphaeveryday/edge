@@ -1089,7 +1089,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 | 명령(DAG 가 내는 것) | `plan-run`(ops, `OPS_ORCHESTRATOR=AIRFLOW`) → 데이터셋별 `ingest-raw-*` → `normalize-* --input-run-id` → `load-* --input-run-id` → `reconcile`(report). 수동 CLI 로 이 순서를 흉내 내지 않는다(Airflow 주체를 꾸미게 된다) |
 | 예상 공급자 호출 | 매크로 **5**(계열당 1), 업종 **3**(비거래일 0), 재무 corpCode **1** + 목록 **21 이상**(회사당 모든 페이지, 보통 1) + 창 안에 접수된 정기보고서(정정 포함)가 정하는 **대상 보고서마다** 재무제표 CFS·OFS 2 + 주식총수 1 = 3. 사업보고서면 같은 해 3분기도 대상이 되고(6), 3분기면 같은 해 사업보고서가 목록에 있을 때 짝으로 붙는다. 창 안 분기·반기보고서의 사업보고서가 소급 목록에 없고 다음 해 1월 1일이 창 끝 이하이면(창 시작과 무관) 다음 해 목록을 한 번 더 받는다. 10월 초 평상일(정정 몇 건)이면 **≈ 25~35** — 실제 수는 raw manifest 로 대조한다. DART 는 공시 레인과 같은 키의 일 한도를 나눠 쓴다 |
 | 기대 결과 | 원장 `ops_pipeline_run` 에 `pipeline_type='source-daily'` run 1건 → `orchestration_status=SUCCEEDED`. `ops_expected_task` 9작업, 그중 `MACRO_COLLECTION` 에도 attempt 가 있다(#1051 효과). `source_observation_freshness()` 의 `last_load_fulfilled_at` 이 데이터셋마다 채워진다. 매크로 5계열 모두 행이 생긴다(국고채·CPI·브렌트는 처음). 재무 raw manifest `holdings_coverage`·`unmapped` 를 확인한다 |
-| 실패 시 | 부분 실패(exit 2)는 받은 범위만 하류로 가고 run 은 FAILED 로 마감한다. 재수집하지 말고 위 "재수집 없는 복구" 를 따른다. 반복 trigger 로 해결하지 않는다 |
+| 실패 시 | 반복 trigger 로 해결하지 않는다. 경우를 나눈다. **정제·적재 실패**(raw 는 남음)는 위 "재수집 없는 복구" 를 따른다. **수집 부분 실패**(exit 2 — 일부 계열·회사가 `error`)는 받은 범위만 하류로 가고 run 은 FAILED 로 마감한다. 이 경우 `reprocess_slot` 은 수집을 건너뛰어 빠진 범위를 회복하지 못한다. 원인(키·한도·도달)을 해결한 뒤 다음 정기 창(소급일 안)이 다시 받게 두거나, 그 범위만 백필 params 로 새 run 에서 받는다 |
 | 정기 활성화(별도 승인) | unpause 와 `ops` 태스크 정의 env `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true` 를 **같은 변경으로** 넣는다. env 만 먼저 넣으면 pause 동안 매일 PLANNER_MISSING 이 열린다 |
 
 ## 활성화 전 결정·미해결 조건
