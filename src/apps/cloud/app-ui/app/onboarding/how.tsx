@@ -26,7 +26,7 @@ export default function How() {
       step={0}
       title={'뉴스 3만 건을\n대신 읽어드려요'}
       body={'언론사 70곳의 뉴스와 공시, 리포트를\n매일 새벽에 모아요.'}
-      accent={'최신 AI(GPT Astra)가\n다섯 가지 기준으로 정리해요.'}
+      accent={'AI가 다섯 가지 기준으로 정리해요.'}
       cta="다음"
       onNext={() => router.push('/onboarding/sticker')}
     >
@@ -55,8 +55,8 @@ export default function How() {
         <Down />
         <View style={styles.pill}>
           <View style={styles.pillDot}><View style={styles.pillDotIn} /></View>
-          <Text style={styles.pillName}>GPT Astra</Text>
-          <Text style={styles.pillSub}>최신 모델이 매일 새벽 읽어요</Text>
+          <Text style={styles.pillName}>AI 분석</Text>
+          <Text style={styles.pillSub}>매일 새벽 읽어요</Text>
         </View>
       </View>
     </IntroShell>
