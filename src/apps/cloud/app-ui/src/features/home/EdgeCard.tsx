@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, StyleSheet, Text, View } from 'react-native';
 import { ChangeOnly } from '@/components/ui';
 import { colors, signal as SIG, SIGNAL_ORDER, type Signal, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -12,6 +13,12 @@ export function EdgeCard({ title, band, changePct }: { title: string; band: Sign
   const i = SIGNAL_ORDER.indexOf(band);
   const pos = ((i + 0.5) / SIGNAL_ORDER.length) * 100;
   const c = SIG[band].color;
+  // 단계 바뀜의 점 미끄러짐
+  const x = useRef(new Animated.Value(pos)).current;
+  useEffect(() => {
+    Animated.timing(x, { toValue: pos, duration: 220, useNativeDriver: false }).start();
+  }, [x, pos]);
+  const left = x.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] });
   return (
     <View style={styles.card}>
       <View style={styles.head}>
@@ -28,7 +35,7 @@ export function EdgeCard({ title, band, changePct }: { title: string; band: Sign
         <View style={styles.segs}>
           {SIGNAL_ORDER.map((s) => <View key={s} style={[styles.seg, { backgroundColor: SEG_BG[s] }]} />)}
         </View>
-        <View style={[styles.knob, { left: `${pos}%`, borderColor: c }]} />
+        <Animated.View style={[styles.knob, { left, borderColor: c }]} />
       </View>
       <View style={styles.ticks}>
         {SIGNAL_ORDER.map((s) => <Text key={s} style={styles.tick}>{SIG[s].label}</Text>)}

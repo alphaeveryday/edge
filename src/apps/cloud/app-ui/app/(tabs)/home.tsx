@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOP_BAR_H, TopBar } from '@/components/TopBar';
 import { Chip, LinkRow, PageTitle, SectionHead } from '@/components/ui';
@@ -9,7 +9,8 @@ import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
-import { useHomeBrief } from '@/features/home/queries';
+import { useHomeBrief, usePrefetchBriefs } from '@/features/home/queries';
+import { useSwapFade } from '@/lib/useSwapFade';
 import { api, isApiError } from '@/api';
 import { useToast } from '@/store/toast';
 import { colors, PAGE_X } from '@/theme/tokens';
@@ -36,6 +37,8 @@ export default function Home() {
     }
   };
   const b = brief.data;
+  usePrefetchBriefs(b?.groups.map((g) => g.key));
+  const fade = useSwapFade(b?.group, brief.isPlaceholderData);
   const rows = b ? (showAll ? b.etfs : b.etfs.slice(0, 3)) : [];
   const more = (b?.etfs.length ?? 0) > 3;
   const groupLabel = b?.groups.find((g) => g.key === b.group)?.label ?? '';
@@ -46,19 +49,20 @@ export default function Home() {
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="내 종목 브리핑" meta={b?.asOf} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === b.group} onPress={() => setGroup(g.key)} />)}
+          {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === group} onPress={() => setGroup(g.key)} />)}
         </ScrollView>
-        {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
-
-        <View style={styles.rows}>
-          {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={() => open(e.code)} />)}
-          {more && (
-            <View style={{ marginTop: 12 }}>
-              <LinkRow variant="card" muted label={showAll ? '접기' : `${b!.etfs.length - 3}개 더 보기`} open={showAll} onPress={() => setShowAll((v) => !v)} />
-            </View>
-          )}
-          {b && b.etfs.length === 0 && <Text style={styles.empty}>관심 ETF가 없어요 · 탐색에서 담아 보세요</Text>}
-        </View>
+        <Animated.View style={{ opacity: fade }}>
+          {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
+          <View style={styles.rows}>
+            {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={() => open(e.code)} />)}
+            {more && (
+              <View style={{ marginTop: 12 }}>
+                <LinkRow variant="card" muted label={showAll ? '접기' : `${b!.etfs.length - 3}개 더 보기`} open={showAll} onPress={() => setShowAll((v) => !v)} />
+              </View>
+            )}
+            {b && b.etfs.length === 0 && <Text style={styles.empty}>관심 ETF가 없어요 · 탐색에서 담아 보세요</Text>}
+          </View>
+        </Animated.View>
 
         <View style={styles.divider} />
         <View style={{ paddingTop: 22 }}>
