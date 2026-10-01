@@ -271,7 +271,7 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 
 | | `macro_observation` | `financial_metric` | `sector_classification` |
 |---|---|---|---|
-| 공급자·계열 | ECOS `731Y003/D/0000003` 원/달러 종가 15:30(원, 1달러당 — FMP USDKRW는 현재 구독에서 402, §10.8) · FMP `treasury-rates` `year10`(%) · ECOS `817Y002/D/010210000` 국고채 10년(연%) · KOSIS `101/DT_1J22042` `T03` 총지수 전년동월비(%) · EIA `petroleum/pri/spt` `RBRTE` Europe Brent Spot FOB($/bbl) | OpenDART `list.json`(정기공시, 접수일) · `fnlttSinglAcntAll.json`(전체 재무제표, CFS·OFS) · `stockTotqySttus.json`(주식총수) | KIS 공개 마스터 ZIP `kospi_code.mst`·`kosdaq_code.mst`(지수업종 대·중·소 4자리) · `idxcode.mst`(업종명). KIS Open API 아님(키·토큰 없음) |
+| 공급자·계열 | ECOS `731Y003/D/0000003` 원/달러 종가 15:30(원, 1달러당 — FMP USDKRW는 현재 구독에서 402, §10.8) · FRED `DGS10`(%) — 2026-10-01 FMP `treasury-rates` `year10` 에서 교체, 같은 계열(§10.8 추기) · ECOS `817Y002/D/010210000` 국고채 10년(연%) · KOSIS `101/DT_1J22042` `T03` 총지수 전년동월비(%) · EIA `petroleum/pri/spt` `RBRTE` Europe Brent Spot FOB($/bbl) | OpenDART `list.json`(정기공시, 접수일) · `fnlttSinglAcntAll.json`(전체 재무제표, CFS·OFS) · `stockTotqySttus.json`(주식총수) | KIS 공개 마스터 ZIP `kospi_code.mst`·`kosdaq_code.mst`(지수업종 대·중·소 4자리) · `idxcode.mst`(업종명). KIS Open API 아님(키·토큰 없음) |
 | 대상 | 5계열. 브렌트는 현물(선물 대체 금지), CPI는 공급자 공표 전년동월비(지수 수준 자체 계산 금지) | 구성종목(ETF 스냅샷에서 **기간별** 파생, §10.5) × 12월 결산 정기보고서. EPS 기본·희석, BPS, 매출액, 영업이익 | KOSPI·KOSDAQ 전 종목(ETF·ETN 포함, `security_group`로 구분) |
 | 한 행 | (계열, 관측일)의 한 수집 실행 판본 | (회사, 사업연도, 기간, 지표, 기간 종류, 연결/별도)의 한 수집 실행 판본 | (시장, 종목, 받은 날)의 한 수집 실행 판본 |
 | 논리 키 | `series_id, observation_date` | `corp_code, fiscal_year, fiscal_period, metric, period_kind, fs_basis` | `market, instrument_code, as_of_date` |
@@ -382,7 +382,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 - **재시도**: 공급자 일시 오류는 HTTP 클라이언트(5xx·네트워크 3회). 4xx·DART 키/한도/점검(010·011·012·020·800·901)은 즉시 중단.
   Airflow는 업무 미시작(exit 75)만 재시도. 정제·적재 재시도·재처리(`reprocess_slot`)는 raw·artifact만 읽는다.
 - **호출 한도**: 벤더마다 따로다. KIS 공유 예산(ADR-0055, 현재 비활성)은 KIS API 전용이고 KIS 마스터 다운로드는 대상이
-  아니다. DART는 공시 레인과 같은 키의 일 한도를 나눠 쓴다(요청 간격 0.5초). FMP는 공용키 bandwidth(ALPHA-558) 안이다.
+  아니다. DART는 공시 레인과 같은 키의 일 한도를 나눠 쓴다(요청 간격 0.5초). FRED 는 별도 키(`edge-dev-data-pipeline/fred/api-key`, 수동 등록)로 계열당 요청 1(백필은 10년 창당 1)이다. 매크로는 FMP 를 쓰지 않는다(2026-10-01).
 
 ### 10.6 신선도·완전성
 
@@ -445,6 +445,22 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 발급 키 정상) · KOSIS 2(T03 데이터 2026-06~08 + 공식 항목 메타 getMeta ITM) · EIA 1(RBRTE 2026-09) · DART 2(사업보고서 11011 주식총수
 삼성·하이닉스). FMP treasury·KIS 마스터는 다시 부르지 않았다. 원문 `.dev/alpha-1130-live/round2/`(SHA256SUMS·README, 키 스캔 0건).
 
+**추기 — 미 국채 10년 공급자 교체(2026-10-01, ALPHA-1136).** FMP 를 쓰지 않기로 해 `us_10y_yield` 를 FRED `DGS10` 으로 바꿨다.
+같은 계열인지 공식 원문으로 대조했다(FRED 페이지 1회·API 문서 1회 조회, 나머지는 연준·재무부 문서):
+
+| 항목 | FMP `treasury-rates` `year10`(교체 전) | FRED `DGS10` |
+|---|---|---|
+| 원천 | 재무부 일별 par yield curve 10년(이 문서·어댑터의 기존 서술. FMP 문서 페이지는 403 으로 재확인 못 함) | 연준 H.15 "Treasury constant maturities" — H.15 각주: Source U.S. Treasury, "재무부가 일별 수익률곡선에서 고정 만기로 읽은 값" |
+| 산출 | par yield curve 를 10년 만기에서 읽은 값 | 재무부 FAQ: "CMT yields are read directly from the Treasury's daily par yield curve" — 같은 곡선, 같은 만기 |
+| 단위 | % | % (Percent, Not Seasonally Adjusted) |
+| 주기·날짜 | 미국 영업일, `date` YYYY-MM-DD | Daily, `date` YYYY-MM-DD. 휴일·미게시일은 값 `"."` |
+
+판단: **같은 의미 — `us_10y_yield`·단위 `percent` 를 유지**하고 공급자 `fred`·원천 계열 `FRED DGS10` 만 바꾼다(DB CHECK 은
+확장 마이그레이션 `V202610011500` 이 FRED 튜플을 더하고 FMP 튜플은 남긴다). 이전 보고의 "FRED DGS10 은 par yield 와 정의가
+다르다"는 **틀렸다** — 시리즈 제목의 'Market Yield … Constant Maturity' 는 H.15 의 명칭일 뿐 값은 재무부 par yield curve 다.
+**값 대조는 아직이다**: FMP 09-25 `year10`=5.17(위 실측)과 FRED 09-25 값을 실응답으로 비교해 확정한다(FRED 키 수령 후, 남은 호출 3).
+가시시각은 그대로 수신시각이다 — FRED 의 `realtime_start` 를 공개시각으로 쓰지 않는다(결정 ①).
+
 | 공급자 | 확인된 사실 | 코드에 반영 |
 |---|---|---|
 | KOSIS T03 | 공식 메타: T03=`전년동월비(%)`·"Change over the same month of last year", C1 0=총지수. **데이터 행·메타 모두 `UNIT_NM` 없음**(T02 전월비만 `%`) — 단위는 항목명 끝 "(%)" 에만 있다. 2026-06 3.2·07 2.8·08 3.1, 09 은 미공표 | 합성 fixture 가 지어낸 `UNIT_NM` 때문에 파서가 실응답 전건을 `unit_mismatch` 로 거부하던 것을 고쳤다: `UNIT_NM` 이 있으면 그것, 없으면 항목명 "(%)" 만 단위 증거(둘 다 없으면 거부) |
@@ -477,7 +493,7 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 | 데이터셋 | 평가에 필요한 범위 | 공급자 이력 | 계약대로 보이는 범위(수집 뒤) | 결손과 소비자가 보는 모양 |
 |---|---|---|---|---|
 | USD/KRW·국고채 10y | 9-14~18 각 시점의 최근 2관측 → 09-10~17 관측일 | ECOS 1990~·1995~ 전량 | 백필 값은 **수신시각(수집일) 이후**에만 보인다(결정 ①). 평가시각 T=09-14~18 < 수집일이면 `macro_observations_as_of(T)` 는 **0행** | `macro_inputs` gap `no_observation_visible` — 결손으로 드러난다("현재 지식으로 평가" 모드는 만들지 않기로 했다, 2026-09-30) |
-| 미국채 10y | 같음 | FMP treasury 이력 있음 | 같음 | 같음 |
+| 미국채 10y | 같음 | FRED DGS10 1962~(교체 전엔 FMP treasury) | 같음 | 같음 |
 | CPI YoY | 8월분(9월 초 공표) | KOSIS 이력 있음(키 발급됨, 운영 시크릿 미연결) | 같은 수신시각 규칙 | 같음 |
 | 브렌트 | 09-10~17 | EIA 이력 있음(키 발급됨, 운영 시크릿 미연결) | 같음 | 같음 |
 | 재무(EPS·BPS) | 구성종목별 최근 4분기(2025-Q3~2026-Q2) | DART 최신 제출본만. 2026-Q2 반기보고서 접수 08-14 | 백필해도 **접수일 기준으로 과거에 보인다**(결정 ①): T=09-14 에 2026-Q2 까지 보인다. 단 09-29 정정본(고려제강 등 49건/955 중)은 정정 값이 원본 접수일에 붙지 않으므로 **T=09-14 에는 그 회사의 2026-Q2 가 없다**(정정 전 값은 API 가 안 준다) | `financial_inputs` 는 그 분기 행을 안 낸다(공개 자체가 없음) → `valuation.calculate` "four consecutive released quarters required". 우선주 회사는 ① 전까지 gap `PREFERRED_SHARES_PRESENT` |
