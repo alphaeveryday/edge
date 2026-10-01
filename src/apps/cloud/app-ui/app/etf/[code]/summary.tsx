@@ -21,7 +21,7 @@ export default function EtfSummary() {
   if (!etf || !chart) return <Loading rows={3} />;
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
-      {chart && <LineChart data={chart} name={etf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} price={etf.price} changePct={etf.changePct} />}
+      {chart && <LineChart data={chart} name={etf.name} price={etf.price} changePct={etf.changePct} />}
       <View style={styles.divider} />
       <Pressable onPress={() => setOpen(true)} style={({ pressed }) => [styles.why, pressed && { opacity: 0.6 }]}>
         <View style={styles.whyHead}>

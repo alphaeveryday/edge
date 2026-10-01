@@ -11,7 +11,6 @@ import { useSession } from '@/store/session';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-const short = (name: string) => name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '');
 
 export default function EtfPick() {
   const router = useRouter();
@@ -51,7 +50,7 @@ export default function EtfPick() {
         <View style={styles.grid}>
           {list.map((e) => (
             <View key={e.code} style={styles.cell}>
-              <PickCircle size={84} label={short(e.name)} on={etfs.includes(e.code)} hot={e.hot} onPress={() => toggleEtf(e.code)}>
+              <PickCircle size={84} label={e.name} on={etfs.includes(e.code)} hot={e.hot} onPress={() => toggleEtf(e.code)}>
                 <SectorIcon theme={e.theme} bg={e.logoBg} size={78} />
               </PickCircle>
             </View>

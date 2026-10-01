@@ -36,7 +36,7 @@ export default function Community() {
           <View style={styles.voteWrap}>
             <View style={styles.voteHead}>
               <SectorIcon theme={voteEtf.theme} bg={voteEtf.logoBg} size={18} />
-              <Text style={styles.voteHeadText}>{voteEtf.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')} · 오늘의 투표</Text>
+              <Text style={styles.voteHeadText}>{voteEtf.name} · 오늘의 투표</Text>
             </View>
             <VoteCard stat={stat} />
           </View>
