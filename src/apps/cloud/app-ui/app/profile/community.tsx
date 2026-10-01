@@ -72,7 +72,7 @@ export default function CommunityProfile() {
               <Text style={styles.time}>{p.time}</Text>
             </View>
             <Text style={styles.body}>{p.body}</Text>
-            <PostActions like={p.like} reply={p.reply} repost={p.repost} liked={p.liked} onLike={() => like.mutate(p.id)} />
+            <PostActions like={p.like} reply={p.reply} liked={p.liked} onLike={() => like.mutate(p.id)} />
           </Pressable>
         ))}
         {posts && posts.length === 0 && <Text style={styles.empty}>아직 쓴 글이 없어요{'\n'}종목 커뮤니티에서 첫 글을 남겨 보세요</Text>}

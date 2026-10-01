@@ -56,16 +56,6 @@ export default function Post() {
               </View>
             </View>
             <Text style={styles.body}>{p.title ? `${p.title}\n${p.body}` : p.body}</Text>
-            {p.repostOf && (
-              <View style={styles.quote}>
-                <View style={styles.quoteHead}>
-                  <Avatar label={p.repostOf.name} bg={p.repostOf.avatarBg} size={22} />
-                  <Text style={styles.quoteName}>{p.repostOf.name}</Text>
-                  <Text style={styles.quoteTime}>{p.repostOf.time}</Text>
-                </View>
-                <Text style={styles.quoteBody}>{p.repostOf.body}</Text>
-              </View>
-            )}
             {!!p.etf.short && (
               <Pressable onPress={() => router.push(`/etf/${p.etf.code}/brief`)} style={({ pressed }) => [styles.tag, pressed && { opacity: 0.6 }]}>
                 <SectorIcon theme={p.etf.theme} bg={p.etf.logoBg} size={16} />
@@ -74,7 +64,7 @@ export default function Post() {
             )}
             <Text style={styles.views}>조회 {(p.views ?? 0).toLocaleString('ko-KR')}</Text>
             <View style={styles.actions}>
-              <PostActions size="lg" like={p.like} reply={p.reply} repost={p.repost} liked={p.liked} onLike={() => like.mutate(p.id)} />
+              <PostActions size="lg" like={p.like} reply={p.reply} liked={p.liked} onLike={() => like.mutate(p.id)} />
             </View>
           </View>
         )}
@@ -123,11 +113,6 @@ const styles = StyleSheet.create({
   name: { fontFamily: fam.extrabold, fontSize: 15, color: colors.text, letterSpacing: -0.3 },
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
   body: { fontFamily: fam.regular, fontSize: 18, lineHeight: 29, color: colors.text, marginTop: 14 },
-  quote: { marginTop: 14, borderWidth: 1, borderColor: colors.line, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, gap: 6 },
-  quoteHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  quoteName: { fontFamily: fam.bold, fontSize: 14, color: colors.text },
-  quoteTime: { fontFamily: fam.regular, fontSize: 12, color: colors.textFaint },
-  quoteBody: { fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: '#333D4B' },
   tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, backgroundColor: colors.surface, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 },
   tagText: { fontFamily: fam.bold, fontSize: 13, color: colors.textSub },
   views: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 14 },

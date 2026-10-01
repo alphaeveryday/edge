@@ -25,7 +25,7 @@ export function PostRow({ post }: { post: Post }) {
         </View>
         <Text style={styles.text}>{post.body}</Text>
         <View style={styles.actions}>
-          <PostActions like={post.like} reply={post.reply} repost={post.repost} liked={post.liked} onLike={() => like.mutate(post.id)} onReply={open} />
+          <PostActions like={post.like} reply={post.reply} liked={post.liked} onLike={() => like.mutate(post.id)} onReply={open} />
         </View>
       </View>
     </Pressable>

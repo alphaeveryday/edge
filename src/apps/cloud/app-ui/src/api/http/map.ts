@@ -38,15 +38,14 @@ export const me = (m: WireMe): Me => ({ ...m, avatarBg: bgOf(m.handle) });
 
 export interface WirePost {
   id: string; etf: { code: string; theme: string; short: string }; author: { name: string; handle: string }; time: string;
-  title?: string; body: string; quoteTag?: string; repostOf?: { name: string; handle: string; time: string; body: string };
-  like: number; reply: number; repost: number; liked: boolean; views?: number; mine?: boolean; blocked?: boolean;
+  title?: string; body: string; quoteTag?: string;
+  like: number; reply: number; liked: boolean; views?: number; mine?: boolean; blocked?: boolean;
 }
 export const post = (p: WirePost): Post => ({
   ...p,
   etf: { ...p.etf, logoBg: bgOf(p.etf.theme) },
   author: { ...p.author, avatarBg: bgOf(p.author.handle) },
   time: ago(p.time),
-  repostOf: p.repostOf ? { name: p.repostOf.name, avatarBg: bgOf(p.repostOf.handle), time: ago(p.repostOf.time), body: p.repostOf.body } : undefined,
 });
 
 export interface WireReply { id: string; author: { name: string; handle: string }; time: string; body: string }

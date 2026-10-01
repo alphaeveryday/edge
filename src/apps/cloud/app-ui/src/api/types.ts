@@ -45,10 +45,8 @@ export interface Post {
   title?: string;
   body: string;
   quoteTag?: string;
-  repostOf?: { name: string; avatarBg: string; time: string; body: string };
   like: number;
   reply: number;
-  repost: number;
   liked: boolean;
   views?: number;
   mine?: boolean;

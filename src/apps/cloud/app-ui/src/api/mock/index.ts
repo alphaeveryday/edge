@@ -220,7 +220,7 @@ export const mockClient: ApiClient = {
         id: 'u' + ++seq,
         etf: e ? { code: e.code, theme: e.theme, logoBg: e.logoBg, short: e.name } : { code: '', theme: '', logoBg: '#8E8E93', short: '' },
         author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg },
-        time: '방금', body, like: 0, reply: 0, repost: 0, liked: false, views: 0, mine: true,
+        time: '방금', body, like: 0, reply: 0, liked: false, views: 0, mine: true,
       };
       posts.unshift(post);
       return delay({ ...post }, 60);

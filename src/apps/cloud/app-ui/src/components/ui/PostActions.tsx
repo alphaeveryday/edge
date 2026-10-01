@@ -6,21 +6,17 @@ import { fam } from '@/theme/typography';
 interface Props {
   like: number;
   reply: number;
-  repost?: number;
   liked?: boolean;
-  reposted?: boolean;
   size?: 'md' | 'lg';
   onLike?: () => void;
   onReply?: () => void;
-  onRepost?: () => void;
 }
 
-export function PostActions({ like, reply, repost, liked, reposted, size = 'md', onLike, onReply, onRepost }: Props) {
+export function PostActions({ like, reply, liked, size = 'md', onLike, onReply }: Props) {
   const lg = size === 'lg';
   const fs = lg ? 15 : 14;
   const ic = lg ? 20 : 18;
   const likeC = liked ? colors.up : colors.textFaint;
-  const rpC = reposted ? colors.primary : colors.textFaint;
   return (
     <View style={styles.row}>
       <Pressable onPress={onLike} accessibilityRole="button" accessibilityLabel="좋아요" hitSlop={6} style={({ pressed }) => [styles.item, pressed && { opacity: 0.6 }]}>
@@ -35,14 +31,6 @@ export function PostActions({ like, reply, repost, liked, reposted, size = 'md',
         </Svg>
         <Text style={[styles.count, { fontSize: fs, color: colors.textFaint }]}>{reply}</Text>
       </Pressable>
-      {repost !== undefined && (
-        <Pressable onPress={onRepost} hitSlop={6} style={({ pressed }) => [styles.item, pressed && { opacity: 0.6 }]}>
-          <Svg width={ic} height={ic} viewBox="0 0 24 24">
-            <Path d="M7 7h9a3 3 0 0 1 3 3v2M17 17H8a3 3 0 0 1-3-3v-2M14 4l3 3-3 3M10 20l-3-3 3-3" fill="none" stroke={rpC} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-          </Svg>
-          <Text style={[styles.count, { fontSize: fs, color: rpC }]}>{repost}</Text>
-        </Pressable>
-      )}
     </View>
   );
 }
