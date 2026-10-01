@@ -38,6 +38,7 @@ public class PipelineRepository {
         config.setMinimumIdle(0);
         config.setReadOnly(true);
         config.setConnectionInitSql("set statement_timeout = 30000");
+        config.setInitializationFailTimeout(-1);   // 파이프라인 불통이 앱 기동을 막지 않게 첫 사용 때 접속
         dataSource = new HikariDataSource(config);
         jdbc = new JdbcTemplate(dataSource);
     }
