@@ -147,7 +147,7 @@
 > 열거한 것은 이 예외를 모른다),
 > **세션 계획·drain·재오픈 CLI**(ALPHA-698 — `run plan-minute-session`·
 > `run drain-minute-session`, ALPHA-1135 — `run reopen-minute-session`: FINALIZED 가격 세션을
-> ACTIVE·창 DUE 로 되돌려 소급 재수집. 사유 필수, 가격 세션·FINALIZED/FAILED 만, 지목 창
+> ACTIVE·창 DUE 로 되돌려 소급 재수집. 사유 필수, 지난 날짜·가격 세션·FINALIZED/FAILED 만, 지목 창
 > 하나라도 없으면 무변경. QC 는 재오픈 뒤 못 받은 창을 MISSING 으로 접지 않고 FAILED 로 세운다. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
 > 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
@@ -2183,7 +2183,8 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #   ① 그 세션의 universe 를 찾는다 — Worker 는 원장의 `universe_version`·`universe_hash` 와
 #      다른 파일이면 처리를 거부한다. 원장 값은 `minute_ingestion_session` 에서, 후보 파일은
 #      `config/minute/universe.json.bak-*`(변경일 백업만 있다 — 해시로 대조).
-#   ② reopen — FINALIZED·FAILED 가격 세션만 연다(그 밖은 exit 1). `--reason` 필수(옛
+#   ② reopen — **지난 날짜의** FINALIZED·FAILED 가격 세션만 연다(그 밖은 exit 1 — 오늘 세션을
+#      열면 Worker 가 당일 TR 을 타 종가 단일가 없는 값을 재봉인한다. 다음 날 돌린다). `--reason` 필수(옛
 #      final_checksum 과 함께 출력에 남는 것이 감사 근거). `--windows 1529` 처럼 창 시작 KST
 #      HHMM 으로 일부만 열 수 있다(없으면 전부, 빈 값은 거부). 지목한 창 하나라도 없으면
 #      아무것도 안 바뀐다. session_id 는 원장 `minute_ingestion_session`(dataset·source_group·

@@ -16,6 +16,9 @@ from test_minute_content_recovery import ChangingCollector
 
 pytestmark = pytest.mark.skipif(not os.environ.get("E2E_PGHOST"), reason="실 PostgreSQL 필요")
 
+# 픽스처 세션은 2026-09-29 — 그 다음 날을 오늘로 둔다(재오픈은 지난 날짜만 연다)
+TODAY = datetime(2026, 9, 30).date()
+
 
 @pytest.fixture
 def finalized(tmp_path):
@@ -98,7 +101,7 @@ def test_reopened_session_recollects_and_bumps_only_changed_windows(finalized):
     from data_pipeline.minute.repository import MinuteLedger  # noqa: F401 — fixture 와 같은 모듈
 
     before_token = _session(h)[1]
-    result = h.ledger.reopen_session(session_id=h.sid, window_starts=None)
+    result = h.ledger.reopen_session(session_id=h.sid, window_starts=None, today=TODAY)
     assert result["reopened_windows"] == 2
     assert result["previous_final_checksum"] == "f" * 64   # 감사 근거로 호출자에게 돌아간다
     phase, token, final_checksum, final_generation = _session(h)
@@ -121,7 +124,7 @@ def test_reopen_of_selected_windows_leaves_the_rest_sealed(finalized):
     # ALPHA-1128 이 쓰는 모양 — 마감 창 하나만 다시 받는다. 나머지를 DUE 로 돌리면 콜만 탄다
     h = finalized
     second = h.start + timedelta(minutes=1)
-    assert h.ledger.reopen_session(session_id=h.sid, window_starts=[second])["reopened_windows"] == 1
+    assert h.ledger.reopen_session(session_id=h.sid, window_starts=[second], today=TODAY)["reopened_windows"] == 1
     assert [r[1] for r in _windows(h)] == ["VALID", "DUE"]
 
 
@@ -137,7 +140,8 @@ def test_unknown_window_rejects_the_whole_reopen(finalized):
     before = (_session(h), _windows(h))
     with pytest.raises(SessionReopenRejected, match="원장에 있다"):
         h.ledger.reopen_session(session_id=h.sid,
-                                window_starts=[h.start, h.start + timedelta(minutes=33)])
+                                window_starts=[h.start, h.start + timedelta(minutes=33)],
+                                today=TODAY)
     assert (_session(h), _windows(h)) == before
 
 
@@ -151,7 +155,7 @@ def test_only_finalized_sessions_are_reopened(finalized, phase):
         c.execute("UPDATE minute_ingestion_session SET phase=%s WHERE session_id=%s", (phase, h.sid))
     before = _windows(h)
     with pytest.raises(SessionReopenRejected, match="FINALIZED·FAILED"):
-        h.ledger.reopen_session(session_id=h.sid, window_starts=None)
+        h.ledger.reopen_session(session_id=h.sid, window_starts=None, today=TODAY)
     assert _windows(h) == before
 
 
@@ -164,7 +168,7 @@ def test_non_price_sessions_are_rejected(finalized):
         c.execute("UPDATE minute_ingestion_session SET dataset='sector_index_minute' "
                   "WHERE session_id=%s", (h.sid,))
     with pytest.raises(SessionReopenRejected, match="가격 세션만"):
-        h.ledger.reopen_session(session_id=h.sid, window_starts=None)
+        h.ledger.reopen_session(session_id=h.sid, window_starts=None, today=TODAY)
     with h.connect(h.db) as c:
         c.execute("UPDATE minute_ingestion_session SET dataset='price_minute' WHERE session_id=%s",
                   (h.sid,))
@@ -181,7 +185,7 @@ def test_early_drain_keeps_reopened_windows_and_fails_qc_instead_of_sealing_miss
     from data_pipeline.minute.eod import SessionQc
 
     h = finalized
-    h.ledger.reopen_session(session_id=h.sid, window_starts=None)
+    h.ledger.reopen_session(session_id=h.sid, window_starts=None, today=TODAY)
     h.ledger.request_drain(session_id=h.sid, now=h.now)     # Worker 가 한 창도 안 받은 채
     assert h.worker().tick(h.now + timedelta(hours=1)) == "DRAINED"
     result = SessionQc(ledger=h.ledger, storage=h.storage).run(
@@ -191,7 +195,7 @@ def test_early_drain_keeps_reopened_windows_and_fails_qc_instead_of_sealing_miss
     assert [(r[1], r[2]) for r in _windows(h)] == [("DUE", 1), ("DUE", 1)]   # 옛 확정분 보존
 
     # FAILED 를 다시 열어 끝까지 받으면 정상 경로로 돌아온다
-    assert h.ledger.reopen_session(session_id=h.sid, window_starts=None)["reopened_windows"] == 2
+    assert h.ledger.reopen_session(session_id=h.sid, window_starts=None, today=TODAY)["reopened_windows"] == 2
     w = h.worker()
     assert w.tick(h.now + timedelta(hours=3)) == "PROCESSED"
     assert w.tick(h.now + timedelta(hours=3)) == "PROCESSED"
@@ -215,3 +219,21 @@ def test_never_committed_due_is_still_confirmed_missing(finalized):
         session_id=h.sid, now=h.now + timedelta(hours=2))
     assert result["missing_confirmed"] == 1
     assert [r[1] for r in _windows(h)] == ["VALID", "MISSING"]
+
+
+@pytest.mark.parametrize("today_offset", [0, -1])
+def test_today_or_future_session_is_rejected(finalized, today_offset):
+    """오늘(이후) 세션은 열지 않는다(봇 P1).
+
+    Worker 는 날짜만으로 소급 경로를 고른다(`session_date < 오늘`). 마감 뒤 오늘 세션을 열면
+    당일 TR 로 다시 받는데, 당일 TR 은 종가 단일가 봉을 세션 안에서 주지 않아(ALPHA-1128)
+    같은 단일가 전 값을 재커밋·재봉인한다 — 고친 줄 알지만 아무것도 안 바뀐다.
+    """
+    from data_pipeline.minute.repository import SessionReopenRejected
+
+    h = finalized
+    before = (_session(h), _windows(h))
+    with pytest.raises(SessionReopenRejected, match="지난 날짜"):
+        h.ledger.reopen_session(session_id=h.sid, window_starts=None,
+                                today=h.start.date() + timedelta(days=today_offset))
+    assert (_session(h), _windows(h)) == before

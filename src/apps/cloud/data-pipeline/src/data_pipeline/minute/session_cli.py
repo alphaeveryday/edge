@@ -236,7 +236,8 @@ def reopen_session_cli(settings, *, session_id: str | None, windows: str | None,
                     return 2
                 starts.append(datetime(day.year, day.month, day.day,
                                        int(hhmm[:2]), int(hhmm[2:]), tzinfo=KST))
-        result = ledger.reopen_session(session_id=session_id, window_starts=starts)
+        result = ledger.reopen_session(session_id=session_id, window_starts=starts,
+                                       today=datetime.now(KST).date())
     except SessionReopenRejected as error:
         logger.error("재오픈 거부: %s", error)
         return 1

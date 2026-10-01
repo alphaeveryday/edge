@@ -555,7 +555,7 @@ class MinuteLedger:
 
     # ── 재오픈 (ALPHA-1135) ────────────────────────────────────
     def reopen_session(
-        self, *, session_id: str, window_starts: Sequence[datetime] | None,
+        self, *, session_id: str, window_starts: Sequence[datetime] | None, today: date,
     ) -> dict:
         """FINALIZED(·FAILED) 가격 세션을 ACTIVE 로 되돌리고 지목한 창(None=전부)을 DUE 로 돌린다.
 
@@ -572,6 +572,9 @@ class MinuteLedger:
           fence 를 뺏고, QC 중이면 판정과 다툰다. FAILED 를 여는 이유: 재수집 도중 drain 이
           걸려 QC 가 "재오픈 미수집 창"으로 세운 세션을 다시 열어 마저 받아야 한다.
         - 지목한 창 중 원장에 없는 것이 있다 — 오타가 "일부만 열림"으로 조용히 접힌다.
+        - 세션 날짜가 `today`(KST) 이후다 — Worker 는 날짜로만 소급 경로를 고른다
+          (`is_backfill = session_date < 오늘`, worker.py). 오늘 세션을 열면 당일 TR 로 다시
+          받아 종가 단일가 없는 같은 값을 재봉인한다(봇 P1). 다음 날 연다.
 
         ⚠️ **fencing token 을 올린다** — 확정 전에 떠난 Worker 의 낡은 토큰으로 이 세션에
         다시 쓰지 못하게. ⚠️ `final_checksum`·`final_generation` 을 비운다 — 남겨 두면 QC
@@ -582,7 +585,7 @@ class MinuteLedger:
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT dataset, phase, final_checksum, final_generation
+                SELECT dataset, phase, final_checksum, final_generation, session_date
                 FROM minute_ingestion_session WHERE session_id = %s FOR UPDATE
                 """,
                 (session_id,),
@@ -590,13 +593,17 @@ class MinuteLedger:
             row = cur.fetchone()
             if row is None:
                 raise SessionReopenRejected(f"없는 세션이다: {session_id}")
-            dataset, phase, final_checksum, final_generation = row
+            dataset, phase, final_checksum, final_generation, session_date = row
             if dataset != DATASET_PRICE_MINUTE:
                 raise SessionReopenRejected(
                     f"가격 세션만 연다(소급 수집 경로가 가격뿐이다): {session_id} 는 {dataset}")
             if phase not in ("FINALIZED", "FAILED"):
                 raise SessionReopenRejected(
                     f"FINALIZED·FAILED 세션만 연다: {session_id} 는 {phase}")
+            if session_date >= today:
+                raise SessionReopenRejected(
+                    f"지난 날짜 세션만 연다(소급 TR 경로): {session_id} 는 {session_date}, "
+                    f"오늘 {today} — 다음 날 다시 실행하라")
             starts = None if window_starts is None else sorted(set(window_starts))
             cur.execute(
                 """

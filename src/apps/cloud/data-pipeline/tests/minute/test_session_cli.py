@@ -435,8 +435,9 @@ class TestReopen:
         def session_snapshot(self, *, session_id):
             return self.snapshot
 
-        def reopen_session(self, *, session_id, window_starts):
+        def reopen_session(self, *, session_id, window_starts, today):
             self.calls.append(window_starts)
+            self.today = today
             if self.reject:
                 raise self.reject
             return {"session_id": session_id, "reopened_windows": len(window_starts or [1, 2]),
@@ -463,6 +464,9 @@ class TestReopen:
             datetime(2026, 9, 29, 6, 29, tzinfo=timezone.utc),
             datetime(2026, 9, 29, 0, 0, tzinfo=timezone.utc)]
         assert all(s.utcoffset() == timedelta(hours=9) for s in starts)
+        # 오늘 = KST 날짜 — UTC 로 넘기면 00:00~09:00 KST 에 어제 세션을 "오늘"로 보고 거부한다
+        from data_pipeline.minute.models import KST
+        assert ledger.today == datetime.now(KST).date()
         out = json.loads(capsys.readouterr().out)
         assert out["reason"] == "ALPHA-1135 재수집"
         assert out["previous_final_checksum"] == "a" * 64
