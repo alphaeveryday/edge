@@ -21,12 +21,13 @@ interface Props {
   onClose: () => void;
   // 탐색에서 열 때의 투표 카드와 다음 ETF
   withVote?: boolean;
+  linkEtf?: boolean;
   next?: { code: string; name: string };
   onNext?: () => void;
 }
 
 // 화면을 거의 다 덮는 분석 상세 시트
-export function DailySheet({ code, daily: d, open, onClose, withVote, next, onNext }: Props) {
+export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, next, onNext }: Props) {
   const router = useRouter();
   const { top, bottom } = useSafeAreaInsets();
   const { data: etf } = useEtf(code);
@@ -45,11 +46,14 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, next, onNe
           <View style={styles.head}>
             <View style={styles.handle} />
             <View style={styles.headRow}>
-              {etf && <SectorIcon theme={etf.theme} bg={etf.logoBg} size={36} />}
-              <View style={styles.headMid}>
-                <Text numberOfLines={1} style={styles.headName}>{etf?.name}</Text>
-                {etf && <RowQuote price={etf.price} changePct={etf.changePct} />}
-              </View>
+              {/* ETF 이름을 누르면 상세의 오늘 움직임으로 */}
+              <Pressable disabled={!linkEtf} onPress={() => { onClose(); router.push(`/etf/${code}/summary`); }} style={styles.headLink}>
+                {etf && <SectorIcon theme={etf.theme} bg={etf.logoBg} size={36} />}
+                <View style={styles.headMid}>
+                  <Text numberOfLines={1} style={styles.headName}>{etf?.name}</Text>
+                  {etf && <RowQuote price={etf.price} changePct={etf.changePct} />}
+                </View>
+              </Pressable>
               {etf && <Sticker signal={etf.signal} />}
               <IconButton icon="close" size={32} color={colors.textFaint} onPress={onClose} />
             </View>
@@ -144,6 +148,7 @@ const styles = StyleSheet.create({
   head: { paddingTop: 10, paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: colors.surface },
   handle: { width: 38, height: 4, borderRadius: 999, backgroundColor: colors.line, alignSelf: 'center', marginBottom: 18 },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headLink: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
   headMid: { flex: 1, gap: 5, marginLeft: 4 },
   headName: { fontFamily: fam.bold, fontSize: 15, color: colors.text, letterSpacing: -0.3, lineHeight: 20 },
   title: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 29, letterSpacing: -0.6, color: colors.text },

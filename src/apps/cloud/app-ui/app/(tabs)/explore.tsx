@@ -67,6 +67,7 @@ export default function Explore() {
           open={!!cur}
           onClose={() => setSel(null)}
           withVote
+          linkEtf
           next={nextIdx === null ? undefined : { code: rows[nextIdx].etf.code, name: rows[nextIdx].etf.name }}
           onNext={nextIdx === null ? undefined : () => setSel(nextIdx)}
         />
