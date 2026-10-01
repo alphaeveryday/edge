@@ -88,6 +88,11 @@ data "aws_secretsmanager_secret" "app_api_mail" {
   name = "${local.prefix}-app-api/mail/password"
 }
 
+# 파이프라인 RDS 읽기 전용 롤(app_sync_ro) 비밀번호. 롤과 시크릿은 수동 선생성(ALPHA-1134)
+data "aws_secretsmanager_secret" "app_api_pipeline" {
+  name = "${local.prefix}-app-api/pipeline/password"
+}
+
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
 module "network" {
   source             = "../../modules/network"
@@ -884,16 +889,21 @@ module "app_api" {
     SPRING_MAIL_HOST     = "smtp.gmail.com"
     SPRING_MAIL_USERNAME = "asm.alphaeveryday@gmail.com"
     APP_MAIL_OPERATOR    = "asm.alphaeveryday@gmail.com"
+    # 파이프라인 RDS 읽기 동기화. URL 이 없으면 앱은 동기화를 돌리지 않는다
+    APP_PIPELINE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+    APP_PIPELINE_USERNAME = "app_sync_ro"
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
     APP_JWT_SECRET             = "${data.aws_secretsmanager_secret.app_api_jwt.arn}:secret::"
     SPRING_MAIL_PASSWORD       = "${data.aws_secretsmanager_secret.app_api_mail.arn}:secret::"
+    APP_PIPELINE_PASSWORD      = "${data.aws_secretsmanager_secret.app_api_pipeline.arn}:secret::"
   }
   secret_arns = [
     module.app_rds.master_user_secret_arn,
     data.aws_secretsmanager_secret.app_api_jwt.arn,
     data.aws_secretsmanager_secret.app_api_mail.arn,
+    data.aws_secretsmanager_secret.app_api_pipeline.arn,
   ]
 
   depends_on = [module.app_alb]
@@ -906,6 +916,15 @@ resource "aws_vpc_security_group_ingress_rule" "app_rds_from_app_api" {
   from_port                    = 5432
   to_port                      = 5432
   description                  = "app-api to postgres"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_app_api" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.app_api.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "app-api pipeline read sync to postgres"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "app_redis_from_app_api" {
