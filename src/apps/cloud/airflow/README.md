@@ -14,6 +14,7 @@
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
 | `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
+| `deploy/wait_rollout.sh` | `deploy-airflow` 의 서비스 교체 완료 판정(PRIMARY 가 새 리비전·COMPLETED 될 때까지 최대 10분, FAILED·롤백이면 실패) |
 | `deploy/compose.local.yaml` | 배포 이미지의 로컬 리허설(ECS 태스크와 같은 세 컨테이너·localhost 공유, 마이그레이션 선행) |
 | `verify/` | 실제 AWS 격리 검증 — `shim.py`(검증 태스크 진입점: 재생 입력·계수·장애), `Dockerfile`(배포된 업무 이미지 + shim), `run.py`(설정·trigger·증거 수집) |
 | `local/` | 로컬 비교 환경. ECS·SNS·SFN 대역, 배포된 ASL 해석기, 저장 입력 재생 |
