@@ -6,6 +6,9 @@ import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { dirSignal } from './dir';
 
+// 가장 긴 축 라벨(매크로) 기준 스티커 폭
+const STICKER_W = 72;
+
 interface Props {
   axis: Axis;
   dir: Dir;
@@ -19,7 +22,7 @@ export function FactorRow({ axis, dir, summary, hasPage, onSelect, onHint }: Pro
   return (
     <Pressable onPress={onSelect} style={({ pressed }) => [styles.row, pressed && hasPage && { opacity: 0.6 }]}>
       <Pressable onPress={onHint} hitSlop={4}>
-        <Sticker signal={dirSignal[dir]} size={30} radius={11} label={axis} />
+        <Sticker signal={dirSignal[dir]} size={30} radius={11} label={axis} minWidth={STICKER_W} />
       </Pressable>
       <Text style={styles.summary}>{summary}</Text>
       {hasPage && (

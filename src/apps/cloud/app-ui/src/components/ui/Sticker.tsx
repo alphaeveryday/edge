@@ -9,9 +9,10 @@ interface Props {
   radius?: number;
   showLabel?: boolean;
   label?: string;
+  minWidth?: number;
 }
 
-export function Sticker({ signal, size = 28, radius = 9, showLabel = true, label }: Props) {
+export function Sticker({ signal, size = 28, radius = 9, showLabel = true, label, minWidth = 44 }: Props) {
   const s = SIG[signal];
   // 기호 크기의 스티커 크기 비례, 기준 28
   const markSize = (size * (s.double ? 9 : 13)) / 28;
@@ -19,7 +20,7 @@ export function Sticker({ signal, size = 28, radius = 9, showLabel = true, label
     <View
       style={[
         styles.box,
-        { height: size, minWidth: showLabel ? 44 : size, width: showLabel ? undefined : size, paddingHorizontal: showLabel ? 9 : 0, borderRadius: radius, backgroundColor: s.bg, shadowColor: s.color },
+        { height: size, minWidth: showLabel ? minWidth : size, width: showLabel ? undefined : size, paddingHorizontal: showLabel ? 9 : 0, borderRadius: radius, backgroundColor: s.bg, shadowColor: s.color },
       ]}
     >
       <LinearGradient colors={['rgba(255,255,255,0.8)', 'rgba(255,255,255,0.42)']} start={{ x: 0, y: 0 }} end={{ x: 0.5, y: 1 }} style={[StyleSheet.absoluteFill, { borderRadius: radius }]} />
