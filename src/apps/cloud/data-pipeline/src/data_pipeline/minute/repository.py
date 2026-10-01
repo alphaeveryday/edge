@@ -640,8 +640,9 @@ class MinuteLedger:
           안전하다 — 되돌릴 수 없는 상태를 만들지 않는 대신 재진입을 연다.
         - `FAILED` — 불변식 위반으로 멈춘 자리다. 원인을 고친 뒤 다시 판정할 수 있어야 한다.
 
-        `FINALIZED` 는 자격이 없다(None) — 확정된 하루를 다시 열지 않는다. 정정이 필요하면
-        correction 경로가 새 세대를 만든다(v0.7 10.5).
+        `FINALIZED` 는 자격이 없다(None) — QC 가 확정된 하루를 다시 열지 않는다. 정정이 필요하면
+        `reopen_session`(ALPHA-1135)이 ACTIVE 로 되돌리고 재커밋이 새 세대를 만든 뒤 drain→QC
+        가 다시 봉인한다.
 
         ⚠️ **fencing token 을 올리고 돌려준다.** phase 만으로 CAS 하면 ABA 가 통과한다:
         실행 A 가 스냅샷을 뜬 뒤 멈추고, B 가 FAILED 로 바꾸고, C 가 다시 QC_RUNNING 으로

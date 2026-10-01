@@ -18,7 +18,8 @@ full-day reconciliation)는 벤더 실호출 경로가 필요해 별건이고, �
 실패했는지 복구가 실패했는지"가 한 exit code 로 뭉개진다.
 
 ⚠️ **되돌릴 수 없는 것을 만들지 않는다.** QC 는 쓰기가 전부 멱등이고(같은 입력 → 같은
-확정), `FINALIZED` 만이 단방향이다. 그래서 `QC_RUNNING`·`FAILED` 에서 **재진입을 연다** —
+확정), `FINALIZED` 만이 QC 안에서 단방향이다(되여는 것은 QC 가 아니라 운영자의
+`reopen-minute-session` 이다 — ALPHA-1135). 그래서 `QC_RUNNING`·`FAILED` 에서 **재진입을 연다** —
 QC 에는 lease 가 없어서, 중간에 죽은 실행을 막아 두면 그 세션은 누구도 끝낼 수 없다.
 
 ⚠️ **orphan 목록은 스냅샷이지 보증이 아니다.** S3 PUT 과 DB commit 은 한 트랜잭션이 아니라
