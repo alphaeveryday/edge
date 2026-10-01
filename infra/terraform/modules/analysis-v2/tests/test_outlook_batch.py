@@ -256,9 +256,26 @@ class OutlookBatchContract(unittest.TestCase):
         processor = processor_of(render())
         item = {'etf_code': '069500', 'analysis_at': AT, 'deadline': PAST, 'max_attempts': 2, 'attempt': 0,
                 'ran': False, 'analysis_id': identity('069500', 0)}
-        self.assertEqual(step(processor, 'WaitForSlot', item)['nextState'], 'CheckDeadline')
-        self.assertEqual(step(processor, 'CheckDeadline', item)['nextState'], 'DeadlineExceeded')
-        self.assertEqual(step(processor, 'CheckDeadlineWaiting', item)['nextState'], 'DeadlineExceeded')
+        self.assertEqual(step(processor, 'WaitForSlot', item)['nextState'], 'StillTimeToWait')
+        self.assertEqual(step(processor, 'StillTimeToWait', item)['nextState'], 'DeadlineExceeded')
+
+    def test_deadline_is_judged_right_before_start_and_after_rereading_status(self):
+        """마감 판정은 시작 직전에 한다(Gate 재시도로 흐른 시간 포함). 남의 실행을 기다린 뒤에는
+        상태를 먼저 다시 읽는다 — 기다리는 사이 마감 전에 발행된 결과를 미완료로 세지 않기 위해서다."""
+        processor = processor_of(render())
+        item = {'etf_code': '069500', 'analysis_at': AT, 'deadline': PAST, 'max_attempts': 2, 'attempt': 0,
+                'ran': False, 'analysis_id': identity('069500', 0), 'gate': {'busy': 0}}
+        self.assertEqual(step(processor, 'GateOpen', item)['nextState'], 'StillTimeToRun')
+        self.assertEqual(step(processor, 'StillTimeToRun', item)['nextState'], 'DeadlineExceeded')
+        self.assertEqual(step(processor, 'StillTimeToRun', item | {'deadline': FUTURE})['nextState'], 'Run')
+        self.assertEqual(step(processor, 'WaitForOther', item)['nextState'], 'ReadStatus')
+        self.assertEqual(step(processor, 'StillRunning', item)['nextState'], 'DeadlineExceeded')
+        self.assertEqual(step(processor, 'StillRunning', item | {'deadline': FUTURE})['nextState'], 'WaitForOther')
+
+    def test_items_run_one_at_a_time(self):
+        """동시 1건은 Map 설정으로도 고정한다 — writer 역할 연결 한도 5, 워커는 건당 3개(README 기준 측정).
+        run_batch 가 항목을 순차로 걷는 것은 이 값이 1일 때만 실제와 같다."""
+        self.assertEqual(render()['States']['RunItems']['MaxConcurrency'], 1)
 
     def test_publication_after_deadline_is_late_not_completed(self):
         """마감 뒤에 저장된 결과는 완료로 세지 않고 드러낸다."""
@@ -283,6 +300,13 @@ class OutlookBatchContract(unittest.TestCase):
         for bad in ({'analysis_at': '2026-10-02T03:00:00+09:00'}, {}, {'analysis_at': AT, 'etf_codes': []}):
             state, out = run_batch(World(), bad)
             self.assertEqual((state, out['error']), ('InvalidInput', 'OutlookBatch.InvalidInput'), bad)
+
+    def test_malformed_limits_are_rejected_before_any_run(self):
+        """시도 상한·마감이 잘못되면 한 건도 시작하지 않는다 — 형식이 틀린 마감은 시각 비교가 조용히 거짓이 된다."""
+        for bad in ({'max_attempts': 0}, {'max_attempts': '2'}, {'deadline': '08:00'}):
+            world = World()
+            state, out = run_batch(world, {'analysis_at': AT, 'deadline': FUTURE} | bad)
+            self.assertEqual((state, out['error'], world.runs), ('InvalidInput', 'OutlookBatch.InvalidInput', []), bad)
 
 
 if __name__ == '__main__':

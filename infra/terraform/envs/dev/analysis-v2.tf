@@ -1,9 +1,11 @@
 # 전망 배치 대상은 수집 설정의 국내 ETF 목록 그대로다(손으로 옮겨 적지 않는다). 목록이 바뀌면
 # terraform-plan·apply 가 이 파일 경로로도 깨어난다(워크플로 paths).
+# 절 안의 **모든** 키를 잡는다(들여쓰기·따옴표 유무 무관) — 6자리 코드가 아닌 키는 모듈의
+# precondition 이 plan 을 실패시킨다. 형식이 달라진 줄을 조용히 빼고 성공하지 않기 위해서다.
 locals {
   sources_toml      = file("${path.module}/../../../../src/apps/cloud/data-pipeline/src/data_pipeline/config/sources.toml")
   etf_map_section   = split("\n[", split("[krx_etf.source.etf_map]\n", local.sources_toml)[1])[0]
-  outlook_etf_codes = [for match in regexall("(?m)^\"([0-9A-Z]{6})\"\\s*=", local.etf_map_section) : match[0]]
+  outlook_etf_codes = [for match in regexall("(?m)^[ \\t]*\"?([^\"=#\\s]+)\"?[ \\t]*=", local.etf_map_section) : match[0]]
 }
 
 module "analysis_v2" {

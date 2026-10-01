@@ -13,7 +13,7 @@ cd tests/loadtest/analysis-v2/local
 EDGE_REPO=<저장소 루트> docker compose -p v2probe up -d postgres
 EDGE_REPO=<저장소 루트> docker compose -p v2probe --profile migration run --rm flyway migrate
 uv run --python 3.12 --with 'psycopg[binary]>=3.1' --with claude-agent-sdk==0.2.160 --with 'PyYAML>=6' --with 'jsonschema>=4' --with boto3 python probe.py sweep --kind outlook --c 2 --llm 6
-uv run ... python probe.py scenarios
+uv run --python 3.12 --with 'psycopg[binary]>=3.1' --with claude-agent-sdk==0.2.160 --with 'PyYAML>=6' --with 'jsonschema>=4' --with boto3 python probe.py scenarios
 docker compose -p v2probe down
 ```
 
@@ -94,7 +94,7 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 | 단계 | 상태 | 근거 |
 |---|---|---|
 | 정의 문법 | 통과 | AWS `ValidateStateMachineDefinition` |
-| 계약 테스트(대역) | 15건 통과, 변이 8건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
+| 계약 테스트(대역) | 18건 통과, 변이 12건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
 | Terraform | `validate` 통과 | 37종 목록이 `sources.toml` 파싱 결과와 순서까지 일치(해시 동일) |
 | dev 소량 통합 | 대기 | 배포 뒤 |
 | dev 37종 전체 실측 | 대기 | 배포 뒤 |

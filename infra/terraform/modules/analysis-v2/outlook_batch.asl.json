@@ -23,7 +23,9 @@
             { "Variable": "$.analysis_at", "IsPresent": true },
             { "Variable": "$.analysis_at", "IsTimestamp": true },
             { "Variable": "$.analysis_at", "StringMatches": "*Z" },
-            { "Variable": "$.etf_codes[0]", "IsPresent": true }
+            { "Variable": "$.etf_codes[0]", "IsPresent": true },
+            { "Variable": "$.max_attempts", "IsNumeric": true },
+            { "Variable": "$.max_attempts", "NumericGreaterThanEquals": 1 }
           ],
           "Next": "HasDeadline"
         }
@@ -33,11 +35,17 @@
     "InvalidInput": {
       "Type": "Fail",
       "Error": "OutlookBatch.InvalidInput",
-      "Cause": "analysis_at 은 Z 로 끝나는 UTC 시각이어야 하고(분석 ID 가 이 문자열에서 나온다) etf_codes 는 비어 있으면 안 된다"
+      "Cause": "analysis_at 은 Z 로 끝나는 UTC 시각(분석 ID 가 이 문자열에서 나온다), etf_codes 는 비어 있지 않은 목록, max_attempts 는 1 이상의 수, deadline 은 주면 시각이어야 한다"
     },
     "HasDeadline": {
       "Type": "Choice",
-      "Choices": [{ "Variable": "$.deadline", "IsPresent": true, "Next": "GivenDeadline" }],
+      "Choices": [
+        {
+          "And": [{ "Variable": "$.deadline", "IsPresent": true }, { "Variable": "$.deadline", "IsTimestamp": true }],
+          "Next": "GivenDeadline"
+        },
+        { "Variable": "$.deadline", "IsPresent": true, "Next": "InvalidInput" }
+      ],
       "Default": "DeriveDeadline"
     },
     "GivenDeadline": {
@@ -112,21 +120,14 @@
             "Choices": [
               { "Variable": "$.status.value", "StringEquals": "completed", "Next": "ReadPublication" },
               { "Variable": "$.status.value", "StringEquals": "failed", "Next": "NextAttempt" },
-              { "Variable": "$.status.value", "StringEquals": "queued", "Next": "WaitForOther" },
-              { "Variable": "$.status.value", "StringEquals": "running", "Next": "WaitForOther" }
+              { "Variable": "$.status.value", "StringEquals": "queued", "Next": "StillRunning" },
+              { "Variable": "$.status.value", "StringEquals": "running", "Next": "StillRunning" }
             ],
             "Default": "Unknown"
           },
           "Unstarted": {
             "Type": "Choice",
             "Choices": [{ "Variable": "$.ran", "BooleanEquals": true, "Next": "NextAttempt" }],
-            "Default": "CheckDeadline"
-          },
-          "CheckDeadline": {
-            "Type": "Choice",
-            "Choices": [
-              { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
-            ],
             "Default": "Gate"
           },
           "Gate": {
@@ -146,9 +147,23 @@
           "GateOpen": {
             "Type": "Choice",
             "Choices": [{ "Variable": "$.gate.busy", "NumericGreaterThan": 0, "Next": "WaitForSlot" }],
+            "Default": "StillTimeToRun"
+          },
+          "WaitForSlot": { "Type": "Wait", "Seconds": 30, "Next": "StillTimeToWait" },
+          "StillTimeToWait": {
+            "Type": "Choice",
+            "Choices": [
+              { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
+            ],
+            "Default": "Gate"
+          },
+          "StillTimeToRun": {
+            "Type": "Choice",
+            "Choices": [
+              { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
+            ],
             "Default": "Run"
           },
-          "WaitForSlot": { "Type": "Wait", "Seconds": 30, "Next": "CheckDeadline" },
           "Run": {
             "Type": "Task",
             "Resource": "arn:aws:states:::states:startExecution.sync:2",
@@ -168,14 +183,14 @@
             "Next": "MarkRan"
           },
           "MarkRan": { "Type": "Pass", "Result": true, "ResultPath": "$.ran", "Next": "ReadStatus" },
-          "WaitForOther": { "Type": "Wait", "Seconds": 30, "Next": "CheckDeadlineWaiting" },
-          "CheckDeadlineWaiting": {
+          "StillRunning": {
             "Type": "Choice",
             "Choices": [
               { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
             ],
-            "Default": "ReadStatus"
+            "Default": "WaitForOther"
           },
+          "WaitForOther": { "Type": "Wait", "Seconds": 30, "Next": "ReadStatus" },
           "NextAttempt": {
             "Type": "Pass",
             "Parameters": {
