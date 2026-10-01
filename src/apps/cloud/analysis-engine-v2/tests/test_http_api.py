@@ -137,6 +137,15 @@ def test_screen_body_preserves_contract_without_transport_wrapper(api):
     assert result['headers']['X-Analysis-Id']==REQUEST['analysis_id']
 
 
+def test_completed_without_publication_never_returns_invalid_screen(api):
+    api.publications.rows['a'*32]=row(kind='movement',published_at=None)
+    status=api.handle(event('GET','/v2/analyses/movement/'+('a'*32)))
+    assert json.loads(status['body'])['status']=='completed'
+    result=api.handle(event('GET','/v2/analyses/movement/'+('a'*32)+'/screens/all'))
+    assert result['statusCode']==404
+    assert json.loads(result['body'])['error']['code']=='NOT_PUBLISHED'
+
+
 def test_latest_ignores_new_running_failed_and_synthetic_rows(api):
     api.publications.rows['a'*32]=row()
     for n,status,source in [('b','running','database'),('c','failed','database'),('d','completed','synthetic')]:

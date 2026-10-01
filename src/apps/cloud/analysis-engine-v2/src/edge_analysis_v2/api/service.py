@@ -177,6 +177,9 @@ class AnalysisAPI:
         state=self.status(kind,identity)
         if state['status']!='completed':
             raise APIError(409,'RESULT_NOT_READY','Analysis has not completed; read its status.')
+        row=self.publications.find(identity)
+        if row is None or row['published_at'] is None:
+            raise APIError(404,'NOT_PUBLISHED','Analysis completed without publishing a screen.')
         result=self.publications.screen(kind,identity,feature)
         if result is None:
             raise APIError(404,'NOT_FOUND','Screen not found.')
