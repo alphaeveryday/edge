@@ -3,21 +3,23 @@ import { StyleSheet, Text, View } from 'react-native';
 import { api } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
+import { useSession } from '@/store/session';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const LINES = [
   'ETF Orca의 분석은 공개된 뉴스·공시·리포트를 AI가 정리한 참고 자료예요.',
   '매수·매도 권유가 아니며, 투자 판단과 책임은 이용자 본인에게 있어요.',
-  '분석은 매일 새벽 갱신되고, 장중 변동은 반영되지 않을 수 있어요.',
+  '전망은 매일 장 시작 전에, 가격 변동 설명은 가격이 움직일 때 갱신돼요.',
 ];
 
-// AI 분석 첫 진입 시 한 번 받는 면책 동의
+// AI 분석 첫 진입 시 한 번 받는 면책 동의. 회원은 서버, 비회원은 기기에 기록
 export function DisclaimerSheet() {
   const qc = useQueryClient();
   const { data: me } = useMe();
   const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
-  const open = !!me && !me.disclaimerAcceptedAt;
+  const { loggedIn, restored, guestDisclaimed, acceptGuestDisclaimer } = useSession();
+  const open = loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed;
   return (
     <BottomSheet open={open} onClose={() => {}}>
       <SheetHead title="투자 유의 사항" sub="AI 분석을 보기 전에 한 번만 확인해 주세요." />
@@ -30,7 +32,7 @@ export function DisclaimerSheet() {
         ))}
       </View>
       <View style={{ marginTop: 20 }}>
-        <CtaButton label="확인했어요" tone="dark" onPress={() => accept.mutate()} />
+        <CtaButton label="확인했어요" tone="dark" onPress={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())} />
       </View>
     </BottomSheet>
   );
