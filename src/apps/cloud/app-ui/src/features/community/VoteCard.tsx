@@ -39,7 +39,7 @@ export function VoteCard({ stat, onGate }: { stat: VoteStat; onGate?: () => void
             <Pressable
               key={m.k}
               onPress={() => requireLogin('투표', () => vote.mutate(m.k), onGate)}
-              style={({ pressed }) => [styles.btn, voted ? { backgroundColor: on ? m.c : colors.white, borderWidth: 1.5, borderColor: on ? m.c : colors.line } : { backgroundColor: m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
+              style={({ pressed }) => [styles.btn, voted ? { backgroundColor: on ? m.c : colors.white, borderWidth: 1, borderColor: on ? m.c : colors.lineStrong } : { backgroundColor: m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
             >
               <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.btnText, { color: voted && on ? colors.white : m.c }]}>
                 {m.label}{voted && <Text style={styles.btnPct}> {stat.pct[m.k]}%</Text>}
