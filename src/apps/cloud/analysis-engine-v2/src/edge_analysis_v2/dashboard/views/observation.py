@@ -28,6 +28,13 @@ def render_observation(detail, level):
     esc = lambda value: html.escape(str(value))
     parts = ['<h2>에이전트 관측 · ' + {'summary':'요약', 'calls':'툴 호출 상세', 'raw':'원문'}[level] + '</h2>',
              '<p class="muted">저장된 SDK 이벤트를 표시합니다. 없는 기록은 추정하지 않습니다.</p>']
+    job=detail['job']
+    if job.get('origin')=='cloud':
+        parts.append('<p>클라우드 실행: '+esc(job.get('workflow_status','확인 중'))
+                     +' · 관측 기록: '+esc(job.get('observation_status','수신 중'))+'</p>')
+        for key in ('error','observation_error'):
+            if job.get(key):
+                parts.append('<p class="error">'+esc(job[key])+'</p>')
     if invalid:
         parts.append('<p class="error">읽지 못한 이벤트 ' + str(invalid) + '줄 · 작성 중인 마지막 줄 또는 손상된 기록입니다. 원문에서 확인하세요.</p>')
     if level == 'raw':

@@ -222,8 +222,9 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                 if path in ('/', '/review'):
                     template = 'index.html'
                     return self.reply(200, (Path(__file__).parent/'static'/template).read_text(encoding='utf-8'), True)
-                if path == '/assets/prompt-manager.js':
-                    data = (Path(__file__).parent/'static'/'prompts.js').read_bytes()
+                if path in ('/assets/prompt-manager.js','/assets/cloud-controls.js'):
+                    name = 'prompts.js' if path.endswith('prompt-manager.js') else 'cloud-controls.js'
+                    data = (Path(__file__).parent/'static'/name).read_bytes()
                     self.send_response(200)
                     self.send_header('Content-Type','text/javascript; charset=utf-8')
                     self.send_header('Content-Length',str(len(data)))
@@ -235,11 +236,14 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                     return self.reply(200, reader())
                 if path == '/api/execution':
                     return self.reply(200, {'enabled':execution is not None,
+                        'mode':getattr(execution,'mode','local'),
                         'csrf_token':execution.csrf_token if execution else None,
                         'scenarios':[{'id':name,'label':label,'movement_at':scenario_cutoff('movement',name),
-                                      'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()]})
+                                      'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()] if getattr(execution,'mode','local')!='cloud' else []})
                 if path == '/api/jobs':
                     return self.reply(200, execution.jobs() if execution else [])
+                if path == '/api/cloud-sync' and getattr(execution,'mode',None)=='cloud':
+                    return self.reply(200, execution.sync_status)
                 fields = path.strip('/').split('/')
                 if len(fields) == 5 and fields[:2] == ['api','prompts'] and fields[2] in ('outlook','movement') and fields[3] == 'compare' and prompt_versions:
                     try:
@@ -318,7 +322,8 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                 length = int(self.headers.get('Content-Length','0'))
                 if not 0 < length <= (1048576 if is_prompt else 4096) or self.headers.get('Content-Type') != 'application/json':
                     return self.reply(400,{'error':'Small JSON request required'})
-                body = json.loads(self.rfile.read(length))
+                from edge_analysis_v2.cloud.contract import decode_json
+                body = decode_json(self.rfile.read(length))
                 if is_prompt:
                     if not isinstance(body, dict):
                         raise ValueError('JSON 객체를 입력하세요.')
