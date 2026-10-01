@@ -866,6 +866,23 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - 정해진 것: 키 env 이름(설정 로더 `DATA_PIPELINE_` + `__` 중첩), 기본 대상 ETF `091160`(`sources.toml` `[source_observations].etf_ids`), DAG 슬롯 매일 09:10 KST(주말 포함).
 - 키 값은 명령·로그·문서·PR 에 쓰지 않는다 — 태스크 정의의 시크릿 주입만.
 
+**FRED 교체·실행 환경 PR 의 배포 시점(2026-10-01 조사 — 머지 전 판단 근거):**
+
+| 단계 | 바뀌는 것 | 판단 |
+|---|---|---|
+| #1038 스키마 | schema-migrate → dev RDS `macro_observation` CHECK 교체(0행, `lock_timeout 3s`). 이미지·서비스·IAM 불변 | **장중 가능**. 공유 RDS 부하는 연결 1개·짧은 잠금뿐 |
+| #1039 FRED 코드 | deploy-data-pipeline → 이미지 push(`data-pipeline-latest` 이동) + 분 상주 9개 중 desired>0 순차 재기동(서비스당 ~3분, 전체 ~30분). 태스크 정의·IAM·DB 불변 | **장외 권장**(아래) |
+| #1036 macro 배선 | terraform-apply(`macro` task-def 신규·실행 역할 시크릿 정책·SFN 정책 — 추가만) + **deploy-data-pipeline 재실행**(카탈로그 주석·테스트 경로) | **장외 권장**, #1039 이미지가 돈 **뒤**(아니면 macro 태스크 ConfigError) |
+| #1037 RunTask 허용 | terraform-apply(Airflow 태스크 역할 정책 — 추가만) | 장중 가능, **Airflow 검증 창(16:30~23:30)만 피한다** |
+
+- **재배포 방식(실측)**: `MINUTE_SERVICES_DEPLOYED=true`, 9개 모두 minimumHealthy 100%·maximum 200%·헬스체크 없음·`stopTimeout` 120초 → 새 태스크가 RUNNING 되면 옛 태스크에 SIGTERM, 120초 뒤 SIGKILL. 세션 밖(평일 16:10~07:45·주말)은 desired 0 이라 재기동이 생략되고 이미지만 바뀐다.
+- **종료 계약(코드)**: 9개 모두 SIGTERM 에 새 claim 을 멈추고 진행 중 tick 을 끝낸 뒤 세션 fence 를 반납한다(테스트 `test_sigterm_stops_without_new_claim`·`test_sigterm_releases_lease_for_immediate_takeover` 등 23개 dev 에서 통과). fence·claim token 은 **DB 쓰기만** 막는다 — KIS·DART·LLM 호출과 S3 쓰기는 commit 전에 일어나 막지 않는다(S3 는 내용 해시 키·IfNoneMatch 라 고아 객체만 남는다).
+- **왜 장외인가**: price-worker 의 lease 근거는 "window 하나 75초"인데(검증기 주석상 하한 가드지 상한 아님), **10-01 실측 수집은 window 당 p50 112초·p90 183초**다. 그러면 ① tick 이 120초를 넘겨 SIGKILL 될 수 있고, 그 tick 의 window 는 lease(≤300초) 만료 뒤에야 재수집된다 ② tick 이 세션 lease(300초)를 넘기면 새 태스크가 fence 를 얻은 뒤에도 옛 태스크가 KIS 를 계속 불러, 프로세스별 간격(12.5 req/s ×2)이 앱키 한도(20/s)를 넘을 수 있다 — 공유 예산(ADR-0055)은 꺼져 있다. 중복 호출을 세는 로그가 없어 ②의 실제 발생 여부는 **미확인**이다.
+- **과거 장중 재배포 4회(실측)**: 09-09 11:04·14:01, 09-17 13:00, 09-29 14:08(가격 워커 교체 시각). 가격 window 는 전부 VALID·결손 단위 0, 영향은 09-09 오전 2 window 가 2차 시도로 ~400초 늦은 정도. 09-17 은 교체 전부터 ~11분 밀려 있어 교체 영향을 분리할 수 없다. 업종·iNAV(재수집 불가 레인)는 4회 모두 결손 0(09-09 오후 iNAV INCOMPLETE 1 window 는 그날 평소 3건과 구분 불가). **ECS COMPLETED 가 아니라 window 상태로 본 결과**지만, 그때는 수집이 75초 가정 안이었다 — 오늘 조건의 근거는 아니다.
+- **Airflow 검증과의 공유 지점**: 검증 이미지는 빌드 시점의 data-pipeline 다이제스트를 BASE 로 고정한다 → 빌드 직전 배포는 검증 대상을 바꾼다. 검증 중단 기준에 공유 RDS 지표와 "창 안 업무 SFN FAILED 1건"(19:30 공시 SFN 은 `data-pipeline-latest` 를 당긴다)이 있다. 그래서 이미지·terraform 을 바꾸는 #1039·#1036·#1037 은 검증 창(16:30~23:30)과 빌드 직전을 피한다. #1038 은 그 지점을 건드리지 않는다.
+- **권장 순서·시점**: #1038(언제든) → 검증 종료(23:30) 뒤 장외 창 **23:30~00:00 또는 00:40~06:30**(00:10 뉴스·07:00 premarket SFN 앞뒤 ±20분 회피 — SFN 도중 mutable 태그가 바뀌면 한 run 안에서 이미지가 섞인다)에 #1039 → 배포·다음 reconcile 확인 → #1036 → #1037. 쌓인 PR 이동 절차는 `docs/git-conventions.md`.
+- **제안(미적용)**: deploy-data-pipeline 에 deploy-airflow 와 같은 평일 장중 차단(`allow_market_hours` 수동 허용)을 넣는 최소 수정. 지금은 장중 머지가 곧 장중 재기동이다.
+
 **첫 수동 실행 인수인계(활성화 전, dev — 아직 실행하지 않았다):**
 - **전제(환경 담당 확인 필요)**: ALPHA-1119 small·1408 검증이 끝나고 채택된 뒤. 그 검증은 장중 수급 **단일 배치**라 source_daily 까지 검증한 것이 아니다 — 이 DAG 를 올린 뒤 dag-processor 파싱 메모리와 첫 수동 실행의 호스트·태스크 메모리를 따로 본다.
 - **호출 상한(강제)**: 첫 실행은 DAG 가 아니라 아래 "단건 실행" CLI(같은 이미지, `macro`·`dart` 태스크 정의로 ECS 단건 실행)로 한다. DAG 에는 계열·대상 제한 인자가 없어 수동 trigger 는 매크로 5계열·구성종목 전체를 부른다. 매크로는 `--series` 로 1~2계열로 줄인다. 재무는 ETF 하나(`DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'`)와 하루짜리 접수일 창(`--from`=`--to`)으로 줄인다. 이렇게 해도 목록 호출은 그 ETF의 구성종목 수만큼 나간다(종목 단위 제한 인자는 없다). 공급자 호출 수는 원장·수집 로그 `counts` 로 대조한다. DAG 수동 trigger 는 두 번째 실행부터다.
