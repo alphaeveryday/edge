@@ -835,11 +835,11 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - 로컬 검증: DAG 계약(`tests/test_source_daily_dag.py`, 공식 이미지), DAG 명령 그대로의 원장 통합(`data-pipeline/tests/e2e/test_source_daily_lane_pg.py` — plan-run → 9스텝 → reconcile, 실 PostgreSQL·가짜 공급자 HTTP).
 
 **활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
-1. `macro` 태스크 정의(`edge-{env}-data-pipeline-macro`): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
-   `DATA_PIPELINE_PRICE__SOURCE__API_KEY`(기존 FMP 시크릿 — 미국채 10y 만)·`DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY`(신규 시크릿 셋 — ECOS 는 USD/KRW·국고채. 세 키 모두 **발급 완료(2026-09-30), 운영 시크릿 연결은 미완료** — 값은 문서·PR 에 쓰지 않는다). 배포 뒤 카탈로그 `MACRO_COLLECTION.instrumented` 를 True 로 올린다(배선이 플래그보다 한 배포 앞선다).
+1. `macro` 태스크 정의(**이름 제안** `edge-{env}-data-pipeline-macro` = data-pipeline 모듈 `aws_ecs_task_definition.this["macro"]` — 미생성·미결정): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
+   `DATA_PIPELINE_PRICE__SOURCE__API_KEY`(기존 FMP 시크릿 — 미국채 10y 만)·`DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY`(신규 시크릿 셋 — **이름 제안** `edge-{env}-data-pipeline/{ecos,kosis,eia}/api-key`, 2026-10-01 조회 시 없음. FMP 는 기존 `edge-dev-data-pipeline/fmp/api-key`(지금 `fmp` 태스크 정의에만 붙어 있다). ECOS 는 USD/KRW·국고채. 세 키 모두 **발급 완료(2026-09-30), 운영 시크릿 연결은 미완료** — 값은 문서·PR 에 쓰지 않는다). 카탈로그 `MACRO_COLLECTION.instrumented` 전환 순서: ① 인프라 PR 로 `macro` 태스크 정의(DB env + 키 env)를 `tasks.tf` 에 넣고 apply ② 그 뒤 코드 PR 로 플래그를 True — `test_instrumented_entries_have_db_env_in_taskdef` 가 `tasks.tf` 에 DB env 가 없으면 실패시킨다(순서를 코드가 막는다). 지금은 False.
 2. `bigkinds`·`dart`·`rds`·`ops` 태스크 정의는 기존 것을 쓴다(DART 키는 기존 `dart` 에 있다, 업종 마스터는 키가 없다). 새 이미지 배포가 필요하다(새 CLI 스텝·설정 섹션). **⚠️ Airflow 태스크 역할의 RunTask 허용 목록**(`infra/terraform/envs/dev/main.tf` `batch_task_definition_families`)에 지금 `kis`·`bigkinds`·`rds`·`ops` 만 있다 — `dart`(재무 수집)와 새 `macro` family 를 더하지 않으면 `financial_collect`·`macro_collect` 가 `AccessDeniedException` 으로 시작도 못 한다(Codex 봇 P1, 2026-09-30 확인). 활성화 전 필수, 인프라 PR 은 Airflow 담당.
 3. 주기 결측 판정을 켜려면 `ops` 태스크 정의(주기 reconcile)에 `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true`. 없으면 이 레인은 PLANNER_MISSING 판정 대상이 아니다(안전 기본값).
-4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다(미확인).
+4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다. 2026-10-01 네트워크 층 확인: 업무 태스크 SG(`sg-047705118179af733`) egress 전체 허용, 서브넷 기본 경로 NAT — 호스트 차단 규칙은 보이지 않는다. **실제 도달은 첫 단건 실행에서 확인**(Airflow RunTask 가 다른 SG 를 쓰면 그 SG 도 본다). 호스트는 설정 기본값(`config/models.py` `*_base_url`)과 같다.
 5. 마이그레이션 `V202609301200` — **적용 완료(2026-09-30 17:04 KST, #1003 머지 `86743919`, schema-migrate success)**. dev RDS 실측: `flyway_schema_history` 202609301200 success, 테이블 4 존재, 함수 5 모두 `SECURITY DEFINER`·`search_path=public, pg_temp`·소유자 `edge`·`edge_analysis_v2_writer` EXECUTE·PUBLIC EXECUTE 없음, writer 의 테이블 권한 없음. 코드 PR(#1010~#1013·이 PR)은 그 뒤 머지한다(스키마는 테이블 4·조회 함수 5·writer EXECUTE 부여 — 확장 단계만). 구 스키마 위에서 새 이미지가 돌면 `load-*` 만 실패(exit 1)하고 raw·artifact 는 남아 `--all` 로 이어 싣는다. 새 스키마 위의 기존 코드는 영향 없다(추가 객체뿐 — CI e2e 전체가 새 스키마 위에서 돈다).
 6. USD/KRW 도 ECOS 다(FMP USDKRW 는 현재 구독에서 402) — `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY` 없이는 매크로 5계열 중 국채 10y(FMP)만 온다. ECOS 샘플 키는 10건 상한이라 운영 키가 필요하다.
 
@@ -849,11 +849,16 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - Airflow: `edge/airflow:dc11b7c5…` 이미지는 **빌드·푸시만** 됐다. 서비스가 desired 0 이라 deploy-airflow 가 태스크 정의 등록·서비스 교체를 건너뛰었다(서비스 태스크 정의 `edge-dev-airflow:10` = 옛 이미지 `7bb0c196`). 즉 **`edge_source_daily` DAG 는 아직 Airflow 에 올라가지 않았다.** 서비스를 다음에 dev 이미지로 켜면 그때 pause 상태로 등록된다(`is_paused_upon_creation`) — 그 뒤 dag-processor 가 DAG 하나를 더 파싱한다.
 - 새 수집 경로: `macro` 태스크 정의 없음, SFN·스케줄러 어디에도 새 CLI 스텝·`source-daily` 레인 참조 없음(10-01 조회), RunTask 허용 목록 미변경 — 실제 공급자 호출·적재는 한 번도 하지 않았다.
 
+**자리표시자·미결정 값(첫 실행 전에 정한다):** `<…>` 는 채워 넣을 값이다. `R`(run_id)·날짜·계열·ETF 코드는 **예시**다.
+- 미결정: `macro` 태스크 정의 이름·시크릿 이름(위 1 의 제안), 첫 실행 대상(매크로 계열·재무 ETF·접수일)과 실행 시각, 첫 실행에 쓸 이미지 태그(아래 "이미지").
+- 정해진 것: 키 env 이름(설정 로더 `DATA_PIPELINE_` + `__` 중첩), 기본 대상 ETF `091160`(`sources.toml` `[source_observations].etf_ids`), DAG 슬롯 매일 09:10 KST(주말 포함).
+- 키 값은 명령·로그·문서·PR 에 쓰지 않는다 — 태스크 정의의 시크릿 주입만.
+
 **첫 수동 실행 인수인계(활성화 전, dev — 아직 실행하지 않았다):**
 - **전제(환경 담당 확인 필요)**: ALPHA-1119 small·1408 검증이 끝나고 채택된 뒤. 그 검증은 장중 수급 **단일 배치**라 source_daily 까지 검증한 것이 아니다 — 이 DAG 를 올린 뒤 dag-processor 파싱 메모리와 첫 수동 실행의 호스트·태스크 메모리를 따로 본다.
-- **호출 상한(강제)**: 첫 실행은 DAG 가 아니라 아래 "단건 재현" CLI(같은 이미지, `macro`·`dart` 태스크 정의로 ECS 단건 실행)로 한다. DAG 에는 계열·대상 제한 인자가 없어 수동 trigger 는 매크로 5계열·구성종목 전체를 부른다. 매크로는 `--series` 로 1~2계열로 줄인다. 재무는 ETF 하나(`DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'`)와 하루짜리 접수일 창(`--from`=`--to`)으로 줄인다. 이렇게 해도 목록 호출은 그 ETF의 구성종목 수만큼 나간다(종목 단위 제한 인자는 없다). 공급자 호출 수는 원장·수집 로그 `counts` 로 대조한다. DAG 수동 trigger 는 두 번째 실행부터다.
+- **호출 상한(강제)**: 첫 실행은 DAG 가 아니라 아래 "단건 실행" CLI(같은 이미지, `macro`·`dart` 태스크 정의로 ECS 단건 실행)로 한다. DAG 에는 계열·대상 제한 인자가 없어 수동 trigger 는 매크로 5계열·구성종목 전체를 부른다. 매크로는 `--series` 로 1~2계열로 줄인다. 재무는 ETF 하나(`DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'`)와 하루짜리 접수일 창(`--from`=`--to`)으로 줄인다. 이렇게 해도 목록 호출은 그 ETF의 구성종목 수만큼 나간다(종목 단위 제한 인자는 없다). 공급자 호출 수는 원장·수집 로그 `counts` 로 대조한다. DAG 수동 trigger 는 두 번째 실행부터다.
 - **이미지**: `edge/pipeline:dc11b7c52a2a5efa9e0638703a006aadd06e877f`(원천 관측 코드 #1010~#1013 + Airflow 계획 경로 #1015 모두 포함, `GIT_SHA` 가 이미지에 구워져 있다 — taskdef 에 따로 넣지 않는다). 태스크 정의는 태그를 고정해 쓰면 첫 실행 재현이 쉽다(`data-pipeline-latest` 는 다음 머지로 바뀐다). 첫 실행의 raw manifest `code_version` 이 `dc11b7c5…` 인지 확인한다(`unknown` 이면 옛 이미지). 카탈로그 `MACRO_COLLECTION.instrumented=True` 전환 조건: `macro` taskdef 가 있고 ECOS·KOSIS·EIA 키 env 가 그 taskdef 에 들어간 배포 **뒤**의 이미지에서 플래그를 올린다(플래그가 먼저 가면 Reconciler 가 없는 시도를 결손으로 판정). 지금은 False 다.
-- **첫 run 은 pause 유지 + 수동 trigger** — params 비움(정기 창: 매크로 어제−소급일~어제, 재무 접수일 오늘−14~오늘, 업종 오늘 거래일이면 3파일). 예상 공급자 호출: 매크로 **5**(계열당 1 — 창이 `max_window_days` 안), 업종 **3**(ZIP), 재무 **구성종목 수 ≈ 50**(`list.json` 회사당 1 페이지; 정기 창에 새 정기보고서가 있는 회사만 +재무제표 1~2·주식총수 1). 첫 실행이 8월 반기보고서를 실으려면 `financial_from=2026-08-01 financial_to=<오늘>` — 회사당 목록 1 + 반기 재무제표 **CFS·OFS 각 1**(`collect_financial` 은 둘 다 요청한다, 연결 없는 회사는 CFS 가 `empty`) + 주식총수 1 = 4, 구성종목 50이면 **≈ 200**(+corpCode.xml 1, 목록 2페이지 이상인 회사만 +1). 매크로 백필은 `macro_from/to` (`to`≤어제; 1500초 상한 안에서 1년 단위).
+- **DAG 첫 수동 trigger(단건 검증이 끝난 뒤 — 두 번째 실행부터, pause 유지)** — params 비움(정기 창: 매크로 어제−소급일~어제, 재무 접수일 오늘−14~오늘, 업종 오늘 거래일이면 3파일). 예상 공급자 호출: 매크로 **5**(계열당 1 — 창이 `max_window_days` 안), 업종 **3**(ZIP), 재무 **구성종목 수 ≈ 50**(`list.json` 회사당 1 페이지; 정기 창에 새 정기보고서가 있는 회사만 +재무제표 1~2·주식총수 1). 첫 실행이 8월 반기보고서를 실으려면 `financial_from=2026-08-01 financial_to=<오늘>` — 회사당 목록 1 + 반기 재무제표 **CFS·OFS 각 1**(`collect_financial` 은 둘 다 요청한다, 연결 없는 회사는 CFS 가 `empty`) + 주식총수 1 = 4, 구성종목 50이면 **≈ 200**(+corpCode.xml 1, 목록 2페이지 이상인 회사만 +1). 매크로 백필은 `macro_from/to` (`to`≤어제; 1500초 상한 안에서 1년 단위).
 - **단건 실행(대상 run_id 를 명시한다 — 첫 검증에서 `--all` 을 쓰지 않는다)**: 같은 run_id `R` 로 세 단계를 잇는다(DAG 와 같은 형태). `--all` 은 이번 run 외의 미소비 정제 run 까지 집으므로 첫 검증의 대조 대상을 흐린다.
   ```bash
   R=manual_macro_20261001_1
@@ -861,6 +866,13 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   python -m data_pipeline.run normalize-macro --run-id $R --input-run-id $R
   python -m data_pipeline.run load-macro --run-id $R --input-run-id $R
   ```
+  데이터셋별 최소 범위와 예상 공급자 호출(단건):
+  | 데이터셋 | 최소 대상·기간 | 예상 호출 |
+  |---|---|---|
+  | 매크로 | `--series usd_krw`(ECOS 1계열), `--from`~`--to` ≤ `max_window_days` | ECOS **1** |
+  | 재무 | ETF 1개(`<ETF 코드>`, 기본 `091160`), 접수일 하루(`--from`=`--to`=`<접수일>`) | corpCode.xml 1 + 목록 `<구성종목 수>`(회사당 1페이지) + 그날 정기보고서가 있는 회사만 재무제표 CFS·OFS 2 + 주식총수 1 — **추정**(3분기 정정이면 사업보고서 재무제표를 다시 받는다). 실제 수는 raw manifest `counts` 로 대조 |
+  | 업종 | 인자 없음(오늘이 거래일일 때만) | ZIP **3**(코스피·코스닥·업종명) |
+
   재무는 `DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'` 와 하루짜리 `--from`=`--to` 로 `ingest-raw-financial-metric`·`normalize-financial-metric`·`load-financial-metric`, 업종은 `ingest-raw-sector`(기간 인자 없음, 거래일에만)·`normalize-sector`·`load-sector` 를 같은 형태로.
 - **재요청 확인(재수집·중복 적재가 없는지)**: 끝난 `R` 로 세 줄을 그대로 한 번 더 돌린다. ① 수집 로그에 `run_id=R 는 이미 수집 완료 — 공급자 재호출 없음` 이 나오고 raw manifest 가 바뀌지 않는다(`shasum -a 256 manifest.json` 전후 동일). 요청 범위를 바꿔 같은 `R` 을 쓰면 "다른 요청 범위로 이미 수집됐다"로 거부돼야 정상. ② 정제는 완료 run 이라 manifest 를 덮지 않는다. ③ 적재 뒤 `SELECT count(*) FROM macro_observation WHERE raw_run_id='R'` 가 전후 같다(`ON CONFLICT DO NOTHING`).
 - **교차 확인(run 뒤)**: ① raw manifest `operations_archive/raw_run_manifests/dataset=*/run_id=<run>/manifest.json` 의 `counts`(ok·empty·error)와 `code_version` ② canonical manifest 의 `rows`·`rejected`·`raw_manifest_sha256` 가 ①의 **저장된 manifest.json 바이트의 sha256**(`shasum -a 256 manifest.json` — manifest 안에 자기 해시 필드는 없다)과 같은지 ③ DB `SELECT count(*), max(received_at) FROM macro_observation WHERE raw_run_id='<run>'` 가 ②의 `rows` 와 같은지(재무는 `financial_metric` 과 `financial_report_version` 둘 다 — 판본 수 = canonical manifest `companion.rows`, `status` 별 건수로 UNCONFIRMED 응답 파악) ④ `SELECT * FROM source_observation_freshness()` 에 데이터셋 행이 생겼는지 ⑤ v2 어댑터 경로: `SELECT * FROM macro_observations_as_of(now(),'usd_krw',2)` · `SELECT period, eps, bps, bps_note, version_raw_run_id, latest_unconfirmed_at FROM financial_quarters_as_of(now(),'005930')` 를 `edge_analysis_v2_writer` 로(`SET ROLE`) 실행 — 테이블 직접 SELECT 는 거부돼야 정상. ⑥ v2 결과 대조: 같은 기준시각으로 v2 어댑터(`edge_analysis_v2.storage.source_inputs.macro_inputs`·`financial_inputs`)를 돌려 ⑤의 값과 같은지, 근사 Q4 EPS 가 `eps_derivation`·`approximate` 로 전달되고 카드 투영에서 근사 PER 이 빠지는지 본다.
