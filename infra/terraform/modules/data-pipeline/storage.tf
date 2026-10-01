@@ -55,6 +55,23 @@ resource "aws_secretsmanager_secret" "dart" {
   description = "OpenDART API key for ${var.name} (수동 주입: {\"apikey\":\"...\"})"
 }
 
+# 원천 관측 매크로 키(ALPHA-1130·1136). 그릇만 — 값은 TF 밖에서 수동 주입한다. 소비자는 아직 없다:
+# `macro` 태스크 정의(별도 PR)가 `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA}_API_KEY` 로 붙인다.
+resource "aws_secretsmanager_secret" "ecos" {
+  name        = "${var.name}/ecos/api-key"
+  description = "ECOS(한국은행) API key for ${var.name} (수동 주입: {\"apikey\":\"...\"})"
+}
+
+resource "aws_secretsmanager_secret" "kosis" {
+  name        = "${var.name}/kosis/api-key"
+  description = "KOSIS(통계청) API key for ${var.name} (수동 주입: {\"apikey\":\"...\"})"
+}
+
+resource "aws_secretsmanager_secret" "eia" {
+  name        = "${var.name}/eia/api-key"
+  description = "EIA API key for ${var.name} (수동 주입: {\"apikey\":\"...\"})"
+}
+
 # KRX 그릇은 ALPHA-336 때 CLI 로 먼저 만들어져 TF 밖에 있었다. 형제 시크릿과 같은 소유
 # 구조로 되돌리되, 기존 그릇 입양(import)은 호출부에서 한다 — 시크릿 ARN 은 AWS 가 붙이는
 # 랜덤 접미사를 포함해 환경마다 다르고, import 는 그 ARN 을 id 로 받기 때문이다.
