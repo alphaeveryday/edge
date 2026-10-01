@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
   argBody: { gap: 7, marginTop: 12, paddingLeft: 26 },
   bullet: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   bulletDot: { width: 4, height: 4, borderRadius: 999, backgroundColor: colors.textFaint, marginTop: 10 },
-  bulletText: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 25, color: '#333D4B' },
+  bulletText: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 25, color: colors.textSub },
   rule: { marginTop: 34, height: 1, backgroundColor: colors.line },
   closing: { marginTop: 26, borderRadius: 18, backgroundColor: colors.card, paddingTop: 22, paddingHorizontal: 20, paddingBottom: 24 },
   closingTitle: { fontFamily: fam.extrabold, fontSize: 18, letterSpacing: -0.5, color: colors.text },

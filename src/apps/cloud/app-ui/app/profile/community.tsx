@@ -100,5 +100,5 @@ const styles = StyleSheet.create({
   tagText: { fontFamily: fam.bold, fontSize: 12, color: colors.textSub },
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
   body: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
-  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textFaint, paddingVertical: 40 },
+  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textMuted, paddingVertical: 40 },
 });

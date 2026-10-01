@@ -74,10 +74,10 @@ const styles = StyleSheet.create({
   stat: { flex: 1, borderRadius: 14, backgroundColor: colors.card, paddingTop: 14, paddingBottom: 12, paddingHorizontal: 10, alignItems: 'center', gap: 3 },
   statV: { fontFamily: fam.monoExtraBold, fontSize: 22, color: colors.text, letterSpacing: -0.6 },
   statL: { fontFamily: fam.semibold, fontSize: 12, color: colors.textMuted },
-  statU: { fontFamily: fam.regular, fontSize: 11, color: colors.textFaint },
+  statU: { fontFamily: fam.regular, fontSize: 11, color: colors.textMuted },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingLeft: 14, paddingRight: 18, borderRadius: 999, backgroundColor: colors.text, shadowColor: colors.text, shadowOpacity: 0.22, shadowRadius: 15, shadowOffset: { width: 0, height: 12 } },
   pillDot: { width: 26, height: 26, borderRadius: 999, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
   pillDotIn: { width: 10, height: 10, borderRadius: 999, backgroundColor: colors.white },
   pillName: { fontFamily: fam.bold, fontSize: 14, color: colors.white, letterSpacing: -0.28 },
-  pillSub: { fontFamily: fam.regular, fontSize: 12, color: colors.textFaint },
+  pillSub: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
 });

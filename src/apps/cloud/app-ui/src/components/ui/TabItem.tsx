@@ -5,7 +5,7 @@ import { fam, type } from '@/theme/typography';
 export function TabItem({ label, on, dot, grow = true, onPress }: { label: string; on: boolean; dot?: boolean; grow?: boolean; onPress?: () => void }) {
   return (
     <Pressable onPress={onPress} style={[styles.tab, grow ? styles.grow : styles.fit, on && styles.on]}>
-      <Text numberOfLines={1} style={[styles.label, { color: on ? colors.text : colors.textFaint, fontFamily: on ? fam.extrabold : fam.semibold }]}>{label}</Text>
+      <Text numberOfLines={1} style={[styles.label, { color: on ? colors.text : colors.textMuted, fontFamily: on ? fam.extrabold : fam.semibold }]}>{label}</Text>
       {dot && <View style={styles.dot} />}
     </Pressable>
   );

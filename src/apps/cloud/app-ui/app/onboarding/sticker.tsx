@@ -58,7 +58,7 @@ const styles = StyleSheet.create({
   glow: { position: 'absolute', width: 320, height: 320, borderRadius: 999, backgroundColor: colors.primarySoft, opacity: 0.7 },
   stack: { alignItems: 'center', gap: 9 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  hint: { width: 44, textAlign: 'right', fontFamily: fam.semibold, fontSize: 12, color: colors.textFaint },
+  hint: { width: 44, textAlign: 'right', fontFamily: fam.semibold, fontSize: 12, color: colors.textMuted },
   axesWrap: { alignItems: 'center', gap: 10, marginTop: 22 },
   axes: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, maxWidth: 330 },
   axis: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 7, paddingLeft: 9, paddingRight: 12 },

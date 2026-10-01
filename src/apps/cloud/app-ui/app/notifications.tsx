@@ -68,5 +68,5 @@ const styles = StyleSheet.create({
   time: { fontFamily: fam.mono, fontSize: 12, color: colors.textFaint },
   title: { fontSize: 15, lineHeight: 22, color: colors.text, letterSpacing: -0.3 },
   body: { fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textMuted },
-  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textFaint, paddingVertical: 50 },
+  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted, paddingVertical: 50 },
 });

@@ -42,5 +42,5 @@ const styles = StyleSheet.create({
   list: { gap: 10, marginTop: 16 },
   row: { flexDirection: 'row', gap: 10 },
   dot: { width: 5, height: 5, borderRadius: 999, backgroundColor: colors.text, marginTop: 10 },
-  text: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: '#333D4B' },
+  text: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.textSub },
 });

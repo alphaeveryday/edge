@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
   insightHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   dot: { width: 8, height: 8, borderRadius: 999 },
   insightCap: { fontFamily: fam.extrabold, fontSize: 12 },
-  insightText: { fontFamily: fam.semibold, fontSize: 15, lineHeight: 25, color: '#333D4B', marginTop: 9 },
+  insightText: { fontFamily: fam.semibold, fontSize: 15, lineHeight: 25, color: colors.textSub, marginTop: 9 },
   section: { marginTop: 22, marginHorizontal: 20 },
   h2: { fontFamily: fam.extrabold, fontSize: 20, letterSpacing: -0.6, color: colors.text },
   h2Row: { flexDirection: 'row', alignItems: 'baseline', gap: 9 },

@@ -73,7 +73,7 @@ const styles = StyleSheet.create({
   me: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 20 },
   name: { fontFamily: fam.extrabold, fontSize: 19, color: colors.text },
   email: { fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
-  cap: { fontFamily: fam.bold, fontSize: 13, color: colors.textFaint, paddingTop: 24, paddingHorizontal: 24, paddingBottom: 8 },
+  cap: { fontFamily: fam.bold, fontSize: 13, color: colors.textMuted, paddingTop: 24, paddingHorizontal: 24, paddingBottom: 8 },
   card: { backgroundColor: colors.white, borderRadius: 14, marginHorizontal: 20, paddingHorizontal: 16 },
   logout: { alignItems: 'center', paddingTop: 26, paddingBottom: 6 },
   logoutText: { fontFamily: fam.semibold, fontSize: 15, color: colors.up },

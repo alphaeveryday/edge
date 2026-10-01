@@ -67,5 +67,5 @@ const styles = StyleSheet.create({
   list: { paddingTop: 22, paddingHorizontal: 16, paddingBottom: 24 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 22 },
   cell: { width: '33.33%', alignItems: 'center' },
-  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textFaint, paddingVertical: 40 },
+  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted, paddingVertical: 40 },
 });

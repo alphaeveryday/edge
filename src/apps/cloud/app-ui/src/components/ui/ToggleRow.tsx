@@ -20,7 +20,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
   divider: { borderBottomWidth: 1, borderBottomColor: colors.surface },
   label: { ...type.listLabel, color: colors.text },
-  sub: { ...type.caption, color: colors.textFaint },
+  sub: { ...type.caption, color: colors.textMuted },
   track: { width: 50, height: 30, borderRadius: radius.pill },
   knob: { position: 'absolute', top: 2, width: 26, height: 26, borderRadius: radius.pill, backgroundColor: colors.white, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
 });

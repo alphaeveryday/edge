@@ -84,7 +84,7 @@ const styles = StyleSheet.create({
   rank: { fontFamily: fam.monoExtraBold, fontSize: 12, textAlign: 'center', overflow: 'hidden' },
   rankTop: { color: colors.white, backgroundColor: colors.text, borderRadius: 7, paddingVertical: 3, paddingHorizontal: 7 },
   rankPlain: { color: colors.textFaint, width: 20 },
-  name: { fontFamily: fam.bold, fontSize: 12, color: colors.textFaint, flexShrink: 1 },
+  name: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, flexShrink: 1 },
   title: { fontFamily: fam.extrabold, fontSize: 18, lineHeight: 25, letterSpacing: -0.5, color: colors.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { maxWidth: '100%', fontFamily: fam.bold, fontSize: 12, color: colors.textSub, backgroundColor: colors.card, borderRadius: 7, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },

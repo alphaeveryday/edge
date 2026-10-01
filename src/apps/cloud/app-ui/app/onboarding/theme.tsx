@@ -51,7 +51,7 @@ const styles = StyleSheet.create({
   list: { paddingTop: 22, paddingHorizontal: 16, paddingBottom: 24, gap: 30 },
   groupHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: 4 },
   groupTitle: { fontFamily: fam.extrabold, fontSize: 15, color: colors.text, letterSpacing: -0.3 },
-  groupSub: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
+  groupSub: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
   grid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 26, paddingTop: 8 },
   cell: { width: '33.33%', alignItems: 'center' },
 });

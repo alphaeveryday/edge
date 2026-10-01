@@ -5,7 +5,7 @@ import { colors } from '@/theme/tokens';
 import { fam, type } from '@/theme/typography';
 
 export type ListIcon = 'chart' | 'star' | 'search' | 'comm' | 'bell';
-const C = '#333D4B';
+const C = colors.textSub;
 
 function Icon({ name }: { name: ListIcon }) {
   const st = { stroke: C, fill: 'none' as const, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };

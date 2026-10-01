@@ -54,7 +54,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   field: { marginTop: 12, marginHorizontal: PAGE_X },
   results: { paddingTop: 8, paddingHorizontal: PAGE_X },
-  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textFaint, paddingVertical: 40 },
+  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted, paddingVertical: 40 },
   recent: { flexDirection: 'row', gap: 8, paddingTop: 12, paddingHorizontal: PAGE_X },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 8, paddingLeft: 8, paddingRight: 13 },
   chipName: { fontFamily: fam.semibold, fontSize: 14, color: colors.text },

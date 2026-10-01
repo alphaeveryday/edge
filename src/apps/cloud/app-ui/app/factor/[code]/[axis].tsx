@@ -77,7 +77,7 @@ export default function FactorPage() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   nav: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingTop: 2 },
-  etf: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
+  etf: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
   body: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 40 },
   headline: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   event: { flexDirection: 'row', gap: 10 },

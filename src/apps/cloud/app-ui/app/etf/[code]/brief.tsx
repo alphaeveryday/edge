@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
   headTitle: { fontFamily: fam.bold, fontSize: 18, color: colors.text, letterSpacing: -0.5, marginTop: 20, marginHorizontal: 20 },
   article: { marginTop: 20, marginHorizontal: 22 },
   question: { fontFamily: fam.extrabold, fontSize: 24, lineHeight: 33, letterSpacing: -0.7, color: colors.text },
-  dateline: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted, marginTop: 12 },
+  dateline: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 12 },
   card: { marginTop: 20, borderRadius: 18, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, overflow: 'hidden', shadowColor: colors.text, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
   cardBar: { height: 4 },
   cardBody: { paddingTop: 22, paddingHorizontal: 20, paddingBottom: 24, gap: 14 },

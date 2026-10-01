@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
   input: { flex: 1, minHeight: 150, fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.text, paddingTop: 7, textAlignVertical: 'top' },
   foot: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 12, paddingHorizontal: 18, borderTopWidth: 1, borderTopColor: colors.surface },
   hint: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
-  count: { fontFamily: fam.mono, fontSize: 13, color: colors.textMuted },
+  count: { fontFamily: fam.mono, fontSize: 13, color: colors.textFaint },
   pickList: { maxHeight: 360, marginTop: 8 },
   pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, borderTopWidth: 1, borderTopColor: colors.surface },
   pickName: { flex: 1, fontFamily: fam.bold, fontSize: 15, color: colors.text },
