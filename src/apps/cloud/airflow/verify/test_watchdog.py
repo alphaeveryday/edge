@@ -41,8 +41,10 @@ def test_rds_trip_uses_the_fixed_criteria_with_sustain():
 
 
 class FakeS3:
-    def __init__(self, beat=None):
+    def __init__(self, beat=None, required=True):
         self.objects = {} if beat is None else {shim.WATCH_KEY: json.dumps(beat).encode()}
+        if required:
+            self.objects[shim.WATCH_REQUIRED_KEY] = b"{}"
         self.puts = []
 
     def get_object(self, Bucket, Key):
@@ -102,3 +104,10 @@ def test_the_heartbeat_survives_the_per_batch_reset():
     # WHY(봇 P1): 실행기는 배치마다 verify-reset 으로 상태 접두를 지운다. 심장박동이 그 안에 있으면 감시를 먼저 띄워도
     # 첫 업무 스텝이 심장박동을 못 읽고 거부된다.
     assert not any(shim.WATCH_KEY.startswith(p) for p in shim.RESET_PREFIXES)
+
+
+def test_runs_without_a_watchdog_requirement_keep_the_old_behaviour(monkeypatch):
+    # WHY(봇 P1): 감시를 쓰지 않는 이전 기준(V·B1~B3)의 업무 스텝까지 막으면 그 절차가 통째로 돌지 않는다.
+    # 표지가 없으면 게이트를 걸지 않는다(표지가 있으면 위 테스트대로 심장박동이 있어야 한다).
+    monkeypatch.setattr(shim, "_s3", FakeS3(None, required=False))
+    assert shim._watch_gate() is None

@@ -162,8 +162,13 @@ def ops(command: list[str]) -> tuple[int | None, str]:
 def watchdog(args) -> int:
     """실험 중 감시 태스크(shim verify-watchdog)를 띄우고 첫 심장박동을 확인한다. 이 뒤로는 PC 와 무관하게 돈다.
     기준: criteria 의 watchdog.until_kst 까지, rds_stop 그대로. 심장박동이 없으면 업무 스텝은 시작하지 않는다."""
-    w = CRIT["watchdog"]
+    w = CRIT.get("watchdog")
+    if not w:
+        raise SystemExit("기준 파일에 watchdog 설정이 없다 — 이 기준은 감시를 쓰지 않는다")
     stops = {k: v for k, v in CRIT["rds_stop"].items() if not k.startswith("_") and k != "business"}
+    # 표지를 먼저 — 이 뒤로 업무 스텝은 감시 심장박동 없이는 시작하지 않는다(감시가 죽어도 마찬가지).
+    s3.put_object(Bucket=_bucket(), Key="watchdog/required.json",
+                  Body=json.dumps({"exp": args.exp, "at": datetime.now(KST).isoformat()}).encode())
     task = ecs.run_task(cluster=CLUSTER, taskDefinition=f"{PREFIX}-verify-ops", launchType="FARGATE",
                         networkConfiguration=_network(f"{PREFIX}-verify"), startedBy="verify-watchdog",
                         overrides={"containerOverrides": [{"name": "data-pipeline", "command": [

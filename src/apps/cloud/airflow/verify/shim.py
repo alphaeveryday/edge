@@ -334,6 +334,9 @@ def _ship_host_obs(asg, report: dict, wait_seconds: int = 180) -> None:
 # 2분 넘게 끊기면 시작하지 않는다(exit 75) — 감시가 죽으면 검증 부하도 멈춘다.
 # state/ 밖에 둔다 — 배치마다 verify-reset 이 state/ 를 지운다(봇 P1: 지우면 첫 업무 스텝이 심장박동을 못 읽는다).
 WATCH_KEY = "watchdog/heartbeat.json"
+# 감시를 쓰는 실험(run.py watchdog)이 감시를 띄우기 전에 남긴다. 이 표지가 있을 때만 게이트가 걸린다 — 감시를 쓰지 않는
+# 이전 기준(V·B1~B3)은 종전대로 돈다. 표지가 생긴 뒤에는 심장박동이 없거나 묵으면 업무를 시작하지 않는다.
+WATCH_REQUIRED_KEY = "watchdog/required.json"
 WATCH_FRESH_SECONDS = 120
 WATCH_LOSS_LIMIT = 3
 HOST_MEM_MIN_MIB = 64
@@ -474,7 +477,13 @@ def watchdog() -> int:
 
 
 def _watch_gate() -> str | None:
-    """업무 스텝 시작 전 — 감시 심장박동이 신선하고 중단이 없어야 한다. 아니면 거부 사유."""
+    """업무 스텝 시작 전 — 감시를 요구하는 실험이면 심장박동이 신선하고 중단이 없어야 한다. 아니면 거부 사유."""
+    try:
+        _s3.get_object(Bucket=BUCKET, Key=WATCH_REQUIRED_KEY)
+    except Exception as exc:
+        if getattr(exc, "response", {}).get("Error", {}).get("Code") in ("NoSuchKey", "404") or isinstance(exc, KeyError):
+            return None                            # 감시를 쓰지 않는 실험
+        return f"감시 요구 표지를 확인하지 못했다({type(exc).__name__})"   # 모르면 거부 쪽
     try:
         beat = json.loads(_s3.get_object(Bucket=BUCKET, Key=WATCH_KEY)["Body"].read())
     except Exception as exc:
