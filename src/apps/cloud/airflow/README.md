@@ -598,7 +598,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
   2. 호스트 가용 최저 247MiB에서 더 많은 DAG·동시 실행.
   3. `edge_source_daily` 활성화 뒤의 파싱 부하와 그 DAG의 업무 실행. 다른 PR·인계 항목이다.
   4. 장중(업무 시간)의 RDS 동시 부하. 이번 창은 장 마감 뒤다.
-  5. 배포 워크플로의 조기 실패 판정.
+  5. 배포 워크플로의 조기 실패 판정. → 코드는 #1049(`c27ee206`, ALPHA-1138)로 고쳤다(아래 "배포·롤백"). 실제 배포에서의 판정은 미검증이다.
   6. 운영 전환(활성화·SFN 전환)과 그 롤백 절차.
   7. 감시의 조건 위반 자동 중단·게이트 거부·감시 사망 시 부하 정지(AWS 미시험, 위 표).
 
@@ -707,6 +707,16 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 ### 배포·롤백
 
 - 평시 배포: `src/apps/cloud/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 서비스 desired 가 0(운영자 정지)이면 리비전만 바꾸고 켜지 않는다 — 켜는 것은 `start_service=true` 뿐이다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
+- 완료 판정(ALPHA-1138, #1049 `c27ee206`, 2026-10-02 머지). 이전에는 services-stable 직후 PRIMARY 를 한 번만 봐서, 정상 배포도 `IN_PROGRESS` 면 실패로 끝났다. 10-01 두 배포(run 36831907974·36833370844)가 그랬고, 실제로는 21·26초 뒤 완료됐다. 지금은 `update-service` 가 돌려준 **이번 배포 id** 를 `deploy/wait_rollout.sh` 가 따라간다.
+  - 그 id 가 PRIMARY·COMPLETED 면 성공이다.
+  - PRIMARY 가 다른 배포(롤백·같은 리비전의 다른 배포)이거나 FAILED 면 바로 실패다.
+  - `IN_PROGRESS` 는 최대 10분 다시 본다. job 제한은 60분이다.
+  - 검증: 가짜 `aws` 테스트 5건(로컬·CI 같은 Airflow 이미지)과 판정 조건 변이 확인. 로컬 Codex 리뷰를 거쳤고, 봇은 P2 1건(job 제한, 수용) 뒤 `+1` 을 줬다. CI 11건이 통과했다.
+  - 머지 뒤 자동 실행 run 36884642677 은 success 였다. 이미지 `edge/airflow:c27ee206…` 를 빌드·푸시했고, desired 0 이라 교체는 건너뛰었다. 실행 뒤에도 서비스 0/0/0·ASG 0·태스크 0이었다.
+  - **실제 AWS 배포에서의 판정은 미검증이다.** 다음 승인된 기동(`start_service=true`)에서 확인한다.
+    - 로그에 `서비스 갱신 요청: … (deployment ecs-svc/…)` 가 찍히는가.
+    - `PRIMARY:` 줄이 그 id 로 IN_PROGRESS → COMPLETED 로 바뀌는가.
+    - 워크플로가 `success` 로 끝나는가.
 - 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다.
 - Airflow **버전을 내리는** 롤백은 이 경로로 하지 않는다. 새 버전의 `db migrate` 가 스키마를 올렸기 때문이다. 업그레이드 전에 메타DB 스냅샷을 찍고, 되돌릴 때는 그 스냅샷으로 복원한 뒤 옛 이미지를 배포한다.
 - Terraform 이 태스크 정의(환경·자원·역할)를 바꾸면 **다음 배포부터** 반영된다. 서비스의 리비전과 desired 는 CD 가 소유한다(`ignore_changes`). 바로 반영하려면 workflow_dispatch 로 같은 태그를 다시 배포한다.
