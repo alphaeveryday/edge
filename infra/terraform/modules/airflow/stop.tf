@@ -43,6 +43,43 @@ locals {
   }
 }
 
+# 알림 전용(ALPHA-1141) — README 실행안의 "수동 중단" 기준. 서비스를 내리지 않고 SNS(파이프라인 알람 토픽, 이메일 구독)로만
+# 알린다. 판단·롤백은 담당자가 한다 — 메일이 늦게 읽히면 그만큼 늦다(자동 대응이 아니다).
+locals {
+  notify_alarms = {
+    rds_freeable_warn = {
+      metric = "FreeableMemory", statistic = "Minimum", op = "LessThanThreshold", threshold = 480 * 1024 * 1024
+      what   = "업무 RDS 여유 메모리 < 480MiB 5분 연속(자동 중단 400MiB 전 단계)"
+    }
+    rds_connections = {
+      metric = "DatabaseConnections", statistic = "Maximum", op = "GreaterThanThreshold", threshold = 50
+      what   = "업무 RDS 연결 > 50 5분 연속(장중 평시 최대 27~35)"
+    }
+    rds_write_latency = {
+      metric = "WriteLatency", statistic = "Maximum", op = "GreaterThanThreshold", threshold = 0.05
+      what   = "업무 RDS 쓰기 지연 > 50ms 5분 연속(평시 분당 최대 3~6ms, 단발 84ms)"
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "notify" {
+  for_each            = local.stop_enabled ? local.notify_alarms : {}
+  alarm_name          = "${var.name}-notify-${replace(each.key, "_", "-")}"
+  alarm_description   = "수동 중단 기준: ${each.value.what}. 자동으로 멈추지 않는다 — 담당자가 원인(Airflow 몫인지)을 보고 README \"첫 운영 전환 실행안\"의 수동 중단·롤백을 판단한다."
+  namespace           = "AWS/RDS"
+  metric_name         = each.value.metric
+  dimensions          = { DBInstanceIdentifier = var.db_instance_identifier }
+  statistic           = each.value.statistic
+  period              = 60
+  evaluation_periods  = 5
+  datapoints_to_alarm = 5
+  threshold           = each.value.threshold
+  comparison_operator = each.value.op
+  treat_missing_data  = "notBreaching" # 결측은 자동 중단 경보(rds_freeable, breaching)가 맡는다
+  alarm_actions       = [var.alarm_topic_arn]
+  ok_actions          = [var.alarm_topic_arn]
+}
+
 resource "aws_appautoscaling_target" "airflow" {
   count              = local.stop_enabled ? 1 : 0
   service_namespace  = "ecs"

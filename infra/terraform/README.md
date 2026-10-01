@@ -25,7 +25,7 @@ infra/terraform/
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
-    ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 운영 중단 경보(stop.tf)·관리 태스크(dbadmin), 격리 검증 자원) — ALPHA-1119, 메타DB 는 envs/dev `airflow_rds`
+    ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 운영 중단 경보(stop.tf)·관리 태스크(dbadmin), 격리 검증 자원) — ALPHA-1119. 메타DB 는 별도 인스턴스가 아니라 기존 업무 RDS(`modules/rds`, `edge-dev`) 안의 DB `airflow`·역할 `airflow_meta`(관리 태스크가 만든다)
     ├── data-pipeline/      # Step Functions 배치 4종 — 시장 + 뉴스 + 공시(rollback-only) + 장중 수급 — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
