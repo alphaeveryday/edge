@@ -80,8 +80,8 @@ resource "aws_ecs_task_definition" "this" {
       "awslogs-region" = var.region, "awslogs-stream-prefix" = "run"
     } }
   }])
-  # Image revisions are registered by the v2 deployment workflow; Terraform owns permissions/network.
-  lifecycle { ignore_changes = [container_definitions] }
+  # The v2 deployment workflow owns image revisions and their scratch volume; Terraform owns permissions/network.
+  lifecycle { ignore_changes = [container_definitions, volume] }
 }
 resource "aws_iam_role" "workflow" {
   name               = "${var.name}-workflow"

@@ -144,7 +144,7 @@ def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None
                 factor_output = call('get_instrument_factors', {'instrument_id': context['etf_code']})
             response = asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
                 schemas=schemas,call=call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
-                artifacts=artifacts,key=key,model=model))
+                artifacts=artifacts,key=key,model=model,kind=kind))
             if kind == 'movement':
                 result = store.save_movement(analysis_id,response)
             else:

@@ -3,7 +3,7 @@ name = "analysis-engine-v2"
 version = "0.1.0"
 description = "Agent-driven ETF analysis with inspectable tool evidence"
 requires-python = ">=3.12"
-dependencies = ["psycopg[binary]>=3.1", "claude-agent-sdk>=0.2.158,<0.3", "PyYAML>=6", "jsonschema>=4"]
+dependencies = ["psycopg[binary]>=3.1", "claude-agent-sdk==0.2.160", "PyYAML>=6", "jsonschema>=4"]
 
 [project.optional-dependencies]
 cloud = ["boto3>=1.34"]
