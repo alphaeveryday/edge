@@ -721,11 +721,12 @@ module "airflow" {
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
   image = "${local.airflow_ecr_repository_url}:bootstrap"
 
-  db_host              = module.rds.address
-  db_port              = module.rds.port
-  db_name              = "airflow"
-  db_user              = "airflow_meta"
-  db_security_group_id = module.rds.security_group_id # 기존 SG 에 인그레스 규칙만 더한다(SG 자체는 불변)
+  db_host                = module.rds.address
+  db_port                = module.rds.port
+  db_name                = "airflow"
+  db_user                = "airflow_meta"
+  db_security_group_id   = module.rds.security_group_id # 기존 SG 에 인그레스 규칙만 더한다(SG 자체는 불변)
+  db_instance_identifier = local.prefix                 # modules/rds 의 identifier = name(= local.prefix)
 
   alarm_topic_arn = module.data_pipeline.alarm_topic_arn
 
