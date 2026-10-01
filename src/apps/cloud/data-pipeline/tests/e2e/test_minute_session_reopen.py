@@ -126,6 +126,12 @@ def test_reopen_of_selected_windows_leaves_the_rest_sealed(finalized):
     second = h.start + timedelta(minutes=1)
     assert h.ledger.reopen_session(session_id=h.sid, window_starts=[second], today=TODAY)["reopened_windows"] == 1
     assert [r[1] for r in _windows(h)] == ["VALID", "DUE"]
+    # watermark 도 같이 내려간다 — 남기면 재수집 전(또는 실패 뒤)에도 그 창까지 완료로 보인다
+    with h.connect(h.db) as c:
+        processed, contiguous = c.execute(
+            "SELECT processed_through, contiguous_complete_through FROM minute_ingestion_session "
+            "WHERE session_id=%s", (h.sid,)).fetchone()
+    assert processed == contiguous == second                 # 첫 창(끝=second)까지만
 
 
 def test_unknown_window_rejects_the_whole_reopen(finalized):

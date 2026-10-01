@@ -488,6 +488,34 @@ class MinuteLedger:
             )
             return cur.rowcount == 1
 
+    @staticmethod
+    def _recompute_watermarks_tx(cur, session_id: str) -> tuple[datetime | None, datetime | None]:
+        """watermark 두 개를 원장 상태에서 다시 계산해 저장한다 — 호출자가 세션 행을 잠근 채로."""
+        cur.execute(
+            """
+            UPDATE minute_ingestion_session
+            SET processed_through = (
+                  SELECT MAX(window_end) FROM minute_ingestion_window
+                  WHERE session_id = %s AND data_status = ANY(%s)),
+                contiguous_complete_through = (
+                  SELECT MAX(window_end) FROM minute_ingestion_window
+                  WHERE session_id = %s AND data_status = ANY(%s)
+                    AND window_start < COALESCE(
+                      (SELECT MIN(window_start) FROM minute_ingestion_window
+                        WHERE session_id = %s AND NOT data_status = ANY(%s)),
+                      'infinity'::timestamptz)),
+                updated_at = now()
+            WHERE session_id = %s
+            RETURNING processed_through, contiguous_complete_through
+            """,
+            (session_id, sorted(RESULT_STATUSES),
+             session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+             session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+             session_id),
+        )
+        row = cur.fetchone()
+        return (None, None) if row is None else (row[0], row[1])
+
     # ── watermark (ALPHA-663) ─────────────────────────────────
     def advance_watermarks(self, *, session_id: str) -> tuple[datetime | None, datetime | None]:
         """session watermark 두 개를 재계산해 저장하고 (processed, contiguous) 를 돌려준다.
@@ -509,30 +537,7 @@ class MinuteLedger:
             )
             if cur.fetchone() is None:
                 raise ValueError(f"session {session_id} 이 없다 — watermark 대상 오류")
-            cur.execute(
-                """
-                UPDATE minute_ingestion_session
-                SET processed_through = (
-                      SELECT MAX(window_end) FROM minute_ingestion_window
-                      WHERE session_id = %s AND data_status = ANY(%s)),
-                    contiguous_complete_through = (
-                      SELECT MAX(window_end) FROM minute_ingestion_window
-                      WHERE session_id = %s AND data_status = ANY(%s)
-                        AND window_start < COALESCE(
-                          (SELECT MIN(window_start) FROM minute_ingestion_window
-                            WHERE session_id = %s AND NOT data_status = ANY(%s)),
-                          'infinity'::timestamptz)),
-                    updated_at = now()
-                WHERE session_id = %s
-                RETURNING processed_through, contiguous_complete_through
-                """,
-                (session_id, sorted(RESULT_STATUSES),
-                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
-                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
-                 session_id),
-            )
-            row = cur.fetchone()
-            return (None, None) if row is None else (row[0], row[1])
+            return self._recompute_watermarks_tx(cur, session_id)
 
     # ── drain (ALPHA-663) ─────────────────────────────────────
     def request_drain(self, *, session_id: str, now: datetime) -> bool:
@@ -631,6 +636,9 @@ class MinuteLedger:
                 """,
                 (session_id,),
             )
+            # 열린 창이 DUE 가 됐으니 watermark 도 같은 트랜잭션에서 내린다 — 남겨 두면 재수집이
+            # 끝나기 전(또는 실패해 FAILED 로 선 뒤)에도 "그 창까지 연속 완료"로 보인다(봇 P2)
+            self._recompute_watermarks_tx(cur, session_id)
         return {"session_id": session_id, "reopened_windows": reopened,
                 "previous_final_checksum": final_checksum,
                 "previous_final_generation": final_generation}
