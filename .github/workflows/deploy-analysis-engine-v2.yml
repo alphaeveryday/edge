@@ -36,6 +36,25 @@ jobs:
           docker run --rm --entrypoint python "$image" -c "from importlib.resources import files; import subprocess; subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
           docker push "$image"
           echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Publish the API runtime image for infrastructure bootstrap
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          repo="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline"
+          docker build --platform linux/amd64 --provenance=false -f src/apps/cloud/analysis-engine-v2/Dockerfile.api -t "$repo:analysis-v2-api-${GITHUB_SHA}" src
+          docker push "$repo:analysis-v2-api-${GITHUB_SHA}"
+          echo "ANALYSIS_API_IMAGE=$repo:analysis-v2-api-${GITHUB_SHA}" >> "$GITHUB_ENV"
+      - name: Deploy the API image after its infrastructure exists
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if aws lambda get-function --function-name edge-dev-analysis-v2-api >/tmp/api-function.json 2>/tmp/api-error; then break; fi
+            if [ "$attempt" = 60 ]; then cat /tmp/api-error; exit 1; fi
+            sleep 10
+          done
+          aws lambda wait function-active-v2 --function-name edge-dev-analysis-v2-api
+          aws lambda update-function-code --function-name edge-dev-analysis-v2-api --image-uri "$ANALYSIS_API_IMAGE" --query LastUpdateStatus --output text
+          aws lambda wait function-updated-v2 --function-name edge-dev-analysis-v2-api
       - name: Register the immutable image as the next v2 task revision
         run: |
           set -euo pipefail
