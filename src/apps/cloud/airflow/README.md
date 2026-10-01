@@ -700,7 +700,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 1. `foundation` apply(수동) — `edge/airflow` ECR 저장소.
 2. 이 PR 머지 → `terraform-apply` 가 클러스터·호스트·서비스(desired 0)·검증 자원을 만든다(새 RDS 없음). 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 desired 0 이면 배포를 건너뛴다.
 3. 시크릿 값과 전용 DB·역할: `python3 verify/run.py secrets`(boto3 가 있는 인터프리터 — 예: `src/.venv/bin/python`)(없는 키만 만든다, 값은 찍지 않는다) → `python3 verify/run.py setup`(관리 태스크가 전용 DB·역할 생성, 검증 원장 스키마 복제, 권한 분리 확인).
-4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable.
+4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable → PRIMARY rollout COMPLETED(`deploy/wait_rollout.sh` — stable 직후 `IN_PROGRESS` 는 최대 10분 다시 보고, `FAILED`·다른 리비전이면 바로 실패).
 5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
 
 ### 배포·롤백
