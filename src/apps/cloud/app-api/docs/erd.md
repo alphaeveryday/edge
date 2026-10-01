@@ -257,27 +257,52 @@ PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심�
 
 ## 읽기 전용 동기화
 
-원천은 둘이다.
-- 분석 산출물: `~/Downloads/ETF ORCA` 의 파이프라인 설계 문서(오늘 움직임·전망·5요인 상세).
+원천은 셋이다.
+- 분석 산출물: analysis-engine-v2 엔진 테이블(`movement_*`·`outlook_*`, 파이프라인 RDS). `data_source = 'database'` 인 완료 발행본만 옮긴다.
+- 앱 관리 값: `etf_curation`(선별 목록과 원천 없는 표시 값)과 `theme`, 마이그레이션으로 채운다.
 - 마스터·시장 데이터: 파이프라인 마트 스키마 `src/libs/schema/migrations-cloud`. ETF 정체성은 `instrument.instrument_id`(ULID)이고 자연키는 `UNIQUE(market_code, ticker)`(MIC `XKRX` + 6자리 코드). 이름은 `entity.display_name`, 테마는 `etf_profile.primary_theme_concept_id → concept`, 일별 가격은 `price_daily`, 구성종목은 `etf_holding_snapshot`.
 
 | 앱 테이블 | 파이프라인 원천 | 비고 |
 |---|---|---|
-| etf | instrument + entity + etf_profile | `code`=ticker, `instrument_id` 로 조인 |
-| theme | concept + entity | `concept_id` 로 조인 |
-| etf_candle | price_daily | close·volume 만 있고 **open·high·low 없음** |
-| etf_quote | 없음 | 마트에 실시간 시세 테이블 없음 |
-| etf_detail(holdings) | etf_holding_snapshot | weight_ratio 0~1 |
-| 순위 | 없음 | 계약이 요구하는 키로 테이블만 선점 |
+| etf | instrument + entity + etf_curation | `code`=ticker, 테마·부제·hot 은 선별 표 |
+| theme | 없음 | 마이그레이션 시드, 선별 ETF 가 쓰는 테마만 |
+| etf_candle | price_daily | close·volume 만 있고 **open·high·low 없음**(선 차트) |
+| etf_quote | price_daily 최근 두 종가 | 등락률은 두 종가로 계산, 장중 시세 없음 |
+| etf_detail | etf_holding_snapshot + 구성종목 price_daily + etf_curation | weight_ratio 0~1 |
+| etf_move | movement_analyses + movement_items | 거래일마다 최신 1건 |
+| etf_analysis·etf_analysis_axis | outlook_analyses + outlook_items·factors·conclusion_keywords·factor_metrics·issue_items | KST 날짜마다 최신 1건 |
+| etf_rank | etf_analysis | 동기화가 계산 |
 
 규칙.
-- 앱 DB 안 별도 테이블. 앱은 읽기만 한다. 쓰기 주체(논리 복제·배치·파이프라인 직접 쓰기)는 4단계 동기화 방식 결정 때 정한다.
+- 쓰기는 `sync` 스케줄러 하나(10분 주기, ShedLock). 다른 도메인은 읽기만.
+- 파이프라인 RDS 는 읽기 전용 롤로 읽기.
+- 원천이 같으면 다시 쓰지 않음.
+- 선별 목록 밖 코드와 원천 30일 창 밖 날짜의 행은 삭제.
 - 표 데이터(`etf`·`theme`·`etf_quote`·`etf_candle`)는 정규화. 키·범위·검색으로 조회하기 때문이다.
-- 분석 산출물은 키 컬럼 + `payload JSONB`. payload 는 **파이프라인 발행본 원문**이다. 앱 계약 형태로의 변환은 서비스가 읽을 때 한다. 계약이 바뀌어도 재동기화가 없고, 논리 복제와 호환되며, `tool_run_ids`·`item_id` 같은 관리 필드가 보존된다.
+- 분석 산출물은 키 컬럼 + `payload JSONB`. payload 는 동기화가 엔진 테이블에서 조립한 문서. 엔진이 정규화 테이블로 저장해 원문 문서가 없다.
+- 한글 enum 접기 같은 계약 변환은 서비스가 읽을 때.
 - 키 컬럼은 정렬·달력·존재 여부·전일 비교에 쓰는 것만 뽑는다. payload 안을 WHERE 로 뒤지지 않는다.
 - `as_of DATE` 는 KST 거래일, `published_at TIMESTAMPTZ` 는 파이프라인 발행 시각, `synced_at TIMESTAMPTZ NOT NULL DEFAULT now()` 는 동기화 시각. 발행본은 (대상, as_of) 당 최신 1행으로 upsert 한다. 발행 이력은 파이프라인이 보존하고 앱 DB 는 최신본만 둔다.
-- 파이프라인 `outlook.direction` 은 자유 문자열이고 앱 `Signal` 은 5단계다. 파이프라인에 5단계 enum 을 발행본에 함께 내달라고 요청한다. 그전까지 동기화는 알려진 문자열만 매핑(강한 상승→`strongUp`, 상승→`up`, 중립·판단 유보→`neutral`, 하락→`down`, 강한 하락→`strongDown`)하고 나머지는 `neutral`.
+- 엔진 `outlook_sticker` 5단계는 `Signal` 5단계로 1:1 매핑. 값이 없으면 그 전망은 건너뜀.
 - 요인 `sticker` 5단계는 앱 `Dir` 3단계로 접는다. 강력상승·상승→`help`, 중립→`neutral`, 하락·강력하락→`burden`. 오늘 움직임 `sentiment` 는 positive→`help`, neutral→`neutral`, negative→`burden`.
+
+### etf_curation (선별 목록, 앱 관리)
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| etf_code | varchar(6) PK | 이 표의 행이 곧 앱 ETF 목록 |
+| theme_key | varchar(30) → theme | |
+| sub | varchar(100) NULL | 부제 |
+| hot | boolean DEFAULT false | |
+| manager | varchar(50) | 운용사 |
+| expense_ratio | numeric(5,2) | 총보수 연 % |
+| listed_on | date | 상장일 |
+| leverage | numeric(3,1) NULL | 레버리지 배수, 해당 없으면 NULL |
+| hedged | boolean NULL | 환헤지 여부, 해외 자산이 아니면 NULL |
+| blurb | varchar(200) | 한 줄 소개 |
+
+- 마이그레이션이 쓰는 표. 값 수정은 새 마이그레이션.
+- 동기화가 여기서 `etf`·`etf_detail` 로 복사. 한 행을 시드와 동기화가 나눠 쓰지 않기 위함.
+- 파이프라인 `etf_profile` 운용사·보수는 비어 있어 미사용(2026-10-01 조회).
 
 ### etf
 | 컬럼 | 타입 | 비고 |
@@ -309,10 +334,10 @@ PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심�
 ### etf_quote
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
-| etf_code | varchar(6) PK → etf | 최신 1행. 마트에 원천 없음(열린 질문) |
+| etf_code | varchar(6) PK → etf | 최신 1행. `price_daily` 최근 종가 |
 | price | numeric(14,2) | |
 | change_pct | numeric(6,2) | 전일 대비 |
-| as_of | timestamptz | 관측 시각. `HomeBrief.asOf` 는 그룹 최대값 |
+| as_of | timestamptz | 최근 거래일 15:30 KST. `HomeBrief.asOf` 는 그룹 최대값 |
 | synced_at | timestamptz | |
 
 ### etf_candle
@@ -333,10 +358,10 @@ PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있�
 | etf_code | varchar(6) → etf | |
 | as_of | date | 거래일 |
 | published_at | timestamptz | `MoveInfo.at` |
-| payload | jsonb | 서버 조합본 `{summary, items[]}` |
+| payload | jsonb | `{summary, items[]}` |
 | synced_at | timestamptz | |
 
-`UNIQUE(etf_code, as_of)`. payload 의 `items[]` 는 `{item_id, type, title_keyword, sentence, sentiment, tool_run_ids, source_as_of, added_at}`. 매핑: `text`=summary, `groups`=items 를 type(이슈·차트·수급·매크로) 별로 묶어 `head`=type 라벨·`t`=title_keyword·`sub`=sentence·`dir`=sentiment 접기. `foot`·`sheetTitle` 은 서비스 고정 문구. `summary` 가 null 이면 화면에 카드가 없다.
+`UNIQUE(etf_code, as_of)`. payload 의 `items[]` 는 `{type, title_keyword, sentence, sentiment}`, `selected_item_ids` 가 있으면 그 항목만 그 순서로. 매핑: `text`=summary, `groups`=items 를 type(이슈·차트·수급·매크로) 별로 묶어 `head`=type 라벨·`t`=title_keyword·`sub`=sentence·`dir`=sentiment 접기. `foot`·`sheetTitle` 은 서비스 고정 문구. `summary` 가 null 이면 화면에 카드가 없다.
 
 ### etf_analysis (전망 발행본)
 | 컬럼 | 타입 | 비고 |
@@ -345,11 +370,11 @@ PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있�
 | etf_code | varchar(6) → etf | |
 | as_of | date | 분석 기준일. `DailyAnalysis.date` |
 | published_at | timestamptz | |
-| signal | varchar(10) | 5단계. `outlook.direction` 매핑(위 규칙) |
-| payload | jsonb | `{outlook, summary_card, detail, factors, conclusion, publication}` |
+| signal | varchar(10) | 5단계. `outlook_sticker` 매핑(위 규칙) |
+| payload | jsonb | `{summary_card, detail, factors, conclusion}` |
 | synced_at | timestamptz | |
 
-`UNIQUE(etf_code, as_of)`. `detail` 은 서버가 수정분을 반영한 완성본(`title, items[], updates{date, items[]}`)이다. 매핑: `dates`=같은 ETF 의 as_of 목록(`hasDaily`), `now`=signal, `prev`=직전 as_of 행의 signal, `headTitle`=고정 문구 "오늘 발행", `question`=summary_card.title, `dateline`=published_at, `synth`=summary_card.summary, `axes`=factors(sticker→Dir, `hasPage`=`etf_analysis_axis` 행 존재), `title`=detail.title, `args`=detail.items(`no` 순번, `claim`=title_keyword, `body`=sentences[].sentence), `todayDate`·`today`=detail.updates, `closingTitle`=conclusion.title, `pos`=supports[].label, `neg`=burdens[].label, `close`=conclusion.sentence(+change_condition). `id`·`tool_run_ids`·`is_updated`·`reason` 은 앱에 내려가지 않는다. 최신 signal 은 `EtfSummary.signal`·`HomeBrief.band`·`IssueDetail.affected[].prev` 에도 쓴다.
+`UNIQUE(etf_code, as_of)`. 조립: summary_card=`{title: summary_title, summary}`, detail=`{title: detail_title, items[]: outlook_items(detail){title_keyword, sentences: bullets}, updates.items[]: outlook_items(update).sentence}`, conclusion=`{title, sentence, change_condition, supports[], burdens[]}`(conclusion_keywords), factors[]=`{axis, sticker, summary: sentence}`. 매핑: `dates`=같은 ETF 의 as_of 목록(`hasDaily`), `now`=signal, `prev`=직전 as_of 행의 signal, `headTitle`=고정 문구 "오늘 발행", `question`=summary_card.title, `dateline`=published_at, `synth`=summary_card.summary, `axes`=factors(sticker→Dir, `hasPage`=`etf_analysis_axis` 행 존재), `title`=detail.title, `args`=detail.items(`no` 순번, `claim`=title_keyword, `body`=sentences[].sentence), `todayDate`·`today`=detail.updates, `closingTitle`=conclusion.title, `pos`=supports[].label, `neg`=burdens[].label, `close`=conclusion.sentence(+change_condition). `id`·`tool_run_ids`·`is_updated`·`reason` 은 앱에 내려가지 않는다. 최신 signal 은 `EtfSummary.signal`·`HomeBrief.band`·`IssueDetail.affected[].prev` 에도 쓴다.
 
 ### etf_analysis_axis (5요인 상세)
 | 컬럼 | 타입 | 비고 |
@@ -357,9 +382,9 @@ PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있�
 | etf_analysis_id | bigint → etf_analysis | |
 | axis | varchar(6) | `issue` \| `chart` \| `macro` \| `value` \| `flow` CHECK |
 | dir | varchar(8) | sticker→Dir |
-| payload | jsonb | 수치 4축 `{type, sticker, headline, analysis_at, metrics[]}`, 이슈 `{type, sticker, headline, items[]}` |
+| payload | jsonb | 수치 축 `{sticker, headline, metrics[]}`, 이슈 `{sticker, headline, items[]}` |
 
-PK `(etf_analysis_id, axis)`. 파이프라인이 축별 독립 응답을 내고 앱도 축별 엔드포인트라 행을 나눈다. 행이 없으면 `ANALYSIS4001`. `MetricPage`: `verdict`=headline, `tiles`=metrics(카드 이름·단위·표시 포맷은 `key` 별 서비스 상수, `note`=subject·observed_at). `metrics: []` 이면 tiles 도 빈 배열. `FactorPage`(issue): `headline`, `events`=items(`k`=title_keyword, `body`=sentence, `dir`=sentiment).
+PK `(etf_analysis_id, axis)`. 이슈 항목(outlook_issue_items)이나 대응표에 있는 지표(outlook_factor_metrics)가 있는 축만 행을 만든다. headline 은 이슈=issue_headline, 수치=요인 문장. 지표 라벨·단위·표시 포맷은 동기화의 `metric_key` 대응표(없는 키는 건너뜀), 지표별 sticker 는 없다. 행이 없으면 `ANALYSIS4001`. `MetricPage`: `verdict`=headline, `tiles`=metrics(카드 이름·단위·표시 포맷은 `key` 별 서비스 상수, `note`=subject·observed_at). `metrics: []` 이면 tiles 도 빈 배열. `FactorPage`(issue): `headline`, `events`=items(`k`=title_keyword, `body`=sentence, `dir`=sentiment).
 
 ### etf_rank (탐색 순위)
 | 컬럼 | 타입 | 비고 |
@@ -371,17 +396,24 @@ PK `(etf_analysis_id, axis)`. 파이프라인이 축별 독립 응답을 내고 
 | chips | jsonb | string[] |
 | ready | boolean | |
 
-PK `(as_of, rank)`. 최신 as_of 만 조회. 원천 미확인.
+PK `(as_of, rank)`. 최신 as_of 만 조회.
+- 대상: ETF 별 최신 전망 중 가장 최근 발행일.
+- 순서: `Signal` 강한 순, 같으면 최근 발행 순.
+- title=요약 제목, chips=결론 support 키워드 최대 2개, 없으면 burden.
 
 ### etf_detail
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
 | etf_code | varchar(6) PK → etf | |
 | as_of | date | |
-| payload | jsonb | `EtfDetailData` 전체(insight·stocks·themes·holdings·info·blurb) |
+| payload | jsonb | `EtfDetailData` 모양(stocks·holdings·stockCount·info·blurb) |
 | synced_at | timestamptz | |
 
-구성종목 비중·설명 문장이 전부 작성물이라 통째로 둔다. 종목 기준 역조회 엔드포인트가 없어 `etf_holding` 정규화는 하지 않는다. 원천 미확인.
+최신 구성 스냅샷 기준.
+- stocks: 비중 상위 10개와 두 종가 등락률. holdings: 전 종목 이름·비중.
+- info·blurb: `etf_curation`.
+- 원천 없는 insight·themes·themeRows·방향·설명은 생략.
+- 역조회 엔드포인트가 없어 `etf_holding` 정규화 안 함.
 
 ### 조합 (테이블 없음)
 - `EtfSummary` = etf + etf_quote + 최신 etf_analysis.signal.
@@ -433,6 +465,5 @@ erDiagram
 - `Post.etf.short`(ETF 짧은 이름)·`Post.author.name` 은 조인으로 만든다. 탈퇴 회원은 name 을 "탈퇴한 사용자" 로.
 - 리포스트 카운터(`repost_count`)는 `repost_of_id` 집계로도 되지만 피드 조회마다 세지 않으려고 카운터를 둔다.
 - 파이프라인에 요청할 것: `outlook.direction` 5단계 enum 동봉. 오늘 움직임 `summary` null 발행본을 `GET /etfs/{code}/move` 가 어떻게 답할지(404 코드 vs 빈 응답)는 계약 확인.
-- 원천 갭: `etf_candle` 의 open·high·low(`price_daily` 는 close·volume 만), `etf_quote` 의 실시간 시세(마트에 없음). 원천 미확인: etf_rank·etf_detail 본문.
+- 원천 갭: `etf_candle` 의 open·high·low(`price_daily` 는 close·volume 만), `etf_quote` 의 장중 시세(마트에 없음), 구성 해석·테마 비중·구성종목 방향과 설명.
 - 상장폐지 등으로 `etf` 에 없는 코드가 관심·게시물에 남으면 조인이 빈다. 숨길지 표시할지는 서비스 규칙으로 정한다.
-- 동기화 방식(논리 복제·배치·파이프라인 직접 쓰기)은 4단계에서. 방식에 따라 `synced_at` 의 의미와 upsert 주체가 정해진다.

@@ -66,7 +66,13 @@ com.edge.app
 
 **구현 순서는 스텁 → 실 구현.** 계약의 operation 전부를 컨트롤러·DTO 로 먼저 만들고 서비스는 고정 예시 데이터를 반환한다. 앱은 그 시점부터 붙는다. 도메인을 구현하면 그 서비스 본문을 교체한다. mock 모드(플래그로 mock·real 병존)는 두지 않는다. 앱 쪽 mock 클라이언트가 이미 12 도메인을 덮고 있어 서버 mock 은 가짜 데이터 두 벌이 되고, 플래그·분기가 영구히 남기 때문이다. 실데이터가 아직 없는 도메인은 스텁이 예시를 주거나 준비 중 코드(`ANALYSIS4001`)를 준다. 남은 스텁은 검색으로 센다.
 
-**데이터.** 사용자·관심·게시물·투표·알림은 이 모듈이 쓰기 소유. ETF·분석·테마는 파이프라인 산출물을 앱 DB 로 동기화한 읽기 전용 테이블(방식 미결, ADR-0056 미결 항목). 스키마는 `db/etf-migration` Flyway 가 소유하며 Hibernate 는 `validate` 만 한다.
+**데이터.**
+- 쓰기 소유: 사용자·관심·게시물·투표·알림.
+- 동기화 테이블(ETF·분석·순위): 쓰기는 `sync` 패키지 하나, 다른 도메인은 읽기만.
+- `sync` Repository 는 JdbcTemplate. 파이프라인 테이블에 엔티티가 없고 쓰기가 일괄 upsert.
+- 파이프라인 접속 env: `APP_PIPELINE_URL`·`APP_PIPELINE_USERNAME`·`APP_PIPELINE_PASSWORD`. 없으면 동기화 미동작.
+- 원천 없는 값(선별 목록·테마·운용사): `etf_curation`·`theme` 마이그레이션.
+- 스키마 소유: `db/etf-migration` Flyway, Hibernate 는 `validate`.
 
 ## Redis Cluster 부분 장애 실측 (2026-09-20)
 
