@@ -12,6 +12,9 @@
 # - 감시 상실: RDS 지표가 끊기면 RDS 상태를 모르는 것이라 위반으로 본다(breaching). 서비스 메모리 지표는 태스크가 없으면
 #   끊기는데, 그때는 이미 멈춘 것이다 — notBreaching 으로 두어야 다시 켤 수 있다(breaching 이면 기동 중 지표가 오기 전에
 #   또 0 으로 내린다). 태스크 부재 자체는 service_down 경보(main.tf)가 알린다.
+# - 한계: ECS 배포가 진행 중인 동안 오토스케일링은 스케일인을 멈춘다(AWS ECS 서비스 오토스케일링 문서). 그 사이에는 이 장치가
+#   서비스를 내리지 못한다. 배포는 장 마감 뒤에만 하고(README 실행안), 배포 중에는 deploy-airflow(wait_rollout, 최대 10분)를
+#   지켜보는 운영자가 판단한다. 배포가 끝나면 ALARM 이 남아 있는 경보가 다음 분에 다시 내린다.
 locals {
   stop_enabled = var.host_count > 0
   stop_alarms = {

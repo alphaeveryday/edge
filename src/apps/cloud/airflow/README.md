@@ -323,7 +323,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 - 호스트 관측기(`host_observer`): 5초마다 호스트 메모리·모든 cgroup(태스크·ECS·SSM·docker)·상위 프로세스, 커널 로그(OOM), docker 이벤트(종료 코드)를 **호스트 디스크에 append** — 대상이 죽어도 남는다. SSM 으로 수거.
 - 정기 DAG 는 모두 pause, `investor_intraday_orchestrator = "SFN"`·SFN 스케줄 그대로.
 
-**수명주기(되살아나지 않게).** 호스트 수는 Terraform `host_count`(1/0)가 정한다 — 콘솔로 0 을 만들면 다음 dev 머지의 자동 apply 가 1 로 되돌리므로 내리는 것도 코드로 한다. 서비스 desired 는 CD 소유(`deploy-airflow` 는 desired 0 이면 마이그레이션까지 건너뛴다 — 지운 DB 에 붙지 않는다). 서비스 중단 알람은 `host_count=1` 일 때만. 검증 자원(버킷·태스크 정의·관리 역할·검증 시크릿)은 `verify_enabled=false` 로 걷는다.
+**수명주기(되살아나지 않게).** 호스트 수는 Terraform `host_count`(1/0)가 정한다 — 콘솔로 0 을 만들면 다음 dev 머지의 자동 apply 가 1 로 되돌리므로 내리는 것도 코드로 한다. 서비스 desired 는 CD 소유(`deploy-airflow` 는 desired 0 이면 마이그레이션까지 건너뛴다 — 지운 DB 에 붙지 않는다). 서비스 중단 알람·운영 중단 경보(`stop.tf`)는 `host_count=1` 일 때만. 검증 자원(버킷·검증 태스크 정의·검증 시크릿)은 `verify_enabled=false` 로 걷는다. 관리 태스크(dbadmin)와 그 역할은 검증 자원이 꺼져도 호스트가 있으면 남는다(운영 메타DB 관리, ALPHA-1141) — `host_count=0`·`verify_enabled=false` 가 함께일 때 걷힌다.
 
 **시간.** 시작은 19:30 공시 배치 종료 확인 뒤, 23:58~00:45(뉴스 00:10)에는 새 run 을 시작하지 않는다, **06:30 KST 전에 신규 실행 중지·정리 시작**(프리마켓 07:00·분 세션 07:45 전). 최대 24시간, 상시 운영으로 자동 연장하지 않는다.
 
@@ -934,6 +934,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 - S1 위반 → 중단: `aws cloudwatch set-alarm-state --alarm-name edge-dev-airflow-stop-task-memory --state-value ALARM --state-reason "ALPHA-1141 S1"` → 3분 안에 서비스 `desiredCount=0`·`runningCount=0`, 서비스 이벤트에 오토스케일링 갱신, SNS 수신. 호스트는 남는다. 다음 평가에서 경보가 OK 로 돌아오면 `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 1` 로 다시 켜고 HEALTHY 확인.
 - S2 같은 절차를 `edge-dev-airflow-stop-rds-freeable` 로 한 번 더(방향이 반대인 경보도 같은 정책을 타는지).
 - S3 감시 상실: `describe-alarms` 로 `rds-freeable` 의 `TreatMissingData=breaching`, `task-memory` 의 `notBreaching` 을 확인한다. **결측 경로는 설정 확인뿐이다** — RDS 지표를 실제로 끊을 수는 없다.
+- 한계: ECS 배포가 진행 중인 동안은 오토스케일링이 스케일인을 멈춰 이 장치가 서비스를 내리지 못한다. 그래서 배포는 장 마감 뒤에만 하고 배포 중에는 운영자가 지켜본다. 배포가 끝나면 남아 있는 ALARM 이 다음 분에 다시 내린다.
 - `set-alarm-state` 가 오토스케일링 액션을 부르지 않으면(S1 에서 desired 가 그대로면) 전환하지 않는다. 그때는 임계를 일시로 낮춘 경보(`put-metric-alarm`)로 실제 위반을 만들어 다시 확인하고, apply 로 원복한다.
 
 **관측과 중단 기준.** 자동은 경보가 서비스를 내리고, 수동은 그날 장 마감 뒤 롤백한다(장중이면 긴급 롤백 절차).
