@@ -25,6 +25,7 @@ public class SignupCodeService {
     private final MemberRepository memberRepository;
     private final Mailer mailer;
     private final MailQuota mailQuota;
+    private final ReviewAccount reviewAccount;
 
     // 60초 내 재요청은 발송 없이 같은 응답
     @Transactional
@@ -37,15 +38,21 @@ public class SignupCodeService {
         if (current != null && current.getCreatedAt().plus(RESEND_GAP).isAfter(now)) {
             return;
         }
-        if (current != null && current.dailyLimitReached(now)) {
+        boolean review = reviewAccount.is(email);
+        if (!review && current != null && current.dailyLimitReached(now)) {
             throw new GeneralException(AppErrorStatus.AUTH_MAIL_LIMIT);
         }
-        mailQuota.take();
-        String code = AuthService.newCode();
+        if (!review) {
+            mailQuota.take();
+        }
+        String code = review ? ReviewAccount.CODE : AuthService.newCode();
         if (current == null) {
             codeRepository.save(SignupCode.issue(email, AuthService.hash(code), now));
         } else {
             current.reissue(AuthService.hash(code), now);
+        }
+        if (review) {
+            return;
         }
         mailer.send(email, "[ETF Orca] 가입 인증 코드",
                 "가입 인증 코드는 " + code + " 입니다.\n10분 안에 앱에 입력해 주세요.\n요청하지 않았다면 이 메일을 무시해 주세요.");

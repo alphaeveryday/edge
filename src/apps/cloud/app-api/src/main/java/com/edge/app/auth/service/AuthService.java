@@ -61,6 +61,7 @@ public class AuthService {
     private final SignupCodeRepository signupCodeRepository;
     private final Mailer mailer;
     private final MailQuota mailQuota;
+    private final ReviewAccount reviewAccount;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @Transactional
@@ -112,15 +113,21 @@ public class AuthService {
         if (current != null && current.getCreatedAt().plus(RESET_RESEND_GAP).isAfter(now)) {
             return;
         }
-        if (current != null && current.dailyLimitReached(now)) {
+        boolean review = reviewAccount.is(member.getEmail());
+        if (!review && current != null && current.dailyLimitReached(now)) {
             throw new GeneralException(AppErrorStatus.AUTH_MAIL_LIMIT);
         }
-        mailQuota.take();
-        String code = newCode();
+        if (!review) {
+            mailQuota.take();
+        }
+        String code = review ? ReviewAccount.CODE : newCode();
         if (current == null) {
             resetCodeRepository.save(PasswordResetCode.issue(member.getId(), hash(code), now));
         } else {
             current.reissue(hash(code), now);
+        }
+        if (review) {
+            return;
         }
         mailer.send(member.getEmail(), "[ETF Orca] 비밀번호 재설정 코드",
                 "비밀번호 재설정 코드는 " + code + " 입니다.\n10분 안에 앱에 입력해 주세요.\n요청하지 않았다면 이 메일을 무시해 주세요.");
