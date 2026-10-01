@@ -31,8 +31,8 @@ export default function Home() {
       await qc.fetchQuery({ queryKey: ['etf', 'move', code], queryFn: () => api.etf.move(code) });
       router.push(`/etf/${code}/summary`);
     } catch (e) {
-      if (isApiError(e, 'NOT_READY')) toast('아직 AI 분석이 준비되지 않았어요');
-      else toast('불러오지 못했어요');
+      if (isApiError(e, 'NOT_READY')) toast('아직 AI 분석이 준비되지 않았어요', 'error');
+      else toast('불러오지 못했어요', 'error');
     }
   };
   const b = brief.data;

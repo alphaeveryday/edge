@@ -25,7 +25,7 @@ export default function Explore() {
   const daily = useDaily(cur?.etf.code ?? '', undefined, !!cur);
   useEffect(() => {
     if (!daily.error) return;
-    toast(isApiError(daily.error, 'NOT_READY') ? '아직 AI 분석이 준비되지 않았어요' : '불러오지 못했어요');
+    toast(isApiError(daily.error, 'NOT_READY') ? '아직 AI 분석이 준비되지 않았어요' : '불러오지 못했어요', 'error');
     setSel(null);
   }, [daily.error, toast]);
   const nextIdx = sel === null || rows.length < 2 ? null : (sel + 1) % rows.length;

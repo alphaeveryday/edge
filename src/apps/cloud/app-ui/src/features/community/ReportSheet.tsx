@@ -31,14 +31,14 @@ export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarg
     if (!target) return;
     report.mutate({ target, reason }, {
       onSuccess: () => { close(); toast('신고를 접수했어요. 24시간 안에 확인할게요'); },
-      onError: () => toast('신고에 실패했어요'),
+      onError: () => toast('신고에 실패했어요', 'error'),
     });
   };
   const doBlock = () => {
     if (!target) return;
     block.mutate(target.handle, {
       onSuccess: () => { close(); onBlocked?.(); toast('차단했어요'); },
-      onError: () => toast('차단에 실패했어요'),
+      onError: () => toast('차단에 실패했어요', 'error'),
     });
   };
   return (
