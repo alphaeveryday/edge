@@ -87,7 +87,7 @@ const styles = StyleSheet.create({
   swatches: { flexDirection: 'row', gap: 8 },
   swatch: { width: 28, height: 28, borderRadius: 999 },
   swatchOn: { borderWidth: 3, borderColor: colors.white, shadowColor: colors.text, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } },
-  input: { height: 48, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  input: { height: 54, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   nick: { fontFamily: fam.extrabold, fontSize: 19, color: colors.text, letterSpacing: -0.5 },
   handle: { fontFamily: fam.mono, fontSize: 13, color: colors.textMuted },
   stats: { flexDirection: 'row', gap: 28, marginTop: 4 },

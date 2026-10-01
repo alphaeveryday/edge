@@ -44,5 +44,5 @@ export function NewGroupSheet({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 const styles = StyleSheet.create({
-  input: { marginTop: 16, backgroundColor: colors.surface, borderRadius: radius.field, padding: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  input: { marginTop: 16, backgroundColor: colors.surface, borderRadius: radius.field, height: 54, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
 });
