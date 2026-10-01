@@ -104,5 +104,11 @@
     "loss_limit": 3,
     "host_mem_available_min_mib": 64,
     "why": "노트북 절전·포워딩 단절과 무관하게 중단 기준을 본다. 감시가 죽으면 검증 부하가 멈춘다(심장박동 게이트)"
-  }
+  },
+  "_post_run_corrections": [
+    "2026-10-01 18:2x — 결과를 본 뒤 고친 것(기준값은 그대로, 교정 전 판정은 verdict-raw.json 에 남긴다):",
+    "운영자가 손으로 남긴 준비 기록(pr1028_merge·deploy_airflow_dispatch·reup_after_pretest)을 실험 구간 계산에서 주석으로 분류 — 구간 시작이 16:36 으로 당겨져 A2·A4·A8·A11 이 관측 완전성 미달로 판정 불가였다",
+    "호스트 health 표본은 실험 구간 안만 본다 — 재기동 직후 Airflow 기동 전 no_api_container 18건(16:57~17:01)이 오류로 세어졌다",
+    "정리 시작(cleanup_begin) 뒤의 기록(pr1029_merge)도 실험 구간에서 뺀다 — 구간 끝이 정리 시각으로 늘어나 관측 완전성이 다시 미달로 계산됐다"
+  ]
 }

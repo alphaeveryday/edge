@@ -466,11 +466,22 @@ def analyze(exp: str) -> dict:
     burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
     # heartbeat 표본: 호스트 관측기 health.log 가 있으면 그것(PC·포워딩과 무관), 없으면 운영자 PC 표본(이전 회차).
     # import 오류 수는 인증이 필요한 API 라 PC 표본에만 있다 — DAG 파일이 실험 중 바뀌지 않으므로 처음·끝 표본으로 본다.
+    # 실험 구간 — 운영자가 손으로 남긴 주석 표시(기준선 메모·설정 변경·개입 기록)는 실험 시작·끝이 아니다.
+    notes = ("baseline_note", "config_change", "operator_intervention", "unplaceable_by_design", "infra_defect",
+             # 실험 전 준비 기록(인프라 머지·배포 디스패치·사전 시험 뒤 재기동) — 실험 구간의 시작이 아니다
+             # (aws-small-1408-a4a5 사후 교정: 이 기록이 구간 시작을 16:36 으로 당겨 관측 완전성을 판정 불가로 만들었다).
+             "pr1028_merge", "deploy_airflow_dispatch", "reup_after_pretest")
+    # 정리 시작(cleanup_begin) 뒤의 기록(정리 PR 머지 등)도 실험이 아니다 — 구간은 그 앞에서 끝난다.
+    cleanup_at = min((m["t"] for m in marks if m["event"] == "cleanup_begin"), default=float("inf"))
+    ev = [m["t"] for m in marks if m["event"] not in notes and m["event"] != "cleanup_begin" and m["t"] < cleanup_at]
+    need = (min(ev), max(ev)) if ev else None
     import_samples = [h for h in health if h.get("code") == 200 and h.get("import_errors") is not None]
     hh = host_health(d)
     health_source = "host" if hh else "operator_pc"
     if hh:
-        health = hh
+        # 호스트 관측기는 Airflow 보다 먼저 뜬다(호스트 기동 → 서비스 배포). 실험 구간 밖의 표본(기동 전 no_api_container)은
+        # 실험의 heartbeat 가 아니다 — 구간 안 표본만 본다(PC 표본은 실험 중에만 돌아 이 문제가 없었다).
+        health = [h for h in hh if need and need[0] - 60 <= h["t"] <= need[1] + 60]
     # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
     ok_h = [h for h in health if "health" in h and h.get("code") == 200]
     # 공백은 **성공한** 표본 사이로 잰다 — 실패 행이 촘촘해도 heartbeat 를 확인한 것이 아니다.
@@ -483,10 +494,6 @@ def analyze(exp: str) -> dict:
     # RDS 관측이 실험 전 구간(첫 배포 확인 ~ 마지막 표시)을 덮어야 A8 을 판정한다 — 빈 구간이 2분 넘으면 판정 불가.
     spans = sorted((datetime.fromisoformat(r["from"]).timestamp(), datetime.fromisoformat(r["to"]).timestamp())
                    for r in rdss)
-    # 실험 구간 — 운영자가 손으로 남긴 주석 표시(기준선 메모·설정 변경·개입 기록)는 실험 시작·끝이 아니다.
-    notes = ("baseline_note", "config_change", "operator_intervention", "unplaceable_by_design", "infra_defect")
-    ev = [m["t"] for m in marks if m["event"] not in notes and m["event"] != "cleanup_begin"]
-    need = (min(ev), max(ev)) if ev else None
     covered_to, rds_uncovered = (need[0] if need else 0), []
     for a, b in spans:
         if need and a > covered_to + 120:
