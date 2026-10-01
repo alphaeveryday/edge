@@ -13,7 +13,8 @@ interface Props {
 
 export function Sticker({ signal, size = 28, radius = 9, showLabel = true, label }: Props) {
   const s = SIG[signal];
-  const markSize = s.double ? 9 : 13;
+  // 기호 크기의 스티커 크기 비례, 기준 28
+  const markSize = (size * (s.double ? 9 : 13)) / 28;
   return (
     <View
       style={[
