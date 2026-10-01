@@ -32,6 +32,7 @@ from ..db import connect as _default_connect
 from ..db import stable_domain_id
 from .models import canonical_json, scheduled_at_for
 from .states import (
+    DATASET_PRICE_MINUTE,
     RESULT_STATUSES,
     WINDOW_CLAIMED,
     WINDOW_DUE,
@@ -55,6 +56,10 @@ class UniverseConflictError(RuntimeError):
 class SessionFinalizedError(RuntimeError):
     """drain 경계 이후(DRAINING~FINALIZED/FAILED) session 재계획 시도 — snapshot 경계
     뒤에 window 를 더하지 않는다."""
+
+
+class SessionReopenRejected(RuntimeError):
+    """확정 세션 재오픈 거부 — 가격 세션·FINALIZED·지목한 창 실재가 아니면 아무것도 안 바꾼다."""
 
 
 @dataclass
@@ -547,6 +552,80 @@ class MinuteLedger:
                 (now, session_id),
             )
             return cur.rowcount == 1
+
+    # ── 재오픈 (ALPHA-1135) ────────────────────────────────────
+    def reopen_session(
+        self, *, session_id: str, window_starts: Sequence[datetime] | None,
+    ) -> dict:
+        """FINALIZED 가격 세션을 ACTIVE 로 되돌리고 지목한 창(None=전부)을 DUE 로 돌린다.
+
+        확정된 하루가 틀린 봉으로 봉인됐을 때(ALPHA-1127 — 08-04~09-29) 다시 수집할 유일한
+        문이다. 그 뒤는 기존 경로 그대로다: 지난 날짜 Worker 는 소급 TR 로 받고 outbox 를
+        안 낸다(재판정·LLM 없음), checksum 이 바뀐 창만 generation+1·옛 객체는 보존, 이어서
+        drain → QC 가 다시 봉인한다.
+
+        한 트랜잭션에서 세션 행을 `FOR UPDATE` 로 잠그고 판정한다 — 거부면 아무것도 안
+        바뀐다. 거부 조건:
+        - 가격 세션이 아니다 — 소급 TR 이 있는 것은 가격뿐이다(업종지수는 소급 불가,
+          iNAV·뉴스는 경로가 다르다). 열어 두면 아무도 못 채우는 DUE 가 생긴다.
+        - FINALIZED 가 아니다 — 살아 있는 세션(ACTIVE·DRAINING)에 걸면 Worker 의 fence 를
+          뺏고, QC 중이면 판정과 다툰다. 확정된 하루만 연다.
+        - 지목한 창 중 원장에 없는 것이 있다 — 오타가 "일부만 열림"으로 조용히 접힌다.
+
+        ⚠️ **fencing token 을 올린다** — 확정 전에 떠난 Worker 의 낡은 토큰으로 이 세션에
+        다시 쓰지 못하게. ⚠️ `final_checksum`·`final_generation` 을 비운다 — 남겨 두면 QC
+        재실행이 "이미 확정"으로 읽고(`eod._already_finalized`) 옛 판정을 돌려준다. 옛 값은
+        반환값에 실려 호출자가 기록한다(감사 근거). 창의 generation·checksum·manifest 는
+        **그대로 둔다** — 재커밋이 "바뀌었나"를 그 값과 대조해 세대를 정한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT dataset, phase, final_checksum, final_generation
+                FROM minute_ingestion_session WHERE session_id = %s FOR UPDATE
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise SessionReopenRejected(f"없는 세션이다: {session_id}")
+            dataset, phase, final_checksum, final_generation = row
+            if dataset != DATASET_PRICE_MINUTE:
+                raise SessionReopenRejected(
+                    f"가격 세션만 연다(소급 수집 경로가 가격뿐이다): {session_id} 는 {dataset}")
+            if phase != "FINALIZED":
+                raise SessionReopenRejected(
+                    f"FINALIZED 세션만 연다: {session_id} 는 {phase}")
+            starts = None if window_starts is None else sorted(set(window_starts))
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window
+                SET data_status = %s, claimed_by = NULL, claim_token = NULL,
+                    lease_expires_at = NULL, next_attempt_at = NULL, updated_at = now()
+                WHERE session_id = %s
+                  AND (%s::timestamptz[] IS NULL OR window_start = ANY(%s::timestamptz[]))
+                """,
+                (WINDOW_DUE, session_id, starts, starts),
+            )
+            reopened = cur.rowcount
+            if starts is not None and reopened != len(starts):
+                # 트랜잭션째 버린다(connect 컨텍스트가 예외에 롤백한다)
+                raise SessionReopenRejected(
+                    f"지목한 창 {len(starts)}개 중 {reopened}개만 원장에 있다: {session_id}")
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'ACTIVE', worker_fencing_token = worker_fencing_token + 1,
+                    lease_expires_at = NULL, heartbeat_at = NULL,
+                    drain_requested_at = NULL, drain_ack_at = NULL,
+                    final_checksum = NULL, final_generation = NULL, updated_at = now()
+                WHERE session_id = %s
+                """,
+                (session_id,),
+            )
+        return {"session_id": session_id, "reopened_windows": reopened,
+                "previous_final_checksum": final_checksum,
+                "previous_final_generation": final_generation}
 
     # ── EOD QC (ALPHA-693) ────────────────────────────────────
 

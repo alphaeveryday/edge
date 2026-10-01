@@ -145,8 +145,10 @@
 > 는 결코 빈 문자열이 아니다 — 하류가 기대도 되는 불변식이다), 충돌 갈래의 `COALESCE` 는
 > 레이크·PG 에 남은 옛 `''` 행 때문에 있다. 마이그레이션 ②가 "지워지는 것도 움직임"이라고
 > 열거한 것은 이 예외를 모른다),
-> **세션 계획·drain CLI**(ALPHA-698 — `run plan-minute-session`·
-> `run drain-minute-session`. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
+> **세션 계획·drain·재오픈 CLI**(ALPHA-698 — `run plan-minute-session`·
+> `run drain-minute-session`, ALPHA-1135 — `run reopen-minute-session`: FINALIZED 가격 세션을
+> ACTIVE·창 DUE 로 되돌려 소급 재수집. 사유 필수, 가격 세션·FINALIZED 만, 지목 창 하나라도
+> 없으면 무변경. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
 > 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
 > exit code 가 아니라 출력(`created`·`drain_requested`)이 말한다. ⚠️ `--dataset`·
@@ -2169,10 +2171,38 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #     수동 DEAD 격리도 필요 없다. 그 발행 의도는 job의 `delivery_expected=false`에 같이 남아
 #     조회 시각이나 생성 시각으로 다시 추정하지 않는다(ALPHA-1066). 실시간 job은 true라 필수
 #     event 부재가 자정을 지나도 전달 실패로 보인다. 무엇을 수집했는지는 window·job 원장에 남는다.
-#  3) 종가 단일가 구간(15:21~15:29)의 값이 **당일 레인과 다르다**. 당일 TR 은 그 9분을
-#     마감 체결 봉의 복제로 채우고(거래량까지 반복 — 5분 마지막 두 버킷이 부풀려진다),
-#     소급 경로는 체결이 없었다는 사실대로 직전 종가 flat·거래량 0 으로 채운다. 백필한
-#     하루만 그 두 버킷이 다르게(더 정확하게) 나온다.
+#  3) 마감 창(15:29)의 값이 **당일 레인과 다르다**. 소급 경로는 종가 단일가 봉(KIS 라벨
+#     15:30)을 그 창에 접어(`kis_minute.fold_closing_auction`) 종가 = 공식 종가지만, 당일
+#     레인은 그 봉을 세션 안에서 못 받아 접수 구간 봉(vol 0·단일가 전 가격) 그대로다
+#     (ALPHA-1127·1128). 재수집한 하루가 정본이다.
+#
+# 확정된 세션 재수집(ALPHA-1135) — 이미 FINALIZED 인 가격 세션이 틀린 봉으로 봉인됐을 때
+# (ALPHA-1127: 08-04~09-29). 위 1) 의 "prefix 가 비어 있어야" 는 **새 세션** 얘기다 — 같은
+# 세션을 다시 여는 이 경로는 재커밋이 generation+1 로 새 키에 쓰고 옛 객체는 이력으로 남는다.
+# 순서(하루 단위, 장 마감 뒤·주말 — 소급 TR 이 앱키 예산을 하루 ~1,800콜 쓴다):
+#   ① 그 세션의 universe 를 찾는다 — Worker 는 원장의 `universe_version`·`universe_hash` 와
+#      다른 파일이면 처리를 거부한다. 원장 값은 `minute_ingestion_session` 에서, 후보 파일은
+#      `config/minute/universe.json.bak-*`(변경일 백업만 있다 — 해시로 대조).
+#   ② reopen — FINALIZED 가격 세션만 연다(그 밖은 exit 1). `--reason` 필수(옛 final_checksum
+#      과 함께 출력에 남는 것이 감사 근거). `--windows 1529` 처럼 창 시작 KST HHMM 으로 일부만
+#      열 수 있다(없으면 전부). 지목한 창 하나라도 없으면 아무것도 안 바뀐다.
+#   ③ price-worker 를 그 날짜로 — `DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2`(legacy
+#      세션에도 쓴다 — 옛 승자는 이력에 기록된다). 지난 날짜라 소급 TR·outbox 미발행이다.
+#      checksum 이 바뀐 창만 새 세대가 된다. `--max-ticks` 를 창 수보다 넉넉히(예: 450).
+#   ④ drain → ⑤ qc(다시 FINALIZED + 새 final_checksum) → ⑥ rollup(롤업 소유일만 —
+#      `WRITER_SINCE` 앞은 거부되고 그게 맞다).
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run reopen-minute-session --session-id <session_id> \
+    --reason "ALPHA-1135 라벨 오독 재수집"
+DATA_PIPELINE_DB__PASSWORD=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET=... \
+DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2.1 \
+DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2 \
+KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
+  python -m data_pipeline.run price-worker --session-date 2026-09-29 \
+    --universe s3://edge-dev-pipeline-lake/config/minute/universe.json.bak-<그 세션의 파일> \
+    --max-ticks 450
 # 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
 # canonical 로 판정한다(LLM 0). 임계는 price_triggers 의 abs_threshold(발화)·
 # revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은

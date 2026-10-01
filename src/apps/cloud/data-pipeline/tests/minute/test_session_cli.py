@@ -413,3 +413,95 @@ class TestCliWiring:
         assert _keyword_names(plan_session_cli) == {
             "dataset", "source_group", "session_date", "universe"}
         assert _keyword_names(drain_session_cli) == {"session_id"}
+
+
+class TestReopen:
+    """`reopen-minute-session`(ALPHA-1135) — 확정을 깨는 수동 개입의 입구.
+
+    원장 판정(FINALIZED·가격 세션·창 실재)은 실 PG e2e(`tests/e2e/test_minute_session_reopen.py`)
+    가 잰다. 여기서 고정하는 건 CLI 몫 셋이다: **사유 없이는 안 연다**(옛 final_checksum 과 함께
+    출력에 남는 것이 유일한 감사 근거), **HHMM 이 그 세션 날짜의 KST 창 시작으로 번역된다**
+    (UTC 로 번역하면 9시간 어긋난 창을 지목해 "원장에 없다"로 거부되거나, 다른 창을 연다),
+    **거부(1)와 실행 불가(2)를 가른다**(재시도로 안 낫는 거부를 2 로 내면 재시도가 돈다).
+    """
+
+    class Ledger:
+        def __init__(self, *, snapshot, reject=None):
+            self.snapshot, self.reject, self.calls = snapshot, reject, []
+
+        def __call__(self, **kwargs):
+            return self
+
+        def session_snapshot(self, *, session_id):
+            return self.snapshot
+
+        def reopen_session(self, *, session_id, window_starts):
+            self.calls.append(window_starts)
+            if self.reject:
+                raise self.reject
+            return {"session_id": session_id, "reopened_windows": len(window_starts or [1, 2]),
+                    "previous_final_checksum": "a" * 64, "previous_final_generation": 1}
+
+    def _install(self, monkeypatch, **kwargs):
+        from datetime import date
+
+        import data_pipeline.minute.session_cli as module
+        ledger = self.Ledger(snapshot={"session_date": date(2026, 9, 29), "phase": "FINALIZED"},
+                             **kwargs)
+        monkeypatch.setattr(module, "MinuteLedger", ledger)
+        return ledger
+
+    def test_windows_are_kst_window_starts_of_the_session_date(self, monkeypatch, capsys):
+        from datetime import datetime, timedelta, timezone
+
+        from data_pipeline.minute.session_cli import reopen_session_cli
+        ledger = self._install(monkeypatch)
+        assert reopen_session_cli(make_settings(), session_id="msn_x", windows="1529,0900",
+                                  reason="ALPHA-1135 재수집") == 0
+        [starts] = ledger.calls
+        assert [s.astimezone(timezone.utc) for s in starts] == [
+            datetime(2026, 9, 29, 6, 29, tzinfo=timezone.utc),
+            datetime(2026, 9, 29, 0, 0, tzinfo=timezone.utc)]
+        assert all(s.utcoffset() == timedelta(hours=9) for s in starts)
+        out = json.loads(capsys.readouterr().out)
+        assert out["reason"] == "ALPHA-1135 재수집"
+        assert out["previous_final_checksum"] == "a" * 64
+
+    def test_no_windows_reopens_everything(self, monkeypatch):
+        from data_pipeline.minute.session_cli import reopen_session_cli
+        ledger = self._install(monkeypatch)
+        assert reopen_session_cli(make_settings(), session_id="msn_x", windows=None,
+                                  reason="r") == 0
+        assert ledger.calls == [None]
+
+    @pytest.mark.parametrize("reason", [None, "", "   "])
+    def test_reason_is_required(self, monkeypatch, reason):
+        from data_pipeline.minute.session_cli import reopen_session_cli
+        ledger = self._install(monkeypatch)
+        assert reopen_session_cli(make_settings(), session_id="msn_x", windows=None,
+                                  reason=reason) == 2
+        assert ledger.calls == []
+
+    @pytest.mark.parametrize("windows", ["930", "15:29", "1529,abcd"])
+    def test_malformed_windows_open_nothing(self, monkeypatch, windows):
+        from data_pipeline.minute.session_cli import reopen_session_cli
+        ledger = self._install(monkeypatch)
+        assert reopen_session_cli(make_settings(), session_id="msn_x", windows=windows,
+                                  reason="r") == 2
+        assert ledger.calls == []
+
+    def test_ledger_refusal_is_exit_1(self, monkeypatch):
+        from data_pipeline.minute.repository import SessionReopenRejected
+        from data_pipeline.minute.session_cli import reopen_session_cli
+        self._install(monkeypatch, reject=SessionReopenRejected("FINALIZED 세션만 연다"))
+        assert reopen_session_cli(make_settings(), session_id="msn_x", windows=None,
+                                  reason="r") == 1
+
+    def test_unknown_session_and_missing_db_are_exit_2(self, monkeypatch):
+        import data_pipeline.minute.session_cli as module
+        from data_pipeline.minute.session_cli import reopen_session_cli
+        monkeypatch.setattr(module, "MinuteLedger", self.Ledger(snapshot=None))
+        assert reopen_session_cli(make_settings(), session_id="msn_x", windows=None,
+                                  reason="r") == 2
+        assert reopen_session_cli(make_settings(db_ok=False), session_id="msn_x", windows=None,
+                                  reason="r") == 2
