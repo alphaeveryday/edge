@@ -714,8 +714,9 @@ module "airflow" {
   # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
   task_memory   = 1408
-  # small·1408 A4·A5 표적 재검증(2026-10-01)을 마쳐 0 으로 내렸다. 다시 올리는 것도 이 값(코드)으로 한다.
-  host_count    = 0
+  # ALPHA-1141 장중 수급 첫 운영 전환 준비 — 장후 기동·중단 시험·10-05 까지 유휴 관측(업무 DAG pause, SFN 그대로).
+  # 다음 승인이 없으면 README "첫 운영 전환 실행안"의 기본 종료로 0 으로 내린다(메타DB 는 남긴다).
+  host_count    = 1
   host_observer = false
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
