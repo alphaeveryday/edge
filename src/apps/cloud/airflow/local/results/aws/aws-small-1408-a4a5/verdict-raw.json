@@ -1,0 +1,383 @@
+{
+ "exp": "aws-small-1408-a4a5",
+ "deploy": {
+  "task_memory": "1408",
+  "hosts": [
+   {
+    "ec2": "i-0c74ccb9319d26205",
+    "status": "ACTIVE",
+    "agent": {
+     "agentVersion": "1.107.0",
+     "agentHash": "cc1e779d",
+     "dockerVersion": "DockerVersion: 25.0.16"
+    },
+    "registered": {
+     "CPU": 2048,
+     "MEMORY": 1846
+    },
+    "remaining": {
+     "CPU": 256,
+     "MEMORY": 438
+    },
+    "attributes": {
+     "ecs.ami-id": "ami-0c15069e7568e5f41",
+     "ecs.cpu-architecture": "arm64",
+     "ecs.instance-type": "t4g.small"
+    }
+   }
+  ],
+  "health_matches_plan": true,
+  "settings_match_plan": true,
+  "airflow_version": {
+   "version": "3.3.2",
+   "git_version": ".release:aa19d2dbb9ed187ec01957a92848d9b005e9ba9d"
+  },
+  "running_image_digests": [
+   {
+    "scheduler": "sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"
+   },
+   {
+    "dag-processor": "sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"
+   },
+   {
+    "api-server": "sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"
+   }
+  ]
+ },
+ "host": {
+  "mem_total_mib": 1846,
+  "mem_available_min_mib": 247,
+  "mem_available_p50_mib": 346,
+  "swap_total_mib": 0,
+  "swap_used_max_mib": 0,
+  "task_cgroups": 1,
+  "task_oom_kill": 0,
+  "task_mem_max_mib": 1129,
+  "task_mem_limit_mib": 1408,
+  "task_hit_limit_events": 0,
+  "component_max_mib": {
+   "airflow_task": 1129,
+   "containerd": 104,
+   "dockerd": 1197,
+   "ecs_agent": 132,
+   "observer": 36,
+   "other": 43,
+   "ssm_agent": 117,
+   "system_other": 1616,
+   "user": 0
+  },
+  "component_mean_mib": {
+   "airflow_task": 999,
+   "containerd": 92,
+   "dockerd": 181,
+   "ecs_agent": 18,
+   "observer": 28,
+   "other": 21,
+   "ssm_agent": 81,
+   "system_other": 514,
+   "user": 0
+  },
+  "idle_task_anon_mib": {
+   "S1": 729,
+   "after_L": 926
+  },
+  "idle_mem_available_mib": {
+   "S1": 493,
+   "after_L": 358
+  },
+  "samples": 786,
+  "task_paths_seen": 1,
+  "task_events_missing": 0,
+  "first_t": 1790841426.0,
+  "last_t": 1790846164.0,
+  "max_gap_s": 8.0
+ },
+ "host_obs_files": {
+  "samples.log": true,
+  "kmsg.log": true,
+  "docker-events.log": true
+ },
+ "kernel_oom_lines": [],
+ "docker": {
+  "oom": [],
+  "die": []
+ },
+ "latency": {
+  "L": {
+   "prev_end_to_queued_p95": 1.0,
+   "queued_to_start_p95": 4.6,
+   "start_to_ecs_created_p95": 1.2,
+   "ecs_stopped_to_end_p95": 12.6,
+   "n": {
+    "gap": 30,
+    "queue": 36,
+    "submit": 30,
+    "detect": 30
+   },
+   "detect_values": [
+    0.7,
+    1.7,
+    2.0,
+    3.0,
+    3.2,
+    3.3,
+    3.5,
+    3.8,
+    5.1,
+    6.3,
+    8.2,
+    8.6,
+    8.6,
+    8.7,
+    9.4,
+    9.7,
+    9.7,
+    9.7,
+    9.8,
+    10.0,
+    10.0,
+    10.2,
+    10.2,
+    10.3,
+    10.6,
+    11.3,
+    11.6,
+    11.7,
+    12.6,
+    12.8
+   ],
+   "detect_max": 12.807059049606323,
+   "ecs_tasks": 30,
+   "unmatched": [],
+   "missing_samples": []
+  }
+ },
+ "outcomes": {
+  "B1": null,
+  "B3": null,
+  "L": {
+   "normals": [
+    {
+     "key": "N1",
+     "state": "success",
+     "starts": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "ok_runs": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "writes": 1,
+     "ledger": [
+      "AIRFLOW",
+      "SUCCEEDED",
+      {
+       "INVESTOR_INTRADAY_COLLECTION_KIS": "FULFILLED",
+       "NORMALIZE_INVESTOR_INTRADAY": "FULFILLED",
+       "LOAD_INVESTOR_INTRADAY": "FULFILLED"
+      }
+     ],
+     "ecs": 5,
+     "ok": true
+    },
+    {
+     "key": "N2",
+     "state": "success",
+     "starts": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "ok_runs": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "writes": 1,
+     "ledger": [
+      "AIRFLOW",
+      "SUCCEEDED",
+      {
+       "INVESTOR_INTRADAY_COLLECTION_KIS": "FULFILLED",
+       "NORMALIZE_INVESTOR_INTRADAY": "FULFILLED",
+       "LOAD_INVESTOR_INTRADAY": "FULFILLED"
+      }
+     ],
+     "ecs": 5,
+     "ok": true
+    },
+    {
+     "key": "N3",
+     "state": "success",
+     "starts": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "ok_runs": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "writes": 1,
+     "ledger": [
+      "AIRFLOW",
+      "SUCCEEDED",
+      {
+       "INVESTOR_INTRADAY_COLLECTION_KIS": "FULFILLED",
+       "NORMALIZE_INVESTOR_INTRADAY": "FULFILLED",
+       "LOAD_INVESTOR_INTRADAY": "FULFILLED"
+      }
+     ],
+     "ecs": 5,
+     "ok": true
+    },
+    {
+     "key": "N4",
+     "state": "success",
+     "starts": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "ok_runs": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "writes": 1,
+     "ledger": [
+      "AIRFLOW",
+      "SUCCEEDED",
+      {
+       "INVESTOR_INTRADAY_COLLECTION_KIS": "FULFILLED",
+       "NORMALIZE_INVESTOR_INTRADAY": "FULFILLED",
+       "LOAD_INVESTOR_INTRADAY": "FULFILLED"
+      }
+     ],
+     "ecs": 5,
+     "ok": true
+    },
+    {
+     "key": "N5",
+     "state": "success",
+     "starts": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "ok_runs": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "writes": 1,
+     "ledger": [
+      "AIRFLOW",
+      "SUCCEEDED",
+      {
+       "INVESTOR_INTRADAY_COLLECTION_KIS": "FULFILLED",
+       "NORMALIZE_INVESTOR_INTRADAY": "FULFILLED",
+       "LOAD_INVESTOR_INTRADAY": "FULFILLED"
+      }
+     ],
+     "ecs": 5,
+     "ok": true
+    },
+    {
+     "key": "N6",
+     "state": "success",
+     "starts": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "ok_runs": {
+      "collect": 1,
+      "normalize": 1,
+      "load": 1
+     },
+     "writes": 1,
+     "ledger": [
+      "AIRFLOW",
+      "SUCCEEDED",
+      {
+       "INVESTOR_INTRADAY_COLLECTION_KIS": "FULFILLED",
+       "NORMALIZE_INVESTOR_INTRADAY": "FULFILLED",
+       "LOAD_INVESTOR_INTRADAY": "FULFILLED"
+      }
+     ],
+     "ecs": 5,
+     "ok": true
+    }
+   ],
+   "valid_runs": [
+    "aws__aws-small-1408-a4a5__L__0935",
+    "aws__aws-small-1408-a4a5__L__1005",
+    "aws__aws-small-1408-a4a5__L__1125",
+    "aws__aws-small-1408-a4a5__L__1325",
+    "aws__aws-small-1408-a4a5__L__1435",
+    "aws__aws-small-1408-a4a5__L__1520"
+   ],
+   "normal_ok": 6
+  }
+ },
+ "health": {
+  "samples": 315,
+  "errors": 18,
+  "errors_outside_restart": 18,
+  "unhealthy_outside_restart": 0,
+  "max_gap_s": 16,
+  "source": "host",
+  "first_t": 1790841697,
+  "last_t": 1790846155,
+  "import_errors_missing": 1,
+  "import_errors_max": 0
+ },
+ "burst": {
+  "n": 0,
+  "non_2xx": [],
+  "p95_s": null
+ },
+ "rds": {
+  "checks": 2,
+  "uncovered": [
+   [
+    1790840167,
+    1790841827.0
+   ]
+  ],
+  "any_stop": false,
+  "business_failed_sfn": [],
+  "data_gap": false,
+  "freeable_min": 561.82,
+  "connections_max": 27.0,
+  "cpu_max": 10.58,
+  "role_sessions_max": {
+   "airflow_meta": 4,
+   "airflow_verify": 0
+  },
+  "airflow_db_error_logs": []
+ },
+ "stopped": [],
+ "unplaceable_events": [],
+ "unexpected_airflow_container_exits": [],
+ "pass": {
+  "A0_deploy_matches_plan": true,
+  "A1_placement": true,
+  "A2_no_oom_restart": null,
+  "A3_host_memory": true,
+  "A4_heartbeat_parse": null,
+  "A5_latency": true,
+  "A6_outcomes": "n/a(L)",
+  "A7_business": true,
+  "A8_db": null,
+  "A9_no_growth": "n/a(L)",
+  "A10_ui": "n/a(L)",
+  "A11_task_headroom": null,
+  "A12_deploy_fixed": true
+ }
+}

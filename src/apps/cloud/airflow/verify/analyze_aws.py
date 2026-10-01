@@ -408,6 +408,20 @@ def outcomes(batches) -> dict:
     return res
 
 
+def heartbeat_gaps(ok_ts: list[float], window: tuple[float, float], rw) -> list[float]:
+    """성공한 heartbeat 표본 시각 → 실험 구간과 겹치는 공백들(초). 구간 밖 표본도 경계를 잇는 데 쓴다 — 구간 시작을
+    가로지르는 관측 공백이 '구간 안 첫 표본부터'로 잘려 사라지지 않게(봇 P1). 구간 앞·뒤에 표본이 없으면 그 경계까지가 공백이다.
+    주입 재시작 창(rw) 안에서 시작하는 공백은 세지 않는다."""
+    a0, a1 = window
+    ts = sorted(ok_ts)
+    gaps = [b - a for a, b in zip(ts, ts[1:]) if b >= a0 and a <= a1 and not any(x <= a <= y for x, y in rw)]
+    if not ts or ts[0] > a0:
+        gaps.append((ts[0] if ts else a1) - a0)
+    if ts and ts[-1] < a1:
+        gaps.append(a1 - ts[-1])
+    return gaps
+
+
 def host_health(d: Path) -> list[dict]:
     """호스트 관측기의 health.log(`H <epoch> <code> <초> <본문>`) → health.jsonl 과 같은 모양의 표본.
     호스트에서 태스크 네임스페이스로 부른 것이라 운영자 PC·포트 포워딩과 무관하다(ALPHA-1119 A4 재검증)."""
@@ -479,13 +493,15 @@ def analyze(exp: str) -> dict:
     hh = host_health(d)
     health_source = "host" if hh else "operator_pc"
     if hh:
-        # 호스트 관측기는 Airflow 보다 먼저 뜬다(호스트 기동 → 서비스 배포). 실험 구간 밖의 표본(기동 전 no_api_container)은
-        # 실험의 heartbeat 가 아니다 — 구간 안 표본만 본다(PC 표본은 실험 중에만 돌아 이 문제가 없었다).
-        health = [h for h in hh if need and need[0] - 60 <= h["t"] <= need[1] + 60]
+        # 호스트 관측기는 Airflow 보다 먼저 뜬다(호스트 기동 → 서비스 배포). 실험 구간 밖의 오류(기동 전 no_api_container)는
+        # 실험의 heartbeat 실패가 아니다 — 오류·비정상은 구간 안 표본만 센다. 공백은 구간 밖 성공 표본까지 이어서 잰다.
+        hh_ok_ts = [h["t"] for h in hh if "health" in h and h.get("code") == 200]
+        health = [h for h in hh if need and need[0] <= h["t"] <= need[1]]
     # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
     ok_h = [h for h in health if "health" in h and h.get("code") == 200]
     # 공백은 **성공한** 표본 사이로 잰다 — 실패 행이 촘촘해도 heartbeat 를 확인한 것이 아니다.
-    gaps = [b["t"] - a["t"] for a, b in zip(ok_h, ok_h[1:]) if not any(x <= a["t"] <= y for x, y in rw)]
+    gaps = (heartbeat_gaps(hh_ok_ts, need, rw) if hh and need else
+            [b["t"] - a["t"] for a, b in zip(ok_h, ok_h[1:]) if not any(x <= a["t"] <= y for x, y in rw)])
     err_outside = [h for h in health if h not in ok_h and not any(x <= h["t"] <= y for x, y in rw)]
     bad_h = [h for h in ok_h if not any(x <= h["t"] <= y for x, y in rw) and
              not (h["health"].get("scheduler", {}).get("status") == "healthy"
@@ -568,9 +584,8 @@ def analyze(exp: str) -> dict:
         "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
         "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60
                                        or err_outside or out["health"]["import_errors_missing"]
-                                       # 호스트 표본은 실험 처음~끝을 덮어야 한다(PC 표본은 이전 회차 규칙 그대로)
-                                       or (hh and (not need or ok_h[0]["t"] > need[0] + 120
-                                                   or ok_h[-1]["t"] < need[1] - 120))) else (
+                                       # 호스트 표본: 구간 경계 공백까지 위 max_gap(60초)에 들어 있다(heartbeat_gaps)
+                                       or (hh and not need)) else (
             out["health"]["unhealthy_outside_restart"] == 0 and out["health"]["import_errors_max"] == 0),
         "A5_latency": lat_ok(),
         "A6_outcomes": None if not all(b in out_come and out_come[b] for b in ("B1", "B2", "B3")) else all(

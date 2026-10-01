@@ -1,0 +1,38 @@
+{"t": 1790840167, "kst": "16:36:07", "event": "pr1028_merge", "head": "cb1e91b6", "plan": "32/3/2 all module.airflow"}
+{"t": 1790840580, "kst": "16:43:00", "event": "deploy_airflow_dispatch", "run": 36831907974, "image_tag": "dc11b7c52a2a5efa9e0638703a006aadd06e877f"}
+{"t": 1790841400, "kst": "16:56:40", "event": "reup_after_pretest", "asg": [1,2,1]}
+{"t": 1790841455, "kst": "16:57:35", "event": "deploy_airflow_dispatch", "run": 36833370844, "image_tag": "dc11b7c52a2a5efa9e0638703a006aadd06e877f"}
+{"t": 1790841842.3, "kst": "17:04:02", "event": "watchdog_start", "task": "143190d0a7b14ce5b8688b3cec46f8e3", "until": "22:25"}
+{"t": 1790841887.6, "kst": "17:04:47", "event": "watchdog_first_beat", "ok": true, "beat": {"t": 1790841884.8158216, "at": "2026-10-01T17:04:44.815825+09:00", "trip": null, "losses": {"host": 0, "rds": 0, "sfn": 0, "service": 0}, "last": {"host": {"memavail_min_kb": 548904, "sample_age": 3, "kmsg_oom": 0, "docker_oom": 0, "cg_oom_kill": 0}, "rds": {"FreeableMemory": [582.68359375, 584.82421875, 583.19140625, 581.625, 580.62890625, 571.66015625, 568.83203125, 568.11328125], "SwapUsage": [15.6171875, 15.6171875, 15.6171875, 15.60546875, 15.60546875, 15.60546875, 15.60546875, 15.60546875], "CPUUtilization": [5.699715014249287, 4.5335600113339, 4.019038426334271, 3.9640150882932206, 4.813447725458898, 4.518273535110577, 5.696560441753709], "DatabaseConnections": [21.0, 21.0, 21.0, 21.0, 21.0, 24.0, 25.0, 25.0], "WriteLatency": [0.0, 0.1724137931034483, 4.766214177978884, 0.0, 0.1724137931034483, 0.2105263157894737, 0.42207792207792205, 3.7848605577689245], "ReadLatency": [0.0, 0.0, 0.0, 0.0, 2.2222222222222223, 0.0, 0.0, 0.0]}, "sfn": [], "service": ["arn:aws:ecs:ap-northeast-2:393229433969:task/edge-dev-airflow/4eb57312f5c44eb288d4f984afe8c09a"]}, "task": "arn:aws:ecs:ap-northeast-2:393229433969:task/edge-dev-airflow/143190d0a7b14ce5b8688b3cec46f8e3"}}
+{"t": 1790841887.9, "kst": "17:04:47", "event": "idle_begin", "tag": "S1", "seconds": 600}
+{"t": 1790842487.9, "kst": "17:14:47", "event": "idle_end", "tag": "S1"}
+{"t": 1790842555.3, "kst": "17:15:55", "event": "watchdog_ok_at_batch", "beat_at": "2026-10-01T17:15:23.304775+09:00"}
+{"t": 1790842555.3, "kst": "17:15:55", "event": "reset_begin", "batch": "L"}
+{"t": 1790842556.3, "kst": "17:15:56", "event": "runs_cleared", "n": 0}
+{"t": 1790842626.2, "kst": "17:17:06", "event": "batch_begin", "batch": "L"}
+{"t": 1790842626.6, "kst": "17:17:06", "event": "trigger", "run": "aws__aws-small-1408-a4a5__L__0935", "code": 200, "conf": null, "detail": null, "deploy": {"tasks": [{"arn": "4eb57312f5c44eb288d4f984afe8c09a", "td": "edge-dev-airflow:14", "digests": ["sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"]}]}}
+{"t": 1790842990.7, "kst": "17:23:10", "event": "run_done", "run": "aws__aws-small-1408-a4a5__L__0935", "state": "success", "started": true}
+{"t": 1790842990.7, "kst": "17:23:10", "event": "scenario", "key": "N1", "run": "aws__aws-small-1408-a4a5__L__0935", "state": "success"}
+{"t": 1790842991.1, "kst": "17:23:11", "event": "trigger", "run": "aws__aws-small-1408-a4a5__L__1005", "code": 200, "conf": null, "detail": null, "deploy": {"tasks": [{"arn": "4eb57312f5c44eb288d4f984afe8c09a", "td": "edge-dev-airflow:14", "digests": ["sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"]}]}}
+{"t": 1790843350.2, "kst": "17:29:10", "event": "run_done", "run": "aws__aws-small-1408-a4a5__L__1005", "state": "success", "started": true}
+{"t": 1790843350.2, "kst": "17:29:10", "event": "scenario", "key": "N2", "run": "aws__aws-small-1408-a4a5__L__1005", "state": "success"}
+{"t": 1790843350.6, "kst": "17:29:10", "event": "trigger", "run": "aws__aws-small-1408-a4a5__L__1125", "code": 200, "conf": null, "detail": null, "deploy": {"tasks": [{"arn": "4eb57312f5c44eb288d4f984afe8c09a", "td": "edge-dev-airflow:14", "digests": ["sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"]}]}}
+{"t": 1790843699.7, "kst": "17:34:59", "event": "run_done", "run": "aws__aws-small-1408-a4a5__L__1125", "state": "success", "started": true}
+{"t": 1790843699.7, "kst": "17:34:59", "event": "scenario", "key": "N3", "run": "aws__aws-small-1408-a4a5__L__1125", "state": "success"}
+{"t": 1790843700.1, "kst": "17:35:00", "event": "trigger", "run": "aws__aws-small-1408-a4a5__L__1325", "code": 200, "conf": null, "detail": null, "deploy": {"tasks": [{"arn": "4eb57312f5c44eb288d4f984afe8c09a", "td": "edge-dev-airflow:14", "digests": ["sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"]}]}}
+{"t": 1790844068.9, "kst": "17:41:08", "event": "run_done", "run": "aws__aws-small-1408-a4a5__L__1325", "state": "success", "started": true}
+{"t": 1790844068.9, "kst": "17:41:08", "event": "scenario", "key": "N4", "run": "aws__aws-small-1408-a4a5__L__1325", "state": "success"}
+{"t": 1790844069.3, "kst": "17:41:09", "event": "trigger", "run": "aws__aws-small-1408-a4a5__L__1435", "code": 200, "conf": null, "detail": null, "deploy": {"tasks": [{"arn": "4eb57312f5c44eb288d4f984afe8c09a", "td": "edge-dev-airflow:14", "digests": ["sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"]}]}}
+{"t": 1790844458.3, "kst": "17:47:38", "event": "run_done", "run": "aws__aws-small-1408-a4a5__L__1435", "state": "success", "started": true}
+{"t": 1790844458.4, "kst": "17:47:38", "event": "scenario", "key": "N5", "run": "aws__aws-small-1408-a4a5__L__1435", "state": "success"}
+{"t": 1790844458.6, "kst": "17:47:38", "event": "trigger", "run": "aws__aws-small-1408-a4a5__L__1520", "code": 200, "conf": null, "detail": null, "deploy": {"tasks": [{"arn": "4eb57312f5c44eb288d4f984afe8c09a", "td": "edge-dev-airflow:14", "digests": ["sha256:3b2a1e61bb971805d1c778acbd9468e19535c95f68e50d5efa242ea1073bc154"]}]}}
+{"t": 1790844827.1, "kst": "17:53:47", "event": "run_done", "run": "aws__aws-small-1408-a4a5__L__1520", "state": "success", "started": true}
+{"t": 1790844827.1, "kst": "17:53:47", "event": "scenario", "key": "N6", "run": "aws__aws-small-1408-a4a5__L__1520", "state": "success"}
+{"t": 1790844899.4, "kst": "17:54:59", "event": "evidence", "batch": "L", "ecs_tasks": 30, "runs": 6, "ledger": true}
+{"t": 1790844899.4, "kst": "17:54:59", "event": "batch_end", "batch": "L"}
+{"t": 1790844899.4, "kst": "17:54:59", "event": "forward_cut_begin", "seconds": 600}
+{"t": 1790845502.9, "kst": "18:05:02", "event": "forward_cut_end"}
+{"t": 1790845504.0, "kst": "18:05:04", "event": "idle_begin", "tag": "after_L", "seconds": 600}
+{"t": 1790846104.1, "kst": "18:15:04", "event": "idle_end", "tag": "after_L"}
+{"t": 1790846333, "kst": "18:18:53", "event": "cleanup_begin"}
+{"t": 1790846627, "kst": "18:23:47", "event": "pr1029_merge", "merge": "0e93fbd7789c2e9068ca1bc629926e7ce758e280", "plan": "2/3/32 all module.airflow"}

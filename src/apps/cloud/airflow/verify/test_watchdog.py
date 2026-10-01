@@ -160,3 +160,19 @@ def test_a_criteria_without_watchdog_clears_a_stale_requirement(run_module, monk
     monkeypatch.setattr(run_module, "s3", fake)
     run_module._watch_precondition("e")
     assert set(fake.deleted) == {"watchdog/required.json", "watchdog/heartbeat.json"}
+
+
+def test_heartbeat_gaps_keep_outages_that_cross_the_window_edges():
+    # WHY(봇 P1): 구간 안 표본만 보면 구간 시작을 가로지르는 관측 공백(시작 70초 전 마지막 표본 → 시작 50초 뒤 다음 표본)이
+    # 사라져 heartbeat 증거 부족이 통과로 바뀐다. 구간 밖 성공 표본으로 경계를 잇고, 표본이 없으면 경계까지를 공백으로 센다.
+    import analyze_aws
+    w = (1000.0, 2000.0)
+    steady = [1000.0 + 15 * i for i in range(-2, 70)]
+    assert max(analyze_aws.heartbeat_gaps(steady, w, [])) <= 15
+    crossing = [930.0] + [1050.0 + 15 * i for i in range(0, 64)]
+    assert max(analyze_aws.heartbeat_gaps(crossing, w, [])) == 120          # 930 → 1050 이 구간 시작을 가로지른다
+    late_only = [1070.0 + 15 * i for i in range(0, 62)]
+    assert max(analyze_aws.heartbeat_gaps(late_only, w, [])) == 70           # 구간 앞 표본 없음 → 시작부터 첫 표본까지
+    early_end = [1000.0 + 15 * i for i in range(0, 60)]
+    assert max(analyze_aws.heartbeat_gaps(early_end, w, [])) == 2000 - (1000 + 15 * 59)
+    assert analyze_aws.heartbeat_gaps([], w, []) == [1000.0]

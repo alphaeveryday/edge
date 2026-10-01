@@ -1,0 +1,226 @@
+{
+ "from": "2026-10-01T17:03:47+09:00",
+ "to": "2026-10-01T17:14:48.203297+09:00",
+ "FreeableMemory": {
+  "n": 11,
+  "min": 564.0,
+  "max": 569.07,
+  "series": [
+   568.11,
+   568.26,
+   566.88,
+   569.07,
+   568.37,
+   564.0,
+   566.06,
+   568.01,
+   568.16,
+   566.98,
+   567.63
+  ]
+ },
+ "SwapUsage": {
+  "n": 11,
+  "min": 15.61,
+  "max": 15.61,
+  "series": [
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61,
+   15.61
+  ]
+ },
+ "CPUUtilization": {
+  "n": 10,
+  "min": 4.8,
+  "max": 7.36,
+  "series": [
+   5.31,
+   4.8,
+   5.6,
+   5.69,
+   5.37,
+   5.01,
+   5.01,
+   5.32,
+   7.36,
+   5.34
+  ]
+ },
+ "DatabaseConnections": {
+  "n": 11,
+  "min": 25.0,
+  "max": 26.0,
+  "series": [
+   25.0,
+   25.0,
+   25.0,
+   25.0,
+   25.0,
+   26.0,
+   25.0,
+   25.0,
+   25.0,
+   25.0,
+   25.0
+  ]
+ },
+ "WriteLatency": {
+  "n": 11,
+  "min": 0.14,
+  "max": 4.09,
+  "series": [
+   3.78,
+   0.26,
+   0.41,
+   0.26,
+   0.14,
+   4.09,
+   0.17,
+   0.29,
+   0.34,
+   0.29,
+   3.11
+  ]
+ },
+ "ReadLatency": {
+  "n": 11,
+  "min": 0.0,
+  "max": 10.0,
+  "series": [
+   0.0,
+   0.0,
+   0.91,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   3.33,
+   0.0,
+   10.0
+  ]
+ },
+ "CPUCreditBalance": {
+  "n": 2,
+  "min": 571.18,
+  "max": 572.64,
+  "series": [
+   571.18,
+   572.64
+  ]
+ },
+ "stop": {
+  "freeable": false,
+  "swap": false,
+  "cpu": false,
+  "latency": false,
+  "connections": false
+ },
+ "coverage": {
+  "FreeableMemory": 1.22,
+  "SwapUsage": 1.22,
+  "CPUUtilization": 1.11,
+  "DatabaseConnections": 1.22,
+  "WriteLatency": 1.22,
+  "ReadLatency": 1.22
+ },
+ "data_gap": false,
+ "airflow_db_error_logs": [],
+ "dbadmin_stats": [
+  {
+   "at": "2026-10-01T08:15:21.954925+00:00",
+   "db": [
+    {
+     "bytes": 11459607,
+     "datname": "airflow",
+     "blks_hit": 434887,
+     "blks_read": 92,
+     "deadlocks": 0,
+     "temp_bytes": 0,
+     "numbackends": 4,
+     "tup_fetched": 100329,
+     "tup_written": 5744,
+     "xact_commit": 36304,
+     "tup_returned": 351021,
+     "xact_rollback": 52
+    },
+    {
+     "bytes": 13098007,
+     "datname": "edge_verify",
+     "blks_hit": 130742,
+     "blks_read": 196,
+     "deadlocks": 0,
+     "temp_bytes": 0,
+     "numbackends": 0,
+     "tup_fetched": 58849,
+     "tup_written": 9254,
+     "xact_commit": 929,
+     "tup_returned": 342701,
+     "xact_rollback": 0
+    },
+    {
+     "bytes": 1763851287,
+     "datname": "edge",
+     "blks_hit": 13418974216,
+     "blks_read": 148501114,
+     "deadlocks": 2,
+     "temp_bytes": 81728788648,
+     "numbackends": 22,
+     "tup_fetched": 6222267119,
+     "tup_written": 13508269,
+     "xact_commit": 34466208,
+     "tup_returned": 200490758347,
+     "xact_rollback": 566009
+    }
+   ],
+   "sessions": [
+    {
+     "n": 4,
+     "state": "idle",
+     "datname": "airflow",
+     "usename": "airflow_meta",
+     "wait_event_type": "Client"
+    },
+    {
+     "n": 1,
+     "state": "idle",
+     "datname": "edge",
+     "usename": "app_sync_ro",
+     "wait_event_type": "Client"
+    },
+    {
+     "n": 1,
+     "state": "active",
+     "datname": "edge",
+     "usename": "edge",
+     "wait_event_type": null
+    },
+    {
+     "n": 20,
+     "state": "idle",
+     "datname": "edge",
+     "usename": "edge",
+     "wait_event_type": "Client"
+    },
+    {
+     "n": 2,
+     "state": "idle",
+     "datname": "rdsadmin",
+     "usename": "rdsadmin",
+     "wait_event_type": "Client"
+    }
+   ],
+   "max_connections": 181,
+   "longest_active_s": null
+  }
+ ],
+ "business_failed_sfn": []
+}
