@@ -929,12 +929,12 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 **메타DB 생성.** `run.py secrets`(검증 시크릿 없으면 건너뜀) → 실행 전에 `airflow` DB·`airflow_meta` 역할이 **없는지** 조회 → `run.py dbadmin create` → `run.py dbadmin privcheck`(업무 테이블 권한 0·PUBLIC 접속 불가·역할 1개 규격). 이미 있으면 `create` 를 돌리지 않고 멈춘다 — `create` 는 있는 역할의 비밀번호를 시크릿 값으로 다시 맞추므로, 누가 만든 것인지 확인 전에는 덮어쓰지 않는다. 검증 DB(`edge_verify`)는 만들지 않는다(검증 자원이 꺼져 있으면 관리 태스크에 그 몫이 없다).
 
 **중단 시험(업무 DAG pause·SFN 운영 그대로).**
-- S1: 강제 ALARM. App Auto Scaling 액션이 걸린 경보는 `--state-reason-data` 에 평가 데이터(지표값·임계)가 있어야 정책이 계단을 고른다(AWS `SetAlarmState` 문서) — 없으면 ALARM·SNS 만 나고 desired 는 그대로일 수 있다.
+- S1: 강제 ALARM. App Auto Scaling 액션이 걸린 경보는 `--state-reason-data` 에 평가 데이터(지표값·임계)가 있어야 정책이 계단을 고른다(AWS `SetAlarmState` 문서) — 없으면 ALARM·SNS 만 나고 desired 는 그대로일 수 있다. 형식은 실제 경보 이력(`describe-alarm-history`, analysis-backlog 경보의 `stateReasonData`)과 같은 소문자 키다.
   ```bash
   now=$(date -u +%Y-%m-%dT%H:%M:%S.000+0000)
   aws cloudwatch set-alarm-state --alarm-name edge-dev-airflow-stop-task-memory --state-value ALARM \
     --state-reason "ALPHA-1141 S1 forced" \
-    --state-reason-data "{\"version\":\"1.0\",\"queryDate\":\"$now\",\"statistic\":\"Maximum\",\"period\":60,\"recentDatapoints\":[95.0,95.0],\"threshold\":90.0,\"evaluatedDatapoints\":[{\"timestamp\":\"$now\",\"sampleCount\":1.0,\"value\":95.0}]}"
+    --state-reason-data "{\"version\":\"1.0\",\"queryDate\":\"$now\",\"startDate\":\"$now\",\"statistic\":\"Maximum\",\"period\":60,\"recentDatapoints\":[95.0,95.0],\"threshold\":90.0,\"evaluatedDatapoints\":[{\"timestamp\":\"$now\",\"sampleCount\":1.0,\"value\":95.0}]}"
   ```
   → 오토스케일링 활동(`aws application-autoscaling describe-scaling-activities --service-namespace ecs --resource-id service/edge-dev-airflow/edge-dev-airflow`)과 서비스 `desiredCount=0`·`runningCount=0`·태스크 STOPPED 를 확인한다. SNS 메일 수신은 담당자가 확인한다. 경보가 실제 값으로 OK 로 돌아온 뒤 `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 1` → HEALTHY.
 - S2: 같은 절차를 `edge-dev-airflow-stop-rds-freeable`(아래 방향 경보)로 한 번 더. 평가 데이터는 `"statistic":"Minimum"`, 값 `209715200`(200MiB, 바이트)·임계 `419430400`(400MiB).
@@ -990,7 +990,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 
 | 축 | 기준 |
 |---|---|
-| 대상 ↔ 원천 응답 | 수집 로그(`collection_log`)의 대상 종목(설정 targets + holdings 추가분) 각각이 raw 행으로 오거나 `failed_symbols` 에 사유와 함께 남는다. 말없이 빠진 종목 0 |
+| 대상 ↔ 원천 응답 | 수집 로그(`collection_log`)의 대상 = 설정 targets + holdings 의 구성종목·ETF 티커. ① 실패한 종목은 모두 `failed_symbols` 에 사유와 함께 있다 ② raw 행의 종목은 모두 대상 안에 있다 ③ raw 행이 있는 개별 종목 수가 같은 슬롯의 직전 SFN 5거래일 범위 안이다. 정상 빈 응답(`output2=[]` — ETF 는 구조적으로 0행, 장 시작 직후엔 개별 종목도 빈다)은 로그에 따로 남지 않아 "대상 전부가 행 또는 실패"로는 대사할 수 없다 |
 | 원천 ↔ canonical | 정제 attempt 의 `records_out + failed_records` = 수집 `records_saved`(raw 행 수) |
 | canonical ↔ DB | 적재 attempt 의 `records_out(already+created+updated) + failed_records` = 정제 `records_out`. 실패 행은 사유(unknown_instrument 등)가 원장에 남는다. 첫 운영일 1회는 한 슬롯의 canonical parquet 과 `investor_flow_intraday`(키 instrument·trade_date·asof_slot)를 값까지 전수 대조한다 |
 | 원장 | 그날 run_key 5개 모두 `orchestrator='AIRFLOW'`·`orchestration_status` 와 `orchestration_reported_at` 채워짐. LAUNCH_CONFLICT·PLANNER_MISSING 0. OPEN `EXECUTION_HOLD` 0(있으면 "보류 해제와 수동 복구"로 풀고 원인 기록). R02 미귀결 0 |
