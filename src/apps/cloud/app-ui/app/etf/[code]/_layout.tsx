@@ -48,7 +48,7 @@ export default function EtfLayout() {
         ))}
       </View>
       <Slot />
-      <PickGroupSheet etf={pick && data ? data : null} onClose={() => setPick(false)} />
+      <PickGroupSheet etfs={pick && data ? [data] : []} onClose={() => setPick(false)} />
     </View>
   );
 }

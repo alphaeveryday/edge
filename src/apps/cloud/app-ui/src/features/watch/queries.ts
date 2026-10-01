@@ -16,6 +16,14 @@ export const useWatchedCodes = () => {
     combine: (rs) => ({ codes: new Set(rs.flatMap((r) => r.data ?? []).map((e) => e.code)), ready: !!groups && rs.every((r) => r.isSuccess) }),
   });
 };
+// 그룹별 담긴 ETF 코드
+export const useGroupMembers = () => {
+  const { data: groups } = useWatchGroups();
+  return useQueries({
+    queries: (groups ?? []).map((g) => ({ queryKey: ['watch', 'list', g.key], queryFn: () => api.watch.list(g.key) })),
+    combine: (rs) => Object.fromEntries((groups ?? []).flatMap((g, i) => (rs[i]?.data ? [[g.key, new Set(rs[i].data.map((e) => e.code))]] : []))) as Record<string, Set<string>>,
+  });
+};
 export const useMembership = (code: string) => useQuery({ queryKey: ['watch', 'membership', code], queryFn: () => api.watch.membership(code), enabled: !!code });
 
 export const useCreateGroup = () => {
@@ -32,5 +40,8 @@ export const useSetMembers = () => {
 };
 export const useSetMembership = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (v: { code: string; groups: string[] }) => api.watch.setMembership(v.code, v.groups), onSuccess: () => invalidate(qc) });
+  return useMutation({
+    mutationFn: (items: { code: string; groups: string[] }[]) => Promise.all(items.map((v) => api.watch.setMembership(v.code, v.groups))),
+    onSuccess: () => invalidate(qc),
+  });
 };

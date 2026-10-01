@@ -5,44 +5,65 @@ import type { EtfSummary } from '@/api';
 import { BottomSheet, CtaButton, SectorIcon } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
-import { fam } from '@/theme/typography';
+import { fam, type } from '@/theme/typography';
+import { CheckCircle } from './CheckCircle';
 import { NewGroupForm } from './NewGroupSheet';
-import { useMembership, useSetMembership, useWatchGroups } from './queries';
+import { useGroupMembers, useSetMembership, useWatchGroups } from './queries';
 
 interface Props {
-  etf: EtfSummary | null;
+  etfs: EtfSummary[];
+  title?: string;
   onClose: () => void;
 }
 
-// ETF 하나를 어느 관심 그룹에 담을지 고르는 시트
-export function PickGroupSheet({ etf, onClose }: Props) {
+// ETF 를 어느 관심 그룹에 담을지 고르는 시트, 처음 체크는 고른 ETF 전부가 담긴 그룹
+export function PickGroupSheet({ etfs, title, onClose }: Props) {
+  const open = etfs.length > 0;
   const { data: groups } = useWatchGroups();
-  const { data: mine } = useMembership(etf?.code ?? '');
+  const members = useGroupMembers();
   const save = useSetMembership();
   const toast = useToast((s) => s.show);
+  const [initial, setInitial] = useState<string[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [newOpen, setNewOpen] = useState(false);
+  const ready = !!groups && groups.every((g) => members[g.key]);
+  const [inited, setInited] = useState(false);
   useEffect(() => {
-    if (etf) setPicked(mine ?? []);
-  }, [etf, mine]);
-  useEffect(() => {
-    if (!etf) setNewOpen(false);
-  }, [etf]);
+    if (!open) {
+      setInited(false);
+      setNewOpen(false);
+    } else if (ready && !inited) {
+      const all = groups.filter((g) => etfs.every((e) => members[g.key].has(e.code))).map((g) => g.key);
+      setInitial(all);
+      setPicked(all);
+      setInited(true);
+    }
+  }, [open, ready, inited, groups, etfs, members]);
   const toggle = (k: string) => setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]));
-  const confirm = () =>
-    etf &&
-    save.mutate({ code: etf.code, groups: picked }, {
+  // 체크를 바꾼 그룹만 반영
+  const confirm = () => {
+    const items = etfs.map((e) => {
+      const had = (groups ?? []).filter((g) => members[g.key]?.has(e.code)).map((g) => g.key);
+      const kept = had.filter((k) => !initial.includes(k) || picked.includes(k));
+      return { code: e.code, groups: [...new Set([...kept, ...picked])] };
+    });
+    save.mutate(items, {
       onSuccess: () => {
         onClose();
-        toast(picked.length ? '관심에 담았어요' : '관심에서 뺐어요');
+        toast(items.some((v) => v.groups.length) ? '관심에 담았어요' : '관심에서 뺐어요');
       },
     });
+  };
   return (
-    <BottomSheet open={!!etf} onClose={onClose} padded={false}>
-      <View style={styles.head}>
-        {etf && <SectorIcon theme={etf.theme} bg={etf.logoBg} size={34} />}
-        <Text numberOfLines={1} style={styles.name}>{etf?.name}</Text>
-      </View>
+    <BottomSheet open={open} onClose={onClose} padded={false}>
+      {title ? (
+        <Text style={styles.title}>{title}</Text>
+      ) : (
+        <View style={styles.head}>
+          {etfs[0] && <SectorIcon theme={etfs[0].theme} bg={etfs[0].logoBg} size={34} />}
+          <Text numberOfLines={1} style={styles.name}>{etfs[0]?.name}</Text>
+        </View>
+      )}
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
         {newOpen ? (
           <View style={{ paddingBottom: 15 }}>
@@ -63,9 +84,7 @@ export function PickGroupSheet({ etf, onClose }: Props) {
               <Svg width={18} height={18} viewBox="0 0 18 18"><Path d="M2 4.5h4.6l1.3 1.6H16v7.4H2z" fill="none" stroke={colors.textFaint} strokeWidth={1.6} strokeLinejoin="round" /></Svg>
               <Text numberOfLines={1} style={styles.gname}>{g.label}</Text>
               <Text style={styles.count}>{g.count}</Text>
-              <View style={[styles.ck, on && styles.ckOn]}>
-                <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? colors.white : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
-              </View>
+              <CheckCircle on={on} />
             </Pressable>
           );
         })}
@@ -73,7 +92,7 @@ export function PickGroupSheet({ etf, onClose }: Props) {
       </ScrollView>
       <View style={styles.foot}>
         <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={onClose} /></View>
-        <View style={{ flex: 1.6 }}><CtaButton label="확인" onPress={confirm} /></View>
+        <View style={{ flex: 1.6 }}><CtaButton label="확인" disabled={!inited || save.isPending} onPress={confirm} /></View>
       </View>
     </BottomSheet>
   );
@@ -82,6 +101,7 @@ export function PickGroupSheet({ etf, onClose }: Props) {
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingBottom: 6 },
   name: { flex: 1, fontFamily: fam.extrabold, fontSize: 17, color: colors.text, letterSpacing: -0.34 },
+  title: { ...type.sheetTitle, color: colors.text, paddingHorizontal: 20, paddingBottom: 6 },
   list: { paddingHorizontal: 20 },
   newRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 15 },
   plus: { width: 26, height: 26, borderRadius: 999, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
@@ -89,7 +109,5 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 15, borderTopWidth: 1, borderTopColor: colors.surface },
   gname: { flex: 1, fontFamily: fam.bold, fontSize: 16, color: colors.text },
   count: { fontFamily: fam.mono, fontSize: 12, color: colors.textFaint },
-  ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
-  ckOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   foot: { flexDirection: 'row', gap: 9, paddingTop: 12, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface },
 });
