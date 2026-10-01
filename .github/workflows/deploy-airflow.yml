@@ -56,7 +56,8 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 준비·빌드 + 마이그레이션 15분 + services-stable 10분 + rollout 완료 10분(wait_rollout.sh)이 들어가야 한다
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
