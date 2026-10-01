@@ -2,7 +2,7 @@
 
 백엔드는 분석을 요청하고 완료되면 앱 화면용 JSON을 조회합니다. 이미 만든 분석은 재실행 없이 조회합니다. 전망·오늘 움직임·5요인 상세 JSON은 기존 화면 계약 그대로이며, API는 DB에 저장된 결과를 조립합니다.
 
-> **배포 상태:** 코드·로컬 검증 완료, 외부 주소 배포 진행 중. 아래 예시는 형식 설명용입니다.
+> 아래 예시는 호출 형식 설명용입니다. 실제 주소와 배포 검증 결과는 옵시디언 `ETF ORCA/분석 API.md`에 기록합니다.
 
 ## 목차
 1. 시작하기·인증
@@ -15,7 +15,7 @@
 
 ## 1. 시작하기·인증
 
-**Base URL:** 배포 후 기록.
+**Base URL:** 개발 환경의 Terraform 출력 `analysis_v2_api_url`. 호출 서버의 `ANALYSIS_API_URL`에 설정합니다.
 
 ```text
 분석 요청(POST) → 상태 조회(GET) → completed 확인 → 화면 조회(GET)
@@ -31,12 +31,13 @@
 
 ```python
 import json
+import os
 from urllib.request import Request, urlopen
 import boto3
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
-BASE_URL = "배포 후 기록되는 HTTPS 주소"
+BASE_URL = os.environ["ANALYSIS_API_URL"]
 session = boto3.Session(region_name="ap-northeast-2")
 
 def call(method, path, body=None):
@@ -214,6 +215,6 @@ Gateway 인증·제한·연동 오류는 AWS 기본 형식 또는 5xx일 수 있
 - DB 테이블 추가 없음. API 전용 계정은 결과 8개 테이블 SELECT만 허용합니다.
 - 기본 조회 5요청/초, 분석 요청 0.2요청/초·순간 2요청 제한. 분석 동시 실행 용량은 별도입니다.
 - 단위 테스트 316개, 격리 PostgreSQL 1개, Lambda Linux 이미지 빌드 통과.
-- 구현 PR #1040. 외부 HTTP 배포·실행 검증은 진행 중입니다.
+- 구현 PR #1040. 배포 확인은 미인증 요청 거부 → 기존 화면 조회 → 새 분석 접수·완료·화면 조회 순서입니다.
 
 문서 구성은 [Stripe API 문서](https://docs.stripe.com/api)를 참고했습니다. 인증·실행 중복 처리는 [AWS HTTP API](https://docs.aws.amazon.com/lambda/latest/dg/services-apigateway.html), [StartExecution](https://docs.aws.amazon.com/step-functions/latest/apireference/API_StartExecution.html)의 계약을 따릅니다.
