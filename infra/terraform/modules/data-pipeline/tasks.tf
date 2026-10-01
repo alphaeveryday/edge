@@ -262,13 +262,13 @@ locals {
     rds = {
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
     }
-    # 원천 관측 매크로 수집(ingest-raw-macro, ALPHA-1136). ECOS(USD/KRW·국고채)·KOSIS(CPI)·EIA(브렌트).
-    # ⚠️ FMP 키는 **붙이지 않는다**(FMP 미사용 결정) — 미국채 10년(`us_10y_yield`)은 FMP 계열이라 이
-    # 태스크에서 키 없음으로 그 계열만 실패한다(수집기 규칙). 대체 원천 결정 전까지 미해결(ALPHA-1136).
+    # 원천 관측 매크로 수집(ingest-raw-macro, ALPHA-1136). ECOS(USD/KRW·국고채)·KOSIS(CPI)·EIA(브렌트)·
+    # FRED(미 국채 10년 DGS10 — FMP 미사용 결정으로 교체, #1039). FMP 키는 붙이지 않는다.
     macro = {
       DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY  = "${data.aws_secretsmanager_secret.macro["ecos"].arn}:apikey::"
       DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY = "${data.aws_secretsmanager_secret.macro["kosis"].arn}:apikey::"
       DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY   = "${data.aws_secretsmanager_secret.macro["eia"].arn}:apikey::"
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY  = "${data.aws_secretsmanager_secret.macro["fred"].arn}:apikey::"
       DATA_PIPELINE_DB__PASSWORD                              = "${var.db_password_secret_arn}:password::"
     }
     # assemble-events(ALPHA-412) — 분류 LLM 과 DB 적재를 한 태스크가 다 한다(엔진 추출

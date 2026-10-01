@@ -55,11 +55,11 @@ resource "aws_secretsmanager_secret" "dart" {
   description = "OpenDART API key for ${var.name} (수동 주입: {\"apikey\":\"...\"})"
 }
 
-# 원천 관측 매크로 키(ALPHA-1130·1136) — 그릇까지 **TF 밖에서 수동 등록**했다(2026-10-01, 사용자 결정).
+# 원천 관측 매크로 키(ALPHA-1130·1136) — 그릇까지 **TF 밖에서 수동 등록**했다(2026-10-01, 사용자 결정). fred 는 미 국채 10년(DGS10).
 # 그래서 resource 가 아니라 data 로 이름만 참조한다. 값 형식은 위 형제들과 같은 {"apikey":"..."}.
 # TF 소유로 옮기려면 KRX 처럼 import 가 필요하다(ARN 의 랜덤 접미사 때문에 이름으로 재생성 불가).
 data "aws_secretsmanager_secret" "macro" {
-  for_each = toset(["ecos", "kosis", "eia"])
+  for_each = toset(["ecos", "kosis", "eia", "fred"])
   name     = "${var.name}/${each.key}/api-key"
 }
 
