@@ -69,10 +69,18 @@ def test_eia_live_rbrte_is_brent_spot_fob_in_dollars_per_barrel():
     assert good[-1]["observation_date"] == "2026-09-22"      # 09-30 조회 시 최신 관측 09-22 — 약 1주 지연
 
 
-def test_fmp_treasury_live_row_is_percent_per_maturity():
-    good, bad = macro_series.parse("us_10y_yield", live("fmp_treasury_rates.json"))
-    assert bad == [] and good[0] == {"observation_date": "2026-09-25", "value": "5.17"}
-    assert macro_series.SERIES["us_10y_yield"].unit == "percent"
+def test_fred_dgs10_live_matches_the_fmp_year10_it_replaces():
+    # WHY(실응답 2026-10-01, ALPHA-1136): 공급자를 바꿔도 같은 계열이어야 us_10y_yield 를 그대로 쓸 수 있다.
+    # FRED 응답 원문을 그대로 두고, 교체 전 FMP 실응답과 겹치는 날 값이 같은지 본다(09-15~25 9일 전부 일치 확인, 여기선 fixture 에 남은 날).
+    body = json.loads(live("fred_dgs10.json"))
+    assert body["units"] == "lin" and body["realtime_start"] == "2026-09-30"
+    good, bad = macro_series.parse("us_10y_yield", live("fred_dgs10.json"))
+    assert bad == [] and good[0] == {"observation_date": "2026-09-15", "value": "5"}     # 공급자 자릿수 그대로("5")
+    fred = {g["observation_date"]: Decimal(g["value"]) for g in good}
+    fmp = {r["date"]: Decimal(str(r["year10"])) for r in json.loads(live("fmp_treasury_rates.json"))}
+    common = sorted(set(fred) & set(fmp))
+    assert common and all(fred[d] == fmp[d] for d in common), common
+    assert fred["2026-09-25"] == Decimal("5.17")
 
 
 # ── KIS 업종 ─────────────────────────────────────────────────────────────

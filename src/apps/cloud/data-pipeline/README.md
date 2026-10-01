@@ -703,9 +703,9 @@ LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # docs/design/etf-data-storage-plan.md §10. 세 데이터셋 모두 수집(raw + raw manifest) →
 # 정제(--input-run-id = 수집 run, 실행별 artifact + canonical 현재 상태 + manifest) →
 # 적재(--input-run-id = 정제 run 또는 --all = 소비 마커 없는 완료 manifest 전부)다.
-# 매크로 창 미지정 = 계열별 소급일 ~ 어제(KST). 백필은 --from/--to(관측일, --to ≤ 어제). 키는 env 로(FMP 키는 미국채 10y 만, USD/KRW·국고채는 ECOS — FMP USDKRW 는 현재 구독에서 402.
+# 매크로 창 미지정 = 계열별 소급일 ~ 어제(KST). 백필은 --from/--to(관측일, --to ≤ 어제). 키는 env 로(미국채 10y 는 FRED `DGS10` — FMP 는 쓰지 않는다, USD/KRW·국고채는 ECOS.
 # raw·canonical manifest 의 code_version 은 GIT_SHA env 에서 온다, 없으면 unknown):
-DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
+DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY=... \
 DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY=... \
 DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY=... \
 DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=... \

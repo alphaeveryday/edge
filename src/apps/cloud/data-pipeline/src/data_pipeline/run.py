@@ -729,8 +729,7 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         return source_observations_financial.collect_financial(
             storage, dart, run_id, etf_ids=config.etf_ids, from_date=args.from_date, to_date=args.to_date)
     series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
-    source = macro_series.MacroSource(
-        config.macro, fmp_api_key=settings.price.source.api_key if settings.price else None)
+    source = macro_series.MacroSource(config.macro)
     if not config.macro.enabled:
         raise SystemExit("source_observations.macro 가 비활성이다")
     return source_observations_macro.collect_macro(

@@ -6,12 +6,12 @@
 | series_id | 공급자 · 계열 | 단위 | 주기 |
 |---|---|---|---|
 | usd_krw | ECOS `731Y003`(원화의 대미달러 환율) 항목 `0000003` 원/달러(종가 15:30) — 서울외환시장 현물 종가 | KRW_per_USD | 일 |
-| us_10y_yield | FMP `treasury-rates` 의 `year10` — 미 재무부 par yield 10년 | percent | 일 |
+| us_10y_yield | FRED `DGS10` — 연준 H.15 의 10년 고정만기(CMT) 수익률(원천 미 재무부 일별 par yield curve) | percent | 일 |
 | kr_10y_yield | ECOS `817Y002`(시장금리 일별) 항목 `010210000` 국고채(10년) | percent | 일 |
 | kr_cpi_yoy | KOSIS `101/DT_1J22042`(월별 소비자물가 등락률) `T03` 전년동월비 · 총지수(`objL1=0`) | percent | 월 |
 | brent_spot_usd | EIA `petroleum/pri/spt` 계열 `RBRTE` — Europe Brent Spot Price FOB | USD_per_barrel | 일 |
 
-**실응답 확인 상태 (2026-09-30 소량 실호출, 설계 §10.8)**: ECOS 두 계열(817Y002·731Y003)과 FMP treasury-rates 는
+**실응답 확인 상태 (2026-09-30 소량 실호출, 설계 §10.8)**: ECOS 두 계열(817Y002·731Y003)은
 실응답으로 필드·단위·날짜 형식을 확인했다(fixture `tests/fixtures/source_observations/*_live.json` 이 그 원문 축약본).
 FMP USD/KRW(`historical-price-eod/full?symbol=USDKRW`)는 현재 구독에서 **HTTP 402(심볼 미제공)** 라 쓸 수 없어 ECOS 로 바꿨다.
 KOSIS·EIA 는 키가 없어 **미확인**이다 — 파서는 기대와 다른 형태를 조용히 넘기지 않고 사유와 함께 거부한다. 특히 KOSIS
@@ -22,8 +22,15 @@ KOSIS·EIA 는 키가 없어 **미확인**이다 — 파서는 기대와 다른 
 **값을 바꾸지 않는다.** 한국 CPI 는 공급자가 공표한 전년동월비를 그대로 쓴다 — 지수 수준에서 자체
 계산하지 않는다. USD/KRW 는 1달러당 원 방향 그대로다(역수 금지). ECOS 731Y003 에는 `0000013` 원/달러(종가, 2024-07
 익일 02:00 마감 체제)도 있으나 이력이 짧아 15:30 종가(`0000003`, 1990~)를 쓴다 — 바꾸려면 계열을 갈라야 한다.
-브렌트는 현물(Spot FOB)이며 선물(FMP `BZUSD` 등)으로 대체하지 않는다. 미 국채 FMP `treasury-rates` 는 재무부 par yield curve 이며 시장
-종가 수익률과 다를 수 있다(계열 정의는 공급자 문서 기준, 값 대조 미확인).
+브렌트는 현물(Spot FOB)이며 선물(FMP `BZUSD` 등)으로 대체하지 않는다.
+
+**미 국채 10년 = FRED `DGS10`(2026-10-01, FMP `treasury-rates` `year10` 에서 교체 — FMP 미사용 결정).** 같은 계열이다:
+FRED DGS10 의 출처는 연준 H.15 이고, H.15 는 10년 고정만기 수익률의 출처를 "U.S. Treasury" 로, 값을 "재무부가 일별
+수익률곡선에서 고정 만기로 읽은 값"으로 적는다. 재무부는 CMT 수익률을 "재무부 일별 par yield curve 에서 직접 읽는다"고
+적는다 — FMP `year10` 이 옮기던 바로 그 par yield curve 10년이다. 단위 % · 미국 영업일 · 관측일 YYYY-MM-DD 도 같다.
+FRED 는 휴일·미게시일을 값 `"."` 로 준다 — 관측이 없다는 공급자 표기이므로 0 으로도, 거부로도 세지 않고 건너뛴다
+(FMP 는 그 날 행 자체를 생략했다 — 같은 결과). `units` 가 `lin`(변환 없음)이 아니면 단위 불일치로 거부한다.
+옛 FMP raw 는 지우지 않지만 이 코드로 다시 정제하지 않는다(재정제는 같은 코드 판에서만 — 설계 §10.3).
 
 **시각**: 다섯 공급자 모두 API 로 공표 시각을 주지 않는다. 그래서 공개시각 열을 만들지 않고, 분석
 가시시각은 실제 수신시각이다(2026-09-30 결정 — 설계 §10). 관측 기간이 끝나기 전에 받은 값(진행 중
@@ -60,9 +67,9 @@ class MacroSeries:
 SERIES: dict[str, MacroSeries] = {s.series_id: s for s in (
     MacroSeries("usd_krw", "ecos", "D", "KRW_per_USD",
                 "ECOS 731Y003/D/0000003", 14, 3650),
-    # FMP treasury-rates 는 한 요청 기간이 짧게 제한된다고 문서화돼 있다(3개월) — 백필은 잘라 부른다.
-    MacroSeries("us_10y_yield", "fmp", "D", "percent",
-                "FMP treasury-rates year10", 14, 90),
+    # FRED 는 한 요청 최대 100000 관측(문서 limit 상한) — 일별 10년 창이면 충분하다.
+    MacroSeries("us_10y_yield", "fred", "D", "percent",
+                "FRED DGS10", 14, 3650),
     MacroSeries("kr_10y_yield", "ecos", "D", "percent",
                 "ECOS 817Y002/D/010210000", 14, 3650),
     # 통계청 공표는 다음 달 초다. 정정·늦은 게시를 흡수하려 4개월을 다시 훑는다.
@@ -74,7 +81,8 @@ SERIES: dict[str, MacroSeries] = {s.series_id: s for s in (
 )}
 
 # 응답이 단위를 줄 때 기대하는 문자열(문서 기준, 실응답 미확인). 다르면 값을 버리지 않고 거부로 드러낸다.
-_VENDOR_UNITS = {"usd_krw": "원", "kr_10y_yield": "연%", "kr_cpi_yoy": "%", "brent_spot_usd": "$/BBL"}
+_VENDOR_UNITS = {"usd_krw": "원", "kr_10y_yield": "연%", "kr_cpi_yoy": "%", "brent_spot_usd": "$/BBL",
+                 "us_10y_yield": "lin"}   # FRED 는 단위가 아니라 변환 종류를 돌려준다 — lin 이어야 원값(%)
 # ECOS 계열 → (통계표, 항목). 요청 URL 과 응답 정체성 검사가 같은 표를 본다.
 _ECOS = {"usd_krw": ("731Y003", "0000003", "원/달러(종가 15:30)"),
          "kr_10y_yield": ("817Y002", "010210000", "국고채(10년)")}
@@ -107,9 +115,9 @@ def request_windows(series: MacroSeries, from_date: date, to_date: date) -> list
 class MacroSource:
     """계열별 요청을 만들고 응답 바이트를 그대로 돌려준다(해석은 `classify`·`parse`)."""
 
-    def __init__(self, config, *, fmp_api_key: str | None, client: PoliteClient | None = None):
+    def __init__(self, config, *, client: PoliteClient | None = None):
         self.config = config
-        self._keys = {"fmp": fmp_api_key, "ecos": config.ecos_api_key,
+        self._keys = {"fred": config.fred_api_key, "ecos": config.ecos_api_key,
                       "kosis": config.kosis_api_key, "eia": config.eia_api_key}
         # 실행당 최대 수십 콜이라 유량 제약은 없다. 공급자마다 한도가 달라 하나의 예산으로 묶지 않는다.
         self.client = client or PoliteClient(min_interval=1.0, timeout=30.0)
@@ -122,9 +130,12 @@ class MacroSource:
         key = self._keys[series.vendor]
         c = self.config
         if series.series_id == "us_10y_yield":
-            public = {"endpoint": "treasury-rates", "from": start.isoformat(), "to": end.isoformat()}
-            url = f"{c.fmp_base_url}/treasury-rates?" + urllib.parse.urlencode(
-                {"from": public["from"], "to": public["to"], "apikey": key})
+            public = {"endpoint": "series/observations", "series_id": "DGS10", "units": "lin",
+                      "start": start.isoformat(), "end": end.isoformat()}
+            # realtime 인자를 주지 않는다 — 기본(오늘)이 "지금 공개된 판"이고, 가시시각은 수신시각이 정한다.
+            url = f"{c.fred_base_url}/series/observations?" + urllib.parse.urlencode(
+                {"series_id": "DGS10", "api_key": key, "file_type": "json", "units": "lin",
+                 "observation_start": public["start"], "observation_end": public["end"]})
         elif series.vendor == "ecos":
             stat, item, _ = _ECOS[series.series_id]
             public = {"endpoint": "StatisticSearch", "stat_code": stat, "cycle": "D", "item_code1": item,
@@ -197,10 +208,12 @@ def classify(series_id: str, body: bytes) -> tuple[str, str | None]:
 
 def _classify(vendor: str, data) -> tuple[str, str | None]:
     """classify 의 공급자별 판정(형태 예외는 호출부가 unexpected_shape 로 접는다)."""
-    if vendor == "fmp":
-        if isinstance(data, list):
-            return ("ok", None) if data else ("empty", None)
-        return "error", "unexpected_shape"            # {"Error Message": …} 등
+    if vendor == "fred":
+        if isinstance(data, dict) and isinstance(data.get("observations"), list):
+            return ("ok", None) if data["observations"] else ("empty", None)
+        if isinstance(data, dict) and "error_code" in data:   # HTTP 200 으로 온 오류 본문 — 정상 0건이 아니다
+            return "error", f"fred_{data.get('error_code')}"
+        return "error", "unexpected_shape"
     if vendor == "ecos":
         if isinstance(data, dict) and isinstance(data.get("StatisticSearch"), dict):
             rows = data["StatisticSearch"].get("row")
@@ -252,11 +265,14 @@ def parse(series_id: str, body: bytes) -> tuple[list[dict], list[dict]]:
     data = _json(body)
     rows: list[tuple[str | None, object, dict | None]] = []   # (관측일, 값, 검사할 필드) — 필드 None = 행 형태 불량
     if series_id == "us_10y_yield":
-        for item in data:
+        units = data.get("units")                     # 요청 변환(lin = 원값). 다르면 값이 %가 아니다
+        for item in data["observations"]:
             if not isinstance(item, dict):
                 rows.append((None, None, None))
                 continue
-            rows.append((_iso(item.get("date"), "%Y-%m-%d"), item.get("year10"), {}))
+            if item.get("value") == ".":              # FRED 의 "관측 없음"(휴일·미게시) — 0 도 거부도 아니다
+                continue
+            rows.append((_iso(item.get("date"), "%Y-%m-%d"), item.get("value"), {"unit": units}))
     elif series_id in _ECOS:
         for item in data["StatisticSearch"]["row"]:
             if not isinstance(item, dict):
