@@ -866,6 +866,20 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - 정해진 것: 키 env 이름(설정 로더 `DATA_PIPELINE_` + `__` 중첩), 기본 대상 ETF `091160`(`sources.toml` `[source_observations].etf_ids`), DAG 슬롯 매일 09:10 KST(주말 포함).
 - 키 값은 명령·로그·문서·PR 에 쓰지 않는다 — 태스크 정의의 시크릿 주입만.
 
+**FRED 교체·실행 환경 배포 결과(2026-10-01 실측):**
+
+| PR | 머지 | 결과 |
+|---|---|---|
+| #1038 스키마 | `123a7800` 13:47 | schema-migrate 성공, dev RDS `flyway_schema_history` 202610011500 success, CHECK 에 FRED 튜플 추가·FMP 튜플 유지 |
+| #1039 FRED 코드 | `7ef0864b` 17:20 | 이미지 `edge/pipeline:7ef0864b…`·`GIT_SHA` 일치, 분 상주 재기동 생략(desired 0). 17:25 reconcile 새 이미지로 exit 0 |
+| #1036 macro 배선 | `d7d4e111` 18:33 | apply 1 추가·2 변경·0 삭제. `edge-dev-data-pipeline-macro:1` — 시크릿 ECOS·KOSIS·EIA·FRED `:apikey::`·DB `:password::`, 실행 역할이 네 시크릿을 읽는다. 이미지 재빌드 `GIT_SHA=d7d4e111…`(digest `713b779e…`) |
+| #1037 RunTask 허용 | `f32b30bd` 18:38 | apply 0·1·0. Airflow 태스크 역할 RunTask 에 `dart:*`·`macro:*` 추가 |
+
+- #1039 는 Airflow 검증 중(사용자 지시 — 이미지만 바뀌고 검증 이미지는 이미 빌드됨) 머지했다. #1036·#1037 은 검증 정리(#1029) apply 뒤 머지했다. #1036 의 plan 은 검증 중에도 Airflow 자원을 건드리지 않았다(전체 plan 로그 확인).
+- 그대로인 것: `MACRO_COLLECTION.instrumented=False`(`_WIRING_AHEAD_OF_FLAG` 유예), `edge_source_daily` 미등록·pause, `ops` 결측 판정 env 없음, `investor_intraday_orchestrator=SFN`, FMP 시크릿 보존. `macro` task-def 로 실행된 태스크 0, 원천 관측 표 4개 0행(18:40 조회).
+- 18:40 reconcile 은 최종 이미지로 exit 0.
+- **첫 단건 남은 조건(ALPHA-1136)**: 대상·기간·실행 시각 결정 → `macro`·`dart`·`bigkinds`·`rds` 태스크 정의로 CLI 단건(run_id 명시, `--all` 없음, 미 국채 10년 포함 가능 — FRED 배포됨) → raw·manifest·canonical·DB 판본·조회 함수·v2 대조 → instrumented 플래그 PR(유예 제거) → DAG 수동 trigger → 정기 활성화(결측 판정 env 포함).
+
 **FRED 교체·실행 환경 PR 의 배포 시점(2026-10-01 조사 — 머지 전 판단 근거):**
 
 | 단계 | 바뀌는 것 | 판단 |
