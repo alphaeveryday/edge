@@ -33,9 +33,10 @@ export function NavBar({ title, backIcon = 'back', onBack, rightIcon, rightBadge
 }
 
 const styles = StyleSheet.create({
-  root: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 },
+  root: { height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 },
   spacer: { width: 38 },
-  title: { flex: 1, textAlign: 'center', fontFamily: fam.extrabold, fontSize: 16, color: colors.text, letterSpacing: -0.3, paddingHorizontal: 4 },
+  // 좌우 버튼 폭과 무관하게 화면 가운데
+  title: { position: 'absolute', left: 88, right: 88, pointerEvents: 'none', textAlign: 'center', fontFamily: fam.extrabold, fontSize: 16, color: colors.text, letterSpacing: -0.3 },
   rightLabel: { minWidth: 38, paddingVertical: 8, paddingHorizontal: 6, alignItems: 'flex-end' },
   rightText: { fontFamily: fam.bold, fontSize: 13.5 },
 });
