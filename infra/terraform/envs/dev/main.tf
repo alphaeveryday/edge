@@ -735,6 +735,10 @@ module "airflow" {
     module.data_pipeline.task_definition_families["bigkinds"],
     module.data_pipeline.task_definition_families["rds"],
     module.data_pipeline.ops_task_definition_family,
+    # 원천 관측 레인 edge_source_daily(ALPHA-1136): 재무 수집은 기존 dart, 매크로 수집은 macro task-def.
+    # 없으면 financial_collect·macro_collect 가 AccessDeniedException 으로 시작도 못 한다.
+    module.data_pipeline.task_definition_families["dart"],
+    module.data_pipeline.task_definition_families["macro"],
   ]
   batch_task_definition_prefix = "${local.prefix}-data-pipeline"
   batch_pass_role_arns         = module.data_pipeline.batch_pass_role_arns
