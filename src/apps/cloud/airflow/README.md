@@ -14,7 +14,7 @@
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
 | `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
-| `deploy/wait_rollout.sh` | `deploy-airflow` 의 서비스 교체 완료 판정(PRIMARY 가 새 리비전·COMPLETED 될 때까지 최대 10분, FAILED·롤백이면 실패) |
+| `deploy/wait_rollout.sh` | `deploy-airflow` 의 서비스 교체 완료 판정(update-service 가 돌려준 배포 id 가 PRIMARY·COMPLETED 될 때까지 최대 10분, FAILED·롤백·다른 배포면 실패) |
 | `deploy/compose.local.yaml` | 배포 이미지의 로컬 리허설(ECS 태스크와 같은 세 컨테이너·localhost 공유, 마이그레이션 선행) |
 | `verify/` | 실제 AWS 격리 검증 — `shim.py`(검증 태스크 진입점: 재생 입력·계수·장애), `Dockerfile`(배포된 업무 이미지 + shim), `run.py`(설정·trigger·증거 수집) |
 | `local/` | 로컬 비교 환경. ECS·SNS·SFN 대역, 배포된 ASL 해석기, 저장 입력 재생 |
@@ -701,7 +701,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 1. `foundation` apply(수동) — `edge/airflow` ECR 저장소.
 2. 이 PR 머지 → `terraform-apply` 가 클러스터·호스트·서비스(desired 0)·검증 자원을 만든다(새 RDS 없음). 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 desired 0 이면 배포를 건너뛴다.
 3. 시크릿 값과 전용 DB·역할: `python3 verify/run.py secrets`(boto3 가 있는 인터프리터 — 예: `src/.venv/bin/python`)(없는 키만 만든다, 값은 찍지 않는다) → `python3 verify/run.py setup`(관리 태스크가 전용 DB·역할 생성, 검증 원장 스키마 복제, 권한 분리 확인).
-4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable → PRIMARY rollout COMPLETED(`deploy/wait_rollout.sh` — stable 직후 `IN_PROGRESS` 는 최대 10분 다시 보고, `FAILED`·다른 리비전이면 바로 실패).
+4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable → 이번 배포(id)의 rollout COMPLETED(`deploy/wait_rollout.sh` — stable 직후 `IN_PROGRESS` 는 최대 10분 다시 보고, `FAILED`이거나 PRIMARY 가 다른 배포면 바로 실패).
 5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
 
 ### 배포·롤백

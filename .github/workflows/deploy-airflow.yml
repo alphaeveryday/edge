@@ -56,8 +56,8 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # 준비·빌드 + 마이그레이션 15분 + services-stable 10분 + rollout 완료 10분(wait_rollout.sh)이 들어가야 한다
-    timeout-minutes: 45
+    # 준비·빌드(실측 2분 안팎) + 마이그레이션 15분 + services-stable 10분 + rollout 완료 10분(wait_rollout.sh)에 여유를 둔다
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -169,10 +169,11 @@ jobs:
           # 2) 서비스 교체 — 세 구성요소가 같은 이미지로 함께 바뀐다. 실패하면 circuit breaker 가 이전 리비전으로 되돌린다.
           #    desired 는 운영자 소유다: 0 이면(최초 구축 전·장애 대응 정지·검증 종료) 위 단계에서 이미 건너뛰었다.
           service_def="$(register "${FAMILY}")"
-          aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" \
-            --task-definition "${service_def}" --desired-count 1 >/dev/null
-          echo "서비스 갱신 요청: ${service_def}"
+          deployment="$(aws ecs update-service --cluster "${CLUSTER}" --service "${SERVICE}" \
+            --task-definition "${service_def}" --desired-count 1 \
+            --query 'service.deployments[?status==`PRIMARY`].id' --output text)"
+          echo "서비스 갱신 요청: ${service_def} (deployment ${deployment})"
           aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
           # stable 직후엔 rollout 이 아직 IN_PROGRESS 일 수 있다 — 완료·실패·제한 시간을 가려 기다린다(ALPHA-1138)
-          src/apps/cloud/airflow/deploy/wait_rollout.sh "${CLUSTER}" "${SERVICE}" "${service_def}"
+          src/apps/cloud/airflow/deploy/wait_rollout.sh "${CLUSTER}" "${SERVICE}" "${deployment}"
           echo "배포 완료: ${IMAGE}"
