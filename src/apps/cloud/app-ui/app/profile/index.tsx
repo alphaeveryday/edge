@@ -58,7 +58,7 @@ export default function Profile() {
         <Text style={styles.version}>ETF Orca v0.1.0</Text>
       </ScrollView>
       <BottomSheet open={delOpen} onClose={() => setDelOpen(false)}>
-        <SheetHead title="정말 탈퇴할까요?" sub="관심 종목·그룹·쓴 글·투표 기록이 모두 지워지고 되돌릴 수 없어요." />
+        <SheetHead title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 답글은 '탈퇴한 사용자'로 남아요." />
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
           <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setDelOpen(false)} /></View>
           <View style={{ flex: 1.6 }}><CtaButton label="탈퇴하기" tone="danger" onPress={() => del.mutate()} /></View>
