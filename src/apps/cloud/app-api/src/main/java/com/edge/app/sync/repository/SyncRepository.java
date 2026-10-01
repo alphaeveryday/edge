@@ -59,15 +59,16 @@ public class SyncRepository {
                 """, code, price, changePct, Timestamp.from(asOf));
     }
 
-    public LocalDate lastCandle(String code) {
-        return jdbc.queryForObject("select max(trade_date) from etf_candle where etf_code = ?", LocalDate.class, code);
-    }
-
-    public void upsertCandles(String code, List<PipelineRepository.Close> closes) {
+    /** 원천에 없는 날짜의 일봉 삭제 후 upsert. 시가·고가·저가는 원천에 없어 NULL */
+    public void replaceCandles(String code, List<PipelineRepository.Close> closes) {
+        jdbc.update("delete from etf_candle where etf_code = ? and trade_date::text <> all(?)", code,
+                days(closes.stream().map(PipelineRepository.Close::date).toList()));
         jdbc.batchUpdate("""
                 insert into etf_candle (etf_code, trade_date, close, volume) values (?, ?, ?, ?)
-                on conflict (etf_code, trade_date) do update set close = excluded.close, volume = excluded.volume
-                 where (etf_candle.close, etf_candle.volume) is distinct from (excluded.close, excluded.volume)
+                on conflict (etf_code, trade_date) do update set open = null, high = null, low = null,
+                    close = excluded.close, volume = excluded.volume
+                 where (etf_candle.open, etf_candle.high, etf_candle.low, etf_candle.close, etf_candle.volume)
+                       is distinct from (null, null, null, excluded.close, excluded.volume)
                 """, closes, 500, (ps, c) -> {
             ps.setString(1, code);
             ps.setDate(2, Date.valueOf(c.date()));

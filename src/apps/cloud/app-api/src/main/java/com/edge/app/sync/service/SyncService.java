@@ -93,9 +93,7 @@ public class SyncService {
             log.warn("sync skipped code={} reason=no-instrument", c.code());
             return false;
         }
-        LocalDate lastCandle = sync.lastCandle(c.code());
-        LocalDate since = lastCandle == null ? LocalDate.now(KST).minusYears(1) : lastCandle.minusDays(7);
-        List<Close> closes = pipeline.closes(etf.instrumentId(), since);
+        List<Close> closes = pipeline.closes(etf.instrumentId(), LocalDate.now(KST).minusYears(1));
         Close last = closes.isEmpty() ? null : closes.getLast();
         Close prev = closes.size() < 2 ? last : closes.get(closes.size() - 2);
         List<Holding> holdings = last == null ? List.of() : pipeline.holdings(etf.instrumentId(), prev.date(), last.date());
@@ -107,7 +105,7 @@ public class SyncService {
             if (last != null) {
                 sync.upsertQuote(c.code(), last.close(), pct(prev.close(), last.close()),
                         last.date().atTime(MARKET_CLOSE).atZone(KST).toInstant());
-                sync.upsertCandles(c.code(), closes);
+                sync.replaceCandles(c.code(), closes);
             }
             sync.upsertDetail(c.code(), holdings.isEmpty() ? LocalDate.now(KST) : holdings.getFirst().asOf(), detail(c, holdings));
             sync.replaceMoves(c.code(), moves);

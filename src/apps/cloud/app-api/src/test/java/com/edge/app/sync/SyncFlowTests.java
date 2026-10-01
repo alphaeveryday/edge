@@ -108,6 +108,8 @@ class SyncFlowTests {
                 + "('069500', 'fake-1', 'XKRX', 'KODEX 200', 'kospi'), ('091160', 'fake-2', 'XKRX', '옛 이름', 'semicon')");
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('069500', 1, 0, now())");
         jdbc.update("insert into etf_move(etf_code, as_of, published_at, payload) values ('091160', '2026-09-20', now(), '{\"summary\":\"가짜\"}')");
+        jdbc.update("insert into etf_candle(etf_code, trade_date, open, high, low, close) values "
+                + "('091160', '2026-09-20', 1, 2, 0, 1), ('091160', '2026-09-30', 1, 2, 0, 1)");
     }
 
     @Test
@@ -137,6 +139,11 @@ class SyncFlowTests {
         assertEquals(List.of("수급", "이슈"), groups.stream().map(g -> g.get("head")).toList(), "선택 항목만, 선택 순서대로");
         assertEquals(0, jdbc.queryForObject("select count(*) from etf_move where as_of = '2026-09-20'", Integer.class),
                 "원천에 없는 날짜의 옛 시드는 지워진다");
+        assertEquals(List.of(Map.of("trade_date", "2026-09-29", "close", "141160.00", "open", "-"),
+                        Map.of("trade_date", "2026-09-30", "close", "142700.00", "open", "-")),
+                jdbc.queryForList("select trade_date::text, close::text, coalesce(open::text, '-') open from etf_candle "
+                        + "where etf_code = '091160' order by trade_date"),
+                "일봉은 원천 날짜만, 옛 시가·고가·저가는 지운다");
 
         Map<String, Object> daily = result(call(port, "GET", "/api/v1/etfs/091160/analysis", null, "X-Device-Id", "sync-1"));
         assertEquals("메모리 값 상승", daily.get("question"));
