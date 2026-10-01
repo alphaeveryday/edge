@@ -5,7 +5,8 @@
     "A4 표본을 호스트 관측기 health.log(15초, nsenter)로 — 운영자 PC 포워딩과 무관. 종료 장치가 호스트를 내리기 전 관측 기록을 버킷에 보낸다",
     "시나리오 L: 정상 run 6회를 같은 조건으로 연속(증거는 마지막 run 직후 — ListTasks 1시간 안), 뒤에 포워딩 10분 고의 단절(A4 증거 경로 확인)",
     "A5 표본은 업무 시작·exit 0 종료·산출물·ECS 5·원장 성공이 모두 확인된 run 의 ECS 태스크만. 유효 run 5 미만이거나 종료 감지 표본 25 미만이면 판정 불가",
-    "기준값(A4·A5 문구)은 바꾸지 않는다. p95 와 함께 개별 값·최대·표본 수를 보고한다"
+    "기준값(A4·A5 문구)은 바꾸지 않는다. p95 와 함께 개별 값·최대·표본 수를 보고한다",
+    "실행 전 보완(2026-10-01 11:5x KST, 첫 실행 전): 실험 중 감시를 PC 밖(AWS)으로 — verify-watchdog 태스크가 30~60초마다 호스트(SSM 으로 관측기 기록: MemAvailable·OOM), 기존 RDS(rds_stop 그대로), 업무 SFN 실패, Airflow 서비스 태스크 교체를 보고, 기준을 넘거나 한 감시가 3회 연속 실패하면 종료 절차(서비스 0 → 검증 태스크 중단 → 관측 기록 전송 → 호스트 0)를 바로 부른다. 업무 스텝은 감시 심장박동이 120초 넘게 없거나 중단이 선언됐으면 시작하지 않는다(exit 75)"
   ],
   "verify_day": "2026-10-01",
   "window": {
@@ -96,5 +97,12 @@
     "증거 수거(호스트 관측 — 호스트가 없으면 obs/shutdown/·L.json·deployinfo·RDS·shutdown 보고서) · 검증 원장 백업 · 검증 버킷 사본",
     "dbadmin teardown(전용 DB·역할) → Terraform host_count 0·host_observer false·verify_enabled false·종료 장치 제거 머지",
     "조회로 확인: ASG 0·EC2 0·서비스 0·검증 태스크 0·스케줄 0·전용 DB·역할 0·검증 버킷·시크릿 0·SFN 설정 그대로(investor_intraday_orchestrator=SFN)"
-  ]
+  ],
+  "watchdog": {
+    "until_kst": "22:25",
+    "heartbeat_fresh_seconds": 120,
+    "loss_limit": 3,
+    "host_mem_available_min_mib": 64,
+    "why": "노트북 절전·포워딩 단절과 무관하게 중단 기준을 본다. 감시가 죽으면 검증 부하가 멈춘다(심장박동 게이트)"
+  }
 }

@@ -159,6 +159,34 @@ def ops(command: list[str]) -> tuple[int | None, str]:
     return _one_off(f"{PREFIX}-verify-ops", command, "data-pipeline", "ops")
 
 
+def watchdog(args) -> int:
+    """실험 중 감시 태스크(shim verify-watchdog)를 띄우고 첫 심장박동을 확인한다. 이 뒤로는 PC 와 무관하게 돈다.
+    기준: criteria 의 watchdog.until_kst 까지, rds_stop 그대로. 심장박동이 없으면 업무 스텝은 시작하지 않는다."""
+    w = CRIT["watchdog"]
+    stops = {k: v for k, v in CRIT["rds_stop"].items() if not k.startswith("_") and k != "business"}
+    task = ecs.run_task(cluster=CLUSTER, taskDefinition=f"{PREFIX}-verify-ops", launchType="FARGATE",
+                        networkConfiguration=_network(f"{PREFIX}-verify"), startedBy="verify-watchdog",
+                        overrides={"containerOverrides": [{"name": "data-pipeline", "command": [
+                            "verify-watchdog", w["until_kst"], json.dumps(stops)]}]})["tasks"][0]
+    arn = task["taskArn"]
+    mark(args.exp, "watchdog_start", task=arn.rsplit("/", 1)[1], until=w["until_kst"])
+    bucket, deadline = _bucket(), time.time() + 300
+    while time.time() < deadline:
+        time.sleep(15)
+        try:
+            beat = json.loads(s3.get_object(Bucket=bucket, Key="state/watchdog/heartbeat.json")["Body"].read())
+        except s3.exceptions.NoSuchKey:
+            continue
+        if beat.get("task") and beat["task"].endswith(arn.rsplit("/", 1)[1]) and time.time() - beat["t"] < 120:
+            ok = not beat.get("trip") and not any(str(v).startswith("error") for v in beat["last"].values())
+            mark(args.exp, "watchdog_first_beat", ok=ok, beat=beat)
+            print(json.dumps(beat, ensure_ascii=False, default=str)[:1500])
+            return 0 if ok else 1
+    mark(args.exp, "watchdog_no_beat")
+    print("감시 심장박동 없음 — 본 실험을 시작하지 않는다")
+    return 1
+
+
 def setup(_args) -> int:
     bucket = _bucket()
     if not LAKE:
@@ -842,7 +870,7 @@ def main() -> int:
     sub.add_parser("backup").add_argument("exp")
     d = sub.add_parser("dbadmin")
     d.add_argument("cmd")
-    for name in ("deployinfo", "obs"):
+    for name in ("deployinfo", "obs", "watchdog"):
         sub.add_parser(name).add_argument("exp")
     b = sub.add_parser("batch")
     b.add_argument("exp")
@@ -857,7 +885,7 @@ def main() -> int:
     r.add_argument("--no-stats", action="store_true")
     args = p.parse_args()
     return {"secrets": secrets, "dbadmin": dbadmin, "setup": setup, "forward": forward, "backup": backup,
-            "deployinfo": deployinfo, "obs": obs, "batch": batch, "idle": idle, "rds": rds,
+            "deployinfo": deployinfo, "obs": obs, "watchdog": watchdog, "batch": batch, "idle": idle, "rds": rds,
             "slotcheck": slotcheck}[args.name](args)
 
 
