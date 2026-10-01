@@ -1,0 +1,20 @@
+{
+    "executionArn": "arn:aws:states:ap-northeast-2:393229433969:execution:edge-dev-analysis-v2:986fa67a645e494890c38c552e35381c",
+    "stateMachineArn": "arn:aws:states:ap-northeast-2:393229433969:stateMachine:edge-dev-analysis-v2",
+    "name": "986fa67a645e494890c38c552e35381c",
+    "status": "SUCCEEDED",
+    "startDate": "2026-10-01T16:08:07.389000+09:00",
+    "stopDate": "2026-10-01T16:10:08.336000+09:00",
+    "input": "{\"analysis_at\":\"2026-10-01T13:13:08.588981+09:00\",\"analysis_id\":\"986fa67a645e494890c38c552e35381c\",\"etf_code\":\"091160\",\"kind\":\"movement\"}",
+    "inputDetails": {
+        "included": true
+    },
+    "output": "{\"analysis_at\":\"2026-10-01T13:13:08.588981+09:00\",\"analysis_id\":\"986fa67a645e494890c38c552e35381c\",\"etf_code\":\"091160\",\"kind\":\"movement\",\"task\":{\"Attachments\":[{\"Details\":[{\"Name\":\"subnetId\",\"Value\":\"subnet-082d6209b3c9a5da4\"},{\"Name\":\"networkInterfaceId\",\"Value\":\"eni-0c312633d3145ac3a\"},{\"Name\":\"macAddress\",\"Value\":\"0a:ff:f2:e2:9b:d9\"},{\"Name\":\"privateDnsName\",\"Value\":\"ip-10-0-101-170.ap-northeast-2.compute.internal\"},{\"Name\":\"privateIPv4Address\",\"Value\":\"10.0.101.170\"}],\"Id\":\"bed15356-0614-4862-be73-c7c62b57ce2e\",\"Status\":\"DELETED\",\"Type\":\"ElasticNetworkInterface\"}],\"Attributes\":[{\"Name\":\"ecs.cpu-architecture\",\"Value\":\"x86_64\"}],\"AvailabilityZone\":\"ap-northeast-2c\",\"ClusterArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:cluster/edge-dev-worker\",\"Connectivity\":\"CONNECTED\",\"ConnectivityAt\":1790838492340,\"Containers\":[{\"ContainerArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:container/edge-dev-worker/b2c39a12d36f4a0ab555b9bef21bb08f/c625551e-0d8c-46de-81c4-c848b49bae28\",\"Cpu\":\"0\",\"ExitCode\":0,\"GpuIds\":[],\"HealthStatus\":\"UNKNOWN\",\"Image\":\"393229433969.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-f447f10f0252c5d0a1d48f05aa913a532c80ba01\",\"ImageDigest\":\"sha256:81a83464d112d090b4f93e114c34dbcda55d16b832c8f7c94b42d12087d602f5\",\"LastStatus\":\"STOPPED\",\"ManagedAgents\":[],\"Name\":\"analysis-v2\",\"NetworkBindings\":[],\"NetworkInterfaces\":[{\"AttachmentId\":\"bed15356-0614-4862-be73-c7c62b57ce2e\",\"PrivateIpv4Address\":\"10.0.101.170\"}],\"RuntimeId\":\"b2c39a12d36f4a0ab555b9bef21bb08f-2512570994\",\"TaskArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:task/edge-dev-worker/b2c39a12d36f4a0ab555b9bef21bb08f\"}],\"Cpu\":\"1024\",\"CreatedAt\":1790838488056,\"DesiredStatus\":\"STOPPED\",\"EnableExecuteCommand\":false,\"EphemeralStorage\":{\"SizeInGiB\":20},\"ExecutionStoppedAt\":1790838581596,\"FargateEphemeralStorage\":{\"SizeInGiB\":20},\"Group\":\"family:edge-dev-analysis-v2\",\"HealthStatus\":\"UNKNOWN\",\"InferenceAccelerators\":[],\"LastStatus\":\"STOPPED\",\"LaunchType\":\"FARGATE\",\"Memory\":\"2048\",\"Overrides\":{\"ContainerOverrides\":[{\"Command\":[],\"Environment\":[{\"Name\":\"ANALYSIS_REQUEST\",\"Value\":\"{\\\"analysis_at\\\":\\\"2026-10-01T13:13:08.588981+09:00\\\",\\\"analysis_id\\\":\\\"986fa67a645e494890c38c552e35381c\\\",\\\"etf_code\\\":\\\"091160\\\",\\\"kind\\\":\\\"movement\\\"}\"}],\"EnvironmentFiles\":[],\"Name\":\"analysis-v2\",\"ResourceRequirements\":[]}],\"InferenceAcceleratorOverrides\":[]},\"PlatformFamily\":\"Linux\",\"PlatformVersion\":\"1.4.0\",\"PullStartedAt\":1790838506419,\"PullStoppedAt\":1790838513330,\"StartedAt\":1790838515289,\"StartedBy\":\"AWS Step Functions\",\"StopCode\":\"EssentialContainerExited\",\"StoppedAt\":1790838608147,\"StoppedReason\":\"Essential container in task exited\",\"StoppingAt\":1790838591624,\"Tags\":[],\"TaskArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:task/edge-dev-worker/b2c39a12d36f4a0ab555b9bef21bb08f\",\"TaskDefinitionArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:task-definition/edge-dev-analysis-v2:5\",\"Version\":5}}",
+    "outputDetails": {
+        "included": true
+    },
+    "traceHeader": "Root=1-6abe06d7-7dd5d86b5fa3189c0daa2c1a;Parent=49f2771c44014419;Sampled=0",
+    "redriveCount": 0,
+    "redriveStatus": "NOT_REDRIVABLE",
+    "redriveStatusReason": "Execution is SUCCEEDED and cannot be redriven"
+}

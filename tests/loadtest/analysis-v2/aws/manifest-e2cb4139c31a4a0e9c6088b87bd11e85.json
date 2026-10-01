@@ -1,0 +1,30 @@
+{
+ "job": {
+  "analysis_id": "e2cb4139c31a4a0e9c6088b87bd11e85",
+  "kind": "movement",
+  "etf_code": "091160",
+  "analysis_at": "2026-09-29T12:02:24.705987+09:00",
+  "origin": "cloud",
+  "scenario": "database",
+  "data_source": "database",
+  "status": "completed",
+  "started_at": "2026-09-30T16:22:56.705759+00:00",
+  "finished_at": "2026-09-30T16:24:46.832938+00:00",
+  "contract_status": "partial",
+  "observation_status": "complete"
+ },
+ "files": [
+  "contract_audit.json",
+  "evidence.json",
+  "input.json",
+  "output_schema.json",
+  "raw_response.txt",
+  "response.json",
+  "screen.json",
+  "screens.json",
+  "storage.json",
+  "system_prompt.txt",
+  "tool_schemas.json"
+ ],
+ "events": 595
+}
