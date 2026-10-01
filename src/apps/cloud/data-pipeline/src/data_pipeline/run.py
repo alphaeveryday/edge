@@ -41,7 +41,7 @@ from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.reconciliation import reconcile_artifacts_cli
 from .minute.rollup import ROLLUP_DATASETS, rollup_session_cli
-from .minute.session_cli import drain_session_cli, plan_session_cli
+from .minute.session_cli import drain_session_cli, plan_session_cli, reopen_session_cli
 from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
@@ -255,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
                  # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
                  # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
                  "plan-minute-session", "drain-minute-session",
+                 # 재오픈(ALPHA-1135): FINALIZED 가격 세션을 ACTIVE·창 DUE 로 — 수동 재수집.
+                 "reopen-minute-session",
                  # 세션 스케일 오케스트레이션(ALPHA-712): start=거래일 판정+계획+desired 1,
                  # stop=drain+원장 게이트 대기+desired 0. 상주 서비스 3종을 올리고 내리는
                  # 유일한 주체다(terraform 은 desired_count 를 ignore_changes 로 뒀다).
@@ -372,8 +374,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
                              "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
                              "있는 세션까지 확정하거나 drain 을 건다")
+    parser.add_argument("--windows", default=None,
+                        help="reopen-minute-session: 다시 열 창 시작 KST HHMM 쉼표 목록"
+                             "(canonical `window=HHMM` 축). 없으면 전부")
     parser.add_argument("--reason", default=None,
-                        help="redrive·reconcile-minute-artifacts: 수동 개입 사유. delivery event 또는 격리 기록에 "
+                        help="redrive·reconcile-minute-artifacts·reopen-minute-session: 수동 개입 사유. delivery event 또는 격리 기록에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
     parser.add_argument("--quarantine", action="store_true",
                         help="reconcile-minute-artifacts: 닫힌 세션의 미확정 후보를 논리 격리")
@@ -445,7 +450,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.kind or not args.job_id or not (args.reason or "").strip():
             raise SystemExit("redrive 는 --kind·--job-id·--reason 이 모두 필요하다")
     elif (args.kind is not None or args.job_id is not None
-          or (args.reason is not None and args.step != "reconcile-minute-artifacts")
+          or (args.reason is not None
+              and args.step not in ("reconcile-minute-artifacts", "reopen-minute-session"))
           or args.destination is not None):
         raise SystemExit(
             "--kind·--job-id·--reason·--destination 은 redrive 에서만 쓴다 — "
@@ -462,10 +468,15 @@ def main(argv: list[str] | None = None) -> int:
         args.actor is not None or args.reason is not None
     ):
         raise SystemExit("--actor·--reason 은 --quarantine과 함께 쓴다")
-    if args.step not in ("qc-minute-session", "drain-minute-session", "reconcile-minute-artifacts") \
+    if args.step != "reopen-minute-session" and args.windows is not None:
+        raise SystemExit("--windows 는 reopen-minute-session 전용이다 — "
+                         f"이 스텝({args.step})에서는 무시되므로 거부한다")
+    if args.step not in ("qc-minute-session", "drain-minute-session", "reconcile-minute-artifacts",
+                         "reopen-minute-session") \
             and args.session_id is not None:
         raise SystemExit(
-            "--session-id 는 qc-minute-session·drain-minute-session·reconcile-minute-artifacts 에서만 쓴다 — "
+            "--session-id 는 qc-minute-session·drain-minute-session·reconcile-minute-artifacts·"
+            "reopen-minute-session 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step not in ("plan-minute-session", "start-minute-session",
@@ -612,6 +623,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step == "drain-minute-session":
         return drain_session_cli(settings, session_id=args.session_id)
+    if args.step == "reopen-minute-session":
+        return reopen_session_cli(settings, session_id=args.session_id,
+                                  windows=args.windows, reason=args.reason)
     if args.step == "start-minute-session":
         return start_session_cli(settings, dataset=args.dataset,
                                  source_group=args.source_group, universe=args.universe)
@@ -715,8 +729,7 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         return source_observations_financial.collect_financial(
             storage, dart, run_id, etf_ids=config.etf_ids, from_date=args.from_date, to_date=args.to_date)
     series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
-    source = macro_series.MacroSource(
-        config.macro, fmp_api_key=settings.price.source.api_key if settings.price else None)
+    source = macro_series.MacroSource(config.macro)
     if not config.macro.enabled:
         raise SystemExit("source_observations.macro 가 비활성이다")
     return source_observations_macro.collect_macro(

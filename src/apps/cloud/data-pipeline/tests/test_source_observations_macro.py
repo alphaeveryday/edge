@@ -45,17 +45,17 @@ class FakeClient:
 
 ALL_ROUTES = {
     "731Y003": body("ecos_usdkrw.json"),
-    "treasury-rates": body("fmp_treasury.json"),
+    "series/observations": body("fred_dgs10.json"),
     "817Y002": body("ecos_kr10y.json"),
     "statisticsParameterData": body("kosis_cpi.json"),
     "petroleum/pri/spt": body("eia_brent.json"),
 }
-KEYS = {"ecos_api_key": "E", "kosis_api_key": "K", "eia_api_key": "A"}
+KEYS = {"ecos_api_key": "E", "kosis_api_key": "K", "eia_api_key": "A", "fred_api_key": "R"}
 
 
-def source(routes=ALL_ROUTES, keys=KEYS, fmp="F"):
+def source(routes=ALL_ROUTES, keys=KEYS):
     client = FakeClient(dict(routes))
-    return macro_series.MacroSource(MacroObservationSource(**keys), fmp_api_key=fmp, client=client), client
+    return macro_series.MacroSource(MacroObservationSource(**keys), client=client), client
 
 
 def canonical_rows(storage, series_id, day):
@@ -124,7 +124,7 @@ def test_vendor_no_data_is_empty_not_failure_and_one_vendor_failure_is_partial(t
 def test_missing_key_fails_that_series_without_calling_it(tmp_path):
     # WHY: 키 없이 부르면 4xx 가 수집 장애로 위장된다. 키 주입 누락은 그 계열의 실패로 드러낸다.
     storage = LocalStorage(tmp_path)
-    src, client = source(keys={"ecos_api_key": None, "kosis_api_key": "K", "eia_api_key": "A"})
+    src, client = source(keys={"ecos_api_key": None, "kosis_api_key": "K", "eia_api_key": "A", "fred_api_key": "R"})
     assert collect(storage, "run_k", src) == so.PARTIAL_EXIT
     assert not any("ecos" in url for url in client.calls)
     log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/collection_logs/")
@@ -215,17 +215,19 @@ def test_backfill_cannot_reach_today_and_regular_window_ends_yesterday():
 
 
 def test_long_backfill_is_split_by_vendor_window_limit():
-    # WHY: FMP treasury-rates 는 한 요청 기간이 짧게 제한된다 — 한 번에 부르면 앞부분이 조용히 잘린다.
-    windows = macro_series.request_windows(macro_series.SERIES["us_10y_yield"], date(2026, 1, 1), date(2026, 6, 30))
-    assert windows[0] == (date(2026, 1, 1), date(2026, 3, 31)) and windows[-1][1] == date(2026, 6, 30)
-    assert all((b - a).days < 90 for a, b in windows)
+    # WHY: 공급자는 한 요청 관측 수에 상한이 있다 — 한 번에 부르면 앞부분이 조용히 잘린다. 창은 겹치지도 비지도 않는다.
+    series = macro_series.SERIES["us_10y_yield"]
+    windows = macro_series.request_windows(series, date(2000, 1, 1), date(2026, 6, 30))
+    assert windows[0][0] == date(2000, 1, 1) and windows[-1][1] == date(2026, 6, 30) and len(windows) > 1
+    assert all((b - a).days < series.max_window_days for a, b in windows)
+    assert all(nxt[0] - prev[1] == timedelta(days=1) for prev, nxt in zip(windows, windows[1:]))
 
 
 def test_request_record_never_contains_credentials(tmp_path):
     # WHY: raw manifest·로그는 만료 없이 남는다. 키가 들어가면 영구 유출이다.
     storage = LocalStorage(tmp_path)
-    src, _ = source(keys={"ecos_api_key": "SECRET-E", "kosis_api_key": "SECRET-K", "eia_api_key": "SECRET-A"},
-                    fmp="SECRET-F")
+    src, _ = source(keys={"ecos_api_key": "SECRET-E", "kosis_api_key": "SECRET-K", "eia_api_key": "SECRET-A",
+                          "fred_api_key": "SECRET-R"})
     assert collect(storage, "run_s", src) == 0
     for key in storage.list_keys("operations_archive/"):
         assert b"SECRET-" not in storage.get_bytes(key), key
@@ -253,7 +255,7 @@ def test_malformed_rows_and_missing_ecos_rows_are_visible_not_fatal(tmp_path):
 
 def test_vendor_decimals_survive_json_parsing():
     # WHY(리뷰): JSON 숫자를 float 로 먼저 읽으면 "공급자 자릿수 그대로" 계약이 저장 전에 깨진다.
-    raw = b'[{"date": "2026-07-27", "year10": 4.1234567890123456789}]'
+    raw = b'{"units": "lin", "observations": [{"date": "2026-07-27", "value": "4.1234567890123456789"}]}'
     good, _ = macro_series.parse("us_10y_yield", raw)
     assert good[0]["value"] == "4.1234567890123456789"
 
@@ -416,18 +418,18 @@ def test_rate_limit_stops_that_vendor_only(tmp_path):
     from data_pipeline.sources.http import StopFetch
 
     routes = dict(ALL_ROUTES)
-    routes["treasury-rates"] = StopFetch("429", status=429)
+    routes["series/observations"] = StopFetch("429", status=429)
     src, client = source(routes)
     storage = LocalStorage(tmp_path)
-    assert collect(storage, "run_rl", src, series=["us_10y_yield", "kr_10y_yield"], from_date="2025-01-01",
+    assert collect(storage, "run_rl", src, series=["us_10y_yield", "kr_10y_yield"], from_date="2000-01-01",
                    to_date="2026-07-28") == 2
-    fmp_calls = [u for u in client.calls if "treasury-rates" in u]
-    assert len(fmp_calls) == 1                                           # 첫 창에서 멈춘다(90일 창이 여럿이어도)
+    fred_calls = [u for u in client.calls if "series/observations" in u]
+    assert len(fred_calls) == 1                                          # 첫 창에서 멈춘다(10년 창이 여럿이어도)
     assert any("817Y002" in u for u in client.calls)                     # ECOS 는 계속
     manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("macro_observation", "run_rl")))
-    fmp = [o for o in manifest["objects"] if o["series_id"] == "us_10y_yield"]
-    assert len(fmp) > 1 and fmp[0]["detail"] == "http_429"
-    assert {o["detail"] for o in fmp[1:]} == {"vendor_stopped:http_429"} and {o["status"] for o in fmp} == {"error"}
+    fred = [o for o in manifest["objects"] if o["series_id"] == "us_10y_yield"]
+    assert len(fred) > 1 and fred[0]["detail"] == "http_429"
+    assert {o["detail"] for o in fred[1:]} == {"vendor_stopped:http_429"} and {o["status"] for o in fred} == {"error"}
 
 
 @pytest.mark.parametrize("step", ["ingest-raw-macro", "normalize-macro", "load-macro"])
@@ -442,3 +444,75 @@ def test_observation_steps_refuse_the_unused_source_flag(tmp_path, step):
     with pytest.raises(SystemExit, match="--source"):
         run_module._dispatch_observation(args, SimpleNamespace(source_observations=SimpleNamespace()),
                                          LocalStorage(tmp_path), "run_src")
+
+
+# ── FRED DGS10(미 국채 10년, ALPHA-1136 — FMP 에서 교체) ─────────────────────────────────
+
+def _fred(observations, units="lin") -> bytes:
+    return json.dumps({"units": units, "observations": observations}).encode()
+
+
+def test_fred_missing_marker_is_neither_zero_nor_a_rejection():
+    # WHY: FRED 는 휴일·미게시일을 "." 로 준다. 0 으로 실으면 금리가 0% 로 보이고, 거부로 세면 휴일이 낀 정기 창마다
+    # 정제가 부분 실패(exit 2)로 끝나 진짜 파손과 구분이 안 된다. 공급자가 말한 "관측 없음"은 그냥 관측이 없는 것이다.
+    good, bad = macro_series.parse("us_10y_yield", _fred([
+        {"date": "2026-07-03", "value": "."}, {"date": "2026-07-06", "value": "4.40"}]))
+    assert good == [{"observation_date": "2026-07-06", "value": "4.40"}] and bad == []
+
+
+def test_fred_blank_or_garbage_value_is_rejected_not_skipped():
+    # WHY: "." 만 공급자의 결측 표기다. 빈 문자열·null·문자는 응답 파손이라 드러나야 한다(조용히 빠지면 결손이 숨는다).
+    good, bad = macro_series.parse("us_10y_yield", _fred([
+        {"date": "2026-07-06", "value": ""}, {"date": "2026-07-07", "value": None}, {"date": "2026-07-08", "value": "n/a"}]))
+    assert good == [] and [r["reasons"] for r in bad] == [["missing_value"]] * 3
+
+
+def test_fred_transformed_units_are_rejected():
+    # WHY: units 가 lin 이 아니면 값은 %가 아니라 변화율·로그다. 같은 계열 ID 로 실리면 금리 비교가 조용히 틀린다.
+    good, bad = macro_series.parse("us_10y_yield", _fred([{"date": "2026-07-06", "value": "0.5"}], units="pch"))
+    assert good == [] and bad[0]["reasons"] == ["unit_mismatch"]
+
+
+def test_fred_dates_are_observation_days_and_values_keep_vendor_digits():
+    good, _ = macro_series.parse("us_10y_yield", body("fred_dgs10.json"))
+    assert good == [{"observation_date": "2026-07-24", "value": "4.69"},
+                    {"observation_date": "2026-07-27", "value": "4.65"},
+                    {"observation_date": "2026-07-28", "value": "4.61"}]
+    assert macro_series.SERIES["us_10y_yield"].unit == "percent"
+    assert macro_series.SERIES["us_10y_yield"].source_series == "FRED DGS10"
+
+
+@pytest.mark.parametrize("payload, expected", [
+    (b'{"error_code": 400, "error_message": "Bad Request. The value for variable api_key is not registered."}',
+     ("error", "fred_400")),
+    (b'{"units": "lin", "observations": []}', ("empty", None)),
+    (b'{"units": "lin"}', ("error", "unexpected_shape")),
+    (b'[]', ("error", "unexpected_shape")),
+])
+def test_fred_error_bodies_are_not_an_empty_success(payload, expected):
+    # WHY: 오류 본문이 "그 기간 관측 없음"으로 접히면 인증·요청 실패가 정상 0건으로 위장된다. 빈 관측 목록만 empty 다.
+    assert macro_series.classify("us_10y_yield", payload) == expected
+
+
+def test_fred_auth_failure_is_a_collection_error(tmp_path):
+    # WHY: 키가 틀리면 FRED 는 HTTP 400 을 준다 — 수집은 그 계열을 오류로 남겨야 한다(0건 성공 아님). 요청한 계열이
+    # 전부 실패하면 부분 실패(2)도 아니라 실패(1)다. 다른 계열과 함께면 부분 실패(2)다.
+    routes = {**ALL_ROUTES, "series/observations": StopFetch("400", status=400)}
+    src, _ = source(routes)
+    storage = LocalStorage(tmp_path)
+    assert collect(storage, "run_auth", src, series=["us_10y_yield"]) == 1
+    assert collect(storage, "run_auth2", source(routes)[0], series=["us_10y_yield", "usd_krw"]) == so.PARTIAL_EXIT
+    manifest = json.loads(storage.get_bytes(so.raw_run_manifest_key("macro_observation", "run_auth")))
+    assert [(o["status"], o["detail"]) for o in manifest["objects"]] == [("error", "http_400")]
+
+
+def test_macro_path_runs_all_five_series_without_any_fmp_key(tmp_path):
+    # WHY: FMP 는 더 쓰지 않는다. 설정에 FMP 칸이 없고, 다섯 계열이 FMP 키 없이 수집·정제된다.
+    assert "fmp_base_url" not in MacroObservationSource.model_fields
+    src, client = source()
+    storage = LocalStorage(tmp_path)
+    assert src.missing_credentials(sorted(macro_series.SERIES)) == []
+    assert collect(storage, "run_nofmp", src) == 0
+    assert not any("financialmodelingprep" in u for u in client.calls)
+    assert so.normalize(storage, so_macro.MACRO, "run_nofmp_n", "run_nofmp", producer="normalize_macro") == 0
+    assert [r["value"] for r in canonical_rows(storage, "us_10y_yield", "2026-07-28")] == ["4.61"]

@@ -8,3 +8,8 @@ variable "bucket_name" { type = string }
 variable "image" { type = string }
 variable "deploy_role_name" { type = string }
 variable "operator_arn" { type = string }
+variable "api_image" { type = string }
+variable "api_client_role_names" {
+  type    = list(string)
+  default = []
+}

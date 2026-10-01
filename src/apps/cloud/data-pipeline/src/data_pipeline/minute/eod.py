@@ -18,7 +18,8 @@ full-day reconciliation)는 벤더 실호출 경로가 필요해 별건이고, �
 실패했는지 복구가 실패했는지"가 한 exit code 로 뭉개진다.
 
 ⚠️ **되돌릴 수 없는 것을 만들지 않는다.** QC 는 쓰기가 전부 멱등이고(같은 입력 → 같은
-확정), `FINALIZED` 만이 단방향이다. 그래서 `QC_RUNNING`·`FAILED` 에서 **재진입을 연다** —
+확정), `FINALIZED` 만이 QC 안에서 단방향이다(되여는 것은 QC 가 아니라 운영자의
+`reopen-minute-session` 이다 — ALPHA-1135). 그래서 `QC_RUNNING`·`FAILED` 에서 **재진입을 연다** —
 QC 에는 lease 가 없어서, 중간에 죽은 실행을 막아 두면 그 세션은 누구도 끝낼 수 없다.
 
 ⚠️ **orphan 목록은 스냅샷이지 보증이 아니다.** S3 PUT 과 DB commit 은 한 트랜잭션이 아니라
@@ -265,9 +266,18 @@ class SessionQc:
             # ack_drain 이 CLAIMED 잔존을 거부하므로 DRAINED 세션엔 있을 수 없다. 있다면
             # drain 을 우회한 경로가 있다는 뜻이라, MISSING 으로 접으면 그 경로가 숨는다.
             violations.append(f"CLAIMED 잔존 {counts[WINDOW_CLAIMED]}건 — drain 이 우회됐다")
-        if counts[WINDOW_DUE]:
+        reopened = sum(1 for _, _, status, generation, _ in rows
+                       if status == WINDOW_DUE and generation)
+        if reopened:
+            # 재오픈(ALPHA-1135) 뒤 다시 받기 전에 drain 이 걸렸다. MISSING 으로 접으면 옛 확정
+            # 값이 결손으로 봉인되므로 원장이 남겨 둔 것이다(`confirm_missing_windows`).
+            violations.append(
+                f"재오픈 뒤 다시 받지 못한 창 {reopened}건 — 옛 확정분은 보존됐다. "
+                "reopen-minute-session 으로 다시 열고 price-worker 를 끝까지 돌린 뒤 drain 하라")
+        if counts[WINDOW_DUE] - reopened:
             # 방금 확정했는데 남아 있다 = phase 가 QC_RUNNING 이 아니었거나 동시 쓰기다.
-            violations.append(f"DUE 잔존 {counts[WINDOW_DUE]}건 — MISSING 확정이 적용되지 않았다")
+            violations.append(
+                f"DUE 잔존 {counts[WINDOW_DUE] - reopened}건 — MISSING 확정이 적용되지 않았다")
         # ⚠️ `expected_window_count` 와 대조하지 **않는다** — 그 값은 계획 시점에
         # `COUNT(*)` 로 덮어써지므로(`plan_session`) 항상 실제 행 수와 같다. 그걸 게이트로
         # 쓰면 planner 가 390분 중 389분만 만들어도 389==389 로 통과해, 빠진 분은 MISSING

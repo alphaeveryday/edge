@@ -892,6 +892,8 @@ module "app_api" {
     # 파이프라인 RDS 읽기 동기화. URL 이 없으면 앱은 동기화를 돌리지 않는다
     APP_PIPELINE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
     APP_PIPELINE_USERNAME = "app_sync_ro"
+    # 앱 심사용 데모 계정. 이 주소만 가입·재설정 코드 고정, 비우면 꺼짐
+    APP_REVIEW_EMAIL = "review@example.com"
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
