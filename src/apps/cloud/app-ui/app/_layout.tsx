@@ -11,6 +11,8 @@ import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
+// 시작 화면 최소 노출 1초
+const splashMin = new Promise((r) => setTimeout(r, 1000));
 // 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 화면 이동. 로그인 실패 401 은 폼이 처리
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
@@ -29,7 +31,7 @@ export default function RootLayout() {
   const restored = useSession((s) => s.restored);
   useEffect(() => { restore(); }, [restore]);
   useEffect(() => {
-    if ((loaded || error) && restored) SplashScreen.hideAsync();
+    if ((loaded || error) && restored) splashMin.then(() => SplashScreen.hideAsync());
   }, [loaded, error, restored]);
   if (!loaded && !error) return null;
   return (
