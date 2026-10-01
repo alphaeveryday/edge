@@ -39,7 +39,7 @@ export default function What() {
             <View style={styles.mainLogo} />
             <View style={{ flex: 1, gap: 2 }}>
               <Text numberOfLines={1} style={styles.mainName}>TIGER 반도체TOP10</Text>
-              <Text style={styles.mainPrice}>₩12,819 <Text style={{ color: colors.up }}>+3.0%</Text></Text>
+              <Text style={styles.mainPrice}>₩ 12,819 <Text style={{ color: colors.up }}>+3.0%</Text></Text>
             </View>
             <View style={styles.mainSig}><Text style={styles.mainSigText}>▲ 강력 상승</Text></View>
           </View>
