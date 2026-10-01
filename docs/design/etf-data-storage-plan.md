@@ -87,6 +87,8 @@ archive의 `report_date`는 현행 helper 명칭이다. 신규 데이터셋은 �
 어떤 날짜를 넣는지 manifest의 파티션 정의에 명시한다. 공개시각으로 간주하지 않는다.
 기존 helper가 있다고 신규 데이터셋 지원까지 완료된 것은 아니다. dataset 등록·manifest 검증·소비자 연결은 구현 작업이다.
 
+**경로 날짜의 시간대.** raw 의 `ingest_date`, 그것을 물려받는 artifact `report_date`, `collection_logs` 의 `started_date`, `data_quality_logs` 의 `checked_date` 는 **실행 시작 시각의 UTC 날짜**다(`write_raw_run`·`ingest_raw*` 모두 UTC). 업무 날짜(거래일·`as_of_date`·DAG 슬롯·run_key)는 KST 다. 그래서 00:00~09:00 KST 에 시작한 실행은 경로 날짜가 업무 날짜보다 하루 앞선다(2026-10-02 00:00 KST 업종 실행 → `ingest_date=2026-10-01`, `as_of_date=2026-10-02`). 정제·적재·재처리·`--all`·운영 원장은 날짜 없는 manifest 키·run_id 프리픽스로 찾고 artifact 키는 manifest 에서 읽으므로 영향이 없다(2026-10-02 점검). 소비자도 날짜로 경로를 조립하지 말고 manifest 나 run_id 로 찾는다.
+
 manifest는 직접 객체 키·해시·행 수·입력 실행·출력 파티션·처리한 논리 키 범위를 제공한다.
 불변 객체를 먼저 쓰고 검증 후 완료 manifest를 공개한다. 완료되지 않은 후보는 정상 입력으로 읽지 않는다.
 같은 run_id로 다른 바이트를 덮어쓰지 않으며 재수집·정정은 새 실행으로 남긴다.
@@ -250,7 +252,7 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 
 ## 10. 분석 v2 원천 관측의 저장·소비 계약 (ALPHA-1130)
 
-상태: **구현(코드·로컬 검증) — 미배포·미수집·정기 비활성.** §9를 적용한 첫 데이터셋 셋이다. 입력 요구는
+상태: **배포·첫 소량 수집 완료(2026-10-02, ALPHA-1136) — 정기 비활성.** dev DB 에 매크로 2계열·업종·재무 표본이 실렸다(실행 기록은 `src/apps/cloud/airflow/README.md` "첫 소량 실행 결과"). 원장 연결 실행·정기 활성화는 ALPHA-1140. §9를 적용한 첫 데이터셋 셋이다. 입력 요구는
 "v2 필요 데이터와 확보 현황"(2026-09-26 조사): KODEX 반도체(091160)와 **각 분석 시점의** 전체 구성종목, 매크로 5계열.
 결정(2026-09-30 확인): ① 과거 가시시각은 공급자 공개일 증거가 있는 자료(DART 접수일)만 재구성하고 매크로 백필은 수신시각 기준,
 ② 재무 Q4 = FY − 9개월 누적(유도 표시), ③ 연결 우선·연결 재무제표가 없는 회사만 별도.
@@ -289,9 +291,11 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 
 | | raw (원본 형식) | canonical 현재 상태 (Parquet) | 실행별 artifact |
 |---|---|---|---|
-| 매크로 | `raw/source={fmp,ecos,kosis,eia}/dataset=macro_observation/series_id={id}/ingest_date=/run_id=/{id}-{from}-{to}-{sha16}.json` | `canonical/market_data/macro_observation/series_id=/observation_date=/part-00000.parquet` | `operations_archive/canonical_run_artifacts/dataset=macro_observation/run_id=/report_date={ingest_date}/part-00000.parquet` |
+| 매크로 | `raw/source={ecos,fred,kosis,eia}/dataset=macro_observation/series_id={id}/ingest_date=/run_id=/{id}-{from}-{to}-{sha16}.json` | `canonical/market_data/macro_observation/series_id=/observation_date=/part-00000.parquet` | `operations_archive/canonical_run_artifacts/dataset=macro_observation/run_id=/report_date={ingest_date}/part-00000.parquet` |
 | 재무 | `raw/source=dart/dataset=financial_metric/market=KR/ingest_date=/run_id=/{corp}-{종류}-{sha16}.json` (종류: 목록 `list-pN` · 재무제표 `{연도}-{보고서}-{CFS·OFS}` · 주식총수 `…-shares`) | `canonical/financials/financial_metric/market=KR/period_end=/part-00000.parquet` | 같은 규칙(`dataset=financial_metric`) |
 | 업종 | `raw/source=kis/dataset=sector_classification/market={KOSPI,KOSDAQ,KR}/ingest_date=/run_id=/{파일}-{sha16}.zip` | `canonical/reference/sector_classification/market=/as_of_date=/part-00000.parquet` | 같은 규칙 |
+
+`ingest_date`·`report_date` 는 UTC 실행일이고 canonical 의 `observation_date`·`period_end`·`as_of_date` 는 업무 날짜(업종 `as_of_date` 는 수신 KST 날짜)다 — 둘은 00~09시 KST 실행에서 하루 어긋난다(§3 "경로 날짜의 시간대").
 
 - raw 객체 이름에 내용 해시가 있어 불변이다(같은 바이트 재기록 no-op, 다른 바이트는 다른 키). **raw run manifest**
   (`operations_archive/raw_run_manifests/dataset=/run_id=/manifest.json`)에 오른 객체만 입력이다 — 키·sha256·바이트 수·
@@ -490,7 +494,7 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 
 ### 10.10 과거 평가 입력의 확보 범위
 
-평가일은 v2 재생 계약이 쓰는 **2026-09-14~18**(`fixture-tool-contract.md` "시간순 재생")을 **가정**했다 — 실제 평가 기간은 확정되지 않았다(확정되면 표만 다시 계산). "함수 구현"과 "입력 확보"는 다르다: 아래 다섯 함수는 모두 구현·로컬 검증됐고, **DB 에는 아직 한 행도 없다**(미배포·미수집).
+평가일은 v2 재생 계약이 쓰는 **2026-09-14~18**(`fixture-tool-contract.md` "시간순 재생")을 **가정**했다 — 실제 평가 기간은 확정되지 않았다(확정되면 표만 다시 계산). "함수 구현"과 "입력 확보"는 다르다: 아래 다섯 함수는 모두 구현·로컬 검증됐다. dev DB 에는 2026-10-02 첫 소량 수집분만 있다(매크로 2계열 09-15~25, 업종 10-02, 재무는 심텍 2026-Q2 한 건). 아래 표는 그대로 수집 계획의 근거다.
 
 | 데이터셋 | 평가에 필요한 범위 | 공급자 이력 | 계약대로 보이는 범위(수집 뒤) | 결손과 소비자가 보는 모양 |
 |---|---|---|---|---|
