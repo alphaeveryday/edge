@@ -5,7 +5,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOP_BAR_H, TopBar } from '@/components/TopBar';
 import { Chip, LinkRow, PageTitle, SectionHead } from '@/components/ui';
-import { PostRow } from '@/features/community/PostRow';
+import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
@@ -64,7 +64,7 @@ export default function Home() {
         <View style={{ paddingTop: 22 }}>
           <SectionHead title="커뮤니티 인기글" />
         </View>
-        {posts.data?.map((p) => <PostRow key={p.id} post={p} />)}
+        {posts.data?.map((p) => <EtfPostRow key={p.id} post={p} showTag />)}
         <View style={{ marginTop: 12, marginHorizontal: PAGE_X }}>
           <LinkRow variant="card" muted label="더보기" open={false} onPress={() => router.push('/(tabs)/community')} />
         </View>

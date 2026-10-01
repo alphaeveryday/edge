@@ -6,7 +6,7 @@ import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useToggleLike } from './queries';
 
-// ETF 커뮤니티와 전체 커뮤니티 공용 게시물 카드
+// 홈·전체 커뮤니티·ETF 커뮤니티 공용 게시물 카드
 export function EtfPostRow({ post, onQuoteTag, showTag }: { post: Post; onQuoteTag?: () => void; showTag?: boolean }) {
   const router = useRouter();
   const like = useToggleLike();
