@@ -295,7 +295,7 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 | 재무 | `raw/source=dart/dataset=financial_metric/market=KR/ingest_date=/run_id=/{corp}-{종류}-{sha16}.json` (종류: 목록 `list-pN` · 재무제표 `{연도}-{보고서}-{CFS·OFS}` · 주식총수 `…-shares`) | `canonical/financials/financial_metric/market=KR/period_end=/part-00000.parquet` | 같은 규칙(`dataset=financial_metric`) |
 | 업종 | `raw/source=kis/dataset=sector_classification/market={KOSPI,KOSDAQ,KR}/ingest_date=/run_id=/{파일}-{sha16}.zip` | `canonical/reference/sector_classification/market=/as_of_date=/part-00000.parquet` | 같은 규칙 |
 
-`ingest_date`·`report_date` 는 UTC 실행일이고 canonical 의 `observation_date`·`period_end`·`as_of_date` 는 업무 날짜(업종 `as_of_date` 는 수신 KST 날짜)다 — 둘은 00~09시 KST 실행에서 하루 어긋난다(§3 "경로 날짜의 시간대").
+`ingest_date`·`report_date` 는 UTC 실행일이다. canonical 파티션 날짜는 다른 축이다 — 매크로 `observation_date` 는 공급자 관측일, 재무 `period_end` 는 보고기간 말이라 실행일과 비교할 값이 아니다. 같은 실행일을 뜻하는 것은 업종 `as_of_date`(수신 KST 날짜)뿐이고, 이것만 00~09시 KST 실행에서 `ingest_date` 보다 하루 뒤다(§3 "경로 날짜의 시간대").
 
 - raw 객체 이름에 내용 해시가 있어 불변이다(같은 바이트 재기록 no-op, 다른 바이트는 다른 키). **raw run manifest**
   (`operations_archive/raw_run_manifests/dataset=/run_id=/manifest.json`)에 오른 객체만 입력이다 — 키·sha256·바이트 수·
@@ -372,7 +372,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 ### 10.5 수집 주기·백필·재시도·writer
 
 - **writer**: 데이터셋·파티션마다 정제 스텝 하나(`normalize-{macro,sector,financial-metric}`). raw는 수집 스텝, DB는 적재 스텝.
-- **정기**: DAG `edge_source_daily` 매일 09:10 KST 한 슬롯(근거는 DAG 도크스트링). 매크로 창 = 어제 − 소급일 ~ 어제
+- **정기**: DAG `edge_source_daily` 매일 09:10 KST 한 슬롯(근거는 DAG 도크스트링). 매크로 창 = 어제 − (소급일 − 1) ~ 어제, 월별(CPI)은 시작을 그 달 1일로 맞춘다
   (USD/KRW·금리 14일, CPI 124일, 브렌트 28일 — 늦은 게시·정정 흡수). 재무 창 = 접수일 오늘−14 ~ 오늘. 업종 = 거래일만.
 - **백필**: 같은 DAG를 수동 trigger + `macro_from/to`·`financial_from/to`(CLI `--from/--to`). 매크로 `to`≤어제, 재무 `to`≤오늘 —
   미래·진행 중 관측은 스텝이 거부한다. 업종은 현재값만이라 백필 인자가 없다(`ingest-raw-sector`가 `--from/--to` 거부).
