@@ -849,6 +849,8 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - Airflow: `edge/airflow:dc11b7c5…` 이미지는 **빌드·푸시만** 됐다. 서비스가 desired 0 이라 deploy-airflow 가 태스크 정의 등록·서비스 교체를 건너뛰었다(서비스 태스크 정의 `edge-dev-airflow:10` = 옛 이미지 `7bb0c196`). 즉 **`edge_source_daily` DAG 는 아직 Airflow 에 올라가지 않았다.** 서비스를 다음에 dev 이미지로 켜면 그때 pause 상태로 등록된다(`is_paused_upon_creation`) — 그 뒤 dag-processor 가 DAG 하나를 더 파싱한다.
 - 새 수집 경로: `macro` 태스크 정의 없음, SFN·스케줄러 어디에도 새 CLI 스텝·`source-daily` 레인 참조 없음(10-01 조회), RunTask 허용 목록 미변경 — 실제 공급자 호출·적재는 한 번도 하지 않았다.
 
+**첫 수집·적재·v2 소비 검증은 ALPHA-1136**(코드는 ALPHA-1130 으로 완료, 2026-10-01 기준 원천 관측 표 4개 모두 0행). 재무 표 재사용은 ALPHA-643 과 합의 대기 — 미결.
+
 **자리표시자·미결정 값(첫 실행 전에 정한다):** `<…>` 는 채워 넣을 값이다. `R`(run_id)·날짜·계열·ETF 코드는 **예시**다.
 - 미결정: `macro` 태스크 정의 이름·시크릿 이름(위 1 의 제안), 첫 실행 대상(매크로 계열·재무 ETF·접수일)과 실행 시각, 첫 실행에 쓸 이미지 태그(아래 "이미지").
 - 정해진 것: 키 env 이름(설정 로더 `DATA_PIPELINE_` + `__` 중첩), 기본 대상 ETF `091160`(`sources.toml` `[source_observations].etf_ids`), DAG 슬롯 매일 09:10 KST(주말 포함).
