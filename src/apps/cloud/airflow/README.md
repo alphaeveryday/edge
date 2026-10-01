@@ -929,8 +929,15 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 **메타DB 생성.** `run.py secrets`(검증 시크릿 없으면 건너뜀) → 실행 전에 `airflow` DB·`airflow_meta` 역할이 **없는지** 조회 → `run.py dbadmin create` → `run.py dbadmin privcheck`(업무 테이블 권한 0·PUBLIC 접속 불가·역할 1개 규격). 이미 있으면 `create` 를 돌리지 않고 멈춘다 — `create` 는 있는 역할의 비밀번호를 시크릿 값으로 다시 맞추므로, 누가 만든 것인지 확인 전에는 덮어쓰지 않는다. 검증 DB(`edge_verify`)는 만들지 않는다(검증 자원이 꺼져 있으면 관리 태스크에 그 몫이 없다).
 
 **중단 시험(업무 DAG pause·SFN 운영 그대로).**
-- S1: `aws cloudwatch set-alarm-state --alarm-name edge-dev-airflow-stop-task-memory --state-value ALARM --state-reason "ALPHA-1141 S1"` → 오토스케일링 활동(`aws application-autoscaling describe-scaling-activities --service-namespace ecs --resource-id service/edge-dev-airflow/edge-dev-airflow`)과 서비스 `desiredCount=0`·`runningCount=0`·태스크 STOPPED 를 확인한다. SNS 메일 수신은 담당자가 확인한다. 경보가 실제 값으로 OK 로 돌아온 뒤 `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 1` → HEALTHY.
-- S2: 같은 절차를 `edge-dev-airflow-stop-rds-freeable`(아래 방향 경보)로 한 번 더.
+- S1: 강제 ALARM. App Auto Scaling 액션이 걸린 경보는 `--state-reason-data` 에 평가 데이터(지표값·임계)가 있어야 정책이 계단을 고른다(AWS `SetAlarmState` 문서) — 없으면 ALARM·SNS 만 나고 desired 는 그대로일 수 있다.
+  ```bash
+  now=$(date -u +%Y-%m-%dT%H:%M:%S.000+0000)
+  aws cloudwatch set-alarm-state --alarm-name edge-dev-airflow-stop-task-memory --state-value ALARM \
+    --state-reason "ALPHA-1141 S1 forced" \
+    --state-reason-data "{\"version\":\"1.0\",\"queryDate\":\"$now\",\"statistic\":\"Maximum\",\"period\":60,\"recentDatapoints\":[95.0,95.0],\"threshold\":90.0,\"evaluatedDatapoints\":[{\"timestamp\":\"$now\",\"sampleCount\":1.0,\"value\":95.0}]}"
+  ```
+  → 오토스케일링 활동(`aws application-autoscaling describe-scaling-activities --service-namespace ecs --resource-id service/edge-dev-airflow/edge-dev-airflow`)과 서비스 `desiredCount=0`·`runningCount=0`·태스크 STOPPED 를 확인한다. SNS 메일 수신은 담당자가 확인한다. 경보가 실제 값으로 OK 로 돌아온 뒤 `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 1` → HEALTHY.
+- S2: 같은 절차를 `edge-dev-airflow-stop-rds-freeable`(아래 방향 경보)로 한 번 더. 평가 데이터는 `"statistic":"Minimum"`, 값 `209715200`(200MiB, 바이트)·임계 `419430400`(400MiB).
 - **이 시험이 확인하는 것은 "ALARM 전이 → 정책 → 서비스 0" 경로뿐이다.** 실제 메모리 위반·RDS 지표 결측으로 경보가 ALARM 이 되는지는 시험하지 않는다. 결측 경로는 `describe-alarms` 의 `TreatMissingData`(rds-freeable=breaching, task-memory=notBreaching) **설정 확인뿐이라 미검증으로 남긴다.**
 - 실패(액션이 불리지 않거나 서비스가 안 내려감)하면 전환으로 가지 않고 원인과 자원 상태를 보고한다.
 
