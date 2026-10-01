@@ -40,6 +40,8 @@ BUCKET = os.environ["VERIFY_BUCKET"]
 FIXTURE = "fixtures/investor_estimate.ndjson"
 STEP_MODULES = ("ingest-raw-investor-estimate", "normalize-investor-estimate", "load-investor-intraday")
 _s3 = boto3.client("s3")
+# verify-reset 이 배치마다 지우는 접두(재생 입력 fixtures·감시 심장박동 watchdog/ 는 남긴다).
+RESET_PREFIXES = ("state/", "raw/", "canonical/", "operations_archive/", "manifests/")
 
 
 def _arg(argv: list[str], name: str) -> str | None:
@@ -167,7 +169,7 @@ def reset() -> int:
         conn.execute("TRUNCATE investor_flow_intraday, ops_task_attempt, ops_reconciliation_issue,"
                      " ops_expectation_snapshot, ops_expected_task, ops_pipeline_run CASCADE")
     deleted = 0
-    for prefix in ("state/", "raw/", "canonical/", "operations_archive/", "manifests/"):
+    for prefix in RESET_PREFIXES:
         for page in _s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix):
             keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
             if keys:
@@ -330,7 +332,8 @@ def _ship_host_obs(asg, report: dict, wait_seconds: int = 180) -> None:
 # 운영자 PC·포트 포워딩과 무관하게 AWS 안에서 중단 기준을 본다. 기준을 넘거나 감시가 3회 연속 실패하면 종료 장치와
 # 같은 절차(서비스 0 → 검증 태스크 중단 → 관측 기록 전송 → 호스트 0)를 바로 부른다. 업무 스텝은 이 감시의 심장박동이
 # 2분 넘게 끊기면 시작하지 않는다(exit 75) — 감시가 죽으면 검증 부하도 멈춘다.
-WATCH_KEY = "state/watchdog/heartbeat.json"
+# state/ 밖에 둔다 — 배치마다 verify-reset 이 state/ 를 지운다(봇 P1: 지우면 첫 업무 스텝이 심장박동을 못 읽는다).
+WATCH_KEY = "watchdog/heartbeat.json"
 WATCH_FRESH_SECONDS = 120
 WATCH_LOSS_LIMIT = 3
 HOST_MEM_MIN_MIB = 64

@@ -96,3 +96,9 @@ def test_watchdog_trip_calls_the_shutdown_procedure_and_loss_counts_as_a_trip(mo
     assert len(calls) == 1 and calls[0][0] == 60 and "감시 상실" in calls[0][1]
     beat = json.loads(fake.objects[shim.WATCH_KEY])
     assert beat["trip"] and max(beat["losses"].values()) == shim.WATCH_LOSS_LIMIT
+
+
+def test_the_heartbeat_survives_the_per_batch_reset():
+    # WHY(봇 P1): 실행기는 배치마다 verify-reset 으로 상태 접두를 지운다. 심장박동이 그 안에 있으면 감시를 먼저 띄워도
+    # 첫 업무 스텝이 심장박동을 못 읽고 거부된다.
+    assert not any(shim.WATCH_KEY.startswith(p) for p in shim.RESET_PREFIXES)

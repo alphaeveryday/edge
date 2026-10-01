@@ -174,7 +174,7 @@ def watchdog(args) -> int:
     while time.time() < deadline:
         time.sleep(15)
         try:
-            beat = json.loads(s3.get_object(Bucket=bucket, Key="state/watchdog/heartbeat.json")["Body"].read())
+            beat = json.loads(s3.get_object(Bucket=bucket, Key="watchdog/heartbeat.json")["Body"].read())
         except s3.exceptions.NoSuchKey:
             continue
         if beat.get("task") and beat["task"].endswith(arn.rsplit("/", 1)[1]) and time.time() - beat["t"] < 120:

@@ -496,7 +496,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
   - 업무: 창 안에 실패한 업무 SFN을 본다.
   - Airflow: 서비스 태스크가 교체됐는지 본다.
 - 기준을 넘거나, 한 감시가 3회 연속 실패하면(감시 상실) 종료 장치와 같은 절차를 바로 부른다(서비스 0 → 검증 태스크 중단 → 관측 기록 전송 → 호스트 0).
-- 심장박동은 검증 버킷 `state/watchdog/heartbeat.json`에 남는다. 업무 스텝(shim)은 심장박동이 120초 넘게 묵었거나 중단이 선언됐으면 업무를 시작하지 않는다(exit 75). 감시가 죽으면 검증 부하도 멈춘다.
+- 심장박동은 검증 버킷 `watchdog/heartbeat.json`에 남는다(배치마다 지우는 `state/` 밖). 업무 스텝(shim)은 심장박동이 120초 넘게 묵었거나 중단이 선언됐으면 업무를 시작하지 않는다(exit 75). 감시가 죽으면 검증 부하도 멈춘다.
 - 로컬 검증: `verify/test_watchdog.py` 7건(data-pipeline 환경). 각 규칙을 지우면 실패하는 것을 확인했다. 호스트 조회 스크립트는 이전 회차의 실제 관측 기록에 Amazon Linux 2023 컨테이너로 돌려 값을 얻었다.
 
 **비용(추정).**
