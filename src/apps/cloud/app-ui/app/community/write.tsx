@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { Avatar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead } from '@/components/ui';
@@ -42,7 +42,7 @@ export default function CommunityWrite() {
     ? '관심에 담은 ETF만 태그할 수 있어요'
     : tags.length ? `종목 ${tags.length}개 태그 (최대 ${TAG_MAX}개)` : '종목을 1개 이상 태그해 주세요';
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.root, { paddingTop: top + 8 }]}>
+    <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.nav}>
         <IconButton icon="close" onPress={() => router.back()} />
         <Text style={styles.navTitle}>글쓰기</Text>

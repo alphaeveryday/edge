@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
 import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
@@ -35,7 +35,7 @@ export default function Post() {
   const leave = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/community'));
   const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); leave(); toast('글을 지웠어요'); } });
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.root, { paddingTop: top + 8 }]}>
+    <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.navWrap}>
         <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle }))} />
       </View>
