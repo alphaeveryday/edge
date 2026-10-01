@@ -543,8 +543,9 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     # 매크로 5계열·KIS 지수업종·DART 재무 지표. SFN 이 없으므로 `sfn_state_name` 은 빈 값이다 — `by_sfn_state` 는 빈 이름을 매칭하지 않고,
     # ASL 대조 테스트는 이 레인을 Airflow 전용으로 따로 센다(test_ops_catalog). 흐름(flow)은 데이터셋마다 하나다.
     # 정제 의존을 비우는 이유는 다른 레인과 같다 — 수집 부분 실패 뒤에도 받은 것은 정제한다.
-    # ⚠️ MACRO_COLLECTION 만 instrumented=False 다: 매크로 키(ECOS·KOSIS·EIA + FMP)를 가진 `macro`
-    # 태스크 정의가 아직 없다(인프라 인계 — 설계 §10). 배선이 먼저 배포된 뒤 True 로 올린다(ALPHA-596 순서).
+    # ⚠️ MACRO_COLLECTION 만 instrumented=False 다: `macro` 태스크 정의(ECOS·KOSIS·EIA 키 + DB env)는
+    # ALPHA-1136 배선 PR 이 만든다 — 그 배포가 먼저 착지한 뒤 True 로 올린다(ALPHA-596 순서, 그동안
+    # test_ops_catalog `_WIRING_AHEAD_OF_FLAG`). FMP 키는 붙이지 않는다(미사용 결정 — `us_10y_yield` 미해결).
     CatalogEntry(
         task_key="MACRO_COLLECTION", flow="macro", stage="raw", dataset="macro_observation", required=True,
         cli_command=("ingest-raw-macro",), sfn_state_name="", ecs_task_definition="macro",

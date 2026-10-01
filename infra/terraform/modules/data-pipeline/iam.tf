@@ -38,6 +38,10 @@ resource "aws_iam_role_policy" "execution_secrets" {
           # ResourceInitializationError 로 태스크가 시작되지 않는다
           aws_secretsmanager_secret.toss.arn,
           aws_secretsmanager_secret.krx.arn,
+          # 원천 관측 매크로 키(ALPHA-1136, 수동 등록 그릇 — storage.tf data)
+          data.aws_secretsmanager_secret.macro["ecos"].arn,
+          data.aws_secretsmanager_secret.macro["kosis"].arn,
+          data.aws_secretsmanager_secret.macro["eia"].arn,
           var.deepseek_secret_arn,
           var.db_password_secret_arn,
         ]

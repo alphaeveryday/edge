@@ -248,7 +248,8 @@ def test_catalog_and_asl_task_states_match_both_ways():
 # 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는 다른
 # 작업까지 덩달아 면제되지 않게 하기 위해서다.
 # ALPHA-610 이 #379(배선)→#(이 PR, 플래그)로 실제로 밟은 경로이고, 지금은 비어 있는 것이 맞다.
-_WIRING_AHEAD_OF_FLAG: set[str] = set()
+# MACRO_COLLECTION: ALPHA-1136 배선 PR(`macro` task-def + DB env). 플래그를 True 로 올리는 PR 이 지운다.
+_WIRING_AHEAD_OF_FLAG: set[str] = {"MACRO_COLLECTION"}
 
 
 def _taskdefs_with_db_env() -> set[str]:

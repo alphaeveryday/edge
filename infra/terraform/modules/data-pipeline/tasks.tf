@@ -204,6 +204,9 @@ locals {
     # 초록으로 보인다. 이 배선(#379)이 한 배포 앞서고 카탈로그 플래그 전환이 뒤따랐다 —
     # 순서를 뒤집으면 Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다.
     deepseek = local.db_env
+    # MACRO_COLLECTION(ALPHA-1136) wrapper 기록용 — 위 deepseek 와 같은 순서: 이 배선이 한 배포
+    # 앞서고 카탈로그 instrumented 전환이 뒤따른다(그 전까지 test_ops_catalog `_WIRING_AHEAD_OF_FLAG`).
+    macro = local.db_env
   }
 
   secret_sets = {
@@ -258,6 +261,15 @@ locals {
     }
     rds = {
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
+    }
+    # 원천 관측 매크로 수집(ingest-raw-macro, ALPHA-1136). ECOS(USD/KRW·국고채)·KOSIS(CPI)·EIA(브렌트).
+    # ⚠️ FMP 키는 **붙이지 않는다**(FMP 미사용 결정) — 미국채 10년(`us_10y_yield`)은 FMP 계열이라 이
+    # 태스크에서 키 없음으로 그 계열만 실패한다(수집기 규칙). 대체 원천 결정 전까지 미해결(ALPHA-1136).
+    macro = {
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY  = "${data.aws_secretsmanager_secret.macro["ecos"].arn}:apikey::"
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY = "${data.aws_secretsmanager_secret.macro["kosis"].arn}:apikey::"
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY   = "${data.aws_secretsmanager_secret.macro["eia"].arn}:apikey::"
+      DATA_PIPELINE_DB__PASSWORD                              = "${var.db_password_secret_arn}:password::"
     }
     # assemble-events(ALPHA-412) — 분류 LLM 과 DB 적재를 한 태스크가 다 한다(엔진 추출
     # 체인 이식이라 분리 불가). deepseek·rds 두 세트의 합집합.
