@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   body: { paddingTop: 12, paddingHorizontal: 20, paddingBottom: 34 },
   verdictRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  verdict: { fontFamily: fam.extrabold, fontSize: 18, letterSpacing: -0.5, color: colors.text },
+  verdict: { flex: 1, fontFamily: fam.extrabold, fontSize: 18, letterSpacing: -0.5, color: colors.text },
   legend: { flexDirection: 'row', gap: 12, marginTop: 16 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   sw: { width: 9, height: 9, borderRadius: 3 },

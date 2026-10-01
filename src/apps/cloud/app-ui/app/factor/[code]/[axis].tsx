@@ -22,7 +22,7 @@ export default function FactorPage() {
       <View style={styles.nav}>
         <IconButton icon="back" onPress={() => router.back()} />
         {f && <Sticker signal={dirSignal[f.dir]} size={28} radius={11} label={f.axis} />}
-        <Text style={styles.etf}>{etf?.name}</Text>
+        <Text numberOfLines={1} style={styles.etf}>{etf?.name}</Text>
       </View>
       <QueryState query={q} rows={3} pending={{ title: `${axis} 요인 상세는 준비 중이에요`, sub: '재료가 확인되면 이 축의 근거를 정리해 올려요' }}>
         {(f) => (
@@ -77,7 +77,7 @@ export default function FactorPage() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   nav: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingTop: 2 },
-  etf: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
+  etf: { flex: 1, fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
   body: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 40 },
   headline: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   event: { flexDirection: 'row', gap: 10 },
