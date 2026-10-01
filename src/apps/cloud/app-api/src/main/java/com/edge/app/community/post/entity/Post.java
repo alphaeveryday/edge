@@ -35,17 +35,11 @@ public class Post {
     @Column(name = "quote_tag", length = 30)
     private String quoteTag;
 
-    @Column(name = "repost_of_id")
-    private Long repostOfId;
-
     @Column(name = "like_count", nullable = false)
     private int likeCount;
 
     @Column(name = "reply_count", nullable = false)
     private int replyCount;
-
-    @Column(name = "repost_count", nullable = false)
-    private int repostCount;
 
     @Column(name = "view_count", nullable = false)
     private int viewCount;

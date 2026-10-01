@@ -5,10 +5,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 
 public record PostResponse(String id, Etf etf, Author author, Instant time, String title, String body, String quoteTag,
-        RepostOf repostOf, int like, int reply, int repost, boolean liked, int views, boolean mine, Boolean blocked) {
+        int like, int reply, boolean liked, int views, boolean mine, Boolean blocked) {
     // 상세 조회 전용. 목록에서는 키 생략
     public PostResponse asBlocked() {
-        return new PostResponse(id, etf, author, time, title, body, quoteTag, repostOf, like, reply, repost, liked, views,
+        return new PostResponse(id, etf, author, time, title, body, quoteTag, like, reply, liked, views,
                 mine, true);
     }
 
@@ -17,8 +17,5 @@ public record PostResponse(String id, Etf etf, Author author, Instant time, Stri
     }
 
     public record Author(String name, String handle) {
-    }
-
-    public record RepostOf(String name, String handle, Instant time, String body) {
     }
 }

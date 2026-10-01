@@ -91,7 +91,7 @@ class PostFlowTests extends ContainerTests {
         assertEquals("TIGER 나스닥100", etf.get("short"));
         assertEquals("A", ((Map<?, ?>) created.get("author")).get("name"));
         assertFalse(created.containsKey("title"));
-        assertFalse(created.containsKey("repostOf"));
+        assertFalse(created.containsKey("repost"), "리포스트 기능 없음");
     }
 
     @Test

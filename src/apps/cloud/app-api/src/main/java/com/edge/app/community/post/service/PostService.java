@@ -197,8 +197,8 @@ public class PostService {
             Etf etf = etfs.get(p.getEtfCode());
             return new PostResponse(Long.toString(p.getId()),
                     new PostResponse.Etf(p.getEtfCode(), etf == null ? "" : etf.getThemeKey(), etf == null ? p.getEtfCode() : etf.getName()),
-                    authors.get(p.getAuthorId()), p.getCreatedAt(), p.getTitle(), p.getBody(), p.getQuoteTag(), null,
-                    p.getLikeCount(), p.getReplyCount(), p.getRepostCount(), liked.contains(p.getId()), p.getViewCount(),
+                    authors.get(p.getAuthorId()), p.getCreatedAt(), p.getTitle(), p.getBody(), p.getQuoteTag(),
+                    p.getLikeCount(), p.getReplyCount(), liked.contains(p.getId()), p.getViewCount(),
                     requester != null && requester.equals(p.getAuthorId()), null);
         }).toList();
     }
