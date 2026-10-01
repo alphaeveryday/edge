@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
 
 const invalidate = (qc: ReturnType<typeof useQueryClient>) => {
@@ -8,6 +8,14 @@ const invalidate = (qc: ReturnType<typeof useQueryClient>) => {
 
 export const useWatchGroups = () => useQuery({ queryKey: ['watch', 'groups'], queryFn: () => api.watch.groups() });
 export const useWatchList = (group: string) => useQuery({ queryKey: ['watch', 'list', group], queryFn: () => api.watch.list(group) });
+// 모든 관심 그룹에 담긴 ETF 코드
+export const useWatchedCodes = () => {
+  const { data: groups } = useWatchGroups();
+  return useQueries({
+    queries: (groups ?? []).map((g) => ({ queryKey: ['watch', 'list', g.key], queryFn: () => api.watch.list(g.key) })),
+    combine: (rs) => ({ codes: new Set(rs.flatMap((r) => r.data ?? []).map((e) => e.code)), ready: !!groups && rs.every((r) => r.isSuccess) }),
+  });
+};
 export const useMembership = (code: string) => useQuery({ queryKey: ['watch', 'membership', code], queryFn: () => api.watch.membership(code), enabled: !!code });
 
 export const useCreateGroup = () => {

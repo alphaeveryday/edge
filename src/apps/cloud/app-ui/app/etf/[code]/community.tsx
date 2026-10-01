@@ -19,7 +19,7 @@ export default function EtfCommunity() {
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </ScrollView>
       <View style={styles.fab}>
-        <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push('/community/write'))} />
+        <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push({ pathname: '/community/write', params: { code } }))} />
       </View>
     </View>
   );
