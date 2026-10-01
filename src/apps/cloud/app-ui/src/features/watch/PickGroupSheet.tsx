@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 15, borderTopWidth: 1, borderTopColor: colors.surface },
   gname: { flex: 1, fontFamily: fam.bold, fontSize: 16, color: colors.text },
   count: { fontFamily: fam.mono, fontSize: 12, color: colors.textFaint },
-  ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   ckOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   foot: { flexDirection: 'row', gap: 9, paddingTop: 12, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface },
 });

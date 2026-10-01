@@ -32,6 +32,6 @@ export function FactorRow({ axis, dir, summary, hasPage, onSelect, onHint }: Pro
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: '#EEF1F4' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line },
   summary: { flex: 1, fontFamily: fam.semibold, fontSize: 15, lineHeight: 22, color: colors.text },
 });

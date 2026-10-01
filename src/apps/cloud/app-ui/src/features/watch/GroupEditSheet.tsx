@@ -55,7 +55,7 @@ export function GroupEditSheet({ open, group, groupLabel, onClose }: Props) {
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: colors.surface },
-  box: { width: 22, height: 22, borderRadius: 7, borderWidth: 2, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  box: { width: 22, height: 22, borderRadius: 7, borderWidth: 2, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   boxOn: { borderColor: colors.primary, backgroundColor: colors.primary },
   name: { flex: 1, fontFamily: fam.bold, fontSize: 15, color: colors.text },
 });

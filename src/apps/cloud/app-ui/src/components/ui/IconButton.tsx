@@ -71,7 +71,7 @@ export function IconButton({ icon, size = 38, circled, floating, fab, soft, colo
 }
 
 const styles = StyleSheet.create({
-  btn: { borderRadius: radius.pill, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  btn: { borderRadius: radius.pill, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   fabShadow: shadow.fab,
   floatShadow: shadow.floating,
   badge: { position: 'absolute', top: -2, right: -2, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: radius.pill, backgroundColor: colors.up, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center' },

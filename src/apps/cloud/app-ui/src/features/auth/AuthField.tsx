@@ -32,7 +32,7 @@ export function AuthField({ secure, invalid, ...rest }: TextInputProps & { secur
 
 const styles = StyleSheet.create({
   wrap: { justifyContent: 'center' },
-  input: { height: 54, borderRadius: radius.field, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 16, color: colors.text },
+  input: { height: 54, borderRadius: radius.field, borderWidth: 1, borderColor: colors.lineStrong, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 16, color: colors.text },
   invalid: { borderWidth: 1.5, borderColor: colors.up },
   eye: { position: 'absolute', right: 6, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 });

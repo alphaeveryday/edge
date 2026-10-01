@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
   tag: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 32, paddingLeft: 8, paddingRight: 10, borderRadius: 999, backgroundColor: colors.card },
   tagBad: { borderWidth: 1, borderColor: colors.up },
   tagText: { fontFamily: fam.bold, fontSize: 13, color: colors.text },
-  add: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 32, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: colors.line },
+  add: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 32, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: colors.lineStrong },
   addText: { fontFamily: fam.bold, fontSize: 13, color: colors.primary },
   editor: { flexDirection: 'row', gap: 11, paddingTop: 12, paddingHorizontal: 16, paddingBottom: 8 },
   input: { flex: 1, minHeight: 150, fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.text, paddingTop: 7, textAlignVertical: 'top' },
@@ -128,7 +128,7 @@ const styles = StyleSheet.create({
   pickList: { maxHeight: 360, marginTop: 8 },
   pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, borderTopWidth: 1, borderTopColor: colors.surface },
   pickName: { flex: 1, fontFamily: fam.bold, fontSize: 15, color: colors.text },
-  ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   ckOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   empty: { paddingVertical: 24, textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
 });
