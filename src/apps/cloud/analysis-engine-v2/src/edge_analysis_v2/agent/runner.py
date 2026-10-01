@@ -88,10 +88,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     artifacts.mkdir(parents=True, exist_ok=True)
     def encode(value):
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
-    def guarded_call(name, args):
-        skills.require_loaded()
-        return call(name, args)
-    server, allowed = make_server(schemas, guarded_call)
+    server, allowed = make_server(schemas, call)
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
         skills = SkillSession(workspace, artifacts, kind, allowed)
@@ -99,8 +96,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         options = ClaudeAgentOptions(
             model=model, system_prompt=prompt, tools=['Skill', 'Read'], allowed_tools=allowed + ['Read'],
             skills=skills.names, plugins=[{'type':'local', 'path':str(skills.plugin)}],
-            hooks={'PreToolUse':[HookMatcher(hooks=[skills.before])],
-                   'PostToolUse':[HookMatcher(hooks=[skills.after])]},
+            hooks={'PreToolUse':[HookMatcher(hooks=[skills.before])]},
             mcp_servers={'analysis': server}, strict_mcp_config=True,
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
@@ -127,7 +123,6 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                 (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
                 if event.get('is_error') or event.get('subtype') != 'success':
                     raise ValueError('SDK did not produce a successful final result')
-                skills.require_loaded()
                 value = event.get('structured_output')
                 if value is None:
                     value = json.loads(event.get('result') or '')

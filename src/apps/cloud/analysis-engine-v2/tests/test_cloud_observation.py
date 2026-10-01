@@ -46,8 +46,9 @@ def test_incremental_transport_preserves_numbers_shapes_and_complete_events(tmp_
     source.mkdir()
     body = {'columns':['amount'], 'rows':[[9007199254740993]], 'note':'원문'}
     (source/'input.json').write_text(json.dumps(body, ensure_ascii=False), encoding='utf-8')
-    skills = {'loaded':['analysis:hypothesis-analysis-workflow'], 'documents':[]}
+    skills = {'available':['analysis:hypothesis-analysis-workflow'], 'documents':[]}
     (source/'skills.json').write_text(json.dumps(skills), encoding='utf-8')
+    (source/'AGENTS.md').write_text('Use skills when needed.', encoding='utf-8')
     events = source/'events.jsonl'
     events.write_bytes(b'{"step":1}\n{"step":')
     s3 = MemoryS3()
@@ -57,6 +58,7 @@ def test_incremental_transport_preserves_numbers_shapes_and_complete_events(tmp_
     download(s3, 'bucket', manifest, local)
     assert json.loads((local/'input.json').read_text(encoding='utf-8')) == body
     assert json.loads((local/'skills.json').read_text(encoding='utf-8')) == skills
+    assert (local/'AGENTS.md').read_text(encoding='utf-8') == 'Use skills when needed.'
     assert (local/'events.jsonl').read_bytes() == b'{"step":1}\n'
     events.write_bytes(b'{"step":1}\n{"step":2}\n')
     manifest = publisher.publish(job | {'status':'completed'})

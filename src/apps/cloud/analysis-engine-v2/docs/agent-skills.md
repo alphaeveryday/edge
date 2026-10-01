@@ -1,7 +1,8 @@
 # 분석 스킬 실행 계약
 
 분석 워커는 기존 프로세스 내부 MCP를 유지한다. 별도 MCP 서버나 포트를 만들지 않는다.
-`agent/runner.py`는 실행마다 임시 작업 디렉터리와 SDK 로컬 플러그인을 만들고 다음 두 문서를 로드한다.
+`agent/runner.py`는 실행마다 임시 작업 디렉터리와 SDK 로컬 플러그인을 만들고 다음 두 스킬을 제공한다.
+에이전트는 필요할 때 스킬을 선택해서 읽으며, 스킬 호출 없이 분석하거나 결과를 제출할 수 있다.
 
 - `skills/hypothesis-analysis-workflow/SKILL.md`
 - `skills/etf-hypothesis-analysis/SKILL.md`
@@ -9,7 +10,10 @@
 원본은 사용자가 지정한 `etf-research-agent/.claude/skills/`의 같은 이름 문서다.
 2026-10-01에 원문 바이트를 그대로 패키지에 포함했다. 개발자 PC의 절대 경로에 의존하지 않는다.
 원본 수정은 자동 반영하지 않는다. 패키지 사본 갱신, 리뷰, 이미지 빌드가 필요하다.
-실행의 `skills.json`에는 실제 로드한 스킬 이름과 문서 SHA-256이 저장되며 관측 업로드에도 포함된다.
+실행의 `skills.json`에는 제공한 스킬 이름과 문서 SHA-256이 저장되며 관측 업로드에도 포함된다.
+해시는 문서 버전 기록일 뿐 실행 허용이나 스킬 로딩 검증에 사용하지 않는다.
+작업 규칙은 `agent/workspace/AGENTS.md`에 두고 실행 폴더와 관측 기록에 복사한다.
+현재 SDK가 AGENTS.md를 자동으로 읽는다고 가정하지 않고, runner가 해당 내용을 시스템 지침에 포함한다.
 
 ## 적용 우선순위
 
@@ -22,8 +26,8 @@
 ## 실행 경계
 
 - SDK 0.2.160을 고정한다. 개인/프로젝트 설정을 로드하지 않고 설정 디렉터리도 실행마다 분리한다.
-- 네이티브 도구는 `Skill`, `Read`만 노출한다. Read는 고정한 두 문서만 허용한다.
-- 문서 해시가 바뀌거나 두 스킬의 성공 로딩을 확인하지 못하면 MCP 실행과 최종 응답 수락을 막는다.
+- 네이티브 도구는 `Skill`, `Read`만 노출한다. Read는 승인된 스킬 문서와 작업 폴더의 AGENTS.md만 허용한다.
+- 스킬 호출 횟수·로딩 성공·문서 해시를 분석이나 최종 응답의 선행 조건으로 검사하지 않는다.
 - 셸, 파일 쓰기, 직접 웹 접근, 추가 MCP와 하위 에이전트를 허용하지 않는다.
 - 대화 종료나 예외 후 임시 작업 디렉터리를 정리한다. 관측 결과는 별도 실행 폴더에 남긴다.
 
@@ -52,7 +56,9 @@ docker build -f apps/cloud/analysis-engine-v2/Dockerfile -t analysis-v2:skills .
 docker run --rm --read-only --cap-drop ALL --entrypoint python \
   -e DEEPSEEK_API_KEY -e DEEPSEEK_MODEL analysis-v2:skills \
   -m edge_analysis_v2.agent.smoke --artifacts /tmp/probe
+# 스킬을 호출하지 않아도 분석 도구와 최종 응답이 동작하는지 확인하려면 --without-skills 추가
 ```
 
-두 번째 검사는 실제 모델 비용이 발생한다. 두 스킬의 네이티브 로딩, 내부 MCP 1회 호출,
-구조화 응답 수락을 확인한다. DB 접속이나 ETF 분석 품질 검증은 수행하지 않는다.
+모델 smoke 검사는 실제 모델 비용이 발생한다. 기본 모드는 두 스킬의 네이티브 로딩 후
+내부 MCP 1회 호출과 구조화 응답 수락을 확인한다. `--without-skills` 모드는 스킬을
+호출하지 않고 같은 경로를 검증한다. DB 접속이나 ETF 분석 품질 검증은 수행하지 않는다.
