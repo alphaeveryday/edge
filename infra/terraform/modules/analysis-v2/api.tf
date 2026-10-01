@@ -60,6 +60,8 @@ resource "aws_apigatewayv2_integration" "analysis" {
 resource "aws_apigatewayv2_route" "analysis" {
   for_each = toset([
     "POST /v2/analyses",
+    "GET /v2/etfs/{etf_code}/outlook",
+    "GET /v2/etfs/{etf_code}/movement",
     "GET /v2/analyses/{kind}/{analysis_id}",
     "GET /v2/analyses/{kind}/{analysis_id}/screens/{feature}",
     "GET /v2/etfs/{etf_code}/analyses/{kind}/latest/screens/{feature}"

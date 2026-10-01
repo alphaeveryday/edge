@@ -1,9 +1,10 @@
 """HTTP transport independent of AWS credentials and database connection ownership."""
 import base64
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import logging
 import re
+from urllib.parse import parse_qsl
 
 from botocore.exceptions import ClientError
 
@@ -47,10 +48,12 @@ class AnalysisAPI:
         try:
             if not event.get('requestContext',{}).get('authorizer',{}).get('iam',{}).get('userArn'):
                 raise APIError(403,'FORBIDDEN','An authorized AWS IAM caller is required.')
-            if event.get('rawQueryString'):
-                raise APIError(400,'INVALID_REQUEST','Query parameters are not supported.')
             method = event['requestContext']['http']['method']
             parts = event.get('rawPath','').strip('/').split('/')
+            etf_screen = method=='GET' and len(parts)==4 and parts[:2]==['v2','etfs'] and parts[3] in FEATURES
+            query = event.get('rawQueryString','')
+            if query and not etf_screen:
+                raise APIError(400,'INVALID_REQUEST','Query parameters are not supported on this endpoint.')
             if method=='POST' and parts==['v2','analyses']:
                 raw = event.get('body') or ''
                 if len(raw.encode('utf-8'))>5500:
@@ -78,10 +81,10 @@ class AnalysisAPI:
                     self.validate(kind,feature=parts[5])
                     body=self.screen(kind,identity,parts[5]);status=200
                     headers['X-Analysis-Id']=identity
-            elif method=='GET' and len(parts)==8 and parts[:2]==['v2','etfs'] and parts[3]=='analyses' and parts[5:7]==['latest','screens']:
-                ticker, kind, feature = parts[2],parts[4],parts[7]
+            elif etf_screen or (method=='GET' and len(parts)==8 and parts[:2]==['v2','etfs'] and parts[3]=='analyses' and parts[5:7]==['latest','screens']):
+                ticker, kind, feature = (parts[2],parts[3],'all') if etf_screen else (parts[2],parts[4],parts[7])
                 self.validate(kind,ticker=ticker,feature=feature)
-                latest=self.publications.latest(ticker,kind)
+                latest=self.publications.latest(ticker,kind,analysis_date=self.query_date(query))
                 if latest is None:
                     raise APIError(404,'NOT_FOUND','No completed publication for this ETF.')
                 identity=latest['analysis_id']
@@ -99,6 +102,19 @@ class AnalysisAPI:
             status=503
             body={'error':{'code':'SERVICE_UNAVAILABLE','message':'Analysis service is temporarily unavailable.'},'request_id':request_id}
         return {'statusCode':status,'headers':headers,'body':json.dumps(body,ensure_ascii=False,allow_nan=False)}
+
+    @staticmethod
+    def query_date(query):
+        """Parse a single optional analysis date, rejecting ambiguous query values."""
+        if not query:
+            return None
+        try:
+            pairs=parse_qsl(query,keep_blank_values=True,strict_parsing=True,max_num_fields=1)
+            if len(pairs)!=1 or pairs[0][0]!='date' or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}',pairs[0][1]):
+                raise ValueError('Invalid date query')
+            return date.fromisoformat(pairs[0][1])
+        except ValueError:
+            raise APIError(400,'INVALID_REQUEST','Use one date=YYYY-MM-DD query parameter, or omit it.') from None
 
     @staticmethod
     def validate(kind, *, identity=None, ticker=None, feature=None):

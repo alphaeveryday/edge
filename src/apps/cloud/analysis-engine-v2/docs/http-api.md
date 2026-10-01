@@ -4,6 +4,40 @@
 
 > 아래 예시는 호출 형식 설명용입니다. 실제 주소와 배포 검증 결과는 옵시디언 `ETF ORCA/분석 API.md`에 기록합니다.
 
+## 앱 화면 조회
+
+앱 백엔드는 종목 코드만으로 저장된 최신 화면을 받습니다. 분석 ID를 먼저 조회할 필요가 없으며, 이 호출은 새 분석을 실행하지 않습니다.
+
+| 화면 | 요청 |
+|---|---|
+| 전망 | `GET /v2/etfs/{etf_code}/outlook` |
+| 오늘의 가격변동 설명 | `GET /v2/etfs/{etf_code}/movement` |
+
+| 인자 | 위치 | 필수 | 설명 |
+|---|---|:---:|---|
+| `etf_code` | 경로 | 예 | 대문자·숫자 6자리 종목 코드 |
+| `date` | 쿼리 | 아니오 | `YYYY-MM-DD`. 한국 시간의 분석 대상일. 생략하면 전체 날짜 중 최신 발행본 |
+
+```http
+GET /v2/etfs/091160/outlook
+GET /v2/etfs/091160/movement
+GET /v2/etfs/091160/outlook?date=2026-10-01
+GET /v2/etfs/091160/movement?date=2026-10-01
+```
+
+- 날짜는 `analysis_at`의 한국 시간 날짜입니다. 저장·발행한 날짜가 아닙니다.
+- 실제 DB 자료로 분석했고, 완료·발행된 결과만 반환합니다. 실행 중·실패·목데이터 결과는 제외합니다.
+- 해당 범위에서 분석 기준시각이 가장 늦은 결과를 선택합니다. 같으면 발행시각, 분석 ID 내림차순으로 결정합니다.
+- 날짜를 지정했는데 결과가 없으면 `404`입니다. 다른 날짜의 글로 대체하지 않습니다.
+- 날짜를 생략하면 이전 거래일의 결과도 반환할 수 있습니다. 화면의 `publication.analysis_at`으로 분석 시점을 확인합니다.
+- 한 번 선택한 발행본으로 전체 화면을 조립합니다. 응답은 기존 `screens/all` JSON 그대로이며 별도 래퍼를 붙이지 않습니다. 5요인 수치 상세는 기존 `factor_details` 조회를 사용합니다.
+- 분석 ID는 확인용 `X-Analysis-Id` 헤더에만 추가합니다. `Content-Location`은 선택된 발행본의 조회 경로입니다.
+- 하루의 최종본을 별도로 확정하지 않습니다. 재발행하면 같은 날짜를 다시 조회했을 때 최신 발행본을 받습니다.
+- 빈 날짜·잘못된 날짜·중복 `date`·다른 쿼리 인자는 `400`, DB 장애는 `503`입니다.
+- 기존 분석 요청·상태 조회·ID별 화면 조회는 유지합니다.
+
+---
+
 ## 목차
 1. 시작하기·인증
 2. 분석 요청
@@ -21,7 +55,7 @@
 분석 요청(POST) → 상태 조회(GET) → completed 확인 → 화면 조회(GET)
 ```
 
-- 새 글이 필요 없으면 5번의 최신 조회만 호출합니다.
+- 앱 화면은 위의 종목별 조회만 호출합니다. 새 분석이 필요할 때만 POST를 사용합니다.
 - 인증: AWS IAM SigV4. 허용된 앱 백엔드 역할 또는 검수 역할을 사용합니다.
 - 공개 API 키는 없습니다. 앱·브라우저에 AWS 자격증명을 넣지 않습니다.
 - 요청: `Content-Type: application/json`. 시각: 시간대를 포함한 RFC3339.
@@ -214,7 +248,8 @@ Gateway 인증·제한·연동 오류는 AWS 기본 형식 또는 5xx일 수 있
 - API Gateway → Lambda → 기존 Step Functions/Fargate 또는 PostgreSQL 조회.
 - DB 테이블 추가 없음. API 전용 계정은 결과 8개 테이블 SELECT만 허용합니다.
 - 기본 조회 5요청/초, 분석 요청 0.2요청/초·순간 2요청 제한. 분석 동시 실행 용량은 별도입니다.
-- 단위 테스트 316개, 격리 PostgreSQL 1개, Lambda Linux 이미지 빌드 통과.
+- 종목·날짜 조회 추가: 단위 테스트 331개, 격리 PostgreSQL 3개 통과. KST 자정 경계·재발행·미발행 제외·날짜 내 결과 없음 검증.
+- API 최초 배포 때 Lambda Linux 이미지 빌드를 검증했습니다. 이후 배포마다 CI에서 이미지를 다시 빌드합니다.
 - 구현 PR #1040. 배포 확인은 미인증 요청 거부 → 기존 화면 조회 → 새 분석 접수·완료·화면 조회 순서입니다.
 
 문서 구성은 [Stripe API 문서](https://docs.stripe.com/api)를 참고했습니다. 인증·실행 중복 처리는 [AWS HTTP API](https://docs.aws.amazon.com/lambda/latest/dg/services-apigateway.html), [StartExecution](https://docs.aws.amazon.com/step-functions/latest/apireference/API_StartExecution.html)의 계약을 따릅니다.

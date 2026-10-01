@@ -1,6 +1,6 @@
 """The consumer gets committed screens, never duplicate work or synthetic publications."""
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 
 from botocore.exceptions import ClientError
@@ -24,9 +24,11 @@ class Publications:
     def screen(self, kind, identity, feature):
         return deepcopy(self.body)
 
-    def latest(self, code, kind):
+    def latest(self, code, kind, *, analysis_date=None):
         eligible = [r for r in self.rows.values() if r['kind']==kind and r['etf_code']==code
-                    and r['status']=='completed' and r['data_source']=='database' and r['published_at']]
+                    and r['status']=='completed' and r['data_source']=='database' and r['published_at']
+                    and (analysis_date is None or r['analysis_at'].astimezone(
+                        timezone(timedelta(hours=9))).date()==analysis_date)]
         return max(eligible,key=lambda r:(r['analysis_at'],r['published_at'],r['analysis_id'])) if eligible else None
 
 
@@ -176,3 +178,62 @@ def test_synthetic_publication_cannot_be_served_by_consumer_api(api):
     api.publications.rows['a'*32]=row(data_source='synthetic')
     assert api.handle(event('GET','/v2/analyses/outlook/'+('a'*32)))['statusCode']==404
     assert api.handle(event())['statusCode']==409
+
+
+@pytest.mark.parametrize('kind',['outlook','movement'])
+def test_etf_read_returns_one_screen_without_launching_analysis(api,kind):
+    api.publications.rows['a'*32]=row(kind=kind)
+    api.publications.rows['b'*32]=row(kind=kind,analysis_id='b'*32,analysis_at=NOW,
+                                      status='running',published_at=None)
+    result=api.handle(event('GET',f'/v2/etfs/0177X0/{kind}'))
+    assert result['statusCode']==200
+    assert json.loads(result['body'])==api.publications.body
+    assert result['headers']['X-Analysis-Id']=='a'*32
+    assert result['headers']['Content-Location']==f'/v2/analyses/{kind}/{"a"*32}/screens/all'
+    assert api.workflows.starts==0
+
+
+@pytest.mark.parametrize('kind',['outlook','movement'])
+def test_date_selects_analysis_day_and_never_falls_back_to_latest(api,kind):
+    api.publications.rows['a'*32]=row(kind=kind)
+    api.publications.rows['b'*32]=row(kind=kind,analysis_id='b'*32,
+        analysis_at=datetime.fromisoformat('2026-09-30T08:30:00+09:00'))
+    request=event('GET',f'/v2/etfs/0177X0/{kind}')
+    request['rawQueryString']='date=2026-09-30'
+    result=api.handle(request)
+    assert result['statusCode']==200
+    assert result['headers']['X-Analysis-Id']=='b'*32
+    request['rawQueryString']='date=2000-01-01'
+    assert api.handle(request)['statusCode']==404
+    assert api.workflows.starts==0
+
+
+@pytest.mark.parametrize('query',[
+    'date=', 'date=2026-02-30', 'date=2026-2-03', 'date=20261001',
+    'date=2026-W40-4', 'date=2026-10-01T00:00:00Z',
+    'date=2026-10-01&date=2026-10-01', 'date=2026-10-01&other=1', 'other=1',
+])
+def test_invalid_date_queries_fail_before_data_access(api,query):
+    def unexpected(*args,**kwargs):
+        pytest.fail('Invalid queries must not reach the database')
+    api.publications.latest=unexpected
+    request=event('GET','/v2/etfs/0177X0/outlook')
+    request['rawQueryString']=query
+    assert api.handle(request)['statusCode']==400
+
+
+def test_date_is_forwarded_as_date_not_free_text(api):
+    def latest(code,kind,*,analysis_date):
+        assert (code,kind,analysis_date)==('0177X0','outlook',date(2026,10,1))
+        return None
+    api.publications.latest=latest
+    request=event('GET','/v2/etfs/0177X0/outlook')
+    request['rawQueryString']='date=2026-10-01'
+    assert api.handle(request)['statusCode']==404
+
+
+def test_query_on_old_routes_stays_rejected(api):
+    request=event()
+    request['rawQueryString']='date=2026-10-01'
+    assert api.handle(request)['statusCode']==400
+    assert api.workflows.starts==0
