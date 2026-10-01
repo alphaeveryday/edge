@@ -51,6 +51,14 @@ resource "aws_iam_role_policy" "verify_task_shutdown" {
         ]
       },
       { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = ["*"] },
+      # 실험 중 감시(shim `verify-watchdog`) — 기존 RDS 지표·업무 SFN 실패·Airflow 서비스 태스크를 읽기만 한다.
+      { Effect = "Allow", Action = ["cloudwatch:GetMetricStatistics", "states:ListStateMachines", "states:ListExecutions"], Resource = ["*"] },
+      {
+        Effect    = "Allow"
+        Action    = ["ecs:ListTasks"]
+        Resource  = ["*"]
+        Condition = { ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn } }
+      },
     ]
   })
 }

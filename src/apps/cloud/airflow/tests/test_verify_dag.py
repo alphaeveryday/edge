@@ -67,7 +67,7 @@ def test_verify_dag_runs_the_same_graph_against_isolated_resources_only(monkeypa
 def test_verify_dag_absent_without_env_and_refuses_the_business_cluster(monkeypatch):
     for k in VERIFY_ENV:
         monkeypatch.delenv(k, raising=False)
-    assert sorted(_bag(monkeypatch, {}).dag_ids) == ["edge_investor_intraday"]
+    assert sorted(_bag(monkeypatch, {}).dag_ids) == ["edge_investor_intraday", "edge_source_daily"]
     import edge_batch
     monkeypatch.setattr(edge_batch, "CLUSTER", VERIFY_ENV["EDGE_VERIFY_CLUSTER"])
     bag = _bag(monkeypatch, VERIFY_ENV)

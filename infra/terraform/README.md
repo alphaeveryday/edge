@@ -34,7 +34,7 @@ infra/terraform/
 
 `ecs-service` 를 super-admin-api·tenant-sync-api·app-api 가(app-api 만 `autoscaling` 입력으로 CPU target tracking 1~2대, ADR-0056), `static-site` 를 super-admin UI 가 쓴다(S3 정적 호스팅이 실물인 클라우드 표면 전용). 데모 표면(MTS·검수 콘솔)은 `proxy-site`(CloudFront→박스 오리진 창문)를 동일 재사용한다 — 서빙 원칙(ALPHA-632): 모든 데모 표면은 박스가 서빙한다. (tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032.)
 (tenant-console-api 는 onprem 플레인이라 dev ECS 에서 제거 — 실 배포처는 데모 박스 compose, ADR-0029·0033.)
-세 API 는 각자 전용 ALB 뒤에 있다 — tenant-sync-api=`sync-dev.edgesignal.dev`(mTLS 예정), super-admin-api=`admin-api-dev.edgesignal.dev`, app-api=`etforca.edgesignal.dev`(ETF Orca 앱, 별도 RDS `edge-dev-app`+ElastiCache, ADR-0056). 진입점은 호스트 단위 1:1, ALB 경로 라우팅 없음(ADR-0034). 단 admin 콘솔 CDN(`admin-dev`)은 `/api/*` 를 admin ALB 오리진으로 프록시한다(same-origin 세션 쿠키, ALPHA-615) — ALB 계층의 1:1 은 그대로다.
+세 API 는 각자 전용 ALB 뒤에 있다 — tenant-sync-api=`sync-dev.edgesignal.dev`(mTLS 예정), super-admin-api=`admin-api-dev.edgesignal.dev`, app-api=`etforca.edgesignal.dev`(ETF Orca 앱, 별도 RDS `edge-dev-app`+ElastiCache, ADR-0056). app-api 는 앱 테이블 동기화를 위해 파이프라인 RDS 도 읽기 전용 롤 `app_sync_ro` 로 읽는다(ALPHA-1134, 롤·시크릿 수동 선생성). 진입점은 호스트 단위 1:1, ALB 경로 라우팅 없음(ADR-0034). 단 admin 콘솔 CDN(`admin-dev`)은 `/api/*` 를 admin ALB 오리진으로 프록시한다(same-origin 세션 쿠키, ALPHA-615) — ALB 계층의 1:1 은 그대로다.
 
 ## 설계 요지
 
