@@ -714,7 +714,7 @@ module "airflow" {
   # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
   task_memory   = 1408
-  # small·1408 후속 검증(2026-09-30)을 마쳐 0 으로 내렸다. 다시 올리는 것도 이 값(코드)으로 한다.
+  # small·1408 A4·A5 표적 재검증(2026-10-01)을 마쳐 0 으로 내렸다. 다시 올리는 것도 이 값(코드)으로 한다.
   host_count    = 0
   host_observer = false
 
@@ -896,6 +896,8 @@ module "app_api" {
     # 파이프라인 RDS 읽기 동기화. URL 이 없으면 앱은 동기화를 돌리지 않는다
     APP_PIPELINE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
     APP_PIPELINE_USERNAME = "app_sync_ro"
+    # 앱 심사용 데모 계정. 이 주소만 가입·재설정 코드 고정, 비우면 꺼짐
+    APP_REVIEW_EMAIL = "review@example.com"
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"

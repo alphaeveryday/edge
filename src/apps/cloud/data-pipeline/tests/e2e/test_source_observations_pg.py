@@ -65,8 +65,8 @@ def _macro_source(usd_body: bytes):
     from data_pipeline.sources import macro_series
 
     routes = {"731Y003": usd_body,
-              "treasury-rates": (FIXTURES / "fmp_treasury.json").read_bytes()}
-    return macro_series.MacroSource(MacroObservationSource(ecos_api_key="E"), fmp_api_key="F", client=_Client(routes))
+              "series/observations": (FIXTURES / "fred_dgs10.json").read_bytes()}
+    return macro_series.MacroSource(MacroObservationSource(ecos_api_key="E", fred_api_key="R"), client=_Client(routes))
 
 
 def _macro_run(storage, tag: str, usd_body: bytes) -> str:
@@ -118,6 +118,16 @@ def test_macro_chain_lands_versions_and_the_as_of_query_respects_receipt(tmp_pat
     assert {r[4] for r in rows} == {first} and rows[0][3].startswith("raw/source=ecos/dataset=macro_observation/")
     assert storage.get_bytes(rows[0][3])     # raw 원문이 그 키에 있다
     assert manifest["artifact"]["rows"] == 6
+    # 미 국채 10년(FRED DGS10, ALPHA-1136): 같은 실행의 수신 전엔 안 보이고, 수신 뒤엔 공급자 값·출처 그대로 보인다.
+    us_received = conn.execute("SELECT min(received_at) FROM macro_observation WHERE raw_run_id = %s AND series_id = %s",
+                               (f"{RUN}a_raw", "us_10y_yield")).fetchone()[0]
+    assert _as_of(conn, us_received - timedelta(seconds=1), series="us_10y_yield") == []
+    us_rows = _as_of(conn, us_received, series="us_10y_yield")
+    assert [(d, v) for d, v, *_ in us_rows] == [("2026-07-24", "4.69"), ("2026-07-27", "4.65"), ("2026-07-28", "4.61")]
+    assert conn.execute("SELECT DISTINCT source_vendor, source_series, unit FROM macro_observation"
+                        " WHERE raw_run_id = %s AND series_id = 'us_10y_yield'", (f"{RUN}a_raw",)).fetchall() == [
+        ("fred", "FRED DGS10", "percent")]
+    assert us_rows[0][3].startswith("raw/source=fred/dataset=macro_observation/")
     # "최근 공개 2관측일" 요구는 limit 로 고른다 — 툴 기본 21 과 섞지 않는다.
     assert [d for d, *_ in _as_of(conn, received, limit=2)] == ["2026-07-27", "2026-07-28"]
 

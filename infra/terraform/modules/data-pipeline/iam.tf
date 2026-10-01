@@ -42,6 +42,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
           data.aws_secretsmanager_secret.macro["ecos"].arn,
           data.aws_secretsmanager_secret.macro["kosis"].arn,
           data.aws_secretsmanager_secret.macro["eia"].arn,
+          data.aws_secretsmanager_secret.macro["fred"].arn,
           var.deepseek_secret_arn,
           var.db_password_secret_arn,
         ]
