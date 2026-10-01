@@ -63,7 +63,8 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 
 **SFN 등록 30작업은 전부 `instrumented=True` 다**(ALPHA-596 이 krx·dart 를, ALPHA-610 이 TagNews 를
-승격). 예외 하나는 Airflow 전용 `MACRO_COLLECTION`(ALPHA-1130) — 키를 가진 `macro` task-def 가 아직 없다. `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
+승격). Airflow 전용 원천 관측 9작업도 전부 True 다 — 마지막 `MACRO_COLLECTION` 은 `macro` task-def 배선(#1036, ALPHA-1136)이
+먼저 배포된 뒤 ALPHA-1140 이 올렸다. `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
 **배선이 플래그보다 한 배포 앞선다**(ALPHA-596 #359→#362, ALPHA-610 #379→이 PR). 이미지 CD 와
@@ -543,14 +544,13 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     # 매크로 5계열·KIS 지수업종·DART 재무 지표. SFN 이 없으므로 `sfn_state_name` 은 빈 값이다 — `by_sfn_state` 는 빈 이름을 매칭하지 않고,
     # ASL 대조 테스트는 이 레인을 Airflow 전용으로 따로 센다(test_ops_catalog). 흐름(flow)은 데이터셋마다 하나다.
     # 정제 의존을 비우는 이유는 다른 레인과 같다 — 수집 부분 실패 뒤에도 받은 것은 정제한다.
-    # ⚠️ MACRO_COLLECTION 만 instrumented=False 다: `macro` 태스크 정의(ECOS·KOSIS·EIA·FRED 키 + DB env)는
-    # ALPHA-1136 배선 PR 이 만든다 — 그 배포가 먼저 착지한 뒤 True 로 올린다(ALPHA-596 순서, 그동안
-    # test_ops_catalog `_WIRING_AHEAD_OF_FLAG`). FMP 키는 붙이지 않는다 — 미 국채 10년은 FRED DGS10(#1039).
+    # MACRO_COLLECTION 의 `macro` 태스크 정의(ECOS·KOSIS·EIA·FRED 키 + DB env)는 #1036(ALPHA-1136)이 먼저 배포했고,
+    # 플래그는 그 뒤 ALPHA-1140 이 올렸다(ALPHA-596 순서 — 배선이 한 배포 앞선다). FMP 키는 붙이지 않는다 — 미 국채 10년은 FRED DGS10(#1039).
     CatalogEntry(
         task_key="MACRO_COLLECTION", flow="macro", stage="raw", dataset="macro_observation", required=True,
         cli_command=("ingest-raw-macro",), sfn_state_name="", ecs_task_definition="macro",
         source_vendor="multi", deadline_offset_seconds=1200, stalled_after_seconds=1500,
-        instrumented=False, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+        instrumented=True, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
         task_key="NORMALIZE_MACRO", flow="macro", stage="normalize", dataset="macro_observation", required=True,
