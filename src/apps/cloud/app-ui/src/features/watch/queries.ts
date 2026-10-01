@@ -20,7 +20,7 @@ export const useMembership = (code: string) => useQuery({ queryKey: ['watch', 'm
 
 export const useCreateGroup = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (label: string) => api.watch.createGroup(label), onSuccess: () => invalidate(qc) });
+  return useMutation({ mutationFn: (label: string) => api.watch.createGroup(label), onSuccess: () => qc.invalidateQueries({ queryKey: ['watch', 'groups'] }) });
 };
 export const useDeleteGroup = () => {
   const qc = useQueryClient();

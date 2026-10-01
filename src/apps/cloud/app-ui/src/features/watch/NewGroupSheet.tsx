@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
+import type { WatchGroup } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { useWatchGroup } from '@/store/watch';
@@ -7,27 +8,37 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useCreateGroup } from './queries';
 
-export function NewGroupSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+// 새 그룹 이름 입력과 만들기, 관심 탭 시트와 하트 시트 공용
+export function NewGroupForm({ onCreated }: { onCreated: (g: WatchGroup) => void }) {
   const [name, setName] = useState('');
   const create = useCreateGroup();
-  const setGroup = useWatchGroup((s) => s.setGroup);
   const toast = useToast((s) => s.show);
-  const submit = () =>
+  const submit = () => {
+    if (!name.trim() || create.isPending) return;
     create.mutate(name.trim(), {
       onSuccess: (g) => {
-        setGroup(g.key);
         setName('');
-        onClose();
+        onCreated(g);
         toast(`${g.label} 그룹을 만들었어요`);
       },
     });
+  };
   return (
-    <BottomSheet open={open} onClose={onClose}>
-      <SheetHead title="새 그룹" />
-      <TextInput value={name} onChangeText={setName} placeholder="예: 연금계좌" placeholderTextColor={colors.textFaint} autoFocus style={styles.input} />
+    <>
+      <TextInput value={name} onChangeText={setName} placeholder="예: 연금계좌" placeholderTextColor={colors.textFaint} autoFocus returnKeyType="done" onSubmitEditing={submit} style={styles.input} />
       <View style={{ marginTop: 14 }}>
         <CtaButton label="만들기" tone="dark" disabled={!name.trim()} onPress={submit} />
       </View>
+    </>
+  );
+}
+
+export function NewGroupSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const setGroup = useWatchGroup((s) => s.setGroup);
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <SheetHead title="새 그룹" />
+      <NewGroupForm onCreated={(g) => { setGroup(g.key); onClose(); }} />
     </BottomSheet>
   );
 }

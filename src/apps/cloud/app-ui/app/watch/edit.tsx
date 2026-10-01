@@ -44,7 +44,7 @@ export default function WatchEdit() {
         </Pressable>
         {data?.map((e) => (
           <View key={e.code} style={styles.row}>
-            <Pressable onPress={() => remove(e.code)} hitSlop={6} style={styles.removeBtn}>
+            <Pressable onPress={() => remove(e.code)} hitSlop={6} accessibilityLabel={`${e.name} 빼기`} style={styles.removeBtn}>
               <View style={styles.remove}><View style={styles.removeBar} /></View>
             </Pressable>
             <SectorIcon theme={e.theme} bg={e.logoBg} size={30} />
