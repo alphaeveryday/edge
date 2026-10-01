@@ -56,8 +56,8 @@ export default function EtfData() {
         </View>
         )}
         <View style={styles.legendRow}>
-          <View style={styles.legendItem}><View style={styles.swGrad} /><Text style={styles.legendText}><Text style={styles.legendB}>{view === 'temp' ? '색·태그' : '색·숫자'}</Text> = {view === 'temp' ? '투자 온도' : '오늘 등락률'}</Text></View>
-          <View style={styles.legendItem}><View style={styles.swBox} /><Text style={styles.legendText}><Text style={styles.legendB}>{view === 'temp' ? '크기·숫자' : '크기'}</Text> = {view === 'temp' ? 'ETF 내 비중' : '비중·기여도'}</Text></View>
+          <View style={styles.legendItem}><Text style={styles.legendText}><Text style={styles.legendB}>{view === 'temp' ? '색·태그' : '색·숫자'}</Text> = {view === 'temp' ? '투자 온도' : '오늘 등락률'}</Text></View>
+          <View style={styles.legendItem}><Text style={styles.legendText}><Text style={styles.legendB}>{view === 'temp' ? '크기·숫자' : '크기'}</Text> = {view === 'temp' ? 'ETF 내 비중' : '비중·기여도'}</Text></View>
         </View>
         <HeatMap cells={cells} mode={view} />
         {temp && (
@@ -141,8 +141,6 @@ const styles = StyleSheet.create({
   vline: { width: 1, height: 18, backgroundColor: colors.line },
   legendRow: { flexDirection: 'row', gap: 14, marginTop: 12 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  swGrad: { width: 18, height: 12, borderRadius: 3, backgroundColor: '#B98FC0' },
-  swBox: { width: 18, height: 12, borderRadius: 3, borderWidth: 1.5, borderColor: colors.textFaint },
   legendText: { fontFamily: fam.regular, fontSize: 12, color: colors.textSub },
   legendB: { fontFamily: fam.bold, color: colors.text },
   scale: { flexDirection: 'row', gap: 4, marginTop: 10 },

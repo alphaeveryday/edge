@@ -8,6 +8,13 @@ import { fam } from '@/theme/typography';
 
 const W = 354, H = 262, PLOT_W = 296;
 const MA20 = '#E0891A';
+const TICKS = 5;
+
+// 축 라벨은 등간격 최대 5개, 양 끝은 안쪽으로
+function ticks(n: number) {
+  if (n <= TICKS) return Array.from({ length: n }, (_, i) => i);
+  return Array.from({ length: TICKS }, (_, k) => Math.round(((n - 1) * (k + 0.5)) / TICKS));
+}
 
 export interface Plot {
   x: (i: number) => number;
@@ -51,8 +58,8 @@ export function ChartFrame({ data, name, price, changePct, lo, hi, children }: {
         </Svg>
       </View>
       <View style={styles.axis}>
-        {data.axis.map((l, i) => (
-          <Text key={l} style={[styles.axisLabel, { left: `${((i + 0.5) / data.axis.length) * (PLOT_W / W) * 100}%` }]}>{l}</Text>
+        {ticks(data.axis.length).map((i) => (
+          <Text key={i} style={[styles.axisLabel, { left: `${((i + 0.5) / data.axis.length) * (PLOT_W / W) * 100}%` }]}>{data.axis[i]}</Text>
         ))}
       </View>
     </View>

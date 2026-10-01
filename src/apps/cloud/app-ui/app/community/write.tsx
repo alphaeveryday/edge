@@ -74,8 +74,8 @@ export default function CommunityWrite() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
-  nav: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: 8, paddingRight: 16 },
-  navTitle: { flex: 1, textAlign: 'center', fontFamily: fam.bold, fontSize: 17, color: colors.text, letterSpacing: -0.34 },
+  nav: { height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8, paddingRight: 16 },
+  navTitle: { position: 'absolute', left: 0, right: 0, pointerEvents: 'none', textAlign: 'center', fontFamily: fam.bold, fontSize: 17, color: colors.text, letterSpacing: -0.34 },
   editor: { flexDirection: 'row', gap: 11, paddingTop: 12, paddingHorizontal: 16, paddingBottom: 8 },
   input: { flex: 1, minHeight: 150, fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.text, paddingTop: 7, textAlignVertical: 'top' },
   sug: { marginLeft: 65, marginRight: 16, borderRadius: 14, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 10 } },

@@ -38,7 +38,7 @@ export default function Search() {
               {recent.data?.map((e) => (
                 <Pressable key={e.code} onPress={() => router.push(`/etf/${e.code}/brief`)} style={({ pressed }) => [styles.chip, pressed && { opacity: 0.6 }]}>
                   <SectorIcon theme={e.theme} bg={e.logoBg} size={22} />
-                  <Text style={styles.chipName}>{e.name.replace(/^(TIGER|KODEX|PLUS|HANARO|SOL)\s*/, '')}</Text>
+                  <Text style={styles.chipName}>{e.name}</Text>
                   <Text style={[styles.chipChg, { color: chgColor(e.changePct) }]}>{pct(e.changePct)}</Text>
                 </Pressable>
               ))}

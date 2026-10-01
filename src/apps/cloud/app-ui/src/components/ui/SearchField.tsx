@@ -32,5 +32,5 @@ export function SearchField({ value, onChangeText, placeholder = '검색', autoF
 
 const styles = StyleSheet.create({
   root: { height: 44, borderRadius: 12, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
-  input: { flex: 1, fontFamily: fam.regular, fontSize: 15, color: colors.text, padding: 0 },
+  input: { flex: 1, alignSelf: 'stretch', fontFamily: fam.regular, fontSize: 15, color: colors.text, padding: 0 },
 });
