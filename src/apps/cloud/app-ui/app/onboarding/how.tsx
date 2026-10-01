@@ -25,7 +25,7 @@ export default function How() {
     <IntroShell
       step={0}
       title={'뉴스 3만 건을\n대신 읽어드려요'}
-      body={'언론사 70곳의 뉴스와 공시, 리포트를\n매일 모아요.'}
+      body={'언론사 70곳의 뉴스와 공시, 리포트를\n매일 새벽에 모아요.'}
       accent={'AI가 다섯 가지 기준으로 정리해요.'}
       cta="다음"
       onNext={() => router.push('/onboarding/sticker')}
