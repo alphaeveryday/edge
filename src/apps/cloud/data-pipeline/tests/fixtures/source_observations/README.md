@@ -25,6 +25,7 @@ KIS 마스터는 선택 종목 줄만 재압축, 업종명 파일은 전체, EIA
 | `eia_brent_spot.json` | EIA v2 petroleum/pri/spt RBRTE 2026-09 (16행 중 4행) | series-description=Europe Brent Spot Price FOB (Dollars per Barrel), units=$/BBL, daily, 최신 09-22 |
 | `dart_shares_*_2025_11011.json` | 사업보고서 주식총수(삼성·하이닉스) | stlm_dt=2025-12-31 — 기준일=보고기간 말 검사와 일치 |
 | `fmp_treasury_rates.json` | FMP stable treasury-rates (dev 키) | 만기별 % 숫자, `year10` — **보존용**: 미 국채 10년은 FRED DGS10 으로 바뀌어(ALPHA-1136) 파서가 더 읽지 않는다. 09-25 `year10`=5.17 은 FRED 값 대조 기준 |
+| `fred_dgs10.json` | FRED `series/observations` `DGS10` **실응답 원문 그대로**(2026-10-01, 관측 09-15~29 11행, 1317B, sha256 `b18d5282…`) | `units=lin`·값 문자열(`"5"` 처럼 자릿수 그대로). 교체 전 FMP `year10` 과 09-15~25 9일 전부 같다 |
 | `kis_*.mst.zip` | KIS 공개 마스터 | 고정폭 227/221, 업종명 `[5:45]`(헤더가 맞고 공식 샘플 `[3:43]` 은 틀림), 소분류는 전 종목 0000 |
 | `dart_*` | OpenDART (dev 키) 삼성전자·SK하이닉스·고려제강 | 3개월/누적 필드, KRW, 연결/별도, IS 없는 회사(하이닉스)는 CIS, 주식총수 행·stlm_dt, 정정본 접수번호 |
 
