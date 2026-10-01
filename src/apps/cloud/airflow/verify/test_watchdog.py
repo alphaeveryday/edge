@@ -1,6 +1,7 @@
 """실험 중 감시(shim verify-watchdog)·심장박동 게이트 — data-pipeline 환경에서 실행한다(shim 이 data_pipeline 을 import).
 
-    cd src && VERIFY_BUCKET=x AWS_DEFAULT_REGION=ap-northeast-2 uv run --package data-pipeline \\
+    cd src && VERIFY_CRITERIA=criteria_aws_1408_a4a5.json VERIFY_BUCKET=x AWS_DEFAULT_REGION=ap-northeast-2 \
+        PYTHONPATH=apps/cloud/airflow/verify uv run --package data-pipeline \\
         pytest apps/cloud/airflow/verify/test_watchdog.py -q
 """
 import json
@@ -111,3 +112,51 @@ def test_runs_without_a_watchdog_requirement_keep_the_old_behaviour(monkeypatch)
     # 표지가 없으면 게이트를 걸지 않는다(표지가 있으면 위 테스트대로 심장박동이 있어야 한다).
     monkeypatch.setattr(shim, "_s3", FakeS3(None, required=False))
     assert shim._watch_gate() is None
+
+
+class FakeRunS3:
+    def __init__(self, objects):
+        self.objects, self.deleted = dict(objects), []
+
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise KeyError(Key)
+
+    def get_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise KeyError(Key)
+        return {"Body": type("B", (), {"read": lambda _s, d=self.objects[Key]: d})()}
+
+    def delete_objects(self, Bucket, Delete):
+        self.deleted += [o["Key"] for o in Delete["Objects"]]
+
+
+@pytest.fixture
+def run_module(monkeypatch):
+    import run
+    monkeypatch.setattr(run, "_bucket", lambda: "b")
+    monkeypatch.setattr(run, "mark", lambda *a, **k: None)
+    return run
+
+
+def test_a_watchdog_criteria_refuses_to_start_a_batch_without_a_live_watchdog(run_module, monkeypatch):
+    # WHY(봇 P1): 감시를 요구하는 기준인데 수동 선행 단계를 빠뜨리면 표지가 없어 게이트가 꺼진 채 부하가 걸린다.
+    monkeypatch.setattr(run_module, "CRIT", {"watchdog": {"until_kst": "22:25"}})
+    for objects in ({}, {"watchdog/required.json": b"{}"},
+                    {"watchdog/required.json": b"{}", "watchdog/heartbeat.json": json.dumps({"t": time.time() - 300}).encode()},
+                    {"watchdog/required.json": b"{}", "watchdog/heartbeat.json": json.dumps({"t": time.time(), "trip": "x"}).encode()}):
+        monkeypatch.setattr(run_module, "s3", FakeRunS3(objects))
+        with pytest.raises(SystemExit):
+            run_module._watch_precondition("e")
+    monkeypatch.setattr(run_module, "s3", FakeRunS3({"watchdog/required.json": b"{}",
+                                                     "watchdog/heartbeat.json": json.dumps({"t": time.time()}).encode()}))
+    run_module._watch_precondition("e")
+
+
+def test_a_criteria_without_watchdog_clears_a_stale_requirement(run_module, monkeypatch):
+    # WHY(봇 P1): 앞 실험이 남긴 표지가 감시를 쓰지 않는 다음 배치(V·B)의 업무를 영영 막지 않게 한다.
+    monkeypatch.setattr(run_module, "CRIT", {})
+    fake = FakeRunS3({"watchdog/required.json": b"{}"})
+    monkeypatch.setattr(run_module, "s3", fake)
+    run_module._watch_precondition("e")
+    assert set(fake.deleted) == {"watchdog/required.json", "watchdog/heartbeat.json"}

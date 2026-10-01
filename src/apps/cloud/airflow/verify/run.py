@@ -582,9 +582,28 @@ def batch(args) -> int:
         stop.set()
 
 
+def _watch_precondition(exp: str) -> None:
+    """감시 요구는 기준 파일이 정한다. 감시를 쓰는 기준이면 신선한 심장박동(중단 없음)이 있어야 배치를 시작한다.
+    감시를 쓰지 않는 기준이면 이전 실험이 남긴 표지·심장박동을 지운다(게이트가 이 배치를 막지 않게)."""
+    bucket = _bucket()
+    if not CRIT.get("watchdog"):
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": "watchdog/required.json"},
+                                                             {"Key": "watchdog/heartbeat.json"}]})
+        return
+    try:
+        s3.head_object(Bucket=bucket, Key="watchdog/required.json")
+        beat = json.loads(s3.get_object(Bucket=bucket, Key="watchdog/heartbeat.json")["Body"].read())
+    except Exception as exc:
+        raise SystemExit(f"감시가 없다({type(exc).__name__}) — run.py watchdog 를 먼저, 감시 없이 배치를 시작하지 않는다")
+    if beat.get("trip") or time.time() - beat.get("t", 0) > 120:
+        raise SystemExit(f"감시 상태가 배치 시작 조건이 아니다(trip={beat.get('trip')}, 나이 {int(time.time() - beat.get('t', 0))}초)")
+    mark(exp, "watchdog_ok_at_batch", beat_at=beat.get("at"))
+
+
 def _batch(args) -> int:
     exp, b = args.exp, args.batch
     spec = CRIT["scenarios"][b]
+    _watch_precondition(exp)
     mark(exp, "reset_begin", batch=b)
     clear_runs(exp)
     if ops(["verify-reset"])[0] != 0:
