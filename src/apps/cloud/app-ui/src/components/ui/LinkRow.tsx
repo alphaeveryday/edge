@@ -17,14 +17,14 @@ export function LinkRow({ label, variant = 'inline', open = null, muted, center,
   const accent = variant === 'accent';
   const card = variant === 'card' || accent;
   const centered = !!center || card;
-  const c = accent ? colors.downDeep : muted ? colors.textSub : colors.text;
+  const c = accent ? colors.primary : muted ? colors.textSub : colors.text;
   const dir = open === true ? 'up' : open === false ? 'down' : 'right';
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
-        { justifyContent: centered ? 'center' : 'flex-start', backgroundColor: accent ? 'rgba(27,100,218,0.09)' : card ? colors.card : 'transparent', borderRadius: card ? radius.button : 0, paddingHorizontal: card ? 16 : 0 },
+        { justifyContent: centered ? 'center' : 'flex-start', backgroundColor: accent ? colors.primarySoft : card ? colors.card : 'transparent', borderRadius: card ? radius.button : 0, paddingHorizontal: card ? 16 : 0 },
         divider && styles.divider,
         pressed && { opacity: 0.7 },
       ]}
