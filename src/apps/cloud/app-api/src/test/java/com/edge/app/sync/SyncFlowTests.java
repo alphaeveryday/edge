@@ -78,7 +78,7 @@ class SyncFlowTests {
 
     @BeforeAll
     static void seed(@Autowired JdbcTemplate jdbc) {
-        PIPELINE.update("insert into entity values ('i-etf', 'KODEX 반도체'), ('i-a', 'SK하이닉스'), ('i-b', '삼성전자')");
+        PIPELINE.update("insert into entity values ('i-etf', 'KODEX 반도체'), ('i-a', 'SK하이닉스 보통주'), ('i-b', '삼성전자')");
         PIPELINE.update("insert into instrument values ('i-etf', 'XKRX', '091160', 'ETF'), ('i-a', 'XKRX', '000660', 'EQUITY'), "
                 + "('i-b', 'XKRX', '005930', 'EQUITY')");
         PIPELINE.update("insert into price_daily values ('i-etf', '2026-09-29', 141160, 100), ('i-etf', '2026-09-30', 142700, 200), "
@@ -128,7 +128,7 @@ class SyncFlowTests {
         Map<String, Object> detail = result(call(port, "GET", "/api/v1/etfs/091160/detail", null, "X-Device-Id", "sync-1"));
         assertFalse(detail.containsKey("insight"), "원천 없는 구성 해석은 생략");
         List<Map<String, Object>> stocks = (List<Map<String, Object>>) detail.get("stocks");
-        assertEquals("SK하이닉스", stocks.getFirst().get("name"), "비중 순");
+        assertEquals("SK하이닉스", stocks.getFirst().get("name"), "비중 순, 보통주 표기 제거");
         assertEquals(10.0, ((Number) stocks.getFirst().get("changePct")).doubleValue());
         assertFalse(stocks.getFirst().containsKey("dir"), "원천 없는 방향은 생략");
         assertTrue(((List<Map<String, Object>>) detail.get("info")).contains(Map.of("k", "총보수", "v", "연 0.45%")));

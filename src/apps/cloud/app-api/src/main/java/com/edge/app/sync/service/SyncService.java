@@ -121,8 +121,8 @@ public class SyncService {
     private String detail(Curation c, List<Holding> holdings) {
         List<Holding> sorted = holdings.stream().sorted(Comparator.comparingDouble(Holding::weightRatio).reversed()).toList();
         List<Map<String, Object>> stocks = sorted.stream().limit(HEAT_CELLS)
-                .map(h -> map("name", h.name(), "weight", weight(h), "changePct", pct(h.prevClose(), h.lastClose()))).toList();
-        List<Map<String, Object>> rows = sorted.stream().map(h -> map("name", h.name(), "weight", weight(h))).toList();
+                .map(h -> map("name", stock(h), "weight", weight(h), "changePct", pct(h.prevClose(), h.lastClose()))).toList();
+        List<Map<String, Object>> rows = sorted.stream().map(h -> map("name", stock(h), "weight", weight(h))).toList();
         List<Map<String, Object>> info = new ArrayList<>(List.of(
                 map("k", "운용사", "v", c.manager()),
                 map("k", "총보수", "v", "연 " + c.expenseRatio().stripTrailingZeros().toPlainString() + "%"),
@@ -251,6 +251,11 @@ public class SyncService {
             return BigDecimal.ZERO;
         }
         return last.divide(prev, 8, RoundingMode.HALF_UP).subtract(BigDecimal.ONE).movePointRight(2).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    // 원천 표시명 끝의 보통주 표기 제거
+    private static String stock(Holding h) {
+        return h.name().replaceFirst(" 보통주$", "");
     }
 
     private static double weight(Holding h) {
