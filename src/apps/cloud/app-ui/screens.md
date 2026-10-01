@@ -9,7 +9,7 @@
 | 온보딩 1~3 | `onboarding/{how,sticker,what}` | 뉴스 3만 건 · 전망 스티커 5단계 · 오늘 달라진 것 |
 | 테마 선택 · ETF 선택 | `onboarding/{theme,etf}` | ETF 선택 완료 → 홈. 가입 화면은 첫 진입에 없다 |
 | 홈 | `(tabs)/home` | 그룹 칩 · 전망 강도 카드 · 관심 top3(+더보기) · 커뮤니티 인기글 |
-| 관심 · 관심 편집 | `(tabs)/watch` · `watch/edit` | 그룹 칩 · 종목 추가(검색) |
+| 관심 · 관심 편집 · 종목 추가 | `(tabs)/watch` · `watch/edit` · `watch/add` | 그룹 칩 · 종목 추가는 온보딩 ETF 그리드 재사용 |
 | 검색 | `search` | 최근 검색 · 결과 없음 |
 | ETF 상세 4탭 | `etf/[code]/{brief,summary,community,data}` | AI 분석 · 오늘 움직임 · 커뮤니티 · 종목정보 |
 | 요인 상세 · 요인 지표 | `factor/[code]/[axis]` · `metric/[code]/[axis]` | AI 분석 탭에서 진입 |
@@ -20,7 +20,7 @@
 | 전체 메뉴 | `menu` | 로그인 진입 "로그인하고 시작하기" |
 | 로그인 · 회원가입 · 비밀번호 재설정 | `login` · `auth/signup` · `auth/reset` | 모달, 우상단 닫기. 로그인 = 워드마크 + 이메일·비밀번호 + 회원가입·비밀번호 찾기. 소셜 로그인은 SDK 도입 전까지 없음(v3 의 CTA 3개 화면에서 변경, 이메일 1차 출시) |
 
-시트(컴포넌트): 분석 상세(`DailySheet`, 투표 카드 상단·다음 ETF 순환) · 오늘 움직임 상세(`MoveSheet`) · 힌트 · 그룹 담기 · 그룹 생성/편집/삭제 · 면책 고지 · 출처 목록 · 글 삭제.
+시트(컴포넌트): 분석 상세(`DailySheet`, 투표 카드 상단·다음 ETF 순환) · 오늘 움직임 상세(`MoveSheet`) · 힌트 · 그룹 담기 · 그룹 생성/삭제 · 면책 고지 · 출처 목록 · 글 삭제.
 
 사라진 화면(v3): 스토리 뷰어, 인사이트, 테마 ETF 시트(탐색), 테마 ETF 비교, 투자 에이전트 채팅. 이후 삭제: 테마·테마 분석, 이슈·실시간 이슈(v3 에는 있음).
 
@@ -45,7 +45,7 @@ app/
   auth/signup.tsx (모달)     # 이메일 가입
   auth/reset.tsx (모달)
   (tabs)/{home,explore,community}.tsx  watch/index.tsx
-  watch/edit.tsx
+  watch/edit.tsx  watch/add.tsx
   etf/[code]/_layout.tsx     # 헤더 + 4탭
   etf/[code]/{brief,summary,community,data}.tsx
   factor/[code]/[axis].tsx  metric/[code]/[axis].tsx

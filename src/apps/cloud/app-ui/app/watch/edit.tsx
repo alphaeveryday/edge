@@ -6,7 +6,6 @@ import Svg, { Path } from 'react-native-svg';
 import { CtaButton, NavBar, SectorIcon } from '@/components/ui';
 import { DeleteGroupSheet } from '@/features/watch/DeleteGroupSheet';
 import { GroupChips } from '@/features/watch/GroupChips';
-import { GroupEditSheet } from '@/features/watch/GroupEditSheet';
 import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
 import { useSetMembers, useWatchGroups, useWatchList } from '@/features/watch/queries';
 import { useWatchGroup } from '@/store/watch';
@@ -21,7 +20,6 @@ export default function WatchEdit() {
   const { data } = useWatchList(group);
   const save = useSetMembers();
   const [newOpen, setNewOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
   const [delOpen, setDelOpen] = useState(false);
   const g = groups?.find((x) => x.key === group);
   const remove = (code: string) => save.mutate({ group, codes: (data ?? []).filter((e) => e.code !== code).map((e) => e.code) });
@@ -36,7 +34,7 @@ export default function WatchEdit() {
         <Text style={styles.hint}>손잡이를 끌어 순서를 바꿔요</Text>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: PAGE_X, paddingBottom: 20 }}>
-        <Pressable onPress={() => setAddOpen(true)} style={({ pressed }) => [styles.addRow, pressed && { opacity: 0.6 }]}>
+        <Pressable onPress={() => router.push('/watch/add')} style={({ pressed }) => [styles.addRow, pressed && { opacity: 0.6 }]}>
           <View style={styles.plus}>
             <Svg width={13} height={13} viewBox="0 0 14 14"><Path d="M7 2v10M2 7h10" stroke={colors.textSub} strokeWidth={2} strokeLinecap="round" /></Svg>
           </View>
@@ -61,7 +59,6 @@ export default function WatchEdit() {
         <CtaButton label="완료" tone="dark" onPress={() => router.back()} />
       </View>
       <NewGroupSheet open={newOpen} onClose={() => setNewOpen(false)} />
-      <GroupEditSheet open={addOpen} group={group} groupLabel={g?.label ?? ''} onClose={() => setAddOpen(false)} />
       <DeleteGroupSheet group={delOpen && g ? g : null} onClose={() => setDelOpen(false)} />
     </View>
   );
