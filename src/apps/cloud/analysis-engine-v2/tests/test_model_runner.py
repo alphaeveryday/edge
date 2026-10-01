@@ -34,11 +34,28 @@ def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_pa
 
     result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
         call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path,
-        key='test-secret', model='deepseek-flash', client_factory=Client))
+        key='test-secret', model='deepseek-flash', client_factory=Client, kind=kind))
 
     assert result == {'summary': 'ok'}
-    assert captured == [prompt]
-    assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == prompt
+    assert len(captured) == 1 and captured[0].startswith(prompt)
+    assert 'analysis:hypothesis-analysis-workflow' in captured[0]
+    assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
+    assert ('이번 작업은 오늘 움직임 설명' in captured[0]) == (kind == 'movement')
+
+
+def test_valid_json_without_required_skills_is_rejected_and_workspace_removed(tmp_path):
+    workspaces = []
+    base = client_for(ResultMessage(structured_output={'summary':'ok'}))
+    class Client(base):
+        async def __aenter__(self):
+            workspaces.append(Path(self.options.cwd))
+            return self
+    with pytest.raises(ValueError, match='skills'):
+        asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+            call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+            key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert not (tmp_path/'response.json').exists()
+    assert workspaces and not workspaces[0].exists()
 
 
 @dataclass
@@ -52,7 +69,9 @@ class ResultMessage:
 def client_for(message):
     class Client:
         def __init__(self, *, options):
-            assert options.tools == []
+            self.options = options
+            assert options.tools == ['Skill', 'Read']
+            assert options.setting_sources == []
             assert options.permission_mode == 'dontAsk'
             assert options.env['DISABLE_AUTO_COMPACT'] == '0'
             assert options.strict_mcp_config
@@ -60,6 +79,9 @@ def client_for(message):
             assert options.thinking == {'type': 'enabled', 'budget_tokens': 8192}
             assert options.effort == 'high'
         async def __aenter__(self):
+            for name in self.options.skills:
+                await self.options.hooks['PostToolUse'][0].hooks[0](
+                    {'tool_name':'Skill','tool_input':{'skill':name},'tool_response':{'success':True}}, 'call', {})
             return self
         async def __aexit__(self, *args):
             return False

@@ -18,6 +18,8 @@ python -m edge_analysis_v2.dashboard.server --rds-ca /path/to/rds-ca.pem --port 
 
 ## 검증
 
+문서 스킬과 실행 권한, 컨테이너 검증 방법은 [분석 스킬 실행 계약](docs/agent-skills.md)을 참고한다.
+
 ```sh
 python -m pytest tests -q
 node --test integration_tests/test_review_refresh.cjs integration_tests/test_prompt_drafts.cjs

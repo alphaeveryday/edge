@@ -33,7 +33,7 @@ jobs:
           account="$(aws sts get-caller-identity --query Account --output text)"
           image="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-${GITHUB_SHA}"
           docker build --platform linux/amd64 -f src/apps/cloud/analysis-engine-v2/Dockerfile -t "$image" src
-          docker run --rm --entrypoint python "$image" -c "from importlib.resources import files; import subprocess; subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
+          docker run --rm --read-only --cap-drop ALL --entrypoint python "$image" -c "from importlib.resources import files; import os, subprocess, tempfile; assert os.getuid()==1001; tempfile.TemporaryDirectory().cleanup(); subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
           docker push "$image"
           echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Publish the API runtime image for infrastructure bootstrap
@@ -72,6 +72,18 @@ jobs:
           assert task['family']=='edge-dev-analysis-v2'
           assert len(task['containerDefinitions'])==1
           task['containerDefinitions'][0]['image']=os.environ['ANALYSIS_IMAGE']
+          container=task['containerDefinitions'][0]
+          container['user']='1001:1001'
+          container['readonlyRootFilesystem']=True
+          linux=container.setdefault('linuxParameters',{})
+          linux['capabilities']={'drop':['ALL']}
+          mounts=container.setdefault('mountPoints',[])
+          volumes=task.setdefault('volumes',[])
+          # One task-local writable volume, never a shared host/EFS workspace.
+          assert not mounts or mounts==[{'sourceVolume':'analysis-scratch','containerPath':'/tmp','readOnly':False}]
+          assert not volumes or volumes==[{'name':'analysis-scratch','host':{}}] or volumes==[{'name':'analysis-scratch'}]
+          container['mountPoints']=[{'sourceVolume':'analysis-scratch','containerPath':'/tmp','readOnly':False}]
+          task['volumes']=[{'name':'analysis-scratch'}]
           json.dump(task,open('/tmp/next-task.json','w'))
           PY
           aws ecs register-task-definition --cli-input-json file:///tmp/next-task.json --query taskDefinition.taskDefinitionArn --output text

@@ -133,7 +133,10 @@ analysis-engine-v2/
     │   └── body_editor.py
     ├── agent/                    # 모델 SDK와 에이전트 출력 계약
     │   ├── runner.py
+    │   ├── skill_session.py      # 문서 스킬 로딩·도구 접근 제한
+    │   ├── smoke.py              # 실제 모델·내부 MCP 호환성 검사
     │   └── output_schema.py
+    ├── skills/                   # 이미지에 포함되는 승인된 분석 SKILL.md
     ├── tools/                    # 툴 실행·모델 노출 스키마
     │   ├── execution.py
     │   ├── model_schema.py
