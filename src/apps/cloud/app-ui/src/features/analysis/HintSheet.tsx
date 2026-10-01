@@ -37,7 +37,7 @@ export function HintSheet({ hintKey, onClose }: { hintKey: string | null; onClos
 }
 
 const styles = StyleSheet.create({
-  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim },
   card: { position: 'absolute', left: 20, right: 20, bottom: 40, backgroundColor: colors.white, borderRadius: 18, paddingTop: 18, paddingHorizontal: 20, paddingBottom: 20, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 18, shadowOffset: { width: 0, height: 12 } },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { fontFamily: fam.extrabold, fontSize: 16, color: colors.text },

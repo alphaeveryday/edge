@@ -4,7 +4,7 @@ import { colors, signal as SIG, SIGNAL_ORDER, type Signal } from '@/theme/tokens
 import { fam } from '@/theme/typography';
 
 const SEG_BG: Record<Signal, string> = {
-  strongDown: '#1B64DA', down: '#8FBBFA', neutral: '#D5DAE0', up: '#F7A1A8', strongUp: '#F04452',
+  strongDown: colors.downDeep, down: colors.downLight, neutral: colors.lineStrong, up: colors.upLight, strongUp: colors.up,
 };
 
 // 관심 그룹 전체의 전망 강도 게이지

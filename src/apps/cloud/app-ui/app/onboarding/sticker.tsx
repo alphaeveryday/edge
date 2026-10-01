@@ -8,11 +8,11 @@ import { fam } from '@/theme/typography';
 
 const HINT: Record<string, string> = { strongUp: '지금', neutral: '지켜봐요', strongDown: '피해요' };
 const AXES = [
-  { name: '호재', q: '사건이 진짜인가', c: '#F04452' },
-  { name: '차트', q: '주가가 따라왔나', c: '#3182F6' },
-  { name: '매크로', q: '밖에서 방해하나', c: '#E8A13D' },
+  { name: '호재', q: '사건이 진짜인가', c: colors.up },
+  { name: '차트', q: '주가가 따라왔나', c: colors.down },
+  { name: '매크로', q: '밖에서 방해하나', c: colors.warn },
   { name: '밸류', q: '이익 대비 싼가', c: '#8B34E0' },
-  { name: '수급', q: '큰손이 믿나', c: '#0E8A6C' },
+  { name: '수급', q: '큰손이 믿나', c: colors.positive },
 ];
 
 export default function StickerIntro() {
@@ -38,7 +38,7 @@ export default function StickerIntro() {
       </View>
       <View style={styles.axesWrap}>
         <Svg width={16} height={22} viewBox="0 0 16 22" style={{ transform: [{ rotate: '180deg' }] }}>
-          <Path d="M8 1v17M2 13l6 6 6-6" stroke="#C9CED8" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <Path d="M8 1v17M2 13l6 6 6-6" stroke={colors.lineStrong} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </Svg>
         <View style={styles.axes}>
           {AXES.map((a) => (

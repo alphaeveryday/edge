@@ -7,7 +7,7 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const W = 354, H = 262, PLOT_W = 296;
-const MA20 = '#E0891A';
+const MA20 = colors.chartMa20;
 const TICKS = 5;
 
 // 축 라벨은 등간격 최대 5개, 양 끝은 안쪽으로

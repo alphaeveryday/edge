@@ -48,7 +48,7 @@ const styles = StyleSheet.create({
   divider: { height: 10, backgroundColor: colors.surface },
   why: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 14, gap: 11 },
   whyHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  whyTitle: { fontFamily: fam.extrabold, fontSize: 15, color: '#3B5BD8', letterSpacing: -0.3 },
+  whyTitle: { fontFamily: fam.extrabold, fontSize: 15, color: colors.primary, letterSpacing: -0.3 },
   ago: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, backgroundColor: colors.surface, borderRadius: 8, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
   whyText: { fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.text },
   whyFoot: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 2 },

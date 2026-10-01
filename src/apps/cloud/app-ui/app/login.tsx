@@ -75,5 +75,5 @@ const styles = StyleSheet.create({
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
   links: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 20 },
   link: { fontFamily: fam.semibold, fontSize: 14, color: colors.textSub },
-  sep: { width: 1, height: 12, backgroundColor: '#D1D6DB' },
+  sep: { width: 1, height: 12, backgroundColor: colors.lineStrong },
 });

@@ -22,6 +22,21 @@ export const colors = {
   neutralDeep: '#636366',
   warn: '#E8A13D',
   positive: '#0E8A6C',
+  upSoft: 'rgba(240,68,82,0.12)',
+  downSoft: 'rgba(49,130,246,0.12)',
+  upLight: '#F7A1A8',
+  downLight: '#8FBBFA',
+  warnDeep: '#C9820E',
+  success: '#22C55E',
+  primaryTint: '#DDD9FB',
+  highlight: 'rgba(49,130,246,0.18)',
+  voteUpBg: '#FFF0F1',
+  voteDownBg: '#EAF2FF',
+  unreadBg: '#F8FAFF',
+  toastBg: '#2B2F3A',
+  scrim: 'rgba(0,0,0,0.35)',
+  tabBarLine: 'rgba(0,0,0,0.07)',
+  chartMa20: '#E0891A',
 } as const;
 
 // 전망 스티커 5단계 색

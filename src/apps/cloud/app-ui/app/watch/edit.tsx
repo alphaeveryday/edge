@@ -83,6 +83,6 @@ const styles = StyleSheet.create({
   name: { flex: 1, fontFamily: fam.bold, fontSize: 15, color: colors.text },
   grip: { gap: 3, paddingVertical: 6, paddingHorizontal: 2 },
   gripRow: { flexDirection: 'row', gap: 3 },
-  dot: { width: 3, height: 3, borderRadius: 999, backgroundColor: '#C9CED8' },
+  dot: { width: 3, height: 3, borderRadius: 999, backgroundColor: colors.lineStrong },
   foot: { paddingTop: 12, paddingHorizontal: PAGE_X, borderTopWidth: 1, borderTopColor: colors.surface },
 });

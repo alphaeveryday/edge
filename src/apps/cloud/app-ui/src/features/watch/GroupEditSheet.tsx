@@ -36,7 +36,7 @@ export function GroupEditSheet({ open, group, groupLabel, onClose }: Props) {
               <View style={[styles.box, on && styles.boxOn]}>
                 {on && (
                   <Svg width={12} height={12} viewBox="0 0 12 12">
-                    <Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke="#FFFFFF" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                    <Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={colors.white} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   </Svg>
                 )}
               </View>

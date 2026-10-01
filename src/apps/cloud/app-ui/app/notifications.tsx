@@ -9,7 +9,7 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const KIND: Record<NotiKind, { label: string; c: string; bg: string; glyph: string }> = {
-  watch: { label: '관심', c: '#C9820E', bg: '#E8A13D', glyph: '★' },
+  watch: { label: '관심', c: colors.warnDeep, bg: colors.warn, glyph: '★' },
   comm: { label: '커뮤니티', c: colors.downDeep, bg: colors.down, glyph: '▣' },
 };
 const TABS: { k: NotiKind | 'all'; label: string }[] = [{ k: 'all', label: '전체' }, { k: 'watch', label: '관심' }, { k: 'comm', label: '커뮤니티' }];
@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   tabs: { flexDirection: 'row', paddingTop: 6, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
   row: { flexDirection: 'row', gap: 12, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: colors.surface },
-  unread: { backgroundColor: '#F8FAFF' },
+  unread: { backgroundColor: colors.unreadBg },
   head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   kind: { fontFamily: fam.bold, fontSize: 13 },
   time: { fontFamily: fam.mono, fontSize: 12, color: colors.textFaint },

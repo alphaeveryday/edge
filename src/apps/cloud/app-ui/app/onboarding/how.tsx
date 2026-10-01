@@ -15,7 +15,7 @@ const STATS = [
 
 const Down = () => (
   <Svg width={16} height={22} viewBox="0 0 16 22">
-    <Path d="M8 1v17M2 13l6 6 6-6" stroke="#C9CED8" strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M8 1v17M2 13l6 6 6-6" stroke={colors.lineStrong} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
 

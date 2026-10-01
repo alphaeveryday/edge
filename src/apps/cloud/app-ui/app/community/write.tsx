@@ -97,7 +97,7 @@ export default function CommunityWrite() {
                 <SectorIcon theme={e.theme} bg={e.logoBg} size={30} />
                 <Text numberOfLines={1} style={styles.pickName}>{e.name}</Text>
                 <View style={[styles.ck, on && styles.ckOn]}>
-                  <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? '#FFFFFF' : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
+                  <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? colors.white : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
                 </View>
               </Pressable>
             );

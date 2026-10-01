@@ -10,8 +10,8 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const DIR_C = { help: colors.up, neutral: colors.neutral, burden: colors.down } as const;
-const TAG = { help: { bg: 'rgba(240,68,82,0.12)', c: colors.upDeep }, neutral: { bg: colors.surface, c: colors.neutralDeep }, burden: { bg: 'rgba(49,130,246,0.12)', c: colors.downDeep } } as const;
-const LEGEND_TEMP = [{ c: colors.down, t: '부담' }, { c: '#8FBBFA', t: '' }, { c: colors.neutral, t: '중립' }, { c: '#F7A1A8', t: '' }, { c: colors.up, t: '도움' }];
+const TAG = { help: { bg: colors.upSoft, c: colors.upDeep }, neutral: { bg: colors.surface, c: colors.neutralDeep }, burden: { bg: colors.downSoft, c: colors.downDeep } } as const;
+const LEGEND_TEMP = [{ c: colors.down, t: '부담' }, { c: colors.downLight, t: '' }, { c: colors.neutral, t: '중립' }, { c: colors.upLight, t: '' }, { c: colors.up, t: '도움' }];
 
 export default function EtfData() {
   const { code } = useLocalSearchParams<{ code: string }>();

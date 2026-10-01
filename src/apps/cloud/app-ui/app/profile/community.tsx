@@ -7,7 +7,7 @@ import { useMe, useMyPosts, useToggleLike, useUpdateMe } from '@/features/commun
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-const COLORS = ['#3D34E0', '#F04452', '#3182F6', '#0E8A6C', '#E8A13D'];
+const COLORS = [colors.primary, colors.up, colors.down, colors.positive, colors.warn];
 
 export default function CommunityProfile() {
   const router = useRouter();

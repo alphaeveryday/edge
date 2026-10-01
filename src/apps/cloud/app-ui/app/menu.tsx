@@ -39,7 +39,7 @@ export default function Menu() {
         ) : (
           <Pressable onPress={() => go('/login')} style={({ pressed }) => [styles.me, pressed && { opacity: 0.6 }]}>
             <View style={styles.guest}>
-              <Svg width={22} height={22} viewBox="0 0 22 22"><Circle cx={11} cy={8} r={3.6} fill="#FFFFFF" /><Path d="M4 18.5c1.2-3.4 3.8-5 7-5s5.8 1.6 7 5" fill="#FFFFFF" /></Svg>
+              <Svg width={22} height={22} viewBox="0 0 22 22"><Circle cx={11} cy={8} r={3.6} fill={colors.white} /><Path d="M4 18.5c1.2-3.4 3.8-5 7-5s5.8 1.6 7 5" fill={colors.white} /></Svg>
             </View>
             <View style={{ flex: 1, gap: 3 }}>
               <Text style={styles.meName}>로그인하고 시작하기</Text>
@@ -65,6 +65,6 @@ const styles = StyleSheet.create({
   me: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: 16, backgroundColor: colors.surface },
   meName: { flex: 1, fontFamily: fam.extrabold, fontSize: 16, color: colors.text, letterSpacing: -0.3 },
   meSub: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
-  guest: { width: 44, height: 44, borderRadius: 999, backgroundColor: '#D5DAE0', alignItems: 'center', justifyContent: 'center' },
+  guest: { width: 44, height: 44, borderRadius: 999, backgroundColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   sep: { height: 1, backgroundColor: colors.surface, marginTop: 10, marginHorizontal: 8 },
 });

@@ -8,7 +8,7 @@ import { VoteCard } from '@/features/community/VoteCard';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { Loading } from '@/components/state';
-import { colors, signal as SIG } from '@/theme/tokens';
+import { colors, signal as SIG, radius, shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { dirSignal } from './dir';
 import { FactorRow } from './FactorRow';
@@ -143,8 +143,8 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
-  sheet: { flex: 1, backgroundColor: colors.white, borderTopLeftRadius: 22, borderTopRightRadius: 22, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: -10 } },
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim },
+  sheet: { flex: 1, backgroundColor: colors.white, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, ...shadow.sheet },
   head: { paddingTop: 10, paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: colors.surface },
   handle: { width: 38, height: 4, borderRadius: 999, backgroundColor: colors.line, alignSelf: 'center', marginBottom: 18 },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -152,12 +152,12 @@ const styles = StyleSheet.create({
   headMid: { flex: 1, gap: 5, marginLeft: 4 },
   headName: { fontFamily: fam.bold, fontSize: 15, color: colors.text, letterSpacing: -0.3, lineHeight: 20 },
   title: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 29, letterSpacing: -0.6, color: colors.text },
-  today: { marginTop: 16, borderRadius: 14, borderWidth: 1, borderColor: '#DDD9FB', backgroundColor: colors.primarySoft, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 15 },
+  today: { marginTop: 16, borderRadius: 14, borderWidth: 1, borderColor: colors.primaryTint, backgroundColor: colors.primarySoft, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 15 },
   todayHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   todayDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: colors.down },
   todayCap: { fontFamily: fam.extrabold, fontSize: 13, color: colors.downDeep },
   todayLine: { fontFamily: fam.regular, fontSize: 15, lineHeight: 25, color: colors.text },
-  hl: { backgroundColor: 'rgba(49,130,246,0.18)' },
+  hl: { backgroundColor: colors.highlight },
   arg: { marginTop: 18, borderRadius: 14, padding: 12, marginHorizontal: -12 },
   argHead: { flexDirection: 'row', gap: 10, alignItems: 'baseline' },
   argNo: { fontFamily: fam.monoBold, fontSize: 12, color: colors.textDisabled },
@@ -172,8 +172,8 @@ const styles = StyleSheet.create({
   chipCap: { fontFamily: fam.extrabold, fontSize: 12, letterSpacing: 0.5 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { fontFamily: fam.bold, fontSize: 13, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10, overflow: 'hidden' },
-  chipNeg: { color: colors.downDeep, backgroundColor: 'rgba(49,130,246,0.12)' },
-  chipPos: { color: colors.upDeep, backgroundColor: 'rgba(240,68,82,0.12)' },
+  chipNeg: { color: colors.downDeep, backgroundColor: colors.downSoft },
+  chipPos: { color: colors.upDeep, backgroundColor: colors.upSoft },
   close: { fontFamily: fam.bold, fontSize: 16, lineHeight: 27, color: colors.text, marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.line },
   changed: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
   prevLabel: { fontFamily: fam.bold, fontSize: 14, color: colors.textMuted },

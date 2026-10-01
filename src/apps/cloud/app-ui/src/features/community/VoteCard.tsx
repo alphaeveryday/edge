@@ -6,9 +6,9 @@ import { useVote } from './queries';
 import { useRequireLogin } from '@/store/session';
 
 const META: { k: VoteChoice; label: string; c: string; bg: string }[] = [
-  { k: 'buy', label: '산다', c: colors.up, bg: '#FFF0F1' },
+  { k: 'buy', label: '산다', c: colors.up, bg: colors.voteUpBg },
   { k: 'wait', label: '기다린다', c: colors.textSub, bg: colors.surface },
-  { k: 'sell', label: '판다', c: colors.down, bg: '#EAF2FF' },
+  { k: 'sell', label: '판다', c: colors.down, bg: colors.voteDownBg },
 ];
 
 export function VoteCard({ stat, onGate }: { stat: VoteStat; onGate?: () => void }) {
