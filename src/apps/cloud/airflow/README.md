@@ -949,8 +949,8 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 | 완료 | 코드 ALPHA-1130(#1010~#1017·#1014·#1021) dev 머지·배포. 미 국채 10년 FRED `DGS10` 교체(#1038 스키마·#1039 코드). `macro` 태스크 정의 `edge-dev-data-pipeline-macro:1`·실행 역할 시크릿 읽기(#1036). Airflow RunTask 에 `dart`·`macro`(#1037). 시크릿 `edge-dev-data-pipeline/{ecos,kosis,eia,fred}/api-key` 수동 등록(AWSCURRENT 1개씩, `{"apikey"}`). 최종 업무 이미지 `edge/pipeline@sha256:713b779e…`(`GIT_SHA` d7d4e111). 아래 "FRED 교체·실행 환경 배포 결과" 표 |
 | 구현됐지만 비활성 | `MACRO_COLLECTION.instrumented=False`(테스트 유예 `_WIRING_AHEAD_OF_FLAG`), `edge_source_daily` DAG 미등록·pause, `ops` 주기 결측 판정 env(`OPS_SOURCE_DAILY_SCHED_*`) 없음, `investor_intraday_orchestrator=SFN`. 공급자 실호출(운영)·적재 0 — 원천 관측 표 4개 0행 |
 | 미검증·남은 결함 | 분 상주 서비스의 새 이미지 장중 동작(다음 세션 07:45 기동 뒤 확인). 10-01 가격 분 수집 지연(ALPHA-1127 — 원인 미확정, 75초 가정 초과 단서). 적재 전 만료 정제 run 의 `--all`(ALPHA-1133). 재무 표 재사용 합의(ALPHA-643, 질문만). FRED 정기 실행의 휴일 `"."` 처리는 단위 테스트만(실응답 창에 휴일 없음). deploy-data-pipeline 에 장중 차단 가드 없음(제안만) |
-| 다음 작업·선행 조건 | ALPHA-1136 첫 단건: 대상·기간·시각 결정 → 아래 "이미지" 의 digest 고정 단건 리비전 → CLI 단건(run_id 명시, `--all` 없음) → raw·manifest·canonical·DB 판본·조회 함수·v2 대조 → instrumented 플래그 PR(유예 제거) → DAG 수동 trigger → 정기 활성화(결측 env) |
-| 승인 범위 | **승인·완료**: FRED 교체 PR 4개 머지·자동 배포, 시크릿 수동 등록. **별도 승인 필요**: 공급자 실호출·첫 단건 수집·운영 적재·백필, instrumented 전환, DAG 실행·unpause·정기 활성화, 결측 판정 env, SFN 주체 전환, FMP 시크릿 삭제, 장중 배포 가드 PR |
+| 다음 작업·선행 조건 | ALPHA-1136 첫 단건: 대상·기간·시각 결정 → 아래 "이미지" 의 digest 고정 단건 리비전 → CLI 단건(run_id 명시, `--all` 없음) → raw·manifest·canonical·DB 판본·조회 함수·v2 대조 → instrumented 플래그 PR(유예 제거) → **Airflow 서비스 기동·DAG 등록**(서비스가 desired 0 이면 deploy-airflow 가 교체를 건너뛴다 — `workflow_dispatch` `start_service=true` 로 dev 이미지 배포, Airflow 담당 · 별도 승인. `edge_source_daily` 가 pause 로 등록됐는지 확인) → DAG 수동 trigger → 정기 활성화(결측 env) |
+| 승인 범위 | **승인·완료**: FRED 교체 PR 4개 머지·자동 배포, 시크릿 수동 등록. **별도 승인 필요**: 공급자 실호출·첫 단건 수집·운영 적재·백필, instrumented 전환, Airflow 서비스 기동, DAG 실행·unpause·정기 활성화, 결측 판정 env, SFN 주체 전환, FMP 시크릿 삭제, 장중 배포 가드 PR |
 
 로컬 근거: 실응답 원문 `~/Desktop/Development/edge/.dev/alpha-1130-live/`(`shasum -a 256 -c SHA256SUMS`, 32개, `round3/` = FRED), 로컬 키 파일 `~/.config/edge/alpha-1130-keys.env`(값은 문서에 쓰지 않는다).
 
