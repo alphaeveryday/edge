@@ -870,9 +870,9 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 | PR | 머지 | 결과 |
 |---|---|---|
-| #1038 스키마 | `123a7800` 13:47 | schema-migrate 성공, dev RDS `flyway_schema_history` 202610011500 success, CHECK 에 FRED 튜플 추가·FMP 튜플 유지 |
-| #1039 FRED 코드 | `7ef0864b` 17:20 | 이미지 `edge/pipeline:7ef0864b…`·`GIT_SHA` 일치, 분 상주 재기동 생략(desired 0). 17:25 reconcile 새 이미지로 exit 0 |
-| #1036 macro 배선 | `d7d4e111` 18:33 | apply 1 추가·2 변경·0 삭제. `edge-dev-data-pipeline-macro:1` — 시크릿 ECOS·KOSIS·EIA·FRED `:apikey::`·DB `:password::`, 실행 역할이 네 시크릿을 읽는다. 이미지 재빌드 `GIT_SHA=d7d4e111…`(digest `713b779e…`) |
+| #1038 스키마 | `123a7800` 13:46 | schema-migrate 성공, dev RDS `flyway_schema_history` 202610011500 success, CHECK 에 FRED 튜플 추가·FMP 튜플 유지 |
+| #1039 FRED 코드 | `7ef0864b` 17:19 | 이미지 `edge/pipeline:7ef0864b…`·`GIT_SHA` 일치, 분 상주 재기동 생략(desired 0). 17:25 reconcile 새 이미지로 exit 0 |
+| #1036 macro 배선 | `d7d4e111` 18:32 | apply 1 추가·2 변경·0 삭제. `edge-dev-data-pipeline-macro:1` — 시크릿 ECOS·KOSIS·EIA·FRED `:apikey::`·DB `:password::`, 실행 역할이 네 시크릿을 읽는다. 이미지 재빌드 `GIT_SHA=d7d4e111…`(digest `713b779e…`) |
 | #1037 RunTask 허용 | `f32b30bd` 18:38 | apply 0·1·0. Airflow 태스크 역할 RunTask 에 `dart:*`·`macro:*` 추가 |
 
 - #1039 는 Airflow 검증 중(사용자 지시 — 이미지만 바뀌고 검증 이미지는 이미 빌드됨) 머지했다. #1036·#1037 은 검증 정리(#1029) apply 뒤 머지했다. #1036 의 plan 은 검증 중에도 Airflow 자원을 건드리지 않았다(전체 plan 로그 확인).
