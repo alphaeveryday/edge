@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { IntroShell } from '@/features/onboarding/IntroShell';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const RANK = [
@@ -72,27 +72,27 @@ export default function What() {
 
 const styles = StyleSheet.create({
   stage: { width: '100%', height: 340, alignItems: 'center', justifyContent: 'center' },
-  rankCard: { position: 'absolute', left: -6, top: 60, width: 168, borderRadius: 16, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, padding: 14, gap: 10, transform: [{ rotate: '-9deg' }], shadowColor: colors.text, shadowOpacity: 0.1, shadowRadius: 17, shadowOffset: { width: 0, height: 14 } },
+  rankCard: { position: 'absolute', left: -6, top: 60, width: 168, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, padding: 14, gap: 10, transform: [{ rotate: '-9deg' }], shadowColor: colors.text, shadowOpacity: 0.1, shadowRadius: 17, shadowOffset: { width: 0, height: 14 } },
   rankTitle: { fontFamily: fam.extrabold, fontSize: 12, color: colors.text },
   rankRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rankN: { fontFamily: fam.monoBold, fontSize: 10, color: colors.textFaint, width: 14 },
   rankDot: { width: 18, height: 18, borderRadius: 999 },
   rankName: { flex: 1, fontFamily: fam.bold, fontSize: 11, color: colors.text },
   rankSig: { fontFamily: fam.extrabold, fontSize: 10 },
-  mainCard: { position: 'absolute', right: -30, top: 10, width: 258, borderRadius: 22, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, paddingTop: 18, paddingHorizontal: 16, paddingBottom: 30, gap: 14, transform: [{ rotate: '7deg' }], shadowColor: colors.text, shadowOpacity: 0.14, shadowRadius: 25, shadowOffset: { width: 0, height: 24 } },
+  mainCard: { position: 'absolute', right: -30, top: 10, width: 258, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, paddingTop: 18, paddingHorizontal: 16, paddingBottom: 30, gap: 14, transform: [{ rotate: '7deg' }], shadowColor: colors.text, shadowOpacity: 0.14, shadowRadius: 25, shadowOffset: { width: 0, height: 24 } },
   mainHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   mainLogo: { width: 32, height: 32, borderRadius: 999, backgroundColor: colors.primary },
   mainName: { fontFamily: fam.bold, fontSize: 14, color: colors.text },
   mainPrice: { fontFamily: fam.mono, fontSize: 11, color: colors.textFaint },
   mainSig: { backgroundColor: colors.upSoft, borderRadius: 999, paddingVertical: 5, paddingHorizontal: 8 },
   mainSigText: { fontFamily: fam.extrabold, fontSize: 11, color: colors.up },
-  today: { borderRadius: 14, backgroundColor: colors.primarySoft, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 11, gap: 8 },
+  today: { borderRadius: radius.card, backgroundColor: colors.primarySoft, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 11, gap: 8 },
   todayHead: { fontFamily: fam.extrabold, fontSize: 11, color: colors.primary },
   todayLine: { alignSelf: 'flex-start', fontFamily: fam.regular, fontSize: 12, lineHeight: 17, color: colors.text, backgroundColor: colors.primaryTint, paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4 },
   pt: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   ptN: { fontFamily: fam.mono, fontSize: 10, color: colors.textFaint, paddingTop: 3 },
   ptTitle: { fontFamily: fam.bold, fontSize: 13, lineHeight: 18, color: colors.text },
-  ptTag: { alignSelf: 'flex-start', backgroundColor: colors.surface, borderRadius: 6, paddingVertical: 3, paddingHorizontal: 7 },
+  ptTag: { alignSelf: 'flex-start', backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
   ptTagText: { fontFamily: fam.bold, fontSize: 11, color: colors.textSub },
   ptBody: { fontFamily: fam.regular, fontSize: 12, lineHeight: 18, color: colors.textSub },
 });

@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, NavBar, PostActions, SectionHead, SectorIcon } from '@/components/ui';
 import { useMe, useMyPosts, useToggleLike, useUpdateMe } from '@/features/community/queries';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const COLORS = [colors.primary, colors.up, colors.down, colors.positive, colors.warn];
@@ -87,7 +87,7 @@ const styles = StyleSheet.create({
   swatches: { flexDirection: 'row', gap: 8 },
   swatch: { width: 28, height: 28, borderRadius: 999 },
   swatchOn: { borderWidth: 3, borderColor: colors.white, shadowColor: colors.text, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } },
-  input: { height: 48, borderRadius: 14, backgroundColor: colors.surface, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  input: { height: 48, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   nick: { fontFamily: fam.extrabold, fontSize: 19, color: colors.text, letterSpacing: -0.5 },
   handle: { fontFamily: fam.mono, fontSize: 13, color: colors.textMuted },
   stats: { flexDirection: 'row', gap: 28, marginTop: 4 },
@@ -96,7 +96,7 @@ const styles = StyleSheet.create({
   divider: { height: 10, backgroundColor: colors.surface, marginTop: 20 },
   post: { gap: 8, paddingTop: 14, paddingHorizontal: PAGE_X, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
   postHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  tag: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: 7, paddingVertical: 3, paddingHorizontal: 7 },
+  tag: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
   tagText: { fontFamily: fam.bold, fontSize: 12, color: colors.textSub },
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
   body: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },

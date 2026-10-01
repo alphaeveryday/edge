@@ -6,7 +6,7 @@ import { dirLabel } from '@/features/analysis/dir';
 import { HeatMap } from '@/features/etf/HeatMap';
 import { useEtfDetail } from '@/features/etf/queries';
 import { QueryState } from '@/components/state';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const DIR_C = { help: colors.up, neutral: colors.neutral, burden: colors.down } as const;
@@ -128,7 +128,7 @@ export default function EtfData() {
 }
 
 const styles = StyleSheet.create({
-  insight: { marginTop: 20, marginHorizontal: 20, paddingVertical: 16, paddingHorizontal: 17, borderRadius: 16, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
+  insight: { marginTop: 20, marginHorizontal: 20, paddingVertical: 16, paddingHorizontal: 17, borderRadius: radius.card, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
   insightHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   dot: { width: 8, height: 8, borderRadius: 999 },
   insightCap: { fontFamily: fam.extrabold, fontSize: 12 },
@@ -148,7 +148,7 @@ const styles = StyleSheet.create({
   scaleBar: { width: '100%', height: 6, borderRadius: 3 },
   scaleText: { fontFamily: fam.regular, fontSize: 11, color: colors.textMuted },
   divider: { height: 8, backgroundColor: colors.card, marginTop: 28 },
-  seg: { flexDirection: 'row', gap: 3, padding: 3, marginTop: 12, borderRadius: 10, backgroundColor: colors.surface },
+  seg: { flexDirection: 'row', gap: 3, padding: 3, marginTop: 12, borderRadius: radius.control, backgroundColor: colors.surface },
   segItem: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
   segOn: { backgroundColor: colors.white, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
   segText: { fontFamily: fam.bold, fontSize: 14 },
@@ -160,7 +160,7 @@ const styles = StyleSheet.create({
   holdTag: { fontFamily: fam.bold, fontSize: 12, borderRadius: 999, paddingVertical: 4, paddingHorizontal: 9, overflow: 'hidden' },
   holdDesc: { fontFamily: fam.regular, fontSize: 14, lineHeight: 20, color: colors.textSub, marginTop: 5 },
   infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 14 },
-  infoTile: { width: '48%', backgroundColor: colors.card, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14 },
+  infoTile: { width: '48%', backgroundColor: colors.card, borderRadius: radius.card, paddingVertical: 12, paddingHorizontal: 14 },
   infoK: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
   infoV: { fontFamily: fam.monoExtraBold, fontSize: 17, color: colors.text, marginTop: 4, letterSpacing: -0.3 },
   blurb: { fontFamily: fam.regular, fontSize: 14, lineHeight: 24, color: colors.textSub, marginTop: 14 },

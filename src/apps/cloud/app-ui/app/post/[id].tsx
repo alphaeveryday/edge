@@ -7,7 +7,7 @@ import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } fr
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { useRequireLogin } from '@/store/session';
 import { useToast } from '@/store/toast';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export default function Post() {
@@ -113,7 +113,7 @@ const styles = StyleSheet.create({
   name: { fontFamily: fam.extrabold, fontSize: 15, color: colors.text, letterSpacing: -0.3 },
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
   body: { fontFamily: fam.regular, fontSize: 18, lineHeight: 29, color: colors.text, marginTop: 14 },
-  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, backgroundColor: colors.surface, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 },
+  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 6, paddingHorizontal: 10 },
   tagText: { fontFamily: fam.bold, fontSize: 13, color: colors.textSub },
   views: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 14 },
   actions: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.surface },

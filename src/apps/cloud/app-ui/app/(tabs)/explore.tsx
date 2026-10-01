@@ -9,7 +9,7 @@ import { DailySheet } from '@/features/analysis/DailySheet';
 import { useDaily } from '@/features/analysis/queries';
 import { useRank } from '@/features/explore/queries';
 import { useToast } from '@/store/toast';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
 
@@ -82,10 +82,10 @@ const styles = StyleSheet.create({
   row: { gap: 13, paddingVertical: 24, borderBottomWidth: 1, borderBottomColor: colors.line },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   rank: { fontFamily: fam.monoExtraBold, fontSize: 12, textAlign: 'center', overflow: 'hidden' },
-  rankTop: { color: colors.white, backgroundColor: colors.text, borderRadius: 7, paddingVertical: 3, paddingHorizontal: 7 },
+  rankTop: { color: colors.white, backgroundColor: colors.text, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
   rankPlain: { color: colors.textFaint, width: 20 },
   name: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, flexShrink: 1 },
   title: { fontFamily: fam.extrabold, fontSize: 18, lineHeight: 25, letterSpacing: -0.5, color: colors.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: { maxWidth: '100%', fontFamily: fam.bold, fontSize: 12, color: colors.textSub, backgroundColor: colors.card, borderRadius: 7, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
+  chip: { maxWidth: '100%', fontFamily: fam.bold, fontSize: 12, color: colors.textSub, backgroundColor: colors.card, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
 });

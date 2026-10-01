@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Post } from '@/api';
 import { Avatar, PostActions, SectorIcon } from '@/components/ui';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useToggleLike } from './queries';
 
@@ -45,9 +45,9 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   name: { fontFamily: fam.bold, fontSize: 15, color: colors.text, letterSpacing: -0.3 },
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
-  quoteTag: { backgroundColor: colors.primarySoft, borderRadius: 8, paddingVertical: 5, paddingHorizontal: 9 },
+  quoteTag: { backgroundColor: colors.primarySoft, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9 },
   quoteTagText: { fontFamily: fam.bold, fontSize: 12, color: colors.primary },
-  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: 8, paddingVertical: 5, paddingHorizontal: 9 },
+  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9 },
   tagText: { fontFamily: fam.bold, fontSize: 12, color: colors.textSub },
   title: { fontFamily: fam.extrabold, fontSize: 17, lineHeight: 24, letterSpacing: -0.34, color: colors.text },
   body: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.textSub },

@@ -6,7 +6,7 @@ import { Avatar, Chevron, IconButton, ListRow, type ListIcon } from '@/component
 import { useMe } from '@/features/community/queries';
 import { useUnreadCount } from '@/features/notification/queries';
 import { useSession } from '@/store/session';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const GROUPS: { icon: ListIcon; label: string; href: string }[][] = [
@@ -62,7 +62,7 @@ export default function Menu() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   topBar: { position: 'absolute', right: 16, zIndex: 30, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  me: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: 16, backgroundColor: colors.surface },
+  me: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: radius.card, backgroundColor: colors.surface },
   meName: { flex: 1, fontFamily: fam.extrabold, fontSize: 16, color: colors.text, letterSpacing: -0.3 },
   meSub: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
   guest: { width: 44, height: 44, borderRadius: 999, backgroundColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },

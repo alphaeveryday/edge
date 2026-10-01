@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { VoteStat, VoteChoice } from '@/api';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useVote } from './queries';
 import { useRequireLogin } from '@/store/session';
@@ -53,12 +53,12 @@ export function VoteCard({ stat, onGate }: { stat: VoteStat; onGate?: () => void
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 18, backgroundColor: colors.card, padding: 16 },
+  card: { borderRadius: radius.card, backgroundColor: colors.card, padding: 16 },
   title: { fontFamily: fam.extrabold, fontSize: 17, lineHeight: 23, letterSpacing: -0.5, color: colors.text },
   sub: { fontFamily: fam.regular, fontSize: 12.5, color: colors.textMuted, marginTop: 4 },
   bar: { flexDirection: 'row', gap: 3, marginTop: 12, height: 12 },
   btns: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  btn: { flex: 1, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  btn: { flex: 1, height: 40, borderRadius: radius.control, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   btnText: { fontFamily: fam.extrabold, fontSize: 14 },
   btnPct: { fontFamily: fam.monoExtraBold, fontSize: 13 },
 });

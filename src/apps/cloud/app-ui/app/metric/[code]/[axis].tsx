@@ -6,7 +6,7 @@ import { Chevron, NavBar, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { useMetric } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const TILE: Record<Dir | 'none', { bg: string; border: string; c: string }> = {
@@ -73,7 +73,7 @@ const styles = StyleSheet.create({
   sw: { width: 9, height: 9, borderRadius: 3 },
   legendText: { fontFamily: fam.regular, fontSize: 12, color: colors.textSub },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
-  tile: { borderRadius: 16, borderWidth: 1, gap: 6 },
+  tile: { borderRadius: radius.card, borderWidth: 1, gap: 6 },
   tileLabel: { fontFamily: fam.bold, color: colors.textSub },
   tileValue: { fontFamily: fam.monoExtraBold, letterSpacing: -1, lineHeight: 36 },
   tileNote: { fontFamily: fam.regular, fontSize: 13, lineHeight: 20, color: colors.textSub },

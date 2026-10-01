@@ -8,7 +8,7 @@ import { DisclaimerSheet } from '@/features/auth/DisclaimerSheet';
 import { dirSignal } from '@/features/analysis/dir';
 import { useDaily } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
-import { colors, signal as SIG } from '@/theme/tokens';
+import { colors, signal as SIG, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export default function EtfBrief() {
@@ -83,7 +83,7 @@ export default function EtfBrief() {
 const styles = StyleSheet.create({
   strip: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, marginHorizontal: 20 },
   days: { flex: 1, flexDirection: 'row', gap: 4 },
-  day: { flex: 1, height: 42, borderRadius: 10, alignItems: 'center', justifyContent: 'center', gap: 1, backgroundColor: colors.card },
+  day: { flex: 1, height: 42, borderRadius: radius.control, alignItems: 'center', justifyContent: 'center', gap: 1, backgroundColor: colors.card },
   dayOn: { backgroundColor: colors.text },
   dayW: { fontFamily: fam.regular, fontSize: 10 },
   dayD: { fontFamily: fam.monoExtraBold, fontSize: 13 },
@@ -92,7 +92,7 @@ const styles = StyleSheet.create({
   article: { marginTop: 20, marginHorizontal: 22 },
   question: { fontFamily: fam.extrabold, fontSize: 24, lineHeight: 33, letterSpacing: -0.7, color: colors.text },
   dateline: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 12 },
-  card: { marginTop: 20, borderRadius: 18, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, overflow: 'hidden', shadowColor: colors.text, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+  card: { marginTop: 20, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, overflow: 'hidden', shadowColor: colors.text, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
   cardBar: { height: 4 },
   cardBody: { paddingTop: 22, paddingHorizontal: 20, paddingBottom: 24, gap: 14 },
   cardCap: { fontFamily: fam.extrabold, fontSize: 12, color: colors.textMuted, letterSpacing: 0.7 },

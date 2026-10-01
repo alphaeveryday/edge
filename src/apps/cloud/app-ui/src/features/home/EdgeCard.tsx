@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { ChangeOnly } from '@/components/ui';
-import { colors, signal as SIG, SIGNAL_ORDER, type Signal } from '@/theme/tokens';
+import { colors, signal as SIG, SIGNAL_ORDER, type Signal, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const SEG_BG: Record<Signal, string> = {
@@ -38,7 +38,7 @@ export function EdgeCard({ title, band, changePct }: { title: string; band: Sign
 }
 
 const styles = StyleSheet.create({
-  card: { marginTop: 14, marginHorizontal: 20, borderRadius: 20, backgroundColor: colors.card, paddingTop: 17, paddingHorizontal: 17, paddingBottom: 16, gap: 14 },
+  card: { marginTop: 14, marginHorizontal: 20, borderRadius: radius.card, backgroundColor: colors.card, paddingTop: 17, paddingHorizontal: 17, paddingBottom: 16, gap: 14 },
   head: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
   headL: { flex: 1, gap: 5 },
   headR: { alignItems: 'flex-end', gap: 4 },

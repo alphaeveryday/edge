@@ -4,7 +4,7 @@ import type { WatchGroup } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { useWatchGroup } from '@/store/watch';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useCreateGroup } from './queries';
 
@@ -44,5 +44,5 @@ export function NewGroupSheet({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 const styles = StyleSheet.create({
-  input: { marginTop: 16, backgroundColor: colors.surface, borderRadius: 12, padding: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  input: { marginTop: 16, backgroundColor: colors.surface, borderRadius: radius.field, padding: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
 });

@@ -4,7 +4,7 @@ import { FullWindowOverlay } from 'react-native-screens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { useToast } from '@/store/toast';
-import { colors, shadow } from '@/theme/tokens';
+import { colors, shadow, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 // 전체 화면 모달과 시트 위에도 보이도록 iOS 는 창 최상단 레이어에 표시
@@ -35,7 +35,7 @@ export function Toast() {
 }
 
 const styles = StyleSheet.create({
-  root: { position: 'absolute', left: 16, right: 16, zIndex: 60, backgroundColor: colors.toastBg, borderRadius: 16, paddingVertical: 12, paddingLeft: 14, paddingRight: 12, flexDirection: 'row', alignItems: 'center', gap: 12, ...shadow.toast },
+  root: { position: 'absolute', left: 16, right: 16, zIndex: 60, backgroundColor: colors.toastBg, borderRadius: radius.card, paddingVertical: 12, paddingLeft: 14, paddingRight: 12, flexDirection: 'row', alignItems: 'center', gap: 12, ...shadow.toast },
   icon: { width: 24, height: 24, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
   text: { flex: 1, fontFamily: fam.semibold, fontSize: 14.5, color: colors.white },
 });

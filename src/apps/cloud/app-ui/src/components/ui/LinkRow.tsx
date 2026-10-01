@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 import { Chevron } from './Chevron';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -24,7 +24,7 @@ export function LinkRow({ label, variant = 'inline', open = null, muted, center,
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
-        { justifyContent: centered ? 'center' : 'flex-start', backgroundColor: accent ? 'rgba(27,100,218,0.09)' : card ? colors.card : 'transparent', borderRadius: card ? 12 : 0, paddingHorizontal: card ? 16 : 0 },
+        { justifyContent: centered ? 'center' : 'flex-start', backgroundColor: accent ? 'rgba(27,100,218,0.09)' : card ? colors.card : 'transparent', borderRadius: card ? radius.button : 0, paddingHorizontal: card ? 16 : 0 },
         divider && styles.divider,
         pressed && { opacity: 0.7 },
       ]}

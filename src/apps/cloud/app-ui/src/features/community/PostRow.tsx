@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Post } from '@/api';
 import { Avatar, PostActions, SectorIcon } from '@/components/ui';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useToggleLike } from './queries';
 
@@ -38,7 +38,7 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   name: { fontFamily: fam.extrabold, fontSize: 15, color: colors.text, letterSpacing: -0.3, maxWidth: 110 },
   handle: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted, flexShrink: 1 },
-  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: 7, paddingVertical: 3, paddingHorizontal: 7 },
+  tag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
   tagText: { fontFamily: fam.bold, fontSize: 12, color: colors.textSub },
   text: { fontFamily: fam.regular, fontSize: 15, lineHeight: 23.7, color: colors.text },
   actions: { marginTop: 2, alignSelf: 'flex-start' },

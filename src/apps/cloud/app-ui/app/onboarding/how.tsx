@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { IntroShell } from '@/features/onboarding/IntroShell';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const PRESS_A = ['경향신문', '매일경제', '한국경제', '서울경제', '머니투데이', '이데일리'];
@@ -67,11 +67,11 @@ const styles = StyleSheet.create({
   col: { width: '100%', alignItems: 'center', gap: 16 },
   press: { gap: 8, alignSelf: 'stretch', overflow: 'hidden' },
   pressRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
-  pressChip: { paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8, backgroundColor: colors.surface },
+  pressChip: { paddingVertical: 7, paddingHorizontal: 12, borderRadius: radius.tag, backgroundColor: colors.surface },
   pressChipOn: { backgroundColor: colors.text },
   pressText: { fontFamily: fam.extrabold, fontSize: 13, color: colors.textSub, letterSpacing: -0.26 },
   stats: { flexDirection: 'row', gap: 8, width: '100%', maxWidth: 330 },
-  stat: { flex: 1, borderRadius: 14, backgroundColor: colors.card, paddingTop: 14, paddingBottom: 12, paddingHorizontal: 10, alignItems: 'center', gap: 3 },
+  stat: { flex: 1, borderRadius: radius.card, backgroundColor: colors.card, paddingTop: 14, paddingBottom: 12, paddingHorizontal: 10, alignItems: 'center', gap: 3 },
   statV: { fontFamily: fam.monoExtraBold, fontSize: 22, color: colors.text, letterSpacing: -0.6 },
   statL: { fontFamily: fam.semibold, fontSize: 12, color: colors.textMuted },
   statU: { fontFamily: fam.regular, fontSize: 11, color: colors.textMuted },

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View, type TextInputProps } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { colors } from '@/theme/tokens';
+import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 // 로그인·가입 공용 입력칸. 비밀번호는 보기 토글
@@ -32,7 +32,7 @@ export function AuthField({ secure, invalid, ...rest }: TextInputProps & { secur
 
 const styles = StyleSheet.create({
   wrap: { justifyContent: 'center' },
-  input: { height: 54, borderRadius: 14, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 16, color: colors.text },
+  input: { height: 54, borderRadius: radius.field, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 16, color: colors.text },
   invalid: { borderWidth: 1.5, borderColor: colors.up },
   eye: { position: 'absolute', right: 6, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 });
