@@ -38,6 +38,7 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <StatusBar style="dark" />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
+        <Stack.Screen name="index" />
         <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="menu" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
