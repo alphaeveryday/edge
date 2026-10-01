@@ -942,6 +942,18 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 원장 계획·보고를 Airflow 만 한다(`ops.entry._AIRFLOW_ONLY_LANES` — SFN 주체로 plan-run 하면 거부). 계약·일정 근거는
 `docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
 
+**현재 상태와 다음 작업(2026-10-01 19:30 기준 — 인계 정본. 세부는 아래 절과 ALPHA-1136):**
+
+| 구분 | 내용 |
+|---|---|
+| 완료 | 코드 ALPHA-1130(#1010~#1017·#1014·#1021) dev 머지·배포. 미 국채 10년 FRED `DGS10` 교체(#1038 스키마·#1039 코드). `macro` 태스크 정의 `edge-dev-data-pipeline-macro:1`·실행 역할 시크릿 읽기(#1036). Airflow RunTask 에 `dart`·`macro`(#1037). 시크릿 `edge-dev-data-pipeline/{ecos,kosis,eia,fred}/api-key` 수동 등록(AWSCURRENT 1개씩, `{"apikey"}`). 최종 업무 이미지 `edge/pipeline@sha256:713b779e…`(`GIT_SHA` d7d4e111). 아래 "FRED 교체·실행 환경 배포 결과" 표 |
+| 구현됐지만 비활성 | `MACRO_COLLECTION.instrumented=False`(테스트 유예 `_WIRING_AHEAD_OF_FLAG`), `edge_source_daily` DAG 미등록·pause, `ops` 주기 결측 판정 env(`OPS_SOURCE_DAILY_SCHED_*`) 없음, `investor_intraday_orchestrator=SFN`. 공급자 실호출(운영)·적재 0 — 원천 관측 표 4개 0행 |
+| 미검증·남은 결함 | 분 상주 서비스의 새 이미지 장중 동작(다음 세션 07:45 기동 뒤 확인). 10-01 가격 분 수집 지연(ALPHA-1127 — 원인 미확정, 75초 가정 초과 단서). 적재 전 만료 정제 run 의 `--all`(ALPHA-1133). 재무 표 재사용 합의(ALPHA-643, 질문만). FRED 정기 실행의 휴일 `"."` 처리는 단위 테스트만(실응답 창에 휴일 없음). deploy-data-pipeline 에 장중 차단 가드 없음(제안만) |
+| 다음 작업·선행 조건 | ALPHA-1136 첫 단건: 대상·기간·시각 결정 → 아래 "이미지" 의 digest 고정 단건 리비전 → CLI 단건(run_id 명시, `--all` 없음) → raw·manifest·canonical·DB 판본·조회 함수·v2 대조 → instrumented 플래그 PR(유예 제거) → **Airflow 서비스 기동·DAG 등록**(서비스가 desired 0 이면 deploy-airflow 가 교체를 건너뛴다 — `workflow_dispatch` `start_service=true` 로 dev 이미지 배포, Airflow 담당 · 별도 승인. `edge_source_daily` 가 pause 로 등록됐는지 확인) → DAG 수동 trigger → 정기 활성화(결측 env) |
+| 승인 범위 | **승인·완료**: FRED 교체 PR 4개 머지·자동 배포, 시크릿 수동 등록. **별도 승인 필요**: 공급자 실호출·첫 단건 수집·운영 적재·백필, instrumented 전환, Airflow 서비스 기동, DAG 실행·unpause·정기 활성화, 결측 판정 env, SFN 주체 전환, FMP 시크릿 삭제, 장중 배포 가드 PR |
+
+로컬 근거: 실응답 원문 `~/Desktop/Development/edge/.dev/alpha-1130-live/`(`shasum -a 256 -c SHA256SUMS`, 32개, `round3/` = FRED), 로컬 키 파일 `~/.config/edge/alpha-1130-keys.env`(값은 문서에 쓰지 않는다).
+
 - 세 계열은 서로 기다리지 않는다(한 공급자 장애가 다른 원천 적재를 막지 않는다). 수집·정제 exit 2 는 받은 범위만 하류로 넘기고 런은 실패로 마감한다(장중 수급과 같은 선택 2).
 - 백필은 같은 DAG 수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`. 업종은 현재값뿐이라 백필 인자가 없다. 한 run 1500초 — 긴 기간은 1년 단위로 나눈다. 청크는 1분 이상 간격으로, 그리고 대기열까지 포함해 **슬롯 날짜(KST) 안에 끝나게** trigger 한다(`plan` 이 당일 슬롯만 받아 자정을 넘긴 run 은 전체가 실패한다 — 다음 날 다시 trigger) — run_id 가 분 단위 슬롯에서 나와, 같은 분이면 두 번째 run 의 수집이 "다른 요청 범위"로 실패한다.
 - 로컬 검증: DAG 계약(`tests/test_source_daily_dag.py`, 공식 이미지), DAG 명령 그대로의 원장 통합(`data-pipeline/tests/e2e/test_source_daily_lane_pg.py` — plan-run → 9스텝 → reconcile, 실 PostgreSQL·가짜 공급자 HTTP).
