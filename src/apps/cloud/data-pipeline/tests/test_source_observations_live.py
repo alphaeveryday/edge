@@ -69,12 +69,6 @@ def test_eia_live_rbrte_is_brent_spot_fob_in_dollars_per_barrel():
     assert good[-1]["observation_date"] == "2026-09-22"      # 09-30 조회 시 최신 관측 09-22 — 약 1주 지연
 
 
-def test_fmp_treasury_live_row_is_percent_per_maturity():
-    good, bad = macro_series.parse("us_10y_yield", live("fmp_treasury_rates.json"))
-    assert bad == [] and good[0] == {"observation_date": "2026-09-25", "value": "5.17"}
-    assert macro_series.SERIES["us_10y_yield"].unit == "percent"
-
-
 # ── KIS 업종 ─────────────────────────────────────────────────────────────
 
 def test_kis_master_live_layout_names_and_levels(monkeypatch):

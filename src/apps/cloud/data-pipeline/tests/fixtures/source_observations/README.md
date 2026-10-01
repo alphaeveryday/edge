@@ -5,7 +5,7 @@
 | 파일 | 형태의 근거 | 값의 근거 |
 |---|---|---|
 | `ecos_usdkrw.json` | ECOS 731Y003 **실응답 구조**(`live/ecos_usd_krw_ecos_731Y003.json`) | 날짜만 2026-07-24~28 로 바꿨다. 값은 dev `fx_daily` USDKRW 실측(1459.66·1464.671·1461.35) — 계열은 다르다(FMP vs ECOS 15:30 종가) |
-| `fmp_treasury.json` | FMP stable `treasury-rates` 목록 형태 | year10 은 dev `rates_daily` 실측(07-24~30). 나머지 만기는 생략 |
+| `fred_dgs10.json` | FRED `series/observations` **문서 형태**(실응답 아님 — ALPHA-1136) | 값은 옛 `fmp_treasury.json` 의 year10(dev `rates_daily` 07-24·27·28)을 그대로 옮겼다 |
 | `ecos_kr10y.json` | ECOS StatisticSearch 실응답 구조와 같다 | 예시값 |
 | `kosis_cpi.json` | KOSIS 실응답 구조(`live/kosis_cpi_yoy.json`) — **UNIT_NM 없음**, 단위는 ITM_NM "전년동월비(%)" | 실측 2026-06 행(3.2) + 2026-07 행(2.8)을 202605 로 옮긴 것 |
 | `eia_brent.json` | EIA 실응답 구조(`live/eia_brent_spot.json`, series-description·units 포함) | 실측값, 날짜만 2026-09→07 로 옮김 |
@@ -24,7 +24,7 @@ KIS 마스터는 선택 종목 줄만 재압축, 업종명 파일은 전체, EIA
 | `kosis_cpi_yoy.json`·`kosis_meta_itm.json` | KOSIS DT_1J22042 T03 데이터(2026-06~08)·항목 메타(getMeta ITM) | T03=전년동월비(%)·Change over the same month of last year·총지수. **UNIT_NM 은 데이터·메타 모두 없음**(T02 만 %) |
 | `eia_brent_spot.json` | EIA v2 petroleum/pri/spt RBRTE 2026-09 (16행 중 4행) | series-description=Europe Brent Spot Price FOB (Dollars per Barrel), units=$/BBL, daily, 최신 09-22 |
 | `dart_shares_*_2025_11011.json` | 사업보고서 주식총수(삼성·하이닉스) | stlm_dt=2025-12-31 — 기준일=보고기간 말 검사와 일치 |
-| `fmp_treasury_rates.json` | FMP stable treasury-rates (dev 키) | 만기별 % 숫자, `year10` |
+| `fmp_treasury_rates.json` | FMP stable treasury-rates (dev 키) | 만기별 % 숫자, `year10` — **보존용**: 미 국채 10년은 FRED DGS10 으로 바뀌어(ALPHA-1136) 파서가 더 읽지 않는다. 09-25 `year10`=5.17 은 FRED 값 대조 기준 |
 | `kis_*.mst.zip` | KIS 공개 마스터 | 고정폭 227/221, 업종명 `[5:45]`(헤더가 맞고 공식 샘플 `[3:43]` 은 틀림), 소분류는 전 종목 0000 |
 | `dart_*` | OpenDART (dev 키) 삼성전자·SK하이닉스·고려제강 | 3개월/누적 필드, KRW, 연결/별도, IS 없는 회사(하이닉스)는 CIS, 주식총수 행·stlm_dt, 정정본 접수번호 |
 
