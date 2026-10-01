@@ -489,6 +489,16 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 **A4 증거 경로(#1027).** health 표본을 운영자 PC 대신 호스트 관측기가 15초마다 남긴다(`nsenter -n` 으로 api-server 네임스페이스의 `/api/v2/monitor/health`, `/var/log/edge-obs/health.log`). 종료 장치는 호스트를 내리기 전에 관측 기록을 검증 버킷 `obs/shutdown/` 으로 보낸다. 운영자 PC 가 잠들거나 포워딩이 끊겨도 A2~A4 증거가 남는다. import 오류 수는 인증 API 라 PC 표본(실험 처음·끝)으로 본다. 재검증 기준은 `verify/criteria_aws_1408_a4a5.json`, 배치는 `run.py batch <exp> L` 이다.
 
+**실험 중 감시(PC 무관, 2026-10-01).** 지금까지 실험 중 중단 기준(OOM·호스트 메모리·기존 RDS·업무 SFN 실패)은 운영자 PC 의 실행기가 단계 사이에만 봤다. 22:30·23:00 종료 장치는 예정 시각 종료일 뿐 중단 기준 감시가 아니다. 그래서 감시를 AWS 안으로 옮겼다.
+- `run.py watchdog <exp>`가 검증 ops 태스크로 `shim verify-watchdog <22:25> <rds_stop>`을 띄운다. 30~60초마다 아래를 본다.
+  - 호스트: SSM으로 관측기 기록을 읽어 최근 90초 MemAvailable 최소(64MiB 미만이면 중단)와 OOM 흔적(커널·docker·태스크 cgroup)을 본다.
+  - 기존 RDS: 기준 파일의 `rds_stop` 그대로, 지속 분까지 본다.
+  - 업무: 창 안에 실패한 업무 SFN을 본다.
+  - Airflow: 서비스 태스크가 교체됐는지 본다.
+- 기준을 넘거나, 한 감시가 3회 연속 실패하면(감시 상실) 종료 장치와 같은 절차를 바로 부른다(서비스 0 → 검증 태스크 중단 → 관측 기록 전송 → 호스트 0).
+- 심장박동은 검증 버킷 `watchdog/heartbeat.json`에 남는다(배치마다 지우는 `state/` 밖). 업무 스텝(shim)은 심장박동이 120초 넘게 묵었거나 중단이 선언됐으면 업무를 시작하지 않는다(exit 75). 감시가 죽으면 검증 부하도 멈춘다. 게이트는 `run.py watchdog`가 감시를 띄우기 전에 남기는 표지(`watchdog/required.json`)가 있을 때만 걸린다. 그래서 감시를 쓰지 않는 이전 기준(V·B1~B3)은 종전대로 돈다. `run.py batch`는 기준 파일이 감시를 요구하면 신선한 심장박동이 있어야 시작하고, 감시를 쓰지 않는 기준이면 남은 표지·심장박동을 지운 뒤 시작한다.
+- 로컬 검증: `verify/test_watchdog.py` 11건(data-pipeline 환경). 각 규칙을 지우면 실패하는 것을 확인했다. 호스트 조회 스크립트는 이전 회차의 실제 관측 기록에 Amazon Linux 2023 컨테이너로 돌려 값을 얻었다.
+
 **비용(추정).**
 - small 약 4.5시간(두 호스트 합) ≈ 0.09 USD, EBS·검증 Fargate(약 45개 × 1~3분)·이미지 pull·로그 ≈ 0.4 USD.
 - 합계 **약 0.5 USD**(상한 3). 정리 뒤 잔여는 앱 시크릿·ECR·로그 보관, 약 0.6 USD/월.
