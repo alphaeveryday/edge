@@ -62,7 +62,7 @@ def finalized(tmp_path):
                   "final_generation=1, lease_expires_at=NULL WHERE session_id=%s",
                   ("f" * 64, sid))
     h = SimpleNamespace(db=db, connect=connect, sid=sid, start=start, now=now, ledger=ledger,
-                        worker=worker, collector=collector)
+                        worker=worker, collector=collector, storage=LocalStorage(tmp_path))
     try:
         yield h
     finally:
@@ -141,7 +141,7 @@ def test_unknown_window_rejects_the_whole_reopen(finalized):
     assert (_session(h), _windows(h)) == before
 
 
-@pytest.mark.parametrize("phase", ["ACTIVE", "DRAINING", "DRAINED", "QC_RUNNING", "FAILED"])
+@pytest.mark.parametrize("phase", ["ACTIVE", "DRAINING", "DRAINED", "QC_RUNNING"])
 def test_only_finalized_sessions_are_reopened(finalized, phase):
     # 살아 있는 세션에 걸면 Worker 의 fence 를 뺏고, QC 중이면 판정과 다툰다
     from data_pipeline.minute.repository import SessionReopenRejected
@@ -150,7 +150,7 @@ def test_only_finalized_sessions_are_reopened(finalized, phase):
     with h.connect(h.db) as c:
         c.execute("UPDATE minute_ingestion_session SET phase=%s WHERE session_id=%s", (phase, h.sid))
     before = _windows(h)
-    with pytest.raises(SessionReopenRejected, match="FINALIZED"):
+    with pytest.raises(SessionReopenRejected, match="FINALIZED·FAILED"):
         h.ledger.reopen_session(session_id=h.sid, window_starts=None)
     assert _windows(h) == before
 
@@ -168,3 +168,50 @@ def test_non_price_sessions_are_rejected(finalized):
     with h.connect(h.db) as c:
         c.execute("UPDATE minute_ingestion_session SET dataset='price_minute' WHERE session_id=%s",
                   (h.sid,))
+
+
+def test_early_drain_keeps_reopened_windows_and_fails_qc_instead_of_sealing_missing(finalized):
+    """재수집 전에 drain 이 걸려도 옛 확정분을 MISSING 으로 봉인하지 않는다(리뷰 지적).
+
+    QC 는 "도래한 DUE = 누락"으로 MISSING 확정한다. 재오픈한 창도 DUE 라 구분이 없으면
+    옛 VALID 값이 있던 창이 결손으로 봉인되고 재청구 대상에서도 빠진다 — 데이터는 S3 에
+    남아 있는데 원장이 그걸 버린다. 원장은 generation ≥ 1 인 DUE 를 남기고 QC 가 세션을
+    FAILED 로 세운다. FAILED 는 다시 열려 마저 받을 수 있어야 한다.
+    """
+    from data_pipeline.minute.eod import SessionQc
+
+    h = finalized
+    h.ledger.reopen_session(session_id=h.sid, window_starts=None)
+    h.ledger.request_drain(session_id=h.sid, now=h.now)     # Worker 가 한 창도 안 받은 채
+    assert h.worker().tick(h.now + timedelta(hours=1)) == "DRAINED"
+    result = SessionQc(ledger=h.ledger, storage=h.storage).run(
+        session_id=h.sid, now=h.now + timedelta(hours=2))
+    assert result["phase"] == "FAILED" and result["missing_confirmed"] == 0
+    assert any("재오픈 뒤 다시 받지 못한 창 2건" in v for v in result["violations"])
+    assert [(r[1], r[2]) for r in _windows(h)] == [("DUE", 1), ("DUE", 1)]   # 옛 확정분 보존
+
+    # FAILED 를 다시 열어 끝까지 받으면 정상 경로로 돌아온다
+    assert h.ledger.reopen_session(session_id=h.sid, window_starts=None)["reopened_windows"] == 2
+    w = h.worker()
+    assert w.tick(h.now + timedelta(hours=3)) == "PROCESSED"
+    assert w.tick(h.now + timedelta(hours=3)) == "PROCESSED"
+    assert [r[1] for r in _windows(h)] == ["VALID", "VALID"]
+
+
+def test_never_committed_due_is_still_confirmed_missing(finalized):
+    # 위 가드가 진짜 누락(한 번도 커밋 안 된 창)까지 살려 두면 QC 가 모든 결손 날을 FAILED 로
+    # 세운다 — 가드는 generation 으로만 가른다
+    from data_pipeline.minute.eod import SessionQc
+
+    h = finalized
+    with h.connect(h.db) as c:
+        c.execute("UPDATE minute_ingestion_window SET data_status='DUE', generation=0, "
+                  "checksum=NULL, manifest_uri=NULL, manifest_checksum=NULL "
+                  "WHERE session_id=%s AND window_start=%s", (h.sid, h.start + timedelta(minutes=1)))
+        c.execute("DELETE FROM minute_window_artifact_commit WHERE session_id=%s AND window_start=%s",
+                  (h.sid, h.start + timedelta(minutes=1)))
+        c.execute("UPDATE minute_ingestion_session SET phase='DRAINED' WHERE session_id=%s", (h.sid,))
+    result = SessionQc(ledger=h.ledger, storage=h.storage).run(
+        session_id=h.sid, now=h.now + timedelta(hours=2))
+    assert result["missing_confirmed"] == 1
+    assert [r[1] for r in _windows(h)] == ["VALID", "MISSING"]

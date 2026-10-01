@@ -557,7 +557,7 @@ class MinuteLedger:
     def reopen_session(
         self, *, session_id: str, window_starts: Sequence[datetime] | None,
     ) -> dict:
-        """FINALIZED 가격 세션을 ACTIVE 로 되돌리고 지목한 창(None=전부)을 DUE 로 돌린다.
+        """FINALIZED(·FAILED) 가격 세션을 ACTIVE 로 되돌리고 지목한 창(None=전부)을 DUE 로 돌린다.
 
         확정된 하루가 틀린 봉으로 봉인됐을 때(ALPHA-1127 — 08-04~09-29) 다시 수집할 유일한
         문이다. 그 뒤는 기존 경로 그대로다: 지난 날짜 Worker 는 소급 TR 로 받고 outbox 를
@@ -568,8 +568,9 @@ class MinuteLedger:
         바뀐다. 거부 조건:
         - 가격 세션이 아니다 — 소급 TR 이 있는 것은 가격뿐이다(업종지수는 소급 불가,
           iNAV·뉴스는 경로가 다르다). 열어 두면 아무도 못 채우는 DUE 가 생긴다.
-        - FINALIZED 가 아니다 — 살아 있는 세션(ACTIVE·DRAINING)에 걸면 Worker 의 fence 를
-          뺏고, QC 중이면 판정과 다툰다. 확정된 하루만 연다.
+        - FINALIZED·FAILED 가 아니다 — 살아 있는 세션(ACTIVE·DRAINING)에 걸면 Worker 의
+          fence 를 뺏고, QC 중이면 판정과 다툰다. FAILED 를 여는 이유: 재수집 도중 drain 이
+          걸려 QC 가 "재오픈 미수집 창"으로 세운 세션을 다시 열어 마저 받아야 한다.
         - 지목한 창 중 원장에 없는 것이 있다 — 오타가 "일부만 열림"으로 조용히 접힌다.
 
         ⚠️ **fencing token 을 올린다** — 확정 전에 떠난 Worker 의 낡은 토큰으로 이 세션에
@@ -593,9 +594,9 @@ class MinuteLedger:
             if dataset != DATASET_PRICE_MINUTE:
                 raise SessionReopenRejected(
                     f"가격 세션만 연다(소급 수집 경로가 가격뿐이다): {session_id} 는 {dataset}")
-            if phase != "FINALIZED":
+            if phase not in ("FINALIZED", "FAILED"):
                 raise SessionReopenRejected(
-                    f"FINALIZED 세션만 연다: {session_id} 는 {phase}")
+                    f"FINALIZED·FAILED 세션만 연다: {session_id} 는 {phase}")
             starts = None if window_starts is None else sorted(set(window_starts))
             cur.execute(
                 """
@@ -691,6 +692,13 @@ class MinuteLedger:
         데인 비잠금 검사 = TOCTOU). 그래서 같은 트랜잭션에서 세션 행을 `FOR UPDATE` 로
         먼저 잠그고 대조한 뒤 쓴다. 이 쓰기는 되돌릴 수 없어 값이 비쌀 자격이 있다.
 
+        ⚠️ **generation = 0** — 한 번도 커밋되지 않은 창만 누락이다. generation ≥ 1 인 DUE 는
+        `reopen_session` 이 다시 연 확정분이고(그 밖에 커밋된 창이 DUE 로 돌아가는 경로는
+        없다 — claim 은 DUE·만료 CLAIMED 만 집고 커밋된 창은 종결 상태다), 재수집 전에 drain
+        이 걸리면 여기 남는다. 그걸 MISSING 으로 접으면 **옛 VALID 값이 있던 창이 결손으로
+        봉인**되고 재청구 대상에서도 빠진다(ALPHA-1135 리뷰). DUE 로 남겨 `_violations` 가
+        세션을 FAILED 로 세우게 한다 — FAILED 는 `reopen_session` 이 다시 연다.
+
         ⚠️ **scheduled_at ≤ now** — phase 만으로는 부족하다. 장중에 `request_drain` 이
         잘못 호출되면 Worker 가 새 claim 을 멈추고, CLAIMED 만 없으면 `ack_drain` 이
         DRAINED 를 만든다. 그 상태로 QC 를 돌리면 **아직 오지도 않은 분**까지 MISSING 으로
@@ -714,6 +722,7 @@ class MinuteLedger:
                 UPDATE minute_ingestion_window
                 SET data_status = 'MISSING', updated_at = now()
                 WHERE session_id = %s AND data_status = 'DUE' AND scheduled_at <= %s
+                  AND generation = 0
                 """,
                 (session_id, now),
             )

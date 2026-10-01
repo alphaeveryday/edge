@@ -147,8 +147,8 @@
 > 열거한 것은 이 예외를 모른다),
 > **세션 계획·drain·재오픈 CLI**(ALPHA-698 — `run plan-minute-session`·
 > `run drain-minute-session`, ALPHA-1135 — `run reopen-minute-session`: FINALIZED 가격 세션을
-> ACTIVE·창 DUE 로 되돌려 소급 재수집. 사유 필수, 가격 세션·FINALIZED 만, 지목 창 하나라도
-> 없으면 무변경. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
+> ACTIVE·창 DUE 로 되돌려 소급 재수집. 사유 필수, 가격 세션·FINALIZED/FAILED 만, 지목 창
+> 하나라도 없으면 무변경. QC 는 재오픈 뒤 못 받은 창을 MISSING 으로 접지 않고 FAILED 로 세운다. 체인의 **가운데가 비어 있었다**: EOD QC 조차 세션 행을 손으로
 > 넣어야 돌았다. 원장이 멱등·CAS 를 갖고 있어 얇은 배선이고, 판정은 여기 두지 않는다.
 > 재실행은 성공이다 — 재계획도 이미 걸린 drain 도 exit 0 이고, 무엇이 새로 생겼는지는
 > exit code 가 아니라 출력(`created`·`drain_requested`)이 말한다. ⚠️ `--dataset`·
@@ -2183,14 +2183,22 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #   ① 그 세션의 universe 를 찾는다 — Worker 는 원장의 `universe_version`·`universe_hash` 와
 #      다른 파일이면 처리를 거부한다. 원장 값은 `minute_ingestion_session` 에서, 후보 파일은
 #      `config/minute/universe.json.bak-*`(변경일 백업만 있다 — 해시로 대조).
-#   ② reopen — FINALIZED 가격 세션만 연다(그 밖은 exit 1). `--reason` 필수(옛 final_checksum
-#      과 함께 출력에 남는 것이 감사 근거). `--windows 1529` 처럼 창 시작 KST HHMM 으로 일부만
-#      열 수 있다(없으면 전부). 지목한 창 하나라도 없으면 아무것도 안 바뀐다.
-#   ③ price-worker 를 그 날짜로 — `DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2`(legacy
-#      세션에도 쓴다 — 옛 승자는 이력에 기록된다). 지난 날짜라 소급 TR·outbox 미발행이다.
-#      checksum 이 바뀐 창만 새 세대가 된다. `--max-ticks` 를 창 수보다 넉넉히(예: 450).
-#   ④ drain → ⑤ qc(다시 FINALIZED + 새 final_checksum) → ⑥ rollup(롤업 소유일만 —
-#      `WRITER_SINCE` 앞은 거부되고 그게 맞다).
+#   ② reopen — FINALIZED·FAILED 가격 세션만 연다(그 밖은 exit 1). `--reason` 필수(옛
+#      final_checksum 과 함께 출력에 남는 것이 감사 근거). `--windows 1529` 처럼 창 시작 KST
+#      HHMM 으로 일부만 열 수 있다(없으면 전부, 빈 값은 거부). 지목한 창 하나라도 없으면
+#      아무것도 안 바뀐다. session_id 는 원장 `minute_ingestion_session`(dataset·source_group·
+#      session_date)에서 읽는다.
+#   ③ price-worker 를 그 날짜로 **`--max-ticks` 없이** 띄운다 — DRAINED 를 볼 때까지 산다.
+#      `DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2`(legacy 세션에도 쓴다 — 옛 승자는 이력에
+#      기록된다). 지난 날짜라 소급 TR·outbox 미발행. checksum 이 바뀐 창만 새 세대가 된다.
+#   ④ 원장에서 그 세션의 `data_status IN ('DUE','CLAIMED')` 가 0 이 된 것을 확인하고
+#   ⑤ drain — **③의 Worker 가 살아 있을 때** 건다. drain 은 phase 만 바꾸고 DRAINED 로 넘기는
+#      ack 는 Worker 만 한다(Worker 를 먼저 끝내면 세션이 DRAINING 에 머물고 QC 가 거부한다).
+#      Worker 는 ack 뒤 스스로 끝난다(exit 0).
+#   ⑥ qc(다시 FINALIZED + 새 final_checksum) → ⑦ rollup(롤업 소유일만 — `WRITER_SINCE` 앞은
+#      거부되고 그게 맞다).
+#   ⚠️ ④ 전에 drain 이 걸려도 옛 확정분은 안 잃는다 — QC 는 재오픈 뒤 못 받은 창(generation
+#      ≥ 1 인 DUE)을 MISSING 으로 접지 않고 세션을 FAILED 로 세운다. 그때는 ②부터 다시.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run reopen-minute-session --session-id <session_id> \
     --reason "ALPHA-1135 라벨 오독 재수집"
@@ -2201,8 +2209,10 @@ DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2.1 \
 DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT=content_v2 \
 KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
   python -m data_pipeline.run price-worker --session-date 2026-09-29 \
-    --universe s3://edge-dev-pipeline-lake/config/minute/universe.json.bak-<그 세션의 파일> \
-    --max-ticks 450
+    --universe s3://edge-dev-pipeline-lake/config/minute/universe.json.bak-<그 세션의 파일> &
+# (④ 확인 뒤) 같은 Worker 가 살아 있는 동안
+DATA_PIPELINE_DB__PASSWORD=... \
+  python -m data_pipeline.run drain-minute-session --session-id <session_id>
 # 상주 가격 판정 Consumer(1분 파이프라인, ALPHA-711) — Price Job SQS 를 소비해 분봉
 # canonical 로 판정한다(LLM 0). 임계는 price_triggers 의 abs_threshold(발화)·
 # revert_threshold(회수) 재사용(섹션 필수), --universe 는 planner·worker 와 같은

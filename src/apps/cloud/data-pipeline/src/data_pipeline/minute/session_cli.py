@@ -199,9 +199,10 @@ def reopen_session_cli(settings, *, session_id: str | None, windows: str | None,
                        reason: str | None) -> int:
     """`run reopen-minute-session --session-id <id> --reason <사유> [--windows HHMM,...]`.
 
-    확정된 가격 세션을 다시 수집할 수 있게 연다(ALPHA-1135). 연 뒤의 순서(런북):
-    `price-worker --session-date D --universe <그 세션의 universe>` → `drain-minute-session`
-    → `qc-minute-session` → `rollup-minute-session`. 지난 날짜 Worker 는 소급 TR 로 받고
+    확정된 가격 세션을 다시 수집할 수 있게 연다(ALPHA-1135). 연 뒤의 순서(런북): `price-worker
+    --session-date D --universe <그 세션의 universe>`(max-ticks 없이 — DRAINED 까지 산다) →
+    남은 DUE 0 확인 → `drain-minute-session`(살아 있는 Worker 가 ack 하고 끝난다) →
+    `qc-minute-session` → `rollup-minute-session`. 지난 날짜 Worker 는 소급 TR 로 받고
     트리거를 내지 않는다.
 
     `--windows` 는 KST `HHMM`(창 **시작**, canonical 경로의 `window=HHMM` 과 같은 축) 목록이다.
@@ -224,7 +225,9 @@ def reopen_session_cli(settings, *, session_id: str | None, windows: str | None,
             logger.error("없는 세션이다 — 지목이 틀렸다: %s", session_id)
             return 2
         starts = None
-        if windows:
+        # `if windows:` 로 거르면 빈 문자열(자동화의 빈 변수)이 "전부 열기"로 확대된다 —
+        # 창 하나 재수집이 하루 전체 재수집이 된다. None 만 전부다.
+        if windows is not None:
             day = snapshot["session_date"]
             starts = []
             for hhmm in (w.strip() for w in windows.split(",")):

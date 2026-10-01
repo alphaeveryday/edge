@@ -482,7 +482,8 @@ class TestReopen:
                                   reason=reason) == 2
         assert ledger.calls == []
 
-    @pytest.mark.parametrize("windows", ["930", "15:29", "1529,abcd"])
+    # 빈 문자열은 자동화의 빈 변수다 — "전부 열기"로 확대되면 창 하나가 하루 전체가 된다
+    @pytest.mark.parametrize("windows", ["930", "15:29", "1529,abcd", "", " "])
     def test_malformed_windows_open_nothing(self, monkeypatch, windows):
         from data_pipeline.minute.session_cli import reopen_session_cli
         ledger = self._install(monkeypatch)
