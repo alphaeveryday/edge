@@ -1,11 +1,13 @@
 import { View } from 'react-native';
 import Svg, { Circle, Ellipse, G, Path, Rect } from 'react-native-svg';
 
-type Kind = 'chip' | 'yield' | 'bond' | 'defense' | 'bio' | 'green' | 'commodity' | 'equity' | 'etc';
+type Kind = 'chip' | 'bank' | 'game' | 'yield' | 'bond' | 'defense' | 'bio' | 'green' | 'commodity' | 'equity' | 'etc';
 
 export function sectorKind(theme: string): Kind {
   const t = theme;
-  if (/반도체|AI|소프트|로봇|테크/.test(t)) return 'chip';
+  if (/반도체|AI|IT|소프트|로봇|테크/.test(t)) return 'chip';
+  if (/은행|금융|증권|보험/.test(t)) return 'bank';
+  if (/게임|엔터/.test(t)) return 'game';
   if (/배당|인프라|리츠/.test(t)) return 'yield';
   if (/채권|금리/.test(t)) return 'bond';
   if (/방산|국방/.test(t)) return 'defense';
@@ -29,6 +31,24 @@ function Glyph({ kind, bg }: { kind: Kind; bg: string }) {
           {[8.25, 11.1, 13.95].map((y) => <Rect key={'r' + y} x={18.8} y={y} width={3.6} height={1.8} rx={0.9} fill={W} />)}
           <Rect x={4.6} y={4.6} width={14.8} height={14.8} rx={3.6} fill={W} />
           <Rect x={8.9} y={8.9} width={6.2} height={6.2} rx={1.7} fill={bg} />
+        </G>
+      );
+    case 'bank':
+      return (
+        <G>
+          <Path d="M12 2.4l9.2 4.6v1.9H2.8V7z" fill={W} />
+          {[4.2, 8.6, 12.8, 17.2].map((x) => <Rect key={x} x={x} y={10.4} width={2.6} height={6.8} rx={0.8} fill={W} />)}
+          <Rect x={2.8} y={18.4} width={18.4} height={2.8} rx={1} fill={W} />
+        </G>
+      );
+    case 'game':
+      return (
+        <G>
+          <Rect x={2.2} y={6.2} width={19.6} height={11.8} rx={5.9} fill={W} />
+          <Rect x={5.6} y={11.2} width={5.2} height={1.8} rx={0.9} fill={bg} />
+          <Rect x={7.3} y={9.5} width={1.8} height={5.2} rx={0.9} fill={bg} />
+          <Circle cx={15.9} cy={10.7} r={1.3} fill={bg} />
+          <Circle cx={18} cy={13.4} r={1.3} fill={bg} />
         </G>
       );
     case 'yield':
