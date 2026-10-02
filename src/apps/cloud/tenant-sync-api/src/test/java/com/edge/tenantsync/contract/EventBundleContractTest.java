@@ -54,9 +54,12 @@ class EventBundleContractTest {
 		assertThat(schema.validate(json, InputFormat.JSON)).isEmpty();
 		var items = mapper.readTree(json).path("entries").get(0).path("evidences");
 		assertThat(items.get(0).path("news_id").asText()).isEqualTo("news-1");
+		assertThat(items.get(0).path("tool_run_id").asText()).isEqualTo("news-run-1");
+		assertThat(items.get(0).path("item_ids")).isEqualTo(mapper.readTree("[\"item-1\"]"));
 		assertThat(items.get(0).has("arguments")).isFalse();
 		var actual = items.get(1);
 		assertThat(actual.path("kind").asText()).isEqualTo("CALCULATION");
+		assertThat(actual.path("tool_run_id").asText()).isEqualTo("calc-1");
 		assertThat(actual.path("arguments")).isEqualTo(arguments);
 		assertThat(actual.path("output")).isEqualTo(output);
 		assertThat(actual.path("formula_latex").asText()).isEqualTo(calculation.formulaLatex());
