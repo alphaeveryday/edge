@@ -1,0 +1,343 @@
+{
+  "Comment": "전망 배치 — ETF마다 기존 단건 워크플로를 한 번에 하나씩 실행한다. 계약: tests/loadtest/analysis-v2/README.md",
+  "StartAt": "Defaults",
+  "TimeoutSeconds": 28800,
+  "States": {
+    "Defaults": {
+      "Type": "Pass",
+      "Result": ${defaults_json},
+      "ResultPath": "$.defaults",
+      "Next": "Merge"
+    },
+    "Merge": {
+      "Type": "Pass",
+      "Parameters": { "batch.$": "States.JsonMerge($.defaults, $, false)" },
+      "OutputPath": "$.batch",
+      "Next": "CheckInput"
+    },
+    "CheckInput": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.analysis_at", "IsPresent": true },
+            { "Variable": "$.analysis_at", "IsTimestamp": true },
+            { "Variable": "$.analysis_at", "StringMatches": "*Z" },
+            { "Not": { "Variable": "$.analysis_at", "StringMatches": "*.*" } },
+            { "Variable": "$.etf_codes[0]", "IsPresent": true },
+            { "Variable": "$.max_attempts", "NumericGreaterThanEquals": 1 }
+          ],
+          "Next": "HasDeadline"
+        }
+      ],
+      "Default": "InvalidInput"
+    },
+    "InvalidInput": {
+      "Type": "Fail",
+      "Error": "OutlookBatch.InvalidInput",
+      "Cause": "analysis_at 은 소수 초 없이 Z 로 끝나는 UTC 시각(분석 ID 가 이 문자열에서 나온다), etf_codes 는 비어 있지 않은 목록, max_attempts 는 1 이상의 수, deadline 은 주면 시각이어야 한다"
+    },
+    "HasDeadline": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [{ "Variable": "$.deadline", "IsPresent": true }, { "Variable": "$.deadline", "IsTimestamp": true }],
+          "Next": "GivenDeadline"
+        },
+        { "Variable": "$.deadline", "IsPresent": true, "Next": "InvalidInput" }
+      ],
+      "Default": "DeriveDeadline"
+    },
+    "GivenDeadline": {
+      "Type": "Pass",
+      "Parameters": { "deadline.$": "$.deadline" },
+      "ResultPath": "$.limits",
+      "Next": "RunItems"
+    },
+    "DeriveDeadline": {
+      "Type": "Pass",
+      "Parameters": {
+        "deadline.$": "States.Format('{}T${deadline_utc}', States.ArrayGetItem(States.StringSplit($.analysis_at, 'T'), 0))"
+      },
+      "ResultPath": "$.limits",
+      "Next": "RunItems"
+    },
+    "RunItems": {
+      "Type": "Map",
+      "ItemsPath": "$.etf_codes",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "etf_code.$": "$$.Map.Item.Value",
+        "analysis_at.$": "$.analysis_at",
+        "deadline.$": "$.limits.deadline",
+        "max_attempts.$": "$.max_attempts",
+        "attempt": 0
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "Identify",
+        "States": {
+          "Identify": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "analysis_at.$": "$.analysis_at",
+              "deadline.$": "$.deadline",
+              "max_attempts.$": "$.max_attempts",
+              "attempt.$": "$.attempt",
+              "ran": false,
+              "analysis_id.$": "States.Hash(States.Format('outlook:{}:{}:{}', $.etf_code, $.analysis_at, $.attempt), 'MD5')"
+            },
+            "Next": "ReadStatus"
+          },
+          "ReadStatus": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::apigateway:invoke",
+            "Parameters": {
+              "ApiEndpoint": "${api_endpoint}",
+              "Method": "GET",
+              "Path.$": "States.Format('/v2/analyses/outlook/{}', $.analysis_id)",
+              "AuthType": "IAM_ROLE"
+            },
+            "ResultSelector": { "value.$": "$.ResponseBody.status" },
+            "ResultPath": "$.status",
+            "Retry": [
+              {
+                "ErrorEquals": ["ApiGateway.429", "ApiGateway.500", "ApiGateway.502", "ApiGateway.503", "ApiGateway.504"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 4,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              { "ErrorEquals": ["ApiGateway.404"], "ResultPath": "$.status_error", "Next": "Unstarted" },
+              { "ErrorEquals": ["States.ALL"], "ResultPath": "$.status_error", "Next": "Unknown" }
+            ],
+            "Next": "Route"
+          },
+          "Route": {
+            "Type": "Choice",
+            "Choices": [
+              { "Variable": "$.status.value", "StringEquals": "completed", "Next": "ReadPublication" },
+              { "Variable": "$.status.value", "StringEquals": "failed", "Next": "NextAttempt" },
+              { "Variable": "$.status.value", "StringEquals": "queued", "Next": "StillRunning" },
+              { "Variable": "$.status.value", "StringEquals": "running", "Next": "StillRunning" }
+            ],
+            "Default": "Unknown"
+          },
+          "Unstarted": {
+            "Type": "Choice",
+            "Choices": [
+              { "Not": { "Variable": "$.status_error.Cause", "StringMatches": "*Analysis not found*" }, "Next": "Unknown" },
+              { "Variable": "$.ran", "BooleanEquals": true, "Next": "NextAttempt" }
+            ],
+            "Default": "Gate"
+          },
+          "Gate": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:sfn:listExecutions",
+            "Parameters": {
+              "StateMachineArn": "${analysis_state_machine_arn}",
+              "StatusFilter": "RUNNING",
+              "MaxResults": 1
+            },
+            "ResultSelector": { "busy.$": "States.ArrayLength($.Executions)" },
+            "ResultPath": "$.gate",
+            "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 3, "BackoffRate": 2 }],
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.status_error", "Next": "Unknown" }],
+            "Next": "GateOpen"
+          },
+          "GateOpen": {
+            "Type": "Choice",
+            "Choices": [{ "Variable": "$.gate.busy", "NumericGreaterThan": 0, "Next": "StillTimeToWait" }],
+            "Default": "StillTimeToRun"
+          },
+          "StillTimeToWait": {
+            "Type": "Choice",
+            "Choices": [
+              { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
+            ],
+            "Default": "WaitForSlot"
+          },
+          "WaitForSlot": { "Type": "Wait", "Seconds": 30, "Next": "ReadStatus" },
+          "StillTimeToRun": {
+            "Type": "Choice",
+            "Choices": [
+              { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
+            ],
+            "Default": "Run"
+          },
+          "Run": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::states:startExecution.sync:2",
+            "Parameters": {
+              "StateMachineArn": "${analysis_state_machine_arn}",
+              "Name.$": "$.analysis_id",
+              "Input": {
+                "analysis_id.$": "$.analysis_id",
+                "kind": "outlook",
+                "etf_code.$": "$.etf_code",
+                "analysis_at.$": "$.analysis_at"
+              }
+            },
+            "TimeoutSeconds": 1500,
+            "ResultPath": null,
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.run_error", "Next": "MarkRan" }],
+            "Next": "MarkRan"
+          },
+          "MarkRan": { "Type": "Pass", "Result": true, "ResultPath": "$.ran", "Next": "ReadStatus" },
+          "StillRunning": {
+            "Type": "Choice",
+            "Choices": [
+              { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
+            ],
+            "Default": "WaitForOther"
+          },
+          "WaitForOther": { "Type": "Wait", "Seconds": 30, "Next": "ReadStatus" },
+          "NextAttempt": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "analysis_at.$": "$.analysis_at",
+              "deadline.$": "$.deadline",
+              "max_attempts.$": "$.max_attempts",
+              "attempt.$": "States.MathAdd($.attempt, 1)",
+              "analysis_id.$": "$.analysis_id"
+            },
+            "Next": "MoreAttempts"
+          },
+          "MoreAttempts": {
+            "Type": "Choice",
+            "Choices": [{ "Variable": "$.attempt", "NumericLessThanPath": "$.max_attempts", "Next": "Identify" }],
+            "Default": "Failed"
+          },
+          "ReadPublication": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::apigateway:invoke",
+            "Parameters": {
+              "ApiEndpoint": "${api_endpoint}",
+              "Method": "GET",
+              "Path.$": "States.Format('/v2/analyses/outlook/{}/screens/summary', $.analysis_id)",
+              "AuthType": "IAM_ROLE"
+            },
+            "ResultSelector": { "published_at.$": "$.ResponseBody.publication.published_at" },
+            "ResultPath": "$.publication",
+            "Retry": [
+              {
+                "ErrorEquals": ["ApiGateway.429", "ApiGateway.500", "ApiGateway.502", "ApiGateway.503", "ApiGateway.504"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 4,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.status_error", "Next": "Unknown" }],
+            "Next": "OnTime"
+          },
+          "OnTime": {
+            "Type": "Choice",
+            "Choices": [
+              { "Not": { "Variable": "$.publication.published_at", "IsTimestamp": true }, "Next": "Unknown" },
+              { "Variable": "$.publication.published_at", "TimestampGreaterThanPath": "$.deadline", "Next": "Late" }
+            ],
+            "Default": "Completed"
+          },
+          "Completed": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "outcome": "completed",
+              "analysis_id.$": "$.analysis_id",
+              "attempt.$": "$.attempt",
+              "published_at.$": "$.publication.published_at"
+            },
+            "End": true
+          },
+          "Late": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "outcome": "late",
+              "analysis_id.$": "$.analysis_id",
+              "attempt.$": "$.attempt",
+              "published_at.$": "$.publication.published_at"
+            },
+            "End": true
+          },
+          "Failed": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "outcome": "failed",
+              "last_analysis_id.$": "$.analysis_id",
+              "attempts.$": "$.attempt"
+            },
+            "End": true
+          },
+          "DeadlineExceeded": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "outcome": "deadline_exceeded",
+              "analysis_id.$": "$.analysis_id",
+              "attempt.$": "$.attempt"
+            },
+            "End": true
+          },
+          "Unknown": {
+            "Type": "Pass",
+            "Parameters": {
+              "etf_code.$": "$.etf_code",
+              "outcome": "unknown",
+              "analysis_id.$": "$.analysis_id",
+              "attempt.$": "$.attempt"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.items",
+      "Next": "Summarize"
+    },
+    "Summarize": {
+      "Type": "Pass",
+      "Parameters": {
+        "analysis_at.$": "$.analysis_at",
+        "deadline.$": "$.limits.deadline",
+        "total.$": "States.ArrayLength($.items)",
+        "completed.$": "States.ArrayLength($.items[?(@.outcome=='completed')])",
+        "late.$": "States.ArrayLength($.items[?(@.outcome=='late')])",
+        "failed.$": "States.ArrayLength($.items[?(@.outcome=='failed')])",
+        "deadline_exceeded.$": "States.ArrayLength($.items[?(@.outcome=='deadline_exceeded')])",
+        "unknown.$": "States.ArrayLength($.items[?(@.outcome=='unknown')])",
+        "unfinished.$": "$.items[?(@.outcome!='completed')]"
+      },
+      "ResultPath": "$.summary",
+      "Next": "Verdict"
+    },
+    "Verdict": {
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.summary.completed", "NumericEqualsPath": "$.summary.total", "Next": "Done" },
+        {
+          "Or": [
+            { "Variable": "$.summary.late", "NumericGreaterThan": 0 },
+            { "Variable": "$.summary.deadline_exceeded", "NumericGreaterThan": 0 }
+          ],
+          "Next": "MissedDeadline"
+        }
+      ],
+      "Default": "Incomplete"
+    },
+    "Done": { "Type": "Succeed" },
+    "MissedDeadline": {
+      "Type": "Fail",
+      "Error": "OutlookBatch.DeadlineExceeded",
+      "CausePath": "States.JsonToString($.summary)"
+    },
+    "Incomplete": {
+      "Type": "Fail",
+      "Error": "OutlookBatch.Incomplete",
+      "CausePath": "States.JsonToString($.summary)"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+    "executionArn": "arn:aws:states:ap-northeast-2:393229433969:execution:edge-dev-analysis-v2:e2cb4139c31a4a0e9c6088b87bd11e85",
+    "stateMachineArn": "arn:aws:states:ap-northeast-2:393229433969:stateMachine:edge-dev-analysis-v2",
+    "name": "e2cb4139c31a4a0e9c6088b87bd11e85",
+    "status": "SUCCEEDED",
+    "startDate": "2026-10-01T01:22:25.990000+09:00",
+    "stopDate": "2026-10-01T01:25:15.649000+09:00",
+    "input": "{\n  \"analysis_id\": \"e2cb4139c31a4a0e9c6088b87bd11e85\",\n  \"kind\": \"movement\",\n  \"etf_code\": \"091160\",\n  \"analysis_at\": \"2026-09-29T12:02:24.705987+09:00\"\n}",
+    "inputDetails": {
+        "included": true
+    },
+    "output": "{\"analysis_id\":\"e2cb4139c31a4a0e9c6088b87bd11e85\",\"kind\":\"movement\",\"etf_code\":\"091160\",\"analysis_at\":\"2026-09-29T12:02:24.705987+09:00\",\"task\":{\"Attachments\":[{\"Details\":[{\"Name\":\"subnetId\",\"Value\":\"subnet-02a38e78bca30275b\"},{\"Name\":\"networkInterfaceId\",\"Value\":\"eni-0516f9c3c42e92470\"},{\"Name\":\"macAddress\",\"Value\":\"02:ff:ff:81:6f:d9\"},{\"Name\":\"privateDnsName\",\"Value\":\"ip-10-0-100-236.ap-northeast-2.compute.internal\"},{\"Name\":\"privateIPv4Address\",\"Value\":\"10.0.100.236\"}],\"Id\":\"6901d6eb-6445-455b-acc6-5e48ce49fa1b\",\"Status\":\"DELETED\",\"Type\":\"eni\"}],\"Attributes\":[{\"Name\":\"ecs.cpu-architecture\",\"Value\":\"x86_64\"}],\"AvailabilityZone\":\"ap-northeast-2a\",\"ClusterArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:cluster/edge-dev-worker\",\"Connectivity\":\"CONNECTED\",\"ConnectivityAt\":1790785356737,\"Containers\":[{\"ContainerArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:container/edge-dev-worker/5c26284a0eb34fafa9ebfbfd64f02094/9d597e28-3525-432f-90b8-957f6c3963e8\",\"Cpu\":\"0\",\"ExitCode\":0,\"GpuIds\":[],\"Image\":\"393229433969.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-1039dfa540452ff04de9298b380f1dd100776def\",\"ImageDigest\":\"sha256:e21efab92a773a667956eacdcbaab557247b1b4c0148fddf90fc5ec6b43ec9bc\",\"LastStatus\":\"STOPPED\",\"ManagedAgents\":[],\"Name\":\"analysis-v2\",\"NetworkBindings\":[],\"NetworkInterfaces\":[{\"AttachmentId\":\"6901d6eb-6445-455b-acc6-5e48ce49fa1b\",\"PrivateIpv4Address\":\"10.0.100.236\"}],\"RuntimeId\":\"5c26284a0eb34fafa9ebfbfd64f02094-2512570994\",\"TaskArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:task/edge-dev-worker/5c26284a0eb34fafa9ebfbfd64f02094\"}],\"Cpu\":\"1024\",\"CreatedAt\":1790785346721,\"DesiredStatus\":\"STOPPED\",\"EnableExecuteCommand\":false,\"EphemeralStorage\":{\"SizeInGiB\":20},\"ExecutionStoppedAt\":1790785487708,\"Group\":\"family:edge-dev-analysis-v2\",\"InferenceAccelerators\":[],\"LastStatus\":\"STOPPED\",\"LaunchType\":\"FARGATE\",\"Memory\":\"2048\",\"Overrides\":{\"ContainerOverrides\":[{\"Command\":[],\"Environment\":[{\"Name\":\"ANALYSIS_REQUEST\",\"Value\":\"{\\\"analysis_id\\\":\\\"e2cb4139c31a4a0e9c6088b87bd11e85\\\",\\\"kind\\\":\\\"movement\\\",\\\"etf_code\\\":\\\"091160\\\",\\\"analysis_at\\\":\\\"2026-09-29T12:02:24.705987+09:00\\\"}\"}],\"EnvironmentFiles\":[],\"Name\":\"analysis-v2\",\"ResourceRequirements\":[]}],\"InferenceAcceleratorOverrides\":[]},\"PlatformVersion\":\"1.4.0\",\"PullStartedAt\":1790785366372,\"PullStoppedAt\":1790785373140,\"StartedAt\":1790785374623,\"StartedBy\":\"AWS Step Functions\",\"StopCode\":\"EssentialContainerExited\",\"StoppedAt\":1790785514434,\"StoppedReason\":\"Essential container in task exited\",\"StoppingAt\":1790785497741,\"Tags\":[],\"TaskArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:task/edge-dev-worker/5c26284a0eb34fafa9ebfbfd64f02094\",\"TaskDefinitionArn\":\"arn:aws:ecs:ap-northeast-2:393229433969:task-definition/edge-dev-analysis-v2:2\",\"Version\":5}}",
+    "outputDetails": {
+        "included": true
+    },
+    "redriveCount": 0,
+    "redriveStatus": "NOT_REDRIVABLE",
+    "redriveStatusReason": "Execution is SUCCEEDED and cannot be redriven"
+}

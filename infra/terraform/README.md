@@ -25,6 +25,7 @@ infra/terraform/
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
+    ├── analysis-v2/        # 분석엔진 v2: 단건 워크플로(Fargate)·조회 API(Lambda + HTTP API)·전망 배치 워크플로와 스케줄(outlook_batch.tf, ALPHA-1142)
     ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 운영 중단 경보(stop.tf)·관리 태스크(dbadmin), 격리 검증 자원) — ALPHA-1119. 메타DB 는 별도 인스턴스가 아니라 기존 업무 RDS(`modules/rds`, `edge-dev`) 안의 DB `airflow`·역할 `airflow_meta`(관리 태스크가 만든다)
     ├── data-pipeline/      # Step Functions 배치 4종 — 시장 + 뉴스 + 공시(rollback-only) + 장중 수급 — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
@@ -110,6 +111,8 @@ cd ../envs/dev  && terraform apply
 > **Reconciler(`edge-dev-data-pipeline-reconcile`)도 ENABLED**다. ops catalog는 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중 수급 3)이다. 주말 전환이 만드는 활성화 전 슬롯 경보는 첫 정상 배치 뒤 [공시 전환 절차](../../src/apps/cloud/data-pipeline/README.md)에 따라 해당 이슈만 정리한다. 수동 슬롯은 `OPS_RUN_KEY`를 명시해 reconcile한다.
 >
 > **1분 세션 스케줄 3개**는 평일 start 07:45, stop 16:10, 업종지수 rollup 16:00 KST다. start는 가격·뉴스·공시·iNAV·업종지수 세션을 계획하고 세션 결속 서비스 9종을 올린다. 공시 격자는 universe와 무관하게 09:00–15:30이며 종료까지 복구 여유 40분을 둔다. 가격 시간외 선언이 추가되면 종료 시각을 재검토한다. `analysis-consumer`는 이 목록 밖에서 SQS 잔여 기반 오토스케일링이 소유한다. stop은 phase DRAINED, 게이트 큐 0, outbox NEW 0을 연속 확인한 뒤 QC와 scale-down을 수행한다. ECS Task State Change rule은 start/stop 컨테이너의 비0 종료를 alarm SNS로 전달한다.
+>
+> **전망 배치 스케줄(`edge-dev-analysis-v2-outlook-batch`)은 DISABLED**로 만든다(ALPHA-1142). 37종 전체 실행을 실측한 뒤 시작 시각을 정해 켠다. 대상 ETF는 `sources.toml`의 `[krx_etf.source.etf_map]`을 plan 때 읽으므로, 이 파일이 바뀌어도 terraform-plan·apply가 돈다. 계약과 한계는 [측정 기록](../../tests/loadtest/analysis-v2/README.md)에 있다.
 >
 > ⚠️ **`kr_holidays`(envs/dev/main.tf)는 해마다 손으로 갱신해야 한다** — 거래소 캘린더 연동 전까지의 수동 주입 지점(ALPHA-387). 주말만 코드가 안다. 비면 **다섯 곳**이 함께 퇴화한다: Planner 가 평일 휴장일에 런을 계획하고, KRX 수집이 직전 거래일 PDF 를 휴장일 as-of 로 오라벨하며, **KIS iNAV 가드(ALPHA-557)가 그날을 거래일로 보고 직전 거래일 값을 오늘 것으로 적재**하고, **KIS 투자자 수집(ALPHA-562)이 그날을 거래일로 보고 풀리지 않을 OPSQ2001 블랙아웃을 심볼마다 75초씩 기다린다**(유니버스 전체면 ~10시간). **1분 세션 start(ALPHA-712)도 그날을 거래일로 보고 세션(가격·뉴스·iNAV)을 만들고 상주 서비스를 올린다** — window 는 전건 빈 캔들로 남는다. `planner`·`krx`·`kis`·`minute-session` task-def 가 같은 `OPS_KR_HOLIDAYS` 를 받는다.
 >

@@ -1,0 +1,34 @@
+# v2 용량·재시도 실험 전용 격리 PostgreSQL. 데이터는 tmpfs(컨테이너 삭제 시 소멸).
+# dev RDS(db.t4g.small 2GiB, PG 16.13) 실측 설정을 본뜬다: max_connections=181, shared_buffers=52845×8kB≈413MB.
+# EDGE_REPO 는 edge 저장소 루트(마이그레이션 원본, 읽기 전용 마운트).
+services:
+  postgres:
+    image: postgres:16
+    command: ["postgres", "-c", "max_connections=181", "-c", "shared_buffers=413MB"]
+    environment:
+      POSTGRES_DB: analysis_v2
+      POSTGRES_USER: v2_local
+      POSTGRES_PASSWORD: local_only
+    ports:
+      - "127.0.0.1:55461:5432"
+    mem_limit: 2g
+    cpus: 2
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U v2_local -d analysis_v2"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  flyway:
+    image: flyway/flyway:10.21.0
+    profiles: ["migration"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/analysis_v2
+      FLYWAY_USER: v2_local
+      FLYWAY_PASSWORD: local_only
+    volumes:
+      - ${EDGE_REPO}/src/libs/schema/migrations-cloud:/flyway/sql:ro
