@@ -1,5 +1,6 @@
 """Agent data tables preserve facts without repeating subject metadata."""
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -54,3 +55,33 @@ def test_macro_initial_input_and_tool_return_have_identical_table_contract():
         assert body['columns'] == ['at', 'value', 'available_at'] + (['reference_period'] if series == 'kr_cpi_yoy' else [])
     definition = next(d for d in tools.definitions if d['function_name'] == 'get_macro_observations')
     assert definition['version'] == 'v3'
+
+
+def test_large_etf_preview_fits_context_without_losing_constituents_or_calculation_history():
+    fixture = build_demo_fixture()
+    stock = fixture['holdings'][0]['instrument_id']
+    prices = [r for r in fixture['prices'] if r['instrument_id'] == stock]
+    flows = [r for r in fixture['flow'] if r['instrument_id'] == stock]
+    etf = fixture['context']['etf_code']
+    fixture['prices'] = [r for r in fixture['prices'] if r['instrument_id'] == etf]
+    fixture['flow'] = []
+    holding = fixture['holdings'][0]
+    fixture['holdings'] = []
+    for i in range(201):
+        identity = f'STOCK_{i:03}'
+        fixture['holdings'].append(dict(holding, instrument_id=identity, weight=0.2 if i == 200 else 0.004))
+        fixture['prices'].extend(dict(r, instrument_id=identity) for r in prices)
+        fixture['flow'].extend(dict(r, instrument_id=identity) for r in flows)
+    tools = FixtureTools(fixture)
+    arguments = {'instrument_id': 'STOCK_200', 'factors': ['chart', 'flow']}
+    before = tools.call('get_instrument_factors', arguments)['result']
+    payload = tools.initial_input()
+    assert len(json.dumps(payload)) < 200_000, 'Initial history must not consume the model context before research starts'
+    assert len(payload['holdings']['holdings']) == 201
+    assert len(payload['prices']) == 202 and len(payload['flow']) == 201
+    assert len(payload['prices'][etf]['rows']) == 40
+    assert payload['prices']['STOCK_200']['rows'][-1][0] == prices[-1]['date']
+    assert payload['flow']['STOCK_200']['rows'][-1][0] == flows[-1]['date']
+    assert payload['history_preview']['truncated'] == ['prices', 'flow']
+    assert tools.call('get_instrument_factors', arguments)['result'] == before
+    assert tools.fixture['prices'] == fixture['prices'] and tools.fixture['flow'] == fixture['flow']
