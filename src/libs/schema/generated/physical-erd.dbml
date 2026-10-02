@@ -1159,6 +1159,9 @@ Table "price_daily" {
   "price_basis" varchar(30)
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
+  "open_price" numeric(24,8)
+  "high_price" numeric(24,8)
+  "low_price" numeric(24,8)
 
   indexes {
     ("instrument_id", "trade_date") [pk]
