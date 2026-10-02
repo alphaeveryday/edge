@@ -90,10 +90,9 @@ def harness(tmp_path, monkeypatch):
     def fake_connect(config):
         yield conn
 
-    def fake_apply(cur, rows, *, data_version, price_basis, dry_run, storage, snapshot_key):
+    def fake_apply(cur, rows, *, data_version, price_basis, dry_run, storage, run_id):
         chunks.append({"rows": list(rows), "data_version": data_version,
-                       "price_basis": price_basis, "dry_run": dry_run,
-                       "snapshot_key": snapshot_key})
+                       "price_basis": price_basis, "dry_run": dry_run, "run_id": run_id})
         return {"new": len(rows), "replaced": 0, "rewritten": 0, "kept": 0}
 
     monkeypatch.setattr(step, "connect", fake_connect)
@@ -140,8 +139,8 @@ def test_항목_값이_제_컬럼으로_실린다(harness):
     [chunk] = chunks
     assert chunk["rows"] == [
         # instrument_id, trade_date, open, high, low, close, adj_close, volume
-        ("inst_samsung", "2026-07-30", "101", "201", "301", "401", "501", 601),
-        ("inst_hynix", "2026-07-30", "102", "202", "302", "402", "502", 602),
+        ("inst_samsung", "2026-07-30", 101, 201, 301, 401, 501, 601),
+        ("inst_hynix", "2026-07-30", 102, 202, 302, 402, 502, 602),
     ]
     assert chunk["data_version"] == "dataguide-20260802"
     assert chunk["price_basis"] == "raw_close;adj_asof=2026-08-02"
@@ -194,12 +193,22 @@ def test_종가_없이_다른_값만_있는_칸은_세고_부분_성공으로_�
     ("open_price", "0", "bad_open_price"),
     ("low_price", "-5", "bad_low_price"),
     ("adjusted_close_price", "nan", "bad_adjusted_close_price"),
+    ("high_price", "inf", "bad_high_price"),
+    ("high_price", "abc", "bad_high_price"),
+    ("close_price", "1e16", "bad_close_price"),           # NUMERIC(24,8) 정수부 16자리 초과
+    ("close_price", "1e-10", "bad_close_price"),          # 8자리로 줄이면 0 — 양수 CHECK 위반
+    ("open_price", "100.123456789", "bad_open_price"),    # 소수 9자리 — 넣으면 값이 바뀐다
     ("volume", "-1", "bad_volume"),
     ("volume", "10.5", "bad_volume"),
+    ("volume", "inf", "bad_volume"),                      # float 변환이면 OverflowError 로 런이 죽는다
+    ("volume", "1e309", "bad_volume"),
+    ("volume", "9223372036854775808", "bad_volume"),      # BIGINT 상한 + 1
 ])
 def test_CHECK_위반_값은_격리하고_나머지는_싣는다(harness, column, value, reason):
-    # WHY: 위반 행 하나가 임시 표에 올라가면 INSERT 가 CHECK 로 묶음 13만 행을 통째로 죽인다.
-    #      미리 빼고 사유와 함께 세야 나머지가 실린다. 거래량은 BIGINT 라 소수도 위반이다.
+    # WHY: 위반 행 하나가 임시 표에 올라가면 INSERT 가 묶음 13만 행을 통째로 죽이고, 변환에서
+    #      예외가 나면 런 전체가 멈춘다. 미리 빼고 사유와 함께 세야 나머지가 실린다. 판정 기준은
+    #      float 근사가 아니라 DB 컬럼 형(NUMERIC(24,8)·BIGINT)이다 — dry_run 은 최종 INSERT 를
+    #      하지 않으므로 여기서 못 거르면 실제 적재에서야 터진다.
     storage, _conn, chunks = harness
     _write_all(storage, ["2026-07-30"], override={(column, "2026-07-30", 2): value})
 
@@ -213,6 +222,28 @@ def test_CHECK_위반_값은_격리하고_나머지는_싣는다(harness, column
     assert log["ops"]["failed_records"] == 1
 
 
+@pytest.mark.parametrize("column,value,expected", [
+    ("volume", "9007199254740993", 9007199254740993),     # float 로는 …992 가 된다
+    ("volume", "9223372036854775807", 9223372036854775807),
+    ("volume", "1000.0", 1000),
+    ("close_price", "71500.5", "71500.5"),
+    ("close_price", "9999999999999999.99999999", "9999999999999999.99999999"),
+])
+def test_컬럼_형에_들어가는_값은_바뀌지_않고_실린다(harness, column, value, expected):
+    # WHY: 값을 float 로 거치면 2^53 을 넘는 거래량이 조용히 다른 수가 된다. 원장에 실리는 수는
+    #      원천의 수와 같아야 한다 — 경계값이 격리되지도, 바뀌지도 않는지 본다.
+    from decimal import Decimal
+
+    storage, _conn, chunks = harness
+    _write_all(storage, ["2026-07-30"], override={(column, "2026-07-30", 1): value})
+
+    assert _run(storage) == 0
+
+    row = dict(zip(step._STAGE_COLUMNS, chunks[0]["rows"][0]))
+    assert row[column] == (Decimal(expected) if isinstance(expected, str) else expected)
+    assert type(row["volume"]) is int
+
+
 def test_거래량이_비어도_가격은_싣는다(harness):
     # WHY: 원천에 거래량만 빈 날이 있다(2006-10 이후 1,083칸 실측). 그날의 종가는 유효하므로
     #      거래량 NULL 로 싣는다 — 버리면 거래일 구멍이 생긴다.
@@ -221,8 +252,7 @@ def test_거래량이_비어도_가격은_싣는다(harness):
 
     assert _run(storage) == 0
 
-    assert chunks[0]["rows"][0] == ("inst_samsung", "2026-07-30", "101", "201", "301", "401",
-                                    "501", None)
+    assert chunks[0]["rows"][0] == ("inst_samsung", "2026-07-30", 101, 201, 301, 401, 501, None)
 
 
 def test_항목_파일의_열_구성이_다르면_아무것도_싣지_않는다(harness):
@@ -266,6 +296,21 @@ def test_뒤쪽_행이_어긋나도_앞_묶음을_싣지_않는다(harness, monk
     assert chunks == [] and conn.commits == 0
 
 
+def test_뒤쪽_행의_열_수가_달라도_앞_묶음을_싣지_않는다(harness, monkeypatch):
+    # WHY: 한 행에 필드가 하나 더 있으면 그 뒤 종목 전부에 옆 종목의 값이 붙는다. 날짜만 미리
+    #      보면 이 어긋남을 못 잡고, 읽다가 만났을 때는 앞 묶음이 이미 커밋돼 있다.
+    storage, conn, chunks = harness
+    monkeypatch.setattr(step, "_CHUNK_DATES", 1)
+    _write_all(storage, ["2026-07-28", "2026-07-29"])
+    _write_item(storage, "volume", [["2026-07-28", "601", "602", "603"],
+                                    ["2026-07-29", "601", "602", "603", "604"]])
+
+    assert _run(storage) == 1
+
+    assert chunks == [] and conn.commits == 0
+    assert "열 수" in _log(storage)["failures"][0]["error"]
+
+
 def test_항목_파일이_없으면_멈춘다(harness):
     # WHY: 수정주가 파일만 없는데 나머지로 진행하면 수정종가가 전부 빈 채 "성공"한다.
     storage, _conn, chunks = harness
@@ -287,8 +332,6 @@ def test_거래일_묶음마다_커밋한다(harness, monkeypatch):
     assert _run(storage) == 0
 
     assert [len(c["rows"]) for c in chunks] == [4, 2]     # 2일 + 1일
-    # 묶음마다 보존본 키가 달라야 뒤 묶음이 앞 묶음의 교체 전 행을 덮지 않는다.
-    assert len({c["snapshot_key"] for c in chunks}) == 2
     assert conn.commits == 2
     assert _log(storage)["chunks_done"] == 2
 

@@ -828,15 +828,17 @@ def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     )
 
 
-def replaced_rows_snapshot_key(dataset: str, run_id: str, part: int) -> str:
+def replaced_rows_snapshot_key(dataset: str, run_id: str, content_sha256: str) -> str:
     """일회성 적재가 덮어쓴 기존 DB 행의 보존본 키(gzip ndjson, 묶음당 1건).
 
     덮어쓴 값은 DB 에서 사라지므로 되돌리려면 덮기 전 행이 어딘가 남아 있어야 한다. 실행 단위
-    감사물이라 품질 로그와 같은 축(dataset·run_id)으로 둔다.
+    감사물이라 품질 로그와 같은 축(dataset·run_id)으로 두되, 파일 이름은 **내용 해시**다 —
+    묶음 번호로 이름을 지으면 같은 run_id 로 범위를 바꿔 재실행할 때 앞 실행의 보존본을 덮는다.
+    내용이 다르면 키가 달라 덮을 수 없고, 같으면 같은 바이트를 다시 쓸 뿐이다.
     """
     return (
         f"operations_archive/replaced_rows/dataset={dataset}"
-        f"/run_id={run_id}/part-{part:05d}.ndjson.gz"
+        f"/run_id={run_id}/sha256={content_sha256}.ndjson.gz"
     )
 
 

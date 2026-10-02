@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -73,9 +74,11 @@ def _seed(cur) -> None:
                 " (%s, %s, 71400, 0.01, 0.00995, 900, '2026-07-02T06:30:00+00:00',"
                 "  'fmp_5min_20260720')", (INSTRUMENT_ID, FIVE_MIN_DAY))
     # KIS 일일 적재 행 — 거래량·수집 시각이 DataGuide 와 다르다. 그대로 남아야 한다.
+    # data_version 은 일일 로더의 run_id 라 무엇이든 될 수 있다. `fmp-5min-…` 은 교체 대상
+    # 접두 `fmp_5min` 과 한 글자 다르다 — LIKE 로 비교하면 `_` 가 그 글자를 삼켜 교체된다.
     cur.execute("INSERT INTO price_daily (instrument_id, trade_date, close_price, volume,"
                 " available_at, data_version) VALUES"
-                " (%s, %s, 71500, 987, '2026-07-03T06:41:00+00:00', 'run_kis_daily')",
+                " (%s, %s, 71500, 987, '2026-07-03T06:41:00+00:00', 'fmp-5min-recovery')",
                 (INSTRUMENT_ID, KIS_DAY))
 
 
@@ -144,9 +147,11 @@ def test_dataguide_backfill_inserts_replaces_5min_rows_and_keeps_kis_rows(tmp_pa
                 first["kept_existing"]) == (1, 1, 0, 1)
         # 덮어쓴 5분봉 집산 행은 덮기 전 값 그대로 보존본에 남는다 — 되돌릴 유일한 근거다.
         [snapshot] = storage.list_keys("operations_archive/replaced_rows/")
-        assert "run_id=e2e-1148-a/" in snapshot
-        [kept_row] = [json.loads(line) for line in
-                      gzip.decompress(storage.get_bytes(snapshot)).decode("utf-8").splitlines()]
+        payload = gzip.decompress(storage.get_bytes(snapshot))
+        # 키가 내용 해시라 다른 내용이 같은 자리를 덮을 수 없다.
+        assert snapshot.endswith(f"run_id=e2e-1148-a/sha256={hashlib.sha256(payload).hexdigest()}"
+                                 ".ndjson.gz")
+        [kept_row] = [json.loads(line) for line in payload.decode("utf-8").splitlines()]
         assert (kept_row["trade_date"], float(kept_row["close_price"]), kept_row["simple_return"],
                 kept_row["volume"], kept_row["data_version"]) == (
             FIVE_MIN_DAY, 71400.0, 0.01, 900, "fmp_5min_20260720")

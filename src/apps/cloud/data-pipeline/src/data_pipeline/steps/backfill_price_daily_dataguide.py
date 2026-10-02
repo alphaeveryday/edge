@@ -35,10 +35,12 @@ DB `price_daily` 의 이력은 2022-11 부터이고 2025-07-16 이전은 5분봉
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from ..config import DbConfig
 from ..db import connect
@@ -48,7 +50,7 @@ from ..lake import (
     quality_log_key,
     replaced_rows_snapshot_key,
 )
-from .load_price_daily import _MICS_BY_MARKET, _instrument_ids, _non_negative, _pos_finite
+from .load_price_daily import _MICS_BY_MARKET, _instrument_ids
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,10 @@ _REPLACEABLE_VERSION_PREFIX = "fmp_5min"
 # 한 번에 커밋하는 거래일 수. 마스터 약 2,700종목이면 묶음당 13만 행 남짓이다.
 _CHUNK_DATES = 50
 _SAMPLE_LIMIT = 10
+# price_daily 의 가격 컬럼은 NUMERIC(24, 8), 거래량은 BIGINT 다.
+_PRICE_QUANTUM = Decimal("0.00000001")
+_PRICE_LIMIT = Decimal(10) ** 16
+_BIGINT_MAX = 2**63 - 1
 
 _STAGE_COLUMNS = ("instrument_id", "trade_date", *_PRICE_COLUMNS, "volume")
 
@@ -92,7 +98,7 @@ def _text(data: bytes):
 
 
 def _aligned_layout(blobs: dict[str, bytes]) -> list[str]:
-    """여섯 파일의 머리행과 날짜 열이 같은지 확인하고 공통 머리행을 돌려준다. 다르면 실패한다.
+    """여섯 파일의 머리행·날짜 열·행별 열 수가 같은지 확인하고 공통 머리행을 돌려준다. 다르면 실패한다.
 
     적재 전에 전부 본다 — 읽으며 확인하면 어긋남을 만나기 전 묶음이 이미 커밋돼 있다.
     날짜는 달력일이고 오름차순이어야 한다(기간 필터가 문자열 비교다).
@@ -101,7 +107,13 @@ def _aligned_layout(blobs: dict[str, bytes]) -> list[str]:
     for column, data in blobs.items():
         with _text(data) as stream:
             header = _split(stream.readline())
-            layouts[column] = (header, [line[:11] for line in stream])
+            dates = []
+            for line in stream:
+                # 열이 하나 밀린 행은 그 뒤 종목 전부에 남의 값을 붙인다.
+                if line.count(",") != len(header) - 1:
+                    raise ValueError(f"열 수가 머리행과 다른 행: {column} {line[:10]}")
+                dates.append(line[:11])
+            layouts[column] = (header, dates)
     header, dates = layouts["close_price"]
     if header[:1] != ["date"]:
         raise ValueError("DataGuide 항목 파일에 date 열이 없다")
@@ -130,30 +142,57 @@ def _split(line: str) -> list[str]:
     return line.rstrip("\r\n").split(",")
 
 
-def _violation(values: dict) -> str | None:
-    """ck_price_daily_values·ck_price_daily_ohl 을 위반하면 사유, 아니면 None.
+def _decimal(text: str) -> Decimal | None:
+    """원문을 유한한 십진수로 읽는다. 못 읽거나 NaN·무한대면 None(예외를 던지지 않는다)."""
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() else None
 
-    위반 행을 임시 표에 올리면 INSERT 가 묶음 전체를 CHECK 로 죽인다 — 미리 빼고 센다(Rule 12).
-    거래량은 BIGINT 라 정수가 아닌 값도 위반으로 본다.
+
+def _parse(values: dict[str, str | None]) -> tuple[tuple | None, str | None]:
+    """한 칸의 원문 값들을 price_daily 에 그대로 들어갈 값으로 바꾼다. (값들, None) 또는 (None, 사유).
+
+    위반 행 하나가 임시 표에 올라가면 INSERT 가 묶음 전체를 죽인다 — 미리 빼고 센다(Rule 12).
+    float 를 거치지 않는다: 큰 정수가 바뀌고, 무한대는 변환에서 예외로 터져 격리가 아니라 런
+    전체 실패가 된다. 가격은 NUMERIC(24,8) 에 손실 없이 들어가고 양수여야 하며(범위 밖·소수
+    9자리 이상·반올림하면 0 이 되는 값은 위반), 거래량은 BIGINT 범위의 음이 아닌 정수여야 한다.
     """
+    parsed: list = []
     for column in _PRICE_COLUMNS:
-        if values[column] is not None and not _pos_finite(values[column]):
-            return f"bad_{column}"
-    volume = values["volume"]
-    if volume is not None:
-        if not _non_negative(volume) or float(volume) != int(float(volume)):
-            return "bad_volume"
-    return None
+        text = values[column]
+        if text is None:
+            parsed.append(None)
+            continue
+        value = _decimal(text)
+        if (value is None or not 0 < value < _PRICE_LIMIT
+                or value != value.quantize(_PRICE_QUANTUM)):
+            return None, f"bad_{column}"
+        parsed.append(value)
+    text = values["volume"]
+    if text is None:
+        parsed.append(None)
+    else:
+        value = _decimal(text)
+        if (value is None or not 0 <= value <= _BIGINT_MAX
+                or value != value.to_integral_value()):
+            return None, "bad_volume"
+        parsed.append(int(value))
+    return tuple(parsed), None
 
 
 def _apply_chunk(cur, rows: list[tuple], *, data_version: str, price_basis: str,
-                 dry_run: bool, storage: Storage, snapshot_key: str) -> dict[str, int]:
+                 dry_run: bool, storage: Storage, run_id: str) -> dict[str, int]:
     """한 묶음을 임시 표에 올려 분류를 세고, dry_run 이 아니면 price_daily 에 반영한다.
 
     분류는 반영 전에 센다: new(행 없음)·replaced(5분봉 집산 행)·rewritten(이 스텝의 기존 행)·
     kept(그 밖의 기존 행 — 손대지 않음). 반영된 행 수가 new+replaced+rewritten 과 다르면
     충돌 규칙이 센 것과 다르게 동작한 것이므로 실패시킨다. 교체할 행이 있으면 덮기 **전에**
-    그 행들을 snapshot_key 에 남긴다 — 저장이 실패하면 덮지 않는다.
+    그 행들을 보존본으로 남긴다 — 저장이 실패하면 덮지 않는다.
+
+    교체 대상은 `starts_with` 로 가린다. `LIKE 'fmp_5min%'` 는 `_` 가 임의의 한 글자라
+    `fmp-5min-…` 같은 다른 적재분까지 교체 대상으로 읽는다.
     """
     cur.execute("TRUNCATE dataguide_price_stage")
     with cur.copy(
@@ -161,17 +200,17 @@ def _apply_chunk(cur, rows: list[tuple], *, data_version: str, price_basis: str,
     ) as copy:
         for row in rows:
             copy.write_row(row)
-    replaceable = _REPLACEABLE_VERSION_PREFIX + "%"
+    prefix = _REPLACEABLE_VERSION_PREFIX
     cur.execute(
         "SELECT count(*) FILTER (WHERE p.instrument_id IS NULL),"
-        "       count(*) FILTER (WHERE p.data_version LIKE %(replaceable)s),"
+        "       count(*) FILTER (WHERE starts_with(p.data_version, %(prefix)s)),"
         "       count(*) FILTER (WHERE p.data_version = %(version)s),"
         "       count(*) FILTER (WHERE p.instrument_id IS NOT NULL"
-        "                          AND p.data_version NOT LIKE %(replaceable)s"
+        "                          AND NOT starts_with(p.data_version, %(prefix)s)"
         "                          AND p.data_version <> %(version)s)"
         " FROM dataguide_price_stage s"
         " LEFT JOIN price_daily p USING (instrument_id, trade_date)",
-        {"replaceable": replaceable, "version": data_version},
+        {"prefix": prefix, "version": data_version},
     )
     new, replaced, rewritten, kept = cur.fetchone()
     counts = {"new": new, "replaced": replaced, "rewritten": rewritten, "kept": kept}
@@ -181,14 +220,18 @@ def _apply_chunk(cur, rows: list[tuple], *, data_version: str, price_basis: str,
         cur.execute(
             "SELECT row_to_json(p)::text FROM price_daily p"
             " JOIN dataguide_price_stage s USING (instrument_id, trade_date)"
-            " WHERE p.data_version LIKE %(replaceable)s"
+            " WHERE starts_with(p.data_version, %(prefix)s)"
             " ORDER BY p.instrument_id, p.trade_date",
-            {"replaceable": replaceable},
+            {"prefix": prefix},
         )
         lines = [line for (line,) in cur.fetchall()]
         if len(lines) != replaced:
             raise RuntimeError(f"보존할 교체 대상 행 수가 분류와 다르다: {len(lines)} != {replaced}")
-        storage.put_bytes(snapshot_key, gzip.compress(("\n".join(lines) + "\n").encode("utf-8")))
+        payload = ("\n".join(lines) + "\n").encode("utf-8")
+        storage.put_bytes(
+            replaced_rows_snapshot_key(DATASET, run_id, hashlib.sha256(payload).hexdigest()),
+            gzip.compress(payload, mtime=0),
+        )
     cur.execute(
         "INSERT INTO price_daily (instrument_id, trade_date, open_price, high_price, low_price,"
         " close_price, adjusted_close_price, volume, price_basis, available_at, data_version)"
@@ -202,9 +245,9 @@ def _apply_chunk(cur, rows: list[tuple], *, data_version: str, price_basis: str,
         "     adjusted_close_price = EXCLUDED.adjusted_close_price, volume = EXCLUDED.volume,"
         "     price_basis = EXCLUDED.price_basis, available_at = EXCLUDED.available_at,"
         "     data_version = EXCLUDED.data_version, simple_return = NULL, log_return = NULL"
-        " WHERE price_daily.data_version LIKE %(replaceable)s"
+        " WHERE starts_with(price_daily.data_version, %(prefix)s)"
         "    OR price_daily.data_version = EXCLUDED.data_version",
-        {"basis": price_basis, "version": data_version, "replaceable": replaceable},
+        {"basis": price_basis, "version": data_version, "prefix": prefix},
     )
     if cur.rowcount != new + replaced + rewritten:
         raise RuntimeError(
@@ -285,8 +328,7 @@ def run(
                     if chunk:
                         counts = _apply_chunk(
                             cur, chunk, data_version=data_version, price_basis=price_basis,
-                            dry_run=dry_run, storage=storage,
-                            snapshot_key=replaced_rows_snapshot_key(DATASET, run_id, chunks_done),
+                            dry_run=dry_run, storage=storage, run_id=run_id,
                         )
                         for key, value in counts.items():
                             totals[key] += value
@@ -301,8 +343,6 @@ def run(
                     if trade_date < from_date or trade_date > to_date:
                         continue
                     fields = {column: _split(line) for column, line in lines.items()}
-                    if any(len(f) != len(header) for f in fields.values()):
-                        raise ValueError(f"열 수가 머리행과 다른 행: {trade_date}")
                     dates_read += 1
                     for index, instrument_id in targets:
                         values = {column: fields[column][index] or None for column in ITEMS}
@@ -313,8 +353,8 @@ def run(
                                 skipped_orphan_cell += 1
                             continue
                         rows_read += 1
-                        reason = _violation(values)
-                        if reason is not None:
+                        parsed, reason = _parse(values)
+                        if parsed is None:
                             skipped_check_violation += 1
                             if len(check_violations) < _SAMPLE_LIMIT:
                                 check_violations.append({
@@ -322,12 +362,7 @@ def run(
                                     "reason": reason,
                                 })
                             continue
-                        volume = values["volume"]
-                        chunk.append((
-                            instrument_id, trade_date,
-                            *(values[column] for column in _PRICE_COLUMNS),
-                            None if volume is None else int(float(volume)),
-                        ))
+                        chunk.append((instrument_id, trade_date, *parsed))
                     chunk_dates += 1
                     if chunk_dates >= _CHUNK_DATES:
                         flush()
