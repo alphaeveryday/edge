@@ -20,7 +20,7 @@ variable "outlook_etf_codes" {
 }
 variable "outlook_schedule_expression" {
   type        = string
-  description = "전망 배치 스케줄(Asia/Seoul). 예정 시각이 그대로 업무 기준시각이 된다."
+  description = "전망 배치 스케줄(Asia/Seoul). 예정 시각이 그대로 업무 기준시각이 된다. 당일 00:00~08:00 KST 사이여야 한다(전망 날짜 = 기준시각의 한국 날짜)."
 }
 variable "outlook_schedule_state" {
   type    = string
