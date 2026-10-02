@@ -30,7 +30,7 @@ interface Props {
 // 화면을 거의 다 덮는 분석 상세 시트
 export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, next, onNext }: Props) {
   const router = useRouter();
-  const { top } = useSafeAreaInsets();
+  const { top, bottom } = useSafeAreaInsets();
   const { data: etf } = useEtf(code);
   const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
@@ -61,7 +61,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
           </View>
           {!d && <Loading rows={3} />}
           {d && (
-            <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: next && onNext ? 10 : bottom + 10 }} showsVerticalScrollIndicator={false}>
               {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={onClose} /></View>}
               <Text style={styles.title}>{d.title}</Text>
               {d.today.length > 0 && (
