@@ -49,9 +49,10 @@ for name, (mutate, tests) in MUTATIONS.items():
     t.render = render
     suite = unittest.TestSuite(t.OutlookBatchContract(x) for x in tests)
     result = unittest.TextTestRunner(stream=open('/dev/null', 'w')).run(suite)
-    # 정의가 깨져서 난 오류는 가드를 검증한 것이 아니다 — 변이 자체가 잘못됐다.
-    broken = any('InvalidDefinition' in trace for _, trace in result.errors)
-    killed = not result.wasSuccessful() and not broken
-    print(('INVALID ' if broken else 'killed  ' if killed else 'SURVIVED'), name, tests)
+    # 검출은 계약 단언의 실패만 센다. 오류(정의가 깨진 변이·AWS 호출 장애)는 가드를 검증한 것이 아니다.
+    killed = bool(result.failures) and not result.errors
+    print(('ERROR   ' if result.errors else 'killed  ' if killed else 'SURVIVED'), name, tests)
+    for _, trace in result.errors:
+        print('   ', trace.strip().splitlines()[-1][:200])
     if not killed: survived.append(name)
 sys.exit(1 if survived else 0)

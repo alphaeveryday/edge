@@ -144,7 +144,8 @@ def processor_of(definition):
 
 
 def run_batch(world, batch_input, definition=None):
-    """배치 전체를 걷는다. 반환: (종료 상태 이름, 마지막 출력 또는 Fail 의 cause)."""
+    """배치 전체를 걷는다. 반환: (종료 상태 이름, 결과). 결과의 error 는 Fail 의 오류 이름(성공이면 None),
+    cause 는 집계(summary)다. 성공이면 마지막 출력(items 등)도 함께 들어 있다."""
     definition = definition or render()
     processor = processor_of(definition)
     state, data = definition['StartAt'], batch_input
@@ -161,8 +162,8 @@ def run_batch(world, batch_input, definition=None):
         if kind == 'Fail':
             return state, {'error': result['error'], 'cause': json.loads(result['cause']) if result['cause'].startswith('{') else result['cause']}
         data = json.loads(result['output'])
-        if kind == 'Succeed':
-            return state, data
+        if kind == 'Succeed':  # 실패와 같은 모양으로 돌려준다 — 기대와 다른 종료가 KeyError 가 아니라 단언 실패로 드러나게
+            return state, data | {'error': None, 'cause': data['summary']}
         state = result['nextState']
     raise AssertionError('배치가 끝나지 않는다')
 
