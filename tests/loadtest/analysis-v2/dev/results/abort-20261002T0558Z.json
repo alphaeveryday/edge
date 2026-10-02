@@ -1,0 +1,57 @@
+{
+ "execution": "abort-20261002T0558Z",
+ "status": "ABORTED",
+ "error": "TestAbort",
+ "input": {
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "etf_codes": [
+   "395160"
+  ]
+ },
+ "started": "2026-10-02T15:18:52.912000+09:00",
+ "stopped": "2026-10-02T15:20:09.299000+09:00",
+ "total_seconds": 76.4,
+ "history_events": 37,
+ "summary": {
+  "cause": "부모 중단 시 자식 정리 확인(ALPHA-1142)"
+ },
+ "items": 1,
+ "child_runs_in_this_execution": 1,
+ "child_failed_in_this_execution": 1,
+ "failure_reasons": {
+  "running": 1
+ },
+ "retried_items": 0,
+ "child_seconds_succeeded": null,
+ "child_seconds_sum": 76.8,
+ "db_connections_max": {
+  "before_10min": 25.0,
+  "during": 25.0
+ },
+ "rows": [
+  {
+   "etf_code": "395160",
+   "outcome": "not judged",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "1f247b1883db1ee8cab33aecf1bb2b6f",
+     "status": "ABORTED",
+     "started": "2026-10-02T15:18:53.517000+09:00",
+     "stopped": "2026-10-02T15:20:10.294000+09:00",
+     "seconds": 76.8,
+     "failure": "running"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "d9825b4cab5f83467cff5d610b08a1ff",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:21:53.668000+09:00",
+     "stopped": "2026-10-02T15:25:25.276000+09:00",
+     "seconds": 211.6
+    }
+   ]
+  }
+ ]
+}
