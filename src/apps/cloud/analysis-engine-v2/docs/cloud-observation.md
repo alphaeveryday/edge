@@ -4,7 +4,7 @@
 
 ## 요청 계약
 
-`cloud/request.schema.json`이 실행 요청의 정본이다. 에이전트 입력·툴 응답·화면 계약과 별개이며 해당 본문은 변경하지 않는다.
+`cloud/request.schema.json`이 외부 실행 요청의 정본이다. 내부 가격 사건만 `cloud/trigger-source.schema.json`에 맞는 `source`를 추가한다([접수 계약](../../../../../docs/contracts/analysis-v2-admission.md)). 에이전트 입력·툴 응답·화면 계약은 변경하지 않는다.
 
 ```json
 {

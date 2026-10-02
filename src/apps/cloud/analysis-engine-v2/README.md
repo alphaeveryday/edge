@@ -19,6 +19,7 @@ python -m edge_analysis_v2.dashboard.server --rds-ca /path/to/rds-ca.pem --port 
 ## 검증
 
 문서 스킬과 실행 권한, 컨테이너 검증 방법은 [분석 스킬 실행 계약](docs/agent-skills.md)을 참고한다.
+API·가격 사건의 실행 접수와 운영 연결 전 범위는 [v2 실행 접수 계약](../../../../docs/contracts/analysis-v2-admission.md)을 참고한다.
 
 ```sh
 python -m pytest tests -q
@@ -26,6 +27,12 @@ node --test integration_tests/test_review_refresh.cjs integration_tests/test_pro
 ```
 
 DB 통합 테스트는 Flyway 마이그레이션이 적용된 로컬 테스트 DB가 필요하다. `V2_TEST_DSN`은 `127.0.0.1:55439/analysis_v2`, `V2_FACTOR_TEST_DSN`은 `127.0.0.1:55440/analysis_v2`, `V2_SOURCE_TEST_DSN`은 `127.0.0.1:55445/edge`(cloud 스키마)를 가리켜야 한다. 실제 분석 DB를 테스트 대상으로 허용하지 않는다.
+
+접수 통합 테스트는 `V2_ADMISSION_TEST_DSN=postgresql://v2_local:local_only@127.0.0.1:55446/analysis_v2`인 별도 로컬 PostgreSQL을 사용한다. 테스트가 임시 스키마에 새 접수 테이블을 만들고 제거하므로 전체 원천 적재는 필요 없다.
+
+```sh
+python -m pytest integration_tests/test_admission.py -q
+```
 
 ```sh
 python -m pytest tests integration_tests -q

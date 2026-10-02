@@ -25,6 +25,7 @@
 | [contracts/analysis-v2-selected-evidence.md](contracts/analysis-v2-selected-evidence.md) | v2 최종 선택 설명의 근거 조회와 기존 관리자 표 연결 범위 | 탐색 근거와 최종 근거를 구분할 때 |
 | [contracts/console-facts-api.md](contracts/console-facts-api.md) | Super Admin Console facts API — 규칙 엔진이 읽는 사실 계약 ([adr/0050](adr/0050-console-facts-endpoint.md)) | 콘솔 규칙 엔진의 입력을 만질 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
+| [contracts/analysis-v2-admission.md](contracts/analysis-v2-admission.md) | v2 실행 접수·재전달·원본 가격 트리거 계약 | API·큐의 분석 실행 접수를 연결할 때 |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 — **은퇴(ADR-0053)**, 기록 보존용 | 폐지 경위·현행 재구성 근거를 볼 때 |
 | [domain/data-source-licensing.md](domain/data-source-licensing.md) | 외부 데이터 소스 재제공 리스크 스냅샷 (참고용·비블로커, best-effort) | 실증권사 납품/실사 대비·데이터 소스 라이선스가 궁금할 때 |

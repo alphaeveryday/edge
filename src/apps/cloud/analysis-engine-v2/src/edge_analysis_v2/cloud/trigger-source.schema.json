@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "event_type", "trigger_id", "generation"],
+  "properties": {
+    "event_id": {"type": "string", "minLength": 1, "maxLength": 512},
+    "event_type": {"const": "PriceTriggerFired"},
+    "trigger_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "generation": {"type": "integer", "minimum": 1}
+  }
+}
