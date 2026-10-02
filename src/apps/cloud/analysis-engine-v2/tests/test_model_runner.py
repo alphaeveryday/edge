@@ -72,6 +72,21 @@ def test_research_is_bounded_by_elapsed_time_not_a_fixed_turn_count(tmp_path):
     assert not (tmp_path/'response.json').exists()
 
 
+@pytest.mark.parametrize('kind,seconds',[('outlook',600),('movement',300)])
+def test_deep_outlook_has_more_time_without_expanding_movement(monkeypatch,tmp_path,kind,seconds):
+    original = asyncio.timeout
+    deadlines = []
+    def timeout(value):
+        deadlines.append(value)
+        return original(value)
+    monkeypatch.setattr(asyncio,'timeout',timeout)
+    asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+        call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+        key='test-secret', model='deepseek-flash', kind=kind,
+        client_factory=client_for(ResultMessage(structured_output={'summary':'ok'}))))
+    assert deadlines == [seconds]
+
+
 @dataclass
 class ResultMessage:
     subtype: str = 'success'

@@ -12,6 +12,8 @@ python -m edge_analysis_v2.dashboard.server --rds-ca /path/to/rds-ca.pem --port 
 
 `http://127.0.0.1:8765/`에 접속한다. `--env-file`과 `--runs-dir`를 생략하면 실행 기능 없이 DB를 조회한다. `.env`에서 읽는 값은 `DEEPSEEK_API_KEY`와 선택적 `DEEPSEEK_MODEL`이다. 실행 기록·키·프롬프트 버전 이력은 Git에 추가하지 않는다.
 
+모델 실행은 전망 600초, 오늘의 가격변동 설명 300초를 기본 한도로 사용한다. 별도 고정 턴 제한은 없으며, 시간 초과 시 불완전한 응답을 발행하지 않고 실패로 기록한다.
+
 프롬프트 관리는 실제 `prompts/*.yaml`을 수정한다. 저장은 이후 대시보드 실행부터 적용되며 실행 시작 시 YAML과 버전이 고정된다. 과거 버전 비교는 읽기 전용이다. 버전 이력은 실행 디렉터리의 `.prompt_versions/`에 저장한다.
 
 계약 검사는 실제 DB 조립 응답을 읽기 전용으로 검증한다. 옵시디언 원문을 복사하지 않고 경로와 해시만 보관한다. 자세한 범위는 [계약 안내](src/edge_analysis_v2/contracts/README.md)를 참고한다.

@@ -59,7 +59,7 @@ def make_server(schemas: list[dict], call):
 
 async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     output_schema: dict, artifacts: Path, key: str, model: str,
-                    timeout_seconds: int = 300, client_factory=ClaudeSDKClient, kind: str = 'outlook') -> dict:
+                    timeout_seconds: int | None = None, client_factory=ClaudeSDKClient, kind: str = 'outlook') -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -71,7 +71,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         artifacts: Local execution folder for inspection.
         key: DeepSeek key, never persisted.
         model: DeepSeek model name.
-        timeout_seconds: Total deadline, from 1 to 600 seconds.
+        timeout_seconds: Total deadline, 1..600 seconds; default outlook 600, movement 300.
         client_factory: SDK constructor; replaced by a fake for offline tests.
         kind: Analysis scope; movement must not expand into a forecast report.
 
@@ -83,6 +83,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         TimeoutError: Conversation deadline exceeded.
         jsonschema.ValidationError: Final JSON violates the output contract.
     """
+    if timeout_seconds is None:
+        timeout_seconds = 600 if kind == 'outlook' else 300
     if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
         raise ValueError('API key and a 1..600 second deadline are required')
     artifacts.mkdir(parents=True, exist_ok=True)
