@@ -51,13 +51,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from .candle import Candle, build_candle, is_stamp, to_decimal
-from .http import PoliteClient, StopFetch
+from .http import CallStats, PoliteClient, StopFetch
 from .kis_auth import KisAuth, token_expired, domain_for
 from .call_budget import CallBudgetError
 
@@ -221,6 +222,12 @@ def fold_closing_auction(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
 _token_expired = token_expired  # 이 모듈의 기존 호출부 이름을 유지한다
 
 
+def _code_label(msg_cd: object) -> str:
+    """계측 이름에 쓸 벤더 오류 코드. 코드 형상(영대문자·숫자)이 아니면 `OTHER` 로 접는다 —
+    응답 본문의 임의 문자열이 로그 키로 새지 않게 한다."""
+    return msg_cd if isinstance(msg_cd, str) and re.fullmatch(r"[A-Z0-9]{1,16}", msg_cd) else "OTHER"
+
+
 class KisMinuteClient:
     """당일 분봉 조회 — 종목당 1콜(30분치). 간격·재시도는 `PoliteClient` 와 여기서 지킨다."""
 
@@ -230,11 +237,13 @@ class KisMinuteClient:
     path = PATH_MINUTE
 
     def __init__(self, app_key: str, app_secret: str, client: PoliteClient,
-                 env: str = "prod"):
+                 env: str = "prod", *, stats: CallStats | None = None):
         self.app_key = app_key
         self.app_secret = app_secret
         self.base = domain_for(env)
         self.client = client
+        # 호출 계측(ALPHA-1124) — 운반 계층과 같은 누적기를 넘겨받으면 한 줄로 합쳐진다.
+        self.stats = stats or CallStats()
         self.auth = KisAuth(app_key, app_secret, client, env)
         # 실제 재시도 수 — collector 가 window 결과의 retry_count 로 싣는다(0 고정이면
         # 유량 압력이 관측에서 통째로 사라진다)
@@ -307,6 +316,8 @@ class KisMinuteClient:
                     self._rate_streak = 0  # 성공 = 유량 회복 — 승격 판정을 리셋한다
                 return output2
             detail = f"rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} msg1={data.get('msg1')}"
+            # 거절 응답을 **코드별로** 센다 — 재시도로 끝내 성공해도 남는다(종전엔 소진만 보였다).
+            self.stats.add(**{f"kis_{_code_label(data.get('msg_cd'))}": 1})
             if _token_expired(f"{data.get('msg_cd')} {data.get('msg1')}") and not reissued:
                 logger.warning("KIS 분봉 토큰 만료 — 캐시 폐기 후 1회 재발급: %s", detail)
                 self.auth.invalidate(used_token)   # 이 요청이 쓴 토큰일 때만 — 이미 갱신됐으면 새 토큰 재사용
@@ -316,11 +327,14 @@ class KisMinuteClient:
                 if attempt < MAX_RATE_RETRY - 1:
                     with self._counter_lock:
                         self.retry_count += 1
-                    self.client._sleep(0.7 * (attempt + 1))
+                    wait = 0.7 * (attempt + 1)
+                    self.client._sleep(wait)
+                    self.stats.add(rate_sleep_sec=wait)
                     continue
                 # 재시도 예산까지 유량 소진 — 연속되면 종목이 아니라 앱키 전역의 상태다.
                 # 종목별 missing 으로만 접으면 백오프 합(~7초)이 전 종목에 곱해져 window
                 # 폭주가 된다(RATE_STREAK_LIMIT 주석의 산술).
+                self.stats.add(rate_exhausted=1)
                 with self._counter_lock:
                     self._rate_streak += 1
                     streak = self._rate_streak
@@ -458,8 +472,8 @@ class KisHistoricalMinuteClient(KisMinuteClient):
     path = PATH_HISTORICAL
 
     def __init__(self, app_key: str, app_secret: str, client: PoliteClient,
-                 *, session_date: date, env: str = "prod"):
-        super().__init__(app_key, app_secret, client, env)
+                 *, session_date: date, env: str = "prod", stats: CallStats | None = None):
+        super().__init__(app_key, app_secret, client, env, stats=stats)
         self.session_date = session_date
         self._ymd = session_date.strftime("%Y%m%d")
         self._day_last_window_end = datetime.strptime(

@@ -409,3 +409,42 @@ def test_first_call_is_not_delayed(monkeypatch):
     started = time.monotonic()
     client.get("https://x.example/y")
     assert time.monotonic() - started < 1.0
+
+
+def test_stats_separate_send_wait_from_response_time(monkeypatch):
+    # WHY(ALPHA-1124): 수집이 느려졌을 때 벤더 응답이 느린 것인지 발신 간격을 기다린 것인지는 합계
+    #      시간만으로 가를 수 없다 — 둘이 다른 칸에 쌓여야 원인을 고를 수 있다.
+    client, _, _ = _virtual_clock_client(monkeypatch, interval=1.0, rtt=0.25)
+
+    for _ in range(3):
+        client.get("https://x.example/y")
+
+    # 첫 콜은 안 기다리고, 뒤 두 콜은 간격 1.0 에서 응답 0.25 를 뺀 0.75 씩 기다린다
+    assert client.stats.drain() == {
+        "attempts": 3, "rtt_ms": 750, "rtt_max_ms": 250, "pace_wait_ms": 1500,
+    }
+    # 읽으면 비운다 — 다음 구간 요약에 앞 구간이 섞이면 구간별 비교가 무의미해진다
+    assert client.stats.drain() == {}
+
+
+def test_stats_count_every_send_and_name_failures_without_their_text(monkeypatch):
+    # WHY(ALPHA-1124): 재시도로 성공한 호출은 결과만 보면 정상 1건이다. 발신 수·재시도 대기·실패 종류가
+    #      따로 남아야 호출이 늘어난 것을 볼 수 있다. 실패는 상태코드·클래스명으로만 남긴다 — 예외
+    #      문자열에는 URL·프록시 자격증명이 들어갈 수 있다.
+    secret = "proxy-password=sensitive"
+    outcomes = [
+        lambda req: (_ for _ in ()).throw(
+            urllib.error.HTTPError(req.full_url, 503, secret, {}, io.BytesIO(b""))),
+        lambda req: (_ for _ in ()).throw(urllib.error.URLError(TimeoutError(secret))),
+        lambda req: _Resp(b"[]"),
+    ]
+    client = _client(monkeypatch, lambda req: outcomes.pop(0)(req))
+
+    assert client.request("GET", "https://x.example/y?key=" + secret) == "[]"
+
+    stats = client.stats.drain()
+    assert {key: stats[key] for key in stats if not key.endswith("_ms")} == {
+        "attempts": 3, "transport_retry": 2, "err_http_503": 1, "err_TimeoutError": 1,
+    }
+    assert stats["transport_backoff_ms"] == 3000  # 1초 + 2초 — 재시도 대기는 응답 소요와 다른 칸이다
+    assert secret not in str(stats)

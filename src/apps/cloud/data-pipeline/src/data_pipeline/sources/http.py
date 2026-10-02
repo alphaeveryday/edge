@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 
 from ..failures import SafeFailureError
 
@@ -48,6 +49,62 @@ RETRY_BACKOFF_SEC = [1, 2, 4]
 DISCONNECT_RETRY_DEADLINE_SEC = 10.0
 DISCONNECT_RETRY_BUDGET = 5
 DISCONNECT_RETRY_BUDGET_WINDOW_SEC = 60.0
+
+
+class CallStats:
+    """발신 계측 누적기(ALPHA-1124) — 이름 붙은 합계를 모으고, 읽는 쪽이 `drain()` 으로 가져가며 비운다.
+
+    운반 계층(`PoliteClient`)과 어댑터가 **같은 인스턴스**에 더한다. 한 구간의 소요를 발신 대기·
+    응답 소요·재시도 대기로 나눠 보려면 한 줄에 있어야 하기 때문이다(느린 응답과 유량 제한은 합계
+    시간만으로는 구분되지 않는다). 받는 값은 건수와 초뿐이다 — URL·헤더·응답 본문은 받지 않는다.
+    thread-safe(동시 요청).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sums: dict[str, float] = {}
+
+    def add(self, **amounts: float) -> None:
+        """이름별 합계에 더한다. 초 단위 값은 이름을 `_sec` 로 끝낸다(`drain` 이 밀리초로 낸다)."""
+        with self._lock:
+            for key, amount in amounts.items():
+                self._sums[key] = self._sums.get(key, 0) + amount
+
+    @contextmanager
+    def attempt(self):
+        """발신 1회 — 시도 수·응답 소요(합·최대)와 실패 종류를 센다. 예외는 그대로 지나간다."""
+        started = time.monotonic()
+        try:
+            yield
+        except Exception as exc:
+            self.add(**{f"err_{_error_kind(exc)}": 1})
+            raise
+        finally:
+            rtt = time.monotonic() - started
+            with self._lock:
+                self._sums["attempts"] = self._sums.get("attempts", 0) + 1
+                self._sums["rtt_sec"] = self._sums.get("rtt_sec", 0) + rtt
+                self._sums["rtt_max_sec"] = max(self._sums.get("rtt_max_sec", 0), rtt)
+
+    def drain(self) -> dict[str, int]:
+        """누적을 읽고 비운다 — 건수는 그대로, 초(`*_sec`)는 밀리초 정수(`*_ms`)로 낸다."""
+        with self._lock:
+            sums, self._sums = self._sums, {}
+        return {
+            (key[:-4] + "_ms" if key.endswith("_sec") else key):
+                round(value * 1000) if key.endswith("_sec") else int(value)
+            for key, value in sums.items()
+        }
+
+
+def _error_kind(exc: Exception) -> str:
+    """실패 종류의 이름 — HTTP 상태코드 또는 예외 클래스명. 예외 **문자열**은 쓰지 않는다
+    (URL·프록시 자격증명이 들어갈 수 있다 — 아래 `SafeFailureError` 주석과 같은 이유).
+    `URLError` 는 감싼 원인(시간 초과·연결 거부·DNS)이 구분의 실체라 그쪽 이름을 쓴다."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"http_{exc.code}"
+    reason = getattr(exc, "reason", None)
+    return type(reason if isinstance(reason, BaseException) else exc).__name__
 
 
 class StopFetch(Exception):
@@ -89,6 +146,8 @@ class PoliteClient:
         # 발신 속도가 1/min_interval 로 묶인다(_respect_interval 주석).
         self._next_slot_at = 0.0
         self._lock = threading.Lock()
+        # 발신 계측(ALPHA-1124). 읽는 호출자가 없으면 키 몇 개의 합계로 남을 뿐이다.
+        self.stats = CallStats()
 
     # 테스트에서 대기 없이 돌리도록 교체 가능한 지점.
     _sleep = staticmethod(time.sleep)
@@ -170,12 +229,15 @@ class PoliteClient:
         for slot, backoff in enumerate(backoffs):
             if backoff:
                 self._sleep(backoff)
+                self.stats.add(transport_retry=1, transport_backoff_sec=backoff)
             # 재시도도 새 허용을 받는다(같은 전체 예산). pacer 가 돌아온 뒤 소켓 쓰기까지의 지연(연결·
             # TLS 핸드셰이크)은 통제하지 못한다 — call_budget 도크스트링.
+            paced_from = time.monotonic()
             if self.pacer is not None:
                 self.pacer.pace()
             else:
                 self._respect_interval()
+            self.stats.add(pace_wait_sec=time.monotonic() - paced_from)
             req = urllib.request.Request(
                 url, data=data, headers=headers or {}, method=method
             )
@@ -185,7 +247,7 @@ class PoliteClient:
             if first_sent_at is None:
                 first_sent_at = time.monotonic()
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                with self.stats.attempt(), urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = resp.read()
                     return body.decode("utf-8", errors="replace") if decode else body
             except urllib.error.HTTPError as exc:
