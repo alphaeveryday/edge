@@ -1486,7 +1486,10 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   비KR 은 최신 fetched_at 이 이긴다. **벤더 교차 같은 키 충돌은
   fail-loud**(둘 다 제외 + quality_log·비0 종료 — USD 를 KRW 로 태깅하는 통화 오염 방지). 통화는
   market 별 태깅만 하고 FX 환산하지 않는다. `load-price-daily` 마트는 값이 바뀌거나 `available_at` 이
-  앞당겨질 때만 갱신한다(수급 적재와 같은 규약).
+  앞당겨질 때만 갱신한다(수급 적재와 같은 규약). 종가·수정종가·거래량과 함께 시가·고가·저가도
+  싣는다(ALPHA-1148) — 시·고·저가 비어 있던 행을 채우기만 하는 갱신은 `available_at` 을 뒤로
+  밀지 않고, 채워진 뒤의 정정은 값과 시각을 함께 옮긴다. 다른 적재기가 `price_basis` 를 채운
+  행을 덮을 때는 그 값도 비운다.
 - **canonical(뉴스, 정제 Step2)** — `canonical/news/news_articles/language={ko|en}/published_date=…/part-*.parquet`
   에 게이트 통과 행을 **article_id 키로 멱등 병합**. **정체성 `article_id = url_hash(원문 URL)`**
   (FMP `url`/BigKinds `PROVIDER_LINK_PAGE`)은 **소스 무관**이라 canonical 이 소스를 흡수한 **통합
