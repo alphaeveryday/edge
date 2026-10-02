@@ -1717,9 +1717,11 @@ python -m data_pipeline.run backfill-price-daily-dataguide --run-id dataguide-pr
 - 되돌리기: 삽입한 행은 `DELETE FROM price_daily WHERE data_version = 'dataguide-20260802'`
   (위 `data_version` 그대로)로 지우고, 교체된 5분봉 집산 행은 위 보존본에서 복원한다(복원
   스크립트는 없다).
-- 실측(2026-10-02, 로컬 PostgreSQL 16 리허설): 마스터 2,804종목 중 2,688종목·4,888거래일·
-  8,690,491행, 110초, 표 크기 약 2.0GB. 겹치는 100,197행의 시가·고가·저가·종가가 KIS canonical
-  과 전부 같았다. dev DB 적재는 이 문서 작성 시점에 실행 전이다.
+- dev 실행(2026-10-02 18:07~18:20 KST, `run_id=dataguide-price-20261002`): 마스터 2,804종목 중
+  2,688종목·4,888거래일·8,690,491행을 읽어 8,467,064행 삽입, 5분봉 집산 123,230행 교체, KIS
+  100,197행 유지, 격리 0. 12분 45초 걸렸고 적재 뒤 `price_daily` 는 8,707,934행·약 2.4GB 다.
+  적재 전 로컬 리허설에서 겹치는 100,197행의 시가·고가·저가·종가가 KIS canonical 과 전부
+  같음을 확인했다. 교체 전 행 123,230건은 보존본 14개 파일에 남아 있다.
 
 ## 운영 원장 — expected_task·Planner·Reconciler (ALPHA-530)
 
