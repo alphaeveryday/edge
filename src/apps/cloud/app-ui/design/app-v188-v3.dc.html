@@ -49,18 +49,18 @@ input { outline: none; border: none; background: transparent; }
 <div style="position: absolute; top: 0; left: 0; right: 0; height: {{ topStripH }}; z-index: 20; background: {{ statusBg }}; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); pointer-events: none;"></div>
 <sc-if value="{{ showTopBar }}">
 <div style="position: absolute; top: 56px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 8px;">
-  <dc-import name="IconButton" hint-size="34px,34px" icon="search" size="34" floating="{{ true }}" on-click="{{ openSearch }}"></dc-import>
-  <dc-import name="IconButton" hint-size="34px,34px" icon="bell" size="34" floating="{{ true }}" badge="{{ notiBadge }}" on-click="{{ openNotis }}"></dc-import>
-  <dc-import name="IconButton" hint-size="34px,34px" icon="menu" size="34" floating="{{ true }}" on-click="{{ openMenu }}"></dc-import>
+  <dc-import name="IconButton" hint-size="34px,34px" icon="search" size="34" on-click="{{ openSearch }}"></dc-import>
+  <dc-import name="IconButton" hint-size="34px,34px" icon="bell" size="34" badge="{{ notiBadge }}" on-click="{{ openNotis }}"></dc-import>
+  <dc-import name="IconButton" hint-size="34px,34px" icon="menu" size="34" on-click="{{ openMenu }}"></dc-import>
 </div>
 </sc-if>
 
 <sc-if value="{{ menuOpen }}">
 <div data-screen-label="전체 메뉴" style="position: absolute; inset: 0; z-index: 60; background: #FFFFFF; display: flex; flex-direction: column; padding-top: 98px; animation: pushIn 0.26s cubic-bezier(0.32, 0.72, 0, 1);">
   <div style="position: absolute; top: 56px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 8px;">
-    <dc-import name="IconButton" hint-size="34px,34px" icon="search" size="34" floating="{{ true }}" on-click="{{ menuSearch }}"></dc-import>
-    <dc-import name="IconButton" hint-size="34px,34px" icon="bell" size="34" floating="{{ true }}" badge="{{ notiBadge }}" on-click="{{ menuNotis }}"></dc-import>
-    <dc-import name="IconButton" hint-size="34px,34px" icon="close" size="34" floating="{{ true }}" on-click="{{ closeMenu }}"></dc-import>
+    <dc-import name="IconButton" hint-size="34px,34px" icon="search" size="34" on-click="{{ menuSearch }}"></dc-import>
+    <dc-import name="IconButton" hint-size="34px,34px" icon="bell" size="34" badge="{{ notiBadge }}" on-click="{{ menuNotis }}"></dc-import>
+    <dc-import name="IconButton" hint-size="34px,34px" icon="close" size="34" on-click="{{ closeMenu }}"></dc-import>
   </div>
   <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 6px 16px 30px;">
     <sc-if value="{{ loggedIn }}">
@@ -3453,7 +3453,7 @@ class Component extends DCLogic {
 
       isDiscoverDark: s.screen === 'discover',
 
-      statusBg: s.screen === 'discover' ? 'rgba(250,250,248,0.92)' : (['home'].includes(s.screen) ? 'rgba(250,250,248,0.92)' : (s.screen === 'profile' ? 'rgba(244,244,246,0.92)' : 'rgba(255,255,255,0.92)')),
+      statusBg: s.screen === 'profile' ? 'rgba(244,244,246,0.92)' : '#FFFFFF',
       isSearching: s.screen === 'search',
       isStock: s.screen === 'stock',
       isProfile: s.screen === 'profile',
