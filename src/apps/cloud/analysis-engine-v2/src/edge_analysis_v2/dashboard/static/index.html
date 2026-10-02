@@ -20,6 +20,13 @@
 <nav class="tabs" id="views" aria-label="분석 출력 유형"></nav><div class="toolbar" id="subviews"><label for="subview" id="subview-label">세부 화면</label><select id="subview"></select></div><div id="detail"></div>
 </main></div>
 <section id="prompt-workspace" hidden>
+<section class="panel" style="margin-bottom:24px">
+<h2>공통 작성 지침 · 분석 스킬</h2>
+<p class="muted">대시보드가 참조하는 워커 패키지의 전체 원문입니다. 스킬은 제공 여부와 실제 읽기 여부가 다르며, 필요한 경우에만 선택해서 읽습니다. 아래 시스템 프롬프트와 함께 확인하세요.</p>
+<label for="instruction-document">문서 선택</label> <select id="instruction-document"></select>
+<p id="instruction-source" class="muted"></p>
+<pre id="instruction-content" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:640px;overflow:auto;padding:20px;background:#eeeee5;color:#27342f;border-radius:8px;font:14px/1.9 'Malgun Gothic',sans-serif" aria-live="polite"></pre>
+</section>
 <div class="toolbar"><h2>시스템 프롬프트 관리</h2><label for="prompt-kind">모델 작업</label><select id="prompt-kind"><option value="outlook">전망</option><option value="movement">오늘 움직임</option></select></div>
 <p class="muted">실제 모델이 읽는 YAML입니다. 저장한 변경은 이후 실행에 적용되며, 실행 중인 작업과 과거 실행 기록은 유지됩니다.</p>
 <p id="prompt-version" class="muted"></p><p id="prompt-message" role="status" aria-live="polite"></p>
