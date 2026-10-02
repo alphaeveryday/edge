@@ -113,7 +113,12 @@ export function EvidenceTable({ rows }: { rows: EvidenceRow[] }) {
               {ev.type === '수치 계산' && (
                 <tr>
                   <td colSpan={4} style={{ whiteSpace: 'normal', padding: 20 }}>
-                    <CalculationEvidence evidence={ev} />
+                    <details>
+                      <summary className="cursor-pointer py-1 font-medium">계산식·상세 보기</summary>
+                      <div className="mt-3">
+                        <CalculationEvidence evidence={ev} />
+                      </div>
+                    </details>
                   </td>
                 </tr>
               )}
