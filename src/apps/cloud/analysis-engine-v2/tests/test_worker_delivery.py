@@ -16,6 +16,11 @@ def test_worker_registers_after_analysis_and_reports_delivery_failure(monkeypatc
     monkeypatch.setattr(worker,'connect_sources',lambda *a,**k:connection)
     for name in ['load_source','load_flow','load_prices','DatabaseTools']:
         monkeypatch.setattr(worker,name,Mock())
+    def observations(conn, source):
+        assert conn is connection
+        events.append('research')
+        return source
+    monkeypatch.setattr(worker,'load_research_observations',observations)
     monkeypatch.setattr(worker,'execute_request',lambda **k:events.append('analysis'))
     def deliver(*args):
         events.append('delivery')
@@ -38,4 +43,4 @@ def test_worker_registers_after_analysis_and_reports_delivery_failure(monkeypatc
     else:
         run()
         assert states[-1]['status']=='completed'
-    assert events==(['analysis','delivery'] if kind=='movement' else ['analysis'])
+    assert events==(['research','analysis','delivery'] if kind=='movement' else ['research','analysis'])
