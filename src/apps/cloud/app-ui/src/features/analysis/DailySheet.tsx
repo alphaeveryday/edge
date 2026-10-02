@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import { Animated, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { DailyAnalysis } from '@/api';
@@ -36,15 +36,28 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
   const { data: etf } = useEtf(code);
   const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
-  const focus = useScrollFocus(axisOpen);
-  const drag = useSheetDrag(open, onClose);
+  // 다른 화면에 다녀오는 동안 숨김, 돌아오면 애니메이션 없이 다시 표시
+  const [away, setAway] = useState(false);
+  const awayRef = useRef(false);
+  const [instant, setInstant] = useState(false);
+  const shown = open && !away;
+  const focus = useScrollFocus(axisOpen && shown);
+  const drag = useSheetDrag(shown, onClose);
   const [hint, setHint] = useState<string | null>(null);
-  const goMetric = (axis: string) => {
-    onClose();
-    router.push(axisHref(code, axis));
+  useFocusEffect(useCallback(() => {
+    if (!awayRef.current) return;
+    awayRef.current = false;
+    setInstant(true);
+    setAway(false);
+  }, []));
+  const leave = (go?: () => void) => {
+    awayRef.current = true;
+    setAway(true);
+    go?.();
   };
+  const goMetric = (axis: string) => leave(() => router.push(axisHref(code, axis)));
   return (
-    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={shown} transparent animationType={instant ? 'none' : 'slide'} onShow={() => setInstant(false)} onRequestClose={onClose}>
       <View style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} />
         <Animated.View style={[styles.sheet, { marginTop: top + 46 }, drag.style]}>
@@ -52,7 +65,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
             <View style={styles.handle} />
             <View style={styles.headRow}>
               {/* ETF 이름을 누르면 상세의 오늘 움직임으로 */}
-              <Pressable disabled={!linkEtf} onPress={() => { onClose(); router.push(`/etf/${code}/summary`); }} style={styles.headLink}>
+              <Pressable disabled={!linkEtf} onPress={() => leave(() => router.push(`/etf/${code}/summary`))} style={styles.headLink}>
                 {etf && <SectorIcon theme={etf.theme} bg={etf.logoBg} size={36} />}
                 <View style={styles.headMid}>
                   <Text numberOfLines={1} style={styles.headName}>{etf?.name}</Text>
@@ -66,7 +79,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
           {!d && <Loading rows={3} />}
           {d && (
             <ScrollView ref={focus.scroll} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: next && onNext ? 10 : bottom + 10 }} showsVerticalScrollIndicator={false}>
-              {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={onClose} /></View>}
+              {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={leave} /></View>}
               <Text style={styles.title}>{d.title}</Text>
               {d.today.length > 0 && (
                 <View style={styles.today}>
