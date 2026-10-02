@@ -1019,10 +1019,12 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 |---|---|---|
 | 10-05 18:00 | 스케줄 `edge-dev-airflow-default-stop-service` | `ecs:UpdateService` desired 0 |
 | 10-05 18:10 | 스케줄 `edge-dev-airflow-default-stop-host` | `autoscaling:UpdateAutoScalingGroup` min·max·desired 0 |
-| 그 뒤 첫 dev apply | Terraform | `host_count` 가 기한 뒤 plan 에서 0 으로 계산된다(`envs/dev/main.tf` `airflow_host_until`) — 호스트를 되살리지 않고, 경보·오토스케일링·관리 태스크·이 스케줄들을 걷는다 |
+| 10-05 18:20 | 스케줄 `edge-dev-airflow-default-stop-service-recheck` | 서비스 desired 0 을 한 번 더 — 18:00 직전에 시작한 `deploy-airflow` 가 정지 확인을 지난 뒤 desired 1 을 쓰는 경우를 덮는다(18:00 뒤에 시작한 배포는 desired 0 을 보고 건너뛴다) |
+| 그 뒤 첫 dev apply | Terraform | `host_count` 가 기한 뒤 plan 에서 0 으로 계산된다(`envs/dev/main.tf` `airflow_host_until`) — 호스트를 되살리지 않고, 경보·오토스케일링·관리 태스크를 걷는다. 종료 스케줄·역할은 `host_until` 에만 묶여 남는다(기한 직후 apply 가 아직 돌지 않은 스케줄을 지우지 않게). 정리 PR 에서 `host_until` 을 비워 걷는다 |
 
 - **남는 것:** 메타DB `airflow`·역할 `airflow_meta`, 시크릿 `edge-dev-airflow/app`, 로그 그룹(30일), 클러스터·서비스 정의(desired 0), ECR 이미지, CloudWatch 지표(1분 15일), SSM 명령 이력(30일). dbadmin `teardown` 은 하지 않는다. SFN·스케줄·`investor_intraday_orchestrator = "SFN"` 은 건드리지 않는다.
-- **기한 뒤 plan 의 모습.** 어느 PR 이든 기한 뒤의 plan 에는 Airflow 쪽 `0 to add, 1 to change(ASG 1→0), 13+ to destroy` 가 보인다(의도). 종료가 확정되면 `host_count = 0` 리터럴로 정리한다.
+- **기한 뒤 plan 의 모습.** 어느 PR 이든 기한 뒤의 plan 에는 Airflow 쪽 `1 to change(ASG 1→0), 13 to destroy`(경보 7·오토스케일링 2·관리 태스크 4)가 보인다(의도). 종료가 확정되면 `host_count = 0` 리터럴·`host_until` 제거로 정리한다.
+- **관측 기간 중 배포.** `dags/**` 등이 dev 에 머지되면 `deploy-airflow` 가 서비스를 새 태스크로 바꾼다(메모리 기준선이 다시 시작된다). 보고는 태스크 ID 가 바뀐 시각으로 구간을 나눈다.
 - **취소·연장.** 18:00 전에 `airflow_host_until` 을 바꾸는 PR 을 머지한다(apply 가 스케줄 시각과 `host_count` 계산을 함께 옮긴다). 18:00 뒤에 승인이 오면 다시 기동한다(위 "일정과 단계"의 기동 절차 — 메타DB 는 남아 있으므로 `dbadmin create` 는 하지 않는다).
 - **종료 뒤 울리는 것.** 서비스가 0 이 되면 `service-down` 경보가 약 10분 뒤 ALARM 이 된다(SNS 1통). 다음 apply 가 경보를 걷을 때까지 ALARM 으로 남는다 — 종료가 일어났다는 신호로 읽는다.
 - **종료 확인(사람 또는 다음 세션).** 예약 사실이 아니라 실제 상태를 대조한다: 서비스 `desiredCount=0`·`runningCount=0`, ASG `0/0/0`·인스턴스 없음, `aws rds`·조회로 DB `airflow` 존재, 로그 그룹 존재, SFN 스케줄 5개 `ENABLED`, DAG 는 메타DB 에 pause 로 남음(다시 기동하면 확인). 스케줄 실행 자체는 CloudTrail(`UpdateService`·`UpdateAutoScalingGroup`, 호출자 역할 `edge-dev-airflow-default-stop`)로 본다.
