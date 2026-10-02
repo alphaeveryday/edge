@@ -31,6 +31,8 @@ def test_real_cli_closes_source_and_records_actual_execution_status(tmp_path,mon
     monkeypatch.setattr(database_run,'load_source',lambda *args:{'raw':'database'})
     monkeypatch.setattr(database_run,'load_flow',lambda connection,data:data)
     monkeypatch.setattr(database_run,'load_prices',lambda connection,data:data)
+    monkeypatch.setattr(database_run,'connect_results',lambda path:SourceConnection())
+    monkeypatch.setattr(database_run,'load_research_observations',lambda connection,data:data)
     monkeypatch.setattr(database_run,'DatabaseTools',lambda data:'real tools')
     monkeypatch.setattr(database_run,'execute_request',execute)
     if fails:

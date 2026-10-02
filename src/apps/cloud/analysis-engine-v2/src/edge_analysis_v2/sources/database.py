@@ -7,9 +7,11 @@ import psycopg
 from psycopg.rows import dict_row
 
 from edge_analysis_v2.storage.database import DB_HOST
+from edge_analysis_v2.storage.source_inputs import macro_inputs, financial_inputs
 from edge_analysis_v2.sources.calendar import trading_dates
 from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.tools.fixture_data.common import holdings, instant, number
+from edge_analysis_v2.tools.fixture_data.news import search_articles
 
 
 def connect_sources(ca_path: Path, *, session=None, cloud=False):
@@ -103,16 +105,19 @@ def load_source(connection, ticker, analysis_at):
             'instruments':list(instruments.values()),'holdings':portfolio,'holdings_status':status_rows,
             'source_instrument_ids':source_ids,'trading_dates':[], 'news':[], 'news_links':[]}
     current = holdings(data, require_complete=False)
-    top = sorted(current['holdings'], key=lambda r:r['weight'], reverse=True)[:5]
-    targets = [etf['instrument_id']]+[source_ids[r['instrument_id']] for r in top]
-    targets += [actors[r['instrument_id']] for r in top if actors.get(r['instrument_id'])]
+    members = current['holdings']
+    targets = [etf['instrument_id']]+[source_ids[r['instrument_id']] for r in members]
+    targets += [actors[r['instrument_id']] for r in members if actors.get(r['instrument_id'])]
     articles = _rows(connection, """SELECT d.document_id,d.title,d.published_at,d.available_at,n.lead_text,n.lead_observed_at
         FROM document d JOIN news_document n USING(document_id)
         WHERE d.document_type='NEWS' AND d.published_at BETWEEN %s AND %s AND d.available_at<=%s
         AND EXISTS(SELECT 1 FROM document_entity de WHERE de.document_id=d.document_id AND de.entity_id=ANY(%s))
-        ORDER BY d.published_at DESC,d.document_id LIMIT 301""", (at-timedelta(days=30),at,at,targets))
-    data['news_limit_reached'] = len(articles)>300
-    for row in articles[:300]:
+        ORDER BY d.published_at DESC,d.document_id LIMIT 1001""", (at-timedelta(days=180),at,at,targets))
+    data['news_limit_reached'] = len(articles)>1000
+    data['news_scope'] = {'lookback_days':180, 'max_articles':1000,
+                          'limit_reached':data['news_limit_reached'],
+                          'universe':'ETF and observed constituents; linked DB news excerpts only'}
+    for row in articles[:1000]:
         body = row['lead_text'] if row['lead_observed_at'] is not None and row['lead_observed_at']<=at else None
         data['news'].append({'news_id':row['document_id'],'title':row['title'],'body':body,'body_kind':'excerpt',
             'published_at':row['published_at'].isoformat(),'available_at':row['available_at'].isoformat()})
@@ -224,6 +229,16 @@ def load_prices(connection, data, *, request=None):
     return data
 
 
+def load_research_observations(connection, data):
+    """Use the existing writer-authorized as-of functions; preserve missing-data reasons."""
+    at = instant(data['context']['analysis_at'])
+    members = sorted({r['instrument_id'] for r in holdings(data, require_complete=False)['holdings']})
+    macro, macro_gaps = macro_inputs(connection, at)
+    financials, financial_gaps = financial_inputs(connection, at, members)
+    return data | {'macro':macro, 'financials':financials,
+                   'source_gaps':{'macro':macro_gaps, 'financials':financial_gaps}}
+
+
 class DatabaseTools(FixtureTools):
     """Use shared deterministic calculations with verified database observations only."""
 
@@ -236,7 +251,15 @@ class DatabaseTools(FixtureTools):
             enabled |= {'calculate_investor_flow','calculate_weighted_flow','sum_investor_net_flow','sum_weighted_net_flow'}
         if 'prices' in source:
             enabled |= {'calculate_chart_indicators','evaluate_indicator_transition','get_instrument_factors'}
+        if 'macro' in source:
+            enabled |= {'get_macro_observations','compare_macro_observations','get_instrument_factors'}
+        if 'financials' in source:
+            enabled |= {'calculate_valuation','calculate_weighted_valuation','get_instrument_factors'}
         self._tools = {name:tool for name,tool in self._tools.items() if name in enabled}
+        self._register('search_news_articles',
+            '확보된 뉴스 제목·발췌를 모든 검색어 포함으로 검색합니다. 빈 query는 전체 목록이며 offset으로 다음 페이지를 읽습니다. 기업명·납기·마진 등으로 검색하고 없으면 검색어를 넓히세요. 공개 웹 검색이 아닙니다. 읽기·최종 근거는 get_issue_evidence를 사용합니다.',
+            {'query':{'type':'string','maxLength':200}, 'offset':{'type':'integer','minimum':0}},
+            lambda **args:search_articles(self.fixture, **args), '', ['document','news_document'])
         self._tools['get_etf_holdings'].update(
             callback=lambda:holdings(self.fixture, require_complete=False),
             description='조회 시점에 확보된 구성종목과 원래 비중입니다. coverage=partial이면 전체 포트폴리오가 확인되지 않았으며 가중 계산에 사용할 수 없습니다.',
@@ -246,10 +269,15 @@ class DatabaseTools(FixtureTools):
             self._tools['calculate_chart_indicators']['description'] += ' 고가·저가 미확보 시 바닥지수는 null입니다.'
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
-            # get_instrument_factors 는 근사 EPS 표시(ALPHA-1130)로 응답 모양이 바뀌어 v2 — 불변 툴 ID 아래 섞이지 않게.
-            tool['version'] = 'database-v2' if name == 'get_instrument_factors' else 'database-v1'
+            # Source definitions are immutable; connecting stored observations needs a new factor version.
+            tool['version'] = 'database-v3' if name == 'get_instrument_factors' else 'database-v1'
             if name == 'get_instrument_factors':
-                tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot']
+                tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot',
+                                   'macro_observations_as_of','financial_quarters_as_of']
+            elif 'macro' in name:
+                tool['sources'] = ['macro_observations_as_of']
+            elif 'valuation' in name:
+                tool['sources'] = ['financial_quarters_as_of','price_daily','etf_holding_snapshot']
             elif name in ('calculate_chart_indicators','evaluate_indicator_transition'):
                 tool['sources'] = ['price_daily','minute_price_trigger']
             elif 'flow' in name:
@@ -260,10 +288,14 @@ class DatabaseTools(FixtureTools):
     def initial_input(self):
         """Expose raw observations and material source limitations to the agent."""
         result = super().initial_input()
+        result['source_gaps'] = self.fixture.get('source_gaps', {})
+        result['news_scope'] = self.fixture.get('news_scope', {})
         result['source_notes'] = [
             '구성종목 coverage=partial이면 전체 ETF 가중 수급·밸류를 계산할 수 없습니다.',
             '뉴스 본문은 확보 발췌입니다. 스레드는 현존 관계이며 과거 정정·삭제까지 복원하지 않습니다.',
             '가격 조정 방식 미확인. 고가·저가 미확보로 바닥지수·ATR은 미제공. 장중 관측은 실제 트리거 가격이며 연속 분봉이 아닙니다.',
-            '2026년 거래일만 검증되어 52주 지표는 미제공. 매크로·재무는 아직 연결하지 않았습니다.',
+            '2026년 거래일만 검증되어 52주 지표는 미제공. 매크로·재무의 시점별 조회 결과는 macro·financials와 source_gaps를 확인하세요.',
+            '뉴스는 확보한 전체 편입종목 관련 최대 180일·1000건 발췌입니다. search_news_articles로 초기 목록 밖을 검색할 수 있습니다. 결과 없음은 이 DB 범위의 미확보이며 비공개·공개 자료 부재를 뜻하지 않습니다.',
+            'DB 재무는 공개 분기 EPS·BPS이며 증권사 예상치·계약별 마진이 아닙니다. 원문 전체·공시 직접 검색·공개 웹 조회는 이 실행 도구에서 지원하지 않습니다. 발췌 안의 관련 자료까지 조사한 뒤 남은 접근 한계를 특정하세요.',
         ]
         return result
