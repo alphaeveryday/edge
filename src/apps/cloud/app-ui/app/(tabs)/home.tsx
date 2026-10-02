@@ -11,6 +11,7 @@ import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
 import { useHomeBrief, usePrefetchBriefs } from '@/features/home/queries';
 import { analysisAsOf } from '@/lib/format';
+import { useScrollFocus } from '@/lib/useScrollFocus';
 import { useSwapFade } from '@/lib/useSwapFade';
 import { api, isApiError } from '@/api';
 import { useToast } from '@/store/toast';
@@ -23,6 +24,7 @@ export default function Home() {
   const { top } = useSafeAreaInsets();
   const { group, setGroup } = useWatchGroup();
   const [showAll, setShowAll] = useState(false);
+  const focus = useScrollFocus(showAll, top + TOP_BAR_H);
   const brief = useHomeBrief(group);
   const posts = useHotPosts();
   const qc = useQueryClient();
@@ -47,14 +49,14 @@ export default function Home() {
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={focus.scroll} contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="내 종목 브리핑" meta={analysisAsOf()} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === group} onPress={() => setGroup(g.key)} />)}
         </ScrollView>
         <Animated.View style={{ opacity: fade }}>
           {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
-          <View style={styles.rows}>
+          <View ref={focus.anchor} style={styles.rows}>
             {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={() => open(e.code)} />)}
             {more && (
               <View style={{ marginTop: 12 }}>

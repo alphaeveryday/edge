@@ -7,6 +7,7 @@ import { BottomBar, Chevron, IconButton, LinkRow, RowQuote, SectorIcon, Sticker 
 import { VoteCard } from '@/features/community/VoteCard';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
+import { useScrollFocus } from '@/lib/useScrollFocus';
 import { Loading } from '@/components/state';
 import { colors, signal as SIG, radius, shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -34,6 +35,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
   const { data: etf } = useEtf(code);
   const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
+  const focus = useScrollFocus(axisOpen);
   const [hint, setHint] = useState<string | null>(null);
   const goMetric = (axis: string) => {
     onClose();
@@ -61,7 +63,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
           </View>
           {!d && <Loading rows={3} />}
           {d && (
-            <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: next && onNext ? 10 : bottom + 10 }} showsVerticalScrollIndicator={false}>
+            <ScrollView ref={focus.scroll} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: next && onNext ? 10 : bottom + 10 }} showsVerticalScrollIndicator={false}>
               {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={onClose} /></View>}
               <Text style={styles.title}>{d.title}</Text>
               {d.today.length > 0 && (
@@ -113,7 +115,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
                   </View>
                 )}
               </View>
-              <Pressable onPress={() => setAxisOpen((v) => !v)} style={styles.toggle}>
+              <Pressable ref={focus.anchor} onPress={() => setAxisOpen((v) => !v)} style={styles.toggle}>
                 <Text style={styles.toggleText}>5가지 기준 모두 보기</Text>
                 <Chevron size={14} color={colors.textFaint} dir={axisOpen ? 'up' : 'down'} />
               </Pressable>

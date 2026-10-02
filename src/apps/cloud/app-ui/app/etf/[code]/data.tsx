@@ -6,6 +6,7 @@ import { dirLabel } from '@/features/analysis/dir';
 import { HeatMap } from '@/features/etf/HeatMap';
 import { useEtfDetail } from '@/features/etf/queries';
 import { QueryState } from '@/components/state';
+import { useScrollFocus } from '@/lib/useScrollFocus';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -20,6 +21,7 @@ export default function EtfData() {
   const [mode, setMode] = useState<'temp' | 'chg'>('temp');
   const [comp, setComp] = useState<'stock' | 'theme'>('stock');
   const [more, setMore] = useState(false);
+  const focus = useScrollFocus(more);
   return (
     <QueryState query={q} rows={5}>
       {(d) => {
@@ -29,7 +31,7 @@ export default function EtfData() {
         const rows = comp === 'theme' && d.themeRows?.length ? d.themeRows : d.holdings;
         const shown = more ? rows : rows.slice(0, 3);
         return (
-    <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+    <PageScroll ref={focus.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       {d.insight && (
         <View style={styles.insight}>
           <View style={styles.insightHead}>
@@ -70,7 +72,7 @@ export default function EtfData() {
       </View>
 
       <View style={styles.divider} />
-      <View style={styles.section}>
+      <View ref={focus.anchor} style={styles.section}>
         <View style={styles.h2Row}>
           <Text style={styles.h2}>구성 상태</Text>
           <Text style={styles.h2Meta}>비중 순</Text>
