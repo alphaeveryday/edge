@@ -114,6 +114,16 @@
 - **NEW는 전체 상태 전달(full snapshot)** — diff/patch가 아니다. On-Prem은 도메인 ID 기준 멱등 upsert만 하면 되고, 부분 갱신 병합 로직이 필요 없다.
 - INVALIDATION 수신 시 On-Prem 동작(item·게시분 즉시 비노출)은 [../domain/state-machine.md](../domain/state-machine.md) 소관. 정정(CORRECTION) 형상은 계약에서 폐지됐다 — 소비자는 미지 유형과 동일하게 거부한다([ADR-0044](../adr/0044-correction-abolition.md)).
 
+### 검수콘솔 API의 계산 근거 전달
+
+설명 조회 API는 `news_id`, `tool_run_id`, `item_ids`, `as_of`, `arguments`, `output`,
+`formula_latex`, `description`을 각각 `newsId`, `toolRunId`, `itemIds`, `asOf`,
+`arguments`, `output`, `formulaLatex`, `description`으로 전달한다. 입출력 JSON은
+저장된 구조를 보존한다. 계산 근거의 표시 유형은 `수치 계산`이며, 시각은 `as_of`를
+사용한다(날짜는 그대로, 시각은 KST). 기준일이 없으면 `—`로 표시하며 발행·실행 시각으로
+대체하지 않는다. 기존 뉴스·공시 응답은 유지한다. 검수 상세 API는 저장된 근거 JSON을
+기존처럼 snake_case로 전달한다.
+
 ### 기존 뉴스·공시의 `source_events`·`evidences` 경계면 컬럼 (ALPHA-395)
 
 reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·근거 데이터·이벤트 타임라인 — [../console-ia/tenant-console.md](../console-ia/tenant-console.md))를 최소로 충족하는 컬럼만 싣는다(reader 자유·Rule 2).
