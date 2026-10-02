@@ -113,7 +113,8 @@ def report(args):
     ran = [a for r in rows for a in r['attempts'] if a['seconds'] is not None and inside(a)]
     seconds = sorted(a['seconds'] for a in ran if a['status'] == 'SUCCEEDED')
     # 단건 실행이 동시에 떠 있던 최대 수(워크플로 기준 — 슬롯을 기다리는 시간도 포함한다)
-    spans = [(datetime.fromisoformat(a['started']), datetime.fromisoformat(a['stopped'])) for a in ran]
+    spans = [(datetime.fromisoformat(a['started']), datetime.fromisoformat(a['stopped']) if a['stopped'] else ended)
+             for r in rows for a in r['attempts'] if inside(a)]  # 아직 도는 시도는 지금까지로 센다
     overlap = max((sum(b <= start < e for b, e in spans) for start, _ in spans), default=0)
     slot_waits = slot_wait_seconds(began, ended)
     reasons = {}
