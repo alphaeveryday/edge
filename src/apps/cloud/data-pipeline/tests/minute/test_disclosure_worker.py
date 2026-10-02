@@ -690,6 +690,7 @@ def test_거부_문서가_있는_창은_VALID가_아니고_재처리_근거가_m
     "missing_body", "parse_error", "unknown_reason", "list_row_reason",
     "mixed_with_transient", "no_rcept_no", "no_reasons_reported",
     "assemble_exception", "assemble_log_lost", "assemble_build_error",
+    "assemble_reference_data",
 ])
 def test_일시_실패와_모르는_사유는_종전대로_커서를_막는다(tmp_path, monkeypatch, case):
     """WHY: 한 번 실패했다고 확정 거부로 접으면, 다시 읽어 풀릴 문서(본문 미도착·저장 오류)가
@@ -723,6 +724,10 @@ def test_일시_실패와_모르는_사유는_종전대로_커서를_막는다(t
         # 이벤트 유형 미등록 같은 설정 문제 — 문서의 문제가 아니다
         "assemble_build_error": dict(assemble_exit=1, assemble_report=_assemble_report(
             ["event_build_error"])),
+        # 발행사 보통주 기준정보가 아직 없다 — 마스터가 채워지면 풀리는데, 캐치업을 소진하면
+        # D-1 fact 는 조립 창에서 빠져 다시 시도되지 않는다(저녁 배치는 조립을 안 한다)
+        "assemble_reference_data": dict(assemble_exit=1, assemble_report=_assemble_report(
+            ["missing_supplier_instrument"])),
     }[case]
     db = FakeMinuteDB()
     steps = install(monkeypatch, StubSteps(cursor_candidate="R2", **options))

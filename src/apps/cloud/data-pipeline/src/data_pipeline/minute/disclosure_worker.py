@@ -55,8 +55,11 @@ window 가 전량을 다시 읽는다. 반대로 **같은 원문이면 늘 같�
 
 그렇다고 처리된 것으로 치지 않는다: 거부를 본 window 는 **INCOMPLETE** 로 남고, poll manifest 의
 `rejected_documents`(접수번호·단계·사유·원문 위치)와 그 run 의 quality_log 가 재처리 근거다. 거부
-문서를 따로 표시해 두지도 않는다 — 질의 창 안에 있는 동안 주기 전량 대사(60 poll)와 저녁 배치가
-같은 문서를 다시 판정하므로, 파서·기준정보가 고쳐지면 그 판정이 바뀐다.
+문서를 따로 표시해 두지도 않는다 — 정제 거부는 질의 창 안에 있는 동안 주기 전량 대사(60 poll)가,
+조립 거부는 접수일이 질의 창 안에 있는 동안 매 window 가 같은 문서를 다시 판정한다.
+⚠️ 질의 창을 벗어난 뒤에는 이 레인이 다시 보지 않는다. 저녁 배치는 정제·적재까지만 돌고 **조립을
+하지 않으므로**(`disclosure_pipeline.tf`), 파서를 고친 뒤의 재처리는 `backfill-normalize-disclosure`
+(정제 → 적재 → 조립)를 그 접수일 범위로 돌리는 것이다.
 
 ⚠️ **한 tick 은 1분보다 오래 걸린다** — 공용 골격이 realtime 1 + `recovery_budget_per_tick`
 을 한 tick 안에서 처리한다. 그 자체는 이 레인의 정상이다(토스 실측 tick 73초+). 요구는
@@ -108,23 +111,26 @@ _NOT_OBSERVED_STATUSES = frozenset({"skipped"})
 
 # **다시 읽어도 결과가 같은** 문서 단위 거부 사유(ALPHA-1154). 전부 "이미 저장한 입력에 대한
 # 판정"이다 — 정제 쪽은 본문 내용 판정이고(본문은 한 번 받으면 다음 poll 이 그 객체를 재사용한다:
-# `ingest_raw_disclosure._existing_documents`), 조립 쪽은 적재된 fact 의 필수 항목 결손이다
-# (DART 목록을 다시 읽는다고 fact 가 바뀌지 않는다). 그래서 커서를 막아 얻는 것이 없다.
+# `ingest_raw_disclosure._existing_documents`), 조립 쪽은 본문에서 계약 대상(체결계약명)을 못 뽑아
+# 적재가 개념 ID 를 만들지 못한 fact 다(`load_disclosure._prepare_supply_rows` — 이름이 비면 None).
+# 어느 쪽도 다시 읽는다고 달라지지 않아, 커서를 막아 얻는 것이 없다.
 #
 # ⚠️ **여기 없는 사유는 전부 일시 실패로 본다**(모르는 사유 포함) — 종전대로 커서를 막는다.
 # 틀리면 막는 쪽으로 틀려야 한다: 확정으로 잘못 접으면 다시 읽어 풀릴 문서가 경계 뒤에 갇힌다.
 # 그래서 넣지 않은 것: `missing_document_body`(본문 미도착 — 다음 poll 이 다시 받는다),
 # `parse_error`(본문 객체 읽기 실패가 같은 except 로 접힌다), `raw_read_error`,
 # 목록 행에서 오는 `missing_rcept_no`·`missing_report_date`·`bad_report_date`(목록은 매 poll
-# 다시 읽으므로 값이 달라질 수 있다), 조립의 `event_build_error`(문서가 아니라 설정 문제).
+# 다시 읽으므로 값이 달라질 수 있다), 조립의 `missing_supplier_instrument`(발행사의 보통주
+# 기준정보 조인 결과다 — 문서가 아니라 마스터가 채워지면 풀린다. 캐치업을 소진하면 D-1 fact 는
+# 그 뒤 조립 창에서 빠져 다시 시도되지 않는다)와 `event_build_error`(설정 문제).
 _CONFIRMED_REJECT_REASONS = frozenset({
     # 공급계약 본문(quality.validate_supply_fact 의 blocking 중 본문 유래)
     "empty_parse", "amount_out_of_range", "ratio_not_finite",
     # 사업부문 본문(normalize_disclosure_segment · quality.validate_segment_fact)
     "no_segments_parsed", "missing_segment_name", "empty_segment",
     "revenue_out_of_range", "share_not_finite",
-    # 조립(assemble_disclosure_events._skip_reasons) — 적재된 fact 의 필수 항목 결손
-    "missing_supplier_instrument", "missing_contract_object",
+    # 조립(assemble_disclosure_events._skip_reasons) — 본문에서 계약 대상을 못 뽑은 fact
+    "missing_contract_object",
 })
 
 # 시장 전체 공시 하루 건수의 상한 실측(2026-07-31 기준 700~1,070건). 페이지 예산 대조에만
