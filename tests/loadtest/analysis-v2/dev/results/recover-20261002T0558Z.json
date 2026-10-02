@@ -26,7 +26,8 @@
  "items": 1,
  "child_runs_in_this_execution": 1,
  "child_failed_in_this_execution": 0,
- "retried_items": 1,
+ "failure_reasons": {},
+ "retried_items": 0,
  "child_seconds_succeeded": {
   "n": 1,
   "min": 211.6,
@@ -50,7 +51,8 @@
      "status": "ABORTED",
      "started": "2026-10-02T15:18:53.517000+09:00",
      "stopped": "2026-10-02T15:20:10.294000+09:00",
-     "seconds": 76.8
+     "seconds": 76.8,
+     "failure": "running"
     },
     {
      "attempt": 1,

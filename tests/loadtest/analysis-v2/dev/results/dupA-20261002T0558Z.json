@@ -26,6 +26,7 @@
  "items": 1,
  "child_runs_in_this_execution": 1,
  "child_failed_in_this_execution": 0,
+ "failure_reasons": {},
  "retried_items": 0,
  "child_seconds_succeeded": {
   "n": 1,

@@ -18,7 +18,10 @@
  "items": 1,
  "child_runs_in_this_execution": 1,
  "child_failed_in_this_execution": 1,
- "retried_items": 1,
+ "failure_reasons": {
+  "running": 1
+ },
+ "retried_items": 0,
  "child_seconds_succeeded": null,
  "child_seconds_sum": 76.8,
  "db_connections_max": {
@@ -28,7 +31,7 @@
  "rows": [
   {
    "etf_code": "395160",
-   "outcome": "completed",
+   "outcome": "not judged",
    "published_at": null,
    "attempts": [
     {
@@ -37,7 +40,8 @@
      "status": "ABORTED",
      "started": "2026-10-02T15:18:53.517000+09:00",
      "stopped": "2026-10-02T15:20:10.294000+09:00",
-     "seconds": 76.8
+     "seconds": 76.8,
+     "failure": "running"
     },
     {
      "attempt": 1,

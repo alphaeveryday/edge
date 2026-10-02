@@ -34,6 +34,7 @@
  "items": 1,
  "child_runs_in_this_execution": 0,
  "child_failed_in_this_execution": 0,
+ "failure_reasons": {},
  "retried_items": 0,
  "child_seconds_succeeded": null,
  "child_seconds_sum": 0,
@@ -46,7 +47,16 @@
    "etf_code": "0167A0",
    "outcome": "deadline_exceeded",
    "published_at": null,
-   "attempts": []
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "71260813878b640f296dc07335336d12",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:15:10.829000+09:00",
+     "stopped": "2026-10-02T15:18:14.081000+09:00",
+     "seconds": 183.3
+    }
+   ]
   }
  ]
 }

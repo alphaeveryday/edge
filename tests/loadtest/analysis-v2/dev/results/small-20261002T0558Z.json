@@ -27,11 +27,14 @@
  "items": 2,
  "child_runs_in_this_execution": 3,
  "child_failed_in_this_execution": 1,
+ "failure_reasons": {
+  "TimeoutError": 1
+ },
  "retried_items": 1,
  "child_seconds_succeeded": {
   "n": 2,
   "min": 222.1,
-  "median": 280.2,
+  "median": 251.1,
   "max": 280.2
  },
  "child_seconds_sum": 862.3,
@@ -51,7 +54,8 @@
      "status": "FAILED",
      "started": "2026-10-02T14:58:12.189000+09:00",
      "stopped": "2026-10-02T15:04:12.214000+09:00",
-     "seconds": 360.0
+     "seconds": 360.0,
+     "failure": "TimeoutError"
     },
     {
      "attempt": 1,

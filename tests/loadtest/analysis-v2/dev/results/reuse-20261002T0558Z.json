@@ -27,7 +27,8 @@
  "items": 2,
  "child_runs_in_this_execution": 0,
  "child_failed_in_this_execution": 0,
- "retried_items": 1,
+ "failure_reasons": {},
+ "retried_items": 0,
  "child_seconds_succeeded": null,
  "child_seconds_sum": 0,
  "db_connections_max": {
@@ -46,7 +47,8 @@
      "status": "FAILED",
      "started": "2026-10-02T14:58:12.189000+09:00",
      "stopped": "2026-10-02T15:04:12.214000+09:00",
-     "seconds": 360.0
+     "seconds": 360.0,
+     "failure": "TimeoutError"
     },
     {
      "attempt": 1,

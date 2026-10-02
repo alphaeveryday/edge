@@ -9,7 +9,7 @@
 import argparse
 import hashlib
 import json
-import sys
+import statistics
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +20,9 @@ REGION, ACCOUNT = 'ap-northeast-2', '393229433969'
 BATCH = f'arn:aws:states:{REGION}:{ACCOUNT}:stateMachine:edge-dev-analysis-v2-outlook-batch'
 SINGLE_EXECUTION = f'arn:aws:states:{REGION}:{ACCOUNT}:execution:edge-dev-analysis-v2:'
 RESULTS = Path(__file__).resolve().parent/'results'
+BUCKET = 'edge-dev-pipeline-lake'
 sfn = boto3.client('stepfunctions', region_name=REGION)
+s3 = boto3.client('s3', region_name=REGION)
 
 
 def start(args):
@@ -54,7 +56,18 @@ def attempts(etf, analysis_at, limit):
         found.append({'attempt': attempt, 'analysis_id': ident, 'status': child['status'],
                       'started': child['startDate'].isoformat(), 'stopped': stop.isoformat() if stop else None,
                       'seconds': round((stop - child['startDate']).total_seconds(), 1) if stop else None})
+        if child['status'] not in ('SUCCEEDED', 'RUNNING'):
+            found[-1]['failure'] = failure(ident)
     return found
+
+
+def failure(ident):
+    """워커가 관측 manifest 에 남긴 실패 유형(예: TimeoutError). 워커가 뜨기 전에 죽었으면 manifest 가 없다."""
+    try:
+        job = json.loads(s3.get_object(Bucket=BUCKET, Key=f'analysis-v2/runs/{ident}/manifest.json')['Body'].read())['job']
+    except s3.exceptions.NoSuchKey:
+        return 'no manifest'
+    return (job.get('error') or job['status']).split(':')[0]
 
 
 def report(args):
@@ -65,8 +78,9 @@ def report(args):
     if execution['status'] == 'SUCCEEDED':
         body = json.loads(execution['output'])
         items, summary = body['items'], body['summary']
-    else:  # 실패면 cause 에 집계와 미완료 항목만 있다. 완료 항목은 단건 실행에서 다시 읽는다
+    else:  # 실패면 cause 에 집계와 미완료 항목만 있다. 중단·시간 초과·실행 중이면 집계 자체가 없다
         items, summary = [], json.loads(execution['cause']) if execution.get('cause', '').startswith('{') else {'cause': execution.get('cause')}
+    judged = 'unfinished' in summary  # 배치가 항목 판정까지 마쳤는가
     events = 0
     for page in sfn.get_paginator('get_execution_history').paginate(executionArn=arn, includeExecutionData=False):
         events += len(page['events'])
@@ -74,15 +88,21 @@ def report(args):
     codes = batch_input.get('etf_codes') or definition['States']['Defaults']['Result']['etf_codes']
     limit = batch_input.get('max_attempts') or definition['States']['Defaults']['Result']['max_attempts']
     outcomes = {i['etf_code']: i for i in items} | {i['etf_code']: i for i in summary.get('unfinished', [])}
-    rows = [{'etf_code': code, 'outcome': outcomes.get(code, {}).get('outcome', 'completed' if execution['status'] != 'RUNNING' else 'pending'),
+    # 집계에 없는 항목은 집계가 있을 때만 완료다(실패 배치의 cause 는 미완료 항목만 싣는다). 집계가 없으면 판정 없음.
+    rows = [{'etf_code': code, 'outcome': outcomes.get(code, {}).get('outcome', 'completed' if judged else 'not judged'),
              'published_at': outcomes.get(code, {}).get('published_at'), 'attempts': attempts(code, batch_input['analysis_at'], limit)}
             for code in codes]
-    ran = [a for r in rows for a in r['attempts'] if a['seconds'] is not None and began <= datetime.fromisoformat(a['started']) <= ended]
+    inside = lambda a: began <= datetime.fromisoformat(a['started']) <= ended  # 이 배치 실행 구간에 시작한 시도만
+    ran = [a for r in rows for a in r['attempts'] if a['seconds'] is not None and inside(a)]
     seconds = sorted(a['seconds'] for a in ran if a['status'] == 'SUCCEEDED')
+    reasons = {}
+    for a in ran:
+        if 'failure' in a:
+            reasons[a['failure']] = reasons.get(a['failure'], 0) + 1
     connections = boto3.client('cloudwatch', region_name=REGION).get_metric_statistics(
         Namespace='AWS/RDS', MetricName='DatabaseConnections', Dimensions=[{'Name': 'DBInstanceIdentifier', 'Value': 'edge-dev'}],
         StartTime=began - timedelta(minutes=10), EndTime=ended + timedelta(minutes=5), Period=60, Statistics=['Maximum'])['Datapoints']
-    inside = [p['Maximum'] for p in connections if began <= p['Timestamp'] <= ended]
+    during = [p['Maximum'] for p in connections if began <= p['Timestamp'] <= ended]
     before = [p['Maximum'] for p in connections if p['Timestamp'] < began]
     result = {
         'execution': args.name, 'status': execution['status'], 'error': execution.get('error'), 'input': batch_input,
@@ -90,10 +110,11 @@ def report(args):
         'total_seconds': round((ended - began).total_seconds(), 1), 'history_events': events, 'summary': summary,
         'items': len(rows), 'child_runs_in_this_execution': len(ran),
         'child_failed_in_this_execution': sum(a['status'] != 'SUCCEEDED' for a in ran),
-        'retried_items': sum(len(r['attempts']) > 1 for r in rows),
-        'child_seconds_succeeded': {'n': len(seconds), 'min': seconds[0], 'median': seconds[len(seconds)//2], 'max': seconds[-1]} if seconds else None,
+        'failure_reasons': reasons,
+        'retried_items': sum(sum(inside(a) for a in r['attempts']) > 1 for r in rows),
+        'child_seconds_succeeded': {'n': len(seconds), 'min': seconds[0], 'median': round(statistics.median(seconds), 1), 'max': seconds[-1]} if seconds else None,
         'child_seconds_sum': round(sum(a['seconds'] for a in ran), 1),
-        'db_connections_max': {'before_10min': max(before, default=None), 'during': max(inside, default=None)},
+        'db_connections_max': {'before_10min': max(before, default=None), 'during': max(during, default=None)},
         'rows': rows,
     }
     RESULTS.mkdir(exist_ok=True)

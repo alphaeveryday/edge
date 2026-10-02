@@ -42,11 +42,15 @@
  "items": 37,
  "child_runs_in_this_execution": 45,
  "child_failed_in_this_execution": 11,
+ "failure_reasons": {
+  "TimeoutError": 8,
+  "ToolInputError": 3
+ },
  "retried_items": 8,
  "child_seconds_succeeded": {
   "n": 34,
   "min": 202.6,
-  "median": 268.4,
+  "median": 268.0,
   "max": 359.3
  },
  "child_seconds_sum": 12881.2,
@@ -685,9 +689,5 @@
     }
    ]
   }
- ],
- "failure_reasons": {
-  "TimeoutError": 8,
-  "ToolInputError": 3
- }
+ ]
 }
