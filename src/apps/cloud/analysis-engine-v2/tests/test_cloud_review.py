@@ -178,6 +178,25 @@ def test_observation_uses_persisted_job_without_requiring_database():
     reader.assert_not_called()
 
 
+def test_prompt_comparison_is_available_without_analysis_execution(tmp_path):
+    from edge_analysis_v2.prompts.versions import PromptVersions
+    sources = tmp_path/'prompts'
+    sources.mkdir()
+    path = sources/'outlook.yaml'
+    path.write_text('system_prompt: original', encoding='utf-8')
+    prompts = PromptVersions(sources, tmp_path/'history')
+    old = prompts.read('outlook')
+    path.write_text('system_prompt: changed', encoding='utf-8')
+    with server(Mock(), prompt_versions=prompts) as port:
+        config = json.loads(request(port, '/api/execution')[1])
+        assert config['enabled'] is False
+        assert config['prompts_enabled'] is True
+        assert config['prompts_read_only'] is True
+        code, body = request(port, '/api/prompts/outlook/compare/' + old['version'])
+        assert code == 200
+        assert json.loads(body)['added'] == 1
+
+
 def test_prompt_edit_requires_csrf_valid_yaml_and_current_version(tmp_path):
     from edge_analysis_v2.prompts.versions import PromptVersions
     sources = tmp_path/'prompts'

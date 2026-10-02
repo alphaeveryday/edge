@@ -235,6 +235,8 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                     return self.reply(200, reader())
                 if path == '/api/execution':
                     return self.reply(200, {'enabled':execution is not None,
+                        'prompts_enabled':prompt_versions is not None,
+                        'prompts_read_only':execution is None,
                         'csrf_token':execution.csrf_token if execution else None,
                         'scenarios':[{'id':name,'label':label,'movement_at':scenario_cutoff('movement',name),
                                       'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()]})

@@ -97,9 +97,24 @@ class FixtureTools:
         price_tables = {target: table([r for r in prices if r["instrument_id"] == target],
                                      ["date", "high", "low", "close", "volume", "turnover"])
                         for target in sorted({r["instrument_id"] for r in prices})}
+        flow_tables = flow.input_tables(rows)
+        truncated = []
+        # Reserve context for research on broad ETFs while keeping every subject
+        # visible. Calculation callbacks continue using the complete fixture.
+        for name, tables in [('prices', price_tables), ('flow', flow_tables)]:
+            etf_rows = len(tables.get(context['etf_code'], {}).get('rows', []))
+            constituents = [body for target, body in tables.items() if target != context['etf_code']]
+            limit = max(1, (1200 - etf_rows) // max(1, len(constituents)))
+            for body in constituents:
+                if len(body['rows']) > limit:
+                    body['rows'] = body['rows'][-limit:]
+                    if name not in truncated:
+                        truncated.append(name)
         snapshots = {"instrument_id": context["etf_code"],
                      **table([r | {"at": r["observed_at"]} for r in chart.snapshots(self.fixture)],
                              ["at", "price", "high", "low", "available_at"])}
         catalog = sorted({(r['instrument_id'],r['metric'],r['period']) for r in financial_observations.visible(self.fixture)})
         exploration = {'financial_observation_catalog':table([dict(zip(['instrument_id','metric','period'],r)) for r in catalog], ['instrument_id','metric','period'])} if 'financial_observations' in self.fixture else {}
-        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture, require_complete=False), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow.input_tables(rows), "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "eps_derivation", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
+        if truncated:
+            exploration['history_preview'] = {'truncated': truncated, 'note': '초기 구성종목 이력은 최근 일부만 표시합니다. 전체 이력으로 계산하려면 get_instrument_factors와 수급 계산 툴을 사용하세요. 미리보기 행 수를 전체 관측 기간으로 해석하지 마세요.'}
+        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture, require_complete=False), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow_tables, "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "eps_derivation", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}

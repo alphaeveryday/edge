@@ -22,6 +22,7 @@
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
 | [contracts/publication-api.md](contracts/publication-api.md) | MTS/HTS 연동 방식 — Publication API | 증권사 연동 접점을 만질 때 |
+| [contracts/analysis-v2-selected-evidence.md](contracts/analysis-v2-selected-evidence.md) | v2 최종 선택 설명의 근거 조회와 기존 관리자 표 연결 범위 | 탐색 근거와 최종 근거를 구분할 때 |
 | [contracts/console-facts-api.md](contracts/console-facts-api.md) | Super Admin Console facts API — 규칙 엔진이 읽는 사실 계약 ([adr/0050](adr/0050-console-facts-endpoint.md)) | 콘솔 규칙 엔진의 입력을 만질 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
 | [contracts/analysis-v2-admission.md](contracts/analysis-v2-admission.md) | v2 실행 접수·재전달·원본 가격 트리거 계약 | API·큐의 분석 실행 접수를 연결할 때 |
