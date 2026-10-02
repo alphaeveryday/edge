@@ -22,7 +22,7 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 관심 그룹 요약. band 는 signal 서수 평균 반올림, changePct 는 산술평균. 그룹 없으면 빈 브리프. */
+/** 관심 그룹 요약. score 는 signal 서수 평균(소수 둘째 자리), band 는 그 반올림, changePct 는 산술평균. 그룹 없으면 빈 브리프. */
 @Service
 @RequiredArgsConstructor
 public class HomeService {
@@ -42,9 +42,10 @@ public class HomeService {
                 .orElse(List.of());
         List<EtfSummaryResponse> etfs = summaries(codes);
         Instant asOf = codes.isEmpty() ? null : etfRepository.latestQuoteAsOf(codes);
+        double score = score(etfs);
         return new HomeBriefResponse(asOf == null ? Instant.now() : asOf,
                 groups.stream().map(g -> new WatchGroupResponse(g.getKey(), g.getLabel(), (int) itemRepository.countByGroupId(g.getId()))).toList(),
-                key, band(etfs), changePct(etfs), etfs);
+                key, Signal.values()[(int) Math.round(score)], score, changePct(etfs), etfs);
     }
 
     private List<EtfSummaryResponse> summaries(List<String> codes) {
@@ -56,12 +57,10 @@ public class HomeService {
         return codes.stream().map(byCode::get).filter(Objects::nonNull).toList();
     }
 
-    private static Signal band(List<EtfSummaryResponse> etfs) {
-        if (etfs.isEmpty()) {
-            return Signal.NEUTRAL;
-        }
+    // 강력하락 0 ~ 강력상승 4, 그룹이 비면 중립
+    private static double score(List<EtfSummaryResponse> etfs) {
         double mean = etfs.stream().mapToInt(e -> e.signal().ordinal()).average().orElse(Signal.NEUTRAL.ordinal());
-        return Signal.values()[(int) Math.round(mean)];
+        return Math.round(mean * 100) / 100.0;
     }
 
     private static double changePct(List<EtfSummaryResponse> etfs) {

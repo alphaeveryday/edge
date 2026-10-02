@@ -8,5 +8,5 @@ import java.time.Instant;
 import java.util.List;
 
 public record HomeBriefResponse(Instant asOf, List<WatchGroupResponse> groups, String group, Signal band,
-        double changePct, List<EtfSummaryResponse> etfs) {
+        double score, double changePct, List<EtfSummaryResponse> etfs) {
 }
