@@ -26,7 +26,8 @@ def validate(path):
                     for name in ("V202609281600__create_v2_analysis_storage.sql",
                                  "V202609282200__add_v2_factor_details.sql",
                                  "V202609301400__isolate_analysis_source.sql",
-                                 "V202610021500__add_v2_execution_requests.sql"))
+                                 "V202610021500__add_v2_execution_requests.sql",
+                                 "V202610022229__add_movement_withdrawal_time.sql"))
     expected, refs, uniques = {}, set(), set()
     for table, body in re.findall(r"CREATE TABLE (\w+) \((.*?)^\);", ddl, re.M | re.S):
         primary = re.search(r"PRIMARY KEY \(([^)]+)\)", body)

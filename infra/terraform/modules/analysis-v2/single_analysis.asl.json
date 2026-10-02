@@ -1,0 +1,156 @@
+{
+  "StartAt": "Input",
+  "TimeoutSeconds": 28800,
+  "States": {
+    "Input": {
+      "Type": "Pass",
+      "Parameters": {
+        "request.$": "$"
+      },
+      "Next": "Acquire"
+    },
+    "Acquire": {
+      "Type": "Task",
+      "Resource": "${control_arn}",
+      "Parameters": {
+        "action": "acquire",
+        "execution_arn.$": "$$.Execution.Id",
+        "request_key.$": "States.Format('{}:{}', $.request.kind, $.request.etf_code)"
+      },
+      "ResultPath": "$.slot",
+      "Next": "Capacity",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "Capacity": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.slot.acquired",
+          "BooleanEquals": true,
+          "Next": "Analyze"
+        }
+      ],
+      "Default": "Wait"
+    },
+    "Wait": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "Acquire"
+    },
+    "Analyze": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "TimeoutSeconds": 1100,
+      "Parameters": {
+        "Cluster": "${cluster_arn}",
+        "TaskDefinition": "${task_family}",
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ${subnets_json},
+            "SecurityGroups": [
+              "${security_group}"
+            ],
+            "AssignPublicIp": "DISABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "analysis-v2",
+              "Environment": [
+                {
+                  "Name": "ANALYSIS_REQUEST",
+                  "Value.$": "States.JsonToString($.request)"
+                },
+                {
+                  "Name": "ANALYSIS_SLOTS",
+                  "Value": "${slots}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.task",
+      "Next": "Release",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.failure",
+          "Next": "ReleaseFailed"
+        }
+      ]
+    },
+    "CheckExit": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.task.Containers[0].ExitCode",
+          "NumericEquals": 0,
+          "Next": "Completed"
+        }
+      ],
+      "Default": "Failed"
+    },
+    "Completed": {
+      "Type": "Succeed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "AnalysisFailed",
+      "Cause": "Inspect observation artifacts and task logs"
+    },
+    "Release": {
+      "Type": "Task",
+      "Resource": "${control_arn}",
+      "Parameters": {
+        "action": "release",
+        "execution_arn.$": "$$.Execution.Id"
+      },
+      "ResultPath": null,
+      "Next": "CheckExit",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "ReleaseFailed": {
+      "Type": "Task",
+      "Resource": "${control_arn}",
+      "Parameters": {
+        "action": "release",
+        "execution_arn.$": "$$.Execution.Id"
+      },
+      "ResultPath": null,
+      "Next": "Failed",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ]
+    }
+  }
+}

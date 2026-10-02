@@ -93,30 +93,28 @@ resource "aws_iam_role_policy" "workflow" {
     { Effect = "Allow", Action = ["ecs:RunTask"], Resource = local.task_arn, Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } } },
     { Effect = "Allow", Action = ["ecs:DescribeTasks", "ecs:StopTask"], Resource = "*", Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } } },
     { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn], Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } } },
-    { Effect = "Allow", Action = ["events:PutTargets", "events:PutRule", "events:DescribeRule"], Resource = "arn:aws:events:${var.region}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule" }
+    { Effect = "Allow", Action = ["events:PutTargets", "events:PutRule", "events:DescribeRule"], Resource = "arn:aws:events:${var.region}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule" },
+    { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = aws_lambda_function.control.arn }
   ] })
 }
 resource "aws_sfn_state_machine" "this" {
   name     = var.name
   role_arn = aws_iam_role.workflow.arn
-  definition = jsonencode({ StartAt = "Analyze", TimeoutSeconds = 1200, States = {
-    Analyze = {
-      Type = "Task", Resource = "arn:aws:states:::ecs:runTask.sync", TimeoutSeconds = 1100,
-      Parameters = {
-        Cluster              = var.cluster_arn, TaskDefinition = aws_ecs_task_definition.this.family, LaunchType = "FARGATE",
-        NetworkConfiguration = { AwsvpcConfiguration = { Subnets = var.subnet_ids, SecurityGroups = [aws_security_group.this.id], AssignPublicIp = "DISABLED" } },
-        Overrides            = { ContainerOverrides = [{ Name = "analysis-v2", Environment = [{ Name = "ANALYSIS_REQUEST", "Value.$" = "States.JsonToString($)" }] }] }
-      }, ResultPath          = "$.task", Next = "CheckExit"
-    },
-    CheckExit = { Type = "Choice", Choices = [{ Variable = "$.task.Containers[0].ExitCode", NumericEquals = 0, Next = "Completed" }], Default = "Failed" },
-    Completed = { Type = "Succeed" }, Failed = { Type = "Fail", Error = "AnalysisFailed", Cause = "Inspect observation artifacts and task logs" }
-  } })
+  definition = templatefile("${path.module}/single_analysis.asl.json", {
+    control_arn    = aws_lambda_function.control.arn
+    cluster_arn    = var.cluster_arn
+    task_family    = aws_ecs_task_definition.this.family
+    security_group = aws_security_group.this.id
+    subnets_json   = jsonencode(var.subnet_ids)
+    slots          = tostring(var.analysis_slots)
+  })
 }
+
 resource "aws_iam_role_policy" "deploy" {
   name = "analysis-v2-task-registration"
   role = var.deploy_role_name
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn], Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } } }
+    { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.consumer.arn], Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } } }
   ] })
 }
 resource "aws_iam_role" "observer" {

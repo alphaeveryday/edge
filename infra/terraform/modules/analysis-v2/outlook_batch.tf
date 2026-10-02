@@ -1,11 +1,12 @@
-# 전망 배치(ALPHA-1142) — 스케줄러가 배치 워크플로를 시작하고, 배치는 ETF마다 기존 단건
-# 워크플로를 **한 번에 하나씩** 중첩 호출한다. 분석 로직·요청 계약은 그대로다.
+# 전망 배치(ALPHA-1142·1157) — 스케줄러가 배치 워크플로를 시작하고, 배치는 ETF마다 기존 단건
+# 워크플로를 **analysis_slots 건씩** 중첩 호출한다. 분석 로직·요청 계약은 그대로다.
 #
-# 한 번에 하나인 이유: writer 역할 연결 한도가 5이고 워커는 건당 3개를 분석 내내 쥔다
-# (2026-10-02 실측 — tests/loadtest/analysis-v2/README.md). 그래서 Map 동시 수가 아니라
-# **단건 워크플로의 실행 중 개수**를 보고 시작을 기다린다(정의의 Gate). 수동 시작·다른 배치와도
-# 겹치지 않게 하려는 것이다. 다만 확인과 시작 사이에 끼어든 실행은 못 막는다 — 그때는 역할
-# 한도가 한쪽을 거절하고(모델 호출 전), 배치는 그 항목을 새 ID 로 한 번 더 시도한다.
+# 동시 수의 상한은 워커의 분석 슬롯이 진다(단건 워크플로가 ANALYSIS_SLOTS 를 넘긴다). 워커는
+# 건당 writer 연결 3개를 분석 내내 쥐므로, 슬롯이 없으면 원천을 읽기 전에 기다린다. 배치·API·수동
+# 시작이 모두 같은 워커를 지나 같은 상한을 받는다. 정의의 Gate(단건 워크플로의 실행 중 개수 확인)는
+# 상한이 아니라 **기다릴 태스크를 미리 띄우지 않기 위한 절약**이다 — 확인과 시작 사이에 끼어든
+# 실행은 워커에서 슬롯을 기다릴 뿐 실패하지 않는다. 로컬 대시보드 실행은 슬롯을 잡지 않는다
+# (tests/loadtest/analysis-v2/README.md '알려진 한계').
 #
 # 정의는 outlook_batch.asl.json, 계약 테스트는 tests/test_outlook_batch.py.
 locals {
@@ -37,6 +38,7 @@ resource "aws_sfn_state_machine" "outlook_batch" {
     api_endpoint               = replace(aws_apigatewayv2_api.analysis.api_endpoint, "https://", "")
     defaults_json              = jsonencode({ etf_codes = var.outlook_etf_codes, max_attempts = 2 })
     deadline_utc               = var.outlook_deadline_utc
+    slots                      = var.analysis_slots
   })
   depends_on = [aws_iam_role_policy.outlook_batch]
 

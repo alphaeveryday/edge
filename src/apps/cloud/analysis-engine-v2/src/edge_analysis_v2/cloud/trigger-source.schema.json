@@ -7,6 +7,8 @@
     "event_id": {"type": "string", "minLength": 1, "maxLength": 512},
     "event_type": {"const": "PriceTriggerFired"},
     "trigger_id": {"type": "string", "minLength": 1, "maxLength": 256},
-    "generation": {"type": "integer", "minimum": 1}
+    "generation": {"type": "integer", "minimum": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "window_start": {"type": "string", "format": "date-time"}
   }
 }

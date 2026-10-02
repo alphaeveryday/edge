@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태(2026-10-02): 장중 수급(`edge_investor_intraday`)은 격리 검증 DAG 로 실제 AWS 검증까지 마쳤고, 운영 데이터로는 아직 돌지 않았다(SFN 이 운영 중). 실행 환경은 ECS on EC2(ALPHA-1119, 아래 "실행 환경"). ALPHA-1141 로 운영 메타DB·중단 경보를 갖춘 뒤 장후 기동·중단 시험·유휴 관측을 하고, SFN → Airflow 전환은 그 결과를 보고 따로 결정한다(아래 "첫 운영 전환 실행안").
+현재 상태(2026-10-02 22:00): 장중 수급(`edge_investor_intraday`)은 격리 검증 DAG 로 실제 AWS 검증까지 마쳤고, 운영 데이터로는 아직 돌지 않았다(SFN 이 운영 중). ALPHA-1141 로 Airflow 를 기동했고(t4g.small 1대·서비스 1/1, 운영 메타DB `airflow`), 중단 시험 S1·S2 를 통과했다. **DAG 둘은 pause 이고 업무 run 은 0 이다.** 10-05 까지 유휴 관측 중이며, SFN → Airflow 전환은 그 결과를 보고 따로 결정한다(아래 "첫 운영 전환 실행안"의 "실행 결과").
 
 ## 구성
 
@@ -716,7 +716,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
   - `IN_PROGRESS` 는 최대 10분 다시 본다. job 제한은 60분이다.
   - 검증: 가짜 `aws` 테스트 5건(로컬·CI 같은 Airflow 이미지)과 판정 조건 변이 확인. 로컬 Codex 리뷰를 거쳤고, 봇은 P2 1건(job 제한, 수용) 뒤 `+1` 을 줬다. CI 11건이 통과했다.
   - 머지 뒤 자동 실행 run 36884642677 은 success 였다. 이미지 `edge/airflow:c27ee206…` 를 빌드·푸시했고, desired 0 이라 교체는 건너뛰었다. 실행 뒤에도 서비스 0/0/0·ASG 0·태스크 0이었다.
-  - **실제 AWS 배포에서의 판정은 미검증이다.** 다음 승인된 기동(`start_service=true`)에서 확인한다.
+  - **실제 AWS 배포에서 확인했다(2026-10-02, run 36996575755, `start_service=true`).** 로그 `서비스 갱신 요청: …task-definition/edge-dev-airflow:16 (deployment ecs-svc/6544360946965775560)`, `PRIMARY:` 줄이 그 id 로 19:45:07 `IN_PROGRESS` → 19:45:23 `COMPLETED`, 워크플로 success. 아래 세 항목은 그때의 확인 기준이다.
     - 로그에 `서비스 갱신 요청: … (deployment ecs-svc/…)` 가 찍히는가.
     - `PRIMARY:` 줄이 그 id 로 IN_PROGRESS → COMPLETED 로 바뀌는가.
     - 워크플로가 `success` 로 끝나는가.
@@ -906,7 +906,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 
 | 단계 | 상태 |
 |---|---|
-| 실행안 보완·#1053 검증과 머지·장후 기동·중단 시험·10-05 까지 유휴 관측 | 승인됨 |
+| 실행안 보완·#1053 검증과 머지·장후 기동·중단 시험·10-05 까지 유휴 관측 | 승인됨 — 기동·중단 시험까지 실행함(아래 "실행 결과"), 유휴 관측 진행 중 |
 | SFN → Airflow 전환(스케줄 DISABLED·DAG unpause) | **미승인** — 10-05 유휴 관측 보고 뒤 따로 결정 |
 | 5거래일 운영·연장·상시 유지 | **미승인** — 이 승인만으로 시작하지 않는다 |
 
@@ -975,6 +975,40 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 #### 유휴 관측 기준선(10-02 ~ 10-05)
 
 세 구간을 나눠 기록한다 — 섞으면 증가 추세를 오판한다. ① 기동 직후(첫 HEALTHY 부터 1시간) ② 중단 시험 직후(재기동 뒤 1시간) ③ 안정 유휴(③-1 10-03 00:00~ 이후 일별 최저·최대). 각 구간에서 태스크 메모리(1분 최대·최저), 서비스 이벤트의 재시작 수, RDS 여유 메모리·연결(Airflow 기동 전 같은 시간대와 비교), 비용을 남긴다. 중단 기준에 걸리면 서비스를 desired 0 으로 내리고 보고한다 — 호스트·메타DB 는 지우지 않는다(증거 보존).
+
+#### 실행 결과(2026-10-02) — 기동·중단 시험·기준선 ①②
+
+원자료(명령 출력·지표 요약·plan)는 레포 밖 `~/Desktop/Development/edge/.dev/alpha-1141-obs/` 에 둔다(AWS 원자료는 커밋하지 않는 관례). 아래 수치는 CloudWatch 1분 지표다.
+
+| 단계 | 결과 |
+|---|---|
+| #1053 머지 | `b0ed4586`. terraform-apply 0 added·0 changed·0 destroyed. GitHub Codex 봇은 사용 한도 소진으로 리뷰하지 못했다 — 로컬 Codex 4라운드(수용 4건 수정, 마지막 0건)와 CI 12건으로 확인했다 |
+| 기동 전 확인(17:46~19:35) | 분 상주 서비스 10개 desired 0, 시장 EOD SFN 15:54 SUCCEEDED, 장중 수급 5슬롯 SUCCEEDED·RUNNING 0. 분석 v2 전망 배치(다른 작업의 전체 실행)가 돌고 있어 19:18 종료까지 기다렸고, 19:30 공시 배치(19:34 FAILED — 09-30·10-01 에 이어 3일째, 이때 Airflow 서비스 0·메타DB 없음)가 끝난 뒤 RDS 를 건드렸다 |
+| #1054 머지(19:19) | `fe9c135f`. apply 13 added·1 changed·0 destroyed(plan 과 같다). 호스트 `i-09745ff0bc77cb7ec` 등록, 경보 7개·오토스케일링 대상 0~1 |
+| 메타DB(19:36) | 사전 조회로 `airflow`·`airflow*` 역할 부재 확인 → `dbadmin create` → `privcheck` 통과(업무 테이블 권한 0, PUBLIC 접속 0, 규격 역할 1, 멤버십 0). 조회 결과 DB `airflow`(소유 `airflow_meta`), 역할 `airflow_meta`(CONNECTION LIMIT 10). `edge_verify` 는 만들지 않았다. `run.py secrets` 는 새 키 0 |
+| 배포(19:38~19:45) | run 36996575755 success. 마이그레이션 exit 0. 태스크 정의 `edge-dev-airflow:16`, 이미지 `edge/airflow:24b902262534fea425aeeb34796027b3974a76d1`(digest `sha256:23948e3c7988a132a0b48823ecd8f7f40bd0a01c0901ee8d50c3681fdd9f54ca`). 세 컨테이너 HEALTHY. DAG `edge_investor_intraday`·`edge_source_daily` 둘 다 pause, import error 0, dag run 0 |
+| S1(20:45) | `stop-task-memory` 강제 ALARM 20:45:43 → 오토스케일링 액션 실행(경보 이력) → 활동 `Setting desired count to 0`(원인: 그 경보·정책 `edge-dev-airflow-stop`) → 11초 안 desired 0, 22초 안 running 0. 호스트는 InService 그대로. 20:47 경보 OK → `update-service --desired-count 1` → 20:48:57 HEALTHY |
+| S2(20:49) | `stop-rds-freeable`(아래 방향) 강제 ALARM 20:49:08 → 같은 정책 → 22초 안 0/0. 20:50 OK → 재기동 → 20:51:48 HEALTHY, 1분 뒤에도 1/1(경보가 다시 내리지 않음) |
+| S3 | 설정 확인만: `stop-rds-freeable` `breaching`, `stop-task-memory`·`stop-rds-swap`·알림 3종 `notBreaching`. **결측으로 ALARM 이 되는 경로와 실제 지표 위반으로 ALARM 이 되는 경로는 미검증이다** |
+| 재기동 뒤 | 두 번 재기동 뒤에도 DAG 둘 pause·import error 0·dag run 0(메타DB 유지). `airflow_meta` 세션 4(idle), 메타DB 크기 약 11MB |
+
+SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이력에는 SNS 액션 성공으로 남았다).
+
+**기준선.**
+
+| 구간 | 태스크 메모리(1408MiB 대비) | RDS 여유 메모리 | RDS 연결 | 재시작 |
+|---|---|---|---|---|
+| 기동 전 60분(18:38~19:38) | — | 549~564MiB(중앙 553) | 20~26(중앙 24) | — |
+| ① 기동 직후(19:46~20:44, 태스크 af7f559c) | 56.5% → 최대 60.7%(약 795 → 854MiB) | 524~547(중앙 540) | 24~35(중앙 25, 35 는 기동 순간) | 0 |
+| ② 중단 시험 직후(20:53~21:52, 태스크 8aa8e140) | 52.5% → 최대 56.3%(약 740 → 793MiB) | 532~550(중앙 545) | 24~28(중앙 25) | 0 |
+| ③ 안정 유휴(10-03 00:00~) | 미기록 | 미기록 | 미기록 | 미기록 |
+
+- 새 태스크는 두 번 모두 첫 1시간에 약 +55MiB 올랐다. 이 증가가 멈추는지는 ③에서 본다 — 지금은 판단하지 않는다.
+- 오늘 RDS 여유 메모리는 Airflow 기동 **전**부터 09-28·09-29 같은 시간대(590~614MiB)보다 40~50MiB 낮았다(오후 내내 분석 v2 전망 배치가 돌았다). Airflow 몫은 기동 전후 중앙값 차이로 약 −10MiB 다. 다음 날 같은 시간대와 다시 비교해야 확정된다.
+- 쓰기 지연 최대 18.7ms(단발), 스왑 15.4~15.7MiB, 태스크 CPU 4~6%, `CPUSurplusCreditsCharged` 0.
+- 비용(추정, 청구 데이터 아님): 호스트 19:20 기동 — EC2 0.0208 + EBS 약 0.004 USD/시간. 10-02 약 0.12 USD, 이후 하루 약 0.6~0.65 USD(로그 포함). 10-05 까지 약 2 USD.
+
+**③ 기록 방법(사람이 한다).** 하루 1회 `obs.py <시작 KST> <끝 KST|now>`(위 원자료 폴더, boto3 필요) 또는 같은 지표를 `aws cloudwatch get-metric-statistics` 로 조회해 이 표에 일별 최저·최대를 더한다. 재시작은 `aws ecs describe-services --cluster edge-dev-airflow --services edge-dev-airflow --query 'services[0].events[:20]'`.
 
 #### 기본 종료(다음 승인이 없을 때)
 

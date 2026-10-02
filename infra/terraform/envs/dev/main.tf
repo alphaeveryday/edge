@@ -528,7 +528,8 @@ module "pipeline" {
 # 기존 임시 news-pipeline SFN 과 분리된 상태머신. 최초엔 DISABLED 로 생성한다.
 # analyze 페이즈는 구 analysis-engine 모듈의 흡수다(ALPHA-408) — 이미지는 alphamale 코드베이스라 따로다.
 module "data_pipeline" {
-  source = "../../modules/data-pipeline"
+  source                                = "../../modules/data-pipeline"
+  analysis_consumer_task_definition_arn = module.analysis_v2.consumer_task_definition_arn
 
   name             = "${local.prefix}-data-pipeline"
   region           = var.region

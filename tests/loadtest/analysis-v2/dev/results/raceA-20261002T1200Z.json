@@ -1,0 +1,82 @@
+{
+ "execution": "raceA-20261002T1200Z",
+ "status": "FAILED",
+ "error": "OutlookBatch.Incomplete",
+ "input": {
+  "analysis_at": "2026-10-02T12:00:00Z",
+  "etf_codes": [
+   "069500"
+  ]
+ },
+ "started": "2026-10-02T21:00:19.361000+09:00",
+ "stopped": "2026-10-02T21:08:14.945000+09:00",
+ "total_seconds": 475.6,
+ "history_events": 315,
+ "summary": {
+  "total": 1,
+  "late": 0,
+  "analysis_at": "2026-10-02T12:00:00Z",
+  "unfinished": [
+   {
+    "outcome": "failed",
+    "etf_code": "069500",
+    "last_analysis_id": "381f79cea8d6e22bf78183c710d0b731",
+    "attempts": 2
+   }
+  ],
+  "completed": 0,
+  "failed": 1,
+  "deadline": "2026-10-02T23:00:00Z",
+  "deadline_exceeded": 0,
+  "unknown": 0
+ },
+ "max_concurrent_children": 1,
+ "gate_waits_30s": {
+  "WaitForSlot": 12
+ },
+ "worker_slot_wait_seconds": {
+  "n": 3,
+  "max": 0.0,
+  "waited": 0
+ },
+ "items": 1,
+ "child_runs_in_this_execution": 2,
+ "child_failed_in_this_execution": 2,
+ "failure_reasons": {
+  "ValueError": 2
+ },
+ "retried_items": 1,
+ "child_seconds_succeeded": null,
+ "child_seconds_sum": 100.3,
+ "db_connections_max": {
+  "before_10min": 27.0,
+  "during": 28.0
+ },
+ "rows": [
+  {
+   "etf_code": "069500",
+   "outcome": "failed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "16c43958ef3301603b819d4d0665c67d",
+     "status": "FAILED",
+     "started": "2026-10-02T21:00:24.277000+09:00",
+     "stopped": "2026-10-02T21:01:16.171000+09:00",
+     "seconds": 51.9,
+     "failure": "ValueError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "381f79cea8d6e22bf78183c710d0b731",
+     "status": "FAILED",
+     "started": "2026-10-02T21:07:24.873000+09:00",
+     "stopped": "2026-10-02T21:08:13.274000+09:00",
+     "seconds": 48.4,
+     "failure": "ValueError"
+    }
+   ]
+  }
+ ]
+}
