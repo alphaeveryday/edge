@@ -1,6 +1,6 @@
 """Resolve producer-owned event and price coordinates without importing v1."""
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import json
 from uuid import NAMESPACE_URL, uuid5
 
@@ -26,9 +26,16 @@ def _event(connection, event_id):
     if len(rows)!=1 or payload['generation']!=event['generation']:
         raise ValueError('Price trigger coordinates disagree')
     trigger = rows[0]
-    for key in ('close_price','open_price','anchor_price','change_rate','threshold'):
-        if key in trigger and (key not in payload or Decimal(str(payload[key]))!=trigger[key]):
-            raise ValueError('Price trigger values disagree')
+    # Match the producer table's NUMERIC scales, not the unrounded JSON fraction.
+    scales = {'close_price':6,'open_price':6,'anchor_price':6,'change_rate':8,'threshold':8}
+    for key, scale in scales.items():
+        if key not in trigger:
+            continue
+        if key not in payload:
+            raise ValueError(f'Missing price trigger field: {key}')
+        value = Decimal(str(payload[key]))
+        if not value.is_finite() or value.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)!=trigger[key]:
+            raise ValueError(f'Price trigger value disagrees: {key}')
     if 'detection_policy_version' in trigger and payload.get('detection_policy_version')!=trigger['detection_policy_version']:
         raise ValueError('Price trigger policy disagrees')
     cutoff = max(trigger['created_at'],trigger['window_start']+timedelta(minutes=1))
