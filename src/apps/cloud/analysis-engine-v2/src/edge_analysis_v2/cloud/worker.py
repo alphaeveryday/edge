@@ -9,6 +9,7 @@ from threading import Event, Thread
 import time
 
 import boto3
+from psycopg.rows import dict_row
 
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.cloud.artifacts import Publisher, atomic, encode
@@ -17,6 +18,7 @@ from edge_analysis_v2.contracts.audit import read_contract_audit
 from edge_analysis_v2.dashboard.server import assemble_screen
 from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices
 from edge_analysis_v2.storage.database import connect_results
+from edge_analysis_v2.storage.delivery import enqueue_movement
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
 
 LOG = logging.getLogger(__name__)
@@ -90,6 +92,21 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
         session: AWS session backed by the ECS task role.
         slots: Analyses allowed to run at once; see acquire_slot.
     """
+    # A completed movement can retry delivery without claiming or overwriting its observations.
+    if request['kind'] == 'movement':
+        with connect_results(ca_path,session=session,cloud=True) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("SELECT status,etf_code,analysis_at,data_source FROM movement_analyses WHERE analysis_id=%s",
+                               (request['analysis_id'],))
+                existing = cursor.fetchone()
+            if existing and existing['status'] == 'completed':
+                if (existing['etf_code'] != request['etf_code']
+                        or existing['analysis_at'] != datetime.fromisoformat(request['analysis_at'])
+                        or existing['data_source'] != 'database'):
+                    raise ValueError('Completed analysis belongs to a different request')
+                count = enqueue_movement(connection, request['analysis_id'])
+                LOG.info('Completed movement delivery recovered analysis_id=%s tenants=%s',request['analysis_id'],count)
+                return
     folder.mkdir(parents=True,exist_ok=True)
     job = request | {'origin':'cloud','scenario':'database','data_source':'database',
                      'status':'running','started_at':datetime.now(timezone.utc).isoformat()}
@@ -120,6 +137,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                 artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
+            if request['kind'] == 'movement':
+                job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
         job['status']='completed'
     except Exception as exc:
         job.update(status='failed',error=type(exc).__name__+': analysis failed; inspect recorded events')

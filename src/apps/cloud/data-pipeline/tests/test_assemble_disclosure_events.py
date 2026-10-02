@@ -180,6 +180,36 @@ def test_missing_required_identity_is_counted_without_blocking_valid_fact(monkey
     assert result["skipped_required"] == 1
 
 
+def test_skipped_fact_is_identified_with_its_reason(monkeypatch):
+    """WHY(ALPHA-1154): 건수만 남으면 어느 공시가 이벤트가 되지 못했는지 나중에 찾을 수 없다
+    (10-01 의 4건은 로그에 `skipped_required=4` 뿐이었다). 접수번호·fact·사유를 남기고, 사유는
+    실제로 빈 필수 항목만 댄다 — 다른 원인의 ValueError 를 문서 결손으로 적으면 1분 레인이
+    설정 문제를 "다시 읽어도 같은 문서 거부"로 읽고 커서를 넘긴다."""
+    conn = _Conn()
+    monkeypatch.setattr(assemble_disclosure_events, "thread_events", lambda *_: 0)
+    skipped: list[dict] = []
+
+    assemble_disclosure_events.persist_facts(conn, [
+        _fact(),
+        _fact(fact_id="no_object", document_id="doc_a", rcept_no="20260809000201",
+              contract_object_concept_id=None),
+        _fact(fact_id="no_supplier", document_id="doc_b", rcept_no="20260809000202",
+              supplier_instrument_id=None),
+    ], skipped)
+
+    assert [(item["rcept_no"], item["fact_id"], item["document_id"], item["reasons"])
+            for item in skipped] == [
+        ("20260809000201", "no_object", "doc_a", ["missing_contract_object"]),
+        ("20260809000202", "no_supplier", "doc_b", ["missing_supplier_instrument"]),
+    ]
+
+    # 필수 항목은 다 있는데 이벤트를 못 만든 경우 — 문서 결손 사유를 대지 않는다
+    monkeypatch.setattr(assemble_disclosure_events, "load_process_registry", lambda: {})
+    other: list[dict] = []
+    assemble_disclosure_events.persist_facts(conn, [_fact()], other)
+    assert [item["reasons"] for item in other] == [["event_build_error"]]
+
+
 def test_fetch_maps_issuer_and_counterparty_to_common_instruments():
     """공시 typed fact의 actor FK를 그대로 thread에 쓰면 NEWS instrument FK와 절대 같아질 수
     없다. 조회 경계에서 양쪽 actor의 보통주 instrument를 명시적으로 가져온다."""
@@ -230,3 +260,39 @@ def test_run_surfaces_required_identity_loss_in_quality_log(tmp_path, monkeypatc
     assert log["created"] == 1
     assert log["skipped_required"] == 1
     assert log["exit_code"] == 1
+
+
+def test_run_reports_skipped_facts_only_when_the_log_is_durable(tmp_path, monkeypatch):
+    """WHY(ALPHA-1154): 1분 레인은 이 report 를 근거로 "건너뛴 fact 는 다시 읽어도 같다"고 보고
+    커서를 넘긴다. 그 근거가 quality_log 에 남지 않았는데 report 만 채워 주면, 재처리할 기록 없이
+    커서가 지나간다 — 로그 기록이 실패하면 report 는 비어 있어야 한다."""
+    conn = _Conn()
+
+    @contextmanager
+    def fake_connect(_db):
+        yield conn
+
+    monkeypatch.setattr(assemble_disclosure_events, "connect", fake_connect, raising=False)
+    monkeypatch.setattr(assemble_disclosure_events, "thread_events", lambda *_: 0)
+    monkeypatch.setattr(
+        assemble_disclosure_events, "fetch_facts",
+        lambda *_args, **_kwargs: [_fact(), _fact(fact_id="bad", document_id="doc_bad",
+                                                  contract_object_concept_id=None)])
+
+    storage = LocalStorage(tmp_path / "lake")
+    report: dict = {}
+    assert assemble_disclosure_events.run(
+        storage, "R1", db=DbConfig(password="x"), report=report) == 1
+    [key] = [key for key in storage.list_keys("operations_archive/") if key.endswith("log.json")]
+    log = json.loads(storage.get_bytes(key).decode("utf-8"))
+    assert [item["fact_id"] for item in log["skipped_facts"]] == ["bad"]
+    assert report["skipped_facts"] == log["skipped_facts"] and report["failures"] == []
+
+    class _BrokenStorage(LocalStorage):
+        def put_bytes(self, key, data):
+            raise OSError("quality log put failed")
+
+    lost: dict = {}
+    assert assemble_disclosure_events.run(
+        _BrokenStorage(tmp_path / "broken"), "R2", db=DbConfig(password="x"), report=lost) == 1
+    assert lost == {}
