@@ -73,14 +73,14 @@ public class BundleScreener {
 	@Transactional
 	public void screen(long cursorFrom, byte[] body) {
 		List<DeliveryEntry> entries = parser.parse(cursorFrom, body);
-		// 정책은 번들당 1회, 판정이 필요한 entry(NEW)를 처음 만날 때 로드한다 —
+		// 정책은 번들당 1회, v1 NEW를 처음 만날 때 로드한다 — v2는 정책 없이 자동 게시.
 		// INVALIDATION 만 실린 번들은 정책 없이도 진행돼야 한다(무효화는 안전 조치라
-		// 온보딩 전에도 반영). 정책 0건 시 NEW 는 진행 중단이다.
+		// 온보딩 전에도 반영). 정책 0건 시 v1 NEW는 진행 중단이다.
 		ActivePolicy policy = null;
 		for (DeliveryEntry entry : entries) {
 			switch (entry.deliveryType()) {
 				case "NEW" -> {
-					if (policy == null) {
+					if (!"v2".equals(requiredResult(entry).analysisEngine()) && policy == null) {
 						policy = loadActivePolicy();
 					}
 					screenNew(entry, policy);
@@ -132,7 +132,7 @@ public class BundleScreener {
 		}
 		// 최초 진입(SYSTEM) 이력 — 감사 재현의 시점 원장(ALPHA-431). from NULL = 수신 진입.
 		statusHistoryRepository.save(new AnalysisItemStatusHistory(result.explanationResultId(),
-				null, decision.status(), null));
+				null, decision.status(), "v2".equals(result.analysisEngine()) ? "v2 자동 노출" : null));
 		for (ScreeningDecision.Check check : decision.checks()) {
 			screeningCheckRepository.append(result.explanationResultId(), policy.policyVersionId(),
 					check.ruleId(), check.result(), check.matchedText());
@@ -200,7 +200,7 @@ public class BundleScreener {
 				entry.evidencesJson(),
 				entry.cursor(),
 				status,
-				result.contentAsOf());
+				result.contentAsOf(), result.analysisEngine());
 	}
 
 	private static DeliveryEntry.ExplanationResult requiredResult(DeliveryEntry entry) {
