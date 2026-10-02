@@ -2,6 +2,7 @@
 from psycopg.rows import dict_row
 
 from edge_analysis_v2.storage.inspection import read_published_movement_evidence
+from edge_analysis_v2.storage.retractions import is_retracted
 
 
 def enqueue_movement(connection, analysis_id):
@@ -31,6 +32,9 @@ def enqueue_movement(connection, analysis_id):
     with connection.transaction(), connection.cursor(row_factory=dict_row) as cur:
         # Same lock as v1: cursor order must also be transaction commit order.
         cur.execute("SELECT pg_advisory_xact_lock(hashtext('tenant-delivery-fanout')::bigint)")
+        if is_retracted(cur, analysis_id):
+            cur.execute('UPDATE movement_analyses SET withdrawn_at=COALESCE(withdrawn_at,now()) WHERE analysis_id=%s', (analysis_id,))
+            return 0
         cur.execute("""SELECT 1 FROM tenant_delivery d
             JOIN movement_analyses delivered ON delivered.analysis_id=d.movement_analysis_id
             JOIN movement_analyses current ON current.analysis_id=%s

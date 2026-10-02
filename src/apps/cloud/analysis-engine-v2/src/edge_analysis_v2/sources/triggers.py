@@ -33,7 +33,8 @@ def _event(connection, event_id):
         raise ValueError('Price trigger policy disagrees')
     cutoff = max(trigger['created_at'],trigger['window_start']+timedelta(minutes=1))
     source = dict(event_id=event_id,event_type=event['event_type'],
-                  trigger_id=trigger['trigger_id'],generation=trigger['generation'])
+                  trigger_id=trigger['trigger_id'],generation=trigger['generation'],
+                  session_id=trigger['session_id'],window_start=trigger['window_start'].isoformat())
     identity = uuid5(NAMESPACE_URL,json.dumps(['edge-analysis-v2',event['event_type'],event_id,event['generation']])).hex
     request = decode_request(json.dumps(dict(analysis_id=identity,kind='movement',etf_code=trigger['entity_id'],
         analysis_at=cutoff.astimezone(timezone.utc).isoformat(),source=source)),internal=True)
@@ -65,6 +66,31 @@ def resolve_trigger(connection, request):
     """Revalidate the execution input and return the exact original FIRE row."""
     original, trigger, _ = _event(connection,request['source']['event_id'])
     expected = request | {'analysis_at':datetime.fromisoformat(request['analysis_at']).astimezone(timezone.utc).isoformat()}
+    for key in ('session_id','window_start'):
+        if key not in request['source']:
+            original['source'].pop(key)
     if original!=expected:
         raise ValueError('Execution request does not match the original trigger')
     return trigger
+
+
+def load_queue_event(connection, raw):
+    """Resolve either event from the producer's outbox, rejecting forged coordinates."""
+    message = decode_json(raw)
+    if not isinstance(message, dict) or set(message) != {'event_id','event_type','payload'}:
+        raise ValueError('Invalid price event envelope')
+    if message['event_type'] != 'ExposureReverted':
+        return load_event_request(connection, raw)
+    with connection.cursor(row_factory=dict_row) as cur:
+        cur.execute('''SELECT event_id,event_type,payload FROM dataset_commit_outbox
+            WHERE event_id=%s AND destination='price-explanation-realtime' ''', (message['event_id'],))
+        original = cur.fetchone()
+    if original != message:
+        raise ValueError('Reversion does not match the outbox')
+    payload = message['payload']
+    for key in ('entity_id','session_id','window_start'):
+        if not isinstance(payload.get(key), str) or not payload[key].strip():
+            raise ValueError('Missing reversion coordinate')
+    if datetime.fromisoformat(payload['window_start']).utcoffset() is None:
+        raise ValueError('Reversion timestamp requires offset')
+    return message

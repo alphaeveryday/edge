@@ -29,6 +29,23 @@ def poll(queue):
     return poll_once(sqs, 'queue-url', loader, admission, stop)
 
 
+@pytest.mark.parametrize('fails', [False, True])
+def test_reversion_is_persisted_before_ack_without_starting_model_workflow(queue, fails):
+    sqs, loader, admission, stop = queue
+    event = {'event_id':'revert-1', 'event_type':'ExposureReverted', 'payload':{}}
+    loader.return_value = event
+    retract = Mock(side_effect=RuntimeError('Database unavailable') if fails else None)
+    if fails:
+        with pytest.raises(RuntimeError):
+            poll_once(sqs, 'queue-url', loader, admission, stop, retract)
+        sqs.delete_message.assert_not_called()
+    else:
+        poll_once(sqs, 'queue-url', loader, admission, stop, retract)
+        sqs.delete_message.assert_called_once()
+    retract.assert_called_once_with(event)
+    assert admission.workflows.starts == 0
+
+
 def test_ack_observes_committed_admission_without_waiting_for_analysis(queue):
     sqs, loader, admission, _ = queue
     def delete(**kwargs):
