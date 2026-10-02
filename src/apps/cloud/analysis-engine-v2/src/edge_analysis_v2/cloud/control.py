@@ -29,7 +29,7 @@ def tasks_stopped(connection, ecs, cluster, slot):
     return not active
 
 
-def control(connection, workflows, ecs, cluster, execution_arn, action):
+def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots=1, request_key=None):
     """Acquire one shared slot or release it after the owning task stops.
 
     Args:
@@ -39,19 +39,24 @@ def control(connection, workflows, ecs, cluster, execution_arn, action):
         cluster: Server-configured cluster ARN.
         execution_arn: Caller workflow execution ARN.
         action: Acquire or release.
+        slots: Shared configured capacity, from one through three.
+        request_key: Analysis kind and ETF code; one execution at a time per pair.
 
     Returns:
         Acquired flag and stable ECS startedBy identity.
     """
     if action not in ('acquire', 'release'):
         raise ValueError('Unknown execution control action')
+    if type(slots) is not int or not 1 <= slots <= 3:
+        raise ValueError('Invalid analysis capacity')
+    request_key = request_key or execution_arn
     started_by = sha256(execution_arn.encode()).hexdigest()[:32]
     # AWS calls occur outside the transaction so a slow dependency never holds the lock.
     with connection.cursor(row_factory=dict_row) as cur:
         cur.execute('SELECT execution_arn,started_by,task_arns FROM analysis_execution_slots')
-        slots = cur.fetchall()
+        existing_slots = cur.fetchall()
     removable = []
-    for slot in slots:
+    for slot in existing_slots:
         if slot['execution_arn'] == execution_arn:
             finished = action == 'release'
         else:
@@ -65,10 +70,10 @@ def control(connection, workflows, ecs, cluster, execution_arn, action):
             connection.execute('DELETE FROM analysis_execution_slots WHERE execution_arn=%s', (arn,))
         if action == 'release':
             return {'acquired': False, 'started_by': started_by}
-        rows = connection.execute('SELECT execution_arn FROM analysis_execution_slots').fetchall()
-        if not rows:
-            connection.execute('INSERT INTO analysis_execution_slots(execution_arn,started_by) VALUES (%s,%s)',
-                               (execution_arn, started_by))
+        rows = connection.execute('SELECT execution_arn,request_key FROM analysis_execution_slots').fetchall()
+        if len(rows) < slots and all(row[1] != request_key for row in rows):
+            connection.execute('INSERT INTO analysis_execution_slots(execution_arn,started_by,request_key) VALUES (%s,%s,%s)',
+                               (execution_arn, started_by, request_key))
             acquired = True
         else:
             acquired = any(row[0] == execution_arn for row in rows)
@@ -84,4 +89,5 @@ def handler(event, context):
         raise ValueError('Unexpected workflow execution')
     with connect_results(Path(os.environ['RDS_CA_PATH']), session=session, cloud=True) as connection:
         return control(connection, session.client('stepfunctions'), session.client('ecs'),
-                       os.environ['CLUSTER_ARN'], arn, event['action'])
+                       os.environ['CLUSTER_ARN'], arn, event['action'],
+                       slots=int(os.environ['ANALYSIS_SLOTS']), request_key=event.get('request_key'))

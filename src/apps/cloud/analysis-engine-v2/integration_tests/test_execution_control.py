@@ -65,3 +65,10 @@ def test_release_is_idempotent_and_aws_failure_cannot_free_live_slot(capacity):
     control(conn, workflows, ecs, 'cluster', 'one', 'release')
     control(conn, workflows, ecs, 'cluster', 'one', 'release')
     assert control(conn, workflows, ecs, 'cluster', 'two', 'acquire')['acquired']
+
+
+def test_three_slots_still_serialize_the_same_etf_and_kind(capacity):
+    conn, _, workflows, ecs = capacity
+    assert control(conn, workflows, ecs, 'cluster', 'a', 'acquire', slots=3, request_key='movement:091160')['acquired']
+    assert not control(conn, workflows, ecs, 'cluster', 'b', 'acquire', slots=3, request_key='movement:091160')['acquired']
+    assert control(conn, workflows, ecs, 'cluster', 'c', 'acquire', slots=3, request_key='movement:069500')['acquired']

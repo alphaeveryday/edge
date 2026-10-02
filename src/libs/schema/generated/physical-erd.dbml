@@ -48,6 +48,7 @@ Table "analysis_execution_requests" {
 Table "analysis_execution_slots" {
   "execution_arn" text [pk]
   "started_by" varchar(36) [not null]
+  "request_key" text [not null]
   "task_arns" text[] [not null]
   "created_at" timestamptz [not null]
 }

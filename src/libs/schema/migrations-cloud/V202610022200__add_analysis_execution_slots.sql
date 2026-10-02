@@ -2,6 +2,7 @@
 CREATE TABLE analysis_execution_slots (
     execution_arn text PRIMARY KEY,
     started_by varchar(36) NOT NULL UNIQUE,
+    request_key text NOT NULL UNIQUE,
     task_arns text[] NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
 );
