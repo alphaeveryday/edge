@@ -9,6 +9,8 @@ variable "image" { type = string }
 variable "deploy_role_name" { type = string }
 variable "operator_arn" { type = string }
 variable "api_image" { type = string }
+variable "price_queue_url" { type = string }
+variable "price_queue_arn" { type = string }
 variable "api_client_role_names" {
   type    = list(string)
   default = []

@@ -103,3 +103,31 @@ jobs:
           json.dump(task,open('/tmp/next-task.json','w'))
           PY
           aws ecs register-task-definition --cli-input-json file:///tmp/next-task.json --query taskDefinition.taskDefinitionArn --output text
+      - name: Update workflow control and the price admission runtime
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if aws lambda get-function --function-name edge-dev-analysis-v2-control >/dev/null 2>/tmp/control-error; then break; fi
+            if [ "$attempt" = 60 ]; then cat /tmp/control-error; exit 1; fi
+            sleep 10
+          done
+          aws lambda wait function-active-v2 --function-name edge-dev-analysis-v2-control
+          aws lambda update-function-code --function-name edge-dev-analysis-v2-control --image-uri "$ANALYSIS_API_IMAGE" --query LastUpdateStatus --output text
+          aws lambda wait function-updated-v2 --function-name edge-dev-analysis-v2-control
+          aws ecs describe-task-definition --task-definition edge-dev-analysis-v2-consumer >/tmp/consumer.json
+          python - <<'PY'
+          import json, os
+          task=json.load(open('/tmp/consumer.json'))['taskDefinition']
+          fields=('family','taskRoleArn','executionRoleArn','networkMode','containerDefinitions','volumes','requiresCompatibilities','cpu','memory')
+          task={k:task[k] for k in fields if k in task}
+          assert task['family']=='edge-dev-analysis-v2-consumer'
+          task['containerDefinitions'][0]['image']=os.environ['ANALYSIS_IMAGE']
+          json.dump(task,open('/tmp/next-consumer.json','w'))
+          PY
+          task="$(aws ecs register-task-definition --cli-input-json file:///tmp/next-consumer.json --query taskDefinition.taskDefinitionArn --output text)"
+          current="$(aws ecs describe-services --cluster edge-dev-worker --services edge-dev-data-pipeline-analysis-consumer --query 'services[0].taskDefinition' --output text)"
+          # The first v1 -> v2 switch is explicit, after old tasks have drained. Later deploys stay automatic.
+          if [[ "$current" == *:task-definition/edge-dev-analysis-v2-consumer:* ]]; then
+            aws ecs update-service --cluster edge-dev-worker --service edge-dev-data-pipeline-analysis-consumer --task-definition "$task" >/dev/null
+            aws ecs wait services-stable --cluster edge-dev-worker --services edge-dev-data-pipeline-analysis-consumer
+          fi

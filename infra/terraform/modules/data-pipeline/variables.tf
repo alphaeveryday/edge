@@ -725,3 +725,8 @@ variable "call_budget_enabled" {
   type        = bool
   default     = false
 }
+variable "analysis_consumer_task_definition_arn" {
+  type        = string
+  default     = null
+  description = "v2 admission task; null keeps the legacy task for environments not yet migrated."
+}

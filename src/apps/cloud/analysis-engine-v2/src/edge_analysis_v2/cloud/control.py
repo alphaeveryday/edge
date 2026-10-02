@@ -1,4 +1,5 @@
 """Reserve analysis capacity before starting Fargate; reclaim only stopped work."""
+import json
 from hashlib import sha256
 import os
 from pathlib import Path
@@ -9,12 +10,18 @@ from psycopg.rows import dict_row
 from edge_analysis_v2.storage.database import connect_results
 
 
-def tasks_stopped(connection, ecs, cluster, slot):
+def tasks_stopped(connection, workflows, ecs, cluster, slot):
     """Stop surviving tasks and return true only after ECS confirms their exit."""
-    response = ecs.list_tasks(cluster=cluster, startedBy=slot['started_by'])
-    arns = sorted(set(response['taskArns']) | set(slot['task_arns']))
-    if response.get('nextToken'):
-        raise RuntimeError('Unexpected task pagination')
+    arns = set(slot['task_arns'])
+    # Optimized ECS integration owns StartedBy. Its execution history identifies tasks.
+    for page in workflows.get_paginator('get_execution_history').paginate(
+            executionArn=slot['execution_arn']):
+        for event in page['events']:
+            details = event.get('taskSubmittedEventDetails', {})
+            if details.get('resourceType') == 'ecs' and details.get('resource') == 'runTask.sync':
+                output = json.loads(details['output'])
+                arns.update(task['TaskArn'] for task in output.get('Tasks', []))
+    arns = sorted(arns)
     if not arns:
         return True
     # StopTask removes a task from the default RUNNING listing before it has exited.
@@ -43,7 +50,7 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
         request_key: Analysis kind and ETF code; one execution at a time per pair.
 
     Returns:
-        Acquired flag and stable ECS startedBy identity.
+        Acquired flag and stable reservation identity.
     """
     if action not in ('acquire', 'release'):
         raise ValueError('Unknown execution control action')
@@ -62,7 +69,7 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
         else:
             status = workflows.describe_execution(executionArn=slot['execution_arn'])['status']
             finished = status in ('SUCCEEDED', 'FAILED', 'TIMED_OUT', 'ABORTED')
-        if finished and tasks_stopped(connection, ecs, cluster, slot):
+        if finished and tasks_stopped(connection, workflows, ecs, cluster, slot):
             removable.append(slot['execution_arn'])
     with connection.transaction():
         connection.execute("SELECT pg_advisory_xact_lock(hashtext('analysis-v2-capacity')::bigint)")
