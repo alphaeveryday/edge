@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.dashboard.jobs import read_settings
-from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices
+from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices, load_research_observations
 from edge_analysis_v2.storage.database import connect_results
 
 
@@ -39,6 +39,8 @@ def main():
     try:
         with connect_sources(args.rds_ca) as connection:
             source = load_prices(connection, load_flow(connection, load_source(connection,args.ticker,args.analysis_at)))
+        with connect_results(args.rds_ca) as connection:
+            source = load_research_observations(connection, source)
         execute_request(kind=args.kind,source_tools=DatabaseTools(source),
             connection_factory=lambda:connect_results(args.rds_ca),artifacts=folder,
             analysis_id=identity, **settings)

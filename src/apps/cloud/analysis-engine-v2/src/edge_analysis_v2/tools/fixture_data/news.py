@@ -54,3 +54,16 @@ def evidence(fixture, news_ids, include_body):
     keys = ("news_id", "title", "body") if include_body else ("news_id", "title")
     return {"news": [{k: rows[identity].get(k) for k in keys} |
                      ({'body_kind': rows[identity]['body_kind']} if include_body and 'body_kind' in rows[identity] else {}) for identity in news_ids]}
+
+
+def search_articles(fixture, query, offset):
+    """Page an immutable, cutoff-filtered corpus without treating its boundary as public absence."""
+    if not isinstance(query, str) or len(query) > 200 or type(offset) is not int or offset < 0:
+        raise ValueError('Bounded query and nonnegative offset required')
+    words = query.casefold().split()
+    matches = [r for r in visible(fixture)
+               if all(word in (r['title'] + ' ' + (r.get('body') or '')).casefold() for word in words)]
+    page = matches[offset:offset+50]
+    return {'articles':[{k:r[k] for k in ('news_id','title','published_at')} for r in page],
+            'matched_count':len(matches), 'next_offset':offset+50 if offset+50 < len(matches) else None,
+            'scope':dict(fixture.get('news_scope', {}))}
