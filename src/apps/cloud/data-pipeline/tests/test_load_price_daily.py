@@ -23,8 +23,8 @@ from data_pipeline.lake import (
 )
 from data_pipeline.steps import load_price_daily
 
-_COLUMNS = ("market", "ticker", "trade_date", "close", "adj_close", "volume",
-            "currency", "source_vendor", "fetched_at")
+_COLUMNS = ("market", "ticker", "trade_date", "open", "high", "low", "close", "adj_close",
+            "volume", "currency", "source_vendor", "fetched_at")
 
 
 def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
@@ -34,6 +34,7 @@ def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
 
     schema = pa.schema([
         ("market", pa.string()), ("ticker", pa.string()), ("trade_date", pa.string()),
+        ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()),
         ("close", pa.float64()), ("adj_close", pa.float64()), ("volume", pa.int64()),
         ("currency", pa.string()), ("source_vendor", pa.string()), ("fetched_at", pa.string()),
     ])
@@ -50,6 +51,7 @@ _AT = datetime.fromisoformat("2026-07-20T06:00:00+00:00")
 
 def _price_row(ticker: str = "005930", trade_date: str = "2026-07-16", **over) -> dict:
     row = {"market": "KR", "ticker": ticker, "trade_date": trade_date,
+           "open": 71000.0, "high": 72000.0, "low": 70500.0,
            "close": 71500.0, "adj_close": 71500.0, "volume": 12_345_678,
            "currency": "KRW", "source_vendor": "kis", "fetched_at": "2026-07-20T06:00:00+00:00"}
     row.update(over)
@@ -133,7 +135,8 @@ class _FakeCursor:
             # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신·available_at 앞당김=(True,) /
             # 같은 값이고 시각도 안 앞당겨지면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key = (params[0], params[1])
-            value = (params[2], params[3], params[4])  # close, adj_close, volume
+            # close, adj_close, volume, open, high, low
+            value = (params[2], params[3], params[4], params[7], params[8], params[9])
             available_at = datetime.fromisoformat(params[5])
             prev = self._existing.get(key)
             if prev is None:
@@ -217,7 +220,8 @@ def test_canonical_가격이_마트_행이_된다(tmp_path, monkeypatch):
 
     assert load_price_daily.run(storage, "R1", db=_db()) == 0
 
-    [(instrument_id, trade_date, close, adj, volume, available_at, data_version)] = _inserts(conn)
+    [(instrument_id, trade_date, close, adj, volume, available_at, data_version,
+      open_price, high_price, low_price)] = _inserts(conn)
     assert instrument_id == "inst_samsung"        # (market,ticker) → instrument 해소
     assert trade_date == "2026-07-16"
     assert close == pytest.approx(71500.0)
@@ -225,6 +229,8 @@ def test_canonical_가격이_마트_행이_된다(tmp_path, monkeypatch):
     assert volume == 12_345_678
     assert available_at == "2026-07-20T06:00:00+00:00"  # fetched_at = 우리가 얻은 시각
     assert data_version == "R1"
+    # 시가·고가·저가도 canonical 값 그대로다(ALPHA-1148). 안 실리면 고저 범위·ATR 을 못 만든다.
+    assert (open_price, high_price, low_price) == (71000.0, 72000.0, 70500.0)
 
 
 def test_manifest_정상경로는_KR_winner만_GET하고_건수를_분리한다(tmp_path, monkeypatch):
@@ -247,7 +253,7 @@ def test_manifest_정상경로는_KR_winner만_GET하고_건수를_분리한다(
 
     assert load_price_daily.run(storage, "R1", db=_db(), input_run_id="N1") == 0
     assert [params[0] for params in _inserts(conn)] == ["inst_samsung"]
-    assert _inserts(conn)[0][-1] == "N1", (
+    assert _inserts(conn)[0][6] == "N1", (
         "manifest 재시도에서도 downstream 조인용 version은 producer run_id여야 한다")
     assert storage.listed == []
     assert canonical_run_manifest_key("price_daily", "N1") in storage.gotten
@@ -372,7 +378,8 @@ def test_실패한_winner는_현재_run_version으로_stamp하지_않는다(tmp_
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [_price_row()])
     conn = _FakeConn(
-        existing={("inst_samsung", "2026-07-16"): ((70000.0, 70000.0, 1), _AT)},
+        existing={("inst_samsung", "2026-07-16"):
+                  ((70000.0, 70000.0, 1, 71000.0, 72000.0, 70500.0), _AT)},
         fail_instruments={"inst_samsung"},
     )
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
@@ -389,7 +396,7 @@ def test_재확정_stamp_실패도_다른_winner를_보존하고_exit2(tmp_path,
     _write_canonical(storage, "KR", "2026-07-16", [
         _price_row("005930"), _price_row("000660"),
     ])
-    same = (71500.0, 71500.0, 12_345_678)
+    same = (71500.0, 71500.0, 12_345_678, 71000.0, 72000.0, 70500.0)
     conn = _FakeConn(
         instruments={"005930": "inst_samsung", "000660": "inst_hynix"},
         existing={("inst_samsung", "2026-07-16"): (same, _AT)},
@@ -485,6 +492,25 @@ def test_CHECK_위반_행은_격리하고_센다(tmp_path, monkeypatch):
     assert log["created"] == 1
     assert log["skipped_check_violation"] == 1
     assert log["check_violations"][0]["reason"] == "bad_adjusted_close_price"
+
+
+@pytest.mark.parametrize("column", ["open", "high", "low"])
+def test_시고저_CHECK_위반_행도_격리하고_센다(tmp_path, monkeypatch, column):
+    # WHY(ALPHA-1148): ck_price_daily_ohl 은 시가·고가·저가가 양수·유한이길 요구한다. 게이트가
+    #      이 컬럼을 안 보면 DB 가 거부한 뒤에야 row_load_error 로 드러나 어느 값이 나빴는지가
+    #      구조화된 사유로 남지 않는다. 세 컬럼 각각이 적재 전에 걸려야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row("005930"), _price_row("000660", **{column: 0.0})])
+    conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
+
+    assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]
+    log = _log(storage)
+    assert log["skipped_check_violation"] == 1
+    assert log["check_violations"][0]["reason"] == f"bad_{column}_price"
 
 
 def test_비수치_값은_배치를_죽이지_않고_격리된다(tmp_path, monkeypatch):
@@ -591,7 +617,7 @@ def test_같은_키가_여러_part_에_있으면_canonical_과_같은_승자를_
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
     assert load_price_daily.run(storage, "R1", db=_db()) == 0
-    [(_, _, _, _, volume, available_at, _)] = _inserts(conn)
+    [(_, _, _, _, volume, available_at, *_)] = _inserts(conn)
     assert volume == 100                                    # 사전순 마지막 part 도 최신도 아니다
     assert available_at == "2026-07-16T06:41:00+00:00"      # available_at 도 D일 수집 시각
 
