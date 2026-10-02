@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { DailyAnalysis } from '@/api';
-import { Chevron, IconButton, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
+import { BottomBar, Chevron, IconButton, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
 import { VoteCard } from '@/features/community/VoteCard';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
@@ -30,7 +30,7 @@ interface Props {
 // 화면을 거의 다 덮는 분석 상세 시트
 export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, next, onNext }: Props) {
   const router = useRouter();
-  const { top, bottom } = useSafeAreaInsets();
+  const { top } = useSafeAreaInsets();
   const { data: etf } = useEtf(code);
   const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
@@ -131,9 +131,9 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
             </ScrollView>
           )}
           {next && onNext && (
-            <View style={[styles.foot, { paddingBottom: Math.max(bottom, 12) + 8 }]}>
+            <BottomBar style={styles.foot}>
               <LinkRow variant="accent" label={`다음 · ${next.name}`} onPress={onNext} />
-            </View>
+            </BottomBar>
           )}
           <HintSheet hintKey={hint} onClose={() => setHint(null)} />
         </View>

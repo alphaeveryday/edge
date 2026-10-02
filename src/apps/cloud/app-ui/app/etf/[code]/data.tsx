@@ -1,7 +1,7 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Chip, LinkRow, SectionHead } from '@/components/ui';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Chip, LinkRow, PageScroll, SectionHead } from '@/components/ui';
 import { dirLabel } from '@/features/analysis/dir';
 import { HeatMap } from '@/features/etf/HeatMap';
 import { useEtfDetail } from '@/features/etf/queries';
@@ -29,7 +29,7 @@ export default function EtfData() {
         const rows = comp === 'theme' && d.themeRows?.length ? d.themeRows : d.holdings;
         const shown = more ? rows : rows.slice(0, 3);
         return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+    <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       {d.insight && (
         <View style={styles.insight}>
           <View style={styles.insightHead}>
@@ -121,7 +121,7 @@ export default function EtfData() {
         </View>
         {!!d.blurb && <Text style={styles.blurb}>{d.blurb}</Text>}
       </View>
-    </ScrollView>
+    </PageScroll>
       ); }}
     </QueryState>
   );

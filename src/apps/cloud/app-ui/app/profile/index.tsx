@@ -1,10 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
-import { Avatar, BottomSheet, Chevron, CtaButton, ListRow, NavBar, SheetHead, ToggleRow } from '@/components/ui';
+import { Avatar, BottomSheet, Chevron, CtaButton, ListRow, NavBar, PageScroll, SheetHead, ToggleRow } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useOnboarding } from '@/store/onboarding';
 import { useSession } from '@/store/session';
@@ -33,7 +33,7 @@ export default function Profile() {
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="계정" onBack={() => router.back()} />
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <PageScroll showsVerticalScrollIndicator={false}>
         <Pressable onPress={() => router.push('/profile/community')} style={({ pressed }) => [styles.me, pressed && { opacity: 0.6 }]}>
           {me && <Avatar label={me.nick} bg={me.avatarBg} size={52} />}
           <View style={{ flex: 1 }}>
@@ -56,7 +56,7 @@ export default function Profile() {
           <Text style={styles.logoutText}>로그아웃</Text>
         </Pressable>
         <Text style={styles.version}>ETF Orca v0.1.0</Text>
-      </ScrollView>
+      </PageScroll>
       <BottomSheet open={delOpen} onClose={() => setDelOpen(false)}>
         <SheetHead title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 답글은 '탈퇴한 사용자'로 남아요." />
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>

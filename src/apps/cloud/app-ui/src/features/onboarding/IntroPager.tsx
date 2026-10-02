@@ -2,7 +2,7 @@ import { useFocusEffect } from 'expo-router';
 import { type ReactNode, useCallback, useRef, useState } from 'react';
 import { BackHandler, type NativeScrollEvent, type NativeSyntheticEvent, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CtaButton } from '@/components/ui';
+import { BottomBar, CtaButton } from '@/components/ui';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -21,7 +21,7 @@ interface Props {
 
 // 온보딩 소개 가로 페이저, 점 표시와 버튼 고정
 export function IntroPager({ pages, onDone }: Props) {
-  const { top, bottom } = useSafeAreaInsets();
+  const { top } = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [height, setHeight] = useState(0);
   const [index, setIndex] = useState(0);
@@ -70,9 +70,9 @@ export function IntroPager({ pages, onDone }: Props) {
       <View style={styles.dots}>
         {pages.map((p, i) => <View key={p.title} style={[styles.dot, i === index && styles.dotOn]} />)}
       </View>
-      <View style={[styles.cta, { paddingBottom: Math.max(bottom, 16) + 14 }]}>
+      <BottomBar style={styles.cta}>
         <CtaButton label={page.cta} onPress={() => (index < pages.length - 1 ? go(index + 1) : onDone())} />
-      </View>
+      </BottomBar>
     </View>
   );
 }

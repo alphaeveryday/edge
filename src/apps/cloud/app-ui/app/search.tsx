@@ -2,7 +2,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { NavBar, SearchField, SectionHead, SectorIcon } from '@/components/ui';
+import { NavBar, PageScroll, SearchField, SectionHead, SectorIcon } from '@/components/ui';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { useEtfSearch, useRecentEtfs } from '@/features/etf/queries';
 import { chgColor, pct } from '@/lib/format';
@@ -25,7 +25,7 @@ export default function Search() {
       <View style={styles.field}>
         <SearchField value={q} onChangeText={setQ} placeholder="ETF·테마 검색" autoFocus />
       </View>
-      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <PageScroll keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {searching ? (
           <View style={styles.results}>
             {results.data?.map((e) => <EtfRow key={e.code} etf={e} showSub />)}
@@ -45,7 +45,7 @@ export default function Search() {
             </ScrollView>
           </>
         )}
-      </ScrollView>
+      </PageScroll>
     </View>
   );
 }

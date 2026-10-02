@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { Avatar, Chevron, IconButton, ListRow, type ListIcon } from '@/components/ui';
+import { Avatar, Chevron, IconButton, ListRow, PageScroll, type ListIcon } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useUnreadCount } from '@/features/notification/queries';
 import { useSession } from '@/store/session';
@@ -29,7 +29,7 @@ export default function Menu() {
         <IconButton icon="bell" size={34} floating badge={unread || undefined} onPress={() => go('/notifications')} />
         <IconButton icon="close" size={34} floating onPress={() => router.back()} />
       </View>
-      <ScrollView contentContainerStyle={{ paddingTop: top + 54, paddingHorizontal: 16, paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
+      <PageScroll contentContainerStyle={{ paddingTop: top + 54, paddingHorizontal: 16, paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
         {loggedIn && me ? (
           <Pressable onPress={() => go('/profile')} style={({ pressed }) => [styles.me, pressed && { opacity: 0.6 }]}>
             <Avatar label={me.nick} bg={me.avatarBg} size={44} />
@@ -54,7 +54,7 @@ export default function Menu() {
             <View style={styles.sep} />
           </View>
         ))}
-      </ScrollView>
+      </PageScroll>
     </View>
   );
 }

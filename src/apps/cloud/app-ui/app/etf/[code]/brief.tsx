@@ -1,8 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Axis } from '@/api';
-import { IconButton, LinkRow, Sticker } from '@/components/ui';
+import { IconButton, LinkRow, PageScroll, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { DisclaimerSheet } from '@/features/auth/DisclaimerSheet';
 import { dirSignal } from '@/features/analysis/dir';
@@ -22,7 +22,7 @@ export default function EtfBrief() {
   return (
     <QueryState query={q} rows={3} pending={{ title: '오늘 분석은 08:30에 올라와요', sub: '발행되면 여기에서 바로 볼 수 있어요' }}>
       {(d) => { const now = SIG[d.now]; return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+    <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       <View style={styles.strip}>
         <IconButton icon="prev" size={28} soft color={colors.textSub} />
         <View style={styles.days}>
@@ -75,7 +75,7 @@ export default function EtfBrief() {
       </View>
       <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} />
       <DisclaimerSheet />
-    </ScrollView>
+    </PageScroll>
       ); }}
     </QueryState>
   );

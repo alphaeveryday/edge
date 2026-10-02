@@ -1,4 +1,5 @@
 export { Avatar } from './Avatar';
+export { BottomBar, useBottomGap } from './BottomBar';
 export { BottomSheet } from './BottomSheet';
 export { Chevron } from './Chevron';
 export { Chip } from './Chip';
@@ -7,6 +8,7 @@ export { IconButton } from './IconButton';
 export { LinkRow } from './LinkRow';
 export { ListRow, type ListIcon } from './ListRow';
 export { NavBar } from './NavBar';
+export { PageScroll } from './PageScroll';
 export { PageTitle } from './PageTitle';
 export { PostActions } from './PostActions';
 export { ChangeOnly, RowQuote } from './Quote';

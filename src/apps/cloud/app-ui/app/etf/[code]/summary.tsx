@@ -1,8 +1,8 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { LinkRow } from '@/components/ui';
+import { LinkRow, PageScroll } from '@/components/ui';
 import { LineChart } from '@/features/etf/LineChart';
 import { MoveSheet } from '@/features/etf/MoveSheet';
 import { useChart, useEtf, useMove } from '@/features/etf/queries';
@@ -20,7 +20,7 @@ export default function EtfSummary() {
   if (chartQ.isError) return <ErrorView onRetry={() => chartQ.refetch()} />;
   if (!etf || !chart) return <Loading rows={3} />;
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
+    <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
       {chart && <LineChart data={chart} name={etf.name} price={etf.price} changePct={etf.changePct} />}
       <View style={styles.divider} />
       <Pressable onPress={() => setOpen(true)} style={({ pressed }) => [styles.why, pressed && { opacity: 0.6 }]}>
@@ -40,7 +40,7 @@ export default function EtfSummary() {
         <LinkRow variant="accent" label="자세히 보기" onPress={() => setOpen(true)} />
       </View>
       <MoveSheet etf={etf} move={open && move ? move : null} onClose={() => setOpen(false)} />
-    </ScrollView>
+    </PageScroll>
   );
 }
 

@@ -1,10 +1,10 @@
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
-import { CtaButton, NavBar, PageTitle } from '@/components/ui';
+import { CtaButton, NavBar, PageScroll, PageTitle } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
@@ -40,7 +40,7 @@ export default function PasswordReset() {
   const ready = /^\d{6}$/.test(code) && pw.length >= 8 && pw === pw2;
   const resend = () => { setErr(''); req.mutate(undefined, { onSuccess: () => Alert.alert('코드를 다시 보냈어요', '메일함을 확인해 주세요. 1분 안에는 다시 보낼 수 없어요.') }); };
   return (
-    <ScrollView style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+    <PageScroll style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
       <NavBar title="비밀번호 재설정" onBack={null} rightIcon="close" onRight={() => router.back()} />
       {sent ? (
         <>
@@ -64,7 +64,7 @@ export default function PasswordReset() {
           </View>
         </>
       )}
-    </ScrollView>
+    </PageScroll>
   );
 }
 

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { Avatar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead } from '@/components/ui';
+import { Avatar, BottomBar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead } from '@/components/ui';
 import { useCreatePost, useMe } from '@/features/community/queries';
 import { useEtfList } from '@/features/etf/queries';
 import { useWatchedCodes } from '@/features/watch/queries';
@@ -18,7 +18,7 @@ const TAG_MAX = 3;
 export default function CommunityWrite() {
   const router = useRouter();
   const { code } = useLocalSearchParams<{ code?: string }>();
-  const { top, bottom } = useSafeAreaInsets();
+  const { top } = useSafeAreaInsets();
   const { data: me } = useMe();
   const { data: etfs } = useEtfList();
   const watched = useWatchedCodes();
@@ -82,11 +82,11 @@ export default function CommunityWrite() {
         />
       </View>
       <View style={{ flex: 1 }} />
-      <View style={[styles.foot, { paddingBottom: Math.max(bottom, 16) + 14 }]}>
+      <BottomBar style={styles.foot}>
         <Text style={[styles.hint, unwatched.length > 0 && { color: colors.up }]}>{hint}</Text>
         <View style={{ flex: 1 }} />
         <Text style={[styles.count, draft.length > MAX && { color: colors.up }]}>{draft.length}/{MAX}</Text>
-      </View>
+      </BottomBar>
       <BottomSheet open={picking} onClose={() => setPicking(false)}>
         <SheetHead title="종목 태그" sub={`관심에 담은 ETF 중 최대 ${TAG_MAX}개`} onClose={() => setPicking(false)} />
         <ScrollView style={styles.pickList} showsVerticalScrollIndicator={false}>

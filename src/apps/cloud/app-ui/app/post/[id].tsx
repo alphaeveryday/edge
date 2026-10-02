@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
+import { Avatar, BottomBar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
 import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { useRequireLogin } from '@/store/session';
@@ -13,7 +13,7 @@ import { fam } from '@/theme/typography';
 export default function Post() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { top, bottom } = useSafeAreaInsets();
+  const { top } = useSafeAreaInsets();
   const { data: p } = usePost(id);
   const { data: replies } = useReplies(id);
   const like = useToggleLike();
@@ -87,12 +87,12 @@ export default function Post() {
           </View>
         ))}
       </ScrollView>
-      <View style={[styles.composer, { paddingBottom: Math.max(bottom, 12) + 10 }]}>
+      <BottomBar style={styles.composer}>
         <TextInput value={draft} onChangeText={setDraft} placeholder="답글 쓰기" placeholderTextColor={colors.textFaint} style={styles.input} onSubmitEditing={send} />
         <Pressable onPress={send} disabled={!draft.trim()}>
           <Text style={[styles.send, { color: draft.trim() ? colors.primary : colors.textDisabled }]}>게시</Text>
         </Pressable>
-      </View>
+      </BottomBar>
       <ReportSheet target={target} onClose={() => setTarget(null)} onBlocked={() => target?.type === 'post' && leave()} />
       <BottomSheet open={more} onClose={() => setMore(false)}>
         <SheetHead title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." />

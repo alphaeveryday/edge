@@ -1,8 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Axis, Dir } from '@/api';
-import { Chevron, NavBar, Sticker } from '@/components/ui';
+import { Chevron, NavBar, PageScroll, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { useMetric } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
@@ -26,7 +26,7 @@ export default function MetricPage() {
       <NavBar title={`${axis} 지표`} onBack={() => router.back()} />
       <QueryState query={q} rows={3} pending={{ title: `${axis} 지표는 준비 중이에요`, sub: '이 ETF에 맞는 지표가 정리되면 올라와요' }}>
         {(m) => (
-        <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        <PageScroll contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           <View style={styles.verdictRow}>
             <Sticker signal={dirSignal[m.dir]} size={30} radius={11} label={m.axis} />
             <Text style={styles.verdict}>{m.verdict}</Text>
@@ -56,7 +56,7 @@ export default function MetricPage() {
               <Chevron size={14} color={colors.textDisabled} />
             </Pressable>
           )}
-        </ScrollView>
+        </PageScroll>
         )}
       </QueryState>
     </View>

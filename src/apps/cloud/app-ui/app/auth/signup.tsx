@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
-import { CtaButton, NavBar } from '@/components/ui';
+import { BottomBar, CtaButton, NavBar } from '@/components/ui';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { AuthField } from '@/features/auth/AuthField';
 import { useSession } from '@/store/session';
@@ -17,7 +17,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // 이메일 인증 코드 확인 후 가입. 로그인 화면에서 진입, 닫기와 성공은 로그인 화면까지 함께 닫고 원래 화면으로
 export default function Signup() {
   const router = useRouter();
-  const { top, bottom } = useSafeAreaInsets();
+  const { top } = useSafeAreaInsets();
   const login = useSession((s) => s.login);
   const toast = useToast((s) => s.show);
   const [email, setEmail] = useState('');
@@ -80,14 +80,14 @@ export default function Signup() {
           {!!message && <Text style={styles.err}>{message}</Text>}
         </View>
       </ScrollView>
-      <View style={[styles.foot, { paddingBottom: Math.max(bottom, 16) + 10 }]}>
+      <BottomBar style={styles.foot}>
         <Text style={styles.terms}>가입하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의한 것으로 봐요.</Text>
         <CtaButton label="가입하기" tone="dark" disabled={!ready || submit.isPending} onPress={() => submit.mutate()} />
         <View style={styles.toLogin}>
           <Text style={styles.toLoginText}>이미 계정이 있나요?</Text>
           <Pressable onPress={() => router.back()} hitSlop={8}><Text style={styles.toLoginLink}>로그인</Text></Pressable>
         </View>
-      </View>
+      </BottomBar>
     </KeyboardAvoidingView>
   );
 }

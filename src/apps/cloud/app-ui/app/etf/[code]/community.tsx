@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ScrollView, StyleSheet, View } from 'react-native';
-import { IconButton } from '@/components/ui';
+import { StyleSheet, View } from 'react-native';
+import { IconButton, PageScroll } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { VoteCard } from '@/features/community/VoteCard';
 import { useEtfPosts, useVoteStat } from '@/features/community/queries';
@@ -14,10 +14,10 @@ export default function EtfCommunity() {
   const { data: posts } = useEtfPosts(code);
   return (
     <View style={{ flex: 1 }}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+      <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
         {stat && <View style={styles.vote}><VoteCard stat={stat} /></View>}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
-      </ScrollView>
+      </PageScroll>
       <View style={styles.fab}>
         <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push({ pathname: '/community/write', params: { code } }))} />
       </View>

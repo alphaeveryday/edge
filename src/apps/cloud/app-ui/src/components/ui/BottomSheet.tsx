@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, shadow } from '@/theme/tokens';
+import { useBottomGap } from './BottomBar';
 
 interface Props {
   open: boolean;
@@ -11,12 +11,12 @@ interface Props {
 }
 
 export function BottomSheet({ open, onClose, children, padded = true }: Props) {
-  const { bottom } = useSafeAreaInsets();
+  const gap = useBottomGap();
   return (
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { paddingBottom: Math.max(bottom, 20) + 10 }, padded && styles.padded]}>
+        <View style={[styles.sheet, { paddingBottom: gap }, padded && styles.padded]}>
           <View style={styles.handle} />
           {children}
         </View>

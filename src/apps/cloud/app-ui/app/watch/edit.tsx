@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { CtaButton, NavBar } from '@/components/ui';
+import { BottomBar, CtaButton, NavBar } from '@/components/ui';
 import { DeleteGroupSheet } from '@/features/watch/DeleteGroupSheet';
 import { GroupChips } from '@/features/watch/GroupChips';
 import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
@@ -17,7 +17,7 @@ import { fam } from '@/theme/typography';
 
 export default function WatchEdit() {
   const router = useRouter();
-  const { top, bottom } = useSafeAreaInsets();
+  const { top } = useSafeAreaInsets();
   const group = useWatchGroup((s) => s.group);
   const { data: groups } = useWatchGroups();
   const { data } = useWatchList(group);
@@ -62,7 +62,7 @@ export default function WatchEdit() {
         </Pressable>
         <SortableRows etfs={list} selected={sel} onToggle={toggle} onReorder={(codes) => save.mutate({ group, codes })} onDragging={setDragging} />
       </ScrollView>
-      <View style={[styles.foot, { paddingBottom: Math.max(bottom, 16) + 10 }]}>
+      <BottomBar style={styles.foot}>
         {picked.length ? (
           <View style={styles.actions}>
             <View style={{ flex: 1 }}><CtaButton label="삭제" tone="soft" onPress={remove} /></View>
@@ -71,7 +71,7 @@ export default function WatchEdit() {
         ) : (
           <CtaButton label="완료" tone="dark" onPress={() => router.back()} />
         )}
-      </View>
+      </BottomBar>
       <NewGroupSheet open={newOpen} onClose={() => setNewOpen(false)} />
       <PickGroupSheet etfs={moveOpen ? picked : []} title="어떤 그룹으로 옮길까요?" onClose={() => setMoveOpen(false)} />
       <DeleteGroupSheet group={delOpen && g ? g : null} onClose={() => setDelOpen(false)} />

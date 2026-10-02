@@ -1,8 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Axis } from '@/api';
-import { IconButton, Sticker } from '@/components/ui';
+import { IconButton, PageScroll, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { useFactor } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
@@ -26,7 +26,7 @@ export default function FactorPage() {
       </View>
       <QueryState query={q} rows={3} pending={{ title: `${axis} 요인 상세는 준비 중이에요`, sub: '재료가 확인되면 이 축의 근거를 정리해 올려요' }}>
         {(f) => (
-        <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        <PageScroll contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           <Text style={styles.headline}>{f.headline}</Text>
           {f.events && (
             <View style={{ gap: 20, marginTop: 22 }}>
@@ -67,7 +67,7 @@ export default function FactorPage() {
               )}
             </View>
           )}
-        </ScrollView>
+        </PageScroll>
         )}
       </QueryState>
     </View>

@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar, NavBar, PostActions, SectionHead, SectorIcon } from '@/components/ui';
+import { Avatar, NavBar, PageScroll, PostActions, SectionHead, SectorIcon } from '@/components/ui';
 import { useMe, useMyPosts, useToggleLike, useUpdateMe } from '@/features/community/queries';
 import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -29,7 +29,7 @@ export default function CommunityProfile() {
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="내 프로필" onBack={() => router.back()} rightLabel={editing ? '완료' : '수정'} onRight={toggleEdit} />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
         <View style={styles.head}>
           {me && <Avatar label={nick || me.nick} bg={bg || me.avatarBg} size={84} />}
           {editing ? (
@@ -76,7 +76,7 @@ export default function CommunityProfile() {
           </Pressable>
         ))}
         {posts && posts.length === 0 && <Text style={styles.empty}>아직 쓴 글이 없어요{'\n'}종목 커뮤니티에서 첫 글을 남겨 보세요</Text>}
-      </ScrollView>
+      </PageScroll>
     </View>
   );
 }

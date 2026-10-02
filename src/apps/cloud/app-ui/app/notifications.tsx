@@ -1,9 +1,9 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Notification, NotiKind } from '@/api';
-import { Avatar, NavBar, TabItem } from '@/components/ui';
+import { Avatar, NavBar, PageScroll, TabItem } from '@/components/ui';
 import { useNotifications, useReadAll, useReadNoti } from '@/features/notification/queries';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -34,7 +34,7 @@ export default function Notifications() {
       <View style={styles.tabs}>
         {TABS.map((t) => <TabItem key={t.k} grow={false} label={t.label} on={tab === t.k} dot={t.k !== 'all' && hasUnread(t.k)} onPress={() => setTab(t.k)} />)}
       </View>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         {data?.map((n) => {
           const k = KIND[n.kind];
           return (
@@ -53,7 +53,7 @@ export default function Notifications() {
           );
         })}
         {data && data.length === 0 && <Text style={styles.empty}>이 종류의 알림이 아직 없어요</Text>}
-      </ScrollView>
+      </PageScroll>
     </View>
   );
 }

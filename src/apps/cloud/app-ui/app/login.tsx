@@ -1,10 +1,10 @@
 import { useMutation } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
-import { CtaButton, NavBar } from '@/components/ui';
+import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
@@ -46,7 +46,7 @@ export default function Login() {
   const send = () => ready && !submit.isPending && submit.mutate();
   const clear = (fn: (v: string) => void) => (v: string) => { fn(v); setErr(''); };
   return (
-    <ScrollView style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+    <PageScroll style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
       <NavBar title="" onBack={null} rightIcon="close" onRight={close} />
       <Text style={styles.brand}>ETF Orca</Text>
       {!!hint && <Text style={styles.hint}>{hint}</Text>}
@@ -63,7 +63,7 @@ export default function Login() {
         <View style={styles.sep} />
         <Pressable onPress={() => router.push('/auth/reset')} hitSlop={8}><Text style={styles.link}>비밀번호 찾기</Text></Pressable>
       </View>
-    </ScrollView>
+    </PageScroll>
   );
 }
 
