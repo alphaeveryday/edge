@@ -348,8 +348,12 @@ def test_파생_수익률과_미소스_컬럼은_적재하지_않는다(tmp_path
 
     [(sql, _)] = [(s, p) for s, p in conn.log if s.upper().startswith("INSERT INTO PRICE_DAILY")]
     lowered = sql.lower()
-    for col in ("simple_return", "log_return", "turnover_value", "price_basis"):
+    for col in ("simple_return", "log_return", "turnover_value"):
         assert col not in lowered, col
+    # price_basis 는 값을 넣지 않는다 — INSERT 컬럼에 없고, 덮어쓸 때 NULL 로 되돌리는 것뿐이다
+    # (다른 적재기가 남긴 기준 표지가 값이 바뀐 행에 남지 않게, ALPHA-1148).
+    assert "price_basis" not in lowered.split(" values ")[0]
+    assert lowered.count("price_basis") == 1 and "price_basis = null" in lowered
 
 
 def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):

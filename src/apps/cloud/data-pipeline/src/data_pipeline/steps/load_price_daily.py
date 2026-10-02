@@ -29,6 +29,9 @@ instrument_type 을 안 건다). `(market_code, ticker)` 는 유일 자연키(uq
   * open_price · high_price · low_price ← canonical open · high · low (ALPHA-1148)
   * `turnover_value` · `price_basis` = **NULL**. canonical price_daily 가 나르지 않고(정제가
     KIS acml_tr_pbmn 을 보존하지 않는다) 소비처도 없다 — 있지도 않은 값을 지어내지 않는다.
+    다른 적재기가 `price_basis` 를 채운 행(DataGuide 이력 적재, ALPHA-1148)을 이 로더가 덮을
+    때는 `price_basis` 도 NULL 로 되돌린다 — 그 값은 덮기 전 행의 수정종가 기준이라, 값이
+    canonical 것으로 바뀐 뒤에도 남으면 없는 수정종가의 기준을 말하는 거짓 표지가 된다.
   * `simple_return` · `log_return` = **NULL**. 전일 종가가 필요한 **파생 피처**이고, 첫 거래일·
     상장일·거래정지·액면분할 같은 경계 처리가 얽힌다 — 그건 피처 레이어 소관이지 원장 적재의
     일이 아니다(feature-layer-separation-plan). 이 로더는 관측된 가격만 옮긴다.
@@ -416,6 +419,7 @@ def run(
                             "     open_price = EXCLUDED.open_price,"
                             "     high_price = EXCLUDED.high_price,"
                             "     low_price = EXCLUDED.low_price,"
+                            "     price_basis = NULL,"
                             # 시·고·저 보충뿐인 갱신은 시각을 뒤로 밀지 않는다(모듈 docstring).
                             "     available_at = CASE"
                             "       WHEN (price_daily.close_price, price_daily.adjusted_close_price,"

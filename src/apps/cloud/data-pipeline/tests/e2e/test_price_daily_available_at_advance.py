@@ -121,6 +121,50 @@ def test_filling_empty_ohl_keeps_available_at_but_a_correction_moves_it_on_real_
             _cleanup(cur)
 
 
+def test_overwriting_a_history_row_clears_its_adjusted_close_and_basis_on_real_postgres(tmp_path):
+    """이력 적재가 넣은 행(수정종가·기준 표지 있음)을 canonical 값이 덮으면 둘 다 비운다(ALPHA-1148).
+
+    새로 수집 대상이 된 종목은 400일 이력이 canonical 을 거쳐 들어와, DataGuide 이력 적재가
+    넣어 둔 같은 거래일 행을 덮는다. KIS 는 수정종가를 주지 않으므로 그 행의 수정종가는 NULL 이
+    되는데, `price_basis` 가 그대로면 "수정종가 기준일"이 수정종가 없는 행에 남는다.
+    """
+    import psycopg
+
+    from data_pipeline.config import DbConfig
+    from data_pipeline.lake import LocalStorage
+    from data_pipeline.steps import load_price_daily
+
+    pg = _pg_kwargs()
+    db = DbConfig(host=pg["host"], port=pg["port"], name=pg["dbname"],
+                  user=pg["user"], password=pg["password"], sslmode="disable")
+    storage = LocalStorage(tmp_path / "lake")
+
+    with psycopg.connect(**pg) as conn, conn.cursor() as cur:
+        _cleanup(cur)
+        _seed_instrument(cur)
+        cur.execute("INSERT INTO price_daily (instrument_id, trade_date, open_price, high_price,"
+                    " low_price, close_price, adjusted_close_price, volume, price_basis,"
+                    " available_at, data_version) VALUES (%s, %s, 71000, 72000, 70500, 71500,"
+                    " 1430, 1005, 'raw_close;adj_asof=2026-08-02', '2026-07-16T06:30:00+00:00',"
+                    " 'dataguide-20260802')", (INSTRUMENT_ID, TRADE_DATE))
+    try:
+        # 같은 시·고·저·종가, 거래량만 다른 KIS 행(수정종가 없음).
+        _write_canonical(storage, "2026-12-01T06:41:00+00:00", open=71000.0, high=72000.0,
+                         low=70500.0, adj_close=None)
+        assert load_price_daily.run(storage, "e2e-1148-kis", db=db) == 0
+        with psycopg.connect(**pg) as conn, conn.cursor() as cur:
+            cur.execute("SELECT close_price, adjusted_close_price, volume, price_basis,"
+                        " (available_at AT TIME ZONE 'UTC')::text, data_version FROM price_daily"
+                        " WHERE instrument_id = %s AND trade_date = %s",
+                        (INSTRUMENT_ID, TRADE_DATE))
+            [(close, adj, volume, basis, at, version)] = cur.fetchall()
+        assert (float(close), adj, volume, basis, at, version) == (
+            71500.0, None, 1000, None, "2026-12-01 06:41:00", "e2e-1148-kis")
+    finally:
+        with psycopg.connect(**pg) as conn, conn.cursor() as cur:
+            _cleanup(cur)
+
+
 def test_same_price_with_earlier_available_at_moves_the_mart_back_on_real_postgres(tmp_path):
     """D+1 값으로 먼저 적재된 행이 D일 수집분 재정제로 available_at 만 앞당겨지고, 늦은 시각으론 안 밀린다."""
     import psycopg
