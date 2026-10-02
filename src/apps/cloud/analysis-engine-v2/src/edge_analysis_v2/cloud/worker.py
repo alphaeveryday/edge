@@ -74,7 +74,7 @@ def run(request, *, bucket, ca_path, folder, key, model, session):
             if not locked:
                 raise ValueError('Another analysis of this ETF is running')
             with connect_sources(ca_path,session=session,cloud=True) as connection:
-                source = load_prices(connection,load_flow(connection,load_source(connection,request['etf_code'],request['analysis_at'])))
+                source = load_prices(connection,load_flow(connection,load_source(connection,request['etf_code'],request['analysis_at'])),request=request)
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                 artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
@@ -108,7 +108,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--request',default=os.environ.get('ANALYSIS_REQUEST'))
     args=parser.parse_args()
-    request=decode_request(args.request or '')
+    request=decode_request(args.request or '',internal=True)
     session=boto3.Session(region_name=os.environ.get('AWS_REGION','ap-northeast-2'))
     secret=json.loads(session.client('secretsmanager').get_secret_value(
         SecretId=os.environ['DEEPSEEK_SECRET_ARN'])['SecretString'])
