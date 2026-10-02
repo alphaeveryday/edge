@@ -7,6 +7,7 @@ import { TOP_BAR_H, TopBar } from '@/components/TopBar';
 import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { useDaily } from '@/features/analysis/queries';
+import { analysisAsOf } from '@/lib/format';
 import { useRank } from '@/features/explore/queries';
 import { useToast } from '@/store/toast';
 import { colors, PAGE_X, radius } from '@/theme/tokens';
@@ -33,7 +34,7 @@ export default function Explore() {
     <View style={styles.root}>
       <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
-        <PageTitle title="탐색" />
+        <PageTitle title="탐색" meta={analysisAsOf()} />
         <View style={{ paddingTop: 22 }}>
           <SectionHead title="AI가 보는 오늘 순위" />
         </View>

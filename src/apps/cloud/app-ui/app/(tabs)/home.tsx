@@ -10,6 +10,7 @@ import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
 import { useHomeBrief, usePrefetchBriefs } from '@/features/home/queries';
+import { analysisAsOf } from '@/lib/format';
 import { useSwapFade } from '@/lib/useSwapFade';
 import { api, isApiError } from '@/api';
 import { useToast } from '@/store/toast';
@@ -47,7 +48,7 @@ export default function Home() {
     <View style={styles.root}>
       <TopBar />
       <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
-        <PageTitle title="내 종목 브리핑" meta={b?.asOf} />
+        <PageTitle title="내 종목 브리핑" meta={analysisAsOf()} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === group} onPress={() => setGroup(g.key)} />)}
         </ScrollView>

@@ -192,7 +192,7 @@ export const mockClient: ApiClient = {
       const codes = members[group] ?? [];
       const etfs = codes.map(etfOf);
       const changePct = etfs.length ? Math.round((etfs.reduce((a, e) => a + e.changePct, 0) / etfs.length) * 10) / 10 : 0;
-      return delay({ asOf: '오늘 08:30 기준', groups: groupList(), group, band: avgSignal(codes), changePct, etfs });
+      return delay({ groups: groupList(), group, band: avgSignal(codes), changePct, etfs });
     },
   },
   community: {

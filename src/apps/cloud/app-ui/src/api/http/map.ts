@@ -20,12 +20,6 @@ export const ago = (iso: string, now = Date.now()) => {
   if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
   return `${Math.floor(s / 86400)}일 전`;
 };
-export const asOfLabel = (iso: string) => {
-  const d = new Date(iso);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `오늘 ${hh}:${mm} 기준`;
-};
 
 export interface WireEtfSummary { code: string; name: string; theme: string; price: number; changePct: number; signal: Signal; hot?: boolean; sub?: string }
 export const etf = (e: WireEtfSummary): EtfSummary => ({ ...e, logoBg: bgOf(e.theme) });

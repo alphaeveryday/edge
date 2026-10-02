@@ -29,7 +29,6 @@ export interface WatchGroup {
 }
 
 export interface HomeBrief {
-  asOf: string;
   groups: WatchGroup[];
   group: string;
   band: Signal;

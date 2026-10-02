@@ -80,7 +80,7 @@ export const httpClient: ApiClient = {
   home: {
     brief: async (group) => {
       const b = await request<Omit<HomeBrief, 'etfs'> & { etfs: m.WireEtfSummary[] }>('GET', '/home/brief', { query: { group } });
-      return { ...b, asOf: m.asOfLabel(b.asOf), etfs: await summaries(b.etfs) };
+      return { ...b, etfs: await summaries(b.etfs) };
     },
   },
   community: {
