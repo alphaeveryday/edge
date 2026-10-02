@@ -9,6 +9,7 @@ import { useChart, useEtf, useMove } from '@/features/etf/queries';
 import { ErrorView, Loading } from '@/components/state';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function EtfSummary() {
   const { code } = useLocalSearchParams<{ code: string }>();
@@ -17,10 +18,11 @@ export default function EtfSummary() {
   const chart = chartQ.data;
   const { data: move } = useMove(code);
   const [open, setOpen] = useState(false);
+  const refresh = usePullRefresh();
   if (chartQ.isError) return <ErrorView onRetry={() => chartQ.refetch()} />;
   if (!etf || !chart) return <Loading rows={3} />;
   return (
-    <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
+    <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
       {chart && <LineChart data={chart} name={etf.name} price={etf.price} changePct={etf.changePct} />}
       <View style={styles.divider} />
       <Pressable onPress={() => setOpen(true)} style={({ pressed }) => [styles.why, pressed && { opacity: 0.6 }]}>

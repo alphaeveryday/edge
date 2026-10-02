@@ -1,9 +1,8 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { isApiError } from '@/api';
-import { TOP_BAR_H, TopBar } from '@/components/TopBar';
+import { TopBar } from '@/components/TopBar';
 import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { useDaily } from '@/features/analysis/queries';
@@ -13,10 +12,10 @@ import { useToast } from '@/store/toast';
 import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Explore() {
   const router = useRouter();
-  const { top } = useSafeAreaInsets();
   const toast = useToast((s) => s.show);
   const q = useRank();
   const rows = q.data ?? [];
@@ -30,10 +29,11 @@ export default function Explore() {
     setSel(null);
   }, [daily.error, toast]);
   const nextIdx = sel === null || rows.length < 2 ? null : (sel + 1) % rows.length;
+  const refresh = usePullRefresh();
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView refreshControl={refresh} contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="탐색" meta={analysisAsOf()} />
         <View style={{ paddingTop: 22 }}>
           <SectionHead title="AI가 보는 오늘 순위" />

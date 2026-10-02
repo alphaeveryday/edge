@@ -1,8 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { TOP_BAR_H, TopBar } from '@/components/TopBar';
+import { TopBar } from '@/components/TopBar';
 import { PageTitle } from '@/components/ui';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { GroupChips } from '@/features/watch/GroupChips';
@@ -12,10 +11,10 @@ import { useSwapFade } from '@/lib/useSwapFade';
 import { useWatchGroup } from '@/store/watch';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Watch() {
   const router = useRouter();
-  const { top } = useSafeAreaInsets();
   const group = useWatchGroup((s) => s.group);
   const list = useWatchList(group, true);
   const data = list.data;
@@ -23,10 +22,11 @@ export default function Watch() {
   useGroupMembers();
   const fade = useSwapFade(group, list.isPlaceholderData);
   const [newOpen, setNewOpen] = useState(false);
+  const refresh = usePullRefresh();
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+      <ScrollView refreshControl={refresh} contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="관심" />
         <View style={styles.chips}>
           <GroupChips onAdd={() => setNewOpen(true)} onEdit={() => router.push('/watch/edit')} />

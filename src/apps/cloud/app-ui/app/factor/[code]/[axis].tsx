@@ -9,6 +9,7 @@ import { QueryState } from '@/components/state';
 import { useEtf } from '@/features/etf/queries';
 import { colors, signal as SIG } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function FactorPage() {
   const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
@@ -17,6 +18,7 @@ export default function FactorPage() {
   const { data: etf } = useEtf(code);
   const q = useFactor(code, axis);
   const f = q.data;
+  const refresh = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.nav}>
@@ -26,7 +28,7 @@ export default function FactorPage() {
       </View>
       <QueryState query={q} rows={3} pending={{ title: `${axis} 요인 상세는 준비 중이에요`, sub: '재료가 확인되면 이 축의 근거를 정리해 올려요' }}>
         {(f) => (
-        <PageScroll contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        <PageScroll refreshControl={refresh} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
           <Text style={styles.headline}>{f.headline}</Text>
           {f.events && (
             <View style={{ gap: 20, marginTop: 22 }}>

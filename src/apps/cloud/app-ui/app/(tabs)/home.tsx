@@ -2,8 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { TOP_BAR_H, TopBar } from '@/components/TopBar';
+import { TopBar } from '@/components/TopBar';
 import { Chip, LinkRow, PageTitle, SectionHead } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { useHotPosts } from '@/features/community/queries';
@@ -18,13 +17,13 @@ import { useToast } from '@/store/toast';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useWatchGroup } from '@/store/watch';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Home() {
   const router = useRouter();
-  const { top } = useSafeAreaInsets();
   const { group, setGroup } = useWatchGroup();
   const [showAll, setShowAll] = useState(false);
-  const focus = useScrollFocus(showAll, top + TOP_BAR_H);
+  const focus = useScrollFocus(showAll);
   const brief = useHomeBrief(group);
   const posts = useHotPosts();
   const qc = useQueryClient();
@@ -46,10 +45,11 @@ export default function Home() {
   const more = (b?.etfs.length ?? 0) > 3;
   const groupLabel = b?.groups.find((g) => g.key === b.group)?.label ?? '';
 
+  const refresh = usePullRefresh();
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView ref={focus.scroll} contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={focus.scroll} refreshControl={refresh} contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="내 종목 브리핑" meta={analysisAsOf()} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === group} onPress={() => setGroup(g.key)} />)}

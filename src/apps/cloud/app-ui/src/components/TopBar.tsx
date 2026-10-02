@@ -22,5 +22,5 @@ export function TopBar() {
 export const TOP_BAR_H = 48;
 
 const styles = StyleSheet.create({
-  root: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, flexDirection: 'row', justifyContent: 'flex-end', gap: 8, paddingRight: 16, backgroundColor: colors.white },
+  root: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, paddingRight: 16, backgroundColor: colors.white },
 });

@@ -7,6 +7,7 @@ import { Avatar, NavBar, PageScroll, TabItem } from '@/components/ui';
 import { useNotifications, useReadAll, useReadNoti } from '@/features/notification/queries';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 const KIND: Record<NotiKind, { label: string; c: string; bg: string; glyph: string }> = {
   watch: { label: '관심', c: colors.warnDeep, bg: colors.warn, glyph: '★' },
@@ -28,13 +29,14 @@ export default function Notifications() {
     if (n.postId) router.push(`/post/${n.postId}`);
     else if (n.etf) router.push(`/etf/${n.etf}/brief`);
   };
+  const refresh = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="알림" onBack={() => router.back()} rightLabel="모두 읽음" rightColor={colors.textSub} onRight={() => readAll.mutate()} />
       <View style={styles.tabs}>
         {TABS.map((t) => <TabItem key={t.k} grow={false} label={t.label} on={tab === t.k} dot={t.k !== 'all' && hasUnread(t.k)} onPress={() => setTab(t.k)} />)}
       </View>
-      <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         {data?.map((n) => {
           const k = KIND[n.kind];
           return (

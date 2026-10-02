@@ -1,9 +1,10 @@
-import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
 import { useSession } from '@/store/session';
@@ -11,6 +12,11 @@ import { colors } from '@/theme/tokens';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
+// 앱 복귀 시 띄워 둔 화면의 조회 다시 받기
+focusManager.setEventListener((onFocus) => {
+  const sub = AppState.addEventListener('change', (s) => onFocus(s === 'active'));
+  return () => sub.remove();
+});
 // 시작 화면 최소 노출 1초
 const splashMin = new Promise((r) => setTimeout(r, 1000));
 // 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 화면 이동. 로그인 실패 401 은 폼이 처리

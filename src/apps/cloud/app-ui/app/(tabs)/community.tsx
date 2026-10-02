@@ -1,8 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { TOP_BAR_H, TopBar } from '@/components/TopBar';
+import { TopBar } from '@/components/TopBar';
 import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { VoteCard } from '@/features/community/VoteCard';
@@ -12,21 +11,22 @@ import { useRank } from '@/features/explore/queries';
 import { useRequireLogin } from '@/store/session';
 import { colors, PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Community() {
   const router = useRouter();
   const requireLogin = useRequireLogin();
-  const { top } = useSafeAreaInsets();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const { data: posts } = useFeed(scope);
   // 탐색 1위 ETF 대상의 오늘의 투표
   const voteCode = useRank().data?.[0]?.etf.code ?? '';
   const { data: stat } = useVoteStat(voteCode, !!voteCode);
   const { data: voteEtf } = useEtf(voteCode);
+  const refresh = usePullRefresh();
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView contentContainerStyle={{ paddingTop: top + TOP_BAR_H, paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
+      <ScrollView refreshControl={refresh} contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
         <PageTitle title="커뮤니티" />
         <View style={styles.chips}>
           <Chip label="전체" on={scope === 'all'} onPress={() => setScope('all')} />

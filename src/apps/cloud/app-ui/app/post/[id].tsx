@@ -9,6 +9,7 @@ import { useRequireLogin } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Post() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -34,12 +35,13 @@ export default function Post() {
   };
   const leave = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/community'));
   const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); leave(); toast('글을 지웠어요'); } });
+  const refresh = usePullRefresh();
   return (
     <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.navWrap}>
         <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle, name: p.author.name }))} />
       </View>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
+      <ScrollView refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
         {p?.blocked && !reveal && (
           <View style={[styles.post, styles.cover]}>
             <Text style={styles.coverText}>차단한 사용자의 글이에요</Text>

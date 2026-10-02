@@ -9,6 +9,7 @@ import { QueryState } from '@/components/state';
 import { useScrollFocus } from '@/lib/useScrollFocus';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 const DIR_C = { help: colors.up, neutral: colors.neutral, burden: colors.down } as const;
 const TAG = { help: { bg: colors.upSoft, c: colors.upDeep }, neutral: { bg: colors.surface, c: colors.neutralDeep }, burden: { bg: colors.downSoft, c: colors.downDeep } } as const;
@@ -22,6 +23,7 @@ export default function EtfData() {
   const [comp, setComp] = useState<'stock' | 'theme'>('stock');
   const [more, setMore] = useState(false);
   const focus = useScrollFocus(more);
+  const refresh = usePullRefresh();
   return (
     <QueryState query={q} rows={5}>
       {(d) => {
@@ -31,7 +33,7 @@ export default function EtfData() {
         const rows = comp === 'theme' && d.themeRows?.length ? d.themeRows : d.holdings;
         const shown = more ? rows : rows.slice(0, 3);
         return (
-    <PageScroll ref={focus.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+    <PageScroll ref={focus.scroll} refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       {d.insight && (
         <View style={styles.insight}>
           <View style={styles.insightHead}>

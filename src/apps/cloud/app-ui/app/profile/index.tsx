@@ -12,6 +12,7 @@ import { openPrivacy, openTerms } from '@/lib/links';
 import { useToast } from '@/store/toast';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Profile() {
   const router = useRouter();
@@ -30,10 +31,11 @@ export default function Profile() {
     mutationFn: () => api.member.deleteAccount(),
     onSuccess: () => { setDelOpen(false); leave('계정을 지웠어요'); },
   });
+  const refresh = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="계정" onBack={() => router.back()} />
-      <PageScroll showsVerticalScrollIndicator={false}>
+      <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false}>
         <Pressable onPress={() => router.push('/profile/community')} style={({ pressed }) => [styles.me, pressed && { opacity: 0.6 }]}>
           {me && <Avatar label={me.nick} bg={me.avatarBg} size={52} />}
           <View style={{ flex: 1 }}>
