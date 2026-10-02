@@ -551,7 +551,7 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 
 - **현재 필터 위치와 동작**: `src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/sources/database.py` `load_source` 의 status 조회(`… AND trade_date<=%s AND loaded_at<=%s ORDER BY trade_date DESC LIMIT 40`). status 의 `loaded_at` 이 T 이후면 그 스냅샷을 통째로 건너뛴다. 그 뒤 행은 `available_at ≤ T` 로 다시 거르고, 유효 행 수가 `valid_row_count` 와 다르면 `Holdings rows and ingestion status disagree` 로 실패한다.
 - **조건만 지우면 안 된다**: status 는 날짜만으로 보이는데 행은 아직 안 보이는 시각이 생겨 위 불일치 실패가 난다(아래 표 1b·3·5).
-- **제안**: `loaded_at<=%s` 를 "그 스냅샷(같은 `data_version`)에 `available_at > T` 인 행이 없다"로 바꾼다. 스냅샷이 보이는 시각이 적재 시각에서 **마지막 행의 수집 시각**으로 옮겨질 뿐이고, 새 실패 경로가 생기지 않는다. 한 곳의 SQL 만 바뀐다:
+- **제안**: `loaded_at<=%s` 를 "그 스냅샷(같은 `data_version`)에 `available_at > T` 인 행이 없다"로 바꾼다. 스냅샷이 보이는 시각이 적재 시각에서 **마지막 행의 수집 시각**으로 옮겨진다. 아래 로컬 확인의 여덟 경우에서는 새 실패가 없었다(행이 없는 status 는 예외 — 아래 "달라지는 것"). 한 곳의 SQL 만 바뀐다:
 
   ```diff
   -    statuses = _rows(connection, """SELECT trade_date,input_row_count,valid_row_count,data_version
@@ -565,7 +565,7 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
   ```
 
 - **유지되는 것**: 행 단위 `available_at ≤ T` 필터, `valid_row_count` 불일치 실패, 스냅샷이 없을 때의 `No holdings snapshot available at analysis time`, 최신 구성으로 대신하지 않는 동작, `partial` 판정, status 최근 40건 한도. `loaded_at` 컬럼과 로더의 기록은 그대로다.
-- **달라지는 것**: 수집과 적재 사이의 시각에서 당일 스냅샷이 보인다. 같은 데이터를 다시 적재해도 과거 조회가 흔들리지 않는다(`available_at` 이 그대로라서). 행이 하나도 없는 status(유효 0행)는 적재 시각이 아니라 거래일부터 보이지만, 행이 없어 선택에는 영향이 없다.
+- **달라지는 것**: 수집과 적재 사이의 시각에서 당일 스냅샷이 보인다. 같은 데이터를 다시 적재해도 과거 조회가 흔들리지 않는다(`available_at` 이 그대로라서). 행이 하나도 없는 status 는 적재 시각이 아니라 거래일부터 보인다. 행이 없어 그 날짜가 선택되지는 않지만 **최근 40건 한도는 차지한다** — 그런 status 가 40건 이상 이어지면 그 앞의 유효 스냅샷이 탐색에서 밀려 실패한다(현행은 적재 시각 뒤에만 그렇다). dev 25거래일에는 행이 없는 status 가 없다(관측 사례 없음).
 
 **로컬 경계 확인(2026-10-02, 임시 테이블·공급자 호출 없음·운영 데이터 접근 없음).** 전날 스냅샷(09-29, 비중 0.6·0.4)과 당일 스냅샷(09-30, 비중 0.5·0.5)을 두고 세 변형이 고른 스냅샷:
 
