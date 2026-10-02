@@ -8,6 +8,7 @@ import { useNotifications, useReadAll, useReadNoti } from '@/features/notificati
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
+import { loadMore } from '@/lib/usePages';
 
 const KIND: Record<NotiKind, { label: string; c: string; bg: string; glyph: string }> = {
   watch: { label: '관심', c: colors.warnDeep, bg: colors.warn, glyph: '★' },
@@ -19,7 +20,8 @@ export default function Notifications() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const [tab, setTab] = useState<NotiKind | 'all'>('all');
-  const { data } = useNotifications(tab);
+  const list = useNotifications(tab);
+  const data = list.data;
   const { data: all } = useNotifications('all');
   const read = useReadNoti();
   const readAll = useReadAll();
@@ -36,7 +38,7 @@ export default function Notifications() {
       <View style={styles.tabs}>
         {TABS.map((t) => <TabItem key={t.k} grow={false} label={t.label} on={tab === t.k} dot={t.k !== 'all' && hasUnread(t.k)} onPress={() => setTab(t.k)} />)}
       </View>
-      <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      <PageScroll refreshControl={refresh} {...loadMore(list)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         {data?.map((n) => {
           const k = KIND[n.kind];
           return (

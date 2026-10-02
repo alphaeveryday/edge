@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api';
-import type { Me, VoteStat, VoteChoice, Post, ReportReason } from '@/api';
+import type { Me, Page, VoteStat, VoteChoice, Post, ReportReason } from '@/api';
+import { usePages } from '@/lib/usePages';
 import { useRequireLogin, useSession } from '@/store/session';
 
-export const useMyPosts = () => useQuery({ queryKey: ['community', 'mine'], queryFn: () => api.community.mine() });
+export const useMyPosts = () => usePages(['community', 'mine'], (c) => api.community.mine(c));
 export const useUpdateMe = () => {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (patch: Partial<Me>) => api.member.update(patch), onSuccess: (me) => qc.setQueryData(['member', 'me'], me) });
@@ -13,10 +14,10 @@ export const useMe = () => {
   return useQuery({ queryKey: ['member', 'me'], queryFn: () => api.member.me(), staleTime: Infinity, enabled: loggedIn });
 };
 export const useHotPosts = () => useQuery({ queryKey: ['community', 'hot'], queryFn: () => api.community.hot() });
-export const useEtfPosts = (code: string) => useQuery({ queryKey: ['community', 'posts', code], queryFn: () => api.community.posts(code) });
-export const useFeed = (scope: 'all' | 'mine') => useQuery({ queryKey: ['community', 'feed', scope], queryFn: () => api.community.feed(scope) });
+export const useEtfPosts = (code: string) => usePages(['community', 'posts', code], (c) => api.community.posts(code, c));
+export const useFeed = (scope: 'all' | 'mine') => usePages(['community', 'feed', scope], (c) => api.community.feed(scope, c));
 export const usePost = (id: string) => useQuery({ queryKey: ['community', 'post', id], queryFn: () => api.community.get(id) });
-export const useReplies = (id: string) => useQuery({ queryKey: ['community', 'replies', id], queryFn: () => api.community.replies(id) });
+export const useReplies = (id: string) => usePages(['community', 'replies', id], (c) => api.community.replies(id, c));
 export const useVoteStat = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'voteStat', code], queryFn: () => api.community.voteStat(code), enabled });
 
 const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
@@ -32,7 +33,13 @@ export const useToggleLike = () => {
   const m = useMutation({
     mutationFn: (id: string) => api.community.toggleLike(id),
     onSuccess: (updated) => {
-      qc.setQueriesData<Post[]>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'replies' }, (old) => (Array.isArray(old) ? old.map((p) => (p.id === updated.id ? updated : p)) : old));
+      const swap = (p: Post) => (p.id === updated.id ? updated : p);
+      // 인기글 배열과 이어 받는 목록 모두 교체
+      qc.setQueriesData<Post[] | InfiniteData<Page<Post>>>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'replies' }, (old) => {
+        if (Array.isArray(old)) return old.map(swap);
+        if (old && 'pages' in old) return { ...old, pages: old.pages.map((pg) => ({ ...pg, items: pg.items.map(swap) })) };
+        return old;
+      });
       qc.setQueryData<Post>(['community', 'post', updated.id], (old) => (old ? { ...old, like: updated.like, liked: updated.liked } : old));
     },
   });

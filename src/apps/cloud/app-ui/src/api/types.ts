@@ -36,6 +36,12 @@ export interface HomeBrief {
   etfs: EtfSummary[];
 }
 
+// 커서 목록의 한 페이지, next 없으면 끝
+export interface Page<T> {
+  items: T[];
+  next: string | null;
+}
+
 export interface Post {
   id: string;
   etf: Pick<EtfSummary, 'code' | 'theme' | 'logoBg'> & { short: string };

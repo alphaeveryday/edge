@@ -22,6 +22,7 @@ const summary = async (e: m.WireEtfSummary) => relabel(m.etf(e));
 const summaries = (list: m.WireEtfSummary[]) => Promise.all(list.map(summary));
 const post = async (p: m.WirePost) => { const x = m.post(p); return { ...x, etf: await relabel(x.etf) }; };
 const posts = (list: m.WirePost[]) => Promise.all(list.map(post));
+const postPage = async (p: m.WirePage<m.WirePost>) => ({ items: await posts(p.items), next: p.nextCursor });
 
 export const httpClient: ApiClient = {
   etf: {
@@ -85,13 +86,16 @@ export const httpClient: ApiClient = {
   },
   community: {
     hot: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'hot' } })).items),
-    posts: async (code) => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code } })).items),
-    feed: async (scope) => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope } })).items),
-    mine: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine' } })).items),
+    posts: async (code, cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code, cursor } })),
+    feed: async (scope, cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope, cursor } })),
+    mine: async (cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine', cursor } })),
     // 내 좋아요와 내 글 판정용 요청자 동봉
     get: async (id) => post(await request<m.WirePost>('GET', `/posts/${id}`)),
     // 차단한 작성자 제외용 요청자 동봉
-    replies: async (id) => (await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`)).items.map(m.reply),
+    replies: async (id, cursor) => {
+      const p = await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`, { query: { cursor } });
+      return { items: p.items.map(m.reply), next: p.nextCursor };
+    },
     reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
     create: async (input) => post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
@@ -127,7 +131,10 @@ export const httpClient: ApiClient = {
     },
   },
   notification: {
-    list: async (kind) => (await request<m.WirePage<Notification>>('GET', '/notifications', { query: { kind: kind === 'all' ? undefined : kind } })).items.map((n) => ({ ...n, time: m.ago(n.time) })),
+    list: async (kind, cursor) => {
+      const p = await request<m.WirePage<Notification>>('GET', '/notifications', { query: { kind: kind === 'all' ? undefined : kind, cursor } });
+      return { items: p.items.map((n) => ({ ...n, time: m.ago(n.time) })), next: p.nextCursor };
+    },
     unread: async () => (await request<{ count: number }>('GET', '/notifications/unread-count')).count,
     read: (id) => request<void>('POST', `/notifications/${id}/read`),
     readAll: () => request<void>('POST', '/notifications/read-all'),

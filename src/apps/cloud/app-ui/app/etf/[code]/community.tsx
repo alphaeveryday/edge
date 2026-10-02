@@ -6,18 +6,20 @@ import { VoteCard } from '@/features/community/VoteCard';
 import { useEtfPosts, useVoteStat } from '@/features/community/queries';
 import { useRequireLogin } from '@/store/session';
 import { usePullRefresh } from '@/lib/usePullRefresh';
+import { loadMore } from '@/lib/usePages';
 
 export default function EtfCommunity() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
   const requireLogin = useRequireLogin();
   const { data: stat } = useVoteStat(code);
-  const { data: posts } = useEtfPosts(code);
+  const postQ = useEtfPosts(code);
+  const posts = postQ.data;
   const gap = useBottomGap();
   const refresh = usePullRefresh();
   return (
     <View style={{ flex: 1 }}>
-      <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
+      <PageScroll refreshControl={refresh} {...loadMore(postQ)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
         {stat && <View style={styles.vote}><VoteCard stat={stat} /></View>}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </PageScroll>

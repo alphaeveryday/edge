@@ -10,6 +10,7 @@ import { NOTIFICATIONS } from './notifications';
 import { ETFS, GROUP_MEMBERS, GROUPS, POSTS, THEMES } from './data';
 
 const delay = <T,>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
+const page = <T,>(items: T[]) => delay({ items, next: null });
 
 // 앱 재시작 시 초기화되는 인메모리 쓰기 상태
 const posts = [...POSTS, ...ETF_POSTS].map((p) => ({ ...p }));
@@ -175,7 +176,7 @@ export const mockClient: ApiClient = {
     logout: () => delay(undefined, 20),
   },
   notification: {
-    list: (kind) => delay(notis.filter((n) => kind === 'all' || n.kind === kind).map((n) => ({ ...n }))),
+    list: (kind) => page(notis.filter((n) => kind === 'all' || n.kind === kind).map((n) => ({ ...n }))),
     unread: () => delay(notis.filter((n) => !n.read).length, 20),
     read: (id) => {
       const n = notis.find((x) => x.id === id);
@@ -200,13 +201,13 @@ export const mockClient: ApiClient = {
     feed: (scope) => {
       const mine = members.base ?? [];
       const list = posts.filter((p) => scope === 'all' || mine.includes(p.etf.code));
-      return delay(list.map((p) => ({ ...p })));
+      return page(list.map((p) => ({ ...p })));
     },
     get: (id) => {
       const p = posts.find((x) => x.id === id);
       return p ? delay({ ...p, views: p.views ?? 7300 }) : Promise.reject(new ApiError('NOT_FOUND', `unknown post ${id}`));
     },
-    replies: (id) => delay((replies[id] ?? []).map((r) => ({ ...r }))),
+    replies: (id) => page((replies[id] ?? []).map((r) => ({ ...r }))),
     reply: (id, body) => {
       const r: Reply = { id: 'r' + ++seq, author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg }, time: '방금', body };
       replies[id] = [...(replies[id] ?? []), r];
@@ -225,7 +226,7 @@ export const mockClient: ApiClient = {
       posts.unshift(post);
       return delay({ ...post }, 60);
     },
-    mine: () => delay(posts.filter((p) => p.mine).map((p) => ({ ...p }))),
+    mine: () => page(posts.filter((p) => p.mine).map((p) => ({ ...p }))),
     remove: (id) => {
       const i = posts.findIndex((x) => x.id === id);
       if (i >= 0) posts.splice(i, 1);
@@ -233,7 +234,7 @@ export const mockClient: ApiClient = {
     },
     report: () => delay(undefined, 40),
     block: () => delay(undefined, 40),
-    posts: (code) => delay(posts.filter((p) => p.etf.code === code && !p.id.startsWith('p')).map((p) => ({ ...p }))),
+    posts: (code) => page(posts.filter((p) => p.etf.code === code && !p.id.startsWith('p')).map((p) => ({ ...p }))),
     voteStat: (code) => delay(voteStatOf(code)),
     vote: (code, choice) => {
       votes[code] = votes[code] === choice ? null : choice;

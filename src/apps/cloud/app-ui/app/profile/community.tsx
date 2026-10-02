@@ -7,12 +7,14 @@ import { useMe, useMyPosts, useToggleLike, useUpdateMe } from '@/features/commun
 import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
+import { loadMore } from '@/lib/usePages';
 
 export default function CommunityProfile() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: me } = useMe();
-  const { data: posts } = useMyPosts();
+  const mine = useMyPosts();
+  const posts = mine.data;
   const update = useUpdateMe();
   const like = useToggleLike();
   const [editing, setEditing] = useState(false);
@@ -27,7 +29,7 @@ export default function CommunityProfile() {
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="내 프로필" onBack={() => router.back()} rightLabel={editing ? '완료' : '수정'} onRight={toggleEdit} />
-      <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <PageScroll refreshControl={refresh} {...loadMore(mine)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
         <View style={styles.head}>
           {me && <Avatar label={nick || me.nick} bg={me.avatarBg} size={84} />}
           {editing ? (

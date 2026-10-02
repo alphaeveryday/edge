@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, Me, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, Me, Page, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -45,13 +45,13 @@ export interface HomeApi {
 
 export interface CommunityApi {
   hot(): Promise<Post[]>;
-  posts(code: EtfCode): Promise<Post[]>;
-  feed(scope: 'all' | 'mine'): Promise<Post[]>;
+  posts(code: EtfCode, cursor?: string): Promise<Page<Post>>;
+  feed(scope: 'all' | 'mine', cursor?: string): Promise<Page<Post>>;
   get(id: string): Promise<Post>;
-  replies(id: string): Promise<Reply[]>;
+  replies(id: string, cursor?: string): Promise<Page<Reply>>;
   reply(id: string, body: string): Promise<Reply>;
   create(input: { body: string; tags: EtfCode[] }): Promise<Post>;
-  mine(): Promise<Post[]>;
+  mine(cursor?: string): Promise<Page<Post>>;
   remove(id: string): Promise<void>;
   toggleLike(id: string): Promise<Post>;
   voteStat(code: EtfCode): Promise<VoteStat>;
@@ -77,7 +77,7 @@ export interface AuthApi {
 }
 
 export interface NotificationApi {
-  list(kind: NotiKind | 'all'): Promise<Notification[]>;
+  list(kind: NotiKind | 'all', cursor?: string): Promise<Page<Notification>>;
   unread(): Promise<number>;
   read(id: string): Promise<void>;
   readAll(): Promise<void>;

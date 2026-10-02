@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
 import type { NotiKind } from '@/api';
+import { usePages } from '@/lib/usePages';
 
-export const useNotifications = (kind: NotiKind | 'all') => useQuery({ queryKey: ['noti', 'list', kind], queryFn: () => api.notification.list(kind) });
+export const useNotifications = (kind: NotiKind | 'all') => usePages(['noti', 'list', kind], (c) => api.notification.list(kind, c));
 export const useUnreadCount = () => useQuery({ queryKey: ['noti', 'unread'], queryFn: () => api.notification.unread() });
 
 export const useReadNoti = () => {

@@ -10,13 +10,15 @@ import { useToast } from '@/store/toast';
 import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
+import { loadMore } from '@/lib/usePages';
 
 export default function Post() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: p } = usePost(id);
-  const { data: replies } = useReplies(id);
+  const replyQ = useReplies(id);
+  const replies = replyQ.data;
   const like = useToggleLike();
   const reply = useReply(id);
   const del = useDeletePost();
@@ -41,7 +43,7 @@ export default function Post() {
       <View style={styles.navWrap}>
         <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle, name: p.author.name }))} />
       </View>
-      <ScrollView refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
+      <ScrollView refreshControl={refresh} {...loadMore(replyQ)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
         {p?.blocked && !reveal && (
           <View style={[styles.post, styles.cover]}>
             <Text style={styles.coverText}>차단한 사용자의 글이에요</Text>
