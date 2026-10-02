@@ -953,13 +953,13 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 원장 계획·보고를 Airflow 만 한다(`ops.entry._AIRFLOW_ONLY_LANES` — SFN 주체로 plan-run 하면 거부). 계약·일정 근거는
 `docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
 
-**현재 상태와 다음 작업(2026-10-02 01:00 기준 — 인계 정본. 세부는 아래 절과 ALPHA-1140):**
+**현재 상태와 다음 작업(2026-10-02 16:20 기준 — 인계 정본. 세부는 아래 절과 ALPHA-1140):**
 
 | 구분 | 내용 |
 |---|---|
 | 완료 | 코드 ALPHA-1130(#1010~#1017·#1014·#1021) dev 머지·배포. 미 국채 10년 FRED `DGS10` 교체(#1038 스키마·#1039 코드). `macro` 태스크 정의 `edge-dev-data-pipeline-macro:1`·실행 역할 시크릿 읽기(#1036). Airflow RunTask 에 `dart`·`macro`(#1037). 시크릿 `edge-dev-data-pipeline/{ecos,kosis,eia,fred}/api-key` 수동 등록(AWSCURRENT 1개씩, `{"apikey"}`). 최종 업무 이미지 `edge/pipeline@sha256:713b779e…`(`GIT_SHA` d7d4e111). **첫 소량 실행(ALPHA-1136, 10-02 완료)**: 매크로 2계열·업종·재무 표본을 CLI 단건으로 수집·적재·as-of 조회·v2 대조·재실행 무호출까지 확인 — 아래 "첫 소량 실행 결과" |
 | 구현됐지만 비활성 | `MACRO_COLLECTION.instrumented=False`(플래그 PR #1051 draft — 머지 전까지 False), `edge_source_daily` DAG 미등록·pause, `ops` 주기 결측 판정 env(`OPS_SOURCE_DAILY_SCHED_*`) 없음, `investor_intraday_orchestrator=SFN`. 원장에 이 레인의 run 은 0건이다(수동 run_id 는 원장에 매칭되지 않는다 — `source_observation_freshness().last_load_fulfilled_at` 이 null) |
-| 미검증·남은 결함 | 분 상주 서비스의 새 이미지(`713b779e`) 장중 동작(10-02 07:45 기동 뒤 확인 — 미조회). 10-01 가격 분 수집 지연(ALPHA-1127 — 원인 미확정). 적재 전 만료 정제 run 의 `--all`(ALPHA-1133). 재무 표 재사용 합의(ALPHA-643). 구성종목 커버리지(ALPHA-1139, 보류 — 설계 §10.11): 과거 holdings 는 추가 적재하지 않기로 했고 DB 이력은 08-28 부터다. 0행 사유를 구분하지 못하는 한계와, 커버리지 함수·v2 런타임의 스냅샷 선택 계약 차이(매일 수집~적재 사이 3~11분 등)는 **미해결**이다 — 커버리지 결과를 v2 실행 가능 보장으로 읽지 않는다. v2 database 모드가 `macro_inputs`·`financial_inputs` 를 아직 부르지 않는다(ALPHA-1096·1097·1098). FRED 휴일 `"."` 처리는 단위 테스트만. deploy-data-pipeline 장중 차단 가드 없음(제안만) |
+| 미검증·남은 결함 | 분 상주 서비스의 새 이미지(`713b779e`) 장중 동작은 10-02 에 조회했다 — 기동·무중단은 확인, **가격 분 커밋 지연 확대와 공시 분 전 window INCOMPLETE 는 원인 미확정**(아래 "10-02 분 서비스 확인"). 가격 분 수집 지연(ALPHA-1127 — 원인 미확정). 적재 전 만료 정제 run 의 `--all`(ALPHA-1133). 재무 표 재사용 합의(ALPHA-643). 구성종목 커버리지(ALPHA-1139, 보류 — 설계 §10.11): 과거 holdings 는 추가 적재하지 않고, 조회 시점 조건은 `available_at` 만 쓴다(`loaded_at` 은 기록만 유지, 커버리지 함수에 더하지 않음). v2 런타임의 `loaded_at` 필터 제거는 분석 담당에게 낼 **제안 단계**라 지금은 두 쪽이 다르게 고른다(매일 수집~적재 사이 3~11분 등). 0행 사유 구분·품질 조건·적용 단위·40건 한도·과거 판본 보존은 **미해결**이다 — 커버리지 결과를 v2 실행 가능 보장으로 읽지 않는다. v2 database 모드가 `macro_inputs`·`financial_inputs` 를 아직 부르지 않는다(ALPHA-1096·1097·1098). FRED 휴일 `"."` 처리는 단위 테스트만. deploy-data-pipeline 장중 차단 가드 없음(제안만) |
 | 다음 작업·선행 조건 | ALPHA-1140: #1051 장외 머지(16:10~07:45) → **Airflow 서비스 기동·DAG 등록**(서비스가 desired 0 이면 deploy-airflow 가 교체를 건너뛴다 — `workflow_dispatch` `start_service=true` 로 dev 이미지 배포, Airflow 담당. `edge_source_daily` 가 pause 로 등록됐는지 확인) → DAG 수동 trigger 1회 → 원장·신선도 확인 → 정기 활성화(unpause + 결측 env 를 같은 변경으로). 아래 "Airflow 첫 DAG 실행 인계" |
 | 승인 범위 | **승인·완료**: FRED 교체 PR 4개 머지·자동 배포, 시크릿 수동 등록, 첫 소량 실행(공급자 19회·dev 적재). **별도 승인 필요**: #1051 머지, Airflow 서비스 기동, DAG 실행·unpause·정기 활성화, 결측 판정 env, 백필, SFN 주체 전환, FMP 시크릿 삭제, 장중 배포 가드 PR |
 
@@ -1078,11 +1078,28 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 구성종목 커버리지 0행(08-14) → ALPHA-1139(보류). 08-14 에는 DB 에 볼 수 있는 스냅샷이 없어 0행이 맞다. 다만 0행 사유 구분과 v2 와의 선택 규칙 차이는 미해결이다(설계 §10.11)
 - 증거: `~/Desktop/Development/edge/.dev/alpha-1136-first-run/`(`shasum -a 256 -c SHA256SUMS`). 수집 데이터(dev S3 raw·canonical, DB 행)는 보존한다.
 
+**10-02 분 서비스 확인(읽기 전용, 16:00~16:16 KST 조회):** 새 이미지로 처음 돈 장중 세션이다.
+
+- 기동: 분 상주 서비스 9개가 07:46~07:47 에 `imageDigest sha256:713b779e…` 로 떴다. 16:00 조회까지 재시작·중단된 태스크는 없다.
+- 레인별 결과(`minute_ingestion_window`, 390 window):
+
+  | 레인 | 결과 | 커밋 지연 p50 / p90 |
+  |---|---|---|
+  | `sector_index_minute` | VALID 390 | 33초 / 41초 |
+  | `etf_inav_minute` | VALID 390 | 28초 / 37초 |
+  | `news_minute` | VALID 191·VALID_EMPTY 199 | 5초 / 7초 |
+  | `price_minute` | 16:16 기준 VALID 357·VALID_EMPTY 10, **미완료 23**(DUE·CLAIMED, 세션 DRAINING, 연속 완료 14:32 까지). INCOMPLETE 0 | **2,718초 / 6,040초**(진행 중 값) |
+  | `disclosure_minute` | **INCOMPLETE 390**(VALID 0) | 23초 / 26초 |
+
+- 가격 분 커밋 지연의 추이: 09-28 54초 → 09-30 74초 → 10-01 952초 → 10-02 2,718초(p50). 10-01 은 이전 이미지(`dc11b7c5`)였고 이미 늘어 있었다. 새 이미지는 분 저장소 코드 변경(#1033)을 포함한다. **이 지연을 새 이미지 탓으로도, 무관하다고도 단정할 근거가 없다** — 원인 미확정(ALPHA-1127).
+- 공시 분 레인: 10-01 과 10-02 이틀 연속 390 window 전부 INCOMPLETE 다(09-29 56, 09-30 15). 10-02 10:00 window 는 수집 20초·95건, 09-30 같은 window 는 1.5초·13건이었다. 09-30 장 마감 뒤부터 10-01 장 시작 전까지 머지된 변경에 공시 수집 코드 자체는 없다. 다만 분 레인 공용 모듈(`minute/models.py`·`minute/repository.py`)과 설정(`[source_observations]` 추가)은 그 사이에 바뀌었다. 원인 미확정이고, 그 변경들과의 관계도 확인하지 못했다.
+- 따라서 "새 이미지에서 분 서비스 정상"이라고 쓰지 않는다. 확인된 것은 기동과 무중단, 업종지수·iNAV·뉴스 레인의 완료다.
+
 **Airflow 첫 DAG 실행 인계(ALPHA-1140 — 계획, 실행 전):** 목적은 적재 성공이 **원장과 `source_observation_freshness()` 에 나타나는지** 확인하는 것이다. 기존 Planner(`plan-run`)·원장 경로를 그대로 쓴다. 수동 run(위 `manual_*`)을 원장에 올리거나 성공 시각을 채우지 않는다.
 
 | 항목 | 내용 |
 |---|---|
-| 선행 | ① #1051(`MACRO_COLLECTION.instrumented=True`) 장외 머지 → deploy-data-pipeline 성공, `data-pipeline-latest` digest 기록. ② Airflow 서비스를 dev 이미지로 기동(`deploy-airflow` `workflow_dispatch` `start_service=true`, Airflow 담당) → `edge_source_daily` 가 **pause** 로 등록됐는지 확인. ③ 실행 중인 업무 SFN·ECS 0, 장외 |
+| 선행 | ① #1051(`MACRO_COLLECTION.instrumented=True`) 장외 머지 → deploy-data-pipeline 성공, `data-pipeline-latest` digest 기록. ② Airflow 서비스를 dev 이미지로 기동(`deploy-airflow` `workflow_dispatch` `start_service=true`, Airflow 담당) → `edge_source_daily` 가 **pause** 로 등록됐는지 확인. ③ 실행 중인 업무 SFN·ECS 0, 장외. ④ **Airflow 담당의 유휴 관측이 진행 중이면 이 DAG 를 켜지 않는다**(trigger·unpause 모두) — 관측이 끝났는지 Airflow 담당에게 확인한 뒤에 한다 |
 | 이미지 | 태스크 정의 `ops`·`macro`·`dart`·`bigkinds`·`rds` 의 `data-pipeline-latest`(mutable). 실행 직전 ECR digest 를 적고, 실행 뒤 raw manifest `code_version` 이 #1051 머지 SHA 인지 대조한다 |
 | 입력 | DAG `edge_source_daily` 수동 trigger, **params 비움**(정기 창: 매크로는 계열마다 어제−(소급일−1)~어제 — 소급일 14인 일별 계열이면 10-02 실행에서 09-18~10-01, 월별 CPI 는 시작을 그 달 1일로 맞춘다; 재무 접수일 오늘−14~오늘; 업종은 오늘이 거래일이면 3파일). 대상 ETF 기본 `091160`(10-01 S3 스냅샷 기준 주식 21종목). `reprocess_slot` 비움. 슬롯 날짜(KST) 안에 끝나게 trigger 한다(자정을 넘기면 `plan` 이 거부한다) |
 | 실행 절차 | pause 인 DAG 는 수동 trigger 해도 run 이 queued 에 머문다. ① trigger(params 비움) → ② **일시 unpause** → ③ run 종료(최대 `dagrun_timeout` 1500초)를 확인 → ④ **다시 pause**. `catchup=False`·`run_immediately=timedelta(0)` 이라 unpause 가 지난 09:10 슬롯을 돌리지 않는다(위 "활성화 시 지난 슬롯을 돌리지 않는다"). 다음 09:10 슬롯 전에 ④를 끝내야 정기 run 이 생기지 않는다 — 장외 저녁(16:30~23:00)에 하고, 자정 전에 끝나게 한다. UI 의 trigger 가 자동 unpause 를 제안하면 받지 않고 ②·④를 명시적으로 한다 |
