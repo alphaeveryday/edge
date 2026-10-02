@@ -58,6 +58,11 @@
       "description": "신규 설명(NEW) — 본체·실행·배열 포함, target/reason 없음.",
       "additionalProperties": false,
       "required": ["cursor", "delivery_type", "explanation_result", "explanation_run", "source_events", "evidences"],
+      "allOf": [{
+        "if": {"properties": {"explanation_result": {"required": ["analysis_engine"], "properties": {"analysis_engine": {"const": "v2"}}}}},
+        "then": {"properties": {"explanation_run": {"properties": {"release_bundle_version": {"type": "null"}}}}},
+        "else": {"properties": {"explanation_run": {"properties": {"release_bundle_version": {"type": "string"}}}}}
+      }],
       "properties": {
         "cursor": { "$ref": "#/$defs/EntryCursor" },
         "delivery_type": { "const": "NEW" },
@@ -134,7 +139,7 @@
       "required": ["explanation_run_id", "release_bundle_version"],
       "properties": {
         "explanation_run_id": { "type": "string" },
-        "release_bundle_version": { "type": "string", "description": "explanation_run.bundle_version 값." }
+        "release_bundle_version": { "type": ["string", "null"], "description": "v1 release bundle version. v2 does not use release bundles and returns null." }
       }
     },
 
