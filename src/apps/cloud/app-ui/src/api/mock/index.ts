@@ -1,7 +1,6 @@
 import type { ApiClient } from '../client';
 import { ApiError } from '../error';
 import type { Me, VoteStat, VoteChoice, Post, Reply, WatchGroup } from '../types';
-import type { Signal } from '@/theme/tokens';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
@@ -48,10 +47,10 @@ const voteStatOf = (code: string): VoteStat => {
   return { code, count: n, pct: { buy: pct[0], wait: pct[1], sell: pct[2] }, mine };
 };
 
-const avgSignal = (codes: string[]): Signal => {
+// 서버와 같은 signal 서수 평균, 그룹이 비면 중립
+const avgScore = (codes: string[]) => {
   const idx = codes.map((c) => SIGNAL_ORDER.indexOf(etfOf(c).signal));
-  const m = Math.round(idx.reduce((a, b) => a + b, 0) / Math.max(idx.length, 1));
-  return SIGNAL_ORDER[m] ?? 'neutral';
+  return idx.length ? Math.round((idx.reduce((a, b) => a + b, 0) / idx.length) * 100) / 100 : 2;
 };
 
 export const mockClient: ApiClient = {
@@ -193,7 +192,8 @@ export const mockClient: ApiClient = {
       const codes = members[group] ?? [];
       const etfs = codes.map(etfOf);
       const changePct = etfs.length ? Math.round((etfs.reduce((a, e) => a + e.changePct, 0) / etfs.length) * 10) / 10 : 0;
-      return delay({ groups: groupList(), group, band: avgSignal(codes), changePct, etfs });
+      const score = avgScore(codes);
+      return delay({ groups: groupList(), group, band: SIGNAL_ORDER[Math.round(score)], score, changePct, etfs });
     },
   },
   community: {

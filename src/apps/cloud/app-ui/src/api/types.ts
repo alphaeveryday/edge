@@ -32,6 +32,8 @@ export interface HomeBrief {
   groups: WatchGroup[];
   group: string;
   band: Signal;
+  // 그룹 signal 서수 평균 0~4, 구판 서버는 없음
+  score?: number;
   changePct: number;
   etfs: EtfSummary[];
 }

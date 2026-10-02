@@ -9,11 +9,12 @@ const SEG_BG: Record<Signal, string> = {
 };
 
 // 관심 그룹 전체의 전망 강도 게이지
-export function EdgeCard({ title, band, changePct }: { title: string; band: Signal; changePct: number }) {
-  const i = SIGNAL_ORDER.indexOf(band);
-  const pos = ((i + 0.5) / SIGNAL_ORDER.length) * 100;
+export function EdgeCard({ title, band, score, changePct }: { title: string; band: Signal; score?: number; changePct: number }) {
+  // 점 위치는 평균값, 없으면 단계 칸 가운데
+  const at = score ?? SIGNAL_ORDER.indexOf(band);
+  const pos = ((at + 0.5) / SIGNAL_ORDER.length) * 100;
   const c = SIG[band].color;
-  // 단계 바뀜의 점 미끄러짐
+  // 위치 바뀜의 점 미끄러짐
   const x = useRef(new Animated.Value(pos)).current;
   useEffect(() => {
     Animated.timing(x, { toValue: pos, duration: 220, useNativeDriver: false }).start();

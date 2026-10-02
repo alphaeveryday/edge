@@ -55,7 +55,7 @@ export default function Home() {
           {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === group} onPress={() => setGroup(g.key)} />)}
         </ScrollView>
         <Animated.View style={{ opacity: fade }}>
-          {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} changePct={b.changePct} />}
+          {b && <EdgeCard title={`${groupLabel} 그룹 전망 강도`} band={b.band} score={b.score} changePct={b.changePct} />}
           <View ref={focus.anchor} style={styles.rows}>
             {rows.map((e) => <EtfRow key={e.code} etf={e} onPress={() => open(e.code)} />)}
             {more && (
