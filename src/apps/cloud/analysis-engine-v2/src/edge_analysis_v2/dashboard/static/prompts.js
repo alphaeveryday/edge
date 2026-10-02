@@ -20,6 +20,7 @@ function populate(){el('prompt-version').textContent=`활성 버전 ${current.ve
 async function load(){const selected=kind;message('프롬프트 불러오는 중…');try{const value=await api('/api/prompts/'+selected);if(selected!==kind)return;const draft=drafts.get(kind);current=draft?.current||value;populate();el('prompt-yaml').value=draft?.yaml??current.yaml;el('prompt-note').value=draft?.note||'';
  if(config?.prompts_read_only){
   el('prompt-yaml').readOnly=true;el('prompt-save').parentElement.hidden=true;
+  el('prompt-workspace').querySelector('p.muted').textContent='연결된 시스템 프롬프트를 조회하고 과거 버전과 비교합니다. 기존 분석 결과는 변경되지 않습니다.';
   el('prompt-yaml').closest('section').querySelector('h3').textContent='YAML 보기';
   yamlColor(current.yaml,el('prompt-highlight'));documentView(current.system_prompt);
   message('읽기 전용 · 배포된 프롬프트와 과거 버전을 비교합니다.');
