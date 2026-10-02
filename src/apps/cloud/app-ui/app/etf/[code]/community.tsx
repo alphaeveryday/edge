@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
-import { IconButton, PageScroll } from '@/components/ui';
+import { IconButton, PageScroll, useBottomGap } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { VoteCard } from '@/features/community/VoteCard';
 import { useEtfPosts, useVoteStat } from '@/features/community/queries';
@@ -12,13 +12,14 @@ export default function EtfCommunity() {
   const requireLogin = useRequireLogin();
   const { data: stat } = useVoteStat(code);
   const { data: posts } = useEtfPosts(code);
+  const gap = useBottomGap();
   return (
     <View style={{ flex: 1 }}>
-      <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+      <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
         {stat && <View style={styles.vote}><VoteCard stat={stat} /></View>}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </PageScroll>
-      <View style={styles.fab}>
+      <View style={[styles.fab, { bottom: gap }]}>
         <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push({ pathname: '/community/write', params: { code } }))} />
       </View>
     </View>
@@ -27,5 +28,5 @@ export default function EtfCommunity() {
 
 const styles = StyleSheet.create({
   vote: { marginTop: 14, marginHorizontal: 16, marginBottom: 6 },
-  fab: { position: 'absolute', right: 18, bottom: 26 },
+  fab: { position: 'absolute', right: 18 },
 });
