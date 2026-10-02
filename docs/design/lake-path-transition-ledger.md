@@ -35,7 +35,7 @@
 | `pit_daily`·`fin_annual`·`flow_daily` | `analysis/backfill/*.parquet` | 106MB · 2MB · 25MB | 2025-06-27~2026-07-31 · FY2000~2026 · 2022-01-03~2026-07-31 | DataGuide 파생 | `statics/pit.py`·`fin.py`·`flowhist.py`(수동, dev 버킷 하드코딩) | `sql_surface.v_pit`·`v_fin`·`paneltest` | 유지(대체 생산 전) | 유지 |
 | `tau_sidecar` | `analysis/backfill/tau_sidecar.parquet` | 1 · 26MB (08-11) | published 2026-04-25~08-03 · 360,151행 | (article_id, published_kst) | `statics/tau_sidecar.py`(수동, 로컬 출력) | `trial.py`·`evidence.py`·`duck.py:1051` | 폐지 후보(τ 재적재 완료 시, 통일 스펙 ⑦) | 범위 밖 |
 | `etf_holdings_fmp` | `analysis/backfill/etf_holdings_fmp.parquet` | 1 · 0.07MB | as_of 2026-01-28 하루 · 4,153행 | ETF 보유 | **레포 밖** | `layers.py:602`(`s3_etf_holdings` 0행 폴백) | 미결 | 범위 밖 |
-| DataGuide curated | `draft/curated/source=dataguide/dataset={market_daily,financial_statements,investor_flow_daily,price_daily,consensus,reference,market_history}` gzip CSV | 1,337 · 2.93GB | market_daily 2025-02-03~2026-07-31 · consensus as_of ~2026-07-31 · 나머지 as_of 2026-08-02·08-05 | 롱 포맷(trade_date, ticker, item_code, value) | **레포 밖 수작업** | `duck.s3_dg_*`·`tool_dg`·`tool_consensus`·`tool_fin`·`pit/fin/flowhist/dgwide` | 승격 보류(ADR-0057 §5-1 미충족) | 유지 |
+| DataGuide curated | `draft/curated/source=dataguide/dataset={market_daily,financial_statements,investor_flow_daily,price_daily,consensus,reference,market_history}` gzip CSV | 1,337 · 2.93GB | market_daily 2025-02-03~2026-07-31 · consensus as_of ~2026-07-31 · 나머지 as_of 2026-08-02·08-05 | 롱 포맷(trade_date, ticker, item_code, value) | **레포 밖 수작업** | `duck.s3_dg_*`·`tool_dg`·`tool_consensus`·`tool_fin`·`pit/fin/flowhist/dgwide` · data-pipeline `backfill-price-daily-dataguide`(`price_daily` 만, 일회성) | 승격 보류(ADR-0057 §5-1 미충족) | 유지 |
 | Glue DataGuide 표 | `market_data_kr.dg_market_daily_src`(외부 표, curated 위) · `dg_market_daily_m`(Iceberg, 다른 버킷, 08-05) | 미확인 | 미확인 | — | 레포 밖 | **레포 참조 0** | 미결 | 미확인 |
 | draft Iceberg | `draft/canonical/{group}/{table}` · Glue `edge_lake_draft` 20표(+`_latest` 뷰) | 177 · 22MB | 데이터가 있는 표는 `statement_line`(파일 149)·`report_current`(1)뿐, 나머지 18표는 메타데이터만 | tables.py 선언 12표 | `canonical/run.py`(Athena MERGE, 두 표만 · 스케줄 없음) | `duck.s3_statement_line`(`tool_business.py:96`) 외 7뷰(소비자 0) | 표별 승격(§4.3) | 유지 |
 
@@ -180,6 +180,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 ### 4.3 DataGuide·draft Iceberg
 
 - DataGuide는 공급 계약과 갱신 담당이 없다. `pit_daily`·`fin_annual`·`flow_daily`는 대체 생산 경로가 생기기 전까지 유지한다.
+- DataGuide `price_daily`(as_of 2026-08-02, wide CSV)는 정본 존으로 승격하지 않고 data-pipeline 의 일회성 스텝 `backfill-price-daily-dataguide` 가 DB `price_daily` 로 직접 싣는다(ALPHA-1148). 종목 마스터에 있는 종목의 2006-10-01~2026-07-31 일봉이 대상이고 갱신하지 않는다. 출처는 `data_version=dataguide-20260802` 로 남는다. 스냅샷 이후 구간은 KIS 일일 수집이 맡는다.
 - draft Iceberg 20표 중 데이터가 있는 것은 `statement_line`·`report_current` 둘이다.
   writer(`canonical/run.py`)는 레포에 있지만 스케줄이 없다. 나머지 18표는 메타데이터만 있다.
 - Glue `market_data_kr.dg_market_daily_*`와 `market-data-393229433969` 버킷의 나머지 표는 레포 참조가 0이다. 미확인이다.

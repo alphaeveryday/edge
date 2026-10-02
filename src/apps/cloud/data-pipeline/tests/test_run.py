@@ -576,6 +576,42 @@ def test_backfill_normalize_disclosure_defaults_to_all_raw_and_accepts_filing_wi
         main(["backfill-disclosure", "--run-id", "B3"])
 
 
+def test_backfill_price_daily_dataguide_requires_an_explicit_snapshot_and_window(monkeypatch):
+    """869만 행을 싣는 일회성 적재다. 스냅샷·기간을 기본값으로 채우면 인자를 빠뜨린 실행이
+    엉뚱한 범위를 싣는다 — 셋 다 명시해야 하고, 전용 플래그가 다른 스텝에서 조용히 무시되면
+    `--dry-run` 을 붙였다고 믿은 실제 적재가 일어난다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    captured = []
+
+    def fake_run(storage, run_id, *, db, as_of_date, from_date, to_date, dry_run):
+        captured.append((as_of_date, from_date, to_date, dry_run))
+        return 0
+
+    monkeypatch.setattr(run_mod.backfill_price_daily_dataguide, "run", fake_run)
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda db: db)
+    base = ["backfill-price-daily-dataguide", "--run-id", "B1", "--as-of-date", "2026-08-02",
+            "--from", "2006-10-01", "--to", "2026-07-31"]
+
+    assert main(base) == 0
+    assert main([*base, "--dry-run"]) == 0
+    assert captured == [("2026-08-02", "2006-10-01", "2026-07-31", False),
+                        ("2026-08-02", "2006-10-01", "2026-07-31", True)]
+
+    for missing in ("--as-of-date", "--from", "--to"):
+        index = base.index(missing)
+        with pytest.raises(SystemExit, match="필요하다"):
+            main(base[:index] + base[index + 2:])
+    with pytest.raises(SystemExit, match="달력일"):
+        main([*base[:-1], "2026-02-31"])
+    with pytest.raises(SystemExit, match="늦을 수 없다"):
+        main([*base[:5], "--from", "2026-08-01", "--to", "2026-07-31"])
+    with pytest.raises(SystemExit, match="전용이다"):
+        main(["load-price-daily", "--run-id", "R", "--all", "--dry-run"])
+    with pytest.raises(SystemExit, match="전용이다"):
+        main(["load-price-daily", "--run-id", "R", "--all", "--as-of-date", "2026-08-02"])
+    assert len(captured) == 2
+
+
 def test_deadline_rejected_where_it_is_ignored(monkeypatch):
     # WHY: `--deadline-sec` 는 KRX ETF 만 소비한다. 다른 스텝에서 조용히 무시되면 운영자가
     #      상한이 걸렸다고 오인하고(있다고 믿는데 안 걸린다), SFN 이 엉뚱한 브랜치에 상한을

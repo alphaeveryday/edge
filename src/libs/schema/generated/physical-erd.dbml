@@ -1159,6 +1159,9 @@ Table "price_daily" {
   "price_basis" varchar(30)
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
+  "open_price" numeric(24,8)
+  "high_price" numeric(24,8)
+  "low_price" numeric(24,8)
 
   indexes {
     ("instrument_id", "trade_date") [pk]
@@ -1332,6 +1335,8 @@ Table "tenant_delivery" {
   "target_explanation_result_id" text
   "reason" text
   "created_at" timestamptz [not null]
+  "movement_analysis_id" text
+  "target_movement_analysis_id" text
 
   indexes {
     ("tenant_id", "cursor") [pk]
@@ -1487,7 +1492,9 @@ Ref: "supply_contract_fact"."counterparty_actor_id" > "actor"."actor_id"
 Ref: "supply_contract_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")
 Ref: "tenant_credential"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_delivery"."explanation_result_id" > "explanation_result"."explanation_result_id"
+Ref: "tenant_delivery"."movement_analysis_id" > "movement_analyses"."analysis_id"
 Ref: "tenant_delivery"."target_explanation_result_id" > "explanation_result"."explanation_result_id"
+Ref: "tenant_delivery"."target_movement_analysis_id" > "movement_analyses"."analysis_id"
 Ref: "tenant_delivery"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_release_history"."bundle_version" > "release_bundle"."bundle_version"
 Ref: "tenant_release_history"."tenant_id" > "tenant"."tenant_id"
