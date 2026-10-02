@@ -1038,12 +1038,13 @@ components:
         count: { type: integer }
     HomeBrief:
       type: object
-      required: [asOf, groups, group, band, changePct, etfs]
+      required: [asOf, groups, group, band, score, changePct, etfs]
       properties:
         asOf: { type: string, format: date-time, description: 기준 시각. "오늘 08:30 기준" 문구는 앱이 만든다 }
         groups: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
         group: { type: string }
         band: { $ref: '#/components/schemas/Signal' }
+        score: { type: number, minimum: 0, maximum: 4, description: 그룹 signal 서수 평균(강력하락 0 ~ 강력상승 4), 소수 둘째 자리. band 는 이 값의 반올림 }
         changePct: { type: number }
         etfs: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
     Me:
