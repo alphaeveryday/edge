@@ -221,6 +221,11 @@ jobs:
           docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
           < src/libs/schema/tests/minute_window_artifact_commit.sql
 
+      - name: V1 and v2 delivery references (real PostgreSQL)
+        run: >
+          docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
+          < src/libs/schema/tests/v2_tenant_delivery.sql
+
       - name: Analysis v2 writer permissions (real PostgreSQL)
         run: >
           docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge

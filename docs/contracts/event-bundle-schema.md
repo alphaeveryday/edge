@@ -114,6 +114,20 @@
 - **NEW는 전체 상태 전달(full snapshot)** — diff/patch가 아니다. On-Prem은 도메인 ID 기준 멱등 upsert만 하면 되고, 부분 갱신 병합 로직이 필요 없다.
 - INVALIDATION 수신 시 On-Prem 동작(item·게시분 즉시 비노출)은 [../domain/state-machine.md](../domain/state-machine.md) 소관. 정정(CORRECTION) 형상은 계약에서 폐지됐다 — 소비자는 미지 유형과 동일하게 거부한다([ADR-0044](../adr/0044-correction-abolition.md)).
 
+### v2 가격 설명의 전달 참조
+
+`tenant_delivery`에 `movement_analysis_id`와 `target_movement_analysis_id`를 추가한다.
+둘 다 `movement_analyses.analysis_id`를 참조하며, 기존 v1 참조와 커서 규칙은 유지한다.
+
+| 전달 | v1 | v2 | 공통 조건 |
+|---|---|---|---|
+| NEW | `explanation_result_id` | `movement_analysis_id` | 본체 참조는 둘 중 하나. 회수 대상·사유 없음 |
+| INVALIDATION | `target_explanation_result_id` | `target_movement_analysis_id` | 회수 대상은 둘 중 하나. 본체 참조 없음·사유 필수 |
+
+이 변경은 저장 형상만 준비한다. v2 발번은 번들 조립·회수 코드와 수신 검증 이후에 활성화한다.
+v2에서 산출하지 않는 v1 설명 유형·확신도를 임의 생성하지 않는다. 이 판정값의 전달 방식은
+생산자 연결 시 별도로 확정한다. 기존 v1 기록과 외부 JSON 계약은 이번 migration에서 바꾸지 않는다.
+
 ### 검수콘솔 API의 계산 근거 전달
 
 설명 조회 API는 `news_id`, `tool_run_id`, `item_ids`, `as_of`, `arguments`, `output`,
