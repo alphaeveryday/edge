@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
   emailRow: { flexDirection: 'row', gap: 8 },
   hint: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.textMuted },
-  foot: { gap: 14, paddingTop: 12, paddingHorizontal: 24 },
+  foot: { gap: 14, paddingTop: 12, paddingHorizontal: 24, borderTopWidth: 1, borderTopColor: colors.surface },
   terms: { textAlign: 'center', fontFamily: fam.regular, fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   termsLink: { fontFamily: fam.semibold, color: colors.textSub, textDecorationLine: 'underline' },
   toLogin: { flexDirection: 'row', justifyContent: 'center', gap: 6 },
