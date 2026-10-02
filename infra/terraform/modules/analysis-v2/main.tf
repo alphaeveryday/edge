@@ -105,8 +105,12 @@ resource "aws_sfn_state_machine" "this" {
       Parameters = {
         Cluster              = var.cluster_arn, TaskDefinition = aws_ecs_task_definition.this.family, LaunchType = "FARGATE",
         NetworkConfiguration = { AwsvpcConfiguration = { Subnets = var.subnet_ids, SecurityGroups = [aws_security_group.this.id], AssignPublicIp = "DISABLED" } },
-        Overrides            = { ContainerOverrides = [{ Name = "analysis-v2", Environment = [{ Name = "ANALYSIS_REQUEST", "Value.$" = "States.JsonToString($)" }] }] }
-      }, ResultPath          = "$.task", Next = "CheckExit"
+        Overrides = { ContainerOverrides = [{ Name = "analysis-v2", Environment = [
+          { Name = "ANALYSIS_REQUEST", "Value.$" = "States.JsonToString($)" },
+          # Every start path runs this workflow, so the worker's slot wait caps them all (cloud/worker.py acquire_slot).
+          { Name = "ANALYSIS_SLOTS", Value = tostring(var.analysis_slots) }
+        ] }] }
+      }, ResultPath = "$.task", Next = "CheckExit"
     },
     CheckExit = { Type = "Choice", Choices = [{ Variable = "$.task.Containers[0].ExitCode", NumericEquals = 0, Next = "Completed" }], Default = "Failed" },
     Completed = { Type = "Succeed" }, Failed = { Type = "Fail", Error = "AnalysisFailed", Cause = "Inspect observation artifacts and task logs" }

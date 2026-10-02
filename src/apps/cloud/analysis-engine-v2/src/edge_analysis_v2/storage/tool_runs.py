@@ -58,6 +58,10 @@ class ToolStore:
 
         Raises:
             ValueError: The same identifier already describes a different tool.
+
+        Analyses that start together register the same definition at once. The insert
+        therefore yields to a concurrent writer on either unique key instead of failing,
+        and the comparison below still rejects a different definition.
         """
         self._require_idle()
         definition = dict(tool_id=tool_id, function_name=function_name, version=version,
@@ -69,7 +73,7 @@ class ToolStore:
                     (tool_id, function_name, version, description, source_names, formula_latex)
                 VALUES (%(tool_id)s, %(function_name)s, %(version)s, %(description)s,
                         %(source_names)s, %(formula_latex)s)
-                ON CONFLICT (tool_id) DO NOTHING
+                ON CONFLICT DO NOTHING
                 """, definition)
             cur.execute("SELECT * FROM tool_definitions WHERE tool_id = %s", (tool_id,))
             if cur.fetchone() != definition:
