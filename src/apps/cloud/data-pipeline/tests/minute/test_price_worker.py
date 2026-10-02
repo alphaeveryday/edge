@@ -933,6 +933,83 @@ class TestCollectorSelection:
         # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
         assert collector.client.client.min_interval == pytest.approx(0.08)
 
+    def _collect_with(self, monkeypatch, responses, **config):
+        """실제 조립(`make_price_collector`)으로 창 하나를 수집한다 — urlopen 만 대역이다."""
+        import io
+        import json
+
+        from data_pipeline.minute.models import CollectionRequest
+        from data_pipeline.minute.worker import make_price_collector
+
+        def urlopen(req, timeout=None):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return io.BytesIO(json.dumps(item).encode())  # BytesIO 는 with 블록을 지원한다
+
+        monkeypatch.setattr("urllib.request.urlopen", urlopen)
+        collector, _ = make_price_collector(
+            self._config(source="kis", app_key="APPKEY-1", app_secret="APPSECRET-1", **config),
+            session_date=TODAY,
+        )
+        collector.client.client._sleep = lambda seconds: None
+        start = datetime.combine(TODAY, datetime.min.time(), KST).replace(hour=10)
+        request = CollectionRequest(
+            dataset="price_minute", window_start=start, window_end=start + timedelta(minutes=1),
+            run_id="run-1", session_id="msn_x", execution_mode="resident",
+            universe_version="u1", unit_ids=("005930",),
+        )
+        return collector.collect(request, start)
+
+    def test_window_summary_log_tells_rate_limit_from_slow_response(self, monkeypatch, caplog):
+        """창마다 호출 요약 한 줄이 남는다(ALPHA-1124) — 조립된 그대로의 collector 에서.
+
+        수집 소요가 늘었을 때 KIS 응답 지연과 유량 제한 재시도를 가를 근거가 종전엔 없었다
+        (`retry_count` 는 계산만 되고 저장·로그가 없었다). 이음매(`make_price_collector` 가 세 층에
+        같은 누적기를 넘긴다)가 끊기면 운영 로그에서 조용히 사라지므로 조립 경로로 확인한다.
+        """
+        caplog.set_level("INFO", logger="data_pipeline.minute.kis_collector")
+        self._collect_with(monkeypatch, [
+            {"access_token": "TOKEN-1", "expires_in": 86400},
+            {"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "초당 거래건수 초과"},
+            {"rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상", "output2": []},
+        ])
+
+        lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("kis.http.window")]
+        assert len(lines) == 1
+        fields = dict(part.split("=", 1) for part in lines[0].split()[1:])
+        # 고정 항목은 늘 같은 순서다 — 로그 조회의 parse 한 줄(README)이 창마다 맞아야 한다
+        assert list(fields)[5:] == ["attempts", "rtt_ms", "rtt_max_ms", "pace_wait_ms", "transport_retry",
+                                    "transport_backoff_ms", "kis_EGW00201", "rate_sleep_ms", "rate_exhausted"]
+        assert fields["caller"] == "minute-price" and fields["units"] == "1"
+        # 발신 3회(토큰 1 + 거절 1 + 성공 1) — 최종 성공 1건과 실제 발신 수가 구분된다
+        assert fields["attempts"] == "3"
+        assert fields["kis_EGW00201"] == "1" and fields["rate_sleep_ms"] == "700"
+        # 없던 일은 0 으로 **적는다** — 키가 빠지면 "발생 0회"와 "미관측"을 못 가른다
+        assert fields["rate_exhausted"] == "0" and fields["transport_retry"] == "0"
+        for field in ("elapsed_ms", "rtt_ms", "rtt_max_ms", "pace_wait_ms"):
+            assert int(fields[field]) >= 0
+        # 키·토큰·종목 코드는 싣지 않는다(종목별 상세는 원장 missing_units 의 몫)
+        for sensitive in ("APPKEY-1", "APPSECRET-1", "TOKEN-1", "005930"):
+            assert sensitive not in lines[0]
+
+    def test_window_summary_is_logged_when_collection_raises(self, monkeypatch, caplog):
+        # WHY: 창이 예외로 끝났을 때의 계측이 가장 필요하다 — 성공한 창만 남기면 통째로 실패한 창의
+        #      호출 수·오류 종류가 관측에서 빠진다.
+        import urllib.error
+
+        from data_pipeline.sources.kis_minute import KisSourceError
+
+        caplog.set_level("INFO", logger="data_pipeline.minute.kis_collector")
+        with pytest.raises(KisSourceError):
+            self._collect_with(monkeypatch, [
+                {"access_token": "TOKEN-1", "expires_in": 86400},
+                urllib.error.HTTPError("https://x", 403, "forbidden", {}, None),
+            ])
+
+        (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("kis.http.window")]
+        assert "status=RAISED" in line and "err_http_403=1" in line and "attempts=2" in line
+
     def test_fetch_concurrency_needs_the_shared_budget(self):
         """동시 요청은 공유 허용과 함께일 때만 켠다(ALPHA-1087) — 허용 없이 켜면 로컬 간격 안에서 실제 발신률만 올라
         이미 한도에 닿는 합산을 더 나쁘게 만든다."""
