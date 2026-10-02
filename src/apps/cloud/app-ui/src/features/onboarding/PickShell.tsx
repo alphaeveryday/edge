@@ -33,5 +33,5 @@ export function PickShell({ navTitle = '', title, sub, cta, ctaDisabled, onBack,
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   body: { flex: 1 },
-  foot: { paddingTop: 16, paddingHorizontal: 16, backgroundColor: colors.card },
+  foot: { paddingTop: 12, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface },
 });

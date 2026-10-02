@@ -10,7 +10,7 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarActiveTintColor: colors.text,
         tabBarInactiveTintColor: colors.textMuted,
-        tabBarStyle: { backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.tabBarLine },
+        tabBarStyle: { backgroundColor: colors.white, borderTopWidth: 1, borderTopColor: colors.tabBarLine },
         tabBarLabelStyle: { fontFamily: fam.semibold, fontSize: 11 },
       }}
     >

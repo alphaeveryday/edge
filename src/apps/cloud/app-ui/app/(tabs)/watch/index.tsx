@@ -44,7 +44,7 @@ export default function Watch() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1, backgroundColor: colors.white },
   chips: { paddingVertical: 12, paddingHorizontal: PAGE_X, borderBottomWidth: 1, borderBottomColor: colors.surface },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textSub, paddingVertical: 34, paddingHorizontal: 20 },
 });
