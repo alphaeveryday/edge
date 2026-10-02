@@ -2,7 +2,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
 
 import psycopg
 import pytest
@@ -23,7 +23,7 @@ def delivery():
         tenant=conn.execute("INSERT INTO tenant(tenant_name,environment,status) VALUES (%s,'DEV','ACTIVE') RETURNING tenant_id",(key,)).fetchone()[0]
         conn.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'sum',%s,'Net flow sum')",(key,key))
         def make(suffix='', offset=0, source='database', published=True):
-            identity=key+suffix
+            identity=uuid5(NAMESPACE_URL,key+suffix).hex
             conn.execute("""INSERT INTO movement_analyses(analysis_id,etf_code,analysis_at,trading_date,status,published_at,data_source,summary,selected_item_ids)
                 VALUES (%s,%s,%s,%s,'completed',%s,%s,'Summary',%s)""",
                 (identity,key,now+timedelta(minutes=offset),now.date(),now if published else None,source,[identity]))
