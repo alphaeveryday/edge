@@ -16,6 +16,7 @@ from edge_analysis_v2.contracts.audit import read_contract_audit
 from edge_analysis_v2.dashboard.server import assemble_screen
 from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices, load_research_observations
 from edge_analysis_v2.storage.database import connect_results
+from edge_analysis_v2.storage.delivery import enqueue_movement
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
 
 LOG = logging.getLogger(__name__)
@@ -79,6 +80,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session):
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                 artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
+            if request['kind'] == 'movement':
+                job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
         job['status']='completed'
     except Exception as exc:
         job.update(status='failed',error=type(exc).__name__+': analysis failed; inspect recorded events')

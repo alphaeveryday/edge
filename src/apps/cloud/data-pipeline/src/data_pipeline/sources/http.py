@@ -3,6 +3,8 @@
 - 요청 간 최소 간격 = **평균 발신률 상한**. 클라이언트 1개를 워커 여럿이 공유해도
   전체 발신률이 1/min_interval 로 묶인다(thread-safe). 인접 간격은 보장 대상이 아니다
 - 5xx/일시 오류는 지수 백오프(1→2→4초) 재시도
+- 응답 없이 끊긴 연결은 같은 재시도 루프 안에서 **한도를 두고** 한 번 다시 보낸다. 한도 밖이면
+  종전대로 그 예외를 그대로 올린다(`DISCONNECT_RETRY_*`)
 - 4xx/429 는 즉시 중단(StopFetch) — 키 오류·쿼터 초과를 재시도로 두드리지 않는다
 
 간격 강제·재시도·StopFetch 백본은 `request()` 한 곳에 있고, `get()` 은 그 위의
@@ -16,14 +18,93 @@ stdlib(urllib)만 사용해 의존성 없이 단위테스트에서 import 된다
 
 from __future__ import annotations
 
+import http.client
 import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 
 from ..failures import SafeFailureError
 
 RETRY_BACKOFF_SEC = [1, 2, 4]
+
+# 응답 없이 끊긴 연결(`RemoteDisconnected`·`ConnectionResetError`·`IncompleteRead`)의 재시도 한도.
+# urllib 은 발신 단계 실패만 `URLError` 로 감싸고 응답 수신 단계의 끊김은 원형 그대로 올린다 — 그래서
+# 아래 재시도를 통째로 빠져나가 호출자를 죽였다(분 가격은 종목 하나의 끊김이 window 전체 실패였다).
+# 목적은 **드문 끊김**(KIS 분봉 실측 하루 9~37건)을 흡수하는 것뿐이다. 계속 끊기는 장애에서 기존 재시도
+# (어댑터의 EGW00201 루프·window 재청구)와 곱해져 발신이 늘지 않게 세 겹으로 묶는다:
+#   - 호출당 1회(새 루프가 아니라 기존 재시도 루프의 한 칸을 쓴다 — 호출당 발신 상한 4 는 그대로다)
+#   - **재발신 시각**이 첫 발신 뒤 `DISCONNECT_RETRY_DEADLINE_SEC` 안일 때만. 끊긴 시점에 백오프를 더해
+#     미리 보고(넘길 것이면 기다리지 않는다), 발신 간격·공유 허용 대기가 끝난 발신 직전에 다시 본다
+#   - 클라이언트 전체로 **고정 구간**(`DISCONNECT_RETRY_BUDGET_WINDOW_SEC`)마다 `DISCONNECT_RETRY_BUDGET` 회까지.
+#     ⚠️ "임의의 60초에 5회"를 보장하지 않는다 — 구간 경계에 걸치면 임의의 60초에 최대 2배(10회)까지 나간다.
+#     ponytail: 고정 구간 카운터. 상한이 있다는 것이 목적이라 그대로 둔다. 엄밀한 이동 창이 필요해지면
+#     재시도 시각 deque 로 바꾼다.
+# 재발신도 다른 발신과 같은 길을 지난다 — 백오프 뒤 발신 간격(또는 공유 호출 허용)을 다시 받는다.
+# 한도 밖이면 다시 보내지 않고 **그 예외를 그대로 올린다**(이 재시도가 없던 때와 같은 동작). 안전 실패
+# (`NETWORK_RETRY_EXHAUSTED`)로 바꾸지 않는 이유: 분 가격은 그걸 종목 결손으로 접어 window 를 커밋하는데,
+# 커밋된 window 는 자동 재청구되지 않는다(DUE·만료 CLAIMED 만 다시 집는다). 예외로 window 를 실패시켜야
+# lease 만료 뒤 전 종목 재수집 경로가 남는다 — 끊김으로 생긴 결손을 영구화하지 않는다.
+DISCONNECT_RETRY_DEADLINE_SEC = 10.0
+DISCONNECT_RETRY_BUDGET = 5
+DISCONNECT_RETRY_BUDGET_WINDOW_SEC = 60.0
+
+
+class CallStats:
+    """발신 계측 누적기(ALPHA-1124) — 이름 붙은 합계를 모으고, 읽는 쪽이 `drain()` 으로 가져가며 비운다.
+
+    운반 계층(`PoliteClient`)과 어댑터가 **같은 인스턴스**에 더한다. 한 구간의 소요를 발신 대기·
+    응답 소요·재시도 대기로 나눠 보려면 한 줄에 있어야 하기 때문이다(느린 응답과 유량 제한은 합계
+    시간만으로는 구분되지 않는다). 받는 값은 건수와 초뿐이다 — URL·헤더·응답 본문은 받지 않는다.
+    thread-safe(동시 요청).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sums: dict[str, float] = {}
+
+    def add(self, **amounts: float) -> None:
+        """이름별 합계에 더한다. 초 단위 값은 이름을 `_sec` 로 끝낸다(`drain` 이 밀리초로 낸다)."""
+        with self._lock:
+            for key, amount in amounts.items():
+                self._sums[key] = self._sums.get(key, 0) + amount
+
+    @contextmanager
+    def attempt(self):
+        """발신 1회 — 시도 수·응답 소요(합·최대)와 실패 종류를 센다. 예외는 그대로 지나간다."""
+        started = time.monotonic()
+        try:
+            yield
+        except Exception as exc:
+            self.add(**{f"err_{_error_kind(exc)}": 1})
+            raise
+        finally:
+            rtt = time.monotonic() - started
+            with self._lock:
+                self._sums["attempts"] = self._sums.get("attempts", 0) + 1
+                self._sums["rtt_sec"] = self._sums.get("rtt_sec", 0) + rtt
+                self._sums["rtt_max_sec"] = max(self._sums.get("rtt_max_sec", 0), rtt)
+
+    def drain(self) -> dict[str, int]:
+        """누적을 읽고 비운다 — 건수는 그대로, 초(`*_sec`)는 밀리초 정수(`*_ms`)로 낸다."""
+        with self._lock:
+            sums, self._sums = self._sums, {}
+        return {
+            (key[:-4] + "_ms" if key.endswith("_sec") else key):
+                round(value * 1000) if key.endswith("_sec") else int(value)
+            for key, value in sums.items()
+        }
+
+
+def _error_kind(exc: Exception) -> str:
+    """실패 종류의 이름 — HTTP 상태코드 또는 예외 클래스명. 예외 **문자열**은 쓰지 않는다
+    (URL·프록시 자격증명이 들어갈 수 있다 — 아래 `SafeFailureError` 주석과 같은 이유).
+    `URLError` 는 감싼 원인(시간 초과·연결 거부·DNS)이 구분의 실체라 그쪽 이름을 쓴다."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"http_{exc.code}"
+    reason = getattr(exc, "reason", None)
+    return type(reason if isinstance(reason, BaseException) else exc).__name__
 
 
 class StopFetch(Exception):
@@ -53,6 +134,11 @@ class PoliteClient:
     def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0, pacer=None):
         self.min_interval = min_interval
         self.timeout = timeout
+        # 끊긴 연결 재시도 예산(DISCONNECT_RETRY_BUDGET) — 현재 **고정 구간**의 시작 시각과 쓴 횟수.
+        # 간격용 `_lock` 은 대기 동안 잡혀 있어 따로 둔다.
+        self._disconnect_lock = threading.Lock()
+        self._disconnect_window_from = 0.0
+        self._disconnect_retries = 0
         # 공유 호출 허용(sources/call_budget.py). 있으면 매 발신 시도가 pacer.pace() 를 거치고
         # 로컬 간격(min_interval)은 쓰지 않는다 — 그 간격은 계정 예산을 나눠 쓰려던 값이다.
         self.pacer = pacer
@@ -60,6 +146,8 @@ class PoliteClient:
         # 발신 속도가 1/min_interval 로 묶인다(_respect_interval 주석).
         self._next_slot_at = 0.0
         self._lock = threading.Lock()
+        # 발신 계측(ALPHA-1124). 읽는 호출자가 없으면 키 몇 개의 합계로 남을 뿐이다.
+        self.stats = CallStats()
 
     # 테스트에서 대기 없이 돌리도록 교체 가능한 지점.
     _sleep = staticmethod(time.sleep)
@@ -101,6 +189,23 @@ class PoliteClient:
                 self._sleep(wait)
             self._next_slot_at = time.monotonic() + self.min_interval
 
+    def _may_retry_disconnect(self, resend_by: float, wait: float) -> bool:
+        """끊긴 연결을 `wait` 초 뒤에 다시 보내도 되는가 — 그 시각이 기한(`resend_by`) 안이고
+        클라이언트 예산이 남았을 때만.
+
+        된다고 답하면 예산 한 칸을 쓴다. 한도의 근거는 `DISCONNECT_RETRY_*` 주석.
+        """
+        now = time.monotonic()
+        if now + wait > resend_by:
+            return False
+        with self._disconnect_lock:
+            if now - self._disconnect_window_from > DISCONNECT_RETRY_BUDGET_WINDOW_SEC:
+                self._disconnect_window_from, self._disconnect_retries = now, 0
+            if self._disconnect_retries >= DISCONNECT_RETRY_BUDGET:
+                return False
+            self._disconnect_retries += 1
+            return True
+
     def request(
         self,
         method: str,
@@ -115,21 +220,34 @@ class PoliteClient:
         - method/headers/data 로 GET·POST·커스텀 헤더를 표현한다(data 있으면 POST 본문).
         - decode=True 면 UTF-8 문자열, False 면 원본 bytes 를 돌려준다(바이너리 ZIP 등).
         재시도 소진은 SafeFailureError. 4xx/429 는 재시도·격리 대상이 아니라 즉시 StopFetch.
+        응답 없이 끊긴 연결은 한도 안에서 1회만 다시 보내고, 한도 밖이면 그 예외를 그대로 올린다.
         """
-        for backoff in [0, *RETRY_BACKOFF_SEC]:
+        first_sent_at = None
+        disconnect_retried = False
+        dropped = None  # 끊김 재시도를 앞둔 동안만 — (그 예외, 다시 보낼 수 있는 마지막 시각)
+        backoffs = [0, *RETRY_BACKOFF_SEC]
+        for slot, backoff in enumerate(backoffs):
             if backoff:
                 self._sleep(backoff)
+                self.stats.add(transport_retry=1, transport_backoff_sec=backoff)
             # 재시도도 새 허용을 받는다(같은 전체 예산). pacer 가 돌아온 뒤 소켓 쓰기까지의 지연(연결·
             # TLS 핸드셰이크)은 통제하지 못한다 — call_budget 도크스트링.
+            paced_from = time.monotonic()
             if self.pacer is not None:
                 self.pacer.pace()
             else:
                 self._respect_interval()
+            self.stats.add(pace_wait_sec=time.monotonic() - paced_from)
             req = urllib.request.Request(
                 url, data=data, headers=headers or {}, method=method
             )
+            if dropped is not None and time.monotonic() > dropped[1]:
+                raise dropped[0]  # 발신 간격·공유 허용 대기가 끊김 재시도 기한을 넘겼다
+            dropped = None
+            if first_sent_at is None:
+                first_sent_at = time.monotonic()
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                with self.stats.attempt(), urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = resp.read()
                     return body.decode("utf-8", errors="replace") if decode else body
             except urllib.error.HTTPError as exc:
@@ -145,6 +263,15 @@ class PoliteClient:
                 pass  # 5xx → 재시도
             except (urllib.error.URLError, TimeoutError):
                 pass  # 네트워크 실패 → 재시도
+            except (ConnectionError, http.client.IncompleteRead) as exc:
+                # 응답 수신 중 끊김 — 한도 안에서 1회만 재시도하고, 한도 밖이면 그대로 올린다
+                # (DISCONNECT_RETRY_* 주석). 남은 칸이 없으면 다시 보낼 수 없으니 예산도 쓰지 않는다.
+                upcoming = backoffs[slot + 1:slot + 2]
+                deadline = first_sent_at + DISCONNECT_RETRY_DEADLINE_SEC
+                if disconnect_retried or not upcoming or not self._may_retry_disconnect(deadline, upcoming[0]):
+                    raise
+                disconnect_retried = True
+                dropped = (exc, deadline)
         # 원본 예외 문자열에는 URL·프록시 자격증명 등이 들어갈 수 있다. 호출자는 고정 코드로
         # 일시 장애를 분류하고 원문은 현재 traceback 밖으로 전달하지 않는다(ALPHA-1064).
         raise SafeFailureError("NETWORK_RETRY_EXHAUSTED")

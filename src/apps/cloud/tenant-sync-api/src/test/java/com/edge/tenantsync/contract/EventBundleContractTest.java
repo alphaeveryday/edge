@@ -43,7 +43,7 @@ class EventBundleContractTest {
 				LocalDate.parse("2026-10-02"), Instant.parse("2026-10-02T01:00:00Z"),
 				null, "설명", null, null, Instant.parse("2026-10-02T01:00:00Z"), "v2");
 		var bundle = EventBundle.of(1L, List.of(BundleEntry.newResult(1, result,
-				new ExplanationRun("v2-result", "v2"), List.of(), List.of())));
+				new ExplanationRun("v2-result", null), List.of(), List.of())));
 		ObjectMapper mapper = new ObjectMapper();
 		String json = mapper.writeValueAsString(bundle);
 		assertThat(schema.validate(json, InputFormat.JSON)).isEmpty();
