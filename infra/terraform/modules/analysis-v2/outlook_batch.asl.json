@@ -146,17 +146,17 @@
           },
           "GateOpen": {
             "Type": "Choice",
-            "Choices": [{ "Variable": "$.gate.busy", "NumericGreaterThan": 0, "Next": "WaitForSlot" }],
+            "Choices": [{ "Variable": "$.gate.busy", "NumericGreaterThan": 0, "Next": "StillTimeToWait" }],
             "Default": "StillTimeToRun"
           },
-          "WaitForSlot": { "Type": "Wait", "Seconds": 30, "Next": "StillTimeToWait" },
           "StillTimeToWait": {
             "Type": "Choice",
             "Choices": [
               { "Variable": "$$.State.EnteredTime", "TimestampGreaterThanEqualsPath": "$.deadline", "Next": "DeadlineExceeded" }
             ],
-            "Default": "Gate"
+            "Default": "WaitForSlot"
           },
+          "WaitForSlot": { "Type": "Wait", "Seconds": 30, "Next": "ReadStatus" },
           "StillTimeToRun": {
             "Type": "Choice",
             "Choices": [

@@ -94,7 +94,7 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 | 단계 | 상태 | 근거 |
 |---|---|---|
 | 정의 문법 | 통과 | AWS `ValidateStateMachineDefinition` |
-| 계약 테스트(대역) | 18건 통과, 변이 12건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
+| 계약 테스트(대역) | 19건 통과, 변이 13건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
 | Terraform | `validate` 통과 | 37종 목록이 `sources.toml` 파싱 결과와 순서까지 일치(해시 동일) |
 | dev 소량 통합 | 대기 | 배포 뒤 |
 | dev 37종 전체 실측 | 대기 | 배포 뒤 |
@@ -104,6 +104,7 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 
 ```sh
 AWS_PROFILE=edge uv run --with boto3 python -m unittest discover -s infra/terraform/modules/analysis-v2/tests -v
+AWS_PROFILE=edge uv run --with boto3 python infra/terraform/modules/analysis-v2/tests/mutate_outlook_batch.py
 ```
 
 ## 가격변동 연결 (다음 작업, 미구현)

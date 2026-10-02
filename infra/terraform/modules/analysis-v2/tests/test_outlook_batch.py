@@ -42,7 +42,11 @@ def render(**overrides):
     for key, value in values.items():
         text = text.replace('${' + key + '}', value)
     assert '${' not in text, 'templatefile 자리표시자가 남았다'
-    return json.loads(text)
+    definition = json.loads(text)
+    for state in definition['States']['RunItems']['ItemProcessor']['States'].values():
+        if state['Type'] == 'Wait':  # TestState 는 Wait 를 실제로 기다린다. 대기 길이는 계약이 아니다
+            state['Seconds'] = 1
+    return definition
 
 
 def identity(etf, attempt, at=AT):
@@ -235,7 +239,7 @@ class OutlookBatchContract(unittest.TestCase):
         world = World(busy=[1, 1, 0])
         state, _ = run_batch(world, {'analysis_at': AT, 'deadline': FUTURE, 'etf_codes': ['069500']})
         self.assertEqual(state, 'Done')
-        self.assertEqual(world.trace, ['ReadStatus', 'Gate', 'Gate', 'Gate', 'Run', 'ReadStatus', 'ReadPublication'])
+        self.assertEqual(world.trace, ['ReadStatus', 'Gate', 'ReadStatus', 'Gate', 'ReadStatus', 'Gate', 'Run', 'ReadStatus', 'ReadPublication'])
 
     def test_same_attempt_running_elsewhere_is_awaited_not_started_twice(self):
         """같은 작업을 다른 배치가 이미 돌리고 있으면 끝날 때까지 기다렸다가 그 결과를 쓴다."""
@@ -256,8 +260,27 @@ class OutlookBatchContract(unittest.TestCase):
         processor = processor_of(render())
         item = {'etf_code': '069500', 'analysis_at': AT, 'deadline': PAST, 'max_attempts': 2, 'attempt': 0,
                 'ran': False, 'analysis_id': identity('069500', 0)}
-        self.assertEqual(step(processor, 'WaitForSlot', item)['nextState'], 'StillTimeToWait')
+        self.assertEqual(step(processor, 'GateOpen', item | {'gate': {'busy': 1}})['nextState'], 'StillTimeToWait')
         self.assertEqual(step(processor, 'StillTimeToWait', item)['nextState'], 'DeadlineExceeded')
+        self.assertEqual(step(processor, 'StillTimeToWait', item | {'deadline': FUTURE})['nextState'], 'WaitForSlot')
+
+    def test_job_started_by_another_batch_while_waiting_for_a_slot_is_picked_up(self):
+        """빈자리를 기다리는 사이 다른 배치가 같은 작업을 시작해 끝냈으면 다시 돌리지 않고 그 결과를 쓴다.
+        기다린 뒤 상태를 다시 읽지 않으면 마감 전에 발행된 결과를 못 보고 마감 초과로 센다."""
+        ident = identity('069500', 0)
+
+        class StartedElsewhere(World):
+            def mock(self, state, data):
+                if state == 'Gate' and not self.status:  # 첫 확인 때 다른 배치가 이 작업을 막 시작했다
+                    self.trace.append(state)
+                    self.status[ident], self.published[ident] = 'completed', datetime.now(timezone.utc).isoformat()
+                    return ok({'Executions': [{'Name': ident}]})
+                return super().mock(state, data)
+
+        world = StartedElsewhere()
+        state, out = run_batch(world, {'analysis_at': AT, 'deadline': FUTURE, 'etf_codes': ['069500']})
+        self.assertEqual((state, world.runs, out['items'][0]['outcome']), ('Done', [], 'completed'))
+        self.assertEqual(world.trace, ['ReadStatus', 'Gate', 'ReadStatus', 'ReadPublication'])
 
     def test_deadline_is_judged_right_before_start_and_after_rereading_status(self):
         """마감 판정은 시작 직전에 한다(Gate 재시도로 흐른 시간 포함). 남의 실행을 기다린 뒤에는
@@ -269,6 +292,7 @@ class OutlookBatchContract(unittest.TestCase):
         self.assertEqual(step(processor, 'StillTimeToRun', item)['nextState'], 'DeadlineExceeded')
         self.assertEqual(step(processor, 'StillTimeToRun', item | {'deadline': FUTURE})['nextState'], 'Run')
         self.assertEqual(step(processor, 'WaitForOther', item)['nextState'], 'ReadStatus')
+        self.assertEqual(step(processor, 'WaitForSlot', item)['nextState'], 'ReadStatus')
         self.assertEqual(step(processor, 'StillRunning', item)['nextState'], 'DeadlineExceeded')
         self.assertEqual(step(processor, 'StillRunning', item | {'deadline': FUTURE})['nextState'], 'WaitForOther')
 
