@@ -290,6 +290,8 @@ def test_late_drop_is_not_retried(monkeypatch):
 def test_drop_retries_are_capped_across_calls(monkeypatch):
     # WHY: 호출당 한도만으로는 장애 때 "모든 호출이 한 번씩 더" 가 된다(발신 2배). 클라이언트 전체
     #      예산이 그 상한이다 — 예산을 다 쓰면 재시도 없이 실패하고, 구간이 지나면 다시 허용한다.
+    #      ⚠️ 고정 구간 카운터다: 이 테스트는 "한 구간 안에서 5회"만 고정한다. 임의의 60초에 대한
+    #      보장이 아니다(구간 경계에 걸치면 최대 10회).
     from data_pipeline.sources.http import (
         DISCONNECT_RETRY_BUDGET,
         DISCONNECT_RETRY_BUDGET_WINDOW_SEC,
@@ -369,6 +371,34 @@ def test_drop_on_the_last_attempt_does_not_spend_the_budget(monkeypatch):
 
     # 같은 예산 구간 안(백오프 7초 × 5회 = 35초)의 일회성 끊김이 여전히 복구된다
     assert client.request("GET", "https://x.example/y") == "[]"
+
+
+
+def test_drop_retry_waits_for_the_send_interval_like_any_other_send(monkeypatch):
+    # WHY: 재시도가 발신 간격 제어를 건너뛰면 끊김이 몰릴 때 벤더 한도 위로 발신이 나간다(KIS 는 초당
+    #      한도). 재발신도 직전 발신에서 간격만큼 떨어져야 한다 — 백오프(1초)보다 간격이 길면 간격이 이긴다.
+    interval = 3.0
+    client, _, sends = _scripted_client(
+        monkeypatch, [(0.1, _dropped()), (0.1, b"[]")], interval=interval)
+
+    assert client.request("GET", "https://x.example/y") == "[]"
+    assert sends[1] - sends[0] == pytest.approx(interval)
+
+
+def test_drop_retry_takes_a_new_shared_send_permit(monkeypatch):
+    # WHY: 공유 호출 허용이 켜진 경로에서는 발신마다 허용 한 건이다. 재발신이 첫 허용을 재사용하면
+    #      합산 한도 계산에서 발신 하나가 빠진다.
+    class Pacer:
+        calls = 0
+
+        def pace(self, cost=1):
+            self.calls += 1
+
+    client, _, sends = _scripted_client(monkeypatch, [(0.1, _dropped()), (0.1, b"[]")])
+    client.pacer = Pacer()
+
+    assert client.request("GET", "https://x.example/y") == "[]"
+    assert (len(sends), client.pacer.calls) == (2, 2)
 
 
 def test_first_call_is_not_delayed(monkeypatch):

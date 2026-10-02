@@ -36,9 +36,11 @@ RETRY_BACKOFF_SEC = [1, 2, 4]
 #   - 호출당 1회(새 루프가 아니라 기존 재시도 루프의 한 칸을 쓴다 — 호출당 발신 상한 4 는 그대로다)
 #   - **재발신 시각**이 첫 발신 뒤 `DISCONNECT_RETRY_DEADLINE_SEC` 안일 때만. 끊긴 시점에 백오프를 더해
 #     미리 보고(넘길 것이면 기다리지 않는다), 발신 간격·공유 허용 대기가 끝난 발신 직전에 다시 본다
-#   - 클라이언트 전체로 `DISCONNECT_RETRY_BUDGET_WINDOW_SEC` 동안 `DISCONNECT_RETRY_BUDGET` 회까지
-#     ponytail: 고정 구간 카운터다 — 구간 경계에 걸치면 임의의 60초에 최대 2배(10회)까지 나간다.
-#     상한이 있다는 것이 목적이라 그대로 둔다. 엄밀한 이동 창이 필요해지면 재시도 시각 deque 로 바꾼다.
+#   - 클라이언트 전체로 **고정 구간**(`DISCONNECT_RETRY_BUDGET_WINDOW_SEC`)마다 `DISCONNECT_RETRY_BUDGET` 회까지.
+#     ⚠️ "임의의 60초에 5회"를 보장하지 않는다 — 구간 경계에 걸치면 임의의 60초에 최대 2배(10회)까지 나간다.
+#     ponytail: 고정 구간 카운터. 상한이 있다는 것이 목적이라 그대로 둔다. 엄밀한 이동 창이 필요해지면
+#     재시도 시각 deque 로 바꾼다.
+# 재발신도 다른 발신과 같은 길을 지난다 — 백오프 뒤 발신 간격(또는 공유 호출 허용)을 다시 받는다.
 # 한도 밖이면 다시 보내지 않고 **그 예외를 그대로 올린다**(이 재시도가 없던 때와 같은 동작). 안전 실패
 # (`NETWORK_RETRY_EXHAUSTED`)로 바꾸지 않는 이유: 분 가격은 그걸 종목 결손으로 접어 window 를 커밋하는데,
 # 커밋된 window 는 자동 재청구되지 않는다(DUE·만료 CLAIMED 만 다시 집는다). 예외로 window 를 실패시켜야
@@ -75,7 +77,7 @@ class PoliteClient:
     def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0, pacer=None):
         self.min_interval = min_interval
         self.timeout = timeout
-        # 끊긴 연결 재시도 예산(DISCONNECT_RETRY_BUDGET) — 현재 구간의 시작 시각과 쓴 횟수.
+        # 끊긴 연결 재시도 예산(DISCONNECT_RETRY_BUDGET) — 현재 **고정 구간**의 시작 시각과 쓴 횟수.
         # 간격용 `_lock` 은 대기 동안 잡혀 있어 따로 둔다.
         self._disconnect_lock = threading.Lock()
         self._disconnect_window_from = 0.0
