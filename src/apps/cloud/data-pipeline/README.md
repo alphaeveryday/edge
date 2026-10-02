@@ -1677,6 +1677,50 @@ py -m data_pipeline.backfill.run verify   --bucket edge-dev-pipeline-lake --draf
 본다. 진짜 PIT 는 `list.json`(정정 열거) + `document.xml`(rcept_no 원본) 파싱이 필요하고
 별 `source` 로 추가할 자리다(후속).
 
+### DataGuide 일봉 → `price_daily` 일회성 적재 (ALPHA-1148)
+
+DB `price_daily` 의 과거 이력을 레이크 임시 존의 DataGuide 일봉 스냅샷
+(`draft/curated/source=dataguide/dataset=price_daily/market=KR/as_of_date=…/item=…/*.csv.gz`)에서
+한 번 싣는 스텝이다. 스냅샷은 갱신 담당이 없어 canonical 로 올리지 않고(ADR-0057 §5) DB 로 바로
+싣는다. 종목 마스터(`instrument`)에 있는 종목의 열만 읽는다.
+
+```bash
+# 분류만 센다(쓰기 없음) — 실제 적재 전에 먼저 돌려 created·replaced_5min·kept_existing 을 본다.
+python -m data_pipeline.run backfill-price-daily-dataguide --run-id dataguide-price-dry \
+  --as-of-date 2026-08-02 --from 2006-10-01 --to 2026-07-31 --dry-run
+# 실제 적재. 50거래일 묶음마다 커밋하고, 같은 인자로 다시 돌리면 같은 결과다(멱등).
+python -m data_pipeline.run backfill-price-daily-dataguide --run-id dataguide-price-20261002 \
+  --as-of-date 2026-08-02 --from 2006-10-01 --to 2026-07-31
+```
+
+`--as-of-date`·`--from`·`--to` 는 기본값이 없다. DB 접속은 다른 적재 스텝과 같은
+`DATA_PIPELINE_DB__*` 를 쓴다(배포 환경에서는 `rds` task-def).
+
+| 기존 행 | 처리 |
+|---|---|
+| 없음 | 삽입 |
+| `data_version` 이 `fmp_5min` 으로 시작(5분봉 집산) | 교체하고 `simple_return`·`log_return` 을 비운다. 교체 전 행은 `operations_archive/replaced_rows/dataset=price_daily_dataguide_backfill/run_id=…/` 에 먼저 남긴다 |
+| 이 스텝이 넣은 행 | 같은 값으로 다시 쓴다 |
+| 그 밖(KIS 일일 적재분) | 건드리지 않는다 |
+
+- 넣는 값: 시가·고가·저가·종가(원주가), 수정주가, 거래량. `available_at` 은 거래일 15:30 KST 다.
+  `--as-of-date 2026-08-02` 면 `data_version=dataguide-20260802`(하이픈 없는 YYYYMMDD),
+  `price_basis=raw_close;adj_asof=2026-08-02` 다.
+- **수정주가는 스냅샷 기준이다.** 스냅샷 뒤에 분할·권리락이 생기면 낡는다. KIS 일일 적재 행에는
+  수정주가가 없다.
+- **`available_at` 은 실제 입수 시각이 아니다.** 과거 시점 재현에 이 행을 쓰면 그 시점에 이미
+  알던 값으로 보인다.
+- 여섯 항목 파일의 열 구성·날짜 행·행별 열 수가 하나라도 다르거나 머리행에 같은 열이 두 번
+  있으면 한 행도 싣지 않는다. 실을 행이 하나도 없어도 실패로 끝난다(기간 밖·마스터와 맞는 열 0).
+  값이 컬럼 형(NUMERIC(24,8)·BIGINT)에 그대로 들어가지 않는 칸은 격리하고 exit 2 로 끝난다.
+- 결과는 `operations_archive/data_quality_logs/dataset=price_daily_dataguide_backfill/` 에 남는다.
+- 되돌리기: 삽입한 행은 `DELETE FROM price_daily WHERE data_version = 'dataguide-20260802'`
+  (위 `data_version` 그대로)로 지우고, 교체된 5분봉 집산 행은 위 보존본에서 복원한다(복원
+  스크립트는 없다).
+- 실측(2026-10-02, 로컬 PostgreSQL 16 리허설): 마스터 2,804종목 중 2,688종목·4,888거래일·
+  8,690,491행, 110초, 표 크기 약 2.0GB. 겹치는 100,197행의 시가·고가·저가·종가가 KIS canonical
+  과 전부 같았다. dev DB 적재는 이 문서 작성 시점에 실행 전이다.
+
 ## 운영 원장 — expected_task·Planner·Reconciler (ALPHA-530)
 
 SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projection(`ops_*` 5테이블,
