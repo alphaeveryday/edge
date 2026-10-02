@@ -423,7 +423,6 @@ input { outline: none; border: none; background: transparent; }
         <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;">
           <div style="display: flex; align-items: center; gap: 5px; min-width: 0;">
             <span style="font-size: 15px; font-weight: 800; color: #191F28; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;">{{ cf.name }}</span>
-            <span style="font-size: 13px; color: #6B7684; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ cf.handle }}</span>
             <span style="font-size: 13px; color: #6B7684; flex-shrink: 0;">· {{ cf.time }}</span>
           </div>
           <span style="align-self: flex-start; display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: #4E5968; background: #F2F4F6; border-radius: 7px; padding: 3px 7px;"><dc-import name="SectorIcon" style="flex-shrink: 0;" hint-size="14px,14px" theme="{{ cf.theme }}" bg="{{ cf.logoBg }}" size="14"></dc-import>{{ cf.short }}</span>
@@ -1211,26 +1210,18 @@ input { outline: none; border: none; background: transparent; }
       <dc-import name="Avatar" hint-size="84px,84px" size="84" bg="{{ meAvBg }}" label="{{ meAv }}"></dc-import>
     </div>
     <sc-if value="{{ cpEditing }}">
-      <div style="display: flex; gap: 8px;">
-        <sc-for list="{{ cpColors }}" as="cc" hint-placeholder-count="5">
-          <span data-c="{{ cc.c }}" onClick="{{ setMeAvBg }}" style="width: 28px; height: 28px; border-radius: 999px; background: {{ cc.c }}; box-shadow: {{ cc.ring }}; cursor: pointer;"></span>
-        </sc-for>
-      </div>
       <div style="width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
         <input type="text" value="{{ meNick }}" onInput="{{ onMeNick }}" placeholder="닉네임" style="height: 48px; border-radius: 14px; border: none; outline: none; background: #F2F4F6; padding: 0 14px; font-size: 15px; font-family: Pretendard, sans-serif; color: #191F28; box-sizing: border-box;">
-        <input type="text" value="{{ meHandle }}" onInput="{{ onMeHandle }}" placeholder="@아이디" style="height: 48px; border-radius: 14px; border: none; outline: none; background: #F2F4F6; padding: 0 14px; font-size: 15px; font-family: 'JetBrains Mono', Pretendard, monospace; color: #191F28; box-sizing: border-box;">
       </div>
     </sc-if>
     <sc-if value="{{ cpViewing }}" hint-placeholder-val="{{ true }}">
       <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
         <span style="font-size: 19px; font-weight: 800; color: #191F28; letter-spacing: -0.03em;">{{ meNick }}</span>
-        <span style="font-family: 'JetBrains Mono', Pretendard, monospace; font-size: 13px; color: #6B7684;">{{ meHandle }}</span>
       </div>
     </sc-if>
     <div style="display: flex; gap: 28px; margin-top: 4px;">
       <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;"><span style="font-family: 'JetBrains Mono', Pretendard, monospace; font-size: 17px; font-weight: 800; color: #191F28;">{{ cpPostCount }}</span><span style="font-size: 12px; color: #6B7684;">글</span></div>
       <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;"><span style="font-family: 'JetBrains Mono', Pretendard, monospace; font-size: 17px; font-weight: 800; color: #191F28;">{{ cpLikeCount }}</span><span style="font-size: 12px; color: #6B7684;">좋아요</span></div>
-      <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;"><span style="font-family: 'JetBrains Mono', Pretendard, monospace; font-size: 17px; font-weight: 800; color: #191F28;">{{ cpVoteCount }}</span><span style="font-size: 12px; color: #6B7684;">투표</span></div>
     </div>
   </div>
   <div style="height: 10px; background: #F2F4F6; margin-top: 20px;"></div>
