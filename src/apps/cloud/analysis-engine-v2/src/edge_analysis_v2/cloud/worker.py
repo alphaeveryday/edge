@@ -6,19 +6,59 @@ import logging
 import os
 from pathlib import Path
 from threading import Event, Thread
+import time
 
 import boto3
+from psycopg.rows import dict_row
 
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.cloud.artifacts import Publisher, atomic, encode
 from edge_analysis_v2.cloud.contract import decode_request
 from edge_analysis_v2.contracts.audit import read_contract_audit
 from edge_analysis_v2.dashboard.server import assemble_screen
-from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices
+from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices, load_research_observations
 from edge_analysis_v2.storage.database import connect_results
+from edge_analysis_v2.storage.delivery import enqueue_movement
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
 
 LOG = logging.getLogger(__name__)
+# The workflow stops the task at 1100 seconds; waiting longer would leave no time to analyze.
+SLOT_WAIT_SECONDS = 600
+
+
+class SlotUnavailable(RuntimeError):
+    """Every analysis slot stayed busy for the whole wait; no source or model work started."""
+
+
+def acquire_slot(connection, slots, *, wait_seconds=SLOT_WAIT_SECONDS, sleep=time.sleep, clock=time.monotonic):
+    """Wait for one of the shared analysis slots and hold it on this session.
+
+    Each running analysis keeps three result-writer connections open while the model
+    works, and that role has a connection limit. Excess work therefore waits here,
+    before reading sources or calling the model, instead of being refused a connection
+    halfway. The slot is a session advisory lock: it is released when the connection
+    closes, including when the task is killed.
+
+    Args:
+        connection: The task's lock connection, kept open until the analysis ends.
+        slots: Number of analyses allowed to run at once across all cloud tasks.
+        wait_seconds: Longest wait before giving up.
+
+    Returns:
+        Index of the slot now held.
+
+    Raises:
+        SlotUnavailable: No slot became free in time.
+    """
+    deadline = clock() + wait_seconds
+    while True:
+        for index in range(slots):
+            if connection.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0))',
+                                  (f'cloud:slot:{index}',)).fetchone()[0]:
+                return index
+        if clock() >= deadline:
+            raise SlotUnavailable('No analysis slot became free')
+        sleep(5)
 
 
 def export_records(connection, request, folder):
@@ -39,7 +79,7 @@ def export_records(connection, request, folder):
     return audit
 
 
-def run(request, *, bucket, ca_path, folder, key, model, session):
+def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
     """Execute with a fixed cutoff and publish observations independently of analysis status.
 
     Args:
@@ -50,7 +90,23 @@ def run(request, *, bucket, ca_path, folder, key, model, session):
         key: Secret DeepSeek credential, never logged or persisted.
         model: Server-controlled model identifier.
         session: AWS session backed by the ECS task role.
+        slots: Analyses allowed to run at once; see acquire_slot.
     """
+    # A completed movement can retry delivery without claiming or overwriting its observations.
+    if request['kind'] == 'movement':
+        with connect_results(ca_path,session=session,cloud=True) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("SELECT status,etf_code,analysis_at,data_source FROM movement_analyses WHERE analysis_id=%s",
+                               (request['analysis_id'],))
+                existing = cursor.fetchone()
+            if existing and existing['status'] == 'completed':
+                if (existing['etf_code'] != request['etf_code']
+                        or existing['analysis_at'] != datetime.fromisoformat(request['analysis_at'])
+                        or existing['data_source'] != 'database'):
+                    raise ValueError('Completed analysis belongs to a different request')
+                count = enqueue_movement(connection, request['analysis_id'])
+                LOG.info('Completed movement delivery recovered analysis_id=%s tenants=%s',request['analysis_id'],count)
+                return
     folder.mkdir(parents=True,exist_ok=True)
     job = request | {'origin':'cloud','scenario':'database','data_source':'database',
                      'status':'running','started_at':datetime.now(timezone.utc).isoformat()}
@@ -73,11 +129,17 @@ def run(request, *, bucket, ca_path, folder, key, model, session):
                 ('cloud:'+request['kind']+':'+request['etf_code'],)).fetchone()[0]
             if not locked:
                 raise ValueError('Another analysis of this ETF is running')
+            waited = time.monotonic()
+            LOG.info('Analysis slot %s of %s acquired after %.0f seconds',
+                     acquire_slot(lock_connection, slots), slots, time.monotonic()-waited)
             with connect_sources(ca_path,session=session,cloud=True) as connection:
                 source = load_prices(connection,load_flow(connection,load_source(connection,request['etf_code'],request['analysis_at'])),request=request)
+            source = load_research_observations(lock_connection, source)
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                 artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
+            if request['kind'] == 'movement':
+                job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
         job['status']='completed'
     except Exception as exc:
         job.update(status='failed',error=type(exc).__name__+': analysis failed; inspect recorded events')
@@ -117,7 +179,8 @@ def main():
         raise ValueError('DeepSeek credential unavailable')
     run(request,bucket=os.environ['OBSERVATION_BUCKET'],ca_path=Path(os.environ['RDS_CA_PATH']),
         folder=Path('/tmp/analysis')/request['analysis_id'],key=key,
-        model=secret.get('DEEPSEEK_MODEL','deepseek-flash'),session=session)
+        model=secret.get('DEEPSEEK_MODEL','deepseek-flash'),session=session,
+        slots=int(os.environ.get('ANALYSIS_SLOTS','1')))
 
 
 if __name__=='__main__':

@@ -32,10 +32,11 @@ ETFS = ['069500', '396500']
 AT = '2026-10-01T18:00:00Z'  # = 2026-10-02 03:00 KST
 FUTURE = (datetime.now(timezone.utc) + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
 PAST = '2000-01-01T00:00:00Z'
+SLOTS = 3  # 분석 슬롯 수 = Map 동시 수 = 시작 전 확인의 문턱
 
 
 def render(**overrides):
-    values = {'defaults_json': json.dumps({'etf_codes': ETFS, 'max_attempts': 2}), 'deadline_utc': '23:00:00Z',
+    values = {'defaults_json': json.dumps({'etf_codes': ETFS, 'max_attempts': 2}), 'deadline_utc': '23:00:00Z', 'slots': str(SLOTS),
               'api_endpoint': 'abc123.execute-api.ap-northeast-2.amazonaws.com',
               'analysis_state_machine_arn': SINGLE} | overrides
     text = TEMPLATE.read_text(encoding='utf-8')
@@ -88,6 +89,8 @@ class World:
         if state == 'Gate':
             return ok({'Executions': [{'Name': 'other'}] * (self.busy.pop(0) if self.busy else 0)})
         if state == 'Run':
+            if ident in self.status or self.foreign.get(ident):  # 같은 이름의 실행이 이미 있다 — 새로 돌지 않는다
+                return {'errorOutput': {'error': 'StepFunctions.ExecutionAlreadyExistsException', 'cause': 'exists'}}
             behaviour = self.plan.get((data['etf_code'], data['attempt']), 'ok')
             self.runs.append((data['etf_code'], data['attempt'], ident))
             if behaviour == 'never_started':
@@ -159,7 +162,9 @@ def run_batch(world, batch_input, definition=None):
             placeholder = CLIENT.test_state(definition=json.dumps(definition), stateName=state, input=json.dumps(data),
                                             inspectionLevel='DEBUG', mock=ok([{}] * len(data['etf_codes'])))  # 자리표시 — 항목 입력만 얻는다
             items = json.loads(placeholder['inspectionData']['afterItemSelector'])
-            outputs = [run_item(processor, item, world) for item in items]  # MaxConcurrency 1 = 순차
+            # 항목을 차례로 걷는다. 항목 하나의 계약을 보는 것이고, 항목끼리 동시에 도는 상황의 상한은
+            # 워커의 분석 슬롯이 진다(로컬 탐침과 dev 검증 몫).
+            outputs = [run_item(processor, item, world) for item in items]
             result = CLIENT.test_state(definition=json.dumps(definition), stateName=state, input=json.dumps(data), mock=ok(outputs))
         else:
             result = step(definition, state, data)
@@ -240,8 +245,9 @@ class OutlookBatchContract(unittest.TestCase):
         self.assertEqual((state, out['items'][0]['attempt']), ('Done', 1))
 
     def test_waits_while_another_v2_execution_is_running(self):
-        """다른 v2 실행(다른 배치·수동 시작)이 도는 동안에는 시작하지 않는다 — 총 동시 1건."""
-        world = World(busy=[1, 1, 0])
+        """슬롯 수만큼 v2 실행이 돌고 있으면 시작하지 않는다 — 띄워 봐야 워커가 슬롯을 기다릴 뿐이다.
+        그보다 적으면 다른 실행이 있어도 바로 시작한다."""
+        world = World(busy=[SLOTS, SLOTS, SLOTS - 1])
         state, _ = run_batch(world, {'analysis_at': AT, 'deadline': FUTURE, 'etf_codes': ['069500']})
         self.assertEqual(state, 'Done')
         self.assertEqual(world.trace, ['ReadStatus', 'Gate', 'ReadStatus', 'Gate', 'ReadStatus', 'Gate', 'Run', 'ReadStatus', 'ReadPublication'])
@@ -261,11 +267,10 @@ class OutlookBatchContract(unittest.TestCase):
         self.assertEqual((out['cause']['deadline_exceeded'], out['cause']['completed']), (2, 0))
 
     def test_deadline_while_waiting_for_a_slot_stops_waiting(self):
-        world = World(busy=[1] * 50)
         processor = processor_of(render())
         item = {'etf_code': '069500', 'analysis_at': AT, 'deadline': PAST, 'max_attempts': 2, 'attempt': 0,
                 'ran': False, 'analysis_id': identity('069500', 0)}
-        self.assertEqual(step(processor, 'GateOpen', item | {'gate': {'busy': 1}})['nextState'], 'StillTimeToWait')
+        self.assertEqual(step(processor, 'GateOpen', item | {'gate': {'busy': SLOTS}})['nextState'], 'StillTimeToWait')
         self.assertEqual(step(processor, 'StillTimeToWait', item)['nextState'], 'DeadlineExceeded')
         self.assertEqual(step(processor, 'StillTimeToWait', item | {'deadline': FUTURE})['nextState'], 'WaitForSlot')
 
@@ -276,10 +281,10 @@ class OutlookBatchContract(unittest.TestCase):
 
         class StartedElsewhere(World):
             def mock(self, state, data):
-                if state == 'Gate' and not self.status:  # 첫 확인 때 다른 배치가 이 작업을 막 시작했다
+                if state == 'Gate' and not self.status:  # 첫 확인 때 슬롯이 다 찼고, 그중 하나가 이 작업이다
                     self.trace.append(state)
                     self.status[ident], self.published[ident] = 'completed', datetime.now(timezone.utc).isoformat()
-                    return ok({'Executions': [{'Name': ident}]})
+                    return ok({'Executions': [{'Name': ident}] * SLOTS})
                 return super().mock(state, data)
 
         world = StartedElsewhere()
@@ -301,10 +306,33 @@ class OutlookBatchContract(unittest.TestCase):
         self.assertEqual(step(processor, 'StillRunning', item)['nextState'], 'DeadlineExceeded')
         self.assertEqual(step(processor, 'StillRunning', item | {'deadline': FUTURE})['nextState'], 'WaitForOther')
 
-    def test_items_run_one_at_a_time(self):
-        """동시 1건은 Map 설정으로도 고정한다 — writer 역할 연결 한도 5, 워커는 건당 3개(README 기준 측정).
-        run_batch 가 항목을 순차로 걷는 것은 이 값이 1일 때만 실제와 같다."""
-        self.assertEqual(render()['States']['RunItems']['MaxConcurrency'], 1)
+    def test_map_concurrency_and_gate_follow_the_slot_count(self):
+        """배치가 한꺼번에 띄우는 수와 시작 전 확인의 문턱은 분석 슬롯 수와 같아야 한다.
+        더 크면 슬롯을 기다리기만 하는 태스크가 writer 연결을 하나씩 쥐고 쌓인다."""
+        definition = render()
+        gate = definition['States']['RunItems']['ItemProcessor']['States']
+        self.assertEqual(definition['States']['RunItems']['MaxConcurrency'], SLOTS)
+        self.assertEqual(gate['Gate']['Parameters']['MaxResults'], SLOTS)
+        processor = processor_of(definition)
+        item = {'etf_code': '069500', 'deadline': FUTURE, 'attempt': 0, 'analysis_id': identity('069500', 0)}
+        self.assertEqual(step(processor, 'GateOpen', item | {'gate': {'busy': SLOTS - 1}})['nextState'], 'StillTimeToRun')
+        self.assertEqual(step(processor, 'GateOpen', item | {'gate': {'busy': SLOTS}})['nextState'], 'StillTimeToWait')
+
+    def test_same_job_started_by_another_batch_just_before_start_is_not_run_twice(self):
+        """확인과 시작 사이에 다른 배치가 같은 작업을 시작했으면, 같은 이름의 실행이 이미 있어 새로 돌지 않고
+        그 실행의 저장 상태를 읽는다."""
+        ident = identity('069500', 0)
+
+        class StartedBetween(World):
+            def mock(self, state, data):
+                if state == 'Gate' and not self.status:
+                    self.status[ident], self.published[ident] = 'completed', datetime.now(timezone.utc).isoformat()
+                return super().mock(state, data)
+
+        world = StartedBetween()
+        state, out = run_batch(world, {'analysis_at': AT, 'deadline': FUTURE, 'etf_codes': ['069500']})
+        self.assertEqual((state, world.runs, out['items'][0]['outcome']), ('Done', [], 'completed'))
+        self.assertEqual(world.trace, ['ReadStatus', 'Gate', 'Run', 'ReadStatus', 'ReadPublication'])
 
     def test_publication_after_deadline_is_late_not_completed(self):
         """마감 뒤에 저장된 결과는 완료로 세지 않고 드러낸다."""

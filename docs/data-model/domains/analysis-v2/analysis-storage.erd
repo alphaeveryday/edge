@@ -97,7 +97,8 @@
           "movement_analyses.trading_date",
           "movement_analyses.summary",
           "movement_analyses.selected_item_ids",
-          "movement_analyses.data_source"
+          "movement_analyses.data_source",
+          "movement_analyses.withdrawn_at"
         ],
         "seqColumnIds": [
           "movement_analyses.analysis_id",
@@ -110,7 +111,8 @@
           "movement_analyses.trading_date",
           "movement_analyses.summary",
           "movement_analyses.selected_item_ids",
-          "movement_analyses.data_source"
+          "movement_analyses.data_source",
+          "movement_analyses.withdrawn_at"
         ],
         "ui": {
           "x": 80,
@@ -2469,6 +2471,26 @@
         "meta": {
           "createAt": 1790920558631,
           "updateAt": 1790920558631
+        }
+      },
+      "movement_analyses.withdrawn_at": {
+        "id": "movement_analyses.withdrawn_at",
+        "tableId": "movement_analyses",
+        "name": "withdrawn_at",
+        "comment": "?? ??? ?? ??? ??",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
         }
       }
     },

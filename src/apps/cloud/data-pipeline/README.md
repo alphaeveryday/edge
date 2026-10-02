@@ -1221,6 +1221,44 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
   시작하지 않는다. 이 스크립트는 예산 밖에서 호출하기 때문이다. 다만 이 가드가 완전한 차단은 아니며,
   1차 통제는 운영 절차다.
 
+### KIS 호출 계측 — 분 가격 창 요약 로그 (ALPHA-1124)
+
+분 가격 워커는 창 하나를 수집할 때마다 요약 한 줄을 남긴다(`data_pipeline.minute.kis_collector`, INFO).
+수집이 예외로 끝난 창도 `status=RAISED` 로 남긴다.
+
+```
+kis.http.window caller=minute-price window=2026-10-02T05:32:00+00:00 status=VALID units=451 elapsed_ms=71200 attempts=463 rtt_ms=58300 rtt_max_ms=1900 pace_wait_ms=4100 transport_retry=1 transport_backoff_ms=1000 kis_EGW00201=12 rate_sleep_ms=8400 rate_exhausted=0 err_http_502=1
+```
+(값은 형식 예시다 — 실측이 아니다.)
+
+| 항목 | 뜻 |
+|---|---|
+| `attempts` | 실제 HTTP 발신 횟수. 토큰 발급과 재시도를 포함한다(성공 건수와 다르다) |
+| `rtt_ms` / `rtt_max_ms` | 발신부터 응답 본문 수신까지의 합계·최대. **KIS 응답 지연**은 여기에 쌓인다 |
+| `pace_wait_ms` | 발신 간격(또는 공유 호출 예산)을 기다린 시간 |
+| `kis_<코드>` | 거절 응답(`rt_cd≠0`)의 `msg_cd` 별 건수. 재시도로 끝내 성공해도 센다. 코드 형상이 아니면 `kis_OTHER` |
+| `rate_sleep_ms` | `EGW00201` 뒤 물러난 시간의 합. **유량 제한**은 `kis_EGW00201` 과 여기에 쌓인다 |
+| `rate_exhausted` | `EGW00201` 재시도 예산(5회)을 다 쓴 종목 수 |
+| `transport_retry` / `transport_backoff_ms` | 5xx·네트워크 실패 재시도 횟수와 그 대기 |
+| `err_<종류>` | 발신 실패 종류별 건수 — `err_http_503`, `err_TimeoutError` 등(상태코드·예외 클래스명) |
+
+- 읽는 법: 동시 요청 1(기본)에서 `elapsed_ms ≈ rtt_ms + pace_wait_ms + rate_sleep_ms + transport_backoff_ms` 다.
+  어느 항이 늘었는지가 원인을 가른다. 동시 요청이 켜지면 합계가 겹쳐 `elapsed_ms` 보다 커진다.
+- `attempts` 부터 `rate_exhausted` 까지 아홉 항목은 0 이어도 **이 순서로** 싣는다. 그 밖의 `kis_`·`err_`
+  항목은 발생했을 때만 뒤에 붙는다. 이 로그가 배포되기 전 기간은 "발생 0회"가 아니라 "미관측"으로 읽는다.
+- 앱키·시크릿·토큰·URL·응답 본문·종목 코드는 싣지 않는다. 종목별 상세는 원장 `missing_units` 를 쓴다.
+- 조회(CloudWatch Logs Insights, 분 가격 워커 로그 그룹):
+  ```
+  filter @message like "kis.http.window caller=minute-price"
+  | parse @message /elapsed_ms=(?<elapsed>\d+) attempts=(?<attempts>\d+) rtt_ms=(?<rtt>\d+) rtt_max_ms=(?<rtt_max>\d+) pace_wait_ms=(?<pace>\d+) transport_retry=(?<t_retry>\d+) transport_backoff_ms=(?<t_backoff>\d+) kis_EGW00201=(?<egw>\d+) rate_sleep_ms=(?<rate_sleep>\d+) rate_exhausted=(?<exhausted>\d+)/
+  | stats count() as windows, pct(elapsed, 50) as elapsed_p50, sum(attempts) as sends, sum(egw) as egw00201,
+          sum(rate_sleep) as rate_sleep_ms, sum(pace) as pace_wait_ms, sum(t_retry) as transport_retry,
+          sum(rtt) / sum(attempts) as rtt_avg_ms, max(rtt_max) as rtt_max_ms by bin(30m)
+  ```
+- 범위: 운반 계층(`PoliteClient.stats`) 계측은 모든 호출자에 들어 있지만, **요약 로그를 내는 것은 분 가격
+  워커뿐**이다. 나머지 KIS 어댑터(iNAV·업종지수·일봉·수급·ETF 프로파일)의 거절 코드 집계와 토큰 발급
+  카운터는 아직 없다(ALPHA-1124 남은 범위).
+
 ## 레이크 저장 계약
 
 ### Minute 내용 주소 후보·확정·소비 계약 (ALPHA-1060)
@@ -2326,6 +2364,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 대사가 최대 60 poll 안에 회수한다. collection log와 window manifest의 observation_scope가
 # full/incremental/state-changed fallback을 구분한다. 대상 본문·두 canonical
 # manifest·load pending 내구화 전 실패는 커서를 전진시키지 않고 다음 window가 재시도한다.
+# 다시 읽어도 결과가 같은 문서 단위 거부(정제의 본문 내용 판정·조립의 계약 대상 결손 —
+# `_CONFIRMED_REJECT_REASONS`)는 커서를 막지 않는다(ALPHA-1154). 그 window 는 INCOMPLETE 로
+# 남고 manifest 의 rejected_documents 에 접수번호·단계·사유·원문 위치가 남는다 — 커서 전진은
+# 전건 처리 완료가 아니다. 재처리는 backfill-normalize-disclosure --from/--to(정제→적재→조립).
 # ⚠️ 페이지 예산은 이 워커의 소스 `max_pages` 로 **주입**된다 — 벤더 섹션의 500(백필용)이
 # 그대로면 lease 검증이 실제보다 짧은 tick 을 통과시킨다.
 # 질의 날짜창은 **세션 날짜(KST)** 에서 나온다: 매 tick 당일, 세션 첫 tick 만 D-1 포함

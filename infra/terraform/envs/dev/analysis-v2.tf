@@ -19,11 +19,16 @@ module "analysis_v2" {
   cluster_arn           = module.worker_cluster.cluster_arn
   db_security_group_id  = module.rds.security_group_id
   bucket_name           = module.pipeline.lake_bucket
-  image                 = "${local.data_pipeline_ecr_repository_url}:analysis-v2-bootstrap"
+  image                 = "${local.data_pipeline_ecr_repository_url}:analysis-v2-0c88464c8239b7db518a694851912b4840dc95c0"
   deploy_role_name      = element(split("/", module.gha_deploy_dev.role_arn), 1)
   operator_arn          = "arn:aws:iam::393229433969:user/junyoung727"
-  api_image             = "${local.data_pipeline_ecr_repository_url}:analysis-v2-api-f447f10f0252c5d0a1d48f05aa913a532c80ba01"
+  api_image             = "${local.data_pipeline_ecr_repository_url}:analysis-v2-api-0c88464c8239b7db518a694851912b4840dc95c0"
   api_client_role_names = [element(split("/", module.app_api.task_role_arn), 1)]
+  price_queue_url       = module.data_pipeline.minute_queue_urls["price-explanation-realtime"]
+  price_queue_arn       = module.data_pipeline.minute_queue_arns["price-explanation-realtime"]
+
+  # 분석 동시 3건. 연결 한도(V202610022100)와 슬롯을 읽는 워커 이미지가 dev 에 배포된 것을 확인한 뒤 올렸다(ALPHA-1157).
+  analysis_slots = 3
 
   outlook_etf_codes = local.outlook_etf_codes
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn

@@ -1,5 +1,5 @@
 {
-  "Comment": "전망 배치 — ETF마다 기존 단건 워크플로를 한 번에 하나씩 실행한다. 계약: tests/loadtest/analysis-v2/README.md",
+  "Comment": "전망 배치 — ETF마다 기존 단건 워크플로를 분석 슬롯 수만큼 동시에 실행한다. 계약: tests/loadtest/analysis-v2/README.md",
   "StartAt": "Defaults",
   "TimeoutSeconds": 28800,
   "States": {
@@ -65,7 +65,7 @@
     "RunItems": {
       "Type": "Map",
       "ItemsPath": "$.etf_codes",
-      "MaxConcurrency": 1,
+      "MaxConcurrency": ${slots},
       "ItemSelector": {
         "etf_code.$": "$$.Map.Item.Value",
         "analysis_at.$": "$.analysis_at",
@@ -139,7 +139,7 @@
             "Parameters": {
               "StateMachineArn": "${analysis_state_machine_arn}",
               "StatusFilter": "RUNNING",
-              "MaxResults": 1
+              "MaxResults": ${slots}
             },
             "ResultSelector": { "busy.$": "States.ArrayLength($.Executions)" },
             "ResultPath": "$.gate",
@@ -149,7 +149,7 @@
           },
           "GateOpen": {
             "Type": "Choice",
-            "Choices": [{ "Variable": "$.gate.busy", "NumericGreaterThan": 0, "Next": "StillTimeToWait" }],
+            "Choices": [{ "Variable": "$.gate.busy", "NumericGreaterThanEquals": ${slots}, "Next": "StillTimeToWait" }],
             "Default": "StillTimeToRun"
           },
           "StillTimeToWait": {

@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 import pytest
 
 from edge_analysis_v2.cloud.admission import RequestConflict, canonical_input
-from edge_analysis_v2.sources.triggers import load_event_request
+from edge_analysis_v2.sources.triggers import load_event_request, load_queue_event
 from edge_analysis_v2.sources.database import load_prices
 from edge_analysis_v2.storage.requests import RequestStore
 
@@ -87,6 +87,8 @@ def test_event_identity_and_price_survive_late_delivery_and_newer_trigger(source
     request = load_event_request(c,json.dumps(message))
     assert request == load_event_request(c,json.dumps(message,sort_keys=True))
     assert request['source']['trigger_id']=='original'
+    assert request['source']['session_id']=='session'
+    assert datetime.fromisoformat(request['source']['window_start']).utcoffset() is not None
     assert datetime.fromisoformat(request['analysis_at'])==datetime(2026,10,2,1,1,2,tzinfo=timezone.utc)
     data = dict(context={'etf_code':'091160','analysis_at':request['analysis_at']},
                 trading_dates=['2026-10-01','2026-10-02'],source_instrument_ids={'091160':'instrument-etf'})
@@ -121,3 +123,50 @@ def test_message_and_worker_cutoff_must_match_the_durable_event(source):
                 trading_dates=['2026-10-01','2026-10-02'],source_instrument_ids={'091160':'instrument-etf'})
     with pytest.raises(ValueError):
         load_prices(c,data,request=request)
+
+
+@pytest.mark.parametrize('change', [None, 'forged', 'naive'])
+def test_reversion_must_match_original_outbox_with_explicit_time(source, change):
+    c, _ = source
+    payload = dict(entity_id='091160',session_id='session',window_start='2026-10-02T01:05:00+00:00')
+    if change == 'naive':
+        payload['window_start']='2026-10-02T01:05:00'
+    c.execute('INSERT INTO dataset_commit_outbox VALUES (%s,%s,%s,%s::jsonb,%s)',
+              ('reversion','ExposureReverted','price-explanation-realtime',json.dumps(payload),1))
+    message=dict(event_id='reversion',event_type='ExposureReverted',payload=payload)
+    if change == 'forged':
+        payload['entity_id']='069500'
+    if change:
+        with pytest.raises(ValueError):
+            load_queue_event(c,json.dumps(message))
+    else:
+        assert load_queue_event(c,json.dumps(message)) == message
+
+
+@pytest.mark.parametrize('raw,stored', [
+    ('0.030344357313331060347766792','0.03034436'),
+    ('0.030344355','0.03034436'),
+])
+def test_original_event_accepts_postgres_numeric_rounding_but_not_changed_values(source, raw, stored):
+    c, message = source
+    c.execute('ALTER TABLE minute_price_trigger ADD COLUMN change_rate numeric(12,8)')
+    c.execute("UPDATE minute_price_trigger SET change_rate=%s WHERE trigger_id='original'", (raw,))
+    message['payload']['change_rate']=raw
+    c.execute('UPDATE dataset_commit_outbox SET payload=%s::jsonb', (json.dumps(message['payload']),))
+    assert str(c.execute("SELECT change_rate FROM minute_price_trigger WHERE trigger_id='original'").fetchone()['change_rate'])==stored
+    assert load_event_request(c,json.dumps(message))['source']['trigger_id']=='original'
+    # A different stored value still indicates a genuinely inconsistent source.
+    c.execute("UPDATE minute_price_trigger SET change_rate=change_rate+0.00000001 WHERE trigger_id='original'")
+    with pytest.raises(ValueError):
+        load_event_request(c,json.dumps(message))
+
+
+def test_equal_rounded_numbers_do_not_allow_modifying_original_message(source):
+    c,message=source
+    c.execute('ALTER TABLE minute_price_trigger ADD COLUMN change_rate numeric(12,8)')
+    c.execute("UPDATE minute_price_trigger SET change_rate=0.03034436 WHERE trigger_id='original'")
+    message['payload']['change_rate']='0.0303443573'
+    c.execute('UPDATE dataset_commit_outbox SET payload=%s::jsonb',(json.dumps(message['payload']),))
+    message['payload']['change_rate']='0.0303443574'
+    with pytest.raises(ValueError,match='Delivered event does not match'):
+        load_event_request(c,json.dumps(message))

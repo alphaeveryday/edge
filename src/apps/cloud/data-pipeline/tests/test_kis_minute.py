@@ -405,6 +405,32 @@ class TestRateLimit:
         # retry_count 는 window 결과에 실린다 — 0 으로 고정되면 유량 압력이 관측에서 사라진다
         assert client.retry_count == 1
 
+    def test_rate_limit_is_counted_even_when_the_retry_succeeds(self):
+        # WHY(ALPHA-1124): 재시도로 풀린 EGW00201 은 종전엔 어디에도 남지 않아 "로그 0줄"이 발생 0회의
+        #      증거가 못 됐다. 최초 거절과 그 대기 시간이 성공한 호출에서도 남아야 한다.
+        client, _ = make_client([TOKEN, err("EGW00201", "초당 거래건수 초과"), ok([row()])])
+        client.candles("005930", window_end=WINDOW_END)
+        assert client.stats.drain() == {"kis_EGW00201": 1, "rate_sleep_ms": 700}
+
+    def test_exhausted_rate_limit_is_counted_apart_from_occurrences(self):
+        # WHY: 발생 수와 소진 수는 다른 사실이다 — 5번 거절돼 종목 하나를 잃은 것과 1번 거절 뒤
+        #      성공한 것 5건은 발생 수가 같다.
+        client, _ = make_client([TOKEN] + [err("EGW00201")] * 5)
+        with pytest.raises(KisUnitError):
+            client.candles("005930", window_end=WINDOW_END)
+        assert client.stats.drain() == {
+            "kis_EGW00201": 5, "rate_sleep_ms": 7000, "rate_exhausted": 1,
+        }
+
+    def test_stats_never_carry_response_text_or_credentials(self):
+        # WHY: 계측 키는 그대로 로그에 찍힌다. 코드 형상이 아닌 msg_cd(본문의 임의 문자열)와 msg1,
+        #      앱키·시크릿·토큰이 키나 값으로 새면 안 된다.
+        client, _ = make_client([TOKEN, err("see app-key now", "app-secret tok-1")])
+        with pytest.raises(KisUnitError):
+            client.candles("005930", window_end=WINDOW_END)
+        stats = client.stats.drain()
+        assert stats == {"kis_OTHER": 1}
+
     def test_egw00201_exhausted_is_unit_level(self):
         # 예산을 다 써도 unit 축이다 — 소스 전역으로 올리면 유량 한 번에 window 가 죽는다
         client, _ = make_client([TOKEN] + [err("EGW00201")] * 5)

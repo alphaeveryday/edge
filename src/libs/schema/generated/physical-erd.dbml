@@ -45,6 +45,14 @@ Table "analysis_execution_requests" {
   "accepted_at" timestamptz
 }
 
+Table "analysis_execution_slots" {
+  "execution_arn" text [pk]
+  "started_by" varchar(36) [not null]
+  "request_key" text [not null]
+  "task_arns" text[] [not null]
+  "created_at" timestamptz [not null]
+}
+
 Table "assertion_argument" {
   "assertion_argument_id" bigint [pk, increment]
   "assertion_id" text [not null]
@@ -874,6 +882,7 @@ Table "movement_analyses" {
   "summary" text
   "selected_item_ids" text[] [not null]
   "data_source" text [not null]
+  "withdrawn_at" timestamptz
 }
 
 Table "movement_items" {
@@ -886,6 +895,13 @@ Table "movement_items" {
   "source_as_of" timestamptz
   "tool_run_ids" text[] [not null]
   "created_at" timestamptz [not null]
+}
+
+Table "movement_retractions" {
+  "event_id" text [pk]
+  "etf_code" text [not null]
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
 }
 
 Table "news_document" {

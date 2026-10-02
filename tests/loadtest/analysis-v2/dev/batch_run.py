@@ -70,6 +70,19 @@ def failure(ident):
     return (job.get('error') or job['status']).split(':')[0]
 
 
+def slot_wait_seconds(began, ended):
+    """구간 안에 워커가 남긴 '슬롯을 몇 초 기다려 잡았다' 로그의 대기 초. 다른 실행(수동 등)의 워커도 섞인다."""
+    found, pages = [], boto3.client('logs', region_name=REGION).get_paginator('filter_log_events').paginate(
+        logGroupName='/edge/analysis-v2', filterPattern='"Analysis slot"',
+        startTime=int(began.timestamp()*1000), endTime=int(ended.timestamp()*1000) + 60000)
+    for page in pages:
+        for event in page['events']:
+            words = event['message'].split()
+            if 'after' in words:
+                found.append(float(words[words.index('after') + 1]))
+    return found
+
+
 def report(args):
     arn = BATCH.replace(':stateMachine:', ':execution:') + ':' + args.name
     execution = sfn.describe_execution(executionArn=arn)
@@ -81,9 +94,13 @@ def report(args):
     else:  # 실패면 cause 에 집계와 미완료 항목만 있다. 중단·시간 초과·실행 중이면 집계 자체가 없다
         items, summary = [], json.loads(execution['cause']) if execution.get('cause', '').startswith('{') else {'cause': execution.get('cause')}
     judged = 'unfinished' in summary  # 배치가 항목 판정까지 마쳤는가
-    events = 0
+    events, waits = 0, {}
     for page in sfn.get_paginator('get_execution_history').paginate(executionArn=arn, includeExecutionData=False):
         events += len(page['events'])
+        for event in page['events']:
+            if event['type'] == 'WaitStateEntered':  # 30초 대기 1회: WaitForSlot = 실행 중 개수가 슬롯 수 이상, WaitForOther = 같은 작업을 남이 실행 중
+                name = event['stateEnteredEventDetails']['name']
+                waits[name] = waits.get(name, 0) + 1
     definition = json.loads(sfn.describe_state_machine_for_execution(executionArn=arn)['definition'])
     codes = batch_input.get('etf_codes') or definition['States']['Defaults']['Result']['etf_codes']
     limit = batch_input.get('max_attempts') or definition['States']['Defaults']['Result']['max_attempts']
@@ -95,6 +112,11 @@ def report(args):
     inside = lambda a: began <= datetime.fromisoformat(a['started']) <= ended  # 이 배치 실행 구간에 시작한 시도만
     ran = [a for r in rows for a in r['attempts'] if a['seconds'] is not None and inside(a)]
     seconds = sorted(a['seconds'] for a in ran if a['status'] == 'SUCCEEDED')
+    # 단건 실행이 동시에 떠 있던 최대 수(워크플로 기준 — 슬롯을 기다리는 시간도 포함한다)
+    spans = [(datetime.fromisoformat(a['started']), datetime.fromisoformat(a['stopped']) if a['stopped'] else ended)
+             for r in rows for a in r['attempts'] if inside(a)]  # 아직 도는 시도는 지금까지로 센다
+    overlap = max((sum(b <= start < e for b, e in spans) for start, _ in spans), default=0)
+    slot_waits = slot_wait_seconds(began, ended)
     reasons = {}
     for a in ran:
         if 'failure' in a:
@@ -108,6 +130,8 @@ def report(args):
         'execution': args.name, 'status': execution['status'], 'error': execution.get('error'), 'input': batch_input,
         'started': began.isoformat(), 'stopped': execution['stopDate'].isoformat() if execution.get('stopDate') else None,
         'total_seconds': round((ended - began).total_seconds(), 1), 'history_events': events, 'summary': summary,
+        'max_concurrent_children': overlap, 'gate_waits_30s': waits,
+        'worker_slot_wait_seconds': {'n': len(slot_waits), 'max': max(slot_waits, default=None), 'waited': sum(w > 0 for w in slot_waits)},
         'items': len(rows), 'child_runs_in_this_execution': len(ran),
         'child_failed_in_this_execution': sum(a['status'] != 'SUCCEEDED' for a in ran),
         'failure_reasons': reasons,
