@@ -39,8 +39,11 @@ MUTATIONS = {
                     ['test_saved_but_exit_failed_attempt_counts_by_its_own_stored_result']),
     'date-level-reuse': (lambda d: item(d)['Identify']['Parameters'].update({'analysis_id.$': "States.Hash(States.Format('outlook:{}:{}:{}', $.etf_code, States.ArrayGetItem(States.StringSplit($.analysis_at, 'T'), 0), $.attempt), 'MD5')"}),
                     ['test_other_reference_time_same_day_is_a_different_job']),
-    'start-when-status-unknown': (lambda d: item(d)['ReadStatus'].update(Catch=[{'ErrorEquals': ['States.ALL'], 'ResultPath': '$.status_error', 'Next': 'Unstarted'}]),
-                    ['test_unreadable_status_never_starts_paid_work']),
+    'any-404-means-unstarted': (lambda d: item(d)['Unstarted']['Choices'].pop(0),
+                    ['test_gateway_404_is_not_read_as_never_started']),
+    'trust-unreadable-publication-time': (lambda d: item(d)['OnTime']['Choices'].pop(0),
+                    ['test_unreadable_publication_time_is_not_counted_as_on_time']),
+    # ReadStatus 의 Catch 를 Unstarted 로 돌리는 변이는 두지 않는다 — Unstarted 의 404 판별이 같은 결과를 내 동치다.
 }
 survived = []
 for name, (mutate, tests) in MUTATIONS.items():

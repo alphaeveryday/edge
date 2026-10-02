@@ -60,11 +60,12 @@ class World:
     busy: Gate 호출마다 앞에서 꺼내 쓰는 '다른 v2 실행 수'. 다 쓰면 0.
     foreign: 분석 ID → 상태 조회마다 앞에서 꺼내 쓰는 상태열(다른 실행이 같은 ID 를 돌리는 중).
     status_down: 상태 API 가 계속 503.
+    route_missing: 상태 조회가 앱이 아니라 API Gateway 의 404 로 끝난다(경로·라우트 어긋남).
     """
 
-    def __init__(self, plan=None, busy=(), foreign=None, status_down=False):
+    def __init__(self, plan=None, busy=(), foreign=None, status_down=False, route_missing=False):
         self.plan, self.busy, self.foreign = plan or {}, list(busy), foreign or {}
-        self.status_down = status_down
+        self.status_down, self.route_missing = status_down, route_missing
         self.status, self.published, self.runs, self.trace = {}, {}, [], []
 
     def mock(self, state, data):
@@ -78,8 +79,11 @@ class World:
                 if value == 'completed':
                     self.status[ident], self.published[ident] = 'completed', datetime.now(timezone.utc).isoformat()
                 return ok({'ResponseBody': {'status': value}, 'StatusCode': 200})
+            if self.route_missing:  # API Gateway 가 직접 내는 404 — 앱까지 가지 못했다
+                return {'errorOutput': {'error': 'ApiGateway.404', 'cause': '{"message":"Not Found"}'}}
             if ident not in self.status:
-                return {'errorOutput': {'error': 'ApiGateway.404', 'cause': 'NOT_FOUND'}}
+                return {'errorOutput': {'error': 'ApiGateway.404', 'cause': json.dumps(
+                    {'error': {'code': 'NOT_FOUND', 'message': 'Analysis not found.'}, 'request_id': 'r'})}}
             return ok({'ResponseBody': {'status': self.status[ident]}, 'StatusCode': 200})
         if state == 'Gate':
             return ok({'Executions': [{'Name': 'other'}] * (self.busy.pop(0) if self.busy else 0)})
@@ -314,6 +318,20 @@ class OutlookBatchContract(unittest.TestCase):
         world = World(status_down=True)
         state, out = self.batch(world)
         self.assertEqual((state, out['cause']['unknown'], world.runs), ('Incomplete', 2, []))
+
+    def test_gateway_404_is_not_read_as_never_started(self):
+        """'분석 없음'은 앱이 낸 404 만이다. 경로가 어긋나 API Gateway 가 낸 404 를 미시작으로 읽으면
+        모든 ETF 를 유료로 돌리고도 결과를 못 읽어 다시 돌린다."""
+        world = World(route_missing=True)
+        state, out = self.batch(world)
+        self.assertEqual((state, out['cause']['unknown'], world.runs), ('Incomplete', 2, []))
+
+    def test_unreadable_publication_time_is_not_counted_as_on_time(self):
+        """발행 시각이 시각 형식이 아니면 시각 비교가 조용히 거짓이 된다 — 마감 전 완료로 세지 않는다."""
+        processor = processor_of(render())
+        item = {'etf_code': '069500', 'deadline': FUTURE, 'attempt': 0, 'analysis_id': identity('069500', 0)}
+        self.assertEqual(step(processor, 'OnTime', item | {'publication': {'published_at': None}})['nextState'], 'Unknown')
+        self.assertEqual(step(processor, 'OnTime', item | {'publication': {'published_at': '2026-10-01T22:59:59.123456+00:00'}})['nextState'], 'Completed')
 
     def test_default_deadline_is_0800_kst_of_the_reference_day(self):
         definition = render()

@@ -127,7 +127,10 @@
           },
           "Unstarted": {
             "Type": "Choice",
-            "Choices": [{ "Variable": "$.ran", "BooleanEquals": true, "Next": "NextAttempt" }],
+            "Choices": [
+              { "Not": { "Variable": "$.status_error.Cause", "StringMatches": "*Analysis not found*" }, "Next": "Unknown" },
+              { "Variable": "$.ran", "BooleanEquals": true, "Next": "NextAttempt" }
+            ],
             "Default": "Gate"
           },
           "Gate": {
@@ -233,6 +236,7 @@
           "OnTime": {
             "Type": "Choice",
             "Choices": [
+              { "Not": { "Variable": "$.publication.published_at", "IsTimestamp": true }, "Next": "Unknown" },
               { "Variable": "$.publication.published_at", "TimestampGreaterThanPath": "$.deadline", "Next": "Late" }
             ],
             "Default": "Completed"
