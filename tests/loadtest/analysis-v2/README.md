@@ -4,8 +4,10 @@ v2 전망·가격변동 실행 자동화의 기준 측정과 계약 재현 기�
 
 ## 구성과 재현
 
-- `aws/`: 2026-10-02 dev 조회 원본. SFN 실행 3건(`v2-executions.json`, `exec-*.json`), 구간 분해(`cloud-phase-breakdown.json`), DB 조회 SQL과 결과(`q1.sql`, `q2.sql`, `dbq-q1.txt`, `dbq-q2.parsed.json`), CloudWatch 원본(`cloudwatch.json`), 조회 스크립트(`dbq.sh`).
-- `local/`: 탐침 `probe.py`, 격리 DB `docker-compose.yml`, 원시 결과 `results-20261002.jsonl` 44건, 요약 `results-summary-20261002.json`.
+- `aws/`: dev 조회 SQL(`q1.sql`~`q4.sql`)과 조회 스크립트(`dbq.sh`).
+- `local/`: 탐침 `probe.py`, 격리 DB `docker-compose.yml`. 탐침은 결과를 `local/results.jsonl`에 쓴다.
+- `dev/`: 배치 실행·조회 스크립트 `batch_run.py`. 결과를 `dev/results/`에 쓴다.
+- 측정 원본(실행·조회 결과 JSON, 탐침 결과 JSONL)은 저장소에 두지 않는다. 위 결과 경로는 `.gitignore`에 있다. 이 문서 수치의 근거인 2026-10-02 원본 28개는 커밋 `66123f75`의 같은 폴더에 남아 있고 `git show 66123f75:tests/loadtest/analysis-v2/<경로>`로 꺼낸다. 아래에서 인용하는 원본 파일 이름은 그 커밋 기준이다.
 - 측정 시점 코드: `4311a19b`. 배포 이미지 `analysis-v2-cb9fa258`(작업 정의 9번)과 v2 소스 차이 0줄. 대상 목록 37종, 해시 `dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c`.
 
 ```sh
@@ -147,7 +149,7 @@ AWS_PROFILE=edge uv run --with boto3 python infra/terraform/modules/analysis-v2/
 
 ### dev 검증 (2026-10-02, 배포 커밋 `390b1532`, 수동 시작)
 
-실제 AWS dev에서 배치를 수동으로 시작해 확인했다. 스케줄 발화가 아니다. 실행별 원본은 `dev/results/`에 있고 `dev/batch_run.py`로 다시 뽑는다.
+실제 AWS dev에서 배치를 수동으로 시작해 확인했다. 스케줄 발화가 아니다. 실행별 원본은 `dev/batch_run.py`로 `dev/results/`에 다시 뽑는다(추적하지 않는 경로다).
 
 | 확인 | 실행 이름 | 결과 |
 |---|---|---|
