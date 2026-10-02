@@ -1,8 +1,6 @@
-import { useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { Sticker } from '@/components/ui';
-import { IntroShell } from '@/features/onboarding/IntroShell';
 import { colors, SIGNAL_ORDER } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -15,17 +13,9 @@ const AXES = [
   { name: '수급', q: '큰손이 믿나', c: colors.positive },
 ];
 
-export default function StickerIntro() {
-  const router = useRouter();
+export function StickerHero() {
   return (
-    <IntroShell
-      step={1}
-      title={'전망은 스티커\n하나로 말해요'}
-      body={'강력 하락부터 강력 상승까지 5단계.\nETF마다 매일 아침 하나씩 붙어요.'}
-      accent={'호재·차트·매크로·밸류·수급\n다섯 기준을 보고 정해요.'}
-      cta="다음"
-      onNext={() => router.push('/onboarding/what')}
-    >
+    <>
       <View style={styles.glow} />
       <View style={styles.stack}>
         {[...SIGNAL_ORDER].reverse().map((s, i) => (
@@ -50,7 +40,7 @@ export default function StickerIntro() {
           ))}
         </View>
       </View>
-    </IntroShell>
+    </>
   );
 }
 

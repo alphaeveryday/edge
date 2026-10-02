@@ -23,7 +23,7 @@ export default function Profile() {
   const toast = useToast((s) => s.show);
   // 로그아웃과 탈퇴 공통의 온보딩 복귀
   const leave = (msg: string) => { qc.clear(); logout(); resetOnboarding(); if (router.canDismiss()) router.dismissAll();
-    router.replace('/onboarding/how'); toast(msg); };
+    router.replace('/onboarding/intro'); toast(msg); };
   const [notif, setNotif] = useState(true);
   const [delOpen, setDelOpen] = useState(false);
   const del = useMutation({

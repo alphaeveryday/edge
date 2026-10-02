@@ -5,5 +5,5 @@ export default function Index() {
   const onboarded = useSession((s) => s.onboarded);
   const restored = useSession((s) => s.restored);
   if (!restored) return null;
-  return <Redirect href={onboarded ? '/(tabs)/home' : '/onboarding/how'} />;
+  return <Redirect href={onboarded ? '/(tabs)/home' : '/onboarding/intro'} />;
 }

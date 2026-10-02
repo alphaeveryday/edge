@@ -1,6 +1,4 @@
-import { useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
-import { IntroShell } from '@/features/onboarding/IntroShell';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -11,17 +9,9 @@ const RANK = [
   { n: '04', name: '국고채30년', bg: '#E0562B', sig: '■ 중립', sc: '#8E8E93' },
 ];
 
-export default function What() {
-  const router = useRouter();
+export function WhatHero() {
   return (
-    <IntroShell
-      step={2}
-      title={'오늘 달라진 것만\n보여드려요'}
-      body={'어떤 일이 생겼고, 그게 내 ETF에\n왜 중요한지 순서대로 설명해요.'}
-      accent="어제 본 내용은 다시 안 읽어도 돼요."
-      cta="내 ETF 고르기"
-      onNext={() => router.push('/onboarding/theme')}
-    >
+    <>
       <View style={styles.stage}>
         <View style={styles.rankCard}>
           <Text style={styles.rankTitle}>전망 좋은 순</Text>
@@ -66,7 +56,7 @@ export default function What() {
           </View>
         </View>
       </View>
-    </IntroShell>
+    </>
   );
 }
 

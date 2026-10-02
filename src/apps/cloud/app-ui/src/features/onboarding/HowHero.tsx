@@ -1,7 +1,5 @@
-import { useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { IntroShell } from '@/features/onboarding/IntroShell';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
@@ -19,17 +17,9 @@ const Down = () => (
   </Svg>
 );
 
-export default function How() {
-  const router = useRouter();
+export function HowHero() {
   return (
-    <IntroShell
-      step={0}
-      title={'뉴스 3만 건을\n대신 읽어드려요'}
-      body={'언론사 70곳의 뉴스와 공시, 리포트를\n매일 새벽에 모아요.'}
-      accent={'AI가 다섯 가지 기준으로 정리해요.'}
-      cta="다음"
-      onNext={() => router.push('/onboarding/sticker')}
-    >
+    <>
       <View style={styles.col}>
         <View style={styles.press}>
           {[PRESS_A, PRESS_B].map((row, i) => (
@@ -59,7 +49,7 @@ export default function How() {
           <Text style={styles.pillSub}>장 시작 전 읽어요</Text>
         </View>
       </View>
-    </IntroShell>
+    </>
   );
 }
 
