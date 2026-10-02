@@ -1,4 +1,5 @@
 """Concurrent requests wait without starting another billable analysis task."""
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock
@@ -21,8 +22,9 @@ def capacity():
         conn.execute('SET ROLE edge_analysis_v2_writer')
         workflows = Mock()
         workflows.describe_execution.return_value = {'status': 'RUNNING'}
+        workflows.get_paginator.return_value.paginate.return_value = [{'events': []}]
         ecs = Mock()
-        ecs.list_tasks.return_value = {'taskArns': []}
+        workflows.get_paginator.return_value.paginate.return_value = [{'events': []}]
         yield conn, dsn, workflows, ecs
         conn.execute('DELETE FROM analysis_execution_slots')
 
@@ -45,11 +47,11 @@ def test_aborted_workflow_does_not_release_capacity_until_ecs_task_stops(capacit
     conn, _, workflows, ecs = capacity
     assert control(conn, workflows, ecs, 'cluster', 'old', 'acquire')['acquired']
     workflows.describe_execution.return_value = {'status': 'ABORTED'}
-    ecs.list_tasks.return_value = {'taskArns': ['task']}
+    workflows.get_paginator.return_value.paginate.return_value = [{'events': [{'taskSubmittedEventDetails': {'resourceType': 'ecs', 'resource': 'runTask.sync', 'output': json.dumps({'Tasks': [{'TaskArn': 'task'}]})}}]}]
     ecs.describe_tasks.return_value = {'tasks': [{'taskArn': 'task', 'lastStatus': 'RUNNING'}]}
     assert not control(conn, workflows, ecs, 'cluster', 'new', 'acquire')['acquired']
     ecs.stop_task.assert_called_once()
-    ecs.list_tasks.return_value = {'taskArns': []}
+    workflows.get_paginator.return_value.paginate.return_value = [{'events': []}]
     assert not control(conn, workflows, ecs, 'cluster', 'new', 'acquire')['acquired']
     ecs.describe_tasks.return_value = {'tasks': [{'taskArn': 'task', 'lastStatus': 'STOPPED'}]}
     assert control(conn, workflows, ecs, 'cluster', 'new', 'acquire')['acquired']
