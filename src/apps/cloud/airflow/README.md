@@ -908,6 +908,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 |---|---|
 | 실행안 보완·#1053 검증과 머지·장후 기동·중단 시험·10-05 까지 유휴 관측 | 승인됨 — 기동·중단 시험까지 실행함(아래 "실행 결과"), 유휴 관측 진행 중 |
 | SFN → Airflow 전환(스케줄 DISABLED·DAG unpause) | **미승인** — 10-05 유휴 관측 보고 뒤 따로 결정 |
+| 기본 종료 — 10-05 18:00 KST 까지 전환·연장 승인이 없으면 서비스·호스트 0 | 승인됨(2026-10-02). 무인으로 실행된다(아래 "기본 종료"). 메타DB·역할·로그·증거 보존, SFN 그대로 |
 | 5거래일 운영·연장·상시 유지 | **미승인** — 이 승인만으로 시작하지 않는다 |
 
 **확정한 결정(2026-10-02 사용자).** exit 2 적재 정책 현행 유지(선택 2). `edge_source_daily` 는 관측 기간 내내 pause. 분석 엔진 소비 정책 불변. t4g.small 1대·태스크 1408MiB·기존 RDS 안 분리된 메타DB(`airflow`·`airflow_meta`). 비용 상한 하루 1.5 USD·계획 전체 15 USD.
@@ -1008,15 +1009,42 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 - 쓰기 지연 최대 18.7ms(단발), 스왑 15.4~15.7MiB, 태스크 CPU 4~6%, `CPUSurplusCreditsCharged` 0.
 - 비용(추정, 청구 데이터 아님): 호스트 19:20 기동 — EC2 0.0208 + EBS 약 0.004 USD/시간. 10-02 약 0.12 USD, 이후 하루 약 0.6~0.65 USD(로그 포함). 10-05 까지 약 2 USD.
 
-**③ 기록 방법(사람이 한다).** 하루 1회 `obs.py <시작 KST> <끝 KST|now>`(위 원자료 폴더, boto3 필요) 또는 같은 지표를 `aws cloudwatch get-metric-statistics` 로 조회해 이 표에 일별 최저·최대를 더한다. 재시작은 `aws ecs describe-services --cluster edge-dev-airflow --services edge-dev-airflow --query 'services[0].events[:20]'`.
+**③ 기록 방법(보고는 사람이나 다음 세션이 쓴다 — 자료는 위 "측정 자료" 표대로 AWS 에 남는다).** 하루 1회 `obs.py <시작 KST> <끝 KST|now>`(위 원자료 폴더, boto3 필요) 또는 같은 지표를 `aws cloudwatch get-metric-statistics` 로 조회해 이 표에 일별 최저·최대를 더한다. 재시작은 `aws ecs describe-services --cluster edge-dev-airflow --services edge-dev-airflow --query 'services[0].events[:20]'`.
 
-#### 기본 종료(다음 승인이 없을 때)
+#### 기본 종료(10-05 18:00 KST, 무인)
 
-10-05 보고 뒤 다음 단계 승인이 없으면, 관측을 임의로 연장하지 않고 담당자가 한다.
-1. 서비스 desired 0(`update-service --desired-count 0`) → `runningCount=0` 확인.
-2. `host_count = 0` PR 머지(호스트·관리 태스크·경보가 걷힌다). 메타DB `airflow`·`airflow_meta`·시크릿·로그 그룹(30일)은 **남긴다** — dbadmin `teardown` 을 하지 않는다.
-3. DAG pause·SFN 스케줄은 그대로 둔다(전환하지 않았으므로 바꿀 것이 없다).
-4. 관측 기록(지표 요약·이미지 digest·태스크 정의·시험 결과)을 ALPHA-1141 에 남긴다.
+10-05 18:00 KST 까지 전환 또는 연장 승인이 없으면 서비스와 호스트를 0 으로 내린다(2026-10-02 승인). 그 시각에 운영자·에이전트·노트북이 없어도 되게 AWS 쪽에 둔다(`modules/airflow/default_stop.tf`, 검증 종료 장치의 강제 종료와 같은 형태 — 스케줄러가 API 를 직접 부른다).
+
+| 시각(KST) | 주체 | 하는 일 |
+|---|---|---|
+| 10-05 18:00 | 스케줄 `edge-dev-airflow-default-stop-service` | `ecs:UpdateService` desired 0 |
+| 10-05 18:10 | 스케줄 `edge-dev-airflow-default-stop-host` | `autoscaling:UpdateAutoScalingGroup` min·max·desired 0 |
+| 10-05 18:20 | 스케줄 `edge-dev-airflow-default-stop-service-recheck` | 서비스 desired 0 을 한 번 더 — 18:00 직전에 시작한 `deploy-airflow` 가 정지 확인을 지난 뒤 desired 1 을 쓰는 경우를 덮는다(18:00 뒤에 시작한 배포는 desired 0 을 보고 건너뛴다) |
+| 그 뒤 첫 dev apply | Terraform | `host_count` 가 기한 뒤 plan 에서 0 으로 계산된다(`envs/dev/main.tf` `airflow_host_until`) — 호스트를 되살리지 않고, 경보·오토스케일링·관리 태스크를 걷는다. 종료 스케줄·역할은 `host_until` 에만 묶여 남는다(기한 직후 apply 가 아직 돌지 않은 스케줄을 지우지 않게). 정리 PR 에서 `host_until` 을 비워 걷는다 |
+
+- **남는 것:** 메타DB `airflow`·역할 `airflow_meta`, 시크릿 `edge-dev-airflow/app`, 로그 그룹(30일), 클러스터·서비스 정의(desired 0), ECR 이미지, CloudWatch 지표(1분 15일), SSM 명령 이력(30일). dbadmin `teardown` 은 하지 않는다. SFN·스케줄·`investor_intraday_orchestrator = "SFN"` 은 건드리지 않는다.
+- **기한 뒤 plan 의 모습.** 어느 PR 이든 기한 뒤의 plan 에는 Airflow 쪽 `1 to change(ASG 1→0), 13 to destroy`(경보 7·오토스케일링 2·관리 태스크 4)가 보인다(의도). 종료가 확정되면 `host_count = 0` 리터럴·`host_until` 제거로 정리한다.
+- **관측 기간 중 배포.** `dags/**` 등이 dev 에 머지되면 `deploy-airflow` 가 서비스를 새 태스크로 바꾼다(메모리 기준선이 다시 시작된다). 보고는 태스크 ID 가 바뀐 시각으로 구간을 나눈다.
+- **취소·연장.** 18:00 전에 `airflow_host_until` 을 바꾸는 PR 을 머지한다(apply 가 스케줄 시각과 `host_count` 계산을 함께 옮긴다). 18:00 뒤에 승인이 오면 다시 기동한다(위 "일정과 단계"의 기동 절차 — 메타DB 는 남아 있으므로 `dbadmin create` 는 하지 않는다).
+- **종료 뒤 울리는 것.** 서비스가 0 이 되면 `service-down` 경보가 약 10분 뒤 ALARM 이 된다(SNS 1통). 다음 apply 가 경보를 걷을 때까지 ALARM 으로 남는다 — 종료가 일어났다는 신호로 읽는다.
+- **종료 확인(사람 또는 다음 세션).** 예약 사실이 아니라 실제 상태를 대조한다: 서비스 `desiredCount=0`·`runningCount=0`, ASG `0/0/0`·인스턴스 없음, `aws rds`·조회로 DB `airflow` 존재, 로그 그룹 존재, SFN 스케줄 5개 `ENABLED`, DAG 는 메타DB 에 pause 로 남음(다시 기동하면 확인). 스케줄 실행 자체는 CloudTrail(`UpdateService`·`UpdateAutoScalingGroup`, 호출자 역할 `edge-dev-airflow-default-stop`)로 본다.
+
+#### 측정 자료 — 에이전트 없이 남는 것과 아닌 것
+
+일별 보고를 늦게 쓰는 것과 측정 자료가 빠지는 것은 다르다. 아래 "저장 주체"가 AWS 인 항목은 보고가 늦어도 자료가 남는다.
+
+| 자료 | 저장 주체·위치 | 보존 | 에이전트 없이 |
+|---|---|---|---|
+| 태스크 메모리·CPU(1분) | CloudWatch `AWS/ECS` `MemoryUtilization`·`CPUUtilization`(Cluster·Service) | 1분 값 15일 | 남는다 |
+| RDS 여유 메모리·연결·CPU·쓰기 지연·스왑(1분) | CloudWatch `AWS/RDS`(edge-dev) | 1분 값 15일 | 남는다 |
+| 호스트 CPU·크레딧(5분) | CloudWatch `AWS/EC2` | 5분 값 63일 | 남는다 |
+| **호스트 메모리**(MemAvailable·태스크 cgroup·OOM 계수) | 스케줄 `edge-dev-airflow-host-mem`(5분) → SSM 명령 이력 | 30일 | **표본 시작 뒤로만 남는다.** 기동(10-02 19:20)부터 표본 시작 전까지는 연속 자료가 없다 — 수동 표본 2개(23:41 여유 547MiB, 23:44 545MiB)뿐이고 나중에 만들 수 없다 |
+| 재시작 | ECS 서비스 이벤트(최근 100건), 구성요소 로그 `/ecs/edge-dev-airflow`(30일), 호스트 표본의 `uptime_s`·`cg_oom_kill` | — | 남는다 |
+| 경보 전이·액션 | CloudWatch 경보 이력 | 14일 | 남는다 |
+| SNS 메일 **수신** | 받은 사람의 메일함 | — | 경보 이력의 "SNS 액션 성공"은 발송 요청 기록이다. 수신은 담당자가 메일함에서 확인해야 한다 |
+
+- 호스트 표본 한 줄: `HOSTMEM t=<epoch> avail_kb=… free_kb=… task_cg_mib=… cg_oom_kill=… kmsg_oom=… uptime_s=…`. 조회는 `aws ssm list-command-invocations --details`(Comment `edge-dev-airflow-host-mem`).
+- 표본 명령은 5분마다 호스트에서 셸 하나를 잠깐 띄운다(관측에 주는 영향은 이 정도다).
 
 #### 전환 승인 뒤에 쓸 기준(지금은 실행하지 않는다)
 

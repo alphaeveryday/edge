@@ -700,6 +700,10 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 # 태스크(src/apps/cloud/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
 # DB·역할을 나눠도 인스턴스 자원(메모리·CPU·IOPS·연결 상한·재부팅)은 공유한다. 재사용 가부는 이 검증(장외)의
 # 관측·중단 기준으로 판단한다(README "기존 RDS 재사용 검증"). 장중 재사용은 미검증이다.
+locals {
+  airflow_host_until = "2026-10-05T09:00:00Z" # 10-05 18:00 KST
+}
+
 module "airflow" {
   source = "../../modules/airflow"
 
@@ -716,8 +720,13 @@ module "airflow" {
   instance_type = "t4g.small"
   task_memory   = 1408
   # ALPHA-1141 장중 수급 첫 운영 전환 준비 — 장후 기동·중단 시험·10-05 까지 유휴 관측(업무 DAG pause, SFN 그대로).
-  # 다음 승인이 없으면 README "첫 운영 전환 실행안"의 기본 종료로 0 으로 내린다(메타DB 는 남긴다).
-  host_count    = 1
+  # 기본 종료(2026-10-02 사용자 승인): 10-05 18:00 KST 까지 전환·연장 승인이 없으면 서비스·호스트를 0 으로 내린다.
+  # - host_until 에 스케줄러가 내린다(modules/airflow/default_stop.tf — 운영자·에이전트 없이).
+  # - host_count 를 같은 시각으로 계산한다: 기한 뒤의 plan 은 0 이라, 뒤늦은 자동 apply 가 호스트를 되살리지 않는다.
+  #   ⚠️ 그래서 기한 뒤에는 **어느 PR 의 plan 에나** Airflow 호스트·경보·관리 태스크 제거가 보인다(의도). 전환·연장을
+  #   승인받으면 이 시각을 바꾸고, 종료가 확정되면 host_count = 0 리터럴로 정리한다. 메타DB·시크릿·로그 그룹은 남는다.
+  host_until    = local.airflow_host_until
+  host_count    = timecmp(plantimestamp(), local.airflow_host_until) < 0 ? 1 : 0
   host_observer = false
 
   # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
