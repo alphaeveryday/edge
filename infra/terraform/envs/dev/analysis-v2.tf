@@ -28,8 +28,10 @@ module "analysis_v2" {
   outlook_etf_codes = local.outlook_etf_codes
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
   scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
-  # 잠정값 — 37종 전체 실측 뒤 08:00 KST 에서 역산해 확정하고 그때 켠다(기본 DISABLED).
-  outlook_schedule_expression = "cron(0 3 ? * MON-FRI *)"
+  # 02:00 KST 시작. 2026-10-02 dev 37종 실측 232분에 실패 시도 여유 60분, 스케줄 전달 재시도 창 30분,
+  # 여유 30분을 더해 08:00 에서 역산했다(tests/loadtest/analysis-v2/README.md '시작 시각').
+  outlook_schedule_expression = "cron(0 2 ? * MON-FRI *)"
+  outlook_schedule_state      = "ENABLED"
 }
 output "analysis_v2_state_machine_arn" { value = module.analysis_v2.state_machine_arn }
 output "analysis_v2_observer_role_arn" { value = module.analysis_v2.observer_role_arn }
