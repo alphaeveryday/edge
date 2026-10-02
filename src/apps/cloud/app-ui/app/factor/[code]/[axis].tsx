@@ -1,31 +1,25 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Axis } from '@/api';
-import { IconButton, PageScroll, Sticker } from '@/components/ui';
+import { PageScroll, Sticker } from '@/components/ui';
+import { AxisNav } from '@/features/analysis/AxisNav';
 import { dirSignal } from '@/features/analysis/dir';
 import { useFactor } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
-import { useEtf } from '@/features/etf/queries';
 import { colors, signal as SIG } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function FactorPage() {
   const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
-  const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const { data: etf } = useEtf(code);
   const q = useFactor(code, axis);
   const f = q.data;
   const refresh = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
-      <View style={styles.nav}>
-        <IconButton icon="back" onPress={() => router.back()} />
-        {f && <Sticker signal={dirSignal[f.dir]} size={28} radius={11} label={f.axis} />}
-        <Text numberOfLines={1} style={styles.etf}>{etf?.name}</Text>
-      </View>
+      <AxisNav code={code} axis={axis} dir={f?.dir} />
       <QueryState query={q} rows={3} pending={{ title: `${axis} 요인 상세는 준비 중이에요`, sub: '재료가 확인되면 이 축의 근거를 정리해 올려요' }}>
         {(f) => (
         <PageScroll refreshControl={refresh} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
@@ -78,8 +72,6 @@ export default function FactorPage() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
-  nav: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingTop: 2 },
-  etf: { flex: 1, fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
   body: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 40 },
   headline: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   event: { flexDirection: 'row', gap: 10 },

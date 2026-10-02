@@ -2,8 +2,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Axis, Dir } from '@/api';
-import { Chevron, NavBar, PageScroll, Sticker } from '@/components/ui';
-import { dirSignal } from '@/features/analysis/dir';
+import { Chevron, PageScroll } from '@/components/ui';
+import { AxisNav } from '@/features/analysis/AxisNav';
 import { useMetric } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
 import { colors, radius } from '@/theme/tokens';
@@ -25,14 +25,11 @@ export default function MetricPage() {
   const refresh = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
-      <NavBar title={`${axis} 지표`} onBack={() => router.back()} />
+      <AxisNav code={code} axis={axis} dir={q.data?.dir} />
       <QueryState query={q} rows={3} pending={{ title: `${axis} 지표는 준비 중이에요`, sub: '이 ETF에 맞는 지표가 정리되면 올라와요' }}>
         {(m) => (
         <PageScroll refreshControl={refresh} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-          <View style={styles.verdictRow}>
-            <Sticker signal={dirSignal[m.dir]} size={30} radius={11} label={m.axis} />
-            <Text style={styles.verdict}>{m.verdict}</Text>
-          </View>
+          <Text style={styles.headline}>{m.verdict}</Text>
           {m.tiles.some((t) => t.dir) && (
             <View style={styles.legend}>
               <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.up }]} /><Text style={styles.legendText}>도움</Text></View>
@@ -40,7 +37,7 @@ export default function MetricPage() {
               <View style={styles.legendItem}><View style={[styles.sw, { backgroundColor: colors.down }]} /><Text style={styles.legendText}>부담</Text></View>
             </View>
           )}
-          <View style={styles.grid}>
+          <View style={[styles.grid, { marginTop: m.tiles.some((t) => t.dir) ? 14 : 22 }]}>
             {m.tiles.map((t) => {
               const s = TILE[t.dir ?? 'none'];
               return (
@@ -67,14 +64,13 @@ export default function MetricPage() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
-  body: { paddingTop: 12, paddingHorizontal: 20, paddingBottom: 34 },
-  verdictRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  verdict: { flex: 1, fontFamily: fam.extrabold, fontSize: 18, letterSpacing: -0.5, color: colors.text },
-  legend: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  body: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 40 },
+  headline: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
+  legend: { flexDirection: 'row', gap: 12, marginTop: 22 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   sw: { width: 9, height: 9, borderRadius: 3 },
   legendText: { fontFamily: fam.regular, fontSize: 12, color: colors.textSub },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   tile: { borderRadius: radius.card, borderWidth: 1, gap: 6 },
   tileLabel: { fontFamily: fam.bold, color: colors.textSub },
   tileValue: { fontFamily: fam.monoExtraBold, letterSpacing: -1, lineHeight: 36 },
