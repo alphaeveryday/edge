@@ -137,3 +137,41 @@ def test_execution_boundary_returns_committed_response_and_records_failure(audit
     assert failure["status"] == "failed"
     assert failure["arguments"] == {"days": 999}
     assert "private" not in failure["error_message"]
+
+
+def test_analyses_starting_together_can_register_the_same_definition(audit):
+    """Parallel analyses register identical definitions at the same moment; none may fail.
+
+    The losing insert used to hit the (function_name, version) key, which the tool_id
+    conflict clause does not cover, and that analysis failed before calling the model.
+    The race is repeated because a single round only collides some of the time.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    _, _, _, dsn = audit
+    workers, keys = 6, ["audit-race-" + uuid4().hex for _ in range(20)]
+
+    def definition(key):
+        return dict(tool_id=key, function_name=key, version="v1", description="동시 등록",
+                    source_names=["일별 투자자 수급"], formula_latex=None)
+
+    try:
+        with ThreadPoolExecutor(workers) as pool:
+            connections = list(pool.map(lambda _: psycopg.connect(dsn, autocommit=True), range(workers)))
+            try:
+                for key in keys:
+                    barrier = Barrier(workers)
+                    def register(conn, key=key, barrier=barrier):
+                        barrier.wait(timeout=10)
+                        ToolStore(conn).register_definition(**definition(key))
+                    list(pool.map(register, connections))
+            finally:
+                for conn in connections:
+                    conn.close()
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            assert conn.execute("SELECT count(*) FROM tool_definitions WHERE tool_id = ANY(%s)", (keys,)).fetchone() == (len(keys),)
+            with pytest.raises(ValueError, match="immutable"):
+                ToolStore(conn).register_definition(**(definition(keys[0]) | {"description": "다른 정의"}))
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DELETE FROM tool_definitions WHERE tool_id = ANY(%s)", (keys,))

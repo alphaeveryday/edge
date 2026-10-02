@@ -14,7 +14,7 @@ import test_outlook_batch as t
 original = t.render
 def item(d): return d['States']['RunItems']['ItemProcessor']['States']
 MUTATIONS = {
-    'gate-bypass': (lambda d: item(d)['GateOpen'].update(Choices=[{'Variable': '$.gate.busy', 'NumericGreaterThan': 999, 'Next': 'StillTimeToWait'}]),
+    'gate-bypass': (lambda d: item(d)['GateOpen'].update(Choices=[{'Variable': '$.gate.busy', 'NumericGreaterThanEquals': 999, 'Next': 'StillTimeToWait'}]),
                     ['test_waits_while_another_v2_execution_is_running']),
     'attempt-not-incremented': (lambda d: item(d)['NextAttempt']['Parameters'].update({'attempt.$': '$.attempt'}),
                     ['test_only_failed_item_is_retried_with_a_new_id']),
@@ -32,7 +32,9 @@ MUTATIONS = {
                     ['test_malformed_limits_are_rejected_before_any_run']),
     'slot-wait-without-reread': (lambda d: item(d)['WaitForSlot'].update(Next='Gate'),
                     ['test_job_started_by_another_batch_while_waiting_for_a_slot_is_picked_up']),
-    'parallel-items': (lambda d: d['States']['RunItems'].update(MaxConcurrency=2), ['test_items_run_one_at_a_time']),
+    'map-wider-than-slots': (lambda d: d['States']['RunItems'].update(MaxConcurrency=t.SLOTS + 1), ['test_map_concurrency_and_gate_follow_the_slot_count']),
+    'gate-opens-at-full-slots': (lambda d: item(d)['GateOpen'].update(Choices=[{'Variable': '$.gate.busy', 'NumericGreaterThan': t.SLOTS, 'Next': 'StillTimeToWait'}]),
+                    ['test_map_concurrency_and_gate_follow_the_slot_count']),
     'id-ignores-reference-time': (lambda d: item(d)['Identify']['Parameters'].update({'analysis_id.$': "States.Hash(States.Format('outlook:{}:{}', $.etf_code, $.attempt), 'MD5')"}),
                     ['test_other_reference_time_same_day_is_a_different_job']),
     'trust-exit-code': (lambda d: item(d)['Run'].update(Catch=[{'ErrorEquals': ['States.ALL'], 'ResultPath': '$.run_error', 'Next': 'NextAttempt'}]),

@@ -13,6 +13,15 @@ variable "api_client_role_names" {
   type    = list(string)
   default = []
 }
+variable "analysis_slots" {
+  type        = number
+  default     = 3
+  description = "동시에 도는 분석 수의 상한. 워커가 이 수의 슬롯 중 하나를 잡고 시작하며, 전망 배치의 동시 수도 이 값이다. 올리려면 writer 역할 연결 한도(건당 3개)를 먼저 확인한다."
+  validation {
+    condition     = var.analysis_slots >= 1 && floor(var.analysis_slots) == var.analysis_slots
+    error_message = "analysis_slots 는 1 이상의 정수여야 한다."
+  }
+}
 # 전망 배치(ALPHA-1142)
 variable "outlook_etf_codes" {
   type        = list(string)
