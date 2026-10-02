@@ -44,6 +44,20 @@ D-1 이 하루 한 번은 필요한 이유는 **중단 캐치업**이다. 익일
 "첫 window 인가"로 판정하면 중간 배포된 날은 D-1 을 영영 안 본다).
 ⚠️ 덮는 폭은 **하루뿐이다.** 이틀 이상 멈춘 뒤의 공백은 이 창이 못 메우고 수동 백필 소관이다.
 
+## 커서 전진은 "전건 처리 완료"가 아니다 (ALPHA-1154)
+
+접수번호 커서와 D-1 캐치업은 **다음 poll 이 무엇을 다시 읽어야 하는가**만 정한다. 실패가 다시
+읽으면 풀릴 수 있을 때(본문 미도착, 저장·적재·조립 예외, 사유를 모르는 실패)는 커서를 막아 다음
+window 가 전량을 다시 읽는다. 반대로 **같은 원문이면 늘 같은 결과인 문서 단위 거부**
+(`_CONFIRMED_REJECT_REASONS`)는 다시 읽어도 안 풀린다 — 그런 문서 하나가 커서를 막으면 그 문서가
+질의 창을 벗어날 때까지 매 분 전량을 다시 읽고 전 창이 INCOMPLETE 가 된다(10-01·10-02 각 390창).
+그래서 확정 거부는 커서를 막지 않는다.
+
+그렇다고 처리된 것으로 치지 않는다: 거부를 본 window 는 **INCOMPLETE** 로 남고, poll manifest 의
+`rejected_documents`(접수번호·단계·사유·원문 위치)와 그 run 의 quality_log 가 재처리 근거다. 거부
+문서를 따로 표시해 두지도 않는다 — 질의 창 안에 있는 동안 주기 전량 대사(60 poll)와 저녁 배치가
+같은 문서를 다시 판정하므로, 파서·기준정보가 고쳐지면 그 판정이 바뀐다.
+
 ⚠️ **한 tick 은 1분보다 오래 걸린다** — 공용 골격이 realtime 1 + `recovery_budget_per_tick`
 을 한 tick 안에서 처리한다. 그 자체는 이 레인의 정상이다(토스 실측 tick 73초+). 요구는
 **lease 가 최악 tick 을 덮는 것**이고 그 검증자는
@@ -92,6 +106,27 @@ _HARD_FAIL_STATUSES = frozenset({"error", "stopped"})
 # **공시 0건인 정상 거래일**로 확정된다(Rule 12 성공 위장의 전형).
 _NOT_OBSERVED_STATUSES = frozenset({"skipped"})
 
+# **다시 읽어도 결과가 같은** 문서 단위 거부 사유(ALPHA-1154). 전부 "이미 저장한 입력에 대한
+# 판정"이다 — 정제 쪽은 본문 내용 판정이고(본문은 한 번 받으면 다음 poll 이 그 객체를 재사용한다:
+# `ingest_raw_disclosure._existing_documents`), 조립 쪽은 적재된 fact 의 필수 항목 결손이다
+# (DART 목록을 다시 읽는다고 fact 가 바뀌지 않는다). 그래서 커서를 막아 얻는 것이 없다.
+#
+# ⚠️ **여기 없는 사유는 전부 일시 실패로 본다**(모르는 사유 포함) — 종전대로 커서를 막는다.
+# 틀리면 막는 쪽으로 틀려야 한다: 확정으로 잘못 접으면 다시 읽어 풀릴 문서가 경계 뒤에 갇힌다.
+# 그래서 넣지 않은 것: `missing_document_body`(본문 미도착 — 다음 poll 이 다시 받는다),
+# `parse_error`(본문 객체 읽기 실패가 같은 except 로 접힌다), `raw_read_error`,
+# 목록 행에서 오는 `missing_rcept_no`·`missing_report_date`·`bad_report_date`(목록은 매 poll
+# 다시 읽으므로 값이 달라질 수 있다), 조립의 `event_build_error`(문서가 아니라 설정 문제).
+_CONFIRMED_REJECT_REASONS = frozenset({
+    # 공급계약 본문(quality.validate_supply_fact 의 blocking 중 본문 유래)
+    "empty_parse", "amount_out_of_range", "ratio_not_finite",
+    # 사업부문 본문(normalize_disclosure_segment · quality.validate_segment_fact)
+    "no_segments_parsed", "missing_segment_name", "empty_segment",
+    "revenue_out_of_range", "share_not_finite",
+    # 조립(assemble_disclosure_events._skip_reasons) — 적재된 fact 의 필수 항목 결손
+    "missing_supplier_instrument", "missing_contract_object",
+})
+
 # 시장 전체 공시 하루 건수의 상한 실측(2026-07-31 기준 700~1,070건). 페이지 예산 대조에만
 # 쓴다 — 수집 동작을 정하지 않는다(순회 종료는 벤더의 `total_page` 가 정한다).
 # ⚠️ `config.models.MinuteDisclosureWorkerConfig.max_pages_per_window` 의 **하한**이 이 값에서
@@ -125,6 +160,7 @@ def build_poll_manifest(
     data_status: str,
     step_exits: dict[str, int],
     observation_scope: dict,
+    rejected_documents: list[dict],
 ) -> dict:
     """이 window 가 **무엇을 보고 무엇으로 판정했나** — EOD·감사가 읽는 기록.
 
@@ -158,6 +194,12 @@ def build_poll_manifest(
         # 체인 5스텝의 종료 코드 — 어느 칸이 깨졌는지가 남지 않으면 INCOMPLETE 가
         # "무언가 안 됐다"로만 남는다(Rule 12).
         "step_exits": dict(sorted(step_exits.items())),
+        # 이 window 가 본 **확정 거부 문서**(ALPHA-1154). 커서는 이 문서들을 기다리지 않고
+        # 나아가므로, 여기 남기지 않으면 "커서가 나아갔다"가 "전건 처리됐다"로 읽힌다.
+        # 원문 위치는 본문 객체 키(poll 사이에 재사용돼 같은 값)만 담는다 — 메타 ndjson 키는
+        # run_id 가 들어 있어 위 불변 계약을 깬다(그 키는 run_id 로 찾는 quality_log 에 있다).
+        "rejected_documents": rejected_documents,
+        "rejected_count": len(rejected_documents),
     }
 
 
@@ -277,6 +319,8 @@ class DisclosureWorker(MinuteWorkerLoop):
             rcept_nos: tuple[str, ...] = tuple(sorted(set(outcome["rcept_nos"])))
             hard_failed = raw_status in _HARD_FAIL_STATUSES
             truncated = bool(outcome.get("list_truncated"))
+            # 단계 → (확정 거부 문서, 확정 거부로 볼 수 없는 실패 수). 비0 으로 끝난 단계만 든다.
+            rejections: dict[str, tuple[list[dict], int]] = {}
 
             if hard_failed:
                 # 수집이 사실상 실패했다 — 정제·적재를 돌리지 않는다. 부분 수집분은 raw 에
@@ -294,15 +338,22 @@ class DisclosureWorker(MinuteWorkerLoop):
                     ("segment", normalize_disclosure_segment.run),
                 )
                 for name, normalizer in normalizers:
+                    failures: list[dict] = []
                     try:
                         step_exits[name] = normalizer(
                             self.storage, run_id, run_id, raw_keys=outcome["raw_keys"],
+                            failures_out=failures,
                         )
                     except Exception:
                         # producer 계보는 독립이다. 한쪽 예외를 hard failure로 남기되 다른
                         # manifest의 초기화·성공 기록까지 막지 않는다.
                         logger.exception("공시 window 정제 예외(producer=%s)", name)
                         step_exits[name] = 1
+                    # exit 2 일 때만 사유를 읽는다 — canonical·quality_log·완료 manifest 가
+                    # 온전히 기록된 뒤의 행 실패다. exit 1 은 그 기록 자체가 깨진 것이라
+                    # 사유가 무엇이든 다시 읽어야 한다.
+                    if step_exits[name] == 2:
+                        rejections[name] = _split_failures(name, failures)
                 # 적재는 raw가 0건이어도 돈다. 현재 run의 completed canonical manifest를 exact
                 # GET해 durable pending에 enqueue하고, 기존 pending도 날짜 범위 안에서 재시도한다
                 # (ALPHA-1045). shared canonical LIST는 명시 bootstrap에만 남아 있다.
@@ -315,12 +366,21 @@ class DisclosureWorker(MinuteWorkerLoop):
                         from_date=query_from, to_date=query_to,
                     )
                     if step_exits["load"] == 0:
+                        report: dict = {}
                         step_exits["assemble"] = assemble_disclosure_events.run(
                             self.storage, run_id, db=cfg.db,
-                            from_date=query_from, to_date=query_to,
+                            from_date=query_from, to_date=query_to, report=report,
                         )
+                        # `report` 는 quality_log 가 기록됐을 때만 채워진다. 비었거나 조립
+                        # 예외(`failures`)가 있으면 건너뛴 fact 가 있어도 확정 거부로 읽지 않는다.
+                        if step_exits["assemble"] != 0 and report and not report.get("failures"):
+                            rejections["assemble"] = _split_failures(
+                                "assemble", report.get("skipped_facts") or [])
 
             data_status = _classify(raw_status, step_exits, rcept_nos)
+            rejected_documents = [
+                item for name in sorted(rejections) for item in rejections[name][0]
+            ]
             manifest = build_poll_manifest(
                 dataset=cfg.dataset, session_id=self.session_id,
                 source_code=cfg.source_code,
@@ -328,6 +388,7 @@ class DisclosureWorker(MinuteWorkerLoop):
                 query_from=query_from, query_to=query_to,
                 rcept_nos=rcept_nos, data_status=data_status, step_exits=step_exits,
                 observation_scope=_observation_scope(after_rcept_no, outcome),
+                rejected_documents=rejected_documents,
             )
             manifest_bytes = serialize_manifest(manifest)
             # 키 축이 **attempt** 다(세대가 아니다) — 라이브 소스의 재poll은 다른 제한 관측을
@@ -362,14 +423,21 @@ class DisclosureWorker(MinuteWorkerLoop):
                 and not isinstance(total_count, bool)
                 and total_count >= 0
             )
+
+            def settled(name: str) -> bool:
+                """그 단계가 0 으로 끝났거나, 비0 이 **확정 거부만으로** 설명되는가.
+
+                뒤쪽은 "처리 완료"가 아니라 "다시 읽어도 달라질 것이 없다"는 뜻이다 — 일시·미지
+                실패가 하나라도 섞였으면 거짓이다.
+                """
+                rejected, unresolved = rejections.get(name, ((), 1))
+                return step_exits.get(name) == 0 or (bool(rejected) and unresolved == 0)
+
             downstream_durable = (
                 step_exits.get("ingest") == 0
-                and all(step_exits.get(name) == 0 for name in ("normalize", "segment"))
+                and all(settled(name) for name in ("normalize", "segment"))
                 and step_exits.get("load") in (0, 2)
-                and (
-                    step_exits.get("load") == 2
-                    or step_exits.get("assemble") == 0
-                )
+                and (step_exits.get("load") == 2 or settled("assemble"))
             )
             cursor_safe = outcome.get("cursor_safe") is True and downstream_durable
             state_safe = (
@@ -403,13 +471,18 @@ class DisclosureWorker(MinuteWorkerLoop):
                 # 내구화돼야 D-1을 다시 질의하지 않아도 된다. 그 전 실패는 다음 window가 같은
                 # 이틀 창을 다시 읽어 변경된 응답으로 복구한다. 시장 전체의 foreign malformed
                 # 행은 수집 스텝이 별도 진단으로 남기고 이 gate의 실패로 세지 않는다.
+                # 확정 거부 문서(ALPHA-1154)는 다시 읽어도 같은 결과라 이 gate 를 막지 않는다 —
+                # 소진된 것은 "D-1 을 다시 질의할 이유"이지 그 문서의 처리가 아니다.
                 self.prior_day_done = True
             if data_status != WINDOW_VALID:
                 # 조용한 성공 위장 금지(Rule 12) — 어느 칸이 왜 깨졌는지 남긴다.
                 logger.warning(
-                    "공시 window %s → %s (창 %s~%s · rcept %d건 · step_exits %s)",
+                    "공시 window %s → %s (창 %s~%s · rcept %d건 · step_exits %s"
+                    " · 확정 거부 %d건%s)",
                     claim["window_start"], data_status, query_from, query_to,
-                    len(rcept_nos), step_exits,
+                    len(rcept_nos), step_exits, len(rejected_documents),
+                    " — 커서는 전진, 재처리 대상은 manifest rejected_documents"
+                    if rejected_documents and cursor_safe else "",
                 )
             # INVALID 은 tick 에 실패로 실린다(WINDOW_FAILED) — `hard_failed` 로 판정하면
             # `skipped`(안 봤다)가 성공 tick 으로 보고된다. INCOMPLETE 는 산출이 있으니
@@ -456,6 +529,33 @@ def _observation_scope(after_rcept_no: str | None, outcome: dict) -> dict:
     }
 
 
+def _split_failures(stage: str, items: list[dict]) -> tuple[list[dict], int]:
+    """한 단계의 문서 단위 실패 → `(확정 거부 문서 목록, 확정 거부로 볼 수 없는 실패 수)`.
+
+    확정 거부는 사유 중 하나라도 `_CONFIRMED_REJECT_REASONS` 에 들고 **접수번호가 있는** 실패다
+    (게이트는 blocking 사유와 경고를 한 목록에 같이 싣는다 — 확정 사유가 하나면 나머지가 무엇이든
+    그 원문은 다시 읽어도 거부된다). 접수번호가 없으면 나중에 찾아 재처리할 수 없으므로 확정으로
+    접지 않는다. 같은 문서의 여러 실패(사업부문은 부문마다 한 건)는 한 항목으로 합친다.
+    """
+    rejected: dict[str, dict] = {}
+    unresolved = 0
+    for item in items:
+        reasons = item.get("reasons") if isinstance(item, dict) else None
+        rcept_no = item.get("rcept_no") if isinstance(item, dict) else None
+        if (not isinstance(reasons, list) or not isinstance(rcept_no, str) or not rcept_no
+                or not _CONFIRMED_REJECT_REASONS.intersection(
+                    reason for reason in reasons if isinstance(reason, str))):
+            unresolved += 1
+            continue
+        entry = rejected.setdefault(rcept_no, {"stage": stage, "rcept_no": rcept_no,
+                                               "reasons": []})
+        entry["reasons"] = sorted({*entry["reasons"], *(str(reason) for reason in reasons)})
+        for location in ("document_raw_path", "document_id", "fact_id"):
+            if item.get(location):
+                entry.setdefault(location, item[location])
+    return [rejected[key] for key in sorted(rejected)], unresolved
+
+
 def _classify(
     raw_status: str, step_exits: dict[str, int], rcept_nos: tuple[str, ...]
 ) -> str:
@@ -466,7 +566,8 @@ def _classify(
       것을 "0건 관측"으로 접으면 하루가 통째로 정상 빈 날이 된다(`_NOT_OBSERVED_STATUSES`).
     - 수집은 됐는데 어느 칸이든 비0(수집 `partial` 포함) → **INCOMPLETE**. "그 폴링의 산출이
       온전치 않다"는 뜻이고 소스 장애가 아니다 — PR A 가 INCOMPLETE 를 실패 unit 으로 세지
-      않는 이유가 이것이다(세면 QC 가 소스 장애로 오독한다).
+      않는 이유가 이것이다(세면 QC 가 소스 장애로 오독한다). **확정 거부 문서만 있는 창도
+      여기다**(ALPHA-1154) — 커서는 나아가도 그 창은 전건 처리된 것이 아니다.
     - 관측 0건 → **VALID_EMPTY**. manifest가 선언한 observation_scope 안에 우리 공시가 없는
       것은 정상이다. 증분 scope를 날짜창 전체의 무공시로 해석하면 안 된다.
     - 그 밖 → **VALID**.

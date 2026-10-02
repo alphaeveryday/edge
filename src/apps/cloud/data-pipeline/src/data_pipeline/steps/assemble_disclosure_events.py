@@ -137,8 +137,26 @@ def to_canonical_event(fact: dict) -> dict:
     }
 
 
-def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
-    """새 supply fact의 assertion→event→evidence를 적재하고 공용 thread에 연결한다."""
+def _skip_reasons(fact: dict) -> list[str]:
+    """조립이 건너뛴 fact 의 사유 — 필수 항목이 실제로 비었을 때만 그 이름을 댄다.
+
+    `to_canonical_event` 의 `ValueError` 는 필수 항목 결손 말고도 난다(이벤트 유형 미등록 등).
+    그건 문서가 아니라 설정의 문제라 문서 단위 거부로 적지 않는다.
+    """
+    reasons = [reason for column, reason in (
+        ("supplier_instrument_id", "missing_supplier_instrument"),
+        ("contract_object_concept_id", "missing_contract_object"),
+    ) if not fact.get(column)]
+    return reasons or ["event_build_error"]
+
+
+def persist_facts(conn, facts: list[dict],
+                  skipped_out: list[dict] | None = None) -> dict[str, int]:
+    """새 supply fact의 assertion→event→evidence를 적재하고 공용 thread에 연결한다.
+
+    `skipped_out` 을 주면 건너뛴 fact 를 접수번호·fact·사유와 함께 담는다(ALPHA-1154) —
+    건수만으로는 어느 공시가 이벤트가 되지 못했는지 나중에 찾을 수 없다.
+    """
     events = []
     skipped_required = 0
     for fact in facts:
@@ -146,6 +164,13 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
             events.append(to_canonical_event(fact))
         except ValueError:
             skipped_required += 1
+            if skipped_out is not None:
+                skipped_out.append({
+                    "rcept_no": fact.get("rcept_no"), "fact_id": fact.get("fact_id"),
+                    "document_id": fact.get("document_id"),
+                    "report_date": _date_text(fact.get("report_date")),
+                    "reasons": _skip_reasons(fact),
+                })
     if not events:
         return {"created": 0, "already": 0, "rethreaded": 0, "unknown_thread": 0,
                 "skipped_required": skipped_required}
@@ -279,18 +304,26 @@ def persist_facts(conn, facts: list[dict]) -> dict[str, int]:
 
 
 def run(storage: Storage, run_id: str, *, db: DbConfig,
-        from_date: str | None = None, to_date: str | None = None) -> int:
-    """기간 내 typed supply facts를 조립한다. 기간 미지정은 전체 보관분이다."""
+        from_date: str | None = None, to_date: str | None = None,
+        report: dict | None = None) -> int:
+    """기간 내 typed supply facts를 조립한다. 기간 미지정은 전체 보관분이다.
+
+    `report` 를 주면 quality_log 에 쓴 내용을 거기 담는다 — **로그 기록이 성공했을 때만**
+    (ALPHA-1154). 종료 코드 1 은 조립 예외·로그 유실·필수 항목 결손을 한 값으로 접어서,
+    커서를 막을지 정하는 호출자(1분 레인)가 셋을 가를 수 없다. 비어 돌아온 `report` 는
+    "근거가 남지 않았다"이므로 호출자는 종전처럼 실패로 본다.
+    """
     started_at = datetime.now(timezone.utc)
     facts_read = 0
     result = {"created": 0, "already": 0, "rethreaded": 0, "unknown_thread": 0,
               "skipped_required": 0}
     failures = []
+    skipped_facts: list[dict] = []
     try:
         with connect(db) as conn:
             facts = fetch_facts(conn, from_date=from_date, to_date=to_date)
             facts_read = len(facts)
-            result = persist_facts(conn, facts)
+            result = persist_facts(conn, facts, skipped_facts)
     except Exception as exc:
         logger.exception("DART 공시 이벤트 조립 실패(롤백)")
         failures.append({"reason": "assembly_error", "error": str(exc)})
@@ -301,7 +334,8 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         "started_at": started_at.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date, "facts_read": facts_read,
-        **result, "failures": failures, "exit_code": exit_code,
+        **result, "skipped_facts": skipped_facts,
+        "failures": failures, "exit_code": exit_code,
         "ops": {"records_out": result["created"] + result["already"],
                 "failed_records": len(failures) + result["skipped_required"]},
     }
@@ -312,5 +346,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
         )
     except Exception:
         logger.exception("DART 공시 이벤트 조립 로그 기록 실패")
-        exit_code = 1
+        return 1
+    if report is not None:
+        report.update(log)
     return exit_code
