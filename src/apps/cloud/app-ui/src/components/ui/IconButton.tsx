@@ -35,7 +35,6 @@ interface Props {
   icon: IconName;
   size?: number;
   circled?: boolean;
-  floating?: boolean;
   fab?: boolean;
   soft?: boolean;
   color?: string;
@@ -43,9 +42,9 @@ interface Props {
   onPress?: () => void;
 }
 
-export function IconButton({ icon, size = 38, circled, floating, fab, soft, color = colors.text, badge, onPress }: Props) {
+export function IconButton({ icon, size = 38, circled, fab, soft, color = colors.text, badge, onPress }: Props) {
   const c = fab ? colors.white : color;
-  const bg = fab ? colors.text : floating ? 'rgba(242,244,246,0.94)' : soft ? colors.surface : circled ? colors.white : 'transparent';
+  const bg = fab ? colors.text : soft ? colors.surface : circled ? colors.white : 'transparent';
   return (
     <Pressable
       onPress={onPress}
@@ -56,7 +55,6 @@ export function IconButton({ icon, size = 38, circled, floating, fab, soft, colo
         styles.btn,
         { width: size, height: size, backgroundColor: bg, borderWidth: circled ? 1 : 0 },
         fab && styles.fabShadow,
-        floating && styles.floatShadow,
         pressed && { opacity: 0.7 },
       ]}
     >
@@ -73,7 +71,6 @@ export function IconButton({ icon, size = 38, circled, floating, fab, soft, colo
 const styles = StyleSheet.create({
   btn: { borderRadius: radius.pill, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   fabShadow: shadow.fab,
-  floatShadow: shadow.floating,
   badge: { position: 'absolute', top: -2, right: -2, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: radius.pill, backgroundColor: colors.up, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center' },
   badgeText: { fontFamily: fam.extrabold, fontSize: 10.5, color: colors.white },
 });

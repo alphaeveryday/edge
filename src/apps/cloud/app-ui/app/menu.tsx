@@ -24,10 +24,10 @@ export default function Menu() {
   const go = (href: string) => { router.back(); setTimeout(() => router.push(href as never), 0); };
   return (
     <View style={styles.root}>
-      <View style={[styles.topBar, { top: top + 6 }]}>
-        <IconButton icon="search" size={34} floating onPress={() => go('/search')} />
-        <IconButton icon="bell" size={34} floating badge={unread || undefined} onPress={() => go('/notifications')} />
-        <IconButton icon="close" size={34} floating onPress={() => router.back()} />
+      <View style={[styles.topBar, { paddingTop: top + 6, height: top + 54 }]}>
+        <IconButton icon="search" size={34} onPress={() => go('/search')} />
+        <IconButton icon="bell" size={34} badge={unread || undefined} onPress={() => go('/notifications')} />
+        <IconButton icon="close" size={34} onPress={() => router.back()} />
       </View>
       <PageScroll contentContainerStyle={{ paddingTop: top + 54, paddingHorizontal: 16, paddingBottom: 30 }} showsVerticalScrollIndicator={false}>
         {loggedIn && me ? (
@@ -61,7 +61,7 @@ export default function Menu() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
-  topBar: { position: 'absolute', right: 16, zIndex: 30, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  topBar: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, flexDirection: 'row', justifyContent: 'flex-end', gap: 8, paddingRight: 16, backgroundColor: colors.white },
   me: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: radius.card, backgroundColor: colors.surface },
   meName: { flex: 1, fontFamily: fam.extrabold, fontSize: 16, color: colors.text, letterSpacing: -0.3 },
   meSub: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
