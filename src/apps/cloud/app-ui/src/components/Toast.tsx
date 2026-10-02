@@ -1,5 +1,5 @@
-import { Fragment } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Fragment, useEffect, useMemo, useRef } from 'react';
+import { Animated, PanResponder, Platform, StyleSheet, Text, View } from 'react-native';
 import { FullWindowOverlay } from 'react-native-screens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -13,12 +13,26 @@ const Layer = Platform.OS === 'ios' ? FullWindowOverlay : Fragment;
 export function Toast() {
   const text = useToast((s) => s.text);
   const kind = useToast((s) => s.kind);
+  const hide = useToast((s) => s.hide);
   const { top } = useSafeAreaInsets();
+  const y = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (text) y.setValue(0);
+  }, [text, y]);
+  // 위로 밀어 닫기
+  const pan = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => g.dy < -4,
+    onPanResponderMove: (_, g) => y.setValue(Math.min(0, g.dy)),
+    onPanResponderRelease: (_, g) => {
+      if (g.dy < -24 || g.vy < -0.5) hide();
+      else Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    },
+  }), [y, hide]);
   if (!text) return null;
   const error = kind === 'error';
   return (
     <Layer>
-      <View style={[styles.root, { top: top + 8 }]} pointerEvents="none">
+      <Animated.View {...pan.panHandlers} style={[styles.root, { top: top + 8, transform: [{ translateY: y }] }]}>
         <View style={[styles.icon, { backgroundColor: error ? colors.up : colors.success }]}>
           <Svg width={13} height={13} viewBox="0 0 14 14">
             {error ? (
@@ -29,7 +43,7 @@ export function Toast() {
           </Svg>
         </View>
         <Text style={styles.text}>{text}</Text>
-      </View>
+      </Animated.View>
     </Layer>
   );
 }
