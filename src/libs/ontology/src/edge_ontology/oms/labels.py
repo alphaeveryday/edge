@@ -16,7 +16,7 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import Mapping, NamedTuple
 
-from ._resource import load_yaml_resource
+from .loader import load_yaml_resource
 
 _GENERIC_LABEL = "비슷한 유형"
 
@@ -28,7 +28,7 @@ class EventTypeLabel(NamedTuple):
 
 @lru_cache(maxsize=1)
 def _payload() -> tuple[Mapping[str, str], Mapping[str, str]]:
-    payload = load_yaml_resource("labels", "event_type_labels_ko.yaml")
+    payload = load_yaml_resource("metadata/value_types", "event_type_labels_ko.yaml")
     types = payload.get("types") or {}
     families = payload.get("families") or {}
     if not isinstance(types, dict) or not isinstance(families, dict):

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from ..attribute.model import Attribute
+from ..properties.model import Attribute
 
 
 @dataclass(frozen=True)

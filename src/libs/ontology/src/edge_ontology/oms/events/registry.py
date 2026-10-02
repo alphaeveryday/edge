@@ -15,12 +15,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .._resource import load_yaml_resource
-from ..attribute.common import load_common_attributes
-from ..attribute.model import SECTIONS, parse_section
-from ..constants import DEFAULT_VERSION, PROCESS_DIR
-from ..relation import load_relations
-from ..relation.slots import SLOT_VALUES, load_argument_slots, load_known_collisions
+from ..loader import load_yaml_resource
+from ..properties.common import load_common_attributes
+from ..properties.model import SECTIONS, parse_section
+from ...constants import DEFAULT_VERSION, THREAD_DIR
+from ..roles import load_relations
+from ..roles.slots import SLOT_VALUES, load_argument_slots, load_known_collisions
 from .lifecycle import load_lifecycle_models, stage_sequence
 from .model import ProcessRegistry, ProcessType
 from .types import load_type_definitions
@@ -148,7 +148,7 @@ def load_process_registry(types_dir: Path | str | None = None,
     """
     definitions = load_type_definitions(types_dir)
     lifecycle = load_lifecycle_models()
-    contract = load_yaml_resource(PROCESS_DIR, THREAD_CONTRACT_RESOURCE)
+    contract = load_yaml_resource(THREAD_DIR, THREAD_CONTRACT_RESOURCE)
     contract_types = contract.get("types") or {}
     argument_slots = load_argument_slots(slots_path)
 

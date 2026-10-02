@@ -15,8 +15,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .._resource import load_yaml_resource
-from ..constants import RELATION_DIR
+from ..loader import load_yaml_resource
+from ...constants import RELATION_DIR
 from ..entity.authority import REGISTRY_SECTIONS, load_authority_registry, normalize_name
 from ..entity.kinds import load_entity_kinds
 from .model import MINT, NONE, REGISTRY, SCHEMES, Relation, RelationVocabulary

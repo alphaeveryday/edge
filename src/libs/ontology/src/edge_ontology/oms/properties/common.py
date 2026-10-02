@@ -10,8 +10,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from .._resource import load_yaml_resource
-from ..constants import ATTRIBUTE_DIR
+from ..loader import load_yaml_resource
+from ...constants import ATTRIBUTE_DIR
 from .model import Attribute, parse_section
 
 COMMON_ATTRIBUTES_RESOURCE = "common_features_v0_1.yaml"

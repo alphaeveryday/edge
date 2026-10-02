@@ -14,8 +14,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from .._resource import load_yaml_resource
-from ..constants import RELATION_DIR
+from ..loader import load_yaml_resource
+from ...constants import ARGUMENT_DIR
 
 ARGUMENT_SLOTS_RESOURCE = "argument_slots_v0_1.yaml"
 
@@ -38,7 +38,7 @@ class KnownCollision:
 
 
 def _document(path: Path | str | None) -> Mapping[str, object]:
-    return load_yaml_resource(RELATION_DIR, ARGUMENT_SLOTS_RESOURCE, override=path)
+    return load_yaml_resource(ARGUMENT_DIR, ARGUMENT_SLOTS_RESOURCE, override=path)
 
 
 @lru_cache(maxsize=1)

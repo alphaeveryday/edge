@@ -13,10 +13,10 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from .._resource import yaml_mapping
-from ..constants import PROCESS_DIR, RESOURCE_PACKAGE
+from ..loader import yaml_mapping
+from ...constants import PROCESS_DIR, RESOURCE_PACKAGE
 
-TYPES_DIR = "types"
+TYPES_DIR = "event_types"
 
 
 def _iter_type_files(types_dir: Path | str | None) -> list[tuple[str, str]]:

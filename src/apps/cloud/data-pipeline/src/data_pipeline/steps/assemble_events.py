@@ -110,7 +110,7 @@ GATE_DOC_CLASSES = ("EVENT", "MARKET_COMMENTARY", "OPINION_OR_ANALYSIS", "PROMOT
 
 # event_argument.slot 은 LLM 이 아니라 온톨로지가 정한다(ALPHA-596) — (타입, 역할)만으로
 # 결정되므로 기사를 볼 필요가 없고, LLM 에 물으면 3값 중 무엇을 내도 범위검사를 통과해
-# 오류가 조용하다(AGENTS Rule 5). 어휘는 edge_ontology.relation.slots.SLOT_VALUES.
+# 오류가 조용하다(AGENTS Rule 5). 어휘는 edge_ontology.oms.roles.slots.SLOT_VALUES.
 
 # 추출 콜 confidence(H/M/L) → source_event.confidence_level CHECK 어휘 사상.
 _CONFIDENCE_LEVELS = {"H": "HIGH", "M": "MEDIUM", "L": "LOW"}

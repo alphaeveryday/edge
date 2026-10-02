@@ -5,8 +5,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .._resource import load_yaml_resource
-from ..constants import PROCESS_DIR
+from ..loader import load_yaml_resource
+from ...constants import PROCESS_DIR
 
 LIFECYCLE_RESOURCE = "lifecycle_models_v0_1.yaml"
 

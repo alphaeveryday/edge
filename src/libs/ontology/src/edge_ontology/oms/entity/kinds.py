@@ -15,8 +15,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from .._resource import load_yaml_resource
-from ..constants import ENTITY_DIR
+from ..loader import load_yaml_resource
+from ...constants import ENTITY_DIR
 
 ENTITY_KINDS_RESOURCE = "entity_kinds_v0_1.yaml"
 

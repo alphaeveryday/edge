@@ -16,8 +16,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from .._resource import load_yaml_resource
-from ..constants import ENTITY_DIR
+from ..loader import load_yaml_resource
+from ...constants import REFERENCE_DIR
 
 AUTHORITY_REGISTRY_RESOURCE = "authority_registry_v0_1.yaml"
 REGISTRY_SECTIONS = ("authorities", "courts", "central_banks", "institutions",
@@ -70,7 +70,7 @@ class AuthorityRegistry:
 @lru_cache(maxsize=1)
 def load_authority_registry(path: Path | str | None = None) -> AuthorityRegistry:
     """명부 적재 + 정합 검사(미지 절·중복 id·별칭 충돌·모호어 유입)."""
-    doc = load_yaml_resource(ENTITY_DIR, AUTHORITY_REGISTRY_RESOURCE, override=path)
+    doc = load_yaml_resource(REFERENCE_DIR, AUTHORITY_REGISTRY_RESOURCE, override=path)
     banned = {normalize_name(x) for x in
               (doc.get("meta", {}).get("matching", {}).get("ambiguous_rejected") or ())}
     entries: dict[str, AuthorityEntry] = {}

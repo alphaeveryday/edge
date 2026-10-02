@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .constants import RESOURCE_PACKAGE
+from ..constants import RESOURCE_PACKAGE
 
 
 def read_text_resource(*parts: str) -> str:
