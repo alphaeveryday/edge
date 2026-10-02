@@ -69,11 +69,14 @@ class _Conn:
     def __init__(self):
         self.statements: list[str] = []
         self.commits = 0
+        self.fail_commit = False
 
     def cursor(self):
         return _Cursor(self)
 
     def commit(self):
+        if self.fail_commit:
+            raise RuntimeError("의도된 커밋 실패")
         self.commits += 1
 
 
@@ -309,6 +312,48 @@ def test_뒤쪽_행의_열_수가_달라도_앞_묶음을_싣지_않는다(harne
 
     assert chunks == [] and conn.commits == 0
     assert "열 수" in _log(storage)["failures"][0]["error"]
+
+
+def test_머리행에_같은_종목_열이_둘이면_멈춘다(harness):
+    # WHY: 같은 종목 열이 둘이면 한 거래일에 같은 (종목, 거래일)이 두 번 올라간다. dry_run 은
+    #      최종 INSERT 를 하지 않아 통과시키고, 실제 적재는 그 묶음에서 죽는다 — 미리 거부한다.
+    storage, _conn, chunks = harness
+    _write_all(storage, ["2026-07-30"], header=["date", "A005930", "A005930", "A999999"])
+
+    assert _run(storage, dry_run=True) == 1
+
+    assert chunks == []
+    assert "같은 열" in _log(storage)["failures"][0]["error"]
+
+
+@pytest.mark.parametrize("dates,window", [
+    ([], {}),                                                    # 머리행뿐인 스냅샷
+    (["2026-07-30"], {"from_date": "2027-01-01", "to_date": "2027-12-31"}),   # 기간이 스냅샷 밖
+])
+def test_실을_거래일이_없으면_성공으로_끝나지_않는다(harness, dates, window):
+    # WHY: 빈 스냅샷이나 잘못 준 기간이 0행을 싣고 exit 0 으로 끝나면 "이력을 채웠다"고 읽힌다.
+    storage, _conn, chunks = harness
+    _write_all(storage, dates)
+
+    assert _run(storage, **window) == 1
+
+    assert chunks == []
+    assert _log(storage)["rows_read"] == 0
+
+
+def test_커밋에_실패한_묶음은_적재_건수에_넣지_않는다(harness):
+    # WHY: 로그의 created·records_out 은 "DB 에 남은 행"이어야 한다. 커밋 전에 세면 되감긴
+    #      묶음까지 적재된 것으로 보고된다.
+    storage, conn, chunks = harness
+    conn.fail_commit = True
+    _write_all(storage, ["2026-07-30"])
+
+    assert _run(storage) == 1
+
+    assert len(chunks) == 1                      # 반영은 시도했다
+    log = _log(storage)
+    assert log["created"] == 0 and log["chunks_done"] == 0
+    assert log["ops"]["records_out"] == 0
 
 
 def test_항목_파일이_없으면_멈춘다(harness):

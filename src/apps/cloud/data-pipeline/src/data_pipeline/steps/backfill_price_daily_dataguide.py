@@ -117,6 +117,9 @@ def _aligned_layout(blobs: dict[str, bytes]) -> list[str]:
     header, dates = layouts["close_price"]
     if header[:1] != ["date"]:
         raise ValueError("DataGuide 항목 파일에 date 열이 없다")
+    if len(set(header)) != len(header):
+        # 같은 종목 열이 둘이면 한 거래일에 같은 키가 두 번 올라가 INSERT 가 묶음째 죽는다.
+        raise ValueError("DataGuide 항목 파일 머리행에 같은 열이 두 번 있다")
     for column, (other_header, other_dates) in layouts.items():
         if other_header != header:
             raise ValueError(f"DataGuide 항목 파일의 열 구성이 서로 다르다: {column}")
@@ -325,14 +328,16 @@ def run(
                 def flush() -> None:
                     """쌓인 묶음을 반영하고 커밋한다."""
                     nonlocal chunk, chunk_dates, chunks_done
+                    counts = {}
                     if chunk:
                         counts = _apply_chunk(
                             cur, chunk, data_version=data_version, price_basis=price_basis,
                             dry_run=dry_run, storage=storage, run_id=run_id,
                         )
-                        for key, value in counts.items():
-                            totals[key] += value
                     conn.commit()
+                    # 커밋이 된 뒤에만 센다 — 커밋이 실패한 묶음까지 적재 건수에 들어가면 안 된다.
+                    for key, value in counts.items():
+                        totals[key] += value
                     chunks_done += 1
                     chunk, chunk_dates = [], 0
 
@@ -366,6 +371,9 @@ def run(
                     chunk_dates += 1
                     if chunk_dates >= _CHUNK_DATES:
                         flush()
+                if not dates_read:
+                    # 기간을 잘못 준 실행이 0행을 싣고 성공으로 끝나면 안 된다(Rule 12).
+                    raise ValueError(f"요청 기간에 거래일 행이 없다: {from_date}~{to_date}")
                 flush()
     except Exception as exc:
         # 앞서 커밋된 묶음은 남는다 — 같은 인자로 다시 돌리면 이어서 채운다(멱등).
