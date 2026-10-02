@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { colors, radius, shadow } from '@/theme/tokens';
 import { useBottomGap } from './BottomBar';
 
@@ -14,7 +14,7 @@ export function BottomSheet({ open, onClose, children, padded = true }: Props) {
   const gap = useBottomGap();
   return (
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.root}>
+      <KeyboardAvoidingView behavior="padding" style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} />
         <View style={[styles.sheet, { paddingBottom: gap }, padded && styles.padded]}>
           <View style={styles.handle} />
