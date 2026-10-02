@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { DailyAnalysis } from '@/api';
 import { BottomBar, Chevron, IconButton, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
@@ -8,6 +8,7 @@ import { VoteCard } from '@/features/community/VoteCard';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { useScrollFocus } from '@/lib/useScrollFocus';
+import { useSheetDrag } from '@/lib/useSheetDrag';
 import { Loading } from '@/components/state';
 import { colors, signal as SIG, radius, shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -36,6 +37,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
   const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
   const focus = useScrollFocus(axisOpen);
+  const drag = useSheetDrag(open, onClose);
   const [hint, setHint] = useState<string | null>(null);
   const goMetric = (axis: string) => {
     onClose();
@@ -45,8 +47,8 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={[styles.sheet, { marginTop: top + 46 }]}>
-          <View style={styles.head}>
+        <Animated.View style={[styles.sheet, { marginTop: top + 46 }, drag.style]}>
+          <View {...drag.handlers} style={styles.head}>
             <View style={styles.handle} />
             <View style={styles.headRow}>
               {/* ETF 이름을 누르면 상세의 오늘 움직임으로 */}
@@ -138,7 +140,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
             </BottomBar>
           )}
           <HintSheet hintKey={hint} onClose={() => setHint(null)} />
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );
