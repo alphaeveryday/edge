@@ -75,7 +75,7 @@ def _worker_with_fakes(monkeypatch, events):
     connection.execute.side_effect = execute
     monkeypatch.setattr(worker, 'connect_results', lambda *a, **k: connection)
     monkeypatch.setattr(worker, 'connect_sources', lambda *a, **k: (events.append('sources'), connection)[1])
-    for name in ['load_source', 'load_flow', 'load_prices', 'DatabaseTools']:
+    for name in ['load_source', 'load_flow', 'load_prices', 'load_research_observations', 'DatabaseTools']:
         monkeypatch.setattr(worker, name, Mock())
     monkeypatch.setattr(worker, 'execute_request', lambda **k: events.append('analysis'))
     monkeypatch.setattr(worker, 'Publisher', lambda *a: Mock())

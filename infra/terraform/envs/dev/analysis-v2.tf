@@ -25,6 +25,9 @@ module "analysis_v2" {
   api_image             = "${local.data_pipeline_ecr_repository_url}:analysis-v2-api-f447f10f0252c5d0a1d48f05aa913a532c80ba01"
   api_client_role_names = [element(split("/", module.app_api.task_role_arn), 1)]
 
+  # 분석 동시 3건. 연결 한도(V202610022100)와 슬롯을 읽는 워커 이미지가 dev 에 배포된 것을 확인한 뒤 올렸다(ALPHA-1157).
+  analysis_slots = 3
+
   outlook_etf_codes = local.outlook_etf_codes
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
   scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
