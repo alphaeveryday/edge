@@ -1,7 +1,7 @@
 """공시 1분 Worker 테스트 (ALPHA-875 PR B).
 
 루프 골격(fence·drain·lane·claim 경합)은 `test_price_worker`·`test_news_worker` 가 이미
-덮는다. 여기서는 **이 dataset 만 갖는 축**을 본다 — 넷 다 "틀려도 초록으로 보이는" 모양이라
+덮는다. 여기서는 **이 dataset 만 갖는 축**을 본다 — 전부 "틀려도 초록으로 보이는" 모양이라
 반례가 없으면 관측되지 않는다:
 
 1. 날짜창이 **세션 날짜(KST)** 에서 나오는가 — UTC 기본창이면 세션 날짜가 창 밖인데도
@@ -10,6 +10,8 @@
 3. 정제가 `raw/` 전량 스캔을 **안 하는가** — 하면 분 단위로 못 돌지만 기능은 정상으로 보인다.
 4. 같은 rcept_no 집합을 다시 봤을 때 세대가 유지되는가 — manifest 에 시각·attempt 가 섞이면
    조용히 매 tick 오른다.
+5. 다시 읽어도 같은 결과인 문서 거부가 커서를 막지 않되 VALID 로도 접히지 않는가(ALPHA-1154) —
+   막으면 하루가 전량 재조회·INCOMPLETE 로 잠기고, 접으면 처리 못 한 공시가 원장에서 사라진다.
 """
 
 from __future__ import annotations
