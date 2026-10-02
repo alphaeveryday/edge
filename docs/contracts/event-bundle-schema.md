@@ -130,6 +130,9 @@ v2에서 산출하지 않는 v1 설명 유형·확신도를 임의 생성하지 
 
 ### 검수콘솔 API의 계산 근거 전달
 
+금융사 전달 API의 `evidences`도 이 계약의 문서·계산 두 형상을 직렬화한다.
+문서는 뉴스 ID·툴 실행 ID·관련 항목 ID가 있을 때만 추가하며, 계산은 저장된 인자·전체 반환 객체와 수식·설명을 그대로 보낸다. 계산의 `published_at`은 `null`이고, 알 수 없는 `as_of`나 수식도 `null`을 유지한다. 실행 시각으로 대체하지 않는다.
+
 설명 조회 API는 `news_id`, `tool_run_id`, `item_ids`, `as_of`, `arguments`, `output`,
 `formula_latex`, `description`을 각각 `newsId`, `toolRunId`, `itemIds`, `asOf`,
 `arguments`, `output`, `formulaLatex`, `description`으로 전달한다. 입출력 JSON은
