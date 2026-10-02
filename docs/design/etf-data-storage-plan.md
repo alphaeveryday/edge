@@ -340,7 +340,7 @@ artifact 가 만료된 뒤 경로별로:
 | `macro_observations_as_of(T, series, n=21)` | 최근 n개 관측(관측일·`reference_period`·값·단위·수신·가시·근거 키) | 관측일마다 `available_at ≤ T` 판본 중 최신. 문서의 "최근 공개 2관측일"은 n=2, 툴 탐색 한도 21과 섞지 않는다 |
 | `financial_quarters_as_of(T, instrument_code)` | 분기별 EPS(해당 분기)·BPS(분기말, 보통주 기준 `bps`·통상 `bps_total_shares`·`bps_note`)·매출·영업이익과 각 유도 표시·접수번호·run | 누적값은 돌려주지 않는다. 기준(연결/별도)은 회사 단위로 고정 — T까지 연결이 한 번이라도 보이면 연결. **행 단위는 확정 보고서 판본이다**(`financial_report_version` — 회사·연도·보고기간·기준마다 `available_at ≤ T` 인 CONFIRMED 판본 중 가장 늦게 **받은** 것). 그 실행이 만든 지표만 값이 있고 빠진 지표는 NULL 이지 옛 실행의 값이 아니다 — 지표가 0개인 정정 판본도 한 줄이라 옛 값이 최신처럼 남지 않는다(리뷰 5~9차 잔여 ⑥ 해소). UNCONFIRMED 판본(HTTP 오류·파손·다른 보고서 응답)은 선택에 끼지 않아 일시 실패가 확정값을 무효화하지 않고, 확정 판본보다 늦은 실패는 `latest_unconfirmed_at` 으로만 드러난다. 늦게 끝난 옛 실행은 수신시각이 앞서 최신 확정을 덮지 못한다. 같은 접수번호의 재수집은 모두 원 공개일부터 보이고(결정 ①) 그중 가장 늦게 받은 것이 이긴다; 새 접수번호(정정)는 그 접수일부터만 보인다. 확정이 한 번도 없는 보고서는 가장 늦은 UNCONFIRMED 시도가 값 NULL·`version_status=UNCONFIRMED` 행으로 나온다(어댑터 gap `REPORT_UNCONFIRMED`) — 소비자가 실패한 확인 시도를 본다. 진행 중·중단된 실행은 판본이 없다(아무것도 바꾸지 않는다). 연결/별도 기준은 **지표가 있는 확정 연결 판본 이력**으로 정한다 — 최신 연결 판본이 비어도 별도 값으로 갈아타지 않는다. 파손 행이 섞인 응답(malformed)·정제가 거부한 분모 응답은 확인된 응답이 아니다(판본 UNCONFIRMED / `shares=error`). Q4 행은 사업보고서 판본의 것이다. 주식수 표는 한 표여야 한다 — 같은 종류 행이 둘 이상이고 서로 다르거나, 종류별 행의 접수번호·기준일이 다르거나, 기준일이 보고기간 말과 다르거나, 수가 정수가 아니면 거부. `version_rejected` 에 그 판본이 못 만든 지표와 사유가 있다. `bps_note`: 정제가 `bps_total_shares` 근거 줄에 남긴 판정 `common_bps`(`computed`·`bps_blocked_preferred_shares`·`bps_share_rows_unreadable`·`bps_input_missing` — 파손이 정책보다 먼저)를 조회가 그대로 읽는다: `PREFERRED_SHARES_PRESENT`(정책 차단, §10.9 ①) / `COMMON_SHARE_BPS_UNAVAILABLE`(주식수 파손) / `BPS_ABSENT_IN_LATEST_VERSION`(분모 응답은 정상(ok·013)인데 BPS 없음 — 확정된 부재) / `BPS_UNCONFIRMED`(분모 응답 실패 — 확정 못 함, 재수집 대상) |
 | `sector_classification_as_of(T, codes[])` | 종목별 최신 스냅샷의 대·중·소 코드·이름 | `found=false`(그 시점 스냅샷에 없음) ≠ 코드 NULL(원천 `0000`) |
-| `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다. **한계**: holdings 표는 ETF·날짜당 한 판본(기존 적재가 덮어쓴다)이라 정정 스냅샷 뒤엔 그 날짜의 이전 구성을 복원하지 못한다(정정 전 T 는 그 날짜를 건너뛴다) — 구성종목 판본 이력은 holdings 레인 소관 |
+| `etf_constituent_source_coverage(etf, T)` | T에 유효한 구성종목 스냅샷(기존 `etf_holding_snapshot`+status good 판정)의 종목별 업종·재무 확보 여부 | 스냅샷이 없으면 0행 — 현재 구성으로 대신하지 않는다. **한계**: holdings 표는 ETF·날짜당 한 판본(기존 적재가 덮어쓴다)이라 정정 스냅샷 뒤엔 그 날짜의 이전 구성을 복원하지 못한다(정정 전 T 는 그 날짜를 건너뛴다) — 구성종목 판본 이력은 holdings 레인 소관. 0행의 사유를 구분하지 못하고 v2 런타임과 스냅샷 선택 규칙이 달라 **v2 실행 가능 보장이 아니다**(§10.11) |
 
 예제(로컬 PostgreSQL 검증, `tests/e2e/test_source_observations_pg.py`):
 
@@ -399,7 +399,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
   근거가 없다. FRESH/STALE 판정은 공급자 캘린더를 둔 뒤 ADR-0043 Dataset Contract로 붙인다. `MACRO_COLLECTION`은
   미계측(taskdef 없음)이라 수집 단계의 원장 증거는 없고 적재 단계만 있다 — 함수도 적재 작업만 본다.
 - 재무 판본 상태: `financial_quarters_as_of` 가 행마다 권위 판본(run·수신시각)과 `latest_unconfirmed_at` 을 준다 — "확정값이 있는데 최근 확인이 실패했다"와 "확인했는데 지표가 없다"(NULL 행)와 "아직 확인 안 됨"(판본 없음)이 갈린다.
-- 재무 완전성: `etf_constituent_source_coverage(etf, T)`의 `eps_quarters`<4·`latest_bps_period` 결측이 종목별 부족이다.
+- 재무 완전성: `etf_constituent_source_coverage(etf, T)`의 `eps_quarters`<4·`latest_bps_period` 결측이 종목별 부족이다. 이 함수가 고른 구성종목은 v2 런타임이 고르는 것과 다를 수 있다(§10.11).
 - 업종 완전성: 같은 함수의 `has_sector_classification=false`.
 
 ### 10.7 소비 쪽과 맞출 것 (v2 fixture 계약과의 차이)
@@ -508,3 +508,46 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 
 요약: 과거 평가는 **재무만** 계약 안에서 과거 가시성이 복원되고, 매크로·업종은 수집 시작 이후부터다. "당시 이용 가능한 입력" 계약을
 유지하고 "현재 지식으로 과거 평가" 모드는 **만들지 않는다**(2026-09-30 결정) — 2026-09 평가에서 매크로·업종이 비는 것은 결손으로 그대로 드러난다.
+
+### 10.11 구성종목 스냅샷 선택 — 결정·범위·한계·합의 필요 (ALPHA-1139)
+
+2026-10-02 첫 소량 실행에서 `etf_constituent_source_coverage('0210A0', 2026-08-14 00:00 KST)` 가 0행이었다(재무는 S3 스냅샷 08-13 으로 수집됨). 아래는 그 조사 결과를 상태별로 나눈 것이다. **커버리지 함수의 결과는 v2 실행 가능 여부를 보장하지 않는다** — 두 쪽이 스냅샷을 고르는 규칙이 다르다(아래 "팀 합의 필요").
+
+| 구분 | 내용 |
+|---|---|
+| 결정 완료(2026-10-02) | 과거 holdings 를 DB 에 **추가 적재하지 않는다.** S3 canonical 에만 있는 07-15~08-27 스냅샷은 그대로 둔다 |
+| 현재 데이터 범위(dev, 2026-10-02 15:40 조회) | DB `etf_holding_snapshot_status` 는 25거래일이다. 정기 적재분은 **08-28 부터**(보통 거래일 당일 15:41 KST 쯤 수집). 그 밖에 재수집된 날짜가 있다 — 08-04·08-10·09-04·09-08·09-09·09-17·09-28 은 S3 canonical 자체가 09-29 에 다시 수집돼 `available_at` 이 09-29 이고, 09-07 은 09-10, 09-23 은 09-24 다. S3 canonical 은 07-15 부터 있다 |
+| 유지할 동작 | 기준시각에 볼 수 있는 스냅샷이 없으면 **최신 구성으로 대신하지 않는다.** 커버리지 함수는 0행, v2 는 `No holdings snapshot available at analysis time` 으로 실패, 재무 수집은 raw manifest 에 `no_holdings_snapshot` 을 남긴다 |
+| 남은 한계(미해결, 수정 보류) | 커버리지 함수의 0행은 사유를 구분하지 못한다: ① 모르는 ETF ② 기준시각에 볼 수 있는 스냅샷 없음 ③ 유효 구성종목이 없는 스냅샷(유효 행이 입력의 절반 미만이면 good 이 아니라 건너뛴다). 지금은 점검 스크립트(`analysis-engine-v2/scripts/inspect_source_readiness.sql`)만 이 함수를 부르고 운영 런타임은 쓰지 않아 수정을 보류했다. 해결된 것이 아니다 |
+| 팀 합의 필요(미결) | 커버리지 함수와 v2 런타임의 스냅샷 선택 계약이 다르다(아래 표). 어느 쪽을 정본으로 할지는 분석 담당과 합의한다. 합의 전에는 어느 쪽 코드도 바꾸지 않는다 |
+
+**선택 규칙의 차이(코드 기준):**
+
+| | 재무 수집 `constituents_between` | 커버리지 함수 | v2 런타임 `sources/database.py` + `fixture_data/common.holdings` |
+|---|---|---|---|
+| 원천 | S3 canonical `etf_holdings/as_of_date=` | DB `etf_holding_snapshot(_status)` | 같은 DB |
+| 시점 조건 | 없음(창 시작일 이하 최신 + 창 안 전부의 합집합) | 행 `available_at ≤ T` | 행 `available_at ≤ T` **그리고** status `loaded_at ≤ T` |
+| 품질 조건 | 없음 | `2 × valid_row_count ≥ input_row_count` 인 스냅샷만. 아니면 더 옛 스냅샷으로 내려간다 | 임계 없음. 보이는 것 중 가장 늦은 `as_of_date` 를 쓰고, 불완전하면 `coverage=partial`(완전성을 요구하는 툴은 실패) |
+| ETF 식별 | 설정의 ETF 코드 | `instrument.ticker`, 시장 XKRX·XKOS | `ticker` + XKRX + `instrument_type='ETF'` 가 정확히 1건, 아니면 실패 |
+
+- `available_at` 은 S3 canonical 행의 `fetched_at`(수집 시각)이다. `loaded_at` 은 `load-etf-holdings` 가 status 행을 쓴 시각이다. 로더는 같은 (ETF, 날짜)를 다시 적재할 때마다 `loaded_at = now()` 로 덮어쓴다(값이 같아도).
+- **실측(dev 25거래일 전부):** `loaded_at − available_at` 은 159~675초다. 차이가 0인 날은 없다. good 조건에 걸린 스냅샷은 없었다(품질 조건 차이는 코드상 차이이고 데이터에서 관측되지는 않았다).
+
+**시간 경계 예시:**
+
+| # | 상황 | 기준시각 T | 커버리지 함수가 고르는 스냅샷 | v2 가 고르는 스냅샷 | 근거 |
+|---|---|---|---|---|---|
+| 1 | 매 거래일의 수집~적재 사이 | 2026-10-01 15:45 KST | 10-01(`available_at` 15:41:25) | 09-30(10-01 은 `loaded_at` 15:52:00 이라 아직 안 보임) | 실측. 매일 3~11분 |
+| 2 | 적재 지연·실패 뒤 복구 | D일 15:41 수집, 적재는 D+1일 10:00 에 복구 → T = D일 18:00 | D | D−1 | 코드. 창이 복구 시각까지 늘어난다(관측 사례 없음) |
+| 3 | 같은 스냅샷 재적재 | 10-01 스냅샷을 10-03 10:00 에 다시 적재 → T = 10-02 09:00 | 10-01(`available_at` 그대로) | 09-30(`loaded_at` 이 10-03 으로 바뀌어 T 뒤가 됨) | 코드. **재적재가 과거 T 의 v2 결과를 바꾼다**(관측 사례 없음) |
+| 4 | 유효 행이 입력의 절반 미만인 스냅샷 | 그 스냅샷이 보이는 T | 건너뛰고 그 전 스냅샷 | 그 스냅샷(`partial` 또는 실패) | 코드(관측 사례 없음) |
+| 5 | 늦게 수집된 날짜 | 09-17 스냅샷(`available_at` 09-29) → T = 09-18 10:00 | 09-16 | 09-16 | 실측. 두 쪽이 같다 — 거래일이 아니라 수집 시각이 가시성을 정한다 |
+
+**분석 담당에게 물을 것:**
+
+1. v2 가 `loaded_at ≤ T` 를 두는 의도는 "그 시각에 DB 에서 실제로 읽을 수 있었던 것만 쓴다"인가. 그렇다면 예시 3(재적재가 과거 T 의 결과를 바꿈)은 의도한 동작인가, 아니면 처음 적재한 시각을 지켜야 하는가.
+2. 시점 조건의 정본을 어느 쪽으로 할 것인가 — (가) 커버리지 함수에 `loaded_at ≤ T` 를 더한다 (나) v2 에서 `loaded_at` 조건을 뺀다 (다) 차이를 두고 커버리지 함수를 "수집 시각 기준 참고값"으로 명시한다.
+3. 품질 조건은 어느 쪽인가 — 절반 미만이면 옛 스냅샷으로 내려갈지(커버리지), 최신을 쓰고 `partial` 로 드러낼지(v2).
+4. 커버리지 0행의 사유 구분(모르는 ETF / 스냅샷 없음 / 유효 구성 없음)이 필요한 소비자가 점검 스크립트 말고 있는가. 있다면 반환 모양을 바꿀지, 모르는 ETF 만 오류로 올릴지.
+
+결정이 나면 함수 교체는 마이그레이션 하나로 묶는다(1·2·4 가 같은 함수다). 이 합의와 무관하게 수집·원장 연결(ALPHA-1140)은 진행할 수 있다. 수집 대상은 창 시작일 이하 최신 S3 스냅샷과 창 안 스냅샷의 합집합이라, 정기 14일 창에서는 소비가 고르는 스냅샷이 대개 그 안에 든다. 항상은 아니다 — 소비가 창 시작일보다 오래된 스냅샷을 보는 동안, 그 사이 구성에서 빠진 종목이 그날 낸 정기보고서는 그날 run 에서 받지 않는다(조건이 겹쳐야 하고 관측 사례는 없다).
