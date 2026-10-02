@@ -1,6 +1,8 @@
 package com.edge.tenantsync.contract;
 
 import com.edge.tenantsync.dto.BundleEntry;
+import com.edge.tenantsync.dto.BundleEvidence;
+import com.edge.tenantsync.dto.CalculationEvidenceItem;
 import com.edge.tenantsync.dto.EventBundle;
 import com.edge.tenantsync.dto.EvidenceItem;
 import com.edge.tenantsync.dto.ExplanationResult;
@@ -34,6 +36,72 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EventBundleContractTest {
 
 	private final JsonSchema schema = loadSchema();
+
+	@Test
+	void 뉴스와_계산의_실제_DTO를_번들에_섞어도_감사값이_보존된다() {
+		ObjectMapper mapper = new ObjectMapper();
+		var arguments = mapper.readTree("{\"investor\":\"foreign\",\"days\":5}");
+		var output = mapper.readTree("""
+				{"tool_run_id":"calc-1","result":{"amount_krw":9007199254740993,
+				 "ratio":"1.50","series":{"columns":["day","value"],"rows":[["2026-09-30",18]]}}}
+				""");
+		var calculation = new CalculationEvidenceItem("외국인 순매수", "investor_flow_daily",
+				"2026-09-30", "calc-1", List.of("item-1", "item-2"), arguments, output,
+				"\\sum_{d=1}^{5} x_d", "선택한 거래일의 외국인 순매수 금액을 합산합니다.");
+		var news = new EvidenceItem("NEWS", "기사 제목", "bigkinds", "2026-09-30T00:00:00Z",
+				null, "news-1", "news-run-1", List.of("item-1"));
+		String json = serializeEvidence(List.of(news, calculation));
+		assertThat(schema.validate(json, InputFormat.JSON)).isEmpty();
+		var items = mapper.readTree(json).path("entries").get(0).path("evidences");
+		assertThat(items.get(0).path("news_id").asText()).isEqualTo("news-1");
+		assertThat(items.get(0).path("tool_run_id").asText()).isEqualTo("news-run-1");
+		assertThat(items.get(0).path("item_ids")).isEqualTo(mapper.readTree("[\"item-1\"]"));
+		assertThat(items.get(0).has("arguments")).isFalse();
+		var actual = items.get(1);
+		assertThat(actual.path("kind").asText()).isEqualTo("CALCULATION");
+		assertThat(actual.path("tool_run_id").asText()).isEqualTo("calc-1");
+		assertThat(actual.path("arguments")).isEqualTo(arguments);
+		assertThat(actual.path("output")).isEqualTo(output);
+		assertThat(actual.path("formula_latex").asText()).isEqualTo(calculation.formulaLatex());
+		assertThat(actual.path("item_ids").size()).isEqualTo(2);
+		assertThat(actual.path("as_of").asText()).isEqualTo("2026-09-30");
+		assertThat(actual.path("published_at").isNull()).isTrue();
+		assertThat(actual.has("news_id")).isFalse();
+	}
+
+	@Test
+	void 관측시점과_수식을_모르면_필수_null_필드를_그대로_전달한다() {
+		ObjectMapper mapper = new ObjectMapper();
+		var calculation = new CalculationEvidenceItem("수급", "investor_flow_daily", null,
+				"calc-1", List.of("item-1"), mapper.readTree("{}"), mapper.readTree("{}"),
+				null, "외국인 순매수 금액입니다.");
+		String json = serializeEvidence(List.of(calculation));
+		assertThat(schema.validate(json, InputFormat.JSON)).isEmpty();
+		var item = mapper.readTree(json).path("entries").get(0).path("evidences").get(0);
+		for (String field : List.of("published_at", "as_of", "formula_latex")) {
+			assertThat(item.has(field)).as(field).isTrue();
+			assertThat(item.path(field).isNull()).as(field).isTrue();
+		}
+	}
+
+	@Test
+	void 기존_문서는_추가_감사필드를_null로_보내지_않는다() {
+		String json = serializeEvidence(List.of(new EvidenceItem("DISCLOSURE", null, "DART", null, null)));
+		assertThat(schema.validate(json, InputFormat.JSON)).isEmpty();
+		var item = new ObjectMapper().readTree(json).path("entries").get(0).path("evidences").get(0);
+		assertThat(item.size()).isEqualTo(5);
+		for (String field : List.of("news_id", "tool_run_id", "item_ids")) {
+			assertThat(item.has(field)).as(field).isFalse();
+		}
+	}
+
+	private static String serializeEvidence(List<? extends BundleEvidence> evidence) {
+		var result = new ExplanationResult("r1", "i1", "069500", "KODEX 200",
+				LocalDate.parse("2026-09-30"), Instant.parse("2026-09-30T01:00:00Z"),
+				"MIXED", "요약", null, null, null);
+		return new ObjectMapper().writeValueAsString(EventBundle.of(1L, List.of(
+				BundleEntry.newResult(1, result, new ExplanationRun("run1", "v1"), List.of(), evidence))));
+	}
 
 	private static JsonSchema loadSchema() {
 		JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
