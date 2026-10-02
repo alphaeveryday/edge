@@ -9,6 +9,7 @@ from data_pipeline.lake import (
     LocalStorage,
     S3Storage,
     canonical_etf_holdings_partition,
+    draft_dataguide_price_item_prefix,
     canonical_run_manifest_key,
     feature_run_manifest_key,
     run_manifest_consumed_key,
@@ -162,6 +163,16 @@ def test_canonical_etf_holdings_partition_is_market_as_of_keyed():
     assert (
         canonical_etf_holdings_partition("KR", "2026-07-14")
         == "canonical/holdings/etf_holdings/market=KR/as_of_date=2026-07-14"
+    )
+
+
+def test_draft_dataguide_price_item_prefix_matches_the_existing_snapshot_layout():
+    # WHY: 이 경로는 우리가 정하는 규약이 아니라 **이미 레이크에 놓인 스냅샷의 위치**다
+    #      (2026-08-02 적재분). 빌더가 한 글자라도 다르면 항목 파일을 0개로 읽고 적재가 멈춘다.
+    assert (
+        draft_dataguide_price_item_prefix("KR", "2026-08-02", "S41000060F")
+        == "draft/curated/source=dataguide/dataset=price_daily/market=KR"
+           "/as_of_date=2026-08-02/item=S41000060F"
     )
 
 

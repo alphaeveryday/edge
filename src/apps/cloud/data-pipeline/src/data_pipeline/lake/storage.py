@@ -675,6 +675,19 @@ def canonical_price_daily_partition(market: str, trade_date: str) -> str:
     return f"canonical/market_data/price_daily/market={market}/trade_date={trade_date}"
 
 
+def draft_dataguide_price_item_prefix(market: str, as_of_date: str, item_code: str) -> str:
+    """DataGuide 일봉 스냅샷의 항목별 wide CSV 프리픽스 (끝 슬래시 없음).
+
+    임시 존(`draft/curated`)이다 — 공급 계약·갱신 담당이 없어 정본 존으로 승격하지 않는다
+    (ADR-0057 §5). 스냅샷 한 장(`as_of_date`) 아래 항목 코드(시가·고가·저가·종가·수정주가·
+    거래량)마다 파일이 하나씩 있다. 일회성 이력 적재(backfill_price_daily_dataguide)만 읽는다.
+    """
+    return (
+        f"draft/curated/source=dataguide/dataset=price_daily/market={market}"
+        f"/as_of_date={as_of_date}/item={item_code}"
+    )
+
+
 def canonical_news_articles_partition(language: str, published_date: str) -> str:
     """canonical 뉴스 메타 파티션 프리픽스 (끝 슬래시 없음).
 
@@ -812,6 +825,18 @@ def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     return (
         f"operations_archive/data_quality_logs/dataset={dataset}"
         f"/checked_date={checked_date}/run_id={run_id}/log.json"
+    )
+
+
+def replaced_rows_snapshot_key(dataset: str, run_id: str, part: int) -> str:
+    """일회성 적재가 덮어쓴 기존 DB 행의 보존본 키(gzip ndjson, 묶음당 1건).
+
+    덮어쓴 값은 DB 에서 사라지므로 되돌리려면 덮기 전 행이 어딘가 남아 있어야 한다. 실행 단위
+    감사물이라 품질 로그와 같은 축(dataset·run_id)으로 둔다.
+    """
+    return (
+        f"operations_archive/replaced_rows/dataset={dataset}"
+        f"/run_id={run_id}/part-{part:05d}.ndjson.gz"
     )
 
 
