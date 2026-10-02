@@ -643,6 +643,31 @@ class TestHistoricalCandles:
         # 관측된 봉은 그대로다 — 합성이 실측을 덮어쓰지 않는다
         assert client.candles("005930", window_end=self.at("1028"))[0].volume == Decimal("1200")
 
+    def test_minute_omitted_for_every_symbol_is_sealed_as_no_trade_not_missing(self):
+        """벤더가 어떤 분을 **전 종목에서** 안 주면 그 창은 결손이 아니라 전 종목 무거래다.
+
+        종목 단위 합성(위 테스트)의 창 단위 귀결이다. 미수집 창을 소급 TR 로 회수할 때
+        (ALPHA-1153) 벤더가 그 분을 주지 않아도 원장은 MISSING → VALID_EMPTY 가 되어 회수된
+        것처럼 보인다. 그래서 회수 전에 **원시 응답**에서 대상 분의 행을 확인하고, 사후 판정은
+        "MISSING 이 사라졌다"가 아니라 "VALID(체결 있음)이다"로 해야 한다.
+        """
+        from data_pipeline.minute.kis_collector import KisPriceCollector
+        from data_pipeline.minute.models import CollectionRequest
+        from data_pipeline.minute.states import WINDOW_VALID_EMPTY
+
+        day = [ok([row("103000"), row("102700")]), ok([self.other_day("102600")])]
+        client, _ = self.hist([TOKEN, *day, *day])       # 두 종목 모두 10:28 행이 없다
+        request = CollectionRequest(
+            dataset="price_minute", window_start=self.at("1028"), window_end=self.at("1029"),
+            run_id="run-1", session_id="msn_x", execution_mode="resident",
+            universe_version="u1", unit_ids=("000660", "005930"),
+        )
+        result, records, manifest = KisPriceCollector(
+            client=client, clock=lambda: self.at("1029")).collect(request, self.at("1029"))
+        assert result.status == WINDOW_VALID_EMPTY
+        assert manifest["no_trade"] == ["000660", "005930"] and manifest["missing"] == []
+        assert {record["volume"] for record in records} == {"0"}   # 실린 봉은 전부 합성한 flat 이다
+
     def test_fill_does_not_reach_before_the_first_observation(self):
         # 첫 체결 앞은 그 종목의 그날 가격을 아직 모른다(직전가가 없다) — 채우면 없는
         # 값을 지어내는 것이고, missing 이 사실에 가장 가깝다
@@ -882,3 +907,19 @@ class TestHistoricalCandles:
         client, _ = self.hist([TOKEN, *[ok([row("153000")]) for _ in range(MAX_DAY_PAGES)]])
         with pytest.raises(KisUnitError, match="페이지 예산"):
             client.candles("005930", window_end=self.at("1530"))
+
+
+def test_probe_reports_target_minutes_the_vendor_did_not_trade():
+    # WHY: 회수 전 확인(scripts/probe_historical_minute.py)의 판정은 **체결 행**이다. 행 유무만 보면
+    #      합성 전이라도 거래량 0 행을 "있다"로 세어, 벤더가 그 분을 안 준 날을 통과시킨다.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "probe_historical_minute",
+        Path(__file__).resolve().parents[1] / "scripts" / "probe_historical_minute.py")
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    candles = [parse_minute_row(row("143200"), "005930"),
+               parse_minute_row(row("143400", volume="0"), "005930")]
+    assert probe.minutes_without_trade(candles, ["1432", "1434", "1435"]) == ["1434", "1435"]

@@ -2287,6 +2287,23 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #      거부되고 그게 맞다).
 #   ⚠️ ④ 전에 drain 이 걸려도 옛 확정분은 안 잃는다 — QC 는 재오픈 뒤 못 받은 창(generation
 #      ≥ 1 인 DUE)을 MISSING 으로 접지 않고 세션을 FAILED 로 세운다. 그때는 ②부터 다시.
+#
+# 미수집(MISSING) 창 회수(ALPHA-1153) — 한 번도 커밋 안 된 창(generation 0)을 `--windows` 로 지목해
+# 같은 순서로 받는다. 이 순서 전체가 `tests/e2e/test_minute_missing_window_recovery.py` 에 있다.
+# 위와 다른 점:
+#   - **② 전에 원시 응답을 본다.** 소급 TR 은 무거래 분의 행을 주지 않아 어댑터가 직전가 flat 으로
+#     채운다. 벤더가 대상 분을 통째로 안 줘도 그 창은 MISSING 이 아니라 VALID_EMPTY(전 종목 무거래)
+#     로 확정돼 회수된 것처럼 보인다. `scripts/probe_historical_minute.py` 로 대형주 몇 종의 대상
+#     분에 체결 행이 있는지 확인하고(exit 1 이면 열지 않는다), 사후 판정도 "MISSING 0" 이 아니라
+#     "대상 창이 VALID(체결 있음)" 로 한다.
+#   - 멈추는 길: 연 뒤 못 받았으면 ⑤(Worker 가 ack) → ⑥. generation 0 인 창은 다시 MISSING 이 되고
+#     나머지 창과 `final_checksum` 은 열기 전과 같다. Worker 가 창을 집었다 실패했으면 그 claim 의
+#     lease(300초)가 끝난 뒤에야 ack 된다.
+#   - 발행 event 가 없으므로 가격 판정 기록(`minute_price_judgment`)의 그 창들은 빈 채로 남는다 —
+#     봉 회수와 판정 공백은 별개다.
+#   - KIS 콜은 창 수와 무관하게 종목 수 × 페이지(종목당 1~4, 상한 8)다. 하루치를 받은 뒤에도
+#     창당 약 25초가 든다(09-29 시험 실측, 451종 — 수집은 0.2초였다. 커밋 뒤 그날 5분 파생을
+#     다시 쓰는 시간으로 추정).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run reopen-minute-session --session-id <session_id> \
     --reason "ALPHA-1135 라벨 오독 재수집"
