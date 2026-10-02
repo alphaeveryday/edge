@@ -37,6 +37,14 @@ BEGIN
                 NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'DELETE')) THEN
                 RAISE EXCEPTION 'Missing result update permission: %',r.relname;
             END IF;
+        ELSIF r.relname='analysis_execution_slots' THEN
+            IF NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT')
+               OR NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'INSERT')
+               OR NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'DELETE')
+               OR NOT has_column_privilege('edge_analysis_v2_writer',r.oid,'task_arns','UPDATE')
+               OR has_table_privilege('edge_analysis_v2_writer',r.oid,'UPDATE,TRUNCATE,TRIGGER,REFERENCES') THEN
+                RAISE EXCEPTION 'Wrong execution control grants';
+            END IF;
         ELSIF has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') THEN
             RAISE EXCEPTION 'Unexpected source access: %',r.relname;
         END IF;
