@@ -321,7 +321,8 @@ class OutlookBatchContract(unittest.TestCase):
 
     def test_non_canonical_reference_time_is_rejected(self):
         """분석 ID 가 기준시각 문자열에서 나오므로 같은 순간의 다른 표기를 받지 않는다."""
-        for bad in ({'analysis_at': '2026-10-02T03:00:00+09:00'}, {}, {'analysis_at': AT, 'etf_codes': []}):
+        for bad in ({'analysis_at': '2026-10-02T03:00:00+09:00'}, {'analysis_at': '2026-10-01T18:00:00.000Z'}, {},
+                    {'analysis_at': AT, 'etf_codes': []}):
             state, out = run_batch(World(), bad)
             self.assertEqual((state, out['error']), ('InvalidInput', 'OutlookBatch.InvalidInput'), bad)
 

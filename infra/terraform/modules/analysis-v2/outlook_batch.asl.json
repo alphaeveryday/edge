@@ -23,8 +23,8 @@
             { "Variable": "$.analysis_at", "IsPresent": true },
             { "Variable": "$.analysis_at", "IsTimestamp": true },
             { "Variable": "$.analysis_at", "StringMatches": "*Z" },
+            { "Not": { "Variable": "$.analysis_at", "StringMatches": "*.*" } },
             { "Variable": "$.etf_codes[0]", "IsPresent": true },
-            { "Variable": "$.max_attempts", "IsNumeric": true },
             { "Variable": "$.max_attempts", "NumericGreaterThanEquals": 1 }
           ],
           "Next": "HasDeadline"
@@ -35,7 +35,7 @@
     "InvalidInput": {
       "Type": "Fail",
       "Error": "OutlookBatch.InvalidInput",
-      "Cause": "analysis_at 은 Z 로 끝나는 UTC 시각(분석 ID 가 이 문자열에서 나온다), etf_codes 는 비어 있지 않은 목록, max_attempts 는 1 이상의 수, deadline 은 주면 시각이어야 한다"
+      "Cause": "analysis_at 은 소수 초 없이 Z 로 끝나는 UTC 시각(분석 ID 가 이 문자열에서 나온다), etf_codes 는 비어 있지 않은 목록, max_attempts 는 1 이상의 수, deadline 은 주면 시각이어야 한다"
     },
     "HasDeadline": {
       "Type": "Choice",

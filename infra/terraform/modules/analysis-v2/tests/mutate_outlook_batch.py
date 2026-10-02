@@ -14,11 +14,11 @@ import test_outlook_batch as t
 original = t.render
 def item(d): return d['States']['RunItems']['ItemProcessor']['States']
 MUTATIONS = {
-    'gate-bypass': (lambda d: item(d)['GateOpen'].update(Choices=[{'Variable': '$.gate.busy', 'NumericGreaterThan': 999, 'Next': 'WaitForSlot'}]),
+    'gate-bypass': (lambda d: item(d)['GateOpen'].update(Choices=[{'Variable': '$.gate.busy', 'NumericGreaterThan': 999, 'Next': 'StillTimeToWait'}]),
                     ['test_waits_while_another_v2_execution_is_running']),
     'attempt-not-incremented': (lambda d: item(d)['NextAttempt']['Parameters'].update({'attempt.$': '$.attempt'}),
                     ['test_only_failed_item_is_retried_with_a_new_id']),
-    'skip-publication-check': (lambda d: item(d)['OnTime'].update(Choices=[{'Variable': '$.publication.published_at', 'TimestampGreaterThanPath': '$.analysis_at', 'Next': 'Completed'}]),
+    'skip-publication-check': (lambda d: item(d)['OnTime'].update(Choices=[{'Variable': '$.attempt', 'NumericLessThan': -1, 'Next': 'Late'}]),
                     ['test_publication_after_deadline_is_late_not_completed']),
     'no-deadline-check': (lambda d: item(d)['StillTimeToRun'].update(Choices=[{'Variable': '$.attempt', 'NumericLessThan': -1, 'Next': 'DeadlineExceeded'}]),
                     ['test_start_after_absolute_deadline_runs_nothing_and_fails']),
@@ -26,7 +26,9 @@ MUTATIONS = {
                     ['test_deadline_is_judged_right_before_start_and_after_rereading_status']),
     'accept-zero-attempts': (lambda d: d['States']['CheckInput']['Choices'][0]['And'].pop(),
                     ['test_malformed_limits_are_rejected_before_any_run']),
-    'accept-malformed-deadline': (lambda d: d['States']['HasDeadline']['Choices'].pop(0),
+    'accept-fractional-seconds': (lambda d: d['States']['CheckInput']['Choices'][0]['And'].pop(3),
+                    ['test_non_canonical_reference_time_is_rejected']),
+    'accept-malformed-deadline': (lambda d: d['States']['HasDeadline'].update(Choices=[{'Variable': '$.deadline', 'IsPresent': True, 'Next': 'GivenDeadline'}]),
                     ['test_malformed_limits_are_rejected_before_any_run']),
     'slot-wait-without-reread': (lambda d: item(d)['WaitForSlot'].update(Next='Gate'),
                     ['test_job_started_by_another_batch_while_waiting_for_a_slot_is_picked_up']),
@@ -47,7 +49,9 @@ for name, (mutate, tests) in MUTATIONS.items():
     t.render = render
     suite = unittest.TestSuite(t.OutlookBatchContract(x) for x in tests)
     result = unittest.TextTestRunner(stream=open('/dev/null', 'w')).run(suite)
-    killed = not result.wasSuccessful()
-    print(('killed  ' if killed else 'SURVIVED'), name, tests)
+    # 정의가 깨져서 난 오류는 가드를 검증한 것이 아니다 — 변이 자체가 잘못됐다.
+    broken = any('InvalidDefinition' in trace for _, trace in result.errors)
+    killed = not result.wasSuccessful() and not broken
+    print(('INVALID ' if broken else 'killed  ' if killed else 'SURVIVED'), name, tests)
     if not killed: survived.append(name)
 sys.exit(1 if survived else 0)

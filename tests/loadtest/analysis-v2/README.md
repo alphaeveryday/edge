@@ -71,7 +71,7 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 
 ### 실행 계약
 
-- **업무 기준시각**: 스케줄의 예정 시각이 `analysis_at`이 된다. 실제 시작이 늦어지거나 스케줄러가 재전달해도 같은 값이다. 수동 재실행은 같은 문자열을 입력으로 준다. `Z`로 끝나는 UTC 표기만 받는다(분석 ID가 이 문자열에서 나온다).
+- **업무 기준시각**: 스케줄의 예정 시각이 `analysis_at`이 된다. 실제 시작이 늦어지거나 스케줄러가 재전달해도 같은 값이다. 수동 재실행은 같은 문자열을 입력으로 준다. 소수 초 없이 `Z`로 끝나는 UTC 표기(`2026-10-01T18:00:00Z`)만 받는다. 분석 ID가 이 문자열에서 나오므로 같은 순간의 다른 표기는 다른 작업이 된다.
 - **분석 ID**: `MD5(outlook:ETF:analysis_at:시도 번호)`. 시도마다 새 ID이고, 같은 작업의 같은 시도는 어느 배치에서 계산해도 같은 ID다. 논리적 작업은 종류, ETF, 기준시각이다.
 - **완료분 재사용**: 시도 0부터 해당 ID의 저장 상태를 조회 API(`GET /v2/analyses/outlook/{id}`)로 읽는다. 완료면 재사용, 실패면 다음 시도, 없으면 실행한다. 날짜별 최신 발행본은 보지 않으므로 같은 날 다른 기준시각의 작업을 건너뛰지 않는다.
 - **재시도**: 항목당 시도 2회(재시도 1회). 소진되면 그 항목은 실패다. `max_attempts`를 올려 재실행하면 실패 항목의 다음 시도만 돈다.
@@ -94,7 +94,7 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 | 단계 | 상태 | 근거 |
 |---|---|---|
 | 정의 문법 | 통과 | AWS `ValidateStateMachineDefinition` |
-| 계약 테스트(대역) | 19건 통과, 변이 13건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
+| 계약 테스트(대역) | 19건 통과, 변이 14건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
 | Terraform | `validate` 통과 | 37종 목록이 `sources.toml` 파싱 결과와 순서까지 일치(해시 동일) |
 | dev 소량 통합 | 대기 | 배포 뒤 |
 | dev 37종 전체 실측 | 대기 | 배포 뒤 |
