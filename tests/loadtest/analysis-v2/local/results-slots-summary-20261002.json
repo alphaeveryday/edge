@@ -1,0 +1,190 @@
+[
+ {
+  "name": "T1-six-starts-three-slots",
+  "at": "2026-10-02T20:09:13+0900",
+  "conditions": {
+   "llm_s": 8.0,
+   "slots": 3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 6,
+    "edge_analysis_v2_writer": 20
+   }
+  },
+  "code_sha": "a2f374669d67c4dc1606d09e96bbe22959ac8297",
+  "elapsed_s": 19.12,
+  "max_concurrent_analyses": 3,
+  "ok": 6,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 12,
+   "reader": 3
+  },
+  "writer_connection_seconds": 178.9,
+  "connect_ms_max": 13.3,
+  "pg_container_mem": {
+   "first": "124.3MiB",
+   "peak_sampled": "126.5MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 6
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "T2-six-starts-no-slot-control",
+  "at": "2026-10-02T20:09:22+0900",
+  "conditions": {
+   "llm_s": 8.0,
+   "slots": "none",
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 6,
+    "edge_analysis_v2_writer": 20
+   }
+  },
+  "code_sha": "a2f374669d67c4dc1606d09e96bbe22959ac8297",
+  "elapsed_s": 9.11,
+  "max_concurrent_analyses": 6,
+  "ok": 6,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 18,
+   "reader": 6
+  },
+  "writer_connection_seconds": 148.5,
+  "connect_ms_max": 8.7,
+  "pg_container_mem": {
+   "first": "136.5MiB",
+   "peak_sampled": "140.3MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 6
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "T3-mixed-kinds-share-slots",
+  "at": "2026-10-02T20:09:41+0900",
+  "conditions": {
+   "llm_s": 8.0,
+   "slots": 3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 6,
+    "edge_analysis_v2_writer": 20
+   }
+  },
+  "code_sha": "a2f374669d67c4dc1606d09e96bbe22959ac8297",
+  "elapsed_s": 19.11,
+  "max_concurrent_analyses": 3,
+  "ok": 6,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 12,
+   "reader": 3
+  },
+  "writer_connection_seconds": 178.0,
+  "connect_ms_max": 12.3,
+  "pg_container_mem": {
+   "first": "123MiB",
+   "peak_sampled": "123.9MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 3
+   },
+   "movement": {
+    "completed": 3
+   }
+  }
+ },
+ {
+  "name": "T4-killed-holder-frees-slot",
+  "at": "2026-10-02T20:09:57+0900",
+  "conditions": {
+   "llm_s": 8.0,
+   "slots": 3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 6,
+    "edge_analysis_v2_writer": 20
+   }
+  },
+  "code_sha": "a2f374669d67c4dc1606d09e96bbe22959ac8297",
+  "elapsed_s": 16.02,
+  "max_concurrent_analyses": 3,
+  "ok": 3,
+  "failed": 1,
+  "errors": [
+   "no output (killed)"
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 10,
+   "reader": 3
+  },
+  "writer_connection_seconds": 79.3,
+  "connect_ms_max": 11.9,
+  "pg_container_mem": {
+   "first": "138.1MiB",
+   "peak_sampled": "138.1MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 3,
+    "running": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "T5-wait-bound",
+  "at": "2026-10-02T20:10:06+0900",
+  "conditions": {
+   "llm_s": 8.0,
+   "slots": 1,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 6,
+    "edge_analysis_v2_writer": 20
+   },
+   "slot_wait_s": 2
+  },
+  "code_sha": "a2f374669d67c4dc1606d09e96bbe22959ac8297",
+  "elapsed_s": 8.95,
+  "max_concurrent_analyses": 1,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: SlotUnavailable: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 4,
+   "reader": 1
+  },
+  "writer_connection_seconds": 29.7,
+  "connect_ms_max": 12.4,
+  "pg_container_mem": {
+   "first": "126.5MiB",
+   "peak_sampled": "127.6MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ }
+]

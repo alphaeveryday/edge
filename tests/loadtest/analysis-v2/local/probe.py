@@ -9,7 +9,8 @@ S3(로컬 디렉터리, manifest 의 IfNoneMatch 선점만 재현), Secrets Mana
 
   probe.py setup                       # 로컬 역할 로그인·제한을 dev 실측값(writer 5, reader 3)으로 맞춘다
   probe.py sweep --kind outlook --c 4 --llm 8 [--writer-limit N]   # 동시 C건
-  probe.py scenarios                   # 중복·재시도·중단 시나리오와 단언
+  probe.py scenarios                   # 중복·재시도·중단 시나리오와 단언(역할 한도 5·3, 슬롯 제어 이전의 계약)
+  probe.py slots                       # 분석 슬롯 시나리오와 단언(역할 한도 20·6, 슬롯 3)
   probe.py one ...                     # 내부용(분석 1건 = 프로세스 1개)
 """
 import argparse
@@ -65,9 +66,10 @@ def setup(writer_limit=5, reader_limit=3):
         return c.execute("SELECT rolname, rolconnlimit FROM pg_roles WHERE rolname LIKE 'edge_analysis_v2%' ORDER BY 1").fetchall()
 
 
-def reset():
+def reset(definitions=False):
+    """결과 표를 비운다. definitions=True 면 툴 정의도 지워 '첫 등록이 동시에 일어나는' 상태로 만든다."""
     with admin() as c:
-        c.execute('TRUNCATE ' + ','.join(TABLES) + ' CASCADE')
+        c.execute('TRUNCATE ' + ','.join(TABLES + (('tool_definitions',) if definitions else ())) + ' CASCADE')
     if WORK.exists():
         subprocess.run(['rm', '-rf', str(WORK)], check=True)
 
@@ -110,7 +112,7 @@ def one(args):
     from edge_analysis_v2.storage.database import ResultDatabaseError
     from edge_analysis_v2.tools.fixture_data import make_fixture
 
-    connections, model_calls, began = [], [], time.time()
+    connections, model_calls, model_ends, began = [], [], [], time.time()
 
     def connect(role, **options):
         event = {'role': role, 'open_start': time.time()}
@@ -156,6 +158,7 @@ def one(args):
         await asyncio.sleep(args.llm/2)
         if args.fail == 'timeout':
             raise TimeoutError()
+        model_ends.append(time.time())
         if args.kind == 'movement':
             return {'new_items': [dict(candidate_id='new', type='이슈', title_keyword='계약',
                     sentence='판매 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])],
@@ -169,24 +172,29 @@ def one(args):
                     sentence='판매 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])]}}
 
     worker.connect_results, worker.connect_sources = connect_results, connect_sources
-    worker.load_source, worker.load_flow, worker.load_prices = load_source, (lambda c, d: d), (lambda c, d: d)
+    worker.load_source, worker.load_flow, worker.load_prices = load_source, (lambda c, d: d), (lambda c, d, **_: d)
     worker.execute_request = partial(service.execute_request, model_call=model)
+    worker.acquire_slot = partial(worker.acquire_slot, wait_seconds=args.slot_wait)
     request = {'analysis_id': args.id, 'kind': args.kind, 'etf_code': args.etf, 'analysis_at': ANALYSIS_AT}
     error, stage = None, 'run'
     try:
         worker.run(request, bucket='local', ca_path=HERE, folder=WORK/'artifacts'/args.id,
-                   key='fake-key', model='stub', session=LocalSession())
+                   key='fake-key', model='stub', session=LocalSession(), slots=args.slots)
     except Exception as exc:
         error = type(exc).__name__ + ': ' + str(exc)[:160]
     print(json.dumps({'id': args.id, 'kind': args.kind, 'etf': args.etf, 'exit': 1 if error else 0, 'error': error,
-                      'model_calls': len(model_calls), 'began': began, 'ended': time.time(),
+                      'model_calls': len(model_calls), 'model_window': [model_calls[0], model_ends[0]] if model_ends else None,
+                      'began': began, 'ended': time.time(),
                       'connections': connections}, ensure_ascii=False), flush=True)
     sys.exit(1 if error else 0)
 
 
 # ── 여러 건 동시 실행과 관측 ────────────────────────────────────────────────────────────
-def launch(specs, *, llm, src=0.3, kill_after=None):
-    """specs: [{kind, etf, id, fail?}] 를 동시에 시작하고 DB 세션을 표본 측정한다."""
+def launch(specs, *, llm, src=0.3, kill_after=None, slots=99, slot_wait=600):
+    """specs: [{kind, etf, id, fail?, start_after?, kill_after?}] 를 시작하고 DB 세션을 표본 측정한다.
+
+    slots 기본 99 는 슬롯 제어가 없던 때와 같다(항상 잡힌다). kill_after 는 전체에, spec 의 kill_after 는 그 건에만 건다.
+    start_after 가 없는 건은 동시에 시작한다."""
     stop, samples, memory = threading.Event(), [], []
 
     def sample():
@@ -207,18 +215,28 @@ def launch(specs, *, llm, src=0.3, kill_after=None):
     for thread in threads:
         thread.start()
     started = time.time()
-    procs = [subprocess.Popen([sys.executable, __file__, 'one', '--kind', s['kind'], '--etf', s['etf'], '--id', s['id'],
-                               '--llm', str(llm), '--src', str(src), '--fail', s.get('fail', 'none')],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for s in specs]
+    def start(s):
+        time.sleep(max(0, started + s.get('start_after', 0) - time.time()))
+        return subprocess.Popen([sys.executable, __file__, 'one', '--kind', s['kind'], '--etf', s['etf'], '--id', s['id'],
+                                 '--llm', str(llm), '--src', str(src), '--fail', s.get('fail', 'none'),
+                                 '--slots', str(slots), '--slot-wait', str(slot_wait)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    procs = [start(s) for s in sorted(specs, key=lambda s: s.get('start_after', 0))]
+    specs = sorted(specs, key=lambda s: s.get('start_after', 0))
     if kill_after is not None:
         time.sleep(kill_after)
         for proc in procs:
+            proc.send_signal(signal.SIGKILL)
+    for spec, proc in zip(specs, procs):
+        if spec.get('kill_after') is not None:
+            time.sleep(max(0, started + spec['kill_after'] - time.time()))
             proc.send_signal(signal.SIGKILL)
     outputs = []
     for spec, proc in zip(specs, procs):
         out, err = proc.communicate()
         line = out.strip().splitlines()[-1] if out.strip() else None
-        outputs.append(json.loads(line) if line else spec | {'exit': proc.returncode, 'error': 'no output (killed)' if kill_after is not None else err.strip()[-300:], 'model_calls': None, 'connections': []})
+        killed = kill_after is not None or spec.get('kill_after') is not None
+        outputs.append(json.loads(line) if line else spec | {'exit': proc.returncode, 'error': 'no output (killed)' if killed else err.strip()[-300:], 'model_calls': None, 'model_window': None, 'connections': []})
     elapsed = time.time() - started
     stop.set()
     for thread in threads:
@@ -229,7 +247,9 @@ def launch(specs, *, llm, src=0.3, kill_after=None):
     peak = {role: max((s.get(role, 0) for _, s in samples), default=0) for role in ('writer', 'reader')}
     held = [e['closed']-e['opened'] for o in outputs for e in o['connections'] if e['role'] == 'writer' and 'closed' in e]
     opened = [e['opened']-e['open_start'] for o in outputs for e in o['connections'] if 'opened' in e]
-    return {'elapsed_s': round(elapsed, 2), 'ok': sum(o['exit'] == 0 for o in outputs),
+    windows = [o['model_window'] for o in outputs if o.get('model_window')]
+    overlap = max((sum(a <= t < b for a, b in windows) for t, _ in windows), default=0)  # 모델 대기가 겹친 최대 건수
+    return {'elapsed_s': round(elapsed, 2), 'max_concurrent_analyses': overlap, 'ok': sum(o['exit'] == 0 for o in outputs),
             'failed': sum(o['exit'] != 0 for o in outputs),
             'errors': sorted({(o['error'] or '')[:90] for o in outputs if o['exit'] != 0}),
             'connect_errors': sorted({e['error'] for o in outputs for e in o['connections'] if 'error' in e}),
@@ -309,7 +329,8 @@ def scenarios(args):
     reset()  # S6 같은 ETF 의 전망+가격변동 병행 → ETF 락은 종류별이라 서로 안 막지만 writer 역할 한도(5)에 걸린다
     r = record('S6-outlook-plus-movement-same-etf', cond, launch(
         [{'kind': 'outlook', 'etf': a, 'id': uuid4().hex}, {'kind': 'movement', 'etf': a, 'id': uuid4().hex}], llm=args.llm))
-    assert r['ok'] == 1 and r['failed'] == 1 and any('too many connections' in e for e in r['connect_errors']), r
+    # 둘이 같은 순간에 마지막 연결을 요청하면 둘 다 거절될 수도 있다(13회 중 2회 관측). 둘 다 성공하는 일은 없다.
+    assert r['ok'] <= 1 and r['failed'] >= 1 and any('too many connections' in e for e in r['connect_errors']), r
 
     setup(-1, -1)
     reset()  # S7 한도를 풀면 같은 병행이 둘 다 성공(원인이 역할 한도임을 대조로 확인)
@@ -320,6 +341,45 @@ def scenarios(args):
     print('scenarios: all assertions passed')
 
 
+def slot_scenarios(args):
+    """분석 슬롯 계약(ALPHA-1157). 역할 한도는 마이그레이션 값(writer 20, reader 6), 슬롯 3."""
+    codes, _ = etf_codes()
+    limits = {r['rolname']: r['rolconnlimit'] for r in setup(20, 6)}
+    cond = {'llm_s': args.llm, 'slots': 3, 'role_limits': limits}
+    new = lambda n, kind='outlook': [{'kind': kind, 'etf': codes[i], 'id': uuid4().hex} for i in range(n)]
+
+    reset(definitions=True)  # T1 동시에 6건이 시작해도 3건씩만 분석하고, 나머지는 실패하지 않고 기다렸다가 전부 끝난다(툴 정의 첫 등록 포함)
+    r = record('T1-six-starts-three-slots', cond, launch(new(6), llm=args.llm, slots=3))
+    assert (r['ok'], r['failed'], r['max_concurrent_analyses']) == (6, 0, 3), r
+    assert not r['connect_errors'] and r['peak_sessions']['writer'] <= 3*3 + 3, r['peak_sessions']
+
+    reset(definitions=True)  # T2 슬롯이 없던 때의 동작을 같은 한도에서 재현 — 6건이 한꺼번에 분석을 시작한다(상한 없음)
+    r = record('T2-six-starts-no-slot-control', cond | {'slots': 'none'}, launch(new(6), llm=args.llm))
+    assert r['max_concurrent_analyses'] > 3, r
+
+    reset()  # T3 전망 3 + 가격변동 3(서로 다른 시작 경로를 흉내) — 종류와 무관하게 합쳐서 3건
+    specs = new(3) + [{'kind': 'movement', 'etf': codes[10 + i], 'id': uuid4().hex} for i in range(3)]
+    r = record('T3-mixed-kinds-share-slots', cond, launch(specs, llm=args.llm, slots=3))
+    assert (r['ok'], r['failed'], r['max_concurrent_analyses']) == (6, 0, 3), r
+
+    reset()  # T4 슬롯을 쥔 태스크가 강제 종료되면 슬롯이 풀리고 기다리던 건이 이어서 돈다
+    specs = new(4)
+    specs[0]['kill_after'] = 4        # 먼저 시작해 슬롯을 쥔 건을 죽인다
+    specs[3]['start_after'] = 2       # 슬롯 3개가 다 찬 뒤에 시작해 기다리는 건
+    began = time.time()
+    r = record('T4-killed-holder-frees-slot', cond, launch(specs, llm=args.llm, slots=3))
+    waiter = next(o for o in r['runs'] if o['id'] == specs[3]['id'])
+    assert (r['ok'], r['failed']) == (3, 1) and r['db_rows']['outlook'].get('completed') == 3, r
+    assert began + 4 <= waiter['model_window'][0] < began + 2 + args.llm, waiter  # 죽은 뒤, 다른 건이 끝나기 전에 시작했다
+
+    reset()  # T5 끝내 슬롯이 안 나면 원천·모델을 시작하지 않고 SlotUnavailable 로 끝난다(DB 행 없음)
+    r = record('T5-wait-bound', cond | {'slots': 1, 'slot_wait_s': 2}, launch(new(2), llm=args.llm, slots=1, slot_wait=2))
+    loser = next(o for o in r['runs'] if o['exit'])
+    assert (r['ok'], r['failed'], loser['model_calls']) == (1, 1, 0) and 'SlotUnavailable' in loser['error'], loser
+    assert r['db_rows']['outlook'] == {'completed': 1}, r['db_rows']
+    print('slots: all assertions passed')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -328,14 +388,17 @@ if __name__ == '__main__':
     p.add_argument('--kind', required=True); p.add_argument('--etf', required=True); p.add_argument('--id', required=True)
     p.add_argument('--llm', type=float, default=8); p.add_argument('--src', type=float, default=0.3)
     p.add_argument('--fail', default='none', choices=('none', 'model', 'timeout'))
+    p.add_argument('--slots', type=int, default=99); p.add_argument('--slot-wait', type=float, default=600)
     p = commands.add_parser('sweep')
     p.add_argument('--kind', default='outlook'); p.add_argument('--c', type=int, required=True)
     p.add_argument('--llm', type=float, default=8); p.add_argument('--src', type=float, default=0.3)
     p.add_argument('--writer-limit', type=int, default=5); p.add_argument('--reader-limit', type=int, default=3)
     p = commands.add_parser('scenarios')
     p.add_argument('--llm', type=float, default=6)
+    p = commands.add_parser('slots')
+    p.add_argument('--llm', type=float, default=8)
     args = parser.parse_args()
     if args.command == 'setup':
         print(setup())
     else:
-        {'one': one, 'sweep': sweep, 'scenarios': scenarios}[args.command](args)
+        {'one': one, 'sweep': sweep, 'scenarios': scenarios, 'slots': slot_scenarios}[args.command](args)
