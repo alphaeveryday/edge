@@ -483,7 +483,7 @@
         <mxCell id="analysis_execution_requests-accepted_at" value="accepted_at : timestamptz" vertex="1" parent="analysis_execution_requests" style="text;html=0;align=left;fontSize=12;">
           <mxGeometry as="geometry" x="12" y="149" width="410" height="21" />
         </mxCell>
-      <mxCell id="movement_analyses.withdrawn_at" value="withdrawn_at: timestamptz" style="text;html=0;align=left;spacingLeft=8;" vertex="1" parent="movement_analyses"><mxGeometry x="0" y="300" width="350" height="24" as="geometry" /></mxCell></root>
+      <mxCell id="movement_analyses.withdrawn_at" value="withdrawn_at : timestamptz" style="text;html=0;align=left;spacingLeft=8;" vertex="1" parent="movement_analyses"><mxGeometry x="0" y="300" width="350" height="24" as="geometry" /></mxCell></root>
     </mxGraphModel>
   </diagram>
 </mxfile>
