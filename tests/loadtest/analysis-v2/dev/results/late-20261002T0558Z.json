@@ -1,0 +1,62 @@
+{
+ "execution": "late-20261002T0558Z",
+ "status": "FAILED",
+ "error": "OutlookBatch.DeadlineExceeded",
+ "input": {
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "etf_codes": [
+   "0167A0"
+  ],
+  "deadline": "2026-10-02T06:00:00Z"
+ },
+ "started": "2026-10-02T15:14:22.577000+09:00",
+ "stopped": "2026-10-02T15:14:23.111000+09:00",
+ "total_seconds": 0.5,
+ "history_events": 43,
+ "summary": {
+  "total": 1,
+  "late": 0,
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "unfinished": [
+   {
+    "outcome": "deadline_exceeded",
+    "etf_code": "0167A0",
+    "attempt": 0,
+    "analysis_id": "71260813878b640f296dc07335336d12"
+   }
+  ],
+  "completed": 0,
+  "failed": 0,
+  "deadline": "2026-10-02T06:00:00Z",
+  "deadline_exceeded": 1,
+  "unknown": 0
+ },
+ "items": 1,
+ "child_runs_in_this_execution": 0,
+ "child_failed_in_this_execution": 0,
+ "failure_reasons": {},
+ "retried_items": 0,
+ "child_seconds_succeeded": null,
+ "child_seconds_sum": 0,
+ "db_connections_max": {
+  "before_10min": 25.0,
+  "during": null
+ },
+ "rows": [
+  {
+   "etf_code": "0167A0",
+   "outcome": "deadline_exceeded",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "71260813878b640f296dc07335336d12",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:15:10.829000+09:00",
+     "stopped": "2026-10-02T15:18:14.081000+09:00",
+     "seconds": 183.3
+    }
+   ]
+  }
+ ]
+}

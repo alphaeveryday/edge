@@ -1,0 +1,59 @@
+{
+ "execution": "dupA-20261002T0558Z",
+ "status": "SUCCEEDED",
+ "error": null,
+ "input": {
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "etf_codes": [
+   "0167A0"
+  ]
+ },
+ "started": "2026-10-02T15:15:10.256000+09:00",
+ "stopped": "2026-10-02T15:18:16.316000+09:00",
+ "total_seconds": 186.1,
+ "history_events": 66,
+ "summary": {
+  "total": 1,
+  "late": 0,
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "unfinished": [],
+  "completed": 1,
+  "failed": 0,
+  "deadline": "2026-10-02T23:00:00Z",
+  "deadline_exceeded": 0,
+  "unknown": 0
+ },
+ "items": 1,
+ "child_runs_in_this_execution": 1,
+ "child_failed_in_this_execution": 0,
+ "failure_reasons": {},
+ "retried_items": 0,
+ "child_seconds_succeeded": {
+  "n": 1,
+  "min": 183.3,
+  "median": 183.3,
+  "max": 183.3
+ },
+ "child_seconds_sum": 183.3,
+ "db_connections_max": {
+  "before_10min": 25.0,
+  "during": 25.0
+ },
+ "rows": [
+  {
+   "etf_code": "0167A0",
+   "outcome": "completed",
+   "published_at": "2026-10-02T06:17:47.269583+00:00",
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "71260813878b640f296dc07335336d12",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:15:10.829000+09:00",
+     "stopped": "2026-10-02T15:18:14.081000+09:00",
+     "seconds": 183.3
+    }
+   ]
+  }
+ ]
+}

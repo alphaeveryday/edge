@@ -1,0 +1,693 @@
+{
+ "execution": "full-20261002T0626Z",
+ "status": "FAILED",
+ "error": "OutlookBatch.Incomplete",
+ "input": {
+  "analysis_at": "2026-10-02T06:26:00Z"
+ },
+ "started": "2026-10-02T15:26:05.692000+09:00",
+ "stopped": "2026-10-02T19:18:03.890000+09:00",
+ "total_seconds": 13918.2,
+ "history_events": 2458,
+ "summary": {
+  "total": 37,
+  "late": 0,
+  "analysis_at": "2026-10-02T06:26:00Z",
+  "unfinished": [
+   {
+    "outcome": "failed",
+    "etf_code": "0190G0",
+    "last_analysis_id": "1676465d3aee7944d6bfa6b230ae54bd",
+    "attempts": 2
+   },
+   {
+    "outcome": "failed",
+    "etf_code": "0005G0",
+    "last_analysis_id": "0e5c473326980d2613d181f8815af22e",
+    "attempts": 2
+   },
+   {
+    "outcome": "failed",
+    "etf_code": "486240",
+    "last_analysis_id": "07c00330cff6a3c3051f419f08546f65",
+    "attempts": 2
+   }
+  ],
+  "completed": 34,
+  "failed": 3,
+  "deadline": "2026-10-02T23:00:00Z",
+  "deadline_exceeded": 0,
+  "unknown": 0
+ },
+ "items": 37,
+ "child_runs_in_this_execution": 45,
+ "child_failed_in_this_execution": 11,
+ "failure_reasons": {
+  "TimeoutError": 8,
+  "ToolInputError": 3
+ },
+ "retried_items": 8,
+ "child_seconds_succeeded": {
+  "n": 34,
+  "min": 202.6,
+  "median": 268.0,
+  "max": 359.3
+ },
+ "child_seconds_sum": 12881.2,
+ "db_connections_max": {
+  "before_10min": 25.0,
+  "during": 35.0
+ },
+ "rows": [
+  {
+   "etf_code": "069500",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "9b55ed6c6393934c1ff78ee62409d74c",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:26:06.355000+09:00",
+     "stopped": "2026-10-02T15:30:33.078000+09:00",
+     "seconds": 266.7
+    }
+   ]
+  },
+  {
+   "etf_code": "396500",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "904ee61e0191ddecff05ed48c2d0690a",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:30:36.124000+09:00",
+     "stopped": "2026-10-02T15:34:05.411000+09:00",
+     "seconds": 209.3
+    }
+   ]
+  },
+  {
+   "etf_code": "0167A0",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "03999669eaf54721138f8b37a297c661",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:34:11.023000+09:00",
+     "stopped": "2026-10-02T15:38:22.824000+09:00",
+     "seconds": 251.8
+    }
+   ]
+  },
+  {
+   "etf_code": "091160",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "58ffc37a9dfcd5b38161352ba558930c",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:45:33.157000+09:00",
+     "stopped": "2026-10-02T15:51:32.433000+09:00",
+     "seconds": 359.3
+    }
+   ]
+  },
+  {
+   "etf_code": "395160",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "98305793710e8981ba139abc0e0b9e79",
+     "status": "FAILED",
+     "started": "2026-10-02T15:51:36.534000+09:00",
+     "stopped": "2026-10-02T15:57:38.440000+09:00",
+     "seconds": 361.9,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "f63f9601db0f5252682a8da5dc59d397",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:57:44.162000+09:00",
+     "stopped": "2026-10-02T16:03:14.145000+09:00",
+     "seconds": 330.0
+    }
+   ]
+  },
+  {
+   "etf_code": "395270",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "427e10c54e24317c1ba5f6cc643faca4",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:03:17.207000+09:00",
+     "stopped": "2026-10-02T16:08:44.408000+09:00",
+     "seconds": 327.2
+    }
+   ]
+  },
+  {
+   "etf_code": "139260",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "229c69ac3bcc1e353879f6d546e668d7",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:08:47.335000+09:00",
+     "stopped": "2026-10-02T16:12:56.275000+09:00",
+     "seconds": 248.9
+    }
+   ]
+  },
+  {
+   "etf_code": "091230",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "ead396fed2e81006d6a9d276c5d545d2",
+     "status": "FAILED",
+     "started": "2026-10-02T16:12:59.196000+09:00",
+     "stopped": "2026-10-02T16:19:03.561000+09:00",
+     "seconds": 364.4,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "0b8e75ceafbb01c433469e34759d4032",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:19:07.326000+09:00",
+     "stopped": "2026-10-02T16:23:36.440000+09:00",
+     "seconds": 269.1
+    }
+   ]
+  },
+  {
+   "etf_code": "469150",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "eb0371ee2e7e5dc35d37ffeac79d36f7",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:23:39.611000+09:00",
+     "stopped": "2026-10-02T16:28:07.196000+09:00",
+     "seconds": 267.6
+    }
+   ]
+  },
+  {
+   "etf_code": "455850",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "5a41efc28d9a8f8d6752800f3b6baf6c",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:28:10.327000+09:00",
+     "stopped": "2026-10-02T16:32:12.582000+09:00",
+     "seconds": 242.3
+    }
+   ]
+  },
+  {
+   "etf_code": "474590",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "a360d940e3ed41095d47a5a758241f35",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:32:15.333000+09:00",
+     "stopped": "2026-10-02T16:37:14.881000+09:00",
+     "seconds": 299.5
+    }
+   ]
+  },
+  {
+   "etf_code": "471990",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "d6cd9a8d343956a71947726518291d51",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:37:18.306000+09:00",
+     "stopped": "2026-10-02T16:40:40.861000+09:00",
+     "seconds": 202.6
+    }
+   ]
+  },
+  {
+   "etf_code": "475300",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "644e435d9315de99d6e0afc2f3c5969f",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:40:43.512000+09:00",
+     "stopped": "2026-10-02T16:45:14.685000+09:00",
+     "seconds": 271.2
+    }
+   ]
+  },
+  {
+   "etf_code": "0210A0",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "fb893e3e47396617ed342b9186b0dee8",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:45:17.625000+09:00",
+     "stopped": "2026-10-02T16:48:44.324000+09:00",
+     "seconds": 206.7
+    }
+   ]
+  },
+  {
+   "etf_code": "0182R0",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "3f2bc6edf3ddd45012fc43426c89361b",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:48:47.111000+09:00",
+     "stopped": "2026-10-02T16:53:31.780000+09:00",
+     "seconds": 284.7
+    }
+   ]
+  },
+  {
+   "etf_code": "471780",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "467c418d7794ba051e7b6c8ba5352572",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:53:35.213000+09:00",
+     "stopped": "2026-10-02T16:59:13.394000+09:00",
+     "seconds": 338.2
+    }
+   ]
+  },
+  {
+   "etf_code": "388420",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "1fda0ff39b95d72cb5f85a91db3d2ead",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T16:59:17.630000+09:00",
+     "stopped": "2026-10-02T17:03:37.717000+09:00",
+     "seconds": 260.1
+    }
+   ]
+  },
+  {
+   "etf_code": "363580",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "4d3b8a8091e1cedc573ca32e51cc18e3",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T17:03:40.781000+09:00",
+     "stopped": "2026-10-02T17:07:33.720000+09:00",
+     "seconds": 232.9
+    }
+   ]
+  },
+  {
+   "etf_code": "494220",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "7261f77cad54e3b5ea38dab11d9aa9b7",
+     "status": "FAILED",
+     "started": "2026-10-02T17:07:36.432000+09:00",
+     "stopped": "2026-10-02T17:13:48.317000+09:00",
+     "seconds": 371.9,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "b8371d289b090e22990eb22051f31f84",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T17:13:51.987000+09:00",
+     "stopped": "2026-10-02T17:19:23.125000+09:00",
+     "seconds": 331.1
+    }
+   ]
+  },
+  {
+   "etf_code": "0093A0",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "281130156f3cf62406b713718aead6c3",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T17:19:27.515000+09:00",
+     "stopped": "2026-10-02T17:23:18.264000+09:00",
+     "seconds": 230.7
+    }
+   ]
+  },
+  {
+   "etf_code": "0190G0",
+   "outcome": "failed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "fb43a344a14ddaddd58b6bdb129bb676",
+     "status": "FAILED",
+     "started": "2026-10-02T17:23:22.367000+09:00",
+     "stopped": "2026-10-02T17:29:24.182000+09:00",
+     "seconds": 361.8,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "1676465d3aee7944d6bfa6b230ae54bd",
+     "status": "FAILED",
+     "started": "2026-10-02T17:29:27.853000+09:00",
+     "stopped": "2026-10-02T17:35:37.594000+09:00",
+     "seconds": 369.7,
+     "failure": "TimeoutError"
+    }
+   ]
+  },
+  {
+   "etf_code": "0005G0",
+   "outcome": "failed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "953b0a79af36b2e590844ac9ddf7aaa4",
+     "status": "FAILED",
+     "started": "2026-10-02T17:35:41.572000+09:00",
+     "stopped": "2026-10-02T17:39:33.045000+09:00",
+     "seconds": 231.5,
+     "failure": "ToolInputError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "0e5c473326980d2613d181f8815af22e",
+     "status": "FAILED",
+     "started": "2026-10-02T17:39:35.538000+09:00",
+     "stopped": "2026-10-02T17:43:35.640000+09:00",
+     "seconds": 240.1,
+     "failure": "ToolInputError"
+    }
+   ]
+  },
+  {
+   "etf_code": "471760",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "0d2ea8c947f73a34d22d6501b86b4596",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T17:43:37.891000+09:00",
+     "stopped": "2026-10-02T17:47:08.792000+09:00",
+     "seconds": 210.9
+    }
+   ]
+  },
+  {
+   "etf_code": "266370",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "e55389ac948a24c204a3d196269d825f",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T17:47:11.531000+09:00",
+     "stopped": "2026-10-02T17:52:07.332000+09:00",
+     "seconds": 295.8
+    }
+   ]
+  },
+  {
+   "etf_code": "486240",
+   "outcome": "failed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "f79ad5f2707a61734061b574b545e874",
+     "status": "FAILED",
+     "started": "2026-10-02T17:52:10.552000+09:00",
+     "stopped": "2026-10-02T17:58:25.198000+09:00",
+     "seconds": 374.6,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "07c00330cff6a3c3051f419f08546f65",
+     "status": "FAILED",
+     "started": "2026-10-02T17:58:28.850000+09:00",
+     "stopped": "2026-10-02T18:04:27.432000+09:00",
+     "seconds": 358.6,
+     "failure": "TimeoutError"
+    }
+   ]
+  },
+  {
+   "etf_code": "475310",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "c25a3da92137548431ee199315fb0b17",
+     "status": "FAILED",
+     "started": "2026-10-02T18:04:31.403000+09:00",
+     "stopped": "2026-10-02T18:08:24.538000+09:00",
+     "seconds": 233.1,
+     "failure": "ToolInputError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "991087a569d31c0666ea043e9324fab2",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:08:28.003000+09:00",
+     "stopped": "2026-10-02T18:12:56.397000+09:00",
+     "seconds": 268.4
+    }
+   ]
+  },
+  {
+   "etf_code": "476260",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "5c0a67705150c317bca9ee63d48cfa18",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:12:59.419000+09:00",
+     "stopped": "2026-10-02T18:16:50.634000+09:00",
+     "seconds": 231.2
+    }
+   ]
+  },
+  {
+   "etf_code": "261060",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "fe9f13e42585bd5a3b527e4376b42592",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:16:53.962000+09:00",
+     "stopped": "2026-10-02T18:21:13.004000+09:00",
+     "seconds": 259.0
+    }
+   ]
+  },
+  {
+   "etf_code": "482030",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "b0d9c0c8d618ea71eebb4469be3d00ec",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:28:53.527000+09:00",
+     "stopped": "2026-10-02T18:33:45.149000+09:00",
+     "seconds": 291.6
+    }
+   ]
+  },
+  {
+   "etf_code": "0176P0",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "0809499280b0f45d83ba7292c12a259c",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:33:47.963000+09:00",
+     "stopped": "2026-10-02T18:38:29.717000+09:00",
+     "seconds": 281.8
+    }
+   ]
+  },
+  {
+   "etf_code": "300950",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "1091e1077af9c6c3f68d2a8213b60ce8",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:38:32.779000+09:00",
+     "stopped": "2026-10-02T18:43:24.338000+09:00",
+     "seconds": 291.6
+    }
+   ]
+  },
+  {
+   "etf_code": "305720",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "2bf58acc75bb580b18ab570d9437d8dd",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:43:27.164000+09:00",
+     "stopped": "2026-10-02T18:48:49.617000+09:00",
+     "seconds": 322.5
+    }
+   ]
+  },
+  {
+   "etf_code": "091170",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "5569f9fccc38b8a98a3e748840d2ddb0",
+     "status": "FAILED",
+     "started": "2026-10-02T18:48:52.457000+09:00",
+     "stopped": "2026-10-02T18:54:49.644000+09:00",
+     "seconds": 357.2,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "3e6b64508cab7adc79c6fc7aad92c1f7",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:54:53.396000+09:00",
+     "stopped": "2026-10-02T18:59:10.142000+09:00",
+     "seconds": 256.7
+    }
+   ]
+  },
+  {
+   "etf_code": "449450",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "cdd0b54ff4b5d35e4f11bb5e7083ceb8",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T18:59:14.203000+09:00",
+     "stopped": "2026-10-02T19:03:34.172000+09:00",
+     "seconds": 260.0
+    }
+   ]
+  },
+  {
+   "etf_code": "0177X0",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "6f46244c5c481724a519ea00e71801de",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T19:03:37.077000+09:00",
+     "stopped": "2026-10-02T19:07:07.046000+09:00",
+     "seconds": 210.0
+    }
+   ]
+  },
+  {
+   "etf_code": "377990",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "df5eaabdd78510ac174796d00591c6cc",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T19:07:10.166000+09:00",
+     "stopped": "2026-10-02T19:12:11.056000+09:00",
+     "seconds": 300.9
+    }
+   ]
+  },
+  {
+   "etf_code": "261070",
+   "outcome": "completed",
+   "published_at": null,
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "2a3fe621e1b8b287cb6b3376e295bbcd",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T19:12:14.159000+09:00",
+     "stopped": "2026-10-02T19:18:00.281000+09:00",
+     "seconds": 346.1
+    }
+   ]
+  }
+ ]
+}

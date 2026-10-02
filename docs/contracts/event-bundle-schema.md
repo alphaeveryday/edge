@@ -125,8 +125,14 @@
 | INVALIDATION | `target_explanation_result_id` | `target_movement_analysis_id` | 회수 대상은 둘 중 하나. 본체 참조 없음·사유 필수 |
 
 이 변경은 저장 형상만 준비한다. v2 발번은 번들 조립·회수 코드와 수신 검증 이후에 활성화한다.
-v2에서 산출하지 않는 v1 설명 유형·확신도를 임의 생성하지 않는다. 이 판정값의 전달 방식은
-생산자 연결 시 별도로 확정한다. 기존 v1 기록과 외부 JSON 계약은 이번 migration에서 바꾸지 않는다.
+v2 결과는 서버가 `explanation_result.analysis_engine: "v2"`를 넣는다. 에이전트가 선택하는 값이 아니다.
+`explanation_type`과 `confidence_level`은 `null`로 보내며, v1 판정값을 만들어 채우지 않는다.
+구형 결과는 `analysis_engine`을 생략하며 v1으로 처리한다.
+
+v2 NEW는 관리자 승인 없이 `AUTO_PUBLISHED`로 저장하고 게시한다. 활성 검수 정책이 없어도 동작하며,
+v1의 승인 스위치·금칙어·출처 수·확신도 조건을 적용하지 않는다. 검수 판정을 수행하지 않았으므로
+가짜 PASS 기록을 생성하지 않고, 게시 상태 이력에 `v2 자동 노출`을 남긴다.
+근거 보존·멱등 수신·INVALIDATION 회수는 기존 경로를 사용한다. v1 정책은 유지한다.
 
 ### 검수콘솔 API의 계산 근거 전달
 

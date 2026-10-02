@@ -87,6 +87,83 @@ class PolicyScreeningIntegrationTest extends OnpremPostgresIntegrationTest {
 				.isEmpty();
 	}
 
+	private static byte[] v2Bundle(String id) {
+		return new String(newBundle(id, id, "무해한 요약"), StandardCharsets.UTF_8)
+				.replace("\"explanation_type\":\"EVENT_SUPPORTED\"",
+						"\"analysis_engine\":\"v2\",\"explanation_type\":null")
+				.replace("\"confidence_level\":\"MEDIUM\"", "\"confidence_level\":null")
+				.replace("\"evidences\":[]", "\"evidences\":[{\"kind\":\"NEWS\",\"news_id\":\"n1\",\"title\":\"뉴스\",\"source\":\"bigkinds\",\"published_at\":null}]")
+				.getBytes(StandardCharsets.UTF_8);
+	}
+
+	@Test
+	void v2는_정책_없이_자동게시하고_근거와_엔진을_저장한다() {
+		screener.screen(115501L, v2Bundle("v2-direct"));
+		assertThat(jdbc.queryForMap("SELECT analysis_engine, explanation_type, confidence_level, status "
+				+ "FROM analysis_item WHERE explanation_result_id='v2-direct'"))
+				.containsEntry("analysis_engine", "v2").containsEntry("status", "AUTO_PUBLISHED")
+				.containsEntry("explanation_type", null).containsEntry("confidence_level", null);
+		assertThat(jdbc.queryForObject("SELECT evidences->0->>'news_id' FROM analysis_item "
+				+ "WHERE explanation_result_id='v2-direct'", String.class)).isEqualTo("n1");
+		assertThat(jdbc.queryForObject("SELECT count(*) FROM publication WHERE analysis_item_id='v2-direct'",
+				Integer.class)).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT count(*) FROM screening_check WHERE analysis_item_id='v2-direct'",
+				Integer.class)).isZero();
+		assertThat(jdbc.queryForObject("SELECT reason FROM analysis_item_status_history WHERE analysis_item_id='v2-direct'",
+				String.class)).isEqualTo("v2 자동 노출");
+		assertThatThrownBy(() -> jdbc.update("UPDATE analysis_item SET confidence_level='HIGH' WHERE explanation_result_id='v2-direct'"))
+				.isInstanceOf(DataIntegrityViolationException.class);
+		assertThatThrownBy(() -> jdbc.update("UPDATE analysis_item SET analysis_engine='v1' WHERE explanation_result_id='v2-direct'"))
+				.isInstanceOf(DataIntegrityViolationException.class);
+	}
+
+	@Test
+	void v2는_차단정책도_적용하지_않고_v1은_그대로_차단한다() {
+		long policy = seedActivePolicy(false, 5, "HIGH");
+		seedRule(policy, "BANNED_WORD", "{\"text\":\"무해\"}", "BLOCK");
+		screener.screen(115502L, v2Bundle("v2-policy"));
+		screener.screen(115503L, newBundle("v1-policy", "V1TEST", "무해한 요약"));
+		assertThat(jdbc.queryForObject("SELECT status FROM analysis_item WHERE explanation_result_id='v2-policy'",
+				String.class)).isEqualTo("AUTO_PUBLISHED");
+		assertThat(jdbc.queryForObject("SELECT status FROM analysis_item WHERE explanation_result_id='v1-policy'",
+				String.class)).isEqualTo("BLOCKED");
+	}
+
+	@Test
+	void v2_재수신은_중복게시하지_않고_회수후에도_되살리지_않는다() {
+		byte[] body = v2Bundle("v2-replay");
+		screener.screen(115504L, body);
+		screener.screen(115504L, body);
+		screener.screen(115505L, envelope("""
+				{"entries":[{"cursor":2,"delivery_type":"INVALIDATION",
+				 "target_explanation_result_id":"v2-replay","reason":"가격 복귀"}]}
+				""").getBytes(StandardCharsets.UTF_8));
+		screener.screen(115504L, body);
+		assertThat(jdbc.queryForObject("SELECT status FROM analysis_item WHERE explanation_result_id='v2-replay'",
+				String.class)).isEqualTo("INVALIDATED");
+		assertThat(jdbc.queryForObject("SELECT count(*) FROM publication WHERE analysis_item_id='v2-replay'",
+				Integer.class)).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT status FROM publication WHERE analysis_item_id='v2-replay'",
+				String.class)).isEqualTo("INVALIDATED");
+		assertThat(jdbc.queryForObject("SELECT count(*) FROM analysis_item_status_history WHERE analysis_item_id='v2-replay'",
+				Integer.class)).isEqualTo(2);
+	}
+
+	@Test
+	void 잘못된_엔진과_v2의_가짜_확신도는_게시하지_않는다() {
+		String body = new String(v2Bundle("v2-invalid"), StandardCharsets.UTF_8);
+		assertThatThrownBy(() -> screener.screen(115506L,
+				body.replace("\"analysis_engine\":\"v2\"", "\"analysis_engine\":\"v3\"")
+						.getBytes(StandardCharsets.UTF_8)))
+				.isInstanceOf(IllegalStateException.class).hasMessageContaining("analysis_engine");
+		assertThatThrownBy(() -> screener.screen(115506L,
+				body.replace("\"confidence_level\":null", "\"confidence_level\":\"HIGH\"")
+						.getBytes(StandardCharsets.UTF_8)))
+				.isInstanceOf(IllegalStateException.class).hasMessageContaining("V2 requires");
+		assertThat(jdbc.queryForObject("SELECT count(*) FROM analysis_item WHERE explanation_result_id='v2-invalid'",
+				Integer.class)).isZero();
+	}
+
 	@Test
 	void 금칙어_BLOCK_판정이_실_테이블에_상태_근거_미게시로_남는다() {
 		long version = seedActivePolicy(true, null);

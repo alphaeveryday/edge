@@ -1,0 +1,79 @@
+{
+ "execution": "reuse-20261002T0558Z",
+ "status": "SUCCEEDED",
+ "error": null,
+ "input": {
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "etf_codes": [
+   "091160",
+   "396500"
+  ]
+ },
+ "started": "2026-10-02T15:13:46.763000+09:00",
+ "stopped": "2026-10-02T15:13:48.529000+09:00",
+ "total_seconds": 1.8,
+ "history_events": 75,
+ "summary": {
+  "total": 2,
+  "late": 0,
+  "analysis_at": "2026-10-02T05:58:00Z",
+  "unfinished": [],
+  "completed": 2,
+  "failed": 0,
+  "deadline": "2026-10-02T23:00:00Z",
+  "deadline_exceeded": 0,
+  "unknown": 0
+ },
+ "items": 2,
+ "child_runs_in_this_execution": 0,
+ "child_failed_in_this_execution": 0,
+ "failure_reasons": {},
+ "retried_items": 0,
+ "child_seconds_succeeded": null,
+ "child_seconds_sum": 0,
+ "db_connections_max": {
+  "before_10min": 25.0,
+  "during": null
+ },
+ "rows": [
+  {
+   "etf_code": "091160",
+   "outcome": "completed",
+   "published_at": "2026-10-02T06:08:26.392678+00:00",
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "ad650a5b2dbab0a9e21a6c9c7cb862a5",
+     "status": "FAILED",
+     "started": "2026-10-02T14:58:12.189000+09:00",
+     "stopped": "2026-10-02T15:04:12.214000+09:00",
+     "seconds": 360.0,
+     "failure": "TimeoutError"
+    },
+    {
+     "attempt": 1,
+     "analysis_id": "d981bfff321918116c0f8b2ffa8ab382",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:04:19.336000+09:00",
+     "stopped": "2026-10-02T15:08:59.498000+09:00",
+     "seconds": 280.2
+    }
+   ]
+  },
+  {
+   "etf_code": "396500",
+   "outcome": "completed",
+   "published_at": "2026-10-02T06:12:18.938263+00:00",
+   "attempts": [
+    {
+     "attempt": 0,
+     "analysis_id": "9958ab69e337d3cbcbc4cb66f8036a1f",
+     "status": "SUCCEEDED",
+     "started": "2026-10-02T15:09:02.380000+09:00",
+     "stopped": "2026-10-02T15:12:44.442000+09:00",
+     "seconds": 222.1
+    }
+   ]
+  }
+ ]
+}
