@@ -10,7 +10,7 @@ Table "analysis_item" {
   "trade_date" date [not null]
   "explanation_as_of" timestamptz [not null]
   "analysis_type" varchar(30) [not null]
-  "explanation_type" varchar(30) [not null]
+  "explanation_type" varchar(30)
   "summary" text [not null]
   "headline" text
   "confidence_level" varchar(20)
@@ -21,6 +21,7 @@ Table "analysis_item" {
   "received_at" timestamptz [not null]
   "updated_at" timestamptz [not null]
   "content_as_of" timestamptz
+  "analysis_engine" varchar(10) [not null]
 }
 
 Table "analysis_item_status_history" {
