@@ -140,7 +140,7 @@ class EventBundleContractTest {
 		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null, null)));
 		// upsert 1행(신규 수신)이어야 판정·근거 기록 경로가 실행된다 — mock 기본값 0은 재수신 skip 이 된다.
 		when(analysis.upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-				any(), anyLong(), any(), any())).thenReturn(1);
+				any(), anyLong(), any(), any(), any())).thenReturn(1);
 		BundleScreener screener = new BundleScreener(pending, analysis, publications, policies, rules, checks, history);
 
 		// 계약을 만족하는 populated evidences 를 담은 NEW 번들을 실제로 screen 한다
@@ -162,7 +162,7 @@ class EventBundleContractTest {
 		ArgumentCaptor<java.time.OffsetDateTime> movedContentAsOf =
 				ArgumentCaptor.forClass(java.time.OffsetDateTime.class);
 		verify(analysis).upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-				movedEvidences.capture(), anyLong(), any(), movedContentAsOf.capture());
+				movedEvidences.capture(), anyLong(), any(), movedContentAsOf.capture(), any());
 		String moved = movedEvidences.getValue();
 		assertThat(mapper.readTree(moved))
 				.isEqualTo(mapper.readTree(bundle).path("entries").get(0).path("evidences"));

@@ -1,0 +1,362 @@
+[
+ {
+  "analysis_id": "9b55ed6c6393934c1ff78ee62409d74c",
+  "etf_code": "069500",
+  "status": "completed",
+  "published_at": "2026-10-02T06:30:07.580269+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "904ee61e0191ddecff05ed48c2d0690a",
+  "etf_code": "396500",
+  "status": "completed",
+  "published_at": "2026-10-02T06:33:37.662545+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "03999669eaf54721138f8b37a297c661",
+  "etf_code": "0167A0",
+  "status": "completed",
+  "published_at": "2026-10-02T06:37:57.271916+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "58ffc37a9dfcd5b38161352ba558930c",
+  "etf_code": "091160",
+  "status": "completed",
+  "published_at": "2026-10-02T06:51:01.168528+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "f63f9601db0f5252682a8da5dc59d397",
+  "etf_code": "395160",
+  "status": "completed",
+  "published_at": "2026-10-02T07:02:48.728077+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "427e10c54e24317c1ba5f6cc643faca4",
+  "etf_code": "395270",
+  "status": "completed",
+  "published_at": "2026-10-02T07:08:13.840802+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "229c69ac3bcc1e353879f6d546e668d7",
+  "etf_code": "139260",
+  "status": "completed",
+  "published_at": "2026-10-02T07:12:28.987585+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "0b8e75ceafbb01c433469e34759d4032",
+  "etf_code": "091230",
+  "status": "completed",
+  "published_at": "2026-10-02T07:23:07.015022+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "eb0371ee2e7e5dc35d37ffeac79d36f7",
+  "etf_code": "469150",
+  "status": "completed",
+  "published_at": "2026-10-02T07:27:38.099227+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "5a41efc28d9a8f8d6752800f3b6baf6c",
+  "etf_code": "455850",
+  "status": "completed",
+  "published_at": "2026-10-02T07:31:43.522434+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "a360d940e3ed41095d47a5a758241f35",
+  "etf_code": "474590",
+  "status": "completed",
+  "published_at": "2026-10-02T07:36:44.849905+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "d6cd9a8d343956a71947726518291d51",
+  "etf_code": "471990",
+  "status": "completed",
+  "published_at": "2026-10-02T07:40:13.68756+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "644e435d9315de99d6e0afc2f3c5969f",
+  "etf_code": "475300",
+  "status": "completed",
+  "published_at": "2026-10-02T07:44:48.67607+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "fb893e3e47396617ed342b9186b0dee8",
+  "etf_code": "0210A0",
+  "status": "completed",
+  "published_at": "2026-10-02T07:48:18.296386+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "3f2bc6edf3ddd45012fc43426c89361b",
+  "etf_code": "0182R0",
+  "status": "completed",
+  "published_at": "2026-10-02T07:53:05.608858+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "467c418d7794ba051e7b6c8ba5352572",
+  "etf_code": "471780",
+  "status": "completed",
+  "published_at": "2026-10-02T07:58:45.244069+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "1fda0ff39b95d72cb5f85a91db3d2ead",
+  "etf_code": "388420",
+  "status": "completed",
+  "published_at": "2026-10-02T08:03:09.047955+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "4d3b8a8091e1cedc573ca32e51cc18e3",
+  "etf_code": "363580",
+  "status": "completed",
+  "published_at": "2026-10-02T08:07:02.72012+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "b8371d289b090e22990eb22051f31f84",
+  "etf_code": "494220",
+  "status": "completed",
+  "published_at": "2026-10-02T08:18:55.985605+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "281130156f3cf62406b713718aead6c3",
+  "etf_code": "0093A0",
+  "status": "completed",
+  "published_at": "2026-10-02T08:22:49.601161+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "0d2ea8c947f73a34d22d6501b86b4596",
+  "etf_code": "471760",
+  "status": "completed",
+  "published_at": "2026-10-02T08:46:41.614633+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "e55389ac948a24c204a3d196269d825f",
+  "etf_code": "266370",
+  "status": "completed",
+  "published_at": "2026-10-02T08:51:36.289967+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "991087a569d31c0666ea043e9324fab2",
+  "etf_code": "475310",
+  "status": "completed",
+  "published_at": "2026-10-02T09:12:26.878842+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "5c0a67705150c317bca9ee63d48cfa18",
+  "etf_code": "476260",
+  "status": "completed",
+  "published_at": "2026-10-02T09:16:24.292271+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "fe9f13e42585bd5a3b527e4376b42592",
+  "etf_code": "261060",
+  "status": "completed",
+  "published_at": "2026-10-02T09:20:43.899933+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "b0d9c0c8d618ea71eebb4469be3d00ec",
+  "etf_code": "482030",
+  "status": "completed",
+  "published_at": "2026-10-02T09:33:16.549814+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "0809499280b0f45d83ba7292c12a259c",
+  "etf_code": "0176P0",
+  "status": "completed",
+  "published_at": "2026-10-02T09:37:59.599571+00:00",
+  "has_previous": false,
+  "error": null
+ },
+ {
+  "analysis_id": "1091e1077af9c6c3f68d2a8213b60ce8",
+  "etf_code": "300950",
+  "status": "completed",
+  "published_at": "2026-10-02T09:42:54.896624+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "2bf58acc75bb580b18ab570d9437d8dd",
+  "etf_code": "305720",
+  "status": "completed",
+  "published_at": "2026-10-02T09:48:20.702566+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "3e6b64508cab7adc79c6fc7aad92c1f7",
+  "etf_code": "091170",
+  "status": "completed",
+  "published_at": "2026-10-02T09:58:41.60819+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "cdd0b54ff4b5d35e4f11bb5e7083ceb8",
+  "etf_code": "449450",
+  "status": "completed",
+  "published_at": "2026-10-02T10:03:04.594364+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "6f46244c5c481724a519ea00e71801de",
+  "etf_code": "0177X0",
+  "status": "completed",
+  "published_at": "2026-10-02T10:06:40.100884+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "df5eaabdd78510ac174796d00591c6cc",
+  "etf_code": "377990",
+  "status": "completed",
+  "published_at": "2026-10-02T10:11:45.571821+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "2a3fe621e1b8b287cb6b3376e295bbcd",
+  "etf_code": "261070",
+  "status": "completed",
+  "published_at": "2026-10-02T10:17:33.545796+00:00",
+  "has_previous": true,
+  "error": null
+ },
+ {
+  "analysis_id": "0e5c473326980d2613d181f8815af22e",
+  "etf_code": "0005G0",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "ToolInputError: Evidence '04095a236bc44e72980364110d5c1cc2': final news evidence"
+ },
+ {
+  "analysis_id": "953b0a79af36b2e590844ac9ddf7aaa4",
+  "etf_code": "0005G0",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "ToolInputError: Evidence 'e84b1d69c1e244239520dbfb238d6f50': final news evidence"
+ },
+ {
+  "analysis_id": "5569f9fccc38b8a98a3e748840d2ddb0",
+  "etf_code": "091170",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": true,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "98305793710e8981ba139abc0e0b9e79",
+  "etf_code": "395160",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": true,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "1676465d3aee7944d6bfa6b230ae54bd",
+  "etf_code": "0190G0",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "ead396fed2e81006d6a9d276c5d545d2",
+  "etf_code": "091230",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "f79ad5f2707a61734061b574b545e874",
+  "etf_code": "486240",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "7261f77cad54e3b5ea38dab11d9aa9b7",
+  "etf_code": "494220",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "c25a3da92137548431ee199315fb0b17",
+  "etf_code": "475310",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "ToolInputError: Evidence '3d9fb25487bbe99c1cc8177bb2' is missing, foreign, futur"
+ },
+ {
+  "analysis_id": "fb43a344a14ddaddd58b6bdb129bb676",
+  "etf_code": "0190G0",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ },
+ {
+  "analysis_id": "07c00330cff6a3c3051f419f08546f65",
+  "etf_code": "486240",
+  "status": "failed",
+  "published_at": null,
+  "has_previous": false,
+  "error": "TimeoutError: Execution failed; inspect model and tool records."
+ }
+]

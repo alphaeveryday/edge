@@ -38,6 +38,24 @@ class EventBundleContractTest {
 	private final JsonSchema schema = loadSchema();
 
 	@Test
+	void v2는_엔진을_명시하고_v1_판정값을_만들지_않는다() {
+		var result = new ExplanationResult("v2-result", "i1", "091160", "KODEX 반도체",
+				LocalDate.parse("2026-10-02"), Instant.parse("2026-10-02T01:00:00Z"),
+				null, "설명", null, null, Instant.parse("2026-10-02T01:00:00Z"), "v2");
+		var bundle = EventBundle.of(1L, List.of(BundleEntry.newResult(1, result,
+				new ExplanationRun("v2-result", null), List.of(), List.of())));
+		ObjectMapper mapper = new ObjectMapper();
+		String json = mapper.writeValueAsString(bundle);
+		assertThat(schema.validate(json, InputFormat.JSON)).isEmpty();
+		assertThat(mapper.readTree(json).path("entries").get(0).path("explanation_result")
+				.path("analysis_engine").asString()).isEqualTo("v2");
+		assertThat(schema.validate(json.replace("\"v2\"", "\"v3\""), InputFormat.JSON)).isNotEmpty();
+		assertThat(schema.validate(json.replace("\"confidence_level\":null", "\"confidence_level\":\"HIGH\""), InputFormat.JSON)).isNotEmpty();
+		assertThat(schema.validate(json.replace("\"explanation_type\":null", "\"explanation_type\":\"MIXED\""), InputFormat.JSON)).isNotEmpty();
+		assertThat(schema.validate(json.replace("\"analysis_engine\":\"v2\"", "\"analysis_engine\":\"v1\""), InputFormat.JSON)).isNotEmpty();
+	}
+
+	@Test
 	void 뉴스와_계산의_실제_DTO를_번들에_섞어도_감사값이_보존된다() {
 		ObjectMapper mapper = new ObjectMapper();
 		var arguments = mapper.readTree("{\"investor\":\"foreign\",\"days\":5}");

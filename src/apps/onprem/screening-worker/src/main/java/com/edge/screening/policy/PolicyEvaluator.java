@@ -7,7 +7,8 @@ import java.util.List;
 
 /**
  * 순수 결정 코어(ADR-0039 §2 policy/) — (entry, 활성 정책) → 판정. I/O 를 모른다.
- * 집계: BLOCK > REVIEW > PASS. PASS 는 자동 제공 AND 게이트(UNCERTAIN 아님·스위치·
+ * v2는 정책 판정 없이 자동 게시한다. v1 집계: BLOCK > REVIEW > PASS.
+ * v1 PASS 는 자동 제공 AND 게이트(UNCERTAIN 아님·스위치·
  * 최소 출처 수·최소 확신도)를 전부 통과해야 AUTO_PUBLISHED 가 된다(모호성은 전부
  * 검수·차단 쪽 — 보수적 온보딩, ALPHA-634 확신도 게이트 설계).
  * SINGLE_SOURCE 판정 기준(출처 2건 미만)은 콘솔 검수 사유 분류(단일 출처)와 대응한다.
@@ -20,6 +21,9 @@ public final class PolicyEvaluator {
 	}
 
 	public static ScreeningDecision decide(DeliveryEntry entry, ActivePolicy policy) {
+		if ("v2".equals(entry.explanationResult().analysisEngine())) {
+			return new ScreeningDecision("AUTO_PUBLISHED", List.of());
+		}
 		List<ScreeningDecision.Check> checks = new ArrayList<>();
 		boolean block = false;
 		boolean review = false;

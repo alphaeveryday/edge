@@ -125,8 +125,14 @@
 | INVALIDATION | `target_explanation_result_id` | `target_movement_analysis_id` | 회수 대상은 둘 중 하나. 본체 참조 없음·사유 필수 |
 
 이 변경은 저장 형상만 준비한다. v2 발번은 번들 조립·회수 코드와 수신 검증 이후에 활성화한다.
-v2에서 산출하지 않는 v1 설명 유형·확신도를 임의 생성하지 않는다. 이 판정값의 전달 방식은
-생산자 연결 시 별도로 확정한다. 기존 v1 기록과 외부 JSON 계약은 이번 migration에서 바꾸지 않는다.
+v2 결과는 서버가 `explanation_result.analysis_engine: "v2"`를 넣는다. 에이전트가 선택하는 값이 아니다.
+`explanation_type`과 `confidence_level`은 `null`로 보내며, v1 판정값을 만들어 채우지 않는다.
+구형 결과는 `analysis_engine`을 생략하며 v1으로 처리한다.
+
+v2 NEW는 관리자 승인 없이 `AUTO_PUBLISHED`로 저장하고 게시한다. 활성 검수 정책이 없어도 동작하며,
+v1의 승인 스위치·금칙어·출처 수·확신도 조건을 적용하지 않는다. 검수 판정을 수행하지 않았으므로
+가짜 PASS 기록을 생성하지 않고, 게시 상태 이력에 `v2 자동 노출`을 남긴다.
+근거 보존·멱등 수신·INVALIDATION 회수는 기존 경로를 사용한다. v1 정책은 유지한다.
 
 ### 검수콘솔 API의 계산 근거 전달
 
@@ -180,3 +186,12 @@ MVP의 앱 레벨 발신자 체크섬(`X-Bundle-Checksum`)·byte[] 응답은 폐
 - (채움 보증, 미해소) 선별 nullable 컬럼 `source_event.event_date`·`document.title`·`document.published_at` 의 결정적 채움 보증 — 이 PR(ALPHA-395)의 CODEOWNERS 리뷰에서 진기 확인으로 해소 예정 (위 "경계면 컬럼" 절 참조)
 
 해소된 안건: ~~confidence 스케일~~ → 물리 스키마의 `confidence_level` enum(HIGH/MEDIUM/LOW) 채택. ~~risk_grade 존치~~ → 물리 스키마에 없음. 산정 주체는 온프렘 Screening Worker 로 확정(2026-07-26 — Cloud AI 는 가드레일 제공만, 등급 기준은 증권사별 상이)이므로 번들 경계면에 risk_grade 는 싣지 않는 방향이 기본, 필요 시 확장-수축으로 추가. ~~ID 체계(UUIDv7 제안)~~ → 물리 스키마의 TEXT 도메인 ID 채택.
+
+### v2 운영 전달
+
+- 분석 완료 후 실제 DB 자료로 발행한 가격 설명만 기존 `tenant_delivery`에 등록한다. 목데이터·미발행 결과는 전달하지 않는다.
+- 전달 API는 `movement_analysis_id`로 본문과 선택 항목의 근거를 조회한다. 분석 ID를 기존 `explanation_result_id`와 `explanation_run_id` 자리에 전달한다.
+- `analysis_engine`은 서버가 `v2`로 지정한다. v1 전용 `release_bundle_version`·설명 유형·확신도는 `null`이다.
+- 뉴스 제목은 저장된 툴 결과를 보존하고 출처·발행시각·링크는 해당 뉴스 ID의 원문 메타데이터를 연결한다. 계산은 저장된 인자·전체 출력·수식·정의를 그대로 전달한다.
+- 변경 없는 이전 설명은 다시 발번하지 않는다. 재시도는 동일 분석을 중복 발번하지 않는다. 회수는 기존 INVALIDATION에 v2 대상 ID를 싣는다.
+- 수신 서버 배포 → 전달 API 배포 → 분석 완료 시 전달 등록 활성화 순으로 적용한다.

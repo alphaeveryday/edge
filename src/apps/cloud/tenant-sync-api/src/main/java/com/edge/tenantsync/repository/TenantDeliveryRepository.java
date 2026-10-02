@@ -23,11 +23,11 @@ public interface TenantDeliveryRepository extends Repository<TenantDelivery, Ten
 
 	@Query("""
 			SELECT new com.edge.tenantsync.repository.DeliveryRow(
-			    d.cursor, d.deliveryType, d.targetExplanationResultId, d.reason,
+			    d.cursor, d.deliveryType, COALESCE(d.targetExplanationResultId, d.targetMovementAnalysisId), d.reason,
 			    r.explanationResultId, r.etfInstrumentId, i.ticker, e.displayName,
 			    r.tradeDate, r.explanationAsOf, r.explanationType, r.summary,
 			    r.confidenceLevel, r.primaryThreadId,
-			    run.explanationRunId, run.bundleVersion)
+			    run.explanationRunId, run.bundleVersion, d.movementAnalysisId)
 			FROM TenantDelivery d
 			LEFT JOIN ExplanationResultEntity r ON r.explanationResultId = d.explanationResultId
 			LEFT JOIN ExplanationRunEntity run ON run.explanationRunId = r.explanationRunId
