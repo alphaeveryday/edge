@@ -178,6 +178,22 @@ def test_observation_uses_persisted_job_without_requiring_database():
     reader.assert_not_called()
 
 
+def test_instruction_library_exposes_complete_worker_documents_only():
+    from edge_analysis_v2.agent.skill_session import SKILLS, SOURCE
+    with server(Mock()) as port:
+        code, body = request(port, '/api/instructions')
+        assert code == 200
+        documents = json.loads(body)['documents']
+        assert {d['id'] for d in documents} == {'AGENTS.md', *SKILLS}
+        for name in SKILLS:
+            record = next(d for d in documents if d['id'] == name)
+            assert record['content'] == (SOURCE/name/'SKILL.md').read_text(encoding='utf-8')
+            assert record['usage'] == '필요할 때 선택해서 읽는 스킬'
+        agents = next(d for d in documents if d['id'] == 'AGENTS.md')
+        assert agents['content'] == (SOURCE.parent/'agent/workspace/AGENTS.md').read_text(encoding='utf-8')
+        assert request(port, '/api/instructions/../../secrets')[0] == 404
+
+
 def test_prompt_comparison_is_available_without_analysis_execution(tmp_path):
     from edge_analysis_v2.prompts.versions import PromptVersions
     sources = tmp_path/'prompts'
