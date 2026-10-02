@@ -98,8 +98,8 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 | 정의 문법 | 통과 | AWS `ValidateStateMachineDefinition` |
 | 계약 테스트(대역) | 21건 통과, 변이 15건 전부 검출 | `infra/terraform/modules/analysis-v2/tests/test_outlook_batch.py` |
 | Terraform | `validate` 통과 | 37종 목록이 `sources.toml` 파싱 결과와 순서까지 일치(해시 동일) |
-| dev 소량 통합 | 대기 | 배포 뒤 |
-| dev 37종 전체 실측 | 대기 | 배포 뒤 |
+| dev 소량 통합 | 통과 (2026-10-02) | 아래 'dev 검증' |
+| dev 37종 전체 실측 | 진행 중 | 아래 'dev 검증' |
 | 실제 스케줄 발화 관측 | 대기 | 시작 시각 확정 뒤 |
 
 계약 테스트는 상태 전이, 내장 함수, Retry와 Catch를 AWS의 실제 해석기(TestState API)로 평가한다. 대역은 조회 API, 실행 중 목록, 단건 워크플로 호출 셋이다. IAM 권한, 실제 API 응답 형식, 부모 중단 시 자식 정리는 dev 검증에서 확인한다. 자격증명이 필요해 CI에서는 돌지 않는다.
@@ -108,6 +108,28 @@ EventBridge Scheduler → 배치 워크플로(`edge-dev-analysis-v2-outlook-batc
 AWS_PROFILE=edge uv run --with boto3 python -m unittest discover -s infra/terraform/modules/analysis-v2/tests -v
 AWS_PROFILE=edge uv run --with boto3 python infra/terraform/modules/analysis-v2/tests/mutate_outlook_batch.py
 ```
+
+### dev 검증 (2026-10-02, 배포 커밋 `390b1532`, 수동 시작)
+
+실제 AWS dev에서 배치를 수동으로 시작해 확인했다. 스케줄 발화가 아니다. 실행별 원본은 `dev/results/`에 있고 `dev/batch_run.py`로 다시 뽑는다.
+
+| 확인 | 실행 이름 | 결과 |
+|---|---|---|
+| 정상 실행 2종 | `small-20261002T0558Z` | 성공, 14분 38초. 단건 실행 3회. 091160의 첫 시도가 모델 대화 제한 300초로 실패(`TimeoutError`)했고 새 ID의 둘째 시도가 성공 |
+| 같은 입력 재실행 | `reuse-20261002T0558Z` | 성공, 1.8초, 단건 실행 0회. 실패한 시도 0을 건너 시도 1의 완료분을 재사용 |
+| 마감이 지난 뒤 시작 | `late-20261002T0558Z` | `OutlookBatch.DeadlineExceeded`, 0.5초, 단건 실행 0회. 실패 알람이 ALARM으로 전이 |
+| 같은 배치 2개 동시 시작 | `dupA-`, `dupB-20261002T0558Z` | 둘 다 성공. 단건 실행은 1개뿐이고 두 배치가 그 결과를 함께 썼다 |
+| 실행 중 부모 중단 | `abort-20261002T0558Z` | 자식 실행이 1초 뒤 ABORTED, ECS 태스크는 약 68초 뒤 종료(종료 코드 137). DB 행은 `running`으로 남는다 |
+| 중단 뒤 재실행 | `recover-20261002T0558Z` | 성공. 중단된 시도 0을 실패로 읽고 시도 1을 새 ID로 실행 |
+
+대역 테스트가 덮지 못하던 것 중 여기서 확인된 것:
+
+- 조회 API를 IAM 인증으로 호출할 수 있고, 없는 분석의 404 cause에 `Analysis not found.`가 실린다.
+- 실행 중 목록 조회, 단건 워크플로 중첩 시작과 완료 대기, 발행 시각 비교가 실제 응답으로 동작한다.
+- 직전 항목이 끝난 직후의 총량 확인에서 30초 추가 대기는 생기지 않았다(전이 5회 관측).
+- 시도 하나에 붙는 배치 쪽 부대 시간은 약 5초다(조회 2~3회와 총량 확인).
+
+확인하지 못한 것: 스케줄 발화로 시작한 실행, 다른 v2 실행과 겹친 상태의 대기, 실제 시각으로 마감을 넘기는 경우.
 
 ## 가격변동 연결 (다음 작업, 미구현)
 
