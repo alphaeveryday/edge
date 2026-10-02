@@ -17,7 +17,8 @@ export function useSheetDrag(open: boolean, onClose: () => void) {
     const back = () => Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
     const vertical = (_: unknown, g: PanResponderGestureState) => Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx);
     return PanResponder.create({
-      // 헤더 안 버튼의 탭은 유지, 세로로 움직일 때만 가로챔
+      // 빈 곳은 닿을 때부터 맡음, 헤더 안 버튼은 세로로 움직일 때 가로챔
+      onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponderCapture: vertical,
       onPanResponderMove: (_, g) => y.setValue(Math.max(0, g.dy)),
       onPanResponderRelease: (_, g) => {
