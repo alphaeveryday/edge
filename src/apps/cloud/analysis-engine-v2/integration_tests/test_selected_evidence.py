@@ -101,16 +101,16 @@ def test_stored_output_and_definition_are_not_recomputed_or_rewritten(saved):
     assert result['context'] == {'flow_as_of_date': '2026-10-01'}
 
 
-@pytest.mark.parametrize('damage', ['item_missing', 'run_missing', 'run_failed',
+@pytest.mark.parametrize('damage', ['item_missing', 'run_missing', 'references_empty', 'run_failed',
                                    'foreign_etf', 'foreign_source', 'future', 'wrong_day'])
 def test_broken_references_are_not_presented_as_complete_evidence(saved, damage):
     conn, old, current, selected = saved
     if damage == 'item_missing':
         conn.execute('UPDATE movement_analyses SET selected_item_ids=%s WHERE analysis_id=%s',
                      (['missing'], current))
-    elif damage == 'run_missing':
+    elif damage in ('run_missing', 'references_empty'):
         conn.execute('UPDATE movement_items SET tool_run_ids=%s WHERE item_id=%s',
-                     (['missing'], selected[0]))
+                     ([] if damage == 'references_empty' else ['missing'], selected[0]))
     elif damage == 'run_failed':
         conn.execute("UPDATE tool_runs SET status='failed' WHERE tool_run_id=%s", (old + '-sum',))
     else:
@@ -156,3 +156,16 @@ def test_reader_does_not_join_the_callers_existing_write_transaction(saved):
         conn.execute('SELECT 1')
         with pytest.raises(ValueError, match='idle autocommit'):
             inspection.read_published_movement_evidence(conn, current)
+
+
+def test_publication_writer_and_reader_agree_when_previous_explanation_is_reused(saved):
+    conn, old, current, _ = saved
+    conn.execute("""UPDATE movement_analyses SET status='running', published_at=NULL,
+                    previous_analysis_id=%s WHERE analysis_id=%s""", (old, current))
+    store = PublicationStore(conn, final_tool_names={'sum', 'get_issue_evidence'})
+    store.save_movement(current, {'new_items': [], 'selected_item_ids': [old + '-selected'],
+                                 'summary': '이전 설명이 여전히 가장 중요합니다.'})
+    result = inspection.read_published_movement_evidence(conn, current)
+    assert result['items'] == [{'item_id': old + '-selected',
+                               'tool_run_ids': [old + '-sum', old + '-news']}]
+    assert [run['tool_run_id'] for run in result['tool_runs']] == [old + '-sum', old + '-news']

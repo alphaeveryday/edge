@@ -140,6 +140,8 @@ def read_published_movement_evidence(connection: Connection, analysis_id: str) -
         if set(items_by_id) != set(selected):
             raise ValueError('Selected item is missing, foreign, future, or unpublished')
         items = [items_by_id[identity] for identity in selected]
+        if any(not item['tool_run_ids'] for item in items):
+            raise ValueError('Selected item has no evidence references')
         references = list(dict.fromkeys(ref for item in items for ref in item['tool_run_ids']))
         cur.execute('''SELECT r.*, d.function_name, d.version, d.description,
                              d.formula_latex, d.source_names
