@@ -24,5 +24,14 @@ public record DeliveryRow(
 		String confidenceLevel,
 		String primaryThreadId,
 		String explanationRunId,
-		String bundleVersion) {
+		String bundleVersion,
+        String movementAnalysisId) {
+    public DeliveryRow(long cursor, String deliveryType, String targetExplanationResultId, String reason,
+            String explanationResultId, String etfInstrumentId, String etfTicker, String etfName,
+            LocalDate tradeDate, Instant explanationAsOf, String explanationType, String summary,
+            String confidenceLevel, String primaryThreadId, String explanationRunId, String bundleVersion) {
+        this(cursor, deliveryType, targetExplanationResultId, reason, explanationResultId, etfInstrumentId,
+                etfTicker, etfName, tradeDate, explanationAsOf, explanationType, summary, confidenceLevel,
+                primaryThreadId, explanationRunId, bundleVersion, null);
+    }
 }

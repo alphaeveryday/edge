@@ -865,7 +865,8 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
         if is_backfill:
             return KisPriceCollector(client=KisHistoricalMinuteClient(
                 options.app_key, options.app_secret, http, session_date=session_date,
-            )), is_backfill
+                stats=http.stats,
+            ), stats=http.stats), is_backfill
         concurrency = options.fetch_concurrency
         if concurrency > 1 and http.pacer is None:
             # 공유 허용 없이 동시 요청을 켜면 로컬 간격(0.08초) 안에서 실제 발신률만 올라간다 — 합산이 이미
@@ -873,8 +874,9 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
             logger.warning("fetch_concurrency=%d 무시 — 공유 호출 허용이 꺼져 있다(동시성 1로 수집)", concurrency)
             concurrency = 1
         return KisPriceCollector(
-            client=KisMinuteClient(options.app_key, options.app_secret, http),
+            client=KisMinuteClient(options.app_key, options.app_secret, http, stats=http.stats),
             concurrency=concurrency,
+            stats=http.stats,
         ), is_backfill
     if options.source == "toss":
         from ..sources.toss import TossOpenApiClient
