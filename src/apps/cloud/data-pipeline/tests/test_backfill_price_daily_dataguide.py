@@ -326,14 +326,17 @@ def test_머리행에_같은_종목_열이_둘이면_멈춘다(harness):
     assert "같은 열" in _log(storage)["failures"][0]["error"]
 
 
-@pytest.mark.parametrize("dates,window", [
-    ([], {}),                                                    # 머리행뿐인 스냅샷
-    (["2026-07-30"], {"from_date": "2027-01-01", "to_date": "2027-12-31"}),   # 기간이 스냅샷 밖
+@pytest.mark.parametrize("dates,window,header", [
+    ([], {}, None),                                              # 머리행뿐인 스냅샷
+    (["2026-07-30"], {"from_date": "2027-01-01", "to_date": "2027-12-31"}, None),  # 기간이 스냅샷 밖
+    (["2026-07-30"], {}, ["date", "005930", "000660", "999999"]),   # 열 이름에 'A' 가 없다
+    (["2026-07-30"], {}, ["date", "A111111", "A222222", "A333333"]),  # 마스터와 겹치는 종목 0
 ])
-def test_실을_거래일이_없으면_성공으로_끝나지_않는다(harness, dates, window):
-    # WHY: 빈 스냅샷이나 잘못 준 기간이 0행을 싣고 exit 0 으로 끝나면 "이력을 채웠다"고 읽힌다.
+def test_실을_행이_없으면_성공으로_끝나지_않는다(harness, dates, window, header):
+    # WHY: 빈 스냅샷, 잘못 준 기간, 마스터와 한 종목도 안 맞는 머리행(형식이 바뀐 스냅샷·빈 마스터)
+    #      은 모두 0행을 싣는다. 그게 exit 0 으로 끝나면 "이력을 채웠다"고 읽힌다.
     storage, _conn, chunks = harness
-    _write_all(storage, dates)
+    _write_all(storage, dates, header=header)
 
     assert _run(storage, **window) == 1
 

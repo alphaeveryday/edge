@@ -1703,17 +1703,20 @@ python -m data_pipeline.run backfill-price-daily-dataguide --run-id dataguide-pr
 | 이 스텝이 넣은 행 | 같은 값으로 다시 쓴다 |
 | 그 밖(KIS 일일 적재분) | 건드리지 않는다 |
 
-- 넣는 값: 시가·고가·저가·종가(원주가), 수정주가, 거래량. `data_version=dataguide-<스냅샷일>`,
-  `price_basis=raw_close;adj_asof=<스냅샷일>`, `available_at` 은 거래일 15:30 KST 다.
+- 넣는 값: 시가·고가·저가·종가(원주가), 수정주가, 거래량. `available_at` 은 거래일 15:30 KST 다.
+  `--as-of-date 2026-08-02` 면 `data_version=dataguide-20260802`(하이픈 없는 YYYYMMDD),
+  `price_basis=raw_close;adj_asof=2026-08-02` 다.
 - **수정주가는 스냅샷 기준이다.** 스냅샷 뒤에 분할·권리락이 생기면 낡는다. KIS 일일 적재 행에는
   수정주가가 없다.
 - **`available_at` 은 실제 입수 시각이 아니다.** 과거 시점 재현에 이 행을 쓰면 그 시점에 이미
   알던 값으로 보인다.
-- 여섯 항목 파일의 열 구성·날짜 행이 하나라도 다르면 한 행도 싣지 않는다. 종가가 있는데 값이
-  CHECK 를 위반하는 칸은 격리하고 exit 2 로 끝난다.
+- 여섯 항목 파일의 열 구성·날짜 행·행별 열 수가 하나라도 다르거나 머리행에 같은 열이 두 번
+  있으면 한 행도 싣지 않는다. 실을 행이 하나도 없어도 실패로 끝난다(기간 밖·마스터와 맞는 열 0).
+  값이 컬럼 형(NUMERIC(24,8)·BIGINT)에 그대로 들어가지 않는 칸은 격리하고 exit 2 로 끝난다.
 - 결과는 `operations_archive/data_quality_logs/dataset=price_daily_dataguide_backfill/` 에 남는다.
-- 되돌리기: 삽입한 행은 `DELETE FROM price_daily WHERE data_version = 'dataguide-<스냅샷일>'`
-  으로 지우고, 교체된 5분봉 집산 행은 위 보존본에서 복원한다(복원 스크립트는 없다).
+- 되돌리기: 삽입한 행은 `DELETE FROM price_daily WHERE data_version = 'dataguide-20260802'`
+  (위 `data_version` 그대로)로 지우고, 교체된 5분봉 집산 행은 위 보존본에서 복원한다(복원
+  스크립트는 없다).
 - 실측(2026-10-02, 로컬 PostgreSQL 16 리허설): 마스터 2,804종목 중 2,688종목·4,888거래일·
   8,690,491행, 110초, 표 크기 약 2.0GB. 겹치는 100,197행의 시가·고가·저가·종가가 KIS canonical
   과 전부 같았다. dev DB 적재는 이 문서 작성 시점에 실행 전이다.

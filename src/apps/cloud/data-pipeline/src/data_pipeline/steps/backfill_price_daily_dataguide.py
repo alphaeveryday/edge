@@ -371,9 +371,13 @@ def run(
                     chunk_dates += 1
                     if chunk_dates >= _CHUNK_DATES:
                         flush()
-                if not dates_read:
-                    # 기간을 잘못 준 실행이 0행을 싣고 성공으로 끝나면 안 된다(Rule 12).
-                    raise ValueError(f"요청 기간에 거래일 행이 없다: {from_date}~{to_date}")
+                if not rows_read:
+                    # 기간을 잘못 줬거나 마스터와 맞는 종목 열이 하나도 없는 실행이 0행을 싣고
+                    # 성공으로 끝나면 안 된다(Rule 12).
+                    raise ValueError(
+                        f"실을 행이 없다: 기간 {from_date}~{to_date} 거래일 {dates_read}개, "
+                        f"마스터와 맞는 종목 열 {len(targets)}개"
+                    )
                 flush()
     except Exception as exc:
         # 앞서 커밋된 묶음은 남는다 — 같은 인자로 다시 돌리면 이어서 채운다(멱등).
