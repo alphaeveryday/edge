@@ -36,7 +36,7 @@ export default function CommunityProfile() {
             <Text style={styles.nick}>{me?.nick}</Text>
           )}
           <View style={styles.stats}>
-            {[[posts?.length ?? 0, '글'], [likes, '좋아요'], [1, '투표']].map(([v, l]) => (
+            {[[posts?.length ?? 0, '글'], [likes, '좋아요']].map(([v, l]) => (
               <View key={String(l)} style={{ alignItems: 'center', gap: 2 }}>
                 <Text style={styles.statV}>{v}</Text>
                 <Text style={styles.statL}>{l}</Text>
