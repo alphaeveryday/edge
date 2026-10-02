@@ -89,6 +89,14 @@ test_out.txt
 tests/loadtest/publication/results/*
 !tests/loadtest/publication/results/.gitkeep
 
+# v2 분석 측정 원본(실행·조회 결과 덤프). 위와 같은 이유로 저장소에 두지 않는다 -
+# 수치는 tests/loadtest/analysis-v2/README.md 로 가고, 원본은 스크립트로 다시 뽑는다.
+tests/loadtest/analysis-v2/dev/results/
+tests/loadtest/analysis-v2/local/results*
+tests/loadtest/analysis-v2/local/work/
+tests/loadtest/analysis-v2/aws/*.json
+tests/loadtest/analysis-v2/aws/*.txt
+
 .tmp/
 *.dtmp
 .$*
