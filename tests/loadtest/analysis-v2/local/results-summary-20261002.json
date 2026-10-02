@@ -1,0 +1,1893 @@
+[
+ {
+  "name": "sweep-outlook-c1",
+  "at": "2026-10-02T01:09:21+0900",
+  "conditions": {
+   "c": 1,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.2,
+  "ok": 1,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.8,
+  "connect_ms_max": 13.3,
+  "pg_container_mem": {
+   "first": "108MiB",
+   "peak_sampled": "108.4MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c1",
+  "at": "2026-10-02T01:09:29+0900",
+  "conditions": {
+   "c": 1,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.21,
+  "ok": 1,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.8,
+  "connect_ms_max": 10.6,
+  "pg_container_mem": {
+   "first": "108.1MiB",
+   "peak_sampled": "108.1MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c1",
+  "at": "2026-10-02T01:09:37+0900",
+  "conditions": {
+   "c": 1,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.2,
+  "ok": 1,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.8,
+  "connect_ms_max": 12.3,
+  "pg_container_mem": {
+   "first": "108.1MiB",
+   "peak_sampled": "108.5MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:09:45+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.2,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 19.1,
+  "connect_ms_max": 13.1,
+  "pg_container_mem": {
+   "first": "108.2MiB",
+   "peak_sampled": "108.2MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:09:52+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.23,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 19.2,
+  "connect_ms_max": 12.7,
+  "pg_container_mem": {
+   "first": "108.2MiB",
+   "peak_sampled": "108.8MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:10:00+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.14,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 19.0,
+  "connect_ms_max": 14.3,
+  "pg_container_mem": {
+   "first": "108.2MiB",
+   "peak_sampled": "108.5MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c3",
+  "at": "2026-10-02T01:10:08+0900",
+  "conditions": {
+   "c": 3,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.17,
+  "ok": 1,
+  "failed": 2,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.4,
+  "connect_ms_max": 10.3,
+  "pg_container_mem": {
+   "first": "108MiB",
+   "peak_sampled": "108.3MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c3",
+  "at": "2026-10-02T01:10:16+0900",
+  "conditions": {
+   "c": 3,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.24,
+  "ok": 1,
+  "failed": 2,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.5,
+  "connect_ms_max": 12.0,
+  "pg_container_mem": {
+   "first": "108.3MiB",
+   "peak_sampled": "108.9MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c3",
+  "at": "2026-10-02T01:10:24+0900",
+  "conditions": {
+   "c": 3,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.2,
+  "ok": 1,
+  "failed": 2,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.4,
+  "connect_ms_max": 18.3,
+  "pg_container_mem": {
+   "first": "108.4MiB",
+   "peak_sampled": "108.4MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c4",
+  "at": "2026-10-02T01:10:32+0900",
+  "conditions": {
+   "c": 4,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.23,
+  "ok": 1,
+  "failed": 3,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_reader\"",
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.4,
+  "connect_ms_max": 13.5,
+  "pg_container_mem": {
+   "first": "108.4MiB",
+   "peak_sampled": "109MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c4",
+  "at": "2026-10-02T01:10:39+0900",
+  "conditions": {
+   "c": 4,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.21,
+  "ok": 1,
+  "failed": 3,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_reader\"",
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.5,
+  "connect_ms_max": 12.9,
+  "pg_container_mem": {
+   "first": "108.7MiB",
+   "peak_sampled": "108.7MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c4",
+  "at": "2026-10-02T01:10:40+0900",
+  "conditions": {
+   "c": 4,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 0.73,
+  "ok": 0,
+  "failed": 4,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_reader\""
+  ],
+  "peak_sessions": {
+   "writer": 0,
+   "reader": 0
+  },
+  "writer_connection_seconds": 0.0,
+  "connect_ms_max": 11.7,
+  "pg_container_mem": {
+   "first": null,
+   "peak_sampled": null
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c8",
+  "at": "2026-10-02T01:10:48+0900",
+  "conditions": {
+   "c": 8,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.35,
+  "ok": 1,
+  "failed": 7,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_reader\"",
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.4,
+  "connect_ms_max": 12.2,
+  "pg_container_mem": {
+   "first": "108.5MiB",
+   "peak_sampled": "108.6MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c8",
+  "at": "2026-10-02T01:10:56+0900",
+  "conditions": {
+   "c": 8,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.44,
+  "ok": 1,
+  "failed": 7,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_reader\"",
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.4,
+  "connect_ms_max": 13.1,
+  "pg_container_mem": {
+   "first": "109.4MiB",
+   "peak_sampled": "109.4MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c8",
+  "at": "2026-10-02T01:10:57+0900",
+  "conditions": {
+   "c": 8,
+   "kind": "outlook",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 1.22,
+  "ok": 0,
+  "failed": 8,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_reader\"",
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 1.1,
+  "connect_ms_max": 15.0,
+  "pg_container_mem": {
+   "first": null,
+   "peak_sampled": null
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-movement-c1",
+  "at": "2026-10-02T01:11:05+0900",
+  "conditions": {
+   "c": 1,
+   "kind": "movement",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.11,
+  "ok": 1,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.6,
+  "connect_ms_max": 11.8,
+  "pg_container_mem": {
+   "first": "108.2MiB",
+   "peak_sampled": "108.8MiB"
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {
+    "completed": 1
+   }
+  }
+ },
+ {
+  "name": "sweep-movement-c2",
+  "at": "2026-10-02T01:11:13+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "movement",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.1,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 18.9,
+  "connect_ms_max": 14.4,
+  "pg_container_mem": {
+   "first": "109MiB",
+   "peak_sampled": "109MiB"
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {
+    "completed": 1
+   }
+  }
+ },
+ {
+  "name": "sweep-movement-c3",
+  "at": "2026-10-02T01:11:21+0900",
+  "conditions": {
+   "c": 3,
+   "kind": "movement",
+   "llm_s": 6.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.11,
+  "ok": 1,
+  "failed": 2,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 3
+  },
+  "writer_connection_seconds": 19.2,
+  "connect_ms_max": 11.5,
+  "pg_container_mem": {
+   "first": "108MiB",
+   "peak_sampled": "108.9MiB"
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {
+    "completed": 1
+   }
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:11:53+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 21.22,
+  "ok": 2,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 6,
+   "reader": 2
+  },
+  "writer_connection_seconds": 121.6,
+  "connect_ms_max": 13.4,
+  "pg_container_mem": {
+   "first": "114.4MiB",
+   "peak_sampled": "115.1MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 2
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c4",
+  "at": "2026-10-02T01:12:14+0900",
+  "conditions": {
+   "c": 4,
+   "kind": "outlook",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 21.25,
+  "ok": 4,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 12,
+   "reader": 4
+  },
+  "writer_connection_seconds": 243.0,
+  "connect_ms_max": 14.2,
+  "pg_container_mem": {
+   "first": "125.5MiB",
+   "peak_sampled": "127.7MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 4
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c8",
+  "at": "2026-10-02T01:12:36+0900",
+  "conditions": {
+   "c": 8,
+   "kind": "outlook",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 21.56,
+  "ok": 8,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 24,
+   "reader": 8
+  },
+  "writer_connection_seconds": 486.8,
+  "connect_ms_max": 12.7,
+  "pg_container_mem": {
+   "first": "148.2MiB",
+   "peak_sampled": "167.6MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 8
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c12",
+  "at": "2026-10-02T01:12:59+0900",
+  "conditions": {
+   "c": 12,
+   "kind": "outlook",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 21.88,
+  "ok": 12,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 36,
+   "reader": 12
+  },
+  "writer_connection_seconds": 729.7,
+  "connect_ms_max": 18.6,
+  "pg_container_mem": {
+   "first": "187.5MiB",
+   "peak_sampled": "192.3MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 12
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c20",
+  "at": "2026-10-02T01:13:22+0900",
+  "conditions": {
+   "c": 20,
+   "kind": "outlook",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 22.52,
+  "ok": 20,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 60,
+   "reader": 19
+  },
+  "writer_connection_seconds": 1221.0,
+  "connect_ms_max": 60.3,
+  "pg_container_mem": {
+   "first": "232MiB",
+   "peak_sampled": "239.8MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 20
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c37",
+  "at": "2026-10-02T01:13:48+0900",
+  "conditions": {
+   "c": 37,
+   "kind": "outlook",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 24.94,
+  "ok": 37,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 111,
+   "reader": 35
+  },
+  "writer_connection_seconds": 2277.9,
+  "connect_ms_max": 75.8,
+  "pg_container_mem": {
+   "first": "120.1MiB",
+   "peak_sampled": "340.9MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 37
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook,movement-c74",
+  "at": "2026-10-02T01:14:17+0900",
+  "conditions": {
+   "c": 74,
+   "kind": "outlook,movement",
+   "llm_s": 20.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": -1,
+    "edge_analysis_v2_writer": -1
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 29.04,
+  "ok": 56,
+  "failed": 18,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  remaining connection slots are reserved for roles with the SUPERUSER attribut",
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  sorry, too many clients already"
+  ],
+  "peak_sessions": {
+   "writer": 168,
+   "reader": 42
+  },
+  "writer_connection_seconds": 3499.4,
+  "connect_ms_max": 301.9,
+  "pg_container_mem": {
+   "first": "120.1MiB",
+   "peak_sampled": "443.6MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 30
+   },
+   "movement": {
+    "completed": 26
+   }
+  }
+ },
+ {
+  "name": "S1-same-etf-different-id",
+  "at": "2026-10-02T01:14:25+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.2,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ValueError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.8,
+  "connect_ms_max": 11.6,
+  "pg_container_mem": {
+   "first": "126.1MiB",
+   "peak_sampled": "126.5MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S2-rerun-loser-same-id",
+  "at": "2026-10-02T01:14:26+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 0.6,
+  "ok": 0,
+  "failed": 1,
+  "errors": [
+   "ClientError: An error occurred (PreconditionFailed) when calling the PutObject operation: "
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 0,
+   "reader": 0
+  },
+  "writer_connection_seconds": 0,
+  "connect_ms_max": 0,
+  "pg_container_mem": {
+   "first": null,
+   "peak_sampled": null
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S3-rerun-completed-same-id",
+  "at": "2026-10-02T01:14:27+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 0.61,
+  "ok": 0,
+  "failed": 1,
+  "errors": [
+   "ClientError: An error occurred (PreconditionFailed) when calling the PutObject operation: "
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 0,
+   "reader": 0
+  },
+  "writer_connection_seconds": 0,
+  "connect_ms_max": 0,
+  "pg_container_mem": {
+   "first": null,
+   "peak_sampled": null
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S4a-model-failure",
+  "at": "2026-10-02T01:14:32+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 4.11,
+  "ok": 0,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ValueError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 9.6,
+  "connect_ms_max": 14.5,
+  "pg_container_mem": {
+   "first": "126.4MiB",
+   "peak_sampled": "126.4MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "failed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S4b-retry-new-id",
+  "at": "2026-10-02T01:14:39+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.12,
+  "ok": 1,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.7,
+  "connect_ms_max": 11.8,
+  "pg_container_mem": {
+   "first": "125.9MiB",
+   "peak_sampled": "126MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1,
+    "failed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S5a-killed-mid-run",
+  "at": "2026-10-02T01:14:45+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 4.51,
+  "ok": 0,
+  "failed": 1,
+  "errors": [
+   "no output (killed)"
+  ],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 0,
+  "connect_ms_max": 0,
+  "pg_container_mem": {
+   "first": "126.2MiB",
+   "peak_sampled": "126.2MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "running": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S5b-retry-after-kill-new-id",
+  "at": "2026-10-02T01:14:52+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.15,
+  "ok": 1,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 1
+  },
+  "writer_connection_seconds": 18.8,
+  "connect_ms_max": 15.3,
+  "pg_container_mem": {
+   "first": "126.7MiB",
+   "peak_sampled": "126.7MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1,
+    "running": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "S6-outlook-plus-movement-same-etf",
+  "at": "2026-10-02T01:15:00+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.13,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 18.9,
+  "connect_ms_max": 9.9,
+  "pg_container_mem": {
+   "first": "125.2MiB",
+   "peak_sampled": "125.8MiB"
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {
+    "completed": 1
+   }
+  }
+ },
+ {
+  "name": "S7-same-as-S6-without-role-limit",
+  "at": "2026-10-02T01:15:08+0900",
+  "conditions": {
+   "llm_s": 6.0,
+   "role_limits": "unlimited"
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 7.18,
+  "ok": 2,
+  "failed": 0,
+  "errors": [],
+  "connect_errors": [],
+  "peak_sessions": {
+   "writer": 6,
+   "reader": 2
+  },
+  "writer_connection_seconds": 37.3,
+  "connect_ms_max": 15.1,
+  "pg_container_mem": {
+   "first": "131.5MiB",
+   "peak_sampled": "131.7MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {
+    "completed": 1
+   }
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:20:55+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.14,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.0,
+  "connect_ms_max": 8.9,
+  "pg_container_mem": {
+   "first": "125.5MiB",
+   "peak_sampled": "125.5MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:01+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.22,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.1,
+  "connect_ms_max": 8.8,
+  "pg_container_mem": {
+   "first": "125.5MiB",
+   "peak_sampled": "125.5MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:06+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.15,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.0,
+  "connect_ms_max": 15.0,
+  "pg_container_mem": {
+   "first": "125.8MiB",
+   "peak_sampled": "125.8MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:12+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.22,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.2,
+  "connect_ms_max": 11.5,
+  "pg_container_mem": {
+   "first": "125.6MiB",
+   "peak_sampled": "125.6MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:13+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 0.99,
+  "ok": 0,
+  "failed": 2,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 2,
+   "reader": 2
+  },
+  "writer_connection_seconds": 0.7,
+  "connect_ms_max": 14.1,
+  "pg_container_mem": {
+   "first": null,
+   "peak_sampled": null
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:18+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.19,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.1,
+  "connect_ms_max": 12.0,
+  "pg_container_mem": {
+   "first": "125.9MiB",
+   "peak_sampled": "125.9MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:23+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.18,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.1,
+  "connect_ms_max": 13.9,
+  "pg_container_mem": {
+   "first": "126.4MiB",
+   "peak_sampled": "126.4MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:25+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 1.01,
+  "ok": 0,
+  "failed": 2,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 2,
+   "reader": 2
+  },
+  "writer_connection_seconds": 0.7,
+  "connect_ms_max": 9.5,
+  "pg_container_mem": {
+   "first": null,
+   "peak_sampled": null
+  },
+  "db_rows": {
+   "outlook": {},
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:30+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.19,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.1,
+  "connect_ms_max": 11.1,
+  "pg_container_mem": {
+   "first": "126.7MiB",
+   "peak_sampled": "126.7MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ },
+ {
+  "name": "sweep-outlook-c2",
+  "at": "2026-10-02T01:21:35+0900",
+  "conditions": {
+   "c": 2,
+   "kind": "outlook",
+   "llm_s": 4.0,
+   "src_s": 0.3,
+   "role_limits": {
+    "edge_analysis_v2_api_reader": 5,
+    "edge_analysis_v2_reader": 3,
+    "edge_analysis_v2_writer": 5
+   }
+  },
+  "code_sha": "4311a19b7badb1b619f913b2c019bb0a2a26ebc2",
+  "etf_list": {
+   "count": 37,
+   "sha256": "dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c"
+  },
+  "elapsed_s": 5.17,
+  "ok": 1,
+  "failed": 1,
+  "errors": [
+   "RuntimeError: ResultDatabaseError: analysis failed; inspect recorded events"
+  ],
+  "connect_errors": [
+   "connection failed: connection to server at \"127.0.0.1\", port 55461 failed: FATAL:  too many connections for role \"edge_analysis_v2_writer\""
+  ],
+  "peak_sessions": {
+   "writer": 3,
+   "reader": 2
+  },
+  "writer_connection_seconds": 13.1,
+  "connect_ms_max": 13.1,
+  "pg_container_mem": {
+   "first": "126.6MiB",
+   "peak_sampled": "126.6MiB"
+  },
+  "db_rows": {
+   "outlook": {
+    "completed": 1
+   },
+   "movement": {}
+  }
+ }
+]

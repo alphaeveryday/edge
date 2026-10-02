@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태: 첫 레인인 장중 수급(`edge_investor_intraday`)을 로컬에서 검증했다. 실행 환경은 ECS on EC2 자체 운영으로 정했다(ALPHA-1119, 아래 "실행 환경"). **2026-09-29 밤, t4g.micro + 기존 RDS 로 실제 AWS 단기 검증을 한다**(아래 "실제 AWS 단기 검증"). 장중 수급 정기 DAG 활성화와 SFN → Airflow 전환은 하지 않았다(별도 승인).
+현재 상태(2026-10-02): 장중 수급(`edge_investor_intraday`)은 격리 검증 DAG 로 실제 AWS 검증까지 마쳤고, 운영 데이터로는 아직 돌지 않았다(SFN 이 운영 중). 실행 환경은 ECS on EC2(ALPHA-1119, 아래 "실행 환경"). ALPHA-1141 로 운영 메타DB·중단 경보를 갖춘 뒤 장후 기동·중단 시험·유휴 관측을 하고, SFN → Airflow 전환은 그 결과를 보고 따로 결정한다(아래 "첫 운영 전환 실행안").
 
 ## 구성
 
@@ -206,7 +206,7 @@ docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro --entrypoint bash
 
 ## 실행 환경(ECS on EC2, ALPHA-1119)
 
-Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module "airflow_rds"`·`module "airflow"`, `foundation/ecr.tf`(`edge/airflow`). 배포: `.github/workflows/deploy-airflow.yml`.
+Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module "airflow"`(메타DB 는 별도 인스턴스가 아니라 기존 `module "rds"`(`edge-dev`) 안 DB `airflow`), `foundation/ecr.tf`(`edge/airflow`). 배포: `.github/workflows/deploy-airflow.yml`.
 
 ### 구성과 선택 이유
 
@@ -323,7 +323,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 - 호스트 관측기(`host_observer`): 5초마다 호스트 메모리·모든 cgroup(태스크·ECS·SSM·docker)·상위 프로세스, 커널 로그(OOM), docker 이벤트(종료 코드)를 **호스트 디스크에 append** — 대상이 죽어도 남는다. SSM 으로 수거.
 - 정기 DAG 는 모두 pause, `investor_intraday_orchestrator = "SFN"`·SFN 스케줄 그대로.
 
-**수명주기(되살아나지 않게).** 호스트 수는 Terraform `host_count`(1/0)가 정한다 — 콘솔로 0 을 만들면 다음 dev 머지의 자동 apply 가 1 로 되돌리므로 내리는 것도 코드로 한다. 서비스 desired 는 CD 소유(`deploy-airflow` 는 desired 0 이면 마이그레이션까지 건너뛴다 — 지운 DB 에 붙지 않는다). 서비스 중단 알람은 `host_count=1` 일 때만. 검증 자원(버킷·태스크 정의·관리 역할·검증 시크릿)은 `verify_enabled=false` 로 걷는다.
+**수명주기(되살아나지 않게).** 호스트 수는 Terraform `host_count`(1/0)가 정한다 — 콘솔로 0 을 만들면 다음 dev 머지의 자동 apply 가 1 로 되돌리므로 내리는 것도 코드로 한다. 서비스 desired 는 CD 소유(`deploy-airflow` 는 desired 0 이면 마이그레이션까지 건너뛴다 — 지운 DB 에 붙지 않는다). 서비스 중단 알람·운영 중단 경보(`stop.tf`)는 `host_count=1` 일 때만. 검증 자원(버킷·검증 태스크 정의·검증 시크릿)은 `verify_enabled=false` 로 걷는다. 관리 태스크(dbadmin)와 그 역할은 검증 자원이 꺼져도 호스트가 있으면 남는다(운영 메타DB 관리, ALPHA-1141) — `host_count=0`·`verify_enabled=false` 가 함께일 때 걷힌다.
 
 **시간.** 시작은 19:30 공시 배치 종료 확인 뒤, 23:58~00:45(뉴스 00:10)에는 새 run 을 시작하지 않는다, **06:30 KST 전에 신규 실행 중지·정리 시작**(프리마켓 07:00·분 세션 07:45 전). 최대 24시간, 상시 운영으로 자동 연장하지 않는다.
 
@@ -649,7 +649,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 - **실제 검증 과제:** 장 마감 뒤 Airflow on/off 를 번갈아 FreeableMemory·연결·CPU 차이를 잰다. 이어서 장중 1일을 관측한다. 그 결과로 재사용을 정한다.
 
 - 나눠도 공유하는 것: VPC·data 서브넷, 알람 SNS 토픽. 메타DB 장애는 Airflow 만 멈춘다. 반대로 업무 DB 장애는 여전히 Airflow 런의 원장 스텝(plan·report·wrapper)을 실패시킨다. 원장이 업무 DB 에 있기 때문이다.
-- 백업: RDS 자동 백업 7일(PITR). 복구는 PITR 로 새 인스턴스를 만든 뒤 `module "airflow_rds"` 를 그 인스턴스로 바꾸고 `deploy-airflow` 를 다시 돌린다.
+- 백업: RDS 자동 백업 7일(PITR). 메타DB 는 업무 RDS `edge-dev` 안의 DB `airflow` 라 백업·PITR 도 그 인스턴스 단위다. 메타DB 만 되돌리려면 PITR 로 임시 인스턴스를 만들어 `airflow` DB 만 덤프·복원한다(업무 DB 를 되돌리지 않는다). 그 뒤 `deploy-airflow` 를 다시 돌린다.
 - 메타DB 를 잃으면 사라지는 것: DAG run·task 이력, XCom(보류 사유 포함), pause 상태. **업무 상태의 정본은 원장(업무 DB)이다.** 보류는 `report` 가 원장 `EXECUTION_HOLD` 로 옮기고, 결말 없는 실행은 주기 Reconciler 의 sweep 이 찾는다. 새 메타DB 에서 DAG 는 pause 로 다시 생긴다(`dags_are_paused_at_creation`). 잃은 이력 구간의 보류는 원장으로 판단한다.
 - 비밀번호 로테이션: `modules/rds` 가 토 09:00~12:00 KST 에 돌린다. 연결 문자열은 태스크 기동 때 한 번 만들어진다. 로테이션 뒤에는 **새** 연결부터 실패한다 — 헬스체크는 새 연결을 열지 않으므로(위 "헬스체크") 풀 재활용 시점까지 healthy 일 수 있고, 구성요소가 새 연결에서 실패해야 태스크가 교체된다. 장이 없는 시간이지만 실제 AWS 검증 항목이다.
 
@@ -692,6 +692,8 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 - 헬스체크: 세 컨테이너 모두 `/api/v2/monitor/health` 의 자기 구성요소 status(위 "헬스체크", 60초 간격, 3회 실패면 ECS 가 태스크를 교체한다).
 - 알림(모두 기존 파이프라인 SNS 토픽):
   - `edge-dev-airflow-service-down`: 서비스의 ECS CPU 지표가 10분 끊기면 울린다(태스크 없음·교체 실패·호스트 사망).
+  - `edge-dev-airflow-stop-{task-memory,rds-freeable,rds-swap}`(ALPHA-1141, `stop.tf`): 중단 기준을 넘으면 SNS 와 함께 **서비스를 desired 0 으로 내린다**(오토스케일링 ExactCapacity 0). 도는 업무 태스크·호스트는 그대로다. 기준은 아래 "첫 운영 전환 실행안"의 관측·중단 기준 표. 호스트가 있을 때만 생긴다.
+  - `edge-dev-airflow-notify-{rds-freeable-warn,rds-connections,rds-write-latency}`(ALPHA-1141): 수동 중단 기준의 장중 알림. SNS 만 보내고 서비스는 건드리지 않는다.
   - 메타DB 여유 메모리 알람·RDS 이벤트 구독: `modules/rds` 가 붙인다.
   - DAG 실패: 운영 DAG 의 `on_failure_callback`(기존).
 - ⚠️ 서비스가 desired 0 인 동안(최초 구축 직후, 첫 배포 전)은 서비스 중단 알람이 울린다. 첫 배포로 풀린다.
@@ -701,6 +703,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 1. `foundation` apply(수동) — `edge/airflow` ECR 저장소.
 2. 이 PR 머지 → `terraform-apply` 가 클러스터·호스트·서비스(desired 0)·검증 자원을 만든다(새 RDS 없음). 같은 머지에서 `deploy-airflow` 도 뜬다. 서비스가 desired 0 이면 배포를 건너뛴다.
 3. 시크릿 값과 전용 DB·역할: `python3 verify/run.py secrets`(boto3 가 있는 인터프리터 — 예: `src/.venv/bin/python`)(없는 키만 만든다, 값은 찍지 않는다) → `python3 verify/run.py setup`(관리 태스크가 전용 DB·역할 생성, 검증 원장 스키마 복제, 권한 분리 확인).
+   - 검증 없이 운영 메타DB 만 만들 때(`verify_enabled=false`, ALPHA-1141): `run.py secrets`(검증 시크릿이 없으면 건너뛴다) → `run.py dbadmin create` → `run.py dbadmin privcheck`. 관리 태스크(dbadmin)는 호스트가 있으면(`host_count > 0`) 검증과 무관하게 생기고, 검증 자원이 없으면 `airflow`·`airflow_meta` 만 다룬다. Airflow 태스크 SG(메타DB 인그레스 보유)로 뜨고 로그는 `/ecs/edge-dev-airflow` 의 `dbadmin/` 스트림이다.
 4. `deploy-airflow` 를 workflow_dispatch `start_service=true` 로 실행한다(장 마감 뒤). 순서는 이미지 빌드 → 마이그레이션 태스크 exit 0 → 서비스 새 리비전·desired 1 → services-stable → 이번 배포(id)의 rollout COMPLETED(`deploy/wait_rollout.sh` — stable 직후 `IN_PROGRESS` 는 최대 10분 다시 보고, `FAILED`이거나 PRIMARY 가 다른 배포면 바로 실패).
 5. 확인: 세 컨테이너 HEALTHY, UI 로그인, DAG 두 개(운영·검증)가 **pause**, import error 0, 예제 DAG 없음, dag run 0.
 
@@ -895,6 +898,132 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 
 - 부분 실패 적재 정책(선택 1/2)은 여전히 팀 결정 항목이다(아래 "활성화 전 결정" 1). 지금은 두 경로 모두 선택 2(유효 행 적재 + 런 FAILED)다.
 
+### 첫 운영 전환 실행안(ALPHA-1141)
+
+장중 수급 레인을 정해진 기간만 Airflow 로 운영하고, 끝나면 결과를 보고해 유지 여부를 **따로 결정한다.** 아래 "전환"·"롤백" 절차를 이 기간의 날짜·기준으로 구체화한 것이다. **신규 데이터 DAG(원천 관측 `edge_source_daily`, ALPHA-1140)와는 별개 트랙이다.**
+
+**승인 상태(2026-10-02).**
+
+| 단계 | 상태 |
+|---|---|
+| 실행안 보완·#1053 검증과 머지·장후 기동·중단 시험·10-05 까지 유휴 관측 | 승인됨 |
+| SFN → Airflow 전환(스케줄 DISABLED·DAG unpause) | **미승인** — 10-05 유휴 관측 보고 뒤 따로 결정 |
+| 5거래일 운영·연장·상시 유지 | **미승인** — 이 승인만으로 시작하지 않는다 |
+
+**확정한 결정(2026-10-02 사용자).** exit 2 적재 정책 현행 유지(선택 2). `edge_source_daily` 는 관측 기간 내내 pause. 분석 엔진 소비 정책 불변. t4g.small 1대·태스크 1408MiB·기존 RDS 안 분리된 메타DB(`airflow`·`airflow_meta`). 비용 상한 하루 1.5 USD·계획 전체 15 USD.
+
+**다시 하지 않는 것(통과한 검증).** IAM·재접속·응답 유실·보류(76)·결과 미상·주기 sweep·종료 감지 지연(A5)·호스트 표본(A4)·small·1408 메모리 상한(격리 검증 DAG, 2026-09-30·10-01). 이번에 처음 확인하는 것: ① 검증 자원 없는 운영 메타DB 부트스트랩 ② 배포 완료 판정(#1049)의 실제 배포 ③ 중단 경보가 실제로 서비스를 내리는지(강제 ALARM 한정) ④ 업무 run 없는 상태의 장시간 유휴 메모리·RDS 영향. 실제 KIS·운영 원장에서의 정상 운영은 전환 승인 뒤의 일이다.
+
+#### 일정과 단계(KST)
+
+휴장: 10-03(토)·10-04(일)·10-05(개천절 대체)·10-09(한글날).
+
+| 언제 | 할 일 | 끝 조건 |
+|---|---|---|
+| 10-02 | #1053 최신 dev 기준 확인·머지(호스트 0 이라 apply 변경 0) | terraform-apply 성공·변경 0 |
+| 10-02 장후 | **기동 전 확인** — 시각(15:00)이 아니라 실제 종료로 판단한다: 분 상주 서비스 desired 0(16:10 세션 정지 뒤), 시장 EOD SFN(15:40) 종료, 장중 수급 SFN RUNNING 0, 업무 ECS 태스크 중 장중 레인 0. 그다음 `host_count = 1` PR(plan 첨부) 머지 → 메타DB 생성(아래) → `deploy-airflow` `start_service=true` | 세 컨테이너 HEALTHY, DAG 둘 pause, import error 0, 이미지 digest·태스크 정의 기록 |
+| 10-02 기동 뒤 | 중단 시험(아래) | 시험 결과 기록, 서비스 복구 |
+| 10-02 ~ 10-05 | 유휴 관측 — 업무 DAG 는 pause 그대로 | 10-05 관측 보고 |
+| 10-05 | 관측 결과와 전환 가능 여부 보고. **다음 단계 승인이 없으면** DAG unpause·SFN 스케줄 변경을 하지 않고 아래 "기본 종료"를 한다 | 승인 또는 기본 종료 |
+
+**메타DB 생성.** `run.py secrets`(검증 시크릿 없으면 건너뜀) → 실행 전에 `airflow` DB·`airflow_meta` 역할이 **없는지** 조회 → `run.py dbadmin create` → `run.py dbadmin privcheck`(업무 테이블 권한 0·PUBLIC 접속 불가·역할 1개 규격). 이미 있으면 `create` 를 돌리지 않고 멈춘다 — `create` 는 있는 역할의 비밀번호를 시크릿 값으로 다시 맞추므로, 누가 만든 것인지 확인 전에는 덮어쓰지 않는다. 검증 DB(`edge_verify`)는 만들지 않는다(검증 자원이 꺼져 있으면 관리 태스크에 그 몫이 없다).
+
+**중단 시험(업무 DAG pause·SFN 운영 그대로).**
+- S1: 강제 ALARM. App Auto Scaling 액션이 걸린 경보는 `--state-reason-data` 에 평가 데이터(지표값·임계)가 있어야 정책이 계단을 고른다(AWS `SetAlarmState` 문서) — 없으면 ALARM·SNS 만 나고 desired 는 그대로일 수 있다. 형식은 실제 경보 이력(`describe-alarm-history`, analysis-backlog 경보의 `stateReasonData`)과 같은 소문자 키다.
+  ```bash
+  now=$(date -u +%Y-%m-%dT%H:%M:%S.000+0000)
+  aws cloudwatch set-alarm-state --alarm-name edge-dev-airflow-stop-task-memory --state-value ALARM \
+    --state-reason "ALPHA-1141 S1 forced" \
+    --state-reason-data "{\"version\":\"1.0\",\"queryDate\":\"$now\",\"startDate\":\"$now\",\"statistic\":\"Maximum\",\"period\":60,\"recentDatapoints\":[95.0,95.0],\"threshold\":90.0,\"evaluatedDatapoints\":[{\"timestamp\":\"$now\",\"sampleCount\":1.0,\"value\":95.0}]}"
+  ```
+  → 오토스케일링 활동(`aws application-autoscaling describe-scaling-activities --service-namespace ecs --resource-id service/edge-dev-airflow/edge-dev-airflow`)과 서비스 `desiredCount=0`·`runningCount=0`·태스크 STOPPED 를 확인한다. SNS 메일 수신은 담당자가 확인한다. 경보가 실제 값으로 OK 로 돌아온 뒤 `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 1` → HEALTHY.
+- S2: 같은 절차를 `edge-dev-airflow-stop-rds-freeable`(아래 방향 경보)로 한 번 더. 평가 데이터는 `"statistic":"Minimum"`, 값 `209715200`(200MiB, 바이트)·임계 `419430400`(400MiB).
+- **이 시험이 확인하는 것은 "ALARM 전이 → 정책 → 서비스 0" 경로뿐이다.** 실제 메모리 위반·RDS 지표 결측으로 경보가 ALARM 이 되는지는 시험하지 않는다. 결측 경로는 `describe-alarms` 의 `TreatMissingData`(rds-freeable=breaching, task-memory=notBreaching) **설정 확인뿐이라 미검증으로 남긴다.**
+- 실패(액션이 불리지 않거나 서비스가 안 내려감)하면 전환으로 가지 않고 원인과 자원 상태를 보고한다.
+
+#### 자동 중단 — 무엇을 멈추고 무엇을 못 멈추나
+
+- 경보(`stop.tf`)가 하는 일은 **Airflow 서비스 desired 0 = 신규 제출 중단**이다. 이미 도는 업무 ECS 태스크(worker 클러스터)와 그 태스크의 DB 부하는 **즉시 멈추지 않는다** — 끝날 때까지 돈다(장중 수급 수집 최대 약 4분). 업무 부하까지 끊어야 하면 담당자가 종료 확인 ③으로 태스크를 찾아 `aws ecs stop-task` 로 따로 요청하고 STOPPED 를 확인한다(결과 미상이 된다 — "보류 해제와 수동 복구").
+- 기준을 넘는 동안은 운영자가 다시 켜도 매분 0 으로 돌아간다. 다시 켜기는 경보 OK 확인 뒤.
+- **ECS 배포가 진행 중이면 자동 scale-in 이 막혀 경보가 서비스를 내리지 못한다.** 장후에만 배포한다는 규칙은 노출 시간을 줄일 뿐 보호가 아니다. 배포 중 보호는 아래 사람 절차가 맡는다.
+
+| 항목 | 정한 것 |
+|---|---|
+| 배포 시작 | 관측 기간 중 Airflow 배포(`dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 머지의 자동 배포 포함)는 담당자가 직접 시작하거나 지켜볼 수 있을 때만 머지한다. 서비스가 desired 0 이면 자동 배포는 교체를 건너뛴다(켜지 않는다) |
+| 감시 주체 | 배포를 시작한(머지한) 사람. `deploy-airflow` 가 끝날 때까지(최대 약 10분 + 마이그레이션) 콘솔·CLI 를 본다 |
+| 중단 기준 | 배포 중 `stop-*` 경보가 ALARM 이 됨 · 서비스 이벤트에 OOM·연속 기동 실패 · rollout 이 10분 안에 COMPLETED 가 안 됨 |
+| 직접 중단 | `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 0` (배포 중에도 desired 변경은 된다 — 막히는 것은 오토스케일링의 scale-in 뿐) |
+| 확인 | `aws ecs wait services-stable --cluster edge-dev-airflow --services edge-dev-airflow` → `describe-services` 의 `runningCount=0`·`pendingCount=0`, `aws ecs list-tasks --cluster edge-dev-airflow --desired-status RUNNING` 빈 결과. 도는 업무 태스크는 위 첫 항목대로 따로 본다 |
+
+#### 수동 중단 — 기준·점검 주기·알림·담당
+
+- 담당: ALPHA-1141 담당자(김진기). 알림은 파이프라인 알람 토픽(`edge-dev-data-pipeline-alarms`, 이메일 구독 1건)으로 온다. **메일을 읽고 판단할 때까지 대응은 없다** — 자동 대응이 아닌 항목이다.
+- **에이전트 세션이 여러 날 감시·재개한다고 가정하지 않는다.** 자동 중단 경보(`stop-*`)만 사람 없이 동작한다. 나머지는 사람이 메일을 받거나 점검할 때 대응한다.
+
+| 기준 | 실시간 알림(장중 포함) | 정기 점검 | 대응 |
+|---|---|---|---|
+| RDS 여유 메모리 < 480MiB | `notify-rds-freeable-warn`(5분 연속) | 하루 1회 장후 | Airflow 몫인지 확인(역할별 세션 `run.py dbadmin stats`) → 원인이 Airflow 면 서비스 desired 0 |
+| RDS 연결 > 50 | `notify-rds-connections`(5분 연속) | 하루 1회 | 같은 판단. `airflow_meta` 는 DB 가 10 으로 막는다 |
+| RDS 쓰기 지연 > 50ms | `notify-rds-write-latency`(5분 연속, 분당 최대값) | 하루 1회 | 같은 판단 |
+| 태스크 메모리 추세 | 없음(자동 중단 90% 만) | 하루 1회 — 유휴 기준선·최대 | OOM 재시작 1건, 유휴 기준선이 하루 5%p 넘게 오르는 날 이틀 연속, 최대 85% 초과 → 서비스 desired 0 |
+| 서비스 중단 | `service-down`(10분) | — | 원인 조사. 유휴 관측 중이면 업무 영향 없음 |
+| 비용 | 없음 | 하루 1회(Cost Explorer·`CPUSurplusCreditsCharged`) | 하루 1.5 USD 초과면 원인 확인, 계획 합계 15 USD 에 닿기 전 기본 종료 |
+
+- 장후 일일 점검은 **지난 하루를 확인하는 일**이지 장중 위반을 즉시 잡는 장치가 아니다. 장중 즉시성은 자동 중단 경보(3종)와 알림 경보(3종)의 이메일까지다.
+- 점검 명령: CloudWatch 1분 지표(`aws cloudwatch get-metric-statistics`; `AWS/ECS MemoryUtilization`(ClusterName·ServiceName=edge-dev-airflow), `AWS/RDS` FreeableMemory·DatabaseConnections·WriteLatency·SwapUsage(DBInstanceIdentifier=edge-dev)), 재시작은 `aws ecs describe-services ... --query 'services[0].events[:20]'` 와 멈춘 태스크의 `stoppedReason`.
+
+#### 유휴 관측 기준선(10-02 ~ 10-05)
+
+세 구간을 나눠 기록한다 — 섞으면 증가 추세를 오판한다. ① 기동 직후(첫 HEALTHY 부터 1시간) ② 중단 시험 직후(재기동 뒤 1시간) ③ 안정 유휴(③-1 10-03 00:00~ 이후 일별 최저·최대). 각 구간에서 태스크 메모리(1분 최대·최저), 서비스 이벤트의 재시작 수, RDS 여유 메모리·연결(Airflow 기동 전 같은 시간대와 비교), 비용을 남긴다. 중단 기준에 걸리면 서비스를 desired 0 으로 내리고 보고한다 — 호스트·메타DB 는 지우지 않는다(증거 보존).
+
+#### 기본 종료(다음 승인이 없을 때)
+
+10-05 보고 뒤 다음 단계 승인이 없으면, 관측을 임의로 연장하지 않고 담당자가 한다.
+1. 서비스 desired 0(`update-service --desired-count 0`) → `runningCount=0` 확인.
+2. `host_count = 0` PR 머지(호스트·관리 태스크·경보가 걷힌다). 메타DB `airflow`·`airflow_meta`·시크릿·로그 그룹(30일)은 **남긴다** — dbadmin `teardown` 을 하지 않는다.
+3. DAG pause·SFN 스케줄은 그대로 둔다(전환하지 않았으므로 바꿀 것이 없다).
+4. 관측 기록(지표 요약·이미지 digest·태스크 정의·시험 결과)을 ALPHA-1141 에 남긴다.
+
+#### 전환 승인 뒤에 쓸 기준(지금은 실행하지 않는다)
+
+**성공 기준(슬롯마다).** 주된 기준은 업무 일치다.
+
+| 축 | 기준 |
+|---|---|
+| 대상 ↔ 원천 응답 | 수집 로그(`collection_log`)의 대상 = 설정 targets + holdings 의 구성종목·ETF 티커. ① 실패한 종목은 모두 `failed_symbols` 에 사유와 함께 있다 ② raw 행의 종목은 모두 대상 안에 있다 ③ raw 행이 있는 개별 종목 수가 같은 슬롯의 직전 SFN 5거래일 범위 안이다. 정상 빈 응답(`output2=[]` — ETF 는 구조적으로 0행, 장 시작 직후엔 개별 종목도 빈다)은 로그에 따로 남지 않아 "대상 전부가 행 또는 실패"로는 대사할 수 없다 |
+| 원천 ↔ canonical | 정제 attempt 의 `records_out + failed_records` = 수집 `records_saved`(raw 행 수) |
+| canonical ↔ DB | 적재 attempt 의 `records_out(already+created+updated) + failed_records` = 정제 `records_out`. 실패 행은 사유(unknown_instrument 등)가 원장에 남는다. 첫 운영일 1회는 한 슬롯의 canonical parquet 과 `investor_flow_intraday`(키 instrument·trade_date·asof_slot)를 값까지 전수 대조한다 |
+| 원장 | 그날 run_key 5개 모두 `orchestrator='AIRFLOW'`·`orchestration_status` 와 `orchestration_reported_at` 채워짐. LAUNCH_CONFLICT·PLANNER_MISSING 0. OPEN `EXECUTION_HOLD` 0(있으면 "보류 해제와 수동 복구"로 풀고 원인 기록). R02 미귀결 0 |
+| 보조(이상 탐지) | 하루 행 수가 전주 같은 요일 대비 ±2% 밖이면 원인을 원천 응답으로 설명한다. 이것만으로 성공·실패를 정하지 않는다 |
+
+**ECS 태스크 수.** 정상은 슬롯당 5개(plan·collect·normalize·load·report). 그보다 많으면 먼저 사유를 가른다: 기동 실패(`TaskFailedToStart`)·exit 75 의 Airflow 재시도는 정상 경로다. **중복 업무 실행**은 같은 run·같은 작업에서 업무 게이트를 통과한 attempt(원장 `ops_task_attempt`, `record_source='DUPLICATE_SKIP'` 과 exit 75·76 제외)가 둘 이상인 경우로만 판정한다. 태스크 수만으로 중복이라 하지 않는다.
+
+**시간 기준(SFN 실측 근거).** 장중 수급 SFN 은 9월 4일 이후 성공 99회에서 실행 p50 389s·최대 420s, 슬롯→시작 지연 p50 58s·최대 109s, 14일 attempt 기준 수집 p50 207s·최대 240s, 정제 최대 49s, 적재 최대 8s 였다. Airflow 는 스텝마다 종료 감지가 최대 약 13s 늦다(A5 p95 12.6s).
+
+| 대상(원장 attempt 시작→종료, run 은 슬롯→report 종료) | 허용 | 넘으면 |
+|---|---|---|
+| 수집 | ≤ 300s(최대 240 + 25%) | 원인 기록. 이틀 연속이면 롤백 판단 |
+| 정제 | ≤ 60s | 같음 |
+| 적재 | ≤ 15s | 같음 |
+| run 전체 | ≤ 600s(SFN 슬롯→종료 최대 529s + 감지 4스텝 52s, 반올림) | 같음. 900s(작업 stalled 기준)를 넘으면 그 슬롯을 실패로 본다 |
+
+**롤백 — 슬롯을 두 가지로 나눈다.**
+- **아직 계획되지 않은 슬롯**(원장에 run_key 없음): 종료 확인 뒤 `orchestrator = "SFN"` 으로 되돌리면 다음 cron 슬롯부터 SFN 이 계획·실행한다.
+- **Airflow 소유로 계획된 슬롯**(`orchestrator='AIRFLOW'`, 실패·미완): **SFN 으로 복구하지 않는다.**
+  - SFN 계획 경로(스케줄·`plan-run`)로 같은 run_key 를 다시 계획하면 Planner 가 **LAUNCH_CONFLICT** 로 거부하고 SFN 을 시작하지 않는다(로컬 확인: `test_sfn_replan_of_airflow_owned_slot_is_refused_without_starting`).
+  - `aws stepfunctions start-execution` 직접 시작이나 env 없는 수동 ECS 는 Planner·실행권 게이트를 **거치지 않아 그대로 실행된다**(`test_sfn_path_is_not_gated_by_open_attempts`). 소유권 계약을 깨므로 금지한다.
+  - 복구는 정제·적재만 한다. raw 가 있으면 Airflow 재처리 run(conf `reprocess_slot`). Airflow 가 죽었으면 종료 확인 ①~⑥ 뒤 같은 run_id 로 정제·적재 ECS 를 `OPS_EXCLUSIVE_STEP=1` 과 함께 수동 실행한다(ECS 안에서 게이트를 거친다). 원장의 소유는 AIRFLOW 그대로다.
+  - **수집은 복구하지 않는다.** 장중 추정 API 에는 날짜·시각 인자가 없어, 지난 슬롯을 지금 다시 부르면 **지금의 누적 응답**이 그 슬롯 이름으로 저장된다. 과거 시각의 응답은 다시 받을 수 없다. 당일 다음 슬롯이 누적값을 회수하고, 마지막 14:35 슬롯이 비면 그날은 공백으로 남긴다.
+
+**기간 종료.** 5거래일 운영은 전환 승인 때 함께 정한다. 끝나면 결과를 보고하고 **상시 유지·5거래일 연장·SFN 복귀를 자동으로 진행하지 않는다.** 결정이 없으면 기본은 SFN 복귀다: DAG pause → 종료 확인 ①~⑥ → `orchestrator = "SFN"` PR → 스케줄 ENABLED 확인 → 위 "기본 종료" 2~4.
+
+#### 후속: 시장 EOD 이관 전 검토 항목(구현하지 않음)
+
+시장 EOD 는 수집 8·정제 7·적재 6 정도가 Parallel 로 돈다. 지금 Airflow 구성은 parallelism 1 이고 `EdgeStep` 은 ECS 종료까지 worker 슬롯을 쥐고 동기로 기다린다. "병렬화하려면 반드시 증설"로 확정하지 않고 다음을 먼저 잰다.
+1. **동기 대기 방식의 병렬화 비용** — parallelism 을 올릴 때 늘어나는 LocalExecutor 프로세스 메모리(검증 때 task 실행 1개당 약 250~300MiB 관찰)와 1408MiB·호스트 여유의 관계. 대부분 ECS 를 기다리는 시간이라 CPU 보다 메모리 문제다.
+2. **deferrable 방식 + Triggerer** — 대기를 Triggerer 의 비동기 루프로 넘기면 worker 슬롯·프로세스를 덜 쓴다. 대가는 Triggerer 구성요소 추가(같은 태스크 안 컨테이너 또는 프로세스)의 메모리·헬스체크·배포 변경과, provider 의 deferrable `EcsRunTaskOperator` 호환성(3.3.2·amazon 9.36.0).
+3. **`EdgeStep` 계약 영향** — 재접속(`startedBy` 조회)·보류(ECS_STATE_UNKNOWN·RESULT_UNKNOWN)·`on_kill` 무력화·clear/자동 재시도 구분이 defer/resume 경계에서도 그대로 성립하는지. 지금 판정은 한 execute 호출 안에서 끝난다는 전제다.
+
 ### 전환(SFN → Airflow)
 
 전제:
@@ -935,7 +1064,8 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
    - 이 레인의 API 응답은 그날 누적이라, 다음 SFN 슬롯이 앞 슬롯 값을 다시 받는다.
 5. **미처리 슬롯 회수.**
    - Airflow가 계획만 하고 실행을 끝내지 못한 슬롯은 `orchestrator='AIRFLOW'`로 남는다. SFN이 같은 run_key를 계획하면 LAUNCH_CONFLICT로 거부된다.
-   - 당일 슬롯은 다음 SFN 슬롯의 누적 응답이 회수한다. 마지막 슬롯(14:35)만 현행 수동 레시피(원래 run_id로 ECS 스텝 실행)로 회수한다.
+   - 당일 슬롯은 다음 SFN 슬롯의 누적 응답이 회수한다. 지난 슬롯의 **수집**은 다시 하지 않는다 — 날짜·시각 인자가 없는 API 라 지금 응답이 그 슬롯 이름으로 저장된다("보류 해제와 수동 복구" 5와 같은 규칙). 마지막 슬롯(14:35)이 비면 그날은 공백이다. raw 가 있는 슬롯의 정제·적재만 위 "첫 운영 전환 실행안"의 롤백 절차로 복구한다.
+   - (2026-10-02 정정: 이전 문장 "마지막 슬롯만 현행 수동 레시피로 회수"는 위 금지 규칙과 충돌해 지웠다.)
 6. **이력.** Airflow가 만든 원장 행과 산출물은 지우지 않는다. 같은 run_id·경로 계약이라 SFN 산출물과 구분 없이 소비된다.
 
 ### 안정화 뒤 제거(이 레인)

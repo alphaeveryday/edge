@@ -13,3 +13,23 @@ variable "api_client_role_names" {
   type    = list(string)
   default = []
 }
+# 전망 배치(ALPHA-1142)
+variable "outlook_etf_codes" {
+  type        = list(string)
+  description = "전망 배치 대상 ETF 코드. 수집 설정의 국내 ETF 목록에서 호출부가 읽어 넘긴다."
+}
+variable "outlook_schedule_expression" {
+  type        = string
+  description = "전망 배치 스케줄(Asia/Seoul). 예정 시각이 그대로 업무 기준시각이 된다. 당일 00:00~08:00 KST 사이여야 한다(전망 날짜 = 기준시각의 한국 날짜)."
+}
+variable "outlook_schedule_state" {
+  type    = string
+  default = "DISABLED"
+}
+variable "outlook_deadline_utc" {
+  type        = string
+  default     = "23:00:00Z"
+  description = "저장 마감의 UTC 시각 부분. 23:00:00Z = 08:00 KST. 기준시각과 같은 UTC 날짜에 붙인다(기준시각이 09:00~다음 날 08:00 KST 사이여야 한다)."
+}
+variable "alarm_topic_arn" { type = string }
+variable "scheduler_dlq_arn" { type = string }

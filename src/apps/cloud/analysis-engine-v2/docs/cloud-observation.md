@@ -1,10 +1,10 @@
 # 클라우드 실행과 로컬 관측
 
-분석은 AWS에서 실행하고 결과와 툴 근거는 기존 PostgreSQL에 저장한다. 실행 입력·모델 이벤트·화면 응답·DB 검수 기록은 S3에 복사한다. 로컬 대시보드는 읽기 권한으로 새 기록을 자동 다운로드한다. 예약은 만들지 않는다.
+분석은 AWS에서 실행하고 결과와 툴 근거는 기존 PostgreSQL에 저장한다. 실행 입력·모델 이벤트·화면 응답·DB 검수 기록은 S3에 복사한다. 로컬 대시보드는 읽기 권한으로 새 기록을 자동 다운로드한다. 예약 실행은 전망 배치뿐이며 같은 단건 워크플로를 호출한다(`infra/terraform/modules/analysis-v2/outlook_batch.tf`).
 
 ## 요청 계약
 
-`cloud/request.schema.json`이 실행 요청의 정본이다. 에이전트 입력·툴 응답·화면 계약과 별개이며 해당 본문은 변경하지 않는다.
+`cloud/request.schema.json`이 외부 실행 요청의 정본이다. 내부 가격 사건만 `cloud/trigger-source.schema.json`에 맞는 `source`를 추가한다([접수 계약](../../../../../docs/contracts/analysis-v2-admission.md)). 에이전트 입력·툴 응답·화면 계약은 변경하지 않는다.
 
 ```json
 {

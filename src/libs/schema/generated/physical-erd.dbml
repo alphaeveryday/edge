@@ -36,6 +36,15 @@ Table "analysis_evidence_bundle" {
   "series_lineage" jsonb [not null]
 }
 
+Table "analysis_execution_requests" {
+  "analysis_id" text [pk]
+  "source_event_id" text
+  "input_json" text [not null]
+  "execution_arn" text [not null]
+  "created_at" timestamptz [not null]
+  "accepted_at" timestamptz
+}
+
 Table "assertion_argument" {
   "assertion_argument_id" bigint [pk, increment]
   "assertion_id" text [not null]

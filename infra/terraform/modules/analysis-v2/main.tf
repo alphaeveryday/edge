@@ -1,4 +1,4 @@
-# Cloud analysis has no scheduler or public listener. Operators start one workflow.
+# One workflow runs one analysis. Callers: operators, the HTTP API (api.tf) and the scheduled outlook batch (outlook_batch.tf).
 data "aws_caller_identity" "current" {}
 data "aws_secretsmanager_secret" "reader" { name = "edge/analysis-v2/readonly" }
 data "aws_secretsmanager_secret" "writer" { name = "edge/analysis-v2/writer" }

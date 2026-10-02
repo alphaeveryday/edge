@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl
 from botocore.exceptions import ClientError
 
 from edge_analysis_v2.cloud.contract import decode_request
+from edge_analysis_v2.cloud.admission import WorkflowAdmission, RequestConflict
 
 LOG = logging.getLogger(__name__)
 FEATURES = {'movement':{'all','summary','detail'},
@@ -32,13 +33,15 @@ class AnalysisAPI:
         workflows: Step Functions client, limited to the configured workflow.
         state_machine: Server-owned Standard Workflow ARN.
         now: Clock used to reject requests for future data.
+        requests: Optional durable admission store, wired after its DB role exists.
     """
 
-    def __init__(self, publications, workflows, state_machine, *, now=None):
+    def __init__(self, publications, workflows, state_machine, *, now=None, requests=None):
         self.publications = publications
         self.workflows = workflows
         self.state_machine = state_machine
         self.now = now or (lambda:datetime.now(timezone.utc))
+        self.admission = WorkflowAdmission(workflows, state_machine, requests=requests, now=self.now)
 
     def handle(self, event):
         """Handle a trusted API Gateway payload 2.0 after IAM authentication."""
@@ -148,20 +151,11 @@ class AnalysisAPI:
             if row['data_source']!='database' or not self.same_request(row,request):
                 raise APIError(409,'ID_CONFLICT','analysis_id already belongs to a different request.')
             return 200,self.status(request['kind'],identity)
-        previous=self.execution(identity)
-        if previous is not None:
-            if not self.same_request(json.loads(previous['input']),request):
-                raise APIError(409,'ID_CONFLICT','analysis_id already belongs to a different request.')
-            return 200,self.status(request['kind'],identity)
-        raw=json.dumps(request,sort_keys=True,separators=(',',':'))
         try:
-            self.workflows.start_execution(stateMachineArn=self.state_machine,name=identity,input=raw)
-        except ClientError as exc:
-            if exc.response['Error']['Code']!='ExecutionAlreadyExists':
-                raise
-            previous=self.execution(identity)
-            if previous is None or not self.same_request(json.loads(previous['input']),request):
-                raise APIError(409,'ID_CONFLICT','analysis_id already belongs to a different request.') from None
+            accepted=self.admission.submit(request)
+        except RequestConflict:
+            raise APIError(409,'ID_CONFLICT','analysis_id already belongs to a different request.') from None
+        if not accepted['new']:
             return 200,self.status(request['kind'],identity)
         return 202,request | {'status':'queued'}
 

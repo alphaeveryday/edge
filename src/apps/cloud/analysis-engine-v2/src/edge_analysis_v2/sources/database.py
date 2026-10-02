@@ -1,6 +1,6 @@
 """Fixed-time source reads; no fixture generation or mutable DB connection in tools."""
 import json
-from datetime import timedelta
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -162,17 +162,24 @@ def load_flow(connection, data):
     return data
 
 
-def load_prices(connection, data):
+def load_prices(connection, data, *, request=None):
     """Attach available closes and actual intraday trigger observations.
 
     Args:
         connection: Same read-only source transaction as other observations.
         data: Bundle with the registered trading calendar, updated in place.
+        request: Optional internal event request, pinning its original FIRE row.
 
     Returns:
         Price observations; absent high, low and turnover stay null.
     """
     at = instant(data['context']['analysis_at'])
+    trigger = None
+    if request and 'source' in request:
+        from edge_analysis_v2.sources.triggers import resolve_trigger
+        if request['etf_code']!=data['context']['etf_code'] or instant(request['analysis_at'])!=at:
+            raise ValueError('Price input context does not match the execution request')
+        trigger = resolve_trigger(connection,request)
     if not data['trading_dates']:
         raise ValueError('Registered trading calendar required before price reads')
     symbols = {identity:ticker for ticker,identity in data['source_instrument_ids'].items()}
@@ -202,12 +209,18 @@ def load_prices(connection, data):
         SELECT DISTINCT ON (window_start) window_start,close_price,created_at
         FROM minute_price_trigger WHERE entity_id=%s AND trigger_kind='FIRE'
         AND window_start>=%s AND window_start+INTERVAL '1 minute'<=%s AND created_at<=%s
+        AND window_start<%s
         ORDER BY window_start DESC,created_at DESC,generation DESC) observations
-        ORDER BY window_start DESC LIMIT 5''', (data['context']['etf_code'],at.replace(hour=0,minute=0,second=0,microsecond=0),at,at))
+        ORDER BY window_start DESC LIMIT %s''', (data['context']['etf_code'],
+        at.astimezone(timezone(timedelta(hours=9))).replace(hour=0,minute=0,second=0,microsecond=0),at,at,
+        trigger['window_start'] if trigger else at,4 if trigger else 5))
+    points = list(reversed(points))
+    if trigger:
+        points.append(trigger)
     data['price_snapshots'] = [{'instrument_id':data['context']['etf_code'],
         'observed_at':(r['window_start']+timedelta(minutes=1)).isoformat(),
         'available_at':r['created_at'].isoformat(),'price':number(r['close_price']),
-        'high':None,'low':None} for r in reversed(points)]
+        'high':None,'low':None} for r in points]
     return data
 
 
