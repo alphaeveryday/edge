@@ -1002,6 +1002,7 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 | 기동 전 60분(18:38~19:38) | — | 549~564MiB(중앙 553) | 20~26(중앙 24) | — |
 | ① 기동 직후(19:46~20:44, 태스크 af7f559c) | 56.5% → 최대 60.7%(약 795 → 854MiB) | 524~547(중앙 540) | 24~35(중앙 25, 35 는 기동 순간) | 0 |
 | ② 중단 시험 직후(20:53~21:52, 태스크 8aa8e140) | 52.5% → 최대 56.3%(약 740 → 793MiB) | 532~550(중앙 545) | 24~28(중앙 25) | 0 |
+| ②′ 같은 태스크 이어서(10-02 22:20~23:40) | 790~794MiB 에서 평탄(1분 표본 누락 0) | — | — | 0 |
 | ③ 안정 유휴(10-03 00:00~) | 미기록 | 미기록 | 미기록 | 미기록 |
 
 - 새 태스크는 두 번 모두 첫 1시간에 약 +55MiB 올랐다. 이 증가가 멈추는지는 ③에서 본다 — 지금은 판단하지 않는다.
@@ -1027,7 +1028,22 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 - **관측 기간 중 배포.** `dags/**` 등이 dev 에 머지되면 `deploy-airflow` 가 서비스를 새 태스크로 바꾼다(메모리 기준선이 다시 시작된다). 보고는 태스크 ID 가 바뀐 시각으로 구간을 나눈다.
 - **취소·연장.** 18:00 전에 `airflow_host_until` 을 바꾸는 PR 을 머지한다(apply 가 스케줄 시각과 `host_count` 계산을 함께 옮긴다). 18:00 뒤에 승인이 오면 다시 기동한다(위 "일정과 단계"의 기동 절차 — 메타DB 는 남아 있으므로 `dbadmin create` 는 하지 않는다).
 - **종료 뒤 울리는 것.** 서비스가 0 이 되면 `service-down` 경보가 약 10분 뒤 ALARM 이 된다(SNS 1통). 다음 apply 가 경보를 걷을 때까지 ALARM 으로 남는다 — 종료가 일어났다는 신호로 읽는다.
-- **종료 확인(사람 또는 다음 세션).** 예약 사실이 아니라 실제 상태를 대조한다: 서비스 `desiredCount=0`·`runningCount=0`, ASG `0/0/0`·인스턴스 없음, `aws rds`·조회로 DB `airflow` 존재, 로그 그룹 존재, SFN 스케줄 5개 `ENABLED`, DAG 는 메타DB 에 pause 로 남음(다시 기동하면 확인). 스케줄 실행 자체는 CloudTrail(`UpdateService`·`UpdateAutoScalingGroup`, 호출자 역할 `edge-dev-airflow-default-stop`)로 본다.
+- **종료 확인(사람 또는 다음 세션).** 예약 사실이 아니라 실제 상태를 대조한다: 서비스 `desiredCount=0`·`runningCount=0`, ASG `0/0/0`·인스턴스 없음, `aws rds`·조회로 DB `airflow` 존재, 로그 그룹 존재, SFN 스케줄 5개 `ENABLED`, DAG 는 메타DB 에 pause 로 남음(다시 기동하면 확인). 스케줄 실행 자체는 `AWS/Scheduler` `InvocationAttemptCount`(ScheduleGroup=default, 1분)와 오류 지표(`TargetErrorCount` 등 — 오류가 있을 때만 생긴다)로 본다. CloudTrail `LookupEvents` 는 조직 SCP 가 막아 쓸 수 없다.
+
+**설정 확인(2026-10-02 23:53, #1101 `e0dd11c1` apply 6 added·0 changed·0 destroyed).**
+
+| 스케줄 | 식 | 대상 API·입력 | 재시도 |
+|---|---|---|---|
+| `edge-dev-airflow-default-stop-service` | `at(2026-10-05T09:00:00)` UTC | `ecs:updateService` — Cluster `edge-dev-airflow`, Service `edge-dev-airflow`, DesiredCount 0 | 5 |
+| `edge-dev-airflow-default-stop-host` | `at(2026-10-05T09:10:00)` UTC | `autoscaling:updateAutoScalingGroup` — `edge-dev-airflow-host`, Min·Max·Desired 0 | 5 |
+| `edge-dev-airflow-default-stop-service-recheck` | `at(2026-10-05T09:20:00)` UTC | 첫 줄과 같다 | 5 |
+| `edge-dev-airflow-host-mem` | `rate(5 minutes)`, 종료 10-05 18:00 KST | `ssm:sendCommand` — `AWS-RunShellScript`, 대상 태그 `aws:autoscaling:groupName=edge-dev-airflow-host` | 0 |
+
+- 네 스케줄 모두 ENABLED, 역할 `edge-dev-airflow-default-stop`(신뢰 주체 `scheduler.amazonaws.com`).
+- 권한 모의(`iam simulate-principal-policy`): 이 서비스의 `ecs:UpdateService`·이 ASG 의 `autoscaling:UpdateAutoScalingGroup` allowed, 다른 서비스(worker 클러스터)는 implicitDeny.
+- **실제 호출 확인(상태 변경 없이).** 같은 역할로 현재 값 그대로(서비스 DesiredCount 1, ASG Min 1·Max 2)를 쓰는 일회성 스케줄 둘을 23:55 에 실행했다. 그 분의 `InvocationAttemptCount` 3(15분 주기 Reconciler 1 + 이 둘), 오류 지표 없음, 실행 뒤 자동 삭제, 서비스 1/1·ASG 1/2/1·배포 1개 그대로. 호출이 대상 API 에 닿았다는 직접 기록(CloudTrail)은 SCP 로 볼 수 없어 **지표로 본 간접 확인이다.**
+- `ssm:sendCommand` 경로는 직접 확인됐다 — 스케줄이 만든 표본이 23:52·23:57 에 SSM 명령 이력에 Success 로 남았다(호스트 여유 524~527MiB, 태스크 cgroup 836MiB, OOM 계수 0).
+- **desired 0·ASG 0 값으로의 실제 종료는 10-05 18:00 에 처음 실행된다.** 같은 변경(서비스 0)은 S1·S2 에서 오토스케일링 경로로 확인했고, ASG 0 은 10-01 검증 종료 때 같은 API 로 확인한 동작이다.
 
 #### 측정 자료 — 에이전트 없이 남는 것과 아닌 것
 
