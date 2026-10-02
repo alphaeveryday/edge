@@ -18,6 +18,7 @@ export interface ReportTarget {
   type: 'post' | 'reply';
   id: string;
   handle: string;
+  name: string;
 }
 
 // 신고 사유 5개와 작성자 차단. 차단은 확인 단계를 거친다
@@ -45,7 +46,7 @@ export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarg
     <BottomSheet open={!!target} onClose={close}>
       {confirm ? (
         <>
-          <SheetHead title={`${target?.handle} 님을 차단할까요?`} sub="이 사용자의 글과 답글이 목록에서 보이지 않고, 이 사용자의 답글 알림도 오지 않아요." />
+          <SheetHead title={`${target?.name} 님을 차단할까요?`} sub="이 사용자의 글과 답글이 목록에서 보이지 않고, 이 사용자의 답글 알림도 오지 않아요." />
           <View style={styles.btns}>
             <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setConfirm(false)} /></View>
             <View style={{ flex: 1.6 }}><CtaButton label="차단하기" tone="danger" disabled={block.isPending} onPress={doBlock} /></View>

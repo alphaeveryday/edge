@@ -7,8 +7,6 @@ import { useMe, useMyPosts, useToggleLike, useUpdateMe } from '@/features/commun
 import { colors, PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-const COLORS = [colors.primary, colors.up, colors.down, colors.positive, colors.warn];
-
 export default function CommunityProfile() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
@@ -18,11 +16,9 @@ export default function CommunityProfile() {
   const like = useToggleLike();
   const [editing, setEditing] = useState(false);
   const [nick, setNick] = useState('');
-  const [handle, setHandle] = useState('');
-  const [bg, setBg] = useState('');
-  useEffect(() => { if (me) { setNick(me.nick); setHandle(me.handle); setBg(me.avatarBg); } }, [me]);
+  useEffect(() => { if (me) setNick(me.nick); }, [me]);
   const toggleEdit = () => {
-    if (editing) update.mutate({ nick: nick.trim() || me?.nick, handle: handle.trim() || me?.handle, avatarBg: bg });
+    if (editing) update.mutate({ nick: nick.trim() || me?.nick });
     setEditing((v) => !v);
   };
   const likes = (posts ?? []).reduce((a, p) => a + p.like, 0);
@@ -31,22 +27,13 @@ export default function CommunityProfile() {
       <NavBar title="내 프로필" onBack={() => router.back()} rightLabel={editing ? '완료' : '수정'} onRight={toggleEdit} />
       <PageScroll showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
         <View style={styles.head}>
-          {me && <Avatar label={nick || me.nick} bg={bg || me.avatarBg} size={84} />}
+          {me && <Avatar label={nick || me.nick} bg={me.avatarBg} size={84} />}
           {editing ? (
-            <>
-              <View style={styles.swatches}>
-                {COLORS.map((c) => <Pressable key={c} onPress={() => setBg(c)} style={[styles.swatch, { backgroundColor: c }, bg === c && styles.swatchOn]} />)}
-              </View>
-              <View style={{ width: '100%', gap: 8, marginTop: 6 }}>
-                <TextInput value={nick} onChangeText={setNick} placeholder="닉네임" placeholderTextColor={colors.textFaint} style={styles.input} />
-                <TextInput value={handle} onChangeText={setHandle} placeholder="@아이디" placeholderTextColor={colors.textFaint} autoCapitalize="none" style={[styles.input, { fontFamily: fam.mono }]} />
-              </View>
-            </>
-          ) : (
-            <View style={{ alignItems: 'center', gap: 4 }}>
-              <Text style={styles.nick}>{me?.nick}</Text>
-              <Text style={styles.handle}>{me?.handle}</Text>
+            <View style={{ width: '100%', marginTop: 6 }}>
+              <TextInput value={nick} onChangeText={setNick} placeholder="닉네임" placeholderTextColor={colors.textFaint} style={styles.input} />
             </View>
+          ) : (
+            <Text style={styles.nick}>{me?.nick}</Text>
           )}
           <View style={styles.stats}>
             {[[posts?.length ?? 0, '글'], [likes, '좋아요'], [1, '투표']].map(([v, l]) => (
@@ -84,12 +71,8 @@ export default function CommunityProfile() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.white },
   head: { alignItems: 'center', gap: 14, paddingTop: 22, paddingHorizontal: 20, paddingBottom: 6 },
-  swatches: { flexDirection: 'row', gap: 8 },
-  swatch: { width: 28, height: 28, borderRadius: 999 },
-  swatchOn: { borderWidth: 3, borderColor: colors.white, shadowColor: colors.text, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } },
   input: { height: 54, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   nick: { fontFamily: fam.extrabold, fontSize: 19, color: colors.text, letterSpacing: -0.5 },
-  handle: { fontFamily: fam.mono, fontSize: 13, color: colors.textMuted },
   stats: { flexDirection: 'row', gap: 28, marginTop: 4 },
   statV: { fontFamily: fam.monoExtraBold, fontSize: 17, color: colors.text },
   statL: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },

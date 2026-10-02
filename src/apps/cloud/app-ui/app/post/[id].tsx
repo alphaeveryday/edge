@@ -37,7 +37,7 @@ export default function Post() {
   return (
     <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.navWrap}>
-        <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle }))} />
+        <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle, name: p.author.name }))} />
       </View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
         {p?.blocked && !reveal && (
@@ -77,7 +77,7 @@ export default function Post() {
                 <Text style={styles.replyTime}>{r.time}</Text>
                 <View style={{ flex: 1 }} />
                 {r.author.handle !== me?.handle && (
-                  <Pressable onPress={() => openReport({ type: 'reply', id: r.id, handle: r.author.handle })} hitSlop={10} accessibilityLabel="답글 신고">
+                  <Pressable onPress={() => openReport({ type: 'reply', id: r.id, handle: r.author.handle, name: r.author.name })} hitSlop={10} accessibilityLabel="답글 신고">
                     <Text style={styles.replyMore}>⋯</Text>
                   </Pressable>
                 )}

@@ -112,7 +112,7 @@ export const httpClient: ApiClient = {
   },
   member: {
     me: async () => m.me(await request<m.WireMe>('GET', '/me')),
-    update: async (patch) => m.me(await request<m.WireMe>('PATCH', '/me', { body: { nick: patch.nick, handle: patch.handle } })),
+    update: async (patch) => m.me(await request<m.WireMe>('PATCH', '/me', { body: { nick: patch.nick } })),
     acceptDisclaimer: async () => m.me(await request<m.WireMe>('POST', '/me/disclaimer')),
     deleteAccount: async () => { await request<void>('DELETE', '/me'); await tokens.clear(); },
   },
