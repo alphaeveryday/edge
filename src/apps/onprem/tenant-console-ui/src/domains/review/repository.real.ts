@@ -22,7 +22,12 @@ interface WireItem {
 interface WireDetail extends WireItem {
   explanation_as_of?: string;
   content_as_of?: string;
-  evidences: { kind: string; title: string | null; source: string; published_at?: string; source_uri?: string }[];
+  evidences: {
+    kind: string; title: string | null; source: string; published_at?: string; source_uri?: string;
+    news_id?: string; tool_run_id?: string; item_ids?: string[]; as_of?: string;
+    arguments?: Record<string, unknown>; output?: Record<string, unknown>;
+    formula_latex?: string; description?: string;
+  }[];
   checks: {
     result: 'PASS' | 'REVIEW' | 'BLOCK';
     rule_type?: string;
@@ -74,6 +79,14 @@ function toDetail(w: WireDetail): ReviewItemDetail {
       source: e.source,
       publishedAt: e.published_at ?? null,
       sourceUri: e.source_uri ?? null,
+      newsId: e.news_id,
+      toolRunId: e.tool_run_id,
+      itemIds: e.item_ids,
+      asOf: e.as_of,
+      arguments: e.arguments,
+      output: e.output,
+      formulaLatex: e.formula_latex,
+      description: e.description,
     })),
     checks: (w.checks ?? []).map((c) => ({
       result: c.result,

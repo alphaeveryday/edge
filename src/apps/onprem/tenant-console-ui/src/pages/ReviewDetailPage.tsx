@@ -182,10 +182,13 @@ export function ReviewDetailPage() {
 
       <EvidenceTable
         rows={it.evidences.map((e) => ({
-          type: EVIDENCE_KIND_LABEL[e.kind] ?? e.kind,
+          ...e,
+          type: e.kind === 'CALCULATION' ? '수치 계산' : EVIDENCE_KIND_LABEL[e.kind] ?? e.kind,
           title: e.title,
           source: e.source,
-          time: kstMinute(e.publishedAt),
+          time: e.kind === 'CALCULATION'
+            ? (e.asOf && /^\d{4}-\d{2}-\d{2}$/.test(e.asOf) ? e.asOf : kstMinute(e.asOf))
+            : kstMinute(e.publishedAt),
           sourceUri: e.sourceUri,
         }))}
       />
