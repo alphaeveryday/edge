@@ -3,14 +3,15 @@
 SFN 이 없는 **Airflow 전용 레인**이다. 업무는 기존 `data_pipeline.run` 스텝이 하고(`steps/source_observations`),
 이 DAG 는 슬롯·의존·ECS 실행·원장 보고만 한다. 계약 정본은 docs/design/etf-data-storage-plan.md §10.
 
-일정 — 매일 09:10 KST 한 슬롯(주말 포함). 근거:
-- FMP USD/KRW·미 국채: 전 거래일 뉴욕 마감 값이 KST 06~07시에 확정된다.
-- ECOS 국고채 10년: 전 거래일 최종호가수익률이 다음날 아침까지 게시된다(게시 시각 미확인 — 소급 창 14일이 늦은 게시를 흡수).
-- KOSIS CPI 전년동월비: 통계청 공표가 공표일 08:00 KST — 공표 당일 09:10 슬롯이 받는다.
-- EIA 브렌트 현물: 주 1회 갱신 — 소급 창 28일이 흡수한다.
-- DART 정기보고서: 접수일 다음날 00:00 KST 부터 보이는 계약이라 다음날 아침 수집으로 충분하다.
+일정 — 매일 05:20 KST 한 슬롯(주말·휴일 포함). 전망 배치(analysis-v2, 매일 06:00 KST)가 기준시각에 읽으려면 그 전에
+적재가 끝나야 한다 — run 상한(dagrun_timeout 1500초)을 다 써도 05:45 다. 같은 호스트의 장중 수급 DAG(09:35~14:35)와
+겹치지 않는다. 이 시각에 공급자가 무엇을 주는가:
+- 매크로(ECOS 원/달러·국고채 10년, FRED 미 국채 10년, EIA 브렌트): 그 시각까지 게시된 값만 받는다. 게시 시각은 실측하지
+  않았다 — 더 늦게 게시된 값은 다음 날 슬롯이 받는다(소급 창 14일, 브렌트 28일). 받은 시각이 그대로 가시시각이다.
+- KOSIS CPI 전년동월비: 통계청 공표가 공표일 08:00 KST — 다음 날 슬롯이 받는다(06:00 전망은 어느 슬롯이 받아도 다음 날부터 본다).
+- DART 정기보고서: 접수일 다음날 00:00 KST 부터 보이는 계약이라 05:20 수집이 전날 접수분까지 받는다.
 - KIS 마스터: 비거래일엔 받지 않는다(수집 스텝이 스스로 건너뛰고 원장도 SKIPPED 로 계획한다).
-주말 슬롯은 US·DART 늦은 게시 흡수용이다 — 새 값이 없으면 같은 값의 판본만 추가된다(수신시각 이력).
+주말·휴일 슬롯은 US·DART 늦은 게시 흡수용이다 — 새 값이 없으면 같은 값의 판본만 추가된다(수신시각 이력).
 
 정기·백필 구분:
 - 정기 run(스케줄): 수집 창은 스텝이 정한다 — 매크로 (어제−소급일 ~ 어제), 재무 접수일 (오늘−14 ~ 오늘).
@@ -26,8 +27,7 @@ SFN 이 없는 **Airflow 전용 레인**이다. 업무는 기존 `data_pipeline.
 않았을 때만(EdgeStep exit 75) 재시도한다 — 두 층이 곱해지지 않는다. 같은 run_id 재수집은 완료 raw manifest 가
 있으면 공급자를 부르지 않는다.
 
-⚠️ 활성화 전 인프라(이 PR 범위 밖 — 설계 §10 인계): `macro` 태스크 정의(FMP·ECOS·KOSIS·EIA 키 + DB env)가
-없다. 그 전에는 매크로 수집이 기동 실패로 끝난다. DAG 는 생성 시 pause 다.
+DAG 는 생성 시 pause 다 — 켜는 절차와 결측 판정 env 는 README "원천 관측 레인".
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, Ed
                         reprocess_slot, run_key, run_status, settlement, slot_time)
 
 LANE = "source-daily"
-CRONS = ("10 9 * * *",)
+CRONS = ("20 5 * * *",)
 # 계열 → 단계 → (원장 task_key, 태스크 정의 키, CLI 스텝). tests/test_airflow_dag_contract.py 가 카탈로그와 대조한다.
 FAMILIES = {
     "macro": {"collect": ("MACRO_COLLECTION", "macro", "ingest-raw-macro"),
@@ -110,7 +110,7 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
     """이 레인의 DAG. 계열 셋은 서로 기다리지 않는다 — 한 공급자 장애가 다른 원천을 막지 않게."""
     ecs_target = {"cluster": CLUSTER, **(ecs_target or {})}
     params = {"reprocess_slot": Param("", type="string", description=(
-        "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-10-01T09:10:00+09:00)이면 그 슬롯의 raw 를 다시 "
+        "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-10-04T05:20:00+09:00)이면 그 슬롯의 raw 를 다시 "
         "정제·적재한다(수집 안 함)."))}
     for family, names in BACKFILL_PARAMS.items():
         for name in names:

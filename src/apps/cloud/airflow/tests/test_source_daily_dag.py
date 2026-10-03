@@ -37,7 +37,10 @@ def test_new_lane_is_paused_until_someone_turns_it_on(dag_module):
 
 def test_schedule_and_guards(dag_module):
     dag = dag_module.dag
-    assert dag_module.CRONS == ("10 9 * * *",)
+    # WHY: 전망 배치는 매일 06:00 KST 에 기준시각까지 보이는 값만 읽는다(envs/dev/analysis-v2.tf). 슬롯에 run 상한을
+    # 더한 시각이 06:00 을 넘으면 그날 수집이 그날 전망에 못 들어간다(옛 09:10 슬롯이 그랬다).
+    assert dag_module.CRONS == ("20 5 * * *",)
+    assert timedelta(hours=5, minutes=20) + dag.dagrun_timeout < timedelta(hours=6)
     assert dag.timetable.__class__.__name__ == "MultipleCronTriggerTimetable"
     assert dag.catchup is False and dag.max_active_runs == 1
     assert dag.dagrun_timeout < timedelta(seconds=1800)        # Reconciler 수명보다 짧게

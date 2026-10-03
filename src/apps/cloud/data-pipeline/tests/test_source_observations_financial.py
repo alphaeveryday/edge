@@ -952,3 +952,34 @@ def test_macro_only_config_loads_and_financial_collection_requires_etf_ids(tmp_p
     settings = SimpleNamespace(source_observations=config, dart_financial=None)
     with pytest.raises(SystemExit, match="etf_ids"):
         run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_etf")
+
+
+def test_financial_targets_default_to_the_outlook_etf_list(tmp_path, monkeypatch):
+    # WHY: 전망 배치는 krx_etf.source.etf_map 의 ETF 전부를 돈다(envs/dev/analysis-v2.tf 가 같은 절을 읽는다). 재무 대상을
+    # 따로 적어 두면 전망은 도는데 재무는 안 받는 ETF 가 생긴다(2026-10-03: 전망 37종인데 재무 대상은 091160 하나였다).
+    # etf_ids 는 범위를 좁히는 재정의일 뿐이고, 커밋된 설정은 좁히지 않는다.
+    from types import SimpleNamespace
+
+    from data_pipeline import run as run_module
+    from data_pipeline.config.loader import load_settings
+    from data_pipeline.config.models import SourceObservationsConfig
+
+    seen = []
+    monkeypatch.setattr(run_module.dart_fundamental, "DartFundamentalSource",
+                        lambda config, client: SimpleNamespace(enabled=True))
+    monkeypatch.setattr(run_module.source_observations_financial, "collect_financial",
+                        lambda storage, source, run_id, *, etf_ids, **kwargs: seen.append(etf_ids) or 0)
+    args = SimpleNamespace(step="ingest-raw-financial-metric", input_run_id=None, from_date=None, to_date=None,
+                           series=None, all_partitions=False, source=None)
+
+    def dispatch(etf_ids):
+        settings = SimpleNamespace(
+            source_observations=SourceObservationsConfig.model_validate({"etf_ids": etf_ids}),
+            dart_financial=SimpleNamespace(source=SimpleNamespace(api_key="k")),
+            krx_etf=SimpleNamespace(source=SimpleNamespace(etf_map={"069500": "KR7069500007", "0167A0": "KR70167A0005"})))
+        return run_module._dispatch_observation(args, settings, LocalStorage(tmp_path), "run_etf")
+
+    assert dispatch([]) == 0 and dispatch(["091160"]) == 0
+    assert seen == [["0167A0", "069500"], ["091160"]]
+    shipped = load_settings()
+    assert shipped.source_observations.etf_ids == [] and len(shipped.krx_etf.source.etf_map) > 1
