@@ -585,10 +585,11 @@ def retry_safety(args):
         tools = ToolStore(connection)
         outcome = {}
         try:
-            tools.save_run(**saved)
-            outcome['plain_rerun_same_content'] = 'accepted'
+            # ALPHA-1167(dev ebe41e47) 뒤 서비스 save_run 은 같은 내용이면 저장된 출력을 돌려준다.
+            replay = tools.save_run(**saved)
+            outcome['plain_rerun_same_content'] = 'stored' if replay == run[4] else 'accepted-different-output'
         except psycopg.errors.UniqueViolation:
-            outcome['plain_rerun_same_content'] = 'UniqueViolation'
+            outcome['plain_rerun_same_content'] = 'UniqueViolation'  # 검토 기준 코드(604e5e9f)
         outcome['confirm_rerun_same_content'] = 'confirmed' if save_run_or_confirm(tools, connection, **saved) == run[4] else 'mismatch'
         changed = saved | {'output': run[4] | {'result': {'tampered': True}}}
         try:
@@ -607,8 +608,10 @@ def retry_safety(args):
     result = {'save_outlook_rerun_same_result': again == published, 'rows_before_after': [before, after],
               'tool_run': outcome, 'stored_tool_run_unchanged': stored_unchanged, 'transient_classification': classified}
     assert (result['save_outlook_rerun_same_result'] and before == after and stored_unchanged
-            and outcome == {'plain_rerun_same_content': 'UniqueViolation', 'confirm_rerun_same_content': 'confirmed',
-                            'confirm_rerun_different_content': 'rejected: tool_run_id already holds different evidence'}), result
+            and outcome['plain_rerun_same_content'] in ('UniqueViolation', 'stored')
+            and {k: v for k, v in outcome.items() if k != 'plain_rerun_same_content'} == {
+                'confirm_rerun_same_content': 'confirmed',
+                'confirm_rerun_different_content': 'rejected: tool_run_id already holds different evidence'}), result
     record('review-retry-safety', {'mode': 'b'}, result)
     print('retry-safety: all assertions passed')
 
@@ -796,10 +799,18 @@ def control_exp(args):
     results['stale-slot-no-task-recorded'] = stale('ABORTED', [])
     # 3) 실행 이력 조회 실패 → 끝난 다른 실행의 자리를 판정 못 하면 새 자리 확보 전체가 실패
     results['stale-slot-history-error'] = stale('ABORTED', [], history_error=RuntimeError('ThrottlingException'))
-    assert results['stale-slot-task-missing']['acquire'].startswith('raised RuntimeError'), results
     assert results['stale-slot-no-task-recorded'] == {'acquire': 'acquired', 'slots_left': ['new'],
                                                       'describe_tasks_called': False}, results
-    assert results['stale-slot-history-error']['acquire'].startswith('raised'), results
+    # 검토 기준 코드(604e5e9f)는 판정 못 한 자리 하나로 자리 확보 전체가 예외로 끝났다(C1).
+    # ALPHA-1166(dev 8702bd1f) 뒤로는 그 자리만 점유로 남기고 다른 ETF 의 자리를 준다.
+    before = (results['stale-slot-task-missing']['acquire'].startswith('raised RuntimeError')
+              and results['stale-slot-history-error']['acquire'].startswith('raised'))
+    after = (results['stale-slot-task-missing'] == {'acquire': 'acquired', 'slots_left': ['new', 'old'],
+                                                   'describe_tasks_called': True}
+             and results['stale-slot-history-error'] == {'acquire': 'acquired', 'slots_left': ['new', 'old'],
+                                                        'describe_tasks_called': False})
+    assert before or after, results
+    results['stale-slot-behavior'] = 'before-ALPHA-1166' if before else 'after-ALPHA-1166'
 
     # 4) 회수와 새 자리 확보가 동시에: 자리 3 중 하나가 끝난(STOPPED) 실행의 것이고, 10곳이 동시에 다른 ETF 자리를 청한다
     def race():
