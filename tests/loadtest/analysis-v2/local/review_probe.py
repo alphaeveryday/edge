@@ -67,6 +67,17 @@ class _Info:
         self.transaction_status = status
 
 
+TRANSIENT_SQLSTATES = ('57P01', '57P02', '57P03', '53300')  # 서버 쪽 세션 종료·재시작 중, 역할 연결 한도 초과
+
+
+def transient(exc):
+    """README '재시도'의 정책: 연결 계열 오류만 다시 시도한다. SQLSTATE 가 없으면 클라이언트 쪽 연결 끊김이다.
+
+    문장 시간 초과(57014)를 비롯한 그 밖의 오류는 재시도로 해결된다는 근거가 없어 넣지 않는다."""
+    state = getattr(exc, 'sqlstate', None)
+    return isinstance(exc, psycopg.OperationalError) and (state is None or state.startswith('08') or state in TRANSIENT_SQLSTATES)
+
+
 def _site():
     """연결을 여는 v2 코드의 가장 안쪽 함수 이름(연결 수 내역용)."""
     frame = sys._getframe(2)
@@ -259,14 +270,14 @@ def one(args):
                 marks['ack_lost_after_commit'] = time.time()
                 raise psycopg.OperationalError('injected: commit outcome unknown to caller')
             return result
-        def retrying(self, *a, _inner=lost, **k):  # --save-retry: 연결 계열 오류만, 시간 상한 안에서 트랜잭션 전체를 다시
+        def retrying(self, *a, _inner=lost, **k):  # --save-retry: transient() 오류만, 시간 상한 안에서 트랜잭션 전체를 다시
             marks.setdefault('save_start', time.time())
             deadline = time.time() + args.save_retry
             while True:
                 try:
                     return _inner(self, *a, **k)
-                except psycopg.OperationalError:
-                    if time.time() >= deadline:
+                except psycopg.OperationalError as exc:
+                    if not transient(exc) or time.time() >= deadline:
                         raise
                     marks.setdefault('save_retries', 0)
                     marks['save_retries'] += 1
@@ -550,8 +561,15 @@ def retry_safety(args):
         except ValueError as exc:
             outcome['confirm_rerun_different_content'] = 'rejected: ' + str(exc)
         stored_unchanged = connection.execute('SELECT output FROM tool_runs WHERE tool_run_id=%s', (run[0],)).fetchone()[0] == run[4]
+    errors = psycopg.errors
+    classified = {'no_sqlstate': transient(psycopg.OperationalError('server closed the connection')),
+                  '57P01': transient(errors.AdminShutdown()), '53300': transient(errors.TooManyConnections()),
+                  '08006': transient(errors.ConnectionFailure()), '57014': transient(errors.QueryCanceled()),
+                  '23505': transient(errors.UniqueViolation())}
+    assert classified == {'no_sqlstate': True, '57P01': True, '53300': True, '08006': True, '57014': False,
+                          '23505': False}, classified
     result = {'save_outlook_rerun_same_result': again == published, 'rows_before_after': [before, after],
-              'tool_run': outcome, 'stored_tool_run_unchanged': stored_unchanged}
+              'tool_run': outcome, 'stored_tool_run_unchanged': stored_unchanged, 'transient_classification': classified}
     assert (result['save_outlook_rerun_same_result'] and before == after and stored_unchanged
             and outcome == {'plain_rerun_same_content': 'UniqueViolation', 'confirm_rerun_same_content': 'confirmed',
                             'confirm_rerun_different_content': 'rejected: tool_run_id already holds different evidence'}), result
@@ -563,8 +581,8 @@ def save_faults(args):
     """발행 저장 트랜잭션 도중 세션이 끊기거나, 커밋은 됐는데 호출자가 실패로 받는 경우.
 
     save-kill: 첫 항목 INSERT 직전에 그 세션을 서버에서 끊는다(트랜잭션 도중). save-ack-lost: 커밋 직후 호출자에게
-    연결 오류를 낸다. --save-retry 는 이 탐침 안의 시험 구현이다: 연결 계열 오류(OperationalError)만, 시간 상한 안에서
-    발행 트랜잭션 전체를 다시 부른다. 모델은 다시 부르지 않는다."""
+    연결 오류를 낸다. --save-retry 는 이 탐침 안의 시험 구현이다: transient() 가 고른 연결 계열 오류만, 시간 상한
+    안에서 발행 트랜잭션 전체를 다시 부른다. 모델은 다시 부르지 않는다."""
     codes, _ = etf_codes()
     roles = limits(20, 6)
     zero = dict.fromkeys(OUTLOOK_ROWS, 0)
@@ -635,6 +653,7 @@ def order(args):
               't3_chain': [name_of[i] for i in chain], 'latest': name_of[latest]}
     record('review-order-inverted-movement', {'mode': 'a', 'llm_s': args.llm, 'tools': args.tools}, result)
     assert result['previous'] == {'t1': None, 't2': None, 't3': 't2'}, result
+    assert result['published'] == {'t1': True, 't2': True, 't3': True}, result  # t1 이 전달되지 않는 이유가 미게시가 아니라 가드여야 한다
     assert result['delivered_new'] == {'t1': 0, 't2': 1, 't3': 1} and result['latest'] == 't3', result
     assert 't1' not in result['t3_chain'], result
     print('order: t1 은 완료·게시되지만 전달되지 않고(t2 가 이미 전달됨), 뒤 사건의 이전 설명 사슬에도 들어가지 않는다')
