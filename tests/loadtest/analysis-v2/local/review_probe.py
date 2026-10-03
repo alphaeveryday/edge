@@ -552,27 +552,38 @@ def save_faults(args):
     발행 트랜잭션 전체를 다시 부른다. 모델은 다시 부르지 않는다."""
     codes, _ = etf_codes()
     roles = limits(20, 6)
-    cases = (('baseline', 'b', 'none', 0), ('save-kill', 'a', 'save-kill', 0), ('save-kill', 'b', 'save-kill', 0),
-             ('save-kill', 'b', 'save-kill', args.save_retry), ('save-ack-lost', 'b', 'save-ack-lost', 0),
-             ('save-ack-lost', 'b', 'save-ack-lost', args.save_retry))
-    expected = None
+    zero = dict.fromkeys(OUTLOOK_ROWS, 0)
+    # (이름, 모드, 주입, 저장 재시도 초, 기대: 주입 표시, 종료 코드, DB 상태, 행이 기준과 같은가/0인가, 저장 재시도 있음)
+    cases = (('baseline', 'b', 'none', 0, None, 0, 'completed', 'baseline', False),
+             ('save-kill', 'a', 'save-kill', 0, 'killed_in_save', 1, 'running', 'zero', False),
+             ('save-kill', 'b', 'save-kill', 0, 'killed_in_save', 1, 'failed', 'zero', False),
+             ('save-kill', 'b', 'save-kill', args.save_retry, 'killed_in_save', 0, 'completed', 'baseline', True),
+             ('save-ack-lost', 'b', 'save-ack-lost', 0, 'ack_lost_after_commit', 1, 'completed', 'baseline', False),
+             ('save-ack-lost', 'b', 'save-ack-lost', args.save_retry, 'ack_lost_after_commit', 0, 'completed', 'baseline', True))
+    baseline = None
     results = []
-    for label, mode, inject, save_retry in cases:
+    for label, mode, inject, save_retry, mark, want_exit, want_db, want_rows, want_retry in cases:
         reset()
         identity = uuid4().hex
         r = launch([{'kind': 'outlook', 'etf': codes[0], 'id': identity, 'inject': inject, 'save_retry': save_retry}],
                    mode=mode, llm=args.llm, tools=args.tools, retry=5.0 if mode == 'b' else 0.0)
         rows = outlook_rows(identity)
-        expected = expected or rows
+        if label == 'baseline':
+            assert r['runs'][0]['exit'] == 0 and sum(rows.values()) > 0, ('baseline run must publish rows', r)
+            baseline = rows
         marks = r['runs'][0]['marks'] or {}
-        summary = {'exit': r['runs'][0]['exit'], 'db': r['runs'][0]['db'], 'rows': rows, 'rows_as_baseline': rows == expected,
-                   'model_calls': marks.get('model_calls'), 'save_retries': marks.get('save_retries', 0),
-                   'error': r['runs'][0]['error']}
+        summary = {'exit': r['runs'][0]['exit'], 'db': r['runs'][0]['db'], 'rows': rows, 'rows_as_baseline': rows == baseline,
+                   'injected': mark is None or mark in marks, 'model_calls': marks.get('model_calls'),
+                   'save_retries': marks.get('save_retries', 0), 'error': r['runs'][0]['error']}
         results.append((label, mode, save_retry, summary))
         record(f'review-save-fault-{label}-{mode}-retry{save_retry:g}', {'mode': mode, 'inject': inject,
                'save_retry_s': save_retry, 'llm_s': args.llm, 'tools': args.tools, 'role_limits': roles}, summary)
+        assert (summary['injected'] and summary['exit'] == want_exit and summary['db'] == want_db
+                and rows == (baseline if want_rows == 'baseline' else zero) and summary['model_calls'] == 1
+                and (summary['save_retries'] > 0) == want_retry), (label, mode, save_retry, summary)
     print('\n'.join(f'{l:14} {m} retry{s:<3g} exit={x["exit"]} db={x["db"]} rows_as_baseline={x["rows_as_baseline"]} '
                     f'model_calls={x["model_calls"]} save_retries={x["save_retries"]}' for l, m, s, x in results))
+    print('save-faults: all assertions passed')
 
 
 def order(args):
