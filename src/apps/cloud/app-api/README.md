@@ -16,7 +16,7 @@ curl -i -X POST localhost:8080/api/v1/admin/votes/reconcile -H 'X-Admin-Token: l
 
 기본값은 REJECT_COMMANDS / 500ms / timeoutOptions=true / MASTER다. 환경 변수는 application.yaml과 compose에 외부화했다. S3 실험용 재시도(`VOTE_REDIS_RETRY`)는 실험 종결 후 제거했다 — 실측·해석은 experiments/FAILOVER_RESULTS.md 기록이 정본이다. Lua가 choices 해시의 이전 선택과 비교해 같으면 no-op, 다르면 이전 카운터 -1·새 카운터 +1 하므로 동일 투표 재실행은 중복 집계되지 않는다.
 
-Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹었다. 쓰기 서킷은 `VoteCountRepository.vote()`에 있어 열려도 DB 저장은 막지 않고 폴백이 실패를 삼킨다(메트릭+로그). 읽기 서킷은 `DbFirstVoteService.counts()`에 있고 폴백이 DB 집계로 대체한다. 재조정 `replace()`는 복구 경로라 서킷 밖이다. 서킷이 열리면 Lettuce 타임아웃 대기 없이 즉시 폴백한다(REJECT가 못 잡는 "연결은 살아 있는데 느려지는" 유형의 이중 방어). 서킷 범위는 `VOTE_CIRCUIT_SCOPE`(기본 `global`)로 고른다 — `shard`면 `RedisCircuit`이 키 슬롯을 소유한 마스터의 첫 슬롯 번호로 서킷(`redis-shard-0`·`redis-shard-5461`·…)을 골라 장애 샤드만 차단한다. 슬롯 표는 Lettuce `Partitions`를 그대로 쓰므로 페일오버(노드만 바뀜)엔 상태가 이어지고 리샤딩(소유자 바뀜)엔 옮긴 슬롯이 새 샤드 서킷으로 따라간다. Cluster가 아니면 `shard`여도 전역 `redis`로 동작한다.
+Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹었다. 쓰기 서킷은 `VoteCountRepository.vote()`에 있어 열려도 DB 저장은 막지 않고 폴백이 실패를 삼킨다(메트릭+로그). 읽기 서킷은 `DbFirstVoteService.counts()`에 있고 폴백이 DB 집계로 대체한다. 재조정 `replace()`는 복구 경로라 서킷 밖이다. 서킷이 열리면 Lettuce 타임아웃 대기 없이 즉시 폴백한다(REJECT가 못 잡는 "연결은 살아 있는데 느려지는" 유형의 이중 방어). 서킷 범위는 `VOTE_CIRCUIT_SCOPE`(기본 `shard`)로 고른다 — `shard`면 `RedisCircuit`이 키 슬롯을 소유한 마스터의 첫 슬롯 번호로 서킷(`redis-shard-0`·`redis-shard-5461`·…)을 골라 장애 샤드만 차단한다. 슬롯 표는 Lettuce `Partitions`를 그대로 쓰므로 페일오버(노드만 바뀜)엔 상태가 이어지고 리샤딩(소유자 바뀜)엔 옮긴 슬롯이 새 샤드 서킷으로 따라간다. Cluster가 아니면 `shard`여도 전역 `redis`로 동작한다.
 
 클라이언트 timeout 옵션 의미는 [Lettuce 공식 문서](https://github.com/redis/lettuce/blob/main/docs/advanced-usage/client-options.md)를 참고했다. 500ms는 커맨드 제한이며, 전체 HTTP 지연·5분 복구는 부하 실험으로 판정해야 한다.
 
@@ -98,7 +98,7 @@ replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤�
 
 개념 설명은 [블로그](https://choyoungseo20.github.io/posts/redis-cluster/)에 있다.
 
-DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 auto-increment 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(etf_code, member_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON DUPLICATE KEY UPDATE`(원자 upsert)로 한다. `DbFirstVoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. 커밋 순서와 리스너 실행 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
+DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 identity 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(etf_code, member_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON CONFLICT DO UPDATE`(원자 upsert)로 한다. `DbFirstVoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. 커밋 순서와 리스너 실행 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
 
 코드 스타일은 로컬 kuke-board/service/view를 참고했다. 서비스(`VoteService` 의 db-first 구현)는 트랜잭션 쓰기+이벤트 발행과 서킷 폴백 집계, event 패키지의 리스너가 커밋 후 캐시 갱신, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
 
@@ -106,7 +106,7 @@ DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long
 
 ## write-behind 모드 (실험용)
 
-`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다. 단일 인스턴스·Sentinel 전용이다: 인스턴스가 둘이면 flush 가 겹쳐 오래된 배치가 최신 표를 덮을 수 있고(소유권·버전 검사 없음), Cluster 에선 전역 `vote:dirty-etfs` 와 전망별 키가 다른 슬롯이라 다중 키 Lua 가 CROSSSLOT 으로 실패하므로 기동 시 거부한다. dirty 배치 읽기(HSCAN)도 `VOTE_REDIS_READ_FROM=MASTER`(기본) 전제다 — replica 읽기(S5)와 조합하면 지연 replica 의 낡은 dirty 가 최신 DB 표를 덮을 수 있다.
+`vote.mode=write-behind`(env `VOTE_MODE`)로 켜면 투표가 DB 대신 Redis 에 먼저 기록되고, 스케줄러가 dirty 표를 DB 에 뒤늦게 반영한다. 기본값(`db-first`, 미설정)은 위 구조 그대로다. `VoteService` 는 인터페이스이고 모드별 구현(`DbFirstVoteService` / `WriteBehindVoteService`)이 `@ConditionalOnProperty` 로 하나만 뜬다. 실험용 택일이라 조회 `counts()` 는 두 구현에 같은 코드로 중복돼 있다 — 실험 종료 후 한쪽을 지운다. Sentinel 전용이다. 인스턴스가 여럿이어도 flush 는 ShedLock(`vote-flush`)으로 한 대만 돈다. 다만 한 주기가 `lockAtMostFor` 30초를 넘기면 락이 풀려 flush 가 겹칠 수 있고, 버전 검사가 없어 오래된 배치가 최신 표를 덮을 수 있다. Cluster 에선 전역 `vote:dirty-etfs` 와 전망별 키가 다른 슬롯이라 다중 키 Lua 가 CROSSSLOT 으로 실패하므로 기동 시 거부한다. dirty 배치 읽기(HSCAN)도 `VOTE_REDIS_READ_FROM=MASTER`(기본) 전제다 — replica 읽기(S5)와 조합하면 지연 replica 의 낡은 dirty 가 최신 DB 표를 덮을 수 있다.
 
 - 쓰기: `WriteBehindVoteService.vote()` 가 `VoteBufferRepository` 의 Lua 한 번으로 count·choices 갱신 + `vote:{code}:dirty` 해시·`vote:dirty-etfs` 집합 마킹을 한다. DB 트랜잭션을 열지 않는다. Redis 실패는 서킷 폴백이 503(`VOTE5001`)으로 즉시 반려한다 — DB 우회는 없다.
 - flush: `VoteFlusher` 가 `vote.flush.interval-ms`(기본 3000, 첫 실행도 한 주기 뒤) 마다 전망별로 `vote.flush.batch-size`(기본 500) 만큼 HSCAN 으로 읽어 `vote` 에 다중행 upsert 하고, 읽었던 choice 와 같은 항목만 dirty 에서 지운다. 한 주기에 전망당 한 배치. 전망 하나의 실패는 다른 전망을 막지 않는다.
