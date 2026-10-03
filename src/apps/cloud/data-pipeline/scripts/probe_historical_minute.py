@@ -1,9 +1,8 @@
 """과거 분봉 TR 이 그 날짜·그 분의 체결 행을 주는지 소량으로 확인한다. **조회만** — 저장·원장 변경 없음.
 
 미수집(MISSING) 창을 소급 TR 로 회수하기 전에 돌린다(README "미수집 창 회수", ALPHA-1153).
-어댑터는 벤더가 주지 않은 분을 직전가 flat·거래량 0 으로 채우므로, 대상 분이 통째로 없어도 본
-실행은 그 창을 전 종목 무거래(VALID_EMPTY)로 확정한다 — 회수된 것처럼 보인다. 그래서 채우기 전의
-**원시 행**을 여기서 먼저 본다.
+벤더가 대상 분을 통째로 안 주는 날이면 본 실행은 그 창들을 전 종목 결손으로 다시 커밋할 뿐이라
+콜만 쓴다 — 그래서 대형주 몇 종의 **원시 행**을 여기서 먼저 본다.
 
     AWS_PROFILE=edge KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \\
       uv run --package data-pipeline python apps/cloud/data-pipeline/scripts/probe_historical_minute.py \\
@@ -24,12 +23,17 @@ import json
 from datetime import datetime
 
 from data_pipeline.sources.http import PoliteClient
-from data_pipeline.sources.kis_minute import KST, KisHistoricalMinuteClient
+from data_pipeline.sources.kis_minute import KST, KisHistoricalMinuteClient, fold_closing_auction
 
 
 def minutes_without_trade(candles, windows: list[str]) -> list[str]:
-    """`windows`(창 시작 KST HHMM) 중 그 종목의 원시 봉에 체결 행이 없는 분."""
-    traded = {c.window_start.astimezone(KST).strftime("%H%M") for c in candles if c.traded}
+    """`windows`(창 시작 KST HHMM) 중 그 종목의 원시 봉에 체결 행이 없는 분.
+
+    15:30 단일가는 회수와 같이 15:29 창으로 접은 뒤 본다 — 소급 TR 은 15:29 행을 주지 않으므로(10-02 원문)
+    접지 않으면 15:29 창은 단일가가 있어도 "체결 없음"이 되어 회수를 막는다.
+    """
+    traded = {c.window_start.astimezone(KST).strftime("%H%M")
+              for c in fold_closing_auction(tuple(candles)) if c.traded}
     return [window for window in windows if window not in traded]
 
 
@@ -54,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         client = KisHistoricalMinuteClient(secret["app_key"], secret["app_secret"],
                                            PoliteClient(min_interval=0.25), session_date=args.date)
         for symbol in args.symbols.split(","):
-            candles = client._fetch_day(symbol)  # 합성(`fill_no_trade_minutes`) 전의 그날 원시 봉
+            candles = client._fetch_day(symbol)  # 그날 벤더가 준 봉(접기는 `minutes_without_trade` 안)
             absent = minutes_without_trade(candles, windows)
             absent_anywhere = absent_anywhere or bool(absent)
             print(json.dumps({"symbol": symbol, "day_rows": len(candles),
