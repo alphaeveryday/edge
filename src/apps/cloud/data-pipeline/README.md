@@ -722,8 +722,20 @@ uv run --package data-pipeline python -m data_pipeline.run ingest-raw-sector --r
 uv run --package data-pipeline python -m data_pipeline.run load-financial-metric --all
 ```
 
-> **thread 재계산(ALPHA-457 등 thread_key 산식 변경 시)** — `thread_id = f(thread_key)` 라
-> thread_key 산식을 바꾸면 기존 `thread_id`·`thread_key` 가 전부 갈린다. 그런데 재실행은
+> **사건 참여자와 이력 보존** — 사건의 Equity 참여자는 저장 시 발행 Actor로 변환한다.
+> 문서의 종목 매칭과 source_event ID는 유지한다. 기존 데이터는
+> `V202610030010__event_participants_reference_issuers.sql`로 참여 대상과 thread_key만
+> 바꾸며, 참여·사건·thread ID와 이력 참조는 보존한다. 아래 삭제 절차는 이 전환에 적용하지 않는다.
+> threading은 기존 키의 thread ID를 조회해 재사용하고, 처음 보는 키에만 ID를 생성한다.
+> 전환 시 모든 사건 writer와 재가동 스케줄을 멈추고 백업·충돌 검사를 마친 뒤,
+> 호환 코드와 마이그레이션을 모두 적용하고 쓰기를 재개한다. 두 배포 워크플로의 실행 순서는
+> 자동으로 보장되지 않는다. 전환 후 Equity 참여자를 쓰는 구버전 writer는 DB가 거부한다.
+> 이번 전환의 분석 조회 지원 범위는 v2다. 종목 ID를 사건 참여 ID와 직접 비교하는
+> 구형 v1 조회는 호환되지 않으므로 배포 후 검증·재가동 대상으로 사용하지 않는다.
+
+> **thread 전체 재계산(ALPHA-457 등 이력을 재생성하기로 한 경우에만)** — 새 thread의
+> ID는 키로 생성하지만, 이미 존재하는 thread는 키를 변경해도 ID를 보존할 수 있다.
+> 단순 재실행은
 > **미연결(event_thread_link 없는) 이벤트만** threading 하므로(`fetch_unthreaded_events`),
 > 그냥 다시 돌리면 옛 키의 링크가 남아 재계산되지 않는다. 세 계보 테이블을 비우고 창으로
 > 재실행한다(dev 는 누적 행이 적어 전량 재계산이 싸다 — source_event/assertion 은 결정적

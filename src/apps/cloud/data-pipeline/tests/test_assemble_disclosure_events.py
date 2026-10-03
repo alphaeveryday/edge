@@ -85,7 +85,9 @@ class _Cursor:
     def execute(self, sql, params=None):
         flat = " ".join(sql.split())
         self.conn.log.append((flat, params))
-        if flat.upper().startswith("SELECT SE.SOURCE_EVENT_ID"):
+        if flat.upper().startswith("SELECT INSTRUMENT_ID, ISSUER_ACTOR_ID"):
+            self.rows = list(getattr(self.conn, "issuer_mapping", {}).items())
+        elif flat.upper().startswith("SELECT SE.SOURCE_EVENT_ID"):
             self.rows = list(self.conn.existing_events.items())
         elif flat.upper().startswith("SELECT DOCUMENT_ID, EVENT_TYPE_CODE"):
             self.rows = list(self.conn.assertions)

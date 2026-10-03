@@ -11,6 +11,7 @@ from edge_ontology import load_process_registry, role_entity_kind
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
+from ..events.participants import actor_arguments
 from ..lake import Storage, quality_log_key
 from .assemble_events import thread_events
 
@@ -208,7 +209,7 @@ def persist_facts(conn, facts: list[dict],
                 " slot, mention_text, entity_kind, group_ord)"
                 " VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
                 " ON CONFLICT (source_event_id, role_code, entity_id) DO NOTHING",
-                grounded,
+                actor_arguments(conn, grounded),
             )
         unknown = thread_events(conn, rethread) if rethread else 0
         return {"created": 0, "already": len(events), "rethreaded": len(rethread),
@@ -284,7 +285,8 @@ def persist_facts(conn, facts: list[dict],
         cur.executemany(
             "INSERT INTO event_argument (source_event_id, role_code, entity_id, confidence, slot,"
             " mention_text, entity_kind, group_ord) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
-            " ON CONFLICT (source_event_id, role_code, entity_id) DO NOTHING", event_args)
+            " ON CONFLICT (source_event_id, role_code, entity_id) DO NOTHING",
+            actor_arguments(conn, event_args))
         cur.executemany(
             "INSERT INTO event_measure (source_event_id, measure_ord, role_code, surface, value,"
             " unit, basis, value_source, parse_flag, group_ord, dart_rcept_no)"
