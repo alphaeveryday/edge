@@ -144,10 +144,14 @@ class ToolStore:
                 return cur.fetchone()["output"]
         except UniqueViolation:
             # A repeat after an unknown commit outcome stores nothing new; different evidence never passes.
+            # PostgreSQL compares: jsonb keeps true apart from 1, which Python equality does not.
             with self.connection.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT " + ", ".join(row) + " FROM tool_runs WHERE tool_run_id = %s", (tool_run_id,))
+                cur.execute("SELECT output FROM tool_runs WHERE tool_run_id = %s AND "
+                            + " AND ".join(f"{column} IS NOT DISTINCT FROM %s" for column in row),
+                            (tool_run_id, *(Jsonb(value) if column in ("arguments", "context", "output")
+                                            and value is not None else value for column, value in row.items())))
                 stored = cur.fetchone()
-            if stored != row:
+            if stored is None:
                 raise
             return stored["output"]
 

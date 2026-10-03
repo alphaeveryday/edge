@@ -184,3 +184,17 @@ def test_repeat_of_the_same_execution_is_accepted_without_a_second_row(audit):
     assert store.save_run(**args) == first
     assert store.connection.execute('SELECT count(*) FROM tool_runs WHERE tool_run_id=%s',
                                     (args['tool_run_id'],)).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("field, value", [("output", True), ("arguments", True), ("context", 1)])
+def test_repeat_with_different_json_type_is_still_refused(audit, field, value):
+    # Python's True == 1 must not let different evidence pass as a repeat.
+    store, args, _, _ = audit
+    stored = {"output": 1, "arguments": 1, "context": True}[field]
+    args[field] = ({**args["output"], "result": {"exact": stored}} if field == "output"
+                   else {**args[field], "exact": stored})
+    store.save_run(**args)
+    args[field] = ({**args["output"], "result": {"exact": value}} if field == "output"
+                   else {**args[field], "exact": value})
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        store.save_run(**args)
