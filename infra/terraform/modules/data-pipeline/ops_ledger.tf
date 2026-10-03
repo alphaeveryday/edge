@@ -215,6 +215,9 @@ resource "aws_ecs_task_definition" "ops" {
       OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN = aws_sfn_state_machine.investor_intraday.arn
       OPS_INVESTOR_INTRADAY_SCHED_HHMM        = local.investor_intraday_schedule_hhmm
       OPS_INVESTOR_INTRADAY_SCHED_WEEKEND     = local.investor_intraday_schedule_weekend
+      # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(variables.tf).
+      OPS_SOURCE_DAILY_SCHED_HHMM    = var.source_daily_sched_hhmm
+      OPS_SOURCE_DAILY_SCHED_WEEKEND = "true"
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import sys
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+TF = ROOT.parents[3] / "infra/terraform/modules/data-pipeline"
 sys.path.insert(0, str(ROOT / "dags"))
 KST = timezone(timedelta(hours=9))
 
@@ -33,6 +35,15 @@ def dag_module():
 def test_new_lane_is_paused_until_someone_turns_it_on(dag_module):
     # WHY: 매크로 태스크 정의·키가 아직 없다. 배포만으로 정기 수집이 시작되면 안 된다.
     assert dag_module.dag.is_paused_upon_creation is True
+
+
+def test_slot_matches_the_missed_run_judgment(dag_module):
+    # WHY: Reconciler 는 `OPS_SOURCE_DAILY_SCHED_HHMM` 시각의 run 이 없으면 PLANNER_MISSING 을 연다. 이 레인은 cron 변수가
+    # 없어 Terraform 이 DAG 에서 시각을 뽑지 못한다 — 한쪽만 옮기면 매일 거짓 결측이 열리고 진짜 결측은 안 보인다.
+    tf = (TF / "variables.tf").read_text()
+    block = tf[tf.index('variable "source_daily_sched_hhmm"'):]
+    slots = re.search(r'default\s*=\s*"([^"]*)"', block[:block.index("\n}\n")])[1].split(",")
+    assert sorted(f"{int(m)} {int(h)} * * *" for h, m in (s.split(":") for s in slots)) == sorted(dag_module.CRONS)
 
 
 def test_schedule_and_guards(dag_module):
