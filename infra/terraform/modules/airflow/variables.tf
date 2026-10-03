@@ -27,12 +27,6 @@ variable "host_count" {
   }
 }
 
-variable "host_until" {
-  description = "호스트를 이 시각(RFC3339 UTC)에 내린다 — 스케줄러가 서비스 0·10분 뒤 호스트 0(default_stop.tf). 비우면 기한 없음. 호출부는 host_count 도 같은 시각으로 계산해 기한 뒤 apply 가 호스트를 되살리지 않게 한다"
-  type        = string
-  default     = ""
-}
-
 variable "task_memory" {
   description = "서비스 태스크의 합산 메모리 상한(MiB) — 세 구성요소와 자식 프로세스가 함께 쓴다. 호스트 등록 메모리보다 크면 배치되지 않는다"
   type        = number
