@@ -83,7 +83,7 @@ def select_jobs(paths: list[str], available: set[str]) -> dict:
         "legacy": selected,
         "images": selected,
         "optional": [{"package": name, "path": path} for name, path in OPTIONAL.items() if name in optional],
-        "e2e": bool(selected) or schema,
+        "e2e": bool(selected) or schema or "analysis-engine-v2" in requested,
     }
 
 

@@ -198,12 +198,14 @@ jobs:
         working-directory: src
         run: uv sync --locked --python 3.12
 
-      - name: golden-path e2e
+      - name: source-lineage and database e2e
         working-directory: src
         env:
           E2E_PGHOST: 127.0.0.1
           # E2E_PGPORT 는 "Start ephemeral Postgres" 스텝이 $GITHUB_ENV 로 넘긴다.
         # data-pipeline e2e 를 같은 호출에 넣는 이유: 이 잡만 실 스키마 Postgres 를 갖는다.
+        # Actor 전환 뒤 뉴스 조립→조회 계보는 data-pipeline/test_news_v2_lineage가 v2로 검증한다.
+        # 퇴역한 v1 골든패스는 제거했지만 나머지 DB 경계 회귀 검사는 유지한다.
         # 앱별 분리 규칙(파일 헤더)은 **같은 basename 충돌** 때문인데 두 e2e 디렉터리의
         # 파일명이 겹치지 않아 안전하다 — 겹치는 이름을 새로 만들지 마라.
         # ⚠️ 여기서만 검증되는 것이 있다: savepoint 로 회수 범위만 되돌린다는 ALPHA-1053 의

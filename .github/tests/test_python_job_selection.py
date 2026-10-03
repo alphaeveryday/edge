@@ -15,11 +15,11 @@ class SelectionTests(unittest.TestCase):
     def select(self, *paths, available=("analysis-engine-v2", "edge-analysis-tools")):
         return selection.select_jobs(list(paths), set(available))
 
-    def test_v2_does_not_run_legacy_jobs(self):
-        result = self.select("src/apps/cloud/analysis-engine-v2/src/agent.py")
+    def test_v2_keeps_source_lineage_e2e_without_legacy_units_or_images(self):
+        result = self.select("src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/sources/database.py")
         self.assertEqual(result["legacy"], [])
         self.assertEqual(result["images"], [])
-        self.assertFalse(result["e2e"])
+        self.assertTrue(result["e2e"])
         self.assertEqual([p["package"] for p in result["optional"]], ["analysis-engine-v2"])
 
     def test_calculation_library_also_checks_its_agent_consumer(self):
