@@ -56,6 +56,7 @@ export interface CommunityApi {
   toggleLike(id: string): Promise<Post>;
   voteStat(code: EtfCode): Promise<VoteStat>;
   vote(code: EtfCode, choice: VoteChoice): Promise<VoteStat>;
+  unvote(code: EtfCode): Promise<VoteStat>;
   report(target: { type: 'post' | 'reply'; id: string }, reason: ReportReason): Promise<void>;
   block(handle: string): Promise<void>;
 }

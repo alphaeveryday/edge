@@ -238,7 +238,11 @@ export const mockClient: ApiClient = {
     posts: (code) => page(posts.filter((p) => p.etf.code === code && !p.id.startsWith('p')).map((p) => ({ ...p }))),
     voteStat: (code) => delay(voteStatOf(code)),
     vote: (code, choice) => {
-      votes[code] = votes[code] === choice ? null : choice;
+      votes[code] = choice;
+      return delay(voteStatOf(code), 40);
+    },
+    unvote: (code) => {
+      votes[code] = null;
       return delay(voteStatOf(code), 40);
     },
     toggleLike: (id) => {

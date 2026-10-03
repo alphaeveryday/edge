@@ -49,7 +49,8 @@ export const useToggleLike = () => {
 export const useVote = (code: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (choice: VoteChoice) => api.community.vote(code, choice),
+    // null 선택의 철회 요청
+    mutationFn: (choice: VoteChoice | null) => (choice ? api.community.vote(code, choice) : api.community.unvote(code)),
     onSuccess: (stat) => qc.setQueryData<VoteStat>(['community', 'voteStat', code], stat),
   });
 };

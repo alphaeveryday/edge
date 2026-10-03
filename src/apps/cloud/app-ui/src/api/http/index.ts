@@ -118,6 +118,10 @@ export const httpClient: ApiClient = {
       await request<void>('PUT', `/etfs/${code}/vote`, { body: { choice } });
       return m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), choice);
     },
+    unvote: async (code) => {
+      await request<void>('DELETE', `/etfs/${code}/vote`);
+      return m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), null);
+    },
   },
   member: {
     me: async () => m.me(await request<m.WireMe>('GET', '/me')),
