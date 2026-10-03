@@ -529,8 +529,9 @@ sector_etf_ids = [
 # docs/design/etf-data-storage-plan.md §10. 인증키는 env 로만 주입한다(ECOS·KOSIS·EIA 는
 # DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__*_API_KEY, FMP 는 price.source, DART 는 dart_financial.source).
 [source_observations]
-# 재무 수집 대상 뿌리 — KODEX 반도체. 구성종목은 canonical 스냅샷에서 기간별로 파생한다.
-etf_ids = ["091160"]
+# 재무 수집 대상 뿌리는 여기 적지 않는다 — 위 `[krx_etf.source.etf_map]` 의 ETF 전부다(전망 배치 대상과 같은 목록).
+# 구성종목은 canonical 스냅샷에서 기간별로 파생하고, 여러 ETF 에 든 회사는 한 번만 받는다.
+# `etf_ids = [...]` 를 적으면 그 ETF 로만 좁힌다(단건 검증용).
 
 [source_observations.macro]
 enabled = true

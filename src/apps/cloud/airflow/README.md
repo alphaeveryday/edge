@@ -1210,7 +1210,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 ## 원천 관측 레인(source-daily, ALPHA-1130)
 
-분석 v2 원천(매크로 5계열·DART 재무 지표·KIS 지수업종)의 하루 1슬롯(09:10 KST) 배치다. **SFN 이 없는 첫 레인**이라
+분석 v2 원천(매크로 5계열·DART 재무 지표·KIS 지수업종)의 하루 1슬롯(05:20 KST — 06:00 전망 배치 전에 적재가 끝나는 시각) 배치다. **SFN 이 없는 첫 레인**이라
 원장 계획·보고를 Airflow 만 한다(`ops.entry._AIRFLOW_ONLY_LANES` — SFN 주체로 plan-run 하면 거부). 계약·일정 근거는
 `docs/design/etf-data-storage-plan.md` §10 과 DAG 도크스트링.
 
@@ -1234,7 +1234,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 1. `macro` 태스크 정의(`edge-{env}-data-pipeline-macro` = data-pipeline 모듈 `aws_ecs_task_definition.this["macro"]` — **#1036 머지·apply 완료, 2026-10-01 `macro:1`**): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
    `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA,FRED}_API_KEY`(시크릿 `edge-{env}-data-pipeline/{ecos,kosis,eia,fred}/api-key` — 네 개 모두 **2026-10-01 수동 등록 완료**(TF 밖, `{"apikey":...}`, AWSCURRENT 1개씩), TF 는 data 로 참조만 한다. **FMP 는 쓰지 않는다** — 미 국채 10년은 FRED `DGS10`(#1039, 같은 계열 — 설계 §10.8 추기). ECOS 는 USD/KRW·국고채. 네 키 모두 `macro:1` 에 `:apikey::` 로 연결됐고 실행 역할이 읽는다(2026-10-01 #1036 apply 확인) — 값은 문서·PR 에 쓰지 않는다). 카탈로그 `MACRO_COLLECTION.instrumented` 전환 순서(ALPHA-596·610 과 같은 두 단계, 플래그 PR #1051 머지 전까지 False): ① 배선 PR(**#1036 으로 완료**) — `tasks.tf` 에 `macro`(DB env + 키 env)를 넣고 **같은 PR 에서** `tests/test_ops_catalog.py` 의 `_WIRING_AHEAD_OF_FLAG` 에 `"MACRO_COLLECTION"` 을 더한다(안 더하면 같은 테스트의 역방향 단언 — DB env 가 배선됐는데 False — 이 실패한다). apply·배포. ② 플래그 PR(#1051, draft) — True 로 올리고 `_WIRING_AHEAD_OF_FLAG` 에서 지운다(안 지우면 만료 단언 `stale` 이 실패한다). 한 PR 에 묶지 않는 이유는 그 테스트 위 주석: 이미지가 태스크 정의보다 먼저 뜨면 DB env 없는 옛 리비전에서 True 가 돌아 LEDGER_GAP 이 영구로 열린다.
 2. `bigkinds`·`dart`·`rds`·`ops` 태스크 정의는 기존 것을 쓴다(DART 키는 기존 `dart` 에 있다, 업종 마스터는 키가 없다). 새 이미지 배포가 필요하다(새 CLI 스텝·설정 섹션). **⚠️ Airflow 태스크 역할의 RunTask 허용 목록**(`infra/terraform/envs/dev/main.tf` `batch_task_definition_families`)에 `dart`(재무 수집)·`macro` family 를 **#1037 로 추가 완료**(2026-10-01 apply, 실측 RunTask 리소스 `bigkinds`·`dart`·`kis`·`macro`·`ops`·`rds`). 없었으면 `financial_collect`·`macro_collect` 가 `AccessDeniedException` 으로 시작도 못 했다(Codex 봇 P1, 2026-09-30).
-3. 주기 결측 판정을 켜려면 `ops` 태스크 정의(주기 reconcile)에 `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true`. 없으면 이 레인은 PLANNER_MISSING 판정 대상이 아니다(안전 기본값).
+3. 주기 결측 판정을 켜려면 `ops` 태스크 정의(주기 reconcile)에 `OPS_SOURCE_DAILY_SCHED_HHMM=05:20`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true`. 없으면 이 레인은 PLANNER_MISSING 판정 대상이 아니다(안전 기본값).
 4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다. 2026-10-01 네트워크 층 확인: 업무 태스크 SG(`sg-047705118179af733`) egress 전체 허용, 서브넷 기본 경로 NAT — 호스트 차단 규칙은 보이지 않는다. **실제 도달은 첫 단건 실행에서 확인**(Airflow RunTask 가 다른 SG 를 쓰면 그 SG 도 본다). 호스트는 설정 기본값(`config/models.py` `*_base_url`)과 같다.
 5. 마이그레이션 `V202609301200` — **적용 완료(2026-09-30 17:04 KST, #1003 머지 `86743919`, schema-migrate success)**. dev RDS 실측: `flyway_schema_history` 202609301200 success, 테이블 4 존재, 함수 5 모두 `SECURITY DEFINER`·`search_path=public, pg_temp`·소유자 `edge`·`edge_analysis_v2_writer` EXECUTE·PUBLIC EXECUTE 없음, writer 의 테이블 권한 없음. 코드 PR(#1010~#1013·이 PR)은 그 뒤 머지한다(스키마는 테이블 4·조회 함수 5·writer EXECUTE 부여 — 확장 단계만). 구 스키마 위에서 새 이미지가 돌면 `load-*` 만 실패(exit 1)하고 raw·artifact 는 남아 `--all` 로 이어 싣는다. 새 스키마 위의 기존 코드는 영향 없다(추가 객체뿐 — CI e2e 전체가 새 스키마 위에서 돈다).
 6. USD/KRW 도 ECOS 다(FMP USDKRW 는 현재 구독에서 402) — `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY` 없이는 원/달러·국고채가 오지 않는다. ECOS 샘플 키는 10건 상한이라 운영 키가 필요하다. 키가 빠진 계열은 부르지 않고 `missing_credentials` 로 실패한다(수집 exit 2).
@@ -1249,7 +1249,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 **자리표시자·결정 값:** `<…>` 는 채워 넣을 값이다. 아래 예시의 `R`(run_id)·날짜·계열·ETF 코드는 **예시**다.
 - 첫 실행 대상·시각은 정해 실행했다(10-02 — "첫 소량 실행 결과"). 이미지는 `d7d4e111…`(digest `713b779e…`)였다.
-- 정해진 것: 키 env 이름(설정 로더 `DATA_PIPELINE_` + `__` 중첩), 기본 대상 ETF `091160`(`sources.toml` `[source_observations].etf_ids`), DAG 슬롯 매일 09:10 KST(주말 포함).
+- 정해진 것: 키 env 이름(설정 로더 `DATA_PIPELINE_` + `__` 중첩), 재무 대상 ETF = `sources.toml` `[krx_etf.source.etf_map]` 의 ETF 전부(전망 배치 대상과 같은 목록 — `[source_observations].etf_ids` 를 적으면 그 ETF 로만 좁힌다), DAG 슬롯 매일 05:20 KST(주말·휴일 포함).
 - 키 값은 명령·로그·문서·PR 에 쓰지 않는다 — 태스크 정의의 시크릿 주입만.
 
 **FRED 교체·실행 환경 배포 결과(2026-10-01 실측):**
@@ -1402,13 +1402,13 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 |---|---|
 | 선행 | ① #1051(`MACRO_COLLECTION.instrumented=True`) 장외 머지 → deploy-data-pipeline 성공, `data-pipeline-latest` digest 기록. ② Airflow 서비스 기동은 ALPHA-1141(위 "첫 운영 전환 실행안")이 한다 — 10-02 장후 기동, 10-05 까지 유휴 관측. 그때 `edge_source_daily` 가 **pause** 로 등록되고 import error 가 없는지 그 관측에서 확인한다(이 DAG 의 dag-processor 파싱은 아직 실측한 적이 없다). ③ 실행 중인 업무 SFN·ECS 0, 장외. ④ **유휴 관측 기간(10-02~10-05, ALPHA-1141) 내내 이 DAG 는 pause 다 — trigger·unpause 하지 않는다**(확정된 결정). 첫 실행은 10-05 관측 보고와 그 뒤 승인 이후다(10-05 는 휴장 — 빨라야 10-06) |
 | 이미지 | 태스크 정의 `ops`·`macro`·`dart`·`bigkinds`·`rds` 의 `data-pipeline-latest`(mutable). 실행 직전 ECR digest 를 적고, 실행 뒤 raw manifest `code_version` 이 #1051 머지 SHA 인지 대조한다 |
-| 입력 | DAG `edge_source_daily` 수동 trigger, **params 비움**(정기 창: 매크로는 계열마다 어제−(소급일−1)~어제 — 소급일 14인 일별 계열이면 10-02 실행에서 09-18~10-01, 월별 CPI 는 시작을 그 달 1일로 맞춘다; 재무 접수일 오늘−14~오늘; 업종은 오늘이 거래일이면 3파일). 대상 ETF 기본 `091160`(10-01 S3 스냅샷 기준 주식 21종목). `reprocess_slot` 비움. 슬롯 날짜(KST) 안에 끝나게 trigger 한다(자정을 넘기면 `plan` 이 거부한다) |
+| 입력 | DAG `edge_source_daily` 수동 trigger, **params 비움**(정기 창: 매크로는 계열마다 어제−(소급일−1)~어제 — 소급일 14인 일별 계열이면 10-02 실행에서 09-18~10-01, 월별 CPI 는 시작을 그 달 1일로 맞춘다; 재무 접수일 오늘−14~오늘; 업종은 오늘이 거래일이면 3파일). 대상 ETF 는 `[krx_etf.source.etf_map]` 의 ETF 전부다(10-03 기준 37종, 구성종목 합집합 376종목 — 여러 ETF 에 든 회사는 한 번만 받는다). `reprocess_slot` 비움. 슬롯 날짜(KST) 안에 끝나게 trigger 한다(자정을 넘기면 `plan` 이 거부한다) |
 | 실행 절차 | pause 인 DAG 는 수동 trigger 해도 run 이 queued 에 머문다. ① trigger(params 비움) → ② **일시 unpause** → ③ run 종료(최대 `dagrun_timeout` 1500초)를 확인 → ④ **다시 pause**. `catchup=False`·`run_immediately=timedelta(0)` 이라 unpause 가 지난 09:10 슬롯을 돌리지 않는다(위 "활성화 시 지난 슬롯을 돌리지 않는다"). 다음 09:10 슬롯 전에 ④를 끝내야 정기 run 이 생기지 않는다 — 장외 저녁(16:30~23:00)에 하고, 자정 전에 끝나게 한다. UI 의 trigger 가 자동 unpause 를 제안하면 받지 않고 ②·④를 명시적으로 한다 |
 | 명령(DAG 가 내는 것) | `plan-run`(ops, `OPS_ORCHESTRATOR=AIRFLOW`) → 데이터셋별 `ingest-raw-*` → `normalize-* --input-run-id` → `load-* --input-run-id` → `reconcile`(report). 수동 CLI 로 이 순서를 흉내 내지 않는다(Airflow 주체를 꾸미게 된다) |
-| 예상 공급자 호출 | 매크로 **5**(계열당 1), 업종 **3**(비거래일 0), 재무 corpCode **1** + 목록 **21 이상**(회사당 모든 페이지, 보통 1) + 창 안에 접수된 정기보고서(정정 포함)가 정하는 **대상 보고서마다** 재무제표 CFS·OFS 2 + 주식총수 1 = 3. 사업보고서면 같은 해 3분기도 대상이 되고(6), 3분기면 같은 해 사업보고서가 목록에 있을 때 짝으로 붙는다. 창 안 분기·반기보고서의 사업보고서가 소급 목록에 없고 다음 해 1월 1일이 창 끝 이하이면(창 시작과 무관) 다음 해 목록을 한 번 더 받는다. 10월 초 평상일(정정 몇 건)이면 **≈ 25~35** — 실제 수는 raw manifest 로 대조한다. DART 는 공시 레인과 같은 키의 일 한도를 나눠 쓴다 |
+| 예상 공급자 호출 | 매크로 **5**(계열당 1), 업종 **3**(비거래일 0), 재무 corpCode **1** + 목록 **대상 회사 수만큼**(회사당 모든 페이지, 보통 1 — 10-03 기준 구성종목 376) + 창 안에 접수된 정기보고서(정정 포함)가 정하는 **대상 보고서마다** 재무제표 CFS·OFS 2 + 주식총수 1 = 3. 사업보고서면 같은 해 3분기도 대상이 되고(6), 3분기면 같은 해 사업보고서가 목록에 있을 때 짝으로 붙는다. 창 안 분기·반기보고서의 사업보고서가 소급 목록에 없고 다음 해 1월 1일이 창 끝 이하이면(창 시작과 무관) 다음 해 목록을 한 번 더 받는다. 10월 초 평상일(정정 몇 건)이면 **≈ 380~400** — 실제 수는 raw manifest 로 대조한다. DART 는 공시 레인과 같은 키의 일 한도를 나눠 쓴다 |
 | 기대 결과 | 원장 `ops_pipeline_run` 에 `pipeline_type='source-daily'` run 1건 → `orchestration_status=SUCCEEDED`. `ops_expected_task` 9작업, 그중 `MACRO_COLLECTION` 에도 attempt 가 있다(#1051 효과). `source_observation_freshness()` 의 `last_load_fulfilled_at` 이 데이터셋마다 채워진다. 매크로 5계열 모두 행이 생긴다(국고채·CPI·브렌트는 처음). 재무 raw manifest `holdings_coverage`·`unmapped` 를 확인한다. `etf_constituent_source_coverage` 를 함께 볼 때는 참고값으로만 쓴다 — v2 런타임과 스냅샷 선택 규칙이 달라 v2 실행 가능 보장이 아니다(설계 §10.11) |
 | 실패 시 | 반복 trigger 로 해결하지 않는다. 경우를 나눈다. **정제·적재 실패**(raw 는 남음)는 위 "재수집 없는 복구" 를 따른다. **수집 부분 실패**(exit 2 — 일부 계열·회사가 `error`)는 받은 범위만 하류로 가고 run 은 FAILED 로 마감한다. 이 경우 `reprocess_slot` 은 수집을 건너뛰어 빠진 범위를 회복하지 못한다. 원인(키·한도·도달)을 해결한 뒤 다음 정기 창(소급일 안)이 다시 받게 두거나, 그 범위만 백필 params 로 새 run 에서 받는다 |
-| 정기 활성화(별도 승인) | unpause 와 `ops` 태스크 정의 env `OPS_SOURCE_DAILY_SCHED_HHMM=09:10`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true` 를 **같은 변경으로** 넣는다. env 만 먼저 넣으면 pause 동안 매일 PLANNER_MISSING 이 열린다 |
+| 정기 활성화(별도 승인) | unpause 와 `ops` 태스크 정의 env `OPS_SOURCE_DAILY_SCHED_HHMM=05:20`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true` 를 넣는다. env 는 **첫 정기 슬롯이 지난 뒤** 넣는다 — 결측 판정은 가장 최근에 지난 슬롯을 보므로(`entry._due_slots`), 첫 슬롯 전에 넣으면 run 이 있었던 적 없는 전날 05:20 슬롯에 PLANNER_MISSING 이 열리고 닫힐 길이 없다. env 만 넣고 DAG 를 pause 로 두면 매일 열린다 |
 
 ## 활성화 전 결정·미해결 조건
 

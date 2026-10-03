@@ -372,7 +372,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
 ### 10.5 수집 주기·백필·재시도·writer
 
 - **writer**: 데이터셋·파티션마다 정제 스텝 하나(`normalize-{macro,sector,financial-metric}`). raw는 수집 스텝, DB는 적재 스텝.
-- **정기**: DAG `edge_source_daily` 매일 09:10 KST 한 슬롯(근거는 DAG 도크스트링). 매크로 창 = 어제 − (소급일 − 1) ~ 어제, 월별(CPI)은 시작을 그 달 1일로 맞춘다
+- **정기**: DAG `edge_source_daily` 매일 05:20 KST 한 슬롯(06:00 전망 배치 전에 적재가 끝나는 시각 — 근거는 DAG 도크스트링). 매크로 창 = 어제 − (소급일 − 1) ~ 어제, 월별(CPI)은 시작을 그 달 1일로 맞춘다
   (USD/KRW·금리 14일, CPI 124일, 브렌트 28일 — 늦은 게시·정정 흡수). 재무 창 = 접수일 오늘−14 ~ 오늘. 업종 = 거래일만.
 - **백필**: 같은 DAG를 수동 trigger + `macro_from/to`·`financial_from/to`(CLI `--from/--to`). 매크로 `to`≤어제, 재무 `to`≤오늘 —
   미래·진행 중 관측은 스텝이 거부한다. 업종은 현재값만이라 백필 인자가 없다(`ingest-raw-sector`가 `--from/--to` 거부).

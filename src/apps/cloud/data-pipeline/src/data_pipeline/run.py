@@ -725,8 +725,13 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         return source_observations_sector.collect_sector(
             storage, PoliteClient(min_interval=1.0, timeout=60.0), config.sector.base_url, run_id)
     if family == "financial":
-        if not config.etf_ids:
-            raise SystemExit("source_observations.etf_ids 가 비어 있다 — 재무 수집 대상 ETF 가 없다")
+        # 대상 뿌리 = 전망 배치 대상과 같은 목록(`krx_etf.source.etf_map` — envs/dev/analysis-v2.tf 가 같은 절을 읽는다).
+        # 따로 옮겨 적으면 전망은 도는데 재무는 안 받는 ETF 가 생긴다. `etf_ids` 는 범위를 좁히는 재정의다(단건 검증).
+        krx_etf = getattr(settings, "krx_etf", None)
+        etf_ids = config.etf_ids or sorted(krx_etf.source.etf_map if krx_etf else ())
+        if not etf_ids:
+            raise SystemExit("재무 수집 대상 ETF 가 없다 — krx_etf.source.etf_map 과 source_observations.etf_ids 가 "
+                             "모두 비어 있다")
         # DART 키는 기존 재무 수집과 같은 것(dart_financial.source)을 쓴다 — tasks.tf dart 태스크 정의에 이미 있다.
         if settings.dart_financial is None or not settings.dart_financial.source.api_key:
             raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
@@ -735,7 +740,7 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         if not dart.enabled:     # 설정 플래그(dart_financial.source.enabled)로 끈 공급자는 부르지 않는다
             raise SystemExit("dart_financial.source 가 비활성이다")
         return source_observations_financial.collect_financial(
-            storage, dart, run_id, etf_ids=config.etf_ids, from_date=args.from_date, to_date=args.to_date)
+            storage, dart, run_id, etf_ids=etf_ids, from_date=args.from_date, to_date=args.to_date)
     series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
     source = macro_series.MacroSource(config.macro)
     if not config.macro.enabled:
