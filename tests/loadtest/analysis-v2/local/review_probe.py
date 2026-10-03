@@ -233,6 +233,10 @@ def one(args):
                     dict(id='contract', title_keyword='계약', sentences=['판매 물량을 확보했어요.'], tool_run_ids=[reference])]})
         await asyncio.sleep(step)
         marks['model_end'] = time.time()
+        # 모델 응답을 받은 뒤 저장 전에 멈춘다. launch 의 'all-model-end' 장애 주입이 이 표시를 보고 들어온다.
+        (WORK/'model_end').mkdir(parents=True, exist_ok=True)
+        (WORK/'model_end'/args.id).touch()
+        await asyncio.sleep(args.hold)
         if args.kind == 'movement':
             return {'new_items': [dict(candidate_id='new', type='이슈', title_keyword='계약',
                     sentence='판매 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])],
@@ -256,6 +260,7 @@ def one(args):
                 raise psycopg.OperationalError('injected: commit outcome unknown to caller')
             return result
         def retrying(self, *a, _inner=lost, **k):  # --save-retry: 연결 계열 오류만, 시간 상한 안에서 트랜잭션 전체를 다시
+            marks.setdefault('save_start', time.time())
             deadline = time.time() + args.save_retry
             while True:
                 try:
@@ -298,12 +303,22 @@ def peak(intervals):
     return best
 
 
-def launch(specs, *, mode, llm, tools, src=0.3, retry=0.0, faults=()):
-    """faults: [(초, 'terminate')] 또는 [(초, 'deny', 지속 초)]. 기준은 전체 시작 시각.
+def launch(specs, *, mode, llm, tools, src=0.3, retry=0.0, faults=(), hold=0.0):
+    """faults: [(언제, 'terminate')] 또는 [(언제, 'deny', 지속 초)].
 
-    terminate 는 writer 세션을 모두 끊는다. deny 는 writer 로그인을 막고 세션을 끊은 뒤 지속 초 뒤에 푼다
-    (장애 조치처럼 연결이 끊기고 잠시 새 연결도 안 되는 상황)."""
-    stop, samples, notes = threading.Event(), [], []
+    언제는 전체 시작 기준 초, 또는 'all-model-end'(모든 분석이 모델 응답을 받고 저장 전에 멈춘 뒤 — 각 분석은
+    hold 초 동안 저장을 미룬다). terminate 는 writer 세션을 모두 끊는다. deny 는 writer 로그인을 막고 세션을 끊은 뒤
+    지속 초 뒤에 푼다(장애 조치처럼 연결이 끊기고 잠시 새 연결도 안 되는 상황). 관측·주입 스레드가 실패하거나
+    예정한 주입이 다 일어나지 않으면 결과를 내지 않고 예외로 끝낸다."""
+    stop, samples, notes, thread_errors = threading.Event(), [], [], []
+
+    def guarded(target):
+        def run():
+            try:
+                target()
+            except Exception as exc:  # 스레드 예외는 join 으로 전달되지 않는다 — 모아서 아래에서 올린다
+                thread_errors.append(f'{target.__name__}: {type(exc).__name__}: {exc}')
+        return run
 
     def sample():
         with admin() as c:
@@ -313,21 +328,29 @@ def launch(specs, *, mode, llm, tools, src=0.3, retry=0.0, faults=()):
                 samples.append({r['usename'].rsplit('_', 1)[-1]: r['n'] for r in rows})
 
     def inject():
+        marker = WORK/'model_end'
         with admin() as c:
-            for fault in sorted(faults):
-                time.sleep(max(0, started + fault[0] - time.time()))
+            for fault in faults:
+                if fault[0] == 'all-model-end':
+                    deadline = time.time() + 120
+                    while not (marker.is_dir() and len(list(marker.iterdir())) >= len({s['id'] for s in specs})):
+                        if time.time() > deadline:
+                            raise TimeoutError('model-end markers did not appear')
+                        time.sleep(0.05)
+                else:
+                    time.sleep(max(0, started + fault[0] - time.time()))
                 if fault[1] == 'deny':
                     c.execute('ALTER ROLE edge_analysis_v2_writer NOLOGIN')
                 n = len(c.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                                   "WHERE usename='edge_analysis_v2_writer'").fetchall())
-                notes.append({'at': round(time.time()-started, 2), 'fault': fault[1], 'terminated': n})
+                notes.append({'at': round(time.time()-started, 2), 'abs': time.time(), 'fault': fault[1], 'terminated': n})
                 if fault[1] == 'deny':
                     time.sleep(fault[2])
                     c.execute('ALTER ROLE edge_analysis_v2_writer LOGIN')
-                    notes.append({'at': round(time.time()-started, 2), 'fault': 'login-restored'})
+                    notes.append({'at': round(time.time()-started, 2), 'abs': time.time(), 'fault': 'login-restored'})
 
     started = time.time()
-    threads = [threading.Thread(target=sample, daemon=True), threading.Thread(target=inject, daemon=True)]
+    threads = [threading.Thread(target=guarded(sample), daemon=True), threading.Thread(target=guarded(inject), daemon=True)]
     for thread in threads:
         thread.start()
 
@@ -336,7 +359,7 @@ def launch(specs, *, mode, llm, tools, src=0.3, retry=0.0, faults=()):
         return subprocess.Popen([sys.executable, __file__, 'one', '--mode', mode, '--kind', s['kind'], '--etf', s['etf'],
                                  '--id', s['id'], '--llm', str(llm), '--tools', str(tools), '--src', str(src),
                                  '--retry', str(retry), '--at', s.get('at', ''), '--inject', s.get('inject', 'none'),
-                                 '--save-retry', str(s.get('save_retry', 0))],
+                                 '--save-retry', str(s.get('save_retry', 0)), '--hold', str(hold)],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     specs = sorted(specs, key=lambda s: s.get('start_after', 0))
     procs = [start(s) for s in specs]  # start_after 가 있으면 앞 건이 끝나기를 기다리지 않고 그 시각에 시작한다
@@ -354,6 +377,9 @@ def launch(specs, *, mode, llm, tools, src=0.3, retry=0.0, faults=()):
     stop.set()
     threads[0].join(timeout=5)
     threads[1].join(timeout=60)
+    planned = len(faults) + sum(1 for f in faults if f[1] == 'deny')
+    if thread_errors or threads[1].is_alive() or len(notes) != planned:
+        raise RuntimeError(f'probe observation or fault injection failed: errors={thread_errors} notes={notes}')
     with admin() as c:
         status = {r['analysis_id']: r['status'] for kind in ('outlook', 'movement') for r in c.execute(
             f'SELECT analysis_id, status FROM {kind}_analyses')}
@@ -398,18 +424,27 @@ def occupancy(args):
 
 
 def faults(args):
-    """모델 대기 중 writer 연결이 모두 끊기거나, 모델이 끝나는 순간 writer 로그인이 몇 초 막힌다."""
+    """모델 대기 중 writer 세션이 모두 끊기거나, 모델 응답을 받은 뒤 저장 전에 writer 로그인이 몇 초 막힌다.
+
+    주입이 의도한 단계에 들어갔는지 분석마다 확인하고(phase_ok), 아니면 예외로 끝낸다."""
     codes, _ = etf_codes()
     roles = limits(20, 6)
-    cases = [('terminate-mid-wait', [(args.llm*0.5 + 1, 'terminate')]),
-             ('deny-at-save', [(args.llm + 0.3, 'deny', args.deny)])]
-    for label, plan in cases:
+    inf = float('inf')
+    cases = [('terminate-mid-wait', [(args.llm*0.5 + 1, 'terminate')], 0.0,
+              lambda m, t: m.get('model_start', inf) < t < m.get('model_end', inf)),
+             ('deny-after-model', [('all-model-end', 'deny', args.deny)], 3.0,
+              lambda m, t: m.get('model_end', inf) <= t <= m.get('save_start', inf))]
+    for label, plan, hold, in_phase in cases:
         for mode, retry in (('a', 0.0), ('b', 0.0), ('b', args.retry)):
             reset()
             specs = [{'kind': args.kind, 'etf': codes[i], 'id': uuid4().hex} for i in range(args.n)]
+            r = launch(specs, mode=mode, llm=args.llm, tools=args.tools, retry=retry, faults=plan, hold=hold)
+            at = r['faults'][0]['abs']
+            r['phase_ok'] = [in_phase(run['marks'] or {}, at) for run in r['runs']]
             record(f'review-fault-{label}-{mode}-retry{retry:g}', {'mode': mode, 'retry_s': retry, 'n': args.n,
-                   'kind': args.kind, 'llm_s': args.llm, 'tools': args.tools, 'plan': plan, 'role_limits': roles},
-                   launch(specs, mode=mode, llm=args.llm, tools=args.tools, retry=retry, faults=plan))
+                   'kind': args.kind, 'llm_s': args.llm, 'tools': args.tools, 'plan': plan, 'hold_s': hold,
+                   'role_limits': roles}, r)
+            assert all(r['phase_ok']), (label, mode, r['phase_ok'], [run['marks'] for run in r['runs']])
 
 
 def dup(args):
@@ -737,6 +772,7 @@ if __name__ == '__main__':
     p.add_argument('--src', type=float, default=0.3); p.add_argument('--retry', type=float, default=0.0)
     p.add_argument('--at', default=''); p.add_argument('--save-retry', type=float, default=0.0)
     p.add_argument('--inject', default='none', choices=('none', 'save-kill', 'save-ack-lost'))
+    p.add_argument('--hold', type=float, default=0.0)
     p = commands.add_parser('occupancy')
     p.add_argument('--modes', default='a,b'); p.add_argument('--n', type=int, default=37)
     p.add_argument('--kind', default='outlook'); p.add_argument('--llm', type=float, default=30)
