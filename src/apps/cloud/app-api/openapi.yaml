@@ -1,21 +1,27 @@
-# ETF Orca 앱 API 계약 (뼈대). 정본은 이 파일이다. 노션 PRD 의 정책·데이터 모델은 참고.
+# ETF Orca 앱 API 계약의 정본
+# 노션 PRD 의 정책과 데이터 모델은 참고용
 #
-# 규약(2026-09-28 확정)
-# - 인증: 회원 Bearer(액세스 JWT + DB 저장 리프레시), 게스트 X-Device-Id. 둘 다 있으면 토큰 우선.
-# - 응답 봉투: libs/jvm-common ApiResponse {isSuccess, code, message, result}. 실패도 같은 봉투.
-# - 에러 코드: COMMON400/401/403/500 은 jvm-common, 도메인 코드는 app-api AppErrorStatus 소유.
-#   앱은 code 를 번역 없이 그대로 분기한다. 이 파일의 x-error-codes 가 코드 목록의 SSOT.
-# - 페이지네이션: 커서. ?cursor=&size=, 응답 result 에 items[] 와 nextCursor(마지막이면 null).
-# - 투표: PUT 응답은 현황을 싣지 않는다(쓰기 경로에 읽기를 붙이지 않음). 앱은 성공 후 GET count.
-# - 스키마 이름과 필드는 app-ui src/api/types.ts 에서 옮기되 다음을 뺐다(2026-09-28 결정).
-#   표시용 색(logoBg·bg·avatarBg)은 앱이 theme key·handle 로 매핑한다. 시각은 전부 ISO 8601 이고
-#   상대 문구("3분 전")·기준 문구("오늘 08:30 기준")는 앱이 만든다.
-# - 서버 없이 앱에서 끝내는 것: 최근 본 ETF(기기 저장), 용어 힌트(앱 번들). 로그아웃은 서버가 리프레시 토큰을 지운다.
-# - 합친 것: etf.list+search → GET /etfs?q=, community.feed/mine/posts/hot → GET /posts?scope=&code=.
-# - Axis 는 영문 코드(issue·chart·macro·value·flow). 라벨은 앱이 가진다.
-# - 정책 위반은 도메인 코드 + 400. 앱이 해결 가능한 위반은 x-error-codes 의 action 대로 화면 이동한다.
+# 규약
+# - 인증: 회원 Bearer 와 게스트 X-Device-Id 중 토큰 우선
+# - 회원 토큰: 액세스 JWT 와 DB 저장 리프레시 토큰의 조합
+# - 응답 봉투: 실패에도 같은 jvm-common ApiResponse 봉투
+# - 에러 코드: COMMON 계열은 jvm-common, 도메인 코드는 AppErrorStatus 소유
+#   앱의 번역 없는 code 분기와 x-error-codes 기준의 코드 목록
+# - 페이지네이션: 응답 result 의 items[] 와 nextCursor 기반 커서 방식
+#   마지막 페이지의 nextCursor 는 null
+# - 투표: 쓰기 경로에 읽기를 붙이지 않는 현황 없는 PUT 응답
+#   성공 후 앱의 GET count 재조회
+# - 스키마: app-ui 타입 정의에서 옮기되 표시용 값은 제외
+#   표시용 색은 앱의 theme key 와 handle 매핑
+#   시각은 ISO 8601, 상대 문구와 기준 문구는 앱 생성
+# - 앱 단독 처리: 기기 저장의 최근 본 ETF와 앱 번들의 용어 힌트
+# - 로그아웃: 서버의 리프레시 토큰 삭제
+# - 통합 조회: ETF 목록과 검색은 GET /etfs?q=, 커뮤니티 피드류는 GET /posts?scope=&code= 로 통합
+# - Axis: 영문 코드 사용과 앱 소유의 라벨
+# - 정책 위반: 도메인 코드와 400 응답
+#   앱이 해결 가능한 위반은 x-error-codes 의 action 대상 화면으로 이동
 #
-# 출처: app-ui src/api/client.ts(13 도메인 52 메서드), src/api/types.ts.
+# 출처는 app-ui 의 API 클라이언트와 타입 정의
 
 openapi: 3.1.0
 info:
@@ -52,29 +58,31 @@ tags:
   - name: notification
     description: 알림 목록·읽음
 
-# 도메인 에러 코드 목록. 형식 {도메인}{4|5}{순번}(4 클라이언트·5 서버 오류, 순번은 도메인 안 단조 증가). HTTP 상태는 http 필드. app-api AppErrorStatus enum 과 1:1.
-# action 은 앱이 해결 가능한 위반에서 이동할 화면. 없으면 message 를 보여주고 끝.
-# 행별 본문을 채우며 추가한다.
+# AppErrorStatus enum 과 1:1 대응하는 도메인 에러 코드 목록
+# 코드 형식은 {도메인}{4|5}{순번}, 4는 클라이언트 오류와 5는 서버 오류
+# 순번은 도메인 안의 단조 증가
+# action 은 앱이 해결 가능한 위반에서의 이동 화면, 없으면 message 표시로 종료
+# 행별 본문 구현 시점의 코드 추가
 x-error-codes:
   COMMON400: { http: 400, message: 잘못된 요청입니다. }
   COMMON401: { http: 401, message: 인증이 필요합니다., action: login }
   COMMON403: { http: 403, message: 금지된 요청입니다. }
   COMMON500: { http: 500, message: "서버 에러, 관리자에게 문의 바랍니다." }
   ETF4001: { http: 404, message: 없는 ETF 입니다. }
-  ANALYSIS4001: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 앱 Pending 화면 분기. 없는 ETF(ETF4001)와 구분
+  ANALYSIS4001: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 없는 ETF와 구분되는 앱 Pending 화면 분기
   POST4001: { http: 404, message: 없는 글입니다. }
-  POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 커뮤니티 정책
+  POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 의 커뮤니티 정책
   POST4003: { http: 400, message: 태그는 최대 3개입니다. }
   WATCH4001: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
-  WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 관심 정책
+  WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 의 관심 정책
   MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
   MEMBER4003: { http: 404, message: 없는 회원입니다. }
   MEMBER4004: { http: 400, message: 자기 자신은 차단할 수 없습니다. }
-  MEMBER4005: { http: 404, message: 가입되지 않은 이메일입니다. }   # 가입 응답(MEMBER4002)이 이미 가입 여부를 드러내 재설정에서도 숨기지 않음
+  MEMBER4005: { http: 404, message: 가입되지 않은 이메일입니다. }   # 가입 응답이 이미 가입 여부를 드러내므로 재설정에서도 미은닉
   AUTH4001: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
-  AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 가입 인증·비밀번호 재설정 공용. 틀림·만료·시도 초과 구분 없음
-  AUTH4003: { http: 429, message: 오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요. }   # 이메일당 24시간 5회 또는 전체 하루 300통 초과
-  VOTE5001: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus
+  AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 가입 인증과 비밀번호 재설정 공용의 실패 사유 미구분 응답
+  AUTH4003: { http: 429, message: 오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요. }   # 이메일당 24시간 5회 또는 전체 하루 300통의 초과
+  VOTE5001: { http: 503, message: 투표 저장소를 사용할 수 없습니다. }   # 기존 AppErrorStatus 의 코드
 
 security:
   - bearerAuth: []
