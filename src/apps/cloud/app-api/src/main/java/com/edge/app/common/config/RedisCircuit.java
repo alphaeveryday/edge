@@ -22,7 +22,7 @@ public class RedisCircuit {
     private final RedisClusterClient client;
 
     public RedisCircuit(CircuitBreakerRegistry registry, RedisConnectionFactory factory,
-            @Value("${vote.circuit.scope:global}") String scope) {
+            @Value("${vote.circuit.scope:shard}") String scope) {
         this.registry = registry;
         this.client = "shard".equals(scope) && factory instanceof LettuceConnectionFactory lettuce
                 && lettuce.getNativeClient() instanceof RedisClusterClient cluster ? cluster : null;

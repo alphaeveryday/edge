@@ -54,7 +54,7 @@ vote:
     read-from: ${VOTE_REDIS_READ_FROM:MASTER}
   admin-token: ${VOTE_ADMIN_TOKEN:}
   circuit:
-    scope: ${VOTE_CIRCUIT_SCOPE:global}
+    scope: ${VOTE_CIRCUIT_SCOPE:shard}
   reconcile:
     interval: ${VOTE_RECONCILE_INTERVAL:PT5M}
 resilience4j:
