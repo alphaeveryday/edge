@@ -9,9 +9,12 @@ import { tokens } from './storage';
 interface WireAuth { accessToken: string; refreshToken: string; me: m.WireMe; guestMapped?: boolean }
 const signIn = async (r: WireAuth) => { await tokens.save(r.accessToken, r.refreshToken); return m.me(r.me); };
 
-// 서버에 없는 최근 본 ETF와 내 투표 선택의 메모리 보관
+// 서버에 없는 최근 본 ETF의 메모리 보관
 let recent: EtfSummary[] = [];
-const myVotes: Record<string, VoteChoice | null> = {};
+
+// 게스트의 내 투표 조회 생략
+const myVote = async (code: string) =>
+  (await tokens.access()) ? (await request<{ choice: VoteChoice | null }>('GET', `/etfs/${code}/vote`)).choice : null;
 
 // 와이어 테마 key 의 화면용 라벨 변환
 let themeLabels: Promise<Record<string, string>> | null = null;
@@ -106,11 +109,13 @@ export const httpClient: ApiClient = {
       const cur = await request<m.WirePost>('GET', `/posts/${id}`);
       return post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
     },
-    voteStat: async (code) => m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVotes[code] ?? null),
+    voteStat: async (code) => {
+      const [count, mine] = await Promise.all([request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), myVote(code)]);
+      return m.voteStat(code, count, mine);
+    },
     // 현황 없는 응답이라 성공 후 집계 재조회
     vote: async (code, choice) => {
       await request<void>('PUT', `/etfs/${code}/vote`, { body: { choice } });
-      myVotes[code] = choice;
       return m.voteStat(code, await request<m.WireVoteCount>('GET', `/etfs/${code}/vote/count`, { auth: false }), choice);
     },
   },
