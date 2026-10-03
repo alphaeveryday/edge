@@ -618,12 +618,14 @@ module "data_pipeline" {
   # 공시·뉴스처럼 DISABLED 신설 → 별도 apply 컷오버를 밟지 않는 이유: 이 3스텝은 시장 SFN 이
   # 돌던 것을 뺏어오는 게 아니라 **배선이 0이던 신설**이라(ALPHA-767·768) 두 레인이 같은 스텝을
   # 동시에 소유하는 겹침 창이 없다.
-  # ⚠️ 이 스케줄이 켜져 있으므로 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 도 함께 주입된다
-  # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다.
+  # ⚠️ 이 값(ENABLED) 또는 아래 orchestrator = "AIRFLOW" 이면 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 이 주입된다
+  # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다. AIRFLOW 인 동안 실제 스케줄은 DISABLED 다.
   investor_intraday_schedule_state = "ENABLED"
-  # 실행 주체(ALPHA-1088). 전환은 이 한 줄을 "AIRFLOW" 로 바꿔 apply 한다 — 스케줄은 꺼지고 Reconciler
-  # 슬롯 대조는 유지된다. 바꾸기 전 src/apps/cloud/airflow/README.md 의 종료 확인(①~⑤)을 따른다.
-  investor_intraday_orchestrator = "SFN"
+  # 실행 주체(ALPHA-1088). ALPHA-1141 상시 운영 전환(2026-10-03 사용자 승인): 장중 수급 5슬롯은 Airflow 가 실행한다.
+  # 이 값이 AIRFLOW 면 이 레인의 EventBridge 스케줄 5개는 DISABLED, Reconciler 슬롯 대조는 유지된다.
+  # SFN 상태 머신·태스크 정의는 남는다 — 롤백은 이 값을 "SFN" 으로 되돌리는 PR(먼저 Airflow 업무 종료·보류·슬롯
+  # 소유를 확인한다, src/apps/cloud/airflow/README.md "운영 전환·롤백 절차").
+  investor_intraday_orchestrator = "AIRFLOW"
 
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를

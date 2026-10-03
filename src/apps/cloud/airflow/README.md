@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태(2026-10-03): 장중 수급(`edge_investor_intraday`)은 격리 검증 DAG 로 실제 AWS 검증까지 마쳤고, Airflow 를 기동해 유휴 관측 중이다(t4g.small 1대·서비스 1/1, 운영 메타DB `airflow`, 중단 시험 S1·S2 통과). **SFN → Airflow 상시 운영 전환이 승인됐다(10-03)** — 10-05 관측 확인 뒤 전환 PR #1105 를 머지하고 10-06 09:35 부터 Airflow 가 실행한다. 그 전까지 DAG 둘은 pause, SFN 이 운영 중이다(아래 "첫 운영 전환 실행안").
+현재 상태(2026-10-03 15:52): **장중 수급은 Airflow 가 상시 운영한다.** 10-03 전환(#1105) — SFN 스케줄 5개 DISABLED, 실행 주체 AIRFLOW, `edge_investor_intraday` unpause. 첫 실행은 10-05 09:35(휴장일 — 업무 없이 끝나는 run), 첫 실제 수집은 10-06 09:35 다. SFN 상태 머신은 롤백용으로 남아 있다. 원천 관측 `edge_source_daily` 는 pause(수급 첫 거래일 정상 확인 뒤 활성화). 결과는 아래 "첫 운영 전환 실행안"의 "전환 결과(10-03)".
 
 ## 구성
 
@@ -1052,7 +1052,7 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 - 호스트 표본 한 줄: `HOSTMEM t=<epoch> avail_kb=… free_kb=… task_cg_mib=… cg_oom_kill=… kmsg_oom=… uptime_s=…`. 조회는 `aws ssm list-command-invocations --details`(Comment `edge-dev-airflow-host-mem`).
 - 표본 명령은 5분마다 호스트에서 셸 하나를 잠깐 띄운다(관측에 주는 영향은 이 정도다).
 
-#### 전환 실행(10-05)
+#### 전환 실행(10-05 예정 → 10-03 앞당겨 실행)
 
 전환 PR #1105 는 `envs/dev` 의 `investor_intraday_orchestrator = "AIRFLOW"` 한 가지만 바꾼다(종료 예약 제거는 먼저 별도 PR 로 머지했다). plan: **0 add · 5 change · 0 destroy** — 장중 수급 SFN 스케줄 5개 `ENABLED → DISABLED`. SFN 상태 머신·태스크 정의·Reconciler 태스크 정의·다른 레인은 바뀌지 않는다. 10-05 에 최신 dev 로 갱신해 머지한다.
 
@@ -1067,6 +1067,20 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 5. `aws scheduler get-schedule` 로 장중 수급 스케줄 5개 `DISABLED`, ASG min 1·max 2 그대로, Reconciler 태스크 정의 env 에 슬롯 대조(`OPS_INVESTOR_INTRADAY_SCHED_HHMM`)가 남았는지 확인.
 6. `edge_investor_intraday` 만 unpause(REST `PATCH /api/v2/dags/edge_investor_intraday {"is_paused": false}`). `edge_source_daily` 는 pause 그대로. `run_immediately=timedelta(0)` 이라 지난 슬롯을 돌리지 않는다 — unpause 뒤 dag run 0, 다음 실행 예정이 10-06 09:35(KST)인지(`next_dagrun_logical_date`) 본다.
 7. 10-06 09:35 첫 슬롯 뒤: run_key `orchestrator='AIRFLOW'`, SFN 실행 0, LAUNCH_CONFLICT 0.
+
+**전환 결과(10-03, 사용자가 시점을 앞당겨 승인).**
+
+| 단계 | 결과 |
+|---|---|
+| 지표(전환 직전) | 경보 7개 모두 OK. 태스크 메모리 10-02 22:20 이후 783~796MiB 평탄(1분 표본 누락 0). 호스트 여유 412~560MiB(10-03 09:37 단발 412, 그 밖 494~560), OOM 0. RDS(10-03 00:00~) 여유 538~623MiB·연결 최대 36·CPU 최대 12.5%·쓰기 지연 최대 8.8ms·스왑 16~20MiB — 기존 중단 기준 안 |
+| 휴장일·catchup 확인(코드·이력) | 원장 계획이 SKIPPED 인 작업은 시도를 만들지 않고 통과한다(`ops/wrapper.py` — 실행권·보류 게이트 앞). 수집은 비거래일이면 KIS 를 부르지 않는다. 09-24 휴장일 SFN 도 업무 시도 0. DAG `catchup=false`·`max_active_runs=1`·`run_immediately=timedelta(0)` |
+| 종료 확인 | ① RUNNING 시도 0 ③ 이 레인 살아 있는 ECS 0 ④ SFN RUNNING 0 ⑤ Airflow run 0(둘 다 pause) ⑥ OPEN 보류 0, LAUNCH_CONFLICT 0. ②(실행권 lock)는 시도·태스크가 없어 확인 대상 없음 |
+| 슬롯 소유 | 마지막 run_key `investor-intraday:2026-10-02T14:35` SFN SUCCEEDED. Airflow 소유 run 0 |
+| #1105 머지(15:50) | `acf496e0`. CI 통과, plan = apply **0 added · 5 changed · 0 destroyed**(장중 수급 스케줄 5개 `ENABLED → DISABLED`). 종료 예약 제거는 #1109(13:53)로 먼저 했다 |
+| 머지 뒤 확인 | 스케줄 5개 DISABLED, `investor_intraday_orchestrator = "AIRFLOW"`, Reconciler 태스크 정의(`ops:13`)에 `OPS_INVESTOR_INTRADAY_SCHED_HHMM=09:35,10:05,11:25,13:25,14:35`·`STATE_MACHINE_ARN` 유지, SFN 상태 머신 ACTIVE |
+| unpause(15:51:46) | `edge_investor_intraday` 만(`edge_source_daily` pause 유지). 2분 40초 동안 dag run 0. 다음 예정 `2026-10-05T00:35Z`(10-05 09:35 KST — 휴장일 run), run 시간 상한 25분 |
+
+**미확인(운영 확인 대상).** 실제 장중 수집·적재(10-06 첫 거래일 5슬롯), 휴장일 run 이 Airflow 경로에서 실제로 업무 없이 끝나는지(10-05 — 코드·SFN 이력으로만 확인), 업무 실행 중 메모리·RDS, 알림 메일 실제 수신.
 
 **운영 중 감시.** 자동은 중단 경보 3종(서비스 desired 0)과 알림 경보 3종(SNS), 호스트 메모리 표본이다. 자동 중단이 일어나면 SFN 스케줄은 DISABLED 이므로 **그 사이 슬롯은 비고**, 사람이 아래 롤백을 해야 SFN 으로 돌아간다.
 
