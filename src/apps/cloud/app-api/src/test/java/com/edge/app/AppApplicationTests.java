@@ -16,6 +16,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.web.client.RestClient;
+import com.zaxxer.hikari.HikariDataSource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -23,6 +24,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import javax.sql.DataSource;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -59,6 +61,8 @@ class AppApplicationTests {
     StringRedisTemplate redis;
     @Autowired
     AccessTokens tokens;
+    @Autowired
+    DataSource dataSource;
 
     RestClient client() {
         return RestClient.builder().baseUrl("http://localhost:" + port)
@@ -76,17 +80,20 @@ class AppApplicationTests {
     }
 
     @Test
-    void voteIsCommittedBeforeRedisIsCalled() throws Exception {
+    void voteIsCommittedAndConnectionReleasedBeforeRedisIsCalled() throws Exception {
         String etf = "000011";
-        // AFTER_COMMIT 콜백이 리스너 안 단언을 삼키므로 테스트 스레드에서의 관측값 단언
+        // 요청 스레드 안 단언 대신 Redis 호출 시점 관측값의 테스트 스레드 단언
         var seenAtRedisCall = new CompletableFuture<Integer>();
+        var activeAtRedisCall = new CompletableFuture<Integer>();
         doAnswer(invocation -> {
+            activeAtRedisCall.complete(dataSource.unwrap(HikariDataSource.class).getHikariPoolMXBean().getActiveConnections());
             try (var pool = Executors.newSingleThreadExecutor()) {
                 seenAtRedisCall.complete(pool.submit(() -> votes(etf).size()).get(5, TimeUnit.SECONDS));
             }
             return invocation.callRealMethod();
         }).when(voteCountRepository).vote(etf, 1L, VoteChoice.BUY);
         assertEquals(200, vote(etf, 1, "buy"));
+        assertEquals(0, activeAtRedisCall.get(5, TimeUnit.SECONDS), "DB connection must be released before Redis is called");
         assertEquals(1, seenAtRedisCall.get(5, TimeUnit.SECONDS), "vote must be visible in DB before Redis is called");
     }
 

@@ -54,7 +54,7 @@ com.edge.app
 
 **Service 는 구체 클래스가 기본.** 구현을 바꿔 끼울 사정이 없으면 클래스 하나. 미리 두는 인터페이스는 추측성 추상화라 두지 않는다.
 
-**도메인 간 참조.** 다른 도메인 것은 Service 가 아니라 Repository 를 직접 읽는다(Service 끼리 부르면 순환·계층 비대). 쓰기는 자기 도메인만 한다. 부수 효과(글 작성 후 알림 생성 등)는 `VoteRecorded` 처럼 이벤트로 넘긴다.
+**도메인 간 참조.** 다른 도메인 것은 Service 가 아니라 Repository 를 직접 읽는다(Service 끼리 부르면 순환·계층 비대). 쓰기는 자기 도메인만 한다. 부수 효과(글 작성 후 알림 생성 등)는 `MemberWithdrawn` 처럼 이벤트로 넘긴다.
 
 **인증.** 회원 `Authorization: Bearer` 액세스 JWT + DB 저장 리프레시, 게스트 `X-Device-Id`. 둘 다 있으면 토큰 우선. common 의 `AuthFilter` 가 해석하고 리졸버가 인자 타입으로 넘긴다. `MemberPrincipal` 은 회원만, `AppPrincipal` 은 회원 또는 게스트, 익명이면 COMMON401. 필터는 DB 를 보지 않는다.
 
@@ -100,9 +100,9 @@ replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤�
 
 개념 설명은 [블로그](https://choyoungseo20.github.io/posts/redis-cluster/)에 있다.
 
-DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 identity 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(etf_code, member_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON CONFLICT DO UPDATE`(원자 upsert)로 한다. `VoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. 커밋 순서와 리스너 실행 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
+DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 identity 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(etf_code, member_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON CONFLICT DO UPDATE`(원자 upsert)로 한다. `VoteFacade`가 `VoteService.vote()`의 트랜잭션을 커밋하고 커넥션을 반납한 뒤 `updateCount()`로 Redis를 갱신한다. 커밋 전 캐시 갱신(롤백 시 유령 표)은 구조적으로 불가능하다. 커밋 순서와 Redis 반영 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
 
-코드 스타일은 로컬 kuke-board/service/view를 참고했다. 서비스(`VoteService`)는 트랜잭션 쓰기+이벤트 발행과 서킷 폴백 집계, event 패키지의 리스너가 커밋 후 캐시 갱신, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
+코드 스타일은 로컬 kuke-board/service/view를 참고했다. Facade(`VoteFacade`)는 트랜잭션 밖에서 쓰기와 Redis 반영의 순서 조율, 서비스(`VoteService`)는 트랜잭션 쓰기와 서킷 폴백 집계, event 패키지의 리스너는 탈퇴 후 집계 교체, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
 
 `/ping`은 제거했다. 실험 시작 준비 확인은 기존 `/actuator/health`를 사용한다. 무관 요청 지연(NFR-1)은 부하 실험의 별도 k6 시나리오가 정적 `/`(50rps)로 측정한다 — actuator health는 Redis 인디케이터를 포함해 무관 요청으로 부적합하다.
 

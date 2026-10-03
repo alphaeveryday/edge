@@ -15,11 +15,6 @@ public class VoteCacheListener {
     private final VoteCountRepository voteCountRepository;
     private final VoteRepository voteRepository;
 
-    @TransactionalEventListener
-    public void applyToCache(VoteRecorded event) {
-        voteCountRepository.vote(event.etfCode(), event.memberId(), event.choice());
-    }
-
     // 남은 표 기준의 집계 교체
     // 실패의 정합 주기 위임
     @TransactionalEventListener

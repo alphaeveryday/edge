@@ -1,5 +1,6 @@
 package com.edge.app.community.vote.controller;
 
+import com.edge.app.community.vote.service.VoteFacade;
 import com.edge.app.community.vote.service.VoteService;
 
 import com.edge.app.common.auth.MemberPrincipal;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/etfs/{code}/vote")
 @RequiredArgsConstructor
 public class VoteController {
+    private final VoteFacade voteFacade;
     private final VoteService voteService;
 
     // 응답의 현황 제외
@@ -28,7 +30,7 @@ public class VoteController {
     @PutMapping
     public ApiResponse<Void> communityVote(@PathVariable String code, MemberPrincipal principal,
             @RequestBody @Valid VoteRequest request) {
-        voteService.vote(code, principal.memberId(), request.choice());
+        voteFacade.vote(code, principal.memberId(), request.choice());
         return ApiResponse.onSuccess(null);
     }
 
