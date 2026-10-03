@@ -11,6 +11,7 @@
 - 남은 자리의 수동 복구: ① `aws stepfunctions describe-execution --execution-arn <실행 ARN>`으로 그 실행이 끝났는지 확인합니다. ② 그 실행의 태스크(자리 행의 `task_arns`, 비어 있으면 실행 이력의 `TaskSubmitted`)마다 `aws ecs describe-tasks --cluster <분석 클러스터> --tasks <ARN>`이 `STOPPED`를 답하는지 봅니다. ECS는 멈춘 태스크를 적어도 1시간 보여 주므로 경고를 본 뒤 바로 확인합니다. ECS 목록에 없음, `MISSING`, 로그 끊김, 워커 manifest의 완료 기록은 태스크가 멈췄다는 기록이 아닙니다. ③ 모든 태스크의 `STOPPED`를 확인한 자리만 writer 연결로 `DELETE FROM analysis_execution_slots WHERE execution_arn = '<실행 ARN>'`합니다. 확인하지 못하면 지우지 않고 원인을 조사합니다.
 - 분석 오류를 성공으로 처리하지 않습니다. 실패한 모델 실행은 원본 기록을 보존합니다. 이미 완료된 분석의 전달 재시도는 모델을 다시 호출하지 않습니다.
 - 같은 사건 재전달은 같은 실행에 연결합니다. SFN 접수와 DB 기록이 모두 확인된 뒤 SQS 메시지를 삭제합니다.
+- 워커는 단건 SFN의 실행 ARN을 받아, 발행 트랜잭션에서 자기 자리 행을 잠근 채 새 결과를 커밋합니다. 자리가 이미 회수됐으면 발행하지 않고 실패로 남깁니다. 전달 등록은 커밋된 발행만 대상으로 하므로 따로 자리를 확인하지 않습니다. 모델 대기 중에는 DB 연결을 쥐지 않고, 끊긴 연결은 같은 시도 안에서 다시 엽니다.
 
 ## 회수와 교대
 
