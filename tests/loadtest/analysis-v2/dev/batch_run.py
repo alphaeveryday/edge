@@ -5,6 +5,7 @@
     AWS_PROFILE=edge uv run --with boto3 python batch_run.py start --analysis-at 2026-10-02T06:30:00Z --etf 091160 069500
     AWS_PROFILE=edge uv run --with boto3 python batch_run.py start --analysis-at 2026-10-02T07:00:00Z        # 37종 전체
     AWS_PROFILE=edge uv run --with boto3 python batch_run.py report <실행 이름>                               # 끝난(또는 도는) 실행 측정
+    AWS_PROFILE=edge uv run --with boto3 python batch_run.py latest                                           # 가장 최근 배치 실행(스케줄 발화 포함) 측정
 """
 import argparse
 import hashlib
@@ -58,6 +59,11 @@ def attempts(etf, analysis_at, limit):
                       'seconds': round((stop - child['startDate']).total_seconds(), 1) if stop else None})
         if child['status'] not in ('SUCCEEDED', 'RUNNING'):
             found[-1]['failure'] = failure(ident)
+        types = [event['type'] for page in sfn.get_paginator('get_execution_history').paginate(
+            executionArn=SINGLE_EXECUTION + ident, includeExecutionData=False) for event in page['events']]
+        # 단건 워크플로가 자리를 못 얻어 기다린 30초 횟수와, 실행 제어 호출이 실패한 횟수(스로틀, 시작 실패, 시간 초과)
+        found[-1] |= {'capacity_waits_30s': types.count('WaitStateEntered'),
+                      'control_failures': sum(t.startswith('LambdaFunction') and t.endswith(('Failed', 'TimedOut')) for t in types)}
     return found
 
 
@@ -121,16 +127,21 @@ def report(args):
     for a in ran:
         if 'failure' in a:
             reasons[a['failure']] = reasons.get(a['failure'], 0) + 1
-    connections = boto3.client('cloudwatch', region_name=REGION).get_metric_statistics(
-        Namespace='AWS/RDS', MetricName='DatabaseConnections', Dimensions=[{'Name': 'DBInstanceIdentifier', 'Value': 'edge-dev'}],
-        StartTime=began - timedelta(minutes=10), EndTime=ended + timedelta(minutes=5), Period=60, Statistics=['Maximum'])['Datapoints']
-    during = [p['Maximum'] for p in connections if began <= p['Timestamp'] <= ended]
-    before = [p['Maximum'] for p in connections if p['Timestamp'] < began]
+    def rds(metric, statistic):
+        points = boto3.client('cloudwatch', region_name=REGION).get_metric_statistics(
+            Namespace='AWS/RDS', MetricName=metric, Dimensions=[{'Name': 'DBInstanceIdentifier', 'Value': 'edge-dev'}],
+            StartTime=began - timedelta(minutes=10), EndTime=ended + timedelta(minutes=5), Period=60, Statistics=[statistic])['Datapoints']
+        return ([p[statistic] for p in points if p['Timestamp'] < began], [p[statistic] for p in points if began <= p['Timestamp'] <= ended])
+    before, during = rds('DatabaseConnections', 'Maximum')
+    memory, cpu = rds('FreeableMemory', 'Minimum'), rds('CPUUtilization', 'Maximum')
+    every = [a for r in rows for a in r['attempts'] if inside(a)]
     result = {
         'execution': args.name, 'status': execution['status'], 'error': execution.get('error'), 'input': batch_input,
         'started': began.isoformat(), 'stopped': execution['stopDate'].isoformat() if execution.get('stopDate') else None,
         'total_seconds': round((ended - began).total_seconds(), 1), 'history_events': events, 'summary': summary,
         'max_concurrent_children': overlap, 'gate_waits_30s': waits,
+        'child_capacity_waits_30s': sum(a['capacity_waits_30s'] for a in every),
+        'child_control_failures': sum(a['control_failures'] for a in every),
         'worker_slot_wait_seconds': {'n': len(slot_waits), 'max': max(slot_waits, default=None), 'waited': sum(w > 0 for w in slot_waits)},
         'items': len(rows), 'child_runs_in_this_execution': len(ran),
         'child_failed_in_this_execution': sum(a['status'] != 'SUCCEEDED' for a in ran),
@@ -139,6 +150,8 @@ def report(args):
         'child_seconds_succeeded': {'n': len(seconds), 'min': seconds[0], 'median': round(statistics.median(seconds), 1), 'max': seconds[-1]} if seconds else None,
         'child_seconds_sum': round(sum(a['seconds'] for a in ran), 1),
         'db_connections_max': {'before_10min': max(before, default=None), 'during': max(during, default=None)},
+        'db_freeable_memory_min_mb': {'before_10min': round(min(memory[0])/2**20) if memory[0] else None, 'during': round(min(memory[1])/2**20) if memory[1] else None},
+        'db_cpu_max_percent': {'before_10min': round(max(cpu[0]), 1) if cpu[0] else None, 'during': round(max(cpu[1]), 1) if cpu[1] else None},
         'rows': rows,
     }
     RESULTS.mkdir(exist_ok=True)
@@ -158,5 +171,11 @@ if __name__ == '__main__':
     p.add_argument('--no-wait', action='store_true')
     p = commands.add_parser('report')
     p.add_argument('name')
+    commands.add_parser('latest')
     args = parser.parse_args()
+    if args.command == 'latest':  # 스케줄이 시작한 실행은 이름이 임의 값이라 목록에서 찾는다
+        found = sfn.list_executions(stateMachineArn=BATCH, maxResults=1)['executions']
+        if not found:
+            parser.exit(1, '배치 실행 이력이 없다\n')
+        args = argparse.Namespace(command='report', name=found[0]['name'])
     {'start': start, 'report': report}[args.command](args)

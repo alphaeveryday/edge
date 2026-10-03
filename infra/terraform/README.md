@@ -112,7 +112,7 @@ cd ../envs/dev  && terraform apply
 >
 > **1분 세션 스케줄 3개**는 평일 start 07:45, stop 16:10, 업종지수 rollup 16:00 KST다. start는 가격·뉴스·공시·iNAV·업종지수 세션을 계획하고 세션 결속 서비스 9종을 올린다. 공시 격자는 universe와 무관하게 09:00–15:30이며 종료까지 복구 여유 40분을 둔다. 가격 시간외 선언이 추가되면 종료 시각을 재검토한다. `analysis-consumer`는 이 목록 밖에서 SQS 잔여 기반 오토스케일링이 소유한다. stop은 phase DRAINED, 게이트 큐 0, outbox NEW 0을 연속 확인한 뒤 QC와 scale-down을 수행한다. ECS Task State Change rule은 start/stop 컨테이너의 비0 종료를 alarm SNS로 전달한다.
 >
-> **전망 배치 스케줄(`edge-dev-analysis-v2-outlook-batch`)은 평일 02:00 KST로 ENABLED**다(ALPHA-1142). 37종을 분석 슬롯 수(dev 3)만큼 동시에 돌려 08:00 KST 전에 저장한다. 대상 ETF는 `sources.toml`의 `[krx_etf.source.etf_map]`을 plan 때 읽으므로, 이 파일이 바뀌어도 terraform-plan·apply가 돈다. 계약과 한계는 [측정 기록](../../tests/loadtest/analysis-v2/README.md)에 있다.
+> **전망 배치 스케줄(`edge-dev-analysis-v2-outlook-batch`)은 평일 06:00 KST로 ENABLED**다(ALPHA-1142, 시각은 ALPHA-1157). 37종을 분석 슬롯 수(dev 3)만큼 동시에 돌려 08:00 KST 전에 저장한다. 대상 ETF는 `sources.toml`의 `[krx_etf.source.etf_map]`을 plan 때 읽으므로, 이 파일이 바뀌어도 terraform-plan·apply가 돈다. 계약과 한계는 [측정 기록](../../tests/loadtest/analysis-v2/README.md)에 있다.
 >
 > ⚠️ **`kr_holidays`(envs/dev/main.tf)는 해마다 손으로 갱신해야 한다** — 거래소 캘린더 연동 전까지의 수동 주입 지점(ALPHA-387). 주말만 코드가 안다. 비면 **다섯 곳**이 함께 퇴화한다: Planner 가 평일 휴장일에 런을 계획하고, KRX 수집이 직전 거래일 PDF 를 휴장일 as-of 로 오라벨하며, **KIS iNAV 가드(ALPHA-557)가 그날을 거래일로 보고 직전 거래일 값을 오늘 것으로 적재**하고, **KIS 투자자 수집(ALPHA-562)이 그날을 거래일로 보고 풀리지 않을 OPSQ2001 블랙아웃을 심볼마다 75초씩 기다린다**(유니버스 전체면 ~10시간). **1분 세션 start(ALPHA-712)도 그날을 거래일로 보고 세션(가격·뉴스·iNAV)을 만들고 상주 서비스를 올린다** — window 는 전건 빈 캔들로 남는다. `planner`·`krx`·`kis`·`minute-session` task-def 가 같은 `OPS_KR_HOLIDAYS` 를 받는다.
 >
