@@ -5,13 +5,11 @@ import com.edge.app.community.vote.repository.VoteRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "vote.mode", havingValue = "db-first", matchIfMissing = true)
 @RequiredArgsConstructor
 public class VoteCacheListener {
     private final VoteCountRepository voteCountRepository;
