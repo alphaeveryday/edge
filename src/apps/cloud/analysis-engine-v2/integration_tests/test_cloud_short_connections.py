@@ -4,11 +4,13 @@ The single-analysis workflow's slot row owns the run, so publication is refused 
 reclaimed, and a dropped or refused connection is repeated inside the same attempt instead of paying
 for the model again. The dashboard keeps its analysis ID lock and long connections.
 """
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 import os
 from threading import Event, Thread
 import time
+from unittest.mock import Mock
 from uuid import uuid4
 
 import psycopg
@@ -17,13 +19,17 @@ import pytest
 
 from edge_analysis_v2.analysis import service
 from edge_analysis_v2.cloud import worker
+from edge_analysis_v2.cloud.control import control
 from edge_analysis_v2.storage import database
 from edge_analysis_v2.storage.publications import OwnershipLost, PublicationStore
+from test_execution_control import stopped_record, submitted
 from edge_analysis_v2.tools.fixture_data import make_fixture
 
 OUTLOOK_ROWS = ('outlook_items', 'outlook_factors', 'outlook_conclusion_keywords', 'outlook_factor_metrics',
                 'outlook_issue_items')
 ANALYSIS_AT = '2026-09-21T10:00:00+09:00'
+STOPPED_AT = datetime(2026, 9, 21, 1, tzinfo=timezone.utc)
+NEXT = 'arn:aws:states:ap-northeast-2:1:execution:edge-dev-analysis-v2:next-'
 
 
 @pytest.fixture
@@ -104,6 +110,7 @@ def cloud(tmp_path):
             for table in OUTLOOK_ROWS + ('movement_items', 'movement_analyses', 'outlook_analyses'):
                 other.execute(f'DELETE FROM {table} WHERE analysis_id=%s', (identity,))
             other.execute('DELETE FROM analysis_execution_slots WHERE started_by=%s', (identity[:32],))
+            other.execute('DELETE FROM analysis_execution_slots WHERE execution_arn=%s', (NEXT + identity,))
 
 
 def news(kwargs):
@@ -329,3 +336,92 @@ def test_movement_published_but_interrupted_before_delivery_is_delivered_by_the_
         with cloud.admin() as other:
             other.execute('DELETE FROM tenant_delivery WHERE tenant_id=%s', (tenant,))
             other.execute('DELETE FROM tenant WHERE tenant_id=%s', (tenant,))
+
+
+def reclaim_by_control(cloud, owner, identity, events, ecs=None):
+    """The next run of the same kind and ETF asks the real execution control for a slot.
+
+    Only AWS is a stand-in: the owner's workflow has ended (ABORTED) with the given history, and ECS
+    answers as `ecs` does. The slot table, locks and writer grants are the real PostgreSQL ones.
+    """
+    workflows = Mock()
+    workflows.describe_execution.side_effect = lambda executionArn: {
+        'status': 'ABORTED' if executionArn == owner else 'RUNNING'}
+    workflows.get_paginator.return_value.paginate.return_value = [{'events': events}]
+    with psycopg.connect(cloud.dsn, autocommit=True, application_name='reclaim-' + identity[:16]) as conn:
+        conn.execute('SET ROLE edge_analysis_v2_writer')
+        return control(conn, workflows, ecs or Mock(), 'cluster', NEXT + identity, 'acquire',
+                       slots=3, request_key='outlook:' + identity)
+
+
+def blocker(cloud, name, seconds=10):
+    """Application name of the session that `name` waits on, polled until the lock wait appears."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        with cloud.admin() as other:
+            row = other.execute("""SELECT b.application_name FROM pg_stat_activity a
+                CROSS JOIN LATERAL unnest(pg_blocking_pids(a.pid)) AS p(pid)
+                JOIN pg_stat_activity b ON b.pid = p.pid WHERE a.application_name = %s""", (name,)).fetchone()
+        if row:
+            return row[0]
+        time.sleep(0.05)
+    return None
+
+
+def test_execution_control_reclaim_waits_for_the_publication_and_takes_the_slot_after_it(cloud):
+    """Proof that the task stopped can arrive while its last transaction is still open (the container
+    is gone before PostgreSQL ends the session). Control must queue behind that publication, so the
+    next run of the ETF starts after it instead of racing it."""
+    identity = uuid4().hex
+    owner = cloud.owned(identity)
+    pause = {'match': 'INSERT INTO outlook_items', 'entered': Event(), 'release': Event()}
+    cloud.faults['pause'] = pause
+    decided = {}
+    def reclaim():
+        decided['result'] = reclaim_by_control(cloud, owner, identity,
+                                               [submitted('task', STOPPED_AT), stopped_record('task', STOPPED_AT)])
+    first = Thread(target=cloud.execute, args=(outlook_model([]),), kwargs={'owner': owner, 'identity': identity})
+    first.start()
+    assert pause['entered'].wait(10)  # the publication transaction holds the owner's slot row
+    second = Thread(target=reclaim)
+    second.start()
+    holder = blocker(cloud, 'reclaim-' + identity[:16])
+    pause['release'].set()
+    first.join(10)
+    second.join(10)
+    assert holder and holder.startswith('short-conn-')  # control waited on the publishing session
+    assert cloud.status(identity)[0] == 'completed' and cloud.rows(identity)['outlook_items'] > 0
+    assert decided['result']['acquired'] and decided['result']['held'] == []
+
+
+def test_slot_reclaimed_by_execution_control_refuses_the_old_workers_publication(cloud):
+    """Once control has freed the slot, the next run of the ETF may already be running. A worker that
+    outlived its slot must publish nothing, or two runs would both claim to be the latest."""
+    identity = uuid4().hex
+    owner = cloud.owned(identity)
+    decided = {}
+    def reclaim():
+        decided['result'] = reclaim_by_control(cloud, owner, identity,
+                                               [submitted('task', STOPPED_AT), stopped_record('task', STOPPED_AT)])
+    with pytest.raises(OwnershipLost):
+        cloud.execute(outlook_model([], during=reclaim), owner=owner, identity=identity)
+    assert decided['result']['acquired']
+    state, error = cloud.status(identity)
+    assert state == 'failed' and 'reclaimed' in error
+    assert set(cloud.rows(identity).values()) == {0}
+
+
+def test_missing_task_keeps_the_slot_so_its_worker_still_publishes(cloud):
+    """ECS forgetting a task (MISSING) does not prove it stopped. Control keeps the slot occupied, so
+    the worker that may still be running is not cut off and the next run keeps waiting."""
+    identity = uuid4().hex
+    owner = cloud.owned(identity)
+    ecs = Mock()
+    ecs.describe_tasks.return_value = {'tasks': [], 'failures': [{'arn': 'task', 'reason': 'MISSING'}]}
+    decided = {}
+    def reclaim():
+        decided['result'] = reclaim_by_control(cloud, owner, identity, [submitted('task', STOPPED_AT)], ecs)
+    cloud.execute(outlook_model([], during=reclaim), owner=owner, identity=identity)
+    assert not decided['result']['acquired']
+    assert decided['result']['held'] == [{'execution_arn': owner, 'reason': 'task-missing'}]
+    assert cloud.status(identity)[0] == 'completed' and cloud.rows(identity)['outlook_items'] > 0
