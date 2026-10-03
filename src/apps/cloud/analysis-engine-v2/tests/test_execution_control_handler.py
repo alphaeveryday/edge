@@ -18,7 +18,7 @@ def test_warm_invocations_reuse_clients_and_report_where_time_went(monkeypatch):
     monkeypatch.setattr(control, 'connect_results', connect)
     monkeypatch.setattr(control, 'control', lambda *args, **kwargs: {'acquired': True, 'started_by': 'x', 'held': []})
     for name, value in {'EXECUTION_ARN_PREFIX': 'arn:aws:states:r:1:execution:w:', 'RDS_CA_PATH': '/ca.pem',
-                        'CLUSTER_ARN': 'cluster', 'ANALYSIS_SLOTS': '3', 'TASK_FAMILY': 'w'}.items():
+                        'CLUSTER_ARN': 'cluster', 'ANALYSIS_SLOTS': '3'}.items():
         monkeypatch.setenv(name, value)
     event = {'execution_arn': 'arn:aws:states:r:1:execution:w:one', 'action': 'acquire', 'request_key': 'outlook:069500'}
     first, second = control.handler(event, None), control.handler(event, None)

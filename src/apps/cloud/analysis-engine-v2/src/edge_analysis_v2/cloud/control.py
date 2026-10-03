@@ -1,5 +1,4 @@
 """Reserve analysis capacity before starting Fargate; reclaim only stopped work."""
-from datetime import datetime, timedelta, timezone
 import json
 from hashlib import sha256
 import logging
@@ -15,9 +14,6 @@ from edge_analysis_v2.storage.database import connect_results
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 TERMINAL = ('SUCCEEDED', 'FAILED', 'TIMED_OUT', 'ABORTED')
-# The ECS API is eventually consistent; AWS advises backing off up to five minutes before trusting
-# DescribeTasks after RunTask. Absence from ECS counts as evidence only after twice that long.
-SETTLE = timedelta(minutes=10)
 
 
 def _run_task(details):
@@ -28,19 +24,16 @@ def task_history(workflows, execution_arn):
     """Read what the execution history proves about its Analyze task.
 
     Returns:
-        Submitted task ARNs with their submission time, task ARNs whose completion event already
-        reported STOPPED, and the time of the last RunTask event when a call never recorded a task.
+        Submitted task ARNs, task ARNs whose completion event already reported STOPPED, and whether
+        the execution ever scheduled a RunTask call.
     """
-    submitted, stopped, unrecorded = {}, set(), None
+    submitted, stopped, called = set(), set(), False
     # Optimized ECS integration owns StartedBy. Its execution history identifies tasks.
     for page in workflows.get_paginator('get_execution_history').paginate(executionArn=execution_arn):
         for event in page['events']:
-            at = event.get('timestamp')
             details = event.get('taskSubmittedEventDetails', {})
             if _run_task(details):
-                for task in json.loads(details['output']).get('Tasks', []):
-                    submitted[task['TaskArn']] = at
-                unrecorded = None
+                submitted.update(task['TaskArn'] for task in json.loads(details['output']).get('Tasks', []))
                 continue
             for key, field in (('taskSucceededEventDetails', 'output'), ('taskFailedEventDetails', 'cause')):
                 details = event.get(key, {})
@@ -52,60 +45,27 @@ def task_history(workflows, execution_arn):
                     task = None
                 if isinstance(task, dict) and task.get('LastStatus') == 'STOPPED' and task.get('TaskArn'):
                     stopped.add(task['TaskArn'])
-            for key in ('taskScheduledEventDetails', 'taskStartedEventDetails', 'taskFailedEventDetails'):
-                if _run_task(event.get(key, {})) and not submitted:
-                    unrecorded = at  # A RunTask call that never reported its task (failed or interrupted)
-    return submitted, stopped, unrecorded
+            called = called or any(_run_task(event.get(key, {})) for key in (
+                'taskScheduledEventDetails', 'taskStartedEventDetails', 'taskFailedEventDetails'))
+    return submitted, stopped, called
 
 
-def running_for_key(ecs, cluster, family, request_key):
-    """Return true unless ECS shows no unstopped worker task with the same kind and ETF.
-
-    StopTask flips desiredStatus to STOPPED while the container still runs, so both listings are read
-    and lastStatus decides. A task ECS listed but would not describe counts as possibly running.
-    """
-    arns = sorted({arn for status in ('RUNNING', 'STOPPED') for page in ecs.get_paginator('list_tasks').paginate(
-        cluster=cluster, family=family, desiredStatus=status) for arn in page['taskArns']})
-    for start in range(0, len(arns), 100):
-        batch = arns[start:start+100]
-        response = ecs.describe_tasks(cluster=cluster, tasks=batch)
-        if response.get('failures') or len(response.get('tasks', [])) != len(batch):
-            return True
-        for task in response['tasks']:
-            if task.get('lastStatus') == 'STOPPED':
-                continue
-            for container in task.get('overrides', {}).get('containerOverrides', []):
-                for variable in container.get('environment', []):
-                    if variable.get('name') != 'ANALYSIS_REQUEST':
-                        continue
-                    request = json.loads(variable['value'])
-                    if f"{request.get('kind')}:{request.get('etf_code')}" == request_key:
-                        return True
-    return False
-
-
-def reclaimable(connection, workflows, ecs, cluster, slot, *, family=None, now=None):
+def reclaimable(connection, workflows, ecs, cluster, slot):
     """Decide from evidence whether a finished execution's slot may be reused.
 
-    A slot is freed only when every task its execution started is known to have stopped: a completion
-    event in the execution history, ECS reporting STOPPED, or ECS no longer knowing a task submitted
-    longer ago than SETTLE. Anything less keeps the slot occupied. Surviving tasks are asked to stop.
+    A slot is freed only when the execution never called RunTask, or every task it started is
+    recorded as STOPPED in the execution history or by ECS. ECS forgetting a task (MISSING), an
+    unrecorded task, elapsed time or a failed lookup proves nothing, so the slot stays occupied and
+    needs the manual recovery in docs/price-automation.md. Surviving tasks are asked to stop.
 
     Returns:
         Whether the slot can be deleted, and the reason for the decision.
     """
-    now = now or datetime.now(timezone.utc)
-    submitted, stopped, unrecorded = task_history(workflows, slot['execution_arn'])
-    arns = set(slot['task_arns']) | set(submitted)
+    submitted, stopped, called = task_history(workflows, slot['execution_arn'])
+    arns = set(slot['task_arns']) | submitted
     if not arns:
-        if unrecorded is None:
-            return True, 'no-task-started'
-        # RunTask was called but its task was never recorded. Only ECS can say whether it runs.
-        if family is None or now - unrecorded < SETTLE:
-            return False, 'task-unrecorded'
-        if running_for_key(ecs, cluster, family, slot['request_key']):
-            return False, 'task-unrecorded-running'
-        return True, 'task-unrecorded-none-running'
+        # A RunTask call whose task was never recorded may still have started one.
+        return (False, 'task-unrecorded') if called else (True, 'no-task-started')
     # StopTask removes a task from the default RUNNING listing before it has exited.
     connection.execute('UPDATE analysis_execution_slots SET task_arns=%s WHERE execution_arn=%s',
                        (sorted(arns), slot['execution_arn']))
@@ -114,21 +74,19 @@ def reclaimable(connection, workflows, ecs, cluster, slot, *, family=None, now=N
         return True, 'stopped-recorded'
     response = ecs.describe_tasks(cluster=cluster, tasks=pending)
     states = {task['taskArn']: task['lastStatus'] for task in response.get('tasks', [])}
-    missing = {failure['arn'] for failure in response.get('failures', []) if failure.get('reason') == 'MISSING'}
     active = [arn for arn in pending if arn in states and states[arn] != 'STOPPED']
     for arn in active:
         ecs.stop_task(cluster=cluster, task=arn, reason='Analysis workflow finished')
     if active:
         return False, 'task-running'
-    unknown = [arn for arn in pending if states.get(arn) != 'STOPPED' and not (
-        arn in missing and submitted.get(arn) is not None and now - submitted[arn] >= SETTLE)]
+    unknown = [arn for arn in pending if arn not in states]
     if unknown:
-        return False, 'task-missing-recent' if all(arn in missing for arn in unknown) else 'task-state-unknown'
-    return True, 'stopped-or-missing-after-settle' if missing else 'stopped'
+        missing = {failure['arn'] for failure in response.get('failures', []) if failure.get('reason') == 'MISSING'}
+        return False, 'task-missing' if set(unknown) <= missing else 'task-state-unknown'
+    return True, 'stopped'
 
 
-def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots=1, request_key=None,
-            family=None, now=None):
+def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots=1, request_key=None):
     """Acquire one shared slot or release it after the owning task stops.
 
     A slot whose release cannot be proven stays occupied and keeps counting against the capacity,
@@ -143,8 +101,6 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
         action: Acquire or release.
         slots: Shared configured capacity, from one through three.
         request_key: Analysis kind and ETF code; one execution at a time per pair.
-        family: Worker task family, used only to look for a task whose ARN was never recorded.
-        now: Aware clock for tests.
 
     Returns:
         Acquired flag, stable reservation identity, and slots kept occupied without proof of release.
@@ -169,13 +125,11 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
                 finished = workflows.describe_execution(executionArn=arn)['status'] in TERMINAL
             if not finished:
                 continue
-            free, reason = reclaimable(connection, workflows, ecs, cluster, slot, family=family, now=now)
+            free, reason = reclaimable(connection, workflows, ecs, cluster, slot)
         except Exception as exc:
             free, reason = False, 'check-failed:' + type(exc).__name__
         if free:
             removable.append(arn)
-            if reason not in ('stopped', 'stopped-recorded', 'no-task-started'):
-                LOG.warning('Reclaiming analysis slot execution=%s reason=%s', arn, reason)
         else:
             held.append({'execution_arn': arn, 'reason': reason})
             LOG.warning('Keeping analysis slot occupied execution=%s reason=%s', arn, reason)
@@ -214,8 +168,7 @@ def handler(event, context):
         connected = time.monotonic()
         result = control(connection, _CLIENTS['workflows'], _CLIENTS['ecs'],
                          os.environ['CLUSTER_ARN'], arn, event['action'],
-                         slots=int(os.environ['ANALYSIS_SLOTS']), request_key=event.get('request_key'),
-                         family=os.environ.get('TASK_FAMILY'))
+                         slots=int(os.environ['ANALYSIS_SLOTS']), request_key=event.get('request_key'))
     done = time.monotonic()
     timing = {'clients_ms': round((clients-began)*1000), 'connect_ms': round((connected-clients)*1000),
               'control_ms': round((done-connected)*1000)}

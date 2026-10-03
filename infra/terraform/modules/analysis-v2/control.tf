@@ -15,8 +15,7 @@ resource "aws_iam_role_policy" "control" {
     { Effect = "Allow", Action = ["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSubnets", "ec2:DeleteNetworkInterface", "ec2:AssignPrivateIpAddresses", "ec2:UnassignPrivateIpAddresses"], Resource = "*" },
     { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = data.aws_secretsmanager_secret.writer.arn },
     { Effect = "Allow", Action = ["states:DescribeExecution", "states:GetExecutionHistory"], Resource = "arn:aws:states:${var.region}:${data.aws_caller_identity.current.account_id}:execution:${var.name}:*" },
-    # ListTasks: 실행 이력에 태스크가 남지 않은 자리만, 같은 종류·ETF 의 워커 태스크가 아직 도는지 확인한다(control.py running_for_key).
-    { Effect = "Allow", Action = ["ecs:DescribeTasks", "ecs:StopTask", "ecs:ListTasks"], Resource = "*", Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } } }
+    { Effect = "Allow", Action = ["ecs:DescribeTasks", "ecs:StopTask"], Resource = "*", Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } } }
   ] })
 }
 # reserved_concurrent_executions: 정합성은 함수 안의 트랜잭션 락이 지킨다(동시 호출 37개에서도 상한 유지,
@@ -41,7 +40,6 @@ resource "aws_lambda_function" "control" {
       RDS_CA_PATH          = "/var/task/rds-ca.pem"
       CLUSTER_ARN          = var.cluster_arn
       ANALYSIS_SLOTS       = tostring(var.analysis_slots)
-      TASK_FAMILY          = aws_ecs_task_definition.this.family
       EXECUTION_ARN_PREFIX = "arn:aws:states:${var.region}:${data.aws_caller_identity.current.account_id}:execution:${var.name}:"
     }
   }
