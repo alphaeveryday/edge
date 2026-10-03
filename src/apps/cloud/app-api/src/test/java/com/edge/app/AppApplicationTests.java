@@ -114,6 +114,28 @@ class AppApplicationTests {
                 .getStatusCode().value());
     }
 
+    int withdraw(String etf, long member) {
+        return client().delete().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(member))
+                .retrieve().toBodilessEntity().getStatusCode().value();
+    }
+
+    @Test
+    void withdrawRemovesVoteFromDbAndCountsIdempotently() {
+        String etf = "000077";
+        assertEquals(200, vote(etf, 1, "buy"));
+        assertEquals(200, vote(etf, 2, "sell"));
+        assertEquals(200, withdraw(etf, 1));
+        assertEquals(1, votes(etf).size());
+        assertNull(myVote(etf, 1));
+        assertEquals(new VoteCounts(0, 0, 1), voteCountRepository.counts(etf));
+        assertEquals(1, redis.opsForHash().size("vote:{" + etf + "}:choices"));
+        // 투표 기록 없는 재철회의 카운터 불변
+        assertEquals(200, withdraw(etf, 1));
+        assertEquals(new VoteCounts(0, 0, 1), voteCountRepository.counts(etf));
+        assertEquals(401, client().delete().uri("/api/v1/etfs/" + etf + "/vote").retrieve().toBodilessEntity()
+                .getStatusCode().value());
+    }
+
     @Test
     void numericChoiceIsRejected() {
         assertEquals(400, vote("000012", 1, 0));

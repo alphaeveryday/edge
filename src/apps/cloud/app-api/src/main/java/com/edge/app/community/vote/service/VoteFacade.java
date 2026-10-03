@@ -15,4 +15,9 @@ public class VoteFacade {
         voteService.vote(etfCode, memberId, choice);
         voteService.updateCount(etfCode, memberId, choice);
     }
+
+    public void withdraw(String etfCode, Long memberId) {
+        voteService.withdraw(etfCode, memberId);
+        voteService.removeFromCount(etfCode, memberId);
+    }
 }

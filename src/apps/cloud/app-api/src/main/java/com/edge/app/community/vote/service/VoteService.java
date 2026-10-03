@@ -38,6 +38,15 @@ public class VoteService {
         voteCountRepository.vote(etfCode, memberId, choice);
     }
 
+    @Transactional
+    public void withdraw(String etfCode, Long memberId) {
+        voteRepository.deleteByEtfCodeAndMemberId(etfCode, memberId);
+    }
+
+    public void removeFromCount(String etfCode, Long memberId) {
+        voteCountRepository.withdraw(etfCode, memberId);
+    }
+
     // 읽은 경로를 나타내는 source 표식
     // 폴백 정책을 아는 이 계층의 표식 부착
     public VoteCountResponse counts(String etfCode) {

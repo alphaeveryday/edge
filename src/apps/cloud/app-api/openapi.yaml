@@ -798,6 +798,16 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    delete:
+      tags: [community]
+      operationId: communityVoteWithdraw
+      summary: 투표 철회
+      security: [{ bearerAuth: [] }]
+      description: 요청 회원의 이 ETF 투표 삭제. 투표 기록이 없어도 성공(멱등). 앱은 성공 후 count 를 다시 읽는다.
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
     get:
       tags: [community]
       operationId: communityMyVote

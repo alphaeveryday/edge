@@ -10,6 +10,7 @@ import com.edge.app.community.vote.dto.VoteRequest;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -31,6 +32,12 @@ public class VoteController {
     public ApiResponse<Void> communityVote(@PathVariable String code, MemberPrincipal principal,
             @RequestBody @Valid VoteRequest request) {
         voteFacade.vote(code, principal.memberId(), request.choice());
+        return ApiResponse.onSuccess(null);
+    }
+
+    @DeleteMapping
+    public ApiResponse<Void> communityVoteWithdraw(@PathVariable String code, MemberPrincipal principal) {
+        voteFacade.withdraw(code, principal.memberId());
         return ApiResponse.onSuccess(null);
     }
 

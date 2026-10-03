@@ -40,6 +40,10 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
     List<String> etfCodesOf(@Param("member") long memberId);
 
     @Modifying
+    @Query("delete from Vote v where v.etfCode = :etf and v.memberId = :member")
+    void deleteByEtfCodeAndMemberId(@Param("etf") String etfCode, @Param("member") Long memberId);
+
+    @Modifying
     @Query("delete from Vote v where v.memberId = :member")
     void deleteByMember(@Param("member") long memberId);
 }

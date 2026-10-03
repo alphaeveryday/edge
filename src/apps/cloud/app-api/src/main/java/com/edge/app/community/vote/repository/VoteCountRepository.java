@@ -27,6 +27,7 @@ public class VoteCountRepository {
     private static final String COUNT_KEY_FORMAT = "vote:{%s}:count";
 
     private static final DefaultRedisScript<Long> VOTE = script("vote.lua", Long.class);
+    private static final DefaultRedisScript<Long> WITHDRAW = script("withdraw.lua", Long.class);
     private static final DefaultRedisScript<List> REPLACE = script("reconcile.lua", List.class);
 
     // 열린 서킷이 DB 저장을 막지 않도록 Redis 호출에만 거는 쓰기 서킷
@@ -40,6 +41,18 @@ public class VoteCountRepository {
         } catch (Exception ex) {
             meterRegistry.counter("vote.redis.write.failures").increment();
             log.warn("Redis vote failed etf={}; DB committed", etfCode, ex);
+        }
+    }
+
+    // 이전 선택 카운터의 차감과 회원 선택 삭제
+    // 투표 기록 없는 철회의 no-op
+    public void withdraw(String etfCode, Long memberId) {
+        try {
+            circuit.of(etfCode).executeRunnable(
+                    () -> redisTemplate.execute(WITHDRAW, generateKeys(etfCode), memberId.toString()));
+        } catch (Exception ex) {
+            meterRegistry.counter("vote.redis.write.failures").increment();
+            log.warn("Redis withdraw failed etf={}; DB committed", etfCode, ex);
         }
     }
 
