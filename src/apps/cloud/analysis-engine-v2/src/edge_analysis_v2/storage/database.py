@@ -1,6 +1,7 @@
 """Dedicated result database connection through the fixed local SSM tunnel."""
 import json
 from pathlib import Path
+import random
 import time
 
 import psycopg
@@ -127,11 +128,12 @@ def connect_results(ca_path: Path, *, session=None, cloud=False):
                                   transient=isinstance(exc, psycopg.OperationalError)) from None
 
 
-def retry_transient(operation, *, seconds=RETRY_SECONDS, sleep=time.sleep, clock=time.monotonic):
+def retry_transient(operation, *, seconds=RETRY_SECONDS, sleep=time.sleep, clock=time.monotonic, jitter=random.uniform):
     """Run an idempotent operation, repeating the whole of it after a dropped or refused connection.
 
     The operation must open its own connection and own complete transactions, so a repeat never
-    continues a transaction that failed halfway. Any other error is raised at once.
+    continues a transaction that failed halfway. Any other error is raised at once. Waits are
+    jittered so workers refused together do not all return together.
 
     Args:
         operation: Zero-argument callable; repeated as a unit.
@@ -151,7 +153,8 @@ def retry_transient(operation, *, seconds=RETRY_SECONDS, sleep=time.sleep, clock
         except Exception as exc:
             if not transient(exc) or clock() - started + delay > seconds:
                 raise
+            wait = jitter(delay / 2, delay)
             STATS.retries += 1
-            STATS.retry_wait_seconds += delay
-            sleep(delay)
+            STATS.retry_wait_seconds += wait
+            sleep(wait)
             delay = min(delay * 2, 8)

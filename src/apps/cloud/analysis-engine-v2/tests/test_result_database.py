@@ -102,8 +102,15 @@ def test_retry_repeats_only_connection_failures_within_the_time_bound():
     def dropped():
         raise psycopg.errors.AdminShutdown("terminating connection due to administrator command")
     with pytest.raises(psycopg.errors.AdminShutdown):
-        db.retry_transient(dropped, seconds=10, sleep=sleep, clock=lambda: clock[0])
+        db.retry_transient(dropped, seconds=10, sleep=sleep, clock=lambda: clock[0], jitter=lambda low, high: high)
     assert waits == [0.5, 1, 2, 4] and sum(waits) <= 10
+    spread, ticking = [], [0.0]
+    def jittered(seconds):
+        spread.append(seconds)
+        ticking[0] += seconds
+    with pytest.raises(psycopg.errors.AdminShutdown):
+        db.retry_transient(dropped, seconds=10, sleep=jittered, clock=lambda: ticking[0])
+    assert all(low <= wait <= high for wait, (low, high) in zip(spread, [(0.25, 0.5), (0.5, 1), (1, 2), (2, 4)]))
     for error in (psycopg.errors.QueryCanceled("statement timeout"), ValueError("bad input"),
                   db.ResultDatabaseError("identity", transient=False)):
         calls = []
