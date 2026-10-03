@@ -61,6 +61,26 @@ class SingleAnalysis(unittest.TestCase):
         data['task']={'Containers':[{'ExitCode':1}]}
         self.assertEqual(self.step('CheckExit',data)['nextState'],'Failed')
 
+    def retry(self, state, error, count):
+        result=self.client.test_state(
+            definition=json.dumps(self.definition),stateName=state,input=json.dumps({'request':self.request}),
+            inspectionLevel='DEBUG',mock={'errorOutput':{'error':error,'cause':'mocked'}},
+            context=json.dumps({'Execution':{'Id':'arn:aws:states:ap-northeast-2:393229433969:execution:edge-dev-analysis-v2:test'}}),
+            stateConfiguration={'retrierRetryCount':count})
+        return result['status'],result.get('inspectionData',{}).get('errorDetails',{})
+
+    def test_control_throttle_retries_longer_with_jitter_than_function_errors(self):
+        # A throttled control call never reached the slot table, so it may wait; a function error must not hide.
+        for state in ('Acquire','Release','ReleaseFailed'):
+            for count in range(8):
+                status,details=self.retry(state,'Lambda.TooManyRequestsException',count)
+                self.assertEqual((status,details['retryIndex']),('RETRIABLE',0),(state,count))
+                self.assertLessEqual(details['retryBackoffIntervalSeconds'],20,(state,count))
+            self.assertEqual(self.retry(state,'Lambda.TooManyRequestsException',8)[0],'FAILED',state)
+            status,details=self.retry(state,'RuntimeError',0)
+            self.assertEqual((status,details['retryIndex'],details['retryBackoffIntervalSeconds']),('RETRIABLE',1,5),state)
+            self.assertEqual(self.retry(state,'RuntimeError',3)[0],'FAILED',state)
+
     def test_slot_key_is_kind_and_etf_not_analysis_id(self):
         result=self.step('Acquire',{'request':self.request},{'result':'{"acquired":true,"started_by":"x"}','fieldValidationMode':'NONE'})
         sent=json.loads(result['inspectionData']['afterParameters'])
