@@ -434,17 +434,32 @@ def faults(args):
               lambda m, t: m.get('model_start', inf) < t < m.get('model_end', inf)),
              ('deny-after-model', [('all-model-end', 'deny', args.deny)], 3.0,
               lambda m, t: m.get('model_end', inf) <= t <= m.get('save_start', inf))]
+    n = args.n
+    # 기대: (성공 수, DB 상태별 수). A 는 쥐고 있던 연결이 끊겨 실패 기록도 못 남기고 running 으로 남는다.
+    expect = {('terminate-mid-wait', 'a', 0.0): (0, {'running': n}),
+              ('terminate-mid-wait', 'b', 0.0): (n, {'completed': n}),
+              ('terminate-mid-wait', 'b', args.retry): (n, {'completed': n}),
+              ('deny-after-model', 'a', 0.0): (0, {'running': n}),
+              ('deny-after-model', 'b', 0.0): (0, {'running': n}),
+              ('deny-after-model', 'b', args.retry): (n, {'completed': n})}
+    tools_per_run = args.tools + (2 if args.kind == 'outlook' else 0)  # 전망은 시작 시 요인 조회와 본문 쓰기가 더 있다
     for label, plan, hold, in_phase in cases:
         for mode, retry in (('a', 0.0), ('b', 0.0), ('b', args.retry)):
             reset()
-            specs = [{'kind': args.kind, 'etf': codes[i], 'id': uuid4().hex} for i in range(args.n)]
+            specs = [{'kind': args.kind, 'etf': codes[i], 'id': uuid4().hex} for i in range(n)]
             r = launch(specs, mode=mode, llm=args.llm, tools=args.tools, retry=retry, faults=plan, hold=hold)
             at = r['faults'][0]['abs']
             r['phase_ok'] = [in_phase(run['marks'] or {}, at) for run in r['runs']]
-            record(f'review-fault-{label}-{mode}-retry{retry:g}', {'mode': mode, 'retry_s': retry, 'n': args.n,
+            record(f'review-fault-{label}-{mode}-retry{retry:g}', {'mode': mode, 'retry_s': retry, 'n': n,
                    'kind': args.kind, 'llm_s': args.llm, 'tools': args.tools, 'plan': plan, 'hold_s': hold,
                    'role_limits': roles}, r)
+            ok, states = expect[(label, mode, retry)]
             assert all(r['phase_ok']), (label, mode, r['phase_ok'], [run['marks'] for run in r['runs']])
+            assert r['ok'] == ok and {k: v for k, v in r['db_rows'].items() if v} == states, (label, mode, retry, r['db_rows'])
+            assert all((run['marks'] or {}).get('model_calls') == 1 for run in r['runs']), (label, mode, retry)
+            if label == 'deny-after-model':  # 장애는 툴 기록이 다 저장된 뒤에 들어갔다
+                assert r['tool_runs'] == n * tools_per_run, (label, mode, retry, r['tool_runs'])
+    print('faults: all assertions passed')
 
 
 def dup(args):
