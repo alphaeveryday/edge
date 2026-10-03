@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from psycopg import Connection
+from psycopg.errors import UniqueViolation
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -86,6 +87,9 @@ class ToolStore:
     ) -> dict | None:
         """Commit evidence and return exactly the output read back from PostgreSQL.
 
+        Saving the same execution again, for example after a commit whose reply was lost, returns the
+        stored output without writing; every saved field must match.
+
         Args:
             tool_run_id: Identifier already assigned to this execution.
             tool_id: Registered tool definition identifier.
@@ -103,6 +107,7 @@ class ToolStore:
 
         Raises:
             ValueError: Invalid identity, JSON, timing, or success/failure combination.
+            psycopg.errors.UniqueViolation: The identifier already stores different evidence.
         """
         self._require_idle()
         if analysis_kind not in ("movement", "outlook"):
@@ -119,21 +124,36 @@ class ToolStore:
             raise ValueError("Response must identify this successful execution")
         for value in (arguments, context, output):
             _json_value(value)
-        with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
-            cur.execute("""
-                INSERT INTO tool_runs
-                    (tool_run_id, tool_id, movement_analysis_id, outlook_analysis_id,
-                     arguments, context, output, status, error_message, started_at, finished_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING output
-                """, (tool_run_id, tool_id,
-                      analysis_id if analysis_kind == "movement" else None,
-                      analysis_id if analysis_kind == "outlook" else None,
-                      Jsonb(arguments), Jsonb(context), Jsonb(output) if output is not None else None,
-                      "completed" if output is not None else "failed", error_message,
-                      started_at, finished_at))
-            stored = cur.fetchone()["output"]
-        return stored
+        row = dict(tool_run_id=tool_run_id, tool_id=tool_id,
+                   movement_analysis_id=analysis_id if analysis_kind == "movement" else None,
+                   outlook_analysis_id=analysis_id if analysis_kind == "outlook" else None,
+                   arguments=arguments, context=context, output=output,
+                   status="completed" if output is not None else "failed", error_message=error_message,
+                   started_at=started_at, finished_at=finished_at)
+        try:
+            with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
+                cur.execute("""
+                    INSERT INTO tool_runs
+                        (tool_run_id, tool_id, movement_analysis_id, outlook_analysis_id,
+                         arguments, context, output, status, error_message, started_at, finished_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING output
+                    """, (tool_run_id, tool_id, row["movement_analysis_id"], row["outlook_analysis_id"],
+                          Jsonb(arguments), Jsonb(context), Jsonb(output) if output is not None else None,
+                          row["status"], error_message, started_at, finished_at))
+                return cur.fetchone()["output"]
+        except UniqueViolation:
+            # A repeat after an unknown commit outcome stores nothing new; different evidence never passes.
+            # PostgreSQL compares: jsonb keeps true apart from 1, which Python equality does not.
+            with self.connection.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT output FROM tool_runs WHERE tool_run_id = %s AND "
+                            + " AND ".join(f"{column} IS NOT DISTINCT FROM %s" for column in row),
+                            (tool_run_id, *(Jsonb(value) if column in ("arguments", "context", "output")
+                                            and value is not None else value for column, value in row.items())))
+                stored = cur.fetchone()
+            if stored is None:
+                raise
+            return stored["output"]
 
     def get_run(self, tool_run_id: str) -> dict | None:
         """Read execution evidence together with its administrator-facing definition.

@@ -22,6 +22,19 @@
       "Retry": [
         {
           "ErrorEquals": [
+            "Lambda.TooManyRequestsException",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 8,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 20,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": [
             "States.TaskFailed"
           ],
           "IntervalSeconds": 5,
@@ -75,6 +88,10 @@
                 {
                   "Name": "ANALYSIS_SLOTS",
                   "Value": "${slots}"
+                },
+                {
+                  "Name": "ANALYSIS_EXECUTION_ARN",
+                  "Value.$": "$$.Execution.Id"
                 }
               ]
             }
@@ -124,6 +141,19 @@
       "Retry": [
         {
           "ErrorEquals": [
+            "Lambda.TooManyRequestsException",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 8,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 20,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": [
             "States.TaskFailed"
           ],
           "IntervalSeconds": 5,
@@ -142,6 +172,19 @@
       "ResultPath": null,
       "Next": "Failed",
       "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 8,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 20,
+          "JitterStrategy": "FULL"
+        },
         {
           "ErrorEquals": [
             "States.TaskFailed"

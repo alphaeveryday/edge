@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태(2026-10-02 22:00): 장중 수급(`edge_investor_intraday`)은 격리 검증 DAG 로 실제 AWS 검증까지 마쳤고, 운영 데이터로는 아직 돌지 않았다(SFN 이 운영 중). ALPHA-1141 로 Airflow 를 기동했고(t4g.small 1대·서비스 1/1, 운영 메타DB `airflow`), 중단 시험 S1·S2 를 통과했다. **DAG 둘은 pause 이고 업무 run 은 0 이다.** 10-05 까지 유휴 관측 중이며, SFN → Airflow 전환은 그 결과를 보고 따로 결정한다(아래 "첫 운영 전환 실행안"의 "실행 결과").
+현재 상태(2026-10-03 15:52): **장중 수급은 Airflow 가 상시 운영한다.** 10-03 전환(#1105) — SFN 스케줄 5개 DISABLED, 실행 주체 AIRFLOW, `edge_investor_intraday` unpause. 첫 실행은 10-05 09:35(휴장일 — 업무 없이 끝나는 run), 첫 실제 수집은 10-06 09:35 다. SFN 상태 머신은 롤백용으로 남아 있다. 원천 관측 `edge_source_daily` 는 pause(수급 첫 거래일 정상 확인 뒤 활성화). 결과는 아래 "첫 운영 전환 실행안"의 "전환 결과(10-03)".
 
 ## 구성
 
@@ -907,9 +907,9 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 | 단계 | 상태 |
 |---|---|
 | 실행안 보완·#1053 검증과 머지·장후 기동·중단 시험·10-05 까지 유휴 관측 | 승인됨 — 기동·중단 시험까지 실행함(아래 "실행 결과"), 유휴 관측 진행 중 |
-| SFN → Airflow 전환(스케줄 DISABLED·DAG unpause) | **미승인** — 10-05 유휴 관측 보고 뒤 따로 결정 |
-| 기본 종료 — 10-05 18:00 KST 까지 전환·연장 승인이 없으면 서비스·호스트 0 | 승인됨(2026-10-02). 무인으로 실행된다(아래 "기본 종료"). 메타DB·역할·로그·증거 보존, SFN 그대로 |
-| 5거래일 운영·연장·상시 유지 | **미승인** — 이 승인만으로 시작하지 않는다 |
+| SFN → Airflow **상시 운영 전환** — 장중 수급 5슬롯 | **승인됨(2026-10-03)**. 10-05 관측 확인에서 기존 중단 기준 안이면 10-05 장 마감 슬롯 뒤 전환하고 10-06 09:35 부터 Airflow 가 계속 실행한다. 기간을 정한 시험 운영과 기한 뒤 종료·SFN 자동 복귀 계획은 철회했다(같은 날). 원천 관측 DAG·나머지 SFN 배치는 그대로 |
+| 기간에 따른 종료 | **없음**. 10-05 18:00 자동 종료 예약과 기한에 따라 `host_count` 를 0 으로 만드는 조건은 10-03 종료 예약 제거 PR 로 지웠다(전환보다 먼저, 실행 주체·SFN 스케줄·DAG pause 는 그대로 둔 채). 정해진 날짜에 종료하거나 SFN 으로 돌아가지 않는다. 장애 시에는 중단 경보·롤백 절차를 따른다 |
+| 원천 관측 DAG(ALPHA-1140) 수동 1회 → 정기 활성화 | 승인됨 — 수급 전환 뒤 첫 거래일 5슬롯이 정상이고 기존 중단 기준 안일 때. 백필은 대상·기간·호출량을 준비해 별도 승인 |
 
 **확정한 결정(2026-10-02 사용자).** exit 2 적재 정책 현행 유지(선택 2). `edge_source_daily` 는 관측 기간 내내 pause. 분석 엔진 소비 정책 불변. t4g.small 1대·태스크 1408MiB·기존 RDS 안 분리된 메타DB(`airflow`·`airflow_meta`). 비용 상한 하루 1.5 USD·계획 전체 15 USD.
 
@@ -925,7 +925,9 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 | 10-02 장후 | **기동 전 확인** — 시각(15:00)이 아니라 실제 종료로 판단한다: 분 상주 서비스 desired 0(16:10 세션 정지 뒤), 시장 EOD SFN(15:40) 종료, 장중 수급 SFN RUNNING 0, 업무 ECS 태스크 중 장중 레인 0. 그다음 `host_count = 1` PR(plan 첨부) 머지 → 메타DB 생성(아래) → `deploy-airflow` `start_service=true` | 세 컨테이너 HEALTHY, DAG 둘 pause, import error 0, 이미지 digest·태스크 정의 기록 |
 | 10-02 기동 뒤 | 중단 시험(아래) | 시험 결과 기록, 서비스 복구 |
 | 10-02 ~ 10-05 | 유휴 관측 — 업무 DAG 는 pause 그대로 | 10-05 관측 보고 |
-| 10-05 | 관측 결과와 전환 가능 여부 보고. **다음 단계 승인이 없으면** DAG unpause·SFN 스케줄 변경을 하지 않고 아래 "기본 종료"를 한다 | 승인 또는 기본 종료 |
+| 10-05 | 관측 결과 보고 → 기존 중단 기준 안이고 실행 종료·보류·슬롯 소유 확인이 끝나면 아래 "전환 실행(10-05)". 위반·중복 실행 위험이 있으면 멈추고 보고한다. 시각이 아니라 실제 실행 상태로 판단한다 | 전환 |
+| 10-06 | 첫 슬롯(09:35)과 첫 거래일 5슬롯 확인 — 실행·산출물·적재·원장 판정·중복·누락·메모리·RDS. 이후 매 거래일 같은 점검 | 중단 기준 위반 시 롤백 |
+| 10-06 장후~ | 첫 거래일이 정상이면 원천 관측 DAG 수동 1회 → 정기 활성화(아래 "원천 관측 레인") | — |
 
 **메타DB 생성.** `run.py secrets`(검증 시크릿 없으면 건너뜀) → 실행 전에 `airflow` DB·`airflow_meta` 역할이 **없는지** 조회 → `run.py dbadmin create` → `run.py dbadmin privcheck`(업무 테이블 권한 0·PUBLIC 접속 불가·역할 1개 규격). 이미 있으면 `create` 를 돌리지 않고 멈춘다 — `create` 는 있는 역할의 비밀번호를 시크릿 값으로 다시 맞추므로, 누가 만든 것인지 확인 전에는 덮어쓰지 않는다. 검증 DB(`edge_verify`)는 만들지 않는다(검증 자원이 꺼져 있으면 관리 태스크에 그 몫이 없다).
 
@@ -1012,23 +1014,11 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 
 **③ 기록 방법(보고는 사람이나 다음 세션이 쓴다 — 자료는 위 "측정 자료" 표대로 AWS 에 남는다).** 하루 1회 `obs.py <시작 KST> <끝 KST|now>`(위 원자료 폴더, boto3 필요) 또는 같은 지표를 `aws cloudwatch get-metric-statistics` 로 조회해 이 표에 일별 최저·최대를 더한다. 재시작은 `aws ecs describe-services --cluster edge-dev-airflow --services edge-dev-airflow --query 'services[0].events[:20]'`.
 
-#### 기본 종료(10-05 18:00 KST, 무인)
+#### 기간에 따른 종료 — 쓰지 않는다(2026-10-03 철회)
 
-10-05 18:00 KST 까지 전환 또는 연장 승인이 없으면 서비스와 호스트를 0 으로 내린다(2026-10-02 승인). 그 시각에 운영자·에이전트·노트북이 없어도 되게 AWS 쪽에 둔다(`modules/airflow/default_stop.tf`, 검증 종료 장치의 강제 종료와 같은 형태 — 스케줄러가 API 를 직접 부른다).
+10-02 승인으로 10-05 18:00 KST 무인 종료(스케줄러가 서비스 0 → 10분 뒤 호스트 0 → 20분 뒤 서비스 0 재호출)와, 그 뒤 apply 가 호스트를 되살리지 않게 `host_count` 를 기한으로 계산하는 조건(`plantimestamp()`)을 넣었다(#1101). 10-03 상시 운영 전환 승인으로 철회했고, 종료 예약 제거 PR 이 전환보다 먼저 스케줄 3개·전용 역할(`edge-dev-airflow-default-stop`)·`host_until`·기한 조건을 지웠다. 호스트는 `host_count = 1` 리터럴이다. 이후 기간 종료 예약은 만들지 않는다. 남긴 것은 호스트 메모리 표본(`modules/airflow/host_mem.tf`) 하나다.
 
-| 시각(KST) | 주체 | 하는 일 |
-|---|---|---|
-| 10-05 18:00 | 스케줄 `edge-dev-airflow-default-stop-service` | `ecs:UpdateService` desired 0 |
-| 10-05 18:10 | 스케줄 `edge-dev-airflow-default-stop-host` | `autoscaling:UpdateAutoScalingGroup` min·max·desired 0 |
-| 10-05 18:20 | 스케줄 `edge-dev-airflow-default-stop-service-recheck` | 서비스 desired 0 을 한 번 더 — 18:00 직전에 시작한 `deploy-airflow` 가 정지 확인을 지난 뒤 desired 1 을 쓰는 경우를 덮는다(18:00 뒤에 시작한 배포는 desired 0 을 보고 건너뛴다) |
-| 그 뒤 첫 dev apply | Terraform | `host_count` 가 기한 뒤 plan 에서 0 으로 계산된다(`envs/dev/main.tf` `airflow_host_until`) — 호스트를 되살리지 않고, 경보·오토스케일링·관리 태스크를 걷는다. 종료 스케줄·역할은 `host_until` 에만 묶여 남는다(기한 직후 apply 가 아직 돌지 않은 스케줄을 지우지 않게). 정리 PR 에서 `host_until` 을 비워 걷는다 |
-
-- **남는 것:** 메타DB `airflow`·역할 `airflow_meta`, 시크릿 `edge-dev-airflow/app`, 로그 그룹(30일), 클러스터·서비스 정의(desired 0), ECR 이미지, CloudWatch 지표(1분 15일), SSM 명령 이력(30일). dbadmin `teardown` 은 하지 않는다. SFN·스케줄·`investor_intraday_orchestrator = "SFN"` 은 건드리지 않는다.
-- **기한 뒤 plan 의 모습.** 어느 PR 이든 기한 뒤의 plan 에는 Airflow 쪽 `1 to change(ASG 1→0), 13 to destroy`(경보 7·오토스케일링 2·관리 태스크 4)가 보인다(의도). 종료가 확정되면 `host_count = 0` 리터럴·`host_until` 제거로 정리한다.
-- **관측 기간 중 배포.** `dags/**` 등이 dev 에 머지되면 `deploy-airflow` 가 서비스를 새 태스크로 바꾼다(메모리 기준선이 다시 시작된다). 보고는 태스크 ID 가 바뀐 시각으로 구간을 나눈다.
-- **취소·연장.** 18:00 전에 `airflow_host_until` 을 바꾸는 PR 을 머지한다(apply 가 스케줄 시각과 `host_count` 계산을 함께 옮긴다). 18:00 뒤에 승인이 오면 다시 기동한다(위 "일정과 단계"의 기동 절차 — 메타DB 는 남아 있으므로 `dbadmin create` 는 하지 않는다).
-- **종료 뒤 울리는 것.** 서비스가 0 이 되면 `service-down` 경보가 약 10분 뒤 ALARM 이 된다(SNS 1통). 다음 apply 가 경보를 걷을 때까지 ALARM 으로 남는다 — 종료가 일어났다는 신호로 읽는다.
-- **종료 확인(사람 또는 다음 세션).** 예약 사실이 아니라 실제 상태를 대조한다: 서비스 `desiredCount=0`·`runningCount=0`, ASG `0/0/0`·인스턴스 없음, `aws rds`·조회로 DB `airflow` 존재, 로그 그룹 존재, SFN 스케줄 5개 `ENABLED`, DAG 는 메타DB 에 pause 로 남음(다시 기동하면 확인). 스케줄 실행 자체는 `AWS/Scheduler` `InvocationAttemptCount`(ScheduleGroup=default, 1분)와 오류 지표(`TargetErrorCount` 등 — 오류가 있을 때만 생긴다)로 본다. CloudTrail `LookupEvents` 는 조직 SCP 가 막아 쓸 수 없다.
+아래는 그 스케줄의 당시 설정·확인 기록이다(이력).
 
 **설정 확인(2026-10-02 23:53, #1101 `e0dd11c1` apply 6 added·0 changed·0 destroyed).**
 
@@ -1062,7 +1052,70 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 - 호스트 표본 한 줄: `HOSTMEM t=<epoch> avail_kb=… free_kb=… task_cg_mib=… cg_oom_kill=… kmsg_oom=… uptime_s=…`. 조회는 `aws ssm list-command-invocations --details`(Comment `edge-dev-airflow-host-mem`).
 - 표본 명령은 5분마다 호스트에서 셸 하나를 잠깐 띄운다(관측에 주는 영향은 이 정도다).
 
-#### 전환 승인 뒤에 쓸 기준(지금은 실행하지 않는다)
+#### 전환 실행(10-05 예정 → 10-03 앞당겨 실행)
+
+전환 PR #1105 는 `envs/dev` 의 `investor_intraday_orchestrator = "AIRFLOW"` 한 가지만 바꾼다(종료 예약 제거는 먼저 별도 PR 로 머지했다). plan: **0 add · 5 change · 0 destroy** — 장중 수급 SFN 스케줄 5개 `ENABLED → DISABLED`. SFN 상태 머신·태스크 정의·Reconciler 태스크 정의·다른 레인은 바뀌지 않는다. 10-05 에 최신 dev 로 갱신해 머지한다.
+
+- **롤백에 필요한 것은 남긴다.** SFN 상태 머신·타임아웃 알람·스케줄 리소스(DISABLED)·`OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN` 주입·Planner 의 SFN 경로. 이 레인은 Airflow 전용 레인(`_AIRFLOW_ONLY_LANES`)에 넣지 않는다 — 넣으면 SFN 계획이 거부돼 롤백 길이 막힌다.
+- **Reconciler 슬롯 대조는 유지된다**(`OPS_INVESTOR_INTRADAY_SCHED_HHMM` 은 orchestrator 가 AIRFLOW 여도 주입된다). Airflow 가 슬롯을 안 돌리면 PLANNER_MISSING 이 열린다.
+
+순서(10-05, 14:35 슬롯 뒤 ~ 18:00 전).
+1. 10-05 관측 보고. 기존 중단 기준 위반이나 중복 실행 위험이 있으면 여기서 멈추고 보고한다.
+2. 10-05 14:35 SFN 실행(휴장일 SKIPPED 계획)이 끝났는지, 이 레인의 SFN RUNNING 0·업무 ECS 0 인지 본다.
+3. 종료 확인 ①~⑥, 미해결 보류(⑥), 슬롯 소유(10-05 run_key 5개 `orchestrator='SFN'`, 10-06 run_key 0개).
+4. #1105 를 최신 dev 로 갱신 → CI·실제 plan 이 위와 같은지 → 머지 → terraform-apply 결과 대조.
+5. `aws scheduler get-schedule` 로 장중 수급 스케줄 5개 `DISABLED`, ASG min 1·max 2 그대로, Reconciler 태스크 정의 env 에 슬롯 대조(`OPS_INVESTOR_INTRADAY_SCHED_HHMM`)가 남았는지 확인.
+6. `edge_investor_intraday` 만 unpause(REST `PATCH /api/v2/dags/edge_investor_intraday {"is_paused": false}`). `edge_source_daily` 는 pause 그대로. `run_immediately=timedelta(0)` 이라 지난 슬롯을 돌리지 않는다 — unpause 뒤 dag run 0, 다음 실행 예정이 10-06 09:35(KST)인지(`next_dagrun_logical_date`) 본다.
+7. 10-06 09:35 첫 슬롯 뒤: run_key `orchestrator='AIRFLOW'`, SFN 실행 0, LAUNCH_CONFLICT 0.
+
+**전환 결과(10-03, 사용자가 시점을 앞당겨 승인).**
+
+| 단계 | 결과 |
+|---|---|
+| 지표(전환 직전) | 경보 7개 모두 OK. 태스크 메모리 10-02 22:20 이후 783~796MiB 평탄(1분 표본 누락 0). 호스트 여유 412~560MiB(10-03 09:37 단발 412, 그 밖 494~560), OOM 0. RDS(10-03 00:00~) 여유 538~623MiB·연결 최대 36·CPU 최대 12.5%·쓰기 지연 최대 8.8ms·스왑 16~20MiB — 기존 중단 기준 안 |
+| 휴장일·catchup 확인(코드·이력) | 원장 계획이 SKIPPED 인 작업은 시도를 만들지 않고 통과한다(`ops/wrapper.py` — 실행권·보류 게이트 앞). 수집은 비거래일이면 KIS 를 부르지 않는다. 09-24 휴장일 SFN 도 업무 시도 0. DAG `catchup=false`·`max_active_runs=1`·`run_immediately=timedelta(0)` |
+| 종료 확인 | ① RUNNING 시도 0 ③ 이 레인 살아 있는 ECS 0 ④ SFN RUNNING 0 ⑤ Airflow run 0(둘 다 pause) ⑥ OPEN 보류 0, LAUNCH_CONFLICT 0. ②(실행권 lock)는 시도·태스크가 없어 확인 대상 없음 |
+| 슬롯 소유 | 마지막 run_key `investor-intraday:2026-10-02T14:35` SFN SUCCEEDED. Airflow 소유 run 0 |
+| #1105 머지(15:50) | `acf496e0`. CI 통과, plan = apply **0 added · 5 changed · 0 destroyed**(장중 수급 스케줄 5개 `ENABLED → DISABLED`). 종료 예약 제거는 #1109(13:53)로 먼저 했다 |
+| 머지 뒤 확인 | 스케줄 5개 DISABLED, `investor_intraday_orchestrator = "AIRFLOW"`, Reconciler 태스크 정의(`ops:13`)에 `OPS_INVESTOR_INTRADAY_SCHED_HHMM=09:35,10:05,11:25,13:25,14:35`·`STATE_MACHINE_ARN` 유지, SFN 상태 머신 ACTIVE |
+| unpause(15:51:46) | `edge_investor_intraday` 만(`edge_source_daily` pause 유지). 2분 40초 동안 dag run 0. 다음 예정 `2026-10-05T00:35Z`(10-05 09:35 KST — 휴장일 run), run 시간 상한 25분 |
+
+**미확인(운영 확인 대상).** 실제 장중 수집·적재(10-06 첫 거래일 5슬롯), 휴장일 run 이 Airflow 경로에서 실제로 업무 없이 끝나는지(10-05 — 코드·SFN 이력으로만 확인), 업무 실행 중 메모리·RDS, 알림 메일 실제 수신.
+
+**운영 중 감시.** 자동은 중단 경보 3종(서비스 desired 0)과 알림 경보 3종(SNS), 호스트 메모리 표본이다. 자동 중단이 일어나면 SFN 스케줄은 DISABLED 이므로 **그 사이 슬롯은 비고**, 사람이 아래 롤백을 해야 SFN 으로 돌아간다.
+
+**운영 인계 — 알림과 롤백 담당.**
+
+| 항목 | 현재 |
+|---|---|
+| 알림 경로 | 경보 → SNS 토픽 `edge-dev-data-pipeline-alarms` → 이메일 구독 1건(`var.pipeline_alarm_email`, 확인 완료 상태). Airflow DAG 실패(`on_failure_callback`)도 같은 토픽이다 |
+| 받는 사람·롤백 담당 | 그 메일함의 주인 — ALPHA-1141 담당(파이프라인·인프라 담당 김진기). 자동 중단을 받으면 위 "롤백"을 판단·실행한다 |
+| 실제 수신 확인 | **확인되지 않았다.** 경보 이력의 "SNS 액션 성공"(10-02 S1 20:45·S2 20:49, `ALARM: "edge-dev-airflow-stop-…"`)은 발송 요청 기록이다. 메일함에서 그 두 통을 찾아 수신을 확인해야 한다. 이메일 전송 상태 로그(SNS delivery status)는 켜져 있지 않다 |
+| 매 거래일 점검 | 사람이 한다(장 마감 뒤 성공 기준·경보·메모리·RDS). 에이전트 세션의 예약 실행은 보조 수단이다 — 운영은 세션 생존에 기대지 않는다: 자동 중단·알림은 AWS 가 하고, 판단·롤백은 사람이 한다 |
+
+
+**롤백(장애 — 기존 중단 기준 위반).** 위 "롤백(Airflow → SFN)"을 따른다. ① DAG pause(Airflow 가 살아 있으면) 또는 서비스 desired 0 ② 종료 확인 ①~⑥ — **Airflow 업무 종료·보류·슬롯 소유를 확인하기 전에는 SFN 을 재개하지 않는다** ③ `investor_intraday_orchestrator = "SFN"` 으로 되돌리는 PR(스케줄 ENABLED, 다음 슬롯부터 SFN) ④ Airflow 는 desired 0 으로 두고 원인 조사. Airflow 소유로 계획된 슬롯은 SFN 으로 복구하지 않는다(아래 "롤백 — 슬롯을 두 가지로 나눈다"). 정해진 날짜가 됐다는 이유로 SFN 으로 돌아가지 않는다.
+
+**상시 운영 월 비용 — 유휴 관측 기반 예상치(서울 리전, 현재 구성, 2026-10-03, 청구 데이터 아님).** 업무 실행(10-06~)이 붙은 뒤 로그·CPU 를 다시 재서 갱신한다.
+
+| 항목 | 근거 | USD/월 |
+|---|---|---|
+| EC2 t4g.small 1대 | 0.0208/시간 × 730 | 15.18 |
+| EBS gp3 30GiB | 0.0912/GB | 2.74 |
+| CPU 초과 크레딧 | 호스트 평균 CPU 약 5%(기준선 20% 아래), `CPUSurplusCreditsCharged` 0 | 0 |
+| CloudWatch Logs | 유휴 수집 하루 약 8.8MB(구성요소 7.1·task 1.7) ≈ 0.27GB × 0.76. 업무 실행이 붙으면 늘어난다 | 0.2~1.0 |
+| CloudWatch 경보 | 7개 × 0.10 | 0.70 |
+| Secrets Manager | `edge-dev-airflow/app` 1개 | 0.40 |
+| ECR `edge/airflow` | 이미지 20개(공유 레이어 포함 합계 약 5GB, 실제 저장량은 그보다 작다), 수명 주기 정책 없음 — 배포마다 는다 | 0.1~0.5 |
+| NAT 처리량 | API·로그·배포 때 이미지 pull | 0.1~0.3 |
+| 메타DB | 기존 RDS `edge-dev` 안 DB(약 11MB) — 인스턴스 추가 없음 | 0 |
+| 스케줄러·SSM Run Command·오토스케일링 | 무료 범위(표본 월 약 8,640회) | 0 |
+| **합계** | | **약 19.5~21** |
+
+- 업무 ECS 태스크는 SFN 이든 Airflow 든 같은 태스크라 늘지 않는다. 이 레인의 SFN 상태 전이 요금(월 0.1 USD 미만)은 줄어든다.
+- 기존 RDS 를 상향해야 할 만큼 영향이 커지면(위 "기존 RDS 재사용 평가") 그 비용이 더해진다 — 지금까지 관측으로는 필요 없다.
+
+#### 전환 운영 기준(10-06~, 상시)
 
 **성공 기준(슬롯마다).** 주된 기준은 업무 일치다.
 
@@ -1093,7 +1146,7 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
   - 복구는 정제·적재만 한다. raw 가 있으면 Airflow 재처리 run(conf `reprocess_slot`). Airflow 가 죽었으면 종료 확인 ①~⑥ 뒤 같은 run_id 로 정제·적재 ECS 를 `OPS_EXCLUSIVE_STEP=1` 과 함께 수동 실행한다(ECS 안에서 게이트를 거친다). 원장의 소유는 AIRFLOW 그대로다.
   - **수집은 복구하지 않는다.** 장중 추정 API 에는 날짜·시각 인자가 없어, 지난 슬롯을 지금 다시 부르면 **지금의 누적 응답**이 그 슬롯 이름으로 저장된다. 과거 시각의 응답은 다시 받을 수 없다. 당일 다음 슬롯이 누적값을 회수하고, 마지막 14:35 슬롯이 비면 그날은 공백으로 남긴다.
 
-**기간 종료.** 5거래일 운영은 전환 승인 때 함께 정한다. 끝나면 결과를 보고하고 **상시 유지·5거래일 연장·SFN 복귀를 자동으로 진행하지 않는다.** 결정이 없으면 기본은 SFN 복귀다: DAG pause → 종료 확인 ①~⑥ → `orchestrator = "SFN"` PR → 스케줄 ENABLED 확인 → 위 "기본 종료" 2~4.
+**기간.** 상시 운영이다. 정해진 날짜에 종료하거나 SFN 으로 돌아가지 않는다(2026-10-03 결정). 첫 거래일 5슬롯은 위 성공 기준으로 전부 확인하고, 이후에는 같은 기준을 매 거래일 점검과 경보로 유지한다.
 
 #### 후속: 시장 EOD 이관 전 검토 항목(구현하지 않음)
 

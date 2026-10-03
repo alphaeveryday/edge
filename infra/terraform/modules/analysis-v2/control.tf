@@ -18,6 +18,9 @@ resource "aws_iam_role_policy" "control" {
     { Effect = "Allow", Action = ["ecs:DescribeTasks", "ecs:StopTask"], Resource = "*", Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } } }
   ] })
 }
+# reserved_concurrent_executions: 정합성은 함수 안의 트랜잭션 락이 지킨다(동시 호출 37개에서도 상한 유지,
+# tests/loadtest/analysis-v2 README C5). 호출마다 writer 연결 1개를 쓰므로 writer 한도 20 의 대기 몫(6)에서 3개를 쓴다
+# (V202610022100). 1이면 호출 1회 1초 남짓에 초당 1건도 처리하지 못해 동시 시작이 스로틀된다.
 resource "aws_lambda_function" "control" {
   function_name                  = "${var.name}-control"
   role                           = aws_iam_role.control.arn
@@ -26,7 +29,7 @@ resource "aws_lambda_function" "control" {
   architectures                  = ["x86_64"]
   memory_size                    = 256
   timeout                        = 28
-  reserved_concurrent_executions = 1
+  reserved_concurrent_executions = 3
   image_config { command = ["edge_analysis_v2.cloud.control.handler"] }
   vpc_config {
     subnet_ids         = var.subnet_ids

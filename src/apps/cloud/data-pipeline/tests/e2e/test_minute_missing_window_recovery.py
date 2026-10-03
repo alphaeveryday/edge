@@ -11,6 +11,11 @@
 
 ⚠️ 이 회수는 **봉 데이터**만 채운다. 지난 날짜 Worker 는 발행 event 를 만들지 않으므로 가격 판정
 기록(`minute_price_judgment`)의 그 창들은 빈 채로 남는다 — 데이터 회수와 판정 공백은 별개다.
+
+⚠️ 소급 TR 은 무거래 분의 행을 주지 않고 어댑터는 그 분을 채우지 않는다(ALPHA-1153 — 종가 단일가
+접수 구간도 예외 없음). 그래서 저유동 종목은 회수 뒤에도 대상 분에서 **결손**이고, 그 창은 INCOMPLETE 로
+커밋된다. 그 결손은 manifest·원장·artifact 에 남고, 같은 창을 다시 열어 덮을 수 있다. 15:29 창은
+15:30 단일가 봉만으로 만들어진다.
 """
 
 import hashlib
@@ -36,29 +41,46 @@ UNITS = {"etf_ids": ["500000"], "constituent_ids": ["100000", "100001"]}
 # 10-02 세션에서 실제로 비었던 22개 창(시작 KST HHMM) — 한 구간이 아니라 VALID 창 사이에 흩어져 있다
 TARGETS = ("1432,1434,1435,1436,1438,1439,1440,1442,1443,1444,1446,1447,1448,1450,1451,1453,"
            "1455,1456,1458,1503,1504,1506").split(",")
-ORDER_ONLY = [f"{1520 + i}" for i in range(10)]  # 15:20~15:29 — 종가 단일가 접수 구간(전 종목 무거래)
+ORDER_ONLY = [f"{1520 + i}" for i in range(10)]  # 15:20~15:29 — 종가 단일가 접수 구간(전 종목 체결 없음)
+AUCTION_PRICE = "1100"    # 15:30 종가 단일가 — 다른 분(1000)과 갈라 놓아야 마감 봉이 어디서 왔는지 보인다
+LOW_LIQUIDITY = "100001"
+# 대상 분 가운데 저유동 종목이 체결한 분(7의 배수) — 그 밖의 대상 분은 그 종목의 행이 없다
+LOW_LIQUIDITY_TRADED = {hhmm for hhmm in TARGETS if int(hhmm) % 7 == 0}
 
 
 class FakeKis:
     """KIS 과거 분봉 TR 대역 — 요청 라벨에서 거슬러 최대 120행, 하루가 끝나면 전 거래일 행이 섞인다."""
 
     def __init__(self):
-        self.absent: set[str] = set()   # 이 라벨(HHMM)의 행을 벤더가 주지 않는다
         self.calls = 0
+        # True 면 당일 TR 처럼 무거래 분(저유동 종목의 빈 분·접수 구간 15:20~15:29)도 거래량 0·flat
+        # 행으로 주고, 15:30 단일가 행은 주지 않는다(당일 TR 은 세션 안에 확정 층으로 안 준다) —
+        # **실제 소급 TR 은 이렇게 주지 않는다**. 봉인 단계는 운영의 368창(당일 경로가 벤더의 flat 행을
+        # 받았다)을 흉내 내려고 켜고, 회수 단계는 실제 소급 TR 처럼 끈다(10-02 원문: 09:00~15:19 체결 분
+        # + 15:30). 후속 회수 시험에선 "그 분의 근거가 나중에 생긴 경우"를 이걸로 표현한다.
+        self.explicit_no_trade = False
 
     def _rows(self, symbol: str) -> list[dict]:
         rows = []
         minute = datetime.strptime("0900", "%H%M")
-        while minute.strftime("%H%M") < "1520":
+        while minute.strftime("%H%M") <= "1530":
             label = minute.strftime("%H%M")
-            # 100001 은 저유동 — 7분에 한 번만 체결된다(나머지 분은 어댑터가 직전가 flat 으로 채운다)
-            traded = symbol != "100001" or int(label) % 7 == 0 or label == "0900"
-            if traded and label not in self.absent:
-                rows.append({"stck_bsop_date": YMD, "stck_cntg_hour": label + "00",
-                             "stck_prpr": "1000", "stck_oprc": "1000", "stck_hgpr": "1000",
-                             "stck_lwpr": "1000", "cntg_vol": str(int(label)),
-                             "acml_tr_pbmn": "1"})
             minute += timedelta(minutes=1)
+            if label == "1530":
+                if self.explicit_no_trade:
+                    continue
+                traded, price = True, AUCTION_PRICE
+            else:
+                # 100001 은 저유동 — 7분에 한 번만 체결된다(15:19 는 1519 % 7 == 0 이라 체결이 있다).
+                # 접수 구간은 전 종목 체결이 없다
+                traded = label not in ORDER_ONLY and (
+                    symbol != "100001" or int(label) % 7 == 0 or label == "0900")
+                price = "1000"
+            if traded or self.explicit_no_trade:
+                rows.append({"stck_bsop_date": YMD, "stck_cntg_hour": label + "00",
+                             "stck_prpr": price, "stck_oprc": price, "stck_hgpr": price,
+                             "stck_lwpr": price, "cntg_vol": str(int(label)) if traded else "0",
+                             "acml_tr_pbmn": "1"})
         return rows
 
     def urlopen(self, req, timeout=None):
@@ -170,7 +192,7 @@ def sealed(tmp_path, monkeypatch, capsys):
 
     cleanup()
     targets = [_kst(hhmm) for hhmm in TARGETS]
-    kis.absent = set(ORDER_ONLY)
+    kis.explicit_no_trade = True    # 봉인 단계 = 운영의 당일 수집(벤더가 무거래 분도 flat 행을 준다)
     try:
         assert run("plan-minute-session", "--dataset", "price_minute", "--source-group", "kis",
                    "--session-date", DAY, "--universe", str(universe))[0] == 0
@@ -195,8 +217,9 @@ def sealed(tmp_path, monkeypatch, capsys):
                 "SELECT job_id, 0, 1, session_id, window_start, generation, 'e2e', 0.02, 0.01, 'e2e', "
                 "'{}', '{}', '{}', false FROM price_window_job WHERE session_id=%s AND window_start=%s",
                 (sid, _kst("1433")))
+        kis.explicit_no_trade = False   # 회수는 실제 소급 TR 처럼 — 무거래 분은 행이 없다
         yield SimpleNamespace(sid=sid, run=run, query=query, kis=kis, lake=lake, targets=targets,
-                              worker=worker, collect_then_drain=collect_then_drain)
+                              worker=worker, collect_then_drain=collect_then_drain, db=db)
     finally:
         cleanup()
 
@@ -236,6 +259,10 @@ def _judgments(h) -> list:
 
 
 def _five_minute_volume(h, unit: str, bucket: str) -> int:
+    return int(_five_minute_bar(h, unit, bucket)["volume"])
+
+
+def _five_minute_bar(h, unit: str, bucket: str) -> dict:
     import pyarrow.parquet as pq
 
     (path,) = [p for p in h.lake.rglob("*.parquet") if "intraday_5m" in str(p)]
@@ -243,14 +270,31 @@ def _five_minute_volume(h, unit: str, bucket: str) -> int:
     # `ts` 는 naive KST 다(구간 시작 라벨 — `canonical_intraday_5m_key`). 시간대 변환을 걸면 실행
     # 머신의 로컬 시간대로 읽혀 UTC 러너에서 9시간 밀린다.
     (row,) = [r for r in rows if r["ticker"] == unit and r["ts"].strftime("%H%M") == bucket]
-    return int(row["volume"])
+    return row
 
 
-def _reopen_targets(h) -> dict:
+def _reopen_targets(h, windows=TARGETS) -> dict:
     code, out = h.run("reopen-minute-session", "--session-id", h.sid,
-                      "--windows", ",".join(TARGETS), "--reason", "ALPHA-1153 e2e")
+                      "--windows", ",".join(windows), "--reason", "ALPHA-1153 e2e")
     assert code == 0
     return out
+
+
+def _artifact(h, start, row) -> tuple[dict, dict]:
+    """소비 경로 그대로(`read_window_artifact`) 그 창의 봉 → {종목: 레코드}, 그리고 manifest 의 분류."""
+    from data_pipeline.lake.storage import LocalStorage
+    from data_pipeline.minute.artifact_reader import read_window_artifact
+
+    storage = LocalStorage(h.lake)
+    window_end = start + timedelta(minutes=1)
+    body = read_window_artifact(
+        storage, dataset="price_minute", market="KR", session_id=h.sid, window_start=start,
+        window_end=window_end, generation=row["generation"], checksum=row["checksum"],
+        manifest_uri=row["manifest_uri"], manifest_checksum=row["manifest_checksum"])
+    records = {json.loads(line)["unit_id"]: json.loads(line)
+               for line in body.decode("utf-8").splitlines()}
+    units = json.loads(storage.get_bytes(row["manifest_uri"]))["units"]
+    return records, units
 
 
 def test_scattered_missing_windows_are_recovered_and_nothing_else_moves(sealed):
@@ -298,19 +342,33 @@ def test_scattered_missing_windows_are_recovered_and_nothing_else_moves(sealed):
     _reopen_targets(h)
     h.collect_then_drain()
     code, qc = h.run("qc-minute-session", "--session-id", h.sid)
+    # 결손(INCOMPLETE)은 QC 위반이 아니다 — 세션은 봉인되고, MISSING(한 번도 못 받은 창)은 0 이다
     assert (code, qc["phase"], qc["missing_confirmed"]) == (0, "FINALIZED", 0)
     assert h.run("rollup-minute-session", "--dataset", "price_minute", "--source-group", "kis",
                  "--session-date", DAY)[0] == 0
 
     after_windows, after_files = _windows(h), _files(h)
-    # ① 비어 있던 창이 첫 세대로 채워진다. 기대 종목 전부(3)가 실려야 한다 — VALID 만 보면
-    #    종목이 빠진 채 허용 결손 안에서 통과한 창을 못 가른다.
-    for start in h.targets:
+    # ① 비어 있던 창이 첫 세대로 커밋된다 — **벤더가 행을 준 종목만** 실린다. 저유동 100001 은
+    #    7분에 한 번만 체결되므로 그 밖의 대상 분은 행이 없고, 그 종목은 그 창에서 결손이다
+    #    (ALPHA-1153 — 직전가 flat 으로 채워 VALID 로 만들지 않는다). 결손 1/3 은 허용(1%·3종)을
+    #    넘으므로 INCOMPLETE 다. 숫자를 창마다 본다 — 상태만 보면 결손을 못 가른다.
+    for hhmm, start in zip(TARGETS, h.targets):
         row = after_windows[start]
-        assert (row["data_status"], row["generation"], row["attempt_count"]) == ("VALID", 1, 1)
-        assert row["checksum"] and row["manifest_checksum"] and row["manifest_uri"]
-        assert (row["expected_unit_count"], row["succeeded_unit_count"], row["failed_unit_count"],
-                row["record_count"]) == (3, 3, 0, 3)
+        assert row["generation"] == 1 and row["attempt_count"] == 1, hhmm
+        assert row["checksum"] and row["manifest_checksum"] and row["manifest_uri"], hhmm
+        if hhmm in LOW_LIQUIDITY_TRADED:
+            assert (row["data_status"], row["succeeded_unit_count"], row["failed_unit_count"],
+                    row["record_count"], row["missing_units"]) == ("VALID", 3, 0, 3, None), hhmm
+        else:
+            assert (row["data_status"], row["succeeded_unit_count"], row["failed_unit_count"],
+                    row["record_count"], row["missing_units"]) == (
+                "INCOMPLETE", 2, 1, 2, [LOW_LIQUIDITY]), hhmm
+        # 소비 경로(`read_window_artifact`)와 manifest 도 같은 말을 해야 한다 — 결손 종목의 봉은
+        # 실리지 않고(거래량 0 flat 으로 둔갑하지 않는다), manifest `missing` 에 이름이 남는다.
+        records, units = _artifact(h, start, row)
+        assert (LOW_LIQUIDITY in records) == (hhmm in LOW_LIQUIDITY_TRADED), hhmm
+        assert units["missing"] == ([] if hhmm in LOW_LIQUIDITY_TRADED else [LOW_LIQUIDITY]), hhmm
+        assert all(record["volume"] != "0" for record in records.values()), hhmm
     # ② 나머지 368창은 원장도 저장 객체도 그대로다(상태·세대·checksum·시도 수, 파일 바이트).
     untouched = {start: row for start, row in before_windows.items() if start not in h.targets}
     assert {start: after_windows[start] for start in untouched} == untouched
@@ -332,4 +390,94 @@ def test_scattered_missing_windows_are_recovered_and_nothing_else_moves(sealed):
     # ⑤ 5분 파생이 회수분을 싣는다 — 안 실리면 1분은 고쳐졌는데 소비자는 부분본을 계속 읽는다.
     assert _five_minute_volume(h, "100000", "1430") == sum(range(1430, 1435))
     # 소급 클라이언트는 종목당 하루치를 한 번 받아 캐시한다 — 22창이어도 종목 수 × 페이지 수만 부른다
-    assert h.kis.calls - calls_before == 4 + 4 + 1   # 380행 2종 각 4쪽, 저유동 1종 1쪽
+    assert h.kis.calls - calls_before == 4 + 4 + 1   # 381행(09:00~15:19 + 15:30) 2종 각 4쪽, 저유동 1종 1쪽
+
+
+
+def test_partial_recovery_keeps_unconfirmed_minutes_missing_and_can_be_redone(sealed):
+    """부분 회수 → 같은 창을 다시 연다(ALPHA-1153).
+
+    첫 회수에서 저유동 종목이 체결하지 않은 대상 분은 결손이다(벤더가 행을 안 줬다 — 무거래인지
+    누락인지 모른다). 그 창들(INCOMPLETE)만 `--windows` 로 다시 열어, 이번엔 그 분의 근거가 있는
+    응답(거래량 0 행 — 여기선 FakeKis.explicit_no_trade 로 표현)으로 받으면 다음 generation 으로
+    덮여 결손이 풀리고, 첫 회수에서 이미 온전했던 창과 회수 대상 밖 창은 그대로다.
+    """
+    h = sealed
+    before_windows = _windows(h)
+    _reopen_targets(h)
+    h.collect_then_drain()
+    assert h.run("qc-minute-session", "--session-id", h.sid)[0] == 0
+    first = _windows(h)
+    incomplete = [hhmm for hhmm, start in zip(TARGETS, h.targets)
+                  if first[start]["data_status"] == "INCOMPLETE"]
+    assert incomplete == [hhmm for hhmm in TARGETS if hhmm not in LOW_LIQUIDITY_TRADED]
+    outbox, judgments = _counts(h, "dataset_commit_outbox"), _judgments(h)
+
+    h.kis.explicit_no_trade = True
+    _reopen_targets(h, incomplete)
+    h.collect_then_drain()
+    code, qc = h.run("qc-minute-session", "--session-id", h.sid)
+    assert (code, qc["phase"], qc["missing_confirmed"]) == (0, "FINALIZED", 0)
+    second = _windows(h)
+    for hhmm, start in zip(TARGETS, h.targets):
+        row = second[start]
+        if hhmm in incomplete:
+            # 다음 세대로 덮였다 — 결손이 풀리고 저유동 종목은 근거 있는 무거래(거래량 0)로 실린다
+            assert (row["data_status"], row["generation"], row["succeeded_unit_count"],
+                    row["failed_unit_count"], row["missing_units"]) == ("VALID", 2, 3, 0, None), hhmm
+            records, units = _artifact(h, start, row)
+            assert records[LOW_LIQUIDITY]["volume"] == "0" and units["no_trade"] == [LOW_LIQUIDITY]
+        else:
+            assert row == first[start], hhmm              # 첫 회수에서 온전했던 창은 그대로
+    untouched = {start: row for start, row in before_windows.items() if start not in h.targets}
+    assert {start: second[start] for start in untouched} == untouched
+    assert _counts(h, "dataset_commit_outbox") == outbox and _judgments(h) == judgments
+
+
+def test_recovered_closing_call_minutes_stay_missing_and_close_on_the_auction(sealed):
+    """회수 경로에서 소급 응답에 없는 분은 결손 그대로다 — 종가 단일가 접수 구간도(ALPHA-1153).
+
+    ⚠️ 의도가 바뀐 자리다(사용자 결정). 예전엔 접수 구간(15:20~15:29)을 거래소 규칙으로 15:19 종가
+    flat 으로 채워 회수해도 VALID_EMPTY 였다. 이제 소급 경로는 벤더가 준 행만 싣는다: 봉인 단계(당일
+    경로 흉내, 벤더 flat 행)에서 VALID_EMPTY 였던 그 창들을 다시 열어 실제 소급 TR 처럼 받으면
+    15:20~15:28 은 전 종목 결손(INCOMPLETE)이고, 15:29 창은 15:30 단일가 봉만이다(시가=고가=저가=
+    종가=단일가, 거래량=단일가 거래량). 5분 15:25 버킷도 그 봉 하나로 만들어진다 — 수동 5분 백필과
+    회수 rollup 이 소비자에게 내는 모양이 이것이다.
+    """
+    h = sealed
+    before_windows = _windows(h)
+    starts = [_kst(hhmm) for hhmm in ORDER_ONLY]
+    assert {before_windows[start]["data_status"] for start in starts} == {"VALID_EMPTY"}
+    assert _five_minute_volume(h, "100000", "1525") == 0
+
+    _reopen_targets(h, ORDER_ONLY)
+    h.collect_then_drain()
+    code, qc = h.run("qc-minute-session", "--session-id", h.sid)
+    # 22창은 이미 MISSING 으로 확정돼 있어 이번 QC 가 새로 확정하는 것은 0 이다(아래 untouched 가 본다)
+    assert (code, qc["phase"], qc["missing_confirmed"]) == (0, "FINALIZED", 0)
+    assert h.run("rollup-minute-session", "--dataset", "price_minute", "--source-group", "kis",
+                 "--session-date", DAY)[0] == 0
+
+    after = _windows(h)
+    all_units = sorted(UNITS["etf_ids"] + UNITS["constituent_ids"])
+    generation = before_windows[starts[0]]["generation"] + 1
+    for hhmm, start in zip(ORDER_ONLY[:-1], starts):
+        row = after[start]
+        # 15:19 봉이 있어도 그 뒤를 채우지 않는다 — 전 종목 결손, 실린 봉 0
+        assert (row["data_status"], row["generation"], row["succeeded_unit_count"],
+                row["failed_unit_count"], row["record_count"], sorted(row["missing_units"])) == (
+            "INCOMPLETE", generation, 0, 3, 0, all_units), hhmm
+    last = after[starts[-1]]
+    assert (last["data_status"], last["generation"], last["record_count"], last["missing_units"]) == (
+        "VALID", generation, 3, None)
+    records, units = _artifact(h, starts[-1], last)
+    assert sorted(records) == all_units and units["missing"] == []
+    for unit, record in records.items():
+        assert (record["open"], record["high"], record["low"], record["close"], record["volume"]) == (
+            AUCTION_PRICE, AUCTION_PRICE, AUCTION_PRICE, AUCTION_PRICE, "1530"), unit
+    bucket = _five_minute_bar(h, "100000", "1525")
+    assert (bucket["open"], bucket["close"], int(bucket["volume"])) == (
+        float(AUCTION_PRICE), float(AUCTION_PRICE), 1530)
+    # 회수 대상 밖 창(368창 + 아직 MISSING 인 22창)은 그대로다
+    untouched = {start: row for start, row in before_windows.items() if start not in starts}
+    assert {start: after[start] for start in untouched} == untouched

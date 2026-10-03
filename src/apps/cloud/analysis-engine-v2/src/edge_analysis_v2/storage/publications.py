@@ -13,17 +13,24 @@ from edge_analysis_v2.analysis.body_editor import KST
 from edge_analysis_v2.tools.execution import ToolInputError
 
 
+class OwnershipLost(ValueError):
+    """The single-analysis workflow's slot is gone, so this execution may not publish anything new."""
+
+
 class PublicationStore:
     """Save complete analyses, retaining old publications and tool evidence.
 
     Args:
         connection: Caller-owned idle autocommit PostgreSQL connection.
         final_tool_names: Explicit allowed final-evidence function names.
+        owner: Workflow execution ARN holding the slot for this analysis. When given, a new
+            publication commits only while that slot row exists; the dashboard passes none.
     """
 
-    def __init__(self, connection, *, final_tool_names=frozenset()):
+    def __init__(self, connection, *, final_tool_names=frozenset(), owner=None):
         self.connection = connection
         self.final_tool_names = frozenset(final_tool_names)
+        self.owner = owner
         self._idle()
 
     def _idle(self):
@@ -72,6 +79,18 @@ class PublicationStore:
         # Serializes publications for one ETF without requiring another table.
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (kind + ":" + row["etf_code"],))
         return row
+
+    def _owned(self, cur):
+        """Hold the owner's slot until commit, or refuse when execution control already reclaimed it.
+
+        A reclaim deletes the row, so it waits for this transaction; the next execution of the ETF then
+        sees this publication as its predecessor instead of racing it.
+        """
+        if self.owner is None:
+            return
+        cur.execute("SELECT 1 FROM analysis_execution_slots WHERE execution_arn=%s FOR SHARE", (self.owner,))
+        if cur.fetchone() is None:
+            raise OwnershipLost("Execution slot was reclaimed; refusing to publish")
 
     def _evidence(self, cur, ids, analysis):
         for identity in schemas.references(ids):
@@ -129,6 +148,7 @@ class PublicationStore:
             analysis = self._analysis(cur, "movement", identity)
             if analysis["status"] == "completed":
                 return self._movement(cur, identity)
+            self._owned(cur)
             schemas.movement(response)
             cur.execute("""WITH RECURSIVE history AS (
                 SELECT analysis_id,previous_analysis_id FROM movement_analyses WHERE analysis_id=%s
@@ -195,6 +215,7 @@ class PublicationStore:
             analysis = self._analysis(cur, "outlook", identity)
             if analysis["status"] == "completed":
                 return self._outlook(cur, identity)
+            self._owned(cur)
             schemas.outlook(features, body)
             if body["updates"]["date"] != analysis["analysis_at"].astimezone(KST).date().isoformat():
                 raise ValueError("Update date must match analysis date")

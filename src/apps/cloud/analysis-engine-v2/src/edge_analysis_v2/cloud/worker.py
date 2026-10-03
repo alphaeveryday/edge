@@ -17,7 +17,7 @@ from edge_analysis_v2.cloud.contract import decode_request
 from edge_analysis_v2.contracts.audit import read_contract_audit
 from edge_analysis_v2.dashboard.server import assemble_screen
 from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices, load_research_observations
-from edge_analysis_v2.storage.database import connect_results
+from edge_analysis_v2.storage.database import STATS, connect_results, retry_transient
 from edge_analysis_v2.storage.delivery import enqueue_movement
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
 
@@ -79,7 +79,13 @@ def export_records(connection, request, folder):
     return audit
 
 
-def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
+def load_sources(ca_path, session, request):
+    """Read the fixed-time source observations through one read-only transaction."""
+    with connect_sources(ca_path,session=session,cloud=True) as connection:
+        return load_prices(connection,load_flow(connection,load_source(connection,request['etf_code'],request['analysis_at'])),request=request)
+
+
+def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner=None):
     """Execute with a fixed cutoff and publish observations independently of analysis status.
 
     Args:
@@ -90,23 +96,35 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
         key: Secret DeepSeek credential, never logged or persisted.
         model: Server-controlled model identifier.
         session: AWS session backed by the ECS task role.
-        slots: Analyses allowed to run at once; see acquire_slot.
+        slots: Analyses allowed to run at once; see acquire_slot. Unused with owner.
+        owner: Single-analysis workflow execution ARN. Its slot already limits concurrency and keeps
+            one run per kind and ETF, so the worker holds no session lock or long connection, repeats
+            database steps after a dropped connection, and publishes only while the slot is owned.
+            Without it (workflow definition older than the image) the previous locks are used.
     """
+    def once(step):
+        with connect_results(ca_path,session=session,cloud=True) as connection:
+            return step(connection)
+    db = (lambda step: retry_transient(lambda: once(step))) if owner else once
+    STATS.reset()
     # A completed movement can retry delivery without claiming or overwriting its observations.
     if request['kind'] == 'movement':
-        with connect_results(ca_path,session=session,cloud=True) as connection:
+        def recover(connection):
             with connection.cursor(row_factory=dict_row) as cursor:
                 cursor.execute("SELECT status,etf_code,analysis_at,data_source FROM movement_analyses WHERE analysis_id=%s",
                                (request['analysis_id'],))
                 existing = cursor.fetchone()
-            if existing and existing['status'] == 'completed':
-                if (existing['etf_code'] != request['etf_code']
-                        or existing['analysis_at'] != datetime.fromisoformat(request['analysis_at'])
-                        or existing['data_source'] != 'database'):
-                    raise ValueError('Completed analysis belongs to a different request')
-                count = enqueue_movement(connection, request['analysis_id'])
-                LOG.info('Completed movement delivery recovered analysis_id=%s tenants=%s',request['analysis_id'],count)
-                return
+            if not existing or existing['status'] != 'completed':
+                return None
+            if (existing['etf_code'] != request['etf_code']
+                    or existing['analysis_at'] != datetime.fromisoformat(request['analysis_at'])
+                    or existing['data_source'] != 'database'):
+                raise ValueError('Completed analysis belongs to a different request')
+            return enqueue_movement(connection, request['analysis_id'])
+        count = db(recover)
+        if count is not None:
+            LOG.info('Completed movement delivery recovered analysis_id=%s tenants=%s',request['analysis_id'],count)
+            return
     folder.mkdir(parents=True,exist_ok=True)
     job = request | {'origin':'cloud','scenario':'database','data_source':'database',
                      'status':'running','started_at':datetime.now(timezone.utc).isoformat()}
@@ -124,22 +142,31 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
     thread.start()
     failure = None
     try:
-        with connect_results(ca_path,session=session,cloud=True) as lock_connection:
-            locked = lock_connection.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0))',
-                ('cloud:'+request['kind']+':'+request['etf_code'],)).fetchone()[0]
-            if not locked:
-                raise ValueError('Another analysis of this ETF is running')
-            waited = time.monotonic()
-            LOG.info('Analysis slot %s of %s acquired after %.0f seconds',
-                     acquire_slot(lock_connection, slots), slots, time.monotonic()-waited)
-            with connect_sources(ca_path,session=session,cloud=True) as connection:
-                source = load_prices(connection,load_flow(connection,load_source(connection,request['etf_code'],request['analysis_at'])),request=request)
-            source = load_research_observations(lock_connection, source)
+        if owner:
+            source = retry_transient(lambda: load_sources(ca_path, session, request))
+            source = db(lambda connection: load_research_observations(connection, source))
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
-                artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
+                artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,owner=owner)
             if request['kind'] == 'movement':
-                job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
+                # Ownership is checked when the publication commits; delivery only enqueues that commit.
+                job['delivery_tenants'] = db(lambda connection: enqueue_movement(connection, request['analysis_id']))
+        else:
+            with connect_results(ca_path,session=session,cloud=True) as lock_connection:
+                locked = lock_connection.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0))',
+                    ('cloud:'+request['kind']+':'+request['etf_code'],)).fetchone()[0]
+                if not locked:
+                    raise ValueError('Another analysis of this ETF is running')
+                waited = time.monotonic()
+                LOG.info('Analysis slot %s of %s acquired after %.0f seconds',
+                         acquire_slot(lock_connection, slots), slots, time.monotonic()-waited)
+                source = load_sources(ca_path, session, request)
+                source = load_research_observations(lock_connection, source)
+                execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
+                    connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
+                    artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
+                if request['kind'] == 'movement':
+                    job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
         job['status']='completed'
     except Exception as exc:
         job.update(status='failed',error=type(exc).__name__+': analysis failed; inspect recorded events')
@@ -151,8 +178,7 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
             raise RuntimeError('Observation upload did not stop')
         job['finished_at']=datetime.now(timezone.utc).isoformat()
         try:
-            with connect_results(ca_path,session=session,cloud=True) as connection:
-                audit=export_records(connection,request,folder)
+            audit=db(lambda connection: export_records(connection,request,folder))
             if audit:
                 job['contract_status']=audit['status']
             job['observation_status']='complete'
@@ -160,6 +186,9 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1):
             job['observation_status']='incomplete'
             job['observation_error']='Database evidence export failed'
             failure=failure or RuntimeError('Evidence export failed')
+        # Secret lookup, connection setup and whole steps are timed apart; nothing here is a credential.
+        job['db_connections'] = STATS.summary()
+        LOG.info('Result database connections analysis_id=%s %s', request['analysis_id'], json.dumps(job['db_connections']))
         publisher.publish(job)
     if failure:
         raise RuntimeError(job.get('error',job.get('observation_error','Cloud execution failed'))) from None
@@ -180,7 +209,8 @@ def main():
     run(request,bucket=os.environ['OBSERVATION_BUCKET'],ca_path=Path(os.environ['RDS_CA_PATH']),
         folder=Path('/tmp/analysis')/request['analysis_id'],key=key,
         model=secret.get('DEEPSEEK_MODEL','deepseek-flash'),session=session,
-        slots=int(os.environ.get('ANALYSIS_SLOTS','1')))
+        slots=int(os.environ.get('ANALYSIS_SLOTS','1')),
+        owner=os.environ.get('ANALYSIS_EXECUTION_ARN') or None)
 
 
 if __name__=='__main__':
