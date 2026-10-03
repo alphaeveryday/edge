@@ -1,11 +1,13 @@
 package com.edge.app.community.vote.service;
 
+import com.edge.app.community.vote.entity.Vote;
 import com.edge.app.community.vote.entity.VoteChoice;
 import com.edge.app.community.vote.event.VoteCacheListener;
 import com.edge.app.community.vote.event.VoteRecorded;
 import com.edge.app.community.vote.repository.VoteCountRepository;
 import com.edge.app.community.vote.repository.VoteRepository;
 
+import com.edge.app.community.vote.dto.MyVoteResponse;
 import com.edge.app.community.vote.dto.VoteCountResponse;
 import com.edge.app.community.vote.repository.VoteCounts;
 import com.edge.app.common.config.RedisCircuit;
@@ -48,6 +50,11 @@ public class VoteService {
         } catch (Exception ex) {
             return countsFromDb(etfCode, ex);
         }
+    }
+
+    public MyVoteResponse myVote(String etfCode, Long memberId) {
+        return new MyVoteResponse(voteRepository.findByEtfCodeAndMemberId(etfCode, memberId)
+                .map(Vote::getChoice).orElse(null));
     }
 
     private VoteCountResponse countsFromDb(String etfCode, Throwable ex) {

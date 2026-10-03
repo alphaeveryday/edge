@@ -29,6 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 
@@ -87,6 +88,23 @@ class AppApplicationTests {
         }).when(voteCountRepository).vote(etf, 1L, VoteChoice.BUY);
         assertEquals(200, vote(etf, 1, "buy"));
         assertEquals(1, seenAtRedisCall.get(5, TimeUnit.SECONDS), "vote must be visible in DB before Redis is called");
+    }
+
+    Object myVote(String etf, long member) {
+        return ((Map<?, ?>) client().get().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(member))
+                .retrieve().body(Map.class).get("result")).get("choice");
+    }
+
+    @Test
+    void myVoteFollowsLastChoiceAndIsNullBeforeVoting() {
+        String etf = "000066";
+        assertNull(myVote(etf, 1));
+        assertEquals(200, vote(etf, 1, "buy"));
+        assertEquals(200, vote(etf, 1, "sell"));
+        assertEquals("sell", myVote(etf, 1));
+        assertNull(myVote(etf, 2));
+        assertEquals(401, client().get().uri("/api/v1/etfs/" + etf + "/vote").retrieve().toBodilessEntity()
+                .getStatusCode().value());
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.edge.app.community.vote.controller;
 import com.edge.app.community.vote.service.VoteService;
 
 import com.edge.app.common.auth.MemberPrincipal;
+import com.edge.app.community.vote.dto.MyVoteResponse;
 import com.edge.app.community.vote.dto.VoteCountResponse;
 import com.edge.app.community.vote.dto.VoteRequest;
 import com.edge.common.apipayload.ApiResponse;
@@ -29,6 +30,11 @@ public class VoteController {
             @RequestBody @Valid VoteRequest request) {
         voteService.vote(code, principal.memberId(), request.choice());
         return ApiResponse.onSuccess(null);
+    }
+
+    @GetMapping
+    public ApiResponse<MyVoteResponse> communityMyVote(@PathVariable String code, MemberPrincipal principal) {
+        return ApiResponse.onSuccess(voteService.myVote(code, principal.memberId()));
     }
 
     @GetMapping("/count")

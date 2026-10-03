@@ -798,6 +798,24 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    get:
+      tags: [community]
+      operationId: communityMyVote
+      summary: 내 투표
+      security: [{ bearerAuth: [] }]
+      description: 요청 회원의 이 ETF 선택. 미투표는 choice null. 집계 조회와 분리해 count 경로의 조건을 유지한다.
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 내 투표
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/MyVote' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
   /etfs/{code}/vote/count:
     get:
       tags: [community]
@@ -1117,6 +1135,11 @@ components:
         waits: { type: integer }
         sells: { type: integer }
         source: { type: string, enum: [redis, db] }
+    MyVote:
+      type: object
+      required: [choice]
+      properties:
+        choice: { type: [string, 'null'], enum: [buy, wait, sell, null] }
 
     # ── ETF 상세 ──
     Candle:

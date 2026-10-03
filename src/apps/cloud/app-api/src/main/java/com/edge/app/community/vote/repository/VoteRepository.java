@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface VoteRepository extends JpaRepository<Vote, Long> {
     interface ChoiceCount {
@@ -32,6 +33,8 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
     List<ChoiceCount> countByChoice(@Param("etf") String etfCode);
 
     List<Vote> findByEtfCode(String etfCode);
+
+    Optional<Vote> findByEtfCodeAndMemberId(String etfCode, Long memberId);
 
     @Query("select distinct v.etfCode from Vote v where v.memberId = :member")
     List<String> etfCodesOf(@Param("member") long memberId);
