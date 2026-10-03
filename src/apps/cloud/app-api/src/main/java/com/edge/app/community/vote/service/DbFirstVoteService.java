@@ -31,8 +31,10 @@ public class DbFirstVoteService implements VoteService {
     private final ApplicationEventPublisher eventPublisher;
     private final RedisCircuit circuit;
 
-    // Redis 갱신은 커밋 이후여야 한다 — 트랜잭션 안에서 이벤트만 발행하고,
-    // VoteCacheListener(AFTER_COMMIT)가 캐시를 따라 갱신한다(실패는 repository 폴백이 삼킴).
+    // 커밋 이후의 Redis 갱신
+    // 트랜잭션 안에서의 이벤트 발행 한정
+    // AFTER_COMMIT 단계 VoteCacheListener 의 캐시 갱신
+    // 갱신 실패의 repository 폴백 흡수
     @Override
     @Transactional
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
@@ -40,7 +42,8 @@ public class DbFirstVoteService implements VoteService {
         eventPublisher.publishEvent(new VoteRecorded(etfCode, memberId, choice));
     }
 
-    // source(redis/db)는 어느 경로로 읽었는지의 표식 — 폴백 정책을 아는 이 계층이 붙인다.
+    // 읽은 경로를 나타내는 source 표식
+    // 폴백 정책을 아는 이 계층의 표식 부착
     @Override
     public VoteCountResponse counts(String etfCode) {
         try {

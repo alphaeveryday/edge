@@ -8,7 +8,10 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.ZoneId;
 
-/** 전체 하루 발송 상한. Gmail 하루 한도 약 500통 보호용, 코드 메일만 거절 */
+/**
+ * Gmail 하루 한도 약 500통 보호용 전체 하루 발송 상한
+ * 상한 초과 시 코드 메일 한정 거절
+ */
 @Component
 @RequiredArgsConstructor
 public class MailQuota {

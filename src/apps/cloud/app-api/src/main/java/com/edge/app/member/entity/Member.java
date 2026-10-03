@@ -80,7 +80,10 @@ public class Member {
         this.disclaimerAcceptedAt = at;
     }
 
-    /** 탈퇴 처리. 행 유지, 식별 정보만 NULL, 재가입 가능 */
+    /**
+     * 행을 유지하고 식별 정보만 비우는 탈퇴 처리
+     * 탈퇴 뒤 재가입 허용
+     */
     public void withdraw(Instant at) {
         this.deletedAt = at;
         this.email = null;

@@ -29,11 +29,12 @@ public class VoteCountRepository {
     private static final DefaultRedisScript<Long> VOTE = script("vote.lua", Long.class);
     private static final DefaultRedisScript<List> REPLACE = script("reconcile.lua", List.class);
 
-    // 서킷이 열려도 DB 저장은 막지 않도록 쓰기 서킷은 여기(Redis 호출)에만 건다.
-    // replace()는 복구 경로라 서킷 밖 — 열린 서킷이 재조정까지 차단하면 안 된다.
+    // 열린 서킷이 DB 저장을 막지 않도록 Redis 호출에만 거는 쓰기 서킷
+    // 열린 서킷의 재조정 차단을 막는 복구 경로 replace() 의 서킷 제외
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
         try {
-            // StringRedisTemplate 은 스크립트 인자를 String 으로 직렬화한다 — Long 을 그대로 넘기면 ClassCastException.
+            // StringRedisTemplate 의 스크립트 인자 String 직렬화
+            // Long 인자 전달 시 ClassCastException 발생
             circuit.of(etfCode).executeRunnable(
                     () -> redisTemplate.execute(VOTE, generateKeys(etfCode), memberId.toString(), choice.value()));
         } catch (Exception ex) {

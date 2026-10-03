@@ -29,7 +29,7 @@ public class AuthController {
     private final AuthService authService;
     private final SignupCodeService signupCodeService;
 
-    // X-Device-Id 선택. 있으면 게스트 데이터의 계정 매핑
+    // X-Device-Id 가 있을 때의 게스트 데이터 계정 매핑
     @PostMapping("/login")
     public ApiResponse<AuthResponse> authLogin(@RequestBody @Valid LoginRequest request,
             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
@@ -51,7 +51,7 @@ public class AuthController {
     @PostMapping("/signup")
     public ApiResponse<AuthResponse> authSignup(@RequestBody @Valid SignupRequest request,
             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceKey) {
-        // 코드 확인은 가입 트랜잭션 밖에서 먼저. 요청당 DB 연결 두 개 점유 방지
+        // 요청당 DB 연결 두 개 점유를 막는 가입 트랜잭션 밖 코드 확인 선행
         signupCodeService.verify(request.email(), request.code());
         return ApiResponse.onSuccess(authService.signup(request, deviceKey));
     }

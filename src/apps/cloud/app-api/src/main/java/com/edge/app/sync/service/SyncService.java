@@ -43,7 +43,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
-/** 파이프라인 RDS 에서 선별 ETF 의 시세·구성·오늘 움직임·전망을 앱 테이블로 옮김 */
+/** 선별 ETF 의 파이프라인 RDS 데이터를 앱 테이블로 옮기는 동기화 */
 @Slf4j
 @Service
 @ConditionalOnProperty("app.pipeline.url")
@@ -60,7 +60,10 @@ public class SyncService {
     private static final List<String> SIGNALS = List.of("strongUp", "up", "neutral", "down", "strongDown");
     private static final Map<String, String> SIGNAL = Map.of("강력상승", "strongUp", "상승", "up", "중립", "neutral", "하락", "down", "강력하락", "strongDown");
     private static final BigDecimal EOK = new BigDecimal("100000000");
-    /** 지표 키별 라벨·단위. 엔진 대시보드 표기 기준, 없는 키는 건너뜀 */
+    /**
+     * 엔진 대시보드 표기 기준의 지표 키별 라벨·단위
+     * 표에 없는 키의 생략
+     */
     private static final Map<String, MetricLabel> METRICS = Map.ofEntries(
             Map.entry("ma20_distance_pct", new MetricLabel("20일선 대비", "%", true)),
             Map.entry("ma60_direction", new MetricLabel("60일선 방향", "", false)),
@@ -137,7 +140,9 @@ public class SyncService {
         return true;
     }
 
-    // 종목정보: 구성종목은 비중 순, 히트맵은 상위만. 원천 없는 해석·테마·방향은 넣지 않음
+    // 종목정보 구성종목의 비중 순 정렬
+    // 종목정보 히트맵의 상위 종목 한정
+    // 원천 없는 해석·테마·방향의 제외
     private String detail(Curation c, List<Holding> holdings) {
         List<Holding> sorted = holdings.stream().sorted(Comparator.comparingDouble(Holding::weightRatio).reversed()).toList();
         List<Map<String, Object>> stocks = sorted.stream().limit(HEAT_CELLS)
@@ -157,7 +162,7 @@ public class SyncService {
                 "info", info, "blurb", c.blurb()));
     }
 
-    // 오늘 움직임: 선택된 항목이 있으면 그 순서대로
+    // 선택된 항목이 있을 때 그 순서를 따르는 오늘 움직임
     private Dated move(Movement m) {
         List<MovementItem> all = pipeline.movementItems(m.id());
         List<MovementItem> items = m.selected().isEmpty() ? all
@@ -167,7 +172,8 @@ public class SyncService {
         return new Dated(m.tradingDate(), m.publishedAt(), JSON.writeValueAsString(map("summary", m.summary(), "items", rows)));
     }
 
-    // 전망: 서버가 읽는 payload 키로 조립하고 요인 페이지 축을 함께 만듦
+    // 서버가 읽는 payload 키 기준의 전망 조립
+    // 요인 페이지 축의 동시 생성
     private Built outlook(Outlook o) {
         String signal = SIGNAL.get(o.sticker());
         if (signal == null) {
@@ -221,7 +227,8 @@ public class SyncService {
         return axes;
     }
 
-    // 탐색 순위: 가장 최근 발행일의 전망을 5단계 강한 순, 같으면 최근 발행 순
+    // 가장 최근 발행일 전망의 5단계 강한 순 탐색 순위
+    // 같은 단계의 최근 발행 순 정렬
     private void rank() {
         List<Latest> latest = sync.latestAnalyses();
         LocalDate asOf = latest.stream().map(Latest::asOf).max(Comparator.naturalOrder()).orElse(LocalDate.now(KST));
@@ -254,7 +261,9 @@ public class SyncService {
         if (m.number() == null) {
             return m.text();
         }
-        // 금액은 억 원, 횟수·일수는 정수, 나머지는 소수 한 자리
+        // 금액의 억 원 단위
+        // 횟수·일수의 정수 표기
+        // 나머지 지표의 소수 한 자리 표기
         BigDecimal n = label.unit().equals("억 원") ? m.number().divide(EOK, 8, RoundingMode.HALF_UP) : m.number();
         BigDecimal v = n.setScale(COUNT_UNITS.contains(label.unit()) ? 0 : 1, RoundingMode.HALF_UP);
         return (label.signed() && v.signum() > 0 ? "+" : "") + v.toPlainString();

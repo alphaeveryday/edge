@@ -11,7 +11,10 @@ import java.util.Collection;
 import java.util.List;
 
 public interface EtfRepository extends JpaRepository<Etf, String> {
-    /** EtfSummary 조합. etf·시세·최신 signal, 없으면 0·neutral */
+    /**
+     * etf·시세·최신 signal 의 EtfSummary 조합
+     * 값이 없을 때의 0 과 neutral 기본값
+     */
     interface SummaryRow {
         String getCode();
         String getName();
@@ -37,7 +40,11 @@ public interface EtfRepository extends JpaRepository<Etf, String> {
     @Query(value = SUMMARY_SELECT + "where e.code in (:codes)", nativeQuery = true)
     List<SummaryRow> summaries(@Param("codes") Collection<String> codes);
 
-    /** 이름·코드 부분 일치 검색. 빈 q 는 전체, 인기·이름순 */
+    /**
+     * 이름·코드 부분 일치 검색
+     * 빈 q 의 전체 조회
+     * 인기순 우선의 이름순 정렬
+     */
     @Query(value = SUMMARY_SELECT + """
             where e.name ilike concat('%', :q, '%') or e.code like concat(:q, '%')
             order by e.hot desc, e.name

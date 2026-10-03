@@ -16,7 +16,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 온보딩은 테마를 교체하고 고른 ETF 를 기본 관심 그룹에 더한다(이미 담긴 것은 유지). */
+/** 온보딩의 테마 교체와 고른 ETF 의 기본 관심 그룹 추가 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class OnboardingFlowTests extends ContainerTests {
     @LocalServerPort

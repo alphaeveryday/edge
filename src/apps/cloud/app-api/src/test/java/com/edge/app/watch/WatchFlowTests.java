@@ -17,7 +17,11 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** PRD 관심 정책: 기본 그룹 자동 생성·삭제 불가, 사용자 그룹 10개, 삭제 시 종목은 기본 그룹에 유지. */
+/**
+ * PRD 의 관심 정책
+ * 자동 생성되고 삭제할 수 없는 기본 그룹과 최대 10개의 사용자 그룹
+ * 그룹 삭제 시 종목의 기본 그룹 유지
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class WatchFlowTests extends ContainerTests {
     @LocalServerPort
@@ -30,7 +34,7 @@ class WatchFlowTests extends ContainerTests {
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, sub, hot) values "
                 + "('069500','i1','XKRX','KODEX 200','kospi',null,false), ('133690','i2','XKRX','TIGER 나스닥100','us',null,true), "
                 + "('305720','i3','XKRX','KODEX 2차전지','battery','부제',false) "
-                + "on conflict (code) do update set sub = excluded.sub, hot = excluded.hot");   // 테스트 클래스끼리 DB 를 공유한다
+                + "on conflict (code) do update set sub = excluded.sub, hot = excluded.hot");   // 테스트 클래스 간 DB 공유 대응
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('069500', 41230.5, 1.23, now()) on conflict do nothing");
         jdbc.update("insert into etf_analysis(etf_code, as_of, published_at, signal, payload) values "
                 + "('069500', '2026-09-26', now(), 'down', '{}'), ('069500', '2026-09-27', now(), 'strongUp', '{}') on conflict do nothing");
@@ -109,7 +113,7 @@ class WatchFlowTests extends ContainerTests {
         List<Map<String, Object>> base = result(call("w4", "GET", "/api/v1/watch-groups/base/etfs", null));
         assertEquals(List.of("133690", "069500"), base.stream().map(e -> e.get("code")).toList(), "삭제된 그룹의 종목은 기본 그룹에 남는다");
         assertEquals(List.of("base"), result(call("w4", "GET", "/api/v1/etfs/069500/watch-groups", null)));
-        // 재삭제는 no-op.
+        // 재삭제의 무동작
         assertEquals(200, call("w4", "DELETE", "/api/v1/watch-groups/" + key, null).getStatusCode().value());
     }
 

@@ -16,7 +16,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 계약의 security 두 종류(bearer 전용 / bearer 또는 deviceId)를 인자 타입이 그대로 표현하는지. */
+/** 계약의 security 두 종류를 인자 타입으로 표현하는 인증 필터 */
 class AuthFilterTests {
     @RestController
     static class Probe {
@@ -57,7 +57,7 @@ class AuthFilterTests {
 
     @Test
     void invalidBearerIsUnauthorizedEvenWithDeviceId() throws Exception {
-        // 토큰이 있으면 토큰이 우선이고 검증 실패를 게스트로 강등하지 않는다.
+        // 토큰 우선 처리와 검증 실패의 게스트 강등 금지
         mvc.perform(get("/any").header("Authorization", "Bearer bad").header("X-Device-Id", "d1"))
                 .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("COMMON401"));
         mvc.perform(get("/public").header("Authorization", "Basic abc"))

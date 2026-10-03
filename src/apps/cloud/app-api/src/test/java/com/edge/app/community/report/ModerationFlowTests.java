@@ -26,7 +26,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-/** 스토어 심사 요건(악성 사용자 차단·신고 접수와 운영자 대응)의 서버 쪽 보장. */
+/** 악성 사용자 차단과 신고 대응이라는 스토어 심사 요건의 서버 쪽 보장 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ModerationFlowTests extends ContainerTests {
     @LocalServerPort
@@ -88,7 +88,8 @@ class ModerationFlowTests extends ContainerTests {
         return ((Number) result(call("GET", "/api/v1/notifications/unread-count", null, m.token())).get("count")).intValue();
     }
 
-    // 차단은 차단한 사람의 화면에서만 작동해야 하고, 다른 회원·게스트의 커뮤니티는 그대로여야 한다
+    // 차단한 사람의 화면에 한정한 차단 효과
+    // 다른 회원과 게스트 커뮤니티의 무영향
     @Test
     void blockHidesAuthorOnlyForBlocker() {
         Member a = member("mb-a@example.com");
@@ -127,7 +128,8 @@ class ModerationFlowTests extends ContainerTests {
         assertEquals(401, call("PUT", "/api/v1/blocks/" + a.handle(), null, "dev:mb-g2").getStatusCode().value());
     }
 
-    // 운영자가 24시간 안에 대응하려면 신고마다 원문이 담긴 메일이 한 번 가야 하고, 반복 신고가 메일 폭탄이 되면 안 된다
+    // 운영자의 24시간 내 대응을 위한 신고별 원문 메일 1회 발송
+    // 반복 신고의 메일 폭탄 방지
     @Test
     void reportMailsOperatorOncePerTarget() {
         Member author = member("mr-a@example.com");

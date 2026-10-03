@@ -16,7 +16,7 @@ import static com.edge.app.ApiCalls.result;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-/** 발행본 원문을 계약으로 접는다(erd.md). 축 행이 없으면 hasPage=false 이고 그 축의 페이지는 준비 중. */
+/** 발행본 원문의 계약 형태 변환과 축 행이 없을 때의 준비 중 페이지 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AnalysisFlowTests extends ContainerTests {
     @LocalServerPort

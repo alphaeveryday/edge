@@ -15,7 +15,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 신고 저장과 운영자 메일. 같은 대상 재신고는 저장·메일 없이 성공 */
+/**
+ * 신고 저장과 운영자 메일
+ * 같은 대상 재신고의 저장·메일 없는 성공
+ */
 @Service
 @RequiredArgsConstructor
 public class ReportService {
@@ -45,7 +48,8 @@ public class ReportService {
         if (reportRepository.insertIfAbsent(memberId, request.targetType(), targetId, request.reason()) == 0) {
             return;
         }
-        // 운영자 메일은 상한과 무관하게 발송, 발송 수에만 반영
+        // 상한과 무관한 운영자 메일 발송
+        // 운영자 메일의 발송 수 반영
         mailQuota.count();
         mailer.send(operator, "[ETF Orca 신고] " + request.reason() + " " + request.targetType() + " " + targetId,
                 "사유: " + request.reason() + "\n대상: " + request.targetType() + " " + targetId

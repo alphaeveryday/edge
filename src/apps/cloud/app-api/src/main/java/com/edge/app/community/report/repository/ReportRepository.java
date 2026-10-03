@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ReportRepository extends JpaRepository<Report, Long> {
-    /** 멱등 삽입. 반환 행 수로 운영자 메일 발송 결정 */
+    /** 반환 행 수로 운영자 메일 발송을 정하는 멱등 삽입 */
     @Modifying
     @Query(value = """
             insert into report(reporter_member_id, target_type, target_id, reason)

@@ -16,7 +16,8 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
         long getTotal();
     }
 
-    // 신규/변경을 DB 원자 upsert 로 판정한다 — SELECT 선검사는 동시 요청 레이스가 있다.
+    // DB 원자 upsert 기반의 신규와 변경 판정
+    // 동시 요청 레이스가 있는 SELECT 선검사 회피
     @Modifying
     @Query(value = """
             insert into vote(etf_code, member_id, choice) values (:etf, :member, :choice)

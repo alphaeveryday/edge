@@ -10,16 +10,19 @@ import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 
 /**
- * 요청 principal 의 id 해소. 처음 보는 디바이스는 device·principal 행 생성.
- * 다른 도메인의 유일한 진입점. 로그인 매핑도 여기 소유.
- * 소유자 이전은 principal 규칙이라 관심·온보딩·알림 테이블 직접 UPDATE.
+  * 요청 principal 의 id 해소
+  * 처음 보는 디바이스의 device·principal 행 생성
+  * 다른 도메인의 유일한 진입점
+  * 로그인 매핑의 소유
+  * principal 규칙인 소유자 이전을 위한 관심·온보딩·알림 테이블 직접 UPDATE
  */
 public interface PrincipalRepository extends JpaRepository<Principal, Long> {
     Optional<Principal> findByMemberId(long memberId);
 
     Optional<Principal> findByDeviceId(long deviceId);
 
-    // device·principal 단문 upsert. no-op update 는 기존 id RETURNING 용도
+    // device·principal 단문 upsert
+    // 기존 id RETURNING 용 no-op update
     @Query(value = """
             with d as (
                 insert into device(device_key) values (:key)
@@ -46,7 +49,7 @@ public interface PrincipalRepository extends JpaRepository<Principal, Long> {
             """, nativeQuery = true)
     long countOwnedData(@Param("p") long principalId);
 
-    /** 회원 관심 그룹 비우기. 이전 전 호출로 그룹 key 유니크 충돌 방지 */
+    /** 이전 전 호출로 그룹 key 유니크 충돌을 막는 회원 관심 그룹 비우기 */
     @Modifying
     @Query(value = """
             with gone as (delete from watch_group where principal_id = :p returning id)

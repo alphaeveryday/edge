@@ -18,29 +18,32 @@ repositories {
 }
 
 dependencies {
-	implementation project(':libs:jvm-common') // 에러 응답 공통 포맷(ApiResponse)·에러 코드 규약
+	implementation project(':libs:jvm-common') // 에러 응답 공통 포맷(ApiResponse)과 에러 코드 규약
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-mail'
-	// 구현 문서 /v3/api-docs 를 openapi.yaml 과 대조하는 검증용. UI 없음, 애노테이션으로 계약을 중복 기술하지 않는다.
+	// 구현 문서와 openapi.yaml 의 대조 검증용
+	// 애노테이션의 계약 중복 기술 금지
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-api:3.1.1'
-	// 액세스 JWT(HS256) 발급·검증. 소셜 idToken 검증(JWKS)까지 한 라이브러리로 덮는다.
+	// 액세스 JWT(HS256) 발급과 소셜 idToken 검증(JWKS)의 단일 라이브러리
 	implementation 'com.nimbusds:nimbus-jose-jwt:10.3'
-	// 비밀번호 bcrypt 해시만. 웹 보안 자동설정은 쓰지 않는다(인증은 common/auth 필터).
+	// 비밀번호 bcrypt 해시 전용
+	// 인증은 자체 필터 소관이라 웹 보안 자동설정 미사용
 	implementation 'org.springframework.security:spring-security-crypto'
-	// Boot 4 는 AOP starter 가 없다 — 서킷 애노테이션 프록시에 필요한 weaver 만 직접 추가.
+	// Boot 4 의 AOP starter 부재로 서킷 애노테이션 프록시용 weaver 직접 추가
 	implementation 'org.aspectj:aspectjweaver'
 	implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.3.0'
-	// 이 모듈은 자체 스키마를 소유하고 앱 기동 시 직접 마이그레이션한다 (libs/schema 와 분리).
-	// Boot 4 는 Flyway 자동설정이 spring-boot-flyway 모듈에 있다.
+	// 공용 스키마와 분리된 자체 스키마의 앱 기동 시 마이그레이션
+	// Boot 4 의 Flyway 자동설정은 별도 모듈 소관
 	implementation 'org.springframework.boot:spring-boot-flyway'
 	implementation 'org.flywaydb:flyway-core'
 	implementation 'org.flywaydb:flyway-database-postgresql'
 	runtimeOnly 'org.postgresql:postgresql'
-	// 다중 인스턴스에서 @Scheduled 셋(재조정·워머·플러셔)을 한 대만 실행(ADR-0056). intake 와 같은 shedlock 테이블 리스.
+	// 다중 인스턴스에서 스케줄 작업의 한 대 실행
+	// intake 와 같은 shedlock 테이블의 리스
 	implementation 'net.javacrumbs.shedlock:shedlock-spring:7.10.0'
 	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:7.10.0'
 	compileOnly 'org.projectlombok:lombok'

@@ -22,7 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Apple·Google idToken 의 JWKS 검증. 결과는 sub·email, 실패는 empty */
+/** 실패 시 빈 결과를 내는 Apple·Google idToken 의 JWKS 검증 */
 @Component
 @EnableConfigurationProperties(SocialProperties.class)
 public class IdTokenVerifier {

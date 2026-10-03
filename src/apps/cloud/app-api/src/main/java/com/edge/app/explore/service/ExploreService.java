@@ -16,7 +16,10 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 최신 as_of 순위 조회. 동기화에 없는 ETF 숨김 */
+/**
+ * 최신 as_of 순위 조회
+ * 동기화에 없는 ETF 숨김
+ */
 @Service
 @RequiredArgsConstructor
 public class ExploreService {

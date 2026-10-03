@@ -15,7 +15,7 @@ public class BlockService {
     private final MemberRepository memberRepository;
     private final MemberBlockRepository blockRepository;
 
-    // 멱등. 이미 차단했어도 성공
+    // 이미 차단한 경우에도 성공하는 멱등 처리
     @Transactional
     public void block(long memberId, String handle) {
         Member target = memberRepository.findByHandleAndDeletedAtIsNull(handle)

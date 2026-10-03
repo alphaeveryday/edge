@@ -46,7 +46,10 @@ public class EtfService {
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.ETF_NOT_FOUND));
     }
 
-    /** 차트 조회. 구간은 최신 일봉 기준, 이동평균은 선행 행 부족 시 null */
+    /**
+     * 최신 일봉 기준 구간의 차트 조회
+     * 선행 행 부족 시 이동평균의 null 처리
+     */
     @Transactional(readOnly = true)
     public ChartResponse chart(String code, ChartRange range) {
         requireEtf(code);
@@ -73,7 +76,10 @@ public class EtfService {
         return value == null ? null : value.doubleValue();
     }
 
-    /** 오늘 움직임 조회. 발행본 없음·summary null 은 ANALYSIS4001 */
+    /**
+     * 오늘 움직임 조회
+     * 발행본이나 summary 가 없을 때의 ANALYSIS4001 응답
+     */
     @Transactional(readOnly = true)
     public MoveResponse move(String code) {
         requireEtf(code);
@@ -94,7 +100,10 @@ public class EtfService {
                 groups.entrySet().stream().map(e -> new MoveResponse.Group(e.getKey(), e.getValue())).toList());
     }
 
-    /** 종목정보 조회. payload 는 EtfDetailData 전체, 없으면 ANALYSIS4001 */
+    /**
+     * EtfDetailData 전체를 payload 로 담은 종목정보 조회
+     * 발행본이 없을 때의 ANALYSIS4001 응답
+     */
     @Transactional(readOnly = true)
     public EtfDetailResponse detail(String code) {
         requireEtf(code);

@@ -29,9 +29,11 @@ root = Path(__file__).resolve().parent
 out = root / 'runs' / (f'{scenario}-{hot}-' + ('' if fault_kind == 'kill' else fault_kind + '-') + ('' if kill_replica else 'replica-')
                        + ('refresh-' if os.environ.get('REDIS_TOPOLOGY_REFRESH') == 'true' else '') + time.strftime('%Y%m%d-%H%M%S'))
 out.mkdir(parents=True)
-# 서킷 off = 실패율 임계치 100%: 부분 장애(≤67%)에선 절대 열리지 않는다. 코드에서 서킷을 빼는 대신 env 로 무력화.
-# compose 는 environment 에 나열한 변수만 컨테이너로 넘긴다 — 새 변수는 docker-compose.cluster.yaml 에도 추가해야 한다.
-# full-coverage yes(기본)면 슬롯 하나만 비어도 전 노드가 CLUSTERDOWN 을 돌려줘 부분 장애가 전체 장애가 된다 — 실험 기본은 no.
+# 코드에서 서킷을 빼는 대신 실패율 임계치 100% env 로의 서킷 무력화
+# 67% 이하 부분 장애에서 절대 열리지 않는 임계치
+# environment 에 나열한 변수만 넘기는 compose 때문에 새 변수의 cluster compose 파일 추가 필요
+# 기본값 yes 의 full-coverage 는 슬롯 하나만 비어도 전 노드 CLUSTERDOWN 응답
+# 부분 장애의 전체 장애 확산 방지를 위한 실험 기본값 no
 env = dict(os.environ,
            REDIS_CLUSTER_REQUIRE_FULL_COVERAGE=os.environ.get('REDIS_CLUSTER_REQUIRE_FULL_COVERAGE', 'no'),
            VOTE_REDIS_COMMAND_TIMEOUT='60s' if scenario == 'C1' else '500ms',
@@ -65,7 +67,8 @@ for _ in range(180):
     time.sleep(1)
 else: raise SystemExit('App did not become ready')
 
-# 토폴로지: 서비스별 myself 줄 → 샤드 = 슬롯 시작 오름차순. 페일오버로 노드가 바뀌어도 슬롯 범위 기준은 유지된다.
+# 서비스별 myself 줄에서 읽은 슬롯 시작 오름차순의 샤드 번호
+# 페일오버로 노드가 바뀌어도 유지되는 슬롯 범위 기준
 nodes = {}
 for n in range(1, 7):
     line = next(l for l in dc('exec', '-T', f'redis-{n}', 'redis-cli', 'cluster', 'nodes').splitlines() if 'myself' in l)
@@ -95,7 +98,7 @@ with (out / 'k6.log').open('w') as log:
             if fault_kind == 'kill': dc('kill', '-s', 'SIGKILL', *victims)
             elif fault_kind == 'pause': dc('pause', *victims)
             else:
-                # 분리 전 IP 를 기억해 같은 IP 로 재연결한다 — 바뀌면 다른 노드가 아는 주소와 어긋나 클러스터에 못 돌아온다.
+                # 다른 노드가 아는 주소와 맞추기 위한 분리 전 IP 로의 재연결
                 victim_ips = {}
                 for v in victims:
                     cid = dc('ps', '-q', v).strip()
@@ -112,11 +115,11 @@ with (out / 'k6.log').open('w') as log:
 (out / 'metrics.json').write_text(json.dumps(samples, indent=2))
 load_end = time.time()
 
-# 복구: 죽인 노드를 되살려 cluster ok 를 기다린 뒤 재조정을 요청하고 30종목 DB=Redis 를 확인한다.
+# 노드 복구와 cluster ok 대기 후 재조정 요청, 30종목의 DB 와 Redis 일치 확인
 survivor = shards[(fail_shard + 1) % len(shards)]['master']
 def cli(*args):
     return dc('exec', '-T', survivor, 'redis-cli', '-c', '--raw', *args)
-# 복구 대상은 주입한 victims 그대로(KILL_REPLICA=false 면 마스터만) — 안 멈춘 컨테이너 unpause 는 docker 가 거부한다.
+# 안 멈춘 컨테이너의 unpause 를 docker 가 거부하므로 주입한 victims 만 복구 대상
 if not injected: pass
 elif fault_kind == 'kill': dc('start', *victims)
 elif fault_kind == 'pause': dc('unpause', *victims)
@@ -132,8 +135,9 @@ forecast_ids = [str(i) for s in forecasts for i in s]
 db = {}
 for line in sql("select etf_code,choice,count(*) from vote where etf_code in (" + ','.join("'" + i + "'" for i in forecast_ids) + ") group by etf_code,choice;").splitlines():
     fid, choice, cnt = line.split('\t'); db.setdefault(fid, {})[choice.lower()] = int(cnt)
-# C1 은 부하 종료 후에도 버퍼링된 명령이 60s 타임아웃까지 스레드를 잡는다 — 조회 실패는 불일치로 보고 재시도.
-# choices 해시(사용자→선택)도 DB 사용자 수와 맞아야 한다 — count 만 같고 해시가 비면 다음 재투표가 잘못 차감된다.
+# C1 에서 부하 종료 후에도 60s 타임아웃까지 스레드를 잡는 버퍼링 명령
+# 조회 실패의 불일치 간주와 재시도
+# count 만 같고 해시가 비면 다음 재투표의 오차감이 생기므로 choices 해시와 DB 사용자 수의 일치 확인
 db_users = {}
 for line in sql("select etf_code,count(*) from vote where etf_code in (" + ','.join("'" + i + "'" for i in forecast_ids) + ") group by etf_code;").splitlines():
     fid, cnt = line.split('\t'); db_users[fid] = int(cnt)
@@ -158,7 +162,7 @@ duplicates = sql('select etf_code,member_id,count(*) from vote group by etf_code
 (out / 'app.log').write_text(dc('logs', '--timestamps', 'app'))
 (out / 'redis.log').write_text(dc('logs', '--timestamps', *[f'redis-{n}' for n in range(1, 7)]))
 
-# 후처리: 장애 주입 기준 before / during(+20s) / after 를 샤드 등급(failed/healthy)·hot 으로 나눠 SLO 초과와 폴백을 센다.
+# 장애 주입 기준 before, during(+20s), after 구간의 샤드 등급별 SLO 초과와 폴백 집계
 fault = json.loads((out / 'fault.json').read_text())['epoch'] if (out / 'fault.json').exists() else None
 def phase(ts):
     if fault is None: return 'before'
@@ -185,11 +189,12 @@ with (out / 'samples.json').open() as fh:
                 read_db[sec] = read_db.get(sec, 0) + 1
 rows = []
 for (kind, ph, cls), a in sorted(agg.items()):
-    if a['n'] == 0: continue  # read_source 만 있고 지연 표본이 없는 버킷(경계 시각 사이) — 분모 0
+    if a['n'] == 0: continue  # 경계 시각 사이 버킷의 지연 표본 부재로 인한 분모 0 생략
     lat = sorted(a['lat']); p99 = lat[min(len(lat) - 1, int(len(lat) * 0.99))] if lat else None
     rows.append({'kind': kind, 'phase': ph, 'class': cls, 'n': a['n'], 'slo_exceed': round(a['slo'] / a['n'], 4), 'error': round(a['err'] / a['n'], 4),
                  'db_fallback': round(a['db'] / a['n'], 4) if kind == 'read' else None, 'p99_ms': round(p99, 1) if p99 is not None else None})
-# 페일오버 소요 = replica 의 승격 로그 시각 - 주입 시각. 앱 회복 = 장애 샤드 읽기가 다시 source=redis 를 돌려준 첫 시각.
+# 주입 시각부터 replica 승격 로그 시각까지의 페일오버 소요
+# 장애 샤드 읽기의 source 가 다시 redis 로 돌아온 첫 시각 기준의 앱 회복
 failover = None
 for line in (out / 'redis.log').read_text().splitlines():
     m = re.search(r'\|\s+(\S+Z) .*Failover election won', line)
@@ -202,14 +207,15 @@ with (out / 'samples.json').open() as fh:
         if p['type'] == 'Point' and p['metric'] == 'read_source' and fault:
             t = p['data']['tags']
             ts = parse_time(p['data']['time']).timestamp()
-            # 승격 전(또는 주입 명령이 끝나기 전) 성공 응답을 회복으로 세지 않는다 — failover 시각이 있으면 그 이후만.
+            # 승격 전이나 주입 명령 완료 전 성공 응답의 회복 집계 제외
             if int(t['shard']) == fail_shard and t.get('source') == 'redis' and ts > fault + max(1, failover or 0):
                 app_recover = round(ts - fault, 2); break
 busy = [r['tomcat.threads.busy'] for r in samples if r['tomcat.threads.busy'] is not None]
 pending = [r['hikaricp.connections.pending'] for r in samples if r['hikaricp.connections.pending'] is not None]
 during_db = [v for s, v in read_db.items() if 0 <= s < 20]
-# 서킷 개방 증거 = CallNotPermittedException(열린 서킷이 호출을 거부). 첫 발생 시각 - 주입 시각 = 감지 시간.
-# 부하 구간(주입~k6 종료)만 센다 — 종료 후 러너의 검산 호출이 잡히면 안 된다.
+# 열린 서킷의 호출 거부 예외를 서킷 개방 증거로 사용
+# 주입 시각부터 첫 발생 시각까지의 감지 시간
+# 종료 후 러너의 검산 호출 배제를 위한 주입부터 k6 종료까지의 집계 구간
 app_log = (out / 'app.log').read_text()
 stamps = [parse_time(m.group(1)).timestamp() for m in re.finditer(r'^\S+\s+\|\s+(\S+Z) io\.github\.resilience4j\.circuitbreaker\.CallNotPermittedException', app_log, re.M)]
 stamps = [t for t in stamps if fault and fault <= t <= load_end]
@@ -231,7 +237,8 @@ for r in rows:
     print(f"{r['kind']:10}{r['phase']:8}{r['class']:10}{r['n']:>7}{r['slo_exceed']:>8.1%}{r['error']:>8.1%}{db_col}{r['p99_ms']:>9}")
 print('Results:', out)
 print('Cleanup after review:', ' '.join(compose + ['down', '-v']))
-# 장애가 주입되지 않은 런(부하가 INJECT_AT 전에 끝남 등)은 실험이 아니다 — HTTP 실패율은 측정 대상이라 게이트가 아니다.
+# 장애 미주입 런의 실험 제외
+# 측정 대상인 HTTP 실패율의 게이트 미사용
 if fault is None:
     print('FAULT WAS NEVER INJECTED — not a failure-injection run'); raise SystemExit(2)
 raise SystemExit(load.returncode or (0 if not mismatch and not duplicates else 1))

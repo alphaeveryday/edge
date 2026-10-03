@@ -14,8 +14,11 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 
 /**
- * 헤더 해석과 요청 속성 principal 설정. DB 조회 없음.
- * Bearer 우선, 검증 실패는 즉시 COMMON401. 없으면 X-Device-Id 게스트, 둘 다 없으면 익명 통과.
+  * DB 조회 없는 헤더 해석과 요청 속성 principal 설정
+  * Bearer 우선 해석
+  * Bearer 검증 실패 시 즉시 COMMON401 응답
+  * Bearer 가 없을 때의 X-Device-Id 게스트 처리
+  * 둘 다 없을 때의 익명 통과
  */
 @Component
 public class AuthFilter extends OncePerRequestFilter {

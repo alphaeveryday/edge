@@ -21,7 +21,9 @@ import org.springframework.web.bind.annotation.RestController;
 public class VoteController {
     private final VoteService voteService;
 
-    // 응답에 현황을 싣지 않는다. 쓰기 경로에 읽기를 붙이면 장애 실측 조건이 달라진다. 앱은 성공 후 count 를 읽는다.
+    // 응답의 현황 제외
+    // 쓰기 경로에 읽기가 붙으면 달라지는 장애 실험 조건
+    // 앱의 성공 후 count 조회
     @PutMapping
     public ApiResponse<Void> communityVote(@PathVariable String code, MemberPrincipal principal,
             @RequestBody @Valid VoteRequest request) {

@@ -22,7 +22,13 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 관심 그룹 요약. score 는 signal 서수 평균(소수 둘째 자리), band 는 그 반올림, changePct 는 산술평균. 그룹 없으면 빈 브리프. */
+/**
+ * 관심 그룹 요약
+ * score 의 소수 둘째 자리 signal 서수 평균
+ * band 의 score 반올림 값
+ * changePct 의 산술평균 값
+ * 그룹이 없을 때의 빈 브리프
+ */
 @Service
 @RequiredArgsConstructor
 public class HomeService {
@@ -57,7 +63,8 @@ public class HomeService {
         return codes.stream().map(byCode::get).filter(Objects::nonNull).toList();
     }
 
-    // 강력하락 0 ~ 강력상승 4, 그룹이 비면 중립
+    // 강력하락 0 부터 강력상승 4 까지의 서수
+    // 빈 그룹의 중립 처리
     private static double score(List<EtfSummaryResponse> etfs) {
         double mean = etfs.stream().mapToInt(e -> e.signal().ordinal()).average().orElse(Signal.NEUTRAL.ordinal());
         return Math.round(mean * 100) / 100.0;

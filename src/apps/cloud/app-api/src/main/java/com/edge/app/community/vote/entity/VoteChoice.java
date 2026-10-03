@@ -5,7 +5,8 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
-// DB·Redis·API 값은 소문자(계약 PollChoice: buy | wait | sell). value() 로 오가고 name() 은 쓰지 않는다.
+// DB·Redis·API 공통의 계약 PollChoice 소문자 값
+// value() 기반 변환과 name() 사용 금지
 public enum VoteChoice {
     BUY, WAIT, SELL;
 

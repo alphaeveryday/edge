@@ -15,7 +15,7 @@ import static com.edge.app.ApiCalls.call;
 import static com.edge.app.ApiCalls.result;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 테마 목록은 position 순 */
+/** position 순의 테마 목록 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ThemeFlowTests extends ContainerTests {
     @LocalServerPort

@@ -21,8 +21,9 @@ public class RedisConfig {
         return builder -> builder.commandTimeout(timeout).readFrom(ReadFrom.valueOf(readFrom));
     }
 
-    // Boot 가 만든 빌더(Cluster 면 topology refresh 를 담은 ClusterClientOptions.Builder) 위에 얹는다.
-    // ClientOptions 를 새로 만들어 clientOptions() 로 넣으면 refresh 설정이 통째로 버려진다(실측).
+    // Boot 가 만든 빌더 위의 설정 추가
+    // Cluster 에서 topology refresh 설정을 담은 Boot 빌더
+    // 새 ClientOptions 의 clientOptions() 주입 시 refresh 설정 전체 유실
     @Bean
     LettuceClientOptionsBuilderCustomizer redisOptions(
             @Value("${spring.data.redis.timeout}") Duration timeout,

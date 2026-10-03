@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class CursorTests {
     @Test
     void roundTripKeepsMicrosecondPrecision() {
-        // PostgreSQL timestamptz 는 마이크로초까지라 그 정밀도가 남아야 같은 행을 다시 가리킨다.
+        // 같은 행을 다시 가리키기 위한 PostgreSQL timestamptz 의 마이크로초 정밀도 보존
         Cursor cursor = new Cursor(Instant.parse("2026-09-28T01:02:03.123456Z"), 42L);
         assertEquals(cursor, Cursor.decode(cursor.encode()));
     }

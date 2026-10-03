@@ -22,7 +22,8 @@ public class VoteCacheListener {
         voteCountRepository.vote(event.etfCode(), event.memberId(), event.choice());
     }
 
-    // 남은 표로 집계 교체. 실패는 정합 주기에 맡김
+    // 남은 표 기준의 집계 교체
+    // 실패의 정합 주기 위임
     @TransactionalEventListener
     public void replaceInCache(VotesRemoved event) {
         for (String etfCode : event.etfCodes()) {

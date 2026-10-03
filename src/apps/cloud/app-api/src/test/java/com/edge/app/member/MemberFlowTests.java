@@ -50,7 +50,7 @@ class MemberFlowTests extends ContainerTests {
         assertEquals("@orca_one", me.get("handle"), "앱 표기 형식 @ 를 서버가 보장");
         var taken = call("PATCH", "/api/v1/me", Map.of("handle", "@orca_one"), b);
         assertEquals(400, taken.getStatusCode().value());
-        // 자기 handle 그대로는 허용.
+        // 자기 handle 의 재사용 허용
         assertEquals(200, call("PATCH", "/api/v1/me", Map.of("handle", "@orca_one"), a).getStatusCode().value());
         assertEquals(400, call("PATCH", "/api/v1/me", Map.of("nick", ""), a).getStatusCode().value());
     }

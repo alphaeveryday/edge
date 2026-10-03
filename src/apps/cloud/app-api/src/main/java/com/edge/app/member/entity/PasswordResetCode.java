@@ -10,7 +10,11 @@ import lombok.NoArgsConstructor;
 import java.time.Duration;
 import java.time.Instant;
 
-/** sha-256 해시만 저장. 10분 만료, 시도 5회, 이메일당 하루 발송 5회 */
+/**
+ * sha-256 해시 한정 저장
+ * 10분 만료와 시도 5회 상한
+ * 이메일당 하루 발송 5회 상한
+ */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -61,7 +65,7 @@ public class PasswordResetCode {
         this.createdAt = now;
     }
 
-    // 재발송마다 시도 수가 초기화되므로 추측 누적을 하루 발송 수로 제한
+    // 재발송마다 초기화되는 시도 수 대신 하루 발송 수 기준의 추측 누적 제한
     public boolean dailyLimitReached(Instant now) {
         return sentCount >= MAX_DAILY_SENDS && windowStartedAt.plus(DAY).isAfter(now);
     }

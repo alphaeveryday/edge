@@ -10,7 +10,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
 
-// 다중 인스턴스에서 @Scheduled 를 한 대만 실행(ADR-0056). 시계는 DB now() 로 통일한다.
+// 다중 인스턴스에서 스케줄 작업의 한 대 실행
+// DB 시계 기준의 락 시각 통일
 @Configuration
 @EnableSchedulerLock(defaultLockAtMostFor = "PT5M")
 public class SchedulerLockConfig {

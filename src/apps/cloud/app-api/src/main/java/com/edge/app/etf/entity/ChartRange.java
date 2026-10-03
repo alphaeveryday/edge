@@ -3,7 +3,8 @@ package com.edge.app.etf.entity;
 import java.time.LocalDate;
 import java.time.Period;
 
-// 쿼리 파라미터 range 의 계약값. 숫자 시작 불가라 상수명 역순 표기
+// 쿼리 파라미터 range 의 계약값
+// 숫자 시작 불가에 따른 상수명 역순 표기
 public enum ChartRange {
     W1("1W", Period.ofWeeks(1)), M1("1M", Period.ofMonths(1)), M3("3M", Period.ofMonths(3)),
     M6("6M", Period.ofMonths(6)), Y1("1Y", Period.ofYears(1));

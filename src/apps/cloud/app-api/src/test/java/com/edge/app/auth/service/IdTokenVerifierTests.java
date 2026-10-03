@@ -18,7 +18,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 서명·발급자·audience·만료 중 하나라도 어긋나면 로그인시키지 않는다. */
+/** 서명, 발급자, audience, 만료 중 하나라도 어긋난 토큰의 로그인 거부 */
 class IdTokenVerifierTests {
     @Test
     void acceptsOnlyTokensSignedByIssuerForOurAudience() throws Exception {

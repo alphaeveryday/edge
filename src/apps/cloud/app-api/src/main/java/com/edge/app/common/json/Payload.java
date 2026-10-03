@@ -6,7 +6,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.List;
 import java.util.stream.StreamSupport;
 
-/** 발행본 원문 payload 읽기. 없는 키는 빈 값 */
+/** 없는 키를 빈 값으로 돌려주는 발행본 원문 payload 읽기 */
 public record Payload(JsonNode node) {
     private static final JsonMapper MAPPER = JsonMapper.builder().build();
 

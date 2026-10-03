@@ -15,7 +15,10 @@ import static com.edge.app.ApiCalls.call;
 import static com.edge.app.ApiCalls.result;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 최신 as_of 의 순위만, 동기화에서 빠진 ETF 행은 숨긴다. etf_rank 는 이 클래스만 시드한다. */
+/**
+ * 동기화에서 빠진 ETF 행을 숨긴 최신 as_of 의 순위
+ * 순위 테이블 시드는 이 클래스 전담
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ExploreFlowTests extends ContainerTests {
     @LocalServerPort

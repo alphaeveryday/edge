@@ -52,7 +52,7 @@ public class VoteFlusher {
         }
     }
 
-    // 전망 하나의 실패(DB 장애·손상 dirty)가 다른 전망의 flush 를 막지 않도록 전망 단위로 격리한다.
+    // DB 장애나 손상 dirty 로 인한 한 전망의 실패가 다른 전망 flush 를 막지 않게 하는 전망 단위 격리
     private void flushEtf(String etfCode) {
         try {
             Map<Long, VoteChoice> batch = buffer.readDirty(etfCode, batchSize);

@@ -14,7 +14,7 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.time.LocalDate;
 
-/** 오늘 움직임 발행본. payload 원문 해석은 서비스 */
+/** payload 원문 해석을 서비스에 맡기는 오늘 움직임 발행본 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

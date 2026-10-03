@@ -8,7 +8,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 읽기 도메인 흐름 테스트 공용 호출. 헤더는 (이름, 값) 쌍. */
+/** 이름과 값 쌍의 헤더를 받는 읽기 도메인 흐름 테스트 공용 호출 */
 public final class ApiCalls {
     private ApiCalls() {
     }

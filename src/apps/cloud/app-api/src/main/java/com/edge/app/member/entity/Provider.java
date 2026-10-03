@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
-// 가입 경로. DB·와이어 값은 소문자
+// DB·와이어 값이 소문자인 가입 경로
 public enum Provider {
     EMAIL, APPLE, GOOGLE;
 

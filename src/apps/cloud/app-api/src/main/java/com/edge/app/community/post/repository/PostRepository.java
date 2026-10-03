@@ -15,7 +15,12 @@ import java.util.Optional;
 public interface PostRepository extends JpaRepository<Post, Long> {
     Optional<Post> findByIdAndDeletedAtIsNull(long id);
 
-    /** 최신순 키셋 피드. byCode 는 단일 태그, byCodes 는 관심 코드 태그, 첫 페이지는 상한 sentinel, viewer 가 차단한 작성자 제외 */
+    /**
+     * 최신순 키셋 피드
+     * byCode 의 단일 태그 필터와 byCodes 의 관심 코드 태그 필터
+     * 첫 페이지의 상한 sentinel
+     * viewer 가 차단한 작성자 제외
+     */
     @Query("""
             select p from Post p where p.deletedAt is null
               and (p.createdAt < :at or (p.createdAt = :at and p.id < :id))
@@ -28,7 +33,7 @@ public interface PostRepository extends JpaRepository<Post, Long> {
             @Param("code") String code, @Param("byCodes") boolean byCodes, @Param("codes") Collection<String> codes,
             @Param("viewer") long viewer, Limit limit);
 
-    /** 인기순 첫 페이지. 좋아요 수 정렬, 커서 없음 */
+    /** 커서 없이 좋아요 수로 정렬한 인기순 첫 페이지 */
     @Query("""
             select p from Post p where p.deletedAt is null
               and not exists (select 1 from MemberBlock b where b.blockerId = :viewer and b.blockedId = p.authorId)

@@ -18,7 +18,8 @@ if scenario == 'S3':
     raise SystemExit('S3 (retry) was removed with VOTE_REDIS_RETRY — see README; use S2')
 user_pool = int(os.environ.get('USER_POOL', '0'))
 if user_pool and user_pool < 500:
-    # 50rps 에서 같은 사용자의 요청 간격 = pool/50 초. 겹치면 ack 도착 순서가 커밋 순서와 달라져 사용자별 대조가 무효다.
+    # 50rps 에서 같은 사용자의 요청 간격은 pool/50 초
+    # 간격이 겹치면 ack 도착 순서와 커밋 순서가 달라져 사용자별 대조 무효
     raise SystemExit('USER_POOL must be >= 500 (>= 10s between a user\'s requests at 50rps) or unset')
 root = Path(__file__).resolve().parent
 out = root / 'runs' / (scenario + '-' + time.strftime('%Y%m%d-%H%M%S'))
@@ -38,7 +39,8 @@ def get(path):
     with urllib.request.urlopen('http://localhost:8080' + path, timeout=6) as r:
         return r.read().decode()
 def parse_time(stamp):
-    # k6 는 RFC3339 로 소수초를 가변 자릿수(최대 9)로 찍는다 — 3.11 미만 fromisoformat 은 6자리·Z 미지원.
+    # 최대 9자리 가변 소수초의 k6 RFC3339 시각
+    # 3.11 미만 fromisoformat 의 6자리 초과와 Z 미지원 대응
     stamp = re.sub(r'\.(\d+)', lambda m: '.' + (m.group(1) + '000000')[:6], stamp).replace('Z', '+00:00')
     return datetime.fromisoformat(stamp)
 def sql(query):
@@ -75,7 +77,8 @@ def master_cli(*args):
     address = dc('exec', '-T', 'sentinel-1', 'redis-cli', '-p', '26379', '--raw', 'SENTINEL', 'get-master-addr-by-name', 'mymaster').splitlines()
     return dc('exec', '-T', 'sentinel-1', 'redis-cli', '-h', address[0], '-p', address[1], '--raw', *args)
 if mode == 'write-behind':
-    # DB snapshot 은 flush 가 dirty 를 비운 뒤에 떠야 한다 — 미flush 분은 지연이지 유실이 아니다.
+    # flush 가 dirty 를 비운 뒤의 DB 스냅샷
+    # 미flush 분은 유실이 아닌 지연
     for _ in range(60):
         if master_cli('SCARD', 'vote:dirty-etfs').strip() == '0': break
         time.sleep(1)
@@ -94,7 +97,7 @@ for _ in range(300):
     time.sleep(1)
 (out / 'after-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
 (out / 'master-voted.txt').write_text(master_cli('HLEN', 'vote:{' + etf + '}:choices'))
-# 사용자별 최종 choice 3방향 대조: k6 ack(200 의 마지막 choice) vs DB vs Redis choices 해시.
+# k6 ack 와 DB 와 Redis choices 해시 사이의 사용자별 최종 choice 3방향 대조
 acked = {}
 with (out / 'samples.json').open() as samples:
     for line in samples:

@@ -1,4 +1,4 @@
-# write-behind 실험용 override — 기본 compose 위에 겹쳐 쓴다:
+# 기본 compose 위에 겹쳐 쓰는 write-behind 실험용 override
 #   docker compose -f docker-compose.yaml -f docker-compose.write-behind.yaml up
 services:
   app:

@@ -7,7 +7,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** 쓰기는 멱등 네이티브 삽입만 */
+/** 멱등 네이티브 삽입 한정의 쓰기 */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

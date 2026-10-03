@@ -25,7 +25,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** 발행본 원문의 계약 매핑. 규칙은 erd.md 분석 절, 고정 문구는 앱 mock 과 동일 */
+/**
+ * 발행본 원문의 계약 매핑
+ * erd.md 분석 절의 매핑 규칙
+ * 앱 mock 과 같은 고정 문구
+ */
 @Service
 @RequiredArgsConstructor
 public class AnalysisService {
@@ -72,7 +76,7 @@ public class AnalysisService {
                 conclusion.list("supports").stream().map(s -> s.text("label")).toList(), close, null);
     }
 
-    /** 이슈 축 payload 매핑. sticker·headline·items 원문 */
+    /** 이슈 축 payload 의 원문 매핑 */
     @Transactional(readOnly = true)
     public FactorPageResponse factor(String code, Axis axis) {
         EtfAnalysisAxis row = axisRow(code, axis);
@@ -82,7 +86,7 @@ public class AnalysisService {
                         i.text("title_keyword"), i.text("sentence"))).toList(), null, null);
     }
 
-    /** 수치 축 payload 매핑. sticker·headline·analysis_at·metrics 원문 */
+    /** 수치 축 payload 의 원문 매핑 */
     @Transactional(readOnly = true)
     public MetricPageResponse metric(String code, Axis axis) {
         EtfAnalysisAxis row = axisRow(code, axis);

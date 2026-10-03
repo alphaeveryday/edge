@@ -6,10 +6,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:app}
     password: ${SPRING_DATASOURCE_PASSWORD:app}
   jackson:
-    default-property-inclusion: non_null   # 계약: 선택 필드는 키 생략. nextCursor 만 ALWAYS(PageResponse)
+    default-property-inclusion: non_null   # PageResponse nextCursor 외 선택 필드의 키 생략 계약
     datatype:
       enum:
-        fail-on-numbers-for-enums: true   # {"choice":0} 이 BUY 로 접수되지 않게
+        fail-on-numbers-for-enums: true   # {"choice":0} 의 BUY 접수 방지
   jpa:
     open-in-view: false
     hibernate:
@@ -24,8 +24,10 @@ spring:
       timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
       connect-timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
       ssl:
-        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache 는 전송 암호화 필수(ADR-0056), 로컬 compose 는 평문
-  mail:   # host 는 SPRING_MAIL_HOST 로만 설정. 없으면 발송기 미생성으로 로그 기록
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # 전송 암호화가 필수인 ElastiCache 대응
+  # host 는 SPRING_MAIL_HOST 로만 설정
+  # host 가 없을 때의 발송기 미생성과 로그 기록
+  mail:
     port: 587
     properties:
       mail.smtp.auth: true
@@ -34,11 +36,15 @@ app:
   mail:
     operator: ${APP_MAIL_OPERATOR:operator@localhost}   # 신고 알림 수신 주소
   jwt:
-    secret: ${APP_JWT_SECRET}   # 필수, 기본값 없음. HS256 이라 32바이트 이상
+    secret: ${APP_JWT_SECRET}   # 기본값 없는 필수 값인 HS256 32바이트 이상 비밀키
     access-ttl: ${APP_JWT_ACCESS_TTL:PT1H}
-  review:   # 심사용 계정 이메일. 이 주소만 가입·재설정 코드 123456 고정, 메일 미발송. 비우면 꺼짐
+  # 이 주소 한정으로 메일 없이 가입·재설정 코드 123456 을 고정하는 심사용 계정 이메일
+  # 빈 값의 기능 꺼짐
+  review:
     email: ${APP_REVIEW_EMAIL:}
-  social:   # 소셜 idToken 의 audience(앱 client id). 비어 있으면 그 provider 로그인은 전부 거절
+  # 앱 client id 인 소셜 idToken audience
+  # 비어 있으면 그 provider 로그인 전부 거절
+  social:
     apple-client-id: ${APP_APPLE_CLIENT_ID:}
     google-client-id: ${APP_GOOGLE_CLIENT_ID:}
 vote:
@@ -73,11 +79,11 @@ management:
       enabled: false   # 헬스 조회마다 SMTP 접속 방지
   endpoint:
     health:
-      # ALB 가 보는 readiness 는 Kubernetes 밖에선 명시적으로 켜야 노출된다.
+      # Kubernetes 밖에서 명시적 활성화가 필요한 ALB 용 readiness 노출
       probes:
         enabled: true
       group:
-        # DB 를 포함해 RDS 비밀번호 로테이션 뒤 태스크가 교체되게 한다. Redis 는 제외
-        # (기본 /actuator/health 는 Redis 만 내려가도 503 이라 전 태스크가 교체된다).
+        # RDS 비밀번호 로테이션 뒤 태스크 교체를 위한 DB 포함
+        # Redis 만 내려가도 기본 헬스가 503 이 되어 전 태스크가 교체되는 문제로 인한 Redis 제외
         readiness:
           include: readinessState,db

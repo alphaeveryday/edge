@@ -12,7 +12,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 앱은 code 를 번역 없이 분기하므로 enum 과 openapi x-error-codes 가 어긋나면 화면 분기가 깨진다. */
+/** 앱의 번역 없는 code 분기 때문에 enum 과 계약 에러 코드의 일치 필요 */
 class AppErrorStatusTests {
     @Test
     @SuppressWarnings("unchecked")

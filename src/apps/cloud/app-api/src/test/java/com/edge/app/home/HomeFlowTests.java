@@ -16,7 +16,11 @@ import static com.edge.app.ApiCalls.result;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-/** score 는 signal 서수 평균, band 는 그 반올림, changePct 는 산술평균, asOf 는 그룹 시세의 최대. 그룹이 없으면 빈 브리프. */
+/**
+ * 홈 브리프의 그룹 집계 규칙
+ * score 는 signal 서수 평균, band 는 그 반올림, changePct 는 산술평균, asOf 는 그룹 시세의 최댓값
+ * 그룹이 없을 때의 빈 브리프
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class HomeFlowTests extends ContainerTests {
     @LocalServerPort
@@ -48,7 +52,7 @@ class HomeFlowTests extends ContainerTests {
         assertEquals(2, ((List<Map<String, Object>>) brief.get("groups")).get(0).get("count"));
     }
 
-    // 단계는 같아도 게이지 위치가 기울도록 평균을 그대로 전달
+    // 단계가 같아도 게이지 위치가 기울도록 반올림 없는 평균 전달
     @Test
     void scoreKeepsTheLeanInsideTheBand() {
         result(call(port, "PUT", "/api/v1/watch-groups/base/etfs", Map.of("codes", List.of("940003", "940004", "940005")), "X-Device-Id", "h3"));

@@ -32,7 +32,10 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 계약의 auth 흐름과 PRD 게스트 데이터 정책. 소셜 검증기는 외부 JWKS 라 대체한다. */
+/**
+ * 계약의 auth 흐름과 PRD 의 게스트 데이터 정책
+ * 외부 JWKS 에 의존하는 소셜 검증기의 대체
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class AuthFlowTests extends ContainerTests {
     @LocalServerPort
@@ -81,14 +84,14 @@ class AuthFlowTests extends ContainerTests {
         assertFalse(me.containsKey("disclaimerAcceptedAt"), "선택 필드는 키 생략");
         assertEquals(false, auth.get("guestMapped"));
 
-        // 회전: 새 리프레시가 나오고 옛 것은 COMMON400.
+        // 새 리프레시 발급과 옛 리프레시의 COMMON400 응답
         var rotated = result(call("POST", "/api/v1/auth/refresh", Map.of("refreshToken", auth.get("refreshToken"))));
         assertNotEquals(auth.get("refreshToken"), rotated.get("refreshToken"));
         var reused = call("POST", "/api/v1/auth/refresh", Map.of("refreshToken", auth.get("refreshToken")));
         assertEquals(400, reused.getStatusCode().value());
         assertEquals("COMMON400", reused.getBody().get("code"));
 
-        // 로그아웃은 회원의 리프레시를 전부 폐기한다.
+        // 로그아웃 시 회원 리프레시의 전부 폐기
         assertEquals(200, call("POST", "/api/v1/auth/logout", null, "Authorization", "Bearer " + rotated.get("accessToken")).getStatusCode().value());
         assertEquals(400, call("POST", "/api/v1/auth/refresh", Map.of("refreshToken", rotated.get("refreshToken"))).getStatusCode().value());
     }
@@ -117,7 +120,8 @@ class AuthFlowTests extends ContainerTests {
         return call("POST", "/api/v1/auth/signup", Map.of("email", email, "password", "pw123456", "nick", "인증", "code", code));
     }
 
-    // 남의 이메일로 가입하지 못하게 메일로 받은 코드가 있어야만 가입되고, 코드 대입은 5회에서 막혀야 한다
+    // 남의 이메일 가입 방지를 위한 메일 수신 코드 필수
+    // 5회에서 막히는 코드 대입
     @Test
     void signupRequiresEmailCode() {
         String code = requestSignupCode("v1@example.com");
@@ -155,7 +159,8 @@ class AuthFlowTests extends ContainerTests {
         return call("POST", "/api/v1/auth/password-reset/confirm", Map.of("email", email, "code", code, "newPassword", newPassword));
     }
 
-    // 미가입 이메일은 메일 없이 바로 알려 주고, 재요청 폭주가 메일 폭탄이 되지 않아야 한다
+    // 메일 없이 바로 알리는 미가입 이메일 응답
+    // 재요청 폭주의 메일 폭탄 방지
     @Test
     void passwordResetRejectsUnknownEmailAndThrottlesResend() {
         var unknown = call("POST", "/api/v1/auth/password-reset", Map.of("email", "zz@example.com"));
@@ -169,7 +174,7 @@ class AuthFlowTests extends ContainerTests {
         verify(mailer, times(1)).send(eq("c@example.com"), anyString(), anyString());
     }
 
-    // 재설정은 탈취된 세션을 끊는 수단이라 옛 비밀번호와 옛 리프레시가 모두 무효여야 한다
+    // 탈취된 세션을 끊는 수단이라 재설정 후 옛 비밀번호와 옛 리프레시의 무효
     @Test
     void passwordResetConfirmChangesPasswordAndRevokesSessions() {
         var auth = signup("r1@example.com");
@@ -188,7 +193,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("AUTH4002", confirmReset("r1@example.com", code, "again1234").getBody().get("code"));
     }
 
-    // 6자리 코드는 시도 제한과 만료가 없으면 대입으로 뚫린다
+    // 시도 제한과 만료 없이는 대입으로 뚫리는 6자리 코드
     @Test
     void passwordResetCodeLocksAfterFiveFailuresAndExpires() {
         signup("r2@example.com");
@@ -206,7 +211,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("AUTH4002", confirmReset("r3@example.com", fresh, "newpw1234").getBody().get("code"));
     }
 
-    // 동시 오답이 시도 수를 덮어쓰면 5회 제한을 넘어 대입된다
+    // 동시 오답의 시도 수 덮어쓰기로 인한 5회 제한 초과 대입 방지
     @Test
     void concurrentWrongCodesStillLockAfterFive() throws Exception {
         signup("r4@example.com");
@@ -232,7 +237,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("AUTH4002", confirmReset("r4@example.com", code, "newpw1234").getBody().get("code"));
     }
 
-    // 재발송마다 시도 수가 초기화되므로 이메일당 하루 발송 수가 추측 누적의 상한
+    // 재발송마다 시도 수가 초기화되므로 추측 누적의 상한인 이메일당 하루 발송 수
     @Test
     void codeMailStopsAfterFiveSendsADay() {
         signup("r6@example.com");
@@ -255,7 +260,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("AUTH4003", call("POST", "/api/v1/auth/signup/code", Map.of("email", "v3@example.com")).getBody().get("code"));
     }
 
-    // Gmail 하루 한도가 소진되면 그날 가입·재설정이 전부 막히므로 코드 메일을 먼저 끊는다
+    // Gmail 하루 한도 소진 시 그날 가입과 재설정이 전부 막히므로 코드 메일의 선차단
     @Test
     void codeMailStopsAtGlobalDailyLimit() {
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Seoul"));
@@ -270,7 +275,7 @@ class AuthFlowTests extends ContainerTests {
         }
     }
 
-    // 형식이 틀린 코드가 시도 수를 깎으면 장난 요청 5번으로 정상 코드가 무효가 된다
+    // 장난 요청 5번의 정상 코드 무효화를 막기 위한 형식 오류 코드의 시도 수 미차감
     @Test
     void malformedCodeAndShortPasswordAreRejectedBeforeCounting() {
         signup("r5@example.com");
@@ -291,17 +296,17 @@ class AuthFlowTests extends ContainerTests {
         String bearer = "Bearer " + auth.get("accessToken");
         String handle = (String) ((Map<?, ?>) auth.get("me")).get("handle");
         assertEquals(200, call("DELETE", "/api/v1/me", null, "Authorization", bearer).getStatusCode().value());
-        // 토큰은 만료 전이지만 회원이 없으므로 COMMON401, 리프레시도 막힌다.
+        // 만료 전 토큰이라도 회원이 없으므로 COMMON401 응답과 리프레시 차단
         assertEquals(401, call("GET", "/api/v1/me", null, "Authorization", bearer).getStatusCode().value());
         assertEquals(400, call("POST", "/api/v1/auth/refresh", Map.of("refreshToken", auth.get("refreshToken"))).getStatusCode().value());
-        // 행은 남고 식별 정보만 비어 같은 이메일로 재가입할 수 있다.
+        // 행은 남기고 식별 정보만 비운 상태의 같은 이메일 재가입 허용
         assertEquals(1, jdbc.queryForObject("select count(*) from member where deleted_at is not null and email is null and handle = ?", Integer.class, handle));
         signup("d@example.com");
     }
 
     @Test
     void guestDataMovesToAccountOnlyWhenAccountIsEmpty() {
-        // 디바이스가 관심 그룹을 갖고 있다(관심 도메인 구현 전이라 직접 심는다).
+        // 관심 그룹을 가진 디바이스의 직접 시드
         long devicePrincipal = jdbc.queryForObject("insert into device(device_key) values ('dev-1') on conflict (device_key) do update set last_seen_at = now() returning id", Long.class);
         devicePrincipal = jdbc.queryForObject("insert into principal(kind, device_id) values ('device', ?) on conflict (device_id) do update set kind = excluded.kind returning id", Long.class, devicePrincipal);
         long group = jdbc.queryForObject("insert into watch_group(principal_id, key, label, is_default) values (?, 'base', '기본 관심', true) returning id", Long.class, devicePrincipal);
@@ -315,7 +320,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals(0, jdbc.queryForObject("select count(*) from watch_group where principal_id = ?", Integer.class, devicePrincipal));
         assertEquals(memberId, jdbc.queryForObject("select member_id from device where device_key = 'dev-1'", Long.class));
 
-        // 계정에 이미 데이터가 있으면 두 번째 디바이스의 것은 옮기지 않는다.
+        // 계정에 데이터가 있을 때 두 번째 디바이스 데이터의 이전 생략
         devicePrincipal = jdbc.queryForObject("insert into device(device_key) values ('dev-2') returning id", Long.class);
         devicePrincipal = jdbc.queryForObject("insert into principal(kind, device_id) values ('device', ?) returning id", Long.class, devicePrincipal);
         group = jdbc.queryForObject("insert into watch_group(principal_id, key, label, is_default) values (?, 'base', '기본 관심', true) returning id", Long.class, devicePrincipal);
@@ -339,7 +344,7 @@ class AuthFlowTests extends ContainerTests {
         assertEquals(400, call("POST", "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t")).getStatusCode().value());
     }
 
-    /** 서버 로그(2026-09-28): 앱이 가입을 4건 동시에 보내 선검사를 전부 통과하고 uq_member_email 에서 500 이 났다. */
+    /** 동시 가입 4건이 선검사를 모두 통과해 유니크 제약에서 500 이 나던 문제의 재발 방지 */
     @Test
     void concurrentSignupsWithSameEmailYieldOneAccountAndConflictsForTheRest() throws Exception {
         int n = 6;

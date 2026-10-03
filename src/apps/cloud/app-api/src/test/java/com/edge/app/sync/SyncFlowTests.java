@@ -30,8 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 동기화는 선별 목록 ETF 만, 파이프라인 실데이터(database 출처) 발행본만 앱 화면 응답으로 옮긴다.
- * 목록 밖 행 삭제가 다른 테스트의 시드를 지우지 않게 공유 컨테이너가 아닌 자기 DB 를 쓴다.
+ * 선별 목록 ETF 와 파이프라인 실데이터 발행본에 한정한 앱 화면 응답 동기화
+ * 목록 밖 행 삭제가 다른 테스트 시드를 지우지 않도록 공유 컨테이너 대신 자체 DB 사용
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "app.sync.initial-delay=PT1H")
@@ -85,7 +85,7 @@ class SyncFlowTests {
                 + "('i-a', '2026-09-29', 100, 1), ('i-a', '2026-09-30', 110, 1), ('i-b', '2026-09-29', 50, 1), ('i-b', '2026-09-30', 49, 1)");
         PIPELINE.update("insert into etf_holding_snapshot values ('i-etf', 'i-b', '2026-09-30', 0.2), ('i-etf', 'i-a', '2026-09-30', 0.3)");
 
-        // 같은 날 실데이터 발행본과 더 최근의 미분류 발행본: 실데이터만 옮겨야 한다
+        // 같은 날 실데이터 발행본과 더 최근 미분류 발행본 중 실데이터만 이전
         PIPELINE.update("insert into movement_analyses values ('m-db', '091160', '2026-09-29T03:00:00Z', 'completed', "
                 + "'2026-09-29T03:01:00Z', '2026-09-29', '실데이터 요약', '{mi-2,mi-1}', 'database'), "
                 + "('m-old', '091160', '2026-09-29T05:00:00Z', 'completed', '2026-09-29T05:01:00Z', '2026-09-29', '가상 요약', '{}', 'unknown')");
@@ -103,7 +103,7 @@ class SyncFlowTests {
                 + "('o-db', '차트', 'ma20_distance_pct', 8.6009, '2026-09-29T06:41:00Z', 0), ('o-db', '차트', 'unmapped_key', 1, '2026-09-29T06:41:00Z', 1), ('o-db', '수급', 'weighted_foreign_net_amount_20d', 12345678900, '2026-09-29T06:41:00Z', 0)");
         PIPELINE.update("insert into outlook_issue_items values ('o-db', 0, '고정가', '3개월 상승', 'positive')");
 
-        // 손으로 넣은 옛 시드: 목록 밖 ETF 와 원천에 없는 날짜의 움직임
+        // 목록 밖 ETF 와 원천에 없는 날짜의 움직임을 담은 수동 옛 시드
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key) values "
                 + "('133690', 'fake-1', 'XKRX', 'TIGER 나스닥100', 'us'), ('091160', 'fake-2', 'XKRX', '옛 이름', 'semicon')");
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('133690', 1, 0, now())");

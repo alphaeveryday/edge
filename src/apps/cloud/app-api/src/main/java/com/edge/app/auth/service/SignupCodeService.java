@@ -27,7 +27,7 @@ public class SignupCodeService {
     private final MailQuota mailQuota;
     private final ReviewAccount reviewAccount;
 
-    // 60초 내 재요청은 발송 없이 같은 응답
+    // 60초 내 재요청에 발송 없는 같은 응답
     @Transactional
     public void send(String email) {
         if (memberRepository.findByEmailAndDeletedAtIsNull(email).isPresent()) {
@@ -58,12 +58,13 @@ public class SignupCodeService {
                 "가입 인증 코드는 " + code + " 입니다.\n10분 안에 앱에 입력해 주세요.\n요청하지 않았다면 이 메일을 무시해 주세요.");
     }
 
-    // 가입 트랜잭션 밖에서 먼저 호출해 틀린 시도 수를 확정 저장. 코드 삭제는 가입 성공 트랜잭션 몫
+    // 틀린 시도 수의 확정 저장을 위한 가입 트랜잭션 밖 선호출
+    // 코드 삭제는 가입 성공 트랜잭션 소관
     @Transactional(noRollbackFor = GeneralException.class)
     public void verify(String email, String code) {
         Instant now = Instant.now();
         SignupCode saved = codeRepository.findForUpdate(email).orElse(null);
-        // 잠금 대기 중 먼저 가입한 요청이 코드를 지웠으면 가입 경합 패자로 응답
+        // 잠금 대기 중 먼저 가입한 요청이 코드를 지운 경우의 가입 경합 패자 응답
         if (memberRepository.findByEmailAndDeletedAtIsNull(email).isPresent()) {
             throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
         }

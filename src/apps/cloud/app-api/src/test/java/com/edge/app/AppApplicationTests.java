@@ -77,7 +77,7 @@ class AppApplicationTests {
     @Test
     void voteIsCommittedBeforeRedisIsCalled() throws Exception {
         String etf = "000011";
-        // 리스너 안의 단언은 AFTER_COMMIT 콜백이 삼킨다 — 관측값을 테스트 스레드로 가져와 여기서 단언한다.
+        // AFTER_COMMIT 콜백이 리스너 안 단언을 삼키므로 테스트 스레드에서의 관측값 단언
         var seenAtRedisCall = new CompletableFuture<Integer>();
         doAnswer(invocation -> {
             try (var pool = Executors.newSingleThreadExecutor()) {
@@ -108,13 +108,13 @@ class AppApplicationTests {
             }
         }
         assertEquals(1, voteCountRepository.counts(etf).buys());
-        // 재투표는 마지막 선택으로 변경 — 이전 카운터에서 빠지고 새 카운터로 옮겨진다.
+        // 이전 카운터에서 새 카운터로 옮겨지는 마지막 선택 기준의 재투표
         assertEquals(200, vote(etf, 1, "sell"));
         var rows = votes(etf);
         assertEquals(1, rows.size());
         assertEquals(VoteChoice.SELL, rows.get(0).getChoice());
         assertEquals(new VoteCounts(0, 0, 1), voteCountRepository.counts(etf));
-        // 같은 선택 재실행(재시도·스크립트 재실행)은 no-op — 중복 집계 없음.
+        // 중복 집계 없는 같은 선택 재실행
         voteCountRepository.vote(etf, 1L, VoteChoice.SELL);
         assertEquals(1, voteCountRepository.counts(etf).sells());
         try (var connection = redis.getConnectionFactory().getConnection()) {
@@ -134,7 +134,7 @@ class AppApplicationTests {
             long start = System.nanoTime();
             assertEquals(200, vote(etf, 2, "sell"));
             assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) < 1000);
-            // 장애 중 재투표(변경)도 DB 에는 반영된다 — 폴백 집계가 마지막 선택을 보여준다.
+            // 장애 중 재투표의 DB 반영과 폴백 집계의 마지막 선택 표시
             assertEquals(200, vote(etf, 2, "wait"));
             assertEquals(new VoteCountResponse(1, 1, 0, "db"), voteService.counts(etf));
         } finally {
@@ -162,7 +162,7 @@ class AppApplicationTests {
     void manualRepairRequiresAdminAndRepairsBothDerivedKeys() throws Exception {
         String etf = "000044";
         assertEquals(400, vote(etf, 1, "INVALID"));
-        // 회원 전용이라 토큰 없는 투표는 COMMON401.
+        // 회원 전용이라 토큰 없는 투표의 COMMON401 응답
         assertEquals(401, client().put().uri("/api/v1/etfs/" + etf + "/vote")
                 .body(Map.of("choice", "buy")).retrieve().toBodilessEntity().getStatusCode().value());
         assertEquals(400, client().put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(1))

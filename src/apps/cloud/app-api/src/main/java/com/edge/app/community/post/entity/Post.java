@@ -11,7 +11,10 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 
-/** 게시물. 카운터는 비정규화, 증감은 저장소 원자 UPDATE 한정 */
+/**
+ * 비정규화 카운터를 둔 게시물
+ * 저장소 원자 UPDATE 한정의 카운터 증감
+ */
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

@@ -7,7 +7,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-/** 답글 발생 시 글쓴이 comm 알림. 자기 글 답글과 글쓴이가 차단한 답글 작성자 제외, 같은 트랜잭션 처리 */
+/**
+ * 답글 발생 시 글쓴이 comm 알림
+ * 자기 글 답글과 글쓴이가 차단한 답글 작성자 제외
+ * 같은 트랜잭션 처리
+ */
 @Component
 @RequiredArgsConstructor
 public class ReplyListener {

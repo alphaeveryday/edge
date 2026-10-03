@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
-// 알림 종류. 와이어 값은 계약 소문자 코드
+// 와이어 값이 계약 소문자 코드인 알림 종류
 public enum NotiKind {
     WATCH, COMM;
 

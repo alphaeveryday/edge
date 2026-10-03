@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""투표 부하 생성기. 결과 파일에 CSV(ts_ms,status,latency_ms).
+"""ts_ms·status·latency_ms 열의 CSV 를 결과 파일에 쓰는 투표 부하 생성기.
 
 사용: load.py <out_csv> <forecast_id> [rps=20] [duration_s=60] [users=100]
-duration+10초에 무조건 종료한다(요청이 매달려도 부하 측정이 멈추지 않게).
+요청이 매달려도 측정이 멈추지 않도록 duration+10초의 강제 종료.
 """
 import json
 import os

@@ -12,7 +12,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** e2e·테스트 가입이 실서버에서 존재하지 않는 주소로 메일을 보내 반송이 쌓이면 발신 평판이 떨어진다 */
+/** 실서버 테스트 가입의 없는 주소 발송으로 쌓이는 반송과 발신 평판 하락 방지 */
 class MailerTests {
     @Test
     void reservedTestDomainIsLoggedNotSent() {

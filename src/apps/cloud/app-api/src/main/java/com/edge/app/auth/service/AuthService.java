@@ -40,8 +40,10 @@ import java.util.Base64;
 import java.util.HexFormat;
 
 /**
- * 가입·로그인의 member 행 생성. 이후 회원 상태 변경은 MemberService 소유.
- * 리프레시 토큰은 불투명 난수, DB 저장은 sha-256 해시, 재발급마다 회전.
+  * 가입·로그인의 member 행 생성
+  * 이후 회원 상태 변경의 MemberService 소관
+  * 불투명 난수 리프레시 토큰의 sha-256 해시 저장
+  * 재발급마다 리프레시 토큰 회전
  */
 @Service
 @RequiredArgsConstructor
@@ -89,7 +91,8 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 인증 코드 확인(SignupCodeService.verify) 뒤 호출. 동시 가입의 유니크 위반도 MEMBER4002 로 응답
+    // SignupCodeService.verify 의 인증 코드 확인 뒤 호출
+    // 동시 가입의 유니크 위반도 MEMBER4002 응답
     @Transactional
     public AuthResponse signup(SignupRequest request, String deviceKey) {
         Member member;
@@ -103,7 +106,8 @@ public class AuthService {
         return signIn(member, deviceKey);
     }
 
-    // 60초 내 재요청은 발송 없이 같은 응답. 가입 여부는 가입 응답이 이미 드러내 숨기지 않음
+    // 60초 내 재요청에 발송 없는 같은 응답
+    // 가입 응답이 이미 드러내는 가입 여부라 은닉 생략
     @Transactional
     public void requestPasswordReset(PasswordResetRequest request) {
         Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
@@ -172,7 +176,8 @@ public class AuthService {
                 MeResponse.from(member), false);
     }
 
-    // 게스트 데이터 정책. 계정에 관심 데이터가 없으면 디바이스 소유 행 이전, 디바이스는 회원에 연결
+    // 디바이스의 회원 연결
+    // 계정에 관심 데이터가 없을 때의 디바이스 소유 행 이전
     private AuthResponse signIn(Member member, String deviceKey) {
         long memberPrincipal = principalRepository.upsertMember(member.getId());
         Long deviceId = null;

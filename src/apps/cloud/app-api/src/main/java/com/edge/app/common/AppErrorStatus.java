@@ -5,9 +5,13 @@ import com.edge.common.apipayload.code.ErrorReasonDto;
 import org.springframework.http.HttpStatus;
 
 /**
- * 도메인 에러 코드. openapi.yaml 의 x-error-codes 와 1:1 (COMMON 넷은 jvm-common ErrorStatus 소유).
- * 형식 {도메인}{4|5}{순번}. 4 는 클라이언트 오류, 5 는 서버 오류, 순번은 도메인 안 단조 증가. HTTP 상태는 enum 이 따로 가진다.
- * 앱은 code 를 번역 없이 그대로 분기한다.
+  * openapi.yaml 의 x-error-codes 와 1:1 대응하는 도메인 에러 코드
+  * COMMON 코드 넷의 jvm-common ErrorStatus 소관
+  * {도메인}{4|5}{순번} 형식
+  * 클라이언트 오류 4 와 서버 오류 5 의 구분
+  * 도메인 안 단조 증가 순번
+  * HTTP 상태의 enum 별도 보유
+  * 앱의 번역 없는 code 분기
  */
 public enum AppErrorStatus implements BaseErrorCode {
     ETF_NOT_FOUND(HttpStatus.NOT_FOUND, "ETF4001", "없는 ETF 입니다."),

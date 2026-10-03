@@ -44,7 +44,7 @@ public class PostController {
         return ApiResponse.onSuccess(postService.create(principal.memberId(), request));
     }
 
-    // 공개 조회. 요청자 있으면 liked·mine 채움
+    // 요청자가 있을 때 liked·mine 을 채우는 공개 조회
     @GetMapping("/{id}")
     public ApiResponse<PostResponse> communityGet(@PathVariable String id, @Nullable AppPrincipal principal) {
         return ApiResponse.onSuccess(postService.get(id, principal));
@@ -56,7 +56,7 @@ public class PostController {
         return ApiResponse.onSuccess(null);
     }
 
-    // 공개 조회. 요청자 있으면 차단한 작성자 제외
+    // 요청자가 있을 때 차단한 작성자를 빼는 공개 조회
     @GetMapping("/{id}/replies")
     public ApiResponse<PageResponse<ReplyResponse>> communityReplies(@PathVariable String id, @Nullable AppPrincipal principal,
             @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {

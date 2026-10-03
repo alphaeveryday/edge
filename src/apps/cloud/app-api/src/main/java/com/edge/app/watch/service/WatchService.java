@@ -31,7 +31,12 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 관심 그룹 관리. 기본 그룹은 첫 접근 생성, 사용자 그룹 10개 상한, 기본 그룹 삭제 불가 */
+/**
+ * 관심 그룹 관리
+ * 첫 접근 시 기본 그룹 생성
+ * 사용자 그룹 10개 상한
+ * 기본 그룹 삭제 불가
+ */
 @Service
 @RequiredArgsConstructor
 public class WatchService {
@@ -65,7 +70,8 @@ public class WatchService {
         return new WatchGroupResponse(group.getKey(), group.getLabel(), 0);
     }
 
-    // 삭제 그룹의 종목은 기본 그룹 유지, 없는 그룹은 no-op
+    // 삭제 그룹 종목의 기본 그룹 유지
+    // 없는 그룹의 no-op 처리
     @Transactional
     public void deleteGroup(AppPrincipal principal, String key) {
         long principalId = principalRepository.resolve(principal);
@@ -136,7 +142,7 @@ public class WatchService {
         }
     }
 
-    /** 기본 그룹 종목 추가. 멱등, 온보딩 완료 이벤트가 호출 */
+    /** 온보딩 완료 이벤트가 호출하는 멱등 기본 그룹 종목 추가 */
     @Transactional
     public void addToBase(long principalId, List<String> codes) {
         requireEtfs(codes);
@@ -166,7 +172,8 @@ public class WatchService {
         }
         Map<String, EtfSummaryResponse> byCode = etfRepository.summaries(codes).stream()
                 .map(EtfSummaryResponse::from).collect(Collectors.toMap(EtfSummaryResponse::code, Function.identity()));
-        // 동기화에 없는 코드 숨김, 관심 순서 유지
+        // 동기화에 없는 코드 숨김
+        // 관심 순서 유지
         return codes.stream().map(byCode::get).filter(Objects::nonNull).toList();
     }
 

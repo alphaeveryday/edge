@@ -18,7 +18,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 검색은 이름·코드 부분 일치, 차트 이동평균은 앞 행으로 계산, 움직임 발행본이 없거나 summary null 이면 준비 중. */
+/**
+ * 이름과 코드의 부분 일치 검색
+ * 앞 행 기준의 차트 이동평균
+ * 움직임 발행본이 없거나 summary 가 null 일 때의 준비 중 응답
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class EtfFlowTests extends ContainerTests {
     @LocalServerPort
@@ -34,7 +38,7 @@ class EtfFlowTests extends ContainerTests {
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('910001', 10000, 1.5, now()) "
                 + "on conflict (etf_code) do update set price = excluded.price");
         LocalDate day = LocalDate.of(2026, 9, 1);
-        for (int i = 0; i < 25; i++) {   // 9/1 부터 25일치, 종가 100..124
+        for (int i = 0; i < 25; i++) {   // 9/1 부터 25일치의 종가 100..124 시드
             jdbc.update("insert into etf_candle(etf_code, trade_date, open, high, low, close, volume) values ('910001', ?, 1, 2, 0, ?, 10) "
                     + "on conflict (etf_code, trade_date) do update set close = excluded.close", day.plusDays(i), 100 + i);
         }
@@ -80,7 +84,7 @@ class EtfFlowTests extends ContainerTests {
         assertEquals(109.5, ma20.get(2), "100..119 평균");
     }
 
-    // 원천이 종가만 주는 일봉도 차트에 나가야 하고, 없는 시가·고가·저가를 지어내지 않는다
+    // 종가만 있는 일봉의 차트 노출과 없는 시가·고가·저가의 비생성
     @Test
     void chartOmitsMissingOpenHighLowButKeepsClose() {
         jdbc.update("insert into etf_candle(etf_code, trade_date, close, volume) values ('910002', '2026-09-25', 50, 1) "

@@ -1,4 +1,5 @@
--- 동기화 테스트용 파이프라인 RDS 축소본. 동기화가 읽는 컬럼만 원본(migrations-cloud)과 같은 이름·제약으로
+-- 동기화 테스트용 파이프라인 RDS 축소본
+-- 동기화가 읽는 컬럼에 한정한 원본과 같은 이름과 제약
 CREATE TABLE entity (entity_id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
 CREATE TABLE instrument (
     instrument_id TEXT PRIMARY KEY, market_code VARCHAR(30) NOT NULL, ticker VARCHAR(30) NOT NULL,

@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 
-/** 단방향 차단. 조회 필터의 exists 대상 */
+/** 조회 필터의 exists 대상인 단방향 차단 */
 @Entity
 @Getter
 @IdClass(MemberBlock.Key.class)

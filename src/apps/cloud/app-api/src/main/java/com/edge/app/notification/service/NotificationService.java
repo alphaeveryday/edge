@@ -45,7 +45,8 @@ public class NotificationService {
         return new UnreadCountResponse((int) repository.countByPrincipalIdAndReadAtIsNull(principalRepository.resolve(principal)));
     }
 
-    // 남의 알림·잘못된 id 는 no-op. 계약에 404 없음
+    // 남의 알림과 잘못된 id 의 no-op 처리
+    // 404 가 없는 계약
     @Transactional
     public void read(AppPrincipal principal, String id) {
         long principalId = principalRepository.resolve(principal);
@@ -60,7 +61,7 @@ public class NotificationService {
         repository.markAllRead(principalRepository.resolve(principal), Instant.now());
     }
 
-    /** 답글 알림 적재. 글쓴이 회원 principal 없으면 생성 */
+    /** 글쓴이 회원 principal 이 없으면 생성까지 하는 답글 알림 적재 */
     @Transactional
     public void notifyReply(long postAuthorMemberId, long postId, String replyBody) {
         long principalId = principalRepository.upsertMember(postAuthorMemberId);

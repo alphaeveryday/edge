@@ -51,7 +51,8 @@ public class VoteWarmer {
         request();
     }
 
-    // 겹친 트리거는 병합하고, Lettuce 이벤트 스레드에서는 제출만 한다(블로킹 작업 금지).
+    // 겹친 트리거 병합
+    // 블로킹 작업을 막는 Lettuce 이벤트 스레드의 제출 한정
     public boolean request() {
         if (!running.compareAndSet(false, true)) {
             return false;
@@ -60,7 +61,7 @@ public class VoteWarmer {
         return true;
     }
 
-    // 재연결 없이 warm 만 실패한 경우(일시 DB 장애)를 위한 주기 재시도.
+    // 일시 DB 장애처럼 재연결 없이 warm 만 실패한 경우의 주기 재시도
     @Scheduled(fixedDelayString = "${vote.warm.interval:PT5M}", initialDelayString = "${vote.warm.interval:PT5M}")
     @SchedulerLock(name = "vote-warm", lockAtMostFor = "PT4M")
     void scheduled() {

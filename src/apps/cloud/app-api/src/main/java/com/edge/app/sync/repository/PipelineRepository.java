@@ -18,7 +18,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
-/** 파이프라인 RDS 읽기 전용 조회. 앱 DataSource 와 분리된 별도 풀 */
+/** 앱 DataSource 와 분리된 별도 풀의 파이프라인 RDS 읽기 전용 조회 */
 @Repository
 @ConditionalOnProperty("app.pipeline.url")
 @EnableConfigurationProperties(PipelineProperties.class)
@@ -38,7 +38,7 @@ public class PipelineRepository {
         config.setMinimumIdle(0);
         config.setReadOnly(true);
         config.setConnectionInitSql("set statement_timeout = 30000");
-        config.setInitializationFailTimeout(-1);   // 파이프라인 불통이 앱 기동을 막지 않게 첫 사용 때 접속
+        config.setInitializationFailTimeout(-1);   // 파이프라인 불통에도 앱 기동이 막히지 않는 첫 사용 시점 접속
         dataSource = new HikariDataSource(config);
         jdbc = new JdbcTemplate(dataSource);
     }
@@ -56,7 +56,7 @@ public class PipelineRepository {
                 """, (rs, n) -> new Instrument(rs.getString(1), rs.getString(2), rs.getString(3)), code).stream().findFirst();
     }
 
-    /** since 이후 종가가 있는 일봉, 날짜 오름차순 */
+    /** since 이후 종가가 있는 일봉의 날짜 오름차순 조회 */
     public List<Close> closes(String instrumentId, LocalDate since) {
         return jdbc.query("""
                 select trade_date, close_price, volume from price_daily

@@ -22,7 +22,7 @@ public abstract class ContainerTests {
         REDIS.start();
     }
 
-    /** 가입 테스트용 인증 코드. signupCode(email) 로 DB 에 심고 가입 요청에 실어 보낸다 */
+    /** DB 에 심어 가입 요청에 싣는 가입 테스트용 인증 코드 */
     public static final String SIGNUP_CODE = "000000";
 
     public static void signupCode(String email) {

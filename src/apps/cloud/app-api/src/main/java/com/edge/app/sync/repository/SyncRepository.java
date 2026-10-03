@@ -12,7 +12,10 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-/** 동기화 테이블 쓰기. 이 테이블들의 유일한 writer, 바뀐 행만 갱신 */
+/**
+ * 동기화 테이블의 유일한 writer
+ * 바뀐 행 한정 갱신
+ */
 @Repository
 @RequiredArgsConstructor
 public class SyncRepository {
@@ -59,7 +62,10 @@ public class SyncRepository {
                 """, code, price, changePct, Timestamp.from(asOf));
     }
 
-    /** 원천에 없는 날짜의 일봉 삭제 후 upsert. 시가·고가·저가는 원천에 없어 NULL */
+    /**
+     * 원천에 없는 날짜의 일봉 삭제 후 upsert
+     * 원천에 없는 시가·고가·저가의 NULL 저장
+     */
     public void replaceCandles(String code, List<PipelineRepository.Close> closes) {
         jdbc.update("delete from etf_candle where etf_code = ? and trade_date::text <> all(?)", code,
                 days(closes.stream().map(PipelineRepository.Close::date).toList()));

@@ -17,9 +17,10 @@ import java.util.TreeSet;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 구현 문서(springdoc /v3/api-docs)와 계약(openapi.yaml)의 operation 집합 대조.
- * 비교 단위는 "METHOD path operationId [query 파라미터명]". 컨트롤러 메서드명이 operationId 다.
- * /api/v1/admin/** 은 운영 엔드포인트라 계약 밖(2026-09-28 결정).
+ * 구현 문서와 계약의 operation 집합 대조
+ * 메서드, 경로, operationId, 쿼리 파라미터명 단위의 비교
+ * 컨트롤러 메서드명 기준의 operationId
+ * 계약 밖인 운영 엔드포인트의 대조 제외
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class OpenapiContractTests extends ContainerTests {

@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** PRD 커뮤니티 정책(관심 ETF 글쓰기·태그 3개·회원 쓰기)과 커서 페이지·카운터. */
+/** PRD 의 커뮤니티 정책과 커서 페이지 및 카운터 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class PostFlowTests extends ContainerTests {
     @LocalServerPort
@@ -112,7 +112,7 @@ class PostFlowTests extends ContainerTests {
         Map<String, Object> byCode = result(call("GET", "/api/v1/posts?code=305720", null, "dev:g2"));
         assertEquals(List.of(p2), items(byCode).stream().map(i -> i.get("id")).toList());
 
-        // mine 은 요청자(회원 또는 게스트 디바이스)의 관심 ETF 글
+        // 회원 또는 게스트 디바이스인 요청자의 관심 ETF 글 목록
         Map<String, Object> mine = result(call("GET", "/api/v1/posts?scope=mine", null, b));
         assertEquals(List.of(p3), items(mine).stream().map(i -> i.get("id")).toList());
         call("PUT", "/api/v1/etfs/305720/watch-groups", Map.of("groups", List.of("base")), "dev:pf-mine");
@@ -191,7 +191,8 @@ class PostFlowTests extends ContainerTests {
         assertEquals("탈퇴한 사용자", ((Map<?, ?>) post.get("author")).get("name"));
     }
 
-    // 약관 제10조: 글은 익명으로 남고 투표·좋아요·관심은 지워져 집계에서도 빠짐
+    // 약관 제10조에 따른 글의 익명 보존
+    // 투표와 좋아요와 관심의 삭제와 집계 제외
     @Test
     void withdrawalKeepsPostsButRemovesVotesLikesAndWatch(@Autowired JdbcTemplate jdbc) {
         String a = member("p10@example.com", "A10", List.of("069500"));

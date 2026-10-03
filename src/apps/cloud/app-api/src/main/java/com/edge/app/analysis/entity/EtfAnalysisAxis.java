@@ -12,7 +12,7 @@ import org.hibernate.type.SqlTypes;
 
 import java.io.Serializable;
 
-/** 5요인 상세. 축별 독립 발행이라 축마다 한 행 */
+/** 축별 독립 발행에 따른 축당 한 행의 5요인 상세 */
 @Entity
 @Getter
 @IdClass(EtfAnalysisAxis.Key.class)

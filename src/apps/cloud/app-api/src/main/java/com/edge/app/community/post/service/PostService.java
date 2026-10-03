@@ -41,16 +41,21 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 커뮤니티 정책. 쓰기는 회원, 관심 ETF 한정, 태그 3개 상한, 소프트 삭제 */
+/**
+ * 커뮤니티 정책
+ * 회원과 관심 ETF 한정의 쓰기
+ * 글당 태그 3개 상한
+ * 소프트 삭제
+ */
 @Service
 @RequiredArgsConstructor
 public class PostService {
     private static final int TAG_MAX = 3;
     private static final String DELETED_MEMBER_NAME = "탈퇴한 사용자";
-    // 첫 페이지 sentinel. 피드는 상한, 답글은 하한
+    // 피드는 상한, 답글은 하한인 첫 페이지 sentinel
     private static final Cursor FEED_START = new Cursor(Instant.parse("9999-12-31T00:00:00Z"), Long.MAX_VALUE);
     private static final Cursor REPLY_START = new Cursor(Instant.EPOCH, 0);
-    // 차단 필터의 조회자. 게스트는 차단 행이 없는 0
+    // 차단 행이 없는 0 으로 두는 게스트의 차단 필터 조회자
     private static final long NO_VIEWER = 0;
 
     private final PostRepository postRepository;
@@ -108,7 +113,8 @@ public class PostService {
         return responses(List.of(post), memberId).get(0);
     }
 
-    // 조회수 증가와 요청자 기준 liked·mine 채움, 차단한 작성자의 글은 blocked 표시
+    // 조회수 증가와 요청자 기준 liked·mine 채움
+    // 차단한 작성자 글의 blocked 표시
     @Transactional
     public PostResponse get(String id, AppPrincipal principal) {
         Post post = existing(id);
@@ -175,7 +181,8 @@ public class PostService {
         }
     }
 
-    // size+1 조회로 다음 페이지 판정, 마지막 행으로 커서 생성
+    // size+1 조회 기반의 다음 페이지 판정
+    // 마지막 행 기준의 커서 생성
     private static <E, R> PageResponse<R> page(List<E> rows, int size, Function<E, Cursor> cursorOf,
             Function<List<E>, List<R>> toResponses) {
         boolean more = rows.size() > size;

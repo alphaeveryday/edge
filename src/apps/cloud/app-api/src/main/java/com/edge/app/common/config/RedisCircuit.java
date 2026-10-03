@@ -12,8 +12,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.Collections;
 
-// 샤드 서킷 이름은 소유 노드의 첫 슬롯. 슬롯 표는 Lettuce 가 refresh/MOVED 로 유지하는 Partitions 를 그대로 쓴다 —
-// 페일오버(노드만 바뀜)엔 상태가 이어지고, 리샤딩(소유자 바뀜)엔 옮긴 슬롯이 새 샤드 서킷으로 따라간다.
+// 소유 노드의 첫 슬롯을 쓰는 샤드 서킷 이름
+// Lettuce 가 refresh 와 MOVED 로 유지하는 Partitions 의 슬롯 표 사용
+// 노드만 바뀌는 페일오버에서의 서킷 상태 유지
+// 소유자가 바뀌는 리샤딩에서 옮긴 슬롯의 새 샤드 서킷 이동
 @Component
 public class RedisCircuit {
     private final CircuitBreakerRegistry registry;
@@ -32,7 +34,8 @@ public class RedisCircuit {
         }
         int slot = SlotHash.getSlot("vote:{" + etfCode + "}:count");
         var partitions = client.getPartitions();
-        // 빈 Partitions 는 getMasterBySlot 이 빈 캐시 배열을 인덱싱해 예외를 낸다 — null 가드 앞에서 걸러 전역으로.
+        // getMasterBySlot 이 빈 캐시 배열을 인덱싱해 예외를 내는 빈 Partitions
+        // null 가드 앞에서 걸러 내는 전역 서킷 처리
         RedisClusterNode master = partitions.isEmpty() ? null : partitions.getMasterBySlot(slot);
         if (master == null || master.getSlots().isEmpty()) {
             return registry.circuitBreaker("redis");

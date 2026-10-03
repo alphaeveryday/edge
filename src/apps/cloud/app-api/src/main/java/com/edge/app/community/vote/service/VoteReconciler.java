@@ -51,7 +51,8 @@ public class VoteReconciler {
         request();
     }
 
-    // 겹친 트리거는 병합하고, Lettuce 이벤트 스레드에서는 제출만 한다(블로킹 작업 금지).
+    // 겹친 트리거 병합
+    // 블로킹 작업을 막는 Lettuce 이벤트 스레드의 제출 한정
     public boolean request() {
         if (!running.compareAndSet(false, true)) {
             return false;
@@ -63,10 +64,11 @@ public class VoteReconciler {
     private void reconcile() {
         long start = System.nanoTime();
         try {
-            // 단일 findAll 스냅샷 — 전망 목록/전망별 조회의 시차 없이 한 시점 기준으로 교체한다.
+            // 목록 조회와 전망별 조회의 시차를 없애는 단일 findAll 스냅샷 기준 교체
             Map<String, List<Vote>> byEtf = voteRepository.findAll().stream()
                     .collect(Collectors.groupingBy(Vote::getEtfCode));
-            // 전망 단위로 격리한다 — Cluster 부분 장애에서 한 샤드의 실패가 정상 샤드 전망의 복구를 막으면 안 된다.
+            // 전망 단위 격리
+            // Cluster 부분 장애에서 한 샤드 실패의 정상 샤드 전망 복구 차단 방지
             int failed = 0;
             for (var entry : byEtf.entrySet()) {
                 try {

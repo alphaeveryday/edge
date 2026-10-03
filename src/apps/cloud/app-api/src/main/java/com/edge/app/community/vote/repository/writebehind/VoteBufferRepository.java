@@ -33,7 +33,8 @@ public class VoteBufferRepository {
     private static final DefaultRedisScript<Long> RELEASE = script("writebehind/release-dirty.lua");
     private static final DefaultRedisScript<Long> WARM = script("writebehind/warm.lua");
 
-    // 전망별 키({etfCode})와 전역 dirty 집합이 다른 슬롯이라 Cluster 에선 다중 키 Lua 가 CROSSSLOT 으로 전건 실패한다.
+    // 전망별 키와 전역 dirty 집합의 슬롯 차이에 따른 Cluster 거부
+    // Cluster 에서 다중 키 Lua 의 CROSSSLOT 전건 실패
     @PostConstruct
     void rejectCluster() {
         if (connectionFactory instanceof LettuceConnectionFactory lettuce && lettuce.isClusterAware()) {

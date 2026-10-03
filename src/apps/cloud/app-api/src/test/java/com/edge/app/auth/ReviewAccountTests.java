@@ -10,7 +10,10 @@ import java.util.Map;
 import static com.edge.app.ApiCalls.call;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 심사자는 메일을 받을 수 없어 지정 이메일 하나만 고정 코드로 가입·재설정. 다른 이메일에는 고정 코드가 통하지 않는다 */
+/**
+ * 메일을 받을 수 없는 심사자를 위한 지정 이메일 하나의 고정 코드 가입과 재설정
+ * 다른 이메일에서의 고정 코드 거부
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = "app.review.email=review-test@example.com")
 class ReviewAccountTests extends ContainerTests {
     @LocalServerPort

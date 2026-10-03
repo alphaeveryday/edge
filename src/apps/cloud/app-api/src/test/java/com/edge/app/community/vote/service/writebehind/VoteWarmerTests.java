@@ -46,7 +46,7 @@ class VoteWarmerTests extends ContainerTests {
     void warmMergesMissingUsersWithoutOverridingLiveOnes() {
         String etf = "000402";
         buffer.record(etf, 1L, VoteChoice.BUY);
-        // DB 의 user 1 은 낡은 표(SELL), user 2 는 Redis 에 없는 표 — 전자는 무시, 후자만 채운다.
+        // DB 의 user 1 낡은 표는 무시하고 Redis 에 없는 user 2 표만 채움
         flushRepository.upsertAll(etf, Map.of(1L, VoteChoice.SELL, 2L, VoteChoice.WAIT));
         warmer.warm();
         assertEquals(new VoteCounts(1, 1, 0), counts.counts(etf));

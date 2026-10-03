@@ -4,13 +4,15 @@ import { Counter, Trend, Rate } from 'k6/metrics';
 const voteStatus = new Counter('vote_status');
 const voteFailure = new Rate('vote_failure');
 const voteLatency = new Trend('vote_latency', true);
-// 무관 요청 = 정적 / (Redis·DB 무관, 같은 Tomcat 풀) — actuator health 는 Redis 인디케이터를 포함해 부적합.
+// Redis 와 DB 에 무관하고 같은 Tomcat 풀을 쓰는 정적 / 의 무관 요청
+// Redis 인디케이터를 포함하는 actuator health 의 부적합
 const unrelatedLatency = new Trend('unrelated_latency', true);
 const unrelatedFailure = new Rate('unrelated_failure');
 const base = __ENV.BASE_URL || 'http://localhost:8080';
 const etf = __ENV.ETF_ID || '069500';
 const runId = Number(__ENV.USER_OFFSET || '1');
-// USER_POOL 설정 시 같은 사용자가 여러 번, 다른 choice 로 투표한다(재투표 축). 미설정이면 요청마다 고유 사용자.
+// USER_POOL 설정 시 같은 사용자의 다른 choice 재투표
+// 미설정 시 요청마다 고유 사용자
 const userPool = Number(__ENV.USER_POOL || '0');
 export const options = {
   scenarios: {

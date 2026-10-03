@@ -20,7 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 답글이 글쓴이에게 comm 알림을 만들고, 읽음은 본인 것만, 목록은 종류 필터와 커서. */
+/**
+ * 답글로 생기는 글쓴이의 comm 알림
+ * 본인 알림에 한정한 읽음 처리와 종류 필터와 커서의 목록
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class NotificationFlowTests extends ContainerTests {
     @LocalServerPort
@@ -81,7 +84,7 @@ class NotificationFlowTests extends ContainerTests {
         assertEquals(false, n.get("read"));
         assertFalse(n.containsKey("etf"));
 
-        // 남의 알림은 읽음 처리되지 않는다.
+        // 남의 알림의 읽음 처리 불가
         assertEquals(200, call("POST", "/api/v1/notifications/" + n.get("id") + "/read", null, other).getStatusCode().value());
         assertEquals(1, result(call("GET", "/api/v1/notifications/unread-count", null, author)).get("count"));
         assertEquals(200, call("POST", "/api/v1/notifications/" + n.get("id") + "/read", null, author).getStatusCode().value());

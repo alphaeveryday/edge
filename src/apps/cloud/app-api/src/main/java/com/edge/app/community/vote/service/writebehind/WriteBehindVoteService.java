@@ -30,7 +30,8 @@ public class WriteBehindVoteService implements VoteService {
     private final VoteBufferRepository buffer;
     private final MeterRegistry meterRegistry;
 
-    // DB 트랜잭션 없이 Redis 에만 기록한다. Redis 실패는 DB 우회 없이 즉시 반려.
+    // DB 트랜잭션 없는 Redis 단독 기록
+    // Redis 실패의 DB 우회 없는 즉시 반려
     @Override
     @CircuitBreaker(name = "redis", fallbackMethod = "onRedisDown")
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
@@ -43,7 +44,7 @@ public class WriteBehindVoteService implements VoteService {
         throw new GeneralException(AppErrorStatus.VOTE_STORE_UNAVAILABLE);
     }
 
-    // DB 폴백은 flush 지연분만큼 낡은 값이다.
+    // flush 지연분만큼 낡은 DB 폴백 값
     @Override
     @CircuitBreaker(name = "redis", fallbackMethod = "countsFromDb")
     public VoteCountResponse counts(String etfCode) {
