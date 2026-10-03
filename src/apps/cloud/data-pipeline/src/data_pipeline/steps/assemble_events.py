@@ -55,6 +55,7 @@ from ..db import connect, stable_domain_id
 from ..entity_resolution import (AMBIGUOUS, UNRESOLVED, ResolutionIndex,
                                  load_resolution_index, mint_concept, resolve, resolve_alias_ticker)
 from ..events.amounts import BASIS_VALUES, parse_amount, parse_basis
+from ..events.participants import actor_arguments, actor_role_values, issuer_mapping, role_entities
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 from ..ops.quality_diagnostics import (
     ARGUMENTS_MISSING,
@@ -1090,7 +1091,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             "INSERT INTO event_argument (source_event_id, role_code, entity_id, confidence,"
             " slot, mention_text, entity_kind, group_ord) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT (source_event_id, role_code, entity_id) DO NOTHING",
-            event_args,
+            actor_arguments(conn, event_args),
         )
         cur.executemany(
             "INSERT INTO event_measure (source_event_id, measure_ord, role_code, surface,"
@@ -1209,16 +1210,28 @@ def thread_events(conn, events: list[dict]) -> int:
 
     keyed: list[tuple[dict, str]] = []          # identity 충족 — 스레드 대상
     unknown: list[tuple[dict, list[str]]] = []  # identity 결측 — UNKNOWN
+    issuers = issuer_mapping(conn, (
+        entity for event in events for value in event["role_values"].values() if value
+        for entity in role_entities(value)
+    ))
     for event in events:
-        thread_key, missing = _thread_key(event["event_type_code"], event["role_values"])
+        thread_key, missing = _thread_key(
+            event["event_type_code"], actor_role_values(event["role_values"], issuers))
         (unknown.append((event, missing)) if thread_key is None
          else keyed.append((event, thread_key)))
 
-    prior_counts = _thread_prior_counts(conn, [k for _e, k in keyed])
-    thread_stages = _thread_current_stages(conn, [k for _e, k in keyed])
+    keys = list({key for _event, key in keyed})
+    with conn.cursor() as cur:
+        cur.execute("SELECT thread_key, thread_id FROM event_thread WHERE thread_key = ANY(%s)",
+                    (keys,))
+        existing_ids = dict(cur.fetchall())
+    ids = {key: existing_ids.get(key, _stable_id("thr", key)) for key in keys}
+    prior_counts = _thread_prior_counts(conn, ids)
+    thread_stages = _thread_current_stages(conn, ids)
     per_thread_seen: dict[str, int] = {}
     for event, thread_key in sorted(keyed, key=lambda ek: ek[0]["available_at"]):
-        thread_id = _stable_id("thr", thread_key)
+        # A key migration preserves the historical ID and every external reference.
+        thread_id = ids[thread_key]
         prior = prior_counts.get(thread_key, 0) + per_thread_seen.get(thread_key, 0)
         novelty = _novelty(event, prior, thread_stages.get(thread_key))
         per_thread_seen[thread_key] = per_thread_seen.get(thread_key, 0) + 1
@@ -1360,10 +1373,10 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
     return list(events.values())
 
 
-def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
-    if not thread_keys:
+def _thread_prior_counts(conn, ids: dict[str, str]) -> dict[str, int]:
+    if not ids:
         return {}
-    thread_ids = {_stable_id("thr", tk): tk for tk in thread_keys}
+    thread_ids = {tid: key for key, tid in ids.items()}
     with conn.cursor() as cur:
         cur.execute(
             "SELECT thread_id, COUNT(*) FROM event_thread_link WHERE thread_id = ANY(%s)"
@@ -1374,11 +1387,11 @@ def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
     return {thread_ids[tid]: n for tid, n in counts.items()}
 
 
-def _thread_current_stages(conn, thread_keys: list[str]) -> dict[str, str]:
+def _thread_current_stages(conn, ids: dict[str, str]) -> dict[str, str]:
     """thread_key → 기존 event_thread.current_stage(있는 것만) — novelty 판정의 시드."""
-    if not thread_keys:
+    if not ids:
         return {}
-    thread_ids = {_stable_id("thr", tk): tk for tk in thread_keys}
+    thread_ids = {tid: key for key, tid in ids.items()}
     with conn.cursor() as cur:
         cur.execute(
             "SELECT thread_id, current_stage FROM event_thread WHERE thread_id = ANY(%s)",

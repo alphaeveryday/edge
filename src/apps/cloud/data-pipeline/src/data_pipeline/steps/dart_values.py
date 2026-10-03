@@ -4,7 +4,7 @@
 ``value_source``·``dart_rcept_no`` 두 컬럼만 UPDATE 한다(ALPHA-538 과 같은 컬럼 소유 분리).
 
 매칭 규약(v4 DART 레인): 공시 제출인과 같은 발행회사(공급계약 공시의 제출인은 **공급사**이므로
-사건의 ``SUPPLIER`` 참여자를 ``equity_profile`` 로 issuer actor 에 접지) · 상대오차
+사건의 ``SUPPLIER`` Actor를 직접 읽고, 전환 전 주식 참조는 발행 Actor로 해소) · 상대오차
 ``|value − dart| / dart < 0.08`` · 공시 available_at 이 사건 available_at ±7일(KST 달력일).
 승격은 **공급사 후보가 유일**하고 **후보 공시가 정확히 1건**일 때만 한다 — 둘 중 하나라도
 여럿이면 금액을 어느 제출인에 귀속할지 단정할 수 없으므로 PARSED 를 보존한 채 카운터로
@@ -29,7 +29,7 @@ def _kst_day(value: datetime):
     return (value if value.tzinfo is None else value.astimezone(_KST)).date()
 
 
-# 사건의 SUPPLIER 참여 instrument 를 equity_profile 로 발행회사 actor 에 접지한 PARSED KRW
+# 사건의 SUPPLIER 발행회사 Actor에 귀속된 PARSED KRW (전환 전 주식 참조도 지원).
 # 측정행. 공급사가 여럿이면 행이 곱해진다 — (사건, ord) 로 묶어 issuer 집합을 만든다.
 #
 # 세 가지 좁히기가 정합성에 필수다(Codex #265 P2):
@@ -44,13 +44,14 @@ def _kst_day(value: datetime):
 #    제출인 = 공급사) 기준이다. 상장 CUSTOMER 의 issuer 를 후보에 넣으면 그 고객사의 무관한
 #    공급계약 공시로 승격되거나(남의 rcept) 공급사 공시와 함께 모호로 빠져 승격을 잃는다.
 _MEASURE_SQL = (
-    "SELECT em.source_event_id, em.measure_ord, em.value, ep.issuer_actor_id, se.available_at"
+    "SELECT em.source_event_id, em.measure_ord, em.value, cp.actor_id, se.available_at"
     " FROM event_measure em"
     " JOIN source_event se ON se.source_event_id = em.source_event_id"
     " JOIN event_argument ea ON ea.source_event_id = em.source_event_id"
     " AND ea.role_code = 'SUPPLIER'"
     " AND (em.group_ord IS NULL OR ea.group_ord = em.group_ord)"
-    " JOIN equity_profile ep ON ep.instrument_id = ea.entity_id"
+    " LEFT JOIN equity_profile ep ON ep.instrument_id = ea.entity_id"
+    " JOIN company_profile cp ON cp.actor_id = COALESCE(ep.issuer_actor_id, ea.entity_id)"
     " WHERE em.value_source = 'PARSED' AND em.unit = 'KRW' AND em.value IS NOT NULL"
     " AND em.role_code = 'CONTRACT_VALUE'"
     " AND se.event_type_code = 'COMPANY.CONTRACT.SIGNING'"
