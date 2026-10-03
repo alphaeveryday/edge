@@ -9,6 +9,8 @@ probe.py 와 같은 컨테이너, 마이그레이션, 대역(LLM·원천 조회�
      연결을 열고 닫는다. 그래서 세션 advisory lock 세 개는 그 문장이 끝나면 풀려 보호 효과가 없다. b 는 그 보호를
      단건 SFN 의 자리 표(analysis_execution_slots), 실행 이름, manifest 선점에 맡긴다는 가정이다.
      --retry 초 동안 연결 생성 실패를 0.5초 간격으로 다시 시도한다(0 이면 재시도 없음, 모드 a 는 늘 0).
+  c  실제 구현(ALPHA-1167). EDGE_REPO 가 그 코드를 가리켜야 한다. 실행마다 자리 행을 넣고 실행 ARN 을 워커에 넘겨
+     워커가 소유권 확인·단계별 연결·연결 재시도를 직접 한다. 대역 연결이나 탐침의 저장 재시도는 쓰지 않는다.
 
 이 탐침에는 SFN 자리 표가 없다. 모든 실행은 워커 슬롯 99(사실상 제어 없음)로 돈다. 그래서 a 의 37건 결과는
 배포 상태(자리 3에서 3건씩 실행)의 실패율이 아니라 '한꺼번에 띄우면 무엇이 먼저 막히는가'다.
@@ -46,7 +48,15 @@ import psycopg
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 
-from probe import ANALYSIS_AT, DSN, HERE, WORK, LocalSession, admin, etf_codes, record, reset, retarget, setup
+from probe import ANALYSIS_AT, DSN, HERE, WORK, LocalSession, admin, etf_codes, record, retarget, setup
+from probe import reset as reset_results
+
+
+def reset(definitions=False):
+    """probe.reset 에 더해 자리 표도 비운다(모드 c 가 실행마다 자리 행을 넣는다)."""
+    reset_results(definitions)
+    with admin() as c:
+        c.execute('TRUNCATE analysis_execution_slots')
 
 
 class _Rows:
@@ -179,7 +189,12 @@ def one(args):
             connection = psycopg.connect(DSN[role], **options)
         except Exception as exc:
             event['error'] = str(exc).strip().splitlines()[-1][:160]
-            raise ResultDatabaseError('Writer connection unavailable') from None
+            if args.mode != 'c':
+                raise ResultDatabaseError('Writer connection unavailable') from None
+            if role == 'reader':
+                raise  # 실제 connect_sources 는 psycopg 오류를 그대로 올린다
+            raise ResultDatabaseError('Writer connection unavailable',
+                                      transient=isinstance(exc, psycopg.OperationalError)) from None
         event['opened'] = time.time()
         close = connection.close
         def closing():
@@ -208,7 +223,7 @@ def one(args):
         return connection
 
     def connect_results(ca_path, *, session=None, cloud=False):
-        return writer() if args.mode == 'a' else ShortConnection(writer, retry)
+        return ShortConnection(writer, retry) if args.mode == 'b' else writer()
 
     def connect_sources(ca_path, *, session=None, cloud=False):
         deadline = time.time() + retry
@@ -288,15 +303,23 @@ def one(args):
     worker.load_source, worker.load_flow, worker.load_prices = load_source, (lambda c, d: d), (lambda c, d, **_: d)
     worker.execute_request = partial(service.execute_request, model_call=model)
     request = {'analysis_id': args.id, 'kind': args.kind, 'etf_code': args.etf, 'analysis_at': args.at or ANALYSIS_AT}
-    error = None
+    error, owner = None, None
+    if args.mode == 'c':  # 단건 워크플로의 자리 확보를 흉내: 이 실행 ARN 의 자리 행
+        owner = 'arn:aws:states:ap-northeast-2:1:execution:edge-dev-analysis-v2:' + args.id
+        with admin() as a:
+            a.execute('INSERT INTO analysis_execution_slots(execution_arn,started_by,request_key) VALUES (%s,%s,%s) '
+                      'ON CONFLICT DO NOTHING', (owner, args.id[:32], 'probe:' + args.id))
     try:
         worker.run(request, bucket='local', ca_path=HERE, folder=WORK/'artifacts'/args.id,
-                   key='fake-key', model='stub', session=LocalSession(), slots=99)
+                   key='fake-key', model='stub', session=LocalSession(), slots=99, **({'owner': owner} if owner else {}))
     except Exception as exc:
         error = type(exc).__name__ + ': ' + str(exc)[:160]
         cause = exc.__cause__ or exc.__context__
         if cause is not None:
             error += ' <- ' + type(cause).__name__ + ': ' + str(cause).strip().splitlines()[0][:120]
+    if args.mode == 'c':
+        from edge_analysis_v2.storage.database import STATS
+        marks['db_connections'] = STATS.summary()
     print(json.dumps({'id': args.id, 'kind': args.kind, 'etf': args.etf, 'exit': 1 if error else 0, 'error': error,
                       'marks': marks, 'began': began, 'ended': time.time(), 'connections': connections},
                      ensure_ascii=False), flush=True)
@@ -452,10 +475,13 @@ def faults(args):
               ('terminate-mid-wait', 'b', args.retry): (n, {'completed': n}),
               ('deny-after-model', 'a', 0.0): (0, {'running': n}),
               ('deny-after-model', 'b', 0.0): (0, {'running': n}),
-              ('deny-after-model', 'b', args.retry): (n, {'completed': n})}
+              ('deny-after-model', 'b', args.retry): (n, {'completed': n}),
+              ('terminate-mid-wait', 'c', 0.0): (n, {'completed': n}),
+              ('deny-after-model', 'c', 0.0): (n, {'completed': n})}
     tools_per_run = args.tools + (2 if args.kind == 'outlook' else 0)  # 전망은 시작 시 요인 조회와 본문 쓰기가 더 있다
     for label, plan, hold, in_phase in cases:
-        for mode, retry in (('a', 0.0), ('b', 0.0), ('b', args.retry)):
+        # c 는 EDGE_REPO 가 ALPHA-1167 코드를 가리킬 때만 돈다(--only-c). 기본 실행은 a·b 만.
+        for mode, retry in ((('c', 0.0),) if args.only_c else (('a', 0.0), ('b', 0.0), ('b', args.retry))):
             reset()
             specs = [{'kind': args.kind, 'etf': codes[i], 'id': uuid4().hex} for i in range(n)]
             r = launch(specs, mode=mode, llm=args.llm, tools=args.tools, retry=retry, faults=plan, hold=hold)
@@ -494,6 +520,16 @@ def dup(args):
     r = record('review-dup-a-same-etf-different-id', {'mode': 'a', 'role_limits': roles, 'llm_s': args.llm, 'stagger_s': 1},
                launch(pair(), mode='a', llm=args.llm, tools=args.tools))
     assert (r['ok'], r['failed']) == (1, 1) and 'ValueError' in r['errors'][0], r  # 워커의 ETF 락이 거절한다
+    if args.real:  # 실제 구현(c): 같은 ID 는 manifest 선점이, 같은 ETF 는 (탐침에 없는) 자리 표가 막는다
+        reset()
+        same = uuid4().hex
+        r = record('review-dup-c-same-id-concurrent', {'mode': 'c', 'role_limits': roles, 'llm_s': args.llm},
+                   launch([{'kind': 'outlook', 'etf': codes[0], 'id': same}] * 2, mode='c', llm=args.llm, tools=args.tools))
+        assert (r['ok'], r['failed']) == (1, 1) and 'PreconditionFailed' in r['errors'][0], r['errors']
+        reset()
+        r = record('review-dup-c-same-etf-different-id', {'mode': 'c', 'role_limits': roles, 'llm_s': args.llm, 'stagger_s': 1},
+                   launch(pair(), mode='c', llm=args.llm, tools=args.tools))
+        assert (r['ok'], r['db_rows']['completed']) == (2, 2), r
     print('dup: all assertions passed')
 
 
@@ -592,7 +628,11 @@ def save_faults(args):
              ('save-kill', 'b', 'save-kill', 0, 'killed_in_save', 1, 'failed', 'zero', False),
              ('save-kill', 'b', 'save-kill', args.save_retry, 'killed_in_save', 0, 'completed', 'baseline', True),
              ('save-ack-lost', 'b', 'save-ack-lost', 0, 'ack_lost_after_commit', 1, 'completed', 'baseline', False),
-             ('save-ack-lost', 'b', 'save-ack-lost', args.save_retry, 'ack_lost_after_commit', 0, 'completed', 'baseline', True))
+             ('save-ack-lost', 'b', 'save-ack-lost', args.save_retry, 'ack_lost_after_commit', 0, 'completed', 'baseline', True),
+             ('save-kill', 'c', 'save-kill', 0, 'killed_in_save', 0, 'completed', 'baseline', None),
+             ('save-ack-lost', 'c', 'save-ack-lost', 0, 'ack_lost_after_commit', 0, 'completed', 'baseline', None))
+    # c 는 --only-c 일 때만(EDGE_REPO 가 ALPHA-1167 코드여야 한다). 기준 실행은 늘 돈다.
+    cases = [case for case in cases if case[0] == 'baseline' or (case[1] == 'c') == args.only_c]
     baseline = None
     results = []
     for label, mode, inject, save_retry, mark, want_exit, want_db, want_rows, want_retry in cases:
@@ -613,7 +653,7 @@ def save_faults(args):
                'save_retry_s': save_retry, 'llm_s': args.llm, 'tools': args.tools, 'role_limits': roles}, summary)
         assert (summary['injected'] and summary['exit'] == want_exit and summary['db'] == want_db
                 and rows == (baseline if want_rows == 'baseline' else zero) and summary['model_calls'] == 1
-                and (summary['save_retries'] > 0) == want_retry), (label, mode, save_retry, summary)
+                and (want_retry is None or (summary['save_retries'] > 0) == want_retry)), (label, mode, save_retry, summary)
     print('\n'.join(f'{l:14} {m} retry{s:<3g} exit={x["exit"]} db={x["db"]} rows_as_baseline={x["rows_as_baseline"]} '
                     f'model_calls={x["model_calls"]} save_retries={x["save_retries"]}' for l, m, s, x in results))
     print('save-faults: all assertions passed')
@@ -811,7 +851,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest='command', required=True)
     p = commands.add_parser('one')
-    p.add_argument('--mode', choices=('a', 'b'), required=True)
+    p.add_argument('--mode', choices=('a', 'b', 'c'), required=True)
     p.add_argument('--kind', required=True); p.add_argument('--etf', required=True); p.add_argument('--id', required=True)
     p.add_argument('--llm', type=float, default=8); p.add_argument('--tools', type=int, default=40)
     p.add_argument('--src', type=float, default=0.3); p.add_argument('--retry', type=float, default=0.0)
@@ -828,14 +868,17 @@ if __name__ == '__main__':
     p.add_argument('--n', type=int, default=3); p.add_argument('--kind', default='outlook')
     p.add_argument('--llm', type=float, default=20); p.add_argument('--tools', type=int, default=40)
     p.add_argument('--deny', type=float, default=5); p.add_argument('--retry', type=float, default=15)
+    p.add_argument('--only-c', action='store_true')
     p = commands.add_parser('dup')
     p.add_argument('--llm', type=float, default=6); p.add_argument('--tools', type=int, default=10)
+    p.add_argument('--real', action='store_true')
     p = commands.add_parser('control')
     p.add_argument('--rounds', type=int, default=20)
     commands.add_parser('retry-safety')
     p = commands.add_parser('save-faults')
     p.add_argument('--llm', type=float, default=4); p.add_argument('--tools', type=int, default=10)
     p.add_argument('--save-retry', type=float, default=10)
+    p.add_argument('--only-c', action='store_true')
     p = commands.add_parser('order')
     p.add_argument('--llm', type=float, default=2); p.add_argument('--tools', type=int, default=4)
     p = commands.add_parser('sites')
