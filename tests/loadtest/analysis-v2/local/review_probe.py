@@ -35,6 +35,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 import json
 import signal
 import subprocess
@@ -301,6 +302,15 @@ def one(args):
 
     worker.connect_results, worker.connect_sources = connect_results, connect_sources
     worker.load_source, worker.load_flow, worker.load_prices = load_source, (lambda c, d: d), (lambda c, d, **_: d)
+    research = worker.load_research_observations
+    if args.prepared:  # 배치 전에 한 번 준비한 거시·재무 입력을 받는다. 시작 때 writer 조회가 없다
+        prepared = json.loads(Path(args.prepared).read_text())
+        worker.load_research_observations = lambda connection, data: data | prepared
+    elif args.research:
+        def held(connection, data):  # 시작 때 writer 에서 도는 거시·재무 조회 시간(dev 실측 상한)을 흉내
+            connection.execute('SELECT pg_sleep(%s)', (args.research,))
+            return research(connection, data)
+        worker.load_research_observations = held
     worker.execute_request = partial(service.execute_request, model_call=model)
     request = {'analysis_id': args.id, 'kind': args.kind, 'etf_code': args.etf, 'analysis_at': args.at or ANALYSIS_AT}
     error, owner = None, None
@@ -393,7 +403,8 @@ def launch(specs, *, mode, llm, tools, src=0.3, retry=0.0, faults=(), hold=0.0):
         return subprocess.Popen([sys.executable, __file__, 'one', '--mode', mode, '--kind', s['kind'], '--etf', s['etf'],
                                  '--id', s['id'], '--llm', str(llm), '--tools', str(tools), '--src', str(src),
                                  '--retry', str(retry), '--at', s.get('at', ''), '--inject', s.get('inject', 'none'),
-                                 '--save-retry', str(s.get('save_retry', 0)), '--hold', str(hold)],
+                                 '--save-retry', str(s.get('save_retry', 0)), '--hold', str(hold),
+                                 '--research', str(s.get('research', 0)), '--prepared', s.get('prepared', '')],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     specs = sorted(specs, key=lambda s: s.get('start_after', 0))
     procs = [start(s) for s in specs]  # start_after 가 있으면 앞 건이 끝나기를 기다리지 않고 그 시각에 시작한다
@@ -452,9 +463,40 @@ def occupancy(args):
         reset(definitions=True)
         specs = [{'kind': args.kind, 'etf': codes[i % len(codes)], 'id': uuid4().hex} for i in range(args.n)]
         retry = args.retry if mode == 'b' else 0.0
+        profile = json.loads(Path(args.research_profile).read_text()) if args.research_profile else []
+        prepare = None
+        if args.prepare_seconds is not None:
+            prepare = prepared_inputs(args.prepare_seconds)
+            for s in specs:
+                s['prepared'] = prepare['path']
+        else:
+            for i, s in enumerate(specs):
+                s['research'] = profile[i % len(profile)] if profile else 0
         record(f'review-occupancy-{mode}-n{args.n}', {'mode': mode, 'n': args.n, 'kind': args.kind, 'llm_s': args.llm,
-               'tools': args.tools, 'src_s': args.src, 'retry_s': retry, 'role_limits': roles},
+               'tools': args.tools, 'src_s': args.src, 'retry_s': retry, 'role_limits': roles,
+               'research_profile': args.research_profile or None, 'prepare': prepare},
                launch(specs, mode=mode, llm=args.llm, tools=args.tools, src=args.src, retry=retry))
+
+
+def prepared_inputs(seconds):
+    """배치 전 공유 입력 준비: 거시·재무를 한 번 읽어 파일로 둔다(writer 하나, 준비 시간은 dev 실측 기반 추정치).
+
+    같은 기준시각에서 워커가 직접 읽은 결과와 내용이 같은지도 확인한다. 로컬 DB 에는 원천 자료가 없어
+    내용 비교는 형태와 기준시각만 증명한다 — 실데이터 동일성은 README 의 dev 입력 비교를 본다."""
+    from edge_analysis_v2.sources.database import load_research_observations
+    from edge_analysis_v2.tools.fixture_data import make_fixture
+    data = make_fixture(analysis_at=ANALYSIS_AT)
+    began = time.time()
+    with psycopg.connect(DSN['writer'], autocommit=True) as connection:
+        connection.execute('SELECT pg_sleep(%s)', (seconds,))
+        shared = load_research_observations(connection, data)
+        direct = load_research_observations(connection, data)
+    keys = ('macro', 'financials', 'source_gaps')
+    assert {k: shared[k] for k in keys} == {k: direct[k] for k in keys} and shared['context'] == data['context']
+    WORK.mkdir(parents=True, exist_ok=True)
+    (WORK/'prepared.json').write_text(json.dumps({k: shared[k] for k in keys}, ensure_ascii=False))
+    return {'seconds': round(time.time() - began, 2), 'path': str(WORK/'prepared.json'),
+            'analysis_at': shared['context']['analysis_at']}
 
 
 def faults(args):
@@ -869,12 +911,16 @@ if __name__ == '__main__':
     p.add_argument('--at', default=''); p.add_argument('--save-retry', type=float, default=0.0)
     p.add_argument('--inject', default='none', choices=('none', 'save-kill', 'save-ack-lost'))
     p.add_argument('--hold', type=float, default=0.0)
+    p.add_argument('--research', type=float, default=0.0); p.add_argument('--prepared', default='')
     p = commands.add_parser('occupancy')
     p.add_argument('--modes', default='a,b'); p.add_argument('--n', type=int, default=37)
     p.add_argument('--kind', default='outlook'); p.add_argument('--llm', type=float, default=30)
     p.add_argument('--tools', type=int, default=40); p.add_argument('--src', type=float, default=0.3)
     p.add_argument('--retry', type=float, default=0.0)
     p.add_argument('--writer-limit', type=int, default=-1); p.add_argument('--reader-limit', type=int, default=-1)
+    p.add_argument('--research-profile', default='', help='ETF 별 시작 writer 조회 초(JSON 목록). 차례로 배정')
+    p.add_argument('--prepare-seconds', type=float, default=None,
+                   help='주면 배치 전 공유 입력 준비를 이 초만큼 writer 하나로 흉내 내고 워커는 그 결과를 받는다')
     p = commands.add_parser('faults')
     p.add_argument('--n', type=int, default=3); p.add_argument('--kind', default='outlook')
     p.add_argument('--llm', type=float, default=20); p.add_argument('--tools', type=int, default=40)
