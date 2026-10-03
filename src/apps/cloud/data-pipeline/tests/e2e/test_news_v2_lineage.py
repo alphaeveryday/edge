@@ -20,7 +20,26 @@ EVENT_TYPE = "COMPANY.CAPITAL.DIVIDEND_DECISION"
 DAY = datetime.now(timezone.utc).date().isoformat()
 
 
-def test_assembled_actor_event_reaches_v2_news_tools(tmp_path):
+@pytest.fixture
+def pg():
+    import psycopg
+
+    pg = dict(host=os.environ["E2E_PGHOST"], port=int(os.environ.get("E2E_PGPORT", "5432")),
+              dbname=os.environ.get("E2E_PGDATABASE", "edge"), user=os.environ.get("E2E_PGUSER", "edge"),
+              password=os.environ.get("E2E_PGPASSWORD", "edge"), connect_timeout=5)
+    if pg["host"] not in ("localhost", "127.0.0.1"):
+        raise ValueError("This fixture requires isolated local PostgreSQL, never a shared database")
+    cleanup = "TRUNCATE document, source_event, event_thread, etf_holding_snapshot, etf_holding_snapshot_status CASCADE"
+    with psycopg.connect(**pg, autocommit=True) as connection:
+        connection.execute(cleanup)
+        try:
+            yield pg
+        finally:
+            # Today's holdings must not change later tests' point-in-time selection.
+            connection.execute(cleanup)
+
+
+def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
     import psycopg
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -30,11 +49,6 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path):
     from data_pipeline.steps import assemble_events
     from edge_analysis_v2.sources.database import DatabaseTools, load_source
 
-    pg = dict(host=os.environ["E2E_PGHOST"], port=int(os.environ.get("E2E_PGPORT", "5432")),
-              dbname=os.environ.get("E2E_PGDATABASE", "edge"), user=os.environ.get("E2E_PGUSER", "edge"),
-              password=os.environ.get("E2E_PGPASSWORD", "edge"), connect_timeout=5)
-    if pg["host"] not in ("localhost", "127.0.0.1"):
-        raise ValueError("This fixture requires isolated local PostgreSQL, never a shared database")
     article_id = "actor-v2-" + uuid4().hex
     title = "삼성전자 배당 결정"
     storage = LocalStorage(tmp_path / "lake")
@@ -55,8 +69,6 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path):
                                      "primary_ticker": "005930", "confidence": 0.9}]})
 
     with psycopg.connect(**pg, autocommit=True) as seed:
-        # Like the other full-schema E2Es, this fixture owns an ephemeral database.
-        seed.execute("TRUNCATE document, source_event, event_thread, etf_holding_snapshot, etf_holding_snapshot_status CASCADE")
         actor = seed.execute("SELECT issuer_actor_id FROM equity_profile WHERE instrument_id=%s", (SHARE,)).fetchone()[0]
         assert actor != SHARE
         seed.execute("INSERT INTO etf_profile(instrument_id,etf_type) VALUES (%s,'SECTOR') ON CONFLICT DO NOTHING", (ETF,))

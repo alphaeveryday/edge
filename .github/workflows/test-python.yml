@@ -138,11 +138,10 @@ jobs:
         run: docker build -f src/apps/cloud/${{ matrix.app }}/Dockerfile src
 
 
-  # ── 골든패스 E2E 1개 (뉴스 조립 → 분석 → 영속) ───────────────
-  # ephemeral Postgres 에 Flyway cloud 세트를 실제 적용한 뒤, assemble_events(분류 LLM
-  # fake) → analysis-engine(DeepSeek fake·S3 fake) 를 같은 DB 위에서 이어 돌린다.
-  # 두 코드베이스의 결정적 ID 수렴과 실 스키마 SQL 정합이 검증 대상이다(ALPHA-534).
-  # sync 는 무스코프다 — 이 테스트만 의도적으로 두 워크스페이스 멤버를 함께 쓴다.
+  # ── 뉴스 조립 → v2 조회 계보와 DB 경계 E2E ─────────────────
+  # ephemeral Postgres 에 Flyway cloud 세트를 적용한 뒤 실제 저장·조회 SQL을 검증한다.
+  # 뉴스 분류만 fake이며, batch/minute 조립의 Actor·사건·묶음 ID가 v2 툴까지 보존돼야 한다.
+  # sync 는 무스코프다 — data-pipeline, v2 조회와 기존 DB 경계 검사를 함께 실행한다.
   e2e:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
