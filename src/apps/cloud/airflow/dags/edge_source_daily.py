@@ -110,7 +110,7 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
     """이 레인의 DAG. 계열 셋은 서로 기다리지 않는다 — 한 공급자 장애가 다른 원천을 막지 않게."""
     ecs_target = {"cluster": CLUSTER, **(ecs_target or {})}
     params = {"reprocess_slot": Param("", type="string", description=(
-        "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-10-01T09:10:00+09:00)이면 그 슬롯의 raw 를 다시 "
+        "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-10-04T05:20:00+09:00)이면 그 슬롯의 raw 를 다시 "
         "정제·적재한다(수집 안 함)."))}
     for family, names in BACKFILL_PARAMS.items():
         for name in names:
