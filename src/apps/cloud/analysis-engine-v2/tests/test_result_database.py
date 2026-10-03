@@ -127,3 +127,13 @@ def test_retry_repeats_only_connection_failures_within_the_time_bound():
             raise outcome
         return outcome
     assert db.retry_transient(flaky, sleep=sleep, clock=lambda: clock[0]) == "done"
+
+
+def test_callers_that_build_a_session_per_call_do_not_grow_the_cache(tmp_path, monkeypatch):
+    # The control Lambda can create a session on every invocation of a long-lived container.
+    ca = tmp_path / "ca.pem"
+    ca.write_text("test")
+    monkeypatch.setattr(db.psycopg, "connect", lambda **_: Mock())
+    for _ in range(20):
+        db.connect_results(ca, session=writer_session())
+    assert len(db._SECRETS) <= db._CACHED_SESSIONS

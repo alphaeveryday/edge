@@ -1,4 +1,5 @@
 """Dedicated result database connection through the fixed local SSM tunnel."""
+from collections import OrderedDict
 import json
 from pathlib import Path
 import random
@@ -59,7 +60,10 @@ class ConnectionStats:
 
 STATS = ConnectionStats()
 _SESSIONS = {}
-_SECRETS = {}
+# Per-session cache, newest last. Bounded because some callers build a session per call (a warm
+# Lambda would otherwise keep every one); a cached entry keeps its session alive, so ids stay unique.
+_SECRETS = OrderedDict()
+_CACHED_SESSIONS = 8
 
 
 def _secret(session, *, refresh):
@@ -67,6 +71,9 @@ def _secret(session, *, refresh):
     cached = _SECRETS.get(id(session))
     if cached is None or cached['session'] is not session:
         cached = _SECRETS[id(session)] = {'session': session, 'client': session.client("secretsmanager"), 'secret': None}
+        while len(_SECRETS) > _CACHED_SESSIONS:
+            _SECRETS.popitem(last=False)
+    _SECRETS.move_to_end(id(session))
     if refresh or cached['secret'] is None:
         started = time.monotonic()
         cached['secret'] = json.loads(cached['client'].get_secret_value(SecretId=SECRET_ID)["SecretString"])
