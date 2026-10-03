@@ -397,7 +397,7 @@ SELECT observation_date, value FROM macro_observations_as_of(:t, 'usd_krw', 2);
   최신 관측일과 그 근거(`basis`). 상태는 **항상 UNKNOWN(`NO_PROVIDER_CALENDAR`)** — ECOS는 KRX 휴장일(09-24·25)에도 값을
   냈고(§10.8), DART 접수는 회사마다, KIS 마스터의 공식 게시 캘린더는 미확보라 "어제 값이 있어야 한다"는 기대를 코드가 만들
   근거가 없다. FRESH/STALE 판정은 공급자 캘린더를 둔 뒤 ADR-0043 Dataset Contract로 붙인다. `MACRO_COLLECTION`은
-  미계측(taskdef 없음)이라 수집 단계의 원장 증거는 없고 적재 단계만 있다 — 함수도 적재 작업만 본다.
+  `macro` task-def 배포(#1036) 뒤 계측으로 올렸다(ALPHA-1140) — 수집 단계의 원장 증거도 남지만, 함수는 적재 작업만 본다.
 - 재무 판본 상태: `financial_quarters_as_of` 가 행마다 권위 판본(run·수신시각)과 `latest_unconfirmed_at` 을 준다 — "확정값이 있는데 최근 확인이 실패했다"와 "확인했는데 지표가 없다"(NULL 행)와 "아직 확인 안 됨"(판본 없음)이 갈린다.
 - 재무 완전성: `etf_constituent_source_coverage(etf, T)`의 `eps_quarters`<4·`latest_bps_period` 결측이 종목별 부족이다. 이 함수가 고른 구성종목은 v2 런타임이 고르는 것과 다를 수 있다(§10.11).
 - 업종 완전성: 같은 함수의 `has_sector_classification=false`.

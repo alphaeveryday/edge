@@ -1818,8 +1818,8 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   플래그가 먼저 뜨면 Reconciler 가 영구 거짓 LEDGER_GAP 을 연다(ALPHA-596 은 PR 을 둘로 쪼갰고,
   ALPHA-610 도 #379→후속으로 같은 순서를 밟았다 — 중간 상태는 `_WIRING_AHEAD_OF_FLAG` 유예가
   덮고, 그 유예는 플래그가 올라가는 순간 스스로 실패해 제거를 강제한다).
-  **TagNews 도 ALPHA-610 이 올려 SFN 작업의 `instrumented=False` 는 0개다**(예외: Airflow 전용
-  `MACRO_COLLECTION` — `macro` task-def 미존재, ALPHA-1130 인프라 인계) — SFN 등록 30작업이 전부 자기
+  **TagNews 도 ALPHA-610 이 올려 SFN 작업의 `instrumented=False` 는 0개다**(Airflow 전용 원천 관측
+  `MACRO_COLLECTION` 도 `macro` 배선 #1036 뒤 ALPHA-1140 이 올려 0개) — SFN 등록 30작업이 전부 자기
   원장을 직접 쓴다(장중 수급 3작업도 `kis`·`bigkinds`·`rds` task-def 를 재사용해 DB env 를 그대로 받는다). 그래서 attempt 결측은 더는 정상이 아니라 `LEDGER_GAP` 이고, 그 스텝이
   기사별 LLM 실패를 격리해 exit 0 으로 끝나도 `failed_records` 가 `data_status=INCOMPLETE` 로
   올라온다(07-27 940/940 전건 실패가 초록으로 보였던 그 경로 — ALPHA-589 는 스텝이 스스로 exit 1

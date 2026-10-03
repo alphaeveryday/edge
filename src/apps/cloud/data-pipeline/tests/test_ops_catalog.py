@@ -229,9 +229,8 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
     # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
     # FMP 를 되살릴 때처럼 정당한 미계측이 다시 생기면 여기서 명시적으로 다시 연다.
-    # 예외 하나(ALPHA-1130): 매크로 수집은 키를 가진 `macro` 태스크 정의가 아직 없다(인프라 인계).
-    # 배선이 한 배포 먼저 뜬 뒤 True 로 올린다 — 그때 이 집합은 다시 빈 집합이어야 한다.
-    assert {e.task_key for e in catalog.entries() if not e.instrumented} == {"MACRO_COLLECTION"}
+    # 원천 관측 MACRO_COLLECTION 도 `macro` 배선(#1036)이 먼저 배포된 뒤 ALPHA-1140 이 올렸다.
+    assert {e.task_key for e in catalog.entries() if not e.instrumented} == set()
 
 
 # **배선이 플래그보다 한 배포 앞선** 작업(task_key). 비어 있는 것이 정상 상태다.
@@ -248,8 +247,8 @@ def test_catalog_and_asl_task_states_match_both_ways():
 # 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는 다른
 # 작업까지 덩달아 면제되지 않게 하기 위해서다.
 # ALPHA-610 이 #379(배선)→#(이 PR, 플래그)로 실제로 밟은 경로이고, 지금은 비어 있는 것이 맞다.
-# MACRO_COLLECTION: ALPHA-1136 배선 PR(`macro` task-def + DB env). 플래그를 True 로 올리는 PR 이 지운다.
-_WIRING_AHEAD_OF_FLAG: set[str] = {"MACRO_COLLECTION"}
+# MACRO_COLLECTION 도 같은 경로를 밟았다 — #1036(배선) → ALPHA-1140(플래그, 여기서 지웠다).
+_WIRING_AHEAD_OF_FLAG: set[str] = set()
 
 
 def _taskdefs_with_db_env() -> set[str]:
