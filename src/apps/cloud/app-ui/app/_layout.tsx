@@ -19,7 +19,8 @@ focusManager.setEventListener((onFocus) => {
 });
 // 시작 화면 최소 노출 1초
 const splashMin = new Promise((r) => setTimeout(r, 1000));
-// 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 화면 이동. 로그인 실패 401 은 폼이 처리
+// 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 화면 이동
+// 로그인 실패 401 은 폼 소관
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (e) => {

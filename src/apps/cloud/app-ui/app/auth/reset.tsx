@@ -10,7 +10,8 @@ import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-// 메일로 받은 6자리 코드와 새 비밀번호 입력. 성공 시 로그인 화면으로
+// 메일로 받은 6자리 코드와 새 비밀번호 입력
+// 성공 시 로그인 화면 복귀
 export default function PasswordReset() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();

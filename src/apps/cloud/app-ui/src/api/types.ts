@@ -32,13 +32,15 @@ export interface HomeBrief {
   groups: WatchGroup[];
   group: string;
   band: Signal;
-  // 그룹 signal 서수 평균 0~4, 구판 서버는 없음
+  // 0~4 범위의 그룹 signal 서수 평균
+  // 구판 서버 응답의 필드 부재
   score?: number;
   changePct: number;
   etfs: EtfSummary[];
 }
 
-// 커서 목록의 한 페이지, next 없으면 끝
+// 커서 목록의 한 페이지
+// next 부재 시 마지막 페이지
 export interface Page<T> {
   items: T[];
   next: string | null;
@@ -57,7 +59,8 @@ export interface Post {
   liked: boolean;
   views?: number;
   mine?: boolean;
-  // 내가 차단한 작성자의 글. 글 상세에서만 옴
+  // 내가 차단한 작성자의 글 여부
+  // 글 상세 응답에만 포함
   blocked?: boolean;
 }
 

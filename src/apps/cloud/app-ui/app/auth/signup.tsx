@@ -14,7 +14,8 @@ import { fam } from '@/theme/typography';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// 이메일 인증 코드 확인 후 가입. 로그인 화면에서 진입, 닫기와 성공은 로그인 화면까지 함께 닫고 원래 화면으로
+// 이메일 인증 코드 확인 후 가입
+// 닫기와 성공 시 로그인 화면까지 함께 닫는 원래 화면 복귀
 export default function Signup() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
@@ -51,7 +52,7 @@ export default function Signup() {
     onError: (e) => setErr(isApiError(e) ? e.message : '코드를 보내지 못했어요'),
   });
   const clear = (fn: (v: string) => void) => (v: string) => { fn(v); setErr(''); };
-  // 인증한 이메일을 바꾸면 코드부터 다시
+  // 인증한 이메일 변경 시 코드 발송부터 재시작
   const changeEmail = (v: string) => { setEmail(v); setErr(''); setSent(false); setCode(''); };
   const message = err || problems[0];
   return (

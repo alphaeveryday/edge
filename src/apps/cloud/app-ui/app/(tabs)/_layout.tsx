@@ -12,7 +12,8 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarActiveTintColor: colors.text,
         tabBarInactiveTintColor: colors.textMuted,
-        // 탭 내용 49 위아래 여백, 시스템 하단 영역 위 8
+        // 탭 내용 높이 49와 위아래 여백
+        // 시스템 하단 영역 위 8의 아래 여백
         tabBarStyle: { height: 63 + bottom, paddingTop: 6, paddingBottom: bottom + 8, backgroundColor: colors.white, borderTopWidth: 1, borderTopColor: colors.tabBarLine },
         tabBarLabelStyle: { fontFamily: fam.semibold, fontSize: 11 },
       }}

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { RefreshControl } from 'react-native';
 import { colors } from '@/theme/tokens';
 
-// 당겨서 새로고침, 띄워 둔 화면의 조회 전부 다시 받기
+// 띄워 둔 화면의 조회 전부를 다시 받는 당겨서 새로고침
 export function usePullRefresh() {
   const qc = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);

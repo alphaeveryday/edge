@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-// 키체인과 웹 저장소에 두는 토큰·디바이스 ID·온보딩 완료·비회원 면책 동의
+// 키체인과 웹 저장소에 두는 토큰과 기기 상태
 const KEYS = { access: 'etforca.access', refresh: 'etforca.refresh', device: 'etforca.device', onboarded: 'etforca.onboarded', disclaimed: 'etforca.disclaimed' } as const;
 type Key = keyof typeof KEYS;
 

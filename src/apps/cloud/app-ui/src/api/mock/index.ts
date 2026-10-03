@@ -47,7 +47,8 @@ const voteStatOf = (code: string): VoteStat => {
   return { code, count: n, pct: { buy: pct[0], wait: pct[1], sell: pct[2] }, mine };
 };
 
-// 서버와 같은 signal 서수 평균, 그룹이 비면 중립
+// 서버와 같은 signal 서수 평균
+// 빈 그룹의 중립 처리
 const avgScore = (codes: string[]) => {
   const idx = codes.map((c) => SIGNAL_ORDER.indexOf(etfOf(c).signal));
   return idx.length ? Math.round((idx.reduce((a, b) => a + b, 0) / idx.length) * 100) / 100 : 2;

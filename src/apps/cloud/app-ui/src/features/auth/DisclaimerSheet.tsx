@@ -13,7 +13,8 @@ const LINES = [
   '전망은 매일 장 시작 전에, 가격 변동 설명은 가격이 움직일 때 갱신돼요.',
 ];
 
-// AI 분석 첫 진입 시 한 번 받는 면책 동의. 회원은 서버, 비회원은 기기에 기록
+// AI 분석 첫 진입 시 한 번 받는 면책 동의
+// 회원의 서버 기록과 비회원의 기기 기록
 export function DisclaimerSheet() {
   const qc = useQueryClient();
   const { data: me } = useMe();

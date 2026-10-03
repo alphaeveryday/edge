@@ -8,7 +8,7 @@ import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useCreateGroup } from './queries';
 
-// 새 그룹 이름 입력과 만들기, 관심 탭 시트와 하트 시트 공용
+// 관심 탭 시트와 하트 시트 공용의 새 그룹 만들기
 export function NewGroupForm({ onCreated }: { onCreated: (g: WatchGroup) => void }) {
   const [name, setName] = useState('');
   const create = useCreateGroup();

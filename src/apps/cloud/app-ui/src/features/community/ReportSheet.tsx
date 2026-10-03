@@ -21,7 +21,8 @@ export interface ReportTarget {
   name: string;
 }
 
-// 신고 사유 5개와 작성자 차단. 차단은 확인 단계를 거친다
+// 신고 사유 5개와 작성자 차단
+// 확인 단계를 거치는 차단
 export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarget | null; onClose: () => void; onBlocked?: () => void }) {
   const toast = useToast((s) => s.show);
   const report = useReport();

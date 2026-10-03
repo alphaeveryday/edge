@@ -3,7 +3,8 @@ import type { ChartData } from '@/api';
 import { colors } from '@/theme/tokens';
 import { ChartFrame } from './ChartFrame';
 
-// 시가·고가·저가가 있는 원천용. 없는 값은 종가로 그림
+// 시가·고가·저가가 있는 원천용
+// 없는 값의 종가 대체
 export function CandleChart({ data, name, price, changePct }: { data: ChartData; name: string; price: number; changePct: number }) {
   const lo = Math.min(...data.candles.map((c) => c.l ?? c.c));
   const hi = Math.max(...data.candles.map((c) => c.h ?? c.c));

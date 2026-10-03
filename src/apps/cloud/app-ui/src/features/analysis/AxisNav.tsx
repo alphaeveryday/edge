@@ -7,7 +7,7 @@ import { colors } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { dirSignal } from './dir';
 
-// 축 상세 화면 공용 상단, 뒤로·축 배지·ETF 이름
+// 축 상세 화면 공용 상단 바
 export function AxisNav({ code, axis, dir }: { code: string; axis: Axis; dir?: Dir }) {
   const router = useRouter();
   const { data: etf } = useEtf(code);

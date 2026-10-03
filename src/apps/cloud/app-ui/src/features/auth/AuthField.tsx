@@ -4,7 +4,8 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { colors, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
-// 로그인·가입 공용 입력칸. 비밀번호는 보기 토글
+// 로그인·가입 공용 입력칸
+// 비밀번호의 보기 토글
 export function AuthField({ secure, invalid, ...rest }: TextInputProps & { secure?: boolean; invalid?: boolean }) {
   const [shown, setShown] = useState(false);
   return (

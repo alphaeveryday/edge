@@ -10,7 +10,8 @@ const SEG_BG: Record<Signal, string> = {
 
 // 관심 그룹 전체의 전망 강도 게이지
 export function EdgeCard({ title, band, score, changePct }: { title: string; band: Signal; score?: number; changePct: number }) {
-  // 점 위치는 평균값, 없으면 단계 칸 가운데
+  // 평균값 기준의 점 위치
+  // 평균값 부재 시 단계 칸 가운데
   const at = score ?? SIGNAL_ORDER.indexOf(band);
   const pos = ((at + 0.5) / SIGNAL_ORDER.length) * 100;
   const c = SIG[band].color;

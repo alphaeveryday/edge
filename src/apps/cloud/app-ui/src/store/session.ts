@@ -27,7 +27,7 @@ export const useSession = create<SessionState>((set) => ({
   logout: () => { onboarding.save(false); set({ loggedIn: false, onboarded: false }); },
   // 서버의 토큰 거부 시 온보딩 상태를 둔 로그아웃
   expire: () => set({ loggedIn: false }),
-  // 기동 시 온보딩 완료·비회원 면책 동의와 회원 확인 기반 로그인 상태 복원
+  // 기동 시 기기 상태와 회원 확인 기반의 로그인 상태 복원
   restore: async () => {
     const onboarded = await onboarding.done();
     const guestDisclaimed = await guestDisclaimer.done();
@@ -44,7 +44,9 @@ export const useSession = create<SessionState>((set) => ({
   },
 }));
 
-// 비로그인 시 동작 대신 로그인 화면으로 보내는 래퍼. 이유는 로그인 화면의 안내 한 줄, before 는 이동 전 모달 닫기용
+// 비로그인 시 동작 대신 로그인 화면으로 보내는 래퍼
+// reason 은 로그인 화면의 안내 한 줄
+// before 는 이동 전 모달 닫기용
 export const useRequireLogin = () => {
   const loggedIn = useSession((s) => s.loggedIn);
   const router = useRouter();

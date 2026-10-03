@@ -36,7 +36,8 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
   const { data: etf } = useEtf(code);
   const { data: stat } = useVoteStat(code, !!withVote && open);
   const [axisOpen, setAxisOpen] = useState(false);
-  // 다른 화면에 다녀오는 동안 숨김, 돌아오면 애니메이션 없이 다시 표시
+  // 다른 화면에 다녀오는 동안의 숨김
+  // 복귀 시 애니메이션 없는 재표시
   const [away, setAway] = useState(false);
   const awayRef = useRef(false);
   const [instant, setInstant] = useState(false);
@@ -64,7 +65,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
           <View {...drag.handlers} style={styles.head}>
             <View style={styles.handle} />
             <View style={styles.headRow}>
-              {/* ETF 이름을 누르면 상세의 오늘 움직임으로 */}
+              {/* ETF 이름 탭 시 상세의 오늘 움직임으로 이동 */}
               <Pressable disabled={!linkEtf} onPress={() => leave(() => router.push(`/etf/${code}/summary`))} style={styles.headLink}>
                 {etf && <SectorIcon theme={etf.theme} bg={etf.logoBg} size={36} />}
                 <View style={styles.headMid}>

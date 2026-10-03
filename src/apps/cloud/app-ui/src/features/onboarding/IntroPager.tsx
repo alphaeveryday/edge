@@ -19,7 +19,7 @@ interface Props {
   onDone: () => void;
 }
 
-// 온보딩 소개 가로 페이저, 점 표시와 버튼 고정
+// 점 표시와 버튼이 고정된 온보딩 소개 가로 페이저
 export function IntroPager({ pages, onDone }: Props) {
   const { top } = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -33,7 +33,7 @@ export function IntroPager({ pages, onDone }: Props) {
     if (i !== index && i >= 0 && i < pages.length) setIndex(i);
   };
 
-  // Android 뒤로 가기는 이전 장
+  // Android 뒤로 가기의 이전 장 이동
   useFocusEffect(useCallback(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (index === 0) return false;

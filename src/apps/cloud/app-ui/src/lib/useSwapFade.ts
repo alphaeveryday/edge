@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { Animated } from 'react-native';
 
-// 내용 교체의 짧은 흐림·복귀, 새 데이터 대기 중은 흐림 유지
+// 내용 교체의 짧은 흐림과 복귀
+// 새 데이터 대기 중 흐림 유지
 export function useSwapFade(key: string | undefined, waiting: boolean) {
   const op = useRef(new Animated.Value(1)).current;
   const first = useRef(true);

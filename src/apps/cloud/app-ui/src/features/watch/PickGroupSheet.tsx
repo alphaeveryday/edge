@@ -16,7 +16,8 @@ interface Props {
   onClose: () => void;
 }
 
-// ETF 를 어느 관심 그룹에 담을지 고르는 시트, 처음 체크는 고른 ETF 전부가 담긴 그룹
+// ETF 를 어느 관심 그룹에 담을지 고르는 시트
+// 고른 ETF 전부가 담긴 그룹의 초기 체크
 export function PickGroupSheet({ etfs, title, onClose }: Props) {
   const open = etfs.length > 0;
   const { data: groups } = useWatchGroups();

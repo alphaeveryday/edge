@@ -21,7 +21,8 @@ const REASON: Record<string, string> = {
   만료: '로그인이 풀렸어요. 다시 로그인해 주세요',
 };
 
-// 이메일 로그인. 성공 시 원래 화면으로
+// 이메일 로그인
+// 성공 시 원래 화면 복귀
 export default function Login() {
   const router = useRouter();
   const { reason, email: resetEmail } = useLocalSearchParams<{ reason?: string; email?: string }>();

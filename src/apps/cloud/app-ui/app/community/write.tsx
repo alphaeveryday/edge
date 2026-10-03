@@ -25,7 +25,7 @@ export default function CommunityWrite() {
   const create = useCreatePost();
   const toast = useToast((s) => s.show);
   const [draft, setDraft] = useState('');
-  // ETF 화면에서 들어오면 그 ETF 를 미리 태그
+  // ETF 화면에서 진입 시 그 ETF 의 사전 태그
   const [tags, setTags] = useState<string[]>(code ? [code] : []);
   const [picking, setPicking] = useState(false);
   const etfOf = (c: string) => etfs?.find((e) => e.code === c);

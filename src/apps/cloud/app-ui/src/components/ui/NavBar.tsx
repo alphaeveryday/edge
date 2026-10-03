@@ -35,7 +35,7 @@ export function NavBar({ title, backIcon = 'back', onBack, rightIcon, rightBadge
 const styles = StyleSheet.create({
   root: { height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 },
   spacer: { width: 38 },
-  // 좌우 버튼 폭과 무관하게 화면 가운데
+  // 좌우 버튼 폭과 무관한 화면 가운데 정렬
   title: { position: 'absolute', left: 88, right: 88, pointerEvents: 'none', textAlign: 'center', ...type.navTitle, color: colors.text },
   rightLabel: { minWidth: 38, paddingVertical: 8, paddingHorizontal: 6, alignItems: 'flex-end' },
   rightText: { fontFamily: fam.bold, fontSize: 13.5 },

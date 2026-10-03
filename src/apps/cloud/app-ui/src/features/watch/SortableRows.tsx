@@ -120,7 +120,7 @@ function Grip({ index, handlers }: { index: number; handlers: React.MutableRefOb
           if (active) handlers.current.move(g.dy);
           else if (Math.abs(g.dy) > 6) clearTimeout(timer);
         },
-        // 길게 누르기 전에는 스크롤에 양보
+        // 길게 누르기 전의 스크롤 양보
         onPanResponderTerminationRequest: () => !active,
         onPanResponderRelease: stop,
         onPanResponderTerminate: stop,

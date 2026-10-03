@@ -10,7 +10,8 @@ const W = 354, H = 262, PLOT_W = 296;
 const MA20 = colors.chartMa20;
 const TICKS = 5;
 
-// 축 라벨은 등간격 최대 5개, 양 끝은 안쪽으로
+// 등간격 최대 5개의 축 라벨
+// 양 끝 라벨의 안쪽 배치
 function ticks(n: number) {
   if (n <= TICKS) return Array.from({ length: n }, (_, i) => i);
   return Array.from({ length: TICKS }, (_, k) => Math.round(((n - 1) * (k + 0.5)) / TICKS));
@@ -21,7 +22,8 @@ export interface Plot {
   y: (v: number) => number;
 }
 
-// 범례·격자·축·이동평균선. 본체(캔들·선)는 children 이 그림
+// 이동평균선을 포함한 차트 틀
+// 캔들과 선 본체는 children 소관
 export function ChartFrame({ data, name, price, changePct, lo, hi, children }: {
   data: ChartData; name: string; price: number; changePct: number; lo: number; hi: number; children: (p: Plot) => ReactNode;
 }) {

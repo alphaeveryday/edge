@@ -2,7 +2,8 @@ import { useInfiniteQuery, type QueryKey } from '@tanstack/react-query';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import type { Page } from '@/api';
 
-// 커서 목록의 이어 받기, data 는 펼친 배열
+// 커서 목록의 이어 받기
+// 펼친 배열 형태의 data
 export function usePages<T>(queryKey: QueryKey, fetch: (cursor?: string) => Promise<Page<T>>) {
   return useInfiniteQuery({
     queryKey,
