@@ -59,11 +59,21 @@ def task_history(workflows, execution_arn):
 
 
 def running_for_key(ecs, cluster, family, request_key):
-    """Return true when any running worker task carries the same kind and ETF in its request."""
-    arns = [arn for page in ecs.get_paginator('list_tasks').paginate(
-        cluster=cluster, family=family, desiredStatus='RUNNING') for arn in page['taskArns']]
+    """Return true unless ECS shows no unstopped worker task with the same kind and ETF.
+
+    StopTask flips desiredStatus to STOPPED while the container still runs, so both listings are read
+    and lastStatus decides. A task ECS listed but would not describe counts as possibly running.
+    """
+    arns = sorted({arn for status in ('RUNNING', 'STOPPED') for page in ecs.get_paginator('list_tasks').paginate(
+        cluster=cluster, family=family, desiredStatus=status) for arn in page['taskArns']})
     for start in range(0, len(arns), 100):
-        for task in ecs.describe_tasks(cluster=cluster, tasks=arns[start:start+100])['tasks']:
+        batch = arns[start:start+100]
+        response = ecs.describe_tasks(cluster=cluster, tasks=batch)
+        if response.get('failures') or len(response.get('tasks', [])) != len(batch):
+            return True
+        for task in response['tasks']:
+            if task.get('lastStatus') == 'STOPPED':
+                continue
             for container in task.get('overrides', {}).get('containerOverrides', []):
                 for variable in container.get('environment', []):
                     if variable.get('name') != 'ANALYSIS_REQUEST':

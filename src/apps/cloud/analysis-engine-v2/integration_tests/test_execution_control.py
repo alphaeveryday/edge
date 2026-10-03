@@ -221,3 +221,21 @@ def test_concurrent_acquires_and_reclaim_keep_the_cap_and_one_per_etf(capacity):
         acquired = sum(pool.map(acquire, range(len(keys))))
     rows = conn.execute('SELECT execution_arn, request_key FROM analysis_execution_slots').fetchall()
     assert acquired == 1 and len(rows) == 3 and len({key for _, key in rows}) == 3 and 'done' not in {arn for arn, _ in rows}
+
+
+def test_unrecorded_task_stays_held_when_ecs_cannot_describe_or_is_still_stopping_it(capacity):
+    conn, _, workflows, ecs = capacity
+    leftover(conn, workflows, _run_task('TaskScheduled', NOW - timedelta(minutes=20)))
+    ask = lambda: control(conn, workflows, ecs, 'cluster', 'new', 'acquire', slots=3, request_key='outlook:069500',
+                          family='edge-dev-analysis-v2', now=NOW)
+    ecs.get_paginator.return_value.paginate.return_value = [{'taskArns': ['live']}]
+    ecs.describe_tasks.return_value = {'tasks': [], 'failures': [{'arn': 'live', 'reason': 'ACCESS_DENIED'}]}
+    assert ask()['held'][0]['reason'] == 'task-unrecorded-running'
+    # StopTask was sent (desiredStatus STOPPED) but the container is still running: only the STOPPED listing has it.
+    listings = {'RUNNING': [{'taskArns': []}], 'STOPPED': [{'taskArns': ['live']}]}
+    ecs.get_paginator.return_value.paginate.side_effect = lambda **kwargs: listings[kwargs['desiredStatus']]
+    stopping = worker_task('outlook:069500') | {'desiredStatus': 'STOPPED', 'lastStatus': 'DEACTIVATING'}
+    ecs.describe_tasks.return_value = {'tasks': [stopping], 'failures': []}
+    assert ask()['held'][0]['reason'] == 'task-unrecorded-running'
+    ecs.describe_tasks.return_value = {'tasks': [stopping | {'lastStatus': 'STOPPED'}], 'failures': []}
+    assert ask()['acquired']
