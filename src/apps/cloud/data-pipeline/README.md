@@ -63,8 +63,12 @@
 > ⚠️ **TR 이 둘이다**(ALPHA-846): 세션 날짜가 지난 거래일이면 소급 TR `FHKST03010230`
 > (`KisHistoricalMinuteClient`)로 간다 — 당일 TR 에는 날짜 축이 없어 과거 세션에 물리면
 > 오늘 봉이 오늘 라벨로 돌아와 전 window 가 missing 이 된다. 설정 노브가 아니라 벤더
-> 사실이라 **날짜에서 유도**한다. 소급 TR 은 무거래 분 행을 주지 않아 어댑터가 직전 종가
-> flat 으로 채우고, 응답이 거래일 경계를 넘으므로 `stck_bsop_date` 로 자른다),
+> 사실이라 **날짜에서 유도**한다. 소급 TR 은 무거래 분 행을 주지 않는다 — 행이 없는 분은
+> 무거래인지 누락인지 응답만으로 가를 수 없어 **결손(missing)** 으로 남긴다 — 예외 없이 벤더가
+> 준 행만 싣는다(ALPHA-1153). 종가 단일가 접수 구간(15:20~15:29)도 행이 없으면 결손이고, 15:29
+> 창은 15:30 단일가 봉만으로 만든다. 당일 TR 경로(실시간 레인)는 이와 무관하다 — 벤더가 무거래
+> 분도 flat 행으로 준다.
+> 응답이 거래일 경계를 넘으므로 `stck_bsop_date` 로 자른다),
 > BigKinds adaptive overlap 컨트롤러+source item 관측 원장(anchor frontier·identity
 > 격자 승격, ALPHA-668), News Worker loop(관측 전량 원장 판정→기사별 job, anchor 이중
 > 보존·recovery, poll 원본/판정 기록 보존, ALPHA-669 — feed 주입식, BigKinds HTTP
@@ -93,7 +97,8 @@
 > 실었다가 15:31:00 에 0 자리표시로 리셋하고 세션 stop 전까지 확정 층으로 주지 않는다
 > (09-30 실측). 그래서 **실시간 15:29 창은 접수 구간 봉(vol 0·단일가 전 가격) 그대로**이고,
 > 단일가는 마감 뒤 재수집(소급 TR)이 `kis_minute.fold_closing_auction` 으로 15:29 창에
-> 접어 정본으로 덮는다 — 그 재수집 배선이 ALPHA-1128 의 남은 일이다. 접수 구간(15:20~
+> 접어 정본으로 덮는다 — 그 재수집 배선이 ALPHA-1128 의 남은 일이다(소급 TR 은 접수 구간
+> 행을 주지 않아(10-02 원문) 재수집 15:29 창은 단일가 봉만이다, ALPHA-1153). 접수 구간(15:20~
 > 15:29) 창은 체결이 없어 `vol 0` 이 맞다. 옛 규칙(ALPHA-763·773: 열 창을 통째로 15:31 로)은
 > "벤더가 직전 봉을 거래량째 복제한다"(08-05 실측)를 벤더 결함으로 읽은 것이었다 — 실제는
 > 요청 라벨 행 = 형성 중 봉이라는 응답 형상이었고, 창 끝을 라벨로 묻던 옛 수집기만 그 행을
@@ -722,8 +727,20 @@ uv run --package data-pipeline python -m data_pipeline.run ingest-raw-sector --r
 uv run --package data-pipeline python -m data_pipeline.run load-financial-metric --all
 ```
 
-> **thread 재계산(ALPHA-457 등 thread_key 산식 변경 시)** — `thread_id = f(thread_key)` 라
-> thread_key 산식을 바꾸면 기존 `thread_id`·`thread_key` 가 전부 갈린다. 그런데 재실행은
+> **사건 참여자와 이력 보존** — 사건의 Equity 참여자는 저장 시 발행 Actor로 변환한다.
+> 문서의 종목 매칭과 source_event ID는 유지한다. 기존 데이터는
+> `V202610030010__event_participants_reference_issuers.sql`로 참여 대상과 thread_key만
+> 바꾸며, 참여·사건·thread ID와 이력 참조는 보존한다. 아래 삭제 절차는 이 전환에 적용하지 않는다.
+> threading은 기존 키의 thread ID를 조회해 재사용하고, 처음 보는 키에만 ID를 생성한다.
+> 전환 시 모든 사건 writer와 재가동 스케줄을 멈추고 백업·충돌 검사를 마친 뒤,
+> 호환 코드와 마이그레이션을 모두 적용하고 쓰기를 재개한다. 두 배포 워크플로의 실행 순서는
+> 자동으로 보장되지 않는다. 전환 후 Equity 참여자를 쓰는 구버전 writer는 DB가 거부한다.
+> 이번 전환의 분석 조회 지원 범위는 v2다. 종목 ID를 사건 참여 ID와 직접 비교하는
+> 구형 v1 조회는 호환되지 않으므로 배포 후 검증·재가동 대상으로 사용하지 않는다.
+
+> **thread 전체 재계산(ALPHA-457 등 이력을 재생성하기로 한 경우에만)** — 새 thread의
+> ID는 키로 생성하지만, 이미 존재하는 thread는 키를 변경해도 ID를 보존할 수 있다.
+> 단순 재실행은
 > **미연결(event_thread_link 없는) 이벤트만** threading 하므로(`fetch_unthreaded_events`),
 > 그냥 다시 돌리면 옛 키의 링크가 남아 재계산되지 않는다. 세 계보 테이블을 비우고 창으로
 > 재실행한다(dev 는 누적 행이 적어 전량 재계산이 싸다 — source_event/assertion 은 결정적
@@ -1221,6 +1238,44 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
   시작하지 않는다. 이 스크립트는 예산 밖에서 호출하기 때문이다. 다만 이 가드가 완전한 차단은 아니며,
   1차 통제는 운영 절차다.
 
+### KIS 호출 계측 — 분 가격 창 요약 로그 (ALPHA-1124)
+
+분 가격 워커는 창 하나를 수집할 때마다 요약 한 줄을 남긴다(`data_pipeline.minute.kis_collector`, INFO).
+수집이 예외로 끝난 창도 `status=RAISED` 로 남긴다.
+
+```
+kis.http.window caller=minute-price window=2026-10-02T05:32:00+00:00 status=VALID units=451 elapsed_ms=71200 attempts=463 rtt_ms=58300 rtt_max_ms=1900 pace_wait_ms=4100 transport_retry=1 transport_backoff_ms=1000 kis_EGW00201=12 rate_sleep_ms=8400 rate_exhausted=0 err_http_502=1
+```
+(값은 형식 예시다 — 실측이 아니다.)
+
+| 항목 | 뜻 |
+|---|---|
+| `attempts` | 실제 HTTP 발신 횟수. 토큰 발급과 재시도를 포함한다(성공 건수와 다르다) |
+| `rtt_ms` / `rtt_max_ms` | 발신부터 응답 본문 수신까지의 합계·최대. **KIS 응답 지연**은 여기에 쌓인다 |
+| `pace_wait_ms` | 발신 간격(또는 공유 호출 예산)을 기다린 시간 |
+| `kis_<코드>` | 거절 응답(`rt_cd≠0`)의 `msg_cd` 별 건수. 재시도로 끝내 성공해도 센다. 코드 형상이 아니면 `kis_OTHER` |
+| `rate_sleep_ms` | `EGW00201` 뒤 물러난 시간의 합. **유량 제한**은 `kis_EGW00201` 과 여기에 쌓인다 |
+| `rate_exhausted` | `EGW00201` 재시도 예산(5회)을 다 쓴 종목 수 |
+| `transport_retry` / `transport_backoff_ms` | 5xx·네트워크 실패 재시도 횟수와 그 대기 |
+| `err_<종류>` | 발신 실패 종류별 건수 — `err_http_503`, `err_TimeoutError` 등(상태코드·예외 클래스명) |
+
+- 읽는 법: 동시 요청 1(기본)에서 `elapsed_ms ≈ rtt_ms + pace_wait_ms + rate_sleep_ms + transport_backoff_ms` 다.
+  어느 항이 늘었는지가 원인을 가른다. 동시 요청이 켜지면 합계가 겹쳐 `elapsed_ms` 보다 커진다.
+- `attempts` 부터 `rate_exhausted` 까지 아홉 항목은 0 이어도 **이 순서로** 싣는다. 그 밖의 `kis_`·`err_`
+  항목은 발생했을 때만 뒤에 붙는다. 이 로그가 배포되기 전 기간은 "발생 0회"가 아니라 "미관측"으로 읽는다.
+- 앱키·시크릿·토큰·URL·응답 본문·종목 코드는 싣지 않는다. 종목별 상세는 원장 `missing_units` 를 쓴다.
+- 조회(CloudWatch Logs Insights, 분 가격 워커 로그 그룹):
+  ```
+  filter @message like "kis.http.window caller=minute-price"
+  | parse @message /elapsed_ms=(?<elapsed>\d+) attempts=(?<attempts>\d+) rtt_ms=(?<rtt>\d+) rtt_max_ms=(?<rtt_max>\d+) pace_wait_ms=(?<pace>\d+) transport_retry=(?<t_retry>\d+) transport_backoff_ms=(?<t_backoff>\d+) kis_EGW00201=(?<egw>\d+) rate_sleep_ms=(?<rate_sleep>\d+) rate_exhausted=(?<exhausted>\d+)/
+  | stats count() as windows, pct(elapsed, 50) as elapsed_p50, sum(attempts) as sends, sum(egw) as egw00201,
+          sum(rate_sleep) as rate_sleep_ms, sum(pace) as pace_wait_ms, sum(t_retry) as transport_retry,
+          sum(rtt) / sum(attempts) as rtt_avg_ms, max(rtt_max) as rtt_max_ms by bin(30m)
+  ```
+- 범위: 운반 계층(`PoliteClient.stats`) 계측은 모든 호출자에 들어 있지만, **요약 로그를 내는 것은 분 가격
+  워커뿐**이다. 나머지 KIS 어댑터(iNAV·업종지수·일봉·수급·ETF 프로파일)의 거절 코드 집계와 토큰 발급
+  카운터는 아직 없다(ALPHA-1124 남은 범위).
+
 ## 레이크 저장 계약
 
 ### Minute 내용 주소 후보·확정·소비 계약 (ALPHA-1060)
@@ -1486,7 +1541,10 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   비KR 은 최신 fetched_at 이 이긴다. **벤더 교차 같은 키 충돌은
   fail-loud**(둘 다 제외 + quality_log·비0 종료 — USD 를 KRW 로 태깅하는 통화 오염 방지). 통화는
   market 별 태깅만 하고 FX 환산하지 않는다. `load-price-daily` 마트는 값이 바뀌거나 `available_at` 이
-  앞당겨질 때만 갱신한다(수급 적재와 같은 규약).
+  앞당겨질 때만 갱신한다(수급 적재와 같은 규약). 종가·수정종가·거래량과 함께 시가·고가·저가도
+  싣는다(ALPHA-1148) — 시·고·저가 비어 있던 행을 채우기만 하는 갱신은 `available_at` 을 뒤로
+  밀지 않고, 채워진 뒤의 정정은 값과 시각을 함께 옮긴다. 다른 적재기가 `price_basis` 를 채운
+  행을 덮을 때는 그 값도 비운다.
 - **canonical(뉴스, 정제 Step2)** — `canonical/news/news_articles/language={ko|en}/published_date=…/part-*.parquet`
   에 게이트 통과 행을 **article_id 키로 멱등 병합**. **정체성 `article_id = url_hash(원문 URL)`**
   (FMP `url`/BigKinds `PROVIDER_LINK_PAGE`)은 **소스 무관**이라 canonical 이 소스를 흡수한 **통합
@@ -1673,6 +1731,52 @@ py -m data_pipeline.backfill.run verify   --bucket edge-dev-pipeline-lake --draf
 "언제 처음 공개됐나"는 근사할 수 있지만, 사후 정정된 값을 그 시점 값으로 쓰면 조용히 미래를
 본다. 진짜 PIT 는 `list.json`(정정 열거) + `document.xml`(rcept_no 원본) 파싱이 필요하고
 별 `source` 로 추가할 자리다(후속).
+
+### DataGuide 일봉 → `price_daily` 일회성 적재 (ALPHA-1148)
+
+DB `price_daily` 의 과거 이력을 레이크 임시 존의 DataGuide 일봉 스냅샷
+(`draft/curated/source=dataguide/dataset=price_daily/market=KR/as_of_date=…/item=…/*.csv.gz`)에서
+한 번 싣는 스텝이다. 스냅샷은 갱신 담당이 없어 canonical 로 올리지 않고(ADR-0057 §5) DB 로 바로
+싣는다. 종목 마스터(`instrument`)에 있는 종목의 열만 읽는다.
+
+```bash
+# 분류만 센다(쓰기 없음) — 실제 적재 전에 먼저 돌려 created·replaced_5min·kept_existing 을 본다.
+python -m data_pipeline.run backfill-price-daily-dataguide --run-id dataguide-price-dry \
+  --as-of-date 2026-08-02 --from 2006-10-01 --to 2026-07-31 --dry-run
+# 실제 적재. 50거래일 묶음마다 커밋하고, 같은 인자로 다시 돌리면 같은 결과다(멱등).
+python -m data_pipeline.run backfill-price-daily-dataguide --run-id dataguide-price-20261002 \
+  --as-of-date 2026-08-02 --from 2006-10-01 --to 2026-07-31
+```
+
+`--as-of-date`·`--from`·`--to` 는 기본값이 없다. DB 접속은 다른 적재 스텝과 같은
+`DATA_PIPELINE_DB__*` 를 쓴다(배포 환경에서는 `rds` task-def).
+
+| 기존 행 | 처리 |
+|---|---|
+| 없음 | 삽입 |
+| `data_version` 이 `fmp_5min` 으로 시작(5분봉 집산) | 교체하고 `simple_return`·`log_return` 을 비운다. 교체 전 행은 `operations_archive/replaced_rows/dataset=price_daily_dataguide_backfill/run_id=…/` 에 먼저 남긴다 |
+| 이 스텝이 넣은 행 | 같은 값으로 다시 쓴다 |
+| 그 밖(KIS 일일 적재분) | 건드리지 않는다 |
+
+- 넣는 값: 시가·고가·저가·종가(원주가), 수정주가, 거래량. `available_at` 은 거래일 15:30 KST 다.
+  `--as-of-date 2026-08-02` 면 `data_version=dataguide-20260802`(하이픈 없는 YYYYMMDD),
+  `price_basis=raw_close;adj_asof=2026-08-02` 다.
+- **수정주가는 스냅샷 기준이다.** 스냅샷 뒤에 분할·권리락이 생기면 낡는다. KIS 일일 적재 행에는
+  수정주가가 없다.
+- **`available_at` 은 실제 입수 시각이 아니다.** 과거 시점 재현에 이 행을 쓰면 그 시점에 이미
+  알던 값으로 보인다.
+- 여섯 항목 파일의 열 구성·날짜 행·행별 열 수가 하나라도 다르거나 머리행에 같은 열이 두 번
+  있으면 한 행도 싣지 않는다. 실을 행이 하나도 없어도 실패로 끝난다(기간 밖·마스터와 맞는 열 0).
+  값이 컬럼 형(NUMERIC(24,8)·BIGINT)에 그대로 들어가지 않는 칸은 격리하고 exit 2 로 끝난다.
+- 결과는 `operations_archive/data_quality_logs/dataset=price_daily_dataguide_backfill/` 에 남는다.
+- 되돌리기: 삽입한 행은 `DELETE FROM price_daily WHERE data_version = 'dataguide-20260802'`
+  (위 `data_version` 그대로)로 지우고, 교체된 5분봉 집산 행은 위 보존본에서 복원한다(복원
+  스크립트는 없다).
+- dev 실행(2026-10-02 18:07~18:20 KST, `run_id=dataguide-price-20261002`): 마스터 2,804종목 중
+  2,688종목·4,888거래일·8,690,491행을 읽어 8,467,064행 삽입, 5분봉 집산 123,230행 교체, KIS
+  100,197행 유지, 격리 0. 12분 45초 걸렸고 적재 뒤 `price_daily` 는 8,707,934행·약 2.4GB 다.
+  적재 전 로컬 리허설에서 겹치는 100,197행의 시가·고가·저가·종가가 KIS canonical 과 전부
+  같음을 확인했다. 교체 전 행 123,230건은 보존본 14개 파일에 남아 있다.
 
 ## 운영 원장 — expected_task·Planner·Reconciler (ALPHA-530)
 
@@ -2174,7 +2278,9 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #  3) 마감 창(15:29)의 값이 **당일 레인과 다르다**. 소급 경로는 종가 단일가 봉(KIS 라벨
 #     15:30)을 그 창에 접어(`kis_minute.fold_closing_auction`) 종가 = 공식 종가지만, 당일
 #     레인은 그 봉을 세션 안에서 못 받아 접수 구간 봉(vol 0·단일가 전 가격) 그대로다
-#     (ALPHA-1127·1128). 재수집한 하루가 정본이다.
+#     (ALPHA-1127·1128). 재수집한 하루가 정본이다. 소급 TR 은 접수 구간(15:20~15:29) 행을
+#     주지 않으므로(10-02 원문 3종목 — 거래소 규칙상 그 구간은 체결이 없다) 소급 15:29 창은 단일가 봉만(시가=고가=저가=종가=단일가)이고 15:20~15:28
+#     창은 전 종목 결손이다(ALPHA-1153 — 채우지 않는다).
 #
 # 확정된 세션 재수집(ALPHA-1135) — 이미 FINALIZED 인 가격 세션이 틀린 봉으로 봉인됐을 때
 # (ALPHA-1127: 08-04~09-29). 위 1) 의 "prefix 가 비어 있어야" 는 **새 세션** 얘기다 — 같은
@@ -2200,6 +2306,39 @@ KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
 #      거부되고 그게 맞다).
 #   ⚠️ ④ 전에 drain 이 걸려도 옛 확정분은 안 잃는다 — QC 는 재오픈 뒤 못 받은 창(generation
 #      ≥ 1 인 DUE)을 MISSING 으로 접지 않고 세션을 FAILED 로 세운다. 그때는 ②부터 다시.
+#   ⚠️ 소급 재수집은 저유동 종목의 무거래 분을 **결손**으로 남긴다(ALPHA-1153 — 소급 TR 이 그 분의 행을
+#      주지 않고 어댑터가 채우지 않는다). 당일 수집분 기준 정규장 창당 무거래 종목은 10~71개(10-02, 451종)라
+#      재수집한 창은 대부분 INCOMPLETE 로 커밋된다 — 당일 레인의 VALID(무거래 종목은 벤더 flat 행)와 다르다.
+#      접수 구간 15:20~15:28 창은 **전 종목 결손**(INCOMPLETE)이고 15:29 창은 단일가 봉만이다 — 당일 레인의
+#      VALID_EMPTY(벤더 flat 행)와 다르다.
+#
+# 미수집(MISSING) 창 회수(ALPHA-1153) — 한 번도 커밋 안 된 창(generation 0)을 `--windows` 로 지목해
+# 같은 순서로 받는다. 이 순서 전체가 `tests/e2e/test_minute_missing_window_recovery.py` 에 있다.
+# 위와 다른 점:
+#   - **벤더가 준 행만 싣는다.** 소급 TR 은 무거래 분의 행을 주지 않고, 어댑터는 그 분을 채우지 않는다
+#     (종가 단일가 접수 구간 15:20~15:29 도 예외 없다 — 그 구간을 열면 15:20~15:28 은 전 종목 결손,
+#     15:29 는 단일가 봉만이다). 그래서 대상 분에 행이 없는 종목은
+#     그 창에서 **결손**(manifest `missing`, 원장 `missing_units`)이 되고, 결손이 기대 종목의 1%·3종을
+#     넘으면 창은 INCOMPLETE 로 커밋된다 — 저유동 종목이 많으면 회수 뒤에도 INCOMPLETE 가 남는 것이
+#     정상이다. 그 창은 나중에 근거가 생기면 같은 `--windows` 로 다시 열어 다음 generation 으로 덮는다.
+#     사후 판정은 "MISSING 0" 이 아니라 창마다 성공·결손 종목 수로 한다.
+#   - ② 전에 `scripts/probe_historical_minute.py` 로 대형주 몇 종의 대상 분에 체결 행이 있는지 본다
+#     (exit 1 이면 열지 않는다) — 벤더가 그 분을 통째로 안 주는 날인지 미리 안다. 15:29 는 회수처럼
+#     15:30 단일가를 접어 본다. 15:20~15:28 은 소급 TR 이 행을 주지 않아(10-02 원문 3종목) exit 1 이 된다
+#     — 그 창을 열면 전 종목 결손으로 커밋된다.
+#   - ⚠️ 5분 파생은 종목 결손을 표시하지 않는다 — 롤업은 커밋된 창의 있는 봉만 모으고 출력(ticker·ts·
+#     OHLCV)에 분 수가 없어, 결손 분이 있는 종목의 5분봉이 온전한 봉과 구분되지 않는다. 접수 구간
+#     창(15:20~15:29)까지 다시 받으면(확정 세션 재수집처럼 전부 열 때) 15:20 버킷은 행이 없고 15:25
+#     버킷은 15:29 창의 단일가 봉 하나로 만들어진다(시가=종가=단일가). 결손 정보의 정본은 1분 창의
+#     manifest·원장이다.
+#   - 멈추는 길: 연 뒤 못 받았으면 ⑤(Worker 가 ack) → ⑥. generation 0 인 창은 다시 MISSING 이 되고
+#     나머지 창과 `final_checksum` 은 열기 전과 같다. Worker 가 창을 집었다 실패했으면 그 claim 의
+#     lease(300초)가 끝난 뒤에야 ack 된다.
+#   - 발행 event 가 없으므로 가격 판정 기록(`minute_price_judgment`)의 그 창들은 빈 채로 남는다 —
+#     봉 회수와 판정 공백은 별개다.
+#   - KIS 콜은 창 수와 무관하게 종목 수 × 페이지(종목당 1~4, 상한 8)다. 하루치를 받은 뒤에도
+#     창당 약 25초가 든다(09-29 시험 실측, 451종 — 수집은 0.2초였다. 커밋 뒤 그날 5분 파생을
+#     다시 쓰는 시간으로 추정).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run reopen-minute-session --session-id <session_id> \
     --reason "ALPHA-1135 라벨 오독 재수집"
@@ -2260,6 +2399,10 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 대사가 최대 60 poll 안에 회수한다. collection log와 window manifest의 observation_scope가
 # full/incremental/state-changed fallback을 구분한다. 대상 본문·두 canonical
 # manifest·load pending 내구화 전 실패는 커서를 전진시키지 않고 다음 window가 재시도한다.
+# 다시 읽어도 결과가 같은 문서 단위 거부(정제의 본문 내용 판정·조립의 계약 대상 결손 —
+# `_CONFIRMED_REJECT_REASONS`)는 커서를 막지 않는다(ALPHA-1154). 그 window 는 INCOMPLETE 로
+# 남고 manifest 의 rejected_documents 에 접수번호·단계·사유·원문 위치가 남는다 — 커서 전진은
+# 전건 처리 완료가 아니다. 재처리는 backfill-normalize-disclosure --from/--to(정제→적재→조립).
 # ⚠️ 페이지 예산은 이 워커의 소스 `max_pages` 로 **주입**된다 — 벤더 섹션의 500(백필용)이
 # 그대로면 lease 검증이 실제보다 짧은 tick 을 통과시킨다.
 # 질의 날짜창은 **세션 날짜(KST)** 에서 나온다: 매 tick 당일, 세션 첫 tick 만 D-1 포함

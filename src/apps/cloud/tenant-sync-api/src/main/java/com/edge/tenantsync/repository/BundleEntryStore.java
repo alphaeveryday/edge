@@ -33,9 +33,11 @@ import java.util.stream.Collectors;
 public class BundleEntryStore {
 
 	private final TenantDeliveryRepository repository;
+	private final MovementDeliveryStore movements;
 
-	public BundleEntryStore(TenantDeliveryRepository repository) {
+	public BundleEntryStore(TenantDeliveryRepository repository, MovementDeliveryStore movements) {
 		this.repository = repository;
+		this.movements = movements;
 	}
 
 	public List<BundleEntry> findAfter(long tenantId, long afterCursor, int limit) {
@@ -44,8 +46,11 @@ public class BundleEntryStore {
 		Map<String, List<SourceEventItem>> sourceEventsByRun = sourceEventsByRun(runIds);
 		Map<String, List<EvidenceItem>> evidencesByRun = evidencesByRun(runIds);
 		Map<String, Instant> contentAsOfById = contentAsOfById(rows);
+		Map<String, MovementDeliveryStore.Content> movementContent = movements.read(rows.stream()
+				.map(DeliveryRow::movementAnalysisId).filter(Objects::nonNull).collect(Collectors.toSet()));
 		return rows.stream()
-				.map(row -> toEntry(row,
+				.map(row -> row.movementAnalysisId() != null
+						? movementContent.get(row.movementAnalysisId()).entry(row.cursor()) : toEntry(row,
 						row.explanationRunId() == null ? List.of()
 								: sourceEventsByRun.getOrDefault(row.explanationRunId(), List.of()),
 						row.explanationRunId() == null ? List.of()

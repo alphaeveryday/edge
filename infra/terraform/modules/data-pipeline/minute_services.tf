@@ -758,7 +758,7 @@ resource "aws_ecs_task_definition" "analysis_consumer" {
 resource "aws_ecs_service" "analysis_consumer" {
   name            = "${var.name}-analysis-consumer"
   cluster         = var.cluster_arn
-  task_definition = aws_ecs_task_definition.analysis_consumer.arn
+  task_definition = coalesce(var.analysis_consumer_task_definition_arn, aws_ecs_task_definition.analysis_consumer.arn)
   desired_count   = 0
   launch_type     = "FARGATE"
 
@@ -774,7 +774,8 @@ resource "aws_ecs_service" "analysis_consumer" {
     # (`analysis_autoscaling.tf`). 세션은 이 서비스를 올리지도 내리지도 않는다.
     # 그래서 이 `ignore_changes` 는 그때보다 지금 **더** 필요하다 — 없으면 apply 마다
     # 스케일러가 정한 대수를 terraform 이 0 으로 되돌린다.
-    ignore_changes = [desired_count]
+    # Image revisions belong to application CD; Terraform must not restore the v1 revision.
+    ignore_changes = [desired_count, task_definition]
   }
 }
 

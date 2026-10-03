@@ -17,6 +17,13 @@ public record DeliveryEntry(long cursor, String deliveryType, ExplanationResult 
 	public record ExplanationResult(String explanationResultId, String etfInstrumentId, String etfTicker,
 			String etfName, LocalDate tradeDate, OffsetDateTime explanationAsOf, String explanationType,
 			String summary, String headline, String confidenceLevel, String primaryThreadId,
-			OffsetDateTime contentAsOf) {
+			OffsetDateTime contentAsOf, String analysisEngine) {
+		public ExplanationResult(String explanationResultId, String etfInstrumentId, String etfTicker,
+				String etfName, LocalDate tradeDate, OffsetDateTime explanationAsOf, String explanationType,
+				String summary, String headline, String confidenceLevel, String primaryThreadId,
+				OffsetDateTime contentAsOf) {
+			this(explanationResultId, etfInstrumentId, etfTicker, etfName, tradeDate, explanationAsOf,
+					explanationType, summary, headline, confidenceLevel, primaryThreadId, contentAsOf, "v1");
+		}
 	}
 }

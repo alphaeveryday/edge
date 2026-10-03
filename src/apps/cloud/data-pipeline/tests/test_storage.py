@@ -9,6 +9,8 @@ from data_pipeline.lake import (
     LocalStorage,
     S3Storage,
     canonical_etf_holdings_partition,
+    draft_dataguide_price_item_prefix,
+    replaced_rows_snapshot_key,
     canonical_run_manifest_key,
     feature_run_manifest_key,
     run_manifest_consumed_key,
@@ -162,6 +164,28 @@ def test_canonical_etf_holdings_partition_is_market_as_of_keyed():
     assert (
         canonical_etf_holdings_partition("KR", "2026-07-14")
         == "canonical/holdings/etf_holdings/market=KR/as_of_date=2026-07-14"
+    )
+
+
+def test_draft_dataguide_price_item_prefix_matches_the_existing_snapshot_layout():
+    # WHY: 이 경로는 우리가 정하는 규약이 아니라 **이미 레이크에 놓인 스냅샷의 위치**다
+    #      (2026-08-02 적재분). 빌더가 한 글자라도 다르면 항목 파일을 0개로 읽고 적재가 멈춘다.
+    assert (
+        draft_dataguide_price_item_prefix("KR", "2026-08-02", "S41000060F")
+        == "draft/curated/source=dataguide/dataset=price_daily/market=KR"
+           "/as_of_date=2026-08-02/item=S41000060F"
+    )
+
+
+def test_replaced_rows_snapshot_key_is_content_addressed():
+    # WHY: 덮어쓴 DB 행의 보존본은 되돌릴 유일한 근거다. 키가 묶음 번호면 같은 run_id 로 범위를
+    #      바꿔 재실행할 때 앞 실행의 보존본을 덮는다 — 내용이 다르면 키가 달라야 한다.
+    first = replaced_rows_snapshot_key("price_daily_dataguide_backfill", "R1", "a" * 64)
+    second = replaced_rows_snapshot_key("price_daily_dataguide_backfill", "R1", "b" * 64)
+    assert first != second
+    assert first == (
+        "operations_archive/replaced_rows/dataset=price_daily_dataguide_backfill"
+        f"/run_id=R1/sha256={'a' * 64}.ndjson.gz"
     )
 
 

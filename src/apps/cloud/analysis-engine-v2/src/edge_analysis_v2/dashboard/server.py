@@ -18,6 +18,7 @@ from edge_analysis_v2.dashboard.views.analysis import render_screen
 from edge_analysis_v2.contracts.audit import read_contract_audit, render_contract_audit, unchecked_report
 from edge_analysis_v2.dashboard.views.observation import render_observation
 from edge_analysis_v2.prompts.versions import PromptVersions, PromptConflict, parse_prompt
+from edge_analysis_v2.agent.skill_session import SKILLS, SOURCE
 
 
 def read_cloud(ca_path: Path, kind: str | None = None, analysis_id: str | None = None):
@@ -233,8 +234,17 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                     return
                 if path == '/api/analyses':
                     return self.reply(200, reader())
+                if path == '/api/instructions':
+                    documents = [('AGENTS.md', SOURCE.parent/'agent/workspace/AGENTS.md', '매 실행의 시스템 프롬프트에 추가되는 공통 지침')]
+                    documents += [(name, SOURCE/name/'SKILL.md', '필요할 때 선택해서 읽는 스킬') for name in SKILLS]
+                    return self.reply(200, {'documents':[
+                        {'id':name, 'source':str(source), 'usage':usage,
+                         'content':source.read_text(encoding='utf-8')}
+                        for name,source,usage in documents]})
                 if path == '/api/execution':
                     return self.reply(200, {'enabled':execution is not None,
+                        'prompts_enabled':prompt_versions is not None,
+                        'prompts_read_only':execution is None,
                         'csrf_token':execution.csrf_token if execution else None,
                         'scenarios':[{'id':name,'label':label,'movement_at':scenario_cutoff('movement',name),
                                       'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()]})

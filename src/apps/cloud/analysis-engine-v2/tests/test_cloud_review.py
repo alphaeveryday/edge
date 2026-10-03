@@ -178,6 +178,41 @@ def test_observation_uses_persisted_job_without_requiring_database():
     reader.assert_not_called()
 
 
+def test_instruction_library_exposes_complete_worker_documents_only():
+    from edge_analysis_v2.agent.skill_session import SKILLS, SOURCE
+    with server(Mock()) as port:
+        code, body = request(port, '/api/instructions')
+        assert code == 200
+        documents = json.loads(body)['documents']
+        assert {d['id'] for d in documents} == {'AGENTS.md', *SKILLS}
+        for name in SKILLS:
+            record = next(d for d in documents if d['id'] == name)
+            assert record['content'] == (SOURCE/name/'SKILL.md').read_text(encoding='utf-8')
+            assert record['usage'] == '필요할 때 선택해서 읽는 스킬'
+        agents = next(d for d in documents if d['id'] == 'AGENTS.md')
+        assert agents['content'] == (SOURCE.parent/'agent/workspace/AGENTS.md').read_text(encoding='utf-8')
+        assert request(port, '/api/instructions/../../secrets')[0] == 404
+
+
+def test_prompt_comparison_is_available_without_analysis_execution(tmp_path):
+    from edge_analysis_v2.prompts.versions import PromptVersions
+    sources = tmp_path/'prompts'
+    sources.mkdir()
+    path = sources/'outlook.yaml'
+    path.write_text('system_prompt: original', encoding='utf-8')
+    prompts = PromptVersions(sources, tmp_path/'history')
+    old = prompts.read('outlook')
+    path.write_text('system_prompt: changed', encoding='utf-8')
+    with server(Mock(), prompt_versions=prompts) as port:
+        config = json.loads(request(port, '/api/execution')[1])
+        assert config['enabled'] is False
+        assert config['prompts_enabled'] is True
+        assert config['prompts_read_only'] is True
+        code, body = request(port, '/api/prompts/outlook/compare/' + old['version'])
+        assert code == 200
+        assert json.loads(body)['added'] == 1
+
+
 def test_prompt_edit_requires_csrf_valid_yaml_and_current_version(tmp_path):
     from edge_analysis_v2.prompts.versions import PromptVersions
     sources = tmp_path/'prompts'

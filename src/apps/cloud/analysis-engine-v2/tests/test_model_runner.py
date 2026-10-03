@@ -58,6 +58,35 @@ def test_valid_json_without_skill_calls_is_accepted_and_workspace_removed(tmp_pa
     assert workspaces and not workspaces[0].exists()
 
 
+def test_research_is_bounded_by_elapsed_time_not_a_fixed_turn_count(tmp_path):
+    base = client_for(None)
+    class Client(base):
+        async def receive_response(self):
+            assert self.options.max_turns is None
+            await asyncio.sleep(10)
+            yield ResultMessage(structured_output={'summary':'too late'})
+    with pytest.raises(TimeoutError):
+        asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+            call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+            key='test-secret', model='deepseek-flash', client_factory=Client, timeout_seconds=1))
+    assert not (tmp_path/'response.json').exists()
+
+
+@pytest.mark.parametrize('kind,seconds',[('outlook',600),('movement',300)])
+def test_deep_outlook_has_more_time_without_expanding_movement(monkeypatch,tmp_path,kind,seconds):
+    original = asyncio.timeout
+    deadlines = []
+    def timeout(value):
+        deadlines.append(value)
+        return original(value)
+    monkeypatch.setattr(asyncio,'timeout',timeout)
+    asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+        call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+        key='test-secret', model='deepseek-flash', kind=kind,
+        client_factory=client_for(ResultMessage(structured_output={'summary':'ok'}))))
+    assert deadlines == [seconds]
+
+
 @dataclass
 class ResultMessage:
     subtype: str = 'success'

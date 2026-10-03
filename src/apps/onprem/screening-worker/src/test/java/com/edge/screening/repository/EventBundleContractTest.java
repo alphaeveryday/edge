@@ -2,13 +2,17 @@ package com.edge.screening.repository;
 
 import com.edge.screening.entity.PolicyVersion;
 import com.edge.screening.service.BundleScreener;
+import com.edge.screening.delivery.DeliveryBundleParser;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SchemaValidatorsConfig;
 import com.networknt.schema.SpecVersion;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -34,6 +38,80 @@ import static org.mockito.Mockito.when;
 class EventBundleContractTest {
 
 	private final JsonSchema schema = loadSchema();
+	private final ObjectMapper mapper = new ObjectMapper();
+
+	private static final String CALCULATION = """
+			{"kind":"CALCULATION","title":"외국인 최근 5거래일 순매수 합계",
+			 "source":"일별 투자자 수급","published_at":null,"as_of":"2026-07-14",
+			 "tool_run_id":"calc-1","item_ids":["item-1","item-2"],
+			 "arguments":{"investor":"foreign","days":5},
+			 "output":{"tool_run_id":"calc-1","result":{"amount_krw":1300000000,"precise":"0.000123456789"}},
+			 "formula_latex":"S = N_1 + N_2 + N_3 + N_4 + N_5",
+			 "description":"지정한 5거래일의 외국인 순매수 금액을 합산합니다."}
+			""";
+	private static final String NEWS = """
+			{"kind":"NEWS","title":"장비 공급 계약","source":"뉴스 공급자","published_at":null,
+			 "news_id":"news-1","tool_run_id":"news-run-1","item_ids":["item-1"]}
+			""";
+
+	@Test
+	void 계산근거의_저장값과_관측일이_계약을_만족한다() {
+		assertThat(schema.validate(newBundleWith("[" + CALCULATION + "]"), InputFormat.JSON)).isEmpty();
+	}
+
+	@Test
+	void 뉴스ID는_뉴스에만_붙인다() {
+		assertThat(schema.validate(newBundleWith("[" + NEWS + "]"), InputFormat.JSON)).isEmpty();
+		assertThat(schema.validate(newBundleWith("[" + NEWS.replace("\"NEWS\"", "\"DISCLOSURE\"") + "]"),
+				InputFormat.JSON)).isNotEmpty();
+	}
+
+	@Test
+	void 기준일과_수식이_없으면_추측하지않고_null로_보낸다() {
+		var node = (tools.jackson.databind.node.ObjectNode) mapper.readTree(CALCULATION);
+		node.putNull("as_of");
+		node.putNull("formula_latex");
+		assertThat(schema.validate(newBundleWith("[" + node + "]"), InputFormat.JSON)).isEmpty();
+	}
+
+	@Test
+	void 계산의_기준일을_기사발표시각에_넣지않는다() {
+		var node = (tools.jackson.databind.node.ObjectNode) mapper.readTree(CALCULATION);
+		node.put("published_at", "2026-07-15T10:00:00+09:00");
+		assertThat(schema.validate(newBundleWith("[" + node + "]"), InputFormat.JSON)).isNotEmpty();
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"tool_run_id", "arguments", "output", "formula_latex", "description", "as_of", "item_ids"})
+	void 불완전한_계산근거는_계약에서_거부한다(String field) {
+		var node = (tools.jackson.databind.node.ObjectNode) mapper.readTree(CALCULATION);
+		node.remove(field);
+		assertThat(schema.validate(newBundleWith("[" + node + "]"), InputFormat.JSON)).isNotEmpty();
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"2026-07-14", "2026-07-15T10:00:00+09:00"})
+	void 날짜와_오프셋시각을_관측기준으로_허용한다(String asOf) {
+		var node = (tools.jackson.databind.node.ObjectNode) mapper.readTree(CALCULATION);
+		node.put("as_of", asOf);
+		assertThat(schema.validate(newBundleWith("[" + node + "]"), InputFormat.JSON)).isEmpty();
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"어제", "2026-07-15T10:00:00", "2026-02-30"})
+	void 모호하거나_존재하지않는_관측일은_거부한다(String asOf) {
+		var node = (tools.jackson.databind.node.ObjectNode) mapper.readTree(CALCULATION);
+		node.put("as_of", asOf);
+		assertThat(schema.validate(newBundleWith("[" + node + "]"), InputFormat.JSON)).isNotEmpty();
+	}
+
+	@Test
+	void 계산근거를_추가해도_심사정책의_출처수가_늘지않는다() {
+		var entries = new DeliveryBundleParser().parse(101L,
+				envelope(newBundleWith("[" + CALCULATION + "]")).getBytes(StandardCharsets.UTF_8));
+		assertThat(entries.getFirst().sourceEventCount()).isZero();
+		assertThat(mapper.readTree(entries.getFirst().evidencesJson()).get(0)).isEqualTo(mapper.readTree(CALCULATION));
+	}
 
 	private static JsonSchema loadSchema() {
 		JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
@@ -48,8 +126,9 @@ class EventBundleContractTest {
 		}
 	}
 
-	@Test
-	void BundleScreener_가_옮긴_evidences_가_계약형상을_유지한다() {
+	@ParameterizedTest
+	@ValueSource(booleans = {false, true})
+	void BundleScreener_가_옮긴_evidences_가_계약형상을_유지한다(boolean includeCalculation) {
 		PendingBundleRepository pending = mock(PendingBundleRepository.class);
 		AnalysisItemRepository analysis = mock(AnalysisItemRepository.class);
 		PublicationRepository publications = mock(PublicationRepository.class);
@@ -61,7 +140,7 @@ class EventBundleContractTest {
 		when(policies.findActive()).thenReturn(Optional.of(new PolicyVersion(1L, true, null, null)));
 		// upsert 1행(신규 수신)이어야 판정·근거 기록 경로가 실행된다 — mock 기본값 0은 재수신 skip 이 된다.
 		when(analysis.upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-				any(), anyLong(), any(), any())).thenReturn(1);
+				any(), anyLong(), any(), any(), any())).thenReturn(1);
 		BundleScreener screener = new BundleScreener(pending, analysis, publications, policies, rules, checks, history);
 
 		// 계약을 만족하는 populated evidences 를 담은 NEW 번들을 실제로 screen 한다
@@ -69,6 +148,9 @@ class EventBundleContractTest {
 		String bundle = newBundleWith(
 				"[{\"kind\":\"DISCLOSURE\",\"title\":\"삼성전자 공급계약 공시\",\"source\":\"DART\",\"published_at\":\"2026-07-14T09:00:00Z\","
 						+ "\"source_uri\":\"https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260714000001\"}]");
+		if (includeCalculation) {
+			bundle = bundle.replace("\"evidences\":[", "\"evidences\":[" + CALCULATION + "," + NEWS + ",");
+		}
 		assertThat(schema.validate(bundle, InputFormat.JSON)).as("입력 번들 자체가 계약을 만족해야 한다").isEmpty();
 
 		// 저장 body 는 신형 봉투(ADR-0040 T4) — 스키마 검증은 봉투 안 EventBundle(bundle) 대상이고,
@@ -80,8 +162,10 @@ class EventBundleContractTest {
 		ArgumentCaptor<java.time.OffsetDateTime> movedContentAsOf =
 				ArgumentCaptor.forClass(java.time.OffsetDateTime.class);
 		verify(analysis).upsert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
-				movedEvidences.capture(), anyLong(), any(), movedContentAsOf.capture());
+				movedEvidences.capture(), anyLong(), any(), movedContentAsOf.capture(), any());
 		String moved = movedEvidences.getValue();
+		assertThat(mapper.readTree(moved))
+				.isEqualTo(mapper.readTree(bundle).path("entries").get(0).path("evidences"));
 		// optional content_as_of(ALPHA-918)도 번들→원장 배선에서 유실되면 안 된다 —
 		// 파서가 null 로 흘리거나 upsert 전달이 빠지면 여기서 잡힌다.
 		assertThat(movedContentAsOf.getValue())

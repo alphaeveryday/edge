@@ -107,6 +107,6 @@ resource "aws_iam_role_policy" "api_deploy" {
   role = var.deploy_role_name
   policy = jsonencode({ Version = "2012-10-17", Statement = [{
     Effect   = "Allow", Action = ["lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionCode"],
-    Resource = aws_lambda_function.api.arn
+    Resource = [aws_lambda_function.api.arn, aws_lambda_function.control.arn]
   }] })
 }

@@ -35,6 +35,7 @@ class PublicationReader:
         if kind not in ('movement','outlook'):
             raise ValueError('Unknown analysis kind')
         date_filter=sql.SQL('')
+        active_filter=sql.SQL('AND withdrawn_at IS NULL') if kind=='movement' else sql.SQL('')
         params=[ticker]
         if analysis_date is not None:
             date_filter=sql.SQL('''AND analysis_at >= (%s::date::timestamp AT TIME ZONE 'Asia/Seoul')
@@ -43,9 +44,9 @@ class PublicationReader:
         with self.connection_factory() as c, c.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.SQL('''SELECT analysis_id FROM {} WHERE etf_code=%s
                 AND status='completed' AND data_source='database' AND published_at IS NOT NULL
-                {}
+                {} {}
                 ORDER BY analysis_at DESC,published_at DESC,analysis_id DESC LIMIT 1''').format(
-                    sql.Identifier(kind+'_analyses'),date_filter),params)
+                    sql.Identifier(kind+'_analyses'),date_filter,active_filter),params)
             return cur.fetchone()
 
     def screen(self, kind, identity, feature):

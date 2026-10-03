@@ -14,6 +14,9 @@ canonical 전체 스캔으로 넓히지 않고 실패한다. 날짜창·전체 �
 (`normalize_price._pick_winner`, ALPHA-1120) 다음 날·휴장일 재수집이 값과 `available_at` 을
 밀어내지 않고, 벤더 정정(OHLC 변경)만 값과 시각을 옮긴다. 단 **`available_at` 이 앞당겨지는 경우는 값이 같아도 갱신한다** — 옛 raw
 재정제로 승자가 D일 수집분으로 돌아오면 "언제 알았나"가 앞당겨진다(load_etf_flow 와 같은 규약).
+**시가·고가·저가가 비어 있던 행을 채우기만 하는 갱신은 `available_at` 을 뒤로 밀지 않는다**(ALPHA-1148) —
+종가·수정종가·거래량이 같고 기존 시·고·저가 전부 NULL 이면 정정이 아니라 없던 컬럼의 보충이다. 그때 수집
+시각으로 덮으면 이미 쓰이던 종가가 과거 시점 조회에서 사라진다. 둘 중 이른 시각을 남긴다.
 
 **instrument_id 해소**: canonical 의 `(market, ticker)` → `instrument` 조회다. 시장별 MIC
 매핑을 거쳐 `(market_code, ticker)` 로 찾는다 — ETF·개별주식 **양쪽 다**(NAV 로더와 달리
@@ -23,8 +26,12 @@ instrument_type 을 안 건다). `(market_code, ticker)` 는 유일 자연키(uq
 
 **적재 컬럼과 의도적 결측(NULL)**:
   * close_price ← canonical close, adjusted_close_price ← canonical adj_close, volume ← canonical volume
+  * open_price · high_price · low_price ← canonical open · high · low (ALPHA-1148)
   * `turnover_value` · `price_basis` = **NULL**. canonical price_daily 가 나르지 않고(정제가
     KIS acml_tr_pbmn 을 보존하지 않는다) 소비처도 없다 — 있지도 않은 값을 지어내지 않는다.
+    다른 적재기가 `price_basis` 를 채운 행(DataGuide 이력 적재, ALPHA-1148)을 이 로더가 덮을
+    때는 `price_basis` 도 NULL 로 되돌린다 — 그 값은 덮기 전 행의 수정종가 기준이라, 값이
+    canonical 것으로 바뀐 뒤에도 남으면 없는 수정종가의 기준을 말하는 거짓 표지가 된다.
   * `simple_return` · `log_return` = **NULL**. 전일 종가가 필요한 **파생 피처**이고, 첫 거래일·
     상장일·거래정지·액면분할 같은 경계 처리가 얽힌다 — 그건 피처 레이어 소관이지 원장 적재의
     일이 아니다(feature-layer-separation-plan). 이 로더는 관측된 가격만 옮긴다.
@@ -32,6 +39,7 @@ instrument_type 을 안 건다). `(market_code, ticker)` 는 유일 자연키(uq
 **CHECK 방어**: canonical 게이트가 이미 OHLCV 를 걸렀지만(close>0·volume>=0), adj_close 는
 정합성 게이트 대상이 아닌 참고 필드라 0·음수가 통과할 수 있다 — `ck_price_daily_values` 를
 위반하는 행은 적재 전에 격리하고 센다(FK/CHECK 위반으로 런 전체를 롤백시키지 않는다, Rule 12).
+시가·고가·저가도 같은 방식으로 `ck_price_daily_ohl`(양수·유한) 위반을 격리한다.
 """
 
 from __future__ import annotations
@@ -274,7 +282,7 @@ def _non_negative(value) -> bool:
 
 
 def _check_violation(fact: dict) -> str | None:
-    """ck_price_daily_values 를 위반하면 사유, 아니면 None. 적재 전 방어선(Rule 12).
+    """ck_price_daily_values·ck_price_daily_ohl 을 위반하면 사유, 아니면 None. 적재 전 방어선(Rule 12).
 
     canonical 게이트가 close>0·volume>=0 은 이미 보장하지만 adj_close 는 참고 필드라
     0·음수·비유한이 통과할 수 있다. 위반 행을 넣으면 CHECK 로 배치가 죽으니 격리한다.
@@ -282,6 +290,9 @@ def _check_violation(fact: dict) -> str | None:
     close, adj, volume = fact["close_price"], fact["adjusted_close_price"], fact["volume"]
     if close is not None and not _pos_finite(close):
         return "bad_close_price"
+    for column in ("open_price", "high_price", "low_price"):
+        if fact[column] is not None and not _pos_finite(fact[column]):
+            return f"bad_{column}"
     if adj is not None and not _pos_finite(adj):
         return "bad_adjusted_close_price"
     if volume is not None and not _non_negative(volume):
@@ -358,6 +369,9 @@ def run(
                 "close_price": row.get("close"),
                 "adjusted_close_price": row.get("adj_close"),
                 "volume": row.get("volume"),
+                "open_price": row.get("open"),
+                "high_price": row.get("high"),
+                "low_price": row.get("low"),
                 # available_at = '우리가 이 관측을 쓸 수 있게 된 시각'. 수집 시각이
                 # 가장 보수적인 근사다(load-etf-nav 와 같은 규약).
                 "available_at": row.get("fetched_at") or started_at.isoformat(),
@@ -395,21 +409,39 @@ def run(
                     try:
                         cur.execute(
                             "INSERT INTO price_daily (instrument_id, trade_date, close_price,"
-                            " adjusted_close_price, volume, available_at, data_version)"
-                            " VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                            " adjusted_close_price, volume, available_at, data_version,"
+                            " open_price, high_price, low_price)"
+                            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                             " ON CONFLICT (instrument_id, trade_date) DO UPDATE"
                             " SET close_price = EXCLUDED.close_price,"
                             "     adjusted_close_price = EXCLUDED.adjusted_close_price,"
-                            "     volume = EXCLUDED.volume, available_at = EXCLUDED.available_at,"
+                            "     volume = EXCLUDED.volume,"
+                            "     open_price = EXCLUDED.open_price,"
+                            "     high_price = EXCLUDED.high_price,"
+                            "     low_price = EXCLUDED.low_price,"
+                            "     price_basis = NULL,"
+                            # 시·고·저 보충뿐인 갱신은 시각을 뒤로 밀지 않는다(모듈 docstring).
+                            "     available_at = CASE"
+                            "       WHEN (price_daily.close_price, price_daily.adjusted_close_price,"
+                            "             price_daily.volume) IS NOT DISTINCT FROM"
+                            "            (EXCLUDED.close_price, EXCLUDED.adjusted_close_price,"
+                            "             EXCLUDED.volume)"
+                            "        AND num_nonnulls(price_daily.open_price, price_daily.high_price,"
+                            "                         price_daily.low_price) = 0"
+                            "       THEN LEAST(price_daily.available_at, EXCLUDED.available_at)"
+                            "       ELSE EXCLUDED.available_at END,"
                             "     data_version = EXCLUDED.data_version"
                             " WHERE (price_daily.close_price, price_daily.adjusted_close_price,"
-                            "        price_daily.volume) IS DISTINCT FROM"
-                            "       (EXCLUDED.close_price, EXCLUDED.adjusted_close_price, EXCLUDED.volume)"
+                            "        price_daily.volume, price_daily.open_price,"
+                            "        price_daily.high_price, price_daily.low_price) IS DISTINCT FROM"
+                            "       (EXCLUDED.close_price, EXCLUDED.adjusted_close_price, EXCLUDED.volume,"
+                            "        EXCLUDED.open_price, EXCLUDED.high_price, EXCLUDED.low_price)"
                             "    OR price_daily.available_at > EXCLUDED.available_at"
                             " RETURNING (xmax <> 0) AS was_update",
                             (instrument_id, trade_date, fact["close_price"],
                              fact["adjusted_close_price"], fact["volume"],
-                             fact["available_at"], confirmed_data_version),
+                             fact["available_at"], confirmed_data_version,
+                             fact["open_price"], fact["high_price"], fact["low_price"]),
                         )
                         row = cur.fetchone()
                         if row is None:

@@ -1,7 +1,7 @@
 """실제 AWS 격리 검증 절차(ALPHA-1119) — 운영자 PC 에서 돈다(AWS 자격증명, session-manager-plugin).
 
     python verify/run.py secrets                  # 앱·검증 시크릿 값 생성(없을 때만, 값은 찍지 않는다)
-    python verify/run.py dbadmin <create|clone_schema|privcheck|stats|teardown>
+    python verify/run.py dbadmin <create|clone_schema|privcheck|stats|teardown>   # 검증이 꺼져 있으면 운영 메타DB(airflow) 몫만
     python verify/run.py setup                    # 재생 입력(레이크 읽기) → DB·역할 → 스키마 복제 → 권한 확인 → 종목 등록
     python verify/run.py forward                  # Airflow API 포트 포워딩(백그라운드, 127.0.0.1:18080)
     python verify/run.py deployinfo <exp>         # 배포 설정·이미지 digest·헬스체크 방식·호스트 등록 메모리 기록
@@ -103,6 +103,11 @@ def secrets(_args) -> int:
             sm.put_secret_value(SecretId=sid, SecretString=json.dumps(cur))
         print(f"{sid}: 키 {sorted(cur)} (새로 만든 키 {missing})")
     ensure(f"{PREFIX}/app", ["jwt_secret", "api_secret_key", "admin_password", "meta_db_password"], "meta_db_password")
+    try:                                       # 검증 자원이 꺼져 있으면(운영 메타DB 만 만들 때) 검증 시크릿이 없다
+        sm.describe_secret(SecretId=f"{PREFIX}/verify")
+    except sm.exceptions.ResourceNotFoundException:
+        print(f"{PREFIX}/verify: 없음(verify_enabled=false) — 건너뜀")
+        return 0
     ensure(f"{PREFIX}/verify", ["verify_db_password"], "verify_db_password")
     return 0
 
@@ -116,9 +121,10 @@ def _network(sg_name: str) -> dict:
                                     "assignPublicIp": "DISABLED"}}
 
 
-def _one_off(family: str, command: list[str], container: str, stream_prefix: str) -> tuple[int | None, str]:
+def _one_off(family: str, command: list[str], container: str, stream_prefix: str,
+             sg: str = f"{PREFIX}-verify", log_group: str = f"/ecs/{PREFIX}-verify") -> tuple[int | None, str]:
     task = ecs.run_task(cluster=CLUSTER, taskDefinition=family, launchType="FARGATE",
-                        networkConfiguration=_network(f"{PREFIX}-verify"), startedBy="verify-admin",
+                        networkConfiguration=_network(sg), startedBy="verify-admin",
                         overrides={"containerOverrides": [{"name": container, "command": command}]})["tasks"][0]
     arn = task["taskArn"]
     while (t := ecs.describe_tasks(cluster=CLUSTER, tasks=[arn])["tasks"][0])["lastStatus"] != "STOPPED":
@@ -129,7 +135,7 @@ def _one_off(family: str, command: list[str], container: str, stream_prefix: str
     for _ in range(8):                  # awslogs 전달은 STOPPED 보다 늦을 수 있다
         try:
             text = "\n".join(e["message"] for e in logs.get_log_events(
-                logGroupName=f"/ecs/{PREFIX}-verify", logStreamName=stream, startFromHead=True)["events"])
+                logGroupName=log_group, logStreamName=stream, startFromHead=True)["events"])
         except logs.exceptions.ResourceNotFoundException:
             text = ""
         if text:
@@ -145,7 +151,9 @@ def dbadmin_run(cmd: str) -> tuple[int | None, list[str]]:
     packed = base64.b64encode(gzip.compress((HERE / "dbadmin.sh").read_bytes())).decode()
     script = f"echo {packed} | base64 -d | gunzip > /tmp/dbadmin.sh && source /tmp/dbadmin.sh && main {cmd}"
     assert len(script) < 7000, len(script)
-    code, text = _one_off(f"{PREFIX}-dbadmin", [script], "dbadmin", "dbadmin")
+    # 검증 자원 없이도(운영 메타DB) 돌도록 Airflow 태스크 SG·구성요소 로그 그룹을 쓴다(verify.tf 관리 태스크 절).
+    code, text = _one_off(f"{PREFIX}-dbadmin", [script], "dbadmin", "dbadmin",
+                          sg=f"{PREFIX}-task", log_group=f"/ecs/{PREFIX}")
     return code, [line for line in text.splitlines() if line.startswith("DBADMIN")]
 
 

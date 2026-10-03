@@ -80,6 +80,7 @@ from .sources import (
 from .steps import (
     assemble_events,
     backfill_disclosure,
+    backfill_price_daily_dataguide,
     build_minute_universe,
     enrich_corp_code,
     ingest_price_raw,
@@ -228,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
                  "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
+                 "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "backfill-price-daily-dataguide", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
                  # 1분 유니버스 재생성(ALPHA-953): canonical KR holdings → `--universe`
                  # 가 가리키는 정본 객체 갱신. storage(canonical 읽기) 만 필요하고
                  # 수집창·원장 DB 와 무관하다. ⚠️ **세션 계획 전에만** 돌려라 — 장중
@@ -297,6 +298,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
+    # DataGuide 일봉 일회성 적재(ALPHA-1148) 전용 — 스냅샷 파티션과 쓰기 없는 분류 집계.
+    parser.add_argument("--as-of-date", default=None,
+                        help="backfill-price-daily-dataguide: 스냅샷 as_of_date YYYY-MM-DD")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="backfill-price-daily-dataguide: 분류만 세고 price_daily 는 쓰지 않는다")
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
     # 정제 스텝 전용 — 그 수집 런의 raw 만 읽어 canonical 을 적재한다(ALPHA-389). SFN 이 이
     # 경로로 돈다: 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에 비례한다. 미지정이면
@@ -587,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("load-instruments는 --latest-good 또는 --all 중 정확히 하나가 필요하다")
     if args.pending_only and args.step != "load-disclosure":
         raise SystemExit("--pending-only는 load-disclosure 전용이다")
+    if (args.as_of_date is not None or args.dry_run) and args.step != "backfill-price-daily-dataguide":
+        raise SystemExit("--as-of-date·--dry-run 은 backfill-price-daily-dataguide 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -899,6 +907,27 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return backfill_disclosure.run(
             storage, run_id, db=db_config_from_env(settings.db),
             from_date=args.from_date, to_date=args.to_date,
+        )
+
+    # DataGuide 일봉 일회성 적재(ALPHA-1148). 범위를 기본값으로 두지 않는다 — 869만 행을 싣는
+    # 작업이라 스냅샷과 기간을 실행한 사람이 명시해야 한다.
+    if args.step == "backfill-price-daily-dataguide":
+        for name, value in (("--as-of-date", args.as_of_date), ("--from", args.from_date),
+                            ("--to", args.to_date)):
+            if value is None:
+                raise SystemExit(f"backfill-price-daily-dataguide 는 {name} 이 필요하다")
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+        if args.from_date > args.to_date:
+            raise SystemExit("backfill-price-daily-dataguide 의 --from은 --to보다 늦을 수 없다")
+        return backfill_price_daily_dataguide.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            as_of_date=args.as_of_date, from_date=args.from_date, to_date=args.to_date,
+            dry_run=args.dry_run,
         )
 
     # 가격 적재 정상 경로는 NormalizePrice manifest의 KR direct key와 winner만 읽는다.
