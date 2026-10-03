@@ -46,6 +46,8 @@ class SingleAnalysis(unittest.TestCase):
         env=sent['Overrides']['ContainerOverrides'][0]['Environment']
         self.assertEqual(json.loads(env[0]['Value']),self.request)
         self.assertEqual(env[1]['Value'],'3')
+        # The worker publishes only while this execution still owns its slot row.
+        self.assertEqual(env[2],{'Name':'ANALYSIS_EXECUTION_ARN','Value':'arn:aws:states:ap-northeast-2:393229433969:execution:edge-dev-analysis-v2:test'})
         self.assertEqual(result['nextState'],'Release')
         output=json.loads(result['output'])
         released=self.step('Release',output,{'result':'{}','fieldValidationMode':'NONE'})

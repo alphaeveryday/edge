@@ -75,6 +75,10 @@
                 {
                   "Name": "ANALYSIS_SLOTS",
                   "Value": "${slots}"
+                },
+                {
+                  "Name": "ANALYSIS_EXECUTION_ARN",
+                  "Value.$": "$$.Execution.Id"
                 }
               ]
             }

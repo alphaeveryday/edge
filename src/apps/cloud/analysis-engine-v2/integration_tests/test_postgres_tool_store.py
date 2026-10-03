@@ -175,3 +175,12 @@ def test_analyses_starting_together_can_register_the_same_definition(audit):
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute("DELETE FROM tool_definitions WHERE tool_id = ANY(%s)", (keys,))
+
+
+def test_repeat_of_the_same_execution_is_accepted_without_a_second_row(audit):
+    # A save whose commit reply was lost is repeated with identical values; it must not fail the analysis.
+    store, args, _, _ = audit
+    first = store.save_run(**args)
+    assert store.save_run(**args) == first
+    assert store.connection.execute('SELECT count(*) FROM tool_runs WHERE tool_run_id=%s',
+                                    (args['tool_run_id'],)).fetchone()[0] == 1
