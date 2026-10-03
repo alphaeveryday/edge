@@ -1,6 +1,7 @@
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend, Rate } from 'k6/metrics';
+import { bearer } from './token.js';
 const voteStatus = new Counter('vote_status');
 const voteFailure = new Rate('vote_failure');
 const voteLatency = new Trend('vote_latency', true);
@@ -72,8 +73,8 @@ export function vote() {
   const [forecast, t] = pick(i);
   const user = 1 + i;
   const choice = ['buy', 'wait', 'sell'][i % 3];
-  const r = http.post(`${base}/api/v1/forecasts/${forecast}/votes`, JSON.stringify({choice}), {
-    headers: {'Content-Type':'application/json', 'X-User-Id': String(user)}, timeout: '10s',
+  const r = http.put(`${base}/api/v1/etfs/${forecast}/vote`, JSON.stringify({choice}), {
+    headers: {'Content-Type':'application/json', 'Authorization': bearer(user)}, timeout: '10s',
   });
   const tags = Object.assign({status: String(r.status)}, t);
   voteStatus.add(1, tags);
@@ -84,7 +85,7 @@ export function vote() {
 // 응답 source 기준의 폴백 QPS 집계
 export function read() {
   const [forecast, t] = pick(exec.scenario.iterationInTest);
-  const r = http.get(`${base}/api/v1/forecasts/${forecast}/votes/count`, { timeout: '10s' });
+  const r = http.get(`${base}/api/v1/etfs/${forecast}/vote/count`, { timeout: '10s' });
   let source = 'error';
   if (r.status === 200) { try { source = r.json('result.source'); } catch (e) {} }
   const tags = Object.assign({status: String(r.status), source}, t);

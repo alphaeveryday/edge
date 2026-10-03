@@ -145,7 +145,7 @@ def consistent():
     bad = []
     for fid in forecast_ids:
         try:
-            r = json.loads(get(f'/api/v1/forecasts/{fid}/votes/count'))['result']
+            r = json.loads(get(f'/api/v1/etfs/{fid}/vote/count'))['result']
             if r['source'] != 'redis' or any(r[c + 's'] != db.get(fid, {}).get(c, 0) for c in ('buy', 'wait', 'sell')): bad.append(fid); continue
             if int(cli('hlen', 'vote:{' + fid + '}:choices').strip() or 0) != db_users.get(fid, 0): bad.append(fid)
         except Exception: bad.append(fid)

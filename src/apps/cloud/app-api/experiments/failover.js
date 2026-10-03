@@ -1,6 +1,7 @@
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend, Rate } from 'k6/metrics';
+import { bearer } from './token.js';
 const voteStatus = new Counter('vote_status');
 const voteFailure = new Rate('vote_failure');
 const voteLatency = new Trend('vote_latency', true);
@@ -26,8 +27,8 @@ export function vote() {
   const i = exec.scenario.iterationInTest;
   const user = runId + (userPool ? i % userPool : i);
   const choice = ['buy', 'wait', 'sell'][(userPool ? Math.floor(i / userPool) + i % userPool : i) % 3];
-  const r = http.post(`${base}/api/v1/forecasts/${etf}/votes`, JSON.stringify({choice}), {
-    headers: {'Content-Type':'application/json', 'X-User-Id': String(user)}, timeout: '10s',
+  const r = http.put(`${base}/api/v1/etfs/${etf}/vote`, JSON.stringify({choice}), {
+    headers: {'Content-Type':'application/json', 'Authorization': bearer(user)}, timeout: '10s',
   });
   voteStatus.add(1, {status: String(r.status), user: String(user), choice});
   voteFailure.add(r.status !== 200);

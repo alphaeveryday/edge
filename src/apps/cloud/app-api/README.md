@@ -60,7 +60,7 @@ com.edge.app
 
 **에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4001`, `ANALYSIS4001`). 앱은 code 를 번역 없이 그대로 분기한다.
 
-**기존 투표 코드 이동(완료).** 투표 파일은 `community/vote/` 아래 계층 폴더, 경로는 `/api/v1/etfs/{code}/vote` 의 `PUT`(투표, 응답에 현황 없음)·`GET`(내 투표)·`DELETE`(철회)와 `GET /api/v1/etfs/{code}/vote/count`(공개). 투표 응답에 집계를 싣지 않는 이유는 쓰기 경로에 Redis 읽기가 붙으면 장애 실측 조건(요청당 실패 1회)이 달라지기 때문이다. 계약이 현황을 요구하면 계약을 고친다. Redis·ShedLock 설정은 `common/config`. `experiments/` 스크립트는 옛 경로와 `X-User-Id` 그대로라 재실행 전 회원별 토큰 발급 방식으로 고쳐야 한다.
+**기존 투표 코드 이동(완료).** 투표 파일은 `community/vote/` 아래 계층 폴더, 경로는 `/api/v1/etfs/{code}/vote` 의 `PUT`(투표, 응답에 현황 없음)·`GET`(내 투표)·`DELETE`(철회)와 `GET /api/v1/etfs/{code}/vote/count`(공개). 투표 응답에 집계를 싣지 않는 이유는 쓰기 경로에 Redis 읽기가 붙으면 장애 실측 조건(요청당 실패 1회)이 달라지기 때문이다. 계약이 현황을 요구하면 계약을 고친다. Redis·ShedLock 설정은 `common/config`. `experiments/` 의 k6 스크립트는 `token.js` 가 compose 와 같은 `APP_JWT_SECRET` 으로 회원별 액세스 JWT 를 직접 서명해 투표한다.
 
 **먼저 만들 수 있는 것(계약과 무관).** common 의 셋: 인증 필터, AppErrorStatus 확장, 커서 유틸. 계약이 확정되면 도메인별 구현을 바로 시작한다.
 

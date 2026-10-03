@@ -73,18 +73,18 @@ with (out / 'k6.log').open('w') as log:
 def master_cli(*args):
     address = dc('exec', '-T', 'sentinel-1', 'redis-cli', '-p', '26379', '--raw', 'SENTINEL', 'get-master-addr-by-name', 'mymaster').splitlines()
     return dc('exec', '-T', 'sentinel-1', 'redis-cli', '-h', address[0], '-p', address[1], '--raw', *args)
-(out / 'before-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
+(out / 'before-reconcile.json').write_text(get('/api/v1/etfs/' + etf + '/vote/count'))
 (out / 'db.tsv').write_text(sql("select choice,count(*) from vote where etf_code='" + etf + "' group by choice;"))
 (out / 'duplicates.tsv').write_text(sql('select etf_code,member_id,count(*) from vote group by etf_code,member_id having count(*)>1;'))
 # Observe automatic reconciliation for up to five minutes after the load.
 expected = dict(line.split('\t') for line in (out / 'db.tsv').read_text().splitlines())
 for _ in range(300):
     try:
-        result = json.loads(get('/api/v1/forecasts/' + etf + '/votes/count'))['result']
+        result = json.loads(get('/api/v1/etfs/' + etf + '/vote/count'))['result']
         if result['source'] == 'redis' and all(result[c + 's'] == int(expected.get(c, 0)) for c in ('buy', 'wait', 'sell')): break
     except Exception: pass
     time.sleep(1)
-(out / 'after-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
+(out / 'after-reconcile.json').write_text(get('/api/v1/etfs/' + etf + '/vote/count'))
 (out / 'master-voted.txt').write_text(master_cli('HLEN', 'vote:{' + etf + '}:choices'))
 # k6 ack 와 DB 와 Redis choices 해시 사이의 사용자별 최종 choice 3방향 대조
 acked = {}

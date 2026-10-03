@@ -10,6 +10,7 @@ services:
     ports:
       - "8080:8080"
     environment:
+      APP_JWT_SECRET: ${APP_JWT_SECRET:-local-experiment-jwt-secret-32bytes-min}
       VOTE_ADMIN_TOKEN: ${VOTE_ADMIN_TOKEN:-local-experiment}
       VOTE_REDIS_COMMAND_TIMEOUT: ${VOTE_REDIS_COMMAND_TIMEOUT:-500ms}
       VOTE_REDIS_DISCONNECTED_BEHAVIOR: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:-REJECT_COMMANDS}
