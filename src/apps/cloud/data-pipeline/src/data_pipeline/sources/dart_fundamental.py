@@ -44,7 +44,10 @@ _PERIOD_BY_CODE = {v: k for k, v in REPORT_CODES.items()}
 _PERIOD_END = {"11013": (3, 31), "11012": (6, 30), "11014": (9, 30), "11011": (12, 31)}
 RCEPT_NO = re.compile(r"[0-9]{14}")
 _TICKER = re.compile(r"[0-9A-Z]{6}")
-_CURRENCY = re.compile(r"[A-Z]{3}")
+# 실응답에서 확인한 값만 둔다(재무제표 종류 5개, 원화 아닌 통화는 USD — 2026-10-03 수집 2만 줄 표본). 여기 없는 값은
+# 파손과 구분할 수 없으므로 결손이 아니라 실패로 드러나고, 실제로 쓰이는 값이면 그때 추가한다.
+_STATEMENT_KINDS = frozenset({"BS", "IS", "CIS", "CF", "SCE"})
+_FOREIGN_CURRENCIES = frozenset({"USD"})
 _REPORT_NAME = re.compile(r"(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)")
 _FLOW_ACCOUNTS = {
     "revenue": "ifrs-full_Revenue",
@@ -263,9 +266,8 @@ def _blank(value) -> bool:
 
 
 def _currency_reason(line: dict) -> str:
-    """원화가 아닌 줄의 거부 사유. 통화 코드로 읽히는 값만 정책 결손이고, 칸이 없거나 깨졌으면 파손이다."""
-    currency = line.get("currency")
-    return "non_krw_currency" if isinstance(currency, str) and _CURRENCY.fullmatch(currency) else "currency_unreadable"
+    """원화가 아닌 줄의 거부 사유. 확인된 외화 코드만 정책 결손이고, 칸이 없거나 모르는 값이면 실패다."""
+    return "non_krw_currency" if line.get("currency") in _FOREIGN_CURRENCIES else "currency_unrecognized"
 
 
 def _pick_line(lines: list[dict], account_id: str, statements: tuple[str, ...]) -> tuple[dict | None, str | None]:
@@ -304,10 +306,10 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
         rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
                         "reasons": ["bad_rcept_no"], "lines": len(bad)})
         lines = [ln for ln in lines if ln not in bad]
-    # 계정 줄 선택은 sj_div·account_id 로 한다 — 그 칸이 없거나 빈 줄은 후보에서 조용히 빠져 "계정 없음"으로 읽힌다.
-    # 계정 부재(결손)를 인정하기 전에 줄의 식별 칸이 온전한지 본다(실응답 2만 줄 표본에서 빈 칸 0).
-    unidentified = sum(1 for ln in lines if not all(isinstance(ln.get(k), str) and ln[k].strip()
-                                                     for k in ("sj_div", "account_id")))
+    # 계정 줄 선택은 sj_div·account_id 로 한다 — 그 칸이 없거나 모르는 값인 줄은 후보에서 조용히 빠져 "계정 없음"으로
+    # 읽힌다. 계정 부재(결손)를 인정하기 전에 줄의 식별 칸이 온전한지 본다(실응답 2만 줄 표본에서 어긋난 줄 0).
+    unidentified = sum(1 for ln in lines if ln.get("sj_div") not in _STATEMENT_KINDS
+                       or not (isinstance(ln.get("account_id"), str) and ln["account_id"].strip()))
     if unidentified:
         rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
                         "reasons": ["bad_account_line"], "lines": unidentified})
@@ -438,11 +440,18 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
     # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
     issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
+    # 있는 종류 행의 수를 못 읽었으면 파손이다 — 아래 어느 분기로 가든 결손(입력 없음·행 없음)으로 읽히면 안 된다.
+    damaged = any(row is not None and _share_count(row, field) is None
+                  for row in (common, preferred) for field in ("istc_totqy", "tesstk_co"))
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         # 칸이 빈 것(원천 미기재)과 비지 않았는데 숫자가 아닌 것(파손)을 가른다 — 뒤쪽은 결손이 아니다.
-        unreadable = equity is None and not _blank(line.get("thstrm_amount"))
-        rejects.append({**base, "metric": "bps", "reprt_code": code,
-                        "reasons": ["bps_input_unreadable" if unreadable else "bps_input_missing"]})
+        if damaged:
+            reason = "bps_share_rows_unreadable"
+        elif equity is None and not _blank(line.get("thstrm_amount")):
+            reason = "bps_input_unreadable"
+        else:
+            reason = "bps_input_missing"
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason]})
         return []
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
@@ -472,8 +481,6 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         # 판정(common_bps)은 그대로 두고(DB 조회의 bps_note 가 읽는다) 거부 기록의 사유만 가른다: 종류 행이 아예 없는 것은
         # 원천이 주지 않은 것이고, 있는 행의 수를 못 읽은 것은 파손이다 — 뒤쪽만 실행 실패로 센다. 한 행이 없더라도 다른
         # 행의 수가 깨졌으면 파손이다.
-        damaged = any(row is not None and _share_count(row, field) is None
-                      for row in (common, preferred) for field in ("istc_totqy", "tesstk_co"))
         absent = common_bps == "bps_share_rows_unreadable" and not damaged
         rejects.append({**base, "metric": "bps", "reprt_code": code,
                         "reasons": ["bps_share_class_row_absent" if absent else common_bps],
