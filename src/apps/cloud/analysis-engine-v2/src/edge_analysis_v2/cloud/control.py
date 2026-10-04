@@ -99,7 +99,7 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
         cluster: Server-configured cluster ARN.
         execution_arn: Caller workflow execution ARN.
         action: Acquire or release.
-        slots: Shared configured capacity, from one through three.
+        slots: Shared configured capacity, from one through forty (the batch's inline Map bound).
         request_key: Analysis kind and ETF code; one execution at a time per pair.
 
     Returns:
@@ -107,7 +107,7 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
     """
     if action not in ('acquire', 'release'):
         raise ValueError('Unknown execution control action')
-    if type(slots) is not int or not 1 <= slots <= 3:
+    if type(slots) is not int or not 1 <= slots <= 40:
         raise ValueError('Invalid analysis capacity')
     request_key = request_key or execution_arn
     started_by = sha256(execution_arn.encode()).hexdigest()[:32]
