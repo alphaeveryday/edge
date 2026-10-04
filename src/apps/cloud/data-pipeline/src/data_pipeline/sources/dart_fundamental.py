@@ -108,6 +108,8 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
             problems.add("bad_account_line")
         if not (isinstance(currency, str) and (currency == "KRW" or currency in _FOREIGN_CURRENCIES)):
             problems.add("currency_unrecognized")
+        if not (isinstance(line.get("rcept_no"), str) and RCEPT_NO.fullmatch(line["rcept_no"])):
+            problems.add("bad_rcept_no")        # 숫자로 온 접수번호는 `extract` 의 문자열 검사를 통과한다
         if isinstance(account, str) and account in used and any(
                 not _blank(line.get(field)) and _amount(line.get(field)) is None
                 for field in ("thstrm_amount", "thstrm_add_amount")):
@@ -359,7 +361,7 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
     lines = [ln for ln in statement["body_json"]["list"] if isinstance(ln, dict)]
     if not _TICKER.fullmatch(str(corp.get("stock_code"))):
         return [], [{"corp_code": corp.get("corp_code"), "reprt_code": code, "reasons": ["bad_instrument_code"]}]
-    bad = [ln for ln in lines if not RCEPT_NO.fullmatch(str(ln.get("rcept_no")))]
+    bad = [ln for ln in lines if not (isinstance(ln.get("rcept_no"), str) and RCEPT_NO.fullmatch(ln["rcept_no"]))]
     if bad:
         rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
                         "reasons": ["bad_rcept_no"], "lines": len(bad)})
@@ -491,14 +493,20 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
 
 
 def _share_label_problem(shares: dict | None) -> str | None:
-    """읽어야 할 종류 행(합계·보통주·우선주)이 없는데 다른 이름의 종류 행이 있으면 지원하지 않는 표기다.
+    """다른 이름의 종류 행이 있고, 읽어야 할 행(합계·보통주·우선주)이 없거나 그 행에 주식이 있을 수 있으면 지원하지 않는 표기다.
 
     자본 줄이 없거나 원화가 아니어서 BPS 를 어차피 못 만드는 경우에도 따로 본다 — 앞선 결손 사유가 표기 문제를 가리지 않게.
     """
-    rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)]
-    unknown = [r for r in rows if _share_class(r) not in (*_SHARE_CLASSES, _SHARE_NOTE)]
+    unknown = _unread_share_rows(shares)
     missing = any(_share_row(shares, kind) is None for kind in _SHARE_CLASSES)
-    return "bps_share_class_label_unsupported" if unknown and missing else None
+    holds = any(_may_hold_shares(r) for r in unknown)
+    return "bps_share_class_label_unsupported" if unknown and (missing or holds) else None
+
+
+def _unread_share_rows(shares: dict | None) -> list[dict]:
+    """읽는 종류(합계·보통주·우선주)도 설명 행(비고)도 아닌 행."""
+    return [r for r in (shares or {}).get("list", [])
+            if isinstance(r, dict) and _share_class(r) not in (*_SHARE_CLASSES, _SHARE_NOTE)]
 
 
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
@@ -544,8 +552,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     # 읽지 않는 종류 행(`종류주식` 등)에 주식이 있을 수 있으면 "모름"이다 — 그 주식이 우선주·합계에 들었는지 표만으로는
     # 알 수 없다(실응답 1,467표 가운데 보통주 BPS 가 나오는 표에는 그런 행이 없다, ALPHA-1170). `비고` 는 종류가 아니라
     # 설명 행이라 뺀다(실응답은 그 행의 수 칸에 `주1)` 같은 주석을 적는다).
-    unread = any(isinstance(r, dict) and _share_class(r) not in (*_SHARE_CLASSES, _SHARE_NOTE)
-                 and _may_hold_shares(r) for r in shares.get("list", []))
+    unread = any(_may_hold_shares(r) for r in _unread_share_rows(shares))
     if unread or None in (issued_common, treasury_common, issued_preferred, treasury_preferred):
         common_bps = "bps_share_rows_unreadable"
     elif issued_preferred > 0:
@@ -572,10 +579,8 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         # 무결성 검사가 먼저 잡으므로, 여기서 종류 수를 못 읽는 것은 그 행이 없어서다 — 다른 이름의 종류 행이 있으면
         # 읽지 못하는 표기이고(지원하지 않음), 없으면 원천이 종류를 나눠 주지 않은 것이다. 어느 쪽도 우선주 0 으로 보지 않는다.
         reason = common_bps
-        if common_bps == "bps_share_rows_unreadable" and unread:
-            reason = "bps_share_class_label_unsupported"      # 읽는 행이 다 있어도 읽지 않는 종류 행에 주식이 있을 수 있다
-        elif common_bps == "bps_share_rows_unreadable" and (common is None or preferred is None):
-            reason = label[0] if label else "bps_share_class_row_absent"
+        if common_bps == "bps_share_rows_unreadable" and (unread or common is None or preferred is None):
+            reason = label[0] if label else "bps_share_class_row_absent"   # unread 면 label 이 반드시 있다(같은 조건)
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows

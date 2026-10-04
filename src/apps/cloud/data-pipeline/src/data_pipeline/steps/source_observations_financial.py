@@ -209,8 +209,9 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             if share is not None:
                 # 분모 응답을 쓴 판본의 수신시각은 두 응답 중 늦은 쪽 — bps 행과 같은 규칙.
                 version["received_at"] = max(version["received_at"], share["fetched_at"])
-            numbers = {ln.get("rcept_no") for ln in statement["body_json"]["list"]
-                       if dart_fundamental.RCEPT_NO.fullmatch(str(ln.get("rcept_no")))}
+            # 문자열인 접수번호만 센다 — 숫자로 온 값이 판본에 실리면 판본 artifact 쓰기가 죽어 그날 정제 전체가 멈춘다.
+            numbers = {ln.get("rcept_no") for ln in statement["body_json"]["list"] if isinstance(ln, dict)
+                       and isinstance(ln.get("rcept_no"), str) and dart_fundamental.RCEPT_NO.fullmatch(ln["rcept_no"])}
             if len(numbers) > 1:
                 # 한 재무제표 응답은 접수번호 하나다 — 원본·정정 줄이 섞이면 어느 공개일의 값인지 정할 수 없다.
                 rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
