@@ -84,6 +84,7 @@ class DatasetSpec:
     companion: "DatasetSpec | None" = None
     # 거부 가운데 실행 장애가 아닌 '분류된 결손'을 가리는 판별자(재무만 준다). 결손은 품질 로그·manifest 에 건수와 사유로
     # 남지만 정제를 부분 실패(exit 2)로 만들지 않는다. 없으면 모든 거부가 실패다(매크로·업종은 그대로).
+    # 원장에는 결손 건수 칸이 없다 — 원장의 failed_records 는 실패만 세고, 결손은 품질 로그·manifest·판본 표에서 본다.
     is_gap: Callable[[dict], bool] | None = None
 
     def names(self) -> list[str]:
@@ -427,9 +428,6 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
                 "gaps": gaps[:200], "records_gap": len(gaps),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "ops": {"records_out": log.get("rows", 0), "failed_records": len(failures)}})
-    if spec.is_gap is not None:
-        # 원장에는 '미지원 건수'로 올린다(구성종목 적재의 CASH·OPTION 제외와 같은 칸) — 실패 건수와 섞지 않는다.
-        log["ops"]["unsupported_records"] = len(gaps)
     quality_written = True
     try:
         storage.put_bytes(quality_log_key(spec.dataset, started_at.date().isoformat(), run_id),
