@@ -1547,3 +1547,36 @@ def test_a_share_table_whose_class_rows_exceed_the_total_yields_no_bps_at_all(tm
     _, _, kept = _half_after(tmp_path / "partial", {**full_responses(SAMSUNG), _HALF_SHARES: json.dumps(partial).encode()})
     assert ("bps_total_shares", "POINT") in _half_cfs_metrics(kept)
 
+
+def test_partial_normalize_logs_one_reject_summary_line_for_the_failure_alert(tmp_path, caplog):
+    # WHY(ALPHA-1169): 실패 통보(Airflow)는 품질 로그를 읽을 권한이 없어 "FAILED"만 보냈다 — 적재는 끝났고 읽지 못하는 표기
+    # 2건만 남은 run 과 실제 장애가 같은 문구였다. 정제가 exit 2 를 만든 거부를 분류·회사·사유와 함께 한 줄로 남기고,
+    # 통보가 컨테이너 로그에서 그 줄을 읽는다. 결손(exit 0)만 있는 run 은 줄을 남기지 않는다.
+    def rename_classes(rows):
+        names = {"보통주": "의결권 있는 주식", "우선주": "의결권 없는 주식"}
+        return [dict(r, se=names.get(r["se"], r["se"])) for r in rows]
+
+    def summaries():
+        return [json.loads(r.getMessage()[len(so.REJECT_SUMMARY_MARK):]) for r in caplog.records
+                if r.getMessage().startswith(so.REJECT_SUMMARY_MARK)]
+
+    with caplog.at_level("INFO"):
+        code, done, _ = _normalize_with(tmp_path, "labels", {**full_responses(SAMSUNG), _HALF_SHARES: _shares_with(rename_classes)})
+    (summary,) = summaries()
+    assert code == 2 and summary["failed"] == done["rejected"] == 2 and summary["gaps"] == done["gaps"]
+    assert summary["classes"] == {"unsupported": 2} and summary["dataset"] == "financial_metric"
+    assert {(i["corp_code"], i["corp_name"], i["fs_basis"], i["metric"], tuple(i["reasons"]), i["class"])
+            for i in summary["items"]} == {
+        (SAMSUNG["corp_code"], "삼성전자", fs, "bps", ("bps_share_class_label_unsupported",), "unsupported")
+        for fs in ("CFS", "OFS")}
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        code, _, _ = _normalize_with(tmp_path, "gaps-only", {**full_responses(SAMSUNG),
+                                                             _HALF_SHARES: shares(SAMSUNG, "2026", "11012", preferred=100)})
+    assert code == 0 and summaries() == []
+    # 한 줄에 들도록 앞 N건만 싣고 전체 건수는 따로 적는다. 분류가 없는 거부는 error 로 센다(가볍게 읽히지 않게).
+    line = so._reject_summary("x", [{"reasons": ["r"], "corp_code": str(n)} for n in range(30)], 0, {})
+    bounded = json.loads(line[len(so.REJECT_SUMMARY_MARK):])
+    assert (bounded["failed"], len(bounded["items"]), bounded["classes"]) == (30, so.REJECT_SUMMARY_ITEMS, {"error": 30})
+    assert len(line.encode("utf-8")) < 16_000
+

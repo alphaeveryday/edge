@@ -104,3 +104,87 @@ def test_collect_on_a_past_slot_is_refused_before_any_ecs_call(dag_module):
     ti = SimpleNamespace(xcom_push=lambda **k: None, xcom_pull=lambda **k: None, try_number=1, max_tries=2)
     with pytest.raises(AirflowFailException, match="소급 수집 불가"):
         op.execute({"ti": ti, "logical_date": past, "dag_run": SimpleNamespace(conf={}, run_after=past)})
+
+
+# ── 실패 통보 문구 (ALPHA-1169) ──────────────────────────────────────────────────────────
+
+_UNSUPPORTED = {"dataset": "financial_metric", "failed": 2, "gaps": 9, "classes": {"unsupported": 2}, "items": [
+    {"corp_code": "00160302", "corp_name": "코스모화학", "fiscal_year": 2026, "reprt_code": "11012", "fs_basis": fs,
+     "metric": "bps", "reasons": ["bps_share_class_label_unsupported"], "class": "unsupported"} for fs in ("CFS", "OFS")]}
+
+
+def _notify(dag_module, monkeypatch, *, codes=None, summary=_UNSUPPORTED, holds=None, logs_error=None, context=None):
+    """실패 콜백을 한 번 돌려 SNS 로 나간 (제목, 본문)을 돌려준다. 기본은 재무 정제만 exit 2 인 run."""
+    import json
+
+    sent = []
+    monkeypatch.setattr(dag_module, "ALARM_TOPIC", "arn:aws:sns:ap-northeast-2:0:alarms")
+    monkeypatch.setattr(dag_module, "SnsHook", lambda: SimpleNamespace(
+        publish_to_target=lambda **kw: sent.append((kw["subject"], kw["message"]))))
+
+    def events(**kw):
+        if logs_error:
+            raise logs_error
+        assert kw["logStreamName"] == "raw-ingest/data-pipeline/abc123"      # 그 ECS 태스크의 스트림만 읽는다
+        lines = ["2026-10-05 05:24:01 INFO x 다른 줄"]
+        if summary is not None:
+            lines.append("2026-10-05 05:24:02 WARNING data_pipeline.steps.source_observations "
+                         + dag_module.REJECT_SUMMARY_MARK + json.dumps(summary, ensure_ascii=False))
+        return {"events": [{"message": m} for m in lines]}
+
+    monkeypatch.setattr(dag_module, "AwsLogsHook", lambda **kw: SimpleNamespace(
+        conn=SimpleNamespace(get_log_events=events)))
+    for step in dag_module.STEPS:      # 테스트 환경에는 로그 그룹 env 가 없다 — 운영처럼 로그 설정이 있는 스텝으로 만든다
+        task = dag_module.dag.get_task(step)
+        monkeypatch.setattr(task, "awslogs_group", "/ecs/edge-dev-data-pipeline")
+        monkeypatch.setattr(task, "awslogs_stream_prefix", "raw-ingest/data-pipeline")
+    exit_codes = {"plan": 0, **{s: 0 for s in dag_module.STEPS}, "report": 0, "financial_normalize": 2, **(codes or {})}
+    xcom = {(s, "exit_code"): c for s, c in exit_codes.items()}
+    xcom.update({(s, "edge_started"): True for s in exit_codes})
+    xcom.update({(s, "ecs_task_arn"): "arn:aws:ecs:ap-northeast-2:0:task/edge-dev-worker/abc123" for s in exit_codes})
+    xcom.update({(s, "hold"): h for s, h in (holds or {}).items()})
+    ti = SimpleNamespace(xcom_pull=lambda task_ids, key: xcom.get((task_ids, key)))
+    run = SimpleNamespace(run_id="scheduled__2026-10-04T20:20:00+00:00", dag_id="edge_source_daily", conf={})
+    dag_module._notify_failure(context or {"dag": dag_module.dag, "dag_run": run, "ti": ti, "reason": "task_failure"})
+    assert len(sent) == 1
+    return sent[0]
+
+
+def test_alert_says_loaded_only_when_every_reject_is_unsupported_notation(dag_module, monkeypatch):
+    # WHY(ALPHA-1169): 수집·적재가 끝났고 읽지 못하는 표기 2건만 남은 run 도 제목이 "FAILED"뿐이라, 매일 오는 통보가
+    # 적재 장애인지 알려진 미지원인지 본문을 열어도 알 수 없었다. 제목과 본문이 그 둘을 가르고 회사·사유를 싣는다.
+    subject, message = _notify(dag_module, monkeypatch)
+    assert subject == "[source-daily] 적재 완료 · 미지원 2건 — airflow scheduled__2026-10-04T20:20:00+00:00"
+    assert "run 은 FAILED 로 닫혔다" in message                       # 판정을 성공으로 바꾸지 않는다 — 문구만 가른다
+    assert "financial_normalize=2" in message and "financial_load=0" in message
+    assert "financial_normalize: 거부 2건(unsupported 2) · 결손 9건" in message
+    assert "  - 00160302 코스모화학 2026 11012 CFS bps: bps_share_class_label_unsupported [unsupported]" in message
+
+
+@pytest.mark.parametrize("case,kwargs,expected", [
+    ("오류로 분류된 거부가 섞임", {"summary": {**_UNSUPPORTED, "failed": 3, "classes": {"error": 1, "unsupported": 2}}},
+     "거부 3건(error 1 unsupported 2)"),
+    ("요약 줄을 로그에서 못 찾음", {"summary": None}, "거부 요약을 로그에서 찾지 못했다"),
+    ("로그 조회가 실패함", {"logs_error": RuntimeError("AccessDenied")}, "상세를 만들지 못했다: RuntimeError: AccessDenied"),
+    ("적재 스텝이 실패함", {"codes": {"financial_load": 1}}, "financial_load=1"),
+    ("다른 계열의 수집이 부분 실패함", {"codes": {"macro_collect": 2}}, "macro_collect: 부분 실패(exit 2)"),
+    ("원장 보고가 실패함", {"codes": {"report": 1}}, "report=1"),
+    ("종료 코드를 남기지 못한 스텝이 있음", {"codes": {"sector_load": None}}, "sector_load=None"),
+    ("실행 보류가 있음", {"holds": {"sector_load": {"kind": "ECS_STATE_UNKNOWN", "reason": "x"}}}, "실행 보류"),
+])
+def test_alert_stays_failed_unless_the_load_is_proven_complete(dag_module, monkeypatch, case, kwargs, expected):
+    # WHY: "적재 완료"는 증거가 다 있을 때만 쓴다 — 오류 분류 거부, 다른 스텝의 실패·부분 실패·보류가 하나라도 있거나
+    # 거부 내용을 읽지 못했으면 제목은 FAILED 그대로다. 실제 오류를 가볍게 읽히게 만들면 안 된다.
+    subject, message = _notify(dag_module, monkeypatch, **kwargs)
+    assert subject == "[source-daily] FAILED — airflow scheduled__2026-10-04T20:20:00+00:00", case
+    assert expected in message and "적재는 끝났다" not in message, case
+
+
+def test_alert_is_still_sent_when_the_callback_has_no_task_context(dag_module, monkeypatch):
+    # WHY: Airflow 는 마지막 태스크 정보를 싣지 못한 콜백에 dag·run_id·reason 만 준다. 상세를 못 만든다고 통보 자체가
+    # 예외로 사라지면 실패가 아무에게도 가지 않는다.
+    subject, message = _notify(dag_module, monkeypatch,
+                               context={"dag": dag_module.dag, "run_id": "manual__x", "reason": "timed_out"})
+    assert subject == "[source-daily] FAILED — airflow manual__x"
+    assert message.startswith("dag=edge_source_daily run=manual__x reason=timed_out")
+
