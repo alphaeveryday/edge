@@ -256,6 +256,14 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         if any("bad_rcept_no" in (b.get("reasons") or []) and b.get("metric") is None for b in bad):
             unconfirmed((corp_code, year, code, fs_div), "bad_rcept_no")
             continue
+        # 값을 읽는 줄의 칸 파손(재무제표 종류·계정명·통화·금액)도 응답 파손이다 — 그 지표가 "없다"는 확인이 아니므로 판본을
+        # 확정하지 않는다. 확정하면 지표가 빠진 판본이 최신 확정본이 되어 옛 확정값을 NULL 로 가린다(ALPHA-1172). 미확정으로
+        # 두면 조회가 옛 확정 판본을 그대로 주고 이 시도를 latest_unconfirmed_at 으로 드러낸다. 빈 칸·지원하지 않는 계정·
+        # 명시된 외화·읽지 않는 줄의 파손은 해당하지 않는다(판정은 `extract` 가 칸을 읽는 자리에서 한다).
+        unreadable = sorted({r for b in bad for r in b.get("reasons") or []} & dart_fundamental.UNREADABLE_LINE_REASONS)
+        if unreadable:
+            unconfirmed((corp_code, year, code, fs_div), "unreadable_line:" + ",".join(unreadable))
+            continue
         if version is not None:
             version["metrics"].extend(f'{r["metric"]}/{r["period_kind"]}/{r["fiscal_period"]}' for r in extracted)
             version["rejected"].extend({"metric": b.get("metric"), "reasons": b.get("reasons")} for b in bad)

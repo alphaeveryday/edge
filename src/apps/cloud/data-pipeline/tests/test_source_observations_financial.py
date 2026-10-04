@@ -215,6 +215,7 @@ def test_in_force_snapshot_is_chosen_per_etf(tmp_path):
 def test_lines_without_a_currency_are_rejected_not_assumed_krw(sj_divs, metric):
     # WHY(봇 P2): 금액 단위는 응답의 currency=KRW 가 세운다. 필드가 빠진 줄을 원으로 가정하면 단위를 확인하지
     # 않은 값이 원 단위 매출·EPS·BPS 로 적힌다 — 실 응답은 모든 줄에 KRW 를 싣는다(live 픽스처 6건 전수).
+    # 통화가 없는 줄은 원화도, 명시된 외화(정책 차단)도 아니다 — 단위를 읽지 못한 줄이다(ALPHA-1172).
     corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
     body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
     for line in body["list"]:
@@ -223,7 +224,7 @@ def test_lines_without_a_currency_are_rejected_not_assumed_krw(sj_divs, metric):
     rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body},
                                              json.loads(shares(SAMSUNG, "2026", "11012")))
     assert not [r for r in rows if r["metric"] == metric]
-    assert any("non_krw_currency" in r["reasons"] and r["metric"] == metric for r in rejects)
+    assert any("currency_unreadable" in r["reasons"] and r["metric"] == metric for r in rejects)
 
 
 def test_bps_refuses_non_krw_equity_and_bad_receipt_numbers():
@@ -1379,3 +1380,170 @@ def test_financial_targets_default_to_the_outlook_etf_list(tmp_path, monkeypatch
     assert seen == [["0167A0", "069500"], ["091160"]]
     shipped = load_settings()
     assert shipped.source_observations.etf_ids == [] and len(shipped.krx_etf.source.etf_map) > 1
+
+
+# ── 줄 파손과 판본 상태 (ALPHA-1172) ─────────────────────────────────────────────────────
+
+_EPS = "ifrs-full_BasicEarningsLossPerShare"
+
+
+def _half_after(tmp_path, responses):
+    """한 회사 수집 → 정제. (종료 코드, 판본 표, 지표 행 표)"""
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    code = so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    return code, _versions(storage)[1], rows_by(storage)
+
+
+def _half_cfs_metrics(rows):
+    return sorted(k[3:5] for k in rows if k[1:3] == (2026, "Q2") and k[5] == "CFS")
+
+
+_UNREADABLE_LINE_CASES = {
+    # 값을 읽는 줄의 칸을 읽지 못한 경우 → (재무제표 변이, 판본에 남는 사유)
+    "주당이익 3개월 금액이 숫자가 아님": (lambda lines: _line(lines, _EPS).update(thstrm_amount="12x4"), "amount_unreadable"),
+    "자본 금액이 숫자가 아님": (_garbage_equity, "amount_unreadable"),
+    "매출 금액 칸이 배열": (lambda lines: _line(lines, _REVENUE).update(thstrm_amount=[1]), "amount_unreadable"),
+    "통화 칸 없음": (_no_currency, "currency_unreadable"),
+    "통화 칸이 객체": (lambda lines: _line(lines, _REVENUE).update(currency={}), "currency_unreadable"),
+    "통화가 코드 형식이 아님": (lambda lines: _line(lines, _REVENUE).update(currency="krw "), "currency_unreadable"),
+    "재무제표 종류 칸이 배열": (lambda lines: _line(lines, _REVENUE).update(sj_div=[]), "statement_kind_unreadable"),
+    "재무제표 종류 칸 없음": (lambda lines: _line(lines, _EPS).pop("sj_div"), "statement_kind_unreadable"),
+    "계정명이 배열": (lambda lines: _line(lines, _EPS).update(account_nm=["우선주 기본주당이익"]), "account_name_unreadable"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_UNREADABLE_LINE_CASES))
+def test_an_unreadable_cell_on_a_line_the_parser_reads_leaves_the_report_unconfirmed(tmp_path, case):
+    # WHY(ALPHA-1172): 값을 읽는 줄의 칸이 깨지면 그 지표만 빠진 판본이 CONFIRMED 로 남았다. 조회는 가장 늦게 받은 확정
+    # 판본만 쓰고 옛 값으로 채우지 않으므로, 그 판본이 옛 확정값을 NULL 로 가리고 "확정된 부재"로 읽혔다. 읽지 못한 것은
+    # 부재의 확인이 아니다 — 판본을 미확정으로 두고 그 보고서의 지표를 싣지 않는다(조회가 옛 확정 판본을 그대로 준다).
+    mutate, reason = _UNREADABLE_LINE_CASES[case]
+    clean = _half_after(tmp_path / "clean", full_responses(SAMSUNG))[2]
+    code, versions, rows = _half_after(tmp_path / "broken", {**full_responses(SAMSUNG), _HALF_CFS: _statement_with(mutate)})
+    version = versions[(2026, "11012", "CFS")]
+    assert code == 2 and version["status"] == "UNCONFIRMED" and json.loads(version["metrics"]) == []
+    assert json.loads(version["detail"])["statement_detail"] == f"unreadable_line:{reason}"
+    assert version["availability_basis"] == "received"            # 실패한 시도를 공개일로 소급하지 않는다
+    assert _half_cfs_metrics(rows) == []                          # 멀쩡한 줄로 만든 지표도 확정 판본 없이 싣지 않는다
+    # 다른 기준·다른 보고서는 그대로다 — 한 응답의 파손이 번지지 않는다.
+    assert versions[(2026, "11012", "OFS")]["status"] == versions[(2026, "11013", "CFS")]["status"] == "CONFIRMED"
+    assert {k: r["value"] for k, r in rows.items()} == {
+        k: r["value"] for k, r in clean.items() if not (k[1:3] == (2026, "Q2") and k[5] == "CFS")}
+
+
+def _add_unread_line(**cells):
+    return lambda lines: lines.append({**lines[0], "account_id": "ifrs-full_CashAndCashEquivalents", "sj_div": "BS", **cells})
+
+
+def _all(**cells):
+    return lambda lines: [ln.update(**cells) for ln in lines]
+
+
+_STILL_CONFIRMED_CASES = {
+    # 파손과 섞지 않는 것 → (재무제표 변이, 빠지는 지표, 그 지표의 거부 사유)
+    "빈 금액 칸(원천 부재)": (lambda lines: _line(lines, _EPS).update(thstrm_amount="-"),
+                       [("eps_basic", "QUARTER")], "missing_value"),
+    "금액 칸 자체가 없음(원천 부재)": (lambda lines: _line(lines, _EPS).pop("thstrm_add_amount"),
+                            [("eps_basic", "CUMULATIVE")], "missing_value"),
+    "표준 계정 id 가 아닌 줄(지원하지 않는 계정)": (
+        lambda lines: _line(lines, "dart_OperatingIncomeLoss").update(account_id="-표준계정코드 미사용-"),
+        [("operating_income", "CUMULATIVE"), ("operating_income", "QUARTER")], "account_unsupported"),
+    "모르는 재무제표 종류 문자열(읽지 않는 재무제표)": (
+        _unknown_statement_kind, [("revenue", "CUMULATIVE"), ("revenue", "QUARTER")], "account_not_found"),
+    "명시된 외화(USD)": (lambda lines: _line(lines, _REVENUE).update(currency="USD"),
+                    [("revenue", "CUMULATIVE"), ("revenue", "QUARTER")], "non_krw_currency"),
+    "실응답에서 본 적 없는 통화 코드(JPY)": (lambda lines: _line(lines, _REVENUE).update(currency="JPY"),
+                               [("revenue", "CUMULATIVE"), ("revenue", "QUARTER")], "non_krw_currency"),
+    "외화 줄의 금액 파손(읽지 않는 칸)": (_dollar_line_with_garbage_amounts,
+                              [("revenue", "CUMULATIVE"), ("revenue", "QUARTER")], "non_krw_currency"),
+    "숫자로 온 금액(허용되는 타입 차이)": (lambda lines: _line(lines, _EPS).update(thstrm_amount=1200), [], None),
+    "숫자로 온 사업연도(허용되는 타입 차이)": (_all(bsns_year=2026), [], None),
+    "읽지 않는 줄의 금액·통화·종류 파손": (_add_unread_line(thstrm_amount="garbage", currency={}, sj_div=[]), [], None),
+    "계정 id 가 없는 줄(어느 계정의 줄인지 모름 — 범위 밖)": (
+        _no_account_id, [("revenue", "CUMULATIVE"), ("revenue", "QUARTER")], "account_unsupported"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_STILL_CONFIRMED_CASES))
+def test_gaps_unsupported_notation_foreign_currency_and_type_variants_stay_confirmed(tmp_path, case):
+    # WHY(ALPHA-1172): 지표가 안 나왔다는 사실만으로 판본을 미확정으로 내리면, 정상 결손이 매일 "확정 실패"가 되고 새 확정
+    # 판본이 영영 안 생긴다(공급자가 칸 타입을 일괄로 바꾸면 전 종목이 그렇게 된다). 미확정은 값을 읽는 칸을 실제로 읽지
+    # 못했을 때뿐이다 — 빈 칸, 읽지 않는 계정·재무제표·줄, 코드로 적힌 외화, 숫자 표현은 종전대로 확정 판본이다.
+    mutate, missing, reason = _STILL_CONFIRMED_CASES[case]
+    clean = _half_after(tmp_path / "clean", full_responses(SAMSUNG))[2]
+    _, versions, rows = _half_after(tmp_path / "case", {**full_responses(SAMSUNG), _HALF_CFS: _statement_with(mutate)})
+    version = versions[(2026, "11012", "CFS")]
+    assert version["status"] == "CONFIRMED"
+    assert sorted(set(_half_cfs_metrics(clean)) - set(_half_cfs_metrics(rows))) == missing
+    assert {k: r["value"] for k, r in rows.items()} == {k: clean[k]["value"] for k in rows}   # 남은 값은 그대로다
+    if reason:
+        assert [r["reasons"] for r in json.loads(version["rejected"])] == [[reason]]
+
+
+def test_damaged_q3_also_leaves_the_annual_report_unconfirmed(tmp_path):
+    # WHY(ALPHA-1172): 3분기 누적이 깨진 재수집이 사업보고서 판본을 "4분기 없음"으로 확정하면 옛 확정 4분기가 가려진다.
+    # 3분기 판본이 미확정이면 기존 규칙(q4_input_unconfirmed)이 사업보고서 판본도 미확정으로 둔다 — 그 길에 실린다.
+    responses = full_responses(SAMSUNG)
+    body = json.loads(statement(SAMSUNG, "2025", "11014", "CFS"))
+    _line(body["list"], _EPS)["thstrm_add_amount"] = "3,0x0"
+    responses[("statement", SAMSUNG["corp_code"], "2025", "11014", "CFS")] = json.dumps(body, ensure_ascii=False).encode()
+    _, versions, rows = _half_after(tmp_path, responses)
+    assert json.loads(versions[(2025, "11014", "CFS")]["detail"])["statement_detail"] == "unreadable_line:amount_unreadable"
+    annual = versions[(2025, "11011", "CFS")]
+    assert annual["status"] == "UNCONFIRMED" and json.loads(annual["detail"])["statement_detail"] == "q4_input_unconfirmed"
+    assert not any(k[1] == 2025 and k[5] == "CFS" for k in rows)
+    assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "OFS") in rows          # 별도는 멀쩡 — 기준별로 따로
+
+
+def test_first_quarter_fallback_fills_only_an_empty_cumulative_cell(tmp_path):
+    # WHY(로컬 리뷰): 1분기는 누적 칸이 비면 3개월 값으로 대신한다(3개월 = 누적). 그 판정이 "거짓이면 빈 칸"이라 빈 배열·객체로
+    # 깨진 누적 칸도 3개월 값으로 대체돼, 읽지 못한 칸이 사유 없이 확정 판본의 값이 됐다. 대체는 없는 칸·빈 문자열에만 한다.
+    key = ("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")
+    cumulative = ("005930", 2026, "Q1", "revenue", "CUMULATIVE", "CFS")
+
+    def first_quarter(cell):
+        body = json.loads(statement(SAMSUNG, "2026", "11013", "CFS"))
+        line = _line(body["list"], _REVENUE)
+        line.pop("thstrm_add_amount") if cell is None else line.update(thstrm_add_amount=cell)
+        return {**full_responses(SAMSUNG), key: json.dumps(body, ensure_ascii=False).encode()}
+
+    for name, cell in (("absent", None), ("empty", "")):
+        _, versions, rows = _half_after(tmp_path / name, first_quarter(cell))
+        assert versions[(2026, "11013", "CFS")]["status"] == "CONFIRMED", name
+        assert rows[cumulative]["value"] == rows[("005930", 2026, "Q1", "revenue", "QUARTER", "CFS")]["value"] == "85000", name
+    for name, cell in (("list", []), ("object", {}), ("false", False)):
+        _, versions, rows = _half_after(tmp_path / name, first_quarter(cell))
+        version = versions[(2026, "11013", "CFS")]
+        assert version["status"] == "UNCONFIRMED", name
+        assert json.loads(version["detail"])["statement_detail"] == "unreadable_line:amount_unreadable", name
+        assert not any(k[1:3] == (2026, "Q1") and k[5] == "CFS" for k in rows), name
+    # 숫자 0 은 깨진 칸이 아니라 값이다(문자열 "0" 과 같다) — 3개월 값으로 바꿔 쓰지 않는다.
+    _, versions, rows = _half_after(tmp_path / "zero", first_quarter(0))
+    assert versions[(2026, "11013", "CFS")]["status"] == "CONFIRMED" and rows[cumulative]["value"] == "0"
+
+
+def _common_exceeds_total(rows):                       # 우선주 행 없음 + 보통주 발행수(2,000)가 합계(1,000)보다 큼
+    return [dict(r, istc_totqy="2,000") if r["se"] == "보통주" else r for r in rows if r["se"] != "우선주"]
+
+
+def test_a_share_table_whose_class_rows_exceed_the_total_yields_no_bps_at_all(tmp_path):
+    # WHY(ALPHA-1172): 종류 행이 일부만 있는 표에서 그 수가 합계를 넘는 모순은 실패 분류(response_damage)에서만 잡았다.
+    # 표 유효성 검사는 통과해서, 어느 행이 틀렸는지 모르는 합계로 계산한 bps_total_shares 가 shares=ok 인 확정 판본에
+    # 실렸다. 모순된 표는 분모가 될 수 없다 — 두 BPS 모두 만들지 않고 분모만 미확정이다. 손익 지표와 판본은 유지한다.
+    table = json.loads(_shares_with(_common_exceeds_total))
+    assert dart_fundamental.share_table_problem(table, "2026-06-30") == "share_rows_inconsistent"
+    # 넘지 않는 부분 표는 모순이 아니다(종류를 나눠 주지 않은 표 — 통상 BPS 는 종전대로 나온다).
+    partial = json.loads(_shares_with(lambda rows: [r for r in rows if r["se"] != "우선주"]))
+    assert dart_fundamental.share_table_problem(partial, "2026-06-30") is None
+    code, versions, rows = _half_after(tmp_path / "broken", {**full_responses(SAMSUNG),
+                                                            _HALF_SHARES: _shares_with(_common_exceeds_total)})
+    version = versions[(2026, "11012", "CFS")]
+    detail = json.loads(version["detail"])
+    assert code == 2 and version["status"] == "CONFIRMED"
+    assert (detail["shares"], detail["shares_detail"]) == ("error", "share_rows_inconsistent")
+    assert _half_cfs_metrics(rows) == [m for m in _half_cfs_metrics(_half_after(tmp_path / "clean", full_responses(SAMSUNG))[2])
+                                       if not m[0].startswith("bps")]
+    _, _, kept = _half_after(tmp_path / "partial", {**full_responses(SAMSUNG), _HALF_SHARES: json.dumps(partial).encode()})
+    assert ("bps_total_shares", "POINT") in _half_cfs_metrics(kept)
+
