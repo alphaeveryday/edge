@@ -367,7 +367,7 @@ resource "aws_iam_role_policy" "minute_queues" {
 
 # 전용 역할이다 — 공용 `aws_iam_role.task` 에 붙이면 **모든 수집·정제 배치 task-def**
 # (`aws_ecs_task_definition.this`)가 상주 서비스를 내릴 권한을 함께 갖는다. 권한 자체는
-# 상주 서비스로 좁혀도, 그것을 행사할 수 있는 실행체가 레인 밖까지 넓어진다(analysis_task 선례).
+# 상주 서비스로 좁혀도, 그것을 행사할 수 있는 실행체가 레인 밖까지 넓어진다.
 resource "aws_iam_role" "minute_session" {
   name               = "${var.name}-minute-session"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -392,7 +392,7 @@ resource "aws_iam_role_policy" "minute_session" {
       {
         # 5분 파생 산출 (ALPHA-955 — `rollup-minute-session`). 이 태스크가 레이크에
         # 만드는 파생 데이터이므로 프리픽스를 한정한다
-        # (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례).
+        # 쓰기 권한은 해당 prefix 안으로 제한한다.
         # 없으면 매일 AccessDenied 다. Scheduler 자체는 RunTask 제출까지만 보지만 아래
         # ECS Task State Change rule 이 이 task family의 exit≠0 을 알람 토픽으로 올린다.
         Effect   = "Allow"
@@ -697,68 +697,10 @@ resource "aws_iam_role_policy" "minute_session_failure_events" {
   })
 }
 
-# ── 분봉 트리거 설명 소비자 (ALPHA-719) ────────────────────────────────
-# analysis-engine 이미지의 상주 소비자 — price-explanation-realtime 을 폴링해
-# `analyze --trigger-id` 경로를 태운다. data-pipeline 서비스 맵(minute_services)에 넣지
-# 않는 이유: 이미지·컨테이너명·env 네임스페이스(PG*·DEEPSEEK_*)가 전부 다르다(tasks.tf
-# analysis 단서와 동일). 세션 스케일에는 아래 env 파생으로 함께 편입된다.
-
-# ExposureReverted 회수 자격(ALPHA-746) — 소비자가 super-admin 무효화 API 를 부를 때 쓰는
-# 운영자 계정. 그릇(SSM SecureString)은 TF 밖 운영자 CLI 주입이다 — 시크릿 그릇 규약("TF 는
-# 그릇만, 값은 수동")에서 한 칸 더: 여기서는 **이름만 계약**한다(kis 토큰 캐시와 같은 결).
-# 미주입이면 태스크가 ResourceInitializationError 로 시작하지 않는다 — 조용한 자격 공백 대신
-# fail-loud. 주입(1회):
-#   aws ssm put-parameter --name /<var.name>/super-admin/operator-email --type SecureString --value '<email>'
-#   aws ssm put-parameter --name /<var.name>/super-admin/operator-password --type SecureString --value '<password>'
-locals {
-  super_admin_email_param_arn    = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-email"
-  super_admin_password_param_arn = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-password"
-}
-
-resource "aws_ecs_task_definition" "analysis_consumer" {
-  family                   = "${var.name}-analysis-consumer"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
-  # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
-  memory             = var.analysis_task_memory
-  execution_role_arn = aws_iam_role.execution.arn
-  task_role_arn      = aws_iam_role.analysis_task.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
-  }
-
-  container_definitions = jsonencode([{
-    name      = local.analysis_container_name
-    image     = var.analysis_image
-    essential = true
-    # 진행 중 메시지(LLM 호출 포함)를 끝낼 시간 — 상주 3종과 같은 근거. Fargate 상한 120.
-    stopTimeout = 120
-    # 이미지 ENTRYPOINT 가 `python -m edge_analysis` 라 command 는 서브커맨드 인자다.
-    command = ["consume-triggers"]
-    environment = [for k, v in merge(local.analysis_env, {
-      EDGE_EXPLANATION_QUEUE_URL = aws_sqs_queue.minute["price-explanation-realtime"].url
-      SUPER_ADMIN_API_URL        = var.super_admin_api_url
-    }) : { name = k, value = v }]
-    # 회수 자격은 이 소비자에게만 주입한다 — 배치 analyze(tasks.tf)는 무효화를 부르지 않는다.
-    secrets = [for k, v in merge(local.analysis_secrets, {
-      SUPER_ADMIN_EMAIL    = local.super_admin_email_param_arn
-      SUPER_ADMIN_PASSWORD = local.super_admin_password_param_arn
-    }) : { name = k, valueFrom = v }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis-consumer" })
-    }
-  }])
-}
-
 resource "aws_ecs_service" "analysis_consumer" {
   name            = "${var.name}-analysis-consumer"
   cluster         = var.cluster_arn
-  task_definition = coalesce(var.analysis_consumer_task_definition_arn, aws_ecs_task_definition.analysis_consumer.arn)
+  task_definition = var.analysis_consumer_task_definition_arn
   desired_count   = 0
   launch_type     = "FARGATE"
 
@@ -777,19 +719,4 @@ resource "aws_ecs_service" "analysis_consumer" {
     # Image revisions belong to application CD; Terraform must not restore the v1 revision.
     ignore_changes = [desired_count, task_definition]
   }
-}
-
-resource "aws_iam_role_policy" "analysis_consumer_queue" {
-  name = "analysis-consumer-queue"
-  role = aws_iam_role.analysis_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      # 소비 + ReturnsNotReady 지연(ChangeMessageVisibility). 설명 큐 하나뿐이다.
-      Effect   = "Allow"
-      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
-      Resource = [aws_sqs_queue.minute["price-explanation-realtime"].arn]
-    }]
-  })
 }
