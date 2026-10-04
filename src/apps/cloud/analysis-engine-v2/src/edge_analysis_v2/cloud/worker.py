@@ -17,6 +17,7 @@ from edge_analysis_v2.cloud.contract import decode_request
 from edge_analysis_v2.contracts.audit import read_contract_audit
 from edge_analysis_v2.dashboard.server import assemble_screen
 from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices, load_research_observations
+from edge_analysis_v2.sources.web_research import WebResearch
 from edge_analysis_v2.storage.database import STATS, connect_results, retry_transient
 from edge_analysis_v2.storage.delivery import enqueue_movement
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
@@ -85,7 +86,7 @@ def load_sources(ca_path, session, request):
         return load_prices(connection,load_flow(connection,load_source(connection,request['etf_code'],request['analysis_at'])),request=request)
 
 
-def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner=None):
+def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner=None, web_key=None):
     """Execute with a fixed cutoff and publish observations independently of analysis status.
 
     Args:
@@ -145,7 +146,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
         if owner:
             source = retry_transient(lambda: load_sources(ca_path, session, request))
             source = db(lambda connection: load_research_observations(connection, source))
-            execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
+            web = WebResearch(web_key, request['analysis_at']) if web_key else None
+            execute_request(kind=request['kind'],source_tools=DatabaseTools(source, web=web),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                 artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,owner=owner)
             if request['kind'] == 'movement':
@@ -162,7 +164,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
                          acquire_slot(lock_connection, slots), slots, time.monotonic()-waited)
                 source = load_sources(ca_path, session, request)
                 source = load_research_observations(lock_connection, source)
-                execute_request(kind=request['kind'],source_tools=DatabaseTools(source),
+                web = WebResearch(web_key, request['analysis_at']) if web_key else None
+                execute_request(kind=request['kind'],source_tools=DatabaseTools(source, web=web),
                     connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                     artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
                 if request['kind'] == 'movement':
@@ -210,7 +213,8 @@ def main():
         folder=Path('/tmp/analysis')/request['analysis_id'],key=key,
         model=secret.get('DEEPSEEK_MODEL','deepseek-flash'),session=session,
         slots=int(os.environ.get('ANALYSIS_SLOTS','1')),
-        owner=os.environ.get('ANALYSIS_EXECUTION_ARN') or None)
+        owner=os.environ.get('ANALYSIS_EXECUTION_ARN') or None,
+        web_key=secret.get('TINYFISH_API_KEY'))
 
 
 if __name__=='__main__':
