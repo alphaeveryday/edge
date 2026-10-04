@@ -475,11 +475,14 @@ def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
             **full_responses(SAMSUNG), _HALF_CFS: _statement_with(on_statement), _HALF_SHARES: _shares_with(extra_class)})
         assert code == 2 and "unsupported" in done["reject_classes"], name
     # 표준 id 가 없는 주당이익 줄은 이름이 어떻게 시작하든 "원천에 없음"이 아니다(첫머리 일치로 보면 놓친다).
-    for eps_name in ("보통주 기본주당이익", "주당순이익", "계속영업 기본주당이익(손실)"):
+    for eps_id, eps_name in (("-표준계정코드 미사용-", "보통주 기본주당이익"), ("-표준계정코드 미사용-", "주당순이익"),
+                             ("-표준계정코드 미사용-", "계속영업 기본주당이익(손실)"),
+                             ("ifrs-full_BasicAndDilutedEarningsLossPerShare", "기본및희석주당이익"),
+                             ("-표준계정코드 미사용-", "기본 및 희석주당순이익")):
         _, rejects = dart_fundamental.extract(
             {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
             {"body_json": json.loads(_statement_with(lambda lines: _line(lines, "ifrs-full_BasicEarningsLossPerShare").update(
-                account_id="-표준계정코드 미사용-", account_nm=eps_name)))}, json.loads(shares(SAMSUNG, "2026", "11012")))
+                account_id=eps_id, account_nm=eps_name)))}, json.loads(shares(SAMSUNG, "2026", "11012")))
         assert [r["reasons"] for r in rejects if r.get("metric") == "eps_basic"] == [["account_unsupported"]], eps_name
     # 반대로 희석 줄만 있는 것은 기본 EPS 의 비슷한 줄이 아니다 — 기본 EPS 줄을 지우면 원천 부재다.
     _, rejects = dart_fundamental.extract(
@@ -569,6 +572,7 @@ _DAMAGE_CASES = {
     "달러 재무제표 + 숫자인 회사 코드": (lambda lines: [ln.update(currency="USD", corp_code=0) for ln in lines], None),
     "자본 칸 빈 값 + 주식총수 행의 사업연도가 빈 배열": (_blank_equity, lambda rows: [dict(r, bsns_year=[]) for r in rows]),
     "자본 칸 빈 값 + 주식총수 행의 보고서 코드가 객체": (_blank_equity, lambda rows: [dict(r, reprt_code={}) for r in rows]),
+    "자본 칸 빈 값 + 주식총수 행의 기준일이 숫자": (_blank_equity, lambda rows: [dict(r, stlm_dt=20260630) for r in rows]),
 }
 
 
@@ -601,6 +605,16 @@ def test_the_same_spots_without_damage_remain_gaps(tmp_path):
         code, done, log = _normalize_with(tmp_path, name, {**full_responses(SAMSUNG), _HALF_CFS: _statement_with(on_statement)})
         assert code == 0 and done["rejected"] == 0 and done["gaps"] > 0, name
         assert {f["class"] for f in log["gaps"]} <= {"policy", "source_absent"}, name
+
+
+def test_type_damage_is_flagged_without_changing_what_is_produced(tmp_path):
+    # WHY(검증 라운드): 식별 검사를 엄격하게 바꿔 숫자로 온 사업연도를 거부했더니, 전에는 만들어지던 지표와 확정 판본이
+    # 사라졌다. 파손을 드러내는 것(실패로 남김)과 산출물을 바꾸는 것은 따로다 — 값은 그대로 두고 실패만 남긴다.
+    _, clean, _ = _normalize_with(tmp_path, "clean", full_responses(SAMSUNG))
+    code, done, log = _normalize_with(tmp_path, "int-year", {**full_responses(SAMSUNG), _HALF_CFS: _statement_with(
+        lambda lines: [ln.update(bsns_year=int(ln["bsns_year"])) for ln in lines])})
+    assert done["rows"] == clean["rows"]                                   # 지표 행 수가 같다(응답을 통째로 버리지 않는다)
+    assert code == 2 and any(f["reasons"] == ["bad_field_type"] and f["class"] == "error" for f in log["failures"])
 
 
 def test_gap_combinations_are_not_promoted_to_errors(tmp_path):

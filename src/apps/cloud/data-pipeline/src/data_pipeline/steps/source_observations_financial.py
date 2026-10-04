@@ -163,10 +163,10 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                 rcept_dates[rcept_no] = day
             continue
         # 요청한 회사·연도·보고서의 응답인지 본다 — 다른 기간의 값을 요청 기간으로 라벨하지 않게.
-        # 칸이 없을 때(None)만 요청값으로 본다 — 빈 배열·객체·숫자처럼 깨진 값을 "없음"으로 치면 파손 응답이 요청 기간의
-        # 온전한 응답으로 읽힌다(재무제표 줄과 주식총수 행 모두 이 검사를 지난다).
-        if any(ln.get(field) is not None and ln.get(field) != request[field]
-               for ln in items for field in ("corp_code", "bsns_year", "reprt_code")):
+        if any(ln.get("corp_code") not in (None, request["corp_code"])
+               or str(ln.get("bsns_year") or request["bsns_year"]) != request["bsns_year"]
+               or str(ln.get("reprt_code") or request["reprt_code"]) != request["reprt_code"]
+               for ln in items):
             rejects.append({**{k: request.get(k) for k in ("corp_code", "bsns_year", "reprt_code")},
                             "raw_key": obj["key"], "reasons": ["response_identity_mismatch"]})
             reject_response(kind, target, "response_identity_mismatch")

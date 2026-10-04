@@ -64,8 +64,11 @@ _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_sha
 # ①을 통과하지 못한 보고서의 거부는 사유가 무엇이든 처리 오류다 — "결손처럼 보이는 파손"이 결손으로 세어지지 않는다.
 _STATEMENT_KINDS = frozenset({"BS", "IS", "CIS", "CF", "SCE"})    # 실응답에서 확인한 재무제표 종류
 _FOREIGN_CURRENCIES = frozenset({"USD"})                           # 실응답에서 확인한 원화 아닌 통화
-_LINE_FIELDS = ("sj_div", "account_id", "account_nm", "currency", "rcept_no", "bsns_year", "reprt_code",
-                "thstrm_amount", "thstrm_add_amount")              # 정제가 재무제표 줄에서 읽는 칸
+# 정제가 읽는 칸 — 전부 문자열(또는 없음)이어야 한다. 식별 검사(`str(값 or 요청값)`)는 빈 배열·객체·0 을 "없음"으로 쳐서
+# 통과시키므로, 타입 파손은 여기서 한 규칙으로 잡는다(주식 수 칸은 숫자도 받는 기존 계약이라 `_share_count` 가 본다).
+_LINE_FIELDS = ("sj_div", "account_id", "account_nm", "currency", "rcept_no", "corp_code", "bsns_year", "reprt_code",
+                "thstrm_amount", "thstrm_add_amount")
+_SHARE_FIELDS = ("se", "rcept_no", "stlm_dt", "corp_code", "bsns_year", "reprt_code")
 _SHARE_NOTE = "비고"                                                # 주식총수 표의 설명 행 — 수 칸에 글이 온다
 _SHARE_CLASSES = ("합계", "보통주", "우선주")
 # 정책 차단: 값을 만들 수 있어도 팀 결정으로 만들지 않는다.
@@ -85,7 +88,7 @@ _REASON_CLASSES = (("policy", POLICY_REASONS), ("source_absent", SOURCE_ABSENT_R
 _SIMILAR_LINES = {
     "revenue": (("Revenue",), ("매출", "영업수익", "이자수익"), ()),
     "operating_income": (("OperatingIncome", "ProfitLossFromOperatingActivities"), ("영업이익", "영업손익", "영업손실"), ()),
-    "eps_basic": (("EarningsLossPerShare", "EarningsPerShare"), ("주당",), ("희석",)),   # 기본·희석 겸용 줄은 id 로 잡힌다
+    "eps_basic": (("EarningsLossPerShare", "EarningsPerShare"), ("주당",), ()),   # 희석 전용 줄은 아래에서 뺀다
     "eps_diluted": (("DilutedEarnings",), ("희석",), ()),
     "bps": (("Equity",), ("자본총계", "지배기업"), ()),           # 재무상태표의 자본 줄(다른 id·회사 정의 id 포함)
 }
@@ -125,6 +128,8 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
         if not isinstance(row, dict):
             continue                        # 파손 행은 상위 정제가 malformed_list_row 로 이미 거부한다
         kind, receipt = row.get("se"), row.get("rcept_no")
+        if any(row.get(field) is not None and not isinstance(row.get(field), str) for field in _SHARE_FIELDS):
+            problems.add("bad_field_type")
         if not (isinstance(receipt, str) and RCEPT_NO.fullmatch(receipt)):
             problems.add("bad_rcept_no")        # 숫자로 온 접수번호는 문자열 검사를 통과해 뒤에서 비교가 깨진다
         if not (isinstance(kind, str) and kind.strip()):
@@ -157,8 +162,9 @@ def _similar_line(lines: list[dict], metric: str) -> bool:
     def similar(line: dict) -> bool:
         """그 줄이 이 지표와 같은 항목으로 보이는가(계정 id 줄기 또는 계정명)."""
         account, name = str(line.get("account_id")), "".join(str(line.get("account_nm") or "").split())
-        if metric == "eps_basic" and "Diluted" in account:
-            return False                    # 희석 전용 줄은 기본 EPS 의 비슷한 줄이 아니다
+        if metric == "eps_basic" and (("Diluted" in account and "Basic" not in account)
+                                      or ("희석" in name and "기본" not in name)):
+            return False                    # 희석 전용 줄은 기본 EPS 의 비슷한 줄이 아니다(기본·희석 겸용 줄은 비슷한 줄이다)
         return any(stem in account for stem in stems) or (
             any(word in name for word in words) and not any(word in name for word in excluded))
     return any(ln.get("sj_div") in (("BS",) if metric == "bps" else ("IS", "CIS")) and similar(ln) for ln in lines)
