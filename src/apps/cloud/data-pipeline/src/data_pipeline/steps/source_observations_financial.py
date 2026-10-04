@@ -195,6 +195,7 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         return row
 
     by_report: dict[tuple, list[tuple[dict, list[dict]]]] = {}
+    damaged: set[tuple] = set()             # 응답 무결성을 통과하지 못한 보고서 (corp, year, code, fs_div)
     for (corp_code, year, code, fs_div), statement in sorted(statements.items()):
         share = shares.get((corp_code, year, code))
         version = versions.get((corp_code, year, code, fs_div))
@@ -217,6 +218,14 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                 unconfirmed((corp_code, year, code, fs_div), "mixed_rcept_no")
                 continue
             version["rcept_no"] = next(iter(numbers), None)
+        # ① 응답 무결성 — 지표를 해석하기 전에 본다. 위반이 있으면 이 보고서의 지표 거부는 결손으로 세지 않는다.
+        damage = dart_fundamental.response_damage(
+            [ln for ln in statement["body_json"]["list"] if isinstance(ln, dict)],
+            share["body_json"] if share else None, dart_fundamental._period_end(year, code))
+        if damage:
+            damaged.add((corp_code, year, code, fs_div))
+            rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
+                            "raw_key": statement["key"], "reasons": damage, "response_damaged": True})
         try:
             extracted, bad = dart_fundamental.extract(
                 {"corp_code": corp_code, "stock_code": corps[corp_code]["stock_code"]},
@@ -227,10 +236,11 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                             "raw_key": statement["key"], "reasons": ["extract_error"], "error": type(exc).__name__})
             unconfirmed((corp_code, year, code, fs_div), f"extract_error:{type(exc).__name__}")
             continue
-        rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
+        rejects.extend({**b, "raw_key": statement["key"], **({"response_damaged": True} if damage else {})}
+                       for b in bad)
         if not extracted and any("account_not_found" in (b.get("reasons") or []) for b in bad):
-            # 응답은 정상인데 쓸 계정 줄이 하나도 없다 — 지표 하나의 미공시가 아니라 계정 체계가 통째로 맞지 않는 것이다
-            # (공급자 형식 변경 등). 지표별 결손은 실패로 세지 않으므로(dart_fundamental.is_metric_gap) 여기서 실패로 드러낸다.
+            # 응답은 정상인데 쓸 계정 줄이 하나도 없다 — 지표 하나의 부재가 아니라 계정 체계가 통째로 맞지 않는 것이다
+            # (공급자 형식 변경 등). 지표별 "계정 없음"은 결손으로 세므로 여기서 실패로 드러낸다.
             rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
                             "raw_key": statement["key"], "reasons": ["no_usable_account_line"]})
         # 재무제표 줄의 접수번호 파손(metric 없는 거부)은 응답 파손 — 남은 줄로 만든 지표를 확정 판본에 싣지 않는다.
@@ -260,6 +270,15 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
                 continue
             q3 = [r for r, _ in items if r["fiscal_period"] == "Q3"]
             derived, bad = dart_fundamental.derive_q4(fy, q3)
+            for b in bad:
+                # 4분기를 못 만든 이유는 3분기 쪽에 있다 — 그 사유와 무결성 상태를 물려받아 분류한다(3분기 계정이
+                # 지원하지 않는 표기였거나 응답이 깨졌으면 4분기 거부도 결손이 아니다).
+                b["cause_reasons"] = [r for prior in rejects if prior.get("metric") == b["metric"]
+                                      and prior.get("corp_code") == corp_code and prior.get("fs_basis") == fs_div
+                                      and prior.get("fiscal_year") == int(year) and prior.get("reprt_code") == "11014"
+                                      for r in prior.get("reasons") or []]
+                if {(corp_code, year, "11014", fs_div), (corp_code, year, "11011", fs_div)} & damaged:
+                    b["response_damaged"] = True
             rejects.extend(bad)
             annual = versions.get((corp_code, year, "11011", fs_div))
             if annual is not None:      # Q4 유도 행·거부는 사업보고서 판본의 것이다
@@ -348,7 +367,8 @@ FINANCIAL = DatasetSpec(
     table="financial_metric",
     collection_vendor="dart",
     companion=FINANCIAL_VERSION,
-    is_gap=dart_fundamental.is_metric_gap,
+    classify=dart_fundamental.reject_class,
+    gap_classes=dart_fundamental.GAP_CLASSES,
 )
 
 

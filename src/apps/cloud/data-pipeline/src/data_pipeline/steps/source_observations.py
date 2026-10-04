@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import os
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -82,10 +83,11 @@ class DatasetSpec:
     # 같은 정제가 함께 만드는 둘째 행 집합(재무: 보고서 판본). 같은 manifest·같은 적재 트랜잭션에 실린다 —
     # 지표 행 없이 판본만, 판본 없이 지표만 실리는 상태가 없다.
     companion: "DatasetSpec | None" = None
-    # 거부 가운데 실행 장애가 아닌 '분류된 결손'을 가리는 판별자(재무만 준다). 결손은 품질 로그·manifest 에 건수와 사유로
-    # 남지만 정제를 부분 실패(exit 2)로 만들지 않는다. 없으면 모든 거부가 실패다(매크로·업종은 그대로).
-    # 원장에는 결손 건수 칸이 없다 — 원장의 failed_records 는 실패만 세고, 결손은 품질 로그·manifest·판본 표에서 본다.
-    is_gap: Callable[[dict], bool] | None = None
+    # 거부 한 건을 분류하는 함수(재무만 준다) → policy·source_absent·unsupported·error. gap_classes 에 든 분류는
+    # 품질 로그·manifest·원장(미지원 건수)에 남기되 정제를 부분 실패(exit 2)로 만들지 않는다. 없으면 모든 거부가
+    # 실패다(매크로·업종은 그대로).
+    classify: Callable[[dict], str] | None = None
+    gap_classes: frozenset = frozenset()
 
     def names(self) -> list[str]:
         """열 이름(파일·DB 적재 순서)."""
@@ -383,7 +385,11 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         rows, rejects = result[0], result[1]
         companion_rows = list(result[2]) if len(result) > 2 else []
         for reject in rejects:
-            (gaps if spec.is_gap is not None and spec.is_gap(reject) else failures).append(reject)
+            if spec.classify is None:
+                failures.append(reject)
+                continue
+            reject = {**reject, "class": spec.classify(reject)}
+            (gaps if reject["class"] in spec.gap_classes else failures).append(reject)
         for row in [*rows, *companion_rows]:
             row["raw_run_id"] = input_run_id
         rows, conflicts, collapsed = _collapse(spec, rows)
@@ -410,8 +416,9 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             "artifact": {"key": artifact_key, "sha256": artifact_sha, "rows": len(rows),
                          "partition_date": "ingest_date"},
             "canonical_partitions": partitions, "rows": len(rows),
-            # rejected 는 실행 실패만 센다(재실행 시 exit 2 판정의 근거). 분류된 결손은 gaps 로 따로 남긴다.
+            # rejected 는 exit 2 를 만드는 거부만 센다(재실행 판정의 근거). 분류된 결손은 gaps 로 따로 남긴다.
             "rejected": len(failures), "gaps": len(gaps), "collapsed_duplicates": collapsed,
+            "reject_classes": dict(sorted(Counter(r["class"] for r in [*failures, *gaps] if "class" in r).items())),
             "companion": companion,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
         log.update({"rows": len(rows), "collapsed_duplicates": collapsed,
@@ -428,6 +435,11 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
                 "gaps": gaps[:200], "records_gap": len(gaps),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "ops": {"records_out": log.get("rows", 0), "failed_records": len(failures)}})
+    if spec.classify is not None:
+        # 원장에는 '정상 제외 건수'(unsupported_records 칸)로 올린다 — 실패 건수와 섞지 않는다. wrapper 는 이 시도가 쓴
+        # 로그일 때만 그 칸을 저장한다(ops_attempt_id).
+        log["ops"]["unsupported_records"] = len(gaps)
+        log["ops_attempt_id"] = os.environ.get("OPS_LEDGER_ATTEMPT_ID")
     quality_written = True
     try:
         storage.put_bytes(quality_log_key(spec.dataset, started_at.date().isoformat(), run_id),

@@ -158,21 +158,23 @@ def test_missing_q3_blocks_q4_derivation_and_non_krw_is_rejected(tmp_path):
         SAMSUNG, "2026", "11013", "CFS", currency="USD")
     storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
                        holdings=("005930",))
-    # 값을 만들지 않는 것이 계약이다. 응답은 온전했으므로 실행 실패(exit 2)가 아니라 분류된 결손으로 남는다(ALPHA-1169).
+    # 값을 만들지 않는 것이 계약이다. 응답은 온전하므로 실행 실패(exit 2)가 아니라 분류된 결손으로 남는다(ALPHA-1169):
+    # 3분기 재무제표 없음(013) = 확인된 원천 부재, 달러 재무제표 = 정책 차단.
     assert so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 0
     done = _canonical_manifest(storage)
-    assert done["rejected"] == 0 and done["gaps"] > 0
+    assert done["rejected"] == 0 and done["gaps"] > 0 and set(done["reject_classes"]) == {"policy", "source_absent"}
     rows = rows_by(storage)
     assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "CFS") not in rows
     assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "OFS") in rows          # 별도는 3분기가 있다
     assert ("005930", 2026, "Q1", "revenue", "QUARTER", "CFS") not in rows
     log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/data_quality_logs/")
                                             if "run_id=run_fn/" in k)))
-    # 결손은 품질 로그·manifest 에 사유와 건수로 남고 실패 목록과 섞이지 않는다(원장에는 결손 건수 칸이 없다).
+    # 결손은 품질 로그에 사유·분류와 함께 남고 실패 목록과 섞이지 않는다. 원장에는 정상 제외 건수로 올라간다.
     reasons = {r for f in log["gaps"] for r in f["reasons"]}
     assert {"q4_derivation_input_missing", "non_krw_currency"} <= reasons
+    assert {f["class"] for f in log["gaps"]} == {"policy", "source_absent"}
     assert log["failures"] == [] and log["ops"]["failed_records"] == 0
-    assert log["records_gap"] == done["gaps"]
+    assert log["ops"]["unsupported_records"] == log["records_gap"] == done["gaps"]
 
 
 def test_report_names_map_to_periods_and_reject_non_december_years():
@@ -221,10 +223,7 @@ def test_lines_without_a_currency_are_rejected_not_assumed_krw(sj_divs, metric):
     rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body},
                                              json.loads(shares(SAMSUNG, "2026", "11012")))
     assert not [r for r in rows if r["metric"] == metric]
-    # 통화 칸이 없는 것은 "달러 재무제표"(정책 결손)가 아니라 응답 파손이다 — 실패로 남는다(ALPHA-1169).
-    mine = [r for r in rejects if r.get("metric") == metric]
-    assert mine and all(r["reasons"] == ["currency_unrecognized"] for r in mine)
-    assert not any(dart_fundamental.is_metric_gap(r) for r in mine)
+    assert any("non_krw_currency" in r["reasons"] and r["metric"] == metric for r in rejects)
 
 
 def test_bps_refuses_non_krw_equity_and_bad_receipt_numbers():
@@ -383,120 +382,178 @@ def _canonical_manifest(storage, run_id="run_fn"):
         f"operations_archive/canonical_run_manifests/dataset=financial_metric/run_id={run_id}/manifest.json"))
 
 
-def test_classified_metric_gaps_do_not_fail_the_run_but_damage_still_does(tmp_path):
-    # WHY(ALPHA-1169): 정제는 만들지 못한 지표가 하나라도 있으면 exit 2 였고, DAG 가 그 run 을 FAILED 로 닫아 실패 통보가
-    # 나갔다. 그런데 우선주 회사의 BPS 차단(팀 결정)이나 주식총수 표가 `-` 인 분기보고서(원천 미기재)는 매일 있는 결손이라
-    # 실행 장애와 구분되지 않았다(2026-10-04 정기 run: 수집·적재 성공, BPS 결손 13건으로 FAILED). 분류된 결손은 기록으로
-    # 남기고 실패 건수에서 빼되, 응답 파손은 계속 실패여야 한다.
-    def run(tmp, responses, run_id):
-        storage, _ = chain(tmp, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
-                           holdings=("005930",))
-        code = so.normalize(storage, so_fin.FINANCIAL, run_id, "run_f", producer="normalize_financial_metric")
-        return code, _canonical_manifest(storage, run_id)
+def _normalize_with(tmp_path, name, responses):
+    """한 회사 수집 → 정제. (종료 코드, 정제 manifest, 품질 로그)"""
+    folder = tmp_path / name
+    folder.mkdir()
+    storage, _ = chain(folder, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    code = so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+    log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/data_quality_logs/")
+                                            if "run_id=run_fn/" in k)))
+    return code, _canonical_manifest(storage), log
 
-    gaps_only = full_responses(SAMSUNG)
-    gaps_only[("shares", SAMSUNG["corp_code"], "2026", "11012")] = shares(SAMSUNG, "2026", "11012", preferred=100)
-    empty_table = json.loads(shares(SAMSUNG, "2026", "11013"))
-    empty_table["list"] = [dict(r, istc_totqy="-", tesstk_co="-") for r in empty_table["list"] if r["se"] in ("합계", "비고")]
-    gaps_only[("shares", SAMSUNG["corp_code"], "2026", "11013")] = json.dumps(empty_table).encode()
-    (tmp_path / "gaps").mkdir()
-    code, done = run(tmp_path / "gaps", gaps_only, "run_gap")
+
+def _statement_with(mutate, fs_div="CFS"):
+    body = json.loads(statement(SAMSUNG, "2026", "11012", fs_div))
+    mutate(body["list"])
+    return json.dumps(body, ensure_ascii=False).encode()
+
+
+def _shares_with(mutate, code="11012", **kwargs):
+    body = json.loads(shares(SAMSUNG, "2026", code, **kwargs))
+    body["list"] = mutate(body["list"])
+    return json.dumps(body, ensure_ascii=False).encode()
+
+
+def _line(lines, account_id):
+    return next(ln for ln in lines if ln.get("account_id") == account_id)
+
+
+_HALF_CFS = ("statement", SAMSUNG["corp_code"], "2026", "11012", "CFS")
+_HALF_SHARES = ("shares", SAMSUNG["corp_code"], "2026", "11012")
+_REVENUE, _PARENT_EQUITY = "ifrs-full_Revenue", "ifrs-full_EquityAttributableToOwnersOfParent"
+
+
+def test_classified_gaps_do_not_fail_the_run(tmp_path):
+    # WHY(ALPHA-1169): 정제는 만들지 못한 지표가 하나라도 있으면 exit 2 였고 DAG 가 run 을 FAILED 로 닫아 실패 통보가 나갔다.
+    # 우선주 회사의 BPS 차단(팀 결정)과 주식총수 표가 `-` 인 분기보고서(원천 미기재)는 매일 있는 결손이라 실행 장애와
+    # 구분되지 않았다(2026-10-04 정기 run: 수집·적재 성공, BPS 결손 13건으로 FAILED).
+    responses = full_responses(SAMSUNG)
+    responses[_HALF_SHARES] = shares(SAMSUNG, "2026", "11012", preferred=100)                     # 정책 차단
+    responses[("shares", SAMSUNG["corp_code"], "2026", "11013")] = _shares_with(                   # 표가 `-` 뿐
+        lambda rows: [dict(r, istc_totqy="-", tesstk_co="-") for r in rows if r["se"] in ("합계", "비고")], code="11013")
+    code, done, log = _normalize_with(tmp_path, "gaps", responses)
     assert code == 0 and done["rejected"] == 0
-    assert done["gaps"] == 4            # 반기 우선주 차단(연결·별도) + 1분기 표가 `-`(연결·별도)
-
-    damaged = dict(gaps_only)
-    broken = json.loads(shares(SAMSUNG, "2026", "11012", preferred=100))
-    for row in broken["list"]:
-        if row["se"] == "우선주":
-            row["istc_totqy"] = "-5"                    # 행은 있는데 수가 파손 — 원천 미기재가 아니다
-    damaged[("shares", SAMSUNG["corp_code"], "2026", "11012")] = json.dumps(broken).encode()
-    (tmp_path / "damage").mkdir()
-    code, done = run(tmp_path / "damage", damaged, "run_dmg")
-    assert code == 2 and done["rejected"] > 0
+    assert done["reject_classes"] == {"policy": 2, "source_absent": 2}      # 연결·별도 판본마다 한 건
+    assert done["gaps"] == log["records_gap"] == log["ops"]["unsupported_records"] == 4
+    assert log["ops"]["failed_records"] == 0
 
 
-def test_damaged_fields_are_failures_even_when_they_look_like_gaps():
-    # WHY(로컬 리뷰): 결손 사유는 "칸이 비었다·줄이 없다"와 "칸이 깨졌다"를 같은 이름으로 내고 있었다. 결손을 실패에서
-    # 빼는 순간 깨진 응답이 조용히 통과한다 — 깨진 쪽은 다른 사유로 갈라 계속 실패여야 한다.
-    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
-    share_body = json.loads(shares(SAMSUNG, "2026", "11012"))
+def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
+    # WHY: 원천에는 있어 보이는데 이 파서가 읽지 않는 표기·계정을 "원천 부재"나 "정책 차단"으로 넘기면, 고쳐야 할 파싱
+    # 한계가 정상 결손으로 숨는다. 값을 대신 쓰지도, 성공으로 닫지도 않는다 — 지원하지 않는 것으로 드러낸다.
+    def rename_classes(rows):                           # 실응답 표기: 보통주식·우선주식 (388050, 2026 반기)
+        return [dict(r, se=r["se"] + "식") if r["se"] in ("보통주", "우선주") else r for r in rows]
 
-    def reasons(mutate, share=share_body):
-        body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
-        mutate(body["list"])
-        _, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body}, share)
-        assert rejects, "변이가 아무 거부도 만들지 않았다"
-        return rejects
+    def other_operating_income_id(lines):               # 실응답: 영업이익이 다른 표준 id 로 실린다
+        _line(lines, "dart_OperatingIncomeLoss")["account_id"] = "ifrs-full_ProfitLossFromOperatingActivities"
 
-    def equity_blank(lines):
+    for name, key, body, reason in (
+            ("labels", _HALF_SHARES, _shares_with(rename_classes), "bps_share_class_label_unsupported"),
+            ("account", _HALF_CFS, _statement_with(other_operating_income_id), "account_unsupported")):
+        code, done, log = _normalize_with(tmp_path, name, {**full_responses(SAMSUNG), key: body})
+        assert code == 2 and done["gaps"] == 0, name
+        assert {f["class"] for f in log["failures"]} == {"unsupported"}, name
+        assert all(f["reasons"] == [reason] for f in log["failures"]), name
+    # 지배지분 줄은 없고 자본총계만 있는 연결 재무제표 — 자본총계를 대신 쓰지 않고, "자본 없음"으로도 읽지 않는다.
+    rows, rejects = dart_fundamental.extract(
+        {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
+        {"body_json": json.loads(_statement_with(
+            lambda lines: _line(lines, _PARENT_EQUITY).update(account_id="ifrs-full_Equity")))},
+        json.loads(shares(SAMSUNG, "2026", "11012")))
+    assert not [r for r in rows if r["metric"].startswith("bps")]
+    assert [r["reasons"] for r in rejects if r.get("metric") == "bps"] == [["account_unsupported"]]
+
+
+def _garbage_equity(lines):
+    _line(lines, _PARENT_EQUITY)["thstrm_amount"] = "garbage"
+
+
+def _no_currency(lines):
+    del _line(lines, _REVENUE)["currency"]
+
+
+def _no_account_id(lines):
+    del _line(lines, _REVENUE)["account_id"]
+
+
+def _unknown_statement_kind(lines):
+    _line(lines, _REVENUE)["sj_div"] = "GARBAGE"
+
+
+def _unknown_currency(lines):
+    _line(lines, _REVENUE)["currency"] = "ZZZ"
+
+
+def _dollar_line_with_garbage_amounts(lines):
+    _line(lines, _REVENUE).update(currency="USD", thstrm_amount="garbage", thstrm_add_amount="garbage")
+
+
+def _blank_equity(lines):
+    _line(lines, _PARENT_EQUITY)["thstrm_amount"] = "-"
+
+
+def _no_equity_line(lines):
+    lines.remove(_line(lines, _PARENT_EQUITY))
+
+
+def _garbage_common(rows):
+    return [dict(r, istc_totqy="garbage") if r["se"] == "보통주" else r for r in rows]
+
+
+_DAMAGE_CASES = {
+    # 결손처럼 보이는 파손(로컬 리뷰 1~3라운드가 찾은 경로). 왼쪽: 재무제표 변이, 오른쪽: 주식총수 표 변이.
+    "자본 금액이 숫자가 아님": (_garbage_equity, None),
+    "통화 칸 없음": (_no_currency, None),
+    "계정 식별 칸 없음": (_no_account_id, None),
+    "재무제표 종류 칸이 모르는 값": (_unknown_statement_kind, None),
+    "모르는 통화 코드": (_unknown_currency, None),
+    "달러 줄의 금액 파손": (_dollar_line_with_garbage_amounts, None),
+    "우선주 행 없음 + 보통주 수 파손": (None, lambda rows: _garbage_common([r for r in rows if r["se"] != "우선주"])),
+    "자본 칸 빈 값 + 보통주 수 파손": (_blank_equity, _garbage_common),
+    "합계 행 없음 + 보통주 수 파손": (None, lambda rows: _garbage_common([r for r in rows if r["se"] != "합계"])),
+    "자본 계정 줄 없음 + 합계 수 파손": (
+        _no_equity_line, lambda rows: [dict(r, istc_totqy="garbage") if r["se"] == "합계" else r for r in rows]),
+    "보통주 행의 종류 칸 없음": (
+        None, lambda rows: [{k: v for k, v in r.items() if k != "se"} if r["se"] == "보통주" else r for r in rows]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_DAMAGE_CASES))
+def test_damage_overlapping_a_gap_condition_stays_an_error(tmp_path, case):
+    # WHY: 결손을 실패에서 빼면, 같은 응답에 파손이 겹쳤을 때 파손이 결손 사유로 읽혀 조용히 통과한다(식별 칸이 깨진 줄은
+    # "계정 없음", 깨진 통화는 "원화 아님", 깨진 종류 행은 "행 없음"). 그래서 지표를 해석하기 전에 응답 무결성을 먼저 보고,
+    # 위반이 있는 보고서의 거부는 사유가 무엇이든 처리 오류로 센다.
+    on_statement, on_shares = _DAMAGE_CASES[case]
+    responses = full_responses(SAMSUNG)
+    if on_statement is not None:
+        responses[_HALF_CFS] = _statement_with(on_statement)
+    if on_shares is not None:
+        responses[_HALF_SHARES] = _shares_with(on_shares)
+    code, done, log = _normalize_with(tmp_path, "damage", responses)
+    assert code == 2 and done["reject_classes"].get("error", 0) >= 1
+    damaged = [f for f in [*log["failures"], *log["gaps"]]
+               if f.get("reprt_code") == "11012" and f.get("fs_basis") == "CFS"]
+    assert damaged and all(f["class"] == "error" for f in damaged)      # 그 보고서의 거부는 하나도 결손으로 세지 않는다
+
+
+def test_the_same_spots_without_damage_remain_gaps(tmp_path):
+    # WHY: 위 무결성 검사가 정상 결손까지 실패로 만들면 고친 것이 없다 — 같은 자리의 온전한 값은 결손이어야 한다.
+    def dollars(lines):
         for ln in lines:
-            if ln.get("account_id") == "ifrs-full_EquityAttributableToOwnersOfParent":
-                ln["thstrm_amount"] = "-"
+            ln["currency"] = "USD"
 
-    def equity_garbage(lines):
-        for ln in lines:
-            if ln.get("account_id") == "ifrs-full_EquityAttributableToOwnersOfParent":
-                ln["thstrm_amount"] = "garbage"
-
-    def currency_missing(lines):
-        for ln in lines:
-            if ln.get("account_id") == "ifrs-full_Revenue":
-                del ln["currency"]
-
-    def account_id_missing(lines):
-        for ln in lines:
-            if ln.get("account_id") == "ifrs-full_Revenue":
-                del ln["account_id"]
-
-    def statement_kind_garbage(lines):
-        for ln in lines:
-            if ln.get("account_id") == "ifrs-full_Revenue":
-                ln["sj_div"] = "GARBAGE"
-
-    def currency_unknown_code(lines):
-        for ln in lines:
-            if ln.get("account_id") == "ifrs-full_Revenue":
-                ln["currency"] = "ZZZ"
-
-    for mutate in (equity_garbage, currency_missing, account_id_missing, statement_kind_garbage, currency_unknown_code):
-        rejects = reasons(mutate)
-        assert not all(dart_fundamental.is_metric_gap(r) for r in rejects), mutate.__name__
-
-    # 우선주 행은 없고 보통주 수가 깨진 표 — 행 부재(결손)가 아니라 파손이다.
-    damaged = json.loads(shares(SAMSUNG, "2026", "11012"))
-    damaged["list"] = [dict(r, istc_totqy="garbage") if r["se"] == "보통주" else r
-                       for r in damaged["list"] if r["se"] != "우선주"]
-    rejects = reasons(lambda lines: None, damaged)
-    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
-    assert not any("bps_share_class_row_absent" in r["reasons"] for r in rejects)
-
-    # 종류 행의 수 파손은 자본 칸이 비었거나 합계 행이 없어도(입력 없음과 겹쳐도) 파손으로 남는다.
-    garbage_common = json.loads(shares(SAMSUNG, "2026", "11012"))
-    garbage_common["list"] = [dict(r, istc_totqy="garbage") if r["se"] == "보통주" else r for r in garbage_common["list"]]
-    no_total = dict(garbage_common, list=[r for r in garbage_common["list"] if r["se"] != "합계"])
-    for share in (garbage_common, no_total):
-        rejects = reasons(equity_blank if share is garbage_common else (lambda lines: None), share)
-        assert any(r["reasons"] == ["bps_share_rows_unreadable"] for r in rejects)
-        assert not all(dart_fundamental.is_metric_gap(r) for r in rejects)
-
-    # 같은 자리의 정상 결손(칸이 비었다·통화가 달러다)은 그대로 결손이다.
-    def revenue_usd(lines):
-        for ln in lines:
-            if ln.get("account_id") == "ifrs-full_Revenue":
-                ln["currency"] = "USD"
-
-    for mutate in (equity_blank, revenue_usd):
-        assert all(dart_fundamental.is_metric_gap(r) for r in reasons(mutate)), mutate.__name__
+    for name, on_statement in (("blank-equity", _blank_equity), ("dollar-statement", dollars)):
+        code, done, log = _normalize_with(tmp_path, name, {**full_responses(SAMSUNG), _HALF_CFS: _statement_with(on_statement)})
+        assert code == 0 and done["rejected"] == 0 and done["gaps"] > 0, name
+        assert {f["class"] for f in log["gaps"]} <= {"policy", "source_absent"}, name
 
 
-def test_only_classified_reasons_count_as_gaps():
-    # WHY: 분류하지 않은 사유가 결손으로 넘어가면 새로 생긴 파손이 조용히 통과한다 — 기본값은 실패다.
-    gap = dart_fundamental.is_metric_gap
-    assert gap({"reasons": ["bps_blocked_preferred_shares"]}) and gap({"reasons": ["account_not_found"]})
-    assert not gap({"reasons": ["bps_share_rows_unreadable"]})          # 수 파손
-    assert not gap({"reasons": ["non_december_fiscal_year"]})           # 보고서 단위 제외는 계속 드러낸다
-    assert not gap({"reasons": ["some_new_reason"]}) and not gap({"reasons": []}) and not gap({})
-    assert not gap({"reasons": ["account_not_found", "bad_rcept_no"]})  # 하나라도 실패 사유면 실패
+def test_reject_class_defaults_to_error():
+    # WHY: 분류 어휘에 없는 사유가 결손으로 넘어가면 새로 생긴 파손이 조용히 통과한다 — 기본값은 처리 오류다.
+    kind = dart_fundamental.reject_class
+    assert kind({"reasons": ["bps_blocked_preferred_shares"]}) == "policy"
+    assert kind({"reasons": ["account_not_found"]}) == "source_absent"
+    assert kind({"reasons": ["bps_share_class_label_unsupported"]}) == "unsupported"
+    assert kind({"reasons": ["bps_share_rows_unreadable"]}) == "error"          # 있는 행의 수 파손
+    assert kind({"reasons": ["non_december_fiscal_year"]}) == "error"           # 보고서 단위 제외는 계속 드러낸다
+    assert kind({"reasons": ["some_new_reason"]}) == kind({"reasons": []}) == kind({}) == "error"
+    assert kind({"reasons": ["account_not_found", "bad_rcept_no"]}) == "error"  # 하나라도 오류 사유면 오류
+    assert kind({"reasons": ["account_not_found"], "response_damaged": True}) == "error"
+    # 4분기 유도 거부는 3분기 쪽 원인을 물려받는다.
+    assert kind({"reasons": ["q4_derivation_input_missing"]}) == "source_absent"
+    assert kind({"reasons": ["q4_derivation_input_missing"], "cause_reasons": ["account_unsupported"]}) == "unsupported"
 
 
 def _extract_bps(share_body):
@@ -512,8 +569,8 @@ def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred()
     missing["list"] = [r for r in missing["list"] if r["se"] != "우선주"]
     rows, rejects = _extract_bps(missing)
     assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
-    # 행이 없는 것은 원천이 주지 않은 것이다 — 값은 똑같이 막되 사유는 수 파손(아래 음수)과 구분한다(ALPHA-1169).
-    assert any("bps_share_class_row_absent" in r["reasons"] for r in rejects)
+    # 행이 없는 것은 원천이 종류를 나눠 주지 않은 것이다 — 값은 똑같이 막고(우선주 0 으로 보지 않는다) 사유만 가른다.
+    assert any(r["reasons"] == ["bps_share_class_row_absent"] for r in rejects)
     total = next(r for r in rows if r["metric"] == "bps_total_shares")
     assert total["inputs"][1]["common_bps"] == "bps_share_rows_unreadable"        # DB 조회가 읽는 판정은 그대로
 

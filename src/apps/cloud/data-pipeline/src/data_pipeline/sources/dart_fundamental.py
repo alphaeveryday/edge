@@ -44,10 +44,6 @@ _PERIOD_BY_CODE = {v: k for k, v in REPORT_CODES.items()}
 _PERIOD_END = {"11013": (3, 31), "11012": (6, 30), "11014": (9, 30), "11011": (12, 31)}
 RCEPT_NO = re.compile(r"[0-9]{14}")
 _TICKER = re.compile(r"[0-9A-Z]{6}")
-# 실응답에서 확인한 값만 둔다(재무제표 종류 5개, 원화 아닌 통화는 USD — 2026-10-03 수집 2만 줄 표본). 여기 없는 값은
-# 파손과 구분할 수 없으므로 결손이 아니라 실패로 드러나고, 실제로 쓰이는 값이면 그때 추가한다.
-_STATEMENT_KINDS = frozenset({"BS", "IS", "CIS", "CF", "SCE"})
-_FOREIGN_CURRENCIES = frozenset({"USD"})
 _REPORT_NAME = re.compile(r"(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)")
 _FLOW_ACCOUNTS = {
     "revenue": "ifrs-full_Revenue",
@@ -58,27 +54,90 @@ _FLOW_ACCOUNTS = {
 _EQUITY_ACCOUNT = {"CFS": "ifrs-full_EquityAttributableToOwnersOfParent", "OFS": "ifrs-full_Equity"}
 _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_share",
           "eps_diluted": "KRW_per_share", "bps": "KRW_per_share", "bps_total_shares": "KRW_per_share"}
-# 지표 결손 사유의 분류(ALPHA-1169). 여기 든 사유는 **보고서 응답은 온전한데 그 지표만 만들 수 없는** 경우다 —
-# 판본 표(rejected)와 품질 로그에 사유와 함께 남기지만 실행 장애가 아니라서 정제를 부분 실패(exit 2)로 만들지 않는다.
-# 여기 없는 사유(응답 파손·표 모순·모호한 계정 줄·숫자를 못 읽은 칸·비12월 결산처럼 보고서 단위로 빠지는 것·새 사유)는
-# 전부 실패다 — 분류하지 않은 것이 조용히 통과하지 않는다.
-POLICY_GAP_REASONS = frozenset({
-    "bps_blocked_preferred_shares",   # 우선주가 있는 회사의 보통주 BPS 차단(설계 §10.9 팀 결정)
-    "non_krw_currency",               # 원화가 아닌 재무제표는 환산하지 않는다
-})
-SOURCE_GAP_REASONS = frozenset({
-    "account_not_found",              # 그 재무제표에 해당 계정 줄이 없다(희석 EPS 미공시·금융업의 매출 계정 등)
-    "q4_derivation_input_missing",    # 3분기 누적값이 없어 4분기를 유도할 수 없다
-    "bps_input_missing",              # 자본 또는 발행주식 수가 보고서에 없다(주식총수 표가 `-`)
-    "bps_share_class_row_absent",     # 주식총수 표에 보통주·우선주 행이 없다(미기재·다른 표기) — 종류별 수를 모른다
-})
-METRIC_GAP_REASONS = POLICY_GAP_REASONS | SOURCE_GAP_REASONS
+# ── 응답 무결성과 거부 사유 분류(ALPHA-1169) ──────────────────────────────────────────────────────────
+# 순서: ① 응답 무결성(response_damage) → ② 지표 해석·계산(extract·derive_q4) → ③ 거부 사유 분류(reject_class).
+# ①을 통과하지 못한 보고서의 거부는 사유가 무엇이든 처리 오류다 — "결손처럼 보이는 파손"이 결손으로 세어지지 않는다.
+_STATEMENT_KINDS = frozenset({"BS", "IS", "CIS", "CF", "SCE"})    # 실응답에서 확인한 재무제표 종류
+_FOREIGN_CURRENCIES = frozenset({"USD"})                           # 실응답에서 확인한 원화 아닌 통화
+_SHARE_NOTE = "비고"                                                # 주식총수 표의 설명 행 — 수 칸에 글이 온다
+_SHARE_CLASSES = ("합계", "보통주", "우선주")
+# 정책 차단: 값을 만들 수 있어도 팀 결정으로 만들지 않는다.
+POLICY_REASONS = frozenset({"bps_blocked_preferred_shares", "non_krw_currency"})
+# 확인된 원천 부재: 온전한 응답에 그 값·줄이 없다(비슷한 줄도 없다).
+# (금액 칸이 비지 않았는데 숫자가 아닌 것은 무결성 검사가 먼저 잡으므로, missing_value 는 빈 칸뿐이다.)
+SOURCE_ABSENT_REASONS = frozenset({"account_not_found", "missing_value", "q4_derivation_input_missing",
+                                   "bps_input_missing", "bps_share_class_row_absent"})
+# 지원하지 않는 표기·계정: 원천에는 있어 보이는데 이 파서가 읽지 않는다. 원천 부재도 정책 차단도 아니다.
+UNSUPPORTED_REASONS = frozenset({"account_unsupported", "bps_share_class_label_unsupported"})
+GAP_CLASSES = frozenset({"policy", "source_absent"})               # 실행 실패로 세지 않는 분류(기록은 남긴다)
+_REASON_CLASSES = (("policy", POLICY_REASONS), ("source_absent", SOURCE_ABSENT_REASONS),
+                   ("unsupported", UNSUPPORTED_REASONS))
+# 표준 계정 줄은 없지만 같은 항목으로 보이는 줄이 있는가 — (계정 id 에 든 줄기, 계정명 첫머리). 있으면 "원천에 없음"이
+# 아니라 "지원하지 않는 계정"이다. 그 줄의 값을 대신 쓰지는 않는다(의미 확인 없이 치환·합산하지 않는다).
+_SIMILAR_LINES = {
+    "revenue": (("Revenue",), ("매출액", "영업수익", "수익(매출액)", "이자수익")),
+    "operating_income": (("OperatingIncome", "ProfitLossFromOperatingActivities"), ("영업이익", "영업손익", "영업손실")),
+    "eps_basic": (("BasicEarningsLossPerShare",), ("기본주당",)),
+    "eps_diluted": (("DilutedEarningsLossPerShare",), ("희석주당",)),
+}
 
 
-def is_metric_gap(reject: dict) -> bool:
-    """이 거부가 실행 장애가 아닌 '분류된 지표 결손'인가 — 사유가 하나 이상이고 전부 분류된 결손일 때만."""
-    reasons = reject.get("reasons")
-    return isinstance(reasons, list) and bool(reasons) and all(r in METRIC_GAP_REASONS for r in reasons)
+def _blank(value) -> bool:
+    """금액 칸이 비었는가(None·빈 문자열·`-`). 비지 않았는데 `_amount` 가 None 이면 숫자 파손이다."""
+    return value is None or str(value).replace(",", "").strip() in ("", "-")
+
+
+def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> list[str]:
+    """한 보고서 응답(재무제표 줄 + 주식총수 표)의 무결성 위반 사유. 온전하면 빈 목록.
+
+    지표를 해석하기 **전에** 본다 — 식별 칸이 깨진 줄은 계정 선택에서 조용히 빠져 "계정 없음"으로, 깨진 통화는
+    "원화 아님"으로, 깨진 종류 행은 "행 없음"으로 읽히기 때문이다. 검사 범위는 지표 해석이 기대는 칸뿐이다.
+    """
+    problems: set[str] = set()
+    used = set(_FLOW_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
+    for line in lines:
+        if line.get("sj_div") not in _STATEMENT_KINDS or not (
+                isinstance(line.get("account_id"), str) and line["account_id"].strip()):
+            problems.add("bad_account_line")
+        if line.get("currency") != "KRW" and line.get("currency") not in _FOREIGN_CURRENCIES:
+            problems.add("currency_unrecognized")
+        if line.get("account_id") in used and any(
+                not _blank(line.get(field)) and _amount(line.get(field)) is None
+                for field in ("thstrm_amount", "thstrm_add_amount")):
+            problems.add("amount_unreadable")
+    for row in (shares or {}).get("list", []):
+        if not isinstance(row, dict):
+            continue                        # 파손 행은 상위 정제가 malformed_list_row 로 이미 거부한다
+        kind = row.get("se")
+        if not (isinstance(kind, str) and kind.strip()):
+            problems.add("bad_share_row")
+        elif kind.strip() != _SHARE_NOTE and any(
+                _share_count(row, field) is None for field in ("istc_totqy", "tesstk_co")):
+            problems.add("share_count_unreadable")
+    table = share_table_problem(shares, period_end)
+    if table:
+        problems.add(table)
+    return sorted(problems)
+
+
+def reject_class(reject: dict) -> str:
+    """거부 한 건의 분류 — policy·source_absent·unsupported·error.
+
+    무결성 위반 보고서의 거부(`response_damaged`), 사유 없는 거부, 분류 어휘에 없는 사유는 error 다. 사유가 여럿이면
+    가장 무거운 쪽을 따른다. 유도 거부(`cause_reasons` — 4분기 유도의 3분기 쪽 사유)는 원인의 분류를 물려받는다.
+    """
+    reasons = [*(reject.get("reasons") or []), *(reject.get("cause_reasons") or [])]
+    if reject.get("response_damaged") or not reasons:
+        return "error"
+    found = {next((name for name, group in _REASON_CLASSES if reason in group), "error") for reason in reasons}
+    return next(name for name in ("error", "unsupported", "source_absent", "policy") if name in found)
+
+
+def _similar_line(lines: list[dict], metric: str) -> bool:
+    stems, heads = _SIMILAR_LINES[metric]
+    return any(ln.get("sj_div") in ("IS", "CIS") and (
+        any(stem in str(ln.get("account_id")) for stem in stems)
+        or str(ln.get("account_nm") or "").replace(" ", "").startswith(heads)) for ln in lines)
 
 
 BPS_FORMULA = ("bps = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
@@ -260,16 +319,6 @@ def _amount(value) -> Decimal | None:
     return number if number.is_finite() else None
 
 
-def _blank(value) -> bool:
-    """금액 칸이 비었는가(None·빈 문자열·`-`). 비지 않았는데 `_amount` 가 None 이면 숫자 파손이다 — 결손이 아니다."""
-    return value is None or str(value).replace(",", "").strip() in ("", "-")
-
-
-def _currency_reason(line: dict) -> str:
-    """원화가 아닌 줄의 거부 사유. 확인된 외화 코드만 정책 결손이고, 칸이 없거나 모르는 값이면 실패다."""
-    return "non_krw_currency" if line.get("currency") in _FOREIGN_CURRENCIES else "currency_unrecognized"
-
-
 def _pick_line(lines: list[dict], account_id: str, statements: tuple[str, ...]) -> tuple[dict | None, str | None]:
     """계정 하나의 줄. 손익은 IS 우선·없으면 CIS. '우선주' 줄은 후보가 아니다 — 남은 한 줄만 인정한다.
 
@@ -306,23 +355,18 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
         rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
                         "reasons": ["bad_rcept_no"], "lines": len(bad)})
         lines = [ln for ln in lines if ln not in bad]
-    # 계정 줄 선택은 sj_div·account_id 로 한다 — 그 칸이 없거나 모르는 값인 줄은 후보에서 조용히 빠져 "계정 없음"으로
-    # 읽힌다. 계정 부재(결손)를 인정하기 전에 줄의 식별 칸이 온전한지 본다(실응답 2만 줄 표본에서 어긋난 줄 0).
-    unidentified = sum(1 for ln in lines if ln.get("sj_div") not in _STATEMENT_KINDS
-                       or not (isinstance(ln.get("account_id"), str) and ln["account_id"].strip()))
-    if unidentified:
-        rejects.append({"corp_code": corp.get("corp_code"), "reprt_code": code, "fs_basis": fs_div,
-                        "reasons": ["bad_account_line"], "lines": unidentified})
     base = {"corp_code": corp["corp_code"], "instrument_code": corp["stock_code"], "fiscal_year": int(year),
             "fs_basis": fs_div, "period_end": _period_end(year, code)}
     period = _PERIOD_BY_CODE[code]
     for metric, account_id in _FLOW_ACCOUNTS.items():
         line, problem = _pick_line(lines, account_id, ("IS", "CIS"))
         if line is None:
+            if problem == "account_not_found" and _similar_line(lines, metric):
+                problem = "account_unsupported"
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
         if line.get("currency") != "KRW":
-            rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [_currency_reason(line)]})
+            rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": ["non_krw_currency"]})
             continue
         if code == "11011":
             fields = [("CUMULATIVE", "FY", "thstrm_amount")]
@@ -423,11 +467,15 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     """
     line, problem = _pick_line(lines, _EQUITY_ACCOUNT[fs_div], ("BS",))
     if line is None:
+        # 연결 재무제표에 지배지분 줄이 없고 자본총계 줄만 있으면 "자본이 없다"가 아니다 — 자본총계를 대신 쓰지는 않는다.
+        if problem == "account_not_found" and any(
+                ln.get("sj_div") == "BS" and ln.get("account_id") in _EQUITY_ACCOUNT.values() for ln in lines):
+            problem = "account_unsupported"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
         return []
     if line.get("currency") != "KRW":
         # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [_currency_reason(line)]})
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
         return []
     problem = share_table_problem(shares, base["period_end"])
     if problem:
@@ -440,18 +488,8 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
     # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
     issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
-    # 있는 종류 행의 수를 못 읽었으면 파손이다 — 아래 어느 분기로 가든 결손(입력 없음·행 없음)으로 읽히면 안 된다.
-    damaged = any(row is not None and _share_count(row, field) is None
-                  for row in (common, preferred) for field in ("istc_totqy", "tesstk_co"))
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
-        # 칸이 빈 것(원천 미기재)과 비지 않았는데 숫자가 아닌 것(파손)을 가른다 — 뒤쪽은 결손이 아니다.
-        if damaged:
-            reason = "bps_share_rows_unreadable"
-        elif equity is None and not _blank(line.get("thstrm_amount")):
-            reason = "bps_input_unreadable"
-        else:
-            reason = "bps_input_missing"
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason]})
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
         return []
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
@@ -478,12 +516,15 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
              "formula": BPS_TOTAL_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
              "inputs": [equity_input, shares_input]}]
     if common_bps != "computed":
-        # 판정(common_bps)은 그대로 두고(DB 조회의 bps_note 가 읽는다) 거부 기록의 사유만 가른다: 종류 행이 아예 없는 것은
-        # 원천이 주지 않은 것이고, 있는 행의 수를 못 읽은 것은 파손이다 — 뒤쪽만 실행 실패로 센다. 한 행이 없더라도 다른
-        # 행의 수가 깨졌으면 파손이다.
-        absent = common_bps == "bps_share_rows_unreadable" and not damaged
-        rejects.append({**base, "metric": "bps", "reprt_code": code,
-                        "reasons": ["bps_share_class_row_absent" if absent else common_bps],
+        # 판정(common_bps)은 그대로 두고(DB 조회의 bps_note 가 읽는다) 거부 기록의 사유만 가른다. 있는 행의 수 파손은
+        # 무결성 검사가 먼저 잡으므로, 여기서 종류 수를 못 읽는 것은 그 행이 없어서다 — 다른 이름의 종류 행이 있으면
+        # 읽지 못하는 표기이고(지원하지 않음), 없으면 원천이 종류를 나눠 주지 않은 것이다. 어느 쪽도 우선주 0 으로 보지 않는다.
+        reason = common_bps
+        if common_bps == "bps_share_rows_unreadable" and (common is None or preferred is None):
+            others = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
+                      and str(r.get("se") or "").strip() not in (*_SHARE_CLASSES, _SHARE_NOTE)]
+            reason = "bps_share_class_label_unsupported" if others else "bps_share_class_row_absent"
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows
     rows.append({**common_fields, "metric": "bps",
