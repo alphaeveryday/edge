@@ -440,8 +440,8 @@ def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
     def rename_total(rows):                             # 합계 행이 다른 이름이면 "발행주식 수 없음"이 아니다
         return [dict(r, se="총계") if r["se"] == "합계" else r for r in rows]
 
-    def other_operating_income_id(lines):               # 실응답: 영업이익이 다른 표준 id 로 실린다
-        _line(lines, "dart_OperatingIncomeLoss")["account_id"] = "ifrs-full_ProfitLossFromOperatingActivities"
+    def other_operating_income_id(lines):               # 실응답: 영업이익 줄이 표준계정코드 없이 실린다
+        _line(lines, "dart_OperatingIncomeLoss")["account_id"] = "-표준계정코드 미사용-"
 
     for name, key, body, reason in (
             ("labels", _HALF_SHARES, _shares_with(rename_classes), "bps_share_class_label_unsupported"),
@@ -634,9 +634,9 @@ def test_operating_income_is_read_from_the_ifrs_account_only_when_the_dart_accou
     extra = next(line for line in both["list"] if line["account_id"] == dart)
     both["list"].append({**extra, "account_id": ifrs, "thstrm_amount": "1", "thstrm_add_amount": "1"})
     assert operating(both) == (expected, [])
-    # 이름이 비슷한 다른 계정은 읽지 않는다.
+    # 이름이 비슷한 다른 계정은 읽지 않는다 — 값을 대신 쓰지 않고, "원천에 없음"이 아니라 지원하지 않는 계정으로 남긴다.
     for other in ("ifrs-full_OtherOperatingIncomeExpense", "dart_OtherOperatingIncome", "-표준계정코드 미사용-"):
-        assert operating(retagged(other)) == ([], [["account_not_found"]]), other
+        assert operating(retagged(other)) == ([], [["account_unsupported"]]), other
     # IFRS 줄이 둘이면 고르지 않는다(dart 계정과 같은 규칙).
     twice = retagged(ifrs)
     twice["list"].append(dict(next(line for line in twice["list"] if line["account_id"] == ifrs)))

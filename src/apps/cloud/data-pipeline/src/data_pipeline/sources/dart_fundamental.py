@@ -100,7 +100,7 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     "원화 아님"으로, 깨진 종류 행은 "행 없음"으로 읽히기 때문이다. 검사 범위는 지표 해석이 기대는 칸뿐이다.
     """
     problems: set[str] = set()
-    used = set(_FLOW_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
+    used = set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
     for line in lines:
         # 칸의 타입부터 본다 — 배열·객체가 들어온 칸을 집합에 물으면 이 검사 자체가 죽어 다른 회사 정제까지 멈춘다.
         kind, account, currency = line.get("sj_div"), line.get("account_id"), line.get("currency")
