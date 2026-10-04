@@ -7,7 +7,7 @@
 # 이 모듈은 "상시 서비스"가 아니라 실행할 task 정의만 만든다(aws_ecs_service 없음).
 
 # 이미지는 분석 엔진과 같은 것을 쓴다(질의 CLI 가 edge_analysis 안에 있다) — 새 ECR 을 만들지 않고
-# data-pipeline 에 넘기는 analysis_image 와 동일한 값을 입력으로 받는다(ADR-0009: 레포는 foundation 소유).
+# 조회 CLI 분리 전까지 기존 v1 이미지를 보존한다(ADR-0009: 레포는 foundation 소유).
 
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.name}"

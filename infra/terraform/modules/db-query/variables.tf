@@ -14,7 +14,7 @@ variable "vpc_id" {
 }
 
 variable "image" {
-  description = "질의 CLI 컨테이너 이미지 URI(:태그 포함). 질의기는 analysis-engine 안의 서브커맨드라 data-pipeline 의 analysis_image 와 같은 값을 넘긴다(전용 ECR 을 만들지 않는다)."
+  description = "질의 CLI 컨테이너 이미지 URI(:태그 포함). 질의기는 아직 analysis-engine 안의 서브커맨드다. 조회 CLI 분리 전까지 기존 이미지를 보존한다."
   type        = string
 }
 
