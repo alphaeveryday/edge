@@ -459,6 +459,17 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
     return None
 
 
+def _share_label_problem(shares: dict | None) -> str | None:
+    """읽어야 할 종류 행(합계·보통주·우선주)이 없는데 다른 이름의 종류 행이 있으면 지원하지 않는 표기다.
+
+    자본 줄이 없거나 원화가 아니어서 BPS 를 어차피 못 만드는 경우에도 따로 본다 — 앞선 결손 사유가 표기 문제를 가리지 않게.
+    """
+    rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)]
+    unknown = [r for r in rows if str(r.get("se") or "").strip() not in (*_SHARE_CLASSES, _SHARE_NOTE)]
+    missing = any(_share_row(shares, kind) is None for kind in _SHARE_CLASSES)
+    return "bps_share_class_label_unsupported" if unknown and missing else None
+
+
 def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict]:
     """BPS 두 지표 (실응답 2026-09-30 확인 — 삼성전자 우선주 802,371,203주, 자기주식은 보통주에만).
 
@@ -469,16 +480,17 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
       소비 쪽이 우선주 있는 회사에 이 값을 쓸지는 팀 결정(설계 §10.9)이다.
     기준시점은 주식총수 표의 `stlm_dt`(보고기간 말)이고 inputs 에 남긴다.
     """
+    label = [reason] if (reason := _share_label_problem(shares)) else []
     line, problem = _pick_line(lines, _EQUITY_ACCOUNT[fs_div], ("BS",))
     if line is None:
         # 연결 재무제표에 지배지분 줄이 없고 자본총계 줄만 있으면 "자본이 없다"가 아니다 — 자본총계를 대신 쓰지는 않는다.
         if problem == "account_not_found" and _similar_line(lines, "bps"):
             problem = "account_unsupported"
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem, *label]})
         return []
     if line.get("currency") != "KRW":
         # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency"]})
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency", *label]})
         return []
     problem = share_table_problem(shares, base["period_end"])
     if problem:
@@ -491,15 +503,9 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
     # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
     issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
-    # 이 파서가 읽지 않는 이름의 종류 행. 읽어야 할 행(합계·보통주·우선주)이 없는데 이런 행이 있으면, 없는 것이 아니라
-    # 읽지 못하는 표기다 — 원천 부재로 넘기지 않는다.
-    unknown_rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
-                    and str(r.get("se") or "").strip() not in (*_SHARE_CLASSES, _SHARE_NOTE)]
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
-        # 읽어야 할 행이 하나라도 없는데 다른 이름의 종류 행이 있으면, 자본 칸이 비었더라도 표기 문제를 가리지 않는다.
-        unsupported = unknown_rows and None in (total, common, preferred)
-        rejects.append({**base, "metric": "bps", "reprt_code": code,
-                        "reasons": ["bps_share_class_label_unsupported" if unsupported else "bps_input_missing"]})
+        # 읽어야 할 행이 없는데 다른 이름의 종류 행이 있으면(label), 자본 칸이 비었더라도 표기 문제를 가리지 않는다.
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": label or ["bps_input_missing"]})
         return []
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
@@ -531,7 +537,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         # 읽지 못하는 표기이고(지원하지 않음), 없으면 원천이 종류를 나눠 주지 않은 것이다. 어느 쪽도 우선주 0 으로 보지 않는다.
         reason = common_bps
         if common_bps == "bps_share_rows_unreadable" and (common is None or preferred is None):
-            reason = "bps_share_class_label_unsupported" if unknown_rows else "bps_share_class_row_absent"
+            reason = label[0] if label else "bps_share_class_row_absent"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows

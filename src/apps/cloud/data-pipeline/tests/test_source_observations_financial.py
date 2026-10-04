@@ -454,6 +454,12 @@ def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
     code, done, log = _normalize_with(tmp_path, "blank-equity-labels", {
         **full_responses(SAMSUNG), _HALF_CFS: _statement_with(_blank_equity), _HALF_SHARES: _shares_with(rename_classes)})
     assert code == 2 and "unsupported" in done["reject_classes"]
+    # 자본 줄 자체가 없어도 마찬가지다 — "계정 없음"(원천 부재)이 표기 문제를 가리지 않는다.
+    code, done, log = _normalize_with(tmp_path, "no-equity-labels", {
+        **full_responses(SAMSUNG), _HALF_CFS: _statement_with(lambda lines: [
+            lines.remove(ln) for ln in [ln for ln in lines if ln.get("sj_div") == "BS"]]),
+        _HALF_SHARES: _shares_with(rename_classes)})
+    assert code == 2 and "unsupported" in done["reject_classes"]
     # 회사가 정의한 id 로 실린 지배지분 줄 — 표준 id 가 아니어도 "자본 없음"이 아니다.
     _, rejects = dart_fundamental.extract(
         {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
