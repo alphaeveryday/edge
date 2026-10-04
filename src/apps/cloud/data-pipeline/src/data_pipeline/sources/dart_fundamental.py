@@ -140,6 +140,14 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     table = share_table_problem(shares, period_end)
     if table:
         problems.add(table)
+    # 종류 행이 일부만 있어도 그 수가 합계를 넘으면 표의 모순이다 — "행 없음"(원천 부재)으로 읽지 않는다. 행이 다 있을 때의
+    # 합 검사는 `share_table_problem` 이 한다(그쪽은 값 경로라 건드리지 않는다).
+    total = _share_row(shares, "합계")
+    parts = [row for row in (_share_row(shares, "보통주"), _share_row(shares, "우선주")) if row is not None]
+    for field in ("istc_totqy", "tesstk_co"):
+        whole, counts = _share_count(total, field), [_share_count(row, field) for row in parts]
+        if whole is not None and None not in counts and sum(counts, Decimal(0)) > whole:
+            problems.add("share_rows_inconsistent")
     return sorted(problems)
 
 
