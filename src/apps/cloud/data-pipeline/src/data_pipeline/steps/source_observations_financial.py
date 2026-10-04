@@ -228,6 +228,11 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             unconfirmed((corp_code, year, code, fs_div), f"extract_error:{type(exc).__name__}")
             continue
         rejects.extend({**b, "raw_key": statement["key"]} for b in bad)
+        if not extracted and any("account_not_found" in (b.get("reasons") or []) for b in bad):
+            # 응답은 정상인데 쓸 계정 줄이 하나도 없다 — 지표 하나의 미공시가 아니라 계정 체계가 통째로 맞지 않는 것이다
+            # (공급자 형식 변경 등). 지표별 결손은 실패로 세지 않으므로(dart_fundamental.is_metric_gap) 여기서 실패로 드러낸다.
+            rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
+                            "raw_key": statement["key"], "reasons": ["no_usable_account_line"]})
         # 재무제표 줄의 접수번호 파손(metric 없는 거부)은 응답 파손 — 남은 줄로 만든 지표를 확정 판본에 싣지 않는다.
         if any("bad_rcept_no" in (b.get("reasons") or []) and b.get("metric") is None for b in bad):
             unconfirmed((corp_code, year, code, fs_div), "bad_rcept_no")
@@ -343,6 +348,7 @@ FINANCIAL = DatasetSpec(
     table="financial_metric",
     collection_vendor="dart",
     companion=FINANCIAL_VERSION,
+    is_gap=dart_fundamental.is_metric_gap,
 )
 
 

@@ -82,6 +82,9 @@ class DatasetSpec:
     # 같은 정제가 함께 만드는 둘째 행 집합(재무: 보고서 판본). 같은 manifest·같은 적재 트랜잭션에 실린다 —
     # 지표 행 없이 판본만, 판본 없이 지표만 실리는 상태가 없다.
     companion: "DatasetSpec | None" = None
+    # 거부 가운데 실행 장애가 아닌 '분류된 결손'을 가리는 판별자(재무만 준다). 결손은 품질 로그·manifest 에 건수와 사유로
+    # 남지만 정제를 부분 실패(exit 2)로 만들지 않는다. 없으면 모든 거부가 실패다(매크로·업종은 그대로).
+    is_gap: Callable[[dict], bool] | None = None
 
     def names(self) -> list[str]:
         """열 이름(파일·DB 적재 순서)."""
@@ -369,6 +372,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         return PARTIAL_EXIT if done.get("rejected") else 0
     exit_code = 0
     failures: list[dict] = []
+    gaps: list[dict] = []
     completed: bytes | None = None
     try:
         storage.put_bytes(manifest_key, json.dumps(
@@ -377,7 +381,8 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         result = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
         rows, rejects = result[0], result[1]
         companion_rows = list(result[2]) if len(result) > 2 else []
-        failures.extend(rejects)
+        for reject in rejects:
+            (gaps if spec.is_gap is not None and spec.is_gap(reject) else failures).append(reject)
         for row in [*rows, *companion_rows]:
             row["raw_run_id"] = input_run_id
         rows, conflicts, collapsed = _collapse(spec, rows)
@@ -404,7 +409,8 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             "artifact": {"key": artifact_key, "sha256": artifact_sha, "rows": len(rows),
                          "partition_date": "ingest_date"},
             "canonical_partitions": partitions, "rows": len(rows),
-            "rejected": len(failures), "collapsed_duplicates": collapsed,
+            # rejected 는 실행 실패만 센다(재실행 시 exit 2 판정의 근거). 분류된 결손은 gaps 로 따로 남긴다.
+            "rejected": len(failures), "gaps": len(gaps), "collapsed_duplicates": collapsed,
             "companion": companion,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
         log.update({"rows": len(rows), "collapsed_duplicates": collapsed,
@@ -418,8 +424,12 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         log["rows"] = 0
         exit_code = 1
     log.update({"failures": failures[:200], "records_failed": len(failures),
+                "gaps": gaps[:200], "records_gap": len(gaps),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "ops": {"records_out": log.get("rows", 0), "failed_records": len(failures)}})
+    if spec.is_gap is not None:
+        # 원장에는 '미지원 건수'로 올린다(구성종목 적재의 CASH·OPTION 제외와 같은 칸) — 실패 건수와 섞지 않는다.
+        log["ops"]["unsupported_records"] = len(gaps)
     quality_written = True
     try:
         storage.put_bytes(quality_log_key(spec.dataset, started_at.date().isoformat(), run_id),
@@ -434,7 +444,8 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         except Exception:
             logger.exception("canonical run manifest 기록 실패")
             exit_code = 1
-    logger.info("%s 정제: rows=%s failures=%d exit=%d", spec.dataset, log.get("rows"), len(failures), exit_code)
+    logger.info("%s 정제: rows=%s failures=%d gaps=%d exit=%d", spec.dataset, log.get("rows"), len(failures),
+                len(gaps), exit_code)
     return exit_code
 
 

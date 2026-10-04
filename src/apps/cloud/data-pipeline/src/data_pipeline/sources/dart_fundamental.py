@@ -54,6 +54,29 @@ _FLOW_ACCOUNTS = {
 _EQUITY_ACCOUNT = {"CFS": "ifrs-full_EquityAttributableToOwnersOfParent", "OFS": "ifrs-full_Equity"}
 _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_share",
           "eps_diluted": "KRW_per_share", "bps": "KRW_per_share", "bps_total_shares": "KRW_per_share"}
+# 지표 결손 사유의 분류(ALPHA-1169). 여기 든 사유는 **보고서 응답은 온전한데 그 지표만 만들 수 없는** 경우다 —
+# 판본 표(rejected)와 품질 로그에 사유와 함께 남기지만 실행 장애가 아니라서 정제를 부분 실패(exit 2)로 만들지 않는다.
+# 여기 없는 사유(응답 파손·표 모순·모호한 계정 줄·숫자를 못 읽은 칸·비12월 결산처럼 보고서 단위로 빠지는 것·새 사유)는
+# 전부 실패다 — 분류하지 않은 것이 조용히 통과하지 않는다.
+POLICY_GAP_REASONS = frozenset({
+    "bps_blocked_preferred_shares",   # 우선주가 있는 회사의 보통주 BPS 차단(설계 §10.9 팀 결정)
+    "non_krw_currency",               # 원화가 아닌 재무제표는 환산하지 않는다
+})
+SOURCE_GAP_REASONS = frozenset({
+    "account_not_found",              # 그 재무제표에 해당 계정 줄이 없다(희석 EPS 미공시·금융업의 매출 계정 등)
+    "q4_derivation_input_missing",    # 3분기 누적값이 없어 4분기를 유도할 수 없다
+    "bps_input_missing",              # 자본 또는 발행주식 수가 보고서에 없다(주식총수 표가 `-`)
+    "bps_share_class_row_absent",     # 주식총수 표에 보통주·우선주 행이 없다(미기재·다른 표기) — 종류별 수를 모른다
+})
+METRIC_GAP_REASONS = POLICY_GAP_REASONS | SOURCE_GAP_REASONS
+
+
+def is_metric_gap(reject: dict) -> bool:
+    """이 거부가 실행 장애가 아닌 '분류된 지표 결손'인가 — 사유가 하나 이상이고 전부 분류된 결손일 때만."""
+    reasons = reject.get("reasons")
+    return isinstance(reasons, list) and bool(reasons) and all(r in METRIC_GAP_REASONS for r in reasons)
+
+
 BPS_FORMULA = ("bps = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
                "주식수 = stockTotqySttus se=보통주(우선주 없는 회사만); 소수 6자리 ROUND_HALF_UP")
 BPS_TOTAL_FORMULA = ("bps_total_shares = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
@@ -424,7 +447,11 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
              "formula": BPS_TOTAL_FORMULA.format(account=_EQUITY_ACCOUNT[fs_div]),
              "inputs": [equity_input, shares_input]}]
     if common_bps != "computed":
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [common_bps],
+        # 판정(common_bps)은 그대로 두고(DB 조회의 bps_note 가 읽는다) 거부 기록의 사유만 가른다: 종류 행이 아예 없는 것은
+        # 원천이 주지 않은 것이고, 행은 있는데 수를 못 읽은 것은 파손이다 — 뒤쪽만 실행 실패로 센다.
+        absent = common_bps == "bps_share_rows_unreadable" and (common is None or preferred is None)
+        rejects.append({**base, "metric": "bps", "reprt_code": code,
+                        "reasons": ["bps_share_class_row_absent" if absent else common_bps],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows
     rows.append({**common_fields, "metric": "bps",
