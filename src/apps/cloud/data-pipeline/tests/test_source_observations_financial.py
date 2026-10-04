@@ -474,6 +474,20 @@ def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
         code, done, log = _normalize_with(tmp_path, name, {
             **full_responses(SAMSUNG), _HALF_CFS: _statement_with(on_statement), _HALF_SHARES: _shares_with(extra_class)})
         assert code == 2 and "unsupported" in done["reject_classes"], name
+    # 표준 id 가 없는 주당이익 줄은 이름이 어떻게 시작하든 "원천에 없음"이 아니다(첫머리 일치로 보면 놓친다).
+    for eps_name in ("보통주 기본주당이익", "주당순이익", "계속영업 기본주당이익(손실)"):
+        _, rejects = dart_fundamental.extract(
+            {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
+            {"body_json": json.loads(_statement_with(lambda lines: _line(lines, "ifrs-full_BasicEarningsLossPerShare").update(
+                account_id="-표준계정코드 미사용-", account_nm=eps_name)))}, json.loads(shares(SAMSUNG, "2026", "11012")))
+        assert [r["reasons"] for r in rejects if r.get("metric") == "eps_basic"] == [["account_unsupported"]], eps_name
+    # 반대로 희석 줄만 있는 것은 기본 EPS 의 비슷한 줄이 아니다 — 기본 EPS 줄을 지우면 원천 부재다.
+    _, rejects = dart_fundamental.extract(
+        {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
+        {"body_json": json.loads(_statement_with(
+            lambda lines: lines.remove(_line(lines, "ifrs-full_BasicEarningsLossPerShare"))))},
+        json.loads(shares(SAMSUNG, "2026", "11012")))
+    assert [r["reasons"] for r in rejects if r.get("metric") == "eps_basic"] == [["account_not_found"]]
     # 회사가 정의한 id 로 실린 지배지분 줄 — 표준 id 가 아니어도 "자본 없음"이 아니다.
     _, rejects = dart_fundamental.extract(
         {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
@@ -549,6 +563,9 @@ _DAMAGE_CASES = {
         None, lambda rows: [{k: v for k, v in r.items() if k != "se"} if r["se"] == "보통주" else r for r in rows]),
     "달러 재무제표 + 숫자로 온 재무제표 접수번호": (
         lambda lines: [ln.update(currency="USD", rcept_no=int(ln["rcept_no"])) for ln in lines], None),
+    "달러 재무제표 + 빈 배열인 사업연도": (lambda lines: [ln.update(currency="USD", bsns_year=[]) for ln in lines], None),
+    "달러 재무제표 + 객체인 보고서 코드": (lambda lines: [ln.update(currency="USD", reprt_code={}) for ln in lines], None),
+    "달러 재무제표 + 숫자인 계정명": (lambda lines: [ln.update(currency="USD", account_nm=0) for ln in lines], None),
 }
 
 

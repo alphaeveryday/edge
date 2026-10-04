@@ -64,6 +64,8 @@ _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_sha
 # ①을 통과하지 못한 보고서의 거부는 사유가 무엇이든 처리 오류다 — "결손처럼 보이는 파손"이 결손으로 세어지지 않는다.
 _STATEMENT_KINDS = frozenset({"BS", "IS", "CIS", "CF", "SCE"})    # 실응답에서 확인한 재무제표 종류
 _FOREIGN_CURRENCIES = frozenset({"USD"})                           # 실응답에서 확인한 원화 아닌 통화
+_LINE_FIELDS = ("sj_div", "account_id", "account_nm", "currency", "rcept_no", "bsns_year", "reprt_code",
+                "thstrm_amount", "thstrm_add_amount")              # 정제가 재무제표 줄에서 읽는 칸
 _SHARE_NOTE = "비고"                                                # 주식총수 표의 설명 행 — 수 칸에 글이 온다
 _SHARE_CLASSES = ("합계", "보통주", "우선주")
 # 정책 차단: 값을 만들 수 있어도 팀 결정으로 만들지 않는다.
@@ -77,14 +79,15 @@ UNSUPPORTED_REASONS = frozenset({"account_unsupported", "bps_share_class_label_u
 GAP_CLASSES = frozenset({"policy", "source_absent"})               # 실행 실패로 세지 않는 분류(기록은 남긴다)
 _REASON_CLASSES = (("policy", POLICY_REASONS), ("source_absent", SOURCE_ABSENT_REASONS),
                    ("unsupported", UNSUPPORTED_REASONS))
-# 표준 계정 줄은 없지만 같은 항목으로 보이는 줄이 있는가 — (계정 id 에 든 줄기, 계정명 첫머리). 있으면 "원천에 없음"이
-# 아니라 "지원하지 않는 계정"이다. 그 줄의 값을 대신 쓰지는 않는다(의미 확인 없이 치환·합산하지 않는다).
+# 표준 계정 줄은 없지만 같은 항목으로 보이는 줄이 있는가 — (계정 id 에 든 줄기, 계정명에 든 말, 계정명에 없어야 하는 말).
+# 있으면 "원천에 없음"이 아니라 "지원하지 않는 계정"이다. 그 줄의 값을 대신 쓰지는 않는다(의미 확인 없이 치환·합산하지
+# 않는다). 넓게 잡는다(포함 검색) — 놓치면 읽지 못한 줄이 "원천 부재"로 통과하고, 넘치면 실패로 남을 뿐이다.
 _SIMILAR_LINES = {
-    "revenue": (("Revenue",), ("매출액", "영업수익", "수익(매출액)", "이자수익")),
-    "operating_income": (("OperatingIncome", "ProfitLossFromOperatingActivities"), ("영업이익", "영업손익", "영업손실")),
-    "eps_basic": (("BasicEarningsLossPerShare",), ("기본주당",)),
-    "eps_diluted": (("DilutedEarningsLossPerShare",), ("희석주당",)),
-    "bps": (("Equity",), ("자본총계", "지배기업")),               # 재무상태표의 자본 줄(다른 id·회사 정의 id 포함)
+    "revenue": (("Revenue",), ("매출", "영업수익", "이자수익"), ()),
+    "operating_income": (("OperatingIncome", "ProfitLossFromOperatingActivities"), ("영업이익", "영업손익", "영업손실"), ()),
+    "eps_basic": (("EarningsLossPerShare", "EarningsPerShare"), ("주당",), ("희석",)),   # 기본·희석 겸용 줄은 id 로 잡힌다
+    "eps_diluted": (("DilutedEarnings",), ("희석",), ()),
+    "bps": (("Equity",), ("자본총계", "지배기업"), ()),           # 재무상태표의 자본 줄(다른 id·회사 정의 id 포함)
 }
 
 
@@ -102,6 +105,10 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     problems: set[str] = set()
     used = set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
     for line in lines:
+        # 정제가 읽는 칸은 전부 문자열(또는 없음)이다 — 숫자·배열·객체로 온 칸은 뒤 단계가 조용히 다른 값으로 바꿔 읽는다
+        # (빈 배열인 사업연도는 요청 연도로 대체되고, 숫자 접수번호는 문자열 검사를 통과한다).
+        if any(line.get(field) is not None and not isinstance(line.get(field), str) for field in _LINE_FIELDS):
+            problems.add("bad_field_type")
         # 칸의 타입부터 본다 — 배열·객체가 들어온 칸을 집합에 물으면 이 검사 자체가 죽어 다른 회사 정제까지 멈춘다.
         kind, account, currency = line.get("sj_div"), line.get("account_id"), line.get("currency")
         if not (isinstance(kind, str) and kind in _STATEMENT_KINDS and isinstance(account, str) and account.strip()):
@@ -145,10 +152,16 @@ def reject_class(reject: dict) -> str:
 
 
 def _similar_line(lines: list[dict], metric: str) -> bool:
-    stems, heads = _SIMILAR_LINES[metric]
-    return any(ln.get("sj_div") in (("BS",) if metric == "bps" else ("IS", "CIS")) and (
-        any(stem in str(ln.get("account_id")) for stem in stems)
-        or str(ln.get("account_nm") or "").replace(" ", "").startswith(heads)) for ln in lines)
+    stems, words, excluded = _SIMILAR_LINES[metric]
+
+    def similar(line: dict) -> bool:
+        """그 줄이 이 지표와 같은 항목으로 보이는가(계정 id 줄기 또는 계정명)."""
+        account, name = str(line.get("account_id")), "".join(str(line.get("account_nm") or "").split())
+        if metric == "eps_basic" and "Diluted" in account:
+            return False                    # 희석 전용 줄은 기본 EPS 의 비슷한 줄이 아니다
+        return any(stem in account for stem in stems) or (
+            any(word in name for word in words) and not any(word in name for word in excluded))
+    return any(ln.get("sj_div") in (("BS",) if metric == "bps" else ("IS", "CIS")) and similar(ln) for ln in lines)
 
 
 BPS_FORMULA = ("bps = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
