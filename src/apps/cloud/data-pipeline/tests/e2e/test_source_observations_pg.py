@@ -319,13 +319,13 @@ def test_sector_as_of_and_constituent_coverage_at_analysis_time(tmp_path, conn):
 
 # ── 보고서 판본(financial_report_version) — 실 PostgreSQL 조회 계약 ──────────────────────
 
-def _financial_run(tmp_path, tag, responses, fetched_at, *, from_date, to_date, now, load=True):
+def _financial_run(tmp_path, tag, responses, fetched_at, *, from_date, to_date, now, load=True, filings=None):
     """삼성전자 한 회사의 수집 → 정제 → (적재). 응답 표는 호출자가 고쳐 넣는다. 반환: (storage, raw, norm)."""
     from data_pipeline.lake import LocalStorage
     from data_pipeline.steps import source_observations as so, source_observations_financial as so_fin
-    from source_observation_fakes import SAMSUNG, DartFake, filing_list, write_holdings
+    from source_observation_fakes import FILINGS, SAMSUNG, DartFake, filing_list, write_holdings
 
-    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)})
+    dart = DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, filings or FILINGS)})
     dart.fetched_at = fetched_at
     storage = LocalStorage(tmp_path / tag)
     write_holdings(storage, "2026-08-14", ["005930"])
@@ -415,6 +415,145 @@ def test_zero_metric_correction_replaces_values_and_failures_do_not(tmp_path, co
     # 같은 접수번호의 재수집은 모두 원 공개일(08-15)부터 보인다(결정 ①) — 그중 가장 늦게 받은 d2 가 과거 시점에서도 이긴다.
     # (새 접수번호를 단 정정본만 그 접수일부터 보인다 — test_financial_quarters_follow_release_dates 가 고정.)
     assert _q(conn, datetime(2026, 8, 17, tzinfo=KST))["2026-Q2"][3] == f"{RUN}d2_raw"
+
+
+# ── 줄 파손 판본(ALPHA-1172) — 원문 → 정제 → 적재 → 조회 함수 → v2 입력 ──────────────────
+
+_HALF = ("2026", "11012")
+_EPS_ID = "ifrs-full_BasicEarningsLossPerShare"
+
+
+def _half_cfs_with(mutate):
+    """2026 반기 CFS 응답의 주당이익 줄만 고친 삼성전자 응답 표."""
+    from source_observation_fakes import SAMSUNG, statement
+
+    body = json.loads(statement(SAMSUNG, *_HALF, "CFS"))
+    mutate(next(ln for ln in body["list"] if ln["account_id"] == _EPS_ID))
+    return {**_samsung_responses(),
+            ("statement", SAMSUNG["corp_code"], *_HALF, "CFS"): json.dumps(body, ensure_ascii=False).encode()}
+
+
+def _half(conn, at):
+    """조회 함수와 v2 입력이 같은 시각에 2026 반기를 어떻게 보는가. 반환: (조회 함수 행, v2 행, v2 결손 또는 None)."""
+    from edge_analysis_v2.storage.source_inputs import financial_inputs
+
+    row = conn.execute(
+        "SELECT eps::text, bps::text, bps_total_shares::text, revenue::text, bps_note, version_raw_run_id,"
+        " version_status, latest_unconfirmed_at, shares_status FROM financial_quarters_as_of(%s, %s)"
+        " WHERE period = '2026-Q2'", (at, "005930")).fetchone()
+    rows, gaps = financial_inputs(conn, at, ["005930"])
+    return (row, next((r for r in rows if r["period"] == "2026-Q2"), None),
+            next((g for g in gaps if g["period"] == "2026-Q2"), None))
+
+
+def _run_at(day):
+    """그 날 00:00 UTC 에 받은 재수집 한 번의 인자(수신시각 문자열, 접수 창·now)."""
+    return f"2026-{day}T00:00:00+00:00", dict(from_date="2026-08-01", to_date=f"2026-{day}",
+                                             now=datetime.fromisoformat(f"2026-{day}T01:00:00+00:00"))
+
+
+def test_unreadable_line_keeps_the_old_confirmed_version_and_shows_the_failed_attempt(tmp_path, conn):
+    """확정 판본 뒤의 줄 파손 응답 · 회복 · 정상 결손인 새 확정 판본 · 같은 접수번호 재수집과 새 정정 접수번호의 가시시각."""
+    from source_observation_fakes import FILINGS, FLOWS, SAMSUNG, statement
+
+    corp = SAMSUNG["corp_code"]
+    fetched, window = _run_at("08-20")
+    _financial_run(tmp_path, "a", _samsung_responses(), fetched, **{**window, "from_date": "2025-10-01"})
+    base, v2_base, gap = _half(conn, datetime(2026, 8, 21, tzinfo=KST))
+    eps, bps, bps_total, revenue = base[:4]
+    assert (eps, revenue, base[5], base[6]) == ("1200", "90000", f"{RUN}a_raw", "CONFIRMED") and bps and bps_total
+    assert (v2_base["eps"], v2_base["bps"], gap) == (eps, bps, None)
+
+    # B(09-05): 반기 CFS 의 주당이익 3개월 칸이 깨져 왔다. 전에는 EPS 만 빠진 확정 판본이 되어 옛 EPS 를 NULL 로 가렸다.
+    # 이제 그 응답은 판본을 확정하지 않는다 — 조회는 옛 확정 판본(A)의 값을 그대로 주고, 실패한 시도를 시각으로 드러낸다.
+    fetched, window = _run_at("09-05")
+    _financial_run(tmp_path, "b", _half_cfs_with(lambda ln: ln.update(thstrm_amount="12x4")), fetched, **window)
+    stored = conn.execute("SELECT status, detail->>'statement_detail', jsonb_array_length(metrics) FROM"
+                          " financial_report_version WHERE raw_run_id = %s AND reprt_code = '11012' AND fs_basis = 'CFS'",
+                          (f"{RUN}b_raw",)).fetchone()
+    assert stored == ("UNCONFIRMED", "unreadable_line:amount_unreadable", 0)
+    # 멀쩡한 줄(매출 등)로 만든 지표도 확정 판본 없이 싣지 않는다 — 이 시도는 반기 CFS 의 어떤 값도 바꾸지 않는다.
+    assert conn.execute("SELECT count(*) FROM financial_metric WHERE raw_run_id = %s AND fiscal_year = 2026"
+                        " AND fiscal_period = 'Q2' AND fs_basis = 'CFS'", (f"{RUN}b_raw",)).fetchone()[0] == 0
+    after_b, v2_b, gap = _half(conn, datetime(2026, 9, 6, tzinfo=KST))
+    assert after_b[:4] == (eps, bps, bps_total, revenue) and after_b[5:7] == (f"{RUN}a_raw", "CONFIRMED")
+    assert after_b[7] is not None                                       # latest_unconfirmed_at — 옛 값을 주고 있음이 보인다
+    assert (v2_b["eps"], v2_b["bps"], gap) == (eps, bps, None)
+    assert v2_b["version"]["raw_run_id"] == f"{RUN}a_raw" and v2_b["version"]["latest_unconfirmed_at"] is not None
+    assert _half(conn, datetime(2026, 9, 4, tzinfo=KST))[0][7] is None   # 실패 전 시점에는 실패도 없다(소급하지 않는다)
+
+    # C(09-08): 같은 접수번호의 정상 응답 → 새 확정 판본으로 회복한다. 같은 접수번호의 재수집은 원 공개일(08-15)부터 보인다.
+    fetched, window = _run_at("09-08")
+    _financial_run(tmp_path, "c", _samsung_responses(), fetched, **window)
+    after_c, v2_c, gap = _half(conn, datetime(2026, 9, 9, tzinfo=KST))
+    assert after_c[:4] == (eps, bps, bps_total, revenue) and after_c[5:8] == (f"{RUN}c_raw", "CONFIRMED", None)
+    assert v2_c["version"]["latest_unconfirmed_at"] is None and gap is None
+    assert _half(conn, datetime(2026, 8, 17, tzinfo=KST))[0][5] == f"{RUN}c_raw"
+
+    # D(09-10): 같은 칸이 **빈 칸**으로 온 정상 응답 — 원천 부재다. 새 확정 판본이고, 옛 값으로 채우지 않는다(기존 계약).
+    fetched, window = _run_at("09-10")
+    _financial_run(tmp_path, "d", _half_cfs_with(lambda ln: ln.update(thstrm_amount="-")), fetched, **window)
+    after_d, v2_d, gap = _half(conn, datetime(2026, 9, 11, tzinfo=KST))
+    assert after_d[:4] == (None, bps, bps_total, revenue) and after_d[5:8] == (f"{RUN}d_raw", "CONFIRMED", None)
+    assert v2_d["eps"] is None and gap["reasons"] == {"eps": "EPS_ABSENT_IN_LATEST_VERSION"}
+
+    # E(09-25 수신): 새 접수번호를 단 정정본(접수일 09-20, EPS 1300). 접수일 다음날 00:00 KST 부터만 보인다.
+    corrected = {**FILINGS, ("2026", "11012-정정"): ("[기재정정]반기보고서 (2026.06)", "20260920000505", "20260920")}
+    flows = {**FLOWS[_HALF], "eps_basic": (1_300, 2_400)}
+    amended = _samsung_responses()
+    for fs in ("CFS", "OFS"):
+        amended[("statement", corp, *_HALF, fs)] = statement(SAMSUNG, *_HALF, fs, flows=flows, rcept_no="20260920000505")
+    fetched, window = _run_at("09-25")
+    _financial_run(tmp_path, "e", amended, fetched, filings=corrected, **window)
+    assert _half(conn, datetime(2026, 9, 20, 23, 59, tzinfo=KST))[0][5] == f"{RUN}d_raw"
+    after_e, v2_e, gap = _half(conn, datetime(2026, 9, 21, 0, 0, tzinfo=KST))
+    assert (after_e[0], after_e[5], after_e[6]) == ("1300", f"{RUN}e_raw", "CONFIRMED") and v2_e["eps"] == "1300"
+
+
+def test_report_unreadable_from_its_first_response_shows_as_an_attempt_until_a_clean_one_arrives(tmp_path, conn):
+    """확정이 한 번도 없는 보고서의 줄 파손 응답은 값 없는 미확정 시도로 보이고, 정상 응답이 오면 확정 판본이 된다."""
+    fetched, window = _run_at("08-20")
+    _financial_run(tmp_path, "f", _half_cfs_with(lambda ln: ln.update(currency={})), fetched,
+                   **{**window, "from_date": "2025-10-01"})
+    first, v2_first, gap = _half(conn, datetime(2026, 8, 21, tzinfo=KST))
+    assert first[:4] == (None, None, None, None) and first[5:7] == (f"{RUN}f_raw", "UNCONFIRMED")
+    assert first[7] is not None                                         # 그 시도 자체의 시각
+    assert (v2_first["eps"], v2_first["bps"], v2_first["version"]["status"]) == (None, None, "UNCONFIRMED")
+    assert gap["reasons"] == {"eps": "REPORT_UNCONFIRMED", "bps": "REPORT_UNCONFIRMED"}
+    # 미확정 시도는 수신시각부터만 보인다 — 받기 전 시점(공개일 뒤)에는 그 보고서 행 자체가 없다.
+    assert _half(conn, datetime(2026, 8, 17, tzinfo=KST))[0] is None
+    # 다른 보고서(1분기)는 같은 실행에서 정상으로 확정됐다 — 한 응답의 파손이 번지지 않는다.
+    assert conn.execute("SELECT eps::text, version_status FROM financial_quarters_as_of(%s, %s) WHERE period = '2026-Q1'",
+                        (datetime(2026, 8, 21, tzinfo=KST), "005930")).fetchone() == ("1100", "CONFIRMED")
+
+    fetched, window = _run_at("08-25")
+    _financial_run(tmp_path, "g", _samsung_responses(), fetched, **window)
+    healed, v2_healed, gap = _half(conn, datetime(2026, 8, 26, tzinfo=KST))
+    assert healed[0] == "1200" and healed[1] and healed[5:8] == (f"{RUN}g_raw", "CONFIRMED", None)
+    assert v2_healed["eps"] == "1200" and gap is None
+
+
+def test_contradictory_share_table_loads_no_bps_and_keeps_the_income_metrics(tmp_path, conn):
+    """종류 행의 수가 합계를 넘는 주식총수 표로는 두 BPS 를 모두 싣지 않는다. EPS·매출·판본은 그대로 확정이다."""
+    from source_observation_fakes import SAMSUNG, shares
+
+    fetched, window = _run_at("08-20")
+    _financial_run(tmp_path, "s", _samsung_responses(), fetched, **{**window, "from_date": "2025-10-01"})
+    table = json.loads(shares(SAMSUNG, *_HALF, treasury=50))
+    table["list"] = [dict(r, istc_totqy="2,000") if r["se"] == "보통주" else r      # 합계는 1,000 — 우선주 행은 없다
+                     for r in table["list"] if r["se"] != "우선주"]
+    broken = {**_samsung_responses(), ("shares", SAMSUNG["corp_code"], *_HALF): json.dumps(table, ensure_ascii=False).encode()}
+    fetched, window = _run_at("09-05")
+    _financial_run(tmp_path, "t", broken, fetched, **window)
+    row, v2_row, gap = _half(conn, datetime(2026, 9, 6, tzinfo=KST))
+    # 전에는 모순된 합계로 계산한 bps_total_shares 가 shares=ok 인 확정 판본에 실렸다.
+    assert row[:4] == ("1200", None, None, "90000")
+    assert row[4:9] == ("BPS_UNCONFIRMED", f"{RUN}t_raw", "CONFIRMED", None, "error")
+    assert conn.execute("SELECT count(*) FROM financial_metric WHERE raw_run_id = %s AND fiscal_year = 2026"
+                        " AND fiscal_period = 'Q2' AND metric IN ('bps', 'bps_total_shares')",
+                        (f"{RUN}t_raw",)).fetchone()[0] == 0
+    assert (v2_row["eps"], v2_row["bps"]) == ("1200", None)
+    assert gap["reasons"] == {"bps": "BPS_UNCONFIRMED"} and gap["bps_total_shares"] is None
 
 
 def test_interrupted_load_recovers_both_tables_and_duplicates_do_not_multiply(tmp_path, conn):

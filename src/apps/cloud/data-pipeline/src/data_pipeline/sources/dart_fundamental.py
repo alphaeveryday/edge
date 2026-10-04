@@ -44,6 +44,7 @@ _PERIOD_BY_CODE = {v: k for k, v in REPORT_CODES.items()}
 _PERIOD_END = {"11013": (3, 31), "11012": (6, 30), "11014": (9, 30), "11011": (12, 31)}
 RCEPT_NO = re.compile(r"[0-9]{14}")
 _TICKER = re.compile(r"[0-9A-Z]{6}")
+_CURRENCY_CODE = re.compile(r"[A-Z]{3}")
 _REPORT_NAME = re.compile(r"(사업|반기|분기)보고서\s*\((\d{4})\.(\d{2})\)")
 _FLOW_ACCOUNTS = {
     "revenue": "ifrs-full_Revenue",
@@ -74,12 +75,17 @@ _SHARE_CLASSES = ("합계", "보통주", "우선주")
 # 정책 차단: 값을 만들 수 있어도 팀 결정으로 만들지 않는다.
 POLICY_REASONS = frozenset({"bps_blocked_preferred_shares", "non_krw_currency"})
 # 확인된 원천 부재: 온전한 응답에 그 값·줄이 없다(비슷한 줄도 없다).
-# (금액 칸이 비지 않았는데 숫자가 아닌 것은 무결성 검사가 먼저 잡으므로, missing_value 는 빈 칸뿐이다.)
+# (missing_value 는 빈 칸뿐이다 — 비지 않았는데 숫자로 읽히지 않는 칸은 `amount_unreadable` 로 따로 나온다.)
 SOURCE_ABSENT_REASONS = frozenset({"account_not_found", "missing_value", "q4_derivation_input_missing",
                                    "bps_input_missing", "bps_share_class_row_absent"})
 # 지원하지 않는 표기·계정: 원천에는 있어 보이는데 이 파서가 읽지 않는다. 원천 부재도 정책 차단도 아니다.
 UNSUPPORTED_REASONS = frozenset({"account_unsupported", "bps_share_class_label_unsupported"})
 GAP_CLASSES = frozenset({"policy", "source_absent"})               # 실행 실패로 세지 않는 분류(기록은 남긴다)
+# 줄 파손(ALPHA-1172): 값을 읽는 줄의 칸을 읽을 수 없다 — 그 지표가 "없다"가 아니라 "읽지 못했다"이므로 정제가 그 보고서
+# 판본을 확정하지 않는다. 사유마다 판정 근거가 따로 있다(`_pick_line`·`_currency_problem`·금액 칸을 읽는 자리의 주석).
+# 빈 칸(원천 부재)·지원하지 않는 계정·세 글자 코드로 적힌 외화(정책 차단)·숫자로 온 금액은 여기에 들지 않는다.
+UNREADABLE_LINE_REASONS = frozenset({"statement_kind_unreadable", "account_name_unreadable", "currency_unreadable",
+                                     "amount_unreadable"})
 _REASON_CLASSES = (("policy", POLICY_REASONS), ("source_absent", SOURCE_ABSENT_REASONS),
                    ("unsupported", UNSUPPORTED_REASONS))
 # 표준 계정 줄은 없지만 같은 항목으로 보이는 줄이 있는가 — (계정 id 에 든 줄기, 계정명에 든 말, 계정명에 없어야 하는 말).
@@ -137,17 +143,9 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
         elif _share_class(row) != _SHARE_NOTE and any(
                 _share_count(row, field) is None for field in ("istc_totqy", "tesstk_co")):
             problems.add("share_count_unreadable")
-    table = share_table_problem(shares, period_end)
+    table = share_table_problem(shares, period_end)     # 종류별 수와 합계의 모순(부분합 포함)도 여기서 나온다
     if table:
         problems.add(table)
-    # 종류 행이 일부만 있어도 그 수가 합계를 넘으면 표의 모순이다 — "행 없음"(원천 부재)으로 읽지 않는다. 행이 다 있을 때의
-    # 합 검사는 `share_table_problem` 이 한다(그쪽은 값 경로라 건드리지 않는다).
-    total = _share_row(shares, "합계")
-    parts = [row for row in (_share_row(shares, "보통주"), _share_row(shares, "우선주")) if row is not None]
-    for field in ("istc_totqy", "tesstk_co"):
-        whole, counts = _share_count(total, field), [_share_count(row, field) for row in parts]
-        if whole is not None and None not in counts and sum(counts, Decimal(0)) > whole:
-            problems.add("share_rows_inconsistent")
     return sorted(problems)
 
 
@@ -362,9 +360,21 @@ def _pick_line(lines: list[dict], account_id: str, statements: tuple[str, ...]) 
 
     우선주 줄만 있으면 거부한다(한 줄뿐이라는 이유로 우선주 EPS 를 보통주 자리에 넣지 않는다). 구분 안 되는 줄이
     둘 이상이면 모호하다.
+
+    줄 파손 두 가지는 값을 고르지 않고 사유로 돌려준다(`UNREADABLE_LINE_REASONS`):
+    - `statement_kind_unreadable`: 이 계정의 줄인데 재무제표 종류 칸이 문자열이 아니거나 비었다. 그 줄이 읽는 재무제표의
+      줄인지 알 수 없어, 후보가 하나뿐인지(또는 없는지) 확정할 수 없다. 모르는 종류 **문자열**은 읽지 않는 재무제표의
+      줄로 본다(같은 계정이 자본변동표·현금흐름표에도 실린다) — 파손이 아니다.
+    - `account_name_unreadable`: 후보 줄의 계정명이 문자열이 아니다. 우선주 줄인지 가를 수 없다(이름이 없는 줄은 종전대로
+      보통주 후보다).
     """
+    mine = [ln for ln in lines if ln.get("account_id") == account_id]
+    if any(not (isinstance(ln.get("sj_div"), str) and ln["sj_div"].strip()) for ln in mine):
+        return None, "statement_kind_unreadable"
     for sj in statements:
-        found = [ln for ln in lines if ln.get("sj_div") == sj and ln.get("account_id") == account_id]
+        found = [ln for ln in mine if ln["sj_div"] == sj]
+        if any(ln.get("account_nm") is not None and not isinstance(ln["account_nm"], str) for ln in found):
+            return None, "account_name_unreadable"
         candidates = [ln for ln in found if "우선주" not in (ln.get("account_nm") or "")]
         if len(candidates) == 1:
             return candidates[0], None
@@ -373,6 +383,20 @@ def _pick_line(lines: list[dict], account_id: str, statements: tuple[str, ...]) 
         if found:
             return None, "preferred_share_line_only"
     return None, "account_not_found"
+
+
+def _currency_problem(line: dict) -> str | None:
+    """값을 읽을 줄의 통화 판정. 원화면 None.
+
+    세 글자 통화 코드로 적힌 외화는 명시된 외화 재무제표다 — 정책 차단(`non_krw_currency`)이고 파손이 아니다. 칸이 없거나
+    코드로 읽히지 않으면(문자열 아님·빈 값·다른 형식) 금액의 단위를 알 수 없는 줄 파손(`currency_unreadable`)이다 — 원으로
+    가정하지도, 외화로 단정하지도 않는다. 근거: 실응답의 읽는 줄 35,729개(재무제표 3,019개, 2026-10-03 수집분)는 전부
+    `KRW`(35,677)·`USD`(52)였다.
+    """
+    currency = line.get("currency")
+    if currency == "KRW":
+        return None
+    return "non_krw_currency" if isinstance(currency, str) and _CURRENCY_CODE.fullmatch(currency) else "currency_unreadable"
 
 
 def _period_end(year: str, code: str) -> str:
@@ -406,8 +430,8 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
                 problem = "account_unsupported"
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
-        if line.get("currency") != "KRW":
-            rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": ["non_krw_currency"]})
+        if problem := _currency_problem(line):
+            rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
         if code == "11011":
             fields = [("CUMULATIVE", "FY", "thstrm_amount")]
@@ -419,8 +443,9 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
         for period_kind, fiscal_period, field in fields:
             value = _amount(line.get(field))
             if value is None:
-                rejects.append({**base, "metric": metric, "reprt_code": code, "field": field,
-                                "reasons": ["missing_value"]})
+                # 빈 칸(없음·빈 문자열·`-`)은 원천 부재다. 비지 않았는데 숫자로 읽히지 않으면 값이 있는데 읽지 못한 것이다.
+                reason = "missing_value" if _blank(line.get(field)) else "amount_unreadable"
+                rejects.append({**base, "metric": metric, "reprt_code": code, "field": field, "reasons": [reason]})
                 continue
             rows.append({**base, "fiscal_period": fiscal_period, "metric": metric, "period_kind": period_kind,
                          "derivation": "REPORTED", "value": str(value), "unit": _UNITS[metric], "formula": None,
@@ -511,11 +536,15 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
     treasury = {se: counts[(se, "tesstk_co")] for se in rows if rows[se] is not None}
     if any(issued[se] is not None and treasury[se] is not None and treasury[se] > issued[se] for se in issued):
         return "share_rows_inconsistent"
-    if all(se in issued for se in ("합계", "보통주", "우선주")):
-        # 발행수·자기주식 합계는 각각 따로 본다 — 한 열의 파손이 다른 열의 확인된 모순을 가리지 않게.
-        for column in (issued, treasury):
-            if None not in column.values() and column["보통주"] + column["우선주"] != column["합계"]:
-                return "share_rows_inconsistent"
+    # 발행수·자기주식 합계는 각각 따로 본다 — 한 열의 파손이 다른 열의 확인된 모순을 가리지 않게.
+    for column in (issued, treasury):
+        whole, parts = column.get("합계"), [column[se] for se in ("보통주", "우선주") if se in column]
+        if whole is None or None in parts:
+            continue
+        # 두 종류가 다 있으면 합이 합계와 같아야 한다. 한 종류만 있어도 그 수가 합계를 넘으면 표의 모순이다 — 어느 행이
+        # 틀렸는지 알 수 없으므로 합계로 통상 BPS 를 만들지 않는다(ALPHA-1172, 전에는 실패 분류에서만 잡았다).
+        if sum(parts, Decimal(0)) > whole or (len(parts) == 2 and sum(parts, Decimal(0)) != whole):
+            return "share_rows_inconsistent"
     return None
 
 
@@ -554,9 +583,14 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
             problem = "account_unsupported"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem, *label]})
         return []
-    if line.get("currency") != "KRW":
+    if problem := _currency_problem(line):
         # 원이 아닌 자본을 원/주로 적으면 단위가 조용히 틀린다(손익 줄과 같은 거부).
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["non_krw_currency", *label]})
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem, *label]})
+        return []
+    if not _blank(line.get("thstrm_amount")) and _amount(line.get("thstrm_amount")) is None:
+        # 자본 칸에 값이 있는데 숫자로 읽히지 않는다 — 빈 칸(`bps_input_missing`, 원천 부재)과 다르다. 주식총수 표의 문제보다
+        # 먼저 본다(뒤에 두면 분모 사유가 자본 줄 파손을 가린다).
+        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["amount_unreadable", *label]})
         return []
     problem = share_table_problem(shares, base["period_end"])
     if problem:
