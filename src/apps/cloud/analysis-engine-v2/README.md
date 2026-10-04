@@ -14,6 +14,34 @@ python -m edge_analysis_v2.dashboard.server --rds-ca /path/to/rds-ca.pem --port 
 
 모델 실행은 전망 600초, 오늘의 가격변동 설명 300초를 기본 한도로 사용한다. 별도 고정 턴 제한은 없으며, 시간 초과 시 불완전한 응답을 발행하지 않고 실패로 기록한다.
 
+### 공개 웹 조사
+
+실제 DB 분석에 `TINYFISH_API_KEY`를 설정하면 기존 분석 MCP에 `search_web(query, page)`와
+`read_web_document(url, offset)`가 추가된다. 로컬 `analysis.database_run`은 `--env-file` 또는
+환경변수에서, 클라우드 워커는 기존 `DEEPSEEK_SECRET_ARN`이 가리키는 Secret JSON에서 읽는다.
+키가 없으면 웹 도구를 등록하지 않고 초기 입력의 `web_research.enabled=false`로 표시한다.
+합성 시나리오는 외부 웹을 사용하지 않는다. 별도 MCP 서비스·DB 마이그레이션·의존성 추가는 없다.
+
+- 검색은 편입종목에 제한되지 않으며 탐색 전용이다. 본문 호출의 성공한 `tool_run_id`를 근거로 쓴다.
+- TinyFish Search/Fetch만 호출한다. Agent·Browser·로그인·쿠키·업로드·임의 헤더는 제공하지 않는다.
+  고정 HTTPS API 주소만 서버가 호출하고 API 리다이렉트는 따르지 않는다. 키는 모델 프로세스에 전달하지 않는다.
+- 입력·결과 URL의 프로토콜·포트·인증정보·DNS를 검사해 비공개 주소, loopback, Tailscale,
+  메타데이터 주소를 거부한다. **TinyFish 내부 브라우저의 DNS·리다이렉트·하위 요청은 공급자 통제 영역**이다.
+  결과 URL 검사는 사후 방어이며 공급자 내부 접속을 사전에 통제했다는 뜻이 아니다. 우리 VPC·로그인 상태를 연결하지 않는다.
+- 실행당 외부 호출 최대 30회(실패 포함), 동시 호출 1개, API 소켓 제한 45초, 응답 2MB,
+  문서 50만 자로 제한한다. 실패는 기록하고 자동 재시도하지 않는다. 빈 검색 결과와 공급자 실패를 구분한다.
+- 본문은 16,000자 단위로 반환한다. `next_offset`으로 같은 실행의 동일 수집본을 이어 읽는다.
+  읽은 각 구간·출처·수집시각은 기존 `tool_runs`에 저장되고 대시보드 도구 호출 상세에서 확인한다.
+  아직 읽지 않은 구간은 실행 메모리에만 있으며, 실행 간 캐시나 원문 전체 영구 보관을 보장하지 않는다.
+- 검색 날짜 필터는 기준일 검증이 아니다. 본문은 발행일이 없거나 기준일 이후이면 최종 근거로 거부한다.
+  날짜만 있는 기준일 당일 문서도 시각 미확인으로 거부한다. `historical_revision_verified=false`이므로
+  오래된 발행일이 현재 본문의 과거 존재를 입증하지 않는다. 추출 본문은 완전한 원문·표의 재현을 보장하지 않는다.
+- 웹 내용은 명령이 아닌 외부 자료다. 시스템 프롬프트·비밀정보·사용자 정보를 검색어에 넣지 않는다.
+  본문의 지시로 스킬·파일·도구 접근 범위를 넓힐 수 없으며, 기존 문서 읽기 경계는 유지한다.
+
+API 계약: [Search](https://docs.tinyfish.ai/api-reference/search-the-web),
+[Fetch](https://docs.tinyfish.ai/api-reference/fetch-and-extract-content-from-urls).
+
 프롬프트 관리는 실제 `prompts/*.yaml`을 수정한다. 저장은 이후 대시보드 실행부터 적용되며 실행 시작 시 YAML과 버전이 고정된다. 과거 버전 비교는 읽기 전용이다. 버전 이력은 실행 디렉터리의 `.prompt_versions/`에 저장한다.
 
 계약 검사는 실제 DB 조립 응답을 읽기 전용으로 검증한다. 옵시디언 원문을 복사하지 않고 경로와 해시만 보관한다. 자세한 범위는 [계약 안내](src/edge_analysis_v2/contracts/README.md)를 참고한다.
