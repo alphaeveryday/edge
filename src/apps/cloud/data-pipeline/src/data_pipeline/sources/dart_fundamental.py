@@ -488,8 +488,14 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
     # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
     issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
+    # 이 파서가 읽지 않는 이름의 종류 행. 읽어야 할 행(합계·보통주·우선주)이 없는데 이런 행이 있으면, 없는 것이 아니라
+    # 읽지 못하는 표기다 — 원천 부재로 넘기지 않는다.
+    unknown_rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
+                    and str(r.get("se") or "").strip() not in (*_SHARE_CLASSES, _SHARE_NOTE)]
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
-        rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": ["bps_input_missing"]})
+        unsupported = total is None and unknown_rows
+        rejects.append({**base, "metric": "bps", "reprt_code": code,
+                        "reasons": ["bps_share_class_label_unsupported" if unsupported else "bps_input_missing"]})
         return []
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
@@ -521,9 +527,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         # 읽지 못하는 표기이고(지원하지 않음), 없으면 원천이 종류를 나눠 주지 않은 것이다. 어느 쪽도 우선주 0 으로 보지 않는다.
         reason = common_bps
         if common_bps == "bps_share_rows_unreadable" and (common is None or preferred is None):
-            others = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
-                      and str(r.get("se") or "").strip() not in (*_SHARE_CLASSES, _SHARE_NOTE)]
-            reason = "bps_share_class_label_unsupported" if others else "bps_share_class_row_absent"
+            reason = "bps_share_class_label_unsupported" if unknown_rows else "bps_share_class_row_absent"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
                         "preferred_istc_totqy": str(issued_preferred)})
         return rows

@@ -436,11 +436,15 @@ def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
     def rename_classes(rows):                           # 실응답 표기: 보통주식·우선주식 (388050, 2026 반기)
         return [dict(r, se=r["se"] + "식") if r["se"] in ("보통주", "우선주") else r for r in rows]
 
+    def rename_total(rows):                             # 합계 행이 다른 이름이면 "발행주식 수 없음"이 아니다
+        return [dict(r, se="총계") if r["se"] == "합계" else r for r in rows]
+
     def other_operating_income_id(lines):               # 실응답: 영업이익이 다른 표준 id 로 실린다
         _line(lines, "dart_OperatingIncomeLoss")["account_id"] = "ifrs-full_ProfitLossFromOperatingActivities"
 
     for name, key, body, reason in (
             ("labels", _HALF_SHARES, _shares_with(rename_classes), "bps_share_class_label_unsupported"),
+            ("total-label", _HALF_SHARES, _shares_with(rename_total), "bps_share_class_label_unsupported"),
             ("account", _HALF_CFS, _statement_with(other_operating_income_id), "account_unsupported")):
         code, done, log = _normalize_with(tmp_path, name, {**full_responses(SAMSUNG), key: body})
         assert code == 2 and done["gaps"] == 0, name
