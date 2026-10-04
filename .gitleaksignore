@@ -13,3 +13,6 @@ dc4471e5ac6acc6fc7b8b934aef1e5a69f3f1304:src/apps/cloud/app-api/README.md:curl-a
 a8aab42232f1410f5b8711afa5ff326d5c226093:src/apps/cloud/app-api/src/main/java/com/edge/app/watch/service/WatchService.java:generic-api-key:39
 ab9119ac424886d46f0de300aca6dc5c586be6be:src/apps/cloud/app-api/src/test/java/com/edge/app/AppApplicationTests.java:generic-api-key:36
 ab9119ac424886d46f0de300aca6dc5c586be6be:src/apps/cloud/app-api/src/test/java/com/edge/app/common/auth/AccessTokensTests.java:generic-api-key:15
+
+# app-api README curl example: local compose/experiment admin token, not a deployed credential.
+b9f7e0d5f43a4ed06688bea2dd5e8211e7c1b616:src/apps/cloud/app-api/README.md:curl-auth-header:164
