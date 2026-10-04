@@ -11,7 +11,7 @@ import collections
 import hashlib
 import json
 import statistics
-from datetime import datetime
+from datetime import datetime, timezone
 
 import boto3
 
@@ -28,8 +28,12 @@ def main(name):
     batch = json.loads((RESULTS/f'{name}.json').read_text())
     current, seen = collections.Counter(), collections.Counter()
     macros, per, gaps, starts = set(), {}, collections.Counter(), []
+    # batch_run.py report 의 inside() 와 같은 범위: 같은 기준시각의 이전 배치가 남긴 시도는 이 배치의 입력이 아니다
+    began = datetime.fromisoformat(batch['started'])
+    ended = datetime.fromisoformat(batch['stopped']) if batch['stopped'] else datetime.now(timezone.utc)
     for row in batch['rows']:
-        attempt = next((a for a in row['attempts'] if a['status'] == 'SUCCEEDED'), None)
+        attempt = next((a for a in row['attempts'] if a['status'] == 'SUCCEEDED'
+                        and began <= datetime.fromisoformat(a['started']) <= ended), None)
         if attempt is None:
             continue
         manifest = read(f"analysis-v2/runs/{attempt['analysis_id']}/manifest.json")
@@ -40,7 +44,8 @@ def main(name):
         current.update(members)
         seen.update(observed)
         macros.add(hashlib.sha256(json.dumps(data['macro'], sort_keys=True).encode()).hexdigest())
-        for gap in data['source_gaps'].get('financials', []):
+        # 원천 DB 입력(DatabaseTools.initial_input)에만 있다. 대역 입력이면 없다
+        for gap in data.get('source_gaps', {}).get('financials', []):
             gaps.update(gap.get('reasons', {}).values())
         # 시작 → 첫 툴 기록: 원천 읽기, writer 의 거시·재무 조회, 정의 등록, 첫 모델 응답까지 포함한 상한
         first = min((datetime.fromisoformat(r['started_at']) for r in evidence['tool_runs']), default=None)
@@ -48,7 +53,7 @@ def main(name):
         per[row['etf_code']] = {'constituents': len(members), 'observed_instruments': len(observed),
                                 'start_to_first_tool_s': round(start, 1) if first else None,
                                 'tool_runs': len(evidence['tool_runs']),
-                                'news_limit_reached': data['news_scope'].get('limit_reached')}
+                                'news_limit_reached': data.get('news_scope', {}).get('limit_reached')}
         if first:
             starts.append(start)
     if not per:
