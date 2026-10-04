@@ -1575,8 +1575,29 @@ def test_partial_normalize_logs_one_reject_summary_line_for_the_failure_alert(tm
                                                              _HALF_SHARES: shares(SAMSUNG, "2026", "11012", preferred=100)})
     assert code == 0 and summaries() == []
     # 한 줄에 들도록 앞 N건만 싣고 전체 건수는 따로 적는다. 분류가 없는 거부는 error 로 센다(가볍게 읽히지 않게).
-    line = so._reject_summary("x", [{"reasons": ["r"], "corp_code": str(n)} for n in range(30)], 0, {})
-    bounded = json.loads(line[len(so.REJECT_SUMMARY_MARK):])
-    assert (bounded["failed"], len(bounded["items"]), bounded["classes"]) == (30, so.REJECT_SUMMARY_ITEMS, {"error": 30})
-    assert len(line.encode("utf-8")) < 16_000
+    many = [{"reasons": ["r"], "corp_code": str(n)} for n in range(30)]
+    items = so._reject_items(many, {})
+    assert len(items) == so.REJECT_SUMMARY_ITEMS and {i["class"] for i in items} == {"error"}
+    assert len(so._reject_summary("x", len(many), 0, {"error": 30}, items).encode("utf-8")) < 16_000
+
+
+def test_rerun_of_a_finished_partial_normalize_still_reports_its_reject_classes(tmp_path, caplog):
+    # WHY(로컬 리뷰): 이미 끝난 정제를 다시 돌리면(clear·재처리) 결과를 다시 쓰지 않고 exit 2 만 돌려준다. 그 실행의 로그에
+    # 요약 줄이 없으면 통보는 거부가 미지원뿐인지 알 수 없다. 완료 manifest 의 분류에서 결손 분류를 뺀 건수를 다시 남긴다.
+    def rename_classes(rows):
+        names = {"보통주": "의결권 있는 주식", "우선주": "의결권 없는 주식"}
+        return [dict(r, se=names.get(r["se"], r["se"])) for r in rows]
+
+    responses = {**full_responses(SAMSUNG), _HALF_SHARES: _shares_with(rename_classes),
+                 ("shares", SAMSUNG["corp_code"], "2026", "11013"): shares(SAMSUNG, "2026", "11013", preferred=100)}
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    assert so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        assert so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith(so.REJECT_SUMMARY_MARK)]
+    summary = json.loads(line[len(so.REJECT_SUMMARY_MARK):])
+    # 결손(우선주 정책 차단 2건)은 거부 분류에 섞이지 않는다 — 섞이면 통보가 미지원뿐인 run 을 그렇게 읽지 못한다.
+    assert (summary["failed"], summary["gaps"], summary["classes"], summary["items"]) == (2, 2, {"unsupported": 2}, [])
 

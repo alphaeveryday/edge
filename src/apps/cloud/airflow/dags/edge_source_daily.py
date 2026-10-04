@@ -144,9 +144,10 @@ def _failure_report(ti, dag, run) -> tuple[str | None, list[str]]:
         lines.extend(_item_line(item) for item in summary["items"])
         if summary["failed"] > len(summary["items"]):
             lines.append(f"  … 외 {summary['failed'] - len(summary['items'])}건(품질 로그 failures 참조)")
+    # 요약의 분류별 건수가 거부 건수와 맞을 때만 분류를 믿는다(분류 없는 거부가 섞인 요약을 미지원으로 읽지 않는다).
     loaded = (bool(partial) and not holds and all(code == 0 for s, code in codes.items() if s not in partial)
-              and all(summaries[s] and summaries[s]["failed"] > 0 and set(summaries[s]["classes"]) <= UNSUPPORTED_ONLY
-                      for s in partial))
+              and all(summaries[s] and set(summaries[s]["classes"]) <= UNSUPPORTED_ONLY
+                      and 0 < summaries[s]["failed"] == sum(summaries[s]["classes"].values()) for s in partial))
     if not loaded:
         return None, lines
     count = sum(summaries[s]["failed"] for s in partial)

@@ -161,10 +161,20 @@ def test_alert_says_loaded_only_when_every_reject_is_unsupported_notation(dag_mo
     assert "  - 00160302 코스모화학 2026 11012 CFS bps: bps_share_class_label_unsupported [unsupported]" in message
 
 
+def test_alert_for_a_rerun_without_item_lines_points_to_the_quality_log(dag_module, monkeypatch):
+    # WHY(로컬 리뷰): 이미 끝난 정제를 다시 돌린 run 의 요약에는 건수·분류만 있다. 분류로 "적재 완료"는 말할 수 있지만
+    # 회사·사유는 없다 — 없는 내용을 지어내지 않고 어디서 보는지 적는다.
+    subject, message = _notify(dag_module, monkeypatch, summary={**_UNSUPPORTED, "items": []})
+    assert subject.startswith("[source-daily] 적재 완료 · 미지원 2건")
+    assert "  … 외 2건(품질 로그 failures 참조)" in message and "코스모화학" not in message
+
+
 @pytest.mark.parametrize("case,kwargs,expected", [
     ("오류로 분류된 거부가 섞임", {"summary": {**_UNSUPPORTED, "failed": 3, "classes": {"error": 1, "unsupported": 2}}},
      "거부 3건(error 1 unsupported 2)"),
     ("요약 줄을 로그에서 못 찾음", {"summary": None}, "거부 요약을 로그에서 찾지 못했다"),
+    ("분류 없는 거부가 섞인 요약", {"summary": {**_UNSUPPORTED, "failed": 3}}, "거부 3건(unsupported 2)"),
+    ("분류가 비어 있는 요약", {"summary": {**_UNSUPPORTED, "classes": {}, "items": []}}, "거부 2건()"),
     ("로그 조회가 실패함", {"logs_error": RuntimeError("AccessDenied")}, "상세를 만들지 못했다: RuntimeError: AccessDenied"),
     ("적재 스텝이 실패함", {"codes": {"financial_load": 1}}, "financial_load=1"),
     ("다른 계열의 수집이 부분 실패함", {"codes": {"macro_collect": 2}}, "macro_collect: 부분 실패(exit 2)"),

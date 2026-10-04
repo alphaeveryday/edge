@@ -360,19 +360,20 @@ def _merge_canonical(storage: Storage, spec: DatasetSpec, rows: list[dict]) -> l
     return written
 
 
-def _reject_summary(dataset: str, failures: list[dict], gaps: int, corps: dict) -> str:
-    """실패 통보가 읽는 한 줄 — exit 2 를 만든 거부의 분류별 건수와 앞 N건(회사·보고서·지표·사유).
-
-    분류가 없는 거부(분류 규칙이 없는 데이터셋, 정제 예외)는 error 로 센다 — 통보가 그것을 가볍게 읽지 않게.
-    """
-    keys = ("corp_code", "bsns_year", "fiscal_year", "reprt_code", "fs_basis", "metric", "report_nm", "reasons")
-    items = [{**{k: f[k] for k in keys if f.get(k) is not None}, "class": f.get("class", "error"),
-              **({"corp_name": name} if (name := (corps.get(f.get("corp_code")) or {}).get("corp_name")) else {})}
-             for f in failures[:REJECT_SUMMARY_ITEMS]]
+def _reject_summary(dataset: str, failed: int, gaps: int, classes: dict, items: list[dict] | None = None) -> str:
+    """실패 통보가 읽는 한 줄 — exit 2 를 만든 거부의 건수·분류별 건수와 건별 내용(있을 때)."""
     return REJECT_SUMMARY_MARK + json.dumps(
-        {"dataset": dataset, "failed": len(failures), "gaps": gaps, "items": items,
-         "classes": dict(sorted(Counter(f.get("class", "error") for f in failures).items()))},
-        ensure_ascii=False, sort_keys=True, default=str)
+        {"dataset": dataset, "failed": failed, "gaps": gaps, "classes": dict(sorted(classes.items())),
+         "items": items or []}, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _reject_items(failures: list[dict], corps: dict) -> list[dict]:
+    """거부 요약에 싣는 앞 N건(회사·보고서·지표·사유). 분류가 없는 거부(분류 규칙이 없는 데이터셋, 정제 예외)는
+    error 로 적는다 — 통보가 그것을 가볍게 읽지 않게."""
+    keys = ("corp_code", "bsns_year", "fiscal_year", "reprt_code", "fs_basis", "metric", "report_nm", "reasons")
+    return [{**{k: f[k] for k in keys if f.get(k) is not None}, "class": f.get("class", "error"),
+             **({"corp_name": name} if (name := (corps.get(f.get("corp_code")) or {}).get("corp_name")) else {})}
+            for f in failures[:REJECT_SUMMARY_ITEMS]]
 
 
 def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: str | None,
@@ -391,6 +392,11 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         if done.get("input_run_id") != input_run_id:
             raise SystemExit(f"{producer} run_id={run_id} 는 다른 입력({done.get('input_run_id')})으로 이미 정제됐다")
         logger.info("%s run_id=%s 는 이미 정제 완료 — 다시 쓰지 않는다", spec.dataset, run_id)
+        if done.get("rejected"):
+            # 재실행도 exit 2 로 끝나 실패 통보가 나간다 — 건수와 분류를 다시 남긴다. 건별 내용은 첫 실행의 품질 로그에만
+            # 있다(여기서 다시 읽지 않는다). 완료 manifest 의 분류는 결손까지 센 것이라 결손 분류를 뺀다.
+            logger.warning("%s", _reject_summary(spec.dataset, done["rejected"], done.get("gaps", 0), {
+                k: v for k, v in (done.get("reject_classes") or {}).items() if k not in spec.gap_classes}))
         return PARTIAL_EXIT if done.get("rejected") else 0
     exit_code = 0
     failures: list[dict] = []
@@ -476,7 +482,9 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             logger.exception("canonical run manifest 기록 실패")
             exit_code = 1
     if failures:
-        logger.warning("%s", _reject_summary(spec.dataset, failures, len(gaps), corps))
+        logger.warning("%s", _reject_summary(spec.dataset, len(failures), len(gaps),
+                                             Counter(f.get("class", "error") for f in failures),
+                                             _reject_items(failures, corps)))
     logger.info("%s 정제: rows=%s failures=%d gaps=%d exit=%d", spec.dataset, log.get("rows"), len(failures),
                 len(gaps), exit_code)
     return exit_code
