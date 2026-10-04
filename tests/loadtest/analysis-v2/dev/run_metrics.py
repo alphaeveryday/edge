@@ -11,6 +11,7 @@ import collections
 import json
 import re
 import statistics
+from datetime import datetime, timezone
 
 import boto3
 
@@ -66,8 +67,12 @@ def attempt(ident):
 
 def main(name):
     batch = json.loads((RESULTS/f'{name}.json').read_text())
+    # batch_run.py report 의 inside() 와 같은 범위: 같은 기준시각의 이전 배치가 남긴 시도는 세지 않는다
+    began = datetime.fromisoformat(batch['started'])
+    ended = datetime.fromisoformat(batch['stopped']) if batch['stopped'] else datetime.now(timezone.utc)
     rows = [{'etf_code': r['etf_code'], 'analysis_id': a['analysis_id'], 'status': a['status'], 'failure': a.get('failure')}
-            | attempt(a['analysis_id']) for r in batch['rows'] for a in r['attempts']]
+            | attempt(a['analysis_id']) for r in batch['rows'] for a in r['attempts']
+            if began <= datetime.fromisoformat(a['started']) <= ended]
     done = [r for r in rows if r['status'] == 'SUCCEEDED' and r['db']]
     failures = collections.Counter()
     for r in rows:
