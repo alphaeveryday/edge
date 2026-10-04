@@ -80,6 +80,26 @@ def test_three_slots_still_serialize_the_same_etf_and_kind(capacity):
     assert control(conn, workflows, ecs, 'cluster', 'c', 'acquire', slots=3, request_key='movement:069500')['acquired']
 
 
+def test_capacity_above_three_still_holds_the_cap_and_one_run_per_etf(capacity):
+    """Raising the shared cap must not loosen it: 37 distinct ETFs fill it, the 38th and a second
+    run of an ETF already running both wait, and a value past the batch's inline Map bound is refused."""
+    conn, dsn, workflows, ecs = capacity
+    keys = [f'outlook:{index:06d}' for index in range(38)]
+    barrier = Barrier(len(keys))
+    def acquire(key):
+        with psycopg.connect(dsn, autocommit=True) as other:
+            other.execute('SET ROLE edge_analysis_v2_writer')
+            barrier.wait()
+            return control(other, workflows, ecs, 'cluster', 'run-' + key, 'acquire', slots=37, request_key=key)['acquired']
+    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+        assert sum(pool.map(acquire, keys)) == 37
+    held = {row[0] for row in conn.execute('SELECT request_key FROM analysis_execution_slots')}
+    control(conn, workflows, ecs, 'cluster', 'run-' + min(held), 'release', slots=37)
+    assert not control(conn, workflows, ecs, 'cluster', 'again', 'acquire', slots=37, request_key=max(held))['acquired']
+    with pytest.raises(ValueError):
+        control(conn, workflows, ecs, 'cluster', 'too-many', 'acquire', slots=41)
+
+
 # ── Reclaim needs evidence that the old task stopped (ALPHA-1166) ────────────────────────────────
 NOW = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 

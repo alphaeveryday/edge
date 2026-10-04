@@ -312,9 +312,9 @@ class SourceObservationsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # 재무 수집 대상 뿌리 ETF. 대상 종목은 이 ETF 들의 canonical 구성종목 스냅샷에서 **기간별로**
-    # 파생한다 — 현재 구성을 과거 전체에 적용하지 않는다(steps/source_observations).
-    # 설정 전체의 필수값이 아니다 — 매크로만 쓰는 설정도 로드된다. 비어 있으면 재무 수집 스텝만 거부한다(run.py).
+    # 재무 수집 대상 뿌리 ETF 를 좁히는 재정의. 비어 있으면 `krx_etf.source.etf_map` 의 ETF 전부다(전망 배치 대상과
+    # 같은 목록, run.py). 대상 종목은 이 ETF 들의 canonical 구성종목 스냅샷에서 **기간별로** 파생한다 — 현재 구성을
+    # 과거 전체에 적용하지 않는다(steps/source_observations). 둘 다 비어 있으면 재무 수집 스텝만 거부한다.
     etf_ids: list[NonBlankStr] = []
     macro: MacroObservationSource = MacroObservationSource()
     sector: SectorMasterSource = SectorMasterSource()

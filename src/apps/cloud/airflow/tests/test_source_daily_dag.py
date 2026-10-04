@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import sys
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+TF = ROOT.parents[3] / "infra/terraform/modules/data-pipeline"
 sys.path.insert(0, str(ROOT / "dags"))
 KST = timezone(timedelta(hours=9))
 
@@ -35,9 +37,20 @@ def test_new_lane_is_paused_until_someone_turns_it_on(dag_module):
     assert dag_module.dag.is_paused_upon_creation is True
 
 
+def test_slot_matches_the_missed_run_judgment(dag_module):
+    # WHY: Reconciler 는 `OPS_SOURCE_DAILY_SCHED_HHMM` 시각의 run 이 없으면 PLANNER_MISSING 을 연다. 이 레인은 cron 변수가
+    # 없어 Terraform 이 DAG 에서 시각을 뽑지 못한다 — 한쪽만 옮기면 매일 거짓 결측이 열리고 진짜 결측은 안 보인다.
+    # 모듈 local 이라 환경이 재정의할 수 없다 — 여기서 읽는 값이 곧 ops 태스크 정의에 들어가는 값이다.
+    slots = re.search(r'source_daily_schedule_hhmm\s*=\s*"([^"]*)"', (TF / "ops_ledger.tf").read_text())[1].split(",")
+    assert sorted(f"{int(m)} {int(h)} * * *" for h, m in (s.split(":") for s in slots)) == sorted(dag_module.CRONS)
+
+
 def test_schedule_and_guards(dag_module):
     dag = dag_module.dag
-    assert dag_module.CRONS == ("10 9 * * *",)
+    # WHY: 전망 배치는 매일 06:00 KST 에 기준시각까지 보이는 값만 읽는다(envs/dev/analysis-v2.tf). 슬롯에 run 상한을
+    # 더한 시각이 06:00 을 넘으면 그날 수집이 그날 전망에 못 들어간다(옛 09:10 슬롯이 그랬다).
+    assert dag_module.CRONS == ("20 5 * * *",)
+    assert timedelta(hours=5, minutes=20) + dag.dagrun_timeout < timedelta(hours=6)
     assert dag.timetable.__class__.__name__ == "MultipleCronTriggerTimetable"
     assert dag.catchup is False and dag.max_active_runs == 1
     assert dag.dagrun_timeout < timedelta(seconds=1800)        # Reconciler 수명보다 짧게
