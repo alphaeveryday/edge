@@ -97,19 +97,22 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     problems: set[str] = set()
     used = set(_FLOW_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
     for line in lines:
-        if line.get("sj_div") not in _STATEMENT_KINDS or not (
-                isinstance(line.get("account_id"), str) and line["account_id"].strip()):
+        # 칸의 타입부터 본다 — 배열·객체가 들어온 칸을 집합에 물으면 이 검사 자체가 죽어 다른 회사 정제까지 멈춘다.
+        kind, account, currency = line.get("sj_div"), line.get("account_id"), line.get("currency")
+        if not (isinstance(kind, str) and kind in _STATEMENT_KINDS and isinstance(account, str) and account.strip()):
             problems.add("bad_account_line")
-        if line.get("currency") != "KRW" and line.get("currency") not in _FOREIGN_CURRENCIES:
+        if not (isinstance(currency, str) and (currency == "KRW" or currency in _FOREIGN_CURRENCIES)):
             problems.add("currency_unrecognized")
-        if line.get("account_id") in used and any(
+        if isinstance(account, str) and account in used and any(
                 not _blank(line.get(field)) and _amount(line.get(field)) is None
                 for field in ("thstrm_amount", "thstrm_add_amount")):
             problems.add("amount_unreadable")
     for row in (shares or {}).get("list", []):
         if not isinstance(row, dict):
             continue                        # 파손 행은 상위 정제가 malformed_list_row 로 이미 거부한다
-        kind = row.get("se")
+        kind, receipt = row.get("se"), row.get("rcept_no")
+        if not (isinstance(receipt, str) and RCEPT_NO.fullmatch(receipt)):
+            problems.add("bad_rcept_no")        # 숫자로 온 접수번호는 문자열 검사를 통과해 뒤에서 비교가 깨진다
         if not (isinstance(kind, str) and kind.strip()):
             problems.add("bad_share_row")
         elif kind.strip() != _SHARE_NOTE and any(

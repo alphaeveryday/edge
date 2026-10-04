@@ -238,9 +238,10 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
             continue
         rejects.extend({**b, "raw_key": statement["key"], **({"response_damaged": True} if damage else {})}
                        for b in bad)
-        if not extracted and any("account_not_found" in (b.get("reasons") or []) for b in bad):
-            # 응답은 정상인데 쓸 계정 줄이 하나도 없다 — 지표 하나의 부재가 아니라 계정 체계가 통째로 맞지 않는 것이다
-            # (공급자 형식 변경 등). 지표별 "계정 없음"은 결손으로 세므로 여기서 실패로 드러낸다.
+        if not extracted and bad and all(b.get("reasons") == ["account_not_found"] for b in bad):
+            # 응답은 정상인데 이 파서가 아는 계정 줄이 **하나도** 없다 — 지표 하나의 부재가 아니라 계정 체계가 통째로 맞지
+            # 않는 것이다(공급자 형식 변경 등). 지표별 "계정 없음"은 결손으로 세므로 여기서 실패로 드러낸다. 계정은 있는데
+            # 값이 정책·빈 칸으로 안 나온 경우(달러 재무제표 등)는 해당하지 않는다.
             rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,
                             "raw_key": statement["key"], "reasons": ["no_usable_account_line"]})
         # 재무제표 줄의 접수번호 파손(metric 없는 거부)은 응답 파손 — 남은 줄로 만든 지표를 확정 판본에 싣지 않는다.

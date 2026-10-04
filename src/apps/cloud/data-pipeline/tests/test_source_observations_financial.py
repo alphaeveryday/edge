@@ -521,6 +521,10 @@ _DAMAGE_CASES = {
     "합계 행 없음 + 보통주 수 파손": (None, lambda rows: _garbage_common([r for r in rows if r["se"] != "합계"])),
     "자본 계정 줄 없음 + 합계 수 파손": (
         _no_equity_line, lambda rows: [dict(r, istc_totqy="garbage") if r["se"] == "합계" else r for r in rows]),
+    "재무제표 종류 칸이 배열": (lambda lines: _line(lines, _REVENUE).update(sj_div=[]), None),
+    "통화 칸이 객체": (lambda lines: _line(lines, _REVENUE).update(currency={}), None),
+    "자본 칸 빈 값 + 숫자로 온 주식총수 접수번호": (
+        _blank_equity, lambda rows: [dict(r, rcept_no=int(r["rcept_no"])) for r in rows]),
     "보통주 행의 종류 칸 없음": (
         None, lambda rows: [{k: v for k, v in r.items() if k != "se"} if r["se"] == "보통주" else r for r in rows]),
 }
@@ -554,6 +558,20 @@ def test_the_same_spots_without_damage_remain_gaps(tmp_path):
         code, done, log = _normalize_with(tmp_path, name, {**full_responses(SAMSUNG), _HALF_CFS: _statement_with(on_statement)})
         assert code == 0 and done["rejected"] == 0 and done["gaps"] > 0, name
         assert {f["class"] for f in log["gaps"]} <= {"policy", "source_absent"}, name
+
+
+def test_gap_combinations_are_not_promoted_to_errors(tmp_path):
+    # WHY(로컬 리뷰): "응답은 정상인데 값이 하나도 안 나왔다"를 전부 계정 체계 오류로 올리면, 온전한 달러 재무제표에
+    # EPS 줄만 없는 경우(정책 차단 + 원천 부재)까지 실패 통보를 낸다. 오류는 아는 계정 줄이 하나도 없을 때뿐이다.
+    def dollars_without_eps(lines):
+        for ln in lines:
+            ln["currency"] = "USD"
+        for ln in [ln for ln in lines if "EarningsLossPerShare" in ln.get("account_id", "")]:
+            lines.remove(ln)
+
+    code, done, _ = _normalize_with(tmp_path, "usd-no-eps", {
+        **full_responses(SAMSUNG), _HALF_CFS: _statement_with(dollars_without_eps)})
+    assert code == 0 and done["rejected"] == 0 and set(done["reject_classes"]) == {"policy", "source_absent"}
 
 
 def test_reject_class_defaults_to_error():
