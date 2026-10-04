@@ -303,10 +303,15 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
     return rows, rejects
 
 
+# 주식 종류 표기 가운데 뜻이 같은 것 — 같은 말에 '식'이 붙은 표기만 둔다(실응답 2026 반기 375곳 중 보통주식 24·우선주식 5).
+# `종류주식`·`의결권 있는 주식`·`기타주식` 은 보통주/우선주와 같은 뜻인지 판단이 필요해 넣지 않는다(ALPHA-1170).
+_SHARE_CLASS_ALIASES = {"보통주식": "보통주", "우선주식": "우선주"}
+
+
 def _share_row(shares: dict | None, se: str) -> dict | None:
     """주식 종류 한 행. 같은 종류 행이 둘 이상이고 수가 서로 다르면 어느 쪽도 고르지 않는다(첫 행 선택은 순서 운이다)."""
-    rows = [r for r in (shares or {}).get("list", [])
-            if isinstance(r, dict) and str(r.get("se") or "").strip() == se]
+    rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
+            and _SHARE_CLASS_ALIASES.get(label := str(r.get("se") or "").strip(), label) == se]
     if not rows:
         return None
     keys = ("istc_totqy", "tesstk_co", "rcept_no", "stlm_dt")

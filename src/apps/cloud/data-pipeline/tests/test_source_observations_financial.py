@@ -375,6 +375,34 @@ def _extract_bps(share_body):
                                     {"body_json": json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))}, share_body)
 
 
+def test_share_class_labels_with_the_same_meaning_are_read():
+    # WHY(ALPHA-1170): 주식총수 표의 종류 표기는 회사마다 다르다. `보통주식`·`우선주식` 은 `보통주`·`우선주` 와 같은 말인데
+    # 읽지 않아, 우선주가 없는 회사의 보통주 BPS 까지 "종류 수를 모른다"로 막혔다(2026 반기 실응답 375곳 중 78곳이 다른 표기).
+    # 뜻이 같은 표기만 읽는다 — `종류주식` 처럼 판단이 필요한 표기는 여전히 읽지 않고 막는다.
+    standard = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    expected = [r for r in _extract_bps(standard)[0] if r["metric"] == "bps"]
+    assert len(expected) == 1
+
+    def renamed(mapping, **kwargs):
+        body = json.loads(shares(SAMSUNG, "2026", "11012", **kwargs))
+        for row in body["list"]:
+            row["se"] = mapping.get(row["se"], row["se"])
+        return body
+
+    suffix = {"보통주": "보통주식", "우선주": "우선주식"}
+    rows, rejects = _extract_bps(renamed(suffix, treasury=50))
+    assert [r["value"] for r in rows if r["metric"] == "bps"] == [expected[0]["value"]]
+    assert not [r for r in rejects if r.get("metric") == "bps"]
+    # 우선주가 있으면 표기가 달라도 정책 차단은 그대로다.
+    rows, rejects = _extract_bps(renamed(suffix, preferred=100))
+    assert not [r for r in rows if r["metric"] == "bps"]
+    assert any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
+    # 판단이 필요한 표기는 우선주로 읽지 않는다 — 보통주 BPS 를 만들지 않고 "모름"으로 막는다.
+    rows, rejects = _extract_bps(renamed({"우선주": "종류주식"}, treasury=50))
+    assert not [r for r in rows if r["metric"] == "bps"]
+    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
+
+
 def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred():
     # WHY(리뷰 4차): 우선주 행이 없거나 음수이거나 종류별 합이 합계와 다르면 "우선주 없음"이 아니라 "모름"이다 —
     # 그때 보통주 BPS 를 만들면 파손 응답이 정상 보통주 기준값으로 적재된다. 틀리면 막는 쪽으로 틀려야 한다.
