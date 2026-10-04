@@ -27,8 +27,8 @@ module "analysis_v2" {
   price_queue_url       = module.data_pipeline.minute_queue_urls["price-explanation-realtime"]
   price_queue_arn       = module.data_pipeline.minute_queue_arns["price-explanation-realtime"]
 
-  # 동시 37 dev 실험 동안만 37. 실험이 끝나면 3으로 되돌리는 PR 을 바로 머지한다(평시 값은 3, ALPHA-1157).
-  analysis_slots = 37
+  # 평시 동시 3건(ALPHA-1157). 동시 37 dev 실험(#1124) 뒤 되돌렸다 — 측정은 tests/loadtest/analysis-v2/README.md.
+  analysis_slots = 3
 
   outlook_etf_codes = local.outlook_etf_codes
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn

@@ -43,6 +43,7 @@ import logging
 import math
 import os
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from ..config import DbConfig
 from ..db import connect, ensure_etf_profile
@@ -176,7 +177,9 @@ def _weight_ratio(weight_pct) -> tuple[float | None, bool]:
         return None, False
     if not math.isfinite(pct):
         return None, False
-    return pct / 100.0, True
+    # 십진수로 나눈다 — 이진 부동소수 나눗셈(27.94/100 = 0.27940000000000004)은 원천의 소수 둘째 자리 값에서 한 눈금
+    # 어긋난 값을 저장하고, 그 잡음이 더해져 합이 정확히 100% 인 스냅샷을 1 초과로 만든다(ALPHA-1162, 069500 10-02).
+    return float(Decimal(repr(pct)) / 100), True
 
 
 def run(
