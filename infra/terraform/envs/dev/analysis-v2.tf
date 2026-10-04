@@ -27,8 +27,8 @@ module "analysis_v2" {
   price_queue_url       = module.data_pipeline.minute_queue_urls["price-explanation-realtime"]
   price_queue_arn       = module.data_pipeline.minute_queue_arns["price-explanation-realtime"]
 
-  # 분석 동시 3건. 연결 한도(V202610022100)와 슬롯을 읽는 워커 이미지가 dev 에 배포된 것을 확인한 뒤 올렸다(ALPHA-1157).
-  analysis_slots = 3
+  # 동시 37 dev 실험 동안만 37. 실험이 끝나면 3으로 되돌리는 PR 을 바로 머지한다(평시 값은 3, ALPHA-1157).
+  analysis_slots = 37
 
   outlook_etf_codes = local.outlook_etf_codes
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn

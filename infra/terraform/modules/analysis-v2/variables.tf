@@ -18,11 +18,11 @@ variable "api_client_role_names" {
 variable "analysis_slots" {
   type        = number
   default     = 1
-  description = "동시에 도는 분석 수의 상한. 워커가 이 수의 슬롯 중 하나를 잡고 시작하며, 전망 배치의 동시 수도 이 값이다. 올리기 전에 writer 역할 연결 한도(건당 3개)와 슬롯을 읽는 워커 이미지가 먼저 배포돼 있어야 한다 — 머지마다 마이그레이션·이미지·terraform 이 순서 없이 따로 적용된다."
+  description = "동시에 도는 분석 수의 상한. 단건 워크플로의 자리 수(배치·API·가격변동 공통)이자 전망 배치 Map 의 동시 수다. 실행 ARN 을 받은 워커는 DB 단계마다 연결을 열고 닫으므로 분석당 장기 연결이 없다 — writer 역할 한도는 동시 시작 순간과 실행 제어 Lambda·로컬 대시보드 몫으로 정한다(tests/loadtest/analysis-v2/README.md)."
   validation {
-    # writer 역할 연결 한도 20 = 슬롯 x 3 + 대기 6 + 로컬 4 + 여유 1 (V202610022100). 3을 넘기려면 한도부터 다시 정한다.
-    condition     = var.analysis_slots >= 1 && var.analysis_slots <= 3 && floor(var.analysis_slots) == var.analysis_slots
-    error_message = "analysis_slots 는 1~3 의 정수여야 한다. 3을 넘기려면 writer 역할 연결 한도를 먼저 올린다."
+    # 40 은 배치의 Inline Map 동시 반복 한계다. 그 위는 Distributed Map 이 필요해 별도 과제다.
+    condition     = var.analysis_slots >= 1 && var.analysis_slots <= 40 && floor(var.analysis_slots) == var.analysis_slots
+    error_message = "analysis_slots 는 1~40 의 정수여야 한다(Inline Map 동시 반복 한계)."
   }
 }
 # 전망 배치(ALPHA-1142)
