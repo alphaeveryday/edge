@@ -910,3 +910,21 @@ def test_최신행의_MIC_정정은_구스키마_행과_하나로_수렴한다(t
     assert log["deduplicated_rows"] == 1
     assert log["ops"]["failed_records"] == 0
     assert len(_inserts(conn)) == 1
+
+
+def test_weight_ratio_keeps_the_source_decimal_value():
+    # WHY(ALPHA-1162): 분석 v2 는 저장된 비중을 십진수로 정확히 더해 합이 1 을 넘으면 그 ETF 분석을 시작하지 않는다.
+    # 퍼센트를 이진 부동소수로 나누면(27.94/100) 원천 값에서 한 눈금 어긋난 0.27940000000000004 가 저장되고, 그 잡음이
+    # 더해져 주식 비중 합이 정확히 100.00% 인 스냅샷(069500, 2026-10-02 실측)이 1.0000000000000000362 로 거부됐다.
+    from decimal import Decimal
+
+    assert load_etf_holdings._weight_ratio(27.94) == (0.2794, True)
+    assert repr(load_etf_holdings._weight_ratio(2.84)[0]) == "0.0284"
+    # 2026-10-02 069500 의 상위 비중(%) — 옛 변환은 이 다섯 값 가운데 넷이 한 눈금씩 어긋났다.
+    for pct in (34.25, 27.94, 2.84, 2.33, 1.36):
+        ratio, ok = load_etf_holdings._weight_ratio(pct)
+        assert ok and Decimal(repr(ratio)) * 100 == Decimal(repr(pct))
+    # 합이 정확히 100.00% 인 비중 묶음은 저장값을 십진수로 더해도 정확히 1 이다.
+    pcts = [34.25, 27.94, 2.84, 2.33, 1.36] + [0.31] * 100 + [0.28]
+    assert sum(Decimal(repr(p)) for p in pcts) == 100
+    assert sum(Decimal(repr(load_etf_holdings._weight_ratio(p)[0])) for p in pcts) == 1
