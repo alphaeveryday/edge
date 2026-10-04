@@ -303,15 +303,27 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
     return rows, rejects
 
 
-# 주식 종류 표기 가운데 뜻이 같은 것 — 같은 말에 '식'이 붙은 표기만 둔다(실응답 2026 반기 375곳 중 보통주식 24·우선주식 5).
-# `종류주식`·`의결권 있는 주식`·`기타주식` 은 보통주/우선주와 같은 뜻인지 판단이 필요해 넣지 않는다(ALPHA-1170).
-_SHARE_CLASS_ALIASES = {"보통주식": "보통주", "우선주식": "우선주"}
+# 주식 종류 표기 가운데 뜻이 같은 것(공백·줄바꿈을 없앤 뒤 정확히 일치할 때만) — 실응답 2026 반기 375곳에서 확인한 표기다.
+# ① 같은 말에 '식'이 붙은 것 ② 표기 안에 보통주/우선주가 적힌 의결권 수식. 포함 검색으로 잡지 않는다 — `우선주 등`·
+# `전환우선주`·`1우선주` 가 함께 걸린다. `종류주식`·`의결권 있는 주식`(보통주/우선주 표시 없음)·`기타주식` 은 같은 뜻인지
+# 판단이 필요해 넣지 않는다(ALPHA-1170).
+_SHARE_CLASS_ALIASES = {
+    "보통주식": "보통주", "우선주식": "우선주",
+    "의결권있는주식(보통주)": "보통주", "의결권없는주식(우선주)": "우선주",
+    "보통주(의결권있는주식)": "보통주", "우선주(의결권없는주식)": "우선주",
+    "의결권있는보통주": "보통주", "의결권없는우선주": "우선주",
+    "의결권이있는주식(보통주)": "보통주", "의결권이없는주식(우선주)": "우선주",
+}
+
+
+def _share_class(row: dict) -> str:
+    label = "".join(str(row.get("se") or "").split())
+    return _SHARE_CLASS_ALIASES.get(label, label)
 
 
 def _share_row(shares: dict | None, se: str) -> dict | None:
     """주식 종류 한 행. 같은 종류 행이 둘 이상이고 수가 서로 다르면 어느 쪽도 고르지 않는다(첫 행 선택은 순서 운이다)."""
-    rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
-            and _SHARE_CLASS_ALIASES.get(label := str(r.get("se") or "").strip(), label) == se]
+    rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict) and _share_class(r) == se]
     if not rows:
         return None
     keys = ("istc_totqy", "tesstk_co", "rcept_no", "stlm_dt")
@@ -407,7 +419,11 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
     # 못 읽었으면 파손이 먼저다 — 재수집 대상이 정책 대기로 보이면 안 된다.
-    if None in (issued_common, treasury_common, issued_preferred, treasury_preferred):
+    # 읽지 않는 종류 행(`종류주식` 등)에 주식이 있어도 "모름"이다 — 그 주식이 우선주·합계에 들었는지 표만으로는 알 수 없다
+    # (실응답 1,467표 가운데 보통주 BPS 가 나오는 표에는 그런 행이 없다, ALPHA-1170). 수가 없는 행은 막지 않는다.
+    unread = any(isinstance(r, dict) and _share_class(r) not in ("합계", "보통주", "우선주")
+                 and (_share_count(r, "istc_totqy") or 0) > 0 for r in shares.get("list", []))
+    if unread or None in (issued_common, treasury_common, issued_preferred, treasury_preferred):
         common_bps = "bps_share_rows_unreadable"
     elif issued_preferred > 0:
         common_bps = "bps_blocked_preferred_shares"        # 정책 차단(§10.9 팀 결정)

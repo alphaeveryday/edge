@@ -397,10 +397,30 @@ def test_share_class_labels_with_the_same_meaning_are_read():
     rows, rejects = _extract_bps(renamed(suffix, preferred=100))
     assert not [r for r in rows if r["metric"] == "bps"]
     assert any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)
-    # 판단이 필요한 표기는 우선주로 읽지 않는다 — 보통주 BPS 를 만들지 않고 "모름"으로 막는다.
-    rows, rejects = _extract_bps(renamed({"우선주": "종류주식"}, treasury=50))
-    assert not [r for r in rows if r["metric"] == "bps"]
-    assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects)
+    # 표기 안에 보통주/우선주가 적힌 의결권 수식(줄바꿈·공백 변형 포함)도 같은 종류다.
+    for explicit in ({"보통주": "의결권 있는 주식\n(보통주)", "우선주": "의결권 없는 주식\n(우선주)"},
+                     {"보통주": "보통주\n(의결권 있는 주식)", "우선주": "우선주\n(의결권 없는 주식)"},
+                     {"보통주": "의결권 있는 보통주", "우선주": "의결권 없는 우선주"},
+                     {"보통주": "의결권이 있는 주식(보통주)", "우선주": "의결권이 없는 주식(우선주)"}):
+        rows, _ = _extract_bps(renamed(explicit, treasury=50))
+        assert [r["value"] for r in rows if r["metric"] == "bps"] == [expected[0]["value"]], explicit
+    # 판단이 필요한 표기는 읽지 않는다 — 보통주 BPS 를 만들지 않고 "모름"으로 막는다. 보통주/우선주 표시가 없는
+    # 의결권 표기, 종류주식, 포함 검색이면 걸렸을 `우선주 등`·`전환우선주` 모두 그렇다.
+    for unclear in ("종류주식", "의결권 없는 주식", "우선주 등", "전환우선주"):
+        rows, rejects = _extract_bps(renamed({"우선주": unclear}, treasury=50))
+        assert not [r for r in rows if r["metric"] == "bps"], unclear
+        assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects), unclear
+
+    # 읽는 행이 다 있어도 읽지 않는 종류 행에 주식이 있으면 보통주 BPS 를 만들지 않는다 — 그 주식이 우선주·합계에
+    # 들었는지 모른다(우선주 0 으로 가정하지 않는다). 통상 BPS 는 합계 행만 쓰므로 남는다. 표준 표기 표도 같다.
+    for mapping in (suffix, {}):
+        extra = renamed(mapping, treasury=50)
+        extra["list"].append({**extra["list"][0], "se": "종류주식", "istc_totqy": "100", "tesstk_co": "-"})
+        rows, rejects = _extract_bps(extra)
+        assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"], mapping
+        assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects), mapping
+        extra["list"][-1]["istc_totqy"] = "-"                      # 주식이 없는 행은 막을 근거가 아니다
+        assert [r["value"] for r in _extract_bps(extra)[0] if r["metric"] == "bps"] == [expected[0]["value"]], mapping
 
 
 def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred():
