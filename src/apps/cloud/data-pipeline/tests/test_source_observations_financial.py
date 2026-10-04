@@ -566,6 +566,9 @@ _DAMAGE_CASES = {
     "달러 재무제표 + 빈 배열인 사업연도": (lambda lines: [ln.update(currency="USD", bsns_year=[]) for ln in lines], None),
     "달러 재무제표 + 객체인 보고서 코드": (lambda lines: [ln.update(currency="USD", reprt_code={}) for ln in lines], None),
     "달러 재무제표 + 숫자인 계정명": (lambda lines: [ln.update(currency="USD", account_nm=0) for ln in lines], None),
+    "달러 재무제표 + 숫자인 회사 코드": (lambda lines: [ln.update(currency="USD", corp_code=0) for ln in lines], None),
+    "자본 칸 빈 값 + 주식총수 행의 사업연도가 빈 배열": (_blank_equity, lambda rows: [dict(r, bsns_year=[]) for r in rows]),
+    "자본 칸 빈 값 + 주식총수 행의 보고서 코드가 객체": (_blank_equity, lambda rows: [dict(r, reprt_code={}) for r in rows]),
 }
 
 
@@ -582,9 +585,10 @@ def test_damage_overlapping_a_gap_condition_stays_an_error(tmp_path, case):
         responses[_HALF_SHARES] = _shares_with(on_shares)
     code, done, log = _normalize_with(tmp_path, "damage", responses)
     assert code == 2 and done["reject_classes"].get("error", 0) >= 1
+    # 그 보고서의 거부는 하나도 결손으로 세지 않는다. 응답 단위로 거부되면(식별 칸 파손) 연결·별도 구분 없이 남는다.
     damaged = [f for f in [*log["failures"], *log["gaps"]]
-               if f.get("reprt_code") == "11012" and f.get("fs_basis") == "CFS"]
-    assert damaged and all(f["class"] == "error" for f in damaged)      # 그 보고서의 거부는 하나도 결손으로 세지 않는다
+               if f.get("reprt_code") == "11012" and f.get("fs_basis") in (None, "CFS")]
+    assert damaged and all(f["class"] == "error" for f in damaged)
 
 
 def test_the_same_spots_without_damage_remain_gaps(tmp_path):
