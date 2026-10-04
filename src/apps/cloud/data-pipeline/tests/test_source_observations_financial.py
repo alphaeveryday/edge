@@ -433,8 +433,9 @@ def test_classified_gaps_do_not_fail_the_run(tmp_path):
 def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
     # WHY: 원천에는 있어 보이는데 이 파서가 읽지 않는 표기·계정을 "원천 부재"나 "정책 차단"으로 넘기면, 고쳐야 할 파싱
     # 한계가 정상 결손으로 숨는다. 값을 대신 쓰지도, 성공으로 닫지도 않는다 — 지원하지 않는 것으로 드러낸다.
-    def rename_classes(rows):                           # 실응답 표기: 보통주식·우선주식 (388050, 2026 반기)
-        return [dict(r, se=r["se"] + "식") if r["se"] in ("보통주", "우선주") else r for r in rows]
+    def rename_classes(rows):                           # 실응답 표기: 보통주·우선주 표시가 없는 의결권 표기
+        names = {"보통주": "의결권 있는 주식", "우선주": "의결권 없는 주식"}
+        return [dict(r, se=names.get(r["se"], r["se"])) for r in rows]
 
     def rename_total(rows):                             # 합계 행이 다른 이름이면 "발행주식 수 없음"이 아니다
         return [dict(r, se="총계") if r["se"] == "합계" else r for r in rows]
@@ -636,7 +637,7 @@ def test_share_class_labels_with_the_same_meaning_are_read():
     for unclear in ("종류주식", "의결권 없는 주식", "우선주 등", "전환우선주"):
         rows, rejects = _extract_bps(renamed({"우선주": unclear}, treasury=50))
         assert not [r for r in rows if r["metric"] == "bps"], unclear
-        assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects), unclear
+        assert any("bps_share_class_label_unsupported" in r["reasons"] for r in rejects), unclear
 
     # 읽는 행이 다 있어도 읽지 않는 종류 행에 주식이 있으면 보통주 BPS 를 만들지 않는다 — 그 주식이 우선주·합계에
     # 들었는지 모른다(우선주 0 으로 가정하지 않는다). 통상 BPS 는 합계 행만 쓰므로 남는다. 표준 표기 표도 같다.
@@ -650,7 +651,9 @@ def test_share_class_labels_with_the_same_meaning_are_read():
             case = (mapping, issued, treasury)
             assert "bps_total_shares" in [r["metric"] for r in rows], case
             assert [r["value"] for r in rows if r["metric"] == "bps"] == ([] if blocked else [expected[0]["value"]]), case
-            assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects) == blocked, case
+            assert any("bps_share_class_label_unsupported" in r["reasons"] for r in rejects) == blocked, case
+            assert dart_fundamental.reject_class(next(r for r in rejects if r.get("metric") == "bps")) == "unsupported" \
+                if blocked else True, case
     # `비고` 행은 종류가 아니다 — 실응답은 그 행의 수 칸에 주석을 적는다(`주1)`). 이 행 때문에 막으면 정상 표가 전부 막힌다.
     noted = renamed(suffix, treasury=50)
     next(r for r in noted["list"] if r["se"] == "비고").update(istc_totqy="-", tesstk_co="주1)")
