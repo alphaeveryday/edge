@@ -51,6 +51,11 @@ _FLOW_ACCOUNTS = {
     "eps_basic": "ifrs-full_BasicEarningsLossPerShare",
     "eps_diluted": "ifrs-full_DilutedEarningsLossPerShare",
 }
+# 같은 항목의 다른 표준 id — 표준 계정 줄이 없을 때만 읽는다. 금융업 재무제표는 영업이익을 IFRS 계정으로 적는다
+# (실응답 4개 보고서 86개 재무제표 전부 그 줄이 정확히 1개, dart 계정과 한 표에 함께 온 적 없음). 같은 항목이라는 근거:
+# 메리츠금융지주가 보고서마다 두 id 를 바꿔 쓰는데 값이 이어진다(2026 반기 누적 − 2분기 = 1분기보고서의 값, ALPHA-1170).
+# 이름이 비슷한 다른 계정(기타영업손익·영업수익)이나 매출·EPS 의 대체 계정은 넣지 않는다 — 의미 확인이 필요하다.
+_EQUIVALENT_ACCOUNTS = {"dart_OperatingIncomeLoss": "ifrs-full_ProfitLossFromOperatingActivities"}
 _EQUITY_ACCOUNT = {"CFS": "ifrs-full_EquityAttributableToOwnersOfParent", "OFS": "ifrs-full_Equity"}
 _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_share",
           "eps_diluted": "KRW_per_share", "bps": "KRW_per_share", "bps_total_shares": "KRW_per_share"}
@@ -274,6 +279,9 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
     period = _PERIOD_BY_CODE[code]
     for metric, account_id in _FLOW_ACCOUNTS.items():
         line, problem = _pick_line(lines, account_id, ("IS", "CIS"))
+        if problem == "account_not_found" and account_id in _EQUIVALENT_ACCOUNTS:
+            account_id = _EQUIVALENT_ACCOUNTS[account_id]          # 근거 줄(inputs)에는 실제로 읽은 id 가 남는다
+            line, problem = _pick_line(lines, account_id, ("IS", "CIS"))
         if line is None:
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
