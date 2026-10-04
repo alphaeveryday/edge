@@ -35,7 +35,7 @@ export function vote() {
   voteLatency.add(r.timings.duration);
 }
 export function unrelated() {
-  const r = http.get(`${base}/`, { timeout: '10s' });
+  const r = http.get(`${base}/terms.html`, { timeout: '10s' });
   unrelatedLatency.add(r.timings.duration);
   unrelatedFailure.add(r.status !== 200);
 }

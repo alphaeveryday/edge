@@ -104,7 +104,7 @@ DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long
 
 코드 스타일은 로컬 kuke-board/service/view를 참고했다. Facade(`VoteFacade`)는 트랜잭션 밖에서 쓰기와 Redis 반영의 순서 조율, 서비스(`VoteService`)는 트랜잭션 쓰기와 서킷 폴백 집계, event 패키지의 리스너는 탈퇴 후 집계 교체, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
 
-`/ping`은 제거했다. 실험 시작 준비 확인은 기존 `/actuator/health`를 사용한다. 무관 요청 지연(NFR-1)은 부하 실험의 별도 k6 시나리오가 정적 `/`(50rps)로 측정한다 — actuator health는 Redis 인디케이터를 포함해 무관 요청으로 부적합하다.
+`/ping`은 제거했다. 실험 시작 준비 확인은 기존 `/actuator/health`를 사용한다. 무관 요청 지연(NFR-1)은 부하 실험의 별도 k6 시나리오가 정적 `/terms.html`(50rps)로 측정한다 — actuator health는 Redis 인디케이터를 포함해 무관 요청으로 부적합하다.
 
 ## write-behind 모드 (제거)
 

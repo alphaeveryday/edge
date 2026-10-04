@@ -93,7 +93,7 @@ export function read() {
   readLatency.add(r.timings.duration, tags);
 }
 export function unrelated() {
-  const r = http.get(`${base}/`, { timeout: '10s' });
+  const r = http.get(`${base}/terms.html`, { timeout: '10s' });
   unrelatedLatency.add(r.timings.duration, {status: String(r.status)});
   unrelatedFailure.add(r.status !== 200);
 }
