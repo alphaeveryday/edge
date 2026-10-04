@@ -375,6 +375,46 @@ def _extract_bps(share_body):
                                     {"body_json": json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))}, share_body)
 
 
+def test_operating_income_is_read_from_the_ifrs_account_only_when_the_dart_account_is_absent():
+    # WHY(ALPHA-1170): 금융업 재무제표는 영업이익을 `ifrs-full_ProfitLossFromOperatingActivities` 로 적는다. 표준 id
+    # 하나만 읽어 금융업 23곳의 영업이익이 "계정 없음"이었다. 같은 항목의 다른 표준 id 만 읽는다 — 이름이 비슷한 다른
+    # 계정을 대신 쓰거나, dart 계정이 있는데 다른 줄로 바꾸면 값의 뜻이 달라진다.
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+    ifrs, dart = "ifrs-full_ProfitLossFromOperatingActivities", "dart_OperatingIncomeLoss"
+
+    def operating(body):
+        rows, rejects = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": body}, None)
+        return ([(r["period_kind"], r["value"], r["inputs"][0]["account_id"]) for r in rows if r["metric"] == "operating_income"],
+                [r["reasons"] for r in rejects if r.get("metric") == "operating_income"])
+
+    standard = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    expected, _ = operating(standard)
+    assert expected and {account for _, _, account in expected} == {dart}
+
+    def retagged(account_id):
+        body = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+        for line in body["list"]:
+            if line["account_id"] == dart:
+                line["account_id"] = account_id
+        return body
+
+    rows, rejects = operating(retagged(ifrs))
+    assert [(kind, value) for kind, value, _ in rows] == [(kind, value) for kind, value, _ in expected]
+    assert {account for _, _, account in rows} == {ifrs} and not rejects      # 근거 줄에는 실제로 읽은 id 가 남는다
+    # dart 계정이 있으면 그 줄이 우선이다 — 값이 다른 IFRS 줄이 함께 와도 바뀌지 않는다.
+    both = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    extra = next(line for line in both["list"] if line["account_id"] == dart)
+    both["list"].append({**extra, "account_id": ifrs, "thstrm_amount": "1", "thstrm_add_amount": "1"})
+    assert operating(both) == (expected, [])
+    # 이름이 비슷한 다른 계정은 읽지 않는다.
+    for other in ("ifrs-full_OtherOperatingIncomeExpense", "dart_OtherOperatingIncome", "-표준계정코드 미사용-"):
+        assert operating(retagged(other)) == ([], [["account_not_found"]]), other
+    # IFRS 줄이 둘이면 고르지 않는다(dart 계정과 같은 규칙).
+    twice = retagged(ifrs)
+    twice["list"].append(dict(next(line for line in twice["list"] if line["account_id"] == ifrs)))
+    assert operating(twice) == ([], [["ambiguous_account_line"]])
+
+
 def test_share_class_labels_with_the_same_meaning_are_read():
     # WHY(ALPHA-1170): 주식총수 표의 종류 표기는 회사마다 다르다. `보통주식`·`우선주식` 은 `보통주`·`우선주` 와 같은 말인데
     # 읽지 않아, 우선주가 없는 회사의 보통주 BPS 까지 "종류 수를 모른다"로 막혔다(2026 반기 실응답 375곳 중 78곳이 다른 표기).
