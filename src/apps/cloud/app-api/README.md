@@ -74,11 +74,36 @@ com.edge.app
 - 원천 없는 값(선별 목록·테마·운용사): `etf_curation`·`theme` 마이그레이션.
 - 스키마 소유: `db/etf-migration` Flyway, Hibernate 는 `validate`.
 
-## Redis Cluster 부분 장애 실측 (2026-09-20)
+## Redis Cluster 부분 장애 실측 (2026-10-04)
 
-측정 당시 코드는 MySQL 시점의 태그 [vote-cluster-isolation-2026-09-20](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-09-20/src/apps/cloud/app-api)에 있다.
+측정 코드는 태그 [vote-cluster-isolation-2026-10-04](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-10-04/src/apps/cloud/app-api)에 있다. 수정 전 코드는 커밋 ecd74dc8 이다.
 
-마스터 3+replica 3, `cluster-require-full-coverage=no`. 투표·조회·무관 요청 각 50rps 를 3분 넣고 60초 후 샤드 0 의 마스터·replica 에 장애를 주입했다. 정상 샤드 요청이 장애를 느끼는지를 주입 후 20초 구간의 투표 SLO(1초) 초과율과 조회 DB 폴백 비율로, 전파 원인을 Tomcat busy·HikariCP 대기(풀 10)로 쟀다. 인기 종목(트래픽 50%)을 장애 샤드에 두면 전역 실패율 67%, 정상 샤드에 두면 17% 다. 원본은 `experiments/runs/C*`(gitignore) 의 result.json 이고 표의 값은 hot=failed 기준이다.
+마스터 3+replica 3, `cluster-require-full-coverage=no`. 투표·조회·무관 요청(`/terms.html`) 각 50rps 를 3분 넣고 60초 후 샤드 0 의 마스터·replica 에 장애를 주입했다. 주입 후 20초 구간의 정상 샤드 투표 SLO(1초) 초과율과 조회 DB 폴백 비율을, 전파 원인으로 Tomcat busy·HikariCP 대기(풀 10)를 쟀다. 인기 종목(트래픽 50%)을 장애 샤드에 두면 전역 실패율 67%, 정상 샤드에 두면 17% 다. 조합마다 3런이고 표의 값은 런 범위, 별도 표기가 없으면 hot=failed 다. 원본은 `experiments/runs/`(gitignore) 의 result.json 이다.
+
+| 구성 | 코드 | 장애 | 정상 샤드 투표 SLO 초과 | 정상 샤드 조회 DB 폴백 | busy | HikariCP 대기 | 조회 폴백 qps |
+|---|---|---|---|---|---|---|---|
+| C1 기본값(60s·버퍼링·서킷 off¹) | 수정 전 | SIGKILL | **91.1~95.0%** (hot=healthy 76.5~80.3%) | 0% | 164~169 | 91~94 | 0 |
+| C2 500ms·REJECT·서킷 off | 수정 전 | SIGKILL | 0% | 0% | 4 | 0 | 32.6~32.9 |
+| C2 | 수정 전 | pause | **70.1~85.7%** | 0~28.3%² | 200 | 181~186 | 19.2~32 |
+| C2 | 수정 전 | partition | **82.4~85.9%** | 0% | 200 | 183~187 | 18.7~19.5 |
+| C2 | 수정 후 | pause·partition | 0% | 0% | 39~40 | 0 | 31.7~32 |
+| C3 전역 서킷 | 수정 후 | SIGKILL | 0% | **94.4~96.5%** | 4 | 0 | 48.9~49.3 |
+| C3 hot=healthy | 수정 후 | SIGKILL | 0% | 0% | 4 | 0 | 8.8 |
+| C4 샤드 서킷 | 수정 후 | SIGKILL | 0% | **0%** | 4 | 0 | 32.7~32.9 |
+| C4 | 수정 후 | pause·partition | 0% | 0% | 13~17 | 0 | 32.8 |
+
+¹ 서킷 off 는 실패율 임계치 100% 로 무력화한 것이라 창(20건)이 전부 실패하면 열린다.
+² 두 런은 서킷이 주입 후 17~19초에 열려 정상 샤드 조회 일부가 폴백했고, 그만큼 SLO 초과가 낮았다.
+
+- 수정 전: AFTER_COMMIT 리스너가 커밋 직후 커넥션을 쥔 채 Redis 를 기다렸다. C1 은 60초 대기로 풀이 고갈돼 무관 요청까지 27~40% SLO 초과가 났다. C2 SIGKILL 은 연결 종료를 감지해 즉시 거부되지만, pause·partition 은 TCP 가 살아 있어 요청마다 500ms 를 기다렸고 같은 경로로 풀이 소진됐다.
+- 수정 후: `VoteFacade` 가 커밋과 커넥션 반납 뒤 Redis 를 갱신한다. 서킷 없이도 pause·partition 의 정상 샤드 영향이 사라졌다. 남은 busy 39~40 은 장애 샤드 요청이 500ms 를 기다린 몫이다.
+- C3: 전역 실패율이 판단 기준이라 정상 샤드 조회까지 폴백됐다. hot=healthy 에서는 3런 모두 서킷이 열리지 않았고, 폴백 8.8qps 는 전부 장애 샤드 몫이다.
+- C4: 장애 샤드 서킷(`redis-shard-0`)만 열린다. pause·partition 에서 주입 후 0.8초에 열려, 400ms 이상 기다린 장애 샤드 요청이 99.2~99.8%(C2 수정 후)에서 7.0% 로, 중앙값이 504ms 에서 3ms 로 줄었다. 남은 7% 는 half-open 시험 호출이라 p99 는 505ms 로 남는다.
+- 재조정 검산: C1 은 부하 종료 후에도 버퍼가 남아 제한 시간 안에 끝나지 않는다. 수정 전 C2 partition 한 런은 9건 불일치로 끝났지만 같은 런의 주기 재조정 delta 는 0 이었다. 원인은 확인하지 않았다. 나머지 런은 30/30 일치다.
+
+### 이전 측정 (2026-09-20, MySQL)
+
+측정 코드는 태그 [vote-cluster-isolation-2026-09-20](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-09-20/src/apps/cloud/app-api)에 있다. 리스너 수정 전 코드다.
 
 | 구성 | 장애 | 정상 샤드 투표 SLO 초과 | 정상 샤드 조회 DB 폴백 | busy | HikariCP 대기 | 조회 폴백 qps |
 |---|---|---|---|---|---|---|
@@ -91,10 +116,6 @@ com.edge.app
 | C4 | pause·partition | 0% | 0% | 13 | 0 | 33 |
 
 ¹ 서킷 off 는 실패율 임계치 100% 로 무력화한 것이라 완전한 off 가 아니다 — 창(20건)이 전부 실패하면 열린다. C1 두 런은 주입 60초 뒤(during 창 밖), C2 kill 한 런(021853)은 0.2초 만에 열렸다. 표에 쓴 C2 런(022148)은 개방 0건이다.
-- C1: 장애 슬롯 명령이 60초 동안 큐에 남고 그 대기가 AFTER_COMMIT 리스너에서 일어나 DB 커넥션 반환이 밀렸다. 풀 10개가 소진되자 정상 샤드 투표와 정적 `/`(28~40% SLO 초과)까지 밀렸고 커넥션 획득 타임아웃(30초)으로 DB 트랜잭션 생성 실패 111~528건이 났다. 부하 종료 후에도 버퍼가 남아 hot=healthy 런은 재조정 검산이 제한 시간 안에 끝나지 않았다(이후 구성은 전 런 30/30 일치).
-- C2: SIGKILL 은 연결 종료를 감지해 즉시 거부되지만 pause·partition 은 TCP 가 살아 있어 요청마다 500ms 를 기다린다. 장애 샤드 투표 33rps × 0.5s 의 동시 대기가 풀 10개를 넘겨 스레드 200 까지 포화됐다.
-- C3: 서킷이 대기를 끊어 SLO 초과는 0% 지만 전역 실패율이 판단 기준이라 정상 샤드 조회까지 폴백됐다. hot=healthy(17%)에서는 반대로 장애 샤드가 전건 실패해도 임계치 50% 에 못 미쳐 거의 열리지 않았다(우연 개방 150·204건, 폴백 9qps 는 전부 장애 샤드).
-- C4: 서킷 이름이 슬롯 소유 마스터라 장애 샤드만 차단된다(`redis-shard-0` 만 개방, hot=healthy 도 0.7초 만에 차단). 폴백 qps 49→33 은 정상 샤드 조회가 Redis 로 돌아간 몫이다.
 
 replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤드 조회 폴백은 전 런 0%. 승격 뒤 장애 샤드 조회가 Redis 로 돌아오기까지는 0.5~2.7초 또는 6.9~7.4초의 두 무리로 갈리며 topology refresh 설정 유무와 무관했다 — 원인은 확인하지 않았다.
 
