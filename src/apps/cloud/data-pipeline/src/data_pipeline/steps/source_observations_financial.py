@@ -226,6 +226,10 @@ def _normalize_financial(objects: list[dict], raw_manifest: dict) -> tuple[list[
         if (corp_code, year, code) in share_rejects:
             # 정제가 거부한 주식총수 응답(다른 기간의 응답·형식 파손)은 "분모 없음"이 아니다 — 이 보고서의 거부를 결손으로 세지 않는다.
             damage = [*damage, "share_response_rejected"]
+        elif share is None and (share_entries.get((corp_code, year, code)) or {}).get("status") != "empty":
+            # 주식총수 응답을 받지 못했다(요청 실패, 또는 수집이 그 요청 전에 멈춤). 공급자가 "자료 없음"으로 답한 것(empty)만
+            # 확인된 부재다 — 받지 못한 응답을 "분모 없음"(원천 부재)으로 세면 수집 실패가 정상 결손으로 통과한다.
+            damage = [*damage, "share_response_not_obtained"]
         if damage:
             damaged.add((corp_code, year, code, fs_div))
             rejects.append({"corp_code": corp_code, "bsns_year": year, "reprt_code": code, "fs_basis": fs_div,

@@ -601,6 +601,18 @@ def test_damage_overlapping_a_gap_condition_stays_an_error(tmp_path, case):
     assert damaged and all(f["class"] == "error" for f in damaged)
 
 
+def test_a_share_response_that_was_not_obtained_is_not_a_confirmed_absence(tmp_path):
+    # WHY(PR 리뷰): 주식총수 요청이 실패했는데 재무제표는 받은 보고서는 분모가 "없는" 것이 아니라 "못 받은" 것이다. 그 BPS
+    # 거부를 원천 부재로 세면 수집 실패가 정상 결손으로 통과한다. 공급자가 "자료 없음"(013)으로 답한 것만 확인된 부재다.
+    def bps_rejects(log):
+        return [f for f in [*log["failures"], *log["gaps"]] if f.get("metric") == "bps" and f.get("reprt_code") == "11012"]
+
+    code, _, log = _normalize_with(tmp_path, "share-error", {**full_responses(SAMSUNG), _HALF_SHARES: b"<html>502</html>"})
+    assert code == 2 and bps_rejects(log) and all(f["class"] == "error" for f in bps_rejects(log))
+    _, _, log = _normalize_with(tmp_path, "share-empty", {**full_responses(SAMSUNG), _HALF_SHARES: NO_DATA})
+    assert bps_rejects(log) and all(f["class"] == "source_absent" for f in bps_rejects(log))
+
+
 def test_the_same_spots_without_damage_remain_gaps(tmp_path):
     # WHY: 위 무결성 검사가 정상 결손까지 실패로 만들면 고친 것이 없다 — 같은 자리의 온전한 값은 결손이어야 한다.
     def dollars(lines):
