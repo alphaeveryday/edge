@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import os
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -82,6 +83,11 @@ class DatasetSpec:
     # 같은 정제가 함께 만드는 둘째 행 집합(재무: 보고서 판본). 같은 manifest·같은 적재 트랜잭션에 실린다 —
     # 지표 행 없이 판본만, 판본 없이 지표만 실리는 상태가 없다.
     companion: "DatasetSpec | None" = None
+    # 거부 한 건을 분류하는 함수(재무만 준다) → policy·source_absent·unsupported·error. gap_classes 에 든 분류는
+    # 품질 로그·manifest·원장(미지원 건수)에 남기되 정제를 부분 실패(exit 2)로 만들지 않는다. 없으면 모든 거부가
+    # 실패다(매크로·업종은 그대로).
+    classify: Callable[[dict], str] | None = None
+    gap_classes: frozenset = frozenset()
 
     def names(self) -> list[str]:
         """열 이름(파일·DB 적재 순서)."""
@@ -369,6 +375,7 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         return PARTIAL_EXIT if done.get("rejected") else 0
     exit_code = 0
     failures: list[dict] = []
+    gaps: list[dict] = []
     completed: bytes | None = None
     try:
         storage.put_bytes(manifest_key, json.dumps(
@@ -377,7 +384,12 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         result = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
         rows, rejects = result[0], result[1]
         companion_rows = list(result[2]) if len(result) > 2 else []
-        failures.extend(rejects)
+        for reject in rejects:
+            if spec.classify is None:
+                failures.append(reject)
+                continue
+            reject = {**reject, "class": spec.classify(reject)}
+            (gaps if reject["class"] in spec.gap_classes else failures).append(reject)
         for row in [*rows, *companion_rows]:
             row["raw_run_id"] = input_run_id
         rows, conflicts, collapsed = _collapse(spec, rows)
@@ -404,7 +416,9 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
             "artifact": {"key": artifact_key, "sha256": artifact_sha, "rows": len(rows),
                          "partition_date": "ingest_date"},
             "canonical_partitions": partitions, "rows": len(rows),
-            "rejected": len(failures), "collapsed_duplicates": collapsed,
+            # rejected 는 exit 2 를 만드는 거부만 센다(재실행 판정의 근거). 분류된 결손은 gaps 로 따로 남긴다.
+            "rejected": len(failures), "gaps": len(gaps), "collapsed_duplicates": collapsed,
+            "reject_classes": dict(sorted(Counter(r["class"] for r in [*failures, *gaps] if "class" in r).items())),
             "companion": companion,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")
         log.update({"rows": len(rows), "collapsed_duplicates": collapsed,
@@ -418,8 +432,14 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         log["rows"] = 0
         exit_code = 1
     log.update({"failures": failures[:200], "records_failed": len(failures),
+                "gaps": gaps[:200], "records_gap": len(gaps),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "ops": {"records_out": log.get("rows", 0), "failed_records": len(failures)}})
+    if spec.classify is not None:
+        # 원장에는 '정상 제외 건수'(unsupported_records 칸)로 올린다 — 실패 건수와 섞지 않는다. wrapper 는 이 시도가 쓴
+        # 로그일 때만 그 칸을 저장한다(ops_attempt_id).
+        log["ops"]["unsupported_records"] = len(gaps)
+        log["ops_attempt_id"] = os.environ.get("OPS_LEDGER_ATTEMPT_ID")
     quality_written = True
     try:
         storage.put_bytes(quality_log_key(spec.dataset, started_at.date().isoformat(), run_id),
@@ -434,7 +454,8 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         except Exception:
             logger.exception("canonical run manifest 기록 실패")
             exit_code = 1
-    logger.info("%s 정제: rows=%s failures=%d exit=%d", spec.dataset, log.get("rows"), len(failures), exit_code)
+    logger.info("%s 정제: rows=%s failures=%d gaps=%d exit=%d", spec.dataset, log.get("rows"), len(failures),
+                len(gaps), exit_code)
     return exit_code
 
 

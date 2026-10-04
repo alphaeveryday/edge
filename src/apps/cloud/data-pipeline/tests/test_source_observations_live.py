@@ -174,7 +174,9 @@ def test_dart_live_bps_common_share_only_when_no_preferred(tmp_path):
     inputs = json.loads(total["inputs"])
     assert inputs[1]["preferred_istc_totqy"] == "802371203" and inputs[1]["stlm_dt"] == "2026-06-30"
     assert inputs[1]["common_bps"] == "bps_blocked_preferred_shares"   # DB bps_note 가 읽는 판정 — 정책 차단
-    assert any("bps_blocked_preferred_shares" in f["reasons"] for f in log["failures"])
+    # 정책 차단은 실행 실패가 아니라 분류된 결손으로 남는다(ALPHA-1169).
+    assert any(f["reasons"] == ["bps_blocked_preferred_shares"] and f["class"] == "policy" for f in log["gaps"])
+    assert not any("bps_blocked_preferred_shares" in f["reasons"] for f in log["failures"])
     hynix = rows[("000660", 2026, "Q2", "bps", "POINT", "CFS")]
     assert hynix["value"] == str((Decimal("262380610000000") / Decimal(712702365 - 1626865)).quantize(Decimal("0.000001")))
     assert json.loads(hynix["inputs"])[1]["se"] == "보통주"
