@@ -218,7 +218,9 @@ DB의 manifest URI와 checksum이 모두 없는 legacy row만 기존 generation 
 
 ## 배포
 
-컨테이너 이미지는 `src/` 컨텍스트에서 `-f apps/cloud/analysis-engine/Dockerfile`로 빌드한다. 실행 인프라는 `infra/terraform/modules/data-pipeline`이 정의한다 — **분봉 트리거 큐를 소비하는 상주 ECS 서비스**(`minute_services.tf`의 `analysis-consumer`, task definition `edge-dev-data-pipeline-analysis-consumer`)로 돈다. 통합 파이프라인 SFN의 책임은 feature 까지고 analyze 페이즈는 없다(ALPHA-806 — 트리거 없이 도는 일 단위 분석은 장중에 층을 못 세워 분봉 경로와 다른 답을 냈다). 수동 재실행은 트리거 단건 재처리다: 같은 task-def 를 `aws ecs run-task`로 띄워 `--trigger-id`를 넘긴다. CI는 `.github/workflows/deploy-analysis-engine.yml`.
+v1 자동 배포는 종료했다. 기존 가격변동 큐와 ECS 서비스는 유지하며, 현재 소비자는 v2 태스크 정의를 사용한다. 배포는 `.github/workflows/deploy-analysis-engine-v2.yml`이 담당한다. v1 태스크를 수동 실행하면 같은 사건을 중복 처리할 수 있으므로 운영 재처리는 [v2 실행 경로](../analysis-engine-v2/docs/price-automation.md)를 따른다.
+
+v1 소스와 태스크 정의는 후속 정리 대상이다. 적재 E2E 테스트가 이 모듈의 `EventStore`·`LakeReader`를 참조하며, `edge-dev-db-query` 태스크도 v1 이미지의 `edge_analysis query`를 사용한다. 소스·이미지 삭제 전에 두 의존성을 분리한다. 기존 조회 태스크가 사용하는 이미지는 보존한다. 이 배포 종료 변경은 DB·큐·ECS 서비스·적재 설정을 변경하지 않는다.
 
 ## 스키마 계약
 
