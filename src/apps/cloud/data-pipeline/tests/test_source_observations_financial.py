@@ -413,14 +413,21 @@ def test_share_class_labels_with_the_same_meaning_are_read():
 
     # 읽는 행이 다 있어도 읽지 않는 종류 행에 주식이 있으면 보통주 BPS 를 만들지 않는다 — 그 주식이 우선주·합계에
     # 들었는지 모른다(우선주 0 으로 가정하지 않는다). 통상 BPS 는 합계 행만 쓰므로 남는다. 표준 표기 표도 같다.
+    # 수가 깨졌거나 자기주식 칸에만 수가 있어도 같다 — 주식이 없다고 확인된 행(빈 칸·`-`·0)만 막지 않는다.
     for mapping in (suffix, {}):
-        extra = renamed(mapping, treasury=50)
-        extra["list"].append({**extra["list"][0], "se": "종류주식", "istc_totqy": "100", "tesstk_co": "-"})
-        rows, rejects = _extract_bps(extra)
-        assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"], mapping
-        assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects), mapping
-        extra["list"][-1]["istc_totqy"] = "-"                      # 주식이 없는 행은 막을 근거가 아니다
-        assert [r["value"] for r in _extract_bps(extra)[0] if r["metric"] == "bps"] == [expected[0]["value"]], mapping
+        for issued, treasury, blocked in (("100", "-", True), ("abc", "-", True), ("-5", "-", True), ("0.5", "-", True),
+                                          ("-", "100", True), ("-", "-", False), ("0", "", False), (None, None, False)):
+            extra = renamed(mapping, treasury=50)
+            extra["list"].append({**extra["list"][0], "se": "종류주식", "istc_totqy": issued, "tesstk_co": treasury})
+            rows, rejects = _extract_bps(extra)
+            case = (mapping, issued, treasury)
+            assert "bps_total_shares" in [r["metric"] for r in rows], case
+            assert [r["value"] for r in rows if r["metric"] == "bps"] == ([] if blocked else [expected[0]["value"]]), case
+            assert any("bps_share_rows_unreadable" in r["reasons"] for r in rejects) == blocked, case
+    # `비고` 행은 종류가 아니다 — 실응답은 그 행의 수 칸에 주석을 적는다(`주1)`). 이 행 때문에 막으면 정상 표가 전부 막힌다.
+    noted = renamed(suffix, treasury=50)
+    next(r for r in noted["list"] if r["se"] == "비고").update(istc_totqy="-", tesstk_co="주1)")
+    assert [r["value"] for r in _extract_bps(noted)[0] if r["metric"] == "bps"] == [expected[0]["value"]]
 
 
 def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred():

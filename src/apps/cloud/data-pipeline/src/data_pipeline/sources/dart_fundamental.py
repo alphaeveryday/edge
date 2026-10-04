@@ -348,6 +348,12 @@ def _share_count(row: dict | None, field: str) -> Decimal | None:
     return Decimal(int(count))
 
 
+def _may_hold_shares(row: dict) -> bool:
+    """발행수·자기주식 칸이 빈 칸·`-`·0 이 아니다 — 읽히는 수든 파손이든 주식이 있을 수 있는 행이다."""
+    return any(row.get(field) is not None and str(row.get(field)).strip() != "" and _share_count(row, field) != 0
+               for field in ("istc_totqy", "tesstk_co"))
+
+
 def share_table_problem(shares: dict | None, period_end: str) -> str | None:
     """주식총수 응답이 한 표로서 유효하지 않은 이유(없으면 None). 응답이 아예 없으면 None(부재는 여기서 판정하지 않는다).
 
@@ -419,10 +425,11 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
     # 못 읽었으면 파손이 먼저다 — 재수집 대상이 정책 대기로 보이면 안 된다.
-    # 읽지 않는 종류 행(`종류주식` 등)에 주식이 있어도 "모름"이다 — 그 주식이 우선주·합계에 들었는지 표만으로는 알 수 없다
-    # (실응답 1,467표 가운데 보통주 BPS 가 나오는 표에는 그런 행이 없다, ALPHA-1170). 수가 없는 행은 막지 않는다.
-    unread = any(isinstance(r, dict) and _share_class(r) not in ("합계", "보통주", "우선주")
-                 and (_share_count(r, "istc_totqy") or 0) > 0 for r in shares.get("list", []))
+    # 읽지 않는 종류 행(`종류주식` 등)에 주식이 있을 수 있으면 "모름"이다 — 그 주식이 우선주·합계에 들었는지 표만으로는
+    # 알 수 없다(실응답 1,467표 가운데 보통주 BPS 가 나오는 표에는 그런 행이 없다, ALPHA-1170). `비고` 는 종류가 아니라
+    # 설명 행이라 뺀다(실응답은 그 행의 수 칸에 `주1)` 같은 주석을 적는다).
+    unread = any(isinstance(r, dict) and _share_class(r) not in ("합계", "보통주", "우선주", "비고")
+                 and _may_hold_shares(r) for r in shares.get("list", []))
     if unread or None in (issued_common, treasury_common, issued_preferred, treasury_preferred):
         common_bps = "bps_share_rows_unreadable"
     elif issued_preferred > 0:
