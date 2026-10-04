@@ -730,13 +730,3 @@ variable "analysis_consumer_task_definition_arn" {
   default     = null
   description = "v2 admission task; null keeps the legacy task for environments not yet migrated."
 }
-
-# 원천 관측 레인(source-daily)의 슬롯 시각(KST "HH:MM", 쉼표 구분) — Reconciler 의 결측 판정 기준이다.
-# 이 레인은 Airflow 전용이라 EventBridge 스케줄이 없다. 시각의 원본은 DAG(`airflow/dags/edge_source_daily.py`
-# CRONS)이고, 이 값이 그것과 같은지 `airflow/tests/test_source_daily_dag.py` 가 대조한다(다른 레인처럼 cron 에서
-# 뽑을 수 없어서다). 빈 값이면 이 레인은 결측 판정 대상이 아니다. 주말·휴일에도 도는 레인이다(ops_ledger.tf).
-# ⚠️ DAG 가 pause 인 환경에 값을 넣으면 매일 PLANNER_MISSING 이 열린다 — DAG 를 켠 환경에만 넣는다.
-variable "source_daily_sched_hhmm" {
-  type    = string
-  default = "05:20"
-}

@@ -40,9 +40,8 @@ def test_new_lane_is_paused_until_someone_turns_it_on(dag_module):
 def test_slot_matches_the_missed_run_judgment(dag_module):
     # WHY: Reconciler 는 `OPS_SOURCE_DAILY_SCHED_HHMM` 시각의 run 이 없으면 PLANNER_MISSING 을 연다. 이 레인은 cron 변수가
     # 없어 Terraform 이 DAG 에서 시각을 뽑지 못한다 — 한쪽만 옮기면 매일 거짓 결측이 열리고 진짜 결측은 안 보인다.
-    tf = (TF / "variables.tf").read_text()
-    block = tf[tf.index('variable "source_daily_sched_hhmm"'):]
-    slots = re.search(r'default\s*=\s*"([^"]*)"', block[:block.index("\n}\n")])[1].split(",")
+    # 모듈 local 이라 환경이 재정의할 수 없다 — 여기서 읽는 값이 곧 ops 태스크 정의에 들어가는 값이다.
+    slots = re.search(r'source_daily_schedule_hhmm\s*=\s*"([^"]*)"', (TF / "ops_ledger.tf").read_text())[1].split(",")
     assert sorted(f"{int(m)} {int(h)} * * *" for h, m in (s.split(":") for s in slots)) == sorted(dag_module.CRONS)
 
 

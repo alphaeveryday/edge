@@ -100,6 +100,12 @@ locals {
   # 모델에 요일 축이 없어 혼합은 애초에 표현할 수 없고, 조용히 한쪽으로 접으면 그 레인의 판정이
   # 어느 방향으로든 틀린 채 배포된다. ⚠️ 부수효과로 **빈 맵도 plan 에서 죽는다**(`one([])`=null
   # → Invalid index). 레인을 끄려면 맵을 비우지 말고 `*_schedule_state` 를 DISABLED 로 둬라.
+  # 원천 관측 레인(source-daily)의 슬롯 시각(KST "HH:MM", 쉼표 구분) — Reconciler 결측 판정 기준. Airflow 전용 레인이라
+  # EventBridge cron 이 없어 여기 적는다. DAG(`airflow/dags/edge_source_daily.py` CRONS)와 같은지
+  # `airflow/tests/test_source_daily_dag.py` 가 대조한다. 변수가 아닌 이유: 환경이 재정의하면 그 대조가 기본값만 보고
+  # 통과한다 — DAG 를 끄는 환경이 생기면 그때 변수로 올리고 테스트가 실제 값을 읽게 한다. 빈 값 = 결측 판정 없음.
+  source_daily_schedule_hhmm = "05:20"
+
   daily_schedule_weekend = tostring(local._day_weekend[join("|", regex(local._cron_day_re, var.schedule_expression))])
   news_schedule_weekend = tostring(local._day_weekend[one(distinct([
     for e in values(var.news_schedule_expressions) : join("|", regex(local._cron_day_re, e))
@@ -215,8 +221,8 @@ resource "aws_ecs_task_definition" "ops" {
       OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN = aws_sfn_state_machine.investor_intraday.arn
       OPS_INVESTOR_INTRADAY_SCHED_HHMM        = local.investor_intraday_schedule_hhmm
       OPS_INVESTOR_INTRADAY_SCHED_WEEKEND     = local.investor_intraday_schedule_weekend
-      # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(variables.tf).
-      OPS_SOURCE_DAILY_SCHED_HHMM    = var.source_daily_sched_hhmm
+      # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(위 locals).
+      OPS_SOURCE_DAILY_SCHED_HHMM    = local.source_daily_schedule_hhmm
       OPS_SOURCE_DAILY_SCHED_WEEKEND = "true"
     }) : { name = k, value = v }]
     secrets = [{
