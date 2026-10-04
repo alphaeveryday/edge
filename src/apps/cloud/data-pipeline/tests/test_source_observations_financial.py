@@ -573,6 +573,9 @@ _DAMAGE_CASES = {
     "자본 칸 빈 값 + 주식총수 행의 사업연도가 빈 배열": (_blank_equity, lambda rows: [dict(r, bsns_year=[]) for r in rows]),
     "자본 칸 빈 값 + 주식총수 행의 보고서 코드가 객체": (_blank_equity, lambda rows: [dict(r, reprt_code={}) for r in rows]),
     "자본 칸 빈 값 + 주식총수 행의 기준일이 숫자": (_blank_equity, lambda rows: [dict(r, stlm_dt=20260630) for r in rows]),
+    "매출 줄의 접수번호 형식이 틀림(그 줄이 빠져 계정 없음으로 읽힘)": (
+        lambda lines: _line(lines, _REVENUE).update(rcept_no="123"), None),
+    "주식총수 응답이 다른 사업연도의 것": (None, lambda rows: [dict(r, bsns_year="2025") for r in rows]),
     "우선주 행 없음 + 보통주 수가 합계보다 큼": (
         None, lambda rows: [dict(r, istc_totqy="2,000") if r["se"] == "보통주" else r      # 합계는 1,000
                             for r in rows if r["se"] != "우선주"]),
