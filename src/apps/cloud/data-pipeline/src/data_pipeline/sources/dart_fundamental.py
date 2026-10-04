@@ -436,8 +436,9 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
         if code == "11011":
             fields = [("CUMULATIVE", "FY", "thstrm_amount")]
         else:
-            # 1분기는 3개월 = 누적이다. 누적 칸이 비었으면 1분기에 한해 3개월 값으로 대신한다.
-            cumulative = ("thstrm_add_amount" if code != "11013" or line.get("thstrm_add_amount")
+            # 1분기는 3개월 = 누적이다. 누적 칸이 없거나 빈 문자열이면 1분기에 한해 3개월 값으로 대신한다. 배열·객체처럼
+            # 깨진 칸은 빈 칸이 아니다 — 대신하지 않고 읽어서 `amount_unreadable` 로 드러낸다(숫자 0 은 값이다).
+            cumulative = ("thstrm_add_amount" if code != "11013" or line.get("thstrm_add_amount") not in (None, "")
                           else "thstrm_amount")
             fields = [("QUARTER", period, "thstrm_amount"), ("CUMULATIVE", period, cumulative)]
         for period_kind, fiscal_period, field in fields:

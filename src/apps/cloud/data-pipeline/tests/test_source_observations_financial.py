@@ -1496,6 +1496,33 @@ def test_damaged_q3_also_leaves_the_annual_report_unconfirmed(tmp_path):
     assert ("005930", 2025, "Q4", "eps_basic", "QUARTER", "OFS") in rows          # 별도는 멀쩡 — 기준별로 따로
 
 
+def test_first_quarter_fallback_fills_only_an_empty_cumulative_cell(tmp_path):
+    # WHY(로컬 리뷰): 1분기는 누적 칸이 비면 3개월 값으로 대신한다(3개월 = 누적). 그 판정이 "거짓이면 빈 칸"이라 빈 배열·객체로
+    # 깨진 누적 칸도 3개월 값으로 대체돼, 읽지 못한 칸이 사유 없이 확정 판본의 값이 됐다. 대체는 없는 칸·빈 문자열에만 한다.
+    key = ("statement", SAMSUNG["corp_code"], "2026", "11013", "CFS")
+    cumulative = ("005930", 2026, "Q1", "revenue", "CUMULATIVE", "CFS")
+
+    def first_quarter(cell):
+        body = json.loads(statement(SAMSUNG, "2026", "11013", "CFS"))
+        line = _line(body["list"], _REVENUE)
+        line.pop("thstrm_add_amount") if cell is None else line.update(thstrm_add_amount=cell)
+        return {**full_responses(SAMSUNG), key: json.dumps(body, ensure_ascii=False).encode()}
+
+    for name, cell in (("absent", None), ("empty", "")):
+        _, versions, rows = _half_after(tmp_path / name, first_quarter(cell))
+        assert versions[(2026, "11013", "CFS")]["status"] == "CONFIRMED", name
+        assert rows[cumulative]["value"] == rows[("005930", 2026, "Q1", "revenue", "QUARTER", "CFS")]["value"] == "85000", name
+    for name, cell in (("list", []), ("object", {}), ("false", False)):
+        _, versions, rows = _half_after(tmp_path / name, first_quarter(cell))
+        version = versions[(2026, "11013", "CFS")]
+        assert version["status"] == "UNCONFIRMED", name
+        assert json.loads(version["detail"])["statement_detail"] == "unreadable_line:amount_unreadable", name
+        assert not any(k[1:3] == (2026, "Q1") and k[5] == "CFS" for k in rows), name
+    # 숫자 0 은 깨진 칸이 아니라 값이다(문자열 "0" 과 같다) — 3개월 값으로 바꿔 쓰지 않는다.
+    _, versions, rows = _half_after(tmp_path / "zero", first_quarter(0))
+    assert versions[(2026, "11013", "CFS")]["status"] == "CONFIRMED" and rows[cumulative]["value"] == "0"
+
+
 def _common_exceeds_total(rows):                       # 우선주 행 없음 + 보통주 발행수(2,000)가 합계(1,000)보다 큼
     return [dict(r, istc_totqy="2,000") if r["se"] == "보통주" else r for r in rows if r["se"] != "우선주"]
 
