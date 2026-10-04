@@ -59,7 +59,7 @@ GET /v2/etfs/091160/movement?date=2026-10-01
 - 인증: AWS IAM SigV4. 허용된 앱 백엔드 역할 또는 검수 역할을 사용합니다.
 - 공개 API 키는 없습니다. 앱·브라우저에 AWS 자격증명을 넣지 않습니다.
 - 요청: `Content-Type: application/json`. 시각: 시간대를 포함한 RFC3339.
-- 전망은 예약 배치가 실행합니다(개발 환경은 평일 06:00 KST 시작, 08:00 KST 마감, ALPHA-1142·ALPHA-1157). 배치는 이 API의 상태·화면 조회만 읽습니다. 가격변동 큐의 자동 실행은 [가격변동 자동 실행](price-automation.md)을 봅니다.
+- 전망은 예약 배치가 실행합니다(개발 환경은 주말·휴일을 포함해 매일 06:00 KST 시작, 08:00 KST 마감, ALPHA-1142·ALPHA-1157). 배치는 이 API의 상태·화면 조회만 읽습니다. 가격변동 큐의 자동 실행은 [가격변동 자동 실행](price-automation.md)을 봅니다.
 
 서버에서는 아래 예시처럼 실행 역할을 사용합니다. 로컬 검수만 `boto3.Session(profile_name="edge-v2-observer")`로 바꿉니다.
 
