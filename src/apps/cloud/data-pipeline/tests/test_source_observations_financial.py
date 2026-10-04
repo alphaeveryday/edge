@@ -450,6 +450,17 @@ def test_unsupported_notation_is_not_counted_as_absent_or_policy(tmp_path):
         assert code == 2 and done["gaps"] == 0, name
         assert {f["class"] for f in log["failures"]} == {"unsupported"}, name
         assert all(f["reasons"] == [reason] for f in log["failures"]), name
+    # 자본 칸이 비었어도(원천 부재 조건) 종류 행 표기 문제를 가리지 않는다.
+    code, done, log = _normalize_with(tmp_path, "blank-equity-labels", {
+        **full_responses(SAMSUNG), _HALF_CFS: _statement_with(_blank_equity), _HALF_SHARES: _shares_with(rename_classes)})
+    assert code == 2 and "unsupported" in done["reject_classes"]
+    # 회사가 정의한 id 로 실린 지배지분 줄 — 표준 id 가 아니어도 "자본 없음"이 아니다.
+    _, rejects = dart_fundamental.extract(
+        {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
+        {"body_json": json.loads(_statement_with(lambda lines: _line(lines, _PARENT_EQUITY).update(
+            account_id="entity_EquityAttributableToOwnersOfParent", account_nm="지배기업 소유주지분")))},
+        json.loads(shares(SAMSUNG, "2026", "11012")))
+    assert [r["reasons"] for r in rejects if r.get("metric") == "bps"] == [["account_unsupported"]]
     # 지배지분 줄은 없고 자본총계만 있는 연결 재무제표 — 자본총계를 대신 쓰지 않고, "자본 없음"으로도 읽지 않는다.
     rows, rejects = dart_fundamental.extract(
         {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012", "CFS",
@@ -499,6 +510,7 @@ def _garbage_common(rows):
 _DAMAGE_CASES = {
     # 결손처럼 보이는 파손(로컬 리뷰 1~3라운드가 찾은 경로). 왼쪽: 재무제표 변이, 오른쪽: 주식총수 표 변이.
     "자본 금액이 숫자가 아님": (_garbage_equity, None),
+    "자본 금액이 쉼표뿐": (lambda lines: _line(lines, _PARENT_EQUITY).update(thstrm_amount=","), None),
     "통화 칸 없음": (_no_currency, None),
     "계정 식별 칸 없음": (_no_account_id, None),
     "재무제표 종류 칸이 모르는 값": (_unknown_statement_kind, None),

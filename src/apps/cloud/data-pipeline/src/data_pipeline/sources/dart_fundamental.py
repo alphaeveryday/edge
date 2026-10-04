@@ -79,12 +79,13 @@ _SIMILAR_LINES = {
     "operating_income": (("OperatingIncome", "ProfitLossFromOperatingActivities"), ("영업이익", "영업손익", "영업손실")),
     "eps_basic": (("BasicEarningsLossPerShare",), ("기본주당",)),
     "eps_diluted": (("DilutedEarningsLossPerShare",), ("희석주당",)),
+    "bps": (("Equity",), ("자본총계", "지배기업")),               # 재무상태표의 자본 줄(다른 id·회사 정의 id 포함)
 }
 
 
 def _blank(value) -> bool:
     """금액 칸이 비었는가(None·빈 문자열·`-`). 비지 않았는데 `_amount` 가 None 이면 숫자 파손이다."""
-    return value is None or str(value).replace(",", "").strip() in ("", "-")
+    return value is None or str(value).strip() in ("", "-")       # 쉼표만 있는 칸은 빈 칸이 아니라 깨진 숫자다
 
 
 def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> list[str]:
@@ -135,7 +136,7 @@ def reject_class(reject: dict) -> str:
 
 def _similar_line(lines: list[dict], metric: str) -> bool:
     stems, heads = _SIMILAR_LINES[metric]
-    return any(ln.get("sj_div") in ("IS", "CIS") and (
+    return any(ln.get("sj_div") in (("BS",) if metric == "bps" else ("IS", "CIS")) and (
         any(stem in str(ln.get("account_id")) for stem in stems)
         or str(ln.get("account_nm") or "").replace(" ", "").startswith(heads)) for ln in lines)
 
@@ -468,8 +469,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     line, problem = _pick_line(lines, _EQUITY_ACCOUNT[fs_div], ("BS",))
     if line is None:
         # 연결 재무제표에 지배지분 줄이 없고 자본총계 줄만 있으면 "자본이 없다"가 아니다 — 자본총계를 대신 쓰지는 않는다.
-        if problem == "account_not_found" and any(
-                ln.get("sj_div") == "BS" and ln.get("account_id") in _EQUITY_ACCOUNT.values() for ln in lines):
+        if problem == "account_not_found" and _similar_line(lines, "bps"):
             problem = "account_unsupported"
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [problem]})
         return []
@@ -493,7 +493,8 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     unknown_rows = [r for r in (shares or {}).get("list", []) if isinstance(r, dict)
                     and str(r.get("se") or "").strip() not in (*_SHARE_CLASSES, _SHARE_NOTE)]
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
-        unsupported = total is None and unknown_rows
+        # 읽어야 할 행이 하나라도 없는데 다른 이름의 종류 행이 있으면, 자본 칸이 비었더라도 표기 문제를 가리지 않는다.
+        unsupported = unknown_rows and None in (total, common, preferred)
         rejects.append({**base, "metric": "bps", "reprt_code": code,
                         "reasons": ["bps_share_class_label_unsupported" if unsupported else "bps_input_missing"]})
         return []
