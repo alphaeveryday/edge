@@ -11,7 +11,7 @@ Super Admin Console
 
 **Run Overview** (= 오늘 운영 현황, ALPHA-683)
 
-- 첫 화면. 레인(원장의 `pipeline_type` 전체 — 지금은 시장·뉴스·공시·장중 수급 4종. 질의가 `DISTINCT ON (pipeline_type)` 이라 레인이 늘면 화면도 함께 는다)별 최신 런의 운영 상태(판정 스펙 §7: IN_PROGRESS/READY/DEGRADED/BLOCKED/UNKNOWN), 필수 작업 귀결 수(단위 명기), 결함 목록(단계 순 — 같은 단계 안 순서는 실행 순서가 아니며, 정확한 최초 결함 지점은 드릴다운 소관), 드릴다운 링크
+- 첫 화면. 레인(원장의 `pipeline_type` 전체 — 지금은 시장·뉴스·공시·장중 수급·원천 관측 5종. 질의가 `DISTINCT ON (pipeline_type)` 이라 레인이 늘면 화면도 함께 는다)별 최신 런의 운영 상태(판정 스펙 §7: IN_PROGRESS/READY/DEGRADED/BLOCKED/UNKNOWN), 필수 작업 귀결 수(단위 명기), 결함 목록(단계 순 — 같은 단계 안 순서는 실행 순서가 아니며, 정확한 최초 결함 지점은 드릴다운 소관), 드릴다운 링크
 - 발행 분포(자동 제공/검수 대기/차단)는 증권사 관리 환경 콘솔 소관 — 이 화면은 파이프라인 원장 범위까지만 답한다
 
 **Tenants** (= 테넌트 관리)
@@ -48,6 +48,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
 | Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` · `GET /api/v1/sources/minute/daily`(최근 일별 Grid 판정) · `GET /api/v1/sources/minute/judgments?sessionId=`(원장 근거 화면의 가격 판정 근거 — 저장된 판정 근거 조회, 원본 본문 재검증 없음, 재계산 미제공) |
 | Event Pipeline — 구성종목 결손 영향 | `GET /api/v1/sources/impact/holdings` |
+| 콘솔 규칙 엔진 사실 표면(하루 사실·최근 일별 추이) | `GET /api/v1/console/facts` · `GET /api/v1/console/trends/entity-resolution` · `GET /api/v1/console/trends/intraday-analysis` (계약은 [../contracts/console-facts-api.md](../contracts/console-facts-api.md), ADR-0050) |
 | Event Pipeline — 분석 목록/무효화 | `GET /api/v1/analyses` · `POST /api/v1/analyses/{id}/invalidate` (사유 필수 — 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번, ALPHA-440. 구 정정/제외/복원 엔드포인트는 ALPHA-737 로 은퇴) |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |
@@ -55,4 +56,4 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 > 무효화 **사유 입력 필수**(빈 값 400). UI 가 사유 입력을 받고, 작업자·사유는 감사 원장
 > (`admin_activity_log`)에 보존된다. 미게시본 무효화는 409 로 거부된다.
 
-> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 신규 쓰기는 분석 무효화(ALPHA-440)뿐 — 구 정정/제외/복원 기록은 과거 이력으로 보존 — 이고 테넌트 생성 감사는 후속): 이벤트 무효화가 작업 시각·작업자·유형·대상·사유와 함께 기록된다(테넌트 생성 감사는 후속). 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.
+> **운영자 작업 감사는 별도 메뉴가 아니다 — 데이터는 존치, 전용 열람 화면만 제거.** 구 Admin Activity Log 브라우징 메뉴는 재설계에서 두지 않는다. 운영자 작업 감사 레코드 자체는 **DB에 보존**된다(context.md의 Admin Activity Log 컴포넌트, super-admin-api `admin_activity_log` 원장 — 신규 쓰기는 분석 무효화(ALPHA-440)뿐이고 구 정정/제외/복원 기록은 과거 이력으로 보존된다): 이벤트 무효화가 작업 시각·작업자·유형·대상·사유와 함께 기록된다(테넌트 생성 감사는 후속). 운영자 작업 감사의 **콘솔 열람 UI**는 후속 UI 설계 수령 시 확정된다 — 현재는 UI-less(데이터 DB 보존)가 기준.

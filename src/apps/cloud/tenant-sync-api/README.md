@@ -32,4 +32,4 @@ curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 200 (신규 없음 — 
 
 로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드다 — NEW 자동 발번은 analysis-engine 소관이지만(ALPHA-493) 엔진이 로컬 compose 에 없어 시드를 유지한다. INVALIDATION 은 super-admin-api 무효화 액션(ALPHA-440)으로 발번된다(CORRECTION 은 폐지 — ADR-0044).
 
-테스트 24건 — 공통 응답 포맷·snake_case 형상(계약 테스트가 `@JsonNaming` 가드레일)·신규 없음 result 생략·fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리·evidences/source_events 조립(두 갈래 DISTINCT·런 경계·NULL 필드)을 고정한다(ALPHA-572·718).
+테스트 36건 — 공통 응답 포맷·snake_case 형상(계약 테스트가 `@JsonNaming` 가드레일)·신규 없음 result 생략·fail-loud 400(바인딩 실패 포함) 에 더해, 실 DB 조회 경로는 Testcontainers 통합 테스트(실 Postgres + Flyway `migrations-cloud`)가 delivery_type 분기·keyset 페이지네이션·테넌트 격리·evidences/source_events 조립(두 갈래 DISTINCT·런 경계·NULL 필드)을 고정한다(ALPHA-572·718).

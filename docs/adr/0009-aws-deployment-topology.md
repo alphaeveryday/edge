@@ -1,6 +1,6 @@
 # ADR-0009: AWS 배포 토폴로지 — Terraform IaC와 단계(phase) 스택
 
-- 상태: 제안됨
+- 상태: 제안됨 — "gateway 만 공개 엣지" 조항은 [ADR-0032](0032-retire-gateway.md)(gateway 은퇴)·[ADR-0034](0034-host-per-edge-alb.md)(서비스당 ALB)가, 분석 배치 구성(수집→정제→분석 8스텝)은 [ADR-0028](0028-unified-pipeline-sfn.md)이 대체
 - 날짜: 2026-07-03
 
 ## 맥락
@@ -27,7 +27,7 @@ AWS 인프라를 **Terraform 으로 소유**한다(그린필드 — click-ops �
 - **단일 모놀리식 state** — 배선은 단순하나 blast-radius 격리가 없다(env destroy 가 zone·ECR 까지 파괴). 폐기.
 - **CDK 유지(TF·CDK 이원 운영)** — 파이프라인만 CDK 로 남기면 도구가 갈린다. TF 단일화로 수렴.
 - **import(B안)로 CDK 파이프라인 흡수** — CDK 물리명·커스텀 리소스가 TF 와 diff 지옥. 병행 재작성(A안) 채택.
-- **배치를 Queue→Worker 로**([proposals](../proposals/system-architecture.md) 초안) — 분석 파이프라인은 **순차 다단계**라 상태·재시도·관측에서 Step Functions 가 낫다. 큐 패턴은 위젯쪽 비동기(이메일·웹훅·알림)에 남긴다.
+- **배치를 Queue→Worker 로**(proposals 초안 — 이 저장소에는 없다) — 분석 파이프라인은 **순차 다단계**라 상태·재시도·관측에서 Step Functions 가 낫다. 큐 패턴은 위젯쪽 비동기(이메일·웹훅·알림)에 남긴다.
 - **`-target` 기반 단계 apply** — break-glass 도구라 상시 운영엔 부적합. 스택 분리로 단계 경계를 만든다.
 
 ## 결과

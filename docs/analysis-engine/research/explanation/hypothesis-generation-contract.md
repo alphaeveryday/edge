@@ -6,9 +6,9 @@ created: 2026-07-14
 updated: 2026-07-14
 related:
  - mechanism-search-space.md
- - ../../engineering/design/explanation-justification-standard.md
- - ../../engineering/design/market-expectation-draft.md
- - ../../engineering/specs/price-decomposition-engine.md
+ - ../../engineering/design/explanation-justification-standard.md  # 이 저장소에 편입되지 않은 문서
+ - ../../engineering/design/market-expectation-draft.md  # 이 저장소에 편입되지 않은 문서
+ - ../../engineering/specs/price-decomposition-engine.md  # 이 저장소에 편입되지 않은 문서
 ---
 # 가설 생성 계약 — 충분데이터 카드와 Claim Tree 형식
 
@@ -43,7 +43,7 @@ related:
 
 ## Context
 
-검증·언어 계약은 [정당화 표준](../../engineering/design/explanation-justification-standard.md)(S0~S8, N1~N7)이, 가설 어휘는 [메커니즘 탐색공간](mechanism-search-space.md)이 소유한다. 이 문서는 **가설 생성 단계의 입력 계약과 출력 형식**만 소유한다. 원칙: 생성은 자유, 인증은 게이트 — 단 생성기가 식별 불가능한 가설만 내놓으면 게이트가 아무리 엄격해도 산출물이 없다. 그래서 입력 계약이 병목이다.
+검증·언어 계약은 정당화 표준(`explanation-justification-standard.md` — 이 저장소에 편입되지 않은 문서)(S0~S8, N1~N7)이, 가설 어휘는 [메커니즘 탐색공간](mechanism-search-space.md)이 소유한다. 이 문서는 **가설 생성 단계의 입력 계약과 출력 형식**만 소유한다. 원칙: 생성은 자유, 인증은 게이트 — 단 생성기가 식별 불가능한 가설만 내놓으면 게이트가 아무리 엄격해도 산출물이 없다. 그래서 입력 계약이 병목이다.
 
 ## 1. 인과 프레임 — 생성기가 답해야 하는 질문의 형식
 

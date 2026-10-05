@@ -1,6 +1,6 @@
 ---
 doc_type: report
-status: Living
+status: Retired
 owner: engineering
 created: 2026-07-26
 updated: 2026-07-26

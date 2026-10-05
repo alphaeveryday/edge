@@ -27,7 +27,7 @@ infra/terraform/
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
     ├── analysis-v2/        # 분석엔진 v2: 단건 워크플로(Fargate)·조회 API(Lambda + HTTP API)·전망 배치 워크플로와 스케줄(outlook_batch.tf, ALPHA-1142)
     ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 운영 중단 경보(stop.tf)·호스트 메모리 표본(host_mem.tf)·관리 태스크(dbadmin), 격리 검증 자원) — ALPHA-1119. 메타DB 는 별도 인스턴스가 아니라 기존 업무 RDS(`modules/rds`, `edge-dev`) 안의 DB `airflow`·역할 `airflow_meta`(관리 태스크가 만든다)
-    ├── data-pipeline/      # Step Functions 배치 4종 — 시장 + 뉴스 + 공시(rollback-only) + 장중 수급 — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
+    ├── data-pipeline/      # Step Functions 배치 5종 — 시장 + 장전 유니버스 + 뉴스 + 공시(평일 19:30 보충) + 장중 수급(Airflow 실행 중, 롤백용 보존) — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
@@ -72,7 +72,7 @@ cd ../envs/dev  && terraform apply
   `data-pipeline` 배치 이미지는 `deploy-data-pipeline.yml` 이 기존 `edge/pipeline` 에 `{git-sha,data-pipeline-latest}` 를 push 하고,
   raw ingest task definition 은 `data-pipeline-latest` 를 참조한다.
 
-## 현재 상태 (2026-07-04)
+## 현재 상태 (최초 작성 2026-07-04, 이후 항목별 갱신)
 
 인프라는 **구조 완성 + apply 됨**. 다만 아래는 의도적으로 꺼두었거나 비어 있다.
 
@@ -81,9 +81,9 @@ cd ../envs/dev  && terraform apply
 | 기능 | 상태 | 켜는 법 |
 |------|------|---------|
 | **알림 이메일**(파이프라인 실패 + RDS 경보) | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
-| **super-admin ALB 보호** | WAFv2 부착됨(ALPHA-297 — AWS Managed CommonRuleSet·KnownBadInputs, 차단 동작·CloudWatch 메트릭). IP 제한은 미적용(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있으나 dev 시크릿 미배선으로 닫힘 | 앱 인증 본격화(ALPHA-474)·`allowed_cidrs` 운영 판단·커스텀 룰/레이트리밋 후속 |
+| **super-admin ALB 보호** | WAFv2 부착됨(ALPHA-297 — AWS Managed CommonRuleSet·KnownBadInputs, 차단 동작·CloudWatch 메트릭). IP 제한은 미적용(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있고, dev 는 부트스트랩 운영자 비밀번호 시크릿을 ECS 에 배선했다(ALPHA-618, 값은 TF 밖 수동 주입) | 앱 인증 본격화(ALPHA-474)·`allowed_cidrs` 운영 판단·커스텀 룰/레이트리밋 후속 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
-| **오토스케일링** | `analysis-consumer` **만** 붙었다(ALPHA-912 — SQS 잔여 일감 계단, `modules/data-pipeline/analysis_autoscaling.tf`). 나머지 서비스는 없음 | 상한은 성능이 아니라 공유 RDS 가 정한다 — `analysis_consumer_max_capacity` 를 실측으로 올린다 |
+| **오토스케일링** | `analysis-consumer`(ALPHA-912 — SQS 잔여 일감 계단, `modules/data-pipeline/analysis_autoscaling.tf`)와 app-api(CPU target tracking 1~2대, ADR-0056 — 위 구조 절)에 붙었다. 나머지 서비스는 없음 | 상한은 성능이 아니라 공유 RDS 가 정한다 — `analysis_consumer_max_capacity` 를 실측으로 올린다 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
 
 > ⚠️ `pipeline_alarm_email` 이 `null` 이면 SNS 구독 리소스가 `count=0` 으로 **아예 안 생겨** 실패
@@ -106,9 +106,9 @@ cd ../envs/dev  && terraform apply
 - **데모 온프렘 런타임** — terraform(EC2·MTS 사이트)은 스캐폴드됨(ADR-0033), 온프렘 박스 compose 는 `demo/onprem/docker-compose.yml`(ALPHA-444 — 고객경로 7서비스 + 검수 콘솔 co-host 2(tenant-console-api·nginx `tenant-console-ui`, ALPHA-554), ECR 이미지 참조, sync-agent→실 cloud). 데모 서빙(ALPHA-632)은 `proxy-site` 모듈 2개 인스턴스 — MTS(`demo-mts.edgesignal.dev` → 박스 `:8080` mock-broker, 정적은 이미지 내장; 설명 조회 `/api/v1/*` 만 별도 behavior 로 박스 `:8084` publication-api 직행 + 쿠키·인증 헤더 strip — ADR-0053, ALPHA-992)·검수 콘솔(`demo-console.edgesignal.dev` → 박스 `:8090` nginx)이며, 콘솔 진입은 로그인 화면(ALPHA-626)이 게이트한다 — SSM 터널은 비상 경로(ALPHA-627, 구 127.0.0.1 전용 바인딩 폐기). 구 MTS S3 버킷·sync 갈래는 제거됐다(정적도 박스가 서빙). 이미지·compose 배포는 `deploy-demo-onprem.yml`(workflow_dispatch — 콘솔 2종 포함 이미지 빌드→SSM Run Command 로 compose, ALPHA-542·554)가 한 번에 한다(전용 배포 역할 `deploy-role.tf` — `foundation` ECR 에 콘솔 UI 저장소 포함). 박스 `apply`(1회 인프라)와 `tenant_delivery` 발번(현재 수동 시드 — 발번기 후속)은 별도.
 - **prod 환경**(`envs/prod`). (super-admin-ui 는 빌드 셸 스캐폴드됨(ALPHA-309) — 콘텐츠·기능은 ALPHA-288.)
 
-> `data-pipeline` 시장 레인은 평일 15:40, 뉴스는 매일 00:10·08:10, 장중 수급은 평일 5슬롯으로 ENABLED다. **공시는 장중 09:00~15:30 390윈도우와 평일 19:30 보충 배치를 함께 운영한다**(ALPHA-1071). 증분 `disclosure-worker`는 minute 원장, 마감 배치는 ops 카탈로그 4작업을 사용한다. 배치 카탈로그 복원 앱을 먼저 배포하고, 기존 세션·워커·배치가 종료된 비거래 경계에서 390 격자 앱과 Terraform 전환을 모두 완료한다. 앱 이미지 CD와 Terraform apply는 독립이므로 다음 거래일 07:45 전에 양쪽 완료를 확인한다. 이미 계획된 720창 세션을 재계획하지 않는다. 실패 시 정상 drain 뒤 minute source group을 비우고 19:30 배치를 유지한다. 종료 실패로 워커가 잔류하면 기존 알림에 따라 정리한 뒤 배치를 실행한다.
+> `data-pipeline` 시장 레인은 평일 15:40, 장전 유니버스는 평일 07:00, 뉴스는 매일 00:10·08:10 으로 ENABLED다. 장중 수급(평일 5슬롯)은 Airflow 가 실행한다(`investor_intraday_orchestrator = "AIRFLOW"`) — 이 레인의 SFN 스케줄은 DISABLED 이고 롤백용으로 남아 있다. **공시는 장중 09:00~15:30 390윈도우와 평일 19:30 보충 배치를 함께 운영한다**(ALPHA-1071). 증분 `disclosure-worker`는 minute 원장, 마감 배치는 ops 카탈로그 4작업을 사용한다. 배치 카탈로그 복원 앱을 먼저 배포하고, 기존 세션·워커·배치가 종료된 비거래 경계에서 390 격자 앱과 Terraform 전환을 모두 완료한다. 앱 이미지 CD와 Terraform apply는 독립이므로 다음 거래일 07:45 전에 양쪽 완료를 확인한다. 이미 계획된 720창 세션을 재계획하지 않는다. 실패 시 정상 drain 뒤 minute source group을 비우고 19:30 배치를 유지한다. 종료 실패로 워커가 잔류하면 기존 알림에 따라 정리한 뒤 배치를 실행한다.
 >
-> **Reconciler(`edge-dev-data-pipeline-reconcile`)도 ENABLED**다. ops catalog는 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중 수급 3)이다. 주말 전환이 만드는 활성화 전 슬롯 경보는 첫 정상 배치 뒤 [공시 전환 절차](../../src/apps/cloud/data-pipeline/README.md)에 따라 해당 이슈만 정리한다. 수동 슬롯은 `OPS_RUN_KEY`를 명시해 reconcile한다.
+> **Reconciler(`edge-dev-data-pipeline-reconcile`)도 ENABLED**다. ops catalog는 39작업(시장 17 + 뉴스 6 + 공시 4 + 장중 수급 3 + 원천 관측 9 — 원천 관측은 SFN 없는 Airflow 전용)이다. 주말 전환이 만드는 활성화 전 슬롯 경보는 첫 정상 배치 뒤 [공시 전환 절차](../../src/apps/cloud/data-pipeline/README.md)에 따라 해당 이슈만 정리한다. 수동 슬롯은 `OPS_RUN_KEY`를 명시해 reconcile한다.
 >
 > **1분 세션 스케줄 3개**는 평일 start 07:45, stop 16:10, 업종지수 rollup 16:00 KST다. start는 가격·뉴스·공시·iNAV·업종지수 세션을 계획하고 세션 결속 서비스 9종을 올린다. 공시 격자는 universe와 무관하게 09:00–15:30이며 종료까지 복구 여유 40분을 둔다. 가격 시간외 선언이 추가되면 종료 시각을 재검토한다. `analysis-consumer`는 이 목록 밖에서 SQS 잔여 기반 오토스케일링이 소유한다. stop은 phase DRAINED, 게이트 큐 0, outbox NEW 0을 연속 확인한 뒤 QC와 scale-down을 수행한다. ECS Task State Change rule은 start/stop 컨테이너의 비0 종료를 alarm SNS로 전달한다.
 >

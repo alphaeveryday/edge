@@ -1,7 +1,7 @@
 # tenant-console-api
 
 증권사 On-Premise 콘솔의 백엔드 — 검수 표면(Review Queue)·인증 + 콘솔 화면
-표면(현재 mock). 계약·권한의 SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고,
+표면(실 원장 — 아래 "콘솔 도메인 표면"). 계약·권한의 SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. 실 DB 접근은 **JPA**(entity·좁은
 Spring Data repository·도메인 model 매핑)다 — DDL 은 Flyway(libs/schema/migrations-onprem)가
 SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl-auto=validate`·`flyway.enabled=false`).
@@ -72,9 +72,9 @@ ALPHA-500 으로 실전환됐다 — name 은 인증 주체(member 원장), 테�
   사라졌다.
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, 컨트롤러가 `XxxResponse.from(스토어/도메인 record)` 로
-  매핑해 반환한다(서비스는 여전히 mock/도메인 record 반환). mock record(스토어 형)와
-  형식이 같아도 별도 타입이다 — DB 연동 시 `from()` 의 매핑원이 mock record 에서
-  repository record 로 바뀐다. 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은
+  매핑해 반환한다(서비스는 도메인 record 반환). 도메인 record 와
+  형식이 같아도 별도 타입이다 — DB 전환으로 `from()` 의 매핑원은 mock record 에서
+  repository record 로 바뀌었다. 네이밍(`Xxx{Request,Response}`, `Dto` 접미사 없음)은
   tenant-sync-api·publication-api·super-admin-api(ALPHA-523) dto 규약을 따른다.
 - **JSON 은 camelCase** — UI 타입이 계약의 SSOT 라 기존 검수 표면(snake_case)과
   다르다. `final` 은 Java 예약어라 컴포넌트명은 `finalText`, JSON 은 `@JsonProperty`.
@@ -106,14 +106,14 @@ curl -i -X POST localhost:18081/api/v1/auth/login \
 # bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
 ```
 
-테스트 131건 — 검수 계약(승인·수정 승인=전이+스냅샷 게시+기록+감사, 반려·차단
+테스트 181건 — 검수 계약(승인·수정 승인=전이+스냅샷 게시+기록+감사, 반려·차단
 사유 필수, 편집 누락·오타 400 강등 차단, 409 수렴), 인증
 계약(로그인 성공/실패 동일 코드·SSO 전용 거부, 필터 401/403·역할 강제·matrix
 parameter 우회 차단·매핑 부재 fail-closed·세션 주체=원장 정체성 SSOT, 부트스트랩
 멱등·해시 저장), 사용자 관리 계약(등록 검증·중복 409·마지막 관리자 409, 역할
 변경의 자기변경 403·조건부 갱신 409·감사 기록), 세션 계약(주체 이름·설정 테넌트
 컨텍스트·프로필 원장 기록·길이 상한 400), 제공 범위 계약(serving_scope 옵트아웃
-upsert·시장 MIC 저장·유니버스 조회·시장 토글=TA·종목 토글=CR), 콘솔 mock 표면의
+upsert·시장 MIC 저장·유니버스 조회·시장 토글=TA·종목 토글=CR), 콘솔 화면 표면의
 UI 계약(camelCase·`final` 필드·상태 전이·어휘 게이트·404)을 인코딩한다.
 단위 테스트는 리포지토리(좁은 인터페이스)를 페이크로 스텁해 DB 없이 돈다. DB 계약은
 Testcontainers Postgres + Flyway(migrations-onprem) 통합 테스트가 검증한다 —
