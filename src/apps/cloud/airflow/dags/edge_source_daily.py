@@ -95,7 +95,7 @@ ALARM_TOPIC = os.environ.get("EDGE_ALARM_TOPIC_ARN") or None
 # 정제 컨테이너가 거부 요약을 남기는 로그 줄의 표지(data_pipeline.steps.source_observations.REJECT_SUMMARY_MARK 와 같다 —
 # data-pipeline tests/test_airflow_dag_contract.py 가 대조한다).
 REJECT_SUMMARY_MARK = "EDGE_REJECT_SUMMARY "
-# 통보 제목을 "적재 완료"로 바꿔도 되는 거부 분류 — 이 파서가 읽지 못하는 표기·계정. 오류(error)가 하나라도 있으면 FAILED 다.
+# 통보 제목에 "적재 완료"를 덧붙여도 되는 거부 분류 — 이 파서가 읽지 못하는 표기·계정. 오류(error)가 하나라도 있으면 덧붙이지 않는다.
 UNSUPPORTED_ONLY = frozenset({"unsupported"})
 
 
@@ -124,7 +124,8 @@ def _failure_report(ti, dag, run) -> tuple[str | None, list[str]]:
     """실패 통보의 (제목 대체, 상세 줄). 제목 대체는 **적재가 끝났고 거부가 전부 미지원 분류일 때만** 준다.
 
     그 밖의 모든 경우(오류 분류 거부, 스텝 실패, 수집 부분 실패, 보류, 요약을 읽지 못함)는 None — 제목은 FAILED 그대로다.
-    run 판정(FAILED)과 종료 코드 정책은 바꾸지 않는다. 통보 문구만 가른다.
+    run 판정(FAILED)과 종료 코드 정책은 바꾸지 않는다. 통보 문구만 가른다 — 대체 제목에도 FAILED 와 run 식별자가 남고,
+    "적재 완료"는 만들어진 지표가 실렸다는 뜻이지 전 지표를 확보했다는 뜻이 아니다(본문에 그렇게 적는다).
     """
     steps = _judged_steps(run)
     codes = {s: ti.xcom_pull(task_ids=s, key="exit_code") for s in ("plan", *steps, "report")}
@@ -151,9 +152,10 @@ def _failure_report(ti, dag, run) -> tuple[str | None, list[str]]:
     if not loaded:
         return None, lines
     count = sum(summaries[s]["failed"] for s in partial)
-    return (f"[{LANE}] 적재 완료 · 미지원 {count}건 — airflow {run.run_id}",
-            [f"판정: 수집·정제·적재는 끝났다. 정제가 읽지 못한 표기·계정 {count}건이 남아 run 은 FAILED 로 닫혔다"
-             "(오류로 분류된 거부 없음).", *lines])
+    return (f"[{LANE}] FAILED · 적재 완료 · 미지원 {count}건 — airflow {run.run_id}",
+            [f"판정: DAG run 은 FAILED 다. 스텝은 모두 끝났고 만들어진 지표는 적재됐다. 정제가 읽지 못한 표기·계정 "
+             f"{count}건의 지표는 만들지 못했다(오류로 분류된 거부는 없다). 전 지표를 확보했다는 뜻이 아니다 — "
+             "거부·결손 건수는 아래에 있다.", *lines])
 
 
 def _notify_failure(context):

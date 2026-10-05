@@ -154,8 +154,14 @@ def test_alert_says_loaded_only_when_every_reject_is_unsupported_notation(dag_mo
     # WHY(ALPHA-1169): 수집·적재가 끝났고 읽지 못하는 표기 2건만 남은 run 도 제목이 "FAILED"뿐이라, 매일 오는 통보가
     # 적재 장애인지 알려진 미지원인지 본문을 열어도 알 수 없었다. 제목과 본문이 그 둘을 가르고 회사·사유를 싣는다.
     subject, message = _notify(dag_module, monkeypatch)
-    assert subject == "[source-daily] 적재 완료 · 미지원 2건 — airflow scheduled__2026-10-04T20:20:00+00:00"
-    assert "run 은 FAILED 로 닫혔다" in message                       # 판정을 성공으로 바꾸지 않는다 — 문구만 가른다
+    # 판정을 성공으로 바꾸지 않는다 — 제목에도 FAILED 와 run 식별자가 남는다(FAILED 로 거르는 수신 규칙이 그대로 잡는다).
+    assert subject == "[source-daily] FAILED · 적재 완료 · 미지원 2건 — airflow scheduled__2026-10-04T20:20:00+00:00"
+    assert len(subject) < 100                                          # SNS 제목 상한
+    assert message.splitlines()[0] == ("dag=edge_source_daily run=scheduled__2026-10-04T20:20:00+00:00 "
+                                       "reason=task_failure")
+    assert "DAG run 은 FAILED 다" in message
+    # "적재 완료"는 만들어진 지표가 실렸다는 뜻이다 — 전 지표 확보로 읽히지 않게 본문이 못 만든 것을 함께 말한다.
+    assert "2건의 지표는 만들지 못했다" in message and "전 지표를 확보했다는 뜻이 아니다" in message
     assert "financial_normalize=2" in message and "financial_load=0" in message
     assert "financial_normalize: 거부 2건(unsupported 2) · 결손 9건" in message
     assert "  - 00160302 코스모화학 2026 11012 CFS bps: bps_share_class_label_unsupported [unsupported]" in message
@@ -165,7 +171,7 @@ def test_alert_for_a_rerun_without_item_lines_points_to_the_quality_log(dag_modu
     # WHY(로컬 리뷰): 이미 끝난 정제를 다시 돌린 run 의 요약에는 건수·분류만 있다. 분류로 "적재 완료"는 말할 수 있지만
     # 회사·사유는 없다 — 없는 내용을 지어내지 않고 어디서 보는지 적는다.
     subject, message = _notify(dag_module, monkeypatch, summary={**_UNSUPPORTED, "items": []})
-    assert subject.startswith("[source-daily] 적재 완료 · 미지원 2건")
+    assert subject.startswith("[source-daily] FAILED · 적재 완료 · 미지원 2건")
     assert "  … 외 2건(품질 로그 failures 참조)" in message and "코스모화학" not in message
 
 
@@ -187,7 +193,7 @@ def test_alert_stays_failed_unless_the_load_is_proven_complete(dag_module, monke
     # 거부 내용을 읽지 못했으면 제목은 FAILED 그대로다. 실제 오류를 가볍게 읽히게 만들면 안 된다.
     subject, message = _notify(dag_module, monkeypatch, **kwargs)
     assert subject == "[source-daily] FAILED — airflow scheduled__2026-10-04T20:20:00+00:00", case
-    assert expected in message and "적재는 끝났다" not in message, case
+    assert expected in message and "적재됐다" not in message, case
 
 
 def test_alert_is_still_sent_when_the_callback_has_no_task_context(dag_module, monkeypatch):
