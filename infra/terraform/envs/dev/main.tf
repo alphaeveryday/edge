@@ -2,7 +2,7 @@ locals {
   prefix                           = "edge-dev"
   data_pipeline_ecr_name           = "edge/pipeline"
   data_pipeline_image_tag          = "data-pipeline-latest"
-  analysis_engine_image_tag        = "analysis-engine-latest"
+  db_query_image_tag               = "db-query-latest"
   data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
   data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
   # foundation 이 소유하는 edge/airflow(ALPHA-1119). data 로 조회하지 않는다 — foundation apply 전에도 plan 이 선다.
@@ -432,8 +432,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
 
 # ── 에이전트 읽기전용 질의 one-off task (ALPHA-622) ──────
 # private RDS 는 VPC 밖에서 못 붙는다 — schema-migrate 와 같은 해법(VPC 내부 one-off task).
-# 이미지는 analysis 페이즈와 동일한 것을 쓴다(질의 코드가 같은 파이썬 패키지에 산다) —
-# DB 조회 CLI 분리 전까지 기존 v1 이미지를 보존한다.
+# 전용 조회 이미지를 기존 ECR 저장소에서 사용한다.
 module "db_query" {
   source = "../../modules/db-query"
 
@@ -441,7 +440,7 @@ module "db_query" {
   region = var.region
   vpc_id = module.network.vpc_id
 
-  image = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
+  image = "${local.data_pipeline_ecr_repository_url}:${local.db_query_image_tag}"
 
   db_host = module.rds.address
   db_port = module.rds.port

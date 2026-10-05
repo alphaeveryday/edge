@@ -14,7 +14,7 @@ variable "vpc_id" {
 }
 
 variable "image" {
-  description = "질의 CLI 컨테이너 이미지 URI(:태그 포함). 질의기는 아직 analysis-engine 안의 서브커맨드다. 조회 CLI 분리 전까지 기존 이미지를 보존한다."
+  description = "분석엔진과 분리된 db-query 이미지 URI(:태그 포함)."
   type        = string
 }
 
@@ -70,7 +70,7 @@ variable "memory" {
 }
 
 variable "cpu_architecture" {
-  description = "질의에 쓰는 이미지(analysis-engine)의 빌드 아키텍처와 일치해야 한다"
+  description = "질의에 쓰는 이미지(db-query)의 빌드 아키텍처와 일치해야 한다"
   type        = string
   default     = "X86_64"
 }
