@@ -61,10 +61,24 @@ ICD 203은 CIA만의 문서가 아니라 미국 정보공동체의 분석 기준
 
 다음 분석에서는 새 자료가 바꾼 논점과 전제를 다시 열고 모든 수치의 관측일을 확인한다. 편입 비중이 바뀌면 상위 5종목 조사 대상도 다시 확인한다.
 
+## 재귀 분석의 실행 정의와 검수
+
+조사 스킬의 A(Q)는 질문과 경쟁 설명들의 묶음이다. 설명·판단이 필요한 중요한 공백에는 같은 A(q)를 적용하고, 하위 답·근거·대안·한계를 모든 관련 후보에 반영한다. 상위 결론의 변화가 다른 가지를 다시 열 수 있다. 이는 ACH의 동일 증거 비교·불일치 검토·핵심 가정 점검을 재귀 구조로 확장한 설계이며 CIA 원문이 제시한 별도 알고리즘이라고 주장하지 않는다.
+
+실행 검수에서는 가설 단어의 출현이나 검색 횟수를 합격 기준으로 삼지 않는다. 관측 가능한 도구 요청·응답과 최종 근거에서 다음을 확인한다.
+
+- 같은 질문의 타당한 대안들이 비교되고, 여러 후보와 양립하는 관측을 결정적 근거로 쓰지 않았는가.
+- 중요한 하위 질문에서도 설명 비교가 필요한 경우 다시 조사했는가. 단순 사실 조회에는 불필요한 경쟁 가설을 만들지 않았는가.
+- 하위 관측이 상위 설명의 방향·크기·시점·범위를 수정하거나 유지할 이유로 연결됐는가. 같은 관측을 독립 근거로 중복 계산하지 않았는가.
+- 미해결 전제를 한계로 바꿀 실제 근거가 있는가. 남은 도구 예산이나 정상 종료는 그 자체로 조사 충족을 입증하지 않는다.
+
+관측 기록만으로 모델의 모든 내부 추론을 복원했다고 말하지 않는다. 한 실행에서 구조를 따랐더라도 일반적인 준수나 투자성과를 보장하지 않는다.
+
 ## 출처
 
 1. CIA Directorate of Intelligence, *Style Manual & Writers Guide for Intelligence Publications*, 8판, 2011, 공개 승인 2012-02-28. 서문, §9.2~9.3, 2장, 9장 표제어 참조. [원문 공개본(FAS 보관)](https://irp.fas.org/cia/product/style.pdf). 미국 GSA의 [정부기관 스타일가이드 목록](https://digital.gov/resources/style-guides-by-government-agencies)이 이 공개본을 연결한다.
 2. CIA, *Ask Molly: CIA Writing Tips*, 2024-11-27. [공식 작성 안내](https://www.cia.gov/stories/story/ask-molly-cia-writing-tips/).
 3. ODNI, *ICD 203: Analytic Standards*, 2015-01-02 및 공개 개정본, 특히 D.6.e.(1)~(9). [공식 문서](https://www.dni.gov/files/documents/ICD/ICD-203.pdf).
-4. US Government, *A Tradecraft Primer: Structured Analytic Techniques for Improving Intelligence Analysis*, 2009-03, 특히 10~16쪽·27~30쪽·38~39쪽. [CIA 공개본](https://www.cia.gov/resources/csi/static/Tradecraft-Primer-apr09.pdf). Pirolli·Card의 수집·재구성 순환과 이 기법들을 결합한 조사 절차 및 원문 링크는 `hypothesis-analysis-workflow`에 담는다.
+4. US Government, *A Tradecraft Primer: Structured Analytic Techniques for Improving Intelligence Analysis*, 2009-03, 특히 인쇄면 7~15쪽의 핵심 가정·정보 품질·ACH. [CIA 공개본](https://www.cia.gov/resources/csi/static/Tradecraft-Primer-apr09.pdf). 실행 절차는 `hypothesis-analysis-workflow`에 두고 출처는 이 문서에서 관리한다.
 5. 미국 국무부 역사실, *The Breakup of Yugoslavia, 1990–1992*, NIE 15–90 인용. [공식 역사 자료](https://history.state.gov/milestones/1989-1992/breakup-yugoslavia).
+6. Richards J. Heuer, Jr., *Psychology of Intelligence Analysis*, 1999, 8장 Analysis of Competing Hypotheses. [CIA 공개본](https://www.cia.gov/resources/csi/static/Pyschology-of-Intelligence-Analysis.pdf). 동일 증거의 후보 간 비교, 가설 재구성, 불일치 검토와 핵심 증거 민감도 검토를 참고한다.
