@@ -33,9 +33,11 @@ DAG 는 생성 시 pause 다 — 켜는 절차와 결측 판정 env 는 README "
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import timedelta
 
+from airflow.providers.amazon.aws.hooks.logs import AwsLogsHook
 from airflow.providers.amazon.aws.hooks.sns import SnsHook
 from airflow.sdk import DAG, Param, TriggerRule, task
 from airflow.sdk.exceptions import AirflowFailException
@@ -44,6 +46,7 @@ from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, EdgeStep, pipeline_run_id,
                         reprocess_slot, run_key, run_status, settlement, slot_time)
 
+log = logging.getLogger(__name__)
 LANE = "source-daily"
 CRONS = ("20 5 * * *",)
 # 계열 → 단계 → (원장 task_key, 태스크 정의 키, CLI 스텝). tests/test_airflow_dag_contract.py 가 카탈로그와 대조한다.
@@ -91,18 +94,89 @@ def _holds_env(ti) -> str:
 
 
 ALARM_TOPIC = os.environ.get("EDGE_ALARM_TOPIC_ARN") or None
+# 정제 컨테이너가 거부 요약을 남기는 로그 줄의 표지(data_pipeline.steps.source_observations.REJECT_SUMMARY_MARK 와 같다 —
+# data-pipeline tests/test_airflow_dag_contract.py 가 대조한다).
+REJECT_SUMMARY_MARK = "EDGE_REJECT_SUMMARY "
+# 통보 제목에 "적재 완료"를 덧붙여도 되는 거부 분류 — 이 파서가 읽지 못하는 표기·계정. 오류(error)가 하나라도 있으면 덧붙이지 않는다.
+UNSUPPORTED_ONLY = frozenset({"unsupported"})
+
+
+def _reject_summary(ti, task) -> dict | None:
+    """정제 스텝의 거부 요약 — 그 ECS 태스크의 CloudWatch 로그에서 표지 줄을 찾는다. 로그 설정·ARN·줄이 없으면 None."""
+    arn = ti.xcom_pull(task_ids=task.task_id, key="ecs_task_arn")
+    if not (arn and task.awslogs_group and task.awslogs_stream_prefix):
+        return None
+    events = AwsLogsHook(aws_conn_id=task.aws_conn_id, region_name=task.awslogs_region).conn.get_log_events(
+        logGroupName=task.awslogs_group, logStreamName=f"{task.awslogs_stream_prefix}/{arn.rsplit('/', 1)[-1]}",
+        startFromHead=False, limit=200)["events"]
+    for event in reversed(events):
+        _, mark, body = event["message"].partition(REJECT_SUMMARY_MARK)
+        if mark:
+            return json.loads(body)
+    return None
+
+
+def _item_line(item: dict) -> str:
+    who = " ".join(str(item[k]) for k in ("corp_code", "corp_name", "bsns_year", "fiscal_year", "reprt_code",
+                                          "fs_basis", "metric", "report_nm") if item.get(k) is not None)
+    return f"  - {who or '(대상 미상)'}: {','.join(item.get('reasons') or [])} [{item.get('class')}]"
+
+
+def _failure_report(ti, dag, run) -> tuple[str | None, list[str]]:
+    """실패 통보의 (제목 대체, 상세 줄). 제목 대체는 **적재가 끝났고 거부가 전부 미지원 분류일 때만** 준다.
+
+    그 밖의 모든 경우(오류 분류 거부, 스텝 실패, 수집 부분 실패, 보류, 요약을 읽지 못함)는 None — 제목은 FAILED 그대로다.
+    run 판정(FAILED)과 종료 코드 정책은 바꾸지 않는다. 통보 문구만 가른다 — 대체 제목에도 FAILED 와 run 식별자가 남고,
+    "적재 완료"는 만들어진 지표가 실렸다는 뜻이지 전 지표를 확보했다는 뜻이 아니다(본문에 그렇게 적는다).
+    """
+    steps = _judged_steps(run)
+    codes = {s: ti.xcom_pull(task_ids=s, key="exit_code") for s in ("plan", *steps, "report")}
+    holds = _holds(ti)
+    lines = ["스텝 종료 코드: " + " ".join(f"{s}={c}" for s, c in codes.items())]
+    if holds:
+        lines.append(f"실행 보류: {holds}")
+    partial = [s for s in steps if codes[s] == 2]
+    summaries = {}
+    for step in partial:
+        summary = summaries[step] = _reject_summary(ti, dag.get_task(step)) if step.endswith("_normalize") else None
+        if summary is None:
+            lines.append(f"{step}: 부분 실패(exit 2) — 거부 요약을 로그에서 찾지 못했다")
+            continue
+        classes = " ".join(f"{k} {v}" for k, v in summary["classes"].items())
+        lines.append(f"{step}: 거부 {summary['failed']}건({classes}) · 결손 {summary['gaps']}건")
+        lines.extend(_item_line(item) for item in summary["items"])
+        if summary["failed"] > len(summary["items"]):
+            lines.append(f"  … 외 {summary['failed'] - len(summary['items'])}건(품질 로그 failures 참조)")
+    # 요약의 분류별 건수가 거부 건수와 맞을 때만 분류를 믿는다(분류 없는 거부가 섞인 요약을 미지원으로 읽지 않는다).
+    loaded = (bool(partial) and not holds and all(code == 0 for s, code in codes.items() if s not in partial)
+              and all(summaries[s] and set(summaries[s]["classes"]) <= UNSUPPORTED_ONLY
+                      and 0 < summaries[s]["failed"] == sum(summaries[s]["classes"].values()) for s in partial))
+    if not loaded:
+        return None, lines
+    count = sum(summaries[s]["failed"] for s in partial)
+    return (f"[{LANE}] FAILED · 적재 완료 · 미지원 {count}건 — airflow {run.run_id}",
+            [f"판정: DAG run 은 FAILED 다. 스텝은 모두 끝났고 만들어진 지표는 적재됐다. 정제가 읽지 못한 표기·계정 "
+             f"{count}건의 지표는 만들지 못했다(오류로 분류된 거부는 없다). 전 지표를 확보했다는 뜻이 아니다 — "
+             "거부·결손 건수는 아래에 있다.", *lines])
 
 
 def _notify_failure(context):
-    """런 실패 통보 — 장중 수급 DAG 와 같은 SNS 토픽."""
+    """런 실패 통보 — 장중 수급 DAG 와 같은 SNS 토픽. 상세를 만들지 못해도 통보는 나간다(종전 문구)."""
     if ALARM_TOPIC is None:
         return
-    run = context["dag_run"]
-    SnsHook().publish_to_target(
-        target_arn=ALARM_TOPIC,
-        subject=f"[{LANE}] FAILED — airflow {run.run_id}",
-        message=f"dag={run.dag_id} run={run.run_id} reason={context.get('reason')}",
-    )
+    run = context.get("dag_run")
+    run_id = getattr(run, "run_id", None) or context.get("run_id")
+    subject = f"[{LANE}] FAILED — airflow {run_id}"
+    lines = [f"dag={context['dag'].dag_id} run={run_id} reason={context.get('reason')}"]
+    try:
+        soft, detail = _failure_report(context["ti"], context["dag"], run)
+        # SNS 제목은 100자 미만이다. 덧붙인 말 때문에 run 식별자가 잘리면 종전 제목을 쓴다(판정 문장은 본문에 그대로 있다).
+        subject, lines = soft if soft and len(soft) < 100 else subject, [*lines, *detail]
+    except Exception as exc:     # XCom·로그 조회 실패, 마지막 태스크 정보가 없는 콜백 — 제목은 FAILED 그대로 둔다
+        lines.append(f"상세를 만들지 못했다: {type(exc).__name__}: {exc}"[:300])
+    SnsHook().publish_to_target(target_arn=ALARM_TOPIC, subject=subject[:99], message="\n".join(lines))
+    # 발행한 통보를 dag-processor 로그에도 남긴다 — 메일함 없이 제목·본문과 상세 조회 성공 여부를 확인할 수 있게.
+    log.info("실패 통보 발행: %s\n%s", subject[:99], "\n".join(lines))
 
 
 def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None = None,

@@ -1547,3 +1547,57 @@ def test_a_share_table_whose_class_rows_exceed_the_total_yields_no_bps_at_all(tm
     _, _, kept = _half_after(tmp_path / "partial", {**full_responses(SAMSUNG), _HALF_SHARES: json.dumps(partial).encode()})
     assert ("bps_total_shares", "POINT") in _half_cfs_metrics(kept)
 
+
+def test_partial_normalize_logs_one_reject_summary_line_for_the_failure_alert(tmp_path, caplog):
+    # WHY(ALPHA-1169): 실패 통보(Airflow)는 품질 로그를 읽을 권한이 없어 "FAILED"만 보냈다 — 적재는 끝났고 읽지 못하는 표기
+    # 2건만 남은 run 과 실제 장애가 같은 문구였다. 정제가 exit 2 를 만든 거부를 분류·회사·사유와 함께 한 줄로 남기고,
+    # 통보가 컨테이너 로그에서 그 줄을 읽는다. 결손(exit 0)만 있는 run 은 줄을 남기지 않는다.
+    def rename_classes(rows):
+        names = {"보통주": "의결권 있는 주식", "우선주": "의결권 없는 주식"}
+        return [dict(r, se=names.get(r["se"], r["se"])) for r in rows]
+
+    def summaries():
+        return [json.loads(r.getMessage()[len(so.REJECT_SUMMARY_MARK):]) for r in caplog.records
+                if r.getMessage().startswith(so.REJECT_SUMMARY_MARK)]
+
+    with caplog.at_level("INFO"):
+        code, done, _ = _normalize_with(tmp_path, "labels", {**full_responses(SAMSUNG), _HALF_SHARES: _shares_with(rename_classes)})
+    (summary,) = summaries()
+    assert code == 2 and summary["failed"] == done["rejected"] == 2 and summary["gaps"] == done["gaps"]
+    assert summary["classes"] == {"unsupported": 2} and summary["dataset"] == "financial_metric"
+    assert {(i["corp_code"], i["corp_name"], i["fs_basis"], i["metric"], tuple(i["reasons"]), i["class"])
+            for i in summary["items"]} == {
+        (SAMSUNG["corp_code"], "삼성전자", fs, "bps", ("bps_share_class_label_unsupported",), "unsupported")
+        for fs in ("CFS", "OFS")}
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        code, _, _ = _normalize_with(tmp_path, "gaps-only", {**full_responses(SAMSUNG),
+                                                             _HALF_SHARES: shares(SAMSUNG, "2026", "11012", preferred=100)})
+    assert code == 0 and summaries() == []
+    # 한 줄에 들도록 앞 N건만 싣고 전체 건수는 따로 적는다. 분류가 없는 거부는 error 로 센다(가볍게 읽히지 않게).
+    many = [{"reasons": ["r"], "corp_code": str(n)} for n in range(30)]
+    items = so._reject_items(many, {})
+    assert len(items) == so.REJECT_SUMMARY_ITEMS and {i["class"] for i in items} == {"error"}
+    assert len(so._reject_summary("x", len(many), 0, {"error": 30}, items).encode("utf-8")) < 16_000
+
+
+def test_rerun_of_a_finished_partial_normalize_still_reports_its_reject_classes(tmp_path, caplog):
+    # WHY(로컬 리뷰): 이미 끝난 정제를 다시 돌리면(clear·재처리) 결과를 다시 쓰지 않고 exit 2 만 돌려준다. 그 실행의 로그에
+    # 요약 줄이 없으면 통보는 거부가 미지원뿐인지 알 수 없다. 완료 manifest 의 분류에서 결손 분류를 뺀 건수를 다시 남긴다.
+    def rename_classes(rows):
+        names = {"보통주": "의결권 있는 주식", "우선주": "의결권 없는 주식"}
+        return [dict(r, se=names.get(r["se"], r["se"])) for r in rows]
+
+    responses = {**full_responses(SAMSUNG), _HALF_SHARES: _shares_with(rename_classes),
+                 ("shares", SAMSUNG["corp_code"], "2026", "11013"): shares(SAMSUNG, "2026", "11013", preferred=100)}
+    storage, _ = chain(tmp_path, DartFake([SAMSUNG], responses, {SAMSUNG["corp_code"]: filing_list(SAMSUNG)}),
+                       holdings=("005930",))
+    assert so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        assert so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith(so.REJECT_SUMMARY_MARK)]
+    summary = json.loads(line[len(so.REJECT_SUMMARY_MARK):])
+    # 결손(우선주 정책 차단 2건)은 거부 분류에 섞이지 않는다 — 섞이면 통보가 미지원뿐인 run 을 그렇게 읽지 못한다.
+    assert (summary["failed"], summary["gaps"], summary["classes"], summary["items"]) == (2, 2, {"unsupported": 2}, [])
+

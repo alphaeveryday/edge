@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
 PARTIAL_EXIT = 2
+# 거부 요약 로그 줄의 표지. Airflow 실패 통보가 정제 컨테이너 로그에서 이 줄을 찾아 회사·사유를 싣는다
+# (airflow/dags/edge_source_daily.py 의 같은 이름 상수와 같아야 한다 — tests/test_airflow_dag_contract.py 가 대조).
+REJECT_SUMMARY_MARK = "EDGE_REJECT_SUMMARY "
+REJECT_SUMMARY_ITEMS = 20       # awslogs 는 16KB 를 넘는 줄을 쪼갠다 — 한 줄에 들도록 건수를 자른다
 CONSUMER = "load_source_observations"
 
 
@@ -356,6 +360,22 @@ def _merge_canonical(storage: Storage, spec: DatasetSpec, rows: list[dict]) -> l
     return written
 
 
+def _reject_summary(dataset: str, failed: int, gaps: int, classes: dict, items: list[dict] | None = None) -> str:
+    """실패 통보가 읽는 한 줄 — exit 2 를 만든 거부의 건수·분류별 건수와 건별 내용(있을 때)."""
+    return REJECT_SUMMARY_MARK + json.dumps(
+        {"dataset": dataset, "failed": failed, "gaps": gaps, "classes": dict(sorted(classes.items())),
+         "items": items or []}, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _reject_items(failures: list[dict], corps: dict) -> list[dict]:
+    """거부 요약에 싣는 앞 N건(회사·보고서·지표·사유). 분류가 없는 거부(분류 규칙이 없는 데이터셋, 정제 예외)는
+    error 로 적는다 — 통보가 그것을 가볍게 읽지 않게."""
+    keys = ("corp_code", "bsns_year", "fiscal_year", "reprt_code", "fs_basis", "metric", "report_nm", "reasons")
+    return [{**{k: f[k] for k in keys if f.get(k) is not None}, "class": f.get("class", "error"),
+             **({"corp_name": name} if (name := (corps.get(f.get("corp_code")) or {}).get("corp_name")) else {})}
+            for f in failures[:REJECT_SUMMARY_ITEMS]]
+
+
 def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: str | None,
               *, producer: str) -> int:
     """raw manifest → 정규화 → artifact·canonical·manifest·quality_log. 성공 0, 행 거부 2, 실패 1."""
@@ -372,15 +392,22 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         if done.get("input_run_id") != input_run_id:
             raise SystemExit(f"{producer} run_id={run_id} 는 다른 입력({done.get('input_run_id')})으로 이미 정제됐다")
         logger.info("%s run_id=%s 는 이미 정제 완료 — 다시 쓰지 않는다", spec.dataset, run_id)
+        if done.get("rejected"):
+            # 재실행도 exit 2 로 끝나 실패 통보가 나간다 — 건수와 분류를 다시 남긴다. 건별 내용은 첫 실행의 품질 로그에만
+            # 있다(여기서 다시 읽지 않는다). 완료 manifest 의 분류는 결손까지 센 것이라 결손 분류를 뺀다.
+            logger.warning("%s", _reject_summary(spec.dataset, done["rejected"], done.get("gaps", 0), {
+                k: v for k, v in (done.get("reject_classes") or {}).items() if k not in spec.gap_classes}))
         return PARTIAL_EXIT if done.get("rejected") else 0
     exit_code = 0
     failures: list[dict] = []
     gaps: list[dict] = []
+    corps: dict = {}                # 수집이 남긴 회사 이름(재무) — 거부 요약 줄에만 쓴다
     completed: bytes | None = None
     try:
         storage.put_bytes(manifest_key, json.dumps(
             {"run_id": run_id, "producer": producer, "canonical_written": False}).encode("utf-8"))
         raw_manifest, objects = _load_raw_objects(storage, spec.dataset, input_run_id)
+        corps = (raw_manifest.get("request_scope") or {}).get("corps") or {}
         result = ([], []) if raw_manifest.get("skipped_reason") else spec.normalize(objects, raw_manifest)
         rows, rejects = result[0], result[1]
         companion_rows = list(result[2]) if len(result) > 2 else []
@@ -454,6 +481,10 @@ def normalize(storage: Storage, spec: DatasetSpec, run_id: str, input_run_id: st
         except Exception:
             logger.exception("canonical run manifest 기록 실패")
             exit_code = 1
+    if failures:
+        logger.warning("%s", _reject_summary(spec.dataset, len(failures), len(gaps),
+                                             Counter(f.get("class", "error") for f in failures),
+                                             _reject_items(failures, corps)))
     logger.info("%s 정제: rows=%s failures=%d gaps=%d exit=%d", spec.dataset, log.get("rows"), len(failures),
                 len(gaps), exit_code)
     return exit_code

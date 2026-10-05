@@ -98,3 +98,11 @@ def test_source_daily_dag_matches_the_catalog_lane():
         assert lane[task_key].ecs_task_definition == taskdef, task_key
         assert lane[task_key].cli_command == (cli,), task_key
     assert re.search(r'^LANE = "source-daily"$', SOURCE_DAG, re.M)
+
+
+def test_reject_summary_mark_matches_the_normalize_log_line():
+    # WHY(ALPHA-1169): 실패 통보는 정제 컨테이너 로그에서 이 표지가 든 줄을 찾아 회사·사유를 싣는다. 한쪽만 바뀌면 통보가
+    # 요약을 못 찾고(제목은 FAILED 로 남지만) 회사·사유가 사라진다 — 두 쪽 테스트가 모두 초록인 채로.
+    from data_pipeline.steps import source_observations
+
+    assert ast.literal_eval(_const("REJECT_SUMMARY_MARK", SOURCE_DAG)) == source_observations.REJECT_SUMMARY_MARK
