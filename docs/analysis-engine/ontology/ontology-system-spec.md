@@ -16,7 +16,7 @@ related:
 
 `edge_ontology`는 뉴스·공시에서 **어떤 존재가 어떤 사건에 어떤 값으로 참여하는지**를
 판정하는 선험적 어휘의 SSOT다. 실제 사건 인스턴스, LLM 호출, 문서 정규화, DB 적재와
-스레딩 실행은 이 라이브러리 밖의 `data-pipeline`·`analysis-engine`가 맡는다.
+스레딩 실행은 이 라이브러리 밖의 `data-pipeline`이 맡는다(v1 `analysis-engine`은 #1140 으로 제거).
 
 ![온톨로지 구조](ontology-architecture.png)
 
@@ -222,8 +222,6 @@ Attribute이므로 관계 어휘 검사와 slot 선언 대상에서 제외한다
 |---|---|---|
 | `data_pipeline.tagging` | Process type·predicate·role menu | 추출 프롬프트의 폐쇄 메뉴 |
 | `data_pipeline.steps.assemble_events` | `role_entity_kind`, `resolve_authority`, `concept_key`, `slot_of`, stage 메뉴 | 역할 해소·완결성·event rows의 결정적 파생 |
-| `analysis_engine.eventstore` | `event_argument.slot` | slot을 포함한 event argument 소비 |
-| storm experiment catalog | `load_type_definitions` | 타입 카탈로그 조회 |
 
 | DB 열 | 정본 | 파생 방식 |
 |---|---|---|

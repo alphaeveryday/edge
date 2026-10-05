@@ -88,7 +88,7 @@ flowchart TB
 | (AI 설명 생성) | AI 설명 후보 + 근거 데이터 연결, 신뢰도/반대 요인 산출 |
 | Cloud Event Store | 비개인화 이벤트·설명 후보·근거 저장, 무효화 이벤트 발행 |
 | Tenant Sync API | Sync Agent(DMZ)가 Pull하는 Event Bundle 제공 (cursor 기반 delta) |
-| Super Admin Console + super-admin-api | 테넌트 생성, 파이프라인 조회, 공통 이벤트 정정/무효화 |
+| Super Admin Console + super-admin-api | 테넌트 생성, 파이프라인 조회, 공통 이벤트 무효화 (정정은 폐지 — [ADR-0044](adr/0044-correction-abolition.md)) |
 | Data Source Monitor | 소스별 수집 상태 모니터링 |
 | Admin Activity Log | Super Admin 작업 이력 |
 
@@ -100,7 +100,7 @@ flowchart TB
 | Intake (내부망) | Sync Agent가 검증한 번들 수신, Raw Event Store 적재 (외부 통신 없음). 옵션 배치에서는 Sync Agent와 단일 모듈로 합침 |
 | Raw Event Store | 수신한 원본 이벤트 보존 (수신 원본 불변) |
 | Screening Worker | 증권사별 금칙어/금지 표현/처리 기준(점검) 적용 → 상태 분기 |
-| Review Queue | **물리 DB 아님.** analysis_items 중 status=REVIEW_REQUIRED의 논리적 작업함 |
+| Review Queue | **물리 DB 아님.** analysis_item 중 status=REVIEW_REQUIRED의 논리적 작업함 |
 | Tenant Console + Tenant Console API | 검수, 정책 관리, 감사 로그, 설정 (증권사 내부 사용자 전용) |
 | Published Store | 최종 노출 확정 문구 저장 |
 | Publication Cache | Published 데이터 조회 캐시 (publication-api 인프로세스 Caffeine — ALPHA-433) |

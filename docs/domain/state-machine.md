@@ -17,7 +17,7 @@
 
 **상태 분기**:
 
-| 분기 | analysis_items.status | 후속 처리 |
+| 분기 | analysis_item.status | 후속 처리 |
 | --- | --- | --- |
 | v2 가격변동 설명 수신 | AUTO_PUBLISHED | 검수 정책 없이 게시. 근거·게시 상태 이력 보존 |
 | 정책 통과(청정 + 자동 제공 기준 충족 — 확신도 게이트 포함, ADR-0046) | AUTO_PUBLISHED | Published Store 저장 → Publication Cache 반영 → MTS/HTS 조회 가능 |
@@ -25,7 +25,7 @@
 | 차단 | BLOCKED | 고객 화면 비노출 |
 | 검수 승인 | APPROVED | Published Store 저장 → Publication Cache 반영 → 조회 가능 |
 | 반려 | REJECTED | 고객 화면 비노출 |
-| 무효화 | INVALIDATED | Publication Cache 제거 + publications.status → INVALIDATED 전이, 즉시 비노출 |
+| 무효화 | INVALIDATED | Publication Cache 제거 + publication.status → INVALIDATED 전이, 즉시 비노출 |
 
 ## 컴플라이언스 플로우 — 무효화 처리 (확정 결정)
 
@@ -48,6 +48,6 @@
 
 | 엔티티 | 상태 |
 | --- | --- |
-| analysis_items.status | RECEIVED, AUTO_PUBLISHED, REVIEW_REQUIRED, APPROVED, REJECTED, BLOCKED, UNPUBLISHED, INVALIDATED |
-| review_tasks.status | PENDING, APPROVED, EDITED_APPROVED, REJECTED, CANCELLED |
-| publications.status | PUBLISHED, UNPUBLISHED, INVALIDATED |
+| analysis_item.status | RECEIVED, AUTO_PUBLISHED, REVIEW_REQUIRED, APPROVED, REJECTED, BLOCKED, UNPUBLISHED, INVALIDATED |
+| review_task.status | PENDING, APPROVED, EDITED_APPROVED, REJECTED, CANCELLED |
+| publication.status | PUBLISHED, UNPUBLISHED, INVALIDATED |

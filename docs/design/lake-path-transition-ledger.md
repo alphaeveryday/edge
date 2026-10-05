@@ -4,6 +4,7 @@
 관련 결정은 [ADR-0057](../adr/0057-lake-dataset-canonical-consumption-and-retirement.md)(**제안됨** — 승인·구현 아님)이다.
 신규 수집 데이터의 저장 계약은 [ETF 데이터 저장 경로 설계 초안](etf-data-storage-plan.md) §9에 있다.
 이 문서는 기존 데이터셋별 경로·생산자·소비자·확인된 문제의 기록이다. 팀 승인을 뜻하지 않는다.
+⚠️ [코드] 열이 가리키는 v1 분석엔진 코드(`statics/*`·`paneltest`·`duck`·`sqltool`·`collect/intraday.py` 등)는 #1140(2026-10-05)으로 제거됐다. 그 writer·reader 는 2026-09-28 시점의 이력이다(`data-pipeline` 경로는 그대로다).
 
 **정보의 출처를 가른다.**
 - **[실측]**: dev 계정 `393229433969`(ap-northeast-2), 2026-09-28 KST 11~15시. S3 `list-objects-v2`·Glue `get-tables`·

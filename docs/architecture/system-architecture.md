@@ -124,20 +124,20 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 |---|---|---|
 | Publication Service | `apps/onprem/publication-api` | 구 serving-api ([adr/0031](../adr/0031-serving-to-publication.md)) |
 | User·Stats·Explanation·Review·Policy·Settings Service | Tenant Console (`apps/onprem/tenant-console-api`·`-ui`) | Policy Service = 점검 **기준** 설정 |
-| Screening Worker | `screening-worker` | 점검 **실행** (≠ Policy) — 금칙어·기준 적용→상태 분기. walking skeleton 구현(무조건 통과 정책, [adr/0037](../adr/0037-compliance-engine-to-screening-worker.md)) |
+| Screening Worker | `screening-worker` | 점검 **실행** (≠ Policy) — 금칙어·기준 적용→상태 분기. 활성 정책(룰·임계값) 평가로 구현(ALPHA-429, [adr/0037](../adr/0037-compliance-engine-to-screening-worker.md)) |
 | Relay Worker | Sync Agent (DMZ) | EDGE Cloud를 outbound pull·검증. 기존 SSOT·코드 명칭 유지([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 | Intake Worker | Intake (내부망) | Sync Agent가 검증한 번들 수신·저장 ([adr/0036](../adr/0036-sync-agent-intake-topology.md)) |
 
-> 위 온프렘 배포 모듈은 전부 walking skeleton 으로 구현됐다(`sync-agent`·`intake`·`screening-worker`·`publication-api`·`tenant-console-api`·`-ui` — [docs/repo-structure.md](../repo-structure.md) 프로젝트 상태).
+> 위 온프렘 배포 모듈은 전부 구현됐다(`sync-agent`·`intake`·`screening-worker`·`publication-api`·`tenant-console-api`·`-ui` — [docs/repo-structure.md](../repo-structure.md) 프로젝트 상태).
 
 **클라우드 (Vendor Cloud)**
 
 | 논리 (이 문서) | 배포 모듈 | 비고 |
 |---|---|---|
-| User·Tenant·**Analysis** Service | Super Admin Console (`apps/cloud/super-admin-api`·`super-admin-ui`) | Analysis Service = 콘솔 **조회** 서비스 (≠ 파이프라인 `analysis-engine`) |
+| User·Tenant·**Analysis** Service | Super Admin Console (`apps/cloud/super-admin-api`·`super-admin-ui`) | Analysis Service = 콘솔 **조회** 서비스 (≠ 분석 엔진 `analysis-engine-v2`) |
 | Tenant Sync Service | `apps/cloud/tenant-sync-api` | |
 | Data Ingestion·Processing Worker | `apps/cloud/data-pipeline` | 독립 Worker 아님 — 단일 Step Functions 3페이즈 raw→정제→feature ([adr/0028](../adr/0028-unified-pipeline-sfn.md)) |
-| Price Analysis Worker | `apps/cloud/analysis-engine` | SFN 페이즈가 아니라 **분봉 트리거 큐 상주 소비자**다 (ALPHA-806 — 일 단위 실행은 장중에 층을 못 세워 제거) |
+| Price Analysis Worker | `apps/cloud/analysis-engine-v2` | 파이프라인 SFN 페이즈가 아니라 **분봉 트리거 큐 소비자**가 분석 SFN 을 시작한다 (ALPHA-806 — 일 단위 실행은 장중에 층을 못 세워 제거. v1 `analysis-engine` 은 #1140 으로 제거) |
 
 > **API Gateway**는 이 문서(및 다이어그램)에서 논리적 진입 표현일 뿐 실제 모듈이 아니다 — 콘솔 내부에서 각 Service가 path로 호출되며, 공개 엣지 라우팅은 별도 ALB(호스트 1:1, [adr/0034](../adr/0034-host-per-edge-alb.md))가 담당한다. 구 `gateway` 모듈은 은퇴됨 ([adr/0032](../adr/0032-retire-gateway.md)).
 

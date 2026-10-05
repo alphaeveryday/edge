@@ -32,7 +32,7 @@ MTS에는 내 종목이 오늘 왜 움직였는지 보여주는 화면이 없습
 
 세 런타임을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 
-- **JVM** — Spring Boot 4 · Gradle 멀티모듈(앱 7 + 라이브러리 2) · Flyway · JPA/JdbcTemplate 병행
+- **JVM** — Spring Boot 4 · Gradle 멀티모듈(앱 8 + 라이브러리 2) · Flyway · JPA/JdbcTemplate 병행
 - **Node** — React 콘솔 UI 2종 + 공유 디자인 시스템(ui-kit) · pnpm workspace
 - **Python** — 데이터 파이프라인 · 분석 엔진 · 온톨로지 SSOT · uv workspace
 - **인프라** — AWS(ECS Fargate·Step Functions·RDS PostgreSQL·Athena/Iceberg·CloudFront) · Terraform(그린필드 IaC) · GitHub Actions
@@ -69,7 +69,7 @@ MTS에는 내 종목이 오늘 왜 움직였는지 보여주는 화면이 없습
 
 Cloud DB의 도메인 7개와 데이터 흐름, 그리고 증권사 관리 환경에서 도는 온프렘 세트까지 한 장입니다. 그림을 클릭하면 도메인별 상세 ERD가 열립니다. 스키마 변경은 Flyway 마이그레이션으로만 하고, CI가 이 문서 ERD를 마이그레이션에서 생성한 DBML과 대조하기 때문에 그림과 실제 DB가 어긋나면 빌드가 실패합니다.
 
-Flyway 세트는 둘입니다 — Cloud 세트 73테이블, On-Prem 세트 13테이블. 두 세트를 잇는 경계는 증권사 쪽에서 여는 단방향 Pull 하나뿐이고, 온프렘 쪽 상세는 [온프렘 테넌트 DB ERD](docs/data-model/onprem/) 한 장으로 봅니다. 두 세트 모두 같은 CI 대조를 받습니다.
+Flyway 세트는 둘입니다 — Cloud 세트 96테이블, On-Prem 세트 14테이블. 두 세트를 잇는 경계는 증권사 쪽에서 여는 단방향 Pull 하나뿐이고, 온프렘 쪽 상세는 [온프렘 테넌트 DB ERD](docs/data-model/onprem/) 한 장으로 봅니다. 두 세트 모두 같은 CI 대조를 받습니다.
 
 ### 2-6. 데이터 파이프라인 · 분석 엔진
 
@@ -105,7 +105,7 @@ Flyway 세트는 둘입니다 — Cloud 세트 73테이블, On-Prem 세트 13테
 
 ### 2-9. 설계 결정 기록(ADR)
 
-설계 결정 54건을 ADR로 남겼습니다. 결정을 뒤집을 때도 기존 문서를 지우지 않고 새 ADR로 대체 근거를 기록합니다.
+설계 결정 58건을 ADR로 남겼습니다. 결정을 뒤집을 때도 기존 문서를 지우지 않고 새 ADR로 대체 근거를 기록합니다.
 
 - [ADR-0010 하이브리드 온프렘 피벗](docs/adr/0010-hybrid-onprem-pivot.md) — 제품 방향을 바꾼 결정
 - [ADR-0044 정정(CORRECTION) 전달 폐지](docs/adr/0044-correction-abolition.md) — 자기 기능을 폐지한 결정
