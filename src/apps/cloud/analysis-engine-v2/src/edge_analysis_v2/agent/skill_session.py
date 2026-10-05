@@ -6,6 +6,7 @@ from pathlib import Path
 
 SKILLS = ('hypothesis-analysis-workflow', 'etf-hypothesis-analysis')
 SOURCE = Path(__file__).parents[1] / 'skills'
+COMMON_INSTRUCTIONS = ('research.md', 'output-contract.md')
 
 
 class SkillSession:
@@ -42,7 +43,9 @@ class SkillSession:
         (self.artifacts / 'AGENTS.md').write_text(content, encoding='utf-8')
         self.readable = frozenset(self.documents) | {agents}
         # The SDK uses Claude, so explicitly include AGENTS.md without enabling project settings.
-        self.instruction = '\n\n' + content
+        shared = [(SOURCE.parent / 'prompts' / name).read_text(encoding='utf-8')
+                  for name in COMMON_INSTRUCTIONS]
+        self.instruction = '\n\n' + '\n\n'.join([*shared, content])
 
     def _readable(self, path):
         try:

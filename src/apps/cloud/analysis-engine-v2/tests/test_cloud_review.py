@@ -184,7 +184,10 @@ def test_instruction_library_exposes_complete_worker_documents_only():
         code, body = request(port, '/api/instructions')
         assert code == 200
         documents = json.loads(body)['documents']
-        assert {d['id'] for d in documents} == {'AGENTS.md', *SKILLS}
+        assert {d['id'] for d in documents} == {'AGENTS.md', 'research.md', 'output-contract.md', *SKILLS}
+        for name in ('research.md', 'output-contract.md'):
+            record = next(d for d in documents if d['id'] == name)
+            assert record['content'] == (SOURCE.parent/'prompts'/name).read_text(encoding='utf-8')
         for name in SKILLS:
             record = next(d for d in documents if d['id'] == name)
             assert record['content'] == (SOURCE/name/'SKILL.md').read_text(encoding='utf-8')

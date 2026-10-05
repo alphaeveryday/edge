@@ -264,13 +264,14 @@ class DatabaseTools(FixtureTools):
             callback=lambda:holdings(self.fixture, require_complete=False),
             description='조회 시점에 확보된 구성종목과 원래 비중입니다. coverage=partial이면 전체 포트폴리오가 확인되지 않았으며 가중 계산에 사용할 수 없습니다.',
             formula=r'W=\sum_i w_i\quad\text{(observed weights; no renormalization)}')
-        self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. false는 최종 근거용 ID·제목입니다. null인 본문을 추측하지 마세요.'
+        self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. true 호출 ID는 최종 근거로 쓸 수 없습니다. 내용을 읽은 뒤 실제 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 항목에 연결하세요. false는 최종 근거용 ID·제목입니다. null인 본문을 추측하지 마세요.'
         if 'prices' in source:
             self._tools['calculate_chart_indicators']['description'] += ' 고가·저가 미확보 시 바닥지수는 null입니다.'
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
             # Source definitions are immutable; connecting stored observations needs a new factor version.
-            tool['version'] = 'database-v3' if name == 'get_instrument_factors' else 'database-v1'
+            tool['version'] = {'get_instrument_factors': 'database-v3',
+                               'get_issue_evidence': 'database-v2'}.get(name, 'database-v1')
             if name == 'get_instrument_factors':
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot',
                                    'macro_observations_as_of','financial_quarters_as_of']
