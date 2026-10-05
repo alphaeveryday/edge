@@ -23,8 +23,9 @@ def task(start, billed, cpu=1024, mem=2048):
 
 def usage():
     day = {'2026-10-01': 2e9, '2026-10-03': 1e9}
-    child = lambda name, etf, at: {'name': name, 'status': 'SUCCEEDED', 'start': ts(at), 'stop': ts(at) + 400, 'transitions': 7, 'lambda_calls': 2,
-                                   'input': f'{{"kind":"outlook","etf_code":"{etf}"}}', 'states': [], 'tasks': [task(at, 300)]}
+    child = lambda name, etf, at, basis='2026-09-30T21:00:00Z': {
+        'name': name, 'status': 'SUCCEEDED', 'start': ts(at), 'stop': ts(at) + 400, 'transitions': 7, 'lambda_calls': 2,
+        'input': f'{{"analysis_at":"{basis}","kind":"outlook","etf_code":"{etf}"}}', 'states': [], 'tasks': [task(at, 300)]}
     return {
         'window': ['2026-10-01T00:00:00+09:00', '2026-10-05T00:00:00+09:00'], 'collected_at': '2026-10-04T12:00:00+09:00',
         # 10-02 는 계정 지표가 없다(수집 공백), 10-04 는 수집 시각 뒤에 끝난다(미완료)
@@ -44,13 +45,13 @@ def usage():
         'logs': {'stored_gb': 0.0, 'ingest_bytes': {}}, 'lambda': {}, 'sqs': {}, 'apigw': {},
         'sfn': {'edge-dev-analysis-v2-outlook-batch': [{'name': 'sched', 'status': 'SUCCEEDED', 'start': ts('2026-10-01T06:00:05+09:00'),
                                                          'stop': ts('2026-10-01T07:00:00+09:00'), 'transitions': 20, 'lambda_calls': 0,
-                                                         'input': '{}', 'states': [], 'tasks': []},
+                                                         'input': '{"analysis_at":"2026-09-30T21:00:00Z"}', 'states': [], 'tasks': []},
                                                         {'name': 'manual', 'status': 'SUCCEEDED', 'start': ts('2026-10-01T11:00:00+09:00'),
                                                          'stop': ts('2026-10-01T11:30:00+09:00'), 'transitions': 9, 'lambda_calls': 0,
                                                          'input': '{}', 'states': [], 'tasks': []}],
                 'edge-dev-analysis-v2': [child('a1', 'AAA', '2026-10-01T06:00:10+09:00'), child('a2', 'BBB', '2026-10-01T06:01:00+09:00'),
                                          # 수동 배치의 자식은 정기 배치 표본에 들어가면 안 된다
-                                         child('m1', 'AAA', '2026-10-01T11:00:10+09:00')]},
+                                         child('m1', 'AAA', '2026-10-01T11:00:10+09:00', '2026-10-01T02:00:00Z')]},
         'run_objects': {'a1': {'events': 100, 'files': 10, 'manifest': 1}, 'a2': {'events': 100, 'files': 10, 'manifest': 1},
                         'm1': {'events': 100, 'files': 10, 'manifest': 1}},
     }
@@ -110,7 +111,8 @@ def test_totals_and_scenario_additions_follow_the_stated_formulas():
     unit = p['unit']['outlook_per_target_day']
     assert s['lines'][0]['add'][0] == pytest.approx((s['N'] - 2) * unit * 30)
     mv = p['unit']['movement_per_event']
-    assert s['lines'][1]['add'][1] == pytest.approx(s['N'] * 0.8 * mv * 20 - 32 * mv * 20)
+    # 현재 사건분은 기준선(NAT·Lambda 제외 단가)에 있으므로 늘어난 사건만 확대 단가로 더한다
+    assert s['lines'][1]['add'][1] == pytest.approx((s['N'] * 0.8 - 32) * mv * 20)
     for i in range(3):
         assert s['add_total'][i] == pytest.approx(sum(l['add'][i] for l in s['lines']))
         assert s['total'][i] == pytest.approx(p['totals']['month'] + s['add_total'][i])
@@ -119,3 +121,46 @@ def test_totals_and_scenario_additions_follow_the_stated_formulas():
 def test_empty_day_class_fails_loudly():
     with pytest.raises(ValueError):
         ic.build_plan(usage(), {'trading_days': ['2026-10-01', '2026-10-03']})
+
+
+def test_overlapping_manual_run_with_other_basis_is_not_a_batch_child():
+    d = usage()
+    d['sfn']['edge-dev-analysis-v2'][2]['start'] = ts('2026-10-01T06:30:00+09:00')  # 정기 배치 창 안에서 시작한 수동 실행
+    b = ic.build_plan(d, {})['batches'][0]
+    assert (b['attempts'], b['matched_by']) == (2, 'analysis_at')
+
+
+def test_analysis_nat_and_lambda_are_not_added_twice_to_the_baseline():
+    p = ic.build_plan(with_movement(usage()), {})
+    b = p['batches'][0]
+    outlook = next(r for r in p['baseline'] if r['name'].startswith('전망'))
+    # 계정 실측 NAT 처리·Lambda 행이 이미 이 실행의 전송·호출을 센다 — 기준선은 Fargate·S3·SFN 만
+    assert outlook['trading'] == pytest.approx(b['fargate'] + b['s3'] + b['sfn'])
+    assert p['unit']['outlook_per_target_day'] * 2 == pytest.approx(b['fargate'] + b['s3'] + b['sfn'] + b['nat'] + b['lambda'])
+
+
+def test_unreadable_task_timing_is_unknown_not_free():
+    d = with_movement(usage())
+    d['sfn']['edge-dev-analysis-v2'][-1]['tasks'][0]['stopped'] = None  # 기록은 있는데 종료 시각을 모름
+    assert ic.build_plan(d, {})['unit']['movement_per_event'] is None
+    d['sfn']['edge-dev-analysis-v2'][-1]['tasks'][0].update(pull_start=None, stopped=ts('2026-10-01T10:00:30+09:00'))
+    assert ic.build_plan(d, {})['unit']['movement_per_event'] is not None  # 이미지 받기 전에 끝난 태스크는 과금이 없다(0)
+
+
+def test_object_growth_is_per_elapsed_day_and_unlisted_runs_make_it_na():
+    d = usage()
+    d['s3'][ic.BUCKET]['objects'] = {'2026-10-01': 100.0, '2026-10-03': 1100.0}
+    row = next(r for r in ic.build_plan(d, {})['baseline'] if r['name'].startswith('S3 PUT'))
+    assert '335/일' in row['name']   # (1,000 − 분석 객체 330) / 경과 2일. 관측 개수(1)로 나누면 670
+    del d['run_objects']['m1']
+    row = next(r for r in ic.build_plan(d, {})['baseline'] if r['name'].startswith('S3 PUT'))
+    assert row['month'] is None
+
+
+def test_missing_nat_metrics_are_na_and_render_survives_na():
+    d = usage()
+    d['nat']['n'] = {k: {} for k in d['nat']['n']}
+    p = ic.build_plan(d, {})
+    assert next(r for r in p['baseline'] if r['name'].startswith('NAT 처리'))['month'] is None
+    del d['run_objects']
+    ic.render(ic.build_plan(d, {}))   # N/A 가 섞여도 출력이 죽지 않는다

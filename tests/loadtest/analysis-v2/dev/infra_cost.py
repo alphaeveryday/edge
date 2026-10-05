@@ -91,6 +91,27 @@ def etf_of(execution):
     return m.group(1) if m else None
 
 
+def at_of(execution):
+    """입력의 analysis_at 을 시각(초)으로. 정기 배치와 그 자식은 같은 기준시각을 쓴다."""
+    m = re.search(r'"analysis_at"\s*:\s*"([^"]+)"', execution.get('input') or '')
+    if not m:
+        return None
+    try:
+        return datetime.fromisoformat(m.group(1).replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return None
+
+
+def billing_state(task):
+    """'billed' / 'not_billed'(기록은 읽었고 이미지 받기 전에 끝남 — 과금 없음) / 'unknown'(기록을 못 읽었거나 아직 안 끝남)."""
+    if billed_seconds(task) is not None:
+        return 'billed'
+    parsed = task.get('parsed', task.get('created') is not None or bool(task.get('family')))
+    if parsed and task.get('pull_start') is None and task.get('stopped') is not None:
+        return 'not_billed'
+    return 'unknown'
+
+
 def run_puts(execution, run_objects):
     """한 분석 실행의 S3 PUT: 이벤트 조각·파일 객체(목록 실측) + manifest 덮어쓰기(코드상 시작·5초마다·종료, 추정)."""
     objects = (run_objects or {}).get(execution['name'])
@@ -236,7 +257,7 @@ def collect(args):
                 except ValueError:
                     t = {}
                 ms = lambda k: t[k] / 1000 if isinstance(t.get(k), (int, float)) else None
-                row['tasks'].append({'family': (t.get('Group') or '').replace('family:', ''), 'cpu': int(t.get('Cpu') or 0), 'memory': int(t.get('Memory') or 0),
+                row['tasks'].append({'parsed': bool(t), 'family': (t.get('Group') or '').replace('family:', ''), 'cpu': int(t.get('Cpu') or 0), 'memory': int(t.get('Memory') or 0),
                                      'created': ms('CreatedAt'), 'pull_start': ms('PullStartedAt'), 'pull_stop': ms('PullStoppedAt'),
                                      'started': ms('StartedAt'), 'exec_stopped': ms('ExecutionStoppedAt'), 'stopping': ms('StoppingAt'),
                                      'stopped': ms('StoppedAt'), 'az': t.get('AvailabilityZone'), 'event': e['type']})
@@ -308,13 +329,17 @@ def scheduled_batches(d, names=None, hour=6):
         if not names and not (st.hour == hour and st.minute < 10):
             continue
         stop = b['stop'] or float('inf')
-        children = [r for r in d['sfn'].get('edge-dev-analysis-v2', []) if kind_of(r) == 'outlook' and b['start'] <= r['start'] <= stop]
-        batches.append({'batch': b, 'children': children, 'date': st.date().isoformat()})
+        at = at_of(b)  # 배치가 자식에게 같은 기준시각을 넘긴다 — 시간 창이 겹친 수동 실행을 거른다
+        children = [r for r in d['sfn'].get('edge-dev-analysis-v2', [])
+                    if kind_of(r) == 'outlook' and b['start'] <= r['start'] <= stop and (at is None or at_of(r) == at)]
+        batches.append({'batch': b, 'children': children, 'date': st.date().isoformat(),
+                        'matched_by': 'analysis_at' if at is not None else '시간 창(배치 입력에 analysis_at 없음)'})
     return batches
 
 
 def analysis_cost(rows, run_objects, tokens_mb):
     """실행 목록의 실제 누적 비용: Fargate(과금 초 합), S3 PUT(객체 실측 + manifest 추정), NAT(요청 본문 근사), SFN·Lambda(이력 실측)."""
+    states = collections.Counter(billing_state(t) for r in rows for t in r['tasks'])
     billed = sum(billed_seconds(t) or 0 for r in rows for t in r['tasks'])
     fargate = sum(fargate_hourly(t['cpu'], t['memory']) * billed_seconds(t) / 3600 for r in rows for t in r['tasks'] if billed_seconds(t))
     puts_obj = puts_manifest = 0
@@ -327,13 +352,15 @@ def analysis_cost(rows, run_objects, tokens_mb):
         puts_obj += o
         puts_manifest += m
     tasks = sum(1 for r in rows if r['tasks'])
-    return {'runs': len(rows), 'tasks': tasks, 'billed_s': billed, 'fargate': fargate,
+    return {'runs': len(rows), 'tasks': tasks, 'billed_s': billed, 'tasks_unknown_billing': states['unknown'],
+            # 과금 시각을 못 읽은 태스크가 있으면 0 이 아니라 '모름'이다
+            'fargate': None if states['unknown'] else fargate,
             's3_puts_objects': puts_obj, 's3_puts_manifest_est': puts_manifest, 's3_runs_without_listing': unknown_puts,
             # 목록이 없는 실행이 하나라도 있으면 0 이 아니라 '모름'이다
             's3': None if unknown_puts else (puts_obj + puts_manifest) * PRICE['s3_put_1k'] / 1000,
             'nat': tasks * tokens_mb / 1000 * PRICE['nat_gb'],
-            'sfn_lambda': sum(r['transitions'] for r in rows) * PRICE['sfn_transition']
-            + sum(r['lambda_calls'] for r in rows) * (0.25 * 1.3 * PRICE['lambda_gb_s'] + PRICE['lambda_req'])}
+            'sfn': sum(r['transitions'] for r in rows) * PRICE['sfn_transition'],
+            'lambda': sum(r['lambda_calls'] for r in rows) * (0.25 * 1.3 * PRICE['lambda_gb_s'] + PRICE['lambda_req'])}
 
 
 def build_plan(d, opts):
@@ -347,7 +374,12 @@ def build_plan(d, opts):
     rows, notes = [], []
 
     def total_of(c):
-        return None if c['s3'] is None else c['fargate'] + c['s3'] + c['nat'] + c['sfn_lambda']
+        """확대 단가: 실행이 새로 만드는 사용량 전부."""
+        return None if c['s3'] is None or c['fargate'] is None else c['fargate'] + c['s3'] + c['nat'] + c['sfn'] + c['lambda']
+
+    def baseline_of(c):
+        """현재 기준선: NAT·Lambda 는 계정 실측 행(NAT 처리, Lambda·SQS·API Gateway)에 이미 있어 뺀다."""
+        return None if c['s3'] is None or c['fargate'] is None else c['fargate'] + c['s3'] + c['sfn']
 
     def add(group, kind, name, t, oth, note):
         rows.append({'group': group, 'kind': kind, 'name': name, 'trading': t, 'other': oth,
@@ -358,19 +390,20 @@ def build_plan(d, opts):
     per_batch = []
     for b in batches:
         c = analysis_cost(b['children'], d.get('run_objects'), o['tokens_mb']['outlook'])
-        c['sfn_lambda'] += b['batch']['transitions'] * PRICE['sfn_transition']
+        c['sfn'] += b['batch']['transitions'] * PRICE['sfn_transition']
         targets = len({etf_of(r) for r in b['children'] if etf_of(r)})
         per_batch.append({'name': b['batch']['name'], 'date': b['date'], 'attempts': c['runs'], 'targets': targets,
-                          'completed': sum(r['status'] == 'SUCCEEDED' for r in b['children']), **c, 'total': total_of(c)})
+                          'completed': sum(r['status'] == 'SUCCEEDED' for r in b['children']), 'matched_by': b['matched_by'], **c,
+                          'total': total_of(c), 'baseline': baseline_of(c)})
     if any(b['total'] is None for b in per_batch):
-        notes.append('정기 배치 실행 일부에 S3 목록이 없다 — 전망 비용 N/A(collect 를 다시 돌린다)')
+        notes.append('정기 배치 실행 일부에 S3 목록 또는 과금 시각이 없다 — 전망 비용 N/A(collect 를 다시 돌린다)')
         per_batch_ok = False
     else:
         per_batch_ok = True
     if per_batch and per_batch_ok:
-        outlook_day = sum(b['total'] for b in per_batch) / len(per_batch)
+        outlook_day = sum(b['baseline'] for b in per_batch) / len(per_batch)
         targets = round(sum(b['targets'] for b in per_batch) / len(per_batch))
-        outlook_unit = outlook_day / targets if targets else None
+        outlook_unit = sum(b['total'] for b in per_batch) / len(per_batch) / targets if targets else None
         retry_ratio = sum(b['attempts'] for b in per_batch) / max(1, sum(b['targets'] for b in per_batch))
     else:
         outlook_day = outlook_unit = targets = retry_ratio = None
@@ -380,8 +413,9 @@ def build_plan(d, opts):
     movement_rows = [r for r in d['sfn'].get('edge-dev-analysis-v2', []) if kind_of(r) == 'movement' and r['tasks']]
     mv = analysis_cost(movement_rows, d.get('run_objects'), o['tokens_mb']['movement']) if movement_rows else None
     movement_unit = total_of(mv) / mv['runs'] if mv and total_of(mv) is not None else None
+    movement_base = baseline_of(mv) / mv['runs'] if mv and baseline_of(mv) is not None else None
     if mv and movement_unit is None:
-        notes.append('가격변동 실행 일부에 S3 목록이 없다 — 건당 단가 N/A')
+        notes.append('가격변동 실행 일부에 S3 목록 또는 과금 시각이 없다 — 건당 단가 N/A')
     if not mv:
         notes.append('가격변동 실행 표본 0 — 건당 단가 N/A')
     elif mv['runs'] < o['min_sample']:
@@ -431,12 +465,12 @@ def build_plan(d, opts):
     # --- 실행량
     if outlook_day is not None:
         add('장중 경로', '실행량', f'전망 정기 배치(배치 {len(per_batch)}개, 시도 평균 {sum(b["attempts"] for b in per_batch) / len(per_batch):.1f})',
-            outlook_day, outlook_day, '배치별 실제 누적 과금·객체 수, 매일')
+            outlook_day, outlook_day, '배치별 실제 누적 과금·객체 수 + SFN, 매일(NAT·Lambda 는 계정 실측 행에 포함)')
     else:
         add('장중 경로', '실행량', '전망 정기 배치', None, None, 'N/A 표본 0')
     add('장중 경로', '실행량', f"가격변동({o['events_per_trading_day']:g}건/거래일)",
-        None if movement_unit is None else o['events_per_trading_day'] * movement_unit, 0,
-        'N/A 표본 0' if movement_unit is None else f"건당 ${movement_unit:.4f}(표본 {mv['runs']}건 평균)")
+        None if movement_base is None else o['events_per_trading_day'] * movement_base, 0,
+        'N/A 표본 0' if movement_base is None else f"건당 ${movement_base:.4f}(표본 {mv['runs']}건 평균, NAT·Lambda 제외)")
     for sm, rs in sorted(d['sfn'].items()):
         if sm.startswith('edge-dev-data-pipeline'):
             by = collections.defaultdict(float)
@@ -449,9 +483,15 @@ def build_plan(d, opts):
     for m in d['nat'].values():
         for x in cls['days']:
             proc[x] = proc.get(x, 0) + m['BytesInFromSource'].get(x, 0) + m['BytesInFromDestination'].get(x, 0)
-    nat_t, nat_o = avg(proc, trading) / 1e9, avg(proc, other) / 1e9
-    add('공유 기반', '실행량', f'NAT 처리 {nat_t:.2f}/{nat_o:.2f} GB(거래일/휴일)', nat_t * PRICE['nat_gb'], nat_o * PRICE['nat_gb'],
-        '소스 입력 + 목적지 입력(바이트마다 한 번)')
+    nat_seen = any(x in m[k] for m in d['nat'].values() for k in ('BytesInFromSource', 'BytesInFromDestination') for x in trading + other)
+    if nat_seen:
+        nat_t, nat_o = avg(proc, trading) / 1e9, avg(proc, other) / 1e9
+        add('공유 기반', '실행량', f'NAT 처리 {nat_t:.2f}/{nat_o:.2f} GB(거래일/휴일)', nat_t * PRICE['nat_gb'], nat_o * PRICE['nat_gb'],
+            '소스 입력 + 목적지 입력(바이트마다 한 번)')
+    else:
+        nat_t = nat_o = None
+        notes.append('NAT 처리 지표가 유효한 날에 하나도 없다 — NAT 처리 N/A')
+        add('공유 기반', '실행량', 'NAT 처리', None, None, 'N/A 지표 없음')
     ingest = collections.defaultdict(float)
     for g in d['logs']['ingest_bytes'].values():
         for k, v in g.items():
@@ -469,12 +509,18 @@ def build_plan(d, opts):
     ks = sorted(k for k in lake if k in valid)
     if len(ks) >= 2:
         # 일별 객체 수는 하루 한 번 찍은 값이다. 두 관측 사이에 시작한 분석 실행의 객체만 뺀다
-        between = lambda r: ks[0] <= datetime.fromtimestamp(r['start'], KST).date().isoformat() < ks[-1]
-        analysis_objects = sum((d.get('run_objects') or {}).get(r['name'], {}).get('events', 0) + (d.get('run_objects') or {}).get(r['name'], {}).get('files', 0)
-                               for r in d['sfn'].get('edge-dev-analysis-v2', []) if between(r))
-        new_objects = max(0, lake[ks[-1]] - lake[ks[0]] - analysis_objects) / (len(ks) - 1)
-        add('공유 기반', '실행량', f'S3 PUT 하한(분석 외 새 객체 {new_objects:.0f}/일)', new_objects * PRICE['s3_put_1k'] / 1000,
-            new_objects * PRICE['s3_put_1k'] / 1000, '객체 수 증가 − 분석 산출물. 덮어쓰기·GET 미포함')
+        between = [r for r in d['sfn'].get('edge-dev-analysis-v2', []) if ks[0] <= datetime.fromtimestamp(r['start'], KST).date().isoformat() < ks[-1]]
+        listing = d.get('run_objects') or {}
+        unlisted = [r['name'] for r in between if r['name'] not in listing]
+        elapsed = (datetime.fromisoformat(ks[-1]) - datetime.fromisoformat(ks[0])).days  # 관측 개수가 아니라 경과 일수
+        if unlisted:
+            notes.append(f'두 객체 수 관측 사이 분석 실행 {len(unlisted)}건의 S3 목록이 없다 — 분석 외 PUT 하한 N/A')
+            add('공유 기반', '실행량', 'S3 PUT 하한(분석 외)', None, None, 'N/A 분석 실행 목록 결손')
+        else:
+            analysis_objects = sum(listing[r['name']]['events'] + listing[r['name']]['files'] for r in between)
+            new_objects = max(0, lake[ks[-1]] - lake[ks[0]] - analysis_objects) / elapsed
+            add('공유 기반', '실행량', f'S3 PUT 하한(분석 외 새 객체 {new_objects:.0f}/일)', new_objects * PRICE['s3_put_1k'] / 1000,
+                new_objects * PRICE['s3_put_1k'] / 1000, f'{ks[0]}~{ks[-1]} 객체 수 증가 − 분석 산출물. 덮어쓰기·GET 미포함')
 
     def known_vcpu(ds):
         svc = sum(int(s['cpu']) / 1024 * avg(s['running_minutes'], ds) / 60 for s in d['services'] if s['cpu'])
@@ -500,17 +546,18 @@ def build_plan(d, opts):
     totals['incomplete'] = [r['name'] for r in rows if r['month'] is None]
 
     # --- 시나리오(기준선에 이미 있는 공유 자원은 다시 더하지 않는다)
-    kis_high = (nat_t - nat_o) * 1e9 / o['current_price_calls'] if nat_t > nat_o else None
+    kis_high = (nat_t - nat_o) * 1e9 / o['current_price_calls'] if nat_t is not None and nat_t > nat_o else None
     worker = fargate_hourly(1024, 2048) * o['session_hours'] * T
     scenarios = []
     cur_out = None if outlook_day is None else outlook_day * M
-    cur_mv = None if movement_unit is None else o['events_per_trading_day'] * movement_unit * T
+    cur_mv = None if movement_base is None else o['events_per_trading_day'] * movement_base * T
     for sc in o['scenarios']:
         n, (u_lo, u_hi), (a_lo, a_hi) = sc['N'], sc['U'], sc['accounts']
         a_mid = round((a_lo + a_hi) / 2)
         rates = o['event_rates']
         out_add = None if outlook_unit is None else (n - targets) * outlook_unit * M
-        mv_add = None if movement_unit is None else [n * r * movement_unit * T - cur_mv for r in rates]
+        # 현재 사건분은 기준선에 있으므로 늘어난 사건 수만 확대 단가로 더한다
+        mv_add = None if movement_unit is None else [(n * r - o['events_per_trading_day']) * movement_unit * T for r in rates]
         workers = [0, (a_mid - 1) * worker, (a_hi - 1) * worker]
 
         def nat(u, byte):
@@ -518,7 +565,7 @@ def build_plan(d, opts):
             return None if byte is None else delta * byte / 1e9 * PRICE['nat_gb'] * T
         nat3 = [nat(u_lo, o['kis_bytes_low']), nat(u_lo, None if kis_high is None else (o['kis_bytes_low'] + kis_high) / 2), nat(u_hi, kis_high)]
         lines = [{'item': '전망(매일)', 'formula': f'(N−{targets}) × 대상 ETF·일 단가 × {M}', 'current': cur_out, 'add': None if out_add is None else [out_add] * 3},
-                 {'item': f'가격변동 {rates[0]}/{rates[1]}/{rates[2]}건/ETF·일', 'formula': f'N × 율 × 건 단가 × {T} − 현재', 'current': cur_mv, 'add': mv_add},
+                 {'item': f'가격변동 {rates[0]}/{rates[1]}/{rates[2]}건/ETF·일', 'formula': f"(N × 율 − {o['events_per_trading_day']:g}) × 건 단가 × {T}", 'current': cur_mv, 'add': mv_add},
                  {'item': f'수집 워커(계좌 {a_lo}~{a_hi}, 낮음=한 워커 다중 앱키)', 'formula': f'(계좌−1) × ${fargate_hourly(1024, 2048) * o["session_hours"]:.3f} × {T}',
                   'current': 0, 'add': workers},
                  {'item': f'KIS 호출 NAT(③, U {u_lo}~{u_hi})', 'formula': f'Δ호출 × {o["kis_bytes_low"]}~{kis_high or 0:.0f} B × $0.059 × {T}',
@@ -543,7 +590,7 @@ def build_plan(d, opts):
             hi = (avg(gb, td) * T + avg(gb, od) * O) * PRICE['xaz_gb']
             conditional.append({'item': f'RDS↔클라이언트 AZ 간 전송({label}, 거래일 {len(td)}·휴일 {len(od)}일)', 'month': [0, hi],
                                 'basis': f"RDS 송수신 거래일 평균 {avg(gb, td):.0f} GB(최대 {max(gb[x] for x in td):.0f}) × $0.01 × 다른 AZ 비율 0~1. {TRANSFER_RULES['rds']}"})
-    conditional.append({'item': 'NAT↔다른 AZ 태스크 전송', 'month': [0, (nat_t * T + nat_o * O) * 2 * PRICE['xaz_gb']],
+    conditional.append({'item': 'NAT↔다른 AZ 태스크 전송', 'month': [0, None if nat_t is None else (nat_t * T + nat_o * O) * 2 * PRICE['xaz_gb']],
                         'basis': f"NAT 처리 × $0.01~0.02 × 다른 AZ 비율 0~1. {TRANSFER_RULES['nat']}"})
     out_gb = sum(avg(m['BytesOutToDestination'], trading) * T + avg(m['BytesOutToDestination'], other) * O for m in d['nat'].values()) / 1e9
     conditional.append({'item': '인터넷 송신', 'month': [0, out_gb * PRICE['internet_out_gb']],
@@ -565,7 +612,8 @@ def build_plan(d, opts):
                      'events_per_trading_day': o['events_per_trading_day'], 'event_rates': o['event_rates'],
                      'movement_retry_assumption': '실측 시도 그대로(재시도 가정 추가 없음)', 'kis_bytes': [o['kis_bytes_low'], kis_high],
                      'scenario_inputs': o['scenarios'], 'notes': notes},
-            'batches': per_batch, 'movement': mv, 'unit': {'outlook_per_target_day': outlook_unit, 'movement_per_event': movement_unit},
+            'batches': per_batch, 'movement': mv,
+            'unit': {'outlook_per_target_day': outlook_unit, 'movement_per_event': movement_unit, 'movement_baseline_per_event': movement_base},
             'baseline': rows, 'totals': totals, 'scenarios': scenarios, 'conditional': conditional, 'unestimated': unestimated,
             'transfer_rules': TRANSFER_RULES}
 
@@ -586,8 +634,8 @@ def render(p, compare=None):
     print(f"기준월 {m['month_days']}일(거래일 {m['month_trading']}) · 전망 대상 {m['outlook_targets']} · 시도/대상 {m['outlook_attempts_per_target'] and round(m['outlook_attempts_per_target'], 2)}"
           f" · 가격변동 {m['events_per_trading_day']:g}건/거래일 · 사건 율 {m['event_rates']} · 재시도 {m['movement_retry_assumption']}")
     for b in p['batches']:
-        print(f"  배치 {b['name'][:36]} {b['date']}: 시도 {b['attempts']}·대상 {b['targets']}·성공 {b['completed']}, 과금 {b['billed_s']}초, "
-              f"PUT 객체 {b['s3_puts_objects']}+manifest 추정 {b['s3_puts_manifest_est']}, 합 ${b['total']:.3f}")
+        print(f"  배치 {b['name'][:36]} {b['date']}({b['matched_by']}): 시도 {b['attempts']}·대상 {b['targets']}·성공 {b['completed']}, 과금 {b['billed_s']}초, "
+              f"PUT 객체 {b['s3_puts_objects']}+manifest 추정 {b['s3_puts_manifest_est']}, 기준선 ${day(b['baseline'])}·단가용 ${day(b['total'])}")
     if p['movement']:
         mv = p['movement']
         print(f"  가격변동 표본 {mv['runs']}건: 과금 합 {mv['billed_s']}초(평균 {mv['billed_s'] / mv['runs']:.0f}), PUT 객체 {mv['s3_puts_objects']}+manifest 추정 {mv['s3_puts_manifest_est']}")
@@ -639,9 +687,9 @@ def plan(args):
             'events_per_trading_day': args.events_per_trading_day, 'transfer_since': args.transfer_since,
             'event_rates': [float(x) for x in args.event_rates.split(',')] if args.event_rates else None}
     p = build_plan(d, opts)
-    render(p, json.loads(Path(args.compare).read_text(encoding='utf-8')) if args.compare else None)
     out = Path(args.usage).with_suffix('.plan.json')
-    out.write_text(json.dumps(p, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
+    out.write_text(json.dumps(p, ensure_ascii=False, indent=1, default=str), encoding='utf-8')  # 출력이 실패해도 결과는 남긴다
+    render(p, json.loads(Path(args.compare).read_text(encoding='utf-8')) if args.compare else None)
     print('\nsaved', out)
 
 
