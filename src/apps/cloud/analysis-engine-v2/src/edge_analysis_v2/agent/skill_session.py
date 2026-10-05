@@ -43,9 +43,13 @@ class SkillSession:
         (self.artifacts / 'AGENTS.md').write_text(content, encoding='utf-8')
         self.readable = frozenset(self.documents) | {agents}
         # The SDK uses Claude, so explicitly include AGENTS.md without enabling project settings.
-        shared = [(SOURCE.parent / 'prompts' / name).read_text(encoding='utf-8')
-                  for name in COMMON_INSTRUCTIONS]
-        self.instruction = '\n\n' + '\n\n'.join([*shared, content])
+        self.research, self.contract = [(SOURCE.parent / 'prompts' / name).read_text(encoding='utf-8')
+                                       for name in COMMON_INSTRUCTIONS]
+        self.writing = content
+
+    def system_prompt(self, task_prompt: str) -> str:
+        """Put investigation and stopping rules before task and presentation details."""
+        return '\n\n'.join([self.research, task_prompt, self.contract, self.writing])
 
     def _readable(self, path):
         try:

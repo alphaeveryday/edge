@@ -94,7 +94,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
         skills = SkillSession(workspace, artifacts, kind, allowed)
-        prompt = prompt + skills.instruction
+        prompt = skills.system_prompt(prompt)
         options = ClaudeAgentOptions(
             model=model, system_prompt=prompt, tools=['Skill', 'Read'], allowed_tools=allowed + ['Read'],
             skills=skills.names, plugins=[{'type':'local', 'path':str(skills.plugin)}],
