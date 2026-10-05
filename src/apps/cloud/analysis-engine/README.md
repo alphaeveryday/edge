@@ -220,7 +220,7 @@ DB의 manifest URI와 checksum이 모두 없는 legacy row만 기존 generation 
 
 v1 자동 배포는 종료했다. 기존 가격변동 큐와 ECS 서비스는 유지하며, 현재 소비자는 v2 태스크 정의를 사용한다. 배포는 `.github/workflows/deploy-analysis-engine-v2.yml`이 담당한다. v1 태스크를 수동 실행하면 같은 사건을 중복 처리할 수 있으므로 운영 재처리는 [v2 실행 경로](../analysis-engine-v2/docs/price-automation.md)를 따른다.
 
-v1 소스와 태스크 정의는 후속 정리 대상이다. 적재 E2E 테스트가 이 모듈의 `EventStore`·`LakeReader`를 참조하며, `edge-dev-db-query` 태스크도 v1 이미지의 `edge_analysis query`를 사용한다. 소스·이미지 삭제 전에 두 의존성을 분리한다. 기존 조회 태스크가 사용하는 이미지는 보존한다. 이 배포 종료 변경은 DB·큐·ECS 서비스·적재 설정을 변경하지 않는다.
+v1 소비자 태스크와 전용 IAM 역할은 제거됐다. 적재 E2E 테스트는 가격 소비자와 롤업을 검증하며 v1 조회기를 참조하지 않는다. 남은 의존성은 `edge-dev-db-query` 태스크의 `edge_analysis query`다. 이 조회 기능을 분리하기 전까지 v1 소스와 해당 이미지를 보존한다.
 
 ## 스키마 계약
 
