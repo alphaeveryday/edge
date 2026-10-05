@@ -608,7 +608,8 @@ def run(args):
     quiet_start(args.pool_console)  # TRUNCATE 가 남은 트랜잭션에 막히기 전에 정리·거부한다
     reset(definitions=True)
     budget = pool_budget(args.pool_console)
-    if budget and budget != {'writer': args.writer_limit, 'reader': args.reader_limit}:
+    pool_writer = args.pool_writer or args.writer_limit  # 연결 몫 분리: 풀 writer 몫 < 역할 한도, 나머지는 직접 연결 몫
+    if budget and (budget != {'writer': pool_writer, 'reader': args.reader_limit} or pool_writer > args.writer_limit):
         raise SystemExit(f'풀 서버 연결 예산 {budget} 이 역할 한도 writer {args.writer_limit}·reader {args.reader_limit} 와 다르다')
     rng = random.Random(args.seed)
     profile = json.loads(Path(args.profile).read_text())['runs'] if args.profile else None
@@ -688,7 +689,7 @@ def run(args):
                   'tools': None if profile else args.tools, 'align_end_s': args.align_end, 'start_spread_s': args.start_spread,
                   'src_s': args.src, 'research_profile': args.research_profile or None, 'db': f'{args.db_host}:{args.port}',
                   'generator_net': args.net or 'host', 'generator_image': args.image if args.net else sys.version.split()[0],
-                  'psycopg': psycopg.__version__, 'policy': args.policy and {k: getattr(args, k) for k in
+                  'psycopg': psycopg.__version__, 'pool_writer': args.pool_writer or args.writer_limit, 'policy': args.policy and {k: getattr(args, k) for k in
                       ('policy', 'deadline', 'pool_wait', 'margin', 'backoff_cap')}, 'startup_options': args.startup_options, 'role_config': configs,
                   'pool_console': bool(args.pool_console), 'pool_budget': budget,
                   'role_limits': roles, 'server': settings(), 'seed': args.seed, 'detail': str(folder)}
@@ -739,6 +740,7 @@ if __name__ == '__main__':
                    help='연결 시작 옵션을 빼고 역할 기본값을 쓴다(PgBouncer 는 options 의 statement_timeout 을 거절한다)')
     p.add_argument('--pool-console', default='', help='PgBouncer 관리 콘솔 DSN. 주면 대기열·서버 연결·통계를 남긴다')
     p.add_argument('--seed', type=int, default=1157); p.add_argument('--label', default='')
+    p.add_argument('--pool-writer', type=int, default=0, help='풀 writer 서버 연결 상한(0 = --writer-limit). 역할 한도는 --writer-limit')
     p.add_argument('--policy', choices=['a', 'b', 'p'], default='', help='실험 정책(운영 코드 아님). a=풀 대기 초과 재시도 없음, b=지터 재시도')
     p.add_argument('--deadline', type=float, default=0, help='DB 단계 하나의 시간 예산(연결·풀 대기·SQL·재시도 대기, 단계 시작부터)')
     p.add_argument('--pool-wait', type=float, default=20, help='PgBouncer query_wait_timeout(실행 콘솔로 SET)')
