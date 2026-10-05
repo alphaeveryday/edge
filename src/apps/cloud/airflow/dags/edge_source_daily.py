@@ -33,6 +33,7 @@ DAG 는 생성 시 pause 다 — 켜는 절차와 결측 판정 env 는 README "
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import timedelta
 
@@ -45,6 +46,7 @@ from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, EdgeStep, pipeline_run_id,
                         reprocess_slot, run_key, run_status, settlement, slot_time)
 
+log = logging.getLogger(__name__)
 LANE = "source-daily"
 CRONS = ("20 5 * * *",)
 # 계열 → 단계 → (원장 task_key, 태스크 정의 키, CLI 스텝). tests/test_airflow_dag_contract.py 가 카탈로그와 대조한다.
@@ -173,6 +175,8 @@ def _notify_failure(context):
     except Exception as exc:     # XCom·로그 조회 실패, 마지막 태스크 정보가 없는 콜백 — 제목은 FAILED 그대로 둔다
         lines.append(f"상세를 만들지 못했다: {type(exc).__name__}: {exc}"[:300])
     SnsHook().publish_to_target(target_arn=ALARM_TOPIC, subject=subject[:99], message="\n".join(lines))
+    # 발행한 통보를 dag-processor 로그에도 남긴다 — 메일함 없이 제목·본문과 상세 조회 성공 여부를 확인할 수 있게.
+    log.info("실패 통보 발행: %s\n%s", subject[:99], "\n".join(lines))
 
 
 def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None = None,

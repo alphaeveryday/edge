@@ -206,6 +206,17 @@ def test_alert_stays_failed_unless_the_load_is_proven_complete(dag_module, monke
     assert expected in message and "적재됐다" not in message, case
 
 
+def test_published_alert_is_also_written_to_the_callback_log(dag_module, monkeypatch, caplog):
+    # WHY: 발행한 통보의 내용은 SNS 에 남지 않는다. 메일함을 열지 않고도 무엇이 나갔는지(제목, 상세 조회가 됐는지, 회사·사유)
+    # 확인하려면 콜백 로그에 같은 내용이 있어야 한다 — 상세를 만들지 못한 통보도 그 사실과 함께 남는다.
+    with caplog.at_level("INFO", logger=dag_module.__name__):
+        subject, message = _notify(dag_module, monkeypatch)
+        _notify(dag_module, monkeypatch, logs_error=RuntimeError("AccessDenied"))
+    published, fallback = [r.getMessage() for r in caplog.records if r.getMessage().startswith("실패 통보 발행: ")]
+    assert published == f"실패 통보 발행: {subject}\n{message}" and "코스모화학" in published
+    assert "[source-daily] FAILED — airflow" in fallback and "상세를 만들지 못했다: RuntimeError: AccessDenied" in fallback
+
+
 def test_alert_is_still_sent_when_the_callback_has_no_task_context(dag_module, monkeypatch):
     # WHY: Airflow 는 마지막 태스크 정보를 싣지 못한 콜백에 dag·run_id·reason 만 준다. 상세를 못 만든다고 통보 자체가
     # 예외로 사라지면 실패가 아무에게도 가지 않는다.
