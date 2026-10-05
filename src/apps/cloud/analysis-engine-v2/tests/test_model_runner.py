@@ -37,7 +37,12 @@ def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_pa
         key='test-secret', model='deepseek-flash', client_factory=Client, kind=kind))
 
     assert result == {'summary': 'ok'}
-    assert len(captured) == 1 and captured[0].startswith(prompt)
+    assert len(captured) == 1
+    research = (prompt_path.parent/'research.md').read_text(encoding='utf-8')
+    contract = (prompt_path.parent/'output-contract.md').read_text(encoding='utf-8')
+    writing = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
+    # Critical investigation rules must precede task details, even without any Skill call.
+    assert captured[0] == '\n\n'.join([research, prompt, contract, writing])
     assert 'analysis:hypothesis-analysis-workflow' in captured[0]
     assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
     assert (tmp_path/'AGENTS.md').read_text(encoding='utf-8') in captured[0]
