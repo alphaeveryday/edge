@@ -2,7 +2,9 @@
 
 `env` 를 destroy 해도 남아야 하는 공유자원을 `envs/*` 와 분리해 소유한다.
 
-## 현재 범위: 와일드카드 ACM
+## 현재 범위
+
+와일드카드 ACM(`acm.tf`, 아래 표), Route53 호스팅 영역(`route53.tf`, 기존 존 import), 이미지 ECR 저장소(`ecr.tf`), GitHub OIDC provider(`oidc.tf`), Terraform CD 역할 `edge-tf-plan`·`edge-tf-apply`(`tf-cd.tf`).
 
 | 자원 | 리전 | 소비자 |
 |------|------|--------|
@@ -13,7 +15,7 @@
 - 와일드카드라 **새 서브도메인(admin. 등) 추가 시 인증서 재발급 불필요** — env 는 이 인증서를 그대로 참조.
 - 두 인증서는 같은 도메인이라 DNS 검증 CNAME 이 동일 → 검증 레코드는 한 벌만 만들어 재사용.
 
-> 확장 예정(원 foundation 범위): 호스팅 영역 import, 앱 ECR, GitHub OIDC provider. clean slate 재건 중이라 지금은 ACM 부터.
+> 처음에는 ACM 부터 만들고 호스팅 영역 import·앱 ECR·GitHub OIDC provider 를 확장 예정으로 뒀다. 지금은 모두 위 "현재 범위"의 파일로 들어와 있다.
 
 ## env 에서 참조 (느슨한 결합)
 
