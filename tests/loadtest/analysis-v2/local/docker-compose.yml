@@ -32,3 +32,55 @@ services:
       FLYWAY_PASSWORD: local_only
     volumes:
       - ${EDGE_REPO}/src/libs/schema/migrations-cloud:/flyway/sql:ro
+  # load900.py --net 의 자식 프로세스 이미지. 호스트(macOS)에서 돌리면 Docker Desktop 포트 중계가 연결 폭주에
+  # 먼저 무너져, DB 와 같은 네트워크(-p v2load900 이면 v2load900_default)의 컨테이너로 띄운다.
+  generator:
+    image: v2load900-gen
+    profiles: ["generator"]
+    build:
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        RUN pip install --no-cache-dir "psycopg[binary]>=3.1" claude-agent-sdk==0.2.160 "PyYAML>=6" "jsonschema>=4" boto3
+  # 직접 연결과 비교할 transaction pooling. 서버 연결 예산은 역할 한도와 같게(writer 20·reader 6), 클라이언트 대기
+  # 상한은 워커 재시도 예산과 같게(20초) 둔다. 관리 콘솔(db=pgbouncer, user=v2_local)은 호스트 56432.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    profiles: ["pool"]
+    entrypoint: ["/usr/bin/pgbouncer", "/etc/pgbouncer-load/pgbouncer.ini"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:56432:6432"
+    ulimits:
+      nofile: 65536
+    configs:
+      - source: pgbouncer_ini
+        target: /etc/pgbouncer-load/pgbouncer.ini
+      - source: pgbouncer_users
+        target: /etc/pgbouncer-load/userlist.txt
+configs:
+  pgbouncer_ini:
+    content: |
+      [databases]
+      analysis_v2 = host=postgres port=5432 dbname=analysis_v2
+      [users]
+      edge_analysis_v2_writer = max_user_connections=20
+      edge_analysis_v2_reader = max_user_connections=6
+      [pgbouncer]
+      listen_addr = 0.0.0.0
+      listen_port = 6432
+      auth_type = scram-sha-256
+      auth_file = /etc/pgbouncer-load/userlist.txt
+      admin_users = v2_local
+      pool_mode = transaction
+      default_pool_size = 20
+      reserve_pool_size = 0
+      max_client_conn = 4000
+      query_wait_timeout = 20
+      max_prepared_statements = 200
+  pgbouncer_users:
+    content: |
+      "edge_analysis_v2_writer" "local_only"
+      "edge_analysis_v2_reader" "local_only"
+      "v2_local" "local_only"
