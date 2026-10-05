@@ -78,6 +78,7 @@ def test_tools_whose_results_changed_for_alpha_1130_carry_new_definition_version
     # date-only macro handling change these results, so keeping the old version would file pre- and post-change
     # executions under one definition and make saved evidence non-reproducible.
     versions = {d['function_name']: d['version'] for d in FixtureTools(valuation_fixture()).definitions}
+    assert versions['get_issue_evidence'] == 'v2'  # Citation description changed; stored definitions are immutable.
     assert {name: versions[name] for name in ('get_macro_observations', 'compare_macro_observations',
             'calculate_valuation', 'calculate_weighted_valuation', 'get_instrument_factors')} == {
         'get_macro_observations': 'v3', 'compare_macro_observations': 'v2', 'calculate_valuation': 'v2',

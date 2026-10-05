@@ -65,4 +65,6 @@ def test_database_factor_tool_version_moves_with_its_response_shape():
     tools = DatabaseTools(source() | {'prices': [], 'price_snapshots': []})
     versions = {d['function_name']: d['version'] for d in tools.definitions}
     assert versions['get_instrument_factors'] == 'database-v3'  # Stored macro/financial sources are now connected.
+    # The audit store also freezes descriptions: moved citation instructions need a new identity.
+    assert versions['get_issue_evidence'] == 'database-v2'
     assert versions['calculate_chart_indicators'] == 'database-v1'          # 모양이 안 바뀐 툴은 그대로

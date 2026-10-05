@@ -235,7 +235,9 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                 if path == '/api/analyses':
                     return self.reply(200, reader())
                 if path == '/api/instructions':
-                    documents = [('AGENTS.md', SOURCE.parent/'agent/workspace/AGENTS.md', '매 실행의 시스템 프롬프트에 추가되는 공통 지침')]
+                    documents = [('research.md', SOURCE.parent/'prompts/research.md', '항상 전달되는 조사·종료 기준'),
+                                 ('output-contract.md', SOURCE.parent/'prompts/output-contract.md', '항상 전달되는 출력·근거 계약'),
+                                 ('AGENTS.md', SOURCE.parent/'agent/workspace/AGENTS.md', '항상 전달되는 작성 원칙')]
                     documents += [(name, SOURCE/name/'SKILL.md', '필요할 때 선택해서 읽는 스킬') for name in SKILLS]
                     return self.reply(200, {'documents':[
                         {'id':name, 'source':str(source), 'usage':usage,

@@ -41,6 +41,10 @@ def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_pa
     assert 'analysis:hypothesis-analysis-workflow' in captured[0]
     assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
     assert (tmp_path/'AGENTS.md').read_text(encoding='utf-8') in captured[0]
+    # No Skill or Read call occurs: shared rules must reach both tasks regardless.
+    for name in ('research.md', 'output-contract.md'):
+        content = (prompt_path.parent/name).read_text(encoding='utf-8')
+        assert captured[0].count(content) == 1
 
 
 def test_valid_json_without_skill_calls_is_accepted_and_workspace_removed(tmp_path):
