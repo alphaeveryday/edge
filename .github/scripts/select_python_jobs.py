@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import tomllib
 
-APPS = ("analysis-engine", "data-pipeline")
+APPS = ("analysis-engine", "data-pipeline", "db-query")
 OPTIONAL = {
     "analysis-engine-v2": "apps/cloud/analysis-engine-v2",
     "edge-analysis-tools": "libs/analysis-tools",

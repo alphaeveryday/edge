@@ -213,6 +213,7 @@ jobs:
           uv run pytest
           apps/cloud/analysis-engine/tests/e2e
           apps/cloud/data-pipeline/tests/e2e
+          apps/cloud/db-query/tests/e2e
           apps/cloud/analysis-engine/tests/statics/test_evidence_save.py
           apps/cloud/data-pipeline/tests/minute/test_schema_vocab.py
           -q

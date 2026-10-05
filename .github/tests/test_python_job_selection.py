@@ -28,7 +28,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result["legacy"], [])
 
     def test_legacy_app_change_keeps_its_tests_build_and_integration(self):
-        for app in ("analysis-engine", "data-pipeline"):
+        for app in ("analysis-engine", "data-pipeline", "db-query"):
             with self.subTest(app=app):
                 result = self.select(f"src/apps/cloud/{app}/source.py")
                 self.assertEqual(result["legacy"], [app])
@@ -48,7 +48,7 @@ class SelectionTests(unittest.TestCase):
                      ".github/workflows/test-python.yml", ".github/scripts/select_python_jobs.py"):
             with self.subTest(path=path):
                 result = self.select(path)
-                self.assertEqual(result["legacy"], ["analysis-engine", "data-pipeline"])
+                self.assertEqual(result["legacy"], ["analysis-engine", "data-pipeline", "db-query"])
                 self.assertEqual(result["images"], result["legacy"])
                 self.assertTrue(result["e2e"])
 
@@ -65,7 +65,7 @@ class SelectionTests(unittest.TestCase):
     def test_shared_change_before_v2_registration_does_not_call_missing_package(self):
         result = self.select("src/uv.lock", available=())
         self.assertEqual(result["optional"], [])
-        self.assertEqual(len(result["legacy"]), 2)
+        self.assertEqual(len(result["legacy"]), 3)
 
     def test_calculation_library_can_be_introduced_before_agent(self):
         result = self.select("src/libs/analysis-tools/tool.py", available=("edge-analysis-tools",))
