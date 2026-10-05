@@ -189,3 +189,15 @@ def test_unfinished_batch_is_left_out_of_the_sample():
     p = ic.build_plan(d, {})
     assert p['batches'] == [] and p['unit']['outlook_per_target_day'] is None
     assert any('RUNNING' in n for n in p['meta']['notes'])
+
+
+def test_request_costs_follow_the_day_type_and_pipeline_transitions_are_counted():
+    d = usage()
+    d['apigw'] = {'api': {'2026-10-01': 1_000_000.0}}           # 거래일에만 호출
+    row = next(r for r in ic.build_plan(d, {'month_days': 30, 'month_trading': 20})['baseline'] if r['name'].startswith('Lambda'))
+    assert row['month'] == pytest.approx(1_000_000 * ic.PRICE['apigw_http_req'] * 20)   # 휴일에 섞어 평균내면 줄어든다
+    d = usage()
+    d['sfn']['edge-dev-data-pipeline'] = [{'name': 'eod', 'status': 'SUCCEEDED', 'start': ts('2026-10-01T15:40:00+09:00'), 'stop': None,
+                                           'transitions': 100, 'lambda_calls': 0, 'input': '{}', 'states': [], 'tasks': []}]
+    row = next(r for r in ic.build_plan(d, {'month_days': 30, 'month_trading': 20})['baseline'] if r['name'] == '배치 태스크 pipeline')
+    assert row['month'] == pytest.approx(100 * ic.PRICE['sfn_transition'] * 20)

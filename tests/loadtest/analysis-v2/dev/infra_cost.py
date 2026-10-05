@@ -484,6 +484,7 @@ def build_plan(d, opts):
             by = collections.defaultdict(float)
             unknown = 0
             for r in rs:
+                by[datetime.fromtimestamp(r['start'], KST).date().isoformat()] += r['transitions'] * PRICE['sfn_transition']  # SFN 상태 전이
                 for t in r['tasks']:
                     unknown += billing_state(t) == 'unknown'
                     if billed_seconds(t):
@@ -493,7 +494,7 @@ def build_plan(d, opts):
                 notes.append(f'{name}: 과금 시각을 모르는 태스크 {unknown}개 — N/A')
                 add('장중 경로', '실행량', name, None, None, 'N/A 과금 시각 결손')
             else:
-                add('장중 경로', '실행량', name, avg(by, trading), avg(by, other), 'SFN 과금 시간')
+                add('장중 경로', '실행량', name, avg(by, trading), avg(by, other), 'SFN 태스크 과금 시간 + 상태 전이')
     proc = {}
     for m in d['nat'].values():
         for x in cls['days']:
@@ -516,11 +517,14 @@ def build_plan(d, opts):
     add('공유 기반', '실행량', 'CloudWatch 로그 수집·보관', avg(ingest, trading) / 1e9 * PRICE['logs_ingest_gb'] + store,
         avg(ingest, other) / 1e9 * PRICE['logs_ingest_gb'] + store, '측정')
     valid = trading + other
-    lam = sum(sum(v['duration_ms'].get(x, 0) for x in valid) / 1000 * v['memory_mb'] / 1024 * PRICE['lambda_gb_s']
-              + sum(v['invocations'].get(x, 0) for x in valid) * PRICE['lambda_req'] for v in d['lambda'].values()) / len(valid)
-    sqs = sum(sum(m.get(x, 0) for x in valid) for v in d['sqs'].values() for m in v.values()) / len(valid) * PRICE['sqs_req']
-    api = sum(sum(v.get(x, 0) for x in valid) for v in d['apigw'].values()) / len(valid) * PRICE['apigw_http_req']
-    add('공유 기반', '실행량', 'Lambda·SQS·API Gateway', lam + sqs + api, lam + sqs + api, '측정, 무료 한도 미적용')
+
+    def requests_cost(ds):  # 거래일·휴일을 따로 평균 낸다(기준월의 거래일 비율이 표본과 다르다)
+        lam = sum(sum(v['duration_ms'].get(x, 0) for x in ds) / 1000 * v['memory_mb'] / 1024 * PRICE['lambda_gb_s']
+                  + sum(v['invocations'].get(x, 0) for x in ds) * PRICE['lambda_req'] for v in d['lambda'].values())
+        sqs = sum(sum(m.get(x, 0) for x in ds) for v in d['sqs'].values() for m in v.values()) * PRICE['sqs_req']
+        api = sum(sum(v.get(x, 0) for x in ds) for v in d['apigw'].values()) * PRICE['apigw_http_req']
+        return (lam + sqs + api) / len(ds)
+    add('공유 기반', '실행량', 'Lambda·SQS·API Gateway', requests_cost(trading), requests_cost(other), '측정, 무료 한도 미적용')
     lake = d['s3'].get(BUCKET, {}).get('objects', {})
     ks = sorted(k for k in lake if k in valid)
     if len(ks) >= 2:
