@@ -141,8 +141,8 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   행은 유형과 무관하게 뺀다 — 본문 객체 키도 canonical 병합 정체성도 rcept_no 라 **보존해도
   영영 못 쓰는 행**이고, 조용히 버리지 않고 `rows_dropped_malformed` 로 센다. 그래서 이 데이터셋은
   `records_saved`(보존 전량)와 `ops.records_out`(대상 건수 = `records_saved_target`)이 **의도적으로
-  다른 첫 로그**다 — 유실(`failed_records`)이 대상 스코프라 산출도 같은 스코프여야 한다(아래 ops
-  봉투의 스코프 규칙). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
+  다른 첫 로그**다 — 유실(`failed_records`)이 대상 스코프라 산출도 같은 스코프여야 한다([ops-ledger.md](ops-ledger.md) 의 ops
+  봉투 스코프 규칙). ⚠️ **그 키는 자기 run_id 파티션이 아닐 수 있다**
   (ALPHA-720): 같은 수집일(UTC 기준 ±1일)에 이미 받아 둔 본문은 다시 내려받지 않고 **기존 키를
   가리킨다**. 전량 대사와 증분 경계 페이지가 기존 행을 다시 내므로 이 장치가 같은 ZIP의 반복
   다운로드를 막는다. minute worker는 첫 조회의 본문 색인을 프로세스 생명 동안 되먹여 이후

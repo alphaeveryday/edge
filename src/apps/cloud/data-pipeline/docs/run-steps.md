@@ -45,7 +45,7 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 39종 중
 # 9종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 9종이 샌다).
 # 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
-# 컨테이너 사이로도 공유한다(ALPHA-573 — 아래 ingest-raw-nav 항목).
+# 컨테이너 사이로도 공유한다(ALPHA-573 — docs/deploy-schedule.md 의 ingest-raw-nav 항목).
 # 시장 SFN은 `--max-failed-symbols 1`을 명시한다(ALPHA-798). 고립 실패 1개는 exit 0이지만
 # collection log는 partial·failed_records=1을 보존해 원장에는 INCOMPLETE로 남는다. 2개 이상과
 # 저장 0건·신규편입 스캔 미완료는 비영이다. FMP·Yahoo는 양수 임계값을 거부해 엄격 모드다.
