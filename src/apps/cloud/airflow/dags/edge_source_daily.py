@@ -168,7 +168,8 @@ def _notify_failure(context):
     lines = [f"dag={context['dag'].dag_id} run={run_id} reason={context.get('reason')}"]
     try:
         soft, detail = _failure_report(context["ti"], context["dag"], run)
-        subject, lines = soft or subject, [*lines, *detail]
+        # SNS 제목은 100자 미만이다. 덧붙인 말 때문에 run 식별자가 잘리면 종전 제목을 쓴다(판정 문장은 본문에 그대로 있다).
+        subject, lines = soft if soft and len(soft) < 100 else subject, [*lines, *detail]
     except Exception as exc:     # XCom·로그 조회 실패, 마지막 태스크 정보가 없는 콜백 — 제목은 FAILED 그대로 둔다
         lines.append(f"상세를 만들지 못했다: {type(exc).__name__}: {exc}"[:300])
     SnsHook().publish_to_target(target_arn=ALARM_TOPIC, subject=subject[:99], message="\n".join(lines))

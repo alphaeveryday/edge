@@ -113,7 +113,8 @@ _UNSUPPORTED = {"dataset": "financial_metric", "failed": 2, "gaps": 9, "classes"
      "metric": "bps", "reasons": ["bps_share_class_label_unsupported"], "class": "unsupported"} for fs in ("CFS", "OFS")]}
 
 
-def _notify(dag_module, monkeypatch, *, codes=None, summary=_UNSUPPORTED, holds=None, logs_error=None, context=None):
+def _notify(dag_module, monkeypatch, *, codes=None, summary=_UNSUPPORTED, holds=None, logs_error=None, context=None,
+            run_id="scheduled__2026-10-04T20:20:00+00:00"):
     """실패 콜백을 한 번 돌려 SNS 로 나간 (제목, 본문)을 돌려준다. 기본은 재무 정제만 exit 2 인 run."""
     import json
 
@@ -144,7 +145,7 @@ def _notify(dag_module, monkeypatch, *, codes=None, summary=_UNSUPPORTED, holds=
     xcom.update({(s, "ecs_task_arn"): "arn:aws:ecs:ap-northeast-2:0:task/edge-dev-worker/abc123" for s in exit_codes})
     xcom.update({(s, "hold"): h for s, h in (holds or {}).items()})
     ti = SimpleNamespace(xcom_pull=lambda task_ids, key: xcom.get((task_ids, key)))
-    run = SimpleNamespace(run_id="scheduled__2026-10-04T20:20:00+00:00", dag_id="edge_source_daily", conf={})
+    run = SimpleNamespace(run_id=run_id, dag_id="edge_source_daily", conf={})
     dag_module._notify_failure(context or {"dag": dag_module.dag, "dag_run": run, "ti": ti, "reason": "task_failure"})
     assert len(sent) == 1
     return sent[0]
@@ -165,6 +166,15 @@ def test_alert_says_loaded_only_when_every_reject_is_unsupported_notation(dag_mo
     assert "financial_normalize=2" in message and "financial_load=0" in message
     assert "financial_normalize: 거부 2건(unsupported 2) · 결손 9건" in message
     assert "  - 00160302 코스모화학 2026 11012 CFS bps: bps_share_class_label_unsupported [unsupported]" in message
+
+
+def test_long_run_id_keeps_the_plain_subject_so_the_identifier_is_not_cut(dag_module, monkeypatch):
+    # WHY(로컬 리뷰): SNS 제목은 100자 미만이다. "적재 완료"를 덧붙인 제목이 그 길이를 넘으면 뒤쪽의 run 식별자가 잘려
+    # 뒤만 다른 백필 run 들을 제목으로 구별할 수 없다. 그때는 종전 제목을 쓰고 판정은 본문에 둔다.
+    run_id = "manual__2026-10-05T05:20:00+09:00__financial_backfill_2025"
+    subject, message = _notify(dag_module, monkeypatch, run_id=run_id)
+    assert subject == f"[source-daily] FAILED — airflow {run_id}" and len(subject) < 100
+    assert "만들어진 지표는 적재됐다" in message and f"run={run_id} " in message
 
 
 def test_alert_for_a_rerun_without_item_lines_points_to_the_quality_log(dag_module, monkeypatch):
