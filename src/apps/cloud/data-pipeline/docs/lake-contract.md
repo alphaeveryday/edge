@@ -186,7 +186,7 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   legacy 키는 `canonical/market_data/etf_inav_minute/market=KR/session_date=…/window=HHMM/
   generation=…/inav.ndjson` 이고, dev(content_v2)의 키는 위 "Minute 내용 주소 후보·확정·소비
   계약" 절을 따른다. 쓰는 주체는 상주 iNAV Worker 다(ALPHA-851·882 —
-  `run inav-worker`, 아래 "상주 iNAV Worker" 절).
+  `run inav-worker`, [ops-ledger.md](ops-ledger.md) 의 "상주 iNAV Worker" 항목).
   `ingest-raw-inav` 스텝은 **산출물이 로그**다(raw 는 무변형 보존이라 판단 재료가 로그뿐이다). 그래서
   로그 사전이 곧 계약이다 — ETF 마다 다음이 나온다:
 

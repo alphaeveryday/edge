@@ -177,7 +177,7 @@ SFN 정의·Reconciler 슬롯 대조는 남는다. 전환·롤백 절차는 [`sr
 - `ingest-raw-inav`(국내 ETF **장중** iNAV, **kis 세트** — 일별 NAV 와 같은 앱키·유니버스)
   — **SFN 에 편입돼 있지 않다.** 위 raw 페이즈 잡 목록에 없고 `statemachine.tf` 에도 없다.
   이 raw 스텝은 **손으로 돌릴 때만** 돈다. 장중 iNAV 자동 수집은 이 스텝이 아니라 상주
-  `inav-worker`(ALPHA-882)가 canonical 로 직접 한다(아래 "상주 iNAV Worker" 절). 잘못된 시각에 돌리는 것 자체는 아래 가드가 막는다.
+  `inav-worker`(ALPHA-882)가 canonical 로 직접 한다([ops-ledger.md](ops-ledger.md) 의 "상주 iNAV Worker" 항목). 잘못된 시각에 돌리는 것 자체는 아래 가드가 막는다.
   - 일별(`FHPST02440200`)과 **시장코드가 갈린다**: iNAV 는 `FID_COND_MRKT_DIV_CODE="E"`, 일별은 `"J"`.
     `"J"` 로 보내면 전건 `rt_cd=2` 로 튕긴다(실측).
   - ⚠️ **소급 백필이 없다.** 날짜·시각 지정이 무시돼 항상 "지금 기준 최근 30행"만 온다 —
