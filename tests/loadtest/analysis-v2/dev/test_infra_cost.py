@@ -41,7 +41,9 @@ def usage():
         'ecr_gb': {'r': 10.0}, 'ecr_unique_gb': {'r': 5.0},
         's3': {ic.BUCKET: {'gb': {'2026-10-03': 1e9}, 'objects': {'2026-10-01': 100.0, '2026-10-03': 400.0}}},
         'counts': {'secrets': 1, 'alarms': 0, 'cloudmap_instances': 0, 'route53_zones': 1},
-        'nat': {'n': {'BytesInFromSource': day, 'BytesInFromDestination': {}, 'BytesOutToDestination': day, 'BytesOutToSource': {}}},
+        # NAT 는 트래픽이 없어도 날마다 점을 남긴다(0 값)
+        'nat': {'n': {'BytesInFromSource': day, 'BytesInFromDestination': {'2026-10-01': 0.0, '2026-10-03': 0.0},
+                      'BytesOutToDestination': day, 'BytesOutToSource': {}}},
         'logs': {'stored_gb': 0.0, 'ingest_bytes': {}}, 'lambda': {}, 'sqs': {}, 'apigw': {},
         'sfn': {'edge-dev-analysis-v2-outlook-batch': [{'name': 'sched', 'status': 'SUCCEEDED', 'start': ts('2026-10-01T06:00:05+09:00'),
                                                          'stop': ts('2026-10-01T07:00:00+09:00'), 'transitions': 20, 'lambda_calls': 0,
@@ -164,3 +166,26 @@ def test_missing_nat_metrics_are_na_and_render_survives_na():
     assert next(r for r in p['baseline'] if r['name'].startswith('NAT 처리'))['month'] is None
     del d['run_objects']
     ic.render(ic.build_plan(d, {}))   # N/A 가 섞여도 출력이 죽지 않는다
+
+
+def test_partial_gaps_are_na_too():
+    d = usage()
+    del d['nat']['n']['BytesInFromSource']['2026-10-03']        # 휴일 하루만 점이 없다
+    assert next(r for r in ic.build_plan(d, {})['baseline'] if r['name'].startswith('NAT 처리'))['month'] is None
+    d = usage()
+    d['s3'][ic.BUCKET]['objects'] = {'2026-10-03': 400.0}       # 관측 1개로는 증가를 못 낸다 — 행이 사라지지 않고 N/A
+    assert next(r for r in ic.build_plan(d, {})['baseline'] if r['name'].startswith('S3 PUT'))['month'] is None
+    d = usage()
+    d['sfn']['edge-dev-data-pipeline'] = [{'name': 'eod', 'status': 'SUCCEEDED', 'start': ts('2026-10-01T15:40:00+09:00'), 'stop': None,
+                                           'transitions': 5, 'lambda_calls': 0, 'input': '{}', 'states': [],
+                                           'tasks': [{'parsed': False, 'cpu': 0, 'memory': 0, 'pull_start': None, 'stopped': None}]}]
+    p = ic.build_plan(d, {})
+    assert next(r for r in p['baseline'] if r['name'] == '배치 태스크 pipeline')['month'] is None
+
+
+def test_unfinished_batch_is_left_out_of_the_sample():
+    d = usage()
+    d['sfn']['edge-dev-analysis-v2-outlook-batch'][0].update(status='RUNNING', stop=None)
+    p = ic.build_plan(d, {})
+    assert p['batches'] == [] and p['unit']['outlook_per_target_day'] is None
+    assert any('RUNNING' in n for n in p['meta']['notes'])

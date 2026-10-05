@@ -319,6 +319,9 @@ def avg(series, ds):
 
 # ---------------------------------------------------------------- plan
 
+FINISHED = ('SUCCEEDED', 'FAILED')  # 정기 배치는 항목 실패가 있어도 끝까지 돌고 FAILED 로 끝난다
+
+
 def scheduled_batches(d, names=None, hour=6):
     """정기 전망 배치와 그 자식 분석 실행. 이름을 주면 그 실행만, 아니면 hour:00~hour:10 KST 에 시작한 배치."""
     batches = []
@@ -327,6 +330,9 @@ def scheduled_batches(d, names=None, hour=6):
         if names and b['name'] not in names:
             continue
         if not names and not (st.hour == hour and st.minute < 10):
+            continue
+        if b['status'] not in FINISHED:  # 도는 중·중단된 배치는 자식 표본이 덜 찼다
+            batches.append({'batch': b, 'children': None, 'date': st.date().isoformat(), 'matched_by': None})
             continue
         stop = b['stop'] or float('inf')
         at = at_of(b)  # 배치가 자식에게 같은 기준시각을 넘긴다 — 시간 창이 겹친 수동 실행을 거른다
@@ -388,7 +394,9 @@ def build_plan(d, opts):
     # --- 분석 단가(실제 누적 과금 기반)
     batches = scheduled_batches(d, o.get('batches'), o['batch_hour'])
     per_batch = []
-    for b in batches:
+    for b in [b for b in batches if b['children'] is None]:
+        notes.append(f"정기 배치 {b['batch']['name']} 상태 {b['batch']['status']} — 끝나지 않아 표본에서 뺐다")
+    for b in [b for b in batches if b['children'] is not None]:
         c = analysis_cost(b['children'], d.get('run_objects'), o['tokens_mb']['outlook'])
         c['sfn'] += b['batch']['transitions'] * PRICE['sfn_transition']
         targets = len({etf_of(r) for r in b['children'] if etf_of(r)})
@@ -474,23 +482,31 @@ def build_plan(d, opts):
     for sm, rs in sorted(d['sfn'].items()):
         if sm.startswith('edge-dev-data-pipeline'):
             by = collections.defaultdict(float)
+            unknown = 0
             for r in rs:
                 for t in r['tasks']:
+                    unknown += billing_state(t) == 'unknown'
                     if billed_seconds(t):
                         by[datetime.fromtimestamp(r['start'], KST).date().isoformat()] += fargate_hourly(t['cpu'], t['memory']) * billed_seconds(t) / 3600
-            add('장중 경로', '실행량', f"배치 태스크 {sm.replace('edge-dev-data-pipeline', 'pipeline')}", avg(by, trading), avg(by, other), 'SFN 과금 시간')
+            name = f"배치 태스크 {sm.replace('edge-dev-data-pipeline', 'pipeline')}"
+            if unknown:
+                notes.append(f'{name}: 과금 시각을 모르는 태스크 {unknown}개 — N/A')
+                add('장중 경로', '실행량', name, None, None, 'N/A 과금 시각 결손')
+            else:
+                add('장중 경로', '실행량', name, avg(by, trading), avg(by, other), 'SFN 과금 시간')
     proc = {}
     for m in d['nat'].values():
         for x in cls['days']:
             proc[x] = proc.get(x, 0) + m['BytesInFromSource'].get(x, 0) + m['BytesInFromDestination'].get(x, 0)
-    nat_seen = any(x in m[k] for m in d['nat'].values() for k in ('BytesInFromSource', 'BytesInFromDestination') for x in trading + other)
-    if nat_seen:
+    # NAT 는 트래픽이 없어도 점을 남긴다 — 유효한 날에 점이 없으면 0 이 아니라 결손이다
+    nat_gaps = sorted({x for m in d['nat'].values() for k in ('BytesInFromSource', 'BytesInFromDestination') for x in trading + other if x not in m[k]})
+    if d['nat'] and not nat_gaps:
         nat_t, nat_o = avg(proc, trading) / 1e9, avg(proc, other) / 1e9
         add('공유 기반', '실행량', f'NAT 처리 {nat_t:.2f}/{nat_o:.2f} GB(거래일/휴일)', nat_t * PRICE['nat_gb'], nat_o * PRICE['nat_gb'],
             '소스 입력 + 목적지 입력(바이트마다 한 번)')
     else:
         nat_t = nat_o = None
-        notes.append('NAT 처리 지표가 유효한 날에 하나도 없다 — NAT 처리 N/A')
+        notes.append(f'NAT 처리 지표 결손 {nat_gaps or "게이트웨이 없음"} — NAT 처리 N/A')
         add('공유 기반', '실행량', 'NAT 처리', None, None, 'N/A 지표 없음')
     ingest = collections.defaultdict(float)
     for g in d['logs']['ingest_bytes'].values():
@@ -521,6 +537,9 @@ def build_plan(d, opts):
             new_objects = max(0, lake[ks[-1]] - lake[ks[0]] - analysis_objects) / elapsed
             add('공유 기반', '실행량', f'S3 PUT 하한(분석 외 새 객체 {new_objects:.0f}/일)', new_objects * PRICE['s3_put_1k'] / 1000,
                 new_objects * PRICE['s3_put_1k'] / 1000, f'{ks[0]}~{ks[-1]} 객체 수 증가 − 분석 산출물. 덮어쓰기·GET 미포함')
+    else:
+        notes.append(f'버킷 객체 수 관측 {len(ks)}개(<2) — 분석 외 PUT 하한 N/A')
+        add('공유 기반', '실행량', 'S3 PUT 하한(분석 외)', None, None, 'N/A 객체 수 관측 부족')
 
     def known_vcpu(ds):
         svc = sum(int(s['cpu']) / 1024 * avg(s['running_minutes'], ds) / 60 for s in d['services'] if s['cpu'])

@@ -1250,7 +1250,7 @@ docker compose -p v2load900 --profile pool down
 - **실제 청구가 아니다.** Cost Explorer는 조직 SCP가 명시 거부해 우회하지 않았다. 무료 한도는 빼지 않았다(상한).
 - 이 금액은 **dev 계정 환경 전체**의 추정이다. 분석 워커만의 비용이 아니며 공유 기반과 다른 서비스를 포함한다.
 - LLM API 요금은 넣지 않았다(사용자 확인 약 $1/일, 재산정 보류). 모델 요청이 NAT를 지나는 전송량만 인프라로 셌다.
-- 계산: `dev/infra_cost.py`의 `collect`(읽기 전용 조회), `calc`(구간 진단), `plan`(이 절의 표와 `.plan.json`). 검증은 `dev/test_infra_cost.py`(고정 입력 11건)다.
+- 계산: `dev/infra_cost.py`의 `collect`(읽기 전용 조회), `calc`(구간 진단), `plan`(이 절의 표와 `.plan.json`). 검증은 `dev/test_infra_cost.py`(고정 입력 13건)다.
 
 #### 요약
 
@@ -1421,7 +1421,7 @@ SFN 이력에 남은 태스크 시각(`CreatedAt`·`PullStartedAt`·`PullStopped
 | KIS 호출당 바이트 상한 | 23 KB | 27 KB | 휴일 NAT 평균이 바뀜 |
 | 확대 추가 S1 / S2 | $130~204 / $381~592 | **$127~195 / $375~567** | 위 단가 변경 |
 | 정기 배치 자식 선택 | 배치 실행 시간 창 | 배치와 같은 `analysis_at` | 시간 창이 겹친 수동 실행이 섞이지 않게(이번 표본에는 영향 없음) |
-| 결손 처리 | 일부 결손을 0으로 계산 | N/A로 전파 | 과금 시각·S3 목록·NAT 지표 결손이 비용 0으로 확정되던 경로를 막음 |
+| 결손 처리 | 일부 결손을 0으로 계산 | N/A로 전파 | 과금 시각(분석·배치 태스크)·S3 목록·객체 수 관측·NAT 날짜별 결손이 비용 0으로 확정되던 경로를 막음. 끝나지 않은 정기 배치는 표본에서 뺌 |
 
 #### 7.8 DB 대량 송신과 전송 비용
 
@@ -1501,7 +1501,7 @@ AWS_PROFILE=edge uv run --no-project --with boto3 python infra_cost.py collect -
 python3 infra_cost.py calc results/infra-usage-20260922-20261006.json                                                 # 태스크 구간·자리 점유·CPU 진단
 python3 infra_cost.py plan results/infra-usage-20260922-20261006.json --transfer-since 2026-10-02 --compare <이전 .plan.json>
 # 정기 배치를 직접 지정: --batch <실행 이름>(여러 번), 거래일 지정: --trading-days 2026-10-06,2026-10-07, 가정 변경: --events-per-trading-day·--event-rates
-uv run --no-project --with pytest python -m pytest test_infra_cost.py -q                                              # 고정 입력 11건
+uv run --no-project --with pytest python -m pytest test_infra_cost.py -q                                              # 고정 입력 13건
 ```
 
 - 이 절의 숫자는 10-05 23:51에 수집한 표본에 실행별 S3 객체 목록(10-06 조회)만 덧붙여 다시 계산한 값이다.
