@@ -113,7 +113,7 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 
 - `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
 - `analysis-engine-v2`의 큐 소비자가 분석 SFN을 시작합니다. v2 워커가 설명·근거를 저장하고 자동 노출 및 테넌트 전달을 처리합니다. 운영 DB의 일회성 조회는 `db-query`를 사용합니다. v1 소스는 제거됐으며 이전 설계 기록은 ADR과 Git 이력에 남습니다.
-- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../src/apps/cloud/data-pipeline/README.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
+- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../src/apps/cloud/data-pipeline/docs/ops-ledger.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)이 관통합니다([docs/context.md](context.md) §3) — Screening 은 활성 정책(policy_version·screening_rule)을 평가해 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 로 분기하며(ALPHA-429), 정정(CORRECTION) 전달은 폐지됐고 무효화(INVALIDATION)가 유일한 사후 조치이며([ADR-0044](adr/0044-correction-abolition.md)), 점검 Audit 은 후속(ALPHA-431)입니다.
 
