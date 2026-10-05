@@ -1,6 +1,6 @@
 """Small deterministic helpers for fixture-bound calculations."""
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Context, Decimal
 
 
 def instant(value):
@@ -57,10 +57,15 @@ def holdings(fixture, day=None, *, require_complete=True):
     latest = max((r["as_of_date"] for r in rows), default=None)
     rows = [r for r in rows if r["as_of_date"] == latest]
     weights = [decimal(r["weight"]) for r in rows]
-    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or not 0 < sum(weights) <= 1:
+    # Weights are stored as doubles, which carry 15 significant decimal digits, so the sum is judged at 15 digits:
+    # a snapshot whose equities are exactly 100.00% must not read as 1.0000000000000000362 because 27.94% was
+    # stored as 0.27940000000000004 (ALPHA-1162). This is deliberate: a sum that differs from one only below
+    # that precision (1.000000000000004) is not told apart from one. Sources publish weights to four decimals.
+    total = Context(prec=15).plus(sum(weights))
+    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or not 0 < total <= 1:
         raise ValueError("complete positive equity weights summing to one required")
     statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
-    complete = sum(weights) == 1
+    complete = total == 1
     if statuses:
         if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
             raise ValueError('holdings status does not match observed rows')
@@ -69,7 +74,7 @@ def holdings(fixture, day=None, *, require_complete=True):
         raise ValueError('complete positive equity weights summing to one required')
     result = {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
     if statuses:
-        result.update(coverage='full' if complete else 'partial', observed_weight_ratio=number(sum(weights)))
+        result.update(coverage='full' if complete else 'partial', observed_weight_ratio=number(total))
     return result
 
 
