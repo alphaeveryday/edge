@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import tomllib
 
-APPS = ("analysis-engine", "data-pipeline", "db-query")
+APPS = ("data-pipeline", "db-query")
 OPTIONAL = {
     "analysis-engine-v2": "apps/cloud/analysis-engine-v2",
     "edge-analysis-tools": "libs/analysis-tools",
@@ -118,4 +118,4 @@ if __name__ == "__main__":
             print(f"{key}={json.dumps(value, separators=(',', ':'))}")
         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(summary, "a", encoding="utf-8") as stream:
-                stream.write("## Python test scope\n\nSchema-only changes keep real DB E2E; v1 changes keep v1 tests/builds; shared changes keep all registered packages.\n\n```json\n" + json.dumps(plan, indent=2) + "\n```\n")
+                stream.write("## Python test scope\n\nSchema-only changes keep real DB E2E; application changes keep their tests/builds; shared changes keep all registered packages.\n\n```json\n" + json.dumps(plan, indent=2) + "\n```\n")

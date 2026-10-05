@@ -28,7 +28,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result["legacy"], [])
 
     def test_legacy_app_change_keeps_its_tests_build_and_integration(self):
-        for app in ("analysis-engine", "data-pipeline", "db-query"):
+        for app in ("data-pipeline", "db-query"):
             with self.subTest(app=app):
                 result = self.select(f"src/apps/cloud/{app}/source.py")
                 self.assertEqual(result["legacy"], [app])
@@ -48,14 +48,14 @@ class SelectionTests(unittest.TestCase):
                      ".github/workflows/test-python.yml", ".github/scripts/select_python_jobs.py"):
             with self.subTest(path=path):
                 result = self.select(path)
-                self.assertEqual(result["legacy"], ["analysis-engine", "data-pipeline", "db-query"])
+                self.assertEqual(result["legacy"], ["data-pipeline", "db-query"])
                 self.assertEqual(result["images"], result["legacy"])
                 self.assertTrue(result["e2e"])
 
-    def test_mixed_changes_do_not_hide_another_developers_v1_work(self):
+    def test_mixed_changes_preserve_query_package_checks(self):
         result = self.select("src/apps/cloud/analysis-engine-v2/agent.py",
-                             "src/apps/cloud/analysis-engine/agent.py")
-        self.assertEqual(result["legacy"], ["analysis-engine"])
+                             "src/apps/cloud/db-query/query.py")
+        self.assertEqual(result["legacy"], ["db-query"])
         self.assertTrue(result["e2e"])
 
     def test_docs_only_has_no_heavy_jobs(self):
@@ -65,7 +65,7 @@ class SelectionTests(unittest.TestCase):
     def test_shared_change_before_v2_registration_does_not_call_missing_package(self):
         result = self.select("src/uv.lock", available=())
         self.assertEqual(result["optional"], [])
-        self.assertEqual(len(result["legacy"]), 3)
+        self.assertEqual(len(result["legacy"]), 2)
 
     def test_calculation_library_can_be_introduced_before_agent(self):
         result = self.select("src/libs/analysis-tools/tool.py", available=("edge-analysis-tools",))
@@ -121,7 +121,7 @@ class SelectionTests(unittest.TestCase):
     def test_schema_reading_tests_remain_in_real_database_job(self):
         workflow = (Path(__file__).parents[1] / "workflows/test-python.yml").read_text(encoding="utf-8")
         e2e = workflow.split("\n  e2e:\n", 1)[1].split("\n  python-result:\n", 1)[0]
-        self.assertIn("tests/statics/test_evidence_save.py", e2e)
+        self.assertIn("apps/cloud/db-query/tests/e2e", e2e)
         self.assertIn("tests/minute/test_schema_vocab.py", e2e)
 
     def test_git_rename_preserves_deleted_source_scope(self):
@@ -130,12 +130,12 @@ class SelectionTests(unittest.TestCase):
             def git(*args):
                 return subprocess.check_output(["git", *args], cwd=folder)
             git("init", "-q")
-            file = Path(folder) / "src/apps/cloud/analysis-engine/source.py"
+            file = Path(folder) / "src/apps/cloud/db-query/source.py"
             file.parent.mkdir(parents=True)
             file.write_text("original content")
             git("add", ".")
             git("-c", "user.name=CI", "-c", "user.email=ci@example.invalid", "commit", "-qm", "base")
-            git("mv", "src/apps/cloud/analysis-engine/source.py", "moved.py")
+            git("mv", "src/apps/cloud/db-query/source.py", "moved.py")
             paths = git("diff", "--cached", "--no-renames", "--name-only", "-z").decode().split("\0")
             result = selection.select_jobs(paths, set())
-            self.assertIn("analysis-engine", result["legacy"])
+            self.assertIn("db-query", result["legacy"])
