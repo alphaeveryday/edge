@@ -2,7 +2,7 @@
 
 유한 배치(SFN 5개)의 **실행 관리**를 레인별로 Airflow로 옮긴다. 업무 실행은 그대로 `data-pipeline`의 ECS 태스크 정의와 `data_pipeline.run` 명령이 맡는다. 상주 분 수집기와 SQS 소비자는 대상이 아니다.
 
-현재 상태(2026-10-03 15:52): **장중 수급은 Airflow 가 상시 운영한다.** 10-03 전환(#1105) — SFN 스케줄 5개 DISABLED, 실행 주체 AIRFLOW, `edge_investor_intraday` unpause. 첫 실행은 10-05 09:35(휴장일 — 업무 없이 끝나는 run), 첫 실제 수집은 10-06 09:35 다. SFN 상태 머신은 롤백용으로 남아 있다. 원천 관측 `edge_source_daily` 는 pause(수급 첫 거래일 정상 확인 뒤 활성화). 결과는 아래 "첫 운영 전환 실행안"의 "전환 결과(10-03)".
+현재 상태(2026-10-03 15:52): **장중 수급은 Airflow 가 상시 운영한다.** 10-03 전환(#1105) — SFN 스케줄 5개 DISABLED, 실행 주체 AIRFLOW, `edge_investor_intraday` unpause. 첫 실행은 10-05 09:35(휴장일 — 업무 없이 끝나는 run), 첫 실제 수집은 10-06 09:35 다. SFN 상태 머신은 롤백용으로 남아 있다. 원천 관측 `edge_source_daily` 는 같은 날 뒤에 unpause 해 매일 05:20 KST 에 돈다(현재 상태는 아래 "원천 관측 레인"의 표). 결과는 아래 "첫 운영 전환 실행안"의 "전환 결과(10-03)".
 
 ## 구성
 
@@ -40,7 +40,7 @@
 - **활성화 시 지난 슬롯을 돌리지 않는다.** 3.3.2 `CronTriggerTimetable`은 `run_immediately=False`를 "다음 슬롯까지 대기"로 문서화했다. 그러나 코드는 슬롯 뒤 max(다음 발화까지 간격의 10%, 5분) 안이면 그 슬롯을 즉시 만든다. 하루 1회 cron이라 창이 2.4시간이다. 로컬 관찰: 11:25 슬롯이 11:45 unpause에 즉시 실행됐다. 그래서 `run_immediately=timedelta(0)`을 쓴다(테스트가 실제 timetable로 확인).
 - **exit code.** 해석 규칙은 `EdgeStep`·`ecs_verdict` 독스트링과 아래 "재시도·재접속·보류 정책"에 있다. 요약하면 다음과 같다.
   - 0은 성공이다.
-  - 정제·적재의 2는 부분 실패다. 현재 구현은 하류를 계속 돌리고 verdict에서 런을 실패로 마감한다. 기존 SFN은 원래 같은 규칙("exit 2면 계속")을 선언했지만 `runTask.sync`의 실패 경로가 exit를 싣지 않아 도달하지 못했고, #958(ALPHA-1113, 2026-09-28 dev 머지)이 그 경로를 고쳐 **지금은 두 경로가 같게 동작한다.** 정책 자체는 여전히 팀 결정 항목이다(아래 "활성화 전 결정").
+  - 정제·적재의 2는 부분 실패다. 현재 구현은 하류를 계속 돌리고 verdict에서 런을 실패로 마감한다. 기존 SFN은 원래 같은 규칙("exit 2면 계속")을 선언했지만 `runTask.sync`의 실패 경로가 exit를 싣지 않아 도달하지 못했고, #958(ALPHA-1113, 2026-09-28 dev 머지)이 그 경로를 고쳐 **지금은 두 경로가 같게 동작한다.** 정책은 2026-10-02 에 현행 유지(선택 2)로 정했다(아래 "첫 운영 전환 실행안"의 "확정한 결정").
   - 컨테이너가 스스로 끝낸 그 밖의 비0은 업무 실패다. Airflow가 재시도하지 않는다.
   - 75(업무 미시작)와 기동 실패만 재시도한다. exit code가 없거나 외부 종료(StopTask 등)로 끝난 것은 "결과 미상"이라 **보류**한다. "종료 코드 없음 = 인프라 실패 = 재시도"로 다루지 않는다.
 - **중복 실행.** 다섯 경우를 구분한다.
@@ -192,8 +192,8 @@ python3 lab.py scenario-holiday     # 휴장일 계획·수집 skip, 같은 logi
 python3 lab.py scenario-report      # DAG 판정 보고 → orchestration_status
 python3 lab.py scenario-trace       # attempt ↔ Airflow try 참조, 응답 유실 뒤 DUPLICATE_SKIP
 python3 lab.py scenario-lockloss    # 실행권 커넥션 상실 중 다른 실행 진입(경계 재현)
-python3 lab.py scenario-hold        # 실행 상태 불명 시 보류(V1~V8, 16개 확인) — 결과: results/hold-summary.md
-python3 lab.py scenario-unsettled   # 결말 없는 실행(수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거) — 결과: results/hold-summary.md
+python3 lab.py scenario-hold        # 실행 상태 불명 시 보류(V1~V8, 16개 확인) — 결과: results/hold-summary.md(로컬, 커밋하지 않는다)
+python3 lab.py scenario-unsettled   # 결말 없는 실행(수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거) — 결과: results/hold-summary.md(로컬, 커밋하지 않는다)
 # DAG 계약 테스트 — CI(test-airflow.yml)와 같은 이미지·명령
 docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro --entrypoint bash \
   apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1 \
@@ -214,18 +214,18 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 |---|---|---|
 | 실행 방식 | 일반 ECS on EC2(ASG + Capacity Provider) | ECS Managed Instances 가 아니다(별도 관리 요금). MWAA 는 SCP 거부 |
 | 클러스터 | 전용 `edge-dev-airflow` | worker 클러스터의 capacity provider 목록은 `aws_ecs_cluster_capacity_providers` 가 통째로 소유한다. EC2 용량을 더하면 기존 리소스를 고치게 된다. 클러스터는 무료다 |
-| 호스트 | **검증 중: t4g.micro**(arm64, 2 vCPU·1 GiB) 1대, ASG `host_count`(1/0) | 로컬은 호스트 몫을 가정해 micro 를 불가로 봤다(아래 "사양 검증") — 실제 EC2 로 다시 잰다("실제 AWS 단기 검증"). 모자라면 같은 조건의 t4g.small. medium 은 small 이 모자란 근거가 없다 |
+| 호스트 | **t4g.small**(arm64, 2 vCPU·2 GiB) 1대, ASG `host_count`(1/0) | micro 는 로컬 사양 검증과 실제 EC2 검증 모두에서 불가였다(아래 "사양 검증"·"실제 AWS 단기 검증 결과"). medium 은 small 이 모자란 근거가 없다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
 | Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1 | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
 | Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
 | 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
-| 메타DB | **검증 중: 기존 업무 RDS 안의 전용 DB `airflow`·역할 `airflow_meta`** | 아래 "메타DB"·"실제 AWS 단기 검증". 재사용 확정은 그 결과 뒤 |
+| 메타DB | **기존 업무 RDS(`edge-dev`) 안의 전용 DB `airflow`·역할 `airflow_meta`** | 아래 "메타DB"·"실제 AWS 단기 검증". 2026-10-02 상시 운영 구성으로 정했다("첫 운영 전환 실행안"의 "확정한 결정") |
 | DAG 배포 | 이미지에 굽는다(`Dockerfile`) | 세 구성요소와 마이그레이션 작업이 한 이미지 태그(커밋)를 쓴다. 서버에 파일을 복사하지 않는다 |
 | UI 접근 | SSM 포트 포워딩만 | ALB·공인 IP 없음. 태스크 SG 는 호스트 SG 에서 온 8080 만 받는다 |
 | 인증 | Airflow 3 기본 SimpleAuthManager, 사용자 `admin` 1명 | 비밀번호는 Secrets Manager. ⚠️ Airflow 문서는 SimpleAuthManager 를 개발·테스트용으로 분류한다. 여기서는 네트워크 경로가 SSM 뿐이고 사용자가 1명이라 받아들였다. 사용자가 늘면 FAB auth manager 로 바꾼다 |
 
-**자원(태스크 정의).** 태스크 메모리 **1536MiB 하나**를 세 컨테이너와 그 자식(LocalExecutor task 프로세스)이 함께 쓴다(태스크 cgroup). 컨테이너별 hard 상한은 두지 않고 예약(`memoryReservation`)만 둔다 — api 300·scheduler 300·dag-processor 250, CPU unit 512·1024·256. 근거는 바로 아래 "사양 검증".
+**자원(태스크 정의).** 태스크 메모리 **1408MiB 하나**(`envs/dev/main.tf` `task_memory`)를 세 컨테이너와 그 자식(LocalExecutor task 프로세스)이 함께 쓴다(태스크 cgroup). 컨테이너별 hard 상한은 두지 않고 예약(`memoryReservation`)만 둔다 — api 300·scheduler 300·dag-processor 250, CPU unit 512·1024·256. 근거는 아래 "사양 검증"과 "small·1408 후속 검증".
 
 **헬스체크.** 파이썬을 띄우지 않는다. 각 컨테이너가 api-server `/api/v2/monitor/health` 의 자기 구성요소 status(`metadatabase`·`scheduler`·`dag_processor`)가 `healthy` 인지 본다. 응답 코드는 부분 장애에도 200 이라 본문을 본다. 판정 재료는 `airflow jobs check` 와 같은 heartbeat(메타DB job 표, 30초 임계)다. `jobs check` 는 한 번에 약 110MiB 인 프로세스라 60초마다 둘이 겹치면 순간 228MiB 가 늘었다(로컬 실측).
 - ⚠️ 전제: 메타DB 하나에 scheduler·dag-processor 가 하나씩뿐이다(서비스 desired 1, 배포 min 0 / max 100). `jobs check --local` 과 달리 이 판정은 호스트를 가리지 않는다 — 같은 메타DB 에 다른 scheduler 가 붙으면(예: 수동으로 띄운 두 번째 태스크) 그쪽 heartbeat 가 이 태스크의 멈춤을 가린다.
@@ -236,7 +236,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 ### 사양 검증(로컬 합산 상한, 2026-09-29) — 실제 EC2 검증이 아니다
 
-질문: "기존 RDS 재사용 + t4g.micro"를 첫 배치 운영 후보로 삼을 수 있는가. 도구는 `local/micro/`, 기준은 측정 전에 고정했다(`local/micro/criteria.json`). 판정 결과는 `local/results/micro/<실험>/verdict.json`에 있다(원시 샘플·로그는 로컬에만 보존).
+질문: "기존 RDS 재사용 + t4g.micro"를 첫 배치 운영 후보로 삼을 수 있는가. 도구는 `local/micro/`, 기준은 측정 전에 고정했다(`local/micro/criteria.json`). 판정 결과(`local/results/micro/<실험>/verdict.json`)와 원시 샘플·로그는 로컬에만 보존하고 커밋하지 않는다. 수치는 아래 표에 남긴다.
 
 **환경.**
 - **합산 상한:** 세 구성요소를 한 컨테이너 = 한 cgroup 에 띄워 합산 상한 하나를 건다. 구성요소 셋, LocalExecutor task 프로세스, 헬스체크 exec 가 모두 그 안이다. ECS 태스크 수준 memory 와 같은 경계다.
@@ -354,7 +354,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 **결론: t4g.micro 는 불가, t4g.small 에 태스크 1024MiB 도 불가.** 1408MiB 는 유휴·재시작만 확인했고 업무 실행은 검증하지 못했다(아래 도구 결함). 상시 운영 사양은 아직 정해지지 않았다.
 
-| 구성 | 결과 | 근거(원자료 `local/results/aws/`) |
+| 구성 | 결과 | 근거(원자료 `local/results/aws/` — 로컬 보존, 커밋하지 않는다) |
 |---|---|---|
 | micro · 1024 | **배치 불가** | ECS 등록 메모리 916MiB < 1024 |
 | micro · 896 | **호스트 전역 OOM**(중단 기준) | Airflow 전 호스트 상주(dockerd·containerd·ECS 에이전트·SSM) 230~300MiB, 가용 약 610MiB. 기동 때 컨테이너마다 `airflow db check`(각 약 135MiB)가 겹쳐 가용 42MiB → 약 6분 스래싱(관측기도 멈춤) → 20:40 `global_oom` 이 api-server 를 죽였다. 태스크 cgroup 은 545MiB 로 상한 아래였다. swap 없음 |
@@ -435,7 +435,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 ### small·1408 후속 검증 결과(2026-09-30 16:20~18:51 KST)
 
-**결론: 조건부.** 메모리·배치, 업무 실행·복구·보류, 기존 RDS 는 기준을 통과했다. 사전 기준 A5(종료 감지 지연)는 실패했고, A4(heartbeat)는 도구 결함으로 25분 공백이 생겨 판정 불가다. 그래서 "검증된 초기 운영 후보로 확인됨"이라고 쓰지 않는다. 가장 작은 다음 변경은 아래 A5 항목에 있다. 원자료는 `local/results/aws/aws-small-1408-v/`(판정 `verdict.json`)에 있다.
+**결론: 조건부.** 메모리·배치, 업무 실행·복구·보류, 기존 RDS 는 기준을 통과했다. 사전 기준 A5(종료 감지 지연)는 실패했고, A4(heartbeat)는 도구 결함으로 25분 공백이 생겨 판정 불가다. 그래서 "검증된 초기 운영 후보로 확인됨"이라고 쓰지 않는다. 가장 작은 다음 변경은 아래 A5 항목에 있다. 원자료는 `local/results/aws/aws-small-1408-v/`(판정 `verdict.json`)에 로컬 보존했다(커밋하지 않는다).
 
 | 판정 | 결과 | 근거 |
 |---|---|---|
@@ -614,7 +614,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 ### 메타DB
 
-- **현재 Terraform(검증 구성)은 기존 업무 RDS(`edge-dev`) 안의 전용 DB·역할이다**(위 "실제 AWS 단기 검증"). 상시 운영에 쓸지는 그 검증 결과와 아래 평가로 정한다 — 재사용은 아직 확정이 아니다.
+- **현재 Terraform 은 기존 업무 RDS(`edge-dev`) 안의 전용 DB·역할이다**(위 "실제 AWS 단기 검증"). 검증 결과와 아래 평가를 거쳐 2026-10-02 상시 운영 구성으로 정했다("첫 운영 전환 실행안"의 "확정한 결정").
 - scheduler 는 쉬지 않고 메타DB 를 조회한다. 로컬 유휴 실측은 초당 트랜잭션 약 28, 버퍼 적중 약 246, 쓰기 0.4행이고, DB 크기는 10MiB 다(업무 실행 중은 더 많다).
 
 **기존 RDS 재사용 평가(2026-09-29, 읽기 전용 지표·기존 기록 — 실제 부하를 주지 않았다)**
@@ -674,7 +674,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 |---|---|
 | 호스트(EC2) | ECS 에이전트(`AmazonEC2ContainerServiceforEC2Role`), SSM(`AmazonSSMManagedInstanceCore`). IMDSv2 강제, 태스크는 호스트 IMDS 차단(`ECS_AWSVPC_BLOCK_IMDS`) |
 | execution | 이미지 pull·awslogs, 시크릿 2개 읽기(메타DB RDS 관리형 시크릿, `edge-dev-airflow/app`) |
-| task(Airflow 프로세스) | 업무 태스크 정의 4종(kis·bigkinds·rds·ops)의 `RunTask`(worker 클러스터 한정), `ListTasks`·`DescribeTasks`·`StopTask`(같은 클러스터), `DescribeTaskDefinition`, 업무 역할 3개 `PassRole`(ecs-tasks 한정), 알람 토픽 `Publish`, 업무 컨테이너 로그 읽기, 자기 task 로그 쓰기. 업무 S3·DB 권한 없음. 검증 자원이 켜져 있으면 검증 태스크 정의·검증 클러스터 몫이 더해진다 |
+| task(Airflow 프로세스) | 업무 태스크 정의 6종(kis·bigkinds·rds·ops·dart·macro — `envs/dev/main.tf` `batch_task_definition_families`)의 `RunTask`(worker 클러스터 한정), `ListTasks`·`DescribeTasks`·`StopTask`(같은 클러스터), `DescribeTaskDefinition`, 업무 역할 3개 `PassRole`(ecs-tasks 한정), 알람 토픽 `Publish`, 업무 컨테이너 로그 읽기, 자기 task 로그 쓰기. 업무 S3·DB 권한 없음. 검증 자원이 켜져 있으면 검증 태스크 정의·검증 클러스터 몫이 더해진다 |
 | 배포(기존 `edge-dev-gha-schema-migrate` 역할에 정책 추가) | `edge/airflow` push, 마이그레이션 태스크 `RunTask`, 서비스 `UpdateService`, Airflow 역할 `PassRole`, 구성요소 로그 읽기 |
 
 - `edge-dev-airflow/app` 시크릿의 값은 Terraform 이 만들지 않는다(state 에 평문을 남기지 않는다). 최초 1회 넣는다(아래 "최초 구축"). 키: `jwt_secret`(구성요소 간 Execution API 토큰 서명), `api_secret_key`, `admin_password`.
@@ -742,7 +742,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 
 **늘어나는 비용 — 안별 비교(USD/월)**
 
-| 항목 | 단가 | #981 원안: medium + 별도 RDS | #981 2차안: small + 별도 RDS | small + 기존 RDS | **현재 Terraform(검증 구성): micro + 기존 RDS**(로컬 가정으로는 불통과 — 실제 AWS 로 판정) |
+| 항목 | 단가 | #981 원안: medium + 별도 RDS | #981 2차안: small + 별도 RDS | **small + 기존 RDS(현재 Terraform)** | micro + 기존 RDS(실제 AWS 검증에서 불가) |
 |---|---|---|---|---|---|
 | EC2 | medium 0.0416·small 0.0208·micro 0.0104 /h | 30.37 | 15.18 | 15.18 | 7.59 |
 | EBS gp3 30GiB(ECS AMI 루트 최소) | 0.0912 /GB·월 | 2.74 | 2.74 | 2.74 | 2.74 |
@@ -759,7 +759,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
   - 로컬 C1 평균은 0.03~0.04 개발기 코어였다. Graviton2 에서의 값은 실제 AWS 검증에서 `CPUCreditUsage`·`CPUSurplusCreditsCharged`로 확인한다.
 - **할인·무료 혜택:** 반영하지 않았다(계정 적용을 확인하지 않았다).
 - **늘지 않는 것(0원):** 공인 IPv4 0개(private 서브넷·EIP 없음), ALB 없음, VPC 엔드포인트 추가 없음, SSM Session Manager 무료. ECS 관리 요금도 없다(ECS on EC2 는 EC2·EBS 만 과금한다, Managed Instances 아님).
-- **기존 RDS 재사용 안의 숨은 비용:** 인스턴스 요금은 0이지만, 영향이 크면 `edge-dev` 를 상향해야 할 수 있다. db.t4g.small → medium 이면 +37.23 USD/월(0.051 → 0.102 /h, 서울 공개 단가). 그러면 별도 micro(20.87)보다 비싸다. 그래서 재사용은 위 "기존 RDS 재사용 평가"의 실제 검증 뒤에 정한다.
+- **기존 RDS 재사용 안의 숨은 비용:** 인스턴스 요금은 0이지만, 영향이 크면 `edge-dev` 를 상향해야 할 수 있다. db.t4g.small → medium 이면 +37.23 USD/월(0.051 → 0.102 /h, 서울 공개 단가). 그러면 별도 micro(20.87)보다 비싸다. 그래서 재사용은 위 "기존 RDS 재사용 평가"의 실제 검증 뒤에 정했다(2026-10-02).
 
 **일시적으로 늘어나는 것**
 - 호스트 교체 때 두 번째 small: 약 15분 × 0.0208 ≈ 0.005/회.
@@ -778,7 +778,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 
 검증은 `edge_investor_intraday_verify` DAG 로 한다. 운영 DAG 와 **같은 `build_dag`·`EdgeStep`**(제출 전 확인·제출·추적·보류·재접속)을 쓰고, 격리 자원(`modules/airflow/verify.tf`)에만 닿는다.
 
-- 원장: 검증 DB `edge_verify`(메타DB 인스턴스의 별도 DB. 업무 RDS 에는 SG 조차 없다). 스키마는 업무와 같은 `migrations-cloud` 다.
+- 원장: 검증 DB `edge_verify`(메타DB 와 같은 업무 RDS 인스턴스 안의 별도 DB — `modules/airflow/verify.tf`. 업무 DB 테이블 권한은 없다). 스키마는 업무와 같은 `migrations-cloud` 다.
 - 레이크: 검증 버킷(30일 만료). 업무 레이크는 재생 입력 한 파일을 **읽기만** 한다.
 - KIS: 호출하지 않는다. 검증 태스크 정의에 KIS 시크릿이 없고, 수집 스텝은 shim 이 저장 응답을 재생한다.
 - ECS: 검증 태스크는 Airflow 클러스터(Fargate)에서 돈다. 업무 Reconciler sweep 이 보는 worker 클러스터와 섞이지 않는다. 같은 슬롯이면 run_id 가 업무와 같아지므로 섞이면 안 된다.
@@ -815,7 +815,7 @@ AIRFLOW_PASSWORD=... python verify/run.py trigger --slot 10:05 --conf '{"faults"
 python verify/run.py evidence --slot 10:05 --dag-run <trigger 가 출력한 dag_run_id>
 ```
 
-## 운영 전환·롤백 절차(장중 수급, 아직 실행하지 않았다)
+## 운영 전환·롤백 절차(장중 수급, 전환은 2026-10-03 실행)
 
 **불변 조건.** 한 레인의 스텝은 어느 순간에도 한 주체만 실행한다. 여러 슬롯이 같은 거래일 canonical 파티션을 CAS 없이 병합하기 때문이다(ALPHA-1057). 주체가 바뀌는 순간 기존 주체의 실행이 **실제로 끝났음을 확인하기 전에는 새 주체를 켜지 않는다.** DAG pause나 스케줄 DISABLED는 새 실행 생성을 멈출 뿐이고, 이미 뜬 ECS 태스크를 멈추지 않는다.
 
@@ -896,11 +896,11 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 | 런 판정 기록 | Reconciler 가 DescribeExecution 으로 채움 | `report` 가 보고, 주기 Reconciler 가 원장 증거로 보완 | 같은 컬럼·같은 run_key |
 | 원장 행 | `orchestrator='SFN'`, `sfn_execution_arn` | `orchestrator='AIRFLOW'`, `orchestrator_run_ref`·`orchestrator_attempt_ref` | 소비자(콘솔 R02 포함)는 둘 다 읽는다 |
 
-- 부분 실패 적재 정책(선택 1/2)은 여전히 팀 결정 항목이다(아래 "활성화 전 결정" 1). 지금은 두 경로 모두 선택 2(유효 행 적재 + 런 FAILED)다.
+- 부분 실패 적재 정책(선택 1/2)은 2026-10-02 현행 유지(선택 2)로 정했다(아래 "확정한 결정", 비교는 "활성화 전 결정" 1). 지금은 두 경로 모두 선택 2(유효 행 적재 + 런 FAILED)다.
 
 ### 첫 운영 전환 실행안(ALPHA-1141)
 
-장중 수급 레인을 정해진 기간만 Airflow 로 운영하고, 끝나면 결과를 보고해 유지 여부를 **따로 결정한다.** 아래 "전환"·"롤백" 절차를 이 기간의 날짜·기준으로 구체화한 것이다. **신규 데이터 DAG(원천 관측 `edge_source_daily`, ALPHA-1140)와는 별개 트랙이다.**
+장중 수급 레인을 Airflow 로 옮기는 첫 운영 전환안이다. 처음에는 정해진 기간만 운영하고 유지 여부를 따로 결정하려 했으나, 2026-10-03 상시 운영으로 바꿨다(아래 "승인 상태"). 아래 "전환"·"롤백" 절차를 날짜·기준으로 구체화한 것이다. **신규 데이터 DAG(원천 관측 `edge_source_daily`, ALPHA-1140)와는 별개 트랙이다.**
 
 **승인 상태(2026-10-02).**
 
@@ -918,6 +918,8 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 #### 일정과 단계(KST)
 
 휴장: 10-03(토)·10-04(일)·10-05(개천절 대체)·10-09(한글날).
+
+아래 표는 10-02 계획이다. 전환은 10-03 에 앞당겨 실행했다(아래 "전환 결과(10-03)").
 
 | 언제 | 할 일 | 끝 조건 |
 |---|---|---|
@@ -1059,7 +1061,7 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 - **롤백에 필요한 것은 남긴다.** SFN 상태 머신·타임아웃 알람·스케줄 리소스(DISABLED)·`OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN` 주입·Planner 의 SFN 경로. 이 레인은 Airflow 전용 레인(`_AIRFLOW_ONLY_LANES`)에 넣지 않는다 — 넣으면 SFN 계획이 거부돼 롤백 길이 막힌다.
 - **Reconciler 슬롯 대조는 유지된다**(`OPS_INVESTOR_INTRADAY_SCHED_HHMM` 은 orchestrator 가 AIRFLOW 여도 주입된다). Airflow 가 슬롯을 안 돌리면 PLANNER_MISSING 이 열린다.
 
-순서(10-05, 14:35 슬롯 뒤 ~ 18:00 전).
+순서(10-05, 14:35 슬롯 뒤 ~ 18:00 전 — 계획이다. 실제로는 10-03 에 앞당겨 실행했다, 아래 "전환 결과(10-03)").
 1. 10-05 관측 보고. 기존 중단 기준 위반이나 중복 실행 위험이 있으면 여기서 멈추고 보고한다.
 2. 10-05 14:35 SFN 실행(휴장일 SKIPPED 계획)이 끝났는지, 이 레인의 SFN RUNNING 0·업무 ECS 0 인지 본다.
 3. 종료 확인 ①~⑥, 미해결 보류(⑥), 슬롯 소유(10-05 run_key 5개 `orchestrator='SFN'`, 10-06 run_key 0개).
@@ -1220,9 +1222,9 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 |---|---|
 | 완료 | 코드 ALPHA-1130(#1010~#1017·#1014·#1021) dev 머지·배포. 미 국채 10년 FRED `DGS10` 교체(#1038 스키마·#1039 코드). `macro` 태스크 정의 `edge-dev-data-pipeline-macro:1`·실행 역할 시크릿 읽기(#1036). Airflow RunTask 에 `dart`·`macro`(#1037). 시크릿 `edge-dev-data-pipeline/{ecos,kosis,eia,fred}/api-key` 수동 등록(AWSCURRENT 1개씩, `{"apikey"}`). 최종 업무 이미지 `edge/pipeline@sha256:713b779e…`(`GIT_SHA` d7d4e111). **첫 소량 실행(ALPHA-1136, 10-02 완료)**: 매크로 2계열·업종·재무 표본을 CLI 단건으로 수집·적재·as-of 조회·v2 대조·재실행 무호출까지 확인 — 아래 "첫 소량 실행 결과" |
 | 정기 운영 중(2026-10-03 ~) | `edge_source_daily` unpause — 매일 05:20 KST. **첫 정기 run(2026-10-04 05:20:00~05:35:09)**: 매크로 48행·재무 209행 적재(05:34 종료, 06:00 전망이 05:21 수신 판본을 읽음), run 은 정제 exit 2 로 FAILED(ALPHA-1169). `MACRO_COLLECTION.instrumented=True`(#1051). 재무 대상은 전망 배치와 같은 37종(#1117, 구성종목 합집합 376개 회사). 업무 이미지 `edge/pipeline@sha256:916a9e41…`(`GIT_SHA` 4fd5dfbe), Airflow 태스크 정의 `edge-dev-airflow:17`. **첫 DAG 실행(수동, run_key `source-daily:2026-10-03T22:17`, 15분 10초)**: 매크로 5계열 48행, 업종 SKIPPED(비거래일), 재무 수집 ok 401·empty 2 → 정제 209행(exit 2 — BPS 13건 결손) → 적재 209행. 원문 명세·정제 명세·원장 9작업·DB 가 서로 맞고 `MACRO_COLLECTION` 에 attempt 가 남았다. 공급자 호출: 매크로 5, DART 404. Airflow 태스크 메모리 최대 80.8%(중단 경보 90%). **재무 최소 이력**(단건 태스크 `manual_fin_20261003_1`, 접수일 2025-10-15~2026-10-03): DART 5,051회·45분, 적재 24,913행 — 현재 구성종목 367개 회사 중 EPS 연속 4분기 319, 최신 분기 보통주 BPS 209, 매출·영업이익 2분기 342 |
-| 미검증·남은 결함 | 분 상주 서비스의 새 이미지(`713b779e`) 장중 동작은 10-02 에 조회했다 — 기동·무중단은 확인. **기존 업무 이상 두 건이 미해결이다(Airflow 와 무관 — 아래 "10-02 분 서비스 확인과 운영 이상 조사")**: 가격 분 수집 처리량 저하(ALPHA-1153, 10-02 에 22개 창 MISSING 확정, 호출당 시간이 늘어난 원인은 미확인)와 공시 분 전 창 INCOMPLETE(ALPHA-1154, 원인 확인·수정 코드 반영 — 운영 실효는 미확인이고 이미 빠진 5건은 그대로다). 적재 전 만료 정제 run 의 `--all`(ALPHA-1133). 재무 표 재사용 합의(ALPHA-643). 구성종목 커버리지(ALPHA-1139, 보류 — 설계 §10.11): 과거 holdings 는 추가 적재하지 않고, 조회 시점 조건은 `available_at` 만 쓴다(`loaded_at` 은 기록만 유지, 커버리지 함수에 더하지 않음). v2 런타임의 `loaded_at` 필터 제거는 분석 담당에게 낼 **제안 단계**라 지금은 두 쪽이 다르게 고른다(매일 수집~적재 사이 3~11분 등). 0행 사유 구분·품질 조건·적용 단위·40건 한도·같은 날짜 재적재의 덮어쓰기는 **미해결**이다(holdings 원천은 정정본을 주지 않는다 — 정정 대응은 범위 밖) — 커버리지 결과를 v2 실행 가능 보장으로 읽지 않는다. v2 database 모드가 `macro_inputs`·`financial_inputs` 를 아직 부르지 않는다(ALPHA-1096·1097·1098). FRED 휴일 `"."` 처리는 단위 테스트만. deploy-data-pipeline 장중 차단 가드 없음(제안만) |
+| 미검증·남은 결함 | 분 상주 서비스의 새 이미지(`713b779e`) 장중 동작은 10-02 에 조회했다 — 기동·무중단은 확인. **기존 업무 이상 두 건이 미해결이다(Airflow 와 무관 — 아래 "10-02 분 서비스 확인과 운영 이상 조사")**: 가격 분 수집 처리량 저하(ALPHA-1153, 10-02 에 22개 창 MISSING 확정, 호출당 시간이 늘어난 원인은 미확인)와 공시 분 전 창 INCOMPLETE(ALPHA-1154, 원인 확인·수정 코드 반영 — 운영 실효는 미확인이고 이미 빠진 5건은 그대로다). 적재 전 만료 정제 run 의 `--all`(ALPHA-1133). 재무 표 재사용 합의(ALPHA-643). 구성종목 커버리지(ALPHA-1139, 보류 — 설계 §10.11): 과거 holdings 는 추가 적재하지 않고, 조회 시점 조건은 `available_at` 만 쓴다(`loaded_at` 은 기록만 유지, 커버리지 함수에 더하지 않음). v2 런타임의 `loaded_at` 필터 제거는 분석 담당에게 낼 **제안 단계**라 지금은 두 쪽이 다르게 고른다(매일 수집~적재 사이 3~11분 등). 0행 사유 구분·품질 조건·적용 단위·40건 한도·같은 날짜 재적재의 덮어쓰기는 **미해결**이다(holdings 원천은 정정본을 주지 않는다 — 정정 대응은 범위 밖) — 커버리지 결과를 v2 실행 가능 보장으로 읽지 않는다. v2 database 모드는 #1089(10-02)부터 `macro_inputs`·`financial_inputs` 를 부른다(ALPHA-1096·1097·1098). FRED 휴일 `"."` 처리는 단위 테스트만. deploy-data-pipeline 장중 차단 가드 없음(제안만) |
 | 다음 작업·알려진 문제 | ① 결측 판정 env 는 첫 정기 슬롯 run 을 원장에서 확인한 뒤(2026-10-04) 넣었다 — 그 전에 넣으면 run 이 없던 슬롯에 PLANNER_MISSING 이 열린다. ② **재무 정제의 실패 판정을 분류로 바꿨다**(ALPHA-1169): 만들지 못한 지표를 정책 차단·확인된 원천 부재·지원하지 않는 표기/계정·처리 오류로 나눈다. 앞의 둘만 있으면 결손으로 기록하고 exit 0, 뒤의 둘이 하나라도 있으면 exit 2 로 run 을 실패로 닫는다(응답 무결성 위반 보고서의 거부는 사유와 무관하게 처리 오류). 그 가운데 값을 읽는 줄의 칸을 읽지 못한 보고서는 판본도 `UNCONFIRMED` 로 남고 지표를 싣지 않는다 — 조회는 옛 확정 판본을 그대로 준다(ALPHA-1172, 설계 §10.4). 결손은 판본 표 `rejected`·품질 로그 `gaps`·정제 manifest `gaps`/`reject_classes`·원장 `unsupported_records` 에 남는다. 2026-10-04 정기분에 적용하면 13건이 결손 9·미지원 2·새로 읽힘 2 로 갈려 **여전히 FAILED 다** — 남은 2건은 보통주·우선주 표시가 없는 `의결권 있는/없는 주식` 표기이고 어떻게 읽을지는 ALPHA-1170 에서 정한다. run 판정은 그대로 두고 **실패 통보 문구만 가른다**: 다른 스텝이 모두 exit 0 이고 정제의 거부가 전부 미지원 분류이면 제목이 `[source-daily] FAILED · 적재 완료 · 미지원 N건`(만들어진 지표가 실렸다는 뜻 — 전 지표 확보가 아니다), 그 밖에는(오류 분류 거부·스텝 실패·수집 부분 실패·보류·거부 요약을 읽지 못함) 종전대로 `FAILED` 다. 본문에는 스텝 종료 코드와 거부 건의 회사·보고서·지표·사유(앞 20건)를 싣는다 — 정제 컨테이너가 로그에 남긴 `EDGE_REJECT_SUMMARY` 줄을 실패 콜백이 CloudWatch 에서 읽는다(상세를 만들지 못해도 통보는 종전 문구로 나간다). 이미 끝난 정제를 다시 돌린 run(clear·재처리)은 건수와 분류만 싣는다 — 건별 내용은 첫 실행의 품질 로그에 있다. 발행한 통보의 제목·본문은 dag-processor 로그(`/airflow/edge-dev-airflow/tasks` 의 `dag_processor/<날짜>/dags-folder/edge_source_daily.py.log`, `실패 통보 발행:` 줄)에도 남는다. ③ **접수 집중기에 run 상한을 넘는다**(ALPHA-1168, 11월 초 전). ④ REST 로 `logical_date` 없이 trigger 하면 `plan` 의 템플릿 렌더링이 실패한다(10-03 1차 수동 실행 — 업무 시작 전 종료, 실패 통보 발행). 수동 trigger 는 `{"logical_date": "<지금 시각>"}` 을 준다 |
-| 승인 범위 | **승인·완료**: FRED 교체 PR 4개 머지·자동 배포, 시크릿 수동 등록, 첫 소량 실행(공급자 19회·dev 적재). Airflow 서비스의 10-02 장후 기동·10-05 까지 유휴 관측은 ALPHA-1141 에서 승인됐다(이 레인의 DAG 는 그 기간 pause). **별도 승인 필요**: #1051 머지, `edge_source_daily` 실행·unpause·정기 활성화, 결측 판정 env, 백필, SFN 주체 전환, FMP 시크릿 삭제, 장중 배포 가드 PR |
+| 승인 범위 | **승인·완료**: FRED 교체 PR 4개 머지·자동 배포, 시크릿 수동 등록, 첫 소량 실행(공급자 19회·dev 적재), #1051 머지, `edge_source_daily` 수동 실행·unpause·정기 활성화(10-03), 결측 판정 env(#1118), 장중 수급 SFN 주체 전환(#1105). Airflow 서비스의 10-02 장후 기동·10-05 까지 유휴 관측은 ALPHA-1141 에서 승인됐다(이 레인의 DAG 는 당초 그 기간 pause 였으나 10-03 에 앞당겨 실행·활성화했다). **별도 승인 필요**: 백필, FMP 시크릿 삭제, 장중 배포 가드 PR |
 
 로컬 근거: 실응답 원문 `~/Desktop/Development/edge/.dev/alpha-1130-live/`(`shasum -a 256 -c SHA256SUMS`, 32개, `round3/` = FRED), 로컬 키 파일 `~/.config/edge/alpha-1130-keys.env`(값은 문서에 쓰지 않는다).
 
@@ -1232,14 +1234,14 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 **활성화 전 인프라(이 레인 PR 범위 밖 — Airflow 환경 담당):**
 1. `macro` 태스크 정의(`edge-{env}-data-pipeline-macro` = data-pipeline 모듈 `aws_ecs_task_definition.this["macro"]` — **#1036 머지·apply 완료, 2026-10-01 `macro:1`**): 업무 이미지 + DB env(`local.db_env`+password) + 키 env
-   `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA,FRED}_API_KEY`(시크릿 `edge-{env}-data-pipeline/{ecos,kosis,eia,fred}/api-key` — 네 개 모두 **2026-10-01 수동 등록 완료**(TF 밖, `{"apikey":...}`, AWSCURRENT 1개씩), TF 는 data 로 참조만 한다. **FMP 는 쓰지 않는다** — 미 국채 10년은 FRED `DGS10`(#1039, 같은 계열 — 설계 §10.8 추기). ECOS 는 USD/KRW·국고채. 네 키 모두 `macro:1` 에 `:apikey::` 로 연결됐고 실행 역할이 읽는다(2026-10-01 #1036 apply 확인) — 값은 문서·PR 에 쓰지 않는다). 카탈로그 `MACRO_COLLECTION.instrumented` 전환 순서(ALPHA-596·610 과 같은 두 단계, 플래그 PR #1051 머지 전까지 False): ① 배선 PR(**#1036 으로 완료**) — `tasks.tf` 에 `macro`(DB env + 키 env)를 넣고 **같은 PR 에서** `tests/test_ops_catalog.py` 의 `_WIRING_AHEAD_OF_FLAG` 에 `"MACRO_COLLECTION"` 을 더한다(안 더하면 같은 테스트의 역방향 단언 — DB env 가 배선됐는데 False — 이 실패한다). apply·배포. ② 플래그 PR(#1051, draft) — True 로 올리고 `_WIRING_AHEAD_OF_FLAG` 에서 지운다(안 지우면 만료 단언 `stale` 이 실패한다). 한 PR 에 묶지 않는 이유는 그 테스트 위 주석: 이미지가 태스크 정의보다 먼저 뜨면 DB env 없는 옛 리비전에서 True 가 돌아 LEDGER_GAP 이 영구로 열린다.
+   `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__{ECOS,KOSIS,EIA,FRED}_API_KEY`(시크릿 `edge-{env}-data-pipeline/{ecos,kosis,eia,fred}/api-key` — 네 개 모두 **2026-10-01 수동 등록 완료**(TF 밖, `{"apikey":...}`, AWSCURRENT 1개씩), TF 는 data 로 참조만 한다. **FMP 는 쓰지 않는다** — 미 국채 10년은 FRED `DGS10`(#1039, 같은 계열 — 설계 §10.8 추기). ECOS 는 USD/KRW·국고채. 네 키 모두 `macro:1` 에 `:apikey::` 로 연결됐고 실행 역할이 읽는다(2026-10-01 #1036 apply 확인) — 값은 문서·PR 에 쓰지 않는다). 카탈로그 `MACRO_COLLECTION.instrumented` 전환 순서(ALPHA-596·610 과 같은 두 단계, 플래그 PR #1051 머지로 True — 완료): ① 배선 PR(**#1036 으로 완료**) — `tasks.tf` 에 `macro`(DB env + 키 env)를 넣고 **같은 PR 에서** `tests/test_ops_catalog.py` 의 `_WIRING_AHEAD_OF_FLAG` 에 `"MACRO_COLLECTION"` 을 더한다(안 더하면 같은 테스트의 역방향 단언 — DB env 가 배선됐는데 False — 이 실패한다). apply·배포. ② 플래그 PR(**#1051 로 완료**) — True 로 올리고 `_WIRING_AHEAD_OF_FLAG` 에서 지운다(안 지우면 만료 단언 `stale` 이 실패한다). 한 PR 에 묶지 않는 이유는 그 테스트 위 주석: 이미지가 태스크 정의보다 먼저 뜨면 DB env 없는 옛 리비전에서 True 가 돌아 LEDGER_GAP 이 영구로 열린다.
 2. `bigkinds`·`dart`·`rds`·`ops` 태스크 정의는 기존 것을 쓴다(DART 키는 기존 `dart` 에 있다, 업종 마스터는 키가 없다). 새 이미지 배포가 필요하다(새 CLI 스텝·설정 섹션). **⚠️ Airflow 태스크 역할의 RunTask 허용 목록**(`infra/terraform/envs/dev/main.tf` `batch_task_definition_families`)에 `dart`(재무 수집)·`macro` family 를 **#1037 로 추가 완료**(2026-10-01 apply, 실측 RunTask 리소스 `bigkinds`·`dart`·`kis`·`macro`·`ops`·`rds`). 없었으면 `financial_collect`·`macro_collect` 가 `AccessDeniedException` 으로 시작도 못 했다(Codex 봇 P1, 2026-09-30).
 3. 주기 결측 판정은 `ops` 태스크 정의(주기 reconcile)의 `OPS_SOURCE_DAILY_SCHED_HHMM`·`OPS_SOURCE_DAILY_SCHED_WEEKEND=true` 가 켠다. 값은 Terraform 모듈 local `source_daily_schedule_hhmm`(`modules/data-pipeline/ops_ledger.tf`, `05:20`)에서 온다 — DAG 슬롯과 같은지 `tests/test_source_daily_dag.py` 가 대조한다(환경이 재정의할 수 없게 변수로 두지 않았다). 빈 값으로 두면 이 레인은 PLANNER_MISSING 판정 대상이 아니다.
 4. 컨테이너 egress 가 `financialmodelingprep.com`·`ecos.bok.or.kr`·`kosis.kr`·`api.eia.gov`·`opendart.fss.or.kr`·`new.real.download.dws.co.kr` 에 닿아야 한다. 2026-10-01 네트워크 층 확인: 업무 태스크 SG(`sg-047705118179af733`) egress 전체 허용, 서브넷 기본 경로 NAT — 호스트 차단 규칙은 보이지 않는다. **실제 도달은 첫 단건 실행에서 확인**(Airflow RunTask 가 다른 SG 를 쓰면 그 SG 도 본다). 호스트는 설정 기본값(`config/models.py` `*_base_url`)과 같다.
 5. 마이그레이션 `V202609301200` — **적용 완료(2026-09-30 17:04 KST, #1003 머지 `86743919`, schema-migrate success)**. dev RDS 실측: `flyway_schema_history` 202609301200 success, 테이블 4 존재, 함수 5 모두 `SECURITY DEFINER`·`search_path=public, pg_temp`·소유자 `edge`·`edge_analysis_v2_writer` EXECUTE·PUBLIC EXECUTE 없음, writer 의 테이블 권한 없음. 코드 PR(#1010~#1013·이 PR)은 그 뒤 머지한다(스키마는 테이블 4·조회 함수 5·writer EXECUTE 부여 — 확장 단계만). 구 스키마 위에서 새 이미지가 돌면 `load-*` 만 실패(exit 1)하고 raw·artifact 는 남아 `--all` 로 이어 싣는다. 새 스키마 위의 기존 코드는 영향 없다(추가 객체뿐 — CI e2e 전체가 새 스키마 위에서 돈다).
 6. USD/KRW 도 ECOS 다(FMP USDKRW 는 현재 구독에서 402) — `DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY` 없이는 원/달러·국고채가 오지 않는다. ECOS 샘플 키는 10건 상한이라 운영 키가 필요하다. 키가 빠진 계열은 부르지 않고 `missing_credentials` 로 실패한다(수집 exit 2).
 
-**배포 상태(2026-10-01 04:50 KST 확인 — 코드 머지·이미지 준비와 실제 배포를 구분한다. 그 시점 기록이다 — 현재 이미지·task-def 는 아래 'FRED 교체·실행 환경 배포 결과'):**
+**배포 상태(2026-10-01 04:50 KST 확인 — 코드 머지·이미지 준비와 실제 배포를 구분한다. 그 시점 기록이다 — 이후 이미지·task-def 는 위 '현재 상태와 다음 작업' 표):**
 - 코드: 분리 PR 9개 dev 머지 완료. 마지막 머지 `dc11b7c5`(#1015). 업무 이미지 `edge/pipeline:dc11b7c52a2a5efa9e0638703a006aadd06e877f`(=`data-pipeline-latest`, digest `sha256:f3d7ec00…`), 이미지 env `GIT_SHA=dc11b7c52a2a5efa9e0638703a006aadd06e877f`(ECR 설정 blob 에서 확인).
 - 기존 업무: SFN 단발 태스크·주기 reconcile 은 실행마다 `data-pipeline-latest` 를 당겨 새 코드로 돈다(머지마다 다음 reconcile exit 0·로그 형태 불변 확인). 분 상주 서비스 9개는 머지 시각에 desired 0 이라 재배포가 건너뛰어졌고, 다음 세션 시작(평일 07:45) 때 새 이미지로 뜬다.
 - Airflow(그 시점): `edge/airflow:dc11b7c5…` 이미지는 **빌드·푸시만** 됐다. 서비스가 desired 0 이라 deploy-airflow 가 태스크 정의 등록·서비스 교체를 건너뛰었다(서비스 태스크 정의 `edge-dev-airflow:10` = 옛 이미지 `7bb0c196`). 즉 **`edge_source_daily` DAG 는 아직 Airflow 에 올라가지 않았다.** 서비스를 다음에 dev 이미지로 켜면 그때 pause 상태로 등록된다(`is_paused_upon_creation`) — 그 뒤 dag-processor 가 DAG 하나를 더 파싱한다.
@@ -1286,7 +1288,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 **첫 수동 실행 인수인계(활성화 전, dev — 2026-10-02 이 절차대로 실행했다. 실제와 다르게 한 점은 "첫 소량 실행 결과"):**
 - **전제(환경 담당 확인 필요)**: ALPHA-1119 small·1408 검증이 끝나고 채택된 뒤. 그 검증은 장중 수급 **단일 배치**라 source_daily 까지 검증한 것이 아니다 — 이 DAG 를 올린 뒤 dag-processor 파싱 메모리와 첫 수동 실행의 호스트·태스크 메모리를 따로 본다.
 - **호출 상한(강제)**: 첫 실행은 DAG 가 아니라 아래 "단건 실행" CLI(같은 이미지, `macro`·`dart` 태스크 정의로 ECS 단건 실행)로 한다. DAG 에는 계열·대상 제한 인자가 없어 수동 trigger 는 매크로 5계열·구성종목 전체를 부른다. 매크로는 `--series` 로 1~2계열로 줄인다. 재무는 ETF 하나(`DATA_PIPELINE_SOURCE_OBSERVATIONS__ETF_IDS='["<ETF 코드>"]'`)와 하루짜리 접수일 창(`--from`=`--to`)으로 줄인다. 이렇게 해도 목록 호출은 그 ETF의 구성종목 수만큼 나간다(종목 단위 제한 인자는 없다). 공급자 호출 수는 원장·수집 로그 `counts` 로 대조한다. DAG 수동 trigger 는 두 번째 실행부터다.
-- **이미지**: `edge/pipeline:d7d4e111ccae50ee871f5460dd8e5c2482b24c9d`(digest `sha256:713b779e…`, 2026-10-01 #1036 머지 이미지 — FRED 미 국채 10년 #1039 포함; 그 전 `dc11b7c5…` 는 미 국채 10년이 FMP 라 `macro` task-def 의 키로 수집할 수 없다). `GIT_SHA` 가 이미지에 구워져 있다 — taskdef 에 따로 넣지 않는다. 태스크 정의는 태그를 고정해 쓰면 첫 실행 재현이 쉽다(`data-pipeline-latest` 는 다음 머지로 바뀐다). 첫 실행의 raw manifest `code_version` 이 `d7d4e111…`(또는 고정한 태그의 SHA)인지 확인한다(`unknown` 이면 옛 이미지). ⚠️ 태스크 정의(`macro:1` 등)는 mutable `data-pipeline-latest` 를 참조하므로, 첫 실행 전에 다른 data-pipeline 배포가 있으면 다른 이미지로 돈다. 그래서 **digest 로 고정한 단건 리비전으로 돌린다**(ECR 저장소가 `MUTABLE` 이라 SHA 태그도 덮일 수 있고, "확인 뒤 실행"은 그 사이 배포에 진다): `aws ecs describe-task-definition --task-definition edge-dev-data-pipeline-macro` 의 정의에서 image 를 `393229433969.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline@sha256:713b779ea603f114260ea53aec7ed59a867e4e6ba0577b7014b80c0ba4597608` (#1036 머지 이미지 = `GIT_SHA` d7d4e111, 레지스트리 호스트 유지)로 바꿔 `register-task-definition` → 그 **리비전 번호를 run-task 에 명시**한다(`dart`·`bigkinds`·`rds` 도 같은 방식). 등록한 단건 리비전은 TF 밖이라 끝나면 `deregister-task-definition` 으로 지운다(TF 가 관리하는 최신 리비전은 그대로). 실행 뒤 `code_version` 대조로 한 번 더 확인한다. 카탈로그 `MACRO_COLLECTION.instrumented=True` 전환 조건: `macro` taskdef 가 있고 ECOS·KOSIS·EIA 키 env 가 그 taskdef 에 들어간 배포 **뒤**의 이미지에서 플래그를 올린다(플래그가 먼저 가면 Reconciler 가 없는 시도를 결손으로 판정). 배선(#1036)은 10-01 배포됐고, 플래그는 #1051(draft) 머지 전까지 False 다.
+- **이미지**: `edge/pipeline:d7d4e111ccae50ee871f5460dd8e5c2482b24c9d`(digest `sha256:713b779e…`, 2026-10-01 #1036 머지 이미지 — FRED 미 국채 10년 #1039 포함; 그 전 `dc11b7c5…` 는 미 국채 10년이 FMP 라 `macro` task-def 의 키로 수집할 수 없다). `GIT_SHA` 가 이미지에 구워져 있다 — taskdef 에 따로 넣지 않는다. 태스크 정의는 태그를 고정해 쓰면 첫 실행 재현이 쉽다(`data-pipeline-latest` 는 다음 머지로 바뀐다). 첫 실행의 raw manifest `code_version` 이 `d7d4e111…`(또는 고정한 태그의 SHA)인지 확인한다(`unknown` 이면 옛 이미지). ⚠️ 태스크 정의(`macro:1` 등)는 mutable `data-pipeline-latest` 를 참조하므로, 첫 실행 전에 다른 data-pipeline 배포가 있으면 다른 이미지로 돈다. 그래서 **digest 로 고정한 단건 리비전으로 돌린다**(ECR 저장소가 `MUTABLE` 이라 SHA 태그도 덮일 수 있고, "확인 뒤 실행"은 그 사이 배포에 진다): `aws ecs describe-task-definition --task-definition edge-dev-data-pipeline-macro` 의 정의에서 image 를 `393229433969.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline@sha256:713b779ea603f114260ea53aec7ed59a867e4e6ba0577b7014b80c0ba4597608` (#1036 머지 이미지 = `GIT_SHA` d7d4e111, 레지스트리 호스트 유지)로 바꿔 `register-task-definition` → 그 **리비전 번호를 run-task 에 명시**한다(`dart`·`bigkinds`·`rds` 도 같은 방식). 등록한 단건 리비전은 TF 밖이라 끝나면 `deregister-task-definition` 으로 지운다(TF 가 관리하는 최신 리비전은 그대로). 실행 뒤 `code_version` 대조로 한 번 더 확인한다. 카탈로그 `MACRO_COLLECTION.instrumented=True` 전환 조건: `macro` taskdef 가 있고 ECOS·KOSIS·EIA 키 env 가 그 taskdef 에 들어간 배포 **뒤**의 이미지에서 플래그를 올린다(플래그가 먼저 가면 Reconciler 가 없는 시도를 결손으로 판정). 배선(#1036)은 10-01 배포됐고, 플래그는 #1051 머지로 True 가 됐다.
 - **DAG 첫 수동 trigger** — 아래 "Airflow 첫 DAG 실행 인계(ALPHA-1140)" 로 옮겼다(호출 수 재산정 포함).
 - **단건 실행(대상 run_id 를 명시한다 — 첫 검증에서 `--all` 을 쓰지 않는다)**: 같은 run_id `R` 로 세 단계를 잇는다(DAG 와 같은 형태). `--all` 은 이번 run 외의 미소비 정제 run 까지 집으므로 첫 검증의 대조 대상을 흐린다.
   ```bash
@@ -1396,7 +1398,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 이미 빠진 5건은 이 수정으로 채워지지 않는다. 재처리 경로는 계약 대상 추출·본문 파싱을 고친 뒤 `backfill-normalize-disclosure --from <접수일> --to <접수일>`(정제 → 적재 → 조립)다. 저녁 배치는 조립을 하지 않는다. 이 5건에는 아직 돌리지 않았고, 다시 돌렸을 때 기존 fact 가 새 값으로 바뀌는지도 확인하지 않았다.
 - 다음 세션(10-06)에는 조회 창이 10-05~10-06 이라 이 문서들이 빠진다(예상 — 그날 창 상태로 확인한다).
 
-**Airflow 첫 DAG 실행 인계(ALPHA-1140 — 계획, 실행 전):** 목적은 적재 성공이 **원장과 `source_observation_freshness()` 에 나타나는지** 확인하는 것이다. 기존 Planner(`plan-run`)·원장 경로를 그대로 쓴다. 수동 run(위 `manual_*`)을 원장에 올리거나 성공 시각을 채우지 않는다.
+**Airflow 첫 DAG 실행 인계(ALPHA-1140 — 계획. 2026-10-03 에 앞당겨 실행했고 결과는 위 '현재 상태와 다음 작업' 표):** 목적은 적재 성공이 **원장과 `source_observation_freshness()` 에 나타나는지** 확인하는 것이다. 기존 Planner(`plan-run`)·원장 경로를 그대로 쓴다. 수동 run(위 `manual_*`)을 원장에 올리거나 성공 시각을 채우지 않는다.
 
 | 항목 | 내용 |
 |---|---|
@@ -1412,9 +1414,9 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 ## 활성화 전 결정·미해결 조건
 
-아래가 해결되기 전에는 **운영 활성화 불가**다. 코드 준비·로컬 검증과는 별개다. 2번은 이번에 대체 조건을 정했고, 나머지는 그대로 남아 있다.
+아래는 운영 활성화 전에 해결할 조건으로 적은 것이다(2026-09-28). 코드 준비·로컬 검증과는 별개다. 장중 수급은 2026-10-03 에 활성화했다 — 1번은 2026-10-02 에 정했고, 2번은 대체 조건을 정했다. 나머지 항목의 상태는 각 항목에 적은 그대로다.
 
-1. **exit 2(부분 실패) 적재 정책 — 팀 결정.** 현재 구현은 선택 2다. 결정 전에는 활성화하지 않는다.
+1. **exit 2(부분 실패) 적재 정책 — 2026-10-02 선택 2 유지로 정함.** 현재 구현은 선택 2다. 아래 표는 그 결정 때의 비교다.
 
    | | 선택 1: 부분 실패 슬롯은 적재 중단(#958 전 SFN의 실제 동작) | 선택 2: 유효 행 적재 + 부분 실패 표시(현재 Airflow 구현, #958 뒤 SFN 동작) |
    |---|---|---|
@@ -1439,7 +1441,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.
 4. **결말 없이 끝난 실행의 보류 기록 — 해결(ALPHA-1088 후속, 아래 "미확정 실행을 원장이 스스로 찾는다").** worker 사망·수동 failed·`dagrun_timeout`으로 report·verdict·callback이 돌지 못해도 원장에 보류가 남는다. 남는 경계(탐지 지연)는 그 절에 적었다.
 5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
-6. **Airflow 실행 환경 — 정함(ALPHA-1119).** ECS on EC2 자체 운영(위 "실행 환경"). `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 는 `modules/airflow` 태스크 정의가 주입하고, DAG 는 이미지로 배포한다. 남은 것은 실제 리소스 생성과 실제 AWS 검증이다.
+6. **Airflow 실행 환경 — 정함(ALPHA-1119).** ECS on EC2 자체 운영(위 "실행 환경"). `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 는 `modules/airflow` 태스크 정의가 주입하고, DAG 는 이미지로 배포한다. 실제 리소스 생성과 실제 AWS 검증은 끝났다(위 "실제 AWS 단기 검증 결과"·"small·1408 A4·A5 표적 재검증 결과").
 7. **아래 "실제 환경 검증"의 성공 기준 충족.**
 
 ## 실제 환경 검증 계획(실행 환경이 정해진 뒤, dev)
@@ -1450,7 +1452,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 | 항목 | 절차 | 성공 기준 |
 |---|---|---|
-| IAM | Airflow 실행 역할로 `ecs:RunTask`(taskdef 4종)·`DescribeTasks`·`ListTasks`·`StopTask`·`iam:PassRole`(execution·task 역할)·`sns:Publish`·`logs:GetLogEvents` | 각 호출 성공. AccessDenied 0 |
+| IAM | Airflow 실행 역할로 `ecs:RunTask`(taskdef 6종)·`DescribeTasks`·`ListTasks`·`StopTask`·`iam:PassRole`(execution·task 역할)·`sns:Publish`·`logs:GetLogEvents` | 각 호출 성공. AccessDenied 0 |
 | 정상 실행 | 당일 슬롯 수동 trigger | ECS 4개(plan·collect·normalize·load)+report 1개. attempt 3건에 `orchestrator_attempt_ref`. `orchestration_status=SUCCEEDED`, `reported_at` 채워짐 |
 | CloudWatch 로그 | `EDGE_ECS_LOG_GROUP` 설정 | Airflow task 로그에 컨테이너 로그가 보인다. plan은 `ops/…`, 나머지는 `raw-ingest/…` 스트림 |
 | ECS 기동 실패와 재시도 | 태스크는 만들어지지만 컨테이너가 못 뜨게 한다(없는 이미지 태그·없는 시크릿 참조의 테스트 태스크 정의) | `stopCode=TaskFailedToStart` → Airflow 재시도 → 다음 시도가 새 태스크 1개 → 성공. 원장 attempt는 성공한 1건. (없는 서브넷은 RunTask 400이라 재시도 없는 설정 실패가 정상이다) |
@@ -1476,5 +1478,5 @@ Flyway는 이미 적용된 버전보다 낮은 새 버전을 거부한다(`outOf
 
 - **경로 B로 확정(2026-09-28).** dev `flyway_schema_history` 실측 최고 버전이 `202609202030`이고 #948은 미적용·미머지였다. #948을 서둘러 머지하지 않고, 어느 공유 환경에도 적용된 적 없던 #949의 세 파일 **이름만** `1500·1510·1520` → `1100·1110·1120`으로 낮췄다(내용 동일). 적용된 마이그레이션은 건드리지 않았다.
 - #948은 손대지 않는다. 뒤에 머지될 때 1200 > 1120이라 그대로 적용된다. #948이 rebase할 때 ERD를 재생성한다.
-- 검증: 실제 Flyway 10.21.0 + PostgreSQL 16, dev 세트 위에서 "dev → 1100대 → #948(1200) 나중" 적용, "dev → #948 먼저 → 1100대"는 `resolved migration not applied: 202609271100`으로 거부(`local/results/migration-matrix-948-949-950.txt`).
+- 검증: 실제 Flyway 10.21.0 + PostgreSQL 16, dev 세트 위에서 "dev → 1100대 → #948(1200) 나중" 적용, "dev → #948 먼저 → 1100대"는 `resolved migration not applied: 202609271100`으로 거부(`local/results/migration-matrix-948-949-950.txt`, 로컬 보존 — 커밋하지 않는다).
 - **스키마 PR의 CI 통과는 적용 완료가 아니다.** CI는 임시 DB에 적용한다. dev 적용은 머지 뒤 `schema-migrate` 워크플로 결과와 `flyway_schema_history`로 따로 확인한다.
