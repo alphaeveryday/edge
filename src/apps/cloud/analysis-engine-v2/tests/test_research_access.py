@@ -115,8 +115,10 @@ def test_weight_sum_is_judged_at_the_precision_a_stored_double_carries(monkeypat
     # 끝나지 않는 소수(1/6 여섯 개)의 합도 같은 이유로 1 이다 — 값마다 자릿수를 자르면 1.000000000000002 로 거부된다.
     assert holdings(_load_stored_weights(monkeypatch, [1 / 6] * 6, 6), require_complete=False)['coverage'] == 'full'
     # 허용 오차가 아니다: 원천 합이 실제로 100% 를 넘는 스냅샷(388420 2026-10-02 주식 합 100.15%, 0093A0 100.01%)은
-    # 그대로 거부된다.
-    for over_pcts in ((19.22, 9.15, 7.42, 6.39, 6.04, 51.93), (12.67, 87.34)):
+    # 넘는 그대로 읽힌다. 적재되지 않은 원천 행(현금)이 있으면 부분 확보로 받고, 전부 적재됐는데 넘으면 거부한다.
+    for over_pcts, ratio in (((19.22, 9.15, 7.42, 6.39, 6.04, 51.93), 1.0015), ((12.67, 87.34), 1.0001)):
         over = [pct / 100.0 for pct in over_pcts]
+        loaded = holdings(_load_stored_weights(monkeypatch, over, len(over) + 1), require_complete=False)
+        assert (loaded['observed_weight_ratio'], loaded['coverage']) == (ratio, 'partial')
         with pytest.raises(ValueError, match='summing to one'):
-            _load_stored_weights(monkeypatch, over, len(over) + 1)
+            _load_stored_weights(monkeypatch, over, len(over))
