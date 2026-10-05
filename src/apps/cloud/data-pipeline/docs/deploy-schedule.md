@@ -29,7 +29,7 @@ AssembleEvents` 를 돌린다. 같은 브랜치 빌더를 재사용하고(news_*
 소비하는 상주 서비스만 만든다. 그래서 ALPHA-893 이 오후 슬롯을 내려도 잃는 소비자가 없다. 뉴스 레인은
 운영 원장에 **자체 `pipeline_type`(`news`)·하루 2슬롯 기대로 편입돼 있다**(ALPHA-591) — 뉴스
 스케줄도 daily 와 같이 Planner(plan-run, `OPS_PIPELINE_TYPE=news`) 경유로 SFN 을 시작한다
-(카탈로그 절 참고).
+([ops-ledger.md](ops-ledger.md) 의 카탈로그 절 참고).
 
 공시 레인도 같은 형태로 분리됐다가 **한 번 더 옮겨 갔다** —
 `edge-dev-data-pipeline-disclosure`(ALPHA-722)가 세워져
@@ -231,7 +231,7 @@ SFN 정의·Reconciler 슬롯 대조는 남는다. 전환·롤백 절차는 [`sr
     `asof_slot` 이 붙어 병합 키·PK·창 프루닝이 전부 달라 인자로 갈아끼울 수 없다(수집 스텝은
     저장 위치만 달라 인자로 갈랐던 것과 대조). 레인이 자동으로 돌리지만 세 스텝을 손으로 이어
     돌려도 체인이 닫힌다 — 복구·검증용이다
-    (`src/` 에서. 수집은 KIS 앱키, 적재는 DB 접속이 필요하다 — 위 각 절의 env 와 같다):
+    (`src/` 에서. 수집은 KIS 앱키, 적재는 DB 접속이 필요하다 — [run-steps.md](run-steps.md) 각 절의 env 와 같다):
     ```bash
     RUN_ID=manual-investor-20260827-0935
     export RUN_ID
