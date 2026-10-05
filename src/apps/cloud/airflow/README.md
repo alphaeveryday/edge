@@ -192,8 +192,10 @@ python3 lab.py scenario-holiday     # 휴장일 계획·수집 skip, 같은 logi
 python3 lab.py scenario-report      # DAG 판정 보고 → orchestration_status
 python3 lab.py scenario-trace       # attempt ↔ Airflow try 참조, 응답 유실 뒤 DUPLICATE_SKIP
 python3 lab.py scenario-lockloss    # 실행권 커넥션 상실 중 다른 실행 진입(경계 재현)
-python3 lab.py scenario-hold        # 실행 상태 불명 시 보류(V1~V8, 16개 확인) — 결과: results/hold-summary.md(로컬, 커밋하지 않는다)
-python3 lab.py scenario-unsettled   # 결말 없는 실행(수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거) — 결과: results/hold-summary.md(로컬, 커밋하지 않는다)
+python3 lab.py scenario-hold        # 실행 상태 불명 시 보류(V1~V8, 16개 확인)
+python3 lab.py scenario-unsettled   # 결말 없는 실행(수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거)
+# 시나리오마다 results/<시나리오>.events.jsonl 을 남긴다(로컬, 커밋하지 않는다). 위 두 시나리오의 사람이 쓴
+# 판정 요약은 `git show 8052842b:src/apps/cloud/airflow/local/results/hold-summary.md` 로 본다.
 # DAG 계약 테스트 — CI(test-airflow.yml)와 같은 이미지·명령
 docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro --entrypoint bash \
   apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1 \
