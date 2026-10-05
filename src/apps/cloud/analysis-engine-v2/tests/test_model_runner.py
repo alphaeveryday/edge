@@ -58,6 +58,20 @@ def test_valid_json_without_skill_calls_is_accepted_and_workspace_removed(tmp_pa
     assert workspaces and not workspaces[0].exists()
 
 
+def test_tinyfish_credential_is_not_inherited_by_model_process(monkeypatch, tmp_path):
+    monkeypatch.setenv('TINYFISH_API_KEY', 'private-provider-key')
+    base = client_for(ResultMessage(structured_output={'summary':'ok'}))
+    class Client(base):
+        async def __aenter__(self):
+            assert self.options.env['TINYFISH_API_KEY'] == ''
+            assert 'private-provider-key' not in self.options.system_prompt
+            return self
+    asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[], call=lambda *args:None,
+        output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert all('private-provider-key' not in p.read_text(encoding='utf-8')
+               for p in tmp_path.iterdir() if p.is_file())
+
+
 def test_research_is_bounded_by_elapsed_time_not_a_fixed_turn_count(tmp_path):
     base = client_for(None)
     class Client(base):

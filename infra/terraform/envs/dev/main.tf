@@ -2,7 +2,7 @@ locals {
   prefix                           = "edge-dev"
   data_pipeline_ecr_name           = "edge/pipeline"
   data_pipeline_image_tag          = "data-pipeline-latest"
-  analysis_engine_image_tag        = "analysis-engine-latest"
+  db_query_image_tag               = "db-query-latest"
   data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
   data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
   # foundation 이 소유하는 edge/airflow(ALPHA-1119). data 로 조회하지 않는다 — foundation apply 전에도 plan 이 선다.
@@ -432,8 +432,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
 
 # ── 에이전트 읽기전용 질의 one-off task (ALPHA-622) ──────
 # private RDS 는 VPC 밖에서 못 붙는다 — schema-migrate 와 같은 해법(VPC 내부 one-off task).
-# 이미지는 analysis 페이즈와 동일한 것을 쓴다(질의 코드가 같은 파이썬 패키지에 산다) —
-# 아래 data_pipeline 의 analysis_image 와 표현식을 공유해 태그가 갈라지지 않게 한다.
+# 전용 조회 이미지를 기존 ECR 저장소에서 사용한다.
 module "db_query" {
   source = "../../modules/db-query"
 
@@ -441,7 +440,7 @@ module "db_query" {
   region = var.region
   vpc_id = module.network.vpc_id
 
-  image = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
+  image = "${local.data_pipeline_ecr_repository_url}:${local.db_query_image_tag}"
 
   db_host = module.rds.address
   db_port = module.rds.port
@@ -537,7 +536,6 @@ module "data_pipeline" {
   subnet_ids       = module.network.private_subnet_ids
   cluster_arn      = module.worker_cluster.cluster_arn
   image            = "${local.data_pipeline_ecr_repository_url}:${local.data_pipeline_image_tag}"
-  analysis_image   = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
   lake_bucket_name = module.pipeline.lake_bucket
   lake_bucket_arn  = module.pipeline.lake_bucket_arn
 
@@ -552,25 +550,6 @@ module "data_pipeline" {
   db_user                = module.rds.master_username
   db_password_secret_arn = module.rds.master_user_secret_arn
   deepseek_secret_arn    = data.aws_secretsmanager_secret.deepseek.arn
-
-  # ExposureReverted 회수 집행(ALPHA-746) — analysis-consumer 가 super-admin 무효화 API 를
-  # 부른다. 내부 경로(Service Connect)가 아닌 공개 엣지인 이유: 소비자는 worker_cluster,
-  # super-admin-api 는 service_cluster 네임스페이스라 디스커버리가 닿지 않는다 — NAT egress
-  # 로 ALB(admin_api_domain, WAF 부착)를 탄다. 자격은 SSM SecureString 수동 주입
-  # (modules/data-pipeline/minute_services.tf 의 파라미터 이름 계약 참조).
-  super_admin_api_url = "https://${var.admin_api_domain}"
-
-  # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
-  # explanation_result 가 RDS 로 영속된다. 미주입은 이제 선택지가 아니다(ALPHA-797 이
-  # S3 폴백을 폐기) — 변수에 기본값이 없어 plan 이 막는다. 잠정 번들(ALPHA-406) —
-  # 정식 버저닝은 릴리스 규약 합의 후.
-  analysis_release_bundle_version = "dev-mvp-0"
-
-  # 시각창 집계 Athena 오프로드(ALPHA-780). 5분봉 Iceberg 정본과 Athena 결과 CSV 가 같은
-  # 버킷에 산다 — **terraform 관리 밖**이라 ARN 만 넘기고 리소스로 잡지 않는다.
-  # 이것 없이는 구간 모드가 DuckDB 폴백(질의당 376MB)으로 떨어져 1분 주기를 못 버틴다.
-  analysis_market_data_bucket_arn = "arn:aws:s3:::market-data-${data.aws_caller_identity.current.account_id}"
-  analysis_athena_workgroup       = "market_data"
 
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"

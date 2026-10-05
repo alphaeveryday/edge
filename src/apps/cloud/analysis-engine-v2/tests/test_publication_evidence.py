@@ -40,3 +40,19 @@ def test_another_etfs_successful_run_is_not_evidence_for_this_etf():
     run = {"data_source":"synthetic", "function_name":"sum", "status":"completed", "etf_code":"OTHER", "analysis_at":now}
     with pytest.raises(ValueError, match="foreign"):
         store._evidence(Cursor(run), ["run-1"], analysis)
+
+
+@pytest.mark.parametrize('eligible', [False, None, 'true', True])
+def test_web_publication_requires_server_confirmed_date_before_cutoff(eligible):
+    store = object.__new__(PublicationStore)
+    store.final_tool_names = frozenset({'read_web_document'})
+    now = datetime.fromisoformat('2026-10-04T08:30:00+09:00')
+    analysis = {'data_source':'database', 'analysis_id':'a', 'etf_code':'ETF', 'analysis_at':now}
+    run = dict(analysis, function_name='read_web_document', status='completed',
+               movement_analysis_id='a', outlook_analysis_id=None, arguments={},
+               output={'result':{'final_eligible':eligible}})
+    if eligible is True:
+        store._evidence(Cursor(run), ['run-1'], analysis)
+    else:
+        with pytest.raises(ValueError, match='publication time'):
+            store._evidence(Cursor(run), ['run-1'], analysis)

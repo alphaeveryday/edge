@@ -120,6 +120,8 @@ class PublicationStore:
             if run["function_name"] == "get_issue_evidence" and run["arguments"].get("include_body") is not False:
                 raise ToolInputError(f"Evidence {identity!r}: final news evidence must exclude article body. "
                                      "Call get_issue_evidence(include_body=false) and use its new tool_run_id.")
+            if run['function_name'] == 'read_web_document' and run['output'].get('result', {}).get('final_eligible') is not True:
+                raise ToolInputError('Web document publication time is future or unverified; use dated evidence before the analysis cutoff.')
 
     def validate_outlook_body_evidence(self, identity, body):
         """Reject invalid draft references before a successful edit is returned.

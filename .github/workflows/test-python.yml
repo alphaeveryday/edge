@@ -1,4 +1,4 @@
-# PR 검증 — Python 워크스페이스(analysis-engine·data-pipeline) 테스트 + 이미지 빌드 스모크.
+# PR 검증 — Python 워크스페이스(data-pipeline·db-query·analysis-engine-v2) 테스트 + 이미지 빌드 스모크.
 #
 # deploy-* 워크플로는 dev 머지 후 CD 전용(빌드→ECR push)이라 테스트가 없다 — 머지 전
 # 기계 게이트는 이 워크플로가 유일하다(ALPHA-534). 어떤 secret 도 쓰지 않고 실제
@@ -204,16 +204,11 @@ jobs:
           # E2E_PGPORT 는 "Start ephemeral Postgres" 스텝이 $GITHUB_ENV 로 넘긴다.
         # data-pipeline e2e 를 같은 호출에 넣는 이유: 이 잡만 실 스키마 Postgres 를 갖는다.
         # Actor 전환 뒤 뉴스 조립→조회 계보는 data-pipeline/test_news_v2_lineage가 v2로 검증한다.
-        # 퇴역한 v1 골든패스는 제거했지만 나머지 DB 경계 회귀 검사는 유지한다.
-        # 앱별 분리 규칙(파일 헤더)은 **같은 basename 충돌** 때문인데 두 e2e 디렉터리의
-        # 파일명이 겹치지 않아 안전하다 — 겹치는 이름을 새로 만들지 마라.
-        # ⚠️ 여기서만 검증되는 것이 있다: savepoint 로 회수 범위만 되돌린다는 ALPHA-1053 의
-        # 주장은 실 Postgres 가 아니면 증명되지 않는다(단위는 fake conn 이라 제어 흐름만 본다).
+        # 적재와 독립 DB 조회기의 실제 PostgreSQL 경계를 함께 검증한다.
         run: >
           uv run pytest
-          apps/cloud/analysis-engine/tests/e2e
           apps/cloud/data-pipeline/tests/e2e
-          apps/cloud/analysis-engine/tests/statics/test_evidence_save.py
+          apps/cloud/db-query/tests/e2e
           apps/cloud/data-pipeline/tests/minute/test_schema_vocab.py
           -q
 

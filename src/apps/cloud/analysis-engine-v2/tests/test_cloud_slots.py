@@ -96,6 +96,22 @@ def test_worker_takes_a_slot_before_it_reads_sources_or_runs_the_model(monkeypat
     assert events == ['cloud:outlook:091160', 'cloud:slot:0', 'sources', 'analysis']
 
 
+@pytest.mark.parametrize('owner', [None, 'workflow-owner'])
+def test_cloud_web_credential_is_bound_to_tools_not_model_or_artifacts(monkeypatch, tmp_path, owner):
+    from unittest.mock import Mock
+    from edge_analysis_v2.sources.web_research import WebResearch
+    worker = _worker_with_fakes(monkeypatch, [])
+    execute = Mock()
+    monkeypatch.setattr(worker, 'execute_request', execute)
+    worker.run(REQUEST, bucket='test', ca_path=tmp_path/'ca', folder=tmp_path/'output',
+               key='model-key', model='test', session=Mock(), owner=owner, web_key='web-secret')
+    web = worker.DatabaseTools.call_args.kwargs['web']
+    assert isinstance(web, WebResearch)
+    assert web.cutoff.isoformat() == REQUEST['analysis_at']
+    assert 'web_key' not in execute.call_args.kwargs
+    assert all('web-secret' not in p.read_text() for p in (tmp_path/'output').glob('*') if p.is_file())
+
+
 def test_worker_without_a_slot_starts_nothing_and_reports_why(monkeypatch, tmp_path):
     from unittest.mock import Mock
     events = []
