@@ -7,6 +7,7 @@ v2 전망·가격변동 실행 자동화의 기준 측정과 계약 재현 기�
 - `aws/`: dev 조회 SQL(`q1.sql`~`q4.sql`)과 조회 스크립트(`dbq.sh`).
 - `local/`: 탐침 `probe.py`, 격리 DB `docker-compose.yml`. 탐침은 결과를 `local/results.jsonl`에 쓴다. 실행 구조 대안 비교는 `review_probe.py`(아래 '실행 구조 대안 검토'), 100~900건 동시 부하와 PgBouncer 비교는 `load900.py`·`pool_check.py`(아래 '로컬 동시 부하와 PgBouncer 비교').
 - `dev/`: 배치 실행·조회 스크립트 `batch_run.py`. 결과를 `dev/results/`에 쓴다. `report <실행 이름>`은 끝난 실행을, `latest`는 가장 최근 실행(스케줄 발화 포함)을 집계한다.
+  - 인프라 비용 산정은 `infra_cost.py`다(아래 '인프라 비용 재산정'). `collect`는 읽기 전용 조회이고, `plan`은 거래일·휴일이 모두 있는 기간을 요구한다. 산식 검증은 `test_infra_cost.py`다.
 - 측정 원본(실행·조회 결과 JSON, 탐침 결과 JSONL)은 저장소에 두지 않는다. 위 결과 경로는 `.gitignore`에 있다. 이 문서 수치의 근거인 2026-10-02 원본 28개는 커밋 `66123f75`의 같은 폴더에 남아 있고 `git show 66123f75:tests/loadtest/analysis-v2/<경로>`로 꺼낸다. 아래에서 인용하는 원본 파일 이름은 그 커밋 기준이다.
 - 측정 시점 코드: `4311a19b`. 배포 이미지 `analysis-v2-cb9fa258`(작업 정의 9번)과 v2 소스 차이 0줄. 대상 목록 37종, 해시 `dc2373347520956f073a75214de38db1a8af9ebcd22a452efe73480f30f9225c`.
 
