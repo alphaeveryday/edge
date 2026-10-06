@@ -148,3 +148,15 @@ def test_removing_a_topic_whose_old_title_is_too_long_still_leaves_a_publishable
     assert violations({'detail': body}) == []
     body['updates']['items'][0]['title_keyword'] = '라' * 21
     assert violations({'detail': body})[0]['location'] == 'detail.updates.items[0].title_keyword'
+
+
+def test_a_same_day_update_entry_with_an_old_long_title_does_not_block_a_rewrite():
+    from datetime import datetime, timezone
+    from edge_analysis_v2.analysis.body_editor import BodyEditor
+    at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
+    topic = {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}
+    old = {'title': '제목', 'items': [topic], 'updates': {'date': '2026-10-06', 'items': [
+        {'id': 'gone', 'change_type': 'deleted', 'title_keyword': '라' * 33, 'sentence': None, 'tool_run_ids': ['r1']}]}}
+    body = BodyEditor(old, at).write('제목', [{'id': 't2', 'title_keyword': '짧은 제목', 'sentences': ['새 문장'], 'tool_run_ids': ['r2']}])
+    assert violations({'detail': body}) == []
+    assert [u['title_keyword'] for u in body['updates']['items'] if u['id'] == 'gone'] == ['라' * 20]

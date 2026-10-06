@@ -58,6 +58,9 @@ class BodyEditor:
         self.draft = deepcopy(base) if base is not None else {"title": "", "items": []}
         updates = self.draft.get("updates", {})
         self.updates = deepcopy(updates.get("items", [])) if updates.get("date") == self.date else []
+        for entry in self.updates:
+            # Same-day entries published before the limits existed keep their old titles; no edit can reach them.
+            entry["title_keyword"] = entry["title_keyword"][:TEXT_LIMITS['detail.items[].title_keyword']]
         if updates.get("date") != self.date:
             for item in self.draft["items"]:
                 for sentence in item["sentences"]:
