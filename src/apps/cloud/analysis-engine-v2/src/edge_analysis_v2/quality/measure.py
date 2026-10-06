@@ -45,17 +45,21 @@ def describe_environment():
             'image_revision': os.environ.get('IMAGE_REVISION'), 'ecs_metadata': bool(os.environ.get('ECS_CONTAINER_METADATA_URI_V4'))}
 
 
-def measure(folder):
+def measure(folder, *, started_at=None, finished_at=None):
     """Summarize one finished run folder.
 
     Args:
         folder: Artifact folder containing events.jsonl written by the runner.
+        started_at: When the run began; with finished_at it replaces the time derived from events.
+        finished_at: When the run ended, successfully or not.
 
     Returns:
         Wall time, model turns, token usage and per-tool call counts and seconds. Tool seconds are
         the time between the model's request and the result it received, including audit commits.
     """
-    events = [json.loads(line) for line in (Path(folder)/'events.jsonl').read_text(encoding='utf8').splitlines()]
+    path = Path(folder)/'events.jsonl'
+    # A run that failed before the first model message leaves no event file; it is still measured.
+    events = [json.loads(line) for line in path.read_text(encoding='utf8').splitlines()] if path.exists() else []
     stamped = [e for e in events if e.get('at')]
     pending, tools, turns, usage, rounds = {}, {}, 0, {}, []
     for event in events:
@@ -79,7 +83,11 @@ def measure(folder):
             for key, value in (event['message'].get('usage') or {}).items():
                 if key.endswith('tokens') and type(value) is int:
                     usage[key] = usage.get(key, 0) + value
-    wall = (datetime.fromisoformat(stamped[-1]['at']) - datetime.fromisoformat(stamped[0]['at'])).total_seconds() if len(stamped) > 1 else None
+    if started_at and finished_at:
+        # The run's own boundaries: includes start-up and any stall after the last message.
+        wall = (finished_at - started_at).total_seconds()
+    else:
+        wall = (datetime.fromisoformat(stamped[-1]['at']) - datetime.fromisoformat(stamped[0]['at'])).total_seconds() if len(stamped) > 1 else None
     total = lambda key: sum(r.get(key) or 0 for r in rounds) if rounds else None
     return {'wall_seconds': wall, 'model_turns': turns, 'rounds': len(rounds), 'sdk_turns': total('num_turns'),
             'sdk_duration_ms': total('duration_ms'), 'sdk_api_ms': total('duration_api_ms'), 'usage': usage, 'tool_calls': sum(t['calls'] for t in tools.values()),

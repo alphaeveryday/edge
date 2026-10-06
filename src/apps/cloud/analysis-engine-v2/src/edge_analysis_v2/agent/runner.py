@@ -101,6 +101,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         raise ValueError('Resume requires the same original observations and cutoff')
     def encode(value):
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
+    started_at = datetime.now(timezone.utc)
     server, allowed = make_server(schemas, call)
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
@@ -182,6 +183,6 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                 pass
             try:
                 # Cost of this run, successful or not, from the events it left behind.
-                (artifacts / 'measurement.json').write_text(encode(measure(artifacts)), encoding='utf-8')
+                (artifacts / 'measurement.json').write_text(encode(measure(artifacts, started_at=started_at, finished_at=datetime.now(timezone.utc))), encoding='utf-8')
             except (OSError, ValueError, KeyError):
                 pass

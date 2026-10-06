@@ -39,6 +39,20 @@ def test_a_run_resumed_for_unfinished_tasks_adds_up_every_round(tmp_path):
     assert result['usage'] == {'input_tokens': 153, 'cache_read_input_tokens': 4352}
 
 
+def test_a_run_that_never_received_a_message_is_still_measured_from_its_own_boundaries(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    began = datetime(2026, 10, 6, tzinfo=timezone.utc)
+    result = measure(tmp_path, started_at=began, finished_at=began + timedelta(seconds=600))
+    assert (result['wall_seconds'], result['model_turns'], result['tool_calls'], result['rounds']) == (600, 0, 0, 0)
+
+
+def test_time_after_the_last_message_counts_toward_the_run(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    (tmp_path/'events.jsonl').write_text(event('AssistantMessage', '2026-10-06T00:00:05+00:00', content=[]), encoding='utf8')
+    began = datetime(2026, 10, 6, tzinfo=timezone.utc)
+    assert measure(tmp_path, started_at=began, finished_at=began + timedelta(seconds=600))['wall_seconds'] == 600
+
+
 def test_the_environment_names_the_agent_executable_and_pinned_packages():
     value = describe_environment()
     assert value['python'] and value['packages']['claude-agent-sdk']
