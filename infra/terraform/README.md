@@ -83,7 +83,7 @@ cd ../envs/dev  && terraform apply
 | **알림 이메일**(파이프라인 실패 + RDS 경보) | ✅ 확인 완료 — 구독 활성(실측 2026-07-20, 구독 ARN 발급됨) | `pipeline_alarm_email` 기본값(변경 시 여기) |
 | **super-admin ALB 보호** | WAFv2 부착됨(ALPHA-297 — AWS Managed CommonRuleSet·KnownBadInputs, 차단 동작·CloudWatch 메트릭). IP 제한은 미적용(콘솔 API 표면 노출 — tenants 는 이제 실 `tenant` DB, ALPHA-526). 앱 인증(AdminAuthFilter fail-closed)은 있고, dev 는 부트스트랩 운영자 비밀번호 시크릿을 ECS 에 배선했다(ALPHA-618, 값은 TF 밖 수동 주입) | 앱 인증 본격화(ALPHA-474)·`allowed_cidrs` 운영 판단·커스텀 룰/레이트리밋 후속 |
 | **sync mTLS** | off — trust store 미주입(엔드포인트 공개 도달, dev 스텁·시드 데이터 전제) | CA·번들 준비(ALPHA-447) 후 `sync_mtls_trust_store_arn` 주입 |
-| **오토스케일링** | `analysis-consumer`(ALPHA-912 — SQS 잔여 일감 계단, `modules/data-pipeline/analysis_autoscaling.tf`)와 app-api(CPU target tracking 1~2대, ADR-0056 — 위 구조 절)에 붙었다. 나머지 서비스는 없음 | 상한은 성능이 아니라 공유 RDS 가 정한다 — `analysis_consumer_max_capacity` 를 실측으로 올린다 |
+| **오토스케일링** | `analysis-consumer`(ALPHA-912 — SQS 잔여 일감 계단, `modules/data-pipeline/analysis_autoscaling.tf`. 평일 08:55~15:45 KST 는 예약으로 최소 1대 — ALPHA-1234)와 app-api(CPU target tracking 1~2대, ADR-0056 — 위 구조 절)에 붙었다. 나머지 서비스는 없음 | 상한은 성능이 아니라 공유 RDS 가 정한다 — `analysis_consumer_max_capacity` 를 실측으로 올린다 |
 | **NAT** | dev 단일 공유(`single_nat_gateway`) | prod 은 AZ당 1개 |
 
 > ⚠️ `pipeline_alarm_email` 이 `null` 이면 SNS 구독 리소스가 `count=0` 으로 **아예 안 생겨** 실패
