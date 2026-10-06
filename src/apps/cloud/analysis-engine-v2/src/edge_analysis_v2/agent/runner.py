@@ -28,6 +28,17 @@ def load_prompt(path: Path) -> str:
     return prompt
 
 
+def describe_schema_error(error) -> str:
+    """Say where an argument or answer is invalid and how large it may be, without echoing the text."""
+    path = '/'.join(str(part) for part in error.absolute_path) or '(root)'
+    if error.validator == 'maxLength':
+        return (f'{path}: {len(error.instance)} characters, limit {error.validator_value}. '
+                'Keep the judgment; move detail into another bullet or topic instead of dropping evidence.')
+    if error.validator == 'maxItems':
+        return f'{path}: {len(error.instance)} items, limit {error.validator_value}.'
+    return f'{path}: {error.message[:300]}'
+
+
 def make_server(schemas: list[dict], call):
     """Expose registered schemas and return exactly the committed callback result.
 
@@ -45,7 +56,14 @@ def make_server(schemas: list[dict], call):
         name = function['name']
         validator = Draft202012Validator(function['parameters'])
         async def handler(arguments, tool_name=name, validator=validator):
-            validator.validate(arguments)
+            invalid = list(validator.iter_errors(arguments))
+            if invalid:
+                # Every failure at once: one round trip per over-long bullet would eat the deadline.
+                lines = [describe_schema_error(error) for error in invalid[:40]]
+                if len(invalid) > 40:
+                    # Never hide that more remain: a fixed draft would be rejected again for the unseen ones.
+                    lines.append(f'{len(invalid) - 40} more fields fail the same way; check every field against its limit.')
+                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(lines)}]}
             async with gate:
                 # Cancellation must not leave a database write racing publication failure.
                 pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
@@ -160,7 +178,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                             continue
                         (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
                         if event.get('is_error') or event.get('subtype') != 'success':
-                            raise ValueError('SDK did not produce a successful final result')
+                            # error_max_structured_output_retries = the answer never fit the output schema.
+                            raise ValueError(f"SDK did not produce a successful final result ({event.get('subtype')})")
                         value = event.get('structured_output')
                         if value is None:
                             value = json.loads(event.get('result') or '')

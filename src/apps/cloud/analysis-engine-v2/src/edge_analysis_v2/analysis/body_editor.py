@@ -4,6 +4,9 @@ from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
+from edge_analysis_v2.contracts.outlook_limits import TEXT_LIMITS, violations
+from edge_analysis_v2.tools.execution import ToolInputError
+
 
 KST = timezone(timedelta(hours=9))
 
@@ -55,6 +58,9 @@ class BodyEditor:
         self.draft = deepcopy(base) if base is not None else {"title": "", "items": []}
         updates = self.draft.get("updates", {})
         self.updates = deepcopy(updates.get("items", [])) if updates.get("date") == self.date else []
+        for entry in self.updates:
+            # Same-day entries published before the limits existed keep their old titles; no edit can reach them.
+            entry["title_keyword"] = entry["title_keyword"][:TEXT_LIMITS['detail.items[].title_keyword']]
         if updates.get("date") != self.date:
             for item in self.draft["items"]:
                 for sentence in item["sentences"]:
@@ -112,6 +118,13 @@ class BodyEditor:
         return self._commit(draft, self.mode)
 
     def _commit(self, draft, mode):
+        over = violations({'detail': draft})
+        if over:
+            # A body inherited from before the limits existed is over in many topics; one rewrite is the short way out.
+            hint = '; rewrite the whole body with write_outlook_body' if mode == 'update' else ''
+            raise ToolInputError('Body exceeds limits: ' + ', '.join(
+                f"{v['location']} {v['actual']}>{v['limit']} {v['kind']}" for v in over[:8])
+                + (f' and {len(over) - 8} more' if len(over) > 8 else '') + hint)
         current = {item["id"]: item for item in draft["items"]}
         if len(current) != len(draft["items"]) or len(current) > 15:
             raise ValueError("Expected at most 15 unique topics")
@@ -138,7 +151,10 @@ class BodyEditor:
             for identity, item in previous.items():
                 if identity not in current:
                     updates.pop(identity, None)
-                    updates[identity] = {"id": identity, "change_type": "deleted", "title_keyword": item["title_keyword"],
+                    # The title of a removed topic is shown in today's updates and can predate the limits;
+                    # nobody can rewrite it any more, so it is cut to fit.
+                    updates[identity] = {"id": identity, "change_type": "deleted",
+                                         "title_keyword": item["title_keyword"][:TEXT_LIMITS['detail.items[].title_keyword']],
                                          "sentence": None, "tool_run_ids": item["tool_run_ids"]}
             for identity, item in current.items():
                 added = identity not in previous

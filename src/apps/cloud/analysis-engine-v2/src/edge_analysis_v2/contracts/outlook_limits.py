@@ -34,6 +34,9 @@ def _texts(screen):
         for j, sentence in enumerate(item.get('sentences') or []):
             text = sentence.get('sentence') if isinstance(sentence, dict) else sentence
             yield 'detail.items[].sentences[].sentence', f'detail.items[{i}].sentences[{j}]', text
+    for i, update in enumerate((detail.get('updates') or {}).get('items') or []):
+        # Today's updates repeat topic titles on the screen.
+        yield 'detail.items[].title_keyword', f'detail.updates.items[{i}].title_keyword', update.get('title_keyword')
     for i, factor in enumerate(screen.get('factors') or []):
         yield 'factors[].sentence', f'factors[{i}].sentence', factor.get('sentence')
     yield 'conclusion.title', 'conclusion.title', conclusion.get('title')

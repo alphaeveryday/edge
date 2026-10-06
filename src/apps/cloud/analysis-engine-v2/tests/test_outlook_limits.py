@@ -53,3 +53,113 @@ def test_a_partial_screen_and_an_absent_change_condition_are_not_violations():
     assert violations({'summary_card': {'title': '가' * 26}}) == [
         {'location': 'summary_card.title', 'limit': 25, 'actual': 26, 'kind': 'characters'}]
     assert violations(screen(**{'conclusion.change_condition': None})) == []
+
+
+def test_the_agent_schemas_carry_the_same_limits_as_the_checker():
+    from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, OUTLOOK
+    properties = OUTLOOK['properties']
+    assert properties['summary_card']['properties']['summary']['maxLength'] == TEXT_LIMITS['summary_card.summary']
+    assert properties['factors']['items']['properties']['sentence']['maxLength'] == TEXT_LIMITS['factors[].sentence']
+    assert properties['conclusion']['properties']['title']['maxLength'] == TEXT_LIMITS['conclusion.title']
+    assert properties['conclusion']['properties']['supports']['items']['properties']['label']['maxLength'] == 15
+    topic = EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['items']['properties']
+    assert topic['sentences']['maxItems'] == 5 and topic['sentences']['items']['maxLength'] == 60
+    assert topic['title_keyword']['maxLength'] == 20
+    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['title']['maxLength'] == 25
+    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['maxItems'] == 15
+    assert properties['summary_card']['properties']['title']['maxLength'] == TEXT_LIMITS['summary_card.title']
+    assert properties['conclusion']['properties']['burdens']['items']['properties']['label']['maxLength'] == TEXT_LIMITS['conclusion.burdens[].label']
+    assert properties['conclusion']['properties']['change_condition']['maxLength'] == TEXT_LIMITS['conclusion.change_condition']
+    change = EDIT_SCHEMAS[1]['function']['parameters']['properties']['changes']['items']['properties']
+    assert change['sentences']['maxItems'] == 5 and change['sentences']['items']['maxLength'] == 60
+
+
+def test_every_overlong_bullet_comes_back_at_once_by_location_and_the_model_still_sees_the_limit(monkeypatch):
+    # WHY: the SDK checks the schema it is shown and answers with the first failure only, echoing the text.
+    import asyncio
+    from edge_analysis_v2.agent import runner
+    from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS
+    from edge_analysis_v2.tools.model_schema import agent_tool_schemas
+    visible = agent_tool_schemas(EDIT_SCHEMAS)[0]['function']['parameters']
+    bullet = visible['properties']['items']['items']['properties']['sentences']
+    assert 'maxLength' not in bullet['items'] and '최대 60자' in bullet['items']['description']
+    assert 'maxItems' not in bullet and '최대 5개' in bullet['description']
+    monkeypatch.setattr(runner, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
+    called = []
+    server, _ = runner.make_server(EDIT_SCHEMAS, lambda name, arguments: called.append(name))
+    topic = {'id': 't1', 'title_keyword': '수주', 'sentences': ['비밀' * 31, '짧다', '기밀' * 40], 'tool_run_ids': ['r1']}
+    text = asyncio.run(server['tools'][0].handler({'title': '제목', 'items': [topic]}))['content'][0]['text']
+    assert 'items/0/sentences/0: 62 characters, limit 60' in text and 'items/0/sentences/2: 80 characters, limit 60' in text
+    assert '비밀' not in text and called == []
+    many = [topic | {'id': f't{i}', 'sentences': ['가' * 61] * 5} for i in range(15)]
+    text = asyncio.run(server['tools'][0].handler({'title': '제목', 'items': many}))['content'][0]['text']
+    assert text.count('characters, limit 60') == 40 and '35 more fields fail' in text
+
+
+def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be_rewritten():
+    from datetime import datetime, timezone
+    import pytest
+    from edge_analysis_v2.analysis.body_editor import BodyEditor
+    at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
+    topic = {'id': 't1', 'title_keyword': '수주 확대', 'sentences': ['마' * 61], 'tool_run_ids': ['r1']}
+    with pytest.raises(ValueError, match=r'detail.items\[0\].sentences\[0\] 61>60'):
+        BodyEditor(None, at).write('제목', [topic])
+    ok = BodyEditor(None, at).write('제목', [topic | {'sentences': ['마' * 60]}])
+    assert len(ok['items']) == 1
+    old_body = {'title': '제목', 'items': [{'id': 't1', 'title_keyword': '수주 확대',
+        'sentences': [{'sentence': '마' * 140, 'is_updated': False}], 'tool_run_ids': ['r1']}]}
+    editor = BodyEditor(old_body, at)
+    from edge_analysis_v2.tools.execution import ToolInputError
+    # ToolInputError is the only failure whose text the audited executor passes on to the model.
+    with pytest.raises(ToolInputError, match='rewrite the whole body'):
+        editor.apply([{'action': 'add', 'id': 't2', 'title_keyword': '새 논점', 'sentences': ['짧은 문장'], 'tool_run_ids': ['r2']}])
+    assert len(editor.write('제목', [topic | {'sentences': ['마' * 60]}])['items']) == 1
+
+
+def test_an_overlong_summary_cannot_be_published():
+    import pytest
+    from edge_analysis_v2.contracts import publication_validation
+    factors = [{'type': t, 'sticker': '중립', 'sentence': '바'} for t in ('이슈', '차트', '매크로', '밸류', '수급')]
+    features = {'outlook': {'direction': '중립'}, 'summary_card': {'title': '가', 'summary': '나' * 81}, 'factors': factors,
+                'conclusion': {'title': '사', 'supports': [], 'burdens': [], 'sentence': '차'}}
+    body = {'title': '다', 'mode': 'create', 'updates': {'date': '2026-10-06', 'items': []}, 'items': [
+        {'id': 't1', 'title_keyword': '라', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r1']}]}
+    with pytest.raises(ValueError, match='summary_card.summary 81>80'):
+        publication_validation.outlook(features, body)
+    features['summary_card']['summary'] = '나' * 80
+    publication_validation.outlook(features, body)
+
+
+def test_a_schema_error_is_described_by_location_and_size_without_echoing_the_text():
+    from jsonschema import Draft202012Validator
+    from edge_analysis_v2.agent.output_schema import OUTLOOK
+    from edge_analysis_v2.agent.runner import describe_schema_error
+    value = {'summary_card': {'title': '가', 'summary': '비밀' * 50}}
+    error = next(e for e in Draft202012Validator(OUTLOOK).iter_errors(value) if e.validator == 'maxLength')
+    message = describe_schema_error(error)
+    assert message.startswith('summary_card/summary: 100 characters, limit 80') and '비밀' not in message
+
+
+def test_removing_a_topic_whose_old_title_is_too_long_still_leaves_a_publishable_update_entry():
+    from datetime import datetime, timezone
+    from edge_analysis_v2.analysis.body_editor import BodyEditor
+    old = {'title': '제목', 'items': [
+        {'id': 't1', 'title_keyword': '라' * 33, 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r1']},
+        {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}]}
+    body = BodyEditor(old, datetime(2026, 10, 6, 10, tzinfo=timezone.utc)).apply([{'action': 'remove', 'id': 't1'}])
+    assert [u['title_keyword'] for u in body['updates']['items'] if u['change_type'] == 'deleted'] == ['라' * 20]
+    assert violations({'detail': body}) == []
+    body['updates']['items'][0]['title_keyword'] = '라' * 21
+    assert violations({'detail': body})[0]['location'] == 'detail.updates.items[0].title_keyword'
+
+
+def test_a_same_day_update_entry_with_an_old_long_title_does_not_block_a_rewrite():
+    from datetime import datetime, timezone
+    from edge_analysis_v2.analysis.body_editor import BodyEditor
+    at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
+    topic = {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}
+    old = {'title': '제목', 'items': [topic], 'updates': {'date': '2026-10-06', 'items': [
+        {'id': 'gone', 'change_type': 'deleted', 'title_keyword': '라' * 33, 'sentence': None, 'tool_run_ids': ['r1']}]}}
+    body = BodyEditor(old, at).write('제목', [{'id': 't2', 'title_keyword': '짧은 제목', 'sentences': ['새 문장'], 'tool_run_ids': ['r2']}])
+    assert violations({'detail': body}) == []
+    assert [u['title_keyword'] for u in body['updates']['items'] if u['id'] == 'gone'] == ['라' * 20]

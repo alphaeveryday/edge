@@ -294,3 +294,25 @@ def test_resume_restores_work_and_rejects_changed_observations(tmp_path):
     result = asyncio.run(run_model(initial=initial, **args))
     assert result == {'summary':'resumed'}
     assert json.loads((tmp_path/'workspace.json').read_text())['status'] == 'completed'
+
+
+def test_an_overlong_final_answer_is_never_accepted(tmp_path):
+    # WHY: the CLI sends an over-limit answer back to the model itself; if one still arrives, it must not be published.
+    schema = {'type': 'object', 'required': ['summary'], 'additionalProperties': False,
+              'properties': {'summary': {'type': 'string', 'maxLength': 5}}}
+    class Client:
+        def __init__(self, *, options):
+            self.options = options
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def query(self, text):
+            pass
+        async def receive_response(self):
+            self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed'}])
+            yield ResultMessage(structured_output={'summary': 'far too long'})
+    with pytest.raises(ValidationError):
+        asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None,
+            output_schema=schema, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert not (tmp_path/'response.json').exists()
