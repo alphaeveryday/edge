@@ -48,8 +48,11 @@ class SkillSession:
         self.writing = content
 
     def system_prompt(self, task_prompt: str) -> str:
-        """Put investigation and stopping rules before task and presentation details."""
-        return '\n\n'.join([self.research, task_prompt, self.contract, self.writing])
+        """Keep domain instructions in the workspace document, not the runtime prompt."""
+        content = '\n\n'.join([self.research, task_prompt, self.contract, self.writing])
+        (self.workspace / 'AGENTS.md').write_text(content, encoding='utf-8')
+        (self.artifacts / 'AGENTS.md').write_text(content, encoding='utf-8')
+        return (SOURCE.parent / 'prompts' / 'harness.md').read_text(encoding='utf-8')
 
     def _readable(self, path):
         try:

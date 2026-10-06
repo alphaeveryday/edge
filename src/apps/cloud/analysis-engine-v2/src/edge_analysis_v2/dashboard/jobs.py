@@ -15,7 +15,7 @@ SCENARIOS = {'baseline':'기본', 'unusual_flow':'특이 수급', 'competing_sig
              'followup':'후속 기사', 'quiet':'변화 없음'}
 SCENARIOS.update({f'replay_{day}':f'연속 재생 {day}/5' for day in range(1,6)})
 SCENARIOS.update({name:values[0] for name,values in CASES.items()})
-ARTIFACTS = ('AGENTS.md', 'skills.json', 'system_prompt.yaml', 'prompt_version.json', 'contract_audit.json', 'case_spec.json', 'verification.json', 'quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
+ARTIFACTS = ('workspace.json', 'model_input.json', 'compactions.jsonl', 'AGENTS.md', 'skills.json', 'system_prompt.yaml', 'prompt_version.json', 'contract_audit.json', 'case_spec.json', 'verification.json', 'quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
              'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json')
 
 
