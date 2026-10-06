@@ -91,6 +91,9 @@ def test_every_overlong_bullet_comes_back_at_once_by_location_and_the_model_stil
     text = asyncio.run(server['tools'][0].handler({'title': '제목', 'items': [topic]}))['content'][0]['text']
     assert 'items/0/sentences/0: 62 characters, limit 60' in text and 'items/0/sentences/2: 80 characters, limit 60' in text
     assert '비밀' not in text and called == []
+    many = [topic | {'id': f't{i}', 'sentences': ['가' * 61] * 5} for i in range(15)]
+    text = asyncio.run(server['tools'][0].handler({'title': '제목', 'items': many}))['content'][0]['text']
+    assert text.count('characters, limit 60') == 40 and '35 more fields fail' in text
 
 
 def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be_rewritten():

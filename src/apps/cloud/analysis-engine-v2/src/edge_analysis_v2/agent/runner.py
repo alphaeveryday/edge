@@ -59,8 +59,11 @@ def make_server(schemas: list[dict], call):
             invalid = list(validator.iter_errors(arguments))
             if invalid:
                 # Every failure at once: one round trip per over-long bullet would eat the deadline.
-                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(
-                    describe_schema_error(error) for error in invalid[:20])}]}
+                lines = [describe_schema_error(error) for error in invalid[:40]]
+                if len(invalid) > 40:
+                    # Never hide that more remain: a fixed draft would be rejected again for the unseen ones.
+                    lines.append(f'{len(invalid) - 40} more fields fail the same way; check every field against its limit.')
+                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(lines)}]}
             async with gate:
                 # Cancellation must not leave a database write racing publication failure.
                 pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
