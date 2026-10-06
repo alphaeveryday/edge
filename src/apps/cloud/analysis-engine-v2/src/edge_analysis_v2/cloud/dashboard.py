@@ -112,20 +112,25 @@ class CloudDashboard:
             self._sync()
 
     def _sync(self):
+        unreadable=0
         try:
             for page in self.s3.get_paginator('list_objects_v2').paginate(Bucket=self.bucket,Prefix=PREFIX):
                 for obj in page.get('Contents',[]):
                     match=re.fullmatch(re.escape(PREFIX)+r'([a-f0-9]{32})/manifest\.json',obj['Key'])
                     if not match or self.etags.get(obj['Key'])==obj.get('ETag'):
                         continue
-                    raw=self.s3.get_object(Bucket=self.bucket,Key=obj['Key'])['Body'].read(LIMIT+1)
-                    if len(raw)>LIMIT:
-                        raise ValueError('Oversized manifest')
-                    manifest=decode_json(raw)
-                    if manifest['job']['analysis_id']!=match[1]:
-                        raise ValueError('Manifest identity mismatch')
-                    download(self.s3,self.bucket,manifest,self.folder/match[1])
-                    self.etags[obj['Key']]=obj.get('ETag')
+                    try:
+                        raw=self.s3.get_object(Bucket=self.bucket,Key=obj['Key'])['Body'].read(LIMIT+1)
+                        if len(raw)>LIMIT:
+                            raise ValueError('Oversized manifest')
+                        manifest=decode_json(raw)
+                        if manifest['job']['analysis_id']!=match[1]:
+                            raise ValueError('Manifest identity mismatch')
+                        download(self.s3,self.bucket,manifest,self.folder/match[1])
+                        self.etags[obj['Key']]=obj.get('ETag')
+                    except Exception:
+                        # One damaged run must not hide every run listed after it; it is retried next poll.
+                        unreadable+=1
             executions=[]
             token=None
             while True:
@@ -156,6 +161,8 @@ class CloudDashboard:
                     job.update(observation_status='incomplete')
                 atomic(self._file(identity,'job.json'),encode(job))
             self.sync_status={'status':'ok','last_synced_at':datetime.now(timezone.utc).isoformat()}
+            if unreadable:
+                self.sync_status=self.sync_status | {'status':'error','error':str(unreadable)+' run observation(s) could not be read; other runs were synchronized'}
         except Exception as exc:
             # Do not overwrite known execution states when local credentials/network fail.
             self.sync_status=self.sync_status | {'status':'error','error':type(exc).__name__+': cloud sync unavailable; check AWS login and connectivity'}

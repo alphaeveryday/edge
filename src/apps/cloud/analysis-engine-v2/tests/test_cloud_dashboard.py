@@ -93,3 +93,24 @@ def test_a_price_triggered_execution_does_not_stop_synchronization_of_the_others
     assert {job['analysis_id'] for job in observer.jobs()}=={triggered['analysis_id'],REQUEST['analysis_id']}
     with pytest.raises(ValueError):
         observer.start(triggered)   # the public start endpoint still refuses source coordinates
+
+
+def test_one_damaged_observation_is_reported_without_hiding_the_runs_after_it(tmp_path):
+    # WHY: the damaged manifest is listed first on every poll; stopping there made all later runs invisible for good.
+    source=tmp_path/'worker'
+    source.mkdir()
+    s3=MemoryS3()
+    job=REQUEST | {'origin':'cloud','status':'running','started_at':REQUEST['analysis_at'],'scenario':'database'}
+    Publisher(s3,'bucket',REQUEST['analysis_id'],source).publish(job)
+    good=next(k for k in s3.objects if k.endswith('manifest.json'))
+    bad=good.replace(REQUEST['analysis_id'],'0'*32)
+    s3.objects[bad]=b'{not json'
+    s3.get_paginator=Mock()
+    s3.get_paginator.return_value.paginate.return_value=[{'Contents':[{'Key':bad,'ETag':'x'},{'Key':good,'ETag':'one'}]}]
+    sfn=Mock()
+    sfn.list_executions.return_value={'executions':[]}
+    observer=CloudDashboard(tmp_path/'local',s3=s3,sfn=sfn,bucket='bucket',state_machine='arn')
+    observer.sync()
+    assert [j['analysis_id'] for j in observer.jobs()]==[REQUEST['analysis_id']]
+    assert observer.sync_status['status']=='error' and observer.sync_status['error'].startswith('1 run observation')
+    sfn.list_executions.assert_called()
