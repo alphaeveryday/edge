@@ -71,6 +71,7 @@ cd ../envs/dev  && terraform apply
   `terraform.tfvars` 핀은 신규 생성 시 baseline 으로만 쓰인다.
   `data-pipeline` 배치 이미지는 `deploy-data-pipeline.yml` 이 기존 `edge/pipeline` 에 `{git-sha,data-pipeline-latest}` 를 push 하고,
   raw ingest task definition 은 `data-pipeline-latest` 를 참조한다.
+- 이미지 보존: 저장소마다 최근 10개 버전만 남고 나머지는 지워진다(ALPHA-1236). 규칙과 새 태그 계열을 만들 때 할 일은 [foundation/README.md](foundation/README.md) "ECR 이미지 보존".
 
 ## 현재 상태 (최초 작성 2026-07-04, 이후 항목별 갱신)
 
