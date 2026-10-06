@@ -1,0 +1,384 @@
+formatVersion: 2
+name: MarketCapitalization
+label: Market capitalization
+description: A market-capitalization observation reported for a security in a dated
+  provider snapshot. Currency and capitalization scope describe the amount.
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns:
+  - instrument_id
+  - as_of_date
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this security and provider-snapshot date, preserving
+      the stored instrument ID and date.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - as_of_date
+      foreignKeys:
+      - constraint: fk_instrument_classification_instrument
+        table: instrument_classification
+        columns:
+        - instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  instrumentId:
+    label: Instrument id
+    description: Internal identifier of the security whose data this record describes.
+      Resolve it to Equity or ETF, not directly to Company.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - as_of_date
+      foreignKeys:
+      - constraint: fk_instrument_classification_instrument
+        table: instrument_classification
+        columns:
+        - instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: instrumentId
+    displayName: Instrument id
+    status: experimental
+    dataType: String
+  snapshotDate:
+    label: Snapshot date
+    description: Date recorded for this provider snapshot.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - as_of_date
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: snapshotDate
+    displayName: Snapshot date
+    status: experimental
+    dataType: Date
+  amount:
+    label: Market capitalization amount
+    description: Market-capitalization amount denominated in currencyCode, for the
+      capitalization scope stated in capitalizationScope.
+    sourceDataType: numeric
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: needsCorrection
+    apiName: amount
+    displayName: Market capitalization amount
+    status: experimental
+    dataType: Decimal
+    mappingNote: The captured source has no currency or capitalization-scope field.
+      Verify denomination and whether the value covers one share class or the whole
+      issuer before exposing the amount.
+  source:
+    label: Classification provider
+    description: Provider that supplied the sector and industry classification, such
+      as FMP.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: source
+    displayName: Classification provider
+    status: experimental
+    dataType: String
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  currencyCode:
+    label: Currency
+    description: Three-letter currency code in which the market-capitalization amount
+      is denominated.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current source table does not preserve this basis; verify it
+      against the provider before mapping.
+    apiName: currencyCode
+    displayName: Currency
+    status: experimental
+    dataType: String
+  capitalizationScope:
+    label: Capitalization scope
+    description: SECURITY for the referenced share class or ISSUER for the issuer-wide
+      capitalization reported against that security.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current source table does not preserve this basis; verify it
+      against the provider before mapping.
+    apiName: capitalizationScope
+    displayName: Capitalization scope
+    status: experimental
+    dataType: String
+  valuationDate:
+    label: Valuation date
+    description: Market date whose price and outstanding-share count underlie this
+      capitalization amount.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current source table does not preserve this basis; verify it
+      against the provider before mapping.
+    apiName: valuationDate
+    displayName: Valuation date
+    status: experimental
+    dataType: Date
+  securityName:
+    label: Security name
+    description: Current stored name of the security identified by instrument_id;
+      not its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityName
+    displayName: Security name
+    status: experimental
+    dataType: String
+  securityTicker:
+    label: Security ticker
+    description: Current ticker of the security; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityTicker
+    displayName: Security ticker
+    status: experimental
+    dataType: String
+  securityMarketCode:
+    label: Security market code
+    description: Current market code of the security, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityMarketCode
+    displayName: Security market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: instrument_classification
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: instrument_classification
+      column: instrument_id
+    instrumentId:
+      alias: base
+      table: instrument_classification
+      column: instrument_id
+    snapshotDate:
+      alias: base
+      table: instrument_classification
+      column: as_of_date
+    amount:
+      alias: base
+      table: instrument_classification
+      column: market_cap
+    source:
+      alias: base
+      table: instrument_classification
+      column: source
+    availableAt:
+      alias: base
+      table: instrument_classification
+      column: available_at
+    currencyCode:
+      kind: unmapped
+      reason: The current source table does not preserve this basis; verify it against
+        the provider before mapping.
+    capitalizationScope:
+      kind: unmapped
+      reason: The current source table does not preserve this basis; verify it against
+        the provider before mapping.
+    valuationDate:
+      kind: unmapped
+      reason: The current source table does not preserve this basis; verify it against
+        the provider before mapping.
+    securityName:
+      kind: view_column
+      schema: ontology_view
+      table: market_capitalization
+      column: security_name
+      sqlFile: sql/views/market_capitalization.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: instrument_classification
+        column: as_of_date
+      - schema: public
+        table: instrument_classification
+        column: instrument_id
+    securityTicker:
+      kind: view_column
+      schema: ontology_view
+      table: market_capitalization
+      column: security_ticker
+      sqlFile: sql/views/market_capitalization.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: instrument_classification
+        column: as_of_date
+      - schema: public
+        table: instrument_classification
+        column: instrument_id
+    securityMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: market_capitalization
+      column: security_market_code
+      sqlFile: sql/views/market_capitalization.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: instrument_classification
+        column: as_of_date
+      - schema: public
+        table: instrument_classification
+        column: instrument_id
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: market_capitalization
+      column: display_title
+      sqlFile: sql/views/market_capitalization.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: instrument_classification
+        column: as_of_date
+      - schema: public
+        table: instrument_classification
+        column: instrument_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - instrument_id
+  - as_of_date
+  tableConstraints:
+  - name: ck_instrument_classification_market_cap
+    kind: c
+    definition: CHECK (((market_cap IS NULL) OR ((market_cap >= (0)::numeric) AND
+      (market_cap < 'Infinity'::numeric))))
+    validated: true
+  - name: ck_instrument_classification_names_not_blank
+    kind: c
+    definition: CHECK ((((sector_name IS NULL) OR (btrim(sector_name) <> ''::text))
+      AND ((industry_name IS NULL) OR (btrim(industry_name) <> ''::text))))
+    validated: true
+  - name: fk_instrument_classification_instrument
+    kind: f
+    definition: FOREIGN KEY (instrument_id) REFERENCES instrument(instrument_id) ON
+      DELETE CASCADE
+    validated: true
+  - name: instrument_classification_pkey
+    kind: p
+    definition: PRIMARY KEY (instrument_id, as_of_date)
+    validated: true
+apiName: MarketCapitalization
+displayName: Market capitalization
+pluralDisplayName: Market capitalizations
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- MarketCapitalization_ForSecurity_Equity
+- MarketCapitalization_ForSecurity_ETF

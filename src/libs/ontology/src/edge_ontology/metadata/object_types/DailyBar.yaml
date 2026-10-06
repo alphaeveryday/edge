@@ -1,0 +1,501 @@
+formatVersion: 2
+name: DailyBar
+label: Daily bar
+description: 'One daily OHLCV bar for an equity security or ETF: open, high, low and
+  close prices, traded quantity and trading value for one trading date.'
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns: &id001
+  - instrument_id
+  - trade_date
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this daily bar, encoded from instrumentId, tradeDate.
+      Every listed key component is preserved.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - &id002
+        constraint: fk_price_daily_instrument
+        table: price_daily
+        columns:
+        - instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  instrumentId:
+    label: Instrument id
+    description: Internal identifier of the security whose data this record describes.
+      Resolve it to Equity or ETF, not directly to Company.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - *id002
+    mappingStatus: ready
+    apiName: instrumentId
+    displayName: Instrument id
+    status: experimental
+    dataType: String
+  tradeDate:
+    label: Trade date
+    description: Trading date to which the recorded market data applies; distinct
+      from the time it was collected.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: tradeDate
+    displayName: Trade date
+    status: experimental
+    dataType: Date
+  openPrice:
+    label: Open price
+    description: Opening price per share or ETF unit for the trading day, in the security's
+      trading currency.
+    dataType: Decimal
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The canonical daily-price dataset contains this value, but the captured
+      price_daily table has no corresponding column. The database load and ontology
+      binding are pending.
+    apiName: openPrice
+    displayName: Open price
+    status: experimental
+  highPrice:
+    label: High price
+    description: Highest traded price per share or ETF unit during the trading day,
+      in the security's trading currency.
+    dataType: Decimal
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The canonical daily-price dataset contains this value, but the captured
+      price_daily table has no corresponding column. The database load and ontology
+      binding are pending.
+    apiName: highPrice
+    displayName: High price
+    status: experimental
+  lowPrice:
+    label: Low price
+    description: Lowest traded price per share or ETF unit during the trading day,
+      in the security's trading currency.
+    dataType: Decimal
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The canonical daily-price dataset contains this value, but the captured
+      price_daily table has no corresponding column. The database load and ontology
+      binding are pending.
+    apiName: lowPrice
+    displayName: Low price
+    status: experimental
+  closePrice:
+    label: Close price
+    description: Exchange closing price per share or ETF unit, in the security's recorded
+      currency.
+    sourceDataType: numeric
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: closePrice
+    displayName: Close price
+    status: experimental
+    dataType: Decimal
+  adjustedClosePrice:
+    label: Adjusted close price
+    description: Closing price adjusted by the source for corporate actions. NULL
+      means an adjusted price is unavailable; the adjustment method depends on the
+      source.
+    sourceDataType: numeric
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: adjustedClosePrice
+    displayName: Adjusted close price
+    status: experimental
+    dataType: Decimal
+  simpleReturn:
+    label: Simple return
+    description: Simple daily return expressed as a fraction; 0.01 represents a 1%
+      gain. Interpret the price adjustment basis together with priceBasis.
+    sourceDataType: double precision
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: simpleReturn
+    displayName: Simple return
+    status: experimental
+    dataType: Double
+  logReturn:
+    label: Log return
+    description: Natural-log daily price return. Its value is a log ratio, not a percentage
+      figure.
+    sourceDataType: double precision
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: logReturn
+    displayName: Log return
+    status: experimental
+    dataType: Double
+  volume:
+    label: Volume
+    description: Total quantity traded during the trading day, measured in shares
+      for equity securities or fund units for ETFs. Zero is a reported zero quantity;
+      NULL means no quantity is available.
+    sourceDataType: bigint
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: volume
+    displayName: Volume
+    status: experimental
+    dataType: Long
+  turnoverValue:
+    label: Turnover value
+    description: Total monetary value of trades during the trading day, in the security's
+      trading currency.
+    sourceDataType: numeric
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: turnoverValue
+    displayName: Turnover value
+    status: experimental
+    dataType: Decimal
+    mappingNote: The column exists, but the current loader writes NULL because the
+      canonical dataset does not carry trading value.
+  priceBasis:
+    label: Price basis
+    description: Source label describing the price or adjustment basis used for the
+      observation. NULL means the basis is not recorded.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: priceBasis
+    displayName: Price basis
+    status: experimental
+    dataType: String
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  securityName:
+    label: Security name
+    description: Current stored name of the security identified by instrument_id;
+      not its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityName
+    displayName: Security name
+    status: experimental
+    dataType: String
+  securityTicker:
+    label: Security ticker
+    description: Current ticker of the security; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityTicker
+    displayName: Security ticker
+    status: experimental
+    dataType: String
+  securityMarketCode:
+    label: Security market code
+    description: Current market code of the security, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityMarketCode
+    displayName: Security market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: price_daily
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: price_daily
+      column: instrument_id
+    instrumentId:
+      alias: base
+      table: price_daily
+      column: instrument_id
+    tradeDate:
+      alias: base
+      table: price_daily
+      column: trade_date
+    closePrice:
+      alias: base
+      table: price_daily
+      column: close_price
+    adjustedClosePrice:
+      alias: base
+      table: price_daily
+      column: adjusted_close_price
+    simpleReturn:
+      alias: base
+      table: price_daily
+      column: simple_return
+    logReturn:
+      alias: base
+      table: price_daily
+      column: log_return
+    volume:
+      alias: base
+      table: price_daily
+      column: volume
+    turnoverValue:
+      alias: base
+      table: price_daily
+      column: turnover_value
+    priceBasis:
+      alias: base
+      table: price_daily
+      column: price_basis
+    availableAt:
+      alias: base
+      table: price_daily
+      column: available_at
+    openPrice:
+      kind: unmapped
+      candidateSource:
+        dataset: canonical/market_data/price_daily
+        column: open
+        identity:
+        - market
+        - ticker
+        - trade_date
+      preparation: Resolve the canonical market/ticker to instrument_id and retain
+        the same winning daily-price record as closePrice and volume. Add or connect
+        the backing data before mapping this property.
+    highPrice:
+      kind: unmapped
+      candidateSource:
+        dataset: canonical/market_data/price_daily
+        column: high
+        identity:
+        - market
+        - ticker
+        - trade_date
+      preparation: Resolve the canonical market/ticker to instrument_id and retain
+        the same winning daily-price record as closePrice and volume. Add or connect
+        the backing data before mapping this property.
+    lowPrice:
+      kind: unmapped
+      candidateSource:
+        dataset: canonical/market_data/price_daily
+        column: low
+        identity:
+        - market
+        - ticker
+        - trade_date
+      preparation: Resolve the canonical market/ticker to instrument_id and retain
+        the same winning daily-price record as closePrice and volume. Add or connect
+        the backing data before mapping this property.
+    securityName:
+      kind: view_column
+      schema: ontology_view
+      table: daily_bar
+      column: security_name
+      sqlFile: sql/views/daily_bar.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: price_daily
+        column: instrument_id
+      - schema: public
+        table: price_daily
+        column: trade_date
+    securityTicker:
+      kind: view_column
+      schema: ontology_view
+      table: daily_bar
+      column: security_ticker
+      sqlFile: sql/views/daily_bar.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: price_daily
+        column: instrument_id
+      - schema: public
+        table: price_daily
+        column: trade_date
+    securityMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: daily_bar
+      column: security_market_code
+      sqlFile: sql/views/daily_bar.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: price_daily
+        column: instrument_id
+      - schema: public
+        table: price_daily
+        column: trade_date
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: daily_bar
+      column: display_title
+      sqlFile: sql/views/daily_bar.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: price_daily
+        column: instrument_id
+      - schema: public
+        table: price_daily
+        column: trade_date
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_price_daily_values
+    kind: c
+    definition: CHECK ((((close_price IS NULL) OR ((close_price > (0)::numeric) AND
+      (close_price < 'Infinity'::numeric))) AND ((adjusted_close_price IS NULL) OR
+      ((adjusted_close_price > (0)::numeric) AND (adjusted_close_price < 'Infinity'::numeric)))
+      AND ((volume IS NULL) OR (volume >= 0)) AND ((turnover_value IS NULL) OR ((turnover_value
+      >= (0)::numeric) AND (turnover_value < 'Infinity'::numeric))) AND ((simple_return
+      IS NULL) OR ((simple_return >= ('-1'::integer)::double precision) AND (simple_return
+      < 'Infinity'::double precision))) AND ((log_return IS NULL) OR ((log_return
+      > '-Infinity'::double precision) AND (log_return < 'Infinity'::double precision)))))
+    validated: true
+  - name: fk_price_daily_instrument
+    kind: f
+    definition: FOREIGN KEY (instrument_id) REFERENCES instrument(instrument_id) ON
+      DELETE CASCADE
+    validated: true
+  - name: price_daily_pkey
+    kind: p
+    definition: PRIMARY KEY (instrument_id, trade_date)
+    validated: true
+apiName: DailyBar
+displayName: Daily bar
+pluralDisplayName: Daily bars
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+dataIssues:
+- Open, high and low exist in the canonical price dataset but are absent from the
+  captured PostgreSQL price_daily schema. Their object properties await source mapping.
+- The current loader writes NULL to turnover_value, price_basis, simple_return and
+  log_return. The ontology definitions are retained; these are data-population gaps.
+linkTypes:
+- DailyBar_ForSecurity_Equity
+- DailyBar_ForSecurity_ETF

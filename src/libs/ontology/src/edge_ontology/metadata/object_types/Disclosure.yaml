@@ -1,0 +1,317 @@
+formatVersion: 2
+name: Disclosure
+label: Disclosure
+description: One company disclosure document, identified by its document record and
+  the company whose disclosure it is. Contract and business-segment facts extracted
+  from it keep their own records.
+group: Disclosures & financials
+primaryKey: id
+identity:
+  columns: &id001
+  - document_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal document identifier of this company filing.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - constraint: fk_disclosure_document_type
+        table: disclosure_document
+        columns:
+        - document_id
+        - document_type
+        target_table: document
+        target_columns:
+        - document_id
+        - document_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  issuerId:
+    label: Issuer id
+    description: Identifier of the company whose own disclosure this is. It identifies
+      the disclosure company, not a filing agent, a contract counterparty, or every
+      company mentioned in the text.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_disclosure_document_issuer
+        table: disclosure_document
+        columns:
+        - issuer_actor_id
+        target_table: company_profile
+        target_columns:
+        - actor_id
+    mappingStatus: ready
+    apiName: issuerId
+    displayName: Issuer id
+    status: experimental
+    dataType: String
+  disclosureType:
+    label: Disclosure type
+    description: Recorded filing category, used to distinguish disclosure subjects
+      such as supply contracts and business segments.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: disclosureType
+    displayName: Disclosure type
+    status: experimental
+    dataType: String
+  reportDate:
+    label: Report date
+    description: Report date recorded for the source filing; it is separate from any
+      contract dates or financial periods extracted from the document.
+    sourceDataType: date
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: reportDate
+    displayName: Report date
+    status: experimental
+    dataType: Date
+  title:
+    label: Title
+    description: Title of this disclosure as stored in the source document record.
+      NULL means no title is available.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: title
+    displayName: Title
+    status: experimental
+    dataType: String
+  publishedAt:
+    label: Published at
+    description: Publication time reported for the original document; distinct from
+      its collection or analytical availability time.
+    sourceDataType: timestamp with time zone
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: publishedAt
+    displayName: Published at
+    status: experimental
+    dataType: Timestamp
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  sourceDocumentId:
+    label: Source document id
+    description: Provider identifier of this disclosure, such as its DART receipt
+      number. It identifies the document, not the company.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceDocumentId
+    displayName: Source document id
+    status: experimental
+    dataType: String
+  sourceUri:
+    label: Source uri
+    description: Source URL or URI used to locate the original document.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceUri
+    displayName: Source uri
+    status: experimental
+    dataType: String
+  issuerName:
+    label: Issuer name
+    description: Current stored name of the issuer referenced by issuer_id; NULL if
+      no name is resolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: issuerName
+    displayName: Issuer name
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Original disclosure title when present; otherwise a display label
+      composed of its stored issuer, disclosure type, reporting date and source document
+      number. The original title remains unchanged.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: disclosure_document
+  joins:
+  - alias: document
+    from: base
+    table: document
+    joinType: left
+    constraint: fk_disclosure_document_type
+    'on':
+    - source: document_id
+      target: document_id
+    - source: document_type
+      target: document_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: disclosure_document
+      column: document_id
+    issuerId:
+      alias: base
+      table: disclosure_document
+      column: issuer_actor_id
+    disclosureType:
+      alias: base
+      table: disclosure_document
+      column: disclosure_type
+    reportDate:
+      alias: base
+      table: disclosure_document
+      column: report_date
+    title:
+      alias: document
+      table: document
+      column: title
+    publishedAt:
+      alias: document
+      table: document
+      column: published_at
+    availableAt:
+      alias: document
+      table: document
+      column: available_at
+    sourceDocumentId:
+      alias: document
+      table: document
+      column: source_document_id
+    sourceUri:
+      alias: document
+      table: document
+      column: source_uri
+    issuerName:
+      kind: view_column
+      schema: ontology_view
+      table: disclosure
+      column: issuer_name
+      sqlFile: sql/views/disclosure.sql
+      inputs:
+      - schema: public
+        table: disclosure_document
+        column: disclosure_type
+      - schema: public
+        table: disclosure_document
+        column: issuer_actor_id
+      - schema: public
+        table: disclosure_document
+        column: report_date
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: disclosure
+      column: display_title
+      sqlFile: sql/views/disclosure.sql
+      inputs:
+      - schema: public
+        table: disclosure_document
+        column: disclosure_type
+      - schema: public
+        table: disclosure_document
+        column: issuer_actor_id
+      - schema: public
+        table: disclosure_document
+        column: report_date
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: disclosure_document_pkey
+    kind: p
+    definition: PRIMARY KEY (document_id)
+    validated: true
+  - name: fk_disclosure_document_issuer
+    kind: f
+    definition: FOREIGN KEY (issuer_actor_id) REFERENCES company_profile(actor_id)
+      ON DELETE RESTRICT
+    validated: true
+  - name: fk_disclosure_document_type
+    kind: f
+    definition: FOREIGN KEY (document_id, document_type) REFERENCES document(document_id,
+      document_type) ON DELETE CASCADE
+    validated: true
+apiName: Disclosure
+displayName: Disclosure
+pluralDisplayName: Disclosures
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- Disclosure_DescribesEvent_SourceEvent

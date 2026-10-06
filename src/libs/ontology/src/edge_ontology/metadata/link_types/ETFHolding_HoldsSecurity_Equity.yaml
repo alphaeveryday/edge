@@ -1,0 +1,29 @@
+id: ETFHolding_HoldsSecurity_Equity
+source: ETFHolding
+definition:
+  name: HoldsSecurity
+  label: HoldsSecurity
+  description: The security held in this ETF position. This target is the constituent,
+    not the ETF that owns the position.
+  target: Equity
+  sourceProperty: constituentInstrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: holdsSecurityEquity
+  displayName: HoldsSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: heldInETFPositions
+    displayName: Held in ETF positions
+    description: Dated ETF positions containing this security as the constituent.
+    pluralDisplayName: Held in ETF positions
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: ETFHolding
+    foreignKeyProperty: constituentInstrumentId
+    referencedObjectType: Equity

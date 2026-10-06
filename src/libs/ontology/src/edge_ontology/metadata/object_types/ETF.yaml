@@ -1,0 +1,411 @@
+formatVersion: 2
+name: ETF
+label: ETF
+description: One exchange-traded fund product, with its own listing, investment mandate,
+  prices, and dated holdings.
+group: Company & securities
+primaryKey: id
+identity:
+  columns: &id001
+  - instrument_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal security identifier of this ETF product.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - constraint: fk_etf_profile_instrument
+        table: etf_profile
+        columns:
+        - instrument_id
+        - instrument_type
+        target_table: instrument
+        target_columns:
+        - instrument_id
+        - instrument_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  name:
+    label: Name
+    description: ETF product display name stored in the entity registry.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: name
+    displayName: Name
+    status: experimental
+    dataType: String
+  ticker:
+    label: Ticker
+    description: Trading symbol or local security code. Interpret it together with
+      marketCode to identify a listing.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: ticker
+    displayName: Ticker
+    status: experimental
+    dataType: String
+  marketCode:
+    label: Market code
+    description: Listing-market identifier used to distinguish securities that may
+      have the same ticker.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: marketCode
+    displayName: Market code
+    status: experimental
+    dataType: String
+  currencyCode:
+    label: Currency code
+    description: Three-letter currency code associated with the security or market
+      index.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: currencyCode
+    displayName: Currency code
+    status: experimental
+    dataType: String
+  etfType:
+    label: Etf type
+    description: Product category recorded in the ETF profile. NULL means the product
+      category has not been supplied.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: etfType
+    displayName: Etf type
+    status: experimental
+    dataType: String
+  trackingMarketSeriesId:
+    label: Tracking market series id
+    description: Identifier of the benchmark series recorded for this ETF. The Tracks
+      link exposes it as MarketIndex only when the target is an index.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_etf_profile_tracking_series
+        table: etf_profile
+        columns:
+        - tracking_market_series_id
+        target_table: market_series
+        target_columns:
+        - market_series_id
+    mappingStatus: ready
+    apiName: trackingMarketSeriesId
+    displayName: Tracking market series id
+    status: experimental
+    dataType: String
+  primaryThemeConceptId:
+    label: Primary theme concept id
+    description: Identifier of the main investment theme assigned to the ETF, when
+      one is recorded.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_etf_profile_theme
+        table: etf_profile
+        columns:
+        - primary_theme_concept_id
+        target_table: concept
+        target_columns:
+        - concept_id
+    mappingStatus: ready
+    apiName: primaryThemeConceptId
+    displayName: Primary theme concept id
+    status: experimental
+    dataType: String
+  assetManagerName:
+    label: Asset manager name
+    description: Name of the asset manager operating the ETF.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: assetManagerName
+    displayName: Asset manager name
+    status: experimental
+    dataType: String
+  leverageMultiplier:
+    label: Leverage multiplier
+    description: Target exposure multiple recorded for the product, for example 2
+      for double exposure or -1 for inverse exposure. NULL means it is unknown.
+    sourceDataType: double precision
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: leverageMultiplier
+    displayName: Leverage multiplier
+    status: experimental
+    dataType: Double
+  currencyHedged:
+    label: Currency hedged
+    description: 'Whether the ETF is recorded as currency hedged: true means hedged,
+      false means unhedged, and NULL means unknown.'
+    sourceDataType: boolean
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: currencyHedged
+    displayName: Currency hedged
+    status: experimental
+    dataType: Boolean
+  totalExpenseRatio:
+    label: Total expense ratio
+    description: Annual fund expenses as a fraction of assets, from 0 to 1; for example,
+      0.005 represents 0.5%.
+    sourceDataType: double precision
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: totalExpenseRatio
+    displayName: Total expense ratio
+    status: experimental
+    dataType: Double
+  profileAsOfDate:
+    label: Profile as of date
+    description: Date for which the stored profile information applies. NULL means
+      the source did not supply a profile date.
+    sourceDataType: date
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: profileAsOfDate
+    displayName: Profile as of date
+    status: experimental
+    dataType: Date
+  benchmarkName:
+    label: Benchmark name
+    description: Stored name of the resolved benchmark index; NULL when no benchmark
+      is resolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: benchmarkName
+    displayName: Benchmark name
+    status: experimental
+    dataType: String
+  themeName:
+    label: Theme name
+    description: Current name of the explicitly linked theme; not inferred from the
+      ETF name.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: themeName
+    displayName: Theme name
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: etf_profile
+  joins:
+  - alias: instrument
+    from: base
+    table: instrument
+    joinType: left
+    constraint: fk_etf_profile_instrument
+    'on':
+    - source: instrument_id
+      target: instrument_id
+    - source: instrument_type
+      target: instrument_type
+  - alias: entity
+    from: instrument
+    table: entity
+    joinType: left
+    constraint: fk_instrument_entity
+    'on':
+    - source: instrument_id
+      target: entity_id
+    - source: entity_type
+      target: entity_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: etf_profile
+      column: instrument_id
+    name:
+      alias: entity
+      table: entity
+      column: display_name
+    ticker:
+      alias: instrument
+      table: instrument
+      column: ticker
+    marketCode:
+      alias: instrument
+      table: instrument
+      column: market_code
+    currencyCode:
+      alias: instrument
+      table: instrument
+      column: currency_code
+    etfType:
+      alias: base
+      table: etf_profile
+      column: etf_type
+    trackingMarketSeriesId:
+      alias: base
+      table: etf_profile
+      column: tracking_market_series_id
+    primaryThemeConceptId:
+      alias: base
+      table: etf_profile
+      column: primary_theme_concept_id
+    assetManagerName:
+      alias: base
+      table: etf_profile
+      column: asset_manager_name
+    leverageMultiplier:
+      alias: base
+      table: etf_profile
+      column: leverage_multiplier
+    currencyHedged:
+      alias: base
+      table: etf_profile
+      column: currency_hedged
+    totalExpenseRatio:
+      alias: base
+      table: etf_profile
+      column: total_expense_ratio
+    profileAsOfDate:
+      alias: base
+      table: etf_profile
+      column: profile_as_of_date
+    benchmarkName:
+      kind: view_column
+      schema: ontology_view
+      table: etf
+      column: benchmark_name
+      sqlFile: sql/views/etf.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_profile
+        column: primary_theme_concept_id
+      - schema: public
+        table: etf_profile
+        column: tracking_market_series_id
+      - schema: public
+        table: market_series
+        column: series_name
+    themeName:
+      kind: view_column
+      schema: ontology_view
+      table: etf
+      column: theme_name
+      sqlFile: sql/views/etf.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_profile
+        column: primary_theme_concept_id
+      - schema: public
+        table: etf_profile
+        column: tracking_market_series_id
+      - schema: public
+        table: market_series
+        column: series_name
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_etf_profile_leverage_multiplier
+    kind: c
+    definition: CHECK (((leverage_multiplier IS NULL) OR ((leverage_multiplier <>
+      (0)::double precision) AND (leverage_multiplier > '-Infinity'::double precision)
+      AND (leverage_multiplier < 'Infinity'::double precision))))
+    validated: true
+  - name: ck_etf_profile_total_expense_ratio
+    kind: c
+    definition: CHECK (((total_expense_ratio IS NULL) OR ((total_expense_ratio >=
+      (0)::double precision) AND (total_expense_ratio <= (1)::double precision))))
+    validated: true
+  - name: etf_profile_pkey
+    kind: p
+    definition: PRIMARY KEY (instrument_id)
+    validated: true
+  - name: fk_etf_profile_instrument
+    kind: f
+    definition: FOREIGN KEY (instrument_id, instrument_type) REFERENCES instrument(instrument_id,
+      instrument_type) ON DELETE CASCADE
+    validated: true
+  - name: fk_etf_profile_theme
+    kind: f
+    definition: FOREIGN KEY (primary_theme_concept_id) REFERENCES concept(concept_id)
+      ON DELETE SET NULL
+    validated: true
+  - name: fk_etf_profile_tracking_series
+    kind: f
+    definition: FOREIGN KEY (tracking_market_series_id) REFERENCES market_series(market_series_id)
+      ON DELETE SET NULL
+    validated: true
+apiName: ETF
+displayName: ETF
+pluralDisplayName: ETFs
+titleProperty: name
+status: experimental
+visibility: normal
+linkTypes:
+- ETF_HasTheme_Concept
+- ETF_Tracks_MarketIndex

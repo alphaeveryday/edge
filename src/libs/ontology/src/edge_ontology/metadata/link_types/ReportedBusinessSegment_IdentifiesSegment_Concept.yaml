@@ -1,0 +1,29 @@
+id: ReportedBusinessSegment_IdentifiesSegment_Concept
+source: ReportedBusinessSegment
+definition:
+  name: IdentifiesSegment
+  label: IdentifiesSegment
+  description: The concept matched to the business segment named in this record. This
+    is a segment classification, not a separate company.
+  target: Concept
+  sourceProperty: conceptId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: identifiesSegment
+  displayName: IdentifiesSegment
+  pluralDisplayName: null
+  inverse:
+    apiName: businessSegmentRecords
+    displayName: Business segment records
+    description: Extracted business-segment records matched to this concept.
+    pluralDisplayName: Business segment records
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: ReportedBusinessSegment
+    foreignKeyProperty: conceptId
+    referencedObjectType: Concept

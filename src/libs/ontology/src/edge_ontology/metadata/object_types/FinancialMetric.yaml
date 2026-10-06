@@ -1,0 +1,580 @@
+formatVersion: 2
+name: FinancialMetric
+label: Financial metric
+description: One company financial value, such as revenue, operating income, or earnings
+  per share, for a specified period and reporting basis. Its identity also preserves
+  the metric kind and collection version.
+group: Disclosures & financials
+primaryKey: id
+identity:
+  columns:
+  - corp_code
+  - fiscal_year
+  - fiscal_period
+  - metric
+  - period_kind
+  - fs_basis
+  - raw_run_id
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this financial measure and collection version, encoded
+      from corpCode, fiscalYear, fiscalPeriod, metric, periodKind, fsBasis, rawRunId.
+      Every listed key component is preserved.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  corpCode:
+    label: DART company code
+    description: Eight-digit DART company identifier used to find the matching Company.dartCorpCode.
+      Leading zeros are part of the code.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: corpCode
+    displayName: DART company code
+    status: experimental
+    dataType: String
+  instrumentCode:
+    label: Instrument code
+    description: Local security code preserved from the source. Use its market context
+      when matching it to a listed security.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: instrumentCode
+    displayName: Instrument code
+    status: experimental
+    dataType: String
+  fiscalYear:
+    label: Fiscal year
+    description: Fiscal year of the financial report or metric.
+    sourceDataType: smallint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: fiscalYear
+    displayName: Fiscal year
+    status: experimental
+    dataType: Short
+  fiscalPeriod:
+    label: Fiscal period
+    description: Period label Q1, Q2, Q3, Q4, or FY. Read together with periodKind
+      to distinguish standalone quarters from cumulative results.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: fiscalPeriod
+    displayName: Fiscal period
+    status: experimental
+    dataType: String
+  periodEnd:
+    label: Period end
+    description: End date assigned to the financial period. The current source normalizes
+      quarters to calendar-quarter ends.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: periodEnd
+    displayName: Period end
+    status: experimental
+    dataType: Date
+  metric:
+    label: Metric
+    description: Financial measure code, such as revenue, operating_income, eps_basic,
+      eps_diluted, bps, or bps_total_shares.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: metric
+    displayName: Metric
+    status: experimental
+    dataType: String
+  periodKind:
+    label: Period kind
+    description: 'Time basis of the value: QUARTER for a standalone quarter, CUMULATIVE
+      for year-to-date results, or POINT for a value at a specific date.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: periodKind
+    displayName: Period kind
+    status: experimental
+    dataType: String
+  fsBasis:
+    label: Financial statement basis
+    description: 'Financial-statement basis: CFS for consolidated statements, or OFS
+      for the company''s separate statements.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - fiscal_period
+      - metric
+      - period_kind
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: fsBasis
+    displayName: Financial statement basis
+    status: experimental
+    dataType: String
+  derivation:
+    label: Reported or calculated value
+    description: 'Origin of the number: REPORTED from the filing, FY_MINUS_9M for
+      fourth-quarter figures calculated from annual minus nine-month results, or EQUITY_OVER_SHARES
+      for calculated book value per share.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: derivation
+    displayName: Reported or calculated value
+    status: experimental
+    dataType: String
+  value:
+    label: Value
+    description: Numeric amount of the financial measure. Interpret it using unit,
+      periodKind, fiscalPeriod, and fsBasis.
+    sourceDataType: numeric
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: value
+    displayName: Value
+    status: experimental
+    dataType: Decimal
+  unit:
+    label: Unit
+    description: 'Measurement unit: KRW for monetary totals or KRW_per_share for per-share
+      values in the current source contract.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: unit
+    displayName: Unit
+    status: experimental
+    dataType: String
+  formula:
+    label: Formula
+    description: Stored formula explaining a derived metric. It must be read with
+      derivation and the source inputs before reproducing the calculation.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: formula
+    displayName: Formula
+    status: experimental
+    dataType: String
+  rceptNo:
+    label: DART receipt number
+    description: DART receipt number identifying the source filing. It is a document
+      identifier, not a company or report-period code.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: rceptNo
+    displayName: DART receipt number
+    status: experimental
+    dataType: String
+  availableAt:
+    label: Available for analysis at
+    description: Analytical availability time computed from receipt time or the source
+      filing date according to the stored availability basis. It differs from the
+      financial period end.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  receivedAt:
+    label: Received at
+    description: Time this collected version was received by the system. Use it to
+      distinguish actual system possession from reconstructed analytical availability.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: receivedAt
+    displayName: Received at
+    status: experimental
+    dataType: Timestamp
+  availabilityBasis:
+    label: Availability basis
+    description: Stored rule used to assign availableAt, such as receipt time or a
+      filing-date convention. A reconstructed date is not an observed historical publication
+      timestamp.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availabilityBasis
+    displayName: Availability basis
+    status: experimental
+    dataType: String
+  calculationInputs:
+    label: Calculation inputs
+    description: JSON text preserving the stored inputs used to derive this value,
+      together with formula and derivation.
+    sourceDataType: jsonb
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: calculationInputs
+    displayName: Calculation inputs
+    status: experimental
+    dataType: String
+  companyName:
+    label: Company name
+    description: Current stored name of the company referenced by company_id; NULL
+      if no name is resolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: companyName
+    displayName: Company name
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: financial_metric
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: financial_metric
+      column: corp_code
+    corpCode:
+      alias: base
+      table: financial_metric
+      column: corp_code
+    instrumentCode:
+      alias: base
+      table: financial_metric
+      column: instrument_code
+    fiscalYear:
+      alias: base
+      table: financial_metric
+      column: fiscal_year
+    fiscalPeriod:
+      alias: base
+      table: financial_metric
+      column: fiscal_period
+    periodEnd:
+      alias: base
+      table: financial_metric
+      column: period_end
+    metric:
+      alias: base
+      table: financial_metric
+      column: metric
+    periodKind:
+      alias: base
+      table: financial_metric
+      column: period_kind
+    fsBasis:
+      alias: base
+      table: financial_metric
+      column: fs_basis
+    derivation:
+      alias: base
+      table: financial_metric
+      column: derivation
+    value:
+      alias: base
+      table: financial_metric
+      column: value
+    unit:
+      alias: base
+      table: financial_metric
+      column: unit
+    formula:
+      alias: base
+      table: financial_metric
+      column: formula
+    rceptNo:
+      alias: base
+      table: financial_metric
+      column: rcept_no
+    availableAt:
+      alias: base
+      table: financial_metric
+      column: available_at
+    receivedAt:
+      alias: base
+      table: financial_metric
+      column: received_at
+    availabilityBasis:
+      alias: base
+      table: financial_metric
+      column: availability_basis
+    calculationInputs:
+      alias: base
+      table: financial_metric
+      column: inputs
+      valueEncoding: jsonString
+    companyName:
+      kind: view_column
+      schema: ontology_view
+      table: financial_metric
+      column: company_name
+      sqlFile: sql/views/financial_metric.sql
+      inputs:
+      - schema: public
+        table: company_profile
+        column: dart_corp_code
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+      - schema: public
+        table: financial_metric
+        column: corp_code
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: financial_metric
+      column: display_title
+      sqlFile: sql/views/financial_metric.sql
+      inputs:
+      - schema: public
+        table: company_profile
+        column: dart_corp_code
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+      - schema: public
+        table: financial_metric
+        column: corp_code
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - corp_code
+  - fiscal_year
+  - fiscal_period
+  - metric
+  - period_kind
+  - fs_basis
+  - raw_run_id
+  tableConstraints:
+  - name: ck_financial_metric_availability
+    kind: c
+    definition: CHECK ((((availability_basis = 'received'::text) AND (available_at
+      = received_at)) OR ((availability_basis = 'provider_release_date'::text) AND
+      (rcept_date IS NOT NULL) AND (available_at = LEAST(received_at, (((rcept_date
+      + 1))::timestamp without time zone AT TIME ZONE 'Asia/Seoul'::text))))))
+    validated: true
+  - name: ck_financial_metric_basis
+    kind: c
+    definition: CHECK ((fs_basis = ANY (ARRAY['CFS'::text, 'OFS'::text])))
+    validated: true
+  - name: ck_financial_metric_codes
+    kind: c
+    definition: CHECK (((corp_code ~ '^[0-9]{8}$'::text) AND (instrument_code ~ '^[0-9A-Z]{6}$'::text)
+      AND (rcept_no ~ '^[0-9]{14}$'::text)))
+    validated: true
+  - name: ck_financial_metric_derivation
+    kind: c
+    definition: CHECK ((((derivation = 'REPORTED'::text) AND (metric <> ALL (ARRAY['bps'::text,
+      'bps_total_shares'::text])) AND (NOT ((fiscal_period = 'Q4'::text) AND (period_kind
+      = 'QUARTER'::text)))) OR ((derivation = 'FY_MINUS_9M'::text) AND (fiscal_period
+      = 'Q4'::text) AND (period_kind = 'QUARTER'::text) AND (formula IS NOT NULL))
+      OR ((derivation = 'EQUITY_OVER_SHARES'::text) AND (metric = ANY (ARRAY['bps'::text,
+      'bps_total_shares'::text])) AND (formula IS NOT NULL))))
+    validated: true
+  - name: ck_financial_metric_finite
+    kind: c
+    definition: CHECK (((value > '-Infinity'::numeric) AND (value < 'Infinity'::numeric)))
+    validated: true
+  - name: ck_financial_metric_fy
+    kind: c
+    definition: CHECK (((fiscal_period <> 'FY'::text) OR (period_kind = 'CUMULATIVE'::text)))
+    validated: true
+  - name: ck_financial_metric_inputs
+    kind: c
+    definition: CHECK ((jsonb_typeof(inputs) = 'array'::text))
+    validated: true
+  - name: ck_financial_metric_period
+    kind: c
+    definition: CHECK ((fiscal_period = ANY (ARRAY['Q1'::text, 'Q2'::text, 'Q3'::text,
+      'Q4'::text, 'FY'::text])))
+    validated: true
+  - name: ck_financial_metric_period_end
+    kind: c
+    definition: "CHECK ((period_end =\nCASE fiscal_period\n    WHEN 'Q1'::text THEN\
+      \ make_date((fiscal_year)::integer, 3, 31)\n    WHEN 'Q2'::text THEN make_date((fiscal_year)::integer,\
+      \ 6, 30)\n    WHEN 'Q3'::text THEN make_date((fiscal_year)::integer, 9, 30)\n\
+      \    ELSE make_date((fiscal_year)::integer, 12, 31)\nEND))"
+    validated: true
+  - name: ck_financial_metric_sha
+    kind: c
+    definition: CHECK (((raw_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256
+      ~ '^[0-9a-f]{64}$'::text)))
+    validated: true
+  - name: ck_financial_metric_shape
+    kind: c
+    definition: CHECK ((((((((((((metric = 'eps_basic'::text) AND (unit = 'KRW_per_share'::text)
+      AND (period_kind = 'QUARTER'::text)) OR ((metric = 'eps_basic'::text) AND (unit
+      = 'KRW_per_share'::text) AND (period_kind = 'CUMULATIVE'::text))) OR ((metric
+      = 'eps_diluted'::text) AND (unit = 'KRW_per_share'::text) AND (period_kind =
+      'QUARTER'::text))) OR ((metric = 'eps_diluted'::text) AND (unit = 'KRW_per_share'::text)
+      AND (period_kind = 'CUMULATIVE'::text))) OR ((metric = 'revenue'::text) AND
+      (unit = 'KRW'::text) AND (period_kind = 'QUARTER'::text))) OR ((metric = 'revenue'::text)
+      AND (unit = 'KRW'::text) AND (period_kind = 'CUMULATIVE'::text))) OR ((metric
+      = 'operating_income'::text) AND (unit = 'KRW'::text) AND (period_kind = 'QUARTER'::text)))
+      OR ((metric = 'operating_income'::text) AND (unit = 'KRW'::text) AND (period_kind
+      = 'CUMULATIVE'::text))) OR ((metric = 'bps'::text) AND (unit = 'KRW_per_share'::text)
+      AND (period_kind = 'POINT'::text))) OR ((metric = 'bps_total_shares'::text)
+      AND (unit = 'KRW_per_share'::text) AND (period_kind = 'POINT'::text))))
+    validated: true
+  - name: financial_metric_pkey
+    kind: p
+    definition: PRIMARY KEY (corp_code, fiscal_year, fiscal_period, metric, period_kind,
+      fs_basis, raw_run_id)
+    validated: true
+apiName: FinancialMetric
+displayName: Financial metric
+pluralDisplayName: Financial metrics
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- FinancialMetric_ForCompany_Company
+- FinancialMetric_HasReportingContext_FinancialReportSnapshot
+- FinancialMetric_ReportedIn_FinancialReportSnapshot
+- FinancialMetric_CalculatedFrom_FinancialMetric

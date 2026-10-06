@@ -1,0 +1,29 @@
+id: SecurityIndustryClassification_ForSecurity_ETF
+source: SecurityIndustryClassification
+definition:
+  name: ForSecurity
+  label: ForSecurity
+  description: The security assigned this sector and industry by the provider on the
+    classification date.
+  target: ETF
+  sourceProperty: instrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forSecurityETF
+  displayName: ForSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: industryClassifications
+    displayName: Industry classifications
+    description: Dated provider industry classifications for this security.
+    pluralDisplayName: Industry classifications
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: SecurityIndustryClassification
+    foreignKeyProperty: instrumentId
+    referencedObjectType: ETF

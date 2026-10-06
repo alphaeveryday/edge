@@ -1,0 +1,28 @@
+id: ETF_HasTheme_Concept
+source: ETF
+definition:
+  name: HasTheme
+  label: HasTheme
+  description: The main investment theme assigned to this ETF product.
+  target: Concept
+  sourceProperty: primaryThemeConceptId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: hasTheme
+  displayName: HasTheme
+  pluralDisplayName: null
+  inverse:
+    apiName: themedETFs
+    displayName: ETFs with this theme
+    description: ETFs assigned this primary investment theme.
+    pluralDisplayName: ETFs with this theme
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: ETF
+    foreignKeyProperty: primaryThemeConceptId
+    referencedObjectType: Concept

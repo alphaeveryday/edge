@@ -1,0 +1,265 @@
+formatVersion: 2
+name: Equity
+label: Equity
+description: One equity security issued by a company, such as its common shares or
+  a preferred share class. Each security has its own identifier, trading data, and
+  ETF holdings.
+group: Company & securities
+primaryKey: id
+identity:
+  columns: &id001
+  - instrument_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal identifier of this equity security and share class. It is
+      different from the issuing company identifier.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - constraint: fk_equity_profile_instrument
+        table: equity_profile
+        columns:
+        - instrument_id
+        - instrument_type
+        target_table: instrument
+        target_columns:
+        - instrument_id
+        - instrument_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  name:
+    label: Name
+    description: Security display name, which may distinguish common and preferred
+      shares of the same issuer.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: name
+    displayName: Name
+    status: experimental
+    dataType: String
+  issuerId:
+    label: Issuer id
+    description: Internal identifier of the company that issued this equity security.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_equity_profile_issuer
+        table: equity_profile
+        columns:
+        - issuer_actor_id
+        target_table: company_profile
+        target_columns:
+        - actor_id
+    mappingStatus: ready
+    apiName: issuerId
+    displayName: Issuer id
+    status: experimental
+    dataType: String
+  shareClass:
+    label: Share class
+    description: 'Share-class code: COMMON for common shares, PREFERRED for preferred
+      shares, or OTHER for other equity classes.'
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: shareClass
+    displayName: Share class
+    status: experimental
+    dataType: String
+  ticker:
+    label: Ticker
+    description: Trading symbol or local security code. Interpret it together with
+      marketCode to identify a listing.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: ticker
+    displayName: Ticker
+    status: experimental
+    dataType: String
+  marketCode:
+    label: Market code
+    description: Listing-market identifier used to distinguish securities that may
+      have the same ticker.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: marketCode
+    displayName: Market code
+    status: experimental
+    dataType: String
+  currencyCode:
+    label: Currency code
+    description: Three-letter currency code associated with the security or market
+      index.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: currencyCode
+    displayName: Currency code
+    status: experimental
+    dataType: String
+  profileAsOfDate:
+    label: Profile as of date
+    description: Date for which the stored profile information applies. NULL means
+      the source did not supply a profile date.
+    sourceDataType: date
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: profileAsOfDate
+    displayName: Profile as of date
+    status: experimental
+    dataType: Date
+  issuerName:
+    label: Issuer name
+    description: Current stored name of the issuer referenced by issuer_id; NULL if
+      no name is resolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: issuerName
+    displayName: Issuer name
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: equity_profile
+  joins:
+  - alias: instrument
+    from: base
+    table: instrument
+    joinType: left
+    constraint: fk_equity_profile_instrument
+    'on':
+    - source: instrument_id
+      target: instrument_id
+    - source: instrument_type
+      target: instrument_type
+  - alias: entity
+    from: instrument
+    table: entity
+    joinType: left
+    constraint: fk_instrument_entity
+    'on':
+    - source: instrument_id
+      target: entity_id
+    - source: entity_type
+      target: entity_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: equity_profile
+      column: instrument_id
+    name:
+      alias: entity
+      table: entity
+      column: display_name
+    issuerId:
+      alias: base
+      table: equity_profile
+      column: issuer_actor_id
+    shareClass:
+      alias: base
+      table: equity_profile
+      column: share_class_code
+    ticker:
+      alias: instrument
+      table: instrument
+      column: ticker
+    marketCode:
+      alias: instrument
+      table: instrument
+      column: market_code
+    currencyCode:
+      alias: instrument
+      table: instrument
+      column: currency_code
+    profileAsOfDate:
+      alias: base
+      table: equity_profile
+      column: profile_as_of_date
+    issuerName:
+      kind: view_column
+      schema: ontology_view
+      table: equity
+      column: issuer_name
+      sqlFile: sql/views/equity.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+      - schema: public
+        table: equity_profile
+        column: issuer_actor_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_equity_profile_share_class
+    kind: c
+    definition: CHECK (((share_class_code)::text = ANY ((ARRAY['COMMON'::character
+      varying, 'PREFERRED'::character varying, 'OTHER'::character varying])::text[])))
+    validated: true
+  - name: equity_profile_pkey
+    kind: p
+    definition: PRIMARY KEY (instrument_id)
+    validated: true
+  - name: fk_equity_profile_instrument
+    kind: f
+    definition: FOREIGN KEY (instrument_id, instrument_type) REFERENCES instrument(instrument_id,
+      instrument_type) ON DELETE CASCADE
+    validated: true
+  - name: fk_equity_profile_issuer
+    kind: f
+    definition: FOREIGN KEY (issuer_actor_id) REFERENCES company_profile(actor_id)
+      ON DELETE RESTRICT
+    validated: true
+apiName: Equity
+displayName: Equity
+pluralDisplayName: Equities
+titleProperty: name
+status: experimental
+visibility: normal
+linkTypes: []

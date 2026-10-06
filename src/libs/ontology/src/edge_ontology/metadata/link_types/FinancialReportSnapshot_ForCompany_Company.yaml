@@ -1,0 +1,29 @@
+id: FinancialReportSnapshot_ForCompany_Company
+source: FinancialReportSnapshot
+definition:
+  name: ForCompany
+  label: ForCompany
+  description: The company whose financial statements this report version describes,
+    matched using its DART company code.
+  target: Company
+  sourceProperty: corpCode
+  targetProperty: dartCorpCode
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+    declaredForeignKey: false
+  mappingStatus: defined
+  apiName: forCompany
+  displayName: ForCompany
+  pluralDisplayName: null
+  inverse:
+    apiName: financialReportSnapshots
+    displayName: Financial report snapshots
+    description: Collected financial-report snapshots for this company.
+    pluralDisplayName: Financial report snapshots
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

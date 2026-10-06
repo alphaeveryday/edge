@@ -1,0 +1,29 @@
+id: DailyInvestorFlow_ForSecurity_ETF
+source: DailyInvestorFlow
+definition:
+  name: ForSecurity
+  label: ForSecurity
+  description: The security being bought and sold in this daily investor-flow record,
+    not a company acting as an investor.
+  target: ETF
+  sourceProperty: instrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forSecurityETF
+  displayName: ForSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: dailyInvestorFlows
+    displayName: Daily investor flows
+    description: Daily investor-flow observations for this security.
+    pluralDisplayName: Daily investor flows
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: DailyInvestorFlow
+    foreignKeyProperty: instrumentId
+    referencedObjectType: ETF

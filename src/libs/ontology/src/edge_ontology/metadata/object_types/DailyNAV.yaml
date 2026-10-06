@@ -1,0 +1,296 @@
+formatVersion: 2
+name: DailyNAV
+label: Daily NAV
+description: Net asset value per ETF unit for one ETF on one trading date. This is
+  the fund asset value per unit, rather than its exchange closing price.
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns:
+  - etf_instrument_id
+  - trade_date
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this daily ETF net asset value, encoded from etfInstrumentId,
+      tradeDate. Every listed key component is preserved.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - trade_date
+      foreignKeys:
+      - constraint: fk_etf_nav_daily_etf
+        table: etf_nav_daily
+        columns:
+        - etf_instrument_id
+        target_table: etf_profile
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  etfInstrumentId:
+    label: Etf instrument id
+    description: Internal identifier of the ETF whose per-unit net asset value is
+      recorded.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - trade_date
+      foreignKeys:
+      - constraint: fk_etf_nav_daily_etf
+        table: etf_nav_daily
+        columns:
+        - etf_instrument_id
+        target_table: etf_profile
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: etfInstrumentId
+    displayName: Etf instrument id
+    status: experimental
+    dataType: String
+  tradeDate:
+    label: Trade date
+    description: Trading date to which the recorded market data applies; distinct
+      from the time it was collected.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - trade_date
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: tradeDate
+    displayName: Trade date
+    status: experimental
+    dataType: Date
+  nav:
+    label: Nav
+    description: Net asset value per ETF unit for the trading date, in the ETF's recorded
+      currency.
+    sourceDataType: numeric
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: nav
+    displayName: Nav
+    status: experimental
+    dataType: Decimal
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  etfName:
+    label: Etf name
+    description: Current stored name of the etf identified by etf_instrument_id; not
+      its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfName
+    displayName: Etf name
+    status: experimental
+    dataType: String
+  etfTicker:
+    label: Etf ticker
+    description: Current ticker of the etf; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfTicker
+    displayName: Etf ticker
+    status: experimental
+    dataType: String
+  etfMarketCode:
+    label: Etf market code
+    description: Current market code of the etf, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfMarketCode
+    displayName: Etf market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: etf_nav_daily
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: etf_nav_daily
+      column: etf_instrument_id
+    etfInstrumentId:
+      alias: base
+      table: etf_nav_daily
+      column: etf_instrument_id
+    tradeDate:
+      alias: base
+      table: etf_nav_daily
+      column: trade_date
+    nav:
+      alias: base
+      table: etf_nav_daily
+      column: nav
+    availableAt:
+      alias: base
+      table: etf_nav_daily
+      column: available_at
+    etfName:
+      kind: view_column
+      schema: ontology_view
+      table: daily_nav
+      column: etf_name
+      sqlFile: sql/views/daily_nav.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_nav_daily
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    etfTicker:
+      kind: view_column
+      schema: ontology_view
+      table: daily_nav
+      column: etf_ticker
+      sqlFile: sql/views/daily_nav.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_nav_daily
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    etfMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: daily_nav
+      column: etf_market_code
+      sqlFile: sql/views/daily_nav.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_nav_daily
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: daily_nav
+      column: display_title
+      sqlFile: sql/views/daily_nav.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_nav_daily
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - etf_instrument_id
+  - trade_date
+  tableConstraints:
+  - name: ck_etf_nav_daily_nav
+    kind: c
+    definition: CHECK (((nav > (0)::numeric) AND (nav < 'Infinity'::numeric)))
+    validated: true
+  - name: etf_nav_daily_pkey
+    kind: p
+    definition: PRIMARY KEY (etf_instrument_id, trade_date)
+    validated: true
+  - name: fk_etf_nav_daily_etf
+    kind: f
+    definition: FOREIGN KEY (etf_instrument_id) REFERENCES etf_profile(instrument_id)
+      ON DELETE CASCADE
+    validated: true
+apiName: DailyNAV
+displayName: Daily NAV
+pluralDisplayName: Daily NAVs
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- DailyNAV_ForETF_ETF

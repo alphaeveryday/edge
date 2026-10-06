@@ -1,0 +1,29 @@
+id: ETF_Tracks_MarketIndex
+source: ETF
+definition:
+  name: Tracks
+  label: Tracks
+  description: The market index recorded as the ETF's benchmark. Follow this link
+    to inspect the index definition, not the ETF's daily return.
+  target: MarketIndex
+  sourceProperty: trackingMarketSeriesId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: tracks
+  displayName: Tracks
+  pluralDisplayName: null
+  inverse:
+    apiName: trackingETFs
+    displayName: Tracking ETFs
+    description: ETFs that use this market index as their recorded benchmark.
+    pluralDisplayName: Tracking ETFs
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: ETF
+    foreignKeyProperty: trackingMarketSeriesId
+    referencedObjectType: MarketIndex

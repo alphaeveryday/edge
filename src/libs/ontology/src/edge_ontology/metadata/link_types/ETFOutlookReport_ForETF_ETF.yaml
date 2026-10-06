@@ -1,0 +1,26 @@
+id: ETFOutlookReport_ForETF_ETF
+source: ETFOutlookReport
+definition:
+  name: ForETF
+  label: For ETF
+  description: The ETF discussed by this published analysis report.
+  target: ETF
+  sourceProperty: etfInstrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forETF
+  displayName: For ETF
+  pluralDisplayName: For ETF
+  inverse:
+    apiName: outlookReports
+    displayName: Outlook reports
+    description: One published v2 outlook report for an ETF. The document preserves
+      an earlier interpretation and its analysis cutoff.
+    pluralDisplayName: null
+  backing:
+    type: foreignKey
+    configurationStatus: ready

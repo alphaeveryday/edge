@@ -1,0 +1,38 @@
+id: SourceEvent_InEventThread_EventThread
+source: SourceEvent
+definition:
+  name: InEventThread
+  label: InEventThread
+  description: The thread tracking the same underlying event across source records
+    and lifecycle updates. Reverse traversal retrieves the source records assigned
+    to that thread.
+  target: EventThread
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: joinPath
+    baseTable: event_thread_link
+    identity:
+    - source_event_id
+    joins:
+    - constraint: fk_event_thread_link_event_class
+    - constraint: fk_event_thread_link_thread
+    sourceEndpoint: event_thread_link.source_event_id
+    targetEndpoint: event_thread_link.thread_id
+    omitNullTarget: true
+  mappingStatus: mappingReview
+  apiName: inEventThread
+  displayName: InEventThread
+  pluralDisplayName: null
+  inverse:
+    apiName: sourceEvents
+    displayName: Source events
+    description: Source accounts assigned to this underlying event history.
+    pluralDisplayName: Source events
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

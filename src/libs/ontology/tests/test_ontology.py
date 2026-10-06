@@ -242,7 +242,7 @@ def test_slot_collisions_must_be_declared_with_a_reason():
     # WHY: (종, slot) 이 같은 역할 쌍은 소비자가 구분할 수 없다. 그걸 조용히 통과시키면
     #      어휘 결함(PARTNER_2 같은 arity hack)이 영구 거주한다. 사유 없는 면제를 막아야
     #      게이트가 게임 불가다 — 면제 목록 자체가 정리 대상 원장이 된다.
-    from edge_ontology.relation.slots import COLLISION_REASONS, load_known_collisions
+    from edge_ontology.oms.roles.slots import COLLISION_REASONS, load_known_collisions
 
     collisions = load_known_collisions()
     assert collisions, "면제가 하나도 없으면 게이트가 놀고 있는 것 아닌지 확인할 것"
@@ -375,9 +375,9 @@ def test_unfillable_identity_types_are_declared():
     # WHY: identity 가 비실체 역할을 요구하는 타입은 추출을 아무리 고쳐도 영구 UNKNOWN
     #      이다. 조용한 0% 를 계약에 적어 드러낸다(Rule 12). 특히 off_menu 셋은
     #      required∪optional 에도 없는 역할을 identity 로 요구하는 온톨로지 결함이다.
-    from edge_ontology._resource import load_yaml_resource
+    from edge_ontology.oms.loader import load_yaml_resource
     from edge_ontology.constants import RELATION_DIR
-    from edge_ontology.relation.vocabulary import ROLE_BINDINGS_RESOURCE
+    from edge_ontology.oms.roles.vocabulary import ROLE_BINDINGS_RESOURCE
 
     declared = load_yaml_resource(RELATION_DIR, ROLE_BINDINGS_RESOURCE)["unfillable_identity"]
     non_entity = O.load_relations().non_entity_roles
@@ -417,7 +417,7 @@ def test_counterparty_fallback_rejects_invalid_policy(tmp_path, scheme, sections
     # WHY: 잘못된 정책 선언을 조용히 무시하면 role별 writer의 해소 결과가 갈린다.
     import yaml
     from edge_ontology.constants import RELATION_DIR
-    from edge_ontology._resource import load_yaml_resource
+    from edge_ontology.oms.loader import load_yaml_resource
 
     doc = load_yaml_resource(RELATION_DIR, "role_bindings_v0_1.yaml")
     doc["identity"]["roles"]["PARTNER"] = {

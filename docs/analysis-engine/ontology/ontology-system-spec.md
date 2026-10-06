@@ -26,7 +26,7 @@ related:
 - 인스턴스가 아닌 **타입·역할·종별·값 모형·정체성 규칙**만 이 라이브러리에 둔다.
 - 타입·역할·속성 어휘가 바뀌면 기존 코퍼스의 해석이 달라질 수 있다. 해당 경우
   `ONTOLOGY_VERSION`을 올리고 재태깅 범위를 명시한다.
-- `resources/relation/`은 edge 로컬 증보다. 그 밖의 상류 리소스는
+- `metadata/value_types/role_bindings_v0_1.yaml`과 `rules/arguments/`는 edge 로컬 증보다. 그 밖의 상류 리소스는
   event-ontology 확정본을 **통째로 교체**한다. 부분 발췌·현지 수정은 금지한다.
 
 ## 2. 네 층과 의존 방향

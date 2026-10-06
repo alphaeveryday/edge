@@ -1,0 +1,46 @@
+id: NewsArticle_MentionsSecurity_Equity
+source: NewsArticle
+definition:
+  name: MentionsSecurity
+  label: MentionsSecurity
+  description: An equity security selected by the article's stored mention mapping,
+    which may contain only the main target. This link does not establish that its
+    issuer participated in an event.
+  target: Equity
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:N
+  status: experimental
+  sourceMapping:
+    kind: joinTable
+    baseTable: document_entity
+    identity:
+    - document_id
+    - entity_id
+    sourceEndpoint: document_entity.document_id
+    targetEndpoint: document_entity.entity_id
+    filter:
+      link_method: mention
+    evidenceFields:
+      matchedText:
+        source: document_entity.matched_text
+        description: Text retained for the stored mention-to-security match, when
+          recorded.
+      linkMethod:
+        source: document_entity.link_method
+        description: Method used to create the document-security link. This relation
+          includes only records whose stored method is mention.
+  mappingStatus: defined
+  apiName: mentionsSecurity
+  displayName: MentionsSecurity
+  pluralDisplayName: MentionsSecurity
+  inverse:
+    apiName: mentioningArticles
+    displayName: Mentioning articles
+    description: News articles with a stored mention of this security.
+    pluralDisplayName: Mentioning articles
+  backing:
+    type: joinTable
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

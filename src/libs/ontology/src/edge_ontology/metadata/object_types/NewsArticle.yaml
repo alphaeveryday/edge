@@ -1,0 +1,374 @@
+formatVersion: 2
+name: NewsArticle
+label: News article
+description: One news article as received from a source provider, with its title,
+  publication time, publisher, and source reference. Articles grouped as duplicates
+  still retain separate document identities.
+group: News & events
+primaryKey: id
+identity:
+  columns:
+  - document_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal document identifier of this source news article.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - document_id
+      foreignKeys:
+      - constraint: fk_news_document_type
+        table: news_document
+        columns:
+        - document_id
+        - document_type
+        target_table: document
+        target_columns:
+        - document_id
+        - document_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  title:
+    label: Title
+    description: Title of the news article as received from its source provider.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: title
+    displayName: Title
+    status: experimental
+    dataType: String
+  publishedAt:
+    label: Published at
+    description: Publication time reported for the original document; distinct from
+      its collection or analytical availability time.
+    sourceDataType: timestamp with time zone
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: publishedAt
+    displayName: Published at
+    status: experimental
+    dataType: Timestamp
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  sourceCode:
+    label: Source code
+    description: Code identifying the source provider in the source registry.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceCode
+    displayName: Source code
+    status: experimental
+    dataType: String
+  sourceDocumentId:
+    label: Source document id
+    description: Article identifier assigned by the news source provider.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceDocumentId
+    displayName: Source document id
+    status: experimental
+    dataType: String
+  sourceUri:
+    label: Source uri
+    description: Source URL or URI used to locate the original document.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceUri
+    displayName: Source uri
+    status: experimental
+    dataType: String
+  leadText:
+    label: Lead text
+    description: Lead paragraph or preview text captured from the news source. It
+      may be shorter than the full article.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: leadText
+    displayName: Lead text
+    status: experimental
+    dataType: String
+  publisher:
+    label: Publisher
+    description: Publisher name supplied for the news article.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: publisher
+    displayName: Publisher
+    status: experimental
+    dataType: String
+  leadObservedAt:
+    label: Lead observed at
+    description: Time the stored lead text was observed or collected from the source.
+    sourceDataType: timestamp with time zone
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: leadObservedAt
+    displayName: Lead observed at
+    status: experimental
+    dataType: Timestamp
+  representativeDocumentId:
+    label: Representative document id
+    description: Identifier of the article selected to represent this duplicate-article
+      group, when one is recorded.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_news_document_representative
+        table: news_document
+        columns:
+        - representative_document_id
+        target_table: news_document
+        target_columns:
+        - document_id
+    mappingStatus: ready
+    apiName: representativeDocumentId
+    displayName: Representative document id
+    status: experimental
+    dataType: String
+  themeConceptId:
+    label: Theme concept id
+    description: Identifier of the theme assigned to this article, when one is recorded.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_news_document_theme
+        table: news_document
+        columns:
+        - theme_concept_id
+        target_table: concept
+        target_columns:
+        - concept_id
+    mappingStatus: ready
+    apiName: themeConceptId
+    displayName: Theme concept id
+    status: experimental
+    dataType: String
+  representativeTitle:
+    label: Representative title
+    description: Stored title of the linked representative article; NULL when no representative
+      is linked.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: representativeTitle
+    displayName: Representative title
+    status: experimental
+    dataType: String
+  themeName:
+    label: Theme name
+    description: Current name of the explicitly linked theme; not inferred from the
+      article text.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: themeName
+    displayName: Theme name
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: news_document
+  joins:
+  - alias: document
+    from: base
+    table: document
+    joinType: left
+    constraint: fk_news_document_type
+    'on':
+    - source: document_id
+      target: document_id
+    - source: document_type
+      target: document_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: news_document
+      column: document_id
+    title:
+      alias: document
+      table: document
+      column: title
+    publishedAt:
+      alias: document
+      table: document
+      column: published_at
+    availableAt:
+      alias: document
+      table: document
+      column: available_at
+    sourceCode:
+      alias: document
+      table: document
+      column: source_code
+    sourceDocumentId:
+      alias: document
+      table: document
+      column: source_document_id
+    sourceUri:
+      alias: document
+      table: document
+      column: source_uri
+    leadText:
+      alias: base
+      table: news_document
+      column: lead_text
+    publisher:
+      alias: base
+      table: news_document
+      column: publisher
+    leadObservedAt:
+      alias: base
+      table: news_document
+      column: lead_observed_at
+    representativeDocumentId:
+      alias: base
+      table: news_document
+      column: representative_document_id
+    themeConceptId:
+      alias: base
+      table: news_document
+      column: theme_concept_id
+    representativeTitle:
+      kind: view_column
+      schema: ontology_view
+      table: news_article
+      column: representative_title
+      sqlFile: sql/views/news_article.sql
+      inputs:
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: news_document
+        column: representative_document_id
+      - schema: public
+        table: news_document
+        column: theme_concept_id
+    themeName:
+      kind: view_column
+      schema: ontology_view
+      table: news_article
+      column: theme_name
+      sqlFile: sql/views/news_article.sql
+      inputs:
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: news_document
+        column: representative_document_id
+      - schema: public
+        table: news_document
+        column: theme_concept_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - document_id
+  tableConstraints:
+  - name: fk_news_document_representative
+    kind: f
+    definition: FOREIGN KEY (representative_document_id) REFERENCES news_document(document_id)
+      ON DELETE SET NULL
+    validated: true
+  - name: fk_news_document_theme
+    kind: f
+    definition: FOREIGN KEY (theme_concept_id) REFERENCES concept(concept_id) ON DELETE
+      SET NULL
+    validated: true
+  - name: fk_news_document_type
+    kind: f
+    definition: FOREIGN KEY (document_id, document_type) REFERENCES document(document_id,
+      document_type) ON DELETE CASCADE
+    validated: true
+  - name: news_document_pkey
+    kind: p
+    definition: PRIMARY KEY (document_id)
+    validated: true
+dataIssues:
+- Stored duplicate representatives require content, membership and cutoff validation
+  against the source content.
+apiName: NewsArticle
+displayName: News article
+pluralDisplayName: News articles
+titleProperty: title
+status: experimental
+visibility: normal
+linkTypes:
+- NewsArticle_HasRepresentativeArticle_NewsArticle
+- NewsArticle_HasTheme_Concept
+- NewsArticle_DescribesEvent_SourceEvent
+- NewsArticle_MentionsSecurity_Equity

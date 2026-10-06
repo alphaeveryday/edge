@@ -186,7 +186,7 @@ $\beta$·$\sigma$ 추정은 장기 가격 이력(2022-11~)을 쓸 수 있다.
 
 ### 온톨로지
 
-`src/libs/ontology/src/edge_ontology/resources/` — 존재 4층(entity·attribute·relation·process).
+`src/libs/ontology/src/edge_ontology/metadata/`·`rules/` — 존재 4층(entity·attribute·relation·process).
 `process/types/` 53타입 + `process/lifecycle_models_v0_1.yaml` 20 라이프사이클.
 타입당 `roles{required,optional,identity,primary}` · `note`(자매 경계) ·
 `quantities{unit_family}` · **`derived{formula}`** (예 `capex_to_mcap = CAPEX_VALUE/market_cap`).
