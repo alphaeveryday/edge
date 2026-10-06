@@ -114,6 +114,13 @@ def _error_kind(exc: Exception) -> str:
     return type(reason if isinstance(reason, BaseException) else exc).__name__
 
 
+def _peer_closed(sock) -> bool:
+    """보낸 요청이 없는데 읽을 것이 생겼는가 — 쉬는 동안 서버가 연결을 닫았다는 뜻이다."""
+    poller = select.poll()  # select.select 는 fd 번호 1024 부터 ValueError 다
+    poller.register(sock, select.POLLIN)
+    return bool(poller.poll(0))
+
+
 class StopFetch(Exception):
     """4xx/429 — 이 소스에 대한 수집을 즉시 중단해야 한다.
 
@@ -238,11 +245,12 @@ class PoliteClient:
         if conn is None:
             connect = http.client.HTTPSConnection if req.type == "https" else http.client.HTTPConnection
             conn = conns[req.host] = connect(req.host, timeout=self.timeout)
-        elif conn.sock is not None and select.select([conn.sock], [], [], 0)[0]:
-            # 쉬는 동안 서버가 닫았다(보낸 요청이 없는데 읽을 것이 생겼다) — 요청을 싣기 전에 새로 맺는다.
-            # 닫힌 연결에 실으면 응답 없이 끊긴 것으로 보여 끊김 재시도 예산(DISCONNECT_RETRY_*)을 쓴다.
-            # ponytail: select 는 fd 번호 1024 미만에서만 된다. 프로세스가 그만큼 열게 되면 poll 로 바꾼다.
+        elif conn.sock is not None and _peer_closed(conn.sock):
+            # 쉬는 동안 서버가 닫았다 — 요청을 싣기 전에 새로 맺는다. 닫힌 연결에 실으면 응답 없이 끊긴
+            # 것으로 보여 끊김 재시도 예산(DISCONNECT_RETRY_*)을 쓴다.
             conn.close()
+        if conn.sock is None:
+            self.stats.add(connects=1)  # 새로 맺는 횟수 — 재사용이 실제로 되는지 창 요약 로그에서 본다
         try:
             try:
                 conn.request(req.get_method(), req.selector,
@@ -250,11 +258,19 @@ class PoliteClient:
             except OSError as exc:
                 raise urllib.error.URLError(exc) from exc
             resp = conn.getresponse()
-            body = resp.read()
+            failed = not 200 <= resp.status < 300
+            try:
+                body = resp.read()
+            except Exception:
+                if not failed:
+                    raise
+                # 오류 응답은 상태가 판정이다 — 본문을 못 읽어도 그 상태로 올린다(`urlopen` 은 헤더만 보고 올린다)
+                body = b""
+                conn.close()
         except BaseException:
             conn.close()  # 응답을 끝까지 받지 못한 연결은 다시 쓰지 않는다 — 다음 발신이 새로 맺는다
             raise
-        if not 200 <= resp.status < 300:
+        if failed:
             raise urllib.error.HTTPError(req.full_url, resp.status, resp.reason, resp.headers, io.BytesIO(body))
         return body
 
