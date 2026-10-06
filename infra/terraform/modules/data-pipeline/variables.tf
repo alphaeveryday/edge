@@ -82,9 +82,25 @@ variable "task_cpu" {
 }
 
 variable "task_memory" {
-  description = "수집·정제·ops·1분 상주 task-def 의 Fargate 메모리(MiB)."
+  description = "수집·정제·ops·1분 세션 task-def 와 배치 사양에 남긴 1분 상주 서비스(minute_batch_sized_services)의 Fargate 메모리(MiB)."
   type        = number
   default     = 2048
+}
+
+# 1분 상주 서비스 전용 사양(ALPHA-1235) — 배치 태스크(task_cpu·task_memory)와 따로 둔다.
+# 이 사양을 받는 7개의 14일 실측(2026-09-22~10-05, 1 vCPU·2 GB 기준): 메모리 최대 117 MB,
+# CPU 최대(1분 평균) 0.29 vCPU. 배치 사양에 남는 서비스는 minute_services.tf 의
+# `minute_batch_sized_services` 다.
+variable "minute_service_cpu" {
+  description = "1분 상주 서비스 task-def 의 Fargate CPU 단위."
+  type        = number
+  default     = 512
+}
+
+variable "minute_service_memory" {
+  description = "1분 상주 서비스 task-def 의 Fargate 메모리(MiB)."
+  type        = number
+  default     = 1024
 }
 
 variable "cpu_architecture" {

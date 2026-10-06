@@ -215,7 +215,8 @@ apply 가 장중 워커를 내리지 않게 한다. 그 주체는 **9종은 세�
 ECS Task State Change rule이 minute-session task family의 컨테이너 exit≠0을 기존 alarm
 SNS topic으로 올린다.
 ⚠️ **analysis-consumer 는 세션이 스케일하지 않는다**(ALPHA-912 — 컷오버 완료). desired 는
-큐 잔여 일감(가시+처리중)을 보는 오토스케일링이 소유하고(`analysis_autoscaling.tf`),
+큐 잔여 일감(가시+처리중)을 보는 오토스케일링이 소유하고(`analysis_autoscaling.tf`. 평일
+08:55~15:45 KST 는 예약이 최소 1대로 둬 첫 트리거가 알람 탐지 ~3분을 기다리지 않게 한다 — ALPHA-1234),
 세션이 이 서비스에 대해 하는 일은 **공용 목록에서 이름을 빼는 것뿐**이다 —
 `_services()` 가 `MINUTE_SESSION_ANALYSIS_SERVICES` 를 근거로 뺀다(ALPHA-910 이 세운 축.
 **축을 가르는 주체는 terraform 이 아니라 코드다**). 그 env 가 비면 **죽는다**: 빼기가 안
