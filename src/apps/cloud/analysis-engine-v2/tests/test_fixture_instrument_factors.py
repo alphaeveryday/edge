@@ -172,3 +172,15 @@ def test_invalid_turnover_differs_from_a_zero_denominator(turnover):
         result = read(fixture)
         assert result['chart']['turnover_ratio_previous_day'] is None
         assert result['chart']['momentum_index'] is not None
+
+
+def test_weighted_flow_states_the_share_of_the_fund_it_covers_and_survives_unpublished_holdings():
+    fixture = make_fixture()
+    flow = read(fixture, factors=['flow'])['flow']
+    assert flow['scope'] == 'holdings_weighted' and flow['observed_weight_ratio'] == 1
+    # Holdings exist but none was published by the analysis time: other factors must still be returned.
+    late = make_fixture()
+    for row in late['holdings']:
+        row['available_at'] = '2099-01-01T00:00:00+09:00'
+    result = read(late)
+    assert result['chart'] is not None and result['macro'] is not None

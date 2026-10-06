@@ -26,10 +26,18 @@ def test_partial_portfolio_is_visible_but_not_renormalized():
     assert tools.initial_input()['holdings'] == result
 
 
-def test_partial_portfolio_cannot_be_used_as_whole_etf_flow():
+def test_whole_etf_figures_need_seventy_percent_of_the_weight_and_always_carry_the_observed_share():
     from edge_analysis_v2.tools.fixture_data.common import holdings
-    with pytest.raises(ValueError, match='complete'):
-        holdings(source())
+    # WHY: a fund whose stored weights sum to 99.71% (cash, rounding) is still the fund; one seen at 69% is not.
+    usable = holdings(source())
+    assert (usable['coverage'], usable['observed_weight_ratio'], usable['holdings'][0]['weight']) == ('partial', .9971, .9971)
+    data = source()
+    data['holdings'][0]['weight'] = .7
+    assert holdings(data)['observed_weight_ratio'] == .7
+    data['holdings'][0]['weight'] = .6999
+    with pytest.raises(ValueError, match='below the 70% coverage'):
+        holdings(data)
+    assert holdings(data, require_complete=False)['observed_weight_ratio'] == .6999
 
 
 def test_one_article_can_belong_to_two_real_events_without_duplicate_article():
@@ -64,7 +72,9 @@ def test_database_factor_tool_version_moves_with_its_response_shape():
     # 불변 툴 ID(이름:버전) 아래 바뀐 모양과 옛 모양이 섞이면 저장된 근거를 재현할 수 없다 — DB 모드도 버전을 올린다.
     tools = DatabaseTools(source() | {'prices': [], 'price_snapshots': []})
     versions = {d['function_name']: d['version'] for d in tools.definitions}
-    assert versions['get_instrument_factors'] == 'database-v3'  # Stored macro/financial sources are now connected.
+    assert versions['get_instrument_factors'] == 'database-v4'  # Weighted figures now carry observed_weight_ratio.
+    # Whole-ETF figures are allowed from 70% observed weight; the same name must not mix old and new meaning.
+    assert versions['get_etf_holdings'] == 'database-v2'
     # The audit store also freezes descriptions: moved citation instructions need a new identity.
     assert versions['get_issue_evidence'] == 'database-v2'
     assert versions['calculate_chart_indicators'] == 'database-v1'          # 모양이 안 바뀐 툴은 그대로

@@ -46,6 +46,9 @@ def available(rows, cutoff, time_key=None):
             and (time_key is None or instant(r[time_key]) <= cutoff)]
 
 
+MIN_WEIGHT_COVERAGE = Decimal('0.7')
+
+
 def holdings(fixture, day=None, *, require_complete=True):
     """Read one complete equity portfolio without renormalizing missing weights."""
     cutoff = instant(fixture["context"]["analysis_at"])
@@ -70,12 +73,17 @@ def holdings(fixture, day=None, *, require_complete=True):
         if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
             raise ValueError('holdings status does not match observed rows')
         complete = complete and statuses[0]['input_count'] == len(rows)
-    if not complete and (require_complete or not statuses):
-        raise ValueError('complete positive equity weights summing to one required')
-    result = {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
-    if statuses:
-        result.update(coverage='full' if complete else 'partial', observed_weight_ratio=number(total))
-    return result
+    # A whole-ETF weighted figure is allowed once the observed weights cover MIN_WEIGHT_COVERAGE of the fund.
+    # Weights are never renormalized, so every such figure must be shown with observed_weight_ratio.
+    if require_complete and total < MIN_WEIGHT_COVERAGE:
+        raise ValueError('observed constituent weights below the 70% coverage required for a whole-ETF figure')
+    return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows],
+            "coverage": 'full' if complete else 'partial', "observed_weight_ratio": number(total)}
+
+
+def covers_whole_etf(portfolio):
+    """Whether observed weights are enough to state a whole-ETF weighted figure."""
+    return decimal(portfolio['observed_weight_ratio']) >= MIN_WEIGHT_COVERAGE
 
 
 def table(rows, columns):

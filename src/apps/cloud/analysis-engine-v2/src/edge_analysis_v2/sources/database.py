@@ -262,7 +262,7 @@ class DatabaseTools(FixtureTools):
             lambda **args:search_articles(self.fixture, **args), '', ['document','news_document'])
         self._tools['get_etf_holdings'].update(
             callback=lambda:holdings(self.fixture, require_complete=False),
-            description='조회 시점에 확보된 구성종목과 원래 비중입니다. coverage=partial이면 전체 포트폴리오가 확인되지 않았으며 가중 계산에 사용할 수 없습니다.',
+            description='조회 시점에 확보된 구성종목과 원래 비중입니다. observed_weight_ratio는 확인된 비중의 합입니다. 70% 이상이면 ETF 전체 가중 계산에 쓰이며, 그 결과는 이 비중만큼의 펀드를 설명합니다.',
             formula=r'W=\sum_i w_i\quad\text{(observed weights; no renormalization)}')
         self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. true 호출 ID는 최종 근거로 쓸 수 없습니다. 내용을 읽은 뒤 실제 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 항목에 연결하세요. false는 최종 근거용 ID·제목입니다. null인 본문을 추측하지 마세요.'
         if 'prices' in source:
@@ -270,8 +270,10 @@ class DatabaseTools(FixtureTools):
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
             # Source definitions are immutable; connecting stored observations needs a new factor version.
-            tool['version'] = {'get_instrument_factors': 'database-v3',
-                               'get_issue_evidence': 'database-v2'}.get(name, 'database-v1')
+            tool['version'] = {'calculate_valuation': 'database-v2', 'get_instrument_factors': 'database-v4',
+                               'get_issue_evidence': 'database-v2', 'get_etf_holdings': 'database-v2',
+                               'calculate_weighted_valuation': 'database-v2', 'calculate_weighted_flow': 'database-v2',
+                               'sum_weighted_net_flow': 'database-v2'}.get(name, 'database-v1')
             if name == 'get_instrument_factors':
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot',
                                    'macro_observations_as_of','financial_quarters_as_of']
@@ -296,7 +298,7 @@ class DatabaseTools(FixtureTools):
         result['source_gaps'] = self.fixture.get('source_gaps', {})
         result['news_scope'] = self.fixture.get('news_scope', {})
         result['source_notes'] = [
-            '구성종목 coverage=partial이면 전체 ETF 가중 수급·밸류를 계산할 수 없습니다.',
+            'ETF 전체 가중 수급·밸류는 확인된 구성 비중의 합(observed_weight_ratio)이 70% 이상일 때 계산합니다. 수급 금액은 확대하지 않고, 밸류 평균은 확인된 비중으로 나눕니다.',
             '뉴스 본문은 확보 발췌입니다. 스레드는 현존 관계이며 과거 정정·삭제까지 복원하지 않습니다.',
             '가격 조정 방식 미확인. 고가·저가 미확보로 바닥지수·ATR은 미제공. 장중 관측은 실제 트리거 가격이며 연속 분봉이 아닙니다.',
             '2026년 거래일만 검증되어 52주 지표는 미제공. 매크로·재무의 시점별 조회 결과는 macro·financials와 source_gaps를 확인하세요.',

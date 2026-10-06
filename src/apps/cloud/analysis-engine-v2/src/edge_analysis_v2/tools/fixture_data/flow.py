@@ -67,12 +67,14 @@ def calculate(fixture, investor, lookback_days, operation, direction, instrument
              if r['as_of_date'] <= cutoff.date().isoformat()}
     if instrument_id is not None and instrument_id not in known:
         raise ValueError('individual outside constituent scope')
-    values = []
+    values, coverage = [], None
     for day in dates:
         if instrument_id is not None:
             weights = [{"instrument_id": instrument_id, "weight": 1}]
         else:
-            weights = holdings(fixture, day.isoformat())["holdings"]
+            portfolio = holdings(fixture, day.isoformat())
+            weights = portfolio["holdings"]
+            coverage = portfolio["observed_weight_ratio"] if coverage is None else min(coverage, portfolio["observed_weight_ratio"])
         total = decimal(0)
         for weight in weights:
             if decimal(weight['weight']) == 0:
@@ -88,6 +90,9 @@ def calculate(fixture, investor, lookback_days, operation, direction, instrument
     result = {"scope": "individual" if instrument_id else "weighted_constituents", "investor": investor, "start_date": dates[0].isoformat(), "end_date": end.isoformat(), "trading_days": lookback_days}
     if instrument_id:
         result["instrument_id"] = instrument_id
+    else:
+        # Not renormalized: the amount covers only this share of the fund's weight (lowest day in the window).
+        result["observed_weight_ratio"] = coverage
     if operation == "sum":
         return result | {"amount_krw": number(sum(values))}
     sign = 1 if direction == "net_buy" else -1

@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = ["psycopg[binary]>=3.1", "claude-agent-sdk==0.2.160", "PyYAML>=6", "jsonschema>=4"]
 
 [project.optional-dependencies]
-cloud = ["boto3>=1.34"]
+cloud = ["boto3>=1.34", "neo4j>=5.28,<6"]
 
 [build-system]
 requires = ["hatchling"]
