@@ -932,6 +932,12 @@ class TestCollectorSelection:
         assert is_backfill is False
         # 유량 상한은 간격이다 — 설정이 client 까지 실제로 닿는지 본다(기본 12 req/s)
         assert collector.client.client.min_interval == pytest.approx(0.08)
+        # 창마다 수백 종목을 한 호스트에 묻는 길이라 연결을 다시 쓴다(ALPHA-1153) — 조립에서 빠지면
+        # 호출마다 TCP·TLS 를 새로 맺는 종전 동작으로 조용히 돌아간다. 연결은 여러 개여야 한다 — KIS 는
+        # 연결 하나에 몰린 호출을 유량 초과로 거절한다
+        from data_pipeline.sources.kis_minute import KEEP_ALIVE_CONNECTIONS
+
+        assert collector.client.client.keep_alive == KEEP_ALIVE_CONNECTIONS > 1
 
     def _collect_with(self, monkeypatch, responses, **config):
         """실제 조립(`make_price_collector`)으로 창 하나를 수집한다 — urlopen 만 대역이다."""
@@ -953,6 +959,7 @@ class TestCollectorSelection:
             session_date=TODAY,
         )
         collector.client.client._sleep = lambda seconds: None
+        collector.client.client.keep_alive = 0  # 대역이 urlopen 이라 그 경로로 보낸다
         start = datetime.combine(TODAY, datetime.min.time(), KST).replace(hour=10)
         request = CollectionRequest(
             dataset="price_minute", window_start=start, window_end=start + timedelta(minutes=1),

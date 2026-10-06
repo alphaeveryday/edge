@@ -851,7 +851,7 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
     # 시간외 window 가 구조적으로 안 나오는데 기동은 통과해, 그 window 들이 매 tick
     # 재청구·재실패하며 세션이 영영 안 마른다(그 게이트가 존재하는 이유다).
     if options.source == "kis":
-        from ..sources.kis_minute import KisHistoricalMinuteClient, KisMinuteClient
+        from ..sources.kis_minute import KEEP_ALIVE_CONNECTIONS, KisHistoricalMinuteClient, KisMinuteClient
         from .kis_collector import KisPriceCollector
 
         _require_credentials(
@@ -860,8 +860,11 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
         )
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
         # 공유 호출 허용(ALPHA-1087): pacer_for(is_backfill) 가 None 이 아니면 로컬 간격 대신 call_budget 을 쓴다.
+        # 연결 재사용(ALPHA-1153)은 실시간 수집에만 켠다 — 창마다 수백 종목을 한 호스트에 묻는 길이다.
+        # 소급(지난 날짜) 수집은 종전 경로 그대로 둔다.
         http = PoliteClient(min_interval=options.min_interval_sec,
-                            pacer=pacer_for(is_backfill) if pacer_for else None)
+                            pacer=pacer_for(is_backfill) if pacer_for else None,
+                            keep_alive=0 if is_backfill else KEEP_ALIVE_CONNECTIONS)
         if is_backfill:
             return KisPriceCollector(client=KisHistoricalMinuteClient(
                 options.app_key, options.app_secret, http, session_date=session_date,
