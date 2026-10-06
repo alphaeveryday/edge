@@ -722,7 +722,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
     - 로그에 `서비스 갱신 요청: … (deployment ecs-svc/…)` 가 찍히는가.
     - `PRIMARY:` 줄이 그 id 로 IN_PROGRESS → COMPLETED 로 바뀌는가.
     - 워크플로가 `success` 로 끝나는가.
-- 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다.
+- 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다. 되돌릴 수 있는 범위는 ECR 에 남는 최근 10개 버전이다([foundation README](../../../../infra/terraform/foundation/README.md) "ECR 이미지 보존"). 그보다 오래된 SHA 는 이미지가 지워져 다시 빌드해야 한다.
 - Airflow **버전을 내리는** 롤백은 이 경로로 하지 않는다. 새 버전의 `db migrate` 가 스키마를 올렸기 때문이다. 업그레이드 전에 메타DB 스냅샷을 찍고, 되돌릴 때는 그 스냅샷으로 복원한 뒤 옛 이미지를 배포한다.
 - Terraform 이 태스크 정의(환경·자원·역할)를 바꾸면 **다음 배포부터** 반영된다. 서비스의 리비전과 desired 는 CD 가 소유한다(`ignore_changes`). 바로 반영하려면 workflow_dispatch 로 같은 태그를 다시 배포한다.
 
