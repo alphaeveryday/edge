@@ -268,7 +268,7 @@ class PoliteClient:
                 conn.close()
         pool.append(conn)
         if conn.sock is None:
-            self.stats.add(connects=1)  # 새로 맺는 횟수 — 재사용이 실제로 되는지 창 요약 로그에서 본다
+            self.stats.add(connects=1)  # 연결을 맺으려 한 횟수(실패 포함) — 재사용이 되는지 창 요약 로그에서 본다
         try:
             try:
                 conn.request(req.get_method(), req.selector,
@@ -304,6 +304,12 @@ class PoliteClient:
             if self._keep_alive_5xx < KEEP_ALIVE_5XX_LIMIT or not self.keep_alive:
                 return
             self.keep_alive = 0
+        # 이 스레드가 쥔 연결은 여기서 닫는다 — 꺼진 뒤로는 `_open` 이 풀을 다시 보지 않는다(다른 스레드의
+        # 풀은 그 스레드가 끝날 때 함께 사라진다)
+        for pool in vars(self._conns).pop("pools", {}).values():
+            for conn in pool:
+                conn.close()
+        self.stats.add(keep_alive_off=1)
         logger.warning("연결 재사용을 끈다 — %.0f초 구간에 5xx 가 %d건이다. 이 클라이언트는 호출마다 새 연결로 보낸다",
                        KEEP_ALIVE_5XX_WINDOW_SEC, KEEP_ALIVE_5XX_LIMIT)
 

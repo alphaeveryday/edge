@@ -460,7 +460,7 @@ class _LoopbackServer:
 
     `statuses` 를 차례로 답한다(다 쓰면 200). 연결 하나에서 `per_conn` 건을 답하면 헤더로 알리지 않고
     닫는다 — 쉬는 연결을 서버가 먼저 닫는 경우의 모양이다. `truncate` 면 본문을 선언한 길이보다 짧게
-    보내고 닫는다.
+    보내고 닫는다. `ended` 는 끝난(어느 쪽이든 닫은) 연결 수다.
     """
 
     def __init__(self, statuses=(), per_conn=None, truncate=False):
@@ -470,7 +470,7 @@ class _LoopbackServer:
         self._statuses, self._per_conn, self._truncate = list(statuses), per_conn, truncate
         self.connections = self.requests = 0
         self.served = []  # 연결별 요청 수(받은 순서)
-        self.closed = threading.Event()  # 서버가 연결을 닫으면 켠다
+        self.ended = 0
         self._stopped = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -504,7 +504,7 @@ class _LoopbackServer:
                 break
         reader.close()
         conn.close()
-        self.closed.set()
+        self.ended += 1
 
     def stop(self):
         self._stopped.set()
@@ -529,6 +529,14 @@ def _live_client(**kwargs):
     client = PoliteClient(min_interval=0, **kwargs)
     client._sleep = lambda secs: None
     return client
+
+
+def _eventually(predicate, timeout=5.0):
+    """다른 스레드(서버)가 따라올 때까지 잠깐 기다린다."""
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return predicate()
 
 
 def _counts(client):
@@ -581,6 +589,9 @@ def test_keep_alive_turns_itself_off_when_5xx_pile_up(loopback, monkeypatch, cap
     assert client.keep_alive == 0
     assert server.served == [2, 1, 1]  # 재사용 연결 하나에 2건, 그 뒤로는 호출마다 새 연결
     assert "연결 재사용을 끈다" in caplog.text
+    assert _counts(client)["keep_alive_off"] == 1  # 창 요약 로그에도 남는다
+    # 쥐고 있던 재사용 연결도 닫는다 — 꺼진 뒤로는 다시 보지 않으므로 여기서 안 닫으면 프로세스가 끝날 때까지 남는다
+    assert _eventually(lambda: server.ended == 3)
 
 
 def test_keep_alive_reconnects_before_sending_when_the_server_closed_the_idle_connection(loopback):
@@ -591,7 +602,7 @@ def test_keep_alive_reconnects_before_sending_when_the_server_closed_the_idle_co
     client = _live_client(keep_alive=1)
 
     assert client.get(server.url) == "[]"
-    assert server.closed.wait(5)
+    assert _eventually(lambda: server.ended == 1)
     assert client.get(server.url) == "[]"
 
     assert server.connections == 2
