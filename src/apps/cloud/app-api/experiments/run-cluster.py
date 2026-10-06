@@ -54,7 +54,7 @@ def parse_time(stamp):
     stamp = re.sub(r'\.(\d+)', lambda m: '.' + (m.group(1) + '000000')[:6], stamp).replace('Z', '+00:00')
     return datetime.fromisoformat(stamp)
 def sql(query):
-    return dc('exec', '-T', 'mysql', 'mysql', '-uapp', '-papp', '-Dapp', '-N', '-e', query)
+    return dc('exec', '-T', 'postgres', 'psql', '-U', 'app', '-d', 'app', '-At', '-F', '\t', '-c', query)
 (out / 'project.txt').write_text(project)
 (out / 'env.json').write_text(json.dumps({k: v for k, v in env.items() if k.startswith(('VOTE_', 'REDIS_TOPOLOGY', 'REDIS_', 'HOT', 'FAIL_', 'KILL_', 'RATE', 'READ_RATE'))}, indent=2))
 dc('up', '-d', '--no-build' if os.environ.get('EXPERIMENT_NO_BUILD') else '--build')
