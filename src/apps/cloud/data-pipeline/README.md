@@ -120,7 +120,7 @@ kis.http.window caller=minute-price window=2026-10-02T05:32:00+00:00 status=VALI
 | `rtt_ms` / `rtt_max_ms` | 발신부터 응답 본문 수신까지의 합계·최대. **KIS 응답 지연**은 여기에 쌓인다. 연결을 새로 맺는 호출은 그 수립 시간(TCP·TLS)도 여기에 든다 |
 | `pace_wait_ms` | 발신 간격(또는 공유 호출 예산)을 기다린 시간 |
 | `kis_<코드>` | 거절 응답(`rt_cd≠0`)의 `msg_cd` 별 건수. 재시도로 끝내 성공해도 센다. 코드 형상이 아니면 `kis_OTHER` |
-| `rate_sleep_ms` | `EGW00201` 뒤 물러난 시간의 합. **유량 제한**은 `kis_EGW00201` 과 여기에 쌓인다 |
+| `rate_sleep_ms` | `EGW00201` 뒤 물러난 시간의 합. **유량 제한**은 `kis_EGW00201` 과 여기에 쌓인다. ⚠️ 2026-10-06 실측에서 KIS 는 `EGW00201` 을 전부 **HTTP 500** 으로 줬다 — 그 경우 운반 계층이 5xx 로 재시도하므로 이 두 항목은 0 으로 남고 `err_http_500`·`transport_retry` 에 쌓인다 |
 | `rate_exhausted` | `EGW00201` 재시도 예산(5회)을 다 쓴 종목 수 |
 | `transport_retry` / `transport_backoff_ms` | 5xx·네트워크 실패 재시도 횟수와 그 대기 |
 | `err_<종류>` | 발신 실패 종류별 건수 — `err_http_503`, `err_TimeoutError` 등(상태코드·예외 클래스명) |
