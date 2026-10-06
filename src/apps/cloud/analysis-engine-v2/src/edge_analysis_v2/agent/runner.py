@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,7 @@ from edge_analysis_v2.agent.work_session import WorkSession
 from edge_analysis_v2.agent.work_context import WorkContext
 from edge_analysis_v2.agent.work_tools import make_workspace_server
 from edge_analysis_v2.tools.execution import ToolExecutionError
+from edge_analysis_v2.quality.measure import describe_environment, measure
 
 
 def load_prompt(path: Path) -> str:
@@ -139,6 +141,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                             ('output_schema.json', output_schema)]:
             (artifacts / name).write_text(encode(value), encoding='utf-8')
         (artifacts / 'system_prompt.txt').write_text(prompt.replace(key, '[redacted]'), encoding='utf-8')
+        (artifacts / 'environment.json').write_text(encode(describe_environment()), encoding='utf-8')
         try:
             async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
                 await client.query(encode(query_input))
@@ -147,7 +150,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     async for message in client.receive_response():
                         event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
                         with (artifacts / 'events.jsonl').open('a', encoding='utf-8') as stream:
-                            stream.write(json.dumps({'message_type': type(message).__name__, 'message': event}, ensure_ascii=False) + '\n')
+                            stream.write(json.dumps({'message_type': type(message).__name__, 'at': datetime.now(timezone.utc).isoformat(),
+                                                     'message': event}, ensure_ascii=False) + '\n')
                         if type(message).__name__ != 'ResultMessage':
                             continue
                         (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
@@ -172,4 +176,9 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                 skills.checkpoint()
             except (OSError, ValueError):
                 # Saving notes must not replace the timeout, cancellation or model error being raised.
+                pass
+            try:
+                # Cost of this run, successful or not, from the events it left behind.
+                (artifacts / 'measurement.json').write_text(encode(measure(artifacts)), encoding='utf-8')
+            except (OSError, ValueError, KeyError):
                 pass
