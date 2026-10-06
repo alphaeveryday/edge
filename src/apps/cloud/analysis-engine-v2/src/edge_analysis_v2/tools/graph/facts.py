@@ -62,7 +62,15 @@ class GraphFacts:
             # parameters disconnect this deployed server rather than returning an error.
             params['cutoff']=self.cutoff
             return alias+'.availableAt <= datetime($cutoff)'
+        if 'openedAt' in props:
+            params['cutoff']=self.cutoff
+            return alias+'.openedAt <= datetime($cutoff)'
         return ''
+
+    def time_bounded(self, kind):
+        # False for current-state records (company, security, fund profiles): they carry no time to compare.
+        props=self.properties(kind)
+        return 'availableAt' in props or 'openedAt' in props
 
     def nodes(self, kind, *, ids=None, filters=None, query='', where=None, parameters=None):
         props=self.properties(kind);conditions=[];params=dict(parameters or {})

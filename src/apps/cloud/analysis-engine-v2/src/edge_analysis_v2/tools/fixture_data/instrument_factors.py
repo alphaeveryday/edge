@@ -109,6 +109,14 @@ def chart_data(fixture, instrument_id):
     return result, None
 
 
+def _below_coverage(fixture):
+    """Whether published holdings exist but cover too little of the fund for a whole-ETF figure."""
+    try:
+        return not covers_whole_etf(holdings(fixture, require_complete=False))
+    except ValueError:
+        return False  # nothing published at the cutoff: the day loop reports that case itself
+
+
 def flow_data(fixture, instrument_id):
     """Return up to thirty contiguous finalized sessions without filling gaps."""
     context = fixture['context']
@@ -121,11 +129,11 @@ def flow_data(fixture, instrument_id):
     if not dates or dates[-1] != end:
         return None, 'Finalized flow date is absent from the trading calendar.'
     weighted = instrument_id == context['etf_code']
-    if weighted and fixture.get('holdings') and not covers_whole_etf(holdings(fixture, require_complete=False)):
+    if weighted and _below_coverage(fixture):
         return None, 'Observed constituent weights are below 70%; whole-ETF weighted flow unavailable.'
     source = available(fixture.get('flow', []), cutoff)
     investors = ('foreign', 'institution', 'individual')
-    history, observed = [], []
+    history, observed, covered = [], [], []
     for day in reversed(dates):
         if weighted and not any(r['as_of_date'] <= day for r in available(fixture.get('holdings', []), min(cutoff, instant(day + 'T23:59:59.999999+09:00')))):
             break
@@ -155,6 +163,8 @@ def flow_data(fixture, instrument_id):
         if not complete:
             break
         history.append([day] + values)
+        if portfolio:
+            covered.append(decimal(portfolio['observed_weight_ratio']))
         observed.extend(day_times)
     units = etf.units_change(fixture) if weighted else None
     if not history and units is None:
@@ -162,6 +172,8 @@ def flow_data(fixture, instrument_id):
     history.reverse()
     result = {'scope': 'holdings_weighted' if weighted else 'instrument', 'finalized_through': end, 'observed_at': max(observed, key=instant) if observed else None, 'unit': 'KRW', 'history': {'columns': ['date'] + list(investors), 'rows': history}}
     if weighted:
+        # Amounts are not scaled up: they describe this share of the fund's weight (lowest day shown).
+        result['observed_weight_ratio'] = number(min(covered)) if covered else None
         for investor in ('foreign', 'institution'):
             values = [decimal(row[investors.index(investor)+1]) for row in history]
             result[f'weighted_{investor}_net_amount_20d'] = number(sum(values[-20:])) if len(values) >= 20 else None
@@ -183,13 +195,15 @@ def valuation_data(fixture, instrument_id):
         return value, None if value else 'No price or released financial observations are available.'
     published_holdings = [r for r in available(fixture.get('holdings', []), instant(fixture['context']['analysis_at'])) if r['as_of_date'] <= instant(fixture['context']['analysis_at']).date().isoformat()]
     portfolio = holdings(fixture, require_complete=False) if published_holdings else {'as_of_date': None, 'holdings': []}
-    if portfolio.get('coverage') == 'partial':
-        return None, 'Constituent coverage is incomplete; whole-ETF weighted valuation unavailable.'
+    if portfolio['holdings'] and not covers_whole_etf(portfolio):
+        return None, 'Observed constituent weights are below 70%; whole-ETF weighted valuation unavailable.'
+    covered = sum(decimal(row['weight']) for row in portfolio['holdings'])
     values = [(row, company_valuation(fixture, row['instrument_id'])) for row in portfolio['holdings']]
-    result = {'scope': 'holdings_weighted', 'holdings_as_of': portfolio['as_of_date']}
+    result = {'scope': 'holdings_weighted', 'holdings_as_of': portfolio['as_of_date'],
+              'observed_weight_ratio': portfolio.get('observed_weight_ratio')}
     for metric in ('per', 'pbr'):
         result['weighted_' + metric] = (number(sum(decimal(row['weight']) * decimal(value[metric])
-            for row, value in values)) if values and all(value and value[metric] is not None for _, value in values) else None)
+            for row, value in values) / covered) if values and all(value and value[metric] is not None for _, value in values) else None)
     # An approximated Q4 EPS in any constituent makes the weighted PER approximate — carried, never silent.
     result['weighted_per_approximate'] = (any(value['eps_approximate'] for _, value in values)
                                           if result['weighted_per'] is not None else None)

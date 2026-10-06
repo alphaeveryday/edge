@@ -76,3 +76,20 @@ def test_an_unnecessary_call_is_reported_without_hiding_whether_the_answer_was_r
     assert verdicts == {'select': 'pass', 'stop': 'fail', 'answer': 'pass'}
     verdicts = {v['id']: v['status'] for v in check(rows, [], {'answer': '042660'})}
     assert verdicts == {'select': 'fail', 'stop': 'pass', 'answer': 'blocked'}
+
+
+def test_a_failure_blocks_later_kinds_but_not_another_hypothesis_of_the_same_kind():
+    rows = [{'id': 'first', 'kind': '선택', 'claim': 'uses search', 'check': {'count': {'tool': 'search', 'min': 1}}},
+            {'id': 'second', 'kind': '선택', 'claim': 'uses resolve', 'check': {'count': {'tool': 'resolve', 'min': 1}}},
+            {'id': 'args', 'kind': '인자', 'claim': 'market', 'check': {'first_arguments': {'tool': 'resolve', 'equals': {'market_code': 'XKRX'}}}}]
+    assert [v['status'] for v in check(rows, [GOOD[0]], {})] == ['fail', 'pass', 'blocked']
+
+
+def test_a_reference_from_a_retried_call_counts_and_a_failed_call_satisfies_nothing():
+    failed = call('resolve', {'tickers': ['A'], 'market_code': 'XKRX'}, 'cq_0', error='bad id')
+    second = call('resolve', {'tickers': ['A', 'B'], 'market_code': 'XKRX'}, 'cq_1b')
+    consumer = call('prices', {'ref': {'tool_run_id': 'cq_1b'}}, 'cq_2')
+    chain = [{'id': 'chain', 'kind': '연결', 'claim': 'reuses a stored result', 'check': {'passes_reference': {'tool': 'resolve', 'to': ['prices']}}}]
+    assert check(chain, [GOOD[0], second, consumer], {})[0]['status'] == 'pass'
+    wanted = [{'id': 'args', 'kind': '인자', 'claim': 'single ticker', 'check': {'called_with': {'tool': 'resolve', 'equals': {'tickers': ['A']}}}}]
+    assert check(wanted, [failed], {})[0]['status'] == 'fail'

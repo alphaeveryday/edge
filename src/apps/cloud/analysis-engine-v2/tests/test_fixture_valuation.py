@@ -83,3 +83,25 @@ def test_tools_whose_results_changed_for_alpha_1130_carry_new_definition_version
             'calculate_valuation', 'calculate_weighted_valuation', 'get_instrument_factors')} == {
         'get_macro_observations': 'v3', 'compare_macro_observations': 'v2', 'calculate_valuation': 'v2',
         'calculate_weighted_valuation': 'v2', 'get_instrument_factors': 'v2'}
+
+
+def test_a_weighted_ratio_over_part_of_the_fund_is_an_average_of_that_part_not_a_shrunken_number():
+    # WHY: with 80% of the weight observed, summing w*x without dividing by the observed weight would report a
+    # PER 20% too low and present it as the fund's. The figure must equal the fully observed one for the same
+    # proportions, and say how much of the fund it describes.
+    full = FixtureTools(valuation_fixture()).call("calculate_weighted_valuation", {})["result"]
+    fixture = valuation_fixture()
+    for row in fixture["holdings"]:
+        row["weight"] = row["weight"] * 0.8
+    tools = FixtureTools(fixture)
+    part = tools.call("calculate_weighted_valuation", {})["result"]
+    assert part["weighted_per"] == pytest.approx(full["weighted_per"]) and part["weighted_pbr"] == pytest.approx(full["weighted_pbr"])
+    assert part["coverage"]["weight"] == pytest.approx(0.8)
+    screen = tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
+    assert screen["weighted_per"] == pytest.approx(full["weighted_per"]) and screen["observed_weight_ratio"] == pytest.approx(0.8)
+    for row in fixture["holdings"]:
+        row["weight"] = row["weight"] * 0.5   # 40% observed: not the fund
+    below = FixtureTools(fixture)
+    with pytest.raises(ValueError, match="below the 70% coverage"):
+        below.call("calculate_weighted_valuation", {})
+    assert below.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"] is None

@@ -46,3 +46,16 @@ class GraphFactsTests(unittest.TestCase):
         self.assertEqual(len(result),2)
         self.assertEqual({x['link_properties']['key_0'] for x in result},{'first','second'})
         with self.assertRaises(ValueError):graph.linked([{'object_type':'Equity','object_id':'stock'}],'Issues')
+
+
+class CutoffScopeTests(unittest.TestCase):
+    def test_event_threads_are_bounded_by_opening_time_and_profiles_are_reported_as_unbounded(self):
+        design={'modelChanged':False,'relations':[],'objects':[
+            {'id':'EventThread','titleProperty':'id','columns':[{'property':p,'mappingStatus':'ready'} for p in ('id','openedAt')]},
+            {'id':'Company','titleProperty':'id','columns':[{'property':'id','mappingStatus':'ready'}]}]}
+        calls=[]
+        graph=GraphFacts(lambda q,p:calls.append((q,p)) or [],design,'2026-10-05T00:00:00+00:00')
+        graph.nodes('EventThread');graph.nodes('Company')
+        self.assertIn('n.openedAt <= datetime($cutoff)',calls[0][0])
+        self.assertNotIn('cutoff',calls[1][0])
+        self.assertTrue(graph.time_bounded('EventThread'));self.assertFalse(graph.time_bounded('Company'))

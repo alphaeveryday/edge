@@ -193,11 +193,14 @@ class GraphTools:
         return self.result(items, limit=limit,
             scope={'object_type': object_type, 'query': query, 'filters': filters or {}, 'complete_within_query': True,
                    'objects_of_this_type_in_graph': self.graph.total(object_type),
+                   'cutoff_applied': self.graph.time_bounded(object_type),
                    'match': 'substring of any matched property', 'matched_properties': ['id'] + self.graph.text_properties(object_type)})
 
     def linked(self, object_refs, link_type, direction='forward', limit=20):
         selection = self.graph.get(object_refs)
+        link = self.graph.links[link_type]
         scope = {'link_type': link_type, 'direction': direction, 'complete_within_query': True,
+                 'cutoff_applied': self.graph.time_bounded(link['target'] if direction == 'forward' else link['source']),
                  'start_objects_not_found': [i['object_id'] for i in selection['items'] if i['status'] != 'resolved']}
         return self.result(self.graph.linked(object_refs, link_type, direction), limit=limit, scope=scope)
 
@@ -214,7 +217,7 @@ class GraphTools:
             raise ValueError('ETF reference required')
         if self.graph.get([etf_ref])['completeness'] != 'complete':
             raise ValueError('ETF not found: object_id must be the id returned by resolve_securities or search_objects, not a ticker')
-        selected = holdings_date
+        selected = holdings_date = requested.isoformat()
         if date_policy == 'latest_on_or_before':
             rows = self.graph.query(
                 'MATCH (h:ETFHolding)-[:ETFHolding_ForETF_ETF]->(e:ETF) WHERE e.id=$etf AND h.tradeDate<=date($day) '

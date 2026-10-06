@@ -87,3 +87,10 @@ def test_only_an_existing_etf_can_be_asked_for_holdings(tmp_path):
     absent = tools.call('get_etf_holdings', {'etf_ref': {'object_type': 'ETF', 'object_id': 'nope'},
                                              'holdings_date': '2026-10-02', 'date_policy': 'exact'})['result']
     assert absent['reason'].startswith('ETF not found: object_id must be the id returned by')
+
+
+def test_the_selected_date_is_stored_in_one_spelling_so_dates_compare_in_calendar_order(tmp_path):
+    tools, calls = make(tmp_path)
+    result = call(tools, '20261002')   # accepted by the date parser; must not be stored as written
+    assert result['selection']['selected_date'] == '2026-10-02' and result['data_scope']['holdings_date'] == '2026-10-02'
+    assert all(parameters.get('day', '2026-10-02') == '2026-10-02' for _, parameters in calls)

@@ -42,7 +42,7 @@ def _first_arguments(calls, answer, *, tool, equals):
 
 
 def _called_with(calls, answer, *, tool, equals):
-    seen = [c['arguments'] for c in calls if c['tool'] == tool]
+    seen = [c['arguments'] for c in calls if c['tool'] == tool and not c['error']]
     return any(_matches(arguments, equals) for arguments in seen), {'arguments': seen}
 
 
@@ -53,15 +53,14 @@ def _errors(calls, answer, *, tool, max=0):
 
 def _passes_reference(calls, answer, *, tool, to):
     """The first later call of a consuming tool must reuse the stored result, not retyped values."""
-    for index, call in enumerate(calls):
-        if call['tool'] != tool or call['error']:
-            continue
-        identifier = call['response']['tool_run_id']
-        later = next((c for c in calls[index + 1:] if c['tool'] in to), None)
-        if later is None:
-            return False, {'next': None}
-        return identifier in json.dumps(later['arguments']), {'next': later['tool'], 'arguments': later['arguments']}
-    return False, {'calls': 0}
+    produced = [(index, c['response']['tool_run_id']) for index, c in enumerate(calls) if c['tool'] == tool and not c['error']]
+    if not produced:
+        return False, {'calls': 0}
+    later = next((c for c in calls[produced[0][0] + 1:] if c['tool'] in to and not c['error']), None)
+    if later is None:
+        return False, {'next': None}
+    text = json.dumps(later['arguments'])
+    return any(identifier in text for _, identifier in produced), {'next': later['tool'], 'arguments': later['arguments']}
 
 
 def _no_repeat(calls, answer, *, tool):
@@ -89,17 +88,17 @@ def check(hypotheses, calls, response):
         response: Final agent response containing answer, claims and limitations.
 
     Returns:
-        One verdict per hypothesis: pass, fail, blocked (an earlier kind failed, so this one
+        One verdict per hypothesis: pass, fail, blocked (a hypothesis of an earlier kind failed, so this one
         cannot be judged) or manual (needs a reader; no predicate given). 비호출 is judged on
         its own: it neither blocks nor is blocked.
     """
     text = '\n'.join([response.get('answer', ''), *response.get('limitations', []),
                       *[c.get('claim', '') for c in response.get('claims', [])]])
-    verdicts, failed = [], None
+    verdicts, failed, failed_kind = [], None, None
     for row in sorted(hypotheses, key=lambda r: ORDER.index(r['kind'])):
         verdict = {key: row[key] for key in ('id', 'kind', 'claim')}
         independent = row['kind'] == '비호출'  # an unnecessary call does not invalidate what followed
-        if failed and not independent:
+        if failed and not independent and ORDER.index(row['kind']) > failed_kind:
             verdict.update(status='blocked', observed={'failed_first': failed})
         elif 'check' not in row:
             verdict.update(status='manual', observed={})
@@ -107,7 +106,7 @@ def check(hypotheses, calls, response):
             results = [PREDICATES[name](calls, text, **arguments) for name, arguments in row['check'].items()]
             verdict.update(status='pass' if all(ok for ok, _ in results) else 'fail',
                            observed=dict(zip(row['check'], [seen for _, seen in results])))
-            if verdict['status'] == 'fail' and not independent:
-                failed = row['id']
+            if verdict['status'] == 'fail' and not independent and failed is None:
+                failed, failed_kind = row['id'], ORDER.index(row['kind'])
         verdicts.append(verdict)
     return verdicts

@@ -46,7 +46,10 @@ def weighted(fixture):
     # Every holding must have a ratio: a constituent without BPS (preferred-share block, unconfirmed
     # share count) makes the whole weighted figure unavailable rather than a partial "ETF PBR".
     values = [calculate(fixture, r["instrument_id"]) | {"weight": r["weight"]} for r in portfolio["holdings"]]
-    return {"as_of_date": portfolio["as_of_date"], "weighted_per": number(sum(decimal(v["weight"])*decimal(v["price"])/decimal(v["ttm_eps"]) for v in values)), "weighted_pbr": number(sum(decimal(v["weight"])*decimal(v["price"])/decimal(v["bps"]) for v in values)), "constituents": values, "coverage": {"constituents": len(values), "weight": number(sum(decimal(v["weight"]) for v in values))}, "approximate": any(v["approximate"] for v in values), "derived_constituents": [v["instrument_id"] for v in values if v["approximate"]], "observed_at": max((v["observed_at"] for v in values), key=instant)}
+    # Holdings may cover 70-100% of the fund. An average over them divides by the covered weight;
+    # coverage.weight says how much of the fund the figure describes.
+    covered = sum(decimal(v["weight"]) for v in values)
+    return {"as_of_date": portfolio["as_of_date"], "weighted_per": number(sum(decimal(v["weight"])*decimal(v["price"])/decimal(v["ttm_eps"]) for v in values)/covered), "weighted_pbr": number(sum(decimal(v["weight"])*decimal(v["price"])/decimal(v["bps"]) for v in values)/covered), "constituents": values, "coverage": {"constituents": len(values), "weight": number(sum(decimal(v["weight"]) for v in values))}, "approximate": any(v["approximate"] for v in values), "derived_constituents": [v["instrument_id"] for v in values if v["approximate"]], "observed_at": max((v["observed_at"] for v in values), key=instant)}
 
 
 def metrics(fixture):

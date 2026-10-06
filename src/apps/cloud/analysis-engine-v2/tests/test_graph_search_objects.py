@@ -56,3 +56,7 @@ def test_the_agent_is_offered_the_real_type_names_so_a_guessed_type_never_reache
         tools.call('search_objects', {'object_type': 'Security', 'query': 'x'})
     assert calls == []
 
+
+def test_a_result_says_whether_the_cutoff_could_be_applied_to_its_type(tmp_path):
+    tools, _ = make(tmp_path, rows=1)
+    assert tools.call('search_objects', {'object_type': 'Equity'})['result']['data_scope']['cutoff_applied'] is True
