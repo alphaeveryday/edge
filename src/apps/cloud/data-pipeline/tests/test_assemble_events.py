@@ -117,7 +117,11 @@ class _FakeCursor:
         flat = " ".join(sql.split())
         conn.log.append((flat, params))
         upper = flat.upper()
-        if upper.startswith("SELECT I.INSTRUMENT_ID, I.TICKER"):
+        if upper.startswith("SELECT INSTRUMENT_ID, ISSUER_ACTOR_ID"):
+            self._rows = list(getattr(conn, "issuer_mapping", {}).items())
+        elif upper.startswith("SELECT THREAD_KEY, THREAD_ID"):
+            self._rows = list(getattr(conn, "thread_ids", {}).items())
+        elif upper.startswith("SELECT I.INSTRUMENT_ID, I.TICKER"):
             # assemble_events도 load_assertions와 같은 해소 인덱스를 쓴다. 이 테스트의
             # 관심사는 ticker 축이므로 이름/발행사 축은 비워 실제 5열 계약만 모사한다.
             self._rows = [(instrument_id, ticker, ticker, None, None)

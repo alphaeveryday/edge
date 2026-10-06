@@ -42,7 +42,8 @@
       "tool_definitions",
       "outlook_conclusion_keywords",
       "outlook_factor_metrics",
-      "outlook_issue_items"
+      "outlook_issue_items",
+      "analysis_execution_requests"
     ],
     "relationshipIds": [
       "fk_movement_items_analysis_id",
@@ -63,7 +64,9 @@
       "uq_outlook_factors_analysis_id_type",
       "uq_outlook_conclusion_keywords_analysis_id_kind_position",
       "uq_tool_definitions_function_name_version",
-      "uq_outlook_factor_metrics_analysis_id_factor_type_position"
+      "uq_outlook_factor_metrics_analysis_id_factor_type_position",
+      "analysis_execution_requests_source_event_id_key",
+      "analysis_execution_requests_execution_arn_key"
     ],
     "memoIds": [
       "overview",
@@ -94,7 +97,8 @@
           "movement_analyses.trading_date",
           "movement_analyses.summary",
           "movement_analyses.selected_item_ids",
-          "movement_analyses.data_source"
+          "movement_analyses.data_source",
+          "movement_analyses.withdrawn_at"
         ],
         "seqColumnIds": [
           "movement_analyses.analysis_id",
@@ -107,7 +111,8 @@
           "movement_analyses.trading_date",
           "movement_analyses.summary",
           "movement_analyses.selected_item_ids",
-          "movement_analyses.data_source"
+          "movement_analyses.data_source",
+          "movement_analyses.withdrawn_at"
         ],
         "ui": {
           "x": 80,
@@ -471,6 +476,39 @@
         "meta": {
           "createAt": 1790573936482,
           "updateAt": 1790573936482
+        }
+      },
+      "analysis_execution_requests": {
+        "id": "analysis_execution_requests",
+        "name": "analysis_execution_requests",
+        "comment": "실행 접수 | 같은 사건의 중복 실행 방지",
+        "columnIds": [
+          "analysis_execution_requests.analysis_id",
+          "analysis_execution_requests.source_event_id",
+          "analysis_execution_requests.input_json",
+          "analysis_execution_requests.execution_arn",
+          "analysis_execution_requests.created_at",
+          "analysis_execution_requests.accepted_at"
+        ],
+        "seqColumnIds": [
+          "analysis_execution_requests.analysis_id",
+          "analysis_execution_requests.source_event_id",
+          "analysis_execution_requests.input_json",
+          "analysis_execution_requests.execution_arn",
+          "analysis_execution_requests.created_at",
+          "analysis_execution_requests.accepted_at"
+        ],
+        "ui": {
+          "x": 80,
+          "y": 1350,
+          "zIndex": 1,
+          "widthName": 240,
+          "widthComment": 420,
+          "color": "#dbeafe"
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
         }
       }
     },
@@ -2314,6 +2352,146 @@
           "createAt": 1790573936482,
           "updateAt": 1790573936482
         }
+      },
+      "analysis_execution_requests.analysis_id": {
+        "id": "analysis_execution_requests.analysis_id",
+        "tableId": "analysis_execution_requests",
+        "name": "analysis_id",
+        "comment": "요청 ID · 기본키",
+        "dataType": "text",
+        "default": "",
+        "options": 10,
+        "ui": {
+          "keys": 1,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests.source_event_id": {
+        "id": "analysis_execution_requests.source_event_id",
+        "tableId": "analysis_execution_requests",
+        "name": "source_event_id",
+        "comment": "원본 사건 ID · 중복 불가",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests.input_json": {
+        "id": "analysis_execution_requests.input_json",
+        "tableId": "analysis_execution_requests",
+        "name": "input_json",
+        "comment": "변경되지 않는 실행 입력",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests.execution_arn": {
+        "id": "analysis_execution_requests.execution_arn",
+        "tableId": "analysis_execution_requests",
+        "name": "execution_arn",
+        "comment": "예약한 SFN 실행 ARN · 중복 불가",
+        "dataType": "text",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests.created_at": {
+        "id": "analysis_execution_requests.created_at",
+        "tableId": "analysis_execution_requests",
+        "name": "created_at",
+        "comment": "최초 예약 시각",
+        "dataType": "timestamptz",
+        "default": "now()",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests.accepted_at": {
+        "id": "analysis_execution_requests.accepted_at",
+        "tableId": "analysis_execution_requests",
+        "name": "accepted_at",
+        "comment": "접수 확인 시각 · 분석 완료 시각 아님",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "movement_analyses.withdrawn_at": {
+        "id": "movement_analyses.withdrawn_at",
+        "tableId": "movement_analyses",
+        "name": "withdrawn_at",
+        "comment": "?? ??? ?? ??? ??",
+        "dataType": "timestamptz",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1790573936482,
+          "updateAt": 1790573936482
+        }
       }
     },
     "relationshipEntities": {
@@ -2742,6 +2920,38 @@
           "createAt": 1790573936482,
           "updateAt": 1790573936482
         }
+      },
+      "analysis_execution_requests_source_event_id_key": {
+        "id": "analysis_execution_requests_source_event_id_key",
+        "name": "analysis_execution_requests_source_event_id_key",
+        "tableId": "analysis_execution_requests",
+        "indexColumnIds": [
+          "analysis_execution_requests_source_event_id_key.source_event_id"
+        ],
+        "seqIndexColumnIds": [
+          "analysis_execution_requests_source_event_id_key.source_event_id"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests_execution_arn_key": {
+        "id": "analysis_execution_requests_execution_arn_key",
+        "name": "analysis_execution_requests_execution_arn_key",
+        "tableId": "analysis_execution_requests",
+        "indexColumnIds": [
+          "analysis_execution_requests_execution_arn_key.execution_arn"
+        ],
+        "seqIndexColumnIds": [
+          "analysis_execution_requests_execution_arn_key.execution_arn"
+        ],
+        "unique": true,
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
       }
     },
     "indexColumnEntities": {
@@ -2903,6 +3113,26 @@
         "meta": {
           "createAt": 1790573936482,
           "updateAt": 1790573936482
+        }
+      },
+      "analysis_execution_requests_source_event_id_key.source_event_id": {
+        "id": "analysis_execution_requests_source_event_id_key.source_event_id",
+        "indexId": "analysis_execution_requests_source_event_id_key",
+        "columnId": "analysis_execution_requests.source_event_id",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
+        }
+      },
+      "analysis_execution_requests_execution_arn_key.execution_arn": {
+        "id": "analysis_execution_requests_execution_arn_key.execution_arn",
+        "indexId": "analysis_execution_requests_execution_arn_key",
+        "columnId": "analysis_execution_requests.execution_arn",
+        "orderType": 1,
+        "meta": {
+          "createAt": 1790920558631,
+          "updateAt": 1790920558631
         }
       }
     },

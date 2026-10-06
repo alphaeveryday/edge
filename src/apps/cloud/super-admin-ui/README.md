@@ -133,9 +133,11 @@ facts-snapshot 을 정본으로 쓰면 안 된다 — 날짜 고정 픽스처라
 
 ## 데이터 레이어
 
-화면 데이터는 전 도메인이 **super-admin-api 호출**이다(ALPHA-515). mock 데이터는
-UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 API 쪽에서 도메인
-단위로 진행된다 — UI 는 그 전환을 알지 못한다(계약 불변).
+화면 데이터는 전 도메인이 **super-admin-api 호출**이다(ALPHA-515). mock→DB 전환은
+API 쪽에서 도메인 단위로 진행돼 끝났고(API 의 `mock` 패키지는 제거됐다), UI 는 그
+전환을 알지 못한다(계약 불변). UI 의 `mock/preview.ts` 는 화면 검수용 미리보기 픽스처다(위 표) —
+목록은 실 데이터 0건일 때 미리보기로 들어가고, 상세는 `?preview=mock` 이면 데이터 유무와 무관하게
+같은 픽스처를 읽는다.
 
 tenant-console-ui 와 거의 동일 규약 — 공통 fetch 래퍼 [`src/api/client.ts`](src/api/client.ts)
 (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증), TanStack Query hook, 페이지는 도메인

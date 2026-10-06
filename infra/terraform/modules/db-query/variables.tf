@@ -14,7 +14,7 @@ variable "vpc_id" {
 }
 
 variable "image" {
-  description = "질의 CLI 컨테이너 이미지 URI(:태그 포함). 질의기는 analysis-engine 안의 서브커맨드라 data-pipeline 의 analysis_image 와 같은 값을 넘긴다(전용 ECR 을 만들지 않는다)."
+  description = "분석엔진과 분리된 db-query 이미지 URI(:태그 포함)."
   type        = string
 }
 
@@ -70,7 +70,7 @@ variable "memory" {
 }
 
 variable "cpu_architecture" {
-  description = "질의에 쓰는 이미지(analysis-engine)의 빌드 아키텍처와 일치해야 한다"
+  description = "질의에 쓰는 이미지(db-query)의 빌드 아키텍처와 일치해야 한다"
   type        = string
   default     = "X86_64"
 }

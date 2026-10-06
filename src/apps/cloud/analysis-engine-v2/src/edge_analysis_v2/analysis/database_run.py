@@ -2,13 +2,15 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.dashboard.jobs import read_settings
-from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices
+from edge_analysis_v2.sources.database import DatabaseTools, connect_sources, load_source, load_flow, load_prices, load_research_observations
 from edge_analysis_v2.storage.database import connect_results
+from edge_analysis_v2.sources.web_research import WebResearch
 
 
 def main():
@@ -22,6 +24,11 @@ def main():
     parser.add_argument('--runs-dir', type=Path, required=True)
     args = parser.parse_args()
     settings = read_settings(args.env_file)
+    web_key = os.environ.pop('TINYFISH_API_KEY', '')
+    for line in args.env_file.read_text(encoding='utf-8-sig').splitlines():
+        name, separator, value = line.strip().partition('=')
+        if separator and name == 'TINYFISH_API_KEY':
+            web_key = value.strip().strip('\"\'')
     identity = uuid4().hex
     folder = args.runs_dir/identity
     folder.mkdir(parents=True)
@@ -39,7 +46,10 @@ def main():
     try:
         with connect_sources(args.rds_ca) as connection:
             source = load_prices(connection, load_flow(connection, load_source(connection,args.ticker,args.analysis_at)))
-        execute_request(kind=args.kind,source_tools=DatabaseTools(source),
+        with connect_results(args.rds_ca) as connection:
+            source = load_research_observations(connection, source)
+        web = WebResearch(web_key, args.analysis_at) if web_key else None
+        execute_request(kind=args.kind,source_tools=DatabaseTools(source, web=web),
             connection_factory=lambda:connect_results(args.rds_ca),artifacts=folder,
             analysis_id=identity, **settings)
         job['status']='completed'

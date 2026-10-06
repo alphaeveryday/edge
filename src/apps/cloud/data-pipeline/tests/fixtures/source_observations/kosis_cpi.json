@@ -1,0 +1,36 @@
+[
+ {
+  "C1_OBJ_NM": "지수종류",
+  "DT": "2.8",
+  "C1": "0",
+  "PRD_SE": "M",
+  "ITM_ID": "T03",
+  "TBL_ID": "DT_1J22042",
+  "ITM_NM": "전년동월비(%)",
+  "TBL_NM": "월별 소비자물가 등락률",
+  "PRD_DE": "202605",
+  "LST_CHN_DE": "2026-07-27",
+  "C1_NM_ENG": "CPI for all item",
+  "C1_NM": "총지수",
+  "ITM_NM_ENG": "Change over the same month of last year",
+  "ORG_ID": "101",
+  "C1_OBJ_NM_ENG": "Kind of index"
+ },
+ {
+  "C1_OBJ_NM": "지수종류",
+  "DT": "3.2",
+  "C1": "0",
+  "PRD_SE": "M",
+  "ITM_ID": "T03",
+  "TBL_ID": "DT_1J22042",
+  "ITM_NM": "전년동월비(%)",
+  "TBL_NM": "월별 소비자물가 등락률",
+  "PRD_DE": "202606",
+  "LST_CHN_DE": "2026-06-29",
+  "C1_NM_ENG": "CPI for all item",
+  "C1_NM": "총지수",
+  "ITM_NM_ENG": "Change over the same month of last year",
+  "ORG_ID": "101",
+  "C1_OBJ_NM_ENG": "Kind of index"
+ }
+]

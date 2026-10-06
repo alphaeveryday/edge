@@ -57,3 +57,14 @@ def test_real_tools_never_create_absent_macro_or_financial_observations():
     assert tools.data_source == 'database'
     assert not initial['financials']['rows']
     assert all(not value['rows'] for value in initial['macro'].values())
+
+
+def test_database_factor_tool_version_moves_with_its_response_shape():
+    # WHY(봇 P1): get_instrument_factors 응답에 근사 EPS 표시(eps_approximate·weighted_per_approximate)가 더해졌다.
+    # 불변 툴 ID(이름:버전) 아래 바뀐 모양과 옛 모양이 섞이면 저장된 근거를 재현할 수 없다 — DB 모드도 버전을 올린다.
+    tools = DatabaseTools(source() | {'prices': [], 'price_snapshots': []})
+    versions = {d['function_name']: d['version'] for d in tools.definitions}
+    assert versions['get_instrument_factors'] == 'database-v3'  # Stored macro/financial sources are now connected.
+    # The audit store also freezes descriptions: moved citation instructions need a new identity.
+    assert versions['get_issue_evidence'] == 'database-v2'
+    assert versions['calculate_chart_indicators'] == 'database-v1'          # 모양이 안 바뀐 툴은 그대로

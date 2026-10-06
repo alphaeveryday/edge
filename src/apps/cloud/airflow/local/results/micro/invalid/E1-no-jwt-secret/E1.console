@@ -1,9 +1,0 @@
-{"t": 1790656778.4, "event": "start_airflow", "mem": "2048m", "settings": {"name": "E1", "mem": "2048m", "parallelism": 4, "parsing": 2, "pool": 3, "overflow": 5}}
-{"t": 1790656795.9, "event": "healthy", "health": "healthy"}
-{"t": 1790656796.0, "event": "dag_loaded", "code": 200}
-{"t": 1790656796.0, "event": "idle_begin", "tag": "start", "seconds": 300}
-{"t": 1790657096.0, "event": "idle_end", "tag": "start"}
-{"t": 1790657096.2, "event": "reset", "tag": "B1"}
-{"t": 1790657096.3, "event": "trigger", "run": "micro__B1__2026-09-22T09:35", "code": 200, "detail": null}
-{"t": 1790657229.2, "event": "run_done", "run": "micro__B1__2026-09-22T09:35", "state": "failed"}
-{"t": 1790657229.3, "event": "trigger", "run": "micro__B1__2026-09-22T10:05", "code": 200, "detail": null}

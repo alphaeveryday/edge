@@ -9,15 +9,16 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from psycopg.rows import dict_row
-from psycopg.pq import TransactionStatus
 
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
 from edge_analysis_v2.storage.database import connect_results
+from edge_analysis_v2.storage.screens import assemble_screen
 from edge_analysis_v2.dashboard.jobs import ExecutionDashboard, SCENARIOS, read_settings, scenario_cutoff
 from edge_analysis_v2.dashboard.views.analysis import render_screen
 from edge_analysis_v2.contracts.audit import read_contract_audit, render_contract_audit, unchecked_report
 from edge_analysis_v2.dashboard.views.observation import render_observation
 from edge_analysis_v2.prompts.versions import PromptVersions, PromptConflict, parse_prompt
+from edge_analysis_v2.agent.skill_session import SKILLS, SOURCE
 
 
 def read_cloud(ca_path: Path, kind: str | None = None, analysis_id: str | None = None):
@@ -78,63 +79,6 @@ def read_screen(ca_path, kind, identity, feature):
     """Read one independent screen feature from completed database rows."""
     with connect_results(ca_path) as connection:
         return assemble_screen(connection, kind, identity, feature)
-
-
-def assemble_screen(connection, kind, identity, feature, *, store=None):
-    """Use the same DB assembly for screen routes and contract audits."""
-    from edge_analysis_v2.storage.publications import PublicationStore
-    store = store or PublicationStore(connection)
-    idle = connection.info.transaction_status == TransactionStatus.IDLE
-    with connection.transaction():
-        if idle:
-            connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-        return _assemble_screen(connection, kind, identity, feature, store)
-
-
-def _assemble_screen(connection, kind, identity, feature, store):
-    """Project one feature from the caller's read-only publication snapshot."""
-    result = store.get_completed_in_snapshot(kind, identity)
-    if result is None:
-        return None
-    # Publication metadata belongs to the server, never the model response.
-    with connection.cursor(row_factory=dict_row) as cur:
-        query = ('SELECT etf_code,analysis_at,published_at FROM movement_analyses WHERE analysis_id=%s'
-                 if kind == 'movement' else
-                 'SELECT etf_code,analysis_at,published_at FROM outlook_analyses WHERE analysis_id=%s')
-        cur.execute(query, (identity,))
-        publication = cur.fetchone()
-        publication = {key: value.isoformat() if hasattr(value, 'isoformat') else value
-                       for key, value in publication.items()}
-        if kind == 'outlook':
-            publication['forecast_period'] = '향후 1개월'
-        else:
-            cur.execute('''SELECT i.item_id,i.source_as_of,i.created_at AS added_at
-                FROM movement_analyses a
-                CROSS JOIN LATERAL unnest(a.selected_item_ids) WITH ORDINALITY selected(id,position)
-                JOIN movement_items i ON i.item_id=selected.id
-                WHERE a.analysis_id=%s ORDER BY selected.position''', (identity,))
-            metadata = cur.fetchall()
-            for item, meta in zip(result['items'], metadata, strict=True):
-                item.update({key: value.isoformat() if hasattr(value, 'isoformat') else value
-                             for key, value in meta.items()})
-        result['publication'] = publication
-    if feature == 'all':
-        return result
-    if kind == 'movement':
-        if feature == 'summary':
-            return {'summary':result['summary'], 'publication':publication}
-        if feature == 'detail':
-            return {'items':result['items'], 'publication':publication}
-        return None
-    if feature == 'summary':
-        return {key:result[key] for key in ('outlook','summary_card','publication')}
-    if feature in ('detail','factors','conclusion'):
-        return {feature:result[feature], 'publication':publication}
-    if feature == 'factor_details':
-        from edge_analysis_v2.storage.factors import read_factor_details
-        details = read_factor_details(connection, identity)
-        return None if details is None else details | {'publication': publication}
-    return None
 
 
 def render_job(detail):
@@ -291,9 +235,20 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                     return
                 if path == '/api/analyses':
                     return self.reply(200, reader())
+                if path == '/api/instructions':
+                    documents = [('research.md', SOURCE.parent/'prompts/research.md', '항상 전달되는 조사·종료 기준'),
+                                 ('output-contract.md', SOURCE.parent/'prompts/output-contract.md', '항상 전달되는 출력·근거 계약'),
+                                 ('AGENTS.md', SOURCE.parent/'agent/workspace/AGENTS.md', '항상 전달되는 작성 원칙')]
+                    documents += [(name, SOURCE/name/'SKILL.md', '필요할 때 선택해서 읽는 스킬') for name in SKILLS]
+                    return self.reply(200, {'documents':[
+                        {'id':name, 'source':str(source), 'usage':usage,
+                         'content':source.read_text(encoding='utf-8')}
+                        for name,source,usage in documents]})
                 if path == '/api/execution':
                     return self.reply(200, {'enabled':execution is not None,
                         'mode':getattr(execution,'mode','local'),
+                        'prompts_enabled':prompt_versions is not None,
+                        'prompts_read_only':execution is None,
                         'csrf_token':execution.csrf_token if execution else None,
                         'scenarios':[{'id':name,'label':label,'movement_at':scenario_cutoff('movement',name),
                                       'outlook_at':scenario_cutoff('outlook',name)} for name,label in SCENARIOS.items()] if getattr(execution,'mode','local')!='cloud' else []})

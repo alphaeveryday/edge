@@ -82,3 +82,27 @@ def test_dag_run_timeout_is_shorter_than_the_reconciler_lifetime():
     from data_pipeline.ops import reconciler
     default = int(re.search(r'EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "(\d+)"', DAG).group(1))
     assert default < reconciler.AIRFLOW_RUN_LIFETIME_SECONDS
+
+
+SOURCE_DAG = (DAGS / "edge_source_daily.py").read_text(encoding="utf-8")
+
+
+def test_source_daily_dag_matches_the_catalog_lane():
+    # WHY(ALPHA-1130): DAG 가 복제한 (task_key, 태스크 정의, CLI) 가 카탈로그와 갈리면 원장이 그 실행을 다른
+    # 작업으로 기록하거나 기대 작업이 영원히 채워지지 않는다(매 run MISSED).
+    families = ast.literal_eval(re.search(r"^FAMILIES = (\{.*?\n\})$", SOURCE_DAG, re.M | re.S).group(1))
+    dag_entries = {spec[0]: spec for stages in families.values() for spec in stages.values()}
+    lane = {e.task_key: e for e in catalog.entries(catalog.SOURCE_DAILY_PIPELINE_TYPE)}
+    assert set(dag_entries) == set(lane)
+    for task_key, (_, taskdef, cli) in dag_entries.items():
+        assert lane[task_key].ecs_task_definition == taskdef, task_key
+        assert lane[task_key].cli_command == (cli,), task_key
+    assert re.search(r'^LANE = "source-daily"$', SOURCE_DAG, re.M)
+
+
+def test_reject_summary_mark_matches_the_normalize_log_line():
+    # WHY(ALPHA-1169): 실패 통보는 정제 컨테이너 로그에서 이 표지가 든 줄을 찾아 회사·사유를 싣는다. 한쪽만 바뀌면 통보가
+    # 요약을 못 찾고(제목은 FAILED 로 남지만) 회사·사유가 사라진다 — 두 쪽 테스트가 모두 초록인 채로.
+    from data_pipeline.steps import source_observations
+
+    assert ast.literal_eval(_const("REJECT_SUMMARY_MARK", SOURCE_DAG)) == source_observations.REJECT_SUMMARY_MARK

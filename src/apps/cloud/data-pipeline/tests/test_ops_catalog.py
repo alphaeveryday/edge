@@ -46,6 +46,10 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         "NORMALIZE_ETF_NAV", "LOAD_ETF_NAV",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
         "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
+        # ALPHA-1130: 원천 관측 수집의 2 = 받은 응답만 담은 완료 raw manifest 확정, 정제의 2 = 거부 행을
+        # 뺀 artifact·canonical manifest 확정. 둘 다 확정한 범위만 하류가 읽는다.
+        "MACRO_COLLECTION", "NORMALIZE_MACRO", "SECTOR_COLLECTION_KIS", "NORMALIZE_SECTOR",
+        "FINANCIAL_METRIC_COLLECTION_DART", "NORMALIZE_FINANCIAL_METRIC",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
     assert all(
@@ -197,7 +201,10 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 아니라 분봉 트리거 큐 상주 소비자가 만든다.
     assert len(asl_states) == 35, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
 
-    registered = {e.sfn_state_name for e in catalog.entries()}
+    # Airflow 전용 레인(ALPHA-1130)은 SFN state 가 없다 — 빈 이름은 그 레인만 쓸 수 있다.
+    airflow_only = {e.task_key for e in catalog.entries() if not e.sfn_state_name}
+    assert airflow_only == {e.task_key for e in catalog.entries("source-daily")}
+    registered = {e.sfn_state_name for e in catalog.entries() if e.sfn_state_name}
     assert registered <= asl_states, f"ASL 에 없는 state 등록: {registered - asl_states}"
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
@@ -213,6 +220,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # ALPHA-1073: 보충 배치 4작업을 복원한다. 장중 직접 함수 호출은 minute 원장에,
     # 배치 CLI는 ops 원장에 남으며 실제 기대 슬롯은 스케줄 env에서만 생긴다.
     assert len(registered) == 30
+    assert len(catalog.entries("source-daily")) == 9
     assert len(catalog.entries("etf-daily")) == 17
     assert len(catalog.entries("news")) == 6
     assert len(catalog.entries("disclosure")) == 4
@@ -221,6 +229,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
     # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
     # FMP 를 되살릴 때처럼 정당한 미계측이 다시 생기면 여기서 명시적으로 다시 연다.
+    # 원천 관측 MACRO_COLLECTION 도 `macro` 배선(#1036)이 먼저 배포된 뒤 ALPHA-1140 이 올렸다.
     assert {e.task_key for e in catalog.entries() if not e.instrumented} == set()
 
 
@@ -238,6 +247,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
 # 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는 다른
 # 작업까지 덩달아 면제되지 않게 하기 위해서다.
 # ALPHA-610 이 #379(배선)→#(이 PR, 플래그)로 실제로 밟은 경로이고, 지금은 비어 있는 것이 맞다.
+# MACRO_COLLECTION 도 같은 경로를 밟았다 — #1036(배선) → ALPHA-1140(플래그, 여기서 지웠다).
 _WIRING_AHEAD_OF_FLAG: set[str] = set()
 
 
@@ -350,6 +360,8 @@ def test_catalog_matches_asl_command_and_taskdef_per_state():
     assert len(asl) >= 27, f"ASL 삼중항 파싱 실패: {len(asl)}"
 
     for entry in catalog.entries():
+        if not entry.sfn_state_name:
+            continue    # Airflow 전용 — DAG 쪽 대조는 airflow/tests 가 한다
         taskdef, args = asl[entry.sfn_state_name]
         assert entry.ecs_task_definition == taskdef, \
             f"{entry.task_key}: task-def 가 ASL({taskdef})과 다르다"
@@ -386,7 +398,8 @@ def test_catalog_cli_commands_are_real_steps():
 
     source = inspect.getsource(run_module.main)
     for entry in catalog.entries():
-        assert f'"{entry.cli_command[0]}"' in source, f"{entry.cli_command[0]} 가 CLI 에 없다"
+        assert (f'"{entry.cli_command[0]}"' in source or entry.cli_command[0] in run_module.OBSERVATION_STEPS), \
+            f"{entry.cli_command[0]} 가 CLI 에 없다"
 
 
 def test_by_cli_resolves_vendor_split_steps():

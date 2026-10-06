@@ -188,7 +188,9 @@ class JdbcMinuteStatusRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertWindow("sess-today", PAST, "VALID");
 		insertPriceJob("job-missing-event", "sess-today", PAST, "PENDING");
 
-		SessionSummary session = repository.status(today).sessions().get(0);
+		// 실제 오늘 날짜라 공유 DB 의 다른 세션이 같은 날에 있을 수 있다 — 순서가 아니라 id 로 고른다.
+		SessionSummary session = repository.status(today).sessions().stream()
+				.filter(s -> s.sessionId().equals("sess-today")).findFirst().orElseThrow();
 
 		assertThat(session.priceJobs().waiting()).isZero();
 		assertThat(session.priceJobs().deliveryFailed())

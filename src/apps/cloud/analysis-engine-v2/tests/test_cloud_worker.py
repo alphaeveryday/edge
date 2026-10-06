@@ -23,7 +23,8 @@ def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failur
         load.side_effect=ValueError('SENSITIVE')
     monkeypatch.setattr(worker,'load_source',load)
     monkeypatch.setattr(worker,'load_flow',lambda c,s:s)
-    monkeypatch.setattr(worker,'load_prices',lambda c,s:s)
+    monkeypatch.setattr(worker,'load_prices',lambda c,s,request=None:s)
+    monkeypatch.setattr(worker,'load_research_observations',lambda c,s:s)
     monkeypatch.setattr(worker,'DatabaseTools',Mock())
     execute=Mock()
     if failure=='model':

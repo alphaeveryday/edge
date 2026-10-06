@@ -36,6 +36,23 @@ Table "analysis_evidence_bundle" {
   "series_lineage" jsonb [not null]
 }
 
+Table "analysis_execution_requests" {
+  "analysis_id" text [pk]
+  "source_event_id" text
+  "input_json" text [not null]
+  "execution_arn" text [not null]
+  "created_at" timestamptz [not null]
+  "accepted_at" timestamptz
+}
+
+Table "analysis_execution_slots" {
+  "execution_arn" text [pk]
+  "started_by" varchar(36) [not null]
+  "request_key" text [not null]
+  "task_arns" text[] [not null]
+  "created_at" timestamptz [not null]
+}
+
 Table "assertion_argument" {
   "assertion_argument_id" bigint [pk, increment]
   "assertion_id" text [not null]
@@ -865,6 +882,7 @@ Table "movement_analyses" {
   "summary" text
   "selected_item_ids" text[] [not null]
   "data_source" text [not null]
+  "withdrawn_at" timestamptz
 }
 
 Table "movement_items" {
@@ -877,6 +895,13 @@ Table "movement_items" {
   "source_as_of" timestamptz
   "tool_run_ids" text[] [not null]
   "created_at" timestamptz [not null]
+}
+
+Table "movement_retractions" {
+  "event_id" text [pk]
+  "etf_code" text [not null]
+  "session_id" text [not null]
+  "window_start" timestamptz [not null]
 }
 
 Table "news_document" {
@@ -1150,6 +1175,9 @@ Table "price_daily" {
   "price_basis" varchar(30)
   "available_at" timestamptz [not null]
   "data_version" varchar(50) [not null]
+  "open_price" numeric(24,8)
+  "high_price" numeric(24,8)
+  "low_price" numeric(24,8)
 
   indexes {
     ("instrument_id", "trade_date") [pk]
@@ -1323,6 +1351,8 @@ Table "tenant_delivery" {
   "target_explanation_result_id" text
   "reason" text
   "created_at" timestamptz [not null]
+  "movement_analysis_id" text
+  "target_movement_analysis_id" text
 
   indexes {
     ("tenant_id", "cursor") [pk]
@@ -1478,7 +1508,9 @@ Ref: "supply_contract_fact"."counterparty_actor_id" > "actor"."actor_id"
 Ref: "supply_contract_fact".("fact_id", "fact_type") > "disclosure_fact".("fact_id", "fact_type")
 Ref: "tenant_credential"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_delivery"."explanation_result_id" > "explanation_result"."explanation_result_id"
+Ref: "tenant_delivery"."movement_analysis_id" > "movement_analyses"."analysis_id"
 Ref: "tenant_delivery"."target_explanation_result_id" > "explanation_result"."explanation_result_id"
+Ref: "tenant_delivery"."target_movement_analysis_id" > "movement_analyses"."analysis_id"
 Ref: "tenant_delivery"."tenant_id" > "tenant"."tenant_id"
 Ref: "tenant_release_history"."bundle_version" > "release_bundle"."bundle_version"
 Ref: "tenant_release_history"."tenant_id" > "tenant"."tenant_id"

@@ -58,6 +58,11 @@
       "description": "신규 설명(NEW) — 본체·실행·배열 포함, target/reason 없음.",
       "additionalProperties": false,
       "required": ["cursor", "delivery_type", "explanation_result", "explanation_run", "source_events", "evidences"],
+      "allOf": [{
+        "if": {"properties": {"explanation_result": {"required": ["analysis_engine"], "properties": {"analysis_engine": {"const": "v2"}}}}},
+        "then": {"properties": {"explanation_run": {"properties": {"release_bundle_version": {"type": "null"}}}}},
+        "else": {"properties": {"explanation_run": {"properties": {"release_bundle_version": {"type": "string"}}}}}
+      }],
       "properties": {
         "cursor": { "$ref": "#/$defs/EntryCursor" },
         "delivery_type": { "const": "NEW" },
@@ -89,7 +94,7 @@
 
     "ExplanationResult": {
       "type": "object",
-      "description": "고객 노출 후보 문구 — Cloud Event Store explanation_result 경계면. 모든 키가 항상 직렬화되며 일부 값은 null 일 수 있다.",
+      "description": "고객 노출 문구. 기본 필드는 항상 직렬화하며, analysis_engine 생략 시 v1으로 처리한다.",
       "additionalProperties": false,
       "required": ["explanation_result_id", "etf_instrument_id", "etf_ticker", "etf_name", "trade_date", "explanation_as_of", "explanation_type", "summary", "confidence_level", "primary_thread_id"],
       "properties": {
@@ -100,10 +105,11 @@
         "trade_date": { "type": "string", "format": "date" },
         "explanation_as_of": { "type": "string", "format": "date-time" },
         "explanation_type": {
-          "type": "string",
-          "description": "explanation_result.explanation_type CHECK 제약.",
-          "enum": ["PRICE_ONLY", "EVENT_SUPPORTED", "MIXED", "UNCERTAIN"]
+          "type": ["string", "null"],
+          "description": "v1 설명 분류. v2는 null이며 분류를 만들어 채우지 않는다.",
+          "enum": ["PRICE_ONLY", "EVENT_SUPPORTED", "MIXED", "UNCERTAIN", null]
         },
+        "analysis_engine": { "type": "string", "enum": ["v1", "v2"], "description": "전달 서버가 지정. 생략하면 v1. v2는 관리자 승인 없이 자동 게시." },
         "summary": { "type": "string" },
         "confidence_level": {
           "type": ["string", "null"],
@@ -114,7 +120,16 @@
         "market_code": { "type": ["string", "null"], "description": "시장 코드(MIC) ← instrument.market_code. ALPHA-395 결정, producer 조인 구현(후속)까지는 미포함이라 optional — 구현 시 required 승격." },
         "content_as_of": { "type": ["string", "null"], "format": "date-time", "description": "콘텐츠 기준시각 — 산문이 서술하는 요청 창의 끝(KST) ← stage_results->'window'. explanation_as_of(생성 벽시계·스냅샷 grain)와 구분되는 표시용 시각. ALPHA-854 이전 행·시드 행·EOD 레인·합성 실패는 null(소비자는 explanation_as_of 폴백) — 백필 없음이라 optional 유지 (ALPHA-918)." },
         "observed_return": { "type": ["number", "null"], "description": "등락률 ← price_movement_trigger.observed_return. ALPHA-395 결정, producer 조인 구현(후속)까지는 미포함이라 optional." }
-      }
+      },
+      "if": { "required": ["analysis_engine"], "properties": { "analysis_engine": { "const": "v2" } } },
+      "then": {
+        "properties": {
+          "explanation_type": { "type": "null" },
+          "confidence_level": { "type": "null" },
+          "etf_ticker": { "type": "string", "minLength": 1 }
+        }
+      },
+      "else": { "properties": { "explanation_type": { "type": "string" } } }
     },
 
     "ExplanationRun": {
@@ -124,7 +139,7 @@
       "required": ["explanation_run_id", "release_bundle_version"],
       "properties": {
         "explanation_run_id": { "type": "string" },
-        "release_bundle_version": { "type": "string", "description": "explanation_run.bundle_version 값." }
+        "release_bundle_version": { "type": ["string", "null"], "description": "v1 release bundle version. v2 does not use release bundles and returns null." }
       }
     },
 
@@ -150,12 +165,20 @@
 
     "Evidences": {
       "type": "array",
-      "description": "설명의 근거가 된 뉴스/공시 문서 목록. lineage 두 갈래(이벤트 근거·공시 정규화 사실) 조립으로 실린다(ALPHA-718) — 근거 없는 런은 빈 배열. 온프렘 소비자(publication-api ExplanationStore) 형상에 정렬(ALPHA-395).",
+      "description": "설명의 뉴스·공시 또는 계산 근거. 계산 근거는 수신 준비용 계약이며 생산자·관리자 화면 연결 전에는 전송하지 않는다. 심사 출처 수는 이 배열이 아닌 source_events에서 계산한다.",
       "minItems": 0,
       "items": { "$ref": "#/$defs/EvidenceItem" }
     },
 
     "EvidenceItem": {
+      "description": "기존 뉴스·공시와 v2 계산 근거를 kind로 구분한다.",
+      "oneOf": [
+        { "$ref": "#/$defs/DocumentEvidenceItem" },
+        { "$ref": "#/$defs/CalculationEvidenceItem" }
+      ]
+    },
+
+    "DocumentEvidenceItem": {
       "type": "object",
       "description": "근거 문서 하나 (document 경계면을 flat 화 — ALPHA-395). publication-api 가 파싱하는 {kind,title,source,published_at} 형상 + 콘솔 원문 링크 source_uri(ALPHA-739).",
       "additionalProperties": false,
@@ -165,7 +188,46 @@
         "title": { "type": ["string", "null"], "description": "헤드라인 ← document.title (nullable)." },
         "source": { "type": "string", "description": "출처 ← document.source_code." },
         "published_at": { "type": ["string", "null"], "format": "date-time", "description": "← document.published_at (nullable)." },
-        "source_uri": { "type": ["string", "null"], "description": "원문 링크 ← document.source_uri (ALPHA-739). optional — 구형(4키) 저장분·EOD 뉴스 결측(assemble 선적재 구멍, ALPHA-740)·원천 URL 결측 기사와 공존해야 해 required 승격은 채움 구멍 해소 후. 공시=DART 뷰어 URL 항상, 뉴스=원천 URL 있을 때." }
+        "source_uri": { "type": ["string", "null"], "description": "원문 링크 ← document.source_uri (ALPHA-739). optional — 구형(4키) 저장분·EOD 뉴스 결측(assemble 선적재 구멍, ALPHA-740)·원천 URL 결측 기사와 공존해야 해 required 승격은 채움 구멍 해소 후. 공시=DART 뷰어 URL 항상, 뉴스=원천 URL 있을 때." },
+        "news_id": { "type": "string", "minLength": 1, "description": "실제 사용한 뉴스 ID. 없는 과거 기사에 추측해 채우지 않는다." },
+        "tool_run_id": { "type": "string", "minLength": 1 },
+        "item_ids": { "$ref": "#/$defs/EvidenceItemIds" }
+      },
+      "if": { "required": ["news_id"] },
+      "then": { "properties": { "kind": { "const": "NEWS" } } }
+    },
+
+    "EvidenceItemIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "해당 근거를 사용한 최종 설명 항목 ID. 문장 내 숫자 위치가 아니다."
+    },
+
+    "CalculationEvidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "title", "source", "published_at", "as_of", "tool_run_id", "item_ids", "arguments", "output", "formula_latex", "description"],
+      "properties": {
+        "kind": { "const": "CALCULATION" },
+        "title": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1, "description": "툴 정의의 데이터명. 여러 개는 ' · '로 연결한다." },
+        "published_at": { "type": "null", "description": "계산에는 기사 발표시각을 만들지 않는다." },
+        "as_of": {
+          "description": "자료 관측일 또는 오프셋을 포함한 관측시각. 모르면 null. 실행시각으로 대체하지 않는다.",
+          "oneOf": [
+            { "type": "string", "format": "date" },
+            { "type": "string", "format": "date-time" },
+            { "type": "null" }
+          ]
+        },
+        "tool_run_id": { "type": "string", "minLength": 1 },
+        "item_ids": { "$ref": "#/$defs/EvidenceItemIds" },
+        "arguments": { "type": "object", "description": "tool_runs.arguments에 저장한 호출 인자 그대로." },
+        "output": { "type": "object", "description": "tool_runs.output 전체 그대로. 결과 재계산·반올림·값의 타입 변경 없음." },
+        "formula_latex": { "type": ["string", "null"], "description": "해당 실행이 참조한 정의의 LaTeX 수식. 없으면 null." },
+        "description": { "type": "string", "minLength": 1, "description": "해당 실행이 참조한 관리자용 툴 설명." }
       }
     }
   }

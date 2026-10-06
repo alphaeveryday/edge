@@ -1,7 +1,7 @@
 """공시 1분 Worker 테스트 (ALPHA-875 PR B).
 
 루프 골격(fence·drain·lane·claim 경합)은 `test_price_worker`·`test_news_worker` 가 이미
-덮는다. 여기서는 **이 dataset 만 갖는 축**을 본다 — 넷 다 "틀려도 초록으로 보이는" 모양이라
+덮는다. 여기서는 **이 dataset 만 갖는 축**을 본다 — 전부 "틀려도 초록으로 보이는" 모양이라
 반례가 없으면 관측되지 않는다:
 
 1. 날짜창이 **세션 날짜(KST)** 에서 나오는가 — UTC 기본창이면 세션 날짜가 창 밖인데도
@@ -10,6 +10,8 @@
 3. 정제가 `raw/` 전량 스캔을 **안 하는가** — 하면 분 단위로 못 돌지만 기능은 정상으로 보인다.
 4. 같은 rcept_no 집합을 다시 봤을 때 세대가 유지되는가 — manifest 에 시각·attempt 가 섞이면
    조용히 매 tick 오른다.
+5. 다시 읽어도 같은 결과인 문서 거부가 커서를 막지 않되 VALID 로도 접히지 않는가(ALPHA-1154) —
+   막으면 하루가 전량 재조회·INCOMPLETE 로 잠기고, 접으면 처리 못 한 공시가 원장에서 사라진다.
 """
 
 from __future__ import annotations
@@ -60,13 +62,21 @@ class StubSteps:
                  status="success", exit_code=0, raw_keys=None, truncated=False,
                  normalize_exit=0, segment_exit=0, cursor_safe=None,
                  cursor_candidate="20260810000002", cursor_safes=None,
-                 cursor_candidates=None, list_total_count=None):
+                 cursor_candidates=None, list_total_count=None,
+                 normalize_failures=(), segment_failures=(),
+                 assemble_exit=0, assemble_report=None):
         self.rcept_nos = tuple(rcept_nos)
         self.status = status
         self.exit_code = exit_code
         self.truncated = truncated
         self.normalize_exit = normalize_exit
         self.segment_exit = segment_exit
+        # 실물 스텝이 quality_log 에 쓰고 호출자에게 돌려주는 실패 기록(ALPHA-1154). 기본은
+        # 비어 있다 — 종료 코드만 비0 이고 사유가 없으면 워커는 확정 거부로 읽지 않아야 한다.
+        self.normalize_failures = list(normalize_failures)
+        self.segment_failures = list(segment_failures)
+        self.assemble_exit = assemble_exit
+        self.assemble_report = assemble_report
         self.cursor_safe = cursor_safe
         self.cursor_candidate = cursor_candidate
         self.cursor_safes = list(cursor_safes or [])
@@ -127,13 +137,19 @@ class StubSteps:
             },
         }
 
-    def normalize(self, storage, run_id, input_run_id=None, *, raw_keys=None):
+    def normalize(self, storage, run_id, input_run_id=None, *, raw_keys=None,
+                  failures_out=None):
         self.normalize_calls.append({"run_id": run_id, "input_run_id": input_run_id,
                                      "raw_keys": raw_keys})
+        if failures_out is not None:
+            failures_out.extend(self.normalize_failures)
         return self.normalize_exit
 
-    def segment(self, storage, run_id, input_run_id=None, *, raw_keys=None):
+    def segment(self, storage, run_id, input_run_id=None, *, raw_keys=None,
+                failures_out=None):
         self.segment_calls.append({"run_id": run_id, "raw_keys": raw_keys})
+        if failures_out is not None:
+            failures_out.extend(self.segment_failures)
         return self.segment_exit
 
     def load(self, storage, run_id, *, db, input_run_id=None, from_date=None, to_date=None):
@@ -141,9 +157,11 @@ class StubSteps:
                                 "from": from_date, "to": to_date})
         return 0
 
-    def assemble(self, storage, run_id, *, db, from_date=None, to_date=None):
+    def assemble(self, storage, run_id, *, db, from_date=None, to_date=None, report=None):
         self.assemble_calls.append({"run_id": run_id, "from": from_date, "to": to_date})
-        return 0
+        if report is not None and self.assemble_report is not None:
+            report.update(self.assemble_report)
+        return self.assemble_exit
 
 
 def install(monkeypatch, steps: StubSteps) -> StubSteps:
@@ -586,6 +604,244 @@ def test_raw_가_0건이어도_빈_manifest를_확정하고_적재는_돈다(tmp
     assert steps.load_calls, "0건 창에서 적재 회수 경로가 사라졌다"
 
 
+# ── 2-1. 확정 거부 문서 — 커서 전진과 전건 처리 완료는 다르다 (ALPHA-1154) ──────
+
+_REJECTED_NO = "20260810000001"
+_BODY_KEY = "raw/documents/20260810000001.zip"
+_RAW_KEY = ("raw/source=dart/dataset=disclosures/market=KR/ingest_date=2026-08-10"
+            "/run_id=r1/part-00000.ndjson")
+
+
+def _normalize_reject(reasons, *, rcept_no=_REJECTED_NO):
+    return {"rcept_no": rcept_no, "raw_key": _RAW_KEY, "document_raw_path": _BODY_KEY,
+            "reasons": list(reasons)}
+
+
+def _assemble_report(reasons, *, failures=()):
+    """실물 `assemble_disclosure_events.run` 이 quality_log 기록 뒤 돌려주는 형상."""
+    return {"skipped_required": 1, "failures": list(failures),
+            "skipped_facts": [{"rcept_no": _REJECTED_NO, "fact_id": "dfact_1",
+                               "document_id": "doc_1", "report_date": "2026-08-10",
+                               "reasons": list(reasons)}]}
+
+
+# 운영에서 하루를 잠근 세 모양: 10-02 정제 empty_parse, 사업부문 표 없음, 10-01 조립 필수 항목 결손
+_CONFIRMED_CASES = {
+    "normalize": dict(normalize_exit=2, normalize_failures=[_normalize_reject(
+        # 게이트는 blocking 사유와 경고를 한 목록에 싣는다(실측 형상) — 확정 사유가 하나면 족하다
+        ["empty_parse", "withheld_counterparty", "missing_amount_and_ratio"])]),
+    "segment": dict(segment_exit=2, segment_failures=[
+        _normalize_reject(["no_segments_parsed"])]),
+    "assemble": dict(assemble_exit=1,
+                     assemble_report=_assemble_report(["missing_contract_object"])),
+}
+
+
+@pytest.mark.parametrize("stage", sorted(_CONFIRMED_CASES))
+def test_확정_거부_문서는_커서와_D_1_캐치업을_막지_않는다(tmp_path, monkeypatch, stage):
+    """WHY(ALPHA-1154): 다시 읽어도 같은 결과인 문서 하나가 커서를 막으면, 그 문서가 질의 창을
+    벗어날 때까지 **매 분 이틀치 전량**을 다시 읽고 같은 이유로 다시 실패한다(10-01·10-02 각
+    390창, DART 목록 7~13쪽/분 — 평소의 약 10배). 막아서 얻는 것이 없는 실패는 막지 않는다."""
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(cursor_candidate="R2", **_CONFIRMED_CASES[stage]))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=4)
+
+    run_ticks(worker, NOW, count=6)
+
+    # 첫 poll(D-1+D)과 창이 바뀐 두 번째 poll 만 전량이고, 그 뒤는 경계 뒤만 읽는다
+    assert steps.collect_after[:4] == [None, None, "R2", "R2"]
+    assert worker.prior_day_done is True
+    assert steps.collect_windows[0] == ("2026-08-09", SESSION_DATE)
+    assert all(w == (SESSION_DATE, SESSION_DATE) for w in steps.collect_windows[1:])
+    # 정상 문서의 처리는 거부 문서와 무관하게 끝까지 간다 — 적재·조립이 매 poll 돈다
+    assert len(steps.load_calls) == len(steps.collect_after)
+    assert len(steps.assemble_calls) == len(steps.collect_after)
+
+
+@pytest.mark.parametrize("stage", sorted(_CONFIRMED_CASES))
+def test_거부_문서가_있는_창은_VALID가_아니고_재처리_근거가_manifest에_남는다(
+        tmp_path, monkeypatch, stage):
+    """WHY: 커서가 나아갔다는 것은 "다시 읽을 이유가 없다"이지 "전건 처리됐다"가 아니다. 거부를
+    본 창이 VALID 로 확정되면 그 공시가 fact·이벤트가 되지 못한 사실이 원장에서 사라진다.
+    접수번호·단계·사유·원문 위치가 남아야 파서·기준정보를 고친 뒤 그 문서를 찾아 다시 돌린다."""
+    db = FakeMinuteDB()
+    install(monkeypatch, StubSteps(**_CONFIRMED_CASES[stage]))
+    worker, _, session_id, storage = build_worker(db, tmp_path, windows=1)
+
+    run_ticks(worker, NOW)
+
+    confirmed = [r for r in _window_rows(db, session_id) if r["data_status"] != "DUE"]
+    assert [r["data_status"] for r in confirmed] == ["INCOMPLETE"]
+    assert worker.rcept_cursor is not None, "이 테스트는 커서가 전진한 창의 표시를 본다"
+    manifest = json.loads(storage.get_bytes(confirmed[0]["manifest_uri"]))
+    assert manifest["rejected_count"] == 1
+    [rejected] = manifest["rejected_documents"]
+    assert rejected["stage"] == stage and rejected["rcept_no"] == _REJECTED_NO
+    assert set(rejected["reasons"]) & dw._CONFIRMED_REJECT_REASONS
+    # 원문 위치 — 정제 거부는 본문 객체 키, 조립 거부는 적재된 fact·문서 ID
+    if stage == "assemble":
+        assert (rejected["document_id"], rejected["fact_id"]) == ("doc_1", "dfact_1")
+    else:
+        assert rejected["document_raw_path"] == _BODY_KEY
+        # 메타 ndjson 키는 run_id 를 담아 재시도마다 달라진다 — manifest 에 넣으면 같은 관측이
+        # 다른 바이트가 되어 세대가 매 시도 오른다(`test_manifest_는_같은_관측이면_같은_바이트다`)
+        assert "raw_key" not in rejected
+
+
+@pytest.mark.parametrize("case", [
+    "missing_body", "parse_error", "unknown_reason", "list_row_reason",
+    "mixed_with_transient", "no_rcept_no", "no_reasons_reported",
+    "assemble_exception", "assemble_log_lost", "assemble_build_error",
+    "assemble_reference_data",
+])
+def test_일시_실패와_모르는_사유는_종전대로_커서를_막는다(tmp_path, monkeypatch, case):
+    """WHY: 한 번 실패했다고 확정 거부로 접으면, 다시 읽어 풀릴 문서(본문 미도착·저장 오류)가
+    경계 뒤에 갇혀 주기 대사 전까지 재시도되지 않는다(ALPHA-1058 의 재시도 계약). 확정으로 볼
+    근거가 사유 코드로 명시되지 않은 실패는 전부 막는 쪽으로 둔다 — 새 사유가 생겨도 같다."""
+    transient = {"rcept_no": "20260810000002", "raw_key": _RAW_KEY,
+                 "reasons": ["missing_document_body"]}
+    options = {
+        "missing_body": dict(normalize_exit=2, normalize_failures=[transient]),
+        # 본문 객체 읽기 실패가 파싱 예외와 같은 except 로 접힌다 — 일시일 수 있다
+        "parse_error": dict(normalize_exit=2, normalize_failures=[
+            _normalize_reject(["parse_error"])]),
+        "unknown_reason": dict(segment_exit=2, segment_failures=[
+            _normalize_reject(["reason_added_next_year"])]),
+        # 목록 행에서 오는 값은 다음 poll 이 목록을 다시 읽으면 달라질 수 있다
+        "list_row_reason": dict(normalize_exit=2, normalize_failures=[
+            _normalize_reject(["bad_report_date"])]),
+        # 확정 거부 옆에 일시 실패가 하나라도 있으면 그 단계 전체가 다시 읽을 대상이다
+        "mixed_with_transient": dict(normalize_exit=2, normalize_failures=[
+            _normalize_reject(["empty_parse"]), transient]),
+        # 접수번호가 없으면 나중에 찾아 재처리할 수 없다 — 확정으로 접지 않는다
+        "no_rcept_no": dict(normalize_exit=2, normalize_failures=[
+            {"raw_key": _RAW_KEY, "reasons": ["empty_parse"]}]),
+        "no_reasons_reported": dict(normalize_exit=2),
+        # 건너뛴 fact 가 있어도 조립 트랜잭션이 롤백됐으면 그 창의 조립은 다시 해야 한다
+        "assemble_exception": dict(assemble_exit=1, assemble_report=_assemble_report(
+            ["missing_contract_object"],
+            failures=[{"reason": "assembly_error", "error": "boom"}])),
+        # quality_log 기록 실패 → 실물 스텝이 report 를 비워 돌려준다(근거가 남지 않았다)
+        "assemble_log_lost": dict(assemble_exit=1),
+        # 이벤트 유형 미등록 같은 설정 문제 — 문서의 문제가 아니다
+        "assemble_build_error": dict(assemble_exit=1, assemble_report=_assemble_report(
+            ["event_build_error"])),
+        # 발행사 보통주 기준정보가 아직 없다 — 마스터가 채워지면 풀리는데, 캐치업을 소진하면
+        # D-1 fact 는 조립 창에서 빠져 다시 시도되지 않는다(저녁 배치는 조립을 안 한다)
+        "assemble_reference_data": dict(assemble_exit=1, assemble_report=_assemble_report(
+            ["missing_supplier_instrument"])),
+    }[case]
+    db = FakeMinuteDB()
+    steps = install(monkeypatch, StubSteps(cursor_candidate="R2", **options))
+    worker, _, _, _ = build_worker(db, tmp_path, windows=3)
+
+    run_ticks(worker, NOW, count=4)
+
+    assert len(steps.collect_after) >= 3
+    assert all(after is None for after in steps.collect_after), steps.collect_after
+    assert worker.prior_day_done is False and worker.rcept_cursor is None
+    assert all(w == ("2026-08-09", SESSION_DATE) for w in steps.collect_windows)
+
+
+def test_거부_문서_옆의_정상_문서는_빠지지_않는다_실제_정제(tmp_path, monkeypatch):
+    """WHY: 커서를 풀어 주는 수정이 정상 문서를 잃으면 안 된다. 스텁이 아닌 **실물 정제**로 본다 —
+    거부 문서보다 접수번호가 앞·뒤인 문서와, 커서 전진 **뒤에** 도착한 문서가 전부 canonical 에
+    들어가는지. 그리고 그동안 같은 거부 문서 때문에 전량을 다시 읽지 않는지."""
+    import io
+    import zipfile
+
+    from data_pipeline.lake import (canonical_supply_contract_fact_partition,
+                                    raw_disclosure_document_key, raw_disclosure_partition)
+    from data_pipeline.steps import normalize_disclosure
+
+    good_html = ("<html><head><title>테스트/단일판매ㆍ공급계약체결</title></head><body><table>"
+                 "<tr><td>계약상대방</td><td>한화에어로스페이스(주)</td></tr>"
+                 "<tr><td>체결계약명</td><td>샘플 공급계약</td></tr>"
+                 "<tr><td>계약금액</td><td>1,200,000,000원</td></tr>"
+                 "<tr><td>매출액 대비</td><td>12.5</td></tr>"
+                 "<tr><td>계약기간</td><td>2024.01.02 ~ 2025.03.04</td></tr>"
+                 "</table></body></html>")
+    empty_html = "<html><head><title>x/공급</title></head><body>표없음</body></html>"
+    before, rejected, after, late = (f"2026081080000{n}" for n in (1, 2, 3, 4))
+    bodies = {before: good_html, rejected: empty_html, after: good_html, late: good_html}
+
+    db = FakeMinuteDB()
+    # install 이 모듈 속성을 스텁으로 바꾸므로 실물을 **먼저** 잡아 둔다
+    real_normalize = normalize_disclosure.run
+    steps = install(monkeypatch, StubSteps())
+    monkeypatch.setattr(dw.normalize_disclosure, "run", real_normalize)
+    worker, _, session_id, storage = build_worker(db, tmp_path, windows=4)
+    body_keys = {}
+    for rcept_no, html in bodies.items():
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr(f"{rcept_no}.xml", html.encode("euc-kr"))
+        body_keys[rcept_no] = raw_disclosure_document_key(
+            "dart", "KR", SESSION_DATE, "first", rcept_no)
+        storage.put_bytes(body_keys[rcept_no], archive.getvalue())
+
+    def collect(settings, storage_, source, run_id, from_date=None, to_date=None, *,
+                ingest_lane, after_rcept_no=None, **_):
+        # 전량 poll 은 창의 전 문서를, 증분 poll 은 경계 뒤 문서만 자기 run 파티션에 쓴다
+        # (실물 `collect` 와 같은 모양 — 본문 객체는 처음 받은 키를 재사용한다).
+        steps.collect_after.append(after_rcept_no)
+        seen = [before, rejected, after] + ([late] if after_rcept_no is not None else [])
+        observed = [no for no in seen if after_rcept_no is None or no > after_rcept_no]
+        key = f"{raw_disclosure_partition('dart', 'KR', SESSION_DATE, run_id)}/part-00000.ndjson"
+        storage_.put_bytes(key, "".join(json.dumps({
+            "report_nm": "단일판매ㆍ공급계약체결", "rcept_no": no, "corp_code": "00406727",
+            "corp_name": "테스트기업", "stock_code": "123456", "our_ticker": "123456",
+            "rcept_dt": "20260810", "market": "KR", "is_target": True,
+            "fetched_at": "2026-08-10T00:00:00+00:00", "document_raw_path": body_keys[no],
+        }, ensure_ascii=False) + "\n" for no in observed).encode("utf-8"))
+        return {
+            "exit_code": 0, "log": {"status": "success", "error": None},
+            "rcept_nos": tuple(observed), "raw_keys": [key], "list_truncated": False,
+            "cursor_safe": True, "cursor_candidate": seen[-1],
+            "cursor_found": after_rcept_no is not None, "list_pages_requested": 1,
+            "list_rcept_nos_seen": tuple(seen), "list_total_count": len(seen),
+            "scan_complete": after_rcept_no is None, "incremental_stop_reason": None,
+        }
+
+    monkeypatch.setattr(dw.ingest_raw_disclosure, "collect", collect)
+
+    run_ticks(worker, NOW, count=6)
+
+    # 같은 거부 문서 때문에 전량을 되풀이하지 않는다 — 세 번째 poll 부터 경계 뒤만 읽는다
+    assert steps.collect_after[:3] == [None, None, after]
+    assert None not in steps.collect_after[2:]
+    # 앞·뒤 문서와 커서 전진 뒤 도착한 문서가 전부 canonical 에 있고, 거부 문서만 없다
+    canonical = {
+        row["rcept_no"]
+        for key in storage.list_keys(canonical_supply_contract_fact_partition("2026-08-10") + "/")
+        if key.endswith(".parquet")
+        for row in normalize_disclosure._read_parquet_rows(storage.get_bytes(key))
+    }
+    assert canonical == {before, after, late}
+    # 거부를 본 전량 창 둘은 INCOMPLETE 이고 근거가 남는다. 그 뒤 창은 자기 관측 범위만 말한다
+    rows = sorted((r for r in _window_rows(db, session_id) if r["data_status"] != "DUE"),
+                  key=lambda r: r["manifest_uri"])
+    manifests = [json.loads(storage.get_bytes(r["manifest_uri"])) for r in rows]
+    full = [m for m in manifests if m["observation_scope"]["mode"] == "full"]
+    assert len(full) == 2 and all(m["data_status"] == "INCOMPLETE" for m in full)
+    for manifest in full:
+        [entry] = manifest["rejected_documents"]
+        assert entry["rcept_no"] == rejected and "empty_parse" in entry["reasons"]
+        assert entry["document_raw_path"] == body_keys[rejected]
+    later = [m for m in manifests if m["observation_scope"]["mode"] != "full"]
+    assert later and all(m["rejected_count"] == 0 for m in later)
+    assert {m["data_status"] for m in later} <= {"VALID", "VALID_EMPTY"}
+    # quality_log 에는 메타 행 위치까지 남는다(run_id 로 찾는다) — 재처리의 입력 넷이 다 있다
+    logs = [json.loads(storage.get_bytes(key)) for key in storage.list_keys(
+        "operations_archive/data_quality_logs/") if key.endswith(".json")]
+    recorded = [f for log in logs if log.get("job_name") == "normalize_disclosure"
+                for f in log["failures"]]
+    assert recorded and all(
+        f["rcept_no"] == rejected and f["document_raw_path"] == body_keys[rejected]
+        and f["raw_key"].endswith("part-00000.ndjson") and "empty_parse" in f["reasons"]
+        for f in recorded)
+
+
 # ── 3. 원장 확정 — 상태·checksum·세대 ──────────────────────────
 
 def _window_rows(db, session_id):
@@ -720,6 +976,9 @@ def test_manifest_는_같은_관측이면_같은_바이트다(tmp_path):
         step_exits={"ingest": 0, "load": 0},
         observation_scope={"mode": "full", "after_rcept_no": None,
                            "cursor_found": False, "pages_requested": 2},
+        rejected_documents=[{"stage": "normalize", "rcept_no": "20260810000001",
+                             "reasons": ["empty_parse"],
+                             "document_raw_path": "raw/documents/20260810000001.zip"}],
     )
     first = dw.build_poll_manifest(**common)
     second = dw.build_poll_manifest(**common)

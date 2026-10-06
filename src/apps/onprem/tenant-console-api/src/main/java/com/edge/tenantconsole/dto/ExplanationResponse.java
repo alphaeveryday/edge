@@ -6,6 +6,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import tools.jackson.databind.JsonNode;
 
 /**
  * 가격 변동 설명 응답(ALPHA-607 실전환) — tenant-console-ui explanations 타입과 1:1
@@ -37,20 +40,34 @@ public record ExplanationResponse(
 	// 내보내려면(UI optional 계약) 여기 명시해야 한다.
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record EvidenceResponse(String type, String title, String source, String time,
-			String sourceUri) {
+			String sourceUri, String newsId, String toolRunId, JsonNode itemIds, String asOf,
+			JsonNode arguments, JsonNode output, String formulaLatex, String description) {
 
 		public static EvidenceResponse from(Explanation.Evidence e) {
-			// kind CHECK 는 NEWS|DISCLOSURE 뿐 — 새 값이 생기면 라벨 없이 코드가 그대로 노출된다.
 			String type = switch (e.kind() == null ? "" : e.kind()) {
 				case "NEWS" -> "뉴스";
 				case "DISCLOSURE" -> "공시";
+				case "CALCULATION" -> "수치 계산";
 				default -> e.kind();
 			};
 			// title·source 는 NULL 허용 — UI 계약(title·source: string)을 깨지 않게 폴백한다.
 			// sourceUri 는 링크라 폴백 없이 null 통과(NON_NULL 생략) — UI 가 링크 미표시로 처리.
 			return new EvidenceResponse(type, e.title() == null ? "(제목 없음)" : e.title(),
-					e.source() == null ? "(출처 없음)" : e.source(), TimeText.doc(e.publishedAt()),
-					e.sourceUri());
+					e.source() == null ? "(출처 없음)" : e.source(),
+					"CALCULATION".equals(e.kind()) ? observationTime(e.asOf()) : TimeText.doc(e.publishedAt()),
+					e.sourceUri(), e.newsId(), e.toolRunId(), e.itemIds(), e.asOf(),
+					e.arguments(), e.output(), e.formulaLatex(), e.description());
+		}
+
+		private static String observationTime(String value) {
+			if (value == null) return "—";
+			try {
+				return value.length() == 10 ? LocalDate.parse(value).toString()
+						: TimeText.doc(OffsetDateTime.parse(value));
+			} catch (java.time.format.DateTimeParseException e) {
+				// 잘못된 원값은 asOf 에 남겨 진단 가능하게 하고 가짜 표시 시각을 만들지 않는다.
+				return "—";
+			}
 		}
 	}
 

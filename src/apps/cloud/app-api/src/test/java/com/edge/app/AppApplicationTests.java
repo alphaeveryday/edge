@@ -16,7 +16,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.mysql.MySQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.util.ArrayList;
@@ -35,12 +35,12 @@ import static org.mockito.Mockito.doAnswer;
         "vote.admin-token=test-admin", "vote.reconcile.initial-delay=PT1H"})
 class AppApplicationTests {
     @ServiceConnection
-    static final MySQLContainer MYSQL = new MySQLContainer(DockerImageName.parse("mysql:8.4"));
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(DockerImageName.parse("postgres:16"));
     @ServiceConnection(name = "redis")
     static final GenericContainer<?> REDIS =
             new GenericContainer<>(DockerImageName.parse("redis:7-alpine")).withExposedPorts(6379);
     static {
-        MYSQL.start();
+        POSTGRES.start();
         REDIS.start();
     }
 

@@ -6,8 +6,7 @@
 #
 # 이 모듈은 "상시 서비스"가 아니라 실행할 task 정의만 만든다(aws_ecs_service 없음).
 
-# 이미지는 분석 엔진과 같은 것을 쓴다(질의 CLI 가 edge_analysis 안에 있다) — 새 ECR 을 만들지 않고
-# data-pipeline 에 넘기는 analysis_image 와 동일한 값을 입력으로 받는다(ADR-0009: 레포는 foundation 소유).
+# 분석엔진과 분리된 db-query 이미지를 기존 ECR 저장소에서 사용한다.
 
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.name}"
@@ -42,7 +41,7 @@ resource "aws_iam_role_policy_attachment" "execution" {
 # AllowedByOrganizations=false) 이 계정에서는 IAM DB 인증이 원리적으로 불가하다 —
 # LakeFormation 이 같은 이유로 막힌 전례와 동일 계열. 읽기전용 안전은 남은 두 층이
 # 진다: 접속 파라미터 default_transaction_read_only=on(연결 단위라 SQL 로 못 되돌림)
-# + 런타임 SELECT 가드(adapters/readonly.py).
+# + 런타임 SELECT 가드(edge_db_query/readonly.py).
 # (RDS 관리형 시크릿은 기본 aws/secretsmanager 키라 GetSecretValue 로 충분. CMK 면 kms:Decrypt 추가.)
 resource "aws_iam_role_policy" "execution_secret" {
   name = "${var.name}-execution-secret"
@@ -85,7 +84,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 
 # ── 태스크 정의 ─────────────────────────────────────────
 locals {
-  # 런타임(edge_analysis)이 읽는 접속 컨텍스트. 비밀번호는 env 가 아니라 아래
+  # 런타임(edge_db_query)이 읽는 접속 컨텍스트. 비밀번호는 env 가 아니라 아래
   # 태스크 정의의 secrets 블록(PGPASSWORD)으로 주입된다 — SCP 가 IAM 토큰 경로를
   # 막아 시크릿 방식으로 전환했다(위 IAM 절 주석).
   environment = {
@@ -95,7 +94,7 @@ locals {
     PGUSER     = var.db_username
     PGSCHEMA   = "public"
 
-    # 읽기전용 롤(agent_ro) 강등은 env 가 아니라 **코드 상수**다(adapters/readonly.py
+    # 읽기전용 롤(agent_ro) 강등은 env 가 아니라 **코드 상수**다(edge_db_query/readonly.py
     # _QUERY_ROLE) - RunTask 의 ContainerOverride.environment 가 task 정의 env 를
     # 덮을 수 있어, env 로 두면 RunTask 권한만으로 강등이 꺼진다.
     # GRANT agent_ro TO 마스터는 V202608111500 마이그레이션이 선행한다.
@@ -121,18 +120,12 @@ resource "aws_ecs_task_definition" "this" {
     cpu_architecture        = var.cpu_architecture
   }
 
-  # entryPoint 를 query 서브커맨드까지 고정한다 — RunTask 오버라이드는 command(인자)만
-  # 바꿀 수 있고 entryPoint 는 못 바꾼다. 이 task 는 마스터 시크릿을 주입받으므로(SCP 가
-  # IAM 경로를 막아서), entryPoint 를 이미지 기본(python -m edge_analysis)에 두면 RunTask
-  # 권한만으로 쓰기 서브커맨드(load-* 류)를 마스터로 돌릴 수 있다. 서브커맨드를 박아
-  # 도달 가능한 코드가 읽기 질의 경로(query: read-only 접속 파라미터+SELECT 가드)뿐이게
-  # 한다. 호출부는 command 로 `--sql <SQL>` 또는 `--file <경로>` 만 넘긴다 — 질의문이
-  # task 정의에 박히지 않는(리비전을 늘리지 않는) 계약은 그대로다.
+  # 조회 전용 진입점. 호출자는 --sql 또는 --file 인자만 전달한다.
   container_definitions = jsonencode([{
     name        = "db-query"
     image       = var.image
     essential   = true
-    entryPoint  = ["python", "-m", "edge_analysis", "query"]
+    entryPoint  = ["python", "-m", "edge_db_query"]
     environment = [for k, v in local.environment : { name = k, value = v }]
     secrets = [
       { name = "PGPASSWORD", valueFrom = "${var.db_password_secret_arn}:password::" },

@@ -28,10 +28,7 @@ env = dict(os.environ, VOTE_REDIS_COMMAND_TIMEOUT='5000ms' if scenario == 'S1' e
            VOTE_REDIS_TIMEOUT_OPTIONS='false' if scenario == 'S1' else 'true',
            VOTE_REDIS_READ_FROM='REPLICA_PREFERRED' if scenario == 'S5' else 'MASTER')
 project = os.environ.get('EXPERIMENT_PROJECT', 'etf-' + scenario.lower() + '-' + str(int(time.time())))
-mode = os.environ.get('VOTE_MODE', 'db-first')
 compose = ['docker', 'compose', '-p', project, '-f', str(root.parent / 'docker-compose.yaml')]
-if mode == 'write-behind':
-    compose += ['-f', str(root.parent / 'docker-compose.write-behind.yaml')]
 def dc(*args):
     return subprocess.check_output(compose + list(args), env=env, text=True)
 def get(path):
@@ -42,7 +39,7 @@ def parse_time(stamp):
     stamp = re.sub(r'\.(\d+)', lambda m: '.' + (m.group(1) + '000000')[:6], stamp).replace('Z', '+00:00')
     return datetime.fromisoformat(stamp)
 def sql(query):
-    return dc('exec', '-T', 'mysql', 'mysql', '-uapp', '-papp', '-Dapp', '-N', '-e', query)
+    return dc('exec', '-T', 'postgres', 'psql', '-U', 'app', '-d', 'app', '-At', '-F', '\t', '-c', query)
 (out / 'project.txt').write_text(project)
 dc('up', '-d', '--no-build' if os.environ.get('EXPERIMENT_NO_BUILD') else '--build')
 for _ in range(180):
@@ -74,13 +71,6 @@ with (out / 'k6.log').open('w') as log:
 def master_cli(*args):
     address = dc('exec', '-T', 'sentinel-1', 'redis-cli', '-p', '26379', '--raw', 'SENTINEL', 'get-master-addr-by-name', 'mymaster').splitlines()
     return dc('exec', '-T', 'sentinel-1', 'redis-cli', '-h', address[0], '-p', address[1], '--raw', *args)
-if mode == 'write-behind':
-    # DB snapshot 은 flush 가 dirty 를 비운 뒤에 떠야 한다 — 미flush 분은 지연이지 유실이 아니다.
-    for _ in range(60):
-        if master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0': break
-        time.sleep(1)
-    (out / 'dirty-after-load.txt').write_text(master_cli('SCARD', 'vote:dirty-forecasts'))
-drain_complete = mode != 'write-behind' or master_cli('SCARD', 'vote:dirty-forecasts').strip() == '0'
 (out / 'before-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
 (out / 'db.tsv').write_text(sql("select choice,count(*) from forecast_vote where forecast_id='" + etf + "' group by choice;"))
 (out / 'duplicates.tsv').write_text(sql('select forecast_id,user_id,count(*) from forecast_vote group by forecast_id,user_id having count(*)>1;'))
@@ -119,8 +109,8 @@ correct = (final['source'] == 'redis'
            and all(final[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL'))
            and int((out / 'master-voted.txt').read_text()) == sum(map(int, expected.values()))
            and not (out / 'duplicates.tsv').read_text().strip()
-           and drain_complete and not per_user['db_redis_mismatch'] and not per_user['ack_db_mismatch'])
-(out / 'checks.json').write_text(json.dumps({'mode':mode, 'db_redis_equal':correct, 'drain_complete':drain_complete, 'k6_exit':load.returncode,
+           and not per_user['db_redis_mismatch'] and not per_user['ack_db_mismatch'])
+(out / 'checks.json').write_text(json.dumps({'db_redis_equal':correct, 'k6_exit':load.returncode,
     'ack_db_mismatch':len(per_user['ack_db_mismatch']), 'ack_redis_mismatch':len(per_user['ack_redis_mismatch'])}, indent=2))
 print('Results:', out)
 print('Cleanup after review:', ' '.join(compose + ['down']))

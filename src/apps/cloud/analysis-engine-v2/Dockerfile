@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --create-home --uid 1001 analysis
 COPY apps/cloud/analysis-engine-v2 ./analysis-engine-v2
 RUN pip install --no-cache-dir './analysis-engine-v2[cloud]' \
-    && python -c "from importlib.resources import files; assert (files('edge_analysis_v2.cloud') / 'request.schema.json').is_file(); assert (files('edge_analysis_v2.prompts') / 'outlook.yaml').is_file()"
+    && python -c "from importlib.resources import files; assert (files('edge_analysis_v2.cloud') / 'request.schema.json').is_file(); assert (files('edge_analysis_v2.prompts') / 'outlook.yaml').is_file(); assert (files('edge_analysis_v2.skills') / 'hypothesis-analysis-workflow' / 'SKILL.md').is_file(); assert (files('edge_analysis_v2.skills') / 'etf-hypothesis-analysis' / 'SKILL.md').is_file()"
+VOLUME ["/tmp"]
 USER analysis
 ENTRYPOINT ["python", "-m", "edge_analysis_v2.cloud.worker"]

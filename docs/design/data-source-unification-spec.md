@@ -10,6 +10,8 @@
 > 표면 목록의 코드 정본: `analysis-engine/src/edge_analysis/statics/duck.py`
 > (`RDB_TABLES`·`S3_SETS`·`BACKFILL_SETS`). 경로 규약의 코드 정본:
 > `data-pipeline/src/data_pipeline/lake/storage.py`.
+>
+> ⚠️ 위 `duck.py` 를 비롯해 이 문서가 인용하는 v1 분석엔진 코드(`analysis-engine/src/edge_analysis/…` — `statics/*`·`collect/*` 등)는 #1140(2026-10-05)으로 제거됐다. 그 인용은 제거 전 기록이다(`data-pipeline` 경로는 그대로다).
 
 ## 1. 산재 현황 전수표
 

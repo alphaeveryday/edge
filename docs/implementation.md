@@ -77,7 +77,7 @@
 - [ ] `libs/schema/scripts/generate-erd.sh`로 `libs/schema/generated/` 물리 ERD를 재생성.
 - [ ] 마이그레이션과 생성 모델을 **같은 PR/커밋**으로 함께 올린다([ADR-0005](adr/0005-db-as-contract.md)).
 - [ ] 이 변경이 확장-수축 중 **어느 단계인지** PR 설명에 명시한다.
-- [ ] 리뷰: `libs/schema`는 JVM·Python 양쪽 소비자가 영향을 받으므로 **양쪽 리뷰**를 받는다(CODEOWNERS로 강제 예정).
+- [ ] 리뷰: `libs/schema`는 JVM·Python 양쪽 소비자가 영향을 받으므로 **양쪽 리뷰**를 받는다(`.github/CODEOWNERS` 에 지정돼 있으나 `dev` 룰셋이 코드 오너 리뷰를 요구하지 않아 강제는 아니다).
 
 **generated 모델 재생성**
 `libs/schema/scripts/generate-erd.sh`가 cloud·onprem Flyway 세트를 PostgreSQL 18 임시
@@ -86,11 +86,11 @@
 
 - `generated/`는 **손으로 고치지 않는다.** 항상 `schema`(마이그레이션/정의)로부터 생성한다.
 - 재생성은 스키마 변경과 **동일 PR**에 포함한다 — 정의와 모델이 어긋난 채 머지되면 안 된다.
-  집행은 pre-commit 훅(opt-in)이 아니라 **CI**다(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR에서 두 DBML을 재생성해 커밋본과 대조하고 어긋나면 빨간불을 낸다. 단 이 레포는 branch protection이 없어 required check 지정이 불가하므로 **드러내는 데까지**다 — 머지를 막지는 못한다.
+  집행은 pre-commit 훅(opt-in)이 아니라 **CI**다(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR에서 두 DBML을 재생성해 커밋본과 대조하고 어긋나면 빨간불을 낸다. 단 `dev` 룰셋(`protect-dev` — 삭제·강제 푸시 금지, PR 필수)에 required status check 가 지정돼 있지 않아 **드러내는 데까지**다 — 머지를 막지는 못한다.
 - Flyway SQL이 계약 SSOT이고, DBML은 물리 구조를 검토하기 위한 파생물이다.
 
 ## 5. 현행 CD (지속적 배포)
 
 > 구 docs/architecture.md에서 흡수 — 현행 운영 사실. 배포 대상 앱 구성은 피벗([context.md](context.md)의 서비스/API 변경표)에 따라 재편됐다(widget·gateway 제거 — ADR-0010·0032).
 
-dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 2종 super-admin-api·tenant-sync-api — tenant-console-api 는 onprem 플레인이라 dev ECS·CD 에서 제거)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). `data-pipeline` 은 `deploy-data-pipeline.yml` 로 raw 수집 배치 이미지를 ECR 에 push 한다. 프론트 워크플로(`deploy-super-admin-ui.yml`)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다(super-admin-ui — cloud 플레인). tenant-console-ui 는 온프렘 플레인이라 cloud CD·정적 호스팅이 없다(ADR-0032 — 박스가 UI·API 를 한 오리진으로 co-host, 온프렘 서빙은 후속 증분). 데모 온프렘 박스는 격리 스택이라 별개다 — `deploy-demo-onprem.yml`(수동 `workflow_dispatch`, 전용 배포 역할)이 이미지 빌드→SSM Run Command 로 박스 compose 를 한 번에 한다(dev 자동 CD 와 무관 — MTS 정적은 mock-broker 이미지에 내장돼 별도 S3 sync 없음, ALPHA-632). 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.
+dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 3종 super-admin-api·tenant-sync-api·app-api — tenant-console-api 는 onprem 플레인이라 dev ECS·CD 에서 제거)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). `data-pipeline` 은 `deploy-data-pipeline.yml` 로 raw 수집 배치 이미지를 ECR 에 push 한다. `analysis-engine-v2`·`airflow`·`db-query` 도 각자 `deploy-<app>.yml` 이 자기 path 변경에 이미지를 ECR 에 push 한다(analysis-engine-v2 는 API Lambda 코드까지 갱신). 프론트 워크플로(`deploy-super-admin-ui.yml`)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다(super-admin-ui — cloud 플레인). tenant-console-ui 는 온프렘 플레인이라 cloud CD·정적 호스팅이 없다(ADR-0032 — 박스가 UI·API 를 한 오리진으로 co-host, 온프렘 서빙은 후속 증분). 데모 온프렘 박스는 격리 스택이라 별개다 — `deploy-demo-onprem.yml`(수동 `workflow_dispatch`, 전용 배포 역할)이 이미지 빌드→SSM Run Command 로 박스 compose 를 한 번에 한다(dev 자동 CD 와 무관 — MTS 정적은 mock-broker 이미지에 내장돼 별도 S3 sync 없음, ALPHA-632). 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.

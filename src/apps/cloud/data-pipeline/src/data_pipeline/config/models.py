@@ -275,6 +275,51 @@ class DartFinancialSource(BaseModel):
     )
 
 
+class MacroObservationSource(BaseModel):
+    """매크로 5계열 원천(ALPHA-1130, 계약은 설계 §10). 인증키는 env 로만 주입한다:
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY=...
+    FMP 는 쓰지 않는다(2026-10-01 결정, ALPHA-1136) — 미 국채 10년은 FRED `DGS10` 이다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    fred_base_url: NonBlankStr = "https://api.stlouisfed.org/fred"
+    ecos_base_url: NonBlankStr = "https://ecos.bok.or.kr/api"
+    kosis_base_url: NonBlankStr = "https://kosis.kr/openapi"
+    eia_base_url: NonBlankStr = "https://api.eia.gov/v2"
+    ecos_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    kosis_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    eia_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    fred_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+
+
+class SectorMasterSource(BaseModel):
+    """KIS 종목 마스터 파일(지수업종 대·중·소분류, ALPHA-1130). 공개 다운로드라 인증이 없다 —
+    KIS API(앱키·토큰)가 아니므로 KIS 공유 호출 예산(ADR-0055) 대상이 아니다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    base_url: NonBlankStr = "https://new.real.download.dws.co.kr/common/master"
+
+
+class SourceObservationsConfig(BaseModel):
+    """분석 v2 원천 관측 세 데이터셋(ALPHA-1130). 재무는 `dart_financial.source` 의 DART 키를 쓴다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 재무 수집 대상 뿌리 ETF 를 좁히는 재정의. 비어 있으면 `krx_etf.source.etf_map` 의 ETF 전부다(전망 배치 대상과
+    # 같은 목록, run.py). 대상 종목은 이 ETF 들의 canonical 구성종목 스냅샷에서 **기간별로** 파생한다 — 현재 구성을
+    # 과거 전체에 적용하지 않는다(steps/source_observations). 둘 다 비어 있으면 재무 수집 스텝만 거부한다.
+    etf_ids: list[NonBlankStr] = []
+    macro: MacroObservationSource = MacroObservationSource()
+    sector: SectorMasterSource = SectorMasterSource()
+
+
 class DartDisclosureSource(BaseModel):
     """OpenDART 국내 공시(disclosure filing) 소스 (disclosures raw).
 

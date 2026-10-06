@@ -164,3 +164,70 @@ def test_result_and_manifest_agree():
     assert result.succeeded_count == len(manifest["received"]) + len(manifest["no_trade"]) == 2
     assert result.failed_count == len(manifest["missing"]) + len(manifest["invalid"]) == 2
     assert result.expected_count == 4
+
+
+def _collect_over_dropping_transport(monkeypatch, always_dropped=()):
+    """실제 조립(운반 계층 + 어댑터 + collector)으로 세 종목을 받는다. `000001` 은 첫 응답이 끊긴다."""
+    import http.client
+    import io
+    import json
+
+    from data_pipeline.sources.http import PoliteClient
+    from data_pipeline.sources.kis_minute import KisMinuteClient
+
+    bar = {"stck_bsop_date": "20260803", "stck_cntg_hour": "102900", "stck_prpr": "100",
+           "stck_oprc": "100", "stck_hgpr": "100", "stck_lwpr": "100", "cntg_vol": "10",
+           "acml_tr_pbmn": "1000"}
+    sends: dict[str, int] = {}
+
+    def urlopen(req, timeout=None):
+        url = req.full_url
+        if "FID_INPUT_ISCD" not in url:
+            return io.BytesIO(json.dumps({"access_token": "tok", "expires_in": 86400}).encode())
+        symbol = url.split("FID_INPUT_ISCD=")[1][:6]
+        sends[symbol] = sends.get(symbol, 0) + 1
+        if symbol in always_dropped or (symbol == "000001" and sends[symbol] == 1):
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+        return io.BytesIO(json.dumps({"rt_cd": "0", "msg_cd": "MCA00000", "output2": [bar]}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    transport = PoliteClient(min_interval=0)
+    transport._sleep = lambda seconds: None
+    collector = KisPriceCollector(client=KisMinuteClient("k", "s", transport), clock=lambda: WINDOW_END)
+    request = CollectionRequest(
+        dataset="price_minute", window_start=WINDOW_START, window_end=WINDOW_END,
+        run_id="run-1", session_id="msn_x", execution_mode="resident",
+        universe_version="u1", unit_ids=("000001", "000002", "000003"),
+    )
+    return lambda: collector.collect(request, WINDOW_END), sends
+
+
+def test_응답_없이_끊긴_연결_하나가_window를_죽이지_않는다(monkeypatch):
+    """KIS 가 응답 없이 연결을 끊어도(`RemoteDisconnected`) 그 호출만 다시 보낸다(ALPHA-1153).
+
+    종전엔 이 예외가 운반 계층 재시도를 빠져나가 **window 전체**가 실패했다 — 이미 받은 종목까지
+    버리고 lease(300초) 뒤 전 종목을 다시 불렀다. 한 번 끊긴 종목은 재시도로 받고 창은 온전해야 한다.
+    """
+    collect, sends = _collect_over_dropping_transport(monkeypatch)
+
+    _, records, manifest = collect()
+
+    assert manifest["received"] == ["000001", "000002", "000003"] and manifest["missing"] == []
+    assert len(records) == 3
+    assert sends == {"000001": 2, "000002": 1, "000003": 1}  # 끊긴 호출만 한 번 더 나갔다
+
+
+def test_계속_끊기는_연결은_종목_결손으로_접지_않고_window를_실패시킨다(monkeypatch):
+    """재시도해도 끊기면 종전처럼 예외로 window 를 실패시킨다 — 종목 missing 으로 접지 않는다.
+
+    missing 으로 접으면 window 가 VALID(허용 결손 이내)나 INCOMPLETE 로 **커밋**되는데, 커밋된
+    window 는 자동 재청구가 없다(DUE·만료 CLAIMED 만 다시 집는다). 끊김으로 생긴 결손이 영구화된다.
+    예외로 실패해야 lease 만료 뒤 전 종목 재수집 경로가 남는다.
+    """
+    import http.client
+
+    collect, sends = _collect_over_dropping_transport(monkeypatch, always_dropped=("000002",))
+
+    with pytest.raises(http.client.RemoteDisconnected):
+        collect()
+    assert sends["000002"] == 2  # 한 번만 다시 보냈다 — 끊김이 발신을 곱하지 않는다

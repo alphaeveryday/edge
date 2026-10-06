@@ -11,6 +11,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: read
 
 concurrency:
   group: deploy-analysis-engine-v2
@@ -22,6 +23,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Wait for this revision's schema migration before deploying readers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! git diff --name-only HEAD^ HEAD | grep -q '^src/libs/schema/migrations-cloud/'; then exit 0; fi
+          for attempt in $(seq 1 90); do
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/schema-migrate.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" --jq '.workflow_runs[0] | if .status == "completed" then .conclusion else "waiting" end')"
+            if [ "$state" = success ]; then exit 0; fi
+            if [ "$state" != waiting ]; then echo "Schema migration did not succeed: $state"; exit 1; fi
+            sleep 10
+          done
+          echo 'Schema migration wait timed out'; exit 1
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -33,9 +49,28 @@ jobs:
           account="$(aws sts get-caller-identity --query Account --output text)"
           image="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-${GITHUB_SHA}"
           docker build --platform linux/amd64 -f src/apps/cloud/analysis-engine-v2/Dockerfile -t "$image" src
-          docker run --rm --entrypoint python "$image" -c "from importlib.resources import files; import subprocess; subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
+          docker run --rm --read-only --cap-drop ALL --entrypoint python "$image" -c "from importlib.resources import files; import os, subprocess, tempfile; assert os.getuid()==1001; tempfile.TemporaryDirectory().cleanup(); subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
           docker push "$image"
           echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Publish the API runtime image for infrastructure bootstrap
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          repo="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline"
+          docker build --platform linux/amd64 --provenance=false -f src/apps/cloud/analysis-engine-v2/Dockerfile.api -t "$repo:analysis-v2-api-${GITHUB_SHA}" src
+          docker push "$repo:analysis-v2-api-${GITHUB_SHA}"
+          echo "ANALYSIS_API_IMAGE=$repo:analysis-v2-api-${GITHUB_SHA}" >> "$GITHUB_ENV"
+      - name: Deploy the API image after its infrastructure exists
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if aws lambda get-function --function-name edge-dev-analysis-v2-api >/tmp/api-function.json 2>/tmp/api-error; then break; fi
+            if [ "$attempt" = 60 ]; then cat /tmp/api-error; exit 1; fi
+            sleep 10
+          done
+          aws lambda wait function-active-v2 --function-name edge-dev-analysis-v2-api
+          aws lambda update-function-code --function-name edge-dev-analysis-v2-api --image-uri "$ANALYSIS_API_IMAGE" --query LastUpdateStatus --output text
+          aws lambda wait function-updated-v2 --function-name edge-dev-analysis-v2-api
       - name: Register the immutable image as the next v2 task revision
         run: |
           set -euo pipefail
@@ -53,6 +88,46 @@ jobs:
           assert task['family']=='edge-dev-analysis-v2'
           assert len(task['containerDefinitions'])==1
           task['containerDefinitions'][0]['image']=os.environ['ANALYSIS_IMAGE']
+          container=task['containerDefinitions'][0]
+          container['user']='1001:1001'
+          container['readonlyRootFilesystem']=True
+          linux=container.setdefault('linuxParameters',{})
+          linux['capabilities']={'drop':['ALL']}
+          mounts=container.setdefault('mountPoints',[])
+          volumes=task.setdefault('volumes',[])
+          # One task-local writable volume, never a shared host/EFS workspace.
+          assert not mounts or mounts==[{'sourceVolume':'analysis-scratch','containerPath':'/tmp','readOnly':False}]
+          assert not volumes or volumes==[{'name':'analysis-scratch','host':{}}] or volumes==[{'name':'analysis-scratch'}]
+          container['mountPoints']=[{'sourceVolume':'analysis-scratch','containerPath':'/tmp','readOnly':False}]
+          task['volumes']=[{'name':'analysis-scratch'}]
           json.dump(task,open('/tmp/next-task.json','w'))
           PY
           aws ecs register-task-definition --cli-input-json file:///tmp/next-task.json --query taskDefinition.taskDefinitionArn --output text
+      - name: Update workflow control and the price admission runtime
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if aws lambda get-function --function-name edge-dev-analysis-v2-control >/dev/null 2>/tmp/control-error; then break; fi
+            if [ "$attempt" = 60 ]; then cat /tmp/control-error; exit 1; fi
+            sleep 10
+          done
+          aws lambda wait function-active-v2 --function-name edge-dev-analysis-v2-control
+          aws lambda update-function-code --function-name edge-dev-analysis-v2-control --image-uri "$ANALYSIS_API_IMAGE" --query LastUpdateStatus --output text
+          aws lambda wait function-updated-v2 --function-name edge-dev-analysis-v2-control
+          aws ecs describe-task-definition --task-definition edge-dev-analysis-v2-consumer >/tmp/consumer.json
+          python - <<'PY'
+          import json, os
+          task=json.load(open('/tmp/consumer.json'))['taskDefinition']
+          fields=('family','taskRoleArn','executionRoleArn','networkMode','containerDefinitions','volumes','requiresCompatibilities','cpu','memory')
+          task={k:task[k] for k in fields if k in task}
+          assert task['family']=='edge-dev-analysis-v2-consumer'
+          task['containerDefinitions'][0]['image']=os.environ['ANALYSIS_IMAGE']
+          json.dump(task,open('/tmp/next-consumer.json','w'))
+          PY
+          task="$(aws ecs register-task-definition --cli-input-json file:///tmp/next-consumer.json --query taskDefinition.taskDefinitionArn --output text)"
+          current="$(aws ecs describe-services --cluster edge-dev-worker --services edge-dev-data-pipeline-analysis-consumer --query 'services[0].taskDefinition' --output text)"
+          # The first v1 -> v2 switch is explicit, after old tasks have drained. Later deploys stay automatic.
+          if [[ "$current" == *:task-definition/edge-dev-analysis-v2-consumer:* ]]; then
+            aws ecs update-service --cluster edge-dev-worker --service edge-dev-data-pipeline-analysis-consumer --task-definition "$task" >/dev/null
+            aws ecs wait services-stable --cluster edge-dev-worker --services edge-dev-data-pipeline-analysis-consumer
+          fi

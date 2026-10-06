@@ -44,3 +44,7 @@ MySQL 이 나은 점도 있다. Redis 장애 실험이 MySQL 기준 실측이고
 - CD: super-admin-api 와 같은 OIDC 이미지 빌드·롤아웃. JWT 서명 키는 Secrets Manager 에 선생성해 ECS secrets 로 주입한다(부트스트랩 비밀번호와 같은 규율).
 - 비용: RDS `db.t4g.micro` + ElastiCache `cache.t4g.micro` 1 + ALB 1 이 추가된다.
 - 미결: 브랜드 도메인 시점, 오토스케일 상한, 실데이터 동기화 방식(논리 복제 vs 배치)은 계약 설계 뒤로 넘긴다.
+
+## 후속(2026-10-06)
+- write-behind 모드 제거(ALPHA-1179)에 따른 VoteWarmer·VoteFlusher 삭제
+- ShedLock 대상 스케줄 작업은 VoteReconciler 하나

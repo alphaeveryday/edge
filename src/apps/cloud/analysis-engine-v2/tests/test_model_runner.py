@@ -34,11 +34,80 @@ def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_pa
 
     result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
         call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path,
-        key='test-secret', model='deepseek-flash', client_factory=Client))
+        key='test-secret', model='deepseek-flash', client_factory=Client, kind=kind))
 
     assert result == {'summary': 'ok'}
-    assert captured == [prompt]
-    assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == prompt
+    assert len(captured) == 1
+    research = (prompt_path.parent/'research.md').read_text(encoding='utf-8')
+    contract = (prompt_path.parent/'output-contract.md').read_text(encoding='utf-8')
+    writing = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
+    # Critical investigation rules must precede task details, even without any Skill call.
+    assert captured[0] == '\n\n'.join([research, prompt, contract, writing])
+    assert 'analysis:hypothesis-analysis-workflow' in captured[0]
+    assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
+    assert (tmp_path/'AGENTS.md').read_text(encoding='utf-8') in captured[0]
+    # No Skill or Read call occurs: shared rules must reach both tasks regardless.
+    for name in ('research.md', 'output-contract.md'):
+        content = (prompt_path.parent/name).read_text(encoding='utf-8')
+        assert captured[0].count(content) == 1
+
+
+def test_valid_json_without_skill_calls_is_accepted_and_workspace_removed(tmp_path):
+    workspaces = []
+    base = client_for(ResultMessage(structured_output={'summary':'ok'}))
+    class Client(base):
+        async def __aenter__(self):
+            workspaces.append(Path(self.options.cwd))
+            return self
+    result = asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+        call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+        key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert result == {'summary':'ok'}
+    assert (tmp_path/'response.json').exists()
+    assert workspaces and not workspaces[0].exists()
+
+
+def test_tinyfish_credential_is_not_inherited_by_model_process(monkeypatch, tmp_path):
+    monkeypatch.setenv('TINYFISH_API_KEY', 'private-provider-key')
+    base = client_for(ResultMessage(structured_output={'summary':'ok'}))
+    class Client(base):
+        async def __aenter__(self):
+            assert self.options.env['TINYFISH_API_KEY'] == ''
+            assert 'private-provider-key' not in self.options.system_prompt
+            return self
+    asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[], call=lambda *args:None,
+        output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert all('private-provider-key' not in p.read_text(encoding='utf-8')
+               for p in tmp_path.iterdir() if p.is_file())
+
+
+def test_research_is_bounded_by_elapsed_time_not_a_fixed_turn_count(tmp_path):
+    base = client_for(None)
+    class Client(base):
+        async def receive_response(self):
+            assert self.options.max_turns is None
+            await asyncio.sleep(10)
+            yield ResultMessage(structured_output={'summary':'too late'})
+    with pytest.raises(TimeoutError):
+        asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+            call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+            key='test-secret', model='deepseek-flash', client_factory=Client, timeout_seconds=1))
+    assert not (tmp_path/'response.json').exists()
+
+
+@pytest.mark.parametrize('kind,seconds',[('outlook',600),('movement',300)])
+def test_deep_outlook_has_more_time_without_expanding_movement(monkeypatch,tmp_path,kind,seconds):
+    original = asyncio.timeout
+    deadlines = []
+    def timeout(value):
+        deadlines.append(value)
+        return original(value)
+    monkeypatch.setattr(asyncio,'timeout',timeout)
+    asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
+        call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
+        key='test-secret', model='deepseek-flash', kind=kind,
+        client_factory=client_for(ResultMessage(structured_output={'summary':'ok'}))))
+    assert deadlines == [seconds]
 
 
 @dataclass
@@ -52,7 +121,9 @@ class ResultMessage:
 def client_for(message):
     class Client:
         def __init__(self, *, options):
-            assert options.tools == []
+            self.options = options
+            assert options.tools == ['Skill', 'Read']
+            assert options.setting_sources == []
             assert options.permission_mode == 'dontAsk'
             assert options.env['DISABLE_AUTO_COMPACT'] == '0'
             assert options.strict_mcp_config

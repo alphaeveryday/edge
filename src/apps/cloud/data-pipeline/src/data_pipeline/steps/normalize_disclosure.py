@@ -274,9 +274,14 @@ def run(
     raw_keys: list[str] | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    failures_out: list[dict] | None = None,
 ) -> int:
     """raw disclosures → 공급계약 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 격리된 행 실패 2, 저장·무결성 실패 1.
+
+    `failures_out` 을 주면 quality_log 에 쓴 것과 같은 실패 목록을 거기 담는다(ALPHA-1154).
+    종료 코드 2 는 "행 실패가 있었다"만 말하고 사유를 말하지 않는다 — 다시 읽으면 풀리는
+    실패와 같은 원문이면 늘 같은 거부를 가르려는 호출자(1분 레인)가 사유를 읽는다.
 
     input_run_id 지정 시 completed raw manifest를 GET해 그 exact key만 읽는다. manifest
     결손·불완전·손상은 전체 스캔으로 넓히지 않고 실패한다. 미지정이면 전체를 읽는다 —
@@ -381,6 +386,9 @@ def run(
             if not doc_path:
                 failures.append({**ref, "reasons": ["missing_document_body"]})
                 continue
+            # 원문 위치를 실패 기록에 같이 남긴다 — 거부된 문서를 나중에 다시 처리하려면
+            # 접수번호만으로는 본문 객체를 찾을 수 없다(키에 수집 run_id 가 들어간다).
+            ref["document_raw_path"] = doc_path
             try:
                 html = extract_document_html(storage.get_bytes(doc_path))
                 parsed = parse_supply(html)
@@ -391,8 +399,7 @@ def run(
                 failures.append({**ref, "reasons": ["parse_error"], "error": str(exc)})
                 continue
 
-            ref = {"rcept_no": rcept_no, "ticker": fact["ticker"],
-                   "report_date": fact["report_date"], "raw_key": raw_key}
+            ref = {**ref, "ticker": fact["ticker"], "report_date": fact["report_date"]}
             blocking = [r for r in reasons if r in BLOCKING_REASONS_DISCLOSURE]
             if blocking:
                 # blocking 이 있으면 canonical 제외 — 경고까지 포함한 전체 사유를 남긴다.
@@ -478,6 +485,8 @@ def run(
 
     if failures and exit_code == 0:
         exit_code = _PARTIAL_EXIT_CODE
+    if failures_out is not None:
+        failures_out.extend(failures)
 
     logger.info(
         "normalize_disclosure 완료: raw_files=%d read=%d routed=%d skipped_type=%d "

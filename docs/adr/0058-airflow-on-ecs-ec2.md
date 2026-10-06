@@ -1,6 +1,6 @@
 # ADR-0058: 유한 배치의 Airflow 실행 환경 — ECS on EC2 자체 운영
 
-- 상태: 제안됨
+- 상태: 승인됨 (2026-10-02 — 상시 운영 구성 확정, [airflow README](../../src/apps/cloud/airflow/README.md) "확정한 결정") — 2026-10-05 추기: 확정 구성은 아래 결정과 두 곳이 다르다. 메타DB 는 별도 인스턴스가 아니라 **기존 업무 RDS(`edge-dev`) 안 DB `airflow`·역할 `airflow_meta`**(대안 4 채택)이고, 태스크 메모리는 1536MiB 가 아니라 **1408MiB** 다(t4g.small 1대는 그대로).
 - 날짜: 2026-09-28
 
 ## 맥락
@@ -22,7 +22,7 @@
 - **t4g.micro·t4g.medium** — micro 는 로컬 합산 상한 768MiB(호스트 몫 가정 차감)에서 OOM, medium 은 small 차감 조건(1792MiB)이 전 기준을 통과해 근거가 없다.
 
 ## 결과
-- 월 약 42~44 USD 가 는다(small + 별도 RDS. 기존 RDS 재사용이 검증되면 약 20~23 — 내역은 `src/apps/cloud/airflow/README.md` "월 비용").
+- 월 약 20~23 USD 가 는다(small + 기존 RDS 안 메타DB — 별도 RDS 였다면 약 42~44. 내역은 `src/apps/cloud/airflow/README.md` "월 비용", 유휴 관측 기반 예상치는 약 19.5~21).
 - 호스트 1대가 단일 장애점이다. 죽으면 스케줄이 멈추고(업무 ECS 는 끝까지 돈다), ASG 교체 뒤 EdgeStep 이 재접속하거나 보류한다. 멈춘 동안의 슬롯은 공백이다.
 - 배포 때 1~3분 Airflow 가 멈춘다(한 태스크 교체). 평일 장중 배포는 워크플로가 막는다.
 - AMI·Airflow 버전 갱신·메타DB 복원은 운영자 절차다(README "호스트 교체"·"배포·롤백"·"메타DB").

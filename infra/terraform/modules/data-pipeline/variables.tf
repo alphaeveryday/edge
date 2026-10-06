@@ -76,86 +76,31 @@ variable "deepseek_secret_arn" {
   type        = string
 }
 
-# ── analyze 페이즈 (구 analysis-engine 모듈 흡수, ALPHA-408) ───────
-# 로직·정확도는 alphamale 레포 소관이고 이 모듈은 실행만 담당한다 — 경계는 이미지다.
-variable "analysis_image" {
-  description = "analysis-engine 컨테이너 이미지 URI(:태그 포함). data-pipeline 과 다른 코드베이스(alphamale)라 이미지가 따로다."
-  type        = string
-}
-
-variable "analysis_release_bundle_version" {
-  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. RDS 의 release_bundle(PUBLISHED) 행과 일치해야 한다. 기본값도 null 도 없는 이유: 미주입이면 영속 전제 결손으로 런이 실패한다(ALPHA-797 이 S3 폴백을 폐기) — 런타임 exit 1 보다 plan 단계에서 막는 게 싸다."
-  type        = string
-  nullable    = false
-
-  # nullable=false 는 누락·명시적 null 만 막는다 — 빈 문자열은 통과해 런타임 exit 1 이
-  # 되므로(코드가 `if bundle:` 로 거른다) description 이 내건 "plan 에서 막는다"가
-  # 그 한 갈래에서만 깨진다. 둘은 서로 대신하지 못한다.
-  validation {
-    condition     = var.analysis_release_bundle_version != ""
-    error_message = "release_bundle(PUBLISHED) 행과 일치하는 번들 버전이 필요하다 — 빈 값은 런타임 exit 1 이다(ALPHA-797)."
-  }
-}
-
-# 시각창 집계 Athena 오프로드(ALPHA-780). 둘 다 채워야 자격이 붙는다 — 하나만 주면
-# 정책이 반쪽이라 조용히 폴백하므로 함께 비우거나 함께 채운다.
-#
-# 이 버킷은 **이 모듈이 만들지 않는다**(terraform 관리 밖). ARN 을 받기만 하고 소유권을
-# 주장하지 않는다 — `aws_s3_bucket` 리소스를 여기 두면 다음 apply 가 남의 버킷을 집는다.
-variable "analysis_market_data_bucket_arn" {
-  description = "5분봉 Iceberg 표 데이터와 Athena 결과 CSV 가 사는 버킷 ARN. 비우면 Athena 자격을 부여하지 않는다(엔진은 canonical 합집합으로 폴백 — 질의당 376MB 를 컨테이너로 받는다)."
-  type        = string
-  default     = ""
-}
-
-variable "analysis_athena_workgroup" {
-  description = "EDGE_ATHENA_WORKGROUP — 시각창 집계를 보낼 Athena 워크그룹. 결과 위치는 워크그룹이 강제하므로 EDGE_ATHENA_OUTPUT 은 주입하지 않는다(같이 보내면 질의가 시작도 못 한다)."
-  type        = string
-  default     = ""
-}
-
-# ── 설명 소비자의 DuckDB 조인층 (Fargate 실행 조건) ────────────────
-# 이 셋이 비면 컨테이너에서 S3 뷰가 통째로 안 붙거나 OOM 으로 죽는데, 둘 다 **사유 없는
-# 침묵**으로 나타난다(빈 조인 = 0행 = 판정불가). 그래서 코드 기본값에 맡기지 않고 주입한다.
-variable "analysis_duckdb_s3_chain" {
-  description = "DUCKDB_S3_CHAIN — DuckDB CREDENTIAL_CHAIN 순서. Fargate 는 컨테이너 자격증명 엔드포인트(instance)로만 붙으므로 그 항목이 반드시 있어야 한다(sso;config;env 만으로는 S3 뷰 전량 실패)."
-  type        = string
-  default     = "env;instance;config;sso"
-}
-
-variable "analysis_duckdb_memory_limit" {
-  description = "DUCKDB_MEMORY_LIMIT — task_memory 보다 낮아야 DuckDB 가 DUCKDB_TEMP_DIR 로 spill 하며 버틴다. 같거나 크면 컨테이너 한도를 먼저 쳐서 OOMKilled(사유 없는 exit 137)로 끝난다."
-  type        = string
-  default     = "1.5GB"
-}
-
-variable "analysis_duckdb_temp_dir" {
-  description = "DUCKDB_TEMP_DIR — spill 위치. 컨테이너 파일시스템에서 쓰기 가능한 곳은 /tmp(Fargate 임시 스토리지)뿐이다."
-  type        = string
-  default     = "/tmp"
-}
-
 variable "task_cpu" {
   type    = number
   default = 1024
 }
 
 variable "task_memory" {
-  description = "수집·정제·ops·1분 상주 task-def 의 Fargate 메모리(MiB)."
+  description = "수집·정제·ops·1분 세션 task-def 와 배치 사양에 남긴 1분 상주 서비스(minute_batch_sized_services)의 Fargate 메모리(MiB)."
   type        = number
   default     = 2048
 }
 
-# analyze 만 4096 (ALPHA-671). DuckDB 조인층이 `pit_daily`(101MB) 위에 윈도우 함수와 CTE
-# 전개를 얹는데 피크가 실측되지 않았고 OOMKilled 전력이 있다. OOM 은 exit 137 만 남기고 어느
-# 질의였는지 말하지 않아 원인 추적이 런 재현에 달린다 — 그 침묵을 메모리로 산다.
-# **공유 `task_memory` 를 올리지 않은 이유**: 1분 상주 서비스 2개가 24시간 켜져 있어서
-# 전량 인상은 analyze 한 번 실행값이 아니라 상주 요금이 된다(월 $1 이 아니다).
-# 1024 CPU 의 Fargate 유효 조합(2048~8192, 1GB 단위) 안이다.
-variable "analysis_task_memory" {
-  description = "analyze task-def 전용 Fargate 메모리(MiB). DuckDB 피크가 상한을 정한다."
+# 1분 상주 서비스 전용 사양(ALPHA-1235) — 배치 태스크(task_cpu·task_memory)와 따로 둔다.
+# 이 사양을 받는 7개의 14일 실측(2026-09-22~10-05, 1 vCPU·2 GB 기준): 메모리 최대 117 MB,
+# CPU 최대(1분 평균) 0.29 vCPU. 배치 사양에 남는 서비스는 minute_services.tf 의
+# `minute_batch_sized_services` 다.
+variable "minute_service_cpu" {
+  description = "1분 상주 서비스 task-def 의 Fargate CPU 단위."
   type        = number
-  default     = 4096
+  default     = 512
+}
+
+variable "minute_service_memory" {
+  description = "1분 상주 서비스 task-def 의 Fargate 메모리(MiB)."
+  type        = number
+  default     = 1024
 }
 
 variable "cpu_architecture" {
@@ -699,11 +644,6 @@ variable "minute_session_source_group" {
   default = "kis"
 }
 
-variable "super_admin_api_url" {
-  description = "ExposureReverted 회수 집행 대상(ALPHA-746) — analysis-consumer 가 부르는 super-admin-api base URL. 무효화(WITHDRAWN 전이·INVALIDATION 발번·감사)의 발화자를 super-admin 하나로 유지한다"
-  type        = string
-}
-
 variable "analysis_consumer_max_capacity" {
   description = "설명 소비자(analysis-consumer) 오토스케일링 상한(ALPHA-912). ⚠️ 성능이 원하는 수가 아니라 **공유 RDS 가 견디는 수**다 — 2026-08-10 에 수동 12대가 db.t4g.micro 를 메모리로 죽였다(당일 2회). ALPHA-924 로 db.t4g.small(2GB) 상향 뒤의 잠정치이고, 정상 거래일 실측으로 올린다. ⚠️ 그 실측은 코드를 세서 하지 마라 — 태스크당 커넥션은 1개가 아니다(`EventStore` 외에 DuckDB 의 `ATTACH postgres` 가 더 연다). `DatabaseConnections` 를 그때의 대수로 나눠 재고, `FreeableMemory` 를 함께 본다(끊는 것은 커넥션 수가 아니라 메모리다). 계단 상단도 이 값에 맞춰야 한다"
   type        = number
@@ -724,4 +664,9 @@ variable "call_budget_enabled" {
   description = "KIS 앱키 공유 호출 허용(call_budget) 사용 여부. 켜기·끄기는 모든 KIS 호출자가 멈춘 시간대에 한 번에 한다 — 부분 전환은 합산 한도를 깬다(ALPHA-1087)."
   type        = bool
   default     = false
+}
+variable "analysis_consumer_task_definition_arn" {
+  type        = string
+  nullable    = false
+  description = "분석 모듈이 제공하는 v2 소비자 task definition ARN. v1 폴백은 제공하지 않는다."
 }

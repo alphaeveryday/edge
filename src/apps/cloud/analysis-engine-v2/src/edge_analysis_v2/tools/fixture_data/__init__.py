@@ -27,7 +27,7 @@ class FixtureTools:
         self._register('compare_financial_observations', '같은 기업·지표·단위·대상 기간의 두 원천 값을 비교합니다. get_financial_observations의 ID를 사용하세요. 예상 수정은 실제 실적 증가가 아닙니다. 예: previous_id=eps-old, current_id=eps-new.', {'previous_id':{'type':'string'},'current_id':{'type':'string'}}, lambda **args:financial_observations.compare(self.fixture, **args), r'\Delta=C-P;\ r=100(C-P)/P\quad(P>0)', ['공개 실적·예상 자료'])
         self._register('calculate_valuation_range', '공개 연간 EPS와 선택한 PER 배수로 개별 종목의 조건부 가격 범위와 현재 PER을 계산합니다. eps_id는 get_financial_observations에서 선택하고, per_low/high는 원문으로 정당화한 가정입니다. 배수 근거도 함께 인용하세요. return_low/high_pct는 각 가정 가격까지의 변화율이며 최대 손실·최대 수익이 아닙니다. 양수는 현재가 위입니다. 밴드 밖으로도 주가가 움직일 수 있습니다. 현재 PER이 과거보다 낮다고 시장 미반영이 입증되지는 않습니다.', {'eps_id':{'type':'string'},'per_low':{'type':'number','exclusiveMinimum':0},'per_high':{'type':'number','exclusiveMinimum':0}}, lambda **args:financial_observations.valuation_range(self.fixture, **args), r'P_{lo}=EPS\times PER_{lo};\ P_{hi}=EPS\times PER_{hi};\ r=100(P/P_{close}-1);\ PER_{current}=P_{close}/EPS', ['공개 연간 EPS 자료','종목 확정 종가','분석자가 선택한 PER 가정'], version='v2')
         self._register("search_news_threads", "공개된 뉴스의 단계별 사건과 중복 보도 수를 탐색합니다. 기사 근거는 get_issue_evidence로 확보하세요.", {}, lambda: news.search(self.fixture), "", ["뉴스 기사"])
-        self._register("get_issue_evidence", "기사 ID로 원문을 읽습니다. include_body=true는 탐색, false는 최종 문장의 기사 근거입니다.", {"news_ids": {"type": "array", "items": {"type": "string"}}, "include_body": {"type": "boolean"}}, lambda **args: news.evidence(self.fixture, **args), "", ["뉴스 기사"])
+        self._register("get_issue_evidence", "기사 ID로 원문을 읽습니다. include_body=true는 탐색이며 이 호출 ID는 최종 근거로 쓸 수 없습니다. 읽은 뒤 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 문장의 기사 근거로 연결하세요.", {"news_ids": {"type": "array", "items": {"type": "string"}}, "include_body": {"type": "boolean"}}, lambda **args: news.evidence(self.fixture, **args), "", ["뉴스 기사"], version="v2")
         self._register("get_etf_holdings", "분석 시각까지 공개된 전체 구성종목과 비중을 확인합니다. 일부 종목을 전체로 환산하지 않습니다.", {}, lambda: holdings(self.fixture), r"\sum_i w_i=1", ["ETF 구성종목 비중"])
         parameters = {"investor": {"type": "string", "enum": ["foreign", "institution", "individual"]}, "lookback_days": {"type": "integer", "minimum": 1, "maximum": 30}, "operation": {"type": "string", "enum": ["sum", "frequency", "streak"]}, "direction": {"type": "string", "enum": ["net_buy", "net_sell", "none"]}}
         for name, extra in (('sum_investor_net_flow',{'instrument_id':{'type':'string'}}), ('sum_weighted_net_flow',{})):
@@ -38,10 +38,10 @@ class FixtureTools:
         self._register("calculate_chart_indicators", "ETF 가격으로 RSI14 모멘텀과 반전 Williams14 바닥지수를 계산합니다. 높은 바닥지수는 과매도 관찰이며 반등확률이 아닙니다.", {}, lambda: chart.indicators(self.fixture), r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})", ["ETF 일봉과 장중 가격"])
         self._register("evaluate_indicator_transition", "최근 지수 관측의 80/20 진입·이탈을 확인합니다. 구간 유지에는 최근5개 관측이 모두 필요합니다.", {"indicator": {"type": "string", "enum": ["momentum", "bottom"]}}, lambda **args: chart.transition(self.fixture, **args), r"U(x)=[x\ge80];\ L(x)=[x\le20]", ["ETF 일봉과 장중 가격"], version="v2")
         series = {"type": "string", "enum": list(macro.SERIES)}
-        self._register("get_macro_observations", "거시지표의 공개된 최근21개 관측값을 탐색합니다. 수치 비교 근거는 compare_macro_observations로 확정합니다.", {"series": series}, lambda **args: macro.read(self.fixture, **args), "", ["목 거시경제 관측"], version="v2")
-        self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"])
-        self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"])
-        self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"])
+        self._register("get_macro_observations", "거시지표의 공개된 최근21개 관측값을 탐색합니다. 수치 비교 근거는 compare_macro_observations로 확정합니다.", {"series": series}, lambda **args: macro.read(self.fixture, **args), "", ["목 거시경제 관측"], version="v3")
+        self._register("compare_macro_observations", "같은 지표의 두 정확한 관측을 비교합니다. 금리·물가의 차이는 %p, 상대변화는 %입니다. 기업이나 ETF 영향은 계산하지 않습니다.", {"series": series, "previous_at": {"type": "string"}, "current_at": {"type": "string"}, "operation": {"type": "string", "enum": ["difference", "percent_change"]}}, lambda **args: macro.compare(self.fixture, **args), r"D=C-P;\ R=100(C/P-1)", ["목 거시경제 관측"], version="v2")
+        self._register("calculate_valuation", "개별 종목의 공개4분기 EPS와 최신 BPS로 PER·PBR을 계산합니다. 양수 분모만 지원하며 자료 누락·적자를 중립으로 바꾸지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"], version="v2")
+        self._register("calculate_weighted_valuation", "전체 구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비중 합1과 전 종목 유효값이 필요합니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\sum_iw_ix_i", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"], version="v2")
 
         self._register('get_instrument_factors',
             '종목의 차트·확정 수급·밸류·공통 매크로를 읽고 다음 조사 대상을 고릅니다. instrument_id는 초기 종목 목록에서 선택합니다. factors를 생략하면 전체, 지정하면 해당 요인만 반환합니다. 예: factors=["flow","valuation"]. 이력은 columns/rows, 시점은 이번 분석에 고정됩니다. ETF 수급·밸류는 구성종목 가중값입니다. null은 미확보입니다. 반환값은 근거로 사용 가능하고 이력의 새 계산은 해당 계산 툴로 확인합니다.',
@@ -50,7 +50,7 @@ class FixtureTools:
                          'items': {'type': 'string', 'enum': list(instrument_factors.FACTORS)}}},
             lambda **args: instrument_factors.read(self.fixture, **args),
             instrument_factors.FORMULA_LATEX, ['종목 가격', '확정 수급', '구성종목 비중', '공개 재무', '거시 관측', 'ETF 분배금·좌수'],
-            required=['instrument_id'])
+            required=['instrument_id'], version='v2')
 
     def _register(self, name, description, parameters, callback, formula, sources, *, version="v1", required=None):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources, "version": version, "required": list(parameters) if required is None else required}
@@ -97,9 +97,24 @@ class FixtureTools:
         price_tables = {target: table([r for r in prices if r["instrument_id"] == target],
                                      ["date", "high", "low", "close", "volume", "turnover"])
                         for target in sorted({r["instrument_id"] for r in prices})}
+        flow_tables = flow.input_tables(rows)
+        truncated = []
+        # Reserve context for research on broad ETFs while keeping every subject
+        # visible. Calculation callbacks continue using the complete fixture.
+        for name, tables in [('prices', price_tables), ('flow', flow_tables)]:
+            etf_rows = len(tables.get(context['etf_code'], {}).get('rows', []))
+            constituents = [body for target, body in tables.items() if target != context['etf_code']]
+            limit = max(1, (1200 - etf_rows) // max(1, len(constituents)))
+            for body in constituents:
+                if len(body['rows']) > limit:
+                    body['rows'] = body['rows'][-limit:]
+                    if name not in truncated:
+                        truncated.append(name)
         snapshots = {"instrument_id": context["etf_code"],
                      **table([r | {"at": r["observed_at"]} for r in chart.snapshots(self.fixture)],
                              ["at", "price", "high", "low", "available_at"])}
         catalog = sorted({(r['instrument_id'],r['metric'],r['period']) for r in financial_observations.visible(self.fixture)})
         exploration = {'financial_observation_catalog':table([dict(zip(['instrument_id','metric','period'],r)) for r in catalog], ['instrument_id','metric','period'])} if 'financial_observations' in self.fixture else {}
-        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture, require_complete=False), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow.input_tables(rows), "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}
+        if truncated:
+            exploration['history_preview'] = {'truncated': truncated, 'note': '초기 구성종목 이력은 최근 일부만 표시합니다. 전체 이력으로 계산하려면 get_instrument_factors와 수급 계산 툴을 사용하세요. 미리보기 행 수를 전체 관측 기간으로 해석하지 마세요.'}
+        return exploration | {"context": deepcopy(context), "instruments": deepcopy(self.fixture.get("instruments", [])), "holdings": holdings(self.fixture, require_complete=False), "news": [{k: r[k] for k in ("news_id", "title", "published_at")} for r in news.visible(self.fixture)[:100]], "flow": flow_tables, "prices": price_tables, "price_snapshots": snapshots, "macro": {series: macro.read(self.fixture, series) for series in macro.SERIES}, "financials": table(financials, ["instrument_id", "period", "eps", "bps", "eps_derivation", "available_at"]), "etf_units": table(units, ["date", "units", "available_at"]), "distributions": table(distributions, ["paid_at", "amount_per_unit", "available_at"]), "previous_analysis": deepcopy(self.fixture.get("previous_analysis"))}

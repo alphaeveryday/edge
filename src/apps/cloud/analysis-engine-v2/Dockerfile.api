@@ -1,0 +1,8 @@
+# Build context: src/. This process only accepts requests and reads publications.
+FROM public.ecr.aws/lambda/python:3.12
+ENV RDS_CA_PATH=/var/task/rds-ca.pem
+COPY apps/cloud/analysis-engine-v2 /tmp/analysis-engine-v2
+RUN pip install --no-cache-dir '/tmp/analysis-engine-v2[cloud]' \
+    && python -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/ap-northeast-2/ap-northeast-2-bundle.pem','/var/task/rds-ca.pem')" \
+    && python -c "from edge_analysis_v2.api.runtime import handler; from edge_analysis_v2.storage.screens import assemble_screen"
+CMD ["edge_analysis_v2.api.runtime.handler"]
