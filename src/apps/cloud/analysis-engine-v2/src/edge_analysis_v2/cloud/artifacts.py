@@ -99,6 +99,9 @@ def validate_manifest(manifest):
     decode_request(encode({k:job.get(k) for k in ('analysis_id','kind','etf_code','analysis_at')}))
     if job.get('origin')!='cloud' or job.get('status') not in ('queued','running','completed','failed','interrupted'):
         raise ValueError('Invalid cloud status')
+    if not isinstance(job.get('started_at'),str) or not job['started_at']:
+        # The dashboard orders runs by this field; a record without it would break every listing.
+        raise ValueError('Observation job has no start time')
     if not isinstance(manifest['files'],dict) or set(manifest['files'])-FILES or not isinstance(manifest['events'],list):
         raise ValueError('Unknown observation artifact')
     if len(manifest['events'])>10000:
