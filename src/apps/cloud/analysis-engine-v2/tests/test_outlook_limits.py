@@ -66,6 +66,31 @@ def test_the_agent_schemas_carry_the_same_limits_as_the_checker():
     assert topic['sentences']['maxItems'] == 5 and topic['sentences']['items']['maxLength'] == 60
     assert topic['title_keyword']['maxLength'] == 20
     assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['title']['maxLength'] == 25
+    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['maxItems'] == 15
+    assert properties['summary_card']['properties']['title']['maxLength'] == TEXT_LIMITS['summary_card.title']
+    assert properties['conclusion']['properties']['burdens']['items']['properties']['label']['maxLength'] == TEXT_LIMITS['conclusion.burdens[].label']
+    assert properties['conclusion']['properties']['change_condition']['maxLength'] == TEXT_LIMITS['conclusion.change_condition']
+    change = EDIT_SCHEMAS[1]['function']['parameters']['properties']['changes']['items']['properties']
+    assert change['sentences']['maxItems'] == 5 and change['sentences']['items']['maxLength'] == 60
+
+
+def test_every_overlong_bullet_comes_back_at_once_by_location_and_the_model_still_sees_the_limit(monkeypatch):
+    # WHY: the SDK checks the schema it is shown and answers with the first failure only, echoing the text.
+    import asyncio
+    from edge_analysis_v2.agent import runner
+    from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS
+    from edge_analysis_v2.tools.model_schema import agent_tool_schemas
+    visible = agent_tool_schemas(EDIT_SCHEMAS)[0]['function']['parameters']
+    bullet = visible['properties']['items']['items']['properties']['sentences']
+    assert 'maxLength' not in bullet['items'] and '최대 60자' in bullet['items']['description']
+    assert 'maxItems' not in bullet and '최대 5개' in bullet['description']
+    monkeypatch.setattr(runner, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
+    called = []
+    server, _ = runner.make_server(EDIT_SCHEMAS, lambda name, arguments: called.append(name))
+    topic = {'id': 't1', 'title_keyword': '수주', 'sentences': ['비밀' * 31, '짧다', '기밀' * 40], 'tool_run_ids': ['r1']}
+    text = asyncio.run(server['tools'][0].handler({'title': '제목', 'items': [topic]}))['content'][0]['text']
+    assert 'items/0/sentences/0: 62 characters, limit 60' in text and 'items/0/sentences/2: 80 characters, limit 60' in text
+    assert '비밀' not in text and called == []
 
 
 def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be_rewritten():
@@ -81,7 +106,9 @@ def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be
     old_body = {'title': '제목', 'items': [{'id': 't1', 'title_keyword': '수주 확대',
         'sentences': [{'sentence': '마' * 140, 'is_updated': False}], 'tool_run_ids': ['r1']}]}
     editor = BodyEditor(old_body, at)
-    with pytest.raises(ValueError, match='rewrite the whole body'):
+    from edge_analysis_v2.tools.execution import ToolInputError
+    # ToolInputError is the only failure whose text the audited executor passes on to the model.
+    with pytest.raises(ToolInputError, match='rewrite the whole body'):
         editor.apply([{'action': 'add', 'id': 't2', 'title_keyword': '새 논점', 'sentences': ['짧은 문장'], 'tool_run_ids': ['r2']}])
     assert len(editor.write('제목', [topic | {'sentences': ['마' * 60]}])['items']) == 1
 

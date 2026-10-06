@@ -15,6 +15,7 @@ from psycopg.rows import dict_row
 from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, MOVEMENT, OUTLOOK
 from edge_analysis_v2.tools.execution import AuditedExecution
 from edge_analysis_v2.analysis.body_editor import BodyEditor
+from edge_analysis_v2.contracts.outlook_limits import violations
 from edge_analysis_v2.storage.factors import read_factor_details, project_factor_metrics
 from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.agent.runner import load_prompt, run_model
@@ -163,6 +164,12 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         previous, previous_items = run(load)
         editor = BodyEditor(previous['detail'] if previous and kind == 'outlook' else None, cutoff)
         initial = tools.initial_input() | {'previous_analysis': previous}
+        inherited_over = violations({'detail': previous['detail']}) if previous and kind == 'outlook' else []
+        if inherited_over:
+            # Otherwise the run investigates fully and then fails at publication on text it never touched.
+            initial['source_notes'] = [*initial.get('source_notes', []),
+                f'이전 본문이 현재 화면 상한을 {len(inherited_over)}곳에서 넘습니다. 그대로는 발행되지 않습니다. '
+                'write_outlook_body로 본문 전체를 상한 안에서 다시 쓰세요.']
         if kind == 'movement':
             initial['previous_items'] = previous_items
         schemas = deepcopy(tools.schemas)

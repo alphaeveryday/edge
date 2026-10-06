@@ -32,13 +32,14 @@ MOVEMENT = obj({
     'selected_item_ids': {'type': 'array', 'maxItems': 5, 'uniqueItems': True, 'items': TEXT},
     'summary': {'type': ['string', 'null']},
 })
-KEYWORDS = {'type': 'array', 'items': obj({'label': limited('conclusion.supports[].label'), 'tool_run_ids': REFS})}
+def keywords(side):
+    return {'type': 'array', 'items': obj({'label': limited(f'conclusion.{side}[].label'), 'tool_run_ids': REFS})}
 OUTLOOK = obj({
     'outlook': obj({'direction': STICKER}),
     'summary_card': obj({'title': limited('summary_card.title'), 'summary': limited('summary_card.summary')}),
     'factors': {'type': 'array', 'minItems': 5, 'maxItems': 5, 'items': obj({
         'type': {'enum': ['이슈', '차트', '매크로', '밸류', '수급']}, 'sticker': STICKER, 'sentence': limited('factors[].sentence')})},
-    'conclusion': obj({'title': limited('conclusion.title'), 'supports': KEYWORDS, 'burdens': KEYWORDS,
+    'conclusion': obj({'title': limited('conclusion.title'), 'supports': keywords('supports'), 'burdens': keywords('burdens'),
                        'sentence': limited('conclusion.sentence'),
                        'change_condition': limited('conclusion.change_condition')}, ['title', 'supports', 'burdens', 'sentence']),
     'issue_detail': obj({'headline': TEXT,

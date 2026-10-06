@@ -35,7 +35,7 @@ def describe_schema_error(error) -> str:
         return (f'{path}: {len(error.instance)} characters, limit {error.validator_value}. '
                 'Keep the judgment; move detail into another bullet or topic instead of dropping evidence.')
     if error.validator == 'maxItems':
-        return f'{path}: {len(error.instance)} items, limit {error.validator_value}. Split into another topic.'
+        return f'{path}: {len(error.instance)} items, limit {error.validator_value}.'
     return f'{path}: {error.message[:300]}'
 
 
@@ -56,9 +56,11 @@ def make_server(schemas: list[dict], call):
         name = function['name']
         validator = Draft202012Validator(function['parameters'])
         async def handler(arguments, tool_name=name, validator=validator):
-            invalid = next(iter(validator.iter_errors(arguments)), None)
-            if invalid is not None:
-                return {'is_error': True, 'content': [{'type': 'text', 'text': describe_schema_error(invalid)}]}
+            invalid = list(validator.iter_errors(arguments))
+            if invalid:
+                # Every failure at once: one round trip per over-long bullet would eat the deadline.
+                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(
+                    describe_schema_error(error) for error in invalid[:20])}]}
             async with gate:
                 # Cancellation must not leave a database write racing publication failure.
                 pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
@@ -115,7 +117,6 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     def encode(value):
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
-    length_retries = 0
     server, allowed = make_server(schemas, call)
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
@@ -161,7 +162,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
                 await client.query(encode(query_input))
                 while True:
-                    final, overflow = None, None
+                    final = None
                     async for message in client.receive_response():
                         event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
                         if type(message).__name__ == 'SystemMessage' and event.get('subtype') == 'thinking_tokens':
@@ -174,23 +175,13 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                             continue
                         (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
                         if event.get('is_error') or event.get('subtype') != 'success':
-                            raise ValueError('SDK did not produce a successful final result')
+                            # error_max_structured_output_retries = the answer never fit the output schema.
+                            raise ValueError(f"SDK did not produce a successful final result ({event.get('subtype')})")
                         value = event.get('structured_output')
                         if value is None:
                             value = json.loads(event.get('result') or '')
-                        errors = list(Draft202012Validator(output_schema).iter_errors(value))
-                        if errors and length_retries < 3 and all(e.validator in ('maxLength', 'maxItems') for e in errors):
-                            # Too long is repairable in the same conversation; any other violation still ends the run.
-                            overflow = errors
-                            continue
                         Draft202012Validator(output_schema).validate(value)
                         final = value
-                    if overflow:
-                        length_retries += 1
-                        await client.query('The final JSON exceeds field limits:\n' + '\n'.join(
-                            '- ' + describe_schema_error(e) for e in overflow[:20])
-                            + '\nSubmit the complete final JSON again within the limits.')
-                        continue
                     if final is None:
                         raise ValueError('SDK ended without a final result')
                     continuation = skills.continuation()
