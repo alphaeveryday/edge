@@ -8,17 +8,40 @@
 
 ## 지금
 
-| 단위 | 상태 | 등록된 도구 |
-|---|---|---|
-| 0. 토대 | 완료 | `get_result_page`, 가설 검사기, 실행기 |
-| 1. 대상 찾기 | 완료 | `resolve_securities`, `get_ontology_schema`, `search_objects`, `get_linked_objects` |
-| 2. 보유 | 완료 | `get_etf_holdings`, `summarize_etf_holdings`, `compare_holdings_dates` |
-| 3. 가격 | 다음 | `get_price_observations`부터. 대상 선택 계약(목록·ETF 전체·저장된 선택)을 함께 옮긴다 |
-| 4~8. 수급·사건·거시·재무·나머지 | 대기 | |
+작업 브랜치: `feature/ALPHA-1238-harness-graph-tools`. 분석 작업 하네스(ALPHA-1239)가 dev에 들어간 뒤의 dev에서 분기했다.
 
-보류: `get_objects`. 다른 도구가 객체를 함께 돌려줘서 필요한 상황이 아직 없다.
+| 단계 | 상태 |
+|---|---|
+| 그래프 도구 8개 (도구 코드와 가설 검사기) | dev에 머지됨. 실제 분석 경로에는 아직 붙지 않음 |
+| 1. 측정 기준 | 진행 중. Fargate 1회 실행 완료, 이미지 고정·환경·측정 기록 구현 |
+| 2. 그래프 도구를 하네스의 분석 경로에 연결 | 대기 |
+| 3. 도구 하나씩 교체 | 대기 |
 
-엔진 테스트 496개 통과. 엔진의 기존 DB 도구는 아직 하나도 빼지 않았다.
+## 하네스 기준선 (그래프 도구 없음)
+
+dev Fargate, 이미지 `analysis-v2-a177338a`, 에이전트 CLI 2.1.283, 모델 `deepseek-flash[1m]`, 1 vCPU·2GB.
+PLUS K방산(449450) 전망, 기준시각 2026-10-06 19:00 KST, 실행 ID `8c83e66faad04a209d76f9b3fe3af93f`. **1회 실행이라 범위는 아직 모른다.**
+
+| 항목 | 값 |
+|---|---|
+| 결과 | 완료, 발행됨 |
+| 전체 시간 | 8분 44초 (워커 7분 43초) |
+| 라운드 | 2 (미완료 작업 알림 1회 후 재개) |
+| 모델 턴 | 147 |
+| 도구 호출 | 111 (감사 기록에 남은 분석 도구 84) |
+| 입력 토큰 | 약 451만 (새 입력 15.4만 + 캐시 재읽기 435만) |
+| 출력 토큰 | 약 6.7만 |
+| SDK 추정 비용 | $4.69 (Claude 단가 기준 추정이라 실제 청구액과 다름) |
+| 첫 입력 크기 | 원자료 17.1만 자 → 모델에 보낸 입력 3.2만 자 |
+| 질문 등록 | 6개 등록, 6개 완료 |
+| 메모 | `notes/index.md` 1개 |
+| 문맥 압축 | 없음 |
+
+많이 불린 도구: `read_source` 20, `search_web` 17, `search_news_articles` 14, `sum_investor_net_flow` 12, `read_web_document` 9, `get_instrument_factors` 7.
+
+실패한 호출: `calculate_valuation` 4회 중 3회와 `calculate_weighted_valuation` 1회가 `MISSING_FINANCIAL_VALUE`(EPS·BPS 없는 분기)로 실패했다. `read_source` 20회 중 2회 실패, `write_outlook_body` 1회는 최종 근거로 쓸 수 없는 실행 ID를 인용해 거절됐다.
+
+관측에서 찾은 것: 모델 이벤트 기록 14.5MB 가운데 46,174줄이 토큰 단위 진행 표시(`thinking_tokens`)였고, S3 업로드가 852조각이 됐다. 이 표시는 저장하지 않게 고쳤다.
 
 ## 도구별 가설 판정
 

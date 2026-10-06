@@ -149,6 +149,9 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     final = None
                     async for message in client.receive_response():
                         event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
+                        if type(message).__name__ == 'SystemMessage' and event.get('subtype') == 'thinking_tokens':
+                            # Per-token progress ticks: tens of thousands per run and nothing reads them.
+                            continue
                         with (artifacts / 'events.jsonl').open('a', encoding='utf-8') as stream:
                             stream.write(json.dumps({'message_type': type(message).__name__, 'at': datetime.now(timezone.utc).isoformat(),
                                                      'message': event}, ensure_ascii=False) + '\n')

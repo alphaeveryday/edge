@@ -57,7 +57,7 @@ def measure(folder):
     """
     events = [json.loads(line) for line in (Path(folder)/'events.jsonl').read_text(encoding='utf8').splitlines()]
     stamped = [e for e in events if e.get('at')]
-    pending, tools, turns, usage, result = {}, {}, 0, {}, {}
+    pending, tools, turns, usage, rounds = {}, {}, 0, {}, []
     for event in events:
         content = event['message'].get('content')
         blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
@@ -74,11 +74,15 @@ def measure(folder):
                 if started and event.get('at'):
                     row['seconds'] = round(row['seconds'] + (datetime.fromisoformat(event['at']) - datetime.fromisoformat(started)).total_seconds(), 3)
         if event['message_type'] == 'ResultMessage':
-            result = event['message']
-            usage = {k: v for k, v in (result.get('usage') or {}).items() if k.endswith('tokens') and type(v) is int}
+            # A run that was reminded of unfinished tasks has one result per round; usage is reported per round.
+            rounds.append(event['message'])
+            for key, value in (event['message'].get('usage') or {}).items():
+                if key.endswith('tokens') and type(value) is int:
+                    usage[key] = usage.get(key, 0) + value
     wall = (datetime.fromisoformat(stamped[-1]['at']) - datetime.fromisoformat(stamped[0]['at'])).total_seconds() if len(stamped) > 1 else None
-    return {'wall_seconds': wall, 'model_turns': turns, 'sdk_turns': result.get('num_turns'), 'sdk_duration_ms': result.get('duration_ms'),
-            'sdk_api_ms': result.get('duration_api_ms'), 'usage': usage, 'tool_calls': sum(t['calls'] for t in tools.values()),
+    total = lambda key: sum(r.get(key) or 0 for r in rounds) if rounds else None
+    return {'wall_seconds': wall, 'model_turns': turns, 'rounds': len(rounds), 'sdk_turns': total('num_turns'),
+            'sdk_duration_ms': total('duration_ms'), 'sdk_api_ms': total('duration_api_ms'), 'usage': usage, 'tool_calls': sum(t['calls'] for t in tools.values()),
             'tool_seconds': round(sum(t['seconds'] for t in tools.values()), 3), 'tools': dict(sorted(tools.items())),
             'unanswered_tool_requests': len(pending)}
 

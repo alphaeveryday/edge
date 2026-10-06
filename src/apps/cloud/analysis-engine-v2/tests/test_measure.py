@@ -28,6 +28,17 @@ def test_tool_seconds_are_the_wait_between_request_and_result_and_errors_are_cou
     assert result['usage'] == {'input_tokens': 100, 'output_tokens': 7}
 
 
+def test_a_run_resumed_for_unfinished_tasks_adds_up_every_round(tmp_path):
+    lines = [event('ResultMessage', '2026-10-06T00:00:10+00:00', num_turns=104, duration_ms=423000,
+                   usage={'input_tokens': 141, 'cache_read_input_tokens': 3100}),
+             event('ResultMessage', '2026-10-06T00:00:40+00:00', num_turns=9, duration_ms=30000,
+                   usage={'input_tokens': 12, 'cache_read_input_tokens': 1252})]
+    (tmp_path/'events.jsonl').write_text(chr(10).join(lines), encoding='utf8')
+    result = measure(tmp_path)
+    assert (result['rounds'], result['sdk_turns'], result['sdk_duration_ms']) == (2, 113, 453000)
+    assert result['usage'] == {'input_tokens': 153, 'cache_read_input_tokens': 4352}
+
+
 def test_the_environment_names_the_agent_executable_and_pinned_packages():
     value = describe_environment()
     assert value['python'] and value['packages']['claude-agent-sdk']
