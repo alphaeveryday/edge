@@ -19,12 +19,12 @@ python scripts/sync_skills.py --source-dir <etf-research-agent의-.claude/skills
 실행의 `skills.json`에는 제공한 스킬 이름과 문서 SHA-256이 저장되며 관측 업로드에도 포함된다.
 해시는 문서 버전 기록일 뿐 실행 허용이나 스킬 로딩 검증에 사용하지 않는다.
 작업 규칙은 `agent/workspace/AGENTS.md`에 두고 실행 폴더와 관측 기록에 복사한다.
-현재 SDK가 AGENTS.md를 자동으로 읽는다고 가정하지 않고, runner가 해당 내용을 시스템 지침에 포함한다.
+현재 SDK가 AGENTS.md를 자동으로 읽는다고 가정하지 않고, runner가 조립된 내용을 최초 작업 메시지에 포함한다. 시스템 지침에는 실행 하네스의 공통 규칙만 둔다.
 
 ## 적용 우선순위
 
 작업별 YAML은 목적·깊이·필수 범위·제출 절차, AGENTS.md는 공통 작성 원칙을 담당한다.
-시스템 지침 맨 앞의 prompts/research.md가 종료 조건·재귀 분석 정의·실행 경계를, prompts/output-contract.md가 공통 근거·출력 계약을 담당한다.
+prompts/research.md가 종료 조건·재귀 분석 정의·실행 경계를, prompts/output-contract.md가 공통 근거·출력 계약을 담당한다. 두 문서와 작업 YAML, 작성 원칙을 실행 폴더의 AGENTS.md로 조립한다.
 조사 스킬은 ACH 기반 비교·질문 선택·하위 답 반영의 적용 방법을 보충하고, ETF 스킬은 사업·이익·기대·평가·ETF 가격 연결을 담당한다.
 네 질문의 필수 충족 기준은 전망 YAML에 두고 스킬마다 반복하지 않는다. 두 스킬은 서로의 로딩을 요구하지 않는다. 전체 책임과 버전 확인 방법은 [지시문 구조](system-prompts.md)를 따른다.
 연구 출처·사례·개발 검수는 [분석 방법 배경](analysis-methodology.md)에 보존하며 실행 의존성으로 삼지 않는다.
@@ -41,9 +41,10 @@ python scripts/sync_skills.py --source-dir <etf-research-agent의-.claude/skills
 ## 실행 경계
 
 - SDK 0.2.160을 고정한다. 개인/프로젝트 설정을 로드하지 않고 설정 디렉터리도 실행마다 분리한다.
-- 네이티브 도구는 `Skill`, `Read`만 노출한다. Read는 승인된 스킬 문서와 작업 폴더의 AGENTS.md만 허용한다.
+- 네이티브 도구는 `Skill`, `Read`, `Write`, `Edit`를 노출한다. 작업 상태는 내부 MCP의 `workspace.update_tasks`로 저장한다. 문서는 승인된 스킬·AGENTS.md와 실행별 notes/의 Markdown만 읽는다. 쓰기·수정·폴더 생성은 notes/ 안에서만 허용한다.
 - 스킬 호출 횟수·로딩 성공·문서 해시를 분석이나 최종 응답의 선행 조건으로 검사하지 않는다.
-- 셸, 파일 쓰기, 직접 웹 접근, 추가 MCP와 하위 에이전트를 허용하지 않는다.
+- 셸, notes/ 밖 쓰기, 직접 웹 접근, 외부 MCP와 하위 에이전트를 허용하지 않는다. 프로세스 내부 workspace MCP가 원자료 페이지 조회와 notes/ 폴더 생성을 제공한다.
+- 미완료 TODO가 남은 정상 종료에는 최대 3회 후속 메시지를 보내며 계속 미완료면 발행을 실패시킨다. workspace.json에 상태·메모를 저장한다. runner의 명시적 resume은 같은 원자료에 한해 중단된 메모와 TODO를 복구하며, 클라우드 큐의 자동 재시도와는 별개다.
 - 대화 종료나 예외 후 임시 작업 디렉터리를 정리한다. 관측 결과는 별도 실행 폴더에 남긴다.
 
 SDK 훅은 도구 권한 검사다. OS 수준에서 프로세스의 모든 파일 읽기를 격리하는 장치는 아니다.
