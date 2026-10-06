@@ -26,10 +26,18 @@ def test_partial_portfolio_is_visible_but_not_renormalized():
     assert tools.initial_input()['holdings'] == result
 
 
-def test_partial_portfolio_cannot_be_used_as_whole_etf_flow():
+def test_whole_etf_figures_need_seventy_percent_of_the_weight_and_always_carry_the_observed_share():
     from edge_analysis_v2.tools.fixture_data.common import holdings
-    with pytest.raises(ValueError, match='complete'):
-        holdings(source())
+    # WHY: a fund whose stored weights sum to 99.71% (cash, rounding) is still the fund; one seen at 69% is not.
+    usable = holdings(source())
+    assert (usable['coverage'], usable['observed_weight_ratio'], usable['holdings'][0]['weight']) == ('partial', .9971, .9971)
+    data = source()
+    data['holdings'][0]['weight'] = .7
+    assert holdings(data)['observed_weight_ratio'] == .7
+    data['holdings'][0]['weight'] = .6999
+    with pytest.raises(ValueError, match='below the 70% coverage'):
+        holdings(data)
+    assert holdings(data, require_complete=False)['observed_weight_ratio'] == .6999
 
 
 def test_one_article_can_belong_to_two_real_events_without_duplicate_article():

@@ -4,7 +4,7 @@ from datetime import date
 import re
 
 from edge_analysis_v2.tools.fixture_data import chart, etf, macro
-from edge_analysis_v2.tools.fixture_data.common import available, decimal, holdings, instant, number
+from edge_analysis_v2.tools.fixture_data.common import available, covers_whole_etf, decimal, holdings, instant, number
 
 FORMULA_LATEX = (
     r"M_n=\frac1n\sum_{j=0}^{n-1}C_j;\ d_{20}=100(P/M_{20}-1);\ "
@@ -121,8 +121,8 @@ def flow_data(fixture, instrument_id):
     if not dates or dates[-1] != end:
         return None, 'Finalized flow date is absent from the trading calendar.'
     weighted = instrument_id == context['etf_code']
-    if weighted and fixture.get('holdings_status') and holdings(fixture, require_complete=False).get('coverage') == 'partial':
-        return None, 'Constituent coverage is incomplete; whole-ETF weighted flow unavailable.'
+    if weighted and fixture.get('holdings') and not covers_whole_etf(holdings(fixture, require_complete=False)):
+        return None, 'Observed constituent weights are below 70%; whole-ETF weighted flow unavailable.'
     source = available(fixture.get('flow', []), cutoff)
     investors = ('foreign', 'institution', 'individual')
     history, observed = [], []
@@ -130,7 +130,7 @@ def flow_data(fixture, instrument_id):
         if weighted and not any(r['as_of_date'] <= day for r in available(fixture.get('holdings', []), min(cutoff, instant(day + 'T23:59:59.999999+09:00')))):
             break
         portfolio = holdings(fixture, day, require_complete=False) if weighted else None
-        if portfolio and portfolio.get('coverage') == 'partial':
+        if portfolio and not covers_whole_etf(portfolio):
             break
         weights = portfolio['holdings'] if weighted else [{'instrument_id': instrument_id, 'weight': 1}]
         values = []

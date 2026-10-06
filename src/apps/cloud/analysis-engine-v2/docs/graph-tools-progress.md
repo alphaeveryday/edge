@@ -2,7 +2,9 @@
 
 작업 위치: `D:/Github/edge-graph-tools`, 브랜치 `feature/graph-tools` (origin/dev `9226762f`에서 분기).
 뷰에 붙지 못한 입력은 [graph-tool-view-gaps.md](graph-tool-view-gaps.md)에 모은다.
-실행 기록은 `D:/Github/etf-research-agent/output/cq-tools-benchmark-20261005/agent-runs/P-*`에 있고 벤치마크 화면(5188)에서 열 수 있다.
+실행 기록은 `D:/Github/etf-research-agent/output/graph-tool-probes-20261006/`에 가설 상황별 마지막 3회만 남겼다. 수정 전 실행은 지웠고, 그 수치는 아래 표에만 남아 있다.
+
+**이 문서의 호출 수·토큰·시간은 배포 환경의 측정값이 아니다.** 실험은 Windows, Python 3.13, PC에 설치된 Claude Code 2.1.291에서 그래프 도구만 가진 에이전트로 돌았다. 배포는 `python:3.12-slim` 이미지, `execute_request` 경로, DB 도구와 함께다. 도구 설명·응답 형태의 전후 비교로만 읽는다.
 
 ## 지금
 
