@@ -851,7 +851,7 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
     # 시간외 window 가 구조적으로 안 나오는데 기동은 통과해, 그 window 들이 매 tick
     # 재청구·재실패하며 세션이 영영 안 마른다(그 게이트가 존재하는 이유다).
     if options.source == "kis":
-        from ..sources.kis_minute import KisHistoricalMinuteClient, KisMinuteClient
+        from ..sources.kis_minute import KEEP_ALIVE_CONNECTIONS, KisHistoricalMinuteClient, KisMinuteClient
         from .kis_collector import KisPriceCollector
 
         _require_credentials(
@@ -864,7 +864,7 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
         # 소급(지난 날짜) 수집은 종전 경로 그대로 둔다.
         http = PoliteClient(min_interval=options.min_interval_sec,
                             pacer=pacer_for(is_backfill) if pacer_for else None,
-                            keep_alive=not is_backfill)
+                            keep_alive=0 if is_backfill else KEEP_ALIVE_CONNECTIONS)
         if is_backfill:
             return KisPriceCollector(client=KisHistoricalMinuteClient(
                 options.app_key, options.app_secret, http, session_date=session_date,

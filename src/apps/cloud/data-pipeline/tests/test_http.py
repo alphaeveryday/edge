@@ -469,6 +469,7 @@ class _LoopbackServer:
         self.url = f"http://127.0.0.1:{self._listener.getsockname()[1]}/y"
         self._statuses, self._per_conn, self._truncate = list(statuses), per_conn, truncate
         self.connections = self.requests = 0
+        self.served = []  # 연결별 요청 수(받은 순서)
         self.closed = threading.Event()  # 서버가 연결을 닫으면 켠다
         self._stopped = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -481,11 +482,12 @@ class _LoopbackServer:
             except TimeoutError:
                 continue
             self.connections += 1
+            self.served.append(0)
             # 연결마다 스레드 — 살아 있는 재사용 연결이 다음 연결의 응답을 막지 않게
-            threading.Thread(target=self._answer, args=(conn,), daemon=True).start()
+            threading.Thread(target=self._answer, args=(conn, len(self.served) - 1), daemon=True).start()
         self._listener.close()
 
-    def _answer(self, conn):
+    def _answer(self, conn, slot):
         reader, served = conn.makefile("rb"), 0
         while self._per_conn is None or served < self._per_conn:
             if not reader.readline():
@@ -493,6 +495,7 @@ class _LoopbackServer:
             while reader.readline() not in (b"\r\n", b""):
                 pass  # 헤더 끝까지
             self.requests += 1
+            self.served[slot] += 1
             served += 1
             status = self._statuses.pop(0) if self._statuses else 200
             length = 9 if self._truncate else 2
@@ -537,7 +540,7 @@ def test_keep_alive_sends_every_call_over_one_connection(loopback):
     #      수립 시간이 호출 간격보다 길어져 한 창이 1분을 넘긴다 — 재사용을 켠 클라이언트는 연결 하나로
     #      보내야 한다. 끄면(기본) 종전대로 호출마다 새 연결이다 — 다른 벤더의 운반은 바뀌지 않는다.
     reused, fresh = loopback(), loopback()
-    keep, plain = _live_client(keep_alive=True), _live_client()
+    keep, plain = _live_client(keep_alive=1), _live_client()
     for server, client in ((reused, keep), (fresh, plain)):
         for _ in range(3):
             assert client.get(server.url) == "[]"
@@ -548,12 +551,44 @@ def test_keep_alive_sends_every_call_over_one_connection(loopback):
     assert _counts(keep) == {"attempts": 3, "connects": 1}
 
 
+def test_keep_alive_rotates_calls_across_its_connections(loopback):
+    # WHY: 한 연결에 호출을 몰면 벤더가 그 연결을 따로 제한한다(KIS 는 연결 하나에 초당 6건쯤부터 유량 초과로
+    #      거절했다). 연결 N 개를 받았으면 N 개에 고르게 나눠 보내야 연결당 속도가 1/N 로 내려간다.
+    server = loopback()
+    client = _live_client(keep_alive=3)
+
+    for _ in range(9):
+        assert client.get(server.url) == "[]"
+
+    assert server.served == [3, 3, 3]
+    assert _counts(client) == {"attempts": 9, "connects": 3}
+
+
+def test_keep_alive_turns_itself_off_when_5xx_pile_up(loopback, monkeypatch, caplog):
+    # WHY: 벤더가 재사용 연결을 따로 제한하면 호출이 5xx 로 거절되고, 그때마다 1초씩 물러나 종전(호출마다 새
+    #      연결)보다 느려진다. 아무도 보지 않는 장중에 그 상태로 하루를 보내지 않도록 5xx 가 쌓이면 스스로
+    #      종전 경로로 돌아가야 하고, 그 사실을 로그에 남겨야 한다.
+    from data_pipeline.sources import http as transport
+
+    monkeypatch.setattr(transport, "KEEP_ALIVE_5XX_LIMIT", 2)
+    server = loopback(statuses=[503, 503])
+    client = _live_client(keep_alive=1)
+
+    with caplog.at_level("WARNING", logger="data_pipeline.sources.http"):
+        assert client.get(server.url) == "[]"  # 503 → 503(한도) → 재사용을 끄고 종전 경로로 200
+        assert client.get(server.url) == "[]"
+
+    assert client.keep_alive == 0
+    assert server.served == [2, 1, 1]  # 재사용 연결 하나에 2건, 그 뒤로는 호출마다 새 연결
+    assert "연결 재사용을 끈다" in caplog.text
+
+
 def test_keep_alive_reconnects_before_sending_when_the_server_closed_the_idle_connection(loopback):
     # WHY: 서버는 쉬는 연결을 알리지 않고 닫는다(창과 창 사이 공백). 그 연결에 요청을 실으면 응답 없이
     #      끊긴 것으로 보여 끊김 재시도 예산(60초 5회)을 쓰고, 예산이 바닥나면 창이 실패한다. 닫힌 것을
     #      **보내기 전에** 알아채 새로 맺어야 한다 — 실패한 발신도 재시도도 없어야 한다.
     server = loopback(per_conn=1)
-    client = _live_client(keep_alive=True)
+    client = _live_client(keep_alive=1)
 
     assert client.get(server.url) == "[]"
     assert server.closed.wait(5)
@@ -567,7 +602,7 @@ def test_keep_alive_reports_http_errors_like_urlopen(loopback):
     # WHY: 재시도·중단 분기는 `urlopen` 의 예외 모양에 걸려 있다. 재사용 경로가 4xx 를 정상 응답으로
     #      돌려주면 키 오류가 빈 수집으로 커밋되고, 5xx 를 올리지 않으면 재시도가 사라진다.
     server = loopback(statuses=[503, 200, 403])
-    client = _live_client(keep_alive=True)
+    client = _live_client(keep_alive=1)
 
     assert client.get(server.url) == "[]"  # 503 → 재시도 → 200
     with pytest.raises(StopFetch) as stop:
@@ -585,7 +620,7 @@ def test_keep_alive_stops_on_4xx_even_when_its_body_is_cut(loopback):
     # WHY: 4xx 는 키·권한 문제라 즉시 중단해야 하고, 그 판정은 상태코드다. 본문이 중간에 끊겼다고 끊김
     #      재시도로 빠지면 같은 키로 다시 두드리고, 소진되면 종목 결손으로 접혀 다음 종목까지 계속 묻는다.
     server = loopback(statuses=[403], truncate=True)
-    client = _live_client(keep_alive=True)
+    client = _live_client(keep_alive=1)
 
     with pytest.raises(StopFetch) as stop:
         client.get(server.url)
@@ -598,7 +633,7 @@ def test_keep_alive_never_sends_https_over_a_plain_connection(loopback, monkeypa
     import http.client
 
     server = loopback()
-    client = _live_client(keep_alive=True)
+    client = _live_client(keep_alive=1)
     assert client.get(server.url) == "[]"
 
     tls_connections = []
@@ -625,7 +660,7 @@ def test_keep_alive_treats_a_failed_send_as_a_network_failure():
     unused.bind(("127.0.0.1", 0))
     url = f"http://127.0.0.1:{unused.getsockname()[1]}/y"
     unused.close()  # listen 한 적 없는 포트 — 연결이 거부된다
-    client = _live_client(keep_alive=True)
+    client = _live_client(keep_alive=1)
 
     with pytest.raises(SafeFailureError):
         client.get(url)
@@ -639,6 +674,6 @@ def test_keep_alive_leaves_requests_with_a_body_on_the_old_path(monkeypatch):
     # WHY: 본문 있는 요청은 `urlopen` 이 붙이는 헤더(Content-Type 기본값)까지 벤더가 보는 모양의 일부다.
     #      재사용 경로는 그걸 옮기지 않았으므로, 켜도 이 요청들은 종전 경로로 가야 한다.
     client = _client(monkeypatch, lambda req: _Resp(b"ok"))
-    client.keep_alive = True
+    client.keep_alive = 1
 
     assert client.request("POST", "https://x.example/y", data=b"a=1") == "ok"

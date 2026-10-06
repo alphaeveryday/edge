@@ -124,7 +124,7 @@ kis.http.window caller=minute-price window=2026-10-02T05:32:00+00:00 status=VALI
 | `rate_exhausted` | `EGW00201` 재시도 예산(5회)을 다 쓴 종목 수 |
 | `transport_retry` / `transport_backoff_ms` | 5xx·네트워크 실패 재시도 횟수와 그 대기 |
 | `err_<종류>` | 발신 실패 종류별 건수 — `err_http_503`, `err_TimeoutError` 등(상태코드·예외 클래스명) |
-| `connects` | 새로 맺은 연결 수. 실시간 수집은 KIS 연결을 다시 쓰므로(ALPHA-1153) 창당 몇 건이어야 한다 — `attempts` 에 가까우면 재사용이 안 되고 있는 것이다 |
+| `connects` | 새로 맺은 연결 수. 실시간 수집은 KIS 연결 8개를 돌아가며 다시 쓰므로(ALPHA-1153) 창당 8건 안팎이어야 한다 — `attempts` 에 가까우면 재사용이 안 되고 있는 것이다. 재사용 경로의 5xx 가 60초에 20건 쌓이면 워커가 재사용을 스스로 끄고 WARNING `연결 재사용을 끈다` 를 남긴다(그 뒤로 이 항목이 사라진다) |
 
 - 읽는 법: 동시 요청 1(기본)에서 `elapsed_ms ≈ rtt_ms + pace_wait_ms + rate_sleep_ms + transport_backoff_ms` 다.
   어느 항이 늘었는지가 원인을 가른다. 동시 요청이 켜지면 합계가 겹쳐 `elapsed_ms` 보다 커진다.

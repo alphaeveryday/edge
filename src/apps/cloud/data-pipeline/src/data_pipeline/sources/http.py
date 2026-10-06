@@ -6,8 +6,8 @@
 - 응답 없이 끊긴 연결은 같은 재시도 루프 안에서 **한도를 두고** 한 번 다시 보낸다. 한도 밖이면
   종전대로 그 예외를 그대로 올린다(`DISCONNECT_RETRY_*`)
 - 4xx/429 는 즉시 중단(StopFetch) — 키 오류·쿼터 초과를 재시도로 두드리지 않는다
-- `keep_alive=True` 면 본문 없는 요청(GET)은 호스트별 연결을 다시 쓴다(`PoliteClient._open`). 기본은
-  종전대로 호출마다 새 연결이다
+- `keep_alive=N` 이면 본문 없는 요청(GET)은 호스트별 연결 N 개를 돌아가며 다시 쓴다(`PoliteClient._open`).
+  기본(0)은 종전대로 호출마다 새 연결이다
 
 간격 강제·재시도·StopFetch 백본은 `request()` 한 곳에 있고, `get()` 은 그 위의
 하위호환 래퍼다(GET+Accept). KR 벤더는 이 코어를 재사용한다 — KIS·BigKinds 는 커스텀
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import http.client
 import io
+import logging
 import select
 import threading
 import time
@@ -30,6 +31,8 @@ import urllib.request
 from contextlib import contextmanager
 
 from ..failures import SafeFailureError
+
+logger = logging.getLogger(__name__)
 
 RETRY_BACKOFF_SEC = [1, 2, 4]
 
@@ -53,6 +56,13 @@ RETRY_BACKOFF_SEC = [1, 2, 4]
 DISCONNECT_RETRY_DEADLINE_SEC = 10.0
 DISCONNECT_RETRY_BUDGET = 5
 DISCONNECT_RETRY_BUDGET_WINDOW_SEC = 60.0
+
+# 연결 재사용을 스스로 끄는 기준 — 재사용 경로의 5xx 가 고정 구간에 이만큼 쌓이면 그 클라이언트는 남은 수명 동안
+# 종전 경로(호출마다 새 연결)로 보낸다. 벤더가 재사용 연결을 따로 제한할 수 있고(KIS 는 연결 하나에 초당 6건쯤부터
+# 유량 초과를 HTTP 500 으로 준다 — `kis_minute.KEEP_ALIVE_CONNECTIONS`), 그 5xx 마다 1초씩 물러나면 종전보다
+# 느려진다. 그때 사람 손 없이 종전 속도로 돌아가게 한다. 평소 5xx 는 분 가격 창(약 40초)당 0~4건이었다.
+KEEP_ALIVE_5XX_LIMIT = 20
+KEEP_ALIVE_5XX_WINDOW_SEC = 60.0
 
 # 연결 재사용 경로가 싣는 User-Agent — `urlopen` 이 붙이던 값 그대로다(재사용을 켜도 벤더가 보는 헤더는 같다).
 _USER_AGENT = f"Python-urllib/{urllib.request.__version__}"
@@ -146,13 +156,17 @@ class PoliteClient:
     """
 
     def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0, pacer=None,
-                 keep_alive: bool = False):
+                 keep_alive: int = 0):
         self.min_interval = min_interval
         self.timeout = timeout
-        # 연결 재사용(ALPHA-1153) — `_open` 도크스트링. 연결은 스레드마다 따로 둔다(http.client 연결은
-        # 동시 요청을 받지 못한다).
+        # 연결 재사용(ALPHA-1153) — 돌아가며 다시 쓸 연결 수(0 이면 끔). `_open` 도크스트링. 연결은 스레드마다
+        # 따로 둔다(http.client 연결은 동시 요청을 받지 못한다).
         self.keep_alive = keep_alive
         self._conns = threading.local()
+        # 재사용 경로의 5xx — 현재 고정 구간의 시작 시각과 건수(KEEP_ALIVE_5XX_LIMIT)
+        self._keep_alive_lock = threading.Lock()
+        self._keep_alive_5xx_from = 0.0
+        self._keep_alive_5xx = 0
         # 끊긴 연결 재시도 예산(DISCONNECT_RETRY_BUDGET) — 현재 **고정 구간**의 시작 시각과 쓴 횟수.
         # 간격용 `_lock` 은 대기 동안 잡혀 있어 따로 둔다.
         self._disconnect_lock = threading.Lock()
@@ -230,7 +244,8 @@ class PoliteClient:
 
         `urlopen` 은 호출마다 연결을 새로 맺는다(`Connection: close`). 1분에 수백 종목을 한 호스트에 묻는
         분 가격 수집에서는 TCP·TLS 수립이 호출 시간의 절반을 넘었다(ALPHA-1153 — 장 마감 뒤 20건씩:
-        새 연결 p50 92ms, 재사용 26ms).
+        새 연결 p50 92ms, 재사용 26ms). 연결은 `keep_alive` 개를 **돌아가며** 쓴다 — 하나에 몰아 보내면
+        벤더가 그 연결을 따로 제한할 수 있다(`KEEP_ALIVE_5XX_LIMIT` 주석).
 
         예외 모양은 `urlopen` 과 같다 — `request()` 의 재시도 분기가 그 모양에 걸려 있다. 발신 단계 실패는
         `URLError`, 2xx 밖 응답은 `HTTPError`, 응답 수신 중 끊김은 원형 그대로다.
@@ -240,16 +255,18 @@ class PoliteClient:
         if not self.keep_alive or req.data is not None:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.read()
-        conns = vars(self._conns).setdefault("conns", {})
-        key = (req.type, req.host)  # 스킴까지 — 호스트만 보면 https 요청이 같은 호스트의 평문 연결에 실린다
-        conn = conns.get(key)
-        if conn is None:
+        # 스킴까지 키로 쓴다 — 호스트만 보면 https 요청이 같은 호스트의 평문 연결에 실린다
+        pool = vars(self._conns).setdefault("pools", {}).setdefault((req.type, req.host), [])
+        if len(pool) < self.keep_alive:
             connect = http.client.HTTPSConnection if req.type == "https" else http.client.HTTPConnection
-            conn = conns[key] = connect(req.host, timeout=self.timeout)
-        elif conn.sock is not None and _peer_closed(conn.sock):
-            # 쉬는 동안 서버가 닫았다 — 요청을 싣기 전에 새로 맺는다. 닫힌 연결에 실으면 응답 없이 끊긴
-            # 것으로 보여 끊김 재시도 예산(DISCONNECT_RETRY_*)을 쓴다.
-            conn.close()
+            conn = connect(req.host, timeout=self.timeout)
+        else:
+            conn = pool.pop(0)  # 가장 오래 쉰 연결
+            if conn.sock is not None and _peer_closed(conn.sock):
+                # 쉬는 동안 서버가 닫았다 — 요청을 싣기 전에 새로 맺는다. 닫힌 연결에 실으면 응답 없이 끊긴
+                # 것으로 보여 끊김 재시도 예산(DISCONNECT_RETRY_*)을 쓴다.
+                conn.close()
+        pool.append(conn)
         if conn.sock is None:
             self.stats.add(connects=1)  # 새로 맺는 횟수 — 재사용이 실제로 되는지 창 요약 로그에서 본다
         try:
@@ -272,8 +289,23 @@ class PoliteClient:
             conn.close()  # 응답을 끝까지 받지 못한 연결은 다시 쓰지 않는다 — 다음 발신이 새로 맺는다
             raise
         if failed:
+            if resp.status >= 500:
+                self._count_keep_alive_5xx()
             raise urllib.error.HTTPError(req.full_url, resp.status, resp.reason, resp.headers, io.BytesIO(body))
         return body
+
+    def _count_keep_alive_5xx(self) -> None:
+        """재사용 경로의 5xx 를 세고, 한도를 넘으면 재사용을 끈다(`KEEP_ALIVE_5XX_LIMIT` 주석)."""
+        now = time.monotonic()
+        with self._keep_alive_lock:
+            if now - self._keep_alive_5xx_from > KEEP_ALIVE_5XX_WINDOW_SEC:
+                self._keep_alive_5xx_from, self._keep_alive_5xx = now, 0
+            self._keep_alive_5xx += 1
+            if self._keep_alive_5xx < KEEP_ALIVE_5XX_LIMIT or not self.keep_alive:
+                return
+            self.keep_alive = 0
+        logger.warning("연결 재사용을 끈다 — %.0f초 구간에 5xx 가 %d건이다. 이 클라이언트는 호출마다 새 연결로 보낸다",
+                       KEEP_ALIVE_5XX_WINDOW_SEC, KEEP_ALIVE_5XX_LIMIT)
 
     def request(
         self,

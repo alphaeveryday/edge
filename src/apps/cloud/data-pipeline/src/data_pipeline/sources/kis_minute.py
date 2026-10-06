@@ -67,6 +67,13 @@ from .call_budget import CallBudgetError
 logger = logging.getLogger(__name__)
 
 TR_ID_MINUTE = "FHKST03010200"
+
+# 실시간 수집이 돌아가며 다시 쓰는 연결 수(`PoliteClient(keep_alive=…)`, ALPHA-1153). KIS 는 **연결 하나**로
+# 들어오는 호출을 계정 한도와 따로 제한한다 — 2026-10-06 장 마감 뒤 실측(같은 TR, 다른 발신 없음):
+#   연결 1개에 11.8건/초 → 10% 가 EGW00201(HTTP 500), 6.1건/초 → 2%, 4.9건/초 → 0%
+#   연결 4개·8개에 돌아가며 11건/초 → 0%. 호출마다 새 연결이면 10건/초에서 0%
+# 기본 간격 0.08초(12.5건/초)를 8개에 나누면 연결당 약 1.6건/초다. ⚠️ 장중 값은 아직 재지 않았다.
+KEEP_ALIVE_CONNECTIONS = 8
 PATH_MINUTE = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
 TR_ID_HISTORICAL = "FHKST03010230"
 PATH_HISTORICAL = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
