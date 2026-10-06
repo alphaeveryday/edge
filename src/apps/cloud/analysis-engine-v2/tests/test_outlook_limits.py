@@ -135,3 +135,16 @@ def test_a_schema_error_is_described_by_location_and_size_without_echoing_the_te
     error = next(e for e in Draft202012Validator(OUTLOOK).iter_errors(value) if e.validator == 'maxLength')
     message = describe_schema_error(error)
     assert message.startswith('summary_card/summary: 100 characters, limit 80') and '비밀' not in message
+
+
+def test_removing_a_topic_whose_old_title_is_too_long_still_leaves_a_publishable_update_entry():
+    from datetime import datetime, timezone
+    from edge_analysis_v2.analysis.body_editor import BodyEditor
+    old = {'title': '제목', 'items': [
+        {'id': 't1', 'title_keyword': '라' * 33, 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r1']},
+        {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}]}
+    body = BodyEditor(old, datetime(2026, 10, 6, 10, tzinfo=timezone.utc)).apply([{'action': 'remove', 'id': 't1'}])
+    assert [u['title_keyword'] for u in body['updates']['items'] if u['change_type'] == 'deleted'] == ['라' * 20]
+    assert violations({'detail': body}) == []
+    body['updates']['items'][0]['title_keyword'] = '라' * 21
+    assert violations({'detail': body})[0]['location'] == 'detail.updates.items[0].title_keyword'

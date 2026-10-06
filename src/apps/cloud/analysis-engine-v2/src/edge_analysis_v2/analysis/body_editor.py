@@ -4,7 +4,7 @@ from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
-from edge_analysis_v2.contracts.outlook_limits import violations
+from edge_analysis_v2.contracts.outlook_limits import TEXT_LIMITS, violations
 from edge_analysis_v2.tools.execution import ToolInputError
 
 
@@ -148,7 +148,10 @@ class BodyEditor:
             for identity, item in previous.items():
                 if identity not in current:
                     updates.pop(identity, None)
-                    updates[identity] = {"id": identity, "change_type": "deleted", "title_keyword": item["title_keyword"],
+                    # The title of a removed topic is shown in today's updates and can predate the limits;
+                    # nobody can rewrite it any more, so it is cut to fit.
+                    updates[identity] = {"id": identity, "change_type": "deleted",
+                                         "title_keyword": item["title_keyword"][:TEXT_LIMITS['detail.items[].title_keyword']],
                                          "sentence": None, "tool_run_ids": item["tool_run_ids"]}
             for identity, item in current.items():
                 added = identity not in previous
