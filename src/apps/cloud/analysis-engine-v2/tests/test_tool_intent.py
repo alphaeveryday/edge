@@ -93,3 +93,10 @@ def test_a_reference_from_a_retried_call_counts_and_a_failed_call_satisfies_noth
     assert check(chain, [GOOD[0], second, consumer], {})[0]['status'] == 'pass'
     wanted = [{'id': 'args', 'kind': '인자', 'claim': 'single ticker', 'check': {'called_with': {'tool': 'resolve', 'equals': {'tickers': ['A']}}}}]
     assert check(wanted, [failed], {})[0]['status'] == 'fail'
+
+
+def test_a_fact_that_appears_only_in_a_claim_or_limitation_is_not_in_the_answer():
+    rows = [{'id': 'answer', 'kind': '답변 반영', 'claim': 'missing code stays visible', 'check': {'answer': {'contains': ['999999']}}}]
+    hidden = {'answer': '두 종목을 확인했습니다', 'limitations': ['999999 미확인'], 'claims': [{'claim': '999999 없음'}]}
+    assert check(rows, [], hidden)[0]['status'] == 'fail'
+    assert check(rows, [], {'answer': '999999는 확인되지 않았습니다'})[0]['status'] == 'pass'

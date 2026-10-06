@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 from time import perf_counter
+from uuid import uuid4
 
 from edge_analysis_v2.agent.runner import run_model
 from edge_analysis_v2.quality.tool_intent import check
@@ -64,7 +65,7 @@ async def run_probe(probe_id, probe, hypotheses, *, run, catalog, digest, runs_d
     Returns:
         The stored report including one verdict per hypothesis.
     """
-    directory = Path(runs_dir)/(probe_id + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
+    directory = Path(runs_dir)/(probe_id + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:6])  # repeats can start within one second
     directory.mkdir(parents=True)
     tools = GraphTools(run, catalog, directory/'tools', probe['cutoff'])
     commit = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=Path(__file__).parent,

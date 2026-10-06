@@ -92,8 +92,7 @@ def check(hypotheses, calls, response):
         cannot be judged) or manual (needs a reader; no predicate given). 비호출 is judged on
         its own: it neither blocks nor is blocked.
     """
-    text = '\n'.join([response.get('answer', ''), *response.get('limitations', []),
-                      *[c.get('claim', '') for c in response.get('claims', [])]])
+    text = response.get('answer') or ''   # only what the customer reads; claims and limitations are not the answer
     verdicts, failed, failed_kind = [], None, None
     for row in sorted(hypotheses, key=lambda r: ORDER.index(r['kind'])):
         verdict = {key: row[key] for key in ('id', 'kind', 'claim')}

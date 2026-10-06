@@ -31,3 +31,12 @@ def test_a_failed_model_run_is_stored_as_an_error_without_the_key(tmp_path):
         catalog=CATALOG, digest='d', runs_dir=tmp_path, key='secret', model='m', model_call=model))
     saved = next(tmp_path.glob('P-*/benchmark.json')).read_text(encoding='utf8')
     assert '"status": "error"' in saved and 'secret' not in saved
+
+
+def test_repeats_started_in_the_same_second_get_separate_folders(tmp_path):
+    async def model(**_):
+        raise ValueError('fails at once')
+    for _ in range(3):
+        asyncio.run(run_probe('P', {'question': 'q', 'cutoff': '2026-10-05T00:00:00+00:00'}, [], run=lambda s, p: [],
+            catalog=CATALOG, digest='d', runs_dir=tmp_path, key='secret', model='m', model_call=model))
+    assert len(list(tmp_path.glob('P-*/benchmark.json'))) == 3
