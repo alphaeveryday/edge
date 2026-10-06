@@ -63,9 +63,17 @@ locals {
         # 배포 한 번에 워커·API 이미지 2개가 올라간다 → 20 = 배포 10번 치.
         { patterns = ["analysis-v2-*"], keep = 20 },
       ]
-      # data-pipeline 은 태그가 SHA 뿐이라 패턴으로 따로 세지 못한다. 저장소 전체로 세되
-      # analysis-v2 20개에 data-pipeline 10개가 밀리지 않게 합친 값이다.
-      keep_tagged = 30
+      # data-pipeline 은 태그가 SHA 뿐이라 패턴으로 따로 세지 못하고, 위 규칙에 맞은 이미지도
+      # 이 개수 안에서 함께 세어진다. 그래서 다른 계열이 몰려 올라오면 data-pipeline·db-query 의
+      # 이전 이미지가 밀릴 수 있다 — 보장이 아니라 여유다. 60 = analysis-v2 하루 최대 배포
+      # 24회 × 2개(2026-10-02) + 기본 10 + db-query 몫.
+      keep_tagged = 60
+    }
+    # 운영 이미지(<sha>)와 격리 검증 이미지(verify·verify-*) 두 계열. 검증 이미지는 드물게
+    # 올라가 운영 배포에 밀리므로 따로 남긴다(verify_enabled 를 다시 켤 때 받아야 한다).
+    "edge/airflow" = {
+      protected_rules = [{ patterns = ["verify*"], keep = 3 }]
+      keep_tagged     = 13
     }
   }
 }
@@ -86,9 +94,11 @@ resource "aws_ecr_lifecycle_policy" "this" {
           }
         ],
         [
-          # 태그 없는 이미지 = 태그가 다른 이미지로 옮겨 간 뒤 남은 것. 7일 = 실패한 배포를
-          # 알아채고 고칠 시간. 태그 달린 인덱스의 자식(태그 없는 실제 이미지)은 인덱스가 남아
-          # 있는 동안 만료되지 않는다.
+          # 태그 없는 이미지 = 태그가 다른 이미지로 옮겨 간 뒤 남은 것. 태그 달린 인덱스의
+          # 자식(태그 없는 실제 이미지)은 인덱스가 남아 있는 동안 만료되지 않는다.
+          # ⚠️ 기준은 태그를 잃은 시각이 아니라 push 시각이다 — 7일 넘게 쓰던 이미지가 태그를
+          # 잃으면 다음 평가(24시간 안)에 지워진다. 7일은 최근에 올린 이미지가 곧바로 태그를
+          # 잃는 경우(같은 커밋 재빌드·같은 태그 재배포)에만 유예가 된다.
           {
             tagStatus   = "untagged"
             countType   = "sinceImagePushed"
