@@ -6,6 +6,8 @@ get() 계약은 그대로여야 한다 — 이 회귀를 코드로 잠근다.
 """
 
 import io
+import socket
+import threading
 import time
 import traceback
 import urllib.error
@@ -448,3 +450,119 @@ def test_stats_count_every_send_and_name_failures_without_their_text(monkeypatch
     }
     assert stats["transport_backoff_ms"] == 3000  # 1초 + 2초 — 재시도 대기는 응답 소요와 다른 칸이다
     assert secret not in str(stats)
+
+
+# ---------- 연결 재사용(keep_alive) — 대역이 아니라 루프백 서버로 실제 소켓을 본다 ----------
+
+
+class _LoopbackServer:
+    """루프백 HTTP/1.1 서버 — 받은 연결 수와 요청 수를 센다.
+
+    `statuses` 를 차례로 답하고(다 쓰면 200), 연결 하나에서 `per_conn` 건을 답하면 헤더로 알리지 않고
+    닫는다 — 쉬는 연결을 서버가 먼저 닫는 경우의 모양이다.
+    """
+
+    def __init__(self, statuses=(), per_conn=None):
+        self._listener = socket.create_server(("127.0.0.1", 0))
+        self.url = f"http://127.0.0.1:{self._listener.getsockname()[1]}/y"
+        self._statuses, self._per_conn = list(statuses), per_conn
+        self.connections = self.requests = 0
+        self.closed = threading.Event()  # 서버가 연결을 닫으면 켠다
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        while True:
+            conn, _ = self._listener.accept()
+            self.connections += 1
+            reader, served = conn.makefile("rb"), 0
+            while self._per_conn is None or served < self._per_conn:
+                if not reader.readline():
+                    break  # 클라이언트가 닫았다
+                while reader.readline() not in (b"\r\n", b""):
+                    pass  # 헤더 끝까지
+                self.requests += 1
+                served += 1
+                status = self._statuses.pop(0) if self._statuses else 200
+                conn.sendall(f"HTTP/1.1 {status} X\r\nContent-Length: 2\r\n\r\n[]".encode())
+            reader.close()
+            conn.close()
+            self.closed.set()
+
+
+def _live_client(**kwargs):
+    client = PoliteClient(min_interval=0, **kwargs)
+    client._sleep = lambda secs: None
+    return client
+
+
+def _counts(client):
+    return {key: value for key, value in client.stats.drain().items() if not key.endswith("_ms")}
+
+
+def test_keep_alive_sends_every_call_over_one_connection():
+    # WHY(ALPHA-1153): 분 가격은 1분에 수백 종목을 한 호스트에 묻는다. 호출마다 TCP·TLS 를 새로 맺으면 그
+    #      수립 시간이 호출 간격보다 길어져 한 창이 1분을 넘긴다 — 재사용을 켠 클라이언트는 연결 하나로
+    #      보내야 한다. 끄면(기본) 종전대로 호출마다 새 연결이다 — 다른 벤더의 운반은 바뀌지 않는다.
+    reused, fresh = _LoopbackServer(), _LoopbackServer()
+    for server, client in ((reused, _live_client(keep_alive=True)), (fresh, _live_client())):
+        for _ in range(3):
+            assert client.get(server.url) == "[]"
+
+    assert (reused.connections, reused.requests) == (1, 3)
+    assert (fresh.connections, fresh.requests) == (3, 3)
+
+
+def test_keep_alive_reconnects_before_sending_when_the_server_closed_the_idle_connection():
+    # WHY: 서버는 쉬는 연결을 알리지 않고 닫는다(창과 창 사이 공백). 그 연결에 요청을 실으면 응답 없이
+    #      끊긴 것으로 보여 끊김 재시도 예산(60초 5회)을 쓰고, 예산이 바닥나면 창이 실패한다. 닫힌 것을
+    #      **보내기 전에** 알아채 새로 맺어야 한다 — 실패한 발신도 재시도도 없어야 한다.
+    server = _LoopbackServer(per_conn=1)
+    client = _live_client(keep_alive=True)
+
+    assert client.get(server.url) == "[]"
+    assert server.closed.wait(5)
+    assert client.get(server.url) == "[]"
+
+    assert server.connections == 2
+    assert _counts(client) == {"attempts": 2}
+
+
+def test_keep_alive_reports_http_errors_like_urlopen():
+    # WHY: 재시도·중단 분기는 `urlopen` 의 예외 모양에 걸려 있다. 재사용 경로가 4xx 를 정상 응답으로
+    #      돌려주면 키 오류가 빈 수집으로 커밋되고, 5xx 를 올리지 않으면 재시도가 사라진다.
+    server = _LoopbackServer(statuses=[503, 200, 403])
+    client = _live_client(keep_alive=True)
+
+    assert client.get(server.url) == "[]"  # 503 → 재시도 → 200
+    with pytest.raises(StopFetch) as stop:
+        client.get(server.url)
+
+    assert (stop.value.status, stop.value.body) == (403, "[]")
+    assert _counts(client) == {"attempts": 3, "transport_retry": 1, "err_http_503": 1, "err_http_403": 1}
+    assert server.connections == 1  # 본문을 끝까지 읽은 오류 응답 뒤에도 같은 연결을 쓴다
+
+
+def test_keep_alive_treats_a_failed_send_as_a_network_failure():
+    # WHY: `urlopen` 은 발신 단계 실패(연결 거부·DNS)를 URLError 로 감싸고, 그건 재시도 뒤 고정 코드로
+    #      끝난다. 원형 그대로 올리면 '응답 없이 끊긴 연결' 분기로 빠져 재시도가 1회로 줄고 예외 원문이
+    #      호출자에게 나간다.
+    unused = socket.socket()
+    unused.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{unused.getsockname()[1]}/y"
+    unused.close()  # listen 한 적 없는 포트 — 연결이 거부된다
+    client = _live_client(keep_alive=True)
+
+    with pytest.raises(SafeFailureError):
+        client.get(url)
+
+    assert _counts(client) == {"attempts": 4, "transport_retry": 3, "err_ConnectionRefusedError": 4}
+
+
+def test_keep_alive_leaves_requests_with_a_body_on_the_old_path(monkeypatch):
+    # WHY: 본문 있는 요청은 `urlopen` 이 붙이는 헤더(Content-Type 기본값)까지 벤더가 보는 모양의 일부다.
+    #      재사용 경로는 그걸 옮기지 않았으므로, 켜도 이 요청들은 종전 경로로 가야 한다.
+    client = _client(monkeypatch, lambda req: _Resp(b"ok"))
+    client.keep_alive = True
+
+    assert client.request("POST", "https://x.example/y", data=b"a=1") == "ok"
+

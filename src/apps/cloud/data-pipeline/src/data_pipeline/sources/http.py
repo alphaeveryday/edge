@@ -6,6 +6,8 @@
 - 응답 없이 끊긴 연결은 같은 재시도 루프 안에서 **한도를 두고** 한 번 다시 보낸다. 한도 밖이면
   종전대로 그 예외를 그대로 올린다(`DISCONNECT_RETRY_*`)
 - 4xx/429 는 즉시 중단(StopFetch) — 키 오류·쿼터 초과를 재시도로 두드리지 않는다
+- `keep_alive=True` 면 본문 없는 요청(GET)은 호스트별 연결을 다시 쓴다(`PoliteClient._open`). 기본은
+  종전대로 호출마다 새 연결이다
 
 간격 강제·재시도·StopFetch 백본은 `request()` 한 곳에 있고, `get()` 은 그 위의
 하위호환 래퍼다(GET+Accept). KR 벤더는 이 코어를 재사용한다 — KIS·BigKinds 는 커스텀
@@ -19,6 +21,8 @@ stdlib(urllib)만 사용해 의존성 없이 단위테스트에서 import 된다
 from __future__ import annotations
 
 import http.client
+import io
+import select
 import threading
 import time
 import urllib.error
@@ -49,6 +53,9 @@ RETRY_BACKOFF_SEC = [1, 2, 4]
 DISCONNECT_RETRY_DEADLINE_SEC = 10.0
 DISCONNECT_RETRY_BUDGET = 5
 DISCONNECT_RETRY_BUDGET_WINDOW_SEC = 60.0
+
+# 연결 재사용 경로가 싣는 User-Agent — `urlopen` 이 붙이던 값 그대로다(재사용을 켜도 벤더가 보는 헤더는 같다).
+_USER_AGENT = f"Python-urllib/{urllib.request.__version__}"
 
 
 class CallStats:
@@ -131,9 +138,14 @@ class PoliteClient:
     `_respect_interval` 도크스트링이 정본이다. 재시도·StopFetch 는 `request()`.
     """
 
-    def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0, pacer=None):
+    def __init__(self, *, min_interval: float = 1.0, timeout: float = 10.0, pacer=None,
+                 keep_alive: bool = False):
         self.min_interval = min_interval
         self.timeout = timeout
+        # 연결 재사용(ALPHA-1153) — `_open` 도크스트링. 연결은 스레드마다 따로 둔다(http.client 연결은
+        # 동시 요청을 받지 못한다).
+        self.keep_alive = keep_alive
+        self._conns = threading.local()
         # 끊긴 연결 재시도 예산(DISCONNECT_RETRY_BUDGET) — 현재 **고정 구간**의 시작 시각과 쓴 횟수.
         # 간격용 `_lock` 은 대기 동안 잡혀 있어 따로 둔다.
         self._disconnect_lock = threading.Lock()
@@ -206,6 +218,46 @@ class PoliteClient:
             self._disconnect_retries += 1
             return True
 
+    def _open(self, req: urllib.request.Request) -> bytes:
+        """한 번 보내고 본문을 받는다. `keep_alive` 면 본문 없는 요청(GET)은 호스트별 연결을 다시 쓴다.
+
+        `urlopen` 은 호출마다 연결을 새로 맺는다(`Connection: close`). 1분에 수백 종목을 한 호스트에 묻는
+        분 가격 수집에서는 TCP·TLS 수립이 호출 시간의 절반을 넘었다(ALPHA-1153 — 장 마감 뒤 20건씩:
+        새 연결 p50 92ms, 재사용 26ms).
+
+        예외 모양은 `urlopen` 과 같다 — `request()` 의 재시도 분기가 그 모양에 걸려 있다. 발신 단계 실패는
+        `URLError`, 2xx 밖 응답은 `HTTPError`, 응답 수신 중 끊김은 원형 그대로다.
+        ⚠️ `urlopen` 과 다른 점: 리다이렉트를 따라가지 않고(3xx 는 `HTTPError` — 재시도 뒤 소진) 프록시
+        환경변수를 읽지 않는다. 본문 있는 요청(POST)은 재사용하지 않는다 — 종전 경로 그대로다.
+        """
+        if not self.keep_alive or req.data is not None:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.read()
+        conns = vars(self._conns)
+        conn = conns.get(req.host)
+        if conn is None:
+            connect = http.client.HTTPSConnection if req.type == "https" else http.client.HTTPConnection
+            conn = conns[req.host] = connect(req.host, timeout=self.timeout)
+        elif conn.sock is not None and select.select([conn.sock], [], [], 0)[0]:
+            # 쉬는 동안 서버가 닫았다(보낸 요청이 없는데 읽을 것이 생겼다) — 요청을 싣기 전에 새로 맺는다.
+            # 닫힌 연결에 실으면 응답 없이 끊긴 것으로 보여 끊김 재시도 예산(DISCONNECT_RETRY_*)을 쓴다.
+            # ponytail: select 는 fd 번호 1024 미만에서만 된다. 프로세스가 그만큼 열게 되면 poll 로 바꾼다.
+            conn.close()
+        try:
+            try:
+                conn.request(req.get_method(), req.selector,
+                             headers={"User-agent": _USER_AGENT, **req.headers})
+            except OSError as exc:
+                raise urllib.error.URLError(exc) from exc
+            resp = conn.getresponse()
+            body = resp.read()
+        except BaseException:
+            conn.close()  # 응답을 끝까지 받지 못한 연결은 다시 쓰지 않는다 — 다음 발신이 새로 맺는다
+            raise
+        if not 200 <= resp.status < 300:
+            raise urllib.error.HTTPError(req.full_url, resp.status, resp.reason, resp.headers, io.BytesIO(body))
+        return body
+
     def request(
         self,
         method: str,
@@ -247,9 +299,9 @@ class PoliteClient:
             if first_sent_at is None:
                 first_sent_at = time.monotonic()
             try:
-                with self.stats.attempt(), urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    body = resp.read()
-                    return body.decode("utf-8", errors="replace") if decode else body
+                with self.stats.attempt():
+                    body = self._open(req)
+                return body.decode("utf-8", errors="replace") if decode else body
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 or 400 <= exc.code < 500:
                     try:
