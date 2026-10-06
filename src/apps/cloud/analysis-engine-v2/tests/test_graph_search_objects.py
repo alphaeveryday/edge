@@ -52,3 +52,4 @@ def test_the_agent_is_offered_the_real_type_names_so_a_guessed_type_never_reache
     with pytest.raises(jsonschema.ValidationError):
         tools.call('search_objects', {'object_type': 'Security', 'query': 'x'})
     assert calls == []
+

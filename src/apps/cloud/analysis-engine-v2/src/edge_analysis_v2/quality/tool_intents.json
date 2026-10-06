@@ -15,6 +15,10 @@
   "P-SO-2": {
    "cutoff": "2026-10-05T14:59:59+00:00",
    "question": "이름에 '현대'가 들어간 상장 주식이 이 자료에 모두 몇 개 있는지 세고, 전체 종목코드를 빠짐없이 알려 줘."
+  },
+  "P-LO-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "한화오션이 발행한 상장 주식이 보통주 말고 더 있는지 확인해 줘."
   }
  },
  "tools": {
@@ -216,14 +220,14 @@
      "id": "SO.stop",
      "kind": "비호출",
      "probe": "P-SO-1",
-     "claim": "같은 조건으로 다시 검색하지 않는다(회사를 찾은 뒤 그 회사 ID로 주식을 찾는 것은 허용)",
+     "claim": "같은 조건이나 이름 변형으로 다시 검색하지 않는다",
      "check": {
       "no_repeat": {
        "tool": "search_objects"
       },
       "count": {
        "tool": "search_objects",
-       "max": 3
+       "max": 2
       }
      }
     },
@@ -297,6 +301,91 @@
       "count": {
        "tool": "get_result_page",
        "max": 1
+      }
+     }
+    }
+   ]
+  },
+  "get_linked_objects": {
+   "hypotheses": [
+    {
+     "id": "LO.select",
+     "kind": "선택",
+     "probe": "P-LO-1",
+     "claim": "회사가 발행한 주식 전체는 이름 변형 검색이 아니라 발행 관계를 따라가 확인한다",
+     "check": {
+      "count": {
+       "tool": "get_linked_objects",
+       "min": 1
+      },
+      "errors": {
+       "tool": "get_linked_objects"
+      }
+     }
+    },
+    {
+     "id": "LO.args",
+     "kind": "인자",
+     "probe": "P-LO-1",
+     "claim": "발행 관계(Company_Issues_Equity)를 지정한다",
+     "check": {
+      "called_with": {
+       "tool": "get_linked_objects",
+       "equals": {
+        "link_type": "Company_Issues_Equity"
+       }
+      }
+     }
+    },
+    {
+     "id": "LO.read",
+     "kind": "해석",
+     "probe": "P-LO-1",
+     "claim": "관계로 확인한 뒤 같은 것을 이름 변형으로 다시 찾지 않는다 (미성립: 주식 자료에 보통주만 있어 관계 결과만으로는 답할 수 없는 질문이었다)",
+     "check": {
+      "count": {
+       "tool": "search_objects",
+       "max": 2
+      },
+      "no_repeat": {
+       "tool": "get_linked_objects"
+      }
+     }
+    },
+    {
+     "id": "LO.cheap",
+     "kind": "비호출",
+     "probe": "P-LO-1",
+     "claim": "관계 이름을 알려고 구조를 읽지 않는다 (미성립: 다른 자료 종류의 범위를 확인하려고 읽는다)",
+     "check": {
+      "count": {
+       "tool": "get_ontology_schema",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "LO.answer",
+     "kind": "답변 반영",
+     "probe": "P-LO-1",
+     "claim": "보통주 한 종류만 확인된다고 답한다",
+     "check": {
+      "answer": {
+       "contains": [
+        "보통주"
+       ]
+      }
+     }
+    },
+    {
+     "id": "LO.stop",
+     "kind": "비호출",
+     "probe": "P-RS-1",
+     "claim": "코드 확인 질문에는 관계를 따라가지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_linked_objects",
+       "max": 0
       }
      }
     }

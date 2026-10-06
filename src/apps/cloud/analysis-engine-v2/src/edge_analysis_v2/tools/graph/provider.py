@@ -8,6 +8,9 @@ from edge_analysis_v2.tools.graph.store import EvidenceStore
 
 STRING = {'type': 'string', 'minLength': 1}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 100, 'default': 20}
+REF = {'type': 'object', 'properties': {'object_type': STRING, 'object_id': STRING},
+       'required': ['object_type', 'object_id'], 'additionalProperties': False}
+REFS = {'type': 'array', 'items': REF, 'minItems': 1, 'maxItems': 1000}
 RESULT_REF = {'type': 'object', 'properties': {'tool_run_id': STRING, 'path': {'enum': ['/selection', '/dataset']}},
               'required': ['tool_run_id', 'path'], 'additionalProperties': False}
 
@@ -45,6 +48,12 @@ class GraphTools:
             'A security is Equity or ETF; an issuer is Company. filters need exact property values from get_ontology_schema.',
             {'object_type': kinds, 'query': {'type': 'string', 'maxLength': 120}, 'filters': {'type': 'object'}, 'limit': LIMIT},
             ['object_type'], self.search, sources=['ontology_view의 해당 객체 뷰'])
+        self.register('get_linked_objects',
+            'Follow one declared relation from a batch of objects to everything linked to them, e.g. a company to all securities '
+            'it issued. A link id reads Source_Relation_Target; direction reverse starts from the Target type. Use this instead '
+            'of searching by name variants when the question is about a relation.',
+            {'object_refs': REFS, 'link_type': {'enum': list(self.graph.links)}, 'direction': {'enum': ['forward', 'reverse']},
+             'limit': LIMIT}, ['object_refs', 'link_type'], self.linked, sources=['ontology_view의 해당 관계 뷰'])
         self.register('resolve_securities',
             'Resolve a list of exchange tickers in one batch before querying their prices, flows or events. '
             'Use tickers given in the question, never remembered ones. An object another tool already returned is already '
@@ -154,3 +163,8 @@ class GraphTools:
         return self.result(self.graph.nodes(object_type, query=query, filters=filters), limit=limit,
             scope={'object_type': object_type, 'query': query, 'filters': filters or {}, 'complete_within_query': True,
                    'match': 'substring of any matched property', 'matched_properties': ['id'] + self.graph.text_properties(object_type)})
+
+    def linked(self, object_refs, link_type, direction='forward', limit=20):
+        selection = self.graph.get(object_refs)
+        return self.result(self.graph.linked(object_refs, link_type, direction), selection=selection, limit=limit,
+                           scope={'link_type': link_type, 'direction': direction, 'complete_within_query': True})
