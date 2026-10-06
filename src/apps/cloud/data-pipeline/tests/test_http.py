@@ -481,23 +481,27 @@ class _LoopbackServer:
             except TimeoutError:
                 continue
             self.connections += 1
-            reader, served = conn.makefile("rb"), 0
-            while self._per_conn is None or served < self._per_conn:
-                if not reader.readline():
-                    break  # 클라이언트가 닫았다
-                while reader.readline() not in (b"\r\n", b""):
-                    pass  # 헤더 끝까지
-                self.requests += 1
-                served += 1
-                status = self._statuses.pop(0) if self._statuses else 200
-                length = 9 if self._truncate else 2
-                conn.sendall(f"HTTP/1.1 {status} X\r\nContent-Length: {length}\r\n\r\n[]".encode())
-                if self._truncate:
-                    break
-            reader.close()
-            conn.close()
-            self.closed.set()
+            # 연결마다 스레드 — 살아 있는 재사용 연결이 다음 연결의 응답을 막지 않게
+            threading.Thread(target=self._answer, args=(conn,), daemon=True).start()
         self._listener.close()
+
+    def _answer(self, conn):
+        reader, served = conn.makefile("rb"), 0
+        while self._per_conn is None or served < self._per_conn:
+            if not reader.readline():
+                break  # 클라이언트가 닫았다
+            while reader.readline() not in (b"\r\n", b""):
+                pass  # 헤더 끝까지
+            self.requests += 1
+            served += 1
+            status = self._statuses.pop(0) if self._statuses else 200
+            length = 9 if self._truncate else 2
+            conn.sendall(f"HTTP/1.1 {status} X\r\nContent-Length: {length}\r\n\r\n[]".encode())
+            if self._truncate:
+                break
+        reader.close()
+        conn.close()
+        self.closed.set()
 
     def stop(self):
         self._stopped.set()
@@ -587,6 +591,30 @@ def test_keep_alive_stops_on_4xx_even_when_its_body_is_cut(loopback):
         client.get(server.url)
 
     assert (stop.value.status, server.requests) == (403, 1)
+
+
+def test_keep_alive_never_sends_https_over_a_plain_connection(loopback, monkeypatch):
+    # WHY: 연결을 호스트로만 찾으면 같은 호스트의 http 연결에 https 요청이 실려 인증 헤더가 평문으로 나간다.
+    import http.client
+
+    server = loopback()
+    client = _live_client(keep_alive=True)
+    assert client.get(server.url) == "[]"
+
+    tls_connections = []
+
+    class _Tls(http.client.HTTPConnection):
+        """TLS 없이 같은 루프백 서버로 잇는 대역 — https 요청이 어느 연결 종류를 골랐는지만 본다."""
+
+        def __init__(self, host, **kwargs):
+            tls_connections.append(host)
+            super().__init__(host, **kwargs)
+
+    monkeypatch.setattr("http.client.HTTPSConnection", _Tls)
+    assert client.get(server.url.replace("http://", "https://")) == "[]"
+
+    assert len(tls_connections) == 1
+    assert server.connections == 2
 
 
 def test_keep_alive_treats_a_failed_send_as_a_network_failure():

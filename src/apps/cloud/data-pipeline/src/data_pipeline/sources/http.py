@@ -240,11 +240,12 @@ class PoliteClient:
         if not self.keep_alive or req.data is not None:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.read()
-        conns = vars(self._conns)
-        conn = conns.get(req.host)
+        conns = vars(self._conns).setdefault("conns", {})
+        key = (req.type, req.host)  # 스킴까지 — 호스트만 보면 https 요청이 같은 호스트의 평문 연결에 실린다
+        conn = conns.get(key)
         if conn is None:
             connect = http.client.HTTPSConnection if req.type == "https" else http.client.HTTPConnection
-            conn = conns[req.host] = connect(req.host, timeout=self.timeout)
+            conn = conns[key] = connect(req.host, timeout=self.timeout)
         elif conn.sock is not None and _peer_closed(conn.sock):
             # 쉬는 동안 서버가 닫았다 — 요청을 싣기 전에 새로 맺는다. 닫힌 연결에 실으면 응답 없이 끊긴
             # 것으로 보여 끊김 재시도 예산(DISCONNECT_RETRY_*)을 쓴다.
