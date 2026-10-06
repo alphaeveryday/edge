@@ -43,6 +43,10 @@ class GraphFacts:
         if kind not in self.objects:raise ValueError('Unknown object type: '+kind)
         return {c['property']:c for c in self.objects[kind]['columns'] if c.get('property')}
 
+    def text_properties(self, kind):
+        props=self.properties(kind)
+        return [p for p in ('name','title','displayTitle','ticker','seriesName','metricCode') if p in props]
+
     def cutoff_clause(self, kind, alias, params):
         props=self.properties(kind)
         if 'availableAt' in props:
@@ -59,7 +63,7 @@ class GraphFacts:
             params['ids']=list(dict.fromkeys(ids));conditions.append('n.id IN $ids')
         if query:
             params['text']=query
-            candidates=[p for p in ('name','title','displayTitle','ticker','seriesName','metricCode') if p in props]
+            candidates=self.text_properties(kind)
             matches=['n.id=$text']+['n.'+name(p)+' CONTAINS $text' for p in candidates]
             if 'leadText' in props and 'leadObservedAt' in props:
                 params['cutoff']=self.cutoff

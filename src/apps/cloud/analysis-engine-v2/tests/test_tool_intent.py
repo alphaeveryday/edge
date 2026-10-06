@@ -58,3 +58,21 @@ def test_identical_repeated_calls_are_reported_with_their_arguments():
     rows = [{'id': 'stop', 'kind': '비호출', 'claim': 'no repeated call', 'check': {'no_repeat': {'tool': 'resolve'}}}]
     verdict = check(rows, [GOOD[0], call('resolve', {'market_code': 'XKRX', 'tickers': ['A', 'B']}, 'cq_3')], {})[0]
     assert verdict['status'] == 'fail' and len(verdict['observed']['no_repeat']['repeated_arguments']) == 1
+
+
+def test_a_later_call_can_satisfy_an_argument_expectation_that_names_required_list_members():
+    rows = [{'id': 'detail', 'kind': '해석', 'claim': 'names the type it needs',
+             'check': {'called_with': {'tool': 'schema', 'equals': {'object_types': {'contains': ['Holding']}}}}}]
+    seen = [call('schema', {}, 'cq_1'), call('schema', {'object_types': ['ETF', 'Holding']}, 'cq_2')]
+    assert check(rows, seen, {})[0]['status'] == 'pass'
+    assert check(rows, seen[:1], {})[0]['status'] == 'fail'
+
+
+def test_an_unnecessary_call_is_reported_without_hiding_whether_the_answer_was_right():
+    rows = [{'id': 'stop', 'kind': '비호출', 'claim': 'no extra search', 'check': {'count': {'tool': 'search', 'max': 0}}},
+            {'id': 'answer', 'kind': '답변 반영', 'claim': 'code in answer', 'check': {'answer': {'contains': ['042660']}}},
+            {'id': 'select', 'kind': '선택', 'claim': 'uses resolve', 'check': {'count': {'tool': 'resolve', 'min': 1}}}]
+    verdicts = {v['id']: v['status'] for v in check(rows, [GOOD[0], call('search', {}, 'cq_9')], {'answer': '042660'})}
+    assert verdicts == {'select': 'pass', 'stop': 'fail', 'answer': 'pass'}
+    verdicts = {v['id']: v['status'] for v in check(rows, [], {'answer': '042660'})}
+    assert verdicts == {'select': 'fail', 'stop': 'pass', 'answer': 'blocked'}

@@ -30,10 +30,30 @@ class GraphTools:
         self.schemas = []
         self.definitions = []
         self._handlers = {}
+        kinds = {'enum': list(self.graph.objects)}
         self.register('get_result_page',
             'Read another page of a stored full dataset without rerunning the graph query or changing its cutoff.',
             {'dataset_ref': RESULT_REF, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': LIMIT},
             ['dataset_ref', 'offset'], self.page, sources=['이 분석에서 저장한 도구 결과'])
+        self.register('get_ontology_schema',
+            'Discover graph object types, properties and links; definitions are not observed facts. '
+            'Without object_types it lists every type and link without properties; name the types you will query to get their properties.',
+            {'object_types': {'type': 'array', 'items': kinds}}, [], self.schema, sources=['검토된 그래프 카탈로그'])
+        self.register('search_objects',
+            'Find objects of one type by part of their name, title or ticker. One call returns every match as a stored dataset '
+            'plus a first page; total_rows and matched_properties say what was covered, so do not repeat the search with variants. '
+            'A security is Equity or ETF; an issuer is Company. filters need exact property values from get_ontology_schema.',
+            {'object_type': kinds, 'query': {'type': 'string', 'maxLength': 120}, 'filters': {'type': 'object'}, 'limit': LIMIT},
+            ['object_type'], self.search, sources=['ontology_view의 해당 객체 뷰'])
+        self.register('resolve_securities',
+            'Resolve a list of exchange tickers in one batch before querying their prices, flows or events. '
+            'Use tickers given in the question, never remembered ones. An object another tool already returned is already '
+            'resolved from the same data; calling this to confirm it adds nothing. '
+            'For Korean stocks use market_code XKRX. Return a reusable selection; preserve missing or ambiguous codes. '
+            'Prefer this to one search per ticker.',
+            {'tickers': {'type': 'array', 'items': STRING, 'minItems': 1, 'maxItems': 1000}, 'market_code': STRING,
+             'security_type': {'enum': ['Equity', 'ETF', 'both']}},
+            ['tickers', 'market_code'], self.resolve_securities, sources=['ontology_view.equity', 'ontology_view.etf'])
 
     def register(self, name, description, properties, required, handler, *, sources, version='graph-v1'):
         """Expose one tool to the agent and to the administrator-facing definition store.
@@ -94,3 +114,43 @@ class GraphTools:
 
     def page(self, dataset_ref, offset, limit=20):
         return self.store.page(dataset_ref, offset, limit), None
+
+    def resolve_securities(self, tickers, market_code, security_type='both'):
+        kinds = ['Equity', 'ETF'] if security_type == 'both' else [security_type]
+        requested = list(dict.fromkeys(tickers))
+        found = {}
+        for kind in kinds:
+            for obj in self.graph.nodes(kind, filters={'ticker': requested, 'marketCode': market_code}):
+                found.setdefault(obj['properties']['ticker'], []).append(obj)
+        items = []
+        for ticker in requested:
+            candidates = found.get(ticker, [])
+            obj = candidates[0] if len(candidates) == 1 else None
+            items.append({'requested_ticker': ticker, 'requested_market': market_code,
+                'object_type': obj['object_type'] if obj else None, 'object_id': obj['object_id'] if obj else None,
+                'status': 'resolved' if obj else 'ambiguous' if candidates else 'not_found_at_cutoff', 'object': obj,
+                'candidates': [{k: c[k] for k in ('object_type', 'object_id', 'title')} for c in candidates]})
+        selection = {'items': items, 'requested_count': len(tickers), 'distinct_count': len(items),
+                     'completeness': 'complete' if all(r['status'] == 'resolved' for r in items) else 'partial'}
+        return self.result(items, selection=selection, limit=100, scope={'dataset_kind': 'security_resolution',
+            'identity': 'exchange market plus exact ticker; no name guessing'})
+
+    def schema(self, object_types=None):
+        selected = object_types or list(self.graph.objects)
+        for kind in selected:
+            self.graph.properties(kind)
+        objects = [{'object_type': kind, 'description': self.graph.objects[kind]['description']} for kind in selected]
+        if object_types:
+            for entry in objects:
+                entry['properties'] = [{key: column.get(key) for key in ('property', 'type', 'description', 'mappingStatus')}
+                                       for column in self.graph.objects[entry['object_type']]['columns'] if column.get('property')]
+        links = [{'id': link['id'], 'source': link['source'], 'target': link['target'], 'description': link['description'],
+                  'inverse': (link.get('inverse') or {}).get('apiName')}
+                 for link in self.graph.links.values() if link['source'] in selected or link['target'] in selected]
+        return {'objects': objects, 'links': links, 'cutoff': self.store.cutoff, 'fact_source': 'PuppyGraph',
+                'supported_tools': list(self._handlers)}, None
+
+    def search(self, object_type, query='', filters=None, limit=20):
+        return self.result(self.graph.nodes(object_type, query=query, filters=filters), limit=limit,
+            scope={'object_type': object_type, 'query': query, 'filters': filters or {}, 'complete_within_query': True,
+                   'match': 'substring of any matched property', 'matched_properties': ['id'] + self.graph.text_properties(object_type)})

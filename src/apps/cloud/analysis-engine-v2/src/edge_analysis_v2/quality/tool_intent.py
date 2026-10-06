@@ -18,7 +18,10 @@ def read_calls(directory):
 def _matches(arguments, expected):
     for key, value in expected.items():
         actual = arguments.get(key)
-        if isinstance(value, list) and isinstance(actual, list):
+        if isinstance(value, dict) and set(value) == {'contains'}:
+            if not isinstance(actual, list) or any(item not in actual for item in value['contains']):
+                return False
+        elif isinstance(value, list) and isinstance(actual, list):
             if sorted(map(json.dumps, value)) != sorted(map(json.dumps, actual)):
                 return False
         elif actual != value:
@@ -36,6 +39,11 @@ def _first_arguments(calls, answer, *, tool, equals):
     if first is None:
         return False, {'calls': 0}
     return _matches(first['arguments'], equals) and not first['error'], {'arguments': first['arguments'], 'error': first['error']}
+
+
+def _called_with(calls, answer, *, tool, equals):
+    seen = [c['arguments'] for c in calls if c['tool'] == tool]
+    return any(_matches(arguments, equals) for arguments in seen), {'arguments': seen}
 
 
 def _errors(calls, answer, *, tool, max=0):
@@ -68,7 +76,7 @@ def _answer(calls, answer, *, contains=(), absent=()):
     return not missing and not present, {'missing': missing, 'unexpected': present}
 
 
-PREDICATES = {'count': _count, 'first_arguments': _first_arguments, 'errors': _errors,
+PREDICATES = {'count': _count, 'called_with': _called_with, 'first_arguments': _first_arguments, 'errors': _errors,
               'passes_reference': _passes_reference, 'no_repeat': _no_repeat, 'answer': _answer}
 
 
@@ -82,14 +90,16 @@ def check(hypotheses, calls, response):
 
     Returns:
         One verdict per hypothesis: pass, fail, blocked (an earlier kind failed, so this one
-        cannot be judged) or manual (needs a reader; no predicate given).
+        cannot be judged) or manual (needs a reader; no predicate given). 비호출 is judged on
+        its own: it neither blocks nor is blocked.
     """
     text = '\n'.join([response.get('answer', ''), *response.get('limitations', []),
                       *[c.get('claim', '') for c in response.get('claims', [])]])
     verdicts, failed = [], None
     for row in sorted(hypotheses, key=lambda r: ORDER.index(r['kind'])):
         verdict = {key: row[key] for key in ('id', 'kind', 'claim')}
-        if failed:
+        independent = row['kind'] == '비호출'  # an unnecessary call does not invalidate what followed
+        if failed and not independent:
             verdict.update(status='blocked', observed={'failed_first': failed})
         elif 'check' not in row:
             verdict.update(status='manual', observed={})
@@ -97,7 +107,7 @@ def check(hypotheses, calls, response):
             results = [PREDICATES[name](calls, text, **arguments) for name, arguments in row['check'].items()]
             verdict.update(status='pass' if all(ok for ok, _ in results) else 'fail',
                            observed=dict(zip(row['check'], [seen for _, seen in results])))
-            if verdict['status'] == 'fail':
+            if verdict['status'] == 'fail' and not independent:
                 failed = row['id']
         verdicts.append(verdict)
     return verdicts

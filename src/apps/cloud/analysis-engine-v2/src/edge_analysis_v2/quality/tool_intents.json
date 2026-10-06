@@ -1,4 +1,306 @@
 {
- "probes": {},
- "tools": {}
+ "probes": {
+  "P-RS-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "종목코드 012450, 042660, 999999가 각각 어떤 종목인지 확인해 줘. 확인되지 않는 코드는 그대로 알려 줘."
+  },
+  "P-OS-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "ETF가 어떤 종목을 얼마나 담고 있는지 확인하려면 이 자료에서 어떤 자료 종류와 속성을 봐야 하는지 알려 줘. 실제 값은 조회하지 않아도 돼."
+  },
+  "P-SO-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "한화오션이 발행한 주식의 종목코드를 확인해 줘."
+  },
+  "P-SO-2": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "이름에 '현대'가 들어간 상장 주식이 이 자료에 모두 몇 개 있는지 세고, 전체 종목코드를 빠짐없이 알려 줘."
+  }
+ },
+ "tools": {
+  "resolve_securities": {
+   "hypotheses": [
+    {
+     "id": "RS.select",
+     "kind": "선택",
+     "probe": "P-RS-1",
+     "claim": "코드 목록이 주어지면 이 도구를 불러 종목을 확인한다",
+     "check": {
+      "count": {
+       "tool": "resolve_securities",
+       "min": 1
+      },
+      "errors": {
+       "tool": "resolve_securities"
+      }
+     }
+    },
+    {
+     "id": "RS.args",
+     "kind": "인자",
+     "probe": "P-RS-1",
+     "claim": "첫 호출에 세 코드를 한 배열로, 한국거래소 코드 XKRX로 넘긴다",
+     "check": {
+      "first_arguments": {
+       "tool": "resolve_securities",
+       "equals": {
+        "market_code": "XKRX",
+        "tickers": [
+         "012450",
+         "042660",
+         "999999"
+        ]
+       }
+      }
+     }
+    },
+    {
+     "id": "RS.read",
+     "kind": "해석",
+     "probe": "P-RS-1",
+     "claim": "없는 코드를 다른 시장이나 다른 코드로 바꿔 다시 찾지 않는다",
+     "check": {
+      "count": {
+       "tool": "resolve_securities",
+       "max": 1
+      }
+     }
+    },
+    {
+     "id": "RS.answer",
+     "kind": "답변 반영",
+     "probe": "P-RS-1",
+     "claim": "확인된 두 종목의 이름과 확인되지 않은 코드를 답변에 그대로 남긴다",
+     "check": {
+      "answer": {
+       "contains": [
+        "한화에어로스페이스",
+        "한화오션",
+        "999999"
+       ]
+      }
+     }
+    },
+    {
+     "id": "RS.over",
+     "kind": "선택",
+     "probe": "P-RS-1",
+     "claim": "코드가 주어졌을 때 코드마다 이름 검색을 하지 않는다",
+     "check": {
+      "count": {
+       "tool": "search_objects",
+       "max": 0
+      }
+     }
+    }
+   ]
+  },
+  "get_ontology_schema": {
+   "hypotheses": [
+    {
+     "id": "OS.select",
+     "kind": "선택",
+     "probe": "P-OS-1",
+     "claim": "자료 구조를 물으면 이 도구로 종류와 관계를 확인한다",
+     "check": {
+      "count": {
+       "tool": "get_ontology_schema",
+       "min": 1
+      },
+      "errors": {
+       "tool": "get_ontology_schema"
+      }
+     }
+    },
+    {
+     "id": "OS.read",
+     "kind": "해석",
+     "probe": "P-OS-1",
+     "claim": "전체 목록을 본 뒤 필요한 종류(보유 내역)만 지정해 속성을 읽는다",
+     "check": {
+      "called_with": {
+       "tool": "get_ontology_schema",
+       "equals": {
+        "object_types": {
+         "contains": [
+          "ETFHolding"
+         ]
+        }
+       }
+      },
+      "count": {
+       "tool": "get_ontology_schema",
+       "max": 2
+      },
+      "no_repeat": {
+       "tool": "get_ontology_schema"
+      }
+     }
+    },
+    {
+     "id": "OS.answer",
+     "kind": "답변 반영",
+     "probe": "P-OS-1",
+     "claim": "정의를 읽은 것을 실제 보유 값을 확인한 것처럼 쓰지 않는다"
+    },
+    {
+     "id": "OS.stop",
+     "kind": "비호출",
+     "probe": "P-RS-1",
+     "claim": "코드만 확인하면 되는 질문에는 구조를 읽지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_ontology_schema",
+       "max": 0
+      }
+     }
+    }
+   ]
+  },
+  "search_objects": {
+   "hypotheses": [
+    {
+     "id": "SO.select",
+     "kind": "선택",
+     "probe": "P-SO-1",
+     "claim": "이름만 아는 대상은 이 도구로 찾고, 모르는 코드를 지어내 코드 조회를 하지 않는다",
+     "check": {
+      "count": {
+       "tool": "search_objects",
+       "min": 1
+      },
+      "errors": {
+       "tool": "search_objects"
+      }
+     }
+    },
+    {
+     "id": "SO.over",
+     "kind": "선택",
+     "probe": "P-SO-1",
+     "claim": "기억하고 있던 종목코드로 코드 조회를 하지 않는다",
+     "check": {
+      "count": {
+       "tool": "resolve_securities",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "SO.cheap",
+     "kind": "선택",
+     "probe": "P-SO-1",
+     "claim": "종류 이름을 알려고 구조를 읽지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_ontology_schema",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "SO.args",
+     "kind": "인자",
+     "probe": "P-SO-1",
+     "claim": "주식을 묻는 질문에 회사가 아니라 주식 종류를 지정해 검색한다",
+     "check": {
+      "called_with": {
+       "tool": "search_objects",
+       "equals": {
+        "object_type": "Equity"
+       }
+      }
+     }
+    },
+    {
+     "id": "SO.stop",
+     "kind": "비호출",
+     "probe": "P-SO-1",
+     "claim": "같은 조건으로 다시 검색하지 않는다(회사를 찾은 뒤 그 회사 ID로 주식을 찾는 것은 허용)",
+     "check": {
+      "no_repeat": {
+       "tool": "search_objects"
+      },
+      "count": {
+       "tool": "search_objects",
+       "max": 3
+      }
+     }
+    },
+    {
+     "id": "SO.answer",
+     "kind": "답변 반영",
+     "probe": "P-SO-1",
+     "claim": "찾은 주식의 종목코드를 답한다",
+     "check": {
+      "answer": {
+       "contains": [
+        "042660"
+       ]
+      }
+     }
+    },
+    {
+     "id": "SO.read",
+     "kind": "해석",
+     "probe": "P-SO-2",
+     "claim": "전체 건수 37을 쓰고, 한 번의 검색으로 전체가 확인됐으면 다른 종류·다른 검색어로 다시 찾지 않는다",
+     "check": {
+      "answer": {
+       "contains": [
+        "37"
+       ]
+      },
+      "count": {
+       "tool": "search_objects",
+       "max": 1
+      }
+     }
+    },
+    {
+     "id": "SO.whole",
+     "kind": "답변 반영",
+     "probe": "P-SO-2",
+     "claim": "첫 페이지 밖에 있는 종목까지 답변에 들어 있다",
+     "check": {
+      "answer": {
+       "contains": [
+        "453340",
+        "294870",
+        "079430"
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "get_result_page": {
+   "hypotheses": [
+    {
+     "id": "RP.stop",
+     "kind": "비호출",
+     "probe": "P-RS-1",
+     "claim": "한 페이지로 끝난 결과에는 다음 페이지를 읽지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_result_page",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "RP.chain",
+     "kind": "연결",
+     "probe": "P-SO-2",
+     "claim": "첫 페이지가 완결이면 다음 페이지를 읽지 않고, 남았으면 저장된 결과에서 한 번에 읽는다",
+     "check": {
+      "count": {
+       "tool": "get_result_page",
+       "max": 1
+      }
+     }
+    }
+   ]
+  }
+ }
 }
