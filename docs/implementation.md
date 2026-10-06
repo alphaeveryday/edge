@@ -95,11 +95,11 @@
 
 dev 는 GitHub Actions 로 구현됐다: 스키마(`src/libs/schema/**`) 변경이 dev 에 머지되면 `schema-migrate.yml` 이 실 dev RDS 에 마이그레이션을 적용한다. 백엔드 앱별 워크플로(`deploy-<app>.yml`, 3종 super-admin-api·tenant-sync-api·app-api — tenant-console-api 는 onprem 플레인이라 dev ECS·CD 에서 제거)는 자기 path 변경에 트리거되는 독립 배포다(ECR semver 이미지 → ECS 롤링). `data-pipeline` 은 `deploy-data-pipeline.yml` 로 raw 수집 배치 이미지를 ECR 에 push 한다. `analysis-engine-v2`·`airflow`·`db-query` 도 각자 `deploy-<app>.yml` 이 자기 path 변경에 이미지를 ECR 에 push 한다(analysis-engine-v2 는 API Lambda 코드까지 갱신). 프론트 워크플로(`deploy-super-admin-ui.yml`)는 `deploy-ui.yml` 을 재사용해 pnpm 빌드 → S3 sync → CloudFront 무효화한다(super-admin-ui — cloud 플레인). tenant-console-ui 는 온프렘 플레인이라 cloud CD·정적 호스팅이 없다(ADR-0032 — 박스가 UI·API 를 한 오리진으로 co-host, 온프렘 서빙은 후속 증분). 데모 온프렘 박스는 격리 스택이라 별개다 — `deploy-demo-onprem.yml`(수동 `workflow_dispatch`, 전용 배포 역할)이 이미지 빌드→SSM Run Command 로 박스 compose 를 한 번에 한다(dev 자동 CD 와 무관 — MTS 정적은 mock-broker 이미지에 내장돼 별도 S3 sync 없음, ALPHA-632). 모두 마이그레이션 CD와 분리돼 있어 CI 에서 migrate 를 기다리지 않는다(순서는 확장-수축 + PR 순서 규율로 지킴 — 확장 마이그레이션 먼저 머지·적용 후 의존 코드). 인프라(`infra/terraform/envs/dev`) 자체도 CD 된다 — PR 은 `terraform-plan.yml`(read-only 역할)이 plan 을 PR 코멘트로 게시하고, dev 머지 시 `terraform-apply.yml`(apply 역할, trust 가 `ref:refs/heads/dev` 라 PR 은 assume 불가)이 apply 한다. bootstrap·foundation 스택은 수동. 원칙은 그대로다 — "전체 일괄 자동 배포"는 두지 않고, 마이그레이션 확장 단계가 코드 배포보다 먼저다. prod 배포는 prod 인프라 확정 후 같은 구조로 잇는다.
 
-**ECR 이미지는 저장소마다 최근 10개 버전만 남는다(ALPHA-1236, 2026-10-06 적용).** 위 워크플로가 올린 이미지는 계속 보존되지 않는다. 배포를 바꾸는 사람은 다음을 지킨다.
+**ECR 이미지는 저장소마다 최근 몇 개 버전만 남는다(ALPHA-1236, 2026-10-06 적용).** 위 워크플로가 올린 이미지는 계속 보존되지 않는다. 기본은 태그 달린 버전 최근 10개다. 여러 이미지가 한 저장소를 쓰는 두 곳은 규칙이 다르다 — `edge/pipeline` 은 `*-latest` 가 가리키는 이미지를 항상 남기고 `analysis-v2-*` 20개·전체 60개, `edge/airflow` 는 `verify*` 3개·전체 13개다. 배포를 바꾸는 사람은 다음을 지킨다.
 
 - 이미지로 되돌릴 수 있는 범위는 남아 있는 최근 버전까지다. 그보다 오래된 버전은 그 커밋에서 다시 빌드한다.
 - 한 저장소에 새 태그 계열을 추가하면(`edge/pipeline` 처럼 여러 이미지가 한 저장소를 쓰는 경우) `infra/terraform/foundation/ecr.tf` 에 그 계열의 보존 규칙을 같이 추가한다. 추가하지 않으면 다른 계열 배포에 밀려 실행 이미지가 지워질 수 있다.
 - 같은 태그로 다시 push 하면 이전 이미지는 태그 없는 이미지가 되어 곧 지워진다. 서비스가 새 이미지로 넘어가기 전에 지워지면 안 되는 경우에는 이전 이미지에 다른 태그를 남긴다.
-- 배포가 10번 넘게 연달아 실패한 채로 두면 실행 중 이미지가 보존 범위 밖으로 밀려난다.
+- 배포가 연달아 실패한 채로 두면 실행 중 이미지가 보존 개수 밖으로 밀려난다. 기본 10개 저장소와 `analysis-v2`(배포 한 번에 2개)는 10번이 한계다.
 
 규칙과 근거, 규칙을 바꾸는 절차는 [infra/terraform/foundation/README.md](../infra/terraform/foundation/README.md) "ECR 이미지 보존"에 있다.
