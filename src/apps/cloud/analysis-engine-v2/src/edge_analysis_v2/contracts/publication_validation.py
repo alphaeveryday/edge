@@ -5,6 +5,9 @@ FACTORS = ["이슈", "차트", "매크로", "밸류", "수급"]
 SENTIMENTS = {"positive", "neutral", "negative"}
 
 
+from edge_analysis_v2.contracts.outlook_limits import violations
+
+
 def text(value):
     """Require nonempty text without rewriting the agent's wording."""
     if not isinstance(value, str) or not value.strip():
@@ -98,6 +101,10 @@ def outlook(features, body):
             text(sentence["sentence"])
     if len({item["id"] for item in body["items"]}) != len(body["items"]):
         raise ValueError("Duplicate topic ID")
+    over = violations({"summary_card": features["summary_card"], "factors": factors, "conclusion": conclusion, "detail": body})
+    if over:
+        raise ValueError("Outlook exceeds screen limits: " + ", ".join(
+            f"{v['location']} {v['actual']}>{v['limit']}" for v in over[:8]))
     if set(body["updates"]) != {"date", "items"}:
         raise ValueError("Invalid updates")
     for item in body["updates"]["items"]:

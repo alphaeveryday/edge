@@ -294,3 +294,48 @@ def test_resume_restores_work_and_rejects_changed_observations(tmp_path):
     result = asyncio.run(run_model(initial=initial, **args))
     assert result == {'summary':'resumed'}
     assert json.loads((tmp_path/'workspace.json').read_text())['status'] == 'completed'
+
+
+def test_an_overlong_final_answer_is_sent_back_with_the_field_and_size_until_it_fits(tmp_path):
+    # WHY: a report that breaks a field limit must never be accepted, but the run should not be lost for it either.
+    schema = {'type': 'object', 'required': ['summary'], 'additionalProperties': False,
+              'properties': {'summary': {'type': 'string', 'maxLength': 5}}}
+    queries = []
+    class Client:
+        def __init__(self, *, options):
+            self.options = options
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def query(self, text):
+            queries.append(text)
+        async def receive_response(self):
+            self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed'}])
+            yield ResultMessage(structured_output={'summary': 'short' if len(queries) == 2 else 'far too long'})
+    result = asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None,
+        output_schema=schema, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert result == {'summary': 'short'}
+    assert len(queries) == 2 and 'summary: 12 characters, limit 5' in queries[1] and 'far too long' not in queries[1]
+
+
+def test_an_answer_that_stays_overlong_after_three_requests_fails_instead_of_being_published(tmp_path):
+    schema = {'type': 'object', 'required': ['summary'], 'additionalProperties': False,
+              'properties': {'summary': {'type': 'string', 'maxLength': 5}}}
+    queries = []
+    class Client:
+        def __init__(self, *, options):
+            self.options = options
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def query(self, text):
+            queries.append(text)
+        async def receive_response(self):
+            self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed'}])
+            yield ResultMessage(structured_output={'summary': 'far too long'})
+    with pytest.raises(ValidationError):
+        asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None,
+            output_schema=schema, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+    assert len(queries) == 4 and not (tmp_path/'response.json').exists()

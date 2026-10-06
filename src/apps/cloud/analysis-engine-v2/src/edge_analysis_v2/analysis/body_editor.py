@@ -4,6 +4,8 @@ from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
+from edge_analysis_v2.contracts.outlook_limits import violations
+
 
 KST = timezone(timedelta(hours=9))
 
@@ -112,6 +114,13 @@ class BodyEditor:
         return self._commit(draft, self.mode)
 
     def _commit(self, draft, mode):
+        over = violations({'detail': draft})
+        if over:
+            # A body inherited from before the limits existed cannot be patched into compliance topic by topic.
+            hint = '; rewrite the whole body with write_outlook_body' if mode == 'update' else ''
+            raise ValueError('Body exceeds limits: ' + ', '.join(
+                f"{v['location']} {v['actual']}>{v['limit']} {v['kind']}" for v in over[:8])
+                + (f' and {len(over) - 8} more' if len(over) > 8 else '') + hint)
         current = {item["id"]: item for item in draft["items"]}
         if len(current) != len(draft["items"]) or len(current) > 15:
             raise ValueError("Expected at most 15 unique topics")

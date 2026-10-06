@@ -46,8 +46,9 @@ def test_hidden_scope_constraints_still_reject_before_execution(monkeypatch):
     valid = {'instrument_id': 'stock-1', 'trade_date': '2026-09-18', 'investor': 'foreign'}
     for invalid in (valid | {'instrument_id': 'other'}, valid | {'trade_date': '2099-01-01'},
                     valid | {'investor': 'unknown'}):
-        with pytest.raises(ValidationError):
-            asyncio.run(handler(invalid))
+        rejected = asyncio.run(handler(invalid))
+        # Rejected as a tool error the agent can read and repair, never executed.
+        assert rejected['is_error'] is True and rejected['content'][0]['text']
     assert called == []
     result = asyncio.run(handler(valid))
     assert json.loads(result['content'][0]['text']) == expected
