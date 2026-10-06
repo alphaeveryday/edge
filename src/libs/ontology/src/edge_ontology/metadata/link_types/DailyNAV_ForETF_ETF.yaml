@@ -1,0 +1,29 @@
+id: DailyNAV_ForETF_ETF
+source: DailyNAV
+definition:
+  name: ForETF
+  label: ForETF
+  description: The ETF whose net asset value per unit is recorded for the trading
+    date.
+  target: ETF
+  sourceProperty: etfInstrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forETF
+  displayName: ForETF
+  pluralDisplayName: null
+  inverse:
+    apiName: dailyNAVs
+    displayName: Daily NAVs
+    description: Net asset values per unit recorded for this ETF by trading date.
+    pluralDisplayName: Daily NAVs
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: DailyNAV
+    foreignKeyProperty: etfInstrumentId
+    referencedObjectType: ETF

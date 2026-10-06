@@ -1,0 +1,111 @@
+id: NewsArticle_DescribesEvent_SourceEvent
+source: NewsArticle
+definition:
+  name: DescribesEvent
+  label: DescribesEvent
+  description: A structured event account extracted from this article. Follow the
+    reverse direction to find the article supporting a source-event record.
+  target: SourceEvent
+  sourceProperty: id
+  targetProperty: id
+  cardinality: 1:N
+  status: experimental
+  sourceMapping:
+    kind: joinPath
+    baseTable: event_evidence
+    identity:
+    - evidence_id
+    joins:
+    - constraint: fk_event_evidence_assertion
+    - constraint: fk_document_assertion_document
+    - constraint: fk_event_evidence_event
+    sourceEndpoint: document_assertion.document_id
+    targetEndpoint: event_evidence.source_event_id
+    sourceType: NewsArticle
+    evidenceFields:
+      extractionConfidence:
+        description: The language model's self-reported confidence, from 0 to 1, in
+          extracting the news assertion supporting this article-to-event link. It
+          is not event-truth or thread-matching confidence.
+        nullable: true
+        source: document_assertion.confidence
+        minimum: 0
+        maximum: 1
+    properties:
+      assertionId:
+        table: event_evidence
+        column: assertion_id
+      evidenceType:
+        table: event_evidence
+        column: evidence_type
+      evidenceText:
+        table: event_evidence
+        column: evidence_text
+  mappingStatus: defined
+  apiName: describesEvent
+  displayName: DescribesEvent
+  pluralDisplayName: DescribesEvent
+  inverse:
+    apiName: sourceArticles
+    displayName: Source articles
+    description: News articles containing the assertions used to assemble this event
+      account.
+    pluralDisplayName: null
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.
+  linkProperties:
+    assertionId:
+      label: assertionId
+      description: Identifier of the particular extracted assertion connecting this
+        document to this event account.
+      sourceDataType: text
+      nullable: false
+      sourceConstraints:
+        nullable: false
+        primaryKey: []
+        foreignKeys:
+        - constraint: fk_event_evidence_assertion
+          table: event_evidence
+          columns:
+          - assertion_id
+          target_table: document_assertion
+          target_columns:
+          - assertion_id
+      mappingStatus: ready
+      apiName: assertionId
+      displayName: assertionId
+      status: experimental
+      dataType: String
+    evidenceType:
+      label: evidenceType
+      description: Kind of supporting material recorded for this link, such as TITLE
+        or DISCLOSURE_FACT.
+      sourceDataType: character varying
+      nullable: false
+      sourceConstraints:
+        nullable: false
+        primaryKey: []
+        foreignKeys: []
+      mappingStatus: ready
+      apiName: evidenceType
+      displayName: evidenceType
+      status: experimental
+      dataType: String
+    evidenceText:
+      label: evidenceText
+      description: Stored supporting text for this event-to-document link. Its scope
+        is the recorded excerpt, not necessarily the full document.
+      sourceDataType: text
+      nullable: true
+      sourceConstraints:
+        nullable: true
+        primaryKey: []
+        foreignKeys: []
+      mappingStatus: ready
+      apiName: evidenceText
+      displayName: evidenceText
+      status: experimental
+      dataType: String

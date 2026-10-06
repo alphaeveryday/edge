@@ -1,0 +1,179 @@
+formatVersion: 2
+name: Concept
+label: Concept
+description: A named subject used to classify or describe other objects, such as a
+  product, business segment, place, or investment theme. One record identifies one
+  stored concept, rather than a particular mention in a document.
+group: Reference
+primaryKey: id
+identity:
+  columns: &id001
+  - concept_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal identifier of a named concept in the concept registry.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - constraint: fk_concept_entity
+        table: concept
+        columns:
+        - concept_id
+        - entity_type
+        target_table: entity
+        target_columns:
+        - entity_id
+        - entity_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  name:
+    label: Name
+    description: Stored name of the product, segment, place, theme, or other subject
+      represented by the concept.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: name
+    displayName: Name
+    status: experimental
+    dataType: String
+  conceptType:
+    label: Concept type
+    description: Category label assigned to the concept, used to distinguish subjects
+      such as products, places, and themes. It is not a company or security identifier.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: conceptType
+    displayName: Concept type
+    status: experimental
+    dataType: String
+  parentConceptId:
+    label: Parent concept id
+    description: Identifier of an explicitly recorded broader concept. NULL means
+      no parent is recorded.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_concept_parent
+        table: concept
+        columns:
+        - parent_concept_id
+        target_table: concept
+        target_columns:
+        - concept_id
+    mappingStatus: ready
+    apiName: parentConceptId
+    displayName: Parent concept id
+    status: experimental
+    dataType: String
+  parentConceptName:
+    label: Parent concept name
+    description: Current stored name of the parentConcept referenced by parent_concept_id;
+      NULL if no name is resolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: parentConceptName
+    displayName: Parent concept name
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: concept
+  joins:
+  - alias: entity
+    from: base
+    table: entity
+    joinType: left
+    constraint: fk_concept_entity
+    'on':
+    - source: concept_id
+      target: entity_id
+    - source: entity_type
+      target: entity_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: concept
+      column: concept_id
+    name:
+      alias: entity
+      table: entity
+      column: display_name
+    conceptType:
+      alias: base
+      table: concept
+      column: concept_type
+    parentConceptId:
+      alias: base
+      table: concept
+      column: parent_concept_id
+    parentConceptName:
+      kind: view_column
+      schema: ontology_view
+      table: concept
+      column: parent_concept_name
+      sqlFile: sql/views/concept.sql
+      inputs:
+      - schema: public
+        table: concept
+        column: parent_concept_id
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_concept_not_self_parent
+    kind: c
+    definition: CHECK (((parent_concept_id IS NULL) OR (parent_concept_id <> concept_id)))
+    validated: true
+  - name: concept_pkey
+    kind: p
+    definition: PRIMARY KEY (concept_id)
+    validated: true
+  - name: fk_concept_entity
+    kind: f
+    definition: FOREIGN KEY (concept_id, entity_type) REFERENCES entity(entity_id,
+      entity_type) ON DELETE CASCADE
+    validated: true
+  - name: fk_concept_parent
+    kind: f
+    definition: FOREIGN KEY (parent_concept_id) REFERENCES concept(concept_id) ON
+      DELETE SET NULL
+    validated: true
+apiName: Concept
+displayName: Concept
+pluralDisplayName: Concepts
+titleProperty: name
+status: experimental
+visibility: normal
+linkTypes:
+- Concept_HasParentConcept_Concept

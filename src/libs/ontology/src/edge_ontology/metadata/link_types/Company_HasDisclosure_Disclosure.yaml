@@ -1,0 +1,29 @@
+id: Company_HasDisclosure_Disclosure
+source: Company
+definition:
+  name: HasDisclosure
+  label: HasDisclosure
+  description: A disclosure belonging to this company, as identified by the disclosure
+    issuer reference.
+  target: Disclosure
+  sourceProperty: id
+  targetProperty: issuerId
+  cardinality: 1:N
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: hasDisclosure
+  displayName: HasDisclosure
+  pluralDisplayName: HasDisclosure
+  inverse:
+    apiName: forCompany
+    displayName: ForCompany
+    description: The company whose own disclosure this is.
+    pluralDisplayName: null
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: Disclosure
+    foreignKeyProperty: issuerId
+    referencedObjectType: Company

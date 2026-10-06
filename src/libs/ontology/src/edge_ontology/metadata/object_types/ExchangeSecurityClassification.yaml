@@ -1,0 +1,546 @@
+formatVersion: 2
+name: ExchangeSecurityClassification
+label: Exchange security classification
+description: 'One collected version of a security''s exchange-market classification:
+  security group and industry hierarchy, identified by market, local security code,
+  collection date, and collection run.'
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns:
+  - market
+  - instrument_code
+  - as_of_date
+  - raw_run_id
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of one collected classification snapshot, preserving market,
+      security code, collection date, and collection run.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - market
+      - instrument_code
+      - as_of_date
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  market:
+    label: Market
+    description: Korean exchange-market name, KOSPI or KOSDAQ, used together with
+      instrumentCode to identify the security.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - market
+      - instrument_code
+      - as_of_date
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: market
+    displayName: Market
+    status: experimental
+    dataType: String
+  instrumentCode:
+    label: Instrument code
+    description: Local security code preserved from the source. Use its market context
+      when matching it to a listed security.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - market
+      - instrument_code
+      - as_of_date
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: instrumentCode
+    displayName: Instrument code
+    status: experimental
+    dataType: String
+  standardCode:
+    label: Standard security identifier
+    description: Standard security identifier, such as an ISIN, supplied in the exchange-market
+      classification record.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: standardCode
+    displayName: Standard security identifier
+    status: experimental
+    dataType: String
+  nameKr:
+    label: Korean security name
+    description: Korean security name supplied with this classification snapshot.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: nameKr
+    displayName: Korean security name
+    status: experimental
+    dataType: String
+  securityGroup:
+    label: Security group
+    description: Source category of the listed security, such as a stock, ETF, or
+      ETN. This is separate from the issuer's industry.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: securityGroup
+    displayName: Security group
+    status: experimental
+    dataType: String
+  collectedOn:
+    label: Collected on
+    description: Korean calendar date on which this market-classification snapshot
+      was collected.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - market
+      - instrument_code
+      - as_of_date
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: collectedOn
+    displayName: Collected on
+    status: experimental
+    dataType: Date
+  largeCode:
+    label: Top-level industry code
+    description: Top-level industry-group code in the source taxonomy. NULL represents
+      the source's unclassified code.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: largeCode
+    displayName: Top-level industry code
+    status: experimental
+    dataType: String
+  largeName:
+    label: Top-level industry name
+    description: Name of the top-level industry group identified by largeCode.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: largeName
+    displayName: Top-level industry name
+    status: experimental
+    dataType: String
+  mediumCode:
+    label: Middle-level industry code
+    description: Middle-level industry-group code in the source taxonomy. NULL represents
+      the source's unclassified code.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: mediumCode
+    displayName: Middle-level industry code
+    status: experimental
+    dataType: String
+  mediumName:
+    label: Middle-level industry name
+    description: Name of the middle-level industry group identified by mediumCode.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: mediumName
+    displayName: Middle-level industry name
+    status: experimental
+    dataType: String
+  smallCode:
+    label: Detailed industry code
+    description: Most detailed industry-group code stored in the source taxonomy.
+      NULL represents the source's unclassified code.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: smallCode
+    displayName: Detailed industry code
+    status: experimental
+    dataType: String
+  smallName:
+    label: Detailed industry name
+    description: Name of the detailed industry group identified by smallCode.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: smallName
+    displayName: Detailed industry name
+    status: experimental
+    dataType: String
+  taxonomy:
+    label: Taxonomy
+    description: Classification scheme used for the industry codes; the current source
+      uses KIS_INDEX_SECTOR.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: taxonomy
+    displayName: Taxonomy
+    status: experimental
+    dataType: String
+  availableAt:
+    label: Available for analysis at
+    description: Time the source data was received and became available to this system.
+      It is not a historical release time reconstructed from the observation date.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  securityName:
+    label: Security name
+    description: Current stored name of the security identified by security_id; not
+      its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityName
+    displayName: Security name
+    status: experimental
+    dataType: String
+  securityTicker:
+    label: Security ticker
+    description: Current ticker of the security; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityTicker
+    displayName: Security ticker
+    status: experimental
+    dataType: String
+  securityMarketCode:
+    label: Security market code
+    description: Current market code of the security, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityMarketCode
+    displayName: Security market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: sector_classification
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: sector_classification
+      column: market
+    market:
+      alias: base
+      table: sector_classification
+      column: market
+    instrumentCode:
+      alias: base
+      table: sector_classification
+      column: instrument_code
+    standardCode:
+      alias: base
+      table: sector_classification
+      column: standard_code
+    nameKr:
+      alias: base
+      table: sector_classification
+      column: name_kr
+    securityGroup:
+      alias: base
+      table: sector_classification
+      column: security_group
+    collectedOn:
+      alias: base
+      table: sector_classification
+      column: as_of_date
+    largeCode:
+      alias: base
+      table: sector_classification
+      column: large_code
+    largeName:
+      alias: base
+      table: sector_classification
+      column: large_name
+    mediumCode:
+      alias: base
+      table: sector_classification
+      column: medium_code
+    mediumName:
+      alias: base
+      table: sector_classification
+      column: medium_name
+    smallCode:
+      alias: base
+      table: sector_classification
+      column: small_code
+    smallName:
+      alias: base
+      table: sector_classification
+      column: small_name
+    taxonomy:
+      alias: base
+      table: sector_classification
+      column: taxonomy
+    availableAt:
+      alias: base
+      table: sector_classification
+      column: available_at
+    securityName:
+      kind: view_column
+      schema: ontology_view
+      table: exchange_security_classification
+      column: security_name
+      sqlFile: sql/views/exchange_security_classification.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: sector_classification
+        column: as_of_date
+      - schema: public
+        table: sector_classification
+        column: instrument_code
+      - schema: public
+        table: sector_classification
+        column: market
+      - schema: public
+        table: sector_classification
+        column: raw_run_id
+    securityTicker:
+      kind: view_column
+      schema: ontology_view
+      table: exchange_security_classification
+      column: security_ticker
+      sqlFile: sql/views/exchange_security_classification.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: sector_classification
+        column: as_of_date
+      - schema: public
+        table: sector_classification
+        column: instrument_code
+      - schema: public
+        table: sector_classification
+        column: market
+      - schema: public
+        table: sector_classification
+        column: raw_run_id
+    securityMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: exchange_security_classification
+      column: security_market_code
+      sqlFile: sql/views/exchange_security_classification.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: sector_classification
+        column: as_of_date
+      - schema: public
+        table: sector_classification
+        column: instrument_code
+      - schema: public
+        table: sector_classification
+        column: market
+      - schema: public
+        table: sector_classification
+        column: raw_run_id
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: exchange_security_classification
+      column: display_title
+      sqlFile: sql/views/exchange_security_classification.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: sector_classification
+        column: as_of_date
+      - schema: public
+        table: sector_classification
+        column: instrument_code
+      - schema: public
+        table: sector_classification
+        column: market
+      - schema: public
+        table: sector_classification
+        column: raw_run_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - market
+  - instrument_code
+  - as_of_date
+  - raw_run_id
+  tableConstraints:
+  - name: ck_sector_classification_as_of
+    kind: c
+    definition: CHECK ((as_of_date = ((received_at AT TIME ZONE 'Asia/Seoul'::text))::date))
+    validated: true
+  - name: ck_sector_classification_basis
+    kind: c
+    definition: CHECK (((availability_basis = 'received'::text) AND (available_at
+      = received_at)))
+    validated: true
+  - name: ck_sector_classification_market
+    kind: c
+    definition: CHECK ((market = ANY (ARRAY['KOSPI'::text, 'KOSDAQ'::text])))
+    validated: true
+  - name: ck_sector_classification_none
+    kind: c
+    definition: CHECK ((((raw_large_code = '0000'::text) = (large_code IS NULL)) AND
+      ((raw_medium_code = '0000'::text) = (medium_code IS NULL)) AND ((raw_small_code
+      = '0000'::text) = (small_code IS NULL)) AND ((large_code IS NULL) OR (large_code
+      = raw_large_code)) AND ((medium_code IS NULL) OR (medium_code = raw_medium_code))
+      AND ((small_code IS NULL) OR (small_code = raw_small_code))))
+    validated: true
+  - name: ck_sector_classification_raw
+    kind: c
+    definition: CHECK (((raw_large_code ~ '^[0-9]{4}$'::text) AND (raw_medium_code
+      ~ '^[0-9]{4}$'::text) AND (raw_small_code ~ '^[0-9]{4}$'::text)))
+    validated: true
+  - name: ck_sector_classification_sha
+    kind: c
+    definition: CHECK (((raw_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256
+      ~ '^[0-9a-f]{64}$'::text)))
+    validated: true
+  - name: ck_sector_classification_taxonomy
+    kind: c
+    definition: CHECK ((taxonomy = 'KIS_INDEX_SECTOR'::text))
+    validated: true
+  - name: sector_classification_pkey
+    kind: p
+    definition: PRIMARY KEY (market, instrument_code, as_of_date, raw_run_id)
+    validated: true
+apiName: ExchangeSecurityClassification
+displayName: Exchange security classification
+pluralDisplayName: Exchange security classifications
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- ExchangeSecurityClassification_ForSecurity_Equity
+- ExchangeSecurityClassification_ForSecurity_ETF

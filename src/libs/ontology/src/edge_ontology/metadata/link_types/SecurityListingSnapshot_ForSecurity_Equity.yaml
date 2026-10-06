@@ -1,0 +1,29 @@
+id: SecurityListingSnapshot_ForSecurity_Equity
+source: SecurityListingSnapshot
+definition:
+  name: ForSecurity
+  label: ForSecurity
+  description: The security identified by the provider for this dated observation.
+  target: Equity
+  sourceProperty: instrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forSecurityEquity
+  displayName: ForSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: listingSnapshots
+    displayName: Listing snapshots
+    description: Listing-market and primary-share designation reported for one security
+      in a dated provider snapshot.
+    pluralDisplayName: Listing snapshots
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: SecurityListingSnapshot
+    foreignKeyProperty: instrumentId
+    referencedObjectType: Equity

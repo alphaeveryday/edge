@@ -1,0 +1,182 @@
+formatVersion: 2
+name: MarketIndex
+label: Market index
+description: A named market index that can serve as an ETF benchmark. One record defines
+  the index and its provider identifiers; it does not contain the index's daily values.
+group: Macro & indices
+primaryKey: id
+identity:
+  columns:
+  - market_series_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal identifier of the index definition, shared with the underlying
+      market-series record.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - market_series_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  seriesName:
+    label: Series name
+    description: Human-readable name of the market index.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: seriesName
+    displayName: Series name
+    status: experimental
+    dataType: String
+  sourceCode:
+    label: Source code
+    description: Code identifying the source provider in the source registry.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceCode
+    displayName: Source code
+    status: experimental
+    dataType: String
+  sourceSeriesId:
+    label: Source series id
+    description: Identifier used by the source provider for this index series.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceSeriesId
+    displayName: Source series id
+    status: experimental
+    dataType: String
+  marketCode:
+    label: Market code
+    description: Market identifier recorded by the provider for this index series.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: marketCode
+    displayName: Market code
+    status: experimental
+    dataType: String
+  currencyCode:
+    label: Currency code
+    description: Three-letter currency code associated with the security or market
+      index.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: currencyCode
+    displayName: Currency code
+    status: experimental
+    dataType: String
+  regions:
+    label: Geographic scope
+    description: Geographic markets represented by the index, expressed as country
+      or regional codes.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: No provider-and-series geographic classification has been verified.
+      Prepare a mapping using both sourceCode and sourceSeriesId.
+    apiName: regions
+    displayName: Geographic scope
+    status: experimental
+    dataType: String[]
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: market_series
+  joins: []
+  filters:
+  - column: series_type
+    value: INDEX
+  properties:
+    id:
+      alias: base
+      table: market_series
+      column: market_series_id
+    seriesName:
+      alias: base
+      table: market_series
+      column: series_name
+    sourceCode:
+      alias: base
+      table: market_series
+      column: source_code
+    sourceSeriesId:
+      alias: base
+      table: market_series
+      column: source_series_id
+    marketCode:
+      alias: base
+      table: market_series
+      column: market_code
+    currencyCode:
+      alias: base
+      table: market_series
+      column: currency_code
+    regions:
+      kind: unmapped
+      reason: No provider-and-series geographic classification has been verified.
+        Prepare a mapping using both sourceCode and sourceSeriesId.
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - market_series_id
+  tableConstraints:
+  - name: ck_market_series_currency_code
+    kind: c
+    definition: CHECK (((currency_code IS NULL) OR ((currency_code)::text ~ '^[A-Z]{3}$'::text)))
+    validated: true
+  - name: ck_market_series_status
+    kind: c
+    definition: CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying,
+      'INACTIVE'::character varying])::text[])))
+    validated: true
+  - name: ck_market_series_type
+    kind: c
+    definition: CHECK (((series_type)::text = ANY ((ARRAY['INDEX'::character varying,
+      'ETF_PROXY'::character varying, 'FX'::character varying, 'RATE'::character varying])::text[])))
+    validated: true
+  - name: market_series_pkey
+    kind: p
+    definition: PRIMARY KEY (market_series_id)
+    validated: true
+  - name: uq_market_series_source
+    kind: u
+    definition: UNIQUE (source_code, source_series_id)
+    validated: true
+apiName: MarketIndex
+displayName: Market index
+pluralDisplayName: Market indexes
+titleProperty: seriesName
+status: experimental
+visibility: normal
+linkTypes: []

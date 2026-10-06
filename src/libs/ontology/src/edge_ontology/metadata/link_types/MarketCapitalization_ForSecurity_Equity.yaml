@@ -1,0 +1,29 @@
+id: MarketCapitalization_ForSecurity_Equity
+source: MarketCapitalization
+definition:
+  name: ForSecurity
+  label: ForSecurity
+  description: The security identified by the provider for this dated observation.
+  target: Equity
+  sourceProperty: instrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forSecurityEquity
+  displayName: ForSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: marketCapitalizations
+    displayName: Market capitalizations
+    description: A market-capitalization observation reported for a security in a
+      dated provider snapshot. Currency and capitalization scope describe the amount.
+    pluralDisplayName: Market capitalizations
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: MarketCapitalization
+    foreignKeyProperty: instrumentId
+    referencedObjectType: Equity

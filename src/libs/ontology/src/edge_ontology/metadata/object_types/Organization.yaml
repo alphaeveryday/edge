@@ -1,0 +1,153 @@
+formatVersion: 2
+name: Organization
+label: Organization
+description: A government body or institution registered as an actor. The current
+  type includes GOVERNMENT and INSTITUTION actors; companies are represented by Company.
+group: Reference
+primaryKey: id
+identity:
+  columns: &id001
+  - actor_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal actor identifier of the government body or institution.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - constraint: fk_actor_entity
+        table: actor
+        columns:
+        - actor_id
+        - entity_type
+        target_table: entity
+        target_columns:
+        - entity_id
+        - entity_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  name:
+    label: Name
+    description: Government-body or institution display name stored in the entity
+      registry.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: name
+    displayName: Name
+    status: experimental
+    dataType: String
+  actorType:
+    label: Actor type
+    description: 'Organization category: GOVERNMENT for a government body or INSTITUTION
+      for an institution.'
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: actorType
+    displayName: Actor type
+    status: experimental
+    dataType: String
+  countryCode:
+    label: Country code
+    description: Two-letter country code recorded in the actor profile. It does not
+      describe all countries where the company or institution operates.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: countryCode
+    displayName: Country code
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: actor
+  joins:
+  - alias: entity
+    from: base
+    table: entity
+    joinType: left
+    constraint: fk_actor_entity
+    'on':
+    - source: actor_id
+      target: entity_id
+    - source: entity_type
+      target: entity_type
+  filters:
+  - column: actor_type
+    operator: in
+    values:
+    - GOVERNMENT
+    - INSTITUTION
+  properties:
+    id:
+      alias: base
+      table: actor
+      column: actor_id
+    name:
+      alias: entity
+      table: entity
+      column: display_name
+    actorType:
+      alias: base
+      table: actor
+      column: actor_type
+    countryCode:
+      alias: base
+      table: actor
+      column: country_code
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: actor_pkey
+    kind: p
+    definition: PRIMARY KEY (actor_id)
+    validated: true
+  - name: ck_actor_country_code
+    kind: c
+    definition: CHECK (((country_code IS NULL) OR ((country_code)::text ~ '^[A-Z]{2}$'::text)))
+    validated: true
+  - name: ck_actor_type
+    kind: c
+    definition: CHECK (((actor_type)::text = ANY ((ARRAY['COMPANY'::character varying,
+      'GOVERNMENT'::character varying, 'INSTITUTION'::character varying, 'PERSON'::character
+      varying, 'OTHER'::character varying])::text[])))
+    validated: true
+  - name: fk_actor_entity
+    kind: f
+    definition: FOREIGN KEY (actor_id, entity_type) REFERENCES entity(entity_id, entity_type)
+      ON DELETE CASCADE
+    validated: true
+  - name: uq_actor_id_type
+    kind: u
+    definition: UNIQUE (actor_id, actor_type)
+    validated: true
+apiName: Organization
+displayName: Organization
+pluralDisplayName: Organizations
+titleProperty: name
+status: experimental
+visibility: normal
+linkTypes:
+- Organization_ParticipatesIn_SourceEvent
