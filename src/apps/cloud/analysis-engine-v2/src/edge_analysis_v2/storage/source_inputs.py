@@ -72,7 +72,8 @@ def financial_inputs(conn, analysis_at, instrument_ids):
     was never confirmed but was attempted appears as an all-``None`` row with
     ``version.status == "UNCONFIRMED"`` (gap reason REPORT_UNCONFIRMED). Dropping an incomplete latest quarter would let the
     valuation tool slide to the previous four quarters and report a stale ratio as current, so
-    the hole is kept in place and ``valuation.calculate`` fails on it instead.
+    the hole is kept in place and ``valuation.calculate`` withholds the ratio that needs it instead
+    (PER for an EPS hole in the latest four quarters, PBR for a missing latest BPS).
     Derived Q4 EPS (``FY_MINUS_9M``) is passed through with its derivation so the caller can
     decide whether an approximation is acceptable.
     """

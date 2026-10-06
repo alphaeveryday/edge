@@ -72,7 +72,7 @@ def test_database_factor_tool_version_moves_with_its_response_shape():
     # 불변 툴 ID(이름:버전) 아래 바뀐 모양과 옛 모양이 섞이면 저장된 근거를 재현할 수 없다 — DB 모드도 버전을 올린다.
     tools = DatabaseTools(source() | {'prices': [], 'price_snapshots': []})
     versions = {d['function_name']: d['version'] for d in tools.definitions}
-    assert versions['get_instrument_factors'] == 'database-v4'  # Weighted figures now carry observed_weight_ratio.
+    assert versions['get_instrument_factors'] == 'database-v5'  # Fund ratios follow the 70% per-ratio coverage rule.
     # Whole-ETF figures are allowed from 70% observed weight; the same name must not mix old and new meaning.
     assert versions['get_etf_holdings'] == 'database-v2'
     # The audit store also freezes descriptions: moved citation instructions need a new identity.

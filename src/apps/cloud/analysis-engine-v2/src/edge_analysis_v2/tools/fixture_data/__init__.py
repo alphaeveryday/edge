@@ -50,7 +50,7 @@ class FixtureTools:
                          'items': {'type': 'string', 'enum': list(instrument_factors.FACTORS)}}},
             lambda **args: instrument_factors.read(self.fixture, **args),
             instrument_factors.FORMULA_LATEX, ['종목 가격', '확정 수급', '구성종목 비중', '공개 재무', '거시 관측', 'ETF 분배금·좌수'],
-            required=['instrument_id'], version='v3')
+            required=['instrument_id'], version='v4')
 
     def _register(self, name, description, parameters, callback, formula, sources, *, version="v1", required=None):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources, "version": version, "required": list(parameters) if required is None else required}
