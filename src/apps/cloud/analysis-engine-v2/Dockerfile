@@ -8,7 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1001 analysis
 COPY apps/cloud/analysis-engine-v2 ./analysis-engine-v2
-RUN pip install --no-cache-dir './analysis-engine-v2[cloud]' \
+# Dependencies come from the workspace lock (requirements.lock is exported from src/uv.lock), so two
+# builds of one commit install the same versions. Regenerate it with the command in its header.
+ARG IMAGE_REVISION=unknown
+ENV IMAGE_REVISION=$IMAGE_REVISION
+RUN pip install --no-cache-dir --require-hashes -r ./analysis-engine-v2/requirements.lock \
+    && pip install --no-cache-dir --no-deps ./analysis-engine-v2 \
     && python -c "from importlib.resources import files; assert (files('edge_analysis_v2.cloud') / 'request.schema.json').is_file(); assert (files('edge_analysis_v2.prompts') / 'outlook.yaml').is_file(); assert (files('edge_analysis_v2.skills') / 'hypothesis-analysis-workflow' / 'SKILL.md').is_file(); assert (files('edge_analysis_v2.skills') / 'etf-hypothesis-analysis' / 'SKILL.md').is_file()"
 VOLUME ["/tmp"]
 USER analysis

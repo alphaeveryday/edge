@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           account="$(aws sts get-caller-identity --query Account --output text)"
           image="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-${GITHUB_SHA}"
-          docker build --platform linux/amd64 -f src/apps/cloud/analysis-engine-v2/Dockerfile -t "$image" src
+          docker build --platform linux/amd64 --build-arg IMAGE_REVISION="${GITHUB_SHA}" -f src/apps/cloud/analysis-engine-v2/Dockerfile -t "$image" src
           docker run --rm --read-only --cap-drop ALL --entrypoint python "$image" -c "from importlib.resources import files; import os, subprocess, tempfile; assert os.getuid()==1001; tempfile.TemporaryDirectory().cleanup(); subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
           docker push "$image"
           echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
