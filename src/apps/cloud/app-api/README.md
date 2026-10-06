@@ -1,6 +1,6 @@
 # app-api — ETF 전망 컨센서스 투표
 
-PRD_ETF_투표_Redis_Failover(2026-09-13)의 로컬 실험용 API. 투표 단위는 전망(forecast)이다 — 같은 ETF에 전망이 여러 개 열릴 수 있으므로 ETF가 아니라 전망에 표가 붙는다. 전망 엔티티는 아직 없고 forecastId는 Long 식별자다. 사용자당 1표를 유지하되 재투표로 선택을 바꿀 수 있다(마지막 선택 우선, 같은 선택 재투표는 no-op). 기존 PostgreSQL 데이터는 자동 이관하지 않는다. MySQL용 `db/etf-migration`과 별도 Flyway history table을 사용한다. 과거 `db/migration`은 기존 스키마 기록이다.
+PRD_ETF_투표_Redis_Failover(2026-09-13)의 로컬 실험용 API. 투표 단위는 전망(forecast)이다 — 같은 ETF에 전망이 여러 개 열릴 수 있으므로 ETF가 아니라 전망에 표가 붙는다. 전망 엔티티는 아직 없고 forecastId는 Long 식별자다. 사용자당 1표를 유지하되 재투표로 선택을 바꿀 수 있다(마지막 선택 우선, 같은 선택 재투표는 no-op). DB 는 PostgreSQL 이다(ADR-0056, MySQL 에서 전환). `db/etf-migration`과 별도 Flyway history table을 사용한다. 과거 `db/migration`은 기존 스키마 기록이다.
 
 ```sh
 # 이 디렉터리에서
@@ -21,7 +21,7 @@ Redis 접근에는 Resilience4j 서킷 브레이커(인스턴스 `redis`)를 얹
 클라이언트 timeout 옵션 의미는 [Lettuce 공식 문서](https://github.com/redis/lettuce/blob/main/docs/advanced-usage/client-options.md)를 참고했다. 500ms는 커맨드 제한이며, 전체 HTTP 지연·5분 복구는 부하 실험으로 판정해야 한다.
 
 ```sh
-# src 디렉터리에서: 실제 MySQL·Redis Docker 컨테이너 필요
+# src 디렉터리에서: 실제 PostgreSQL·Redis Docker 컨테이너 필요
 ./gradlew :apps:cloud:app-api:test
 # 기존 compose를 내려 포트 8080, 55440, 6390을 비운 후 experiments에서
 python3 run-failover.py S2  # S1·S2·S4·S5(S3 retry 는 제거돼 거부), 각 3분 부하, 60초 후 장애
@@ -59,7 +59,7 @@ replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤�
 
 개념 설명은 [블로그](https://choyoungseo20.github.io/posts/redis-cluster/)에 있다.
 
-DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 auto-increment 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(forecast_id, user_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON DUPLICATE KEY UPDATE`(원자 upsert)로 한다. `VoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. 커밋 순서와 리스너 실행 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
+DB 접근은 Spring Data JPA의 `VoteRepository extends JpaRepository<Vote, Long>`과 `@Query`를 사용한다. Vote는 identity 대리 키 엔티티이고 사용자당 1행은 `UNIQUE(forecast_id, user_id)` 제약이 강제한다 — 신규/변경 판정은 SELECT 선검사가 아니라 네이티브 `INSERT ... ON CONFLICT DO UPDATE`(원자 upsert)로 한다. `VoteService`의 트랜잭션이 커밋된 뒤 `VoteCacheListener`(`@TransactionalEventListener`, AFTER_COMMIT)가 Redis를 갱신한다 — 커밋 전 캐시 갱신(롤백 시 유령 표)이 구조적으로 불가능하다. 커밋 순서와 리스너 실행 순서는 요청 간에 직렬화되지 않으므로, 같은 사용자의 서로 다른 선택이 동시에 들어오면 DB 와 Redis 가 다음 재조정까지 어긋날 수 있다(같은 선택의 동시 재투표는 no-op 이라 무관). Flyway가 스키마를 관리하고 Hibernate는 validate만 수행한다. 기존 S2 부하 수치는 JDBC 구현에서 측정했으므로 JPA 성능 수치로 해석하지 않는다.
 
 코드 스타일은 로컬 kuke-board/service/view를 참고했다. 서비스(`VoteService`)는 트랜잭션 쓰기+이벤트 발행과 서킷 폴백 집계, event 패키지의 리스너가 커밋 후 캐시 갱신, JPA Repository는 쿼리 선언, VoteCountRepository는 Redis 명령을 담당한다. 참고 코드의 Redis 선저장·주기적 백업 방식은 적용하지 않았다.
 

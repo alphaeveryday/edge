@@ -19,7 +19,7 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
     @Modifying
     @Query(value = """
             insert into forecast_vote(forecast_id, user_id, choice) values (:forecast, :user, :choice)
-            as new on duplicate key update choice = new.choice
+            on conflict (forecast_id, user_id) do update set choice = excluded.choice
             """, nativeQuery = true)
     void upsert(@Param("forecast") Long forecastId, @Param("user") Long userId, @Param("choice") String choice);
 
