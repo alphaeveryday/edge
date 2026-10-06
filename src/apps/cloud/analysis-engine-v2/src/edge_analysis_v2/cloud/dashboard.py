@@ -142,7 +142,8 @@ class CloudDashboard:
                 if cached and cached.get('workflow_status') in ('SUCCEEDED','FAILED','TIMED_OUT','ABORTED'):
                     continue
                 state=self.sfn.describe_execution(executionArn=arn)
-                request=decode_request(state['input'])
+                # Workflow inputs include the worker's trigger coordinates; only the start endpoint is public.
+                request=decode_request(state['input'],internal=True)
                 identity=request['analysis_id']
                 job=self._json(identity,'job.json') or request | {'origin':'cloud','scenario':'database','data_source':'database',
                     'status':'queued','started_at':state['startDate'].isoformat()}

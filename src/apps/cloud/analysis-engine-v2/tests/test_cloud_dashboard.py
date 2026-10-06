@@ -73,3 +73,23 @@ def test_local_auth_failure_does_not_change_cloud_job_state(tmp_path):
     observer.sync()
     assert observer.sync_status['status']=='error'
     assert observer.jobs()==[before]
+
+
+def test_a_price_triggered_execution_does_not_stop_synchronization_of_the_others(tmp_path):
+    # WHY: trigger-started movement runs carry the worker's source coordinates in their workflow input. Rejecting
+    # that input as an invalid public request ended the whole sync, hiding every execution listed after it.
+    s3=Mock()
+    s3.get_paginator.return_value.paginate.return_value=[]
+    triggered=REQUEST | {'analysis_id':'b'*32,'kind':'movement',
+        'source':{'event_id':'evt-1','event_type':'PriceTriggerFired','trigger_id':'trg-1','generation':1}}
+    inputs={'arn:execution:'+triggered['analysis_id']:triggered,'arn:execution:'+REQUEST['analysis_id']:REQUEST}
+    sfn=Mock()
+    sfn.list_executions.return_value={'executions':[{'executionArn':arn} for arn in inputs]}
+    sfn.describe_execution.side_effect=lambda executionArn:{'status':'FAILED','input':json.dumps(inputs[executionArn]),
+        'startDate':datetime.now(timezone.utc)}
+    observer=CloudDashboard(tmp_path,s3=s3,sfn=sfn,bucket='bucket',state_machine='arn')
+    observer.sync()
+    assert observer.sync_status['status']!='error'
+    assert {job['analysis_id'] for job in observer.jobs()}=={triggered['analysis_id'],REQUEST['analysis_id']}
+    with pytest.raises(ValueError):
+        observer.start(triggered)   # the public start endpoint still refuses source coordinates
