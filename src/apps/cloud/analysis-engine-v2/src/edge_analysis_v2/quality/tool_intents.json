@@ -19,6 +19,22 @@
   "P-LO-1": {
    "cutoff": "2026-10-05T14:59:59+00:00",
    "question": "한화오션이 발행한 상장 주식이 보통주 말고 더 있는지 확인해 줘."
+  },
+  "P-EH-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "PLUS K방산(종목코드 449450)이 2026-10-02에 담고 있던 종목과 비중을 빠짐없이 알려 줘."
+  },
+  "P-EH-2": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "PLUS K방산(종목코드 449450)의 2026-10-04 구성종목 중 비중이 가장 큰 종목을 알려 줘. 그 날짜 자료가 없으면 어느 날짜 자료인지 밝혀 줘."
+  },
+  "P-SH-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "PLUS K방산(종목코드 449450)의 2026-10-02 구성에서 비중 상위 3종목이 차지하는 비중 합계와, 전체 구성종목 비중 합계를 알려 줘."
+  },
+  "P-CH-1": {
+   "cutoff": "2026-10-05T14:59:59+00:00",
+   "question": "한화에어로스페이스(종목코드 012450)는 2026-09-11에 PLUS K방산(종목코드 449450)에 편입돼 있었나? 2026-10-02 구성과 비교해 비중이 어떻게 달라졌는지도 알려 줘."
   }
  },
  "tools": {
@@ -248,7 +264,7 @@
      "id": "SO.read",
      "kind": "해석",
      "probe": "P-SO-2",
-     "claim": "전체 건수 37을 쓰고, 한 번의 검색으로 전체가 확인됐으면 다른 종류·다른 검색어로 다시 찾지 않는다",
+     "claim": "전체 건수 37을 쓰고, 다른 검색어로 다시 찾지 않는다(주식과 ETF 두 종류를 한 번씩 보는 것은 허용)",
      "check": {
       "answer": {
        "contains": [
@@ -257,7 +273,7 @@
       },
       "count": {
        "tool": "search_objects",
-       "max": 1
+       "max": 2
       }
      }
     },
@@ -273,6 +289,18 @@
         "294870",
         "079430"
        ]
+      }
+     }
+    },
+    {
+     "id": "SO.lean",
+     "kind": "비호출",
+     "probe": "P-SO-2",
+     "claim": "이름 검색만 필요한 질문에 구조를 읽지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_ontology_schema",
+       "max": 0
       }
      }
     }
@@ -385,6 +413,298 @@
      "check": {
       "count": {
        "tool": "get_linked_objects",
+       "max": 0
+      }
+     }
+    }
+   ]
+  },
+  "get_etf_holdings": {
+   "hypotheses": [
+    {
+     "id": "EH.select",
+     "kind": "선택",
+     "probe": "P-EH-1",
+     "claim": "ETF 구성은 이 도구로 읽고 보유 내역을 이름 검색으로 모으지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_etf_holdings",
+       "min": 1,
+       "max": 1
+      },
+      "errors": {
+       "tool": "get_etf_holdings"
+      }
+     }
+    },
+    {
+     "id": "EH.args",
+     "kind": "인자",
+     "probe": "P-EH-1",
+     "claim": "질문의 날짜를 그대로, exact로 넘긴다",
+     "check": {
+      "first_arguments": {
+       "tool": "get_etf_holdings",
+       "equals": {
+        "holdings_date": "2026-10-02",
+        "date_policy": "exact"
+       }
+      }
+     }
+    },
+    {
+     "id": "EH.path",
+     "kind": "비호출",
+     "probe": "P-EH-1",
+     "claim": "코드가 주어진 ETF는 코드 조회 한 번으로 찾고, 구조 읽기·이름 검색·관계 따라가기를 하지 않는다",
+     "check": {
+      "count": {
+       "tool": "resolve_securities",
+       "max": 1
+      },
+      "errors": {
+       "tool": "resolve_securities"
+      }
+     }
+    },
+    {
+     "id": "EH.extra",
+     "kind": "비호출",
+     "probe": "P-EH-1",
+     "claim": "코드 조회로 ETF를 찾은 뒤 같은 ETF를 이름으로 다시 검색하지 않는다",
+     "check": {
+      "count": {
+       "tool": "search_objects",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "EH.extra2",
+     "kind": "비호출",
+     "probe": "P-EH-1",
+     "claim": "구조 읽기와 관계 따라가기 없이 끝낸다",
+     "check": {
+      "count": {
+       "tool": "get_ontology_schema",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "EH.answer",
+     "kind": "답변 반영",
+     "probe": "P-EH-1",
+     "claim": "가장 큰 종목과 가장 작은 종목이 저장된 비중대로(반올림 허용, 100%로 환산하지 않음) 답에 있다",
+     "check": {
+      "answer": {
+       "contains": [
+        "한화에어로스페이스",
+        "24.2",
+        "엠앤씨솔루션",
+        "0.2"
+       ]
+      }
+     }
+    },
+    {
+     "id": "EH.date",
+     "kind": "해석",
+     "probe": "P-EH-2",
+     "claim": "그 날짜 자료가 없으면 이전 최근 자료를 고른다",
+     "check": {
+      "called_with": {
+       "tool": "get_etf_holdings",
+       "equals": {
+        "holdings_date": "2026-10-04",
+        "date_policy": "latest_on_or_before"
+       }
+      },
+      "count": {
+       "tool": "get_etf_holdings",
+       "max": 2
+      }
+     }
+    },
+    {
+     "id": "EH.dated",
+     "kind": "답변 반영",
+     "probe": "P-EH-2",
+     "claim": "실제로 쓴 날짜가 10월 2일임을 답에 밝힌다",
+     "check": {
+      "answer": {
+       "contains": [
+        "한화에어로스페이스",
+        "2026-10-02"
+       ]
+      }
+     }
+    },
+    {
+     "id": "EH.stop",
+     "kind": "비호출",
+     "probe": "P-RS-1",
+     "claim": "종목 확인 질문에는 부르지 않는다",
+     "check": {
+      "count": {
+       "tool": "get_etf_holdings",
+       "max": 0
+      }
+     }
+    },
+    {
+     "id": "EH.ref",
+     "kind": "인자",
+     "probe": "P-CH-1",
+     "claim": "종목코드를 ETF 식별자로 넣어 실패하지 않는다",
+     "check": {
+      "errors": {
+       "tool": "get_etf_holdings"
+      }
+     }
+    }
+   ]
+  },
+  "summarize_etf_holdings": {
+   "hypotheses": [
+    {
+     "id": "SH.select",
+     "kind": "선택",
+     "probe": "P-SH-1",
+     "claim": "답에 쓸 비중 합계는 직접 더하지 않고 이 도구로 계산한다",
+     "check": {
+      "count": {
+       "tool": "summarize_etf_holdings",
+       "min": 2
+      },
+      "errors": {
+       "tool": "summarize_etf_holdings"
+      }
+     }
+    },
+    {
+     "id": "SH.args",
+     "kind": "인자",
+     "probe": "P-SH-1",
+     "claim": "상위 3종목은 top_n=3으로 요청한다",
+     "check": {
+      "called_with": {
+       "tool": "summarize_etf_holdings",
+       "equals": {
+        "top_n": 3
+       }
+      }
+     }
+    },
+    {
+     "id": "SH.chain",
+     "kind": "연결",
+     "probe": "P-SH-1",
+     "claim": "구성 조회 결과의 저장된 선택을 그대로 넘긴다",
+     "check": {
+      "passes_reference": {
+       "tool": "get_etf_holdings",
+       "to": [
+        "summarize_etf_holdings"
+       ]
+      },
+      "count": {
+       "tool": "get_etf_holdings",
+       "max": 1
+      }
+     }
+    },
+    {
+     "id": "SH.answer",
+     "kind": "답변 반영",
+     "probe": "P-SH-1",
+     "claim": "계산된 58.02%와 99.89%를 답한다(소수 첫째 자리 반올림 허용)",
+     "check": {
+      "answer": {
+       "contains": [
+        "58.0",
+        "99.9"
+       ]
+      }
+     }
+    },
+    {
+     "id": "SH.stop",
+     "kind": "비호출",
+     "probe": "P-RS-1",
+     "claim": "구성과 무관한 질문에는 부르지 않는다 (구성 나열에서 합계를 언급할 때 부르는 것은 의도한 동작으로 확인)",
+     "check": {
+      "count": {
+       "tool": "summarize_etf_holdings",
+       "max": 0
+      }
+     }
+    }
+   ]
+  },
+  "compare_holdings_dates": {
+   "hypotheses": [
+    {
+     "id": "CH.select",
+     "kind": "선택",
+     "probe": "P-CH-1",
+     "claim": "두 날짜의 비중 차이는 직접 빼지 않고 이 도구로 계산한다",
+     "check": {
+      "count": {
+       "tool": "compare_holdings_dates",
+       "min": 1
+      },
+      "errors": {
+       "tool": "compare_holdings_dates"
+      }
+     }
+    },
+    {
+     "id": "CH.chain",
+     "kind": "연결",
+     "probe": "P-CH-1",
+     "claim": "두 날짜의 구성을 읽고(날짜가 없어 다시 읽는 것 포함 4회 이하) 저장된 선택을 넘긴다",
+     "check": {
+      "passes_reference": {
+       "tool": "get_etf_holdings",
+       "to": [
+        "compare_holdings_dates"
+       ]
+      },
+      "count": {
+       "tool": "get_etf_holdings",
+       "min": 2,
+       "max": 4
+      }
+     }
+    },
+    {
+     "id": "CH.read",
+     "kind": "해석",
+     "probe": "P-CH-1",
+     "claim": "없는 날짜를 가까운 날짜로 바꿨다면 실제 날짜를 밝히고, 비중 변화를 매매로 단정하지 않는다"
+    },
+    {
+     "id": "CH.answer",
+     "kind": "답변 반영",
+     "probe": "P-CH-1",
+     "claim": "10월 2일 비중 24.2%를 답한다",
+     "check": {
+      "answer": {
+       "contains": [
+        "24.2"
+       ]
+      }
+     }
+    },
+    {
+     "id": "CH.stop",
+     "kind": "비호출",
+     "probe": "P-EH-1",
+     "claim": "한 날짜만 묻는 질문에는 부르지 않는다",
+     "check": {
+      "count": {
+       "tool": "compare_holdings_dates",
        "max": 0
       }
      }

@@ -26,7 +26,7 @@ class GraphFacts:
         self.run=run;self.catalog=catalog;self.cutoff=cutoff;self.max_rows=max_rows
         self.objects={o['id']:o for o in catalog['objects']}
         self.links={r['id']:r for r in catalog['relations']}
-        self.queries=[]
+        self.queries=[];self.totals={}
 
     def query(self, statement, parameters, *, objects=(), links=()):
         started=perf_counter()
@@ -42,6 +42,14 @@ class GraphFacts:
     def properties(self, kind):
         if kind not in self.objects:raise ValueError('Unknown object type: '+kind)
         return {c['property']:c for c in self.objects[kind]['columns'] if c.get('property')}
+
+    def total(self, kind):
+        # One count per type and run: lets the agent judge coverage without probing with name variants.
+        if kind not in self.totals:
+            params={};clause=self.cutoff_clause(kind,'n',params)
+            rows=self.query('MATCH (n:'+name(kind)+')'+(' WHERE '+clause if clause else '')+' RETURN count(n) AS total',params,objects=[kind])
+            self.totals[kind]=rows[0]['total'] if rows else 0
+        return self.totals[kind]
 
     def text_properties(self, kind):
         props=self.properties(kind)

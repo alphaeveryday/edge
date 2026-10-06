@@ -10,6 +10,8 @@ CATALOG = {'modelChanged': False, 'relations': [], 'objects': [{'id': 'Equity', 
 def make(tmp_path, rows=25):
     calls = []
     def run(statement, parameters):
+        if 'count(n)' in statement:
+            return [{'total': 2766}]
         calls.append((statement, parameters))
         return [{'id': 'e%02d' % i, 'properties': {'name': 'Hyundai %d' % i}} for i in range(rows)]
     return GraphTools(run, CATALOG, tmp_path, '2026-10-05T00:00:00+00:00'), calls
@@ -22,6 +24,7 @@ def test_the_first_page_is_marked_incomplete_and_the_stored_dataset_holds_every_
     assert (len(result['items']), result['total_rows'], result['page']) == (20, 25, {'complete': False, 'next_offset': 20})
     assert result['data_scope']['complete_within_query'] is True and result['data_scope']['query'] == 'Hyundai'
     assert result['data_scope']['matched_properties'] == ['id', 'name', 'ticker']
+    assert result['data_scope']['objects_of_this_type_in_graph'] == 2766
     rest = tools.call('get_result_page', {'dataset_ref': result['dataset_ref'], 'offset': 20})['result']
     assert [i['object_id'] for i in rest['items']] == ['e20', 'e21', 'e22', 'e23', 'e24'] and len(calls) == 1
 

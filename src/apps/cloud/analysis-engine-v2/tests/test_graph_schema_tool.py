@@ -25,6 +25,7 @@ def test_the_overview_lists_every_type_and_link_but_no_properties(tmp_path):
 
 
 def test_named_types_return_only_agent_visible_property_fields_and_their_links(tmp_path):
+    assert tools(tmp_path).call('get_ontology_schema', {'object_types': ['ETF']})['result']['links'] == ['ETFHolding_ForETF_ETF']
     result = tools(tmp_path).call('get_ontology_schema', {'object_types': ['Company']})['result']
     assert result['objects'] == [{'object_type': 'Company', 'description': 'Company description', 'properties': [
         {'property': 'id', 'type': 'string', 'description': 'identifier', 'mappingStatus': 'ready'}]}]

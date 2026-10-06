@@ -27,8 +27,7 @@ def test_every_linked_object_is_returned_with_its_source_and_a_missing_start_obj
     result = tools.call('get_linked_objects', {'object_refs': refs, 'link_type': 'Company_Issues_Equity'})['result']
     assert [(i['source']['object_id'], i['target']['object_id'], i['direction']) for i in result['items']] == [
         ('c1', 'e1', 'forward'), ('c1', 'e2', 'forward')]
-    assert result['selection']['completeness'] == 'partial'
-    assert [i['status'] for i in result['selection']['items']] == ['resolved', 'not_found_at_cutoff']
+    assert result['data_scope']['start_objects_not_found'] == ['missing'] and 'selection' not in result
     assert '(a:`Company`)-[r:`Company_Issues_Equity`]->(n:`Equity`)' in calls[-1][0]
 
 

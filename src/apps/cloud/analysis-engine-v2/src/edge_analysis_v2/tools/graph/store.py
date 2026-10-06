@@ -22,6 +22,8 @@ class EvidenceStore:
         response={'tool_run_id':identifier,'result':copy.deepcopy(result)}
         if dataset is not None:
             response['result']['dataset_ref']={'tool_run_id':identifier,'path':'/dataset'}
+            if dataset.get('selection') is not None:
+                response['result']['selection_ref']={'tool_run_id':identifier,'path':'/selection'}
         record={'response':response,'tool':name,'arguments':arguments,'cutoff':self.cutoff,
                 'elapsed_ms':elapsed_ms,'queries':queries,'error':error,
                 'dataset':dataset,
@@ -53,6 +55,8 @@ class EvidenceStore:
             raise ValueError('Reference cutoff or execution status mismatch')
         if kind=='dataset' and record.get('dataset') is not None:
             return copy.deepcopy(record['dataset'])
+        if kind=='selection' and (record.get('dataset') or {}).get('selection') is not None:
+            return copy.deepcopy(record['dataset']['selection'])
         try:return copy.deepcopy(record['response']['result'][kind])
         except KeyError:raise ValueError('Requested reference kind is unavailable') from None
 

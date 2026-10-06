@@ -19,21 +19,25 @@ def make(tmp_path, kinds=('Equity',)):
 
 def test_missing_and_duplicate_codes_stay_in_the_selection_and_one_query_serves_the_batch(tmp_path):
     tools, calls = make(tmp_path)
-    result = tools.call('resolve_securities', {'tickers': ['001234', '999999', '001234'], 'market_code': 'XKRX',
-                                               'security_type': 'Equity'})['result']
+    output = tools.call('resolve_securities', {'tickers': ['001234', '999999', '001234'], 'market_code': 'XKRX',
+                                               'security_type': 'Equity'})
+    result = output['result']
     assert len(calls) == 1 and calls[0][1]['filter_0'] == ['001234', '999999'] and calls[0][1]['filter_1'] == 'XKRX'
-    selection = result['selection']
-    assert (selection['requested_count'], selection['distinct_count'], selection['completeness']) == (3, 2, 'partial')
-    assert [(i['requested_ticker'], i['status'], i['object_id']) for i in selection['items']] == [
+    assert result['selection'] == {'requested_count': 3, 'distinct_count': 2, 'completeness': 'partial', 'members': 2}
+    assert result['items'] == [
+        {'requested_ticker': '001234', 'status': 'resolved', 'object_type': 'Equity', 'object_id': 'eq_a', 'name': 'Alpha', 'candidates': []},
+        {'requested_ticker': '999999', 'status': 'not_found_at_cutoff', 'object_type': None, 'object_id': None, 'name': None, 'candidates': []}]
+    stored = tools.store.reference(result['selection_ref'], 'selection')
+    assert [(i['requested_ticker'], i['status'], i['object_id']) for i in stored['items']] == [
         ('001234', 'resolved', 'eq_a'), ('999999', 'not_found_at_cutoff', None)]
     assert result['data_scope']['identity'] == 'exchange market plus exact ticker; no name guessing'
 
 
 def test_a_code_shared_by_a_stock_and_a_fund_is_ambiguous_with_both_candidates_not_the_first_match(tmp_path):
     tools, calls = make(tmp_path, kinds=('Equity', 'ETF'))
-    item = tools.call('resolve_securities', {'tickers': ['001234'], 'market_code': 'XKRX'})['result']['selection']['items'][0]
+    item = tools.call('resolve_securities', {'tickers': ['001234'], 'market_code': 'XKRX'})['result']['items'][0]
     assert len(calls) == 2
-    assert item['status'] == 'ambiguous' and item['object_id'] is None and item['object'] is None
+    assert item['status'] == 'ambiguous' and item['object_id'] is None and item['name'] is None
     assert sorted(c['object_id'] for c in item['candidates']) == ['eq_a', 'etf_dup']
 
 

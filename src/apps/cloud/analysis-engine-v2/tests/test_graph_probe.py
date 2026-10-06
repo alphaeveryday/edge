@@ -9,7 +9,7 @@ CATALOG = {'modelChanged': False, 'relations': [], 'objects': []}
 
 def test_a_probe_records_its_calls_and_judges_only_its_hypotheses(tmp_path):
     async def model(*, call, schemas, artifacts, **_):
-        assert [s['function']['name'] for s in schemas] == ['get_result_page', 'get_ontology_schema', 'search_objects', 'get_linked_objects', 'resolve_securities']
+        assert [s['function']['name'] for s in schemas] == ['get_result_page', 'get_ontology_schema', 'search_objects', 'get_linked_objects', 'get_etf_holdings', 'summarize_etf_holdings', 'compare_holdings_dates', 'resolve_securities']
         artifacts.mkdir(parents=True)
         (artifacts/'events.jsonl').write_text(json.dumps({'message_type': 'ResultMessage',
             'message': {'usage': {'input_tokens': 7, 'output_tokens': 2}}}) + '\n', encoding='utf8')

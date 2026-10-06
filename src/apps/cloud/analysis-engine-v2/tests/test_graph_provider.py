@@ -64,7 +64,7 @@ def test_wrong_arguments_and_unknown_tools_are_rejected_before_any_read(tmp_path
 def test_every_registered_tool_has_one_schema_and_one_administrator_definition(tmp_path):
     tools, _ = make(tmp_path)
     names = [s['function']['name'] for s in tools.schemas]
-    assert names == [d['function_name'] for d in tools.definitions] == ['get_result_page', 'get_ontology_schema', 'search_objects', 'get_linked_objects', 'resolve_securities', 'list_companies']
+    assert names == [d['function_name'] for d in tools.definitions] == ['get_result_page', 'get_ontology_schema', 'search_objects', 'get_linked_objects', 'get_etf_holdings', 'summarize_etf_holdings', 'compare_holdings_dates', 'resolve_securities', 'list_companies']
     assert tools.definitions[-1] == {'tool_id': 'list_companies:graph-v1', 'function_name': 'list_companies',
         'version': 'graph-v1', 'description': 'test', 'source_names': ['company']}
     with pytest.raises(ValueError, match='already registered'):
