@@ -15,7 +15,7 @@
 단, 초당한도가 HTTP 429 가 아니라 응답 본문(예 KIS EGW00201)으로 오는 벤더의 재시도는
 운반 계층이 본문 의미를 모르므로 각 어댑터가 처리한다(여긴 운반만).
 
-stdlib(urllib)만 사용해 의존성 없이 단위테스트에서 import 된다.
+stdlib(urllib·http.client)만 사용해 의존성 없이 단위테스트에서 import 된다.
 """
 
 from __future__ import annotations

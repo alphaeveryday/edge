@@ -117,17 +117,18 @@ kis.http.window caller=minute-price window=2026-10-02T05:32:00+00:00 status=VALI
 | 항목 | 뜻 |
 |---|---|
 | `attempts` | 실제 HTTP 발신 횟수. 토큰 발급과 재시도를 포함한다(성공 건수와 다르다) |
-| `rtt_ms` / `rtt_max_ms` | 발신부터 응답 본문 수신까지의 합계·최대. **KIS 응답 지연**은 여기에 쌓인다 |
+| `rtt_ms` / `rtt_max_ms` | 발신부터 응답 본문 수신까지의 합계·최대. **KIS 응답 지연**은 여기에 쌓인다. 연결을 새로 맺는 호출은 그 수립 시간(TCP·TLS)도 여기에 든다 |
 | `pace_wait_ms` | 발신 간격(또는 공유 호출 예산)을 기다린 시간 |
 | `kis_<코드>` | 거절 응답(`rt_cd≠0`)의 `msg_cd` 별 건수. 재시도로 끝내 성공해도 센다. 코드 형상이 아니면 `kis_OTHER` |
 | `rate_sleep_ms` | `EGW00201` 뒤 물러난 시간의 합. **유량 제한**은 `kis_EGW00201` 과 여기에 쌓인다 |
 | `rate_exhausted` | `EGW00201` 재시도 예산(5회)을 다 쓴 종목 수 |
 | `transport_retry` / `transport_backoff_ms` | 5xx·네트워크 실패 재시도 횟수와 그 대기 |
 | `err_<종류>` | 발신 실패 종류별 건수 — `err_http_503`, `err_TimeoutError` 등(상태코드·예외 클래스명) |
+| `connects` | 새로 맺은 연결 수. 실시간 수집은 KIS 연결을 다시 쓰므로(ALPHA-1153) 창당 몇 건이어야 한다 — `attempts` 에 가까우면 재사용이 안 되고 있는 것이다 |
 
 - 읽는 법: 동시 요청 1(기본)에서 `elapsed_ms ≈ rtt_ms + pace_wait_ms + rate_sleep_ms + transport_backoff_ms` 다.
   어느 항이 늘었는지가 원인을 가른다. 동시 요청이 켜지면 합계가 겹쳐 `elapsed_ms` 보다 커진다.
-- `attempts` 부터 `rate_exhausted` 까지 아홉 항목은 0 이어도 **이 순서로** 싣는다. 그 밖의 `kis_`·`err_`
+- `attempts` 부터 `rate_exhausted` 까지 아홉 항목은 0 이어도 **이 순서로** 싣는다. 그 밖의 `kis_`·`err_`·`connects`
   항목은 발생했을 때만 뒤에 붙는다. 이 로그가 배포되기 전 기간은 "발생 0회"가 아니라 "미관측"으로 읽는다.
 - 앱키·시크릿·토큰·URL·응답 본문·종목 코드는 싣지 않는다. 종목별 상세는 원장 `missing_units` 를 쓴다.
 - 조회(CloudWatch Logs Insights, 분 가격 워커 로그 그룹):
