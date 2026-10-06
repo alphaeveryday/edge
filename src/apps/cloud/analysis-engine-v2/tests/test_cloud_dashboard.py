@@ -114,3 +114,23 @@ def test_one_damaged_observation_is_reported_without_hiding_the_runs_after_it(tm
     assert [j['analysis_id'] for j in observer.jobs()]==[REQUEST['analysis_id']]
     assert observer.sync_status['status']=='error' and observer.sync_status['error'].startswith('1 run observation')
     sfn.list_executions.assert_called()
+
+
+def test_a_run_record_without_a_start_time_is_rejected_instead_of_breaking_every_listing(tmp_path):
+    source=tmp_path/'worker'
+    source.mkdir()
+    s3=MemoryS3()
+    job=REQUEST | {'origin':'cloud','status':'running','scenario':'database'}
+    Publisher(s3,'bucket',REQUEST['analysis_id'],source).publish(job | {'started_at':REQUEST['analysis_at']})
+    key=next(k for k in s3.objects if k.endswith('manifest.json'))
+    manifest=json.loads(s3.objects[key])
+    del manifest['job']['started_at']
+    s3.objects[key]=json.dumps(manifest).encode()
+    s3.get_paginator=Mock()
+    s3.get_paginator.return_value.paginate.return_value=[{'Contents':[{'Key':key,'ETag':'one'}]}]
+    sfn=Mock()
+    sfn.list_executions.return_value={'executions':[]}
+    observer=CloudDashboard(tmp_path/'local',s3=s3,sfn=sfn,bucket='bucket',state_machine='arn')
+    observer.sync()
+    assert observer.jobs()==[] and observer.sync_status['status']=='error'
+    assert key not in observer.etags
