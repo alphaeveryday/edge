@@ -1,45 +1,137 @@
-# exogenous.yaml — 이벤트 타입 정의(v0.2, 병합: roles+lifecycle+predicates+features). SSOT.
-
 types:
   EXOGENOUS.ACCIDENT.OPERATIONAL_DISRUPTION:
     family: EXOGENOUS
     lifecycle_model: OPERATIONS_LIFECYCLE
     stage_sensitive: true
-    predicates: [OCCUR, SUSPEND, RESUME, REPORT]
-    roles: {required: [OPERATOR], optional: [FACILITY, PRODUCT, LOCATION, CAPACITY_SHARE, EFFECTIVE_DATE], identity: [OPERATOR, FACILITY, PRODUCT], primary: [OPERATOR]}
-
+    predicates:
+    - OCCUR
+    - SUSPEND
+    - RESUME
+    - REPORT
+    roles:
+      required:
+      - OPERATOR
+      optional:
+      - FACILITY
+      - PRODUCT
+      - LOCATION
+      - CAPACITY_SHARE
+      - EFFECTIVE_DATE
+      identity:
+      - OPERATOR
+      - FACILITY
+      - PRODUCT
+      primary:
+      - OPERATOR
+    note: An accident interrupts operations at the identified operator or facility.
   EXOGENOUS.CONFLICT.OUTBREAK:
     family: EXOGENOUS
     lifecycle_model: EXOGENOUS_SHOCK_NO_LIFECYCLE
     stage_sensitive: false
-    predicates: [OCCUR, ESCALATE, REPORT]
-    roles: {required: [LOCATION], optional: [GEOGRAPHY, COMMODITY, EFFECTIVE_DATE], identity: [LOCATION], primary: [LOCATION]}
-
+    predicates:
+    - OCCUR
+    - ESCALATE
+    - REPORT
+    roles:
+      required:
+      - LOCATION
+      optional:
+      - GEOGRAPHY
+      - COMMODITY
+      - EFFECTIVE_DATE
+      identity:
+      - LOCATION
+      primary:
+      - LOCATION
+    note: A conflict begins or escalates in the identified location or between the
+      reported parties.
   EXOGENOUS.CONFLICT.RESOLUTION:
     family: EXOGENOUS
     lifecycle_model: CONFLICT_RESOLUTION_LIFECYCLE
     stage_sensitive: true
-    predicates: [REACH, SIGN, COLLAPSE]
-    roles: {required: [LOCATION], optional: [GEOGRAPHY, AUTHORITY, EFFECTIVE_DATE], identity: [LOCATION], primary: [LOCATION]}
-    note: "Parties reach/sign a ceasefire, peace deal, or truce that de-escalates or ends an armed conflict; inverse of CONFLICT.OUTBREAK. COLLAPSE=a deal falls apart."
-
+    predicates:
+    - REACH
+    - SIGN
+    - COLLAPSE
+    roles:
+      required:
+      - LOCATION
+      optional:
+      - GEOGRAPHY
+      - AUTHORITY
+      - EFFECTIVE_DATE
+      identity:
+      - LOCATION
+      primary:
+      - LOCATION
+    note: Parties reach/sign a ceasefire, peace deal, or truce that de-escalates or
+      ends an armed conflict; inverse of CONFLICT.OUTBREAK. COLLAPSE=a deal falls
+      apart.
   EXOGENOUS.CYBER.SERVICE_DISRUPTION:
     family: EXOGENOUS
     lifecycle_model: OPERATIONS_LIFECYCLE
     stage_sensitive: true
-    predicates: [OCCUR, SUSPEND, RESUME, REPORT]
-    roles: {required: [OPERATOR], optional: [SERVICE, CUSTOMER, LOCATION, EFFECTIVE_DATE], identity: [OPERATOR, SERVICE], primary: [OPERATOR, CUSTOMER]}
-
+    predicates:
+    - OCCUR
+    - SUSPEND
+    - RESUME
+    - REPORT
+    roles:
+      required:
+      - OPERATOR
+      optional:
+      - SERVICE
+      - CUSTOMER
+      - LOCATION
+      - EFFECTIVE_DATE
+      identity:
+      - OPERATOR
+      - SERVICE
+      primary:
+      - OPERATOR
+      - CUSTOMER
+    note: A cyber incident disrupts an identified service or operator.
   EXOGENOUS.DISASTER.OCCURRENCE:
     family: EXOGENOUS
     lifecycle_model: EXOGENOUS_SHOCK_NO_LIFECYCLE
     stage_sensitive: false
-    predicates: [OCCUR, STRIKE, REPORT]
-    roles: {required: [HAZARD], optional: [LOCATION, GEOGRAPHY, QUANTITY, AMOUNT, EFFECTIVE_DATE], identity: [HAZARD], primary: [HAZARD]}
-
+    predicates:
+    - OCCUR
+    - STRIKE
+    - REPORT
+    roles:
+      required:
+      - HAZARD
+      optional:
+      - LOCATION
+      - GEOGRAPHY
+      - QUANTITY
+      - AMOUNT
+      - EFFECTIVE_DATE
+      identity:
+      - HAZARD
+      primary:
+      - HAZARD
+    note: A natural disaster or other identified hazard occurs in a stated location.
   EXOGENOUS.HEALTH.OUTBREAK:
     family: EXOGENOUS
     lifecycle_model: EXOGENOUS_SHOCK_NO_LIFECYCLE
     stage_sensitive: false
-    predicates: [OCCUR, SPREAD, REPORT]
-    roles: {required: [PATHOGEN], optional: [LOCATION, GEOGRAPHY, QUANTITY, EFFECTIVE_DATE], identity: [PATHOGEN], primary: [PATHOGEN]}
+    predicates:
+    - OCCUR
+    - SPREAD
+    - REPORT
+    roles:
+      required:
+      - PATHOGEN
+      optional:
+      - LOCATION
+      - GEOGRAPHY
+      - QUANTITY
+      - EFFECTIVE_DATE
+      identity:
+      - PATHOGEN
+      primary:
+      - PATHOGEN
+    note: An outbreak of an identified disease or pathogen is reported for a location
+      or population.
