@@ -270,6 +270,12 @@ locals {
 # 여기 안 넣는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관이다.
 locals {
   session_bound_workers = ["news-worker", "disclosure-worker", "inav-worker", "sector-index-worker"]
+
+  # 상주 서비스 사양(minute_service_cpu·memory)을 받지 않고 배치 사양(task_cpu·memory)에
+  # 남는 서비스(ALPHA-1235):
+  # - price-worker: 처리량 저하 원인이 미확정(ALPHA-1153)이라 사양을 함께 바꾸지 않는다.
+  # - disclosure-worker: 14일 실측 CPU 최대(1분 평균) 0.8 vCPU — 0.5 vCPU 로는 모자란다.
+  minute_batch_sized_services = ["price-worker", "disclosure-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -278,8 +284,8 @@ resource "aws_ecs_task_definition" "minute" {
   family                   = "${var.name}-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
+  cpu                      = contains(local.minute_batch_sized_services, each.key) ? var.task_cpu : var.minute_service_cpu
+  memory                   = contains(local.minute_batch_sized_services, each.key) ? var.task_memory : var.minute_service_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
