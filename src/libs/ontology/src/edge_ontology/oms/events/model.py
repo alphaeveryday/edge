@@ -38,7 +38,7 @@ class ProcessType:
     entity_state: Mapping[str, Attribute]
     derived: Mapping[str, Attribute]
 
-    # 스레딩 계약(사건의 동일성 판정) — resources/process/news_thread_contract
+    # 스레딩 계약(사건의 동일성 판정) — rules/threading/news_thread_contract
     identity_required: tuple[str, ...]
     identity_optional: tuple[str, ...]
     missing_identity_policy: str

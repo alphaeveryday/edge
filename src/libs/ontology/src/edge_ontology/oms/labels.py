@@ -1,9 +1,9 @@
 """사건 유형 한국어 라벨 — edge 로컬 증보 리소스의 조회 뷰 (ALPHA-942).
 
 라벨은 고객 산문의 "과거에 {라벨} 소식이 있었던 N건" 자리에 들어가는 명사구다.
-타입 YAML(process/types/) 이 아니라 별도 리소스(resources/labels/)에 사는 이유:
+타입 YAML(metadata/value_types/event_types/) 이 아니라 별도 파일(metadata/value_types/event_type_labels_ko.yaml)에 사는 이유:
 타입 리소스는 상류 실험실 스냅샷으로 **통째 교체**되므로 거기 넣은 라벨은 소실된다
-(resources/relation/ 과 같은 로컬 증보 지위).
+(metadata/value_types/role_bindings_v0_1.yaml 과 같은 로컬 증보 지위).
 
 결측은 폴백으로 접되 **조용히 접지 않는다** — `exact=False` 를 함께 돌려주므로
 호출자(산문 렌더러)가 폴백 사용을 관측할 수 있다(Rule 12). 완전성 자체는

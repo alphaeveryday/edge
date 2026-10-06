@@ -7,8 +7,8 @@ updated: 2026-07-28
 related:
   - ontology-design-criteria.md
   - specs/event-argument-schema-v1.md
-  - ../../../src/libs/ontology/src/edge_ontology/resources/entity/entity_kinds_v0_1.yaml
-  - ../../../src/libs/ontology/src/edge_ontology/resources/relation/role_bindings_v0_1.yaml
+  - ../../../src/libs/ontology/src/edge_ontology/metadata/value_types/entity_kinds_v0_1.yaml
+  - ../../../src/libs/ontology/src/edge_ontology/metadata/value_types/role_bindings_v0_1.yaml
 ---
 # 실체층 완전 위계 — 연구
 
@@ -350,7 +350,7 @@ G5(어휘 개정 = 전 코퍼스 재태깅) 때문에 순서가 중요하다. **
 |---|---|---|---|---|---|
 | **0** | ✅ 완료 | `AuthorityRegistry.resolve(mention, sections)` — 역할별 절 좁히기. 조회 키를 절 단위로 분리 | 불변 | 0 | **live 버그** — COURT+“공정거래위원회”→`actor_auth_kr_ftc` 오해소 |
 | **1c** | ✅ 완료 | `role_bindings.identity` 에 역할별 `scheme`/`sections`/`mint_fallback` 선언. `CLOSED_SET_ROLES`·`MINTABLE_KINDS` 하드코딩 삭제 → 리소스 파생 | 불변 | 0 | 한국거래소 정체성 분열(EXCHANGE·MARKET 이 명부 우선) · §2.3 |
-| **1** | ✅ 완료 | `slot` 을 LLM 에서 온톨로지로 이관 — `resources/relation/argument_slots_v0_1.yaml` 154쌍, `ProcessType.slot_of()`, 추출 프롬프트·스키마에서 제거, 결정적 백필 마이그레이션 | 불변 | **0** | Rule 5 위반 · 조용한 오류 |
+| **1** | ✅ 완료 | `slot` 을 LLM 에서 온톨로지로 이관 — `rules/arguments/argument_slots_v0_1.yaml` 154쌍, `ProcessType.slot_of()`, 추출 프롬프트·스키마에서 제거, 결정적 백필 마이그레이션 | 불변 | **0** | Rule 5 위반 · 조용한 오류 |
 | **1b** | ✅ 완료 | 로더 게이트 — “한 타입 안에서 (종, slot) 이 겹치는 역할 쌍 없음”. 위반은 `known_collisions` 에 사유와 함께 등재해야 통과 | 불변 | 0 | 잔여 모호가 **결함 7건으로 확정**됨(아래) |
 | **2** | 미착수 | `kind_path` 를 **병렬 필드로** 추가. 기존 역할→`entity_kind` 표는 그대로 둔다 | 불변 | 0 | 상위 질의(`Agent 인 참여자`) · 범주혼합 0% 게이트 |
 | **3** | 미착수 | 1b 가 확정한 어휘 결함 정리 — `PARTNER_2` 병합(`group_ord`) · `MERGING_ENTITY` 프레임 분리 · `PRODUCT_FAMILY`/`TECH_NODE` 경계 | **개정** | 해당 타입만 | 잔여 모호 |

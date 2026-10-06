@@ -25,7 +25,7 @@ def test_every_registry_type_has_an_exact_korean_label():
 
     assert not missing, (
         f"라벨 없는 사건 유형 {len(missing)}종 — 상류 스냅샷 교체로 새 타입이 왔다면 "
-        f"resources/labels/event_type_labels_ko.yaml 에 라벨을 추가하라: {missing}")
+        f"metadata/value_types/event_type_labels_ko.yaml 에 라벨을 추가하라: {missing}")
     assert not orphans, f"registry 에 없는 고아 라벨: {orphans}"
 
 

@@ -1,7 +1,7 @@
 """2. 속성(Attribute) — 전 사건 타입이 상속하는 공용 실체상태 풀.
 
 시총·매출·레버리지처럼 어느 사건에서든 분모가 되는 값들이다. 타입 고유 속성은 사건
-타입 정의(4. 사건층 resources/process/types/*.yaml)가 갖는다 — 이 풀은 그 위에 얹힌다.
+타입 정의(4. 사건층 metadata/value_types/event_types/*.yaml)가 갖는다 — 이 풀은 그 위에 얹힌다.
 """
 from __future__ import annotations
 

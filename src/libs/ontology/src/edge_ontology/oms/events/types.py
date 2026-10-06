@@ -1,6 +1,6 @@
 """4. 사건(Process) — 사건 **타입** 정의의 원본 읽기.
 
-`resources/process/types/*.yaml` 는 타입당 하나의 병합 정의를 갖는다(family, predicates,
+`metadata/value_types/event_types/*.yaml` 는 타입당 하나의 병합 정의를 갖는다(family, predicates,
 lifecycle_model, stage_sensitive, roles{required,optional,identity,primary}, note,
 quantities, entity_state, derived). 이게 사건층 SSOT 다.
 
