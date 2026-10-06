@@ -1,3 +1,3 @@
 # link_types
 
-Reserved for reviewed ontology definitions. Dashboard definitions have not been migrated. Event role codes are not object or link types.
+One YAML per directed link type: source and target object types, cardinality and the physical mapping. Object definitions reference these by ID. Event role codes are not object or link types.
