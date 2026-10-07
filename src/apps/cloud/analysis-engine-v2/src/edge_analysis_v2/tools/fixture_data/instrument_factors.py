@@ -201,7 +201,7 @@ def valuation_data(fixture, instrument_id):
     values = [(row, company_valuation(fixture, row['instrument_id'])) for row in portfolio['holdings']]
     result = {'scope': 'holdings_weighted', 'holdings_as_of': portfolio['as_of_date'],
               'observed_weight_ratio': portfolio.get('observed_weight_ratio')}
-    result['ratio_coverage'] = {}
+    result['ratio_coverage'], result['ratio_observed_at'] = {}, {}
     for metric in ('per', 'pbr'):
         # Same rule as calculate_weighted_valuation: average over the constituents that have the ratio,
         # stated only when they hold at least 70% of the fund.
@@ -210,10 +210,13 @@ def valuation_data(fixture, instrument_id):
         result['weighted_' + metric] = (number(sum(decimal(row['weight']) * decimal(value[metric]) for row, value in usable) / share)
                                         if share >= MIN_WEIGHT_COVERAGE else None)
         result['ratio_coverage'][metric] = number(share)
+        # A ratio is stamped by the constituents that went into it; a holding left out cannot date it.
+        stamps = [value['observed_at'] for _, value in usable if value['observed_at']] if result['weighted_' + metric] is not None else []
+        result['ratio_observed_at'][metric] = max(stamps, key=instant) if stamps else None
     # An approximated Q4 EPS in any constituent makes the weighted PER approximate — carried, never silent.
     result['weighted_per_approximate'] = (any(value['eps_approximate'] for _, value in values if value and value['per'] is not None)
                                           if result['weighted_per'] is not None else None)
-    stamps = [value['observed_at'] for _, value in values if value and value['observed_at']]
+    stamps = [stamp for stamp in result['ratio_observed_at'].values() if stamp]
     result['observed_at'] = max(stamps, key=instant) if stamps else None
     distribution = etf.distribution_yield(fixture)
     result['distribution_yield_12m_pct'] = distribution['value'] if distribution else None
