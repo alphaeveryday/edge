@@ -174,6 +174,20 @@ def test_invalid_turnover_differs_from_a_zero_denominator(turnover):
         assert result['chart']['momentum_index'] is not None
 
 
+def test_unreadable_past_snapshot_ends_weighted_flow_history_instead_of_failing_the_call(caplog):
+    # WHY(ALPHA-1162): 전망은 이 도구를 모델 전에 강제로 부르고, 가중 수급은 30거래일 각각의 과거 스냅샷을 읽는다.
+    # 과거 하루가 읽히지 않는다고 도구가 실패하면 그 하루 때문에 전망 전체가 시작하지 못한다 — 스냅샷이 없는 날처럼
+    # 그날에서 이력을 멈추고, 멈춘 날은 운영 로그에 남긴다.
+    fixture = make_fixture()
+    def snapshot(day, weights):
+        return [{'instrument_id': code, 'weight': weight, 'as_of_date': day, 'available_at': day + 'T08:00:00+09:00'}
+                for code, weight in zip(('000660', '005930'), weights)]
+    fixture['holdings'] += snapshot('2026-09-10', (.6, .41)) + snapshot('2026-09-15', (.6, .4))  # 09-10: 합 1.01, 설명할 행 없음
+    flow = read(fixture, factors=['flow'])['flow']
+    assert [row[0] for row in flow['history']['rows']] == ['2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']
+    assert 'day=2026-09-14' in caplog.text
+
+
 def test_weighted_flow_states_the_share_of_the_fund_it_covers_and_survives_unpublished_holdings():
     fixture = make_fixture()
     flow = read(fixture, factors=['flow'])['flow']
