@@ -23,7 +23,7 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
             CREATE TEMP TABLE equity_profile(instrument_id text,issuer_actor_id text);
             CREATE TEMP TABLE etf_holding_snapshot_status(etf_instrument_id text,trade_date date,input_row_count int,valid_row_count int,data_version text,loaded_at timestamptz);
             CREATE TEMP TABLE etf_holding_snapshot(etf_instrument_id text,constituent_instrument_id text,trade_date date,weight_ratio numeric,available_at timestamptz,data_version text);
-            CREATE TEMP TABLE document(document_id text,title text,document_type text,published_at timestamptz,available_at timestamptz);
+            CREATE TEMP TABLE document(document_id text,title text,document_type text,published_at timestamptz,available_at timestamptz,source_uri text);
             CREATE TEMP TABLE news_document(document_id text,lead_text text,lead_observed_at timestamptz);
             CREATE TEMP TABLE document_entity(document_id text,entity_id text);
             CREATE TEMP TABLE document_assertion(assertion_id text,document_id text,available_at timestamptz);
@@ -38,8 +38,8 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
             INSERT INTO equity_profile VALUES ('stock','issuer');
             INSERT INTO etf_holding_snapshot_status VALUES ('etf','2026-09-30',2,1,'current','2026-09-30T08:00:00+09:00');
             INSERT INTO etf_holding_snapshot VALUES ('etf','stock','2026-09-30',.9971,'2026-09-30T08:00:00+09:00','current');
-            INSERT INTO document VALUES ('known','Known','NEWS','2026-09-30T09:00:00+09:00','2026-09-30T09:01:00+09:00'),
-                ('future','Future','NEWS','2026-09-30T13:00:00+09:00','2026-09-30T13:01:00+09:00');
+            INSERT INTO document VALUES ('known','Known','NEWS','2026-09-30T09:00:00+09:00','2026-09-30T09:01:00+09:00','https://news.example.com/known'),
+                ('future','Future','NEWS','2026-09-30T13:00:00+09:00','2026-09-30T13:01:00+09:00','https://news.example.com/future');
             INSERT INTO news_document VALUES ('known','Late excerpt','2026-09-30T13:00:00+09:00'),('future','Future','2026-09-30T13:00:00+09:00');
             INSERT INTO document_entity VALUES ('known','issuer'),('future','issuer');
             INSERT INTO document_assertion VALUES ('assert','known','2026-09-30T09:02:00+09:00');
@@ -69,6 +69,7 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         c.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
         data = load_source(c, '091160', '2026-09-30T12:00:00+09:00')
         assert [r['news_id'] for r in data['news']] == ['known']
+        assert data['news'][0]['source_uri'] == 'https://news.example.com/known'
         assert data['news'][0]['body'] is None
         assert data['news_links'] == []
         assert data['holdings'][0]['weight'] == .9971

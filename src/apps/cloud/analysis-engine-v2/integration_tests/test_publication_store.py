@@ -149,7 +149,7 @@ def test_outlook_news_source_links_are_assembled_from_final_evidence(publication
     evidence(identity, "outlook")
     source_tool = key + "-news-source"
     audit = ToolStore(store.connection)
-    audit.register_definition(tool_id=source_tool, function_name="get_issue_evidence", version="v2",
+    audit.register_definition(tool_id=source_tool, function_name="get_issue_evidence", version=key,
                               description="Read final news evidence", source_names=["news"])
     source_run = identity + "-news-run"
     audit.save_run(tool_run_id=source_run, tool_id=source_tool, analysis_kind="outlook", analysis_id=identity,
@@ -166,6 +166,25 @@ def test_outlook_news_source_links_are_assembled_from_final_evidence(publication
     from edge_analysis_v2.dashboard.server import assemble_screen
     screen = assemble_screen(store.connection, "outlook", identity, "all")
     assert screen["detail"]["items"][0]["source_links"] == result["detail"]["items"][0]["source_links"]
+
+
+def test_reading_before_migration_keeps_existing_dashboard_available(publication):
+    store, key, evidence = publication
+    identity = key + "-legacy"
+    store.begin("outlook", identity, key, NOW)
+    evidence(identity, "outlook")
+    body = BodyEditor(None, NOW).write("본문", [{"id": "topic", "title_keyword": "이유",
+        "sentences": ["불릿"], "sentiment": "positive", "tool_run_ids": [identity]}])
+    store.save_outlook(identity, features(identity), body)
+    # Shadow only this connection's table to represent the not-yet-migrated reader.
+    store.connection.execute("CREATE TEMP TABLE outlook_items AS SELECT * FROM public.outlook_items")
+    try:
+        store.connection.execute("ALTER TABLE pg_temp.outlook_items DROP COLUMN sentiment, DROP COLUMN source_links")
+        result = store.get_outlook(identity)
+        assert result["detail"]["items"][0]["sentiment"] is None
+        assert result["detail"]["items"][0]["source_links"] == []
+    finally:
+        store.connection.execute("DROP TABLE pg_temp.outlook_items")
 
 
 def test_missing_factor_rejects_entire_publication_instead_of_inventing_neutral(publication):

@@ -40,6 +40,14 @@ def test_final_news_evidence_carries_article_url_for_server_assembled_sources(fi
     assert "source_uri" not in exploratory["result"]["news"][0]
 
 
+def test_exploratory_evidence_preserves_an_explicitly_missing_body(fixture):
+    fixture["news"][0]["body"] = None
+    fixture["news"][0]["body_kind"] = "excerpt"
+    result = FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": True})
+    assert result["result"]["news"] == [{
+        "news_id": "0", "title": "Title 0", "body": None, "body_kind": "excerpt"}]
+
+
 def test_partial_weights_never_become_whole_etf(fixture):
     fixture["holdings"][0]["weight"] = 0.2
     with pytest.raises(ValueError, match="weight"):

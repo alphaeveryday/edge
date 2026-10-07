@@ -22,10 +22,10 @@ def _topic(raw, *, added=False, allow_legacy=False):
         raise ValueError("Unknown topic field")
     sentiment = raw.get("sentiment")
     if sentiment is None and not allow_legacy:
-        raise ValueError("Topic requires sentiment")
+        raise ToolInputError("Topic requires sentiment")
     if sentiment is not None and (not isinstance(sentiment, str)
                                   or sentiment not in {"positive", "neutral", "negative"}):
-        raise ValueError("Invalid sentiment")
+        raise ToolInputError("Invalid sentiment")
     numbers = raw.get("updated_sentence_numbers", [])
     sentences = raw["sentences"]
     if not isinstance(sentences, list) or not sentences:
@@ -84,15 +84,6 @@ class BodyEditor:
         """Replace the complete draft, preserving IDs for retained topics."""
         existing = {item["id"] for item in (self.base or {}).get("items", [])}
         normalized = [_topic(item, added=self.base is not None and item["id"] not in existing) for item in items]
-        old_items = {item["id"]: item for item in (self.base or {}).get("items", [])}
-        for item in normalized:
-            previous = old_items.get(item["id"])
-            if previous is None or previous.get("sentiment") == item["sentiment"]:
-                continue
-            old_sentences = Counter(sentence["sentence"] for sentence in previous["sentences"])
-            new_sentences = Counter(sentence["sentence"] for sentence in item["sentences"])
-            if old_sentences == new_sentences:
-                raise ValueError("Sentiment cannot change without a sentence change")
         return self._commit({"title": _text(title), "items": normalized}, "create" if self.base is None else "rewrite")
 
     def apply(self, changes: list, title: str | None = None, item_order: list | None = None) -> dict:
@@ -125,14 +116,14 @@ class BodyEditor:
                        "sentiment": current.get("sentiment"),
                        "tool_run_ids": current["tool_run_ids"]}
                 raw.update({key: value for key, value in change.items() if key != "action"})
-                replacement = _topic(raw, allow_legacy=True)
+                replacement = _topic(raw, allow_legacy="sentiment" not in change)
                 sentence_changed = Counter(s["sentence"] for s in current["sentences"]) != Counter(
                     s["sentence"] for s in replacement["sentences"])
                 sentiment_changed = current.get("sentiment") != replacement["sentiment"]
                 if sentence_changed and "sentiment" not in change:
-                    raise ValueError("Sentence changes require sentiment together")
+                    raise ToolInputError("Sentence changes require sentiment together")
                 if sentiment_changed and not sentence_changed:
-                    raise ValueError("Sentiment cannot change without a sentence change")
+                    raise ToolInputError("Sentiment cannot change without a sentence change")
                 if "sentences" not in change and "updated_sentence_numbers" not in change:
                     replacement["sentences"] = current["sentences"]
                 draft["items"][draft["items"].index(current)] = replacement
@@ -159,11 +150,19 @@ class BodyEditor:
         if len(current) != len(draft["items"]) or len(current) > 15:
             raise ValueError("Expected at most 15 unique topics")
         base = {item["id"]: item for item in (self.base or {}).get("items", [])}
+        previous = {item["id"]: item for item in self.draft["items"]}
+        # Enforce pairing for each edit and for the final change from the published body.
+        for before in (previous, base):
+            for identity in before.keys() & current.keys():
+                old, new = before[identity], current[identity]
+                if (old.get("sentiment") != new["sentiment"]
+                        and Counter(s["sentence"] for s in old["sentences"])
+                        == Counter(s["sentence"] for s in new["sentences"])):
+                    raise ToolInputError("Sentiment cannot change without a sentence change")
         changed = set(base) ^ set(current)
         changed.update(identity for identity in base.keys() & current.keys() if _different(base[identity], current[identity]))
         if mode == "update" and len(changed) >= 10:
             raise ValueError("Ten changed topics require rewrite")
-        previous = {item["id"]: item for item in self.draft["items"]}
         for identity in previous.keys() & current.keys():
             flags = {}
             for sentence in previous[identity]["sentences"]:

@@ -46,7 +46,7 @@ def write_body(kwargs):
     reference = kwargs['call']('get_issue_evidence',
         {'news_ids': [kwargs['initial']['news'][0]['news_id']], 'include_body': False})['tool_run_id']
     kwargs['call']('write_outlook_body', {'title': '공급 계약 확인', 'items': [
-        {'id': 'supply', 'title_keyword': '계약 물량', 'sentences': ['계약 물량을 확보했어요.'],
+        {'id': 'supply', 'title_keyword': '계약 물량', 'sentences': ['계약 물량을 확보했어요.'], 'sentiment': 'positive',
          'tool_run_ids': [reference]}]})
     return reference
 
@@ -65,7 +65,7 @@ def test_failed_edit_audit_does_not_leak_into_published_body(execution, monkeypa
     execute, factory, identity = execution
     save_run = ToolStore.save_run
     def reject_edit(self, **arguments):
-        if arguments['tool_id'] == 'apply_outlook_body_changes:v1':
+        if arguments['tool_id'] == 'apply_outlook_body_changes:v2':
             raise psycopg.OperationalError('Simulated audit write failure')
         return save_run(self, **arguments)
     monkeypatch.setattr(ToolStore, 'save_run', reject_edit)
@@ -73,7 +73,7 @@ def test_failed_edit_audit_does_not_leak_into_published_body(execution, monkeypa
         reference = write_body(kwargs)
         with pytest.raises(psycopg.OperationalError, match='audit write failure'):
             kwargs['call']('apply_outlook_body_changes', {'changes': [
-                {'action': 'update', 'id': 'supply', 'sentences': ['감사 저장에 실패한 수정이에요.'],
+                {'action': 'update', 'id': 'supply', 'sentences': ['감사 저장에 실패한 수정이에요.'], 'sentiment': 'positive',
                  'tool_run_ids': [reference], 'updated_sentence_numbers': [1]}]})
         return final_response(reference)
     screen = execute(model)
@@ -110,7 +110,7 @@ def test_agent_can_correct_nonfinal_evidence_before_publication(execution, opera
     async def model(**kwargs):
         reference = write_body(kwargs)
         search = kwargs['call']('search_news_threads', {})['tool_run_id']
-        topic = {'id': 'supply', 'title_keyword': '수정 계약', 'sentences': ['수정된 계약 물량이에요.'],
+        topic = {'id': 'supply', 'title_keyword': '수정 계약', 'sentences': ['수정된 계약 물량이에요.'], 'sentiment': 'positive',
                  'tool_run_ids': [search]}
         invalid = ({'title': '수정 본문', 'items': [topic]} if operation == 'write_outlook_body'
                    else {'changes': [{'action': 'update', **topic}]})

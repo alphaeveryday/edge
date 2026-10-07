@@ -14,6 +14,20 @@ python -m edge_analysis_v2.cloud.dashboard --profile edge-v2-observer --runs-dir
 
 `edge-v2-observer`는 `work` 프로필에서 `edge-dev-analysis-v2-observer` 역할을 수임한다. 권한은 v2 실행 요청·상태 조회와 관측 S3 경로 읽기뿐이다. 프롬프트 편집은 기존 로컬 개발 모드에서 수행하며 클라우드는 배포된 프롬프트를 사용한다. [요청·저장 계약과 배포 순서](docs/cloud-observation.md)
 
+## 전망 방향 색과 분석 출처 계약
+
+- DB 조립 응답의 `detail.items[].sentiment`는 이유 행의 방향이며 `positive`·`neutral`·`negative`다.
+  중첩된 `sentences[]`의 각 문장에 별도 색을 지정하지 않는다. 색상 코드는 프론트가 매핑한다.
+- 편집 도구는 문장 변경과 센티먼트를 함께 받는다. 센티먼트 단독 변경과 명시적 `null`은 거부한다.
+  여러 번 편집하거나 전체 재작성해도 현재 초안과 발행 전 본문에 대해 같은 제한을 적용한다.
+  변경하지 않은 과거 논점의 미분류 센티먼트만 `null`로 유지한다.
+- `detail.items[].source_links`와 `detail.updates.items[].source_links`는 `{title, url}` 배열이다.
+  서버가 최종 근거 `tool_run_ids`에 연결된 뉴스의 `source_uri` 또는 날짜가 검증된 웹 문서의
+  `final_url`에서 구성하고 URL 중복을 제거한다. 모델이 URL을 작성하지 않는다.
+- URL이 저장되지 않은 과거 뉴스 실행 기록·뉴스 외 근거는 빈 배열을 반환할 수 있다.
+  과거 발행본의 출처 URL을 소급 생성하지 않는다. 분석 출처 목록의 화면 배치와 링크 표시는 프론트가 구현한다.
+- `outlook_items` 컬럼 추가 마이그레이션을 먼저 적용한 다음 워커·API를 배포한다.
+
 ## 실행
 
 패키지를 설치한 Python 환경에서 실행한다. DB 터널과 인증서 경로는 실행 환경에 맞게 지정한다.

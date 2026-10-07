@@ -51,9 +51,17 @@ def evidence(fixture, news_ids, include_body):
     rows = {r["news_id"]: r for r in visible(fixture)}
     if any(identity not in rows for identity in news_ids):
         raise ValueError("news unavailable at analysis time")
-    keys = ("news_id", "title", "body") if include_body else ("news_id", "title", "source_uri")
-    return {"news": [{k: rows[identity][k] for k in keys if k in rows[identity] and rows[identity][k] is not None} |
-                     ({'body_kind': rows[identity]['body_kind']} if include_body and 'body_kind' in rows[identity] else {}) for identity in news_ids]}
+    keys = ("news_id", "title", "body") if include_body else ("news_id", "title")
+    evidence_rows = []
+    for identity in news_ids:
+        row = rows[identity]
+        evidence = {key: row.get(key) for key in keys}
+        if not include_body and row.get("source_uri") is not None:
+            evidence["source_uri"] = row["source_uri"]
+        if include_body and "body_kind" in row:
+            evidence["body_kind"] = row["body_kind"]
+        evidence_rows.append(evidence)
+    return {"news": evidence_rows}
 
 
 def search_articles(fixture, query, offset):

@@ -36,6 +36,9 @@ def test_only_explicit_false_news_lookup_can_be_used_as_final_evidence(include_b
 @pytest.mark.parametrize("value", [
     "javascript:alert(1)", "file:///etc/passwd", "https://user:pass@example.com/a",
     "http://localhost/article", "http://127.0.0.1/article", "https://internal/article",
+    "http://localhost./article", "http://127.1/article", "http://0177.0.0.1/article",
+    "http://0x7f.0.0.1/article", "http://2130706433/article", "http://%31%32%37.1/article",
+    "http://example.com\\@127.0.0.1/article", "https://news.example.com/\x7f",
 ])
 def test_source_links_reject_nonpublic_or_unsafe_urls(value):
     assert _public_source_url(value) is None

@@ -195,3 +195,33 @@ def test_edit_draft_drops_server_assembled_source_links_for_all_topics():
 def test_full_rewrite_cannot_change_only_sentiment():
     with pytest.raises(ValueError, match="sentence"):
         BodyEditor(base(), NOW).write("title", [topic("0", sentiment="negative")])
+
+
+def test_sentence_edit_cannot_erase_sentiment():
+    editor = BodyEditor(base(), NOW)
+    before = editor.result()
+    with pytest.raises(ValueError, match="sentiment"):
+        editor.apply([{"action": "update", **topic("0", "new", sentiment=None)}])
+    assert editor.result() == before
+
+
+def test_repeated_rewrite_cannot_change_only_sentiment_in_current_draft():
+    editor = BodyEditor(base(), NOW)
+    editor.write("title", [topic("0", "new", sentiment="negative")])
+    before = editor.result()
+    with pytest.raises(ValueError, match="sentence"):
+        editor.write("title", [topic("0", "new", sentiment="neutral")])
+    assert editor.result() == before
+
+
+@pytest.mark.parametrize("operation", ["apply", "write"])
+def test_reverting_text_cannot_publish_only_a_sentiment_change(operation):
+    editor = BodyEditor(base(), NOW)
+    editor.apply([{"action": "update", **topic("0", "new", sentiment="negative")}])
+    before = editor.result()
+    with pytest.raises(ValueError, match="sentence"):
+        if operation == "apply":
+            editor.apply([{"action": "update", **topic("0", "old", sentiment="negative")}])
+        else:
+            editor.write("title", [topic("0", "old", sentiment="negative")])
+    assert editor.result() == before

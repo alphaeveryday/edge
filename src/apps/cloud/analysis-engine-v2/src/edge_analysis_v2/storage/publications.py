@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from ipaddress import ip_address
+import re
 from uuid import uuid4
 from urllib.parse import urlsplit
 
@@ -21,11 +22,12 @@ class OwnershipLost(ValueError):
 
 def _public_source_url(value):
     """Keep only safe public HTTP(S) URLs for clickable source links."""
-    if not isinstance(value, str) or not 1 <= len(value) <= 2048 or any(c.isspace() or ord(c) < 32 for c in value):
+    if (not isinstance(value, str) or not 1 <= len(value) <= 2048
+            or any(c.isspace() or ord(c) < 32 or c in "\\\x7f" for c in value)):
         return None
     try:
         parsed = urlsplit(value)
-        host = parsed.hostname or ""
+        host = (parsed.hostname or "").rstrip(".")
         port = parsed.port
         expected_port = 443 if parsed.scheme == "https" else 80
         if (parsed.scheme not in ("http", "https") or not host or parsed.username is not None
@@ -36,7 +38,9 @@ def _public_source_url(value):
             if not ip_address(host).is_global:
                 return None
         except ValueError:
-            if "." not in host:
+            # Browsers interpret shortened/octal/hex IPv4 forms as numeric hosts.
+            if ("." not in host or not re.fullmatch(r"[a-zA-Z0-9.-]+", host)
+                    or re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", host.rsplit(".", 1)[-1])):
                 return None
     except ValueError:
         return None
@@ -319,12 +323,12 @@ class PublicationStore:
             value = {"id": item["item_id"], "title_keyword": item["title_keyword"], "tool_run_ids": item["tool_run_ids"]}
             if item["section"] == "detail":
                 value["sentences"] = item["bullets"]
-                value["sentiment"] = item["sentiment"]
-                value["source_links"] = item["source_links"]
+                value["sentiment"] = item.get("sentiment")
+                value["source_links"] = item.get("source_links", [])
                 detail["items"].append(value)
             else:
-                value.update(change_type=item["change_type"], sentence=item["sentence"], sentiment=item["sentiment"],
-                             source_links=item["source_links"])
+                value.update(change_type=item["change_type"], sentence=item["sentence"], sentiment=item.get("sentiment"),
+                             source_links=item.get("source_links", []))
                 detail["updates"]["items"].append(value)
         cur.execute("SELECT type,sticker,sentence FROM outlook_factors WHERE analysis_id=%s", (identity,))
         factors = {factor["type"]: factor for factor in cur.fetchall()}
