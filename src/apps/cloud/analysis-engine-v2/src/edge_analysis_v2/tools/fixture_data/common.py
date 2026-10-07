@@ -67,9 +67,13 @@ def holdings(fixture, day=None, *, require_complete=True):
     # stored as 0.27940000000000004 (ALPHA-1162). This is deliberate: a sum that differs from one only below
     # that precision (1.000000000000004) is not told apart from one. Sources publish weights to four decimals.
     total = Context(prec=15).plus(sum(weights))
-    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or not 0 < total <= 1:
-        raise ValueError("complete positive equity weights summing to one required")
     statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
+    # Equities above one are explained only by source rows that were not loaded: a negative cash row leaves the
+    # loaded equities above 100% (ALPHA-1162). With every source row loaded the excess has no explanation and is
+    # rejected; without an ingestion status (fixtures) it cannot be explained either.
+    unloaded = len(statuses) == 1 and statuses[0]['input_count'] > len(rows)
+    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or total <= 0 or total > 1 and not unloaded:
+        raise ValueError("complete positive equity weights summing to one required")
     complete = total == 1
     if statuses:
         if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
