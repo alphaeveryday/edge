@@ -273,6 +273,7 @@ Table "etf_holding_snapshot_status" {
   "valid_row_count" int [not null]
   "data_version" varchar(50) [not null]
   "loaded_at" timestamptz [not null]
+  "cash_weight_ratio" numeric
 
   indexes {
     ("etf_instrument_id", "trade_date") [pk]
