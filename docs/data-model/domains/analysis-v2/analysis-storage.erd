@@ -236,7 +236,9 @@
           "outlook_items.bullets",
           "outlook_items.sentence",
           "outlook_items.source_as_of",
-          "outlook_items.tool_run_ids"
+          "outlook_items.tool_run_ids",
+          "outlook_items.sentiment",
+          "outlook_items.source_links"
         ],
         "seqColumnIds": [
           "outlook_items.row_id",
@@ -249,7 +251,9 @@
           "outlook_items.bullets",
           "outlook_items.sentence",
           "outlook_items.source_as_of",
-          "outlook_items.tool_run_ids"
+          "outlook_items.tool_run_ids",
+          "outlook_items.sentiment",
+          "outlook_items.source_links"
         ],
         "ui": {
           "x": 2180,
@@ -2491,6 +2495,46 @@
         "meta": {
           "createAt": 1790573936482,
           "updateAt": 1790573936482
+        }
+      },
+      "outlook_items.sentiment": {
+        "id": "outlook_items.sentiment",
+        "tableId": "outlook_items",
+        "name": "sentiment",
+        "comment": "논점이 전망에 미치는 방향: positive / neutral / negative",
+        "dataType": "text",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1791373021185,
+          "updateAt": 1791373021185
+        }
+      },
+      "outlook_items.source_links": {
+        "id": "outlook_items.source_links",
+        "tableId": "outlook_items",
+        "name": "source_links",
+        "comment": "근거로 제시할 원문 제목과 URL 목록",
+        "dataType": "jsonb",
+        "default": "'[]'::jsonb",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 235,
+          "widthComment": 310,
+          "widthDataType": 120,
+          "widthDefault": 90
+        },
+        "meta": {
+          "createAt": 1791373021185,
+          "updateAt": 1791373021185
         }
       }
     },

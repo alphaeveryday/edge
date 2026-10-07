@@ -124,8 +124,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
     read = lambda connection, identity: (store(connection).get_movement if kind == 'movement' else store(connection).get_outlook)(identity)
     definitions = list(tools.definitions)
     if kind == 'outlook':
-        definitions += [dict(tool_id=s['function']['name']+':v1',function_name=s['function']['name'],
-            version='v1',description=s['function']['description'],source_names=['직전 전망과 이번 편집 초안']) for s in EDIT_SCHEMAS]
+        definitions += [dict(tool_id=s['function']['name']+':v2',function_name=s['function']['name'],
+            version='v2',description=s['function']['description'],source_names=['직전 전망과 이번 편집 초안']) for s in EDIT_SCHEMAS]
 
     def begin(connection):
         with connection.cursor(row_factory=dict_row) as cur:

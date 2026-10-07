@@ -108,7 +108,7 @@ def load_source(connection, ticker, analysis_at):
     members = current['holdings']
     targets = [etf['instrument_id']]+[source_ids[r['instrument_id']] for r in members]
     targets += [actors[r['instrument_id']] for r in members if actors.get(r['instrument_id'])]
-    articles = _rows(connection, """SELECT d.document_id,d.title,d.published_at,d.available_at,n.lead_text,n.lead_observed_at
+    articles = _rows(connection, """SELECT d.document_id,d.title,d.published_at,d.available_at,d.source_uri,n.lead_text,n.lead_observed_at
         FROM document d JOIN news_document n USING(document_id)
         WHERE d.document_type='NEWS' AND d.published_at BETWEEN %s AND %s AND d.available_at<=%s
         AND EXISTS(SELECT 1 FROM document_entity de WHERE de.document_id=d.document_id AND de.entity_id=ANY(%s))
@@ -120,6 +120,7 @@ def load_source(connection, ticker, analysis_at):
     for row in articles[:1000]:
         body = row['lead_text'] if row['lead_observed_at'] is not None and row['lead_observed_at']<=at else None
         data['news'].append({'news_id':row['document_id'],'title':row['title'],'body':body,'body_kind':'excerpt',
+            'source_uri':row['source_uri'],
             'published_at':row['published_at'].isoformat(),'available_at':row['available_at'].isoformat()})
     data['news_links'] = _rows(connection, """SELECT DISTINCT a.document_id AS news_id,
         l.thread_id,s.source_event_id AS event_id,s.lifecycle_stage AS stage
@@ -264,14 +265,14 @@ class DatabaseTools(FixtureTools):
             callback=lambda:holdings(self.fixture, require_complete=False),
             description='조회 시점에 확보된 구성종목과 원래 비중입니다. observed_weight_ratio는 확인된 비중의 합입니다. 70% 이상이면 ETF 전체 가중 계산에 쓰이며, 그 결과는 이 비중만큼의 펀드를 설명합니다.',
             formula=r'W=\sum_i w_i\quad\text{(observed weights; no renormalization)}')
-        self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. true 호출 ID는 최종 근거로 쓸 수 없습니다. 내용을 읽은 뒤 실제 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 항목에 연결하세요. false는 최종 근거용 ID·제목입니다. null인 본문을 추측하지 마세요.'
+        self._tools['get_issue_evidence']['description'] = '기사 ID로 확보된 내용을 읽습니다. include_body=true는 발췌(body_kind=excerpt)이며 전체 기사 원문이 아닙니다. true 호출 ID는 최종 근거로 쓸 수 없습니다. 내용을 읽은 뒤 실제 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 항목에 연결하세요. false는 최종 근거용 ID·제목·원문 URL(source_uri, 확보된 경우)입니다. null인 본문을 추측하지 마세요.'
         if 'prices' in source:
             self._tools['calculate_chart_indicators']['description'] += ' 고가·저가 미확보 시 바닥지수는 null입니다.'
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
             # Source definitions are immutable; connecting stored observations needs a new factor version.
             tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v5',
-                               'get_issue_evidence': 'database-v2', 'get_etf_holdings': 'database-v2',
+                               'get_issue_evidence': 'database-v3', 'get_etf_holdings': 'database-v2',
                                'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v2',
                                'sum_weighted_net_flow': 'database-v2'}.get(name, 'database-v1')
             if name == 'get_instrument_factors':

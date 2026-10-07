@@ -17,9 +17,15 @@ def _text(value):
     return value
 
 
-def _topic(raw, *, added=False):
-    if set(raw) - {"id", "title_keyword", "sentences", "tool_run_ids", "updated_sentence_numbers"}:
+def _topic(raw, *, added=False, allow_legacy=False):
+    if set(raw) - {"id", "title_keyword", "sentences", "sentiment", "tool_run_ids", "updated_sentence_numbers"}:
         raise ValueError("Unknown topic field")
+    sentiment = raw.get("sentiment")
+    if sentiment is None and not allow_legacy:
+        raise ToolInputError("Topic requires sentiment")
+    if sentiment is not None and (not isinstance(sentiment, str)
+                                  or sentiment not in {"positive", "neutral", "negative"}):
+        raise ToolInputError("Invalid sentiment")
     numbers = raw.get("updated_sentence_numbers", [])
     sentences = raw["sentences"]
     if not isinstance(sentences, list) or not sentences:
@@ -33,11 +39,13 @@ def _topic(raw, *, added=False):
     return {"id": _text(raw["id"]), "title_keyword": _text(raw["title_keyword"]),
             "sentences": [{"sentence": _text(text), "is_updated": added or i in numbers}
                           for i, text in enumerate(sentences, 1)],
+            "sentiment": sentiment,
             "tool_run_ids": [_text(ref) for ref in refs]}
 
 
 def _different(left, right):
     return (left["title_keyword"] != right["title_keyword"]
+            or left.get("sentiment") != right.get("sentiment")
             or Counter(s["sentence"] for s in left["sentences"])
             != Counter(s["sentence"] for s in right["sentences"]))
 
@@ -56,9 +64,14 @@ class BodyEditor:
         self.date = analysis_at.astimezone(KST).date().isoformat()
         self.base = deepcopy(base)
         self.draft = deepcopy(base) if base is not None else {"title": "", "items": []}
+        for item in self.draft["items"]:
+            item.pop("source_links", None)
+            item.setdefault("sentiment", None)
         updates = self.draft.get("updates", {})
         self.updates = deepcopy(updates.get("items", [])) if updates.get("date") == self.date else []
         for entry in self.updates:
+            entry.pop("source_links", None)
+            entry.setdefault("sentiment", None)
             # Same-day entries published before the limits existed keep their old titles; no edit can reach them.
             entry["title_keyword"] = entry["title_keyword"][:TEXT_LIMITS['detail.items[].title_keyword']]
         if updates.get("date") != self.date:
@@ -100,9 +113,17 @@ class BodyEditor:
                     raise ValueError("Changed text requires tool_run_ids")
                 raw = {"id": identity, "title_keyword": current["title_keyword"],
                        "sentences": [s["sentence"] for s in current["sentences"]],
+                       "sentiment": current.get("sentiment"),
                        "tool_run_ids": current["tool_run_ids"]}
                 raw.update({key: value for key, value in change.items() if key != "action"})
-                replacement = _topic(raw)
+                replacement = _topic(raw, allow_legacy="sentiment" not in change)
+                sentence_changed = Counter(s["sentence"] for s in current["sentences"]) != Counter(
+                    s["sentence"] for s in replacement["sentences"])
+                sentiment_changed = current.get("sentiment") != replacement["sentiment"]
+                if sentence_changed and "sentiment" not in change:
+                    raise ToolInputError("Sentence changes require sentiment together")
+                if sentiment_changed and not sentence_changed:
+                    raise ToolInputError("Sentiment cannot change without a sentence change")
                 if "sentences" not in change and "updated_sentence_numbers" not in change:
                     replacement["sentences"] = current["sentences"]
                 draft["items"][draft["items"].index(current)] = replacement
@@ -129,11 +150,19 @@ class BodyEditor:
         if len(current) != len(draft["items"]) or len(current) > 15:
             raise ValueError("Expected at most 15 unique topics")
         base = {item["id"]: item for item in (self.base or {}).get("items", [])}
+        previous = {item["id"]: item for item in self.draft["items"]}
+        # Enforce pairing for each edit and for the final change from the published body.
+        for before in (previous, base):
+            for identity in before.keys() & current.keys():
+                old, new = before[identity], current[identity]
+                if (old.get("sentiment") != new["sentiment"]
+                        and Counter(s["sentence"] for s in old["sentences"])
+                        == Counter(s["sentence"] for s in new["sentences"])):
+                    raise ToolInputError("Sentiment cannot change without a sentence change")
         changed = set(base) ^ set(current)
         changed.update(identity for identity in base.keys() & current.keys() if _different(base[identity], current[identity]))
         if mode == "update" and len(changed) >= 10:
             raise ValueError("Ten changed topics require rewrite")
-        previous = {item["id"]: item for item in self.draft["items"]}
         for identity in previous.keys() & current.keys():
             flags = {}
             for sentence in previous[identity]["sentences"]:
@@ -155,14 +184,14 @@ class BodyEditor:
                     # nobody can rewrite it any more, so it is cut to fit.
                     updates[identity] = {"id": identity, "change_type": "deleted",
                                          "title_keyword": item["title_keyword"][:TEXT_LIMITS['detail.items[].title_keyword']],
-                                         "sentence": None, "tool_run_ids": item["tool_run_ids"]}
+                                         "sentence": None, "sentiment": None, "tool_run_ids": item["tool_run_ids"]}
             for identity, item in current.items():
                 added = identity not in previous
                 if added or _different(previous[identity], item):
                     sentences = [s["sentence"] for s in item["sentences"] if added or s["is_updated"]]
                     updates[identity] = {"id": identity, "change_type": "added" if added else "modified",
                                          "title_keyword": item["title_keyword"], "sentence": "\n".join(sentences) or None,
-                                         "tool_run_ids": item["tool_run_ids"]}
+                                         "sentiment": item["sentiment"], "tool_run_ids": item["tool_run_ids"]}
                 elif identity in updates:
                     updates[identity]["tool_run_ids"] = item["tool_run_ids"]
         ordered = [updates[identity] for identity in current if identity in updates]

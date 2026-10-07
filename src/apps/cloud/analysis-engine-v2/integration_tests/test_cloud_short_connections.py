@@ -124,7 +124,7 @@ def outlook_model(calls, during=None):
         calls.append(kwargs['initial'].get('previous_analysis'))
         reference = news(kwargs)
         kwargs['call']('write_outlook_body', {'title': '공급 계약 확인', 'items': [
-            {'id': 'supply', 'title_keyword': '계약 물량', 'sentences': ['계약 물량을 확보했어요.'], 'tool_run_ids': [reference]}]})
+            {'id': 'supply', 'title_keyword': '계약 물량', 'sentences': ['계약 물량을 확보했어요.'], 'sentiment': 'positive', 'tool_run_ids': [reference]}]})
         if during:
             during()
         news(kwargs)

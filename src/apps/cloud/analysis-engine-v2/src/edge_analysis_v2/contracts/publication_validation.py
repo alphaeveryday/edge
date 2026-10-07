@@ -88,10 +88,15 @@ def outlook(features, body):
     if not isinstance(body["items"], list) or len(body["items"]) > 15:
         raise ValueError("At most 15 topics")
     for item in body["items"]:
-        if set(item) != {"id", "title_keyword", "sentences", "tool_run_ids"}:
+        if set(item) != {"id", "title_keyword", "sentences", "sentiment", "tool_run_ids"}:
             raise ValueError("Unexpected body topic fields")
         text(item["id"])
         text(item["title_keyword"])
+        sentiment = item["sentiment"]
+        if (sentiment is not None and (not isinstance(sentiment, str)
+                                       or sentiment not in {"positive", "neutral", "negative"})
+                or sentiment is None and body["mode"] != "update"):
+            raise ValueError("Invalid topic sentiment")
         references(item["tool_run_ids"])
         if not isinstance(item["sentences"], list) or not item["sentences"]:
             raise ValueError("Topic requires sentences")
@@ -108,10 +113,14 @@ def outlook(features, body):
     if set(body["updates"]) != {"date", "items"}:
         raise ValueError("Invalid updates")
     for item in body["updates"]["items"]:
-        if set(item) != {"id", "change_type", "title_keyword", "sentence", "tool_run_ids"} or item["change_type"] not in {"added", "modified", "deleted"}:
+        if set(item) != {"id", "change_type", "title_keyword", "sentence", "sentiment", "tool_run_ids"} or item["change_type"] not in {"added", "modified", "deleted"}:
             raise ValueError("Invalid update item")
         text(item["id"])
         text(item["title_keyword"])
         if item["sentence"] is not None:
             text(item["sentence"])
+        sentiment = item["sentiment"]
+        if sentiment is not None and (not isinstance(sentiment, str)
+                                      or sentiment not in {"positive", "neutral", "negative"}):
+            raise ValueError("Invalid update sentiment")
         references(item["tool_run_ids"])

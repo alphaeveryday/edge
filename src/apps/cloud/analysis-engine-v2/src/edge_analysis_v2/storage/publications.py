@@ -1,7 +1,10 @@
 """Persist completed screen publications independently of tool audit commits."""
 
 from datetime import datetime
+from ipaddress import ip_address
+import re
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from psycopg import sql
 from psycopg.pq import TransactionStatus
@@ -15,6 +18,33 @@ from edge_analysis_v2.tools.execution import ToolInputError
 
 class OwnershipLost(ValueError):
     """The single-analysis workflow's slot is gone, so this execution may not publish anything new."""
+
+
+def _public_source_url(value):
+    """Keep only safe public HTTP(S) URLs for clickable source links."""
+    if (not isinstance(value, str) or not 1 <= len(value) <= 2048
+            or any(c.isspace() or ord(c) < 32 or c in "\\\x7f" for c in value)):
+        return None
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").rstrip(".")
+        port = parsed.port
+        expected_port = 443 if parsed.scheme == "https" else 80
+        if (parsed.scheme not in ("http", "https") or not host or parsed.username is not None
+                or parsed.password is not None or port not in (None, expected_port)
+                or host.endswith((".local", ".localhost", ".internal")) or host in ("localhost",)):
+            return None
+        try:
+            if not ip_address(host).is_global:
+                return None
+        except ValueError:
+            # Browsers interpret shortened/octal/hex IPv4 forms as numeric hosts.
+            if ("." not in host or not re.fullmatch(r"[a-zA-Z0-9.-]+", host)
+                    or re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", host.rsplit(".", 1)[-1])):
+                return None
+    except ValueError:
+        return None
+    return value
 
 
 class PublicationStore:
@@ -93,6 +123,7 @@ class PublicationStore:
             raise OwnershipLost("Execution slot was reclaimed; refusing to publish")
 
     def _evidence(self, cur, ids, analysis):
+        source_links = []
         for identity in schemas.references(ids):
             cur.execute("""SELECT r.*, d.function_name, COALESCE(m.etf_code,o.etf_code) AS etf_code,
                 COALESCE(m.analysis_at,o.analysis_at) AS analysis_at,
@@ -120,8 +151,26 @@ class PublicationStore:
             if run["function_name"] == "get_issue_evidence" and run["arguments"].get("include_body") is not False:
                 raise ToolInputError(f"Evidence {identity!r}: final news evidence must exclude article body. "
                                      "Call get_issue_evidence(include_body=false) and use its new tool_run_id.")
-            if run['function_name'] == 'read_web_document' and run['output'].get('result', {}).get('final_eligible') is not True:
+            output = run.get("output") or {}
+            if run['function_name'] == 'read_web_document' and output.get('result', {}).get('final_eligible') is not True:
                 raise ToolInputError('Web document publication time is future or unverified; use dated evidence before the analysis cutoff.')
+            result = output.get("result", {})
+            if run["function_name"] == "get_issue_evidence":
+                candidates = result.get("news", [])
+                for article in candidates if isinstance(candidates, list) else []:
+                    url = _public_source_url(article.get("source_uri"))
+                    title = article.get("title")
+                    if url and isinstance(title, str) and title.strip():
+                        source_links.append({"title": title[:500], "url": url})
+            elif run["function_name"] == "read_web_document" and result.get("final_eligible") is True:
+                url = _public_source_url(result.get("final_url"))
+                title = result.get("title")
+                if url and isinstance(title, str) and title.strip():
+                    source_links.append({"title": title[:500], "url": url})
+        unique = {}
+        for link in source_links:
+            unique.setdefault(link["url"], link)
+        return list(unique.values())
 
     def validate_outlook_body_evidence(self, identity, body):
         """Reject invalid draft references before a successful edit is returned.
@@ -224,19 +273,20 @@ class PublicationStore:
             if (body["mode"] == "create") != (analysis["previous_analysis_id"] is None):
                 raise ValueError("Body mode disagrees with previous publication")
             for position, item in enumerate(body["items"]):
-                self._evidence(cur, item["tool_run_ids"], analysis)
+                source_links = self._evidence(cur, item["tool_run_ids"], analysis)
                 cur.execute("""INSERT INTO outlook_items
-                    (row_id,analysis_id,item_id,section,position,title_keyword,bullets,source_as_of,tool_run_ids)
-                    VALUES(%s,%s,%s,'detail',%s,%s,%s,%s,%s)""",
+                    (row_id,analysis_id,item_id,section,position,title_keyword,bullets,sentiment,source_links,source_as_of,tool_run_ids)
+                    VALUES(%s,%s,%s,'detail',%s,%s,%s,%s,%s,%s,%s)""",
                     (uuid4().hex, identity, item["id"], position, item["title_keyword"], Jsonb(item["sentences"]),
+                     item["sentiment"], Jsonb(source_links),
                      analysis["analysis_at"], item["tool_run_ids"]))
             for position, item in enumerate(body["updates"]["items"]):
-                self._evidence(cur, item["tool_run_ids"], analysis)
+                source_links = self._evidence(cur, item["tool_run_ids"], analysis)
                 cur.execute("""INSERT INTO outlook_items
-                    (row_id,analysis_id,item_id,section,change_type,position,title_keyword,sentence,tool_run_ids)
-                    VALUES(%s,%s,%s,'update',%s,%s,%s,%s,%s)""",
+                    (row_id,analysis_id,item_id,section,change_type,position,title_keyword,sentence,sentiment,source_links,tool_run_ids)
+                    VALUES(%s,%s,%s,'update',%s,%s,%s,%s,%s,%s,%s)""",
                     (uuid4().hex, identity, item["id"], item["change_type"], position, item["title_keyword"],
-                     item["sentence"], item["tool_run_ids"]))
+                     item["sentence"], item["sentiment"], Jsonb(source_links), item["tool_run_ids"]))
             for factor in features["factors"]:
                 cur.execute("""INSERT INTO outlook_factors(row_id,analysis_id,type,sticker,sentence)
                     VALUES(%s,%s,%s,%s,%s)""", (uuid4().hex, identity, factor["type"], factor["sticker"], factor["sentence"]))
@@ -273,9 +323,12 @@ class PublicationStore:
             value = {"id": item["item_id"], "title_keyword": item["title_keyword"], "tool_run_ids": item["tool_run_ids"]}
             if item["section"] == "detail":
                 value["sentences"] = item["bullets"]
+                value["sentiment"] = item.get("sentiment")
+                value["source_links"] = item.get("source_links", [])
                 detail["items"].append(value)
             else:
-                value.update(change_type=item["change_type"], sentence=item["sentence"])
+                value.update(change_type=item["change_type"], sentence=item["sentence"], sentiment=item.get("sentiment"),
+                             source_links=item.get("source_links", []))
                 detail["updates"]["items"].append(value)
         cur.execute("SELECT type,sticker,sentence FROM outlook_factors WHERE analysis_id=%s", (identity,))
         factors = {factor["type"]: factor for factor in cur.fetchall()}

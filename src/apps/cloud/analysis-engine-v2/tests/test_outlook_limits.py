@@ -87,7 +87,7 @@ def test_every_overlong_bullet_comes_back_at_once_by_location_and_the_model_stil
     monkeypatch.setattr(runner, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
     called = []
     server, _ = runner.make_server(EDIT_SCHEMAS, lambda name, arguments: called.append(name))
-    topic = {'id': 't1', 'title_keyword': '수주', 'sentences': ['비밀' * 31, '짧다', '기밀' * 40], 'tool_run_ids': ['r1']}
+    topic = {'id': 't1', 'title_keyword': '수주', 'sentences': ['비밀' * 31, '짧다', '기밀' * 40], 'sentiment': 'positive', 'tool_run_ids': ['r1']}
     text = asyncio.run(server['tools'][0].handler({'title': '제목', 'items': [topic]}))['content'][0]['text']
     assert 'items/0/sentences/0: 62 characters, limit 60' in text and 'items/0/sentences/2: 80 characters, limit 60' in text
     assert '비밀' not in text and called == []
@@ -101,7 +101,7 @@ def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be
     import pytest
     from edge_analysis_v2.analysis.body_editor import BodyEditor
     at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
-    topic = {'id': 't1', 'title_keyword': '수주 확대', 'sentences': ['마' * 61], 'tool_run_ids': ['r1']}
+    topic = {'id': 't1', 'title_keyword': '수주 확대', 'sentences': ['마' * 61], 'sentiment': 'positive', 'tool_run_ids': ['r1']}
     with pytest.raises(ValueError, match=r'detail.items\[0\].sentences\[0\] 61>60'):
         BodyEditor(None, at).write('제목', [topic])
     ok = BodyEditor(None, at).write('제목', [topic | {'sentences': ['마' * 60]}])
@@ -112,7 +112,7 @@ def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be
     from edge_analysis_v2.tools.execution import ToolInputError
     # ToolInputError is the only failure whose text the audited executor passes on to the model.
     with pytest.raises(ToolInputError, match='rewrite the whole body'):
-        editor.apply([{'action': 'add', 'id': 't2', 'title_keyword': '새 논점', 'sentences': ['짧은 문장'], 'tool_run_ids': ['r2']}])
+        editor.apply([{'action': 'add', 'id': 't2', 'title_keyword': '새 논점', 'sentences': ['짧은 문장'], 'sentiment': 'neutral', 'tool_run_ids': ['r2']}])
     assert len(editor.write('제목', [topic | {'sentences': ['마' * 60]}])['items']) == 1
 
 
@@ -123,7 +123,7 @@ def test_an_overlong_summary_cannot_be_published():
     features = {'outlook': {'direction': '중립'}, 'summary_card': {'title': '가', 'summary': '나' * 81}, 'factors': factors,
                 'conclusion': {'title': '사', 'supports': [], 'burdens': [], 'sentence': '차'}}
     body = {'title': '다', 'mode': 'create', 'updates': {'date': '2026-10-06', 'items': []}, 'items': [
-        {'id': 't1', 'title_keyword': '라', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r1']}]}
+        {'id': 't1', 'title_keyword': '라', 'sentences': [{'sentence': '마', 'is_updated': False}], 'sentiment': 'positive', 'tool_run_ids': ['r1']}]}
     with pytest.raises(ValueError, match='summary_card.summary 81>80'):
         publication_validation.outlook(features, body)
     features['summary_card']['summary'] = '나' * 80
@@ -160,6 +160,6 @@ def test_a_same_day_update_entry_with_an_old_long_title_does_not_block_a_rewrite
     topic = {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}
     old = {'title': '제목', 'items': [topic], 'updates': {'date': '2026-10-06', 'items': [
         {'id': 'gone', 'change_type': 'deleted', 'title_keyword': '라' * 33, 'sentence': None, 'tool_run_ids': ['r1']}]}}
-    body = BodyEditor(old, at).write('제목', [{'id': 't2', 'title_keyword': '짧은 제목', 'sentences': ['새 문장'], 'tool_run_ids': ['r2']}])
+    body = BodyEditor(old, at).write('제목', [{'id': 't2', 'title_keyword': '짧은 제목', 'sentences': ['새 문장'], 'sentiment': 'neutral', 'tool_run_ids': ['r2']}])
     assert violations({'detail': body}) == []
     assert [u['title_keyword'] for u in body['updates']['items'] if u['id'] == 'gone'] == ['라' * 20]

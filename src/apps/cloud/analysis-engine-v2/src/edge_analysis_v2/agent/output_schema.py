@@ -23,9 +23,10 @@ ITEM = obj({'title_keyword': TEXT, 'sentence': TEXT, 'sentiment': SENTIMENT, 'to
 TOPIC = obj({'id': TEXT, 'title_keyword': limited('detail.items[].title_keyword'),
              'sentences': {'type': 'array', 'minItems': 1, 'maxItems': MAX_BULLETS_PER_TOPIC,
                            'items': limited('detail.items[].sentences[].sentence')},
+             'sentiment': SENTIMENT | {'description': 'Required for every new topic. When editing, submit sentiment together with changed sentence text; sentiment-only edits are invalid.'},
              'tool_run_ids': REFS | {'description': '이 논점의 전체 근거 목록을 교체합니다. 바뀐 문장뿐 아니라 유지한 문장의 숫자·비중 근거도 포함합니다. 서로 다른 종류의 숫자를 쓰면 각 계산 호출 ID를 모두 넣습니다.'},
              'updated_sentence_numbers': {'type': 'array', 'items': {'type': 'integer', 'minimum': 1}}},
-            ['id', 'title_keyword', 'sentences', 'tool_run_ids'])
+            ['id', 'title_keyword', 'sentences', 'sentiment', 'tool_run_ids'])
 MOVEMENT = obj({
     'new_items': {'type': 'array', 'items': obj(ITEM['properties'] | {
         'candidate_id': TEXT, 'type': {'enum': ['이슈', '차트', '매크로', '수급']}})},

@@ -76,5 +76,5 @@ def test_database_factor_tool_version_moves_with_its_response_shape():
     # Whole-ETF figures are allowed from 70% observed weight; the same name must not mix old and new meaning.
     assert versions['get_etf_holdings'] == 'database-v2'
     # The audit store also freezes descriptions: moved citation instructions need a new identity.
-    assert versions['get_issue_evidence'] == 'database-v2'
+    assert versions['get_issue_evidence'] == 'database-v3'  # Final evidence now includes the source URL.
     assert versions['calculate_chart_indicators'] == 'database-v1'          # 모양이 안 바뀐 툴은 그대로
