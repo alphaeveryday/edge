@@ -19,7 +19,7 @@
 
 | 툴 | 실제 원천 | 반환·제한 |
 |---|---|---|
-| get_etf_holdings | etf_holding_snapshot + status + instrument/entity | 현재 시각까지 적재된 최신 구성. 원래 비중 유지. 누락 시 coverage=partial, observed_weight_ratio 표시. 가중 계산에는 불완전 구성을 사용하지 않음 |
+| get_etf_holdings | etf_holding_snapshot + status + instrument/entity | 현재 시각까지 적재된 최신 구성. 원래 비중 유지. 누락 시 coverage=partial, observed_weight_ratio 표시. 주식 비중 합이 1을 넘으면 적재되지 않은 원천 행(현금 등, 입력 행 수 > 적재 행 수)이 있을 때만 partial로 받고 합은 넘는 그대로 표시, 그런 행이 없으면 거부. 가중 계산은 관측 비중 70% 이상일 때만 |
 | search_news_threads | document → assertion → event_evidence → source_event → event_thread_link | DB 사건 ID·단계·스레드로 묶음. 같은 사건의 추가 기사만 중복 수로 표시. 연결 없는 기사도 unthreaded_news로 제공 |
 | get_issue_evidence | document + news_document | true는 확보된 발췌와 body_kind=excerpt, false는 동일 기사 ID·제목. 발췌 확보 시점이 늦으면 body=null |
 
