@@ -108,7 +108,7 @@ def load_source(connection, ticker, analysis_at):
     members = current['holdings']
     targets = [etf['instrument_id']]+[source_ids[r['instrument_id']] for r in members]
     targets += [actors[r['instrument_id']] for r in members if actors.get(r['instrument_id'])]
-    articles = _rows(connection, """SELECT d.document_id,d.title,d.published_at,d.available_at,n.lead_text,n.lead_observed_at
+    articles = _rows(connection, """SELECT d.document_id,d.title,d.published_at,d.available_at,d.source_uri,n.lead_text,n.lead_observed_at
         FROM document d JOIN news_document n USING(document_id)
         WHERE d.document_type='NEWS' AND d.published_at BETWEEN %s AND %s AND d.available_at<=%s
         AND EXISTS(SELECT 1 FROM document_entity de WHERE de.document_id=d.document_id AND de.entity_id=ANY(%s))
@@ -120,6 +120,7 @@ def load_source(connection, ticker, analysis_at):
     for row in articles[:1000]:
         body = row['lead_text'] if row['lead_observed_at'] is not None and row['lead_observed_at']<=at else None
         data['news'].append({'news_id':row['document_id'],'title':row['title'],'body':body,'body_kind':'excerpt',
+            'source_uri':row['source_uri'],
             'published_at':row['published_at'].isoformat(),'available_at':row['available_at'].isoformat()})
     data['news_links'] = _rows(connection, """SELECT DISTINCT a.document_id AS news_id,
         l.thread_id,s.source_event_id AS event_id,s.lifecycle_stage AS stage

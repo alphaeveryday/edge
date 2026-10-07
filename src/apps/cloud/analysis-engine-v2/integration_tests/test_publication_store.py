@@ -37,8 +37,8 @@ def publication():
         try:
             yield store, key, evidence
         finally:
-            conn.execute("DELETE FROM tool_runs WHERE tool_id=%s", (key,))
-            conn.execute("DELETE FROM tool_definitions WHERE tool_id=%s", (key,))
+            conn.execute("DELETE FROM tool_runs WHERE tool_id IN (%s,%s)", (key, key + "-news-source"))
+            conn.execute("DELETE FROM tool_definitions WHERE tool_id IN (%s,%s)", (key, key + "-news-source"))
             for table in ["outlook_conclusion_keywords", "outlook_factors", "outlook_items"]:
                 conn.execute(f"DELETE FROM {table} WHERE analysis_id IN (SELECT analysis_id FROM outlook_analyses WHERE etf_code=%s)", (key,))
             conn.execute("DELETE FROM movement_items WHERE analysis_id IN (SELECT analysis_id FROM movement_analyses WHERE etf_code=%s)", (key,))
@@ -133,12 +133,39 @@ def test_outlook_all_features_are_assembled_from_committed_rows(publication):
     store.begin("outlook", identity, key, NOW)
     evidence(identity, "outlook")
     editor = BodyEditor(None, NOW)
-    body = editor.write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"], "tool_run_ids":[identity]}])
+    body = editor.write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"], "sentiment":"positive", "tool_run_ids":[identity]}])
     result = store.save_outlook(identity, features(identity), body)
     assert result["detail"]["items"][0]["sentences"][0] == {"sentence":"불릿", "is_updated":False}
+    assert result["detail"]["items"][0]["sentiment"] == "positive"
     assert result["detail"]["updates"]["items"] == []
     assert store.get_outlook(identity) == result
     assert store.save_outlook(identity, {}, {}) == result
+
+
+def test_outlook_news_source_links_are_assembled_from_final_evidence(publication):
+    store, key, evidence = publication
+    identity = key + "-outlook-source"
+    store.begin("outlook", identity, key, NOW)
+    evidence(identity, "outlook")
+    source_tool = key + "-news-source"
+    audit = ToolStore(store.connection)
+    audit.register_definition(tool_id=source_tool, function_name="get_issue_evidence", version="v2",
+                              description="Read final news evidence", source_names=["news"])
+    source_run = identity + "-news-run"
+    audit.save_run(tool_run_id=source_run, tool_id=source_tool, analysis_kind="outlook", analysis_id=identity,
+                   arguments={"news_ids": ["article-1"], "include_body": False}, context={},
+                   output={"tool_run_id": source_run, "result": {"news": [
+                       {"news_id": "article-1", "title": "계약 발표", "source_uri": "https://news.example.com/article/1"}]}},
+                   started_at=NOW, finished_at=NOW)
+    body = BodyEditor(None, NOW).write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"],
+                                                  "sentiment":"positive", "tool_run_ids":[source_run]}])
+    store.final_tool_names = store.final_tool_names | {"get_issue_evidence"}
+    result = store.save_outlook(identity, features(identity), body)
+    assert result["detail"]["items"][0]["source_links"] == [
+        {"title": "계약 발표", "url": "https://news.example.com/article/1"}]
+    from edge_analysis_v2.dashboard.server import assemble_screen
+    screen = assemble_screen(store.connection, "outlook", identity, "all")
+    assert screen["detail"]["items"][0]["source_links"] == result["detail"]["items"][0]["source_links"]
 
 
 def test_missing_factor_rejects_entire_publication_instead_of_inventing_neutral(publication):
@@ -161,15 +188,17 @@ def test_outlook_changed_topic_and_daily_updates_share_new_analysis(publication)
     store.begin("outlook", identity, key, NOW)
     evidence(identity, "outlook")
     editor = BodyEditor(None, NOW)
-    body = editor.write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"], "tool_run_ids":[identity]}])
+    body = editor.write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"], "sentiment":"positive", "tool_run_ids":[identity]}])
     first = store.save_outlook(identity, features(identity), body)
     second = identity + "-next"
     store.begin("outlook", second, key, NOW + timedelta(minutes=1), identity)
     evidence(second, "outlook")
     editor = BodyEditor(first["detail"], NOW)
-    body = editor.apply([{"action":"update", "id":"topic", "sentences":["새 불릿"], "updated_sentence_numbers":[1], "tool_run_ids":[second]}])
+    body = editor.apply([{"action":"update", "id":"topic", "sentences":["새 불릿"], "sentiment":"negative", "updated_sentence_numbers":[1], "tool_run_ids":[second]}])
     result = store.save_outlook(second, features(second), body)
     assert result["detail"]["updates"]["items"][0]["sentence"] == "새 불릿"
+    assert result["detail"]["items"][0]["sentiment"] == "negative"
+    assert result["detail"]["updates"]["items"][0]["sentiment"] == "negative"
     assert store.get_outlook(identity) == first
 
 

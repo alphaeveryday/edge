@@ -32,6 +32,14 @@ def test_evidence_omits_body_and_rejects_unavailable_id(fixture):
         FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": True})
 
 
+def test_final_news_evidence_carries_article_url_for_server_assembled_sources(fixture):
+    fixture["news"][0]["source_uri"] = "https://news.example.com/article/0"
+    result = FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": False})
+    assert result["result"]["news"][0]["source_uri"] == "https://news.example.com/article/0"
+    exploratory = FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": True})
+    assert "source_uri" not in exploratory["result"]["news"][0]
+
+
 def test_partial_weights_never_become_whole_etf(fixture):
     fixture["holdings"][0]["weight"] = 0.2
     with pytest.raises(ValueError, match="weight"):

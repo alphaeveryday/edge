@@ -8,9 +8,9 @@ from edge_analysis_v2.analysis.body_editor import BodyEditor
 NOW = datetime.fromisoformat("2026-09-28T08:30:00+09:00")
 
 
-def topic(identity="a", sentence="old"):
+def topic(identity="a", sentence="old", sentiment="positive"):
     return {"id": identity, "title_keyword": identity, "sentences": [sentence],
-            "tool_run_ids": ["run-1"]}
+            "sentiment": sentiment, "tool_run_ids": ["run-1"]}
 
 
 def base(count=1):
@@ -42,7 +42,7 @@ def test_multiple_edits_generate_updates_and_do_not_mutate_base():
     editor = BodyEditor(original, NOW)
     editor.apply([
         {"action": "update", "id": "0", "sentences": ["new"],
-         "updated_sentence_numbers": [1], "tool_run_ids": ["run-2"]},
+         "sentiment": "positive", "updated_sentence_numbers": [1], "tool_run_ids": ["run-2"]},
         {"action": "remove", "id": "1"},
         {"action": "add", **topic("2", "added")},
     ])
@@ -93,7 +93,7 @@ def test_title_or_text_change_requires_full_evidence():
 def test_yesterday_highlight_is_not_presented_as_todays_new_information():
     editor = BodyEditor(base(), NOW)
     editor.apply([{"action":"update", "id":"0", "sentences":["new"],
-                  "updated_sentence_numbers":[1], "tool_run_ids":["run-2"]}])
+                  "sentiment":"positive", "updated_sentence_numbers":[1], "tool_run_ids":["run-2"]}])
     next_day = BodyEditor(editor.result(), NOW.replace(day=29))
     assert next_day.result()["items"][0]["sentences"][0]["is_updated"] is False
 
@@ -153,6 +153,45 @@ def test_reordering_duplicate_sentences_does_not_spread_highlights():
     ]
     editor = BodyEditor(original, NOW)
     result = editor.apply([{'action': 'update', 'id': '0', 'sentences': ['other', 'same', 'same'],
-                           'updated_sentence_numbers': [1, 2, 3], 'tool_run_ids': ['run-1']}])
+                           'sentiment': 'positive', 'updated_sentence_numbers': [1, 2, 3], 'tool_run_ids': ['run-1']}])
     assert [s['is_updated'] for s in result['items'][0]['sentences']] == [False, True, False]
     assert result['updates']['items'] == []
+
+
+def test_new_topic_requires_valid_sentiment():
+    with pytest.raises(ValueError, match="sentiment"):
+        BodyEditor(None, NOW).write("title", [{**topic(), "sentiment": "mixed"}])
+
+
+def test_sentence_edit_requires_sentiment_and_sentiment_cannot_change_alone():
+    with pytest.raises(ValueError, match="together"):
+        BodyEditor(base(), NOW).apply([{"action": "update", "id": "0", "sentences": ["new"],
+                                        "tool_run_ids": ["run-2"]}])
+    with pytest.raises(ValueError, match="sentence"):
+        BodyEditor(base(), NOW).apply([{"action": "update", "id": "0", "sentences": ["old"],
+                                        "sentiment": "negative", "tool_run_ids": ["run-2"]}])
+
+
+def test_sentence_and_sentiment_change_are_returned_as_one_modified_topic():
+    result = BodyEditor(base(), NOW).apply([{"action": "update", "id": "0", "sentences": ["new"],
+                                             "sentiment": "negative", "updated_sentence_numbers": [1],
+                                             "tool_run_ids": ["run-2"]}])
+    assert result["items"][0]["sentiment"] == "negative"
+    assert result["updates"]["items"][0]["change_type"] == "modified"
+    assert result["updates"]["items"][0]["sentence"] == "new"
+    assert result["updates"]["items"][0]["sentiment"] == "negative"
+
+
+def test_edit_draft_drops_server_assembled_source_links_for_all_topics():
+    original = base(2)
+    for item in original["items"]:
+        item["source_links"] = [{"title": "Article", "url": "https://news.example.com/1"}]
+    editor = BodyEditor(original, NOW)
+    result = editor.apply([{"action": "update", "id": "0", "sentences": ["new"],
+                            "sentiment": "negative", "tool_run_ids": ["run-2"]}])
+    assert all("source_links" not in item for item in result["items"])
+
+
+def test_full_rewrite_cannot_change_only_sentiment():
+    with pytest.raises(ValueError, match="sentence"):
+        BodyEditor(base(), NOW).write("title", [topic("0", sentiment="negative")])

@@ -51,8 +51,8 @@ def evidence(fixture, news_ids, include_body):
     rows = {r["news_id"]: r for r in visible(fixture)}
     if any(identity not in rows for identity in news_ids):
         raise ValueError("news unavailable at analysis time")
-    keys = ("news_id", "title", "body") if include_body else ("news_id", "title")
-    return {"news": [{k: rows[identity].get(k) for k in keys} |
+    keys = ("news_id", "title", "body") if include_body else ("news_id", "title", "source_uri")
+    return {"news": [{k: rows[identity][k] for k in keys if k in rows[identity] and rows[identity][k] is not None} |
                      ({'body_kind': rows[identity]['body_kind']} if include_body and 'body_kind' in rows[identity] else {}) for identity in news_ids]}
 
 

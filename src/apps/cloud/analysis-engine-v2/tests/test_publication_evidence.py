@@ -5,6 +5,7 @@ from datetime import datetime
 import pytest
 
 from edge_analysis_v2.storage.publications import PublicationStore
+from edge_analysis_v2.storage.publications import _public_source_url
 
 
 class Cursor:
@@ -30,6 +31,18 @@ def test_only_explicit_false_news_lookup_can_be_used_as_final_evidence(include_b
         store._evidence(Cursor(run), ["run-1"], analysis)
     run["arguments"]["include_body"] = False
     store._evidence(Cursor(run), ["run-1"], analysis)
+
+
+@pytest.mark.parametrize("value", [
+    "javascript:alert(1)", "file:///etc/passwd", "https://user:pass@example.com/a",
+    "http://localhost/article", "http://127.0.0.1/article", "https://internal/article",
+])
+def test_source_links_reject_nonpublic_or_unsafe_urls(value):
+    assert _public_source_url(value) is None
+
+
+def test_source_links_preserve_public_article_urls():
+    assert _public_source_url("https://news.example.com/article/1") == "https://news.example.com/article/1"
 
 
 def test_another_etfs_successful_run_is_not_evidence_for_this_etf():
