@@ -200,13 +200,21 @@ def test_the_two_fund_ratio_tools_agree_and_corrupt_data_stops_them_instead_of_s
     bundle = tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
     assert direct["weighted_per"] == bundle["weighted_per"] == 13.75      # A and B hold 80% of the fund
     assert direct["weighted_pbr"] == pytest.approx(bundle["weighted_pbr"]) and bundle["ratio_coverage"] == {"per": .8, "pbr": 1}
-    # C's later release has no usable EPS, so it must not date the PER that was computed without it.
+    # C's later release has no usable EPS, so it must not date the PER that was computed without it; and a
+    # late restatement of an older quarter of A dates PER (which sums it) but not PBR (latest quarter only).
     late = "2026-09-20T18:00:00+09:00"
     for row in fixture["financials"]:
-        if row["instrument_id"] == "C" and row["period"] == "2026-Q1":
-            row["available_at"] = late
-    stamped = FixtureTools(fixture).call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
-    assert stamped["ratio_observed_at"]["per"] != late and stamped["ratio_observed_at"]["pbr"] == late
+        if (row["instrument_id"], row["period"]) in (("C", "2026-Q1"), ("A", "2025-Q4")):
+            row["available_at"] = late if row["instrument_id"] == "A" else "2026-09-19T18:00:00+09:00"
+    for name in ("get_instrument_factors", "calculate_weighted_valuation"):
+        args = {"instrument_id": "ETF", "factors": ["valuation"]} if name == "get_instrument_factors" else {}
+        stamped = FixtureTools(fixture).call(name, args)["result"]
+        stamped = stamped.get("valuation", stamped)["ratio_observed_at"]
+        assert stamped == {"per": late, "pbr": "2026-09-18T18:00:00+09:00"}, name
+    zero = valuation_fixture()
+    zero["prices"][1]["close"] = 0                                        # a zero price is broken data, not "not applicable"
+    with pytest.raises(ValueError, match="INVALID_PRICE"):
+        FixtureTools(zero).call("calculate_weighted_valuation", {})
     fixture["prices"].append(dict(fixture["prices"][-1]))                 # a duplicate price row for C
     with pytest.raises(ValueError, match="CONFLICTING_PRICE"):
         FixtureTools(fixture).call("calculate_weighted_valuation", {})

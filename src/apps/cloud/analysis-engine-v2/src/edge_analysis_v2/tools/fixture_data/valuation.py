@@ -39,7 +39,7 @@ def calculate(fixture, instrument_id):
         raise ToolInputError("MISSING_QUARTERS: no released quarter in database; investigate public filings")
     price = decimal(prices[-1]["close"])
     if price <= 0:
-        raise ToolInputError("RATIO_NOT_APPLICABLE: positive price required; do not interpret as neutral")
+        raise ToolInputError("INVALID_PRICE: the latest price is not positive; source data requires repair")
     selected = sorted(periods)[-4:]
     latest = periods[selected[-1]]
     unavailable, eps, bps = {}, None, None
@@ -62,9 +62,9 @@ def calculate(fixture, instrument_id):
         codes = [reason.split(":")[0] for reason in unavailable.values()]
         code = "RATIO_NOT_APPLICABLE" if "RATIO_NOT_APPLICABLE" in codes else codes[0] if len(set(codes)) == 1 else "MISSING_FINANCIAL_VALUE"
         raise ToolInputError(code + ": neither PER nor PBR can be calculated (" + "; ".join(unavailable.values()) + "); investigate public filings")
-    # The stamp covers only the inputs the returned ratios used.
-    used = [prices[-1]["available_at"]] + ([periods[index]["available_at"] for index in selected] if eps is not None else []) \
-        + ([latest["available_at"]] if bps is not None else [])
+    # Each ratio is stamped by its own inputs: a late restatement of an older quarter dates PER, not PBR.
+    stamps = {"per": max([prices[-1]["available_at"]] + [periods[index]["available_at"] for index in selected], key=instant) if eps is not None else None,
+              "pbr": max([prices[-1]["available_at"], latest["available_at"]], key=instant) if bps is not None else None}
     # Q4 EPS from DART is FY−9M (weighted-share approximation); the result says so, never hides it.
     derived = [periods[index]["period"] for index in selected if periods[index].get("eps_derivation") == "FY_MINUS_9M"] if eps is not None else []
     return {"instrument_id": instrument_id, "per": number(price/eps) if eps is not None else None,
@@ -73,7 +73,8 @@ def calculate(fixture, instrument_id):
             "ttm_eps": number(eps) if eps is not None else None, "bps": number(bps) if bps is not None else None,
             "bps_period": latest["period"] if bps is not None else None,
             "periods": [periods[index]["period"] for index in selected] if eps is not None else [],
-            "derived_periods": derived, "approximate": bool(derived), "observed_at": max(used, key=instant)}
+            "derived_periods": derived, "approximate": bool(derived), "ratio_observed_at": stamps,
+            "observed_at": max((s for s in stamps.values() if s), key=instant)}
 
 
 def covered_weight(rows):
@@ -94,7 +95,7 @@ def weighted(fixture):
             missing.append({"instrument_id": row["instrument_id"], "weight": row["weight"], "reason": str(error).split(";")[0]})
     result = {"as_of_date": portfolio["as_of_date"], "constituents": values, "missing_constituents": missing, "ratio_coverage": {},
               "coverage": {"constituents": len(portfolio["holdings"]), "weight": number(covered_weight(portfolio["holdings"]))}}
-    published = []
+    result["ratio_observed_at"] = {}
     for metric in ("per", "pbr"):
         # The 70% rule applies to the weight that actually has this ratio, not to the holdings list:
         # an average over a minority of the fund is not the fund's ratio.
@@ -103,8 +104,8 @@ def weighted(fixture):
         enough = covered >= MIN_WEIGHT_COVERAGE
         result["weighted_" + metric] = number(sum(decimal(v["weight"])*decimal(v[metric]) for v in usable)/covered) if enough else None
         result["ratio_coverage"][metric] = {"constituents": len(usable), "weight": number(covered)}
-        if enough:
-            published.extend(usable)
+        result["ratio_observed_at"][metric] = max((v["ratio_observed_at"][metric] for v in usable), key=instant) if enough else None
+    published = [stamp for stamp in result["ratio_observed_at"].values() if stamp]
     if not published:
         raise ToolInputError("INSUFFICIENT_RATIO_COVERAGE: constituents with a PER cover "
             + str(result["ratio_coverage"]["per"]["weight"]) + " and with a PBR " + str(result["ratio_coverage"]["pbr"]["weight"])
@@ -112,5 +113,5 @@ def weighted(fixture):
     per_rows = [v for v in values if v["per"] is not None] if result["weighted_per"] is not None else []
     result["approximate"] = any(v["approximate"] for v in per_rows)
     result["derived_constituents"] = [v["instrument_id"] for v in per_rows if v["approximate"]]
-    result["observed_at"] = max((v["observed_at"] for v in published), key=instant)
+    result["observed_at"] = max(published, key=instant)
     return result

@@ -211,7 +211,7 @@ def valuation_data(fixture, instrument_id):
                                         if share >= MIN_WEIGHT_COVERAGE else None)
         result['ratio_coverage'][metric] = number(share)
         # A ratio is stamped by the constituents that went into it; a holding left out cannot date it.
-        stamps = [value['observed_at'] for _, value in usable if value['observed_at']] if result['weighted_' + metric] is not None else []
+        stamps = [value[metric + '_observed_at'] for _, value in usable if value[metric + '_observed_at']] if result['weighted_' + metric] is not None else []
         result['ratio_observed_at'][metric] = max(stamps, key=instant) if stamps else None
     # An approximated Q4 EPS in any constituent makes the weighted PER approximate — carried, never silent.
     result['weighted_per_approximate'] = (any(value['eps_approximate'] for _, value in values if value and value['per'] is not None)
@@ -276,6 +276,8 @@ def company_valuation(fixture, instrument_id):
     bps = decimal(latest['bps']) if latest.get('bps') is not None else None
     published = max((periods[k]['available_at'] for k in selected), key=instant) if selected else None
     stamps = [stamp for stamp in (price_at, published) if stamp]
+    # Each ratio is stamped by its own inputs: a late restatement of an older quarter dates PER, not PBR.
+    latest_published = latest.get('available_at')
     # Q4 EPS from DART is FY−9M (weighted-share approximation, ALPHA-1130): the screen says so rather than hiding it.
     derived = [periods[k]['period'] for k in selected if periods[k].get('eps_derivation') == 'FY_MINUS_9M'] if eps is not None else []
     return {'scope': 'instrument', 'price_krw': number(price) if price is not None else None,
@@ -286,6 +288,8 @@ def company_valuation(fixture, instrument_id):
         'bps_krw': number(bps) if bps is not None else None,
         'per': number(price/eps) if price is not None and eps is not None and eps > 0 else None,
         'pbr': number(price/bps) if price is not None and bps is not None and bps > 0 else None,
+        'per_observed_at': max(stamps, key=instant) if stamps else None,
+        'pbr_observed_at': max([s for s in (price_at, latest_published) if s], key=instant) if price_at or latest_published else None,
         'observed_at': max(stamps, key=instant) if stamps else None}
 
 
