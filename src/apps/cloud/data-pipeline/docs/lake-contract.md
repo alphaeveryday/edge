@@ -367,7 +367,9 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   `skipped_unsupported_asset`과 유형별 수로
   계측하되 유실에는 넣지 않는다. 미지 유형은 `skipped_unknown_asset_type`으로 유실에 남긴다
   (ALPHA-1017). `load-etf-holdings`는 정상 제외 합계를 `ops.unsupported_records`에도 남겨 실행
-  이력에서 적재·지원 제외·유실을 분리한다(ALPHA-1020).
+  이력에서 적재·지원 제외·유실을 분리한다(ALPHA-1020). 현금 행은 적재하지 않지만 그 비중 합은
+  `etf_holding_snapshot_status.cash_weight_ratio`에 남긴다. 현금 행이 없거나 비중을 모르는 현금 행이
+  있으면 NULL이다(ALPHA-1244). 음수 현금이면 주식만의 합이 1을 넘는다.
   파티션은 `part-00000.parquet`로 조건부 교체한 뒤 나머지 직접 자식 part만 지운다.
   구형 part 삭제 실패 뒤 같은·과거 런 재시도와 다른 ETF 수집에서도 이미 교체한 최신
   target에 오래된 구성종목을 다시 합치지 않고 정리를 재시도한다.
