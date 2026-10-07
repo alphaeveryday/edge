@@ -319,7 +319,8 @@ def run(
                     ratio, weight_ok = _weight_ratio(row.get("weight_pct"))
                     prev = cash_weights.get((market, etf_id, _as_of), Decimal(0))
                     cash_weights[(market, etf_id, _as_of)] = (
-                        prev + Decimal(repr(ratio))
+                        # _weight_ratio 의 float 를 되돌리지 않고 원천 퍼센트에서 바로 나눈다(자릿수 보존).
+                        prev + Decimal(repr(float(row["weight_pct"]))) / 100
                         if prev is not None and weight_ok and ratio is not None else None
                     )
                 continue

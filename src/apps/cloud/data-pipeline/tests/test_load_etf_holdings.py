@@ -319,6 +319,11 @@ def test_snapshot_status는_적재하지_않는_현금_행의_비중_합을_남�
         _hold_row(as_of_date="2026-07-20", constituent_ticker="KRD010010002", weight_pct=None, **cash),
     ])
     _write_canonical(storage, "KR", "2026-07-21", [_hold_row(as_of_date="2026-07-21", weight_pct=100.0)])
+    _write_canonical(storage, "KR", "2026-07-22", [  # float64 가 담는 17자리를 그대로 나눈다
+        _hold_row(as_of_date="2026-07-22", weight_pct=99.0),
+        _hold_row(as_of_date="2026-07-22", constituent_ticker="KRD010010001",
+                  weight_pct=0.12345678901234566, **cash),
+    ])
     conn = _FakeConn()
     monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
 
@@ -326,7 +331,8 @@ def test_snapshot_status는_적재하지_않는_현금_행의_비중_합을_남�
     cash_by_day = {day: status[3] for (_etf, day), status in conn.statuses.items()}
     # 07-17: 현금 행이 여럿이면 더한다(0.0063 + 0.0001).
     assert cash_by_day == {"2026-07-16": Decimal("-0.0015"), "2026-07-17": Decimal("0.0064"),
-                           "2026-07-20": None, "2026-07-21": None}
+                           "2026-07-20": None, "2026-07-21": None,
+                           "2026-07-22": Decimal("0.0012345678901234566")}
 
 
 def test_snapshot_status_denominator는_part_중복을_논리_행으로_수렴한다(
