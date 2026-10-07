@@ -1,6 +1,7 @@
 """Common factor observations for one instrument at a fixed analysis cutoff."""
 from calendar import monthrange
 from datetime import date
+import logging
 import re
 
 from edge_analysis_v2.tools.fixture_data import chart, etf, macro
@@ -24,6 +25,7 @@ FORMULA_LATEX += (r";\ G=RMA_{14}(\max(\Delta C,0));\ L=RMA_{14}(\max(-\Delta C,
     r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})")
 
 FACTORS = ('chart', 'flow', 'valuation', 'macro')
+LOG = logging.getLogger(__name__)
 
 
 def read(fixture, instrument_id, factors=FACTORS):
@@ -138,7 +140,13 @@ def flow_data(fixture, instrument_id):
     for day in reversed(dates):
         if weighted and not any(r['as_of_date'] <= day for r in available(fixture.get('holdings', []), min(cutoff, instant(day + 'T23:59:59.999999+09:00')))):
             break
-        portfolio = holdings(fixture, day, require_complete=False) if weighted else None
+        try:
+            portfolio = holdings(fixture, day, require_complete=False) if weighted else None
+        except ValueError as error:
+            # An unreadable past snapshot ends the history like a missing one: this tool runs before the model,
+            # so one bad day must not fail the whole outlook (ALPHA-1162).
+            LOG.warning('Weighted flow history stopped etf=%s day=%s type=%s', instrument_id, day, type(error).__name__)
+            break
         if portfolio and not covers_whole_etf(portfolio):
             break
         weights = portfolio['holdings'] if weighted else [{'instrument_id': instrument_id, 'weight': 1}]

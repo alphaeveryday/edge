@@ -57,7 +57,7 @@
 
 - `scope`: 주식 `instrument`, ETF `holdings_weighted`. ETF 자체 투자자 매매로 표현하지 않는다.
 - `finalized_through`, `unit: "KRW"`, `history`: 열은 `date`, `foreign`, `institution`, `individual`.
-- 가용 확정 이력을 최대 30거래일 반환한다. 빠진 날을 0으로 채우지 않는다. ETF는 각 거래일의 전체 구성과 비중·수급이 필요하다.
+- 가용 확정 이력을 최대 30거래일 반환한다. 빠진 날을 0으로 채우지 않는다. ETF는 각 거래일의 구성(관측 비중 70% 이상)과 비중·수급이 필요하다. 그날 구성이 비중 검증을 통과하지 못하면 구성이 없는 날처럼 그날에서 이력을 멈추고 실행 로그(`Weighted flow history stopped`)에 남긴다.
 - 20일 합계·연속·좌수 변화는 화면 유지에 필요한 기존 계산 결과다. 필요한 기간이 없으면 값만 null이며 연속 경계 미확인을 정확한 일수로 표시하지 않는다.
 
 | ETF 수급 추가 필드 | 의미 |

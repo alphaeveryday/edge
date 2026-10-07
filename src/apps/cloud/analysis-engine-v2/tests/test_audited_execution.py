@@ -31,9 +31,11 @@ def test_returns_only_committed_response_and_preserves_original_arguments():
     assert saved["finished_at"] >= saved["started_at"]
 
 
-def test_calculation_error_is_recorded_without_leaking_exception_text():
+def test_calculation_error_is_recorded_without_leaking_exception_text(caplog):
     store = Mock()
-    runtime = executor(Mock(side_effect=ValueError("password=secret")), store)
+    def call(name, arguments):
+        raise ValueError("password=secret")
+    runtime = executor(call, store)
     with pytest.raises(ToolExecutionError) as raised:
         runtime.call("sum", {"days": 5})
     saved = store.save_run.call_args.kwargs
@@ -41,6 +43,10 @@ def test_calculation_error_is_recorded_without_leaking_exception_text():
     assert saved["tool_run_id"] == raised.value.tool_run_id
     assert "secret" not in saved["error_message"]
     assert "secret" not in str(raised.value)
+    # WHY(ALPHA-1162): the agent and the audit row see only a generic failure, so without this line the cause was
+    # nowhere. Operators get the type and the raising line, still never the text.
+    assert f"tool_run_id={raised.value.tool_run_id} type=ValueError at=test_audited_execution.py:" in caplog.text
+    assert "in call" in caplog.text and "secret" not in caplog.text
 
 
 def test_storage_failure_never_becomes_success_or_triggers_retry():
