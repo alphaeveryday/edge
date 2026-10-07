@@ -1162,6 +1162,8 @@ Table "outlook_items" {
   "sentence" text
   "source_as_of" timestamptz
   "tool_run_ids" text[] [not null]
+  "sentiment" text
+  "source_links" jsonb [not null]
 }
 
 Table "price_daily" {
