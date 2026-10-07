@@ -1,11 +1,16 @@
 """Connect synchronous tool execution to committed PostgreSQL evidence."""
 
+import logging
+import os
+import traceback
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Callable
 from uuid import uuid4
 
 from edge_analysis_v2.storage.tool_runs import ToolStore
+
+LOG = logging.getLogger(__name__)
 
 
 class ToolInputError(ValueError):
@@ -73,6 +78,12 @@ class AuditedExecution:
         except Exception as error:
             run_id = uuid4().hex
             message = str(error) if isinstance(error, ToolInputError) else "Tool execution failed"
+            if not isinstance(error, ToolInputError):
+                # The agent sees only the generic message. The text may carry secrets, so operators get the
+                # type and the raising line instead (ALPHA-1162).
+                where = traceback.extract_tb(error.__traceback__)[-1]
+                LOG.warning('Tool failed tool=%s tool_run_id=%s type=%s at=%s:%s in %s', name, run_id,
+                            type(error).__name__, os.path.basename(where.filename), where.lineno, where.name)
             self._store.save_run(**saved, tool_run_id=run_id, output=None,
                                  finished_at=datetime.now(timezone.utc),
                                  error_message=message)
