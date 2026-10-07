@@ -27,6 +27,11 @@ NULL 로 적재**하지만 NaN·Infinity·비수치는 **오염**이라 결측�
 None 으로 뭉개면 위장 적재된다, Rule 12). 환산 후 범위를 벗어나거나(정제/수집 깨짐) ETF 가
 자기 자신을 담는(ck_etf_holding_not_self) 행도 적재 전 격리한다.
 
+**현금 비중**: 현금·옵션 행은 holdings 모델 밖이라 적재하지 않지만, 현금 행 비중의 합은
+`etf_holding_snapshot_status.cash_weight_ratio` 에 남긴다(ALPHA-1244). 현금이 음수면 주식만의 합이
+1을 넘는데, 소비자가 그 초과를 오류와 구별하려면 이 값이 필요하다. 현금 행이 없거나 그중 하나라도
+비중을 모르면 NULL(확인 못 함)이다 — 0 으로 지어내지 않는다.
+
 **멱등**: PK `(etf_instrument_id, constituent_instrument_id, trade_date)` 로 수렴한다 —
 `ON CONFLICT … DO UPDATE … WHERE weight_ratio IS DISTINCT FROM …` 라 같은 값 재적재는 already,
 비중 정정만 UPDATE 로 흐른다(load_etf_nav 와 같은 근거).
@@ -212,6 +217,7 @@ def run(
     unknown_constituents: set[str] = set()
     weight_sums: dict[str, float] = {}  # "market:etf_id:as_of" → 비중 합(정상성 점검용)
     snapshot_counts: dict[tuple[str, str, str], list[int]] = {}
+    cash_weights: dict[tuple[str, str, str], Decimal | None] = {}  # 현금 행 없는 스냅샷은 키가 없다(NULL)
     failures: list[dict] = []
     exit_code = 0
 
@@ -307,6 +313,15 @@ def run(
             if asset_type in {"CASH", "OPTION"}:
                 skipped_unsupported_asset += 1
                 unsupported_asset_counts[asset_type] = unsupported_asset_counts.get(asset_type, 0) + 1
+                if asset_type == "CASH":
+                    # 현금 행은 적재하지 않지만 비중 합은 상태 표에 남긴다 — 음수 현금이 주식만의 합을
+                    # 1 위로 올리는 이유다(ALPHA-1244). 비중을 모르는 현금 행이 하나라도 있으면 합도 모른다.
+                    ratio, weight_ok = _weight_ratio(row.get("weight_pct"))
+                    prev = cash_weights.get((market, etf_id, _as_of), Decimal(0))
+                    cash_weights[(market, etf_id, _as_of)] = (
+                        prev + Decimal(repr(ratio))
+                        if prev is not None and weight_ok and ratio is not None else None
+                    )
                 continue
             if expected_etfs is not None and etf_id not in expected_etfs:
                 skipped_foreign_etf += 1
@@ -436,13 +451,16 @@ def run(
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO etf_holding_snapshot_status (etf_instrument_id,"
-                        " trade_date, input_row_count, valid_row_count, data_version)"
-                        " VALUES (%s, %s, %s, %s, %s)"
+                        " trade_date, input_row_count, valid_row_count, data_version,"
+                        " cash_weight_ratio)"
+                        " VALUES (%s, %s, %s, %s, %s, %s)"
                         " ON CONFLICT (etf_instrument_id, trade_date) DO UPDATE SET"
                         " input_row_count = EXCLUDED.input_row_count,"
                         " valid_row_count = EXCLUDED.valid_row_count,"
-                        " data_version = EXCLUDED.data_version, loaded_at = now()",
-                        (etf_instrument_id, as_of, input_count, valid_count, run_id),
+                        " data_version = EXCLUDED.data_version,"
+                        " cash_weight_ratio = EXCLUDED.cash_weight_ratio, loaded_at = now()",
+                        (etf_instrument_id, as_of, input_count, valid_count, run_id,
+                         cash_weights.get((market, etf_id, as_of))),
                     )
     except Exception as exc:
         # 커밋 경계는 런 전체다 — 예외면 롤백이라 부분 적재가 없다. 트레이스백으로 죽는 대신
