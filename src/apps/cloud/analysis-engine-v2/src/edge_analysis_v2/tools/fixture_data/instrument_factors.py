@@ -4,7 +4,8 @@ from datetime import date
 import re
 
 from edge_analysis_v2.tools.fixture_data import chart, etf, macro
-from edge_analysis_v2.tools.fixture_data.common import available, covers_whole_etf, decimal, holdings, instant, number
+from edge_analysis_v2.tools.fixture_data.common import MIN_WEIGHT_COVERAGE, available, covers_whole_etf, decimal, holdings, instant, number
+from edge_analysis_v2.tools.fixture_data.valuation import covered_weight
 
 FORMULA_LATEX = (
     r"M_n=\frac1n\sum_{j=0}^{n-1}C_j;\ d_{20}=100(P/M_{20}-1);\ "
@@ -197,17 +198,25 @@ def valuation_data(fixture, instrument_id):
     portfolio = holdings(fixture, require_complete=False) if published_holdings else {'as_of_date': None, 'holdings': []}
     if portfolio['holdings'] and not covers_whole_etf(portfolio):
         return None, 'Observed constituent weights are below 70%; whole-ETF weighted valuation unavailable.'
-    covered = sum(decimal(row['weight']) for row in portfolio['holdings'])
     values = [(row, company_valuation(fixture, row['instrument_id'])) for row in portfolio['holdings']]
     result = {'scope': 'holdings_weighted', 'holdings_as_of': portfolio['as_of_date'],
               'observed_weight_ratio': portfolio.get('observed_weight_ratio')}
+    result['ratio_coverage'], result['ratio_observed_at'] = {}, {}
     for metric in ('per', 'pbr'):
-        result['weighted_' + metric] = (number(sum(decimal(row['weight']) * decimal(value[metric])
-            for row, value in values) / covered) if values and all(value and value[metric] is not None for _, value in values) else None)
+        # Same rule as calculate_weighted_valuation: average over the constituents that have the ratio,
+        # stated only when they hold at least 70% of the fund.
+        usable = [(row, value) for row, value in values if value and value[metric] is not None]
+        share = covered_weight([row for row, _ in usable])
+        result['weighted_' + metric] = (number(sum(decimal(row['weight']) * decimal(value[metric]) for row, value in usable) / share)
+                                        if share >= MIN_WEIGHT_COVERAGE else None)
+        result['ratio_coverage'][metric] = number(share)
+        # A ratio is stamped by the constituents that went into it; a holding left out cannot date it.
+        stamps = [value[metric + '_observed_at'] for _, value in usable if value[metric + '_observed_at']] if result['weighted_' + metric] is not None else []
+        result['ratio_observed_at'][metric] = max(stamps, key=instant) if stamps else None
     # An approximated Q4 EPS in any constituent makes the weighted PER approximate — carried, never silent.
-    result['weighted_per_approximate'] = (any(value['eps_approximate'] for _, value in values)
+    result['weighted_per_approximate'] = (any(value['eps_approximate'] for _, value in values if value and value['per'] is not None)
                                           if result['weighted_per'] is not None else None)
-    stamps = [value['observed_at'] for _, value in values if value and value['observed_at']]
+    stamps = [stamp for stamp in result['ratio_observed_at'].values() if stamp]
     result['observed_at'] = max(stamps, key=instant) if stamps else None
     distribution = etf.distribution_yield(fixture)
     result['distribution_yield_12m_pct'] = distribution['value'] if distribution else None
@@ -267,6 +276,8 @@ def company_valuation(fixture, instrument_id):
     bps = decimal(latest['bps']) if latest.get('bps') is not None else None
     published = max((periods[k]['available_at'] for k in selected), key=instant) if selected else None
     stamps = [stamp for stamp in (price_at, published) if stamp]
+    # Each ratio is stamped by its own inputs: a late restatement of an older quarter dates PER, not PBR.
+    latest_published = latest.get('available_at')
     # Q4 EPS from DART is FY−9M (weighted-share approximation, ALPHA-1130): the screen says so rather than hiding it.
     derived = [periods[k]['period'] for k in selected if periods[k].get('eps_derivation') == 'FY_MINUS_9M'] if eps is not None else []
     return {'scope': 'instrument', 'price_krw': number(price) if price is not None else None,
@@ -277,6 +288,8 @@ def company_valuation(fixture, instrument_id):
         'bps_krw': number(bps) if bps is not None else None,
         'per': number(price/eps) if price is not None and eps is not None and eps > 0 else None,
         'pbr': number(price/bps) if price is not None and bps is not None and bps > 0 else None,
+        'per_observed_at': max(stamps, key=instant) if stamps else None,
+        'pbr_observed_at': max([s for s in (price_at, latest_published) if s], key=instant) if price_at or latest_published else None,
         'observed_at': max(stamps, key=instant) if stamps else None}
 
 

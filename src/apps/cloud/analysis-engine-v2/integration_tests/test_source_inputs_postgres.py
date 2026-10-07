@@ -159,7 +159,7 @@ def test_financial_rows_feed_valuation_and_blocked_bps_is_a_gap(db):
     assert result["periods"] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"]
     fixture["holdings"][0]["instrument_id"] = "TST002"
     fixture["prices"][0]["instrument_id"] = "TST002"
-    with pytest.raises(ValueError):   # a hole in the latest quarter blocks the ratio; it never slides to older quarters
+    with pytest.raises(ValueError):   # one released quarter and no usable book value: neither ratio can be computed
         valuation.calculate(fixture, "TST002")
 
 
@@ -191,8 +191,11 @@ def test_incomplete_latest_quarter_blocks_instead_of_sliding_to_older_quarters(d
                "holdings": [{"instrument_id": "TST001", "weight": "1", "as_of_date": "2026-11-19", "available_at": "2026-11-19T18:00:00+09:00"}],
                "prices": [{"instrument_id": "TST001", "date": "2026-11-19", "close": "68000", "available_at": "2026-11-19T16:00:00+09:00"}],
                "financials": rows}
-    with pytest.raises(ValueError):
-        valuation.calculate(fixture, "TST001")
+    # The latest quarter has EPS but no BPS: PBR is withheld rather than taken from an older quarter,
+    # and PER still covers the latest four quarters.
+    result = valuation.calculate(fixture, "TST001")
+    assert result["pbr"] is None and "MISSING_BPS" in result["unavailable"]["pbr"]
+    assert result["per"] is not None and result["periods"][-1] == "2026-Q3"
 
 
 def test_annual_report_is_invisible_before_the_day_after_receipt(db):

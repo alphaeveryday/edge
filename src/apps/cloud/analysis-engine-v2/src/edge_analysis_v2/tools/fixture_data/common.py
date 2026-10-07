@@ -2,6 +2,8 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Context, Decimal
 
+from edge_analysis_v2.tools.execution import ToolInputError
+
 
 def instant(value):
     """Parse an explicit source timestamp in the Korean market timezone."""
@@ -76,7 +78,8 @@ def holdings(fixture, day=None, *, require_complete=True):
     # A whole-ETF weighted figure is allowed once the observed weights cover MIN_WEIGHT_COVERAGE of the fund.
     # Weights are never renormalized, so every such figure must be shown with observed_weight_ratio.
     if require_complete and total < MIN_WEIGHT_COVERAGE:
-        raise ValueError('observed constituent weights below the 70% coverage required for a whole-ETF figure')
+        # ToolInputError text is what the agent is shown; a plain ValueError reaches it as a generic failure.
+        raise ToolInputError('INSUFFICIENT_HOLDINGS_COVERAGE: observed constituent weights below the 70% coverage required for a whole-ETF figure')
     return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows],
             "coverage": 'full' if complete else 'partial', "observed_weight_ratio": number(total)}
 

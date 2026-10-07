@@ -130,6 +130,8 @@ def project_factor_metrics(output: dict, etf_code: str) -> dict:
                 subject = values.get('metric_subjects', {}).get(metric)
             elif metric == 'distribution_yield_12m_pct':
                 stamp = values['distribution_observed_at']
+            elif metric in ('weighted_per', 'weighted_pbr') and values.get('ratio_observed_at'):
+                stamp = values['ratio_observed_at'][metric.removeprefix('weighted_')]
             elif metric == 'etf_units_change_20d_pct':
                 stamp = values['units_observed_at']
             card = dict(key=metric, value=value, observed_at=stamp, tool_run_ids=[output['tool_run_id']])

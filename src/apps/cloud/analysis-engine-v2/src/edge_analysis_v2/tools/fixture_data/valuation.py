@@ -1,12 +1,24 @@
 """Released quarterly per-share fundamentals and equity-weighted ratios."""
+from calendar import monthrange
+from datetime import date
+from decimal import Context
 import re
 from edge_analysis_v2.tools.execution import ToolInputError
 
-from edge_analysis_v2.tools.fixture_data.common import available, decimal, holdings, instant, number
+from edge_analysis_v2.tools.fixture_data.common import MIN_WEIGHT_COVERAGE, available, decimal, holdings, instant, number
+
+# A constituent without a usable ratio is left out of a fund average; corrupted source data is not.
+ABSENT = ("MISSING_", "RATIO_NOT_APPLICABLE")
 
 
 def calculate(fixture, instrument_id):
-    """Calculate a constituent's TTM PER and latest PBR from available releases."""
+    """Calculate a constituent's TTM PER and latest PBR from available releases.
+
+    Each ratio needs only its own inputs: four consecutive quarters of EPS for PER, the latest released
+    quarter's BPS for PBR. Quarterly reports often carry no BPS, so demanding both in all four quarters
+    refused nearly every company. The window never slides: a hole in the latest four quarters makes
+    PER unavailable, and PBR never falls back to an older quarter's book value.
+    """
     if instrument_id not in {r["instrument_id"] for r in holdings(fixture, require_complete=False)["holdings"]}:
         raise ToolInputError("OUTSIDE_HOLDINGS: instrument outside current holdings; choose an observed constituent")
     cutoff = instant(fixture["context"]["analysis_at"])
@@ -21,46 +33,91 @@ def calculate(fixture, instrument_id):
         match = re.fullmatch(r"(\d{4})-Q([1-4])", row["period"])
         if not match:
             raise ToolInputError("INVALID_PERIOD: invalid fiscal quarter; source data requires repair")
-        index = int(match[1])*4+int(match[2])-1
+        year, quarter = int(match[1]), int(match[2])
+        if date(year, quarter*3, monthrange(year, quarter*3)[1]) > cutoff.date():
+            # A quarter that has not ended cannot have been reported; using it would look ahead.
+            raise ToolInputError("INVALID_PERIOD: financial period ends after analysis time; source data requires repair")
+        index = year*4+quarter-1
         if index in periods and periods[index]["available_at"] == row["available_at"]:
             raise ToolInputError("CONFLICTING_RELEASE: conflicting financial release; source data requires repair")
         periods[index] = row
-    selected = sorted(periods)[-4:]
-    if len(selected) != 4 or selected != list(range(selected[-1]-3, selected[-1]+1)):
-        raise ToolInputError("MISSING_QUARTERS: four consecutive released quarters required in database; investigate public filings")
-    if any(periods[index].get("eps") is None or periods[index].get("bps") is None for index in selected):
-        # A released quarter with a hole (blocked BPS, unconfirmed share count) is not skipped over —
-        # skipping would silently slide the window to older quarters.
-        raise ToolInputError("MISSING_FINANCIAL_VALUE: released quarter without EPS or BPS; investigate public filings")
-    eps = sum(decimal(periods[index]["eps"]) for index in selected)
-    bps = decimal(periods[selected[-1]]["bps"])
+    if not periods:
+        raise ToolInputError("MISSING_QUARTERS: no released quarter in database; investigate public filings")
     price = decimal(prices[-1]["close"])
-    if min(eps, bps, price) <= 0:
-        raise ToolInputError("RATIO_NOT_APPLICABLE: positive TTM EPS, BPS and price required; do not interpret as neutral")
-    observed = max([prices[-1]["available_at"]]+[periods[index]["available_at"] for index in selected], key=instant)
+    if price <= 0:
+        raise ToolInputError("INVALID_PRICE: the latest price is not positive; source data requires repair")
+    selected = sorted(periods)[-4:]
+    latest = periods[selected[-1]]
+    unavailable, eps, bps = {}, None, None
+    if len(selected) != 4 or selected != list(range(selected[-1]-3, selected[-1]+1)):
+        unavailable["per"] = "MISSING_QUARTERS: four consecutive released quarters are required for TTM EPS"
+    elif any(periods[index].get("eps") is None for index in selected):
+        unavailable["per"] = "MISSING_EPS: a released quarter in the latest four has no EPS"
+    else:
+        eps = sum(decimal(periods[index]["eps"]) for index in selected)
+        if eps <= 0:
+            unavailable["per"], eps = "RATIO_NOT_APPLICABLE: TTM EPS is not positive; do not interpret as neutral", None
+    if latest.get("bps") is None:
+        unavailable["pbr"] = "MISSING_BPS: the latest released quarter has no per-share book value"
+    else:
+        bps = decimal(latest["bps"])
+        if bps <= 0:
+            unavailable["pbr"], bps = "RATIO_NOT_APPLICABLE: BPS is not positive; do not interpret as neutral", None
+    if eps is None and bps is None:
+        # A loss-maker with no book value is "not applicable", not a data gap.
+        codes = [reason.split(":")[0] for reason in unavailable.values()]
+        code = "RATIO_NOT_APPLICABLE" if "RATIO_NOT_APPLICABLE" in codes else codes[0] if len(set(codes)) == 1 else "MISSING_FINANCIAL_VALUE"
+        raise ToolInputError(code + ": neither PER nor PBR can be calculated (" + "; ".join(unavailable.values()) + "); investigate public filings")
+    # Each ratio is stamped by its own inputs: a late restatement of an older quarter dates PER, not PBR.
+    stamps = {"per": max([prices[-1]["available_at"]] + [periods[index]["available_at"] for index in selected], key=instant) if eps is not None else None,
+              "pbr": max([prices[-1]["available_at"], latest["available_at"]], key=instant) if bps is not None else None}
     # Q4 EPS from DART is FY−9M (weighted-share approximation); the result says so, never hides it.
-    derived = [periods[index]["period"] for index in selected if periods[index].get("eps_derivation") == "FY_MINUS_9M"]
-    return {"instrument_id": instrument_id, "per": number(price/eps), "pbr": number(price/bps), "price": number(price), "price_date": prices[-1]["date"], "ttm_eps": number(eps), "bps": number(bps), "periods": [periods[index]["period"] for index in selected], "derived_periods": derived, "approximate": bool(derived), "observed_at": observed}
+    derived = [periods[index]["period"] for index in selected if periods[index].get("eps_derivation") == "FY_MINUS_9M"] if eps is not None else []
+    return {"instrument_id": instrument_id, "per": number(price/eps) if eps is not None else None,
+            "pbr": number(price/bps) if bps is not None else None, "unavailable": unavailable,
+            "price": number(price), "price_date": prices[-1]["date"],
+            "ttm_eps": number(eps) if eps is not None else None, "bps": number(bps) if bps is not None else None,
+            "bps_period": latest["period"] if bps is not None else None,
+            "periods": [periods[index]["period"] for index in selected] if eps is not None else [],
+            "derived_periods": derived, "approximate": bool(derived), "ratio_observed_at": stamps,
+            "observed_at": max((s for s in stamps.values() if s), key=instant)}
+
+
+def covered_weight(rows):
+    """Sum of fund weights, judged at the 15 digits a stored double carries (see ``common.holdings``)."""
+    return Context(prec=15).plus(sum(decimal(row["weight"]) for row in rows))
 
 
 def weighted(fixture):
-    """Weight all constituent ratios without imputing or dropping missing stocks."""
+    """Weight each ratio over the constituents that have it, when they cover enough of the fund."""
     portfolio = holdings(fixture)
-    # Every holding must have a ratio: a constituent without BPS (preferred-share block, unconfirmed
-    # share count) makes the whole weighted figure unavailable rather than a partial "ETF PBR".
-    values = [calculate(fixture, r["instrument_id"]) | {"weight": r["weight"]} for r in portfolio["holdings"]]
-    # Holdings may cover 70-100% of the fund. An average over them divides by the covered weight;
-    # coverage.weight says how much of the fund the figure describes.
-    covered = sum(decimal(v["weight"]) for v in values)
-    return {"as_of_date": portfolio["as_of_date"], "weighted_per": number(sum(decimal(v["weight"])*decimal(v["price"])/decimal(v["ttm_eps"]) for v in values)/covered), "weighted_pbr": number(sum(decimal(v["weight"])*decimal(v["price"])/decimal(v["bps"]) for v in values)/covered), "constituents": values, "coverage": {"constituents": len(values), "weight": number(sum(decimal(v["weight"]) for v in values))}, "approximate": any(v["approximate"] for v in values), "derived_constituents": [v["instrument_id"] for v in values if v["approximate"]], "observed_at": max((v["observed_at"] for v in values), key=instant)}
-
-
-def metrics(fixture):
-    """Expose only currently implemented complete valuation cards.
-
-    A card carries no derivation note, so a PER built on an approximated Q4 EPS is withheld here;
-    it stays available through ``calculate``/``weighted``, whose results say ``approximate``.
-    """
-    result = weighted(fixture)
-    keys = ("weighted_pbr",) if result["approximate"] else ("weighted_per", "weighted_pbr")
-    return [{"key": key, "value": result[key], "observed_at": result["observed_at"]} for key in keys]
+    values, missing = [], []
+    for row in portfolio["holdings"]:
+        try:
+            values.append(calculate(fixture, row["instrument_id"]) | {"weight": row["weight"]})
+        except ToolInputError as error:
+            if not str(error).startswith(ABSENT):
+                raise   # duplicate prices or conflicting releases must stop the fund figure, not shrink it
+            missing.append({"instrument_id": row["instrument_id"], "weight": row["weight"], "reason": str(error).split(";")[0]})
+    result = {"as_of_date": portfolio["as_of_date"], "constituents": values, "missing_constituents": missing, "ratio_coverage": {},
+              "coverage": {"constituents": len(portfolio["holdings"]), "weight": number(covered_weight(portfolio["holdings"]))}}
+    result["ratio_observed_at"] = {}
+    for metric in ("per", "pbr"):
+        # The 70% rule applies to the weight that actually has this ratio, not to the holdings list:
+        # an average over a minority of the fund is not the fund's ratio.
+        usable = [v for v in values if v[metric] is not None]
+        covered = covered_weight(usable)
+        enough = covered >= MIN_WEIGHT_COVERAGE
+        result["weighted_" + metric] = number(sum(decimal(v["weight"])*decimal(v[metric]) for v in usable)/covered) if enough else None
+        result["ratio_coverage"][metric] = {"constituents": len(usable), "weight": number(covered)}
+        result["ratio_observed_at"][metric] = max((v["ratio_observed_at"][metric] for v in usable), key=instant) if enough else None
+    published = [stamp for stamp in result["ratio_observed_at"].values() if stamp]
+    if not published:
+        raise ToolInputError("INSUFFICIENT_RATIO_COVERAGE: constituents with a PER cover "
+            + str(result["ratio_coverage"]["per"]["weight"]) + " and with a PBR " + str(result["ratio_coverage"]["pbr"]["weight"])
+            + " of the fund, below the 70% needed for a whole-ETF ratio; use calculate_valuation per company and state the gap")
+    per_rows = [v for v in values if v["per"] is not None] if result["weighted_per"] is not None else []
+    result["approximate"] = any(v["approximate"] for v in per_rows)
+    result["derived_constituents"] = [v["instrument_id"] for v in per_rows if v["approximate"]]
+    result["observed_at"] = max(published, key=instant)
+    return result

@@ -270,9 +270,9 @@ class DatabaseTools(FixtureTools):
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
             # Source definitions are immutable; connecting stored observations needs a new factor version.
-            tool['version'] = {'calculate_valuation': 'database-v2', 'get_instrument_factors': 'database-v4',
+            tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v5',
                                'get_issue_evidence': 'database-v2', 'get_etf_holdings': 'database-v2',
-                               'calculate_weighted_valuation': 'database-v2', 'calculate_weighted_flow': 'database-v2',
+                               'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v2',
                                'sum_weighted_net_flow': 'database-v2'}.get(name, 'database-v1')
             if name == 'get_instrument_factors':
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot',

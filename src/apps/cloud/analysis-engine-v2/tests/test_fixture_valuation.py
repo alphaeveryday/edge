@@ -39,6 +39,11 @@ def test_missing_financial_quarter_has_actionable_safe_error():
     from edge_analysis_v2.tools.execution import ToolInputError
     fixture = valuation_fixture()
     fixture['financials'].pop()
+    # Three quarters cannot make a TTM EPS, but the latest released book value still gives a PBR.
+    result = FixtureTools(fixture).call('calculate_valuation', {'instrument_id': 'B'})['result']
+    assert result['per'] is None and 'MISSING_QUARTERS' in result['unavailable']['per']
+    assert result['pbr'] == 4 and result['bps_period'] == '2026-Q1' and result['periods'] == []
+    fixture['financials'] = [row for row in fixture['financials'] if row['instrument_id'] != 'B']
     with pytest.raises(ToolInputError, match='MISSING_QUARTERS'):
         FixtureTools(fixture).call('calculate_valuation', {'instrument_id': 'B'})
 
@@ -56,8 +61,24 @@ def test_invalid_financial_domain_never_becomes_neutral(mode):
         fixture["financials"][-1]["bps"] = 0
     else:
         fixture["financials"][-1]["period"] = "2026-Q3"
-    with pytest.raises(ValueError):
-        FixtureTools(fixture).call("calculate_weighted_valuation", {})
+    tools = FixtureTools(fixture)
+    if mode == "gap":
+        # A quarter that has not ended is broken data: both fund-ratio tools stop instead of using it.
+        for name, args in (("calculate_weighted_valuation", {}), ("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})):
+            with pytest.raises(ValueError, match="ends after analysis time"):
+                tools.call(name, args)
+        return
+    # One ratio of company B (40% of the fund) cannot be computed. The other ratio is still the fund's;
+    # the affected one is withheld with its coverage and reason, never averaged over the remaining 60%.
+    gone, kept = ("pbr", "per") if mode == "zero_bps" else ("per", "pbr")
+    result = tools.call("calculate_weighted_valuation", {})["result"]
+    assert result["weighted_" + gone] is None and result["weighted_" + kept] is not None
+    assert result["ratio_coverage"][gone]["weight"] == pytest.approx(.6)
+    single = tools.call("calculate_valuation", {"instrument_id": "B"})["result"]
+    expected = "RATIO_NOT_APPLICABLE" if mode in ("loss", "zero_bps") else "MISSING_QUARTERS"
+    assert single[gone] is None and expected in single["unavailable"][gone]
+    bundle = tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
+    assert bundle["weighted_" + gone] is None and bundle["weighted_" + kept] == pytest.approx(result["weighted_" + kept])
 
 
 def test_derived_q4_is_declared_and_withheld_from_the_bare_card():
@@ -83,14 +104,20 @@ def test_derived_q4_is_declared_and_withheld_from_the_bare_card():
 
 
 def test_ttm_never_double_counts_or_skips_a_quarter():
-    # A hole in a released quarter (BPS blocked) must fail, not slide to the four older quarters; and a
-    # re-released quarter is one period, not two.
+    # A hole in the latest quarter (BPS blocked) makes PBR unavailable instead of sliding to an older
+    # quarter's book value, while PER still uses the same latest four quarters; a re-released quarter is one period.
     fixture = valuation_fixture()
     fixture["financials"].append({"instrument_id": "A", "period": "2025-Q2", "eps": 2.5, "bps": 50, "available_at": "2025-08-15T18:00:00+09:00"})
     for row in fixture["financials"]:
         if row["instrument_id"] == "A" and row["period"] == "2026-Q2":
             row["bps"] = None
-    with pytest.raises(ValueError, match="without EPS or BPS"):
+    holed = FixtureTools(fixture).call("calculate_valuation", {"instrument_id": "A"})["result"]
+    assert holed["pbr"] is None and "MISSING_BPS" in holed["unavailable"]["pbr"]
+    assert holed["per"] == 10 and holed["periods"] == ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"]
+    for row in fixture["financials"]:
+        if row["instrument_id"] == "A" and row["period"] == "2026-Q1":
+            row["eps"] = None
+    with pytest.raises(ValueError, match="MISSING_FINANCIAL_VALUE"):
         FixtureTools(fixture).call("calculate_valuation", {"instrument_id": "A"})
     fixture = valuation_fixture()
     fixture["financials"].append({"instrument_id": "A", "period": "2026-Q2", "eps": 9, "bps": 50, "available_at": "2026-09-01T18:00:00+09:00"})
@@ -106,8 +133,8 @@ def test_tools_whose_results_changed_for_alpha_1130_carry_new_definition_version
     assert versions['get_issue_evidence'] == 'v2'  # Citation description changed; stored definitions are immutable.
     assert {name: versions[name] for name in ('get_macro_observations', 'compare_macro_observations',
             'calculate_valuation', 'calculate_weighted_valuation', 'get_instrument_factors')} == {
-        'get_macro_observations': 'v3', 'compare_macro_observations': 'v2', 'calculate_valuation': 'v3',
-        'calculate_weighted_valuation': 'v3', 'get_instrument_factors': 'v3'}
+        'get_macro_observations': 'v3', 'compare_macro_observations': 'v2', 'calculate_valuation': 'v4',
+        'calculate_weighted_valuation': 'v4', 'get_instrument_factors': 'v4'}
 
 
 def test_a_weighted_ratio_over_part_of_the_fund_is_an_average_of_that_part_not_a_shrunken_number():
@@ -130,3 +157,78 @@ def test_a_weighted_ratio_over_part_of_the_fund_is_an_average_of_that_part_not_a
     with pytest.raises(ValueError, match="below the 70% coverage"):
         below.call("calculate_weighted_valuation", {})
     assert below.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"] is None
+
+
+def test_quarterly_reports_without_book_value_do_not_block_either_ratio():
+    # WHY: first- and third-quarter reports usually carry no BPS. Demanding EPS and BPS in all four quarters
+    # refused 8 of the 10 holdings of a real fund, so no outlook could close on a valuation range.
+    fixture = valuation_fixture()
+    for row in fixture["financials"]:
+        if row["period"] in ("2025-Q3", "2026-Q1"):
+            row["bps"] = None
+    tools = FixtureTools(fixture)
+    single = tools.call("calculate_valuation", {"instrument_id": "A"})["result"]
+    assert (single["per"], single["pbr"], single["bps_period"], single["unavailable"]) == (10, 2, "2026-Q2", {})
+    weighted = tools.call("calculate_weighted_valuation", {})["result"]
+    assert weighted["weighted_per"] == 14 and weighted["weighted_pbr"] == 2.8
+
+
+def test_a_whole_fund_ratio_is_withheld_when_the_companies_that_have_it_cover_too_little():
+    fixture = valuation_fixture()
+    for row in fixture["financials"]:
+        if row["instrument_id"] == "B" and row["period"] == "2025-Q4":
+            row["eps"] = None        # B (40%) has no TTM EPS
+    result = FixtureTools(fixture).call("calculate_weighted_valuation", {})["result"]
+    assert result["weighted_per"] is None and result["ratio_coverage"]["per"] == {"constituents": 1, "weight": .6}
+    assert result["weighted_pbr"] == 2.8 and result["missing_constituents"] == []
+    for row in fixture["financials"]:
+        if row["instrument_id"] == "B" and row["period"] == "2026-Q2":
+            row["bps"] = None        # now B has neither ratio
+    with pytest.raises(ValueError, match="INSUFFICIENT_RATIO_COVERAGE"):
+        FixtureTools(fixture).call("calculate_weighted_valuation", {})
+
+
+def test_the_two_fund_ratio_tools_agree_and_corrupt_data_stops_them_instead_of_shrinking_the_fund():
+    # WHY: one run can call both tools; a card built from one and a sentence citing the other must not disagree.
+    fixture = valuation_fixture()
+    fixture["holdings"] = [{"instrument_id": n, "weight": w, "as_of_date": "2026-09-18", "available_at": "2026-09-18T18:00:00+09:00"}
+                           for n, w in (("A", .5), ("B", .3), ("C", .2))]
+    fixture["prices"].append({"instrument_id": "C", "date": "2026-09-18", "close": 300, "available_at": "2026-09-18T18:00:00+09:00"})
+    fixture["financials"] += [{"instrument_id": "C", "period": p, "eps": None if p == "2026-Q1" else 2.5, "bps": 50,
+                               "available_at": "2026-08-15T18:00:00+09:00"} for p in ("2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2")]
+    tools = FixtureTools(fixture)
+    direct = tools.call("calculate_weighted_valuation", {})["result"]
+    bundle = tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
+    assert direct["weighted_per"] == bundle["weighted_per"] == 13.75      # A and B hold 80% of the fund
+    assert direct["weighted_pbr"] == pytest.approx(bundle["weighted_pbr"]) and bundle["ratio_coverage"] == {"per": .8, "pbr": 1}
+    # C's later release has no usable EPS, so it must not date the PER that was computed without it; and a
+    # late restatement of an older quarter of A dates PER (which sums it) but not PBR (latest quarter only).
+    late = "2026-09-20T18:00:00+09:00"
+    for row in fixture["financials"]:
+        if (row["instrument_id"], row["period"]) in (("C", "2026-Q1"), ("A", "2025-Q4")):
+            row["available_at"] = late if row["instrument_id"] == "A" else "2026-09-19T18:00:00+09:00"
+    for name in ("get_instrument_factors", "calculate_weighted_valuation"):
+        args = {"instrument_id": "ETF", "factors": ["valuation"]} if name == "get_instrument_factors" else {}
+        stamped = FixtureTools(fixture).call(name, args)["result"]
+        stamped = stamped.get("valuation", stamped)["ratio_observed_at"]
+        assert stamped == {"per": late, "pbr": "2026-09-18T18:00:00+09:00"}, name
+    zero = valuation_fixture()
+    zero["prices"][1]["close"] = 0                                        # a zero price is broken data, not "not applicable"
+    with pytest.raises(ValueError, match="INVALID_PRICE"):
+        FixtureTools(zero).call("calculate_weighted_valuation", {})
+    fixture["prices"].append(dict(fixture["prices"][-1]))                 # a duplicate price row for C
+    with pytest.raises(ValueError, match="CONFLICTING_PRICE"):
+        FixtureTools(fixture).call("calculate_weighted_valuation", {})
+
+
+def test_exactly_seventy_percent_of_the_fund_is_enough_despite_how_weights_are_stored():
+    fixture = valuation_fixture()
+    fixture["holdings"] = [{"instrument_id": n, "weight": w / 100, "as_of_date": "2026-09-18", "available_at": "2026-09-18T18:00:00+09:00"}
+                           for n, w in (("A", 1.00), ("B", 2.59), ("C", 66.41), ("D", 30.0))]   # A+B+C sum to 0.6999999999999999 as doubles
+    for name in ("C", "D"):
+        fixture["prices"].append({"instrument_id": name, "date": "2026-09-18", "close": 100, "available_at": "2026-09-18T18:00:00+09:00"})
+    fixture["financials"] += [{"instrument_id": "C", "period": p, "eps": 2.5, "bps": 50, "available_at": "2026-08-15T18:00:00+09:00"}
+                              for p in ("2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2")]
+    result = FixtureTools(fixture).call("calculate_weighted_valuation", {})["result"]
+    assert result["weighted_per"] is not None and result["ratio_coverage"]["per"]["weight"] == .7
+    assert result["missing_constituents"][0]["instrument_id"] == "D"
