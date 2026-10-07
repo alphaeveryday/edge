@@ -62,6 +62,12 @@ def test_invalid_financial_domain_never_becomes_neutral(mode):
     else:
         fixture["financials"][-1]["period"] = "2026-Q3"
     tools = FixtureTools(fixture)
+    if mode == "gap":
+        # A quarter that has not ended is broken data: both fund-ratio tools stop instead of using it.
+        for name, args in (("calculate_weighted_valuation", {}), ("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})):
+            with pytest.raises(ValueError, match="ends after analysis time"):
+                tools.call(name, args)
+        return
     # One ratio of company B (40% of the fund) cannot be computed. The other ratio is still the fund's;
     # the affected one is withheld with its coverage and reason, never averaged over the remaining 60%.
     gone, kept = ("pbr", "per") if mode == "zero_bps" else ("per", "pbr")
@@ -71,11 +77,6 @@ def test_invalid_financial_domain_never_becomes_neutral(mode):
     single = tools.call("calculate_valuation", {"instrument_id": "B"})["result"]
     expected = "RATIO_NOT_APPLICABLE" if mode in ("loss", "zero_bps") else "MISSING_QUARTERS"
     assert single[gone] is None and expected in single["unavailable"][gone]
-    if mode == "gap":
-        # The factor screen additionally refuses a quarter that has not ended yet.
-        with pytest.raises(ValueError, match="ends after analysis time"):
-            tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})
-        return
     bundle = tools.call("get_instrument_factors", {"instrument_id": "ETF", "factors": ["valuation"]})["result"]["valuation"]
     assert bundle["weighted_" + gone] is None and bundle["weighted_" + kept] == pytest.approx(result["weighted_" + kept])
 

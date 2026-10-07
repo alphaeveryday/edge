@@ -1,4 +1,6 @@
 """Released quarterly per-share fundamentals and equity-weighted ratios."""
+from calendar import monthrange
+from datetime import date
 from decimal import Context
 import re
 from edge_analysis_v2.tools.execution import ToolInputError
@@ -31,7 +33,11 @@ def calculate(fixture, instrument_id):
         match = re.fullmatch(r"(\d{4})-Q([1-4])", row["period"])
         if not match:
             raise ToolInputError("INVALID_PERIOD: invalid fiscal quarter; source data requires repair")
-        index = int(match[1])*4+int(match[2])-1
+        year, quarter = int(match[1]), int(match[2])
+        if date(year, quarter*3, monthrange(year, quarter*3)[1]) > cutoff.date():
+            # A quarter that has not ended cannot have been reported; using it would look ahead.
+            raise ToolInputError("INVALID_PERIOD: financial period ends after analysis time; source data requires repair")
+        index = year*4+quarter-1
         if index in periods and periods[index]["available_at"] == row["available_at"]:
             raise ToolInputError("CONFLICTING_RELEASE: conflicting financial release; source data requires repair")
         periods[index] = row
