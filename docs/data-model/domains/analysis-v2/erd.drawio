@@ -125,7 +125,7 @@
           <mxGeometry as="geometry" x="12" y="338" width="390" height="21" />
         </mxCell>
         <mxCell id="outlook_items" value="outlook_items" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
-          <mxGeometry as="geometry" x="1000" y="680" width="410" height="330" />
+          <mxGeometry as="geometry" x="1000" y="680" width="410" height="372" />
         </mxCell>
         <mxCell id="outlook_items-row_id" value="row_id : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
           <mxGeometry as="geometry" x="12" y="44" width="390" height="21" />
@@ -159,6 +159,12 @@
         </mxCell>
         <mxCell id="outlook_items-tool_run_ids" value="tool_run_ids : text[]" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
           <mxGeometry as="geometry" x="12" y="254" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-sentiment" value="sentiment : text" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="275" width="390" height="21" />
+        </mxCell>
+        <mxCell id="outlook_items-source_links" value="source_links : jsonb" vertex="1" parent="outlook_items" style="text;html=0;align=left;fontSize=12;">
+          <mxGeometry as="geometry" x="12" y="296" width="390" height="21" />
         </mxCell>
         <mxCell id="outlook_factors" value="outlook_factors" vertex="1" parent="1" style="swimlane;html=0;startSize=36;fillColor=#d1fae5;fontSize=15;">
           <mxGeometry as="geometry" x="1530" y="140" width="370" height="200" />

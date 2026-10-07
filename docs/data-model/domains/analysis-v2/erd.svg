@@ -44,7 +44,7 @@
 <text x="1012" y="513" font-size="12">issue_headline : text</text>
 <text x="1012" y="534" font-size="12">data_source : text</text>
 </g>
-<g id="table-outlook_items"><rect class="table" x="1000" y="680" width="410" height="330" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1001" y="681" width="408" height="35" fill="#d1fae5"/><text x="1012" y="704" font-size="15" font-weight="bold">outlook_items</text>
+<g id="table-outlook_items"><rect class="table" x="1000" y="680" width="410" height="372" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1001" y="681" width="408" height="35" fill="#d1fae5"/><text x="1012" y="704" font-size="15" font-weight="bold">outlook_items</text>
 <text x="1012" y="738" font-size="12">row_id : text</text>
 <text x="1012" y="759" font-size="12">analysis_id : text</text>
 <text x="1012" y="780" font-size="12">item_id : text</text>
@@ -56,6 +56,8 @@
 <text x="1012" y="906" font-size="12">sentence : text</text>
 <text x="1012" y="927" font-size="12">source_as_of : timestamptz</text>
 <text x="1012" y="948" font-size="12">tool_run_ids : text[]</text>
+<text x="1012" y="969" font-size="12">sentiment : text</text>
+<text x="1012" y="990" font-size="12">source_links : jsonb</text>
 </g>
 <g id="table-outlook_factors"><rect class="table" x="1530" y="140" width="370" height="200" rx="6" fill="#f8fafc" stroke="#94a3b8"/><rect x="1531" y="141" width="368" height="35" fill="#d1fae5"/><text x="1542" y="164" font-size="15" font-weight="bold">outlook_factors</text>
 <text x="1542" y="198" font-size="12">row_id : text</text>
