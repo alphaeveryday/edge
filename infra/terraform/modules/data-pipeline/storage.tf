@@ -48,6 +48,19 @@ resource "aws_secretsmanager_secret" "kis" {
 locals {
   kis_token_param_name = "/${var.name}/kis/access-token"
   kis_token_param_arn  = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter${local.kis_token_param_name}"
+
+  # 분 가격 워커 전용 키(2번)의 토큰 캐시(ALPHA-1248). 키마다 따로 둔다 — 캐시에 다른 키의 토큰이 있으면 미스로 보고
+  # 새로 발급해 덮어쓰므로(kis_auth 의 앱키 지문 대조), 한 캐시를 두 키가 쓰면 서로 덮어쓰며 발급 한도(분당 1회)에 걸린다.
+  kis_price_worker_token_param_name = "/${var.name}/kis/access-token-2"
+  kis_price_worker_token_param_arn  = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter${local.kis_price_worker_token_param_name}"
+}
+
+# 분 가격 워커 전용 KIS 키(ALPHA-1248) — 그릇까지 **TF 밖에서 수동 등록**했다(아래 매크로 키와 같은 방식).
+# 값 형식은 1번(`kis`)과 같은 {"app_key":"...","app_secret":"..."}.
+# 켰을 때만 조회한다 — data 조회는 시크릿이 없으면 plan 을 실패시키는데, 꺼진 환경에는 이 시크릿이 없을 수 있다.
+data "aws_secretsmanager_secret" "kis_price_worker" {
+  count = local.price_worker_dedicated_kis ? 1 : 0
+  name  = "${var.name}/kis/oauth-2"
 }
 
 resource "aws_secretsmanager_secret" "dart" {
