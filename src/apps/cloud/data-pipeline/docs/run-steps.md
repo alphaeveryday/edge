@@ -250,7 +250,13 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # part-00000.parquet 키와 SHA-256도 함께 고정한다. canonical·quality log가 모두 성공한 뒤에만
 # canonical_written=true가 된다. 행 격리는 성공 winner를 확정한 exit 2(하류 처리 뒤 실행은
 # INCOMPLETE/FAILED), 저장·무결성 실패는 incomplete manifest를 남기는 exit 1(해당 호출의 하류
-# 차단)이다. 정상 LoadDisclosure는 completed dual manifest의 direct key winner를
+# 차단)이다. 단 이 두 CLI 는 exit 2 의 실패가 **전부 확정 거부**(다시 읽어도 같은 거부 —
+# `quality.disclosure.CONFIRMED_REJECT_REASONS`)이고 문서 수가 상한 이하면 exit 0 으로 닫는다
+# (ALPHA-1163, 상한 `DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN` 기본 3). 본문
+# 미도착·모르는 사유가 섞였거나 상한을 넘으면 그대로 exit 2 다. 0 으로 닫혀도 거부는 quality log
+# `failures`·원장 failed_records(INCOMPLETE)·문서별 경고 줄에 남고, 그 줄이 쌓이면(5일 안에 3번의
+# 실행) `<name>-disclosure-confirmed-reject-piling` 알람이 운다. 1분 레인은 함수를 직접 불러
+# 이 판정을 타지 않는다(창은 INCOMPLETE). 정상 LoadDisclosure는 completed dual manifest의 direct key winner를
 # disclosure_load_pending에 먼저 commit하고 pending만 typed 적재한다. issuer 미해소·일시 실패는
 # 원장에 남아 다음 정상 실행이 재시도한다. 명시 복구(--all 또는 --from/--to)만 shared canonical을
 # pending에 bootstrap하며, --pending-only는 canonical을 읽지 않고 잔여만 회수한다.
