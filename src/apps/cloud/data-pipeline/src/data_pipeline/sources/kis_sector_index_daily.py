@@ -22,6 +22,7 @@ API: 국내업종 기간별시세(일/주/월/년) `inquire-daily-indexchartpric
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 
 from ..config import KisNavSource as KisNavSourceConfig
@@ -56,6 +57,8 @@ class KisSectorIndexDailySource(KisNavSource):
         super().__init__(config, {}, client, from_date, to_date)
         # 사본을 든다 — 호출자가 나중에 고쳐도 도는 중의 질의 대상이 바뀌면 안 된다.
         self.index_map = dict(index_map)
+        # 직전 페이지에서 벤더가 준 행 수(`_note_rows` 가 채운다).
+        self._received = 0
 
     def plan(self) -> list[tuple[str, str]]:
         """수집 대상 → [(KRX 업종코드, KIS 지수코드)]. 맵 검증은 config 가 이미 했다."""
@@ -80,6 +83,13 @@ class KisSectorIndexDailySource(KisNavSource):
             return f"거래일 없는 행: stck_bsop_date={day!r}"
         return None
 
+    def _note_rows(
+        self, our_etf_id: str, kis_symbol: str, rows: list[dict], received_count: int
+    ) -> None:
+        # 페이지 종료는 **벤더가 준 행 수**로 판정한다. 걸러진 수로 보면 결함 행 하나가 50행을
+        # 49행으로 만들어 마지막 페이지로 오인되고, 그보다 과거의 정상 행을 받지 않는다.
+        self._received = received_count
+
     def _fetch_etf(
         self, our_etf_id: str, kis_symbol: str, d1: str, d2: str, token: str
     ) -> list[dict]:
@@ -88,28 +98,48 @@ class KisSectorIndexDailySource(KisNavSource):
         두 번째 페이지부터의 빈 응답은 "창에 거래일이 더 없다"는 정상 종료다. 첫 페이지가
         50행으로 차고 창 시작일이 주말·휴장일이면 다음 창에 거래일이 하나도 없어서 생긴다.
         첫 페이지의 빈 응답은 부모와 같이 실패다(잘못된 코드거나 거래일 없는 창).
+
+        창을 다 못 받은 경우(페이지가 진전하지 않음·MAX_PAGES)는 실패를 기록하고 **받은 행은
+        낸다** — 예외로 올리면 그 지수의 받은 행까지 버려진다. 실패 기록이 런을 partial 로
+        만든다(`kis_price` 의 절단 처리와 같다).
         """
-        rows: dict[str, dict] = {}
+        rows: list[dict] = []
+        seen: set[str] = set()   # 완전히 같은 원본만 접는다
+        days: set[str] = set()
         end = d2
         for _ in range(MAX_PAGES):
+            self._received = 0
             try:
                 page = super()._fetch_etf(our_etf_id, kis_symbol, d1, end, token)
             except EmptyOutputError:
                 if rows:
                     break
                 raise
-            new = 0
+            new_days = 0
             for row in page:
-                if row["stck_bsop_date"] not in rows:
-                    rows[row["stck_bsop_date"]] = row
-                    new += 1
+                # 같은 거래일이라도 값이 다른 행은 둘 다 남긴다 — raw 는 원본 보존이고, 고르는 건
+                # 정제의 충돌 검사(같은 fetched_at 에 값이 다르면 격리) 몫이다.
+                key = json.dumps(row, sort_keys=True, ensure_ascii=False)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(row)
+                if row["stck_bsop_date"] not in days:
+                    days.add(row["stck_bsop_date"])
+                    new_days += 1
             # 하한 없는 창(d1="")은 KIS 가 최근 50행만 준다 — 더 넘길 기준이 없다.
-            if not page or not d1 or new == 0 or len(page) < PAGE_ROWS:
+            if not d1 or self._received < PAGE_ROWS:
                 break
-            earliest = min(row["stck_bsop_date"] for row in page)
-            if earliest <= d1:
+            earliest = min((row["stck_bsop_date"] for row in page), default=None)
+            if earliest is not None and earliest <= d1:
+                break
+            if earliest is None or new_days == 0:
+                # 50행이 왔는데 쓸 행이 없거나(전부 결함) 이미 받은 날짜뿐이다(창 이동이 안 먹음).
+                self._note_failure(
+                    kis_symbol, our_etf_id, f"페이지가 진전하지 않는다(창 끝 {end}) — 창 절단 가능")
                 break
             end = (datetime.strptime(earliest, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
         else:
-            raise ValueError(f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간을 좁혀 재실행)")
-        return [rows[day] for day in sorted(rows)]
+            self._note_failure(
+                kis_symbol, our_etf_id, f"MAX_PAGES({MAX_PAGES}) 도달 — 창 절단 가능(구간을 좁혀 재실행)")
+        return sorted(rows, key=lambda row: row["stck_bsop_date"])

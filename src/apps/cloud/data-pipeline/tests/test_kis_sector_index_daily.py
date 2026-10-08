@@ -19,6 +19,12 @@ class FakeAuth:
         return "TOKEN"
 
 
+def _bar(day: str, close: str = "100.0") -> dict:
+    return {"stck_bsop_date": day, "bstp_nmix_prpr": close, "bstp_nmix_oprc": "99.0",
+            "bstp_nmix_hgpr": "101.0", "bstp_nmix_lwpr": "98.0", "acml_vol": "1",
+            "acml_tr_pbmn": "1", "mod_yn": "N"}
+
+
 def _weekdays(start: str, end: str) -> list[str]:
     day, last, out = date.fromisoformat(start), date.fromisoformat(end), []
     while day <= last:
@@ -33,9 +39,13 @@ class FakeVendor:
 
     `tr_cont` 같은 다음 페이지 신호는 없다(2026-10-08 실측과 같은 형상)."""
 
-    def __init__(self, days_by_kis_code: dict[str, list[str]]):
+    def __init__(self, days_by_kis_code: dict[str, list[str]], *, defect_day=None,
+                 ignore_date2=False, extra_rows=()):
         self.days = days_by_kis_code
         self.queries: list[dict] = []
+        self.defect_day = defect_day      # 이 날짜 행은 거래일 필드가 빠진 결함 행으로 준다
+        self.ignore_date2 = ignore_date2  # 창 끝 이동을 무시하고 늘 첫 창을 준다
+        self.extra_rows = list(extra_rows)  # 응답 끝에 그대로 덧붙일 행
 
     def request(self, method, url, *, headers=None, data=None, decode=True):
         params = {k: v[0] for k, v in
@@ -43,11 +53,16 @@ class FakeVendor:
                                         keep_blank_values=True).items()}
         self.queries.append(params)
         d1, d2 = params["FID_INPUT_DATE_1"], params["FID_INPUT_DATE_2"]
+        if self.ignore_date2:
+            d2 = self.queries[0]["FID_INPUT_DATE_2"]
         days = [d for d in self.days.get(params["FID_INPUT_ISCD"], [])
                 if (not d1 or d >= d1) and d <= d2]
-        rows = [{"stck_bsop_date": d, "bstp_nmix_prpr": "100.0", "bstp_nmix_oprc": "99.0",
-                 "bstp_nmix_hgpr": "101.0", "bstp_nmix_lwpr": "98.0", "acml_vol": "1",
-                 "acml_tr_pbmn": "1", "mod_yn": "N"} for d in sorted(days, reverse=True)[:50]]
+        rows = [_bar(d) for d in sorted(days, reverse=True)[:50]]
+        for row in rows:
+            if row["stck_bsop_date"] == self.defect_day:
+                del row["stck_bsop_date"]
+        if len(self.queries) == 1:
+            rows += self.extra_rows
         return json.dumps({"rt_cd": "0", "output1": {}, "output2": rows})
 
     def _sleep(self, seconds):
@@ -91,6 +106,57 @@ def test_창_시작이_휴장일이라_다음_페이지가_비면_정상_종료�
 
     assert len(records) == 50
     assert src.fetch_failures == []
+
+
+def test_결함_행이_섞인_꽉_찬_페이지도_과거로_계속_넘긴다():
+    # WHY: 종료를 걸러진 행 수로 판정하면 결함 행 하나가 50행을 49행으로 만들어 "마지막
+    # 페이지"로 오인되고, 그보다 과거의 정상 행 수십 일치를 조용히 안 받는다.
+    days = _weekdays("2026-07-01", "2026-10-08")
+    vendor = FakeVendor({"0005": days}, defect_day=days[-1])
+    src = _source(vendor, {"1005": "0005"}, "2026-07-01", "2026-10-08")
+
+    records = list(src.fetch())
+
+    assert [r["stck_bsop_date"] for r in records] == days[:-1]
+    assert len(src.fetch_failures) == 1  # 결함 행은 드러난다
+
+
+def test_창_이동이_먹지_않으면_받은_행은_남기고_절단을_드러낸다():
+    # WHY: 벤더가 바뀐 DATE_2 를 무시하고 같은 50행을 주면 창 앞쪽이 영영 안 온다. 이걸 정상
+    # 종료로 접으면 절단된 소급이 success 로 기록되고 정제가 그대로 확정한다.
+    days = _weekdays("2026-07-01", "2026-10-08")
+    vendor = FakeVendor({"0005": days}, ignore_date2=True)
+    src = _source(vendor, {"1005": "0005"}, "2026-07-01", "2026-10-08")
+
+    records = list(src.fetch())
+
+    assert len(records) == 50  # 받은 것은 버리지 않는다
+    assert any("진전하지 않는다" in f["error"] for f in src.fetch_failures)
+
+
+def test_페이지_상한에_닿으면_받은_행은_남기고_절단을_드러낸다(monkeypatch):
+    # WHY: 상한을 예외로 올리면 그 지수의 받은 행까지 버려진다 — 남기고 partial 로 드러낸다.
+    from data_pipeline.sources import kis_sector_index_daily as mod
+    monkeypatch.setattr(mod, "MAX_PAGES", 1)
+    vendor = FakeVendor({"0005": _weekdays("2026-07-01", "2026-10-08")})
+    src = _source(vendor, {"1005": "0005"}, "2026-07-01", "2026-10-08")
+
+    assert len(list(src.fetch())) == 50
+    assert any("MAX_PAGES" in f["error"] for f in src.fetch_failures)
+
+
+def test_같은_거래일에_값이_다른_행은_둘_다_raw_에_남긴다():
+    # WHY: 거래일로만 접으면 두 번째 값이 저장 전에 사라져, 정제의 값 충돌 검사(같은 fetched_at
+    # 에 값이 다르면 격리)까지 못 가고 응답 순서로 고른 값이 정본이 된다.
+    days = _weekdays("2026-10-05", "2026-10-08")
+    vendor = FakeVendor({"0005": days}, extra_rows=[_bar(days[-1], "999.0"), _bar(days[0])])
+    src = _source(vendor, {"1005": "0005"}, "2026-10-05", "2026-10-08")
+
+    records = list(src.fetch())
+
+    closes = [r["bstp_nmix_prpr"] for r in records if r["stck_bsop_date"] == days[-1]]
+    assert sorted(closes) == ["100.0", "999.0"]
+    assert len(records) == len(days) + 1  # 완전히 같은 원본(days[0])만 접힌다
 
 
 def test_첫_페이지가_비면_실패로_드러난다():
