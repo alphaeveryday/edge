@@ -66,3 +66,4 @@
 | [0056](0056-etforca-app-api-infra.md) | ETF Orca 앱 API(app-api) 클라우드 인프라 — 별도 PostgreSQL·ElastiCache·N 인스턴스·단일 호스트 | 승인됨 |
 | [0057](0057-lake-dataset-canonical-consumption-and-retirement.md) | 레이크 데이터셋 정본과 운영 소비 경로, 승격·폐기 절차 | 제안됨 (적용 보류) |
 | [0058](0058-airflow-on-ecs-ec2.md) | 유한 배치의 Airflow 실행 환경 — ECS on EC2 자체 운영 | 승인됨 (메타DB 는 기존 업무 RDS 안 DB — ADR 상태 추기) |
+| [0060](0060-dedicated-kis-key-for-minute-price.md) | 분 가격 수집을 전용 KIS 키로 분리 — 공유 호출 예산은 켜지 않는다 ([0055](0055-kis-shared-call-budget-on-postgres.md) 를 대체하지 않음) | 제안됨 |
