@@ -623,6 +623,15 @@ module "data_pipeline" {
   # 스텝이 존재한다(이미지 CD 와 apply 는 순서 보장이 없다 — deploy-order-splits-the-pr).
   minute_session_schedule_state = "ENABLED"
 
+  # 분 가격 워커를 2번 KIS 키로 돌린다(ALPHA-1252 — 코드 ALPHA-1247, 배선 ALPHA-1248). price-worker 만 2번 시크릿
+  # (`edge-dev-data-pipeline/kis/oauth-2`, Terraform 밖에서 등록)과 2번 토큰 캐시로 바뀌고, 동시 호출 4·호출 간격
+  # 0.0625초(초당 16건)로 수집한다. iNAV·업종지수·장중 수급·장 마감 배치는 1번 키에 남는다.
+  # ⚠️ 켜고 끄는 것은 **분 세션이 없는 시간에만** 한다 — price-worker 의 태스크 정의가 바뀐다.
+  # ⚠️ `call_budget_enabled` 와 같이 켤 수 없다(plan 이 거부한다).
+  # 되돌리기는 이 줄을 지우는 PR 이다. 대상 ETF 를 148종으로 넓힌 뒤(ALPHA-1249)에는 이것만 되돌릴 수 없다 —
+  # 1번 키에 한 건씩 보내는 방식은 매분 약 500종목이 한계다.
+  minute_price_dedicated_kis_enabled = true
+
   # KR 평일 휴장일 2026 (ALPHA-387). 비면 Planner 는 휴장일에도 런을 계획하고, KRX 수집은 그날
   # 오는 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다 — 주말만 코드가 알기 때문이다.
   # ⚠️ **해마다 갱신해야 한다**(거래소 캘린더 연동 전까지의 수동 주입 지점, trading_calendar.py).

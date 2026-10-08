@@ -92,7 +92,8 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
 - 전용 키 선언 `DATA_PIPELINE_MINUTE_PRICE_WORKER__DEDICATED_APP_KEY`(기본 `false`, ALPHA-1247)는 분봉 워커의 앱키를
   다른 KIS 호출자가 쓰지 않을 때만 켠다. 켜면 공유 예산 없이도 위 동시 요청 수로 수집하고, 발신 속도는 워커의 호출 간격
   (`DATA_PIPELINE_MINUTE_PRICE_WORKER__MIN_INTERVAL_SEC`)이 정한다. 같은 키를 쓰는 호출자가 있는데 켜면 합산 발신이
-  한도를 넘는다. terraform 에는 아직 배선하지 않았다 — 이 필드를 아는 이미지가 배포된 뒤에 싣는다(위와 같은 이유).
+  한도를 넘는다. terraform 은 `minute_price_dedicated_kis_enabled` 가 `true`일 때만 이 값을 싣고, 함께 동시 요청 4·호출 간격
+  0.0625초를 싣고 워커의 KIS 키와 토큰 캐시를 2번으로 바꾼다(ALPHA-1248). dev 는 켜져 있다(ALPHA-1252).
 - 운영 CLI(DB env 필요):
   ```bash
   python -m data_pipeline.sources.call_budget init kis 15     # 표·클래스 시드(이미 있으면 그대로)
