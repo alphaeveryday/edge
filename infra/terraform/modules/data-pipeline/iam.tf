@@ -30,7 +30,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
       {
         Effect = "Allow"
         Action = ["secretsmanager:GetSecretValue"]
-        Resource = [
+        Resource = concat([
           aws_secretsmanager_secret.fmp.arn,
           aws_secretsmanager_secret.kis.arn,
           aws_secretsmanager_secret.dart.arn,
@@ -45,7 +45,10 @@ resource "aws_iam_role_policy" "execution_secrets" {
           data.aws_secretsmanager_secret.macro["fred"].arn,
           var.deepseek_secret_arn,
           var.db_password_secret_arn,
-        ]
+          ],
+          # 분 가격 워커 전용 KIS 키(ALPHA-1248) — 켰을 때만. 여기 없으면 워커가 ResourceInitializationError 로 못 뜬다
+          local.price_worker_dedicated_kis ? [data.aws_secretsmanager_secret.kis_price_worker[0].arn] : []
+        )
       },
     ]
   })
@@ -100,9 +103,10 @@ resource "aws_iam_role_policy" "task" {
         # 각자 발급하는 현행 동작으로 폴백하므로 권한 부족이 런을 깨지는 않는다(느려질 뿐).
         # SecureString 은 AWS 관리 키(alias/aws/ssm)를 쓴다 — 그 키 정책이 SSM 경유 호출에
         # 계정 주체를 허용하므로 별도 kms 문장이 필요 없다.
+        # 두 번째 이름은 분 가격 워커 전용 키(2번)의 토큰 캐시다(ALPHA-1248) — 켰을 때만 든다.
         Effect   = "Allow"
         Action   = ["ssm:GetParameter", "ssm:PutParameter"]
-        Resource = [local.kis_token_param_arn]
+        Resource = concat([local.kis_token_param_arn], local.price_worker_dedicated_kis ? [local.kis_price_worker_token_param_arn] : [])
       },
     ]
   })

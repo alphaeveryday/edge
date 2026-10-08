@@ -14,6 +14,12 @@
 # 그 주체는 이 파일 아래의 `aws_scheduler_schedule.minute_session` 이다(ALPHA-712).
 
 locals {
+  # 분 가격 워커가 전용 KIS 키(2번)로 도는가(ALPHA-1248). source 가 toss 면 KIS 를 쓰지 않으므로 변수가 켜져 있어도
+  # 아무것도 바꾸지 않는다 — 아래 시크릿 분기(toss 면 toss 쌍만 주입)와 같은 조건이라, source 롤백(kis↔toss)이
+  # 여전히 변수 하나로 끝나고 kis 로 돌아오면 전용 키 구성이 그대로 되살아난다.
+  price_worker_dedicated_kis  = var.minute_price_dedicated_kis_enabled && var.minute_session_source_group != "toss"
+  price_worker_kis_secret_arn = local.price_worker_dedicated_kis ? data.aws_secretsmanager_secret.kis_price_worker[0].arn : aws_secretsmanager_secret.kis.arn
+
   # 큐 어휘 — jobs.py DESTINATION_JOB_KINDS(3종) + TRIGGER_EVENT_DESTINATIONS(1종)와
   # 같은 이름이어야 한다(relay 기동 검증 KNOWN_DESTINATIONS 가 4종 전부를 요구한다).
   minute_job_destinations = ["price-analysis-realtime", "news-extraction-realtime", "news-extraction-backfill"]
@@ -110,13 +116,25 @@ locals {
         DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE = var.minute_session_source_group
         # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
-        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
+        # 전용 키(2번)면 캐시도 2번이다 — 한 캐시를 두 키가 쓰면 서로 덮어쓴다(storage.tf).
+        KIS_TOKEN_CACHE_PARAM = local.price_worker_dedicated_kis ? local.kis_price_worker_token_param_name : local.kis_token_param_name
         },
-        # 한 window 안 동시 요청 수(ALPHA-1087). 공유 호출 허용과 **같은 변수에서 유도**한다 —
-        # 허용 없이 동시성만 켜지면 로컬 간격 안에서 실제 발신률만 올라 합산이 더 나빠진다(코드도 1로 강제).
+        # 한 window 안 동시 요청 수(ALPHA-1087). 같은 KIS 키를 다른 호출자와 나눠 쓰는 동안에는 공유 호출 허용과
+        # **같은 변수에서 유도**한다 — 허용 없이 동시성만 켜지면 로컬 간격 안에서 실제 발신률만 올라 합산이 더 나빠진다
+        # (코드도 전용 키가 아니면 1로 강제한다). 전용 키일 때의 동시성은 아래 블록이 싣는다.
         # 꺼져 있으면 변수를 **싣지 않는다**(코드 기본 1) — 이 필드를 모르는 이전 이미지는 extra_forbidden 으로
         # 기동을 거부하므로, 머지 배포에서 terraform-apply 가 새 이미지보다 먼저 끝나면 워커가 죽는다.
-        var.call_budget_enabled ? { DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = "2" } : {}
+        var.call_budget_enabled ? { DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = "2" } : {},
+        # 전용 KIS 키(ALPHA-1248) — 이 키를 쓰는 호출자가 이 워커뿐이라 공유 호출 허용 없이 동시 요청을 켠다.
+        # 발신률은 호출 간격이 정한다: 0.0625초 = 16건/초(2번 키 실측에서 거절 0건인 구간, 계좌 한도 18건/초).
+        # 동시 4는 장중 응답이 느린 분(128~180ms)에도 그 발신률을 채우는 수다.
+        # 위와 같은 이유로 꺼져 있으면 **싣지 않는다** — `dedicated_app_key` 를 모르는 이미지는 기동을 거부한다.
+        # call_budget_enabled 와는 같이 켤 수 없다(아래 태스크 정의의 precondition 이 plan 을 거부한다).
+        local.price_worker_dedicated_kis ? {
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__DEDICATED_APP_KEY = "true"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = "4"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__MIN_INTERVAL_SEC  = "0.0625"
+        } : {}
       )
       # 선택된 source 의 자격증명 쌍**만** 주입한다 — ECS 는 기동 시 secrets 전부를
       # 해석하므로, 미사용 벤더 쌍을 같이 걸면 그 시크릿에 값이 없는 환경(신규 환경·
@@ -127,8 +145,9 @@ locals {
           DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
           DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
           } : {
-          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
-          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+          # 전용 키가 켜져 있으면 2번 시크릿이다(위 locals)
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${local.price_worker_kis_secret_arn}:app_key::"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${local.price_worker_kis_secret_arn}:app_secret::"
         }
       )
     }
@@ -309,6 +328,19 @@ resource "aws_ecs_task_definition" "minute" {
       options   = local.log_options
     }
   }])
+
+  # 시크릿·토큰 캐시 권한이 먼저 붙은 뒤에 새 revision 이 나간다 — 역할 ARN 만 참조하면 정책 갱신과 병렬로 돌아,
+  # 새 시크릿을 싣는 revision(전용 KIS 키 전환 등)이 권한보다 먼저 기동해 ResourceInitializationError 로 죽을 수 있다.
+  depends_on = [aws_iam_role_policy.execution_secrets, aws_iam_role_policy.task]
+
+  lifecycle {
+    # 두 설정을 같이 싣는 리소스(price-worker 의 태스크 정의)에 둔다 — 그래야 이 서비스만 지목한 plan 도 거부된다.
+    # 다른 서비스의 인스턴스는 조건에서 빼, 오류가 서비스 수만큼 반복되지 않게 한다.
+    precondition {
+      condition     = each.key != "price-worker" || !(var.minute_price_dedicated_kis_enabled && var.call_budget_enabled)
+      error_message = "minute_price_dedicated_kis_enabled 와 call_budget_enabled 는 같이 켤 수 없다 — 공유 호출 예산은 1번 KIS 키의 한도를 나누는 장치인데, 둘 다 켜면 2번 키로 나가는 분 가격 호출이 그 예산을 쓴다."
+    }
+  }
 }
 
 resource "aws_ecs_service" "minute" {

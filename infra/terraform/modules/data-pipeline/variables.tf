@@ -665,6 +665,11 @@ variable "call_budget_enabled" {
   type        = bool
   default     = false
 }
+variable "minute_price_dedicated_kis_enabled" {
+  description = "분 가격 워커(price-worker)를 그 워커만 쓰는 2번 KIS 키(`<name>/kis/oauth-2`)로 돌린다(ALPHA-1248). 켜면 워커의 키·토큰 캐시가 2번으로 바뀌고 전용 키 설정·동시 호출 4·호출 간격 0.0625초가 실린다. ⚠️ `dedicated_app_key` 를 아는 이미지(ALPHA-1247)가 배포된 뒤에만 켠다 — 모르는 이미지는 기동을 거부한다. ⚠️ 2번 시크릿은 Terraform 밖에서 등록한다 — 없는 환경에서 켜면 plan 이 실패한다. `call_budget_enabled` 와 같이 켤 수 없다. source 가 toss 면 KIS 를 쓰지 않으므로 이 값은 아무것도 바꾸지 않는다."
+  type        = bool
+  default     = false
+}
 variable "analysis_consumer_task_definition_arn" {
   type        = string
   nullable    = false
