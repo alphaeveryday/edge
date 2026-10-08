@@ -541,6 +541,43 @@ def canonical_etf_nav_partition(market: str, trade_date: str) -> str:
     return f"canonical/market_data/etf_nav/market={market}/trade_date={trade_date}"
 
 
+def raw_sector_index_daily_partition(
+    source: str, market: str, ingest_date: str, run_id: str
+) -> str:
+    """raw 업종지수 일봉(sector_index_daily) 파티션 프리픽스 (끝 슬래시 없음, ALPHA-1254).
+
+    일별 NAV(raw_etf_nav_partition)와 동형이다 — 한 지수가 여러 거래일을 한 번에 주므로
+    수집일(ingest_date) 기준으로 run_id 별 append 한다. 경로는 통일 스펙 §4.1 이 정했다.
+    """
+    return (
+        f"raw/source={source}/dataset=sector_index_daily/market={market}"
+        f"/ingest_date={ingest_date}/run_id={run_id}"
+    )
+
+
+_RAW_SECTOR_INDEX_DAILY_MARKER = "/dataset=sector_index_daily/"
+
+
+def is_raw_sector_index_daily_key(key: str) -> bool:
+    """raw sector_index_daily 데이터 파일 키인지. (part-*.ndjson 만, 프리픽스 디렉터리 아님.)"""
+    return (key.startswith("raw/") and _RAW_SECTOR_INDEX_DAILY_MARKER in key
+            and key.endswith(".ndjson"))
+
+
+def parse_raw_sector_index_daily_key(key: str) -> dict[str, str]:
+    """raw sector_index_daily 키에서 파티션 값(source·market·ingest_date·run_id) 추출."""
+    return parse_raw_etf_nav_key(key)
+
+
+def canonical_sector_index_daily_partition(market: str, trade_date: str) -> str:
+    """canonical 업종지수 일봉 파티션 프리픽스 (끝 슬래시 없음, ALPHA-1254).
+
+    price_daily 와 같은 거래일 파티션이고 행 키는 KRX 업종코드(`code`)다(통일 스펙 §4.1).
+    분석 백필 `sector_index`(trade_date·code·close)는 이 경로의 조회 뷰로 대체될 자리다.
+    """
+    return f"canonical/market_data/sector_index_daily/market={market}/trade_date={trade_date}"
+
+
 _RAW_ETF_PROFILE_MARKER = "/dataset=etf_profile/"
 
 
