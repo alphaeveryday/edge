@@ -59,6 +59,15 @@ class KisSectorIndexDailySource(KisNavSource):
         self.index_map = dict(index_map)
         # 직전 페이지에서 벤더가 준 행 수(`_note_rows` 가 채운다).
         self._received = 0
+        # 뒤 페이지에서 맞은 4xx/429. 받은 행을 먼저 내보낸 뒤 올린다(`fetch`·`_fetch_etf`).
+        self._pending_stop: StopFetch | None = None
+
+    def fetch(self):
+        """부모와 같다. 다만 마지막 지수의 뒤 페이지에서 맞은 중단 신호도 끝에서 올린다."""
+        self._pending_stop = None
+        yield from super().fetch()
+        if self._pending_stop is not None:
+            raise self._pending_stop
 
     def plan(self) -> list[tuple[str, str]]:
         """수집 대상 → [(KRX 업종코드, KIS 지수코드)]. 맵 검증은 config 가 이미 했다."""
@@ -110,6 +119,10 @@ class KisSectorIndexDailySource(KisNavSource):
         낸다** — 예외로 올리면 그 지수의 받은 행까지 버려진다. 실패 기록이 런을 partial 로
         만든다(`kis_price` 의 절단 처리와 같다).
         """
+        if self._pending_stop is not None:
+            # 앞 지수의 뒤 페이지에서 4xx/429 를 맞았다 — 그 지수의 행은 이미 나갔고, 여기서
+            # 올려 부모 fetch 가 소스 전체를 멈추게 한다.
+            raise self._pending_stop
         rows: list[dict] = []
         seen: set[str] = set()   # 완전히 같은 원본만 접는다
         days: set[str] = set()
@@ -122,8 +135,13 @@ class KisSectorIndexDailySource(KisNavSource):
                 if rows:
                     break
                 raise
-            except StopFetch:
-                raise  # 4xx/429 는 소스 전체 문제 — 부모 fetch 가 전체를 멈춘다
+            except StopFetch as exc:
+                # 4xx/429 는 소스 전체 문제라 멈추는 게 맞다. 다만 뒤 페이지에서 맞았으면 받은
+                # 행을 먼저 내보낸다 — 바로 올리면 부모 fetch 가 yield 하기 전이라 raw 에서 사라진다.
+                if not rows:
+                    raise
+                self._pending_stop = exc
+                break
             except Exception as exc:
                 # 첫 페이지 실패는 부모와 같이 지수 단위 실패다. 뒤 페이지 실패는 앞서 받은 행을
                 # 버리지 않고 절단으로 기록한다(재시도 소진·깨진 응답·KIS 오류).

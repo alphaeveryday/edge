@@ -8,7 +8,10 @@ import json
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
 from data_pipeline.config import KisNavSource as KisNavSourceConfig
+from data_pipeline.sources.http import StopFetch
 from data_pipeline.lake import LocalStorage, collection_log_key, raw_sector_index_daily_partition
 from data_pipeline.sources.kis_sector_index_daily import KisSectorIndexDailySource
 from data_pipeline.steps import ingest_raw_etf
@@ -40,10 +43,12 @@ class FakeVendor:
     `tr_cont` 같은 다음 페이지 신호는 없다(2026-10-08 실측과 같은 형상)."""
 
     def __init__(self, days_by_kis_code: dict[str, list[str]], *, defect_day=None,
-                 ignore_date2=False, extra_rows=(), fail_from=None):
+                 ignore_date2=False, extra_rows=(), fail_from=None,
+                 fail_with=ValueError("재시도 소진")):
         self.days = days_by_kis_code
         self.queries: list[dict] = []
-        self.fail_from = fail_from        # 이 번째(1부터) 요청부터 전송 실패를 낸다
+        self.fail_from = fail_from        # 이 번째(1부터) 요청부터 fail_with 를 올린다
+        self.fail_with = fail_with
         self.defect_day = defect_day      # 이 날짜 행은 거래일 필드가 빠진 결함 행으로 준다
         self.ignore_date2 = ignore_date2  # 창 끝 이동을 무시하고 늘 첫 창을 준다
         self.extra_rows = list(extra_rows)  # 응답 끝에 그대로 덧붙일 행
@@ -54,7 +59,7 @@ class FakeVendor:
                                         keep_blank_values=True).items()}
         self.queries.append(params)
         if self.fail_from is not None and len(self.queries) >= self.fail_from:
-            raise ValueError("재시도 소진")
+            raise self.fail_with
         d1, d2 = params["FID_INPUT_DATE_1"], params["FID_INPUT_DATE_2"]
         if self.ignore_date2:
             d2 = self.queries[0]["FID_INPUT_DATE_2"]
@@ -170,6 +175,29 @@ def test_뒤_페이지_요청이_실패해도_앞서_받은_행은_남긴다():
 
     assert len(list(src.fetch())) == 50
     assert any("뒤 페이지 실패" in f["error"] for f in src.fetch_failures)
+
+
+def test_뒤_페이지에서_4xx_를_맞으면_받은_행을_내보낸_뒤_소스를_멈춘다():
+    # WHY: 4xx/429 는 키·쿼터 문제라 소스 전체를 멈추는 게 맞다. 그런데 바로 올리면 부모
+    # fetch 가 그 지수의 행을 yield 하기 전이라 이미 받은 원본이 raw 에서 사라진다.
+    # 다음 지수는 묻지 않아야 하고, 그 지수가 마지막이어도 중단 신호가 묻히면 안 된다.
+    days = _weekdays("2026-07-01", "2026-10-08")
+    vendor = FakeVendor({"0005": days, "0006": days}, fail_from=2,
+                        fail_with=StopFetch("429", status=429))
+    src = _source(vendor, {"1005": "0005", "1006": "0006"}, "2026-07-01", "2026-10-08")
+
+    records = []
+    with pytest.raises(StopFetch):
+        for record in src.fetch():
+            records.append(record)
+
+    assert len(records) == 50 and {r["index_code"] for r in records} == {"1005"}
+    assert {q["FID_INPUT_ISCD"] for q in vendor.queries} == {"0005"}  # 다음 지수는 안 묻는다
+
+    last = FakeVendor({"0005": days}, fail_from=2, fail_with=StopFetch("429", status=429))
+    only = _source(last, {"1005": "0005"}, "2026-07-01", "2026-10-08")
+    with pytest.raises(StopFetch):
+        list(only.fetch())
 
 
 def test_비달력_거래일_행은_결함으로_격리하고_정상_행은_받는다():
