@@ -3,6 +3,8 @@
 from .disclosure import (
     BLOCKING_REASONS_DISCLOSURE,
     BLOCKING_REASONS_SEGMENT,
+    CONFIRMED_REJECT_REASONS,
+    split_failures,
     validate_segment_fact,
     validate_supply_fact,
 )
@@ -11,15 +13,23 @@ from .etf_nav import BLOCKING_REASONS_ETF_NAV, validate_etf_nav
 from .etf_profile import BLOCKING_REASONS_ETF_PROFILE, validate_etf_profile
 from .news import BLOCKING_REASONS, validate_news_meta
 from .price import validate_ohlcv
+from .sector_index_daily import (
+    BLOCKING_REASONS_SECTOR_INDEX_DAILY,
+    validate_sector_index_daily,
+)
 
 __all__ = [
     "validate_ohlcv",
+    "validate_sector_index_daily",
+    "BLOCKING_REASONS_SECTOR_INDEX_DAILY",
     "validate_news_meta",
     "BLOCKING_REASONS",
     "validate_supply_fact",
     "BLOCKING_REASONS_DISCLOSURE",
     "validate_segment_fact",
     "BLOCKING_REASONS_SEGMENT",
+    "CONFIRMED_REJECT_REASONS",
+    "split_failures",
     "validate_etf_holding",
     "BLOCKING_REASONS_ETF",
     "validate_etf_nav",

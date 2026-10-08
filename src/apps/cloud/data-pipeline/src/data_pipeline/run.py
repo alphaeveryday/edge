@@ -1,9 +1,9 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument|ingest-raw-sector-index-daily
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
+         |normalize-etf|normalize-etf-nav|normalize-sector-index-daily|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe
          |{ingest-raw|normalize|load}-{macro|sector|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
@@ -57,6 +57,7 @@ from .lake import (
     raw_investor_estimate_partition,
     raw_etf_nav_partition,
     raw_etf_profile_partition,
+    raw_sector_index_daily_partition,
 )
 from .sources import (
     BigKindsNewsSource,
@@ -72,6 +73,7 @@ from .sources import (
     KisInvestorEstimateSource,
     KisInvestorSource,
     KisNavSource,
+    KisSectorIndexDailySource,
     KrxEtfSource,
     KrxInstrumentSource,
     PoliteClient,
@@ -110,6 +112,7 @@ from .steps import (
     normalize_investor_estimate,
     normalize_news,
     normalize_price,
+    normalize_sector_index_daily,
     source_observations,
     source_observations_financial,
     source_observations_macro,
@@ -120,6 +123,9 @@ from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
+from .quality.disclosure import split_failures
+
+logger = logging.getLogger(__name__)
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
@@ -176,6 +182,7 @@ _WINDOW_CALENDAR: dict[tuple[str, str | None], timezone] = {
     ("ingest-price-raw", "kis"): KST,
     ("ingest-price-raw", "yahoo"): KST,              # index_map 이 ^KS11·^KQ11 (KOSPI·KOSDAQ)
     ("ingest-raw-nav", None): KST,                   # KIS
+    ("ingest-raw-sector-index-daily", None): KST,    # KIS 업종지수 일봉
     ("ingest-raw-inav", None): KST,                  # KIS
     ("ingest-raw-investor", None): KST,              # KIS
     ("ingest-raw-disclosure", None): KST,            # DART
@@ -225,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile", "ingest-raw-instrument",
+                 "ingest-raw-sector-index-daily", "normalize-sector-index-daily",
                  "ingest-raw-investor", "ingest-raw-investor-estimate",
                  "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
@@ -284,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
                  # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
                  # ⚠️ 수집만이 아니라 collect→normalize×2→load→assemble 을 한 window 에서 돈다.
                  "disclosure-worker",
-                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 45종 분봉 상주 루프.
+                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 47종 분봉 상주 루프.
                  # 원장 DB + storage + [minute_sector_index.index_map] 정본 +
                  # minute_price_worker 의 KIS 자격증명(같은 앱키). universe 없음 —
                  # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
@@ -512,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             "수집 유니버스는 canonical holdings 에서 파생된다(무시되므로 거부)"
         )
     if args.step == "sector-index-worker" and args.universe is not None:
-        # 업종지수도 universe 밖이다 — 기대 집합 45종은 config 정본
+        # 업종지수도 universe 밖이다 — 기대 집합 47종은 config 정본
         # (`[minute_sector_index.index_map]`)이고, universe.json 은 지수를 아예 모른다
         # (ETF 명부에도 구성종목에도 없다). planner 도 같은 조건으로 거부한다.
         raise SystemExit(
@@ -752,6 +760,52 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         storage, source, run_id, series_ids=series, from_date=args.from_date, to_date=args.to_date)
 
 
+# 저녁 배치가 본 확정 거부 문서 한 건당 한 줄. `infra/terraform/modules/data-pipeline/tasks.tf`
+# 의 metric filter 가 이 문구를 세므로(줄 수 = 문서 수) 문구를 바꿀 땐 필터를 같이 고쳐라.
+CONFIRMED_REJECT_LOG = "공시 확정 거부 문서"
+
+
+def _settle_confirmed_rejects(step: str, normalizer, storage, run_id: str,
+                              input_run_id: str | None, limit: int) -> int:
+    """저녁 배치의 공시 정제를 돌리고, **확정 거부만 남은** 부분 실패는 종료 0 으로 닫는다
+    (ALPHA-1163).
+
+    정제의 종료 2 는 "행 실패가 있었다"만 말한다. 그 안에는 다시 읽으면 풀리는 실패(본문
+    미도착)와 같은 원문이면 늘 같은 거부(파서 대상이 아닌 서식)가 섞여 있는데, 공시 SFN 의
+    마지막 판정은 둘을 못 가르고 실행을 FAILED 로 닫았다. 거부 문서는 수집 창에 두 번 걸리므로
+    문서 하나가 이틀 연속 FAILED 를 만들었고(2026-09-30~10-08 의 7회 중 4회), FAILED 가 조치할 일이
+    있다는 신호 구실을 못 했다. 그래서 실패가 전부 확정 거부이고 문서 수가 `limit` 이하일 때만
+    0 으로 닫는다. 일시·미지 실패가 하나라도 섞였거나 상한을 넘으면 종전대로 2 다 — 상한은
+    파서가 깨져 전건이 거부되는 날을 성공으로 닫지 않기 위한 것이다.
+
+    0 으로 닫아도 거부는 남는다: quality_log `failures`(접수번호·사유·원문 위치), 원장의
+    `failed_records`·`data_status=INCOMPLETE`(`ops/wrapper.derive_data_status`), 아래 문서별
+    경고 줄과 그 줄을 세는 누적 알람.
+
+    ⚠️ 이 판정은 **CLI 경계에만** 있다. `normalize_*.run` 의 반환값은 바꾸지 않는다 — 1분 레인이
+    같은 함수를 직접 불러 종료 2 로 그 창을 INCOMPLETE 로 남긴다(ALPHA-1154). 반환을 0 으로
+    바꾸면 거부를 본 창이 VALID 로 접힌다.
+    """
+    failures: list[dict] = []
+    exit_code = normalizer(storage, run_id, input_run_id, failures_out=failures)
+    # 종료 2 일 때만 사유를 읽는다 — canonical·quality_log·완료 manifest 가 온전히 기록된 뒤의
+    # 행 실패다. 종료 1 은 그 기록 자체가 깨진 것이라 사유가 무엇이든 실패다.
+    if exit_code != 2:
+        return exit_code
+    rejected, unresolved = split_failures(step, failures)
+    for doc in rejected:
+        logger.warning("%s: step=%s rcept_no=%s reasons=%s",
+                       CONFIRMED_REJECT_LOG, step, doc["rcept_no"], ",".join(doc["reasons"]))
+    if not rejected or unresolved or len(rejected) > limit:
+        logger.warning(
+            "%s 부분 실패를 종료 2 로 남긴다: 확정 거부 %d건(상한 %d) · 그 밖의 실패 %d건",
+            step, len(rejected), limit, unresolved)
+        return exit_code
+    logger.warning("%s 는 확정 거부 %d건만 남아 종료 0 으로 닫는다(상한 %d)",
+                   step, len(rejected), limit)
+    return 0
+
+
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
     max_failed_symbols = args.max_failed_symbols or 0
@@ -782,10 +836,14 @@ def _dispatch(args, settings, storage, run_id) -> int:
                                   expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
     # 공시 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
-    if args.step == "normalize-disclosure":
-        return normalize_disclosure.run(storage, run_id, args.input_run_id)
-    if args.step == "normalize-disclosure-segment":
-        return normalize_disclosure_segment.run(storage, run_id, args.input_run_id)
+    if args.step in ("normalize-disclosure", "normalize-disclosure-segment"):
+        normalizer = (normalize_disclosure if args.step == "normalize-disclosure"
+                      else normalize_disclosure_segment)
+        # 섹션이 없으면 한 건도 접지 않는다 — 상한을 모르는 채 성공으로 닫지 않는다.
+        limit = (settings.dart_disclosure.max_confirmed_rejects_per_run
+                 if settings.dart_disclosure is not None else 0)
+        return _settle_confirmed_rejects(
+            args.step, normalizer.run, storage, run_id, args.input_run_id, limit)
     # ETF 구성종목 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-etf":
@@ -794,6 +852,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-etf-nav":
         return normalize_etf_nav.run(storage, run_id, args.input_run_id)
+    if args.step == "normalize-sector-index-daily":
+        return normalize_sector_index_daily.run(storage, run_id, args.input_run_id)
     # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
     if args.step == "normalize-etf-profile":
         return normalize_etf_profile.run(storage, run_id, args.input_run_id)
@@ -1376,7 +1436,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 30일 반환에 기대던 갭 커버가 사라져 가격과 같은 소급이 필요하다.
         lookback = (
             DEFAULT_PRICE_LOOKBACK_DAYS
-            if args.step in ("ingest-price-raw", "ingest-raw-investor")
+            if args.step in ("ingest-price-raw", "ingest-raw-investor",
+                             "ingest-raw-sector-index-daily")
             else DEFAULT_LOOKBACK_DAYS
         )
         from_date, to_date = default_window(
@@ -1422,6 +1483,27 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return ingest_raw_etf.run(
             settings, storage, nav_source, run_id,
             dataset="etf_nav", partition=raw_etf_nav_partition, job_name="ingest_raw_nav",
+        )
+    if args.step == "ingest-raw-sector-index-daily":
+        # 업종지수 일봉 종가(ALPHA-1254). 분봉 레인은 공식 종가를 못 담아 일봉 TR 로 따로 받는다.
+        # 수집 대상은 분봉 레인과 같은 정본(`[minute_sector_index.index_map]`)이고, 자격증명은
+        # 분봉 레인처럼 NAV 쌍을 쓴다(같은 KIS 앱키).
+        if settings.kis_nav is None:
+            raise SystemExit("kis_nav.source 설정이 없다(업종 일봉 자격증명) — sources.toml 확인")
+        if settings.minute_sector_index is None:
+            raise SystemExit("[minute_sector_index.index_map] 설정이 없다(업종 일봉 수집 대상)")
+        sector_source = KisSectorIndexDailySource(
+            settings.kis_nav.source,
+            settings.minute_sector_index.index_map,
+            kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC,
+                            caller="sector-index-daily", call_class=CLASS_BATCH),
+            from_date,
+            to_date,
+        )
+        return ingest_raw_etf.run(
+            settings, storage, sector_source, run_id,
+            dataset="sector_index_daily", partition=raw_sector_index_daily_partition,
+            job_name="ingest_raw_sector_index_daily",
         )
     if args.step == "ingest-raw-inav":
         # 장중 iNAV(ALPHA-555). 일별 NAV 와 같은 자격증명·유니버스를 쓰되 dataset 이 다르다 —

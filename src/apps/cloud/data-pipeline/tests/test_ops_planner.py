@@ -50,8 +50,9 @@ def test_duplicate_planner_run_creates_one_pipeline_run():
     assert r1.pipeline_run_id == r2.pipeline_run_id
     assert len(db.runs) == 1
     # expected_task 도 중복 생성되지 않는다(자기 레인의 등록 작업 수만큼만 — 카탈로그는 전 레인
-    # 27이지만 시장 일일런 기대는 17 이다. 뉴스 6·공시 4는 자기 레인 런이 계획한다).
-    assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 17
+    # 41이지만 시장 일일런 기대는 19 다. 뉴스 6·공시 4·장중 수급 3·원천 관측 9는 자기 레인 런이
+    # 계획한다. 17 → 19 는 ALPHA-1254 업종지수 일봉 수집·정제).
+    assert len(db.etasks) == len(catalog.entries(PIPELINE_TYPE)) == 19
 
 
 def test_same_day_different_slots_are_separate_runs():

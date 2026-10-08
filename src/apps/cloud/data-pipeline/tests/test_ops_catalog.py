@@ -44,6 +44,8 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         "LOAD_PRICE_TRIGGERS",
         "NORMALIZE_INVESTOR", "LOAD_ETF_FLOW",
         "NORMALIZE_ETF_NAV", "LOAD_ETF_NAV",
+        # ALPHA-1254: 업종지수 일봉 정제는 NAV 와 같은 장치라 2 = 거부 행을 뺀 winner manifest 확정.
+        "NORMALIZE_SECTOR_INDEX_DAILY",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
         "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
         # ALPHA-1130: 원천 관측 수집의 2 = 받은 응답만 담은 완료 raw manifest 확정, 정제의 2 = 거부 행을
@@ -199,7 +201,9 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 셋 늘었다(ALPHA-767·768 이 만든 층에 배선이 처음 붙는다).
     # 36 → 35(ALPHA-806): analyze 페이즈 제거로 AnalyzeOne 이 사라졌다. 설명은 SFN 스텝이
     # 아니라 분봉 트리거 큐 상주 소비자가 만든다.
-    assert len(asl_states) == 35, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
+    # 35 → 37(ALPHA-1254): 업종지수 일봉 수집·정제 2잡 신설(CollectKisSectorIndexDaily·
+    # NormalizeSectorIndexDaily).
+    assert len(asl_states) == 37, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
 
     # Airflow 전용 레인(ALPHA-1130)은 SFN state 가 없다 — 빈 이름은 그 레인만 쓸 수 있다.
     airflow_only = {e.task_key for e in catalog.entries() if not e.sfn_state_name}
@@ -219,9 +223,10 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 이동이라 총계가 그대로였고, 769 는 신설이라 늘었고, 875 는 떠나서 줄었다.
     # ALPHA-1073: 보충 배치 4작업을 복원한다. 장중 직접 함수 호출은 minute 원장에,
     # 배치 CLI는 ops 원장에 남으며 실제 기대 슬롯은 스케줄 env에서만 생긴다.
-    assert len(registered) == 30
+    # 30 → 32(ALPHA-1254): 업종지수 일봉 수집·정제 신설. 시장 17 → 19 — 769 와 같은 신설이다.
+    assert len(registered) == 32
     assert len(catalog.entries("source-daily")) == 9
-    assert len(catalog.entries("etf-daily")) == 17
+    assert len(catalog.entries("etf-daily")) == 19
     assert len(catalog.entries("news")) == 6
     assert len(catalog.entries("disclosure")) == 4
     assert len(catalog.entries("investor-intraday")) == 3

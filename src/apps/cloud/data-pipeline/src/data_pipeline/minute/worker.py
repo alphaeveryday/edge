@@ -715,7 +715,7 @@ class SectorIndexWorkerConfig:
     source: str
     market: str
     session_date: str  # YYYY-MM-DD — artifact key 축
-    # KRX 업종코드 45종. **정렬된 튜플**로 받는다 — 기대 집합의 순서가 checksum 에 새면
+    # KRX 업종코드 47종. **정렬된 튜플**로 받는다 — 기대 집합의 순서가 checksum 에 새면
     # 같은 멤버십이 다른 세대를 만든다(collector 가 다시 정렬하지만 여기서도 고정한다).
     unit_ids: tuple[str, ...]
     # 기대 집합 정체성 — planner 가 세션에 못박은 것과 **같아야** 한다. 장중 재배포로
@@ -777,7 +777,7 @@ class SectorIndexWorker(MinuteWorkerLoop):
         return self._process_window(claim, now)
 
     def _expected_units(self, window_start: datetime) -> tuple[str, ...]:
-        """config 의 45종 전부 — **시각 게이트가 없다**.
+        """config 의 47종 전부 — **시각 게이트가 없다**.
 
         가격·iNAV 는 `universe.units_at(window_start)` 로 거래시간 밖 window 에서 raise
         하는데, 여기엔 universe 가 없다. 격자 자체가 정규장 390 window 로 제한되므로
@@ -858,7 +858,8 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
             (options.app_key, options.app_secret),
             "DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY/__APP_SECRET",
         )
-        # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다.
+        # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 15:40 배치와 나눠 쓴다(전용 키면 이 워커만 쓴다 — 아래
+        # `dedicated_app_key`).
         # 공유 호출 허용(ALPHA-1087): pacer_for(is_backfill) 가 None 이 아니면 로컬 간격 대신 call_budget 을 쓴다.
         # 연결 재사용(ALPHA-1153)은 실시간 수집에만 켠다 — 창마다 수백 종목을 한 호스트에 묻는 길이다.
         # 소급(지난 날짜) 수집은 종전 경로 그대로 둔다.
@@ -871,9 +872,10 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
                 stats=http.stats,
             ), stats=http.stats), is_backfill
         concurrency = options.fetch_concurrency
-        if concurrency > 1 and http.pacer is None:
+        if concurrency > 1 and http.pacer is None and not options.dedicated_app_key:
             # 공유 허용 없이 동시 요청을 켜면 로컬 간격(0.08초) 안에서 실제 발신률만 올라간다 — 합산이 이미
             # 한도에 닿는 기존 방식을 더 나쁘게 만든다(ALPHA-1087). 동시성은 공유 허용과 함께일 때만 쓴다.
+            # 예외는 이 워커만 쓰는 전용 키다(dedicated_app_key, ALPHA-1247) — 합산할 상대가 없어 간격이 곧 그 키의 발신률이다.
             logger.warning("fetch_concurrency=%d 무시 — 공유 호출 허용이 꺼져 있다(동시성 1로 수집)", concurrency)
             concurrency = 1
         return KisPriceCollector(
@@ -1129,7 +1131,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
 
     `inav_worker_cli` 와 같은 계약이다: SIGTERM/SIGINT 는 tick 경계에서 멈추고, DB 오류는
     삼키지 않는다. **`--universe` 가 없는 것이 다르다** — 이 dataset 은 `UNIVERSE_DATASETS`
-    밖이라 planner 도 `--universe` 를 거부하고, 기대 집합 45종은
+    밖이라 planner 도 `--universe` 를 거부하고, 기대 집합 47종은
     `[minute_sector_index.index_map]` 이 준다. 그 config 가 곧 정본이라 이미지 배포가
     반영이다(S3 를 갈 일이 없다).
 

@@ -164,9 +164,10 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 
 ### 4.1 `sector_index`·`sector_member`
 
-목적 표면(`sector_index_daily`·`sector_membership`)의 생산자가 없다. 스펙은 [통일 스펙](data-source-unification-spec.md)
+목적 표면 중 `sector_index_daily`는 생산자가 생겼다(ALPHA-1254, KIS 업종 일봉 TR — 2026-07-01~
+소급은 배포 뒤). `sector_membership`은 아직 생산자가 없다. 스펙은 [통일 스펙](data-source-unification-spec.md)
 §4.1에 있다. 1분 레인의 `sector_index_minute`는 다른 데이터셋이다(분봉, 소급 불가).
-2026-08-03 이후 일봉 공백이 매일 자란다.
+분석이 읽는 백필 `sector_index`는 08-03에서 멈춘 채이고, canonical 직독 뷰로의 전환은 미착수다.
 
 ### 4.2 `layers_daily` — 축별 실측
 
@@ -232,7 +233,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 | `fx_usdkrw`·`us_market` 호환 뷰 전환 | 위 생산자. `change_pct`는 일중 정의를 재현(§2) | ALPHA-1105 |
 | US raw ↔ canonical 키 대조 | 없음. US 5분봉 소비 전환·US 애드혹 raw 폐기의 선행 조건 | 신규 발번 필요 |
 | 구 경로 폐기 (애드혹 raw·KR 07-29 중복·Glue·스테이징) | writer 0·reader 0(코드와 런타임 모두)·보존 기간·승인 | 경로별 |
-| `sector_index_daily`·`sector_membership` 생산자 | 통일 스펙 §4.1 | 미발번 |
+| `sector_index_daily`·`sector_membership` 생산자 | 통일 스펙 §4.1 | [ALPHA-1254](https://alphaeveryday.atlassian.net/browse/ALPHA-1254)(지수 일봉) · 분류는 ALPHA-835 |
 | DataGuide·draft Iceberg 승격 | 갱신 담당·Dataset Contract | 미발번 |
 
 ## 8. 작업 상태 (축소 범위 완료 — 2026-09-28)

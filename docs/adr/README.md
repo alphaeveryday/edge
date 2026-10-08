@@ -67,3 +67,4 @@
 | [0057](0057-lake-dataset-canonical-consumption-and-retirement.md) | 레이크 데이터셋 정본과 운영 소비 경로, 승격·폐기 절차 | 제안됨 (적용 보류) |
 | [0058](0058-airflow-on-ecs-ec2.md) | 유한 배치의 Airflow 실행 환경 — ECS on EC2 자체 운영 | 승인됨 (메타DB 는 기존 업무 RDS 안 DB — ADR 상태 추기) |
 | [0059](0059-target-etf-selection-criteria.md) | 대상 ETF 선정 기준 — 국내 주식형에서 테마별 거래대금 상위 10종 ([0024](0024-scope-domestic-etf.md) 구체화) | 제안됨 |
+| [0060](0060-dedicated-kis-key-for-minute-price.md) | 분 가격 수집을 전용 KIS 키로 분리 — 공유 호출 예산은 켜지 않는다 ([0055](0055-kis-shared-call-budget-on-postgres.md) 를 대체하지 않음) | 제안됨 |

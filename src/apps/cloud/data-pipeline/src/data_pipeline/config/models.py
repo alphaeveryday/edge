@@ -471,6 +471,16 @@ class DartDisclosureConfig(BaseModel):
     # False(기본) = 그림자: 창은 종전대로 두고 계산 결과만 로그로 대조한다. 컷오버
     # terraform 이 `DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW=true` 로 켠다.
     watermark_window: bool = False
+    # 저녁 배치의 정제 한 스텝이 **확정 거부만으로** 성공 종료할 수 있는 문서 수 상한(ALPHA-1163).
+    # 실패가 전부 `quality.disclosure.CONFIRMED_REJECT_REASONS` 이고 문서 수가 이 값 이하면 그
+    # 정제는 종료 0 이다(거부는 quality_log·원장 failed_records 에 남는다). 넘으면 종료 2 —
+    # 파서가 깨져 전건이 거부되는 날을 성공으로 닫지 않으려는 상한이다. 0 이면 한 건도 접지 않는다.
+    # 기본 3 의 근거: 2026-07-26~10-08 배치 86회에서 확정 거부는 실행당 최대 1건이었다.
+    # ⚠️ 3월 사업보고서 철에는 금융사 사업보고서(`no_segments_parsed`)가 하루 여러 건이라 이 값에
+    # 걸린다. 올리는 법: `tasks.tf` `env_sets.bigkinds` 에
+    # `DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN` 한 줄(이미지 재배포 없음).
+    # 이 필드를 아는 이미지가 먼저 나가 있어야 한다 — 모르는 이미지는 그 env 로 설정 로드가 죽는다.
+    max_confirmed_rejects_per_run: int = Field(default=3, ge=0)
 
 
 class MinuteRelayConfig(BaseModel):
@@ -556,6 +566,8 @@ class MinutePriceWorkerConfig(BaseModel):
     # KIS 호출 간격(초). 기본 0.08 → 12.5 req/s. 그 유량은 **앱키 단위 전역**이라 다른 kis
     # 스텝과 나눠 쓴다 — 경합이 보이면 재배포 없이 env 로 올린다. toss 소스에는 쓰이지
     # 않는다(어댑터가 자기 상수).
+    # 전용 키(`dedicated_app_key`)로 도는 환경은 아래 합산 논의의 대상이 아니다 — 그 키를 이 워커만 쓰고, 간격도
+    # 배선이 따로 싣는다(dev 는 0.0625초 — ALPHA-1252).
     #
     # ⚠️ **마진 근거가 ALPHA-769 로 바뀌었다.** 종전엔 경합 상대가 15:40 배치뿐이라 시간대가
     # 안 겹치는 것이 마진의 근거였다(1분 세션은 15:30 종료). 이제 장중 수급 레인이 세션
@@ -572,6 +584,10 @@ class MinutePriceWorkerConfig(BaseModel):
     min_interval_sec: float = Field(default=0.08, gt=0, le=5)
     # 한 window 안 동시 요청 수(KIS 당일 경로만). 1 = 종전 순차. 발신률 한도가 아니다 — 간격·공유 허용이 정한다(ALPHA-1087).
     fetch_concurrency: int = Field(default=1, ge=1, le=4)
+    # 이 워커의 앱키를 다른 KIS 호출자가 쓰지 않는다는 선언(ALPHA-1247). 켜면 공유 허용 없이도 fetch_concurrency 를 그대로 쓴다 —
+    # 합산할 상대가 없어 이 워커의 간격(min_interval_sec)이 곧 그 키의 발신률이다. ⚠️ 같은 키를 쓰는 호출자가 하나라도 있으면
+    # 켜지 마라: 동시 요청은 응답 대기에 묶여 있던 발신을 간격 상한까지 끌어올려, 프로세스마다 따로 둔 간격의 합산이 한도를 넘는다.
+    dedicated_app_key: bool = False
     # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
     # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
     # 안 드러난다.
@@ -918,7 +934,7 @@ class MinuteUniverseConfig(BaseModel):
 
 
 class MinuteSectorIndexConfig(BaseModel):
-    """KRX 업종지수 45종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
+    """KRX 업종지수 45종 + 종합지수 2종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
 
     `[minute_universe]` 와 축이 다르다: 저기는 universe.json 을 **만드는 입력**이고 실제
     정본은 S3 객체지만, 여기 값은 그 자체가 정본이다(이 dataset 은 universe 를 쓰지

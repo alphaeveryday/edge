@@ -229,7 +229,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         empty_allowed=False,
         fulfilled_exit_codes=(0, 2),
     ),
-    # ── KIS 수집 4 ────────────────────────────────────────────────────────────────
+    # ── KIS 수집 5 ────────────────────────────────────────────────────────────────
     # ⚠️ `kr_trading_calendar` 는 **기존 3작업 말고는 전부 False** 다(ALPHA-181). True 면 KR
     # 휴장일에 Planner 가 SKIPPED 로 계획하는데, SFN 은 휴장일에도 돌아 컨테이너가 실제로
     # 실행된다 — 그 실행 결과·실패가 원장에서 통째로 사라진다(SKIPPED 면 wrapper 가 attempt 를
@@ -251,6 +251,14 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="INVESTOR_COLLECTION_KIS", stage="raw", dataset="investor_flow_daily",
         required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
+        ecs_task_definition="kis", source_vendor="kis",
+    ),
+    # 업종지수 일봉 종가(ALPHA-1254). Dataset Contract(신선도 판정)는 아직 없다 — 판정 배선이
+    # 계약 키별로 하드코딩이라(entry·wrapper) 소비단 신선도와 함께 ALPHA-835 잔여로 남긴다.
+    CatalogEntry(
+        task_key="SECTOR_INDEX_DAILY_COLLECTION_KIS", stage="raw", dataset="sector_index_daily",
+        required=True, cli_command=("ingest-raw-sector-index-daily",),
+        sfn_state_name="CollectKisSectorIndexDaily",
         ecs_task_definition="kis", source_vendor="kis",
     ),
     # ── KRX 수집 1 (공시 수집은 아래 공시 레인 절로 이동 — ALPHA-724) ─────────────
@@ -304,6 +312,13 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
+        task_key="NORMALIZE_SECTOR_INDEX_DAILY", stage="normalize", dataset="sector_index_daily",
+        required=True, cli_command=("normalize-sector-index-daily",),
+        sfn_state_name="NormalizeSectorIndexDaily",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+        fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
         task_key="NORMALIZE_INVESTOR", stage="normalize", dataset="investor_flow_daily",
         required=True, cli_command=("normalize-investor",), sfn_state_name="NormalizeInvestor",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
@@ -322,7 +337,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # 되어 이 작업이 BLOCKED 로 굳는다(그 정제는 다른 SFN 에서 돌므로 이 런엔 자리가 없다).
         depends_on=(
             "NORMALIZE_PRICE", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
-            "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
+            "NORMALIZE_ETF_NAV", "NORMALIZE_SECTOR_INDEX_DAILY", "NORMALIZE_INVESTOR",
         ),
     ),
     CatalogEntry(

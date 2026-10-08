@@ -189,6 +189,13 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
   uv run --package data-pipeline python -m data_pipeline.run ingest-raw-nav --from 2026-07-14 --to 2026-07-17
 
+# KRX 업종지수 일봉 원본저장(Step1) — KIS 업종 기간별시세(일), tr_id FHKUP03500100(ALPHA-1254).
+# 분봉 레인은 15:30 단일가 체결을 담지 못해 공식 종가를 이 TR 로 받는다. 대상은 1분 레인과 같은
+# [minute_sector_index.index_map](KRX 업종코드 → KIS 코드), 자격증명은 NAV 쌍이다. 응답이 최신순
+# 최대 50행이라 창을 넘기면 어댑터가 DATE_2 를 옮겨 페이지한다 — 소급 백필도 같은 명령이다.
+DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
+  uv run --package data-pipeline python -m data_pipeline.run ingest-raw-sector-index-daily --from 2026-07-01 --to 2026-10-08
+
 # 국내 ETF 장중 iNAV 원본저장(Step1) — KIS ETF NAV비교추이(분), tr_id FHPST02440100(ALPHA-555).
 # 일별 NAV 와 같은 앱키·유니버스를 쓰되 시장코드가 "E"(일별은 "J")로 갈린다. 응답은 항상 30행
 # 고정이라 조회 창 = --interval-sec × 30 이고(미지정 60초 → 30분치), 날짜·시각 지정이 무시돼
@@ -250,7 +257,13 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-disclosure-
 # part-00000.parquet 키와 SHA-256도 함께 고정한다. canonical·quality log가 모두 성공한 뒤에만
 # canonical_written=true가 된다. 행 격리는 성공 winner를 확정한 exit 2(하류 처리 뒤 실행은
 # INCOMPLETE/FAILED), 저장·무결성 실패는 incomplete manifest를 남기는 exit 1(해당 호출의 하류
-# 차단)이다. 정상 LoadDisclosure는 completed dual manifest의 direct key winner를
+# 차단)이다. 단 이 두 CLI 는 exit 2 의 실패가 **전부 확정 거부**(다시 읽어도 같은 거부 —
+# `quality.disclosure.CONFIRMED_REJECT_REASONS`)이고 문서 수가 상한 이하면 exit 0 으로 닫는다
+# (ALPHA-1163, 상한 `DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN` 기본 3). 본문
+# 미도착·모르는 사유가 섞였거나 상한을 넘으면 그대로 exit 2 다. 0 으로 닫혀도 거부는 quality log
+# `failures`·원장 failed_records(INCOMPLETE)·문서별 경고 줄에 남고, 그 줄이 쌓이면(5일 안에 3번의
+# 실행) `<name>-disclosure-confirmed-reject-piling` 알람이 운다. 1분 레인은 함수를 직접 불러
+# 이 판정을 타지 않는다(창은 INCOMPLETE). 정상 LoadDisclosure는 completed dual manifest의 direct key winner를
 # disclosure_load_pending에 먼저 commit하고 pending만 typed 적재한다. issuer 미해소·일시 실패는
 # 원장에 남아 다음 정상 실행이 재시도한다. 명시 복구(--all 또는 --from/--to)만 shared canonical을
 # pending에 bootstrap하며, --pending-only는 canonical을 읽지 않고 잔여만 회수한다.
@@ -271,6 +284,12 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf
 # 행 탈락·동시각 NAV 충돌은 성공 winner를 보존한 exit 2, 저장·무결성 실패는 exit 1이다.
 uv run --package data-pipeline python -m data_pipeline.run normalize-etf-nav \
   --input-run-id 20260701T000000Z
+
+# 업종지수 일봉 정제(Step2) — raw sector_index_daily(KIS)를 canonical/market_data/sector_index_daily
+# 에 (market, trade_date) 파티션·KRX 업종코드 행 키로 병합한다. NAV 정제와 같은 장치라 manifest·
+# exit 시맨틱(행 탈락·동시각 값 충돌 2, 저장 실패 1)이 같다. OHLC 만 싣는다(거래량·대금은 raw 에만).
+uv run --package data-pipeline python -m data_pipeline.run normalize-sector-index-daily \
+  --input-run-id 20261008T000000Z
 
 # 뉴스 이벤트 태깅(Step3, 피처) — canonical 뉴스(language=ko)를 LLM 으로 태깅해
 # feature/news/assertions 에 article_id 멱등 병합. ko 만 태깅한다(프롬프트가 한국 금융 뉴스

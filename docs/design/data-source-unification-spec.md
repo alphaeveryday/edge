@@ -32,6 +32,7 @@ PIT 안전성 표기: ✅ = 시점 클램프/파티션이 선견을 구조적으
 | `s3_investor_flow` | `canonical/market_data/investor_flow_daily` | `normalize-investor` (KIS EOD) | 일배치 | ✅ |
 | `investor_flow_intraday` | `canonical/market_data/investor_flow_intraday` | 장중 수급 레인(평일 5슬롯) | 하루 5슬롯 | ✅ asof_slot 축 분리로 잠정/확정 구분 |
 | `s3_etf_nav` | `canonical/market_data/etf_nav` | `normalize-etf-nav` (KIS) | 일배치 | ✅ |
+| (소비 뷰 없음) | `canonical/market_data/sector_index_daily` | `normalize-sector-index-daily` (KIS, ALPHA-1254) | 일배치 | ✅ trade_date 파티션 · 분석 `sector_index` 백필 뷰 전환은 미착수(§4.1) |
 | `s3_news_articles` / `s3_assertions` | `canonical/news/news_articles` / `feature/news/assertions` | 뉴스 레인(하루 2슬롯 — 00:10·08:10, ALPHA-893·905) + 1분 뉴스 canonical writer | 슬롯·분 단위 | ⚠️ `available_at` 이 다수 행에서 적재 시각(τ 승격은 사이드카 의존 — §1.4) |
 | `s3_etf_holdings` / `s3_etf_profile` | `canonical/holdings/etf_holdings` / `canonical/reference/etf_profile` | `normalize-etf`(KRX·FMP) / etf-profile(KIS) | 일배치 | ✅ as_of_date · 단 duck 은 유니버스 뿌리 필터 없이 프리픽스 전체를 읽음(🔴 storage.py 주석) |
 | `s3_supply_fact` / `s3_segment_fact` | `canonical/disclosures/*` | 공시 레인 | 일배치 | ✅ report_date |
@@ -139,20 +140,27 @@ duck.py `backfill_sources` docstring).
 
 ### 4.1 KRX 업종지수 일봉 (`sector_index_daily`) + 업종 분류 (`sector_membership`)
 
+- **상태(2026-10-08, ALPHA-1254)**: 지수 일봉 절반을 **KIS 업종 일봉 TR**로 구현했다
+  (`ingest-raw-sector-index-daily` → `normalize-sector-index-daily`, 시장 SFN 15:40). 아래 스펙과
+  다른 점: 원천이 pykrx 가 아니라 KIS 이고, 완전성 기대 집합이 분류 유도가 아니라 1분 레인과
+  같은 config `[minute_sector_index.index_map]`(업종 45종 + 종합지수 2종, ALPHA-1255)이다 — 분류(`sector_membership`) 생산자가
+  아직 없어 유도할 원천이 없다. 분류·기대 집합 유도·duck 뷰 전환은 ALPHA-835 잔여다.
 - **원천 API**: pykrx (KRX 정보데이터시스템 비공식 래퍼) — `get_index_ohlcv`(업종지수 일봉)·
   `get_market_sector_classifications(날짜, 시장)`(PIT 분류). `krxsector.py` 로 검증된 경로다.
   - 대안 검토: KRX 정보데이터시스템 직접 호출은 **불가**(로그인 게이트 + IP 차단 이력 —
     open-source-backfill.md §2 기록, bld 브루트포스 금지). KRX Open API(AUTH_KEY,
-    `krx_instrument` 세트)에 업종지수 엔드포인트가 있는지 [실측 필요] — 있으면 pykrx 보다
-    안정적(pykrx 는 스크레이핑 기반이라 KRX 개편에 취약).
-  - **KIS 업종 일봉 TR** 존재 시 그쪽이 최선(자격증명·레이트리밋 체계 기존 재사용) [실측 필요].
+    `krx_instrument` 세트)에 업종지수 엔드포인트가 있다 — `idx/kosdaq_dd_trd` 는 현 키로 200,
+    `idx/kospi_dd_trd` 는 401(서비스 미승인)이었다(2026-10-08 실측). pykrx 는 이제 KRX 로그인
+    (`KRX_ID`·`KRX_PW`)을 요구한다 — 같은 계정의 동시 세션 1개 제약을 구성종목 수집과 나눈다.
+  - **KIS 업종 일봉 TR — 실재한다**(2026-10-08 실측): `FHKUP03500100`, 최신순 최대 50행·`tr_cont`
+    없음(`FID_INPUT_DATE_2` 를 옮겨 페이지). 45종 전부 응답, 종가가 KRX OpenAPI 공식값과 일치.
 - **인증·레이트리밋**: pykrx 는 무인증·비공식(과호출 시 차단 리스크 — 저부하 직렬 + 지수
   45종/일 1콜 수준이라 실질 위험 낮음). KIS 경로면 기존 앱키·토큰 공유 캐시(ALPHA-573) 재사용.
 - **주기·트리거**: 일봉 — 시장 레인(etf-daily SFN) raw 페이즈에 잡 1개 추가, 장 마감 후
   (15:40 KST 슬롯과 동일). 분류 스냅샷 — 분기 1회면 충분하나 스케줄 어휘를 늘리지 않게
   **매일 받아 canonical 이 as_of 로 접는** 쪽을 권고(응답이 작다).
 - **존·경로** (storage.py 에 빌더 신설):
-  - raw: `raw/source=krx/dataset=sector_index_daily/market=KR/ingest_date=…/run_id=…`
+  - raw: `raw/source=kis/dataset=sector_index_daily/market=KR/ingest_date=…/run_id=…`
     (bronze 통일 규약 동형 — 응답이 여러 거래일을 줄 수 있어 ingest_date 파티션).
   - canonical: `canonical/market_data/sector_index_daily/market=KR/trade_date=…`
     (price_daily 동형 — 행 키 code). 분류는
@@ -160,8 +168,8 @@ duck.py `backfill_sources` docstring).
     (instrument_profile 동형 — 참조 데이터라 reference 존).
   - duck 의 `sector_index`·`sector_member` 백필 세트는 이 canonical 직독 뷰로 대체 후 폐지
     (스키마 호환: trade_date·code·close / as_of·ticker·code·market 유지).
-- **소급 백필**: pykrx 가 과거 구간을 주므로 2026-08-04~현재 공백은 같은 코드로 1회 소급.
-  백필 격리 좌표(run_id=`backfill-…`) 준수.
+- **소급 백필**: KIS 일봉 TR 이 과거 구간을 주므로 2026-07-01~ 를 같은 명령(`--from/--to`)으로
+  1회 소급한다(배포 뒤). 백필 격리 좌표(run_id=`backfill-…`) 준수.
 - **완전성 판정**: collection_log ops 봉투. 기대 집합 = 분류가 실제 가리키는 업종지수 코드
   (krxsector.py 의 used 집합과 같은 유도 — 고정 45 하드코딩 금지). 거래일인데 0행이면
   INCOMPLETE. `ALIAS`(구 분류명 흡수)·unmapped 카운트를 quality_log 에 남긴다.

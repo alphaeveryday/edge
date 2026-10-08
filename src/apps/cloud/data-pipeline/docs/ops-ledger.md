@@ -269,7 +269,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # ⚠️ **업종지수 세션(`--dataset sector_index_minute --source-group kis`)은 세 번째
 # 형상이다**(ALPHA-887): `--universe` 를 **안 받는데**(주면 거부) 격자는 **390**이다 —
 # 위 둘의 조합이 아니라 각 축이 따로 정해진다는 뜻이다. universe 를 안 쓰는 이유는 소스
-# 단위여서가 아니라 **기대 집합 45종이 universe.json 에 아예 없어서**다(지수는 ETF 명부에도
+# 단위여서가 아니라 **기대 집합 47종이 universe.json 에 아예 없어서**다(지수는 ETF 명부에도
 # 구성종목에도 없다) — 정본은 `[minute_sector_index.index_map]` 이고, planner 가 그 표의
 # 해시를 세션에 고정한다. 그래야 장중 재배포로 표가 바뀔 때 Worker 가 거부한다(안 그러면
 # 한 세션 안에서 기대 집합이 조용히 갈린다). 격자가 390 인 이유는 이 TR 이 정규장 지수만
@@ -402,7 +402,7 @@ DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run rollup-minute-session --dataset price_minute \
     --source-group kis --session-date 2026-08-04
-# 업종지수(45종 → part-sector-index.parquet). source-group 은 kis 뿐이다.
+# 업종지수(47종 — 업종 45 + 종합 2 → part-sector-index.parquet). source-group 은 kis 뿐이다.
 AWS_PROFILE=edge \
 DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
@@ -475,11 +475,16 @@ OPS_KR_HOLIDAYS=2026-08-15,2026-10-03 \
 # 자격증명은 **source 마다 다른 쌍**이다(ALPHA-735) — 기본 source=kis 는 APP_KEY/APP_SECRET,
 # source=toss 로 되돌릴 때만 CLIENT_ID/CLIENT_SECRET. 결손은 기동에서 죽는다.
 # 상주 워커는 토큰(24h)보다 오래 사므로 KIS_TOKEN_CACHE_PARAM 을 함께 준다(발급 분당 1회).
+# ⚠️ **키와 토큰 캐시는 짝이다**(ALPHA-1252). dev 의 price-worker 는 2번 KIS 키(`kis/oauth-2`)와 2번 캐시
+# (`…/kis/access-token-2`)를 쓴다. 1번 키로 돌릴 때만 `…/kis/access-token` 을 준다. 어긋나게 주면 캐시에 든
+# 다른 키의 토큰을 미스로 보고 새로 발급해 덮어써서, 그 캐시를 쓰는 운영 태스크가 발급을 반복한다.
+# ⚠️ price-worker 태스크 정의로 돌리면 **지난 날짜 수집도 2번 키로 나간다.** 장중에 운영 워커와 같이 돌리면 두
+# 프로세스가 각자 간격만 지켜 합산이 2번 키의 한도를 넘는다 — 분 세션이 없는 시간에만 돌린다.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2.1 \
-KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
+KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token-2 \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
 # ⚠️ `--session-date` 가 **지난 거래일이면 벤더 TR 과 콜 형상이 바뀐다**(ALPHA-846) —
@@ -624,7 +629,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # full/incremental/state-changed fallback을 구분한다. 대상 본문·두 canonical
 # manifest·load pending 내구화 전 실패는 커서를 전진시키지 않고 다음 window가 재시도한다.
 # 다시 읽어도 결과가 같은 문서 단위 거부(정제의 본문 내용 판정·조립의 계약 대상 결손 —
-# `_CONFIRMED_REJECT_REASONS`)는 커서를 막지 않는다(ALPHA-1154). 그 window 는 INCOMPLETE 로
+# `quality.disclosure.CONFIRMED_REJECT_REASONS`)는 커서를 막지 않는다(ALPHA-1154). 그 window 는 INCOMPLETE 로
 # 남고 manifest 의 rejected_documents 에 접수번호·단계·사유·원문 위치가 남는다 — 커서 전진은
 # 전건 처리 완료가 아니다. 재처리는 backfill-normalize-disclosure --from/--to(정제→적재→조립).
 # ⚠️ 페이지 예산은 이 워커의 소스 `max_pages` 로 **주입**된다 — 벤더 섹션의 500(백필용)이
@@ -639,19 +644,19 @@ DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY=... \
 # 보유한 DART raw 전체를 재처리한다. --from/--to 를 주면 접수일 기준 포괄 범위만 재처리한다.
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run backfill-normalize-disclosure --run-id dart-backfill-20260809
-# 업종지수 Worker(1분 파이프라인, ALPHA-887) — KRX 업종지수 45종 분봉을 window 단위
+# 업종지수 Worker(1분 파이프라인, ALPHA-887) — KRX 업종지수 47종(업종 45 + 종합 2, ALPHA-1255) 분봉을 window 단위
 # canonical artifact 로 확정한다. 세션이 먼저 계획돼 있어야 한다
 # (plan-minute-session --dataset sector_index_minute --source-group kis — universe 없음).
 #
 # iNAV Worker 와 갈리는 곳 셋:
 #  · **기대 집합이 universe 가 아니라 config** 다(`[minute_sector_index.index_map]` 45줄).
-#    지수는 ETF 명부에도 구성종목에도 없어 universe.json 이 이 45종을 모른다. planner 가
+#    지수는 ETF 명부에도 구성종목에도 없어 universe.json 이 이 47종을 모른다. planner 가
 #    그 표의 해시를 세션에 고정하고 Worker 가 대조한다 — **장중에 이미지가 바뀌어 표가
 #    달라지면 기동에서 거부한다**(안 그러면 한 세션 안에서 기대 집합이 조용히 갈린다).
 #  · **`no_trade` 축이 없다** — 지수는 자기가 체결되지 않아 `cntg_vol == 0` 인데 OHLC 가
 #    움직이는 봉이 정상이다(실측 3.9%). 가격의 4분류를 그대로 물리면 매 window 가 INVALID 다.
 #  · **오늘이 아닌 `--session-date` 를 거부한다** — 이 TR 에 날짜 파라미터가 없어 과거일로
-#    돌리면 45종 전건 missing 이 그 날짜 원장에 굳는데, 소급이 불가라 채울 방법이 없다.
+#    돌리면 47종 전건 missing 이 그 날짜 원장에 굳는데, 소급이 불가라 채울 방법이 없다.
 #
 # 자격증명은 `[kis_nav.source]` 를 그대로 쓴다(iNAV 와 같은 쌍 — 같은 KIS 계정이고 쿼터가
 # 앱키 전역이라 어차피 하나다). ⚠️ `[minute_price_worker]` 가 아닌 이유는 그 섹션이

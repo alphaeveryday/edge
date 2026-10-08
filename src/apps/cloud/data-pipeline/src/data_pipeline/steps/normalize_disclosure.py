@@ -281,7 +281,8 @@ def run(
 
     `failures_out` 을 주면 quality_log 에 쓴 것과 같은 실패 목록을 거기 담는다(ALPHA-1154).
     종료 코드 2 는 "행 실패가 있었다"만 말하고 사유를 말하지 않는다 — 다시 읽으면 풀리는
-    실패와 같은 원문이면 늘 같은 거부를 가르려는 호출자(1분 레인)가 사유를 읽는다.
+    실패와 같은 원문이면 늘 같은 거부를 가르려는 호출자(1분 레인, 저녁 배치의 CLI 경계
+    `run._settle_confirmed_rejects`)가 사유를 읽는다. 이 함수의 반환값은 두 호출자에 같다.
 
     input_run_id 지정 시 completed raw manifest를 GET해 그 exact key만 읽는다. manifest
     결손·불완전·손상은 전체 스캔으로 넓히지 않고 실패한다. 미지정이면 전체를 읽는다 —

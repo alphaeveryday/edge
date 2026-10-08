@@ -50,6 +50,14 @@ def _yyyymmdd(date_str: str | None) -> str | None:
     return date_str.replace("-", "") if date_str else None
 
 
+class EmptyOutputError(ValueError):
+    """rt_cd=0 인데 응답 배열이 비었다. 대상 단위 실패로 격리되는 건 `ValueError` 와 같다.
+
+    따로 이름을 두는 이유는 페이지를 넘기는 하위 어댑터(`kis_sector_index_daily`)다 — 두 번째
+    페이지부터의 빈 응답은 "창에 거래일이 더 없다"는 정상 종료인데, 메시지 문자열로 가르면
+    문구 하나 고치는 순간 조용히 오류로 바뀐다."""
+
+
 class KisNavSource:
     """KIS NAV 일별 추이 어댑터 — etf_map 이 곧 유니버스. 엔드포인트·질의
     파라미터는 하위 어댑터(kis_inav)가 갈아끼운다(클래스 속성 주석)."""
@@ -61,6 +69,11 @@ class KisNavSource:
     # rt_cd 판정·EGW00201 재시도·malformed 행 격리는 한 곳(_fetch_etf)에 남긴다.
     tr_id = TR_ID_NAV_DAILY
     path = PATH_NAV_DAILY
+    # 응답 배열 키. 이 엔드포인트는 `output` 이고, 업종 일봉은 `output2` 다.
+    output_key = "output"
+    # raw 행에 붙이는 우리 식별자 필드명. 업종 일봉은 ETF 가 아니라 `index_code` 다 —
+    # bronze 는 지우지 않으니 틀린 이름이 붙으면 영구히 남는다.
+    unit_field = "our_etf_id"
 
     def __init__(
         self,
@@ -150,7 +163,7 @@ class KisNavSource:
                     # bronze 무변형: output 행 원본 보존 + 수집 provenance 만 부착.
                     record = dict(row)
                     record.update(self._extra_provenance())
-                    record["our_etf_id"] = our_etf_id
+                    record[self.unit_field] = our_etf_id
                     record["market"] = "KR"  # KIS ETF NAV 는 KRX 로컬 전용
                     record["kis_symbol"] = kis_symbol
                     record["fetched_at"] = fetched_at
@@ -235,15 +248,17 @@ class KisNavSource:
             if data.get("rt_cd") == "0":
                 # 이 엔드포인트는 output2 가 아니라 단일 output 배열이다(라이브 실측).
                 # 키 누락·비-list 는 rt_cd=0 인데도 이상(스키마 드리프트)이라 fail-loud.
-                output = data.get("output")
+                output = data.get(self.output_key)
                 if not isinstance(output, list):
                     # 봉투 수준 형상 위반이다 — **전송 사고 축**으로 남긴다.
                     # `kis_minute` 이 같은 조건(`output2 이상`·`응답이 객체가 아님`)을
                     # 묶어서 `KisUnitError` 로 돌리는 것과 같은 선이고, 이 레포는
                     # 봉투 수준(전송)과 행·값 수준(INVALID)을 그렇게 가른다.
-                    raise ValueError(f"KIS rt_cd=0 인데 output 이상: {type(output).__name__}")
+                    raise ValueError(
+                        f"KIS rt_cd=0 인데 {self.output_key} 이상: {type(output).__name__}")
                 if not output:
-                    raise ValueError("empty output — 응답 창에 데이터가 없거나 잘못된 종목코드")
+                    raise EmptyOutputError(
+                        f"empty {self.output_key} — 응답 창에 데이터가 없거나 잘못된 종목코드")
                 # 못 쓰는 행이 섞여도 한 행이 ETF 전체를 끊지 않게 — 기록 후 스킵.
                 rows = []
                 for row in output:

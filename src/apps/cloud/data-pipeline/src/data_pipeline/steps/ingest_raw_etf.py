@@ -115,7 +115,8 @@ def run(
             partitions[record["market"]].append(record)
             # holdings/NAV는 1 ETF→N행이라 records_out이 entity 수가 아니다. 세 소스가 공통으로
             # 붙이는 our_etf_id를 distinct로 세야 기대 snapshot과 같은 grain이 된다(ALPHA-611).
-            received_etf_ids.add(record["our_etf_id"])
+            # 업종 일봉처럼 ETF 가 아닌 소스는 자기 식별자 필드를 `unit_field` 로 알린다.
+            received_etf_ids.add(record[getattr(source, "unit_field", "our_etf_id")])
             evidence_field = getattr(source, "actual_as_of_field", None)
             if evidence_field:
                 # 저장한 모든 행의 증거를 그대로 넘긴다. 결측/비문자 값을 제외하면 일부 행의
