@@ -192,7 +192,7 @@ price-worker·relay·price-consumer + news-consumer-realtime·-backfill(ALPHA-71
 news-worker(ALPHA-717) + disclosure-worker(ALPHA-875·1068 — 한 window 가 체인 전체인
 증분 공시 생산자) +
 inav-worker(ALPHA-882 — 장중 iNAV 생산자. 소비자가 없어
-큐는 안 늘어난다) + sector-index-worker(ALPHA-887 — 업종지수 45종 생산자) +
+큐는 안 늘어난다) + sector-index-worker(ALPHA-887 — 업종지수 45종 + 종합지수 2종 생산자) +
 analysis-consumer(ALPHA-719 — 설명 큐 소비, analysis-engine 이미지):
 `infra/terraform/modules/data-pipeline/minute_services.tf`,
 desired_count 0 에 lifecycle ignore_changes — desired 를 terraform 밖에서 정하게 두고
