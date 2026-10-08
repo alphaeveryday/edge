@@ -1384,6 +1384,54 @@ class TestCollectorSelection:
         assert block, "minute_session_source_group 기본값을 못 찾았다"
         assert block.group(1) == self._config().source
 
+    def test_terraform_injects_only_settings_the_worker_accepts(self):
+        """terraform 이 싣는 `DATA_PIPELINE_MINUTE_PRICE_WORKER__*` 는 전부 설정 모델이 받는 것이어야 한다.
+
+        WHY: 모델이 `extra="forbid"` 라 모르는 이름이 하나라도 실리면 워커가 **기동을 거부한다** — 그날 분 가격 수집이
+        통째로 서지 않는다. terraform apply 와 이미지 배포는 순서 보장이 없어서, 필드를 더하는 코드보다 그 이름을
+        싣는 배선이 먼저 dev 에 들어가는 것을 여기서 막는다(전용 KIS 키를 ALPHA-1247 → 1248 → 1252 로 나눈 이유).
+
+        보는 범위:
+        - **이름** — 모듈의 모든 `.tf` 에서 모은다(price-worker 환경은 `local.env` 등과 merge 된다).
+        - **값** — 문자열 리터럴로 적힌 값만 모델로 검증한다(범위 밖 값, 예: 동시 요청 5 도 같은 기동 거부다).
+          리터럴이 아닌 값(변수·시크릿 참조, 조건식, 함수 호출)은 여기서 값을 알 수 없다. 그런 대입은 아래 허용
+          목록에 있는 이름만 통과시킨다 — 새로 생기면 이 테스트가 깨지고, 그 값이 모델 범위 안임을 따로 보여야 한다.
+        ⚠️ 정규식으로 읽는 검사다 — HCL 을 평가하지 않는다. terraform 이 실제로 싣는 최종 환경은 plan 으로 본다.
+        """
+        import re
+
+        from data_pipeline.config.models import MinutePriceWorkerConfig
+
+        module = next(
+            (p / "infra/terraform/modules/data-pipeline" for p in Path(__file__).resolve().parents
+             if (p / "infra/terraform/modules/data-pipeline/minute_services.tf").exists()),
+            None,
+        )
+        if module is None:
+            pytest.skip("minute_services.tf 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+        code = "\n".join(  # 주석 속 이름은 배선이 아니다. 이 모듈의 값에는 `#` 이 든 문자열이 없다
+            line.split("#", 1)[0] for tf in sorted(module.glob("*.tf")) for line in tf.read_text().splitlines()
+        )
+        prefix = "DATA_PIPELINE_MINUTE_PRICE_WORKER__"
+        names = set(re.findall(prefix + r"([A-Z0-9_]+)", code))
+        # 전용 키 배선이 싣는 이름이 검사 대상에 들어 있다 — 정규식이 헛돌면 여기서 드러난다
+        assert {"DEDICATED_APP_KEY", "FETCH_CONCURRENCY", "MIN_INTERVAL_SEC"} <= names
+
+        unknown = sorted(n for n in names if n.lower() not in MinutePriceWorkerConfig.model_fields)
+        assert not unknown, f"설정 모델에 없는 이름을 terraform 이 싣는다(기동 거부): {unknown}"
+
+        literals, opaque = [], set()
+        # 키는 따옴표로 감싸도 같은 HCL 이다(`"NAME" = …`)
+        for name, quoted in re.findall(prefix + r'([A-Z0-9_]+)"?\s*=\s*(?:"([^"$]*)"(?=\s*(?:[},]|$)))?', code, flags=re.M):
+            if quoted or re.search(prefix + name + r'"?\s*=\s*""', code):
+                literals.append((name, quoted))
+            else:
+                opaque.add(name)
+        # 값을 여기서 알 수 없는 대입 — 세션 축(변수 기본값은 위 계약 검사가 대조한다)과 시크릿 참조뿐이어야 한다
+        assert opaque == {"TRIGGER_SCHEMA_VERSION", "SOURCE", "CLIENT_ID", "CLIENT_SECRET", "APP_KEY", "APP_SECRET"}
+        assert {name for name, _ in literals} == {"DEDICATED_APP_KEY", "FETCH_CONCURRENCY", "MIN_INTERVAL_SEC"}
+        for name, value in literals:
+            self._config(**{name.lower(): value})  # 범위 밖이면 ValidationError
 
 def test_drain_회수는_설정된_예산만큼_돈다(tmp_path):
     """바닥(`max(1, …)`)만 못박으면 `reclaim_budget = 1` 로 상수화해도 통과한다 — 그러면

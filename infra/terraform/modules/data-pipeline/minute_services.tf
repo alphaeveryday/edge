@@ -231,9 +231,9 @@ locals {
       command = ["inav-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT = var.minute_artifact_format
-        # 토큰 공유 캐시(ALPHA-573) — price-worker 와 **같은 앱키를 쓴다**. 상주 워커엔
-        # 없으면 안 된다: 매 기동 발급이 분당 1회 제한에 걸리고, 가격 레인·15:40 배치와
-        # 발급을 다툰다.
+        # 토큰 공유 캐시(ALPHA-573) — 1번 KIS 앱키를 쓰는 호출자들이 나눠 쓴다(price-worker 는 전용 키가 꺼져 있을
+        # 때만 여기에 든다 — `minute_price_dedicated_kis_enabled`). 상주 워커엔 없으면 안 된다: 매 기동 발급이 분당
+        # 1회 제한에 걸리고, 같은 키를 쓰는 레인·15:40 배치와 발급을 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
         # 거래일 판정 — `skip_reason` 을 **여는 쪽이 이 컨테이너**다(kis_inav.py). 배치 kis
         # 브랜치(tasks.tf env_sets.kis)와 같은 집합이어야 한다. 안 주면 `is_trading_day` 가
@@ -259,8 +259,9 @@ locals {
       command = ["sector-index-worker"]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT = var.minute_artifact_format
-        # 토큰 공유 캐시(ALPHA-573) — price-worker·inav-worker 와 **같은 앱키**다. KIS 앱키는
-        # 전역 한도라 이걸 빼면 매 기동 발급이 분당 1회 제한에 걸리고 가격 레인과 다툰다.
+        # 토큰 공유 캐시(ALPHA-573) — inav-worker 와 **같은 앱키**다(price-worker 는 전용 키가 꺼져 있을 때만 같은
+        # 키다 — `minute_price_dedicated_kis_enabled`). KIS 앱키는 전역 한도라 이걸 빼면 매 기동 발급이 분당 1회
+        # 제한에 걸리고 같은 키를 쓰는 레인과 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
         # ⚠️ `OPS_KR_HOLIDAYS` 가 **없는 것이 의도다** — inav-worker 와 갈리는 자리라 적어 둔다.
         # 그 env 는 컨테이너가 여는 가드가 읽을 때만 필요한데(ALPHA-882 가 이걸 빠뜨려

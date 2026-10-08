@@ -475,11 +475,16 @@ OPS_KR_HOLIDAYS=2026-08-15,2026-10-03 \
 # 자격증명은 **source 마다 다른 쌍**이다(ALPHA-735) — 기본 source=kis 는 APP_KEY/APP_SECRET,
 # source=toss 로 되돌릴 때만 CLIENT_ID/CLIENT_SECRET. 결손은 기동에서 죽는다.
 # 상주 워커는 토큰(24h)보다 오래 사므로 KIS_TOKEN_CACHE_PARAM 을 함께 준다(발급 분당 1회).
+# ⚠️ **키와 토큰 캐시는 짝이다**(ALPHA-1252). dev 의 price-worker 는 2번 KIS 키(`kis/oauth-2`)와 2번 캐시
+# (`…/kis/access-token-2`)를 쓴다. 1번 키로 돌릴 때만 `…/kis/access-token` 을 준다. 어긋나게 주면 캐시에 든
+# 다른 키의 토큰을 미스로 보고 새로 발급해 덮어써서, 그 캐시를 쓰는 운영 태스크가 발급을 반복한다.
+# ⚠️ price-worker 태스크 정의로 돌리면 **지난 날짜 수집도 2번 키로 나간다.** 장중에 운영 워커와 같이 돌리면 두
+# 프로세스가 각자 간격만 지켜 합산이 2번 키의 한도를 넘는다 — 분 세션이 없는 시간에만 돌린다.
 DATA_PIPELINE_DB__PASSWORD=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET=... \
 DATA_PIPELINE_MINUTE_PRICE_WORKER__TRIGGER_SCHEMA_VERSION=intraday-anchor-v2.1 \
-KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \
+KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token-2 \
   python -m data_pipeline.run price-worker --session-date 2026-08-04 \
     --universe /path/universe.json
 # ⚠️ `--session-date` 가 **지난 거래일이면 벤더 TR 과 콜 형상이 바뀐다**(ALPHA-846) —
