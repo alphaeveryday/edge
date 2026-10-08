@@ -624,7 +624,7 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # full/incremental/state-changed fallback을 구분한다. 대상 본문·두 canonical
 # manifest·load pending 내구화 전 실패는 커서를 전진시키지 않고 다음 window가 재시도한다.
 # 다시 읽어도 결과가 같은 문서 단위 거부(정제의 본문 내용 판정·조립의 계약 대상 결손 —
-# `_CONFIRMED_REJECT_REASONS`)는 커서를 막지 않는다(ALPHA-1154). 그 window 는 INCOMPLETE 로
+# `quality.disclosure.CONFIRMED_REJECT_REASONS`)는 커서를 막지 않는다(ALPHA-1154). 그 window 는 INCOMPLETE 로
 # 남고 manifest 의 rejected_documents 에 접수번호·단계·사유·원문 위치가 남는다 — 커서 전진은
 # 전건 처리 완료가 아니다. 재처리는 backfill-normalize-disclosure --from/--to(정제→적재→조립).
 # ⚠️ 페이지 예산은 이 워커의 소스 `max_pages` 로 **주입**된다 — 벤더 섹션의 500(백필용)이

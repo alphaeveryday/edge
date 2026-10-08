@@ -471,6 +471,16 @@ class DartDisclosureConfig(BaseModel):
     # False(기본) = 그림자: 창은 종전대로 두고 계산 결과만 로그로 대조한다. 컷오버
     # terraform 이 `DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW=true` 로 켠다.
     watermark_window: bool = False
+    # 저녁 배치의 정제 한 스텝이 **확정 거부만으로** 성공 종료할 수 있는 문서 수 상한(ALPHA-1163).
+    # 실패가 전부 `quality.disclosure.CONFIRMED_REJECT_REASONS` 이고 문서 수가 이 값 이하면 그
+    # 정제는 종료 0 이다(거부는 quality_log·원장 failed_records 에 남는다). 넘으면 종료 2 —
+    # 파서가 깨져 전건이 거부되는 날을 성공으로 닫지 않으려는 상한이다. 0 이면 한 건도 접지 않는다.
+    # 기본 3 의 근거: 2026-07-26~10-08 배치 86회에서 확정 거부는 실행당 최대 1건이었다.
+    # ⚠️ 3월 사업보고서 철에는 금융사 사업보고서(`no_segments_parsed`)가 하루 여러 건이라 이 값에
+    # 걸린다. 올리는 법: `tasks.tf` `env_sets.bigkinds` 에
+    # `DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN` 한 줄(이미지 재배포 없음).
+    # 이 필드를 아는 이미지가 먼저 나가 있어야 한다 — 모르는 이미지는 그 env 로 설정 로드가 죽는다.
+    max_confirmed_rejects_per_run: int = Field(default=3, ge=0)
 
 
 class MinuteRelayConfig(BaseModel):
