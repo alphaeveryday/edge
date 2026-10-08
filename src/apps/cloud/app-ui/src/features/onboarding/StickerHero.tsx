@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Defs, Path, RadialGradient, Stop } from 'react-native-svg';
 import { Sticker } from '@/components/ui';
 import { colors, SIGNAL_ORDER } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -13,10 +13,21 @@ const AXES = [
   { name: '수급', q: '큰손이 믿나', c: colors.positive },
 ];
 
+const GLOW = 380;
+
 export function StickerHero() {
   return (
     <>
-      <View style={styles.glow} />
+      <Svg width={GLOW} height={GLOW} style={styles.glow}>
+        <Defs>
+          <RadialGradient id="stickerGlow" cx="50%" cy="50%" r="50%">
+            <Stop offset="0" stopColor={colors.primarySoft} stopOpacity={1} />
+            <Stop offset="0.55" stopColor={colors.primarySoft} stopOpacity={0.6} />
+            <Stop offset="1" stopColor={colors.primarySoft} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        <Circle cx={GLOW / 2} cy={GLOW / 2} r={GLOW / 2} fill="url(#stickerGlow)" />
+      </Svg>
       <View style={styles.stack}>
         {[...SIGNAL_ORDER].reverse().map((s, i) => (
           <View key={s} style={[styles.row, { transform: [{ scale: i === 0 || i === 4 ? 1 : 0.92 }] }]}>
@@ -45,7 +56,7 @@ export function StickerHero() {
 }
 
 const styles = StyleSheet.create({
-  glow: { position: 'absolute', width: 320, height: 320, borderRadius: 999, backgroundColor: colors.primarySoft, opacity: 0.7 },
+  glow: { position: 'absolute' },
   stack: { alignItems: 'center', gap: 9 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   hint: { width: 44, textAlign: 'right', fontFamily: fam.semibold, fontSize: 12, color: colors.textMuted },
