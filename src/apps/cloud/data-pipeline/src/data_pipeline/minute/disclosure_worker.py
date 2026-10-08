@@ -75,6 +75,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import DbConfig, Settings
 from ..lake.storage import Storage, minute_poll_manifest_key
+# 확정 거부 어휘의 정본은 `quality.disclosure` 다 — 저녁 배치(`run.py`)가 같은 목록으로 종료
+# 코드를 정한다(ALPHA-1163). 두 레인이 따로 들면 한쪽만 고친 사유가 레인마다 다르게 판정된다.
+from ..quality.disclosure import (
+    CONFIRMED_REJECT_REASONS as _CONFIRMED_REJECT_REASONS,
+    split_failures as _split_failures,
+)
 from ..steps import (assemble_disclosure_events, ingest_raw_disclosure, load_disclosure,
                      normalize_disclosure)
 from ..steps import normalize_disclosure_segment
@@ -108,30 +114,6 @@ _HARD_FAIL_STATUSES = frozenset({"error", "stopped"})
 # "그 창에 우리 공시가 없었다"이고 이건 "우리가 안 봤다"다. 접으면 하루 390 window 가
 # **공시 0건인 정상 거래일**로 확정된다(Rule 12 성공 위장의 전형).
 _NOT_OBSERVED_STATUSES = frozenset({"skipped"})
-
-# **다시 읽어도 결과가 같은** 문서 단위 거부 사유(ALPHA-1154). 전부 "이미 저장한 입력에 대한
-# 판정"이다 — 정제 쪽은 본문 내용 판정이고(본문은 한 번 받으면 다음 poll 이 그 객체를 재사용한다:
-# `ingest_raw_disclosure._existing_documents`), 조립 쪽은 본문에서 계약 대상(체결계약명)을 못 뽑아
-# 적재가 개념 ID 를 만들지 못한 fact 다(`load_disclosure._prepare_supply_rows` — 이름이 비면 None).
-# 어느 쪽도 다시 읽는다고 달라지지 않아, 커서를 막아 얻는 것이 없다.
-#
-# ⚠️ **여기 없는 사유는 전부 일시 실패로 본다**(모르는 사유 포함) — 종전대로 커서를 막는다.
-# 틀리면 막는 쪽으로 틀려야 한다: 확정으로 잘못 접으면 다시 읽어 풀릴 문서가 경계 뒤에 갇힌다.
-# 그래서 넣지 않은 것: `missing_document_body`(본문 미도착 — 다음 poll 이 다시 받는다),
-# `parse_error`(본문 객체 읽기 실패가 같은 except 로 접힌다), `raw_read_error`,
-# 목록 행에서 오는 `missing_rcept_no`·`missing_report_date`·`bad_report_date`(목록은 매 poll
-# 다시 읽으므로 값이 달라질 수 있다), 조립의 `missing_supplier_instrument`(발행사의 보통주
-# 기준정보 조인 결과다 — 문서가 아니라 마스터가 채워지면 풀린다. 캐치업을 소진하면 D-1 fact 는
-# 그 뒤 조립 창에서 빠져 다시 시도되지 않는다)와 `event_build_error`(설정 문제).
-_CONFIRMED_REJECT_REASONS = frozenset({
-    # 공급계약 본문(quality.validate_supply_fact 의 blocking 중 본문 유래)
-    "empty_parse", "amount_out_of_range", "ratio_not_finite",
-    # 사업부문 본문(normalize_disclosure_segment · quality.validate_segment_fact)
-    "no_segments_parsed", "missing_segment_name", "empty_segment",
-    "revenue_out_of_range", "share_not_finite",
-    # 조립(assemble_disclosure_events._skip_reasons) — 본문에서 계약 대상을 못 뽑은 fact
-    "missing_contract_object",
-})
 
 # 시장 전체 공시 하루 건수의 상한 실측(2026-07-31 기준 700~1,070건). 페이지 예산 대조에만
 # 쓴다 — 수집 동작을 정하지 않는다(순회 종료는 벤더의 `total_page` 가 정한다).
@@ -533,33 +515,6 @@ def _observation_scope(after_rcept_no: str | None, outcome: dict) -> dict:
         "stop_reason": outcome.get("incremental_stop_reason"),
         "scan_complete": bool(outcome.get("scan_complete", False)),
     }
-
-
-def _split_failures(stage: str, items: list[dict]) -> tuple[list[dict], int]:
-    """한 단계의 문서 단위 실패 → `(확정 거부 문서 목록, 확정 거부로 볼 수 없는 실패 수)`.
-
-    확정 거부는 사유 중 하나라도 `_CONFIRMED_REJECT_REASONS` 에 들고 **접수번호가 있는** 실패다
-    (게이트는 blocking 사유와 경고를 한 목록에 같이 싣는다 — 확정 사유가 하나면 나머지가 무엇이든
-    그 원문은 다시 읽어도 거부된다). 접수번호가 없으면 나중에 찾아 재처리할 수 없으므로 확정으로
-    접지 않는다. 같은 문서의 여러 실패(사업부문은 부문마다 한 건)는 한 항목으로 합친다.
-    """
-    rejected: dict[str, dict] = {}
-    unresolved = 0
-    for item in items:
-        reasons = item.get("reasons") if isinstance(item, dict) else None
-        rcept_no = item.get("rcept_no") if isinstance(item, dict) else None
-        if (not isinstance(reasons, list) or not isinstance(rcept_no, str) or not rcept_no
-                or not _CONFIRMED_REJECT_REASONS.intersection(
-                    reason for reason in reasons if isinstance(reason, str))):
-            unresolved += 1
-            continue
-        entry = rejected.setdefault(rcept_no, {"stage": stage, "rcept_no": rcept_no,
-                                               "reasons": []})
-        entry["reasons"] = sorted({*entry["reasons"], *(str(reason) for reason in reasons)})
-        for location in ("document_raw_path", "document_id", "fact_id"):
-            if item.get(location):
-                entry.setdefault(location, item[location])
-    return [rejected[key] for key in sorted(rejected)], unresolved
 
 
 def _classify(

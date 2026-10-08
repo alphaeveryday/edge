@@ -3,6 +3,8 @@
 from .disclosure import (
     BLOCKING_REASONS_DISCLOSURE,
     BLOCKING_REASONS_SEGMENT,
+    CONFIRMED_REJECT_REASONS,
+    split_failures,
     validate_segment_fact,
     validate_supply_fact,
 )
@@ -20,6 +22,8 @@ __all__ = [
     "BLOCKING_REASONS_DISCLOSURE",
     "validate_segment_fact",
     "BLOCKING_REASONS_SEGMENT",
+    "CONFIRMED_REJECT_REASONS",
+    "split_failures",
     "validate_etf_holding",
     "BLOCKING_REASONS_ETF",
     "validate_etf_nav",
