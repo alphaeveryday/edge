@@ -455,7 +455,7 @@ def test_pointer_producer_exit2_fulfills_load_instruments_dependency(task_key, s
     db = FakeOpsDB()
     dependencies = [
         "NORMALIZE_PRICE", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
-        "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
+        "NORMALIZE_ETF_NAV", "NORMALIZE_SECTOR_INDEX_DAILY", "NORMALIZE_INVESTOR",
     ]
     upstream = [
         {"task_key": key, "expected_task_id": f"up-{index}",
@@ -473,6 +473,7 @@ def test_pointer_producer_exit2_fulfills_load_instruments_dependency(task_key, s
         "NORMALIZE_ETF": "NormalizeEtf",
         "NORMALIZE_ETF_PROFILE": "NormalizeEtfProfile",
         "NORMALIZE_ETF_NAV": "NormalizeEtfNav",
+        "NORMALIZE_SECTOR_INDEX_DAILY": "NormalizeSectorIndexDaily",
         "NORMALIZE_INVESTOR": "NormalizeInvestor",
     }
     history = []

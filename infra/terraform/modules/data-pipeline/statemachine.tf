@@ -90,6 +90,14 @@ locals {
       command_expr = "States.Array('ingest-raw-investor', '--max-failed-symbols', '1', '--run-id', $.run_id)"
     },
     {
+      # 업종지수 일봉 종가(ALPHA-1254) — KIS FHKUP03500100. 분봉 레인(sector_index_minute)은 15:30
+      # 단일가 체결을 담지 못해 공식 종가를 일봉 TR 로 따로 받는다. 대상은 분봉 레인과 같은
+      # `[minute_sector_index.index_map]`, 자격증명은 같은 kis 세트다.
+      state        = "CollectKisSectorIndexDaily"
+      taskdef_key  = "kis"
+      command_expr = "States.Array('ingest-raw-sector-index-daily', '--run-id', $.run_id)"
+    },
+    {
       # 장중 투자자 추정(ALPHA-767) — KIS HHPTJ04160200. 위 EOD 확정치와 **다른 데이터셋**이다
       # (가집계 추정 vs 확정). 같은 kis 세트라 task-def·앱키·유니버스를 공유한다.
       #
@@ -179,6 +187,12 @@ locals {
       state        = "NormalizeEtfNav"
       taskdef_key  = "bigkinds"
       command_expr = "States.Array('normalize-etf-nav', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
+      # 업종지수 일봉 정제(ALPHA-1254) — raw sector_index_daily → canonical. NAV 정제와 같은 장치다.
+      state        = "NormalizeSectorIndexDaily"
+      taskdef_key  = "bigkinds"
+      command_expr = "States.Array('normalize-sector-index-daily', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
       # 투자자 수급 정제(ALPHA-482) — raw investor_flow_daily → canonical. 다른 normalize 와
@@ -322,16 +336,16 @@ locals {
     }
   ]
 
-  # NormalizePrice·NormalizeEtf·NormalizeEtfProfile·NormalizeEtfNav·NormalizeInvestor exit 2는
-  # 성공 winner 또는 last-good pointer를 확정한 부분 실패다. feature를 실행하되 마지막 strict
-  # gate에서 전체 SFN을 FAILED로 닫는다.
+  # NormalizePrice·NormalizeEtf·NormalizeEtfProfile·NormalizeEtfNav·NormalizeSectorIndexDaily·
+  # NormalizeInvestor exit 2는 성공 winner 또는 last-good pointer를 확정한 부분 실패다. feature를
+  # 실행하되 마지막 strict gate에서 전체 SFN을 FAILED로 닫는다.
   normalize_non_partial_success_checks = [
     for index, job in local.market_normalize_jobs : {
       Variable     = "$.normalize_results[${index}].status"
       StringEquals = "succeeded"
       } if !contains([
         "NormalizePrice", "NormalizeEtf", "NormalizeEtfProfile", "NormalizeEtfNav",
-        "NormalizeInvestor",
+        "NormalizeSectorIndexDaily", "NormalizeInvestor",
     ], job.state)
   ]
   normalize_price_index = index(
@@ -406,6 +420,30 @@ locals {
       },
     ]
   }
+  normalize_sector_index_daily_index = index(
+    [for job in local.market_normalize_jobs : job.state],
+    "NormalizeSectorIndexDaily",
+  )
+  normalize_sector_index_daily_continue_check = {
+    Or = [
+      {
+        Variable     = "$.normalize_results[${local.normalize_sector_index_daily_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.normalize_results[${local.normalize_sector_index_daily_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.normalize_results[${local.normalize_sector_index_daily_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
   normalize_etf_index = index(
     [for job in local.market_normalize_jobs : job.state],
     "NormalizeEtf",
@@ -458,6 +496,7 @@ locals {
     local.normalize_non_partial_success_checks,
     [local.normalize_price_continue_check, local.normalize_etf_continue_check,
       local.normalize_etf_profile_continue_check, local.normalize_etf_nav_continue_check,
+      local.normalize_sector_index_daily_continue_check,
     local.normalize_investor_continue_check],
   )
 

@@ -13,9 +13,15 @@ from .etf_nav import BLOCKING_REASONS_ETF_NAV, validate_etf_nav
 from .etf_profile import BLOCKING_REASONS_ETF_PROFILE, validate_etf_profile
 from .news import BLOCKING_REASONS, validate_news_meta
 from .price import validate_ohlcv
+from .sector_index_daily import (
+    BLOCKING_REASONS_SECTOR_INDEX_DAILY,
+    validate_sector_index_daily,
+)
 
 __all__ = [
     "validate_ohlcv",
+    "validate_sector_index_daily",
+    "BLOCKING_REASONS_SECTOR_INDEX_DAILY",
     "validate_news_meta",
     "BLOCKING_REASONS",
     "validate_supply_fact",

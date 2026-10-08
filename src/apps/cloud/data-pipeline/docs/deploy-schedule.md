@@ -120,15 +120,15 @@ SFN 정의·Reconciler 슬롯 대조는 남는다. 전환·롤백 절차는 [`sr
 - `ingest-raw-etf --source krx`(국내 ETF 구성종목, **krx 세트** — 로그인 게이트)
 - `ingest-raw-nav`(국내 ETF NAV, **kis 세트** — 단일 벤더라 `--source` 없음)
   - ⚠️ KIS 토큰 발급은 앱키당 분당 1회라, 같은 앱키를 쓰는 `ingest-price-raw --source kis` 와
-    **동시 실행하면 한쪽이 403**(EGW00133) 이다. SFN 에는 kis 브랜치가 4개 나란히 편입돼 있다
-    (price·nav·investor·etf_profile). 흡수는 두 겹이다:
+    **동시 실행하면 한쪽이 403**(EGW00133) 이다. SFN 에는 kis 브랜치가 5개 나란히 편입돼 있다
+    (price·nav·investor·etf_profile·sector_index_daily). 흡수는 두 겹이다:
     - **공유 캐시(ALPHA-573)** — `KIS_TOKEN_CACHE_PARAM` env(터라폼이 kis task-def 에 주입,
       SSM SecureString)가 있으면 발급한 토큰을 컨테이너 사이로 공유해 발급이 하루 1회로
       수렴한다(토큰은 24h 유효). 403 을 맞으면 1분을 기다리기 전에 승자의 쓰기를 짧게
       폴링(2초×5)해 그 토큰을 가져간다. **캐시가 없거나 실패하면 아래 대기·재시도로 폴백**한다
       — 최악이 캐시 없던 시절의 동작이다. env 가 없는 로컬 실행은 항상 이 폴백 경로다.
     - **대기·재시도(ALPHA-458)** — `kis_auth` 가 403 EGW00133 을 만나면 61초 + 지터(0~20초)
-      대기 후 재시도한다(예산 `TOKEN_RATE_LIMIT_MAX_RETRY = 4`, 총 5회 시도 — 동시 발급자
+      대기 후 재시도한다(예산 `TOKEN_RATE_LIMIT_MAX_RETRY = 5`, 총 6회 시도 — 동시 발급자
       수보다 커야 한다). 유량 제한이 아닌 4xx 는 기다려도 안 풀리므로 즉시 올린다.
   - **기준일(as-of) 규약**(ALPHA-387): 스케줄이 KST 15:40(장 마감 후, ALPHA-414)이라 거래일
     런은 그날 PDF 를 받는다(dev 실측: 07-22·23·24 스냅샷 내용 상이). 비거래일 런은 빈 응답이
@@ -155,6 +155,11 @@ SFN 정의·Reconciler 슬롯 대조는 남는다. 전환·롤백 절차는 [`sr
     아니라 **15:41** 인 것은 실측이다(15:40:53~59 실패, 15:41:00 이후 성공). 거래일 조건을
     빼면 비거래일 런이 심볼당 75초를 태워 유니버스 전체가 ~10시간이 된다(2026-07-26 실측:
     28분에 22종목). 휴장일 집합은 Planner·KRX·iNAV 와 같은 `OPS_KR_HOLIDAYS` 를 공유한다.
+- `ingest-raw-sector-index-daily`(KRX 업종지수 일봉 종가, **kis 세트**, ALPHA-1254) — 대상은 1분
+  레인과 같은 `[minute_sector_index.index_map]`. 분봉 레인은 15:30 단일가 체결을 담지 못해 공식
+  종가를 이 일봉 TR(`FHKUP03500100`)로 받는다. 창 미지정이면 가격처럼 5일을 소급하므로, 15:40
+  런이 받은 값이 잠정이어도 다음 거래일 런이 더 늦은 `fetched_at` 으로 덮는다(15:40 시점 확정
+  여부는 미실측).
 
 **수집 — 상태머신 밖(수동 전용)**
 
@@ -257,13 +262,14 @@ SFN 정의·Reconciler 슬롯 대조는 남는다. 전환·롤백 절차는 [`sr
     - 정정 정책은 **최신값 덮어쓰기**(형제 로더와 같은 모델) — 벤더가 가집계를 고치면
       canonical 이 최신 `fetched_at` 으로 수렴하고 마트는 `DO UPDATE` 로 따라간다.
 
-**정제(normalize, 시장 SFN 5잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
+**정제(normalize, 시장 SFN 6잡)** — 레이크만 읽고 canonical 을 쓰므로 벤더 키가 불요라, 시크릿 없는
 bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-id $.run_id` 로 이 실행이
 수집한 raw 만 정제한다**(ALPHA-389) — 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에
 비례한다. 적재는 여전히 멱등이다(병합이 기존 행을 읽어 합친다).
 
 - `normalize-price` · `normalize-etf-profile` · `normalize-etf-nav` · `normalize-investor`
 - `normalize-etf`(ETF 구성종목, ALPHA-342·343)
+- `normalize-sector-index-daily`(업종지수 일봉, ALPHA-1254 — NAV 정제와 같은 장치, exit 2 는 부분 성공)
 - (`normalize-news` 는 뉴스 SFN, `normalize-disclosure`·`normalize-disclosure-segment` 는 공시 레인,
   `normalize-investor-estimate` 는 장중 수급 레인 소관이다 — `market_excluded_states`)
 

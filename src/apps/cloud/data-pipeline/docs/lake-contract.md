@@ -209,6 +209,11 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   하고 부호는 양방향으로 틀린다 — 라벨이 구간 끝이면 최신 행이 정상적으로 미래라 음수가
   오탐이고, 15:30 이후 실행에서는 전일 잔값이 **양수**로 위장한다(하필 창 폭과 비슷해 "실시간
   불가"의 강한 증거처럼 읽힌다). 로그는 관측한 사실만 남긴다.
+- **raw(업종지수 일봉)** — `raw/source=kis/dataset=sector_index_daily/market=KR/ingest_date=…/run_id=…/`
+  에 run_id 별 append(ALPHA-1254). 1분 레인 `sector_index_minute` 와 **다른 축**이다 — 저건 장중 봉,
+  이건 공식 종가다(분봉 격자는 15:30 단일가 체결을 담지 못한다). 응답 행 원본에 `index_code`(KRX
+  업종코드)·`market`·`kis_symbol`(KIS 코드)·`fetched_at` 를 붙인다. 완전히 같은 원본만 접고, 같은
+  거래일에 값이 다른 행은 둘 다 남긴다(고르는 건 canonical 의 충돌 검사다).
 - **raw(투자자 수급)** — 확정과 추정을 **다른 dataset 으로 가른다**(iNAV↔NAV 와 같은 이유):
   - EOD 확정 — `raw/source=kis/dataset=investor_flow_daily/market=KR/ingest_date=…/run_id=…/`
     (ALPHA-482). 거래일 grain 확정 순매수. 자연키 날짜는 행의 `stck_bsop_date` 다.
@@ -408,6 +413,12 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   `load-instruments --latest-good`은 서로 다른 source run을 가리키는 세 pointer를 함께 허용하고,
   pointer bytes/ETag·partition·artifact SHA/물리·논리 행 수를 품질 로그에 남긴다. pointer 결손·손상·
   dangling artifact·정체성 불일치는 shared canonical fallback 없이 exit 1이다(ALPHA-1048).
+- **canonical(업종지수 일봉, 정제 Step2)** — `canonical/market_data/sector_index_daily/market=KR/trade_date=…/part-00000.parquet`
+  (ALPHA-1254, 통일 스펙 §4.1). 행 키는 KRX 업종코드 `code`, 열은 `market`·`code`·`trade_date`·
+  `open`·`high`·`low`·`close`·`source_vendor`·`fetched_at` 다. 거래량·거래대금은 단위(천 주·백만 원으로
+  보인다)를 확정하지 못해 싣지 않고, 지수는 금액이 아니라 통화 열도 없다. `normalize-sector-index-daily`
+  가 NAV 정제와 같은 장치(`normalize_etf_nav.FactDataset`)로 병합한다 — 최신 `fetched_at` 우선, 같은
+  시각에 값이 다르면 그 키를 격리(exit 2), winner 는 `dataset=sector_index_daily` canonical run manifest.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

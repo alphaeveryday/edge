@@ -55,14 +55,14 @@ TOKEN_RATE_LIMIT_WAIT_SEC = 61  # "1분당 1회" + 시계 오차 여유
 TOKEN_RATE_LIMIT_JITTER_SEC = 20
 # 재시도 횟수 — **동시에 토큰을 발급하는 브랜치 수보다 커야 한다.** 발급이 분당 1회라 N개
 # 브랜치가 동시에 시작하면 최악의 경우 마지막 브랜치가 N-1 분을 기다려야 자기 차례가 온다.
-# 현재 동시 발급자는 SFN raw 페이즈의 kis 브랜치 4개다(CollectKisPrice·CollectKisNav·
-# CollectKisEtfProfile·CollectKisInvestor — 마지막은 ALPHA-482 로 추가). 여기에 직전 1분 내
-# 발급이 겹칠 수 있어 한 칸 더 둔다.
+# 현재 동시 발급자는 SFN raw 페이즈의 kis 브랜치 5개다(CollectKisPrice·CollectKisNav·
+# CollectKisEtfProfile·CollectKisInvestor·CollectKisSectorIndexDaily — 마지막 둘은 ALPHA-482·
+# ALPHA-1254 로 추가). 여기에 직전 1분 내 발급이 겹칠 수 있어 한 칸 더 둔다.
 # **kis 브랜치를 추가하면 이 값도 함께 올려라** — 안 올리면 새 브랜치가 상시 partial 이 된다
 # (edge-review 지적). 무한 대기는 금지(막히면 런이 실패로 드러나야 한다, Rule 12).
 # 아래 공유 캐시가 들어온 뒤로는 이 예산이 실제로 쓰이는 일이 드물다 — 403 을 맞은 쪽이
 # 대기 대신 캐시를 다시 읽어 승자의 토큰을 가져가기 때문이다(캐시가 없는 로컬·폴백에서만 발화).
-TOKEN_RATE_LIMIT_MAX_RETRY = 4
+TOKEN_RATE_LIMIT_MAX_RETRY = 5
 
 # ── 컨테이너 간 공유 캐시(SSM SecureString) ──
 # 파라미터 이름은 terraform(data-pipeline 모듈)이 kis task-def env 로 주입한다. 없으면

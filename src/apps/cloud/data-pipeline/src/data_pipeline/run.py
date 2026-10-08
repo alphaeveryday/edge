@@ -1,9 +1,9 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument|ingest-raw-sector-index-daily
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
+         |normalize-etf|normalize-etf-nav|normalize-sector-index-daily|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
          |load-assertions|assemble-events|build-minute-universe
          |{ingest-raw|normalize|load}-{macro|sector|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
@@ -57,6 +57,7 @@ from .lake import (
     raw_investor_estimate_partition,
     raw_etf_nav_partition,
     raw_etf_profile_partition,
+    raw_sector_index_daily_partition,
 )
 from .sources import (
     BigKindsNewsSource,
@@ -72,6 +73,7 @@ from .sources import (
     KisInvestorEstimateSource,
     KisInvestorSource,
     KisNavSource,
+    KisSectorIndexDailySource,
     KrxEtfSource,
     KrxInstrumentSource,
     PoliteClient,
@@ -110,6 +112,7 @@ from .steps import (
     normalize_investor_estimate,
     normalize_news,
     normalize_price,
+    normalize_sector_index_daily,
     source_observations,
     source_observations_financial,
     source_observations_macro,
@@ -179,6 +182,7 @@ _WINDOW_CALENDAR: dict[tuple[str, str | None], timezone] = {
     ("ingest-price-raw", "kis"): KST,
     ("ingest-price-raw", "yahoo"): KST,              # index_map 이 ^KS11·^KQ11 (KOSPI·KOSDAQ)
     ("ingest-raw-nav", None): KST,                   # KIS
+    ("ingest-raw-sector-index-daily", None): KST,    # KIS 업종지수 일봉
     ("ingest-raw-inav", None): KST,                  # KIS
     ("ingest-raw-investor", None): KST,              # KIS
     ("ingest-raw-disclosure", None): KST,            # DART
@@ -228,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile", "ingest-raw-instrument",
+                 "ingest-raw-sector-index-daily", "normalize-sector-index-daily",
                  "ingest-raw-investor", "ingest-raw-investor-estimate",
                  "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
@@ -847,6 +852,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-etf-nav":
         return normalize_etf_nav.run(storage, run_id, args.input_run_id)
+    if args.step == "normalize-sector-index-daily":
+        return normalize_sector_index_daily.run(storage, run_id, args.input_run_id)
     # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
     if args.step == "normalize-etf-profile":
         return normalize_etf_profile.run(storage, run_id, args.input_run_id)
@@ -1429,7 +1436,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 30일 반환에 기대던 갭 커버가 사라져 가격과 같은 소급이 필요하다.
         lookback = (
             DEFAULT_PRICE_LOOKBACK_DAYS
-            if args.step in ("ingest-price-raw", "ingest-raw-investor")
+            if args.step in ("ingest-price-raw", "ingest-raw-investor",
+                             "ingest-raw-sector-index-daily")
             else DEFAULT_LOOKBACK_DAYS
         )
         from_date, to_date = default_window(
@@ -1475,6 +1483,27 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return ingest_raw_etf.run(
             settings, storage, nav_source, run_id,
             dataset="etf_nav", partition=raw_etf_nav_partition, job_name="ingest_raw_nav",
+        )
+    if args.step == "ingest-raw-sector-index-daily":
+        # 업종지수 일봉 종가(ALPHA-1254). 분봉 레인은 공식 종가를 못 담아 일봉 TR 로 따로 받는다.
+        # 수집 대상은 분봉 레인과 같은 정본(`[minute_sector_index.index_map]`)이고, 자격증명은
+        # 분봉 레인처럼 NAV 쌍을 쓴다(같은 KIS 앱키).
+        if settings.kis_nav is None:
+            raise SystemExit("kis_nav.source 설정이 없다(업종 일봉 자격증명) — sources.toml 확인")
+        if settings.minute_sector_index is None:
+            raise SystemExit("[minute_sector_index.index_map] 설정이 없다(업종 일봉 수집 대상)")
+        sector_source = KisSectorIndexDailySource(
+            settings.kis_nav.source,
+            settings.minute_sector_index.index_map,
+            kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC,
+                            caller="sector-index-daily", call_class=CLASS_BATCH),
+            from_date,
+            to_date,
+        )
+        return ingest_raw_etf.run(
+            settings, storage, sector_source, run_id,
+            dataset="sector_index_daily", partition=raw_sector_index_daily_partition,
+            job_name="ingest_raw_sector_index_daily",
         )
     if args.step == "ingest-raw-inav":
         # 장중 iNAV(ALPHA-555). 일별 NAV 와 같은 자격증명·유니버스를 쓰되 dataset 이 다르다 —

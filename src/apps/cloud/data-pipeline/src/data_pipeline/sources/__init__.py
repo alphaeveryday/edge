@@ -15,6 +15,7 @@ from .kis_investor_estimate import KisInvestorEstimateSource
 from .kis_inav import KisInavSource
 from .kis_nav import KisNavSource
 from .kis_price import KisDailyPriceSource
+from .kis_sector_index_daily import KisSectorIndexDailySource
 from .krx_auth import KrxAuth
 from .krx_etf import KrxEtfSource
 from .krx_instrument import KrxInstrumentSource
@@ -34,6 +35,7 @@ __all__ = [
     "KisInvestorEstimateSource",
     "KisInavSource",
     "KisNavSource",
+    "KisSectorIndexDailySource",
     "KisAuth",
     "KrxEtfSource",
     "KrxInstrumentSource",
