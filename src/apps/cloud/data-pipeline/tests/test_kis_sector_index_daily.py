@@ -40,9 +40,10 @@ class FakeVendor:
     `tr_cont` 같은 다음 페이지 신호는 없다(2026-10-08 실측과 같은 형상)."""
 
     def __init__(self, days_by_kis_code: dict[str, list[str]], *, defect_day=None,
-                 ignore_date2=False, extra_rows=()):
+                 ignore_date2=False, extra_rows=(), fail_from=None):
         self.days = days_by_kis_code
         self.queries: list[dict] = []
+        self.fail_from = fail_from        # 이 번째(1부터) 요청부터 전송 실패를 낸다
         self.defect_day = defect_day      # 이 날짜 행은 거래일 필드가 빠진 결함 행으로 준다
         self.ignore_date2 = ignore_date2  # 창 끝 이동을 무시하고 늘 첫 창을 준다
         self.extra_rows = list(extra_rows)  # 응답 끝에 그대로 덧붙일 행
@@ -52,6 +53,8 @@ class FakeVendor:
                   urllib.parse.parse_qs(urllib.parse.urlparse(url).query,
                                         keep_blank_values=True).items()}
         self.queries.append(params)
+        if self.fail_from is not None and len(self.queries) >= self.fail_from:
+            raise ValueError("재시도 소진")
         d1, d2 = params["FID_INPUT_DATE_1"], params["FID_INPUT_DATE_2"]
         if self.ignore_date2:
             d2 = self.queries[0]["FID_INPUT_DATE_2"]
@@ -157,6 +160,30 @@ def test_같은_거래일에_값이_다른_행은_둘_다_raw_에_남긴다():
     closes = [r["bstp_nmix_prpr"] for r in records if r["stck_bsop_date"] == days[-1]]
     assert sorted(closes) == ["100.0", "999.0"]
     assert len(records) == len(days) + 1  # 완전히 같은 원본(days[0])만 접힌다
+
+
+def test_뒤_페이지_요청이_실패해도_앞서_받은_행은_남긴다():
+    # WHY: 뒤 페이지의 전송 실패가 지수 단위 격리로 올라가면 이미 받은 50행까지 raw 에서
+    # 사라진다. 받은 행은 내고 절단은 실패로 기록해야 한다(런은 partial).
+    vendor = FakeVendor({"0005": _weekdays("2026-07-01", "2026-10-08")}, fail_from=2)
+    src = _source(vendor, {"1005": "0005"}, "2026-07-01", "2026-10-08")
+
+    assert len(list(src.fetch())) == 50
+    assert any("뒤 페이지 실패" in f["error"] for f in src.fetch_failures)
+
+
+def test_비달력_거래일_행은_결함으로_격리하고_정상_행은_받는다():
+    # WHY: '20260631' 처럼 8자리 숫자인 비달력일이 결함 검사를 통과하면 페이지 커서 계산에서
+    # 터져 그 지수의 정상 행이 전부 버려진다.
+    days = _weekdays("2026-06-01", "2026-10-08")
+    vendor = FakeVendor({"0005": days}, extra_rows=[_bar("20260631")])
+    src = _source(vendor, {"1005": "0005"}, "2026-06-01", "2026-10-08")
+
+    records = list(src.fetch())
+
+    assert [r["stck_bsop_date"] for r in records] == days
+    assert [f["error"] for f in src.fetch_failures] == [
+        "거래일 없는 행: stck_bsop_date='20260631'"]
 
 
 def test_첫_페이지가_비면_실패로_드러난다():

@@ -26,7 +26,7 @@ import json
 from datetime import datetime, timedelta
 
 from ..config import KisNavSource as KisNavSourceConfig
-from .http import PoliteClient
+from .http import PoliteClient, StopFetch
 from .kis_nav import EmptyOutputError, KisNavSource
 from .kis_sector_index import MARKET_DIV_INDEX
 
@@ -79,7 +79,14 @@ class KisSectorIndexDailySource(KisNavSource):
         if defect is not None:
             return defect
         day = row.get("stck_bsop_date")  # type: ignore[union-attr]
-        if not (isinstance(day, str) and len(day) == 8 and day.isdigit()):
+        # 달력까지 본다 — '20260231' 같은 8자리 비달력일이 통과하면 페이지 커서 계산에서
+        # 터져 그 지수의 정상 행까지 전부 버려진다.
+        try:
+            valid = (isinstance(day, str)
+                     and datetime.strptime(day, "%Y%m%d").strftime("%Y%m%d") == day)
+        except ValueError:
+            valid = False
+        if not valid:
             return f"거래일 없는 행: stck_bsop_date={day!r}"
         return None
 
@@ -115,6 +122,16 @@ class KisSectorIndexDailySource(KisNavSource):
                 if rows:
                     break
                 raise
+            except StopFetch:
+                raise  # 4xx/429 는 소스 전체 문제 — 부모 fetch 가 전체를 멈춘다
+            except Exception as exc:
+                # 첫 페이지 실패는 부모와 같이 지수 단위 실패다. 뒤 페이지 실패는 앞서 받은 행을
+                # 버리지 않고 절단으로 기록한다(재시도 소진·깨진 응답·KIS 오류).
+                if not rows:
+                    raise
+                self._note_failure(
+                    kis_symbol, our_etf_id, f"뒤 페이지 실패(창 끝 {end}) — 창 절단: {exc}")
+                break
             new_days = 0
             for row in page:
                 # 같은 거래일이라도 값이 다른 행은 둘 다 남긴다 — raw 는 원본 보존이고, 고르는 건
