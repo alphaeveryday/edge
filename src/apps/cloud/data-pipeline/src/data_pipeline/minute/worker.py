@@ -715,7 +715,7 @@ class SectorIndexWorkerConfig:
     source: str
     market: str
     session_date: str  # YYYY-MM-DD — artifact key 축
-    # KRX 업종코드 45종. **정렬된 튜플**로 받는다 — 기대 집합의 순서가 checksum 에 새면
+    # KRX 업종코드 47종. **정렬된 튜플**로 받는다 — 기대 집합의 순서가 checksum 에 새면
     # 같은 멤버십이 다른 세대를 만든다(collector 가 다시 정렬하지만 여기서도 고정한다).
     unit_ids: tuple[str, ...]
     # 기대 집합 정체성 — planner 가 세션에 못박은 것과 **같아야** 한다. 장중 재배포로
@@ -777,7 +777,7 @@ class SectorIndexWorker(MinuteWorkerLoop):
         return self._process_window(claim, now)
 
     def _expected_units(self, window_start: datetime) -> tuple[str, ...]:
-        """config 의 45종 전부 — **시각 게이트가 없다**.
+        """config 의 47종 전부 — **시각 게이트가 없다**.
 
         가격·iNAV 는 `universe.units_at(window_start)` 로 거래시간 밖 window 에서 raise
         하는데, 여기엔 universe 가 없다. 격자 자체가 정규장 390 window 로 제한되므로
@@ -1131,7 +1131,7 @@ def sector_index_worker_cli(settings, *, session_date: str | None,
 
     `inav_worker_cli` 와 같은 계약이다: SIGTERM/SIGINT 는 tick 경계에서 멈추고, DB 오류는
     삼키지 않는다. **`--universe` 가 없는 것이 다르다** — 이 dataset 은 `UNIVERSE_DATASETS`
-    밖이라 planner 도 `--universe` 를 거부하고, 기대 집합 45종은
+    밖이라 planner 도 `--universe` 를 거부하고, 기대 집합 47종은
     `[minute_sector_index.index_map]` 이 준다. 그 config 가 곧 정본이라 이미지 배포가
     반영이다(S3 를 갈 일이 없다).
 

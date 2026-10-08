@@ -934,7 +934,7 @@ class MinuteUniverseConfig(BaseModel):
 
 
 class MinuteSectorIndexConfig(BaseModel):
-    """KRX 업종지수 45종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
+    """KRX 업종지수 45종 + 종합지수 2종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
 
     `[minute_universe]` 와 축이 다르다: 저기는 universe.json 을 **만드는 입력**이고 실제
     정본은 S3 객체지만, 여기 값은 그 자체가 정본이다(이 dataset 은 universe 를 쓰지
