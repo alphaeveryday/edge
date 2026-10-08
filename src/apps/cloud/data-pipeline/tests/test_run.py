@@ -318,7 +318,13 @@ def test_성공으로_닫힌_거부_문서도_기록에_남고_분_레인이_받
     [failure] = log["failures"]
     assert (failure["rcept_no"], failure["reasons"]) == (rcept_no, ["no_segments_parsed"])
     assert failure["document_raw_path"] == doc_key
-    assert log["ops"]["failed_records"] == 1      # 원장이 INCOMPLETE 로 읽는 신호
+    # 원장은 종료 코드와 이 품질 로그로 data_status 를 정한다(`ops/entry._observe_from_log` →
+    # `wrapper.derive_data_status`). 종료 0 이 그 판정을 VALID 로 바꾸면 화면에서 거부가 사라진다.
+    from data_pipeline.ops import states, wrapper
+    from data_pipeline.ops.entry import _observe_from_log
+    signals = _observe_from_log(storage, "NORMALIZE_DISCLOSURE_SEGMENT", "B1", 0)
+    assert signals["failed_records"] == 1
+    assert wrapper.derive_data_status(signals) == states.DATA_INCOMPLETE
     per_document = [r.getMessage() for r in caplog.records
                     if run_mod.CONFIRMED_REJECT_LOG in r.getMessage()]
     assert len(per_document) == 1, "문서 한 건당 한 줄이어야 지표 합이 문서 수가 된다"

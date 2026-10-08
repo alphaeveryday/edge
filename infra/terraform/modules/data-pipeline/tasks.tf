@@ -155,23 +155,41 @@ resource "aws_cloudwatch_log_metric_filter" "disclosure_confirmed_reject" {
 # - 5일(20구간)은 영업일 3일 연속이 주말을 끼고도 들어가는 가장 짧은 폭이다(목·금·월).
 #   파서가 깨져 매일 거부가 나면 세 번째 실행에서 울린다.
 # - `datapoints_to_alarm` 을 적지 않으면 20구간 연속이 조건이 돼 영영 안 울린다(M=N 기본값).
+# - 지표를 그대로 쓰지 않고 `FILL(raw, 0)` 으로 결측 구간을 0 으로 채운다. metric filter 는 거부가
+#   있을 때만 값을 내므로 그대로 두면 실데이터가 20개에 못 미치고, 그러면 CloudWatch 가 20구간보다
+#   넓게 조회한 범위의 실데이터를 **전부** 판정에 넣는다(AWS 문서 "all real data points in the
+#   evaluation range are included"). 그 범위의 폭은 공개돼 있지 않아 "5일"이 성립하지 않는다 —
+#   10-02·10-07·10-08 의 세 실행이 그렇게 한 판정에 들어갈 수 있었다. 결측이 없으면 최근 20개만 본다.
+#   `treat_missing_data` 는 지표가 아직 한 번도 안 나온 때(식이 값을 못 내는 때)의 기본값이다.
 #
 # ⚠️ 서로 다른 거부 문서 둘이 사흘 안에 이어 접수돼도 울린다(오탐이 아니라 "한 주에 거부가
 # 몰렸다"는 신호로 본다). 통보는 OK→ALARM 전이 한 번뿐이라, 깨진 채 계속 가도 다시 울리지 않는다.
 resource "aws_cloudwatch_metric_alarm" "disclosure_confirmed_reject_piling" {
   alarm_name        = "${var.name}-disclosure-confirmed-reject-piling"
   alarm_description = "공시 저녁 배치가 5일 안에 3번의 실행에서 확정 거부 문서를 봤다 — 문서 한 건은 2번까지만 걸리므로 거부가 쌓이고 있다. 실행은 SUCCEEDED 일 수 있다. 로그의 '공시 확정 거부 문서' 줄에서 접수번호·사유를 보고, 같은 사유가 매일 나오면 파서가 깨졌는지 확인할 것."
-  namespace         = "edge/${var.name}"
-  metric_name       = "DisclosureConfirmedReject"
 
-  statistic           = "Sum"
-  period              = 21600
+  metric_query {
+    id          = "rejects"
+    expression  = "FILL(raw, 0)"
+    label       = "확정 거부 문서 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "DisclosureConfirmedReject"
+      period      = 21600
+      stat        = "Sum"
+    }
+  }
+
   evaluation_periods  = 20
   datapoints_to_alarm = 3
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
-  # 평상시가 곧 결측이라 notBreaching 이어야 INSUFFICIENT_DATA 로 눌러앉지 않는다.
-  treat_missing_data = "notBreaching"
+  treat_missing_data  = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
