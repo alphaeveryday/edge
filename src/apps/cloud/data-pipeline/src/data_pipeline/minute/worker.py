@@ -1367,7 +1367,9 @@ def inav_worker_cli(settings, *, session_date: str | None, universe: str | None,
         settings.kis_nav.source,
         settings.krx_etf.source.etf_map,
         # 간격이 곧 유량 상한이다 — 앱키 전역 한도를 가격 레인·15:40 배치와 나눠 쓴다.
-        kis_http_client(settings, min_interval=0.5, caller="inav", call_class=CLASS_LANE),
+        # 0.25초(ALPHA-1247): ETF 마다 매분 1콜을 차례로 보내므로 한 바퀴는 **최소** 대상 수 × 간격이다(응답이 간격보다
+        # 느리면 그만큼 더 걸린다). 0.5초면 148종에서 간격만으로 74초라 표본 주기 60초를 넘긴다. 0.25초면 최소 37초다.
+        kis_http_client(settings, min_interval=0.25, caller="inav", call_class=CLASS_LANE),
         interval_sec=DEFAULT_INTERVAL_SEC,
     )
     # ⚠️ **수집 전에 막는다.** 틀린 날짜·휴장일에 돌면 지금 값이 그 날짜의 **불변**
