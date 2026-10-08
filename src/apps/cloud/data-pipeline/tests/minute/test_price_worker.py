@@ -1032,6 +1032,104 @@ class TestCollectorSelection:
         collector, _ = make_price_collector(cfg, session_date=TODAY, pacer_for=lambda backfill: Pacer())
         assert collector.concurrency == 2
 
+    _OK = {"rt_cd": "0", "msg_cd": "MCA00000", "msg1": "정상", "output2": []}
+
+    def _on_the_wire(self, monkeypatch, *, units, respond, **config):
+        """실제 조립(`make_price_collector`)으로 창 하나를 수집할 준비를 한다 — urlopen 만 대역이다.
+
+        `(collect, wire)` 를 돌려준다. `wire` 는 종목 요청 수(`calls`)와 **동시에 나가 있던 요청 수의 최댓값**(`max`)이다.
+        종목 요청마다 `respond()` 가 응답 본문을 정한다(토큰 발급은 세지 않는다).
+        """
+        import io
+        import json
+        import threading
+
+        from data_pipeline.minute.models import CollectionRequest
+        from data_pipeline.minute.worker import make_price_collector
+
+        lock = threading.Lock()
+        wire = {"calls": 0, "now": 0, "max": 0}
+
+        def urlopen(req, timeout=None):
+            if "/oauth2/tokenP" in req.full_url:
+                return io.BytesIO(json.dumps({"access_token": "TOKEN-1", "expires_in": 86400}).encode())
+            with lock:
+                wire["calls"] += 1
+                wire["now"] += 1
+                wire["max"] = max(wire["max"], wire["now"])
+            try:
+                return io.BytesIO(json.dumps(respond()).encode())
+            finally:
+                with lock:
+                    wire["now"] -= 1
+
+        monkeypatch.setattr("urllib.request.urlopen", urlopen)
+        collector, _ = make_price_collector(
+            self._config(source="kis", app_key="k", app_secret="s", **config), session_date=TODAY,
+        )
+        collector.client.client._sleep = lambda seconds: None
+        collector.client.client.keep_alive = 0  # 대역이 urlopen 이라 그 경로로 보낸다
+        start = datetime.combine(TODAY, datetime.min.time(), KST).replace(hour=10)
+        request = CollectionRequest(
+            dataset="price_minute", window_start=start, window_end=start + timedelta(minutes=1),
+            run_id="run-1", session_id="msn_x", execution_mode="resident",
+            universe_version="u1", unit_ids=tuple(f"{n:06d}" for n in range(units)),
+        )
+        return (lambda: collector.collect(request, start)), wire
+
+    def test_shared_key_sends_one_request_at_a_time(self, monkeypatch):
+        """전용 키 선언이 없으면 `fetch_concurrency` 를 올려도 한 번에 한 건만 나간다(ALPHA-1247 — 종전 동작).
+
+        WHY: 공유 허용이 꺼진 KIS 호출자는 프로세스마다 따로 간격을 둔다. 순차 수집은 응답을 기다리는 동안 다음
+        요청을 못 보내 실제 발신이 간격 상한 아래에 머문다. 응답 대기를 겹치면 그 상한까지 올라가, 같은 키를 쓰는
+        iNAV·업종지수·장중 수급과의 합산이 계좌 한도를 넘는다. 그래서 설정값이 아니라 **실제로 겹쳐 나간 요청 수**를 본다.
+        """
+        import time
+
+        def slow():
+            time.sleep(0.02)  # 겹쳐 보낼 수 있었다면 겹쳤을 만큼 길게
+            return self._OK
+
+        collect, wire = self._on_the_wire(monkeypatch, units=8, respond=slow, fetch_concurrency=4)
+        collect()
+        assert wire == {"calls": 8, "now": 0, "max": 1}
+
+    def test_dedicated_key_fetches_concurrently_without_the_shared_budget(self, monkeypatch):
+        """전용 키면 공유 허용 없이도 `fetch_concurrency` 만큼 겹쳐 나간다(ALPHA-1247) — 그 키를 나눠 쓸 상대가 없다."""
+        import threading
+
+        together = threading.Barrier(4, timeout=5)  # 4건이 동시에 나가 있어야만 풀린다 — 순차면 시간 초과로 깨진다
+
+        def respond():
+            together.wait()
+            return self._OK
+
+        collect, wire = self._on_the_wire(monkeypatch, units=8, respond=respond,
+                                          fetch_concurrency=4, dedicated_app_key=True)
+        collect()
+        assert wire == {"calls": 8, "now": 0, "max": 4}
+
+    def test_sustained_rate_rejection_still_stops_the_window_when_concurrent(self, monkeypatch):
+        """동시 수집에서도 유량 거절이 연속되면 창을 통째로 멈춘다(`RATE_STREAK_LIMIT`).
+
+        WHY: 전용 키에서는 이 워커 혼자 한도 가까이 보낸다(ALPHA-1247). 거절이 이어지는데 종목별 결손으로만 접으면
+        종목마다 재시도 예산을 다 쓰면서 남은 종목을 끝까지 부른다 — 한도를 넘긴 계좌에 발신을 더 얹는 것이다.
+        """
+        import time
+
+        from data_pipeline.sources.kis_minute import MAX_RATE_RETRY, KisSourceError
+
+        def rejected():
+            time.sleep(0.005)  # 수집 스레드가 다음 종목으로 넘어가기 전에 취소가 끼어들 틈
+            return {"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "초당 거래건수 초과"}
+
+        collect, wire = self._on_the_wire(monkeypatch, units=40, respond=rejected,
+                                          fetch_concurrency=4, dedicated_app_key=True)
+        with pytest.raises(KisSourceError, match="연속"):
+            collect()
+        # 남은 종목은 부르지 않았다 — 끝까지 갔다면 40종목 × 재시도 예산이다
+        assert wire["calls"] <= 40 * MAX_RATE_RETRY // 2
+
     def test_past_session_date_builds_historical_kis_client(self):
         """지난 거래일이면 **다른 TR** 이다(ALPHA-846).
 

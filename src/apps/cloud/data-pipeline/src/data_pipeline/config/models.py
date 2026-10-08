@@ -572,6 +572,10 @@ class MinutePriceWorkerConfig(BaseModel):
     min_interval_sec: float = Field(default=0.08, gt=0, le=5)
     # 한 window 안 동시 요청 수(KIS 당일 경로만). 1 = 종전 순차. 발신률 한도가 아니다 — 간격·공유 허용이 정한다(ALPHA-1087).
     fetch_concurrency: int = Field(default=1, ge=1, le=4)
+    # 이 워커의 앱키를 다른 KIS 호출자가 쓰지 않는다는 선언(ALPHA-1247). 켜면 공유 허용 없이도 fetch_concurrency 를 그대로 쓴다 —
+    # 합산할 상대가 없어 이 워커의 간격(min_interval_sec)이 곧 그 키의 발신률이다. ⚠️ 같은 키를 쓰는 호출자가 하나라도 있으면
+    # 켜지 마라: 동시 요청은 응답 대기에 묶여 있던 발신을 간격 상한까지 끌어올려, 프로세스마다 따로 둔 간격의 합산이 한도를 넘는다.
+    dedicated_app_key: bool = False
     # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
     # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
     # 안 드러난다.

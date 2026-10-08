@@ -871,9 +871,10 @@ def make_price_collector(options, *, session_date, pacer_for=None) -> tuple[obje
                 stats=http.stats,
             ), stats=http.stats), is_backfill
         concurrency = options.fetch_concurrency
-        if concurrency > 1 and http.pacer is None:
+        if concurrency > 1 and http.pacer is None and not options.dedicated_app_key:
             # 공유 허용 없이 동시 요청을 켜면 로컬 간격(0.08초) 안에서 실제 발신률만 올라간다 — 합산이 이미
             # 한도에 닿는 기존 방식을 더 나쁘게 만든다(ALPHA-1087). 동시성은 공유 허용과 함께일 때만 쓴다.
+            # 예외는 이 워커만 쓰는 전용 키다(dedicated_app_key, ALPHA-1247) — 합산할 상대가 없어 간격이 곧 그 키의 발신률이다.
             logger.warning("fetch_concurrency=%d 무시 — 공유 호출 허용이 꺼져 있다(동시성 1로 수집)", concurrency)
             concurrency = 1
         return KisPriceCollector(
