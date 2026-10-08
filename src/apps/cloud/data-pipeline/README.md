@@ -87,7 +87,7 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
   정본이다. 기본값 25ms·50ms 는 **로컬 실험 설정**이고, 운영 측정으로 확정한 값이 아니다.
 - 분봉 워커 동시 요청 `DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY`(기본 1, 최대 4)는
   공유 예산이 켜졌거나 전용 키 선언(아래)이 있을 때만 적용된다. 둘 다 아니면 경고를 남기고 1로 돈다. terraform 은
-  `call_budget_enabled` 가 `true`일 때만 2를 싣고, `false`면 변수를 싣지 않는다(코드 기본 1). 이 필드를 모르는 이전 이미지가
+  `call_budget_enabled` 가 `true`면 2를, 전용 키 배선(아래)이 켜져 있으면 4를 싣는다. 둘 다 아니면 변수를 싣지 않는다(코드 기본 1). 이 필드를 모르는 이전 이미지가
   기동을 거부하지 않게 하기 위해서다 — 머지 배포에서 terraform-apply 가 이미지 배포보다 먼저 끝날 수 있다.
 - 전용 키 선언 `DATA_PIPELINE_MINUTE_PRICE_WORKER__DEDICATED_APP_KEY`(기본 `false`, ALPHA-1247)는 분봉 워커의 앱키를
   다른 KIS 호출자가 쓰지 않을 때만 켠다. 켜면 공유 예산 없이도 위 동시 요청 수로 수집하고, 발신 속도는 워커의 호출 간격
