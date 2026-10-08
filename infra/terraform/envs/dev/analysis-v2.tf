@@ -27,7 +27,7 @@ module "analysis_v2" {
   price_queue_url       = module.data_pipeline.minute_queue_urls["price-explanation-realtime"]
   price_queue_arn       = module.data_pipeline.minute_queue_arns["price-explanation-realtime"]
 
-  # 평시 동시 12건(ALPHA-1240, 이전 3 — ALPHA-1157). 개장 집중(관측 최대 35건)과 전망 37~39종의 자리 대기를 줄인다.
+  # 평시 동시 12건(ALPHA-1240, 이전 3 — ALPHA-1157). 개장 집중(관측 최대 35건)과 전망 37~39종의 자리 대기를 줄인다(그때의 대상 수다 — ALPHA-1249 로 148종이 됐다).
   # 동시 37 1회 실측(#1124)에서 DB 거절 0·Lambda 스로틀은 재시도로 회복. 역할 연결 한도·Lambda 예약 동시 실행은 그대로다.
   # 되돌릴 때는 이 값만 3으로 바꾼다(#1125). 측정은 tests/loadtest/analysis-v2/README.md.
   analysis_slots = 12

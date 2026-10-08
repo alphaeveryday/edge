@@ -190,9 +190,14 @@ def test_configured_universe_reads_the_declared_sector_candidates():
     WHY: ALPHA-842 가 얹은 48종은 한 번도 수집된 적이 없어 관측 유니버스에 안 잡힌다.
     선언을 못 읽으면 그 종목들이 백필 대상에서 또 빠진다.
     """
+    from data_pipeline.config.loader import load_settings
+
     declared = backfill._configured_universe()
 
-    assert len(declared) >= 40, f"선언된 섹터 후보가 비었다: {len(declared)}종"
+    # 종수 하한(종전 40)을 두지 않는다 — 판정 축(etf_map)으로 옮겨 가면 이 목록은 줄어든다(ALPHA-1249: 47 → 32종).
+    # 대신 선언 집합 **전체**와 대조한다: 일부만 돌려주면 나머지가 백필에서 빠진다.
+    assert declared, "선언된 섹터 후보가 비었다"
+    assert declared == set(load_settings().minute_universe.sector_etf_ids)
     assert all(isinstance(t, str) and t for t in declared)
 
 

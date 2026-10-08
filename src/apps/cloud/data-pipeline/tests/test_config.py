@@ -244,9 +244,9 @@ category_codes = ["002000000"]
 
 
 def test_krx_etf_isins_match_their_short_codes():
-    # WHY: etf_map 의 ISIN 은 손으로 적는 값이고, 오타가 나도 형식은 멀쩡해 보인다. 틀린 ISIN 은
+    # WHY: etf_map 의 ISIN 은 손으로 고칠 수 있는 값이고, 오타가 나도 형식은 멀쩡해 보인다. 틀린 ISIN 은
     #      KRX 가 빈 output 을 주고 그 ETF 가 런 단위로 실패한다(krx_etf.py — partial 로 드러남).
-    #      39종까지 늘어난 지금(ALPHA-454·624·927·936·1171) 그건 매일 시끄러운 실패라, 오타를 런타임이 아니라
+    #      148종인 지금(ALPHA-1249) 그건 매일 시끄러운 실패라, 오타를 런타임이 아니라
     #      여기서 잡는다. 체크디짓까지 봐야 한 자리 오타가 걸린다 — 접두사만 보면 KR7091*1*60002
     #      같은 실수가 통과한다.
     settings = load_settings()
@@ -325,7 +325,7 @@ sector_etf_ids = ["091170", "091170"]
 
 def test_sector_etf_unknown_key_fails_loud(tmp_path):
     # WHY: `extra="forbid"` 가 없으면 키 오타(sector_etf_id)가 조용히 로드되고
-    #      sector_etf_ids 는 빈 튜플이 된다 — 47종이 통째로 사라진 채 초록으로 돈다.
+    #      sector_etf_ids 는 빈 튜플이 된다 — 32종이 통째로 사라진 채 초록으로 돈다.
     #      값 오타는 위에서 막는데 키 오타를 안 막으면 같은 결과에 신호만 없다.
     bad = VALID + """
 [minute_universe]
