@@ -117,6 +117,65 @@ resource "aws_cloudwatch_metric_alarm" "collection_truncated" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
+# 공시 저녁 배치가 본 확정 거부 문서 수(ALPHA-1163).
+#
+# 확정 거부(`quality.disclosure.CONFIRMED_REJECT_REASONS` — 파서 대상이 아닌 서식처럼 다시 읽어도
+# 같은 거부)만 남은 정제는 이제 종료 0 이라 공시 SFN 이 SUCCEEDED 로 닫힌다. 거부 문서는
+# quality_log 와 원장(failed_records·INCOMPLETE)에 남지만 아무도 부르지 않는다.
+#
+# **왜 누적 알람인가**: 확정 거부 사유는 파서가 고장 났을 때 나오는 사유와 겹친다. 서식이 바뀌어
+# 공급계약 파서가 깨져도 `empty_parse` 다. 문서가 많은 날은 실행당 상한
+# (`max_confirmed_rejects_per_run`)이 FAILED 로 올리지만, 한가한 날은 하루 1~2건이라 상한 아래로
+# 매일 성공한다 — 그 상태가 며칠 가도 드러나는 곳이 없다. 거부마다 울리면 평소 모양까지 울려
+# 무뎌지므로, **쌓였을 때만** 울린다.
+#
+# 문구는 `run.py` 의 `CONFIRMED_REJECT_LOG` 와 같아야 한다(test_run 이 두 파일을 대조한다).
+# 그 줄은 문서 한 건당 한 줄이라 Sum 이 문서 수다. 1분 레인은 이 줄을 내지 않는다.
+resource "aws_cloudwatch_log_metric_filter" "disclosure_confirmed_reject" {
+  name           = "${var.name}-disclosure-confirmed-reject"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "\"공시 확정 거부 문서\""
+
+  # namespace 를 var.name 으로 가르는 이유는 raw_ingest_skipped 주석과 동일하다.
+  metric_transformation {
+    name      = "DisclosureConfirmedReject"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+# 판정: **5일 안에 거부를 본 실행이 3번**이면 울린다.
+#
+# - 구간은 6시간이다. 배치는 하루 한 번(19:30 KST)이고 두 정제가 같은 분에 끝나므로, 구간 하나가
+#   곧 실행 하나다. 하루(86400) 구간으로 잡지 않은 것은 구간 경계가 실행 시각 근처에 놓이면 이틀
+#   치가 한 구간에 들 수 있어서다 — 6시간이면 24시간 떨어진 두 실행이 경계와 무관하게 갈린다.
+# - 3 은 문서 한 건이 만들 수 없는 가장 작은 수다. 배치 창이 [직전 실행일, 당일]이라 거부 문서
+#   하나는 정확히 두 실행에 걸린다(평소 모양 = 2). 2026-07-26~10-08 배치 86회에서 확정 거부를 본
+#   실행은 4번(10-01·10-02 한 문서, 10-07·10-08 한 문서)이고 어느 5일을 잡아도 2번이 최대였다.
+# - 5일(20구간)은 영업일 3일 연속이 주말을 끼고도 들어가는 가장 짧은 폭이다(목·금·월).
+#   파서가 깨져 매일 거부가 나면 세 번째 실행에서 울린다.
+# - `datapoints_to_alarm` 을 적지 않으면 20구간 연속이 조건이 돼 영영 안 울린다(M=N 기본값).
+#
+# ⚠️ 서로 다른 거부 문서 둘이 사흘 안에 이어 접수돼도 울린다(오탐이 아니라 "한 주에 거부가
+# 몰렸다"는 신호로 본다). 통보는 OK→ALARM 전이 한 번뿐이라, 깨진 채 계속 가도 다시 울리지 않는다.
+resource "aws_cloudwatch_metric_alarm" "disclosure_confirmed_reject_piling" {
+  alarm_name        = "${var.name}-disclosure-confirmed-reject-piling"
+  alarm_description = "공시 저녁 배치가 5일 안에 3번의 실행에서 확정 거부 문서를 봤다 — 문서 한 건은 2번까지만 걸리므로 거부가 쌓이고 있다. 실행은 SUCCEEDED 일 수 있다. 로그의 '공시 확정 거부 문서' 줄에서 접수번호·사유를 보고, 같은 사유가 매일 나오면 파서가 깨졌는지 확인할 것."
+  namespace         = "edge/${var.name}"
+  metric_name       = "DisclosureConfirmedReject"
+
+  statistic           = "Sum"
+  period              = 21600
+  evaluation_periods  = 20
+  datapoints_to_alarm = 3
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # 평상시가 곧 결측이라 notBreaching 이어야 INSUFFICIENT_DATA 로 눌러앉지 않는다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
 resource "aws_security_group" "task" {
   name        = "${var.name}-task"
   description = "data-pipeline raw ingest tasks ${var.name}"

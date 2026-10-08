@@ -120,6 +120,9 @@ from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
+from .quality.disclosure import split_failures
+
+logger = logging.getLogger(__name__)
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
@@ -752,6 +755,52 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
         storage, source, run_id, series_ids=series, from_date=args.from_date, to_date=args.to_date)
 
 
+# 저녁 배치가 본 확정 거부 문서 한 건당 한 줄. `infra/terraform/modules/data-pipeline/tasks.tf`
+# 의 metric filter 가 이 문구를 세므로(줄 수 = 문서 수) 문구를 바꿀 땐 필터를 같이 고쳐라.
+CONFIRMED_REJECT_LOG = "공시 확정 거부 문서"
+
+
+def _settle_confirmed_rejects(step: str, normalizer, storage, run_id: str,
+                              input_run_id: str | None, limit: int) -> int:
+    """저녁 배치의 공시 정제를 돌리고, **확정 거부만 남은** 부분 실패는 종료 0 으로 닫는다
+    (ALPHA-1163).
+
+    정제의 종료 2 는 "행 실패가 있었다"만 말한다. 그 안에는 다시 읽으면 풀리는 실패(본문
+    미도착)와 같은 원문이면 늘 같은 거부(파서 대상이 아닌 서식)가 섞여 있는데, 공시 SFN 의
+    마지막 판정은 둘을 못 가르고 실행을 FAILED 로 닫았다. 거부 문서는 수집 창에 두 번 걸리므로
+    문서 하나가 이틀 연속 FAILED 를 만들었고(2026-09-30~10-08 의 7회 중 4회), FAILED 가 조치할 일이
+    있다는 신호 구실을 못 했다. 그래서 실패가 전부 확정 거부이고 문서 수가 `limit` 이하일 때만
+    0 으로 닫는다. 일시·미지 실패가 하나라도 섞였거나 상한을 넘으면 종전대로 2 다 — 상한은
+    파서가 깨져 전건이 거부되는 날을 성공으로 닫지 않기 위한 것이다.
+
+    0 으로 닫아도 거부는 남는다: quality_log `failures`(접수번호·사유·원문 위치), 원장의
+    `failed_records`·`data_status=INCOMPLETE`(`ops/wrapper.derive_data_status`), 아래 문서별
+    경고 줄과 그 줄을 세는 누적 알람.
+
+    ⚠️ 이 판정은 **CLI 경계에만** 있다. `normalize_*.run` 의 반환값은 바꾸지 않는다 — 1분 레인이
+    같은 함수를 직접 불러 종료 2 로 그 창을 INCOMPLETE 로 남긴다(ALPHA-1154). 반환을 0 으로
+    바꾸면 거부를 본 창이 VALID 로 접힌다.
+    """
+    failures: list[dict] = []
+    exit_code = normalizer(storage, run_id, input_run_id, failures_out=failures)
+    # 종료 2 일 때만 사유를 읽는다 — canonical·quality_log·완료 manifest 가 온전히 기록된 뒤의
+    # 행 실패다. 종료 1 은 그 기록 자체가 깨진 것이라 사유가 무엇이든 실패다.
+    if exit_code != 2:
+        return exit_code
+    rejected, unresolved = split_failures(step, failures)
+    for doc in rejected:
+        logger.warning("%s: step=%s rcept_no=%s reasons=%s",
+                       CONFIRMED_REJECT_LOG, step, doc["rcept_no"], ",".join(doc["reasons"]))
+    if not rejected or unresolved or len(rejected) > limit:
+        logger.warning(
+            "%s 부분 실패를 종료 2 로 남긴다: 확정 거부 %d건(상한 %d) · 그 밖의 실패 %d건",
+            step, len(rejected), limit, unresolved)
+        return exit_code
+    logger.warning("%s 는 확정 거부 %d건만 남아 종료 0 으로 닫는다(상한 %d)",
+                   step, len(rejected), limit)
+    return 0
+
+
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
     max_failed_symbols = args.max_failed_symbols or 0
@@ -782,10 +831,14 @@ def _dispatch(args, settings, storage, run_id) -> int:
                                   expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
     # 공시 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
-    if args.step == "normalize-disclosure":
-        return normalize_disclosure.run(storage, run_id, args.input_run_id)
-    if args.step == "normalize-disclosure-segment":
-        return normalize_disclosure_segment.run(storage, run_id, args.input_run_id)
+    if args.step in ("normalize-disclosure", "normalize-disclosure-segment"):
+        normalizer = (normalize_disclosure if args.step == "normalize-disclosure"
+                      else normalize_disclosure_segment)
+        # 섹션이 없으면 한 건도 접지 않는다 — 상한을 모르는 채 성공으로 닫지 않는다.
+        limit = (settings.dart_disclosure.max_confirmed_rejects_per_run
+                 if settings.dart_disclosure is not None else 0)
+        return _settle_confirmed_rejects(
+            args.step, normalizer.run, storage, run_id, args.input_run_id, limit)
     # ETF 구성종목 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-etf":

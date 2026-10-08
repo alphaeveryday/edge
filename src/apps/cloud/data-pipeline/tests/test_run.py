@@ -158,7 +158,7 @@ def test_normalize_disclosure_dispatches_step(tmp_path, monkeypatch):
 
     from data_pipeline import run as run_mod
 
-    def fake_run(storage, run_id, input_run_id):
+    def fake_run(storage, run_id, input_run_id, *, failures_out):
         called["input_run_id"] = input_run_id
         return 0
 
@@ -175,13 +175,174 @@ def test_normalize_disclosure_segment_dispatches_step(tmp_path, monkeypatch):
 
     from data_pipeline import run as run_mod
 
-    def fake_run(storage, run_id, input_run_id):
+    def fake_run(storage, run_id, input_run_id, *, failures_out):
         called["input_run_id"] = input_run_id
         return 0
 
     monkeypatch.setattr(run_mod.normalize_disclosure_segment, "run", fake_run)
     assert main(["normalize-disclosure-segment", "--input-run-id", "R9"]) == 0
     assert called == {"input_run_id": "R9"}
+
+
+# ── 저녁 배치의 확정 거부 판정 (ALPHA-1163) ──────────────────────────────────────
+_DISCLOSURE_NORMALIZERS = {
+    "normalize-disclosure": "normalize_disclosure",
+    "normalize-disclosure-segment": "normalize_disclosure_segment",
+}
+
+
+def _confirmed(rcept_no, reason="empty_parse"):
+    return {"rcept_no": rcept_no, "reasons": [reason],
+            "document_raw_path": f"raw/documents/{rcept_no}.zip"}
+
+
+def _run_disclosure_normalizer(monkeypatch, step, *, exit_code, failures):
+    """정제 스텝을 종료 코드와 실패 목록만 내는 대역으로 바꿔 CLI 를 돌린다."""
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+
+    def fake_run(storage, run_id, input_run_id, *, failures_out):
+        failures_out.extend(failures)
+        return exit_code
+
+    monkeypatch.setattr(getattr(run_mod, _DISCLOSURE_NORMALIZERS[step]), "run", fake_run)
+    return main([step, "--run-id", "R", "--input-run-id", "R"])
+
+
+@pytest.mark.parametrize("step", sorted(_DISCLOSURE_NORMALIZERS))
+def test_확정_거부만_남은_공시_정제는_배치를_실패로_닫지_않는다(monkeypatch, step):
+    """WHY: 파서 대상이 아닌 서식(자유서식 주요경영사항, 금융사 사업보고서)은 다시 읽어도 같은
+    거부다. 그 문서 하나가 수집 창에 걸린 이틀 내내 실행을 FAILED 로 닫으면, FAILED 가 조치할
+    일이 있다는 신호 구실을 못 하고 다른 원인의 실패가 같은 모양에 묻힌다."""
+    assert _run_disclosure_normalizer(
+        monkeypatch, step, exit_code=2, failures=[_confirmed("20261007000218")]) == 0
+
+
+@pytest.mark.parametrize("step", sorted(_DISCLOSURE_NORMALIZERS))
+@pytest.mark.parametrize("other", [
+    {"rcept_no": "20260930801255", "reasons": ["missing_document_body"]},   # 본문 미도착
+    {"rcept_no": "20260930801256", "reasons": ["parse_error"], "error": "boom"},
+    {"rcept_no": "20260930801257", "reasons": ["some_new_reason"]},         # 모르는 사유
+    {"raw_key": "raw/x.ndjson", "reasons": ["empty_parse"]},                # 접수번호 없음
+], ids=["missing_body", "parse_error", "unknown_reason", "no_rcept_no"])
+def test_확정_거부에_다시_읽으면_풀릴_실패가_섞이면_실패로_끝난다(monkeypatch, step, other):
+    """WHY: 0 으로 닫는 근거는 "다시 읽어도 달라질 것이 없다"뿐이다. 본문 미도착·읽기 오류는
+    다음 실행에서 풀릴 수 있고, 모르는 사유와 접수번호 없는 실패는 확정이라 볼 근거가 없다.
+    확정 거부가 옆에 있다는 이유로 이런 실패까지 성공으로 닫으면 실제 결손이 초록으로 지나간다."""
+    assert _run_disclosure_normalizer(
+        monkeypatch, step, exit_code=2,
+        failures=[_confirmed("20261001900395"), other]) == 2
+
+
+@pytest.mark.parametrize("step", sorted(_DISCLOSURE_NORMALIZERS))
+def test_확정_거부만_있어도_상한을_넘으면_실패로_끝난다(monkeypatch, step):
+    """WHY: 서식이 바뀌어 파서가 깨져도 사유는 같은 `empty_parse` 다. 상한이 없으면 그날 문서
+    전건이 거부돼도 성공으로 닫힌다. 기본 상한 3 은 배치 86회(2026-07-26~10-08)에서 확정 거부가
+    실행당 최대 1건이었던 실적 위에 둔 여유다 — 경계(3건은 닫고 4건은 실패)를 고정한다."""
+    docs = [_confirmed(f"2026100700000{i}") for i in range(4)]
+    assert _run_disclosure_normalizer(monkeypatch, step, exit_code=2, failures=docs[:3]) == 0
+    assert _run_disclosure_normalizer(monkeypatch, step, exit_code=2, failures=docs) == 2
+
+
+def test_확정_거부_상한은_문서_수로_세고_설정으로_바꾼다(monkeypatch):
+    """WHY: 사업부문 정제는 한 문서의 실패를 부문마다 한 건씩 낸다 — 행 수로 세면 부문이 많은
+    문서 하나가 상한을 넘긴다. 그리고 3월 사업보고서 철에는 금융사 문서가 하루 여러 건이라
+    상한을 이미지 재배포 없이 올릴 수 있어야 한다(env 한 줄). 0 은 한 건도 접지 않는 종전 동작이다."""
+    step = "normalize-disclosure-segment"
+    one_doc_five_segments = [
+        {"rcept_no": "20261007000218", "reasons": ["missing_segment_name"], "segment_ordinal": i}
+        for i in range(5)
+    ]
+    assert _run_disclosure_normalizer(
+        monkeypatch, step, exit_code=2, failures=one_doc_five_segments) == 0
+
+    four_docs = [_confirmed(f"2026031900000{i}", "no_segments_parsed") for i in range(4)]
+    monkeypatch.setenv("DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN", "4")
+    assert _run_disclosure_normalizer(monkeypatch, step, exit_code=2, failures=four_docs) == 0
+    monkeypatch.setenv("DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN", "0")
+    assert _run_disclosure_normalizer(monkeypatch, step, exit_code=2, failures=four_docs[:1]) == 2
+
+
+@pytest.mark.parametrize("exit_code,failures", [
+    (1, [{"rcept_no": "20261007000218", "reasons": ["no_segments_parsed"]}]),
+    (2, []),
+], ids=["hard_failure", "partial_without_reasons"])
+def test_사유를_믿을_수_없는_종료는_그대로_둔다(monkeypatch, exit_code, failures):
+    """WHY: 종료 1 은 canonical·quality_log 기록 자체가 깨진 것이라 그 실패 목록을 판정 근거로
+    쓸 수 없다. 종료 2 인데 사유가 하나도 없으면 무엇이 실패했는지 모른다. 둘 다 성공으로
+    닫을 근거가 없다."""
+    assert _run_disclosure_normalizer(
+        monkeypatch, "normalize-disclosure-segment",
+        exit_code=exit_code, failures=failures) == exit_code
+
+
+def test_성공으로_닫힌_거부_문서도_기록에_남고_분_레인이_받는_종료_코드는_그대로다(
+        tmp_path, monkeypatch, caplog):
+    """WHY: 실행을 실패로 닫지 않는 것과 거부를 숨기는 것은 다르다. 그 공시는 fact 가 되지
+    못했으므로 접수번호와 사유가 남아야 파서 범위를 고친 뒤 찾아 다시 돌린다 — 품질 로그(재처리
+    근거), 원장이 읽는 실패 건수(화면의 INCOMPLETE), 문서별 경고 줄(누적 알람이 세는 것).
+
+    그리고 이 판정은 CLI 경계에만 있어야 한다. 정제 함수가 직접 0 을 내면 같은 함수를 부르는
+    1분 레인이 거부를 본 창을 VALID 로 확정한다(ALPHA-1154 가 막은 것) — 같은 입력에 함수는 2 다."""
+    import io
+    import json
+    import zipfile
+
+    from data_pipeline.lake import (LocalStorage, raw_disclosure_document_key,
+                                    raw_disclosure_partition)
+    from data_pipeline.steps import disclosure_raw_manifest, normalize_disclosure_segment
+
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("DATA_PIPELINE_STORAGE__LOCAL_ROOT", str(tmp_path / "lake"))
+    storage = LocalStorage(tmp_path / "lake")
+    rcept_no = "20261007000218"
+    body = io.BytesIO()
+    with zipfile.ZipFile(body, "w") as archive:   # 사업부문 표가 없는 사업보고서
+        archive.writestr(f"{rcept_no}.xml", "<html><body><p>영업의 현황</p></body></html>")
+    doc_key = raw_disclosure_document_key("dart", "KR", "2026-10-07", "R1", rcept_no)
+    storage.put_bytes(doc_key, body.getvalue())
+    raw_key = f"{raw_disclosure_partition('dart', 'KR', '2026-10-07', 'R1')}/part-00000.ndjson"
+    storage.put_bytes(raw_key, (json.dumps({
+        "report_nm": "[기재정정]사업보고서 (2025.12)", "rcept_no": rcept_no,
+        "rcept_dt": "20261007", "corp_code": "00382199", "our_ticker": "055550",
+        "document_raw_path": doc_key,
+    }, ensure_ascii=False) + "\n").encode("utf-8"))
+    storage.put_bytes(disclosure_raw_manifest.key("R1"),
+                      disclosure_raw_manifest.bytes_for("R1", True, [raw_key]))
+
+    with caplog.at_level("WARNING", logger="data_pipeline.run"):
+        assert main(["normalize-disclosure-segment", "--run-id", "B1", "--input-run-id", "R1"]) == 0
+
+    [log_key] = [k for k in storage.list_keys("operations_archive/data_quality_logs/")
+                 if "run_id=B1" in k]
+    log = json.loads(storage.get_bytes(log_key))
+    [failure] = log["failures"]
+    assert (failure["rcept_no"], failure["reasons"]) == (rcept_no, ["no_segments_parsed"])
+    assert failure["document_raw_path"] == doc_key
+    assert log["ops"]["failed_records"] == 1      # 원장이 INCOMPLETE 로 읽는 신호
+    per_document = [r.getMessage() for r in caplog.records
+                    if run_mod.CONFIRMED_REJECT_LOG in r.getMessage()]
+    assert len(per_document) == 1, "문서 한 건당 한 줄이어야 지표 합이 문서 수가 된다"
+    assert rcept_no in per_document[0] and "no_segments_parsed" in per_document[0]
+
+    assert normalize_disclosure_segment.run(storage, "M1", "R1") == 2
+
+
+def test_분_레인과_배치가_같은_확정_거부_목록을_본다():
+    """WHY: 같은 문서를 1분 레인은 "커서를 막지 않는 거부"로, 배치는 "실패"로 읽으면(또는 그
+    반대면) 한쪽만 고친 사유가 레인마다 다르게 판정된다. 목록과 분류 함수는 한 벌이어야 한다."""
+    from data_pipeline.minute import disclosure_worker
+    from data_pipeline.quality import disclosure as quality
+
+    assert disclosure_worker._CONFIRMED_REJECT_REASONS is quality.CONFIRMED_REJECT_REASONS
+    assert disclosure_worker._split_failures is quality.split_failures is run_mod.split_failures
+
+
+def test_확정_거부_로그_문구와_알람_필터가_같은_문구를_본다():
+    """WHY: 누적 알람은 로그 문구를 세는 metric filter 위에 선다. 문구를 한쪽만 바꾸면 필터가
+    아무것도 세지 않고 알람은 영영 조용하다 — 파서가 깨져도 모르는 상태로 돌아간다."""
+    tasks_tf = (pathlib.Path(__file__).resolve().parents[5]
+                / "infra/terraform/modules/data-pipeline/tasks.tf").read_text(encoding="utf-8")
+    assert f'pattern        = "\\"{run_mod.CONFIRMED_REJECT_LOG}\\""' in tasks_tf
 
 
 def test_normalize_etf_dispatches_step(tmp_path, monkeypatch):
