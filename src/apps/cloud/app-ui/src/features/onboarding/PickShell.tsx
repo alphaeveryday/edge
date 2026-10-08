@@ -7,7 +7,7 @@ import { colors } from '@/theme/tokens';
 interface Props {
   navTitle?: string;
   title: string;
-  sub: string;
+  sub?: string;
   cta: string;
   ctaDisabled?: boolean;
   onBack: () => void;
@@ -15,7 +15,7 @@ interface Props {
   children: ReactNode;
 }
 
-// 테마 선택과 ETF 선택 공통 틀
+// ETF 선택 화면 틀
 export function PickShell({ navTitle = '', title, sub, cta, ctaDisabled, onBack, onNext, children }: Props) {
   const { top } = useSafeAreaInsets();
   return (

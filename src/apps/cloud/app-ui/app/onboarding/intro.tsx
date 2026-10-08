@@ -2,7 +2,6 @@ import { useRouter } from 'expo-router';
 import { HowHero } from '@/features/onboarding/HowHero';
 import { IntroPager, type IntroPage } from '@/features/onboarding/IntroPager';
 import { StickerHero } from '@/features/onboarding/StickerHero';
-import { WhatHero } from '@/features/onboarding/WhatHero';
 
 const PAGES: IntroPage[] = [
   {
@@ -16,19 +15,12 @@ const PAGES: IntroPage[] = [
     title: '전망은 스티커\n하나로 말해요',
     body: '강력 하락부터 강력 상승까지 5단계.\nETF마다 매일 아침 하나씩 붙어요.',
     accent: '호재·차트·매크로·밸류·수급\n다섯 기준을 보고 정해요.',
-    cta: '다음',
+    cta: '관심 ETF 고르기',
     hero: <StickerHero />,
-  },
-  {
-    title: '오늘 달라진 것만\n보여드려요',
-    body: '어떤 일이 생겼고, 그게 내 ETF에\n왜 중요한지 순서대로 설명해요.',
-    accent: '어제 본 내용은 다시 안 읽어도 돼요.',
-    cta: '내 ETF 고르기',
-    hero: <WhatHero />,
   },
 ];
 
 export default function Intro() {
   const router = useRouter();
-  return <IntroPager pages={PAGES} onDone={() => router.push('/onboarding/theme')} />;
+  return <IntroPager pages={PAGES} onDone={() => router.push('/onboarding/etf')} />;
 }

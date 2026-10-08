@@ -1,6 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useMemo } from 'react';
-import { useEtfList, useThemes } from '@/features/etf/queries';
+import { useEtfList } from '@/features/etf/queries';
 import { EtfPickGrid } from '@/features/onboarding/EtfPickGrid';
 import { PickShell } from '@/features/onboarding/PickShell';
 import { api } from '@/api';
@@ -11,30 +10,26 @@ import { useSession } from '@/store/session';
 export default function EtfPick() {
   const router = useRouter();
   const { data } = useEtfList();
-  const { data: themeList } = useThemes();
-  const { themes, etfs, toggleEtf } = useOnboarding();
-  // ETF 테마 표기에 맞춘 고른 테마의 라벨
-  const picked = useMemo(() => (themeList ?? []).filter((t) => themes.includes(t.key)).map((t) => t.label), [themeList, themes]);
+  const { etfs, toggleEtf } = useOnboarding();
   const finishOnboarding = useSession((s) => s.finishOnboarding);
-  const ranked = useMemo(() => [...(data ?? [])].sort((a, b) => Number(picked.includes(b.theme)) - Number(picked.includes(a.theme))), [data, picked]);
-  const n = etfs.length;
   const done = async () => {
-    await api.onboarding.complete({ themes, etfs });
+    await api.onboarding.complete({ themes: [], etfs });
     finishOnboarding();
+    // 고른 ETF 중 목록상 가장 앞의 ETF
+    const first = (data ?? []).find((e) => etfs.includes(e.code))?.code ?? etfs[0];
     router.replace('/(tabs)/home');
+    router.push(`/etf/${first}/brief`);
   };
   return (
     <PickShell
       navTitle=""
-      title="지켜볼 ETF를 골라주세요"
-      sub={picked.length ? `${picked.slice(0, 2).join(' · ')} ETF를 먼저 보여드려요.` : '전망이 좋은 ETF부터 보여드려요.'}
-      cta={`${n}개 선택`}
-      ctaDisabled={n === 0}
+      title="관심 ETF를 골라보세요."
+      cta="전망 보기"
+      ctaDisabled={etfs.length === 0}
       onBack={() => router.back()}
       onNext={done}
     >
-      <EtfPickGrid etfs={ranked} picked={etfs} onToggle={toggleEtf} />
+      <EtfPickGrid etfs={data ?? []} picked={etfs} onToggle={toggleEtf} />
     </PickShell>
   );
 }
-

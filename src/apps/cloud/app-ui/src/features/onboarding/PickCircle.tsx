@@ -13,7 +13,7 @@ interface Props {
   children: ReactNode;
 }
 
-// 테마·ETF 선택 그리드의 원형 항목
+// ETF 선택 그리드의 원형 항목
 export function PickCircle({ size, label, on, hot, onPress, children }: Props) {
   const check = size > 88 ? 28 : 26;
   return (
