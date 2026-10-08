@@ -292,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
                  # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
                  # ⚠️ 수집만이 아니라 collect→normalize×2→load→assemble 을 한 window 에서 돈다.
                  "disclosure-worker",
-                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 45종 분봉 상주 루프.
+                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 47종 분봉 상주 루프.
                  # 원장 DB + storage + [minute_sector_index.index_map] 정본 +
                  # minute_price_worker 의 KIS 자격증명(같은 앱키). universe 없음 —
                  # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
@@ -520,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             "수집 유니버스는 canonical holdings 에서 파생된다(무시되므로 거부)"
         )
     if args.step == "sector-index-worker" and args.universe is not None:
-        # 업종지수도 universe 밖이다 — 기대 집합 45종은 config 정본
+        # 업종지수도 universe 밖이다 — 기대 집합 47종은 config 정본
         # (`[minute_sector_index.index_map]`)이고, universe.json 은 지수를 아예 모른다
         # (ETF 명부에도 구성종목에도 없다). planner 도 같은 조건으로 거부한다.
         raise SystemExit(

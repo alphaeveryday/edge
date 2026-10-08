@@ -143,7 +143,7 @@ duck.py `backfill_sources` docstring).
 - **상태(2026-10-08, ALPHA-1254)**: 지수 일봉 절반을 **KIS 업종 일봉 TR**로 구현했다
   (`ingest-raw-sector-index-daily` → `normalize-sector-index-daily`, 시장 SFN 15:40). 아래 스펙과
   다른 점: 원천이 pykrx 가 아니라 KIS 이고, 완전성 기대 집합이 분류 유도가 아니라 1분 레인과
-  같은 config `[minute_sector_index.index_map]`(45종)이다 — 분류(`sector_membership`) 생산자가
+  같은 config `[minute_sector_index.index_map]`(업종 45종 + 종합지수 2종, ALPHA-1255)이다 — 분류(`sector_membership`) 생산자가
   아직 없어 유도할 원천이 없다. 분류·기대 집합 유도·duck 뷰 전환은 ALPHA-835 잔여다.
 - **원천 API**: pykrx (KRX 정보데이터시스템 비공식 래퍼) — `get_index_ohlcv`(업종지수 일봉)·
   `get_market_sector_classifications(날짜, 시장)`(PIT 분류). `krxsector.py` 로 검증된 경로다.

@@ -82,7 +82,7 @@ ENV_DISCLOSURE_WORKER_SERVICES = "MINUTE_SESSION_DISCLOSURE_WORKER_SERVICES"
 ENV_INAV_SOURCE_GROUP = "MINUTE_SESSION_INAV_SOURCE_GROUP"
 ENV_INAV_WORKER_SERVICES = "MINUTE_SESSION_INAV_WORKER_SERVICES"
 # 업종지수(ALPHA-887) — 뉴스·공시처럼 **universe 를 안 쓴다**(`UNIVERSE_DATASETS` 밖).
-# 기대 집합 45종의 정본은 universe.json 이 아니라 config `[minute_sector_index.index_map]`
+# 기대 집합 47종의 정본은 universe.json 이 아니라 config `[minute_sector_index.index_map]`
 # 이고 planner 가 그 해시를 세션에 고정한다 — 그래서 `--universe` 를 주면 planner 가
 # 거부한다. 아래 표의 `universe=... if lane.dataset in UNIVERSE_DATASETS` 가 그 축을
 # 이미 가르므로 여기 넣는 것만으로 맞는다.

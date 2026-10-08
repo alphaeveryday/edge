@@ -1125,7 +1125,7 @@ def canonical_sector_index_minute_artifact_key(
     축이 아니라 레코드 컬럼.
 
     `price_minute` 와 **dataset 을 나눈다**. 담는 것이 종목 봉이 아니라 업종지수 봉이고,
-    무엇보다 **완전성 기대 집합이 다르다** — 지수 45종은 universe 에 없다(ETF 명부에도
+    무엇보다 **완전성 기대 집합이 다르다** — 지수 47종은 universe 에 없다(ETF 명부에도
     구성종목에도 없다). 한 artifact 에 섞으면 그 window 가 "종목은 다 왔는데 지수는 안
     왔다"를 표현할 수 없어 매 window INCOMPLETE 가 된다(iNAV 와 같은 논거).
 
@@ -1214,7 +1214,7 @@ def canonical_intraday_5m_key(market: str, trade_date: str) -> str:
 
 
 def canonical_intraday_5m_sector_key(market: str, trade_date: str) -> str:
-    """업종지수 45종 5분봉의 거래일 파일 키 (ALPHA-941).
+    """업종지수 47종(업종 45 + 종합 2, ALPHA-1255) 5분봉의 거래일 파일 키 (ALPHA-941).
 
     가격과 **같은 파티션에 다른 파일로** 산다. 새 dataset 을 파지 않는 이유는 소비자다 —
     분석엔진은 이 파티션을 파일명 없이 통째로 건다(`statics/duck.py` 의 `s3_intraday_5m`
