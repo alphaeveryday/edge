@@ -372,6 +372,37 @@ class TestRunGate:
         assert reached == []          # 원장에 닿지도 않았다
         assert code == 1              # bounded 는 확인 게이트다 — 아래 테스트가 짝이다
 
+    def test_호출_간격만으로_표본_주기를_넘기지_않는다(self, monkeypatch, tmp_path):
+        """호출 간격 × 대상 ETF 수가 60초를 넘으면 응답이 아무리 빨라도 다음 분 표본이 밀린다 — iNAV 는 소급이
+        불가라 밀린 만큼 영구 결손이다.
+
+        ETF 마다 매분 1콜을 차례로 보낸다. 대상을 148종까지 넓힌다(ALPHA-1249) — 0.5초 간격이면 74초라 못 맞춘다.
+        ⚠️ **필요조건만 본다.** 실제 한 바퀴는 호출마다 max(응답 시간, 간격)이라, 이 단언이 통과해도 응답이 느리면 밀린다.
+        동봉 설정의 대상 수도 같이 본다: 목록이 이 간격이 감당하는 수를 넘으면 여기서 먼저 깨진다. 동봉 파일을
+        직접 읽는다 — `load_settings()` 는 실행 환경(`DATA_PIPELINE_CONFIG_FILE`·env 재정의)을 따라가 다른 목록을 본다.
+        """
+        import tomllib
+
+        import data_pipeline.minute.worker as module
+        from data_pipeline.config.loader import _DEFAULT_CONFIG_FILE
+        from data_pipeline.minute.inav_collect import _LANE_INTERVAL_SEC
+
+        intervals = []
+        real = module.kis_http_client
+
+        def spy(settings, *, min_interval, **kwargs):
+            intervals.append(min_interval)
+            return real(settings, min_interval=min_interval, **kwargs)
+
+        monkeypatch.setattr(module, "kis_http_client", spy)
+        today = datetime.now(KST).date().isoformat()
+        self._run(monkeypatch, tmp_path, skip_reason="non-trading day", session_date=today, max_ticks=None)
+
+        (interval,) = intervals
+        bundled = tomllib.loads(_DEFAULT_CONFIG_FILE.read_text(encoding="utf-8"))
+        targets = max(148, len(bundled["krx_etf"]["source"]["etf_map"]))
+        assert targets * interval < _LANE_INTERVAL_SEC
+
     def test_상주_모드의_휴장일_skip_만_정상_종료다(self, monkeypatch, tmp_path):
         """`--max-ticks` 없는 상주 실행은 스케줄러가 휴장일마다 정상으로 지나가야 하지만,
         bounded 실행은 "돌렸는데 한 window 도 못 봤다"를 성공으로 보고하면 안 된다 —
