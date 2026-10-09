@@ -1,6 +1,6 @@
 import { focusManager, MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
-import { router, Stack } from 'expo-router';
+import { router, Stack, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
@@ -8,6 +8,7 @@ import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
+import { trackScreen } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useColors, useScheme, useThemePref } from '@/theme/theme';
 import { fontAssets } from '@/theme/typography';
@@ -41,6 +42,8 @@ export default function RootLayout() {
   const restoreTheme = useThemePref((s) => s.restore);
   const themeRestored = useThemePref((s) => s.restored);
   const scheme = useScheme();
+  const pathname = usePathname();
+  useEffect(() => { trackScreen(pathname); }, [pathname]);
   useEffect(() => { restore(); restoreTheme(); }, [restore, restoreTheme]);
   // 화면 전환·키보드 뒤로 드러나는 맨 뒤 창의 배경색
   useEffect(() => { SystemUI.setBackgroundColorAsync(colors.bg); }, [colors.bg]);
