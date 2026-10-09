@@ -42,8 +42,8 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # (미지정=fmp). 인증은 OAuth 앱키/시크릿(env 주입), 도메인은 env(prod|vps). 수집 대상은
 # canonical KR holdings 의 ETF 별 최신 파티션 합집합(부분 스냅샷이 유니버스를 못 줄임,
 # ALPHA-590)의 구성종목·ETF 티커 ∪ targets(ALPHA-419 — 유니버스가 holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
-# symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 39종 중
-# 9종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 9종이 샌다).
+# symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 148종 중
+# 37종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 그 종목들이 샌다).
 # 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
 # 컨테이너 사이로도 공유한다(ALPHA-573 — docs/deploy-schedule.md 의 ingest-raw-nav 항목).
 # 시장 SFN은 `--max-failed-symbols 1`을 명시한다(ALPHA-798). 고립 실패 1개는 exit 0이지만
@@ -164,8 +164,8 @@ DATA_PIPELINE_ETF__SOURCE__API_KEY=... \
 # 국내 ETF 구성종목 원본저장(Step1) — KRX 정보데이터시스템 PDF(MDCSTAT05001). --source krx 로
 # 벤더 선택. 로그인 계정 게이트 뒤라 KRX 계정(mbr_id/pw)을 env 로 주입해 run 당 1회 로그인,
 # 승격 JSESSIONID 세션으로 getJsonData 를 호출한다. etf_map 은 our_etf_id → ISIN(krx_etf.source.
-# etf_map, 현재 KR 39종 — 국내 반도체 29종(488210 상장폐지 제외, ALPHA-1114) + KODEX 200 + 섹터 2종 + 은행 + 테마 6종,
-# ALPHA-454·624·927·936·1171). 날짜창 미지정이면 그날(trdDd), 과거 복구는 같은 거래일을
+# etf_map, 현재 KR 148종 — 국내 주식형에서 테마별 거래대금 상위 10종 등으로 고른 것이다. 선정 기준은 ADR-0059,
+# ALPHA-1249). 날짜창 미지정이면 그날(trdDd), 과거 복구는 같은 거래일을
 # --from/--to 양쪽에 지정해 그날 PDF 전량을 append한다. KRX PDF는 한 날짜 snapshot이라
 # 다일 범위와 한쪽만 지정한 창은 거부한다. 해외기초 ETF 는 비중·금액이 대시(-)로 와도 무변형 보존
 # (현 유니버스엔 없다 — 경로만 유지). ⚠️ 계정 파이프라인 전용(사람 동시 로그인 시 CD011).
@@ -181,9 +181,9 @@ DATA_PIPELINE_KRX_ETF__SOURCE__MBR_ID=... DATA_PIPELINE_KRX_ETF__SOURCE__PW=... 
 
 # 국내 ETF NAV 원본저장(Step1) — KIS ETF NAV비교추이(일), tr_id FHPST02440200(ALPHA-380).
 # KRX getJsonData 는 무로그인·세션 모두 LOGOUT 이라(2026-07-20 실측) 가격에서 검증된 KIS 를
-# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 39종)을 그대로 공유한다
+# 쓴다. 수집 유니버스는 별도 맵을 두지 않고 krx_etf.source.etf_map(KR 148종)을 그대로 공유한다
 # — 구성종목과 NAV 가 다른 목록을 보면 안 되기 때문. KIS 는 ISIN 이 아니라 6자리 단축코드로
-# 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 39종 중 9종 — 숫자로만 거르면 샌다).
+# 질의하며, 신규 상장분은 코드에 문자가 섞인다(0093A0 등 148종 중 37종 — 숫자로만 거르면 샌다).
 # 창(--from/--to)을 그대로 받아 1콜로 구간 거래일 NAV 를 받으므로 백필도 같은 명령이다.
 # raw 는 응답 행 전량 무변형(nav 외 stck_clpr·dprt 포함) append — 필드 선별은 canonical(382).
 DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY=... DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
