@@ -1,5 +1,6 @@
 import { createContext, useContext, useRef, type ReactNode, type Ref } from 'react';
 import { Animated, KeyboardAvoidingView, Modal, Pressable, ScrollView, type ScrollViewProps, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useSheetDrag } from '@/lib/useSheetDrag';
 import { createStyles } from '@/theme/theme';
 import { radius, shadow } from '@/theme/tokens';
@@ -28,33 +29,40 @@ interface Props {
 
 export function BottomSheet({ open, onClose, children, head, tall, padded = true, instant }: Props) {
   const styles = useStyles();
-  const gap = useBottomGap();
   const drag = useSheetDrag({ open, onClose, tall, instant });
   // 닫히는 동안의 마지막 내용 유지
   const last = useRef({ children, head });
   if (open) last.current = { children, head };
   return (
     <Modal visible={drag.mounted} transparent animationType="none" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior="padding" style={styles.root}>
-        <Animated.View style={[styles.backdrop, drag.backdrop]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        </Animated.View>
-        <Animated.View
-          onLayout={(e) => drag.onLayout?.(e.nativeEvent.layout.height)}
-          style={[styles.sheet, !tall && styles.fit, padded && styles.padded, { paddingBottom: gap }, drag.sheet]}
-        >
-          <View {...drag.handlers} style={[styles.grip, padded && styles.gripPadded, !!head && styles.gripHead]}>
-            <View style={[styles.handle, !!head && styles.handleHead]} />
-            {last.current.head}
-          </View>
-          <View {...drag.body} style={tall && styles.body}>
-            <SheetScroll.Provider value={drag.onScroll}>{last.current.children}</SheetScroll.Provider>
-          </View>
-          <View style={styles.under} />
-        </Animated.View>
-      </KeyboardAvoidingView>
+      {/* 탭 화면의 탭바 높이가 섞이지 않는 창 기준 하단 여백 */}
+      <SafeAreaProvider>
+        <KeyboardAvoidingView behavior="padding" style={styles.root}>
+          <Animated.View style={[styles.backdrop, drag.backdrop]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+          </Animated.View>
+          <Animated.View
+            onLayout={(e) => drag.onLayout?.(e.nativeEvent.layout.height)}
+            style={[styles.sheet, !tall && styles.fit, padded && styles.padded, drag.sheet]}
+          >
+            <View {...drag.handlers} style={[styles.grip, padded && styles.gripPadded, !!head && styles.gripHead]}>
+              <View style={[styles.handle, !!head && styles.handleHead]} />
+              {last.current.head}
+            </View>
+            <View {...drag.body} style={tall && styles.body}>
+              <SheetScroll.Provider value={drag.onScroll}>{last.current.children}</SheetScroll.Provider>
+            </View>
+            <SheetGap />
+            <View style={styles.under} />
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </SafeAreaProvider>
     </Modal>
   );
+}
+
+function SheetGap() {
+  return <View style={{ height: useBottomGap() }} />;
 }
 
 const useStyles = createStyles((colors) => ({

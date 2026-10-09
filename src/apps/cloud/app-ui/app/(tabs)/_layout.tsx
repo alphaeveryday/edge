@@ -1,28 +1,37 @@
-import { Tabs } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CommunityIcon, ExploreIcon, HomeIcon, WatchIcon } from '@/components/TabIcons';
+import { NativeTabs } from 'expo-router/unstable-native-tabs';
+import { Platform } from 'react-native';
 import { useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
+// iOS 는 리퀴드 글라스, Android 는 Material 하단 탭
 export default function TabsLayout() {
   const colors = useColors();
-  const { bottom } = useSafeAreaInsets();
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.text,
-        tabBarInactiveTintColor: colors.textMuted,
-        // 탭 내용 높이 49와 위아래 여백
-        // 시스템 하단 영역 위 8의 아래 여백
-        tabBarStyle: { height: 63 + bottom, paddingTop: 6, paddingBottom: bottom + 8, backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.tabBarLine },
-        tabBarLabelStyle: { fontFamily: fam.semibold, fontSize: 11 },
-      }}
+    <NativeTabs
+      minimizeBehavior="onScrollDown"
+      tintColor={colors.text}
+      iconColor={{ default: colors.textMuted, selected: colors.text }}
+      labelStyle={{ default: { fontFamily: fam.semibold, color: colors.textMuted }, selected: { fontFamily: fam.semibold, color: colors.text } }}
+      // iOS 는 배경색 지정 시 유리 효과가 사라져 Android 만 지정
+      backgroundColor={Platform.OS === 'android' ? colors.bg : undefined}
+      indicatorColor={colors.surface}
     >
-      <Tabs.Screen name="home" options={{ title: '홈', tabBarIcon: ({ color }) => <HomeIcon color={color} /> }} />
-      <Tabs.Screen name="watch" options={{ title: '관심', tabBarIcon: ({ color }) => <WatchIcon color={color} /> }} />
-      <Tabs.Screen name="explore" options={{ title: '탐색', tabBarIcon: ({ color }) => <ExploreIcon color={color} /> }} />
-      <Tabs.Screen name="community" options={{ title: '커뮤니티', tabBarIcon: ({ color }) => <CommunityIcon color={color} /> }} />
-    </Tabs>
+      <NativeTabs.Trigger name="home">
+        <NativeTabs.Trigger.Icon sf={{ default: 'house', selected: 'house.fill' }} md="home" />
+        <NativeTabs.Trigger.Label>홈</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="watch">
+        <NativeTabs.Trigger.Icon sf={{ default: 'heart', selected: 'heart.fill' }} md="favorite" />
+        <NativeTabs.Trigger.Label>관심</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="explore">
+        <NativeTabs.Trigger.Icon sf={{ default: 'safari', selected: 'safari.fill' }} md="explore" />
+        <NativeTabs.Trigger.Label>탐색</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="community">
+        <NativeTabs.Trigger.Icon sf={{ default: 'bubble.left', selected: 'bubble.left.fill' }} md="chat_bubble" />
+        <NativeTabs.Trigger.Label>커뮤니티</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
+    </NativeTabs>
   );
 }

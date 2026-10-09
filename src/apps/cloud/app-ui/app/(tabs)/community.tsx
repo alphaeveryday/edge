@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Platform, ScrollView, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TopBar } from '@/components/TopBar';
 import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
@@ -19,6 +20,8 @@ export default function Community() {
   const styles = useStyles();
   const router = useRouter();
   const requireLogin = useRequireLogin();
+  // iOS 탭 화면의 하단 inset 에 포함된 반투명 탭바 높이
+  const { bottom } = useSafeAreaInsets();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const feed = useFeed(scope);
   const posts = feed.data;
@@ -48,7 +51,7 @@ export default function Community() {
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} showTag />)}
         {posts && posts.length === 0 && <Text style={styles.empty}>관심 ETF를 담으면 그 ETF의 글이 모여요</Text>}
       </ScrollView>
-      <View style={styles.fab}>
+      <View style={[styles.fab, Platform.OS === 'ios' && { bottom: 18 + bottom }]}>
         <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push('/community/write'))} />
       </View>
     </View>
