@@ -1,13 +1,15 @@
 import { Pressable, Text, View } from 'react-native';
+import { Icon, type ListIcon } from './ListRow';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { type } from '@/theme/typography';
 
-export function ToggleRow({ label, sub, on, onToggle, divider }: { label: string; sub?: string; on: boolean; onToggle: () => void; divider?: boolean }) {
+export function ToggleRow({ label, icon, sub, on, onToggle, divider }: { label: string; icon?: ListIcon; sub?: string; on: boolean; onToggle: () => void; divider?: boolean }) {
   const styles = useStyles();
   const colors = useColors();
   return (
     <View style={[styles.row, divider && styles.divider]}>
+      {icon && <View style={styles.icon}><Icon name={icon} /></View>}
       <View style={{ flex: 1, gap: 3 }}>
         <Text style={styles.label}>{label}</Text>
         {!!sub && <Text style={styles.sub}>{sub}</Text>}
@@ -20,8 +22,9 @@ export function ToggleRow({ label, sub, on, onToggle, divider }: { label: string
 }
 
 const useStyles = createStyles((colors) => ({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
   divider: { borderBottomWidth: 1, borderBottomColor: colors.surface },
+  icon: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   label: { ...type.listLabel, color: colors.text },
   sub: { ...type.caption, color: colors.textMuted },
   track: { width: 50, height: 30, borderRadius: radius.pill },

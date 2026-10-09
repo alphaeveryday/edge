@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import PostHog from 'posthog-react-native';
+import { create } from 'zustand';
 import { useSession } from '@/store/session';
 
 type Props = Record<string, string | number | boolean>;
@@ -26,3 +27,13 @@ if (client) {
 
 export const track = (event: string, props?: Props) => { client?.capture(event, props); };
 export const trackScreen = (name: string) => { client?.screen(name); };
+
+// 이용 통계 끄기, 설정값은 SDK 저장소에 보관
+export const useAnalyticsOn = create<{ on: boolean; setOn: (on: boolean) => void }>((set) => ({
+  on: true,
+  setOn: (on) => {
+    set({ on });
+    if (on) client?.optIn(); else client?.optOut();
+  },
+}));
+client?.ready().then(() => useAnalyticsOn.setState({ on: !client.optedOut }));

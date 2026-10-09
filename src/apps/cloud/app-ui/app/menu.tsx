@@ -3,10 +3,11 @@ import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { Avatar, Chevron, IconButton, ListRow, PageScroll, type ListIcon } from '@/components/ui';
+import { Avatar, Chevron, IconButton, ListRow, PageScroll, ToggleRow, type ListIcon } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useUnreadCount } from '@/features/notification/queries';
 import { THEME_LABEL, ThemeSheet } from '@/features/theme/ThemeSheet';
+import { useAnalyticsOn } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { createStyles, useColors, useThemePref } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
@@ -28,6 +29,7 @@ export default function Menu() {
   const { data: unread } = useUnreadCount();
   const pref = useThemePref((s) => s.pref);
   const [themeOpen, setThemeOpen] = useState(false);
+  const { on: statsOn, setOn: setStatsOn } = useAnalyticsOn();
   const go = (href: string) => { router.back(); setTimeout(() => router.push(href as never), 0); };
   return (
     <View style={styles.root}>
@@ -63,6 +65,9 @@ export default function Menu() {
         ))}
         <View style={{ paddingTop: 10 }}>
           <ListRow icon="moon" label="화면 모드" value={THEME_LABEL[pref]} onPress={() => setThemeOpen(true)} />
+          <View style={{ paddingHorizontal: 8 }}>
+            <ToggleRow icon="bars" label="이용 통계 보내기" sub="앱 개선에 쓰는 익명 사용 기록" on={statsOn} onToggle={() => setStatsOn(!statsOn)} />
+          </View>
         </View>
       </PageScroll>
       <ThemeSheet open={themeOpen} onClose={() => setThemeOpen(false)} />

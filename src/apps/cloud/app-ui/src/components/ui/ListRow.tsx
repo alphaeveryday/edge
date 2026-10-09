@@ -4,8 +4,8 @@ import { Chevron } from './Chevron';
 import { createStyles, useColors } from '@/theme/theme';
 import { fam, type } from '@/theme/typography';
 
-export type ListIcon = 'chart' | 'star' | 'search' | 'comm' | 'bell' | 'moon';
-function Icon({ name }: { name: ListIcon }) {
+export type ListIcon = 'chart' | 'star' | 'search' | 'comm' | 'bell' | 'moon' | 'bars';
+export function Icon({ name }: { name: ListIcon }) {
   const colors = useColors();
   const st = { stroke: colors.textSub, fill: 'none' as const, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
   switch (name) {
@@ -14,6 +14,7 @@ function Icon({ name }: { name: ListIcon }) {
     case 'search': return <Svg width={20} height={20} viewBox="0 0 20 20"><Circle cx={9} cy={9} r={5.5} {...st} strokeWidth={1.8} /><Path d="M13.2 13.2l3.5 3.5" {...st} strokeWidth={1.8} /></Svg>;
     case 'comm': return <Svg width={20} height={20} viewBox="0 0 20 20"><Path d="M17 10.4c0 2.9-3.1 5.2-7 5.2-.9 0-1.7-.1-2.5-.4L4 16.5l.8-2.7C3.7 12.9 3 11.7 3 10.4 3 7.5 6.1 5.2 10 5.2s7 2.3 7 5.2z" {...st} strokeWidth={1.7} /></Svg>;
     case 'moon': return <Svg width={20} height={20} viewBox="0 0 20 20"><Path d="M16 12.2A6.5 6.5 0 017.8 4a6.5 6.5 0 108.2 8.2z" {...st} strokeWidth={1.7} /></Svg>;
+    case 'bars': return <Svg width={20} height={20} viewBox="0 0 20 20"><Path d="M4.5 16.5v-5M10 16.5v-12M15.5 16.5v-8" {...st} strokeWidth={1.8} /></Svg>;
     case 'bell': return <Svg width={20} height={20} viewBox="0 0 20 20"><Path d="M10 3a4.5 4.5 0 00-4.5 4.5v2.7L4 13h12l-1.5-2.8V7.5A4.5 4.5 0 0010 3z" {...st} strokeWidth={1.7} /><Path d="M8.2 15.5a1.9 1.9 0 003.6 0" {...st} strokeWidth={1.7} /></Svg>;
   }
 }
