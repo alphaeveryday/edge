@@ -25,6 +25,8 @@ export function SheetScrollView({ ref, ...props }: ScrollViewProps & { ref?: Ref
       onLayout={(e) => { m.current.view = e.nativeEvent.layout.height; report(); }}
       onContentSizeChange={(_, h) => { m.current.content = h; report(); }}
       scrollEventThrottle={16}
+      // iOS 관성 스크롤 중 손잡이·버튼 터치를 빼앗는 응답자 재협상 차단
+      disableScrollViewPanResponder
       bounces={false}
       showsVerticalScrollIndicator={false}
       {...props}

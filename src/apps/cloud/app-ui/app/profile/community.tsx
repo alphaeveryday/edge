@@ -32,7 +32,7 @@ export default function CommunityProfile() {
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="내 프로필" onBack={() => router.back()} rightLabel={editing ? '완료' : '수정'} onRight={toggleEdit} />
-      <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled" disableScrollViewPanResponder={false}>
         {pull.indicator}
         <View style={styles.head}>
           {me && <Avatar label={nick || me.nick} bg={me.avatarBg} size={84} />}

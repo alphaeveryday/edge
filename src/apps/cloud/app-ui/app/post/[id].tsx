@@ -47,7 +47,7 @@ export default function Post() {
       <View style={styles.navWrap}>
         <NavBar title="게시물" onBack={() => router.back()} rightLabel={p?.mine ? '삭제' : '신고'} rightColor={colors.textSub} onRight={() => (p?.mine ? setMore(true) : p && openReport({ type: 'post', id: p.id, handle: p.author.handle, name: p.author.name }))} />
       </View>
-      <ScrollView {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
+      <ScrollView {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled" disableScrollViewPanResponder={false}>
         {pull.indicator}
         {p?.blocked && !reveal && (
           <View style={[styles.post, styles.cover]}>

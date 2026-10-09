@@ -89,7 +89,8 @@ export function usePullRefresh(more?: { onScroll: OnScroll }) {
       </Animated.View>
     </Animated.View>
   );
-  return { scroll: { refreshControl, onScroll, scrollEventThrottle: 16 }, indicator };
+  // iOS 관성 스크롤 중 스크롤뷰가 다른 터치를 빼앗는 응답자 재협상 차단
+  return { scroll: { refreshControl, onScroll, scrollEventThrottle: 16, disableScrollViewPanResponder: true }, indicator };
 }
 
 // 스크롤 내용 맨 위 바깥, 당겨서 드러나는 자리
