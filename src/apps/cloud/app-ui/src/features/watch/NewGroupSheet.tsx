@@ -36,13 +36,12 @@ export function NewGroupForm({ onCreated }: { onCreated: (g: WatchGroup) => void
 export function NewGroupSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const setGroup = useWatchGroup((s) => s.setGroup);
   return (
-    <BottomSheet open={open} onClose={onClose}>
-      <SheetHead title="새 그룹" />
+    <BottomSheet open={open} onClose={onClose} head={<SheetHead title="새 그룹" />}>
       <NewGroupForm onCreated={(g) => { setGroup(g.key); onClose(); }} />
     </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  input: { marginTop: 16, backgroundColor: colors.surface, borderRadius: radius.field, height: 54, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  input: { marginTop: 4, backgroundColor: colors.surface, borderRadius: radius.field, height: 54, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
 });

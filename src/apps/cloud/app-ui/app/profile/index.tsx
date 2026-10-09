@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
-import { Avatar, BottomSheet, Chevron, CtaButton, ListRow, NavBar, PageScroll, SheetHead, ToggleRow } from '@/components/ui';
+import { Avatar, Chevron, Dialog, ListRow, NavBar, PageScroll, ToggleRow } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useOnboarding } from '@/store/onboarding';
 import { useSession } from '@/store/session';
@@ -59,13 +59,7 @@ export default function Profile() {
         </Pressable>
         <Text style={styles.version}>ETF Orca v0.1.0</Text>
       </PageScroll>
-      <BottomSheet open={delOpen} onClose={() => setDelOpen(false)}>
-        <SheetHead title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 답글은 '탈퇴한 사용자'로 남아요." />
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
-          <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setDelOpen(false)} /></View>
-          <View style={{ flex: 1.6 }}><CtaButton label="탈퇴하기" tone="danger" onPress={() => del.mutate()} /></View>
-        </View>
-      </BottomSheet>
+      <Dialog open={delOpen} title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 답글은 '탈퇴한 사용자'로 남아요." confirmLabel="탈퇴하기" danger busy={del.isPending} onConfirm={() => del.mutate()} onClose={() => setDelOpen(false)} />
     </View>
   );
 }

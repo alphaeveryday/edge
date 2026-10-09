@@ -4,6 +4,7 @@ export { BottomSheet } from './BottomSheet';
 export { Chevron } from './Chevron';
 export { Chip } from './Chip';
 export { CtaButton } from './CtaButton';
+export { Dialog } from './Dialog';
 export { IconButton } from './IconButton';
 export { LinkRow } from './LinkRow';
 export { ListRow, type ListIcon } from './ListRow';

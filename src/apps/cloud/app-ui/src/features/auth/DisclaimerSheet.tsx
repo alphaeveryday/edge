@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { api } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
@@ -15,15 +16,16 @@ const LINES = [
 
 // AI 분석 첫 진입 시 한 번 받는 면책 동의
 // 회원의 서버 기록과 비회원의 기기 기록
+// 동의 없이 닫으면 다음 진입에 다시 표시
 export function DisclaimerSheet() {
   const qc = useQueryClient();
   const { data: me } = useMe();
   const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
   const { loggedIn, restored, guestDisclaimed, acceptGuestDisclaimer } = useSession();
-  const open = loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed;
+  const [dismissed, setDismissed] = useState(false);
+  const open = !dismissed && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
   return (
-    <BottomSheet open={open} onClose={() => {}}>
-      <SheetHead title="투자 유의 사항" sub="AI 분석을 보기 전에 한 번만 확인해 주세요." />
+    <BottomSheet open={open} onClose={() => setDismissed(true)} head={<SheetHead title="투자 유의 사항" sub="AI 분석을 보기 전에 한 번만 확인해 주세요." />}>
       <View style={styles.list}>
         {LINES.map((t) => (
           <View key={t} style={styles.row}>
@@ -40,7 +42,7 @@ export function DisclaimerSheet() {
 }
 
 const styles = StyleSheet.create({
-  list: { gap: 10, marginTop: 16 },
+  list: { gap: 10, marginTop: 4 },
   row: { flexDirection: 'row', gap: 10 },
   dot: { width: 5, height: 5, borderRadius: 999, backgroundColor: colors.text, marginTop: 10 },
   text: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.textSub },

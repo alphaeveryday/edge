@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar, BottomBar, BottomSheet, CtaButton, NavBar, PostActions, SectorIcon, SheetHead } from '@/components/ui';
+import { Avatar, BottomBar, Dialog, NavBar, PostActions, SectorIcon } from '@/components/ui';
 import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { useRequireLogin } from '@/store/session';
@@ -98,13 +98,7 @@ export default function Post() {
         </Pressable>
       </BottomBar>
       <ReportSheet target={target} onClose={() => setTarget(null)} onBlocked={() => target?.type === 'post' && leave()} />
-      <BottomSheet open={more} onClose={() => setMore(false)}>
-        <SheetHead title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." />
-        <View style={styles.sheetBtns}>
-          <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setMore(false)} /></View>
-          <View style={{ flex: 1.6 }}><CtaButton label="지우기" tone="danger" onPress={remove} /></View>
-        </View>
-      </BottomSheet>
+      <Dialog open={more} title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." confirmLabel="지우기" danger busy={del.isPending} onConfirm={remove} onClose={() => setMore(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -133,5 +127,4 @@ const styles = StyleSheet.create({
   composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.white },
   input: { flex: 1, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 12, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   send: { fontFamily: fam.extrabold, fontSize: 15 },
-  sheetBtns: { flexDirection: 'row', gap: 8, marginTop: 18 },
 });

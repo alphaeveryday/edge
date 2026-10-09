@@ -87,8 +87,7 @@ export default function CommunityWrite() {
         <View style={{ flex: 1 }} />
         <Text style={[styles.count, draft.length > MAX && { color: colors.up }]}>{draft.length}/{MAX}</Text>
       </BottomBar>
-      <BottomSheet open={picking} onClose={() => setPicking(false)}>
-        <SheetHead title="종목 태그" sub={`관심에 담은 ETF 중 최대 ${TAG_MAX}개`} onClose={() => setPicking(false)} />
+      <BottomSheet open={picking} onClose={() => setPicking(false)} tall head={<SheetHead title="종목 태그" sub={`관심에 담은 ETF 중 최대 ${TAG_MAX}개`} />}>
         <ScrollView style={styles.pickList} showsVerticalScrollIndicator={false}>
           {candidates.map((e) => {
             const on = tags.includes(e.code);
@@ -125,7 +124,7 @@ const styles = StyleSheet.create({
   foot: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 12, paddingHorizontal: 18, borderTopWidth: 1, borderTopColor: colors.surface },
   hint: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
   count: { fontFamily: fam.mono, fontSize: 13, color: colors.textFaint },
-  pickList: { maxHeight: 360, marginTop: 8 },
+  pickList: { marginTop: 4 },
   pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, borderTopWidth: 1, borderTopColor: colors.surface },
   pickName: { flex: 1, fontFamily: fam.bold, fontSize: 15, color: colors.text },
   ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },

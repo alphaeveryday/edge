@@ -56,8 +56,12 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
     });
   };
   return (
-    <BottomSheet open={open} onClose={onClose} padded={false}>
-      {title ? (
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      tall
+      padded={false}
+      head={title ? (
         <Text style={styles.title}>{title}</Text>
       ) : (
         <View style={styles.head}>
@@ -65,6 +69,7 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
           <Text numberOfLines={1} style={styles.name}>{etfs[0]?.name}</Text>
         </View>
       )}
+    >
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
         {newOpen ? (
           <View style={{ paddingBottom: 15 }}>

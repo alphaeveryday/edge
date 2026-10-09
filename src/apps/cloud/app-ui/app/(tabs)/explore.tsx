@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { isApiError } from '@/api';
 import { TopBar } from '@/components/TopBar';
@@ -22,6 +22,10 @@ export default function Explore() {
   // 순위 순서로 넘기는 분석 상세 시트
   const [sel, setSel] = useState<number | null>(null);
   const cur = sel === null ? undefined : rows[sel];
+  // 닫히는 동안의 마지막 ETF 유지
+  const last = useRef(cur);
+  if (cur) last.current = cur;
+  const view = cur ?? last.current;
   const daily = useDaily(cur?.etf.code ?? '', undefined, !!cur);
   useEffect(() => {
     if (!daily.error) return;
@@ -61,9 +65,9 @@ export default function Explore() {
           })}
         </View>
       </ScrollView>
-      {cur && (
+      {view && (
         <DailySheet
-          code={cur.etf.code}
+          code={view.etf.code}
           daily={daily.data}
           open={!!cur}
           onClose={() => setSel(null)}

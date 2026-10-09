@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { BottomBar, CtaButton, NavBar } from '@/components/ui';
-import { DeleteGroupSheet } from '@/features/watch/DeleteGroupSheet';
+import { DeleteGroupDialog } from '@/features/watch/DeleteGroupDialog';
 import { GroupChips } from '@/features/watch/GroupChips';
 import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
 import { PickGroupSheet } from '@/features/watch/PickGroupSheet';
@@ -74,7 +74,7 @@ export default function WatchEdit() {
       </BottomBar>
       <NewGroupSheet open={newOpen} onClose={() => setNewOpen(false)} />
       <PickGroupSheet etfs={moveOpen ? picked : []} title="어떤 그룹으로 옮길까요?" onClose={() => setMoveOpen(false)} />
-      <DeleteGroupSheet group={delOpen && g ? g : null} onClose={() => setDelOpen(false)} />
+      <DeleteGroupDialog group={delOpen && g ? g : null} onClose={() => setDelOpen(false)} />
     </View>
   );
 }

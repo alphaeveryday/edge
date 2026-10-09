@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import type { ReportReason } from '@/api';
-import { BottomSheet, CtaButton, ListRow, SheetHead } from '@/components/ui';
+import { BottomSheet, Dialog, ListRow, SheetHead } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { useBlock, useReport } from './queries';
@@ -22,7 +22,7 @@ export interface ReportTarget {
 }
 
 // 신고 사유 5개와 작성자 차단
-// 확인 단계를 거치는 차단
+// 시트 위 팝업 확인을 거치는 차단
 export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarget | null; onClose: () => void; onBlocked?: () => void }) {
   const toast = useToast((s) => s.show);
   const report = useReport();
@@ -39,34 +39,34 @@ export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarg
   const doBlock = () => {
     if (!target) return;
     block.mutate(target.handle, {
-      onSuccess: () => { close(); onBlocked?.(); toast('차단했어요'); },
+      // 닫히는 시트에 팝업이 남지 않도록 팝업 먼저 닫기
+      onSuccess: () => {
+        setConfirm(false);
+        setTimeout(() => { onClose(); onBlocked?.(); toast('차단했어요'); });
+      },
       onError: () => toast('차단에 실패했어요', 'error'),
     });
   };
   return (
-    <BottomSheet open={!!target} onClose={close}>
-      {confirm ? (
-        <>
-          <SheetHead title={`${target?.name} 님을 차단할까요?`} sub="이 사용자의 글과 답글이 목록에서 보이지 않고, 이 사용자의 답글 알림도 오지 않아요." />
-          <View style={styles.btns}>
-            <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={() => setConfirm(false)} /></View>
-            <View style={{ flex: 1.6 }}><CtaButton label="차단하기" tone="danger" disabled={block.isPending} onPress={doBlock} /></View>
-          </View>
-        </>
-      ) : (
-        <>
-          <SheetHead title="신고 사유를 골라 주세요" onClose={close} />
-          <View style={styles.list}>
-            {REASONS.map((r) => <ListRow key={r.key} label={r.label} chevron={false} divider onPress={() => !report.isPending && send(r.key)} />)}
-            <ListRow label="이 사용자 차단" labelColor={colors.upDeep} chevron={false} onPress={() => setConfirm(true)} />
-          </View>
-        </>
-      )}
+    <BottomSheet open={!!target} onClose={close} head={<SheetHead title="신고 사유를 골라 주세요" />}>
+      <View style={styles.list}>
+        {REASONS.map((r) => <ListRow key={r.key} label={r.label} chevron={false} divider onPress={() => !report.isPending && send(r.key)} />)}
+        <ListRow label="이 사용자 차단" labelColor={colors.upDeep} chevron={false} onPress={() => setConfirm(true)} />
+      </View>
+      <Dialog
+        open={confirm}
+        title={`${target?.name} 님을 차단할까요?`}
+        sub="이 사용자의 글과 답글이 목록에서 보이지 않고, 이 사용자의 답글 알림도 오지 않아요."
+        confirmLabel="차단하기"
+        danger
+        busy={block.isPending}
+        onConfirm={doBlock}
+        onClose={() => setConfirm(false)}
+      />
     </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  list: { marginTop: 8 },
-  btns: { flexDirection: 'row', gap: 8, marginTop: 18 },
+  list: { marginTop: -4 },
 });
