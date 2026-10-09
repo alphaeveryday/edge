@@ -3,6 +3,7 @@ import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import * as SystemUI from 'expo-system-ui';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { isApiError } from '@/api';
@@ -41,6 +42,8 @@ export default function RootLayout() {
   const themeRestored = useThemePref((s) => s.restored);
   const scheme = useScheme();
   useEffect(() => { restore(); restoreTheme(); }, [restore, restoreTheme]);
+  // 화면 전환·키보드 뒤로 드러나는 맨 뒤 창의 배경색
+  useEffect(() => { SystemUI.setBackgroundColorAsync(colors.bg); }, [colors.bg]);
   useEffect(() => {
     if ((loaded || error) && restored && themeRestored) splashMin.then(() => SplashScreen.hideAsync());
   }, [loaded, error, restored, themeRestored]);
