@@ -33,7 +33,7 @@ export default function Community() {
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView {...pull.scroll} contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
+      <ScrollView {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="커뮤니티" />
         <View style={styles.chips}>

@@ -28,7 +28,7 @@ export default function Watch() {
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView {...pull.scroll} contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+      <ScrollView {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="관심" />
         <View style={styles.chips}>

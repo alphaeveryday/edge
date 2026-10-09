@@ -51,7 +51,7 @@ export default function Home() {
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView ref={focus.scroll} {...pull.scroll} contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={focus.scroll} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="내 종목 브리핑" meta={analysisAsOf()} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>

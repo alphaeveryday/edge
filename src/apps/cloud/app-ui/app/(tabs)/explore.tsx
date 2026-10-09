@@ -40,7 +40,7 @@ export default function Explore() {
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView {...pull.scroll} contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="탐색" meta={analysisAsOf()} />
         <View style={{ paddingTop: 22 }}>
