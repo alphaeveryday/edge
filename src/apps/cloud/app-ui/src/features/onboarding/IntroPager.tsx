@@ -1,8 +1,9 @@
 import { useFocusEffect } from 'expo-router';
-import { type ReactNode, useCallback, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, type NativeScrollEvent, type NativeSyntheticEvent, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomBar, CtaButton } from '@/components/ui';
+import { track } from '@/lib/analytics';
 import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
@@ -45,6 +46,7 @@ export function IntroPager({ pages, onDone }: Props) {
   }, [index, go]));
 
   const page = pages[index];
+  useEffect(() => { track('onboarding_intro_viewed', { page: index + 1 }); }, [index]);
   return (
     <View style={[styles.root, { paddingTop: top + 16 }]}>
       <ScrollView

@@ -46,7 +46,7 @@ export default function Community() {
               <SectorIcon theme={voteEtf.theme} bg={voteEtf.logoBg} size={18} />
               <Text style={styles.voteHeadText}>{voteEtf.name} · 오늘의 투표</Text>
             </View>
-            <VoteCard stat={stat} />
+            <VoteCard stat={stat} entry="community" />
           </View>
         )}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} showTag />)}

@@ -8,6 +8,7 @@ import { useCreatePost, useMe } from '@/features/community/queries';
 import { useEtfList } from '@/features/etf/queries';
 import { useWatchedCodes } from '@/features/watch/queries';
 import { isApiError } from '@/api';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/store/toast';
 import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
@@ -37,7 +38,7 @@ export default function CommunityWrite() {
   const ready = !!draft.trim() && draft.length <= MAX && tags.length > 0 && unwatched.length === 0;
   const submit = () =>
     create.mutate({ body: draft.trim(), tags }, {
-      onSuccess: () => { router.back(); toast('글을 올렸어요'); },
+      onSuccess: () => { track('community_post_created', { tag_count: tags.length }); router.back(); toast('글을 올렸어요'); },
       onError: (e) => toast(isApiError(e) ? e.message : '글을 올리지 못했어요', 'error'),
     });
   const hint = unwatched.length

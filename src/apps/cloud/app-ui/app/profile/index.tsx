@@ -7,6 +7,7 @@ import { api } from '@/api';
 import { Avatar, Chevron, Dialog, ListRow, NavBar, PageScroll, ToggleRow } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useOnboarding } from '@/store/onboarding';
+import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { useToast } from '@/store/toast';
@@ -32,7 +33,7 @@ export default function Profile() {
   const [delOpen, setDelOpen] = useState(false);
   const del = useMutation({
     mutationFn: () => api.member.deleteAccount(),
-    onSuccess: () => { setDelOpen(false); leave('계정을 지웠어요'); },
+    onSuccess: () => { track('account_deleted'); setDelOpen(false); leave('계정을 지웠어요'); },
   });
   const pull = usePullRefresh();
   return (

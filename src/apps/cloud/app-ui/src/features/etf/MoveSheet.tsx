@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
+import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import type { EtfSummary, MoveInfo } from '@/api';
 import { BottomSheet, CtaButton, SheetScrollView, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
+import { track } from '@/lib/analytics';
 import { createStyles, useSignal } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
@@ -17,8 +19,16 @@ export function MoveSheet({ etf, move, onClose }: Props) {
   const styles = useStyles();
   const SIG = useSignal();
   const router = useRouter();
+  const open = !!move;
+  useEffect(() => {
+    if (open) track('movement_detail_opened', { etf: etf.code });
+  }, [open, etf.code]);
   return (
-    <BottomSheet open={!!move} onClose={onClose} tall head={<View style={styles.head}><Sticker signal={etf.signal} /></View>}>
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      onClosed={(s) => track('movement_detail_closed', { etf: etf.code, duration_sec: s.duration_sec, scroll_pct: s.scroll_pct, close_method: s.close_method })}
+      tall head={<View style={styles.head}><Sticker signal={etf.signal} /></View>}>
       <SheetScrollView>
         <Text style={styles.title}>{move?.sheetTitle}</Text>
         <View style={{ gap: 22, marginTop: 22 }}>

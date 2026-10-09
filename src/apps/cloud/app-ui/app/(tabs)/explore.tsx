@@ -23,6 +23,7 @@ export default function Explore() {
   const rows = q.data ?? [];
   // 순위 순서로 넘기는 분석 상세 시트
   const [sel, setSel] = useState<number | null>(null);
+  const [entry, setEntry] = useState<'explore_rank' | 'explore_next'>('explore_rank');
   const cur = sel === null ? undefined : rows[sel];
   // 닫히는 동안의 마지막 ETF 유지
   const last = useRef(cur);
@@ -51,7 +52,7 @@ export default function Explore() {
           {rows.map((r, i) => {
             const top3 = r.rank <= 3;
             return (
-              <Pressable key={r.etf.code} onPress={() => setSel(i)} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>
+              <Pressable key={r.etf.code} onPress={() => { setEntry('explore_rank'); setSel(i); }} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>
                 <View style={styles.rowHead}>
                   <Text style={[styles.rank, top3 ? styles.rankTop : styles.rankPlain]}>{top3 ? `${r.rank}위` : String(r.rank)}</Text>
                   <SectorIcon theme={r.etf.theme} bg={r.etf.logoBg} size={20} />
@@ -74,10 +75,11 @@ export default function Explore() {
           daily={daily.data}
           open={!!cur}
           onClose={() => setSel(null)}
+          entry={entry}
           withVote
           linkEtf
           next={nextIdx === null ? undefined : { code: rows[nextIdx].etf.code, name: rows[nextIdx].etf.name }}
-          onNext={nextIdx === null ? undefined : () => setSel(nextIdx)}
+          onNext={nextIdx === null ? undefined : () => { setEntry('explore_next'); setSel(nextIdx); }}
         />
       )}
     </View>

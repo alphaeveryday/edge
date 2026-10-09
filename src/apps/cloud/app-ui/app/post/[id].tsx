@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomBar, Dialog, NavBar, PostActions, SectorIcon } from '@/components/ui';
 import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
+import { track } from '@/lib/analytics';
 import { useRequireLogin } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { createStyles, useColors } from '@/theme/theme';
@@ -36,7 +37,7 @@ export default function Post() {
   const send = () => {
     const t = draft.trim();
     if (!t) return;
-    requireLogin('답글', () => reply.mutate(t, { onSuccess: () => setDraft('') }));
+    requireLogin('답글', () => reply.mutate(t, { onSuccess: () => { track('community_reply_created'); setDraft(''); } }));
   };
   const leave = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/community'));
   const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); leave(); toast('글을 지웠어요'); } });

@@ -5,8 +5,11 @@ import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useVote } from './queries';
 import { useRequireLogin } from '@/store/session';
+import { track } from '@/lib/analytics';
 
-export function VoteCard({ stat, onGate }: { stat: VoteStat; onGate?: () => void }) {
+export type VoteEntry = 'community' | 'etf_community' | 'analysis_detail';
+
+export function VoteCard({ stat, entry, onGate }: { stat: VoteStat; entry: VoteEntry; onGate?: () => void }) {
   const styles = useStyles();
   const colors = useColors();
   const META: { k: VoteChoice; label: string; c: string; bg: string }[] = [
@@ -40,7 +43,9 @@ export function VoteCard({ stat, onGate }: { stat: VoteStat; onGate?: () => void
           return (
             <Pressable
               key={m.k}
-              onPress={() => requireLogin('투표', () => vote.mutate(on ? null : m.k), onGate)}
+              onPress={() => requireLogin('투표', () => vote.mutate(on ? null : m.k, {
+                onSuccess: () => track(on ? 'vote_canceled' : 'vote_submitted', on ? { etf: stat.code, entry } : { etf: stat.code, choice: m.k, entry }),
+              }), onGate)}
               style={({ pressed }) => [styles.btn, voted ? { backgroundColor: on ? m.c : colors.bg, borderWidth: 1, borderColor: on ? m.c : colors.lineStrong } : { backgroundColor: m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
             >
               <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.btnText, { color: voted && on ? colors.onPrimary : m.c }]}>

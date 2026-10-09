@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { Axis } from '@/api';
 import { IconButton, LinkRow, PageScroll, Sticker } from '@/components/ui';
+import { track } from '@/lib/analytics';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { DisclaimerSheet } from '@/features/auth/DisclaimerSheet';
 import { dirSignal } from '@/features/analysis/dir';
@@ -33,10 +34,15 @@ export default function EtfBrief() {
       <View style={styles.strip}>
         <IconButton icon="prev" size={28} soft color={colors.textSub} />
         <View style={styles.days}>
-          {d.dates.map((x) => {
+          {d.dates.map((x, _, all) => {
             const on = x.key === d.date;
             return (
-              <Pressable key={x.key} onPress={() => x.hasDaily && setDate(x.key)} style={[styles.day, on && styles.dayOn]}>
+              <Pressable key={x.key} onPress={() => {
+                if (!x.hasDaily) return;
+                // 가장 최근 분석 외 날짜만 기록
+                if (x.key !== d.date && all.some((y) => y.hasDaily && y.key > x.key)) track('analysis_past_viewed', { etf: code, date: x.key });
+                setDate(x.key);
+              }} style={[styles.day, on && styles.dayOn]}>
                 <Text style={[styles.dayW, { color: on ? colors.bg : colors.textFaint }]}>{x.w}</Text>
                 <Text style={[styles.dayD, { color: on ? colors.bg : x.hasDaily ? colors.text : colors.textDisabled }]}>{x.d}</Text>
                 <View style={[styles.dayLine, { backgroundColor: on ? colors.bg : x.hasDaily ? colors.up : 'transparent', opacity: on ? 0.6 : 1 }]} />
@@ -80,7 +86,7 @@ export default function EtfBrief() {
           </View>
         </Pressable>
       </View>
-      <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} />
+      <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} entry="etf_page" />
       <DisclaimerSheet />
     </PageScroll>
       ); }}

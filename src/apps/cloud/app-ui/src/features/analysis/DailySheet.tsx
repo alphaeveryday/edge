@@ -2,10 +2,11 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { DailyAnalysis } from '@/api';
-import { BottomSheet, Chevron, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
+import { BottomSheet, Chevron, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker, type SheetStats } from '@/components/ui';
 import { VoteCard } from '@/features/community/VoteCard';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
+import { track } from '@/lib/analytics';
 import { useScrollFocus } from '@/lib/useScrollFocus';
 import { Loading } from '@/components/state';
 import { createStyles, useColors, useSignal } from '@/theme/theme';
@@ -21,6 +22,7 @@ interface Props {
   daily: DailyAnalysis | undefined;
   open: boolean;
   onClose: () => void;
+  entry: 'etf_page' | 'explore_rank' | 'explore_next';
   // 탐색에서 열 때의 투표 카드와 다음 ETF
   withVote?: boolean;
   linkEtf?: boolean;
@@ -29,7 +31,7 @@ interface Props {
 }
 
 // 분석 상세 시트
-export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, next, onNext }: Props) {
+export function DailySheet({ code, daily: d, open, onClose, entry, withVote, linkEtf, next, onNext }: Props) {
   const styles = useStyles();
   const colors = useColors();
   const SIG = useSignal();
@@ -57,6 +59,18 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
     setAway(true);
     go?.();
   };
+  // 다른 화면 이동이 끝낸 열림의 복귀 뒤 닫힘 미기록
+  const ended = useRef(false);
+  useEffect(() => {
+    if (!open) return;
+    ended.current = false;
+    track('analysis_detail_opened', { etf: code, entry });
+  }, [open, code]);
+  const closed = (s: SheetStats) => {
+    if (ended.current) return;
+    ended.current = s.close_method === 'navigate';
+    track('analysis_detail_closed', { etf: s.session ?? code, duration_sec: s.duration_sec, scroll_pct: s.scroll_pct, close_method: s.close_method });
+  };
   const goMetric = (axis: string) => leave(() => router.push(axisHref(code, axis)));
   // 복귀 표시 직후 즉시 전환 해제
   useEffect(() => {
@@ -76,12 +90,12 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
     </View>
   );
   return (
-    <BottomSheet open={shown} onClose={onClose} tall padded={false} instant={instant} head={head}>
+    <BottomSheet open={shown} onClose={onClose} tall padded={false} instant={instant} head={head} session={code} onClosed={closed} closeMethod={away ? 'navigate' : 'button'}>
       <View style={styles.rule0} />
       {!d && <Loading rows={3} />}
       {d && (
         <SheetScrollView ref={focus.scroll} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }}>
-          {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={leave} /></View>}
+          {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} entry="analysis_detail" onGate={leave} /></View>}
           <Text style={styles.title}>{d.title}</Text>
           {d.today.length > 0 && (
             <View style={styles.today}>
@@ -132,7 +146,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
               </View>
             )}
           </View>
-          <Pressable ref={focus.anchor} onPress={() => setAxisOpen((v) => !v)} style={styles.toggle}>
+          <Pressable ref={focus.anchor} onPress={() => { if (!axisOpen) track('analysis_criteria_expanded', { etf: code }); setAxisOpen(!axisOpen); }} style={styles.toggle}>
             <Text style={styles.toggleText}>5가지 기준 모두 보기</Text>
             <Chevron size={14} color={colors.textFaint} dir={axisOpen ? 'up' : 'down'} />
           </Pressable>

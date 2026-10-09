@@ -23,7 +23,7 @@ export default function EtfCommunity() {
     <View style={{ flex: 1 }}>
       <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
         {pull.indicator}
-        {stat && <View style={styles.vote}><VoteCard stat={stat} /></View>}
+        {stat && <View style={styles.vote}><VoteCard stat={stat} entry="etf_community" /></View>}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </PageScroll>
       <View style={[styles.fab, { bottom: gap }]}>

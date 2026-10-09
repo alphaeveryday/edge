@@ -1,9 +1,22 @@
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/api';
+import { api, type EtfSummary, type WatchGroup } from '@/api';
+import { track } from '@/lib/analytics';
 
 const invalidate = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ['watch'] });
   qc.invalidateQueries({ queryKey: ['home'] });
+};
+
+// 캐시의 그룹별 담긴 코드에 변경을 적용한 담김 변화 기록
+// 순서만 바뀐 저장은 제외
+const trackWatch = (qc: ReturnType<typeof useQueryClient>, apply: (members: Record<string, Set<string>>) => void) => {
+  const groups = qc.getQueryData<WatchGroup[]>(['watch', 'groups']) ?? [];
+  const before = Object.fromEntries(groups.map((g) => [g.key, new Set((qc.getQueryData<EtfSummary[]>(['watch', 'list', g.key]) ?? []).map((e) => e.code))]));
+  const after = Object.fromEntries(Object.entries(before).map(([k, v]) => [k, new Set(v)]));
+  apply(after);
+  const same = Object.keys(after).every((k) => before[k]?.size === after[k].size && [...after[k]].every((c) => before[k].has(c)));
+  if (same) return;
+  track('watchlist_updated', { etf_count: new Set(Object.values(after).flatMap((v) => [...v])).size });
 };
 
 export const useWatchGroups = () => useQuery({ queryKey: ['watch', 'groups'], queryFn: () => api.watch.groups() });
@@ -37,12 +50,21 @@ export const useDeleteGroup = () => {
 };
 export const useSetMembers = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (v: { group: string; codes: string[] }) => api.watch.setMembers(v.group, v.codes), onSuccess: () => invalidate(qc) });
+  return useMutation({
+    mutationFn: (v: { group: string; codes: string[] }) => api.watch.setMembers(v.group, v.codes),
+    onSuccess: (_, v) => {
+      trackWatch(qc, (m) => { m[v.group] = new Set(v.codes); });
+      invalidate(qc);
+    },
+  });
 };
 export const useSetMembership = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (items: { code: string; groups: string[] }[]) => Promise.all(items.map((v) => api.watch.setMembership(v.code, v.groups))),
-    onSuccess: () => invalidate(qc),
+    onSuccess: (_, items) => {
+      trackWatch(qc, (m) => items.forEach((v) => Object.entries(m).forEach(([k, set]) => (v.groups.includes(k) ? set.add(v.code) : set.delete(v.code)))));
+      invalidate(qc);
+    },
   });
 };

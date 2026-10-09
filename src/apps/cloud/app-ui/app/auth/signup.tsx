@@ -7,6 +7,7 @@ import { api, isApiError } from '@/api';
 import { BottomBar, CtaButton, NavBar } from '@/components/ui';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { AuthField } from '@/features/auth/AuthField';
+import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { createStyles } from '@/theme/theme';
@@ -41,7 +42,7 @@ export default function Signup() {
   };
   const submit = useMutation({
     mutationFn: () => api.auth.signup({ email: email.trim(), password: pw, nick: nick.trim(), code }),
-    onSuccess: () => { login(); leave(); toast('가입을 마쳤어요'); },
+    onSuccess: () => { track('signup_completed'); login(); leave(); toast('가입을 마쳤어요'); },
     onError: (e) => setErr(isApiError(e) ? e.message : '가입에 실패했어요'),
   });
   const sendCode = useMutation({
