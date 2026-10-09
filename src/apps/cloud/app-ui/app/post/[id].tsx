@@ -1,18 +1,21 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomBar, Dialog, NavBar, PostActions, SectorIcon } from '@/components/ui';
 import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { useRequireLogin } from '@/store/session';
 import { useToast } from '@/store/toast';
-import { colors, PAGE_X, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 import { loadMore } from '@/lib/usePages';
 
 export default function Post() {
+  const styles = useStyles();
+  const colors = useColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
@@ -103,8 +106,8 @@ export default function Post() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   navWrap: { borderBottomWidth: 1, borderBottomColor: colors.surface },
   post: { paddingTop: 16, paddingHorizontal: PAGE_X, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: colors.surface },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -124,7 +127,7 @@ const styles = StyleSheet.create({
   coverText: { fontFamily: fam.medium, fontSize: 15, color: colors.textMuted },
   coverLink: { fontFamily: fam.bold, fontSize: 15, color: colors.primary },
   replyBody: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
-  composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.white },
+  composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.bg },
   input: { flex: 1, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 12, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   send: { fontFamily: fam.extrabold, fontSize: 15 },
-});
+}));

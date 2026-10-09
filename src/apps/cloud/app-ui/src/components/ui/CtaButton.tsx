@@ -1,15 +1,17 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
-import { colors, radius } from '@/theme/tokens';
+import { Pressable, Text } from 'react-native';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius, type Palette } from '@/theme/tokens';
 import { type } from '@/theme/typography';
 
 type Tone = 'primary' | 'dark' | 'danger' | 'soft';
-const T: Record<Tone | 'disabled', [string, string]> = {
-  primary: [colors.primary, colors.white],
-  dark: [colors.text, colors.white],
-  danger: [colors.up, colors.white],
-  soft: [colors.surface, colors.textSub],
-  disabled: [colors.surface, colors.textDisabled],
-};
+// dark 는 본문색 바탕의 반전 버튼
+const tones = (c: Palette): Record<Tone | 'disabled', [string, string]> => ({
+  primary: [c.primary, c.onPrimary],
+  dark: [c.text, c.bg],
+  danger: [c.up, c.onPrimary],
+  soft: [c.surface, c.textSub],
+  disabled: [c.surface, c.textDisabled],
+});
 
 interface Props {
   label: string;
@@ -21,7 +23,9 @@ interface Props {
 }
 
 export function CtaButton({ label, tone = 'primary', size = 'md', disabled, grow, onPress }: Props) {
-  const [bg, fg] = T[disabled ? 'disabled' : tone];
+  const styles = useStyles();
+  const colors = useColors();
+  const [bg, fg] = tones(colors)[disabled ? 'disabled' : tone];
   return (
     <Pressable
       onPress={disabled ? undefined : onPress}
@@ -32,7 +36,7 @@ export function CtaButton({ label, tone = 'primary', size = 'md', disabled, grow
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   btn: { borderRadius: radius.button, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' },
   label: type.button,
-});
+}));

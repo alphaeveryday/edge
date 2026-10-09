@@ -1,9 +1,9 @@
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { EtfSummary, MoveInfo } from '@/api';
 import { BottomSheet, CtaButton, SheetScrollView, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
-import { colors, signal as SIG } from '@/theme/tokens';
+import { createStyles, useSignal } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -14,6 +14,8 @@ interface Props {
 
 // 오늘 움직임의 원인 상세 시트
 export function MoveSheet({ etf, move, onClose }: Props) {
+  const styles = useStyles();
+  const SIG = useSignal();
   const router = useRouter();
   return (
     <BottomSheet open={!!move} onClose={onClose} tall head={<View style={styles.head}><Sticker signal={etf.signal} /></View>}>
@@ -43,7 +45,7 @@ export function MoveSheet({ etf, move, onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   head: { flexDirection: 'row' },
   title: { fontFamily: fam.extrabold, fontSize: 20, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   groupHead: { fontFamily: fam.extrabold, fontSize: 13, color: colors.neutral },
@@ -51,4 +53,4 @@ const styles = StyleSheet.create({
   mark: { width: 11, textAlign: 'center', fontFamily: fam.extrabold, fontSize: 11, marginTop: 6 },
   itemT: { fontFamily: fam.bold, fontSize: 15, lineHeight: 22, letterSpacing: -0.3, color: colors.text },
   itemSub: { fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textSub },
-});
+}));

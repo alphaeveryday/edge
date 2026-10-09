@@ -1,7 +1,8 @@
 import { createContext, useContext, useRef, type ReactNode, type Ref } from 'react';
 import { Animated, KeyboardAvoidingView, Modal, Pressable, ScrollView, type ScrollViewProps, StyleSheet, View } from 'react-native';
 import { useSheetDrag } from '@/lib/useSheetDrag';
-import { colors, radius, shadow } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { radius, shadow } from '@/theme/tokens';
 import { useBottomGap } from './BottomBar';
 
 const SheetScroll = createContext<ScrollViewProps['onScroll']>(undefined);
@@ -26,6 +27,7 @@ interface Props {
 }
 
 export function BottomSheet({ open, onClose, children, head, tall, padded = true, instant }: Props) {
+  const styles = useStyles();
   const gap = useBottomGap();
   const drag = useSheetDrag({ open, onClose, tall, instant });
   // 닫히는 동안의 마지막 내용 유지
@@ -55,10 +57,10 @@ export function BottomSheet({ open, onClose, children, head, tall, padded = true
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { flex: 1, justifyContent: 'flex-end' },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim },
-  sheet: { backgroundColor: colors.white, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, ...shadow.sheet },
+  sheet: { backgroundColor: colors.bg, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, ...shadow.sheet },
   fit: { maxHeight: '90%' },
   body: { flex: 1 },
   padded: { paddingHorizontal: 20 },
@@ -68,5 +70,5 @@ const styles = StyleSheet.create({
   handle: { width: 38, height: 4, borderRadius: radius.pill, backgroundColor: colors.line, alignSelf: 'center' },
   handleHead: { marginBottom: 18 },
   // 위로 당겨 올린 만큼 드러나는 시트 아래 빈자리 채움
-  under: { position: 'absolute', left: 0, right: 0, top: '100%', height: 400, backgroundColor: colors.white },
-});
+  under: { position: 'absolute', left: 0, right: 0, top: '100%', height: 400, backgroundColor: colors.bg },
+}));

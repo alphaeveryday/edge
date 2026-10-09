@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { Avatar, BottomBar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead, SheetScrollView } from '@/components/ui';
@@ -9,13 +9,15 @@ import { useEtfList } from '@/features/etf/queries';
 import { useWatchedCodes } from '@/features/watch/queries';
 import { isApiError } from '@/api';
 import { useToast } from '@/store/toast';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 const MAX = 280;
 const TAG_MAX = 3;
 
 export default function CommunityWrite() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { code } = useLocalSearchParams<{ code?: string }>();
   const { top } = useSafeAreaInsets();
@@ -96,7 +98,7 @@ export default function CommunityWrite() {
                 <SectorIcon theme={e.theme} bg={e.logoBg} size={30} />
                 <Text numberOfLines={1} style={styles.pickName}>{e.name}</Text>
                 <View style={[styles.ck, on && styles.ckOn]}>
-                  <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? colors.white : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
+                  <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? colors.onPrimary : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
                 </View>
               </Pressable>
             );
@@ -109,8 +111,8 @@ export default function CommunityWrite() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   nav: { height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 8, paddingRight: 16 },
   navTitle: { position: 'absolute', left: 0, right: 0, pointerEvents: 'none', textAlign: 'center', fontFamily: fam.bold, fontSize: 17, color: colors.text, letterSpacing: -0.34 },
   tags: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 12, paddingHorizontal: 16 },
@@ -130,4 +132,4 @@ const styles = StyleSheet.create({
   ck: { width: 24, height: 24, borderRadius: 999, borderWidth: 1.6, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   ckOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   empty: { paddingVertical: 24, textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
-});
+}));

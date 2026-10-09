@@ -1,6 +1,7 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { colors, radius, shadow } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius, shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export type IconName = 'back' | 'close' | 'search' | 'bell' | 'menu' | 'plus' | 'share' | 'prev' | 'next';
@@ -42,9 +43,11 @@ interface Props {
   onPress?: () => void;
 }
 
-export function IconButton({ icon, size = 38, circled, fab, soft, color = colors.text, badge, onPress }: Props) {
-  const c = fab ? colors.white : color;
-  const bg = fab ? colors.text : soft ? colors.surface : circled ? colors.white : 'transparent';
+export function IconButton({ icon, size = 38, circled, fab, soft, color, badge, onPress }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
+  const c = fab ? colors.bg : color ?? colors.text;
+  const bg = fab ? colors.text : soft ? colors.surface : circled ? colors.bg : 'transparent';
   return (
     <Pressable
       onPress={onPress}
@@ -68,9 +71,9 @@ export function IconButton({ icon, size = 38, circled, fab, soft, color = colors
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   btn: { borderRadius: radius.pill, borderColor: colors.lineStrong, alignItems: 'center', justifyContent: 'center' },
   fabShadow: shadow.fab,
-  badge: { position: 'absolute', top: -2, right: -2, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: radius.pill, backgroundColor: colors.up, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center' },
-  badgeText: { fontFamily: fam.extrabold, fontSize: 10.5, color: colors.white },
-});
+  badge: { position: 'absolute', top: -2, right: -2, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: radius.pill, backgroundColor: colors.up, borderWidth: 2, borderColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
+  badgeText: { fontFamily: fam.extrabold, fontSize: 10.5, color: colors.onPrimary },
+}));

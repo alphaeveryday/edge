@@ -1,18 +1,19 @@
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
 import { CtaButton, NavBar, PageScroll, PageTitle } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { useToast } from '@/store/toast';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 // 메일로 받은 6자리 코드와 새 비밀번호 입력
 // 성공 시 로그인 화면 복귀
 export default function PasswordReset() {
+  const styles = useStyles();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const toast = useToast((s) => s.show);
@@ -69,8 +70,8 @@ export default function PasswordReset() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   form: { gap: 12, marginTop: 26, paddingHorizontal: 24 },
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
-});
+}));

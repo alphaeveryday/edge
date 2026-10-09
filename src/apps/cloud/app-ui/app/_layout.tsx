@@ -8,7 +8,7 @@ import { AppState } from 'react-native';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
 import { useSession } from '@/store/session';
-import { colors } from '@/theme/tokens';
+import { useColors, useScheme, useThemePref } from '@/theme/theme';
 import { fontAssets } from '@/theme/typography';
 
 SplashScreen.preventAutoHideAsync();
@@ -33,18 +33,22 @@ const queryClient = new QueryClient({
 });
 
 export default function RootLayout() {
+  const colors = useColors();
   const [loaded, error] = useFonts(fontAssets);
   const restore = useSession((s) => s.restore);
   const restored = useSession((s) => s.restored);
-  useEffect(() => { restore(); }, [restore]);
+  const restoreTheme = useThemePref((s) => s.restore);
+  const themeRestored = useThemePref((s) => s.restored);
+  const scheme = useScheme();
+  useEffect(() => { restore(); restoreTheme(); }, [restore, restoreTheme]);
   useEffect(() => {
-    if ((loaded || error) && restored) splashMin.then(() => SplashScreen.hideAsync());
-  }, [loaded, error, restored]);
+    if ((loaded || error) && restored && themeRestored) splashMin.then(() => SplashScreen.hideAsync());
+  }, [loaded, error, restored, themeRestored]);
   if (!loaded && !error) return null;
   return (
     <QueryClientProvider client={queryClient}>
-      <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.white } }}>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="menu" options={{ animation: 'slide_from_right' }} />

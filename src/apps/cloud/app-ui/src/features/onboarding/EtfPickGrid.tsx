@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import type { EtfSummary } from '@/api';
 import { SearchField, SectorIcon } from '@/components/ui';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 import { PickCircle } from './PickCircle';
 
@@ -14,6 +14,7 @@ interface Props {
 
 // 검색과 ETF 원형 선택 그리드
 export function EtfPickGrid({ etfs, picked, onToggle }: Props) {
+  const styles = useStyles();
   const [q, setQ] = useState('');
   const list = useMemo(() => {
     const k = q.trim();
@@ -40,10 +41,10 @@ export function EtfPickGrid({ etfs, picked, onToggle }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   search: { paddingTop: 12, paddingHorizontal: 20 },
   list: { paddingTop: 22, paddingHorizontal: 16, paddingBottom: 24 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 22 },
   cell: { width: '33.33%', alignItems: 'center' },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted, paddingVertical: 40 },
-});
+}));

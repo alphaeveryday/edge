@@ -1,6 +1,7 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const PRESS_A = ['경향신문', '매일경제', '한국경제', '서울경제', '머니투데이', '이데일리'];
@@ -11,13 +12,18 @@ const STATS = [
   { v: '410', l: '공시·리포트', u: '하루 평균' },
 ];
 
-const Down = () => (
-  <Svg width={16} height={22} viewBox="0 0 16 22">
-    <Path d="M8 1v17M2 13l6 6 6-6" stroke={colors.lineStrong} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-);
+function Down() {
+  const colors = useColors();
+  return (
+    <Svg width={16} height={22} viewBox="0 0 16 22">
+      <Path d="M8 1v17M2 13l6 6 6-6" stroke={colors.lineStrong} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
 
 export function HowHero() {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <>
       <View style={styles.col}>
@@ -26,7 +32,7 @@ export function HowHero() {
             <View key={i} style={styles.pressRow}>
               {row.map((n, j) => (
                 <View key={n} style={[styles.pressChip, (i + j) % 3 === 1 && styles.pressChipOn]}>
-                  <Text style={[styles.pressText, (i + j) % 3 === 1 && { color: colors.white }]}>{n}</Text>
+                  <Text style={[styles.pressText, (i + j) % 3 === 1 && { color: colors.bg }]}>{n}</Text>
                 </View>
               ))}
             </View>
@@ -53,7 +59,7 @@ export function HowHero() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   col: { width: '100%', alignItems: 'center', gap: 16 },
   press: { gap: 8, alignSelf: 'stretch', overflow: 'hidden' },
   pressRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
@@ -67,7 +73,7 @@ const styles = StyleSheet.create({
   statU: { fontFamily: fam.regular, fontSize: 11, color: colors.textMuted },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingLeft: 14, paddingRight: 18, borderRadius: 999, backgroundColor: colors.text, shadowColor: colors.text, shadowOpacity: 0.22, shadowRadius: 15, shadowOffset: { width: 0, height: 12 } },
   pillDot: { width: 26, height: 26, borderRadius: 999, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  pillDotIn: { width: 10, height: 10, borderRadius: 999, backgroundColor: colors.white },
-  pillName: { fontFamily: fam.bold, fontSize: 14, color: colors.white, letterSpacing: -0.28 },
+  pillDotIn: { width: 10, height: 10, borderRadius: 999, backgroundColor: colors.bg },
+  pillName: { fontFamily: fam.bold, fontSize: 14, color: colors.bg, letterSpacing: -0.28 },
   pillSub: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
-});
+}));

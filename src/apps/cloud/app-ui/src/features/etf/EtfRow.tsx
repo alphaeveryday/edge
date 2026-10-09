@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import type { EtfSummary } from '@/api';
 import { RowQuote, SectorIcon, Sticker } from '@/components/ui';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -13,6 +13,7 @@ interface Props {
 }
 
 export function EtfRow({ etf, showSub, divider = true, onPress }: Props) {
+  const styles = useStyles();
   const router = useRouter();
   return (
     <Pressable onPress={onPress ?? (() => router.push(`/etf/${etf.code}/brief`))} style={({ pressed }) => [styles.row, divider && styles.divider, pressed && { opacity: 0.6 }]}>
@@ -26,10 +27,10 @@ export function EtfRow({ etf, showSub, divider = true, onPress }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 14 },
   divider: { borderBottomWidth: 1, borderBottomColor: colors.surface },
   mid: { flex: 1, gap: 4 },
   name: { fontFamily: fam.bold, fontSize: 15, color: colors.text, letterSpacing: -0.3, lineHeight: 20 },
   sub: { fontFamily: fam.regular, fontSize: 12.5, color: colors.textMuted },
-});
+}));

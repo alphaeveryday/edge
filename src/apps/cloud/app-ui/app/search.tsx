@@ -1,15 +1,18 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar, PageScroll, SearchField, SectionHead, SectorIcon } from '@/components/ui';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { useEtfSearch, useRecentEtfs } from '@/features/etf/queries';
 import { chgColor, pct } from '@/lib/format';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export default function Search() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const [q, setQ] = useState('');
@@ -39,7 +42,7 @@ export default function Search() {
                 <Pressable key={e.code} onPress={() => router.push(`/etf/${e.code}/brief`)} style={({ pressed }) => [styles.chip, pressed && { opacity: 0.6 }]}>
                   <SectorIcon theme={e.theme} bg={e.logoBg} size={22} />
                   <Text style={styles.chipName}>{e.name}</Text>
-                  <Text style={[styles.chipChg, { color: chgColor(e.changePct) }]}>{pct(e.changePct)}</Text>
+                  <Text style={[styles.chipChg, { color: chgColor(colors, e.changePct) }]}>{pct(e.changePct)}</Text>
                 </Pressable>
               ))}
             </ScrollView>
@@ -50,8 +53,8 @@ export default function Search() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   field: { marginTop: 12, marginHorizontal: PAGE_X },
   results: { paddingTop: 8, paddingHorizontal: PAGE_X },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted, paddingVertical: 40 },
@@ -59,4 +62,4 @@ const styles = StyleSheet.create({
   chip: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 8, paddingLeft: 8, paddingRight: 13 },
   chipName: { fontFamily: fam.semibold, fontSize: 14, color: colors.text },
   chipChg: { fontFamily: fam.semibold, fontSize: 13 },
-});
+}));

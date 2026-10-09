@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Axis } from '@/api';
 import { PageScroll, Sticker } from '@/components/ui';
@@ -7,11 +7,13 @@ import { AxisNav } from '@/features/analysis/AxisNav';
 import { dirSignal } from '@/features/analysis/dir';
 import { useFactor } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
-import { colors, signal as SIG } from '@/theme/tokens';
+import { createStyles, useSignal } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function FactorPage() {
+  const styles = useStyles();
+  const SIG = useSignal();
   const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
   const { top } = useSafeAreaInsets();
   const q = useFactor(code, axis);
@@ -70,8 +72,8 @@ export default function FactorPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   body: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 40 },
   headline: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   event: { flexDirection: 'row', gap: 10 },
@@ -85,4 +87,4 @@ const styles = StyleSheet.create({
   judg: { flexDirection: 'row', gap: 10 },
   judgDot: { width: 5, height: 5, borderRadius: 999, backgroundColor: colors.text, marginTop: 10 },
   judgText: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 25, color: colors.textSub },
-});
+}));

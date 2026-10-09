@@ -1,6 +1,7 @@
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { Chip } from '@/components/ui';
 import { useWatchGroup } from '@/store/watch';
+import { createStyles } from '@/theme/theme';
 import { useWatchGroups } from './queries';
 
 interface Props {
@@ -10,6 +11,7 @@ interface Props {
 
 // 홈·관심·관심 편집 공용 그룹 칩 줄
 export function GroupChips({ onAdd, onEdit }: Props) {
+  const styles = useStyles();
   const { data } = useWatchGroups();
   const { group, setGroup } = useWatchGroup();
   return (
@@ -23,7 +25,7 @@ export function GroupChips({ onAdd, onEdit }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   scroll: { flexDirection: 'row', gap: 6 },
-});
+}));

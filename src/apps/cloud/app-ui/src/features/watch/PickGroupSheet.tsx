@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { EtfSummary } from '@/api';
 import { BottomSheet, CtaButton, SectorIcon, SheetScrollView } from '@/components/ui';
 import { useToast } from '@/store/toast';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam, type } from '@/theme/typography';
 import { CheckCircle } from './CheckCircle';
 import { NewGroupForm } from './NewGroupSheet';
@@ -19,6 +19,8 @@ interface Props {
 // ETF 를 어느 관심 그룹에 담을지 고르는 시트
 // 고른 ETF 전부가 담긴 그룹의 초기 체크
 export function PickGroupSheet({ etfs, title, onClose }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   const open = etfs.length > 0;
   const { data: groups } = useWatchGroups();
   const members = useGroupMembers();
@@ -104,7 +106,7 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   head: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingBottom: 6 },
   name: { flex: 1, fontFamily: fam.extrabold, fontSize: 17, color: colors.text, letterSpacing: -0.34 },
   title: { ...type.sheetTitle, color: colors.text, paddingHorizontal: 20, paddingBottom: 6 },
@@ -116,4 +118,4 @@ const styles = StyleSheet.create({
   gname: { flex: 1, fontFamily: fam.bold, fontSize: 16, color: colors.text },
   count: { fontFamily: fam.mono, fontSize: 12, color: colors.textFaint },
   foot: { flexDirection: 'row', gap: 9, paddingTop: 12, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface },
-});
+}));

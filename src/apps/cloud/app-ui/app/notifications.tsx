@@ -1,22 +1,24 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Notification, NotiKind } from '@/api';
 import { Avatar, NavBar, PageScroll, TabItem } from '@/components/ui';
 import { useNotifications, useReadAll, useReadNoti } from '@/features/notification/queries';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 import { loadMore } from '@/lib/usePages';
 
-const KIND: Record<NotiKind, { label: string; c: string; bg: string; glyph: string }> = {
-  watch: { label: '관심', c: colors.warnDeep, bg: colors.warn, glyph: '★' },
-  comm: { label: '커뮤니티', c: colors.downDeep, bg: colors.down, glyph: '▣' },
-};
 const TABS: { k: NotiKind | 'all'; label: string }[] = [{ k: 'all', label: '전체' }, { k: 'watch', label: '관심' }, { k: 'comm', label: '커뮤니티' }];
 
 export default function Notifications() {
+  const styles = useStyles();
+  const colors = useColors();
+  const KIND: Record<NotiKind, { label: string; c: string; bg: string; glyph: string }> = {
+    watch: { label: '관심', c: colors.warnDeep, bg: colors.warn, glyph: '★' },
+    comm: { label: '커뮤니티', c: colors.downDeep, bg: colors.down, glyph: '▣' },
+  };
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const [tab, setTab] = useState<NotiKind | 'all'>('all');
@@ -62,8 +64,8 @@ export default function Notifications() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   tabs: { flexDirection: 'row', paddingTop: 6, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
   row: { flexDirection: 'row', gap: 12, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: colors.surface },
   unread: { backgroundColor: colors.unreadBg },
@@ -73,4 +75,4 @@ const styles = StyleSheet.create({
   title: { fontSize: 15, lineHeight: 22, color: colors.text, letterSpacing: -0.3 },
   body: { fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textMuted },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textMuted, paddingVertical: 50 },
-});
+}));

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomBar, CtaButton, NavBar, PageTitle } from '@/components/ui';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 
 interface Props {
   navTitle?: string;
@@ -17,6 +17,7 @@ interface Props {
 
 // ETF 선택 화면 틀
 export function PickShell({ navTitle = '', title, sub, cta, ctaDisabled, onBack, onNext, children }: Props) {
+  const styles = useStyles();
   const { top } = useSafeAreaInsets();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
@@ -30,8 +31,8 @@ export function PickShell({ navTitle = '', title, sub, cta, ctaDisabled, onBack,
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   body: { flex: 1 },
   foot: { paddingTop: 12, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface },
-});
+}));

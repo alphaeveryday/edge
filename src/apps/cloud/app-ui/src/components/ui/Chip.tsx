@@ -1,6 +1,7 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, Text } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam, type } from '@/theme/typography';
 
 interface Props {
@@ -11,6 +12,8 @@ interface Props {
 }
 
 export function Chip({ label, on = false, variant = 'filter', onPress }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   const add = variant === 'add';
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, add ? styles.add : on && styles.on, pressed && { opacity: 0.7 }]}>
@@ -24,9 +27,9 @@ export function Chip({ label, on = false, variant = 'filter', onPress }: Props) 
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: radius.control, paddingVertical: 8, paddingHorizontal: 13, borderWidth: 1, borderColor: 'transparent' },
   on: { backgroundColor: colors.surface },
   add: { borderStyle: 'dashed', borderColor: colors.lineStrong },
   label: type.tab,
-});
+}));

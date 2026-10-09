@@ -1,8 +1,9 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { Axis, Dir } from '@/api';
 import { Sticker } from '@/components/ui';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { dirSignal } from './dir';
 
@@ -19,6 +20,8 @@ interface Props {
 }
 
 export function FactorRow({ axis, dir, summary, hasPage, onSelect, onHint }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable onPress={onSelect} style={({ pressed }) => [styles.row, pressed && hasPage && { opacity: 0.6 }]}>
       <Pressable onPress={onHint} hitSlop={4}>
@@ -34,7 +37,7 @@ export function FactorRow({ axis, dir, summary, hasPage, onSelect, onHint }: Pro
   );
 }
 
-const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line },
+const useStyles = createStyles((colors) => ({
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.line },
   summary: { flex: 1, fontFamily: fam.semibold, fontSize: 15, lineHeight: 22, color: colors.text },
-});
+}));

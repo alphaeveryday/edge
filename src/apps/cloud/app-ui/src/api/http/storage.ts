@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 // 키체인과 웹 저장소에 두는 토큰과 기기 상태
-const KEYS = { access: 'etforca.access', refresh: 'etforca.refresh', device: 'etforca.device', onboarded: 'etforca.onboarded', disclaimed: 'etforca.disclaimed' } as const;
+const KEYS = { access: 'etforca.access', refresh: 'etforca.refresh', device: 'etforca.device', onboarded: 'etforca.onboarded', disclaimed: 'etforca.disclaimed', theme: 'etforca.theme' } as const;
 type Key = keyof typeof KEYS;
 
 const get = async (k: Key): Promise<string | null> => {
@@ -21,7 +21,7 @@ const set = async (k: Key, v: string | null) => {
 
 // 디바이스 ID 중복 생성을 막는 첫 읽기 공유
 let loading: Promise<Record<Key, string | null>> | null = null;
-const load = () => (loading ??= (async () => ({ access: await get('access'), refresh: await get('refresh'), device: await get('device'), onboarded: await get('onboarded'), disclaimed: await get('disclaimed') }))());
+const load = () => (loading ??= (async () => ({ access: await get('access'), refresh: await get('refresh'), device: await get('device'), onboarded: await get('onboarded'), disclaimed: await get('disclaimed'), theme: await get('theme') }))());
 
 const randomId = () => (globalThis.crypto?.randomUUID?.() ?? Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join(''));
 
@@ -57,6 +57,15 @@ export const guestDisclaimer = {
     const c = await load();
     c.disclaimed = '1';
     await set('disclaimed', '1');
+  },
+};
+
+export const themePref = {
+  async load() { return (await load()).theme; },
+  async save(v: string) {
+    const c = await load();
+    c.theme = v;
+    await set('theme', v);
   },
 };
 

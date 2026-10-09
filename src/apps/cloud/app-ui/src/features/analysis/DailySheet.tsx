@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import type { DailyAnalysis } from '@/api';
 import { BottomSheet, Chevron, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
 import { VoteCard } from '@/features/community/VoteCard';
@@ -8,7 +8,8 @@ import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { useScrollFocus } from '@/lib/useScrollFocus';
 import { Loading } from '@/components/state';
-import { colors, signal as SIG, radius } from '@/theme/tokens';
+import { createStyles, useColors, useSignal } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { axisHref } from './axisHref';
 import { dirSignal } from './dir';
@@ -29,6 +30,9 @@ interface Props {
 
 // 분석 상세 시트
 export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, next, onNext }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
+  const SIG = useSignal();
   const router = useRouter();
   const { data: etf } = useEtf(code);
   const { data: stat } = useVoteStat(code, !!withVote && open);
@@ -155,7 +159,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   rule0: { height: 1, backgroundColor: colors.surface },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingBottom: 4 },
   headLink: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -193,5 +197,5 @@ const styles = StyleSheet.create({
   toggleText: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, letterSpacing: -0.28 },
   source: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 18, borderTopWidth: 1, borderTopColor: colors.surface },
   sourceText: { fontFamily: fam.bold, fontSize: 14, color: colors.textSub },
-  foot: { paddingTop: 8, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.white },
-});
+  foot: { paddingTop: 8, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.bg },
+}));

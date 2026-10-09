@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import type { Axis } from '@/api';
 import { IconButton, LinkRow, PageScroll, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
@@ -9,11 +9,15 @@ import { dirSignal } from '@/features/analysis/dir';
 import { axisHref } from '@/features/analysis/axisHref';
 import { useDaily } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
-import { colors, signal as SIG, radius } from '@/theme/tokens';
+import { createStyles, useColors, useSignal } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function EtfBrief() {
+  const styles = useStyles();
+  const colors = useColors();
+  const SIG = useSignal();
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
   const [date, setDate] = useState<string>();
@@ -32,9 +36,9 @@ export default function EtfBrief() {
             const on = x.key === d.date;
             return (
               <Pressable key={x.key} onPress={() => x.hasDaily && setDate(x.key)} style={[styles.day, on && styles.dayOn]}>
-                <Text style={[styles.dayW, { color: on ? colors.white : colors.textFaint }]}>{x.w}</Text>
-                <Text style={[styles.dayD, { color: on ? colors.white : x.hasDaily ? colors.text : colors.textDisabled }]}>{x.d}</Text>
-                <View style={[styles.dayLine, { backgroundColor: on ? 'rgba(255,255,255,0.6)' : x.hasDaily ? colors.up : 'transparent' }]} />
+                <Text style={[styles.dayW, { color: on ? colors.bg : colors.textFaint }]}>{x.w}</Text>
+                <Text style={[styles.dayD, { color: on ? colors.bg : x.hasDaily ? colors.text : colors.textDisabled }]}>{x.d}</Text>
+                <View style={[styles.dayLine, { backgroundColor: on ? colors.bg : x.hasDaily ? colors.up : 'transparent', opacity: on ? 0.6 : 1 }]} />
               </Pressable>
             );
           })}
@@ -83,7 +87,7 @@ export default function EtfBrief() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   strip: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, marginHorizontal: 20 },
   days: { flex: 1, flexDirection: 'row', gap: 4 },
   day: { flex: 1, height: 42, borderRadius: radius.control, alignItems: 'center', justifyContent: 'center', gap: 1, backgroundColor: colors.card },
@@ -95,7 +99,7 @@ const styles = StyleSheet.create({
   article: { marginTop: 20, marginHorizontal: 22 },
   question: { fontFamily: fam.extrabold, fontSize: 24, lineHeight: 33, letterSpacing: -0.7, color: colors.text },
   dateline: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 12 },
-  card: { marginTop: 20, borderRadius: radius.card, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, overflow: 'hidden', shadowColor: colors.text, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+  card: { marginTop: 20, borderRadius: radius.card, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.line, overflow: 'hidden', shadowColor: colors.text, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
   cardBar: { height: 4 },
   cardBody: { paddingTop: 22, paddingHorizontal: 20, paddingBottom: 24, gap: 14 },
   cardCap: { fontFamily: fam.extrabold, fontSize: 12, color: colors.textMuted, letterSpacing: 0.7 },
@@ -110,4 +114,4 @@ const styles = StyleSheet.create({
   axis: { flex: 1, alignItems: 'center', gap: 6 },
   axisLabel: { fontFamily: fam.bold, fontSize: 11, color: colors.textSub },
   cardFoot: { borderTopWidth: 1, borderTopColor: colors.surface, paddingHorizontal: 0 },
-});
+}));

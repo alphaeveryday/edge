@@ -1,21 +1,23 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { Chip, LinkRow, PageScroll, SectionHead } from '@/components/ui';
 import { dirLabel } from '@/features/analysis/dir';
 import { HeatMap } from '@/features/etf/HeatMap';
 import { useEtfDetail } from '@/features/etf/queries';
 import { QueryState } from '@/components/state';
 import { useScrollFocus } from '@/lib/useScrollFocus';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
-const DIR_C = { help: colors.up, neutral: colors.neutral, burden: colors.down } as const;
-const TAG = { help: { bg: colors.upSoft, c: colors.upDeep }, neutral: { bg: colors.surface, c: colors.neutralDeep }, burden: { bg: colors.downSoft, c: colors.downDeep } } as const;
-const LEGEND_TEMP = [{ c: colors.down, t: '부담' }, { c: colors.downLight, t: '' }, { c: colors.neutral, t: '중립' }, { c: colors.upLight, t: '' }, { c: colors.up, t: '도움' }];
-
 export default function EtfData() {
+  const styles = useStyles();
+  const colors = useColors();
+  const DIR_C = { help: colors.up, neutral: colors.neutral, burden: colors.down } as const;
+  const TAG = { help: { bg: colors.upSoft, c: colors.upDeep }, neutral: { bg: colors.surface, c: colors.neutralDeep }, burden: { bg: colors.downSoft, c: colors.downDeep } } as const;
+  const LEGEND_TEMP = [{ c: colors.down, t: '부담' }, { c: colors.downLight, t: '' }, { c: colors.neutral, t: '중립' }, { c: colors.upLight, t: '' }, { c: colors.up, t: '도움' }];
   const { code } = useLocalSearchParams<{ code: string }>();
   const q = useEtfDetail(code);
   const [target, setTarget] = useState<'stock' | 'theme'>('stock');
@@ -131,7 +133,7 @@ export default function EtfData() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   insight: { marginTop: 20, marginHorizontal: 20, paddingVertical: 16, paddingHorizontal: 17, borderRadius: radius.card, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
   insightHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   dot: { width: 8, height: 8, borderRadius: 999 },
@@ -154,7 +156,7 @@ const styles = StyleSheet.create({
   divider: { height: 8, backgroundColor: colors.card, marginTop: 28 },
   seg: { flexDirection: 'row', gap: 3, padding: 3, marginTop: 12, borderRadius: radius.control, backgroundColor: colors.surface },
   segItem: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  segOn: { backgroundColor: colors.white, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
+  segOn: { backgroundColor: colors.bg, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
   segText: { fontFamily: fam.bold, fontSize: 14 },
   compSummary: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted, marginTop: 12 },
   hold: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
@@ -168,4 +170,4 @@ const styles = StyleSheet.create({
   infoK: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
   infoV: { fontFamily: fam.monoExtraBold, fontSize: 17, color: colors.text, marginTop: 4, letterSpacing: -0.3 },
   blurb: { fontFamily: fam.regular, fontSize: 14, lineHeight: 24, color: colors.textSub, marginTop: 14 },
-});
+}));

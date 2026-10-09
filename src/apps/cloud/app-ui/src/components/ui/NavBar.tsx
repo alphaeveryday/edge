@@ -1,6 +1,6 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { IconButton, type IconName } from './IconButton';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam, type } from '@/theme/typography';
 
 interface Props {
@@ -14,7 +14,9 @@ interface Props {
   onRight?: () => void;
 }
 
-export function NavBar({ title, backIcon = 'back', onBack, rightIcon, rightBadge, rightLabel, rightColor = colors.primary, onRight }: Props) {
+export function NavBar({ title, backIcon = 'back', onBack, rightIcon, rightBadge, rightLabel, rightColor, onRight }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={styles.root}>
       {onBack === null ? <View style={styles.spacer} /> : <IconButton icon={backIcon} onPress={onBack} />}
@@ -23,7 +25,7 @@ export function NavBar({ title, backIcon = 'back', onBack, rightIcon, rightBadge
         <IconButton icon={rightIcon} color={colors.textSub} badge={rightBadge} onPress={onRight} />
       ) : rightLabel ? (
         <Pressable onPress={onRight} style={styles.rightLabel}>
-          <Text style={[styles.rightText, { color: rightColor }]}>{rightLabel}</Text>
+          <Text style={[styles.rightText, { color: rightColor ?? colors.primary }]}>{rightLabel}</Text>
         </Pressable>
       ) : (
         <View style={styles.spacer} />
@@ -32,11 +34,11 @@ export function NavBar({ title, backIcon = 'back', onBack, rightIcon, rightBadge
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 },
   spacer: { width: 38 },
   // 좌우 버튼 폭과 무관한 화면 가운데 정렬
   title: { position: 'absolute', left: 88, right: 88, pointerEvents: 'none', textAlign: 'center', ...type.navTitle, color: colors.text },
   rightLabel: { minWidth: 38, paddingVertical: 8, paddingHorizontal: 6, alignItems: 'flex-end' },
   rightText: { fontFamily: fam.bold, fontSize: 13.5 },
-});
+}));

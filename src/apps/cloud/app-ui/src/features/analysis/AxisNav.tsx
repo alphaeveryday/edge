@@ -1,14 +1,15 @@
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { Axis, Dir } from '@/api';
 import { IconButton, Sticker } from '@/components/ui';
 import { useEtf } from '@/features/etf/queries';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 import { dirSignal } from './dir';
 
 // 축 상세 화면 공용 상단 바
 export function AxisNav({ code, axis, dir }: { code: string; axis: Axis; dir?: Dir }) {
+  const styles = useStyles();
   const router = useRouter();
   const { data: etf } = useEtf(code);
   return (
@@ -20,7 +21,7 @@ export function AxisNav({ code, axis, dir }: { code: string; axis: Axis; dir?: D
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   nav: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingTop: 2 },
   etf: { flex: 1, fontFamily: fam.regular, fontSize: 13, color: colors.textMuted },
-});
+}));

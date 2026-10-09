@@ -1,6 +1,7 @@
-import { StyleSheet, TextInput, View } from 'react-native';
+import { TextInput, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -11,6 +12,8 @@ interface Props {
 }
 
 export function SearchField({ value, onChangeText, placeholder = '검색', autoFocus }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={styles.root}>
       <Svg width={18} height={18} viewBox="0 0 18 18">
@@ -30,7 +33,7 @@ export function SearchField({ value, onChangeText, placeholder = '검색', autoF
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { height: 44, borderRadius: radius.field, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
   input: { flex: 1, alignSelf: 'stretch', fontFamily: fam.regular, fontSize: 15, color: colors.text, padding: 0 },
-});
+}));

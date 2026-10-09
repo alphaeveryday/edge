@@ -1,14 +1,14 @@
 import { useMutation } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 // 로그인이 필요한 동작에서 들어왔을 때의 안내
@@ -24,6 +24,7 @@ const REASON: Record<string, string> = {
 // 이메일 로그인
 // 성공 시 원래 화면 복귀
 export default function Login() {
+  const styles = useStyles();
   const router = useRouter();
   const { reason, email: resetEmail } = useLocalSearchParams<{ reason?: string; email?: string }>();
   const hint = reason ? REASON[reason] : undefined;
@@ -68,8 +69,8 @@ export default function Login() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   brand: { alignSelf: 'center', marginTop: 48, fontFamily: fam.extrabold, fontSize: 32, letterSpacing: -1, color: colors.primary },
   hint: { alignSelf: 'center', marginTop: 10, fontFamily: fam.medium, fontSize: 14, color: colors.textMuted },
   form: { gap: 12, marginTop: 40, paddingHorizontal: 24 },
@@ -77,4 +78,4 @@ const styles = StyleSheet.create({
   links: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 20 },
   link: { fontFamily: fam.semibold, fontSize: 14, color: colors.textSub },
   sep: { width: 1, height: 12, backgroundColor: colors.lineStrong },
-});
+}));

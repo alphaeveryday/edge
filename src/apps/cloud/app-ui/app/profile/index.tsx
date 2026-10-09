@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api';
@@ -10,11 +10,14 @@ import { useOnboarding } from '@/store/onboarding';
 import { useSession } from '@/store/session';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { useToast } from '@/store/toast';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Profile() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: me } = useMe();
@@ -64,14 +67,14 @@ export default function Profile() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.card },
   me: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 20 },
   name: { fontFamily: fam.extrabold, fontSize: 19, color: colors.text },
   email: { fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
   cap: { fontFamily: fam.bold, fontSize: 13, color: colors.textMuted, paddingTop: 24, paddingHorizontal: 24, paddingBottom: 8 },
-  card: { backgroundColor: colors.white, borderRadius: radius.card, marginHorizontal: 20, paddingHorizontal: 16 },
+  card: { backgroundColor: colors.bg, borderRadius: radius.card, marginHorizontal: 20, paddingHorizontal: 16 },
   logout: { alignItems: 'center', paddingTop: 26, paddingBottom: 6 },
   logoutText: { fontFamily: fam.semibold, fontSize: 15, color: colors.up },
   version: { textAlign: 'center', fontFamily: fam.regular, fontSize: 12, color: colors.textDisabled, paddingBottom: 28 },
-});
+}));

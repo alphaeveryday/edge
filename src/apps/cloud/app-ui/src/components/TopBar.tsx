@@ -1,12 +1,13 @@
 import { useRouter } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnreadCount } from '@/features/notification/queries';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { IconButton } from './ui';
 
 // 탭 화면 상단 흰 바와 검색·알림·메뉴 버튼
 export function TopBar() {
+  const styles = useStyles();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: unread } = useUnreadCount();
@@ -21,6 +22,6 @@ export function TopBar() {
 
 export const TOP_BAR_H = 48;
 
-const styles = StyleSheet.create({
-  root: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, paddingRight: 16, backgroundColor: colors.white },
-});
+const useStyles = createStyles((colors) => ({
+  root: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, paddingRight: 16, backgroundColor: colors.bg },
+}));

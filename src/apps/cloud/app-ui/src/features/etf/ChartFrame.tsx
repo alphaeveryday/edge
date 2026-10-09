@@ -1,13 +1,12 @@
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import Svg, { Line, Path } from 'react-native-svg';
 import type { ChartData } from '@/api';
 import { chgColor, pct, won } from '@/lib/format';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 const W = 354, H = 262, PLOT_W = 296;
-const MA20 = colors.chartMa20;
 const TICKS = 5;
 
 // 등간격 최대 5개의 축 라벨
@@ -27,6 +26,9 @@ export interface Plot {
 export function ChartFrame({ data, name, price, changePct, lo, hi, children }: {
   data: ChartData; name: string; price: number; changePct: number; lo: number; hi: number; children: (p: Plot) => ReactNode;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const MA20 = colors.chartMa20;
   const pad = (hi - lo) * 0.08 || hi * 0.01 || 1;
   const y = (v: number) => H - ((v - (lo - pad)) / (hi - lo + pad * 2)) * H;
   const step = PLOT_W / data.candles.length;
@@ -41,7 +43,7 @@ export function ChartFrame({ data, name, price, changePct, lo, hi, children }: {
         <View style={styles.legend} pointerEvents="none">
           <View style={styles.legendRow}>
             <Text style={styles.legendName}>{name} · {data.range}</Text>
-            <Text style={[styles.legendQuote, { color: chgColor(changePct) }]}>{won(price)} {pct(changePct)}</Text>
+            <Text style={[styles.legendQuote, { color: chgColor(colors, changePct) }]}>{won(price)} {pct(changePct)}</Text>
           </View>
           <View style={[styles.legendRow, { gap: 10 }]}>
             <View style={styles.maItem}><View style={[styles.maLine, { backgroundColor: colors.textFaint }]} /><Text style={styles.maText}>MA5 <Text style={styles.maVal}>{last5 ? last5.toLocaleString('en-US') : '-'}</Text></Text></View>
@@ -68,8 +70,8 @@ export function ChartFrame({ data, name, price, changePct, lo, hi, children }: {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.line },
+const useStyles = createStyles((colors) => ({
+  root: { backgroundColor: colors.bg, borderBottomWidth: 1, borderBottomColor: colors.line },
   plot: { paddingTop: 12 },
   svg: { width: '100%', height: 340 },
   legend: { position: 'absolute', left: 16, top: 12, zIndex: 2, gap: 4 },
@@ -83,4 +85,4 @@ const styles = StyleSheet.create({
   gridLabel: { position: 'absolute', right: 8, marginTop: -7, fontFamily: fam.mono, fontSize: 11, color: colors.textFaint, zIndex: 2 },
   axis: { height: 26, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.line },
   axisLabel: { position: 'absolute', top: 6, marginLeft: -16, width: 32, textAlign: 'center', fontFamily: fam.mono, fontSize: 10, color: colors.textFaint },
-});
+}));

@@ -1,6 +1,7 @@
 import { View } from 'react-native';
 import Svg, { Circle, Ellipse, G, Path, Rect } from 'react-native-svg';
-import { colors, radius } from '@/theme/tokens';
+import { useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 
 type Kind = 'chip' | 'bank' | 'game' | 'yield' | 'bond' | 'defense' | 'bio' | 'green' | 'commodity' | 'equity' | 'etc';
 
@@ -19,9 +20,8 @@ export function sectorKind(theme: string): Kind {
   return 'etc';
 }
 
-const W = colors.white;
-
 function Glyph({ kind, bg }: { kind: Kind; bg: string }) {
+  const W = useColors().onPrimary;
   switch (kind) {
     case 'chip':
       return (

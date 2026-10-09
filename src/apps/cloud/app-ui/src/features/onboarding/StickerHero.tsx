@@ -1,21 +1,24 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import Svg, { Circle, Defs, Path, RadialGradient, Stop } from 'react-native-svg';
 import { Sticker } from '@/components/ui';
-import { colors, SIGNAL_ORDER } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { SIGNAL_ORDER } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 const HINT: Record<string, string> = { strongUp: '지금', neutral: '지켜봐요', strongDown: '피해요' };
-const AXES = [
-  { name: '호재', q: '사건이 진짜인가', c: colors.up },
-  { name: '차트', q: '주가가 따라왔나', c: colors.down },
-  { name: '매크로', q: '밖에서 방해하나', c: colors.warn },
-  { name: '밸류', q: '이익 대비 싼가', c: '#8B34E0' },
-  { name: '수급', q: '큰손이 믿나', c: colors.positive },
-];
-
 const GLOW = 380;
 
 export function StickerHero() {
+  const styles = useStyles();
+  const colors = useColors();
+  const AXES = [
+    { name: '호재', q: '사건이 진짜인가', c: colors.up },
+    { name: '차트', q: '주가가 따라왔나', c: colors.down },
+    { name: '매크로', q: '밖에서 방해하나', c: colors.warn },
+    { name: '밸류', q: '이익 대비 싼가', c: '#8B34E0' },
+    { name: '수급', q: '큰손이 믿나', c: colors.positive },
+  ];
+  
   return (
     <>
       <Svg width={GLOW} height={GLOW} style={styles.glow}>
@@ -55,7 +58,7 @@ export function StickerHero() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   glow: { position: 'absolute' },
   stack: { alignItems: 'center', gap: 9 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -66,4 +69,4 @@ const styles = StyleSheet.create({
   axisDot: { width: 7, height: 7, borderRadius: 999 },
   axisName: { fontFamily: fam.bold, fontSize: 13, color: colors.text },
   axisQ: { fontFamily: fam.medium, fontSize: 13, color: colors.textMuted },
-});
+}));

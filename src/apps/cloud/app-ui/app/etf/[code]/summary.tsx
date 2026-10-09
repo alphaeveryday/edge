@@ -1,17 +1,19 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { LinkRow, PageScroll } from '@/components/ui';
 import { LineChart } from '@/features/etf/LineChart';
 import { MoveSheet } from '@/features/etf/MoveSheet';
 import { useChart, useEtf, useMove } from '@/features/etf/queries';
 import { ErrorView, Loading } from '@/components/state';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function EtfSummary() {
+  const styles = useStyles();
   const { code } = useLocalSearchParams<{ code: string }>();
   const { data: etf } = useEtf(code);
   const chartQ = useChart(code);
@@ -46,7 +48,7 @@ export default function EtfSummary() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   divider: { height: 10, backgroundColor: colors.surface },
   why: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 14, gap: 11 },
   whyHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -54,4 +56,4 @@ const styles = StyleSheet.create({
   ago: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
   whyText: { fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.text },
   whyFoot: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 2 },
-});
+}));

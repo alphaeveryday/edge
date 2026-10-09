@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { IconButton, PageScroll, useBottomGap } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { VoteCard } from '@/features/community/VoteCard';
@@ -7,8 +7,10 @@ import { useEtfPosts, useVoteStat } from '@/features/community/queries';
 import { useRequireLogin } from '@/store/session';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 import { loadMore } from '@/lib/usePages';
+import { createStyles } from '@/theme/theme';
 
 export default function EtfCommunity() {
+  const styles = useStyles();
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
   const requireLogin = useRequireLogin();
@@ -30,7 +32,7 @@ export default function EtfCommunity() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   vote: { marginTop: 14, marginHorizontal: 16, marginBottom: 6 },
   fab: { position: 'absolute', right: 18 },
-});
+}));

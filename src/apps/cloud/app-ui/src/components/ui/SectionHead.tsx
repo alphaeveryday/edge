@@ -1,9 +1,12 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { Chevron } from './Chevron';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
 import { fam, type } from '@/theme/typography';
 
 export function SectionHead({ title, actionLabel, onAction, meta }: { title: string; actionLabel?: string; onAction?: () => void; meta?: string }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={styles.root}>
       <Text style={styles.title}>{title}</Text>
@@ -19,10 +22,10 @@ export function SectionHead({ title, actionLabel, onAction, meta }: { title: str
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: PAGE_X },
   title: { flex: 1, ...type.sectionTitle, color: colors.text },
   action: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   actionText: { fontFamily: fam.bold, fontSize: 12.5, color: colors.primary },
   meta: { ...type.caption, color: colors.textMuted },
-});
+}));

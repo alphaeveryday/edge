@@ -1,6 +1,7 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, Text } from 'react-native';
 import { Chevron } from './Chevron';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export function LinkRow({ label, variant = 'inline', open = null, muted, center, divider, onPress }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   const accent = variant === 'accent';
   const card = variant === 'card' || accent;
   const centered = !!center || card;
@@ -35,8 +38,8 @@ export function LinkRow({ label, variant = 'inline', open = null, muted, center,
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44 },
   divider: { borderTopWidth: 1, borderTopColor: colors.surface },
   label: { fontSize: 14, letterSpacing: -0.28 },
-});
+}));

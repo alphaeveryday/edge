@@ -1,15 +1,18 @@
 import { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import { Animated, Text, View } from 'react-native';
 import { ChangeOnly } from '@/components/ui';
-import { colors, signal as SIG, SIGNAL_ORDER, type Signal, radius } from '@/theme/tokens';
+import { createStyles, useColors, useSignal } from '@/theme/theme';
+import { SIGNAL_ORDER, type Signal, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
-
-const SEG_BG: Record<Signal, string> = {
-  strongDown: colors.downDeep, down: colors.downLight, neutral: colors.lineStrong, up: colors.upLight, strongUp: colors.up,
-};
 
 // 관심 그룹 전체의 전망 강도 게이지
 export function EdgeCard({ title, band, score, changePct }: { title: string; band: Signal; score?: number; changePct: number }) {
+  const styles = useStyles();
+  const SIG = useSignal();
+  const colors = useColors();
+  const SEG_BG: Record<Signal, string> = {
+    strongDown: colors.gaugeStrongDown, down: colors.downLight, neutral: colors.lineStrong, up: colors.upLight, strongUp: colors.up,
+  };
   // 평균값 기준의 점 위치
   // 평균값 부재 시 단계 칸 가운데
   const at = score ?? SIGNAL_ORDER.indexOf(band);
@@ -46,7 +49,7 @@ export function EdgeCard({ title, band, score, changePct }: { title: string; ban
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   card: { marginTop: 14, marginHorizontal: 20, borderRadius: radius.card, backgroundColor: colors.card, paddingTop: 17, paddingHorizontal: 17, paddingBottom: 16, gap: 14 },
   head: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
   headL: { flex: 1, gap: 5 },
@@ -56,7 +59,7 @@ const styles = StyleSheet.create({
   track: { marginTop: 2, height: 9, justifyContent: 'center' },
   segs: { flexDirection: 'row', gap: 3, height: 9 },
   seg: { flex: 1, borderRadius: 999 },
-  knob: { position: 'absolute', top: -4, marginLeft: -8.5, width: 17, height: 17, borderRadius: 999, backgroundColor: colors.white, borderWidth: 3, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  knob: { position: 'absolute', top: -4, marginLeft: -8.5, width: 17, height: 17, borderRadius: 999, backgroundColor: colors.bg, borderWidth: 3, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   ticks: { flexDirection: 'row', justifyContent: 'space-between' },
   tick: { fontFamily: fam.regular, fontSize: 11, color: colors.textSub },
-});
+}));

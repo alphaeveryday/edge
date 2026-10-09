@@ -1,10 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { RefreshControl } from 'react-native';
-import { colors } from '@/theme/tokens';
+import { useColors } from '@/theme/theme';
 
 // 띄워 둔 화면의 조회 전부를 다시 받는 당겨서 새로고침
 export function usePullRefresh() {
+  const colors = useColors();
   const qc = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = async () => {

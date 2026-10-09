@@ -1,11 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { api } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useSession } from '@/store/session';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 const LINES = [
@@ -18,6 +18,7 @@ const LINES = [
 // 회원의 서버 기록과 비회원의 기기 기록
 // 동의 없이 닫으면 다음 진입에 다시 표시
 export function DisclaimerSheet() {
+  const styles = useStyles();
   const qc = useQueryClient();
   const { data: me } = useMe();
   const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
@@ -41,9 +42,9 @@ export function DisclaimerSheet() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   list: { gap: 10, marginTop: 4 },
   row: { flexDirection: 'row', gap: 10 },
   dot: { width: 5, height: 5, borderRadius: 999, backgroundColor: colors.text, marginTop: 10 },
   text: { flex: 1, fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.textSub },
-});
+}));

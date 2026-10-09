@@ -1,15 +1,18 @@
 import { useState } from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+import { TextInput, View } from 'react-native';
 import type { WatchGroup } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { useWatchGroup } from '@/store/watch';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useCreateGroup } from './queries';
 
 // 관심 탭 시트와 하트 시트 공용의 새 그룹 만들기
 export function NewGroupForm({ onCreated }: { onCreated: (g: WatchGroup) => void }) {
+  const styles = useStyles();
+  const colors = useColors();
   const [name, setName] = useState('');
   const create = useCreateGroup();
   const toast = useToast((s) => s.show);
@@ -42,6 +45,6 @@ export function NewGroupSheet({ open, onClose }: { open: boolean; onClose: () =>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   input: { marginTop: 4, backgroundColor: colors.surface, borderRadius: radius.field, height: 54, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
-});
+}));

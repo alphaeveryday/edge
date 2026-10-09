@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { Chip, LinkRow, PageTitle, SectionHead } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
@@ -14,12 +14,14 @@ import { useScrollFocus } from '@/lib/useScrollFocus';
 import { useSwapFade } from '@/lib/useSwapFade';
 import { api, isApiError } from '@/api';
 import { useToast } from '@/store/toast';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { useWatchGroup } from '@/store/watch';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Home() {
+  const styles = useStyles();
   const router = useRouter();
   const { group, setGroup } = useWatchGroup();
   const [showAll, setShowAll] = useState(false);
@@ -80,10 +82,10 @@ export default function Home() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   chips: { flexDirection: 'row', gap: 6, paddingTop: 12, paddingHorizontal: PAGE_X },
   rows: { paddingTop: 18, paddingHorizontal: PAGE_X },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textSub, paddingVertical: 34 },
   divider: { height: 10, backgroundColor: colors.surface, marginTop: 26 },
-});
+}));

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { isApiError } from '@/api';
 import { TopBar } from '@/components/TopBar';
 import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
@@ -9,12 +9,14 @@ import { useDaily } from '@/features/analysis/queries';
 import { analysisAsOf } from '@/lib/format';
 import { useRank } from '@/features/explore/queries';
 import { useToast } from '@/store/toast';
-import { colors, PAGE_X, radius } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { PAGE_X, radius } from '@/theme/tokens';
 import { Loading } from '@/components/state';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Explore() {
+  const styles = useStyles();
   const router = useRouter();
   const toast = useToast((s) => s.show);
   const q = useRank();
@@ -81,16 +83,16 @@ export default function Explore() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   lead: { fontFamily: fam.regular, fontSize: 13, color: colors.textMuted, paddingTop: 6, paddingHorizontal: PAGE_X },
   row: { gap: 13, paddingVertical: 24, borderBottomWidth: 1, borderBottomColor: colors.line },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   rank: { fontFamily: fam.monoExtraBold, fontSize: 12, textAlign: 'center', overflow: 'hidden' },
-  rankTop: { color: colors.white, backgroundColor: colors.text, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
+  rankTop: { color: colors.bg, backgroundColor: colors.text, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
   rankPlain: { color: colors.textFaint, width: 20 },
   name: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, flexShrink: 1 },
   title: { fontFamily: fam.extrabold, fontSize: 18, lineHeight: 25, letterSpacing: -0.5, color: colors.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { maxWidth: '100%', fontFamily: fam.bold, fontSize: 12, color: colors.textSub, backgroundColor: colors.card, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
-});
+}));

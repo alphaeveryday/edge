@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { PageTitle } from '@/components/ui';
 import { EtfRow } from '@/features/etf/EtfRow';
@@ -9,11 +9,13 @@ import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
 import { useGroupMembers, useWatchList } from '@/features/watch/queries';
 import { useSwapFade } from '@/lib/useSwapFade';
 import { useWatchGroup } from '@/store/watch';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
 export default function Watch() {
+  const styles = useStyles();
   const router = useRouter();
   const group = useWatchGroup((s) => s.group);
   const list = useWatchList(group, true);
@@ -43,8 +45,8 @@ export default function Watch() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   chips: { paddingVertical: 12, paddingHorizontal: PAGE_X, borderBottomWidth: 1, borderBottomColor: colors.surface },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textSub, paddingVertical: 34, paddingHorizontal: 20 },
-});
+}));

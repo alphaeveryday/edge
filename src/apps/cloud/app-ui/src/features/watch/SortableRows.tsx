@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, PanResponder, Pressable, Text, View } from 'react-native';
 import type { EtfSummary } from '@/api';
 import { SectorIcon } from '@/components/ui';
-import { colors, shadow } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { shadow } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { CheckCircle } from './CheckCircle';
 
@@ -24,6 +25,7 @@ interface Props {
 
 // 체크 선택과 손잡이 길게 눌러 끌기의 관심 종목 목록
 export function SortableRows({ etfs, selected, onToggle, onReorder, onDragging }: Props) {
+  const styles = useStyles();
   const [order, setOrder] = useState(etfs);
   const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
   const dy = useRef(new Animated.Value(0)).current;
@@ -97,6 +99,7 @@ export function SortableRows({ etfs, selected, onToggle, onReorder, onDragging }
 }
 
 function Grip({ index, handlers }: { index: number; handlers: React.MutableRefObject<Drag> }) {
+  const styles = useStyles();
   const idx = useRef(index);
   idx.current = index;
   const pr = useRef(
@@ -136,12 +139,12 @@ function Grip({ index, handlers }: { index: number; handlers: React.MutableRefOb
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: { backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  wrap: { backgroundColor: colors.bg },
   lifted: { zIndex: 1, ...shadow.floating },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: colors.surface },
   name: { flex: 1, fontFamily: fam.bold, fontSize: 15, color: colors.text },
   grip: { gap: 3, paddingVertical: 6, paddingHorizontal: 8, marginRight: -6 },
   gripRow: { flexDirection: 'row', gap: 3 },
   dot: { width: 3, height: 3, borderRadius: 999, backgroundColor: colors.lineStrong },
-});
+}));

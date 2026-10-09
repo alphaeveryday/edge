@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
 import { BottomBar, CtaButton, NavBar } from '@/components/ui';
@@ -9,7 +9,7 @@ import { openPrivacy, openTerms } from '@/lib/links';
 import { AuthField } from '@/features/auth/AuthField';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -17,6 +17,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // 이메일 인증 코드 확인 후 가입
 // 닫기와 성공 시 로그인 화면까지 함께 닫는 원래 화면 복귀
 export default function Signup() {
+  const styles = useStyles();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const login = useSession((s) => s.login);
@@ -93,8 +94,8 @@ export default function Signup() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   brand: { alignSelf: 'center', marginTop: 48, fontFamily: fam.extrabold, fontSize: 32, letterSpacing: -1, color: colors.primary },
   form: { gap: 12, marginTop: 40, paddingHorizontal: 24 },
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
@@ -106,4 +107,4 @@ const styles = StyleSheet.create({
   toLogin: { flexDirection: 'row', justifyContent: 'center', gap: 6 },
   toLoginText: { fontFamily: fam.regular, fontSize: 14, color: colors.textMuted },
   toLoginLink: { fontFamily: fam.bold, fontSize: 14, color: colors.primary },
-});
+}));

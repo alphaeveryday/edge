@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
@@ -9,12 +9,14 @@ import { useFeed, useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { useRank } from '@/features/explore/queries';
 import { useRequireLogin } from '@/store/session';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 import { loadMore } from '@/lib/usePages';
 
 export default function Community() {
+  const styles = useStyles();
   const router = useRouter();
   const requireLogin = useRequireLogin();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
@@ -53,12 +55,12 @@ export default function Community() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   chips: { flexDirection: 'row', gap: 6, paddingTop: 12, paddingHorizontal: PAGE_X },
   voteWrap: { marginTop: 16, marginHorizontal: 16, marginBottom: 6 },
   voteHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10, paddingHorizontal: 2 },
   voteHeadText: { fontFamily: fam.extrabold, fontSize: 12.5, color: colors.textSub },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textSub, paddingVertical: 44 },
   fab: { position: 'absolute', right: 18, bottom: 18 },
-});
+}));

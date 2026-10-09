@@ -1,15 +1,18 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, NavBar, PageScroll, PostActions, SectionHead, SectorIcon } from '@/components/ui';
 import { useMe, useMyPosts, useToggleLike, useUpdateMe } from '@/features/community/queries';
-import { colors, PAGE_X, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { PAGE_X, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 import { loadMore } from '@/lib/usePages';
 
 export default function CommunityProfile() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: me } = useMe();
@@ -72,8 +75,8 @@ export default function CommunityProfile() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   head: { alignItems: 'center', gap: 14, paddingTop: 22, paddingHorizontal: 20, paddingBottom: 6 },
   input: { height: 54, borderRadius: radius.field, backgroundColor: colors.surface, paddingHorizontal: 14, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   nick: { fontFamily: fam.extrabold, fontSize: 19, color: colors.text, letterSpacing: -0.5 },
@@ -88,4 +91,4 @@ const styles = StyleSheet.create({
   time: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
   body: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textMuted, paddingVertical: 40 },
-});
+}));

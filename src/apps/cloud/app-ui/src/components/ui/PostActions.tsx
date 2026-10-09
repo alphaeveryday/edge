@@ -1,6 +1,6 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -13,6 +13,8 @@ interface Props {
 }
 
 export function PostActions({ like, reply, liked, size = 'md', onLike, onReply }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   const lg = size === 'lg';
   const fs = lg ? 15 : 14;
   const ic = lg ? 20 : 18;
@@ -35,8 +37,8 @@ export function PostActions({ like, reply, liked, size = 'md', onLike, onReply }
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   item: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   count: { fontFamily: fam.semibold },
-});
+}));

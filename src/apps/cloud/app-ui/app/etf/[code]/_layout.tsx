@@ -1,13 +1,13 @@
 import { Slot, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { NavBar, RowQuote, SectorIcon, Sticker, TabItem } from '@/components/ui';
 import { useEtf } from '@/features/etf/queries';
 import { PickGroupSheet } from '@/features/watch/PickGroupSheet';
 import { useMembership } from '@/features/watch/queries';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 const TABS = [
@@ -18,6 +18,8 @@ const TABS = [
 ] as const;
 
 export default function EtfLayout() {
+  const styles = useStyles();
+  const colors = useColors();
   const { code } = useLocalSearchParams<{ code: string }>();
   const path = usePathname();
   const router = useRouter();
@@ -53,11 +55,11 @@ export default function EtfLayout() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 4, paddingBottom: 12, paddingHorizontal: 16 },
   mid: { flex: 1, gap: 5 },
   name: { fontFamily: fam.bold, fontSize: 15, color: colors.text, letterSpacing: -0.3, lineHeight: 20 },
   heart: { paddingVertical: 4, paddingLeft: 4 },
   tabs: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.line },
-});
+}));

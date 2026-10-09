@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 interface Props {
@@ -15,6 +15,8 @@ interface Props {
 
 // ETF 선택 그리드의 원형 항목
 export function PickCircle({ size, label, on, hot, onPress, children }: Props) {
+  const styles = useStyles();
+  const colors = useColors();
   const check = size > 88 ? 28 : 26;
   return (
     <Pressable onPress={onPress} style={styles.item}>
@@ -29,7 +31,7 @@ export function PickCircle({ size, label, on, hot, onPress, children }: Props) {
         {on && (
           <View style={[styles.check, { width: check, height: check }]}>
             <Svg width={14} height={14} viewBox="0 0 16 16">
-              <Path d="M3.5 8.5l3 3 6-7" stroke={colors.white} strokeWidth={2.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <Path d="M3.5 8.5l3 3 6-7" stroke={colors.onPrimary} strokeWidth={2.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </Svg>
           </View>
         )}
@@ -39,13 +41,13 @@ export function PickCircle({ size, label, on, hot, onPress, children }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   item: { alignItems: 'center', gap: 10 },
   ring: { borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
   ringOn: { shadowColor: colors.primary, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, borderWidth: 3, borderColor: colors.primary },
-  dim: { borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.35)' },
+  dim: { borderRadius: 999, backgroundColor: colors.bg, opacity: 0.35 },
   hot: { position: 'absolute', top: -10, alignSelf: 'center', backgroundColor: colors.up, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 8, shadowColor: colors.up, shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 4 } },
-  hotText: { fontFamily: fam.extrabold, fontSize: 11, color: colors.white },
-  check: { position: 'absolute', right: -2, bottom: -2, borderRadius: 999, backgroundColor: colors.primary, borderWidth: 2.5, borderColor: colors.white, alignItems: 'center', justifyContent: 'center' },
+  hotText: { fontFamily: fam.extrabold, fontSize: 11, color: colors.onPrimary },
+  check: { position: 'absolute', right: -2, bottom: -2, borderRadius: 999, backgroundColor: colors.primary, borderWidth: 2.5, borderColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
   label: { fontSize: 14, letterSpacing: -0.3, textAlign: 'center', lineHeight: 18 },
-});
+}));

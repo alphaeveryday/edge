@@ -1,8 +1,9 @@
-import { StyleSheet, Text, View } from 'react-native';
-import { colors } from '@/theme/tokens';
+import { Text, View } from 'react-native';
+import { createStyles } from '@/theme/theme';
 import { type } from '@/theme/typography';
 
 export function SheetHead({ title, sub }: { title: string; sub?: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.root}>
       <Text style={styles.title}>{title}</Text>
@@ -11,8 +12,8 @@ export function SheetHead({ title, sub }: { title: string; sub?: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { gap: 8 },
   title: { ...type.sheetTitle, color: colors.text },
   sub: { ...type.body, color: colors.textMuted },
-});
+}));

@@ -1,8 +1,8 @@
-import { colors } from '@/theme/tokens';
+import type { Palette } from '@/theme/tokens';
 
 export const won = (n: number) => '₩ ' + n.toLocaleString('en-US');
 export const pct = (n: number) => (n > 0 ? '+' : '') + n.toFixed(1) + '%';
-export const chgColor = (n: number) => (n < 0 ? colors.down : n > 0 ? colors.up : colors.textSub);
+export const chgColor = (c: Palette, n: number) => (n < 0 ? c.down : n > 0 ? c.up : c.textSub);
 
 // 새벽 분석의 장전 제공 시각
 // 한국 시간 08:30 이전의 전날 기준

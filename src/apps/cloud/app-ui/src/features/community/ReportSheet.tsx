@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import type { ReportReason } from '@/api';
 import { BottomSheet, Dialog, ListRow, SheetHead } from '@/components/ui';
 import { useToast } from '@/store/toast';
-import { colors } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
 import { useBlock, useReport } from './queries';
 
 const REASONS: { key: ReportReason; label: string }[] = [
@@ -24,6 +24,8 @@ export interface ReportTarget {
 // 신고 사유 5개와 작성자 차단
 // 시트 위 팝업 확인을 거치는 차단
 export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarget | null; onClose: () => void; onBlocked?: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
   const toast = useToast((s) => s.show);
   const report = useReport();
   const block = useBlock();
@@ -67,6 +69,6 @@ export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarg
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   list: { marginTop: -4 },
-});
+}));

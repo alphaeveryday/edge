@@ -1,9 +1,9 @@
 import { useFocusEffect } from 'expo-router';
 import { type ReactNode, useCallback, useRef, useState } from 'react';
-import { BackHandler, type NativeScrollEvent, type NativeSyntheticEvent, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { BackHandler, type NativeScrollEvent, type NativeSyntheticEvent, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomBar, CtaButton } from '@/components/ui';
-import { colors } from '@/theme/tokens';
+import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
 export interface IntroPage {
@@ -21,6 +21,7 @@ interface Props {
 
 // 점 표시와 버튼이 고정된 온보딩 소개 가로 페이저
 export function IntroPager({ pages, onDone }: Props) {
+  const styles = useStyles();
   const { top } = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [height, setHeight] = useState(0);
@@ -77,8 +78,8 @@ export function IntroPager({ pages, onDone }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   pager: { flex: 1 },
   hero: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, overflow: 'hidden' },
   copy: { paddingHorizontal: 28, paddingBottom: 22, alignItems: 'center' },
@@ -89,4 +90,4 @@ const styles = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 999, backgroundColor: colors.line },
   dotOn: { width: 18, backgroundColor: colors.primary },
   cta: { paddingHorizontal: 16 },
-});
+}));

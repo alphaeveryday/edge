@@ -1,6 +1,7 @@
 import { useRef } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, radius } from '@/theme/tokens';
+import { Modal, Pressable, Text, View } from 'react-native';
+import { createStyles } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { type } from '@/theme/typography';
 import { CtaButton } from './CtaButton';
 
@@ -17,6 +18,7 @@ interface Props {
 
 // 되돌릴 수 없는 결정 하나를 받는 가운데 팝업
 export function Dialog({ open, title, sub, confirmLabel, danger, busy, onConfirm, onClose }: Props) {
+  const styles = useStyles();
   // 사라지는 동안의 마지막 문구 유지
   const last = useRef({ title, sub });
   if (open) last.current = { title, sub };
@@ -37,11 +39,11 @@ export function Dialog({ open, title, sub, confirmLabel, danger, busy, onConfirm
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = createStyles((colors) => ({
   root: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim },
-  card: { width: '100%', maxWidth: 340, backgroundColor: colors.white, borderRadius: radius.sheet, paddingTop: 24, paddingHorizontal: 20, paddingBottom: 16 },
+  card: { width: '100%', maxWidth: 340, backgroundColor: colors.bg, borderRadius: radius.sheet, paddingTop: 24, paddingHorizontal: 20, paddingBottom: 16 },
   title: { ...type.sheetTitle, color: colors.text },
   sub: { ...type.body, color: colors.textMuted, marginTop: 8 },
   btns: { flexDirection: 'row', gap: 8, marginTop: 22 },
-});
+}));

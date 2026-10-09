@@ -1,23 +1,25 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Axis, Dir } from '@/api';
 import { Chevron, PageScroll } from '@/components/ui';
 import { AxisNav } from '@/features/analysis/AxisNav';
 import { useMetric } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
-import { colors, radius } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
 
-const TILE: Record<Dir | 'none', { bg: string; border: string; c: string }> = {
-  help: { bg: 'rgba(240,68,82,0.08)', border: 'rgba(240,68,82,0.25)', c: colors.upDeep },
-  burden: { bg: 'rgba(49,130,246,0.08)', border: 'rgba(49,130,246,0.25)', c: colors.downDeep },
-  neutral: { bg: colors.card, border: colors.line, c: colors.text },
-  none: { bg: colors.card, border: colors.line, c: colors.text },
-};
-
 export default function MetricPage() {
+  const styles = useStyles();
+  const colors = useColors();
+  const TILE: Record<Dir | 'none', { bg: string; border: string; c: string }> = {
+    help: { bg: 'rgba(240,68,82,0.08)', border: 'rgba(240,68,82,0.25)', c: colors.upDeep },
+    burden: { bg: 'rgba(49,130,246,0.08)', border: 'rgba(49,130,246,0.25)', c: colors.downDeep },
+    neutral: { bg: colors.card, border: colors.line, c: colors.text },
+    none: { bg: colors.card, border: colors.line, c: colors.text },
+  };
   const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
@@ -62,8 +64,8 @@ export default function MetricPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   body: { paddingTop: 16, paddingHorizontal: 20, paddingBottom: 40 },
   headline: { fontFamily: fam.extrabold, fontSize: 21, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   legend: { flexDirection: 'row', gap: 12, marginTop: 22 },
@@ -77,4 +79,4 @@ const styles = StyleSheet.create({
   tileNote: { fontFamily: fam.regular, fontSize: 13, lineHeight: 20, color: colors.textSub },
   detail: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18, paddingVertical: 16, borderTopWidth: 1, borderTopColor: colors.surface },
   detailText: { fontFamily: fam.bold, fontSize: 14, color: colors.text },
-});
+}));

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { BottomBar, CtaButton, NavBar } from '@/components/ui';
@@ -12,10 +12,13 @@ import { useSetMembers, useWatchGroups, useWatchList } from '@/features/watch/qu
 import { SortableRows } from '@/features/watch/SortableRows';
 import { useToast } from '@/store/toast';
 import { useWatchGroup } from '@/store/watch';
-import { colors, PAGE_X } from '@/theme/tokens';
+import { createStyles, useColors } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 export default function WatchEdit() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const group = useWatchGroup((s) => s.group);
@@ -79,8 +82,8 @@ export default function WatchEdit() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
   chips: { paddingTop: 12, paddingHorizontal: PAGE_X },
   meta: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 16, paddingBottom: 10, paddingHorizontal: PAGE_X },
   all: { fontFamily: fam.semibold, fontSize: 13, color: colors.textSub },
@@ -90,4 +93,4 @@ const styles = StyleSheet.create({
   addText: { fontFamily: fam.bold, fontSize: 15, color: colors.textSub },
   actions: { flexDirection: 'row', gap: 9 },
   foot: { paddingTop: 12, paddingHorizontal: PAGE_X, borderTopWidth: 1, borderTopColor: colors.surface },
-});
+}));
