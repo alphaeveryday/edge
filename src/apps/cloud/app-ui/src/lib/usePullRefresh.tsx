@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, RefreshControl, StyleSheet, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
@@ -14,6 +15,8 @@ const C = 2 * Math.PI * R;
 const FULL = 110;
 // 새로고침 중 기본 컨트롤이 잡아 두는 상단 여백
 const HOLD = 60;
+// 빠른 응답에도 새로고침이 보이는 최소 시간
+const MIN_MS = 800;
 const IOS = Platform.OS === 'ios';
 
 // 띄워 둔 화면의 조회 전부를 다시 받는 당겨서 새로고침
@@ -24,6 +27,7 @@ export function usePullRefresh(more?: { onScroll: OnScroll }) {
   const [refreshing, setRefreshing] = useState(false);
   const pull = useRef(new Animated.Value(0)).current;
   const spin = useRef(new Animated.Value(0)).current;
+  const full = useRef(false);
   useEffect(() => {
     if (!refreshing) return;
     spin.setValue(0);
@@ -33,14 +37,24 @@ export function usePullRefresh(more?: { onScroll: OnScroll }) {
   }, [refreshing, spin]);
   const onRefresh = async () => {
     setRefreshing(true);
+    const at = Date.now();
     try {
       await qc.refetchQueries({ type: 'active' });
     } finally {
+      await new Promise((ok) => setTimeout(ok, Math.max(0, MIN_MS - (Date.now() - at))));
       setRefreshing(false);
     }
   };
   const onScroll: OnScroll = (e) => {
-    if (IOS) pull.setValue(-e.nativeEvent.contentOffset.y);
+    if (IOS) {
+      const y = -e.nativeEvent.contentOffset.y;
+      pull.setValue(y);
+      // 원호가 다 차는 순간의 진동, 되돌렸다 다시 넘을 때만 반복
+      if (y >= FULL && !full.current) {
+        full.current = true;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } else if (y < FULL) full.current = false;
+    }
     more?.onScroll(e);
   };
   const refreshControl = (
