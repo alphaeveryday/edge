@@ -24,11 +24,12 @@ export default function EtfBrief() {
   const [open, setOpen] = useState(false);
   const q = useDaily(code, date);
   const openMetric = (axis: Axis) => router.push(axisHref(code, axis));
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   return (
     <QueryState query={q} rows={3} pending={{ title: '오늘 분석은 08:30에 올라와요', sub: '발행되면 여기에서 바로 볼 수 있어요' }}>
       {(d) => { const now = SIG[d.now]; return (
-    <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+    <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+      {pull.indicator}
       <View style={styles.strip}>
         <IconButton icon="prev" size={28} soft color={colors.textSub} />
         <View style={styles.days}>

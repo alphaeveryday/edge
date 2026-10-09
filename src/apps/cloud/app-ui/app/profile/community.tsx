@@ -28,11 +28,12 @@ export default function CommunityProfile() {
     setEditing((v) => !v);
   };
   const likes = (posts ?? []).reduce((a, p) => a + p.like, 0);
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh(loadMore(mine));
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="내 프로필" onBack={() => router.back()} rightLabel={editing ? '완료' : '수정'} onRight={toggleEdit} />
-      <PageScroll refreshControl={refresh} {...loadMore(mine)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+        {pull.indicator}
         <View style={styles.head}>
           {me && <Avatar label={nick || me.nick} bg={me.avatarBg} size={84} />}
           {editing ? (

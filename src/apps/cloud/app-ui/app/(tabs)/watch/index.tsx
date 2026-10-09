@@ -24,11 +24,12 @@ export default function Watch() {
   useGroupMembers();
   const fade = useSwapFade(group, list.isPlaceholderData);
   const [newOpen, setNewOpen] = useState(false);
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView refreshControl={refresh} contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+      <ScrollView {...pull.scroll} contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+        {pull.indicator}
         <PageTitle title="관심" />
         <View style={styles.chips}>
           <GroupChips onAdd={() => setNewOpen(true)} onEdit={() => router.push('/watch/edit')} />

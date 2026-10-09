@@ -20,11 +20,12 @@ export default function EtfSummary() {
   const chart = chartQ.data;
   const { data: move } = useMove(code);
   const [open, setOpen] = useState(false);
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   if (chartQ.isError) return <ErrorView onRetry={() => chartQ.refetch()} />;
   if (!etf || !chart) return <Loading rows={3} />;
   return (
-    <PageScroll refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
+    <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
+      {pull.indicator}
       {chart && <LineChart data={chart} name={etf.name} price={etf.price} changePct={etf.changePct} />}
       <View style={styles.divider} />
       <Pressable onPress={() => setOpen(true)} style={({ pressed }) => [styles.why, pressed && { opacity: 0.6 }]}>

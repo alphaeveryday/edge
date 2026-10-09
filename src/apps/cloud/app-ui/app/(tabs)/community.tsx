@@ -29,11 +29,12 @@ export default function Community() {
   const voteCode = useRank().data?.[0]?.etf.code ?? '';
   const { data: stat } = useVoteStat(voteCode, !!voteCode);
   const { data: voteEtf } = useEtf(voteCode);
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh(loadMore(feed));
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView refreshControl={refresh} {...loadMore(feed)} contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
+      <ScrollView {...pull.scroll} contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
+        {pull.indicator}
         <PageTitle title="커뮤니티" />
         <View style={styles.chips}>
           <Chip label="전체" on={scope === 'all'} onPress={() => setScope('all')} />

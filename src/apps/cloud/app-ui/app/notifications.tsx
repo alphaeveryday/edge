@@ -33,14 +33,15 @@ export default function Notifications() {
     if (n.postId) router.push(`/post/${n.postId}`);
     else if (n.etf) router.push(`/etf/${n.etf}/brief`);
   };
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh(loadMore(list));
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="알림" onBack={() => router.back()} rightLabel="모두 읽음" rightColor={colors.textSub} onRight={() => readAll.mutate()} />
       <View style={styles.tabs}>
         {TABS.map((t) => <TabItem key={t.k} grow={false} label={t.label} on={tab === t.k} dot={t.k !== 'all' && hasUnread(t.k)} onPress={() => setTab(t.k)} />)}
       </View>
-      <PageScroll refreshControl={refresh} {...loadMore(list)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+        {pull.indicator}
         {data?.map((n) => {
           const k = KIND[n.kind];
           return (

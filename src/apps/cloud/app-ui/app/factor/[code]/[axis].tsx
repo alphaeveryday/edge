@@ -18,13 +18,14 @@ export default function FactorPage() {
   const { top } = useSafeAreaInsets();
   const q = useFactor(code, axis);
   const f = q.data;
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <AxisNav code={code} axis={axis} dir={f?.dir} />
       <QueryState query={q} rows={3} pending={{ title: `${axis} 요인 상세는 준비 중이에요`, sub: '재료가 확인되면 이 축의 근거를 정리해 올려요' }}>
         {(f) => (
-        <PageScroll refreshControl={refresh} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        <PageScroll {...pull.scroll} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+          {pull.indicator}
           <Text style={styles.headline}>{f.headline}</Text>
           {f.events && (
             <View style={{ gap: 20, marginTop: 22 }}>

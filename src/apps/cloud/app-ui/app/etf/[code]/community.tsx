@@ -18,10 +18,11 @@ export default function EtfCommunity() {
   const postQ = useEtfPosts(code);
   const posts = postQ.data;
   const gap = useBottomGap();
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh(loadMore(postQ));
   return (
     <View style={{ flex: 1 }}>
-      <PageScroll refreshControl={refresh} {...loadMore(postQ)} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
+      <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 90 }}>
+        {pull.indicator}
         {stat && <View style={styles.vote}><VoteCard stat={stat} /></View>}
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} onQuoteTag={() => router.replace(`/etf/${code}/brief`)} />)}
       </PageScroll>

@@ -35,11 +35,12 @@ export default function Explore() {
     setSel(null);
   }, [daily.error, toast]);
   const nextIdx = sel === null || rows.length < 2 ? null : (sel + 1) % rows.length;
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView refreshControl={refresh} contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView {...pull.scroll} contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+        {pull.indicator}
         <PageTitle title="탐색" meta={analysisAsOf()} />
         <View style={{ paddingTop: 22 }}>
           <SectionHead title="AI가 보는 오늘 순위" />

@@ -24,13 +24,14 @@ export default function MetricPage() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const q = useMetric(code, axis);
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <AxisNav code={code} axis={axis} dir={q.data?.dir} />
       <QueryState query={q} rows={3} pending={{ title: `${axis} 지표는 준비 중이에요`, sub: '이 ETF에 맞는 지표가 정리되면 올라와요' }}>
         {(m) => (
-        <PageScroll refreshControl={refresh} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        <PageScroll {...pull.scroll} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+          {pull.indicator}
           <Text style={styles.headline}>{m.verdict}</Text>
           {m.tiles.some((t) => t.dir) && (
             <View style={styles.legend}>

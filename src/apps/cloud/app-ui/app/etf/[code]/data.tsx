@@ -25,7 +25,7 @@ export default function EtfData() {
   const [comp, setComp] = useState<'stock' | 'theme'>('stock');
   const [more, setMore] = useState(false);
   const focus = useScrollFocus(more);
-  const refresh = usePullRefresh();
+  const pull = usePullRefresh();
   return (
     <QueryState query={q} rows={5}>
       {(d) => {
@@ -35,7 +35,8 @@ export default function EtfData() {
         const rows = comp === 'theme' && d.themeRows?.length ? d.themeRows : d.holdings;
         const shown = more ? rows : rows.slice(0, 3);
         return (
-    <PageScroll ref={focus.scroll} refreshControl={refresh} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+    <PageScroll ref={focus.scroll} {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
+      {pull.indicator}
       {d.insight && (
         <View style={styles.insight}>
           <View style={styles.insightHead}>
