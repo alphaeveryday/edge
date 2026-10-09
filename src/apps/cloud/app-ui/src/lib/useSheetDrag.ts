@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, PanResponder, useWindowDimensions } from 'react-native';
-import type { PanResponderGestureState } from 'react-native';
+import type { NativeScrollEvent, NativeSyntheticEvent, PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const LOW = 0.7;
@@ -34,6 +34,8 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const now = useRef(0);
   const start = useRef(0);
   const shown = useRef(false);
+  // 본문 목록의 맨 위 여부
+  const atTop = useRef(true);
   const close = useRef(onClose);
   close.current = onClose;
   const stops = useRef({ low, high });
@@ -49,6 +51,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       setMounted(true);
       if (!ready || shown.current) return;
       shown.current = true;
+      atTop.current = true;
       if (instant) pos.setValue(low);
       else Animated.spring(pos, { toValue: low, useNativeDriver: false, speed: 14, bounciness: 0 }).start();
     } else if (shown.current) {
@@ -69,24 +72,20 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
     if (!tall && shown.current) Animated.spring(pos, { toValue: low, useNativeDriver: false, speed: 16, bounciness: 0 }).start();
   }, [tall, low, pos]);
 
-  const handlers = useMemo(() => {
+  const { handlers, body } = useMemo(() => {
     const snap = (to: number) => Animated.spring(pos, { toValue: to, useNativeDriver: false, speed: 16, bounciness: 6 }).start();
     const vertical = (_: unknown, g: PanResponderGestureState) => Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx);
-    return PanResponder.create({
-      // 빈 곳은 닿을 때부터 제스처 담당
-      // 헤더 안 버튼은 세로 이동 시 가로채기
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponderCapture: vertical,
+    const move = {
       onPanResponderGrant: () => {
         pos.stopAnimation();
         start.current = now.current;
       },
-      onPanResponderMove: (_, g) => {
+      onPanResponderMove: (_: unknown, g: PanResponderGestureState) => {
         const { high } = stops.current;
         const raw = start.current - g.dy;
         pos.setValue(raw > high ? high + rubber(raw - high) : Math.max(0, raw));
       },
-      onPanResponderRelease: (_, g) => {
+      onPanResponderRelease: (_: unknown, g: PanResponderGestureState) => {
         const { low, high } = stops.current;
         const cur = now.current;
         if (g.vy > FLING_CLOSE || cur < low - CLOSE_DY || (g.vy > FLING && cur <= low)) close.current();
@@ -95,8 +94,24 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
         else snap(Math.abs(cur - low) <= Math.abs(cur - high) ? low : high);
       },
       onPanResponderTerminate: () => snap(stops.current.low),
-    }).panHandlers;
+    };
+    return {
+      handlers: PanResponder.create({
+        // 빈 곳은 닿을 때부터 제스처 담당
+        // 헤더 안 버튼은 세로 이동 시 가로채기
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: vertical,
+        ...move,
+      }).panHandlers,
+      // 본문은 목록이 맨 위일 때의 아래 방향 끌기만 시트가 넘겨받음
+      body: PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (e, g) => atTop.current && g.dy > 0 && vertical(e, g),
+        onPanResponderTerminationRequest: () => false,
+        ...move,
+      }).panHandlers,
+    };
   }, [pos]);
+  const onScroll = useMemo(() => (e: NativeSyntheticEvent<NativeScrollEvent>) => (atTop.current = e.nativeEvent.contentOffset.y <= 0), []);
 
   const backdrop = { opacity: pos.interpolate({ inputRange: [0, Math.max(low, 1)], outputRange: [0, 1], extrapolate: 'clamp' }) };
   const shift = pos.interpolate({ inputRange: [0, Math.max(low, 1)], outputRange: [Math.max(low, 1), 0], extrapolateLeft: 'clamp', extrapolateRight: tall ? 'clamp' : 'extend' });
@@ -105,5 +120,5 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
     ? { height: pos.interpolate({ inputRange: [low, high], outputRange: [low, high], extrapolateLeft: 'clamp', extrapolateRight: 'extend' }), transform: [{ translateY: shift }] }
     : { opacity: ready ? 1 : 0, transform: [{ translateY: shift }] };
   const onLayout = tall ? undefined : (h: number) => setFit(Math.round(h));
-  return { mounted, handlers, backdrop, sheet, onLayout };
+  return { mounted, handlers, body, onScroll, backdrop, sheet, onLayout };
 }

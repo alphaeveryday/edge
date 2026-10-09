@@ -1,8 +1,16 @@
-import { useRef, type ReactNode } from 'react';
-import { Animated, KeyboardAvoidingView, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { createContext, useContext, useRef, type ReactNode, type Ref } from 'react';
+import { Animated, KeyboardAvoidingView, Modal, Pressable, ScrollView, type ScrollViewProps, StyleSheet, View } from 'react-native';
 import { useSheetDrag } from '@/lib/useSheetDrag';
 import { colors, radius, shadow } from '@/theme/tokens';
 import { useBottomGap } from './BottomBar';
+
+const SheetScroll = createContext<ScrollViewProps['onScroll']>(undefined);
+
+// 맨 위에서 아래로 끌면 시트가 내려가는 시트 안 목록
+export function SheetScrollView({ ref, ...props }: ScrollViewProps & { ref?: Ref<ScrollView> }) {
+  const onScroll = useContext(SheetScroll);
+  return <ScrollView ref={ref} onScroll={onScroll} scrollEventThrottle={16} bounces={false} showsVerticalScrollIndicator={false} {...props} />;
+}
 
 interface Props {
   open: boolean;
@@ -37,7 +45,9 @@ export function BottomSheet({ open, onClose, children, head, tall, padded = true
             <View style={[styles.handle, !!head && styles.handleHead]} />
             {last.current.head}
           </View>
-          {last.current.children}
+          <View {...drag.body} style={tall && styles.body}>
+            <SheetScroll.Provider value={drag.onScroll}>{last.current.children}</SheetScroll.Provider>
+          </View>
           <View style={styles.under} />
         </Animated.View>
       </KeyboardAvoidingView>
@@ -50,6 +60,7 @@ const styles = StyleSheet.create({
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim },
   sheet: { backgroundColor: colors.white, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, ...shadow.sheet },
   fit: { maxHeight: '90%' },
+  body: { flex: 1 },
   padded: { paddingHorizontal: 20 },
   grip: { paddingTop: 10, paddingBottom: 18 },
   gripPadded: { marginHorizontal: -20, paddingHorizontal: 20 },

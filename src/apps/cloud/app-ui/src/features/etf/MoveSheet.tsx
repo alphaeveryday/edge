@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import type { EtfSummary, MoveInfo } from '@/api';
-import { BottomSheet, CtaButton, Sticker } from '@/components/ui';
+import { BottomSheet, CtaButton, SheetScrollView, Sticker } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { colors, signal as SIG } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -17,7 +17,7 @@ export function MoveSheet({ etf, move, onClose }: Props) {
   const router = useRouter();
   return (
     <BottomSheet open={!!move} onClose={onClose} tall head={<View style={styles.head}><Sticker signal={etf.signal} /></View>}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <SheetScrollView>
         <Text style={styles.title}>{move?.sheetTitle}</Text>
         <View style={{ gap: 22, marginTop: 22 }}>
           {move?.groups.map((g) => (
@@ -38,7 +38,7 @@ export function MoveSheet({ etf, move, onClose }: Props) {
         <View style={{ marginTop: 24, marginBottom: 12 }}>
           <CtaButton label="데일리 분석 보기" tone="dark" onPress={() => { onClose(); router.replace(`/etf/${etf.code}/brief`); }} />
         </View>
-      </ScrollView>
+      </SheetScrollView>
     </BottomSheet>
   );
 }

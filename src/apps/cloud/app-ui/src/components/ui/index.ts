@@ -1,6 +1,6 @@
 export { Avatar } from './Avatar';
 export { BottomBar, useBottomGap } from './BottomBar';
-export { BottomSheet } from './BottomSheet';
+export { BottomSheet, SheetScrollView } from './BottomSheet';
 export { Chevron } from './Chevron';
 export { Chip } from './Chip';
 export { CtaButton } from './CtaButton';

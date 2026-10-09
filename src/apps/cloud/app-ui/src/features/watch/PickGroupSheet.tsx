@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { EtfSummary } from '@/api';
-import { BottomSheet, CtaButton, SectorIcon } from '@/components/ui';
+import { BottomSheet, CtaButton, SectorIcon, SheetScrollView } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { colors } from '@/theme/tokens';
 import { fam, type } from '@/theme/typography';
@@ -70,7 +70,7 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
         </View>
       )}
     >
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+      <SheetScrollView style={styles.list}>
         {newOpen ? (
           <View style={{ paddingBottom: 15 }}>
             <NewGroupForm onCreated={(g) => { setPicked((p) => [...p, g.key]); setNewOpen(false); }} />
@@ -95,7 +95,7 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
           );
         })}
         <View style={{ height: 12 }} />
-      </ScrollView>
+      </SheetScrollView>
       <View style={styles.foot}>
         <View style={{ flex: 1 }}><CtaButton label="취소" tone="soft" onPress={onClose} /></View>
         <View style={{ flex: 1.6 }}><CtaButton label="확인" disabled={!inited || save.isPending} onPress={confirm} /></View>

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { Avatar, BottomBar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead } from '@/components/ui';
+import { Avatar, BottomBar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead, SheetScrollView } from '@/components/ui';
 import { useCreatePost, useMe } from '@/features/community/queries';
 import { useEtfList } from '@/features/etf/queries';
 import { useWatchedCodes } from '@/features/watch/queries';
@@ -88,7 +88,7 @@ export default function CommunityWrite() {
         <Text style={[styles.count, draft.length > MAX && { color: colors.up }]}>{draft.length}/{MAX}</Text>
       </BottomBar>
       <BottomSheet open={picking} onClose={() => setPicking(false)} tall head={<SheetHead title="종목 태그" sub={`관심에 담은 ETF 중 최대 ${TAG_MAX}개`} />}>
-        <ScrollView style={styles.pickList} showsVerticalScrollIndicator={false}>
+        <SheetScrollView style={styles.pickList}>
           {candidates.map((e) => {
             const on = tags.includes(e.code);
             return (
@@ -102,7 +102,7 @@ export default function CommunityWrite() {
             );
           })}
           {watched.ready && candidates.length === 0 && <Text style={styles.empty}>관심에 담은 ETF가 없어요</Text>}
-        </ScrollView>
+        </SheetScrollView>
         <View style={{ marginTop: 12 }}><CtaButton label="완료" onPress={() => setPicking(false)} /></View>
       </BottomSheet>
     </KeyboardAvoidingView>

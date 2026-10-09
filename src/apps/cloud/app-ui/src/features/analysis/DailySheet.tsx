@@ -1,8 +1,8 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { DailyAnalysis } from '@/api';
-import { BottomSheet, Chevron, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
+import { BottomSheet, Chevron, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker } from '@/components/ui';
 import { VoteCard } from '@/features/community/VoteCard';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
@@ -76,7 +76,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
       <View style={styles.rule0} />
       {!d && <Loading rows={3} />}
       {d && (
-        <ScrollView ref={focus.scroll} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
+        <SheetScrollView ref={focus.scroll} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 }}>
           {withVote && stat && <View style={{ marginBottom: 20 }}><VoteCard stat={stat} onGate={leave} /></View>}
           <Text style={styles.title}>{d.title}</Text>
           {d.today.length > 0 && (
@@ -143,7 +143,7 @@ export function DailySheet({ code, daily: d, open, onClose, withVote, linkEtf, n
             <Text style={styles.sourceText}>분석 기준과 출처</Text>
             <Chevron size={14} color={colors.textDisabled} />
           </Pressable>
-        </ScrollView>
+        </SheetScrollView>
       )}
       {next && onNext && (
         <View style={styles.foot}>
