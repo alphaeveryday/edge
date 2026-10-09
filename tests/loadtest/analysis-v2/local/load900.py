@@ -70,7 +70,10 @@ def child(args):
         event = {'a': AID.get(), 'r': role, 's': time.time()}
         events.append(event)
         try:
-            connection = psycopg.connect(dsn(role, spec['host'], spec['port']), **options)
+            target = dsn(role, spec['host'], spec['port'])
+            if spec.get('bad_password') == role:  # --bad-password: 인증 오류 주입
+                target = target.replace('local_only', 'wrong_password')
+            connection = psycopg.connect(target, **options)
         except Exception as exc:
             event['e'], event['f'] = str(exc).strip().splitlines()[-1][:160], time.time()
             raise
@@ -92,8 +95,9 @@ def child(args):
         try:
             return connect('writer', autocommit=True, **writer_options)
         except Exception as exc:
-            raise ResultDatabaseError('Writer connection unavailable',
-                                      transient=isinstance(exc, psycopg.OperationalError)) from None
+            error = ResultDatabaseError('Writer connection unavailable', transient=isinstance(exc, psycopg.OperationalError))
+            error.cause_text = str(exc)  # 탐침에서만: 운영 connect_results 는 원래 문구를 버린다(from None) — 제안 분류(--policy p)용
+            raise error from None
 
     def connect_sources(ca_path, *, session=None, cloud=False):  # 실제 connect_sources 는 psycopg 오류를 그대로 올린다
         connection = connect('reader', row_factory=dict_row, **reader_options)
@@ -101,8 +105,73 @@ def child(args):
         connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
         return connection
 
+    def step_name(operation):  # 재시도 단위가 감싼 DB 단계 함수(step)의 파일·이름·줄. 없으면 감싼 함수 자신
+        code = operation.__code__
+        fn = operation.__closure__[code.co_freevars.index('step')].cell_contents if 'step' in code.co_freevars else operation
+        return f"{Path(fn.__code__.co_filename).stem}.{fn.__qualname__.replace('.<locals>', '')}:{fn.__code__.co_firstlineno}"
+
+    def classify(exc):  # --policy p 의 제안 분류(README '연결 실패 분류'). 문구 기반이라 목록 밖은 원인 불명
+        text, state = (getattr(exc, 'cause_text', '') + ' ' + str(exc)).lower(), getattr(exc, 'sqlstate', None)
+        if 'query_wait_timeout' in text:
+            return 'pool_wait'
+        if any(k in text for k in ('password authentication failed', 'unsupported startup parameter', 'does not exist')):
+            return 'auth_config'
+        if state in ('57P01', '57P02', '57P03', '53300') or any(k in text for k in (
+                'too many connections', 'too many clients', 'not currently accepting', 'starting up', 'shutting down',
+                'connection refused', 'server closed the connection', 'terminating connection', 'timeout expired')):
+            return 'transient'
+        return 'unknown' if transient(exc) else 'permanent'
+
+    def policied(operation, run, name):
+        """--policy a|b 실험 정책(운영 코드 아님). 단계 시작부터 한 시계로 마감을 잰다.
+
+        새 시도는 '남은 시간 ≥ 풀 대기 상한 + 여유'일 때만 시작해, 재시도가 시간 예산을 늘리지 않게 한다.
+        진행 중인 시도는 끊지 못하므로 마감 초과는 막지 않고 steps 에 경과로 남긴다. a 는 풀 대기 초과를 재시도하지 않는다."""
+        started, delay, attempts = time.monotonic(), 0.5, 0
+        while True:
+            attempts += 1
+            try:
+                result = operation()
+                run['steps'].append((time.monotonic() - started, attempts, 'ok', time.monotonic() - started - spec['deadline'], name))
+                return result
+            except Exception as exc:
+                text = str(exc).strip().splitlines()[-1][:120] if str(exc).strip() else ''
+                run['op_errors'].append((time.time(), type(exc).__name__ + ': ' + text))
+                pool_wait = 'query_wait_timeout' in str(exc)
+                wait = random.uniform(0, delay)  # full jitter
+                left = spec['deadline'] - (time.monotonic() - started) - wait
+                kind = classify(exc)
+                wanted = (kind == 'transient' or (kind == 'unknown' and attempts < 2)) if spec['policy'] == 'p' else (
+                    transient(exc) and (spec['policy'] == 'b' or not pool_wait))
+                if not (wanted and left >= spec['pool_wait'] + spec['margin']):
+                    run['steps'].append((time.monotonic() - started, attempts, kind if spec['policy'] == 'p' else (
+                                             'pool_wait' if pool_wait else type(exc).__name__),
+                                         time.monotonic() - started - spec['deadline'], name))
+                    run['exhausted'] += transient(exc)
+                    raise
+                run['retry_waits'].append((time.time(), wait))
+                time.sleep(wait)
+                delay = min(delay * 2, spec['backoff_cap'])
+
     def counted(operation, **kwargs):  # 실제 retry_transient 를 그대로 부르고 시도 실패·대기·소진만 분석별로 센다
-        run = runs[AID.get()]
+        run, name = runs[AID.get()], step_name(operation)
+        if spec.get('inject_unknown') and spec['inject_unknown'] in name:  # 분류 목록 밖 오류를 매 시도 주입
+            def operation():
+                raise psycopg.OperationalError('injected unclassified failure')
+        if spec.get('lose_reply') and spec['lose_reply'] in name and not run.get('reply_lost'):
+            inner = operation
+            def operation():  # 커밋은 DB 에서 끝나고 응답만 잃은 상황을 클라이언트 쪽에서 흉내 낸다(첫 시도 1회)
+                result = inner()
+                if not run.get('reply_lost'):
+                    run['reply_lost'] = True
+                    raise psycopg.OperationalError('server closed the connection unexpectedly (injected after commit)')
+                return result
+        if spec.get('policy'):
+            return policied(operation, run, name)
+        started, errors_before = time.monotonic(), len(run['op_errors'])
+        def finish(outcome):  # 운영 retry_transient 경로도 단계 시간·시도 수를 남긴다. 초과 기준은 예산 20초
+            run['steps'].append((time.monotonic() - started, len(run['op_errors']) - errors_before + (outcome == 'ok'),
+                                 outcome, time.monotonic() - started - 20, name))
         def sleep(seconds):
             run['retry_waits'].append((time.time(), seconds))
             time.sleep(seconds)
@@ -113,8 +182,11 @@ def child(args):
                 run['op_errors'].append((time.time(), type(exc).__name__ + ': ' + str(exc).strip().splitlines()[-1][:120]))
                 raise
         try:
-            return retry_transient(attempt, sleep=sleep, **kwargs)
+            result = retry_transient(attempt, sleep=sleep, **kwargs)
+            finish('ok')
+            return result
         except Exception as exc:
+            finish(type(exc).__name__)
             if transient(exc):
                 run['exhausted'] += 1
             raise
@@ -140,6 +212,7 @@ def child(args):
 
     async def model(**kwargs):
         run, me = runs[AID.get()], mine[AID.get()]
+        run['model_calls'] = run.get('model_calls', 0) + 1  # DB 단계 재시도가 모델을 다시 부르지 않는지
         run['model_start'] = start = time.time()
         call, news = kwargs['call'], kwargs['initial']['news'][0]['news_id']
         if profile:
@@ -183,7 +256,7 @@ def child(args):
     def one(a):
         AID.set(a['id'])
         run = runs[a['id']] = {'retry_waits': [], 'op_errors': [], 'exhausted': 0, 'calls': 0, 'overshoot': [],
-                               'behind': []}
+                               'behind': [], 'steps': []}
         time.sleep(max(0.0, t0 + a['start_after'] - time.time()))
         run['began'] = time.time()
         request = {'analysis_id': a['id'], 'kind': 'outlook', 'etf_code': a['etf'], 'analysis_at': ANALYSIS_AT}
@@ -430,6 +503,19 @@ def summarize(analyses, children, t0, pg, box, before, after, pool, pool_before,
         'connections_closed_by_failure': broken, 'connections_unclosed': unclosed,
         'db_time_s_per_analysis': dist([spent[i] for i in ids], 2),
         'operation_errors': dict(Counter(refusal(m) for r in runs.values() for _, m in r['op_errors'])),
+        'policy_steps': (lambda s: s and {  # --policy 실행만: 단계 전체 시간(연결·풀 대기·SQL·재시도 대기)과 결과
+            'steps': len(s), 'elapsed_s': dist([x[0] for x in s], 2), 'attempts': dict(Counter(x[1] for x in s)),
+            'outcomes': dict(Counter(x[2] for x in s)),
+            'over_deadline': sum(x[3] > 0 for x in s), 'over_s_max': round(max([x[3] for x in s] + [0]), 2),
+            'over_s': dist([x[3] for x in s if x[3] > 0], 2),
+            'by_step': {k: dict(Counter(f"{x[2]}{'/over' if x[3] > 0 else ''}" for x in s if x[4] == k))
+                        for k in sorted({x[4] for x in s})},
+            # 진행 중인 호출은 끊지 않는다: '마감 내 성공'은 모든 DB 단계가 마감 안에 끝난 워커 성공만 센다
+            'worker_ok': sum(r['exit'] == 0 for r in runs.values()),
+            'worker_ok_all_steps_within': sum(r['exit'] == 0 and all(x[3] <= 0 for x in r.get('steps', []))
+                                              for r in runs.values())})(
+            [x for r in runs.values() for x in r.get('steps', [])]),
+        'model_calls_per_analysis': dict(Counter(r.get('model_calls', 0) for r in runs.values())),
         'retries': {'total': sum(len(r['retry_waits']) for r in runs.values()),
                     'analyses_retrying': sum(bool(r['retry_waits']) for r in runs.values()),
                     'wait_s_per_analysis': dist([sum(w for _, w in r['retry_waits']) for r in runs.values()], 2),
@@ -522,7 +608,8 @@ def run(args):
     quiet_start(args.pool_console)  # TRUNCATE 가 남은 트랜잭션에 막히기 전에 정리·거부한다
     reset(definitions=True)
     budget = pool_budget(args.pool_console)
-    if budget and budget != {'writer': args.writer_limit, 'reader': args.reader_limit}:
+    pool_writer = args.pool_writer or args.writer_limit  # 연결 몫 분리: 풀 writer 몫 < 역할 한도, 나머지는 직접 연결 몫
+    if budget and (budget != {'writer': pool_writer, 'reader': args.reader_limit} or pool_writer > args.writer_limit):
         raise SystemExit(f'풀 서버 연결 예산 {budget} 이 역할 한도 writer {args.writer_limit}·reader {args.reader_limit} 와 다르다')
     rng = random.Random(args.seed)
     profile = json.loads(Path(args.profile).read_text())['runs'] if args.profile else None
@@ -547,7 +634,9 @@ def run(args):
     for k in range(procs):
         spec = {'analyses': analyses[k::procs], 'profile': profile, 'src': args.src, 'llm': args.llm,
                 'tools': args.tools, 'align_end': args.align_end, 'host': args.db_host, 'port': args.port,
-                'startup_options': args.startup_options}
+                'startup_options': args.startup_options, 'policy': args.policy, 'deadline': args.deadline,
+                'pool_wait': args.pool_wait, 'margin': args.margin, 'backoff_cap': args.backoff_cap,
+                'bad_password': args.bad_password, 'inject_unknown': args.inject_unknown, 'lose_reply': args.lose_reply}
         (folder/f'spec-{k}.json').write_text(json.dumps(spec))
         command = [sys.executable, __file__]
         if args.net:  # Docker Desktop 포트 중계를 거치지 않도록 DB 와 같은 네트워크의 컨테이너에서 돈다
@@ -566,6 +655,15 @@ def run(args):
     stop, pg, box, pool, observe_errors = threading.Event(), [], [], [], []
     containers = [CONTAINER] + (['v2load900-pgbouncer-1'] if args.pool_console else [])
     watchers = observe(stop, pg, box, containers, pool, args.pool_console, observe_errors)
+    if args.policy:  # 풀 대기 상한을 이 실행의 정책 값으로(전역 설정, 실행 콘솔 SET — 재시작·RELOAD 하면 ini 값으로 돌아간다)
+        if args.pool_wait + args.margin > args.deadline:
+            raise SystemExit('--policy 는 풀 대기 + 여유 ≤ 단계 마감이어야 한다')
+    if args.policy and args.pool_console:
+        with psycopg.connect(args.pool_console, autocommit=True, cursor_factory=psycopg.ClientCursor) as c:
+            c.execute(f'SET query_wait_timeout = {args.pool_wait:g}')
+            applied = next(r[1] for r in c.execute('SHOW CONFIG').fetchall() if r[0] == 'query_wait_timeout')
+        if float(applied) != args.pool_wait:  # noqa: 풀 경로만
+            raise SystemExit(f'query_wait_timeout 적용 실패: {applied}')
     before, pool_before = database_counters(), pool_stats(args.pool_console)
     t0 = time.time() + 2.0
     for proc in children:
@@ -591,7 +689,8 @@ def run(args):
                   'tools': None if profile else args.tools, 'align_end_s': args.align_end, 'start_spread_s': args.start_spread,
                   'src_s': args.src, 'research_profile': args.research_profile or None, 'db': f'{args.db_host}:{args.port}',
                   'generator_net': args.net or 'host', 'generator_image': args.image if args.net else sys.version.split()[0],
-                  'psycopg': psycopg.__version__, 'startup_options': args.startup_options, 'role_config': configs,
+                  'psycopg': psycopg.__version__, 'pool_writer': args.pool_writer or args.writer_limit, 'policy': args.policy and {k: getattr(args, k) for k in
+                      ('policy', 'deadline', 'pool_wait', 'margin', 'backoff_cap')}, 'startup_options': args.startup_options, 'role_config': configs,
                   'pool_console': bool(args.pool_console), 'pool_budget': budget,
                   'role_limits': roles, 'server': settings(), 'seed': args.seed, 'detail': str(folder)}
     record(f'load900-{label}', conditions, result)
@@ -641,6 +740,15 @@ if __name__ == '__main__':
                    help='연결 시작 옵션을 빼고 역할 기본값을 쓴다(PgBouncer 는 options 의 statement_timeout 을 거절한다)')
     p.add_argument('--pool-console', default='', help='PgBouncer 관리 콘솔 DSN. 주면 대기열·서버 연결·통계를 남긴다')
     p.add_argument('--seed', type=int, default=1157); p.add_argument('--label', default='')
+    p.add_argument('--pool-writer', type=int, default=0, help='풀 writer 서버 연결 상한(0 = --writer-limit). 역할 한도는 --writer-limit')
+    p.add_argument('--policy', choices=['a', 'b', 'p'], default='', help='실험 정책(운영 코드 아님). a=풀 대기 초과 재시도 없음, b=지터 재시도')
+    p.add_argument('--deadline', type=float, default=0, help='DB 단계 하나의 시간 예산(연결·풀 대기·SQL·재시도 대기, 단계 시작부터)')
+    p.add_argument('--pool-wait', type=float, default=20, help='PgBouncer query_wait_timeout(실행 콘솔로 SET)')
+    p.add_argument('--margin', type=float, default=5, help='새 시도는 남은 시간 ≥ 풀 대기 + 이 값일 때만')
+    p.add_argument('--backoff-cap', type=float, default=4)
+    p.add_argument('--bad-password', choices=['writer', 'reader'], default='', help='장애 주입: 이 역할의 비밀번호를 틀리게')
+    p.add_argument('--inject-unknown', default='', help='장애 주입: 이름에 이 문자열이 든 DB 단계가 매 시도 분류 밖 오류')
+    p.add_argument('--lose-reply', default='', help='장애 주입: 이 단계의 첫 시도 커밋 뒤 응답 유실')
     p = commands.add_parser('resummarize')
     p.add_argument('--label', required=True); p.add_argument('--reason', required=True)
     p = commands.add_parser('child')
