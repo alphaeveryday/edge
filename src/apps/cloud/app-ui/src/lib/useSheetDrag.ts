@@ -42,11 +42,6 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   stops.current = { low, high };
 
   useEffect(() => {
-    const id = pos.addListener(({ value }) => (now.current = value));
-    return () => pos.removeListener(id);
-  }, [pos]);
-
-  useEffect(() => {
     if (open) {
       setMounted(true);
       if (!ready || shown.current) return;
@@ -76,14 +71,15 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
     const snap = (to: number) => Animated.spring(pos, { toValue: to, useNativeDriver: false, speed: 16, bounciness: 6 }).start();
     const vertical = (_: unknown, g: PanResponderGestureState) => Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx);
     const move = {
+      // 시트가 닫히며 값 리스너가 지워져 위치는 직접 읽음
       onPanResponderGrant: () => {
-        pos.stopAnimation();
-        start.current = now.current;
+        pos.stopAnimation((v) => (start.current = now.current = v));
       },
       onPanResponderMove: (_: unknown, g: PanResponderGestureState) => {
         const { high } = stops.current;
         const raw = start.current - g.dy;
-        pos.setValue(raw > high ? high + rubber(raw - high) : Math.max(0, raw));
+        now.current = raw > high ? high + rubber(raw - high) : Math.max(0, raw);
+        pos.setValue(now.current);
       },
       onPanResponderRelease: (_: unknown, g: PanResponderGestureState) => {
         const { low, high } = stops.current;
