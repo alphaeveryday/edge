@@ -45,13 +45,11 @@ app:
   # 앱 client id 인 소셜 idToken audience
   # 비어 있으면 그 provider 로그인 전부 거절
   social:
-    # 애플 로그인 앱의 번들 ID
-    apple-client-id: ${APP_APPLE_CLIENT_ID:com.alphaeveryday.etforca}
+    apple-client-id: ${APP_APPLE_CLIENT_ID:}
     google-client-id: ${APP_GOOGLE_CLIENT_ID:}
-    # 카카오 네이티브 앱 키, 앱에도 들어가는 공개값이라 기본값으로 보관
-    kakao-client-id: ${APP_KAKAO_CLIENT_ID:80119a4be05f59e1d963f00b32e1f6d7}
-    # 애플 탈퇴 철회용 client secret 서명, 비공개 키(.p8 PEM)는 시크릿 주입
-    apple-team-id: ${APP_APPLE_TEAM_ID:R96U697P3P}
+    kakao-client-id: ${APP_KAKAO_CLIENT_ID:}
+    # 애플 탈퇴 철회용 client secret 서명, 키 ID·비공개 키(.p8 PEM)는 시크릿 주입
+    apple-team-id: ${APP_APPLE_TEAM_ID:}
     apple-key-id: ${APP_APPLE_KEY_ID:}
     apple-private-key: ${APP_APPLE_PRIVATE_KEY:}
 vote:
