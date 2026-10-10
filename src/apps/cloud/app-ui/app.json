@@ -59,7 +59,8 @@
         "@react-native-seoul/kakao-login",
         {}
       ],
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true
