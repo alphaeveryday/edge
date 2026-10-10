@@ -10,6 +10,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.alphaeveryday.etforca",
+      "usesAppleSignIn": true,
       "config": {
         "usesNonExemptEncryption": false
       }
@@ -57,7 +58,8 @@
       [
         "@react-native-seoul/kakao-login",
         {}
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true
