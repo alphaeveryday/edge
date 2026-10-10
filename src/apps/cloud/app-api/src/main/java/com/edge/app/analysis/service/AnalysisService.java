@@ -18,11 +18,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -43,19 +45,22 @@ public class AnalysisService {
     private final EtfAnalysisAxisRepository axisRepository;
 
     @Transactional(readOnly = true)
-    public DailyAnalysisResponse daily(String code, LocalDate date) {
+    public DailyAnalysisResponse daily(String code, LocalDate date, LocalDate week) {
         requireEtf(code);
-        EtfAnalysis analysis = (date == null ? analysisRepository.findTopByEtfCodeOrderByAsOfDesc(code)
-                : analysisRepository.findByEtfCodeAndAsOf(code, date))
+        EtfAnalysis analysis = find(code, date, week)
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.ANALYSIS_NOT_READY));
         Payload p = Payload.parse(analysis.getPayload());
         Payload card = p.get("summary_card");
         Payload detail = p.get("detail");
         Payload conclusion = p.get("conclusion");
         Set<String> pages = Set.copyOf(axisRepository.axesOf(analysis.getId()));
-        List<DailyAnalysisResponse.DailyDate> dates = analysisRepository.asOfs(code).stream()
-                .map(d -> new DailyAnalysisResponse.DailyDate(d, WEEKDAY.format(d), String.valueOf(d.getDayOfMonth()), true))
+        LocalDate monday = analysis.getAsOf().with(DayOfWeek.MONDAY);
+        LocalDate sunday = monday.plusDays(6);
+        Set<LocalDate> published = Set.copyOf(analysisRepository.asOfsBetween(code, monday, sunday));
+        List<DailyAnalysisResponse.DailyDate> dates = monday.datesUntil(sunday.plusDays(1))
+                .map(d -> new DailyAnalysisResponse.DailyDate(d, WEEKDAY.format(d), String.valueOf(d.getDayOfMonth()), published.contains(d)))
                 .toList();
+        String headTitle = analysis.getAsOf().equals(LocalDate.now(KST)) ? "오늘 발행" : DAY.format(analysis.getAsOf()) + " 발행";
         List<DailyAnalysisResponse.Arg> args = detail.list("items").stream()
                 .map(item -> new DailyAnalysisResponse.Arg(String.valueOf(detail.list("items").indexOf(item) + 1),
                         item.text("title_keyword"), item.texts("sentences")))
@@ -66,14 +71,31 @@ public class AnalysisService {
         }
         Signal prev = analysisRepository.findTopByEtfCodeAndAsOfLessThanOrderByAsOfDesc(code, analysis.getAsOf())
                 .map(a -> Signal.of(a.getSignal())).orElse(null);
-        return new DailyAnalysisResponse(analysis.getAsOf(), dates, "오늘 발행", card.text("title"),
+        return new DailyAnalysisResponse(analysis.getAsOf(), dates, headTitle, card.text("title"),
                 DATELINE.format(analysis.getPublishedAt().atZone(KST)), Signal.of(analysis.getSignal()), prev,
                 card.text("summary"),
                 p.list("factors").stream().map(f -> new DailyAnalysisResponse.AxisRead(Axis.of(f.text("axis")),
                         Dir.fold(f.text("sticker")), f.text("summary"), pages.contains(f.text("axis")))).toList(),
                 detail.text("title"), DAY.format(analysis.getAsOf()), detail.get("updates").texts("items"), args,
                 conclusion.text("title"), conclusion.list("burdens").stream().map(b -> b.text("label")).toList(),
-                conclusion.list("supports").stream().map(s -> s.text("label")).toList(), close, null);
+                conclusion.list("supports").stream().map(s -> s.text("label")).toList(), close, null,
+                mondayOf(analysisRepository.lastAsOfBefore(code, monday)), mondayOf(analysisRepository.firstAsOfAfter(code, sunday)));
+    }
+
+    /** date 우선, 다음은 week 가 가리키는 주의 마지막 발행본 */
+    private Optional<EtfAnalysis> find(String code, LocalDate date, LocalDate week) {
+        if (date != null) {
+            return analysisRepository.findByEtfCodeAndAsOf(code, date);
+        }
+        if (week != null) {
+            LocalDate monday = week.with(DayOfWeek.MONDAY);
+            return analysisRepository.findTopByEtfCodeAndAsOfBetweenOrderByAsOfDesc(code, monday, monday.plusDays(6));
+        }
+        return analysisRepository.findTopByEtfCodeOrderByAsOfDesc(code);
+    }
+
+    private static LocalDate mondayOf(LocalDate date) {
+        return date == null ? null : date.with(DayOfWeek.MONDAY);
     }
 
     /** 이슈 축 payload 의 원문 매핑 */

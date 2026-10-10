@@ -10,7 +10,7 @@ import java.util.List;
 public record DailyAnalysisResponse(LocalDate date, List<DailyDate> dates, String headTitle, String question,
         String dateline, Signal now, Signal prev, String synth, List<AxisRead> axes, String title, String todayDate,
         List<String> today, List<Arg> args, String closingTitle, List<String> neg, List<String> pos, String close,
-        Next next) {
+        Next next, LocalDate prevWeek, LocalDate nextWeek) {
     public record DailyDate(LocalDate key, String w, String d, boolean hasDaily) {
     }
 

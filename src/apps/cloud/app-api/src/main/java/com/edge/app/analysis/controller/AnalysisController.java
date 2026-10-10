@@ -23,8 +23,8 @@ public class AnalysisController {
 
     @GetMapping
     public ApiResponse<DailyAnalysisResponse> analysisDaily(@PathVariable String code,
-            @RequestParam(required = false) LocalDate date) {
-        return ApiResponse.onSuccess(analysisService.daily(code, date));
+            @RequestParam(required = false) LocalDate date, @RequestParam(required = false) LocalDate week) {
+        return ApiResponse.onSuccess(analysisService.daily(code, date, week));
     }
 
     @GetMapping("/factors/{axis}")
