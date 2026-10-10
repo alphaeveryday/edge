@@ -23,10 +23,10 @@ export function VoteCard({ stat, entry, onGate }: { stat: VoteStat; entry: VoteE
   const voted = !!stat.mine;
   return (
     <View style={styles.card}>
-      {voted ? (
+      {stat.count > 0 ? (
         <>
           <Text style={styles.title}><Text style={{ color: top.c }}>{top.label}</Text> 선택이 더 많아요</Text>
-          <Text style={styles.sub}>{stat.count.toLocaleString('ko-KR')}명 참여 · 나도 포함</Text>
+          <Text style={styles.sub}>{stat.count.toLocaleString('ko-KR')}명 참여{voted && ' · 나도 포함'}</Text>
           <View style={styles.bar}>
             {META.map((m) => <View key={m.k} style={{ flex: Math.max(stat.pct[m.k], 4), borderRadius: 5, backgroundColor: m.c }} />)}
           </View>
@@ -34,7 +34,7 @@ export function VoteCard({ stat, entry, onGate }: { stat: VoteStat; entry: VoteE
       ) : (
         <>
           <Text style={styles.title}>이 전망, 당신이라면?</Text>
-          <Text style={styles.sub}>{stat.count.toLocaleString('ko-KR')}명이 골랐어요</Text>
+          <Text style={styles.sub}>아직 참여한 사람이 없어요</Text>
         </>
       )}
       <View style={styles.btns}>
