@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import type { EtfSummary } from '@/api';
 import { BottomSheet, CtaButton, SectorIcon, SheetScrollView } from '@/components/ui';
 import { useToast } from '@/store/toast';
@@ -80,7 +80,7 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
         ) : (
           <Pressable onPress={() => setNewOpen(true)} style={({ pressed }) => [styles.newRow, pressed && { opacity: 0.6 }]}>
             <View style={styles.plus}>
-              <Svg width={13} height={13} viewBox="0 0 14 14"><Path d="M7 2v10M2 7h10" stroke={colors.primary} strokeWidth={2} strokeLinecap="round" /></Svg>
+              <Icon name="plus" color={colors.primary} size={16} strokeWidth={2} />
             </View>
             <Text style={styles.newText}>새 그룹 추가</Text>
           </Pressable>
@@ -89,7 +89,7 @@ export function PickGroupSheet({ etfs, title, onClose }: Props) {
           const on = picked.includes(g.key);
           return (
             <Pressable key={g.key} onPress={() => toggle(g.key)} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>
-              <Svg width={18} height={18} viewBox="0 0 18 18"><Path d="M2 4.5h4.6l1.3 1.6H16v7.4H2z" fill="none" stroke={colors.textFaint} strokeWidth={1.6} strokeLinejoin="round" /></Svg>
+              <Icon name="folder" color={colors.textFaint} size={18} />
               <Text numberOfLines={1} style={styles.gname}>{g.label}</Text>
               <Text style={styles.count}>{g.count}</Text>
               <CheckCircle on={on} />

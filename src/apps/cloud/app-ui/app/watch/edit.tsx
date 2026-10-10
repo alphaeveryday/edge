@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { BottomBar, CtaButton, NavBar } from '@/components/ui';
 import { DeleteGroupDialog } from '@/features/watch/DeleteGroupDialog';
 import { GroupChips } from '@/features/watch/GroupChips';
@@ -59,7 +59,7 @@ export default function WatchEdit() {
       <ScrollView style={{ flex: 1 }} scrollEnabled={!dragging} contentContainerStyle={{ paddingHorizontal: PAGE_X, paddingBottom: 20 }}>
         <Pressable onPress={() => router.push('/watch/add')} style={({ pressed }) => [styles.addRow, pressed && { opacity: 0.6 }]}>
           <View style={styles.plus}>
-            <Svg width={13} height={13} viewBox="0 0 14 14"><Path d="M7 2v10M2 7h10" stroke={colors.textSub} strokeWidth={2} strokeLinecap="round" /></Svg>
+            <Icon name="plus" color={colors.textSub} size={16} strokeWidth={2} />
           </View>
           <Text style={styles.addText}>종목 추가하기</Text>
         </Pressable>

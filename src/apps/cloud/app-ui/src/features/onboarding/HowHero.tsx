@@ -1,5 +1,5 @@
 import { Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -15,9 +15,7 @@ const STATS = [
 function Down() {
   const colors = useColors();
   return (
-    <Svg width={16} height={22} viewBox="0 0 16 22">
-      <Path d="M8 1v17M2 13l6 6 6-6" stroke={colors.lineStrong} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </Svg>
+    <Icon name="arrow-down" color={colors.lineStrong} size={26} strokeWidth={2} />
   );
 }
 

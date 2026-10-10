@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
 
@@ -30,9 +30,7 @@ export function PickCircle({ size, label, on, hot, onPress, children }: Props) {
         )}
         {on && (
           <View style={[styles.check, { width: check, height: check }]}>
-            <Svg width={14} height={14} viewBox="0 0 16 16">
-              <Path d="M3.5 8.5l3 3 6-7" stroke={colors.onPrimary} strokeWidth={2.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </Svg>
+            <Icon name="check" color={colors.onPrimary} size={13} strokeWidth={2.2} />
           </View>
         )}
       </View>

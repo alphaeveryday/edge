@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { Avatar, BottomBar, BottomSheet, CtaButton, IconButton, SectorIcon, SheetHead, SheetScrollView } from '@/components/ui';
 import { useCreatePost, useMe } from '@/features/community/queries';
 import { useEtfList } from '@/features/etf/queries';
@@ -61,13 +61,13 @@ export default function CommunityWrite() {
             <Pressable key={c} accessibilityLabel={`${e?.name ?? c} 태그 빼기`} onPress={() => toggle(c)} style={[styles.tag, bad && styles.tagBad]}>
               {e && <SectorIcon theme={e.theme} bg={e.logoBg} size={18} />}
               <Text numberOfLines={1} style={[styles.tagText, bad && { color: colors.up }]}>{e?.name ?? c}</Text>
-              <Svg width={10} height={10} viewBox="0 0 10 10"><Path d="M2 2l6 6M8 2l-6 6" stroke={colors.textFaint} strokeWidth={1.6} strokeLinecap="round" /></Svg>
+              <Icon name="x" color={colors.textFaint} size={12} strokeWidth={1.6} />
             </Pressable>
           );
         })}
         {tags.length < TAG_MAX && (
           <Pressable accessibilityLabel="종목 태그 추가" onPress={() => setPicking(true)} style={({ pressed }) => [styles.add, pressed && { opacity: 0.6 }]}>
-            <Svg width={11} height={11} viewBox="0 0 14 14"><Path d="M7 2v10M2 7h10" stroke={colors.primary} strokeWidth={2} strokeLinecap="round" /></Svg>
+            <Icon name="plus" color={colors.primary} size={14} strokeWidth={2} />
             <Text style={styles.addText}>종목</Text>
           </Pressable>
         )}
@@ -99,7 +99,7 @@ export default function CommunityWrite() {
                 <SectorIcon theme={e.theme} bg={e.logoBg} size={30} />
                 <Text numberOfLines={1} style={styles.pickName}>{e.name}</Text>
                 <View style={[styles.ck, on && styles.ckOn]}>
-                  <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? colors.onPrimary : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
+                  <Icon name="check" color={on ? colors.onPrimary : colors.line} size={12} strokeWidth={2} />
                 </View>
               </Pressable>
             );

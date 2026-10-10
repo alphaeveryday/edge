@@ -2,7 +2,7 @@ import { Slot, useLocalSearchParams, usePathname, useRouter } from 'expo-router'
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { NavBar, RowQuote, SectorIcon, Sticker, TabItem } from '@/components/ui';
 import { useEtf } from '@/features/etf/queries';
 import { PickGroupSheet } from '@/features/watch/PickGroupSheet';
@@ -39,9 +39,7 @@ export default function EtfLayout() {
         </View>
         {data && <Sticker signal={data.signal} />}
         <Pressable onPress={() => setPick(true)} hitSlop={6} style={styles.heart}>
-          <Svg width={20} height={20} viewBox="0 0 24 24">
-            <Path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" fill={inWatch ? colors.up : 'none'} stroke={inWatch ? colors.up : colors.textDisabled} strokeWidth={1.8} strokeLinejoin="round" />
-          </Svg>
+          <Icon name="heart" color={inWatch ? colors.up : colors.textDisabled} fill={inWatch ? colors.up : 'none'} size={21} />
         </Pressable>
       </View>
       <View style={styles.tabs}>

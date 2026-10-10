@@ -1,5 +1,5 @@
-import { Pressable, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import { Pressable, Text } from 'react-native';
+import { Icon } from '@/components/ui/Icon';
 import type { Axis, Dir } from '@/api';
 import { Sticker } from '@/components/ui';
 import { createStyles, useColors } from '@/theme/theme';
@@ -29,9 +29,7 @@ export function FactorRow({ axis, dir, summary, hasPage, onSelect, onHint }: Pro
       </Pressable>
       <Text style={styles.summary}>{summary}</Text>
       {hasPage && (
-        <Svg width={16} height={16} viewBox="0 0 16 16">
-          <Path d="M6 3.5l4.5 4.5L6 12.5" stroke={colors.textDisabled} strokeWidth={1.8} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        </Svg>
+        <Icon name="chevron-right" color={colors.textDisabled} size={18} />
       )}
     </Pressable>
   );

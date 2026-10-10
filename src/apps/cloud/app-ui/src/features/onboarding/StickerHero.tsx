@@ -1,5 +1,6 @@
 import { Text, View } from 'react-native';
-import Svg, { Circle, Defs, Path, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { Sticker } from '@/components/ui';
 import { createStyles, useColors } from '@/theme/theme';
 import { SIGNAL_ORDER } from '@/theme/tokens';
@@ -41,9 +42,7 @@ export function StickerHero() {
         ))}
       </View>
       <View style={styles.axesWrap}>
-        <Svg width={16} height={22} viewBox="0 0 16 22" style={{ transform: [{ rotate: '180deg' }] }}>
-          <Path d="M8 1v17M2 13l6 6 6-6" stroke={colors.lineStrong} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        </Svg>
+        <Icon name="arrow-up" color={colors.lineStrong} size={26} strokeWidth={2} />
         <View style={styles.axes}>
           {AXES.map((a) => (
             <View key={a.name} style={styles.axis}>

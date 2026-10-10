@@ -1,5 +1,5 @@
 import { View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { createStyles, useColors } from '@/theme/theme';
 
 // 관심 그룹·종목 선택의 체크 원
@@ -8,7 +8,7 @@ export function CheckCircle({ on }: { on: boolean }) {
   const colors = useColors();
   return (
     <View style={[styles.ck, on && styles.ckOn]}>
-      <Svg width={12} height={12} viewBox="0 0 12 12"><Path d="M2.5 6.3l2.2 2.2 4.8-5" stroke={on ? colors.onPrimary : colors.line} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" /></Svg>
+      <Icon name="check" color={on ? colors.onPrimary : colors.line} size={12} strokeWidth={2} />
     </View>
   );
 }

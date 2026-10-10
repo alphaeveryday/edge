@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Pressable, TextInput, View, type TextInputProps } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -23,11 +23,7 @@ export function AuthField({ secure, invalid, ...rest }: TextInputProps & { secur
       />
       {secure && (
         <Pressable onPress={() => setShown((v) => !v)} accessibilityLabel={shown ? '비밀번호 숨기기' : '비밀번호 보기'} style={styles.eye}>
-          <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={shown ? colors.textSub : colors.textFaint} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-            <Path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
-            <Circle cx={12} cy={12} r={3} />
-            {shown && <Path d="M4 20L20 4" />}
-          </Svg>
+          <Icon name={shown ? 'eye-off' : 'eye'} color={shown ? colors.textSub : colors.textFaint} size={20} />
         </Pressable>
       )}
     </View>

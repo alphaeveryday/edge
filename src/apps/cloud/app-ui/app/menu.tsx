@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { Avatar, Chevron, IconButton, ListRow, PageScroll, ToggleRow, type ListIcon } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
 import { useUnreadCount } from '@/features/notification/queries';
@@ -48,7 +48,7 @@ export default function Menu() {
         ) : (
           <Pressable onPress={() => go('/login')} style={({ pressed }) => [styles.me, pressed && { opacity: 0.6 }]}>
             <View style={styles.guest}>
-              <Svg width={22} height={22} viewBox="0 0 22 22"><Circle cx={11} cy={8} r={3.6} fill={colors.onPrimary} /><Path d="M4 18.5c1.2-3.4 3.8-5 7-5s5.8 1.6 7 5" fill={colors.onPrimary} /></Svg>
+              <Icon name="user" color={colors.onPrimary} size={24} strokeWidth={2} />
             </View>
             <View style={{ flex: 1, gap: 3 }}>
               <Text style={styles.meName}>로그인하고 시작하기</Text>
