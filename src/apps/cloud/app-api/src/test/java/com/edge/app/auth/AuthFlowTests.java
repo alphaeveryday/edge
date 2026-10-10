@@ -1,6 +1,7 @@
 package com.edge.app.auth;
 
 import com.edge.app.ContainerTests;
+import com.edge.app.auth.service.AppleTokenService;
 import com.edge.app.auth.service.IdTokenVerifier;
 import com.edge.app.common.mail.Mailer;
 import com.edge.app.member.entity.Provider;
@@ -46,6 +47,8 @@ class AuthFlowTests extends ContainerTests {
     IdTokenVerifier idTokenVerifier;
     @MockitoBean
     Mailer mailer;
+    @MockitoBean
+    AppleTokenService appleTokens;
 
     @SuppressWarnings("unchecked")
     ResponseEntity<Map> call(String method, String uri, Object body, String... headers) {
@@ -364,6 +367,33 @@ class AuthFlowTests extends ContainerTests {
         assertEquals("MEMBER4007", call("POST", "/api/v1/auth/signup/code", Map.of("email", "g@example.com")).getBody().get("code"));
         assertEquals("MEMBER4007", call("POST", "/api/v1/auth/password-reset", Map.of("email", "g@example.com")).getBody().get("code"));
         assertEquals(false, result(call("POST", "/api/v1/auth/login", Map.of("email", "mail@example.com", "password", "pw123456"))).get("newMember"));
+    }
+
+    /** 애플 토큰은 로그인마다 최신 값 보관, 탈퇴 커밋 뒤 철회와 삭제 */
+    @Test
+    void appleTokenIsStoredOnLoginAndRevokedOnWithdraw() {
+        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("a-rt", null)));
+        when(appleTokens.exchange("code-1")).thenReturn("rt-1");
+        when(appleTokens.exchange("code-2")).thenReturn("rt-2");
+        result(call("POST", "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t", "nonce", "n", "authorizationCode", "code-1")));
+        var auth = result(call("POST", "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t", "nonce", "n", "authorizationCode", "code-2")));
+        assertEquals("rt-2", jdbc.queryForObject("select t.refresh_token from apple_token t join member m on m.id = t.member_id where m.provider_subject = 'a-rt'", String.class));
+
+        assertEquals(200, call("DELETE", "/api/v1/me", null, "Authorization", "Bearer " + auth.get("accessToken")).getStatusCode().value());
+        verify(appleTokens).revoke("rt-2");
+        assertEquals(0, jdbc.queryForObject("select count(*) from apple_token", Integer.class));
+    }
+
+    /** 같은 이메일 안내로 가입이 거절되면 방금 교환한 애플 토큰 철회 */
+    @Test
+    void rejectedAppleSignupRevokesExchangedToken() {
+        signup("taken@example.com");
+        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("a-taken", "taken@example.com")));
+        when(appleTokens.exchange("code-x")).thenReturn("rt-x");
+        var res = call("POST", "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t", "nonce", "n", "authorizationCode", "code-x"));
+        assertEquals("MEMBER4009", res.getBody().get("code"));
+        verify(appleTokens).revoke("rt-x");
+        assertEquals(0, jdbc.queryForObject("select count(*) from apple_token", Integer.class));
     }
 
     /** 검증된 이메일이 없는 소셜 가입은 이메일 없이 생성 */

@@ -37,8 +37,11 @@ public class IdTokenVerifier {
     /** email_verified 클레임 판정과, 검증된 이메일만 싣는 제공자(카카오)의 email 존재 판정 */
     enum EmailTrust { CLAIM, PRESENT }
 
-    /** 앱이 보낸 nonce 와 토큰 nonce 클레임의 그대로 대조, RAW 는 앱 값 필수 */
-    enum NonceCheck { NONE, RAW }
+    /**
+     * 앱이 보낸 nonce 와 토큰 nonce 클레임의 대조, NONE 외에는 앱 값 필수
+     * SHA256 은 앱이 해시값을 제공자에 넘기고 원문을 서버에 보내는 애플 방식
+     */
+    enum NonceCheck { NONE, RAW, SHA256 }
 
     record Rule(JWTProcessor<SecurityContext> processor, EmailTrust emailTrust, NonceCheck nonceCheck) {
     }
@@ -56,7 +59,7 @@ public class IdTokenVerifier {
     public IdTokenVerifier(SocialProperties properties) throws MalformedURLException {
         this(Map.of(
                 Provider.APPLE, new Rule(processor(remote(APPLE_JWKS), APPLE_ISSUER, properties.appleClientId()),
-                        EmailTrust.CLAIM, NonceCheck.NONE),
+                        EmailTrust.CLAIM, NonceCheck.SHA256),
                 Provider.GOOGLE, new Rule(processor(remote(GOOGLE_JWKS), GOOGLE_ISSUER, properties.googleClientId()),
                         EmailTrust.CLAIM, NonceCheck.NONE),
                 Provider.KAKAO, new Rule(processor(remote(KAKAO_JWKS), KAKAO_ISSUER, properties.kakaoClientId()),
@@ -74,13 +77,21 @@ public class IdTokenVerifier {
         }
         try {
             JWTClaimsSet claims = rule.processor().process(idToken, null);
-            if (rule.nonceCheck() == NonceCheck.RAW && (nonce == null || !nonce.equals(claims.getStringClaim("nonce")))) {
+            if (!nonceMatches(rule.nonceCheck(), nonce, claims.getStringClaim("nonce"))) {
                 return Optional.empty();
             }
             return Optional.of(new Identity(claims.getSubject(), verifiedEmail(claims, rule.emailTrust())));
         } catch (ParseException | BadJOSEException | com.nimbusds.jose.JOSEException e) {
             return Optional.empty();
         }
+    }
+
+    private static boolean nonceMatches(NonceCheck check, String nonce, String claim) {
+        return switch (check) {
+            case NONE -> true;
+            case RAW -> nonce != null && nonce.equals(claim);
+            case SHA256 -> nonce != null && AuthService.hash(nonce).equals(claim);
+        };
     }
 
     private static String verifiedEmail(JWTClaimsSet claims, EmailTrust trust) throws ParseException {

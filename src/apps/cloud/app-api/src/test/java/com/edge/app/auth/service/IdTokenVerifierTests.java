@@ -82,6 +82,18 @@ class IdTokenVerifierTests {
         assertTrue(verifier.verify(Provider.KAKAO, sign(key, claims("app-key").build()), "n-1").isEmpty());
     }
 
+    /** 애플은 앱이 보낸 원문의 SHA-256 16진 값과 토큰 nonce 대조 */
+    @Test
+    void appleComparesSha256OfRawNonce() throws Exception {
+        RSAKey key = new RSAKeyGenerator(2048).keyID("k1").generate();
+        var verifier = new IdTokenVerifier(Map.of(Provider.APPLE, rule(key, "bundle",
+                IdTokenVerifier.EmailTrust.CLAIM, IdTokenVerifier.NonceCheck.SHA256)));
+        String token = sign(key, claims("bundle").claim("nonce", AuthService.hash("raw-1")).build());
+        assertTrue(verifier.verify(Provider.APPLE, token, "raw-1").isPresent());
+        assertTrue(verifier.verify(Provider.APPLE, token, AuthService.hash("raw-1")).isEmpty(), "해시값 자체는 거절");
+        assertTrue(verifier.verify(Provider.APPLE, token, null).isEmpty());
+    }
+
     private static IdTokenVerifier.Rule rule(RSAKey key, String audience, IdTokenVerifier.EmailTrust trust,
             IdTokenVerifier.NonceCheck nonce) {
         return new IdTokenVerifier.Rule(IdTokenVerifier.processor(new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())),

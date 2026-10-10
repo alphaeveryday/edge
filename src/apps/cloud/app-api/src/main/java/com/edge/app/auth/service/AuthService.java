@@ -13,10 +13,12 @@ import com.edge.app.common.auth.AppPrincipal;
 import com.edge.app.common.mail.MailQuota;
 import com.edge.app.common.mail.Mailer;
 import com.edge.app.member.dto.MeResponse;
+import com.edge.app.member.entity.AppleToken;
 import com.edge.app.member.entity.Member;
 import com.edge.app.member.entity.PasswordResetCode;
 import com.edge.app.member.entity.Provider;
 import com.edge.app.member.entity.RefreshToken;
+import com.edge.app.member.repository.AppleTokenRepository;
 import com.edge.app.member.repository.DeviceRepository;
 import com.edge.app.member.repository.MemberRepository;
 import com.edge.app.member.repository.PasswordResetCodeRepository;
@@ -66,6 +68,8 @@ public class AuthService {
     private final MailQuota mailQuota;
     private final ReviewAccount reviewAccount;
     private final TransactionTemplate tx;
+    private final AppleTokenService appleTokens;
+    private final AppleTokenRepository appleTokenRepository;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     // 소셜 가입 이메일의 가입 방법 안내
@@ -81,26 +85,37 @@ public class AuthService {
         return signIn(member, deviceKey, false);
     }
 
-    // 트랜잭션 밖의 토큰 검증
+    // 트랜잭션 밖의 토큰 검증과 애플 토큰 교환
     // 동시 첫 로그인의 유니크 위반은 먼저 생긴 회원으로 재시도
+    // 가입이 거절되면 교환한 애플 토큰 철회
     public AuthResponse social(SocialLoginRequest request, String deviceKey) {
         if (request.provider() == Provider.EMAIL) {
             throw new GeneralException(ErrorStatus._BAD_REQUEST);
         }
         IdTokenVerifier.Identity identity = idTokenVerifier.verify(request.provider(), request.idToken(), request.nonce())
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_SOCIAL_INVALID));
+        String appleToken = request.provider() == Provider.APPLE ? appleTokens.exchange(request.authorizationCode()) : null;
         try {
-            return tx.execute(s -> socialSignIn(request.provider(), identity, deviceKey));
-        } catch (DataIntegrityViolationException e) {
-            return tx.execute(s -> socialSignIn(request.provider(), identity, deviceKey));
+            try {
+                return tx.execute(s -> socialSignIn(request.provider(), identity, appleToken, deviceKey));
+            } catch (DataIntegrityViolationException e) {
+                return tx.execute(s -> socialSignIn(request.provider(), identity, appleToken, deviceKey));
+            }
+        } catch (GeneralException e) {
+            if (appleToken != null) {
+                appleTokens.revoke(appleToken);
+            }
+            throw e;
         }
     }
 
     // 다른 가입 방법의 같은 이메일은 가입 대신 안내
-    private AuthResponse socialSignIn(Provider provider, IdTokenVerifier.Identity identity, String deviceKey) {
+    private AuthResponse socialSignIn(Provider provider, IdTokenVerifier.Identity identity, String appleToken,
+            String deviceKey) {
         Member existing = memberRepository.findByProviderAndProviderSubjectAndDeletedAtIsNull(provider, identity.subject())
                 .orElse(null);
         if (existing != null) {
+            saveAppleToken(existing, appleToken);
             return signIn(existing, deviceKey, false);
         }
         if (identity.email() != null) {
@@ -111,7 +126,14 @@ public class AuthService {
         String handle = newHandle();
         Member member = memberRepository.saveAndFlush(Member.social(provider, identity.subject(), identity.email(),
                 handle.substring(1), handle));
+        saveAppleToken(member, appleToken);
         return signIn(member, deviceKey, true);
+    }
+
+    private void saveAppleToken(Member member, String appleToken) {
+        if (appleToken != null) {
+            appleTokenRepository.save(AppleToken.of(member.getId(), appleToken, Instant.now()));
+        }
     }
 
     // SignupCodeService.verify 의 인증 코드 확인 뒤 호출

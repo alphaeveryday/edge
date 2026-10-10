@@ -83,6 +83,16 @@
 
 인덱스 `(member_id)`. 탈퇴 시 전부 revoke.
 
+### apple_token (애플 로그인 연결, V18)
+
+| 컬럼 | 타입 | 설명 |
+|---|---|---|
+| member_id | bigint PK → member | 회원당 1행 |
+| refresh_token | varchar(1024) | 애플 refresh token 원문. 탈퇴 시 철회 API 에 원문이 필요해 해시 없이 보관 |
+| updated_at | timestamptz | 애플 로그인마다 갱신 |
+
+애플 로그인 때 앱이 보낸 authorization code 를 애플 토큰 API 로 바꿔 저장한다. 탈퇴 커밋 뒤 리스너가 애플 철회 API 를 부르고 행을 지운다. 애플 키 미설정·애플 오류는 로그만 남기고 로그인·탈퇴를 진행한다.
+
 ### password_reset_code
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
@@ -427,6 +437,7 @@ erDiagram
     device ||--o| principal : "kind=device"
     member ||--o{ device : "매핑 후"
     member ||--o{ refresh_token : ""
+    member ||--o| apple_token : ""
     device ||--o{ refresh_token : ""
     member ||--o| password_reset_code : ""
     principal ||--o{ watch_group : ""
