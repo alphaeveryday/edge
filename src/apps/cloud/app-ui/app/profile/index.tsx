@@ -1,3 +1,5 @@
+import { nativeApplicationVersion } from 'expo-application';
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
@@ -62,7 +64,7 @@ export default function Profile() {
         <Pressable onPress={() => { api.auth.logout(); leave('로그아웃했어요'); }} style={styles.logout}>
           <Text style={styles.logoutText}>로그아웃</Text>
         </Pressable>
-        <Text style={styles.version}>ETF Orca v0.1.0</Text>
+        <Text style={styles.version}>ETF Orca v{nativeApplicationVersion ?? Constants.expoConfig?.version}</Text>
       </PageScroll>
       <Dialog open={delOpen} title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 답글은 '탈퇴한 사용자'로 남아요." confirmLabel="탈퇴하기" danger busy={del.isPending} onConfirm={() => del.mutate()} onClose={() => setDelOpen(false)} />
     </View>
