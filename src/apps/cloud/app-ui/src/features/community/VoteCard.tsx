@@ -21,6 +21,7 @@ export function VoteCard({ stat, entry, onGate }: { stat: VoteStat; entry: VoteE
   const requireLogin = useRequireLogin();
   const top = META.reduce((a, b) => (stat.pct[b.k] > stat.pct[a.k] ? b : a));
   const voted = !!stat.mine;
+  const showPct = stat.count > 0;
   return (
     <View style={styles.card}>
       {stat.count > 0 ? (
@@ -46,10 +47,10 @@ export function VoteCard({ stat, entry, onGate }: { stat: VoteStat; entry: VoteE
               onPress={() => requireLogin('투표', () => vote.mutate(on ? null : m.k, {
                 onSuccess: () => track(on ? 'vote_canceled' : 'vote_submitted', on ? { etf: stat.code, entry } : { etf: stat.code, choice: m.k, entry }),
               }), onGate)}
-              style={({ pressed }) => [styles.btn, voted ? { backgroundColor: on ? m.c : colors.bg, borderWidth: 1, borderColor: on ? m.c : colors.lineStrong } : { backgroundColor: m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
+              style={({ pressed }) => [styles.btn, { backgroundColor: on ? m.c : m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
             >
-              <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.btnText, { color: voted && on ? colors.onPrimary : m.c }]}>
-                {m.label}{voted && <Text style={styles.btnPct}> {stat.pct[m.k]}%</Text>}
+              <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.btnText, { color: on ? colors.onPrimary : m.c }]}>
+                {m.label}{showPct && <Text style={styles.btnPct}> {stat.pct[m.k]}%</Text>}
               </Text>
             </Pressable>
           );
