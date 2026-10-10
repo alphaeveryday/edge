@@ -1,6 +1,6 @@
 import { focusManager, MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
-import { router, Stack, usePathname } from 'expo-router';
+import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
@@ -51,18 +51,23 @@ export default function RootLayout() {
     if ((loaded || error) && restored && themeRestored) splashMin.then(() => SplashScreen.hideAsync());
   }, [loaded, error, restored, themeRestored]);
   if (!loaded && !error) return null;
+  // 끌어서 닫을 때 화면 뒤로 드러나는 스택 바탕의 팔레트 색
+  const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
+  const navTheme = { ...base, colors: { ...base.colors, background: colors.bg } };
   return (
     <QueryClientProvider client={queryClient}>
-      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
-        <Stack.Screen name="menu" options={{ animation: 'slide_from_right', fullScreenGestureEnabled: true }} />
-        <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
-        <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
-        <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
-      </Stack>
-      <Toast />
+      <ThemeProvider value={navTheme}>
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="menu" options={{ animation: 'slide_from_right', fullScreenGestureEnabled: true }} />
+          <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
+        </Stack>
+        <Toast />
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
