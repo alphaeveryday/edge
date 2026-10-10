@@ -41,7 +41,8 @@ const useStyles = createStyles((colors) => ({
   box: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, overflow: 'hidden',
     borderWidth: 1, borderColor: colors.glossLine,
-    shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 2,
+    // 반투명 바탕에 비치는 Android elevation 생략, iOS 그림자만
+    shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
   },
   marks: { alignItems: 'center', justifyContent: 'center' },
   mark: { fontFamily: fam.extrabold, textAlign: 'center' },
