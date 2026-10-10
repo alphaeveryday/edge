@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useIsFocused } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { api } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
@@ -23,7 +23,12 @@ export function DisclaimerSheet() {
   useFocusEffect(useCallback(() => setDismissed(false), []));
   // 미리 띄워 둔 탭·아래 깔린 화면의 시트 겹침 방지
   const focused = useIsFocused();
-  const open = focused && !dismissed && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
+  // 비회원 때 이 기기에서 한 동의의 회원 기록 이전
+  const carry = focused && loggedIn && !!me && !me.disclaimerAcceptedAt && guestDisclaimed && !accept.isError;
+  useEffect(() => {
+    if (carry && !accept.isPending) accept.mutate();
+  }, [carry]);
+  const open = focused && !dismissed && !carry && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
   return (
     <Notice open={open} onClose={() => setDismissed(true)} onConfirm={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())} />
   );
