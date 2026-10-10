@@ -9,6 +9,10 @@ const CLOSE_DY = 120;
 const FLING = 0.5;
 const FLING_CLOSE = 2;
 const RUBBER = 140;
+// 버튼·배경 닫힘의 길이이자 끌어 닫기 길이의 상한
+const CLOSE_MS = 180;
+// 끌어 닫기 길이의 하한
+const FLING_MIN_MS = 80;
 
 // 끝 지점 너머의 끌림이 점점 무거워지는 고무줄 저항
 const rubber = (over: number) => (1 - 1 / ((over * 0.55) / RUBBER + 1)) * RUBBER;
@@ -34,12 +38,24 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const now = useRef(0);
   const start = useRef(0);
   const shown = useRef(false);
+  // 닫힘 애니메이션 중 여부
+  const closing = useRef(false);
   // 본문 목록의 맨 위 여부
   const atTop = useRef(true);
   const close = useRef(onClose);
   close.current = onClose;
   const stops = useRef({ low, high });
   stops.current = { low, high };
+
+  // 처음부터 빠르게 출발해 끝에서 감속하는 닫힘
+  const dismiss = useRef((ms: number) => {
+    shown.current = false;
+    closing.current = true;
+    Animated.timing(pos, { toValue: 0, duration: ms, easing: Easing.out(Easing.quad), useNativeDriver: false }).start(({ finished }) => {
+      closing.current = false;
+      if (finished) setMounted(false);
+    });
+  }).current;
 
   useEffect(() => {
     if (open) {
@@ -50,17 +66,17 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       if (instant) pos.setValue(low);
       else Animated.spring(pos, { toValue: low, useNativeDriver: false, speed: 14, bounciness: 0 }).start();
     } else if (shown.current) {
-      shown.current = false;
       if (instant) {
+        shown.current = false;
         pos.setValue(0);
         setMounted(false);
         return;
       }
-      Animated.timing(pos, { toValue: 0, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: false }).start(({ finished }) => finished && setMounted(false));
-    } else {
+      dismiss(CLOSE_MS);
+    } else if (!closing.current) {
       setMounted(false);
     }
-  }, [open, ready, low, instant, pos]);
+  }, [open, ready, low, instant, pos, dismiss]);
 
   // 내용 높이가 바뀐 fit 시트의 새 높이 맞춤
   useEffect(() => {
@@ -84,7 +100,12 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       onPanResponderRelease: (_: unknown, g: PanResponderGestureState) => {
         const { low, high } = stops.current;
         const cur = now.current;
-        if (g.vy > FLING_CLOSE || cur < low - CLOSE_DY || (g.vy > FLING && cur <= low)) close.current();
+        if (g.vy > FLING_CLOSE || cur < low - CLOSE_DY || (g.vy > FLING && cur <= low)) {
+          // 손을 뗀 속도로 출발하는 길이. 감속 곡선의 출발 속도는 평균의 두 배
+          const ms = g.vy > 0 ? (2 * cur) / g.vy : CLOSE_MS;
+          dismiss(Math.min(CLOSE_MS, Math.max(FLING_MIN_MS, ms)));
+          close.current();
+        }
         else if (g.vy > FLING) snap(low);
         else if (g.vy < -FLING) snap(high);
         else snap(Math.abs(cur - low) <= Math.abs(cur - high) ? low : high);
@@ -106,7 +127,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
         ...move,
       }).panHandlers,
     };
-  }, [pos]);
+  }, [pos, dismiss]);
   const onScroll = useMemo(() => (e: NativeSyntheticEvent<NativeScrollEvent>) => (atTop.current = e.nativeEvent.contentOffset.y <= 0), []);
 
   const backdrop = { opacity: pos.interpolate({ inputRange: [0, Math.max(low, 1)], outputRange: [0, 1], extrapolate: 'clamp' }) };
@@ -116,5 +137,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
     ? { height: pos.interpolate({ inputRange: [low, high], outputRange: [low, high], extrapolateLeft: 'clamp', extrapolateRight: 'extend' }), transform: [{ translateY: shift }] }
     : { opacity: ready ? 1 : 0, transform: [{ translateY: shift }] };
   const onLayout = tall ? undefined : (h: number) => setFit(Math.round(h));
-  return { mounted, handlers, body, onScroll, backdrop, sheet, onLayout };
+  // 시트 안 배경·뒤로가기 닫힘의 즉시 출발
+  const closeNow = () => shown.current && !instant && dismiss(CLOSE_MS);
+  return { mounted, handlers, body, onScroll, backdrop, sheet, onLayout, closeNow };
 }

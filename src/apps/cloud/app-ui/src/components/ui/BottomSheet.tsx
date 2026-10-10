@@ -66,16 +66,17 @@ export function BottomSheet({ open, onClose, children, head, tall, padded = true
   const stats = useSheetStats({ open, onClosed, session, closeMethod });
   const close = (m: CloseMethod) => { stats.method.current = m; onClose(); };
   const drag = useSheetDrag({ open, onClose: () => close('drag'), tall, instant });
+  const closeNow = (m: CloseMethod) => { drag.closeNow(); close(m); };
   // 닫히는 동안의 마지막 내용 유지
   const last = useRef({ children, head });
   if (open) last.current = { children, head };
   return (
-    <Modal visible={drag.mounted} transparent animationType="none" onRequestClose={() => close('back')}>
+    <Modal visible={drag.mounted} transparent animationType="none" onRequestClose={() => closeNow('back')}>
       {/* 탭 화면의 탭바 높이가 섞이지 않는 창 기준 하단 여백 */}
       <SafeAreaProvider>
         <KeyboardAvoidingView behavior="padding" style={styles.root}>
           <Animated.View style={[styles.backdrop, drag.backdrop]}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => close('backdrop')} />
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => closeNow('backdrop')} />
           </Animated.View>
           <Animated.View
             onLayout={(e) => drag.onLayout?.(e.nativeEvent.layout.height)}
