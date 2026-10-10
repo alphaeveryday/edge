@@ -8,6 +8,7 @@ import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
+import { usePush } from '@/features/notification/push';
 import { trackScreen } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useColors, useScheme, useThemePref } from '@/theme/theme';
@@ -45,6 +46,7 @@ export default function RootLayout() {
   const pathname = usePathname();
   useEffect(() => { trackScreen(pathname); }, [pathname]);
   useEffect(() => { restore(); restoreTheme(); }, [restore, restoreTheme]);
+  usePush();
   // 화면 전환·키보드 뒤로 드러나는 맨 뒤 창의 배경색
   useEffect(() => { SystemUI.setBackgroundColorAsync(colors.bg); }, [colors.bg]);
   useEffect(() => {

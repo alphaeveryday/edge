@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Notification, NotiKind } from '@/api';
 import { Avatar, NavBar, PageScroll, TabItem } from '@/components/ui';
+import { registerPush } from '@/features/notification/push';
 import { useNotifications, useReadAll, useReadNoti } from '@/features/notification/queries';
 import { createStyles, useColors } from '@/theme/theme';
 import { fam } from '@/theme/typography';
@@ -34,6 +35,8 @@ export default function Notifications() {
     else if (n.etf) router.push(`/etf/${n.etf}/brief`);
   };
   const pull = usePullRefresh(loadMore(list));
+  // 알림함 첫 진입의 알림 권한 요청, 이미 정한 사용자는 묻지 않음
+  useEffect(() => { registerPush(true); }, []);
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="알림" onBack={() => router.back()} rightLabel="모두 읽음" rightColor={colors.textSub} onRight={() => readAll.mutate()} />

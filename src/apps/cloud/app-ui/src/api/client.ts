@@ -84,6 +84,7 @@ export interface NotificationApi {
   unread(): Promise<number>;
   read(id: string): Promise<void>;
   readAll(): Promise<void>;
+  pushToken(token: string): Promise<void>;
 }
 
 export interface ApiClient {

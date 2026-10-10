@@ -189,6 +189,7 @@ export const mockClient: ApiClient = {
       notis.forEach((n) => (n.read = true));
       return delay(undefined, 20);
     },
+    pushToken: () => delay(undefined, 20),
   },
   home: {
     brief: (group = 'base') => {

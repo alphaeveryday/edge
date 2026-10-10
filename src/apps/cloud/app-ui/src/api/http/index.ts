@@ -165,5 +165,6 @@ export const httpClient: ApiClient = {
     unread: async () => (await request<{ count: number }>('GET', '/notifications/unread-count')).count,
     read: (id) => request<void>('POST', `/notifications/${id}/read`),
     readAll: () => request<void>('POST', '/notifications/read-all'),
+    pushToken: (token) => request<void>('PUT', '/notifications/push-token', { body: { token }, auth: 'both' }),
   },
 };

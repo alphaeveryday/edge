@@ -48,14 +48,15 @@ const tryRefresh = () => {
 };
 
 // 로그인과 가입은 게스트 데이터 매핑용 디바이스 헤더만 전송
-export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; auth?: boolean | 'device'; retry?: boolean } = {}): Promise<T> {
+// both 는 회원 토큰이 있어도 기기 헤더를 함께 보내는 기기 단위 요청
+export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; auth?: boolean | 'device' | 'both'; retry?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (opts.auth === 'device') headers['X-Device-Id'] = await deviceId();
   else if (opts.auth !== false) {
     const access = await tokens.access();
     if (access) headers.Authorization = `Bearer ${access}`;
-    else headers['X-Device-Id'] = await deviceId();
+    if (!access || opts.auth === 'both') headers['X-Device-Id'] = await deviceId();
   }
   let res: Response;
   try {
