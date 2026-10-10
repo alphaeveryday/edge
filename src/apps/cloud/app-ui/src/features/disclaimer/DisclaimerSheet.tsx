@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useIsFocused } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Text, View } from 'react-native';
 import { api } from '@/api';
@@ -21,7 +21,9 @@ export function DisclaimerSheet() {
   const [dismissed, setDismissed] = useState(false);
   // 탭처럼 띄워 둔 화면의 재진입 시 다시 표시
   useFocusEffect(useCallback(() => setDismissed(false), []));
-  const open = !dismissed && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
+  // 미리 띄워 둔 탭·아래 깔린 화면의 시트 겹침 방지
+  const focused = useIsFocused();
+  const open = focused && !dismissed && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
   return (
     <Notice open={open} onClose={() => setDismissed(true)} onConfirm={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())} />
   );
