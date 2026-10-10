@@ -16,3 +16,6 @@ ab9119ac424886d46f0de300aca6dc5c586be6be:src/apps/cloud/app-api/src/test/java/co
 
 # app-api README curl example: local compose/experiment admin token, not a deployed credential.
 b9f7e0d5f43a4ed06688bea2dd5e8211e7c1b616:src/apps/cloud/app-api/README.md:curl-auth-header:164
+
+# app-ui eas.json 의 PostHog 프로젝트 키(phc_) — 앱 번들에 들어가는 공개 수집용 키, 비밀 아님.
+38336dd7b43254d5f6ece650943f932689dc66c5:src/apps/cloud/app-ui/eas.json:generic-api-key:27
