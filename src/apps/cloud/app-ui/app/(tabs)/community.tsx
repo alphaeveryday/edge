@@ -1,7 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Platform, ScrollView, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
@@ -14,14 +13,14 @@ import { createStyles } from '@/theme/theme';
 import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 import { usePullRefresh } from '@/lib/usePullRefresh';
+import { useTabOverlap } from '@/lib/useTabOverlap';
 import { loadMore } from '@/lib/usePages';
 
 export default function Community() {
   const styles = useStyles();
   const router = useRouter();
   const requireLogin = useRequireLogin();
-  // iOS 탭 화면의 하단 inset 에 포함된 반투명 탭바 높이
-  const { bottom } = useSafeAreaInsets();
+  const tabOverlap = useTabOverlap();
   const [scope, setScope] = useState<'all' | 'mine'>('all');
   const feed = useFeed(scope);
   const posts = feed.data;
@@ -52,7 +51,7 @@ export default function Community() {
         {posts?.map((p) => <EtfPostRow key={p.id} post={p} showTag />)}
         {posts && posts.length === 0 && <Text style={styles.empty}>관심 ETF를 담으면 그 ETF의 글이 모여요</Text>}
       </ScrollView>
-      <View style={[styles.fab, Platform.OS === 'ios' && { bottom: 18 + bottom }]}>
+      <View style={[styles.fab, { bottom: 18 + tabOverlap }]}>
         <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push('/community/write'))} />
       </View>
     </View>
@@ -66,5 +65,5 @@ const useStyles = createStyles((colors) => ({
   voteHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10, paddingHorizontal: 2 },
   voteHeadText: { fontFamily: fam.extrabold, fontSize: 12.5, color: colors.textSub },
   empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, color: colors.textSub, paddingVertical: 44 },
-  fab: { position: 'absolute', right: 18, bottom: 18 },
+  fab: { position: 'absolute', right: 18 },
 }));
