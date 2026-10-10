@@ -1,18 +1,21 @@
 import { useMutation } from '@tanstack/react-query';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { api, isApiError } from '@/api';
+import { api, isApiError, type SocialProvider } from '@/api';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { KakaoButton } from '@/features/auth/KakaoButton';
 import { kakaoLogin } from '@/features/auth/kakao';
+import { appleLogin, useAppleAvailable } from '@/features/auth/apple';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
-import { createStyles } from '@/theme/theme';
+import { createStyles, useScheme } from '@/theme/theme';
+import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 // 로그인이 필요한 동작에서 들어왔을 때의 안내
@@ -62,26 +65,29 @@ export default function Login() {
   });
   const send = () => ready && !submit.isPending && submit.mutate();
   const [socialErr, setSocialErr] = useState('');
+  const apple = useAppleAvailable();
+  const scheme = useScheme();
   // 취소는 무응답
-  const kakao = useMutation({
-    mutationFn: async () => {
-      const t = await kakaoLogin();
-      return t && api.auth.social({ provider: 'kakao', ...t });
+  const social = useMutation({
+    mutationFn: async (provider: SocialProvider) => {
+      const t = provider === 'apple' ? await appleLogin() : await kakaoLogin();
+      return t && api.auth.social({ provider, ...t });
     },
-    onSuccess: (r) => {
+    onSuccess: (r, provider) => {
       if (!r) return;
       login();
       if (r.newMember) {
-        track('signup_completed', { method: 'kakao' });
+        track('signup_completed', { method: provider });
         router.push('/auth/nick');
         return;
       }
-      track('login_completed', { method: 'kakao' });
+      track('login_completed', { method: provider });
       done();
       toast('로그인했어요');
     },
-    onError: (e) => setSocialErr(isApiError(e) ? e.message : '카카오 로그인에 실패했어요'),
+    onError: (e, provider) => setSocialErr(isApiError(e) ? e.message : `${provider === 'apple' ? '애플' : '카카오'} 로그인에 실패했어요`),
   });
+  const start = (provider: SocialProvider) => { if (social.isPending) return; setSocialErr(''); social.mutate(provider); };
   const clear = (fn: (v: string) => void) => (v: string) => { fn(v); setErr(''); };
   return (
     <PageScroll style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
@@ -107,7 +113,16 @@ export default function Login() {
         <View style={styles.orLine} />
       </View>
       <View style={styles.social}>
-        <KakaoButton disabled={kakao.isPending} onPress={() => { setSocialErr(''); kakao.mutate(); }} />
+        {apple && (
+          <AppleAuthentication.AppleAuthenticationButton
+            buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+            buttonStyle={scheme === 'dark' ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+            cornerRadius={radius.button}
+            style={styles.apple}
+            onPress={() => start('apple')}
+          />
+        )}
+        <KakaoButton disabled={social.isPending} onPress={() => start('kakao')} />
         {!!socialErr && <Text style={styles.err}>{socialErr}</Text>}
         <Text style={styles.terms}>계속하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의하고 만 14세 이상임을 확인한 것으로 봐요.</Text>
       </View>
@@ -128,6 +143,7 @@ const useStyles = createStyles((colors) => ({
   orLine: { flex: 1, height: 1, backgroundColor: colors.line },
   orText: { fontFamily: fam.medium, fontSize: 13, color: colors.textMuted },
   social: { gap: 12, marginTop: 20, paddingHorizontal: 24 },
+  apple: { height: 54, alignSelf: 'stretch' },
   terms: { textAlign: 'center', fontFamily: fam.regular, fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   termsLink: { fontFamily: fam.semibold, color: colors.textSub, textDecorationLine: 'underline' },
 }));
