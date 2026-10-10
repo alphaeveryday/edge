@@ -61,7 +61,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
           <Stack.Screen name="index" />
           <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="menu" options={{ animation: 'slide_from_right', fullScreenGestureEnabled: true }} />
+          <Stack.Screen name="menu" options={{ fullScreenGestureEnabled: true }} />
           <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
