@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef } from 'react';
-import { Animated, PanResponder, Platform, Text, View } from 'react-native';
+import { Animated, PanResponder, Platform, Text } from 'react-native';
 import { FullWindowOverlay } from 'react-native-screens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import { Icon } from '@/components/ui/Icon';
 import { useToast } from '@/store/toast';
 import { createStyles, useColors } from '@/theme/theme';
 import { shadow, radius } from '@/theme/tokens';
@@ -36,15 +36,7 @@ export function Toast() {
   return (
     <Layer>
       <Animated.View {...pan.panHandlers} style={[styles.root, { top: top + 8, transform: [{ translateY: y }] }]}>
-        <View style={[styles.icon, { backgroundColor: error ? colors.up : colors.success }]}>
-          <Svg width={13} height={13} viewBox="0 0 14 14">
-            {error ? (
-              <Path d="M7 3.2v4.6M7 10.6v.1" stroke={colors.onPrimary} strokeWidth={2.2} fill="none" strokeLinecap="round" />
-            ) : (
-              <Path d="M3 7.2l2.6 2.6L11 4.4" stroke={colors.onPrimary} strokeWidth={2.2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            )}
-          </Svg>
-        </View>
+        <Icon name={error ? 'circle-alert' : 'circle-check'} color={error ? colors.up : colors.success} size={24} strokeWidth={2} />
         <Text style={styles.text}>{text}</Text>
       </Animated.View>
     </Layer>
@@ -53,6 +45,5 @@ export function Toast() {
 
 const useStyles = createStyles((colors) => ({
   root: { position: 'absolute', left: 16, right: 16, zIndex: 60, backgroundColor: colors.toastBg, borderRadius: radius.card, paddingVertical: 12, paddingLeft: 14, paddingRight: 12, flexDirection: 'row', alignItems: 'center', gap: 12, ...shadow.toast },
-  icon: { width: 24, height: 24, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
   text: { flex: 1, fontFamily: fam.semibold, fontSize: 14.5, color: colors.onPrimary },
 }));

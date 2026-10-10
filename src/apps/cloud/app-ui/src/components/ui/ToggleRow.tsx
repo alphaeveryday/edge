@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from 'react-native';
-import { Icon, type ListIcon } from './ListRow';
+import { RowIcon, type ListIcon } from './ListRow';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { type } from '@/theme/typography';
@@ -9,7 +9,7 @@ export function ToggleRow({ label, icon, sub, on, onToggle, divider }: { label: 
   const colors = useColors();
   return (
     <View style={[styles.row, divider && styles.divider]}>
-      {icon && <View style={styles.icon}><Icon name={icon} /></View>}
+      {icon && <View style={styles.icon}><RowIcon name={icon} /></View>}
       <View style={{ flex: 1, gap: 3 }}>
         <Text style={styles.label}>{label}</Text>
         {!!sub && <Text style={styles.sub}>{sub}</Text>}

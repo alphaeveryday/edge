@@ -1,5 +1,5 @@
 import { TextInput, View } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import { Icon } from './Icon';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -16,10 +16,7 @@ export function SearchField({ value, onChangeText, placeholder = '검색', autoF
   const colors = useColors();
   return (
     <View style={styles.root}>
-      <Svg width={18} height={18} viewBox="0 0 18 18">
-        <Circle cx={8} cy={8} r={5.5} stroke={colors.textFaint} strokeWidth={1.8} fill="none" />
-        <Path d="M12.5 12.5L16 16" stroke={colors.textFaint} strokeWidth={1.8} strokeLinecap="round" />
-      </Svg>
+      <Icon name="search" color={colors.textFaint} size={18} />
       <TextInput
         value={value}
         onChangeText={onChangeText}
