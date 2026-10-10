@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Firebase 설정·서비스 계정 키, EAS 파일 변수와 credentials 로만 주입
+google-services.json
+GoogleService-Info.plist
+*firebase-adminsdk*.json
