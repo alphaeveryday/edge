@@ -294,7 +294,7 @@ PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심�
 | sub | varchar(100) NULL | 부제 |
 | hot | boolean DEFAULT false | |
 | manager | varchar(50) | 운용사 |
-| expense_ratio | numeric(5,2) | 총보수 연 % |
+| expense_ratio | numeric(6,3) | 총보수 연 % |
 | listed_on | date | 상장일 |
 | leverage | numeric(3,1) NULL | 레버리지 배수, 해당 없으면 NULL |
 | hedged | boolean NULL | 환헤지 여부, 해외 자산이 아니면 NULL |
