@@ -67,6 +67,18 @@ export const useReply = (id: string) => {
   });
 };
 
+export const useDeleteReply = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (replyId: string) => api.community.removeReply(id, replyId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['community', 'replies', id] });
+      qc.invalidateQueries({ queryKey: ['community', 'post', id] });
+      invalidateLists(qc);
+    },
+  });
+};
+
 export const useCreatePost = () => {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (v: { body: string; tags: string[] }) => api.community.create(v), onSuccess: () => invalidateLists(qc) });

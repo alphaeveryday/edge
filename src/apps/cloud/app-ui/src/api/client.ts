@@ -50,6 +50,7 @@ export interface CommunityApi {
   get(id: string): Promise<Post>;
   replies(id: string, cursor?: string): Promise<Page<Reply>>;
   reply(id: string, body: string): Promise<Reply>;
+  removeReply(id: string, replyId: string): Promise<void>;
   create(input: { body: string; tags: EtfCode[] }): Promise<Post>;
   mine(cursor?: string): Promise<Page<Post>>;
   remove(id: string): Promise<void>;

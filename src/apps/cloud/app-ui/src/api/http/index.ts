@@ -100,6 +100,7 @@ export const httpClient: ApiClient = {
       return { items: p.items.map(m.reply), next: p.nextCursor };
     },
     reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
+    removeReply: (id, replyId) => request<void>('DELETE', `/posts/${id}/replies/${replyId}`),
     create: async (input) => post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
     report: (target, reason) => request<void>('POST', '/reports', { body: { targetType: target.type, targetId: target.id, reason } }),

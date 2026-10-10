@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomBar, Dialog, NavBar, PostActions, SectorIcon } from '@/components/ui';
-import { useDeletePost, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
+import { useDeletePost, useDeleteReply, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { track } from '@/lib/analytics';
 import { useRequireLogin } from '@/store/session';
@@ -26,9 +26,11 @@ export default function Post() {
   const like = useToggleLike();
   const reply = useReply(id);
   const del = useDeletePost();
+  const delReply = useDeleteReply(id);
   const toast = useToast((s) => s.show);
   const [draft, setDraft] = useState('');
   const [more, setMore] = useState(false);
+  const [replyDel, setReplyDel] = useState<string | null>(null);
   const [target, setTarget] = useState<ReportTarget | null>(null);
   const [reveal, setReveal] = useState(false);
   const { data: me } = useMe();
@@ -41,6 +43,7 @@ export default function Post() {
   };
   const leave = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/community'));
   const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); leave(); toast('글을 지웠어요'); } });
+  const removeReply = () => replyDel && delReply.mutate(replyDel, { onSuccess: () => { setReplyDel(null); toast('답글을 지웠어요'); } });
   const pull = usePullRefresh(loadMore(replyQ));
   return (
     <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
@@ -85,7 +88,11 @@ export default function Post() {
                 <Text numberOfLines={1} style={styles.replyName}>{r.author.name}</Text>
                 <Text style={styles.replyTime}>{r.time}</Text>
                 <View style={{ flex: 1 }} />
-                {r.author.handle !== me?.handle && (
+                {r.author.handle === me?.handle ? (
+                  <Pressable onPress={() => setReplyDel(r.id)} hitSlop={10} accessibilityLabel="답글 삭제">
+                    <Text style={styles.replyMore}>⋯</Text>
+                  </Pressable>
+                ) : (
                   <Pressable onPress={() => openReport({ type: 'reply', id: r.id, handle: r.author.handle, name: r.author.name })} hitSlop={10} accessibilityLabel="답글 신고">
                     <Text style={styles.replyMore}>⋯</Text>
                   </Pressable>
@@ -104,6 +111,7 @@ export default function Post() {
       </BottomBar>
       <ReportSheet target={target} onClose={() => setTarget(null)} onBlocked={() => target?.type === 'post' && leave()} />
       <Dialog open={more} title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." confirmLabel="지우기" danger busy={del.isPending} onConfirm={remove} onClose={() => setMore(false)} />
+      <Dialog open={!!replyDel} title="이 답글을 지울까요?" sub="지운 답글은 되돌릴 수 없어요." confirmLabel="지우기" danger busy={delReply.isPending} onConfirm={removeReply} onClose={() => setReplyDel(null)} />
     </KeyboardAvoidingView>
   );
 }

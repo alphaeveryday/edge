@@ -216,6 +216,12 @@ export const mockClient: ApiClient = {
       if (p) p.reply += 1;
       return delay(r, 40);
     },
+    removeReply: (id, replyId) => {
+      replies[id] = (replies[id] ?? []).filter((r) => r.id !== replyId);
+      const p = posts.find((x) => x.id === id);
+      if (p) p.reply = Math.max(0, p.reply - 1);
+      return delay(undefined, 40);
+    },
     create: ({ body, tags }) => {
       const e = tags[0] ? etfOf(tags[0]) : undefined;
       const post: Post = {
