@@ -6,7 +6,7 @@ import { TopBar } from '@/components/TopBar';
 import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { useDaily } from '@/features/analysis/queries';
-import { DisclaimerInfoSheet } from '@/features/disclaimer/DisclaimerSheet';
+import { DisclaimerInfoSheet, DisclaimerSheet } from '@/features/disclaimer/DisclaimerSheet';
 import { analysisAsOf } from '@/lib/format';
 import { useRank } from '@/features/explore/queries';
 import { useToast } from '@/store/toast';
@@ -85,6 +85,7 @@ export default function Explore() {
         />
       )}
       <DisclaimerInfoSheet open={info} onClose={() => setInfo(false)} />
+      <DisclaimerSheet />
     </View>
   );
 }

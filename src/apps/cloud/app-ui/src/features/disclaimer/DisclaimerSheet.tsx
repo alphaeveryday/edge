@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Text, View } from 'react-native';
 import { api } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
@@ -7,10 +8,10 @@ import { useMe } from '@/features/community/queries';
 import { useSession } from '@/store/session';
 import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
-import { NOTICE_LINES } from './copy';
+import { NOTICE_LINES, NOTICE_SUB } from './copy';
 
-// AI 분석 첫 진입 시 한 번 받는 면책 동의
-// 회원의 서버 기록과 비회원의 기기 기록
+// AI 분석·오늘 움직임·탐색 첫 진입 시 한 번 받는 면책 동의
+// 회원의 서버 기록과 비회원의 기기 기록, 한 곳의 동의로 전부 해제
 // 동의 없이 닫으면 다음 진입에 다시 표시
 export function DisclaimerSheet() {
   const qc = useQueryClient();
@@ -18,27 +19,23 @@ export function DisclaimerSheet() {
   const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
   const { loggedIn, restored, guestDisclaimed, acceptGuestDisclaimer } = useSession();
   const [dismissed, setDismissed] = useState(false);
+  // 탭처럼 띄워 둔 화면의 재진입 시 다시 표시
+  useFocusEffect(useCallback(() => setDismissed(false), []));
   const open = !dismissed && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
   return (
-    <Notice
-      open={open}
-      onClose={() => setDismissed(true)}
-      sub="AI 분석을 보기 전에 한 번만 확인해 주세요."
-      label="확인했어요"
-      onConfirm={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())}
-    />
+    <Notice open={open} onClose={() => setDismissed(true)} onConfirm={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())} />
   );
 }
 
 // 다시 보기용, 동의 기록 없음
 export function DisclaimerInfoSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  return <Notice open={open} onClose={onClose} label="확인" onConfirm={onClose} />;
+  return <Notice open={open} onClose={onClose} onConfirm={onClose} />;
 }
 
-function Notice({ open, onClose, sub, label, onConfirm }: { open: boolean; onClose: () => void; sub?: string; label: string; onConfirm: () => void }) {
+function Notice({ open, onClose, onConfirm }: { open: boolean; onClose: () => void; onConfirm: () => void }) {
   const styles = useStyles();
   return (
-    <BottomSheet open={open} onClose={onClose} head={<SheetHead title="투자 유의 사항" sub={sub} />}>
+    <BottomSheet open={open} onClose={onClose} head={<SheetHead title="투자 유의 사항" sub={NOTICE_SUB} />}>
       <View style={styles.list}>
         {NOTICE_LINES.map((t) => (
           <View key={t} style={styles.row}>
@@ -48,7 +45,7 @@ function Notice({ open, onClose, sub, label, onConfirm }: { open: boolean; onClo
         ))}
       </View>
       <View style={{ marginTop: 20 }}>
-        <CtaButton label={label} tone="dark" onPress={onConfirm} />
+        <CtaButton label="확인했어요" tone="dark" onPress={onConfirm} />
       </View>
     </BottomSheet>
   );

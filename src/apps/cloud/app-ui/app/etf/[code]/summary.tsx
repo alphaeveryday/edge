@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { LinkRow, PageScroll } from '@/components/ui';
+import { DisclaimerSheet } from '@/features/disclaimer/DisclaimerSheet';
 import { LineChart } from '@/features/etf/LineChart';
 import { MoveSheet } from '@/features/etf/MoveSheet';
 import { useChart, useEtf, useMove } from '@/features/etf/queries';
@@ -45,6 +46,7 @@ export default function EtfSummary() {
         <LinkRow variant="accent" label="자세히 보기" onPress={() => setOpen(true)} />
       </View>
       <MoveSheet etf={etf} move={open && move ? move : null} onClose={() => setOpen(false)} />
+      <DisclaimerSheet />
     </PageScroll>
   );
 }
