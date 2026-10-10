@@ -12,11 +12,12 @@ export function sectorKind(theme: string): Kind {
   if (/은행|금융|증권|보험/.test(t)) return 'bank';
   if (/게임/.test(t)) return 'game';
   if (/엔터|미디어|콘텐츠|컨텐츠/.test(t)) return 'media';
+  // 전력·인프라 테마의 배당 아이콘 오인 방지
+  if (/전력|원자력/.test(t)) return 'power';
   if (/배당|인프라|리츠/.test(t)) return 'yield';
   if (/채권|금리/.test(t)) return 'bond';
   if (/방산|국방/.test(t)) return 'defense';
   if (/바이오|헬스|제약/.test(t)) return 'bio';
-  if (/전력|원자력/.test(t)) return 'power';
   if (/친환경|신재생|2차전지|에너지전환/.test(t)) return 'green';
   if (/원자재|금|에너지|원유|소재|철강|화학/.test(t)) return 'commodity';
   if (/자동차|모빌리티/.test(t)) return 'auto';
