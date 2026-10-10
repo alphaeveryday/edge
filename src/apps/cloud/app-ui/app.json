@@ -60,7 +60,13 @@
         {}
       ],
       "expo-apple-authentication",
-      "expo-notifications"
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#3D34E0"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
