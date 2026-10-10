@@ -47,8 +47,8 @@ app:
   social:
     apple-client-id: ${APP_APPLE_CLIENT_ID:}
     google-client-id: ${APP_GOOGLE_CLIENT_ID:}
-    # 카카오 네이티브 앱 키
-    kakao-client-id: ${APP_KAKAO_CLIENT_ID:}
+    # 카카오 네이티브 앱 키, 앱에도 들어가는 공개값이라 기본값으로 보관
+    kakao-client-id: ${APP_KAKAO_CLIENT_ID:80119a4be05f59e1d963f00b32e1f6d7}
 vote:
   redis:
     disconnected-behavior: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:REJECT_COMMANDS}
