@@ -926,6 +926,27 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /notifications/push-token:
+    put:
+      tags: [notification]
+      operationId: notificationPushToken
+      summary: 푸시 토큰 등록
+      description: 기기 단위 Expo 푸시 토큰 등록. 회원도 X-Device-Id 필수. 회원이면 이 기기를 회원 알림 대상으로, 게스트면 회원 연결을 해제한다(로그아웃 뒤 재등록). 같은 토큰을 가진 다른 기기에서는 떼어 낸다.
+      parameters:
+        - { name: X-Device-Id, in: header, required: true, schema: { type: string, maxLength: 64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, pattern: '^Expo(nent)?PushToken\[[^\]]{1,200}\]$' }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 토큰 형식·기기 헤더 누락
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
 
 components:
   securitySchemes:

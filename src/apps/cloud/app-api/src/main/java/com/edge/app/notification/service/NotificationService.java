@@ -9,22 +9,27 @@ import com.edge.app.notification.dto.UnreadCountResponse;
 import com.edge.app.notification.entity.NotiFilter;
 import com.edge.app.notification.entity.NotiKind;
 import com.edge.app.notification.entity.Notification;
+import com.edge.app.notification.event.PushRequested;
 import com.edge.app.notification.repository.NotificationRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
 public class NotificationService {
+    private static final int PUSH_BODY_MAX = 100;
     private static final Cursor START = new Cursor(Instant.parse("9999-12-31T00:00:00Z"), Long.MAX_VALUE);
 
     private final PrincipalRepository principalRepository;
     private final NotificationRepository repository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public PageResponse<NotificationResponse> list(AppPrincipal principal, NotiFilter filter, Cursor cursor, int size) {
@@ -61,11 +66,13 @@ public class NotificationService {
         repository.markAllRead(principalRepository.resolve(principal), Instant.now());
     }
 
-    /** 글쓴이 회원 principal 이 없으면 생성까지 하는 답글 알림 적재 */
+    /** 글쓴이 회원 principal 이 없으면 생성까지 하는 답글 알림 적재와 커밋 뒤 푸시 */
     @Transactional
     public void notifyReply(long postAuthorMemberId, long postId, long replyId, String replyBody) {
         long principalId = principalRepository.upsertMember(postAuthorMemberId);
         repository.save(Notification.comm(principalId, postId, replyId, "새 답글", replyBody, Instant.now()));
+        String preview = replyBody.length() > PUSH_BODY_MAX ? replyBody.substring(0, PUSH_BODY_MAX) + "…" : replyBody;
+        eventPublisher.publishEvent(new PushRequested(principalId, "새 답글", preview, Map.of("postId", Long.toString(postId))));
     }
 
     @Transactional

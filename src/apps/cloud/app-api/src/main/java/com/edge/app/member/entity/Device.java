@@ -22,4 +22,7 @@ public class Device {
 
     @Column(name = "member_id")
     private Long memberId;
+
+    @Column(name = "push_token")
+    private String pushToken;
 }
