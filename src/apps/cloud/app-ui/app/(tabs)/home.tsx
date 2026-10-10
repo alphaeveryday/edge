@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Animated, ScrollView, Text, View } from 'react-native';
@@ -12,8 +11,6 @@ import { useHomeBrief, usePrefetchBriefs } from '@/features/home/queries';
 import { analysisAsOf } from '@/lib/format';
 import { useScrollFocus } from '@/lib/useScrollFocus';
 import { useSwapFade } from '@/lib/useSwapFade';
-import { api, isApiError } from '@/api';
-import { useToast } from '@/store/toast';
 import { createStyles } from '@/theme/theme';
 import { PAGE_X } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -28,18 +25,8 @@ export default function Home() {
   const focus = useScrollFocus(showAll);
   const brief = useHomeBrief(group);
   const posts = useHotPosts();
-  const qc = useQueryClient();
-  const toast = useToast((s) => s.show);
-  // 발행본이 없으면 이동 대신 토스트
-  const open = async (code: string) => {
-    try {
-      await qc.fetchQuery({ queryKey: ['etf', 'move', code], queryFn: () => api.etf.move(code) });
-      router.push(`/etf/${code}/summary`);
-    } catch (e) {
-      if (isApiError(e, 'NOT_READY')) toast('아직 AI 분석이 준비되지 않았어요', 'error');
-      else toast('불러오지 못했어요', 'error');
-    }
-  };
+  // 오늘 움직임 유무와 무관한 상세 이동
+  const open = (code: string) => router.push(`/etf/${code}/summary`);
   const b = brief.data;
   usePrefetchBriefs(b?.groups.map((g) => g.key));
   const fade = useSwapFade(b?.group, brief.isPlaceholderData);
