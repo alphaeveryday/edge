@@ -6,7 +6,7 @@ import { request } from './fetch';
 import * as m from './map';
 import { tokens } from './storage';
 
-interface WireAuth { accessToken: string; refreshToken: string; me: m.WireMe; guestMapped?: boolean }
+interface WireAuth { accessToken: string; refreshToken: string; me: m.WireMe; guestMapped?: boolean; newMember?: boolean }
 const signIn = async (r: WireAuth) => { await tokens.save(r.accessToken, r.refreshToken); return m.me(r.me); };
 
 // 서버에 없는 최근 본 ETF의 메모리 보관
@@ -147,6 +147,10 @@ export const httpClient: ApiClient = {
     login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' })),
     sendSignupCode: (email) => request<void>('POST', '/auth/signup/code', { body: { email }, auth: false }),
     signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' })),
+    social: async (input) => {
+      const r = await request<WireAuth>('POST', '/auth/social', { body: input, auth: 'device' });
+      return { me: await signIn(r), newMember: !!r.newMember };
+    },
     requestPasswordReset: (email) => request<void>('POST', '/auth/password-reset', { body: { email }, auth: false }),
     confirmPasswordReset: (email, code, newPassword) => request<void>('POST', '/auth/password-reset/confirm', { body: { email, code, newPassword }, auth: false }),
     logout: async () => {

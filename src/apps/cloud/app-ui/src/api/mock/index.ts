@@ -166,6 +166,8 @@ export const mockClient: ApiClient = {
       Object.assign(ME, { email, nick, handle: '@' + email.split('@')[0] });
       return delay({ ...ME });
     },
+    // mock 소셜 가입은 항상 새 회원
+    social: () => delay({ me: { ...ME }, newMember: true }),
     requestPasswordReset: (email) => (ACCOUNTS[email] ? delay(undefined) : Promise.reject(new ApiError('NOT_FOUND', '가입되지 않은 이메일이에요'))),
     // mock 코드는 000000 고정
     confirmPasswordReset: (email, code, newPassword) => {

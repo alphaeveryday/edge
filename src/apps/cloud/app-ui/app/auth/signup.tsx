@@ -42,7 +42,7 @@ export default function Signup() {
   };
   const submit = useMutation({
     mutationFn: () => api.auth.signup({ email: email.trim(), password: pw, nick: nick.trim(), code }),
-    onSuccess: () => { track('signup_completed'); login(); leave(); toast('가입을 마쳤어요'); },
+    onSuccess: () => { track('signup_completed', { method: 'email' }); login(); leave(); toast('가입을 마쳤어요'); },
     onError: (e) => setErr(isApiError(e) ? e.message : '가입에 실패했어요'),
   });
   const sendCode = useMutation({

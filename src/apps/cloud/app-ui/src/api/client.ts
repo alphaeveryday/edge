@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, Me, Page, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, Me, Page, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, SocialProvider, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -73,6 +73,7 @@ export interface AuthApi {
   login(email: string, password: string): Promise<Me>;
   sendSignupCode(email: string): Promise<void>;
   signup(input: { email: string; password: string; nick: string; code: string }): Promise<Me>;
+  social(input: { provider: SocialProvider; idToken: string; nonce?: string }): Promise<{ me: Me; newMember: boolean }>;
   requestPasswordReset(email: string): Promise<void>;
   confirmPasswordReset(email: string, code: string, newPassword: string): Promise<void>;
   logout(): Promise<void>;

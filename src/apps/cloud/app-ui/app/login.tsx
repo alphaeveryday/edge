@@ -6,6 +6,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError } from '@/api';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
+import { KakaoButton } from '@/features/auth/KakaoButton';
+import { kakaoLogin } from '@/features/auth/kakao';
+import { openPrivacy, openTerms } from '@/lib/links';
 import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
@@ -23,8 +26,8 @@ const REASON: Record<string, string> = {
 };
 const REASON_KEY: Record<string, string> = { 투표: 'vote', 글쓰기: 'write', 답글: 'reply', 좋아요: 'like', 신고: 'report', 만료: 'expired', 온보딩: 'onboarding' };
 
-// 이메일 로그인
-// 성공 시 원래 화면 복귀
+// 이메일·카카오 로그인
+// 성공 시 원래 화면 복귀, 소셜 첫 가입은 닉네임 설정
 export default function Login() {
   const styles = useStyles();
   const router = useRouter();
@@ -54,10 +57,31 @@ export default function Login() {
   };
   const submit = useMutation({
     mutationFn: () => api.auth.login(email.trim(), pw),
-    onSuccess: () => { track('login_completed'); login(); done(); toast('로그인했어요'); },
+    onSuccess: () => { track('login_completed', { method: 'email' }); login(); done(); toast('로그인했어요'); },
     onError: (e) => setErr(isApiError(e) ? e.message : '로그인에 실패했어요'),
   });
   const send = () => ready && !submit.isPending && submit.mutate();
+  const [socialErr, setSocialErr] = useState('');
+  // 취소는 무응답
+  const kakao = useMutation({
+    mutationFn: async () => {
+      const t = await kakaoLogin();
+      return t && api.auth.social({ provider: 'kakao', ...t });
+    },
+    onSuccess: (r) => {
+      if (!r) return;
+      login();
+      if (r.newMember) {
+        track('signup_completed', { method: 'kakao' });
+        router.push('/auth/nick');
+        return;
+      }
+      track('login_completed', { method: 'kakao' });
+      done();
+      toast('로그인했어요');
+    },
+    onError: (e) => setSocialErr(isApiError(e) ? e.message : '카카오 로그인에 실패했어요'),
+  });
   const clear = (fn: (v: string) => void) => (v: string) => { fn(v); setErr(''); };
   return (
     <PageScroll style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
@@ -77,6 +101,16 @@ export default function Login() {
         <View style={styles.sep} />
         <Pressable onPress={() => router.push('/auth/reset')} hitSlop={8}><Text style={styles.link}>비밀번호 찾기</Text></Pressable>
       </View>
+      <View style={styles.or}>
+        <View style={styles.orLine} />
+        <Text style={styles.orText}>또는</Text>
+        <View style={styles.orLine} />
+      </View>
+      <View style={styles.social}>
+        <KakaoButton disabled={kakao.isPending} onPress={() => { setSocialErr(''); kakao.mutate(); }} />
+        {!!socialErr && <Text style={styles.err}>{socialErr}</Text>}
+        <Text style={styles.terms}>계속하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의하고 만 14세 이상임을 확인한 것으로 봐요.</Text>
+      </View>
     </PageScroll>
   );
 }
@@ -90,4 +124,10 @@ const useStyles = createStyles((colors) => ({
   links: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 20 },
   link: { fontFamily: fam.semibold, fontSize: 14, color: colors.textSub },
   sep: { width: 1, height: 12, backgroundColor: colors.lineStrong },
+  or: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 32, paddingHorizontal: 24 },
+  orLine: { flex: 1, height: 1, backgroundColor: colors.line },
+  orText: { fontFamily: fam.medium, fontSize: 13, color: colors.textMuted },
+  social: { gap: 12, marginTop: 20, paddingHorizontal: 24 },
+  terms: { textAlign: 'center', fontFamily: fam.regular, fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  termsLink: { fontFamily: fam.semibold, color: colors.textSub, textDecorationLine: 'underline' },
 }));

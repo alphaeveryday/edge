@@ -65,6 +65,7 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="auth/nick" options={{ presentation: 'fullScreenModal', gestureEnabled: false }} />
         </Stack>
         <Toast />
       </ThemeProvider>
