@@ -4,7 +4,6 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
-    "@react-native-google-signin/google-signin": "^16.1.5",
     "@react-native-seoul/kakao-login": "^6.0.4",
     "@tanstack/react-query": "^5.104.0",
     "expo": "~57.0.25",

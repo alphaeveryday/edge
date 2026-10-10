@@ -222,7 +222,7 @@ export interface Reply {
 export type NotiKind = 'watch' | 'comm';
 
 // 서버 /auth/social 의 provider
-export type SocialProvider = 'kakao' | 'apple' | 'google';
+export type SocialProvider = 'kakao' | 'apple';
 
 export interface Notification {
   id: string;
