@@ -5,6 +5,7 @@ export { Chevron } from './Chevron';
 export { Chip } from './Chip';
 export { CtaButton } from './CtaButton';
 export { Dialog } from './Dialog';
+export { Icon, type IconName } from './Icon';
 export { IconButton } from './IconButton';
 export { LinkRow } from './LinkRow';
 export { ListRow, type ListIcon } from './ListRow';
