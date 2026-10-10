@@ -36,6 +36,8 @@ export function usePullRefresh(more?: { onScroll: OnScroll }) {
     return () => loop.stop();
   }, [refreshing, spin]);
   const onRefresh = async () => {
+    // Android 는 당긴 거리를 못 받아 새로고침 판정 순간의 진동
+    if (Platform.OS === 'android') Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Gesture_End);
     setRefreshing(true);
     const at = Date.now();
     try {
