@@ -41,8 +41,9 @@ export function PickCircle({ size, label, on, hot, onPress, children }: Props) {
 
 const useStyles = createStyles((colors) => ({
   item: { alignItems: 'center', gap: 10 },
-  ring: { borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
-  ringOn: { shadowColor: colors.primary, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, borderWidth: 3, borderColor: colors.primary },
+  // 테두리 상시 유지와 색만 전환, Android 는 나중에 붙인 테두리에 반경 미적용
+  ring: { borderRadius: 999, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: 'transparent' },
+  ringOn: { shadowColor: colors.primary, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, borderColor: colors.primary },
   dim: { borderRadius: 999, backgroundColor: colors.bg, opacity: 0.35 },
   hot: { position: 'absolute', top: -10, alignSelf: 'center', backgroundColor: colors.up, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 8, shadowColor: colors.up, shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 4 } },
   hotText: { fontFamily: fam.extrabold, fontSize: 11, color: colors.onPrimary },
