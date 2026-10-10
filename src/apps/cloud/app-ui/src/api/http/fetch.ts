@@ -23,20 +23,23 @@ const qs = (q?: Query) => {
   return p.length ? '?' + p.join('&') : '';
 };
 
-let refreshing: Promise<boolean> | null = null;
+// 서버 거절만 토큰 폐기, 네트워크·서버 장애는 토큰 유지
+type Refresh = 'ok' | 'rejected' | 'offline';
+let refreshing: Promise<Refresh> | null = null;
 // 액세스 만료 시 동시 요청이 공유하는 리프레시 1회
 const tryRefresh = () => {
-  refreshing ??= (async () => {
+  refreshing ??= (async (): Promise<Refresh> => {
     const refresh = await tokens.refresh();
-    if (!refresh) return false;
+    if (!refresh) return 'rejected';
     try {
       const r = await fetch(`${BASE_URL}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: refresh }) });
+      if (r.status >= 500) return 'offline';
       const body = (await r.json()) as Envelope<{ accessToken: string; refreshToken: string }>;
-      if (!body.isSuccess || !body.result) return false;
+      if (!body.isSuccess || !body.result) return 'rejected';
       await tokens.save(body.result.accessToken, body.result.refreshToken);
-      return true;
+      return 'ok';
     } catch {
-      return false;
+      return 'offline';
     } finally {
       refreshing = null;
     }
@@ -67,8 +70,10 @@ export async function request<T>(method: string, path: string, opts: { query?: Q
     throw new ApiError('NETWORK', `bad response ${res.status}`);
   }
   if (body.isSuccess) return body.result as T;
-  if (body.code === 'COMMON401' && opts.retry !== false && (await tokens.refresh()) && (await tryRefresh())) {
-    return request<T>(method, path, { ...opts, retry: false });
+  if (body.code === 'COMMON401' && opts.retry !== false && (await tokens.refresh())) {
+    const r = await tryRefresh();
+    if (r === 'ok') return request<T>(method, path, { ...opts, retry: false });
+    if (r === 'offline') throw new ApiError('NETWORK', 'refresh failed');
   }
   if (body.code === 'COMMON401') await tokens.clear();
   throw new ApiError(toCode(body.code), body.message);

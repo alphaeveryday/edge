@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { create } from 'zustand';
-import { api } from '@/api';
+import { api, isApiError } from '@/api';
 import { guestDisclaimer, onboarding, tokens } from '@/api/http/storage';
 
 interface SessionState {
@@ -33,11 +33,12 @@ export const useSession = create<SessionState>((set) => ({
     const guestDisclaimed = await guestDisclaimer.done();
     let loggedIn = false;
     if (process.env.EXPO_PUBLIC_API_MODE === 'http' && (await tokens.access())) {
+      // 토큰 거부만 로그아웃, 오프라인 기동은 로그인 유지
       try {
         await api.member.me();
         loggedIn = true;
-      } catch {
-        await tokens.clear();
+      } catch (e) {
+        loggedIn = !isApiError(e, 'UNAUTHORIZED');
       }
     }
     set({ restored: true, onboarded, loggedIn, guestDisclaimed });
