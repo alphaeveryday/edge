@@ -8,6 +8,7 @@ import com.nimbusds.jose.proc.BadJOSEException;
 import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.proc.BadJWTException;
 import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
 import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import com.nimbusds.jwt.proc.JWTProcessor;
@@ -46,11 +47,12 @@ public class IdTokenVerifier {
     record Rule(JWTProcessor<SecurityContext> processor, EmailTrust emailTrust, NonceCheck nonceCheck) {
     }
 
-    private static final String APPLE_ISSUER = "https://appleid.apple.com";
+    private static final Set<String> APPLE_ISSUERS = Set.of("https://appleid.apple.com");
     private static final String APPLE_JWKS = "https://appleid.apple.com/auth/keys";
-    private static final String GOOGLE_ISSUER = "https://accounts.google.com";
+    /** 구글 문서상 두 표기 모두 유효 */
+    static final Set<String> GOOGLE_ISSUERS = Set.of("https://accounts.google.com", "accounts.google.com");
     private static final String GOOGLE_JWKS = "https://www.googleapis.com/oauth2/v3/certs";
-    private static final String KAKAO_ISSUER = "https://kauth.kakao.com";
+    private static final Set<String> KAKAO_ISSUERS = Set.of("https://kauth.kakao.com");
     private static final String KAKAO_JWKS = "https://kauth.kakao.com/.well-known/jwks.json";
 
     private final Map<Provider, Rule> rules;
@@ -58,11 +60,11 @@ public class IdTokenVerifier {
     @Autowired
     public IdTokenVerifier(SocialProperties properties) throws MalformedURLException {
         this(Map.of(
-                Provider.APPLE, new Rule(processor(remote(APPLE_JWKS), APPLE_ISSUER, properties.appleClientId()),
+                Provider.APPLE, new Rule(processor(remote(APPLE_JWKS), APPLE_ISSUERS, properties.appleClientId()),
                         EmailTrust.CLAIM, NonceCheck.SHA256),
-                Provider.GOOGLE, new Rule(processor(remote(GOOGLE_JWKS), GOOGLE_ISSUER, properties.googleClientId()),
+                Provider.GOOGLE, new Rule(processor(remote(GOOGLE_JWKS), GOOGLE_ISSUERS, properties.googleClientId()),
                         EmailTrust.CLAIM, NonceCheck.NONE),
-                Provider.KAKAO, new Rule(processor(remote(KAKAO_JWKS), KAKAO_ISSUER, properties.kakaoClientId()),
+                Provider.KAKAO, new Rule(processor(remote(KAKAO_JWKS), KAKAO_ISSUERS, properties.kakaoClientId()),
                         EmailTrust.PRESENT, NonceCheck.RAW)));
     }
 
@@ -107,13 +109,20 @@ public class IdTokenVerifier {
         return JWKSourceBuilder.create(URI.create(url).toURL()).build();
     }
 
-    static JWTProcessor<SecurityContext> processor(JWKSource<SecurityContext> keys, String issuer, String audience) {
+    static JWTProcessor<SecurityContext> processor(JWKSource<SecurityContext> keys, Set<String> issuers, String audience) {
         DefaultJWTProcessor<SecurityContext> processor = new DefaultJWTProcessor<>();
         processor.setJWSKeySelector(new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, keys));
         // audience 미설정 시 빈 문자열 요구로 전부 거절
         String required = audience == null || audience.isBlank() ? "" : audience;
-        processor.setJWTClaimsSetVerifier(new DefaultJWTClaimsVerifier<>(required,
-                new JWTClaimsSet.Builder().issuer(issuer).build(), Set.of("sub", "exp")));
+        processor.setJWTClaimsSetVerifier(new DefaultJWTClaimsVerifier<>(required, null, Set.of("sub", "exp", "iss")) {
+            @Override
+            public void verify(JWTClaimsSet claims, SecurityContext context) throws BadJWTException {
+                super.verify(claims, context);
+                if (!issuers.contains(claims.getIssuer())) {
+                    throw new BadJWTException("issuer 불일치");
+                }
+            }
+        });
         return processor;
     }
 }

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Date;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -94,10 +95,24 @@ class IdTokenVerifierTests {
         assertTrue(verifier.verify(Provider.APPLE, token, null).isEmpty());
     }
 
+    /** 구글 발급자는 https 유무 두 표기 모두 통과 */
+    @Test
+    void googleAcceptsBothIssuerForms() throws Exception {
+        RSAKey key = new RSAKeyGenerator(2048).keyID("k1").generate();
+        var verifier = new IdTokenVerifier(Map.of(Provider.GOOGLE, new IdTokenVerifier.Rule(
+                IdTokenVerifier.processor(new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())), IdTokenVerifier.GOOGLE_ISSUERS, "web"),
+                IdTokenVerifier.EmailTrust.CLAIM, IdTokenVerifier.NonceCheck.NONE)));
+        for (String issuer : new String[] {"https://accounts.google.com", "accounts.google.com"}) {
+            assertTrue(verifier.verify(Provider.GOOGLE, sign(key, claims("web").issuer(issuer).build()), null).isPresent());
+        }
+        assertTrue(verifier.verify(Provider.GOOGLE, sign(key, claims("web").issuer("https://appleid.apple.com").build()), null).isEmpty());
+        assertTrue(verifier.verify(Provider.GOOGLE, sign(key, claims("web").issuer(null).build()), null).isEmpty());
+    }
+
     private static IdTokenVerifier.Rule rule(RSAKey key, String audience, IdTokenVerifier.EmailTrust trust,
             IdTokenVerifier.NonceCheck nonce) {
         return new IdTokenVerifier.Rule(IdTokenVerifier.processor(new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())),
-                "https://appleid.apple.com", audience), trust, nonce);
+                Set.of("https://appleid.apple.com"), audience), trust, nonce);
     }
 
     private static JWTClaimsSet.Builder claims(String audience) {
