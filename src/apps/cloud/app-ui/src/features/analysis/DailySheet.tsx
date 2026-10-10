@@ -4,6 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 import type { DailyAnalysis } from '@/api';
 import { BottomSheet, Chevron, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker, type SheetStats } from '@/components/ui';
 import { VoteCard } from '@/features/community/VoteCard';
+import { DisclaimerNote } from '@/features/disclaimer/DisclaimerNote';
 import { useVoteStat } from '@/features/community/queries';
 import { useEtf } from '@/features/etf/queries';
 import { track } from '@/lib/analytics';
@@ -161,6 +162,7 @@ export function DailySheet({ code, daily: d, open, onClose, entry, withVote, lin
             <Text style={styles.sourceText}>분석 기준과 출처</Text>
             <Chevron size={14} color={colors.textDisabled} />
           </Pressable>
+          <DisclaimerNote style={styles.note} />
         </SheetScrollView>
       )}
       {next && onNext && (
@@ -210,6 +212,7 @@ const useStyles = createStyles((colors) => ({
   toggle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 34, paddingTop: 24, borderTopWidth: 1, borderTopColor: colors.surface },
   toggleText: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, letterSpacing: -0.28 },
   source: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 18, borderTopWidth: 1, borderTopColor: colors.surface },
+  note: { marginTop: 16 },
   sourceText: { fontFamily: fam.bold, fontSize: 14, color: colors.textSub },
   foot: { paddingTop: 8, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.bg },
 }));

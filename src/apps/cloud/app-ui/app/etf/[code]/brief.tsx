@@ -5,7 +5,8 @@ import type { Axis } from '@/api';
 import { IconButton, LinkRow, PageScroll, Sticker } from '@/components/ui';
 import { track } from '@/lib/analytics';
 import { DailySheet } from '@/features/analysis/DailySheet';
-import { DisclaimerSheet } from '@/features/auth/DisclaimerSheet';
+import { DisclaimerNote } from '@/features/disclaimer/DisclaimerNote';
+import { DisclaimerSheet } from '@/features/disclaimer/DisclaimerSheet';
 import { dirSignal } from '@/features/analysis/dir';
 import { axisHref } from '@/features/analysis/axisHref';
 import { useDaily } from '@/features/analysis/queries';
@@ -89,6 +90,7 @@ export default function EtfBrief() {
           </View>
         </Pressable>
       </View>
+      <DisclaimerNote style={styles.note} />
       <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} entry="etf_page" />
       <DisclaimerSheet />
     </PageScroll>
@@ -124,5 +126,6 @@ const useStyles = createStyles((colors) => ({
   axes: { flexDirection: 'row', gap: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.surface },
   axis: { flex: 1, alignItems: 'center', gap: 6 },
   axisLabel: { fontFamily: fam.bold, fontSize: 11, color: colors.textSub },
+  note: { marginTop: 24, marginHorizontal: 22 },
   cardFoot: { borderTopWidth: 1, borderTopColor: colors.surface, paddingHorizontal: 0 },
 }));

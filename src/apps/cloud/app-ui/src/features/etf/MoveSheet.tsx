@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import type { EtfSummary, MoveInfo } from '@/api';
 import { BottomSheet, CtaButton, SheetScrollView } from '@/components/ui';
+import { DisclaimerNote } from '@/features/disclaimer/DisclaimerNote';
 import { dirSignal } from '@/features/analysis/dir';
 import { track } from '@/lib/analytics';
 import { createStyles, useSignal } from '@/theme/theme';
@@ -47,15 +48,17 @@ export function MoveSheet({ etf, move, onClose }: Props) {
             </View>
           ))}
         </View>
-        <View style={{ marginTop: 24, marginBottom: 12 }}>
+        <View style={{ marginTop: 24 }}>
           <CtaButton label="데일리 분석 보기" tone="dark" onPress={() => { onClose(); router.replace(`/etf/${etf.code}/brief`); }} />
         </View>
+        <DisclaimerNote style={styles.note} />
       </SheetScrollView>
     </BottomSheet>
   );
 }
 
 const useStyles = createStyles((colors) => ({
+  note: { marginTop: 16, marginBottom: 12 },
   title: { fontFamily: fam.extrabold, fontSize: 20, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   groupHead: { fontFamily: fam.extrabold, fontSize: 13, color: colors.neutral },
   item: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },

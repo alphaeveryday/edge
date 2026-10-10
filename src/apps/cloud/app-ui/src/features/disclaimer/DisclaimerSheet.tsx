@@ -7,18 +7,12 @@ import { useMe } from '@/features/community/queries';
 import { useSession } from '@/store/session';
 import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
-
-const LINES = [
-  'ETF Orca의 분석은 공개된 뉴스·공시·리포트를 AI가 정리한 참고 자료예요.',
-  '매수·매도 권유가 아니며, 투자 판단과 책임은 이용자 본인에게 있어요.',
-  '전망은 매일 장 시작 전에, 가격 변동 설명은 가격이 움직일 때 갱신돼요.',
-];
+import { NOTICE_LINES } from './copy';
 
 // AI 분석 첫 진입 시 한 번 받는 면책 동의
 // 회원의 서버 기록과 비회원의 기기 기록
 // 동의 없이 닫으면 다음 진입에 다시 표시
 export function DisclaimerSheet() {
-  const styles = useStyles();
   const qc = useQueryClient();
   const { data: me } = useMe();
   const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
@@ -26,9 +20,27 @@ export function DisclaimerSheet() {
   const [dismissed, setDismissed] = useState(false);
   const open = !dismissed && (loggedIn ? !!me && !me.disclaimerAcceptedAt : restored && !guestDisclaimed);
   return (
-    <BottomSheet open={open} onClose={() => setDismissed(true)} head={<SheetHead title="투자 유의 사항" sub="AI 분석을 보기 전에 한 번만 확인해 주세요." />}>
+    <Notice
+      open={open}
+      onClose={() => setDismissed(true)}
+      sub="AI 분석을 보기 전에 한 번만 확인해 주세요."
+      label="확인했어요"
+      onConfirm={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())}
+    />
+  );
+}
+
+// 다시 보기용, 동의 기록 없음
+export function DisclaimerInfoSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return <Notice open={open} onClose={onClose} label="확인" onConfirm={onClose} />;
+}
+
+function Notice({ open, onClose, sub, label, onConfirm }: { open: boolean; onClose: () => void; sub?: string; label: string; onConfirm: () => void }) {
+  const styles = useStyles();
+  return (
+    <BottomSheet open={open} onClose={onClose} head={<SheetHead title="투자 유의 사항" sub={sub} />}>
       <View style={styles.list}>
-        {LINES.map((t) => (
+        {NOTICE_LINES.map((t) => (
           <View key={t} style={styles.row}>
             <View style={styles.dot} />
             <Text style={styles.text}>{t}</Text>
@@ -36,7 +48,7 @@ export function DisclaimerSheet() {
         ))}
       </View>
       <View style={{ marginTop: 20 }}>
-        <CtaButton label="확인했어요" tone="dark" onPress={() => (loggedIn ? accept.mutate() : acceptGuestDisclaimer())} />
+        <CtaButton label={label} tone="dark" onPress={onConfirm} />
       </View>
     </BottomSheet>
   );
