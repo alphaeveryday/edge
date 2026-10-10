@@ -332,16 +332,46 @@ class AuthFlowTests extends ContainerTests {
 
     @Test
     void socialCreatesMemberOnceBySubject() {
-        when(idTokenVerifier.verify(eq(Provider.APPLE), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("apple-sub-1", "s@example.com")));
-        when(idTokenVerifier.verify(eq(Provider.GOOGLE), any())).thenReturn(Optional.empty());
-        var first = result(call("POST", "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t")));
-        var second = result(call("POST", "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t")));
-        assertEquals(1, jdbc.queryForObject("select count(*) from member where provider_subject = 'apple-sub-1'", Integer.class));
+        when(idTokenVerifier.verify(eq(Provider.KAKAO), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("kakao-sub-1", "s@example.com")));
+        when(idTokenVerifier.verify(eq(Provider.GOOGLE), any(), any())).thenReturn(Optional.empty());
+        var first = result(call("POST", "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t", "nonce", "n")));
+        var second = result(call("POST", "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t", "nonce", "n")));
+        assertEquals(1, jdbc.queryForObject("select count(*) from member where provider = 'kakao' and provider_subject = 'kakao-sub-1'", Integer.class));
         assertEquals(((Map<?, ?>) first.get("me")).get("handle"), ((Map<?, ?>) second.get("me")).get("handle"));
+        assertEquals(true, first.get("newMember"));
+        assertEquals(false, second.get("newMember"));
         var bad = call("POST", "/api/v1/auth/social", Map.of("provider", "google", "idToken", "t"));
-        assertEquals(400, bad.getStatusCode().value());
+        assertEquals(401, bad.getStatusCode().value());
+        assertEquals("AUTH4004", bad.getBody().get("code"));
         assertEquals(400, call("POST", "/api/v1/auth/social", Map.of("provider", "email", "idToken", "t")).getStatusCode().value());
-        assertEquals(400, call("POST", "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t")).getStatusCode().value());
+        assertEquals(400, call("POST", "/api/v1/auth/social", Map.of("provider", "naver", "idToken", "t")).getStatusCode().value());
+    }
+
+    /** 같은 이메일의 다른 가입 방법은 가입·로그인·재설정 대신 그 방법 안내 */
+    @Test
+    void sameEmailAcrossJoinMethodsAnnouncesTheOriginalMethod() {
+        assertEquals(true, signup("mail@example.com").get("newMember"));
+        when(idTokenVerifier.verify(eq(Provider.KAKAO), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("k-mail", "mail@example.com")));
+        var kakao = call("POST", "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t", "nonce", "n"));
+        assertEquals(409, kakao.getStatusCode().value());
+        assertEquals("MEMBER4009", kakao.getBody().get("code"));
+        assertEquals(0, jdbc.queryForObject("select count(*) from member where provider = 'kakao'", Integer.class));
+
+        when(idTokenVerifier.verify(eq(Provider.GOOGLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("g-1", "g@example.com")));
+        assertEquals(200, call("POST", "/api/v1/auth/social", Map.of("provider", "google", "idToken", "t")).getStatusCode().value());
+        var login = call("POST", "/api/v1/auth/login", Map.of("email", "g@example.com", "password", "pw123456"));
+        assertEquals("MEMBER4007", login.getBody().get("code"));
+        assertEquals("MEMBER4007", call("POST", "/api/v1/auth/signup/code", Map.of("email", "g@example.com")).getBody().get("code"));
+        assertEquals("MEMBER4007", call("POST", "/api/v1/auth/password-reset", Map.of("email", "g@example.com")).getBody().get("code"));
+        assertEquals(false, result(call("POST", "/api/v1/auth/login", Map.of("email", "mail@example.com", "password", "pw123456"))).get("newMember"));
+    }
+
+    /** 검증된 이메일이 없는 소셜 가입은 이메일 없이 생성 */
+    @Test
+    void socialWithoutVerifiedEmailStoresNoEmail() {
+        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("a-1", null)));
+        assertEquals(200, call("POST", "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t")).getStatusCode().value());
+        assertEquals(null, jdbc.queryForObject("select email from member where provider_subject = 'a-1'", String.class));
     }
 
     /** 동시 가입 4건이 선검사를 모두 통과해 유니크 제약에서 500 이 나던 문제의 재발 방지 */

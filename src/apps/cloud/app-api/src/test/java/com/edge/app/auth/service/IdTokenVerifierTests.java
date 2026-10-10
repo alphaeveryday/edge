@@ -16,21 +16,22 @@ import java.util.Date;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 서명, 발급자, audience, 만료 중 하나라도 어긋난 토큰의 로그인 거부 */
+/** 서명, 발급자, audience, 만료, nonce 중 하나라도 어긋난 토큰의 로그인 거부 */
 class IdTokenVerifierTests {
     @Test
     void acceptsOnlyTokensSignedByIssuerForOurAudience() throws Exception {
         RSAKey key = new RSAKeyGenerator(2048).keyID("k1").generate();
         RSAKey other = new RSAKeyGenerator(2048).keyID("k2").generate();
-        var verifier = new IdTokenVerifier(Map.of(Provider.APPLE, IdTokenVerifier.processor(
-                new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())), "https://appleid.apple.com", "com.edge.orca")));
+        var verifier = new IdTokenVerifier(Map.of(Provider.APPLE, rule(key, "com.edge.orca",
+                IdTokenVerifier.EmailTrust.CLAIM, IdTokenVerifier.NonceCheck.NONE)));
         Date future = new Date(System.currentTimeMillis() + 60_000);
 
         String good = sign(key, new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com")
-                .audience("com.edge.orca").expirationTime(future).claim("email", "e@x.com").build());
-        assertEquals(new IdTokenVerifier.Identity("s1", "e@x.com"), verifier.verify(Provider.APPLE, good).orElseThrow());
+                .audience("com.edge.orca").expirationTime(future).claim("email", "e@x.com").claim("email_verified", "true").build());
+        assertEquals(new IdTokenVerifier.Identity("s1", "e@x.com"), verifier.verify(Provider.APPLE, good, null).orElseThrow());
 
         String wrongKey = sign(other, new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com")
                 .audience("com.edge.orca").expirationTime(future).build());
@@ -41,19 +42,55 @@ class IdTokenVerifierTests {
         String expired = sign(key, new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com")
                 .audience("com.edge.orca").expirationTime(new Date(0)).build());
         for (String bad : new String[] {wrongKey, wrongAud, wrongIss, expired, "garbage"}) {
-            assertTrue(verifier.verify(Provider.APPLE, bad).isEmpty());
+            assertTrue(verifier.verify(Provider.APPLE, bad, null).isEmpty());
         }
-        assertTrue(verifier.verify(Provider.GOOGLE, good).isEmpty(), "설정 없는 provider 는 거절");
+        assertTrue(verifier.verify(Provider.GOOGLE, good, null).isEmpty(), "설정 없는 provider 는 거절");
     }
 
     @Test
     void unconfiguredAudienceRejectsEverything() throws Exception {
         RSAKey key = new RSAKeyGenerator(2048).keyID("k1").generate();
-        var verifier = new IdTokenVerifier(Map.of(Provider.APPLE, IdTokenVerifier.processor(
-                new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())), "https://appleid.apple.com", "")));
+        var verifier = new IdTokenVerifier(Map.of(Provider.APPLE, rule(key, "",
+                IdTokenVerifier.EmailTrust.CLAIM, IdTokenVerifier.NonceCheck.NONE)));
         String token = sign(key, new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com")
                 .audience("com.edge.orca").expirationTime(new Date(System.currentTimeMillis() + 60_000)).build());
-        assertTrue(verifier.verify(Provider.APPLE, token).isEmpty());
+        assertTrue(verifier.verify(Provider.APPLE, token, null).isEmpty());
+    }
+
+    /** email_verified 가 참일 때만 이메일 보존 */
+    @Test
+    void keepsEmailOnlyWhenVerifiedClaimIsTrue() throws Exception {
+        RSAKey key = new RSAKeyGenerator(2048).keyID("k1").generate();
+        var verifier = new IdTokenVerifier(Map.of(Provider.GOOGLE, rule(key, "aud",
+                IdTokenVerifier.EmailTrust.CLAIM, IdTokenVerifier.NonceCheck.NONE)));
+        assertEquals("e@x.com", verifier.verify(Provider.GOOGLE, sign(key, claims("aud").claim("email_verified", true).build()), null).orElseThrow().email());
+        assertEquals("e@x.com", verifier.verify(Provider.GOOGLE, sign(key, claims("aud").claim("email_verified", "true").build()), null).orElseThrow().email());
+        assertNull(verifier.verify(Provider.GOOGLE, sign(key, claims("aud").claim("email_verified", false).build()), null).orElseThrow().email());
+        assertNull(verifier.verify(Provider.GOOGLE, sign(key, claims("aud").build()), null).orElseThrow().email());
+    }
+
+    /** 카카오는 email 존재가 곧 검증, nonce 는 앱 값과 같아야 통과 */
+    @Test
+    void kakaoTrustsPresentEmailAndRequiresMatchingNonce() throws Exception {
+        RSAKey key = new RSAKeyGenerator(2048).keyID("k1").generate();
+        var verifier = new IdTokenVerifier(Map.of(Provider.KAKAO, rule(key, "app-key",
+                IdTokenVerifier.EmailTrust.PRESENT, IdTokenVerifier.NonceCheck.RAW)));
+        String token = sign(key, claims("app-key").claim("nonce", "n-1").build());
+        assertEquals("e@x.com", verifier.verify(Provider.KAKAO, token, "n-1").orElseThrow().email());
+        assertTrue(verifier.verify(Provider.KAKAO, token, "n-2").isEmpty());
+        assertTrue(verifier.verify(Provider.KAKAO, token, null).isEmpty());
+        assertTrue(verifier.verify(Provider.KAKAO, sign(key, claims("app-key").build()), "n-1").isEmpty());
+    }
+
+    private static IdTokenVerifier.Rule rule(RSAKey key, String audience, IdTokenVerifier.EmailTrust trust,
+            IdTokenVerifier.NonceCheck nonce) {
+        return new IdTokenVerifier.Rule(IdTokenVerifier.processor(new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())),
+                "https://appleid.apple.com", audience), trust, nonce);
+    }
+
+    private static JWTClaimsSet.Builder claims(String audience) {
+        return new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com").audience(audience)
+                .expirationTime(new Date(System.currentTimeMillis() + 60_000)).claim("email", "e@x.com");
     }
 
     private static String sign(RSAKey key, JWTClaimsSet claims) throws Exception {

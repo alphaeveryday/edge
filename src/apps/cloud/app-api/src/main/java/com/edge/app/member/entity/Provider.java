@@ -7,7 +7,7 @@ import jakarta.persistence.Converter;
 
 // DB·와이어 값이 소문자인 가입 경로
 public enum Provider {
-    EMAIL, APPLE, GOOGLE;
+    EMAIL, APPLE, GOOGLE, KAKAO;
 
     @JsonValue
     public String value() {

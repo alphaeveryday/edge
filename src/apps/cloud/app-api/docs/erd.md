@@ -47,9 +47,9 @@
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
 | id | bigint PK | |
-| email | varchar(255) UNIQUE NULL | 소셜 가입은 없을 수 있음 |
+| email | varchar(255) UNIQUE NULL | 소셜 가입은 제공자가 검증한 이메일만, 없으면 NULL |
 | password_hash | varchar(100) NULL | 이메일 가입만. bcrypt |
-| provider | varchar(10) | `email` \| `apple` \| `google` |
+| provider | varchar(10) | `email` \| `apple` \| `google` \| `kakao`(V17) |
 | provider_subject | varchar(255) NULL | 소셜 sub. `UNIQUE(provider, provider_subject)` |
 | nick | varchar(30) | |
 | handle | varchar(30) UNIQUE | 아바타 색은 앱이 handle 로 매핑 |

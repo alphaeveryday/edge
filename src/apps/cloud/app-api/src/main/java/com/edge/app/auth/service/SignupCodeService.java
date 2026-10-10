@@ -3,6 +3,7 @@ package com.edge.app.auth.service;
 import com.edge.app.common.AppErrorStatus;
 import com.edge.app.common.mail.MailQuota;
 import com.edge.app.common.mail.Mailer;
+import com.edge.app.member.entity.Provider;
 import com.edge.app.member.entity.SignupCode;
 import com.edge.app.member.repository.MemberRepository;
 import com.edge.app.member.repository.SignupCodeRepository;
@@ -30,9 +31,7 @@ public class SignupCodeService {
     // 60초 내 재요청에 발송 없는 같은 응답
     @Transactional
     public void send(String email) {
-        if (memberRepository.findByEmailAndDeletedAtIsNull(email).isPresent()) {
-            throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
-        }
+        rejectJoined(email);
         Instant now = Instant.now();
         SignupCode current = codeRepository.findForUpdate(email).orElse(null);
         if (current != null && current.getCreatedAt().plus(RESEND_GAP).isAfter(now)) {
@@ -65,9 +64,7 @@ public class SignupCodeService {
         Instant now = Instant.now();
         SignupCode saved = codeRepository.findForUpdate(email).orElse(null);
         // 잠금 대기 중 먼저 가입한 요청이 코드를 지운 경우의 가입 경합 패자 응답
-        if (memberRepository.findByEmailAndDeletedAtIsNull(email).isPresent()) {
-            throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
-        }
+        rejectJoined(email);
         if (saved == null || !saved.usable(now)) {
             throw new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID);
         }
@@ -75,5 +72,13 @@ public class SignupCodeService {
             saved.fail();
             throw new GeneralException(AppErrorStatus.AUTH_RESET_CODE_INVALID);
         }
+    }
+
+    // 이메일 회원은 MEMBER4002, 소셜 회원은 가입 방법 안내
+    private void rejectJoined(String email) {
+        memberRepository.findByEmailAndDeletedAtIsNull(email).ifPresent(m -> {
+            throw new GeneralException(m.getProvider() == Provider.EMAIL
+                    ? AppErrorStatus.MEMBER_ALREADY_EXISTS : AuthService.joinedWith(m.getProvider()));
+        });
     }
 }

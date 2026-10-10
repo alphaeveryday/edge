@@ -26,9 +26,14 @@ public enum AppErrorStatus implements BaseErrorCode {
     MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER4003", "없는 회원입니다."),
     MEMBER_SELF_BLOCK(HttpStatus.BAD_REQUEST, "MEMBER4004", "자기 자신은 차단할 수 없습니다."),
     MEMBER_EMAIL_NOT_FOUND(HttpStatus.NOT_FOUND, "MEMBER4005", "가입되지 않은 이메일입니다."),
+    MEMBER_JOINED_WITH_APPLE(HttpStatus.CONFLICT, "MEMBER4006", "애플로 가입한 계정입니다. 애플로 로그인해 주세요."),
+    MEMBER_JOINED_WITH_GOOGLE(HttpStatus.CONFLICT, "MEMBER4007", "구글로 가입한 계정입니다. 구글로 로그인해 주세요."),
+    MEMBER_JOINED_WITH_KAKAO(HttpStatus.CONFLICT, "MEMBER4008", "카카오로 가입한 계정입니다. 카카오로 로그인해 주세요."),
+    MEMBER_JOINED_WITH_EMAIL(HttpStatus.CONFLICT, "MEMBER4009", "이메일로 가입한 계정입니다. 이메일로 로그인해 주세요."),
     AUTH_BAD_CREDENTIALS(HttpStatus.UNAUTHORIZED, "AUTH4001", "이메일 또는 비밀번호가 맞지 않습니다."),
     AUTH_RESET_CODE_INVALID(HttpStatus.BAD_REQUEST, "AUTH4002", "코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요."),
-    AUTH_MAIL_LIMIT(HttpStatus.TOO_MANY_REQUESTS, "AUTH4003", "오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요.");
+    AUTH_MAIL_LIMIT(HttpStatus.TOO_MANY_REQUESTS, "AUTH4003", "오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요."),
+    AUTH_SOCIAL_INVALID(HttpStatus.UNAUTHORIZED, "AUTH4004", "소셜 로그인을 확인하지 못했습니다. 다시 시도해 주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

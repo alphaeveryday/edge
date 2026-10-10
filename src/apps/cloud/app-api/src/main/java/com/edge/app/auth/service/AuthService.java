@@ -30,6 +30,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -64,31 +65,53 @@ public class AuthService {
     private final Mailer mailer;
     private final MailQuota mailQuota;
     private final ReviewAccount reviewAccount;
+    private final TransactionTemplate tx;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
+    // 소셜 가입 이메일의 가입 방법 안내
     @Transactional
     public AuthResponse login(LoginRequest request, String deviceKey) {
-        Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
-                .filter(m -> passwordEncoder.matches(request.password(), m.getPasswordHash()))
-                .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_BAD_CREDENTIALS));
-        return signIn(member, deviceKey);
+        Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email()).orElse(null);
+        if (member != null && member.getProvider() != Provider.EMAIL) {
+            throw new GeneralException(joinedWith(member.getProvider()));
+        }
+        if (member == null || !passwordEncoder.matches(request.password(), member.getPasswordHash())) {
+            throw new GeneralException(AppErrorStatus.AUTH_BAD_CREDENTIALS);
+        }
+        return signIn(member, deviceKey, false);
     }
 
-    @Transactional
+    // 트랜잭션 밖의 토큰 검증
+    // 동시 첫 로그인의 유니크 위반은 먼저 생긴 회원으로 재시도
     public AuthResponse social(SocialLoginRequest request, String deviceKey) {
         if (request.provider() == Provider.EMAIL) {
             throw new GeneralException(ErrorStatus._BAD_REQUEST);
         }
-        IdTokenVerifier.Identity identity = idTokenVerifier.verify(request.provider(), request.idToken())
-                .orElseThrow(() -> new GeneralException(ErrorStatus._BAD_REQUEST));
-        Member member = memberRepository
-                .findByProviderAndProviderSubjectAndDeletedAtIsNull(request.provider(), identity.subject())
-                .orElseGet(() -> {
-                    String handle = newHandle();
-                    return memberRepository.save(Member.social(request.provider(), identity.subject(),
-                            identity.email(), handle.substring(1), handle));
-                });
-        return signIn(member, deviceKey);
+        IdTokenVerifier.Identity identity = idTokenVerifier.verify(request.provider(), request.idToken(), request.nonce())
+                .orElseThrow(() -> new GeneralException(AppErrorStatus.AUTH_SOCIAL_INVALID));
+        try {
+            return tx.execute(s -> socialSignIn(request.provider(), identity, deviceKey));
+        } catch (DataIntegrityViolationException e) {
+            return tx.execute(s -> socialSignIn(request.provider(), identity, deviceKey));
+        }
+    }
+
+    // 다른 가입 방법의 같은 이메일은 가입 대신 안내
+    private AuthResponse socialSignIn(Provider provider, IdTokenVerifier.Identity identity, String deviceKey) {
+        Member existing = memberRepository.findByProviderAndProviderSubjectAndDeletedAtIsNull(provider, identity.subject())
+                .orElse(null);
+        if (existing != null) {
+            return signIn(existing, deviceKey, false);
+        }
+        if (identity.email() != null) {
+            memberRepository.findByEmailAndDeletedAtIsNull(identity.email()).ifPresent(m -> {
+                throw new GeneralException(joinedWith(m.getProvider()));
+            });
+        }
+        String handle = newHandle();
+        Member member = memberRepository.saveAndFlush(Member.social(provider, identity.subject(), identity.email(),
+                handle.substring(1), handle));
+        return signIn(member, deviceKey, true);
     }
 
     // SignupCodeService.verify 의 인증 코드 확인 뒤 호출
@@ -103,7 +126,7 @@ public class AuthService {
             throw new GeneralException(AppErrorStatus.MEMBER_ALREADY_EXISTS);
         }
         signupCodeRepository.deleteByEmail(request.email());
-        return signIn(member, deviceKey);
+        return signIn(member, deviceKey, true);
     }
 
     // 60초 내 재요청에 발송 없는 같은 응답
@@ -112,6 +135,9 @@ public class AuthService {
     public void requestPasswordReset(PasswordResetRequest request) {
         Member member = memberRepository.findByEmailAndDeletedAtIsNull(request.email())
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.MEMBER_EMAIL_NOT_FOUND));
+        if (member.getProvider() != Provider.EMAIL) {
+            throw new GeneralException(joinedWith(member.getProvider()));
+        }
         Instant now = Instant.now();
         PasswordResetCode current = resetCodeRepository.findForUpdate(member.getId()).orElse(null);
         if (current != null && current.getCreatedAt().plus(RESET_RESEND_GAP).isAfter(now)) {
@@ -173,12 +199,12 @@ public class AuthService {
                 .orElseThrow(() -> new GeneralException(ErrorStatus._BAD_REQUEST));
         current.revoke(now);
         return new AuthResponse(tokens.issue(member.getId()), issueRefresh(member.getId(), current.getDeviceId(), now),
-                MeResponse.from(member), false);
+                MeResponse.from(member), false, false);
     }
 
     // 디바이스의 회원 연결
     // 계정에 관심 데이터가 없을 때의 디바이스 소유 행 이전
-    private AuthResponse signIn(Member member, String deviceKey) {
+    private AuthResponse signIn(Member member, String deviceKey, boolean newMember) {
         long memberPrincipal = principalRepository.upsertMember(member.getId());
         Long deviceId = null;
         boolean mapped = false;
@@ -194,7 +220,7 @@ public class AuthService {
             }
         }
         return new AuthResponse(tokens.issue(member.getId()), issueRefresh(member.getId(), deviceId, Instant.now()),
-                MeResponse.from(member), mapped);
+                MeResponse.from(member), mapped, newMember);
     }
 
     private String issueRefresh(long memberId, Long deviceId, Instant now) {
@@ -203,6 +229,16 @@ public class AuthService {
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
         refreshTokenRepository.save(RefreshToken.issue(memberId, hash(token), deviceId, now.plus(REFRESH_TTL)));
         return token;
+    }
+
+    // 같은 이메일의 다른 가입 방법 안내 코드
+    static AppErrorStatus joinedWith(Provider provider) {
+        return switch (provider) {
+            case EMAIL -> AppErrorStatus.MEMBER_JOINED_WITH_EMAIL;
+            case APPLE -> AppErrorStatus.MEMBER_JOINED_WITH_APPLE;
+            case GOOGLE -> AppErrorStatus.MEMBER_JOINED_WITH_GOOGLE;
+            case KAKAO -> AppErrorStatus.MEMBER_JOINED_WITH_KAKAO;
+        };
     }
 
     private String newHandle() {
