@@ -18,10 +18,11 @@ export interface IntroPage {
 interface Props {
   pages: IntroPage[];
   onDone: () => void;
+  footer?: ReactNode;
 }
 
 // 점 표시와 버튼이 고정된 온보딩 소개 가로 페이저
-export function IntroPager({ pages, onDone }: Props) {
+export function IntroPager({ pages, onDone, footer }: Props) {
   const styles = useStyles();
   const { top } = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -75,6 +76,7 @@ export function IntroPager({ pages, onDone }: Props) {
       </View>
       <BottomBar style={styles.cta}>
         <CtaButton label={page.cta} onPress={() => (index < pages.length - 1 ? go(index + 1) : onDone())} />
+        {footer}
       </BottomBar>
     </View>
   );
@@ -91,5 +93,5 @@ const useStyles = createStyles((colors) => ({
   dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingBottom: 18 },
   dot: { width: 6, height: 6, borderRadius: 999, backgroundColor: colors.line },
   dotOn: { width: 18, backgroundColor: colors.primary },
-  cta: { paddingHorizontal: 16 },
+  cta: { gap: 14, paddingHorizontal: 16 },
 }));
