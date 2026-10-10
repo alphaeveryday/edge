@@ -130,6 +130,6 @@ const useStyles = createStyles((colors) => ({
   coverLink: { fontFamily: fam.bold, fontSize: 15, color: colors.primary },
   replyBody: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
   composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.bg },
-  input: { flex: 1, backgroundColor: colors.surface, borderRadius: 999, paddingVertical: 12, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },
+  input: { flex: 1, height: 44, backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   send: { fontFamily: fam.extrabold, fontSize: 15 },
 }));
