@@ -63,8 +63,8 @@ export const httpClient: ApiClient = {
     complete: (input) => request<void>('POST', '/onboarding/complete', { body: input }),
   },
   analysis: {
-    daily: async (code, date) => {
-      const d = await request<Omit<DailyAnalysis, 'axes'> & { axes: { axis: string; dir: DailyAnalysis['axes'][number]['dir']; summary: string; hasPage: boolean }[] }>('GET', `/etfs/${code}/analysis`, { query: { date }, auth: false });
+    daily: async (code, date, week) => {
+      const d = await request<Omit<DailyAnalysis, 'axes'> & { axes: { axis: string; dir: DailyAnalysis['axes'][number]['dir']; summary: string; hasPage: boolean }[] }>('GET', `/etfs/${code}/analysis`, { query: { date, week }, auth: false });
       return { ...d, axes: d.axes.map((a) => ({ ...a, axis: m.axisLabel(a.axis) })) };
     },
     factor: async (code, axis) => {

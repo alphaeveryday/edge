@@ -157,6 +157,8 @@ export interface DailyAnalysis {
   neg: string[];
   pos: string[];
   close: string;
+  prevWeek?: string | null;
+  nextWeek?: string | null;
 }
 
 export interface FactorPage {

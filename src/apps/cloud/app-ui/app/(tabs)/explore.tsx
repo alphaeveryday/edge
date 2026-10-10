@@ -29,7 +29,7 @@ export default function Explore() {
   const last = useRef(cur);
   if (cur) last.current = cur;
   const view = cur ?? last.current;
-  const daily = useDaily(cur?.etf.code ?? '', undefined, !!cur);
+  const daily = useDaily(cur?.etf.code ?? '', {}, !!cur);
   useEffect(() => {
     if (!daily.error) return;
     toast(isApiError(daily.error, 'NOT_READY') ? '아직 AI 분석이 준비되지 않았어요' : '불러오지 못했어요', 'error');

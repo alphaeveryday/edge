@@ -41,9 +41,10 @@ interface Props {
   color?: string;
   badge?: string | number;
   onPress?: () => void;
+  disabled?: boolean;
 }
 
-export function IconButton({ icon, size = 38, circled, fab, soft, color, badge, onPress }: Props) {
+export function IconButton({ icon, size = 38, circled, fab, soft, color, badge, onPress, disabled }: Props) {
   const styles = useStyles();
   const colors = useColors();
   const c = fab ? colors.bg : color ?? colors.text;
@@ -51,6 +52,7 @@ export function IconButton({ icon, size = 38, circled, fab, soft, color, badge, 
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={icon}
       hitSlop={6}

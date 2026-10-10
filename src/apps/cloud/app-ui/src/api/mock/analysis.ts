@@ -1,13 +1,13 @@
 import type { Axis, DailyAnalysis, FactorPage, Hint, MetricPage } from '../types';
 
 const DATES = [
-  { key: '2026-08-30', w: '토', d: '30', hasDaily: false },
-  { key: '2026-08-31', w: '일', d: '31', hasDaily: false },
   { key: '2026-09-01', w: '월', d: '1', hasDaily: true },
   { key: '2026-09-02', w: '화', d: '2', hasDaily: true },
   { key: '2026-09-03', w: '수', d: '3', hasDaily: true },
   { key: '2026-09-04', w: '목', d: '4', hasDaily: true },
   { key: '2026-09-05', w: '금', d: '5', hasDaily: true },
+  { key: '2026-09-06', w: '토', d: '6', hasDaily: false },
+  { key: '2026-09-07', w: '일', d: '7', hasDaily: false },
 ];
 const DATELINE = 'ETF Orca AI · 9월 5일 금요일 08:30';
 

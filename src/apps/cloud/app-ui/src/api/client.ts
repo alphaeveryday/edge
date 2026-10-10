@@ -33,7 +33,7 @@ export interface OnboardingApi {
 }
 
 export interface AnalysisApi {
-  daily(code: EtfCode, date?: string): Promise<DailyAnalysis>;
+  daily(code: EtfCode, date?: string, week?: string): Promise<DailyAnalysis>;
   factor(code: EtfCode, axis: Axis): Promise<FactorPage>;
   metric(code: EtfCode, axis: Axis): Promise<MetricPage>;
   hint(key: string): Promise<Hint>;

@@ -10,6 +10,7 @@ import { dirSignal } from '@/features/analysis/dir';
 import { axisHref } from '@/features/analysis/axisHref';
 import { useDaily } from '@/features/analysis/queries';
 import { QueryState } from '@/components/state';
+import { kstToday } from '@/lib/format';
 import { createStyles, useColors, useSignal } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -21,9 +22,10 @@ export default function EtfBrief() {
   const SIG = useSignal();
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
-  const [date, setDate] = useState<string>();
+  const [pick, setPick] = useState<{ date?: string; week?: string }>({});
   const [open, setOpen] = useState(false);
-  const q = useDaily(code, date);
+  const q = useDaily(code, pick);
+  const today = kstToday();
   const openMetric = (axis: Axis) => router.push(axisHref(code, axis));
   const pull = usePullRefresh();
   return (
@@ -32,17 +34,18 @@ export default function EtfBrief() {
     <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       {pull.indicator}
       <View style={styles.strip}>
-        <IconButton icon="prev" size={28} soft color={colors.textSub} />
+        <IconButton icon="prev" size={28} soft={!!d.prevWeek} disabled={!d.prevWeek} color={d.prevWeek ? colors.textSub : colors.textDisabled} onPress={() => d.prevWeek && setPick({ week: d.prevWeek })} />
         <View style={styles.days}>
           {d.dates.map((x, _, all) => {
             const on = x.key === d.date;
+            const soon = !x.hasDaily && x.key > today;
             return (
               <Pressable key={x.key} onPress={() => {
                 if (!x.hasDaily) return;
                 // 가장 최근 분석 외 날짜만 기록
-                if (x.key !== d.date && all.some((y) => y.hasDaily && y.key > x.key)) track('analysis_past_viewed', { etf: code, date: x.key });
-                setDate(x.key);
-              }} style={[styles.day, on && styles.dayOn]}>
+                if (x.key !== d.date && (d.nextWeek || all.some((y) => y.hasDaily && y.key > x.key))) track('analysis_past_viewed', { etf: code, date: x.key });
+                setPick({ date: x.key });
+              }} style={[styles.day, soon && styles.daySoon, on && styles.dayOn]}>
                 <Text style={[styles.dayW, { color: on ? colors.bg : colors.textFaint }]}>{x.w}</Text>
                 <Text style={[styles.dayD, { color: on ? colors.bg : x.hasDaily ? colors.text : colors.textDisabled }]}>{x.d}</Text>
                 <View style={[styles.dayLine, { backgroundColor: on ? colors.bg : x.hasDaily ? colors.up : 'transparent', opacity: on ? 0.6 : 1 }]} />
@@ -50,7 +53,7 @@ export default function EtfBrief() {
             );
           })}
         </View>
-        <IconButton icon="next" size={28} soft color={colors.textSub} />
+        <IconButton icon="next" size={28} soft={!!d.nextWeek} disabled={!d.nextWeek} color={d.nextWeek ? colors.textSub : colors.textDisabled} onPress={() => d.nextWeek && setPick({ week: d.nextWeek })} />
       </View>
       <Text style={styles.headTitle}>{d.headTitle}</Text>
       <View style={styles.article}>
@@ -98,6 +101,7 @@ const useStyles = createStyles((colors) => ({
   strip: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, marginHorizontal: 20 },
   days: { flex: 1, flexDirection: 'row', gap: 4 },
   day: { flex: 1, height: 42, borderRadius: radius.control, alignItems: 'center', justifyContent: 'center', gap: 1, backgroundColor: colors.card },
+  daySoon: { backgroundColor: 'transparent', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.lineStrong },
   dayOn: { backgroundColor: colors.text },
   dayW: { fontFamily: fam.regular, fontSize: 10 },
   dayD: { fontFamily: fam.monoExtraBold, fontSize: 13 },
