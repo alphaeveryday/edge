@@ -17,9 +17,22 @@ const myVote = async (code: string) =>
   (await tokens.access()) ? (await request<{ choice: VoteChoice | null }>('GET', `/etfs/${code}/vote`)).choice : null;
 
 // 와이어 테마 key 의 화면용 라벨 변환
-let themeLabels: Promise<Record<string, string>> | null = null;
-const labels = () => (themeLabels ??= request<m.WireTheme[]>('GET', '/themes', { auth: false }).then((l) => Object.fromEntries(l.map((t) => [t.key, t.label]))));
-const labelOf = async (key: string) => (await labels())[key] ?? key;
+// 실패 시 다음 호출의 재조회, 모르는 key 는 1분 간격의 재조회
+let themeLabels: { at: number; map: Promise<Record<string, string>> } | null = null;
+const labels = () => {
+  if (!themeLabels) {
+    const map = request<m.WireTheme[]>('GET', '/themes', { auth: false }).then((l) => Object.fromEntries(l.map((t) => [t.key, t.label])));
+    map.catch(() => { if (themeLabels?.map === map) themeLabels = null; });
+    themeLabels = { at: Date.now(), map };
+  }
+  return themeLabels.map;
+};
+const labelOf = async (key: string) => {
+  const l = await labels();
+  if (key in l || !themeLabels || Date.now() - themeLabels.at < 60_000) return l[key] ?? key;
+  themeLabels = null;
+  return (await labels())[key] ?? key;
+};
 const relabel = async <T extends { theme: string }>(x: T): Promise<T> => ({ ...x, theme: await labelOf(x.theme) });
 const summary = async (e: m.WireEtfSummary) => relabel(m.etf(e));
 const summaries = (list: m.WireEtfSummary[]) => Promise.all(list.map(summary));
