@@ -7,9 +7,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError, type SocialProvider } from '@/api';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
+import { GoogleButton } from '@/features/auth/GoogleButton';
 import { KakaoButton } from '@/features/auth/KakaoButton';
 import { kakaoLogin } from '@/features/auth/kakao';
 import { appleLogin, useAppleAvailable } from '@/features/auth/apple';
+import { googleAvailable, googleLogin } from '@/features/auth/google';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
@@ -27,9 +29,10 @@ const REASON: Record<string, string> = {
   신고: '신고하려면 로그인이 필요해요',
   만료: '로그인이 풀렸어요. 다시 로그인해 주세요',
 };
+const LABEL: Record<SocialProvider, string> = { apple: '애플', google: '구글', kakao: '카카오' };
 const REASON_KEY: Record<string, string> = { 투표: 'vote', 글쓰기: 'write', 답글: 'reply', 좋아요: 'like', 신고: 'report', 만료: 'expired', 온보딩: 'onboarding' };
 
-// 이메일·카카오 로그인
+// 이메일·소셜 로그인
 // 성공 시 원래 화면 복귀, 소셜 첫 가입은 닉네임 설정
 export default function Login() {
   const styles = useStyles();
@@ -70,7 +73,7 @@ export default function Login() {
   // 취소는 무응답
   const social = useMutation({
     mutationFn: async (provider: SocialProvider) => {
-      const t = provider === 'apple' ? await appleLogin() : await kakaoLogin();
+      const t = provider === 'apple' ? await appleLogin() : provider === 'google' ? await googleLogin() : await kakaoLogin();
       return t && api.auth.social({ provider, ...t });
     },
     onSuccess: (r, provider) => {
@@ -85,7 +88,7 @@ export default function Login() {
       done();
       toast('로그인했어요');
     },
-    onError: (e, provider) => setSocialErr(isApiError(e) ? e.message : `${provider === 'apple' ? '애플' : '카카오'} 로그인에 실패했어요`),
+    onError: (e, provider) => setSocialErr(isApiError(e) ? e.message : `${LABEL[provider]} 로그인에 실패했어요`),
   });
   const start = (provider: SocialProvider) => { if (social.isPending) return; setSocialErr(''); social.mutate(provider); };
   const clear = (fn: (v: string) => void) => (v: string) => { fn(v); setErr(''); };
@@ -122,6 +125,7 @@ export default function Login() {
             onPress={() => start('apple')}
           />
         )}
+        {googleAvailable && <GoogleButton disabled={social.isPending} onPress={() => start('google')} />}
         <KakaoButton disabled={social.isPending} onPress={() => start('kakao')} />
         {!!socialErr && <Text style={styles.err}>{socialErr}</Text>}
         <Text style={styles.terms}>계속하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의하고 만 14세 이상임을 확인한 것으로 봐요.</Text>
