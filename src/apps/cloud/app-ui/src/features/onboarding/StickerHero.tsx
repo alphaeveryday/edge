@@ -13,7 +13,7 @@ export function StickerHero() {
   const styles = useStyles();
   const colors = useColors();
   const AXES = [
-    { name: '호재', q: '사건이 진짜인가', c: colors.up },
+    { name: '이슈', q: '사건이 진짜인가', c: colors.up },
     { name: '차트', q: '주가가 따라왔나', c: colors.down },
     { name: '매크로', q: '밖에서 방해하나', c: colors.warn },
     { name: '밸류', q: '이익 대비 싼가', c: '#8B34E0' },
