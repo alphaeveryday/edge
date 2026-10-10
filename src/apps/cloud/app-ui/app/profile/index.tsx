@@ -11,6 +11,7 @@ import { useMe } from '@/features/community/queries';
 import { useOnboarding } from '@/store/onboarding';
 import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
+import { useWatchGroup } from '@/store/watch';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { useToast } from '@/store/toast';
 import { createStyles, useColors } from '@/theme/theme';
@@ -28,14 +29,17 @@ export default function Profile() {
   const logout = useSession((s) => s.logout);
   const resetOnboarding = useOnboarding((s) => s.reset);
   const toast = useToast((s) => s.show);
-  // 로그아웃과 탈퇴 공통의 온보딩 복귀
-  const leave = (msg: string) => { qc.clear(); logout(); resetOnboarding(); if (router.canDismiss()) router.dismissAll();
-    router.replace('/onboarding/intro'); toast(msg); };
+  // 로그아웃은 비회원 홈, 탈퇴는 온보딩 복귀
+  const leave = (msg: string, restart: boolean) => { qc.clear(); logout(restart); resetOnboarding(); useWatchGroup.getState().setGroup('base');
+    if (router.canDismiss()) router.dismissAll();
+    router.replace(restart ? '/onboarding/intro' : '/(tabs)/home'); toast(msg); };
+  // 회원 토큰의 홈 재조회를 막는 토큰 폐기 뒤 이동
+  const signOut = async () => { await api.auth.logout().catch(() => undefined); leave('로그아웃했어요', false); };
   const [notif, setNotif] = useState(true);
   const [delOpen, setDelOpen] = useState(false);
   const del = useMutation({
     mutationFn: () => api.member.deleteAccount(),
-    onSuccess: () => { track('account_deleted'); setDelOpen(false); leave('계정을 지웠어요'); },
+    onSuccess: () => { track('account_deleted'); setDelOpen(false); leave('계정을 지웠어요', true); },
   });
   const pull = usePullRefresh();
   return (
@@ -61,7 +65,7 @@ export default function Profile() {
           <ListRow label="개인정보 처리방침" divider onPress={openPrivacy} />
           <ListRow label="회원 탈퇴" labelColor={colors.textMuted} onPress={() => setDelOpen(true)} />
         </View>
-        <Pressable onPress={() => { api.auth.logout(); leave('로그아웃했어요'); }} style={styles.logout}>
+        <Pressable onPress={signOut} style={styles.logout}>
           <Text style={styles.logoutText}>로그아웃</Text>
         </Pressable>
         <Text style={styles.version}>ETF Orca v{nativeApplicationVersion ?? Constants.expoConfig?.version}</Text>

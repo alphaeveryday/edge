@@ -11,7 +11,7 @@ interface SessionState {
   acceptGuestDisclaimer: () => void;
   finishOnboarding: () => void;
   login: () => void;
-  logout: () => void;
+  logout: (restart: boolean) => void;
   expire: () => void;
   restore: () => Promise<void>;
 }
@@ -24,7 +24,12 @@ export const useSession = create<SessionState>((set) => ({
   acceptGuestDisclaimer: () => { guestDisclaimer.save(); set({ guestDisclaimed: true }); },
   finishOnboarding: () => { onboarding.save(true); set({ onboarded: true }); },
   login: () => set({ loggedIn: true }),
-  logout: () => { onboarding.save(false); set({ loggedIn: false, onboarded: false }); },
+  // 탈퇴만 온보딩 재시작
+  logout: (restart) => {
+    if (!restart) return set({ loggedIn: false });
+    onboarding.save(false);
+    set({ loggedIn: false, onboarded: false });
+  },
   // 서버의 토큰 거부 시 온보딩 상태를 둔 로그아웃
   expire: () => set({ loggedIn: false }),
   // 기동 시 기기 상태와 회원 확인 기반의 로그인 상태 복원
