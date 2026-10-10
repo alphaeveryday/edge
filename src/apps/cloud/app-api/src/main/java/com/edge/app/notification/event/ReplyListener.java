@@ -2,6 +2,7 @@ package com.edge.app.notification.event;
 
 import com.edge.app.community.block.repository.MemberBlockRepository;
 import com.edge.app.community.post.event.ReplyCreated;
+import com.edge.app.community.post.event.ReplyDeleted;
 import com.edge.app.notification.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component;
 /**
  * 답글 발생 시 글쓴이 comm 알림
  * 자기 글 답글과 글쓴이가 차단한 답글 작성자 제외
+ * 답글 삭제 시 그 답글 알림의 삭제
  * 같은 트랜잭션 처리
  */
 @Component
@@ -24,6 +26,11 @@ public class ReplyListener {
                 || blockRepository.existsByBlockerIdAndBlockedId(event.postAuthorId(), event.replyAuthorId())) {
             return;
         }
-        notificationService.notifyReply(event.postAuthorId(), event.postId(), event.body());
+        notificationService.notifyReply(event.postAuthorId(), event.postId(), event.replyId(), event.body());
+    }
+
+    @EventListener
+    public void on(ReplyDeleted event) {
+        notificationService.removeReply(event.replyId());
     }
 }

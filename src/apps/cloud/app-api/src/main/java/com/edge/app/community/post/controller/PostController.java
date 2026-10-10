@@ -69,6 +69,12 @@ public class PostController {
         return ApiResponse.onSuccess(postService.reply(principal.memberId(), id, request));
     }
 
+    @DeleteMapping("/{id}/replies/{replyId}")
+    public ApiResponse<Void> communityRemoveReply(MemberPrincipal principal, @PathVariable String id, @PathVariable String replyId) {
+        postService.removeReply(principal.memberId(), id, replyId);
+        return ApiResponse.onSuccess(null);
+    }
+
     @PutMapping("/{id}/like")
     public ApiResponse<PostResponse> communityLike(MemberPrincipal principal, @PathVariable String id) {
         return ApiResponse.onSuccess(postService.like(principal.memberId(), id));

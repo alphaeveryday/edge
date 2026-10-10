@@ -31,6 +31,9 @@ public class Notification {
     @Column(name = "post_id")
     private Long postId;
 
+    @Column(name = "reply_id")
+    private Long replyId;
+
     @Column(nullable = false)
     private String title;
 
@@ -43,11 +46,12 @@ public class Notification {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    public static Notification comm(long principalId, long postId, String title, String body, Instant at) {
+    public static Notification comm(long principalId, long postId, long replyId, String title, String body, Instant at) {
         Notification n = new Notification();
         n.principalId = principalId;
         n.kind = NotiKind.COMM;
         n.postId = postId;
+        n.replyId = replyId;
         n.title = title;
         n.body = body;
         n.createdAt = at;

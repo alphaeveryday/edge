@@ -13,6 +13,7 @@ import com.edge.app.community.post.entity.PostScope;
 import com.edge.app.community.post.entity.PostTag;
 import com.edge.app.community.post.entity.Reply;
 import com.edge.app.community.post.event.ReplyCreated;
+import com.edge.app.community.post.event.ReplyDeleted;
 import com.edge.app.community.post.repository.PostLikeRepository;
 import com.edge.app.community.post.repository.PostRepository;
 import com.edge.app.community.post.repository.PostTagRepository;
@@ -149,8 +150,23 @@ public class PostService {
         Post post = existing(id);
         Reply reply = replyRepository.save(Reply.create(post.getId(), memberId, request.body().trim(), Instant.now()));
         postRepository.addReply(post.getId());
-        eventPublisher.publishEvent(new ReplyCreated(post.getId(), post.getAuthorId(), memberId, reply.getBody()));
+        eventPublisher.publishEvent(new ReplyCreated(post.getId(), reply.getId(), post.getAuthorId(), memberId, reply.getBody()));
         return replyResponses(List.of(reply)).get(0);
+    }
+
+    // 자리 표시 없는 삭제와 답글 수 감소
+    // 그 답글로 생긴 알림의 삭제
+    @Transactional
+    public void removeReply(long memberId, String id, String replyId) {
+        Post post = existing(id);
+        Reply reply = existingReply(post.getId(), replyId);
+        if (reply.getAuthorId() != memberId) {
+            throw new GeneralException(ErrorStatus._FORBIDDEN);
+        }
+        if (replyRepository.softDelete(reply.getId(), Instant.now()) > 0) {
+            postRepository.subtractReply(post.getId());
+            eventPublisher.publishEvent(new ReplyDeleted(reply.getId()));
+        }
     }
 
     @Transactional
@@ -178,6 +194,15 @@ public class PostService {
                     .orElseThrow(() -> new GeneralException(AppErrorStatus.POST_NOT_FOUND));
         } catch (NumberFormatException e) {
             throw new GeneralException(AppErrorStatus.POST_NOT_FOUND);
+        }
+    }
+
+    private Reply existingReply(long postId, String replyId) {
+        try {
+            return replyRepository.findByIdAndPostIdAndDeletedAtIsNull(Long.parseLong(replyId), postId)
+                    .orElseThrow(() -> new GeneralException(AppErrorStatus.REPLY_NOT_FOUND));
+        } catch (NumberFormatException e) {
+            throw new GeneralException(AppErrorStatus.REPLY_NOT_FOUND);
         }
     }
 

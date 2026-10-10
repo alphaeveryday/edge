@@ -63,9 +63,14 @@ public class NotificationService {
 
     /** 글쓴이 회원 principal 이 없으면 생성까지 하는 답글 알림 적재 */
     @Transactional
-    public void notifyReply(long postAuthorMemberId, long postId, String replyBody) {
+    public void notifyReply(long postAuthorMemberId, long postId, long replyId, String replyBody) {
         long principalId = principalRepository.upsertMember(postAuthorMemberId);
-        repository.save(Notification.comm(principalId, postId, "새 답글", replyBody, Instant.now()));
+        repository.save(Notification.comm(principalId, postId, replyId, "새 답글", replyBody, Instant.now()));
+    }
+
+    @Transactional
+    public void removeReply(long replyId) {
+        repository.deleteByReplyId(replyId);
     }
 
     private static NotificationResponse response(Notification n) {

@@ -19,6 +19,7 @@ public enum AppErrorStatus implements BaseErrorCode {
     POST_NOT_FOUND(HttpStatus.NOT_FOUND, "POST4001", "없는 글입니다."),
     POST_NOT_WATCHED_ETF(HttpStatus.BAD_REQUEST, "POST4002", "관심 ETF 에 대해서만 글을 쓸 수 있습니다."),
     POST_TOO_MANY_TAGS(HttpStatus.BAD_REQUEST, "POST4003", "태그는 최대 3개입니다."),
+    REPLY_NOT_FOUND(HttpStatus.NOT_FOUND, "POST4004", "없는 답글입니다."),
     WATCH_DEFAULT_GROUP_UNDELETABLE(HttpStatus.BAD_REQUEST, "WATCH4001", "기본 관심 그룹은 지울 수 없습니다."),
     WATCH_TOO_MANY_GROUPS(HttpStatus.BAD_REQUEST, "WATCH4002", "관심 그룹은 최대 10개입니다."),
     MEMBER_ALREADY_EXISTS(HttpStatus.CONFLICT, "MEMBER4002", "이미 가입된 이메일입니다."),

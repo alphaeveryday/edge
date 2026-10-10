@@ -183,6 +183,27 @@ class PostFlowTests extends ContainerTests {
     }
 
     @Test
+    void replyRemovalIsAuthorOnlyAndDecrementsCount() {
+        String a = member("p20@example.com", "A20", List.of("069500"));
+        String b = member("p21@example.com", "B20", List.of("069500"));
+        String id = (String) post(a, "thread", List.of("069500")).get("id");
+        String other = (String) post(a, "other", List.of("069500")).get("id");
+        String r1 = (String) result(call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", "r1"), b)).get("id");
+        result(call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", "r2"), b));
+        String uri = "/api/v1/posts/" + id + "/replies/" + r1;
+
+        assertEquals(401, call("DELETE", uri, null, null).getStatusCode().value());
+        assertEquals(403, call("DELETE", uri, null, a).getStatusCode().value(), "글쓴이도 남의 답글 삭제 불가");
+        assertEquals("POST4004", call("DELETE", "/api/v1/posts/" + other + "/replies/" + r1, null, b).getBody().get("code"), "다른 글의 답글");
+        assertEquals("POST4004", call("DELETE", "/api/v1/posts/" + id + "/replies/abc", null, b).getBody().get("code"));
+        assertEquals(200, call("DELETE", uri, null, b).getStatusCode().value());
+        assertEquals("POST4004", call("DELETE", uri, null, b).getBody().get("code"), "지운 답글");
+
+        assertEquals(List.of("r2"), items(result(call("GET", "/api/v1/posts/" + id + "/replies", null, null))).stream().map(i -> i.get("body")).toList());
+        assertEquals(1, result(call("GET", "/api/v1/posts/" + id, null, null)).get("reply"));
+    }
+
+    @Test
     void deletedAuthorIsMasked() {
         String a = member("p9@example.com", "A9", List.of("069500"));
         String id = (String) post(a, "bye", List.of("069500")).get("id");

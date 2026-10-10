@@ -35,4 +35,8 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     @Modifying
     @Query("update Notification n set n.readAt = :at where n.principalId = :p and n.readAt is null")
     void markAllRead(@Param("p") long principalId, @Param("at") Instant at);
+
+    @Modifying
+    @Query("delete from Notification n where n.replyId = :replyId")
+    void deleteByReplyId(@Param("replyId") long replyId);
 }

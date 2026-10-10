@@ -94,6 +94,20 @@ class NotificationFlowTests extends ContainerTests {
     }
 
     @Test
+    void replyRemovalRemovesItsNotificationOnly() {
+        String author = member("n5@example.com");
+        String other = member("n6@example.com");
+        String post = (String) result(call("POST", "/api/v1/posts", Map.of("body", "글", "tags", List.of("069500")), author)).get("id");
+        String gone = (String) result(call("POST", "/api/v1/posts/" + post + "/replies", Map.of("body", "지울 답글"), other)).get("id");
+        result(call("POST", "/api/v1/posts/" + post + "/replies", Map.of("body", "남길 답글"), other));
+        assertEquals(2, result(call("GET", "/api/v1/notifications/unread-count", null, author)).get("count"));
+
+        result(call("DELETE", "/api/v1/posts/" + post + "/replies/" + gone, null, other));
+        assertEquals(1, result(call("GET", "/api/v1/notifications/unread-count", null, author)).get("count"));
+        assertEquals(List.of("남길 답글"), items(result(call("GET", "/api/v1/notifications", null, author))).stream().map(i -> i.get("body")).toList());
+    }
+
+    @Test
     void kindFilterAndCursorAndReadAll() {
         long principal = jdbc.queryForObject("insert into device(device_key) values ('noti-dev') returning id", Long.class);
         principal = jdbc.queryForObject("insert into principal(kind, device_id) values ('device', ?) returning id", Long.class, principal);

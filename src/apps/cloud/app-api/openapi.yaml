@@ -73,6 +73,7 @@ x-error-codes:
   POST4001: { http: 404, message: 없는 글입니다. }
   POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 의 커뮤니티 정책
   POST4003: { http: 400, message: 태그는 최대 3개입니다. }
+  POST4004: { http: 404, message: 없는 답글입니다. }
   WATCH4001: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
   WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 의 관심 정책
   MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
@@ -721,6 +722,20 @@ paths:
                   - properties:
                       result: { $ref: '#/components/schemas/Reply' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /posts/{id}/replies/{replyId}:
+    delete:
+      tags: [community]
+      operationId: communityRemoveReply
+      summary: 답글 삭제
+      security: [{ bearerAuth: [] }]
+      description: 작성자 본인만. 자리 표시 없이 목록에서 빠지고 글의 reply 가 1 줄며, 그 답글로 생긴 글쓴이 알림도 지운다.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: replyId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '403': { $ref: '#/components/responses/Error' }   # 남의 답글
+        '404': { $ref: '#/components/responses/Error' }   # POST4001, POST4004 지운 답글·다른 글의 답글
   /posts/{id}/like:
     put:
       tags: [community]

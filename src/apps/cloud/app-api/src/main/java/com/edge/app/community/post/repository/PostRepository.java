@@ -53,6 +53,10 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     void addReply(@Param("id") long id);
 
     @Modifying(clearAutomatically = true)
+    @Query("update Post p set p.replyCount = p.replyCount - 1 where p.id = :id and p.replyCount > 0")
+    void subtractReply(@Param("id") long id);
+
+    @Modifying(clearAutomatically = true)
     @Query("update Post p set p.viewCount = p.viewCount + 1 where p.id = :id")
     void addView(@Param("id") long id);
 }

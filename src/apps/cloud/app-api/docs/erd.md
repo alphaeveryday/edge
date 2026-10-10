@@ -171,11 +171,12 @@ PK `(principal_id, etf_code)`. 계약에 아직 엔드포인트가 없다(노션
 | kind | varchar(10) | `watch` \| `comm` |
 | etf_code | varchar(6) NULL | |
 | post_id | bigint → post NULL | comm |
+| reply_id | bigint → reply NULL | comm. 답글 삭제 시 함께 삭제. V15 이전 알림은 NULL |
 | title, body | text | |
 | read_at | timestamptz NULL | API `read` = `read_at IS NOT NULL` |
 | created_at | timestamptz | |
 
-인덱스 `(principal_id, created_at DESC, id DESC)`, 부분 인덱스 `(principal_id) WHERE read_at IS NULL`(unread-count).
+인덱스 `(principal_id, created_at DESC, id DESC)`, 부분 인덱스 `(principal_id) WHERE read_at IS NULL`(unread-count), `(reply_id) WHERE reply_id IS NOT NULL`(답글 삭제).
 
 ### post
 | 컬럼 | 타입 | 비고 |
@@ -443,6 +444,7 @@ erDiagram
     member ||--o{ member_block : "blocker"
     member ||--o{ vote : ""
     post o|--o{ notification : "comm"
+    reply o|--o{ notification : "comm"
 ```
 
 ## ER 다이어그램 (읽기 전용 동기화)
