@@ -6,6 +6,7 @@ import { TopBar } from '@/components/TopBar';
 import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { useDaily } from '@/features/analysis/queries';
+import { DisclaimerInfoSheet } from '@/features/disclaimer/DisclaimerSheet';
 import { analysisAsOf } from '@/lib/format';
 import { useRank } from '@/features/explore/queries';
 import { useToast } from '@/store/toast';
@@ -24,6 +25,7 @@ export default function Explore() {
   // 순위 순서로 넘기는 분석 상세 시트
   const [sel, setSel] = useState<number | null>(null);
   const [entry, setEntry] = useState<'explore_rank' | 'explore_next'>('explore_rank');
+  const [info, setInfo] = useState(false);
   const cur = sel === null ? undefined : rows[sel];
   // 닫히는 동안의 마지막 ETF 유지
   const last = useRef(cur);
@@ -44,7 +46,7 @@ export default function Explore() {
         {pull.indicator}
         <PageTitle title="탐색" meta={analysisAsOf()} />
         <View style={{ paddingTop: 22 }}>
-          <SectionHead title="AI가 보는 오늘 순위" />
+          <SectionHead title="AI가 보는 오늘 순위" onInfo={() => setInfo(true)} />
         </View>
         <Text style={styles.lead}>재료가 확인된 ETF부터 위에 있어요.</Text>
         {q.isPending && <Loading rows={5} />}
@@ -82,6 +84,7 @@ export default function Explore() {
           onNext={nextIdx === null ? undefined : () => { setEntry('explore_next'); setSel(nextIdx); }}
         />
       )}
+      <DisclaimerInfoSheet open={info} onClose={() => setInfo(false)} />
     </View>
   );
 }
