@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import type { EtfSummary, MoveInfo } from '@/api';
-import { BottomSheet, CtaButton, SheetScrollView, Sticker } from '@/components/ui';
+import { BottomSheet, CtaButton, SheetScrollView } from '@/components/ui';
 import { dirSignal } from '@/features/analysis/dir';
 import { track } from '@/lib/analytics';
 import { createStyles, useSignal } from '@/theme/theme';
@@ -28,7 +28,7 @@ export function MoveSheet({ etf, move, onClose }: Props) {
       open={open}
       onClose={onClose}
       onClosed={(s) => track('movement_detail_closed', { etf: etf.code, duration_sec: s.duration_sec, scroll_pct: s.scroll_pct, close_method: s.close_method })}
-      tall head={<View style={styles.head}><Sticker signal={etf.signal} /></View>}>
+      tall>
       <SheetScrollView>
         <Text style={styles.title}>{move?.sheetTitle}</Text>
         <View style={{ gap: 22, marginTop: 22 }}>
@@ -56,7 +56,6 @@ export function MoveSheet({ etf, move, onClose }: Props) {
 }
 
 const useStyles = createStyles((colors) => ({
-  head: { flexDirection: 'row' },
   title: { fontFamily: fam.extrabold, fontSize: 20, lineHeight: 28, letterSpacing: -0.6, color: colors.text },
   groupHead: { fontFamily: fam.extrabold, fontSize: 13, color: colors.neutral },
   item: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
