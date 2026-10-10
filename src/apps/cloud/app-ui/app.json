@@ -56,9 +56,7 @@
       ],
       [
         "@react-native-seoul/kakao-login",
-        {
-          "kakaoAppKey": "80119a4be05f59e1d963f00b32e1f6d7"
-        }
+        {}
       ]
     ],
     "experiments": {

@@ -21,10 +21,10 @@
     },
     "production": {
       "autoIncrement": true,
+      "environment": "production",
       "env": {
         "EXPO_PUBLIC_API_MODE": "http",
-        "EXPO_PUBLIC_API_URL": "https://etforca.edgesignal.dev/api/v1",
-        "EXPO_PUBLIC_POSTHOG_KEY": "phc_o6pkASnU42im8VYTfPrJp8HA3QRAVnjKkNJYvvze56Wo"
+        "EXPO_PUBLIC_API_URL": "https://etforca.edgesignal.dev/api/v1"
       }
     }
   },
