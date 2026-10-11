@@ -145,6 +145,9 @@ duck.py `backfill_sources` docstring).
   다른 점: 원천이 pykrx 가 아니라 KIS 이고, 완전성 기대 집합이 분류 유도가 아니라 1분 레인과
   같은 config `[minute_sector_index.index_map]`(업종 45종 + 종합지수 2종, ALPHA-1255)이다 — 분류(`sector_membership`) 생산자가
   아직 없어 유도할 원천이 없다. 분류·기대 집합 유도·duck 뷰 전환은 ALPHA-835 잔여다.
+- **DB 적재(2026-10-11, ALPHA-1260)**: 종합지수 2종(코스피 `1001`·코스닥 `2001`)만 `market_series_daily` 로
+  싣는다(`load-market-series-daily`). 대상은 `market_series` 마스터가 정한다 — 업종 45종은 등록하지 않아
+  싣지 않는다. 시장 SFN 편입 전이라 수동 실행으로만 돈다.
 - **원천 API**: pykrx (KRX 정보데이터시스템 비공식 래퍼) — `get_index_ohlcv`(업종지수 일봉)·
   `get_market_sector_classifications(날짜, 시장)`(PIT 분류). `krxsector.py` 로 검증된 경로다.
   - 대안 검토: KRX 정보데이터시스템 직접 호출은 **불가**(로그인 게이트 + IP 차단 이력 —

@@ -291,6 +291,20 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-etf-nav \
 uv run --package data-pipeline python -m data_pipeline.run normalize-sector-index-daily \
   --input-run-id 20261008T000000Z
 
+# 지수 일봉 적재(RDB, ALPHA-1260) — canonical sector_index_daily 중 market_series 에 등록된 지수
+# (source_code=KRX·ACTIVE — 코스피 1001·코스닥 2001)만 market_series_daily 에 싣는다. 미등록 코드는
+# 세고 넘긴다(실패 아님). 더 늦은 관측만 행을 바꾼다 — 값이 같아도 available_at 은 올라가고, 같거나
+# 더 이른 관측은 아무것도 못 바꾼다. fetched_at 결손·같은 시각의 값 충돌·NUMERIC(24, 8) 밖의 값은
+# 그 키를 싣지 않고, 행별 DB 오류는 savepoint 로 격리한다(둘 다 exit 2). 등록된 지수가 하나도 없으면
+# exit 1 이다. --input-run-id 는 normalize-sector-index-daily 의 completed manifest 가 지목한 direct
+# parquet 와 winner 만 읽고, 날짜창과 --all 은 명시 복구 전용이다.
+# ⚠️ 아직 SFN 에 편입되지 않았다 — 지금은 수동 실행으로만 돈다.
+DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
+  uv run --package data-pipeline python -m data_pipeline.run load-market-series-daily \
+    --input-run-id <normalize-run-id>
+# 기간 복구: ... run load-market-series-daily --from 2026-07-01 --to 2026-10-08
+# 전체 복구: ... run load-market-series-daily --all
+
 # 뉴스 이벤트 태깅(Step3, 피처) — canonical 뉴스(language=ko)를 LLM 으로 태깅해
 # feature/news/assertions 에 article_id 멱등 병합. ko 만 태깅한다(프롬프트가 한국 금융 뉴스
 # 전용 — 영어 기사에 씌우면 품질이 조용히 무너진다).
