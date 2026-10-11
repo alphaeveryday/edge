@@ -27,6 +27,15 @@
 
 버킷·CloudFront·도메인 레코드는 `infra/terraform/envs/dev` 의 `landing_site` 가, 영역과 인증서는 `infra/terraform/foundation` 이 소유한다.
 
+## 방문 분석 (PostHog)
+
+`landing.html` 머리에 PostHog 웹 스니펫이 있다. 로더는 PostHog 저장소의 스니펫 생성 코드(`docs/onboarding/product-analytics/_snippets/js-snippet-builder.ts`)로 만든 것 그대로다.
+
+- 프로젝트는 랜딩 전용이다(US 리전 `us.i.posthog.com`, 프로젝트 ID 658097). 앱(`app-ui`)이 쓰는 프로젝트와 다르다.
+- 스니펫의 `phc_` 키는 공개 수집용 프로젝트 키다. 비밀이 아니다. 개인 API 키(`phx_`)는 저장소에 넣지 않는다.
+- 자동 수집(클릭 등)·히트맵·웹 바이탈은 켜져 있고 세션 리플레이는 꺼져 있다. 이 설정은 코드가 아니라 PostHog 프로젝트 설정에 있다.
+- 로컬 미리보기(`http://127.0.0.1:8000`)에서 열어도 같은 프로젝트로 이벤트가 전송된다. 호스트로 막지 않았다. PostHog 에서 볼 때 호스트로 거른다.
+
 ## 알려진 한계
 
 - `www.etforca.com` 은 서빙하지 않는다.
