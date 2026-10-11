@@ -814,6 +814,11 @@ def test_basic_eps_split_into_continuing_and_discontinued_lines_is_summed():
     _line(both["list"], discontinued)["thstrm_amount"] = "오류"
     assert dart_fundamental.response_damage(both["list"], None, "2026-06-30") == []
     assert values(eps(both)) == ([("QUARTER", "7"), ("CUMULATIVE", "9")], [])
+    # 합계 줄이 없어도 두 줄이 더할 수 있는 짝이 아니면 마찬가지로 읽지 않는 줄이다.
+    for unused in (split(None), split(names=("기본주당이익", "중단영업기본주당이익"))):
+        _line(unused["list"], continuing)["thstrm_amount"] = "오류"
+        assert dart_fundamental.response_damage(unused["list"], None, "2026-06-30") == []
+        assert eps(unused) == ([], [["account_unsupported"]])
     # 계속영업 줄이 둘이면 고르지 않는다(합계 줄과 같은 규칙).
     twice = split()
     twice["list"].append(dict(_line(twice["list"], continuing)))

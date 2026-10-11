@@ -129,10 +129,12 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     "원화 아님"으로, 깨진 종류 행은 "행 없음"으로 읽히기 때문이다. 검사 범위는 지표 해석이 기대는 칸뿐이다.
     """
     problems: set[str] = set()
-    # 나눠 적은 줄은 합계 줄이 손익 재무제표에 없을 때만 읽는다(`extract`) — 읽지 않는 줄의 금액 파손은 응답 파손이 아니다.
-    used = (set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
-            | {account for total, pair in _SPLIT_ACCOUNTS.items() for account in pair
-               if not any(ln.get("account_id") == total and ln.get("sj_div") in ("IS", "CIS") for ln in lines)})
+    used = set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
+    for total, pair in _SPLIT_ACCOUNTS.items():
+        # 나눠 적은 줄은 `extract` 가 실제로 읽을 때만 검사한다(같은 판정을 그대로 쓴다) — 읽지 않는 줄의 금액 파손은
+        # 응답 파손이 아니다. 합계 줄이 있거나 두 줄이 더할 수 있는 짝이 아니면 `extract` 는 그 금액을 읽지 않는다.
+        if _pick_line(lines, total, ("IS", "CIS"))[1] == "account_not_found" and _split_lines(lines, *pair)[0] is not None:
+            used.update(pair)
     for line in lines:
         # 정제가 읽는 칸은 전부 문자열(또는 없음)이다 — 숫자·배열·객체로 온 칸은 뒤 단계가 조용히 다른 값으로 바꿔 읽는다
         # (빈 배열인 사업연도는 요청 연도로 대체되고, 숫자 접수번호는 문자열 검사를 통과한다).
