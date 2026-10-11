@@ -152,7 +152,8 @@ def child(args):
             times = [start + step*(i + 1) for i in range(spec['tools'])]
         reference = None
         write = lambda: asyncio.to_thread(call, 'write_outlook_body', {'title': '계약 이행을 확인해요', 'items': [
-            dict(id='contract', title_keyword='계약', sentences=['판매 물량을 확보했어요.'], tool_run_ids=[reference])]})
+            dict(id='contract', title_keyword='계약', sentences=['판매 물량을 확보했어요.'], sentiment='neutral',
+                 tool_run_ids=[reference])]})
         for index, at in enumerate(times):
             await until(at, run)
             if profile and index == 1:  # 실측 기록 수를 지킨다: 본문 편집이 프로필의 둘째 기록 자리를 쓴다
