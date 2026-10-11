@@ -424,7 +424,7 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   `--input-run-id` 는 위 manifest 의 direct key 와 winner 만 읽는다. 더 늦은 `fetched_at` 만 행을 바꾸고
   (`etf_nav_daily` 와 같은 규약 — `available_at` 은 마지막으로 확인한 관측 시각), `fetched_at` 결손·같은
   시각의 값 충돌·NUMERIC(24, 8) 밖의 값은 그 키를 싣지 않으며 행별 DB 오류는 savepoint 로 격리한다(exit 2).
-  SFN 편입 전이라 수동 실행으로만 돈다.
+  시장 SFN 의 `LoadMarketSeriesDaily` 가 매 실행 부른다.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

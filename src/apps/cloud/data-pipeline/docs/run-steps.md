@@ -298,7 +298,7 @@ uv run --package data-pipeline python -m data_pipeline.run normalize-sector-inde
 # 그 키를 싣지 않고, 행별 DB 오류는 savepoint 로 격리한다(둘 다 exit 2). 등록된 지수가 하나도 없으면
 # exit 1 이다. --input-run-id 는 normalize-sector-index-daily 의 completed manifest 가 지목한 direct
 # parquet 와 winner 만 읽고, 날짜창과 --all 은 명시 복구 전용이다.
-# ⚠️ 아직 SFN 에 편입되지 않았다 — 지금은 수동 실행으로만 돈다.
+# 시장 SFN(평일 15:40)의 LoadMarketSeriesDaily 가 --input-run-id 형태로 부른다.
 DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run load-market-series-daily \
     --input-run-id <normalize-run-id>

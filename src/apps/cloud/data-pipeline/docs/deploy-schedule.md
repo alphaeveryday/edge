@@ -275,7 +275,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
 
 **feature(구 derive, 병렬 잡 + 직렬 선행 2스텝: load-instruments → enrich-corp-code + 직렬 꼬리: load-price-triggers)** — canonical 을
 소비해 분석이 읽을 feature/factor 산출물을 만든다. 정제 뒤라야 하고(전부 canonical 을 읽는다) 병렬 잡들은 서로 독립이다.
-시장 SFN 의 병렬 잡은 `load-etf-nav`·`load-price-daily`·`load-etf-holdings`·`load-etf-flow` 다 — 아래 목록의
+시장 SFN 의 병렬 잡은 `load-etf-nav`·`load-price-daily`·`load-etf-holdings`·`load-etf-flow`·`load-market-series-daily`
+(지수 일봉 → `market_series_daily`, ALPHA-1260 — exit 2 는 NAV·수급 적재와 같이 계속 진행 후 실행을 FAILED 로 마감)다 — 아래 목록의
 `tag-news`·`load-documents`·`load-assertions`·`assemble-events` 는 뉴스 SFN, `load-disclosure` 는 공시 레인 소관이다.
 시크릿이 다른 잡은 task-def 도 따로다. 최종 범위는 뉴스/공시 assertion·event·event_thread
 추출 + 가격이벤트 생성까지(ALPHA-408) — 추출 스텝들은 alphamale 로직 이관 합의 후 편입한다.
