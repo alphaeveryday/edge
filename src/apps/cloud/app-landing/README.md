@@ -4,16 +4,18 @@
 
 | 파일 | 역할 |
 |---|---|
-| `landing.html` | 랜딩 본문. **Claude Artifact용 조각 문서**다(doctype·`<html>`·viewport 메타가 없다) |
+| `landing.html` | 랜딩 본문. **Claude Artifact용 조각 문서**다(doctype·`<html>`·`<head>`·`<body>`·viewport 메타가 없다) |
 | `assets/` | 로고, 파비콘(`icon.png`·`apple-touch-icon.png`), 공유 미리보기 그림(`og.png`), 글꼴(Pretendard 서브셋, SIL OFL 1.1 — `assets/fonts/LICENSE`) |
 | `robots.txt`·`sitemap.xml` | 검색엔진이 사이트 최상위에서 읽는 파일 |
-| `build.sh` | 조각 문서에 문서 머리를 붙여 `dist/index.html` 을 만들고 `assets/`·`robots.txt`·`sitemap.xml` 을 `dist/` 에 복사한다 |
+| `build.sh` | 조각 문서에 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 `dist/index.html` 을 만들고 `assets/`·`robots.txt`·`sitemap.xml` 을 `dist/` 에 복사한다 |
 
 ## 왜 조각 문서인가
 
-시안을 Claude Artifact 로 미리 보면서 고친다. Artifact 는 게시할 때 doctype·head·body 를 감싸 주므로 원본에는 그 부분이 없다. 그대로 서빙하면 문서 선언과 모바일 화면 폭 설정이 빠진다. 그래서 `build.sh` 가 머리 4줄을 붙인다.
+시안을 Claude Artifact 로 미리 보면서 고친다. Artifact 는 게시할 때 doctype·head·body 를 감싸 주므로 원본에는 그 부분이 없다. 그대로 서빙하면 문서 선언과 모바일 화면 폭 설정이 빠진다. 그래서 `build.sh` 가 doctype·`<html>`·charset·viewport 를 붙이고 `<head>` 와 `<body>` 를 명시한다.
 
-원본을 완성된 문서로 바꾸려면 `build.sh` 의 머리 붙이기도 함께 없앤다. `build.sh` 는 `landing.html` 에 doctype 이 있으면 실패한다.
+`<head>` 와 `<body>` 는 `landing.html` 안의 경계 줄 `<!-- build:body -->` 를 기준으로 나눈다. 이 줄 위는 머리, 아래는 본문이 된다. 경계 줄 위에는 머리에 들어갈 요소(`<title>`·`<meta>`·`<link>`·`<script>`·`<style>`)만 둔다. 경계 줄이 없거나 둘 이상이면 `build.sh` 가 실패한다. 브라우저는 `<head>` 가 없어도 머리를 추론하지만, `<head>` 없이 서빙했을 때 구글 서치 콘솔 소유 확인이 실패했다(ALPHA-1264).
+
+원본을 완성된 문서로 바꾸려면 `build.sh` 의 뼈대 씌우기도 함께 없앤다. `build.sh` 는 `landing.html` 에 doctype 이 있으면 실패한다.
 
 ## 고치고 배포하기
 
