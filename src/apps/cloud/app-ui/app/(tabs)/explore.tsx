@@ -59,7 +59,7 @@ export default function Explore() {
             return (
               <Pressable key={r.etf.code} onPress={() => { setEntry('explore_rank'); setSel(i); }} style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}>
                 <View style={styles.rowHead}>
-                  <Text style={[styles.rank, top3 ? styles.rankTop : styles.rankPlain]}>{top3 ? `${r.rank}위` : String(r.rank)}</Text>
+                  <Text numberOfLines={1} style={[styles.rank, top3 ? styles.rankTop : styles.rankPlain]}>{top3 ? `${r.rank}위` : String(r.rank)}</Text>
                   <SectorIcon theme={r.etf.theme} bg={r.etf.logoBg} size={20} />
                   <Text numberOfLines={1} style={styles.name}>{r.etf.name}</Text>
                   <View style={{ flex: 1 }} />
@@ -100,7 +100,7 @@ const useStyles = createStyles((colors) => ({
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   rank: { fontFamily: fam.monoExtraBold, fontSize: 12, textAlign: 'center', overflow: 'hidden' },
   rankTop: { color: colors.bg, backgroundColor: colors.text, borderRadius: radius.tag, paddingVertical: 3, paddingHorizontal: 7 },
-  rankPlain: { color: colors.textFaint, width: 20 },
+  rankPlain: { color: colors.textFaint, width: 26 },
   name: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, flexShrink: 1 },
   title: { fontFamily: fam.extrabold, fontSize: 18, lineHeight: 25, letterSpacing: -0.5, color: colors.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
