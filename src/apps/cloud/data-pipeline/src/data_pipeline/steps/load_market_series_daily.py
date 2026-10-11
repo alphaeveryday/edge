@@ -105,6 +105,7 @@ def run(
 ) -> int:
     """canonical 업종지수 일봉 → market_series_daily. 성공 0, 행 부분 실패 2, 치명 장애 1."""
     started_at = datetime.now(timezone.utc)
+    manifest_partitions = manifest_winners = 0
     read = skipped_missing_identity = skipped_unregistered = skipped_load_violation = 0
     created = updated = unchanged = 0
     load_violations: list[dict] = []
@@ -119,7 +120,7 @@ def run(
         # (code, trade_date) → 적재 후보. 같은 키가 여러 parquet 에 걸리면 최신 fetched_at 이
         # 이긴다 — canonical 병합과 같은 규칙이다(load_etf_nav 와 같은 근거).
         candidates: dict[tuple[str, str], dict] = {}
-        _, _, input_rows = _core._input_rows(
+        manifest_partitions, manifest_winners, input_rows = _core._input_rows(
             storage, input_run_id=input_run_id, from_date=from_date, to_date=to_date,
             spec=_INPUT,
         )
@@ -188,6 +189,7 @@ def run(
         "started_at": started_at.isoformat(), "finished_at": finished_at.isoformat(),
         "duration_seconds": (finished_at - started_at).total_seconds(),
         "input_run_id": input_run_id, "from_date": from_date, "to_date": to_date,
+        "manifest_partitions": manifest_partitions, "manifest_winners": manifest_winners,
         "rows_read": read,
         "skipped_missing_identity": skipped_missing_identity,
         # 마스터에 없는 코드 — 실패가 아니라 마스터가 고른 범위 밖이다.
