@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError, type SocialProvider } from '@/api';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
+import { AuthBrand } from '@/features/auth/AuthBrand';
 import { KakaoButton } from '@/features/auth/KakaoButton';
 import { kakaoLogin } from '@/features/auth/kakao';
 import { appleLogin, useAppleAvailable } from '@/features/auth/apple';
@@ -92,7 +93,7 @@ export default function Login() {
   return (
     <PageScroll style={styles.root} contentContainerStyle={{ paddingTop: top + 8, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
       <NavBar title="" onBack={null} rightIcon="close" onRight={close} />
-      <Text style={styles.brand}>ETF Orca</Text>
+      <AuthBrand />
       {!!hint && <Text style={styles.hint}>{hint}</Text>}
       <View style={styles.form}>
         <AuthField value={email} onChangeText={clear(setEmail)} placeholder="이메일" keyboardType="email-address" textContentType="emailAddress" autoComplete="email" returnKeyType="next" />
@@ -132,7 +133,6 @@ export default function Login() {
 
 const useStyles = createStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.bg },
-  brand: { alignSelf: 'center', marginTop: 48, fontFamily: fam.extrabold, fontSize: 32, letterSpacing: -1, color: colors.primary },
   hint: { alignSelf: 'center', marginTop: 10, fontFamily: fam.medium, fontSize: 14, color: colors.textMuted },
   form: { gap: 12, marginTop: 40, paddingHorizontal: 24 },
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },

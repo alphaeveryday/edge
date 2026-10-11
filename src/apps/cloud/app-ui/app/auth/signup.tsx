@@ -7,6 +7,7 @@ import { api, isApiError } from '@/api';
 import { BottomBar, CtaButton, NavBar } from '@/components/ui';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { AuthField } from '@/features/auth/AuthField';
+import { AuthBrand } from '@/features/auth/AuthBrand';
 import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
@@ -61,7 +62,7 @@ export default function Signup() {
     <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
       <NavBar title="" onBack={null} rightIcon="close" onRight={leave} />
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 20 }}>
-        <Text style={styles.brand}>ETF Orca</Text>
+        <AuthBrand />
         <View style={styles.form}>
           <View style={styles.emailRow}>
             <View style={{ flex: 1 }}>
@@ -97,7 +98,6 @@ export default function Signup() {
 
 const useStyles = createStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.bg },
-  brand: { alignSelf: 'center', marginTop: 48, fontFamily: fam.extrabold, fontSize: 32, letterSpacing: -1, color: colors.primary },
   form: { gap: 12, marginTop: 40, paddingHorizontal: 24 },
   err: { fontFamily: fam.regular, fontSize: 13, lineHeight: 18, color: colors.upDeep },
   emailRow: { flexDirection: 'row', gap: 8 },
