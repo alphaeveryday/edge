@@ -1,5 +1,5 @@
 """Agent response schemas; body text is submitted through editing tools."""
-from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, TEXT_LIMITS
+from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, TEXT_LIMITS, TITLE_MAX_LENGTH
 
 
 def obj(properties, required=None):
@@ -19,7 +19,8 @@ def limited(field):
 REFS = {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': TEXT}
 STICKER = {'type': 'string', 'enum': ['강력상승', '상승', '중립', '하락', '강력하락']}
 SENTIMENT = {'type': 'string', 'enum': ['positive', 'neutral', 'negative']}
-ITEM = obj({'title_keyword': TEXT, 'sentence': TEXT, 'sentiment': SENTIMENT, 'tool_run_ids': REFS})
+ITEM = obj({'title_keyword': TEXT | {'maxLength': TITLE_MAX_LENGTH},
+            'sentence': TEXT, 'sentiment': SENTIMENT, 'tool_run_ids': REFS})
 TOPIC = obj({'id': TEXT, 'title_keyword': limited('detail.items[].title_keyword'),
              'sentences': {'type': 'array', 'minItems': 1, 'maxItems': MAX_BULLETS_PER_TOPIC,
                            'items': limited('detail.items[].sentences[].sentence')},
@@ -43,7 +44,7 @@ OUTLOOK = obj({
     'conclusion': obj({'title': limited('conclusion.title'), 'supports': keywords('supports'), 'burdens': keywords('burdens'),
                        'sentence': limited('conclusion.sentence'),
                        'change_condition': limited('conclusion.change_condition')}, ['title', 'supports', 'burdens', 'sentence']),
-    'issue_detail': obj({'headline': TEXT,
+    'issue_detail': obj({'headline': TEXT | {'maxLength': TITLE_MAX_LENGTH},
                          'items': {'type': 'array', 'items': ITEM}}),
 })
 EDIT_SCHEMAS = [

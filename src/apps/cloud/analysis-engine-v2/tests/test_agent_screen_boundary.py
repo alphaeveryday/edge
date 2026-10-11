@@ -1,5 +1,6 @@
 """The model decides content once; the server owns screen-derived fields."""
 from jsonschema import Draft202012Validator
+import pytest
 
 from edge_analysis_v2.agent.output_schema import MOVEMENT, OUTLOOK, EDIT_SCHEMAS
 
@@ -19,3 +20,29 @@ def test_screen_metadata_and_cards_are_not_model_outputs():
     topic = write['properties']['items']['items']
     assert topic['properties']['sentences']['items']['type'] == 'string'
     assert 'is_updated' not in topic['properties']
+
+
+@pytest.mark.parametrize('schema', [
+    OUTLOOK['properties']['summary_card']['properties']['title'],
+    OUTLOOK['properties']['issue_detail']['properties']['headline'],
+    OUTLOOK['properties']['issue_detail']['properties']['items']['items']['properties']['title_keyword'],
+    MOVEMENT['properties']['new_items']['items']['properties']['title_keyword'],
+    EDIT_SCHEMAS[0]['function']['parameters']['properties']['title'],
+    EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['items']['properties']['title_keyword'],
+])
+def test_customer_titles_fit_twenty_characters_including_spaces_and_punctuation(schema):
+    # Long explanations belong in the body, including for issue and movement titles.
+    validator = Draft202012Validator(schema)
+    title = '가나다라 바사아자.' * 2
+    assert len(title) == 20
+    validator.validate(title)
+    assert not validator.is_valid(title + '요')
+
+
+def test_topic_update_flags_are_rejected_while_bullet_updates_remain_available():
+    schema = EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['items']
+    topic = {'id': 't1', 'title_keyword': '수주 증가', 'sentences': ['새 계약이 늘었어요.'],
+             'sentiment': 'positive', 'tool_run_ids': ['r1'], 'updated_sentence_numbers': [1]}
+    validator = Draft202012Validator(schema)
+    validator.validate(topic)
+    assert not validator.is_valid(topic | {'is_updated': True})

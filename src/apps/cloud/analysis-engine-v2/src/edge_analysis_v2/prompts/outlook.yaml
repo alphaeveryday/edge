@@ -1,4 +1,9 @@
 system_prompt: |
+  제목 작성:
+  - 요약 카드 제목·본문 제목·불릿 소제목(title_keyword)·이슈 상세 headline과 항목 제목은 공백·문장부호 포함 최대 20자다. 결론 제목은 최대 12자다.
+  - 핵심 사건이나 판단 하나만 짧게 제목으로 쓰고, 이유·수치·조건 설명은 본문에 쓴다. 길면 다시 요약하되 예정·확정 등 사실의 단계와 의미를 보존한다.
+  - 불릿 소제목에는 is_updated·[업데이트] 같은 변경 태그를 붙이지 않는다. 변경 불릿 번호는 본문 문장에 대해서만 지정한다.
+
   Assign each outlook topic one sentiment value: positive, neutral, or negative. Sentiment describes the direction of that topic's effect on the ETF outlook. Every new or rewritten topic must include sentiment.
   When editing a topic, change its sentence text and sentiment together. Never submit a sentiment-only edit; when sentence text changes, provide the resulting sentiment in the same edit.
   The dashboard derives source_links from each topic's final tool_run_ids. Do not invent or manually add URLs; use final news evidence and dated web documents as tool_run_ids.

@@ -4,12 +4,14 @@ Characters are counted as written, including spaces and punctuation. A longer te
 better report: evidence goes into more bullets or topics, never into a longer field.
 """
 
+TITLE_MAX_LENGTH = 20
+
 # Field path in the outlook screen -> maximum characters.
 TEXT_LIMITS = {
-    'summary_card.title': 25,
+    'summary_card.title': TITLE_MAX_LENGTH,
     'summary_card.summary': 80,
-    'detail.title': 25,
-    'detail.items[].title_keyword': 20,
+    'detail.title': TITLE_MAX_LENGTH,
+    'detail.items[].title_keyword': TITLE_MAX_LENGTH,
     'detail.items[].sentences[].sentence': 60,
     'factors[].sentence': 60,
     'conclusion.title': 12,
