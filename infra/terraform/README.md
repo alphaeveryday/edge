@@ -112,7 +112,7 @@ cd ../envs/dev  && terraform apply
   aws s3 sync "$LANDING_DIR/assets" "s3://$BUCKET/assets" --delete
   aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/*"
   ```
-  첫 화면 파일은 이름과 상관없이 `index.html` 로 올린다. CloudFront 가 루트 요청에 돌려주는 객체가 `index.html` 이다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다).
+  첫 화면 파일은 이름과 상관없이 `index.html` 로 올린다. CloudFront 가 루트 요청에 돌려주는 객체가 `index.html` 이다. 올리는 HTML 은 `<!doctype html>` 과 viewport 메타를 갖춘 완성된 문서여야 한다. Claude Artifact용 조각 문서에는 둘 다 없으므로 문서 머리를 붙인 뒤 올린다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다).
 
 ### 🔮 미구축 (후속 증분)
 
