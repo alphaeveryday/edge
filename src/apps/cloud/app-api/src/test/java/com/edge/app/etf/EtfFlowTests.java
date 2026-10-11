@@ -33,7 +33,8 @@ class EtfFlowTests extends ContainerTests {
     @BeforeAll
     static void seed(@Autowired JdbcTemplate jdbc) {
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, sub, hot) values "
-                + "('910001','e-910001','XKRX','ORCA 반도체 테스트','semicon','부제',true), ('910002','e-910002','XKRX','ORCA 배당 테스트','dividend',null,false) "
+                + "('910001','e-910001','XKRX','ORCA 반도체 테스트','semicon','부제',true), ('910002','e-910002','XKRX','ORCA 배당 테스트','dividend',null,false), "
+                + "('9100A0','e-9100A0','XKRX','ORCA 알파 테스트','semicon',null,false) "
                 + "on conflict (code) do update set name = excluded.name");
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('910001', 10000, 1.5, now()) "
                 + "on conflict (etf_code) do update set price = excluded.price");
@@ -61,6 +62,10 @@ class EtfFlowTests extends ContainerTests {
         assertEquals(List.of("910001"), byName.stream().map(e -> e.get("code")).toList());
         List<Map<String, Object>> byCode = result(call(port, "GET", "/api/v1/etfs?q=91000", null));
         assertEquals(List.of("910001", "910002"), byCode.stream().map(e -> e.get("code")).toList(), "hot 우선, 이름순");
+        List<Map<String, Object>> loose = result(call(port, "GET", "/api/v1/etfs?q=orca반도체테스트", null));
+        assertEquals(List.of("910001"), loose.stream().map(e -> e.get("code")).toList(), "대소문자·공백 무시");
+        List<Map<String, Object>> lowerCode = result(call(port, "GET", "/api/v1/etfs?q=9100a", null));
+        assertEquals(List.of("9100A0"), lowerCode.stream().map(e -> e.get("code")).toList(), "영문 코드의 대소문자 무시");
         Map<String, Object> one = result(call(port, "GET", "/api/v1/etfs/910001", null, "X-Device-Id", "e1"));
         assertEquals("ORCA 반도체 테스트", one.get("name"));
         assertEquals(1.5, one.get("changePct"));

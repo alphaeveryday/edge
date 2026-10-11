@@ -41,12 +41,13 @@ public interface EtfRepository extends JpaRepository<Etf, String> {
     List<SummaryRow> summaries(@Param("codes") Collection<String> codes);
 
     /**
-     * 이름·코드 부분 일치 검색
+     * 대소문자·공백 무시의 이름 부분 일치와 코드 앞부분 일치 검색
      * 빈 q 의 전체 조회
      * 인기순 우선의 이름순 정렬
      */
     @Query(value = SUMMARY_SELECT + """
-            where e.name ilike concat('%', :q, '%') or e.code like concat(:q, '%')
+            where replace(lower(e.name), ' ', '') like concat('%', replace(lower(:q), ' ', ''), '%')
+               or lower(e.code) like concat(replace(lower(:q), ' ', ''), '%')
             order by e.hot desc, e.name
             """, nativeQuery = true)
     List<SummaryRow> search(@Param("q") String q);
