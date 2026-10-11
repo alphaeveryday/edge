@@ -30,7 +30,7 @@ export default function Profile() {
   const resetOnboarding = useOnboarding((s) => s.reset);
   const toast = useToast((s) => s.show);
   // 로그아웃은 비회원 홈, 탈퇴는 온보딩 복귀
-  const leave = (msg: string, restart: boolean) => { qc.clear(); logout(restart); resetOnboarding(); useWatchGroup.getState().setGroup('base');
+  const leave = (msg: string, restart: boolean) => { qc.resetQueries(); logout(restart); resetOnboarding(); useWatchGroup.getState().setGroup('base');
     if (router.canDismiss()) router.dismissAll();
     router.replace(restart ? '/onboarding/intro' : '/(tabs)/home'); toast(msg); };
   // 회원 토큰의 홈 재조회를 막는 토큰 폐기 뒤 이동
