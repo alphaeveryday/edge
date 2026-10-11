@@ -34,7 +34,8 @@
 
 - 주소는 `https://etforca.com` 을 그대로 적었다. 도메인을 바꾸면 `landing.html` 머리와 `robots.txt`, `sitemap.xml` 을 함께 고친다.
 - `assets/og.png`(1200x630)에는 페이지 제목 문구가 그림으로 들어 있다. 제목을 바꾸면 그림도 다시 만든다.
-- 구글 서치 콘솔과 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
+- 구글 서치 콘솔에는 URL 접두어 속성 `https://etforca.com` 으로 등록했다(팀 구글 계정). 소유 확인은 머리의 `google-site-verification` 메타 태그로 한다. 이 태그를 지우면 소유 확인이 풀린다.
+- 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
 
 ## 방문 분석 (PostHog)
 
