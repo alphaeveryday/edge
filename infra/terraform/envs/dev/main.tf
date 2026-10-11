@@ -93,6 +93,17 @@ data "aws_secretsmanager_secret" "app_api_pipeline" {
   name = "${local.prefix}-app-api/pipeline/password"
 }
 
+# app-api 소셜 로그인 식별자. 공개값도 저장소에 두지 않아 시크릿으로 주입, 그릇+값은 TF 밖 CLI 선생성.
+# 애플: {"secret": <.p8>, "keyId", "teamId", "clientId"(번들 ID)}. 비공개 키는 탈퇴 시 연결 철회용
+data "aws_secretsmanager_secret" "app_api_apple" {
+  name = "${local.prefix}-app-api/apple/private-key"
+}
+
+# 카카오: {"secret": <네이티브 앱 키>}, idToken aud 대조용
+data "aws_secretsmanager_secret" "app_api_kakao" {
+  name = "${local.prefix}-app-api/kakao/client-id"
+}
+
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
 module "network" {
   source             = "../../modules/network"
@@ -897,12 +908,20 @@ module "app_api" {
     APP_JWT_SECRET             = "${data.aws_secretsmanager_secret.app_api_jwt.arn}:secret::"
     SPRING_MAIL_PASSWORD       = "${data.aws_secretsmanager_secret.app_api_mail.arn}:secret::"
     APP_PIPELINE_PASSWORD      = "${data.aws_secretsmanager_secret.app_api_pipeline.arn}:secret::"
+    # 소셜 로그인. 비면 해당 제공자 로그인 거절
+    APP_KAKAO_CLIENT_ID   = "${data.aws_secretsmanager_secret.app_api_kakao.arn}:secret::"
+    APP_APPLE_CLIENT_ID   = "${data.aws_secretsmanager_secret.app_api_apple.arn}:clientId::"
+    APP_APPLE_TEAM_ID     = "${data.aws_secretsmanager_secret.app_api_apple.arn}:teamId::"
+    APP_APPLE_KEY_ID      = "${data.aws_secretsmanager_secret.app_api_apple.arn}:keyId::"
+    APP_APPLE_PRIVATE_KEY = "${data.aws_secretsmanager_secret.app_api_apple.arn}:secret::"
   }
   secret_arns = [
     module.app_rds.master_user_secret_arn,
     data.aws_secretsmanager_secret.app_api_jwt.arn,
     data.aws_secretsmanager_secret.app_api_mail.arn,
     data.aws_secretsmanager_secret.app_api_pipeline.arn,
+    data.aws_secretsmanager_secret.app_api_apple.arn,
+    data.aws_secretsmanager_secret.app_api_kakao.arn,
   ]
 
   depends_on = [module.app_alb]
