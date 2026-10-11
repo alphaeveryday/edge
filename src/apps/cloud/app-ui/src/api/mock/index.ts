@@ -1,6 +1,7 @@
 import type { ApiClient } from '../client';
 import { ApiError } from '../error';
 import type { Me, VoteStat, VoteChoice, Post, Reply, WatchGroup } from '../types';
+import { matches } from '@/lib/search';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
 import { chartOf, detailOf, ETF_POSTS, moveOf } from './detail';
@@ -64,8 +65,7 @@ export const mockClient: ApiClient = {
     },
     list: () => delay(ETFS),
     search: (q) => {
-      const k = q.trim();
-      return delay(k ? ETFS.filter((e) => e.name.includes(k) || e.theme.includes(k) || (e.sub ?? '').includes(k)) : [], 80);
+      return delay(q.trim() ? ETFS.filter((e) => matches(q, e.name, e.theme, e.sub)) : [], 80);
     },
     recent: () => delay(recent.map(etfOf)),
     chart: (code, range) => { const e = etfOf(code); return delay(chartOf(code, e.price, e.changePct, range)); },

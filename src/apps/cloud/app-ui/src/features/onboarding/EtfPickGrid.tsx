@@ -4,6 +4,7 @@ import type { EtfSummary } from '@/api';
 import { SearchField, SectorIcon } from '@/components/ui';
 import { createStyles } from '@/theme/theme';
 import { fam } from '@/theme/typography';
+import { matches } from '@/lib/search';
 import { PickCircle } from './PickCircle';
 
 interface Props {
@@ -16,10 +17,7 @@ interface Props {
 export function EtfPickGrid({ etfs, picked, onToggle }: Props) {
   const styles = useStyles();
   const [q, setQ] = useState('');
-  const list = useMemo(() => {
-    const k = q.trim();
-    return k ? etfs.filter((e) => e.name.includes(k) || e.theme.includes(k)) : etfs;
-  }, [etfs, q]);
+  const list = useMemo(() => etfs.filter((e) => matches(q, e.name, e.theme)), [etfs, q]);
   return (
     <>
       <View style={styles.search}>
