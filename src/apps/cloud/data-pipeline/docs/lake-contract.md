@@ -419,6 +419,12 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   보인다)를 확정하지 못해 싣지 않고, 지수는 금액이 아니라 통화 열도 없다. `normalize-sector-index-daily`
   가 NAV 정제와 같은 장치(`normalize_etf_nav.FactDataset`)로 병합한다 — 최신 `fetched_at` 우선, 같은
   시각에 값이 다르면 그 키를 격리(exit 2), winner 는 `dataset=sector_index_daily` canonical run manifest.
+- **적재(지수 일봉)** — `load-market-series-daily` 가 위 canonical 중 `market_series`(`source_code='KRX'`·
+  `ACTIVE`)에 등록된 코드만 `market_series_daily` 로 옮긴다(ALPHA-1260). 미등록 코드는 세고 넘긴다.
+  `--input-run-id` 는 위 manifest 의 direct key 와 winner 만 읽는다. 더 늦은 `fetched_at` 만 행을 바꾸고
+  (`etf_nav_daily` 와 같은 규약 — `available_at` 은 마지막으로 확인한 관측 시각), `fetched_at` 결손·같은
+  시각의 값 충돌·NUMERIC(24, 8) 밖의 값은 그 키를 싣지 않으며 행별 DB 오류는 savepoint 로 격리한다(exit 2).
+  SFN 편입 전이라 수동 실행으로만 돈다.
 - **품질 로그(정제 Step2)** — `operations_archive/data_quality_logs/dataset=…/checked_date=…/run_id=…/log.json`
   에 검증 실행당 1건. 몇 건 읽고/통과/탈락·canonical 적재했는지와 **탈락 사유**(OHLCV 정합성 위반·결측·
   비수치 등)·벤더 교차 충돌을 남긴다 — 잘못된 가격을 조용히 버리지 않는다(Rule 12). 뉴스(`dataset=

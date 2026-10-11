@@ -34,7 +34,8 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ..config import DbConfig
@@ -60,6 +61,24 @@ _MIC_BY_MARKET = {"KR": "XKRX"}
 _CREATED_SAMPLE_LIMIT = 5
 
 
+@dataclass(frozen=True)
+class InputSpec:
+    """manifest·복구 범위 읽기가 받는 입력 사양 — 기본값은 NAV 다.
+
+    지수 일봉 적재(`load_market_series_daily`, ALPHA-1260)가 같은 읽기를 쓴다. 정제가 같은 장치
+    (`normalize_etf_nav.FactDataset`)로 manifest 를 쓰므로 갈리는 것은 이름·행 키·경로뿐이다.
+    """
+
+    dataset: str = "etf_nav"
+    producer: str = "normalize_etf_nav"
+    # 파티션 안의 행 키. manifest 의 winner_ids 항목 키이기도 하다.
+    row_key: str = "etf_id"
+    partition: Callable[[str, str], str] = canonical_etf_nav_partition
+
+
+_NAV_INPUT = InputSpec()
+
+
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
     import pyarrow.parquet as pq
@@ -67,26 +86,26 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
     return pq.read_table(io.BytesIO(data)).to_pylist()
 
 
-def _partition_dates(storage: Storage, market: str) -> list[str]:
-    """canonical NAV 파티션의 trade_date 목록(정렬)."""
-    marker = canonical_etf_nav_partition(market, "")  # ".../trade_date="
+def _partition_dates(storage: Storage, market: str, spec: InputSpec = _NAV_INPUT) -> list[str]:
+    """canonical 파티션의 trade_date 목록(정렬)."""
+    marker = spec.partition(market, "")  # ".../trade_date="
     dates = {key[len(marker):].split("/", 1)[0] for key in storage.list_keys(marker)}
     dates.discard("")
     return sorted(dates)
 
 
 def _manifest_partitions(
-    storage: Storage, input_run_id: str,
+    storage: Storage, input_run_id: str, spec: InputSpec = _NAV_INPUT,
 ) -> list[tuple[str, str, str, str, frozenset[str]]]:
-    """NormalizeEtfNav가 승인한 직접 key와 현재 실행 winner 범위."""
+    """정제 실행이 승인한 직접 key와 현재 실행 winner 범위."""
     manifest = json.loads(storage.get_bytes(
-        canonical_run_manifest_key("etf_nav", input_run_id)
+        canonical_run_manifest_key(spec.dataset, input_run_id)
     ).decode("utf-8"))
     if not isinstance(manifest, dict) or manifest.get("run_id") != input_run_id:
         raise ValueError(f"요청한 run_id의 manifest가 아니다: run_id={input_run_id}")
-    if (manifest.get("producer") != "normalize_etf_nav"
+    if (manifest.get("producer") != spec.producer
             or manifest.get("canonical_written") is not True):
-        raise ValueError(f"완료된 normalize-etf-nav manifest가 아니다: run_id={input_run_id}")
+        raise ValueError(f"완료된 {spec.producer} manifest가 아니다: run_id={input_run_id}")
     raw = manifest.get("canonical_partitions")
     if not isinstance(raw, list):
         raise ValueError(f"canonical_partitions가 없는 manifest다: run_id={input_run_id}")
@@ -114,7 +133,7 @@ def _manifest_partitions(
         previous = partition
 
         key = item.get("key")
-        expected_key = canonical_run_partition_key("etf_nav", input_run_id, trade_date)
+        expected_key = canonical_run_partition_key(spec.dataset, input_run_id, trade_date)
         if key != expected_key:
             raise ValueError(f"canonical 직접 키가 파티션과 일치하지 않는다: {item!r}")
         digest = item.get("sha256")
@@ -126,12 +145,12 @@ def _manifest_partitions(
             raise ValueError(f"winner_ids가 없는 manifest 파티션이다: {item!r}")
         winner_ids: list[str] = []
         for winner in raw_winners:
-            if not isinstance(winner, dict) or set(winner) != {"etf_id"}:
+            if not isinstance(winner, dict) or set(winner) != {spec.row_key}:
                 raise ValueError(f"winner_ids 항목이 유효하지 않다: {item!r}")
-            etf_id = winner.get("etf_id")
-            if not (isinstance(etf_id, str) and etf_id.strip() == etf_id and etf_id):
+            row_id = winner.get(spec.row_key)
+            if not (isinstance(row_id, str) and row_id.strip() == row_id and row_id):
                 raise ValueError(f"winner_ids 항목이 유효하지 않다: {item!r}")
-            winner_ids.append(etf_id)
+            winner_ids.append(row_id)
         if winner_ids != sorted(set(winner_ids)):
             raise ValueError(f"winner_ids가 정렬·고유 목록이 아니다: {item!r}")
         partitions.append((market, trade_date, key, digest, frozenset(winner_ids)))
@@ -140,11 +159,11 @@ def _manifest_partitions(
 
 def _input_rows(
     storage: Storage, *, input_run_id: str | None,
-    from_date: str | None, to_date: str | None,
+    from_date: str | None, to_date: str | None, spec: InputSpec = _NAV_INPUT,
 ) -> tuple[int, int, Iterator[tuple[str, str, dict, bool]]]:
     """manifest 범위 또는 명시 복구 범위의 물리 행과 논리 선택 여부를 낸다."""
     if input_run_id is not None:
-        partitions = _manifest_partitions(storage, input_run_id)
+        partitions = _manifest_partitions(storage, input_run_id, spec)
 
         def manifest_rows() -> Iterator[tuple[str, str, dict, bool]]:
             """직접 parquet의 물리 행을 읽고 manifest winner 정합성을 검증한다."""
@@ -154,14 +173,14 @@ def _input_rows(
                 if hashlib.sha256(data).hexdigest() != expected_sha:
                     raise ValueError(f"canonical 바이트가 manifest 이후 바뀌었다: key={key}")
                 for row in _read_parquet_rows(data):
-                    etf_id = row.get("etf_id")
-                    selected = etf_id in winner_ids
+                    row_id = row.get(spec.row_key)
+                    selected = row_id in winner_ids
                     if selected:
-                        if etf_id in found:
-                            raise ValueError(f"manifest winner가 canonical에 중복됐다: {etf_id!r}")
+                        if row_id in found:
+                            raise ValueError(f"manifest winner가 canonical에 중복됐다: {row_id!r}")
                         if row.get("market") != market or row.get("trade_date") != trade_date:
-                            raise ValueError(f"manifest winner의 canonical 파티션 정체성이 다르다: {etf_id!r}")
-                        found.add(etf_id)
+                            raise ValueError(f"manifest winner의 canonical 파티션 정체성이 다르다: {row_id!r}")
+                        found.add(row_id)
                     yield market, trade_date, row, selected
                 missing = winner_ids - found
                 if missing:
@@ -173,12 +192,12 @@ def _input_rows(
         """명시된 기존 복구 범위의 canonical parquet 행을 낸다."""
         for market in _MIC_BY_MARKET:
             dates = [
-                date for date in _partition_dates(storage, market)
+                date for date in _partition_dates(storage, market, spec)
                 if (from_date is None or date >= from_date)
                 and (to_date is None or date <= to_date)
             ]
             for trade_date in dates:
-                prefix = canonical_etf_nav_partition(market, trade_date)
+                prefix = spec.partition(market, trade_date)
                 for key in storage.list_keys(prefix + "/"):
                     if key.endswith(".parquet"):
                         for row in _read_parquet_rows(storage.get_bytes(key)):

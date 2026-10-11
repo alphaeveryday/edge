@@ -3,7 +3,7 @@
     python -m data_pipeline.run
         {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument|ingest-raw-sector-index-daily
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|normalize-sector-index-daily|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
+         |normalize-etf|normalize-etf-nav|normalize-sector-index-daily|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav|load-market-series-daily
          |load-assertions|assemble-events|build-minute-universe
          |{ingest-raw|normalize|load}-{macro|sector|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
@@ -94,6 +94,7 @@ from .steps import (
     load_etf_nav,
     load_instruments,
     load_investor_intraday,
+    load_market_series_daily,
     load_price_daily,
     load_price_triggers,
     ingest_raw,
@@ -237,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                  "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "backfill-price-daily-dataguide", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
+                 "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "backfill-price-daily-dataguide", "load-etf-nav", "load-market-series-daily", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
                  # 1분 유니버스 재생성(ALPHA-953): canonical KR holdings → `--universe`
                  # 가 가리키는 정본 객체 갱신. storage(canonical 읽기) 만 필요하고
                  # 수집창·원장 DB 와 무관하다. ⚠️ **세션 계획 전에만** 돌려라 — 장중
@@ -320,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
                         help="load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
-                             "load-etf-nav·load-etf-holdings·load-etf-flow·"
+                             "load-etf-nav·load-market-series-daily·load-etf-holdings·load-etf-flow·"
                              "load-investor-intraday·load-assertions·"
                              "load-disclosure: 명시적 전체 스캔")
     parser.add_argument("--latest-good", action="store_true",
@@ -584,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--series 는 ingest-raw-macro 에서만 쓴다 — 무시되므로 거부한다")
     if args.all_partitions and args.step not in (
         "load-instruments", "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
-        "load-etf-nav", "load-etf-holdings", "load-etf-flow",
+        "load-etf-nav", "load-market-series-daily", "load-etf-holdings", "load-etf-flow",
         "load-investor-intraday",
         "load-assertions",
         "load-disclosure",
@@ -592,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         raise SystemExit(
             "--all 은 load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
-            "load-etf-nav·load-etf-holdings·load-etf-flow·"
+            "load-etf-nav·load-market-series-daily·load-etf-holdings·load-etf-flow·"
             "load-investor-intraday·load-assertions·load-disclosure 전용이다"
         )
     if args.latest_good and args.step != "load-instruments":
@@ -1032,16 +1033,17 @@ def _dispatch(args, settings, storage, run_id) -> int:
 
     # NAV 정상 경로는 NormalizeEtfNav manifest의 direct key와 winner만 읽는다.
     # 날짜창은 명시 복구, 전체 scan은 --all을 직접 쓴 경우뿐이다(ALPHA-1043).
-    if args.step == "load-etf-nav":
+    # 지수 일봉 적재(ALPHA-1260)는 NAV 적재와 입력 범위 규칙이 같다 — 같은 검사를 쓴다.
+    if args.step in ("load-etf-nav", "load-market-series-daily"):
         scopes = sum((args.input_run_id is not None,
                       args.from_date is not None or args.to_date is not None,
                       args.all_partitions))
         if scopes != 1:
             raise SystemExit(
-                "load-etf-nav는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+                f"{args.step}는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
             )
         if (args.from_date is None) != (args.to_date is None):
-            raise SystemExit("load-etf-nav의 --from과 --to는 함께 써야 한다")
+            raise SystemExit(f"{args.step}의 --from과 --to는 함께 써야 한다")
         parsed_dates = []
         for name, value in (("--from", args.from_date), ("--to", args.to_date)):
             if value is None:
@@ -1051,16 +1053,17 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 parsed = datetime.strptime(value, "%Y-%m-%d")
             except ValueError as exc:
                 raise SystemExit(
-                    f"load-etf-nav의 {name}은 YYYY-MM-DD 달력일이어야 한다"
+                    f"{args.step}의 {name}은 YYYY-MM-DD 달력일이어야 한다"
                 ) from exc
             if parsed.strftime("%Y-%m-%d") != value:
                 raise SystemExit(
-                    f"load-etf-nav의 {name}은 YYYY-MM-DD 달력일이어야 한다"
+                    f"{args.step}의 {name}은 YYYY-MM-DD 달력일이어야 한다"
                 )
             parsed_dates.append(parsed)
         if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
-            raise SystemExit("load-etf-nav의 --from은 --to보다 늦을 수 없다")
-        return load_etf_nav.run(
+            raise SystemExit(f"{args.step}의 --from은 --to보다 늦을 수 없다")
+        loader = load_etf_nav if args.step == "load-etf-nav" else load_market_series_daily
+        return loader.run(
             storage, run_id, db=db_config_from_env(settings.db),
             input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,

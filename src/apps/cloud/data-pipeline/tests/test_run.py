@@ -1045,6 +1045,27 @@ def test_load_etf_nav_requires_exactly_one_explicit_scope(monkeypatch):
             main(["load-etf-nav", "--run-id", "R", bound, "2026-08-20"])
 
 
+def test_load_market_series_daily_shares_the_scope_checks_but_runs_its_own_loader(monkeypatch):
+    # WHY(ALPHA-1260): 지수 일봉 적재는 NAV 적재와 범위 검사 블록을 공유한다. 분기를 NAV 로더로
+    # 잘못 태우면 지수 실행이 NAV manifest 를 찾다 실패하고, 검사를 건너뛰면 범위 없는 실행이
+    # canonical 전체를 조용히 훑는다.
+    monkeypatch.delenv("DATA_PIPELINE_CONFIG_FILE", raising=False)
+    monkeypatch.setattr(
+        run_mod.load_etf_nav, "run", lambda *args, **kwargs: pytest.fail("NAV 로더로 갔다"),
+    )
+    captured = []
+    monkeypatch.setattr(
+        run_mod.load_market_series_daily, "run",
+        lambda *args, **kwargs: captured.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(run_mod, "db_config_from_env", lambda _cfg: object())
+    assert main(["load-market-series-daily", "--run-id", "R", "--from", "2026-07-01",
+                 "--to", "2026-10-08"]) == 0
+    assert (captured[0]["from_date"], captured[0]["to_date"]) == ("2026-07-01", "2026-10-08")
+    with pytest.raises(SystemExit, match="load-market-series-daily는 --input-run-id"):
+        main(["load-market-series-daily", "--run-id", "R"])
+
+
 def test_load_etf_nav_forwards_manifest_and_recovery_scopes(monkeypatch):
     # WHY(ALPHA-1043): 정상 manifest와 명시된 날짜/전체 복구 범위를 정확히 전달해야
     # 정상 실행과 사람의 복구 작업이 서로 다른 범위를 읽지 않는다.
