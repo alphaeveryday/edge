@@ -86,7 +86,7 @@ export default function EtfBrief() {
             </View>
           </View>
           <View style={styles.cardFoot}>
-            <LinkRow variant="accent" label="분석 자세히 보기" onPress={() => setOpen(true)} />
+            <LinkRow muted center label="분석 자세히 보기" onPress={() => setOpen(true)} />
           </View>
         </Pressable>
       </View>
