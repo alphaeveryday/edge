@@ -85,7 +85,7 @@ export default function Signup() {
         </View>
       </ScrollView>
       <BottomBar style={styles.foot}>
-        <Text style={styles.terms}>가입하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의한 것으로 봐요.</Text>
+        <Text style={styles.terms}>가입하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의하고 만 14세 이상임을 확인한 것으로 봐요.</Text>
         <CtaButton label="가입하기" tone="dark" disabled={!ready || submit.isPending} onPress={() => submit.mutate()} />
         <View style={styles.toLogin}>
           <Text style={styles.toLoginText}>이미 계정이 있나요?</Text>
