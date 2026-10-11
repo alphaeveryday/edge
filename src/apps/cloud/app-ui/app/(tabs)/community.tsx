@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRouter, useScrollToTop } from 'expo-router';
+import { useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
@@ -29,10 +29,13 @@ export default function Community() {
   const { data: stat } = useVoteStat(voteCode, !!voteCode);
   const { data: voteEtf } = useEtf(voteCode);
   const pull = usePullRefresh(loadMore(feed));
+  // 같은 탭 다시 누르기의 맨 위 이동
+  const top = useRef<ScrollView>(null);
+  useScrollToTop(top);
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={top} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 90 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="커뮤니티" />
         <View style={styles.chips}>

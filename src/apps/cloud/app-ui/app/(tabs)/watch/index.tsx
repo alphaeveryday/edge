@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRouter, useScrollToTop } from 'expo-router';
+import { useRef, useState } from 'react';
 import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { PageTitle } from '@/components/ui';
@@ -25,10 +25,13 @@ export default function Watch() {
   const fade = useSwapFade(group, list.isPlaceholderData);
   const [newOpen, setNewOpen] = useState(false);
   const pull = usePullRefresh();
+  // 같은 탭 다시 누르기의 맨 위 이동
+  const top = useRef<ScrollView>(null);
+  useScrollToTop(top);
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={top} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="관심" />
         <View style={styles.chips}>

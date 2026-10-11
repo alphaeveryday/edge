@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useRouter, useScrollToTop } from 'expo-router';
 import { useState } from 'react';
 import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
@@ -36,6 +36,8 @@ export default function Home() {
   const groupLabel = b?.groups.find((g) => g.key === b.group)?.label ?? '';
 
   const pull = usePullRefresh();
+  // 같은 탭 다시 누르기의 맨 위 이동
+  useScrollToTop(focus.scroll);
   const indices = useIndices();
   return (
     <View style={styles.root}>

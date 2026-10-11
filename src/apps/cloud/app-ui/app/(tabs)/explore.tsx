@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useRouter, useScrollToTop } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { isApiError } from '@/api';
@@ -39,10 +39,13 @@ export default function Explore() {
   }, [daily.error, toast]);
   const nextIdx = sel === null || rows.length < 2 ? null : (sel + 1) % rows.length;
   const pull = usePullRefresh();
+  // 같은 탭 다시 누르기의 맨 위 이동
+  const top = useRef<ScrollView>(null);
+  useScrollToTop(top);
   return (
     <View style={styles.root}>
       <TopBar />
-      <ScrollView {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={top} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
         <PageTitle title="탐색" meta={analysisAsOf()} />
         <View style={{ paddingTop: 22 }}>
