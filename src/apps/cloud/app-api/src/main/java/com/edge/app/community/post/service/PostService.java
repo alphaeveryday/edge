@@ -6,18 +6,18 @@ import com.edge.app.common.cursor.Cursor;
 import com.edge.app.common.cursor.PageResponse;
 import com.edge.app.community.post.dto.PostCreateRequest;
 import com.edge.app.community.post.dto.PostResponse;
-import com.edge.app.community.post.dto.ReplyCreateRequest;
-import com.edge.app.community.post.dto.ReplyResponse;
+import com.edge.app.community.post.dto.CommentCreateRequest;
+import com.edge.app.community.post.dto.CommentResponse;
 import com.edge.app.community.post.entity.Post;
 import com.edge.app.community.post.entity.PostScope;
 import com.edge.app.community.post.entity.PostTag;
-import com.edge.app.community.post.entity.Reply;
-import com.edge.app.community.post.event.ReplyCreated;
-import com.edge.app.community.post.event.ReplyDeleted;
+import com.edge.app.community.post.entity.Comment;
+import com.edge.app.community.post.event.CommentCreated;
+import com.edge.app.community.post.event.CommentDeleted;
 import com.edge.app.community.post.repository.PostLikeRepository;
 import com.edge.app.community.post.repository.PostRepository;
 import com.edge.app.community.post.repository.PostTagRepository;
-import com.edge.app.community.post.repository.ReplyRepository;
+import com.edge.app.community.post.repository.CommentRepository;
 import com.edge.app.etf.entity.Etf;
 import com.edge.app.etf.repository.EtfRepository;
 import com.edge.app.member.entity.Member;
@@ -53,15 +53,15 @@ import java.util.stream.Collectors;
 public class PostService {
     private static final int TAG_MAX = 3;
     private static final String DELETED_MEMBER_NAME = "탈퇴한 사용자";
-    // 피드는 상한, 답글은 하한인 첫 페이지 sentinel
+    // 피드는 상한, 댓글은 하한인 첫 페이지 sentinel
     private static final Cursor FEED_START = new Cursor(Instant.parse("9999-12-31T00:00:00Z"), Long.MAX_VALUE);
-    private static final Cursor REPLY_START = new Cursor(Instant.EPOCH, 0);
+    private static final Cursor COMMENT_START = new Cursor(Instant.EPOCH, 0);
     // 차단 행이 없는 0 으로 두는 게스트의 차단 필터 조회자
     private static final long NO_VIEWER = 0;
 
     private final PostRepository postRepository;
     private final PostTagRepository tagRepository;
-    private final ReplyRepository replyRepository;
+    private final CommentRepository commentRepository;
     private final PostLikeRepository likeRepository;
     private final PrincipalRepository principalRepository;
     private final WatchItemRepository watchItemRepository;
@@ -137,35 +137,35 @@ public class PostService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<ReplyResponse> replies(String id, AppPrincipal principal, Cursor cursor, int size) {
+    public PageResponse<CommentResponse> comments(String id, AppPrincipal principal, Cursor cursor, int size) {
         Post post = existing(id);
-        Cursor from = cursor == null ? REPLY_START : cursor;
+        Cursor from = cursor == null ? COMMENT_START : cursor;
         long viewer = principal == null || principal.memberId() == null ? NO_VIEWER : principal.memberId();
-        List<Reply> replies = replyRepository.page(post.getId(), from.createdAt(), from.id(), viewer, Limit.of(size + 1));
-        return page(replies, size, r -> new Cursor(r.getCreatedAt(), r.getId()), this::replyResponses);
+        List<Comment> comments = commentRepository.page(post.getId(), from.createdAt(), from.id(), viewer, Limit.of(size + 1));
+        return page(comments, size, r -> new Cursor(r.getCreatedAt(), r.getId()), this::commentResponses);
     }
 
     @Transactional
-    public ReplyResponse reply(long memberId, String id, ReplyCreateRequest request) {
+    public CommentResponse comment(long memberId, String id, CommentCreateRequest request) {
         Post post = existing(id);
-        Reply reply = replyRepository.save(Reply.create(post.getId(), memberId, request.body().trim(), Instant.now()));
-        postRepository.addReply(post.getId());
-        eventPublisher.publishEvent(new ReplyCreated(post.getId(), reply.getId(), post.getAuthorId(), memberId, reply.getBody()));
-        return replyResponses(List.of(reply)).get(0);
+        Comment comment = commentRepository.save(Comment.create(post.getId(), memberId, request.body().trim(), Instant.now()));
+        postRepository.addComment(post.getId());
+        eventPublisher.publishEvent(new CommentCreated(post.getId(), comment.getId(), post.getAuthorId(), memberId, comment.getBody()));
+        return commentResponses(List.of(comment)).get(0);
     }
 
-    // 자리 표시 없는 삭제와 답글 수 감소
-    // 그 답글로 생긴 알림의 삭제
+    // 자리 표시 없는 삭제와 댓글 수 감소
+    // 그 댓글로 생긴 알림의 삭제
     @Transactional
-    public void removeReply(long memberId, String id, String replyId) {
+    public void removeComment(long memberId, String id, String commentId) {
         Post post = existing(id);
-        Reply reply = existingReply(post.getId(), replyId);
-        if (reply.getAuthorId() != memberId) {
+        Comment comment = existingComment(post.getId(), commentId);
+        if (comment.getAuthorId() != memberId) {
             throw new GeneralException(ErrorStatus._FORBIDDEN);
         }
-        if (replyRepository.softDelete(reply.getId(), Instant.now()) > 0) {
-            postRepository.subtractReply(post.getId());
-            eventPublisher.publishEvent(new ReplyDeleted(reply.getId()));
+        if (commentRepository.softDelete(comment.getId(), Instant.now()) > 0) {
+            postRepository.subtractComment(post.getId());
+            eventPublisher.publishEvent(new CommentDeleted(comment.getId()));
         }
     }
 
@@ -197,12 +197,12 @@ public class PostService {
         }
     }
 
-    private Reply existingReply(long postId, String replyId) {
+    private Comment existingComment(long postId, String commentId) {
         try {
-            return replyRepository.findByIdAndPostIdAndDeletedAtIsNull(Long.parseLong(replyId), postId)
-                    .orElseThrow(() -> new GeneralException(AppErrorStatus.REPLY_NOT_FOUND));
+            return commentRepository.findByIdAndPostIdAndDeletedAtIsNull(Long.parseLong(commentId), postId)
+                    .orElseThrow(() -> new GeneralException(AppErrorStatus.COMMENT_NOT_FOUND));
         } catch (NumberFormatException e) {
-            throw new GeneralException(AppErrorStatus.REPLY_NOT_FOUND);
+            throw new GeneralException(AppErrorStatus.COMMENT_NOT_FOUND);
         }
     }
 
@@ -230,14 +230,14 @@ public class PostService {
             return new PostResponse(Long.toString(p.getId()),
                     new PostResponse.Etf(p.getEtfCode(), etf == null ? "" : etf.getThemeKey(), etf == null ? p.getEtfCode() : etf.getName()),
                     authors.get(p.getAuthorId()), p.getCreatedAt(), p.getTitle(), p.getBody(), p.getQuoteTag(),
-                    p.getLikeCount(), p.getReplyCount(), liked.contains(p.getId()), p.getViewCount(),
+                    p.getLikeCount(), p.getCommentCount(), liked.contains(p.getId()), p.getViewCount(),
                     requester != null && requester.equals(p.getAuthorId()), null);
         }).toList();
     }
 
-    private List<ReplyResponse> replyResponses(List<Reply> replies) {
-        Map<Long, PostResponse.Author> authors = authors(replies.stream().map(Reply::getAuthorId).collect(Collectors.toSet()));
-        return replies.stream().map(r -> new ReplyResponse(Long.toString(r.getId()), authors.get(r.getAuthorId()),
+    private List<CommentResponse> commentResponses(List<Comment> comments) {
+        Map<Long, PostResponse.Author> authors = authors(comments.stream().map(Comment::getAuthorId).collect(Collectors.toSet()));
+        return comments.stream().map(r -> new CommentResponse(Long.toString(r.getId()), authors.get(r.getAuthorId()),
                 r.getCreatedAt(), r.getBody())).toList();
     }
 

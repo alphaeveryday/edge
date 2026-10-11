@@ -66,18 +66,18 @@ public class NotificationService {
         repository.markAllRead(principalRepository.resolve(principal), Instant.now());
     }
 
-    /** 글쓴이 회원 principal 이 없으면 생성까지 하는 답글 알림 적재와 커밋 뒤 푸시 */
+    /** 글쓴이 회원 principal 이 없으면 생성까지 하는 댓글 알림 적재와 커밋 뒤 푸시 */
     @Transactional
-    public void notifyReply(long postAuthorMemberId, long postId, long replyId, String replyBody) {
+    public void notifyComment(long postAuthorMemberId, long postId, long commentId, String commentBody) {
         long principalId = principalRepository.upsertMember(postAuthorMemberId);
-        repository.save(Notification.comm(principalId, postId, replyId, "새 답글", replyBody, Instant.now()));
-        String preview = replyBody.length() > PUSH_BODY_MAX ? replyBody.substring(0, PUSH_BODY_MAX) + "…" : replyBody;
-        eventPublisher.publishEvent(new PushRequested(principalId, "새 답글", preview, Map.of("postId", Long.toString(postId))));
+        repository.save(Notification.comm(principalId, postId, commentId, "새 댓글", commentBody, Instant.now()));
+        String preview = commentBody.length() > PUSH_BODY_MAX ? commentBody.substring(0, PUSH_BODY_MAX) + "…" : commentBody;
+        eventPublisher.publishEvent(new PushRequested(principalId, "새 댓글", preview, Map.of("postId", Long.toString(postId))));
     }
 
     @Transactional
-    public void removeReply(long replyId) {
-        repository.deleteByReplyId(replyId);
+    public void removeComment(long commentId) {
+        repository.deleteByCommentId(commentId);
     }
 
     private static NotificationResponse response(Notification n) {

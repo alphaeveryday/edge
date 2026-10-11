@@ -7,10 +7,11 @@ import com.edge.app.common.cursor.PageResponse;
 import com.edge.app.community.post.entity.PostScope;
 import com.edge.app.community.post.dto.PostCreateRequest;
 import com.edge.app.community.post.dto.PostResponse;
-import com.edge.app.community.post.dto.ReplyCreateRequest;
-import com.edge.app.community.post.dto.ReplyResponse;
+import com.edge.app.community.post.dto.CommentCreateRequest;
+import com.edge.app.community.post.dto.CommentResponse;
 import com.edge.app.community.post.service.PostService;
 import com.edge.common.apipayload.ApiResponse;
+import io.swagger.v3.oas.annotations.Hidden;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -57,22 +58,43 @@ public class PostController {
     }
 
     // 요청자가 있을 때 차단한 작성자를 빼는 공개 조회
-    @GetMapping("/{id}/replies")
-    public ApiResponse<PageResponse<ReplyResponse>> communityReplies(@PathVariable String id, @Nullable AppPrincipal principal,
+    @GetMapping("/{id}/comments")
+    public ApiResponse<PageResponse<CommentResponse>> communityComments(@PathVariable String id, @Nullable AppPrincipal principal,
             @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return ApiResponse.onSuccess(postService.replies(id, principal, cursor == null ? null : Cursor.decode(cursor), size));
+        return ApiResponse.onSuccess(postService.comments(id, principal, cursor == null ? null : Cursor.decode(cursor), size));
     }
 
-    @PostMapping("/{id}/replies")
-    public ApiResponse<ReplyResponse> communityReply(MemberPrincipal principal, @PathVariable String id,
-            @RequestBody @Valid ReplyCreateRequest request) {
-        return ApiResponse.onSuccess(postService.reply(principal.memberId(), id, request));
+    @PostMapping("/{id}/comments")
+    public ApiResponse<CommentResponse> communityComment(MemberPrincipal principal, @PathVariable String id,
+            @RequestBody @Valid CommentCreateRequest request) {
+        return ApiResponse.onSuccess(postService.comment(principal.memberId(), id, request));
     }
 
-    @DeleteMapping("/{id}/replies/{replyId}")
-    public ApiResponse<Void> communityRemoveReply(MemberPrincipal principal, @PathVariable String id, @PathVariable String replyId) {
-        postService.removeReply(principal.memberId(), id, replyId);
+    @DeleteMapping("/{id}/comments/{commentId}")
+    public ApiResponse<Void> communityRemoveComment(MemberPrincipal principal, @PathVariable String id, @PathVariable String commentId) {
+        postService.removeComment(principal.memberId(), id, commentId);
         return ApiResponse.onSuccess(null);
+    }
+
+    // 1.1.0 이전 앱이 부르는 옛 경로, 계약 문서 제외
+    @Hidden
+    @GetMapping("/{id}/replies")
+    public ApiResponse<PageResponse<CommentResponse>> legacyReplies(@PathVariable String id, @Nullable AppPrincipal principal,
+            @RequestParam(required = false) String cursor, @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return communityComments(id, principal, cursor, size);
+    }
+
+    @Hidden
+    @PostMapping("/{id}/replies")
+    public ApiResponse<CommentResponse> legacyReply(MemberPrincipal principal, @PathVariable String id,
+            @RequestBody @Valid CommentCreateRequest request) {
+        return communityComment(principal, id, request);
+    }
+
+    @Hidden
+    @DeleteMapping("/{id}/replies/{replyId}")
+    public ApiResponse<Void> legacyRemoveReply(MemberPrincipal principal, @PathVariable String id, @PathVariable String replyId) {
+        return communityRemoveComment(principal, id, replyId);
     }
 
     @PutMapping("/{id}/like")

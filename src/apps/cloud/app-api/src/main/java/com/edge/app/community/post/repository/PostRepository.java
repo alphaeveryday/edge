@@ -49,12 +49,12 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     void addLikes(@Param("id") long id, @Param("delta") int delta);
 
     @Modifying(clearAutomatically = true)
-    @Query("update Post p set p.replyCount = p.replyCount + 1 where p.id = :id")
-    void addReply(@Param("id") long id);
+    @Query("update Post p set p.commentCount = p.commentCount + 1 where p.id = :id")
+    void addComment(@Param("id") long id);
 
     @Modifying(clearAutomatically = true)
-    @Query("update Post p set p.replyCount = p.replyCount - 1 where p.id = :id and p.replyCount > 0")
-    void subtractReply(@Param("id") long id);
+    @Query("update Post p set p.commentCount = p.commentCount - 1 where p.id = :id and p.commentCount > 0")
+    void subtractComment(@Param("id") long id);
 
     @Modifying(clearAutomatically = true)
     @Query("update Post p set p.viewCount = p.viewCount + 1 where p.id = :id")

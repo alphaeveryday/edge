@@ -4,7 +4,7 @@ import com.edge.app.common.AppErrorStatus;
 import com.edge.app.common.mail.MailQuota;
 import com.edge.app.common.mail.Mailer;
 import com.edge.app.community.post.repository.PostRepository;
-import com.edge.app.community.post.repository.ReplyRepository;
+import com.edge.app.community.post.repository.CommentRepository;
 import com.edge.app.community.report.dto.ReportRequest;
 import com.edge.app.community.report.repository.ReportRepository;
 import com.edge.app.member.entity.Member;
@@ -24,7 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReportService {
     private final ReportRepository reportRepository;
     private final PostRepository postRepository;
-    private final ReplyRepository replyRepository;
+    private final CommentRepository commentRepository;
     private final MemberRepository memberRepository;
     private final Mailer mailer;
     private final MailQuota mailQuota;
@@ -40,7 +40,7 @@ public class ReportService {
         long targetId = parseId(request.targetId());
         Target target = "post".equals(request.targetType())
                 ? postRepository.findByIdAndDeletedAtIsNull(targetId).map(p -> new Target(p.getAuthorId(), p.getBody())).orElse(null)
-                : replyRepository.findById(targetId).filter(r -> r.getDeletedAt() == null)
+                : commentRepository.findById(targetId).filter(r -> r.getDeletedAt() == null)
                         .map(r -> new Target(r.getAuthorId(), r.getBody())).orElse(null);
         if (target == null) {
             throw new GeneralException(AppErrorStatus.POST_NOT_FOUND);

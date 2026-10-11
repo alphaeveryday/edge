@@ -159,48 +159,63 @@ class PostFlowTests extends ContainerTests {
     }
 
     @Test
-    void repliesPageOldestFirstAndRemovalIsAuthorOnly() {
+    void commentsPageOldestFirstAndRemovalIsAuthorOnly() {
         String a = member("p7@example.com", "A7", List.of("069500"));
         String b = member("p8@example.com", "B7", List.of("069500"));
         String id = (String) post(a, "thread", List.of("069500")).get("id");
         for (String body : List.of("r1", "r2", "r3")) {
-            Map<String, Object> reply = result(call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", body), b));
-            assertEquals("B7", ((Map<?, ?>) reply.get("author")).get("name"));
+            Map<String, Object> comment = result(call("POST", "/api/v1/posts/" + id + "/comments", Map.of("body", body), b));
+            assertEquals("B7", ((Map<?, ?>) comment.get("author")).get("name"));
         }
-        assertEquals(3, result(call("GET", "/api/v1/posts/" + id, null, null)).get("reply"));
-        Map<String, Object> page = result(call("GET", "/api/v1/posts/" + id + "/replies?size=2", null, null));
+        assertEquals(3, result(call("GET", "/api/v1/posts/" + id, null, null)).get("comment"));
+        Map<String, Object> page = result(call("GET", "/api/v1/posts/" + id + "/comments?size=2", null, null));
         assertEquals(List.of("r1", "r2"), items(page).stream().map(i -> i.get("body")).toList());
-        Map<String, Object> next = result(call("GET", "/api/v1/posts/" + id + "/replies?size=2&cursor=" + page.get("nextCursor"), null, null));
+        Map<String, Object> next = result(call("GET", "/api/v1/posts/" + id + "/comments?size=2&cursor=" + page.get("nextCursor"), null, null));
         assertEquals(List.of("r3"), items(next).stream().map(i -> i.get("body")).toList());
         assertNull(next.get("nextCursor"));
 
         assertEquals(403, call("DELETE", "/api/v1/posts/" + id, null, b).getStatusCode().value());
         assertEquals(200, call("DELETE", "/api/v1/posts/" + id, null, a).getStatusCode().value());
         assertEquals(404, call("GET", "/api/v1/posts/" + id, null, null).getStatusCode().value());
-        assertEquals(404, call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", "late"), b).getStatusCode().value());
+        assertEquals(404, call("POST", "/api/v1/posts/" + id + "/comments", Map.of("body", "late"), b).getStatusCode().value());
         List<Map<String, Object>> feed = items(result(call("GET", "/api/v1/posts?code=069500", null, "dev:g4")));
         assertTrue(feed.stream().noneMatch(i -> id.equals(i.get("id"))));
     }
 
     @Test
-    void replyRemovalIsAuthorOnlyAndDecrementsCount() {
+    void commentRemovalIsAuthorOnlyAndDecrementsCount() {
         String a = member("p20@example.com", "A20", List.of("069500"));
         String b = member("p21@example.com", "B20", List.of("069500"));
         String id = (String) post(a, "thread", List.of("069500")).get("id");
         String other = (String) post(a, "other", List.of("069500")).get("id");
-        String r1 = (String) result(call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", "r1"), b)).get("id");
-        result(call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", "r2"), b));
-        String uri = "/api/v1/posts/" + id + "/replies/" + r1;
+        String r1 = (String) result(call("POST", "/api/v1/posts/" + id + "/comments", Map.of("body", "r1"), b)).get("id");
+        result(call("POST", "/api/v1/posts/" + id + "/comments", Map.of("body", "r2"), b));
+        String uri = "/api/v1/posts/" + id + "/comments/" + r1;
 
         assertEquals(401, call("DELETE", uri, null, null).getStatusCode().value());
-        assertEquals(403, call("DELETE", uri, null, a).getStatusCode().value(), "글쓴이도 남의 답글 삭제 불가");
-        assertEquals("POST4004", call("DELETE", "/api/v1/posts/" + other + "/replies/" + r1, null, b).getBody().get("code"), "다른 글의 답글");
-        assertEquals("POST4004", call("DELETE", "/api/v1/posts/" + id + "/replies/abc", null, b).getBody().get("code"));
+        assertEquals(403, call("DELETE", uri, null, a).getStatusCode().value(), "글쓴이도 남의 댓글 삭제 불가");
+        assertEquals("POST4004", call("DELETE", "/api/v1/posts/" + other + "/comments/" + r1, null, b).getBody().get("code"), "다른 글의 댓글");
+        assertEquals("POST4004", call("DELETE", "/api/v1/posts/" + id + "/comments/abc", null, b).getBody().get("code"));
         assertEquals(200, call("DELETE", uri, null, b).getStatusCode().value());
-        assertEquals("POST4004", call("DELETE", uri, null, b).getBody().get("code"), "지운 답글");
+        assertEquals("POST4004", call("DELETE", uri, null, b).getBody().get("code"), "지운 댓글");
 
-        assertEquals(List.of("r2"), items(result(call("GET", "/api/v1/posts/" + id + "/replies", null, null))).stream().map(i -> i.get("body")).toList());
-        assertEquals(1, result(call("GET", "/api/v1/posts/" + id, null, null)).get("reply"));
+        assertEquals(List.of("r2"), items(result(call("GET", "/api/v1/posts/" + id + "/comments", null, null))).stream().map(i -> i.get("body")).toList());
+        assertEquals(1, result(call("GET", "/api/v1/posts/" + id, null, null)).get("comment"));
+    }
+
+    // 1.1.0 이전 앱이 부르는 replies 경로와 reply 필드
+    @Test
+    void legacyReplyPathsAndFieldStillWork() {
+        String a = member("p30@example.com", "A30", List.of("069500"));
+        String b = member("p31@example.com", "B30", List.of("069500"));
+        String id = (String) post(a, "legacy", List.of("069500")).get("id");
+        String c = (String) result(call("POST", "/api/v1/posts/" + id + "/replies", Map.of("body", "old"), b)).get("id");
+        Map<String, Object> detail = result(call("GET", "/api/v1/posts/" + id, null, null));
+        assertEquals(1, detail.get("comment"));
+        assertEquals(1, detail.get("reply"));
+        assertEquals(List.of(c), items(result(call("GET", "/api/v1/posts/" + id + "/replies", null, null))).stream().map(i -> i.get("id")).toList());
+        assertEquals(200, call("DELETE", "/api/v1/posts/" + id + "/replies/" + c, null, b).getStatusCode().value());
+        assertEquals(0, result(call("GET", "/api/v1/posts/" + id, null, null)).get("comment"));
     }
 
     @Test

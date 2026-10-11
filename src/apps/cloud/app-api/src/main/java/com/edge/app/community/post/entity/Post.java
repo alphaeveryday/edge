@@ -41,8 +41,8 @@ public class Post {
     @Column(name = "like_count", nullable = false)
     private int likeCount;
 
-    @Column(name = "reply_count", nullable = false)
-    private int replyCount;
+    @Column(name = "comment_count", nullable = false)
+    private int commentCount;
 
     @Column(name = "view_count", nullable = false)
     private int viewCount;

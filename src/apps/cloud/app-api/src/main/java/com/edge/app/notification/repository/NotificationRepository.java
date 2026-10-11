@@ -37,6 +37,6 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     void markAllRead(@Param("p") long principalId, @Param("at") Instant at);
 
     @Modifying
-    @Query("delete from Notification n where n.replyId = :replyId")
-    void deleteByReplyId(@Param("replyId") long replyId);
+    @Query("delete from Notification n where n.commentId = :commentId")
+    void deleteByCommentId(@Param("commentId") long commentId);
 }

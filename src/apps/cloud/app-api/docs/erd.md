@@ -13,7 +13,7 @@
 
 이름 규칙.
 - 테이블은 단수 snake_case. 회원은 `member`(`user` 금지), 게스트 기기는 `device`, 둘을 묶은 소유자는 `principal`.
-- 쓰기 소유의 자식·연결 테이블은 부모 이름을 접두사로(`watch_item`·`post_tag`·`post_like`·`principal_theme`). 자체 정체성이 있는 것은 제 이름(`reply`·`notification`·`vote`).
+- 쓰기 소유의 자식·연결 테이블은 부모 이름을 접두사로(`watch_item`·`post_tag`·`post_like`·`principal_theme`). 자체 정체성이 있는 것은 제 이름(`comment`·`notification`·`vote`).
 - 동기화 테이블은 단위를 접두사로. ETF 단위 발행본·시장 데이터는 `etf_`(`etf_move`·`etf_analysis`·`etf_analysis_axis`·`etf_rank`·`etf_detail`·`etf_quote`·`etf_candle`). 마스터는 이름 그대로(`etf`·`theme`).
 - 참조 컬럼은 `<테이블>_id`(`member_id`·`device_id`·`principal_id`·`post_id`·`etf_analysis_id`). ETF 와 테마는 자연키라 `etf_code`·`theme_key`. 파이프라인 키는 원래 이름 유지(`instrument_id`·`concept_id`).
 - 시각 컬럼은 `_at`(`created_at`·`updated_at`·`deleted_at`·`published_at`·`synced_at`), 기준일은 `as_of`.
@@ -55,11 +55,11 @@
 | handle | varchar(30) UNIQUE | 아바타 색은 앱이 handle 로 매핑 |
 | disclaimer_accepted_at | timestamptz NULL | 면책 동의 |
 | created_at, updated_at | timestamptz | |
-| deleted_at | timestamptz NULL | 탈퇴. 글·답글은 남기고 작성자 익명 표시 |
+| deleted_at | timestamptz NULL | 탈퇴. 글·댓글은 남기고 작성자 익명 표시 |
 
 회원 테이블은 `member`. `user` 는 PostgreSQL 예약어이기도 하다.
 
-탈퇴(`DELETE /me`): `deleted_at` 을 채우고 같은 트랜잭션에서 `email`·`password_hash`·`provider_subject` 를 NULL 로 지운다. 행은 남겨 글·답글·투표의 작성자 참조를 유지하고, `nick`·`handle` 은 그대로 둔다(익명 표시는 `deleted_at` 으로 판단). 식별 정보를 비우므로 같은 이메일·소셜 계정으로 다시 가입할 수 있다. `UNIQUE(email)`·`UNIQUE(provider, provider_subject)` 는 NULL 을 중복으로 보지 않는다. 함께 `refresh_token` 전부 revoke, `device.member_id` NULL. 액세스 토큰은 서명만 검증하므로 만료(1시간)까지 좋아요·투표 같은 쓰기가 통과한다. 투표 경로에 회원 조회를 붙이지 않기 위한 허용.
+탈퇴(`DELETE /me`): `deleted_at` 을 채우고 같은 트랜잭션에서 `email`·`password_hash`·`provider_subject` 를 NULL 로 지운다. 행은 남겨 글·댓글·투표의 작성자 참조를 유지하고, `nick`·`handle` 은 그대로 둔다(익명 표시는 `deleted_at` 으로 판단). 식별 정보를 비우므로 같은 이메일·소셜 계정으로 다시 가입할 수 있다. `UNIQUE(email)`·`UNIQUE(provider, provider_subject)` 는 NULL 을 중복으로 보지 않는다. 함께 `refresh_token` 전부 revoke, `device.member_id` NULL. 액세스 토큰은 서명만 검증하므로 만료(1시간)까지 좋아요·투표 같은 쓰기가 통과한다. 투표 경로에 회원 조회를 붙이지 않기 위한 허용.
 
 ### device
 | 컬럼 | 타입 | 비고 |
@@ -181,12 +181,12 @@ PK `(principal_id, etf_code)`. 계약에 아직 엔드포인트가 없다(노션
 | kind | varchar(10) | `watch` \| `comm` |
 | etf_code | varchar(6) NULL | |
 | post_id | bigint → post NULL | comm |
-| reply_id | bigint → reply NULL | comm. 답글 삭제 시 함께 삭제. V15 이전 알림은 NULL |
+| comment_id | bigint → comment NULL | comm. 댓글 삭제 시 함께 삭제. V15 이전 알림은 NULL |
 | title, body | text | |
 | read_at | timestamptz NULL | API `read` = `read_at IS NOT NULL` |
 | created_at | timestamptz | |
 
-인덱스 `(principal_id, created_at DESC, id DESC)`, 부분 인덱스 `(principal_id) WHERE read_at IS NULL`(unread-count), `(reply_id) WHERE reply_id IS NOT NULL`(답글 삭제).
+인덱스 `(principal_id, created_at DESC, id DESC)`, 부분 인덱스 `(principal_id) WHERE read_at IS NULL`(unread-count), `(comment_id) WHERE comment_id IS NOT NULL`(댓글 삭제).
 
 ### post
 | 컬럼 | 타입 | 비고 |
@@ -197,7 +197,7 @@ PK `(principal_id, etf_code)`. 계약에 아직 엔드포인트가 없다(노션
 | title | varchar(100) NULL | |
 | body | varchar(280) | PRD 280자 |
 | quote_tag | varchar(30) NULL | |
-| like_count, reply_count, view_count | integer DEFAULT 0 | 비정규화 카운터. 갱신은 같은 트랜잭션 |
+| like_count, comment_count, view_count | integer DEFAULT 0 | 비정규화 카운터. 갱신은 같은 트랜잭션 |
 | created_at, updated_at | timestamptz | |
 | deleted_at | timestamptz NULL | 소프트 삭제 |
 
@@ -212,7 +212,7 @@ PK `(principal_id, etf_code)`. 계약에 아직 엔드포인트가 없다(노션
 
 PK `(post_id, etf_code)`. 최대 3개(POST4003)는 서비스가 센다. 인덱스 `(etf_code)`.
 
-### reply
+### comment
 | 컬럼 | 타입 |
 |---|---|
 | id | bigint PK |
@@ -238,8 +238,8 @@ PK `(post_id, member_id)`. PUT 은 `INSERT ... ON CONFLICT DO NOTHING`, DELETE �
 |---|---|---|
 | id | bigint PK | |
 | reporter_member_id | bigint → member | |
-| target_type | varchar(10) | CHECK `post`·`reply` |
-| target_id | bigint | post 또는 reply id |
+| target_type | varchar(10) | CHECK `post`·`comment` |
+| target_id | bigint | post 또는 comment id |
 | reason | varchar(10) | CHECK `spam`·`abuse`·`sexual`·`scam`·`etc` |
 | created_at | timestamptz | |
 
@@ -252,7 +252,7 @@ UNIQUE `(reporter_member_id, target_type, target_id)`. 삽입은 `ON CONFLICT DO
 | blocked_id | bigint → member |
 | created_at | timestamptz |
 
-PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심·인기·ETF 탭)와 답글 목록에서 blocked 의 글·답글을 빼고, blocked 의 답글로 blocker 에게 가는 알림을 만들지 않는다. 글 상세는 `blocked=true` 로 그대로 준다. 차단 해제는 1차 범위 밖.
+PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심·인기·ETF 탭)와 댓글 목록에서 blocked 의 글·댓글을 빼고, blocked 의 댓글로 blocker 에게 가는 알림을 만들지 않는다. 글 상세는 `blocked=true` 로 그대로 준다. 차단 해제는 1차 범위 밖.
 
 ### vote (기존 forecast_vote 재정의)
 | 컬럼 | 타입 | 비고 |
@@ -447,15 +447,15 @@ erDiagram
     principal ||--o{ notification : ""
     member ||--o{ post : "author"
     post ||--o{ post_tag : ""
-    post ||--o{ reply : ""
+    post ||--o{ comment : ""
     post ||--o{ post_like : ""
-    member ||--o{ reply : "author"
+    member ||--o{ comment : "author"
     member ||--o{ post_like : ""
     member ||--o{ report : "reporter"
     member ||--o{ member_block : "blocker"
     member ||--o{ vote : ""
     post o|--o{ notification : "comm"
-    reply o|--o{ notification : "comm"
+    comment o|--o{ notification : "comm"
 ```
 
 ## ER 다이어그램 (읽기 전용 동기화)

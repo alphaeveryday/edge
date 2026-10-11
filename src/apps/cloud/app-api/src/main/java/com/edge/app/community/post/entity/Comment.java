@@ -14,7 +14,7 @@ import java.time.Instant;
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class Reply {
+public class Comment {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -34,12 +34,12 @@ public class Reply {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
-    public static Reply create(long postId, long authorId, String body, Instant at) {
-        Reply reply = new Reply();
-        reply.postId = postId;
-        reply.authorId = authorId;
-        reply.body = body;
-        reply.createdAt = at;
-        return reply;
+    public static Comment create(long postId, long authorId, String body, Instant at) {
+        Comment comment = new Comment();
+        comment.postId = postId;
+        comment.authorId = authorId;
+        comment.body = body;
+        comment.createdAt = at;
+        return comment;
     }
 }

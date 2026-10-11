@@ -27,7 +27,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 답글 알림의 푸시가 글쓴이가 로그인한 기기에만 가는지
+ * 댓글 알림의 푸시가 글쓴이가 로그인한 기기에만 가는지
  * 로그아웃 뒤 게스트 재등록, 토큰 이동, 무효 토큰 정리
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -73,25 +73,25 @@ class PushFlowTests extends ContainerTests {
                 "Authorization", "Bearer " + bearer))).get("id");
     }
 
-    void reply(String post, String bearer, String body) {
-        result(call(port, "POST", "/api/v1/posts/" + post + "/replies", Map.of("body", body), "Authorization", "Bearer " + bearer));
+    void comment(String post, String bearer, String body) {
+        result(call(port, "POST", "/api/v1/posts/" + post + "/comments", Map.of("body", body), "Authorization", "Bearer " + bearer));
     }
 
     @Test
-    void replyPushReachesAuthorDeviceUntilGuestReRegistration() {
+    void commentPushReachesAuthorDeviceUntilGuestReRegistration() {
         when(expo.send(any(), any(), any(), any())).thenReturn(List.of());
         String author = member("push1@example.com");
         String other = member("push2@example.com");
         result(register("ExponentPushToken[p1]", author, "push-dev-1"));
         String post = post(author);
 
-        reply(post, other, "답글 하나");
-        verify(expo, timeout(3000)).send(List.of("ExponentPushToken[p1]"), "새 답글", "답글 하나", Map.of("postId", post));
+        comment(post, other, "댓글 하나");
+        verify(expo, timeout(3000)).send(List.of("ExponentPushToken[p1]"), "새 댓글", "댓글 하나", Map.of("postId", post));
 
         // 로그아웃 뒤 앱의 게스트 재등록은 회원 알림 대상에서 제외
         result(register("ExponentPushToken[p1]", null, "push-dev-1"));
         clearInvocations(expo);
-        reply(post, other, "답글 둘");
+        comment(post, other, "댓글 둘");
         verify(expo, after(1000).never()).send(any(), any(), any(), any());
     }
 
@@ -105,8 +105,8 @@ class PushFlowTests extends ContainerTests {
 
         when(expo.send(any(), any(), any(), any())).thenReturn(List.of("ExponentPushToken[p3]"));
         String post = post(author);
-        reply(post, other, "답글");
-        verify(expo, timeout(3000)).send(List.of("ExponentPushToken[p3]"), "새 답글", "답글", Map.of("postId", post));
+        comment(post, other, "댓글");
+        verify(expo, timeout(3000)).send(List.of("ExponentPushToken[p3]"), "새 댓글", "댓글", Map.of("postId", post));
         // 발송 직후 정리까지의 비동기 간격
         String left = "ExponentPushToken[p3]";
         for (int i = 0; i < 30 && left != null; i++) {

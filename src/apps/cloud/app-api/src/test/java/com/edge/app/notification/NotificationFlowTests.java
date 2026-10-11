@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 답글로 생기는 글쓴이의 comm 알림
+ * 댓글로 생기는 글쓴이의 comm 알림
  * 본인 알림에 한정한 읽음 처리와 종류 필터와 커서의 목록
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -66,12 +66,12 @@ class NotificationFlowTests extends ContainerTests {
     }
 
     @Test
-    void replyNotifiesPostAuthorExceptSelf() {
+    void commentNotifiesPostAuthorExceptSelf() {
         String author = member("n1@example.com");
         String other = member("n2@example.com");
         String post = (String) result(call("POST", "/api/v1/posts", Map.of("body", "글", "tags", List.of("069500")), author)).get("id");
-        result(call("POST", "/api/v1/posts/" + post + "/replies", Map.of("body", "내 답글"), author));
-        result(call("POST", "/api/v1/posts/" + post + "/replies", Map.of("body", "남의 답글"), other));
+        result(call("POST", "/api/v1/posts/" + post + "/comments", Map.of("body", "내 댓글"), author));
+        result(call("POST", "/api/v1/posts/" + post + "/comments", Map.of("body", "남의 댓글"), other));
 
         assertEquals(1, result(call("GET", "/api/v1/notifications/unread-count", null, author)).get("count"));
         assertEquals(0, result(call("GET", "/api/v1/notifications/unread-count", null, other)).get("count"));
@@ -80,7 +80,7 @@ class NotificationFlowTests extends ContainerTests {
         Map<String, Object> n = list.get(0);
         assertEquals("comm", n.get("kind"));
         assertEquals(post, n.get("postId"));
-        assertEquals("남의 답글", n.get("body"));
+        assertEquals("남의 댓글", n.get("body"));
         assertEquals(false, n.get("read"));
         assertFalse(n.containsKey("etf"));
 
@@ -94,17 +94,17 @@ class NotificationFlowTests extends ContainerTests {
     }
 
     @Test
-    void replyRemovalRemovesItsNotificationOnly() {
+    void commentRemovalRemovesItsNotificationOnly() {
         String author = member("n5@example.com");
         String other = member("n6@example.com");
         String post = (String) result(call("POST", "/api/v1/posts", Map.of("body", "글", "tags", List.of("069500")), author)).get("id");
-        String gone = (String) result(call("POST", "/api/v1/posts/" + post + "/replies", Map.of("body", "지울 답글"), other)).get("id");
-        result(call("POST", "/api/v1/posts/" + post + "/replies", Map.of("body", "남길 답글"), other));
+        String gone = (String) result(call("POST", "/api/v1/posts/" + post + "/comments", Map.of("body", "지울 댓글"), other)).get("id");
+        result(call("POST", "/api/v1/posts/" + post + "/comments", Map.of("body", "남길 댓글"), other));
         assertEquals(2, result(call("GET", "/api/v1/notifications/unread-count", null, author)).get("count"));
 
-        result(call("DELETE", "/api/v1/posts/" + post + "/replies/" + gone, null, other));
+        result(call("DELETE", "/api/v1/posts/" + post + "/comments/" + gone, null, other));
         assertEquals(1, result(call("GET", "/api/v1/notifications/unread-count", null, author)).get("count"));
-        assertEquals(List.of("남길 답글"), items(result(call("GET", "/api/v1/notifications", null, author))).stream().map(i -> i.get("body")).toList());
+        assertEquals(List.of("남길 댓글"), items(result(call("GET", "/api/v1/notifications", null, author))).stream().map(i -> i.get("body")).toList());
     }
 
     @Test

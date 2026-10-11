@@ -80,8 +80,8 @@ class ModerationFlowTests extends ContainerTests {
         return (String) result(call("POST", "/api/v1/posts", Map.of("body", body, "tags", List.of("069500")), m.token())).get("id");
     }
 
-    String reply(Member m, String postId, String body) {
-        return (String) result(call("POST", "/api/v1/posts/" + postId + "/replies", Map.of("body", body), m.token())).get("id");
+    String comment(Member m, String postId, String body) {
+        return (String) result(call("POST", "/api/v1/posts/" + postId + "/comments", Map.of("body", body), m.token())).get("id");
     }
 
     int unread(Member m) {
@@ -111,11 +111,11 @@ class ModerationFlowTests extends ContainerTests {
         assertNull(result(call("GET", "/api/v1/posts/" + bPost, null, c.token())).get("blocked"));
 
         int before = unread(a);
-        String bReply = reply(b, aPost, "차단된 답글");
-        String cReply = reply(c, aPost, "보이는 답글");
-        assertEquals(before + 1, unread(a), "차단한 회원의 답글은 알림을 만들지 않는다");
-        assertEquals(List.of(cReply), ids(call("GET", "/api/v1/posts/" + aPost + "/replies", null, a.token())));
-        assertEquals(List.of(bReply, cReply), ids(call("GET", "/api/v1/posts/" + aPost + "/replies", null, c.token())));
+        String bComment = comment(b, aPost, "차단된 댓글");
+        String cComment = comment(c, aPost, "보이는 댓글");
+        assertEquals(before + 1, unread(a), "차단한 회원의 댓글은 알림을 만들지 않는다");
+        assertEquals(List.of(cComment), ids(call("GET", "/api/v1/posts/" + aPost + "/comments", null, a.token())));
+        assertEquals(List.of(bComment, cComment), ids(call("GET", "/api/v1/posts/" + aPost + "/comments", null, c.token())));
     }
 
     @Test
@@ -135,7 +135,7 @@ class ModerationFlowTests extends ContainerTests {
         Member author = member("mr-a@example.com");
         Member reporter = member("mr-b@example.com");
         String postId = post(author, "신고될 원문");
-        String replyId = reply(author, postId, "신고될 답글");
+        String commentId = comment(author, postId, "신고될 댓글");
 
         Map<String, String> body = Map.of("targetType", "post", "targetId", postId, "reason", "abuse");
         assertEquals(200, call("POST", "/api/v1/reports", body, reporter.token()).getStatusCode().value());
@@ -144,7 +144,10 @@ class ModerationFlowTests extends ContainerTests {
         verify(mailer, times(1)).send(eq("operator@localhost"), anyString(), text.capture());
         assertTrue(text.getValue().contains("신고될 원문") && text.getValue().contains(author.handle()));
 
-        assertEquals(200, call("POST", "/api/v1/reports", Map.of("targetType", "reply", "targetId", replyId, "reason", "spam"), reporter.token()).getStatusCode().value());
+        assertEquals(200, call("POST", "/api/v1/reports", Map.of("targetType", "comment", "targetId", commentId, "reason", "spam"), reporter.token()).getStatusCode().value());
+        verify(mailer, times(2)).send(eq("operator@localhost"), anyString(), anyString());
+        // 1.1.0 이전 앱의 reply 는 같은 comment 신고로 중복 처리
+        assertEquals(200, call("POST", "/api/v1/reports", Map.of("targetType", "reply", "targetId", commentId, "reason", "spam"), reporter.token()).getStatusCode().value());
         verify(mailer, times(2)).send(eq("operator@localhost"), anyString(), anyString());
 
         assertEquals("POST4001", call("POST", "/api/v1/reports", Map.of("targetType", "post", "targetId", "999999999", "reason", "spam"), reporter.token()).getBody().get("code"));

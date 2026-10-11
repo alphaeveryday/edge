@@ -54,7 +54,7 @@ tags:
   - name: analysis
     description: AI 일간 분석과 요인·지표 페이지. 미생성은 ANALYSIS4001
   - name: community
-    description: 글·답글·좋아요·투표. 쓰기는 회원
+    description: 글·댓글·좋아요·투표. 쓰기는 회원
   - name: notification
     description: 알림 목록·읽음
 
@@ -73,7 +73,7 @@ x-error-codes:
   POST4001: { http: 404, message: 없는 글입니다. }
   POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 의 커뮤니티 정책
   POST4003: { http: 400, message: 태그는 최대 3개입니다. }
-  POST4004: { http: 404, message: 없는 답글입니다. }
+  POST4004: { http: 404, message: 없는 댓글입니다. }
   WATCH4001: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
   WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 의 관심 정책
   MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
@@ -691,20 +691,20 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Empty' }
         '403': { $ref: '#/components/responses/Error' }   # 남의 글
-  /posts/{id}/replies:
+  /posts/{id}/comments:
     get:
       tags: [community]
-      operationId: communityReplies
-      summary: 답글 목록
+      operationId: communityComments
+      summary: 댓글 목록
       security: []
-      description: 회원 요청이면 그 회원이 차단한 작성자의 답글은 빠진다.
+      description: 회원 요청이면 그 회원이 차단한 작성자의 댓글은 빠진다.
       parameters:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/Size' }
       responses:
         '200':
-          description: 답글 목록
+          description: 댓글 목록
           content:
             application/json:
               schema:
@@ -715,12 +715,12 @@ paths:
                         allOf:
                           - $ref: '#/components/schemas/Page'
                           - properties:
-                              items: { type: array, items: { $ref: '#/components/schemas/Reply' } }
+                              items: { type: array, items: { $ref: '#/components/schemas/Comment' } }
         '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
     post:
       tags: [community]
-      operationId: communityReply
-      summary: 답글 작성
+      operationId: communityComment
+      summary: 댓글 작성
       security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/Id' }]
       requestBody:
@@ -734,29 +734,29 @@ paths:
                 body: { type: string }
       responses:
         '200':
-          description: 작성된 답글
+          description: 작성된 댓글
           content:
             application/json:
               schema:
                 allOf:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
-                      result: { $ref: '#/components/schemas/Reply' }
+                      result: { $ref: '#/components/schemas/Comment' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
-  /posts/{id}/replies/{replyId}:
+  /posts/{id}/comments/{commentId}:
     delete:
       tags: [community]
-      operationId: communityRemoveReply
-      summary: 답글 삭제
+      operationId: communityRemoveComment
+      summary: 댓글 삭제
       security: [{ bearerAuth: [] }]
-      description: 작성자 본인만. 자리 표시 없이 목록에서 빠지고 글의 reply 가 1 줄며, 그 답글로 생긴 글쓴이 알림도 지운다.
+      description: 작성자 본인만. 자리 표시 없이 목록에서 빠지고 글의 comment 가 1 줄며, 그 댓글로 생긴 글쓴이 알림도 지운다.
       parameters:
         - { $ref: '#/components/parameters/Id' }
-        - { name: replyId, in: path, required: true, schema: { type: string } }
+        - { name: commentId, in: path, required: true, schema: { type: string } }
       responses:
         '200': { $ref: '#/components/responses/Empty' }
-        '403': { $ref: '#/components/responses/Error' }   # 남의 답글
-        '404': { $ref: '#/components/responses/Error' }   # POST4001, POST4004 지운 답글·다른 글의 답글
+        '403': { $ref: '#/components/responses/Error' }   # 남의 댓글
+        '404': { $ref: '#/components/responses/Error' }   # POST4001, POST4004 지운 댓글·다른 글의 댓글
   /posts/{id}/like:
     put:
       tags: [community]
@@ -782,7 +782,7 @@ paths:
     post:
       tags: [community]
       operationId: communityReport
-      summary: 글·답글 신고
+      summary: 글·댓글 신고
       security: [{ bearerAuth: [] }]
       description: 신고를 저장하고 운영자에게 원문을 메일로 보낸다. 같은 대상을 다시 신고해도 200 이고 저장·메일은 한 번뿐. 운영자는 24시간 안에 확인해 DB 에서 소프트 삭제한다.
       requestBody:
@@ -793,7 +793,7 @@ paths:
               type: object
               required: [targetType, targetId, reason]
               properties:
-                targetType: { type: string, enum: [post, reply] }
+                targetType: { type: string, enum: [post, comment, reply], description: reply 는 1.1.0 이전 앱 호환, comment 로 저장 }
                 targetId: { type: string }
                 reason: { type: string, enum: [spam, abuse, sexual, scam, etc], description: 스팸·욕설·음란·사기·기타 }
       responses:
@@ -807,7 +807,7 @@ paths:
       operationId: communityBlock
       summary: 회원 차단
       security: [{ bearerAuth: [] }]
-      description: 단방향 차단. 요청 회원에게 그 회원의 글·답글이 목록에서 빠지고 새 답글 알림이 오지 않는다. 멱등. 차단 해제는 1차 범위 밖.
+      description: 단방향 차단. 요청 회원에게 그 회원의 글·댓글이 목록에서 빠지고 새 댓글 알림이 오지 않는다. 멱등. 차단 해제는 1차 범위 밖.
       parameters:
         - { name: handle, in: path, required: true, schema: { type: string }, description: '@ 포함 handle' }
       responses:
@@ -1175,7 +1175,7 @@ components:
     # ── 커뮤니티 ──
     Post:
       type: object
-      required: [id, etf, author, time, body, like, reply, liked]
+      required: [id, etf, author, time, body, like, comment, liked]
       properties:
         id: { type: string }
         etf:
@@ -1196,12 +1196,13 @@ components:
         body: { type: string }
         quoteTag: { type: string }
         like: { type: integer }
-        reply: { type: integer }
+        comment: { type: integer }
+        reply: { type: integer, deprecated: true, description: comment 와 같은 값. 1.1.0 이전 앱 호환 }
         liked: { type: boolean }
         views: { type: integer }
         mine: { type: boolean }
         blocked: { type: boolean, description: 요청 회원이 차단한 작성자의 글. 글 상세에서만 true 로 온다 }
-    Reply:
+    Comment:
       type: object
       required: [id, author, time, body]
       properties:

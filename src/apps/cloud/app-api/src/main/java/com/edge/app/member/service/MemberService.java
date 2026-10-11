@@ -44,7 +44,7 @@ public class MemberService {
 
     // 탈퇴 시 리프레시 전부 폐기
     // 탈퇴 시 디바이스 연결 해제
-    // 탈퇴 시 글·답글 외 회원 행 삭제
+    // 탈퇴 시 글·댓글 외 회원 행 삭제
     @Transactional
     public void deleteAccount(long memberId) {
         Instant now = Instant.now();
