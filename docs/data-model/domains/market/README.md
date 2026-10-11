@@ -5,6 +5,8 @@
 현재 승자와 과거 승자를 미확정 S3 후보와 구별한다.
 `minute_price_judgment`·`minute_price_baseline_snapshot`·`minute_price_baseline_set`은 가격 판정 시도마다
 실제로 쓴 입력 세대·기준선·앵커와 확정 결과를 보존한다(판정 근거 조회용, 원본 본문 재검증은 하지 않는다).
+`market_series_daily`는 `market_series`에 등록된 시계열의 일별 값(시가·고가·저가·종가)을 보존한다.
+등록된 시계열은 코스피·코스닥 종합지수 2종이다.
 `instrument`·`etf_profile`·`market_series`는 기준정보 도메인에서 참조하는 컨텍스트다.
 
 ![시장 데이터와 수집 상태 ERD](erd.svg)

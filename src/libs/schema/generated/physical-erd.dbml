@@ -719,6 +719,21 @@ Table "market_series" {
   "status" varchar(20) [not null]
 }
 
+Table "market_series_daily" {
+  "market_series_id" text [not null]
+  "trade_date" date [not null]
+  "open_value" numeric(24,8)
+  "high_value" numeric(24,8)
+  "low_value" numeric(24,8)
+  "close_value" numeric(24,8) [not null]
+  "available_at" timestamptz [not null]
+  "data_version" varchar(50) [not null]
+
+  indexes {
+    ("market_series_id", "trade_date") [pk]
+  }
+}
+
 Table "minute_ingestion_session" {
   "session_id" text [pk]
   "dataset" text [not null]
@@ -1476,6 +1491,7 @@ Ref: "instrument".("instrument_id", "entity_type") > "entity".("entity_id", "ent
 Ref: "instrument_classification"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_daily"."instrument_id" > "instrument"."instrument_id"
 Ref: "investor_flow_intraday"."instrument_id" > "instrument"."instrument_id"
+Ref: "market_series_daily"."market_series_id" > "market_series"."market_series_id"
 Ref: "minute_ingestion_window"."session_id" > "minute_ingestion_session"."session_id"
 Ref: "minute_price_baseline_set"."snapshot_id" > "minute_price_baseline_snapshot"."snapshot_id"
 Ref: "minute_price_baseline_snapshot"."session_id" > "minute_ingestion_session"."session_id"
