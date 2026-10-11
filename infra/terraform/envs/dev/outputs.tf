@@ -143,6 +143,19 @@ output "super_admin_ui_distribution_id" {
   value       = module.super_admin_site.distribution_id
 }
 
+# ── 랜딩페이지 수동 업로드용 값 (s3 cp/sync 대상 버킷 · 무효화할 배포) ──
+output "landing_url" {
+  value = module.landing_site.url
+}
+
+output "landing_bucket" {
+  value = module.landing_site.bucket_name
+}
+
+output "landing_distribution_id" {
+  value = module.landing_site.distribution_id
+}
+
 # ── Airflow 실행 환경(ALPHA-1119) — deploy-airflow·검증 절차가 쓰는 이름 ──
 output "airflow_cluster_name" {
   value = module.airflow.cluster_name

@@ -805,6 +805,29 @@ moved {
   to   = module.pipeline
 }
 
+# ── ETF Orca 랜딩페이지 (etforca.com) ───────────────────
+# 영역과 인증서는 foundation 이 소유한다(route53.tf·acm.tf 의 etforca). 여기서는 조회만 한다.
+# 파일은 이 저장소에 없다 — 버킷에 직접 올린다(index.html·assets/).
+data "aws_route53_zone" "etforca" {
+  name = var.landing_domain
+}
+
+data "aws_acm_certificate" "etforca_cdn" {
+  provider    = aws.us_east_1
+  domain      = var.landing_domain
+  statuses    = ["ISSUED"]
+  most_recent = true
+}
+
+module "landing_site" {
+  source = "../../modules/static-site"
+
+  name            = "${local.prefix}-landing"
+  domain_name     = var.landing_domain
+  zone_id         = data.aws_route53_zone.etforca.zone_id
+  certificate_arn = data.aws_acm_certificate.etforca_cdn.arn
+}
+
 # ── ETF Orca 앱 API: app-api (ADR-0056) ─────────────────
 # B2C 앱 서버. 파이프라인·콘솔이 쓰는 `edge-dev` 와 DB 인스턴스를 나눈다. 폭발 반경(스키마
 # 머지=재부팅=1분 레인 정지, ALPHA-924)·부하 성격·PII 경계가 이유다. 파이프라인 데이터는

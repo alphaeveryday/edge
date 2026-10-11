@@ -33,7 +33,7 @@ infra/terraform/
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
 
-`ecs-service` 를 super-admin-api·tenant-sync-api·app-api 가(app-api 만 `autoscaling` 입력으로 CPU target tracking 1~2대, ADR-0056), `static-site` 를 super-admin UI 가 쓴다(S3 정적 호스팅이 실물인 클라우드 표면 전용). 데모 표면(MTS·검수 콘솔)은 `proxy-site`(CloudFront→박스 오리진 창문)를 동일 재사용한다 — 서빙 원칙(ALPHA-632): 모든 데모 표면은 박스가 서빙한다. (tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032.)
+`ecs-service` 를 super-admin-api·tenant-sync-api·app-api 가(app-api 만 `autoscaling` 입력으로 CPU target tracking 1~2대, ADR-0056), `static-site` 를 super-admin UI 와 ETF Orca 랜딩페이지(`etforca.com`)가 쓴다(S3 정적 호스팅이 실물인 클라우드 표면 전용). 데모 표면(MTS·검수 콘솔)은 `proxy-site`(CloudFront→박스 오리진 창문)를 동일 재사용한다 — 서빙 원칙(ALPHA-632): 모든 데모 표면은 박스가 서빙한다. (tenant-console 은 온프렘 플레인이라 cloud 정적사이트 없음 — ADR-0032.)
 (tenant-console-api 는 onprem 플레인이라 dev ECS 에서 제거 — 실 배포처는 데모 박스 compose, ADR-0029·0033.)
 세 API 는 각자 전용 ALB 뒤에 있다 — tenant-sync-api=`sync-dev.edgesignal.dev`(mTLS 예정), super-admin-api=`admin-api-dev.edgesignal.dev`, app-api=`etforca.edgesignal.dev`(ETF Orca 앱, 별도 RDS `edge-dev-app`+ElastiCache, ADR-0056). app-api 는 앱 테이블 동기화를 위해 파이프라인 RDS 도 읽기 전용 롤 `app_sync_ro` 로 읽는다(ALPHA-1134, 롤·시크릿 수동 선생성). 진입점은 호스트 단위 1:1, ALB 경로 라우팅 없음(ADR-0034). 단 admin 콘솔 CDN(`admin-dev`)은 `/api/*` 를 admin ALB 오리진으로 프록시한다(same-origin 세션 쿠키, ALPHA-615) — ALB 계층의 1:1 은 그대로다.
 
@@ -101,6 +101,18 @@ cd ../envs/dev  && terraform apply
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
 - Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../src/apps/cloud/airflow/README.md) "최초 구축")
+- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — CD 가 없다. 랜딩 파일이 이 저장소 밖에 있어 사람이 올린다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다. 아래는 저장소 루트에서 실행한다. `envs/dev` 에서 `terraform init` 을 마쳤고, 이 버킷에 쓰고 CloudFront 캐시를 비울 수 있는 AWS 자격증명이 있어야 한다.
+  ```bash
+  cd infra/terraform/envs/dev
+  LANDING_DIR="<랜딩 파일 폴더>"   # 첫 화면 HTML 과 assets/ 가 있는 폴더
+  BUCKET=$(terraform output -raw landing_bucket)
+  DIST=$(terraform output -raw landing_distribution_id)
+  aws s3 cp "$LANDING_DIR/<첫 화면 HTML>" "s3://$BUCKET/index.html" \
+    --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+  aws s3 sync "$LANDING_DIR/assets" "s3://$BUCKET/assets" --delete
+  aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/*"
+  ```
+  첫 화면 파일은 이름과 상관없이 `index.html` 로 올린다. CloudFront 가 루트 요청에 돌려주는 객체가 `index.html` 이다. 올리는 HTML 은 `<!doctype html>` 과 viewport 메타를 갖춘 완성된 문서여야 한다. Claude Artifact용 조각 문서에는 둘 다 없으므로 문서 머리를 붙인 뒤 올린다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다).
 
 ### 🔮 미구축 (후속 증분)
 
