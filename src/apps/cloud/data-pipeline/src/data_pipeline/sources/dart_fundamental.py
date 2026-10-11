@@ -129,8 +129,10 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     "원화 아님"으로, 깨진 종류 행은 "행 없음"으로 읽히기 때문이다. 검사 범위는 지표 해석이 기대는 칸뿐이다.
     """
     problems: set[str] = set()
+    # 나눠 적은 줄은 합계 줄이 손익 재무제표에 없을 때만 읽는다(`extract`) — 읽지 않는 줄의 금액 파손은 응답 파손이 아니다.
     used = (set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
-            | {account for pair in _SPLIT_ACCOUNTS.values() for account in pair})
+            | {account for total, pair in _SPLIT_ACCOUNTS.items() for account in pair
+               if not any(ln.get("account_id") == total and ln.get("sj_div") in ("IS", "CIS") for ln in lines)})
     for line in lines:
         # 정제가 읽는 칸은 전부 문자열(또는 없음)이다 — 숫자·배열·객체로 온 칸은 뒤 단계가 조용히 다른 값으로 바꿔 읽는다
         # (빈 배열인 사업연도는 요청 연도로 대체되고, 숫자 접수번호는 문자열 검사를 통과한다).

@@ -810,6 +810,10 @@ def test_basic_eps_split_into_continuing_and_discontinued_lines_is_summed():
     both["list"].append({**_line(both["list"], continuing), "account_id": total, "account_nm": "기본주당이익",
                          "thstrm_amount": "7", "thstrm_add_amount": "9"})
     assert eps(both) == ([("QUARTER", "7", [(total, quarter, "7")]), ("CUMULATIVE", "9", [(total, cumulative, "9")])], [])
+    # 그때 나눠 적은 줄은 읽지 않는 줄이다 — 그 줄의 금액이 깨져도 응답 파손으로 세지 않는다(온전한 합계 줄의 보고서가 실패로 남는다).
+    _line(both["list"], discontinued)["thstrm_amount"] = "오류"
+    assert dart_fundamental.response_damage(both["list"], None, "2026-06-30") == []
+    assert values(eps(both)) == ([("QUARTER", "7"), ("CUMULATIVE", "9")], [])
     # 계속영업 줄이 둘이면 고르지 않는다(합계 줄과 같은 규칙).
     twice = split()
     twice["list"].append(dict(_line(twice["list"], continuing)))
