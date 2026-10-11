@@ -109,12 +109,12 @@ export const httpClient: ApiClient = {
     // 내 좋아요와 내 글 판정용 요청자 동봉
     get: async (id) => post(await request<m.WirePost>('GET', `/posts/${id}`)),
     // 차단한 작성자 제외용 요청자 동봉
-    replies: async (id, cursor) => {
-      const p = await request<m.WirePage<m.WireReply>>('GET', `/posts/${id}/replies`, { query: { cursor } });
-      return { items: p.items.map(m.reply), next: p.nextCursor };
+    comments: async (id, cursor) => {
+      const p = await request<m.WirePage<m.WireComment>>('GET', `/posts/${id}/comments`, { query: { cursor } });
+      return { items: p.items.map(m.comment), next: p.nextCursor };
     },
-    reply: async (id, body) => m.reply(await request<m.WireReply>('POST', `/posts/${id}/replies`, { body: { body } })),
-    removeReply: (id, replyId) => request<void>('DELETE', `/posts/${id}/replies/${replyId}`),
+    comment: async (id, body) => m.comment(await request<m.WireComment>('POST', `/posts/${id}/comments`, { body: { body } })),
+    removeComment: (id, commentId) => request<void>('DELETE', `/posts/${id}/comments/${commentId}`),
     create: async (input) => post(await request<m.WirePost>('POST', '/posts', { body: input })),
     remove: (id) => request<void>('DELETE', `/posts/${id}`),
     report: (target, reason) => request<void>('POST', '/reports', { body: { targetType: target.type, targetId: target.id, reason } }),

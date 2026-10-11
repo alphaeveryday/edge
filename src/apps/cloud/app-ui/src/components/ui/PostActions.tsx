@@ -5,14 +5,14 @@ import { fam } from '@/theme/typography';
 
 interface Props {
   like: number;
-  reply: number;
+  comment: number;
   liked?: boolean;
   size?: 'md' | 'lg';
   onLike?: () => void;
-  onReply?: () => void;
+  onComment?: () => void;
 }
 
-export function PostActions({ like, reply, liked, size = 'md', onLike, onReply }: Props) {
+export function PostActions({ like, comment, liked, size = 'md', onLike, onComment }: Props) {
   const styles = useStyles();
   const colors = useColors();
   const lg = size === 'lg';
@@ -25,9 +25,9 @@ export function PostActions({ like, reply, liked, size = 'md', onLike, onReply }
         <Icon name="heart" color={likeC} fill={liked ? colors.up : 'none'} size={ic} />
         <Text style={[styles.count, { fontSize: fs, color: likeC }]}>{like}</Text>
       </Pressable>
-      <Pressable onPress={onReply} hitSlop={6} style={({ pressed }) => [styles.item, pressed && { opacity: 0.6 }]}>
+      <Pressable onPress={onComment} hitSlop={6} style={({ pressed }) => [styles.item, pressed && { opacity: 0.6 }]}>
         <Icon name="message-circle" color={colors.textFaint} size={ic} />
-        <Text style={[styles.count, { fontSize: fs, color: colors.textFaint }]}>{reply}</Text>
+        <Text style={[styles.count, { fontSize: fs, color: colors.textFaint }]}>{comment}</Text>
       </Pressable>
     </View>
   );

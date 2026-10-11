@@ -1,5 +1,5 @@
 import type { Signal } from '@/theme/tokens';
-import type { Axis, Dir, EtfSummary, Me, VoteStat, VoteChoice, Post, Reply, Theme } from '../types';
+import type { Axis, Dir, EtfSummary, Me, VoteStat, VoteChoice, Post, Comment, Theme } from '../types';
 
 // 계약 응답의 앱 타입 변환과 표시용 값 생성
 
@@ -33,7 +33,7 @@ export const me = (m: WireMe): Me => ({ ...m, avatarBg: bgOf(m.handle) });
 export interface WirePost {
   id: string; etf: { code: string; theme: string; short: string }; author: { name: string; handle: string }; time: string;
   title?: string; body: string; quoteTag?: string;
-  like: number; reply: number; liked: boolean; views?: number; mine?: boolean; blocked?: boolean;
+  like: number; comment: number; liked: boolean; views?: number; mine?: boolean; blocked?: boolean;
 }
 export const post = (p: WirePost): Post => ({
   ...p,
@@ -42,8 +42,8 @@ export const post = (p: WirePost): Post => ({
   time: ago(p.time),
 });
 
-export interface WireReply { id: string; author: { name: string; handle: string }; time: string; body: string }
-export const reply = (r: WireReply): Reply => ({ id: r.id, author: { ...r.author, avatarBg: bgOf(r.author.handle) }, time: ago(r.time), body: r.body });
+export interface WireComment { id: string; author: { name: string; handle: string }; time: string; body: string }
+export const comment = (r: WireComment): Comment => ({ id: r.id, author: { ...r.author, avatarBg: bgOf(r.author.handle) }, time: ago(r.time), body: r.body });
 
 export interface WireVoteCount { buys: number; waits: number; sells: number; source: string }
 // 서버 인원 수 기반 비율과 앱이 기억한 내 선택

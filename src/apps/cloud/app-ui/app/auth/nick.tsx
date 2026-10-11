@@ -46,7 +46,7 @@ export default function Nick() {
   return (
     <PageScroll style={styles.root} contentContainerStyle={{ paddingTop: top + 56, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>닉네임을 정해 주세요</Text>
-      <Text style={styles.sub}>커뮤니티 글과 답글에 보이는 이름이에요.</Text>
+      <Text style={styles.sub}>커뮤니티 글과 댓글에 보이는 이름이에요.</Text>
       <View style={styles.form}>
         <AuthField value={nick} onChangeText={(v) => { setNick(v); setErr(''); }} placeholder="닉네임 (2자 이상)" textContentType="nickname" autoComplete="nickname" returnKeyType="done" onSubmitEditing={send} />
         {!!err && <Text style={styles.err}>{err}</Text>}

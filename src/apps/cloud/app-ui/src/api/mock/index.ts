@@ -1,6 +1,6 @@
 import type { ApiClient } from '../client';
 import { ApiError } from '../error';
-import type { Me, VoteStat, VoteChoice, Post, Reply, WatchGroup } from '../types';
+import type { Me, VoteStat, VoteChoice, Post, Comment, WatchGroup } from '../types';
 import { matches } from '@/lib/search';
 import { SIGNAL_ORDER } from '@/theme/tokens';
 import { dailyOf, FACTORS, HINTS, METRICS } from './analysis';
@@ -18,7 +18,7 @@ const votes: Record<string, VoteChoice | null> = {};
 const ME: Me = { nick: '지수', handle: '@me', avatarBg: '#3D34E0', email: 'jisoo.kim@gmail.com' };
 const ACCOUNTS: Record<string, string> = { 'jisoo.kim@gmail.com': 'password' };
 const notis = NOTIFICATIONS.map((n) => ({ ...n }));
-const replies: Record<string, Reply[]> = {
+const comments: Record<string, Comment[]> = {
   p1: [
     { id: 'r1', author: { name: '분할매수중', handle: '@split_buy', avatarBg: '#0E8A6C' }, time: '32분', body: '반도체TOP10 저도 같은 생각이에요. 다만 강력 상승 판단이 유지되는지 한 주 더 보려고요.' },
     { id: 'r2', author: { name: '장투합니다', handle: '@long_hold', avatarBg: '#8B34E0' }, time: '1시간', body: '저는 숫자가 나온 다음에 들어가요. 지금은 기대만 앞서 있어요.' },
@@ -215,18 +215,18 @@ export const mockClient: ApiClient = {
       const p = posts.find((x) => x.id === id);
       return p ? delay({ ...p, views: p.views ?? 7300 }) : Promise.reject(new ApiError('NOT_FOUND', `unknown post ${id}`));
     },
-    replies: (id) => page((replies[id] ?? []).map((r) => ({ ...r }))),
-    reply: (id, body) => {
-      const r: Reply = { id: 'r' + ++seq, author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg }, time: '방금', body };
-      replies[id] = [...(replies[id] ?? []), r];
+    comments: (id) => page((comments[id] ?? []).map((r) => ({ ...r }))),
+    comment: (id, body) => {
+      const r: Comment = { id: 'r' + ++seq, author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg }, time: '방금', body };
+      comments[id] = [...(comments[id] ?? []), r];
       const p = posts.find((x) => x.id === id);
-      if (p) p.reply += 1;
+      if (p) p.comment += 1;
       return delay(r, 40);
     },
-    removeReply: (id, replyId) => {
-      replies[id] = (replies[id] ?? []).filter((r) => r.id !== replyId);
+    removeComment: (id, commentId) => {
+      comments[id] = (comments[id] ?? []).filter((r) => r.id !== commentId);
       const p = posts.find((x) => x.id === id);
-      if (p) p.reply = Math.max(0, p.reply - 1);
+      if (p) p.comment = Math.max(0, p.comment - 1);
       return delay(undefined, 40);
     },
     create: ({ body, tags }) => {
@@ -235,7 +235,7 @@ export const mockClient: ApiClient = {
         id: 'u' + ++seq,
         etf: e ? { code: e.code, theme: e.theme, logoBg: e.logoBg, short: e.name } : { code: '', theme: '', logoBg: '#8E8E93', short: '' },
         author: { name: ME.nick, handle: ME.handle, avatarBg: ME.avatarBg },
-        time: '방금', body, like: 0, reply: 0, liked: false, views: 0, mine: true,
+        time: '방금', body, like: 0, comment: 0, liked: false, views: 0, mine: true,
       };
       posts.unshift(post);
       return delay({ ...post }, 60);

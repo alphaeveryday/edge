@@ -15,7 +15,7 @@ const REASONS: { key: ReportReason; label: string }[] = [
 ];
 
 export interface ReportTarget {
-  type: 'post' | 'reply';
+  type: 'post' | 'comment';
   id: string;
   handle: string;
   name: string;
@@ -58,7 +58,7 @@ export function ReportSheet({ target, onClose, onBlocked }: { target: ReportTarg
       <Dialog
         open={confirm}
         title={`${target?.name} 님을 차단할까요?`}
-        sub="이 사용자의 글과 답글이 목록에서 보이지 않고, 이 사용자의 답글 알림도 오지 않아요."
+        sub="이 사용자의 글과 댓글이 목록에서 보이지 않고, 이 사용자의 댓글 알림도 오지 않아요."
         confirmLabel="차단하기"
         danger
         busy={block.isPending}

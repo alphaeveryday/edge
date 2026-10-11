@@ -1,7 +1,7 @@
 import type { Notification } from '../types';
 
 export const NOTIFICATIONS: Notification[] = [
-  { id: 'n1', kind: 'comm', etf: 'AXAI', postId: 'p1', time: '11:42 오늘', title: '내 글에 댓글 3개가 달렸어요', body: '"수율 80% 전에 사는 건 이르다"에 답글이 이어지고 있어요.', read: false },
+  { id: 'n1', kind: 'comm', etf: 'AXAI', postId: 'p1', time: '11:42 오늘', title: '내 글에 댓글 3개가 달렸어요', body: '"수율 80% 전에 사는 건 이르다"에 댓글이 이어지고 있어요.', read: false },
   { id: 'n2', kind: 'watch', etf: 'AXAI', time: '08:32 오늘', title: '3분기 배당 상향 확정', body: '[미국AI전력핵심인프라] 배당 비중 18% · FOMC 금리 결정 (9월 17일)', read: false },
   { id: 'n3', kind: 'watch', etf: 'DEFN', time: '08:31 오늘', title: '수주 잔고, 5년 치 매출 초과', body: '[K방산] 한화에어로스페이스 비중 20% · 유럽 주문국 예산안 표결 (9월 10일)', read: false },
   { id: 'n4', kind: 'watch', etf: 'AXAI', time: '08:30 오늘', title: '메모리 고정가 3개월 연속 상승', body: '[반도체TOP10] SK하이닉스 비중 22% · SK하이닉스 4분기 양산 수율 (9월 12일 공개)', read: false },

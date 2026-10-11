@@ -17,7 +17,7 @@ export const useHotPosts = () => useQuery({ queryKey: ['community', 'hot'], quer
 export const useEtfPosts = (code: string) => usePages(['community', 'posts', code], (c) => api.community.posts(code, c));
 export const useFeed = (scope: 'all' | 'mine') => usePages(['community', 'feed', scope], (c) => api.community.feed(scope, c));
 export const usePost = (id: string) => useQuery({ queryKey: ['community', 'post', id], queryFn: () => api.community.get(id) });
-export const useReplies = (id: string) => usePages(['community', 'replies', id], (c) => api.community.replies(id, c));
+export const useComments = (id: string) => usePages(['community', 'comments', id], (c) => api.community.comments(id, c));
 export const useVoteStat = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'voteStat', code], queryFn: () => api.community.voteStat(code), enabled });
 
 const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
@@ -35,7 +35,7 @@ export const useToggleLike = () => {
     onSuccess: (updated) => {
       const swap = (p: Post) => (p.id === updated.id ? updated : p);
       // 인기글 배열과 이어 받는 목록 모두 교체
-      qc.setQueriesData<Post[] | InfiniteData<Page<Post>>>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'replies' }, (old) => {
+      qc.setQueriesData<Post[] | InfiniteData<Page<Post>>>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'comments' }, (old) => {
         if (Array.isArray(old)) return old.map(swap);
         if (old && 'pages' in old) return { ...old, pages: old.pages.map((pg) => ({ ...pg, items: pg.items.map(swap) })) };
         return old;
@@ -55,24 +55,24 @@ export const useVote = (code: string) => {
   });
 };
 
-export const useReply = (id: string) => {
+export const useComment = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: string) => api.community.reply(id, body),
+    mutationFn: (body: string) => api.community.comment(id, body),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['community', 'replies', id] });
+      qc.invalidateQueries({ queryKey: ['community', 'comments', id] });
       qc.invalidateQueries({ queryKey: ['community', 'post', id] });
       invalidateLists(qc);
     },
   });
 };
 
-export const useDeleteReply = (id: string) => {
+export const useDeleteComment = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (replyId: string) => api.community.removeReply(id, replyId),
+    mutationFn: (commentId: string) => api.community.removeComment(id, commentId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['community', 'replies', id] });
+      qc.invalidateQueries({ queryKey: ['community', 'comments', id] });
       qc.invalidateQueries({ queryKey: ['community', 'post', id] });
       invalidateLists(qc);
     },
@@ -90,10 +90,10 @@ export const useDeletePost = () => {
 };
 
 export const useReport = () => useMutation({
-  mutationFn: (v: { target: { type: 'post' | 'reply'; id: string }; reason: ReportReason }) => api.community.report(v.target, v.reason),
+  mutationFn: (v: { target: { type: 'post' | 'comment'; id: string }; reason: ReportReason }) => api.community.report(v.target, v.reason),
 });
 
-// 차단한 작성자의 글·답글이 목록에서 빠지도록 커뮤니티 조회 전부 갱신
+// 차단한 작성자의 글·댓글이 목록에서 빠지도록 커뮤니티 조회 전부 갱신
 export const useBlock = () => {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (handle: string) => api.community.block(handle), onSuccess: () => qc.invalidateQueries({ queryKey: ['community'] }) });

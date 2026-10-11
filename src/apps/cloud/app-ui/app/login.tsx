@@ -23,12 +23,12 @@ import { fam } from '@/theme/typography';
 const REASON: Record<string, string> = {
   투표: '투표하려면 로그인이 필요해요',
   글쓰기: '글을 쓰려면 로그인이 필요해요',
-  답글: '답글을 달려면 로그인이 필요해요',
+  댓글: '댓글을 달려면 로그인이 필요해요',
   좋아요: '좋아요를 누르려면 로그인이 필요해요',
   신고: '신고하려면 로그인이 필요해요',
   만료: '로그인이 풀렸어요. 다시 로그인해 주세요',
 };
-const REASON_KEY: Record<string, string> = { 투표: 'vote', 글쓰기: 'write', 답글: 'reply', 좋아요: 'like', 신고: 'report', 만료: 'expired', 온보딩: 'onboarding' };
+const REASON_KEY: Record<string, string> = { 투표: 'vote', 글쓰기: 'write', 댓글: 'comment', 좋아요: 'like', 신고: 'report', 만료: 'expired', 온보딩: 'onboarding' };
 
 // 이메일·카카오 로그인
 // 성공 시 원래 화면 복귀, 소셜 첫 가입은 닉네임 설정

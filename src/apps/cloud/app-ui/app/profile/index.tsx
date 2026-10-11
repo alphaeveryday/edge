@@ -70,7 +70,7 @@ export default function Profile() {
         </Pressable>
         <Text style={styles.version}>ETF Orca v{nativeApplicationVersion ?? Constants.expoConfig?.version}</Text>
       </PageScroll>
-      <Dialog open={delOpen} title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 답글은 '탈퇴한 사용자'로 남아요." confirmLabel="탈퇴하기" danger busy={del.isPending} onConfirm={() => del.mutate()} onClose={() => setDelOpen(false)} />
+      <Dialog open={delOpen} title="정말 탈퇴할까요?" sub="관심 종목과 투표 기록은 지워지고, 쓴 글과 댓글은 '탈퇴한 사용자'로 남아요." confirmLabel="탈퇴하기" danger busy={del.isPending} onConfirm={() => del.mutate()} onClose={() => setDelOpen(false)} />
     </View>
   );
 }

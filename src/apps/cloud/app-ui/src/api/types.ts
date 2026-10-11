@@ -63,7 +63,7 @@ export interface Post {
   body: string;
   quoteTag?: string;
   like: number;
-  reply: number;
+  comment: number;
   liked: boolean;
   views?: number;
   mine?: boolean;
@@ -220,7 +220,7 @@ export interface Me {
 
 export type ReportReason = 'spam' | 'abuse' | 'sexual' | 'scam' | 'etc';
 
-export interface Reply {
+export interface Comment {
   id: string;
   author: { name: string; handle: string; avatarBg: string };
   time: string;

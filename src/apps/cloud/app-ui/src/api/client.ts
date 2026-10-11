@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, Me, Page, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MarketIndex, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, SocialProvider, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, Me, Page, Comment, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MarketIndex, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, SocialProvider, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -49,9 +49,9 @@ export interface CommunityApi {
   posts(code: EtfCode, cursor?: string): Promise<Page<Post>>;
   feed(scope: 'all' | 'mine', cursor?: string): Promise<Page<Post>>;
   get(id: string): Promise<Post>;
-  replies(id: string, cursor?: string): Promise<Page<Reply>>;
-  reply(id: string, body: string): Promise<Reply>;
-  removeReply(id: string, replyId: string): Promise<void>;
+  comments(id: string, cursor?: string): Promise<Page<Comment>>;
+  comment(id: string, body: string): Promise<Comment>;
+  removeComment(id: string, commentId: string): Promise<void>;
   create(input: { body: string; tags: EtfCode[] }): Promise<Post>;
   mine(cursor?: string): Promise<Page<Post>>;
   remove(id: string): Promise<void>;
@@ -59,7 +59,7 @@ export interface CommunityApi {
   voteStat(code: EtfCode): Promise<VoteStat>;
   vote(code: EtfCode, choice: VoteChoice): Promise<VoteStat>;
   unvote(code: EtfCode): Promise<VoteStat>;
-  report(target: { type: 'post' | 'reply'; id: string }, reason: ReportReason): Promise<void>;
+  report(target: { type: 'post' | 'comment'; id: string }, reason: ReportReason): Promise<void>;
   block(handle: string): Promise<void>;
 }
 

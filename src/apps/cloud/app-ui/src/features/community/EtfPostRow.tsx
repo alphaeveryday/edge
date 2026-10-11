@@ -36,7 +36,7 @@ export function EtfPostRow({ post, onQuoteTag, showTag }: { post: Post; onQuoteT
       {!!post.title && <Text style={styles.title}>{post.title}</Text>}
       <Text numberOfLines={3} style={styles.body}>{post.body}</Text>
       <View style={{ marginTop: 2, alignSelf: 'flex-start' }}>
-        <PostActions like={post.like} reply={post.reply} liked={post.liked} onLike={() => like.mutate(post.id)} onReply={open} />
+        <PostActions like={post.like} comment={post.comment} liked={post.liked} onLike={() => like.mutate(post.id)} onComment={open} />
       </View>
     </Pressable>
   );

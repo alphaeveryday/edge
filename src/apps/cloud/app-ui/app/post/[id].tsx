@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, BottomBar, Dialog, NavBar, PostActions, SectorIcon } from '@/components/ui';
-import { useDeletePost, useDeleteReply, useMe, usePost, useReplies, useReply, useToggleLike } from '@/features/community/queries';
+import { useDeletePost, useDeleteComment, useMe, usePost, useComments, useComment, useToggleLike } from '@/features/community/queries';
 import { ReportSheet, type ReportTarget } from '@/features/community/ReportSheet';
 import { track } from '@/lib/analytics';
 import { useRequireLogin } from '@/store/session';
@@ -21,16 +21,16 @@ export default function Post() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: p } = usePost(id);
-  const replyQ = useReplies(id);
-  const replies = replyQ.data;
+  const commentQ = useComments(id);
+  const comments = commentQ.data;
   const like = useToggleLike();
-  const reply = useReply(id);
+  const comment = useComment(id);
   const del = useDeletePost();
-  const delReply = useDeleteReply(id);
+  const delComment = useDeleteComment(id);
   const toast = useToast((s) => s.show);
   const [draft, setDraft] = useState('');
   const [more, setMore] = useState(false);
-  const [replyDel, setReplyDel] = useState<string | null>(null);
+  const [commentDel, setCommentDel] = useState<string | null>(null);
   const [target, setTarget] = useState<ReportTarget | null>(null);
   const [reveal, setReveal] = useState(false);
   const { data: me } = useMe();
@@ -39,12 +39,12 @@ export default function Post() {
   const send = () => {
     const t = draft.trim();
     if (!t) return;
-    requireLogin('답글', () => reply.mutate(t, { onSuccess: () => { track('community_reply_created'); setDraft(''); } }));
+    requireLogin('댓글', () => comment.mutate(t, { onSuccess: () => { track('community_comment_created'); setDraft(''); } }));
   };
   const leave = () => (router.canGoBack() ? router.back() : router.replace('/(tabs)/community'));
   const remove = () => del.mutate(id, { onSuccess: () => { setMore(false); leave(); toast('글을 지웠어요'); } });
-  const removeReply = () => replyDel && delReply.mutate(replyDel, { onSuccess: () => { setReplyDel(null); toast('답글을 지웠어요'); } });
-  const pull = usePullRefresh(loadMore(replyQ));
+  const removeComment = () => commentDel && delComment.mutate(commentDel, { onSuccess: () => { setCommentDel(null); toast('댓글을 지웠어요'); } });
+  const pull = usePullRefresh(loadMore(commentQ));
   return (
     <KeyboardAvoidingView behavior="padding" style={[styles.root, { paddingTop: top + 8 }]}>
       <View style={styles.navWrap}>
@@ -76,42 +76,42 @@ export default function Post() {
             )}
             <Text style={styles.views}>조회 {(p.views ?? 0).toLocaleString('ko-KR')}</Text>
             <View style={styles.actions}>
-              <PostActions size="lg" like={p.like} reply={p.reply} liked={p.liked} onLike={() => like.mutate(p.id)} />
+              <PostActions size="lg" like={p.like} comment={p.comment} liked={p.liked} onLike={() => like.mutate(p.id)} />
             </View>
           </View>
         )}
-        {replies?.map((r) => (
-          <View key={r.id} style={styles.reply}>
+        {comments?.map((r) => (
+          <View key={r.id} style={styles.comment}>
             <Avatar label={r.author.name} bg={r.author.avatarBg} size={36} />
             <View style={{ flex: 1, gap: 5 }}>
-              <View style={styles.replyHead}>
-                <Text numberOfLines={1} style={styles.replyName}>{r.author.name}</Text>
-                <Text style={styles.replyTime}>{r.time}</Text>
+              <View style={styles.commentHead}>
+                <Text numberOfLines={1} style={styles.commentName}>{r.author.name}</Text>
+                <Text style={styles.commentTime}>{r.time}</Text>
                 <View style={{ flex: 1 }} />
                 {r.author.handle === me?.handle ? (
-                  <Pressable onPress={() => setReplyDel(r.id)} hitSlop={10} accessibilityLabel="답글 삭제">
-                    <Text style={styles.replyMore}>⋯</Text>
+                  <Pressable onPress={() => setCommentDel(r.id)} hitSlop={10} accessibilityLabel="댓글 삭제">
+                    <Text style={styles.commentMore}>⋯</Text>
                   </Pressable>
                 ) : (
-                  <Pressable onPress={() => openReport({ type: 'reply', id: r.id, handle: r.author.handle, name: r.author.name })} hitSlop={10} accessibilityLabel="답글 신고">
-                    <Text style={styles.replyMore}>⋯</Text>
+                  <Pressable onPress={() => openReport({ type: 'comment', id: r.id, handle: r.author.handle, name: r.author.name })} hitSlop={10} accessibilityLabel="댓글 신고">
+                    <Text style={styles.commentMore}>⋯</Text>
                   </Pressable>
                 )}
               </View>
-              <Text style={styles.replyBody}>{r.body}</Text>
+              <Text style={styles.commentBody}>{r.body}</Text>
             </View>
           </View>
         ))}
       </ScrollView>
       <BottomBar style={styles.composer}>
-        <TextInput value={draft} onChangeText={setDraft} placeholder="답글 쓰기" placeholderTextColor={colors.textFaint} style={styles.input} onSubmitEditing={send} />
+        <TextInput value={draft} onChangeText={setDraft} placeholder="댓글 쓰기" placeholderTextColor={colors.textFaint} style={styles.input} onSubmitEditing={send} />
         <Pressable onPress={send} disabled={!draft.trim()}>
           <Text style={[styles.send, { color: draft.trim() ? colors.primary : colors.textDisabled }]}>게시</Text>
         </Pressable>
       </BottomBar>
       <ReportSheet target={target} onClose={() => setTarget(null)} onBlocked={() => target?.type === 'post' && leave()} />
       <Dialog open={more} title="이 글을 지울까요?" sub="지운 글은 되돌릴 수 없어요. 태그한 종목 커뮤니티에서도 함께 사라져요." confirmLabel="지우기" danger busy={del.isPending} onConfirm={remove} onClose={() => setMore(false)} />
-      <Dialog open={!!replyDel} title="이 답글을 지울까요?" sub="지운 답글은 되돌릴 수 없어요." confirmLabel="지우기" danger busy={delReply.isPending} onConfirm={removeReply} onClose={() => setReplyDel(null)} />
+      <Dialog open={!!commentDel} title="이 댓글을 지울까요?" sub="지운 댓글은 되돌릴 수 없어요." confirmLabel="지우기" danger busy={delComment.isPending} onConfirm={removeComment} onClose={() => setCommentDel(null)} />
     </KeyboardAvoidingView>
   );
 }
@@ -128,15 +128,15 @@ const useStyles = createStyles((colors) => ({
   tagText: { fontFamily: fam.bold, fontSize: 13, color: colors.textSub },
   views: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 14 },
   actions: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.surface },
-  reply: { flexDirection: 'row', gap: 11, paddingTop: 14, paddingHorizontal: PAGE_X, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
-  replyHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  replyName: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, maxWidth: 110 },
-  replyTime: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
-  replyMore: { fontFamily: fam.bold, fontSize: 16, color: colors.textFaint, paddingHorizontal: 4 },
+  comment: { flexDirection: 'row', gap: 11, paddingTop: 14, paddingHorizontal: PAGE_X, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.surface },
+  commentHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  commentName: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, maxWidth: 110 },
+  commentTime: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint },
+  commentMore: { fontFamily: fam.bold, fontSize: 16, color: colors.textFaint, paddingHorizontal: 4 },
   cover: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 22 },
   coverText: { fontFamily: fam.medium, fontSize: 15, color: colors.textMuted },
   coverLink: { fontFamily: fam.bold, fontSize: 15, color: colors.primary },
-  replyBody: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
+  commentBody: { fontFamily: fam.regular, fontSize: 15, lineHeight: 24, color: colors.text },
   composer: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, paddingHorizontal: 16, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.bg },
   input: { flex: 1, height: 44, backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 16, fontFamily: fam.regular, fontSize: 15, color: colors.text },
   send: { fontFamily: fam.extrabold, fontSize: 15 },
