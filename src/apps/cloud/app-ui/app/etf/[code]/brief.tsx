@@ -32,6 +32,7 @@ export default function EtfBrief() {
   return (
     <QueryState query={q} rows={3} pending={{ title: '오늘 분석은 08:30에 올라와요', sub: '발행되면 여기에서 바로 볼 수 있어요' }}>
       {(d) => { const now = SIG[d.now]; return (
+    <>
     <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
       {pull.indicator}
       <View style={styles.strip}>
@@ -91,9 +92,10 @@ export default function EtfBrief() {
         </Pressable>
       </View>
       <DisclaimerNote style={styles.note} />
-      <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} entry="etf_page" />
-      <DisclaimerSheet />
     </PageScroll>
+    <DailySheet code={code} daily={d} open={open} onClose={() => setOpen(false)} entry="etf_page" />
+    <DisclaimerSheet />
+    </>
       ); }}
     </QueryState>
   );

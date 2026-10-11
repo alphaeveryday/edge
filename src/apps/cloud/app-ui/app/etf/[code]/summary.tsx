@@ -29,6 +29,7 @@ export default function EtfSummary() {
   if (chartQ.isError) return <ErrorView onRetry={() => chartQ.refetch()} />;
   if (!etf || !chart) return <Loading rows={3} />;
   return (
+    <>
     <PageScroll {...pull.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 22 }}>
       {pull.indicator}
       {chart && <LineChart data={chart} name={etf.name} price={etf.price} changePct={etf.changePct} />}
@@ -53,9 +54,10 @@ export default function EtfSummary() {
           <LinkRow muted center divider label="자세히 보기" onPress={() => setOpen(true)} />
         </View>
       )}
-      <MoveSheet etf={etf} move={open && move ? move : null} onClose={() => setOpen(false)} />
-      <DisclaimerSheet />
     </PageScroll>
+    <MoveSheet etf={etf} move={open && move ? move : null} onClose={() => setOpen(false)} />
+    <DisclaimerSheet />
+    </>
   );
 }
 
