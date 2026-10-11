@@ -1,0 +1,1922 @@
+<title>ETF Orca — ETF 한 달 전망, 이유까지 보여드려요</title>
+<!--
+  Claude Artifact용 조각 문서입니다. 게시할 때 doctype, head, body가 자동으로 감싸집니다.
+  B안: PokeClip의 이야기 순서를 따른다. 약속 → 공감(ETF 투자자의 큰 문제 넷) → 문제마다 해결 섹션 하나씩(ETF 단위 분석, 한 달 전망, 오늘 움직임, 커뮤니티) → 조건 → 걱정 해소 → 행동.
+  해결 섹션의 제목은 자기 문제를 되받는다. 디자인 체계는 A안(index.html)과 같다.
+  앱 화면은 스크린샷이 아니라 canvas로 다시 그린 목업이고, 히어로의 폰은 three.js로 렌더링합니다.
+  글꼴 Pretendard는 SIL Open Font License 1.1입니다.
+-->
+<script>
+// 첫 페인트 전에 모션 모드를 정한다. full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기
+(function () {
+  var m = window.matchMedia, root = document.documentElement;
+  var forced = /[?&]mode=(full|lite|reduce)(&|$)/.exec(location.search);
+  var desk = m('(min-width: 1024px) and (min-height: 540px) and (hover: hover) and (pointer: fine)');
+  var mode = forced ? forced[1]
+    : m('(prefers-reduced-motion: reduce)').matches ? 'reduce'
+    : desk.matches ? 'full' : 'lite';
+  root.dataset.mode = mode;
+  root.lang = 'ko';
+  // 모드는 열릴 때 한 번 정한다. 작은 틀로 먼저 열렸다가 커지면(뷰어가 다시 불러올 때 등) 고정 스크롤 없이 굳어 버리므로,
+  // 조건이 바뀌면 페이지를 다시 불러 모드를 새로 정한다
+  if (!forced && mode !== 'reduce') {
+    var swap;
+    desk.addEventListener('change', function () {
+      clearTimeout(swap);
+      swap = setTimeout(function () { if (desk.matches !== (mode === 'full')) location.reload(); }, 400);
+    });
+  }
+  // 모션 초기 상태가 잡히기 전 깜빡임 방지. CDN이 2.5초 안에 안 오면 첫 화면을 먼저 보여 준다(motion-late).
+  // 늦게 도착한 스크립트는 첫 화면 인트로만 건너뛰고 스크롤 모션은 그대로 건다
+  if (mode !== 'reduce') {
+    root.classList.add('motion-pending');
+    setTimeout(function () {
+      if (!root.classList.contains('motion-pending')) return;
+      root.classList.remove('motion-pending');
+      root.classList.add('motion-late');
+    }, 2500);
+  }
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+KR:wght@400;600;700;800&display=swap">
+<style>
+/* 레이아웃: 어두운 무대 위에 밝은 앱 화면이 뜬다. 섹션은 톤 단계와 글로우로만 구분한다. */
+@font-face{font-family:"Pretendard";font-weight:400;font-display:swap;src:url("assets/fonts/Pretendard-Regular.subset.woff2") format("woff2")}
+@font-face{font-family:"Pretendard";font-weight:600;font-display:swap;src:url("assets/fonts/Pretendard-SemiBold.subset.woff2") format("woff2")}
+@font-face{font-family:"Pretendard";font-weight:700;font-display:swap;src:url("assets/fonts/Pretendard-Bold.subset.woff2") format("woff2")}
+@font-face{font-family:"Pretendard";font-weight:800;font-display:swap;src:url("assets/fonts/Pretendard-ExtraBold.subset.woff2") format("woff2")}
+
+:root{
+  color-scheme:dark;
+  --bg:#12141a; --bg-raised:#181b22; --bg-alt:#1a1d26; --stage:#0c0e13;
+  --surface:#222631; --border:#2a2f3b; --border-strong:#3a4152;
+  --t1:#eef1f6; --t2:#a9b1bf; --t3:#7b8494; --on-point:#ffffff;
+  /* 서브색은 파랑 한 계열. 버튼과 강조는 모두 이 파랑으로 간다 */
+  --accent:#5b7cfa; --accent-300:#aebdfd; --accent-subtle:rgb(91 124 250 / .16);
+  --point:#3f5fe0; --point-400:#5b7cfa; --point-300:#aebdfd; --point-subtle:rgb(91 124 250 / .18);
+  /* 빨강과 하늘색은 장식이 아니다. 화면 속 상승과 하락 표시에만 쓴다 */
+  --up:#f0455b; --up-300:#f99aa7; --up-subtle:rgb(240 69 91 / .16);
+  --down:#4da3ff; --down-300:#a5d0ff; --down-subtle:rgb(77 163 255 / .16);
+  --flat:#8a929c;
+  --grad:linear-gradient(135deg,#7089fb 0%,#9fd0ff 100%);
+  --grad-fill:linear-gradient(90deg,#2f49c0 0%,#4a6cf0 100%);
+  --glass:rgb(18 20 26 / .74); --hair:rgb(255 255 255 / .08); --hair-strong:rgb(255 255 255 / .18);
+  --shadow:rgb(0 0 0 / .5); --phone:#0b0c0e; --screen:#ffffff;
+  --font:"Pretendard","Noto Sans KR",-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --num:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --fs-display:clamp(36px,16.7px + 4.95vw,88px);
+  --fs-h2:clamp(32px,23.1px + 2.29vw,56px);
+  --fs-h3:clamp(22px,19.8px + .57vw,28px);
+  --fs-lead:clamp(18px,16.5px + .38vw,22px);
+  --fs-body:clamp(16px,15.3px + .19vw,18px);
+  --maxw:1200px; --gutter-x:20px; --sec-pad:clamp(96px,70px + 6.2vw,160px);
+  /* 모서리 규칙: 패널 24px, 히어로 28px, 누르는 것은 알약 */
+  --radius:24px; --radius-hero:28px;
+  --ease-out:cubic-bezier(.22,1,.36,1); --ease-inout:cubic-bezier(.4,0,.6,1); --ease-overshoot:cubic-bezier(.5,0,0,1.25);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--t1);font-family:var(--font);font-size:var(--fs-body);line-height:1.6;word-break:keep-all;overflow-wrap:break-word;-webkit-font-smoothing:antialiased;overflow-x:clip}
+h1,h2,h3,p,ul,ol,dl,dd,figure{margin:0}
+ul,ol{padding:0;list-style:none}
+a{color:inherit;text-decoration:none}
+img,canvas,svg{display:block}
+strong{font-weight:700;color:var(--t1)}
+:focus-visible{outline:2px solid var(--t1);outline-offset:3px;border-radius:8px}
+
+.container{width:100%;max-width:calc(var(--maxw) + var(--gutter-x) * 2);margin-inline:auto;padding-inline:var(--gutter-x)}
+.container--narrow{--maxw:840px}
+.section{position:relative;padding-block:var(--sec-pad)}
+.display{font-size:var(--fs-display);line-height:1.15;letter-spacing:-.025em;font-weight:700;text-wrap:balance}
+.h2{font-size:var(--fs-h2);line-height:1.2;letter-spacing:-.02em;font-weight:700;text-wrap:balance}
+.h3{font-size:var(--fs-h3);line-height:1.35;letter-spacing:-.01em;font-weight:600}
+.lead{font-size:var(--fs-lead);line-height:1.6;font-weight:600;color:var(--t2)}
+.body{font-size:var(--fs-body);line-height:1.6}
+.muted{color:var(--t2)}
+.nw{white-space:nowrap}
+@media (max-width:420px){.hide-s{display:none}}
+.eyebrow{font-size:14px;font-weight:600;letter-spacing:.02em;color:var(--accent-300)}
+.eyebrow--point{color:var(--point-300)}
+.section-head{max-width:720px;margin-bottom:clamp(40px,30px + 2vw,64px)}
+.section-head .h2{margin:12px 0 16px}
+.section-head--center{margin-inline:auto;text-align:center}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid transparent;border-radius:999px;font-weight:600;white-space:nowrap;line-height:1;transition:transform .2s var(--ease-overshoot),background-color .2s,box-shadow .2s,border-color .2s}
+.btn--sm{height:38px;padding:0 16px;font-size:14px}
+.btn--lg{height:52px;padding:0 26px;font-size:16px}
+.btn--point{background:var(--point);color:var(--on-point)}
+.btn--ghost{background:rgb(255 255 255 / .04);border-color:var(--hair-strong);color:var(--t1)}
+.btn:active{transform:scale(.98)}
+@media (hover:hover){
+  .btn--point:hover{background:var(--point-400);transform:translateY(-2px);box-shadow:0 10px 30px rgb(63 95 224 / .45)}
+  .btn--ghost:hover{border-color:rgb(255 255 255 / .4);transform:translateY(-2px)}
+}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;font-size:13px;font-weight:600;line-height:1;white-space:nowrap}
+.chip--launch{height:30px;padding:0 14px;letter-spacing:.04em;font-weight:700;border:1px solid transparent;background:linear-gradient(var(--stage),var(--stage)) padding-box,var(--grad) border-box}
+.chip--up{background:var(--up-subtle);color:var(--up-300)}
+.chip--down{background:var(--down-subtle);color:var(--down-300)}
+.up{color:var(--up-300)} .down{color:var(--down-300)} .flat{color:var(--flat)}
+
+/* 겹침 순서: cta-bar 40, nav 50, skip 60 */
+.skip{position:fixed;left:16px;top:-64px;z-index:60;background:var(--t1);color:var(--bg);padding:10px 16px;border-radius:999px;font-weight:600}
+.skip:focus{top:calc(env(safe-area-inset-top,0px) + 12px)}
+.nav{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:10px;right:10px;z-index:50;display:flex;justify-content:center;pointer-events:none}
+.nav__pill{pointer-events:auto;width:100%;max-width:1024px;height:54px;display:flex;align-items:center;gap:12px;padding:0 7px 0 14px;border-radius:999px;background:var(--glass);-webkit-backdrop-filter:saturate(1.4) blur(20px);backdrop-filter:saturate(1.4) blur(20px);border:1px solid var(--hair)}
+.nav__logo{display:flex;align-items:center;gap:4px;font-weight:800;font-size:17px;letter-spacing:-.02em}
+.nav__logo img{width:34px;height:34px}
+.nav__links{display:none}
+.nav__actions{margin-left:auto}
+.cta-bar{position:fixed;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:40;display:grid;grid-template-columns:1.5fr 1fr;gap:8px;padding:7px;border-radius:999px;background:var(--glass);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border:1px solid var(--hair);transition:transform .45s var(--ease-out),opacity .3s}
+.cta-bar.is-hidden{transform:translateY(140%);opacity:0;pointer-events:none}
+.cta-bar .btn{height:46px;padding:0 12px;font-size:15px}
+/* 데스크톱에서 다운로드를 누르면 뜨는 QR 창 */
+.qr{width:min(360px,calc(100vw - 32px));margin:auto;padding:0;border:1px solid var(--border-strong);border-radius:24px;background:var(--bg-raised);color:var(--t1);text-align:center;box-shadow:0 30px 80px rgb(0 0 0 / .5)}
+.qr::backdrop{background:rgb(8 10 14 / .72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.qr[open]{animation:qr-in .35s var(--ease-out)}
+@keyframes qr-in{from{opacity:0;transform:translateY(12px) scale(.96)}}
+.qr__in{position:relative;padding:30px 24px 24px}
+.qr h2{font-size:20px;font-weight:800;letter-spacing:-.02em}
+.qr p{margin-top:8px;font-size:14px;line-height:1.55;color:var(--t2)}
+.qr__code{width:204px;margin:20px auto 0;padding:12px;border-radius:16px;background:#fff}
+.qr__code svg{display:block;width:100%;height:auto}
+.qr .qr__note{margin-top:14px;font-size:13px;color:var(--t3)}
+.qr__link{display:inline-block;margin-top:10px;font-size:14px;font-weight:600;color:var(--accent-300);text-decoration:underline;text-underline-offset:3px}
+.qr__x{position:absolute;top:10px;right:10px;width:36px;height:36px;border:0;border-radius:50%;background:transparent;color:var(--t2);font-size:22px;line-height:1;cursor:pointer}
+.qr__x:hover{background:var(--surface);color:var(--t1)}
+a[role="button"]{cursor:pointer}
+
+/* S1 히어로: 인셋 카드 안의 3D 무대 */
+.hero{padding:calc(env(safe-area-inset-top,0px) + 10px) 10px 0}
+.hero__card{position:relative;display:flex;flex-direction:column}
+.hero__media{position:relative;overflow:hidden;aspect-ratio:10 / 9;border-radius:var(--radius-hero);background:radial-gradient(120% 72% at 64% -20%,rgb(96 150 255 / .38),transparent 62%),linear-gradient(180deg,#10285a 0%,#0b1733 44%,var(--stage) 100%)}
+.hero__media::before{content:"";position:absolute;inset:-12% -12% 0;pointer-events:none;transform-origin:60% 0;animation:rays 13s ease-in-out infinite alternate;background:linear-gradient(104deg,transparent 28%,rgb(159 208 255 / .18) 35%,transparent 43%),linear-gradient(97deg,transparent 46%,rgb(159 208 255 / .12) 53%,transparent 60%),linear-gradient(109deg,transparent 60%,rgb(159 208 255 / .16) 67%,transparent 75%),linear-gradient(100deg,transparent 78%,rgb(159 208 255 / .11) 84%,transparent 90%);-webkit-mask-image:linear-gradient(180deg,#000,rgb(0 0 0 / .45) 46%,transparent 84%);mask-image:linear-gradient(180deg,#000,rgb(0 0 0 / .45) 46%,transparent 84%)}
+@keyframes rays{from{transform:skewX(-5deg) translateX(-2%)}to{transform:skewX(4deg) translateX(2%)}}
+.hero__scene{position:absolute;inset:0}
+.hero__gl{position:absolute;inset:0;width:100%;height:100%}
+.hero__fallback{position:absolute;inset:0;display:grid;place-items:center;padding:8% 0}
+.hero__fallback .phone{height:100%;width:auto;aspect-ratio:390 / 844}
+.hero__shade{display:none}
+.hero__copy{padding:32px 10px 8px;text-align:center;display:flex;flex-direction:column;align-items:center}
+.hero__copy .display{margin:20px 0 16px;font-size:clamp(26px,8.4vw,var(--fs-display))}
+.hero__copy .lead{max-width:620px;font-size:clamp(17px,14px + .65vw,24px);line-height:1.5}
+.lead__s{display:block}
+.hero__ctas{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px;justify-content:center}
+.hero__scroll{display:none}
+.h1-line{padding-bottom:.08em}
+.motion-pending .nav__pill,.motion-pending .hero__copy > *,.motion-pending .hero__scene{visibility:hidden}
+
+.phone{width:min(100%,300px);margin-inline:auto;padding:9px;border-radius:46px;background:var(--phone);border:1px solid var(--border-strong);box-shadow:0 30px 70px var(--shadow),inset 0 0 0 1px var(--hair)}
+.phone canvas{width:100%;height:auto;aspect-ratio:390 / 844;border-radius:37px;background:var(--screen)}
+
+/* S2 공감: 가라오케 문장 */
+.pain__grid{display:grid;gap:48px}
+.pain__text .h2{margin:12px 0 0}
+.karaoke{margin-top:32px;display:grid;gap:14px}
+.karaoke li{position:relative;padding-left:28px;font-size:clamp(24px,19px + 1.2vw,36px);line-height:1.35;font-weight:700;letter-spacing:-.02em;color:var(--t3);opacity:.55;transition:color .4s,opacity .4s,transform .5s var(--ease-out);transform-origin:left center}
+.karaoke li::before{content:"";position:absolute;left:0;top:.55em;width:10px;height:10px;border-radius:50%;background:var(--border-strong);transition:background-color .4s,box-shadow .4s}
+.karaoke li.is-active{color:var(--t1);opacity:1}
+.karaoke li.is-active::before{background:var(--point);box-shadow:0 0 0 6px var(--point-subtle)}
+.motion-on .karaoke li{opacity:1}
+.motion-on .karaoke li span{background:linear-gradient(90deg,var(--t1) var(--fill,0%),var(--t3) var(--fill,0%));-webkit-background-clip:text;background-clip:text;color:transparent}
+/* 선택된 줄만 제 크기, 나머지는 줄여 둔다. 키우는 대신 줄이는 쪽이라 좁은 화면에서도 글이 밖으로 넘치지 않는다 */
+.motion-on .karaoke li{transform:scale(.82)}
+.motion-on .karaoke li.is-active{transform:none}
+.scatter{position:relative;width:min(100%,420px);aspect-ratio:1 / 1;margin-inline:auto}
+.scatter svg{width:100%;height:100%;overflow:visible}
+.scatter__tag{position:absolute;padding:8px 14px;border-radius:999px;background:var(--surface);border:1px solid var(--border-strong);font-size:14px;font-weight:700;color:var(--t2);animation:bob 5s var(--ease-inout) infinite alternate}
+.scatter__tag:nth-of-type(1){left:4%;top:12%}
+.scatter__tag:nth-of-type(2){right:2%;top:26%;animation-delay:-1.2s}
+.scatter__tag:nth-of-type(3){left:10%;bottom:20%;animation-delay:-2.4s}
+.scatter__tag:nth-of-type(4){right:10%;bottom:8%;animation-delay:-3.6s}
+@media (max-width:1023px){.scatter{width:min(100%,520px);aspect-ratio:2 / 1}.scatter .scatter__q{top:50%;font-size:84px}}
+.scatter__q{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);font-size:clamp(72px,60px + 4vw,120px);font-weight:800;line-height:1;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+@keyframes bob{from{translate:0 -8px;rotate:-2deg}to{translate:0 10px;rotate:3deg}}
+
+/* S3 ETF 단위 분석: 읽고, 나누고, 모은다 */
+.mock{position:relative;overflow:hidden;background:var(--bg-raised);border:1px solid var(--border);border-radius:20px;box-shadow:0 24px 60px rgb(0 0 0 / .35)}
+.mock__bar{display:flex;align-items:center;justify-content:space-between;gap:12px;height:44px;padding:0 16px;white-space:nowrap;border-bottom:1px solid var(--border);font-size:13px;font-weight:600;color:var(--t2)}
+.status{display:inline-flex;align-items:center;gap:6px;color:var(--t3)}
+.status::before{content:"";width:12px;height:12px;border-radius:50%;border:2px solid var(--border-strong);border-top-color:var(--t2);animation:spin 1s linear infinite}
+.status.is-hit{color:var(--point-300)}
+.status.is-hit::before{border:0;background:var(--point);animation:none;box-shadow:0 0 0 4px var(--point-subtle)}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* 가운데 패널이 둘레의 자료 조각을 종류별로 빨아들인다. 조각은 canvas로 그린다 */
+.swarm{position:relative;display:grid;gap:14px}
+.swarm__cv{display:none;position:absolute;inset:0;z-index:2;width:100%;height:100%;pointer-events:none}
+.swarm__field{display:none;height:112px}
+.swarm__field--b{height:84px}
+.swarm__field p{transition:opacity .5s}
+.swarm.is-done .swarm__field p{opacity:0}
+.swarm__field p{font-size:13px;font-weight:600;color:var(--t3)}
+.motion-on .swarm__cv,.motion-on .swarm__field{display:block}
+.swarm__out{display:grid;gap:8px;width:100%;max-width:460px;min-width:0;margin-inline:auto;padding:16px;border-radius:22px;background:var(--bg-raised);border:1px solid var(--border);box-shadow:0 24px 60px rgb(0 0 0 / .35);transition:border-color .4s,box-shadow .7s}
+.swarm__head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:2px 2px 8px}
+.swarm__head b{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.swarm__head .status{margin-left:auto;font-size:13px;font-weight:600}
+@media (max-width:420px){.swarm__head .status{flex-basis:100%;justify-content:flex-end}}
+/* 분석이 끝나면 종목명 옆에 전망 등급이 도장처럼 찍힌다 */
+/* 스티커: 전망 표시. 낱말은 앱과 같다(강력 상승·상승·중립·하락·강력 하락) */
+.grade{display:inline-flex;align-items:center;height:30px;padding:0 12px;border-radius:999px;background:var(--up);color:var(--on-point);font-size:15px;font-weight:800;white-space:nowrap}
+.grade--flat{background:var(--flat);color:var(--bg)}
+.grade--down{background:var(--down);color:var(--bg)}
+.swarm.scrub .grade[data-grade]{opacity:0;transform:scale(2.8) rotate(-12deg)}
+.swarm.scrub .grade[data-grade].is-on{opacity:1;transform:none;animation:stamp .8s cubic-bezier(.2,1.3,.3,1) both}
+@keyframes stamp{0%{opacity:0;transform:scale(3) rotate(-14deg)}38%{opacity:1;transform:scale(.82) rotate(4deg)}62%{transform:scale(1.12) rotate(-2deg)}100%{opacity:1;transform:scale(1) rotate(0)}}
+.swarm__out.is-fin{border-color:rgb(240 69 91 / .5);box-shadow:0 24px 60px rgb(0 0 0 / .35),0 0 0 1px rgb(240 69 91 / .22),0 0 80px rgb(240 69 91 / .22);animation:thump .55s var(--ease-out)}
+@keyframes thump{0%{transform:scale(1)}28%{transform:scale(1.03)}100%{transform:scale(1)}}
+.swarm__ico{position:relative;flex:none;width:32px;height:32px;border-radius:50%;background:var(--phone);border:1px solid var(--border-strong)}
+.swarm__ico::after{content:"";position:absolute;inset:10px;border-radius:3px;background:var(--t1)}
+.fcell{display:grid;grid-template-columns:3.6em minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px 16px;border-radius:14px;background:var(--surface);border:1px solid var(--border);font-weight:700;transition:opacity .4s,border-color .3s}
+.fcell small{font-size:13px;font-weight:600;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fcell span{font-size:14px;transition:opacity .3s,transform .5s var(--ease-overshoot)}
+.swarm.scrub .fcell:not(.is-on){opacity:.4}
+.swarm.scrub .fcell:not(.is-on) span{opacity:0;transform:scale(.5)}
+.swarm.scrub .fcell.is-on{border-color:var(--border-strong)}
+.fcell.is-pop{animation:pop .7s var(--ease-out)}
+@keyframes pop{0%{box-shadow:0 0 0 0 rgb(127 180 255 / .7);transform:scale(1)}25%{transform:scale(1.035)}100%{box-shadow:0 0 0 22px rgb(127 180 255 / 0);transform:scale(1)}}
+
+/* S4 리포트: 앱의 '자세히 보기'를 위에서 아래로 읽는다. 한 문장 → 달라진 점 → 이유 사슬 → 그래서 */
+.today .section-head{margin-bottom:0}
+.why__grid{display:grid;gap:32px}
+.why .section-head{margin-bottom:0}
+.steps{display:none}
+.report__body{position:relative;display:grid;gap:24px;padding:20px}
+.report__head{display:grid;gap:14px}
+.report__grade{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--t2)}
+.report__title{font-size:clamp(20px,17px + .6vw,26px);font-weight:800;letter-spacing:-.02em;line-height:1.35}
+.marks{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding-top:4px;font-size:12px;font-weight:600;color:var(--t2);text-align:center}
+.marks li{display:grid;gap:6px;justify-items:center}
+.marks i{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;font-style:normal;font-size:13px}
+.marks .is-up{background:var(--up-subtle);color:var(--up)}
+.marks .is-flat{background:rgb(138 146 156 / .16);color:var(--flat)}
+.marks .is-down{background:var(--down-subtle);color:var(--down)}
+.changed{display:grid;gap:10px;padding:16px 18px;border-radius:16px;background:var(--accent-subtle)}
+.changed h4,.report__sub{margin:0;font-size:13px;font-weight:700}
+.changed h4{color:var(--accent-300)}
+.report__sub{color:var(--t3)}
+.changed ul{display:grid;gap:8px}
+.changed li{position:relative;padding-left:16px;font-size:15px;font-weight:600;line-height:1.5}
+.changed li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.changed b,.chain__more b{font-weight:800;font-variant-numeric:tabular-nums;color:var(--t1)}
+.reasons{display:grid;gap:14px}
+.chain{--line:1;position:relative;display:grid;gap:16px}
+.chain::before{content:"";position:absolute;left:5px;top:10px;bottom:14px;width:2px;background:var(--border-strong);transform-origin:top;transform:scaleY(var(--line))}
+.chain li{position:relative;padding-left:28px;font-size:16px;font-weight:700;line-height:1.45}
+.chain li::before{content:"";position:absolute;left:0;top:.35em;width:12px;height:12px;border-radius:50%;background:var(--up);box-shadow:0 0 0 4px var(--bg-raised)}
+.chain li[data-node="down"]::before{background:var(--down)}
+.chain li[data-node="check"]::before{background:var(--flat)}
+.chain summary{position:relative;display:block;padding-right:28px;list-style:none;cursor:pointer}
+.chain summary::-webkit-details-marker{display:none}
+.chain summary::after{content:"";position:absolute;right:4px;top:.4em;width:8px;height:8px;border-right:2px solid var(--t3);border-bottom:2px solid var(--t3);transform:rotate(45deg);transition:transform .3s var(--ease-inout)}
+.chain details[open] summary::after{transform:translateY(4px) rotate(-135deg)}
+.chain__more{display:grid;gap:6px;padding-top:8px}
+.chain details[open] .chain__more{animation:more-in .3s var(--ease-out)}
+@keyframes more-in{from{opacity:0;transform:translateY(-6px)}}
+.chain__more p{position:relative;padding-left:14px;font-size:14px;font-weight:500;line-height:1.55;color:var(--t2)}
+.chain__more p::before{content:"";position:absolute;left:0;top:.68em;width:4px;height:4px;border-radius:50%;background:var(--t3)}
+.chain__more .is-new{color:var(--t1)}
+.chain__more .is-new::before{background:var(--accent)}
+.so{display:grid;gap:12px;padding:18px;border-radius:16px;background:var(--surface)}
+.so h4{margin:0;font-size:17px;font-weight:800}
+.so dl{display:grid;gap:12px;margin:0}
+.so dt{margin-bottom:6px;font-size:12px;font-weight:700}
+.so dd{display:flex;flex-wrap:wrap;gap:6px;margin:0}
+.so__line{padding-top:12px;border-top:1px solid var(--border);font-size:15px;font-weight:700;line-height:1.55}
+/* 진행에 따라 한 줄씩 놓인다. 고정 장면에서는 시트가 창 높이에 갇히고, 방금 놓인 줄을 따라 내려간다 */
+.report.scrub [data-r]{transition:opacity .45s var(--ease-out),transform .6s var(--ease-overshoot)}
+.report.scrub [data-r]:not(.is-on){opacity:0;transform:translateY(14px)}
+.report.scrub .marks li:not(.is-on){transform:scale(.4)}
+.report.scrub .chain li:not(.is-on){transform:translateX(-18px)}
+.report.scrub .chain li.is-on::before{animation:dot .6s var(--ease-out)}
+.report.scrub .so .chip:not(.is-on){transform:translateY(-16px) scale(.7)}
+.report.scrub .chain::before{transition:transform .6s var(--ease-out)}
+@keyframes dot{0%{transform:scale(0)}60%{transform:scale(1.5)}100%{transform:scale(1)}}
+.report.is-pinned .report__view{height:560px;overflow:hidden;-webkit-mask-image:linear-gradient(transparent,#000 20px,#000 calc(100% - 44px),transparent);mask-image:linear-gradient(transparent,#000 20px,#000 calc(100% - 44px),transparent)}
+.report.is-pinned .report__body{padding-bottom:52px;transition:transform .7s var(--ease-out)}
+
+/* S5 오늘 움직임: 넓은 보드 하나를 왼쪽에서 오른쪽으로 읽는다. ① 장중 움직임(차트) → ② 어느 종목이(구성종목) → ③ 왜 움직였을까(이유).
+   좁은 화면에서는 세 구역이 위에서 아래로 쌓인다 */
+.today .section-head{max-width:none;margin-bottom:24px}
+.move__bar-r{display:inline-flex;align-items:center;gap:12px}
+.live{display:inline-flex;align-items:center;gap:8px;height:26px;padding:0 10px;border-radius:999px;background:var(--surface);font-size:12px;font-weight:700;color:var(--t1);white-space:nowrap}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:live 1.6s ease-out infinite}
+@keyframes live{0%{box-shadow:0 0 0 0 rgb(91 124 250 / .7)}100%{box-shadow:0 0 0 9px rgb(91 124 250 / 0)}}
+.move__zones{display:grid}
+.zone{position:relative;display:grid;gap:14px;align-content:start;min-width:0;padding:18px 16px 20px}
+.zone + .zone{border-top:1px solid var(--border)}
+.zone__h{display:flex;align-items:center;gap:10px;margin:0;font-size:14px;font-weight:700;color:var(--t2)}
+.zone__h i{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;border:1px solid var(--border-strong);font-family:var(--num);font-style:normal;font-size:12px;font-weight:700;transition:background-color .4s,border-color .4s,color .4s}
+/* ① 차트 */
+.zone--chart{grid-template-rows:auto minmax(170px,1fr) auto;align-content:stretch}
+.move__plot{position:relative;min-height:170px}
+.move__svg{position:absolute;inset:0;display:block;width:100%;height:100%;overflow:visible}
+.move__grid line{stroke:var(--border);stroke-width:1;vector-effect:non-scaling-stroke}
+.move__svg .move__line3{stroke:var(--up-300);stroke-width:1.5;stroke-dasharray:5 5;vector-effect:non-scaling-stroke;opacity:.7}
+.move__thr,.move__base{position:absolute;left:1%;font-size:11px;font-weight:700;line-height:1;white-space:nowrap}
+.move__thr{top:28.5%;transform:translateY(-150%);font-family:var(--num);color:var(--up-300)}
+.move__base{top:85.9%;transform:translateY(50%);color:var(--t3)}
+.move__today{fill:rgb(240 69 91 / .1)}
+.cd line{stroke-width:1.5;vector-effect:non-scaling-stroke}
+.cd--up line{stroke:var(--up)} .cd--up rect{fill:var(--up)}
+.cd--dn line{stroke:var(--down)} .cd--dn rect{fill:var(--down)}
+.cd--today rect{filter:drop-shadow(0 0 8px rgb(240 69 91 / .8))}
+.move__tag{position:absolute;right:2.5%;bottom:calc(75.3% + 8px);padding:5px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--border-strong);color:var(--t1);font-family:var(--num);font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2;white-space:nowrap;transition:background-color .3s,border-color .3s}
+.move:not(.scrub) .move__tag,.move.is-hit .move__tag{background:var(--up);border-color:var(--up);color:var(--on-point)}
+.move__watch{font-size:13px;font-weight:600}
+/* ③ 이유 */
+.cause__title{margin:0;font-size:clamp(18px,16px + .4vw,21px);font-weight:800;letter-spacing:-.02em;line-height:1.35;text-wrap:balance}
+.cause__list{display:grid;gap:12px}
+.cause__list li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 10px;font-size:15px;font-weight:700;line-height:1.45}
+.cause__list li::before{content:"▲";grid-row:1 / 3;font-size:11px;line-height:22px;color:var(--up)}
+.cause__list li[data-dir="down"]::before{content:"▼";color:var(--down)}
+.cause__list span{grid-column:2;font-size:14px;font-weight:500;color:var(--t2)}
+/* ② 구성종목: 세 줄 히트맵 */
+.zone--who{grid-template-rows:auto minmax(190px,1fr) auto;align-content:stretch}
+.move .heat{height:auto;padding:0;grid-template-rows:1.4fr 1fr .9fr}
+.move .heat__n{display:block}
+.move__why{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--t2)}
+.move:not(.scrub) .heat__t[data-hot]{box-shadow:inset 0 0 0 2px var(--up-300)}
+/* 진행에 따라: 차례가 된 구역이 밝아지고 윗선이 채워진다. 봉은 시간순으로 서고 지금 봉은 조금씩 자란다(--g) */
+.move.scrub .zone{transition:opacity .5s}
+.move.scrub .zone:not(.is-on){opacity:.42}
+.move.scrub .zone::before{content:"";position:absolute;left:0;right:0;top:-1px;height:2px;background:var(--grad);box-shadow:0 0 12px rgb(127 180 255 / .7);transform:scaleX(0);transform-origin:left;transition:transform .7s var(--ease-out)}
+.move.scrub .zone.is-on::before{transform:scaleX(1)}
+.move.scrub .zone.is-cur .zone__h{color:var(--t1)}
+.move.scrub .zone.is-cur .zone__h i{background:var(--point);border-color:var(--point);color:var(--on-point)}
+.move.scrub .cd{transform-box:fill-box;transform-origin:center bottom;transition:opacity .3s var(--ease-out),transform .45s var(--ease-overshoot)}
+.move.scrub .cd:not(.cd--today):not(.is-on){opacity:0;transform:scaleY(0)}
+.move.scrub .cd--today{transform:scaleY(var(--g,1));transition:none}
+.move.scrub .move__today{transition:opacity .5s}
+.move.scrub:not(.is-live) .move__today{opacity:0}
+.move.scrub .heat__t{transition:opacity .45s var(--ease-out),transform .55s var(--ease-overshoot),background-color .4s,box-shadow .4s}
+.move.is-pick .heat__t:not([data-hot]){opacity:.32}
+.move.is-pick .heat__t[data-hot]{z-index:1;transform:scale(1.04);background:rgb(240 69 91 / .82);box-shadow:inset 0 0 0 2px var(--up-300),0 0 26px rgb(240 69 91 / .55)}
+.move.scrub .move__why{transition:opacity .4s var(--ease-out),transform .5s var(--ease-overshoot)}
+.move.scrub .move__why:not(.is-on){opacity:0;transform:translateY(10px)}
+/* 이유는 3%를 넘기 전에는 흐릿한 자리로만 보이고, 넘으면 한 줄씩 또렷해진다 */
+.cause.scrub :is(.cause__title,li){transition:opacity .45s var(--ease-out),transform .6s var(--ease-overshoot),filter .45s}
+.cause.scrub:not(.is-on) .cause__title,.cause.scrub li:not(.is-on){opacity:.3;filter:blur(7px);transform:translateX(10px)}
+
+/* S6 커뮤니티: 전망 투표 */
+/* S6 커뮤니티: 가운데 투표 카드(눌러 볼 수 있고, 세 칸 막대가 고른 쪽으로 늘어난다) 둘레에 다른 사람의 글이 말풍선으로 떠 있다.
+   좁은 화면에서는 투표 아래로 말풍선이 좌우 번갈아 쌓인다 */
+.poll{display:grid;gap:18px;max-width:520px;margin-inline:auto}
+.posts{display:contents}
+.vote{position:relative;display:grid;gap:16px;padding:22px 20px;border-radius:var(--radius);background:linear-gradient(180deg,rgb(91 124 250 / .1),transparent 55%),var(--bg-raised);border:1px solid var(--border-strong);box-shadow:0 30px 80px rgb(0 0 0 / .4),0 0 90px rgb(91 124 250 / .12)}
+.vote__top{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;font-weight:600;color:var(--t3)}
+.vote__top .chip{background:var(--surface);color:var(--t2)}
+.vote__q{font-size:clamp(22px,20px + .5vw,26px);font-weight:800;letter-spacing:-.02em;line-height:1.3}
+.vote__q b{color:var(--up-300)}
+.vote__bar,.vote__pct{display:flex;gap:5px}
+.vote__bar i,.vote__pct b{flex:var(--n,1) 1 0;min-width:0;transition:flex-grow .7s var(--ease-overshoot)}
+.vote__bar{height:18px}
+.vote__bar i{border-radius:9px;transform-origin:left;transition:flex-grow .7s var(--ease-overshoot),transform .7s var(--ease-out),box-shadow .4s}
+.vote__bar i:nth-child(1){background:var(--up)} .vote__bar i:nth-child(2){background:var(--flat)} .vote__bar i:nth-child(3){background:var(--down)}
+.vote__bar i.is-mine{animation:vote-pop .7s var(--ease-out)}
+.vote__bar i:nth-child(1).is-mine{box-shadow:0 0 18px rgb(240 69 91 / .75)}
+.vote__bar i:nth-child(2).is-mine{box-shadow:0 0 18px rgb(138 146 156 / .75)}
+.vote__bar i:nth-child(3).is-mine{box-shadow:0 0 18px rgb(77 163 255 / .75)}
+@keyframes vote-pop{0%{transform:scaleY(1)}35%{transform:scaleY(1.9)}100%{transform:scaleY(1)}}
+.vote__pct{margin-top:-8px;font-family:var(--num);font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.vote__pct b:nth-child(1){color:var(--up-300)} .vote__pct b:nth-child(2){color:var(--t2)} .vote__pct b:nth-child(3){color:var(--down-300)}
+.vote__opts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.vote__opts button{height:56px;border-radius:16px;border:1px solid transparent;font:inherit;font-size:16px;font-weight:700;background:var(--surface);color:var(--t2);cursor:pointer;transition:transform .25s var(--ease-overshoot),background-color .3s,border-color .3s,color .3s,opacity .3s}
+.vote__opts button:nth-child(1){background:var(--up-subtle);color:var(--up-300)}
+.vote__opts button:nth-child(3){background:var(--down-subtle);color:var(--down-300)}
+.vote__opts button:active{transform:scale(.96)}
+.vote__opts button:focus-visible{outline:2px solid var(--accent-300);outline-offset:2px}
+.vote.is-voted .vote__opts button:not(.is-on){opacity:.55}
+.vote__opts button.is-on{border-color:currentColor;box-shadow:0 0 0 3px rgb(255 255 255 / .06)}
+.vote__note{font-size:13px;color:var(--t3)}
+/* 아직 고르지 않았으면 단추가 번갈아 살짝 뜬다(눌러 보라는 신호) */
+.motion-on .vote:not(.is-voted) .vote__opts button{animation:nudge 2.4s var(--ease-inout) infinite}
+.motion-on .vote:not(.is-voted) .vote__opts button:nth-child(2){animation-delay:.25s}
+.motion-on .vote:not(.is-voted) .vote__opts button:nth-child(3){animation-delay:.5s}
+@keyframes nudge{0%,60%,100%{transform:none}30%{transform:translateY(-4px)}}
+/* 말풍선: 아바타가 모서리에 붙고, 그쪽 모서리만 각지다 */
+.post{--r:0deg;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:end;gap:10px;width:88%;transform:rotate(var(--r))}
+.post--b{grid-template-columns:minmax(0,1fr) auto;justify-self:end}
+.post--b .post__av{order:2}
+.post__av{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;font-style:normal;font-size:15px;font-weight:800;color:#0b1220;background:#aebdfd}
+.post--b .post__av{background:#9fd0ff} .post--c .post__av{background:#c9d2e3}
+.post__bub{padding:14px 16px;border-radius:20px 20px 20px 6px;background:var(--bg-raised);border:1px solid var(--border);box-shadow:0 18px 44px rgb(0 0 0 / .35)}
+.post--b .post__bub{border-radius:20px 20px 6px 20px}
+.post__who{display:flex;align-items:baseline;gap:8px;font-size:13px;color:var(--t2)}
+.post__who b{font-weight:700;color:var(--t1)}
+.post__who span{font-size:12px;color:var(--t3)}
+.post__t{margin-top:6px;font-size:16px;font-weight:700;line-height:1.45;letter-spacing:-.01em}
+.post__b{margin-top:2px;font-size:14px;line-height:1.5;color:var(--t2)}
+.motion-on .post__bub{animation:drift 6s var(--ease-inout) infinite}
+.motion-on .post--b .post__bub{animation-delay:-2s} .motion-on .post--c .post__bub{animation-delay:-4s}
+@keyframes drift{0%,100%{transform:none}50%{transform:translateY(-6px)}}
+/* 진행에 따라: 막대가 왼쪽부터 자라고, 말풍선이 하나씩 떠오른다. 투표를 누르면 말풍선이 한 번 들썩인다 */
+.poll.scrub .post{transition:opacity .45s var(--ease-out),transform .7s var(--ease-overshoot)}
+.poll.scrub .post:not(.is-on){opacity:0;transform:translateY(22px) scale(.86) rotate(var(--r))}
+.poll.is-cheer .post{animation:cheer .6s var(--ease-out)}
+.poll.is-cheer .post--b{animation-delay:.08s} .poll.is-cheer .post--c{animation-delay:.16s}
+@keyframes cheer{0%,100%{transform:rotate(var(--r))}40%{transform:translateY(-8px) scale(1.03) rotate(var(--r))}}
+.poll.scrub:not(.is-in) .vote__bar i{transform:scaleX(0)}
+.poll.scrub .vote__bar i:nth-child(2){transition-delay:0s,.12s,0s} .poll.scrub .vote__bar i:nth-child(3){transition-delay:0s,.24s,0s}
+.poll.scrub .vote__pct{transition:opacity .5s .3s}
+.poll.scrub:not(.is-in) .vote__pct{opacity:0}
+
+/* 구성종목 히트맵 (오늘 움직임 안) */
+.heat{display:grid;grid-template-rows:1.3fr 1fr;gap:6px;height:clamp(220px,180px + 8vw,300px);padding:16px}
+.heat__row{display:flex;gap:6px;min-width:0}
+.heat__t{position:relative;flex:var(--w,1) 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:10px;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden}
+.heat__t b{font-family:var(--num);font-size:13px;font-weight:700}
+.heat__row + .heat__row .heat__t{padding-inline:2px;font-size:10px;letter-spacing:-.04em}
+.heat__row + .heat__row .heat__t b{font-size:11px;letter-spacing:-.05em}
+.heat__n{display:none}
+.heat__t--flat{background:rgb(138 146 156 / .22)}
+.heat__t--up1{background:rgb(240 69 91 / .26)} .heat__t--up2{background:rgb(240 69 91 / .44)} .heat__t--up3{background:rgb(240 69 91 / .62)}
+.heat__t--dn1{background:rgb(77 163 255 / .26)} .heat__t--dn2{background:rgb(77 163 255 / .44)} .heat__t--dn3{background:rgb(77 163 255 / .62)}
+
+/* 고정 스크롤 장면(.scrub): 스크롤 진행에 맞춰 하나씩 놓인다 */
+.scrub .heat__t{transition:opacity .45s var(--ease-out),transform .55s var(--ease-overshoot);transition-delay:0s}
+/* 아직 차례가 안 된 줄과 칸은 흐리게 자리만 보인다(장면 중간에 빈 상자가 되지 않게) */
+.scrub .heat__t:not(.is-on){opacity:.14;transform:scale(.94)}
+
+
+/* S7 다루는 ETF: 테마 카드가 두 줄로 엇갈려 흐른다 */
+.facts{overflow-x:clip}
+.facts .section-head{margin-bottom:clamp(32px,24px + 2vw,56px)}
+.facts .h2 [data-count]{font-variant-numeric:tabular-nums}
+.cover{position:relative;display:grid;gap:22px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 9%,#000 91%,transparent);mask-image:linear-gradient(90deg,transparent,#000 9%,#000 91%,transparent)}
+.cover__track{display:flex;width:max-content;margin:0;padding:0;list-style:none;animation:marquee 70s linear infinite}
+.cover__track[data-marquee="right"]{animation-direction:reverse;animation-duration:58s}
+@keyframes marquee{to{transform:translateX(-50%)}}
+.tcard{flex:none;display:flex;align-items:center;gap:14px;min-width:232px;margin-right:14px;padding:14px 22px 14px 14px;border-radius:20px;background:var(--bg-raised);border:1px solid var(--border)}
+.tcard__n{flex:none;width:52px;height:52px;border-radius:14px;background:var(--point-subtle);color:var(--point-300);font-size:20px;font-weight:700;line-height:52px;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tcard__n small{font-size:.55em;font-weight:600;margin-left:1px}
+.tcard__t{display:grid;gap:3px}
+.tcard__t strong{font-size:17px;font-weight:700;line-height:1.3;letter-spacing:-.01em;color:var(--t1)}
+.tcard__t span{font-size:13px;line-height:1.4;color:var(--t3);white-space:nowrap}
+.cover__pill{position:absolute;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);display:inline-flex;width:max-content;align-items:center;gap:10px;height:44px;padding:0 8px 0 10px;border-radius:999px;background:var(--grad-fill);color:var(--on-point);font-size:15px;font-weight:700;white-space:nowrap;box-shadow:0 14px 36px rgb(0 0 0 / .55)}
+.cover__pill img{width:26px;height:26px}
+.cover__pill .live{background:rgb(255 255 255 / .18);color:inherit}
+.cover__pill .live i{background:#fff}
+.cover__foot{margin-top:44px;text-align:center}
+.extras{color:var(--t2)}
+@media (hover:hover){.cover:hover .cover__track{animation-play-state:paused}}
+@media (min-width:1024px){
+  .cover{gap:30px}
+  .tcard{gap:18px;margin-right:18px;padding:18px 28px 18px 18px;border-radius:var(--radius)}
+  .tcard__n{width:62px;height:62px;border-radius:16px;font-size:24px;line-height:62px}
+  .tcard__t strong{font-size:20px}
+  .tcard__t span{font-size:14px}
+}
+@media (max-width:767px){
+  .tcard{gap:12px;min-width:0;padding:12px 16px 12px 12px;border-radius:18px}
+  .tcard__n{width:44px;height:44px;border-radius:12px;font-size:17px;line-height:44px}
+  .tcard__t strong{font-size:15px}
+  .tcard__t span{font-size:12px}
+  .cover__pill{height:38px;font-size:13px}
+  .cover__pill img{width:22px;height:22px}
+}
+/* 움직임을 줄인 화면: 흐르지 않고 전부 펼쳐 보인다 */
+[data-mode="reduce"] .cover{padding-inline:16px;-webkit-mask-image:none;mask-image:none}
+[data-mode="reduce"] .cover__track{width:auto;flex-wrap:wrap;justify-content:center;gap:10px;animation:none}
+[data-mode="reduce"] .tcard{margin-right:0}
+[data-mode="reduce"] .tcard[aria-hidden="true"]{display:none}
+[data-mode="reduce"] .cover__pill{position:static;transform:none;justify-self:center}
+
+/* FAQ */
+.faq__list details{border-bottom:1px solid var(--border)}
+.faq__list summary{position:relative;list-style:none;cursor:pointer;padding:22px 44px 22px 0;font-size:clamp(17px,16px + .3vw,20px);font-weight:600}
+.faq__list summary::-webkit-details-marker{display:none}
+.faq__list summary::after{content:"";position:absolute;right:6px;top:50%;width:11px;height:11px;border-right:2px solid var(--t2);border-bottom:2px solid var(--t2);transform:translateY(-70%) rotate(45deg);transition:transform .3s var(--ease-inout)}
+.faq__list details[open] summary::after{transform:translateY(-25%) rotate(-135deg)}
+.faq__list details p{padding:0 0 24px;color:var(--t2);max-width:680px}
+
+/* 마지막 CTA */
+.cta{overflow:hidden;text-align:center;background:radial-gradient(50% 50% at 50% 62%,rgb(63 95 224 / .26),transparent 70%),radial-gradient(60% 50% at 50% 28%,rgb(127 180 255 / .1),transparent 70%),var(--bg)}
+.cta__inner{display:flex;flex-direction:column;align-items:center}
+.cta__orca{width:clamp(120px,100px + 8vw,200px);height:auto;animation:bob 4.5s var(--ease-inout) infinite alternate;filter:drop-shadow(0 20px 40px var(--shadow))}
+.cta .display{margin:8px 0 18px}
+.cta .hero__ctas{margin-top:34px}
+.cta__note{margin-top:22px;font-size:14px;font-weight:600;color:var(--t3)}
+.find{width:min(100%,520px);margin:0 auto 30px}
+.find label{display:block;margin-bottom:16px}
+body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-events:none}
+.find__in{width:100%;height:58px;padding:0 24px;border:1px solid var(--border-strong);border-radius:999px;background:var(--bg-raised);color:var(--t1);font:inherit;font-size:17px;font-weight:500;transition:border-color .2s,box-shadow .2s}
+.find__in::placeholder{color:var(--t3)}
+.find__in:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-subtle)}
+.find__out{margin-top:10px;padding:6px;border:1px solid var(--border);border-radius:24px;background:var(--bg-raised);text-align:left}
+.find__row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:48px;padding:8px 14px;border:0;border-radius:18px;background:transparent;color:var(--t1);font:inherit;font-size:16px;font-weight:600;text-align:left;cursor:pointer}
+.find__row span{flex:none;font-size:14px;color:var(--accent-300)}
+.find__row:hover,.find__row:focus-visible{background:var(--surface)}
+.find__more{padding:8px 14px 10px;font-size:14px;color:var(--t3)}
+.find__miss{padding:18px 14px 16px;text-align:center}
+.find__miss strong{display:block;font-size:17px;word-break:break-all}
+.find__miss p{margin:6px 0 14px;font-size:15px;line-height:1.55;color:var(--t2)}
+.find__miss p:last-child{margin-bottom:0}
+.find .btn{font-family:inherit;cursor:pointer}
+.find__card{display:grid;gap:16px;padding:16px 14px 14px}
+.find__name{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:17px}
+.find__tag{flex:none;padding:3px 9px;border:1px solid var(--border-strong);border-radius:999px;font-size:12px;font-weight:700;color:var(--t2)}
+.find__card .report__body{padding:4px 0 0}
+.find__meta{font-size:13px;color:var(--t3)}
+.find__card .btn{width:100%;height:46px;font-size:15px}
+.find__sk{display:block;height:14px;border-radius:7px;background:var(--surface);animation:sk .8s ease-in-out infinite alternate}
+.find__sk:nth-of-type(2){width:72%}
+.find__sk:last-child{width:46%}
+@keyframes sk{to{opacity:.35}}
+[data-mode="reduce"] .find__sk{animation:none}
+
+.footer{border-top:1px solid var(--border);padding-block:40px 120px;color:var(--t3);font-size:14px}
+.footer__in{display:grid;gap:18px}
+.footer .nav__logo{color:var(--t1)}
+.footer p{max-width:46em}
+.footer__row{display:flex;flex-wrap:wrap;gap:8px 22px}
+.footer a:not(.nav__logo){color:var(--t2);text-decoration:underline;text-underline-offset:3px}
+
+@media (min-width:768px){
+  .hero__media{aspect-ratio:16 / 11}
+  .heat__n{display:block}
+  .heat__row + .heat__row .heat__t b{font-size:11px;letter-spacing:0}
+  .cta-bar{left:50%;right:auto;width:480px;margin-left:-240px}
+}
+@media (min-width:1024px){
+  .br-m{display:none}
+  .btn--lg{height:56px;padding:0 30px;font-size:17px}
+  .nav__pill{padding-left:18px}
+  .nav__links{display:flex;gap:28px;margin-inline:auto;font-size:15px;color:var(--t2)}
+  .nav__links a{position:relative;transition:color .2s}
+  .nav__links a:hover,.nav__links a[aria-current]{color:var(--t1)}
+  .nav__links a::after{content:"";position:absolute;left:50%;bottom:-10px;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:var(--point-400);opacity:0;transform:scale(0);transition:opacity .25s,transform .35s var(--ease-out)}
+  .nav__links a[aria-current]::after{opacity:1;transform:none}
+  .nav__actions{margin-left:0}
+  .cta-bar{display:none}
+  .footer{padding-bottom:48px}
+
+  .hero{padding:10px}
+  /* 썸네일처럼 아주 긴 화면에서도 히어로가 끝없이 늘어나지 않게 상한을 둔다 */
+  .hero__card{display:block;height:min(calc(100svh - 20px),1100px);min-height:520px;border-radius:var(--radius-hero);overflow:hidden;background:var(--stage)}
+  .hero__media{position:absolute;inset:0;aspect-ratio:auto;border-radius:0}
+  .hero__shade{display:block;position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(90deg,rgb(12 14 19 / .92) 0%,rgb(12 14 19 / .6) 32%,rgb(12 14 19 / 0) 56%)}
+  .hero__copy{position:absolute;left:clamp(40px,4vw,72px);bottom:clamp(40px,6vh,72px);z-index:2;max-width:780px;padding:0;text-align:left;align-items:flex-start}
+  .hero__copy .display{margin:22px 0 18px;font-size:clamp(40px,min(14px + 4.4vw,11.5vh),78px)}
+  .hero__copy .lead{max-width:min(620px,46vw)}
+  .hero__ctas{justify-content:flex-start;margin-top:34px}
+  .hero__scroll{display:block;position:absolute;right:40px;bottom:40px;z-index:2;width:26px;height:42px;border:2px solid rgb(255 255 255 / .3);border-radius:14px}
+  .hero__scroll span{position:absolute;left:50%;top:8px;width:4px;height:8px;margin-left:-2px;border-radius:2px;background:var(--t1);animation:wheel 1.6s var(--ease-inout) infinite}
+
+  .pain__grid{grid-template-columns:8fr 4fr;align-items:center;gap:64px}
+  .swarm{display:block;padding-block:16px}
+  .motion-on .swarm__field{display:none}
+
+  .why__grid{grid-template-columns:6fr 7fr;gap:48px;align-items:center}
+  .report__body{padding:24px 28px}
+  .steps{display:grid;gap:6px;margin-top:28px;counter-reset:s}
+  .steps li{counter-increment:s;display:grid;grid-template-columns:auto 1fr;gap:2px 14px;padding:12px 16px;border-radius:14px;color:var(--t3);transition:background-color .4s,color .4s}
+  .steps li::before{content:counter(s);grid-row:1 / 3;align-self:center;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border-strong);font-family:var(--num);font-size:13px;font-weight:700;transition:background-color .4s,border-color .4s,color .4s}
+  .steps b{font-size:17px;font-weight:700}
+  .steps span{font-size:14px}
+  .steps li.is-on{background:var(--surface);color:var(--t1)}
+  .steps li.is-on span{color:var(--t2)}
+  .steps li.is-on::before{background:var(--point);border-color:var(--point);color:var(--on-point)}
+  .today .section-head{display:grid;grid-template-columns:auto minmax(0,400px);justify-content:space-between;align-items:end;column-gap:48px}
+  .today .section-head .eyebrow{grid-column:1 / -1}
+  .today .section-head .h2{margin-bottom:0}
+  .today .section-head .body{padding-bottom:6px}
+  .move__zones{grid-template-columns:1.25fr 1fr 1.15fr}
+  .zone{padding:22px 24px 24px}
+  .zone + .zone{border-top:0;border-left:1px solid var(--border)}
+  .poll{max-width:none;grid-template-columns:minmax(0,1fr) minmax(360px,420px) minmax(0,1fr);grid-template-rows:auto auto;gap:22px 30px;align-items:center}
+  .vote{grid-column:2;grid-row:1 / 3;padding:28px 26px}
+  .post{width:auto;max-width:330px}
+  .post--a{--r:-2.5deg;grid-column:1;grid-row:1;justify-self:end;align-self:end;margin-right:6px}
+  .post--b{--r:2deg;grid-column:3;grid-row:1 / 3;justify-self:start}
+  .post--c{--r:1.5deg;grid-column:1;grid-row:2;justify-self:start;align-self:start}
+
+  /* full 모드: 공감과 전망 장면은 한 화면에 고정한다 */
+  .motion-full .pain,.motion-full .engine,.motion-full .why,.motion-full .today,.motion-full .talk{min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding-block:80px 24px}
+  .motion-full .pain > .container,.motion-full .engine > .container,.motion-full .why > .container,.motion-full .today > .container,.motion-full .talk > .container{padding-inline:52px}
+  .motion-full .engine .section-head{margin-bottom:24px}
+  .motion-full .engine .fcell{padding:10px 16px}
+  .motion-full .engine .swarm{padding-block:0}
+  .motion-full .engine .swarm__out{padding:14px}
+}
+@keyframes wheel{0%{transform:translateY(0);opacity:1}70%{transform:translateY(12px);opacity:0}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){
+  .hero__media::before,.scatter__tag,.cta__orca,.hero__scroll span,.status::before,.live i,.vote__opts button,.post__bub{animation:none}
+}
+</style>
+
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+
+<header class="nav">
+  <div class="nav__pill">
+    <a class="nav__logo" href="#top"><img src="assets/logo-white.png" alt="" width="34" height="34">ETF Orca</a>
+    <nav class="nav__links" aria-label="주요 메뉴">
+      <a href="#engine">분석</a>
+      <a href="#why">리포트</a>
+      <a href="#today">오늘 움직임</a>
+      <a href="#talk">커뮤니티</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav__actions">
+      <a class="btn btn--point btn--sm" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">다운로드</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- S1 히어로 -->
+<section class="hero" id="top">
+  <div class="hero__card">
+    <div class="hero__media">
+      <div class="hero__scene">
+        <canvas class="hero__gl" data-gl aria-hidden="true"></canvas>
+        <div class="hero__fallback" data-gl-fallback hidden>
+          <figure class="phone"><canvas data-screen="home" width="780" height="1688" role="img" aria-label="ETF Orca 홈 화면 목업. 관심 그룹의 전망 강도가 상승으로 표시된다."></canvas></figure>
+        </div>
+      </div>
+    </div>
+    <div class="hero__shade" aria-hidden="true"></div>
+    <div class="hero__copy" data-cta-zone>
+      <span class="chip chip--launch">App Store 출시</span>
+      <h1 class="display">ETF 한 달 전망,<br>이유까지 보여드려요.</h1>
+      <p class="lead"><span class="lead__s"><span class="nw">뉴스와 공시, 수급을 매일 읽고</span> <span class="nw"><strong>전망의 근거</strong>를 문장으로 정리해요.</span></span> <span class="lead__s">무료이고 로그인 없이 바로 볼 수 있어요.</span></p>
+      <div class="hero__ctas">
+        <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+        <a class="btn btn--ghost btn--lg" href="#engine">미리 보기</a>
+      </div>
+    </div>
+    <div class="hero__scroll" aria-hidden="true"><span></span></div>
+  </div>
+</section>
+
+<!-- S2 공감: ETF 투자자가 겪는 큰 문제 넷. 문제만 말한다. 네 줄의 순서 = 뒤따르는 해결 섹션의 순서 -->
+<section class="section pain" id="pain">
+  <div class="container pain__grid">
+    <div class="pain__text">
+      <p class="eyebrow">ETF 투자자라면</p>
+      <h2 class="h2">이런 적 있죠?</h2>
+      <!-- 초안 문구: 실제 사용자 표현으로 교체 예정 -->
+      <ol class="karaoke" data-karaoke>
+        <li class="is-active"><span>ETF 하나 보려고 종목 수십 개를 따로 찾아봐요</span></li>
+        <li><span>사라는 시그널은 많은데 이유는 안 알려줘요</span></li>
+        <li><span>가격이 움직여도 왜인지 알기 어려워요</span></li>
+        <li><span>ETF는 다른 사람 생각을 볼 곳이 마땅치 않아요</span></li>
+      </ol>
+    </div>
+    <div class="scatter" aria-hidden="true">
+      <svg viewBox="0 0 400 400" fill="none" preserveAspectRatio="none">
+        <defs><linearGradient id="g-scatter" x1="0" x2="1"><stop stop-color="#5b7cfa"/><stop offset="1" stop-color="#9fd0ff"/></linearGradient></defs>
+        <path d="M20 250 L70 232 L110 268 L150 180 L190 214 L235 132 L270 176 L310 96 L350 142 L385 70" stroke="url(#g-scatter)" stroke-width="3" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 10" opacity=".55"/>
+      </svg>
+      <span class="scatter__tag">뉴스</span><span class="scatter__tag">공시</span><span class="scatter__tag">수급</span><span class="scatter__tag">차트</span>
+      <span class="scatter__q">?</span>
+    </div>
+  </div>
+</section>
+
+<!-- S3 ETF 단위 분석 (시그니처 장면): 문제 1 "종목 수십 개를 따로 찾아봐요"를 되받는다. 따로 찾아보던 자료(입력) → 다섯 기준(분석) → ETF 하나(결과) -->
+<section class="section engine" id="engine">
+  <div class="container">
+    <header class="section-head">
+      <p class="eyebrow eyebrow--point">ETF 단위 분석</p>
+      <h2 class="h2">종목 수십 개는 그만.<br>Orca가 대신 읽어요.</h2>
+      <p class="body muted">뉴스와 공시, 리포트에 가격과 수급까지. 따로 찾아보던 자료를 <strong>다섯 가지 기준</strong>으로 읽어요.</p>
+    </header>
+    <!-- 빨아들이는 패널을 가운데 둔다. 양옆에 흩어져 떠 있던 자료 조각들이 종류별로 제 기준 칸에 빨려 들어가고, 다 모이면 그 기준의 표시가 뜬다.
+         모션이 없으면 조각 없이 다섯 칸만 정리된 상태로 보인다. 기준 설명은 팀 프로토타입의 '분석 기준' 문구이고, 표시의 낱말(상승·중립·하락)은 출시된 앱을 따른다 -->
+    <div class="swarm" data-swarm>
+      <canvas class="swarm__cv" data-swarm-cv aria-hidden="true"></canvas>
+      <div class="swarm__field" aria-hidden="true"><p>따로 흩어져 있던 자료</p></div>
+      <div class="swarm__out">
+        <div class="swarm__head"><i class="swarm__ico" aria-hidden="true"></i><b>KODEX 반도체</b><span class="grade" data-grade>▲ 상승</span><span class="status is-hit" data-status>분석 완료</span></div>
+        <div class="fcell" data-fac><b>이슈</b><small>돈을 더 벌게 된 소식인지</small><span class="up">▲ 상승</span></div>
+        <div class="fcell" data-fac><b>차트</b><small>주가가 오르는 흐름인지</small><span class="up">▲ 상승</span></div>
+        <div class="fcell" data-fac><b>매크로</b><small>금리, 환율 같은 바깥 일</small><span class="flat">■ 중립</span></div>
+        <div class="fcell" data-fac><b>밸류</b><small>버는 돈에 비해 싼지</small><span class="flat">■ 중립</span></div>
+        <div class="fcell" data-fac><b>수급</b><small>큰손이 사는지 파는지</small><span class="down">▼ 하락</span></div>
+      </div>
+      <div class="swarm__field swarm__field--b" aria-hidden="true"></div>
+    </div>
+  </div>
+</section>
+
+<!-- S4 리포트: 문제 2 "시그널은 많은데 이유는 안 알려줘요"를 되받는다.
+     앱의 '자세히 보기'가 읽히는 순서를 그대로 보여준다(팀 프로토타입의 구성): 핵심 한 문장 → 오늘 달라진 점 → 이유를 하나씩 → 그래서.
+     내용과 숫자는 10월 5일 KODEX 반도체 리포트. 문장을 줄여 옮긴 것이라 팀 확인 필요 -->
+<section class="section why" id="why">
+  <div class="container why__grid">
+    <header class="section-head">
+      <p class="eyebrow">분석 자세히 보기</p>
+      <h2 class="h2">사라는 말 대신<br>이유가 담긴 리포트를.</h2>
+      <p class="body muted">종목 리포트는 많아도 ETF 리포트는 드물죠. Orca는 전망마다 이유를 순서대로 적어요.</p>
+      <ol class="steps" aria-label="리포트를 읽는 순서">
+        <li><b>핵심 한 문장</b><span>전망과 다섯 기준부터</span></li>
+        <li><b>오늘 달라진 점</b><span>어제와 무엇이 달라졌는지</span></li>
+        <li><b>왜 이렇게 봤을까요</b><span>이유를 하나씩, 근거와 함께</span></li>
+        <li><b>그래서</b><span>부담과 개선을 나란히, 판단은 직접</span></li>
+      </ol>
+    </header>
+    <article class="mock report" data-report>
+      <div class="mock__bar"><span>KODEX 반도체<span class="hide-s"> 한 달</span> 전망</span><span>ETF Orca AI · 10월 5일</span></div>
+      <div class="report__view">
+        <div class="report__body">
+          <div class="report__head">
+            <p class="report__grade"><span class="grade">▲ 상승</span><span>중립에서 상승으로 바뀌었어요</span></p>
+            <h3 class="report__title">HBM4 이익 가시성 확대와 과열·수급 부담의 공존</h3>
+            <ul class="marks" aria-label="다섯 기준. 이슈 상승, 차트 상승, 매크로 중립, 밸류 중립, 수급 하락">
+              <li data-r=".03"><i class="is-up" aria-hidden="true">▲</i>이슈</li>
+              <li data-r=".06"><i class="is-up" aria-hidden="true">▲</i>차트</li>
+              <li data-r=".09"><i class="is-flat" aria-hidden="true">■</i>매크로</li>
+              <li data-r=".12"><i class="is-flat" aria-hidden="true">■</i>밸류</li>
+              <li data-r=".15"><i class="is-down" aria-hidden="true">▼</i>수급</li>
+            </ul>
+          </div>
+          <section class="changed" data-r=".18">
+            <h4>오늘 달라진 점</h4>
+            <ul>
+              <li data-r=".21">삼성전자가 내년 HBM 가격을 <b><span data-n="3">3</span>배</b>로 올리는 방안을 협상 중입니다.</li>
+              <li data-r=".26">마이크론은 내년 물량의 <b><span data-n="75">75</span>%</b>를 이미 계약했다고 밝혔습니다.</li>
+              <li data-r=".31">원/달러가 1383.3원에서 1350.6원으로 <b><span data-n="2.4">2.4</span>%</b> 내렸습니다.</li>
+            </ul>
+          </section>
+          <section class="reasons">
+            <h4 class="report__sub" data-r=".35">왜 이렇게 봤을까요</h4>
+            <ol class="chain">
+              <li data-node="up" data-r=".38"><details open><summary>메모리 가격 협상 구조가 달라졌습니다</summary><div class="chain__more"><p class="is-new">삼성전자는 내년 HBM 가격을 3배로 올리는 방안을 협상 중입니다.</p><p class="is-new">마이크론은 내년 물량의 75%를 이미 계약했다고 밝혔습니다.</p><p>가격 인상 협상에 5년 장기계약까지 더해졌습니다.</p></div></details></li>
+              <li data-node="up" data-r=".44"><details><summary>삼성전자는 HBM4 효과로 3분기에도 사상 최대 실적을 낸 것으로 보도됐습니다</summary><div class="chain__more"><p>마이크론의 사상 최대 실적에 이어 메모리 가격 상승 강도가 확인됐습니다.</p><p>8일 잠정실적 발표를 앞두고 있습니다.</p></div></details></li>
+              <li data-node="up" data-r=".5"><details><summary>그래서 메모리 이익 가시성이 높아졌습니다</summary><div class="chain__more"><p>삼성전자와 SK하이닉스는 이 ETF에서 17.2%, 16.6%를 차지합니다.</p></div></details></li>
+              <li data-node="down" data-r=".56"><details><summary>다만 자사주 매입이라는 방파제가 소진됐습니다</summary><div class="chain__more"><p>삼성전자는 10월 1일까지 자사주 5380만 주를 사들여 목표를 일찍 채웠습니다.</p><p>SK하이닉스도 이르면 10월 중순 매입을 마칠 전망입니다.</p><p>매입이 끝나면 수급 공백 우려가 커집니다. 두 회사는 이 ETF의 <b>33.9%</b>입니다.</p></div></details></li>
+              <li data-node="down" data-r=".62">외국인 순매도가 이어지고 있습니다</li>
+              <li data-node="down" data-r=".68">장비주 고밸류에이션과 단기 과열이 되돌림 위험을 키웁니다</li>
+              <li data-node="check" data-r=".74">8일 삼성전자 잠정실적 발표가 이번 달 첫 확인 지점입니다</li>
+            </ol>
+          </section>
+          <section class="so" data-r=".8">
+            <h4>그래서 상승이에요</h4>
+            <dl>
+              <div><dt class="down">부담</dt><dd><span class="chip chip--down" data-r=".82">자사주 매입 마무리</span><span class="chip chip--down" data-r=".84">외국인 순매도</span><span class="chip chip--down" data-r=".86">단기 과열</span><span class="chip chip--down" data-r=".88">원화 강세</span></dd></div>
+              <div><dt class="up">개선</dt><dd><span class="chip chip--up" data-r=".9">HBM 가격 3배 협상</span><span class="chip chip--up" data-r=".92">내년 물량 75% 계약</span><span class="chip chip--up" data-r=".94">3분기 사상 최대</span></dd></div>
+            </dl>
+            <p class="so__line" data-r=".97">메모리 이익 가시성이 높아졌습니다. 다만 과열과 수급 부담이 되돌림 위험을 키웁니다.</p>
+          </section>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- S5 오늘 움직임: 문제 3 "움직여도 왜인지 알기 어려워요"를 되받는다. 리포트(한 달 전망의 근거)와 겹치지 않게, 여기는 "장중에 3% 넘게 움직인 그때의 이유"를 말한다.
+     배치: 제목은 위, 그 아래 넓은 보드 하나를 왼쪽에서 오른쪽으로 읽는다(① 움직임 → ② 종목 → ③ 이유). 발화 순간 구성종목 등락은 이미 있는 값이고 이유는 그다음에 나오는 분석이라 이 순서다.
+     장중 실시간은 배포 예정인 앱 업데이트 기준(사용자 확인). 3% 기준과 차트 모양은 edge 프로젝트의 1분 가격 트리거 판정 규칙 v2를 따른다(기준선 = 전일 종가, 3% 이상 벌어지면 발화).
+     이 장면의 봉과 등락률은 설명용으로 지어낸 값이고, 이유 문구는 팀 프로토타입의 예시를 KODEX 반도체에 맞춰 옮긴 것이다. 공개 전에 실제 하루의 데이터로 바꿔야 한다 -->
+<section class="section today" id="today">
+  <div class="container">
+    <header class="section-head">
+      <p class="eyebrow eyebrow--point">오늘 움직임</p>
+      <h2 class="h2">가격이 움직인 그때<br>이유부터 보여줘요.</h2>
+      <p class="body muted">장중에 전일 종가보다 3% 넘게 움직이면 뉴스와 공시, 수급에서 찾은 이유를 실시간으로 정리해요.</p>
+    </header>
+    <div class="mock move" data-move>
+      <div class="mock__bar"><span>KODEX 반도체<span class="hide-s"> · 오늘 장중</span></span><span class="move__bar-r"><span class="live"><i aria-hidden="true"></i>장중 실시간</span><span>예시 화면</span></span></div>
+      <div class="move__zones">
+        <section class="zone zone--chart">
+          <h3 class="zone__h"><i>1</i>장중 움직임</h3>
+          <div class="move__plot">
+            <svg class="move__svg" viewBox="0 0 640 222" preserveAspectRatio="none" role="img" aria-label="장중 차트 예시. 전일 종가 근처에서 시작해 조금씩 오르다가 10시 42분에 3% 선을 넘어 3.2% 올랐다.">
+                <g class="move__grid"><line x1="16" y1="190.8" x2="624" y2="190.8"/></g>
+                <rect class="move__today" x="596" y="8" width="28" height="210" rx="8"/>
+                <line class="move__line3" x1="16" y1="63.2" x2="624" y2="63.2"/>
+                <g class="cd cd--up" data-from="0.2" data-to="0.3"><line x1="30" y1="173.8" x2="30" y2="186.5"/><rect x="22" y="178" width="16" height="4.2" rx="2"/></g>
+                <g class="cd cd--up" data-from="0.3" data-to="0.6"><line x1="59" y1="161.8" x2="59" y2="181.4"/><rect x="51" y="165.2" width="16" height="12.8" rx="2"/></g>
+                <g class="cd cd--dn" data-from="0.6" data-to="0.4"><line x1="88" y1="160.2" x2="88" y2="178.8"/><rect x="80" y="165.2" width="16" height="8.6" rx="2"/></g>
+                <g class="cd cd--up" data-from="0.4" data-to="0.9"><line x1="117" y1="149.5" x2="117" y2="176.7"/><rect x="109" y="152.5" width="16" height="21.3" rx="2"/></g>
+                <g class="cd cd--dn" data-from="0.9" data-to="0.7"><line x1="146" y1="148.2" x2="146" y2="165.2"/><rect x="138" y="152.5" width="16" height="8.5" rx="2"/></g>
+                <g class="cd cd--up" data-from="0.7" data-to="1.1"><line x1="175" y1="140.2" x2="175" y2="164.8"/><rect x="167" y="144" width="16" height="17" rx="2"/></g>
+                <g class="cd cd--up" data-from="1.1" data-to="1.4"><line x1="204" y1="126.2" x2="204" y2="149.1"/><rect x="196" y="131.2" width="16" height="12.8" rx="2"/></g>
+                <g class="cd cd--dn" data-from="1.4" data-to="1.2"><line x1="233" y1="127.8" x2="233" y2="143.2"/><rect x="225" y="131.2" width="16" height="8.6" rx="2"/></g>
+                <g class="cd cd--up" data-from="1.2" data-to="1.6"><line x1="262" y1="118.5" x2="262" y2="144"/><rect x="254" y="122.8" width="16" height="17" rx="2"/></g>
+                <g class="cd cd--dn" data-from="1.6" data-to="1.5"><line x1="291" y1="119.8" x2="291" y2="130"/><rect x="283" y="122.8" width="16" height="4.2" rx="2"/></g>
+                <g class="cd cd--up" data-from="1.5" data-to="1.9"><line x1="320" y1="105.3" x2="320" y2="131.7"/><rect x="312" y="110" width="16" height="17" rx="2"/></g>
+                <g class="cd cd--dn" data-from="1.9" data-to="1.7"><line x1="349" y1="106.2" x2="349" y2="122.3"/><rect x="341" y="110" width="16" height="8.5" rx="2"/></g>
+                <g class="cd cd--up" data-from="1.7" data-to="2"><line x1="378" y1="102.3" x2="378" y2="121.9"/><rect x="370" y="105.8" width="16" height="12.7" rx="2"/></g>
+                <g class="cd cd--dn" data-from="2" data-to="1.8"><line x1="407" y1="100.6" x2="407" y2="119.3"/><rect x="399" y="105.8" width="16" height="8.5" rx="2"/></g>
+                <g class="cd cd--up" data-from="1.8" data-to="2.2"><line x1="436" y1="93" x2="436" y2="118.5"/><rect x="428" y="97.2" width="16" height="17.1" rx="2"/></g>
+                <g class="cd cd--dn" data-from="2.2" data-to="2"><line x1="465" y1="94.3" x2="465" y2="108.7"/><rect x="457" y="97.2" width="16" height="8.6" rx="2"/></g>
+                <g class="cd cd--up" data-from="2" data-to="2.3"><line x1="494" y1="89.2" x2="494" y2="109.6"/><rect x="486" y="93" width="16" height="12.8" rx="2"/></g>
+                <g class="cd cd--dn" data-from="2.3" data-to="2.1"><line x1="523" y1="88.3" x2="523" y2="106.2"/><rect x="515" y="93" width="16" height="8.5" rx="2"/></g>
+                <g class="cd cd--up" data-from="2.1" data-to="2.4"><line x1="552" y1="85.3" x2="552" y2="104.9"/><rect x="544" y="88.8" width="16" height="12.7" rx="2"/></g>
+                <g class="cd cd--dn" data-from="2.4" data-to="2.1"><line x1="581" y1="84.5" x2="581" y2="105.8"/><rect x="573" y="88.8" width="16" height="12.7" rx="2"/></g>
+                <g class="cd cd--up cd--today" data-from="2.1" data-to="3.2"><line x1="610" y1="54.8" x2="610" y2="103.2"/><rect x="602" y="54.8" width="16" height="46.7" rx="2"/></g>
+            </svg>
+            <span class="move__thr" aria-hidden="true">+3%</span>
+            <span class="move__base" aria-hidden="true">전일 종가</span>
+            <span class="move__tag"><span data-clock>10:42</span> · <b>+3.2%</b></span>
+          </div>
+          <p class="status is-hit move__watch" data-watch>10:42 · 3% 돌파</p>
+        </section>
+        <section class="zone zone--who">
+          <h3 class="zone__h"><i>2</i>어느 종목이 움직였나</h3>
+          <div class="heat" role="img" aria-label="구성종목 히트맵 예시. 삼성전자 +2.4%, SK하이닉스 +4.8%, 한미반도체 +3.9%, 주성엔지니어링 +1.6%, 원익IPS +2.2%, 이오테크닉스 +0.8%, DB하이텍 -0.6%, HPSP +1.9%">
+            <div class="heat__row"><span class="heat__t heat__t--up2" style="--w:10" data-hot>삼성전자<b>+2.4%</b></span><span class="heat__t heat__t--up3" style="--w:10" data-hot>SK하이닉스<b>+4.8%</b></span></div>
+            <div class="heat__row"><span class="heat__t heat__t--up2" style="--w:12"><span class="heat__n">한미반도체</span><b>+3.9%</b></span><span class="heat__t heat__t--up2" style="--w:15"><span class="heat__n">주성엔지니어링</span><b>+1.6%</b></span><span class="heat__t heat__t--up2" style="--w:10"><span class="heat__n">원익IPS</span><b>+2.2%</b></span></div>
+            <div class="heat__row"><span class="heat__t heat__t--up1" style="--w:13.5"><span class="heat__n">이오테크닉스</span><b>+0.8%</b></span><span class="heat__t heat__t--dn1" style="--w:11"><span class="heat__n">DB하이텍</span><b>-0.6%</b></span><span class="heat__t heat__t--up2" style="--w:9.5"><span class="heat__n">HPSP</span><b>+1.9%</b></span></div>
+          </div>
+          <p class="move__why"><span>가장 크게 끌어올린 종목</span><b class="chip chip--up">SK하이닉스 +4.8%</b><b class="chip chip--up">삼성전자 +2.4%</b></p>
+        </section>
+        <section class="zone zone--why cause" data-cause>
+          <h3 class="zone__h"><i>3</i>왜 움직였을까?</h3>
+          <h4 class="cause__title">KODEX 반도체가 오늘 +3.2% 오른 이유</h4>
+          <ul class="cause__list">
+            <li data-dir="up">메모리값 3개월째 상승<span>AI 서버용 메모리가 부족해요.</span></li>
+            <li data-dir="up">SK하이닉스 HBM4 첫 출하<span>AI용 고급 메모리(HBM)는 일반 메모리보다 4배 비싸요.</span></li>
+            <li data-dir="up">외국인 5일 중 4일 매수<span>외국인이 사면 주가가 오르기 쉬워요.</span></li>
+            <li data-dir="down">대형주는 장비주의 절반만 상승<span>이 둘이 따라와야 ETF가 제대로 올라요.</span></li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- S6 커뮤니티: 문제 4 "다른 사람 생각을 볼 곳이 마땅치 않아요"를 되받는다. 앱의 커뮤니티 탭에 있는 것(팀 프로토타입): 전망 투표 + 글. 배치는 가운데 투표 카드 둘레에 글을 말풍선으로 띄웠다.
+     투표는 실제로 눌러 볼 수 있다(이 페이지 안에서만 바뀌고 어디에도 저장되지 않는다). 비율과 글은 예시다: 글은 프로토타입의 예시 문장을 옮긴 것이고,
+     출시 직후 커뮤니티는 비어 있었으므로 참여 인원이나 공감 수 같은 숫자는 넣지 않는다 -->
+<section class="section talk" id="talk">
+  <div class="container">
+    <header class="section-head section-head--center">
+      <p class="eyebrow">커뮤니티</p>
+      <h2 class="h2">다른 사람 생각이 궁금할 땐<br>ETF마다 글과 <span class="nw">투표가 있어요.</span></h2>
+      <p class="body muted">관심 ETF를 태그해 글과 답글을 남기고, 오늘의 전망에 투표해요.</p>
+    </header>
+    <div class="poll" data-poll>
+      <div class="vote" data-vote>
+        <p class="vote__top"><span class="chip">KODEX 반도체</span><span>예시 화면</span></p>
+        <p class="vote__q" data-vote-title>이 전망, 당신이라면?</p>
+        <div class="vote__bar" aria-hidden="true"><i style="--n:6"></i><i style="--n:4"></i><i style="--n:3"></i></div>
+        <div class="vote__pct" aria-live="polite"><b style="--n:6">46%</b><b style="--n:4">31%</b><b style="--n:3">23%</b></div>
+        <div class="vote__opts"><button type="button" data-opt="0">산다</button><button type="button" data-opt="1">기다린다</button><button type="button" data-opt="2">판다</button></div>
+        <p class="vote__note" data-vote-note>눌러서 골라 보세요. 비율과 글은 예시예요.</p>
+      </div>
+      <ul class="posts" role="list" aria-label="커뮤니티 글 예시">
+        <li class="post post--a"><i class="post__av" aria-hidden="true">꾸</i><div class="post__bub"><p class="post__who"><b>꾸준한개미</b><span>19분</span></p><p class="post__t">저는 매달 같은 날 사는 중이에요.</p><p class="post__b">전망이 상승이어도 금액은 안 바꿔요.</p></div></li>
+        <li class="post post--b"><i class="post__av" aria-hidden="true">연</i><div class="post__bub"><p class="post__who"><b>연금계좌운용</b><span>34분</span></p><p class="post__t">대형주 전고점 돌파가 확인되면 더 담을 생각이에요.</p><p class="post__b">오늘 +3.2% 움직였는데 저는 안 팔았어요.</p></div></li>
+        <li class="post post--c"><i class="post__av" aria-hidden="true">삼</i><div class="post__bub"><p class="post__who"><b>삼전존버</b><span>2시간</span></p><p class="post__t">저는 차트에서 아직 못 봤어요.</p><p class="post__b">20일선 회복부터 봐야 해요.</p></div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- S7 다루는 ETF -->
+<section class="section facts" id="facts">
+  <div class="container">
+    <header class="section-head section-head--center">
+      <p class="eyebrow">다루는 ETF</p>
+      <h2 class="h2">국내 ETF <span data-count="148" data-from="100">148</span>종을<br>무료로 봐요.</h2>
+      <p class="body">반도체부터 방산, 2차전지까지 <span class="nw">테마마다 거래가 많은</span> <span class="nw">ETF를 골랐어요.</span> <span class="nw">로그인 없이 바로 써요.</span></p>
+    </header>
+  </div>
+  <div class="cover" aria-label="다루는 테마와 ETF 예시">
+    <ul class="cover__track" data-marquee="left" role="list">
+      <li class="tcard"><b class="tcard__n">23<small>종</small></b><p class="tcard__t"><strong>반도체</strong><span>KODEX 반도체 · TIGER 반도체TOP10</span></p></li>
+      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>그룹주</strong><span>KODEX 삼성그룹 · TIGER 현대차그룹플러스</span></p></li>
+      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>전력·원자력</strong><span>TIGER 코리아원자력 · KODEX AI전력핵심설비</span></p></li>
+      <li class="tcard"><b class="tcard__n">9<small>종</small></b><p class="tcard__t"><strong>인터넷·소프트웨어</strong><span>TIGER 소프트웨어 · TIGER 인터넷TOP10</span></p></li>
+      <li class="tcard"><b class="tcard__n">7<small>종</small></b><p class="tcard__t"><strong>자동차</strong><span>KODEX 자동차 · SOL 자동차TOP3플러스</span></p></li>
+      <li class="tcard"><b class="tcard__n">6<small>종</small></b><p class="tcard__t"><strong>조선</strong><span>KODEX 조선TOP10 · TIGER 조선TOP10</span></p></li>
+      <li class="tcard"><b class="tcard__n">5<small>종</small></b><p class="tcard__t"><strong>신재생에너지</strong><span>TIGER Fn신재생에너지 · KODEX 신재생에너지액티브</span></p></li>
+      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>게임</strong><span>TIGER K게임 · KODEX 게임산업</span></p></li>
+      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>엔터·미디어</strong><span>KODEX K콘텐츠 · TIGER 미디어컨텐츠</span></p></li>
+      <li class="tcard"><b class="tcard__n">3<small>종</small></b><p class="tcard__t"><strong>대표지수</strong><span>KODEX 200 · KODEX 코스닥150</span></p></li>
+      <li class="tcard"><b class="tcard__n">1<small>종</small></b><p class="tcard__t"><strong>운송</strong><span>KODEX 운송</span></p></li>
+    </ul>
+    <p class="cover__pill"><img src="assets/logo-white.png" alt="" width="52" height="52" loading="lazy">ETF Orca<span class="live"><i></i>148종 분석 중</span></p>
+    <ul class="cover__track" data-marquee="right" role="list">
+      <li class="tcard"><b class="tcard__n">11<small>종</small></b><p class="tcard__t"><strong>2차전지</strong><span>TIGER 2차전지테마 · KODEX 2차전지산업</span></p></li>
+      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>바이오·헬스케어</strong><span>KODEX 바이오 · TIGER 헬스케어</span></p></li>
+      <li class="tcard"><b class="tcard__n">9<small>종</small></b><p class="tcard__t"><strong>방산·우주</strong><span>KODEX 방산TOP10 · PLUS 우주항공</span></p></li>
+      <li class="tcard"><b class="tcard__n">8<small>종</small></b><p class="tcard__t"><strong>소비재</strong><span>TIGER 화장품 · KODEX 필수소비재</span></p></li>
+      <li class="tcard"><b class="tcard__n">7<small>종</small></b><p class="tcard__t"><strong>금융</strong><span>KODEX 은행 · KODEX 증권</span></p></li>
+      <li class="tcard"><b class="tcard__n">6<small>종</small></b><p class="tcard__t"><strong>IT·전자</strong><span>KODEX IT · TIGER 200 IT</span></p></li>
+      <li class="tcard"><b class="tcard__n">5<small>종</small></b><p class="tcard__t"><strong>로봇</strong><span>KODEX 로봇액티브 · TIGER 코리아휴머노이드로봇산업</span></p></li>
+      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>소재</strong><span>KODEX 철강 · TIGER 200 철강소재</span></p></li>
+      <li class="tcard"><b class="tcard__n">3<small>종</small></b><p class="tcard__t"><strong>기계·산업재</strong><span>KODEX 기계장비 · TIGER 200 산업재</span></p></li>
+      <li class="tcard"><b class="tcard__n">2<small>종</small></b><p class="tcard__t"><strong>건설</strong><span>KODEX 건설 · TIGER 200 건설</span></p></li>
+      <li class="tcard"><b class="tcard__n">1<small>종</small></b><p class="tcard__t"><strong>여행·레저</strong><span>TIGER 여행레저</span></p></li>
+    </ul>
+  </div>
+  <div class="container cover__foot">
+    <form class="find" role="search" data-find>
+      <label class="h3" for="find-in">보고 싶은 ETF가 있나요?</label>
+      <input class="find__in" id="find-in" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" placeholder="예: KODEX 반도체">
+      <div class="find__out" aria-live="polite" hidden></div>
+    </form>
+    <p class="extras">그 밖에 <strong>관심 그룹</strong>, <strong>오늘의 전망 순위</strong>, <strong>분석 기준 시각 표시</strong>가 있어요.</p>
+  </div>
+</section>
+
+<!-- S8 걱정 해소 -->
+<section class="section faq" id="faq">
+  <div class="container container--narrow">
+    <header class="section-head section-head--center">
+      <p class="eyebrow">FAQ</p>
+      <h2 class="h2">자주 묻는 질문</h2>
+    </header>
+    <div class="faq__list">
+      <details>
+        <summary>투자 추천인가요?</summary>
+        <p>아니요. ETF Orca는 정보를 제공하는 앱이며 투자 권유가 아닙니다. 주식 거래, 계좌 연결, 자금 이동 기능도 없어요.</p>
+      </details>
+      <details>
+        <summary>전망이 틀릴 수도 있나요?</summary>
+        <!-- 초안 답변: 팀 확인 필요 -->
+        <p>네. 전망은 공개된 정보를 바탕으로 한 분석이고 결과를 보장하지 않아요. 그래서 기준별 근거를 함께 보여드립니다. 투자 판단과 책임은 본인에게 있습니다.</p>
+      </details>
+      <!-- 아래 네 개는 초안 답변: 팀 확인 필요 -->
+      <details>
+        <summary>전망은 어떻게 만들어지나요?</summary>
+        <p>뉴스와 공시, 리포트, 가격, 수급을 이슈·차트·매크로·밸류·수급 다섯 가지 기준으로 읽어요. 기준마다 상승, 중립, 하락으로 판단하고, 그 결과를 모아 한 달 전망을 정합니다.</p>
+      </details>
+      <details>
+        <summary>전망은 얼마나 자주 바뀌나요?</summary>
+        <p>매일 아침 새로 분석해요. 화면마다 분석 기준 시각을 함께 보여드립니다.</p>
+      </details>
+      <details>
+        <summary>어떤 ETF를 볼 수 있나요?</summary>
+        <p>국내에 상장된 주식형 ETF 148종이에요. 반도체, 2차전지, 방산 같은 테마 스무 개와 대표지수, 그룹주에서 거래가 많은 ETF를 골랐어요. 해외 지수, 채권, 레버리지·인버스 ETF는 아직 다루지 않습니다.</p>
+      </details>
+      <details>
+        <summary>무료인가요? 로그인해야 하나요?</summary>
+        <p>무료예요. 로그인 없이 받아서 바로 쓸 수 있어요.</p>
+      </details>
+      <details>
+        <summary>Android에서도 쓸 수 있나요?</summary>
+        <p>지금은 iPhone에서 쓸 수 있어요. Android 버전은 출시를 준비하고 있습니다.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- S9 행동: 사용자가 할 일은 하나뿐이라는 말로 닫는다 -->
+<section class="section cta" id="cta">
+  <div class="container cta__inner" data-cta-zone>
+    <img class="cta__orca" src="assets/logo-white.png" alt="" width="200" height="200" loading="lazy">
+    <h2 class="display">관심 ETF만 담아 두세요.<br>전망은 Orca가 챙길게요.</h2>
+    <div class="hero__ctas">
+      <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+      <a class="btn btn--ghost btn--lg" href="#engine">미리 보기</a>
+    </div>
+    <p class="cta__note">Android는 곧 출시돼요.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="container footer__in">
+    <a class="nav__logo" href="#top"><img src="assets/logo-white.png" alt="" width="34" height="34">ETF Orca</a>
+    <p>ETF Orca는 정보 제공 앱이며 투자 권유가 아닙니다. 주식 거래, 계좌 연결, 자금 이동 기능이 없습니다. 화면은 예시를 위해 다시 그린 목업입니다.</p>
+    <!-- TODO: 이용약관, 개인정보 처리방침 주소가 정해지면 링크 추가 -->
+    <div class="footer__row">
+      <a href="https://www.instagram.com/etf_orca/" target="_blank" rel="noopener">Instagram</a>
+      <span>© 2026 ETF Orca</span>
+    </div>
+  </div>
+</footer>
+
+<div class="cta-bar is-hidden" data-cta-bar>
+  <a class="btn btn--point" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+  <a class="btn btn--ghost" href="#engine">미리 보기</a>
+</div>
+
+<!-- 데스크톱에서 다운로드를 누르면 스토어로 보내지 않고 이 창을 띄운다(휴대폰으로 찍어 받도록). QR은 App Store 링크를 미리 그려 둔 것이라, 링크가 바뀌면 다시 만들어야 한다 -->
+<dialog class="qr" id="qr" aria-labelledby="qr-title">
+  <div class="qr__in">
+    <button class="qr__x" type="button" aria-label="닫기" data-qr-close>×</button>
+    <h2 id="qr-title">휴대폰으로 받으세요</h2>
+    <p>iPhone 카메라로 QR을 비추면 App Store로 이동해요.</p>
+    <div class="qr__code"><svg viewBox="0 0 37 37" shape-rendering="crispEdges" role="img" aria-label="ETF Orca App Store 링크 QR 코드"><path d="M2 2h7v1h-7zM10 2h3v1h-3zM14 2h3v1h-3zM18 2h3v1h-3zM23 2h2v1h-2zM28 2h7v1h-7zM2 3h1v1h-1zM8 3h1v1h-1zM10 3h2v1h-2zM15 3h2v1h-2zM20 3h2v1h-2zM23 3h2v1h-2zM26 3h1v1h-1zM28 3h1v1h-1zM34 3h1v1h-1zM2 4h1v1h-1zM4 4h3v1h-3zM8 4h1v1h-1zM10 4h2v1h-2zM15 4h4v1h-4zM22 4h4v1h-4zM28 4h1v1h-1zM30 4h3v1h-3zM34 4h1v1h-1zM2 5h1v1h-1zM4 5h3v1h-3zM8 5h1v1h-1zM11 5h4v1h-4zM16 5h1v1h-1zM18 5h1v1h-1zM20 5h6v1h-6zM28 5h1v1h-1zM30 5h3v1h-3zM34 5h1v1h-1zM2 6h1v1h-1zM4 6h3v1h-3zM8 6h1v1h-1zM10 6h1v1h-1zM13 6h3v1h-3zM17 6h2v1h-2zM23 6h2v1h-2zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h3v1h-3zM34 6h1v1h-1zM2 7h1v1h-1zM8 7h1v1h-1zM11 7h2v1h-2zM14 7h6v1h-6zM21 7h1v1h-1zM24 7h2v1h-2zM28 7h1v1h-1zM34 7h1v1h-1zM2 8h7v1h-7zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h1v1h-1zM16 8h1v1h-1zM18 8h1v1h-1zM20 8h1v1h-1zM22 8h1v1h-1zM24 8h1v1h-1zM26 8h1v1h-1zM28 8h7v1h-7zM11 9h1v1h-1zM13 9h3v1h-3zM17 9h2v1h-2zM24 9h1v1h-1zM26 9h1v1h-1zM2 10h1v1h-1zM5 10h7v1h-7zM14 10h1v1h-1zM16 10h1v1h-1zM19 10h2v1h-2zM26 10h2v1h-2zM30 10h1v1h-1zM32 10h3v1h-3zM2 11h1v1h-1zM5 11h2v1h-2zM9 11h1v1h-1zM15 11h3v1h-3zM19 11h3v1h-3zM23 11h1v1h-1zM25 11h2v1h-2zM30 11h3v1h-3zM3 12h4v1h-4zM8 12h2v1h-2zM12 12h4v1h-4zM17 12h1v1h-1zM23 12h1v1h-1zM25 12h1v1h-1zM27 12h1v1h-1zM30 12h3v1h-3zM34 12h1v1h-1zM2 13h6v1h-6zM10 13h1v1h-1zM14 13h2v1h-2zM18 13h1v1h-1zM20 13h2v1h-2zM24 13h1v1h-1zM26 13h4v1h-4zM32 13h1v1h-1zM34 13h1v1h-1zM2 14h3v1h-3zM6 14h5v1h-5zM13 14h3v1h-3zM17 14h1v1h-1zM19 14h1v1h-1zM21 14h2v1h-2zM24 14h2v1h-2zM28 14h2v1h-2zM34 14h1v1h-1zM2 15h1v1h-1zM4 15h1v1h-1zM7 15h1v1h-1zM9 15h2v1h-2zM14 15h1v1h-1zM16 15h1v1h-1zM19 15h4v1h-4zM24 15h4v1h-4zM31 15h1v1h-1zM2 16h1v1h-1zM5 16h2v1h-2zM8 16h2v1h-2zM11 16h1v1h-1zM13 16h2v1h-2zM16 16h2v1h-2zM19 16h1v1h-1zM21 16h1v1h-1zM23 16h2v1h-2zM26 16h1v1h-1zM28 16h1v1h-1zM30 16h3v1h-3zM2 17h1v1h-1zM6 17h2v1h-2zM10 17h1v1h-1zM18 17h1v1h-1zM21 17h1v1h-1zM24 17h1v1h-1zM26 17h2v1h-2zM30 17h3v1h-3zM34 17h1v1h-1zM3 18h1v1h-1zM6 18h3v1h-3zM10 18h1v1h-1zM13 18h1v1h-1zM17 18h2v1h-2zM22 18h1v1h-1zM24 18h1v1h-1zM27 18h5v1h-5zM7 19h1v1h-1zM9 19h1v1h-1zM13 19h1v1h-1zM17 19h1v1h-1zM19 19h4v1h-4zM28 19h1v1h-1zM30 19h1v1h-1zM32 19h1v1h-1zM34 19h1v1h-1zM2 20h1v1h-1zM4 20h2v1h-2zM7 20h2v1h-2zM10 20h1v1h-1zM12 20h1v1h-1zM16 20h2v1h-2zM19 20h4v1h-4zM24 20h4v1h-4zM29 20h1v1h-1zM31 20h2v1h-2zM34 20h1v1h-1zM3 21h1v1h-1zM13 21h1v1h-1zM16 21h1v1h-1zM26 21h1v1h-1zM28 21h1v1h-1zM30 21h5v1h-5zM2 22h1v1h-1zM4 22h1v1h-1zM8 22h3v1h-3zM13 22h1v1h-1zM16 22h3v1h-3zM20 22h1v1h-1zM22 22h1v1h-1zM24 22h1v1h-1zM29 22h1v1h-1zM31 22h1v1h-1zM2 23h1v1h-1zM4 23h3v1h-3zM10 23h3v1h-3zM16 23h1v1h-1zM19 23h1v1h-1zM21 23h2v1h-2zM25 23h2v1h-2zM29 23h3v1h-3zM2 24h1v1h-1zM4 24h1v1h-1zM6 24h4v1h-4zM12 24h1v1h-1zM15 24h2v1h-2zM20 24h1v1h-1zM23 24h1v1h-1zM25 24h2v1h-2zM28 24h1v1h-1zM30 24h1v1h-1zM33 24h2v1h-2zM2 25h1v1h-1zM6 25h2v1h-2zM9 25h1v1h-1zM11 25h1v1h-1zM13 25h2v1h-2zM17 25h1v1h-1zM19 25h1v1h-1zM21 25h1v1h-1zM24 25h1v1h-1zM27 25h1v1h-1zM30 25h1v1h-1zM32 25h3v1h-3zM2 26h4v1h-4zM8 26h1v1h-1zM10 26h2v1h-2zM15 26h1v1h-1zM18 26h1v1h-1zM21 26h2v1h-2zM25 26h6v1h-6zM33 26h2v1h-2zM10 27h3v1h-3zM15 27h1v1h-1zM17 27h3v1h-3zM22 27h1v1h-1zM25 27h2v1h-2zM30 27h1v1h-1zM32 27h1v1h-1zM2 28h7v1h-7zM10 28h5v1h-5zM16 28h2v1h-2zM19 28h1v1h-1zM21 28h2v1h-2zM25 28h2v1h-2zM28 28h1v1h-1zM30 28h1v1h-1zM32 28h1v1h-1zM2 29h1v1h-1zM8 29h1v1h-1zM10 29h3v1h-3zM15 29h1v1h-1zM17 29h1v1h-1zM19 29h2v1h-2zM24 29h3v1h-3zM30 29h5v1h-5zM2 30h1v1h-1zM4 30h3v1h-3zM8 30h1v1h-1zM10 30h1v1h-1zM13 30h1v1h-1zM18 30h2v1h-2zM25 30h6v1h-6zM33 30h2v1h-2zM2 31h1v1h-1zM4 31h3v1h-3zM8 31h1v1h-1zM10 31h1v1h-1zM13 31h1v1h-1zM15 31h2v1h-2zM18 31h4v1h-4zM23 31h1v1h-1zM25 31h3v1h-3zM29 31h1v1h-1zM31 31h4v1h-4zM2 32h1v1h-1zM4 32h3v1h-3zM8 32h1v1h-1zM13 32h1v1h-1zM15 32h1v1h-1zM17 32h1v1h-1zM20 32h4v1h-4zM25 32h2v1h-2zM29 32h3v1h-3zM33 32h2v1h-2zM2 33h1v1h-1zM8 33h1v1h-1zM11 33h2v1h-2zM14 33h1v1h-1zM16 33h1v1h-1zM20 33h2v1h-2zM25 33h1v1h-1zM28 33h7v1h-7zM2 34h7v1h-7zM10 34h2v1h-2zM15 34h7v1h-7zM26 34h2v1h-2zM29 34h2v1h-2z"/></svg></div>
+    <p class="qr__note">Android는 곧 출시돼요.</p>
+    <a class="qr__link" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store 페이지 열기</a>
+  </div>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.15.0/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.15.0/ScrollTrigger.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.15.0/SplitText.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.3.26/dist/lenis.min.js"></script>
+<script async src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" onload="window.dispatchEvent(new Event('three-ready'))"></script>
+<script>
+(() => {
+  const root = document.documentElement;
+  const mode = root.dataset.mode || 'lite';
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+  const seg = (p, a, b) => clamp01((p - a) / (b - a)); // 진행률 p를 [a,b] 구간의 0..1로
+  const ease = (t) => 1 - Math.pow(1 - clamp01(t), 3);
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  /* ================= 앱 화면 목업 (canvas 2D) ================= */
+  // 실제 앱의 10월 5일 화면을 390×844 기준으로 다시 그린다. p(0..1)는 화면 안의 작은 움직임 진행률
+  const SW = 390, SH = 844;
+  const INK = '#191f28', SUB = '#6b7684', MUTE = '#8b95a1', LINE = '#eef0f3', CHIP = '#f2f4f6';
+  const UP = '#e5384f', DN = '#2f7cf6', IND = '#4b47d6', UPBG = '#fdecee', DNBG = '#e8f1fe';
+  const sans = (w, s) => `${w} ${s}px Pretendard,"Noto Sans KR",sans-serif`;
+  const mono = (w, s) => `${w} ${s}px "JetBrains Mono",ui-monospace,monospace`;
+  const P = CanvasRenderingContext2D.prototype;
+  if (!P.roundRect) P.roundRect = function (x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    this.moveTo(x + r, y); this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r); this.closePath();
+  };
+  function box(c, x, y, w, h, r, fill, stroke) {
+    c.beginPath(); c.roundRect(x, y, w, h, r);
+    if (fill) { c.fillStyle = fill; c.fill(); }
+    if (stroke) { c.strokeStyle = stroke; c.lineWidth = 1; c.stroke(); }
+  }
+  function tx(c, s, x, y, font, color, align) {
+    c.font = font; c.fillStyle = color; c.textAlign = align || 'left'; c.textBaseline = 'alphabetic'; c.fillText(s, x, y);
+    return c.measureText(s).width;
+  }
+  function wrap(c, s, maxW, font) {
+    c.font = font;
+    const out = []; let cur = '';
+    for (const word of s.split(' ')) {
+      const t = cur ? cur + ' ' + word : word;
+      if (c.measureText(t).width <= maxW) { cur = t; continue; }
+      if (cur) out.push(cur);
+      cur = word;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+  function para(c, s, x, y, maxW, lh, font, color) {
+    const ls = wrap(c, s, maxW, font);
+    ls.forEach((l, i) => tx(c, l, x, y + i * lh, font, color));
+    return y + ls.length * lh;
+  }
+  function tri(c, x, y, dir, col, s) {
+    c.fillStyle = col; c.beginPath();
+    if (dir > 0) { c.moveTo(x, y - s); c.lineTo(x + s, y + s * .8); c.lineTo(x - s, y + s * .8); c.closePath(); }
+    else if (dir < 0) { c.moveTo(x, y + s); c.lineTo(x + s, y - s * .8); c.lineTo(x - s, y - s * .8); c.closePath(); }
+    else c.roundRect(x - s * .8, y - s * .8, s * 1.6, s * 1.6, 2);
+    c.fill();
+  }
+  const dirCol = (d) => (d > 0 ? UP : d < 0 ? DN : SUB);
+  const dirBg = (d) => (d > 0 ? UPBG : d < 0 ? DNBG : CHIP);
+  const dirLabel = (d) => (d > 0 ? '상승' : d < 0 ? '하락' : '중립');
+  function badge(c, right, y, d) {
+    box(c, right - 70, y - 17, 70, 34, 10, dirBg(d));
+    tri(c, right - 51, y, d, dirCol(d), 5);
+    tx(c, dirLabel(d), right - 12, y + 5, sans(700, 13), dirCol(d), 'right');
+  }
+  function etfIcon(c, x, y, r, col) {
+    c.beginPath(); c.arc(x, y, r, 0, 7); c.fillStyle = col; c.fill();
+    box(c, x - r * .34, y - r * .34, r * .68, r * .68, r * .16, '#ffffff');
+  }
+  function pen(c, w, col) { c.strokeStyle = col || INK; c.lineWidth = w || 2; c.lineCap = 'round'; c.lineJoin = 'round'; }
+  function icoSearch(c, x, y) { pen(c); c.beginPath(); c.arc(x, y, 7, 0, 7); c.moveTo(x + 5.5, y + 5.5); c.lineTo(x + 10, y + 10); c.stroke(); }
+  function icoMenu(c, x, y) { pen(c); c.beginPath(); for (const d of [-6, 0, 6]) { c.moveTo(x - 9, y + d); c.lineTo(x + 9, y + d); } c.stroke(); }
+  function icoBell(c, x, y) {
+    pen(c); c.beginPath(); c.moveTo(x - 8, y + 5); c.quadraticCurveTo(x - 5.5, y + 2, x - 5.5, y - 2);
+    c.arc(x, y - 2, 5.5, Math.PI, 0); c.quadraticCurveTo(x + 5.5, y + 2, x + 8, y + 5); c.closePath(); c.stroke();
+    c.beginPath(); c.arc(x, y + 8.5, 1.6, 0, 7); c.fillStyle = INK; c.fill();
+  }
+  function statusBar(c) {
+    tx(c, '9:41', 34, 36, sans(700, 16), INK);
+    box(c, 332, 24, 25, 12, 4, null, INK); box(c, 334, 26, 17, 8, 2, INK);
+    for (let i = 0; i < 4; i++) box(c, 292 + i * 6, 36 - (4 + i * 2.6), 4, 4 + i * 2.6, 1, INK);
+  }
+  function tabBar(c, active) {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 770, SW, 74);
+    c.fillStyle = LINE; c.fillRect(0, 770, SW, 1);
+    ['홈', '관심', '탐색', '커뮤니티'].forEach((t, i) => {
+      const x = 49 + i * 97, on = i === active;
+      box(c, x - 11, 786, 22, 22, 7, null, on ? INK : MUTE);
+      tx(c, t, x, 826, sans(on ? 700 : 600, 11), on ? INK : MUTE, 'center');
+    });
+  }
+  function detailHead(c, tab) {
+    statusBar(c);
+    pen(c, 2.4); c.beginPath(); c.moveTo(34, 90); c.lineTo(26, 99); c.lineTo(34, 108); c.stroke();
+    tx(c, '반도체', SW / 2, 105, sans(700, 17), INK, 'center');
+    icoSearch(c, 352, 97);
+    etfIcon(c, 44, 156, 20, INK);
+    tx(c, 'KODEX 반도체', 76, 151, sans(700, 16), INK);
+    const w = tx(c, '₩ 148,780', 76, 172, mono(500, 12.5), SUB);
+    tx(c, '-0.6%', 84 + w, 172, mono(700, 12.5), DN);
+    badge(c, 338, 156, 1);
+    c.fillStyle = UP; c.beginPath(); c.arc(354, 152, 5.5, Math.PI, 0); c.arc(365, 152, 5.5, Math.PI, 0); c.lineTo(359.5, 166); c.closePath(); c.fill();
+    const tabs = ['AI 분석', '오늘 움직임', '커뮤니티', '종목정보'], xs = [48, 146, 243, 340];
+    tabs.forEach((t, i) => tx(c, t, xs[i], 222, sans(i === tab ? 800 : 600, 15), i === tab ? INK : SUB, 'center'));
+    c.fillStyle = LINE; c.fillRect(0, 238, SW, 1);
+    c.fillStyle = INK; c.fillRect(xs[tab] - 48, 236, 96, 2.5);
+  }
+
+  const SCREENS = {
+    home(c, p) {
+      const e = ease(p);
+      statusBar(c); icoSearch(c, 274, 96); icoBell(c, 314, 96); icoMenu(c, 354, 96);
+      tx(c, '내 종목 브리핑', 24, 168, sans(800, 26), INK);
+      box(c, 268, 146, 98, 28, 8, CHIP); tx(c, '오늘 08:30 기준', 317, 165, sans(700, 11.5), SUB, 'center');
+      box(c, 24, 190, 92, 40, 12, CHIP); tx(c, '기본 관심', 70, 216, sans(700, 15), INK, 'center');
+      box(c, 24, 250, 342, 158, 20, '#f7f8fa');
+      tx(c, '기본 관심 그룹 전망 강도', 44, 284, sans(600, 12.5), SUB);
+      tx(c, '오늘 등락', 346, 284, sans(600, 12.5), SUB, 'right');
+      c.globalAlpha = lerp(.25, 1, e); tx(c, '상승', 44, 322, sans(800, 28), UP); c.globalAlpha = 1;
+      tx(c, '+' + (1.6 * e).toFixed(1) + '%', 346, 322, mono(700, 22), UP, 'right');
+      const sw = 56.4, sx = (i) => 44 + i * (sw + 5);
+      ['#1f5fd6', '#8fb8f8', '#d5dae1', '#f5a3ad', UP].forEach((col, i) => box(c, sx(i), 346, sw, 10, 5, col));
+      const kx = lerp(sx(2), sx(3), e) + sw / 2;
+      c.beginPath(); c.arc(kx, 351, 9, 0, 7); c.fillStyle = '#ffffff'; c.fill(); c.strokeStyle = e > .5 ? UP : SUB; c.lineWidth = 4; c.stroke();
+      ['강력 하락', '하락', '중립', '상승', '강력 상승'].forEach((t, i) => tx(c, t, sx(i) + sw / 2, 386, sans(600, 11), SUB, 'center'));
+      const rows = [['KODEX 반도체', '148,780', '-0.6%', -1, INK], ['PLUS K방산', '52,250', '+3.5%', 1, '#17966b'], ['KODEX 2차전지산업', '15,080', '+2.8%', 1, '#e9a23b']];
+      rows.forEach((r, i) => {
+        const y = 462 + i * 86, a = ease(seg(p, .15 + i * .15, .6 + i * .15));
+        c.globalAlpha = a;
+        etfIcon(c, 46, y, 22, r[4]);
+        tx(c, r[0], 82, y - 5, sans(700, 17), INK);
+        const w = tx(c, '₩ ' + r[1], 82, y + 17, mono(500, 13), SUB);
+        tx(c, r[2], 90 + w, y + 17, mono(700, 13), r[3] > 0 ? UP : DN);
+        badge(c, 366, y, 1);
+        c.globalAlpha = 1;
+        c.fillStyle = LINE; c.fillRect(24, y + 43, 342, 1);
+      });
+      box(c, 24, 706, 342, 48, 14, '#f7f8fa'); tx(c, '3개 더 보기', SW / 2, 736, sans(700, 15), INK, 'center');
+      tabBar(c, 0);
+    },
+    forecast(c, p) {
+      detailHead(c, 0);
+      tx(c, '오늘 발행', 24, 280, sans(700, 17), INK);
+      tx(c, 'KODEX 반도체 한 달 전망', 24, 328, sans(800, 24), INK);
+      tx(c, 'ETF Orca AI · 10월 5일 월요일 19:55', 24, 356, sans(500, 13), MUTE);
+      c.save(); c.beginPath(); c.roundRect(24, 380, 342, 440, 18); c.clip();
+      c.fillStyle = '#ffffff'; c.fillRect(24, 380, 342, 440); c.fillStyle = UP; c.fillRect(24, 380, 342, 4);
+      c.restore(); box(c, 24, 380, 342, 440, 18, null, '#e5e8eb');
+      tx(c, '단기 전망', 44, 420, sans(600, 12), SUB);
+      const e = ease(seg(p, 0, .45));
+      box(c, 44, 434, 34, 34, 10, UPBG); tri(c, 61, 451, 1, UP, 7);
+      c.globalAlpha = lerp(.2, 1, e); tx(c, '상승', 90, 461, sans(800, 26), UP); c.globalAlpha = 1;
+      let w = tx(c, '중립', 44, 494, sans(600, 13), SUB);
+      w += tx(c, '  →  ', 44 + w, 494, sans(600, 13), MUTE);
+      c.globalAlpha = e; tx(c, '상승', 44 + w, 494, sans(700, 13), UP); c.globalAlpha = 1;
+      c.fillStyle = LINE; c.fillRect(44, 512, 302, 1);
+      const end = para(c, '기본 전망은 상승입니다. HBM4 가격 인상 협상과 5년 장기계약, 삼성전자 3분기 사상 최대 실적으로 메모리 이익 가시성이 높아졌습니다. 다만 자사주 매입 방파제 소진과 외국인 순매도, 장비주 고밸류에이션과 단기 과열이 되돌림 위험을 키웁니다.', 44, 546, 302, 26, sans(600, 15.5), INK);
+      c.fillStyle = LINE; c.fillRect(44, end - 4, 302, 1);
+      [['이슈', 1], ['차트', 1], ['매크로', 0], ['밸류', 0], ['수급', -1]].forEach((f, i) => {
+        const x = 70 + i * 62.5, y = end + 30, a = ease(seg(p, .4 + i * .1, .65 + i * .1));
+        c.globalAlpha = a;
+        box(c, x - 16, y - 16 + (1 - a) * 8, 32, 32, 10, dirBg(f[1])); tri(c, x, y + (1 - a) * 8, f[1], dirCol(f[1]), 6);
+        tx(c, f[0], x, y + 38, sans(600, 11.5), SUB, 'center');
+        c.globalAlpha = 1;
+      });
+    },
+  };
+
+  const screens = [];
+  function addScreen(cv, name) {
+    const s = { cv, ctx: cv.getContext('2d'), name, p: 1, after: null, raf: 0 };
+    screens.push(s); return s;
+  }
+  function paint(s, p) {
+    if (p != null) s.p = p;
+    const c = s.ctx, k = s.cv.width / SW;
+    c.setTransform(k, 0, 0, k, 0, 0);
+    c.globalAlpha = 1; c.fillStyle = '#ffffff'; c.fillRect(0, 0, SW, SH);
+    SCREENS[s.name](c, s.p);
+    if (s.after) s.after();
+  }
+  const screenOf = (cv) => screens.find((s) => s.cv === cv);
+  $$('canvas[data-screen]').forEach((cv) => addScreen(cv, cv.dataset.screen));
+  const paintAll = () => screens.forEach((s) => paint(s));
+  paintAll();
+  if (document.fonts && document.fonts.load) {
+    Promise.all(['800 20px Pretendard', '700 20px Pretendard', '600 20px Pretendard', '400 20px Pretendard', '700 14px "JetBrains Mono"', '500 14px "JetBrains Mono"']
+      .map((f) => document.fonts.load(f, '전망A1₩'))).then(paintAll, () => {});
+  }
+  // 화면 안의 움직임을 0에서 1까지 한 번 재생한다
+  function play(s, dur) {
+    if (!s) return;
+    if (mode === 'reduce') return paint(s, 1);
+    const t0 = performance.now();
+    cancelAnimationFrame(s.raf);
+    (function tick(now) {
+      const p = clamp01((now - t0) / dur);
+      paint(s, p);
+      if (p < 1) s.raf = requestAnimationFrame(tick);
+    })(t0);
+  }
+
+  /* ================= 히어로 3D 무대 (three.js) ================= */
+  const hero = { progress: 0, vel: 0, intro: null, wantIntro: false };
+  const glEl = $('[data-gl]'), glFallback = $('[data-gl-fallback]');
+  // 3D를 못 쓰거나 아직 못 받았으면 같은 화면을 평면 폰으로 보여 준다
+  function heroFlat() {
+    glEl.hidden = true; glFallback.hidden = false;
+    hero.intro = () => setTimeout(() => play(screenOf($('canvas', glFallback)), 1800), 700);
+  }
+  function hero3d() {
+    const el = glEl, fallback = glFallback, fail = heroFlat;
+    const THREE = window.THREE;
+    if (!THREE) return fail();
+    let renderer;
+    try { renderer = new THREE.WebGLRenderer({ canvas: el, alpha: true, antialias: true }); } catch (e) { return fail(); }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    const scene = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(30, 1, .1, 100);
+    cam.position.set(0, 0, 13);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x1a1d26, .9));
+    const key = new THREE.DirectionalLight(0xffffff, .9); key.position.set(-4, 6, 8); scene.add(key);
+    const blue = new THREE.PointLight(0x3f5fe0, 2.4, 30); blue.position.set(-6, -3, 4); scene.add(blue);
+    const red = new THREE.PointLight(0x7fb4ff, 1.8, 30); red.position.set(7, 4, 3); scene.add(red);
+
+    function rounded(w, h, r) {
+      const s = new THREE.Shape(), x = -w / 2, y = -h / 2;
+      s.moveTo(x + r, y); s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
+      s.lineTo(x + w, y + h - r); s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      s.lineTo(x + r, y + h); s.quadraticCurveTo(x, y + h, x, y + h - r);
+      s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+      return s;
+    }
+    const PW = 2.2, PH = PW * SH / SW, PD = .2;
+    const bodyGeo = new THREE.ExtrudeGeometry(rounded(PW, PH, .36), { depth: PD, bevelEnabled: true, bevelSize: .03, bevelThickness: .03, bevelSegments: 3, curveSegments: 20 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0c0d10, metalness: .6, roughness: .3 });
+    const sw = PW - .14, sh = PH - .14;
+    const screenGeo = new THREE.ShapeGeometry(rounded(sw, sh, .3), 20);
+    const uv = screenGeo.attributes.uv, pos = screenGeo.attributes.position;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) + sw / 2) / sw, (pos.getY(i) + sh / 2) / sh);
+
+    let dirty = true, raf = 0, visible = true;
+    const kick = () => { if (!raf) raf = requestAnimationFrame(loop); };
+    function phone(name) {
+      const cv = document.createElement('canvas'); cv.width = SW * 2; cv.height = SH * 2;
+      const s = addScreen(cv, name);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.encoding = THREE.sRGBEncoding; tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      s.after = () => { tex.needsUpdate = true; dirty = true; kick(); };
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(bodyGeo, bodyMat); body.position.z = -PD / 2; g.add(body);
+      const scr = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: tex })); scr.position.z = PD / 2 + .032; g.add(scr);
+      scene.add(g);
+      return { g, s };
+    }
+    const front = phone('home'), back = phone('forecast');
+
+    // 물속에 떠 있는 빛 알갱이: 테두리 없이 부드럽게. 작고 또렷한 것, 중간, 크고 흐린 것 세 겹이 수면 쪽으로 천천히 떠오른다
+    const soft = document.createElement('canvas'); soft.width = soft.height = 64;
+    const sx = soft.getContext('2d'), rg = sx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(.3, 'rgba(255,255,255,.5)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+    sx.fillStyle = rg; sx.fillRect(0, 0, 64, 64);
+    const softTex = new THREE.CanvasTexture(soft);
+    const motes = [[26, .3, .5], [14, .62, .26], [7, 1.5, .12]].map(([n, size, opacity]) => {
+      const pos = new Float32Array(n * 3), speed = new Float32Array(n);
+      for (let i = 0; i < n; i++) { pos[i * 3] = (Math.random() - .5) * 20; pos[i * 3 + 1] = (Math.random() - .5) * 10; pos[i * 3 + 2] = -9 + Math.random() * 7; speed[i] = .05 + Math.random() * .16; }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ size, map: softTex, color: 0xbcd6ff, transparent: true, opacity, depthWrite: false })));
+      return { pos, n, speed, at: geo.attributes.position };
+    });
+
+    let wide = true, kx = 1;
+    const overlay = matchMedia('(min-width: 1024px)');
+    function resize() {
+      const w = el.clientWidth, h = el.clientHeight;
+      if (!w || !h) return;
+      renderer.setSize(w, h, false);
+      cam.aspect = w / h; cam.updateProjectionMatrix();
+      wide = overlay.matches; cam.position.z = wide ? Math.max(13, 13 / cam.aspect) : 11.6; cam.position.y = wide ? 0 : .55;
+      kx = wide ? Math.min(1, cam.position.z * .268 * cam.aspect / 5.57) : 1; dirty = true; kick(); // 좁은 화면은 위쪽이 메뉴에 가려지는 만큼 물러나서 아래로 내려 보인다
+    }
+    const ptr = { x: 0, y: 0, tx: 0, ty: 0 };
+    if (mode === 'full') window.addEventListener('pointermove', (e) => { ptr.tx = e.clientX / window.innerWidth - .5; ptr.ty = e.clientY / window.innerHeight - .5; }, { passive: true });
+
+    let born = -1; // 폰이 날아드는 인트로의 시작 시각. 첫 화면이 보이기 시작할 때 잡는다
+    const fly = (t, delay) => 1 - Math.pow(1 - clamp01((t - born - delay) / 1.8), 4); // 빠르게 들어와 천천히 멎는다
+    const seg = (v, a, b) => { const k = clamp01((v - a) / (b - a)); return k * k * (3 - 2 * k); }; // 구간 안에서 부드럽게 0 → 1
+    let lean = 0;
+    function frame(t) {
+      const p = hero.progress, f = mode === 'reduce' ? 0 : 1;
+      if (born < 0 && !root.classList.contains('motion-pending')) born = t;
+      ptr.x += (ptr.tx - ptr.x) * .06; ptr.y += (ptr.ty - ptr.y) * .06;
+      // 인트로가 남은 정도(1 → 0). 아래에서 돌면서 떠올라 제자리에 멎고, 뒤의 폰이 조금 늦게 따라온다
+      const left = (delay) => (!f ? 0 : born < 0 ? 1 : 1 - fly(t, delay)), ia = left(.1), ib = left(.32);
+      // 두 폰이 서로 다른 박자로 떠다니고 좌우로 천천히 돈다
+      const bobA = Math.sin(t * 1.1) * .15 * f, bobB = Math.sin(t * .9 + 1.7) * .19 * f;
+      const swayA = Math.sin(t * .62) * .09 * f, swayB = Math.sin(t * .5 + 2.1) * .12 * f;
+      // 스크롤 속도만큼 뒤로 젖혀졌다가, 멈추면 돌아온다
+      lean += (Math.max(-1, Math.min(1, hero.vel / 2600)) - lean) * .1; hero.vel *= .88;
+      const a = front.g, b = back.g;
+      if (wide) {
+        // 스크롤 앞 절반: 홈 화면 폰이 정면으로 돌아오며 다가온다. 뒤 절반: 두 폰이 자리를 바꿔, 전망 화면 폰이 가운데 앞으로 나온다
+        const s1 = seg(p, 0, .5), s2 = seg(p, .5, 1);
+        a.position.set((lerp(lerp(3.1, 2.1, s1), -1.9, s2) - ptr.x * .3) * kx, bobA - .1 + s2 * .3 - lean * .3 - ptr.y * .22 - ia * 9, lerp(lerp(0, 2, s1), -3.2, s2));
+        a.rotation.set(.06 - lean * .22 + ptr.y * .2 + ia * .5, lerp(lerp(-.5, -.04, s1), .78, s2) + swayA + ptr.x * .36 + ia * 2.6, .03 - s2 * .06 + Math.sin(t * .7) * .025 * f - ia * .4);
+        b.position.set((lerp(lerp(5.9, 5.3, s1), 1.3, s2) - ptr.x * .2) * kx, bobB + .25 - s2 * .3 - lean * .18 - ptr.y * .1 - ib * 10, lerp(-2.6, 2.8, s2));
+        b.rotation.set(.04 - lean * .16 + ptr.y * .12 - ib * .4, lerp(lerp(-.72, -.82, s1), -.1, s2) + swayB * (1 - s2 * .6) + ptr.x * .24 - ib * 2.2, -.03 - Math.sin(t * .6 + 1) * .03 * f + ib * .3);
+      } else {
+        // 좁은 화면: 무대가 화면 밖으로 나가기 전에 같은 자리바꿈을 마친다
+        const sw = seg(p, 0, .5);
+        a.position.set(lerp(-.55, -1.5, sw), bobA - .05 - lean * .2 - ia * 9, lerp(.4, -1.8, sw));
+        a.rotation.set(.05 - lean * .2 + ia * .5, lerp(.3, .75, sw) + swayA + ia * 2.6, -.02 - ia * .4);
+        b.position.set(lerp(1.75, .35, sw), bobB * .8 + .2 - lean * .12 - ib * 10, lerp(-1.9, .9, sw));
+        b.rotation.set(.04 - lean * .14 - ib * .4, lerp(-.36, -.06, sw) + swayB * (1 - sw * .6) - ib * 2.2, .03 + ib * .3);
+      }
+      for (const m of motes) {
+        for (let i = 0; i < m.n; i++) { m.pos[i * 3] += Math.sin(t * .5 + i) * .0012 * f; m.pos[i * 3 + 1] += m.speed[i] * .016 * (1 + p * 3) * f; if (m.pos[i * 3 + 1] > 5.2) m.pos[i * 3 + 1] = -5.2; }
+        m.at.needsUpdate = true;
+      }
+      renderer.render(scene, cam);
+    }
+    const clock = new THREE.Clock();
+    function loop() {
+      raf = 0;
+      if (mode === 'reduce') { if (dirty) { dirty = false; frame(0); } return; }
+      if (!visible || document.hidden) return;
+      frame(clock.getElapsedTime());
+      raf = requestAnimationFrame(loop);
+    }
+    resize();
+    new ResizeObserver(resize).observe(el);
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; kick(); }).observe(el);
+    document.addEventListener('visibilitychange', kick);
+    paint(front.s, mode === 'reduce' ? 1 : 0); paint(back.s, 1);
+    el.hidden = false; fallback.hidden = true;
+    hero.intro = () => setTimeout(() => play(front.s, 1800), 700);
+    if (hero.wantIntro) hero.intro(); // 3D가 인트로보다 늦게 준비됐으면 여기서 화면 속 움직임을 시작한다
+  }
+  // three.js는 따로(async) 받는다. 먼저 와 있으면 바로, 아니면 평면 폰으로 두었다가 도착하면 3D로 바꾼다
+  if (window.THREE) hero3d();
+  else { heroFlat(); window.addEventListener('three-ready', hero3d, { once: true }); }
+
+  /* ================= 기본 동작 (모션 라이브러리 없이도 돈다) ================= */
+
+  // 커뮤니티 투표: 고르면 그쪽에 한 표가 더해져 막대와 비율이 다시 나뉜다. 다른 쪽을 누르면 표가 옮겨 간다. 이 페이지 안에서만 바뀐다(예시)
+  const vote = $('[data-vote]'), vSegs = $$('.vote__bar i', vote), vPcts = $$('.vote__pct b', vote), vBtns = $$('.vote__opts button', vote);
+  const V_BASE = [6, 4, 3], V_NAME = ['산다', '기다린다', '판다']; // 예시 표 수. 한 표가 눈에 보이도록 작게 잡았다
+  function setVote(k) {
+    const n = V_BASE.map((v, i) => v + (i === k)), sum = n.reduce((a, b) => a + b, 0), lead = n.indexOf(Math.max(...n));
+    n.forEach((v, i) => { vSegs[i].style.setProperty('--n', v); vPcts[i].style.setProperty('--n', v); vPcts[i].textContent = `${Math.round(v / sum * 100)}%`; });
+    vBtns.forEach((b, i) => { b.classList.toggle('is-on', i === k); b.setAttribute('aria-pressed', i === k); });
+    vSegs.forEach((el, i) => { el.classList.remove('is-mine'); if (i === k) { void el.offsetWidth; el.classList.add('is-mine'); } }); // 고른 칸이 한 번 튄다
+    vote.classList.add('is-voted');
+    const stage = vote.parentElement; stage.classList.remove('is-cheer'); void stage.offsetWidth; stage.classList.add('is-cheer');
+    $('[data-vote-title]', vote).innerHTML = `<b>${V_NAME[lead]}</b> 선택이 더 많아요`;
+    $('[data-vote-note]', vote).textContent = `'${V_NAME[k]}'에 한 표 더했어요. 실제 투표는 앱에서 해요.`;
+  }
+  vBtns.forEach((b, i) => b.addEventListener('click', () => setVote(i)));
+
+  // 데스크톱(마우스로 쓰는 화면)에서는 다운로드 버튼이 스토어로 가는 대신 QR 창을 띄운다. 휴대폰에서는 그대로 스토어로 간다
+  const qr = $('#qr');
+  if (qr.showModal && matchMedia('(hover: hover) and (pointer: fine)').matches) {
+    $$('a[href*="apps.apple.com"]').forEach((a) => {
+      if (qr.contains(a)) return;
+      // 링크로 남겨 두면 아티팩트 뷰어가 클릭을 따로 처리해 새 탭도 함께 연다(preventDefault가 듣지 않는다). 그래서 링크를 떼고 단추로 쓴다
+      a.removeAttribute('href'); a.removeAttribute('target'); a.setAttribute('role', 'button'); a.tabIndex = 0;
+      const open = (e) => { e.preventDefault(); qr.showModal(); };
+      a.addEventListener('click', open);
+      a.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') open(e); });
+    });
+    qr.addEventListener('click', (e) => { if (e.target === qr || e.target.closest('[data-qr-close]')) qr.close(); }); // 바깥이나 닫기 단추
+    qr.addEventListener('wheel', (e) => e.preventDefault(), { passive: false }); // 떠 있는 동안 뒤 화면이 굴러가지 않게
+  }
+
+  // 다루는 ETF 섹션의 ETF 찾기. 이름은 edge의 대상 ETF 148종(ADR-0059)을 옮긴 것이라, 대상이 바뀌면 함께 고친다
+  const ETFS = 'PLUS 한화그룹주|RISE 바이오TOP10액티브|SOL 전고체배터리&실리콘음극재|IBK K-AI반도체코어테크|SOL 화장품TOP3플러스|KODEX 방산TOP10|PLUS K방산소부장|TIGER 코리아원자력|SOL 한국원자력SMR|RISE AI반도체TOP10|KODEX 원자력SMR|RISE AI전력인프라|1Q K소버린AI|SOL 한국AI소프트웨어|KODEX 조선TOP10|KODEX 코리아소버린AI|TIGER 코리아AI전력기기TOP3플러스|SOL 조선기자재|TIGER 코리아휴머노이드로봇산업|HANARO K휴머노이드테마TOP10|SOL AI반도체TOP2플러스|TIGER 기술이전바이오액티브|WON 두산그룹포커스|ACE K휴머노이드로봇산업TOP2+|1Q K반도체TOP2+|RISE 현대차고정피지컬AI|SOL 우주항공밸류체인|KODEX 전고체배터리ESS TOP2플러스|ACE 코리아AI전력TOP10|ACE K반도체TOP2+|ACE K방산TOP5+|KoAct 광통신&위성네트워크액티브|ACE K바이오코스닥액티브|마이티 AI데이터센터밸류체인|KIWOOM 삼성SK그룹TOP4+|RISE 삼성SK그룹|파워 SK그룹|KODEX 200|KODEX 반도체|KODEX 은행|KODEX 자동차|TIGER 은행|TIGER 반도체|KODEX 삼성그룹|KODEX 기계장비|KODEX 증권|KODEX 에너지화학|KODEX 철강|KODEX 건설|TIGER 삼성그룹|TIGER LG그룹플러스|TIGER 현대차그룹플러스|TIGER 200 건설|TIGER 200 중공업|TIGER 200 철강소재|TIGER 200 에너지화학|TIGER 200 IT|TIGER 200 금융|TIGER 경기방어|TIGER 200 경기소비재|KODEX 보험|KODEX 운송|TIGER 헬스케어|TIGER 중국소비테마|TIGER 소프트웨어|TIGER 증권|TIGER 200 산업재|TIGER 200 생활소비재|TIGER 화장품|TIGER 여행레저|TIGER 미디어컨텐츠|KODEX 코스닥150|KODEX 바이오|TIGER 코스닥150IT|TIGER 코스닥150바이오테크|KODEX K콘텐츠|KODEX IT|KODEX 필수소비재|KODEX 헬스케어|KODEX 200TR|RISE 200금융|TIGER K게임|KODEX 게임산업|TIGER 2차전지테마|KODEX 2차전지산업|TIGER 200커뮤니케이션서비스|KODEX 200IT TR|TIGER 바이오TOP10|TIGER 2차전지TOP10|TIGER 게임TOP10|TIGER 인터넷TOP10|RISE 수소경제테마|TIGER Fn신재생에너지|KODEX 신재생에너지액티브|KODEX 자율주행액티브|TIGER 퓨처모빌리티액티브|RISE 비메모리반도체액티브|KODEX AI반도체TOP2플러스|HANARO Fn K-반도체|HANARO Fn K-POP&미디어|TIGER 반도체TOP10|TIGER Fn메타버스|RISE 메타버스|KODEX 메타버스액티브|TIGER KRX기후변화솔루션|TIME K컬처액티브|PLUS 우주항공|RISE 2차전지액티브|ACE 원자력TOP10|HANARO 원자력iSelect|HANARO Fn K-푸드|HANARO Fn조선해운|SOL 코리아메가테크액티브|KODEX 친환경조선해운액티브|KODEX 로봇액티브|PLUS K방산|SOL AI반도체소부장|SOL 2차전지소부장Fn|PLUS 태양광&ESS|KODEX 2차전지핵심소재10|TIGER 2차전지소재Fn|KoAct 바이오헬스케어액티브|TIME K바이오액티브|TIGER K방산&우주|SOL 자동차소부장Fn|RISE 2차전지TOP10|SOL 조선TOP3플러스|SOL 자동차TOP3플러스|RISE AI&로봇|ACE AI반도체TOP3+|ACE 포스코그룹포커스|KIWOOM 코리아테크TOP10|TIGER AI반도체핵심공정|TIGER 코리아테크액티브|KODEX AI반도체핵심장비|WON 반도체밸류체인액티브|ACE KPOP포커스|SOL 반도체전공정|SOL 반도체후공정|HANARO 반도체핵심공정주도주|HANARO K-뷰티|KoAct 반도체&2차전지핵심소재액티브|DAISHIN AI반도체&인프라액티브|KODEX AI전력핵심설비|SOL K방산|HANARO 전력설비투자|UNICORN SK하이닉스밸류체인액티브|TIGER 조선TOP10'.split('|');
+  // 배포 전 필수: 신청을 받을 주소와 입력 칸 이름(Google Forms라면 formResponse 주소와 entry.숫자). 비어 있으면 아무 데도 보내지 않는다
+  const REQ_URL = '', REQ_FIELD = 'etf';
+  const KO = { 코덱스: 'kodex', 타이거: 'tiger', 에이스: 'ace', 라이즈: 'rise', 하나로: 'hanaro', 플러스: 'plus', 쏠: 'sol', 솔: 'sol', 키움: 'kiwoom' };
+  // 띄어쓰기, 기호, 조합 중인 자모를 떼고 한글로 친 운용사 이름을 맞춘다. 목록과 입력에 똑같이 적용한다
+  const norm = (v) => v.toLowerCase().replace(/[^0-9a-z가-힣]/g, '').replace(/코덱스|타이거|에이스|라이즈|하나로|플러스|쏠|솔|키움/g, (m) => KO[m]);
+  const etfKeys = ETFS.map(norm);
+  // 입력은 낱말로 나눠 모두 들어 있는 이름을 찾는다("타이거 방산" → TIGER K방산&우주). 붙여 쓴 운용사 이름도 떼어 낸다
+  const terms = (v) => v.trim().split(/\s+/).map(norm).flatMap((t) => t.replace(/^(kodex|tiger|ace|rise|hanaro|plus|sol|kiwoom|koact|time|won|1q|ibk)(?=.)/, '$1 ').split(' ')).filter(Boolean);
+  const find = $('[data-find]'), fIn = $('.find__in', find), fOut = $('.find__out', find);
+  const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; n.textContent = text; return n; };
+  let missT, cardSeq = 0;
+  // 시안용 예시 전망이다. 전망 조회 API가 정해지면 이 함수만 fetch로 바꾼다.
+  // KODEX 반도체는 위 리포트 목업(10월 5일 앱 화면)과 같은 값이고, 나머지는 이름으로 만든 가짜 값이라 카드에 "예시 데이터"를 붙인다.
+  // 스티커 낱말은 앱과 같다(edge 분석 엔진의 STICKERS). 시안에서는 상승·중립·하락 셋만 쓴다
+  const FAC = ['이슈', '차트', '매크로', '밸류', '수급'];
+  const STK = [['grade grade--down', '▼ 하락'], ['grade grade--flat', '■ 중립'], ['grade', '▲ 상승']];
+  const FAC_SAY = [
+    ['실적에 부담이 되는 소식이 더 많아요.', '눈에 띄는 소식이 많지 않아요.', '실적에 도움이 되는 소식이 더 많아요.'],
+    ['주가가 내리는 흐름이에요.', '뚜렷한 방향이 없어요.', '주가가 오르는 흐름이에요.'],
+    ['금리와 환율이 부담을 주는 쪽이에요.', '금리와 환율의 영향이 크지 않아요.', '금리와 환율이 도와주는 쪽이에요.'],
+    ['버는 돈에 비해 비싼 편이에요.', '버는 돈에 비해 적당한 가격이에요.', '버는 돈에 비해 싼 편이에요.'],
+    ['큰손이 파는 쪽이에요.', '큰손의 움직임이 엇갈려요.', '큰손이 사는 쪽이에요.'],
+  ];
+  const sumUp = (marks, word) => {
+    const pick = (v) => FAC.filter((_, i) => marks[i] === v), up = pick(1), dn = pick(-1);
+    const topic = (a) => a.join('·') + (a.at(-1) === '수급' ? '은' : '는');
+    const why = up.length && dn.length ? `${topic(up)} 상승 쪽이고 ${topic(dn)} 하락 쪽입니다.`
+      : up.length ? `${topic(up)} 상승 쪽이고 나머지는 중립입니다.`
+      : dn.length ? `${topic(dn)} 하락 쪽이고 나머지는 중립입니다.` : '다섯 기준이 모두 중립입니다.';
+    return `기본 전망은 ${word}입니다. ${why}`;
+  };
+  const titleOf = (marks) => {
+    const pick = (v) => FAC.filter((_, i) => marks[i] === v).join('·'), up = pick(1), dn = pick(-1);
+    return up && dn ? `${up} 상승과 ${dn} 하락의 공존` : up ? `${up} 상승이 이끄는 흐름` : dn ? `${dn} 하락이 누르는 흐름` : '뚜렷한 방향이 없는 구간';
+  };
+  // 응답 모양은 edge 분석 엔진의 발행본(전망 방향 + 요인마다 스티커와 한 문장)을 따랐다
+  const getOutlook = (name) => new Promise((done) => {
+    let h = 7;
+    for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 9973;
+    const marks = FAC.map((_, i) => (Math.floor(h / 3 ** i) % 3) - 1), dir = Math.sign(marks.reduce((a, b) => a + b, 0));
+    setTimeout(done, 450, name === 'KODEX 반도체' ? { real: true, asOf: '10월 5일' } : {
+      dir, asOf: '오늘 08:30 기준', title: titleOf(marks), summary: sumUp(marks, STK[dir + 1][1].slice(2)),
+      factors: FAC.map((type, i) => ({ type, mark: marks[i], sentence: FAC_SAY[i][marks[i] + 1] })),
+    });
+  });
+  // 받아온 전망을 '분석 자세히 보기'와 같은 리포트 모양으로 짠다
+  const reportOf = (d) => {
+    if (d.real) { // 실제 리포트가 있는 종목은 위 섹션의 리포트를 그대로 옮긴다
+      const body = $('.report__body').cloneNode(true);
+      body.removeAttribute('style');
+      $$('[data-n]', body).forEach((n) => (n.textContent = n.dataset.n));
+      $$('details', body).forEach((x, i) => (x.open = !i));
+      return body;
+    }
+    const kid = (tag, cls, text, ...kids) => { const n = el(tag, cls, text); n.append(...kids); return n; };
+    const word = (mark) => STK[mark + 1][1].slice(2);
+    const marks = kid('ul', 'marks', '', ...d.factors.map((fa) => {
+      const ic = el('i', ['is-down', 'is-flat', 'is-up'][fa.mark + 1], STK[fa.mark + 1][1][0]);
+      ic.setAttribute('aria-hidden', 'true');
+      return kid('li', '', '', ic, fa.type);
+    }));
+    marks.setAttribute('aria-label', '다섯 기준. ' + d.factors.map((fa) => `${fa.type} ${word(fa.mark)}`).join(', '));
+    // 이유 사슬은 상승 요인, 하락 요인, 중립 요인 순으로 놓는다
+    const chain = kid('ol', 'chain', '', ...[1, -1, 0].flatMap((v) => d.factors.filter((fa) => fa.mark === v)).map((fa) => {
+      const li = el('li', '', `${fa.type} · ${fa.sentence}`);
+      li.dataset.node = ['down', 'check', 'up'][fa.mark + 1];
+      return li;
+    }));
+    const chips = (v, cls, label) => {
+      const fs = d.factors.filter((fa) => fa.mark === v);
+      return fs.length ? [kid('div', '', '', el('dt', cls, label), kid('dd', '', '', ...fs.map((fa) => el('span', `chip chip--${cls}`, fa.type))))] : [];
+    };
+    return kid('div', 'report__body', '',
+      kid('div', 'report__head', '', kid('p', 'report__grade', '', el('span', STK[d.dir + 1][0], STK[d.dir + 1][1]), el('span', '', '한 달 전망')), el('h3', 'report__title', d.title), marks),
+      kid('section', 'reasons', '', el('h4', 'report__sub', '왜 이렇게 봤을까요'), chain),
+      kid('section', 'so', '', el('h4', '', `그래서 ${word(d.dir)}이에요`), kid('dl', '', '', ...chips(-1, 'down', '부담'), ...chips(1, 'up', '개선')), el('p', 'so__line', d.summary)));
+  };
+  const showCard = async (name) => {
+    clearTimeout(missT);
+    const seq = ++cardSeq, card = el('div', 'find__card', ''), head = el('p', 'find__name', '');
+    fIn.value = name;
+    head.append(el('strong', '', `${name} 한 달 전망`), el('span', 'find__tag', '예시 데이터'));
+    card.append(head, el('i', 'find__sk', ''), el('i', 'find__sk', ''), el('i', 'find__sk', ''));
+    fOut.replaceChildren(card);
+    fOut.hidden = false;
+    const d = await getOutlook(name);
+    if (seq !== cardSeq) return; // 기다리는 사이에 다른 것을 찾았다
+    const go = el('button', 'btn btn--point', '앱에서 매일 새 전망 보기');
+    go.type = 'button';
+    go.onclick = () => $('.cta .btn--point').click(); // 다운로드 버튼과 같은 길: 휴대폰은 스토어, 데스크톱은 QR 창
+    card.replaceChildren(head, reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${d.asOf} · 투자 추천이 아니에요.`), go);
+    if (window.ScrollTrigger) window.ScrollTrigger.refresh(); // 리포트만큼 길어졌으니 아래쪽 위치를 다시 잰다
+  };
+  const showMiss = (raw) => {
+    const p = el('p', '', '아직 다루지 않는 ETF예요. 신청해 두면 다음에 추가할 ETF를 고를 때 참고할게요.');
+    const btn = el('button', 'btn btn--ghost btn--sm', '추가 신청하기');
+    btn.type = 'button';
+    btn.onclick = () => {
+      btn.disabled = true;
+      const ok = () => { p.textContent = '신청했어요. 지금은 국내 주식형 ETF 148종을 볼 수 있어요.'; btn.remove(); };
+      if (!REQ_URL) return ok();
+      fetch(REQ_URL, { method: 'POST', mode: 'no-cors', body: new URLSearchParams({ [REQ_FIELD]: raw }) })
+        .then(ok, () => { p.textContent = '보내지 못했어요. 잠시 뒤 다시 눌러 주세요.'; btn.disabled = false; });
+    };
+    const box = el('div', 'find__miss', '');
+    box.append(el('strong', '', raw), p, btn);
+    fOut.replaceChildren(box);
+    fOut.hidden = false;
+  };
+  const lookup = (now) => {
+    clearTimeout(missT);
+    cardSeq++;
+    const raw = fIn.value.trim(), q = terms(raw);
+    // 입력에 가장 가까운(군더더기가 적은) 이름부터
+    const hits = etfKeys.map((k, i) => [k, ETFS[i]]).filter(([k]) => q.length && q.every((t) => k.includes(t))).sort((a, b) => a[0].length - b[0].length);
+    if (!hits.length) {
+      // 한글은 조합 중에 잠깐 어긋나므로(반돛 → 반도체) 없다는 말은 손을 멈춘 뒤에 한다. 그동안은 앞 결과를 둔다
+      if (q.join('').length > 1) missT = setTimeout(showMiss, now ? 0 : 500, raw);
+      else fOut.hidden = true;
+      return;
+    }
+    fOut.replaceChildren(...hits.slice(0, 4).map(([, name]) => {
+      const row = el('button', 'find__row', name);
+      row.type = 'button';
+      row.append(el('span', '', '전망 보기'));
+      row.onclick = () => showCard(name);
+      return row;
+    }));
+    if (hits.length > 4) fOut.append(el('p', 'find__more', `외 ${hits.length - 4}종이 더 있어요.`));
+    fOut.hidden = false;
+    return true;
+  };
+  fIn.addEventListener('input', () => lookup());
+  // 엔터는 맨 위 결과의 전망을 연다. 결과가 없으면 없다는 안내를 바로 띄운다
+  find.addEventListener('submit', (e) => { e.preventDefault(); fIn.blur(); if (lookup(true)) $('.find__row', fOut).click(); });
+
+  // 조건의 숫자가 굴러서 자리를 잡는다
+  const countIO = new IntersectionObserver((es) => es.forEach((e) => {
+    if (!e.isIntersecting) return;
+    countIO.unobserve(e.target);
+    if (mode === 'reduce') return;
+    const el = e.target, to = +el.dataset.count, from = +el.dataset.from || 0, t0 = performance.now();
+    (function tick(now) {
+      const k = ease((now - t0) / 1200);
+      el.textContent = Math.round(lerp(from, to, k));
+      if (k < 1) requestAnimationFrame(tick);
+    })(t0);
+  }), { threshold: .6 });
+  $$('[data-count]').forEach((el) => countIO.observe(el));
+
+  // 내비: 화면 가운데에 걸린 구역의 메뉴에 표시한다. 메뉴에 없는 구역(첫 화면, 다루는 ETF 등)에서는 표시를 지운다
+  const navLinks = $$('.nav__links a');
+  const secIO = new IntersectionObserver((es) => es.forEach((e) => {
+    if (e.isIntersecting) navLinks.forEach((a) => (a.getAttribute('href') === '#' + e.target.id ? a.setAttribute('aria-current', 'location') : a.removeAttribute('aria-current')));
+  }), { rootMargin: '-50% 0px -50% 0px' });
+  $$('section[id]').forEach((sec) => secIO.observe(sec));
+
+  // 하단 고정 버튼: 다운로드 버튼이 화면에 보이는 동안은 숨긴다
+  const bar = $('[data-cta-bar]'), zones = new Set();
+  const zoneIO = new IntersectionObserver((es) => {
+    es.forEach((e) => (e.isIntersecting ? zones.add(e.target) : zones.delete(e.target)));
+    bar.classList.toggle('is-hidden', zones.size > 0);
+  });
+  $$('[data-cta-zone]').forEach((z) => zoneIO.observe(z));
+
+  // 테마 카드 줄: 끊김 없이 돌도록 내용을 한 번 더 붙인다
+  $$('.cover__track').forEach((t) => { t.innerHTML += t.innerHTML.replace(/<li/g, '<li aria-hidden="true"'); });
+
+  /* ================= 모션 (GSAP + ScrollTrigger + SplitText, full은 Lenis) ================= */
+  const { gsap, ScrollTrigger, SplitText } = window;
+  // 깜빡임 방지용 숨김을 푼다. 인트로 트윈보다 먼저 풀어야 트윈이 "보이는 상태"를 끝값으로 잡는다
+  // 라이브러리가 느리게 받아져 늦게 도착한 경우(motion-late): 예전에는 모션 전체를 껐는데, 그러면 느린 연결에서 고정 스크롤이 통째로 사라진다.
+  // 이미 읽히고 있는 첫 화면의 인트로만 건너뛰고 나머지는 그대로 건다
+  const late = root.classList.contains('motion-late');
+  root.classList.remove('motion-pending');
+  hero.wantIntro = true;
+  if (mode === 'reduce' || !gsap || !ScrollTrigger) { if (hero.intro) hero.intro(); return; }
+  const full = mode === 'full';
+  root.classList.add('motion-on', full ? 'motion-full' : 'motion-lite');
+  gsap.registerPlugin(ScrollTrigger, ...(SplitText ? [SplitText] : []));
+  ScrollTrigger.config({ ignoreMobileResize: true });
+
+  let lenis = null;
+  if (full && window.Lenis) {
+    lenis = new window.Lenis({ lerp: .1, smoothWheel: true });
+    lenis.on('scroll', ScrollTrigger.update);
+    gsap.ticker.add((t) => lenis.raf(t * 1000));
+    gsap.ticker.lagSmoothing(0);
+    new MutationObserver(() => (qr.open ? lenis.stop() : lenis.start())).observe(qr, { attributes: true, attributeFilter: ['open'] }); // QR 창이 떠 있으면 멈춘다
+  }
+  // 앵커 이동: 고정 섹션은 pin-spacer의 시작점으로 간다
+  function anchorY(target) {
+    if (target.id === 'top') return 0;
+    const spacer = target.parentElement && target.parentElement.classList.contains('pin-spacer') ? target.parentElement : null;
+    const y = (spacer || target).getBoundingClientRect().top + window.scrollY;
+    return spacer ? y : y - 72;
+  }
+  $$('a[href^="#"]').forEach((a) => a.addEventListener('click', (e) => {
+    const id = a.getAttribute('href'), target = id.length > 1 && document.querySelector(id);
+    if (!target) return;
+    e.preventDefault();
+    if (lenis) lenis.scrollTo(anchorY(target), { duration: 1.4 });
+    else window.scrollTo({ top: anchorY(target), behavior: 'smooth' });
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.focus({ preventScroll: true });
+  }));
+
+  // S1 히어로: 로드 인트로 (늦게 도착했으면 건너뛴다)
+  if (!late) {
+    const h1 = $('.hero h1');
+    const intro = gsap.timeline({ defaults: { ease: 'expo.out' } });
+    if (SplitText) {
+      SplitText.create(h1, {
+        type: 'lines', mask: 'lines', linesClass: 'h1-line', autoSplit: true,
+        onSplit: (self) => gsap.from(self.lines, { yPercent: 105, duration: 1, stagger: .12, ease: 'expo.out', delay: .28 }),
+      });
+    } else intro.from(h1, { yPercent: 40, opacity: 0, duration: 1 }, .28);
+    const heroBtns = $$('.hero__copy .btn');
+    gsap.set(heroBtns, { transition: 'none' });
+    intro
+      .from('.nav__pill', { y: -24, opacity: 0, duration: .9 }, .05)
+      .from('.hero__scene', { opacity: 0, duration: 1.4, ease: 'power2.out' }, 0)
+      .from('.chip--launch', { y: 16, opacity: 0, duration: .8 }, .2)
+      .from('.hero__copy .lead', { y: 20, opacity: 0, duration: .8 }, .62)
+      .from(heroBtns, { y: 16, opacity: 0, duration: .7, stagger: .08, clearProps: 'transform,opacity,transition' }, .74);
+  }
+  if (hero.intro) hero.intro();
+
+  // 히어로 스크롤: full은 고정 + 인셋 카드가 화면을 채운다, lite는 무대 스케일만
+  if (full) {
+    gsap.timeline({ scrollTrigger: { trigger: '.hero', start: 'top top', end: '+=110%', pin: true, scrub: .6, onUpdate: (s) => { hero.progress = s.progress; hero.vel = s.getVelocity(); } } })
+      .fromTo('.hero__card', { clipPath: 'inset(10px round 40px)' }, { clipPath: 'inset(0px round 0px)', ease: 'none' }, 0)
+      .fromTo('.hero__scene', { scale: 1.14 }, { scale: 1, ease: 'none' }, 0)
+      .to('.hero__copy', { y: -60, opacity: 0, ease: 'power1.in', duration: .3 }, .2) // 폰이 자리를 바꾸기 전에 글이 먼저 빠진다
+      .to('.hero__shade', { opacity: 0, ease: 'none', duration: .3 }, .2)
+      .to('.hero__scroll', { opacity: 0, duration: .2 }, 0)
+      .to({}, { duration: 1 }, 0); // 타임라인 길이를 1로 맞춘다. 위의 시작점과 길이가 곧 스크롤 진행률이다
+  } else {
+    gsap.fromTo('.hero__scene', { scale: 1.08 }, { scale: 1, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true, onUpdate: (st) => { hero.progress = st.progress; hero.vel = st.getVelocity(); } } });
+  }
+
+  // S2 공감: 가라오케 (활성 줄 확대 + 글자 채움)
+  const kLines = $$('[data-karaoke] li');
+  function karaoke(p) {
+    const n = kLines.length, f = p * n, idx = Math.min(n - 1, Math.floor(f));
+    kLines.forEach((l, i) => {
+      l.classList.toggle('is-active', i === idx);
+      l.style.setProperty('--fill', i < idx ? '100%' : i === idx ? Math.min(100, (f - idx) * 160) + '%' : '0%');
+    });
+  }
+  karaoke(0);
+  const fits = (el, k) => el.offsetHeight <= window.innerHeight * (k || 1) + 1;
+  // 고정 장면(full)은 내용을 화면 높이에 맞춘다. 화면이 낮으면 줄이고, 남으면 키워서 한 화면을 채운다.
+  // 너무 작아질 정도면(66% 미만) 손대지 않고 고정도 하지 않는다. 키우는 쪽은 1.5배, 그리고 글 칸 폭이 1040px 아래로 좁아지지 않는 선까지
+  const scenes = [];
+  function fitScene(sec) {
+    const box = sec.firstElementChild, cs = getComputedStyle(sec);
+    const room = (window.innerHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 2) * .96;
+    const cap = Math.min(1.5, window.innerWidth / 1040);
+    let k = 1;
+    box.style.zoom = '';
+    for (let i = 0; i < 4; i++) { // 크기를 바꾸면 줄바꿈이 달라져 높이도 바뀐다. 몇 번 다시 잰다
+      const next = Math.min(cap, k * room / box.getBoundingClientRect().height);
+      if (Math.abs(next - k) < .008) break;
+      k = next; box.style.zoom = k.toFixed(3);
+    }
+    if (k < .66) { box.style.zoom = ''; return false; }
+    if (!scenes.includes(sec)) scenes.push(sec);
+    return true;
+  }
+  ScrollTrigger.create(
+    full && fitScene($('.pain')) ? { trigger: '.pain', start: 'top top', end: '+=150%', pin: true, scrub: true, onUpdate: (s) => karaoke(s.progress) }
+      : innerWidth >= 768 && fits($('.pain'), .96) ? { trigger: '.pain', start: 'center center', end: '+=110%', pin: true, scrub: .4, onUpdate: (s) => karaoke(s.progress) }
+      : { trigger: '.karaoke', start: 'top 85%', end: 'bottom 15%', scrub: true, onUpdate: (s) => karaoke(s.progress) },
+  );
+
+  // S3 ETF 단위 분석: 가운데 패널 둘레에 흩어져 떠 있던 자료 조각들이 종류별로 제 요인 칸에 빨려 들어가고, 다 모이면 그 요인의 방향이 뜬다.
+  // 다섯 요인이 다 정해지면 종목명 옆에 전망 등급이 찍힌다
+  const engineSec = $('.engine'), swarm = $('[data-swarm]'), scv = $('[data-swarm-cv]'), sctx = scv.getContext('2d');
+  const sField = $('.swarm__field', swarm), sFieldB = $('.swarm__field--b', swarm), sOut = $('.swarm__out', swarm), facs = $$('[data-fac]', swarm), sStatus = $('[data-status]', swarm), grade = $('[data-grade]', swarm);
+  const LABELS = [['뉴스', '공시', '리포트', '뉴스', '공시'], ['종가', '20일선', '60일선'], ['금리', '환율', '기름값', '정책'], ['PER', 'PBR'], ['외국인', '기관', '연기금']];
+  const PER = 18, STEP = .16; // 요인마다 조각 수, 요인 사이 간격(스크롤 진행률)
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647; // 매번 같은 배치
+  const bits = [];
+  for (let t = 0; t < 5; t++) for (let j = 0; j < PER; j++) bits.push({ t, j, z: j % 2, label: LABELS[t][j % LABELS[t].length], u: rnd(), v: rnd(), d: rnd(), ph: rnd() * 6.28, bend: rnd() - .5 });
+  const swoosh = (t) => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  let sp = 0, sW = 1, sH = 1, sZones = null, targets = [], per = PER, sides = true;
+  let sK = 1; // 장면이 화면에 맞춰 커지거나 작아진 배율. 조각과 효과도 같은 배율로 그린다
+  let finAt = 0, finTimer = 0, gPos = { x: 0, y: 0 }; // 마무리 장면: 시작 시각, 등급이 찍히는 타이머, 등급 자리
+  const DIR_COL = ['#f0455b', '#f0455b', '#8a929c', '#8a929c', '#4da3ff']; // 요인별 방향 색(상승, 상승, 중립, 중립, 하락)
+  const rays = Array.from({ length: 24 }, (_, i) => ({ a: i / 24 * 6.283 + rnd() * .3, d: 40 + rnd() * 64, s: 1.6 + rnd() * 2.6 }));
+  function measure() {
+    const r = swarm.getBoundingClientRect(), k = Math.min(window.devicePixelRatio || 1, 2);
+    if (!r.width) return;
+    sW = r.width; sH = r.height; scv.width = Math.round(sW * k); scv.height = Math.round(sH * k);
+    sK = parseFloat(swarm.parentElement.style.zoom) || 1;
+    const o = sOut.getBoundingClientRect(), P = { x: o.left - r.left, y: o.top - r.top, w: o.width, h: o.height };
+    sides = P.x > 150; // 패널 양옆에 자리가 있으면 좌우에, 좁은 화면은 패널 위아래 띠에 흩어 둔다(패널 글자를 가리지 않게)
+    if (sides) sZones = [{ x: 0, y: 0, w: P.x - 30, h: sH }, { x: P.x + P.w + 30, y: 0, w: sW - P.x - P.w - 30, h: sH }];
+    else {
+      const f = sField.getBoundingClientRect(), b = sFieldB.getBoundingClientRect();
+      sZones = [{ x: 0, y: f.top - r.top + 26, w: sW, h: f.height - 26 }, { x: 0, y: b.top - r.top + 2, w: sW, h: b.height - 2 }];
+    }
+    per = sides ? PER : 9;
+    targets = facs.map((el) => { const c = el.getBoundingClientRect(); return { l: c.left - r.left + 22, r: c.right - r.left - 22, y: c.top - r.top + c.height / 2 }; });
+    const g = grade.getBoundingClientRect();
+    gPos = { x: g.left - r.left + g.width / 2, y: g.top - r.top + g.height / 2 };
+  }
+  function drawSwarm(time) {
+    if (!sZones) return;
+    const k = scv.width / sW;
+    sctx.setTransform(k, 0, 0, k, 0, 0); sctx.clearRect(0, 0, sW, sH); sctx.textBaseline = 'middle'; sctx.textAlign = 'center'; sctx.lineCap = 'round';
+    for (const b of bits) {
+      if (b.j >= per) continue;
+      const w0 = b.t * STEP + b.d * .1;
+      const a = swoosh(seg(sp, w0, w0 + .12)); // 0 = 떠 있음, 1 = 칸에 도착
+      if (a >= 1) continue;
+      sctx.font = `600 ${11 * sK}px Pretendard,"Noto Sans KR",sans-serif`;
+      const tw = sctx.measureText(b.label).width + 20 * sK, Z = sZones[b.z], T = targets[b.t];
+      const sx = Z.x + tw / 2 + b.u * Math.max(1, Z.w - tw) + Math.sin(time * .9 + b.ph) * 7 * sK;
+      const sy = Z.y + 11 * sK + b.v * Math.max(1, Z.h - 22 * sK) + Math.cos(time * .7 + b.ph) * 6 * sK;
+      const tx = sides ? (b.z ? T.r : T.l) : T.l + (T.r - T.l) * (.1 + b.u * .5);
+      const cx = (sx + tx) / 2 + b.bend * 60, cy = (sy + T.y) / 2 - 30 - Math.abs(b.bend) * 80; // 휘어 들어가는 길
+      const at = (t) => [(1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx, (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * T.y];
+      const [x, y] = at(a), sc = 1 - .45 * a, w = tw * sc, h = 22 * sK * sc;
+      if (a > 0) { // 꼬리
+        const [x0, y0] = at(Math.max(0, a - .18));
+        const g = sctx.createLinearGradient(x0, y0, x, y);
+        g.addColorStop(0, 'rgba(91,124,250,0)'); g.addColorStop(1, 'rgba(127,180,255,.85)');
+        sctx.strokeStyle = g; sctx.lineWidth = 2.5 * sc * sK; sctx.beginPath(); sctx.moveTo(x0, y0); sctx.lineTo(x, y); sctx.stroke();
+      }
+      sctx.globalAlpha = a > .8 ? (1 - a) / .2 : 1;
+      sctx.fillStyle = '#1f2748'; sctx.strokeStyle = a > 0 ? 'rgba(159,208,255,.95)' : '#4a5cb0'; sctx.lineWidth = 1;
+      sctx.beginPath(); sctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2); sctx.fill(); sctx.stroke();
+      sctx.font = `600 ${(11 * sc * sK).toFixed(1)}px Pretendard,"Noto Sans KR",sans-serif`;
+      sctx.fillStyle = a > 0 ? '#ffffff' : '#c9d3ff'; sctx.fillText(b.label, x, y + .5);
+      sctx.globalAlpha = 1;
+    }
+    if (!finAt) return;
+    // 마무리: 다섯 요인의 결과가 종목명 옆으로 모이고(0.3초), 등급이 찍히는 순간 고리와 불꽃이 퍼진다
+    const dt = performance.now() - finAt;
+    if (dt < 330) targets.forEach((T, i) => {
+      const e = swoosh(Math.min(1, dt / 300)), x0 = T.r - 24, cx = (x0 + gPos.x) / 2 + 40, cy = Math.min(T.y, gPos.y) - 30;
+      const at = (t) => [(1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * gPos.x, (1 - t) * (1 - t) * T.y + 2 * (1 - t) * t * cy + t * t * gPos.y];
+      const [x, y] = at(e), [xb, yb] = at(Math.max(0, e - .25));
+      sctx.strokeStyle = DIR_COL[i]; sctx.lineWidth = 3 * sK; sctx.globalAlpha = .7; sctx.beginPath(); sctx.moveTo(xb, yb); sctx.lineTo(x, y); sctx.stroke();
+      sctx.globalAlpha = 1; sctx.fillStyle = DIR_COL[i]; sctx.beginPath(); sctx.arc(x, y, 4.5 * sK, 0, 7); sctx.fill();
+    });
+    const bt = (dt - 300) / 800;
+    if (bt > 0 && bt < 1) {
+      const e = 1 - Math.pow(1 - bt, 3);
+      sctx.globalAlpha = (1 - bt) * .9; sctx.strokeStyle = '#f99aa7'; sctx.lineWidth = 2.5 * (1 - bt) + .5;
+      sctx.beginPath(); sctx.arc(gPos.x, gPos.y, (16 + e * 74) * sK, 0, 7); sctx.stroke();
+      rays.forEach((r, i) => {
+        const x = gPos.x + Math.cos(r.a) * r.d * e * sK, y = gPos.y + Math.sin(r.a) * r.d * e * .8 * sK;
+        sctx.globalAlpha = 1 - bt; sctx.fillStyle = i % 4 ? '#f0455b' : '#ffffff';
+        sctx.beginPath(); sctx.arc(x, y, r.s * sK * (1 - bt * .6), 0, 7); sctx.fill();
+      });
+      sctx.globalAlpha = 1;
+    }
+  }
+  function setFin(on) {
+    grade.classList.toggle('is-on', on); sOut.classList.toggle('is-fin', on); swarm.classList.toggle('is-done', on);
+    sStatus.classList.toggle('is-hit', on); sStatus.textContent = on ? '분석 완료' : '분석 중';
+  }
+  function swarmStep(p) {
+    sp = p;
+    facs.forEach((el, i) => {
+      const on = p >= i * STEP + .22, was = el.classList.contains('is-on');
+      el.classList.toggle('is-on', on);
+      if (on && !was) { el.classList.remove('is-pop'); void el.offsetWidth; el.classList.add('is-pop'); } // 다 모인 순간 한 번 튄다
+    });
+    const fin = p >= .92;
+    if (fin && !finAt) { finAt = performance.now(); finTimer = setTimeout(() => setFin(true), 300); } // 결과가 모인 뒤에 등급이 찍힌다
+    else if (!fin && finAt) { finAt = 0; clearTimeout(finTimer); setFin(false); }
+  }
+  let sRaf = 0, sVis = false;
+  const sLoop = (ms) => { sRaf = 0; if (!sVis || document.hidden) return; drawSwarm(ms / 1000); sRaf = requestAnimationFrame(sLoop); };
+  const sKick = () => { if (sVis && !sRaf) sRaf = requestAnimationFrame(sLoop); };
+  new IntersectionObserver(([e]) => { sVis = e.isIntersecting; sKick(); }).observe(swarm);
+  document.addEventListener('visibilitychange', sKick);
+  new ResizeObserver(measure).observe(swarm);
+  swarm.classList.add('scrub'); setFin(false); swarmStep(0); measure();
+  ScrollTrigger.create(full && fitScene(engineSec)
+    ? { trigger: engineSec, start: 'top top', end: '+=220%', pin: true, scrub: .5, onUpdate: (s) => swarmStep(s.progress), onRefresh: measure }
+    // 고정하지 않는 화면: 스크롤에 묶으면 패널이 반도 안 보일 때 자료가 다 들어가 버린다. 패널이 화면에 거의 다 들어왔을 때 한 번, 3.8초에 걸쳐 스스로 재생한다
+    : { trigger: sOut, start: 'top 45%', once: true,
+        onEnter: () => { measure(); const t0 = performance.now(); (function tick(now) { const q = Math.min(1, (now - t0) / 3800); swarmStep(q); if (q < 1) requestAnimationFrame(tick); })(t0); } });
+
+  // S4 리포트: 앱의 '자세히 보기'를 위에서 아래로 읽는다. 진행에 따라 줄이 하나씩 놓이고, 왼쪽 단계가 바뀌고, 시트가 방금 놓인 줄을 따라 내려간다
+  const whySec = $('.why'), report = $('[data-report]');
+  const rView = $('.report__view', report), rBody = $('.report__body', report), chain = $('.chain', report);
+  const rItems = $$('[data-r]', report), nodes = $$('li', chain), steps = $$('.steps li');
+  const STEP_AT = [0, .17, .34, .79]; // 왼쪽 단계가 바뀌는 진행률
+  let rP = 0;
+  function countUp(el) {
+    const to = +el.dataset.n, dec = (el.dataset.n.split('.')[1] || '').length, t0 = performance.now();
+    (function tick(now) {
+      const k = ease((now - t0) / 700);
+      el.textContent = (to * k).toFixed(dec);
+      if (k < 1) requestAnimationFrame(tick);
+    })(t0);
+  }
+  const show = (el, on) => {
+    const was = el.classList.contains('is-on');
+    el.classList.toggle('is-on', on);
+    if (on && !was) $$('[data-n]', el).forEach(countUp);
+  };
+  const topIn = (el) => { let y = 0; for (let n = el; n && n !== rBody; n = n.offsetParent) y += n.offsetTop; return y; };
+  function reportStep(p) {
+    rP = p;
+    let last = null;
+    rItems.forEach((el) => { const on = p >= +el.dataset.r; show(el, on); if (on) last = el; });
+    chain.style.setProperty('--line', (nodes.filter((n) => n.classList.contains('is-on')).length / nodes.length).toFixed(3));
+    const cur = STEP_AT.filter((t) => p >= t).length - 1;
+    steps.forEach((el, i) => el.classList.toggle('is-on', i === cur));
+    const over = rBody.offsetHeight - rView.clientHeight;
+    const y = last ? Math.min(over, Math.max(0, topIn(last) + last.offsetHeight + 32 - rView.clientHeight)) : 0;
+    rBody.style.transform = y > 0 ? `translateY(${-y}px)` : '';
+  }
+  report.classList.add('scrub', 'is-pinned');
+  if (full && fitScene(whySec)) {
+    reportStep(0);
+    ScrollTrigger.create({ trigger: whySec, start: 'top top', end: '+=240%', pin: true, scrub: true, onUpdate: (s) => reportStep(s.progress) });
+  } else {
+    // 고정하지 않는 화면에서는 시트를 다 펼쳐 두고, 줄마다 화면 안쪽(아래 고정 버튼보다 위)에 올라왔을 때 차례로 놓인다. 이유 사슬의 선도 놓인 만큼 따라 내려간다
+    report.classList.remove('is-pinned');
+    chain.style.setProperty('--line', 0);
+    ScrollTrigger.batch(rItems, { start: 'top 72%', once: true, batchMax: 4, onEnter: (b) => b.forEach((el, i) => setTimeout(() => {
+      show(el, true);
+      chain.style.setProperty('--line', (nodes.filter((n) => n.classList.contains('is-on')).length / nodes.length).toFixed(3));
+    }, i * 150)) });
+  }
+
+  // 이유 줄을 눌러 근거를 펼치면 높이가 달라진다. 고정 장면은 시트 위치를 다시 맞추고, 그 밖에는 아래 장면들의 시작점을 다시 잰다
+  chain.addEventListener('toggle', () => (report.classList.contains('is-pinned') ? reportStep(rP) : ScrollTrigger.refresh()), true);
+
+  // S5 오늘 움직임: 보드를 왼쪽에서 오른쪽으로 읽는다. ① 장중 봉이 시간순으로 서다가 지금 봉이 전일 종가 대비 3% 선을 넘으면
+  // ② 구성종목이 채워져 가장 크게 끌어올린 칸이 도드라지고 ③ 이유가 한 줄씩 또렷해진다
+  const todaySec = $('.today'), move = $('[data-move]'), cause = $('[data-cause]'), mZones = $$('.zone', move), watch = $('[data-watch]', move);
+  const cds = $$('.cd:not(.cd--today)', move), cdNow = $('.cd--today', move), mPct = $('.move__tag b', move), mClock = $('[data-clock]', move);
+  const tiles = $$('.heat__t', move), mWhy = $('.move__why', move), causes = $$('li', cause);
+  const GATE = 3, FROM = +cdNow.dataset.from, TO = +cdNow.dataset.to; // 발화 기준(전일 종가 대비 %), 지금 봉의 시작과 끝(예시)
+  const clock = (i) => `${String(9 + Math.floor(i * 5 / 60)).padStart(2, '0')}:${String(i * 5 % 60).padStart(2, '0')}`; // 봉 하나 = 5분, 09:00부터
+  const say = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+  function moveStep(p) {
+    const shown = Math.min(cds.length, Math.floor(seg(p, 0, .34) * cds.length + 1e-6)); // 시간순으로 선 봉 수
+    cds.forEach((el, i) => el.classList.toggle('is-on', i < shown));
+    const g = seg(p, .36, .5); // 지금 봉이 자란 정도
+    cdNow.style.setProperty('--g', g.toFixed(3));
+    const v = g > 0 ? FROM + (TO - FROM) * g : shown ? +cds[shown - 1].dataset.to : 0, hit = v >= GATE; // 전일 종가 대비 등락률, 3% 선을 넘었는지
+    say(mPct, `+${v.toFixed(1)}%`);
+    say(mClock, g > 0 ? (hit ? '10:42' : '10:40') : clock(Math.max(0, shown - 1)));
+    say(watch, hit ? '10:42 · 3% 돌파' : '3% 넘는지 지켜보는 중'); watch.classList.toggle('is-hit', hit);
+    const z = !hit ? 0 : p < .7 ? 1 : 2; // 지금 차례인 구역(움직임 → 종목 → 이유)
+    mZones.forEach((el, i) => { el.classList.toggle('is-on', i <= z); el.classList.toggle('is-cur', i === z); });
+    move.classList.toggle('is-live', g > 0); move.classList.toggle('is-hit', hit);
+    tiles.forEach((el, j) => el.classList.toggle('is-on', hit && p >= .5 + j * .01));
+    move.classList.toggle('is-pick', p >= .6); // 끌어올린 종목 칸이 도드라지고 나머지는 물러난다
+    mWhy.classList.toggle('is-on', p >= .64);
+    cause.classList.toggle('is-on', p >= .7);
+    causes.forEach((el, j) => el.classList.toggle('is-on', p >= .74 + j * .06));
+  }
+  move.classList.add('scrub'); cause.classList.add('scrub'); moveStep(0);
+  if (full && fitScene(todaySec)) {
+    ScrollTrigger.create({ trigger: todaySec, start: 'top top', end: '+=190%', pin: true, scrub: true, onUpdate: (s) => moveStep(s.progress) });
+  } else {
+    // 고정하지 않는 화면에서는 스스로 재생한다. 구역이 위아래로 쌓였으면 구역마다 화면에 들어올 때 제 몫만(① 0→.5, ② →.7, ③ →1),
+    // 뒤 구역이 먼저 보이면 앞 구역은 끝난 상태로 건너뛴다(아래로 내려갔는데 흐릿한 채 기다리지 않게). 나란히 놓였으면 한 번에 이어서 재생한다
+    const STOPS = [.5, .7, 1], DUR = [2600, 1100, 1600];
+    let cur = 0, goal = 0, raf = 0, last = 0;
+    const run = (now) => {
+      const i = STOPS.findIndex((v) => cur < v), from = STOPS[i - 1] || 0;
+      cur = Math.min(goal, cur + (now - last) / DUR[i] * (STOPS[i] - from)); last = now;
+      moveStep(cur);
+      raf = cur < goal ? requestAnimationFrame(run) : 0;
+    };
+    const playTo = (from, to) => {
+      cur = Math.max(cur, from); goal = Math.max(goal, to);
+      if (!raf && cur < goal) { last = performance.now(); raf = requestAnimationFrame(run); }
+    };
+    if (mZones[1].offsetTop > mZones[0].offsetTop) {
+      mZones.forEach((el, i) => ScrollTrigger.create({ trigger: el, start: 'top 72%', once: true, onEnter: () => playTo(STOPS[i - 1] || 0, STOPS[i]) }));
+    } else {
+      ScrollTrigger.create({ trigger: move, start: 'top 70%', once: true, onEnter: () => playTo(0, 1) });
+    }
+  }
+
+  // S6 커뮤니티: 스크롤에 따라 투표 막대가 자라고 글이 하나씩 놓인다(투표를 누르는 동작은 기본 동작 쪽에 있다)
+  const talkSec = $('.talk'), poll = $('[data-poll]'), posts = $$('.post', poll);
+  poll.classList.add('scrub');
+  if (full && fitScene(talkSec)) {
+    const talkStep = (p) => { poll.classList.toggle('is-in', p >= .06); posts.forEach((el, i) => el.classList.toggle('is-on', p >= .28 + i * .2)); };
+    talkStep(0);
+    ScrollTrigger.create({ trigger: talkSec, start: 'top top', end: '+=110%', pin: true, scrub: true, onUpdate: (s) => talkStep(s.progress) });
+  } else {
+    // 고정하지 않는 화면: 투표가 화면 안쪽에 들어오면 막대가 자라고, 글은 하나씩 올라올 때 놓인다
+    ScrollTrigger.create({ trigger: vote, start: 'top 70%', once: true, onEnter: () => poll.classList.add('is-in') });
+    ScrollTrigger.batch(posts, { start: 'top 74%', once: true, onEnter: (b) => b.forEach((el, i) => setTimeout(() => el.classList.add('is-on'), i * 160)) });
+  }
+
+
+  // 공통 진입 리빌. 고정 장면을 모두 만든 뒤에 만든다(앞에 두면 핀 간격을 모른다). 리포트 섹션의 제목 묶음은 넣지 않는다: 처음부터 보인다
+  const revealSel = [
+    '.pain .eyebrow', '.pain .h2', '.scatter',
+    '.engine .section-head > *',
+    '.report',
+    '.today .section-head > *', '.today .mock',
+    '.poll',
+    '.facts .section-head > *', '.cover', '.cover__foot',
+    '.faq .section-head > *', '.faq__list details',
+    '.cta__inner > *',
+  ];
+  if (!full) revealSel.push('.swarm__out');
+  const reveals = $$(revealSel.join(','));
+  gsap.set(reveals, { opacity: 0, y: 24 });
+  ScrollTrigger.batch(reveals, {
+    start: 'top 88%', once: true, batchMax: 6, // 앵커로 멀리 건너뛰어도 뒤쪽 요소가 몇 초씩 늦게 뜨지 않게
+    onEnter: (batch) => gsap.to(batch, { opacity: 1, y: 0, duration: .8, ease: 'expo.out', stagger: .08, overwrite: true }),
+  });
+  // full: 커뮤니티 섹션 제목이 단어별로 또렷해진다
+
+  // 창 크기가 바뀌면 고정 위치를 다시 재기 전에 장면 크기부터 다시 맞춘다
+  ScrollTrigger.addEventListener('refreshInit', () => scenes.forEach(fitScene));
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ScrollTrigger.refresh());
+  window.addEventListener('load', () => ScrollTrigger.refresh());
+  let faqRefresh = 0;
+  $$('.faq__list details').forEach((d) => d.addEventListener('toggle', () => {
+    cancelAnimationFrame(faqRefresh);
+    faqRefresh = requestAnimationFrame(() => ScrollTrigger.refresh());
+  }));
+})();
+</script>

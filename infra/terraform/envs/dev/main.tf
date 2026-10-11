@@ -810,7 +810,7 @@ moved {
 
 # ── ETF Orca 랜딩페이지 (etforca.com) ───────────────────
 # 영역과 인증서는 foundation 이 소유한다(route53.tf·acm.tf 의 etforca). 여기서는 조회만 한다.
-# 파일은 이 저장소에 없다 — 버킷에 직접 올린다(index.html·assets/).
+# 파일은 src/apps/cloud/app-landing 에 있고 deploy-app-landing.yml 이 버킷에 올린다(index.html·assets/).
 data "aws_route53_zone" "etforca" {
   name = var.landing_domain
 }
