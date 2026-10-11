@@ -515,13 +515,16 @@ module "gha_deploy_dev" {
     module.app_api.execution_role_arn, module.app_api.task_role_arn,
   ]
 
-  # UI 배포(deploy-ui.yml) 권한 — 프론트 S3 sync + CloudFront 무효화.
-  # tenant-console 은 온프렘 플레인이라 cloud 배포처 없음(ADR-0032) — super-admin 만.
+  # 정적 사이트 배포 권한 — S3 sync + CloudFront 무효화.
+  # super-admin UI(deploy-ui.yml)와 ETF Orca 랜딩페이지(deploy-app-landing.yml)가 쓴다.
+  # tenant-console 은 온프렘 플레인이라 cloud 배포처 없음(ADR-0032).
   ui_bucket_arns = [
     module.super_admin_site.bucket_arn,
+    module.landing_site.bucket_arn,
   ]
   ui_distribution_arns = [
     module.super_admin_site.distribution_arn,
+    module.landing_site.distribution_arn,
   ]
 }
 
