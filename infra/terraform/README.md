@@ -1,6 +1,6 @@
 # infra/terraform
 
-`edge` 의 AWS 인프라를 코드로 정의한다. **완전 그린필드** — 도메인 등록(Route53 존·NS 위임)만 수동이고, 그 아래(SSL·네트워크·컴퓨트·데이터·CDN)는 전부 Terraform 이 소유한다. 다른 계정/region 에서도 `tfvars` 만 바꿔 재현된다.
+`edge` 의 AWS 인프라를 코드로 정의한다. **완전 그린필드** — 도메인 등록(구매·NS 위임)만 수동이고, 그 아래(SSL·네트워크·컴퓨트·데이터·CDN)는 전부 Terraform 이 소유한다. 다른 계정/region 에서도 `tfvars` 만 바꿔 재현된다.
 
 > 배포 토폴로지 결정은 [docs/adr/0009](../../docs/adr/0009-aws-deployment-topology.md), 신뢰 경계는 [docs/context.md](../../docs/context.md) §3.
 
@@ -11,7 +11,7 @@
 ```
 infra/terraform/
 ├── bootstrap/          # 원격 state 그릇(S3 버킷 + 네이티브 락). 자체 state=로컬, 계정당 1회
-├── foundation/         # 계정 전역·장수명: Route53 존 · 와일드카드 ACM ×2(apne2·us-east-1) · ECR · GitHub OIDC provider
+├── foundation/         # 계정 전역·장수명: Route53 존 ×2(edgesignal.dev·etforca.com) · 와일드카드 ACM ×2(apne2·us-east-1) · etforca.com ACM(us-east-1) · ECR · GitHub OIDC provider
 ├── envs/
 │   ├── dev/            # 실 벤더 클라우드 (모듈을 엮음, 구체값은 terraform.tfvars)
 │   └── demo-onprem/    # 가상 온프렘 데모 스택 (EC2 + 프록시 사이트 2종(MTS·콘솔), dev와 별도 state — ADR-0033)

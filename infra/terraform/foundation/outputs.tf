@@ -2,6 +2,11 @@ output "zone_id" {
   value = aws_route53_zone.main.zone_id
 }
 
+output "etforca_name_servers" {
+  description = "가비아 네임서버 설정에 넣을 값(4개). 이 위임이 전파돼야 etforca.com 인증서가 발급된다."
+  value       = aws_route53_zone.etforca.name_servers
+}
+
 output "wildcard_certificate_arn" {
   description = "ap-northeast-2 와일드카드 ACM ARN (ALB 등 리전 서비스용). env 는 data 로 조회해도 됨."
   value       = aws_acm_certificate_validation.wildcard.certificate_arn
