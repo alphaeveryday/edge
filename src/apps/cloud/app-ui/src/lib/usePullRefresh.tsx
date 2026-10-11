@@ -91,8 +91,8 @@ export function usePullRefresh(more?: { onScroll: OnScroll }) {
       </Animated.View>
     </Animated.View>
   );
-  // iOS 관성 스크롤 중 스크롤뷰가 다른 터치를 빼앗는 응답자 재협상 차단
-  return { scroll: { refreshControl, onScroll, scrollEventThrottle: 16, disableScrollViewPanResponder: true }, indicator };
+  // 목록 버튼 위에서 시작한 스크롤이 누름으로 끝나지 않도록 응답자 재협상은 기본값 유지
+  return { scroll: { refreshControl, onScroll, scrollEventThrottle: 16 }, indicator };
 }
 
 // 스크롤 내용 맨 위 바깥, 당겨서 드러나는 자리
