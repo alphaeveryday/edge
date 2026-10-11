@@ -281,6 +281,14 @@ locals {
       command_expr = "States.Array('load-etf-flow', '--run-id', $.run_id, '--input-run-id', $.run_id)"
     },
     {
+      # 지수 일봉 적재(ALPHA-1260) — canonical sector_index_daily → market_series_daily.
+      # 같은 run의 NormalizeSectorIndexDaily manifest가 지목한 direct key와 winner만 읽고,
+      # market_series 에 등록된 지수(코스피·코스닥)만 싣는다.
+      state        = "LoadMarketSeriesDaily"
+      taskdef_key  = "rds"
+      command_expr = "States.Array('load-market-series-daily', '--run-id', $.run_id, '--input-run-id', $.run_id)"
+    },
+    {
       # 장중 투자자 추정 적재(ALPHA-768·1036) — 현재 normalize manifest의 직접 parquet와
       # winner만 읽는다. 결손·손상 시 범위를 전량으로 넓히지 않고 실패한다.
       state        = "LoadInvestorIntraday"
@@ -507,13 +515,13 @@ locals {
     }
   ]
 
-  # LoadPriceDaily·LoadEtfNav·LoadEtfFlow exit 2는 성공 winner를 DB에 보존한 부분 실패다.
-  # 계속 처리하되 마지막 strict gate가 전체 SFN을 FAILED로 닫는다.
+  # LoadPriceDaily·LoadEtfNav·LoadEtfFlow·LoadMarketSeriesDaily exit 2는 성공 winner를 DB에
+  # 보존한 부분 실패다. 계속 처리하되 마지막 strict gate가 전체 SFN을 FAILED로 닫는다.
   feature_non_partial_success_checks = [
     for index, job in local.market_feature_jobs : {
       Variable     = "$.feature_results[${index}].status"
       StringEquals = "succeeded"
-    } if !contains(["LoadPriceDaily", "LoadEtfNav", "LoadEtfFlow"], job.state)
+    } if !contains(["LoadPriceDaily", "LoadEtfNav", "LoadEtfFlow", "LoadMarketSeriesDaily"], job.state)
   ]
   feature_price_index = index(
     [for job in local.market_feature_jobs : job.state],
@@ -587,10 +595,34 @@ locals {
       },
     ]
   }
+  feature_market_series_index = index(
+    [for job in local.market_feature_jobs : job.state],
+    "LoadMarketSeriesDaily",
+  )
+  feature_market_series_continue_check = {
+    Or = [
+      {
+        Variable     = "$.feature_results[${local.feature_market_series_index}].status"
+        StringEquals = "succeeded"
+      },
+      {
+        And = [
+          {
+            Variable  = "$.feature_results[${local.feature_market_series_index}].exit_code"
+            IsPresent = true
+          },
+          {
+            Variable      = "$.feature_results[${local.feature_market_series_index}].exit_code"
+            NumericEquals = 2
+          },
+        ]
+      },
+    ]
+  }
   feature_continue_checks = concat(
     local.feature_non_partial_success_checks,
     [local.feature_price_continue_check, local.feature_etf_nav_continue_check,
-    local.feature_etf_flow_continue_check],
+    local.feature_etf_flow_continue_check, local.feature_market_series_continue_check],
   )
 
   ecs_run_task_base = {
@@ -1049,6 +1081,18 @@ locals {
                 },
                 {
                   Variable      = "$.feature_results[${local.feature_etf_flow_index}].exit_code"
+                  NumericEquals = 2
+                },
+              ]
+            },
+            {
+              And = [
+                {
+                  Variable  = "$.feature_results[${local.feature_market_series_index}].exit_code"
+                  IsPresent = true
+                },
+                {
+                  Variable      = "$.feature_results[${local.feature_market_series_index}].exit_code"
                   NumericEquals = 2
                 },
               ]

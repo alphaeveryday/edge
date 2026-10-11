@@ -349,6 +349,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # 범위를 commit한 부분 성공이므로 downstream dependency를 충족한다(ALPHA-1039).
         depends_on=(
             "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW",
+            "LOAD_MARKET_SERIES_DAILY",
         ),
         fulfilled_exit_codes=(0, 2), sfn_state_name="LoadPriceTriggers",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
@@ -367,6 +368,16 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="LOAD_ETF_FLOW", stage="feature", dataset="investor_flow_load", required=True,
         cli_command=("load-etf-flow",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfFlow",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+        fulfilled_exit_codes=(0, 2),
+    ),
+    # 지수 일봉 적재(ALPHA-1260) — canonical sector_index_daily → market_series_daily. 형제 적재와
+    # 같은 게이트 축이다(ENRICH_CORP_CODE 뒤 FeatureParallel). exit 2 는 성공한 지수를 commit 한
+    # 부분 성공이라 뒤 작업의 의존을 충족한다.
+    CatalogEntry(
+        task_key="LOAD_MARKET_SERIES_DAILY", stage="feature", dataset="market_series_load",
+        required=True, cli_command=("load-market-series-daily",),
+        depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadMarketSeriesDaily",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
         fulfilled_exit_codes=(0, 2),
     ),
