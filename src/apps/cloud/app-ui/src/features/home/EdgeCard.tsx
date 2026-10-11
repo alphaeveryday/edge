@@ -1,12 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Text, View } from 'react-native';
-import { ChangeOnly } from '@/components/ui';
 import { createStyles, useColors, useSignal } from '@/theme/theme';
 import { SIGNAL_ORDER, type Signal, radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 // 관심 그룹 전체의 전망 강도 게이지
-export function EdgeCard({ title, band, score, changePct }: { title: string; band: Signal; score?: number; changePct: number }) {
+export function EdgeCard({ title, band, score, asOf }: { title: string; band: Signal; score?: number; asOf: string }) {
   const styles = useStyles();
   const SIG = useSignal();
   const colors = useColors();
@@ -27,14 +26,11 @@ export function EdgeCard({ title, band, score, changePct }: { title: string; ban
   return (
     <View style={styles.card}>
       <View style={styles.head}>
-        <View style={styles.headL}>
+        <View style={styles.capRow}>
           <Text style={styles.cap}>{title}</Text>
-          <Text style={[styles.band, { color: SIG[band].labelColor }]}>{SIG[band].label}</Text>
+          <Text style={styles.asOf}>{asOf}</Text>
         </View>
-        <View style={styles.headR}>
-          <Text style={styles.cap}>오늘 등락</Text>
-          <ChangeOnly changePct={changePct} size={21} />
-        </View>
+        <Text style={[styles.band, { color: SIG[band].labelColor }]}>{SIG[band].label}</Text>
       </View>
       <View style={styles.track}>
         <View style={styles.segs}>
@@ -51,10 +47,10 @@ export function EdgeCard({ title, band, score, changePct }: { title: string; ban
 
 const useStyles = createStyles((colors) => ({
   card: { marginTop: 14, marginHorizontal: 20, borderRadius: radius.card, backgroundColor: colors.card, paddingTop: 17, paddingHorizontal: 17, paddingBottom: 16, gap: 14 },
-  head: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
-  headL: { flex: 1, gap: 5 },
-  headR: { alignItems: 'flex-end', gap: 4 },
+  head: { gap: 5 },
+  capRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   cap: { fontFamily: fam.regular, fontSize: 12, color: colors.textSub },
+  asOf: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
   band: { fontFamily: fam.extrabold, fontSize: 27, letterSpacing: -0.8, lineHeight: 30 },
   track: { marginTop: 2, height: 9, justifyContent: 'center' },
   segs: { flexDirection: 'row', gap: 3, height: 9 },
