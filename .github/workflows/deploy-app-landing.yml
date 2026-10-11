@@ -25,7 +25,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 무효화 대기(aws cloudfront wait)만 최대 10분(20초 × 30회)이다 — 그보다 길게 둔다(deploy-ui.yml 과 같은 값).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
