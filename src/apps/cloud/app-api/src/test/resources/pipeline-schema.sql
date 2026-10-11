@@ -3,8 +3,14 @@
 CREATE TABLE entity (entity_id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
 CREATE TABLE instrument (
     instrument_id TEXT PRIMARY KEY, market_code VARCHAR(30) NOT NULL, ticker VARCHAR(30) NOT NULL,
-    instrument_type VARCHAR(20) NOT NULL CHECK (instrument_type IN ('ETF', 'EQUITY', 'INDEX')),
+    instrument_type VARCHAR(20) NOT NULL CHECK (instrument_type IN ('ETF', 'EQUITY')),
     UNIQUE (market_code, ticker));
+CREATE TABLE market_series (
+    market_series_id TEXT PRIMARY KEY, series_type VARCHAR(30) NOT NULL, series_name TEXT NOT NULL,
+    source_code VARCHAR(50) NOT NULL, source_series_id TEXT NOT NULL, UNIQUE (source_code, source_series_id));
+CREATE TABLE market_series_daily (
+    market_series_id TEXT NOT NULL REFERENCES market_series, trade_date DATE NOT NULL,
+    close_value NUMERIC(24, 8) NOT NULL, PRIMARY KEY (market_series_id, trade_date));
 CREATE TABLE price_daily (
     instrument_id TEXT NOT NULL, trade_date DATE NOT NULL, close_price NUMERIC(24, 8), volume BIGINT,
     PRIMARY KEY (instrument_id, trade_date));

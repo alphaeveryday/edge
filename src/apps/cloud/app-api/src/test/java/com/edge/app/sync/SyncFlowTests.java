@@ -80,10 +80,11 @@ class SyncFlowTests {
     static void seed(@Autowired JdbcTemplate jdbc) {
         PIPELINE.update("insert into entity values ('i-etf', 'KODEX 반도체'), ('i-a', 'SK하이닉스 보통주'), ('i-b', '삼성전자')");
         PIPELINE.update("insert into instrument values ('i-etf', 'XKRX', '091160', 'ETF'), ('i-a', 'XKRX', '000660', 'EQUITY'), "
-                + "('i-b', 'XKRX', '005930', 'EQUITY'), ('i-kospi', 'XKRX', '1001', 'INDEX')");
+                + "('i-b', 'XKRX', '005930', 'EQUITY')");
         PIPELINE.update("insert into price_daily values ('i-etf', '2026-09-29', 141160, 100), ('i-etf', '2026-09-30', 142700, 200), "
-                + "('i-a', '2026-09-29', 100, 1), ('i-a', '2026-09-30', 110, 1), ('i-b', '2026-09-29', 50, 1), ('i-b', '2026-09-30', 49, 1), "
-                + "('i-kospi', current_date - 2, 2500, null), ('i-kospi', current_date - 1, 2525, null)");
+                + "('i-a', '2026-09-29', 100, 1), ('i-a', '2026-09-30', 110, 1), ('i-b', '2026-09-29', 50, 1), ('i-b', '2026-09-30', 49, 1)");
+        PIPELINE.update("insert into market_series values ('s-kospi', 'INDEX', '코스피', 'KRX', '1001'), ('s-kosdaq', 'INDEX', '코스닥', 'KRX', '2001')");
+        PIPELINE.update("insert into market_series_daily values ('s-kospi', current_date - 2, 2500), ('s-kospi', current_date - 1, 2525)");
         PIPELINE.update("insert into etf_holding_snapshot values ('i-etf', 'i-b', '2026-09-30', 0.2), ('i-etf', 'i-a', '2026-09-30', 0.3)");
 
         // 같은 날 실데이터 발행본과 더 최근 미분류 발행본 중 실데이터만 이전

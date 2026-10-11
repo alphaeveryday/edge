@@ -115,7 +115,7 @@ public class SyncService {
     private void syncIndex(String code, String name) {
         try {
             String id = pipeline.index(code).orElse(null);
-            List<Close> closes = id == null ? List.of() : pipeline.closes(id, LocalDate.now(KST).minusDays(14));
+            List<Close> closes = id == null ? List.of() : pipeline.indexCloses(id, LocalDate.now(KST).minusDays(14));
             if (closes.isEmpty()) {
                 log.info("index sync skipped code={} reason=no-data", code);
                 return;

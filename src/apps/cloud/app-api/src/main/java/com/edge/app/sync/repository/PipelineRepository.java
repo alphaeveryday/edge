@@ -57,8 +57,17 @@ public class PipelineRepository {
     }
 
     public Optional<String> index(String code) {
-        return jdbc.queryForList("select instrument_id from instrument where ticker = ? and instrument_type = 'INDEX'",
-                String.class, code).stream().findFirst();
+        return jdbc.queryForList("""
+                select market_series_id from market_series
+                 where source_code = 'KRX' and source_series_id = ? and series_type = 'INDEX'
+                """, String.class, code).stream().findFirst();
+    }
+
+    public List<Close> indexCloses(String seriesId, LocalDate since) {
+        return jdbc.query("""
+                select trade_date, close_value from market_series_daily
+                 where market_series_id = ? and trade_date >= ? order by trade_date
+                """, (rs, n) -> new Close(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2), null), seriesId, since);
     }
 
     /** since 이후 종가가 있는 일봉의 날짜 오름차순 조회 */
