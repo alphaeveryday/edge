@@ -105,14 +105,18 @@ def _winner(facts: list[dict]) -> tuple[dict | None, str | None]:
 
 
 def _load_violation(fact: dict) -> str | None:
-    """지수 값은 양수·유한이어야 한다. 종가는 필수, 시가·고가·저가는 없을 수 있다."""
+    """지수 값은 표가 담을 수 있는 양수여야 한다. 종가는 필수, 시가·고가·저가는 없을 수 있다.
+
+    컬럼이 NUMERIC(24, 8) 이다 — 소수 8자리로 반올림해 0 이 되는 값은 양수 계약을 깨고, 정수부가
+    16자리를 넘는 값은 INSERT 가 실패해 실행 전체를 롤백시킨다. 둘 다 여기서 거른다.
+    """
     for name in _VALUES:
         value = fact[name]
         if value is None and name != "close":
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return f"invalid_{name}"
-        if not math.isfinite(value) or value <= 0:
+        if not math.isfinite(value) or not 0 < round(value, 8) < 1e16:
             return f"invalid_{name}"
     return None
 

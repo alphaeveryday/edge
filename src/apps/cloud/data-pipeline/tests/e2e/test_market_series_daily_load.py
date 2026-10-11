@@ -20,8 +20,9 @@ pytestmark = pytest.mark.skipif(
     reason="ephemeral Postgres 필요 — CI e2e job 전용(E2E_PGHOST 미설정)",
 )
 
-SERIES_ID = "series_e2e_alpha_1260"
-CODE, UNREGISTERED = "9960", "9961"
+SERIES_ID, OTHER_SERIES_ID = "series_e2e_alpha_1260", "series_e2e_alpha_1260_b"
+# 등록된 지수 둘과 미등록 코드 하나.
+CODE, OTHER_CODE, UNREGISTERED = "9960", "9962", "9961"
 D1, D2 = "2026-07-01", "2026-07-02"
 T1, T2, T3, T4 = (f"2026-07-0{day}T06:41:00+00:00" for day in (2, 3, 4, 5))
 
@@ -62,14 +63,14 @@ def _write_partition(storage, trade_date: str, rows: list[dict]) -> None:
         f"{SPEC.canonical_partition('KR', trade_date)}/part-00000.parquet", _parquet(rows))
 
 
-def _loaded(pg: dict) -> list[tuple]:
+def _loaded(pg: dict, series_id: str = SERIES_ID) -> list[tuple]:
     import psycopg
 
     with psycopg.connect(**pg) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT trade_date::text, open_value, high_value, low_value, close_value,"
             " available_at, data_version FROM market_series_daily"
-            " WHERE market_series_id = %s ORDER BY trade_date", (SERIES_ID,))
+            " WHERE market_series_id = %s ORDER BY trade_date", (series_id,))
         return cur.fetchall()
 
 
@@ -80,26 +81,28 @@ def _expected(trade_date: str, close: str, fetched_at: str, data_version: str) -
 
 @pytest.fixture
 def env(tmp_path):
-    """등록된 시험 지수 한 개와 빈 레이크. 끝나면 지수와 그 값 행을 지운다(FK CASCADE)."""
+    """등록된 시험 지수 두 개와 빈 레이크. 끝나면 지수와 그 값 행을 지운다(FK CASCADE)."""
     import psycopg
 
     from data_pipeline.config import DbConfig
     from data_pipeline.lake import LocalStorage
 
     pg = _pg_kwargs()
+    series = [SERIES_ID, OTHER_SERIES_ID]
     with psycopg.connect(**pg) as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM market_series WHERE market_series_id = %s", (SERIES_ID,))
-        cur.execute(
-            "INSERT INTO market_series (market_series_id, series_type, series_name,"
-            " source_code, source_series_id, market_code)"
-            " VALUES (%s, 'INDEX', 'e2e 지수', 'KRX', %s, 'XKRX')", (SERIES_ID, CODE))
+        cur.execute("DELETE FROM market_series WHERE market_series_id = ANY(%s)", (series,))
+        for series_id, code in ((SERIES_ID, CODE), (OTHER_SERIES_ID, OTHER_CODE)):
+            cur.execute(
+                "INSERT INTO market_series (market_series_id, series_type, series_name,"
+                " source_code, source_series_id, market_code)"
+                " VALUES (%s, 'INDEX', 'e2e 지수', 'KRX', %s, 'XKRX')", (series_id, code))
     db = DbConfig(host=pg["host"], port=pg["port"], name=pg["dbname"],
                   user=pg["user"], password=pg["password"], sslmode="disable")
     try:
         yield pg, db, LocalStorage(tmp_path / "lake")
     finally:
         with psycopg.connect(**pg) as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM market_series WHERE market_series_id = %s", (SERIES_ID,))
+            cur.execute("DELETE FROM market_series WHERE market_series_id = ANY(%s)", (series,))
 
 
 def test_등록된_지수만_실리고_더_늦은_관측만_행을_바꾼다(env):
@@ -142,7 +145,8 @@ def test_정기_경로는_정제_manifest가_지목한_winner만_싣는다(env):
     from data_pipeline.steps.normalize_sector_index_daily import SPEC
 
     pg, db, storage = env
-    parquet = _parquet([_row(CODE, D2, 200.0, T3), _row("9962", D2, 70.0, T3)])
+    # 파일에는 등록된 지수가 둘 다 있지만 이 실행의 winner 는 하나다.
+    parquet = _parquet([_row(CODE, D2, 200.0, T3), _row(OTHER_CODE, D2, 70.0, T3)])
     key = canonical_run_partition_key(SPEC.dataset, "e2e-1260-n", D2)
     storage.put_bytes(key, parquet)
     storage.put_bytes(canonical_run_manifest_key(SPEC.dataset, "e2e-1260-n"), json.dumps({
@@ -157,3 +161,5 @@ def test_정기_경로는_정제_manifest가_지목한_winner만_싣는다(env):
     assert run(storage, "e2e-1260-load", db=db, input_run_id="e2e-1260-n") == 0
     # data_version 은 값을 확정한 정제 실행이다(적재 실행 ID 가 아니다).
     assert _loaded(pg) == [_expected(D2, "200.0", T3, "e2e-1260-n")]
+    # winner 가 아닌 행은 등록된 지수여도 싣지 않는다 — 이 실행이 확정하지 않은 값이다.
+    assert _loaded(pg, OTHER_SERIES_ID) == []
