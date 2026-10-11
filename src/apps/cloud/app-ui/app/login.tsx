@@ -1,5 +1,4 @@
 import { useMutation } from '@tanstack/react-query';
-import * as AppleAuthentication from 'expo-apple-authentication';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
@@ -8,6 +7,7 @@ import { api, isApiError, type SocialProvider } from '@/api';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { AuthBrand } from '@/features/auth/AuthBrand';
+import { AppleButton } from '@/features/auth/AppleButton';
 import { KakaoButton } from '@/features/auth/KakaoButton';
 import { kakaoLogin } from '@/features/auth/kakao';
 import { appleLogin, useAppleAvailable } from '@/features/auth/apple';
@@ -16,7 +16,6 @@ import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useToast } from '@/store/toast';
 import { createStyles, useScheme } from '@/theme/theme';
-import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
 
 // 로그인이 필요한 동작에서 들어왔을 때의 안내
@@ -114,15 +113,7 @@ export default function Login() {
         <View style={styles.orLine} />
       </View>
       <View style={styles.social}>
-        {apple && (
-          <AppleAuthentication.AppleAuthenticationButton
-            buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-            buttonStyle={scheme === 'dark' ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-            cornerRadius={radius.button}
-            style={styles.apple}
-            onPress={() => start('apple')}
-          />
-        )}
+        {apple && <AppleButton dark={scheme === 'dark'} disabled={social.isPending} onPress={() => start('apple')} />}
         <KakaoButton disabled={social.isPending} onPress={() => start('kakao')} />
         {!!socialErr && <Text style={styles.err}>{socialErr}</Text>}
         <Text style={styles.terms}>계속하면 <Text style={styles.termsLink} onPress={openTerms}>이용약관</Text>과 <Text style={styles.termsLink} onPress={openPrivacy}>개인정보 처리방침</Text>에 동의하고 만 14세 이상임을 확인한 것으로 봐요.</Text>
@@ -143,7 +134,6 @@ const useStyles = createStyles((colors) => ({
   orLine: { flex: 1, height: 1, backgroundColor: colors.line },
   orText: { fontFamily: fam.medium, fontSize: 13, color: colors.textMuted },
   social: { gap: 12, marginTop: 20, paddingHorizontal: 24 },
-  apple: { height: 54, alignSelf: 'stretch' },
   terms: { textAlign: 'center', fontFamily: fam.regular, fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   termsLink: { fontFamily: fam.semibold, color: colors.textSub, textDecorationLine: 'underline' },
 }));
