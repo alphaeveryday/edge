@@ -712,6 +712,109 @@ def test_operating_income_is_read_from_the_ifrs_account_only_when_the_dart_accou
     assert operating(twice) == ([], [["ambiguous_account_line"]])
 
 
+def test_basic_eps_split_into_continuing_and_discontinued_lines_is_summed():
+    # WHY(ALPHA-1170): 기본 EPS 를 합계 한 줄이 아니라 계속영업·중단영업 두 줄로 적는 회사가 있다(2026-10-11 수집분의 연결
+    # 재무제표 37곳). 합계 줄만 읽어 그 회사들의 EPS 가 비었고, 그 종목을 담은 ETF 의 가중 PER 이 나오지 않았다. 합계는 두
+    # 줄의 합이다. 계속영업 줄 하나를 합계로 읽으면 안 된다 — 중단영업 EPS 를 다른 id 로 적은 회사는 그 값이 합계와 다르다.
+    corp = {"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}
+    total, continuing, discontinued = (f"ifrs-full_BasicEarningsLossPerShare{suffix}" for suffix in (
+        "", "FromContinuingOperations", "FromDiscontinuedOperations"))
+    profit_id = "ifrs-full_ProfitLossFromDiscontinuedOperations"
+
+    def eps(body, code="11012"):
+        rows, rejects = dart_fundamental.extract(corp, "2026", code, "CFS", {"body_json": body}, None)
+        return ([(r["period_kind"], r["value"], [(i["account_id"], i["field"], i["value"]) for i in r["inputs"]])
+                 for r in rows if r["metric"] == "eps_basic"],
+                [r["reasons"] for r in rejects if r.get("metric") == "eps_basic"])
+
+    def split(amounts=("-100", "-150"), names=("계속영업기본주당이익(손실)", "중단영업기본주당이익(손실)"),
+              profit=("-5,000", "-7,500"), code="11012", **profit_line):
+        """합계 줄(반기: 3개월 1,200 · 누적 2,300)을 계속영업 줄로 바꾸고 중단영업 EPS 줄과 중단영업손익 줄을 붙인 재무제표."""
+        body = json.loads(statement(SAMSUNG, "2026", code, "CFS"))
+        line = _line(body["list"], total)
+        line.update(account_id=continuing, account_nm=names[0])
+        if amounts is not None:
+            body["list"].append({**line, "account_id": discontinued, "account_nm": names[1],
+                                 "thstrm_amount": amounts[0], "thstrm_add_amount": amounts[1]})
+            body["list"].append({**line, "account_id": profit_id, "account_nm": "중단영업이익(손실)",
+                                 "thstrm_amount": profit[0], "thstrm_add_amount": profit[1], **profit_line})
+        return body
+
+    def values(result):
+        return [(kind, value) for kind, value, _ in result[0]], result[1]
+
+    quarter, cumulative = "thstrm_amount", "thstrm_add_amount"
+    assert eps(split()) == ([("QUARTER", "1100", [(continuing, quarter, "1200"), (discontinued, quarter, "-100")]),
+                             ("CUMULATIVE", "2150", [(continuing, cumulative, "2300"), (discontinued, cumulative, "-150")])],
+                            [])
+    # 합산한 값임을 행에 남긴다 — 공시 원값 한 줄을 그대로 옮긴 행과 구분된다.
+    extracted, _ = dart_fundamental.extract(corp, "2026", "11012", "CFS", {"body_json": split()}, None)
+    assert {r["formula"] for r in extracted if r["metric"] == "eps_basic"} == {dart_fundamental.SPLIT_FORMULA}
+    # 중단영업 칸이 비면 0 이다(중단영업이 없는 기간) — 근거 줄에는 빈 칸이었다는 사실이 남는다.
+    rows, rejects = eps(split(("", ""), profit=("", "")))
+    assert values((rows, rejects)) == ([("QUARTER", "1200"), ("CUMULATIVE", "2300")], [])
+    assert rows[0][2] == [(continuing, quarter, "1200"), (discontinued, quarter, None)]
+    # 계속영업 줄만 있으면 합계로 읽지 않는다.
+    assert eps(split(None)) == ([], [["account_unsupported"]])
+    # 줄 이름이 그 뜻이 아니면 더하지 않는다 — 실응답에 중단영업 id 로 희석 EPS 를 적은 회사가 있어, 더하면 두 배가 된다.
+    # 두 줄을 따로 본다: 더하는 줄이 중단영업 EPS 가 아니거나, 계속영업 id 의 줄이 이미 합계(이름에 '계속'이 없다)일 수 있다.
+    for names in (("계속영업기본주당이익", "희석주당순이익"), ("기본주당이익", "중단영업기본주당이익"),
+                  ("계속영업기본주당이익", "중단영업희석주당이익"), ("계속영업희석주당이익", "중단영업기본주당이익")):
+        assert eps(split(names=names)) == ([], [["account_unsupported"]]), names
+    assert values(eps(split(names=("계속영업기본및희석주당이익", "중단영업기본및희석주당이익"))))[1] == []   # 겸용 줄은 읽는다
+    # 읽는 줄의 칸이 깨졌으면 "지원하지 않는 계정"으로 접지 않는다 — 정제가 그 판본을 확정하지 않게 사유가 남아야 한다.
+    assert eps(split(names=(123, "중단영업기본주당이익"))) == ([], [["account_name_unreadable"]])
+    assert eps(split(names=("계속영업기본주당이익", ["중단"]))) == ([], [["account_name_unreadable"]])
+    # 중단영업 칸에 값이 있는데 숫자로 읽히지 않으면 계속영업 값만으로 합계를 만들지 않는다.
+    assert values(eps(split(("오류", "-150")))) == ([("CUMULATIVE", "2150")], [["amount_unreadable"]])
+    # 그 칸은 값을 읽는 칸이므로 응답 파손으로도 잡힌다 — 같은 보고서의 다른 거부가 결손으로 세어지지 않는다.
+    assert dart_fundamental.response_damage(split(("오류", "-150"))["list"], None, "2026-06-30") == ["amount_unreadable"]
+    assert dart_fundamental.response_damage(split()["list"], None, "2026-06-30") == []
+    # 0 아닌 중단영업 EPS 는 같은 재무제표의 그 기간 칸에 중단영업손익이 있을 때만 더한다 — 실응답에 중단영업이 없는
+    # 분기인데 계속영업 EPS 와 같은 값을 그 칸에 적은 재무제표가 있어, 더하면 두 배가 된다. 칸마다 본다.
+    assert values(eps(split(("1200", "-150"), profit=("", "-7,500")))) == (
+        [("CUMULATIVE", "2150")], [["account_unsupported"]])
+    assert values(eps(split(("1200", "-150"), profit=("0", "-7,500")))) == (
+        [("CUMULATIVE", "2150")], [["account_unsupported"]])
+    # 근거는 같은 재무제표의 중단영업손익 줄뿐이다 — 다른 재무제표의 줄, 이름만 비슷한 줄, 포괄손익·주당 줄은 근거가 아니다.
+    for other in ({"sj_div": "CIS"}, {"account_id": "-표준계정코드 미사용-", "account_nm": "중단영업 관련 기타포괄손익"},
+                  {"account_id": "ifrs-full_ComprehensiveIncomeFromDiscontinuedOperationsAttributableToOwnersOfParent"},
+                  {"account_id": "ifrs-full_ProfitLossFromDiscontinuedOperationsAttributableToNoncontrollingInterests"},
+                  {"account_id": "ifrs-full_DilutedEarningsLossPerShareFromDiscontinuedOperations"}):
+        assert eps(split(**other)) == ([], [["account_unsupported"], ["account_unsupported"]]), other
+    assert values(eps(split(account_id="ifrs-full_IncomeFromDiscontinuedOperationsAttributableToOwnersOfParent")))[1] == []
+    # 근거 칸에 값이 있는데 숫자로 읽히지 않으면 "근거 없음"이 아니라 "읽지 못함"이다.
+    assert values(eps(split(profit=("NaN", "-7,500")))) == ([("CUMULATIVE", "2150")], [["amount_unreadable"]])
+    # 1분기는 3개월 = 누적이다. 누적 칸의 대체는 줄마다 따로 본다 — 계속영업 줄 기준으로만 정하면 누적 칸이 빈
+    # 중단영업 줄이 0 으로 더해져 3개월 값과 누적 값이 달라진다(1분기 합계 줄: 3개월 1,100 · 누적 1,100).
+    assert eps(split(("-100", ""), profit=("-5,000", ""), code="11013"), "11013") == (
+        [("QUARTER", "1000", [(continuing, quarter, "1100"), (discontinued, quarter, "-100")]),
+         ("CUMULATIVE", "1000", [(continuing, cumulative, "1100"), (discontinued, quarter, "-100")])], [])
+    # 반대로 채워진 줄도 같다(중단영업 줄은 누적 칸만, 계속영업 줄은 3개월 칸만).
+    reverse = split(("", "-100"), profit=("", "-5,000"), code="11013")
+    _line(reverse["list"], continuing)["thstrm_add_amount"] = ""
+    assert eps(reverse, "11013") == (
+        [("QUARTER", "1000", [(continuing, quarter, "1100"), (discontinued, cumulative, "-100")]),
+         ("CUMULATIVE", "1000", [(continuing, quarter, "1100"), (discontinued, cumulative, "-100")])], [])
+    # 빈 칸의 판정은 금액 칸의 빈 칸 판정과 같다(`-`·공백 포함) — 다르면 `-` 로 적힌 칸이 0 으로 더해진다.
+    for blank in ("-", " "):
+        assert values(eps(split((blank, "-100"), profit=(blank, "-5,000"), code="11013"), "11013")) == (
+            [("QUARTER", "1000"), ("CUMULATIVE", "1000")], []), blank
+    # 두 칸이 다 비었으면 물은 칸 그대로 "빈 칸"으로 남긴다(근거 줄의 칸 이름이 행의 기간과 어긋나지 않게).
+    rows, _ = eps(split(("", ""), profit=("", ""), code="11013"), "11013")
+    assert [inputs[1] for _, _, inputs in rows] == [(discontinued, quarter, None), (discontinued, cumulative, None)]
+    # 1분기가 아니면 칸을 바꿔 읽지 않는다 — 반기의 3개월 값과 누적 값은 다른 값이다.
+    assert values(eps(split(("", "-150"), profit=("", "-7,500")))) == ([("QUARTER", "1200"), ("CUMULATIVE", "2150")], [])
+    # 합계 줄이 있으면 그 줄이 우선이다 — 나눠 적은 줄이 함께 와도 값이 바뀌지 않는다.
+    both = split()
+    both["list"].append({**_line(both["list"], continuing), "account_id": total, "account_nm": "기본주당이익",
+                         "thstrm_amount": "7", "thstrm_add_amount": "9"})
+    assert eps(both) == ([("QUARTER", "7", [(total, quarter, "7")]), ("CUMULATIVE", "9", [(total, cumulative, "9")])], [])
+    # 계속영업 줄이 둘이면 고르지 않는다(합계 줄과 같은 규칙).
+    twice = split()
+    twice["list"].append(dict(_line(twice["list"], continuing)))
+    assert eps(twice) == ([], [["account_unsupported"]])
+
 def test_share_class_labels_with_the_same_meaning_are_read():
     # WHY(ALPHA-1170): 주식총수 표의 종류 표기는 회사마다 다르다. `보통주식`·`우선주식` 은 `보통주`·`우선주` 와 같은 말인데
     # 읽지 않아, 우선주가 없는 회사의 보통주 BPS 까지 "종류 수를 모른다"로 막혔다(2026 반기 실응답 375곳 중 78곳이 다른 표기).

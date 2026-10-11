@@ -14,6 +14,8 @@
   달라 근사다(매출·영업이익은 정확히 성립).
 - EPS 는 기본주당이익(`ifrs-full_BasicEarningsLossPerShare`)·희석(`…Diluted…`)의 표준계정 줄만 쓴다.
   같은 계정이 여러 줄이면 이름에 '우선주'가 없는 줄 하나만 보통주로 받고, 그래도 여럿이면 거부한다.
+  기본주당이익 합계 줄 없이 계속영업·중단영업 두 줄로 나눠 적은 재무제표는 두 줄을 더해 읽는다(`_SPLIT_ACCOUNTS`).
+  계속영업 줄만 있으면 읽지 않는다. 희석주당이익은 나눠 적은 줄을 읽지 않는다.
 - BPS 는 공시값이 없어 계산한다: 지배기업 소유주지분(연결) 또는 자본총계(별도) ÷ (발행주식총수 − 자기주식수),
   주식수는 `stockTotqySttus` 의 '합계'(보통주+우선주) 행. 기준시점은 보고기간 말이다. 소수 6자리 반올림.
 - 연결(CFS)·별도(OFS)를 둘 다 받아 fs_basis 로 가른다. 한 회사 안에서 섞지 않는 선택 규칙은 DB 조회 함수가 진다.
@@ -57,6 +59,21 @@ _FLOW_ACCOUNTS = {
 # 메리츠금융지주가 보고서마다 두 id 를 바꿔 쓰는데 값이 이어진다(2026 반기 누적 − 2분기 = 1분기보고서의 값, ALPHA-1170).
 # 이름이 비슷한 다른 계정(기타영업손익·영업수익)이나 매출·EPS 의 대체 계정은 넣지 않는다 — 의미 확인이 필요하다.
 _EQUIVALENT_ACCOUNTS = {"dart_OperatingIncomeLoss": "ifrs-full_ProfitLossFromOperatingActivities"}
+# 기본 EPS 합계 줄 없이 계속영업·중단영업 두 줄로 나눠 적은 재무제표 — 두 줄을 더해 합계로 읽는다(대체가 아니라 합산).
+# 근거(2026-10-11 수집분, 재무제표 4,899개): 세 줄이 함께 온 재무제표의 124개 금액 칸 전부에서 합계 = 계속 + 중단이다
+# (차이 1원 이내 — 줄마다 따로 반올림한다. 중단영업 칸이 빈 7칸도 계속 = 합계). 합계 줄이 없는 재무제표는 연결 145개,
+# 별도 53개였고 그중 이 규칙으로 읽는 것이 연결 108개(회사 37곳), 별도 33개(15곳)다.
+# 계속영업 줄만 있으면 읽지 않는다 — 합계와 함께 온 193칸 가운데 65칸(회사 13곳)이 합계와 달랐다(중단영업 EPS 를
+# 다른 id 로 적는다). 줄 이름도 본다 — 중단영업 id 에 희석 EPS 를 적은 회사가 있어 더하면 두 배가 된다.
+# 0 이 아닌 중단영업 EPS 는 같은 재무제표의 같은 기간 칸에 중단영업손익이 있을 때만 더한다 — 중단영업이 없는 분기에
+# 계속영업 EPS 와 같은 값을 중단영업 칸에 적은 재무제표가 있었다(1개, 값이 있는 120칸 가운데 2칸). 중단영업손익 줄은
+# 아래 두 id 줄기로만 찾는다(지배기업 귀속 줄 포함, 비지배지분 귀속 줄 제외 — 보통주 EPS 의 근거가 아니다). 이름으로
+# 찾지 않는다 — 포괄손익·주당 줄이 함께 걸린다.
+_SPLIT_ACCOUNTS = {"ifrs-full_BasicEarningsLossPerShare": (
+    "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations",
+    "ifrs-full_BasicEarningsLossPerShareFromDiscontinuedOperations")}
+_DISCONTINUED_PROFIT_STEMS = ("ifrs-full_ProfitLossFromDiscontinuedOperations",
+                              "ifrs-full_IncomeFromDiscontinuedOperations")
 _EQUITY_ACCOUNT = {"CFS": "ifrs-full_EquityAttributableToOwnersOfParent", "OFS": "ifrs-full_Equity"}
 _UNITS = {"revenue": "KRW", "operating_income": "KRW", "eps_basic": "KRW_per_share",
           "eps_diluted": "KRW_per_share", "bps": "KRW_per_share", "bps_total_shares": "KRW_per_share"}
@@ -112,7 +129,8 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
     "원화 아님"으로, 깨진 종류 행은 "행 없음"으로 읽히기 때문이다. 검사 범위는 지표 해석이 기대는 칸뿐이다.
     """
     problems: set[str] = set()
-    used = set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
+    used = (set(_FLOW_ACCOUNTS.values()) | set(_EQUIVALENT_ACCOUNTS.values()) | set(_EQUITY_ACCOUNT.values())
+            | {account for pair in _SPLIT_ACCOUNTS.values() for account in pair})
     for line in lines:
         # 정제가 읽는 칸은 전부 문자열(또는 없음)이다 — 숫자·배열·객체로 온 칸은 뒤 단계가 조용히 다른 값으로 바꿔 읽는다
         # (빈 배열인 사업연도는 요청 연도로 대체되고, 숫자 접수번호는 문자열 검사를 통과한다).
@@ -181,6 +199,7 @@ BPS_FORMULA = ("bps = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 
 BPS_TOTAL_FORMULA = ("bps_total_shares = equity / (istc_totqy - tesstk_co); equity = {account}(BS, 기말); "
                      "주식수 = stockTotqySttus se=합계(보통주+우선주, 통상 관행); 소수 6자리 ROUND_HALF_UP")
 Q4_FORMULA = "Q4 = FY(사업보고서 thstrm_amount) - 9M(3분기보고서 thstrm_add_amount)"
+SPLIT_FORMULA = "합계 = 계속영업 + 중단영업(같은 재무제표·같은 기간의 금액 칸, 중단영업 빈 칸은 0)"
 
 
 @dataclass(frozen=True)
@@ -385,6 +404,53 @@ def _pick_line(lines: list[dict], account_id: str, statements: tuple[str, ...]) 
     return None, "account_not_found"
 
 
+def _split_lines(lines: list[dict], continuing_id: str, discontinued_id: str,
+                 ) -> tuple[dict | None, dict | None, str | None]:
+    """합계 줄 대신 더할 (계속영업 줄, 중단영업 줄, 사유). 같은 재무제표에 한 줄씩 있고 이름이 그 뜻일 때만 준다.
+
+    줄을 주지 않을 때의 사유는 둘이다. 줄 파손(`UNREADABLE_LINE_REASONS`)은 그대로 돌려준다 — 읽는 줄이므로 합계 줄과
+    같이 판본을 확정하지 않게 한다. 그 밖(줄 없음·여러 줄·이름이 다름)은 `account_not_found` 다 — 호출자가 종전대로
+    "지원하지 않는 계정"으로 거부한다(`_SPLIT_ACCOUNTS` 의 근거 참조).
+    """
+    continuing, problem = _pick_line(lines, continuing_id, ("IS", "CIS"))
+    discontinued = None
+    if continuing is not None:
+        discontinued, problem = _pick_line(lines, discontinued_id, (continuing["sj_div"],))
+    if problem in UNREADABLE_LINE_REASONS:
+        return None, None, problem
+
+    def named(line: dict, word: str) -> bool:
+        """이름에 그 말이 있고 희석 전용 줄이 아니다(`_similar_line` 과 같은 희석 판정)."""
+        name = line.get("account_nm") or ""
+        return word in name and not ("희석" in name and "기본" not in name)
+    if discontinued is None or not (named(continuing, "계속") and named(discontinued, "중단")):
+        return None, None, "account_not_found"
+    return continuing, discontinued, None
+
+
+def _period_field(line: dict, field: str, code: str) -> str:
+    """그 줄에서 읽을 금액 칸. 1분기는 3개월 = 누적이라, 물은 칸이 비었고(`_blank`) 다른 쪽 칸에 무엇이 있으면 그 칸이다.
+
+    줄마다 따로 정한다 — 계속영업 줄이 고른 칸을 그대로 쓰면, 채워진 칸이 다른 줄의 값이 0 으로 더해진다.
+    """
+    other = "thstrm_add_amount" if field == "thstrm_amount" else "thstrm_amount"
+    return other if code == "11013" and _blank(line.get(field)) and not _blank(line.get(other)) else field
+
+
+def _discontinued_profit_problem(lines: list[dict], sj_div: str, field: str, code: str) -> str | None:
+    """0 이 아닌 중단영업 EPS 를 더하지 못하는 사유(더해도 되면 None).
+
+    같은 재무제표의 중단영업손익 줄(`_DISCONTINUED_PROFIT_STEMS`)에 그 기간 칸의 0 아닌 값이 있어야 한다. 그 칸에 값이
+    있는데 숫자로 읽히지 않으면 근거가 "없다"가 아니라 "읽지 못했다"이다.
+    """
+    cells = [ln.get(_period_field(ln, field, code)) for ln in lines
+             if ln.get("sj_div") == sj_div and str(ln.get("account_id")).startswith(_DISCONTINUED_PROFIT_STEMS)
+             and "NoncontrollingInterests" not in str(ln.get("account_id"))]
+    if any(not _blank(cell) and _amount(cell) is None for cell in cells):
+        return "amount_unreadable"
+    return None if any(_amount(cell) for cell in cells) else "account_unsupported"
+
+
 def _currency_problem(line: dict) -> str | None:
     """값을 읽을 줄의 통화 판정. 원화면 None.
 
@@ -406,7 +472,7 @@ def _period_end(year: str, code: str) -> str:
 
 def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shares: dict | None,
             ) -> tuple[list[dict], list[dict]]:
-    """한 보고서·한 기준의 전체 재무제표 → 지표 행(공시 원값·BPS). 입력 근거를 행마다 남긴다."""
+    """한 보고서·한 기준의 전체 재무제표 → 지표 행(공시 원값·나눠 적은 기본 EPS 의 합·BPS). 입력 근거를 행마다 남긴다."""
     rows, rejects = [], []
     # 접수번호·종목코드 형식이 틀린 판본은 DB CHECK 에서 그 실행의 적재 전체를 롤백시킨다 — 여기서 거른다.
     lines = [ln for ln in statement["body_json"]["list"] if isinstance(ln, dict)]
@@ -425,12 +491,17 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
         if problem == "account_not_found" and account_id in _EQUIVALENT_ACCOUNTS:
             account_id = _EQUIVALENT_ACCOUNTS[account_id]          # 근거 줄(inputs)에는 실제로 읽은 id 가 남는다
             line, problem = _pick_line(lines, account_id, ("IS", "CIS"))
+        added = None                        # 합계 줄 대신 계속영업 줄을 읽을 때 함께 더하는 중단영업 줄
+        if problem == "account_not_found" and account_id in _SPLIT_ACCOUNTS:
+            line, added, problem = _split_lines(lines, *_SPLIT_ACCOUNTS[account_id])
+            if line is not None:
+                account_id = _SPLIT_ACCOUNTS[account_id][0]
         if line is None:
             if problem == "account_not_found" and _similar_line(lines, metric):
                 problem = "account_unsupported"
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
-        if problem := _currency_problem(line):
+        if problem := _currency_problem(line) or (added and _currency_problem(added)):
             rejects.append({**base, "metric": metric, "reprt_code": code, "reasons": [problem]})
             continue
         if code == "11011":
@@ -448,12 +519,29 @@ def extract(corp: dict, year: str, code: str, fs_div: str, statement: dict, shar
                 reason = "missing_value" if _blank(line.get(field)) else "amount_unreadable"
                 rejects.append({**base, "metric": metric, "reprt_code": code, "field": field, "reasons": [reason]})
                 continue
+            inputs = [{"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": line.get("sj_div"),
+                       "account_id": account_id, "account_nm": line.get("account_nm"),
+                       "field": field, "value": str(value)}]
+            if added is not None:
+                # 중단영업 칸이 비면 0 이다(중단영업이 없는 기간). 비지 않았는데 숫자로 읽히지 않으면 합계를 만들지 않는다.
+                added_field = _period_field(added, field, code)
+                extra, problem = _amount(added.get(added_field)), None
+                if extra is None and not _blank(added.get(added_field)):
+                    problem = "amount_unreadable"
+                elif extra:
+                    problem = _discontinued_profit_problem(lines, line["sj_div"], field, code)
+                if problem:
+                    rejects.append({**base, "metric": metric, "reprt_code": code, "field": added_field,
+                                    "reasons": [problem]})
+                    continue
+                inputs.append({**inputs[0], "rcept_no": added["rcept_no"], "account_id": added["account_id"],
+                               "account_nm": added.get("account_nm"), "field": added_field,
+                               "value": None if extra is None else str(extra)})
+                value += extra or 0
             rows.append({**base, "fiscal_period": fiscal_period, "metric": metric, "period_kind": period_kind,
-                         "derivation": "REPORTED", "value": str(value), "unit": _UNITS[metric], "formula": None,
-                         "rcept_no": line["rcept_no"],
-                         "inputs": [{"rcept_no": line["rcept_no"], "reprt_code": code, "sj_div": line.get("sj_div"),
-                                     "account_id": account_id, "account_nm": line.get("account_nm"),
-                                     "field": field, "value": str(value)}]})
+                         "derivation": "REPORTED", "value": str(value), "unit": _UNITS[metric],
+                         "formula": SPLIT_FORMULA if added is not None else None,
+                         "rcept_no": line["rcept_no"], "inputs": inputs})
     rows.extend(_bps(base, period if code != "11011" else "Q4", code, fs_div, lines, shares, rejects))
     return rows, rejects
 

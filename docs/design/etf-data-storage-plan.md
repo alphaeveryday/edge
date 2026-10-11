@@ -309,6 +309,9 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 - 같은 실행 안의 중복 논리 키: 값이 같으면 접고(`collapsed_duplicates`), 다르면 그 키를 격리한다(`conflicting_duplicate`).
 - DB 행마다 `raw_run_id·raw_key·raw_sha256·canonical_run_id·artifact_key·artifact_sha256`이 있어 조회 결과에서 원문까지 간다.
   재무는 `inputs`(JSONB)에 근거 줄(접수번호·보고서·계정 ID·금액 필드·값·raw 키)과 `formula`를 둔다.
+  기본 EPS 를 합계 줄 없이 계속영업·중단영업 두 줄로 적은 재무제표는 두 줄의 합을 싣는다. 이 행의 `derivation` 은
+  `REPORTED` 그대로이고, `formula` 와 `inputs`(두 줄)가 합산임을 알린다(ALPHA-1170, 조건은 `dart_fundamental.py` 의
+  `_SPLIT_ACCOUNTS` 주석).
 
 **보존과 복구(2026-09-30 로컬 실측으로 확정 — `tests/e2e/test_source_observations_pg.py::test_artifact_expiry_recovery_paths`).**
 과거 재현의 근거로 약속하는 것은 **만료가 없는 raw·raw manifest·canonical manifest 와 DB 판본 이력**이다. 실행별 artifact 는
