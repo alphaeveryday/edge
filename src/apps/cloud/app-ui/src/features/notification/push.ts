@@ -23,7 +23,8 @@ export async function registerPush(ask: boolean) {
     if (!granted && ask && canAskAgain) granted = (await Notifications.requestPermissionsAsync()).granted;
     if (!granted) return;
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', { name: '기본', importance: Notifications.AndroidImportance.DEFAULT });
+      // 중요도는 채널 생성 뒤 앱이 못 바꾸어 팝업용 HIGH 채널을 새 ID 로 생성
+      await Notifications.setNotificationChannelAsync('replies', { name: '답글 알림', importance: Notifications.AndroidImportance.HIGH });
     }
     const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
     const { data } = await Notifications.getExpoPushTokenAsync({ projectId });
