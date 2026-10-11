@@ -4,12 +4,13 @@
 
 ## 현재 범위
 
-와일드카드 ACM(`acm.tf`, 아래 표), Route53 호스팅 영역(`route53.tf`, 기존 존 import), 이미지 ECR 저장소(`ecr.tf`), GitHub OIDC provider(`oidc.tf`), Terraform CD 역할 `edge-tf-plan`·`edge-tf-apply`(`tf-cd.tf`).
+ACM 인증서(`acm.tf`, 아래 표), Route53 호스팅 영역 2개(`route53.tf` — `edgesignal.dev` 는 기존 존 import, `etforca.com` 은 신규 생성), 이미지 ECR 저장소(`ecr.tf`), GitHub OIDC provider(`oidc.tf`), Terraform CD 역할 `edge-tf-plan`·`edge-tf-apply`(`tf-cd.tf`).
 
 | 자원 | 리전 | 소비자 |
 |------|------|--------|
 | `*.edgesignal.dev` ACM | ap-northeast-2 | ALB 등 리전 서비스 |
 | `*.edgesignal.dev` ACM | us-east-1 | CloudFront(정적 사이트) |
+| `etforca.com`·`*.etforca.com` ACM | us-east-1 | 아직 없음 — ETF Orca 랜딩페이지 CloudFront 가 쓸 예정 |
 
 - **도메인 등록(NS 위임)만 수동**, 존부터 SSL 은 TF 가 발급·DNS 자동검증한다.
 - 와일드카드라 **새 서브도메인(admin. 등) 추가 시 인증서 재발급 불필요** — env 는 이 인증서를 그대로 참조.
@@ -40,6 +41,26 @@ terraform apply   # 와일드카드 2장 발급 + DNS 검증(수 분)
 ```
 
 foundation apply 가 **env 보다 먼저**여야 한다(env 가 이 인증서를 data 로 찾으므로).
+
+### etforca.com 연결 (가비아 등록 도메인)
+
+`etforca.com` 은 가비아에서 등록했다. apply 는 영역과 인증서 요청까지만 만들고, 네임서버를 가비아에 넣는 일은 사람이 한다.
+
+1. foundation 을 apply 한 뒤 네임서버 4개를 확인한다.
+   ```bash
+   terraform output etforca_name_servers
+   ```
+2. 가비아의 네임서버 설정에서 기존 값을 지우고 이 4개를 넣는다.
+3. 위임이 전파되면 ACM 이 인증서를 발급한다. 발급 여부는 아래로 확인한다.
+   ```bash
+   dig +short NS etforca.com   # AWS 네임서버 4개가 나오면 위임 완료
+   aws acm list-certificates --region us-east-1 \
+     --query "CertificateSummaryList[?DomainName=='etforca.com'].Status"   # ISSUED 여야 한다
+   ```
+
+- **apply 뒤 72시간 안에 2번을 끝낸다.** 넘기면 인증서 요청이 검증 시간 초과로 끝난다. 이때는 foundation 을 다시 apply 하면 인증서를 새로 요청한다.
+- 이 인증서에는 `aws_acm_certificate_validation` 을 두지 않았다. 그 자원은 발급될 때까지 apply 를 붙잡는데, 가비아에 넣을 네임서버가 그 apply 에서 처음 나오기 때문이다.
+- 발급 전에는 이 인증서를 `statuses = ["ISSUED"]` 로 조회하는 env 의 plan 이 실패한다.
 
 ## ECR 이미지 보존
 

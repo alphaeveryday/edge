@@ -11,7 +11,7 @@
 ```
 infra/terraform/
 ├── bootstrap/          # 원격 state 그릇(S3 버킷 + 네이티브 락). 자체 state=로컬, 계정당 1회
-├── foundation/         # 계정 전역·장수명: Route53 존 · 와일드카드 ACM ×2(apne2·us-east-1) · ECR · GitHub OIDC provider
+├── foundation/         # 계정 전역·장수명: Route53 존 ×2(edgesignal.dev·etforca.com) · 와일드카드 ACM ×2(apne2·us-east-1) · etforca.com ACM(us-east-1) · ECR · GitHub OIDC provider
 ├── envs/
 │   ├── dev/            # 실 벤더 클라우드 (모듈을 엮음, 구체값은 terraform.tfvars)
 │   └── demo-onprem/    # 가상 온프렘 데모 스택 (EC2 + 프록시 사이트 2종(MTS·콘솔), dev와 별도 state — ADR-0033)
