@@ -101,10 +101,10 @@ cd ../envs/dev  && terraform apply
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
 - Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../src/apps/cloud/airflow/README.md) "최초 구축")
-- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — CD 가 없다. 랜딩 파일이 이 저장소 밖에 있어 사람이 올린다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다.
+- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — CD 가 없다. 랜딩 파일이 이 저장소 밖에 있어 사람이 올린다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다. 아래는 저장소 루트에서 실행한다. `envs/dev` 에서 `terraform init` 을 마쳤고, 이 버킷에 쓰고 CloudFront 캐시를 비울 수 있는 AWS 자격증명이 있어야 한다.
   ```bash
   cd infra/terraform/envs/dev
-  LANDING_DIR=<랜딩 파일 폴더>   # 첫 화면 HTML 과 assets/ 가 있는 폴더
+  LANDING_DIR="<랜딩 파일 폴더>"   # 첫 화면 HTML 과 assets/ 가 있는 폴더
   BUCKET=$(terraform output -raw landing_bucket)
   DIST=$(terraform output -raw landing_distribution_id)
   aws s3 cp "$LANDING_DIR/<첫 화면 HTML>" "s3://$BUCKET/index.html" \
