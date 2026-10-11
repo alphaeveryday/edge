@@ -10,7 +10,7 @@ ACM 인증서(`acm.tf`, 아래 표), Route53 호스팅 영역 2개(`route53.tf` 
 |------|------|--------|
 | `*.edgesignal.dev` ACM | ap-northeast-2 | ALB 등 리전 서비스 |
 | `*.edgesignal.dev` ACM | us-east-1 | CloudFront(정적 사이트) |
-| `etforca.com`·`*.etforca.com` ACM | us-east-1 | 아직 없음 — ETF Orca 랜딩페이지 CloudFront 가 쓸 예정 |
+| `etforca.com`·`*.etforca.com` ACM | us-east-1 | ETF Orca 랜딩페이지 CloudFront(`envs/dev` 의 `landing_site`) |
 
 - **도메인 등록(NS 위임)만 수동**, 존부터 SSL 은 TF 가 발급·DNS 자동검증한다.
 - 와일드카드라 **새 서브도메인(admin. 등) 추가 시 인증서 재발급 불필요** — env 는 이 인증서를 그대로 참조.
