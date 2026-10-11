@@ -4,6 +4,8 @@ import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
 import { PageTitle } from '@/components/ui';
 import { EtfRow } from '@/features/etf/EtfRow';
+import { MarketTicker } from '@/features/home/MarketTicker';
+import { useIndices } from '@/features/home/queries';
 import { GroupChips } from '@/features/watch/GroupChips';
 import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
 import { useGroupMembers, useWatchList } from '@/features/watch/queries';
@@ -25,6 +27,7 @@ export default function Watch() {
   const fade = useSwapFade(group, list.isPlaceholderData);
   const [newOpen, setNewOpen] = useState(false);
   const pull = usePullRefresh();
+  const indices = useIndices();
   // 같은 탭 다시 누르기의 맨 위 이동
   const top = useRef<ScrollView>(null);
   useScrollToTop(top);
@@ -33,7 +36,7 @@ export default function Watch() {
       <TopBar />
       <ScrollView ref={top} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
-        <PageTitle title="관심" />
+        <PageTitle title="관심" right={<MarketTicker items={indices.data ?? []} />} />
         <View style={styles.chips}>
           <GroupChips onAdd={() => setNewOpen(true)} onEdit={() => router.push('/watch/edit')} />
         </View>

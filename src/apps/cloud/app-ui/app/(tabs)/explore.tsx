@@ -9,6 +9,8 @@ import { useDaily } from '@/features/analysis/queries';
 import { DisclaimerInfoSheet, DisclaimerSheet } from '@/features/disclaimer/DisclaimerSheet';
 import { analysisAsOf } from '@/lib/format';
 import { useRank } from '@/features/explore/queries';
+import { MarketTicker } from '@/features/home/MarketTicker';
+import { useIndices } from '@/features/home/queries';
 import { useToast } from '@/store/toast';
 import { createStyles } from '@/theme/theme';
 import { PAGE_X, radius } from '@/theme/tokens';
@@ -39,6 +41,7 @@ export default function Explore() {
   }, [daily.error, toast]);
   const nextIdx = sel === null || rows.length < 2 ? null : (sel + 1) % rows.length;
   const pull = usePullRefresh();
+  const indices = useIndices();
   // 같은 탭 다시 누르기의 맨 위 이동
   const top = useRef<ScrollView>(null);
   useScrollToTop(top);
@@ -47,9 +50,9 @@ export default function Explore() {
       <TopBar />
       <ScrollView ref={top} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
-        <PageTitle title="탐색" meta={analysisAsOf()} />
+        <PageTitle title="탐색" right={<MarketTicker items={indices.data ?? []} />} />
         <View style={{ paddingTop: 22 }}>
-          <SectionHead title="AI가 보는 오늘 순위" onInfo={() => setInfo(true)} />
+          <SectionHead title="AI가 보는 오늘 순위" badge={analysisAsOf()} onInfo={() => setInfo(true)} />
         </View>
         <Text style={styles.lead}>재료가 확인된 ETF부터 위에 있어요.</Text>
         {q.isPending && <Loading rows={5} />}

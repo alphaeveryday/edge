@@ -2,10 +2,11 @@ import { Pressable, Text, View } from 'react-native';
 import { Chevron } from './Chevron';
 import { Icon } from './Icon';
 import { createStyles, useColors } from '@/theme/theme';
-import { PAGE_X } from '@/theme/tokens';
+import { PAGE_X, radius } from '@/theme/tokens';
 import { fam, type } from '@/theme/typography';
 
-export function SectionHead({ title, actionLabel, onAction, meta, onInfo }: { title: string; actionLabel?: string; onAction?: () => void; meta?: string; onInfo?: () => void }) {
+// badge 는 기준 시각 같은 회색 배지
+export function SectionHead({ title, actionLabel, onAction, meta, badge, onInfo }: { title: string; actionLabel?: string; onAction?: () => void; meta?: string; badge?: string; onInfo?: () => void }) {
   const styles = useStyles();
   const colors = useColors();
   return (
@@ -25,6 +26,8 @@ export function SectionHead({ title, actionLabel, onAction, meta, onInfo }: { ti
         </Pressable>
       ) : meta ? (
         <Text style={styles.meta}>{meta}</Text>
+      ) : badge ? (
+        <Text style={styles.badge}>{badge}</Text>
       ) : null}
     </View>
   );
@@ -37,4 +40,5 @@ const useStyles = createStyles((colors) => ({
   action: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   actionText: { fontFamily: fam.bold, fontSize: 12.5, color: colors.primary },
   meta: { ...type.caption, color: colors.textMuted },
+  badge: { alignSelf: 'center', fontFamily: fam.bold, fontSize: 11.5, color: colors.textMuted, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
 }));
