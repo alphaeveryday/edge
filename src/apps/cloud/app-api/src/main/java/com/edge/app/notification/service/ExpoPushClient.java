@@ -35,7 +35,8 @@ public class ExpoPushClient {
         for (int from = 0; from < tokens.size(); from += BATCH) {
             List<String> batch = tokens.subList(from, Math.min(from + BATCH, tokens.size()));
             List<Map<String, Object>> messages = batch.stream()
-                    .map(to -> Map.<String, Object>of("to", to, "title", title, "body", body, "data", data, "sound", "default"))
+                    .map(to -> Map.<String, Object>of("to", to, "title", title, "body", body, "data", data, "sound", "default",
+                            "channelId", "replies", "priority", "high"))
                     .toList();
             try {
                 Map<?, ?> response = http.post().uri("/--/api/v2/push/send").contentType(MediaType.APPLICATION_JSON)
