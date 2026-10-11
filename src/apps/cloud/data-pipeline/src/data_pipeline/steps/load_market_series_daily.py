@@ -23,8 +23,9 @@ canonical 의 `code`(KRX 업종코드)를 `source_series_id` 로 찾는다. 등�
 **입력 범위**: NAV 로더와 같은 읽기를 쓴다(`load_etf_nav._input_rows`). 정기 경로는 정제 manifest
 가 지목한 직접 parquet 와 winner 만 읽고, 날짜창·전체 스캔은 명시 복구 경로다.
 
-**커밋 경계는 실행 전체다.** 값 검증을 적재 전에 하므로 행 단위 격리(savepoint)는 두지 않는다 —
-DB 오류는 실행 전체를 롤백하고 치명 장애(1)로 끝낸다.
+**행 단위 격리**: 행 하나의 DB 오류(DATE 로 바꿀 수 없는 거래일 등)는 savepoint 로 그 행만 되돌리고
+나머지를 commit 한 뒤 부분 실패(2)로 끝낸다(NAV 로더와 같은 방식) — 불량 행 하나가 멀쩡한 지수까지
+못 싣게 두지 않는다. 접속 단절처럼 실행 전체가 무너지는 오류는 롤백하고 치명 장애(1)다.
 """
 
 from __future__ import annotations
@@ -107,8 +108,8 @@ def _winner(facts: list[dict]) -> tuple[dict | None, str | None]:
 def _load_violation(fact: dict) -> str | None:
     """지수 값은 표가 담을 수 있는 양수여야 한다. 종가는 필수, 시가·고가·저가는 없을 수 있다.
 
-    컬럼이 NUMERIC(24, 8) 이다 — 소수 8자리로 반올림해 0 이 되는 값은 양수 계약을 깨고, 정수부가
-    16자리를 넘는 값은 INSERT 가 실패해 실행 전체를 롤백시킨다. 둘 다 여기서 거른다.
+    컬럼이 NUMERIC(24, 8) 이다 — 소수 8자리로 반올림해 0 이 되는 값은 양수 계약을 깨고(DB 는
+    받아 준다), 정수부가 16자리를 넘는 값은 INSERT 가 거부한다. 둘 다 여기서 사유를 붙여 거른다.
     """
     for name in _VALUES:
         value = fact[name]
@@ -184,11 +185,23 @@ def run(
                             {"code": code, "trade_date": trade_date, "reason": violation}
                         )
                         continue
-                    cur.execute(_UPSERT, (
-                        series_id, trade_date, fact["open"], fact["high"], fact["low"],
-                        fact["close"], fact["observed_at"], input_run_id or run_id,
-                    ))
-                    row = cur.fetchone()
+                    cur.execute("SAVEPOINT market_series_row")
+                    try:
+                        cur.execute(_UPSERT, (
+                            series_id, trade_date, fact["open"], fact["high"], fact["low"],
+                            fact["close"], fact["observed_at"], input_run_id or run_id,
+                        ))
+                        row = cur.fetchone()
+                    except Exception as exc:
+                        cur.execute("ROLLBACK TO SAVEPOINT market_series_row")
+                        cur.execute("RELEASE SAVEPOINT market_series_row")
+                        failures.append({
+                            "code": code, "trade_date": trade_date,
+                            "reasons": ["row_load_error"], "error": str(exc),
+                        })
+                        exit_code = _PARTIAL_EXIT_CODE
+                        continue
+                    cur.execute("RELEASE SAVEPOINT market_series_row")
                     if row is None:
                         unchanged += 1
                     elif row[0]:

@@ -31,8 +31,7 @@ class _FakeCursor:
         return False
 
     def execute(self, sql, params=None):
-        self.selecting = sql.lstrip().startswith("SELECT")
-        if not self.selecting:
+        if sql.lstrip().startswith("INSERT"):
             self.conn.upserts.append(params)
 
     def fetchall(self):
@@ -124,7 +123,7 @@ def test_종가가_없는_행은_싣지_않고_부분_실패로_드러낸다(tmp
     "value", [0, -1.0, float("nan"), float("inf"), True, "6625.93", 1e-10, 1e16])
 def test_지수_값은_표가_담을_수_있는_양수여야_한다(value):
     # WHY: DB CHECK 는 NaN 만 막는다(금리 계열 때문에 부호를 안 건다). 지수의 0·음수는 이 로더가 막는다.
-    # 1e-10 은 NUMERIC(24, 8) 에서 0 으로 저장되고, 1e16 은 INSERT 가 실패해 멀쩡한 지수까지 롤백시킨다.
+    # 1e-10 은 NUMERIC(24, 8) 에서 0 으로 저장되고(DB 가 받아 준다), 1e16 은 INSERT 가 거부한다.
     fact = {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}
     assert step._load_violation({**fact, "close": value}) == "invalid_close"
     assert step._load_violation({**fact, "low": value}) == "invalid_low"

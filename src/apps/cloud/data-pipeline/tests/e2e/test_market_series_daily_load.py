@@ -163,3 +163,25 @@ def test_정기_경로는_정제_manifest가_지목한_winner만_싣는다(env):
     assert _loaded(pg) == [_expected(D2, "200.0", T3, "e2e-1260-n")]
     # winner 가 아닌 행은 등록된 지수여도 싣지 않는다 — 이 실행이 확정하지 않은 값이다.
     assert _loaded(pg, OTHER_SERIES_ID) == []
+
+
+def test_DB가_거부하는_행_하나가_다른_지수의_적재를_막지_않는다(env):
+    """복구 범위는 검증 없이 canonical 을 읽는다. 달력에 없는 거래일은 DATE 변환에서 거부된다."""
+    from data_pipeline.lake import quality_log_key
+    from data_pipeline.steps.load_market_series_daily import DATASET, run
+
+    pg, db, storage = env
+    bad_day = "2026-02-30"
+    _write_partition(storage, bad_day, [_row(CODE, bad_day, 100.5, T1)])
+    _write_partition(storage, D1, [_row(OTHER_CODE, D1, 70.0, T1)])
+
+    # 불량 행은 그 행만 되돌리고 부분 실패(2)로 남는다 — 전체를 롤백하면 멀쩡한 지수까지 비어
+    # 있게 되고, 그 사실은 exit 1 한 줄에 묻힌다.
+    assert run(storage, "e2e-1260-x", db=db) == 2
+    assert _loaded(pg) == []
+    assert _loaded(pg, OTHER_SERIES_ID) == [_expected(D1, "70.0", T1, "e2e-1260-x")]
+    log_keys = [key for key in storage.list_keys(quality_log_key(DATASET, "", "")[:60])
+                if key.endswith("/run_id=e2e-1260-x/log.json")]
+    failures = json.loads(storage.get_bytes(log_keys[0]))["failures"]
+    assert [(f["code"], f["trade_date"], f["reasons"]) for f in failures] == [
+        (CODE, bad_day, ["row_load_error"])]
