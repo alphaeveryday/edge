@@ -80,9 +80,10 @@ class SyncFlowTests {
     static void seed(@Autowired JdbcTemplate jdbc) {
         PIPELINE.update("insert into entity values ('i-etf', 'KODEX 반도체'), ('i-a', 'SK하이닉스 보통주'), ('i-b', '삼성전자')");
         PIPELINE.update("insert into instrument values ('i-etf', 'XKRX', '091160', 'ETF'), ('i-a', 'XKRX', '000660', 'EQUITY'), "
-                + "('i-b', 'XKRX', '005930', 'EQUITY')");
+                + "('i-b', 'XKRX', '005930', 'EQUITY'), ('i-kospi', 'XKRX', '1001', 'INDEX')");
         PIPELINE.update("insert into price_daily values ('i-etf', '2026-09-29', 141160, 100), ('i-etf', '2026-09-30', 142700, 200), "
-                + "('i-a', '2026-09-29', 100, 1), ('i-a', '2026-09-30', 110, 1), ('i-b', '2026-09-29', 50, 1), ('i-b', '2026-09-30', 49, 1)");
+                + "('i-a', '2026-09-29', 100, 1), ('i-a', '2026-09-30', 110, 1), ('i-b', '2026-09-29', 50, 1), ('i-b', '2026-09-30', 49, 1), "
+                + "('i-kospi', current_date - 2, 2500, null), ('i-kospi', current_date - 1, 2525, null)");
         PIPELINE.update("insert into etf_holding_snapshot values ('i-etf', 'i-b', '2026-09-30', 0.2), ('i-etf', 'i-a', '2026-09-30', 0.3)");
 
         // 같은 날 실데이터 발행본과 더 최근 미분류 발행본 중 실데이터만 이전
@@ -178,5 +179,18 @@ class SyncFlowTests {
         Instant after = jdbc.queryForObject("select max(synced_at) from (select synced_at from etf union all select synced_at from etf_quote "
                 + "union all select synced_at from etf_detail union all select synced_at from etf_move union all select synced_at from etf_analysis) s", Instant.class);
         assertEquals(before, after, "10분마다 돌아도 원천이 같으면 행을 다시 쓰지 않는다");
+    }
+
+    // 파이프라인에 없는 지수는 건너뜀, 인증 없이 조회
+    @Test
+    void syncCopiesMarketIndicesWithPreviousCloseChange() {
+        syncService.run();
+
+        List<Map<String, Object>> indices = result(call(port, "GET", "/api/v1/home/indices", null));
+        assertEquals(List.of("1001"), indices.stream().map(i -> i.get("code")).toList());
+        Map<String, Object> kospi = indices.getFirst();
+        assertEquals("코스피", kospi.get("name"));
+        assertEquals(2525.0, ((Number) kospi.get("value")).doubleValue());
+        assertEquals(1.0, ((Number) kospi.get("changePct")).doubleValue());
     }
 }

@@ -319,6 +319,15 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/HomeBrief' }
         '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /home/indices:
+    get:
+      tags: [home]
+      operationId: homeIndices
+      summary: 시장 지수
+      description: 코스피·코스닥의 최근 거래일 종가와 전 거래일 대비 등락률. 파이프라인에 없는 지수는 빠지고, 없으면 빈 목록.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/MarketIndexList' }
 
   # ── etf ──────────────────────────────────────────────
   /etfs:
@@ -1017,6 +1026,15 @@ components:
               - $ref: '#/components/schemas/ApiResponse'
               - properties:
                   result: { $ref: '#/components/schemas/HomeBrief' }
+    MarketIndexList:
+      description: 시장 지수 목록
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { type: array, items: { $ref: '#/components/schemas/MarketIndex' } }
     EtfSummaryList:
       description: ETF 요약 목록
       content:
@@ -1131,6 +1149,15 @@ components:
         score: { type: number, minimum: 0, maximum: 4, description: 그룹 signal 서수 평균(강력하락 0 ~ 강력상승 4), 소수 둘째 자리. band 는 이 값의 반올림 }
         changePct: { type: number }
         etfs: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
+    MarketIndex:
+      type: object
+      required: [code, name, value, changePct, asOf]
+      properties:
+        code: { type: string, description: KRX 지수 코드. 1001 코스피, 2001 코스닥 }
+        name: { type: string }
+        value: { type: number, description: 최근 거래일 종가 }
+        changePct: { type: number, description: 전 거래일 종가 대비 등락률 }
+        asOf: { type: string, format: date-time, description: 최근 거래일 15:30 KST }
     Me:
       type: object
       required: [nick, handle]

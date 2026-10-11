@@ -52,6 +52,16 @@ public class SyncRepository {
                 """, code, instrumentId, marketCode, name, c.themeKey(), c.sub(), c.hot());
     }
 
+    public void upsertIndex(String code, String name, BigDecimal price, BigDecimal changePct, Instant asOf) {
+        jdbc.update("""
+                insert into market_index (code, name, price, change_pct, as_of) values (?, ?, ?, ?, ?)
+                on conflict (code) do update set name = excluded.name, price = excluded.price,
+                    change_pct = excluded.change_pct, as_of = excluded.as_of, synced_at = now()
+                 where (market_index.name, market_index.price, market_index.change_pct, market_index.as_of)
+                       is distinct from (excluded.name, excluded.price, excluded.change_pct, excluded.as_of)
+                """, code, name, price, changePct, Timestamp.from(asOf));
+    }
+
     public void upsertQuote(String code, BigDecimal price, BigDecimal changePct, Instant asOf) {
         jdbc.update("""
                 insert into etf_quote (etf_code, price, change_pct, as_of) values (?, ?, ?, ?)

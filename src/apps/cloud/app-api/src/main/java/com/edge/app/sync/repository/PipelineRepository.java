@@ -56,6 +56,11 @@ public class PipelineRepository {
                 """, (rs, n) -> new Instrument(rs.getString(1), rs.getString(2), rs.getString(3)), code).stream().findFirst();
     }
 
+    public Optional<String> index(String code) {
+        return jdbc.queryForList("select instrument_id from instrument where ticker = ? and instrument_type = 'INDEX'",
+                String.class, code).stream().findFirst();
+    }
+
     /** since 이후 종가가 있는 일봉의 날짜 오름차순 조회 */
     public List<Close> closes(String instrumentId, LocalDate since) {
         return jdbc.query("""

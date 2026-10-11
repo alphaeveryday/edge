@@ -5,6 +5,8 @@ import com.edge.app.etf.dto.EtfSummaryResponse;
 import com.edge.app.etf.entity.Signal;
 import com.edge.app.etf.repository.EtfRepository;
 import com.edge.app.home.dto.HomeBriefResponse;
+import com.edge.app.home.dto.MarketIndexResponse;
+import com.edge.app.home.repository.MarketIndexRepository;
 import com.edge.app.member.repository.PrincipalRepository;
 import com.edge.app.watch.dto.WatchGroupResponse;
 import com.edge.app.watch.entity.WatchGroup;
@@ -36,6 +38,7 @@ public class HomeService {
     private final WatchGroupRepository groupRepository;
     private final WatchItemRepository itemRepository;
     private final EtfRepository etfRepository;
+    private final MarketIndexRepository indexRepository;
 
     // principal 해소 upsert 때문에 readOnly 미적용
     @Transactional
@@ -73,5 +76,10 @@ public class HomeService {
     private static double changePct(List<EtfSummaryResponse> etfs) {
         double mean = etfs.stream().mapToDouble(EtfSummaryResponse::changePct).average().orElse(0);
         return Math.round(mean * 100) / 100.0;
+    }
+
+    @Transactional(readOnly = true)
+    public List<MarketIndexResponse> indices() {
+        return indexRepository.findAllByOrderByCode().stream().map(MarketIndexResponse::from).toList();
     }
 }

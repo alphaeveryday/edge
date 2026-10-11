@@ -85,6 +85,7 @@ public class SyncService {
             Map.entry("weighted_institution_net_buy_streak", new MetricLabel("기관 연속 순매수", "일", false)),
             Map.entry("weighted_foreign_net_buy_streak", new MetricLabel("외국인 연속 순매수", "일", false)),
             Map.entry("etf_units_change_20d_pct", new MetricLabel("발행좌수 20일 변화", "%", true)));
+    private static final Map<String, String> INDICES = Map.of("1001", "코스피", "2001", "코스닥");
     private static final List<String> COUNT_UNITS = List.of("회", "일", "일 뒤");
 
     private final PipelineRepository pipeline;
@@ -107,7 +108,25 @@ public class SyncService {
             }
         }
         tx.executeWithoutResult(s -> rank());
+        INDICES.forEach(this::syncIndex);
         log.info("sync done etfs={}/{}", done, curation.size());
+    }
+
+    private void syncIndex(String code, String name) {
+        try {
+            String id = pipeline.index(code).orElse(null);
+            List<Close> closes = id == null ? List.of() : pipeline.closes(id, LocalDate.now(KST).minusDays(14));
+            if (closes.isEmpty()) {
+                log.info("index sync skipped code={} reason=no-data", code);
+                return;
+            }
+            Close last = closes.getLast();
+            Close prev = closes.size() < 2 ? last : closes.get(closes.size() - 2);
+            sync.upsertIndex(code, name, last.close(), pct(prev.close(), last.close()),
+                    last.date().atTime(MARKET_CLOSE).atZone(KST).toInstant());
+        } catch (RuntimeException e) {
+            log.warn("index sync failed code={}", code, e);
+        }
     }
 
     private boolean syncEtf(Curation c) {

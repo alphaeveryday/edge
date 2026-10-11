@@ -3,7 +3,7 @@
 CREATE TABLE entity (entity_id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
 CREATE TABLE instrument (
     instrument_id TEXT PRIMARY KEY, market_code VARCHAR(30) NOT NULL, ticker VARCHAR(30) NOT NULL,
-    instrument_type VARCHAR(20) NOT NULL CHECK (instrument_type IN ('ETF', 'EQUITY')),
+    instrument_type VARCHAR(20) NOT NULL CHECK (instrument_type IN ('ETF', 'EQUITY', 'INDEX')),
     UNIQUE (market_code, ticker));
 CREATE TABLE price_daily (
     instrument_id TEXT NOT NULL, trade_date DATE NOT NULL, close_price NUMERIC(24, 8), volume BIGINT,
