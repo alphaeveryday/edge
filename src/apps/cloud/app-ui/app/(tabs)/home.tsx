@@ -7,7 +7,8 @@ import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { EdgeCard } from '@/features/home/EdgeCard';
-import { useHomeBrief, usePrefetchBriefs } from '@/features/home/queries';
+import { MarketTicker } from '@/features/home/MarketTicker';
+import { useHomeBrief, useIndices, usePrefetchBriefs } from '@/features/home/queries';
 import { analysisAsOf } from '@/lib/format';
 import { useScrollFocus } from '@/lib/useScrollFocus';
 import { useSwapFade } from '@/lib/useSwapFade';
@@ -35,12 +36,13 @@ export default function Home() {
   const groupLabel = b?.groups.find((g) => g.key === b.group)?.label ?? '';
 
   const pull = usePullRefresh();
+  const indices = useIndices();
   return (
     <View style={styles.root}>
       <TopBar />
       <ScrollView ref={focus.scroll} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
         {pull.indicator}
-        <PageTitle title="내 종목 브리핑" />
+        <PageTitle title="내 종목 브리핑" right={<MarketTicker items={indices.data ?? []} />} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {b?.groups.map((g) => <Chip key={g.key} label={g.label} on={g.key === group} onPress={() => setGroup(g.key)} />)}
         </ScrollView>

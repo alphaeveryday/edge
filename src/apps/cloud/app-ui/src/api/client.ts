@@ -1,4 +1,4 @@
-import type { Axis, ChartData, Notification, NotiKind, Me, Page, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, SocialProvider, Theme, WatchGroup } from './types';
+import type { Axis, ChartData, Notification, NotiKind, Me, Page, Reply, RankRow, DailyAnalysis, EtfCode, EtfDetailData, EtfSummary, FactorPage, Hint, HomeBrief, MarketIndex, MetricPage, MoveInfo, VoteStat, VoteChoice, Post, ReportReason, SocialProvider, Theme, WatchGroup } from './types';
 
 export interface EtfApi {
   get(code: EtfCode): Promise<EtfSummary>;
@@ -41,6 +41,7 @@ export interface AnalysisApi {
 
 export interface HomeApi {
   brief(group?: string): Promise<HomeBrief>;
+  indices(): Promise<MarketIndex[]>;
 }
 
 export interface CommunityApi {

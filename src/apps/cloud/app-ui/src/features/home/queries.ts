@@ -2,6 +2,9 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useEffect } from 'react';
 import { api } from '@/api';
 
+// 하루 한 번 바뀌는 지수의 10분 재사용
+export const useIndices = () => useQuery({ queryKey: ['home', 'indices'], queryFn: () => api.home.indices(), staleTime: 10 * 60_000 });
+
 const briefKey = (group?: string) => ['home', 'brief', group ?? 'base'];
 
 // 그룹 전환 중 이전 그룹 내용 유지

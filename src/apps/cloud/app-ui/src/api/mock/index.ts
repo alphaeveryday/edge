@@ -199,6 +199,10 @@ export const mockClient: ApiClient = {
       const score = avgScore(codes);
       return delay({ groups: groupList(), group, band: SIGNAL_ORDER[Math.round(score)], score, changePct, etfs });
     },
+    indices: () => delay([
+      { code: '1001', name: '코스피', value: 2581.2, changePct: 0.82 },
+      { code: '2001', name: '코스닥', value: 742.35, changePct: -0.21 },
+    ]),
   },
   community: {
     hot: () => delay(posts.filter((p) => ['p1', 'p2', 'p3'].includes(p.id)).map((p) => ({ ...p }))),

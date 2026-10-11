@@ -28,6 +28,14 @@ export interface WatchGroup {
   count: number;
 }
 
+// 홈 상단의 시장 지수, 최근 거래일 종가 기준
+export interface MarketIndex {
+  code: string;
+  name: string;
+  value: number;
+  changePct: number;
+}
+
 export interface HomeBrief {
   groups: WatchGroup[];
   group: string;

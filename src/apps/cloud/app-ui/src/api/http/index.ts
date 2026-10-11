@@ -99,6 +99,7 @@ export const httpClient: ApiClient = {
       const b = await request<Omit<HomeBrief, 'etfs'> & { etfs: m.WireEtfSummary[] }>('GET', '/home/brief', { query: { group } });
       return { ...b, etfs: await summaries(b.etfs) };
     },
+    indices: () => request('GET', '/home/indices', { auth: false }),
   },
   community: {
     hot: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'hot' } })).items),
