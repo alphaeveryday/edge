@@ -4,8 +4,8 @@ from edge_analysis_v2.contracts.outlook_limits import TEXT_LIMITS, checked_texts
 
 def screen(**changes):
     value = {
-        'summary_card': {'title': '가' * 25, 'summary': '나' * 80},
-        'detail': {'title': '다' * 25, 'items': [
+        'summary_card': {'title': '가' * 20, 'summary': '나' * 80},
+        'detail': {'title': '다' * 20, 'items': [
             {'title_keyword': '라' * 20, 'sentences': [{'sentence': '마' * 60, 'is_updated': False} for _ in range(5)]}
             for _ in range(15)]},
         'factors': [{'type': t, 'sticker': '중립', 'sentence': '바' * 60} for t in ('이슈', '차트', '매크로', '밸류', '수급')],
@@ -50,8 +50,8 @@ def test_too_many_topics_bullets_or_a_missing_factor_are_count_violations():
 
 
 def test_a_partial_screen_and_an_absent_change_condition_are_not_violations():
-    assert violations({'summary_card': {'title': '가' * 26}}) == [
-        {'location': 'summary_card.title', 'limit': 25, 'actual': 26, 'kind': 'characters'}]
+    assert violations({'summary_card': {'title': '가' * 21}}) == [
+        {'location': 'summary_card.title', 'limit': 20, 'actual': 21, 'kind': 'characters'}]
     assert violations(screen(**{'conclusion.change_condition': None})) == []
 
 
@@ -65,7 +65,7 @@ def test_the_agent_schemas_carry_the_same_limits_as_the_checker():
     topic = EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['items']['properties']
     assert topic['sentences']['maxItems'] == 5 and topic['sentences']['items']['maxLength'] == 60
     assert topic['title_keyword']['maxLength'] == 20
-    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['title']['maxLength'] == 25
+    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['title']['maxLength'] == 20
     assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['maxItems'] == 15
     assert properties['summary_card']['properties']['title']['maxLength'] == TEXT_LIMITS['summary_card.title']
     assert properties['conclusion']['properties']['burdens']['items']['properties']['label']['maxLength'] == TEXT_LIMITS['conclusion.burdens[].label']
