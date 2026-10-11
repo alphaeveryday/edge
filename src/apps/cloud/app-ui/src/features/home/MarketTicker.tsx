@@ -8,34 +8,43 @@ import { fam } from '@/theme/typography';
 const EVERY = 3500;
 const SHIFT = 14;
 
-// 홈 상단 바 왼쪽의 시장 지수 한 줄 순환
+// 현재 시각 기준 순번, 탭 이동에도 같은 순번과 남은 시간
+const slot = () => Math.floor(Date.now() / EVERY);
+
+// 탭 제목 옆 시장 지수 한 줄 순환
 // 움직임 줄이기 설정은 밀림 없이 교체
 export function MarketTicker({ items }: { items: MarketIndex[] }) {
   const styles = useStyles();
   const colors = useColors();
-  const [at, setAt] = useState(0);
+  const [at, setAt] = useState(slot);
   const [still, setStill] = useState(false);
   const y = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(1)).current;
   useEffect(() => { AccessibilityInfo.isReduceMotionEnabled().then(setStill, () => undefined); }, []);
   useEffect(() => {
     if (items.length < 2) return;
-    const step = () => setAt((i) => (i + 1) % items.length);
-    const t = setInterval(() => {
-      if (still) return step();
-      Animated.parallel([
-        Animated.timing(y, { toValue: -SHIFT, duration: 180, useNativeDriver: true }),
-        Animated.timing(fade, { toValue: 0, duration: 180, useNativeDriver: true }),
-      ]).start(() => {
-        step();
-        y.setValue(SHIFT);
+    let t: ReturnType<typeof setTimeout>;
+    const step = () => setAt(slot());
+    const next = () => {
+      t = setTimeout(() => {
+        next();
+        if (still) return step();
         Animated.parallel([
-          Animated.timing(y, { toValue: 0, duration: 220, useNativeDriver: true }),
-          Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true }),
-        ]).start();
-      });
-    }, EVERY);
-    return () => clearInterval(t);
+          Animated.timing(y, { toValue: -SHIFT, duration: 180, useNativeDriver: true }),
+          Animated.timing(fade, { toValue: 0, duration: 180, useNativeDriver: true }),
+        ]).start(() => {
+          step();
+          y.setValue(SHIFT);
+          Animated.parallel([
+            Animated.timing(y, { toValue: 0, duration: 220, useNativeDriver: true }),
+            Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true }),
+          ]).start();
+        });
+      }, EVERY - (Date.now() % EVERY) + 20);
+    };
+    setAt(slot());
+    next();
+    return () => clearTimeout(t);
   }, [still, items.length]);
   const i = items[at % items.length];
   if (!i) return null;
