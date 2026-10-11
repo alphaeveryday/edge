@@ -19,3 +19,5 @@ mkdir dist
   cat landing.html
 } > dist/index.html
 cp -R assets dist/assets
+# 검색엔진이 사이트 최상위에서 찾는 파일.
+cp robots.txt sitemap.xml dist/

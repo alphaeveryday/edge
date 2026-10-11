@@ -101,7 +101,7 @@ cd ../envs/dev  && terraform apply
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
 - Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../src/apps/cloud/airflow/README.md) "최초 구축")
-- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `src/apps/cloud/app-landing/` 에 있고 ([README](../../src/apps/cloud/app-landing/README.md)), 배포는 버킷의 `index.html` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다).
+- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `src/apps/cloud/app-landing/` 에 있고 ([README](../../src/apps/cloud/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다).
 
 ### 🔮 미구축 (후속 증분)
 

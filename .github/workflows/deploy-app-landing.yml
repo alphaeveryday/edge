@@ -1,7 +1,7 @@
 # ETF Orca 랜딩페이지(etforca.com) dev 배포 — 랜딩 파일이 바뀐 dev push 에서만 돈다.
 # 빌드 도구가 없는 정적 파일이라 deploy-ui.yml(pnpm 빌드)을 재사용하지 않는다. build.sh 가 조각 문서에
 # 문서 머리를 붙여 dist/ 를 만들고, 여기서 S3 에 올린 뒤 CloudFront 캐시를 비운다.
-# 이 배포는 버킷의 index.html 과 assets/ 만 다룬다 — 다른 경로는 지우지 않는다.
+# 이 배포는 버킷의 index.html·robots.txt·sitemap.xml 과 assets/ 만 다룬다 — 다른 경로는 지우지 않는다.
 # 버킷·배포 ID 는 repo vars 로 받는다(envs/dev 출력값 landing_bucket·landing_distribution_id).
 name: deploy-app-landing
 
@@ -56,6 +56,10 @@ jobs:
           aws s3 sync assets "s3://${BUCKET}/assets" --cache-control "no-cache"
           aws s3 cp index.html "s3://${BUCKET}/index.html" \
             --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp robots.txt "s3://${BUCKET}/robots.txt" \
+            --content-type "text/plain; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp sitemap.xml "s3://${BUCKET}/sitemap.xml" \
+            --content-type "application/xml" --cache-control "no-cache"
           aws s3 sync assets "s3://${BUCKET}/assets" --cache-control "no-cache" --delete
           # 캐시 무효화 후 완료까지 대기 — 실패 시 워크플로가 빨간불이 되게.
           id="$(aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" \

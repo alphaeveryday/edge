@@ -1,12 +1,13 @@
 # app-landing — ETF Orca 랜딩페이지
 
-`https://etforca.com` 에 서빙되는 정적 페이지다. 빌드 도구가 없다. HTML 한 장과 `assets/` 가 전부다.
+`https://etforca.com` 에 서빙되는 정적 페이지다. 빌드 도구가 없다. HTML 한 장과 `assets/`, 검색엔진용 파일 두 개가 전부다.
 
 | 파일 | 역할 |
 |---|---|
 | `landing.html` | 랜딩 본문. **Claude Artifact용 조각 문서**다(doctype·`<html>`·viewport 메타가 없다) |
-| `assets/` | 로고와 글꼴(Pretendard 서브셋, SIL OFL 1.1 — `assets/fonts/LICENSE`) |
-| `build.sh` | 조각 문서에 문서 머리를 붙여 `dist/index.html` 과 `dist/assets/` 를 만든다 |
+| `assets/` | 로고, 파비콘(`icon.png`·`apple-touch-icon.png`), 공유 미리보기 그림(`og.png`), 글꼴(Pretendard 서브셋, SIL OFL 1.1 — `assets/fonts/LICENSE`) |
+| `robots.txt`·`sitemap.xml` | 검색엔진이 사이트 최상위에서 읽는 파일 |
+| `build.sh` | 조각 문서에 문서 머리를 붙여 `dist/index.html` 을 만들고 `assets/`·`robots.txt`·`sitemap.xml` 을 `dist/` 에 복사한다 |
 
 ## 왜 조각 문서인가
 
@@ -23,9 +24,17 @@
    ```
 3. PR 을 dev 에 머지하면 [`deploy-app-landing.yml`](../../../../.github/workflows/deploy-app-landing.yml) 이 S3 에 올리고 CloudFront 캐시를 비운다.
 
-배포는 버킷의 `index.html` 과 `assets/` 만 다룬다. `assets/` 에서 지운 파일은 버킷에서도 지워진다.
+배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. `assets/` 에서 지운 파일은 버킷에서도 지워진다.
 
 버킷·CloudFront·도메인 레코드는 `infra/terraform/envs/dev` 의 `landing_site` 가, 영역과 인증서는 `infra/terraform/foundation` 이 소유한다.
+
+## 검색과 공유 미리보기
+
+`landing.html` 머리에 설명(`description`), 대표 주소(`canonical`), 공유 미리보기(Open Graph), 아이콘, 사이트 이름 구조화 데이터가 있다.
+
+- 주소는 `https://etforca.com` 을 그대로 적었다. 도메인을 바꾸면 `landing.html` 머리와 `robots.txt`, `sitemap.xml` 을 함께 고친다.
+- `assets/og.png`(1200x630)에는 페이지 제목 문구가 그림으로 들어 있다. 제목을 바꾸면 그림도 다시 만든다.
+- 구글 서치 콘솔과 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
 
 ## 방문 분석 (PostHog)
 
