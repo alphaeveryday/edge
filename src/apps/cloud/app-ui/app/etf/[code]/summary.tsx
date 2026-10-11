@@ -49,8 +49,8 @@ export default function EtfSummary() {
         {!none && <Text style={styles.whyFoot}>{move?.foot}</Text>}
       </Pressable>
       {!none && (
-        <View style={styles.more}>
-          <LinkRow muted center label="자세히 보기" onPress={() => setOpen(true)} />
+        <View style={{ marginTop: 4 }}>
+          <LinkRow muted center divider label="자세히 보기" onPress={() => setOpen(true)} />
         </View>
       )}
       <MoveSheet etf={etf} move={open && move ? move : null} onClose={() => setOpen(false)} />
@@ -67,6 +67,5 @@ const useStyles = createStyles((colors) => ({
   ago: { fontFamily: fam.bold, fontSize: 12, color: colors.textMuted, backgroundColor: colors.surface, borderRadius: radius.tag, paddingVertical: 5, paddingHorizontal: 9, overflow: 'hidden' },
   whyText: { fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.text },
   whyEmpty: { fontFamily: fam.regular, fontSize: 16, lineHeight: 26, color: colors.textMuted },
-  more: { marginTop: 4, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.surface },
   whyFoot: { fontFamily: fam.regular, fontSize: 13, color: colors.textFaint, marginTop: 2 },
 }));

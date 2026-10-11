@@ -2,7 +2,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { DailyAnalysis } from '@/api';
-import { BottomSheet, Chevron, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker, type SheetStats } from '@/components/ui';
+import { BottomSheet, SheetScrollView, LinkRow, RowQuote, SectorIcon, Sticker, type SheetStats } from '@/components/ui';
 import { VoteCard } from '@/features/community/VoteCard';
 import { DisclaimerNote } from '@/features/disclaimer/DisclaimerNote';
 import { useVoteStat } from '@/features/community/queries';
@@ -147,10 +147,10 @@ export function DailySheet({ code, daily: d, open, onClose, entry, withVote, lin
               </View>
             )}
           </View>
-          <Pressable ref={focus.anchor} onPress={() => { if (!axisOpen) track('analysis_criteria_expanded', { etf: code }); setAxisOpen(!axisOpen); }} style={styles.toggle}>
-            <Text style={styles.toggleText}>5가지 기준 모두 보기</Text>
-            <Chevron size={14} color={colors.textFaint} dir={axisOpen ? 'up' : 'down'} />
-          </Pressable>
+          <View ref={focus.anchor} style={styles.toggle}>
+            <LinkRow variant="card" muted label={axisOpen ? '접기' : `기준 ${d.axes.length}개 더 보기`} open={axisOpen}
+              onPress={() => { if (!axisOpen) track('analysis_criteria_expanded', { etf: code }); setAxisOpen(!axisOpen); }} />
+          </View>
           {axisOpen && (
             <View style={{ gap: 10, marginTop: 16 }}>
               {d.axes.map((a) => (
@@ -158,10 +158,9 @@ export function DailySheet({ code, daily: d, open, onClose, entry, withVote, lin
               ))}
             </View>
           )}
-          <Pressable onPress={() => setHint('edge')} style={styles.source}>
-            <Text style={styles.sourceText}>분석 기준과 출처</Text>
-            <Chevron size={14} color={colors.textDisabled} />
-          </Pressable>
+          <View style={styles.source}>
+            <LinkRow muted center divider label="분석 기준과 출처" onPress={() => setHint('edge')} />
+          </View>
           <DisclaimerNote style={styles.note} />
         </SheetScrollView>
       )}
@@ -209,10 +208,9 @@ const useStyles = createStyles((colors) => ({
   prevLabel: { fontFamily: fam.bold, fontSize: 14, color: colors.textMuted },
   arrow: { fontFamily: fam.regular, fontSize: 13, color: colors.textDisabled },
   nowLabel: { fontFamily: fam.extrabold, fontSize: 14 },
-  toggle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 34, paddingTop: 24, borderTopWidth: 1, borderTopColor: colors.surface },
-  toggleText: { fontFamily: fam.extrabold, fontSize: 14, color: colors.text, letterSpacing: -0.28 },
-  source: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 18, borderTopWidth: 1, borderTopColor: colors.surface },
+  toggle: { marginTop: 28 },
+  // 시트 좌우 여백을 넘는 화면 너비 구분선
+  source: { marginTop: 24, marginHorizontal: -20 },
   note: { marginTop: 16 },
-  sourceText: { fontFamily: fam.bold, fontSize: 14, color: colors.textSub },
   foot: { paddingTop: 8, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: colors.surface, backgroundColor: colors.bg },
 }));

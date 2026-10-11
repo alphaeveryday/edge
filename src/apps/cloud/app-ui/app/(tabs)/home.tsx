@@ -66,8 +66,9 @@ export default function Home() {
           <SectionHead title="커뮤니티 인기글" />
         </View>
         {posts.data?.map((p) => <EtfPostRow key={p.id} post={p} showTag />)}
-        <View style={{ marginTop: 12, marginHorizontal: PAGE_X }}>
-          <LinkRow variant="card" muted label="더보기" open={false} onPress={() => router.push('/(tabs)/community')} />
+        {/* 마지막 글의 아래 선과 겹치는 위 선 */}
+        <View style={{ marginTop: -1 }}>
+          <LinkRow muted center divider label="커뮤니티 더 보기" onPress={() => router.push('/(tabs)/community')} />
         </View>
       </ScrollView>
     </View>

@@ -40,6 +40,7 @@ export function LinkRow({ label, variant = 'inline', open = null, muted, center,
 
 const useStyles = createStyles((colors) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44 },
-  divider: { borderTopWidth: 1, borderTopColor: colors.surface },
+  // 다른 화면 이동 줄의 위아래 구분선
+  divider: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.surface },
   label: { fontSize: 14, letterSpacing: -0.28 },
 }));
