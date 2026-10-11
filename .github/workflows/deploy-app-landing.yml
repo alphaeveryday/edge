@@ -1,6 +1,6 @@
 # ETF Orca 랜딩페이지(etforca.com) dev 배포 — 랜딩 파일이 바뀐 dev push 에서만 돈다.
 # 빌드 도구가 없는 정적 파일이라 deploy-ui.yml(pnpm 빌드)을 재사용하지 않는다. build.sh 가 조각 문서에
-# 문서 머리를 붙여 dist/ 를 만들고, 여기서 S3 에 올린 뒤 CloudFront 캐시를 비운다.
+# 문서 뼈대(doctype·html·head·body)를 씌워 dist/ 를 만들고, 여기서 S3 에 올린 뒤 CloudFront 캐시를 비운다.
 # 이 배포는 버킷의 index.html·robots.txt·sitemap.xml 과 assets/ 만 다룬다 — 다른 경로는 지우지 않는다.
 # 버킷·배포 ID 는 repo vars 로 받는다(envs/dev 출력값 landing_bucket·landing_distribution_id).
 name: deploy-app-landing
