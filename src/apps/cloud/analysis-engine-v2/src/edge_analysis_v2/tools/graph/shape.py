@@ -18,10 +18,9 @@ def won_text(value):
     if value is None:
         return None
     won = int(Decimal(str(value)).to_integral_value(ROUND_HALF_UP))
-    parts = [f'{abs(won) // unit % 10**4:,}{name}' for unit, name in ((10**12, '조'), (10**8, '억'), (10**4, '만'), (1, ''))
-             if abs(won) // unit % 10**4]
-    if abs(won) >= 10**16:
-        parts[0] = f'{abs(won) // 10**12:,}조'
+    # 조 is the largest unit written, so it carries everything above it: 12,345조, not 1경 2,345조.
+    counts = [(abs(won) // 10**12, '조')] + [(abs(won) // unit % 10**4, name) for unit, name in ((10**8, '억'), (10**4, '만'), (1, ''))]
+    parts = [f'{count:,}{name}' for count, name in counts if count]
     return ('-' if won < 0 else '') + (' '.join(parts) or '0') + '원'
 
 
@@ -91,11 +90,8 @@ def table(rows, keep_id=False, keep_title=False):
     for row in rows:
         # A graph object keeps its values under properties; a calculated row is its values.
         values = {k: v for k, v in row.get('properties', row).items() if k not in NOISE and not isinstance(v, (dict, list))}
-        values.update(row.get('money_text') or {})   # the written amount stands in for raw won
         values.update({k: v for k, v in row.items()
-                       if k not in ('object_type', 'object_id', 'title', 'properties', 'money_text') and not isinstance(v, (dict, list))})
-        if values.get('value_text') is not None:
-            values.pop('value', None)
+                       if k not in ('object_type', 'object_id', 'title', 'properties') and not isinstance(v, (dict, list))})
         if keep_title and row.get('title') not in values.values():
             values['title'] = row.get('title')   # an event or a document is named only by its title
         if keep_id:

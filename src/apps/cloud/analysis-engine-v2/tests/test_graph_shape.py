@@ -140,6 +140,8 @@ def test_a_won_amount_is_written_out_exactly_so_no_digit_is_left_to_count():
     assert won_text(-2069000000) == '-20억 6,900만원'
     assert won_text(1000000000000) == '1조원'
     assert won_text(12345678901234567) == '12,345조 6,789억 123만 4,567원'
+    # WHY: an amount with nothing below 조 raised an error, and one won above it was dropped.
+    assert won_text(10**16) == '10,000조원' and won_text(10**16 + 1) == '10,000조 1원'
     assert won_text(0) == '0원' and won_text(None) is None
 
 

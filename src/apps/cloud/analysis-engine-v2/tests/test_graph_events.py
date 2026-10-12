@@ -182,6 +182,68 @@ class EventRowTests(unittest.TestCase):
         self.assertEqual([(r['added'],r['stage'],r['repeated_by']) for r in sent['display_items']],
             [('FIRST_IN_THREAD','ANNOUNCED',2),('FOLLOW_UP_STAGE','DEFINITIVE_SIGNED',0)])
 
+    def test_a_thread_that_does_not_record_what_each_report_added_says_so_and_folds_nothing(self):
+        # WHY: the thread link has no noveltyStatus yet; every report came back as a row described as a change to the event.
+        def event(n):
+            return {'object_type':'SourceEvent','object_id':f'e{n}','title':'COMPANY.CONTRACT.SIGNING / A [SUPPLIER] / 2026-09-04',
+                'properties':{'eventType':'COMPANY.CONTRACT.SIGNING','eventDate':'2026-09-04','availableAt':f'2026-09-04T0{n}:00'}}
+        stored={f'e{n}':event(n) for n in (1,2,3)}
+        thread={'object_type':'EventThread','object_id':'t1','properties':{}}
+        def linked(refs,link,direction='forward',**kw):
+            if 'EventThread' not in link:return []
+            if direction=='reverse':return [{'source':thread,'target':stored[i],'link_properties':{}} for i in stored]
+            return [{'source':r,'target':thread,'link_properties':{}} for r in refs]
+        graph=SimpleNamespace(get=lambda refs:{'items':[{'object_id':r['object_id'],'status':'resolved','object':stored[r['object_id']]} for r in refs]},linked=linked)
+        owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,result=lambda items,**kw:(items,kw))
+        items,sent=EventTools(owner).history([{'object_type':'SourceEvent','object_id':'e2'}])
+        self.assertEqual([(r['added'],r['repeated_by']) for r in sent['display_items']],[('not recorded',0)]*3)
+        meaning=sent['scope']['field_scope']['row']
+        self.assertIn('not recorded for this thread',meaning)
+        self.assertNotIn('changed what is known',meaning)
+
+    def test_a_role_condition_without_named_companies_matches_any_company_in_that_role(self):
+        # WHY: a search for every SUPPLIER, with no company named, marked an event with a SUPPLIER as not matched.
+        event={'object_type':'SourceEvent','object_id':'e','title':'Event','properties':{'eventType':'COMPANY.CONTRACT.SIGNING','eventDate':'2026-09-04'}}
+        report={'event':event,'participants':[{'actor':{'object_type':'Company','object_id':'a','title':'A'},'role':'SUPPLIER','argument_group':0}],'features':[],'documents':[]}
+        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=lambda *a,**kw:[event],linked=lambda *a,**kw:[])
+        owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw))
+        tool=EventTools(owner);tool.enrich=lambda found:[report]
+        search=lambda roles:tool.search(start_date='2026-09-01',end_date='2026-09-30',event_types=['COMPANY.CONTRACT.SIGNING'],
+            participant_conditions=[{'role_codes':roles}])[0][0]['match_status']
+        self.assertEqual((search(['SUPPLIER']),search(['CUSTOMER'])),('matched','not_matched'))
+
+    def test_the_default_last_day_is_the_korean_day_of_the_cutoff(self):
+        # WHY: at 01:00 Korean time the UTC date is the day before, and that day's events were left out of a search with no end date.
+        seen={}
+        owner=SimpleNamespace(graph=None,register=lambda *a,**kw:None,store=SimpleNamespace(cutoff='2026-10-04T16:00:00+00:00'))
+        tool=EventTools(owner);tool.search=lambda **kw:seen.update(kw)
+        tool.similar(event_types=['COMPANY.CONTRACT.SIGNING'])
+        self.assertEqual(seen['end_date'],'2026-10-05')
+
+    def test_events_ordered_by_reported_date_are_in_time_order(self):
+        # WHY: rows came in order of type and of thread id, so a newer event stood before an older one of another type.
+        def report(n,kind,day):
+            return {'event':{'object_type':'SourceEvent','object_id':f'e{n}','title':f'{kind} / A{n} [SUPPLIER] / {day}','properties':{'eventType':kind,'eventDate':day}},
+                'participants':[],'documents':[],'features':[]}
+        reports=[report(1,'COMPANY.A','2026-09-20'),report(2,'COMPANY.B','2026-09-05'),report(3,'COMPANY.A','2026-09-10')]
+        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.A'},{'code':'COMPANY.B'}],nodes=lambda *a,**kw:[r['event'] for r in reports],linked=lambda *a,**kw:[])
+        owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw))
+        tool=EventTools(owner);tool.enrich=lambda found:[r for r in reports if r['event'] in found]
+        rows,sent=tool.search(start_date='2026-09-01',end_date='2026-09-30',query='COMPANY')
+        self.assertEqual([r['reported_date'] for r in sent['display_items']],['2026-09-05','2026-09-10','2026-09-20'])
+
+    def test_a_page_dated_after_the_cutoff_is_not_read_as_the_stored_article(self):
+        # WHY: the reader found the page behind a stored link was published after the analysis time, and its text came back under the stored date.
+        document={'object_type':'NewsArticle','object_id':'d1','title':'t','properties':{'title':'t','publishedAt':'2026-09-04T01:00:00+00:00','sourceUri':'https://example.com/a'}}
+        page={'text':'later text','total_chars':10,'next_offset':None,'temporal_status':'after_cutoff','final_url':'https://example.com/b'}
+        graph=SimpleNamespace(get=lambda refs:{'items':[{'status':'resolved','object':document}]})
+        owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,result=lambda items,**kw:(items,kw),web=SimpleNamespace(read=lambda url,offset:page))
+        tool=EventTools(owner);ref={'object_type':'NewsArticle','object_id':'d1'}
+        with self.assertRaisesRegex(ValueError,'dated after the analysis cutoff'):tool.article(document_ref=ref)
+        page['temporal_status']='unverified_or_future'
+        item=tool.article(document_ref=ref)[0][0]
+        self.assertEqual((item['page_dated'],item['final_url']),('unverified_or_future','https://example.com/b'))
+
     def test_events_ordered_by_amount_put_the_largest_first(self):
         # WHY: rows were in date order; an answer read 44 of 66 and called a 6,400억 contract the largest while larger ones sat on the next page.
         def report(n,value):

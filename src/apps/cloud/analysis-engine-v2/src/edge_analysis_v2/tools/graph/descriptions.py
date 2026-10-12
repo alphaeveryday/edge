@@ -96,7 +96,8 @@ TOOLS = {
         'follow_up': 'get_event_timeline with event_ref for how an earlier event went on.',
         'alternative': 'list_events to see everything that happened to known companies in a period.',
         'args': {'event_types': 'Stored type codes such as COMPANY.CONTRACT.SIGNING; a code that is not stored is an error.',
-                 'query': 'Words that must all appear in the event (companies, contract object, counterpart) or in a report title.',
+                 'query': 'Words that must all appear in the event (companies, contract object, counterpart) or in a report title. Without targets the longest word '
+                          'must be in the event itself: an event that has it only in a report title is not found.',
                  'targets': TARGETS + ' Leave out to look at every company.',
                  'start_date': START + ' Leave out to search from the start of the data.', 'end_date': END + ' Leave out to search up to the cutoff.',
                  'time_field': 'reported_event_date (default) filters by the date the report gave. available filters by when the report entered this data.',
@@ -109,7 +110,8 @@ TOOLS = {
         'summary': 'Read how one event went from announcement to signing, correction or cancellation: only the reports that changed what is known, in time order.',
         'returns': 'One row per report that added something: added (FIRST_IN_THREAD, FOLLOW_UP_STAGE or CORRECTION), reported_date, stage, companies and roles, '
                    'amounts, arguments, the document, and repeated_by: how many later reports only repeated it. One thread is one event. '
-                   'An event without a stored thread returns one row that counts the reports of the same type, companies and reported date.',
+                   'An event without a stored thread returns one row that counts the reports of the same type, companies and reported date. '
+                   'Where added is "not recorded", the data does not say what each report added: every report is then a row and repeats are not folded.',
         'prerequisite': 'event_id from a list_events row or event_ref from a find_similar_events row.',
         'follow_up': 'read_article with a document_ref for the full text of a report. read_document_excerpts for the opening lines of several.',
         'args': {'event_refs': 'Events to open, as [{"object_type":"SourceEvent","object_id":"..."}].', 'limit': LIMIT}},
