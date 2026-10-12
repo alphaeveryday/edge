@@ -100,3 +100,23 @@ def test_draft_sections_are_saved_atomically_and_private(isolated_db):
         store.save_draft(draft_id, 'other', payload)
     with pytest.raises(ValueError, match='NOT_FOUND'):
         store.submit('other', 'key', {'draft_id': draft_id})
+
+
+def test_tax_popup_payload_round_trips_through_owned_draft_api(isolated_db):
+    from fastapi.testclient import TestClient
+    from edge_portfolio.api import app
+    draft_id = str(uuid4())
+    payload = {'holdings': [{'name': '현금', 'kind': 'cash', 'instrument_id': 'CASH:KRW', 'amount_krw': '1000000'}],
+               'preferences': {'accounts': ['일반 계좌', 'ISA'], 'tax_profile': {'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '아니요',
+               'accounts': [{'account': 'ISA', 'subtype': '중개형 · 일반형', 'opened': '', 'remaining_man': '', 'paid_man': '0'}]}}}
+    headers = {'Origin': 'http://localhost:5180'}
+    with TestClient(app) as client:
+        client.get('/api/portfolio/session')
+        assert client.post('/api/portfolio/drafts/' + draft_id, json=payload, headers=headers).status_code == 200
+        with store.connect() as db:
+            tax = db.execute('SELECT payload FROM portfolio_input_tax WHERE draft_id=%s', (draft_id,)).fetchone()['payload']['tax_profile']
+        assert tax['accounts'][0]['remaining_man'] == ''  # Unknown must not become zero.
+        assert tax['accounts'][0]['paid_man'] == '0'
+        client.cookies.clear()
+        client.get('/api/portfolio/session')
+        assert client.post('/api/portfolio/drafts/' + draft_id, json=payload, headers=headers).status_code == 404
