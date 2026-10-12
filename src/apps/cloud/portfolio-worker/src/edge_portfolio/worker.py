@@ -16,7 +16,12 @@ def failure_codes(error):
     if isinstance(error, BaseExceptionGroup):
         return [code for child in error.exceptions for code in failure_codes(child)]
     prefix = str(error).split(':', 1)[0]
-    allowed = {'EXA_FAILED', 'EMPTY_SOURCE', 'TOOL_NOT_ALLOWED', 'TOOL_LIMIT', 'INVALID_TOOL_ARGUMENT', 'OUTPUT_INVALID', 'MODEL_BUDGET', 'MODEL_TRUNCATED'}
+    allowed = {'EXA_FAILED', 'EMPTY_SOURCE', 'TOOL_NOT_ALLOWED', 'TOOL_LIMIT', 'INVALID_TOOL_ARGUMENT', 'OUTPUT_INVALID', 'MODEL_BUDGET', 'MODEL_CALL_BUDGET', 'MODEL_CONTEXT_BUDGET', 'MODEL_TRUNCATED'}
+    if prefix == 'OUTPUT_INVALID':
+        reasons = {'must exactly match': 'ALLOCATION_MISMATCH', 'Call read_portfolio_history': 'HISTORY_NOT_READ',
+                   'Evidence must select': 'EVIDENCE_INVALID', 'paragraphs must total': 'SECTION_LENGTH',
+                   'each bullet must be one sentence': 'BULLET_FORMAT', 'No eligible candidate': 'NO_ELIGIBLE_CANDIDATE'}
+        return ['OUTPUT_INVALID', next((code for text, code in reasons.items() if text in str(error)), 'OUTPUT_SCHEMA')]
     return [prefix if prefix in allowed else type(error).__name__]
 
 
