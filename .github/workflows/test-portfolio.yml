@@ -23,7 +23,7 @@ jobs:
           POSTGRES_PASSWORD: portfolio-test
           POSTGRES_DB: portfolio
         ports: ['5432:5432']
-        options: --health-cmd 'pg_isready -U portfolio' --health-interval 5s --health-retries 10
+        options: --health-cmd "pg_isready -U portfolio" --health-interval 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -46,4 +46,4 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter portfolio-ui build
           pnpm --filter portfolio-ui exec playwright install --with-deps chromium
-          pnpm --filter portfolio-ui test
+          pnpm --filter portfolio-ui test:e2e

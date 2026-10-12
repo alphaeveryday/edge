@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5180",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 5180",
-    "test": "playwright test"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "react": "^19.0.0",
