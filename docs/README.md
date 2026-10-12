@@ -102,3 +102,5 @@
 # 포트폴리오 서비스 문서
 
 - [Terraform 편입과 SSM 권한](design/portfolio-infrastructure.md)
+- [독립 포트폴리오 에이전트](design/portfolio-worker.md)
+- [포트폴리오 배포·입력 저장·검증](design/portfolio-deployment.md)
