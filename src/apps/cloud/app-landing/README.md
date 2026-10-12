@@ -64,5 +64,5 @@
 
 - `www.etforca.com` 은 서빙하지 않는다.
 - 종목 전망은 하루 한 번(08:00 KST) 갱신된다. 그 뒤에 새로 발행된 전망은 다음 날 반영된다.
-- 로컬 미리보기에는 `outlook/` 파일이 없어 종목을 눌러도 "준비 중" 안내가 뜬다. 실제 리포트를 보려면 `dist/outlook/` 에 파일을 받아 둔다(예: `curl -o dist/outlook/091160.json https://etforca.com/outlook/091160.json`).
+- 로컬 미리보기에는 `outlook/` 파일이 없어 종목을 눌러도 "준비 중" 안내가 뜬다. 실제 리포트를 보려면 `dist/outlook/` 에 파일을 받아 둔다(예: `curl --create-dirs -o dist/outlook/091160.json https://etforca.com/outlook/091160.json`).
 - 없는 경로는 403 을 돌려준다.

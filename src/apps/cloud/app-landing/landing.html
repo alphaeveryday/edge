@@ -1420,8 +1420,8 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; n.textContent = text; return n; };
   let missT, cardSeq = 0;
   // 전망은 같은 도메인의 outlook/<코드>.json 에서 읽는다. 매일 08:00에 그날 발행된 앱 화면 응답이 그대로 올라온다(infra/terraform/modules/landing-export).
-  // 파일이 없거나 읽지 못하면 null — 카드가 준비 중이라고 알린다
-  const getOutlook = (code) => fetch(`outlook/${code}.json`).then((r) => (r.ok ? r.json() : null), () => null);
+  // 파일이 없으면 null. 읽다 실패하면(통신 오류, 깨진 파일) 던진다 — 어느 쪽이든 카드가 준비 중이라고 알린다
+  const getOutlook = (code) => fetch(`outlook/${code}.json`).then((r) => (r.ok ? r.json() : null));
   // 방향 낱말은 앱과 같은 다섯 가지(강력상승·상승·중립·하락·강력하락)이고, 색과 기호는 상승·중립·하락 셋으로 묶는다
   const tone = (word) => (word.includes('상승') ? 1 : word.includes('하락') ? -1 : 0);
   const GLYPH = '▼■▲', GRADE = ['grade grade--down', 'grade grade--flat', 'grade'];
@@ -1461,13 +1461,16 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     card.append(head, el('i', 'find__sk', ''), el('i', 'find__sk', ''), el('i', 'find__sk', ''));
     fOut.replaceChildren(card);
     fOut.hidden = false;
-    const d = await getOutlook(code);
+    let report = null;
+    try {
+      const d = await getOutlook(code);
+      if (d) report = [reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${asOf(d.publication.analysis_at)} 기준 · 투자 추천이 아니에요.`)];
+    } catch { /* 깨졌거나 모양이 다른 파일은 없는 파일처럼 다룬다 — 뼈대 화면을 남기지 않는다 */ }
     if (seq !== cardSeq) return; // 기다리는 사이에 다른 것을 찾았다
     const go = el('button', 'btn btn--point', '앱에서 매일 새 전망 보기');
     go.type = 'button';
     go.onclick = () => $('.cta .btn--point').click(); // 다운로드 버튼과 같은 길: 휴대폰은 스토어, 데스크톱은 QR 창
-    if (d) card.replaceChildren(head, reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${asOf(d.publication.analysis_at)} 기준 · 투자 추천이 아니에요.`), go);
-    else card.replaceChildren(head, el('p', 'find__meta', '오늘 전망을 준비하고 있어요. 앱에서는 바로 볼 수 있어요.'), go);
+    card.replaceChildren(head, ...(report || [el('p', 'find__meta', '오늘 전망을 준비하고 있어요. 앱에서는 바로 볼 수 있어요.')]), go);
     if (window.ScrollTrigger) window.ScrollTrigger.refresh(); // 리포트만큼 길어졌으니 아래쪽 위치를 다시 잰다
   };
   const showMiss = (raw) => {
