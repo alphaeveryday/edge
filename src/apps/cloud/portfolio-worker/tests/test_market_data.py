@@ -63,7 +63,7 @@ async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage
                              evidence=[{'source_id': 's1', 'passage_id': 'p1'}])
     class FakeMarket:
         as_of = date(2026, 10, 12)
-        results = {(('US:VOO', 1.0),): {}}
+        queried = {(('US:VOO', 1.0),)}
         async def get(self, rows):
             return {'status': 'available', 'history': {}, 'return_1y_pct': -12}
         def dividends(self, instrument_id):
@@ -74,6 +74,23 @@ async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage
     assert published['recommendation']['expected_return_1y'] == -8
     assert published['recommendation']['target_return_1y'] == 7
     assert published['recommendation']['dividend_yield_1y'] is None
+
+
+async def test_optimizer_cache_alone_cannot_authorize_a_forecast_without_reading_history():
+    final = FinalReport.model_validate(final_payload())
+    final.return_forecast = ReturnForecast(percent=8, reason='가격 부담과 실적 둔화 가능성을 과거 성과에 더해 보수적으로 판단한 추정 수익률이에요.',
+        evidence=[{'source_id': 's1', 'passage_id': 'p1'}])
+    market = MarketData(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'))
+    rows = [{'instrument_id': 'US:VOO', 'weight_pct': 100}]
+    market.results[(('US:VOO', 1.0),)] = {'status': 'available', 'return_1y_pct': 10,
+        'history': {'start_date': '2025-10-10', 'end_date': '2026-10-09', 'method': 'test', 'sources': []}}
+    published = {'recommendation': {'allocations': rows, 'expected_return_1y': None}}
+    sources = [{'id': 's1', 'url': 'https://official.example', 'passages': [{'id': 'p1', 'text': 'Official outlook'}]}]
+    with pytest.raises(ValueError, match='Call read_portfolio_history'):
+        await enrich_report(published, final, market, sources)
+    await market.tool({'allocations': rows})
+    await enrich_report(published, final, market, sources)
+    assert published['recommendation']['expected_return_1y'] == 8
 
 
 

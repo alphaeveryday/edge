@@ -158,6 +158,7 @@ class MarketData:
         self.loader = loader
         self.records = {}
         self.results = {}
+        self.queried = set()
         self.calls = 0
         self.semaphore = asyncio.Semaphore(3)
         self.catalog = {r['id']: r for r in directory()['instruments']}
@@ -217,6 +218,7 @@ class MarketData:
         result = await self.get(args.get('allocations', []))
         if result['status'] != 'available':
             return result
+        self.queried.add(tuple(sorted(weights(args['allocations']).items())))
         return {k: v for k, v in result.items() if k != 'history'} | {
             'start_date': result['history']['start_date'], 'end_date': result['history']['end_date'],
             'method': result['history']['method'], 'sources': result['history']['sources'],
@@ -269,7 +271,7 @@ async def enrich_report(published, final, market, sources):
     dividends = {}
     target = weights(plan['allocations'])
     forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast else []
-    queried = tuple(sorted(target.items())) in market.results
+    queried = tuple(sorted(target.items())) in market.queried
     if final.return_forecast and not queried:
         raise ValueError('Call read_portfolio_history with the final allocation before writing return_forecast')
     result = await market.get(plan['allocations'])
