@@ -641,15 +641,59 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
     return None
 
 
+def _non_common_shares(shares: dict | None) -> Decimal | None:
+    """보통주가 아닌 주식의 발행 수. 표만으로 정할 수 없으면 None(모름).
+
+    합계 − 보통주다(ALPHA-1170). 종류 표기를 해석하지 않는다 — 우선주 행이 없거나 `종류주식` 같은 다른 이름의 행이 있어도
+    그 수는 정해진다. 다만 그 차이가 **표에 적힌 보통주가 아닌 행들의 합과 같을 때만** 인정한다(발행 수·자기주식 수 모두).
+    행이 하나도 없으면 차이는 0 이어야 한다. 세 행(합계·보통주·우선주)만 있는 표에서는 우선주 행의 수와 같다.
+    모름으로 두는 경우:
+    - 합계·보통주 행의 수를 못 읽었다. 적힌 행의 수를 못 읽었다(파손이 정책 차단보다 먼저다 — 다른 이름의 행은 빈 칸만 0 이다).
+    - 차이가 적힌 행의 합과 다르다(적히지 않은 주식이 있거나, 합계에 들지 않은 행이 있다). 어느 행의 자기주식이 발행
+      수보다 많다. 수가 있는 다른 이름의 행이 합계 행과 다른 접수번호·기준일이다(한 표가 아니다 — 세 행끼리는
+      `share_table_problem` 이 본다). 수가 있는 다른 이름의 행 가운데 같은 이름이 둘 이상이다.
+    - 유통 보통주가 없는데 다른 이름의 행에 주식이 있다 — 그 행이 보통주의 다른 표기일 수 있다.
+    근거(2026 반기 주식총수 표 623개, 2026-10-11 수집분): 세 행을 다 읽어 정해지던 표 449개. 나머지 가운데 차이가 0 인
+    표가 140개, 적힌 행의 합과 같은 양수인 표가 15개, 보통주 행을 찾지 못하는 표가 18개였다.
+    """
+    total, common, preferred = (_share_row(shares, kind) for kind in _SHARE_CLASSES)
+    issued_total, treasury_total = _share_count(total, "istc_totqy"), _share_count(total, "tesstk_co")
+    issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
+    if None in (issued_total, treasury_total, issued_common, treasury_common):
+        return None
+    fields = ("istc_totqy", "tesstk_co")
+    others = _unread_share_rows(shares)
+    known = [tuple(_share_count(preferred, field) for field in fields)] if preferred is not None else []
+    unread = [tuple(Decimal(0) if row.get(field) is None or str(row.get(field)).strip() == "" else _share_count(row, field)
+                    for field in fields) for row in others]
+    if any(None in pair for pair in known + unread) or any(held > count for count, held in known + unread):
+        return None
+    # 수가 있는 다른 이름의 행은 합계 행과 같은 표의 행이어야 하고, 같은 이름이 두 번 나오면 안 된다(읽는 종류의 중복 행을
+    # 고르지 않는 것과 같다 — 더해서 맞는다고 중복이 아니라 할 수 없다). 수가 없는 행은 판정에 쓰이지 않는다.
+    table = (str(total.get("rcept_no")), str(total.get("stlm_dt")))
+    holding = [row for row, (count, held) in zip(others, unread) if count or held]
+    if any((str(row.get("rcept_no")), str(row.get("stlm_dt"))) != table for row in holding) \
+            or len({_share_class(row) for row in holding}) != len(holding):
+        return None
+    issued, treasury = issued_total - issued_common, treasury_total - treasury_common
+    if (sum(i for i, _ in known + unread), sum(t for _, t in known + unread)) != (issued, treasury):
+        return None
+    if issued_common <= treasury_common and any(i or t for i, t in unread):
+        return None
+    return issued
+
+
 def _share_label_problem(shares: dict | None) -> str | None:
     """다른 이름의 종류 행이 있고, 읽어야 할 행(합계·보통주·우선주)이 없거나 그 행에 주식이 있을 수 있으면 지원하지 않는 표기다.
 
+    보통주가 아닌 주식의 수가 표의 수만으로 정해지면(`_non_common_shares`) 표기를 읽을 필요가 없으므로 문제가 아니다.
     자본 줄이 없거나 원화가 아니어서 BPS 를 어차피 못 만드는 경우에도 따로 본다 — 앞선 결손 사유가 표기 문제를 가리지 않게.
     """
     unknown = _unread_share_rows(shares)
     missing = any(_share_row(shares, kind) is None for kind in _SHARE_CLASSES)
     holds = any(_may_hold_shares(r) for r in unknown)
-    return "bps_share_class_label_unsupported" if unknown and (missing or holds) else None
+    return "bps_share_class_label_unsupported" if unknown and (missing or holds) and _non_common_shares(shares) is None \
+        else None
 
 
 def _unread_share_rows(shares: dict | None) -> list[dict]:
@@ -662,7 +706,8 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     """BPS 두 지표 (실응답 2026-09-30 확인 — 삼성전자 우선주 802,371,203주, 자기주식은 보통주에만).
 
     - `bps`(보통주 1주 기준, v2 밸류 계약 `가격도 같은 주식단위`): 지배기업 소유주지분 ÷ (보통주 발행 − 보통주 자기주식).
-      **우선주가 있으면 만들지 않는다** — 지분을 주식 종류별로 나눌 근거가 공시에 없어 보통주 순수 BPS 를 계산할 수 없다.
+      **우선주 등 보통주가 아닌 주식이 있으면 만들지 않는다** — 지분을 주식 종류별로 나눌 근거가 공시에 없어 보통주 순수
+      BPS 를 계산할 수 없다.
       그 회사는 `bps_blocked_preferred_shares` 로 거부 기록에 남는다(조용히 통상 BPS 로 대체하지 않는다).
     - `bps_total_shares`(통상 관행): 지배기업 소유주지분 ÷ (보통주+우선주 발행 합계 − 자기주식 합계). 항상 만든다.
       소비 쪽이 우선주 있는 회사에 이 값을 쓸지는 팀 결정(설계 §10.9)이다.
@@ -694,8 +739,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     equity = _amount(line.get("thstrm_amount"))
     issued_total, treasury_total = _share_count(total, "istc_totqy"), _share_count(total, "tesstk_co")
     issued_common, treasury_common = _share_count(common, "istc_totqy"), _share_count(common, "tesstk_co")
-    # 우선주 행이 없으면 "우선주 없음"이 아니라 "모름"이다(실응답은 없을 때도 `-` 행을 준다) — 보통주 BPS 를 막는 쪽으로.
-    issued_preferred, treasury_preferred = _share_count(preferred, "istc_totqy"), _share_count(preferred, "tesstk_co")
+    issued_preferred = _share_count(preferred, "istc_totqy")
     if equity is None or None in (issued_total, treasury_total) or issued_total - treasury_total <= 0:
         # 읽어야 할 행이 없는데 다른 이름의 종류 행이 있으면(label), 자본 칸이 비었더라도 표기 문제를 가리지 않는다.
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": label or ["bps_input_missing"]})
@@ -703,13 +747,16 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
     # 보통주 BPS 를 만들 수 있는지의 판정을 한 번 내리고 통상 BPS 의 근거 줄에 남긴다 — DB 조회(bps_note)가 이 판정을
     # 그대로 읽는다(우선주 수만 보고 다시 추론하면 파손을 정책으로 읽는다). 우선주가 있어도 종류별 수를 하나라도
     # 못 읽었으면 파손이 먼저다 — 재수집 대상이 정책 대기로 보이면 안 된다.
-    # 읽지 않는 종류 행(`종류주식` 등)에 주식이 있을 수 있으면 "모름"이다 — 그 주식이 우선주·합계에 들었는지 표만으로는
-    # 알 수 없다(실응답 1,467표 가운데 보통주 BPS 가 나오는 표에는 그런 행이 없다, ALPHA-1170). `비고` 는 종류가 아니라
-    # 설명 행이라 뺀다(실응답은 그 행의 수 칸에 `주1)` 같은 주석을 적는다).
+    # 우선주 행이 없다고 "우선주 없음"으로 보지 않고, 읽지 않는 종류 행(`종류주식` 등)의 표기도 해석하지 않는다. 그럴 때는
+    # 합계 − 보통주로 정한다(`_non_common_shares`): 합계가 더 많으면 이름이 무엇이든 보통주가 아닌 주식이 있는 것이라
+    # 우선주가 있는 회사와 같은 정책 차단이고, 같으면 없는 것이다. 합계 = 보통주인데 읽지 않는 종류 행에 주식이 있을 수
+    # 있으면 표의 모순이라 "모름"이다. `비고` 는 종류가 아니라 설명 행이라 뺀다(실응답은 그 행의 수 칸에 `주1)` 같은
+    # 주석을 적는다).
     unread = any(_may_hold_shares(r) for r in _unread_share_rows(shares))
-    if unread or None in (issued_common, treasury_common, issued_preferred, treasury_preferred):
+    non_common = _non_common_shares(shares)
+    if non_common is None:
         common_bps = "bps_share_rows_unreadable"
-    elif issued_preferred > 0:
+    elif non_common > 0:
         common_bps = "bps_blocked_preferred_shares"        # 정책 차단(§10.9 팀 결정)
     elif issued_common - treasury_common <= 0:
         common_bps = "bps_input_missing"
@@ -720,7 +767,8 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
                     "field": "thstrm_amount", "value": str(equity)}
     shares_input = {"rcept_no": total.get("rcept_no"), "reprt_code": code, "se": "합계",
                     "istc_totqy": str(issued_total), "tesstk_co": str(treasury_total),
-                    "preferred_istc_totqy": str(issued_preferred) if issued_preferred is not None else "unknown",
+                    # 보통주가 아닌 주식 수 — 정해졌으면 그 수, 아니면 읽은 우선주 행의 수(행이 없으면 unknown).
+                    "preferred_istc_totqy": str(next((n for n in (non_common, issued_preferred) if n is not None), "unknown")),
                     "stlm_dt": total.get("stlm_dt"), "common_bps": common_bps}
     common_fields = {**base, "fiscal_period": fiscal_period, "period_kind": "POINT", "unit": "KRW_per_share",
                      "derivation": "EQUITY_OVER_SHARES", "rcept_no": max(line["rcept_no"], total["rcept_no"])}
@@ -736,7 +784,7 @@ def _bps(base, fiscal_period, code, fs_div, lines, shares, rejects) -> list[dict
         if common_bps == "bps_share_rows_unreadable" and (unread or common is None or preferred is None):
             reason = label[0] if label else "bps_share_class_row_absent"   # unread 면 label 이 반드시 있다(같은 조건)
         rejects.append({**base, "metric": "bps", "reprt_code": code, "reasons": [reason],
-                        "preferred_istc_totqy": str(issued_preferred)})
+                        "preferred_istc_totqy": str(issued_preferred if non_common is None else non_common)})
         return rows
     rows.append({**common_fields, "metric": "bps",
                  "value": str((equity / (issued_common - treasury_common)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),

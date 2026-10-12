@@ -827,7 +827,7 @@ def test_basic_eps_split_into_continuing_and_discontinued_lines_is_summed():
 def test_share_class_labels_with_the_same_meaning_are_read():
     # WHY(ALPHA-1170): 주식총수 표의 종류 표기는 회사마다 다르다. `보통주식`·`우선주식` 은 `보통주`·`우선주` 와 같은 말인데
     # 읽지 않아, 우선주가 없는 회사의 보통주 BPS 까지 "종류 수를 모른다"로 막혔다(2026 반기 실응답 375곳 중 78곳이 다른 표기).
-    # 뜻이 같은 표기만 읽는다 — `종류주식` 처럼 판단이 필요한 표기는 여전히 읽지 않고 막는다.
+    # 뜻이 같은 표기만 읽는다 — `종류주식` 처럼 판단이 필요한 표기는 여전히 해석하지 않는다.
     standard = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
     expected = [r for r in _extract_bps(standard)[0] if r["metric"] == "bps"]
     assert len(expected) == 1
@@ -853,15 +853,19 @@ def test_share_class_labels_with_the_same_meaning_are_read():
                      {"보통주": "의결권이 있는 주식(보통주)", "우선주": "의결권이 없는 주식(우선주)"}):
         rows, _ = _extract_bps(renamed(explicit, treasury=50))
         assert [r["value"] for r in rows if r["metric"] == "bps"] == [expected[0]["value"]], explicit
-    # 판단이 필요한 표기는 읽지 않는다 — 보통주 BPS 를 만들지 않고 "모름"으로 막는다. 보통주/우선주 표시가 없는
-    # 의결권 표기, 종류주식, 포함 검색이면 걸렸을 `우선주 등`·`전환우선주` 모두 그렇다.
+    # 판단이 필요한 표기는 해석하지 않는다 — 보통주/우선주 표시가 없는 의결권 표기, 종류주식, 포함 검색이면 걸렸을
+    # `우선주 등`·`전환우선주` 모두 그렇다. 그 행이 우선주인지는 몰라도 보통주가 아닌 주식이 있는지는 합계 − 보통주로
+    # 정해진다: 같으면 없고(보통주 BPS 를 만든다), 합계가 더 많으면 있다(우선주가 있는 회사와 같은 정책 차단).
     for unclear in ("종류주식", "의결권 없는 주식", "우선주 등", "전환우선주"):
         rows, rejects = _extract_bps(renamed({"우선주": unclear}, treasury=50))
+        assert [r["value"] for r in rows if r["metric"] == "bps"] == [expected[0]["value"]], unclear
+        assert not [r for r in rejects if r.get("metric") == "bps"], unclear
+        rows, rejects = _extract_bps(renamed({"우선주": unclear}, preferred=100))
         assert not [r for r in rows if r["metric"] == "bps"], unclear
-        assert any("bps_share_class_label_unsupported" in r["reasons"] for r in rejects), unclear
+        assert [r["reasons"] for r in rejects if r.get("metric") == "bps"] == [["bps_blocked_preferred_shares"]], unclear
 
-    # 읽는 행이 다 있어도 읽지 않는 종류 행에 주식이 있으면 보통주 BPS 를 만들지 않는다 — 그 주식이 우선주·합계에
-    # 들었는지 모른다(우선주 0 으로 가정하지 않는다). 통상 BPS 는 합계 행만 쓰므로 남는다. 표준 표기 표도 같다.
+    # 읽는 행이 다 있고 합계 = 보통주 + 우선주인데 읽지 않는 종류 행에 주식이 있으면 보통주 BPS 를 만들지 않는다 — 그
+    # 주식이 합계에 들지 않았으니 표가 모순이다(우선주 0 으로 가정하지 않는다). 통상 BPS 는 합계 행만 쓰므로 남는다.
     # 수가 깨졌거나 자기주식 칸에만 수가 있어도 같다 — 주식이 없다고 확인된 행(빈 칸·`-`·0)만 막지 않는다.
     for mapping in (suffix, {}):
         for issued, treasury, blocked in (("100", "-", True), ("abc", "-", True), ("-5", "-", True), ("0.5", "-", True),
@@ -884,11 +888,12 @@ def test_share_class_labels_with_the_same_meaning_are_read():
 def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred():
     # WHY(리뷰 4차): 우선주 행이 없거나 음수이거나 종류별 합이 합계와 다르면 "우선주 없음"이 아니라 "모름"이다 —
     # 그때 보통주 BPS 를 만들면 파손 응답이 정상 보통주 기준값으로 적재된다. 틀리면 막는 쪽으로 틀려야 한다.
-    missing = json.loads(shares(SAMSUNG, "2026", "11012"))
-    missing["list"] = [r for r in missing["list"] if r["se"] != "우선주"]
+    # 우선주 행이 없다는 것만으로는 "우선주 없음"이 아니다 — 합계 − 보통주로 확인될 때만 0 이다(아래 전용 테스트). 발행 수는
+    # 같은데 자기주식 수가 다르면 확인되지 않은 것이다: 값은 막고(우선주 0 으로 보지 않는다) 사유는 "행 없음"으로 가른다.
+    missing = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    missing["list"] = [dict(r, tesstk_co="40") if r["se"] == "보통주" else r for r in missing["list"] if r["se"] != "우선주"]
     rows, rejects = _extract_bps(missing)
     assert [r["metric"] for r in rows if r["metric"].startswith("bps")] == ["bps_total_shares"]
-    # 행이 없는 것은 원천이 종류를 나눠 주지 않은 것이다 — 값은 똑같이 막고(우선주 0 으로 보지 않는다) 사유만 가른다.
     assert any(r["reasons"] == ["bps_share_class_row_absent"] for r in rejects)
     total = next(r for r in rows if r["metric"] == "bps_total_shares")
     assert total["inputs"][1]["common_bps"] == "bps_share_rows_unreadable"        # DB 조회가 읽는 판정은 그대로
@@ -908,6 +913,103 @@ def test_share_table_damage_blocks_common_bps_instead_of_assuming_no_preferred()
     rows, rejects = _extract_bps(inconsistent)
     assert not [r for r in rows if r["metric"].startswith("bps")]
     assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
+
+
+def test_non_common_shares_are_decided_by_total_minus_common_when_the_preferred_row_cannot_tell():
+    # WHY(ALPHA-1170): 우선주 행이 없거나 `종류주식` 같은 다른 이름의 행이 있는 표는 "보통주가 아닌 주식이 몇 주인지 모른다"로
+    # 보통주 BPS 가 막혔다(2026 반기 표 623개 중 173개). 그런데 그 수는 표기를 해석하지 않아도 합계 − 보통주로 정해진다.
+    # 같으면 0 이고(140개 — 보통주 BPS 를 만든다), 합계가 더 많고 그 차이가 표에 적힌 다른 행들의 합과 같으면 있는 것이다
+    # (15개 — 우선주가 있는 회사와 같은 정책 차단). 우선주 행이 없다는 사실만으로 0 이라 가정하는 것이 아니고, 합계가 많다는
+    # 사실만으로 정책 차단이라 하는 것도 아니다: 표의 수가 서로 맞을 때만이다. 안 맞으면 종전대로 "모름"이다.
+    def table(*, issued=1000, common=1000, treasury=50, common_treasury=50, extra=None, more=()):
+        """보통주·합계 행만 있는 표(우선주 행 없음). `extra`·`more` 는 다른 이름의 종류 행 (이름, 발행 수, 자기주식 수)."""
+        body = json.loads(shares(SAMSUNG, "2026", "11012", issued=issued, treasury=treasury))
+        rows = [r for r in body["list"] if r["se"] != "우선주"]
+        for r in rows:
+            if r["se"] == "보통주":
+                r.update(istc_totqy=str(common), tesstk_co=str(common_treasury))
+        for name, count, held in [extra, *more] if extra else more:
+            rows.insert(1, {**rows[0], "se": name, "istc_totqy": count, "tesstk_co": held})
+        return {**body, "list": rows}
+
+    def verdict(body):
+        rows, rejects = _extract_bps(body)
+        total = next(r for r in rows if r["metric"] == "bps_total_shares")
+        return ([r["value"] for r in rows if r["metric"] == "bps"], total["inputs"][1]["common_bps"],
+                total["inputs"][1]["preferred_istc_totqy"], [r["reasons"] for r in rejects if r.get("metric") == "bps"])
+
+    standard = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    expected = [r["value"] for r in _extract_bps(standard)[0] if r["metric"] == "bps"]
+    assert len(expected) == 1
+    # 합계 = 보통주(발행 수·자기주식 수 모두) → 보통주가 아닌 주식은 0 이다. 세 행이 다 있는 표와 같은 값이 나온다.
+    assert verdict(table()) == (expected, "computed", "0", [])
+    for name in ("종류주식", "종류주", "기타주식", "의결권 없는 주식"):
+        for empty in (("-", "-"), ("0", ""), (None, None)):
+            assert verdict(table(extra=(name, *empty))) == (expected, "computed", "0", []), (name, empty)
+    # 합계 > 보통주이고 그 차이가 적힌 다른 행들의 합과 같으면(발행 수·자기주식 수 모두) 이름이 무엇이든 보통주가 아닌
+    # 주식이 있다. 정책 차단이고, 결손으로 분류된다.
+    blocked = ([], "bps_blocked_preferred_shares", "100", [["bps_blocked_preferred_shares"]])
+    for rows in ([("종류주식", "100", "-")], [("상환전환우선주", "100", "")], [("1우선주", "60", "-"), ("2우선주", "40", "-")]):
+        assert verdict(table(common=900, more=rows)) == blocked, rows
+    assert verdict(table(common=900, common_treasury=40, more=[("종류주식", "100", "10")])) == blocked
+    assert dart_fundamental.reject_class({"reasons": ["bps_blocked_preferred_shares"]}) == "policy"
+    # 차이가 적힌 행으로 설명되지 않으면 정책 차단이 아니라 "모름"이다 — 깨진 표가 팀 결정 대기로 보이면 안 된다.
+    unknown_rows = ([], "bps_share_rows_unreadable", "unknown", [["bps_share_class_label_unsupported"]])
+    assert verdict(table(common=900)) == ([], "bps_share_rows_unreadable", "unknown", [["bps_share_class_row_absent"]])  # 행 없음
+    for rows in ([("종류주식", "50", "-")],                          # 일부만 설명된다(적히지 않은 주식이 있다)
+                 [("종류주식", "300", "-")],                         # 합계에 들지 않은 주식이 있다
+                 [("종류주식", "100", "20")],                        # 자기주식 수가 맞지 않는다
+                 [("종류주식", "abc", "-")], [("종류주식", "100", "-5")]):   # 수를 못 읽었다 — 파손이 먼저다
+        assert verdict(table(common=900, more=rows)) == unknown_rows, rows
+    assert verdict(table(common=900, common_treasury=0, treasury=200, more=[("종류주식", "100", "200")])) == unknown_rows
+    # 행마다 본다 — 합으로는 맞아도 한 행의 자기주식이 발행 수보다 많으면 깨진 표다.
+    assert verdict(table(common=900, common_treasury=0, treasury=20,
+                         more=[("1우선주", "10", "20"), ("2우선주", "90", "-")])) == unknown_rows
+    # 같은 이름의 행이 두 번 나오면 더해서 맞아도 인정하지 않는다 — 중복된 행인지 서로 다른 주식인지 알 수 없다.
+    assert verdict(table(common=900, more=[("종류주식", "40", "-"), ("종류주식", "60", "-")])) == unknown_rows
+    assert verdict(table(common=900, more=[("종류주식", "100", "-"), ("종류주식", "-", "-")])) == blocked   # 수가 없는 행은 무관
+    # 근거로 쓰는 행은 합계 행과 같은 표의 행이어야 한다(접수번호·기준일) — 다른 판본·다른 기말의 행으로 판정하지 않는다.
+    for key, value in (("rcept_no", "20260929000001"), ("stlm_dt", "2025-12-31")):
+        mixed = table(common=900, more=[("종류주식", "100", "-")])
+        next(r for r in mixed["list"] if r["se"] == "종류주식")[key] = value
+        assert verdict(mixed) == unknown_rows, key
+        mixed = table(more=[("종류주식", "-", "-")])                  # 수가 없는 행은 판정에 쓰이지 않으므로 막지 않는다
+        next(r for r in mixed["list"] if r["se"] == "종류주식")[key] = value
+        assert verdict(mixed) == (expected, "computed", "0", []), key
+    # 세 행이 다 있는 표에 합계에 들지 않은 행이 더 있어도 마찬가지다(우선주 행의 수만으로 정책 차단이라 하지 않는다).
+    extra_class = json.loads(shares(SAMSUNG, "2026", "11012", preferred=100))
+    extra_class["list"].insert(1, {**extra_class["list"][0], "se": "종류주식", "istc_totqy": "200", "tesstk_co": "-"})
+    assert verdict(extra_class) == ([], "bps_share_rows_unreadable", "100", [["bps_share_class_label_unsupported"]])
+    # 유통 보통주가 없는데 다른 이름의 행에 주식이 있으면 그 행이 보통주의 다른 표기일 수 있다 — 보통주가 아닌 주식이
+    # 있다고 단정하지 않는다.
+    assert verdict(table(common=0, common_treasury=0, treasury=0, more=[("의결권 있는 주식", "1000", "-")])) == unknown_rows
+    # 합계 = 보통주인데 다른 이름의 행에 주식이 있으면 표의 모순이다 — 0 으로 보지 않고 종전대로 막는다.
+    assert verdict(table(extra=("종류주식", "100", "-"))) == (
+        [], "bps_share_rows_unreadable", "unknown", [["bps_share_class_label_unsupported"]])
+    # 발행 수는 같은데 자기주식 수가 다르면 확인되지 않은 것이다(자기주식만 있는 다른 종류는 설명되지 않는다).
+    assert verdict(table(common_treasury=40)) == ([], "bps_share_rows_unreadable", "unknown", [["bps_share_class_row_absent"]])
+    # 있는 우선주 행의 수를 못 읽었으면 합계 − 보통주로 넘어가지 않는다 — 파손이 정책 차단보다 먼저다.
+    damaged = json.loads(shares(SAMSUNG, "2026", "11012", preferred=100))
+    next(r for r in damaged["list"] if r["se"] == "우선주")["tesstk_co"] = "-5"
+    # (근거 줄의 수는 종전대로 읽은 우선주 행의 발행 수다.)
+    assert verdict(damaged)[1:] == ("bps_share_rows_unreadable", "100", [["bps_share_rows_unreadable"]])
+    # 보통주 행을 찾지 못하면 뺄 것이 없다 — 표기 문제로 남는다.
+    unnamed = table()
+    next(r for r in unnamed["list"] if r["se"] == "보통주")["se"] = "의결권 있는 주식"
+    assert verdict(unnamed) == ([], "bps_share_rows_unreadable", "unknown", [["bps_share_class_label_unsupported"]])
+    # 수로 정해지는 표는 다른 이름의 행이 있어도 "지원하지 않는 표기"가 아니다 — 자본 칸이 비어 BPS 를 못 만들 때 그 사유가
+    # 붙으면 원천 부재가 파싱 실패로 세어진다. 보통주 행을 못 찾는 표에는 종전대로 붙는다.
+    blank = json.loads(statement(SAMSUNG, "2026", "11012", "CFS"))
+    _blank_equity(blank["list"])
+
+    def without_equity(share_body):
+        _, rejects = dart_fundamental.extract({"corp_code": SAMSUNG["corp_code"], "stock_code": "005930"}, "2026", "11012",
+                                              "CFS", {"body_json": blank}, share_body)
+        return [r["reasons"] for r in rejects if r.get("metric") == "bps"]
+    assert without_equity(table(extra=("종류주식", "-", "-"))) == [["bps_input_missing"]]
+    assert without_equity(table(common=900, extra=("종류주식", "100", "-"))) == [["bps_input_missing"]]
+    unnamed["list"].insert(1, {**unnamed["list"][0], "se": "종류주식", "istc_totqy": "-", "tesstk_co": "-"})
+    assert without_equity(unnamed) == [["bps_share_class_label_unsupported"]]
 
 
 def test_numeric_zero_share_count_is_zero_not_missing():
@@ -944,8 +1046,9 @@ def test_treasury_share_rows_must_also_reconcile_and_damage_is_not_a_policy_bloc
     rows, rejects = _extract_bps(body)
     assert not [r for r in rows if r["metric"].startswith("bps")]
     assert any("share_rows_inconsistent" in r["reasons"] for r in rejects)
-    missing = json.loads(shares(SAMSUNG, "2026", "11012"))
-    missing["list"] = [r for r in missing["list"] if r["se"] != "우선주"]
+    # 우선주 행이 없고 합계 − 보통주로도 확인되지 않는 표(발행 수는 같고 자기주식 수가 다름)는 정책 차단이 아니다.
+    missing = json.loads(shares(SAMSUNG, "2026", "11012", treasury=50))
+    missing["list"] = [dict(r, tesstk_co="40") if r["se"] == "보통주" else r for r in missing["list"] if r["se"] != "우선주"]
     _, rejects = _extract_bps(missing)
     assert any("bps_share_class_row_absent" in r["reasons"] for r in rejects)
     assert not any("bps_blocked_preferred_shares" in r["reasons"] for r in rejects)

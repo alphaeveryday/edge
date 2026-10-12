@@ -312,6 +312,12 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
   기본 EPS 를 합계 줄 없이 계속영업·중단영업 두 줄로 적은 재무제표는 두 줄의 합을 싣는다. 이 행의 `derivation` 은
   `REPORTED` 그대로이고, `formula` 와 `inputs`(두 줄)가 합산임을 알린다(ALPHA-1170, 조건은 `dart_fundamental.py` 의
   `_SPLIT_ACCOUNTS` 주석).
+  보통주 BPS(`bps`)는 보통주가 아닌 주식이 0 일 때만 만든다. 그 수는 주식총수 표의 합계 − 보통주이고, 표에 적힌 보통주가
+  아닌 행들(우선주 행·다른 이름의 종류 행)의 합과 같을 때만 인정한다 — 종류 표기는 해석하지 않는다. 양수면 이름과
+  무관하게 `bps_note=PREFERRED_SHARES_PRESENT`(정책 차단)이다. 차이가 적힌 행으로 설명되지 않으면 보통주 BPS 를 만들지
+  않는다(통상 BPS 는 남아 `COMMON_SHARE_BPS_UNAVAILABLE`). 합계·보통주·우선주 세 행끼리의 모순은 이 판정보다 먼저 표
+  전체를 무효로 한다 — 그때는 두 BPS 가 다 없고 `BPS_UNCONFIRMED` 다(ALPHA-1170, `dart_fundamental.py` 의
+  `_non_common_shares`·`share_table_problem`).
 
 **보존과 복구(2026-09-30 로컬 실측으로 확정 — `tests/e2e/test_source_observations_pg.py::test_artifact_expiry_recovery_paths`).**
 과거 재현의 근거로 약속하는 것은 **만료가 없는 raw·raw manifest·canonical manifest 와 DB 판본 이력**이다. 실행별 artifact 는
