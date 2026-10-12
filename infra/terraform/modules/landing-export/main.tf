@@ -45,8 +45,9 @@ resource "aws_lambda_function" "this" {
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
   memory_size      = 256
-  # 종목마다 조회 1회 + 간격 0.25초를 차례로 돈다. 조회 1회의 최악은 API 제한 시간(29초)이다.
-  timeout = 600
+  # 람다 상한. 조회 1회를 5초로 끊으므로(handler.py) 전 종목이 다 느려도 148종 × 5.25초 = 777초로 끝까지 돈다.
+  # 종목 수가 170을 넘으면 이 여유가 사라진다.
+  timeout = 900
   environment {
     variables = {
       ANALYSIS_API_URL = var.api_url

@@ -62,8 +62,9 @@ def handler(event, context):
         url = f'{api_url}/v2/etfs/{code}/outlook?date={day}'
         signed = AWSRequest(method='GET', url=url)
         SigV4Auth(session.get_credentials(), 'execute-api', session.region_name).add_auth(signed)
+        # 조회 1회를 5초로 끊는다 — 전 종목이 다 느려도 (5 + 간격 0.25)초 × 148종이 함수 제한 900초 안에 든다.
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=dict(signed.headers)), timeout=30) as response:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=dict(signed.headers)), timeout=5) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             if error.code == 404:  # 그날 발행본 없음
