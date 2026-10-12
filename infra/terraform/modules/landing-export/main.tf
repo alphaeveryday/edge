@@ -45,8 +45,8 @@ resource "aws_lambda_function" "this" {
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
   memory_size      = 256
-  # 람다 상한. 조회 1회를 5초로 끊으므로(handler.py) 전 종목이 다 느려도 148종 × 5.25초 = 777초로 끝까지 돈다.
-  # 종목 수가 170을 넘으면 이 여유가 사라진다.
+  # 람다 상한. 종목마다 조회 1회(제한 30초) + 간격 0.25초를 차례로 돈다. 시간이 모자라면 함수가 남은 종목을
+  # 실패로 적고 스스로 실패로 끝낸다(handler.py out_of_time) — 강제 종료를 기다리지 않는다.
   timeout = 900
   environment {
     variables = {

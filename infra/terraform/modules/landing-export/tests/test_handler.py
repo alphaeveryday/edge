@@ -49,6 +49,16 @@ class ExportTest(unittest.TestCase):
             export(['091160', '069500'], '2026-10-12', fetch, saved.__setitem__)
         self.assertEqual(list(saved), ['069500'])
 
+    def test_running_out_of_time_reports_the_unvisited_etfs(self):
+        # 람다가 제한 시간에 강제 종료되면 어느 종목이 빠졌는지 로그에도 남지 않는다.
+        # 시간이 모자라면 남은 종목을 실패로 적고 실패로 끝내야 한다.
+        saved, clock = {}, iter([False, True])
+        with self.assertRaises(RuntimeError) as raised:
+            export(['091160', '069500'], '2026-10-12', lambda code, day: SCREEN, saved.__setitem__,
+                   out_of_time=lambda: next(clock))
+        self.assertEqual(list(saved), ['091160'])
+        self.assertIn('오류 1종', str(raised.exception))
+
     def test_writing_nothing_is_a_failure(self):
         # 조회 경로가 바뀌어도 404 라 '발행본 없음'과 구분되지 않는다. 0건을 성공으로 두면 조용히 낡는다.
         with self.assertRaises(RuntimeError):

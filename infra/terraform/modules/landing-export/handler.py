@@ -24,7 +24,7 @@ def strip_internal(node):
     return node
 
 
-def export(codes, day, fetch, put, pause=lambda: None):
+def export(codes, day, fetch, put, pause=lambda: None, out_of_time=lambda: False):
     """종목마다 그날 전망을 읽어 저장한다. 그날 발행본이 없는 종목은 건너뛰고 앞선 파일을 둔다.
 
     한 종목의 조회·저장 오류는 나머지를 막지 않는다 — 끝까지 돈 뒤 실패로 끝내 알람이 울리게 한다.
@@ -33,6 +33,9 @@ def export(codes, day, fetch, put, pause=lambda: None):
     """
     missing, failed = [], {}
     for code in codes:
+        if out_of_time():  # 강제 종료되면 결과 줄도 못 남긴다. 남은 종목을 실패로 적고 스스로 끝낸다
+            failed[code] = '함수 제한 시간이 모자라 조회하지 못함'
+            continue
         try:
             screen = fetch(code, day)
             if screen is None:
@@ -62,9 +65,8 @@ def handler(event, context):
         url = f'{api_url}/v2/etfs/{code}/outlook?date={day}'
         signed = AWSRequest(method='GET', url=url)
         SigV4Auth(session.get_credentials(), 'execute-api', session.region_name).add_auth(signed)
-        # 조회 1회를 5초로 끊는다 — 전 종목이 다 느려도 (5 + 간격 0.25)초 × 148종이 함수 제한 900초 안에 든다.
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=dict(signed.headers)), timeout=5) as response:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=dict(signed.headers)), timeout=30) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             if error.code == 404:  # 그날 발행본 없음
@@ -78,4 +80,6 @@ def handler(event, context):
 
     return export(event.get('etf_codes') or json.loads(os.environ['ETF_CODES']),
                   event.get('date') or datetime.now(KST).date().isoformat(),
-                  fetch, put, pause=lambda: time.sleep(0.25))  # 조회 API 한도가 초당 5건이다
+                  fetch, put, pause=lambda: time.sleep(0.25),  # 조회 API 한도가 초당 5건이다
+                  # 조회 제한(30초)과 저장을 한 번 더 감당할 시간이 남았을 때만 다음 종목으로 간다
+                  out_of_time=lambda: context.get_remaining_time_in_millis() < 60_000)
