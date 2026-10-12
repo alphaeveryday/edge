@@ -70,7 +70,8 @@ class EvidenceStore:
         dataset=self.reference(ref,'dataset')
         items=dataset.get('display_items',dataset['items'])
         limit=fit(items[offset:],limit)
-        shown={'columns':dataset['display_columns'],'rows':items[offset:offset+limit]} if 'display_columns' in dataset else {'items':items[offset:offset+limit]}
+        shown=({'columns':dataset['display_columns'],'rows':items[offset:offset+limit],'same_for_all_rows':dataset.get('display_same',{})}
+               if 'display_columns' in dataset else {'items':items[offset:offset+limit]})
         return {**shown,'page':{'offset':offset,'complete':offset+limit>=len(items),
             'next_offset':offset+limit if offset+limit<len(items) else None},'data_scope':dataset['scope'],
             'dataset_ref':ref}

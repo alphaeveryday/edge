@@ -1,5 +1,6 @@
 """Graph tool surface: a response reaches the agent only after its evidence is stored."""
 from datetime import date, datetime, timedelta, timezone
+import json
 from decimal import Decimal
 from time import perf_counter
 
@@ -157,7 +158,7 @@ class GraphTools:
         columns = same = None
         if table and items:
             columns, visible, same = shape.table(visible, keep_id=table in ('ids', 'objects'), keep_title=table == 'objects')
-        asked, limit = limit, shape.fit(visible, limit)
+        asked, limit = limit, shape.fit(visible, limit, used=len(json.dumps(same, ensure_ascii=False, default=str)) if same else 0)
         value = {'total_rows': len(items), 'page': {'complete': len(items) <= limit, 'next_offset': limit if len(items) > limit else None}}
         if len(items) > limit:
             # A first page of a large result was read as the whole answer. What the page leaves out comes
@@ -166,7 +167,7 @@ class GraphTools:
                 + f'. The {len(items) - limit} not shown belong to the same answer set: '
                 'do not describe, count or rule anything out from this page alone. overview summarises the whole set; '
                 "narrow the request with this tool's filters, or read further pages with get_result_page.")
-            value['overview'] = overview(items if columns else visible)
+            value['overview'] = overview(items if columns is not None else visible)
             if search and len(items) > BROAD:
                 # Saying what a page leaves out did not change what the agent did. A search too broad to
                 # read returns no rows, so the next step has to be a narrower search it can read whole.
@@ -175,7 +176,7 @@ class GraphTools:
                 value['notice'] = (f'{len(items)} rows match, too many to read, so none are shown. Choose what the question needs from '
                     f'overview and call this tool again with narrower arguments until fewer than {BROAD} rows match; '
                     'then read every row. Reading this whole set page by page with get_result_page is possible but rarely the right step.')
-        if columns:
+        if columns is not None:
             value.update(columns=columns, rows=visible[:limit], same_for_all_rows=same, data_scope=scope)
         else:
             value.update(items=visible[:limit], data_scope=scope)
@@ -183,10 +184,11 @@ class GraphTools:
             # Members stay in stored evidence; a later tool reads them through selection_ref.
             value['selection'] = {key: item for key, item in selection.items() if key != 'items'} | {'members': len(selection['items'])}
         dataset = {'items': items, 'scope': scope, 'selection': selection}
-        if display_items is not None or columns:
+        if display_items is not None or columns is not None:
             dataset['display_items'] = visible
-        if columns:
-            dataset['display_columns'] = columns
+        if columns is not None:
+            # A later page is rows of the same table, and reads wrong without what the first page said once.
+            dataset.update(display_columns=columns, display_same=same)
         return value, dataset
 
     def page(self, dataset_ref, offset, limit=20):
@@ -246,10 +248,19 @@ class GraphTools:
         if not items and len(words) > 1:
             # A fund that is not stored was looked for 12 times under other spellings. Showing what each word
             # alone matches lets one call settle that nothing stored carries all of them.
+            matches = {word: [o['title'] for o in self.graph.nodes(object_type, query=word, filters=filters)] for word in words}
+            cut = {word: len(titles) for word, titles in matches.items() if len(titles) > 30}
             scope['nothing_has_the_whole_query'] = {
-                'each_word_alone_matches': {word: [o['title'] for o in self.graph.nodes(object_type, query=word, filters=filters)][:30] for word in words},
+                'each_word_alone_matches': {word: titles[:30] for word, titles in matches.items()},
                 'meaning': 'No stored object of this type has the whole query in its name, title or ticker. If the object you want '
                            'is not among these, it is not in this data: say so instead of searching other spellings or types.'}
+            if cut:
+                # A list cut at 30 hid the 31st match while the text above said it was not stored.
+                scope['nothing_has_the_whole_query'].update(
+                    lists_cut_at_30={word: {'matches': total} for word, total in cut.items()},
+                    meaning='No stored object of this type has the whole query in its name, title or ticker. A list cut at 30 does not '
+                            'show every match of that word, so an object missing from it may still be stored: search a word '
+                            'whose list is complete, or that word with a filter.')
         return self.result(items, limit=limit, search=True, scope=scope, table='objects')
 
     def linked(self, object_refs, link_type, direction=None, limit=20):

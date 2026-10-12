@@ -55,3 +55,48 @@ def test_observations_come_back_as_a_table_that_fits_one_response():
     import json
     assert 0 < len(shown['items']) < 60 and len(json.dumps(shown, ensure_ascii=False)) < BUDGET + 4000
     assert shown['page'] == {'complete': False, 'next_offset': len(shown['items'])} and 'as many as one response holds' in shown['notice']
+
+
+def table_tools():
+    tools = object.__new__(GraphTools)
+    tools.store = SimpleNamespace(cutoff='2026-10-05T14:59:59+00:00')
+    return tools
+
+
+def test_a_table_whose_rows_differ_in_nothing_is_still_a_table_with_what_they_share():
+    # WHY: two links to the same object came back as items [[], []] and the values every row shared were dropped.
+    rows = [{'object_type': 'Equity', 'object_id': 'a', 'title': 'A', 'properties': {'ticker': '005930', 'marketCode': 'XKRX'}}] * 2
+    value, dataset = table_tools().result(rows, table='plain')
+    assert value['columns'] == [] and value['rows'] == [[], []] and 'items' not in value
+    assert value['same_for_all_rows'] == {'object_type': 'Equity', 'ticker': '005930', 'marketCode': 'XKRX'}
+    assert dataset['display_same'] == value['same_for_all_rows']
+
+
+def test_a_later_page_of_a_table_repeats_what_every_row_shares(tmp_path):
+    # WHY: a page read through the stored result had rows without the security type and weight the first page said once.
+    from edge_analysis_v2.tools.graph.store import EvidenceStore
+    rows = [{'object_type': 'Equity', 'object_id': f'e{i}', 'title': f'T{i}', 'properties': {'ticker': f'{i:06d}', 'marketCode': 'XKRX'}}
+            for i in range(30)]
+    value, dataset = table_tools().result(rows, table='plain')
+    store = object.__new__(EvidenceStore)
+    store.reference = lambda ref, kind: dataset
+    page = store.page({'tool_run_id': 'r'}, 20, 5)
+    assert page['columns'] == value['columns'] == ['ticker'] and len(page['rows']) == 5
+    assert page['same_for_all_rows'] == {'object_type': 'Equity', 'marketCode': 'XKRX'}
+
+
+def test_the_shape_of_linked_rows_counts_the_objects_they_lead_to():
+    # WHY: a cut list of linked objects came with an empty overview, because their names sit under target.
+    from edge_analysis_v2.tools.graph.shape import overview
+    rows = [{'source': {'object_id': 's'}, 'target': {'object_type': 'Equity' if i % 2 else 'ETF', 'object_id': f't{i}',
+                                                   'properties': {'ticker': f'{i:06d}'}}} for i in range(4)]
+    counts = {key: {r['value']: r['rows'] for r in found} for key, found in overview(rows).items()}
+    assert counts['object_type'] == {'Equity': 2, 'ETF': 2} and len(counts['ticker']) == 4
+
+
+def test_what_every_row_shares_counts_toward_the_size_of_a_response():
+    # WHY: a long value shared by every row moved out of the rows, so the size limit no longer saw it.
+    from edge_analysis_v2.tools.graph.shape import BUDGET, fit
+    rows = [['x' * 1000]] * 60
+    assert fit(rows, 60) > fit(rows, 60, used=BUDGET // 2) > 1
+    assert fit(rows, 60, used=BUDGET * 2) == 1   # one row is always shown

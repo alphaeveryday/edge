@@ -97,3 +97,15 @@ def test_an_object_named_only_by_its_title_keeps_the_title_in_the_table(tmp_path
     columns, values, _ = table(rows, keep_id=True, keep_title=True)
     assert columns == ['object_type', 'name', 'eventDate', 'title', 'object_id']
     assert values == [['SourceEvent', None, '2026-09-03', 'CONTRACT / A / 2026-09-03', 'e1'], ['ETF', 'PLUS K방산', None, None, 'f1']]
+
+
+def test_a_word_list_cut_short_does_not_claim_the_object_is_absent(tmp_path):
+    # WHY: with 31 matches of one word the 31st was hidden while the result said an object missing from the list is not stored.
+    def run(statement, parameters):
+        if 'count(n)' in statement:
+            return [{'total': 40}]
+        return [{'id': 'e%02d' % i, 'properties': {'name': '가나 %02d' % i}} for i in range(31)] if parameters['text'] == '가나' else []
+    tools = GraphTools(run, CATALOG, tmp_path, '2026-10-05T00:00:00+00:00')
+    note = tools.call('search_objects', {'object_type': 'Equity', 'query': '가나 없는말'})['result']['data_scope']['nothing_has_the_whole_query']
+    assert len(note['each_word_alone_matches']['가나']) == 30 and note['lists_cut_at_30'] == {'가나': {'matches': 31}}
+    assert 'may still be stored' in note['meaning'] and 'it is not in this data' not in note['meaning']
