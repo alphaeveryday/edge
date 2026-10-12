@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/apps/cloud/portfolio-ui/**'
       - 'src/apps/cloud/portfolio-worker/**'
+      - 'src/pnpm-lock.yaml'
+      - 'src/package.json'
+      - 'src/pnpm-workspace.yaml'
       - '.github/workflows/*portfolio.yml'
 permissions:
   contents: read

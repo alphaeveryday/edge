@@ -22,7 +22,7 @@
 
 ## 입력 저장
 
-각 단계의 다음 버튼과 계좌 팝업 적용 시 저장한다. `portfolio_input_drafts`가 익명 세션 소유권을 보관하고 `portfolio_input_portfolio`, `funding`, `horizon`, `interests`, `notes`, `tax`가 각각 JSONB 입력을 저장한다. 위 이름의 후반부에도 모두 `portfolio_input_` 접두사가 붙는다. 하나의 트랜잭션으로 갱신하며 다른 세션의 초안은 읽거나 덮어쓸 수 없다. 최종 작업의 `input`에는 당시 입력과 초안 ID를 별도로 고정한다. 아직 제출하지 않은 필드의 매 키 입력 저장이나 초안 복원 UI는 제공하지 않는다.
+각 단계의 다음 버튼과 계좌 팝업 적용 시 저장한다. `portfolio_input_drafts`가 익명 세션 소유권을 보관하고 `portfolio_input_portfolio`, `funding`, `horizon`, `interests`, `notes`, `tax`가 각각 JSONB 입력을 저장한다. 위 이름의 후반부에도 모두 `portfolio_input_` 접두사가 붙는다. 하나의 트랜잭션으로 갱신하며 다른 세션의 초안은 읽거나 덮어쓸 수 없다. 세션별 최근 초안 10개만 보존하고 오래된 초안은 새 입력 시 정리한다. 최종 작업의 `input`에는 당시 입력과 초안 ID를 별도로 고정하므로 초안 정리가 기존 보고서에 영향을 주지 않는다. 아직 제출하지 않은 필드의 매 키 입력 저장이나 초안 복원 UI는 제공하지 않는다.
 
 ETF 목록은 KRX·Nasdaq Trader의 2026-10-12 수집 스냅샷이다. 국내 1,172개, 미국 5,771개이며 ETF와 원화 현금만 입력 가능하다. `scripts/refresh_catalog.py`로 공개 종목 메타데이터를 갱신하고 리뷰·배포한다. 전망을 일괄 조회하는 기능은 아니다. 자동 목록 갱신 스케줄은 없다.
 

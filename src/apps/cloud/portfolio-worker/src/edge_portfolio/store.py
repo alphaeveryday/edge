@@ -57,7 +57,8 @@ def save_draft(draft_id, owner, payload):
         if row and row['owner'] != owner:
             raise ValueError('NOT_FOUND')
         if not row and db.execute('SELECT count(*) AS n FROM portfolio_input_drafts WHERE owner=%s', (owner,)).fetchone()['n'] >= 10:
-            raise ValueError('DRAFT_LIMIT')
+            # Final jobs keep immutable input snapshots; reclaim the oldest editable draft.
+            db.execute('DELETE FROM portfolio_input_drafts WHERE id=(SELECT id FROM portfolio_input_drafts WHERE owner=%s ORDER BY updated_at,id LIMIT 1)', (owner,))
         db.execute('INSERT INTO portfolio_input_drafts(id,owner) VALUES (%s,%s) ON CONFLICT(id) DO UPDATE SET updated_at=now()', (draft_id, owner))
         for name, value in sections.items():
             db.execute(f'INSERT INTO portfolio_input_{name}(draft_id,payload) VALUES (%s,%s) ON CONFLICT(draft_id) DO UPDATE SET payload=excluded.payload,updated_at=now()', (draft_id, Jsonb(value)))
@@ -82,7 +83,7 @@ def submit(owner, key, payload, parent_id=None):
             used = db.execute("SELECT id FROM portfolio_jobs WHERE owner=%s AND kind='chat' AND state IN ('queued','running','succeeded')", (owner,)).fetchone()
             if used:
                 raise ValueError("CHAT_LIMIT")
-        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
+        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND NOT (kind='chat' AND state='failed') AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
         if active >= 3:
             raise ValueError("REQUEST_LIMIT")
         queued = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE state IN ('queued','running')").fetchone()["n"]

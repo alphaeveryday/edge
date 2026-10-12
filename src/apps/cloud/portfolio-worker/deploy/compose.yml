@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
     command: ["uvicorn", "edge_portfolio.api:app", "--host", "0.0.0.0", "--port", "8092"]
     environment:
-      PORTFOLIO_DATABASE_URL: postgresql://portfolio:${PORTFOLIO_DB_PASSWORD}@db/portfolio
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
       PORTFOLIO_ORIGIN: https://etforca.com
       PORTFOLIO_COOKIE_SECURE: "1"
       PORTFOLIO_ORIGIN_SECRET: ${PORTFOLIO_ORIGIN_SECRET}
@@ -42,7 +42,7 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "edge_portfolio.worker"]
     environment:
-      PORTFOLIO_DATABASE_URL: postgresql://portfolio:${PORTFOLIO_DB_PASSWORD}@db/portfolio
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       PORTFOLIO_OUTLOOK_URL: http://outlook:8093/outlook
       AWS_EC2_METADATA_DISABLED: "true"

@@ -77,7 +77,10 @@ def test_chat_quota_is_atomic_and_failure_refunds_it(isolated_db):
     assert results.count('CHAT_LIMIT') == 1
     chat = next(r for r in results if isinstance(r, dict))
     store.claim(); store.finish(chat['id'], failure='ANALYSIS_FAILED')
-    assert isinstance(submit_chat('retry'), dict)
+    retry = submit_chat('retry')
+    assert isinstance(retry, dict)
+    store.claim(); store.finish(retry['id'], failure='ANALYSIS_FAILED')
+    assert isinstance(submit_chat('second-retry'), dict)
 
 
 def test_email_is_bound_to_owned_completed_analysis(isolated_db):
@@ -120,3 +123,16 @@ def test_tax_popup_payload_round_trips_through_owned_draft_api(isolated_db):
         client.cookies.clear()
         client.get('/api/portfolio/session')
         assert client.post('/api/portfolio/drafts/' + draft_id, json=payload, headers=headers).status_code == 404
+
+
+def test_old_drafts_do_not_permanently_block_new_forms(isolated_db):
+    from edge_portfolio.contracts import DraftInput
+    payload = DraftInput(holdings=[]).model_dump(mode='json')
+    first = str(uuid4())
+    store.save_draft(first, 'owner', payload)
+    for _ in range(11):
+        store.save_draft(str(uuid4()), 'owner', payload)
+    with store.connect() as db:
+        assert db.execute('SELECT count(*) AS n FROM portfolio_input_drafts').fetchone()['n'] == 10
+        assert db.execute('SELECT id FROM portfolio_input_drafts WHERE id=%s', (first,)).fetchone() is None
+        assert db.execute('SELECT count(*) AS n FROM portfolio_input_tax').fetchone()['n'] == 10
