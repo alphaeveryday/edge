@@ -22,7 +22,7 @@ try {
   expect(completed.result.schema_version).toBe(2);
   const plan = completed.result.recommendation;
   expect(plan.allocations.reduce((sum, h) => sum + h.weight_pct, 0)).toBeCloseTo(100, 6);
-  if (plan.total_krw !== null) expect(plan.allocations.reduce((sum, h) => sum + BigInt(h.amount_krw), 0)).toBe(BigInt(plan.total_krw));
+  if (plan.total_krw !== null) expect(plan.allocations.reduce((sum, h) => sum + BigInt(h.amount_krw), 0n)).toBe(BigInt(plan.total_krw));
   await expect(page.locator('.evaluation__part h4').nth(0)).toHaveText('최종 투자 의견과 실행할 행동');
   await expect(page.locator('.evaluation__part h4').nth(1)).toHaveText('앞으로의 전망');
   await expect(page.getByRole('heading', { name: '계좌별 최종 투자 제안' })).toBeVisible();
