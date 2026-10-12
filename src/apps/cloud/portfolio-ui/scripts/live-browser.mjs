@@ -18,6 +18,19 @@ try {
   await page.reload();
   await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible({ timeout: 330000 });
   console.log('report ready');
+  const completed = await page.evaluate(async id => (await fetch('/api/portfolio/analyses/' + id)).json(), jobId);
+  expect(completed.result.schema_version).toBe(2);
+  const plan = completed.result.recommendation;
+  expect(plan.allocations.reduce((sum, h) => sum + h.weight_pct, 0)).toBeCloseTo(100, 6);
+  if (plan.total_krw !== null) expect(plan.allocations.reduce((sum, h) => sum + BigInt(h.amount_krw), 0)).toBe(BigInt(plan.total_krw));
+  await expect(page.locator('.evaluation__part h4').nth(0)).toHaveText('최종 투자 의견과 실행할 행동');
+  await expect(page.locator('.evaluation__part h4').nth(1)).toHaveText('앞으로의 전망');
+  await expect(page.getByRole('heading', { name: '계좌별 최종 투자 제안' })).toBeVisible();
+  for (const insight of completed.result.insights) {
+    expect(insight.content.paragraphs.length).toBeGreaterThanOrEqual(3);
+    expect(insight.content.paragraphs.length).toBeLessThanOrEqual(5);
+  }
+  await writeFile('test-results/live-report-v2.json', JSON.stringify(completed.result, null, 2));
   await page.screenshot({ path: 'test-results/live-mobile.png', fullPage: true });
   await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill('이 분석에서 지금 가장 먼저 확인할 것은 무엇인가요?');
   await page.getByRole('button', { name: '질문 보내기' }).click();
@@ -40,6 +53,6 @@ try {
   const outlookQueries = result.result.aws_outlook?.queries || [];
   expect(outlookQueries.length).toBeLessThanOrEqual(3);
   expect(outlookQueries.every(q => q.purpose?.trim() && q.decision_question?.trim())).toBe(true);
-  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, outlookQueries, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
+  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, schemaVersion: result.result.schema_version, recommendationCount: plan.allocations.length, insightCount: completed.result.insights.length, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, outlookQueries, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
   console.log('live end-to-end passed', result.result.elapsed_seconds);
 } finally { await browser.close(); }

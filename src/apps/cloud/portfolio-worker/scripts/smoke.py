@@ -6,6 +6,7 @@ from pathlib import Path
 
 from edge_portfolio.agent import run_analysis
 from edge_portfolio.contracts import AnalysisInput
+from edge_portfolio.catalog import canonicalize
 
 
 async def main():
@@ -17,7 +18,7 @@ async def main():
     def observe(event):
         with Path('artifacts/smoke-events.jsonl').open('a', encoding='utf8') as stream:
             stream.write(json.dumps(event, ensure_ascii=False) + '\n')
-    result = await run_analysis(request, os.environ["DEEPSEEK_API_KEY"], lambda stage: print(stage, flush=True), observe=observe)
+    result = await run_analysis(canonicalize(request), os.environ["DEEPSEEK_API_KEY"], lambda stage: print(stage, flush=True), observe=observe)
     Path("artifacts/live-report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf8")
     print(json.dumps({"seconds": result["elapsed_seconds"], "sources": len(result["sources"]),
                       "lengths": {k: sum(map(len, v["paragraphs"])) for k, v in result["sections"].items()}}))

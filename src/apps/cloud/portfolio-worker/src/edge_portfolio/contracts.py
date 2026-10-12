@@ -2,11 +2,12 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 from datetime import date
+import re
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ROLES = ("question", "portfolio", "outlook", "opinion")
-LIMITS = {"question": (300, 500), "portfolio": (500, 800), "outlook": (500, 800), "opinion": (400, 700)}
+LIMITS = {role: (90, 650) for role in ROLES}
 
 
 class StrictModel(BaseModel):
@@ -97,8 +98,16 @@ class Evidence(StrictModel):
     passage_id: str
 
 
+def multiple_sentences(text):
+    # ETF names contain initialisms such as U.S.; decimals are not sentence ends.
+    text = re.sub(r'\b(?:[A-Za-z]\.){2,}', lambda m: m.group().replace('.', ''), text)
+    text = re.sub(r'(?<=\d)\.(?=\d)', '', text)
+    text = re.sub(r'([.!?。！？])["”’\)\]]+', r'\1', text)
+    return bool(re.search(r'[.!?。！？]\s*[^.!?。！？\s]', text))
+
+
 class Section(StrictModel):
-    paragraphs: list[str] = Field(min_length=2, max_length=5)
+    paragraphs: list[str] = Field(min_length=3, max_length=5)
     evidence: list[Evidence] = Field(max_length=6)
     limitations: list[str] = Field(max_length=3)
 
@@ -106,9 +115,48 @@ class Section(StrictModel):
     def nonempty(self):
         if any(not p.strip() for p in self.paragraphs):
             raise ValueError("Empty paragraph")
+        if any(len(p) > 180 or multiple_sentences(p.strip()) for p in self.paragraphs):
+            raise ValueError('Each bullet must be one sentence of at most 180 characters')
         if any(len(p) > 100 for p in self.limitations):
             raise ValueError("Limitation exceeds 100 characters")
         return self
+
+
+class Scores(StrictModel):
+    leadership: float = Field(ge=0, le=5, multiple_of=0.5)
+    profitability: float = Field(ge=0, le=5, multiple_of=0.5)
+    stability: float = Field(ge=0, le=5, multiple_of=0.5)
+
+
+class Evaluation(StrictModel):
+    scores: Scores | None
+    reason: Section
+
+
+class Allocation(StrictModel):
+    instrument_id: str = Field(min_length=1, max_length=32)
+    account: Literal['일반 계좌', 'ISA', '연금저축', 'IRP']
+    weight_pct: Decimal = Field(gt=0, le=100, max_digits=5, decimal_places=2)
+
+
+class Recommendation(StrictModel):
+    title: str = Field(min_length=1, max_length=40)
+    allocations: list[Allocation] = Field(min_length=1, max_length=10)
+    evaluation: Evaluation
+
+    @model_validator(mode='after')
+    def full_allocation(self):
+        if sum(a.weight_pct for a in self.allocations) != 100:
+            raise ValueError('Recommended weights must total exactly 100')
+        keys = [(a.instrument_id, a.account) for a in self.allocations]
+        if len(set(keys)) != len(keys):
+            raise ValueError('Duplicate recommended instrument/account')
+        return self
+
+
+class Insight(StrictModel):
+    title: str = Field(min_length=1, max_length=50)
+    content: Section
 
 
 class FinalReport(StrictModel):
@@ -116,6 +164,9 @@ class FinalReport(StrictModel):
     portfolio: Section
     outlook: Section
     opinion: Section
+    current_evaluation: Evaluation
+    recommendation: Recommendation
+    insights: list[Insight] = Field(min_length=1, max_length=3)
 
 
 def validate_section(role, raw, sources):
