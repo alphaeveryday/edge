@@ -21,6 +21,14 @@ try {
   const completed = await page.evaluate(async id => (await fetch('/api/portfolio/analyses/' + id)).json(), jobId);
   expect(completed.result.schema_version).toBe(2);
   const plan = completed.result.recommendation;
+  expect(plan.historical_performance?.interval).toBe('1d');
+  expect(plan.historical_performance?.currency).toBe('KRW');
+  expect(plan.historical_performance.points.length).toBeGreaterThanOrEqual(200);
+  expect(plan.historical_performance.points[0].recommended).toBe(1000000);
+  expect(plan.dividend_yield_1y).not.toBeNull();
+  expect(plan.expected_return_1y).not.toBeNull();
+  await page.locator('.report-history').scrollIntoViewIfNeeded();
+  expect((await page.locator('polyline.b').getAttribute('points')).split(' ').length).toBe(plan.historical_performance.points.length);
   expect(plan.allocations.reduce((sum, h) => sum + h.weight_pct, 0)).toBeCloseTo(100, 6);
   if (plan.total_krw !== null) expect(plan.allocations.reduce((sum, h) => sum + BigInt(h.amount_krw), 0n)).toBe(BigInt(plan.total_krw));
   await expect(page.locator('.evaluation__part h4').nth(0)).toHaveText('최종 투자 의견과 실행할 행동');
@@ -53,6 +61,6 @@ try {
   const outlookQueries = result.result.aws_outlook?.queries || [];
   expect(outlookQueries.length).toBeLessThanOrEqual(3);
   expect(outlookQueries.every(q => q.purpose?.trim() && q.decision_question?.trim())).toBe(true);
-  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, schemaVersion: result.result.schema_version, recommendationCount: plan.allocations.length, insightCount: completed.result.insights.length, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, outlookQueries, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
+  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, schemaVersion: result.result.schema_version, recommendationCount: plan.allocations.length, insightCount: completed.result.insights.length, expectedReturn: plan.expected_return_1y, dividendYield: plan.dividend_yield_1y, dailyPoints: plan.historical_performance.points.length, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, outlookQueries, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
   console.log('live end-to-end passed', result.result.elapsed_seconds);
 } finally { await browser.close(); }

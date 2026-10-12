@@ -11,8 +11,7 @@ const report = {
     { instrument_id: 'CASH:KRW', name: '현금', ticker: 'KRW', kind: 'cash', account: '일반 계좌', weight_pct: 40, amount_krw: '400000' }],
     total_krw: '1000000', actions: [{ instrument_id: 'US:QQQ', name: 'Invesco QQQ', ticker: 'QQQ', account: '일반 계좌', before_pct: 0, after_pct: 60, action: '새로 담기' }],
     expected_return_1y: -3, dividend_yield_1y: .8, unavailable_reason: '검증된 자료 부족',
-    historical_performance: { basis: '테스트용 검증 시계열 · 기준 100', source_url: 'https://example.com/history', points: [
-      { date: '2022-01', recommended: 100, current: 100 }, { date: '2023-01', recommended: 90, current: 95 }, { date: '2024-01', recommended: 110, current: 108 }] } },
+    historical_performance: { basis: '최근 1년 · 100만 원을 넣었다면 (원)', source_url: 'https://example.com/history', interval: '1d', currency: 'KRW', points: Array.from({ length: 366 }, (_, i) => ({ date: new Date(Date.UTC(2025, 9, 12 + i)).toISOString().slice(0, 10), recommended: 1000000 + i * 100, current: 1000000 - i * 100 })) } },
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
 
@@ -33,6 +32,11 @@ test('recommended holdings and final amounts are distinct from input; opinion th
   await expect(page.locator('.report-history')).not.toHaveClass(/is-visible/);
   await page.locator('.report-history').scrollIntoViewIfNeeded();
   await expect(page.locator('.report-history')).toHaveClass(/is-visible/);
+  await expect(page.locator('.report-history svg text').last()).toHaveCSS('text-anchor', 'end');
+  expect((await page.locator('polyline.b').getAttribute('points'))!.split(' ')).toHaveLength(366);
+  await page.getByRole('slider', { name: '과거 성과 날짜 선택' }).fill('100');
+  await expect(page.locator('.history-values')).toContainText('1,010,000원');
+  await expect(page.locator('.history-values')).toContainText('990,000원');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(page.locator('.donut-enter circle').first()).toHaveCSS('animation-name', 'none');
   await expect(page.locator('.history-line').first()).toHaveCSS('stroke-dashoffset', '0px');
@@ -51,4 +55,41 @@ test('unknown budget and unconnected history do not fabricate amounts or perform
   await expect(page.locator('.forecast b')).toHaveText(['산출 전', '산출 전']);
   await expect(page.locator('.performance')).toContainText('검증된 자료 부족');
   await expect(page.locator('.performance svg')).toHaveCount(0);
+});
+
+test('approved HTML typography, spacing and card styling match at the same viewport', async ({ page, context }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'design'));
+  await page.route('**/api/portfolio/analyses/design', route => route.fulfill({ json: { id: 'design', state: 'succeeded', result: report } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.portfolio-hero')).toBeVisible();
+  const reference = await context.newPage();
+  await reference.goto('/portfolio/tests/reference/report.html');
+  const selectors = ['.ans.lead', '.verdict em', '.total b', '.lead .axes b', '.portfolio-hero', '.portfolio-hero .todo', '.donut.md', '.mixviz li>b', '.recommended-rating b', '.forecast b', '.account-plan', '.account-plan h5', '.account-plan th[scope="row"]', '.account-plan td strong'];
+  const properties = ['font-family', 'font-size', 'font-weight', 'line-height', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'border-radius', 'background-image', 'background-color'];
+  for (const selector of selectors) {
+    const style = async (p: typeof page) => p.locator(selector).first().evaluate((node, props) => Object.fromEntries(props.map(prop => [prop, getComputedStyle(node).getPropertyValue(prop)])), properties);
+    expect(await style(page), selector).toEqual(await style(reference));
+  }
+  for (const selector of ['.ans.lead', '.portfolio-hero', '.donut.md', '.account-plan']) {
+    const actual = await page.locator(selector).first().boundingBox();
+    const expected = await reference.locator(selector).first().boundingBox();
+    expect(actual!.width, selector).toBeCloseTo(expected!.width, 0);
+  }
+  await reference.screenshot({ path: `test-results/reference-report-${test.info().project.name}.png`, fullPage: true });
+  await reference.close();
+});
+
+test('legacy index values keep their units and account transfers stay identifiable', async ({ page }) => {
+  const legacy = structuredClone(report);
+  Object.assign(legacy.recommendation.historical_performance, { currency: undefined, interval: undefined, basis: '기준 100 지수', points: [
+    { date: '2022-01-01', recommended: 100, current: 100 }, { date: '2024-01-01', recommended: 110, current: 108 }] });
+  legacy.recommendation.actions = [
+    { ...legacy.recommendation.actions[0], name: '국내 ETF', instrument_id: 'KR:069500', ticker: '069500', account: 'ISA', before_pct: 50, after_pct: 0, action: '줄이기' },
+    { ...legacy.recommendation.actions[0], name: '국내 ETF', instrument_id: 'KR:069500', ticker: '069500', account: '일반 계좌', before_pct: 0, after_pct: 50, action: '늘리기' }];
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'legacy-chart'));
+  await page.route('**/api/portfolio/analyses/legacy-chart', route => route.fulfill({ json: { id: 'legacy-chart', state: 'succeeded', result: legacy } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.history-values')).toContainText('110');
+  await expect(page.locator('.history-values')).not.toContainText('원');
+  await expect(page.locator('.action-note')).toHaveText(['ISA', '일반 계좌']);
 });
