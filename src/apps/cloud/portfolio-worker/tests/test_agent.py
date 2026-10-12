@@ -202,6 +202,22 @@ def test_diagnostic_codes_distinguish_budget_and_validation_failures_without_raw
     assert failure_codes(ValueError('OUTPUT_INVALID: unexpected private-data')) == ['OUTPUT_INVALID', 'OUTPUT_SCHEMA']
 
 
+async def test_exa_rate_limit_survives_exception_groups_as_a_specific_job_failure(monkeypatch):
+    from edge_portfolio import worker
+    request = httpx.Request('POST', 'https://mcp.exa.ai/mcp')
+    error = httpx.HTTPStatusError('private provider response', request=request, response=httpx.Response(429, request=request))
+    async def fail(*args, **kwargs):
+        raise ExceptionGroup('MCP', [error])
+    monkeypatch.setattr(worker, 'run_analysis', fail)
+    monkeypatch.setattr(worker.store, 'claim', lambda: {'id': 'test', 'kind': 'analysis', 'input': {'holdings': [{'name': 'cash', 'kind': 'cash', 'amount_krw': 1000000}], 'horizon': '10년 이상'}})
+    monkeypatch.setattr(worker.HEARTBEAT.__class__, 'touch', lambda self: None)
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test')
+    completed = []
+    monkeypatch.setattr(worker.store, 'finish', lambda job, **kwargs: completed.append(kwargs))
+    assert await worker.work_once()
+    assert completed == [{'failure': 'SEARCH_RATE_LIMIT'}]
+
+
 def test_output_diagnostics_identify_schema_field_without_logging_values_or_unknown_keys():
     from edge_portfolio.contracts import FinalReport
     from edge_portfolio.worker import failure_codes

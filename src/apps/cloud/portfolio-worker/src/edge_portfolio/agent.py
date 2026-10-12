@@ -12,13 +12,14 @@ from urllib.parse import urlsplit
 
 import httpx
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
 from .recommendation import search_etfs, publish_recommendation
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
+from .exa_transport import ExaTransport
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -90,7 +91,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     optimizer = Optimizer(market, request)
     async with asyncio.timeout(300), AsyncExitStack() as stack:
         if evidence is None:
-            streams = await stack.enter_async_context(streamablehttp_client(EXA_URL))
+            exa_client = await stack.enter_async_context(httpx.AsyncClient(transport=ExaTransport(), timeout=httpx.Timeout(30, read=300)))
+            streams = await stack.enter_async_context(streamable_http_client(EXA_URL, http_client=exa_client))
             session = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
             await session.initialize()
             evidence = ExaEvidence(session)

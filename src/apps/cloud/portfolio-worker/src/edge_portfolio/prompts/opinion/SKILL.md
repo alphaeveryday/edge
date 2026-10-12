@@ -37,7 +37,7 @@ ETF 구성 종목·과거 가격·보수율을 실제 자료로 확인하며 사
 각 평가 reason은 실제 상품·시장 근거를 인용하는 3개 불릿으로 점수의 이유와 핵심 위험을 설명한다. 현금만 있는 현재 구성의 current_evaluation.scores는 null일 수 있으나 추천 ETF 구성의 scores는 절대로 null이 아니다. recommendation.evaluation에는 세 항목을 모두 채우며 평균이 4점 이상인 후보만 추천한다. 근거가 부족하거나 모든 후보가 4점 미만이면 recommendation·selected_candidate_id·return_forecast를 null로 두고 보류 이유를 설명한다. 개선안을 제시했다는 이유만으로 점수를 올리지 않는다.
 
 ## 최종 점검
-외부 사실은 실제 source_id와 passage_id로 연결한다. portfolio·outlook·두 평가 reason에는 등록된 근거가 필요하다. 다른 모든 근거도 실제 등록 ID만 쓴다.
+외부 사실은 실제 source_id와 passage_id로 연결한다. portfolio·outlook·추천 평가 reason에는 등록된 근거가 필요하다. 현재 평가도 외부 근거를 사용하되, 현재 보유가 현금뿐이고 scores=null이면 입력으로 확인되는 현금 보유·평가 보류 이유만 설명하고 evidence=[]를 허용한다. 이 예외 설명에 시장 전망·금리·세금 등 외부 사실을 끼워 넣지 않는다. 다른 모든 근거도 실제 등록 ID만 쓴다.
 본문 사이에 날짜·수치·추천 행동이 모순되지 않는지 확인한다. 전망·추천 점수는 정성 판단이며 수익 보장이 아니다.
 
 ## 수익 추정·배당·일별 성과

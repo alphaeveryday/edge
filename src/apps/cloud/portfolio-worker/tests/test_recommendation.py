@@ -40,9 +40,19 @@ def test_recommended_rating_is_required_and_low_scores_are_rejected_not_inflated
 def test_cash_current_rating_can_be_absent_without_hiding_recommended_stars():
     raw = final_payload()
     raw['current_evaluation']['scores'] = None
+    raw['current_evaluation']['reason']['evidence'] = []
     result = publish(raw)
     assert result['current_evaluation']['overall'] is None
     assert result['recommendation']['evaluation']['overall'] == 4
+
+
+def test_unrated_etf_current_evaluation_still_requires_external_evidence():
+    raw = final_payload()
+    raw['current_evaluation']['scores'] = None
+    raw['current_evaluation']['reason']['evidence'] = []
+    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}], horizon='10년 이상')
+    with pytest.raises(ValueError, match='require source evidence'):
+        publish(raw, request)
 
 
 @pytest.mark.parametrize('change,match', [

@@ -33,14 +33,15 @@ def allocation_error(item, account, tax):
 
 
 def publish_recommendation(final, request, metrics, sources):
-    def evaluation(value):
+    def evaluation(value, current=False):
         scores = value.scores.model_dump() if value.scores else None
         overall = float((sum(Decimal(str(v)) for v in scores.values()) / 3).quantize(Decimal('.1'), rounding=ROUND_HALF_UP)) if scores else None
-        return {'scores': scores, 'overall': overall, 'rubric_version': 1, 'reason': validate_section('portfolio', value.reason.model_dump(), sources),
+        input_only = current and scores is None and bool(request.holdings) and all(h.kind == 'cash' for h in request.holdings)
+        return {'scores': scores, 'overall': overall, 'rubric_version': 1, 'reason': validate_section('question' if input_only else 'portfolio', value.reason.model_dump(), sources),
                 'method': '시장 주도성·수익성·안정성 세 항목의 평균이에요. ETF 구성 종목·과거 가격·보수율을 확인해 평가하며, 사용자 선호는 점수에 넣지 않아요.'}
 
     if final.recommendation is None:
-        return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation), 'recommendation': None,
+        return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation, current=True), 'recommendation': None,
                 'insights': [{'title': item.title, 'content': validate_section('question', item.content.model_dump(), sources)} for item in final.insights]}
     by_id = {r['id']: r for r in directory()['instruments']}
     by_id['CASH:KRW'] = {'name': '현금', 'ticker': 'KRW', 'kind': 'cash', 'market': 'KR'}
@@ -86,7 +87,7 @@ def publish_recommendation(final, request, metrics, sources):
         actions.append({'instrument_id': key[0], 'name': item['name'], 'ticker': item['ticker'], 'account': key[1],
                         'before_pct': before, 'after_pct': after,
                         'action': '비중 설정' if before is None else '새로 담기' if before == 0 else '줄이기' if before > after else '늘리기'})
-    return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation),
+    return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation, current=True),
             'recommendation': {'title': final.recommendation.title, 'allocations': rows,
                                'evaluation': evaluation(final.recommendation.evaluation), 'actions': actions,
                                'total_krw': metrics['total_krw'], 'expected_return_1y': None, 'dividend_yield_1y': None,
