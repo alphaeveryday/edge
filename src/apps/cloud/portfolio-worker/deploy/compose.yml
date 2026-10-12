@@ -47,6 +47,11 @@ services:
       PORTFOLIO_OUTLOOK_URL: http://outlook:8093/outlook
       AWS_EC2_METADATA_DISABLED: "true"
     mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/portfolio-worker-ready'); assert p.exists() and time.time()-p.stat().st_mtime < 360"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

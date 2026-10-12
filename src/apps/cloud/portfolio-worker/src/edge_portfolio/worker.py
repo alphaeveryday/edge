@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 from . import store
 from .agent import run_analysis
@@ -8,6 +9,7 @@ from .contracts import AnalysisInput
 from .followup import answer_question
 
 log = logging.getLogger("portfolio-worker")
+HEARTBEAT = Path('/tmp/portfolio-worker-ready')
 
 
 def failure_codes(error):
@@ -40,12 +42,18 @@ async def work_once():
 
 
 async def main():
+    HEARTBEAT.unlink(missing_ok=True)
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise RuntimeError("DEEPSEEK_API_KEY is required")
     store.initialize()
-    while True:
-        if not await work_once():
-            await asyncio.sleep(1)
+    try:
+        while True:
+            HEARTBEAT.touch()
+            worked = await work_once()
+            if not worked:
+                await asyncio.sleep(1)
+    finally:
+        HEARTBEAT.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
