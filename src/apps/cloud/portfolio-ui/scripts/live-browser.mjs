@@ -1,0 +1,47 @@
+// Explicit billable end-to-end verification against the running API and worker.
+import { chromium, expect } from '@playwright/test';
+import { mkdir, writeFile } from 'node:fs/promises';
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+const page = await context.newPage();
+const errors = [];
+page.on('pageerror', e => errors.push(e.message));
+await mkdir('test-results', { recursive: true });
+try {
+  await page.goto('http://localhost:5180/portfolio/');
+  await page.getByLabel('ETF 이름 또는 종목 코드').fill('Vanguard S&P 500 ETF (VOO)');
+  await page.getByLabel('현재 평가금액').fill('7000000');
+  await page.getByRole('button', { name: '＋ ETF 추가하기' }).click();
+  await page.getByLabel('ETF 이름 또는 종목 코드').last().fill('Invesco NASDAQ 100 ETF (QQQM)');
+  await page.getByLabel('현재 평가금액').last().fill('3000000');
+  await page.getByLabel('가장 궁금한 점').fill('두 ETF가 겹치면 하나를 줄여야 하나요?');
+  await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
+  await expect(page.locator('.progress')).toBeVisible();
+  const jobId = await page.evaluate(() => localStorage.getItem('edge-portfolio-job'));
+  console.log('submitted', jobId);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible({ timeout: 330000 });
+  console.log('report ready');
+  await page.screenshot({ path: 'test-results/live-mobile.png', fullPage: true });
+  await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill('이 분석에서 지금 가장 먼저 확인할 것은 무엇인가요?');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page.locator('.chat-answer')).toBeVisible({ timeout: 120000 });
+  console.log('follow-up ready');
+  await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill('두 번째 질문입니다');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page.getByRole('dialog').filter({ hasText: '아직 준비 중' })).toBeVisible();
+  await page.getByRole('button', { name: '포트폴리오로 돌아가기' }).click();
+  await expect(page.getByRole('textbox', { name: '추가 질문', exact: true })).toBeDisabled();
+  await page.locator('.premium').click();
+  await page.getByLabel('이메일 주소').fill('portfolio-test@example.com');
+  await page.getByRole('button', { name: '리포트 신청하기' }).click();
+  await expect(page.getByRole('dialog')).toContainText('신청을 접수했어요');
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: 'test-results/live-desktop.png', fullPage: true });
+  expect(errors).toEqual([]);
+  const result = await page.evaluate(async id => (await fetch('/api/portfolio/analyses/' + id)).json(), jobId);
+  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
+  console.log('live end-to-end passed', result.result.elapsed_seconds);
+} finally { await browser.close(); }
