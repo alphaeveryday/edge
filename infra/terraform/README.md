@@ -1,5 +1,7 @@
 # infra/terraform
 
+포트폴리오의 기존 자원 편입과 SSM 권한 경계는 [편입 기록](../../docs/design/portfolio-infrastructure.md)을 따른다. 이 자원은 GitHub의 Terraform plan/apply로 관리하며 로컬 관리자 키로 변경하지 않는다.
+
 `edge` 의 AWS 인프라를 코드로 정의한다. **완전 그린필드** — 도메인 등록(구매·NS 위임)만 수동이고, 그 아래(SSL·네트워크·컴퓨트·데이터·CDN)는 전부 Terraform 이 소유한다. 다른 계정/region 에서도 `tfvars` 만 바꿔 재현된다.
 
 > 배포 토폴로지 결정은 [docs/adr/0009](../../docs/adr/0009-aws-deployment-topology.md), 신뢰 경계는 [docs/context.md](../../docs/context.md) §3.

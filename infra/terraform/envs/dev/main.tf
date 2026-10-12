@@ -825,10 +825,18 @@ data "aws_acm_certificate" "etforca_cdn" {
 module "landing_site" {
   source = "../../modules/static-site"
 
-  name            = "${local.prefix}-landing"
-  domain_name     = var.landing_domain
-  zone_id         = data.aws_route53_zone.etforca.zone_id
-  certificate_arn = data.aws_acm_certificate.etforca_cdn.arn
+  name                    = "${local.prefix}-landing"
+  domain_name             = var.landing_domain
+  zone_id                 = data.aws_route53_zone.etforca.zone_id
+  certificate_arn         = data.aws_acm_certificate.etforca_cdn.arn
+  api_origin_domain       = aws_route53_record.portfolio_origin.fqdn
+  api_origin_id           = "portfolio-api"
+  api_origin_port         = 80
+  api_origin_protocol     = "https-only"
+  api_path_pattern        = "/api/portfolio/*"
+  api_allowed_methods     = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+  api_origin_header_name  = "X-Portfolio-Origin"
+  api_origin_header_value = var.portfolio_origin_header
 }
 
 # 랜딩 종목 검색이 읽는 전망 파일(outlook/<코드>.json)을 매일 08:00 KST 에 갱신한다(ALPHA-1267).
