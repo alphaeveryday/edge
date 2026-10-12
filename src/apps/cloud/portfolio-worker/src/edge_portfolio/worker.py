@@ -1,11 +1,16 @@
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
+from typing import get_args
+
+from pydantic import ValidationError
+from pydantic_core import ErrorType
 
 from . import store
 from .agent import run_analysis
-from .contracts import AnalysisInput
+from .contracts import AnalysisInput, FinalReport
 from .followup import answer_question
 
 log = logging.getLogger("portfolio-worker")
@@ -18,9 +23,24 @@ def failure_codes(error):
     prefix = str(error).split(':', 1)[0]
     allowed = {'EXA_FAILED', 'EMPTY_SOURCE', 'TOOL_NOT_ALLOWED', 'TOOL_LIMIT', 'INVALID_TOOL_ARGUMENT', 'OUTPUT_INVALID', 'MODEL_BUDGET', 'MODEL_CALL_BUDGET', 'MODEL_CONTEXT_BUDGET', 'MODEL_TRUNCATED'}
     if prefix == 'OUTPUT_INVALID':
+        cause = error.__cause__
+        if isinstance(cause, json.JSONDecodeError):
+            return ['OUTPUT_INVALID', 'JSON_INVALID']
+        if isinstance(cause, ValidationError):
+            schema = FinalReport.model_json_schema()
+            fields = {key for model in [schema, *schema.get('$defs', {}).values()] for key in model.get('properties', {})}
+            codes = []
+            for issue in cause.errors(include_input=False, include_context=False, include_url=False)[:6]:
+                path = [part if part in fields else 'FIELD' for part in issue['loc'] if not isinstance(part, int)]
+                kind = issue['type'] if issue['type'] in get_args(ErrorType) else 'VALIDATION'
+                codes.append('_'.join(['SCHEMA', *path, kind]).upper())
+            return ['OUTPUT_INVALID', *codes]
         reasons = {'must exactly match': 'ALLOCATION_MISMATCH', 'Call read_portfolio_history': 'HISTORY_NOT_READ',
                    'Evidence must select': 'EVIDENCE_INVALID', 'paragraphs must total': 'SECTION_LENGTH',
-                   'each bullet must be one sentence': 'BULLET_FORMAT', 'No eligible candidate': 'NO_ELIGIBLE_CANDIDATE'}
+                   'each bullet must be one sentence': 'BULLET_FORMAT', 'No eligible candidate': 'NO_ELIGIBLE_CANDIDATE',
+                   'require source evidence': 'EVIDENCE_REQUIRED', 'Market estimates must cite': 'FORECAST_EVIDENCE',
+                   'account was not selected': 'ACCOUNT_NOT_SELECTED', 'cannot be allocated directly': 'ACCOUNT_MARKET',
+                   'Account subtype does not support': 'ACCOUNT_SUBTYPE'}
         return ['OUTPUT_INVALID', next((code for text, code in reasons.items() if text in str(error)), 'OUTPUT_SCHEMA')]
     return [prefix if prefix in allowed else type(error).__name__]
 
