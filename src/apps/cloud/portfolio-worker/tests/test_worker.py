@@ -15,15 +15,15 @@ def test_worker_only_marks_ready_after_db_initialization_and_cleans_up(monkeypat
 
     monkeypatch.setattr(worker.store, 'initialize', initialize)
 
-    async def poll():
-        assert marker.exists()
-        return False
+    def claim():
+        assert not marker.exists()
+        return None
 
     async def sleep(_):
         assert marker.exists()
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(worker, 'work_once', poll)
+    monkeypatch.setattr(worker.store, 'claim', claim)
     monkeypatch.setattr(worker.asyncio, 'sleep', sleep)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(worker.main())
@@ -36,10 +36,11 @@ def test_worker_queue_failure_never_signals_ready(monkeypatch, tmp_path):
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
 
-    async def poll():
+    def claim():
+        assert not marker.exists()
         raise RuntimeError('database unavailable')
 
-    monkeypatch.setattr(worker, 'work_once', poll)
+    monkeypatch.setattr(worker.store, 'claim', claim)
     with pytest.raises(RuntimeError, match='database unavailable'):
         asyncio.run(worker.main())
     assert not marker.exists()

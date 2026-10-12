@@ -22,6 +22,7 @@ def failure_codes(error):
 
 async def work_once():
     job = store.claim()
+    HEARTBEAT.touch()
     if not job:
         return False
     try:
@@ -48,7 +49,6 @@ async def main():
     store.initialize()
     try:
         while True:
-            HEARTBEAT.touch()
             worked = await work_once()
             if not worked:
                 await asyncio.sleep(1)
