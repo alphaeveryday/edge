@@ -831,6 +831,20 @@ module "landing_site" {
   certificate_arn = data.aws_acm_certificate.etforca_cdn.arn
 }
 
+# 랜딩 종목 검색이 읽는 전망 파일(outlook/<코드>.json)을 매일 08:00 KST 에 갱신한다(ALPHA-1267).
+# 대상은 전망 배치와 같은 목록이다.
+module "landing_export" {
+  source = "../../modules/landing-export"
+
+  name              = "${local.prefix}-landing-export"
+  api_url           = module.analysis_v2.api_url
+  bucket_name       = module.landing_site.bucket_name
+  bucket_arn        = module.landing_site.bucket_arn
+  etf_codes         = local.outlook_etf_codes
+  scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
+  alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
+}
+
 # ── ETF Orca 앱 API: app-api (ADR-0056) ─────────────────
 # B2C 앱 서버. 파이프라인·콘솔이 쓰는 `edge-dev` 와 DB 인스턴스를 나눈다. 폭발 반경(스키마
 # 머지=재부팅=1분 레인 정지, ALPHA-924)·부하 성격·PII 경계가 이유다. 파이프라인 데이터는
