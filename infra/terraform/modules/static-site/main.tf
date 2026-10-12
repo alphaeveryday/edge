@@ -72,7 +72,14 @@ resource "aws_cloudfront_distribution" "this" {
     for_each = var.api_origin_domain != "" ? [1] : []
     content {
       domain_name = var.api_origin_domain
-      origin_id   = "api"
+      origin_id   = var.api_origin_id
+      dynamic "custom_header" {
+        for_each = var.api_origin_header_name == "" ? [] : [1]
+        content {
+          name  = var.api_origin_header_name
+          value = var.api_origin_header_value
+        }
+      }
       custom_origin_config {
         http_port              = var.api_origin_port
         https_port             = 443
@@ -106,7 +113,7 @@ resource "aws_cloudfront_distribution" "this" {
     for_each = var.api_origin_domain != "" ? [1] : []
     content {
       path_pattern             = var.api_path_pattern
-      target_origin_id         = "api"
+      target_origin_id         = var.api_origin_id
       viewer_protocol_policy   = "redirect-to-https"
       allowed_methods          = var.api_allowed_methods
       cached_methods           = ["GET", "HEAD"]
