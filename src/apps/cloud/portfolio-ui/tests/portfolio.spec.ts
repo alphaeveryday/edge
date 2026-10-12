@@ -39,6 +39,7 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.reload();
   await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible();
   await expect(page.locator('.evaluation section')).toHaveCount(4);
+  await expect(page.locator('.fee')).toContainText('100만 원');
   await expect(page.getByRole('heading', { name: '과거 성과' })).toBeVisible();
   await page.getByLabel('추가 질문', { exact: true }).fill('다시 물어볼게요');
   await page.getByRole('button', { name: '질문 보내기' }).click();

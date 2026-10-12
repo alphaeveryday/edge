@@ -11,8 +11,8 @@ from .contracts import validate_section
 async def answer_question(question, report, key):
     messages = [
         {"role": "system", "content": (PROMPTS / "system.md").read_text(encoding="utf8") +
-         "\n후속 질문에만 답한다. 저장된 보고서와 출처를 활용한다. 새 사실이 필요한 질문은 현재 근거로 확인할 수 없는 부분을 명확히 한다. 본문 400~700자, 3문단, 나머지 JSON 계약 동일. 최신 자료를 새로 조회했다고 말하지 않는다."},
-        {"role": "user", "content": json.dumps({"question": question, "report": {k: report[k] for k in ("sections", "sources", "metrics", "as_of")}}, ensure_ascii=False)},
+         "\n후속 질문에만 답한다. 저장된 추천 구성·자유 분석과 출처를 활용한다. 새 사실이 필요한 질문은 현재 근거로 확인할 수 없는 부분을 명확히 한다. 본문 90~650자, 기본 3개·최대 5개 불릿, 각 불릿 한 문장·최대 180자이며 나머지 JSON 계약은 동일하다. 최신 자료를 새로 조회했다고 말하지 않는다."},
+        {"role": "user", "content": json.dumps({"question": question, "report": {k: report[k] for k in ("sections", "sources", "metrics", "as_of", "current_evaluation", "recommendation", "insights") if k in report}}, ensure_ascii=False)},
     ]
     async with asyncio.timeout(90), httpx.AsyncClient(timeout=85) as client:
         for attempt in range(2):

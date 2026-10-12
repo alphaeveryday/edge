@@ -3,6 +3,7 @@ import httpx
 import pytest
 from edge_portfolio.agent import run_analysis
 from edge_portfolio.contracts import AnalysisInput, ROLES, LIMITS
+from report_fixtures import final_payload
 
 
 class Evidence:
@@ -20,10 +21,10 @@ async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_o
             raise httpx.ReadError('response connection closed')
         conversations.append(len(payload["messages"]))
         role = phases[-1]
-        count = LIMITS[role][0] // 2
-        section = {"paragraphs": ["가" * count, "나" * count], "evidence": [{"source_id": "s1", "passage_id": "p1"}], "limitations": []}
+        count = LIMITS[role][0] // 3
+        section = {"paragraphs": ["가" * count, "나" * count, "다" * count], "evidence": [{"source_id": "s1", "passage_id": "p1"}], "limitations": []}
         if role == 'opinion':
-            section = {name: {**section, 'paragraphs': ['가' * (LIMITS[name][0] // 2), '나' * (LIMITS[name][0] // 2)]} for name in ROLES}
+            section = final_payload({name: {**section, 'paragraphs': ['가' * (LIMITS[name][0] // 3)] * 3} for name in ROLES})
         return {"choices": [{"message": {"role": "assistant", "content": json.dumps(section), "reasoning_content": "private"}}]}
     result = await run_analysis(AnalysisInput(holdings=[{"name": "VOO", "amount_krw": 100}], horizon="10년 이상"), "test", phases.append, model_call=model, evidence=Evidence())
     assert phases == list(ROLES)
@@ -69,8 +70,8 @@ async def test_unregistered_url_is_rejected_without_losing_the_whole_analysis():
             assert reply['status'] == 'rejected'
             assert reply['fetchable_urls'] == ['https://official.example/fund']
         def section(name):
-            return {'paragraphs': ['가' * (LIMITS[name][0] // 2)] * 2, 'evidence': [{'source_id': 's1', 'passage_id': 'p1'}], 'limitations': []}
-        content = {name: section(name) for name in ROLES} if role == 'opinion' else section(role)
+            return {'paragraphs': ['가' * (LIMITS[name][0] // 3)] * 3, 'evidence': [{'source_id': 's1', 'passage_id': 'p1'}], 'limitations': []}
+        content = final_payload({name: section(name) for name in ROLES}) if role == 'opinion' else section(role)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'), 'test', phases.append, model_call=model, evidence=RestrictedEvidence())
     assert phases == list(ROLES)

@@ -16,11 +16,13 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
+from .recommendation import search_etfs, publish_recommendation
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
 EXA_URL = "https://mcp.exa.ai/mcp"
 TOOLS = [
+    {"type": "function", "function": {"name": "search_etfs", "description": "추천할 ETF의 등록 ID를 이름 또는 티커로 찾는다. 상품 근거 조회와는 별개다. 한 번에 8개까지 반환한다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "fetch_source", "description": "검색에서 발견한 URL의 본문을 읽고 근거 ID를 받는다.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False}}},
 ]
@@ -80,7 +82,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     context = {"input": request.model_dump(mode="json"), "computed": metrics,
                "as_of": datetime.now(timezone.utc).isoformat(), "aws_outlook": {"status": "available_on_purpose" if os.getenv('PORTFOLIO_OUTLOOK_URL') else "not_connected"}}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
-    sections, trace = {}, []
+    sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
     async with asyncio.timeout(300), AsyncExitStack() as stack:
         if evidence is None:
@@ -99,6 +101,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
 
         calls = 0
         read_retries = 0
+        catalog_calls = 0
         for role in ROLES:
             on_stage(role)
             schema = FinalReport if role == 'opinion' else Section
@@ -130,7 +133,17 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if message.get("tool_calls"):
                     for call in message["tool_calls"]:
                         function = call["function"]
-                        if function['name'] == 'read_etf_outlook':
+                        if function['name'] == 'search_etfs':
+                            catalog_calls += 1
+                            args = json.loads(function['arguments'])
+                            if catalog_calls > 6:
+                                answer = {'status': 'rejected', 'reason': 'Catalog search limit reached; use registered IDs already returned'}
+                            else:
+                                try:
+                                    answer = search_etfs(args.get('query'))
+                                except ValueError as error:
+                                    answer = {'status': 'rejected', 'reason': str(error)}
+                        elif function['name'] == 'read_etf_outlook':
                             try:
                                 answer = await outlook.call(json.loads(function['arguments']), evidence.sources)
                             except ValueError as error:
@@ -151,6 +164,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
+                        published = publish_recommendation(final, request, metrics, evidence.sources)
                     else:
                         sections[role] = validate_section(role, raw, evidence.sources)
                     break
@@ -162,7 +176,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     messages.append({"role": "user", "content": f"출력 검증 실패: {str(error)[:400]}. 현재 역할의 JSON을 한 번 수정하세요. 본문은 {(low + high) // 2}자 목표, 최대 {high}자. 근거는 실제 도구가 준 source_id와 passage_id를 고르세요. 등록 근거가 없는 질문 해석 단계는 evidence: []로 고치세요."})
                     if role == 'opinion':
                         messages[-1]['content'] += f' 최종 출력에는 네 칸 모두 필요합니다. 오류가 난 칸의 한도를 적용하세요: {LIMITS}.'
-        return {"sections": sections, "metrics": metrics, "sources": evidence.sources,
+        return {**published, "sections": sections, "metrics": metrics, "sources": evidence.sources,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
                 "elapsed_seconds": round(time.monotonic() - started, 2), "trace": trace,
                 "aws_outlook": {'queries': outlook.queries, 'status': 'queried' if outlook.queries else 'not_requested'}}
