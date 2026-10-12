@@ -1437,7 +1437,9 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     }));
     marks.setAttribute('aria-label', '다섯 기준. ' + d.factors.map((fa) => `${fa.type} ${fa.sticker}`).join(', '));
     const ups = (d.detail.updates?.items ?? []).filter((u) => u.change_type !== 'deleted' && u.sentence).slice(0, 2);
-    const changed = ups.length ? [kid('section', 'changed', '', el('h4', '', '오늘 달라진 점'), kid('ul', '', '', ...ups.map((u) => el('li', '', u.sentence.split('\n')[0]))))] : [];
+    // 파일은 하루 한 번 갱신된다. 자정부터 갱신 전까지, 또는 그날 발행이 없던 종목은 지난 날짜의 파일이라 '오늘'이라고 부르지 않는다
+    const [, mon, day] = (d.detail.updates?.date ?? '').split('-'), today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+    const changed = ups.length ? [kid('section', 'changed', '', el('h4', '', d.detail.updates.date === today ? '오늘 달라진 점' : `${+mon}월 ${+day}일에 달라진 점`), kid('ul', '', '', ...ups.map((u) => el('li', '', u.sentence.split('\n')[0]))))] : [];
     const shown = d.detail.items.slice(0, 5), rest = d.detail.items.length - shown.length;
     const chain = kid('ol', 'chain', '', ...shown.map((it, i) => {
       const box = kid('details', '', '', el('summary', '', it.title_keyword), kid('div', 'chain__more', '', ...it.sentences.map((s) => el('p', s.is_updated ? 'is-new' : '', s.sentence))));
