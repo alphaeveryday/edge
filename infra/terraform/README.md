@@ -29,6 +29,7 @@ infra/terraform/
     ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 운영 중단 경보(stop.tf)·호스트 메모리 표본(host_mem.tf)·관리 태스크(dbadmin), 격리 검증 자원) — ALPHA-1119. 메타DB 는 별도 인스턴스가 아니라 기존 업무 RDS(`modules/rds`, `edge-dev`) 안의 DB `airflow`·역할 `airflow_meta`(관리 태스크가 만든다)
     ├── data-pipeline/      # Step Functions 배치 5종 — 시장 + 장전 유니버스 + 뉴스 + 공시(평일 19:30 보충) + 장중 수급(Airflow 실행 중, 롤백용 보존) — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
+    ├── landing-export/     # 랜딩 전망 내보내기: 매일 08:00 KST 에 분석 v2 조회 API 로 그날 전망을 읽어 랜딩 버킷 outlook/<코드>.json 에 쓰는 Lambda(zip)·스케줄·실패 경보 — ALPHA-1267
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
@@ -101,7 +102,7 @@ cd ../envs/dev  && terraform apply
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
 - Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../src/apps/cloud/airflow/README.md) "최초 구축")
-- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `src/apps/cloud/app-landing/` 에 있고 ([README](../../src/apps/cloud/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다).
+- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `src/apps/cloud/app-landing/` 에 있고 ([README](../../src/apps/cloud/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 403 을 돌려준다. `www.etforca.com` 은 서빙하지 않는다(`static-site` 가 도메인을 하나만 받는다). 같은 버킷의 `outlook/<코드>.json`(종목별 그날 전망)은 배포가 아니라 `landing-export` 람다가 매일 08:00 KST 에 쓴다 — 랜딩 배포는 이 경로를 건드리지 않는다.
 
 ### 🔮 미구축 (후속 증분)
 
