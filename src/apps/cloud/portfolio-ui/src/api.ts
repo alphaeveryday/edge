@@ -13,7 +13,8 @@ export type Recommendation = { title: string; allocations: Allocation[]; evaluat
 export type Report = {
   schema_version?: number;
   current_evaluation?: Evaluation;
-  recommendation?: Recommendation;
+  recommendation?: Recommendation | null;
+  optimization?: { status: 'available' | 'no_match' | 'unavailable'; selected_candidate_id: string | null };
   insights?: { title: string; content: Section }[];
   sections: Record<Role, Section>;
   metrics: { holdings: { name: string; account: string; weight_pct: number | null }[]; total_krw: string | null; unavailable_reason: string };

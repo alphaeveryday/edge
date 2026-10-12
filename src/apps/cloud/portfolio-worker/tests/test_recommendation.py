@@ -17,20 +17,20 @@ def test_amounts_and_score_are_computed_and_current_input_is_not_the_recommendat
     raw['recommendation']['allocations'] = [
         {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 50},
         {'instrument_id': 'US:QQQ', 'account': '일반 계좌', 'weight_pct': 30},
-        {'instrument_id': 'CASH:KRW', 'account': '일반 계좌', 'weight_pct': 20}]
+        {'instrument_id': 'US:VTI', 'account': '일반 계좌', 'weight_pct': 20}]
     result = publish(raw)
     plan = result['recommendation']
     assert sum(int(h['amount_krw']) for h in plan['allocations']) == 1000001
     assert plan['allocations'][0]['amount_krw'] == '500001'
     assert plan['evaluation']['overall'] == 3.5
-    assert [a['action'] for a in plan['actions']] == ['줄이기', '새로 담기', '새로 담기']
+    assert [a['action'] for a in plan['actions']] == ['줄이기', '새로 담기', '새로 담기', '새로 담기']
     assert result['insights'][0]['title'] == '지금 가장 먼저 판단할 것'
     assert plan['expected_return_1y'] is None and plan['historical_performance'] is None
 
 
 @pytest.mark.parametrize('change,match', [
     ({'weight_pct': 99}, 'total'), ({'instrument_id': 'US:INVENTED'}, 'registered'),
-    ({'account': 'ISA'}, 'not selected')])
+    ({'account': 'ISA'}, 'not selected'), ({'instrument_id': 'CASH:KRW'}, 'cash weight')])
 def test_invalid_model_recommendations_are_not_published(change, match):
     raw = final_payload(); raw['recommendation']['allocations'][0].update(change)
     with pytest.raises(ValueError, match=match): publish(raw)

@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from datetime import date, timedelta
+from decimal import Decimal
 from urllib.parse import quote
 
 import pandas as pd
@@ -84,15 +85,14 @@ def weights(rows):
         value = row.get('weight_pct')
         if not instrument or value is None or not math.isfinite(float(value)) or float(value) <= 0:
             raise ValueError('INVALID_MARKET_WEIGHTS')
-        result[instrument] = result.get(instrument, 0) + float(value)
-    if not result or len(result) > 20 or abs(sum(result.values()) - 100) > .1:
+        result[instrument] = result.get(instrument, Decimal(0)) + Decimal(str(value))
+    if not result or len(result) > 20 or abs(sum(result.values()) - 100) > Decimal('.1'):
         raise ValueError('INVALID_MARKET_WEIGHTS')
     total = sum(result.values())
-    return {k: v / total for k, v in result.items()}
+    return {k: float(v / total) for k, v in result.items()}
 
 
-def comparison(target, current, records, as_of):
-    ids = set(target) | set(current or {})
+def normalized_prices(ids, records, as_of):
     series, urls = {}, []
     for key in ids - {'CASH:KRW'}:
         record = records[key]
@@ -132,9 +132,14 @@ def comparison(target, current, records, as_of):
         end = pd.Timestamp(as_of - timedelta(days=1))
         frame = pd.DataFrame(index=pd.bdate_range(year_before(end.date()), end))
     frame['CASH:KRW'] = 1.0
+    return frame / frame.iloc[0], urls
+
+
+def comparison(target, current, records, as_of):
+    frame, urls = normalized_prices(set(target) | set(current or {}), records, as_of)
 
     def value(allocation):
-        return sum(frame[key] / frame[key].iloc[0] * weight * 1000000 for key, weight in allocation.items())
+        return sum(frame[key] * weight * 1000000 for key, weight in allocation.items())
 
     recommended = value(target)
     existing = value(current) if current else None
