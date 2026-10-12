@@ -162,3 +162,33 @@ def test_diagnostic_codes_distinguish_budget_and_validation_failures_without_raw
     assert failure_codes(ValueError('MODEL_CONTEXT_BUDGET')) == ['MODEL_CONTEXT_BUDGET']
     assert failure_codes(ValueError('OUTPUT_INVALID: Final allocation must exactly match private-data')) == ['OUTPUT_INVALID', 'ALLOCATION_MISMATCH']
     assert failure_codes(ValueError('OUTPUT_INVALID: unexpected private-data')) == ['OUTPUT_INVALID', 'OUTPUT_SCHEMA']
+
+
+def test_output_diagnostics_identify_schema_field_without_logging_values_or_unknown_keys():
+    from edge_portfolio.contracts import FinalReport
+    from edge_portfolio.worker import failure_codes
+    payload = final_payload()
+    payload['recommendation']['evaluation']['scores']['stability'] = 4.2
+    payload['private_user_text'] = 'secret@example.com'
+    try:
+        FinalReport.model_validate(payload)
+    except ValueError as cause:
+        error = ValueError('OUTPUT_INVALID: redacted')
+        error.__cause__ = cause
+    codes = failure_codes(error)
+    assert 'SCHEMA_RECOMMENDATION_EVALUATION_SCORES_STABILITY_MULTIPLE_OF' in codes
+    assert 'SCHEMA_FIELD_EXTRA_FORBIDDEN' in codes
+    assert 'private_user_text' not in str(codes).lower()
+    assert 'secret' not in str(codes).lower()
+    assert '4.2' not in str(codes)
+
+
+def test_output_diagnostics_distinguish_missing_source_evidence_and_invalid_json():
+    from edge_portfolio.worker import failure_codes
+    assert failure_codes(ValueError('OUTPUT_INVALID: Portfolio and outlook require source evidence')) == ['OUTPUT_INVALID', 'EVIDENCE_REQUIRED']
+    try:
+        json.loads('private_user_text')
+    except ValueError as cause:
+        error = ValueError('OUTPUT_INVALID: redacted')
+        error.__cause__ = cause
+    assert failure_codes(error) == ['OUTPUT_INVALID', 'JSON_INVALID']
