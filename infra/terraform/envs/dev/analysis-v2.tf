@@ -28,7 +28,7 @@ module "analysis_v2" {
   price_queue_arn       = module.data_pipeline.minute_queue_arns["price-explanation-realtime"]
 
   # 동시 40건(ALPHA-1257, 이전 12 — ALPHA-1240, 그 전 3 — ALPHA-1157). 모듈 검증 상한(1~40)과 같은 값이다. 개장 집중(관측 최대 35건)과 148종 전망 배치(ALPHA-1249)의 자리 대기를 줄인다.
-  # dev 실측은 동시 37 1회뿐이다(#1124: DB 거절 0·Lambda 스로틀은 재시도로 회복). 40건이 함께 시작할 때의 값은 2026-10-11 06:00 배치로 잰다. 역할 연결 한도·Lambda 예약 동시 실행은 그대로다.
+  # dev 실측은 동시 37 1회(#1124)와 자리 40 정기 배치 1회(2026-10-12)다. 40 배치에서 DB 재시도는 0 이었고, 시작 전 상태 조회가 API Lambda 스로틀에 걸려 148종 중 6종이 시작하지 못했다. 그래서 API Lambda 예약 동시 실행·api_reader 한도·게이트웨이 버스트를 올렸다(ALPHA-1268). 실행 제어 Lambda 와 writer·reader 한도는 그대로다.
   # 되돌릴 때는 이 값만 12로 바꾼다(3으로 되돌린 선례는 #1125). 측정은 tests/loadtest/analysis-v2/README.md.
   analysis_slots = 40
 

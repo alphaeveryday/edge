@@ -23,6 +23,10 @@ resource "aws_iam_role_policy" "api" {
     { Effect = "Allow", Action = ["states:DescribeExecution"], Resource = "arn:aws:states:${var.region}:${data.aws_caller_identity.current.account_id}:execution:${var.name}:*" }
   ] })
 }
+# reserved_concurrent_executions: 호출 하나가 한 번에 api_reader 연결 1개만 연다(조회마다 열고 닫는다). 그래서 이 수가
+# 그 역할의 동시 연결 상한이고, 역할 한도 45(V202610121430) = 이 수 40 + 여유 5 다. 이 수를 올리려면 한도를 먼저 올린다.
+# 40 은 analysis_slots 검증 상한이다 — 전망 배치는 자리 수만큼 상태 조회를 동시에 보낸다. 3 이던 2026-10-12 자리 40
+# 배치에서 스로틀 91건으로 6종이 분석을 시작하지 못했다(tests/loadtest/analysis-v2/README.md '자리 40 dev 실측').
 resource "aws_lambda_function" "api" {
   function_name                  = "${var.name}-api"
   role                           = aws_iam_role.api.arn
@@ -31,7 +35,7 @@ resource "aws_lambda_function" "api" {
   architectures                  = ["x86_64"]
   memory_size                    = 512
   timeout                        = 28
-  reserved_concurrent_executions = 3
+  reserved_concurrent_executions = 40
   vpc_config {
     subnet_ids         = var.subnet_ids
     security_group_ids = [aws_security_group.this.id]
@@ -76,8 +80,10 @@ resource "aws_apigatewayv2_stage" "analysis" {
   name        = "$default"
   auto_deploy = true
   depends_on  = [aws_apigatewayv2_route.analysis]
+  # 버스트 80 = 배치가 동시에 보내는 상태 조회 최대 40건의 2배. 한 차례 재시도나 앱 조회가 겹쳐도 통과시킨다.
+  # 10 이던 2026-10-12 자리 40 배치에서 429 가 18건 났다. 지속 속도 5 는 그대로다(그 배치의 API 호출은 평균 초당 1건 미만).
   default_route_settings {
-    throttling_burst_limit = 10
+    throttling_burst_limit = 80
     throttling_rate_limit  = 5
   }
   route_settings {
