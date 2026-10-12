@@ -36,8 +36,8 @@ def publish_recommendation(final, request, metrics, sources):
     def evaluation(value):
         scores = value.scores.model_dump() if value.scores else None
         overall = float((sum(Decimal(str(v)) for v in scores.values()) / 3).quantize(Decimal('.1'), rounding=ROUND_HALF_UP)) if scores else None
-        return {'scores': scores, 'overall': overall, 'reason': validate_section('portfolio', value.reason.model_dump(), sources),
-                'method': '확인한 근거에 대한 AI 정성 평가이며, 수익 예측이나 검증된 성과 점수가 아니에요.'}
+        return {'scores': scores, 'overall': overall, 'rubric_version': 1, 'reason': validate_section('portfolio', value.reason.model_dump(), sources),
+                'method': '시장 주도성·수익성·안정성 세 항목의 평균이에요. ETF 구성 종목·과거 가격·보수율을 확인해 평가하며, 사용자 선호는 점수에 넣지 않아요.'}
 
     if final.recommendation is None:
         return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation), 'recommendation': None,

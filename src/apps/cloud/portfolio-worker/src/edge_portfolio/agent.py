@@ -59,7 +59,7 @@ class ExaEvidence:
                 parsed = urlsplit(url)
                 if parsed.hostname and not parsed.username and not parsed.password and parsed.port in (None, 443):
                     self.discovered.add(url)
-            return {"search_results": body, "fetchable_urls": sorted(self.discovered)}
+            return {"search_results": body[:2500], "fetchable_urls": sorted(self.discovered)}
         if len(body.strip()) < 50:
             raise ValueError("EMPTY_SOURCE")
         source = {"id": f"s{len(self.sources) + 1}", "url": args["url"], "excerpt": body[:6500],
@@ -72,7 +72,7 @@ class ExaEvidence:
                     chunks.append(chunk)
         source['passages'] = [{'id': f'p{i + 1}', 'text': text} for i, text in enumerate(chunks)]
         self.sources.append(source)
-        return source
+        return {key: value for key, value in source.items() if key != 'excerpt'}
 
 
 async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None):
@@ -183,6 +183,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources)
                         published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
+                        if not selected and optimizer.result['candidates']:
+                            published['optimization']['reason'] = 'RATING_BELOW_MINIMUM'
                         if selected:
                             await enrich_report(published, final, market, evidence.sources)
                     else:
