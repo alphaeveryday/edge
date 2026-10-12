@@ -98,6 +98,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 return response.json()
 
         calls = 0
+        read_retries = 0
         for role in ROLES:
             on_stage(role)
             schema = FinalReport if role == 'opinion' else Section
@@ -107,9 +108,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 calls += 1
                 if calls > 18 or len(json.dumps(messages).encode()) > 350000:
                     raise ValueError("MODEL_BUDGET")
-                result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL],
-                    "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
-                    "max_tokens": 10000 if role == 'opinion' else 6000, "stream": False})
+                try:
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL],
+                        "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
+                        "max_tokens": 10000 if role == 'opinion' else 6000, "stream": False})
+                except httpx.ReadError:
+                    if read_retries:
+                        raise
+                    read_retries += 1
+                    await asyncio.sleep(1)
+                    continue
                 choice = result["choices"][0]
                 if choice.get("finish_reason") == "length":
                     raise ValueError("MODEL_TRUNCATED")

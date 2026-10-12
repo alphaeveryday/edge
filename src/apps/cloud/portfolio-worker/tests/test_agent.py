@@ -1,4 +1,5 @@
 import json
+import httpx
 import pytest
 from edge_portfolio.agent import run_analysis
 from edge_portfolio.contracts import AnalysisInput, ROLES, LIMITS
@@ -8,9 +9,15 @@ class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
-async def test_one_conversation_visits_four_roles_and_keeps_context():
+@pytest.mark.parametrize('disconnect_once', [False, True])
+async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_once):
     phases, conversations = [], []
+    disconnected = False
     async def model(payload):
+        nonlocal disconnected
+        if disconnect_once and not disconnected:
+            disconnected = True
+            raise httpx.ReadError('response connection closed')
         conversations.append(len(payload["messages"]))
         role = phases[-1]
         count = LIMITS[role][0] // 2
@@ -23,6 +30,17 @@ async def test_one_conversation_visits_four_roles_and_keeps_context():
     assert conversations == sorted(set(conversations))
     assert list(result["sections"]) == list(ROLES)
     assert "private" not in json.dumps(result)
+
+
+async def test_repeated_model_read_failure_stops_after_one_retry():
+    calls = []
+    async def model(payload):
+        calls.append(1)
+        raise httpx.ReadError('response connection closed')
+    with pytest.raises(httpx.ReadError):
+        await run_analysis(AnalysisInput(holdings=[{"name": "VOO", "amount_krw": 100}], horizon="10년 이상"),
+                           'test', lambda _: None, model_call=model, evidence=Evidence())
+    assert len(calls) == 2
 
 
 async def test_invalid_output_stops_after_one_repair():
