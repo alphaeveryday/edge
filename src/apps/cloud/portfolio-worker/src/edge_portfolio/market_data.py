@@ -5,6 +5,8 @@ import math
 import json
 import sys
 import subprocess
+import tempfile
+from pathlib import Path
 from datetime import date, timedelta
 from urllib.parse import quote
 
@@ -35,6 +37,7 @@ def year_before(day, years=1):
 
 
 def load_prices(symbol, as_of):
+    yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
     frame = ticker.history(start=(year_before(as_of) - timedelta(days=10)).isoformat(), end=as_of.isoformat(),
                            interval='1d', auto_adjust=False, actions=True, timeout=12)
