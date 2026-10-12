@@ -47,8 +47,9 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 
 **레인(pipeline_type) 축**(ALPHA-591·724·769·875·987): 카탈로그는 시장 레인(`etf-daily`, 17작업)·
 뉴스 레인(`news`, 6작업)·공시 레인(`disclosure`, 4작업 — 875 가 1분 세션으로 보냈던 것을
-987이 저녁 배치로 되돌렸고, 1068에서 빠진 4작업을 1073이 보충 배치로 복원했다)·장중 수급 레인(`investor-intraday`, 3작업)을 함께
-담는다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
+987이 저녁 배치로 되돌렸고, 1068에서 빠진 4작업을 1073이 보충 배치로 복원했다)·장중 수급 레인(`investor-intraday`, 3작업)·
+원천 관측 레인(`source-daily`, 9작업 — **SFN 없는 Airflow 전용**, ALPHA-1130)을 함께 담는다. 아래 "등록 30"·
+"제외 5"는 SFN state 가 있는 작업의 셈이고, Airflow 전용 작업은 `sfn_state_name` 이 비어 그 셈 밖이다. Planner 는 `entries(pipeline_type)` 로 자기 레인만 계획한다 —
 뉴스 SFN 은 하루 여러 슬롯이라 일일런 기대에 뉴스 작업을 섞으면 매 일일런 MISSED 다(그 반대도
 같다). `by_cli`·`by_sfn_state`·`content_hash` 는 전 레인 검색이다: 컨테이너는 자기 레인을
 모르고(CLI 가 정체성), state 이름은 레인 간 유일하며, 해시는 카탈로그 전체의 감사값이다.
@@ -61,8 +62,9 @@ minute_ingestion_window(장 시작 시 하루치 materialize — 실행체가 �
 | `fmp` task-def | CollectFmpNews·CollectFmpPrice·CollectFmpFinancial·CollectFmpEtf | **FMP 공용키 bandwidth 한도 소진**으로 US 수집을 SFN 토글로 껐다(`us_fmp_enabled=false`, ALPHA-558 — 1분봉 백필이 쿼터를 태워 daily 수집까지 막았다). 안 도는 스텝을 등록하면 매 런 MISSED 가 쌓인다 → **한도 회복 후 토글을 켤 때 함께 등록**한다(CollectFmpNews 는 뉴스 레인으로). DB env 는 그때 `tasks.tf` 에 `local.db_env`+password 를 얹으면 된다(ALPHA-596 이 krx·dart 로 한 것과 같은 두 줄) |
 | `dart` 재무 | CollectDartFinancial | **하류 소비자가 0** 이다 — `financial_statements` 를 읽는 정제·적재·분석 코드가 없다(수집 자신과 레이크 경로 빌더뿐). 매일 돌지만 아무도 안 쓰는 데이터라, 등록하면 대응할 이유 없는 실패 경보가 화면에 뜬다. 소비자가 생기거나 수집을 내리기로 하면 그때 정리한다 |
 
-**등록 30작업이 전부 `instrumented=True` 다 — 미계측은 0개다**(ALPHA-596 이 krx·dart 를,
-ALPHA-610 이 TagNews 를 승격). `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
+**SFN 등록 30작업은 전부 `instrumented=True` 다**(ALPHA-596 이 krx·dart 를, ALPHA-610 이 TagNews 를
+승격). Airflow 전용 원천 관측 9작업도 전부 True 다 — 마지막 `MACRO_COLLECTION` 은 `macro` task-def 배선(#1036, ALPHA-1136)이
+먼저 배포된 뒤 ALPHA-1140 이 올렸다. `instrumented` 필드 자체는 남긴다: FMP 4스텝을 되살릴 때 배선
 전에 등록하는 경로가 위 표에 예고돼 있고, 미배선 task-def 의 `False` 는 여전히 정당하다.
 
 **배선이 플래그보다 한 배포 앞선다**(ALPHA-596 #359→#362, ALPHA-610 #379→이 PR). 이미지 CD 와
@@ -150,13 +152,25 @@ class CatalogEntry:
     fulfilled_exit_codes: tuple[int, ...] = (0,)
     # 데이터 전달 계약은 별도 typed registry가 소유한다(ADR-0043). Catalog는 stable key만 참조.
     contract_key: str | None = None
+    # 한 레인 안의 독립 흐름. Reconciler 의 "앞 단계가 뒤에 다시 돌았다(stale)" 판정은 같은 흐름
+    # 안에서만 비교한다. 빈 값 = 레인 전체가 한 흐름(기존 레인). 흐름이 여럿인 레인에서 레인 전체로 비교하면
+    # 다른 흐름의 늦은 수집이 이미 끝난 적재를 stale 로 만들어 런 판정이 영영 안 난다.
+    flow: str = ""
+
+    @property
+    def evidence_key(self) -> str:
+        """Reconciler 가 이 작업의 실행 증거(occurrence)를 모으는 키. SFN 작업은 state 이름(SFN 이력과
+        같은 키), SFN 이 없는 Airflow 전용 작업은 `airflow:<task_key>` — 빈 이름을 공유하면 레인의 모든
+        작업 증거가 한 목록에 섞여 서로의 exit·ARN 으로 판정된다. SFN state 이름에는
+        콜론이 없어 두 공간이 겹치지 않는다."""
+        return self.sfn_state_name or f"airflow:{self.task_key}"
 
     def log_partition_dataset(self) -> str:
         """로그 파티션에 쓰이는 dataset(미지정이면 도메인 dataset)."""
         return self.log_dataset or self.dataset
 
 
-# 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3). 공시 4작업은 875 가 1분 레인으로
+# SFN 등록 30작업(시장 17 + 뉴스 6 + 공시 4 + 장중수급 3) + Airflow 전용 원천 관측 작업(맨 끝). 공시 4작업은 875 가 1분 레인으로
 # 보냈다가 ALPHA-987이 저녁 배치로 되돌렸고, 1068의 제거 뒤 1073이 보충 배치로 복원했다.
 # sfn_state_name·cli_command·ecs_task_definition 은
 # statemachine.tf·news_pipeline.tf·disclosure_pipeline.tf·investor_intraday_pipeline.tf 의 실제
@@ -215,7 +229,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         empty_allowed=False,
         fulfilled_exit_codes=(0, 2),
     ),
-    # ── KIS 수집 4 ────────────────────────────────────────────────────────────────
+    # ── KIS 수집 5 ────────────────────────────────────────────────────────────────
     # ⚠️ `kr_trading_calendar` 는 **기존 3작업 말고는 전부 False** 다(ALPHA-181). True 면 KR
     # 휴장일에 Planner 가 SKIPPED 로 계획하는데, SFN 은 휴장일에도 돌아 컨테이너가 실제로
     # 실행된다 — 그 실행 결과·실패가 원장에서 통째로 사라진다(SKIPPED 면 wrapper 가 attempt 를
@@ -237,6 +251,14 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="INVESTOR_COLLECTION_KIS", stage="raw", dataset="investor_flow_daily",
         required=True, cli_command=("ingest-raw-investor",), sfn_state_name="CollectKisInvestor",
+        ecs_task_definition="kis", source_vendor="kis",
+    ),
+    # 업종지수 일봉 종가(ALPHA-1254). Dataset Contract(신선도 판정)는 아직 없다 — 판정 배선이
+    # 계약 키별로 하드코딩이라(entry·wrapper) 소비단 신선도와 함께 ALPHA-835 잔여로 남긴다.
+    CatalogEntry(
+        task_key="SECTOR_INDEX_DAILY_COLLECTION_KIS", stage="raw", dataset="sector_index_daily",
+        required=True, cli_command=("ingest-raw-sector-index-daily",),
+        sfn_state_name="CollectKisSectorIndexDaily",
         ecs_task_definition="kis", source_vendor="kis",
     ),
     # ── KRX 수집 1 (공시 수집은 아래 공시 레인 절로 이동 — ALPHA-724) ─────────────
@@ -290,6 +312,13 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         fulfilled_exit_codes=(0, 2),
     ),
     CatalogEntry(
+        task_key="NORMALIZE_SECTOR_INDEX_DAILY", stage="normalize", dataset="sector_index_daily",
+        required=True, cli_command=("normalize-sector-index-daily",),
+        sfn_state_name="NormalizeSectorIndexDaily",
+        ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
+        fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
         task_key="NORMALIZE_INVESTOR", stage="normalize", dataset="investor_flow_daily",
         required=True, cli_command=("normalize-investor",), sfn_state_name="NormalizeInvestor",
         ecs_task_definition="bigkinds", deadline_offset_seconds=5400,
@@ -308,7 +337,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # 되어 이 작업이 BLOCKED 로 굳는다(그 정제는 다른 SFN 에서 돌므로 이 런엔 자리가 없다).
         depends_on=(
             "NORMALIZE_PRICE", "NORMALIZE_ETF", "NORMALIZE_ETF_PROFILE",
-            "NORMALIZE_ETF_NAV", "NORMALIZE_INVESTOR",
+            "NORMALIZE_ETF_NAV", "NORMALIZE_SECTOR_INDEX_DAILY", "NORMALIZE_INVESTOR",
         ),
     ),
     CatalogEntry(
@@ -320,6 +349,7 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         # 범위를 commit한 부분 성공이므로 downstream dependency를 충족한다(ALPHA-1039).
         depends_on=(
             "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW",
+            "LOAD_MARKET_SERIES_DAILY",
         ),
         fulfilled_exit_codes=(0, 2), sfn_state_name="LoadPriceTriggers",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
@@ -338,6 +368,16 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
     CatalogEntry(
         task_key="LOAD_ETF_FLOW", stage="feature", dataset="investor_flow_load", required=True,
         cli_command=("load-etf-flow",), depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadEtfFlow",
+        ecs_task_definition="rds", deadline_offset_seconds=7200,
+        fulfilled_exit_codes=(0, 2),
+    ),
+    # 지수 일봉 적재(ALPHA-1260) — canonical sector_index_daily → market_series_daily. 형제 적재와
+    # 같은 게이트 축이다(ENRICH_CORP_CODE 뒤 FeatureParallel). exit 2 는 성공한 지수를 commit 한
+    # 부분 성공이라 뒤 작업의 의존을 충족한다.
+    CatalogEntry(
+        task_key="LOAD_MARKET_SERIES_DAILY", stage="feature", dataset="market_series_load",
+        required=True, cli_command=("load-market-series-daily",),
+        depends_on=("ENRICH_CORP_CODE",), sfn_state_name="LoadMarketSeriesDaily",
         ecs_task_definition="rds", deadline_offset_seconds=7200,
         fulfilled_exit_codes=(0, 2),
     ),
@@ -526,12 +566,77 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         pipeline_type="investor-intraday",
         fulfilled_exit_codes=(0, 2),  # 일부 DB 행 실패여도 성공 winner는 commit된다
     ),
+    # ══ 원천 관측 레인 (pipeline_type="source-daily" — **Airflow 전용**, SFN 없음, ALPHA-1130) ══
+    # 매크로 5계열·KIS 지수업종·DART 재무 지표. SFN 이 없으므로 `sfn_state_name` 은 빈 값이다 — `by_sfn_state` 는 빈 이름을 매칭하지 않고,
+    # ASL 대조 테스트는 이 레인을 Airflow 전용으로 따로 센다(test_ops_catalog). 흐름(flow)은 데이터셋마다 하나다.
+    # 정제 의존을 비우는 이유는 다른 레인과 같다 — 수집 부분 실패 뒤에도 받은 것은 정제한다.
+    # MACRO_COLLECTION 의 `macro` 태스크 정의(ECOS·KOSIS·EIA·FRED 키 + DB env)는 #1036(ALPHA-1136)이 먼저 배포했고,
+    # 플래그는 그 뒤 ALPHA-1140 이 올렸다(ALPHA-596 순서 — 배선이 한 배포 앞선다). FMP 키는 붙이지 않는다 — 미 국채 10년은 FRED DGS10(#1039).
+    CatalogEntry(
+        task_key="MACRO_COLLECTION", flow="macro", stage="raw", dataset="macro_observation", required=True,
+        cli_command=("ingest-raw-macro",), sfn_state_name="", ecs_task_definition="macro",
+        source_vendor="multi", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        instrumented=True, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_MACRO", flow="macro", stage="normalize", dataset="macro_observation", required=True,
+        cli_command=("normalize-macro",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, pipeline_type="source-daily",
+        fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_MACRO", flow="macro", stage="feature", dataset="macro_observation_load", required=True,
+        cli_command=("load-macro",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_MACRO",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        pipeline_type="source-daily",
+    ),
+    # 업종 마스터는 휴장일에 새로 받을 이유가 없다(분류 변경은 상장·변경 공시 뒤 거래일에 반영).
+    CatalogEntry(
+        task_key="SECTOR_COLLECTION_KIS", flow="sector", stage="raw", dataset="sector_classification", required=True,
+        cli_command=("ingest-raw-sector",), sfn_state_name="", ecs_task_definition="bigkinds",
+        source_vendor="kis", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        kr_trading_calendar=True, pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_SECTOR", flow="sector", stage="normalize", dataset="sector_classification", required=True,
+        cli_command=("normalize-sector",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, kr_trading_calendar=True,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_SECTOR", flow="sector", stage="feature", dataset="sector_classification_load", required=True,
+        cli_command=("load-sector",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_SECTOR",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        kr_trading_calendar=True, pipeline_type="source-daily",
+    ),
+    # DART 키·DB env 는 기존 `dart` 태스크 정의에 이미 있다(CollectDartFinancial 과 같은 키).
+    # 창 안에 새 정기보고서가 없는 날은 목록만 받고 재무 호출 0건이다 — 정상이다(empty_allowed).
+    CatalogEntry(
+        task_key="FINANCIAL_METRIC_COLLECTION_DART", flow="financial", stage="raw", dataset="financial_metric", required=True,
+        cli_command=("ingest-raw-financial-metric",), sfn_state_name="", ecs_task_definition="dart",
+        source_vendor="dart", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_FINANCIAL_METRIC", flow="financial", stage="normalize", dataset="financial_metric", required=True,
+        cli_command=("normalize-financial-metric",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, empty_allowed=True,
+        pipeline_type="source-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_FINANCIAL_METRIC", flow="financial", stage="feature", dataset="financial_metric_load", required=True,
+        cli_command=("load-financial-metric",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_FINANCIAL_METRIC",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        empty_allowed=True, pipeline_type="source-daily",
+    ),
 )
 
 CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
 
 PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
+# 원천 관측 레인(ALPHA-1130) — SFN 이 없는 Airflow 전용 레인이다.
+SOURCE_DAILY_PIPELINE_TYPE = "source-daily"
 # 공시 마감 보충 배치. 장중 minute 원장과 별도 정체성을 유지한다(ALPHA-1073).
 # 활성 스케줄은 OPS_DISCLOSURE_SCHED_HHMM에서만 기대하므로 앱 선행 배포가 가능하다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
@@ -599,6 +704,8 @@ def by_cli(step: str, source: str | None = None) -> CatalogEntry | None:
 
 def by_sfn_state(state_name: str) -> CatalogEntry | None:
     """SFN state 이름 → 카탈로그 엔트리(Reconciler 의 history 매핑). 없으면 None(미등록 state)."""
+    if not state_name:
+        return None     # SFN 이 없는(Airflow 전용) 작업의 빈 state 이름은 SFN 이력과 짝이 될 수 없다
     for entry in _ENTRIES:
         if entry.sfn_state_name == state_name:
             return entry
@@ -631,6 +738,7 @@ def content_hash() -> str:
             "pipeline_type": e.pipeline_type,
             "fulfilled_exit_codes": list(e.fulfilled_exit_codes),
             "contract_key": e.contract_key,
+            "flow": e.flow,
         }
         for e in sorted(_ENTRIES, key=lambda x: x.task_key)
     ]

@@ -8,9 +8,9 @@ tag-news 의 argument `text` 는 기사 원문 표현("삼성전자"·"005930")�
   (b) 회사 정식명(발행사 entity display_name) → 그 회사 보통주 instrument_id
   (c) 종목/ETF display_name                  → instrument_id
 
-**해소 결과는 항상 instrument 엔티티다** — 다운스트림 `event_argument ⋈ instrument`
-조인과 분석엔진 entity_index(ticker→instrument_id) 관례에 맞춘다. 회사명이 와도
-회사(actor)가 아니라 그 발행사의 주식으로 해소한다.
+**이 해소기의 결과는 instrument 엔티티다.** 문서의 종목 매칭과 기존 사건 ID 산식이
+이 값을 사용한다. 사건 참여자는 저장 경계에서 `events.participants`가 Equity를
+발행 Actor로 변환한다. 따라서 이 해소 결과를 사건 참여 대상의 최종 ID로 해석하지 않는다.
 
 동명 충돌(한 키가 서로 다른 엔티티 2개)은 **미해소(ambiguous)** 다 — 아무거나 고르면
 그 순간 조용히 틀린다. 별칭은 정상 런에서 확인된 같은 상장사의 정식명 변형만 canonical

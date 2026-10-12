@@ -1,0 +1,42 @@
+name: deploy-db-query
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "src/apps/cloud/db-query/**"
+      - ".github/workflows/deploy-db-query.yml"
+      - "src/.dockerignore"
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-db-query
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and publish query image
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
+          docker build --platform linux/amd64 -f src/apps/cloud/db-query/Dockerfile \
+            -t "${repo}:db-query-${IMAGE_TAG}" -t "${repo}:db-query-latest" src
+          docker push "${repo}:db-query-${IMAGE_TAG}"
+          docker push "${repo}:db-query-latest"

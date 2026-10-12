@@ -13,13 +13,13 @@
 
 1. 출처 격리 → 전체 구성·뉴스 → 수급 → 가격·차트.
 2. 각 원천의 시점·필요 컬럼·기간·결측을 먼저 확인하고 계산 및 실제 호출을 검증한다.
-3. 매크로·재무는 9월 30일 조회에서 0행. 미확보를 목자료로 채우지 않는다.
+3. 매크로·재무는 9월 30일 조회에서 0행이었다. 이후 원천 관측 레인이 적재하고, 데이터베이스 실행이 `macro_inputs`·`financial_inputs`로 읽는다(#1089). 미확보를 목자료로 채우지 않는다.
 
 ## 구성종목·뉴스 조회 계약
 
 | 툴 | 실제 원천 | 반환·제한 |
 |---|---|---|
-| get_etf_holdings | etf_holding_snapshot + status + instrument/entity | 현재 시각까지 적재된 최신 구성. 원래 비중 유지. 누락 시 coverage=partial, observed_weight_ratio 표시. 가중 계산에는 불완전 구성을 사용하지 않음 |
+| get_etf_holdings | etf_holding_snapshot + status + instrument/entity | 현재 시각까지 적재된 최신 구성. 원래 비중 유지. 누락 시 coverage=partial, observed_weight_ratio 표시. 주식 비중 합이 1을 넘으면 적재되지 않은 원천 행(현금 등, 입력 행 수 > 적재 행 수)이 있을 때만 partial로 받고 합은 넘는 그대로 표시, 그런 행이 없으면 거부. 가중 계산은 관측 비중 70% 이상일 때만 |
 | search_news_threads | document → assertion → event_evidence → source_event → event_thread_link | DB 사건 ID·단계·스레드로 묶음. 같은 사건의 추가 기사만 중복 수로 표시. 연결 없는 기사도 unthreaded_news로 제공 |
 | get_issue_evidence | document + news_document | true는 확보된 발췌와 body_kind=excerpt, false는 동일 기사 ID·제목. 발췌 확보 시점이 늦으면 body=null |
 
@@ -49,7 +49,7 @@
 | 장중 관측 | minute_price_trigger의 해당 날짜 실제 FIRE, created_at 이전 | 분봉 종료 시각=window_start+1분. 확보된 관측만 최대 5개. 관측 사이 가격을 보간하지 않음 |
 | calculate_chart_indicators | 확정 종가 + 최신 장중 관측 | RSI14. 고가·저가 없으면 바닥지수 null |
 | evaluate_indicator_transition | 같은 확정 종가 이력에서 각 장중 관측을 독립 계산 | 80/20 진입·이탈은 관측 2개, 유지는 5개 필요. 부족하면 null |
-| get_instrument_factors | 선택한 종목의 확보된 차트·수급, 미확보 요인은 null | 20일선 이격·60일선 방향·최근20일 신고가 횟수. 거래대금·ATR은 원천 누락, 52주는 달력 확보 범위 부족으로 미제공 |
+| get_instrument_factors | 선택한 종목의 확보된 차트·수급·밸류·매크로, 미확보 요인은 null | 20일선 이격·60일선 방향·최근20일 신고가 횟수. 거래대금·ATR은 원천 누락, 52주는 달력 확보 범위 부족으로 미제공 |
 
 - 가격 검사는 지표별 필요 컬럼에 적용. 고가·저가 부족으로 유효한 종가 기반 RSI까지 버리지 않음.
 - 전이의 관측은 연속 1분봉이 아님. 반환 관측시각 사이에서 확인한 전이만 설명할 수 있음.
@@ -68,6 +68,6 @@ python -m edge_analysis_v2.analysis.database_run --kind movement --ticker 091160
 ```
 
 - movement: 실제 트리거 created_at를 analysis-at로 사용.
-- outlook: 해당 날짜 08:30+09:00. 6·7단계 이전이므로 매크로·재무가 채워진 전망 검증은 아님.
+- outlook: 해당 날짜 08:30+09:00. 매크로·재무는 #1089부터 데이터베이스 실행에 실린다. 그 전 실행은 매크로·재무가 채워진 전망 검증이 아님.
 - 이전 글은 같은 출처의 완료 발행본에서 서버가 선택. 에이전트에 결과 DB 연결을 노출하지 않음.
-- 현재 지원은 기존 원천 조회·계산·단일 실제 실행. 예약 실행이나 대시보드의 실데이터 실행 버튼 추가는 후속 작업.
+- 현재 지원은 기존 원천 조회·계산·단일 실제 실행. 전망의 예약 실행은 배치 워크플로가 맡는다(ALPHA-1142, 기준시각은 스케줄 예정 시각). 대시보드의 실데이터 실행 버튼 추가는 후속 작업.

@@ -14,6 +14,8 @@ locals {
   verify_taskdef_keys = ["ops", "kis", "bigkinds", "rds"]
   verify_db_name      = "edge_verify"
   verify_db_user      = "airflow_verify"
+  # 관리 태스크(dbadmin)는 검증 또는 Airflow 가동(운영 메타DB 생성·정리) 중에 둔다 — 아래 "관리 태스크" 절.
+  dbadmin = var.verify_enabled || var.host_count > 0
 }
 
 # 검증 원장 역할(airflow_verify)의 비밀번호. 값은 TF 가 만들지 않는다(검증 절차 run.py secrets 가 넣는다).
@@ -209,21 +211,24 @@ resource "aws_ecs_task_definition" "verify" {
 # ── 관리 태스크(dbadmin) — 업무 RDS 마스터로 전용 DB·역할을 만들고 정리한다 ──
 # 하는 일은 verify/dbadmin.sh 의 명령 목록뿐이다(스크립트를 접어 RunTask override 로 넘긴다): 역할·DB 생성, 검증 원장 스키마 복제
 # (업무 DB 의 스키마만 pg_dump -s → edge_verify, 행은 복사하지 않는다), 연결·부하 조회, 백업, 정리. 마스터 비밀번호를 읽는
-# 유일한 역할이라 execution 역할을 따로 둔다. 검증이 끝나면 verify_enabled=false 로 태스크 정의·역할이 사라진다.
+# 유일한 역할이라 execution 역할을 따로 둔다.
+# 운영 메타DB(airflow·airflow_meta)도 이 태스크로 만든다(ALPHA-1141) — 그래서 검증과 별개로 호스트가 있는 동안에도 둔다.
+# 검증이 꺼져 있으면 airflow 몫만 다루고(VERIFY_* 없음 → dbadmin.sh 가 검증 DB·역할을 건너뛴다), 백업용 태스크 역할도 없다.
+# 네트워크·로그는 검증 자원이 없어도 있는 Airflow 태스크 SG(메타DB 인그레스 보유)·구성요소 로그 그룹을 쓴다.
 resource "aws_iam_role" "dbadmin_execution" {
-  count              = var.verify_enabled ? 1 : 0
+  count              = local.dbadmin ? 1 : 0
   name               = "${var.name}-dbadmin-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "dbadmin_execution" {
-  count      = var.verify_enabled ? 1 : 0
+  count      = local.dbadmin ? 1 : 0
   role       = aws_iam_role.dbadmin_execution[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role_policy" "dbadmin_execution_secret" {
-  count = var.verify_enabled ? 1 : 0
+  count = local.dbadmin ? 1 : 0
   name  = "${var.name}-dbadmin-execution-secret"
   role  = aws_iam_role.dbadmin_execution[0].id
   policy = jsonencode({
@@ -231,20 +236,20 @@ resource "aws_iam_role_policy" "dbadmin_execution_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [var.master_db_secret_arn, aws_secretsmanager_secret.airflow.arn, aws_secretsmanager_secret.verify[0].arn]
+      Resource = concat([var.master_db_secret_arn, aws_secretsmanager_secret.airflow.arn], aws_secretsmanager_secret.verify[*].arn)
     }]
   })
 }
 
 resource "aws_ecs_task_definition" "dbadmin" {
-  count                    = var.verify_enabled ? 1 : 0
+  count                    = local.dbadmin ? 1 : 0
   family                   = "${var.name}-dbadmin"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 256
   memory                   = 512
   execution_role_arn       = aws_iam_role.dbadmin_execution[0].arn
-  task_role_arn            = aws_iam_role.verify_task[0].arn # 백업을 검증 버킷에 올린다(그 버킷만)
+  task_role_arn            = one(aws_iam_role.verify_task[*].arn) # 검증 원장 백업을 검증 버킷에 올린다(검증 때만)
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -257,7 +262,7 @@ resource "aws_ecs_task_definition" "dbadmin" {
     essential  = true
     entryPoint = ["bash", "-c"]
     command    = ["echo 'dbadmin: 명령은 RunTask override 로 준다(verify/run.py)'; exit 2"]
-    environment = [
+    environment = concat([
       { name = "PGHOST", value = var.db_host },
       { name = "PGPORT", value = tostring(var.db_port) },
       { name = "PGUSER", value = var.master_db_user },
@@ -265,20 +270,22 @@ resource "aws_ecs_task_definition" "dbadmin" {
       { name = "PGSSLMODE", value = "require" },
       { name = "META_DB", value = var.db_name },
       { name = "META_USER", value = var.db_user },
+      ], var.verify_enabled ? [
       { name = "VERIFY_DB", value = local.verify_db_name },
       { name = "VERIFY_USER", value = local.verify_db_user },
-    ]
-    secrets = [
+    ] : [])
+    secrets = concat([
       { name = "PGPASSWORD", valueFrom = "${var.master_db_secret_arn}:password::" },
       { name = "META_PW", valueFrom = "${aws_secretsmanager_secret.airflow.arn}:meta_db_password::" },
-      { name = "VERIFY_PW", valueFrom = "${aws_secretsmanager_secret.verify[0].arn}:verify_db_password::" },
       { name = "META_SCRAM", valueFrom = "${aws_secretsmanager_secret.airflow.arn}:meta_db_password_scram::" },
+      ], var.verify_enabled ? [
+      { name = "VERIFY_PW", valueFrom = "${aws_secretsmanager_secret.verify[0].arn}:verify_db_password::" },
       { name = "VERIFY_SCRAM", valueFrom = "${aws_secretsmanager_secret.verify[0].arn}:verify_db_password_scram::" },
-    ]
+    ] : [])
     logConfiguration = {
       logDriver = "awslogs"
       options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.verify[0].name
+        "awslogs-group"         = aws_cloudwatch_log_group.components.name
         "awslogs-region"        = var.region
         "awslogs-stream-prefix" = "dbadmin"
       }

@@ -369,6 +369,8 @@ _LANE_STATE_MACHINE_ARN_ENV = {
     catalog.DISCLOSURE_PIPELINE_TYPE: "OPS_DISCLOSURE_STATE_MACHINE_ARN",
     catalog.INVESTOR_INTRADAY_PIPELINE_TYPE: "OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN",
 }
+# SFN 이 없는 레인 — Airflow 만 계획·실행한다(ALPHA-1130). 위 표와 겹치지 않는다.
+_AIRFLOW_ONLY_LANES = frozenset({catalog.SOURCE_DAILY_PIPELINE_TYPE})
 
 
 # ── CLI 핸들러 ────────────────────────────────────────────
@@ -381,7 +383,7 @@ def plan_run_cli(settings) -> int:
     """
     pipeline_type = os.environ.get("OPS_PIPELINE_TYPE", catalog.PIPELINE_TYPE)
     arn_env = _LANE_STATE_MACHINE_ARN_ENV.get(pipeline_type)
-    if arn_env is None:
+    if arn_env is None and pipeline_type not in _AIRFLOW_ONLY_LANES:
         raise SystemExit(
             f"모르는 OPS_PIPELINE_TYPE={pipeline_type} — "
             f"{'·'.join(_LANE_STATE_MACHINE_ARN_ENV)} 만 계획 가능")
@@ -398,7 +400,9 @@ def plan_run_cli(settings) -> int:
         raise SystemExit(f"모르는 OPS_ORCHESTRATOR={orchestrator} — "
                          f"{'·'.join(sorted(states.ORCHESTRATORS))} 만")
     orchestrator_run_ref = os.environ.get("OPS_ORCHESTRATOR_RUN_REF") or None
-    arn = os.environ.get(arn_env)
+    arn = os.environ.get(arn_env) if arn_env else None
+    if arn_env is None and orchestrator != states.ORCHESTRATOR_AIRFLOW:
+        raise SystemExit(f"{pipeline_type} 는 SFN 이 없는 Airflow 전용 레인이다 — OPS_ORCHESTRATOR=AIRFLOW 만")
     if orchestrator == states.ORCHESTRATOR_AIRFLOW:
         if orchestrator_run_ref is None:
             # 원장 run ↔ Airflow run 을 잇는 유일한 키다. 없이 계획하면 두 이력이 끊긴다.
@@ -485,6 +489,9 @@ def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
         (catalog.INVESTOR_INTRADAY_PIPELINE_TYPE,
          _lane_sched_hhmms("OPS_INVESTOR_INTRADAY_SCHED_HHMM"),
          _lane_sched_weekend("OPS_INVESTOR_INTRADAY_SCHED_WEEKEND")),
+        # 원천 관측(ALPHA-1130). DAG 를 켤 때 ops 태스크 정의에 이 두 env 를 함께 주입해야 결측 판정이 켜진다.
+        (catalog.SOURCE_DAILY_PIPELINE_TYPE, _lane_sched_hhmms("OPS_SOURCE_DAILY_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_SOURCE_DAILY_SCHED_WEEKEND")),
     ]
     slots: list[tuple[str, bool]] = []
     for lane, hhmms, weekend in lanes:

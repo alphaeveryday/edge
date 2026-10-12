@@ -10,6 +10,8 @@ on:
     paths:
       - "infra/terraform/envs/dev/**"
       - "infra/terraform/modules/**"
+      # 전망 배치 대상 ETF 목록의 원본 — envs/dev/analysis-v2.tf 가 이 파일을 읽는다(ALPHA-1142).
+      - "src/apps/cloud/data-pipeline/src/data_pipeline/config/sources.toml"
       # demo 전용 모듈은 dev 가 안 쓴다 — carve-out 해서 demo-only 변경이 dev apply 에 안 묶이게.
       - "!infra/terraform/modules/demo-onprem/**"
       - ".github/workflows/terraform-plan.yml"

@@ -1,0 +1,336 @@
+formatVersion: 2
+name: MacroObservation
+label: Macro observation
+description: One dated value of a macroeconomic indicator, such as an exchange rate,
+  government bond yield, inflation rate, or commodity price. Each collected version
+  retains its own identity, unit, geography, and indicator category.
+group: Macro & indices
+primaryKey: id
+identity:
+  columns: &id001
+  - series_id
+  - observation_date
+  - raw_run_id
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this dated macroeconomic observation version, encoded
+      from seriesId, observationDate, rawRunId. Every listed key component is preserved.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  seriesId:
+    label: Series id
+    description: Internal indicator code, such as usd_krw, us_10y_yield, kr_10y_yield,
+      kr_cpi_yoy, or brent_spot_usd.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: seriesId
+    displayName: Series id
+    status: experimental
+    dataType: String
+  observationDate:
+    label: Observation date
+    description: Date to which the indicator value applies. For monthly inflation,
+      the first day of the month identifies the observation month rather than its
+      release date.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: observationDate
+    displayName: Observation date
+    status: experimental
+    dataType: Date
+  value:
+    label: Value
+    description: 'Observed indicator value in the stated unit. A value in percent
+      uses percentage points as displayed: 4.5 means 4.5%.'
+    sourceDataType: numeric
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: value
+    displayName: Value
+    status: experimental
+    dataType: Decimal
+  unit:
+    label: Unit
+    description: 'Unit supplied for the indicator: for example percent, KRW_per_USD,
+      or USD_per_barrel. Values from different units must not be compared as the same
+      measure.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: unit
+    displayName: Unit
+    status: experimental
+    dataType: String
+  sourceVendor:
+    label: Source vendor
+    description: Provider of the macroeconomic observation, such as ECOS, FRED, FMP,
+      KOSIS, or EIA.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceVendor
+    displayName: Source vendor
+    status: experimental
+    dataType: String
+  sourceSeries:
+    label: Source series
+    description: Provider-specific series or endpoint identifier used to obtain this
+      indicator value.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceSeries
+    displayName: Source series
+    status: experimental
+    dataType: String
+  availableAt:
+    label: Available for analysis at
+    description: Time the source data was received and became available to this system.
+      It is not a historical release time reconstructed from the observation date.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  regions:
+    label: Geographic scope
+    description: Countries or geographic scope assigned by the explicit indicator
+      mapping, such as KR, US, or GLOBAL. An exchange rate can refer to more than
+      one country.
+    dataType: String[]
+    nullable: false
+    mappingStatus: lookup
+    apiName: regions
+    displayName: Geographic scope
+    status: experimental
+  indicatorType:
+    label: Indicator category
+    description: 'Broad indicator category assigned by seriesId: EXCHANGE_RATE, INTEREST_RATE,
+      INFLATION, or COMMODITY.'
+    dataType: String
+    nullable: false
+    mappingStatus: lookup
+    apiName: indicatorType
+    displayName: Indicator category
+    status: experimental
+  seriesName:
+    label: Series name
+    description: Display name for the five indicator codes defined by the source contract;
+      NULL for an unrecognized code. The original series ID, source and unit are retained.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: seriesName
+    displayName: Series name
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: macro_observation
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: macro_observation
+      column: series_id
+    seriesId:
+      alias: base
+      table: macro_observation
+      column: series_id
+    observationDate:
+      alias: base
+      table: macro_observation
+      column: observation_date
+    value:
+      alias: base
+      table: macro_observation
+      column: value
+    unit:
+      alias: base
+      table: macro_observation
+      column: unit
+    sourceVendor:
+      alias: base
+      table: macro_observation
+      column: source_vendor
+    sourceSeries:
+      alias: base
+      table: macro_observation
+      column: source_series
+    availableAt:
+      alias: base
+      table: macro_observation
+      column: available_at
+    regions:
+      lookupProperty: seriesId
+      values:
+        usd_krw:
+        - KR
+        - US
+        us_10y_yield:
+        - US
+        kr_10y_yield:
+        - KR
+        kr_cpi_yoy:
+        - KR
+        brent_spot_usd:
+        - GLOBAL
+    indicatorType:
+      lookupProperty: seriesId
+      values:
+        usd_krw: EXCHANGE_RATE
+        us_10y_yield: INTEREST_RATE
+        kr_10y_yield: INTEREST_RATE
+        kr_cpi_yoy: INFLATION
+        brent_spot_usd: COMMODITY
+    seriesName:
+      kind: view_column
+      schema: ontology_view
+      table: macro_observation
+      column: series_name
+      sqlFile: sql/views/macro_observation.sql
+      inputs:
+      - schema: public
+        table: macro_observation
+        column: observation_date
+      - schema: public
+        table: macro_observation
+        column: series_id
+      - schema: public
+        table: macro_observation
+        column: source_series
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: macro_observation
+      column: display_title
+      sqlFile: sql/views/macro_observation.sql
+      inputs:
+      - schema: public
+        table: macro_observation
+        column: observation_date
+      - schema: public
+        table: macro_observation
+        column: series_id
+      - schema: public
+        table: macro_observation
+        column: source_series
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_macro_observation_basis
+    kind: c
+    definition: CHECK (((availability_basis = 'received'::text) AND (available_at
+      = received_at)))
+    validated: true
+  - name: ck_macro_observation_complete
+    kind: c
+    definition: "CHECK (\nCASE\n    WHEN (series_id = 'kr_cpi_yoy'::text) THEN (((observation_date\
+      \ + '1 mon'::interval))::date <= ((received_at AT TIME ZONE 'Asia/Seoul'::text))::date)\n\
+      \    ELSE (observation_date < ((received_at AT TIME ZONE 'Asia/Seoul'::text))::date)\n\
+      END)"
+    validated: true
+  - name: ck_macro_observation_finite
+    kind: c
+    definition: CHECK (((value > '-Infinity'::numeric) AND (value < 'Infinity'::numeric)))
+    validated: true
+  - name: ck_macro_observation_month
+    kind: c
+    definition: CHECK (((series_id <> 'kr_cpi_yoy'::text) OR (EXTRACT(day FROM observation_date)
+      = (1)::numeric)))
+    validated: true
+  - name: ck_macro_observation_price
+    kind: c
+    definition: CHECK (((series_id <> ALL (ARRAY['usd_krw'::text, 'brent_spot_usd'::text]))
+      OR (value > (0)::numeric)))
+    validated: true
+  - name: ck_macro_observation_series
+    kind: c
+    definition: CHECK ((((((((series_id = 'usd_krw'::text) AND (unit = 'KRW_per_USD'::text)
+      AND (source_vendor = 'ecos'::text) AND (source_series = 'ECOS 731Y003/D/0000003'::text))
+      OR ((series_id = 'us_10y_yield'::text) AND (unit = 'percent'::text) AND (source_vendor
+      = 'fmp'::text) AND (source_series = 'FMP treasury-rates year10'::text))) OR
+      ((series_id = 'us_10y_yield'::text) AND (unit = 'percent'::text) AND (source_vendor
+      = 'fred'::text) AND (source_series = 'FRED DGS10'::text))) OR ((series_id =
+      'kr_10y_yield'::text) AND (unit = 'percent'::text) AND (source_vendor = 'ecos'::text)
+      AND (source_series = 'ECOS 817Y002/D/010210000'::text))) OR ((series_id = 'kr_cpi_yoy'::text)
+      AND (unit = 'percent'::text) AND (source_vendor = 'kosis'::text) AND (source_series
+      = 'KOSIS 101/DT_1J22042 T03 objL1=0'::text))) OR ((series_id = 'brent_spot_usd'::text)
+      AND (unit = 'USD_per_barrel'::text) AND (source_vendor = 'eia'::text) AND (source_series
+      = 'EIA petroleum/pri/spt RBRTE'::text))))
+    validated: true
+  - name: ck_macro_observation_sha
+    kind: c
+    definition: CHECK (((raw_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256
+      ~ '^[0-9a-f]{64}$'::text)))
+    validated: true
+  - name: macro_observation_pkey
+    kind: p
+    definition: PRIMARY KEY (series_id, observation_date, raw_run_id)
+    validated: true
+apiName: MacroObservation
+displayName: Macro observation
+pluralDisplayName: Macro observations
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes: []

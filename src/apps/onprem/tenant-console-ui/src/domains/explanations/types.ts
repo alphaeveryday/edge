@@ -17,8 +17,10 @@ export type Market = 'KRX' | 'NASDAQ';
 
 export type ReviewReason = 'SINGLE_SOURCE' | 'BANNED_WORD' | 'ASSERTIVE';
 
-export interface Evidence {
-  type: '공시' | '뉴스';
+import type { EvidenceAudit } from '../../lib/evidence';
+
+export interface Evidence extends EvidenceAudit {
+  type: '공시' | '뉴스' | '수치 계산';
   title: string;
   source: string;
   time: string;

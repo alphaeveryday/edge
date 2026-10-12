@@ -15,7 +15,7 @@ SCENARIOS = {'baseline':'기본', 'unusual_flow':'특이 수급', 'competing_sig
              'followup':'후속 기사', 'quiet':'변화 없음'}
 SCENARIOS.update({f'replay_{day}':f'연속 재생 {day}/5' for day in range(1,6)})
 SCENARIOS.update({name:values[0] for name,values in CASES.items()})
-ARTIFACTS = ('system_prompt.yaml', 'prompt_version.json', 'contract_audit.json', 'case_spec.json', 'verification.json', 'quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
+ARTIFACTS = ('workspace.json', 'model_input.json', 'compactions.jsonl', 'environment.json', 'measurement.json', 'AGENTS.md', 'skills.json', 'system_prompt.yaml', 'prompt_version.json', 'contract_audit.json', 'case_spec.json', 'verification.json', 'quality_review.md', 'input.json', 'system_prompt.txt', 'events.jsonl', 'raw_response.txt',
              'response.json', 'screen.json', 'factor_details.json', 'tool_schemas.json', 'output_schema.json')
 
 
@@ -66,7 +66,7 @@ class ExecutionDashboard:
                 path = directory / 'job.json'
                 if path.exists():
                     job = json.loads(path.read_text(encoding='utf-8'))
-                    if job.get('status') == 'running':
+                    if job.get('status') == 'running' and job.get('origin') != 'cloud':
                         self._save(job | {'status':'interrupted', 'error':'검수 서버가 재시작되어 실행이 중단됐습니다.'})
 
     def _save(self, job):

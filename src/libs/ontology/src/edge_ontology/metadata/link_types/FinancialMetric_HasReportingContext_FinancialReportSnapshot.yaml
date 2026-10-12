@@ -1,0 +1,42 @@
+id: FinancialMetric_HasReportingContext_FinancialReportSnapshot
+source: FinancialMetric
+definition:
+  name: HasReportingContext
+  label: HasReportingContext
+  description: The collected report snapshot that sets the fiscal year, reporting
+    coverage, statement basis, and collection context of this value.
+  target: FinancialReportSnapshot
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: codeMapping
+    columns:
+    - corp_code
+    - fiscal_year
+    - fs_basis
+    - raw_run_id
+    periodMapping:
+      Q1: '11013'
+      Q2: '11012'
+      Q3: '11014'
+      Q4: '11011'
+      FY: '11011'
+    acceptance: Match company, fiscal year, statement basis, raw run and report code;
+      check receipt-number consistency when present. Require exactly one report. Preserve
+      calculationInputs separately for derived values.
+  mappingStatus: mappingReview
+  apiName: hasReportingContext
+  displayName: HasReportingContext
+  pluralDisplayName: null
+  inverse:
+    apiName: contextualFinancialMetrics
+    displayName: Financial metrics in this context
+    description: Financial measurements associated with this report version.
+    pluralDisplayName: Financial metrics in this context
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

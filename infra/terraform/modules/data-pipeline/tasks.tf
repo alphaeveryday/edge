@@ -117,6 +117,84 @@ resource "aws_cloudwatch_metric_alarm" "collection_truncated" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
+# 공시 저녁 배치가 본 확정 거부 문서 수(ALPHA-1163).
+#
+# 확정 거부(`quality.disclosure.CONFIRMED_REJECT_REASONS` — 파서 대상이 아닌 서식처럼 다시 읽어도
+# 같은 거부)만 남은 정제는 이제 종료 0 이라 공시 SFN 이 SUCCEEDED 로 닫힌다. 거부 문서는
+# quality_log 와 원장(failed_records·INCOMPLETE)에 남지만 아무도 부르지 않는다.
+#
+# **왜 누적 알람인가**: 확정 거부 사유는 파서가 고장 났을 때 나오는 사유와 겹친다. 서식이 바뀌어
+# 공급계약 파서가 깨져도 `empty_parse` 다. 문서가 많은 날은 실행당 상한
+# (`max_confirmed_rejects_per_run`)이 FAILED 로 올리지만, 한가한 날은 하루 1~2건이라 상한 아래로
+# 매일 성공한다 — 그 상태가 며칠 가도 드러나는 곳이 없다. 거부마다 울리면 평소 모양까지 울려
+# 무뎌지므로, **쌓였을 때만** 울린다.
+#
+# 문구는 `run.py` 의 `CONFIRMED_REJECT_LOG` 와 같아야 한다(test_run 이 두 파일을 대조한다).
+# 그 줄은 문서 한 건당 한 줄이라 Sum 이 문서 수다. 1분 레인은 이 줄을 내지 않는다.
+resource "aws_cloudwatch_log_metric_filter" "disclosure_confirmed_reject" {
+  name           = "${var.name}-disclosure-confirmed-reject"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "\"공시 확정 거부 문서\""
+
+  # namespace 를 var.name 으로 가르는 이유는 raw_ingest_skipped 주석과 동일하다.
+  metric_transformation {
+    name      = "DisclosureConfirmedReject"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+# 판정: **5일 안에 거부를 본 실행이 3번**이면 울린다.
+#
+# - 구간은 6시간이다. 배치는 하루 한 번(19:30 KST)이고 두 정제가 같은 분에 끝나므로, 구간 하나가
+#   곧 실행 하나다. 하루(86400) 구간으로 잡지 않은 것은 구간 경계가 실행 시각 근처에 놓이면 이틀
+#   치가 한 구간에 들 수 있어서다 — 6시간이면 24시간 떨어진 두 실행이 경계와 무관하게 갈린다.
+# - 3 은 평소에 문서 한 건이 만들 수 없는 가장 작은 수다. 배치 창이 [직전 완주 실행일, 당일]이라
+#   거부 문서 하나는 두 실행에 걸린다(평소 모양 = 2. 직전 실행이 수집을 완주하지 못해 창이 늘어나면
+#   세 번째 실행에도 걸려 이 알람이 운다). 2026-07-26~10-08 배치 86회에서 확정 거부를 본
+#   실행은 4번(10-01·10-02 한 문서, 10-07·10-08 한 문서)이고 어느 5일을 잡아도 2번이 최대였다.
+# - 5일(20구간)은 영업일 3일 연속이 주말을 끼고도 들어가는 가장 짧은 폭이다(목·금·월).
+#   파서가 깨져 매일 거부가 나면 세 번째 실행에서 울린다.
+# - `datapoints_to_alarm` 을 적지 않으면 20구간 연속이 조건이 돼 영영 안 울린다(M=N 기본값).
+# - 지표를 그대로 쓰지 않고 `FILL(raw, 0)` 으로 결측 구간을 0 으로 채운다. metric filter 는 거부가
+#   있을 때만 값을 내므로 그대로 두면 실데이터가 20개에 못 미치고, 그러면 CloudWatch 가 20구간보다
+#   넓게 조회한 범위의 실데이터를 **전부** 판정에 넣는다(AWS 문서 "all real data points in the
+#   evaluation range are included"). 그 범위의 폭은 공개돼 있지 않아 "5일"이 성립하지 않는다 —
+#   10-02·10-07·10-08 의 세 실행이 그렇게 한 판정에 들어갈 수 있었다. 결측이 없으면 최근 20개만 본다.
+#   `treat_missing_data` 는 지표가 아직 한 번도 안 나온 때(식이 값을 못 내는 때)의 기본값이다.
+#
+# ⚠️ 서로 다른 거부 문서 둘이 사흘 안에 이어 접수돼도 울린다(오탐이 아니라 "한 주에 거부가
+# 몰렸다"는 신호로 본다). 통보는 OK→ALARM 전이 한 번뿐이라, 깨진 채 계속 가도 다시 울리지 않는다.
+resource "aws_cloudwatch_metric_alarm" "disclosure_confirmed_reject_piling" {
+  alarm_name        = "${var.name}-disclosure-confirmed-reject-piling"
+  alarm_description = "공시 저녁 배치가 5일 안에 3번의 실행에서 확정 거부 문서를 봤다 — 문서 한 건은 2번까지만 걸리므로 거부가 쌓이고 있다. 실행은 SUCCEEDED 일 수 있다. 로그의 '공시 확정 거부 문서' 줄에서 접수번호·사유를 보고, 같은 사유가 매일 나오면 파서가 깨졌는지 확인할 것."
+
+  metric_query {
+    id          = "rejects"
+    expression  = "FILL(raw, 0)"
+    label       = "확정 거부 문서 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "DisclosureConfirmedReject"
+      period      = 21600
+      stat        = "Sum"
+    }
+  }
+
+  evaluation_periods  = 20
+  datapoints_to_alarm = 3
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
 resource "aws_security_group" "task" {
   name        = "${var.name}-task"
   description = "data-pipeline raw ingest tasks ${var.name}"
@@ -204,6 +282,9 @@ locals {
     # 초록으로 보인다. 이 배선(#379)이 한 배포 앞서고 카탈로그 플래그 전환이 뒤따랐다 —
     # 순서를 뒤집으면 Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다.
     deepseek = local.db_env
+    # MACRO_COLLECTION(ALPHA-1136) wrapper 기록용 — 위 deepseek 와 같은 순서: 이 배선이 한 배포
+    # 앞서고 카탈로그 instrumented 전환이 뒤따른다(그 전까지 test_ops_catalog `_WIRING_AHEAD_OF_FLAG`).
+    macro = local.db_env
   }
 
   secret_sets = {
@@ -259,6 +340,15 @@ locals {
     rds = {
       DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
     }
+    # 원천 관측 매크로 수집(ingest-raw-macro, ALPHA-1136). ECOS(USD/KRW·국고채)·KOSIS(CPI)·EIA(브렌트)·
+    # FRED(미 국채 10년 DGS10 — FMP 미사용 결정으로 교체, #1039). FMP 키는 붙이지 않는다.
+    macro = {
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY  = "${data.aws_secretsmanager_secret.macro["ecos"].arn}:apikey::"
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY = "${data.aws_secretsmanager_secret.macro["kosis"].arn}:apikey::"
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY   = "${data.aws_secretsmanager_secret.macro["eia"].arn}:apikey::"
+      DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY  = "${data.aws_secretsmanager_secret.macro["fred"].arn}:apikey::"
+      DATA_PIPELINE_DB__PASSWORD                              = "${var.db_password_secret_arn}:password::"
+    }
     # assemble-events(ALPHA-412) — 분류 LLM 과 DB 적재를 한 태스크가 다 한다(엔진 추출
     # 체인 이식이라 분리 불가). deepseek·rds 두 세트의 합집합.
     events = {
@@ -278,64 +368,6 @@ locals {
     "awslogs-group"         = aws_cloudwatch_log_group.this.name
     "awslogs-region"        = var.region
     "awslogs-stream-prefix" = "raw-ingest"
-  }
-}
-
-# ── analysis-engine 공유 설정 (상주 소비자 task-def 가 minute_services.tf 에서 쓴다) ──
-# for_each 밖에 따로 두는 이유: 이미지(alphamale)·env 네임스페이스(PG*·ALPHAMALE_*·DEEPSEEK_*)·
-# 컨테이너명이 data-pipeline 계열과 전부 다르다. 시크릿 주입 메커니즘만 같다.
-locals {
-  analysis_container_name = "analysis-engine"
-
-  # 결과 prefix — env(ALPHAMALE_RESULT_S3_PREFIX)와 analysis task 역할의 PutObject 스코프가
-  # 어긋나지 않게 한 곳에서 고정한다.
-  analysis_result_s3_prefix = "operations_archive/etf_explanations/"
-
-  # 백필 parquet prefix — 결과 prefix 와 같은 이유로 한 곳에서 고정한다. 레이크 버킷 안이라
-  # analysis task 역할의 버킷 전체 Get/List(iam.tf)가 이미 덮는다(추가 정책 불필요).
-  # 결과 prefix 와 달리 **후행 슬래시가 없다**: 이 값은 IAM 스코프가 아니라 코드가 파일명을
-  # 이어붙이는 루트라, 슬래시를 남기면 `…/backfill//pit_daily.parquet` 가 되고 S3 는 그
-  # 빈 세그먼트를 키의 일부로 봐서 조용히 0파일을 돌려준다.
-  analysis_backfill_s3_prefix = "analysis/backfill"
-
-  analysis_env = merge({
-    AWS_REGION            = var.region
-    ALPHAMALE_LAKE_BUCKET = var.lake_bucket_name
-    PGHOST                = var.db_host
-    PGPORT                = tostring(var.db_port)
-    PGDATABASE            = var.db_name
-    PGUSER                = var.db_user
-    PGSCHEMA              = "public"
-    DEEPSEEK_MODEL        = "deepseek-v4-flash"
-    # 형식상의 기본값 — 실제 대상은 **트리거 행**이 정한다(`pipeline.run` 이 소비한
-    # minute_price_trigger 의 ticker 로 덮는다, ALPHA-806). 이 값이 쓰이는 경로는 없다.
-    ALPHAMALE_ETF_TICKER       = "091160"
-    ALPHAMALE_RESULT_S3_PREFIX = "s3://${var.lake_bucket_name}/${local.analysis_result_s3_prefix}"
-    # 백필은 S3 정본만 주입한다. 컨테이너 로컬 경로는 입력·원장으로 쓰지 않는다.
-    CAUSAL_BACKFILL_S3 = "s3://${var.lake_bucket_name}/${local.analysis_backfill_s3_prefix}"
-    # Fargate 의 자격증명은 컨테이너 메타데이터 엔드포인트(instance 체인)에서만 온다 —
-    # sso·config 만 있는 체인은 ~/.aws 가 없는 컨테이너에서 전량 실패해 S3 뷰가 통째로 빠진다.
-    # ⚠️ AWS_PROFILE 은 여기 **없어야 한다**: 있으면 코드가 PROFILE 절을 붙이고 존재하지 않는
-    # 프로필을 찾다 죽는다(컨테이너에 프로필 파일이 없다).
-    DUCKDB_S3_CHAIN = var.analysis_duckdb_s3_chain
-    # 태스크보다 낮은 메모리 상한에서 넘친 계산만 /tmp로 spill한다. 임시 파일은 입력·산출물
-    # 정본이 아니며, Fargate 기본 임시 스토리지 20GiB면 1.5GB 엔진에 충분하다.
-    DUCKDB_MEMORY_LIMIT = var.analysis_duckdb_memory_limit
-    DUCKDB_TEMP_DIR     = var.analysis_duckdb_temp_dir
-    # 조건부 주입이 아니다 — 변수가 nullable=false 라 항상 값이 있고, 없으면 런이 선다
-    # (ALPHA-797 이 미주입 = S3 폴백 모드를 폐기).
-    ALPHAMALE_RELEASE_BUNDLE_VERSION = var.analysis_release_bundle_version
-    },
-    # 워크그룹 이름만 넘긴다 — IAM 정책이 스코프로 쓰는 유일한 이름이라 여기서 고정한다.
-    # DB·표 이름은 코드 DEFAULTS 에 둔다(IAM 은 glue:Get* 를 "*" 로 주므로 정책과 안 엮인다).
-    # ⛔ EDGE_ATHENA_OUTPUT 은 주입 금지 — 워크그룹이 결과 위치를 강제(Enforce)하므로 같이
-    # 보내면 질의가 시작도 못 한다.
-    var.analysis_athena_workgroup == "" ? {} : { EDGE_ATHENA_WORKGROUP = var.analysis_athena_workgroup },
-  )
-
-  analysis_secrets = {
-    PGPASSWORD       = "${var.db_password_secret_arn}:password::"
-    DEEPSEEK_API_KEY = "${var.deepseek_secret_arn}:api_key::"
   }
 }
 

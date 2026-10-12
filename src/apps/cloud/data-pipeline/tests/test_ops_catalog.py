@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from data_pipeline.ops import catalog
+from data_pipeline.steps import load_market_series_daily
 
 _TF_MODULE = Path(__file__).resolve().parents[5] / "infra/terraform/modules/data-pipeline"
 _STATEMACHINE_TF = _TF_MODULE / "statemachine.tf"
@@ -44,8 +45,16 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         "LOAD_PRICE_TRIGGERS",
         "NORMALIZE_INVESTOR", "LOAD_ETF_FLOW",
         "NORMALIZE_ETF_NAV", "LOAD_ETF_NAV",
+        # ALPHA-1254: 업종지수 일봉 정제는 NAV 와 같은 장치라 2 = 거부 행을 뺀 winner manifest 확정.
+        "NORMALIZE_SECTOR_INDEX_DAILY",
+        # ALPHA-1260: 지수 일봉 적재의 2 = 거부한 행만 빼고 나머지 지수를 commit(행 단위 savepoint).
+        "LOAD_MARKET_SERIES_DAILY",
         "NORMALIZE_INVESTOR_INTRADAY", "LOAD_INVESTOR_INTRADAY",
         "NORMALIZE_DISCLOSURE", "NORMALIZE_DISCLOSURE_SEGMENT",
+        # ALPHA-1130: 원천 관측 수집의 2 = 받은 응답만 담은 완료 raw manifest 확정, 정제의 2 = 거부 행을
+        # 뺀 artifact·canonical manifest 확정. 둘 다 확정한 범위만 하류가 읽는다.
+        "MACRO_COLLECTION", "NORMALIZE_MACRO", "SECTOR_COLLECTION_KIS", "NORMALIZE_SECTOR",
+        "FINANCIAL_METRIC_COLLECTION_DART", "NORMALIZE_FINANCIAL_METRIC",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
     assert all(
@@ -54,6 +63,8 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         if entry.task_key not in partial
     )
     assert catalog.get("LOAD_ETF_NAV").dataset == "etf_nav_load"
+    # 원장 관측은 이 dataset 의 quality_log 를 읽는다 — 로더가 쓰는 이름과 갈리면 결과를 못 찾는다.
+    assert catalog.get("LOAD_MARKET_SERIES_DAILY").dataset == load_market_series_daily.DATASET
 
 
 def test_by_sfn_state_maps_registered_only():
@@ -195,9 +206,15 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 셋 늘었다(ALPHA-767·768 이 만든 층에 배선이 처음 붙는다).
     # 36 → 35(ALPHA-806): analyze 페이즈 제거로 AnalyzeOne 이 사라졌다. 설명은 SFN 스텝이
     # 아니라 분봉 트리거 큐 상주 소비자가 만든다.
-    assert len(asl_states) == 35, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
+    # 35 → 37(ALPHA-1254): 업종지수 일봉 수집·정제 2잡 신설(CollectKisSectorIndexDaily·
+    # NormalizeSectorIndexDaily).
+    # 37 → 38(ALPHA-1260): 지수 일봉 적재 1잡 신설(LoadMarketSeriesDaily).
+    assert len(asl_states) == 38, f"ECS Task state 수가 바뀌었다: {len(asl_states)}"
 
-    registered = {e.sfn_state_name for e in catalog.entries()}
+    # Airflow 전용 레인(ALPHA-1130)은 SFN state 가 없다 — 빈 이름은 그 레인만 쓸 수 있다.
+    airflow_only = {e.task_key for e in catalog.entries() if not e.sfn_state_name}
+    assert airflow_only == {e.task_key for e in catalog.entries("source-daily")}
+    registered = {e.sfn_state_name for e in catalog.entries() if e.sfn_state_name}
     assert registered <= asl_states, f"ASL 에 없는 state 등록: {registered - asl_states}"
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
     assert not uncovered, f"등록도 제외도 안 된 state: {uncovered} — 카탈로그에 넣거나 이유를 달아라"
@@ -212,8 +229,11 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 이동이라 총계가 그대로였고, 769 는 신설이라 늘었고, 875 는 떠나서 줄었다.
     # ALPHA-1073: 보충 배치 4작업을 복원한다. 장중 직접 함수 호출은 minute 원장에,
     # 배치 CLI는 ops 원장에 남으며 실제 기대 슬롯은 스케줄 env에서만 생긴다.
-    assert len(registered) == 30
-    assert len(catalog.entries("etf-daily")) == 17
+    # 30 → 32(ALPHA-1254): 업종지수 일봉 수집·정제 신설. 시장 17 → 19 — 769 와 같은 신설이다.
+    # 32 → 33(ALPHA-1260): 지수 일봉 적재 신설. 시장 19 → 20.
+    assert len(registered) == 33
+    assert len(catalog.entries("source-daily")) == 9
+    assert len(catalog.entries("etf-daily")) == 20
     assert len(catalog.entries("news")) == 6
     assert len(catalog.entries("disclosure")) == 4
     assert len(catalog.entries("investor-intraday")) == 3
@@ -221,6 +241,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # TAG_NEWS 를 배선과 함께 승격). 빈 집합을 단언하는 이유: 미계측으로 되돌리는 변경은 그
     # 작업의 유실 신호가 exit code 로 납작해진다는 뜻이라(ALPHA-578) 조용히 지나가면 안 된다.
     # FMP 를 되살릴 때처럼 정당한 미계측이 다시 생기면 여기서 명시적으로 다시 연다.
+    # 원천 관측 MACRO_COLLECTION 도 `macro` 배선(#1036)이 먼저 배포된 뒤 ALPHA-1140 이 올렸다.
     assert {e.task_key for e in catalog.entries() if not e.instrumented} == set()
 
 
@@ -238,6 +259,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
 # 실패의 원인이 된다. task-def 가 아니라 task_key 로 잡는 이유는 같은 task-def 를 쓰는 다른
 # 작업까지 덩달아 면제되지 않게 하기 위해서다.
 # ALPHA-610 이 #379(배선)→#(이 PR, 플래그)로 실제로 밟은 경로이고, 지금은 비어 있는 것이 맞다.
+# MACRO_COLLECTION 도 같은 경로를 밟았다 — #1036(배선) → ALPHA-1140(플래그, 여기서 지웠다).
 _WIRING_AHEAD_OF_FLAG: set[str] = set()
 
 
@@ -350,6 +372,8 @@ def test_catalog_matches_asl_command_and_taskdef_per_state():
     assert len(asl) >= 27, f"ASL 삼중항 파싱 실패: {len(asl)}"
 
     for entry in catalog.entries():
+        if not entry.sfn_state_name:
+            continue    # Airflow 전용 — DAG 쪽 대조는 airflow/tests 가 한다
         taskdef, args = asl[entry.sfn_state_name]
         assert entry.ecs_task_definition == taskdef, \
             f"{entry.task_key}: task-def 가 ASL({taskdef})과 다르다"
@@ -386,7 +410,8 @@ def test_catalog_cli_commands_are_real_steps():
 
     source = inspect.getsource(run_module.main)
     for entry in catalog.entries():
-        assert f'"{entry.cli_command[0]}"' in source, f"{entry.cli_command[0]} 가 CLI 에 없다"
+        assert (f'"{entry.cli_command[0]}"' in source or entry.cli_command[0] in run_module.OBSERVATION_STEPS), \
+            f"{entry.cli_command[0]} 가 CLI 에 없다"
 
 
 def test_by_cli_resolves_vendor_split_steps():
@@ -513,16 +538,17 @@ def test_dependencies_encode_the_asl_gates():
         if e.stage == "normalize":
             assert e.depends_on == () or e.task_key == "NORMALIZE_PRICE", \
                 f"{e.task_key}: 정제에 raw 의존을 걸면 수집 실패 런에서 실제로 성공한 정제가 BLOCKED 다"
-    # 시장 병렬 feature 로더 4개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만
+    # 시장 병렬 feature 로더 5개는 같은 게이트(EnrichCorpCode 직렬 뒤) 아래에 있다 — 하나만
     # 다르면 안 된다. LoadPriceTriggers는 ALPHA-1039에서 가격·holdings commit 뒤 직렬 꼬리로
     # 이동했다. LOAD_DISCLOSURE 는 ALPHA-724 로 공시 레인이라 여기 없다(그 레인의
     # 자체 게이트를 따른다 — 시장 EnrichCorpCode 의존은 레인 밖이라 복사할 수 없다).
     gate = {"LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS",
-            "LOAD_ETF_FLOW"}
+            "LOAD_ETF_FLOW", "LOAD_MARKET_SERIES_DAILY"}
     for key in gate:
         assert catalog.get(key).depends_on == ("ENRICH_CORP_CODE",), key
     assert catalog.get("LOAD_PRICE_TRIGGERS").depends_on == (
-        "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW")
+        "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW",
+        "LOAD_MARKET_SERIES_DAILY")
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
     # 정제 전량 성공 게이트(ASL `NormalizeCheckResults`) — **개수가 아니라 정확한 집합**을
     # terraform 에서 도출해 대조한다(edge-review). 길이만 보면 게이트 멤버가 **바뀌어도**

@@ -1,0 +1,38 @@
+id: ExchangeSecurityClassification_ForSecurity_ETF
+source: ExchangeSecurityClassification
+definition:
+  name: ForSecurity
+  label: ForSecurity
+  description: The listed security matched using the classification's market and local
+    security code. The code mapping and version selection remain under review.
+  target: ETF
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: codeMapping
+    sourceColumns:
+    - market
+    - instrument_code
+    targetColumns:
+    - market_code
+    - ticker
+    marketCodes:
+      KOSPI: XKRX
+      KOSDAQ: XKOS
+    versionSelection: Specify as-of time and raw_run_id; never pick an arbitrary row.
+  mappingStatus: mappingReview
+  apiName: forSecurityETF
+  displayName: ForSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: exchangeClassifications
+    displayName: Exchange classifications
+    description: Collected exchange classification versions matched to this security.
+    pluralDisplayName: Exchange classifications
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

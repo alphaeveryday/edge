@@ -2,7 +2,7 @@ spring:
   application:
     name: app
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:55440/app}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55440/app}
     username: ${SPRING_DATASOURCE_USERNAME:app}
     password: ${SPRING_DATASOURCE_PASSWORD:app}
   jackson:

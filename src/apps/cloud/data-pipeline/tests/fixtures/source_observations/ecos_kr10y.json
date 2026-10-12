@@ -1,0 +1,5 @@
+{"StatisticSearch": {"list_total_count": 3, "row": [
+  {"STAT_CODE": "817Y002", "STAT_NAME": "1.3.2.1. 시장금리(일별)", "ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%", "TIME": "20260724", "DATA_VALUE": "2.905"},
+  {"STAT_CODE": "817Y002", "STAT_NAME": "1.3.2.1. 시장금리(일별)", "ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%", "TIME": "20260727", "DATA_VALUE": "2.887"},
+  {"STAT_CODE": "817Y002", "STAT_NAME": "1.3.2.1. 시장금리(일별)", "ITEM_CODE1": "010210000", "ITEM_NAME1": "국고채(10년)", "UNIT_NAME": "연%", "TIME": "20260728", "DATA_VALUE": "2.891"}
+]}}

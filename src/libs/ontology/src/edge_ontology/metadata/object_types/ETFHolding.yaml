@@ -1,0 +1,484 @@
+formatVersion: 2
+name: ETFHolding
+label: ETF holding
+description: The position of one security in one ETF on one trading date, including
+  its portfolio weight. A new date or a different held security identifies a different
+  holding record.
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns:
+  - etf_instrument_id
+  - constituent_instrument_id
+  - trade_date
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this dated ETF position, encoded from etfInstrumentId,
+      constituentInstrumentId, tradeDate. Every listed key component is preserved.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - constituent_instrument_id
+      - trade_date
+      foreignKeys:
+      - constraint: fk_etf_holding_snapshot_etf
+        table: etf_holding_snapshot
+        columns:
+        - etf_instrument_id
+        target_table: etf_profile
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  etfInstrumentId:
+    label: Etf instrument id
+    description: Identifier of the ETF that holds this constituent on the trading date.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - constituent_instrument_id
+      - trade_date
+      foreignKeys:
+      - constraint: fk_etf_holding_snapshot_etf
+        table: etf_holding_snapshot
+        columns:
+        - etf_instrument_id
+        target_table: etf_profile
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: etfInstrumentId
+    displayName: Etf instrument id
+    status: experimental
+    dataType: String
+  constituentInstrumentId:
+    label: Constituent instrument id
+    description: Identifier of the security held by the ETF, distinct from the ETF's
+      own identifier.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - constituent_instrument_id
+      - trade_date
+      foreignKeys:
+      - constraint: fk_etf_holding_snapshot_constituent
+        table: etf_holding_snapshot
+        columns:
+        - constituent_instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: constituentInstrumentId
+    displayName: Constituent instrument id
+    status: experimental
+    dataType: String
+  tradeDate:
+    label: Trade date
+    description: Trading date to which the recorded market data applies; distinct
+      from the time it was collected.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - etf_instrument_id
+      - constituent_instrument_id
+      - trade_date
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: tradeDate
+    displayName: Trade date
+    status: experimental
+    dataType: Date
+  weightRatio:
+    label: Portfolio weight (fraction)
+    description: Portfolio weight of the held security as a fraction; 0.05 represents
+      5%. NULL means no weight was recorded.
+    sourceDataType: double precision
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: weightRatio
+    displayName: Portfolio weight (fraction)
+    status: experimental
+    dataType: Double
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  etfName:
+    label: Etf name
+    description: Current stored name of the etf identified by etf_instrument_id; not
+      its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfName
+    displayName: Etf name
+    status: experimental
+    dataType: String
+  etfTicker:
+    label: Etf ticker
+    description: Current ticker of the etf; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfTicker
+    displayName: Etf ticker
+    status: experimental
+    dataType: String
+  etfMarketCode:
+    label: Etf market code
+    description: Current market code of the etf, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfMarketCode
+    displayName: Etf market code
+    status: experimental
+    dataType: String
+  securityName:
+    label: Security name
+    description: Current stored name of the security identified by constituent_instrument_id;
+      not its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityName
+    displayName: Security name
+    status: experimental
+    dataType: String
+  securityTicker:
+    label: Security ticker
+    description: Current ticker of the security; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityTicker
+    displayName: Security ticker
+    status: experimental
+    dataType: String
+  securityMarketCode:
+    label: Security market code
+    description: Current market code of the security, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityMarketCode
+    displayName: Security market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: etf_holding_snapshot
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: etf_holding_snapshot
+      column: etf_instrument_id
+    etfInstrumentId:
+      alias: base
+      table: etf_holding_snapshot
+      column: etf_instrument_id
+    constituentInstrumentId:
+      alias: base
+      table: etf_holding_snapshot
+      column: constituent_instrument_id
+    tradeDate:
+      alias: base
+      table: etf_holding_snapshot
+      column: trade_date
+    weightRatio:
+      alias: base
+      table: etf_holding_snapshot
+      column: weight_ratio
+    availableAt:
+      alias: base
+      table: etf_holding_snapshot
+      column: available_at
+    etfName:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: etf_name
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    etfTicker:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: etf_ticker
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    etfMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: etf_market_code
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    securityName:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: security_name
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    securityTicker:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: security_ticker
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    securityMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: security_market_code
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: etf_holding
+      column: display_title
+      sqlFile: sql/views/etf_holding.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: etf_holding_snapshot
+        column: constituent_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: etf_instrument_id
+      - schema: public
+        table: etf_holding_snapshot
+        column: trade_date
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - etf_instrument_id
+  - constituent_instrument_id
+  - trade_date
+  tableConstraints:
+  - name: ck_etf_holding_not_self
+    kind: c
+    definition: CHECK ((etf_instrument_id <> constituent_instrument_id))
+    validated: true
+  - name: ck_etf_holding_weight_ratio
+    kind: c
+    definition: CHECK (((weight_ratio IS NULL) OR ((weight_ratio >= (0)::double precision)
+      AND (weight_ratio <= (1)::double precision))))
+    validated: true
+  - name: etf_holding_snapshot_pkey
+    kind: p
+    definition: PRIMARY KEY (etf_instrument_id, constituent_instrument_id, trade_date)
+    validated: true
+  - name: fk_etf_holding_snapshot_constituent
+    kind: f
+    definition: FOREIGN KEY (constituent_instrument_id) REFERENCES instrument(instrument_id)
+      ON DELETE RESTRICT
+    validated: true
+  - name: fk_etf_holding_snapshot_etf
+    kind: f
+    definition: FOREIGN KEY (etf_instrument_id) REFERENCES etf_profile(instrument_id)
+      ON DELETE CASCADE
+    validated: true
+apiName: ETFHolding
+displayName: ETF holding
+pluralDisplayName: ETF holdings
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- ETFHolding_ForETF_ETF
+- ETFHolding_HoldsSecurity_Equity
+- ETFHolding_HoldsSecurity_ETF

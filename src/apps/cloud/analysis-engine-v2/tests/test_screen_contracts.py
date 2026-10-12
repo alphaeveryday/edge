@@ -14,7 +14,8 @@ def outlook():
         'summary_card': {'title': '요약 제목', 'summary': '요약입니다.'},
         'detail': {'title': '분석 제목', 'items': [
             {'id': 'topic', 'title_keyword': '계약', 'sentences': [
-                {'sentence': '판매 물량이 늘었어요.', 'is_updated': False}], 'tool_run_ids': ['news']}],
+                {'sentence': '판매 물량이 늘었어요.', 'is_updated': False}],
+             'sentiment': 'positive', 'source_links': [], 'tool_run_ids': ['news']}],
             'updates': {'date': '2026-09-30', 'items': []}},
         'factors': [{'type': name, 'sticker': '상승', 'sentence': '자료를 확인했어요.'}
                     for name in ('이슈', '차트', '매크로', '밸류', '수급')],
@@ -29,6 +30,16 @@ def test_schema_accepts_different_summary_and_analysis_titles(outlook):
     assert result['status'] == 'passed'
     assert result['schema']['additionalProperties'] is False
     assert result['schema_errors'] == []
+
+
+def test_topic_sentiment_is_an_enum_and_legacy_rows_may_be_unclassified(outlook):
+    result = audit_payload('outlook', outlook, context={'previous_analysis_id': None})
+    assert result['status'] == 'passed'
+    outlook['detail']['items'][0]['sentiment'] = None
+    assert audit_payload('outlook', outlook, context={'previous_analysis_id': None})['schema_errors'] == []
+    outlook['detail']['items'][0]['sentiment'] = 'mixed'
+    result = audit_payload('outlook', outlook, context={'previous_analysis_id': None})
+    assert any(error['path'] == '/detail/items/0/sentiment' for error in result['schema_errors'])
 
 
 @pytest.mark.parametrize('change,path', [

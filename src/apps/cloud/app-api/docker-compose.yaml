@@ -12,26 +12,25 @@ services:
       VOTE_REDIS_DISCONNECTED_BEHAVIOR: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:-REJECT_COMMANDS}
       VOTE_REDIS_TIMEOUT_OPTIONS: ${VOTE_REDIS_TIMEOUT_OPTIONS:-true}
       VOTE_REDIS_READ_FROM: ${VOTE_REDIS_READ_FROM:-MASTER}
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/app
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/app
       SPRING_DATA_REDIS_SENTINEL_MASTER: mymaster
       SPRING_DATA_REDIS_SENTINEL_NODES: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       sentinel-1:
         condition: service_started
 
-  mysql:
-    image: mysql:8.4
+  postgres:
+    image: postgres:16
     environment:
-      MYSQL_ROOT_PASSWORD: local-root
-      MYSQL_DATABASE: app
-      MYSQL_USER: app
-      MYSQL_PASSWORD: app
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
     ports:
-      - "55440:3306"
+      - "55440:5432"
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uapp -papp"]
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
       interval: 2s
       timeout: 2s
       retries: 15

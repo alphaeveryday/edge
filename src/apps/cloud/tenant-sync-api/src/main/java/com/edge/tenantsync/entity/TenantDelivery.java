@@ -38,6 +38,10 @@ public class TenantDelivery {
 
 	private String reason;
 
+	private String movementAnalysisId;
+
+	private String targetMovementAnalysisId;
+
 	protected TenantDelivery() {
 	}
 }

@@ -1,4 +1,4 @@
-"""Check the native ERD against generated DBML and the two v2 DDL migrations.
+"""Check the native ERD against generated DBML and the listed v2 DDL migrations.
 
 The DDL reader is deliberately scoped to these migrations, not a general SQL parser.
 DBML independently checks table/column coverage and types; DDL supplies defaults,
@@ -25,12 +25,16 @@ def validate(path):
     ddl = "\n".join((ROOT / "src/libs/schema/migrations-cloud" / name).read_text(encoding="utf-8")
                     for name in ("V202609281600__create_v2_analysis_storage.sql",
                                  "V202609282200__add_v2_factor_details.sql",
-                                 "V202609301400__isolate_analysis_source.sql"))
+                                 "V202609301400__isolate_analysis_source.sql",
+                                 "V202610021500__add_v2_execution_requests.sql",
+                                 "V202610022229__add_movement_withdrawal_time.sql",
+                                 "V202610071800__add_outlook_item_sentiment_and_sources.sql"))
     expected, refs, uniques = {}, set(), set()
     for table, body in re.findall(r"CREATE TABLE (\w+) \((.*?)^\);", ddl, re.M | re.S):
         primary = re.search(r"PRIMARY KEY \(([^)]+)\)", body)
         primary = primary.group(1).replace(" ", "").split(",") if primary else []
-        for name, kind, rest in re.findall(r"^    (\w+) (text\[\]|text|timestamptz|date|jsonb|integer|numeric)\b(.*)", body, re.M):
+        for name, kind, rest in re.findall(r"^    (\w+) (text\[\]|text|timestamptz|date|jsonb|integer|numeric)\b(.*)", body, re.M | re.I):
+            kind = kind.lower()
             # A word boundary after text[] would exclude the closing brackets.
             if kind == "text" and rest.startswith("[]"):
                 kind, rest = "text[]", rest[2:]
@@ -41,13 +45,16 @@ def validate(path):
             ref = re.search(r"REFERENCES (\w+)\((\w+)\)", rest)
             if ref:
                 refs.add((f"{table}.{name}", f"{ref[1]}.{ref[2]}"))
+            if re.search(r"\bUNIQUE\b", rest):
+                uniques.add((table, (name,)))
         for key in re.findall(r"UNIQUE \(([^)]+)\)", body):
             uniques.add((table, tuple(key.replace(" ", "").split(","))))
-    for table, name, kind in re.findall(r"ALTER TABLE (\w+) ADD COLUMN (\w+) (\w+);", ddl):
-        expected[f"{table}.{name}"] = (normalized_type(kind), False, False, "")
-
-    for table, name, kind, default in re.findall(r"ALTER TABLE (\w+)\s+ADD COLUMN (\w+) (TEXT) NOT NULL DEFAULT ('[^']*')", ddl):
-        expected[f"{table}.{name}"] = (normalized_type(kind.lower()), True, False, default)
+    for table, body in re.findall(r"ALTER TABLE (\w+)\s+(.*?);", ddl, re.M | re.S):
+        additions = re.findall(r"ADD COLUMN (\w+) (\w+)(.*?)(?=,\s*ADD (?:COLUMN|CONSTRAINT)\b|$)", body, re.S)
+        for name, kind, rest in additions:
+            default = re.search(r"DEFAULT\s+('[^']*'(?:\:\:\w+)?|\w+\(\))", rest)
+            expected[f"{table}.{name}"] = (normalized_type(kind.lower()), "NOT NULL" in rest,
+                                             False, default.group(1) if default else "")
 
     actual = {key: (normalized_type(col["dataType"]), bool(col["options"] & 8),
                     bool(col["options"] & 2), col["default"])

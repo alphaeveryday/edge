@@ -85,14 +85,14 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 
 ### CI 운영 설정 (1회)
 
-1. **Terraform apply** (`infra/terraform/envs/dev`) — schema-migrate task·ECR·SG·OIDC 배포 역할을 생성한다. 계정에 GitHub OIDC provider가 이미 있으면 `create_github_oidc_provider=false` + `github_oidc_provider_arn=<기존 ARN>`로 참조한다. (배포 role은 `dev` **브랜치**에서 도는 워크플로만 신뢰한다 — OIDC sub가 `...:ref:refs/heads/dev`이며 모듈의 `github_branch_refs`로 핀한다. 워크플로는 `environment:`를 쓰지 않는다 — Free+private 플랜은 environment 배포 브랜치 정책을 강제할 수 없어 브랜치 핀이 안 되기 때문. ALPHA-313.)
+1. **Terraform apply** (`infra/terraform/envs/dev`) — schema-migrate task·ECR·SG·OIDC 배포 역할을 생성한다. 계정에 GitHub OIDC provider가 이미 있으면 `create_github_oidc_provider=false` + `github_oidc_provider_arn=<기존 ARN>`로 참조한다. (배포 role은 `dev` **브랜치**에서 도는 워크플로만 신뢰한다 — OIDC sub가 `...:ref:refs/heads/dev`이며 모듈의 `github_branch_refs`로 핀한다. 워크플로는 `environment:`를 쓰지 않는다 — 작성 당시 Free+private 플랜은 environment 배포 브랜치 정책을 강제할 수 없어 브랜치 핀이 안 되기 때문. ALPHA-313.)
 2. **repo-level 변수(vars) 등록** — `terraform output` 값을 GitHub **repository variables**(secret 아님, 식별자)로 넣는다. environment 를 쓰지 않으므로 environment vars 가 아니라 repo vars 다:
    - `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`(=`gha_deploy_role_arn`), `ECS_CLUSTER_ARN`, `MIGRATE_TASK_FAMILY`, `MIGRATE_ECR_REPOSITORY`, `MIGRATE_SUBNET_IDS`, `MIGRATE_SECURITY_GROUP_ID`, `MIGRATE_LOG_GROUP`.
    - DB 접속 비밀번호는 여기 없다(RDS 시크릿에서 task가 직접 읽음).
 3. **prod (후속)**: prod 인프라가 아직 없어 prod 마이그레이션 워크플로는 두지 않는다. prod env terraform(선행 티켓) 적용 후, 배포 role 을 `refs/heads/main` 으로 핀하고 동일 vars 를 채운 뒤 dev 와 같은 패턴의 prod 워크플로를 재도입한다. 승인 게이트가 필요하면 Pro 플랜의 environment protection(Required reviewers)을 쓴다.
-- (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다. (현재 private + free 플랜이라 branch protection 불가 — 그래서 워크플로에 `paths` 필터를 두고 있다. required로 지정하는 시점에는 필터를 걷어내야 한다: path로 스킵된 required check는 Pending으로 남아 PR을 영구 차단한다. `schema-validate.yml` 상단 주석 참고.)
+- (권장) **Branch protection**: `dev`와 `main` 모두에 `schema-validate` 상태 체크(job: `migrate-and-validate`)를 required로 지정한다. 릴리스 경계가 `dev -> main`이므로 main에도 필요하다. (저장소는 공개로 바뀌었고 `dev` 에는 룰셋 `protect-dev`(PR 필수·강제 푸시·삭제 금지)가 있지만 required status check 는 지정하지 않았다 — 그래서 워크플로에 `paths` 필터를 두고 있다. required로 지정하는 시점에는 필터를 걷어내야 한다: path로 스킵된 required check는 Pending으로 남아 PR을 영구 차단한다. `schema-validate.yml` 상단 주석 참고.)
   - 함께 **"Require branches to be up to date before merging"** 를 켠다. 버전 단조성 guard는 체크 실행 시점의 base tip 기준이라, 이 설정이 없으면 같은 base에서 갈라진 두 PR이 각각 통과 후 순서대로 머지될 때 낮은 버전 마이그레이션이 뒤늦게 착지해 배포 `flywayMigrate`가 out-of-order로 실패할 수 있다. 머지 전 최신 base로 rebase를 강제하면 guard가 최신 base_max로 재검증한다.
-  - branch protection 도입 전까지는 이 창이 열려 있으므로(2026-07-29 ALPHA-623 실증 — 하루에 역행 착지 3건) **머지 직전에 최신 dev 대비 버전 단조성을 수동 재확인**한다. 역행 착지가 이미 일어났다면 **전방 리네임**으로 복구한다: 미적용 파일을 내용 그대로(R100) 더 큰 버전으로 리네임하고 그 쌍을 [`rename-recovery.allowlist`](rename-recovery.allowlist)에 선언 — guard 는 allowlist 에 선언된 전방 리네임(내용 동일 + 새>구 + 새>base 최신)만 허용하고 그 외 리네임은 종전대로 전면 거부한다(선언이 diff 에 드러나 "정말 미적용인가"를 리뷰가 판단). 적용된 파일이 잘못 올라가면 배포 `flywayMigrate`가 "applied migration not resolved"로 fail-loud 한다.
+  - required check·최신화 강제를 켜기 전까지는 이 창이 열려 있으므로(2026-07-29 ALPHA-623 실증 — 하루에 역행 착지 3건) **머지 직전에 최신 dev 대비 버전 단조성을 수동 재확인**한다. 역행 착지가 이미 일어났다면 **전방 리네임**으로 복구한다: 미적용 파일을 내용 그대로(R100) 더 큰 버전으로 리네임하고 그 쌍을 [`rename-recovery.allowlist`](rename-recovery.allowlist)에 선언 — guard 는 allowlist 에 선언된 전방 리네임(내용 동일 + 새>구 + 새>base 최신)만 허용하고 그 외 리네임은 종전대로 전면 거부한다(선언이 diff 에 드러나 "정말 미적용인가"를 리뷰가 판단). 적용된 파일이 잘못 올라가면 배포 `flywayMigrate`가 "applied migration not resolved"로 fail-loud 한다.
 
 ### JVM/Spring 앱은 schema **consumer**다
 
@@ -214,7 +214,7 @@ git config core.hooksPath .githooks
 - 훅은 **opt-in 이라 강제되지 않는다** — 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다. 그래서
   **집행은 CI 가 한다**(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR 에서 ERD 를
   다시 만들어 커밋본과 대조하고, 어긋나면 빨간불로 드러낸다. 훅은 편의이고 CI 가 방어선이다.
-  ⚠️ 단 이 레포는 branch protection 이 없어 required check 지정이 불가하다 — 빨간불이 머지를
+  ⚠️ 단 `dev` 룰셋(`protect-dev`)에 required status check 가 지정돼 있지 않다 — 빨간불이 머지를
   **막지는 못한다**(드러내는 데까지다).
   ⚠️ 집행 범위는 **스크립트가 내는 두 `.dbml` 뿐**이다. `generated/` 의 다른 커밋물(손으로 만든
   `physical-erd.dbdiagram` 등)은 생성기가 없어 대조 대상이 아니고 계속 낡을 수 있다.
@@ -224,7 +224,7 @@ git config core.hooksPath .githooks
   `gen-erd.sql` 이 읽는 `pg_catalog` 출력을 바꾸면 무관한 PR 에서 빨간불이 날 수 있다.
   그때는 마이너까지 핀한다(지금은 사례가 없어 핀하지 않는다).
 - `generated/*.dbml` 은 파생물이라 **직접 편집하지 않는다**. 논리 ERD(업무 관점·한글)는 별개
-  문서다 — 예: `src/apps/analysis-engine/docs/logical-erd.dbml`.
+  문서다 — 문서 ERD 는 아래 `docs/data-model/`.
 - **두 DBML 은 문서 ERD(`docs/data-model/`)와도 대조된다** — `scripts/validate-doc-erd.py` 가
   테이블 전수·FK 방향·카디널리티 라벨을 draw.io 원본과 SVG 양쪽에 대조하고(SVG 배경 흰색
   통일도 같이 검사한다), `data-model-validate`

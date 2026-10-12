@@ -44,6 +44,23 @@ D-1 이 하루 한 번은 필요한 이유는 **중단 캐치업**이다. 익일
 "첫 window 인가"로 판정하면 중간 배포된 날은 D-1 을 영영 안 본다).
 ⚠️ 덮는 폭은 **하루뿐이다.** 이틀 이상 멈춘 뒤의 공백은 이 창이 못 메우고 수동 백필 소관이다.
 
+## 커서 전진은 "전건 처리 완료"가 아니다 (ALPHA-1154)
+
+접수번호 커서와 D-1 캐치업은 **다음 poll 이 무엇을 다시 읽어야 하는가**만 정한다. 실패가 다시
+읽으면 풀릴 수 있을 때(본문 미도착, 저장·적재·조립 예외, 사유를 모르는 실패)는 커서를 막아 다음
+window 가 전량을 다시 읽는다. 반대로 **같은 원문이면 늘 같은 결과인 문서 단위 거부**
+(`_CONFIRMED_REJECT_REASONS`)는 다시 읽어도 안 풀린다 — 그런 문서 하나가 커서를 막으면 그 문서가
+질의 창을 벗어날 때까지 매 분 전량을 다시 읽고 전 창이 INCOMPLETE 가 된다(10-01·10-02 각 390창).
+그래서 확정 거부는 커서를 막지 않는다.
+
+그렇다고 처리된 것으로 치지 않는다: 거부를 본 window 는 **INCOMPLETE** 로 남고, poll manifest 의
+`rejected_documents`(접수번호·단계·사유·원문 위치)와 그 run 의 quality_log 가 재처리 근거다. 거부
+문서를 따로 표시해 두지도 않는다 — 정제 거부는 질의 창 안에 있는 동안 주기 전량 대사(60 poll)가,
+조립 거부는 접수일이 질의 창 안에 있는 동안 매 window 가 같은 문서를 다시 판정한다.
+⚠️ 질의 창을 벗어난 뒤에는 이 레인이 다시 보지 않는다. 저녁 배치는 정제·적재까지만 돌고 **조립을
+하지 않으므로**(`disclosure_pipeline.tf`), 파서를 고친 뒤의 재처리는 `backfill-normalize-disclosure`
+(정제 → 적재 → 조립)를 그 접수일 범위로 돌리는 것이다.
+
 ⚠️ **한 tick 은 1분보다 오래 걸린다** — 공용 골격이 realtime 1 + `recovery_budget_per_tick`
 을 한 tick 안에서 처리한다. 그 자체는 이 레인의 정상이다(토스 실측 tick 73초+). 요구는
 **lease 가 최악 tick 을 덮는 것**이고 그 검증자는
@@ -58,6 +75,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..config import DbConfig, Settings
 from ..lake.storage import Storage, minute_poll_manifest_key
+# 확정 거부 어휘의 정본은 `quality.disclosure` 다 — 저녁 배치(`run.py`)가 같은 목록으로 종료
+# 코드를 정한다(ALPHA-1163). 두 레인이 따로 들면 한쪽만 고친 사유가 레인마다 다르게 판정된다.
+from ..quality.disclosure import (
+    CONFIRMED_REJECT_REASONS as _CONFIRMED_REJECT_REASONS,
+    split_failures as _split_failures,
+)
 from ..steps import (assemble_disclosure_events, ingest_raw_disclosure, load_disclosure,
                      normalize_disclosure)
 from ..steps import normalize_disclosure_segment
@@ -125,6 +148,7 @@ def build_poll_manifest(
     data_status: str,
     step_exits: dict[str, int],
     observation_scope: dict,
+    rejected_documents: list[dict],
 ) -> dict:
     """이 window 가 **무엇을 보고 무엇으로 판정했나** — EOD·감사가 읽는 기록.
 
@@ -158,6 +182,12 @@ def build_poll_manifest(
         # 체인 5스텝의 종료 코드 — 어느 칸이 깨졌는지가 남지 않으면 INCOMPLETE 가
         # "무언가 안 됐다"로만 남는다(Rule 12).
         "step_exits": dict(sorted(step_exits.items())),
+        # 이 window 가 본 **확정 거부 문서**(ALPHA-1154). 커서는 이 문서들을 기다리지 않고
+        # 나아가므로, 여기 남기지 않으면 "커서가 나아갔다"가 "전건 처리됐다"로 읽힌다.
+        # 원문 위치는 본문 객체 키(poll 사이에 재사용돼 같은 값)만 담는다 — 메타 ndjson 키는
+        # run_id 가 들어 있어 위 불변 계약을 깬다(그 키는 run_id 로 찾는 quality_log 에 있다).
+        "rejected_documents": rejected_documents,
+        "rejected_count": len(rejected_documents),
     }
 
 
@@ -277,6 +307,8 @@ class DisclosureWorker(MinuteWorkerLoop):
             rcept_nos: tuple[str, ...] = tuple(sorted(set(outcome["rcept_nos"])))
             hard_failed = raw_status in _HARD_FAIL_STATUSES
             truncated = bool(outcome.get("list_truncated"))
+            # 단계 → (확정 거부 문서, 확정 거부로 볼 수 없는 실패 수). 비0 으로 끝난 단계만 든다.
+            rejections: dict[str, tuple[list[dict], int]] = {}
 
             if hard_failed:
                 # 수집이 사실상 실패했다 — 정제·적재를 돌리지 않는다. 부분 수집분은 raw 에
@@ -294,15 +326,22 @@ class DisclosureWorker(MinuteWorkerLoop):
                     ("segment", normalize_disclosure_segment.run),
                 )
                 for name, normalizer in normalizers:
+                    failures: list[dict] = []
                     try:
                         step_exits[name] = normalizer(
                             self.storage, run_id, run_id, raw_keys=outcome["raw_keys"],
+                            failures_out=failures,
                         )
                     except Exception:
                         # producer 계보는 독립이다. 한쪽 예외를 hard failure로 남기되 다른
                         # manifest의 초기화·성공 기록까지 막지 않는다.
                         logger.exception("공시 window 정제 예외(producer=%s)", name)
                         step_exits[name] = 1
+                    # exit 2 일 때만 사유를 읽는다 — canonical·quality_log·완료 manifest 가
+                    # 온전히 기록된 뒤의 행 실패다. exit 1 은 그 기록 자체가 깨진 것이라
+                    # 사유가 무엇이든 다시 읽어야 한다.
+                    if step_exits[name] == 2:
+                        rejections[name] = _split_failures(name, failures)
                 # 적재는 raw가 0건이어도 돈다. 현재 run의 completed canonical manifest를 exact
                 # GET해 durable pending에 enqueue하고, 기존 pending도 날짜 범위 안에서 재시도한다
                 # (ALPHA-1045). shared canonical LIST는 명시 bootstrap에만 남아 있다.
@@ -315,12 +354,21 @@ class DisclosureWorker(MinuteWorkerLoop):
                         from_date=query_from, to_date=query_to,
                     )
                     if step_exits["load"] == 0:
+                        report: dict = {}
                         step_exits["assemble"] = assemble_disclosure_events.run(
                             self.storage, run_id, db=cfg.db,
-                            from_date=query_from, to_date=query_to,
+                            from_date=query_from, to_date=query_to, report=report,
                         )
+                        # `report` 는 quality_log 가 기록됐을 때만 채워진다. 비었거나 조립
+                        # 예외(`failures`)가 있으면 건너뛴 fact 가 있어도 확정 거부로 읽지 않는다.
+                        if step_exits["assemble"] != 0 and report and not report.get("failures"):
+                            rejections["assemble"] = _split_failures(
+                                "assemble", report.get("skipped_facts") or [])
 
             data_status = _classify(raw_status, step_exits, rcept_nos)
+            rejected_documents = [
+                item for name in sorted(rejections) for item in rejections[name][0]
+            ]
             manifest = build_poll_manifest(
                 dataset=cfg.dataset, session_id=self.session_id,
                 source_code=cfg.source_code,
@@ -328,6 +376,7 @@ class DisclosureWorker(MinuteWorkerLoop):
                 query_from=query_from, query_to=query_to,
                 rcept_nos=rcept_nos, data_status=data_status, step_exits=step_exits,
                 observation_scope=_observation_scope(after_rcept_no, outcome),
+                rejected_documents=rejected_documents,
             )
             manifest_bytes = serialize_manifest(manifest)
             # 키 축이 **attempt** 다(세대가 아니다) — 라이브 소스의 재poll은 다른 제한 관측을
@@ -362,14 +411,21 @@ class DisclosureWorker(MinuteWorkerLoop):
                 and not isinstance(total_count, bool)
                 and total_count >= 0
             )
+
+            def settled(name: str) -> bool:
+                """그 단계가 0 으로 끝났거나, 비0 이 **확정 거부만으로** 설명되는가.
+
+                뒤쪽은 "처리 완료"가 아니라 "다시 읽어도 달라질 것이 없다"는 뜻이다 — 일시·미지
+                실패가 하나라도 섞였으면 거짓이다.
+                """
+                rejected, unresolved = rejections.get(name, ((), 1))
+                return step_exits.get(name) == 0 or (bool(rejected) and unresolved == 0)
+
             downstream_durable = (
                 step_exits.get("ingest") == 0
-                and all(step_exits.get(name) == 0 for name in ("normalize", "segment"))
+                and all(settled(name) for name in ("normalize", "segment"))
                 and step_exits.get("load") in (0, 2)
-                and (
-                    step_exits.get("load") == 2
-                    or step_exits.get("assemble") == 0
-                )
+                and (step_exits.get("load") == 2 or settled("assemble"))
             )
             cursor_safe = outcome.get("cursor_safe") is True and downstream_durable
             state_safe = (
@@ -403,13 +459,18 @@ class DisclosureWorker(MinuteWorkerLoop):
                 # 내구화돼야 D-1을 다시 질의하지 않아도 된다. 그 전 실패는 다음 window가 같은
                 # 이틀 창을 다시 읽어 변경된 응답으로 복구한다. 시장 전체의 foreign malformed
                 # 행은 수집 스텝이 별도 진단으로 남기고 이 gate의 실패로 세지 않는다.
+                # 확정 거부 문서(ALPHA-1154)는 다시 읽어도 같은 결과라 이 gate 를 막지 않는다 —
+                # 소진된 것은 "D-1 을 다시 질의할 이유"이지 그 문서의 처리가 아니다.
                 self.prior_day_done = True
             if data_status != WINDOW_VALID:
                 # 조용한 성공 위장 금지(Rule 12) — 어느 칸이 왜 깨졌는지 남긴다.
                 logger.warning(
-                    "공시 window %s → %s (창 %s~%s · rcept %d건 · step_exits %s)",
+                    "공시 window %s → %s (창 %s~%s · rcept %d건 · step_exits %s"
+                    " · 확정 거부 %d건%s)",
                     claim["window_start"], data_status, query_from, query_to,
-                    len(rcept_nos), step_exits,
+                    len(rcept_nos), step_exits, len(rejected_documents),
+                    " — 커서는 전진, 재처리 대상은 manifest rejected_documents"
+                    if rejected_documents and cursor_safe else "",
                 )
             # INVALID 은 tick 에 실패로 실린다(WINDOW_FAILED) — `hard_failed` 로 판정하면
             # `skipped`(안 봤다)가 성공 tick 으로 보고된다. INCOMPLETE 는 산출이 있으니
@@ -466,7 +527,8 @@ def _classify(
       것을 "0건 관측"으로 접으면 하루가 통째로 정상 빈 날이 된다(`_NOT_OBSERVED_STATUSES`).
     - 수집은 됐는데 어느 칸이든 비0(수집 `partial` 포함) → **INCOMPLETE**. "그 폴링의 산출이
       온전치 않다"는 뜻이고 소스 장애가 아니다 — PR A 가 INCOMPLETE 를 실패 unit 으로 세지
-      않는 이유가 이것이다(세면 QC 가 소스 장애로 오독한다).
+      않는 이유가 이것이다(세면 QC 가 소스 장애로 오독한다). **확정 거부 문서만 있는 창도
+      여기다**(ALPHA-1154) — 커서는 나아가도 그 창은 전건 처리된 것이 아니다.
     - 관측 0건 → **VALID_EMPTY**. manifest가 선언한 observation_scope 안에 우리 공시가 없는
       것은 정상이다. 증분 scope를 날짜창 전체의 무공시로 해석하면 안 된다.
     - 그 밖 → **VALID**.

@@ -7,7 +7,7 @@ DECLARE
     results text[] := ARRAY['movement_analyses','movement_items','outlook_analyses',
         'outlook_items','outlook_factors','outlook_conclusion_keywords',
         'outlook_factor_metrics','outlook_issue_items'];
-    audit text[] := ARRAY['tool_definitions','tool_runs'];
+    audit text[] := ARRAY['tool_definitions','tool_runs','movement_retractions'];
 BEGIN
     SELECT * INTO STRICT r FROM pg_roles WHERE rolname = 'edge_analysis_v2_writer';
     IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
@@ -36,6 +36,21 @@ BEGIN
                 NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'UPDATE') OR
                 NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'DELETE')) THEN
                 RAISE EXCEPTION 'Missing result update permission: %',r.relname;
+            END IF;
+        ELSIF r.relname='analysis_execution_requests' THEN
+            IF NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT')
+               OR NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'INSERT')
+               OR NOT has_column_privilege('edge_analysis_v2_writer',r.oid,'accepted_at','UPDATE')
+               OR has_table_privilege('edge_analysis_v2_writer',r.oid,'UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') THEN
+                RAISE EXCEPTION 'Wrong admission grants';
+            END IF;
+        ELSIF r.relname='analysis_execution_slots' THEN
+            IF NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT')
+               OR NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'INSERT')
+               OR NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'DELETE')
+               OR NOT has_column_privilege('edge_analysis_v2_writer',r.oid,'task_arns','UPDATE')
+               OR has_table_privilege('edge_analysis_v2_writer',r.oid,'UPDATE,TRUNCATE,TRIGGER,REFERENCES') THEN
+                RAISE EXCEPTION 'Wrong execution control grants';
             END IF;
         ELSIF has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') THEN
             RAISE EXCEPTION 'Unexpected source access: %',r.relname;

@@ -1,6 +1,8 @@
 """Small deterministic helpers for fixture-bound calculations."""
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Context, Decimal
+
+from edge_analysis_v2.tools.execution import ToolInputError
 
 
 def instant(value):
@@ -9,6 +11,19 @@ def instant(value):
     if value.utcoffset() is None:
         raise ValueError("timestamp requires offset")
     return value.astimezone(timezone(timedelta(hours=9)))
+
+
+def observed(value):
+    """Read an observation instant, or a date-only observation as the end of that Korean day.
+
+    Date-only observations (``YYYY-MM-DD``) come from sources that publish no time, such as
+    daily closes and monthly indicators (ALPHA-1130). They count as observed once that Korean
+    day has ended; no clock time is fabricated and the original string is kept for display.
+    """
+    if isinstance(value, str) and len(value) == 10:
+        day = date.fromisoformat(value)
+        return datetime.combine(day, datetime.max.time(), tzinfo=timezone(timedelta(hours=9)))
+    return instant(value)
 
 
 def decimal(value):
@@ -33,6 +48,9 @@ def available(rows, cutoff, time_key=None):
             and (time_key is None or instant(r[time_key]) <= cutoff)]
 
 
+MIN_WEIGHT_COVERAGE = Decimal('0.7')
+
+
 def holdings(fixture, day=None, *, require_complete=True):
     """Read one complete equity portfolio without renormalizing missing weights."""
     cutoff = instant(fixture["context"]["analysis_at"])
@@ -44,20 +62,35 @@ def holdings(fixture, day=None, *, require_complete=True):
     latest = max((r["as_of_date"] for r in rows), default=None)
     rows = [r for r in rows if r["as_of_date"] == latest]
     weights = [decimal(r["weight"]) for r in rows]
-    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or not 0 < sum(weights) <= 1:
-        raise ValueError("complete positive equity weights summing to one required")
+    # Weights are stored as doubles, which carry 15 significant decimal digits, so the sum is judged at 15 digits:
+    # a snapshot whose equities are exactly 100.00% must not read as 1.0000000000000000362 because 27.94% was
+    # stored as 0.27940000000000004 (ALPHA-1162). This is deliberate: a sum that differs from one only below
+    # that precision (1.000000000000004) is not told apart from one. Sources publish weights to four decimals.
+    total = Context(prec=15).plus(sum(weights))
     statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
-    complete = sum(weights) == 1
+    # Equities above one are explained only by source rows that were not loaded: a negative cash row leaves the
+    # loaded equities above 100% (ALPHA-1162). With every source row loaded the excess has no explanation and is
+    # rejected; without an ingestion status (fixtures) it cannot be explained either.
+    unloaded = len(statuses) == 1 and statuses[0]['input_count'] > len(rows)
+    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or total <= 0 or total > 1 and not unloaded:
+        raise ValueError("complete positive equity weights summing to one required")
+    complete = total == 1
     if statuses:
         if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
             raise ValueError('holdings status does not match observed rows')
         complete = complete and statuses[0]['input_count'] == len(rows)
-    if not complete and (require_complete or not statuses):
-        raise ValueError('complete positive equity weights summing to one required')
-    result = {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows]}
-    if statuses:
-        result.update(coverage='full' if complete else 'partial', observed_weight_ratio=number(sum(weights)))
-    return result
+    # A whole-ETF weighted figure is allowed once the observed weights cover MIN_WEIGHT_COVERAGE of the fund.
+    # Weights are never renormalized, so every such figure must be shown with observed_weight_ratio.
+    if require_complete and total < MIN_WEIGHT_COVERAGE:
+        # ToolInputError text is what the agent is shown; a plain ValueError reaches it as a generic failure.
+        raise ToolInputError('INSUFFICIENT_HOLDINGS_COVERAGE: observed constituent weights below the 70% coverage required for a whole-ETF figure')
+    return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows],
+            "coverage": 'full' if complete else 'partial', "observed_weight_ratio": number(total)}
+
+
+def covers_whole_etf(portfolio):
+    """Whether observed weights are enough to state a whole-ETF weighted figure."""
+    return decimal(portfolio['observed_weight_ratio']) >= MIN_WEIGHT_COVERAGE
 
 
 def table(rows, columns):

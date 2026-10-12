@@ -1,0 +1,575 @@
+formatVersion: 2
+valueTypes:
+- id: EventFamilyCode
+  values:
+  - code: COMPANY
+    description: Actions, plans or results concerning identified companies.
+  - code: EXOGENOUS
+    description: External shocks such as accidents, disasters, conflict or disease
+      outbreaks.
+  - code: INDUSTRY
+    description: Changes in industry demand, supply, prices or technical standards.
+  - code: MACRO
+    description: Economy-wide monetary, exchange-rate, credit or indicator events.
+  - code: MARKET_INFO
+    description: Analyst estimates, recommendations and credit assessments communicated
+      to the market.
+  - code: MARKET_STRUCTURE
+    description: Changes to trading operations, index membership or market organization.
+  - code: POLICY
+    description: Government, regulatory or judicial actions and their reported stages.
+- id: EventPredicateCode
+  values:
+  - code: ACQUIRE
+    description: Acquire an ownership interest, asset or business identified in the
+      event.
+  - code: ADOPT
+    description: Adopt the identified technical standard.
+  - code: APPOINT
+    description: Appoint a person to the identified position.
+  - code: APPROVE
+    description: Grant approval for the identified product or certification request.
+  - code: ASSIGN
+    description: Assign a credit rating to the identified rated entity.
+  - code: BUY
+    description: Buy the securities identified in the reported insider transaction.
+  - code: CARVE_OUT
+    description: Separate part of a business through a carve-out transaction.
+  - code: CERTIFY
+    description: Certify that the identified product meets the stated requirements.
+  - code: CHANGE
+    description: Change the reported commodity price; direction is specified by the
+      source values.
+  - code: CHARGE
+    description: Bring formal regulatory or legal charges against the identified party.
+  - code: CLEAR
+    description: Clear the identified party of the investigated regulatory allegation.
+  - code: COLLAPSE
+    description: End the reported conflict-resolution agreement or negotiations without
+      continuation.
+  - code: CONSOLIDATE
+    description: Combine outstanding shares into fewer shares through a reverse split.
+  - code: CUT
+    description: Cut the workforce or positions identified in the event.
+  - code: DECLARE
+    description: Declare a dividend decision for the identified issuer.
+  - code: DISMISS
+    description: Dismiss a person from a position, or dismiss a legal proceeding,
+      according to the event category.
+  - code: DISSOLVE
+    description: Dissolve the identified partnership or alliance.
+  - code: EASE
+    description: Reduce the scope or severity of the identified export restrictions.
+  - code: ENFORCE
+    description: Apply or enforce the identified rule.
+  - code: ENTER
+    description: Enter the identified commercial market.
+  - code: ENTER_INTO
+    description: Enter into the identified supply or commercial contract.
+  - code: ESCALATE
+    description: Increase the intensity or extent of the identified conflict.
+  - code: EXCLUDE
+    description: Remove the identified constituent from an index.
+  - code: EXIT
+    description: Exit an investment or commercial market identified in the event.
+  - code: EXPAND
+    description: Increase the scope or size of the action, arrangement or capacity
+      identified in the event.
+  - code: FALL
+    description: Report a decrease in the observed demand, inventory or price.
+  - code: FILE
+    description: Submit an offering filing or initiate a legal filing, according to
+      the event category.
+  - code: FINE
+    description: Impose a monetary penalty on the identified party.
+  - code: FORM
+    description: Establish the identified partnership or alliance.
+  - code: HALT
+    description: Suspend trading in the identified security or market.
+  - code: IMPOSE
+    description: Introduce the identified sanction, tariff or restriction.
+  - code: INCLUDE
+    description: Add the identified constituent to an index.
+  - code: INCREASE
+    description: Increase the reported ownership interest in the identified target.
+  - code: INITIATE
+    description: Begin analyst coverage with the reported recommendation or target
+      price.
+  - code: INJECT
+    description: Provide liquidity through the identified authority or program.
+  - code: INTERVENE
+    description: Intervene in the identified foreign-exchange market.
+  - code: INTRODUCE
+    description: Introduce the identified product or service.
+  - code: INVESTIGATE
+    description: Investigate the identified party or conduct under a regulatory proceeding.
+  - code: ISSUE
+    description: Issue securities, guidance or a rule, according to the event category.
+  - code: LAUNCH
+    description: Launch the identified product or service at the reported development
+      or commercial stage.
+  - code: LIFT
+    description: Lift the identified sanction.
+  - code: LIST
+    description: List the identified securities on an exchange.
+  - code: LOWER
+    description: Set a lower dividend, price, forecast, rating, tariff or interest
+      rate, according to the event category.
+  - code: MAINTAIN
+    description: Keep the reported dividend, forecast, rating, target price or policy
+      level unchanged.
+  - code: MERGE
+    description: Combine the identified companies or businesses through a merger.
+  - code: NOMINATE
+    description: Nominate a person for the identified position.
+  - code: OCCUR
+    description: Report that the identified disruption, shock or outbreak occurred.
+  - code: OMIT
+    description: Decide not to pay the dividend addressed by the announcement.
+  - code: OVERTURN
+    description: Reverse the identified earlier court ruling.
+  - code: PRICE
+    description: Set the offering price or pricing terms of the identified securities.
+  - code: PURCHASE
+    description: Purchase the identified business, assets or ownership interest.
+  - code: RAISE
+    description: Set a higher dividend, price, forecast, rating, tariff or interest
+      rate, according to the event category.
+  - code: REACH
+    description: Reach the identified conflict-resolution agreement.
+  - code: RECORD
+    description: Report the financial result recorded for the stated reporting period.
+  - code: REDUCE
+    description: Reduce the identified workforce, capacity, liquidity or ownership
+      interest.
+  - code: REJECT
+    description: Reject the identified product approval or certification request.
+  - code: RELEASE
+    description: Publish the identified results or data, or release a product, according
+      to the event category.
+  - code: REMOVE
+    description: Remove the identified tariff.
+  - code: REPEAL
+    description: Repeal the identified rule or regulation.
+  - code: REPLACE
+    description: Replace the identified executive or technical standard.
+  - code: REPORT
+    description: Report the identified result, observation or occurrence.
+  - code: REPURCHASE
+    description: Repurchase the issuer's own shares.
+  - code: RESIGN
+    description: Leave the identified position through resignation.
+  - code: RESTRUCTURE
+    description: Reorganize the workforce addressed by the event.
+  - code: RESUME
+    description: Resume the identified trading, production or service operation after
+      an interruption.
+  - code: REVISE
+    description: Revise the identified forecast, rule or technical standard.
+  - code: RISE
+    description: Report an increase in the observed demand, inventory or price.
+  - code: RULE
+    description: Issue a judicial decision on the identified legal matter.
+  - code: SELL
+    description: Sell the securities identified in the reported insider transaction.
+  - code: SET
+    description: Set the identified commercial price, exchange-rate policy level or
+      policy interest rate.
+  - code: SETTLE
+    description: Resolve the identified legal or regulatory dispute through a settlement.
+  - code: SIGN
+    description: Sign the identified commercial contract or conflict-resolution agreement.
+  - code: SPIN_OFF
+    description: Separate the identified business from its parent through a spinoff.
+  - code: SPLIT
+    description: Split shares or separate a business, according to the event category.
+  - code: SPREAD
+    description: Report a wider geographic or population extent of the identified
+      outbreak.
+  - code: STRIKE
+    description: Report that the identified disaster affected the stated location.
+  - code: SUSPEND
+    description: Temporarily stop the identified operation, production or service.
+  - code: TAKE_OVER
+    description: Take control of the identified company or business.
+  - code: UNVEIL
+    description: Publicly reveal the identified product or product concept.
+  - code: UPHOLD
+    description: Confirm the identified earlier court ruling.
+  - code: WITHDRAW
+    description: Withdraw an offering, forecast, nomination or rating, or remove liquidity,
+      according to the event category.
+- id: EventRoleCode
+  values:
+  - code: ACQUIRER
+    description: Party acquiring control of the identified target or business.
+  - code: ACTUAL_VALUE
+    description: Reported actual value of the event's metric, with its unit and period.
+  - code: AMOUNT
+    description: Amount reported for the event; its unit and financial meaning depend
+      on the event category.
+  - code: ANALYST_FIRM
+    description: Research firm responsible for the reported analyst assessment.
+  - code: ANNOUNCED_DATE
+    description: Date the action or plan was announced, distinct from when it takes
+      effect.
+  - code: AUTHORITY
+    description: Public or regulatory body taking the reported action.
+  - code: BUYBACK_VALUE
+    description: Money allocated to or spent on a share repurchase, according to the
+      source's basis.
+  - code: CAPACITY_SHARE
+    description: Share of a stated capacity total, expressed on the source's denominator
+      and percentage scale.
+  - code: CAPACITY_VALUE
+    description: Production capacity expressed in the source's physical unit and time
+      basis.
+  - code: CENTRAL_BANK
+    description: Central bank responsible for the reported monetary action.
+  - code: CHANGE_VALUE
+    description: Reported change in a metric, distinct from its resulting level.
+  - code: COMMODITY
+    description: Commodity whose price, supply or demand is discussed.
+  - code: CONSENSUS_VALUE
+    description: Market consensus estimate for the stated metric and period, from
+      the identified source and vintage.
+  - code: CONTRACT_DURATION
+    description: Length of the contract period in the stated duration unit, between
+      the reported start and end dates when available.
+  - code: CONTRACT_OBJECT
+    description: Goods, services or work that the identified contract covers.
+  - code: CONTRACT_VALUE
+    description: Contract amount in the stated currency, distinguishing total from
+      annual value.
+  - code: COURT
+    description: Court responsible for the reported proceeding or ruling.
+  - code: CURRENCY_PAIR
+    description: Two currencies defining the quoted exchange rate; their order determines
+      its direction.
+  - code: CUSTOMER
+    description: Party purchasing or receiving the contracted goods or services.
+  - code: DEAL_VALUE
+    description: Reported consideration or value of the identified transaction, with
+      currency and scope.
+  - code: DEBT_INSTRUMENT
+    description: Debt security or borrowing obligation discussed in the event.
+  - code: DEFENDANT
+    description: Party against whom the identified legal claim or proceeding is brought.
+  - code: DRIVER_HINT
+    description: Source-stated possible explanation for a change; it is not verified
+      causation.
+  - code: DURATION
+    description: Reported length of an event or arrangement, in a stated unit.
+  - code: EFFECTIVE_DATE
+    description: Date on which the reported action or terms take legal or operational
+      effect.
+  - code: ESTIMATE_CHANGE
+    description: Reported revision to an estimate, preserving the forecast metric
+      and period.
+  - code: EXCHANGE
+    description: Trading venue involved in the reported listing or market operation.
+  - code: EXEMPTION
+    description: Exception or exclusion from the identified policy or rule.
+  - code: FACILITY
+    description: Plant, site or operational facility involved in the event.
+  - code: GEOGRAPHY
+    description: Geographic market or area to which the event applies.
+  - code: GUIDANCE_RANGE
+    description: Company-provided forecast range for a stated metric and reporting
+      period.
+  - code: HAZARD
+    description: Identified hazard causing or associated with a reported external
+      shock.
+  - code: INDEX
+    description: Named market index whose composition or status is affected.
+  - code: INDICATOR
+    description: Economic or market statistic being reported or revised.
+  - code: INDUSTRY
+    description: Industry or sector to which the reported development applies.
+  - code: INTEREST_RATE
+    description: Interest rate discussed in the event, with its product, term and
+      quotation basis.
+  - code: INVESTOR
+    description: Party investing capital or acquiring the reported ownership interest.
+  - code: ISSUER
+    description: Company or issuing entity whose securities or corporate action the
+      event concerns.
+  - code: LEGAL_ISSUE
+    description: Legal matter being investigated, disputed or decided.
+  - code: LOCATION
+    description: Physical or geographic place where the reported event occurs.
+  - code: MARKET
+    description: Market affected by the reported trading or commercial action.
+  - code: MATURITY_DATE
+    description: Date on which the identified obligation is scheduled to mature.
+  - code: MEMBER
+    description: Constituent added to or removed from the identified index or group.
+  - code: MERGING_ENTITY
+    description: One of the parties combining in a merger; this role alone does not
+      identify an acquirer.
+  - code: METRIC
+    description: Financial or operating measure to which the reported values refer.
+  - code: NEW_VALUE
+    description: Value after the reported change, in the same stated measurement context.
+  - code: OLD_VALUE
+    description: Value before the reported change, in the same stated measurement
+      context.
+  - code: OPERATOR
+    description: Entity operating the service or facility affected by the event.
+  - code: OUTLOOK
+    description: Forward-looking assessment associated with a rating or other reported
+      judgment.
+  - code: OWNERSHIP_RATIO
+    description: Reported ownership interest in the identified target, with its percentage
+      scale and effective date.
+  - code: PARENT
+    description: Company from which the identified business or subsidiary is separated.
+  - code: PARTNER
+    description: Party participating in a collaboration or alliance, rather than a
+      buyer-supplier role.
+  - code: PARTNER_2
+    description: Another collaboration party in the legacy second-partner slot; it
+      does not imply a different economic role.
+  - code: PATHOGEN
+    description: Disease-causing organism or disease identified in the outbreak report.
+  - code: PAYMENT_DATE
+    description: Scheduled or actual date of the identified payment, as specified
+      by the source.
+  - code: PENALTY_VALUE
+    description: Monetary penalty amount in the stated currency and reported proposed,
+      imposed or paid status.
+  - code: PERIOD
+    description: Period to which the reported event or metric applies, distinct from
+      publication time.
+  - code: PERSON
+    description: Person involved in the reported event; a name alone does not establish
+      unique identity.
+  - code: PLAINTIFF
+    description: Party bringing the identified legal claim or proceeding.
+  - code: POLICY_RATE
+    description: Named policy interest-rate instrument whose level is being decided.
+  - code: POSITION
+    description: Executive or other organizational position affected by the personnel
+      change.
+  - code: PRICE
+    description: Reported price with its currency, unit, target and observation or
+      estimate basis.
+  - code: PRODUCT
+    description: Product or service directly involved in the event.
+  - code: PRODUCT_FAMILY
+    description: Product line or family associated with the event, broader than an
+      individual product.
+  - code: PRODUCT_OR_SCOPE
+    description: Product category or affected scope of the reported policy or action.
+  - code: PROJECT
+    description: Named project or initiative covered by the reported arrangement.
+  - code: QUANTITY
+    description: Physical count or volume in a stated unit, not a monetary value.
+  - code: RATE
+    description: Reported rate with its denominator, scale and applicable period.
+  - code: RATED_ENTITY
+    description: Issuer, company or other entity receiving the reported rating.
+  - code: RATING_AGENCY
+    description: Organization issuing the reported credit assessment.
+  - code: RATIONALE
+    description: Reason stated by the source for its assessment or decision.
+  - code: REASON
+    description: Source-stated reason for the reported action; it does not independently
+      prove causation.
+  - code: RECORD_DATE
+    description: Date used to determine eligible holders for the identified corporate
+      action.
+  - code: REPORTING_PERIOD
+    description: Fiscal or operating period covered by the reported result or forecast.
+  - code: REPORT_DATE
+    description: Date associated with publication of the report, distinct from its
+      reporting period.
+  - code: RULE
+    description: Regulation, legal requirement or policy provision being introduced,
+      changed or applied.
+  - code: SELLER
+    description: Party disposing of the assets or ownership interest in the identified
+      transaction.
+  - code: SERVICE
+    description: Service introduced, operated or disrupted in the event.
+  - code: SHAREHOLDER
+    description: Holder of equity affected by the corporate action or ownership event.
+  - code: SHARES
+    description: Number of shares involved, retaining the class and quantity basis.
+  - code: SPUNOFF_UNIT
+    description: Business or subsidiary separated from the parent company.
+  - code: STANDARD
+    description: Technical standard being adopted, revised or replaced.
+  - code: SUPPLIER
+    description: Party providing the contracted goods, services or work.
+  - code: TARGET
+    description: Entity or scope toward which the event's action is directed, such
+      as the subject of a sanction or policy.
+  - code: TARGET_COMPANY
+    description: Company or business whose ownership or control is the subject of
+      the transaction.
+  - code: TECH_NODE
+    description: Technology generation or process specification associated with the
+      product or facility.
+  - code: USE_OF_PROCEEDS
+    description: Purpose stated for funds raised by the identified financing.
+- id: LifecycleModelCode
+  values:
+  - code: CAPITAL_ACTION_LIFECYCLE
+    description: 'Capital action stages: announcement, filing, pricing and effectiveness;
+      withdrawal is a terminal state.'
+  - code: CAPITAL_ACTION_NO_LIFECYCLE
+    description: Capital action category with no configured ordered stages or terminal
+      states.
+  - code: COMMERCIAL_LIFECYCLE
+    description: 'Commercial market action stages: announcement and effectiveness;
+      exit is a terminal state.'
+  - code: CONFLICT_RESOLUTION_LIFECYCLE
+    description: 'Conflict-resolution stages: proposal, agreement, signature and effectiveness;
+      collapse is a terminal state.'
+  - code: DATA_RELEASE_NO_LIFECYCLE
+    description: Data release category with no configured ordered stages or terminal
+      states.
+  - code: DEAL_LIFECYCLE
+    description: 'Transaction stages: rumor, proposal, preferred bidder, MOU or LOI,
+      definitive agreement, effectiveness and closing; cancellation is a terminal
+      state.'
+  - code: EXOGENOUS_SHOCK_NO_LIFECYCLE
+    description: External-shock category with no configured ordered stages or terminal
+      states.
+  - code: GOVERNANCE_LIFECYCLE
+    description: 'Executive change stages: nomination, appointment and effectiveness;
+      withdrawal is a terminal state.'
+  - code: INDEX_REBALANCE_LIFECYCLE
+    description: 'Index membership stages: announcement and effectiveness; reversal
+      is a terminal state.'
+  - code: LEGAL_REGULATORY_LIFECYCLE
+    description: 'Legal or regulatory stages: investigation, formal charges, ruling
+      and resolution; dismissal is a terminal state.'
+  - code: MARKET_OPERATIONS_LIFECYCLE
+    description: 'Market disruption stages: occurrence, ongoing disruption and resolution.'
+  - code: MARKET_STRUCTURE_LIFECYCLE
+    description: 'Market structure change stages: announcement and effectiveness;
+      reversal is a terminal state.'
+  - code: OFFERING_LIFECYCLE
+    description: 'Offering stages: announcement, execution and completion; cancellation
+      is a terminal state.'
+  - code: OPERATIONS_LIFECYCLE
+    description: 'Operational disruption stages: occurrence, ongoing disruption and
+      resolution.'
+  - code: OWNERSHIP_DISCLOSURE_NO_LIFECYCLE
+    description: Ownership disclosure category with no configured ordered stages or
+      terminal states.
+  - code: POLICY_ACTION_LIFECYCLE
+    description: 'Policy action stages: announcement and effectiveness.'
+  - code: POLICY_LIFECYCLE
+    description: 'Policy stages: proposal, announcement and effectiveness; repeal
+      or lifting is a terminal state.'
+  - code: PRODUCT_TECH_LIFECYCLE
+    description: 'Product stages: concept, prototype demonstration, sampling, customer
+      qualification, mass production and shipping; discontinuation or rejection is
+      a terminal state.'
+  - code: REVISION_NO_LIFECYCLE
+    description: Revision category with no configured ordered stages or terminal states.
+  - code: WORKFORCE_LIFECYCLE
+    description: 'Workforce change stages: announcement and effectiveness.'
+- id: EventStageCode
+  values:
+  - code: AGREED
+    description: The parties have reached the reported agreement.
+  - code: ANNOUNCED
+    description: The action or plan has been publicly announced.
+  - code: APPOINTED
+    description: The person has been appointed to the stated position.
+  - code: CANCELLED
+    description: The identified transaction or offering has been cancelled.
+  - code: CHARGED
+    description: Formal charges have been brought in the proceeding.
+  - code: CLOSED
+    description: The transaction has reached its reported closing.
+  - code: COLLAPSED
+    description: The conflict-resolution process or agreement has collapsed.
+  - code: COMPLETED
+    description: The offering or action has reached its reported completion.
+  - code: CONCEPT
+    description: The product is at the concept stage.
+  - code: CUSTOMER_QUAL
+    description: The product is at customer qualification or validation.
+  - code: DEFINITIVE_SIGNED
+    description: The parties have signed a definitive transaction agreement.
+  - code: DISCONTINUED
+    description: The product or development has been discontinued.
+  - code: DISMISSED
+    description: The proceeding or claim has been dismissed.
+  - code: EFFECTIVE
+    description: The announced action, terms or appointment has taken effect.
+  - code: EXECUTING
+    description: The offering or action is being executed.
+  - code: EXITED
+    description: The party has exited the identified commercial market or arrangement.
+  - code: FILED
+    description: The relevant formal filing has been submitted.
+  - code: INVESTIGATED
+    description: The matter is at the investigation stage.
+  - code: LIFTED
+    description: The identified policy restriction has been lifted.
+  - code: MASS_PRODUCTION
+    description: The product has reached mass production.
+  - code: MOU_LOI
+    description: The parties have reached a memorandum of understanding or letter
+      of intent stage.
+  - code: NOMINATED
+    description: A person has been nominated for the identified position.
+  - code: OCCURRED
+    description: The disruption or operational incident has occurred.
+  - code: ONGOING
+    description: The reported disruption or incident remains in progress.
+  - code: PREFERRED_BIDDER
+    description: A preferred bidder has been selected for the transaction.
+  - code: PRICED
+    description: The offering price or pricing terms have been determined.
+  - code: PROPOSED
+    description: The action or transaction is at the proposal stage.
+  - code: PROTOTYPE_DEMO
+    description: A prototype has reached demonstration.
+  - code: REJECTED
+    description: The product or qualification has been rejected.
+  - code: REPEALED
+    description: The identified policy or rule has been repealed.
+  - code: RESOLVED
+    description: The reported disruption, dispute or proceeding has been resolved.
+  - code: REVERSED
+    description: The announced or effective change has been reversed.
+  - code: RULED
+    description: A ruling has been issued in the proceeding.
+  - code: RUMORED
+    description: A possible transaction is reported as a rumor.
+  - code: SAMPLING
+    description: Product samples are being provided or evaluated.
+  - code: SHIPPING
+    description: The product has reached shipment.
+  - code: SIGNED
+    description: The parties have signed the reported agreement.
+  - code: WITHDRAWN
+    description: The proposal, filing or nomination has been withdrawn.
+- id: EventNoveltyStatus
+  values:
+  - code: CORRECTION
+    description: This account corrects information previously attached to the event
+      thread.
+  - code: DUPLICATE_REBROADCAST
+    description: This account repeats previously reported information without a confirmed
+      new development.
+  - code: FIRST_IN_THREAD
+    description: This is the first account attached to this stored thread, not necessarily
+      the first public report in reality.
+  - code: FOLLOW_UP_STAGE
+    description: This account reports a subsequent stage of the event represented
+      by the thread.
+  - code: UNKNOWN
+    description: The relationship to prior accounts has not been established.
+- id: MissingIdentityPolicy
+  values:
+  - code: EMIT_UNKNOWN_LINK_ONLY
+    description: When required event identity fields are missing, retain the account
+      with an unresolved thread link instead of asserting event identity.

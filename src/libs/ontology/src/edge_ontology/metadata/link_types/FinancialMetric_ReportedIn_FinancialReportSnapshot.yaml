@@ -1,0 +1,43 @@
+id: FinancialMetric_ReportedIn_FinancialReportSnapshot
+source: FinancialMetric
+definition:
+  name: ReportedIn
+  label: ReportedIn
+  description: The report snapshot from which this directly reported financial value
+    was extracted.
+  target: FinancialReportSnapshot
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: codeMapping
+    columns:
+    - corp_code
+    - fiscal_year
+    - fs_basis
+    - raw_run_id
+    periodMapping:
+      Q1: '11013'
+      Q2: '11012'
+      Q3: '11014'
+      Q4: '11011'
+      FY: '11011'
+    acceptance: Only REPORTED values qualify. Match receipt number, company, fiscal
+      year, report type, statement basis, and collection run to exactly one snapshot.
+    sourceFilter:
+      derivation: REPORTED
+  mappingStatus: mappingReview
+  apiName: reportedIn
+  displayName: ReportedIn
+  pluralDisplayName: null
+  inverse:
+    apiName: reportedFinancialMetrics
+    displayName: Reported financial metrics
+    description: Financial measurements associated with this report version.
+    pluralDisplayName: Reported financial metrics
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

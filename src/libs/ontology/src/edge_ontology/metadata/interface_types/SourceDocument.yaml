@@ -1,0 +1,61 @@
+formatVersion: 1
+name: SourceDocument
+displayName: SourceDocument
+description: A news article or disclosure document that provides source material for
+  reported events. A financial-report collection snapshot is not a source document
+  under this contract.
+properties:
+  id:
+    dataType: String
+    nullable: false
+    description: Identifier of the concrete document object; preserve its object type
+      when addressing it.
+  title:
+    dataType: String
+    nullable: true
+    description: Title of the document.
+  publishedAt:
+    dataType: Timestamp
+    nullable: true
+    description: Time the document was published, where known.
+  availableAt:
+    dataType: Timestamp
+    nullable: false
+    description: Time the document is considered available for analysis; distinct
+      from publication time.
+  sourceUri:
+    dataType: String
+    nullable: true
+    description: Address of the original document, where available.
+links:
+  describesEvents:
+    target:
+      kind: object
+      name: SourceEvent
+    cardinality: MANY
+    required: true
+    description: Source-event accounts described by this document. The concrete document
+      type remains available when assessing evidence.
+implementations:
+  NewsArticle:
+    properties:
+      id: id
+      title: title
+      publishedAt: publishedAt
+      availableAt: availableAt
+      sourceUri: sourceUri
+    links:
+      describesEvents:
+        linkType: NewsArticle_DescribesEvent_SourceEvent
+        direction: forward
+  Disclosure:
+    properties:
+      id: id
+      title: title
+      publishedAt: publishedAt
+      availableAt: availableAt
+      sourceUri: sourceUri
+    links:
+      describesEvents:
+        linkType: Disclosure_DescribesEvent_SourceEvent
+        direction: forward

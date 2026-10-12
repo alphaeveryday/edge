@@ -1,0 +1,328 @@
+formatVersion: 2
+name: EventMeasurement
+label: Event measurement
+description: One numeric statement extracted for a source-specific event account.
+  Each measurement retains its original wording, unit and time basis; different measures
+  or conflicting statements remain separate records.
+group: News & events
+primaryKey: id
+identity:
+  columns:
+  - source_event_id
+  - measure_ord
+  encoding: jsonStringArray
+properties:
+  id:
+    label: id
+    description: 'Identity of one reported measurement: source event ID and measurement
+      ordinal, encoded as a JSON string array.'
+    dataType: String
+    nullable: false
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: id
+    displayName: id
+    status: experimental
+  sourceEventId:
+    label: sourceEventId
+    description: ID of the source-specific event account to which this measurement
+      belongs.
+    dataType: String
+    nullable: false
+    sourceDataType: text
+    sourceConstraints:
+      nullable: false
+      primaryKey: &id001
+      - source_event_id
+      - measure_ord
+      foreignKeys:
+      - constraint: fk_event_measure_source_event
+        table: event_measure
+        columns:
+        - source_event_id
+        target_table: source_event
+        target_columns:
+        - source_event_id
+    mappingStatus: ready
+    apiName: sourceEventId
+    displayName: sourceEventId
+    status: experimental
+  measurementOrdinal:
+    label: measurementOrdinal
+    description: Stored ordinal distinguishing measurements within the same source-event
+      account.
+    dataType: Short
+    nullable: false
+    sourceDataType: smallint
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: measurementOrdinal
+    displayName: measurementOrdinal
+    status: experimental
+  metricCode:
+    label: metricCode
+    description: What is measured, such as CONTRACT_VALUE, CONTRACT_DURATION, or CAPEX_VALUE.
+      Interpret it with unit and periodBasis.
+    dataType: String
+    nullable: false
+    sourceDataType: character varying
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: metricCode
+    displayName: metricCode
+    status: experimental
+  reportedText:
+    label: reportedText
+    description: Original text from which the measurement was extracted, including
+      any ranges or approximations.
+    dataType: String
+    nullable: true
+    sourceDataType: text
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: reportedText
+    displayName: reportedText
+    status: experimental
+  value:
+    label: value
+    description: Stored numeric measurement in the accompanying unit, without currency
+      conversion or rescaling. A missing value remains unknown.
+    dataType: Decimal
+    nullable: true
+    sourceDataType: numeric
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: value
+    displayName: value
+    status: experimental
+  unit:
+    label: unit
+    description: Stored unit code, such as KRW, USD, PCT, DAY, or YEARS. PCT denotes
+      a percentage; no implicit conversion is applied.
+    dataType: String
+    nullable: true
+    sourceDataType: character varying
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: unit
+    displayName: unit
+    status: experimental
+  periodBasis:
+    label: periodBasis
+    description: TOTAL means a total amount; ANNUAL means an annual amount; UNKNOWN
+      means the time basis was not resolved. This does not identify a fiscal period.
+    dataType: String
+    nullable: false
+    sourceDataType: character varying
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: periodBasis
+    displayName: periodBasis
+    status: experimental
+  valueSource:
+    label: valueSource
+    description: 'Origin of the stored value: PARSED from text, DART from a disclosure,
+      or UNRESOLVED when numeric interpretation failed.'
+    dataType: String
+    nullable: false
+    sourceDataType: character varying
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: valueSource
+    displayName: valueSource
+    status: experimental
+  parseStatus:
+    label: parseStatus
+    description: Recorded interpretation of the reported text, such as ok, approx_or_range,
+      unit_mismatch, or no_number. A missing status is not proof of accuracy.
+    dataType: String
+    nullable: true
+    sourceDataType: character varying
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: parseStatus
+    displayName: parseStatus
+    status: experimental
+  argumentGroup:
+    label: argumentGroup
+    description: Stored group ordinal relating this measurement to event arguments
+      within the same source account. Missing groups do not establish which participant
+      a value describes.
+    dataType: Short
+    nullable: true
+    sourceDataType: smallint
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: argumentGroup
+    displayName: argumentGroup
+    status: experimental
+  receiptNumber:
+    label: receiptNumber
+    description: DART receipt number carried by the measurement, when present.
+    dataType: String
+    nullable: true
+    sourceDataType: character varying
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: receiptNumber
+    displayName: receiptNumber
+    status: experimental
+  availableAt:
+    label: availableAt
+    description: Availability time of the owning source-event account. The source
+      does not retain a separate measurement availability history.
+    dataType: Timestamp
+    nullable: false
+    sourceDataType: timestamp with time zone
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: availableAt
+    status: experimental
+  displayTitle:
+    label: displayTitle
+    description: Measurement code, reported text and event date, displayed together
+      without changing the stored identity.
+    dataType: String
+    nullable: false
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: displayTitle
+    status: experimental
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: event_measure
+  joins: []
+  filters: []
+  properties:
+    id:
+      kind: view_column
+      schema: ontology_view
+      table: event_measurement
+      column: id
+      sqlFile: sql/views/event_measurement.sql
+      inputs:
+      - schema: public
+        table: event_measure
+        column: source_event_id
+      - schema: public
+        table: event_measure
+        column: measure_ord
+    sourceEventId:
+      alias: base
+      table: event_measure
+      column: source_event_id
+    measurementOrdinal:
+      alias: base
+      table: event_measure
+      column: measure_ord
+    metricCode:
+      alias: base
+      table: event_measure
+      column: role_code
+    reportedText:
+      alias: base
+      table: event_measure
+      column: surface
+    value:
+      alias: base
+      table: event_measure
+      column: value
+    unit:
+      alias: base
+      table: event_measure
+      column: unit
+    periodBasis:
+      alias: base
+      table: event_measure
+      column: basis
+    valueSource:
+      alias: base
+      table: event_measure
+      column: value_source
+    parseStatus:
+      alias: base
+      table: event_measure
+      column: parse_flag
+    argumentGroup:
+      alias: base
+      table: event_measure
+      column: group_ord
+    receiptNumber:
+      alias: base
+      table: event_measure
+      column: dart_rcept_no
+    availableAt:
+      kind: view_column
+      schema: ontology_view
+      table: event_measurement
+      column: available_at
+      sqlFile: sql/views/event_measurement.sql
+      inputs:
+      - schema: public
+        table: source_event
+        column: available_at
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: event_measurement
+      column: display_title
+      sqlFile: sql/views/event_measurement.sql
+      inputs:
+      - schema: public
+        table: event_measure
+        column: role_code
+      - schema: public
+        table: event_measure
+        column: surface
+      - schema: public
+        table: source_event
+        column: event_date
+sourceConstraints: {}
+dataIssues:
+- Measurement availability is inherited from its source event; historical extraction
+  revisions are not retained.
+- A measurement has no assertion-level foreign key. Do not combine roles from different
+  evidence versions.
+apiName: EventMeasurement
+displayName: Event measurement
+pluralDisplayName: Event measurements
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- EventMeasurement_ForEvent_SourceEvent

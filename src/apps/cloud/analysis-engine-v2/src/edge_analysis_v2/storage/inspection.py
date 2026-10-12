@@ -100,3 +100,63 @@ def read_analysis_evidence(connection: Connection, analysis_kind: str,
     return {"storage": "postgresql", "analysis": _row_json(analysis),
             "tool_runs": [_row_json(record) for record in records],
             "definitions": definitions}
+
+
+def read_published_movement_evidence(connection: Connection, analysis_id: str) -> dict | None:
+    """Read only the evidence referenced by the published movement selection.
+
+    Args:
+        connection: Caller-owned idle autocommit result database connection.
+        analysis_id: Publication whose selected items the administrator reviews.
+
+    Returns:
+        Analysis, ordered item references, and distinct stored tool executions
+        with their definitions. Returns None when the analysis does not exist.
+
+    Raises:
+        ValueError: Active transaction, unpublished analysis, or broken reference.
+        psycopg.Error: Database read failed; no partial result is returned.
+    """
+    if (not connection.autocommit
+            or connection.info.transaction_status != TransactionStatus.IDLE):
+        raise ValueError('Evidence reader requires an idle autocommit connection')
+    with connection.transaction(), connection.cursor(row_factory=dict_row) as cur:
+        cur.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        cur.execute('SELECT * FROM movement_analyses WHERE analysis_id=%s', (analysis_id,))
+        analysis = cur.fetchone()
+        if analysis is None:
+            return None
+        if analysis['status'] != 'completed' or analysis['published_at'] is None:
+            raise ValueError('Published movement analysis required')
+        selected = analysis['selected_item_ids']
+        cur.execute('''SELECT i.item_id, i.tool_run_ids
+            FROM movement_items i JOIN movement_analyses a USING (analysis_id)
+            WHERE i.item_id=ANY(%s) AND a.status='completed'
+              AND a.etf_code=%s AND a.data_source=%s AND a.data_source<>'unknown'
+              AND a.analysis_at<=%s AND a.trading_date=%s''',
+                    (selected, analysis['etf_code'], analysis['data_source'],
+                     analysis['analysis_at'], analysis['trading_date']))
+        items_by_id = {row['item_id']: row for row in cur.fetchall()}
+        if set(items_by_id) != set(selected):
+            raise ValueError('Selected item is missing, foreign, future, or unpublished')
+        items = [items_by_id[identity] for identity in selected]
+        if any(not item['tool_run_ids'] for item in items):
+            raise ValueError('Selected item has no evidence references')
+        references = list(dict.fromkeys(ref for item in items for ref in item['tool_run_ids']))
+        cur.execute('''SELECT r.*, d.function_name, d.version, d.description,
+                             d.formula_latex, d.source_names
+            FROM tool_runs r JOIN tool_definitions d USING (tool_id)
+            LEFT JOIN movement_analyses m ON r.movement_analysis_id=m.analysis_id
+            LEFT JOIN outlook_analyses o ON r.outlook_analysis_id=o.analysis_id
+            WHERE r.tool_run_id=ANY(%s) AND r.status='completed'
+              AND COALESCE(m.status,o.status)='completed'
+              AND COALESCE(m.etf_code,o.etf_code)=%s
+              AND COALESCE(m.data_source,o.data_source)=%s
+              AND COALESCE(m.data_source,o.data_source)<>'unknown'
+              AND COALESCE(m.analysis_at,o.analysis_at)<=%s''',
+                    (references, analysis['etf_code'], analysis['data_source'], analysis['analysis_at']))
+        runs_by_id = {row['tool_run_id']: row for row in cur.fetchall()}
+        if set(runs_by_id) != set(references):
+            raise ValueError('Selected evidence is missing, foreign, future, or incomplete')
+    return {'analysis': _row_json(analysis), 'items': items,
+            'tool_runs': [_row_json(runs_by_id[identity]) for identity in references]}

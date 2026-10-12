@@ -1,0 +1,29 @@
+id: ETFHolding_ForETF_ETF
+source: ETFHolding
+definition:
+  name: ForETF
+  label: ForETF
+  description: The ETF whose portfolio contains this holding on the recorded trading
+    date.
+  target: ETF
+  sourceProperty: etfInstrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forETF
+  displayName: ForETF
+  pluralDisplayName: null
+  inverse:
+    apiName: holdings
+    displayName: Holdings
+    description: Dated constituent positions in this ETF portfolio.
+    pluralDisplayName: Holdings
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: ETFHolding
+    foreignKeyProperty: etfInstrumentId
+    referencedObjectType: ETF

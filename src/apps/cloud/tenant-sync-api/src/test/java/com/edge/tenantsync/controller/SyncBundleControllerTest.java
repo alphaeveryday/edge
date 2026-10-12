@@ -78,7 +78,7 @@ class SyncBundleControllerTest {
 	@BeforeEach
 	void setUp() {
 		SyncBundleService service = new SyncBundleService(
-				new BundleEntryStore(new FakeTenantDeliveryRepository()));
+				new BundleEntryStore(new FakeTenantDeliveryRepository(), new com.edge.tenantsync.repository.MovementDeliveryStore(null)));
 		mvc = MockMvcBuilders
 				.standaloneSetup(new SyncBundleController(service, new TenantResolver()))
 				.setControllerAdvice(new ExceptionAdvice())

@@ -14,7 +14,7 @@
    비워 둔다 — 어휘(4키)는 지켜서 `build_window_manifest` 의 완전분할 검증과 갈리지 않는다.
    ⚠️ 그래서 `Candle.traded`(volume > 0)를 이 dataset 에서 "거래 있었나"로 읽지 마라.
    레코드에는 싣되(관측한 값이다) 유동성으로 해석할 소비자를 붙이면 안 된다.
-2. **기대 집합이 universe 가 아니라 config 다.** 지수 45종은 ETF 명부에도 구성종목에도
+2. **기대 집합이 universe 가 아니라 config 다.** 지수 47종은 ETF 명부에도 구성종목에도
    없어 universe.json 이 모른다 — 무엇을 기대할지는 호출자(Worker)가
    `request.unit_ids` 로 정하고, 그 출처는 `[minute_sector_index.index_map]` 이다.
 3. **1콜이 그 거래일 전체(최근 100봉)다.** 한 window 를 채우는 데 필요한 건 그중 한

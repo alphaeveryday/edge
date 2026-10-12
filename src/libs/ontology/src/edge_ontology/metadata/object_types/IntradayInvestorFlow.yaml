@@ -1,0 +1,401 @@
+formatVersion: 2
+name: IntradayInvestorFlow
+label: Intraday investor flow
+description: Cumulative intraday estimates of foreign and institutional net purchases
+  for one equity, trading date, and provider reporting slot, in shares.
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns:
+  - instrument_id
+  - trade_date
+  - asof_slot
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of one equity, trading date, and provider reporting-slot
+      estimate.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - trade_date
+      - asof_slot
+      foreignKeys:
+      - constraint: fk_investor_flow_intraday_instrument
+        table: investor_flow_intraday
+        columns:
+        - instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  instrumentId:
+    label: Instrument id
+    description: Internal identifier of the equity whose intraday investor estimates
+      are recorded.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - trade_date
+      - asof_slot
+      foreignKeys:
+      - constraint: fk_investor_flow_intraday_instrument
+        table: investor_flow_intraday
+        columns:
+        - instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: instrumentId
+    displayName: Instrument id
+    status: experimental
+    dataType: String
+  tradeDate:
+    label: Trade date
+    description: Trading date to which the recorded market data applies; distinct
+      from the time it was collected.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - trade_date
+      - asof_slot
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: tradeDate
+    displayName: Trade date
+    status: experimental
+    dataType: Date
+  reportingSlotCode:
+    label: Reporting slot code
+    description: KIS input-slot code identifying a reported intraday estimate within
+      the trading day.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - instrument_id
+      - trade_date
+      - asof_slot
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: reportingSlotCode
+    displayName: Reporting slot code
+    status: experimental
+    dataType: String
+  foreignNetPurchaseQuantityEstimate:
+    label: Estimated foreign net purchases
+    description: Cumulative foreign-investor purchases minus sales reported up to
+      this KIS reporting slot, in shares. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: foreignNetPurchaseQuantityEstimate
+    displayName: Estimated foreign net purchases
+    status: experimental
+    dataType: Long
+  institutionalNetPurchaseQuantityEstimate:
+    label: Estimated institutional net purchases
+    description: Cumulative institutional-investor purchases minus sales reported
+      up to this KIS reporting slot, in shares.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: institutionalNetPurchaseQuantityEstimate
+    displayName: Estimated institutional net purchases
+    status: experimental
+    dataType: Long
+  foreignAndInstitutionalNetPurchaseQuantityEstimate:
+    label: Estimated foreign and institutional net purchases
+    description: KIS-reported combined cumulative net-purchase quantity for foreign
+      and institutional investors at this reporting slot, in shares.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: foreignAndInstitutionalNetPurchaseQuantityEstimate
+    displayName: Estimated foreign and institutional net purchases
+    status: experimental
+    dataType: Long
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  estimateAsOf:
+    label: Estimate as of
+    description: Time through which the provider has included purchases and sales
+      in this estimate.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The source stores a reporting-slot code but no observed estimate
+      cutoff timestamp. Scheduled update times are not actual observation timestamps.
+    apiName: estimateAsOf
+    displayName: Estimate as of
+    status: experimental
+    dataType: Timestamp
+  securityName:
+    label: Security name
+    description: Current stored name of the security identified by instrument_id;
+      not its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityName
+    displayName: Security name
+    status: experimental
+    dataType: String
+  securityTicker:
+    label: Security ticker
+    description: Current ticker of the security; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityTicker
+    displayName: Security ticker
+    status: experimental
+    dataType: String
+  securityMarketCode:
+    label: Security market code
+    description: Current market code of the security, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityMarketCode
+    displayName: Security market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: investor_flow_intraday
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: investor_flow_intraday
+      column: instrument_id
+    instrumentId:
+      alias: base
+      table: investor_flow_intraday
+      column: instrument_id
+    tradeDate:
+      alias: base
+      table: investor_flow_intraday
+      column: trade_date
+    reportingSlotCode:
+      alias: base
+      table: investor_flow_intraday
+      column: asof_slot
+    foreignNetPurchaseQuantityEstimate:
+      alias: base
+      table: investor_flow_intraday
+      column: net_qty_foreign_est
+    institutionalNetPurchaseQuantityEstimate:
+      alias: base
+      table: investor_flow_intraday
+      column: net_qty_institution_est
+    foreignAndInstitutionalNetPurchaseQuantityEstimate:
+      alias: base
+      table: investor_flow_intraday
+      column: net_qty_total_est
+    availableAt:
+      alias: base
+      table: investor_flow_intraday
+      column: available_at
+    estimateAsOf:
+      kind: unmapped
+      reason: The source stores a reporting-slot code but no observed estimate cutoff
+        timestamp. Scheduled update times are not actual observation timestamps.
+    securityName:
+      kind: view_column
+      schema: ontology_view
+      table: intraday_investor_flow
+      column: security_name
+      sqlFile: sql/views/intraday_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_intraday
+        column: asof_slot
+      - schema: public
+        table: investor_flow_intraday
+        column: instrument_id
+      - schema: public
+        table: investor_flow_intraday
+        column: trade_date
+    securityTicker:
+      kind: view_column
+      schema: ontology_view
+      table: intraday_investor_flow
+      column: security_ticker
+      sqlFile: sql/views/intraday_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_intraday
+        column: asof_slot
+      - schema: public
+        table: investor_flow_intraday
+        column: instrument_id
+      - schema: public
+        table: investor_flow_intraday
+        column: trade_date
+    securityMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: intraday_investor_flow
+      column: security_market_code
+      sqlFile: sql/views/intraday_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_intraday
+        column: asof_slot
+      - schema: public
+        table: investor_flow_intraday
+        column: instrument_id
+      - schema: public
+        table: investor_flow_intraday
+        column: trade_date
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: intraday_investor_flow
+      column: display_title
+      sqlFile: sql/views/intraday_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_intraday
+        column: asof_slot
+      - schema: public
+        table: investor_flow_intraday
+        column: instrument_id
+      - schema: public
+        table: investor_flow_intraday
+        column: trade_date
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - instrument_id
+  - trade_date
+  - asof_slot
+  tableConstraints:
+  - name: fk_investor_flow_intraday_instrument
+    kind: f
+    definition: FOREIGN KEY (instrument_id) REFERENCES instrument(instrument_id) ON
+      DELETE CASCADE
+    validated: true
+  - name: investor_flow_intraday_pkey
+    kind: p
+    definition: PRIMARY KEY (instrument_id, trade_date, asof_slot)
+    validated: true
+apiName: IntradayInvestorFlow
+displayName: Intraday investor flow
+pluralDisplayName: Intraday investor flows
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+dataIssues:
+- The current KIS adapter supplies individual-equity estimates. It does not supply
+  estimates for ETF units, and the source keeps only the latest revision of each reporting
+  slot.
+linkTypes:
+- IntradayInvestorFlow_ForEquity_Equity

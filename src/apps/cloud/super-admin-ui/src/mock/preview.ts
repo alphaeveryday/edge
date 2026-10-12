@@ -60,17 +60,20 @@ export const MARKET_TASKS: FixtureTask[] = [
   { stage: 'raw', taskKey: 'INVESTOR_COLLECTION_KIS' },
   { stage: 'raw', taskKey: 'NAV_COLLECTION_KIS' },
   { stage: 'raw', taskKey: 'ETF_PROFILE_COLLECTION_KIS' },
+  { stage: 'raw', taskKey: 'SECTOR_INDEX_DAILY_COLLECTION_KIS' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF' },
   { stage: 'normalize', taskKey: 'NORMALIZE_PRICE', calendar: true, dependsOn: ['PRICE_COLLECTION_KIS'] },
   { stage: 'normalize', taskKey: 'NORMALIZE_INVESTOR' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF_NAV' },
   { stage: 'normalize', taskKey: 'NORMALIZE_ETF_PROFILE' },
+  { stage: 'normalize', taskKey: 'NORMALIZE_SECTOR_INDEX_DAILY' },
   { stage: 'feature', taskKey: 'LOAD_PRICE_DAILY', calendar: true, dependsOn: ['ENRICH_CORP_CODE'] },
   { stage: 'feature', taskKey: 'LOAD_ETF_HOLDINGS', dependsOn: ['ENRICH_CORP_CODE'] },
   { stage: 'feature', taskKey: 'LOAD_ETF_NAV', dependsOn: ['ENRICH_CORP_CODE'] },
   { stage: 'feature', taskKey: 'LOAD_ETF_FLOW', dependsOn: ['ENRICH_CORP_CODE'] },
-  { stage: 'feature', taskKey: 'LOAD_INSTRUMENTS', dependsOn: ['NORMALIZE_PRICE', 'NORMALIZE_ETF', 'NORMALIZE_ETF_PROFILE', 'NORMALIZE_ETF_NAV', 'NORMALIZE_INVESTOR'] },
-  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS', dependsOn: ['LOAD_PRICE_DAILY', 'LOAD_ETF_NAV', 'LOAD_ETF_HOLDINGS', 'LOAD_ETF_FLOW'] },
+  { stage: 'feature', taskKey: 'LOAD_MARKET_SERIES_DAILY', dependsOn: ['ENRICH_CORP_CODE'] },
+  { stage: 'feature', taskKey: 'LOAD_INSTRUMENTS', dependsOn: ['NORMALIZE_PRICE', 'NORMALIZE_ETF', 'NORMALIZE_ETF_PROFILE', 'NORMALIZE_ETF_NAV', 'NORMALIZE_SECTOR_INDEX_DAILY', 'NORMALIZE_INVESTOR'] },
+  { stage: 'feature', taskKey: 'LOAD_PRICE_TRIGGERS', dependsOn: ['LOAD_PRICE_DAILY', 'LOAD_ETF_NAV', 'LOAD_ETF_HOLDINGS', 'LOAD_ETF_FLOW', 'LOAD_MARKET_SERIES_DAILY'] },
   { stage: 'feature', taskKey: 'ENRICH_CORP_CODE', dependsOn: ['LOAD_INSTRUMENTS'] },
 ];
 /* ⚠️ `MOCK_OVERVIEW` 의 뉴스 레인이 `due: 6` 과 TAG_NEWS·ASSEMBLE_EVENTS 결함을 선언한다.
@@ -496,7 +499,7 @@ export const MOCK_OVERVIEW: SourceOverview = {
       opsStatus: 'IN_PROGRESS',
       /* 격자의 같은 런과 **같은 수**여야 한다 — 개요만 크게 적으면 운영자가 드릴다운에서
        * 재현할 수 없는 숫자가 되고, 검수는 어느 쪽도 못 믿는다(테스트가 고정한다). */
-      counts: { due: 17, requiredDue: 17, fulfilled: 7, failed: 1, missed: 0, blocked: 8, pending: 1, skipped: 0 },
+      counts: { due: 20, requiredDue: 20, fulfilled: 9, failed: 1, missed: 0, blocked: 9, pending: 1, skipped: 0 },
       defects: defectsOf(MARKET_RUN),
     },
     {
@@ -564,6 +567,9 @@ const MOCK_DATASET: Record<string, string> = {
   NORMALIZE_PRICE: 'price_daily',
   LOAD_PRICE_DAILY: 'price_daily',
   LOAD_ETF_FLOW: 'investor_flow_load',
+  SECTOR_INDEX_DAILY_COLLECTION_KIS: 'sector_index_daily',
+  NORMALIZE_SECTOR_INDEX_DAILY: 'sector_index_daily',
+  LOAD_MARKET_SERIES_DAILY: 'market_series_load',
   NEWS_COLLECTION_BIGKINDS: 'stock_news',
   NORMALIZE_NEWS: 'news_articles',
   LOAD_DOCUMENTS: 'document',

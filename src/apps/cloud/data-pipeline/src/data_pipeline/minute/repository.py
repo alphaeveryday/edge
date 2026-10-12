@@ -32,6 +32,7 @@ from ..db import connect as _default_connect
 from ..db import stable_domain_id
 from .models import canonical_json, scheduled_at_for
 from .states import (
+    DATASET_PRICE_MINUTE,
     RESULT_STATUSES,
     WINDOW_CLAIMED,
     WINDOW_DUE,
@@ -55,6 +56,10 @@ class UniverseConflictError(RuntimeError):
 class SessionFinalizedError(RuntimeError):
     """drain 경계 이후(DRAINING~FINALIZED/FAILED) session 재계획 시도 — snapshot 경계
     뒤에 window 를 더하지 않는다."""
+
+
+class SessionReopenRejected(RuntimeError):
+    """확정 세션 재오픈 거부 — 가격 세션·FINALIZED·지목한 창 실재가 아니면 아무것도 안 바꾼다."""
 
 
 @dataclass
@@ -483,6 +488,34 @@ class MinuteLedger:
             )
             return cur.rowcount == 1
 
+    @staticmethod
+    def _recompute_watermarks_tx(cur, session_id: str) -> tuple[datetime | None, datetime | None]:
+        """watermark 두 개를 원장 상태에서 다시 계산해 저장한다 — 호출자가 세션 행을 잠근 채로."""
+        cur.execute(
+            """
+            UPDATE minute_ingestion_session
+            SET processed_through = (
+                  SELECT MAX(window_end) FROM minute_ingestion_window
+                  WHERE session_id = %s AND data_status = ANY(%s)),
+                contiguous_complete_through = (
+                  SELECT MAX(window_end) FROM minute_ingestion_window
+                  WHERE session_id = %s AND data_status = ANY(%s)
+                    AND window_start < COALESCE(
+                      (SELECT MIN(window_start) FROM minute_ingestion_window
+                        WHERE session_id = %s AND NOT data_status = ANY(%s)),
+                      'infinity'::timestamptz)),
+                updated_at = now()
+            WHERE session_id = %s
+            RETURNING processed_through, contiguous_complete_through
+            """,
+            (session_id, sorted(RESULT_STATUSES),
+             session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+             session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
+             session_id),
+        )
+        row = cur.fetchone()
+        return (None, None) if row is None else (row[0], row[1])
+
     # ── watermark (ALPHA-663) ─────────────────────────────────
     def advance_watermarks(self, *, session_id: str) -> tuple[datetime | None, datetime | None]:
         """session watermark 두 개를 재계산해 저장하고 (processed, contiguous) 를 돌려준다.
@@ -504,30 +537,7 @@ class MinuteLedger:
             )
             if cur.fetchone() is None:
                 raise ValueError(f"session {session_id} 이 없다 — watermark 대상 오류")
-            cur.execute(
-                """
-                UPDATE minute_ingestion_session
-                SET processed_through = (
-                      SELECT MAX(window_end) FROM minute_ingestion_window
-                      WHERE session_id = %s AND data_status = ANY(%s)),
-                    contiguous_complete_through = (
-                      SELECT MAX(window_end) FROM minute_ingestion_window
-                      WHERE session_id = %s AND data_status = ANY(%s)
-                        AND window_start < COALESCE(
-                          (SELECT MIN(window_start) FROM minute_ingestion_window
-                            WHERE session_id = %s AND NOT data_status = ANY(%s)),
-                          'infinity'::timestamptz)),
-                    updated_at = now()
-                WHERE session_id = %s
-                RETURNING processed_through, contiguous_complete_through
-                """,
-                (session_id, sorted(RESULT_STATUSES),
-                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
-                 session_id, [WINDOW_VALID, WINDOW_VALID_EMPTY],
-                 session_id),
-            )
-            row = cur.fetchone()
-            return (None, None) if row is None else (row[0], row[1])
+            return self._recompute_watermarks_tx(cur, session_id)
 
     # ── drain (ALPHA-663) ─────────────────────────────────────
     def request_drain(self, *, session_id: str, now: datetime) -> bool:
@@ -548,6 +558,91 @@ class MinuteLedger:
             )
             return cur.rowcount == 1
 
+    # ── 재오픈 (ALPHA-1135) ────────────────────────────────────
+    def reopen_session(
+        self, *, session_id: str, window_starts: Sequence[datetime] | None, today: date,
+    ) -> dict:
+        """FINALIZED(·FAILED) 가격 세션을 ACTIVE 로 되돌리고 지목한 창(None=전부)을 DUE 로 돌린다.
+
+        확정된 하루가 틀린 봉으로 봉인됐을 때(ALPHA-1127 — 08-04~09-29) 다시 수집할 유일한
+        문이다. 그 뒤는 기존 경로 그대로다: 지난 날짜 Worker 는 소급 TR 로 받고 outbox 를
+        안 낸다(재판정·LLM 없음), checksum 이 바뀐 창만 generation+1·옛 객체는 보존, 이어서
+        drain → QC 가 다시 봉인한다.
+
+        한 트랜잭션에서 세션 행을 `FOR UPDATE` 로 잠그고 판정한다 — 거부면 아무것도 안
+        바뀐다. 거부 조건:
+        - 가격 세션이 아니다 — 소급 TR 이 있는 것은 가격뿐이다(업종지수는 소급 불가,
+          iNAV·뉴스는 경로가 다르다). 열어 두면 아무도 못 채우는 DUE 가 생긴다.
+        - FINALIZED·FAILED 가 아니다 — 살아 있는 세션(ACTIVE·DRAINING)에 걸면 Worker 의
+          fence 를 뺏고, QC 중이면 판정과 다툰다. FAILED 를 여는 이유: 재수집 도중 drain 이
+          걸려 QC 가 "재오픈 미수집 창"으로 세운 세션을 다시 열어 마저 받아야 한다.
+        - 지목한 창 중 원장에 없는 것이 있다 — 오타가 "일부만 열림"으로 조용히 접힌다.
+        - 세션 날짜가 `today`(KST) 이후다 — Worker 는 날짜로만 소급 경로를 고른다
+          (`is_backfill = session_date < 오늘`, worker.py). 오늘 세션을 열면 당일 TR 로 다시
+          받아 종가 단일가 없는 같은 값을 재봉인한다(봇 P1). 다음 날 연다.
+
+        ⚠️ **fencing token 을 올린다** — 확정 전에 떠난 Worker 의 낡은 토큰으로 이 세션에
+        다시 쓰지 못하게. ⚠️ `final_checksum`·`final_generation` 을 비운다 — 남겨 두면 QC
+        재실행이 "이미 확정"으로 읽고(`eod._already_finalized`) 옛 판정을 돌려준다. 옛 값은
+        반환값에 실려 호출자가 기록한다(감사 근거). 창의 generation·checksum·manifest 는
+        **그대로 둔다** — 재커밋이 "바뀌었나"를 그 값과 대조해 세대를 정한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT dataset, phase, final_checksum, final_generation, session_date
+                FROM minute_ingestion_session WHERE session_id = %s FOR UPDATE
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise SessionReopenRejected(f"없는 세션이다: {session_id}")
+            dataset, phase, final_checksum, final_generation, session_date = row
+            if dataset != DATASET_PRICE_MINUTE:
+                raise SessionReopenRejected(
+                    f"가격 세션만 연다(소급 수집 경로가 가격뿐이다): {session_id} 는 {dataset}")
+            if phase not in ("FINALIZED", "FAILED"):
+                raise SessionReopenRejected(
+                    f"FINALIZED·FAILED 세션만 연다: {session_id} 는 {phase}")
+            if session_date >= today:
+                raise SessionReopenRejected(
+                    f"지난 날짜 세션만 연다(소급 TR 경로): {session_id} 는 {session_date}, "
+                    f"오늘 {today} — 다음 날 다시 실행하라")
+            starts = None if window_starts is None else sorted(set(window_starts))
+            cur.execute(
+                """
+                UPDATE minute_ingestion_window
+                SET data_status = %s, claimed_by = NULL, claim_token = NULL,
+                    lease_expires_at = NULL, next_attempt_at = NULL, updated_at = now()
+                WHERE session_id = %s
+                  AND (%s::timestamptz[] IS NULL OR window_start = ANY(%s::timestamptz[]))
+                """,
+                (WINDOW_DUE, session_id, starts, starts),
+            )
+            reopened = cur.rowcount
+            if starts is not None and reopened != len(starts):
+                # 트랜잭션째 버린다(connect 컨텍스트가 예외에 롤백한다)
+                raise SessionReopenRejected(
+                    f"지목한 창 {len(starts)}개 중 {reopened}개만 원장에 있다: {session_id}")
+            cur.execute(
+                """
+                UPDATE minute_ingestion_session
+                SET phase = 'ACTIVE', worker_fencing_token = worker_fencing_token + 1,
+                    lease_expires_at = NULL, heartbeat_at = NULL,
+                    drain_requested_at = NULL, drain_ack_at = NULL,
+                    final_checksum = NULL, final_generation = NULL, updated_at = now()
+                WHERE session_id = %s
+                """,
+                (session_id,),
+            )
+            # 열린 창이 DUE 가 됐으니 watermark 도 같은 트랜잭션에서 내린다 — 남겨 두면 재수집이
+            # 끝나기 전(또는 실패해 FAILED 로 선 뒤)에도 "그 창까지 연속 완료"로 보인다(봇 P2)
+            self._recompute_watermarks_tx(cur, session_id)
+        return {"session_id": session_id, "reopened_windows": reopened,
+                "previous_final_checksum": final_checksum,
+                "previous_final_generation": final_generation}
+
     # ── EOD QC (ALPHA-693) ────────────────────────────────────
 
     def begin_qc(self, *, session_id: str, now: datetime) -> dict | None:
@@ -560,8 +655,9 @@ class MinuteLedger:
           안전하다 — 되돌릴 수 없는 상태를 만들지 않는 대신 재진입을 연다.
         - `FAILED` — 불변식 위반으로 멈춘 자리다. 원인을 고친 뒤 다시 판정할 수 있어야 한다.
 
-        `FINALIZED` 는 자격이 없다(None) — 확정된 하루를 다시 열지 않는다. 정정이 필요하면
-        correction 경로가 새 세대를 만든다(v0.7 10.5).
+        `FINALIZED` 는 자격이 없다(None) — QC 가 확정된 하루를 다시 열지 않는다. 정정이 필요하면
+        `reopen_session`(ALPHA-1135)이 ACTIVE 로 되돌리고 재커밋이 새 세대를 만든 뒤 drain→QC
+        가 다시 봉인한다.
 
         ⚠️ **fencing token 을 올리고 돌려준다.** phase 만으로 CAS 하면 ABA 가 통과한다:
         실행 A 가 스냅샷을 뜬 뒤 멈추고, B 가 FAILED 로 바꾸고, C 가 다시 QC_RUNNING 으로
@@ -612,6 +708,13 @@ class MinuteLedger:
         데인 비잠금 검사 = TOCTOU). 그래서 같은 트랜잭션에서 세션 행을 `FOR UPDATE` 로
         먼저 잠그고 대조한 뒤 쓴다. 이 쓰기는 되돌릴 수 없어 값이 비쌀 자격이 있다.
 
+        ⚠️ **generation = 0** — 한 번도 커밋되지 않은 창만 누락이다. generation ≥ 1 인 DUE 는
+        `reopen_session` 이 다시 연 확정분이고(그 밖에 커밋된 창이 DUE 로 돌아가는 경로는
+        없다 — claim 은 DUE·만료 CLAIMED 만 집고 커밋된 창은 종결 상태다), 재수집 전에 drain
+        이 걸리면 여기 남는다. 그걸 MISSING 으로 접으면 **옛 VALID 값이 있던 창이 결손으로
+        봉인**되고 재청구 대상에서도 빠진다(ALPHA-1135 리뷰). DUE 로 남겨 `_violations` 가
+        세션을 FAILED 로 세우게 한다 — FAILED 는 `reopen_session` 이 다시 연다.
+
         ⚠️ **scheduled_at ≤ now** — phase 만으로는 부족하다. 장중에 `request_drain` 이
         잘못 호출되면 Worker 가 새 claim 을 멈추고, CLAIMED 만 없으면 `ack_drain` 이
         DRAINED 를 만든다. 그 상태로 QC 를 돌리면 **아직 오지도 않은 분**까지 MISSING 으로
@@ -635,6 +738,7 @@ class MinuteLedger:
                 UPDATE minute_ingestion_window
                 SET data_status = 'MISSING', updated_at = now()
                 WHERE session_id = %s AND data_status = 'DUE' AND scheduled_at <= %s
+                  AND generation = 0
                 """,
                 (session_id, now),
             )

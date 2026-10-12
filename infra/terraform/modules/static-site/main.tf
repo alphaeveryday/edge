@@ -1,5 +1,5 @@
 # 정적 사이트 호스팅 — S3(프라이빗) + CloudFront(OAC) + Route53 alias.
-# 인증서는 foundation 의 us-east-1 와일드카드를 certificate_arn 으로 받아 쓴다(모듈은 발급 안 함).
+# 인증서는 foundation 의 us-east-1 인증서를 certificate_arn 으로 받아 쓴다(모듈은 발급 안 함).
 # 빌드 산출물 업로드(s3 sync)와 무효화(invalidation)는 CD 가 한다 — 이 모듈은 인프라만 소유한다.
 # widget-ui·tenant-console-ui 등 프론트가 이 모듈을 동일하게 재사용한다.
 

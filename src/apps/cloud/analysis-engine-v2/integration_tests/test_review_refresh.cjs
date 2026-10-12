@@ -30,6 +30,13 @@ test('polling updates the list without replacing content being read; manual refr
   executionEnabled=true;
   await vm.runInContext('initialize()',context);
   assert.equal(get('workspace-prompts').hidden,false,'execution mode must retain prompt management');
+  await vm.runInContext("config={enabled:true,mode:'cloud',scenarios:[]};",context);
+  // Cloud uses the deployed prompt and has no writable local prompt endpoint.
+  const cloudConfig = {enabled:true,mode:'cloud',scenarios:[]};
+  const originalFetch = context.fetch;
+  context.fetch = async url => url==='/api/execution' ? {ok:true,json:async()=>cloudConfig} : originalFetch(url);
+  await vm.runInContext('initialize()',context);
+  assert.equal(get('workspace-prompts').hidden,true);
   calls.length=0;
   await vm.runInContext(`mode='execution'; config={enabled:true,scenarios:[]}; openAnalysis(${JSON.stringify(row)})`,context);
   const original = get('detail').innerHTML;

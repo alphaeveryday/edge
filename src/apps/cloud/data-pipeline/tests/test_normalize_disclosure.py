@@ -291,11 +291,22 @@ def test_empty_parse_body_is_blocked(tmp_path):
     body = _doc_zip("<html><head><title>x/공급</title></head><body>표없음</body></html>", rcept_no)
     _write_run(storage, [(_supply_record(rcept_no), body)])
 
-    assert normalize_disclosure.run(storage, "D1") == 2
+    returned: list[dict] = []
+    assert normalize_disclosure.run(storage, "D1", failures_out=returned) == 2
     assert _canonical_rows(storage, "2026-06-23") == []
     log = _quality_log(storage)
     assert log["records_failed"] == 1
     assert "empty_parse" in log["failures"][0]["reasons"]
+    # WHY(ALPHA-1154): 거부된 문서를 나중에 다시 처리하려면 접수번호·메타 행 위치·본문 객체
+    #      위치·사유가 한 기록에 있어야 한다(본문 키에는 수집 run_id 가 들어가 접수번호만으로는
+    #      못 찾는다). 호출자(1분 레인)는 같은 목록의 사유로 일시 실패와 확정 거부를 가른다 —
+    #      로그와 다른 목록을 받으면 판정 근거와 기록이 갈린다.
+    [failure] = log["failures"]
+    assert failure["rcept_no"] == rcept_no
+    assert failure["document_raw_path"] == raw_disclosure_document_key(
+        SOURCE, MARKET, INGEST_DATE, "R1", rcept_no)
+    assert failure["raw_key"].endswith("/part-00000.ndjson")
+    assert returned == log["failures"]
 
 
 def test_oversized_amount_does_not_kill_canonical_batch(tmp_path):

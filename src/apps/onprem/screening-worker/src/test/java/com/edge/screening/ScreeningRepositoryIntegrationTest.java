@@ -56,7 +56,7 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 	private int upsertItem(String id, String ticker, String status) {
 		return items.upsert(id, "instr-" + id, ticker, "KODEX 200", TRADE_DATE,
 				OffsetDateTime.parse("2026-07-15T16:00:00+09:00"), "EVENT_SUPPORTED", "요약 " + id, null,
-				"MEDIUM", null, "[]", 1L, status, null);
+				"MEDIUM", null, "[]", 1L, status, null, "v1");
 	}
 
 	@Test
@@ -110,7 +110,7 @@ class ScreeningRepositoryIntegrationTest extends OnpremPostgresIntegrationTest {
 		OffsetDateTime contentAsOf = OffsetDateTime.parse("2026-07-15T10:30:00+09:00");
 		items.upsert("er-cao", "instr-er-cao", "069500", "KODEX 200", TRADE_DATE,
 				AS_OF_1, "EVENT_SUPPORTED", "요약", null, "MEDIUM", null, "[]", 1L,
-				"AUTO_PUBLISHED", contentAsOf);
+				"AUTO_PUBLISHED", contentAsOf, "v1");
 		assertThat(publications.publish("er-cao", "069500", TRADE_DATE, AS_OF_1)).isEqualTo(1);
 		assertThat(jdbc.queryForObject(
 				"SELECT content_as_of FROM publication WHERE analysis_item_id = 'er-cao'",

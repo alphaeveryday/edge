@@ -143,6 +143,21 @@ output "super_admin_ui_distribution_id" {
   value       = module.super_admin_site.distribution_id
 }
 
+# ── 랜딩페이지 배포용 값 (GitHub repo vars — deploy-app-landing.yml 이 읽는다) ──
+output "landing_url" {
+  value = module.landing_site.url
+}
+
+output "landing_bucket" {
+  description = "→ vars.APP_LANDING_BUCKET"
+  value       = module.landing_site.bucket_name
+}
+
+output "landing_distribution_id" {
+  description = "→ vars.APP_LANDING_DISTRIBUTION_ID"
+  value       = module.landing_site.distribution_id
+}
+
 # ── Airflow 실행 환경(ALPHA-1119) — deploy-airflow·검증 절차가 쓰는 이름 ──
 output "airflow_cluster_name" {
   value = module.airflow.cluster_name

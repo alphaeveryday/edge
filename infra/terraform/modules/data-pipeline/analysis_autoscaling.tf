@@ -38,13 +38,56 @@ resource "aws_appautoscaling_target" "analysis_consumer" {
   scalable_dimension = "ecs:service:DesiredCount"
 
   # min 0 — 실측상 버스트 배출 뒤 큐가 오래 완전히 빈다(7일 중 6일은 16시간 이상, 잔여가
-  # 밤을 넘긴 08-10 만 예외). 야간·유휴 비용을 0 으로 둔다.
-  # 첫 메시지에 **알람 탐지 ~3분** + 기동이 붙는다(08-11 실측: 09:01 메시지 → 09:04:48
-  # ALARM → 09:04:54 태스크 시작). 60초는 알람 `period` 이지 탐지 지연이 아니다.
+  # 밤을 넘긴 08-10 만 예외). 야간·유휴 비용을 0 으로 둔다. 장중에는 아래 예약이 1 로 올린다.
+  # 0 대에서 첫 메시지는 **알람 탐지 ~3분** + 기동을 기다린다(08-11 실측: 09:01 메시지 →
+  # 09:04:48 ALARM → 09:04:54 태스크 시작). 60초는 알람 `period` 이지 탐지 지연이 아니다.
   # ⚠️ 큐가 자고 있었다면 그 앞에 수면 해제 지연이 더 붙는다(아래 `treat_missing_data`).
-  # 건당 처리가 10분대라 둘 다 무시할 만하다.
+  # v1 은 소비자가 분석까지 해 건당 10분대라 이 대기가 무시할 만했다. v2 소비자는 접수
+  # (검증·요청 기록·분석 실행 시작, ~1초)만 해서 대기가 트리거 뒤 시간의 절반을 넘는다 —
+  # 10-06 실측: 이벤트 발행 → 분석 시작 중앙 185초, 소비자가 이미 떠 있던 2건만 1초.
   min_capacity = 0
   max_capacity = var.analysis_consumer_max_capacity
+
+  # 장중 예약이 min 을 1 로 바꿔 둔다 — 그 사이 apply 가 돌면 0 으로 되돌려 그날은 다시
+  # 3분 대기로 돌아간다. 그래서 min 은 생성 값만 terraform 이 정하고 이후는 예약이 소유한다.
+  lifecycle {
+    ignore_changes = [min_capacity]
+  }
+}
+
+# 장중 최소 1대 (ALPHA-1234) — 접수 소비자를 띄워 둬 트리거가 큐에 들어오는 즉시 분석을
+# 시작한다. 시각 근거: 08-07~10-06 트리거 1,087건이 전부 09:01~15:37 KST. 범위 밖 트리거는
+# 0 대 경로(알람 ~3분)로 지금처럼 처리된다.
+# 예약은 min 만 바꾼다 — 대수를 직접 쓰지 않으니 큐가 밀리면 계단이 그 위로 올리고, max
+# (DB 보호선)는 변수가 계속 정한다. 15:45 에 min 을 0 으로 돌리면 OK 상태에서 매분 불리는
+# 계단(깊이 0 → 0대)이 내린다. 휴장 평일에도 뜬다(하루 ~0.1달러) — 거래일 달력은 끌어오지 않는다.
+resource "aws_appautoscaling_scheduled_action" "analysis_open" {
+  name               = "${var.name}-analysis-open"
+  service_namespace  = aws_appautoscaling_target.analysis_consumer.service_namespace
+  resource_id        = aws_appautoscaling_target.analysis_consumer.resource_id
+  scalable_dimension = aws_appautoscaling_target.analysis_consumer.scalable_dimension
+  schedule           = "cron(55 8 ? * MON-FRI *)"
+  timezone           = "Asia/Seoul"
+
+  scalable_target_action {
+    min_capacity = 1
+  }
+}
+
+resource "aws_appautoscaling_scheduled_action" "analysis_close" {
+  name               = "${var.name}-analysis-close"
+  service_namespace  = aws_appautoscaling_target.analysis_consumer.service_namespace
+  resource_id        = aws_appautoscaling_target.analysis_consumer.resource_id
+  scalable_dimension = aws_appautoscaling_target.analysis_consumer.scalable_dimension
+  schedule           = "cron(45 15 ? * MON-FRI *)"
+  timezone           = "Asia/Seoul"
+
+  scalable_target_action {
+    min_capacity = 0
+  }
+
+  # 같은 대상에 예약을 동시에 만들면 갱신 경합으로 실패할 수 있어 순서를 건다.
+  depends_on = [aws_appautoscaling_scheduled_action.analysis_open]
 }
 
 # 잔여 일감 = **가시 + 처리중(비가시)** 이다. 둘을 더하는 것이 이 알람의 핵심이다.

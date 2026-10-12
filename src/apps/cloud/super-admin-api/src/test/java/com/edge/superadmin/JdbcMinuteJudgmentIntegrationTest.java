@@ -5,6 +5,7 @@ import com.edge.superadmin.repository.MinuteStatusRepository.PriceJudgmentRow;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -14,7 +15,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 판정 근거 조회 SQL(§33.12 로컬) — 실 스키마에서만 확인되는 것: artifact 는 **그 job 세대**의 이력만
  * 붙고(정정된 window 의 최신 세대로 대체하지 않음), 기준선은 이 판정에 나온 종목만 실리며, 기록 없는
  * job 은 attempt NULL 로 남는다.
+ *
+ * <p>컨테이너 DB 는 클래스 사이에 공유되므로 롤백한다 — 남긴 고정 날짜 세션이 그 날짜에 도는
+ * 다른 클래스의 '오늘' 조회에 섞인다(ALPHA-1233).
  */
+@Transactional
 class JdbcMinuteJudgmentIntegrationTest extends CloudPostgresIntegrationTest {
 
 	@Autowired

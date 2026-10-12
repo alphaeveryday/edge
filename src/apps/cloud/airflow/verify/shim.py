@@ -16,7 +16,9 @@
 - `verify-reset`: 검증 원장의 레인 행과 버킷의 state·lake 를 지운다. 검증 DB 가 아니면 거부한다.
 - `verify-ledger`: 검증 원장의 레인 행(런·기대 작업·시도·보류·적재 행 수)을 로그에 JSON 한 줄로 낸다.
 - `verify-resolve-holds`: 종료 확인 뒤 보류 해제(README 절차 6). `verify-backup`: 검증 원장 표별 백업.
-- `verify-shutdown <grace>`: 종료 장치(스케줄러가 띄움) — 서비스 0 → grace 대기 → 남은 검증 태스크 중단 → 호스트 0.
+- `verify-shutdown <grace>`: 종료 장치(스케줄러가 띄움) — 서비스 0 → grace 대기 → 남은 검증 태스크 중단 → 관측 기록 전송 → 호스트 0.
+- `verify-watchdog <HH:MM> <rds_stop JSON>`: 실험 중 감시(PC 무관). 중단 기준·감시 상실이면 위 종료 절차를 바로 부른다.
+  업무 스텝은 감시 심장박동이 2분 넘게 없으면 시작하지 않는다(exit 75).
   `verify-sleep <초>`: 종료 장치 시험용 대기 태스크.
 """
 
@@ -38,6 +40,8 @@ BUCKET = os.environ["VERIFY_BUCKET"]
 FIXTURE = "fixtures/investor_estimate.ndjson"
 STEP_MODULES = ("ingest-raw-investor-estimate", "normalize-investor-estimate", "load-investor-intraday")
 _s3 = boto3.client("s3")
+# verify-reset 이 배치마다 지우는 접두(재생 입력 fixtures·감시 심장박동 watchdog/ 는 남긴다).
+RESET_PREFIXES = ("state/", "raw/", "canonical/", "operations_archive/", "manifests/")
 
 
 def _arg(argv: list[str], name: str) -> str | None:
@@ -165,7 +169,7 @@ def reset() -> int:
         conn.execute("TRUNCATE investor_flow_intraday, ops_task_attempt, ops_reconciliation_issue,"
                      " ops_expectation_snapshot, ops_expected_task, ops_pipeline_run CASCADE")
     deleted = 0
-    for prefix in ("state/", "raw/", "canonical/", "operations_archive/", "manifests/"):
+    for prefix in RESET_PREFIXES:
         for page in _s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix):
             keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
             if keys:
@@ -226,15 +230,17 @@ def backup() -> int:
     return 0
 
 
-def shutdown() -> int:
+def shutdown(grace: int | None = None, reason: str = "schedule") -> int:
     """종료 장치(verify_shutdown.tf) — 스케줄러가 띄운다. 운영자 PC 와 무관하게 검증을 끝낸다.
     Airflow 서비스 desired 0(새 제출 중단) → grace 동안 검증 태스크의 자연 종료 대기 → 남은 **검증 태스크만** StopTask
     (결과는 꾸미지 않는다 — 원장의 RUNNING 시도가 보류로 남고, 여기 목록이 종료 증거다) → 호스트 ASG 0 → 보고서.
     한 단계가 실패해도 나머지 단계와 보고서는 진행한다(실패는 보고서 errors 와 exit 1 로 드러난다)."""
-    grace = int(sys.argv[2]) if len(sys.argv) > 2 else 900
+    if grace is None:
+        grace = int(sys.argv[2]) if len(sys.argv) > 2 else 900
     ecs, asg = boto3.client("ecs"), boto3.client("autoscaling")
     cluster, me = os.environ["OPS_CLUSTER_ARN"], _task_arn()
-    report = {"started": datetime.now(KST).isoformat(), "grace": grace, "self": me, "stopped": [], "errors": []}
+    report = {"started": datetime.now(KST).isoformat(), "grace": grace, "reason": reason, "self": me,
+              "stopped": [], "errors": []}
 
     def step(name, fn):
         try:
@@ -252,7 +258,8 @@ def shutdown() -> int:
             if resp.get("failures"):          # 일부라도 못 읽었으면 "남은 태스크 없음"이 아니라 조회 실패다
                 raise RuntimeError(f"describe_tasks failures: {resp['failures']}")
             # 자기 자신은 ARN 조회가 실패해도 startedBy 로 뺀다
-            out += [t for t in resp["tasks"] if "-verify-" in t["taskDefinitionArn"] and t.get("startedBy") != "verify-shutdown"]
+            out += [t for t in resp["tasks"] if "-verify-" in t["taskDefinitionArn"]
+                    and t.get("startedBy") not in ("verify-shutdown", "verify-watchdog")]
         return out
 
     try:
@@ -283,12 +290,209 @@ def shutdown() -> int:
                 report["errors"].append(f"stop {t['taskArn']}: {exc!r}"[:400])
             report["stopped"].append(row)
     finally:
+        # 호스트를 내리기 전에 관측 기록(/var/log/edge-obs — health·메모리·커널·docker)을 버킷으로 보낸다. 운영자 PC 가
+        # 잠들어 수거하지 못해도 A2~A4 증거가 호스트와 함께 사라지지 않게. 실패해도 호스트는 내린다.
+        step("host_obs_shipped_at", lambda: _ship_host_obs(asg, report))
         step("asg_0_at", lambda: asg.update_auto_scaling_group(AutoScalingGroupName=os.environ["VERIFY_ASG"],
                                                                 MinSize=0, MaxSize=0, DesiredCapacity=0))
         print("VERIFY_SHUTDOWN " + json.dumps(report, ensure_ascii=False), flush=True)
         _s3.put_object(Bucket=BUCKET, Key=f"shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json",
                        Body=json.dumps(report, ensure_ascii=False).encode())
     return 1 if report["errors"] else 0
+
+
+def _ship_host_obs(asg, report: dict, wait_seconds: int = 180) -> None:
+    """ASG 호스트마다 SSM 으로 edge-obs 를 tar·base64 해 검증 버킷 obs/shutdown/ 에 남긴다(run.py obs 와 같은 형식)."""
+    ssm = boto3.client("ssm")
+    groups = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[os.environ["VERIFY_ASG"]])["AutoScalingGroups"]
+    ids = [i["InstanceId"] for g in groups for i in g["Instances"]]
+    if not ids:
+        report["host_obs"] = "호스트 없음"
+        return
+    prefix = f"obs/shutdown/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
+    cid = ssm.send_command(InstanceIds=ids, DocumentName="AWS-RunShellScript", OutputS3BucketName=BUCKET,
+                           OutputS3KeyPrefix=prefix,
+                           Parameters={"commands": ["tar czf - -C /var/log edge-obs | base64 -w0"]})["Command"]["CommandId"]
+    status, deadline = {}, time.time() + wait_seconds
+    while time.time() < deadline and len(status) < len(ids):
+        time.sleep(5)
+        for iid in ids:
+            try:
+                st = ssm.get_command_invocation(CommandId=cid, InstanceId=iid)["Status"]
+            except ssm.exceptions.InvocationDoesNotExist:
+                continue
+            if st in ("Success", "Failed", "Cancelled", "TimedOut"):
+                status[iid] = st
+    report["host_obs"] = {"prefix": prefix, "command": cid, "status": status}
+    if any(status.get(i) != "Success" for i in ids):
+        raise RuntimeError(f"관측 기록 전송 미완: {status}")
+
+
+# ── 실험 중 감시(ALPHA-1119 A4·A5 재검증) ──
+# 운영자 PC·포트 포워딩과 무관하게 AWS 안에서 중단 기준을 본다. 기준을 넘거나 감시가 3회 연속 실패하면 종료 장치와
+# 같은 절차(서비스 0 → 검증 태스크 중단 → 관측 기록 전송 → 호스트 0)를 바로 부른다. 업무 스텝은 이 감시의 심장박동이
+# 2분 넘게 끊기면 시작하지 않는다(exit 75) — 감시가 죽으면 검증 부하도 멈춘다.
+# state/ 밖에 둔다 — 배치마다 verify-reset 이 state/ 를 지운다(봇 P1: 지우면 첫 업무 스텝이 심장박동을 못 읽는다).
+WATCH_KEY = "watchdog/heartbeat.json"
+# 감시를 쓰는 실험(run.py watchdog)이 감시를 띄우기 전에 남긴다. 이 표지가 있을 때만 게이트가 걸린다 — 감시를 쓰지 않는
+# 이전 기준(V·B1~B3)은 종전대로 돈다. 표지가 생긴 뒤에는 심장박동이 없거나 묵으면 업무를 시작하지 않는다.
+WATCH_REQUIRED_KEY = "watchdog/required.json"
+WATCH_FRESH_SECONDS = 120
+WATCH_LOSS_LIMIT = 3
+HOST_MEM_MIN_MIB = 64
+HOST_PROBE = r"""f=/var/log/edge-obs; now=$(date +%s)
+awk -v since=$((now-90)) '/^T /{t=$2} /^M MemAvailable:/{if(t>=since && (m==""||$3<m)) m=$3} END{print "memavail_min_kb", (m==""?-1:m)}' $f/samples.log
+echo "sample_age $(( now - $(grep '^T ' $f/samples.log | tail -1 | cut -d' ' -f2) ))"
+echo "kmsg_oom $(grep -ciE 'out of memory|oom-kill|oom_kill_process' $f/kmsg.log)"
+echo "docker_oom $(grep -c '"Action":"oom"' $f/docker-events.log)"
+echo "cg_oom_kill $(tail -n 4000 $f/samples.log | grep -o 'ev_oom_kill=[0-9]*' | cut -d= -f2 | sort -n | tail -1)"
+"""
+
+
+def _host_trip(probe: dict, baseline_kmsg: int) -> str | None:
+    """호스트 관측 한 번 → 중단 사유(없으면 None). 관측기가 멈췄으면(표본 60초 초과) 관측 실패로 올린다."""
+    if probe.get("sample_age", 10 ** 9) > 60:
+        raise RuntimeError(f"호스트 관측 표본이 {probe.get('sample_age')}초 묵었다")
+    if 0 <= probe.get("memavail_min_kb", -1) < HOST_MEM_MIN_MIB * 1024:
+        return f"호스트 MemAvailable {probe['memavail_min_kb'] // 1024}MiB < {HOST_MEM_MIN_MIB}"
+    if probe.get("memavail_min_kb", -1) < 0:
+        raise RuntimeError("최근 90초 MemAvailable 표본 없음")
+    if probe.get("kmsg_oom", 0) > baseline_kmsg or probe.get("docker_oom", 0) > 0 or probe.get("cg_oom_kill", 0) > 0:
+        return f"OOM 흔적 kmsg={probe.get('kmsg_oom')}(기준 {baseline_kmsg}) docker={probe.get('docker_oom')} cgroup={probe.get('cg_oom_kill')}"
+    return None
+
+
+def _sustained(vals: list, pred, k: int) -> bool:
+    run = 0
+    for v in vals:
+        run = run + 1 if pred(v) else 0
+        if run >= k:
+            return True
+    return False
+
+
+def _rds_trip(series: dict, stops: dict) -> str | None:
+    """분 단위 RDS 지표(MiB·%·ms·개) → 중단 사유. 기준은 실행기가 criteria 의 rds_stop 을 그대로 넘긴다."""
+    lat = [max(a, b) for a, b in zip(series.get("WriteLatency", []), series.get("ReadLatency", []))]
+    k = stops["sustain_minutes"]
+    checks = {"freeable": (series.get("FreeableMemory", []), lambda v: v < stops["freeable_mib_below"], k["freeable"]),
+              "swap": (series.get("SwapUsage", []), lambda v: v > stops["swap_mib_above"], k["swap"]),
+              "cpu": (series.get("CPUUtilization", []), lambda v: v > stops["cpu_pct_above"], k["cpu"]),
+              "latency": (lat, lambda v: v > stops["latency_ms_above"], k["latency"]),
+              "connections": (series.get("DatabaseConnections", []), lambda v: v > stops["connections_above"], k["connections"])}
+    hit = [name for name, (vals, pred, n) in checks.items() if _sustained(vals, pred, n)]
+    return f"RDS 중단 기준 {hit}" if hit else None
+
+
+def watchdog() -> int:
+    """`verify-watchdog <HH:MM 종료> <rds_stop JSON>` — 실행기가 본 실험 전에 띄운다(startedBy verify-watchdog)."""
+    until_hm, stops = sys.argv[2], json.loads(sys.argv[3])
+    ecs, ssm, cw, sfn = (boto3.client(n) for n in ("ecs", "ssm", "cloudwatch", "stepfunctions"))
+    asg = boto3.client("autoscaling")
+    cluster, service = os.environ["OPS_CLUSTER_ARN"], os.environ["VERIFY_SERVICE"]
+    started = datetime.now(timezone.utc)
+    losses = {"host": 0, "rds": 0, "sfn": 0, "service": 0}
+    baseline_kmsg, service_tasks, last = None, None, {}
+
+    def host_probe() -> dict:
+        ids = [i["InstanceId"] for g in asg.describe_auto_scaling_groups(
+            AutoScalingGroupNames=[os.environ["VERIFY_ASG"]])["AutoScalingGroups"] for i in g["Instances"]]
+        if len(ids) != 1:
+            raise RuntimeError(f"호스트 {len(ids)}대")
+        cid = ssm.send_command(InstanceIds=ids, DocumentName="AWS-RunShellScript",
+                               Parameters={"commands": [HOST_PROBE]})["Command"]["CommandId"]
+        for _ in range(12):
+            time.sleep(3)
+            try:
+                inv = ssm.get_command_invocation(CommandId=cid, InstanceId=ids[0])
+            except ssm.exceptions.InvocationDoesNotExist:
+                continue
+            if inv["Status"] == "Success":
+                return {k: int(v) for k, v in (line.split() for line in inv["StandardOutputContent"].splitlines()
+                                               if len(line.split()) == 2 and line.split()[1].lstrip("-").isdigit())}
+            if inv["Status"] in ("Failed", "Cancelled", "TimedOut"):
+                break
+        raise RuntimeError("호스트 관측 명령 실패")
+
+    def rds_series() -> dict:
+        end = datetime.now(timezone.utc)
+        out = {}
+        for m, st, scale in (("FreeableMemory", "Minimum", 2 ** 20), ("SwapUsage", "Maximum", 2 ** 20),
+                             ("CPUUtilization", "Maximum", 1), ("DatabaseConnections", "Maximum", 1),
+                             ("WriteLatency", "Maximum", 0.001), ("ReadLatency", "Maximum", 0.001)):
+            pts = sorted(cw.get_metric_statistics(Namespace="AWS/RDS", MetricName=m, StartTime=end - timedelta(minutes=8),
+                                                  EndTime=end, Period=60, Statistics=[st],
+                                                  Dimensions=[{"Name": "DBInstanceIdentifier", "Value": "edge-dev"}])["Datapoints"],
+                         key=lambda x: x["Timestamp"])
+            out[m] = [p[st] / scale for p in pts]
+        if not out["FreeableMemory"]:
+            raise RuntimeError("RDS 지표 없음")
+        return out
+
+    def sfn_failed() -> list:
+        failed = []
+        for smn in sfn.list_state_machines()["stateMachines"]:
+            if smn["name"].startswith("edge-dev-data-pipeline"):
+                failed += [e["name"] for e in sfn.list_executions(stateMachineArn=smn["stateMachineArn"],
+                                                                   statusFilter="FAILED", maxResults=20)["executions"]
+                           if (e.get("stopDate") or e["startDate"]) >= started]
+        return failed
+
+    def running_service_tasks() -> set:
+        return set(ecs.list_tasks(cluster=cluster, serviceName=service, desiredStatus="RUNNING")["taskArns"])
+
+    trip = None
+    while trip is None and datetime.now(KST).strftime("%H:%M") < until_hm:
+        for name, fn in (("host", host_probe), ("rds", rds_series), ("sfn", sfn_failed), ("service", running_service_tasks)):
+            try:
+                val = fn()
+                losses[name] = 0
+                if name == "host":
+                    baseline_kmsg = val.get("kmsg_oom", 0) if baseline_kmsg is None else baseline_kmsg
+                    trip = trip or _host_trip(val, baseline_kmsg)
+                elif name == "rds":
+                    trip = trip or _rds_trip(val, stops)
+                elif name == "sfn":
+                    trip = trip or (f"창 안 업무 SFN 실패 {val}" if val else None)
+                else:
+                    service_tasks = val if service_tasks is None else service_tasks
+                    trip = trip or (f"Airflow 서비스 태스크 교체 {sorted(service_tasks)} → {sorted(val)}"
+                                    if val != service_tasks else None)
+                last[name] = val if name != "service" else sorted(val)
+            except Exception as exc:
+                losses[name] += 1
+                last[name] = f"error: {exc!r}"[:300]
+                if losses[name] >= WATCH_LOSS_LIMIT:
+                    trip = f"감시 상실({name} {losses[name]}회 연속 실패) — 감시 없이 계속하지 않는다"
+        beat = {"t": time.time(), "at": datetime.now(KST).isoformat(), "trip": trip, "losses": losses,
+                "last": last, "task": _task_arn()}
+        _s3.put_object(Bucket=BUCKET, Key=WATCH_KEY, Body=json.dumps(beat, ensure_ascii=False, default=str).encode())
+        print("VERIFY_WATCH " + json.dumps(beat, ensure_ascii=False, default=str), flush=True)
+        if trip is None:
+            time.sleep(30)
+    if trip:
+        _record("watchdog_trips", {"reason": trip})
+        return shutdown(grace=60, reason=f"watchdog: {trip}")
+    return 0
+
+
+def _watch_gate() -> str | None:
+    """업무 스텝 시작 전 — 감시를 요구하는 실험이면 심장박동이 신선하고 중단이 없어야 한다. 아니면 거부 사유."""
+    try:
+        _s3.get_object(Bucket=BUCKET, Key=WATCH_REQUIRED_KEY)
+    except Exception as exc:
+        if getattr(exc, "response", {}).get("Error", {}).get("Code") in ("NoSuchKey", "404") or isinstance(exc, KeyError):
+            return None                            # 감시를 쓰지 않는 실험
+        return f"감시 요구 표지를 확인하지 못했다({type(exc).__name__})"   # 모르면 거부 쪽
+    try:
+        beat = json.loads(_s3.get_object(Bucket=BUCKET, Key=WATCH_KEY)["Body"].read())
+    except Exception as exc:
+        return f"감시 심장박동 없음({type(exc).__name__})"
+    if beat.get("trip"):
+        return f"감시가 중단을 선언했다: {beat['trip']}"
+    if time.time() - beat.get("t", 0) > WATCH_FRESH_SECONDS:
+        return f"감시 심장박동이 {int(time.time() - beat.get('t', 0))}초 묵었다"
+    return None
 
 
 def sleep() -> int:
@@ -298,13 +502,19 @@ def sleep() -> int:
 
 
 ADMIN = {"verify-seed": seed, "verify-reset": reset, "verify-ledger": ledger, "verify-resolve-holds": resolve_holds,
-         "verify-backup": backup, "verify-shutdown": shutdown, "verify-sleep": sleep}
+         "verify-backup": backup, "verify-shutdown": shutdown, "verify-sleep": sleep, "verify-watchdog": watchdog}
 
 
 def main(argv: list[str]) -> int:
     if argv and argv[0] in ADMIN:
         return ADMIN[argv[0]]()
     step, run_id = argv[0], _arg(argv, "--run-id")
+    refused = _watch_gate()
+    if refused:
+        # 업무를 시작하지 않았다(75 = 미실행, 재시도 대상) — 감시 없이 검증 부하를 걸지 않는다.
+        _record("watchdog_gate", {"step": step, "run_id": run_id, "reason": refused})
+        print(f"VERIFY_WATCH_GATE {step}: {refused}", flush=True)
+        return 75
     fault = json.loads(os.environ.get("VERIFY_FAULT") or "{}")
     _record("invocations", {"step": step, "run_id": run_id, "argv": argv, "fault": fault,
                             "skip_if_succeeded": os.environ.get("OPS_SKIP_IF_SUCCEEDED")})

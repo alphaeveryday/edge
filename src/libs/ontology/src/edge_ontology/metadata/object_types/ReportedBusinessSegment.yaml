@@ -1,0 +1,513 @@
+formatVersion: 2
+name: ReportedBusinessSegment
+label: Reported business segment
+description: Revenue and revenue share reported for one named business segment and
+  reporting period in a company disclosure. Each record preserves the source document
+  and the extracted segment figures.
+group: Disclosures & financials
+primaryKey: id
+identity:
+  columns:
+  - fact_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Identifier of this extracted fact within its source disclosure.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - fact_id
+      foreignKeys:
+      - constraint: fk_business_segment_fact_type
+        table: business_segment_fact
+        columns:
+        - fact_id
+        - fact_type
+        target_table: disclosure_fact
+        target_columns:
+        - fact_id
+        - fact_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  segmentName:
+    label: Segment name
+    description: Business-segment name as extracted from the company disclosure.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: segmentName
+    displayName: Segment name
+    status: experimental
+    dataType: String
+  conceptId:
+    label: Concept id
+    description: Identifier of the named concept matched to the reported business
+      segment. NULL means no concept has been linked.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_business_segment_concept
+        table: business_segment_fact
+        columns:
+        - concept_id
+        target_table: concept
+        target_columns:
+        - concept_id
+    mappingStatus: ready
+    apiName: conceptId
+    displayName: Concept id
+    status: experimental
+    dataType: String
+  reportedPeriodText:
+    label: Reported period text
+    description: Reporting-period wording extracted alongside the business-segment
+      figures.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: reportedPeriodText
+    displayName: Reported period text
+    status: experimental
+    dataType: String
+  revenueKrw:
+    label: Revenue krw
+    description: Revenue attributed to this business segment for the reported period,
+      in KRW.
+    sourceDataType: numeric
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: revenueKrw
+    displayName: Revenue krw
+    status: experimental
+    dataType: Decimal
+  revenueSharePct:
+    label: Segment revenue share (%)
+    description: Percentage of the stated revenue total attributable to this segment;
+      25 means 25 percent. The denominator is described by revenueTotalKrw and revenueTotalScope.
+    sourceDataType: double precision
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: revenueSharePct
+    displayName: Segment revenue share (%)
+    status: experimental
+    dataType: Double
+  shareCalculationMethod:
+    label: Share calculation method
+    description: 'How the revenue share was obtained: REPORTED from the source table,
+      COMPUTED from segment revenue amounts, or RESCALED so the extracted shares total
+      100 percent.'
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: normalized
+    apiName: shareCalculationMethod
+    displayName: Share calculation method
+    status: experimental
+    dataType: String
+  documentId:
+    label: Document id
+    description: Internal identifier of the disclosure document from which this record
+      was extracted.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys:
+      - constraint: fk_disclosure_fact_document
+        table: disclosure_fact
+        columns:
+        - document_id
+        target_table: disclosure_document
+        target_columns:
+        - document_id
+    mappingStatus: ready
+    apiName: documentId
+    displayName: Document id
+    status: experimental
+    dataType: String
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  periodStart:
+    label: Period start
+    description: First date covered by the reported segment revenue.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current segment fact table does not preserve this value. Prepare
+      it from the identified source table without inferring it from the filing date
+      or segment name.
+    apiName: periodStart
+    displayName: Period start
+    status: experimental
+    dataType: Date
+  periodEnd:
+    label: Period end
+    description: Last date covered by the reported segment revenue.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current segment fact table does not preserve this value. Prepare
+      it from the identified source table without inferring it from the filing date
+      or segment name.
+    apiName: periodEnd
+    displayName: Period end
+    status: experimental
+    dataType: Date
+  statementBasis:
+    label: Statement basis
+    description: CFS for consolidated figures or OFS for separate-company figures
+      in the source segment table.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current segment fact table does not preserve this value. Prepare
+      it from the identified source table without inferring it from the filing date
+      or segment name.
+    apiName: statementBasis
+    displayName: Statement basis
+    status: experimental
+    dataType: String
+  revenueTotalKrw:
+    label: Revenue total
+    description: Revenue total used as the denominator of this segment share, in KRW,
+      for the same period and accounting scope.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current segment fact table does not preserve this value. Prepare
+      it from the identified source table without inferring it from the filing date
+      or segment name.
+    apiName: revenueTotalKrw
+    displayName: Revenue total
+    status: experimental
+    dataType: Decimal
+  revenueTotalScope:
+    label: Revenue total scope
+    description: Business and accounting scope included in the revenue-share denominator,
+      including whether intersegment revenue is included.
+    nullable: true
+    mappingStatus: unmapped
+    mappingNote: The current segment fact table does not preserve this value. Prepare
+      it from the identified source table without inferring it from the filing date
+      or segment name.
+    apiName: revenueTotalScope
+    displayName: Revenue total scope
+    status: experimental
+    dataType: String
+  companyName:
+    label: Company name
+    description: Current stored name of the company issuing the source disclosure;
+      NULL if unresolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: companyName
+    displayName: Company name
+    status: experimental
+    dataType: String
+  documentTitle:
+    label: Document title
+    description: Title of the disclosure containing this reported business segment.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: documentTitle
+    displayName: Document title
+    status: experimental
+    dataType: String
+  conceptName:
+    label: Concept name
+    description: Current name of the concept identified by this segment record; NULL
+      if unresolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: conceptName
+    displayName: Concept name
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: business_segment_fact
+  joins:
+  - alias: fact
+    from: base
+    table: disclosure_fact
+    joinType: left
+    constraint: fk_business_segment_fact_type
+    'on':
+    - source: fact_id
+      target: fact_id
+    - source: fact_type
+      target: fact_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: business_segment_fact
+      column: fact_id
+    segmentName:
+      alias: base
+      table: business_segment_fact
+      column: segment_name
+    conceptId:
+      alias: base
+      table: business_segment_fact
+      column: concept_id
+    reportedPeriodText:
+      alias: base
+      table: business_segment_fact
+      column: period_label
+    revenueKrw:
+      alias: base
+      table: business_segment_fact
+      column: revenue_krw
+    revenueSharePct:
+      alias: base
+      table: business_segment_fact
+      column: revenue_share_pct
+    shareCalculationMethod:
+      alias: base
+      table: business_segment_fact
+      column: share_basis
+      valueMapping:
+        REPORTED: REPORTED
+        COMPUTED: COMPUTED
+        RESCALED: RESCALED
+        UNRELIABLE: null
+    documentId:
+      alias: fact
+      table: disclosure_fact
+      column: document_id
+    availableAt:
+      alias: fact
+      table: disclosure_fact
+      column: available_at
+    periodStart:
+      kind: unmapped
+      reason: The current segment fact table does not preserve this value. Prepare
+        it from the identified source table without inferring it from the filing date
+        or segment name.
+    periodEnd:
+      kind: unmapped
+      reason: The current segment fact table does not preserve this value. Prepare
+        it from the identified source table without inferring it from the filing date
+        or segment name.
+    statementBasis:
+      kind: unmapped
+      reason: The current segment fact table does not preserve this value. Prepare
+        it from the identified source table without inferring it from the filing date
+        or segment name.
+    revenueTotalKrw:
+      kind: unmapped
+      reason: The current segment fact table does not preserve this value. Prepare
+        it from the identified source table without inferring it from the filing date
+        or segment name.
+    revenueTotalScope:
+      kind: unmapped
+      reason: The current segment fact table does not preserve this value. Prepare
+        it from the identified source table without inferring it from the filing date
+        or segment name.
+    companyName:
+      kind: view_column
+      schema: ontology_view
+      table: reported_business_segment
+      column: company_name
+      sqlFile: sql/views/reported_business_segment.sql
+      inputs:
+      - schema: public
+        table: business_segment_fact
+        column: period_label
+      - schema: public
+        table: business_segment_fact
+        column: segment_name
+      - schema: public
+        table: disclosure_document
+        column: document_id
+      - schema: public
+        table: disclosure_document
+        column: issuer_actor_id
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+    documentTitle:
+      kind: view_column
+      schema: ontology_view
+      table: reported_business_segment
+      column: document_title
+      sqlFile: sql/views/reported_business_segment.sql
+      inputs:
+      - schema: public
+        table: business_segment_fact
+        column: period_label
+      - schema: public
+        table: business_segment_fact
+        column: segment_name
+      - schema: public
+        table: disclosure_document
+        column: document_id
+      - schema: public
+        table: disclosure_document
+        column: issuer_actor_id
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+    conceptName:
+      kind: view_column
+      schema: ontology_view
+      table: reported_business_segment
+      column: concept_name
+      sqlFile: sql/views/reported_business_segment.sql
+      inputs:
+      - schema: public
+        table: business_segment_fact
+        column: period_label
+      - schema: public
+        table: business_segment_fact
+        column: segment_name
+      - schema: public
+        table: disclosure_document
+        column: document_id
+      - schema: public
+        table: disclosure_document
+        column: issuer_actor_id
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: reported_business_segment
+      column: display_title
+      sqlFile: sql/views/reported_business_segment.sql
+      inputs:
+      - schema: public
+        table: business_segment_fact
+        column: period_label
+      - schema: public
+        table: business_segment_fact
+        column: segment_name
+      - schema: public
+        table: disclosure_document
+        column: document_id
+      - schema: public
+        table: disclosure_document
+        column: issuer_actor_id
+      - schema: public
+        table: document
+        column: title
+      - schema: public
+        table: entity
+        column: display_name
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - fact_id
+  tableConstraints:
+  - name: business_segment_fact_pkey
+    kind: p
+    definition: PRIMARY KEY (fact_id)
+    validated: true
+  - name: ck_business_segment_link_confidence
+    kind: c
+    definition: CHECK (((concept_link_confidence IS NULL) OR ((concept_link_confidence
+      >= (0)::double precision) AND (concept_link_confidence <= (1)::double precision))))
+    validated: true
+  - name: ck_business_segment_revenue
+    kind: c
+    definition: CHECK (((revenue_krw IS NULL) OR ((revenue_krw >= (0)::numeric) AND
+      (revenue_krw < 'Infinity'::numeric))))
+    validated: true
+  - name: ck_business_segment_share
+    kind: c
+    definition: CHECK (((revenue_share_pct IS NULL) OR ((revenue_share_pct >= (0)::double
+      precision) AND (revenue_share_pct < 'Infinity'::double precision))))
+    validated: true
+  - name: ck_business_segment_share_basis
+    kind: c
+    definition: CHECK (((share_basis IS NULL) OR ((share_basis)::text = ANY ((ARRAY['REPORTED'::character
+      varying, 'COMPUTED'::character varying, 'RESCALED'::character varying, 'UNRELIABLE'::character
+      varying])::text[]))))
+    validated: true
+  - name: fk_business_segment_concept
+    kind: f
+    definition: FOREIGN KEY (concept_id) REFERENCES concept(concept_id) ON DELETE
+      SET NULL
+    validated: true
+  - name: fk_business_segment_fact_type
+    kind: f
+    definition: FOREIGN KEY (fact_id, fact_type) REFERENCES disclosure_fact(fact_id,
+      fact_type) ON DELETE CASCADE
+    validated: true
+apiName: ReportedBusinessSegment
+displayName: Reported business segment
+pluralDisplayName: Reported business segments
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- ReportedBusinessSegment_DisclosedIn_Disclosure
+- ReportedBusinessSegment_IdentifiesSegment_Concept

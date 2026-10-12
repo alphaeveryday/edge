@@ -478,12 +478,18 @@ class TestConfigMap:
         assert settings.minute_sector_index is not None, "[minute_sector_index] 가 없다"
         return settings.minute_sector_index
 
-    def test_forty_five_sectors(self):
-        # 정본은 45종이다(레이크 sector_index 코드 집합 · sector_member 스냅샷 둘 다)
+    def test_forty_five_sectors_plus_two_composites(self):
+        # 업종 정본은 45종이다(레이크 sector_index 코드 집합 · sector_member 스냅샷 둘 다).
+        # 종합지수 2종(ALPHA-1255)은 따로 센다 — KRX 코드 대역이 업종과 같아(1xxx·2xxx) 섞어
+        # 세면, 업종 하나가 빠지고 다른 지수가 들어와도 개수가 같아 못 잡는다.
+        # 종합지수 매핑은 값으로 확정했다(2026-10-08 KIS 일봉 종가 = Yahoo ^KS11·^KQ11 4일).
         index_map = self._config().index_map
-        assert len(index_map) == 45
-        assert sum(1 for k in index_map if k.startswith("1")) == 24   # KOSPI
-        assert sum(1 for k in index_map if k.startswith("2")) == 21   # KOSDAQ
+        composites = {"1001": "0001", "2001": "1001"}   # 코스피·코스닥
+        assert {k: index_map.get(k) for k in composites} == composites
+        sectors = {k: v for k, v in index_map.items() if k not in composites}
+        assert len(sectors) == 45
+        assert sum(1 for k in sectors if k.startswith("1")) == 24   # KOSPI
+        assert sum(1 for k in sectors if k.startswith("2")) == 21   # KOSDAQ
 
     def test_kis_codes_are_not_derivable_from_krx_codes(self):
         """🔴 규칙으로 유도할 수 있으면 다음 사람이 표를 지우고 산술을 쓴다.

@@ -93,6 +93,21 @@ export const DATASET_GROUPS: DatasetGroup[] = [
     group: '시장 (EOD)',
     datasets: [
       {
+        id: 'macro_observation', lane: 'source-daily', domain: '시장', label: '매크로 관측',
+        taskKeys: ['MACRO_COLLECTION', 'NORMALIZE_MACRO', 'LOAD_MACRO'],
+        cadence: daily('원천 일배치 · source-daily'), inOpsGrid: true,
+      },
+      {
+        id: 'sector_classification', lane: 'source-daily', domain: '시장', label: '종목 업종 분류',
+        taskKeys: ['SECTOR_COLLECTION_KIS', 'NORMALIZE_SECTOR', 'LOAD_SECTOR'],
+        cadence: daily('원천 일배치 · source-daily'), inOpsGrid: true,
+      },
+      {
+        id: 'financial_metric', lane: 'source-daily', domain: '시장', label: '종목 재무 지표',
+        taskKeys: ['FINANCIAL_METRIC_COLLECTION_DART', 'NORMALIZE_FINANCIAL_METRIC', 'LOAD_FINANCIAL_METRIC'],
+        cadence: daily('원천 일배치 · source-daily'), inOpsGrid: true,
+      },
+      {
         id: 'disclosures',
         lane: 'disclosure',
         domain: '시장',
@@ -119,6 +134,22 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         domain: '시장',
         label: '가격 일봉',
         taskKeys: ['PRICE_COLLECTION_KIS', 'NORMALIZE_PRICE', 'LOAD_PRICE_DAILY'],
+        cadence: daily('일 1회 · 15:40 슬롯'),
+        inOpsGrid: true,
+      },
+      {
+        /* 지수 일봉(ALPHA-1254·1260) — KIS 업종 일봉을 받아 정제하고, 그중 마스터에 등록된
+         * 종합지수(코스피·코스닥)를 DB 로 싣는다. 수집·정제 2작업은 ALPHA-1254 때 이 카탈로그에
+         * 안 매여 격자에서 빠져 있었다 — 적재가 생기면서 한 행으로 묶는다. */
+        id: 'sector_index_daily',
+        lane: 'etf-daily',
+        domain: '시장',
+        label: '지수 일봉',
+        taskKeys: [
+          'SECTOR_INDEX_DAILY_COLLECTION_KIS',
+          'NORMALIZE_SECTOR_INDEX_DAILY',
+          'LOAD_MARKET_SERIES_DAILY',
+        ],
         cadence: daily('일 1회 · 15:40 슬롯'),
         inOpsGrid: true,
       },

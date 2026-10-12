@@ -269,7 +269,7 @@ public class ExplanationService {
 		return byItem;
 	}
 
-	// ── evidences JSONB([{kind,title,source,published_at,source_uri}]) → 도메인 근거 목록 ──
+	// 저장된 문서·계산 근거를 전달한다. 계산 입출력은 다시 가공하지 않는다.
 
 	private List<Explanation.Evidence> parseEvidence(String evidencesJson) {
 		if (evidencesJson == null || evidencesJson.isBlank()) {
@@ -303,7 +303,9 @@ public class ExplanationService {
 			}
 			out.add(new Explanation.Evidence(
 					kind, text(node, "title"), text(node, "source"), parseTime(node),
-					text(node, "source_uri")));
+					text(node, "source_uri"), text(node, "news_id"), text(node, "tool_run_id"),
+					node.get("item_ids"), text(node, "as_of"), node.get("arguments"), node.get("output"),
+					text(node, "formula_latex"), text(node, "description")));
 		}
 		return out;
 	}

@@ -18,6 +18,7 @@
  * 어휘에 한국어를 입힐 뿐이다. 새 레인이 생기면 여기 한 줄 — 안 더하면 테스트가 깨진다.
  */
 export const LANE_LABEL: Record<string, string> = {
+  'source-daily': '원천 관측(배치)',
   'etf-daily': '시장(EOD)',
   news: '뉴스',
   disclosure: '공시 (배치 보충)',

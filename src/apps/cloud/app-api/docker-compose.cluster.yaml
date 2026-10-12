@@ -16,27 +16,26 @@ services:
       VOTE_REDIS_READ_FROM: ${VOTE_REDIS_READ_FROM:-MASTER}
       VOTE_CIRCUIT_FAILURE_RATE: ${VOTE_CIRCUIT_FAILURE_RATE:-50}
       VOTE_CIRCUIT_SCOPE: ${VOTE_CIRCUIT_SCOPE:-global}
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/app
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/app
       SPRING_DATA_REDIS_CLUSTER_NODES: redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379,redis-6:6379
       SPRING_DATA_REDIS_LETTUCE_CLUSTER_REFRESH_ADAPTIVE: ${REDIS_TOPOLOGY_REFRESH:-false}
       SPRING_DATA_REDIS_LETTUCE_CLUSTER_REFRESH_PERIOD: ${REDIS_TOPOLOGY_REFRESH_PERIOD:-}
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       cluster-init:
         condition: service_completed_successfully
 
-  mysql:
-    image: mysql:8.4
+  postgres:
+    image: postgres:16
     environment:
-      MYSQL_ROOT_PASSWORD: local-root
-      MYSQL_DATABASE: app
-      MYSQL_USER: app
-      MYSQL_PASSWORD: app
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
     ports:
-      - "55440:3306"
+      - "55440:5432"
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uapp -papp"]
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
       interval: 2s
       timeout: 2s
       retries: 15

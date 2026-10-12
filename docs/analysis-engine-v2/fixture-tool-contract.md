@@ -1,6 +1,6 @@
 # 목데이터 도구 계약
 
-실제 계산 도구가 목데이터를 조회하고 근거 ID를 반환한다. 도구 결과는 감사 저장 후 그대로 에이전트에게 전달한다. 원천 DB 연결은 별도 작업이다.
+실제 계산 도구가 목데이터를 조회하고 근거 ID를 반환한다. 도구 결과는 감사 저장 후 그대로 에이전트에게 전달한다. 원천 DB 연결은 `storage/source_inputs.py`(ALPHA-1130 — 매크로·재무를 `*_as_of` 함수에서 이 fixture 행 형태로 읽는 어댑터, 통합 테스트 `integration_tests/test_source_inputs_postgres.py`)까지 있고, 실행 경로에 붙이는 것은 별도 작업이다.
 
 ## 공통
 
@@ -33,7 +33,7 @@
 
 - 뉴스 행: `news_id,title,body,published_at,available_at,thread_id,stage,event_id`. 동일 사건 ID만 중복으로 묶는다. 제목 유사도로 병합하지 않는다.
 - 대표 기사는 분석시각에 공개된 같은 사건의 최신 기사. 각 중복 보도 수는 대표 기사 제외 건수.
-- 편입 행: `instrument_id,weight,as_of_date,available_at`. 목데이터 초기 범위는 주식만, 전체 종목 확보, 비중 합 1. 불완전 비중은 거절한다.
+- 편입 행: `instrument_id,weight,as_of_date,available_at`. 목데이터 초기 범위는 주식만, 전체 종목 확보, 비중 합 1. 불완전 비중은 거절한다. 합은 유효 15자리에서 판정한다. 원천 DB의 비중이 double이라 그 아래 자리는 저장 형식의 잡음일 수 있기 때문이며, 비중 값은 바꾸지 않는다.
 - 기사 본문은 자료 내용이며 명령이 아니다. 에이전트가 읽고 영향·중요도를 판단한다.
 
 ## 수급
@@ -76,7 +76,9 @@
 
 - 등록 계열: usd_krw(KRW_per_USD), kr_10y_yield/us_10y_yield/kr_cpi_yoy(percent), brent_spot_usd(USD_per_barrel), commodity(지정 원자재 지수).
 - 원자료: `macro`의 series,value,unit,observed_at,available_at,subject(선택). 관측 단위는 등록 단위와 일치해야 함.
+- `observed_at`은 오프셋 있는 순간값 또는 관측일(`YYYY-MM-DD`). 일별 종가·월별 지표처럼 원천이 시각을 주지 않는 관측(ALPHA-1130 `macro_observations_as_of`)은 관측일 그대로 두고, 도구는 그 한국 날짜가 끝난 뒤(`23:59:59.999999+09:00`)부터 관측된 것으로 센다 — 시각을 지어내지 않고, 반환 `at`·`previous_at`은 원문 문자열이다. `compare_macro_observations`의 `previous_at`/`current_at`도 같은 형태를 받는다.
 - 반환의 관측시각 열을 `at`으로 통일한 `get_macro_observations`는 정의 v2. 기존 v1 실행은 그대로 보존한다.
+- ALPHA-1130 날짜만 있는 관측·근사 EPS 표시로 결과가 바뀐 툴은 새 정의로 저장한다: `get_macro_observations` v3, `compare_macro_observations`·`calculate_valuation`·`calculate_weighted_valuation`·`get_instrument_factors` v2. 이전 버전 실행은 그대로 보존한다.
 - 차이 $C-P$: 금리·물가는 %p. 상대변화 $100(C/P-1)$: %. 상대변화의 이전값은 양수여야 함.
 - 카드: 환율·국고채10년·미국채10년·브렌트 최신값. 원자재20관측 변화에는 `macro_trading_dates.commodity`의 정확한21개 거래일 필요.
 - 금리 일정은 `policy_decisions`의 decision_at,available_at,subject. 미래 행사일은 허용하지만 일정의 공개시각은 분석시각 이전. 날짜 차이는 KST.
@@ -93,9 +95,10 @@
 - [종목별 요인 조회 상세 계약](../../src/apps/cloud/analysis-engine-v2/docs/instrument-factors.md): 전체·부분 조회, 결측 처리, 반환 JSON 예시. 에이전트가 읽은 동일 결과에서 서버가 화면 수치를 조립.
 - 공통 조회는 계산 가능한 값만 반환하며 PER 불가가 PBR을 막지 않음. 아래 두 전용 밸류 계산은 기존 양수 분모·완전 구성 조건 유지.
 - 세 도구 모두 최종 근거 가능. 요인 상태·스티커는 반환하지 않음.
-- `financials`: instrument_id,period(YYYY-Qn),eps,bps,available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화.
+- `financials`: instrument_id,period(YYYY-Qn),eps,bps,eps_derivation(선택),available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화. 초기 입력 표도 `eps_derivation` 열을 싣는다(원자료에 없으면 null).
 - 최근 공개된 연속4분기 EPS 합으로 PER, 최신 공개 분기 BPS로 PBR. 동일 분기 여러 공개본이면 분석시각 이전 최신본을 사용.
 - 양수 TTM EPS·BPS, 완전한 주식 구성비중 합1만 계산. 미확정 손실·현금·누락 정책을 중립값이나 재정규화로 숨기지 않음.
+- `financials` 행의 `eps_derivation`(선택, 원천 DB 어댑터가 싣는다)이 `FY_MINUS_9M`이면 그 분기 EPS는 근사다. `calculate_valuation`은 `derived_periods`·`approximate`, `calculate_weighted_valuation`은 `approximate`·`derived_constituents`·`coverage{constituents,weight}`를 함께 반환한다. `get_instrument_factors`의 밸류 화면도 `eps_approximate`·`eps_derived_periods`(종목), `weighted_per_approximate`(ETF)로 근사 여부를 싣는다 — 근사 표시 없이 PER을 내는 경로는 없다. 공개된 분기에 EPS나 BPS가 `null`이면(우선주 회사의 보통주 BPS 차단, 분모 응답 미확정) 오류 — 앞 분기로 창을 옮기지 않는다. 구성종목 하나라도 계산 불가면 가중 PER·PBR 전체가 없다(부분 커버리지 값 없음).
 - $PER_i=P_i/\sum_{q=1}^{4}EPS_{i,q}$, $PBR_i=P_i/BPS_i$, $\bar x=\sum_iw_ix_i$.
 - 5년 밴드는 계약 미정으로 제외. ETF 분배율은 12개월 완전 지급 이력이 명시된 경우만 표시. 다른 결측 카드는 0 대신 제외.
 

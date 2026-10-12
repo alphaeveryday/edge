@@ -1,0 +1,26 @@
+id: EventMeasurement_ForEvent_SourceEvent
+source: EventMeasurement
+definition:
+  name: ForEvent
+  label: For event
+  description: The source-specific event account in which this measurement was reported.
+  target: SourceEvent
+  sourceProperty: sourceEventId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forEvent
+  displayName: For event
+  pluralDisplayName: For event
+  inverse:
+    apiName: measurements
+    displayName: Measurements
+    description: Numeric statements recorded for this source-event account, with original
+      units, wording and interpretation status.
+    pluralDisplayName: Measurements
+  backing:
+    type: foreignKey
+    configurationStatus: ready

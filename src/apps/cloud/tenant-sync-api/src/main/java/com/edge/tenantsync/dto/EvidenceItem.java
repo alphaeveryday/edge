@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
+import java.util.List;
+
 /**
  * 근거 문서 하나 — document 경계면의 flat 화 {kind, title, source, published_at,
  * source_uri}(ALPHA-395 확정, 조립은 ALPHA-718, source_uri 는 ALPHA-739). kind ←
@@ -21,6 +23,13 @@ public record EvidenceItem(
 		String title,
 		String source,
 		String publishedAt,
-		String sourceUri
-) {
+		String sourceUri,
+		@JsonInclude(JsonInclude.Include.NON_NULL) String newsId,
+		@JsonInclude(JsonInclude.Include.NON_NULL) String toolRunId,
+		@JsonInclude(JsonInclude.Include.NON_NULL) List<String> itemIds
+) implements BundleEvidence {
+
+	public EvidenceItem(String kind, String title, String source, String publishedAt, String sourceUri) {
+		this(kind, title, source, publishedAt, sourceUri, null, null, null);
+	}
 }

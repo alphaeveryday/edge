@@ -1,10 +1,11 @@
 """실행 진입점 — ECS RunTask command 또는 로컬에서 호출한다.
 
     python -m data_pipeline.run
-        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument
+        {ingest-raw|ingest-price-raw|ingest-raw-financial|ingest-raw-disclosure|ingest-raw-etf|ingest-raw-nav|ingest-raw-inav|ingest-raw-etf-profile|ingest-raw-instrument|ingest-raw-sector-index-daily
          |normalize-price|normalize-news|normalize-disclosure|normalize-disclosure-segment
-         |normalize-etf|normalize-etf-nav|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav
-         |load-assertions|assemble-events|build-minute-universe}
+         |normalize-etf|normalize-etf-nav|normalize-sector-index-daily|normalize-etf-profile|normalize-instrument-profile|tag-news|load-instruments|enrich-corp-code|load-price-triggers|load-documents|load-disclosure|load-etf-nav|load-market-series-daily
+         |load-assertions|assemble-events|build-minute-universe
+         |{ingest-raw|normalize|load}-{macro|sector|financial-metric}(원천 관측 — OBSERVATION_STEPS)}
         [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--run-id RUN_ID] [--config PATH]
         [--source VENDOR] [--input-run-id RUN_ID] [--latest-good] [--all] [--pending-only]
         [--limit N] [--window-days N]
@@ -40,7 +41,7 @@ from .minute.news_worker import news_worker_cli
 from .minute.eod import qc_session_cli
 from .minute.reconciliation import reconcile_artifacts_cli
 from .minute.rollup import ROLLUP_DATASETS, rollup_session_cli
-from .minute.session_cli import drain_session_cli, plan_session_cli
+from .minute.session_cli import drain_session_cli, plan_session_cli, reopen_session_cli
 from .minute.states import MINUTE_DATASETS, SOURCE_GROUPS_BY_DATASET
 from .minute.session_ops import start_session_cli, stop_session_cli
 from .minute.relay import relay_cli
@@ -56,6 +57,7 @@ from .lake import (
     raw_investor_estimate_partition,
     raw_etf_nav_partition,
     raw_etf_profile_partition,
+    raw_sector_index_daily_partition,
 )
 from .sources import (
     BigKindsNewsSource,
@@ -71,6 +73,7 @@ from .sources import (
     KisInvestorEstimateSource,
     KisInvestorSource,
     KisNavSource,
+    KisSectorIndexDailySource,
     KrxEtfSource,
     KrxInstrumentSource,
     PoliteClient,
@@ -79,6 +82,7 @@ from .sources import (
 from .steps import (
     assemble_events,
     backfill_disclosure,
+    backfill_price_daily_dataguide,
     build_minute_universe,
     enrich_corp_code,
     ingest_price_raw,
@@ -90,6 +94,7 @@ from .steps import (
     load_etf_nav,
     load_instruments,
     load_investor_intraday,
+    load_market_series_daily,
     load_price_daily,
     load_price_triggers,
     ingest_raw,
@@ -108,11 +113,20 @@ from .steps import (
     normalize_investor_estimate,
     normalize_news,
     normalize_price,
+    normalize_sector_index_daily,
+    source_observations,
+    source_observations_financial,
+    source_observations_macro,
+    source_observations_sector,
     tag_news,
 )
+from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
+from .quality.disclosure import split_failures
+
+logger = logging.getLogger(__name__)
 
 # KIS 시세 TR 초당 한도(EGW00201) 방어용 최소 간격 — 실측 안전값(프로브 MIN_INTERVAL).
 KIS_MIN_INTERVAL_SEC = 0.5
@@ -169,6 +183,7 @@ _WINDOW_CALENDAR: dict[tuple[str, str | None], timezone] = {
     ("ingest-price-raw", "kis"): KST,
     ("ingest-price-raw", "yahoo"): KST,              # index_map 이 ^KS11·^KQ11 (KOSPI·KOSDAQ)
     ("ingest-raw-nav", None): KST,                   # KIS
+    ("ingest-raw-sector-index-daily", None): KST,    # KIS 업종지수 일봉
     ("ingest-raw-inav", None): KST,                  # KIS
     ("ingest-raw-investor", None): KST,              # KIS
     ("ingest-raw-disclosure", None): KST,            # DART
@@ -218,11 +233,12 @@ def main(argv: list[str] | None = None) -> int:
         "step",
         choices=["ingest-raw", "ingest-price-raw", "ingest-raw-financial",
                  "ingest-raw-disclosure", "ingest-raw-etf", "ingest-raw-nav", "ingest-raw-inav", "ingest-raw-etf-profile", "ingest-raw-instrument",
+                 "ingest-raw-sector-index-daily", "normalize-sector-index-daily",
                  "ingest-raw-investor", "ingest-raw-investor-estimate",
                  "normalize-price", "normalize-investor", "normalize-investor-estimate",
                  "normalize-news", "normalize-disclosure", "normalize-disclosure-segment",
                  "normalize-etf", "normalize-etf-nav", "normalize-etf-profile", "normalize-instrument-profile", "tag-news", "load-instruments", "enrich-corp-code", "load-price-triggers",
-                 "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "load-etf-nav", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
+                 "load-price-daily", "load-documents", "load-disclosure", "backfill-normalize-disclosure", "backfill-price-daily-dataguide", "load-etf-nav", "load-market-series-daily", "load-etf-holdings", "load-etf-flow", "load-investor-intraday", "load-assertions", "assemble-events",
                  # 1분 유니버스 재생성(ALPHA-953): canonical KR holdings → `--universe`
                  # 가 가리키는 정본 객체 갱신. storage(canonical 읽기) 만 필요하고
                  # 수집창·원장 DB 와 무관하다. ⚠️ **세션 계획 전에만** 돌려라 — 장중
@@ -249,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
                  # 세션 수명(ALPHA-698): plan=하루치 session+window 멱등 생성(Premarket),
                  # drain=phase 를 DRAINING 으로(EOD). 둘 다 원장 DB 만 필요하다.
                  "plan-minute-session", "drain-minute-session",
+                 # 재오픈(ALPHA-1135): FINALIZED 가격 세션을 ACTIVE·창 DUE 로 — 수동 재수집.
+                 "reopen-minute-session",
                  # 세션 스케일 오케스트레이션(ALPHA-712): start=거래일 판정+계획+desired 1,
                  # stop=drain+원장 게이트 대기+desired 0. 상주 서비스 3종을 올리고 내리는
                  # 유일한 주체다(terraform 은 desired_count 를 ignore_changes 로 뒀다).
@@ -275,16 +293,25 @@ def main(argv: list[str] | None = None) -> int:
                  # 루프. 원장 DB + storage + [dart_disclosure] 정본. universe 없음(소스 단위).
                  # ⚠️ 수집만이 아니라 collect→normalize×2→load→assemble 을 한 window 에서 돈다.
                  "disclosure-worker",
-                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 45종 분봉 상주 루프.
+                 # 1분 업종지수 Worker(ALPHA-887): KRX 업종지수 47종 분봉 상주 루프.
                  # 원장 DB + storage + [minute_sector_index.index_map] 정본 +
                  # minute_price_worker 의 KIS 자격증명(같은 앱키). universe 없음 —
                  # 기대 집합이 config 다(지수는 ETF 명부에도 구성종목에도 없다).
                  # ⚠️ 하위 소비자가 없다 — window 확정에서 멈추고 job·outbox 를 안 만든다.
-                 "sector-index-worker"],
+                 "sector-index-worker",
+                 # 분석 v2 원천 관측(ALPHA-1130): 매크로 5계열·DART 재무 지표·KIS 지수업종. 수집은
+                 # raw+raw manifest, 정제는 --input-run-id(수집 run) 하나, 적재는 --input-run-id(정제 run)
+                 # 또는 --all(소비 마커 없는 완료 manifest 전부). 경로·계약은 steps/source_observations.
+                 *OBSERVATION_STEPS],
     )
     parser.add_argument("--from", dest="from_date", default=None, help="수집 시작일 YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=None, help="수집 종료일 YYYY-MM-DD")
     parser.add_argument("--run-id", default=None)
+    # DataGuide 일봉 일회성 적재(ALPHA-1148) 전용 — 스냅샷 파티션과 쓰기 없는 분류 집계.
+    parser.add_argument("--as-of-date", default=None,
+                        help="backfill-price-daily-dataguide: 스냅샷 as_of_date YYYY-MM-DD")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="backfill-price-daily-dataguide: 분류만 세고 price_daily 는 쓰지 않는다")
     parser.add_argument("--config", default=None, help="설정 파일 경로(기본: 동봉 설정)")
     # 정제 스텝 전용 — 그 수집 런의 raw 만 읽어 canonical 을 적재한다(ALPHA-389). SFN 이 이
     # 경로로 돈다: 정제 비용이 여태 쌓인 raw 전체가 아니라 이번 런에 비례한다. 미지정이면
@@ -294,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="normalize-* 대상 수집 run_id 또는 manifest 소비 적재의 정제 run_id")
     parser.add_argument("--all", action="store_true", dest="all_partitions",
                         help="load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
-                             "load-etf-nav·load-etf-holdings·load-etf-flow·"
+                             "load-etf-nav·load-market-series-daily·load-etf-holdings·load-etf-flow·"
                              "load-investor-intraday·load-assertions·"
                              "load-disclosure: 명시적 전체 스캔")
     parser.add_argument("--latest-good", action="store_true",
@@ -362,8 +389,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="qc-minute-session·drain-minute-session: 대상 1분 세션(필수). "
                              "둘 다 하루 하나를 지목해서 돈다 — 범위를 열어 두면 살아 "
                              "있는 세션까지 확정하거나 drain 을 건다")
+    parser.add_argument("--windows", default=None,
+                        help="reopen-minute-session: 다시 열 창 시작 KST HHMM 쉼표 목록"
+                             "(canonical `window=HHMM` 축). 없으면 전부")
     parser.add_argument("--reason", default=None,
-                        help="redrive·reconcile-minute-artifacts: 수동 개입 사유. delivery event 또는 격리 기록에 "
+                        help="redrive·reconcile-minute-artifacts·reopen-minute-session: 수동 개입 사유. delivery event 또는 격리 기록에 "
                              "실행자와 함께 기록된다 — 수동 개입의 유일한 감사 근거다")
     parser.add_argument("--quarantine", action="store_true",
                         help="reconcile-minute-artifacts: 닫힌 세션의 미확정 후보를 논리 격리")
@@ -376,6 +406,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deadline-sec", type=float, default=None,
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
+    parser.add_argument("--series", default=None,
+                        help="ingest-raw-macro: 쉼표 구분 계열(미지정=전 계열 "
+                             f"{','.join(sorted(macro_series.SERIES))})")
     parser.add_argument("--max-failed-symbols", type=int, default=None,
                         help="가격·투자자 수급 수집: exit 0 으로 허용할 격리 실패 심볼 수"
                              "(미지정=0; partial·failed_records 기록은 유지)")
@@ -432,7 +465,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.kind or not args.job_id or not (args.reason or "").strip():
             raise SystemExit("redrive 는 --kind·--job-id·--reason 이 모두 필요하다")
     elif (args.kind is not None or args.job_id is not None
-          or (args.reason is not None and args.step != "reconcile-minute-artifacts")
+          or (args.reason is not None
+              and args.step not in ("reconcile-minute-artifacts", "reopen-minute-session"))
           or args.destination is not None):
         raise SystemExit(
             "--kind·--job-id·--reason·--destination 은 redrive 에서만 쓴다 — "
@@ -449,10 +483,15 @@ def main(argv: list[str] | None = None) -> int:
         args.actor is not None or args.reason is not None
     ):
         raise SystemExit("--actor·--reason 은 --quarantine과 함께 쓴다")
-    if args.step not in ("qc-minute-session", "drain-minute-session", "reconcile-minute-artifacts") \
+    if args.step != "reopen-minute-session" and args.windows is not None:
+        raise SystemExit("--windows 는 reopen-minute-session 전용이다 — "
+                         f"이 스텝({args.step})에서는 무시되므로 거부한다")
+    if args.step not in ("qc-minute-session", "drain-minute-session", "reconcile-minute-artifacts",
+                         "reopen-minute-session") \
             and args.session_id is not None:
         raise SystemExit(
-            "--session-id 는 qc-minute-session·drain-minute-session·reconcile-minute-artifacts 에서만 쓴다 — "
+            "--session-id 는 qc-minute-session·drain-minute-session·reconcile-minute-artifacts·"
+            "reopen-minute-session 에서만 쓴다 — "
             f"이 스텝({args.step})에서는 무시되므로 거부한다"
         )
     if args.step not in ("plan-minute-session", "start-minute-session",
@@ -482,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
             "수집 유니버스는 canonical holdings 에서 파생된다(무시되므로 거부)"
         )
     if args.step == "sector-index-worker" and args.universe is not None:
-        # 업종지수도 universe 밖이다 — 기대 집합 45종은 config 정본
+        # 업종지수도 universe 밖이다 — 기대 집합 47종은 config 정본
         # (`[minute_sector_index.index_map]`)이고, universe.json 은 지수를 아예 모른다
         # (ETF 명부에도 구성종목에도 없다). planner 도 같은 조건으로 거부한다.
         raise SystemExit(
@@ -542,16 +581,19 @@ def main(argv: list[str] | None = None) -> int:
         # 키우는 게 아니라 명시적 --from/--to 백필이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
+    if args.series is not None and args.step != "ingest-raw-macro":
+        raise SystemExit("--series 는 ingest-raw-macro 에서만 쓴다 — 무시되므로 거부한다")
     if args.all_partitions and args.step not in (
         "load-instruments", "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
-        "load-etf-nav", "load-etf-holdings", "load-etf-flow",
+        "load-etf-nav", "load-market-series-daily", "load-etf-holdings", "load-etf-flow",
         "load-investor-intraday",
         "load-assertions",
         "load-disclosure",
+        *OBSERVATION_LOAD_STEPS,
     ):
         raise SystemExit(
             "--all 은 load-instruments·tag-news·load-documents·load-price-daily·load-price-triggers·"
-            "load-etf-nav·load-etf-holdings·load-etf-flow·"
+            "load-etf-nav·load-market-series-daily·load-etf-holdings·load-etf-flow·"
             "load-investor-intraday·load-assertions·load-disclosure 전용이다"
         )
     if args.latest_good and args.step != "load-instruments":
@@ -560,6 +602,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("load-instruments는 --latest-good 또는 --all 중 정확히 하나가 필요하다")
     if args.pending_only and args.step != "load-disclosure":
         raise SystemExit("--pending-only는 load-disclosure 전용이다")
+    if (args.as_of_date is not None or args.dry_run) and args.step != "backfill-price-daily-dataguide":
+        raise SystemExit("--as-of-date·--dry-run 은 backfill-price-daily-dataguide 전용이다")
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -596,6 +640,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step == "drain-minute-session":
         return drain_session_cli(settings, session_id=args.session_id)
+    if args.step == "reopen-minute-session":
+        return reopen_session_cli(settings, session_id=args.session_id,
+                                  windows=args.windows, reason=args.reason)
     if args.step == "start-minute-session":
         return start_session_cli(settings, dataset=args.dataset,
                                  source_group=args.source_group, universe=args.universe)
@@ -638,6 +685,128 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
+# 원천 관측 세 데이터셋 × (수집·정제·적재). 스텝 이름 → (데이터셋 명세, 단계).
+OBSERVATION_STEPS = {
+    "ingest-raw-macro": ("macro", "collect"),
+    "normalize-macro": ("macro", "normalize"),
+    "load-macro": ("macro", "load"),
+    "ingest-raw-sector": ("sector", "collect"),
+    "normalize-sector": ("sector", "normalize"),
+    "load-sector": ("sector", "load"),
+    "ingest-raw-financial-metric": ("financial", "collect"),
+    "normalize-financial-metric": ("financial", "normalize"),
+    "load-financial-metric": ("financial", "load"),
+}
+OBSERVATION_LOAD_STEPS = tuple(k for k, (_, stage) in OBSERVATION_STEPS.items() if stage == "load")
+
+
+def _dispatch_observation(args, settings, storage, run_id) -> int:
+    """원천 관측 스텝. 수집 창은 스텝이 KST 로 정한다(어제까지 — 진행 중 관측 제외)."""
+    family, stage = OBSERVATION_STEPS[args.step]
+    if getattr(args, "source", None):
+        # 원천 관측 스텝은 공급자를 계열·데이터셋이 정한다 — 받아 두고 버리면 운영자가 좁힌 줄 아는 복구가 전체를 부른다.
+        raise SystemExit(f"{args.step} 는 --source 를 쓰지 않는다 (매크로는 --series 로 좁힌다)")
+    config = settings.source_observations
+    if config is None:
+        raise SystemExit("source_observations 설정이 없다 — sources.toml 확인")
+    spec = {"macro": source_observations_macro.MACRO, "sector": source_observations_sector.SECTOR,
+            "financial": source_observations_financial.FINANCIAL}[family]
+    producer = args.step.replace("-", "_")
+    if stage != "collect" and (args.from_date or args.to_date or args.series):
+        # 정제·적재는 입력 실행 전체를 처리한다 — 받아 두고 버리면 요청보다 넓은 범위를 처리하고도 성공한다.
+        raise SystemExit(f"{args.step} 는 --from/--to/--series 를 쓰지 않는다 (입력 실행 단위로 처리)")
+    if stage == "normalize":
+        return source_observations.normalize(storage, spec, run_id, args.input_run_id, producer=producer)
+    if stage == "load":
+        return source_observations.load(
+            storage, spec, db_config_from_env(settings.db), run_id,
+            input_run_id=args.input_run_id, pending=args.all_partitions, producer=producer)
+    if args.input_run_id is not None:
+        raise SystemExit(f"{args.step} 는 --input-run-id 를 쓰지 않는다")
+    # DAG 는 백필 인자를 빈 문자열로 넘길 수 있다(템플릿이 원소를 빼지 못한다) — 빈 값 = 정기 창.
+    args.from_date, args.to_date = args.from_date or None, args.to_date or None
+    if family == "sector":
+        if args.from_date or args.to_date:
+            # 마스터는 받은 날의 현재값뿐이다 — 과거 날짜를 달면 오늘 분류를 과거로 라벨한다.
+            raise SystemExit("ingest-raw-sector 는 --from/--to 를 쓸 수 없다 — 원천이 현재 분류만 준다")
+        if not config.sector.enabled:
+            raise SystemExit("source_observations.sector 가 비활성이다")
+        return source_observations_sector.collect_sector(
+            storage, PoliteClient(min_interval=1.0, timeout=60.0), config.sector.base_url, run_id)
+    if family == "financial":
+        # 대상 뿌리 = 전망 배치 대상과 같은 목록(`krx_etf.source.etf_map` — envs/dev/analysis-v2.tf 가 같은 절을 읽는다).
+        # 따로 옮겨 적으면 전망은 도는데 재무는 안 받는 ETF 가 생긴다. `etf_ids` 는 범위를 좁히는 재정의다(단건 검증).
+        # 한계: 회사당 목록 1회 + 창 안 보고서마다 3회를 0.5초 간격으로 직렬 호출하고 raw 는 끝에 한 번 저장한다. 정기보고서 접수가
+        # 몰리는 달(3·5·8·11월)에는 14일 창에 대상 회사 대부분의 보고서가 들어와 DAG run 상한(1500초)을 넘는다 — 그 전에
+        # 고쳐야 한다(airflow README "원천 관측 레인" 의 알려진 한계).
+        krx_etf = getattr(settings, "krx_etf", None)
+        etf_ids = config.etf_ids or sorted(krx_etf.source.etf_map if krx_etf else ())
+        if not etf_ids:
+            raise SystemExit("재무 수집 대상 ETF 가 없다 — krx_etf.source.etf_map 과 source_observations.etf_ids 가 "
+                             "모두 비어 있다")
+        # DART 키는 기존 재무 수집과 같은 것(dart_financial.source)을 쓴다 — tasks.tf dart 태스크 정의에 이미 있다.
+        if settings.dart_financial is None or not settings.dart_financial.source.api_key:
+            raise SystemExit("dart_financial.source.api_key 가 없다 — DATA_PIPELINE_DART_FINANCIAL__SOURCE__API_KEY")
+        dart = dart_fundamental.DartFundamentalSource(settings.dart_financial.source,
+                                                      PoliteClient(min_interval=0.5, timeout=30.0))
+        if not dart.enabled:     # 설정 플래그(dart_financial.source.enabled)로 끈 공급자는 부르지 않는다
+            raise SystemExit("dart_financial.source 가 비활성이다")
+        return source_observations_financial.collect_financial(
+            storage, dart, run_id, etf_ids=etf_ids, from_date=args.from_date, to_date=args.to_date)
+    series = args.series.split(",") if args.series else sorted(macro_series.SERIES)
+    source = macro_series.MacroSource(config.macro)
+    if not config.macro.enabled:
+        raise SystemExit("source_observations.macro 가 비활성이다")
+    return source_observations_macro.collect_macro(
+        storage, source, run_id, series_ids=series, from_date=args.from_date, to_date=args.to_date)
+
+
+# 저녁 배치가 본 확정 거부 문서 한 건당 한 줄. `infra/terraform/modules/data-pipeline/tasks.tf`
+# 의 metric filter 가 이 문구를 세므로(줄 수 = 문서 수) 문구를 바꿀 땐 필터를 같이 고쳐라.
+CONFIRMED_REJECT_LOG = "공시 확정 거부 문서"
+
+
+def _settle_confirmed_rejects(step: str, normalizer, storage, run_id: str,
+                              input_run_id: str | None, limit: int) -> int:
+    """저녁 배치의 공시 정제를 돌리고, **확정 거부만 남은** 부분 실패는 종료 0 으로 닫는다
+    (ALPHA-1163).
+
+    정제의 종료 2 는 "행 실패가 있었다"만 말한다. 그 안에는 다시 읽으면 풀리는 실패(본문
+    미도착)와 같은 원문이면 늘 같은 거부(파서 대상이 아닌 서식)가 섞여 있는데, 공시 SFN 의
+    마지막 판정은 둘을 못 가르고 실행을 FAILED 로 닫았다. 거부 문서는 수집 창에 두 번 걸리므로
+    문서 하나가 이틀 연속 FAILED 를 만들었고(2026-09-30~10-08 의 7회 중 4회), FAILED 가 조치할 일이
+    있다는 신호 구실을 못 했다. 그래서 실패가 전부 확정 거부이고 문서 수가 `limit` 이하일 때만
+    0 으로 닫는다. 일시·미지 실패가 하나라도 섞였거나 상한을 넘으면 종전대로 2 다 — 상한은
+    파서가 깨져 전건이 거부되는 날을 성공으로 닫지 않기 위한 것이다.
+
+    0 으로 닫아도 거부는 남는다: quality_log `failures`(접수번호·사유·원문 위치), 원장의
+    `failed_records`·`data_status=INCOMPLETE`(`ops/wrapper.derive_data_status`), 아래 문서별
+    경고 줄과 그 줄을 세는 누적 알람.
+
+    ⚠️ 이 판정은 **CLI 경계에만** 있다. `normalize_*.run` 의 반환값은 바꾸지 않는다 — 1분 레인이
+    같은 함수를 직접 불러 종료 2 로 그 창을 INCOMPLETE 로 남긴다(ALPHA-1154). 반환을 0 으로
+    바꾸면 거부를 본 창이 VALID 로 접힌다.
+    """
+    failures: list[dict] = []
+    exit_code = normalizer(storage, run_id, input_run_id, failures_out=failures)
+    # 종료 2 일 때만 사유를 읽는다 — canonical·quality_log·완료 manifest 가 온전히 기록된 뒤의
+    # 행 실패다. 종료 1 은 그 기록 자체가 깨진 것이라 사유가 무엇이든 실패다.
+    if exit_code != 2:
+        return exit_code
+    rejected, unresolved = split_failures(step, failures)
+    for doc in rejected:
+        logger.warning("%s: step=%s rcept_no=%s reasons=%s",
+                       CONFIRMED_REJECT_LOG, step, doc["rcept_no"], ",".join(doc["reasons"]))
+    if not rejected or unresolved or len(rejected) > limit:
+        logger.warning(
+            "%s 부분 실패를 종료 2 로 남긴다: 확정 거부 %d건(상한 %d) · 그 밖의 실패 %d건",
+            step, len(rejected), limit, unresolved)
+        return exit_code
+    logger.warning("%s 는 확정 거부 %d건만 남아 종료 0 으로 닫는다(상한 %d)",
+                   step, len(rejected), limit)
+    return 0
+
+
 def _dispatch(args, settings, storage, run_id) -> int:
     """스텝 하나를 실행해 exit code 를 낸다. 계측은 호출부(main)가 감싼다."""
     max_failed_symbols = args.max_failed_symbols or 0
@@ -646,6 +815,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # run_id 는 백업 객체 접미사로만 쓴다(`.bak-<run_id>`) — 같은 런의 산출임이 드러난다.
     if args.step == "build-minute-universe":
         return build_minute_universe.run(storage, settings, args.universe, run_id)
+    if args.step in OBSERVATION_STEPS:
+        return _dispatch_observation(args, settings, storage, run_id)
     # 정제(normalize-price)는 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 먼저 분기한다.
     # 벤더는 raw 키의 source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-price":
@@ -666,10 +837,14 @@ def _dispatch(args, settings, storage, run_id) -> int:
                                   expected_etfs=ingest_price_raw._krx_expected_etfs(settings))
     # 공시 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고, 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
-    if args.step == "normalize-disclosure":
-        return normalize_disclosure.run(storage, run_id, args.input_run_id)
-    if args.step == "normalize-disclosure-segment":
-        return normalize_disclosure_segment.run(storage, run_id, args.input_run_id)
+    if args.step in ("normalize-disclosure", "normalize-disclosure-segment"):
+        normalizer = (normalize_disclosure if args.step == "normalize-disclosure"
+                      else normalize_disclosure_segment)
+        # 섹션이 없으면 한 건도 접지 않는다 — 상한을 모르는 채 성공으로 닫지 않는다.
+        limit = (settings.dart_disclosure.max_confirmed_rejects_per_run
+                 if settings.dart_disclosure is not None else 0)
+        return _settle_confirmed_rejects(
+            args.step, normalizer.run, storage, run_id, args.input_run_id, limit)
     # ETF 구성종목 정제도 raw 를 읽는 스텝이라 수집 날짜창·소스 벤더가 없다 — 벤더는 raw 키의
     # source= 로 판별하고(fmp=US·krx=KR), 대상 범위는 --input-run-id 로만 좁힌다(미지정=전체).
     if args.step == "normalize-etf":
@@ -678,6 +853,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # 규정하고, 시간축은 레코드의 거래일(stck_bsop_date)이 준다.
     if args.step == "normalize-etf-nav":
         return normalize_etf_nav.run(storage, run_id, args.input_run_id)
+    if args.step == "normalize-sector-index-daily":
+        return normalize_sector_index_daily.run(storage, run_id, args.input_run_id)
     # ETF 프로필 정제도 raw 만 읽는다 — 마스터(entity·instrument)의 재료를 만든다(ALPHA-462).
     if args.step == "normalize-etf-profile":
         return normalize_etf_profile.run(storage, run_id, args.input_run_id)
@@ -801,6 +978,27 @@ def _dispatch(args, settings, storage, run_id) -> int:
             from_date=args.from_date, to_date=args.to_date,
         )
 
+    # DataGuide 일봉 일회성 적재(ALPHA-1148). 범위를 기본값으로 두지 않는다 — 869만 행을 싣는
+    # 작업이라 스냅샷과 기간을 실행한 사람이 명시해야 한다.
+    if args.step == "backfill-price-daily-dataguide":
+        for name, value in (("--as-of-date", args.as_of_date), ("--from", args.from_date),
+                            ("--to", args.to_date)):
+            if value is None:
+                raise SystemExit(f"backfill-price-daily-dataguide 는 {name} 이 필요하다")
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}") from exc
+            if parsed.strftime("%Y-%m-%d") != value:
+                raise SystemExit(f"{name}은 YYYY-MM-DD 달력일이어야 한다: {value}")
+        if args.from_date > args.to_date:
+            raise SystemExit("backfill-price-daily-dataguide 의 --from은 --to보다 늦을 수 없다")
+        return backfill_price_daily_dataguide.run(
+            storage, run_id, db=db_config_from_env(settings.db),
+            as_of_date=args.as_of_date, from_date=args.from_date, to_date=args.to_date,
+            dry_run=args.dry_run,
+        )
+
     # 가격 적재 정상 경로는 NormalizePrice manifest의 KR direct key와 winner만 읽는다.
     # 날짜창은 명시 복구, 전체 스캔은 --all을 직접 쓴 경우뿐이다(ALPHA-1038).
     if args.step == "load-price-daily":
@@ -835,16 +1033,17 @@ def _dispatch(args, settings, storage, run_id) -> int:
 
     # NAV 정상 경로는 NormalizeEtfNav manifest의 direct key와 winner만 읽는다.
     # 날짜창은 명시 복구, 전체 scan은 --all을 직접 쓴 경우뿐이다(ALPHA-1043).
-    if args.step == "load-etf-nav":
+    # 지수 일봉 적재(ALPHA-1260)는 NAV 적재와 입력 범위 규칙이 같다 — 같은 검사를 쓴다.
+    if args.step in ("load-etf-nav", "load-market-series-daily"):
         scopes = sum((args.input_run_id is not None,
                       args.from_date is not None or args.to_date is not None,
                       args.all_partitions))
         if scopes != 1:
             raise SystemExit(
-                "load-etf-nav는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
+                f"{args.step}는 --input-run-id, --from/--to, --all 중 하나가 필요하다"
             )
         if (args.from_date is None) != (args.to_date is None):
-            raise SystemExit("load-etf-nav의 --from과 --to는 함께 써야 한다")
+            raise SystemExit(f"{args.step}의 --from과 --to는 함께 써야 한다")
         parsed_dates = []
         for name, value in (("--from", args.from_date), ("--to", args.to_date)):
             if value is None:
@@ -854,16 +1053,17 @@ def _dispatch(args, settings, storage, run_id) -> int:
                 parsed = datetime.strptime(value, "%Y-%m-%d")
             except ValueError as exc:
                 raise SystemExit(
-                    f"load-etf-nav의 {name}은 YYYY-MM-DD 달력일이어야 한다"
+                    f"{args.step}의 {name}은 YYYY-MM-DD 달력일이어야 한다"
                 ) from exc
             if parsed.strftime("%Y-%m-%d") != value:
                 raise SystemExit(
-                    f"load-etf-nav의 {name}은 YYYY-MM-DD 달력일이어야 한다"
+                    f"{args.step}의 {name}은 YYYY-MM-DD 달력일이어야 한다"
                 )
             parsed_dates.append(parsed)
         if all(parsed_dates) and parsed_dates[0] > parsed_dates[1]:
-            raise SystemExit("load-etf-nav의 --from은 --to보다 늦을 수 없다")
-        return load_etf_nav.run(
+            raise SystemExit(f"{args.step}의 --from은 --to보다 늦을 수 없다")
+        loader = load_etf_nav if args.step == "load-etf-nav" else load_market_series_daily
+        return loader.run(
             storage, run_id, db=db_config_from_env(settings.db),
             input_run_id=args.input_run_id,
             from_date=args.from_date, to_date=args.to_date,
@@ -1239,7 +1439,8 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # 30일 반환에 기대던 갭 커버가 사라져 가격과 같은 소급이 필요하다.
         lookback = (
             DEFAULT_PRICE_LOOKBACK_DAYS
-            if args.step in ("ingest-price-raw", "ingest-raw-investor")
+            if args.step in ("ingest-price-raw", "ingest-raw-investor",
+                             "ingest-raw-sector-index-daily")
             else DEFAULT_LOOKBACK_DAYS
         )
         from_date, to_date = default_window(
@@ -1285,6 +1486,27 @@ def _dispatch(args, settings, storage, run_id) -> int:
         return ingest_raw_etf.run(
             settings, storage, nav_source, run_id,
             dataset="etf_nav", partition=raw_etf_nav_partition, job_name="ingest_raw_nav",
+        )
+    if args.step == "ingest-raw-sector-index-daily":
+        # 업종지수 일봉 종가(ALPHA-1254). 분봉 레인은 공식 종가를 못 담아 일봉 TR 로 따로 받는다.
+        # 수집 대상은 분봉 레인과 같은 정본(`[minute_sector_index.index_map]`)이고, 자격증명은
+        # 분봉 레인처럼 NAV 쌍을 쓴다(같은 KIS 앱키).
+        if settings.kis_nav is None:
+            raise SystemExit("kis_nav.source 설정이 없다(업종 일봉 자격증명) — sources.toml 확인")
+        if settings.minute_sector_index is None:
+            raise SystemExit("[minute_sector_index.index_map] 설정이 없다(업종 일봉 수집 대상)")
+        sector_source = KisSectorIndexDailySource(
+            settings.kis_nav.source,
+            settings.minute_sector_index.index_map,
+            kis_http_client(settings, min_interval=KIS_MIN_INTERVAL_SEC,
+                            caller="sector-index-daily", call_class=CLASS_BATCH),
+            from_date,
+            to_date,
+        )
+        return ingest_raw_etf.run(
+            settings, storage, sector_source, run_id,
+            dataset="sector_index_daily", partition=raw_sector_index_daily_partition,
+            job_name="ingest_raw_sector_index_daily",
         )
     if args.step == "ingest-raw-inav":
         # 장중 iNAV(ALPHA-555). 일별 NAV 와 같은 자격증명·유니버스를 쓰되 dataset 이 다르다 —

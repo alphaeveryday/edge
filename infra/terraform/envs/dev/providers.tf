@@ -5,6 +5,11 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.60"
     }
+    # 랜딩 전망 내보내기 람다(modules/landing-export)의 zip 묶음
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7"
+    }
   }
 }
 

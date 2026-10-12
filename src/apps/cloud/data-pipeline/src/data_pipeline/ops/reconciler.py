@@ -433,7 +433,7 @@ def _record_unfinished(ledger, run_id: str, tasks: list[dict], evidence: dict[st
         entry = catalog.get(task["task_key"])
         if entry is None or task["plan_status"] == states.PLAN_SKIPPED:
             continue
-        occs = [o for o in evidence.get(entry.sfn_state_name, []) if o.get("ecs_task_arn")]
+        occs = [o for o in evidence.get(entry.evidence_key, []) if o.get("ecs_task_arn")]
         for occ in occs:
             if occ.get("_closed_now") and occ.get("_stopped_without_exit"):
                 ledger.open_or_bump_issue(
@@ -554,12 +554,19 @@ def _stale_tasks(latest: dict[str, tuple[str, object]]) -> set[str]:
     원장엔 실행 세대가 없다. 재처리가 정제만 다시 돌리고 적재 전에 끊기면 적재의 최신 시도는 앞 세대의
     성공이다. 이를 결론으로 쓰면 새 정제 결과가 적재되지 않았는데 SUCCEEDED 가 투영된다."""
     stale = set()
+
+    def flow(task_key: str) -> str:
+        """작업의 흐름(catalog.flow). 미등록 작업은 레인 전체 흐름("")로 본다."""
+        entry = catalog.get(task_key)
+        return entry.flow if entry is not None else ""
+
     for task_key, (stage, at) in latest.items():
         rank = _STAGE_RANK.get(stage)
         if rank is None or at is None:
             continue
+        # 같은 흐름(catalog.flow)의 앞 단계만 본다 — 병렬 흐름의 늦은 수집은 이 작업의 입력이 아니다.
         if any(_STAGE_RANK.get(up_stage, rank) < rank and up_at is not None and up_at > at
-               for up_stage, up_at in latest.values()):
+               for up_key, (up_stage, up_at) in latest.items() if flow(up_key) == flow(task_key)):
             stale.add(task_key)
     return stale
 
@@ -579,7 +586,7 @@ def _airflow_run_status(tasks: list[dict], evidence: dict[str, list[dict]],
         if task["task_key"] in (stale or ()):
             return None
         entry = catalog.get(task["task_key"])
-        occs = evidence.get(entry.sfn_state_name, []) if entry is not None else []
+        occs = evidence.get(entry.evidence_key, []) if entry is not None else []
         latest_exit = occs[-1].get("exit_code") if occs else None
         if task["task_outcome"] in (None, states.OUTCOME_PENDING) or latest_exit is None:
             return None
@@ -604,7 +611,7 @@ def _hydrate_occurrence_evidence(
         task = task_by_key.get(entry.task_key)
         if task is None:
             continue
-        occs = evidence.setdefault(entry.sfn_state_name, [])
+        occs = evidence.setdefault(entry.evidence_key, [])
         attempts = ledger.attempts_for(task["expected_task_id"])
         attempts_by_arn = {
             attempt.get("ecs_task_arn"): attempt
@@ -665,7 +672,7 @@ def _completed_task_keys(evidence: dict[str, list[dict]]) -> set[str]:
     """선행 완료 = hydrate된 최신 물리 attempt에서 카탈로그가 승인한 exit 확인."""
     done: set[str] = set()
     for entry in catalog.entries():
-        occs = evidence.get(entry.sfn_state_name, [])
+        occs = evidence.get(entry.evidence_key, [])
         if (occs and _output_fulfilled(entry, occs[-1].get("exit_code"))
                 and not occs[-1].get("_stopped_without_exit")):     # 외부 종료의 exit 는 업무 결과가 아니다
             done.add(entry.task_key)
@@ -684,7 +691,7 @@ def _reconcile_task(ledger, task, *, run_id, evidence, ecs, cluster_arn, now, ha
     entry = catalog.get(task["task_key"])
     if entry is None:
         return
-    occs = evidence.get(entry.sfn_state_name, [])   # 시간순
+    occs = evidence.get(entry.evidence_key, [])   # 시간순
     eligible_at = _parse_ts(task["eligible_at"])
 
     deps_met = all(d in deps_done for d in entry.depends_on)
@@ -763,7 +770,7 @@ def _reconcile_attempt(ledger, etid, occ, *, entry, sfn_execution_arn, now, stal
         ledger.backfill_attempt(
             expected_task_id=etid, ecs_task_arn=arn,
             execution_status=terminal or states.EXEC_RUNNING,
-            sfn_state_name=entry.sfn_state_name, sfn_execution_arn=sfn_execution_arn,
+            sfn_state_name=entry.sfn_state_name or None, sfn_execution_arn=sfn_execution_arn,
             exit_code=occ.get("exit_code"), started_at=occ.get("_entered_at"))
         # 자기 원장 기록이 불가능한 작업(task-def 에 DB env 없음)은 attempt 결측이 **정상**이다 —
         # 위 backfill 이 유일·정확한 경로이므로 LEDGER_GAP 을 열지 않는다. 열면 매 런 새 ARN 으로

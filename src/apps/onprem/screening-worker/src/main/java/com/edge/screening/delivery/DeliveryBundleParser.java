@@ -115,13 +115,22 @@ public final class DeliveryBundleParser {
 	}
 
 	private static DeliveryEntry.ExplanationResult parseResult(JsonNode result) {
+		String engine = result.has("analysis_engine") ? strictString(result, "analysis_engine") : "v1";
+		if (!"v1".equals(engine) && !"v2".equals(engine)) {
+			throw new IllegalStateException("Unknown analysis_engine");
+		}
+		String ticker = strictString(result, "etf_ticker");
+		if ("v2".equals(engine) && (!result.path("explanation_type").isNull()
+				|| !result.path("confidence_level").isNull() || ticker == null || ticker.isBlank())) {
+			throw new IllegalStateException("V2 requires null v1 assessments and a publication ticker");
+		}
 		// 콘텐츠 기준시각(ALPHA-918) — optional: 구형 번들·EOD 레인은 키 부재/null.
 		// 값이 있으면 형식은 계약(date-time)이라 파싱 실패는 fail-loud 가 맞다(explanation_as_of 동일).
 		String contentAsOf = strictString(result, "content_as_of");
 		return new DeliveryEntry.ExplanationResult(
 				strictString(result, "explanation_result_id"),
 				strictString(result, "etf_instrument_id"),
-				strictString(result, "etf_ticker"),
+				ticker,
 				result.path("etf_name").asString(null),
 				LocalDate.parse(result.path("trade_date").asString()),
 				OffsetDateTime.parse(result.path("explanation_as_of").asString()),
@@ -130,6 +139,6 @@ public final class DeliveryBundleParser {
 				strictString(result, "headline"),
 				result.path("confidence_level").asString(null),
 				result.path("primary_thread_id").asString(null),
-				contentAsOf == null ? null : OffsetDateTime.parse(contentAsOf));
+				contentAsOf == null ? null : OffsetDateTime.parse(contentAsOf), engine);
 	}
 }

@@ -288,6 +288,9 @@ LoadEtfFlow` 가 끝단이다.
 `price_daily` 는 `close_price` · `adjusted_close_price` · `volume` · `turnover_value` 뿐 —
 **OHLC 의 H/L 이 없다.** 따라서:
 
+> 2026-10-02: `open_price` · `high_price` · `low_price` 컬럼이 추가됐다(ALPHA-1148). 아래
+> 판정은 추가 전 기준이다.
+
 - Corwin-Schultz (2012) high-low spread estimator: **계산 불가** (H/L 필수)
 - Abdi-Ranaldo (2017): **계산 불가** (H/L 필수)
 - 정적 VI 판정 (`H ≥ 1.10 × C_prev`): **계산 불가**

@@ -30,7 +30,7 @@ def test_contract_audit_reads_committed_assembly_and_detects_stored_regression(r
                     'selected_item_ids': ['new'], 'summary': '공급 계약을 확인해요.'}
         kwargs['call']('get_instrument_factors', {'instrument_id': kwargs['initial']['context']['etf_code']})
         kwargs['call']('write_outlook_body', {'title': '계약 이행을 확인해요', 'items': [
-            dict(id='contract', title_keyword='계약', sentences=['판매 물량을 확보했어요.'], tool_run_ids=[reference])]})
+            dict(id='contract', title_keyword='계약', sentences=['판매 물량을 확보했어요.'], sentiment='positive', tool_run_ids=[reference])]})
         return {'outlook': {'direction': '상승'}, 'summary_card': {'title': '물량 확보', 'summary': '이행을 확인해요.'},
                 'factors': [{'type': factor, 'sticker': '중립', 'sentence': '자료를 확인했어요.'}
                             for factor in ('이슈', '차트', '매크로', '밸류', '수급')],
@@ -164,7 +164,7 @@ def test_outlook_body_and_independent_features_publish_with_factor_cards(run_con
         kwargs['call']('get_instrument_factors', {'instrument_id': kwargs['initial']['context']['etf_code']})
         kwargs['call']('get_instrument_factors', {'instrument_id': '000660', 'factors': ['valuation']})
         kwargs['call']('write_outlook_body',{'title':'물량 확대를 확인해요','items':[
-            dict(id='supply',title_keyword='공급 확대',sentences=['추가 공급 계약을 확보했어요.'],tool_run_ids=[reference])]})
+            dict(id='supply',title_keyword='공급 확대',sentences=['추가 공급 계약을 확보했어요.'],sentiment='positive',tool_run_ids=[reference])]})
         return {'outlook':{'direction':'상승'},'summary_card':{'title':'공급 확대','summary':'계약 이행을 확인해요.'},
             'factors':[{'type':f,'sticker':'중립','sentence':'기간별 관측값을 확인했어요.'} for f in ('이슈','차트','매크로','밸류','수급')],
             'conclusion':{'title':'계약 이행 확인','supports':[{'label':'계약','tool_run_ids':[reference]}],'burdens':[],'sentence':'공급 이행을 지켜봐요.'},

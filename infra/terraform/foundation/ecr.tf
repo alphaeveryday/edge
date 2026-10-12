@@ -36,3 +36,85 @@ resource "aws_ecr_repository" "this" {
     scan_on_push = true
   }
 }
+
+# ── 이미지 수명 주기 정책 (ALPHA-1236) ─────────────────────────────────
+# 이미지는 git 에서 다시 빌드할 수 있는 캐시로 본다. 남기는 이유는 둘뿐이다 — ①지금 실행 중인
+# 이미지, ②배포가 연달아 실패할 때 서비스가 아직 붙들고 있는 이전 버전이 밀려나지 않을 여유.
+# 롤백용 이력은 이유가 아니다(보존 범위보다 오래된 버전은 그 커밋에서 다시 빌드한다).
+#
+# ⚠️ ECR 은 ECS·Lambda 가 무엇을 실행 중인지 모른다 — 규칙은 태그·개수·나이로만 고른다.
+# 실행 이미지를 지키는 장치는 이 규칙뿐이라, 바꿀 때는 apply 전에 미리보기로 만료 대상을
+# 확인한다(삭제는 되돌릴 수 없다). 절차와 팀이 알아둘 것은 README "ECR 이미지 보존".
+locals {
+  # 저장소 기본값 — 태그 달린 버전 최근 N개. 10 = 조회된 배포 실행 기록의 연속 실패 최장 9회
+  # (2026-09-30 Airflow 구축기) 보다 큰 값.
+  ecr_keep_tagged_default = 10
+
+  # 여러 태그 계열이 한 저장소를 쓰는 곳만 규칙을 더한다. 계열을 나누지 않으면 자주 배포되는
+  # 계열이 다른 계열의 실행 이미지를 "최근 N개" 밖으로 밀어낸다.
+  ecr_repository_overrides = {
+    # data-pipeline(<sha>·data-pipeline-latest) · analysis-v2 · analysis-v2-api · db-query 네 계열.
+    "edge/pipeline" = {
+      protected_rules = [
+        # 움직이는 태그가 가리키는 이미지 = 수집·정제 태스크와 db-query 가 실행하는 이미지.
+        # ECR 에는 "보존" 동작이 없어, 일어나지 않을 만료 조건으로 쓴다(이런 태그는 2개뿐이다).
+        # 상위 규칙의 태그 조건에 맞은 이미지는 하위 규칙이 만료하지 못한다.
+        { patterns = ["*-latest"], keep = 10 },
+        # 배포 한 번에 워커·API 이미지 2개가 올라간다 → 20 = 배포 10번 치.
+        { patterns = ["analysis-v2-*"], keep = 20 },
+      ]
+      # data-pipeline 은 태그가 SHA 뿐이라 패턴으로 따로 세지 못하고, 위 규칙에 맞은 이미지도
+      # 이 개수 안에서 함께 세어진다. 그래서 다른 계열이 몰려 올라오면 data-pipeline·db-query 의
+      # 이전 이미지가 밀릴 수 있다 — 보장이 아니라 여유다. 60 = analysis-v2 하루 최대 배포
+      # 24회 × 2개(2026-10-02) + 기본 10 + db-query 몫.
+      keep_tagged = 60
+    }
+    # 운영 이미지(<sha>)와 격리 검증 이미지(verify·verify-*) 두 계열. 검증 이미지는 드물게
+    # 올라가 운영 배포에 밀리므로 따로 남긴다(verify_enabled 를 다시 켤 때 받아야 한다).
+    "edge/airflow" = {
+      protected_rules = [{ patterns = ["verify*"], keep = 3 }]
+      keep_tagged     = 13
+    }
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "this" {
+  for_each   = aws_ecr_repository.this
+  repository = each.value.name
+
+  policy = jsonencode({
+    rules = [
+      for i, selection in concat(
+        [
+          for r in try(local.ecr_repository_overrides[each.key].protected_rules, []) : {
+            tagStatus      = "tagged"
+            tagPatternList = r.patterns
+            countType      = "imageCountMoreThan"
+            countNumber    = r.keep
+          }
+        ],
+        [
+          # 태그 없는 이미지 = 태그가 다른 이미지로 옮겨 간 뒤 남은 것. 태그 달린 인덱스의
+          # 자식(태그 없는 실제 이미지)은 인덱스가 남아 있는 동안 만료되지 않는다.
+          # ⚠️ 기준은 태그를 잃은 시각이 아니라 push 시각이다 — 7일 넘게 쓰던 이미지가 태그를
+          # 잃으면 다음 평가(24시간 안)에 지워진다. 7일은 최근에 올린 이미지가 곧바로 태그를
+          # 잃는 경우(같은 커밋 재빌드·같은 태그 재배포)에만 유예가 된다.
+          {
+            tagStatus   = "untagged"
+            countType   = "sinceImagePushed"
+            countUnit   = "days"
+            countNumber = 7
+          },
+          # `any` 가 아니라 tagged `*` 로 센다 — `any` 는 인덱스의 자식까지 세어 "N개"가
+          # N개 버전이 아니게 된다.
+          {
+            tagStatus      = "tagged"
+            tagPatternList = ["*"]
+            countType      = "imageCountMoreThan"
+            countNumber    = try(local.ecr_repository_overrides[each.key].keep_tagged, local.ecr_keep_tagged_default)
+          },
+        ]
+      ) : { rulePriority = i + 1, selection = selection, action = { type = "expire" } }
+    ]
+  })
+}

@@ -5,6 +5,9 @@ FACTORS = ["이슈", "차트", "매크로", "밸류", "수급"]
 SENTIMENTS = {"positive", "neutral", "negative"}
 
 
+from edge_analysis_v2.contracts.outlook_limits import violations
+
+
 def text(value):
     """Require nonempty text without rewriting the agent's wording."""
     if not isinstance(value, str) or not value.strip():
@@ -85,10 +88,15 @@ def outlook(features, body):
     if not isinstance(body["items"], list) or len(body["items"]) > 15:
         raise ValueError("At most 15 topics")
     for item in body["items"]:
-        if set(item) != {"id", "title_keyword", "sentences", "tool_run_ids"}:
+        if set(item) != {"id", "title_keyword", "sentences", "sentiment", "tool_run_ids"}:
             raise ValueError("Unexpected body topic fields")
         text(item["id"])
         text(item["title_keyword"])
+        sentiment = item["sentiment"]
+        if (sentiment is not None and (not isinstance(sentiment, str)
+                                       or sentiment not in {"positive", "neutral", "negative"})
+                or sentiment is None and body["mode"] != "update"):
+            raise ValueError("Invalid topic sentiment")
         references(item["tool_run_ids"])
         if not isinstance(item["sentences"], list) or not item["sentences"]:
             raise ValueError("Topic requires sentences")
@@ -98,13 +106,21 @@ def outlook(features, body):
             text(sentence["sentence"])
     if len({item["id"] for item in body["items"]}) != len(body["items"]):
         raise ValueError("Duplicate topic ID")
+    over = violations({"summary_card": features["summary_card"], "factors": factors, "conclusion": conclusion, "detail": body})
+    if over:
+        raise ValueError("Outlook exceeds screen limits: " + ", ".join(
+            f"{v['location']} {v['actual']}>{v['limit']}" for v in over[:8]))
     if set(body["updates"]) != {"date", "items"}:
         raise ValueError("Invalid updates")
     for item in body["updates"]["items"]:
-        if set(item) != {"id", "change_type", "title_keyword", "sentence", "tool_run_ids"} or item["change_type"] not in {"added", "modified", "deleted"}:
+        if set(item) != {"id", "change_type", "title_keyword", "sentence", "sentiment", "tool_run_ids"} or item["change_type"] not in {"added", "modified", "deleted"}:
             raise ValueError("Invalid update item")
         text(item["id"])
         text(item["title_keyword"])
         if item["sentence"] is not None:
             text(item["sentence"])
+        sentiment = item["sentiment"]
+        if sentiment is not None and (not isinstance(sentiment, str)
+                                      or sentiment not in {"positive", "neutral", "negative"}):
+            raise ValueError("Invalid update sentiment")
         references(item["tool_run_ids"])

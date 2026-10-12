@@ -6,7 +6,7 @@
 >
 > **배경**: TODO §2 "외부 데이터 소스 약관 확인" — 늦게 발견하면 제품을 되돌려야 하는 리스크를 **조기에 인지**하려는 스냅샷(ALPHA-399). 목적은 "미팅용 라이선스 확보"가 아니라 "잘못된 데이터 경로에 과투자하지 않기".
 
-## 소스 (5종 — `data-pipeline/config/sources.toml`·`sources/*.py` 기준)
+## 소스 (5종 — ALPHA-399 조사 시점의 `data-pipeline/src/data_pipeline/config/sources.toml`·`sources/*.py` 기준)
 티켓은 4종이나 코드에 **KRX**가 추가돼 5종. 상용 **재제공**(가공물의 대외 제공) 관점 리스크만 표시.
 
 | 소스 | 수집 데이터 | 재제공 리스크 | 핵심 근거 (약관) |

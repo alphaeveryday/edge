@@ -1,0 +1,29 @@
+id: DailyBar_ForSecurity_Equity
+source: DailyBar
+definition:
+  name: ForSecurity
+  label: ForSecurity
+  description: The equity security or ETF whose daily open, high, low, close and trading
+    activity this bar records.
+  target: Equity
+  sourceProperty: instrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forSecurityEquity
+  displayName: ForSecurity
+  pluralDisplayName: null
+  inverse:
+    apiName: dailyBars
+    displayName: Daily bars
+    description: Daily OHLCV bars and trading value for this security.
+    pluralDisplayName: Daily bars
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: DailyBar
+    foreignKeyProperty: instrumentId
+    referencedObjectType: Equity

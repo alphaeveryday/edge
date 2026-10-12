@@ -1,0 +1,29 @@
+id: IntradayInvestorFlow_ForEquity_Equity
+source: IntradayInvestorFlow
+definition:
+  name: ForEquity
+  label: ForEquity
+  description: The equity whose cumulative intraday investor-flow estimates are recorded.
+  target: Equity
+  sourceProperty: instrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forEquity
+  displayName: ForEquity
+  pluralDisplayName: null
+  inverse:
+    apiName: intradayInvestorFlows
+    displayName: Intraday investor flows
+    description: Provisional investor-flow observations for this security by date
+      and slot.
+    pluralDisplayName: Intraday investor flows
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: IntradayInvestorFlow
+    foreignKeyProperty: instrumentId
+    referencedObjectType: Equity

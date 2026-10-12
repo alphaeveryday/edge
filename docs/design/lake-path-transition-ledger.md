@@ -4,6 +4,7 @@
 관련 결정은 [ADR-0057](../adr/0057-lake-dataset-canonical-consumption-and-retirement.md)(**제안됨** — 승인·구현 아님)이다.
 신규 수집 데이터의 저장 계약은 [ETF 데이터 저장 경로 설계 초안](etf-data-storage-plan.md) §9에 있다.
 이 문서는 기존 데이터셋별 경로·생산자·소비자·확인된 문제의 기록이다. 팀 승인을 뜻하지 않는다.
+⚠️ [코드] 열이 가리키는 v1 분석엔진 코드(`statics/*`·`paneltest`·`duck`·`sqltool`·`collect/intraday.py` 등)는 #1140(2026-10-05)으로 제거됐다. 그 writer·reader 는 2026-09-28 시점의 이력이다(`data-pipeline` 경로는 그대로다).
 
 **정보의 출처를 가른다.**
 - **[실측]**: dev 계정 `393229433969`(ap-northeast-2), 2026-09-28 KST 11~15시. S3 `list-objects-v2`·Glue `get-tables`·
@@ -35,7 +36,7 @@
 | `pit_daily`·`fin_annual`·`flow_daily` | `analysis/backfill/*.parquet` | 106MB · 2MB · 25MB | 2025-06-27~2026-07-31 · FY2000~2026 · 2022-01-03~2026-07-31 | DataGuide 파생 | `statics/pit.py`·`fin.py`·`flowhist.py`(수동, dev 버킷 하드코딩) | `sql_surface.v_pit`·`v_fin`·`paneltest` | 유지(대체 생산 전) | 유지 |
 | `tau_sidecar` | `analysis/backfill/tau_sidecar.parquet` | 1 · 26MB (08-11) | published 2026-04-25~08-03 · 360,151행 | (article_id, published_kst) | `statics/tau_sidecar.py`(수동, 로컬 출력) | `trial.py`·`evidence.py`·`duck.py:1051` | 폐지 후보(τ 재적재 완료 시, 통일 스펙 ⑦) | 범위 밖 |
 | `etf_holdings_fmp` | `analysis/backfill/etf_holdings_fmp.parquet` | 1 · 0.07MB | as_of 2026-01-28 하루 · 4,153행 | ETF 보유 | **레포 밖** | `layers.py:602`(`s3_etf_holdings` 0행 폴백) | 미결 | 범위 밖 |
-| DataGuide curated | `draft/curated/source=dataguide/dataset={market_daily,financial_statements,investor_flow_daily,price_daily,consensus,reference,market_history}` gzip CSV | 1,337 · 2.93GB | market_daily 2025-02-03~2026-07-31 · consensus as_of ~2026-07-31 · 나머지 as_of 2026-08-02·08-05 | 롱 포맷(trade_date, ticker, item_code, value) | **레포 밖 수작업** | `duck.s3_dg_*`·`tool_dg`·`tool_consensus`·`tool_fin`·`pit/fin/flowhist/dgwide` | 승격 보류(ADR-0057 §5-1 미충족) | 유지 |
+| DataGuide curated | `draft/curated/source=dataguide/dataset={market_daily,financial_statements,investor_flow_daily,price_daily,consensus,reference,market_history}` gzip CSV | 1,337 · 2.93GB | market_daily 2025-02-03~2026-07-31 · consensus as_of ~2026-07-31 · 나머지 as_of 2026-08-02·08-05 | 롱 포맷(trade_date, ticker, item_code, value) | **레포 밖 수작업** | `duck.s3_dg_*`·`tool_dg`·`tool_consensus`·`tool_fin`·`pit/fin/flowhist/dgwide` · data-pipeline `backfill-price-daily-dataguide`(`price_daily` 만, 일회성) | 승격 보류(ADR-0057 §5-1 미충족) | 유지 |
 | Glue DataGuide 표 | `market_data_kr.dg_market_daily_src`(외부 표, curated 위) · `dg_market_daily_m`(Iceberg, 다른 버킷, 08-05) | 미확인 | 미확인 | — | 레포 밖 | **레포 참조 0** | 미결 | 미확인 |
 | draft Iceberg | `draft/canonical/{group}/{table}` · Glue `edge_lake_draft` 20표(+`_latest` 뷰) | 177 · 22MB | 데이터가 있는 표는 `statement_line`(파일 149)·`report_current`(1)뿐, 나머지 18표는 메타데이터만 | tables.py 선언 12표 | `canonical/run.py`(Athena MERGE, 두 표만 · 스케줄 없음) | `duck.s3_statement_line`(`tool_business.py:96`) 외 7뷰(소비자 0) | 표별 승격(§4.3) | 유지 |
 
@@ -163,9 +164,10 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 
 ### 4.1 `sector_index`·`sector_member`
 
-목적 표면(`sector_index_daily`·`sector_membership`)의 생산자가 없다. 스펙은 [통일 스펙](data-source-unification-spec.md)
+목적 표면 중 `sector_index_daily`는 생산자가 생겼다(ALPHA-1254, KIS 업종 일봉 TR — 2026-07-01~
+소급은 배포 뒤). `sector_membership`은 아직 생산자가 없다. 스펙은 [통일 스펙](data-source-unification-spec.md)
 §4.1에 있다. 1분 레인의 `sector_index_minute`는 다른 데이터셋이다(분봉, 소급 불가).
-2026-08-03 이후 일봉 공백이 매일 자란다.
+분석이 읽는 백필 `sector_index`는 08-03에서 멈춘 채이고, canonical 직독 뷰로의 전환은 미착수다.
 
 ### 4.2 `layers_daily` — 축별 실측
 
@@ -180,6 +182,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 ### 4.3 DataGuide·draft Iceberg
 
 - DataGuide는 공급 계약과 갱신 담당이 없다. `pit_daily`·`fin_annual`·`flow_daily`는 대체 생산 경로가 생기기 전까지 유지한다.
+- DataGuide `price_daily`(as_of 2026-08-02, wide CSV)는 정본 존으로 승격하지 않고 data-pipeline 의 일회성 스텝 `backfill-price-daily-dataguide` 가 DB `price_daily` 로 직접 싣는다(ALPHA-1148). 종목 마스터에 있는 종목의 2006-10-01~2026-07-31 일봉이 대상이고 갱신하지 않는다. 출처는 `data_version=dataguide-20260802` 로 남는다. 스냅샷 이후 구간은 KIS 일일 수집이 맡는다.
 - draft Iceberg 20표 중 데이터가 있는 것은 `statement_line`·`report_current` 둘이다.
   writer(`canonical/run.py`)는 레포에 있지만 스케줄이 없다. 나머지 18표는 메타데이터만 있다.
 - Glue `market_data_kr.dg_market_daily_*`와 `market-data-393229433969` 버킷의 나머지 표는 레포 참조가 0이다. 미확인이다.
@@ -230,7 +233,7 @@ dry-run 두 번(13:57·14:37)의 분류는 같았다.
 | `fx_usdkrw`·`us_market` 호환 뷰 전환 | 위 생산자. `change_pct`는 일중 정의를 재현(§2) | ALPHA-1105 |
 | US raw ↔ canonical 키 대조 | 없음. US 5분봉 소비 전환·US 애드혹 raw 폐기의 선행 조건 | 신규 발번 필요 |
 | 구 경로 폐기 (애드혹 raw·KR 07-29 중복·Glue·스테이징) | writer 0·reader 0(코드와 런타임 모두)·보존 기간·승인 | 경로별 |
-| `sector_index_daily`·`sector_membership` 생산자 | 통일 스펙 §4.1 | 미발번 |
+| `sector_index_daily`·`sector_membership` 생산자 | 통일 스펙 §4.1 | [ALPHA-1254](https://alphaeveryday.atlassian.net/browse/ALPHA-1254)(지수 일봉) · 분류는 ALPHA-835 |
 | DataGuide·draft Iceberg 승격 | 갱신 담당·Dataset Contract | 미발번 |
 
 ## 8. 작업 상태 (축소 범위 완료 — 2026-09-28)

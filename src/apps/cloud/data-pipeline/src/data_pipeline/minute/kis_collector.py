@@ -20,15 +20,22 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from ..sources.http import CallStats
 from ..sources.kis_minute import KisMinuteClient, KisSourceError, KisUnitError
 from .models import CollectionRequest, CollectionResult
 from .price_collect import Outcome, collect_units, select_window_candle
 
 logger = logging.getLogger(__name__)
+
+# 창 요약 로그에 **0 이어도, 이 순서로 먼저** 싣는 항목. 빠진 키와 0 을 구분해야 "발생 0회"와
+# "미관측"이 갈리고, 순서가 고정돼야 로그 조회의 parse 한 줄이 창마다 맞는다(나머지 키는 뒤에 이름순).
+_STAT_KEYS = ("attempts", "rtt_ms", "rtt_max_ms", "pace_wait_ms", "transport_retry",
+              "transport_backoff_ms", "kis_EGW00201", "rate_sleep_ms", "rate_exhausted")
 
 
 @dataclass
@@ -43,6 +50,8 @@ class KisPriceCollector:
     # 순차 호출자는 HTTP 응답을 기다리는 동안 자기 다음 슬롯을 잡지 못해, 공유 허용에서 높은 등급이
     # 제 몫을 다시 가져오지 못했다(ALPHA-1087 계측) — 그 대기를 겹치는 용도다.
     concurrency: int = 1
+    # 호출 계측 누적기(ALPHA-1124) — 운반 계층·어댑터와 같은 인스턴스. None 이면 요약 로그를 내지 않는다.
+    stats: CallStats | None = None
 
     def collect(
         self, request: CollectionRequest, now: datetime
@@ -52,12 +61,35 @@ class KisPriceCollector:
         candle_for = lambda unit_id: self._candle_for(unit_id, request)  # noqa: E731
         if self.concurrency > 1:
             candle_for = self._prefetching(request, candle_for)
-        return collect_units(
-            request, now,
-            candle_for=candle_for,
-            retry_count=lambda: self.client.retry_count,
-            clock=self.clock,
-            artifact_uri=self._artifact_uri,
+        started = time.monotonic()
+        status = "RAISED"  # 예외로 끝난 창 — 그 창의 계측이 가장 필요하다
+        try:
+            out = collect_units(
+                request, now,
+                candle_for=candle_for,
+                retry_count=lambda: self.client.retry_count,
+                clock=self.clock,
+                artifact_uri=self._artifact_uri,
+            )
+            status = out[0].status
+            return out
+        finally:
+            if self.stats is not None:
+                self._log_call_stats(request, status, time.monotonic() - started)
+
+    def _log_call_stats(self, request: CollectionRequest, status: str, elapsed: float) -> None:
+        """창 하나의 KIS 호출 요약 한 줄 — 수집 소요를 응답 소요·발신 대기·재시도 대기로 가른다.
+
+        `elapsed_ms ≈ rtt_ms + pace_wait_ms + transport_backoff_ms + rate_sleep_ms`(동시성 1 일 때.
+        동시 요청이면 합계가 겹쳐 elapsed 보다 커진다). 응답이 느려지면 `rtt_ms` 가, 유량 제한이면
+        `kis_EGW00201`·`rate_sleep_ms` 가 는다. 종목 코드·토큰·응답 본문은 싣지 않는다.
+        """
+        drained = self.stats.drain()
+        stats = {**{key: drained.pop(key, 0) for key in _STAT_KEYS}, **dict(sorted(drained.items()))}
+        logger.info(
+            "kis.http.window caller=minute-price window=%s status=%s units=%d elapsed_ms=%d %s",
+            request.window_start.isoformat(), status, len(request.unit_ids), round(elapsed * 1000),
+            " ".join(f"{key}={value}" for key, value in stats.items()),
         )
 
     def _prefetching(self, request: CollectionRequest, fetch):

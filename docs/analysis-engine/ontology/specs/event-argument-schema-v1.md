@@ -6,8 +6,8 @@ created: 2026-07-22
 updated: 2026-07-22
 related:
   - news-normalization-v3.md
-  - ../../../../src/libs/ontology/src/edge_ontology/resources/process/news_thread_contract_v0_1.yaml
-  - ../../../../src/libs/ontology/src/edge_ontology/resources/relation/role_bindings_v0_1.yaml
+  - ../../../../src/libs/ontology/src/edge_ontology/rules/threading/news_thread_contract_v0_1.yaml
+  - ../../../../src/libs/ontology/src/edge_ontology/metadata/value_types/role_bindings_v0_1.yaml
   - news-ontology-criteria.md
 ---
 # 이벤트 아규먼트 스키마 v1 — 측정가능한 문제 정의 + 최선 스키마 결정

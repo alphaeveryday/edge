@@ -1,0 +1,29 @@
+id: NewsArticle_HasTheme_Concept
+source: NewsArticle
+definition:
+  name: HasTheme
+  label: HasTheme
+  description: The theme assigned to this news article, when the source record contains
+    a theme link.
+  target: Concept
+  sourceProperty: themeConceptId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: hasTheme
+  displayName: HasTheme
+  pluralDisplayName: null
+  inverse:
+    apiName: themedArticles
+    displayName: Articles with this theme
+    description: News articles assigned this theme.
+    pluralDisplayName: Articles with this theme
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: NewsArticle
+    foreignKeyProperty: themeConceptId
+    referencedObjectType: Concept

@@ -1,0 +1,222 @@
+formatVersion: 2
+name: EventThread
+label: Event thread
+description: The history of one underlying event, assembled from source-event records
+  about its announcement, updates, and outcome. For example, it tracks the signing,
+  amendment, and cancellation of the same contract.
+group: News & events
+primaryKey: id
+identity:
+  columns: &id001
+  - thread_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal identifier of the thread intended to track one underlying
+      real-world event across source records.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  eventType:
+    label: Event type
+    description: Category of the underlying event tracked by the thread.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: eventType
+    displayName: Event type
+    status: experimental
+    dataType: String
+  currentStage:
+    label: Current stage
+    description: Latest known lifecycle stage of the event tracked by the thread,
+      as determined from its linked source records.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: needsCorrection
+    mappingNote: The current writer advances stage ordinal; corrections, cancellation,
+      conflicting accounts and out-of-order arrivals are not fully resolved. The intended
+      latest-known state needs a corrected derivation.
+    apiName: currentStage
+    displayName: Current stage
+    status: experimental
+    dataType: String
+  openedAt:
+    label: Opened at
+    description: Earliest analytical availability time of the source-event records
+      assigned to this thread. It is not necessarily the start date of the real-world
+      event.
+    sourceDataType: timestamp with time zone
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: openedAt
+    displayName: Opened at
+    status: experimental
+    dataType: Timestamp
+  lastStateAt:
+    label: Last state at
+    description: Time the thread's latest lifecycle state became known. The current
+      source mapping needs correction before it can supply this intended value.
+    sourceDataType: timestamp with time zone
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: needsCorrection
+    mappingNote: The current column records the latest linked event availability,
+      not necessarily a state change. Correct the source mapping before using this
+      value.
+    apiName: lastStateAt
+    displayName: Last state at
+    status: experimental
+    dataType: Timestamp
+  argumentSummary:
+    label: Argument summary
+    description: Stored entity names or original mentions with their event role codes.
+      This is display context, not a new participation link or inferred event interpretation.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: argumentSummary
+    displayName: Argument summary
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: event_thread
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: event_thread
+      column: thread_id
+    eventType:
+      alias: base
+      table: event_thread
+      column: event_type_code
+    currentStage:
+      alias: base
+      table: event_thread
+      column: current_stage
+    openedAt:
+      alias: base
+      table: event_thread
+      column: opened_at
+    lastStateAt:
+      alias: base
+      table: event_thread
+      column: last_state_at
+    argumentSummary:
+      kind: view_column
+      schema: ontology_view
+      table: event_thread
+      column: argument_summary
+      sqlFile: sql/views/event_thread.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: event_argument
+        column: entity_id
+      - schema: public
+        table: event_argument
+        column: mention_text
+      - schema: public
+        table: event_argument
+        column: role_code
+      - schema: public
+        table: event_thread_link
+        column: source_event_id
+      - schema: public
+        table: event_thread_link
+        column: thread_id
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: event_thread
+      column: display_title
+      sqlFile: sql/views/event_thread.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: event_argument
+        column: entity_id
+      - schema: public
+        table: event_argument
+        column: mention_text
+      - schema: public
+        table: event_argument
+        column: role_code
+      - schema: public
+        table: event_thread_link
+        column: source_event_id
+      - schema: public
+        table: event_thread_link
+        column: thread_id
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_event_thread_time
+    kind: c
+    definition: CHECK (((opened_at IS NULL) OR (last_state_at IS NULL) OR (last_state_at
+      >= opened_at)))
+    validated: true
+  - name: event_thread_pkey
+    kind: p
+    definition: PRIMARY KEY (thread_id)
+    validated: true
+  - name: event_thread_thread_key_key
+    kind: u
+    definition: UNIQUE (thread_key)
+    validated: true
+dataIssues:
+- The current identity key can merge separate events with identical role values.
+- Stage updates require validation for corrections, cancellations, and late records.
+apiName: EventThread
+displayName: Event thread
+pluralDisplayName: Event threads
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes: []

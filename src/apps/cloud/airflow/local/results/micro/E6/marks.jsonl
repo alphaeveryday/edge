@@ -1,9 +1,0 @@
-{"t": 1790667103.5, "event": "code_hash_start", "files": {"local/micro/healthcheck.sh": "41e5a976517f", "local/micro/supervisor.sh": "6b453ded4cb1", "local/micro/compose.micro.yaml": "3f5ea326cf31", "local/compose.yaml": "4a6ac202f4d1", "local/fake_aws.py": "f2fe25877dbb", "local/step_shim.py": "9be728283da1", "dags/edge_batch.py": "7b5b0fbfd590", "dags/edge_investor_intraday.py": "9becc68698dd", "dags/edge_investor_intraday_verify.py": "cf09ecc26e6d"}}
-{"t": 1790667113.6, "event": "start_airflow", "mem": "768m", "settings": {"name": "E6", "mem": "768m", "parallelism": 1, "parsing": 1, "pool": 2, "overflow": 3, "health": "light", "malloc_arena_max": "2", "smoke": false}}
-{"t": 1790667131.1, "event": "healthy", "health": "healthy"}
-{"t": 1790667131.1, "event": "dag_loaded", "code": 200}
-{"t": 1790667131.1, "event": "idle_begin", "tag": "start", "seconds": 300}
-{"t": 1790667431.1, "event": "idle_end", "tag": "start"}
-{"t": 1790667431.4, "event": "reset", "tag": "B1"}
-{"t": 1790667431.5, "event": "trigger", "run": "micro__B1__2026-09-22T09:35", "code": 200, "detail": null}
-{"t": 1790667457.8, "event": "suite_aborted", "why": "C1 실패 확정 — 기동 뒤 유휴에서 이미 memory.events max 83(상한 도달·회수), B1 첫 run 중 api-server 137 Killed(자발 재시작 1)", "restart_count": 1}

@@ -1,5 +1,6 @@
 package com.edge.tenantsync.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
 
@@ -24,6 +25,13 @@ public record ExplanationResult(
 		String confidenceLevel,
 		String primaryThreadId,
 		/** 콘텐츠 기준시각(ALPHA-918) — 산문이 서술하는 요청 창의 끝. 결측(구형 행·시드·EOD)은 null. */
-		Instant contentAsOf
+		Instant contentAsOf,
+		@JsonInclude(JsonInclude.Include.NON_NULL) String analysisEngine
 ) {
+	public ExplanationResult(String explanationResultId, String etfInstrumentId, String etfTicker,
+			String etfName, LocalDate tradeDate, Instant explanationAsOf, String explanationType,
+			String summary, String confidenceLevel, String primaryThreadId, Instant contentAsOf) {
+		this(explanationResultId, etfInstrumentId, etfTicker, etfName, tradeDate, explanationAsOf,
+				explanationType, summary, confidenceLevel, primaryThreadId, contentAsOf, null);
+	}
 }

@@ -2,14 +2,21 @@
 
 import asyncio
 from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, create_sdk_mcp_server, tool
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, create_sdk_mcp_server, tool
 from jsonschema import Draft202012Validator
 import yaml
 
 from edge_analysis_v2.tools.model_schema import agent_tool_schemas
+from edge_analysis_v2.agent.work_session import WorkSession
+from edge_analysis_v2.agent.work_context import WorkContext
+from edge_analysis_v2.agent.work_tools import make_workspace_server
+from edge_analysis_v2.tools.execution import ToolExecutionError
+from edge_analysis_v2.quality.measure import describe_environment, measure
 
 
 def load_prompt(path: Path) -> str:
@@ -19,6 +26,17 @@ def load_prompt(path: Path) -> str:
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError('system_prompt must be a nonempty string')
     return prompt
+
+
+def describe_schema_error(error) -> str:
+    """Say where an argument or answer is invalid and how large it may be, without echoing the text."""
+    path = '/'.join(str(part) for part in error.absolute_path) or '(root)'
+    if error.validator == 'maxLength':
+        return (f'{path}: {len(error.instance)} characters, limit {error.validator_value}. '
+                'Keep the judgment; move detail into another bullet or topic instead of dropping evidence.')
+    if error.validator == 'maxItems':
+        return f'{path}: {len(error.instance)} items, limit {error.validator_value}.'
+    return f'{path}: {error.message[:300]}'
 
 
 def make_server(schemas: list[dict], call):
@@ -38,7 +56,14 @@ def make_server(schemas: list[dict], call):
         name = function['name']
         validator = Draft202012Validator(function['parameters'])
         async def handler(arguments, tool_name=name, validator=validator):
-            validator.validate(arguments)
+            invalid = list(validator.iter_errors(arguments))
+            if invalid:
+                # Every failure at once: one round trip per over-long bullet would eat the deadline.
+                lines = [describe_schema_error(error) for error in invalid[:40]]
+                if len(invalid) > 40:
+                    # Never hide that more remain: a fixed draft would be rejected again for the unseen ones.
+                    lines.append(f'{len(invalid) - 40} more fields fail the same way; check every field against its limit.')
+                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(lines)}]}
             async with gate:
                 # Cancellation must not leave a database write racing publication failure.
                 pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
@@ -49,6 +74,8 @@ def make_server(schemas: list[dict], call):
                         await pending
                     finally:
                         raise
+                except ToolExecutionError as error:
+                    return {'is_error': True, 'content': [{'type': 'text', 'text': str(error)}]}
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
         registered.append(tool(name, function['description'], visible['function']['parameters'])(handler))
         allowed.append('mcp__analysis__' + name)
@@ -57,7 +84,8 @@ def make_server(schemas: list[dict], call):
 
 async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     output_schema: dict, artifacts: Path, key: str, model: str,
-                    timeout_seconds: int = 300, client_factory=ClaudeSDKClient) -> dict:
+                    timeout_seconds: int | None = None, client_factory=ClaudeSDKClient, kind: str = 'outlook',
+                    resume: bool = False) -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -69,8 +97,10 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         artifacts: Local execution folder for inspection.
         key: DeepSeek key, never persisted.
         model: DeepSeek model name.
-        timeout_seconds: Total deadline, from 1 to 600 seconds.
+        timeout_seconds: Total deadline, 1..600 seconds; default outlook 600, movement 300.
         client_factory: SDK constructor; replaced by a fake for offline tests.
+        kind: Analysis scope; movement must not expand into a forecast report.
+        resume: Restore interrupted notes and TODOs with identical original observations.
 
     Returns:
         Validated final response. Meaning is reviewed separately by a reviewer.
@@ -80,44 +110,98 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         TimeoutError: Conversation deadline exceeded.
         jsonschema.ValidationError: Final JSON violates the output contract.
     """
+    if timeout_seconds is None:
+        timeout_seconds = 600 if kind == 'outlook' else 300
     if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
         raise ValueError('API key and a 1..600 second deadline are required')
     artifacts.mkdir(parents=True, exist_ok=True)
+    if resume and json.loads((artifacts / 'input.json').read_text(encoding='utf-8')) != initial:
+        raise ValueError('Resume requires the same original observations and cutoff')
     def encode(value):
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
+    started_at = datetime.now(timezone.utc)
     server, allowed = make_server(schemas, call)
-    options = ClaudeAgentOptions(
-        model=model, system_prompt=prompt, tools=[], allowed_tools=allowed,
-        mcp_servers={'analysis': server}, strict_mcp_config=True,
-        output_format={'type': 'json_schema', 'schema': output_schema},
-        permission_mode='dontAsk', setting_sources=[],
-        settings=json.dumps({'autoCompactEnabled': True}),
-        cwd=str(artifacts.resolve()), max_turns=24,
-        thinking={'type': 'enabled', 'budget_tokens': 8192}, effort='high',
-        env={'ANTHROPIC_BASE_URL': 'https://api.deepseek.com/anthropic',
-             'ANTHROPIC_AUTH_TOKEN': key, 'ANTHROPIC_API_KEY': '', 'CLAUDE_CODE_OAUTH_TOKEN': '',
-             'ANTHROPIC_MODEL': model, 'ANTHROPIC_DEFAULT_HAIKU_MODEL': model,
-             'ANTHROPIC_DEFAULT_SONNET_MODEL': model, 'ANTHROPIC_DEFAULT_OPUS_MODEL': model,
-             'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0'})
-    for name, value in [('input.json', initial), ('tool_schemas.json', agent_tool_schemas(schemas)),
-                        ('output_schema.json', output_schema)]:
-        (artifacts / name).write_text(encode(value), encoding='utf-8')
-    (artifacts / 'system_prompt.txt').write_text(prompt.replace(key, '[redacted]'), encoding='utf-8')
-    async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
-        await client.query(encode(initial))
-        async for message in client.receive_response():
-            event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
-            with (artifacts / 'events.jsonl').open('a', encoding='utf-8') as stream:
-                stream.write(json.dumps({'message_type': type(message).__name__, 'message': event}, ensure_ascii=False) + '\n')
-            if type(message).__name__ != 'ResultMessage':
-                continue
-            (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
-            if event.get('is_error') or event.get('subtype') != 'success':
-                raise ValueError('SDK did not produce a successful final result')
-            value = event.get('structured_output')
-            if value is None:
-                value = json.loads(event.get('result') or '')
-            Draft202012Validator(output_schema).validate(value)
-            (artifacts / 'response.json').write_text(encode(value), encoding='utf-8')
-            return value
-    raise ValueError('SDK ended without a final result')
+    with TemporaryDirectory(prefix='analysis-worker-') as directory:
+        workspace = Path(directory)
+        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
+        skills = WorkSession(workspace, artifacts, kind, allowed + workspace_allowed)
+        source_context = WorkContext(initial)
+        prompt = skills.system_prompt(prompt)
+        query_input = {'workspace_instructions': {'path': 'AGENTS.md',
+                       'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
+                       'input': source_context.initial}
+        if resume:
+            query_input['resumed_work'] = skills.restore()
+        (artifacts / 'model_input.json').write_text(encode(query_input), encoding='utf-8')
+        # DeepSeek's documented SDK model tag prevents the unknown-model 200K default.
+        sdk_model = model if model.endswith('[1m]') else model + '[1m]'
+        options = ClaudeAgentOptions(
+            model=sdk_model, system_prompt=prompt, tools=['Skill', 'Read', 'Write', 'Edit'],
+            allowed_tools=allowed + workspace_allowed + ['Read', 'Write', 'Edit'],
+            skills=skills.names, plugins=[{'type':'local', 'path':str(skills.plugin)}],
+            hooks={'PreToolUse':[HookMatcher(hooks=[skills.before])],
+                   'PreCompact':[HookMatcher(hooks=[skills.precompact])],
+                   'PostToolUse':[HookMatcher(hooks=[skills.after])]},
+            mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, skills)}, strict_mcp_config=True,
+            output_format={'type': 'json_schema', 'schema': output_schema},
+            permission_mode='dontAsk', setting_sources=[],
+            settings=json.dumps({'autoCompactEnabled': True}),
+            cwd=str(workspace),
+            thinking={'type': 'enabled', 'budget_tokens': 8192}, effort='high',
+            env={'TINYFISH_API_KEY':'', 'CLAUDE_CONFIG_DIR':str(workspace/'config'), 'ANTHROPIC_BASE_URL': 'https://api.deepseek.com/anthropic',
+                 'ANTHROPIC_AUTH_TOKEN': key, 'ANTHROPIC_API_KEY': '', 'CLAUDE_CODE_OAUTH_TOKEN': '',
+                 'ANTHROPIC_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_HAIKU_MODEL': sdk_model,
+                 'ANTHROPIC_DEFAULT_SONNET_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_OPUS_MODEL': sdk_model,
+                 'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0',
+                 'CLAUDE_CODE_DISABLE_1M_CONTEXT': '0',
+                 'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '1000000',
+                 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE': '80'})
+        for name, value in [('input.json', initial), ('tool_schemas.json', agent_tool_schemas(schemas)),
+                            ('output_schema.json', output_schema)]:
+            (artifacts / name).write_text(encode(value), encoding='utf-8')
+        (artifacts / 'system_prompt.txt').write_text(prompt.replace(key, '[redacted]'), encoding='utf-8')
+        (artifacts / 'environment.json').write_text(encode(describe_environment()), encoding='utf-8')
+        try:
+            async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
+                await client.query(encode(query_input))
+                while True:
+                    final = None
+                    async for message in client.receive_response():
+                        event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
+                        if type(message).__name__ == 'SystemMessage' and event.get('subtype') == 'thinking_tokens':
+                            # Per-token progress ticks: tens of thousands per run and nothing reads them.
+                            continue
+                        with (artifacts / 'events.jsonl').open('a', encoding='utf-8') as stream:
+                            stream.write(json.dumps({'message_type': type(message).__name__, 'at': datetime.now(timezone.utc).isoformat(),
+                                                     'message': event}, ensure_ascii=False) + '\n')
+                        if type(message).__name__ != 'ResultMessage':
+                            continue
+                        (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
+                        if event.get('is_error') or event.get('subtype') != 'success':
+                            # error_max_structured_output_retries = the answer never fit the output schema.
+                            raise ValueError(f"SDK did not produce a successful final result ({event.get('subtype')})")
+                        value = event.get('structured_output')
+                        if value is None:
+                            value = json.loads(event.get('result') or '')
+                        Draft202012Validator(output_schema).validate(value)
+                        final = value
+                    if final is None:
+                        raise ValueError('SDK ended without a final result')
+                    continuation = skills.continuation()
+                    if continuation is None:
+                        (artifacts / 'response.json').write_text(encode(final), encoding='utf-8')
+                        return final
+                    await client.query(continuation)
+        finally:
+            if skills.status == 'running':
+                skills.status = 'interrupted'
+            try:
+                skills.checkpoint()
+            except (OSError, ValueError):
+                # Saving notes must not replace the timeout, cancellation or model error being raised.
+                pass
+            try:
+                # Cost of this run, successful or not, from the events it left behind.
+                (artifacts / 'measurement.json').write_text(encode(measure(artifacts, started_at=started_at, finished_at=datetime.now(timezone.utc))), encoding='utf-8')
+            except (OSError, ValueError, KeyError):
+                pass

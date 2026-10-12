@@ -16,7 +16,7 @@ related:
 
 `edge_ontology`는 뉴스·공시에서 **어떤 존재가 어떤 사건에 어떤 값으로 참여하는지**를
 판정하는 선험적 어휘의 SSOT다. 실제 사건 인스턴스, LLM 호출, 문서 정규화, DB 적재와
-스레딩 실행은 이 라이브러리 밖의 `data-pipeline`·`analysis-engine`가 맡는다.
+스레딩 실행은 이 라이브러리 밖의 `data-pipeline`이 맡는다(v1 `analysis-engine`은 #1140 으로 제거).
 
 ![온톨로지 구조](ontology-architecture.png)
 
@@ -26,7 +26,7 @@ related:
 - 인스턴스가 아닌 **타입·역할·종별·값 모형·정체성 규칙**만 이 라이브러리에 둔다.
 - 타입·역할·속성 어휘가 바뀌면 기존 코퍼스의 해석이 달라질 수 있다. 해당 경우
   `ONTOLOGY_VERSION`을 올리고 재태깅 범위를 명시한다.
-- `resources/relation/`은 edge 로컬 증보다. 그 밖의 상류 리소스는
+- `metadata/value_types/role_bindings_v0_1.yaml`과 `rules/arguments/`는 edge 로컬 증보다. 그 밖의 상류 리소스는
   event-ontology 확정본을 **통째로 교체**한다. 부분 발췌·현지 수정은 금지한다.
 
 ## 2. 네 층과 의존 방향
@@ -222,8 +222,6 @@ Attribute이므로 관계 어휘 검사와 slot 선언 대상에서 제외한다
 |---|---|---|
 | `data_pipeline.tagging` | Process type·predicate·role menu | 추출 프롬프트의 폐쇄 메뉴 |
 | `data_pipeline.steps.assemble_events` | `role_entity_kind`, `resolve_authority`, `concept_key`, `slot_of`, stage 메뉴 | 역할 해소·완결성·event rows의 결정적 파생 |
-| `analysis_engine.eventstore` | `event_argument.slot` | slot을 포함한 event argument 소비 |
-| storm experiment catalog | `load_type_definitions` | 타입 카탈로그 조회 |
 
 | DB 열 | 정본 | 파생 방식 |
 |---|---|---|

@@ -84,6 +84,12 @@ variable "admin_api_domain" {
   default     = "admin-api-dev.edgesignal.dev"
 }
 
+variable "landing_domain" {
+  description = "ETF Orca 랜딩페이지 도메인. 영역 이름과 같은 루트 도메인이다(www 는 서빙하지 않는다)."
+  type        = string
+  default     = "etforca.com"
+}
+
 # ── ETF Orca 앱 API (ADR-0056) ─────────────────────────
 variable "app_api_image" {
   description = "app-api ECR 이미지 URI(:태그 포함). TF 소유 baseline — 실행 태그는 CD 소유"

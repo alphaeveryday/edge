@@ -56,7 +56,7 @@ class BundleScreenerTest {
 		public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 				OffsetDateTime asOf, String type, String summary, String headline, String confidence,
 				String threadId, String evidencesJson, long sourceCursor, String status,
-				OffsetDateTime contentAsOf) {
+				OffsetDateTime contentAsOf, String analysisEngine) {
 			upserts.add(new Upserted(id, status));
 			return 1;
 		}
@@ -316,9 +316,9 @@ class BundleScreenerTest {
 			public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 					OffsetDateTime asOf, String type, String summary, String headline, String confidence,
 					String threadId, String evidencesJson, long sourceCursor, String status,
-				OffsetDateTime contentAsOf) {
+				OffsetDateTime contentAsOf, String analysisEngine) {
 				super.upsert(id, inst, ticker, name, tradeDate, asOf, type, summary, headline, confidence,
-						threadId, evidencesJson, sourceCursor, status, contentAsOf);
+						threadId, evidencesJson, sourceCursor, status, contentAsOf, analysisEngine);
 				return 0;
 			}
 		};
@@ -569,9 +569,9 @@ class BundleScreenerTest {
 			public int upsert(String id, String inst, String ticker, String name, LocalDate tradeDate,
 					OffsetDateTime asOf, String type, String summary, String headline, String confidence,
 					String threadId, String evidencesJson, long sourceCursor, String status,
-				OffsetDateTime contentAsOf) {
+				OffsetDateTime contentAsOf, String analysisEngine) {
 				super.upsert(id, inst, ticker, name, tradeDate, asOf, type, summary, headline, confidence,
-						threadId, evidencesJson, sourceCursor, status, contentAsOf);
+						threadId, evidencesJson, sourceCursor, status, contentAsOf, analysisEngine);
 				return 0;
 			}
 

@@ -6,42 +6,44 @@
 # 권한 분리:
 # - airflow_meta: DB `airflow` 소유. 업무 DB(edge)의 테이블 권한 없음(PUBLIC 에도 테이블 권한이 없다 — privcheck 로 확인).
 # - airflow_verify: DB `edge_verify`(검증 원장) 소유. 역시 업무 테이블 권한 없음.
+# - 검증 자원이 꺼져 있으면(VERIFY_USER 없음 — 운영 메타DB 만, ALPHA-1141) airflow_meta·airflow 만 다룬다.
 # - 두 역할 모두 CONNECTION LIMIT 10, 문장 30초·트랜잭션 유휴 60초 상한. 전역 파라미터는 건드리지 않는다(역할 수준 설정).
 # - 새 DB 두 개는 PUBLIC CONNECT 를 거두고 소유 역할만 붙게 한다.
 # - 마스터(PGUSER)는 두 역할의 SET 권한만 받는다(INHERIT FALSE — 권한이 마스터로 새지 않게). 소유자 권한이 필요한 문장
 #   (PUBLIC CONNECT 회수·DB 삭제)은 SET ROLE 로 소유 역할이 되어 실행한다. RDS 마스터는 슈퍼유저가 아니다.
 set -euo pipefail
+VERIFY_USER=${VERIFY_USER:-}
 
 q() { psql -X -v ON_ERROR_STOP=1 -At "$@"; }
+# 다룰 짝 "역할:DB:비밀번호변수:SCRAM변수" — 검증 몫은 VERIFY_USER 가 있을 때만.
+pairs() {
+  echo "$META_USER:airflow:META_PW:META_SCRAM"
+  [ -z "${VERIFY_USER:-}" ] || echo "$VERIFY_USER:edge_verify:VERIFY_PW:VERIFY_SCRAM"
+}
 
 create() {
-  case "${META_SCRAM:-}${VERIFY_SCRAM:-}" in SCRAM-SHA-256*SCRAM-SHA-256*) ;; *) echo "DBADMIN create: SCRAM 검증자 없음(run.py secrets)"; exit 1 ;; esac
-  # 비밀번호는 명령행(-v)으로 넘기지 않는다(프로세스 목록에 보인다) — psql 안에서 환경변수를 읽는다(\getenv, psql 15+).
-  # SQL 에는 평문이 아니라 SCRAM 검증자(run.py secrets 가 만든 *_scram)를 넣는다 — 문장이 실패하면 서버 오류 로그에 남는다.
-  q -v meta_user="$META_USER" -v verify_user="$VERIFY_USER" -v master="$PGUSER" <<'SQL'
-\getenv meta_pw META_SCRAM
-\getenv verify_pw VERIFY_SCRAM
-SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE CONNECTION LIMIT 10 PASSWORD %L', u, p)
-  FROM (VALUES (:'meta_user', :'meta_pw'), (:'verify_user', :'verify_pw')) v(u, p)
- WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = u) \gexec
-SELECT format('ALTER ROLE %I PASSWORD %L', u, p)
-  FROM (VALUES (:'meta_user', :'meta_pw'), (:'verify_user', :'verify_pw')) v(u, p) \gexec
-SELECT format('ALTER ROLE %I SET statement_timeout = %L', u, '30s') FROM (VALUES (:'meta_user'), (:'verify_user')) v(u) \gexec
-SELECT format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', u, '60s') FROM (VALUES (:'meta_user'), (:'verify_user')) v(u) \gexec
-SELECT format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', u, :'master') FROM (VALUES (:'meta_user'), (:'verify_user')) v(u) \gexec
+  local u db pwv sv
+  while IFS=: read -r u db pwv sv; do
+    case "${!sv:-}" in SCRAM-SHA-256*) ;; *) echo "DBADMIN create: $u SCRAM 검증자 없음(run.py secrets)"; exit 1 ;; esac
+    # 비밀번호는 명령행(-v)으로 넘기지 않는다(프로세스 목록에 보인다) — psql 안에서 환경변수를 읽는다(\getenv, psql 15+).
+    # SQL 에는 평문이 아니라 SCRAM 검증자(run.py secrets 가 만든 *_scram)를 넣는다 — 문장이 실패하면 서버 오류 로그에 남는다.
+    q -v u="$u" -v sv="$sv" -v master="$PGUSER" <<'SQL'
+\getenv pw :sv
+SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE CONNECTION LIMIT 10 PASSWORD %L', :'u', :'pw')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'u') \gexec
+SELECT format('ALTER ROLE %I PASSWORD %L', :'u', :'pw') \gexec
+SELECT format('ALTER ROLE %I SET statement_timeout = %L', :'u', '30s') \gexec
+SELECT format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', :'u', '60s') \gexec
+SELECT format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', :'u', :'master') \gexec
 SQL
-  q <<SQL
-SELECT 'CREATE DATABASE airflow OWNER ' || quote_ident('$META_USER') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'airflow') \gexec
-SELECT 'CREATE DATABASE edge_verify OWNER ' || quote_ident('$VERIFY_USER') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'edge_verify') \gexec
-SET ROLE "$META_USER";
-REVOKE CONNECT ON DATABASE airflow FROM PUBLIC;
-GRANT CONNECT ON DATABASE airflow TO "$META_USER";
-RESET ROLE;
-SET ROLE "$VERIFY_USER";
-REVOKE CONNECT ON DATABASE edge_verify FROM PUBLIC;
-GRANT CONNECT ON DATABASE edge_verify TO "$VERIFY_USER";
+    q <<SQL
+SELECT 'CREATE DATABASE $db OWNER ' || quote_ident('$u') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '$db') \gexec
+SET ROLE "$u";
+REVOKE CONNECT ON DATABASE $db FROM PUBLIC;
+GRANT CONNECT ON DATABASE $db TO "$u";
 RESET ROLE;
 SQL
+  done < <(pairs)
   echo "DBADMIN create ok"
 }
 
@@ -61,21 +63,21 @@ clone_schema() {
 # 권한 분리 확인 — 두 역할이 업무 DB 테이블을 읽지 못하는지, 새 DB 에 다른 역할이 못 붙는지.
 privcheck() {
   # 위반·확인 불가면 exit 1 — 출력만 하고 넘어가지 않는다.
-  local u pw n bad=0
-  for u in META VERIFY; do
-    eval "pw=\$${u}_PW"; eval "u=\$${u}_USER"
-    n=$(PGUSER="$u" PGPASSWORD="$pw" psql -X -At -v ON_ERROR_STOP=1 -d "$PGDATABASE" -c \
+  local u db pwv sv n bad=0 roles=0
+  while IFS=: read -r u db pwv sv; do
+    roles=$((roles + 1))
+    n=$(PGUSER="$u" PGPASSWORD="${!pwv}" psql -X -At -v ON_ERROR_STOP=1 -d "$PGDATABASE" -c \
       "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','v','m','p')
           AND (has_table_privilege(c.oid, 'SELECT') OR has_table_privilege(c.oid, 'INSERT')
                OR has_table_privilege(c.oid, 'UPDATE') OR has_table_privilege(c.oid, 'DELETE'))") || n=unknown
     echo "DBADMIN privcheck $u business_table_privileges=$n"
     [ "$n" = 0 ] || bad=1
-  done
+  done < <(pairs)
   n=$(q -c "SELECT count(*) FROM pg_database WHERE datname IN ('airflow','edge_verify') AND has_database_privilege('public', datname, 'CONNECT')") || n=unknown
   echo "DBADMIN privcheck public_connect_dbs=$n"; [ "$n" = 0 ] || bad=1
   n=$(q -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('$META_USER','$VERIFY_USER') AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND rolconnlimit = 10 AND array_to_string(rolconfig, ';') LIKE '%statement_timeout=30s%'") || n=unknown
-  echo "DBADMIN privcheck compliant_roles=$n"; [ "$n" = 2 ] || bad=1
+  echo "DBADMIN privcheck compliant_roles=$n"; [ "$n" = "$roles" ] || bad=1
   n=$(q -c "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid JOIN pg_roles g ON g.oid = m.member WHERE g.rolname IN ('$META_USER','$VERIFY_USER')") || n=unknown
   echo "DBADMIN privcheck memberships_of_new_roles=$n"; [ "$n" = 0 ] || bad=1
   [ "$bad" = 0 ] || { echo "DBADMIN privcheck FAILED"; exit 1; }
@@ -100,19 +102,18 @@ SQL
 }
 
 teardown() {
-  q <<SQL
-SELECT 'SET ROLE ' || quote_ident('$META_USER') WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$META_USER') \gexec
-SELECT 'DROP DATABASE IF EXISTS airflow WITH (FORCE)' \gexec
+  local u db pwv sv names=() dbs=()
+  while IFS=: read -r u db pwv sv; do
+    names+=("'$u'"); dbs+=("'$db'")
+    q -v u="$u" <<SQL
+SELECT 'SET ROLE ' || quote_ident(:'u') WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'u') \gexec
+SELECT 'DROP DATABASE IF EXISTS $db WITH (FORCE)' \gexec
 RESET ROLE;
-SELECT 'SET ROLE ' || quote_ident('$VERIFY_USER') WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$VERIFY_USER') \gexec
-SELECT 'DROP DATABASE IF EXISTS edge_verify WITH (FORCE)' \gexec
-RESET ROLE;
+SELECT format('DROP ROLE %I', :'u') WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'u') \gexec
 SQL
-  q -v meta_user="$META_USER" -v verify_user="$VERIFY_USER" <<'SQL'
-SELECT format('DROP ROLE %I', u) FROM (VALUES (:'meta_user'), (:'verify_user')) v(u)
- WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = u) \gexec
-SQL
-  echo "DBADMIN teardown ok roles_left=$(q -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('$META_USER','$VERIFY_USER')") dbs_left=$(q -c "SELECT count(*) FROM pg_database WHERE datname IN ('airflow','edge_verify')")"
+  done < <(pairs)
+  local IFS=,
+  echo "DBADMIN teardown ok roles_left=$(q -c "SELECT count(*) FROM pg_roles WHERE rolname IN (${names[*]})") dbs_left=$(q -c "SELECT count(*) FROM pg_database WHERE datname IN (${dbs[*]})")"
 }
 
 main() {

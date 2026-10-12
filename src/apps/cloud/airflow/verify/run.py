@@ -1,7 +1,7 @@
 """실제 AWS 격리 검증 절차(ALPHA-1119) — 운영자 PC 에서 돈다(AWS 자격증명, session-manager-plugin).
 
     python verify/run.py secrets                  # 앱·검증 시크릿 값 생성(없을 때만, 값은 찍지 않는다)
-    python verify/run.py dbadmin <create|clone_schema|privcheck|stats|teardown>
+    python verify/run.py dbadmin <create|clone_schema|privcheck|stats|teardown>   # 검증이 꺼져 있으면 운영 메타DB(airflow) 몫만
     python verify/run.py setup                    # 재생 입력(레이크 읽기) → DB·역할 → 스키마 복제 → 권한 확인 → 종목 등록
     python verify/run.py forward                  # Airflow API 포트 포워딩(백그라운드, 127.0.0.1:18080)
     python verify/run.py deployinfo <exp>         # 배포 설정·이미지 digest·헬스체크 방식·호스트 등록 메모리 기록
@@ -103,6 +103,11 @@ def secrets(_args) -> int:
             sm.put_secret_value(SecretId=sid, SecretString=json.dumps(cur))
         print(f"{sid}: 키 {sorted(cur)} (새로 만든 키 {missing})")
     ensure(f"{PREFIX}/app", ["jwt_secret", "api_secret_key", "admin_password", "meta_db_password"], "meta_db_password")
+    try:                                       # 검증 자원이 꺼져 있으면(운영 메타DB 만 만들 때) 검증 시크릿이 없다
+        sm.describe_secret(SecretId=f"{PREFIX}/verify")
+    except sm.exceptions.ResourceNotFoundException:
+        print(f"{PREFIX}/verify: 없음(verify_enabled=false) — 건너뜀")
+        return 0
     ensure(f"{PREFIX}/verify", ["verify_db_password"], "verify_db_password")
     return 0
 
@@ -116,9 +121,10 @@ def _network(sg_name: str) -> dict:
                                     "assignPublicIp": "DISABLED"}}
 
 
-def _one_off(family: str, command: list[str], container: str, stream_prefix: str) -> tuple[int | None, str]:
+def _one_off(family: str, command: list[str], container: str, stream_prefix: str,
+             sg: str = f"{PREFIX}-verify", log_group: str = f"/ecs/{PREFIX}-verify") -> tuple[int | None, str]:
     task = ecs.run_task(cluster=CLUSTER, taskDefinition=family, launchType="FARGATE",
-                        networkConfiguration=_network(f"{PREFIX}-verify"), startedBy="verify-admin",
+                        networkConfiguration=_network(sg), startedBy="verify-admin",
                         overrides={"containerOverrides": [{"name": container, "command": command}]})["tasks"][0]
     arn = task["taskArn"]
     while (t := ecs.describe_tasks(cluster=CLUSTER, tasks=[arn])["tasks"][0])["lastStatus"] != "STOPPED":
@@ -129,7 +135,7 @@ def _one_off(family: str, command: list[str], container: str, stream_prefix: str
     for _ in range(8):                  # awslogs 전달은 STOPPED 보다 늦을 수 있다
         try:
             text = "\n".join(e["message"] for e in logs.get_log_events(
-                logGroupName=f"/ecs/{PREFIX}-verify", logStreamName=stream, startFromHead=True)["events"])
+                logGroupName=log_group, logStreamName=stream, startFromHead=True)["events"])
         except logs.exceptions.ResourceNotFoundException:
             text = ""
         if text:
@@ -145,7 +151,9 @@ def dbadmin_run(cmd: str) -> tuple[int | None, list[str]]:
     packed = base64.b64encode(gzip.compress((HERE / "dbadmin.sh").read_bytes())).decode()
     script = f"echo {packed} | base64 -d | gunzip > /tmp/dbadmin.sh && source /tmp/dbadmin.sh && main {cmd}"
     assert len(script) < 7000, len(script)
-    code, text = _one_off(f"{PREFIX}-dbadmin", [script], "dbadmin", "dbadmin")
+    # 검증 자원 없이도(운영 메타DB) 돌도록 Airflow 태스크 SG·구성요소 로그 그룹을 쓴다(verify.tf 관리 태스크 절).
+    code, text = _one_off(f"{PREFIX}-dbadmin", [script], "dbadmin", "dbadmin",
+                          sg=f"{PREFIX}-task", log_group=f"/ecs/{PREFIX}")
     return code, [line for line in text.splitlines() if line.startswith("DBADMIN")]
 
 
@@ -157,6 +165,39 @@ def dbadmin(args) -> int:
 
 def ops(command: list[str]) -> tuple[int | None, str]:
     return _one_off(f"{PREFIX}-verify-ops", command, "data-pipeline", "ops")
+
+
+def watchdog(args) -> int:
+    """실험 중 감시 태스크(shim verify-watchdog)를 띄우고 첫 심장박동을 확인한다. 이 뒤로는 PC 와 무관하게 돈다.
+    기준: criteria 의 watchdog.until_kst 까지, rds_stop 그대로. 심장박동이 없으면 업무 스텝은 시작하지 않는다."""
+    w = CRIT.get("watchdog")
+    if not w:
+        raise SystemExit("기준 파일에 watchdog 설정이 없다 — 이 기준은 감시를 쓰지 않는다")
+    stops = {k: v for k, v in CRIT["rds_stop"].items() if not k.startswith("_") and k != "business"}
+    # 표지를 먼저 — 이 뒤로 업무 스텝은 감시 심장박동 없이는 시작하지 않는다(감시가 죽어도 마찬가지).
+    s3.put_object(Bucket=_bucket(), Key="watchdog/required.json",
+                  Body=json.dumps({"exp": args.exp, "at": datetime.now(KST).isoformat()}).encode())
+    task = ecs.run_task(cluster=CLUSTER, taskDefinition=f"{PREFIX}-verify-ops", launchType="FARGATE",
+                        networkConfiguration=_network(f"{PREFIX}-verify"), startedBy="verify-watchdog",
+                        overrides={"containerOverrides": [{"name": "data-pipeline", "command": [
+                            "verify-watchdog", w["until_kst"], json.dumps(stops)]}]})["tasks"][0]
+    arn = task["taskArn"]
+    mark(args.exp, "watchdog_start", task=arn.rsplit("/", 1)[1], until=w["until_kst"])
+    bucket, deadline = _bucket(), time.time() + 300
+    while time.time() < deadline:
+        time.sleep(15)
+        try:
+            beat = json.loads(s3.get_object(Bucket=bucket, Key="watchdog/heartbeat.json")["Body"].read())
+        except s3.exceptions.NoSuchKey:
+            continue
+        if beat.get("task") and beat["task"].endswith(arn.rsplit("/", 1)[1]) and time.time() - beat["t"] < 120:
+            ok = not beat.get("trip") and not any(str(v).startswith("error") for v in beat["last"].values())
+            mark(args.exp, "watchdog_first_beat", ok=ok, beat=beat)
+            print(json.dumps(beat, ensure_ascii=False, default=str)[:1500])
+            return 0 if ok else 1
+    mark(args.exp, "watchdog_no_beat")
+    print("감시 심장박동 없음 — 본 실험을 시작하지 않는다")
+    return 1
 
 
 def setup(_args) -> int:
@@ -211,6 +252,26 @@ def _task_ip_and_host() -> tuple[str, str]:
 
 def forward(_args) -> int:
     ip, iid = _task_ip_and_host()
+    _release_port()
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    log = open(RESULTS / "forward.log", "ab")
+    subprocess.Popen(["aws", "ssm", "start-session", "--region", REGION, "--target", iid,
+                      "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
+                      "--parameters", f"host={ip},portNumber=8080,localPortNumber={PORT}"],
+                     stdout=log, stderr=log, start_new_session=True)
+    for _ in range(30):
+        try:
+            urllib.request.urlopen(f"{API}/api/v2/monitor/health", timeout=3)
+            print(f"포워딩 {API} → {iid} {ip}:8080")
+            return 0
+        except OSError:
+            time.sleep(2)
+    print("포워딩 실패")
+    return 1
+
+
+def _release_port() -> None:
+    """이 실행기가 띄운 SSM 포워딩을 끝낸다(남의 프로세스가 포트를 쥐고 있으면 멈춘다)."""
     subprocess.run(["pkill", "-f", f"localPortNumber={PORT}"], check=False)
     # aws CLI 를 죽여도 그 자식 session-manager-plugin(옛 태스크 IP)이 포트를 계속 쥐고 있을 수 있다 — 포트 점유자를
     # 직접 끝낸다(2026-09-30 재시작 뒤 25분 동안 새 세션이 포트를 못 잡았다).
@@ -227,21 +288,6 @@ def forward(_args) -> int:
         subprocess.run(["kill", pid], check=False)
     if held:
         time.sleep(1)
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    log = open(RESULTS / "forward.log", "ab")
-    subprocess.Popen(["aws", "ssm", "start-session", "--region", REGION, "--target", iid,
-                      "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
-                      "--parameters", f"host={ip},portNumber=8080,localPortNumber={PORT}"],
-                     stdout=log, stderr=log, start_new_session=True)
-    for _ in range(30):
-        try:
-            urllib.request.urlopen(f"{API}/api/v2/monitor/health", timeout=3)
-            print(f"포워딩 {API} → {iid} {ip}:8080")
-            return 0
-        except OSError:
-            time.sleep(2)
-    print("포워딩 실패")
-    return 1
 
 
 _TOKEN: dict = {}
@@ -388,7 +434,7 @@ def clear_runs(exp: str) -> None:
         rid = r["dag_run_id"]
         if r["state"] in ("running", "queued"):
             raise RuntimeError(f"초기화 전 도는 run: {rid}")
-        m = re.match(r"aws__(.+)__(B\d|V)__\d{4}$", rid)
+        m = re.match(r"aws__(.+)__(B\d|V|L)__\d{4}$", rid)
         f = out_dir(m[1]) / f"{m[2]}.json" if m else None
         doc = json.loads(f.read_text()) if f and f.exists() else {}
         # 파일이 있는 것만으로는 부족하다(재실행이 남긴 옛 파일·조회 실패로 빈 증거) — 이 run 의 try 와 원장이 담겼는지 본다.
@@ -544,9 +590,28 @@ def batch(args) -> int:
         stop.set()
 
 
+def _watch_precondition(exp: str) -> None:
+    """감시 요구는 기준 파일이 정한다. 감시를 쓰는 기준이면 신선한 심장박동(중단 없음)이 있어야 배치를 시작한다.
+    감시를 쓰지 않는 기준이면 이전 실험이 남긴 표지·심장박동을 지운다(게이트가 이 배치를 막지 않게)."""
+    bucket = _bucket()
+    if not CRIT.get("watchdog"):
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": "watchdog/required.json"},
+                                                             {"Key": "watchdog/heartbeat.json"}]})
+        return
+    try:
+        s3.head_object(Bucket=bucket, Key="watchdog/required.json")
+        beat = json.loads(s3.get_object(Bucket=bucket, Key="watchdog/heartbeat.json")["Body"].read())
+    except Exception as exc:
+        raise SystemExit(f"감시가 없다({type(exc).__name__}) — run.py watchdog 를 먼저, 감시 없이 배치를 시작하지 않는다")
+    if beat.get("trip") or time.time() - beat.get("t", 0) > 120:
+        raise SystemExit(f"감시 상태가 배치 시작 조건이 아니다(trip={beat.get('trip')}, 나이 {int(time.time() - beat.get('t', 0))}초)")
+    mark(exp, "watchdog_ok_at_batch", beat_at=beat.get("at"))
+
+
 def _batch(args) -> int:
     exp, b = args.exp, args.batch
     spec = CRIT["scenarios"][b]
+    _watch_precondition(exp)
     mark(exp, "reset_begin", batch=b)
     clear_runs(exp)
     if ops(["verify-reset"])[0] != 0:
@@ -554,6 +619,8 @@ def _batch(args) -> int:
     mark(exp, "batch_begin", batch=b)
     if b == "V":
         return _batch_v(exp, spec)
+    if b == "L":
+        return _batch_l(exp, spec)
     wait = CRIT["scenarios"]["normalize_wait_seconds"]
     if b in ("B1", "B3"):
         for i, hhmm in enumerate(spec["slots"]):
@@ -631,6 +698,29 @@ def _batch_v(exp: str, spec: dict) -> int:
         run("A1")
     evidence(exp, "V")
     mark(exp, "batch_end", batch="V")
+    return 0
+
+
+def _batch_l(exp: str, spec: dict) -> int:
+    """A4·A5 표적 재검증(ALPHA-1119) — 같은 조건의 정상 run 을 slots 순서대로 반복하고, 멈춘 ECS 태스크가 조회에서
+    사라지기 전(약 1시간)에 증거를 바로 모은다. 그 뒤 유휴 구간에서 운영자 PC 포워딩을 일부러 끊었다 잇는다 —
+    호스트 health 표본이 그 사이에도 이어지는지가 A4 증거 경로의 확인이다. 정상 run 이 시작하지 않으면 멈춘다."""
+    for i, hhmm in enumerate(spec["slots"]):
+        rid = trigger(exp, "L", hhmm)
+        state = wait_run(exp, rid)
+        mark(exp, "scenario", key=f"N{i + 1}", run=rid, state=state)
+        if state in ("not_started", "timeout"):
+            evidence(exp, "L")
+            raise RuntimeError(f"N{i + 1} {rid}: {state} — 중단")
+    evidence(exp, "L")
+    mark(exp, "batch_end", batch="L")
+    cut = spec.get("forward_cut_seconds", 0)
+    if cut:
+        mark(exp, "forward_cut_begin", seconds=cut)
+        _release_port()
+        time.sleep(cut)
+        forward(None)
+        mark(exp, "forward_cut_end")
     return 0
 
 
@@ -752,11 +842,34 @@ def rds(args) -> int:
 
 
 # ── 호스트 관측 기록 수거 ──
+def _extract_obs(args, iid: str, raw: bytes) -> None:
+    dest = out_dir(args.exp) / "host-obs" / iid
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
+        tf.extractall(dest)
+    print(f"수거: {iid} → {dest} ({len(raw)} bytes)")
+
+
+def obs_from_shutdown(args) -> int:
+    """호스트가 이미 내려갔을 때 — 종료 장치가 내리기 직전 보낸 관측 기록(obs/shutdown/<시각>/)의 가장 최근 것을 푼다."""
+    bucket = _bucket()
+    keys = [o["Key"] for p in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="obs/shutdown/")
+            for o in p.get("Contents", []) if o["Key"].endswith("/stdout")]
+    if not keys:
+        print("종료 장치가 보낸 관측 기록 없음")
+        return 1
+    latest = max(k.split("/")[2] for k in keys)
+    for key in (k for k in keys if k.split("/")[2] == latest):
+        iid = next(part for part in key.split("/") if part.startswith("i-"))
+        _extract_obs(args, iid, base64.b64decode(s3.get_object(Bucket=bucket, Key=key)["Body"].read()))
+    return 0
+
+
 def obs(args) -> int:
     inst = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[f"{PREFIX}-host"])["AutoScalingGroups"][0]["Instances"]
     if not inst:
-        print("호스트 없음")
-        return 1
+        print("호스트 없음 — 종료 장치가 보낸 기록을 찾는다")
+        return obs_from_shutdown(args)
     iid = inst[0]["InstanceId"]
     bucket = _bucket()
     prefix = f"obs/{args.exp}/{datetime.now(KST):%H%M%S}"
@@ -777,12 +890,7 @@ def obs(args) -> int:
     if inv.get("Status") != "Success" or not keys:
         print(f"수거 실패: {inv.get('Status')} {inv.get('StandardErrorContent', '')[:300]}")
         return 1
-    raw = base64.b64decode(s3.get_object(Bucket=bucket, Key=keys[0])["Body"].read())
-    dest = out_dir(args.exp) / "host-obs" / iid
-    dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
-        tf.extractall(dest)
-    print(f"수거: {iid} → {dest} ({len(raw)} bytes)")
+    _extract_obs(args, iid, base64.b64decode(s3.get_object(Bucket=bucket, Key=keys[0])["Body"].read()))
     return 0
 
 
@@ -794,11 +902,11 @@ def main() -> int:
     sub.add_parser("backup").add_argument("exp")
     d = sub.add_parser("dbadmin")
     d.add_argument("cmd")
-    for name in ("deployinfo", "obs"):
+    for name in ("deployinfo", "obs", "watchdog"):
         sub.add_parser(name).add_argument("exp")
     b = sub.add_parser("batch")
     b.add_argument("exp")
-    b.add_argument("batch", choices=("B1", "B2", "B3", "V"))
+    b.add_argument("batch", choices=("B1", "B2", "B3", "V", "L"))
     i = sub.add_parser("idle")
     i.add_argument("exp")
     i.add_argument("tag")
@@ -809,7 +917,7 @@ def main() -> int:
     r.add_argument("--no-stats", action="store_true")
     args = p.parse_args()
     return {"secrets": secrets, "dbadmin": dbadmin, "setup": setup, "forward": forward, "backup": backup,
-            "deployinfo": deployinfo, "obs": obs, "batch": batch, "idle": idle, "rds": rds,
+            "deployinfo": deployinfo, "obs": obs, "watchdog": watchdog, "batch": batch, "idle": idle, "rds": rds,
             "slotcheck": slotcheck}[args.name](args)
 
 

@@ -2,6 +2,7 @@ package com.edge.tenantconsole.model;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 /**
  * 가격 변동 설명 도메인 표현(ALPHA-607 실전환) — 서비스가 원장(analysis_item)에
@@ -38,6 +39,10 @@ public record Explanation(
 	 * ALPHA-740).
 	 */
 	public record Evidence(String kind, String title, String source, OffsetDateTime publishedAt,
-			String sourceUri) {
+			String sourceUri, String newsId, String toolRunId, JsonNode itemIds, String asOf,
+			JsonNode arguments, JsonNode output, String formulaLatex, String description) {
+		public Evidence(String kind, String title, String source, OffsetDateTime publishedAt, String sourceUri) {
+			this(kind, title, source, publishedAt, sourceUri, null, null, null, null, null, null, null, null);
+		}
 	}
 }

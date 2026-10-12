@@ -3,7 +3,8 @@
 
     python verify/shutdown_test.py <exp>
 
-통과 조건: 서비스 desired 0 · 대기 태스크 STOPPED(stoppedReason 이 verify-shutdown) · ASG 0 · 보고서(shutdown/) 존재.
+통과 조건: 서비스 desired 0 · 대기 태스크 STOPPED(stoppedReason 이 verify-shutdown) · ASG 0 · 보고서(shutdown/) 존재 ·
+관측 기록 전송(보고서 host_obs 전부 Success).
 통과해도 호스트·서비스는 내려간 상태로 끝난다 — 본 실험 전에 ASG 를 Terraform 값(1/2/1)으로, 서비스를 배포로 다시 올린다.
 """
 
@@ -53,7 +54,10 @@ def main(exp: str) -> int:
         res["report"] = json.loads(r.s3.get_object(Bucket=bucket, Key=res["reports"][0])["Body"].read())
     ok = (res.get("service_desired") == 0 and res.get("dummy") == "STOPPED"
           and "verify-shutdown" in (res.get("dummy_reason") or "") and res.get("asg") == [0, 0, 0]
-          and bool(res.get("reports")) and not res.get("report", {}).get("errors"))
+          and bool(res.get("reports")) and not res.get("report", {}).get("errors")
+          # 호스트를 내리기 전 관측 기록을 버킷에 보냈는가(ALPHA-1119 A4 — PC 없이도 증거가 남는 경로)
+          and isinstance(res.get("report", {}).get("host_obs"), dict)
+          and set(res["report"]["host_obs"]["status"].values()) == {"Success"})
     r.mark(exp, "shutdown_test_end", ok=ok, **res)
     return 0 if ok else 1
 

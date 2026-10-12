@@ -1,0 +1,260 @@
+formatVersion: 2
+name: SourceEvent
+label: Source event
+description: A structured account of an event reported by a particular news article
+  or disclosure. Different sources or later updates can produce separate records about
+  the same underlying event.
+group: News & events
+primaryKey: id
+identity:
+  columns: &id001
+  - source_event_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal identifier of one source-specific account of an event. Records
+      describing the same underlying event can have different IDs.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  eventType:
+    label: Event type
+    description: Event category code used to identify what kind of event is described,
+      such as a contract-related event.
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: eventType
+    displayName: Event type
+    status: experimental
+    dataType: String
+  predicate:
+    label: Predicate
+    description: Action or relationship code extracted for the event, identifying
+      what the source says happened.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: predicate
+    displayName: Predicate
+    status: experimental
+    dataType: String
+  sourceClass:
+    label: Source class
+    description: 'Kind of originating document: NEWS for a news article or DISCLOSURE
+      for a company filing.'
+    sourceDataType: character varying
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: sourceClass
+    displayName: Source class
+    status: experimental
+    dataType: String
+  eventDate:
+    label: Event date
+    description: Date assigned to the event described by the source. It can differ
+      from the document's publication or collection date.
+    sourceDataType: date
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: eventDate
+    displayName: Event date
+    status: experimental
+    dataType: Date
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  lifecycleStage:
+    label: Lifecycle stage
+    description: Stage described by this particular source record, such as a contract
+      announcement, amendment, or cancellation. It need not be the latest stage in
+      the event thread.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: lifecycleStage
+    displayName: Lifecycle stage
+    status: experimental
+    dataType: String
+  argumentSummary:
+    label: Argument summary
+    description: Stored entity names or original mentions with their event role codes.
+      This is display context, not a new participation link or inferred event interpretation.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: argumentSummary
+    displayName: Argument summary
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: source_event
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: source_event
+      column: source_event_id
+    eventType:
+      alias: base
+      table: source_event
+      column: event_type_code
+    predicate:
+      alias: base
+      table: source_event
+      column: predicate_code
+    sourceClass:
+      alias: base
+      table: source_event
+      column: source_class
+    eventDate:
+      alias: base
+      table: source_event
+      column: event_date
+    availableAt:
+      alias: base
+      table: source_event
+      column: available_at
+    lifecycleStage:
+      alias: base
+      table: source_event
+      column: lifecycle_stage
+    argumentSummary:
+      kind: view_column
+      schema: ontology_view
+      table: source_event
+      column: argument_summary
+      sqlFile: sql/views/source_event.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: event_argument
+        column: entity_id
+      - schema: public
+        table: event_argument
+        column: mention_text
+      - schema: public
+        table: event_argument
+        column: role_code
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: source_event
+      column: display_title
+      sqlFile: sql/views/source_event.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: event_argument
+        column: entity_id
+      - schema: public
+        table: event_argument
+        column: mention_text
+      - schema: public
+        table: event_argument
+        column: role_code
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: ck_source_event_completeness
+    kind: c
+    definition: CHECK (((completeness IS NULL) OR ((completeness)::text = ANY ((ARRAY['complete'::character
+      varying, 'partial'::character varying])::text[]))))
+    validated: true
+  - name: ck_source_event_confidence_level
+    kind: c
+    definition: CHECK (((confidence_level IS NULL) OR ((confidence_level)::text =
+      ANY ((ARRAY['HIGH'::character varying, 'MEDIUM'::character varying, 'LOW'::character
+      varying])::text[]))))
+    validated: true
+  - name: ck_source_event_source_class
+    kind: c
+    definition: CHECK (((source_class)::text = ANY ((ARRAY['NEWS'::character varying,
+      'DISCLOSURE'::character varying])::text[])))
+    validated: true
+  - name: ck_source_event_status
+    kind: c
+    definition: CHECK (((event_status)::text = ANY ((ARRAY['ACTIVE'::character varying,
+      'REJECTED'::character varying])::text[])))
+    validated: true
+  - name: source_event_pkey
+    kind: p
+    definition: PRIMARY KEY (source_event_id)
+    validated: true
+  - name: uq_source_event_id_class
+    kind: u
+    definition: UNIQUE (source_event_id, source_class)
+    validated: true
+dataIssues:
+- Company participation and thread membership remain unverified against the source
+  evidence.
+apiName: SourceEvent
+displayName: Source event
+pluralDisplayName: Source events
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- SourceEvent_InEventThread_EventThread

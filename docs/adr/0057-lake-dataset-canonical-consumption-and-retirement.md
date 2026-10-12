@@ -7,6 +7,8 @@
   ([현황 대장](../design/lake-path-transition-ledger.md) §7). 지금 적용하는 것은 §1~§4를 신규 수집 데이터의 저장
   계약([설계 초안](../design/etf-data-storage-plan.md) §9)에 참고하는 데까지다.
   예외가 하나 있다. 5분봉 애드혹 raw의 표준 raw 복사는 이미 실행됐다(추가만, 소비자 없음 — 대장 §3.1).
+- 2026-10-05 추기: 맥락이 인용한 v1 분석엔진 소비자(`collect/intraday.py`·`pit.py`·`fin.py`·`flowhist.py`·`dgwide.py`·
+  `tau_sidecar.py`)는 #1140(ALPHA-1173)으로 소스째 제거됐다. 아래 "분석엔진" 서술은 작성 시점(v1) 기준이다.
 
 ## 맥락
 

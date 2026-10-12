@@ -48,10 +48,10 @@ DATASET_ETF_INAV_MINUTE = "etf_inav_minute"
 # 전체를 읽고 사이 poll은 접수 원장 증가분까지만 읽는다(`sources/dart_disclosure.py`). 그래서
 # window는 "그 분에 한 번 폴링했다"는 원장 단위이고 실제 관측 깊이는 manifest에 따로 남긴다.
 DATASET_DISCLOSURE_MINUTE = "disclosure_minute"
-# KRX 업종지수 45종 1분봉(ALPHA-887). 일봉 `sector_index` 와 **같은 unit_id 축**(KRX
+# KRX 업종지수 45종 + 종합지수 2종 1분봉(ALPHA-887·1255). 일봉 `sector_index` 와 **같은 unit_id 축**(KRX
 # 업종코드)이고 grain 만 다르다 — 벤더 코드(KIS 지수번호)는 어댑터 URL 안에서만 산다.
 # 🔴 기대 집합이 universe 가 아니라 **config**(`[minute_sector_index.index_map]`)다.
-# 지수는 ETF 명부에도 구성종목에도 없어서 universe.json 이 이 45종을 모른다.
+# 지수는 ETF 명부에도 구성종목에도 없어서 universe.json 이 이 47종을 모른다.
 DATASET_SECTOR_INDEX_MINUTE = "sector_index_minute"
 # dataset 별 source_group 어휘. 원장의 `source_group` 은 **정본**이다 — 어휘 밖 값으로
 # 세션이 서면 그 소스를 처리하는 어댑터·Worker 배선이 없어 dataset 오타와 같은 모양으로

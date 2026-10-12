@@ -75,6 +75,11 @@ output "alarm_topic_arn" {
   value       = aws_sns_topic.alarms.arn
 }
 
+output "scheduler_dlq_arn" {
+  description = "스케줄 전달 실패 DLQ. 다른 모듈의 스케줄도 이 큐로 보내 도착 알람(scheduler-dlq-arrivals) 하나에 묶는다"
+  value       = aws_sqs_queue.scheduler_dlq.arn
+}
+
 # ── Airflow 실행 환경(ALPHA-1119)이 이 레인의 ECS 태스크를 띄우는 데 쓰는 값 ──
 # Airflow 역할의 iam:PassRole 대상 — 배치 태스크 정의(tasks.tf·ops_ledger.tf)가 쓰는 역할 셋.
 output "batch_pass_role_arns" {

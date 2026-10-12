@@ -82,6 +82,11 @@ variable "db_user" {
   type = string
 }
 
+variable "db_instance_identifier" {
+  description = "업무 RDS 인스턴스 식별자 — 운영 중단 경보(stop.tf)가 FreeableMemory·SwapUsage 를 본다"
+  type        = string
+}
+
 variable "db_security_group_id" {
   description = "메타DB SG — Airflow·검증 태스크의 5432 인그레스를 여기 건다"
   type        = string
@@ -156,7 +161,7 @@ variable "verify_image" {
 }
 
 variable "master_db_secret_arn" {
-  description = "업무 RDS 마스터 시크릿 — 검증 관리 태스크(dbadmin)만 쓴다: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제"
+  description = "업무 RDS 마스터 시크릿 — 관리 태스크(dbadmin)만 쓴다: 운영 메타DB·검증 전용 DB와 역할 생성·정리, 검증 원장 스키마 복제"
   type        = string
   default     = ""
 }

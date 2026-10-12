@@ -14,7 +14,7 @@ variable "zone_id" {
 }
 
 variable "certificate_arn" {
-  description = "CloudFront 뷰어 인증서 ARN. foundation 의 us-east-1 와일드카드(*.edgesignal.dev). 반드시 us-east-1 인증서여야 함."
+  description = "CloudFront 뷰어 인증서 ARN. foundation 의 us-east-1 인증서(*.edgesignal.dev 와일드카드 또는 etforca.com). 반드시 us-east-1 인증서여야 함."
   type        = string
 }
 

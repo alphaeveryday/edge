@@ -5,6 +5,9 @@
 #   P=RSS 상위 프로세스. cgroup 이 사라져도(컨테이너 재시작) 그 전까지의 값이 파일에 남는다.
 # - kmsg.log: 커널 로그 전체(OOM killer 가 죽인 프로세스·cgroup 경로가 여기 남는다).
 # - docker-events.log: 컨테이너 die(exitCode)·oom·start 이벤트.
+# - health.log: 15초마다 api-server 의 /api/v2/monitor/health(scheduler·dag_processor heartbeat). 호스트에서 태스크
+#   네트워크 네임스페이스로 들어가(nsenter -n) 부른다 — 운영자 PC 포트 포워딩이 끊겨도 표본이 남는다. curl 은
+#   호스트 cgroup 에서 돌아 태스크 메모리 측정에 끼지 않는다. 형식: `H <epoch> <http_code> <초> <본문>`.
 # 수거는 SSM send-command(출력 → 검증 버킷 obs/). 상시 운영에서는 var.host_observer=false 로 설치하지 않는다.
 mkdir -p /var/log/edge-obs
 cat > /usr/local/bin/edge-obs-sample.sh <<'SH'
@@ -36,11 +39,40 @@ while true; do
 done
 SH
 chmod +x /usr/local/bin/edge-obs-sample.sh
+cat > /usr/local/bin/edge-obs-health.sh <<'SH'
+#!/bin/bash
+OUT=/var/log/edge-obs/health.log
+while true; do
+  t=$(date +%s)
+  cid=$(docker ps -q --filter label=com.amazonaws.ecs.container-name=api-server | head -1)
+  pid=$([ -n "$cid" ] && docker inspect -f '{{.State.Pid}}' "$cid" 2>/dev/null)
+  if [ -n "$pid" ] && [ "$pid" != 0 ]; then
+    meta=$(nsenter -t "$pid" -n curl -s -m 5 -o /tmp/edge-health.json -w '%%{http_code} %%{time_total}' \
+      http://127.0.0.1:8080/api/v2/monitor/health 2>/dev/null) || meta="000 0"
+    echo "H $t $meta $(tr -d '\n' < /tmp/edge-health.json 2>/dev/null)" >> "$OUT"
+    rm -f /tmp/edge-health.json
+  else
+    echo "H $t 000 0 no_api_container" >> "$OUT"
+  fi
+  sleep 15
+done
+SH
+chmod +x /usr/local/bin/edge-obs-health.sh
 cat > /etc/systemd/system/edge-obs-sample.service <<'UNIT'
 [Unit]
 Description=edge airflow verification host sampler
 [Service]
 ExecStart=/usr/local/bin/edge-obs-sample.sh
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT
+cat > /etc/systemd/system/edge-obs-health.service <<'UNIT'
+[Unit]
+Description=edge airflow verification api health sampler
+After=docker.service
+[Service]
+ExecStart=/usr/local/bin/edge-obs-health.sh
 Restart=always
 [Install]
 WantedBy=multi-user.target
@@ -66,4 +98,4 @@ Restart=always
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now --no-block edge-obs-sample.service edge-obs-kmsg.service edge-obs-docker.service
+systemctl enable --now --no-block edge-obs-sample.service edge-obs-kmsg.service edge-obs-docker.service edge-obs-health.service

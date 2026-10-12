@@ -1,0 +1,402 @@
+formatVersion: 2
+name: FinancialReportSnapshot
+label: Financial report snapshot
+description: One collected snapshot of a company's DART financial report for a fiscal
+  year, report coverage, and statement basis. Separate collection runs retain separate
+  snapshots of the same filing.
+group: Disclosures & financials
+primaryKey: id
+identity:
+  columns:
+  - corp_code
+  - fiscal_year
+  - reprt_code
+  - fs_basis
+  - raw_run_id
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of one collected report snapshot, preserving company code,
+      fiscal year, report type, statement basis, and collection run.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - reprt_code
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  corpCode:
+    label: DART company code
+    description: Eight-digit DART company identifier used to find the matching Company.dartCorpCode.
+      Leading zeros are part of the code.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - reprt_code
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: corpCode
+    displayName: DART company code
+    status: experimental
+    dataType: String
+  instrumentCode:
+    label: Instrument code
+    description: Local security code preserved from the source. Use its market context
+      when matching it to a listed security.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: instrumentCode
+    displayName: Instrument code
+    status: experimental
+    dataType: String
+  fiscalYear:
+    label: Fiscal year
+    description: Fiscal year of the financial report or metric.
+    sourceDataType: smallint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - reprt_code
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: fiscalYear
+    displayName: Fiscal year
+    status: experimental
+    dataType: Short
+  reportTypeCode:
+    label: DART report type code
+    description: 'DART report code: 11013 for a first-quarter report, 11012 for a
+      half-year report, 11014 for a nine-month report, and 11011 for an annual report.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - reprt_code
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: reportTypeCode
+    displayName: DART report type code
+    status: experimental
+    dataType: String
+  reportCoverage:
+    label: Report coverage
+    description: 'Period covered by the report: Q1 for the first quarter, H1 for the
+      first half-year, 9M for the first nine months, or FY for the full fiscal year.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: normalized
+    apiName: reportCoverage
+    displayName: Report coverage
+    status: experimental
+    dataType: String
+  fsBasis:
+    label: Financial statement basis
+    description: 'Financial-statement basis: CFS for consolidated statements, or OFS
+      for the company''s separate statements.'
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - corp_code
+      - fiscal_year
+      - reprt_code
+      - fs_basis
+      - raw_run_id
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: fsBasis
+    displayName: Financial statement basis
+    status: experimental
+    dataType: String
+  receiptNumber:
+    label: DART receipt number
+    description: DART receipt number identifying the filing represented by this collected
+      snapshot.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: receiptNumber
+    displayName: DART receipt number
+    status: experimental
+    dataType: String
+  receiptDate:
+    label: DART receipt date
+    description: Date DART received the filing represented by this snapshot.
+    sourceDataType: date
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: receiptDate
+    displayName: DART receipt date
+    status: experimental
+    dataType: Date
+  availableAt:
+    label: Available for analysis at
+    description: Analytical availability time computed from receipt time or the source
+      filing date according to the stored availability basis. It differs from the
+      financial period end.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  receivedAt:
+    label: Received at
+    description: Time this collected version was received by the system. Use it to
+      distinguish actual system possession from reconstructed analytical availability.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: receivedAt
+    displayName: Received at
+    status: experimental
+    dataType: Timestamp
+  availabilityBasis:
+    label: Availability basis
+    description: Stored rule used to assign availableAt, such as receipt time or a
+      filing-date convention. A reconstructed date is not an observed historical publication
+      timestamp.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availabilityBasis
+    displayName: Availability basis
+    status: experimental
+    dataType: String
+  companyName:
+    label: Company name
+    description: Current stored name of the company referenced by company_id; NULL
+      if no name is resolved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: companyName
+    displayName: Company name
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: financial_report_version
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: financial_report_version
+      column: corp_code
+    corpCode:
+      alias: base
+      table: financial_report_version
+      column: corp_code
+    instrumentCode:
+      alias: base
+      table: financial_report_version
+      column: instrument_code
+    fiscalYear:
+      alias: base
+      table: financial_report_version
+      column: fiscal_year
+    reportTypeCode:
+      alias: base
+      table: financial_report_version
+      column: reprt_code
+    reportCoverage:
+      alias: base
+      table: financial_report_version
+      column: report_period
+      valueMapping:
+        Q1: Q1
+        Q2: H1
+        Q3: 9M
+        Q4: FY
+    fsBasis:
+      alias: base
+      table: financial_report_version
+      column: fs_basis
+    receiptNumber:
+      alias: base
+      table: financial_report_version
+      column: rcept_no
+    receiptDate:
+      alias: base
+      table: financial_report_version
+      column: rcept_date
+    availableAt:
+      alias: base
+      table: financial_report_version
+      column: available_at
+    receivedAt:
+      alias: base
+      table: financial_report_version
+      column: received_at
+    availabilityBasis:
+      alias: base
+      table: financial_report_version
+      column: availability_basis
+    companyName:
+      kind: view_column
+      schema: ontology_view
+      table: financial_report_snapshot
+      column: company_name
+      sqlFile: sql/views/financial_report_snapshot.sql
+      inputs:
+      - schema: public
+        table: company_profile
+        column: dart_corp_code
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+      - schema: public
+        table: financial_report_version
+        column: corp_code
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: financial_report_snapshot
+      column: display_title
+      sqlFile: sql/views/financial_report_snapshot.sql
+      inputs:
+      - schema: public
+        table: company_profile
+        column: dart_corp_code
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: entity
+        column: entity_id
+      - schema: public
+        table: financial_report_version
+        column: corp_code
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - corp_code
+  - fiscal_year
+  - reprt_code
+  - fs_basis
+  - raw_run_id
+  tableConstraints:
+  - name: ck_financial_report_version_availability
+    kind: c
+    definition: CHECK ((((availability_basis = 'received'::text) AND (available_at
+      = received_at)) OR ((availability_basis = 'provider_release_date'::text) AND
+      (rcept_date IS NOT NULL) AND (available_at = LEAST(received_at, (((rcept_date
+      + 1))::timestamp without time zone AT TIME ZONE 'Asia/Seoul'::text))))))
+    validated: true
+  - name: ck_financial_report_version_basis
+    kind: c
+    definition: CHECK ((fs_basis = ANY (ARRAY['CFS'::text, 'OFS'::text])))
+    validated: true
+  - name: ck_financial_report_version_codes
+    kind: c
+    definition: CHECK (((corp_code ~ '^[0-9]{8}$'::text) AND (instrument_code ~ '^[0-9A-Z]{6}$'::text)
+      AND ((rcept_no IS NULL) OR (rcept_no ~ '^[0-9]{14}$'::text))))
+    validated: true
+  - name: ck_financial_report_version_json
+    kind: c
+    definition: CHECK (((jsonb_typeof(metrics) = 'array'::text) AND (jsonb_typeof(rejected)
+      = 'array'::text) AND (jsonb_typeof(detail) = 'object'::text)))
+    validated: true
+  - name: ck_financial_report_version_report
+    kind: c
+    definition: CHECK ((((((reprt_code = '11013'::text) AND (report_period = 'Q1'::text))
+      OR ((reprt_code = '11012'::text) AND (report_period = 'Q2'::text))) OR ((reprt_code
+      = '11014'::text) AND (report_period = 'Q3'::text))) OR ((reprt_code = '11011'::text)
+      AND (report_period = 'Q4'::text))))
+    validated: true
+  - name: ck_financial_report_version_sha
+    kind: c
+    definition: CHECK (((raw_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256
+      ~ '^[0-9a-f]{64}$'::text)))
+    validated: true
+  - name: ck_financial_report_version_status
+    kind: c
+    definition: CHECK ((status = ANY (ARRAY['CONFIRMED'::text, 'UNCONFIRMED'::text])))
+    validated: true
+  - name: financial_report_version_pkey
+    kind: p
+    definition: PRIMARY KEY (corp_code, fiscal_year, reprt_code, fs_basis, raw_run_id)
+    validated: true
+apiName: FinancialReportSnapshot
+displayName: Financial report snapshot
+pluralDisplayName: Financial report snapshots
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- FinancialReportSnapshot_ForCompany_Company

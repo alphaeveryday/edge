@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:edge:screen-output:2026-09-30:v1",
+  "$id": "urn:edge:screen-output:2026-10-07:v1",
   "title": "ETF ORCA 최종 화면 출력 계약",
   "description": "에이전트 응답이 아닌 DB 조회·조립 완료 응답의 계약. 출처는 manifest.json 참조.",
   "$defs": {
@@ -42,6 +42,15 @@
         "neutral",
         "negative"
       ]
+    },
+    "sourceLink": {
+      "type": "object",
+      "properties": {
+        "title": {"$ref": "#/$defs/text"},
+        "url": {"type": "string", "format": "uri", "minLength": 1}
+      },
+      "required": ["title", "url"],
+      "additionalProperties": false
     },
     "publication": {
       "type": "object",
@@ -196,6 +205,18 @@
           },
           "minItems": 1
         },
+        "sentiment": {
+          "anyOf": [
+            {"$ref": "#/$defs/sentiment"},
+            {"type": "null"}
+          ],
+          "description": "Topic sentiment; null is allowed for historical records created before sentiment classification was added."
+        },
+        "source_links": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/sourceLink"},
+          "description": "Links derived by the server from this topic's final evidence runs."
+        },
         "tool_run_ids": {
           "$ref": "#/$defs/references"
         }
@@ -204,6 +225,8 @@
         "id",
         "title_keyword",
         "sentences",
+        "sentiment",
+        "source_links",
         "tool_run_ids"
       ],
       "additionalProperties": false
@@ -232,6 +255,16 @@
           "minLength": 1,
           "pattern": "\\S"
         },
+        "sentiment": {
+          "anyOf": [
+            {"$ref": "#/$defs/sentiment"},
+            {"type": "null"}
+          ]
+        },
+        "source_links": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/sourceLink"}
+        },
         "tool_run_ids": {
           "$ref": "#/$defs/references"
         }
@@ -241,6 +274,8 @@
         "change_type",
         "title_keyword",
         "sentence",
+        "sentiment",
+        "source_links",
         "tool_run_ids"
       ],
       "additionalProperties": false
