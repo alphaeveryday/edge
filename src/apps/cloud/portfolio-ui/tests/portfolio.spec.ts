@@ -3,6 +3,17 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
+test('an unavailable saved analysis can return to input without clearing browser storage manually', async ({ page }) => {
+  await page.route('**/api/portfolio/catalog', route => route.fulfill({ json: catalog }));
+  await page.route('**/api/portfolio/analyses/missing-job', route => route.fulfill({ status: 404, json: {} }));
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'missing-job'));
+  await page.goto('/portfolio/');
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: '입력 화면으로', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBeNull();
+});
+
 test('default account, real stages, result restoration, chat gate and email receipt', async ({ page }) => {
   let ready = false;
   const section = { paragraphs: ['검증용 포트폴리오 설명이에요.', '검증용 판단 조건이에요.'], evidence: [], limitations: [] };
@@ -19,7 +30,11 @@ test('default account, real stages, result restoration, chat gate and email rece
   await expect(page.locator('.acct__name').first()).toHaveText('\uC77C\uBC18 \uACC4\uC88C');
   await fillForm(page);
   await expect(page.locator('.progress')).toContainText('약 5분');
-  await expect(page.locator('.active')).toContainText('현재 포트폴리오 분석');
+  await expect(page.locator('.agents.tree .mini')).toHaveCount(3);
+  await expect(page.locator('.agents.tree .wide')).toHaveCount(2);
+  await expect(page.locator('.agents [data-s=run]')).toHaveCount(2);
+  await expect(page.locator('.stage canvas')).toBeVisible();
+  await page.screenshot({ path: `test-results/progress-${test.info().project.name}.png`, fullPage: true });
   ready = true;
   await page.reload();
   await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible();
@@ -72,6 +87,14 @@ test('cash default, live donut, ETF-only search and direct recommendation flow',
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
   await expect(page.getByRole('heading', { name: '어떻게 넣나요?' })).toBeVisible();
   await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요' })).toBeVisible();
+  await page.getByRole('button', { name: '매달 꾸준히', exact: true }).click();
+  await page.getByLabel('추가 투자금액').fill('200');
+  await page.getByRole('button', { name: '목돈 한 번에', exact: true }).click();
+  await expect(page.getByLabel('추가 투자금액')).toHaveCount(0);
+  const saved = page.waitForRequest(r => r.url().includes('/drafts/') && r.method() === 'POST');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  expect((await saved).postDataJSON().preferences.contribution).toBe('목돈 한 번에');
+  await expect(page.getByRole('heading', { name: '언제쯤 쓸 돈인가요?' })).toBeVisible();
   await page.screenshot({ path: `test-results/recommend-${test.info().project.name}.png`, fullPage: true });
 });
 
@@ -86,6 +109,15 @@ test('tax details and custom interests persist without a dividend step', async (
   await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
   await page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' }).click();
+  await expect(page.locator('input[type=radio]:checked')).toHaveCount(0);
+  await page.getByRole('button', { name: '선택한 내용 적용하기' }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('연간 소득 구간');
+  await page.getByRole('button', { name: '계좌 정보 닫기' }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('필수 항목');
+  await page.locator('.tax-trigger').click();
+  await page.getByRole('group', { name: '연간 소득 구간', exact: true }).getByRole('radio', { name: '확인 필요', exact: true }).check();
   await page.getByRole('radio', { name: '대한민국 거주자', exact: true }).check();
   await page.getByRole('radio', { name: '19~54세', exact: true }).check();
   await page.getByRole('radio', { name: '아니요', exact: true }).check();

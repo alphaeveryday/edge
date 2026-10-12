@@ -572,9 +572,6 @@ button:disabled{cursor:default;opacity:.5}
 .followup form{display:grid;gap:12px}.followup form label{font-size:14px}.followup textarea{display:block;margin-top:10px}
 .followup-dialog .notice{margin:14px 0}.premium-cta svg{height:38px}
 .pending-score{font-size:13px;color:var(--t3);margin-left:auto}.report-date{color:var(--t3)!important;font-size:11px!important}
-.progress h1{font-size:30px}.progress>p{color:var(--t2)}.progress ol{display:grid;grid-template-columns:1fr;gap:10px}.progress li{padding:18px;border-radius:18px;border:1px solid var(--border);color:var(--t3)}.progress li.active{border-color:var(--accent);color:var(--accent-300);background:var(--accent-subtle)}
-.orb{position:absolute;left:50%;top:45%;width:120px;height:120px;margin:-60px;border-radius:50%;border:1px solid #aebdfd;box-shadow:0 0 55px #5b7cfa66,inset 0 0 55px #5b7cfa66;background:repeating-radial-gradient(ellipse at center,transparent 0 12px,#5b7cfa55 13px 14px);animation:orbit 5s linear infinite}
-@keyframes orbit{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.orb{animation:none}}
 .rows ~ .instrument-search .field{height:76px;padding-left:78px;border:1px solid transparent;border-radius:999px;background:linear-gradient(var(--bg-raised),var(--bg-raised)) padding-box,var(--grad) border-box;box-shadow:0 24px 60px #0005,0 0 70px #5b7cfa29}
 .rows ~ .instrument-search .find__plus{left:15px;top:15px;background:var(--grad-fill)}
 .instrument-search .sug{z-index:25;max-height:360px;overflow-y:auto}.instrument-search .sug button{text-align:left;width:100%}.instrument-search .sug button[aria-selected="true"]{background:var(--accent-subtle)}.instrument-search .sug small{display:block;margin-top:4px;font-size:12px}.catalog-note{padding:10px 14px;font-size:12px;color:var(--t3);line-height:1.6}
