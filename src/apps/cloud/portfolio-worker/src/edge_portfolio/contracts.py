@@ -172,7 +172,8 @@ class FinalReport(StrictModel):
     outlook: Section
     opinion: Section
     current_evaluation: Evaluation
-    recommendation: Recommendation
+    recommendation: Recommendation | None
+    selected_candidate_id: str | None = None
     insights: list[Insight] = Field(min_length=1, max_length=3)
     return_forecast: ReturnForecast | None = None
 

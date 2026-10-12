@@ -15,6 +15,17 @@ const report = {
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
 
+test('a batch without eligible candidates publishes analysis without a recommendation or invented chart', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'no-match'));
+  await page.route('**/api/portfolio/analyses/no-match', route => route.fulfill({ json: { id: 'no-match', state: 'succeeded',
+    result: { ...report, schema_version: 3, recommendation: null, optimization: { status: 'no_match', selected_candidate_id: null } } } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByText('이번 비교에서 추천 기준을 충족한 구성을 찾지 못했어요.')).toBeVisible();
+  await expect(page.locator('.portfolio-hero')).toHaveCount(0);
+  await expect(page.locator('.performance')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible();
+});
+
 test('recommended holdings and final amounts are distinct from input; opinion then outlook then free insights', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'v2'));

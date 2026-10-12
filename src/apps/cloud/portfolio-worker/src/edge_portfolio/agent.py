@@ -18,6 +18,7 @@ from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
 from .recommendation import search_etfs, publish_recommendation
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
+from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -86,6 +87,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
     market = market or MarketData(request, datetime.fromisoformat(context['as_of']).date())
+    optimizer = Optimizer(market, request)
     async with asyncio.timeout(300), AsyncExitStack() as stack:
         if evidence is None:
             streams = await stack.enter_async_context(streamablehttp_client(EXA_URL))
@@ -114,9 +116,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if calls > 18 or len(json.dumps(messages).encode()) > 350000:
                     raise ValueError("MODEL_BUDGET")
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL],
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
                         "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
-                        "max_tokens": 10000 if role == 'opinion' else 6000, "stream": False})
+                        "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     if read_retries:
                         raise
@@ -145,6 +147,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     answer = search_etfs(args.get('query'))
                                 except ValueError as error:
                                     answer = {'status': 'rejected', 'reason': str(error)}
+                        elif function['name'] == 'optimize_portfolios':
+                            try:
+                                answer = await optimizer.tool(json.loads(function['arguments']))
+                            except ValueError as error:
+                                answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_portfolio_history':
                             try:
                                 answer = await market.tool(json.loads(function['arguments']))
@@ -170,10 +177,15 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
+                        selected = optimizer.validate(final)
                         sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources)
-                        await enrich_report(published, final, market, evidence.sources)
+                        published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
+                        if selected:
+                            await enrich_report(published, final, market, evidence.sources)
                     else:
+                        if role == 'portfolio' and optimizer.result is None:
+                            raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
                         sections[role] = validate_section(role, raw, evidence.sources)
                     break
                 except (ValueError, TypeError) as error:
