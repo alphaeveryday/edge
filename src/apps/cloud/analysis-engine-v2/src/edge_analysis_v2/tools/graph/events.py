@@ -154,6 +154,14 @@ class EventTools:
          'Several amounts or contract objects in one row can be separate events. arguments lists the five most reported wordings per role, without the companies already in participants. '
          'documents is the title of the fullest report; read_document_excerpts returns its stored excerpt. event_ref is that report and opens the others through get_event_timeline.')
 
+    def stored_values(self,kind,prop):
+        """The values one property has among objects stored at the cutoff.
+
+        A type that first appears after the cutoff was listed as a stored type with no event here, and accepted as an argument.
+        """
+        params={};clause=self.graph.cutoff_clause(kind,'n',params)
+        return {r['code'] for r in self.graph.query(f'MATCH (n:{kind})'+(' WHERE '+clause if clause else '')+f' RETURN DISTINCT n.{prop} AS code',params,objects=[kind])}
+
     def search(self,targets=None,start_date=None,end_date=None,time_field='reported_event_date',event_types=None,participant_conditions=None,query='',
                feature_filters=None,available_since=None,order_by='reported_date',limit=20,index=False):
         terms=query.split()
@@ -167,17 +175,25 @@ class EventTools:
                 if not Decimal(feature['value']).is_finite():raise ValueError('Finite feature value required')
             except InvalidOperation:raise ValueError('Feature value must be a decimal string') from None
         if filters:
-            codes={r['code'] for r in self.graph.query('MATCH (m:EventMeasurement) RETURN DISTINCT m.metricCode AS code',{},objects=['EventMeasurement'])}
+            codes=self.stored_values('EventMeasurement','metricCode')
             if any(f['metric_code'] not in codes for f in filters):raise ValueError('Feature code is not present in the graph; discover available event features first')
         selection=self.tools.select(targets) if targets is not None else None
         actors,mapping=self.tools.actors(selection) if selection else ([],[])
+        # Events hang on companies. A fund named as an object, or a share with no stored issuer, leads to none, and
+        # the search then came back as a period in which these targets had no events.
+        reached={(a['object_type'],a['object_id']) for a in actors}|{(m['security']['object_type'],m['security']['object_id']) for m in mapping}
+        missed=[{k:i[k] for k in ('object_type','object_id')} for i in (selection or {}).get('items',[])
+            if i.get('status')=='resolved' and (i['object_type'],i['object_id']) not in reached]
+        if missed and not actors:
+            raise ValueError('None of the targets is a company or a share with a stored issuing company, so no event can be looked up for them. '
+                'For a fund, pass targets {"kind":"etf_holdings",...} to look at its constituents. This is a wrong argument, not missing events.')
         params={'start':start_date,'end':end_date}
         if time_field=='reported_event_date':where='n.eventDate>=date($start) AND n.eventDate<=date($end)'
         elif time_field=='available':
             where='n.availableAt>=datetime($start_at) AND n.availableAt<datetime($end_at)'
             params.update(self.tools.time_bounds(start_date,end_date))
         else:raise ValueError('Unsupported time field')
-        stored={r['code'] for r in self.graph.query('MATCH (n:SourceEvent) RETURN DISTINCT n.eventType AS code',{},objects=['SourceEvent'])}
+        stored=self.stored_values('SourceEvent','eventType')
         untyped=where
         if event_types:
             # An unknown type used to return zero rows, which reads as "no such event". It is a wrong argument.
@@ -219,7 +235,6 @@ class EventTools:
             # An event was findable only by company and period; "크로아티아" had to go through the generic object search.
             words=lambda i:' '.join([i['event']['title'] or '']+[d['document']['title'] or '' for d in i['documents']])
             output=[i for i in output if all(term in words(i) for term in terms)]
-        selected_ids={(r['object_type'],r['object_id']) for r in actors}
         for item in output:
             matched_groups=[];participant_status='matched'
             for condition in conditions:
@@ -272,6 +287,9 @@ class EventTools:
                 ('every stored event whose own text contains the longest query word; an event that has that word only in a report title is not among them'
                  if terms else 'every stored event of the requested types'),'feature_filters':filters,'coverage':coverage,'stored_reports':len(output),
             'status_counts':{s:sum(x['match_status']==s for x in rows) for s in ('matched','not_matched','unknown')}}
+        if missed:
+            scope['targets_not_searched']={'targets':missed,'meaning':'No issuing company is stored for these targets, so their events were not looked for. '
+                'The result speaks for the other targets only.'}
         def largest(row):
             found=[(Decimal(m['properties']['value']),m['properties']) for r in row['reports'] for m in r['features']
                 if m['properties'].get('unit')=='KRW' and m['properties'].get('value') is not None]
@@ -353,11 +371,14 @@ class EventTools:
         for item in [*loose,*self.enrich([o for i,o in candidates.items() if i not in events])]:
             if signature(item) in groups:events[item['event']['object_id']]=item['event'];of[item['event']['object_id']]=groups[signature(item)]
         reports=self.enrich(sorted(events.values(),key=lambda o:(o['properties'].get('availableAt') or '',o['object_id'])))
-        items=[];last={}
+        items=[];last={};asked={r['object_id'] for r in event_refs}
         for report in reports:
             identifier=report['event']['object_id'];group=of.get(identifier);stored=isinstance(group,str)
             # A repeat, or any later report of an event the data has no thread for, is counted on the row before it.
-            if group in last and (added.get(identifier)=='DUPLICATE_REBROADCAST' or not stored):last[group]['repeats'].append(report);continue
+            # Without a thread the event that was asked for is never counted away: two contracts of one company on one
+            # day look alike, and the second one's customer and amount were hidden behind the first. A repeat the
+            # thread records is still a repeat, whichever report was asked for.
+            if group in last and (added.get(identifier)=='DUPLICATE_REBROADCAST' or (not stored and identifier not in asked)):last[group]['repeats'].append(report);continue
             item={'report':report,'repeats':[],'thread':group if stored else None,'added':added.get(identifier)}
             items.append(item)
             if group is not None:last[group]=item

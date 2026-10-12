@@ -39,7 +39,7 @@ class EventFeatureTests(unittest.TestCase):
     def test_role_in_one_group_and_amount_in_another_cannot_satisfy_combined_question(self):
         actor={'object_type':'Company','object_id':'a','title':'Company A'}
         event={'object_type':'SourceEvent','object_id':'e','title':'Event','properties':{}}
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'CONTRACT_VALUE'}],
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'CONTRACT_VALUE'}],
             linked=lambda refs,*a,**kw:[{'target':event}] if refs else [])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,
             select=lambda _: {'items':[]},actors=lambda _:([{k:actor[k] for k in ('object_type','object_id')}],[]),
@@ -54,7 +54,7 @@ class EventFeatureTests(unittest.TestCase):
     def test_company_scope_does_not_accept_an_equity_as_participant_identity(self):
         actor={'object_type':'Company','object_id':'a'}
         event={'object_type':'SourceEvent','object_id':'e','properties':{}}
-        graph=SimpleNamespace(query=lambda *a,**kw:[],linked=lambda refs,*a,**kw:[{'target':event}] if refs else [])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[],linked=lambda refs,*a,**kw:[{'target':event}] if refs else [])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,
             select=lambda _: {},actors=lambda _:([actor],[]),result=lambda *a,**kw:None)
         tool=EventTools(owner);tool.enrich=lambda _:[{'event':event,'participants':[],'features':[],'documents':[]}]
@@ -83,7 +83,7 @@ class EventRowTests(unittest.TestCase):
 
     def test_an_event_type_that_is_not_stored_is_a_wrong_argument_not_an_absence(self):
         # WHY: CONTRACT.SIGNED returned 0 rows while 21 COMPANY.CONTRACT.SIGNING events existed.
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'},{'code':'COMPANY.PRODUCT.LAUNCH'}],linked=lambda *a,**kw:[])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'},{'code':'COMPANY.PRODUCT.LAUNCH'}],linked=lambda *a,**kw:[])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,select=lambda _:{'items':[]},
             actors=lambda _:([],[]),result=lambda items,**kw:(items,kw))
         tool=EventTools(owner)
@@ -99,7 +99,7 @@ class EventRowTests(unittest.TestCase):
         def linked(refs,link,direction='forward',where=None,parameters=None):
             if not refs or 'ParticipatesIn' not in link or direction!='forward':return []
             return [] if where and 'eventType IN' in where else [{'target':launch}]
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':c} for c in ('COMPANY.CAPITAL.EQUITY_ISSUANCE','COMPANY.PRODUCT.LAUNCH')],linked=linked)
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':c} for c in ('COMPANY.CAPITAL.EQUITY_ISSUANCE','COMPANY.PRODUCT.LAUNCH')],linked=linked)
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,select=lambda _:{'items':[]},
             actors=lambda _:([{'object_type':'Company','object_id':'c'}],[]),result=lambda items,**kw:(items,kw))
         tool=EventTools(owner)
@@ -122,7 +122,7 @@ class EventRowTests(unittest.TestCase):
                 'documents':[{'document':{'object_type':'NewsArticle','object_id':f'd{n}','title':f'기사 {n}','properties':{'leadText':'본문'}},'link_properties':{}}]}
         reports=[report(1,'양밍해운','1552700000000'),report(2,'대만 양밍해운','1552700000000'),report(3,'양밍해운',None),
                  report(4,'양밍해운','1500000000000'),report(5,'양밍해운','1552700000000','2026-09-04')]
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],
             linked=lambda refs,*a,**kw:[{'target':r['event']} for r in reports] if refs else [])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,select=lambda _:{'items':[]},
             actors=lambda _:([{'object_type':'Company','object_id':'a'}],[]),result=lambda items,**kw:(items,kw))
@@ -152,7 +152,7 @@ class EventRowTests(unittest.TestCase):
             asked.append(query);return [r['event'] for r in reports]
         thread={'object_type':'EventThread','object_id':'t1','properties':{}}
         linked=lambda refs,link,*a,**kw:[{'source':{'object_id':'e1'},'target':thread,'link_properties':{'noveltyStatus':'FIRST_IN_THREAD'}},{'source':{'object_id':'e2'},'target':thread,'link_properties':{'noveltyStatus':'DUPLICATE_REBROADCAST'}}] if 'EventThread' in link else []
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=nodes,linked=linked)
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=nodes,linked=linked)
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw))
         tool=EventTools(owner);tool.enrich=lambda found:[r for r in reports if r['event'] in found]
         rows,sent=tool.search(start_date='2026-09-01',end_date='2026-09-30',query='크로아티아 천무')
@@ -205,7 +205,7 @@ class EventRowTests(unittest.TestCase):
         # WHY: a search for every SUPPLIER, with no company named, marked an event with a SUPPLIER as not matched.
         event={'object_type':'SourceEvent','object_id':'e','title':'Event','properties':{'eventType':'COMPANY.CONTRACT.SIGNING','eventDate':'2026-09-04'}}
         report={'event':event,'participants':[{'actor':{'object_type':'Company','object_id':'a','title':'A'},'role':'SUPPLIER','argument_group':0}],'features':[],'documents':[]}
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=lambda *a,**kw:[event],linked=lambda *a,**kw:[])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=lambda *a,**kw:[event],linked=lambda *a,**kw:[])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw))
         tool=EventTools(owner);tool.enrich=lambda found:[report]
         search=lambda roles:tool.search(start_date='2026-09-01',end_date='2026-09-30',event_types=['COMPANY.CONTRACT.SIGNING'],
@@ -226,7 +226,7 @@ class EventRowTests(unittest.TestCase):
             return {'event':{'object_type':'SourceEvent','object_id':f'e{n}','title':f'{kind} / A{n} [SUPPLIER] / {day}','properties':{'eventType':kind,'eventDate':day}},
                 'participants':[],'documents':[],'features':[]}
         reports=[report(1,'COMPANY.A','2026-09-20'),report(2,'COMPANY.B','2026-09-05'),report(3,'COMPANY.A','2026-09-10')]
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.A'},{'code':'COMPANY.B'}],nodes=lambda *a,**kw:[r['event'] for r in reports],linked=lambda *a,**kw:[])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.A'},{'code':'COMPANY.B'}],nodes=lambda *a,**kw:[r['event'] for r in reports],linked=lambda *a,**kw:[])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw))
         tool=EventTools(owner);tool.enrich=lambda found:[r for r in reports if r['event'] in found]
         rows,sent=tool.search(start_date='2026-09-01',end_date='2026-09-30',query='COMPANY')
@@ -244,6 +244,51 @@ class EventRowTests(unittest.TestCase):
         item=tool.article(document_ref=ref)[0][0]
         self.assertEqual((item['page_dated'],item['final_url']),('unverified_or_future','https://example.com/b'))
 
+    def test_a_target_that_leads_to_no_company_is_an_error_and_a_partly_reached_set_says_what_it_left_out(self):
+        # WHY: a fund named as an object reached no company, and the search came back as a period with no events.
+        fund={'object_type':'ETF','object_id':'f','status':'resolved'};share={'object_type':'Equity','object_id':'s','status':'resolved'}
+        company={'object_type':'Company','object_id':'c'}
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.A'}],linked=lambda *a,**kw:[])
+        owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw),
+            select=lambda targets:{'items':targets},actors=lambda selection:([],[]))
+        tool=EventTools(owner);tool.enrich=lambda found:[]
+        with self.assertRaisesRegex(ValueError,'no event can be looked up'):tool.search([fund],'2026-09-01','2026-09-30')
+        owner.actors=lambda selection:([company],[{'security':share,'actor':company}])
+        _,sent=tool.search([fund,share],'2026-09-01','2026-09-30')
+        self.assertEqual(sent['scope']['targets_not_searched']['targets'],[{'object_type':'ETF','object_id':'f'}])
+        _,sent=tool.search([share],'2026-09-01','2026-09-30')
+        self.assertNotIn('targets_not_searched',sent['scope'])
+
+    def test_stored_types_are_the_types_stored_at_the_cutoff(self):
+        # WHY: a type that first appears after the cutoff was accepted as an argument and listed as a stored type with no event.
+        asked=[]
+        def query(statement,parameters,**kw):
+            asked.append((statement,dict(parameters)));return [{'code':'COMPANY.A'}]
+        def clause(kind,alias,params):
+            params['cutoff']='2026-10-05T00:00:00+00:00';return alias+'.availableAt <= datetime($cutoff)'
+        tool=EventTools(SimpleNamespace(graph=SimpleNamespace(cutoff_clause=clause,query=query),register=lambda *a,**kw:None))
+        self.assertEqual(tool.stored_values('SourceEvent','eventType'),{'COMPANY.A'})
+        self.assertEqual(asked,[('MATCH (n:SourceEvent) WHERE n.availableAt <= datetime($cutoff) RETURN DISTINCT n.eventType AS code',{'cutoff':'2026-10-05T00:00:00+00:00'})])
+
+    def test_the_event_that_was_asked_for_is_a_row_even_when_it_looks_like_a_repeat(self):
+        # WHY: two contracts of one company on one day, with no thread, were joined; asking for the second returned only the first.
+        def event(n):
+            return {'object_type':'SourceEvent','object_id':f'e{n}','title':f'COMPANY.CONTRACT.SIGNING / A [SUPPLIER]; 고객{n} [CUSTOMER] / 2026-09-04',
+                'properties':{'eventType':'COMPANY.CONTRACT.SIGNING','eventDate':'2026-09-04','availableAt':f'2026-09-04T0{n}:00'}}
+        stored={'e1':event(1),'e2':event(2)};actor={'object_type':'Company','object_id':'a','title':'A'}
+        def linked(refs,link,direction='forward',**kw):
+            if 'EventThread' in link:return []
+            if link=='Company_ParticipatesIn_SourceEvent' and direction=='reverse':
+                return [{'source':r,'target':actor,'link_properties':{'roleCode':'SUPPLIER'}} for r in refs]
+            if link=='Company_ParticipatesIn_SourceEvent':return [{'source':actor,'target':e} for e in stored.values()]
+            return []
+        graph=SimpleNamespace(get=lambda refs:{'items':[{'object_id':r['object_id'],'status':'resolved','object':stored[r['object_id']]} for r in refs]},linked=linked)
+        owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,result=lambda items,**kw:(items,kw))
+        _,sent=EventTools(owner).history([{'object_type':'SourceEvent','object_id':'e2'}])
+        shown={r['event_ref']['object_id']:r for r in sent['display_items']}
+        self.assertIn('e2',shown)
+        self.assertEqual(shown['e2']['arguments'],[{'role':'SUPPLIER','text':'A'},{'role':'CUSTOMER','text':'고객2'}])
+
     def test_events_ordered_by_amount_put_the_largest_first(self):
         # WHY: rows were in date order; an answer read 44 of 66 and called a 6,400억 contract the largest while larger ones sat on the next page.
         def report(n,value):
@@ -251,7 +296,7 @@ class EventRowTests(unittest.TestCase):
                     'properties':{'eventType':'COMPANY.CONTRACT.SIGNING','eventDate':f'2026-09-{n:02d}'}},'participants':[],'documents':[],
                 'features':[{'object_id':f'm{n}','properties':{'metricCode':'CONTRACT_VALUE','value':str(value),'unit':'KRW','periodBasis':'UNKNOWN'}}]}
         reports=[report(n,n*10**11) for n in range(1,8)]
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=lambda *a,**kw:[r['event'] for r in reports],linked=lambda *a,**kw:[])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=lambda *a,**kw:[r['event'] for r in reports],linked=lambda *a,**kw:[])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw))
         tool=EventTools(owner);tool.enrich=lambda found:[r for r in reports if r['event'] in found]
         rows,sent=tool.search(start_date='2026-09-01',end_date='2026-09-30',query='COMPANY',order_by='amount')
@@ -269,7 +314,7 @@ class EventRowTests(unittest.TestCase):
         asked=[]
         def nodes(kind,query='',**kw):
             asked.append(query);return [r['event'] for r in reports]
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=nodes,linked=lambda *a,**kw:[r['event'] and {'target':r['event']} for r in reports])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'}],nodes=nodes,linked=lambda *a,**kw:[r['event'] and {'target':r['event']} for r in reports])
         seen={}
         def result(items,**kw):
             seen.update(kw);return items,kw
@@ -308,7 +353,7 @@ class EventRowTests(unittest.TestCase):
                     'properties':{'eventType':'COMPANY.CONTRACT.SIGNING' if n%2 else 'COMPANY.LEGAL.LITIGATION','eventDate':'2026-09-01','lifecycleStage':'DEFINITIVE_SIGNED'}},
                 'participants':[{'actor':{'object_type':'Company','object_id':f'c{n}','title':f'회사{n%3}'},'role':'SUPPLIER','argument_group':0}],'documents':[],'features':[]}
         reports=[report(n) for n in range(600)]
-        graph=SimpleNamespace(query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'},{'code':'COMPANY.LEGAL.LITIGATION'}],linked=lambda *a,**kw:[{'target':r['event']} for r in reports])
+        graph=SimpleNamespace(cutoff_clause=lambda *a:'',query=lambda *a,**kw:[{'code':'COMPANY.CONTRACT.SIGNING'},{'code':'COMPANY.LEGAL.LITIGATION'}],linked=lambda *a,**kw:[{'target':r['event']} for r in reports])
         owner=SimpleNamespace(graph=graph,register=lambda *a,**kw:None,check_date=date.fromisoformat,result=lambda items,**kw:(items,kw),
             select=lambda targets:{'items':[]},actors=lambda selection:([{'object_type':'Company','object_id':'c0'}],[]))
         tool=EventTools(owner);tool.enrich=lambda found:[r for r in reports if r['event'] in found]
