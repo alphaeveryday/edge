@@ -585,5 +585,20 @@ button:disabled{cursor:default;opacity:.5}
 .tax-dialog label { display: grid; gap: 8px; font-size: 13px; }
 .tax-dialog select, .tax-dialog input { width: 100%; min-width: 0; padding: 12px; border: 1px solid #ccd3e0; border-radius: 12px; background: white; color: #152035; }
 .tax-dialog fieldset { display: grid; gap: 14px; border: 1px solid #ccd3e0; border-radius: 16px; padding: 16px; min-width: 0; }
+.tax-dialog { padding: 28px 22px; }
+.tax-dialog h2 { font-size: 25px; margin: 12px 20px 8px 0; }
+.tax-dialog form { gap: 24px; }
+.tax-dialog fieldset { border-color: #394359; }
+.tax-dialog legend { padding: 0 6px; font-size: 14px; font-weight: 700; line-height: 1.6; }
+.tax-dialog .tax-question { border: 0; padding: 0; gap: 10px; }
+.tax-dialog .tax-question legend { padding: 0 0 10px; }
+.tax-options { display: grid; gap: 8px; }
+.tax-dialog .tax-option { display: flex; align-items: center; gap: 12px; margin: 0; padding: 14px; border: 1px solid #3e485d; border-radius: 12px; background: #222938; color: #e5eafa; cursor: pointer; line-height: 1.6; }
+.tax-dialog .tax-option:has(input:checked) { border-color: #8eaaff; background: #293d68; }
+.tax-dialog .tax-option:has(input:focus-visible) { outline: 2px solid #b4c5ff; outline-offset: 2px; }
+.tax-dialog .tax-option input { width: 19px; height: 19px; flex: 0 0 19px; margin: 0; padding: 0; accent-color: #9fbaff; }
+.tax-dialog .tax-targets p { margin: 0; font-size: 12px; }
+.tax-dialog input:not([type=radio]):not([type=checkbox]) { background: #111824; color: #edf2ff; border-color: #4b5973; color-scheme: dark; }
+.tax-dialog form .primary { background: #4361e8; color: #fff; border-color: #7590ff; }
 .keyword-entry { display: flex; gap: 8px; margin-top: 12px; }
 .keyword-entry .field { min-width: 0; flex: 1; }

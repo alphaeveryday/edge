@@ -111,6 +111,7 @@ def test_tax_popup_payload_round_trips_through_owned_draft_api(isolated_db):
     draft_id = str(uuid4())
     payload = {'holdings': [{'name': '현금', 'kind': 'cash', 'instrument_id': 'CASH:KRW', 'amount_krw': '1000000'}],
                'preferences': {'accounts': ['일반 계좌', 'ISA'], 'tax_profile': {'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '아니요',
+               'recommended_accounts': ['IRP', '연금저축'],
                'accounts': [{'account': 'ISA', 'subtype': '중개형 · 일반형', 'opened': '', 'remaining_man': '', 'paid_man': '0'}]}}}
     headers = {'Origin': 'http://localhost:5180'}
     with TestClient(app) as client:
@@ -120,6 +121,7 @@ def test_tax_popup_payload_round_trips_through_owned_draft_api(isolated_db):
             tax = db.execute('SELECT payload FROM portfolio_input_tax WHERE draft_id=%s', (draft_id,)).fetchone()['payload']['tax_profile']
         assert tax['accounts'][0]['remaining_man'] == ''  # Unknown must not become zero.
         assert tax['accounts'][0]['paid_man'] == '0'
+        assert tax['recommended_accounts'] == ['IRP', '연금저축']  # Strategy targets need not be existing accounts.
         client.cookies.clear()
         client.get('/api/portfolio/session')
         assert client.post('/api/portfolio/drafts/' + draft_id, json=payload, headers=headers).status_code == 404

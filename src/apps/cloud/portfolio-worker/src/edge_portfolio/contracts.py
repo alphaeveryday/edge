@@ -45,6 +45,7 @@ class TaxAccount(StrictModel):
 
 
 class TaxProfile(StrictModel):
+    recommended_accounts: list[Literal['ISA', 'IRP', '연금저축']] = Field(default_factory=list, max_length=3)
     residence: Literal['대한민국 거주자', '비거주자', '확인 필요']
     age: Literal['19세 미만', '19~54세', '55세 이상', '확인 필요']
     income: str = Field(min_length=1, max_length=60)
