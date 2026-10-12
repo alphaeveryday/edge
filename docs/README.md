@@ -99,3 +99,6 @@
 같은 PR에서 구(舊) 구조 문서를 삭제하고 유효분을 흡수했다:
 - `docs/architecture.md` (embed widget/클라우드 단일 구조) → 삭제. 구 구조 요지는 [adr/0010](adr/0010-hybrid-onprem-pivot.md) 맥락, 현행 CD 서술은 [implementation.md](implementation.md) §5로 흡수.
 - `docs/schema.md` → 삭제. 소유권 원칙·확장-수축 절차·체크리스트·generated 규칙은 [implementation.md](implementation.md) §4로 흡수 (피벗 전 서비스 기준 테이블 레지스트리는 폐기). RLS 서사는 [adr/0011](adr/0011-rls-to-physical-isolation.md).
+# 포트폴리오 서비스 문서
+
+- [Terraform 편입과 SSM 권한](design/portfolio-infrastructure.md)

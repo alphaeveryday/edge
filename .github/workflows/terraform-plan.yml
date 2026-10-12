@@ -15,6 +15,7 @@ on:
       - "!infra/terraform/modules/demo-onprem/**"
       - ".github/workflows/terraform-plan.yml"
       - ".github/workflows/terraform-apply.yml"
+      - ".github/scripts/portfolio_origin_header.py"
 
 permissions:
   id-token: write # OIDC
@@ -47,7 +48,10 @@ jobs:
           aws-region: ap-northeast-2
 
       - name: terraform init
-        run: terraform init -input=false -lock-timeout=5m
+        # CI preserves the already deployed origin gate; no Secrets Manager value permission.
+        run: |
+          python ../../../../.github/scripts/portfolio_origin_header.py
+          terraform init -input=false -lock-timeout=5m
 
       - name: terraform validate
         run: terraform validate
@@ -66,6 +70,8 @@ jobs:
           script: |
             const fs = require('fs');
             let plan = fs.readFileSync('infra/terraform/envs/dev/plan_output.txt', 'utf8');
+            const originGate = process.env.TF_VAR_portfolio_origin_header;
+            if (originGate) plan = plan.split(originGate).join('[REDACTED]');
             const max = 60000;
             if (plan.length > max) plan = plan.slice(0, max) + '\n... (출력이 잘렸습니다 — 전체는 워크플로 로그 참고)';
             const ok = '${{ steps.plan.outcome }}' === 'success';
