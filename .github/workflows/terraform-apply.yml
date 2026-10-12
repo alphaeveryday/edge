@@ -16,6 +16,7 @@ on:
       - "!infra/terraform/modules/demo-onprem/**"
       - ".github/workflows/terraform-plan.yml"
       - ".github/workflows/terraform-apply.yml"
+      - ".github/scripts/portfolio_origin_header.py"
 
 permissions:
   id-token: write # OIDC
@@ -47,7 +48,9 @@ jobs:
           aws-region: ap-northeast-2
 
       - name: terraform init
-        run: terraform init -input=false -lock-timeout=5m
+        run: |
+          python ../../../../.github/scripts/portfolio_origin_header.py
+          terraform init -input=false -lock-timeout=5m
 
       - name: terraform apply
         run: terraform apply -input=false -auto-approve -lock-timeout=5m

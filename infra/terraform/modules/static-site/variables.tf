@@ -68,3 +68,18 @@ variable "api_path_pattern" {
   type        = string
   default     = "/api/*"
 }
+variable "api_origin_id" {
+  type    = string
+  default = "api"
+}
+
+variable "api_origin_header_name" {
+  type    = string
+  default = ""
+}
+
+variable "api_origin_header_value" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
