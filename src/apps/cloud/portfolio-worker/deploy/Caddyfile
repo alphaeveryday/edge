@@ -1,0 +1,11 @@
+portfolio-origin.etforca.com {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+    handle /api/portfolio/* {
+        reverse_proxy api:8092
+    }
+    respond 404
+}

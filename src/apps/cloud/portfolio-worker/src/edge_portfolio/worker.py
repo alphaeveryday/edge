@@ -10,6 +10,14 @@ from .followup import answer_question
 log = logging.getLogger("portfolio-worker")
 
 
+def failure_codes(error):
+    if isinstance(error, BaseExceptionGroup):
+        return [code for child in error.exceptions for code in failure_codes(child)]
+    prefix = str(error).split(':', 1)[0]
+    allowed = {'EXA_FAILED', 'EMPTY_SOURCE', 'TOOL_NOT_ALLOWED', 'TOOL_LIMIT', 'INVALID_TOOL_ARGUMENT', 'OUTPUT_INVALID', 'MODEL_BUDGET', 'MODEL_TRUNCATED'}
+    return [prefix if prefix in allowed else type(error).__name__]
+
+
 async def work_once():
     job = store.claim()
     if not job:
@@ -27,7 +35,7 @@ async def work_once():
     except Exception as error:
         failure = "TIMED_OUT" if isinstance(error, TimeoutError) else "ANALYSIS_FAILED"
         store.finish(job["id"], failure=failure)
-        log.warning("job=%s status=failed type=%s", job["id"], type(error).__name__)
+        log.warning("job=%s status=failed codes=%s", job["id"], failure_codes(error))
     return True
 
 

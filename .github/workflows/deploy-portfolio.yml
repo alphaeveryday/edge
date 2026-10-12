@@ -1,0 +1,75 @@
+name: deploy-portfolio
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'src/apps/cloud/portfolio-ui/**'
+      - 'src/apps/cloud/portfolio-worker/**'
+      - 'src/pnpm-lock.yaml'
+      - '.github/workflows/deploy-portfolio.yml'
+  workflow_run:
+    workflows: [terraform-apply]
+    types: [completed]
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-portfolio
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: (github.event_name != 'workflow_run' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: src/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build UI
+        working-directory: src
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter portfolio-ui build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+      - name: Release API and worker
+        run: |
+          python -m pip install boto3==1.42.30
+          python src/apps/cloud/portfolio-worker/deploy/release.py
+      - name: Publish portfolio files only
+        env:
+          BUCKET: ${{ vars.APP_LANDING_BUCKET }}
+          DISTRIBUTION_ID: ${{ vars.APP_LANDING_DISTRIBUTION_ID }}
+        working-directory: src/apps/cloud/portfolio-ui/dist
+        run: |
+          set -euo pipefail
+          : "${BUCKET:?APP_LANDING_BUCKET required}"
+          : "${DISTRIBUTION_ID:?APP_LANDING_DISTRIBUTION_ID required}"
+          before=$(aws s3api head-object --bucket "$BUCKET" --key index.html --query ETag --output text)
+          aws s3 sync assets "s3://${BUCKET}/portfolio/assets" --cache-control 'public,max-age=31536000,immutable'
+          aws s3 cp index.html "s3://${BUCKET}/portfolio/index.html" --content-type 'text/html; charset=utf-8' --cache-control no-cache
+          aws s3api put-object --bucket "$BUCKET" --key 'portfolio/' --body index.html --content-type 'text/html; charset=utf-8' --cache-control no-cache > /dev/null
+          after=$(aws s3api head-object --bucket "$BUCKET" --key index.html --query ETag --output text)
+          test "$before" = "$after"
+          id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/portfolio/*' '/api/portfolio/*' --query Invalidation.Id --output text)
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"
+          curl --fail --retry 5 https://etforca.com/api/portfolio/session

@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from contextlib import AsyncExitStack
@@ -14,6 +15,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
+from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -76,9 +78,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     skills = {role: (PROMPTS / role / "SKILL.md").read_text(encoding="utf8") for role in ROLES}
     version = hashlib.sha256((system + "".join(skills.values())).encode()).hexdigest()
     context = {"input": request.model_dump(mode="json"), "computed": metrics,
-               "as_of": datetime.now(timezone.utc).isoformat(), "aws_outlook": {"status": "not_connected"}}
+               "as_of": datetime.now(timezone.utc).isoformat(), "aws_outlook": {"status": "available_on_purpose" if os.getenv('PORTFOLIO_OUTLOOK_URL') else "not_connected"}}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
     sections, trace = {}, []
+    outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
     async with asyncio.timeout(300), AsyncExitStack() as stack:
         if evidence is None:
             streams = await stack.enter_async_context(streamablehttp_client(EXA_URL))
@@ -104,7 +107,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 calls += 1
                 if calls > 18 or len(json.dumps(messages).encode()) > 350000:
                     raise ValueError("MODEL_BUDGET")
-                result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS,
+                result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL],
                     "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
                     "max_tokens": 10000 if role == 'opinion' else 6000, "stream": False})
                 choice = result["choices"][0]
@@ -119,7 +122,20 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if message.get("tool_calls"):
                     for call in message["tool_calls"]:
                         function = call["function"]
-                        answer = await evidence.call(function["name"], json.loads(function["arguments"]))
+                        if function['name'] == 'read_etf_outlook':
+                            try:
+                                answer = await outlook.call(json.loads(function['arguments']), evidence.sources)
+                            except ValueError as error:
+                                answer = {'status': 'rejected', 'reason': str(error)[:300]}
+                        else:
+                            try:
+                                answer = await evidence.call(function["name"], json.loads(function["arguments"]))
+                            except ValueError as error:
+                                if str(error) not in {'TOOL_NOT_ALLOWED', 'INVALID_TOOL_ARGUMENT', 'EMPTY_SOURCE', 'EXA_FAILED'}:
+                                    raise
+                                answer = {'status': 'unavailable' if str(error) in {'EMPTY_SOURCE', 'EXA_FAILED'} else 'rejected',
+                                          'reason': str(error), 'fetchable_urls': sorted(getattr(evidence, 'discovered', set())),
+                                          'instruction': '본문을 읽지 못했습니다. 등록된 URL을 정확히 사용하거나 다른 공식 근거를 검색하세요. 실패한 응답을 근거로 인용하지 마세요.'}
                         messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(answer, ensure_ascii=False)})
                     continue
                 try:
@@ -141,4 +157,4 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         return {"sections": sections, "metrics": metrics, "sources": evidence.sources,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
                 "elapsed_seconds": round(time.monotonic() - started, 2), "trace": trace,
-                "aws_outlook": context["aws_outlook"]}
+                "aws_outlook": {'queries': outlook.queries, 'status': 'queried' if outlook.queries else 'not_requested'}}

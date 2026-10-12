@@ -7,7 +7,9 @@ from uuid import UUID
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from . import store
-from .contracts import AnalysisInput, StrictModel
+from .catalog import canonicalize, directory
+from starlette.middleware.gzip import GZipMiddleware
+from .contracts import AnalysisInput, DraftInput, StrictModel
 from pydantic import Field
 
 
@@ -18,6 +20,7 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 COOKIE = "edge_portfolio_session"
 
 
@@ -30,6 +33,9 @@ def owner(request):
 
 @app.middleware("http")
 async def origin_check(request, call_next):
+    origin_secret = os.getenv('PORTFOLIO_ORIGIN_SECRET')
+    if request.url.path != '/health' and origin_secret and not secrets.compare_digest(request.headers.get('x-portfolio-origin', ''), origin_secret):
+        return Response(status_code=403)
     if request.method == "POST" and request.headers.get("origin") != os.getenv("PORTFOLIO_ORIGIN", "http://localhost:5180"):
         return Response(status_code=403)
     try:
@@ -41,7 +47,7 @@ async def origin_check(request, call_next):
     if request.method == "POST" and len(await request.body()) > 32_000:
         return Response(status_code=413)
     response = await call_next(request)
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = "public, max-age=3600" if request.url.path == '/api/portfolio/catalog' else "no-store"
     return response
 
 
@@ -51,6 +57,11 @@ def session(request: Request, response: Response):
         response.set_cookie(COOKIE, secrets.token_hex(32), httponly=True, samesite="strict",
                             secure=os.getenv("PORTFOLIO_COOKIE_SECURE", "0") == "1", max_age=86400 * 30)
     return {"estimated_seconds": 300}
+
+
+@app.get('/api/portfolio/catalog')
+def catalog():
+    return directory()
 
 
 def public(row):
@@ -86,10 +97,25 @@ def report_request(job_id: str, body: ReportRequest, request: Request):
 @app.post("/api/portfolio/analyses", status_code=202)
 def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header()):
     try:
+        body = canonicalize(body)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    try:
         return public(store.submit(owner(request), str(idempotency_key), body.model_dump(mode="json")))
     except ValueError as error:
         code = str(error)
-        raise HTTPException(409 if code == "IDEMPOTENCY_CONFLICT" else 429, code) from None
+        raise HTTPException(404 if code == 'NOT_FOUND' else 409 if code == "IDEMPOTENCY_CONFLICT" else 429, code) from None
+
+
+@app.post('/api/portfolio/drafts/{draft_id}')
+def save_draft(draft_id: UUID, body: DraftInput, request: Request):
+    try:
+        body = canonicalize(body)
+        store.save_draft(str(draft_id), owner(request), body.model_dump(mode='json'))
+    except ValueError as error:
+        code = str(error)
+        raise HTTPException(404 if code == 'NOT_FOUND' else 429 if code == 'DRAFT_LIMIT' else 422, code) from None
+    return {'status': 'saved'}
 
 
 @app.get("/api/portfolio/analyses/{job_id}")

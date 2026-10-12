@@ -54,9 +54,11 @@ pnpm --filter portfolio-ui test
 ## API
 
 - `GET /api/portfolio/session`: HttpOnly 방문자 쿠키 설정.
+- `GET /api/portfolio/catalog`: 국내·미국 ETF 종목 메타데이터 스냅샷.
+- `POST /api/portfolio/drafts/{id}`: 단계별 입력을 소유권이 있는 초안의 분리 테이블에 저장.
 - `POST /api/portfolio/analyses`: `Idempotency-Key` UUID, holdings/question/horizon → 202 작업.
 - `GET /api/portfolio/analyses/{id}`: 소유한 작업의 queued/running/succeeded/failed 상태.
 - `POST /api/portfolio/analyses/{id}/chat`: question과 멱등 키. 무료 1회 초과는 409 CHAT_LIMIT.
 - `POST /api/portfolio/analyses/{id}/report-request`: email. 접수만 저장, 발송은 미구현.
 
-현재 AWS 배포 및 전망 조회 연결은 수행하지 않았다. 컨테이너는 새 AWS 서비스로 배치할 수 있지만 전용 DB·라우팅·인증·TLS를 정하고 배포 검증해야 한다.
+AWS 운영 구성과 배포·롤백 절차는 [배포 기록](../../../../docs/design/portfolio-deployment.md)을 따른다. 전망 조회는 ETF 한 종목과 명시적인 목적이 필수다. 이메일은 1일 이내 발송을 안내하지만 자동 발송은 구현하지 않는다.

@@ -1,10 +1,14 @@
+import { fillForm } from '../scripts/fill-form.mjs';
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
 test('default account, real stages, result restoration, chat gate and email receipt', async ({ page }) => {
   let ready = false;
   const section = { paragraphs: ['검증용 포트폴리오 설명이에요.', '검증용 판단 조건이에요.'], evidence: [], limitations: [] };
   await page.route('**/api/portfolio/**', async route => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (path.endsWith('/chat')) return route.fulfill({ status: 409, json: { detail: 'CHAT_LIMIT' } });
     if (path.endsWith('/report-request')) return route.fulfill({ status: 201, json: { status: 'received' } });
     if (path.endsWith('/session')) return route.fulfill({ json: {} });
@@ -12,10 +16,8 @@ test('default account, real stages, result restoration, chat gate and email rece
     return route.fulfill({ json: { id: 'test-job', state: ready ? 'succeeded' : 'running', stage: 'portfolio', started_at: new Date().toISOString(), result: ready ? result : null } });
   });
   await page.goto('/portfolio/');
-  await expect(page.getByLabel('투자 계좌 1')).toHaveValue('일반 계좌');
-  await page.getByLabel('ETF 이름 또는 종목 코드').fill('VOO');
-  await page.getByLabel('현재 평가금액').fill('1000000');
-  await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
+  await expect(page.locator('.acct__name').first()).toHaveText('\uC77C\uBC18 \uACC4\uC88C');
+  await fillForm(page);
   await expect(page.locator('.progress')).toContainText('약 5분');
   await expect(page.locator('.active')).toContainText('현재 포트폴리오 분석');
   ready = true;
@@ -32,8 +34,68 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.getByLabel('이메일 주소').fill('test@example.com');
   await page.getByRole('button', { name: '리포트 신청하기' }).click();
   await expect(page.getByRole('dialog')).toContainText('신청을 접수했어요');
-  await expect(page.getByRole('dialog')).toContainText('발송 일정은 아직');
+  await expect(page.getByRole('dialog')).toContainText('1일 이내');
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/report-${test.info().project.name}.png`, fullPage: true });
+});
+
+test('cash default, live donut, ETF-only search and direct recommendation flow', async ({ page }) => {
+  await page.route('**/api/portfolio/session', route => route.fulfill({ json: {} }));
+  await page.route('**/api/portfolio/drafts/**', route => route.fulfill({ json: { status: 'saved' } }));
+  await page.route('**/api/portfolio/catalog', route => route.fulfill({ json: catalog }));
+  await page.goto('/portfolio/');
+  await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toHaveValue('100');
+  await expect(page.locator('.portfolio-preview')).toContainText('100만');
+  await expect(page.getByRole('button', { name: '계좌별로 세금을 고려해 포트폴리오를 추천해드릴까요?' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '계좌별로 추천받기' })).toHaveCount(0);
+  await page.getByRole('button', { name: '현금 빼기' }).click();
+  await expect(page.locator('.portfolio-preview')).toHaveCount(0);
+  await page.getByRole('button', { name: /ISA/ }).click();
+  const find = page.getByRole('combobox', { name: 'ISA에 담은 ETF 찾기' });
+  await find.fill('VOO');
+  await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
+  await expect(page.locator('.acct').filter({ hasText: 'ISA' })).toContainText('Vanguard S&P 500 ETF');
+  await expect(page.locator('.portfolio-preview')).toBeVisible();
+  expect(await find.evaluate(el => getComputedStyle(el).backgroundImage)).toContain('linear-gradient');
+  await find.fill('현금');
+  await page.getByRole('option', { name: '현금 원화 현금' }).click();
+  await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toBeVisible();
+  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
+  await expect(page.getByRole('heading', { name: '어떻게 넣나요?' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요' })).toBeVisible();
+  await page.screenshot({ path: `test-results/recommend-${test.info().project.name}.png`, fullPage: true });
+});
+
+test('tax details and custom interests persist without a dividend step', async ({ page }) => {
+  const saved: any[] = [];
+  await page.route('**/api/portfolio/**', async route => {
+    if (route.request().url().endsWith('/catalog')) return route.fulfill({ json: catalog });
+    if (route.request().url().includes('/drafts/')) saved.push(route.request().postDataJSON());
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/portfolio/');
+  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await page.getByRole('button', { name: /ISA/ }).click();
+  await page.getByRole('button', { name: '계좌별로 세금을 고려해 포트폴리오를 추천해드릴까요?' }).click();
+  await page.getByLabel('세법상 거주지').selectOption('대한민국 거주자');
+  await page.getByLabel('나이 구간').selectOption('19~54세');
+  await page.getByLabel('연간 소득 구간').selectOption('확인 필요');
+  await page.getByLabel('직전 3개 과세기간 중 금융소득종합과세 대상이었나요?').selectOption('아니요');
+  await page.getByLabel('계좌 세부 유형').selectOption('중개형 · 일반형');
+  await page.getByRole('button', { name: '계좌 정보 적용하기' }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  expect(saved.at(-1).preferences.tax_profile.accounts[1].subtype).toBe('중개형 · 일반형');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '이미 다 매수한 상태에요' }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '3년 안', exact: true }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '더 담고 싶은 쪽이 있나요?' })).toBeVisible();
+  await page.getByLabel('관심 키워드 직접 입력').fill('환율 부담');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '추가적으로 고려할 것들을 알려주세요' })).toBeVisible();
+  expect(saved.at(-1).preferences.interests).toContain('환율 부담');
+  expect(saved.at(-1).preferences.contribution).toBe('이미 다 매수한 상태에요');
 });

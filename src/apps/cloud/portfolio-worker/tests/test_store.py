@@ -85,3 +85,18 @@ def test_email_is_bound_to_owned_completed_analysis(isolated_db):
     store.claim(); store.finish(parent['id'], result={})
     assert store.request_report(parent['id'], 'other', 'reader@example.com') is False
     assert store.request_report(parent['id'], 'owner', 'reader@example.com') is True
+
+
+def test_draft_sections_are_saved_atomically_and_private(isolated_db):
+    from edge_portfolio.contracts import DraftInput
+    draft_id = str(uuid4())
+    payload = DraftInput(holdings=[], preferences={'contribution': 'already bought', 'interests': ['custom']}).model_dump(mode='json')
+    store.save_draft(draft_id, 'owner', payload)
+    with store.connect() as db:
+        for name in store.INPUT_TABLES:
+            assert db.execute(f'SELECT count(*) AS n FROM portfolio_input_{name} WHERE draft_id=%s', (draft_id,)).fetchone()['n'] == 1
+        assert db.execute('SELECT payload FROM portfolio_input_interests WHERE draft_id=%s', (draft_id,)).fetchone()['payload']['interests'] == ['custom']
+    with pytest.raises(ValueError, match='NOT_FOUND'):
+        store.save_draft(draft_id, 'other', payload)
+    with pytest.raises(ValueError, match='NOT_FOUND'):
+        store.submit('other', 'key', {'draft_id': draft_id})

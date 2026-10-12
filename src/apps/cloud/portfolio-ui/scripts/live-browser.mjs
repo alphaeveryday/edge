@@ -1,3 +1,4 @@
+import { fillForm } from './fill-form.mjs';
 // Explicit billable end-to-end verification against the running API and worker.
 import { chromium, expect } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -9,14 +10,8 @@ const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 await mkdir('test-results', { recursive: true });
 try {
-  await page.goto('http://localhost:5180/portfolio/');
-  await page.getByLabel('ETF 이름 또는 종목 코드').fill('Vanguard S&P 500 ETF (VOO)');
-  await page.getByLabel('현재 평가금액').fill('7000000');
-  await page.getByRole('button', { name: '＋ ETF 추가하기' }).click();
-  await page.getByLabel('ETF 이름 또는 종목 코드').last().fill('Invesco NASDAQ 100 ETF (QQQM)');
-  await page.getByLabel('현재 평가금액').last().fill('3000000');
-  await page.getByLabel('가장 궁금한 점').fill('두 ETF가 겹치면 하나를 줄여야 하나요?');
-  await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
+  await page.goto(process.env.PORTFOLIO_URL || 'http://localhost:5180/portfolio/');
+  await fillForm(page);
   await expect(page.locator('.progress')).toBeVisible();
   const jobId = await page.evaluate(() => localStorage.getItem('edge-portfolio-job'));
   console.log('submitted', jobId);
@@ -42,6 +37,9 @@ try {
   await page.screenshot({ path: 'test-results/live-desktop.png', fullPage: true });
   expect(errors).toEqual([]);
   const result = await page.evaluate(async id => (await fetch('/api/portfolio/analyses/' + id)).json(), jobId);
-  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
+  const outlookQueries = result.result.aws_outlook?.queries || [];
+  expect(outlookQueries.length).toBeLessThanOrEqual(3);
+  expect(outlookQueries.every(q => q.purpose?.trim() && q.decision_question?.trim())).toBe(true);
+  await writeFile('test-results/live-verification.json', JSON.stringify({ jobId, elapsed: result.result.elapsed_seconds, sourceCount: result.result.sources.length, outlookQueries, states: ['submitted', 'restored', 'succeeded', 'chat_answered', 'chat_blocked', 'email_received'], errors }, null, 2));
   console.log('live end-to-end passed', result.result.elapsed_seconds);
 } finally { await browser.close(); }

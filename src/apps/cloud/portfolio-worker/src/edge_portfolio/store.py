@@ -6,6 +6,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+INPUT_TABLES = ('portfolio', 'funding', 'horizon', 'interests', 'notes', 'tax')
+
 
 def connect():
     return psycopg.connect(os.environ["PORTFOLIO_DATABASE_URL"], row_factory=dict_row,
@@ -31,6 +33,34 @@ def initialize():
         db.execute("""CREATE TABLE IF NOT EXISTS portfolio_report_requests (
             job_id text REFERENCES portfolio_jobs(id), owner text NOT NULL, email text NOT NULL,
             created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(job_id, owner))""")
+        db.execute("""CREATE TABLE IF NOT EXISTS portfolio_input_drafts (
+            id uuid PRIMARY KEY, owner text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())""")
+        for name in INPUT_TABLES:
+            db.execute(f"""CREATE TABLE IF NOT EXISTS portfolio_input_{name} (
+                draft_id uuid PRIMARY KEY REFERENCES portfolio_input_drafts(id) ON DELETE CASCADE,
+                payload jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())""")
+
+
+def save_draft(draft_id, owner, payload):
+    preferences = payload['preferences']
+    sections = {
+        'portfolio': {k: payload[k] for k in ('holdings', 'question', 'input_mode', 'planning')},
+        'funding': {'contribution': preferences['contribution']},
+        'horizon': {'horizon': payload['horizon']},
+        'interests': {'interests': preferences['interests']},
+        'notes': {'note': preferences['note']},
+        'tax': {'accounts': preferences['accounts'], 'tax_profile': preferences['tax_profile']},
+    }
+    with connect() as db:
+        db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', (owner,))
+        row = db.execute('SELECT owner FROM portfolio_input_drafts WHERE id=%s FOR UPDATE', (draft_id,)).fetchone()
+        if row and row['owner'] != owner:
+            raise ValueError('NOT_FOUND')
+        if not row and db.execute('SELECT count(*) AS n FROM portfolio_input_drafts WHERE owner=%s', (owner,)).fetchone()['n'] >= 10:
+            raise ValueError('DRAFT_LIMIT')
+        db.execute('INSERT INTO portfolio_input_drafts(id,owner) VALUES (%s,%s) ON CONFLICT(id) DO UPDATE SET updated_at=now()', (draft_id, owner))
+        for name, value in sections.items():
+            db.execute(f'INSERT INTO portfolio_input_{name}(draft_id,payload) VALUES (%s,%s) ON CONFLICT(draft_id) DO UPDATE SET payload=excluded.payload,updated_at=now()', (draft_id, Jsonb(value)))
 
 
 def submit(owner, key, payload, parent_id=None):
@@ -42,6 +72,8 @@ def submit(owner, key, payload, parent_id=None):
             if existing["input"] != payload or existing["parent_id"] != parent_id:
                 raise ValueError("IDEMPOTENCY_CONFLICT")
             return existing
+        if payload.get('draft_id') and not db.execute('SELECT id FROM portfolio_input_drafts WHERE id=%s AND owner=%s', (payload['draft_id'], owner)).fetchone():
+            raise ValueError('NOT_FOUND')
         db.execute("SELECT pg_advisory_xact_lock(1266)")
         if parent_id:
             parent = db.execute("SELECT id FROM portfolio_jobs WHERE id=%s AND owner=%s AND state='succeeded' AND kind='analysis'", (parent_id, owner)).fetchone()
