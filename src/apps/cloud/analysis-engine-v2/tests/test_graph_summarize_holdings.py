@@ -11,12 +11,12 @@ def make(tmp_path, weights, selected_date='2026-10-02', etf_ref=ETF):
     tools = GraphTools(lambda statement, parameters: [], CATALOG, tmp_path, '2026-10-05T00:00:00+00:00')
     members = [{'object_type': 'Equity', 'object_id': key, 'object': {'title': key.upper()}, 'weight_ratio': weight} for key, weight in weights]
     selection = {'items': members, 'etf_ref': etf_ref, 'selected_date': selected_date}
-    tools.register('fake_holdings', 'test', {}, [], lambda: tools.result(members, selection=selection), sources=[])
+    tools.register('fake_holdings', {}, [], lambda: tools.result(members, selection=selection), sources=[])
     return tools, tools.call('fake_holdings', {})['result']['selection_ref']
 
 
 def summary(tools, ref, **more):
-    return tools.call('summarize_etf_holdings', {'selection_ref': ref, **more})['result']
+    return tools.call('sum_holding_weights', {'selection_ref': ref, **more})['result']
 
 
 def test_the_total_is_exact_decimal_arithmetic_and_is_not_scaled_to_one_hundred(tmp_path):

@@ -7,6 +7,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from edge_analysis_v2.tools.graph.shape import fit
+
 
 class EvidenceStore:
     def __init__(self, directory, cutoff):
@@ -40,13 +42,15 @@ class EvidenceStore:
         return response
 
     def reference(self, ref, kind):
-        if not isinstance(ref,dict) or set(ref)!={'tool_run_id','path'}:
-            raise ValueError('Reference requires tool_run_id and path')
+        if not isinstance(ref,dict) or 'tool_run_id' not in ref or set(ref)-{'tool_run_id','path'}:
+            raise ValueError('Reference requires tool_run_id')
         identifier=ref['tool_run_id']
         if not isinstance(identifier,str) or not re.fullmatch(r'cq_[a-f0-9]{32}',identifier):
             raise ValueError('Invalid reference identifier')
-        if kind not in ('selection','dataset') or ref['path']!='/'+kind:
-            raise ValueError('Reference kind/path mismatch')
+        # The path names a part of the run, and the tool already knows which part it reads. Requiring the
+        # caller to match it failed 9 calls in 45 runs that passed the right run with the other path.
+        if kind not in ('selection','dataset') or ref.get('path','/'+kind) not in ('/selection','/dataset'):
+            raise ValueError('Reference path must be /selection or /dataset')
         # An on-disk run from another analysis/session is not implicitly authorized.
         if not any(r['response']['tool_run_id']==identifier for r in self.calls):
             raise ValueError('Reference does not belong to this analysis')
@@ -65,6 +69,8 @@ class EvidenceStore:
             raise ValueError('Page requires nonnegative offset and limit 1..100')
         dataset=self.reference(ref,'dataset')
         items=dataset.get('display_items',dataset['items'])
-        return {'items':items[offset:offset+limit],'page':{'offset':offset,'complete':offset+limit>=len(items),
+        limit=fit(items[offset:],limit)
+        shown={'columns':dataset['display_columns'],'rows':items[offset:offset+limit]} if 'display_columns' in dataset else {'items':items[offset:offset+limit]}
+        return {**shown,'page':{'offset':offset,'complete':offset+limit>=len(items),
             'next_offset':offset+limit if offset+limit<len(items) else None},'data_scope':dataset['scope'],
             'dataset_ref':ref}

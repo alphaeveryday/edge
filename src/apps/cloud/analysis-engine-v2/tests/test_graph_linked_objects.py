@@ -25,8 +25,9 @@ def test_every_linked_object_is_returned_with_its_source_and_a_missing_start_obj
     tools, calls = make(tmp_path)
     refs = [{'object_type': 'Company', 'object_id': 'c1'}, {'object_type': 'Company', 'object_id': 'missing'}]
     result = tools.call('get_linked_objects', {'object_refs': refs, 'link_type': 'Company_Issues_Equity'})['result']
-    assert [(i['source']['object_id'], i['target']['object_id'], i['direction']) for i in result['items']] == [
-        ('c1', 'e1', 'forward'), ('c1', 'e2', 'forward')]
+    # WHY: each row carried the whole target object and the link's keys, and 64 rows did not fit one response.
+    assert (result['columns'], result['rows']) == (['name', 'object_id'], [['Common', 'e1'], ['Preferred', 'e2']])
+    assert result['same_for_all_rows'] == {'object_type': 'Equity', 'source_id': 'c1'}
     assert result['data_scope']['start_objects_not_found'] == ['missing'] and 'selection' not in result
     assert '(a:`Company`)-[r:`Company_Issues_Equity`]->(n:`Equity`)' in calls[-1][0]
 
@@ -36,8 +37,12 @@ def test_reverse_starts_from_the_target_type_and_a_wrong_start_type_is_a_limitat
     equity = [{'object_type': 'Equity', 'object_id': 'e1'}]
     tools.call('get_linked_objects', {'object_refs': equity, 'link_type': 'Company_Issues_Equity', 'direction': 'reverse'})
     assert '(a:`Equity`)<-[r:`Company_Issues_Equity`]-(n:`Company`)' in calls[-1][0]
-    wrong = tools.call('get_linked_objects', {'object_refs': equity, 'link_type': 'Company_Issues_Equity'})['result']
-    assert wrong == {'status': 'invalid_or_unavailable', 'reason': 'Reference type does not match link direction'}
+    # WHY: 5 calls in 45 runs started from the target type without saying reverse and got an error back.
+    tools.call('get_linked_objects', {'object_refs': equity, 'link_type': 'Company_Issues_Equity'})
+    assert '(a:`Equity`)<-[r:`Company_Issues_Equity`]-(n:`Company`)' in calls[-1][0]
+    # WHY: after direction became optional, 2 calls in 13 runs still passed the wrong one and failed.
+    tools.call('get_linked_objects', {'object_refs': equity, 'link_type': 'Company_Issues_Equity', 'direction': 'forward'})
+    assert '(a:`Equity`)<-[r:`Company_Issues_Equity`]-(n:`Company`)' in calls[-1][0]
 
 
 def test_unmapped_links_are_limitations_and_unknown_links_never_reach_the_graph(tmp_path):

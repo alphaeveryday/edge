@@ -6,15 +6,20 @@ from time import perf_counter
 from jsonschema import Draft202012Validator
 
 from edge_analysis_v2.tools.graph.facts import GraphFacts
+from edge_analysis_v2.tools.graph.shape import overview
 from edge_analysis_v2.tools.graph.store import EvidenceStore
+
+from edge_analysis_v2.tools.graph import descriptions, shape
 
 STRING = {'type': 'string', 'minLength': 1}
 LIMIT = {'type': 'integer', 'minimum': 1, 'maximum': 100, 'default': 20}
 REF = {'type': 'object', 'properties': {'object_type': STRING, 'object_id': STRING},
        'required': ['object_type', 'object_id'], 'additionalProperties': False}
 REFS = {'type': 'array', 'items': REF, 'minItems': 1, 'maxItems': 1000}
+# path is accepted and not needed: the run id names the stored result and the receiving tool knows which part it reads.
 RESULT_REF = {'type': 'object', 'properties': {'tool_run_id': STRING, 'path': {'enum': ['/selection', '/dataset']}},
-              'required': ['tool_run_id', 'path'], 'additionalProperties': False}
+              'required': ['tool_run_id'], 'additionalProperties': False}
+BROAD = 100   # a search matching more rows than this returns their shape, not the rows
 
 
 class GraphTools:
@@ -25,81 +30,83 @@ class GraphTools:
         catalog: Reviewed graph catalog from ``load_catalog``.
         directory: Folder that receives one evidence file per call.
         cutoff: Analysis time with an explicit timezone; later facts stay invisible.
+        expose: Names of the tools the agent may see and call; every tool when omitted. A tool left out
+            does not exist for the agent, so one tool's effect can be measured by adding it alone.
+
+    Raises:
+        ValueError: ``expose`` names a tool that is not defined.
     """
 
     data_source = 'graph'
 
-    def __init__(self, run, catalog, directory, cutoff):
+    def __init__(self, run, catalog, directory, cutoff, expose=None):
+        self._expose = None if expose is None else set(expose)
         self.store = EvidenceStore(directory, cutoff)
         self.graph = GraphFacts(run, catalog, self.store.cutoff)
         self.schemas = []
         self.definitions = []
         self._handlers = {}
+        self.defined = set()
         kinds = {'enum': list(self.graph.objects)}
         self.register('get_result_page',
-            'Read another page of a stored full dataset without rerunning the graph query or changing its cutoff.',
             {'dataset_ref': RESULT_REF, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': LIMIT},
             ['dataset_ref', 'offset'], self.page, sources=['이 분석에서 저장한 도구 결과'])
         self.register('get_ontology_schema',
-            'Discover graph object types, properties and links; definitions are not observed facts. '
-            'Without object_types it lists every type and link without properties; name the types you will query to get their properties.',
             {'object_types': {'type': 'array', 'items': kinds}}, [], self.schema, sources=['검토된 그래프 카탈로그'])
         self.register('search_objects',
-            'Find objects of one type by part of their name, title or ticker. One call returns every match as a stored dataset '
-            'plus a first page; total_rows and matched_properties say what was covered, so do not repeat the search with variants. '
-            'A security is Equity or ETF; an issuer is Company. filters need exact property values from get_ontology_schema.',
             {'object_type': kinds, 'query': {'type': 'string', 'maxLength': 120}, 'filters': {'type': 'object'}, 'limit': LIMIT},
             ['object_type'], self.search, sources=['ontology_view의 해당 객체 뷰'])
         self.register('get_linked_objects',
-            'Follow one declared relation from a batch of objects to everything linked to them, e.g. a company to all securities '
-            'it issued. A link id reads Source_Relation_Target; direction reverse starts from the Target type. Use this instead '
-            'of searching by name variants when the question is about a relation.',
             {'object_refs': REFS, 'link_type': {'enum': list(self.graph.links)}, 'direction': {'enum': ['forward', 'reverse']},
              'limit': LIMIT}, ['object_refs', 'link_type'], self.linked, sources=['ontology_view의 해당 관계 뷰'])
         self.register('get_etf_holdings',
-            'Read every direct constituent of one ETF on one date, with the stored weights (0.05 means 5%). '
-            'etf_ref.object_id is the id a lookup tool returned, so resolve the fund first. '
-            'exact fails when that date has no snapshot; latest_on_or_before picks the nearest earlier snapshot and reports '
-            'selected_date, which the answer must state. Weights are not normalized and the snapshot is not certified complete.',
             {'etf_ref': REF, 'holdings_date': {'type': 'string', 'format': 'date', 'description': 'YYYY-MM-DD, Korean market day'},
              'date_policy': {'enum': ['exact', 'latest_on_or_before']}, 'limit': LIMIT},
             ['etf_ref', 'holdings_date', 'date_policy'], self.holdings,
             sources=['ontology_view.etf_holding', 'ontology_view.equity', 'ontology_view.etf'])
-        self.register('summarize_etf_holdings',
-            'Add up stored holding weights from a get_etf_holdings result: all constituents, an explicit subset, or the largest N. '
-            'Use this for any weight total, concentration or combined exposure stated in the answer instead of adding weights yourself. '
-            'Pass selection_ref from the holdings result. No normalization and no inferred groups.',
+        self.register('sum_holding_weights',
             {'selection_ref': RESULT_REF, 'members': REFS, 'top_n': {'type': 'integer', 'minimum': 1, 'maximum': 1000}},
             ['selection_ref'], self.summarize_holdings, sources=['get_etf_holdings로 저장한 구성'])
-        self.register('compare_holdings_dates',
-            'Compare two get_etf_holdings results of the same ETF on an earlier and a later date: who was present on each date '
-            'and how each stored weight changed. Pass both selection_refs. A weight change is not evidence of a trade or rebalancing.',
+        self.register('compare_holdings_between_dates',
             {'earlier_ref': RESULT_REF, 'later_ref': RESULT_REF}, ['earlier_ref', 'later_ref'], self.compare_holdings,
             sources=['get_etf_holdings로 저장한 두 구성'])
-        self.register('resolve_securities',
-            'Resolve a list of exchange tickers in one batch before querying their prices, flows or events. '
-            'Use tickers given in the question, never remembered ones. An object another tool already returned is already '
-            'resolved from the same data; calling this to confirm it adds nothing. '
-            'For Korean stocks use market_code XKRX. Return a reusable selection; preserve missing or ambiguous codes. '
-            'Prefer this to one search per ticker.',
+        self.register('find_securities_by_ticker',
             {'tickers': {'type': 'array', 'items': STRING, 'minItems': 1, 'maxItems': 1000}, 'market_code': STRING,
              'security_type': {'enum': ['Equity', 'ETF', 'both']}},
-            ['tickers', 'market_code'], self.resolve_securities, sources=['ontology_view.equity', 'ontology_view.etf'])
+            ['tickers', 'market_code'], self.find_securities_by_ticker, sources=['ontology_view.equity', 'ontology_view.etf'])
+        self.register('get_objects',
+            {'object_refs': REFS}, ['object_refs'], self.get, sources=['ontology_view의 해당 객체 뷰'])
+        unknown = (self._expose or set()) - self.defined
+        if unknown:
+            raise ValueError('Unknown tools to expose: ' + ', '.join(sorted(unknown)))
 
-    def register(self, name, description, properties, required, handler, *, sources, version='graph-v1'):
+    def register(self, name, properties, required, handler, *, sources, version='graph-v1'):
         """Expose one tool to the agent and to the administrator-facing definition store.
+
+        The text the agent reads (the description and the argument descriptions) is in descriptions.py.
 
         Args:
             name: Public function name, unique within this surface.
-            description: Text the agent reads when choosing a tool.
             properties: JSON Schema properties of the arguments.
             required: Argument names that must be present.
             handler: Callable(**arguments) returning (public result, full dataset or None).
-            sources: Views or stored results this tool reads.
+            sources: Object types (recorded as their views) or stored results this tool reads.
             version: Changes whenever the meaning of the response changes.
         """
-        if name in self._handlers:
+        if name in self.defined:
             raise ValueError('Tool is already registered: ' + name)
+        self.defined.add(name)
+        if self._expose is not None and name not in self._expose:
+            return
+        sources = [self.graph.objects.get(s, {}).get('viewName', s) for s in sources]
+        description = name
+        if name in descriptions.TOOLS:
+            description = descriptions.text(name)
+            notes = descriptions.TOOLS[name]['args']
+            missing = set(properties) - set(notes)
+            if missing:
+                raise ValueError(f'{name}: no description for arguments {sorted(missing)}')
+            properties = {key: {**schema, 'description': notes[key]} for key, schema in properties.items()}
         parameters = {'type': 'object', 'properties': properties, 'required': required, 'additionalProperties': False}
         self.schemas.append({'type': 'function', 'function': {'name': name, 'description': description, 'parameters': parameters}})
         self.definitions.append(dict(tool_id=name + ':' + version, function_name=name, version=version,
@@ -130,24 +137,62 @@ class GraphTools:
         return self.store.commit(name, arguments, result, elapsed_ms=round((perf_counter() - started) * 1000, 2),
                                  queries=self.graph.queries[begin:], error=error, dataset=dataset)
 
-    def result(self, items, *, selection=None, scope=None, limit=20, display_items=None):
-        """Split a complete dataset into the visible first page and the stored whole."""
+    def result(self, items, *, selection=None, scope=None, limit=20, display_items=None, search=False, table=None):
+        """Split a complete dataset into the visible first page and the stored whole.
+
+        Args:
+            search: The rows are matches of a search the agent can narrow, not a set it asked for by identity.
+            table: Show graph objects as columns and rows; 'ids' also keeps each row's object id, 'objects' its title too.
+        """
         scope = {'cutoff': self.store.cutoff, 'source': 'PuppyGraph', **(scope or {})}
+        if search and len(items) <= BROAD:
+            # A search is told to narrow below BROAD rows and then read every row, so a set that small is shown
+            # whole. Cut to the requested limit, 52 rows came back as 20 and the other 32 were never read.
+            limit = BROAD
+        if table and not (search and len(items) > BROAD):
+            # A table row is short, so rows that were asked for are bounded by the response size alone:
+            # 46 rate rows came back as 20, and 198 price rows as 100 of a page that had room for all.
+            limit = len(items)
         visible = items if display_items is None else display_items
-        value = {'items': visible[:limit], 'data_scope': scope, 'total_rows': len(items),
-                 'page': {'complete': len(items) <= limit, 'next_offset': limit if len(items) > limit else None}}
+        columns = same = None
+        if table and items:
+            columns, visible, same = shape.table(visible, keep_id=table in ('ids', 'objects'), keep_title=table == 'objects')
+        asked, limit = limit, shape.fit(visible, limit)
+        value = {'total_rows': len(items), 'page': {'complete': len(items) <= limit, 'next_offset': limit if len(items) > limit else None}}
+        if len(items) > limit:
+            # A first page of a large result was read as the whole answer. What the page leaves out comes
+            # first, with the shape of the full set, so the next step is to narrow rather than to conclude.
+            value['notice'] = (f'{limit} of {len(items)} rows are shown' + (', as many as one response holds' if limit < asked else '')
+                + f'. The {len(items) - limit} not shown belong to the same answer set: '
+                'do not describe, count or rule anything out from this page alone. overview summarises the whole set; '
+                "narrow the request with this tool's filters, or read further pages with get_result_page.")
+            value['overview'] = overview(items if columns else visible)
+            if search and len(items) > BROAD:
+                # Saying what a page leaves out did not change what the agent did. A search too broad to
+                # read returns no rows, so the next step has to be a narrower search it can read whole.
+                limit = 0
+                value['page']['next_offset'] = 0
+                value['notice'] = (f'{len(items)} rows match, too many to read, so none are shown. Choose what the question needs from '
+                    f'overview and call this tool again with narrower arguments until fewer than {BROAD} rows match; '
+                    'then read every row. Reading this whole set page by page with get_result_page is possible but rarely the right step.')
+        if columns:
+            value.update(columns=columns, rows=visible[:limit], same_for_all_rows=same, data_scope=scope)
+        else:
+            value.update(items=visible[:limit], data_scope=scope)
         if selection is not None:
             # Members stay in stored evidence; a later tool reads them through selection_ref.
             value['selection'] = {key: item for key, item in selection.items() if key != 'items'} | {'members': len(selection['items'])}
         dataset = {'items': items, 'scope': scope, 'selection': selection}
-        if display_items is not None:
-            dataset['display_items'] = display_items
+        if display_items is not None or columns:
+            dataset['display_items'] = visible
+        if columns:
+            dataset['display_columns'] = columns
         return value, dataset
 
     def page(self, dataset_ref, offset, limit=20):
         return self.store.page(dataset_ref, offset, limit), None
 
-    def resolve_securities(self, tickers, market_code, security_type='both'):
+    def find_securities_by_ticker(self, tickers, market_code, security_type='both'):
         kinds = ['Equity', 'ETF'] if security_type == 'both' else [security_type]
         requested = list(dict.fromkeys(tickers))
         found = {}
@@ -190,19 +235,46 @@ class GraphTools:
 
     def search(self, object_type, query='', filters=None, limit=20):
         items = self.graph.nodes(object_type, query=query, filters=filters)
-        return self.result(items, limit=limit,
-            scope={'object_type': object_type, 'query': query, 'filters': filters or {}, 'complete_within_query': True,
-                   'objects_of_this_type_in_graph': self.graph.total(object_type),
-                   'cutoff_applied': self.graph.time_bounded(object_type),
-                   'match': 'substring of any matched property', 'matched_properties': ['id'] + self.graph.text_properties(object_type)})
+        scope = {'object_type': object_type, 'query': query, 'filters': filters or {}, 'complete_within_query': True,
+                 'objects_of_this_type_in_graph': self.graph.total(object_type),
+                 'cutoff_applied': self.graph.time_bounded(object_type),
+                 'match': 'substring of any matched property', 'matched_properties': ['id'] + self.graph.text_properties(object_type)}
+        words = query.split()
+        if not items and query:
+            # After "한화" matched nothing, the same search was repeated with "한화오션" and "한화에어로스페이스".
+            scope['nothing_matches'] = 'No stored object of this type contains this text, so no longer text that includes it can match either.'
+        if not items and len(words) > 1:
+            # A fund that is not stored was looked for 12 times under other spellings. Showing what each word
+            # alone matches lets one call settle that nothing stored carries all of them.
+            scope['nothing_has_the_whole_query'] = {
+                'each_word_alone_matches': {word: [o['title'] for o in self.graph.nodes(object_type, query=word, filters=filters)][:30] for word in words},
+                'meaning': 'No stored object of this type has the whole query in its name, title or ticker. If the object you want '
+                           'is not among these, it is not in this data: say so instead of searching other spellings or types.'}
+        return self.result(items, limit=limit, search=True, scope=scope, table='objects')
 
-    def linked(self, object_refs, link_type, direction='forward', limit=20):
-        selection = self.graph.get(object_refs)
+    def linked(self, object_refs, link_type, direction=None, limit=20):
         link = self.graph.links[link_type]
+        if direction is None or link['source'] != link['target']:
+            # The start objects say which end of the relation they are. Asking the caller as well failed 5 calls,
+            # and 2 more after it became optional, so it only decides a relation between two objects of one type.
+            direction = 'reverse' if link['source'] != link['target'] and {r['object_type'] for r in object_refs} == {link['target']} else 'forward'
+        selection = self.graph.get(object_refs)
         scope = {'link_type': link_type, 'direction': direction, 'complete_within_query': True,
                  'cutoff_applied': self.graph.time_bounded(link['target'] if direction == 'forward' else link['source']),
                  'start_objects_not_found': [i['object_id'] for i in selection['items'] if i['status'] != 'resolved']}
-        return self.result(self.graph.linked(object_refs, link_type, direction), limit=limit, scope=scope)
+        items = self.graph.linked(object_refs, link_type, direction)
+        # The linked object with where it was reached from and what the link says, as one table row. Each row
+        # used to carry the whole target object and the link's own keys: 64 rows did not fit one response.
+        rows = [{**row['target'], 'properties': {**row['target']['properties'], **row['link_properties']}, 'source_id': row['source']['object_id']}
+                for row in items]
+        return self.result(items, limit=limit, scope=scope, display_items=rows, table='objects')
+
+    def get(self, object_refs):
+        selection = self.graph.get(object_refs)
+        # Each object as one table row; one that was not found keeps its id and status.
+        rows = [{**(item.get('object') or {k: item[k] for k in ('object_type', 'object_id')} | {'properties': {}}), 'status': item['status']}
+                for item in selection['items']]
+        return self.result(selection['items'], selection=selection, limit=100, display_items=rows, table='objects')
 
     def check_date(self, value):
         """Reject a Korean market day that begins after the analysis cutoff."""
@@ -216,7 +288,7 @@ class GraphTools:
         if etf_ref['object_type'] != 'ETF':
             raise ValueError('ETF reference required')
         if self.graph.get([etf_ref])['completeness'] != 'complete':
-            raise ValueError('ETF not found: object_id must be the id returned by resolve_securities or search_objects, not a ticker')
+            raise ValueError('ETF not found: object_id must be the id returned by find_securities_by_ticker or search_objects, not a ticker')
         selected = holdings_date = requested.isoformat()
         if date_policy == 'latest_on_or_before':
             rows = self.graph.query(
@@ -250,12 +322,12 @@ class GraphTools:
         rows = [{'name': m['object']['title'] if m['object'] else h['properties'].get('securityName'),
                  'ticker': h['properties'].get('securityTicker'), 'weight_ratio': m['weight_ratio'], 'status': m['status'],
                  'object_type': m['object_type'], 'object_id': m['object_id']} for m, h in zip(members, items)]
-        return self.result(items, selection=selection, limit=limit, display_items=rows, scope={
+        return self.result(items, selection=selection, limit=limit, display_items=rows, table=True, scope={
             'source_snapshot_completeness': 'not_certified', 'historical_revisions': 'not_reconstructable', 'holdings_date': selected})
 
     def holdings_selection(self, ref):
         # A holdings result carries two references to the same run; either one identifies its selection.
-        selection = self.store.reference({'tool_run_id': ref['tool_run_id'], 'path': '/selection'}, 'selection')
+        selection = self.store.reference(ref, 'selection')
         if not selection.get('etf_ref') or not selection.get('selected_date'):
             raise ValueError('A dated ETF holdings selection from get_etf_holdings is required')
         return selection
