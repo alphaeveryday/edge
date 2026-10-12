@@ -23,6 +23,11 @@ variable "etf_codes" {
   type        = list(string)
 }
 
+variable "alarm_topic_arn" {
+  description = "내보내기 실패 알람을 보낼 SNS 토픽"
+  type        = string
+}
+
 variable "scheduler_dlq_arn" {
   description = "스케줄러가 호출에 실패한 이벤트를 보낼 큐"
   type        = string

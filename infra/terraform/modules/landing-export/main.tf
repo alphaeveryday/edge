@@ -57,6 +57,23 @@ resource "aws_lambda_function" "this" {
   depends_on = [aws_iam_role_policy.this, aws_cloudwatch_log_group.this]
 }
 
+# 스케줄러는 람다를 비동기로 부른다 — 본문이 실패해도(조회·저장 오류, 0건) 스케줄러의 실패 큐로는 오지 않는다.
+# 그래서 함수 오류 지표에 알람을 건다. 하루 한 번 도는 함수라 한 번의 오류가 곧 그날 갱신 실패다.
+resource "aws_cloudwatch_metric_alarm" "failed" {
+  alarm_name          = "${var.name}-failed"
+  alarm_description   = "랜딩 전망 내보내기가 실패했다 — etforca.com 종목 검색이 어제 전망을 보여 준다. 로그의 결과 줄(failed·missing)에 종목별 사유가 있다."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  dimensions          = { FunctionName = aws_lambda_function.this.function_name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [var.alarm_topic_arn]
+}
+
 resource "aws_iam_role" "scheduler" {
   name               = "${var.name}-scheduler"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "scheduler.amazonaws.com" }, Action = "sts:AssumeRole" }] })

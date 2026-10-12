@@ -27,21 +27,25 @@ def strip_internal(node):
 def export(codes, day, fetch, put, pause=lambda: None):
     """종목마다 그날 전망을 읽어 저장한다. 그날 발행본이 없는 종목은 건너뛰고 앞선 파일을 둔다.
 
-    하나도 쓰지 못하면 실패로 끝낸다 — 조회 경로가 달라져도 응답은 같은 404 라, 0건을 성공으로 두면
+    한 종목의 조회·저장 오류는 나머지를 막지 않는다 — 끝까지 돈 뒤 실패로 끝내 알람이 울리게 한다.
+    하나도 쓰지 못해도 실패다 — 조회 경로가 달라져도 응답은 같은 404 라, 0건을 성공으로 두면
     랜딩이 낡은 전망을 계속 보여 줘도 아무도 모른다.
     """
-    missing = []
+    missing, failed = [], {}
     for code in codes:
-        screen = fetch(code, day)
-        if screen is None:
-            missing.append(code)
-        else:
-            put(code, json.dumps(strip_internal(screen), ensure_ascii=False))
+        try:
+            screen = fetch(code, day)
+            if screen is None:
+                missing.append(code)
+            else:
+                put(code, json.dumps(strip_internal(screen), ensure_ascii=False))
+        except Exception as error:  # 종목 단위로 가둔다. 사유는 아래 결과 줄에 남는다
+            failed[code] = f'{type(error).__name__}: {error}'
         pause()
-    result = {'date': day, 'written': len(codes) - len(missing), 'missing': missing}
+    result = {'date': day, 'written': len(codes) - len(missing) - len(failed), 'missing': missing, 'failed': failed}
     print(json.dumps(result, ensure_ascii=False))
-    if not result['written']:
-        raise RuntimeError(f'{day} 전망을 하나도 내보내지 못했다({len(codes)}종 모두 발행본 없음)')
+    if failed or not result['written']:
+        raise RuntimeError(f"{day} 전망 내보내기 실패: 저장 {result['written']}종, 오류 {len(failed)}종, 발행본 없음 {len(missing)}종")
     return result
 
 

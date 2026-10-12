@@ -33,7 +33,21 @@ class ExportTest(unittest.TestCase):
         # 그날 발행본이 없는 종목은 덮어쓰지 않는다 — 빈 파일로 덮으면 랜딩의 그 종목이 비어 버린다.
         result, saved = self.run_export({('091160', '2026-10-12'): SCREEN, ('069500', '2026-10-11'): SCREEN})
         self.assertEqual(list(saved), ['091160'])
-        self.assertEqual(result, {'date': '2026-10-12', 'written': 1, 'missing': ['069500']})
+        self.assertEqual(result, {'date': '2026-10-12', 'written': 1, 'missing': ['069500'], 'failed': {}})
+
+    def test_one_failing_etf_does_not_block_the_rest_but_fails_the_run(self):
+        # 앞 종목의 조회 오류가 뒤 종목의 갱신을 막으면 한 종목 장애가 랜딩 전체를 낡게 한다.
+        # 그래도 성공으로 끝내면 안 된다 — 실패로 끝나야 알람이 울린다.
+        saved = {}
+
+        def fetch(code, day):
+            if code == '091160':
+                raise TimeoutError('timed out')
+            return SCREEN
+
+        with self.assertRaises(RuntimeError):
+            export(['091160', '069500'], '2026-10-12', fetch, saved.__setitem__)
+        self.assertEqual(list(saved), ['069500'])
 
     def test_writing_nothing_is_a_failure(self):
         # 조회 경로가 바뀌어도 404 라 '발행본 없음'과 구분되지 않는다. 0건을 성공으로 두면 조용히 낡는다.
