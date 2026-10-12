@@ -113,8 +113,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             repairs = 0
             while True:
                 calls += 1
-                if calls > 18 or len(json.dumps(messages).encode()) > 350000:
-                    raise ValueError("MODEL_BUDGET")
+                if calls > 24:
+                    raise ValueError("MODEL_CALL_BUDGET")
+                if len(json.dumps(messages, ensure_ascii=False).encode('utf8')) > 350000:
+                    raise ValueError("MODEL_CONTEXT_BUDGET")
                 try:
                     result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
                         "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
@@ -190,7 +192,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     break
                 except (ValueError, TypeError) as error:
                     repairs += 1
-                    if repairs > 1:
+                    if repairs > (2 if role == 'opinion' else 1):
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
                     low, high = LIMITS[role]
                     messages.append({"role": "user", "content": f"출력 검증 실패: {str(error)[:400]}. 현재 역할의 JSON을 한 번 수정하세요. 본문은 {(low + high) // 2}자 목표, 최대 {high}자. 근거는 실제 도구가 준 source_id와 passage_id를 고르세요. 등록 근거가 없는 질문 해석 단계는 evidence: []로 고치세요."})
