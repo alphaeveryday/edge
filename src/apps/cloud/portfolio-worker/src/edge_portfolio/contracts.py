@@ -25,7 +25,7 @@ class AnalysisInput(StrictModel):
 
 class Evidence(StrictModel):
     source_id: str
-    quote: str = Field(min_length=12, max_length=300)
+    passage_id: str
 
 
 class Section(StrictModel):
@@ -42,19 +42,29 @@ class Section(StrictModel):
         return self
 
 
+class FinalReport(StrictModel):
+    question: Section
+    portfolio: Section
+    outlook: Section
+    opinion: Section
+
+
 def validate_section(role, raw, sources):
     section = Section.model_validate(raw)
     length = sum(len(p) for p in section.paragraphs)
     low, high = LIMITS[role]
     if not low <= length <= high:
-        raise ValueError(f"paragraphs must total {low}..{high} characters; got {length}")
+        raise ValueError(f"{role}: paragraphs must total {low}..{high} characters; got {length}")
     by_id = {s["id"]: s for s in sources}
+    citations = []
     for e in section.evidence:
-        if e.source_id not in by_id or e.quote not in by_id[e.source_id]["excerpt"]:
-            raise ValueError("Evidence must quote a registered source exactly")
+        passages = {p['id']: p['text'] for p in by_id.get(e.source_id, {}).get('passages', [])}
+        if e.passage_id not in passages:
+            raise ValueError(f"Evidence must select a registered passage: {e.source_id}/{e.passage_id}")
+        citations.append({**e.model_dump(), 'quote': passages[e.passage_id]})
     if role in ("portfolio", "outlook") and not section.evidence:
         raise ValueError("Portfolio and outlook require source evidence")
-    return section.model_dump()
+    return {**section.model_dump(), 'evidence': citations}
 
 
 def calculate(request: AnalysisInput):

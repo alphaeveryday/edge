@@ -5,7 +5,7 @@ from edge_portfolio.contracts import AnalysisInput, ROLES, LIMITS
 
 
 class Evidence:
-    sources = [{"id": "s1", "excerpt": "official source quotation"}]
+    sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
 async def test_one_conversation_visits_four_roles_and_keeps_context():
@@ -14,7 +14,9 @@ async def test_one_conversation_visits_four_roles_and_keeps_context():
         conversations.append(len(payload["messages"]))
         role = phases[-1]
         count = LIMITS[role][0] // 2
-        section = {"paragraphs": ["가" * count, "나" * count], "evidence": [{"source_id": "s1", "quote": "official source quotation"}], "limitations": []}
+        section = {"paragraphs": ["가" * count, "나" * count], "evidence": [{"source_id": "s1", "passage_id": "p1"}], "limitations": []}
+        if role == 'opinion':
+            section = {name: {**section, 'paragraphs': ['가' * (LIMITS[name][0] // 2), '나' * (LIMITS[name][0] // 2)]} for name in ROLES}
         return {"choices": [{"message": {"role": "assistant", "content": json.dumps(section), "reasoning_content": "private"}}]}
     result = await run_analysis(AnalysisInput(holdings=[{"name": "VOO", "amount_krw": 100}], horizon="10년 이상"), "test", phases.append, model_call=model, evidence=Evidence())
     assert phases == list(ROLES)

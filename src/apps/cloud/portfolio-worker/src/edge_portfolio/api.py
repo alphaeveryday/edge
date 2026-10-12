@@ -7,7 +7,8 @@ from uuid import UUID
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from . import store
-from .contracts import AnalysisInput
+from .contracts import AnalysisInput, StrictModel
+from pydantic import Field
 
 
 @asynccontextmanager
@@ -31,7 +32,13 @@ def owner(request):
 async def origin_check(request, call_next):
     if request.method == "POST" and request.headers.get("origin") != os.getenv("PORTFOLIO_ORIGIN", "http://localhost:5180"):
         return Response(status_code=403)
-    if int(request.headers.get("content-length", "0")) > 32_000:
+    try:
+        size = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        return Response(status_code=400)
+    if size > 32_000:
+        return Response(status_code=413)
+    if request.method == "POST" and len(await request.body()) > 32_000:
         return Response(status_code=413)
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
@@ -48,6 +55,32 @@ def session(request: Request, response: Response):
 
 def public(row):
     return {k: row[k] for k in ("id", "state", "stage", "result", "failure", "created_at", "started_at", "finished_at")}
+
+
+class ChatInput(StrictModel):
+    question: str = Field(min_length=1, max_length=1000)
+
+
+class ReportRequest(StrictModel):
+    email: str = Field(max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+@app.post("/api/portfolio/analyses/{job_id}/chat", status_code=202)
+def chat(job_id: str, body: ChatInput, request: Request, idempotency_key: UUID = Header()):
+    if not body.question.strip():
+        raise HTTPException(422, "EMPTY_QUESTION")
+    try:
+        return public(store.submit(owner(request), str(idempotency_key), body.model_dump(), parent_id=job_id))
+    except ValueError as error:
+        code = str(error)
+        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
+
+
+@app.post("/api/portfolio/analyses/{job_id}/report-request", status_code=201)
+def report_request(job_id: str, body: ReportRequest, request: Request):
+    if not store.request_report(job_id, owner(request), body.email):
+        raise HTTPException(404, "NOT_FOUND")
+    return {"status": "received", "delivery_status": "not_scheduled"}
 
 
 @app.post("/api/portfolio/analyses", status_code=202)

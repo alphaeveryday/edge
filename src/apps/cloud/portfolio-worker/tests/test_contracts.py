@@ -10,10 +10,16 @@ def test_weights_are_calculated_not_generated():
 
 
 def test_fabricated_quote_cannot_be_published():
-    with pytest.raises(ValueError, match="quote"):
-        validate_section("outlook", {"paragraphs": ["가" * 250, "나" * 250], "evidence": [{"source_id": "s1", "quote": "invented quote"}], "limitations": []}, [{"id": "s1", "excerpt": "actual evidence"}])
+    with pytest.raises(ValueError, match="passage"):
+        validate_section("outlook", {"paragraphs": ["가" * 250, "나" * 250], "evidence": [{"source_id": "s1", "passage_id": "invented"}], "limitations": []}, [{"id": "s1", "passages": []}])
 
 
 def test_length_limit_is_enforced_not_silently_truncated():
     with pytest.raises(ValueError, match="characters"):
         validate_section("question", {"paragraphs": ["가" * 251, "나" * 251], "evidence": [], "limitations": []}, [])
+
+
+def test_quote_is_copied_by_code_without_model_reformatting():
+    text = 'Information Technology | 38.0 %'
+    result = validate_section('portfolio', {'paragraphs': ['가' * 250, '나' * 250], 'evidence': [{'source_id': 's1', 'passage_id': 'p1'}], 'limitations': []}, [{'id': 's1', 'passages': [{'id': 'p1', 'text': text}]}])
+    assert result['evidence'][0]['quote'] == text

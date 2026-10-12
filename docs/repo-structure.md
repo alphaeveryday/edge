@@ -56,6 +56,8 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 
 ## apps — 배포 단위
 
+포트폴리오 서비스는 `src/apps/cloud/portfolio-ui`(React 19)와 `src/apps/cloud/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 기존 분석 엔진·온톨로지에 의존하지 않는다. [설계와 실행 경계](design/portfolio-worker.md).
+
 | 앱 | 런타임 | 아티팩트 | 역할 |
 |---|---|---|---|
 | `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, 디자인 v0.2 기준 재구축 — [console-ia](console-ia/tenant-console.md)와의 IA 정렬은 후속). 전 도메인이 tenant-console-api 호출 — UI 자체 mock 레이어 없음 |
