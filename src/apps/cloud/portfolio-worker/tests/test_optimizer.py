@@ -135,3 +135,28 @@ async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():
     with pytest.raises(ValueError, match='eligible selected account'):
         await optimizer.tool({'combinations': groups})
     assert optimizer.result is None
+
+
+async def test_planning_never_optimizes_single_etf_recommendations():
+    request, market, groups = batch()
+    request.planning = True
+    market.loader = lambda symbol, as_of: record(currency='KRW')
+    optimizer = Optimizer(market, request)
+    with pytest.raises(ValueError, match='at least two'):
+        await optimizer.tool({'combinations': groups})
+    assert optimizer.result is None
+    from itertools import combinations
+    pairs = [list(pair) for pair in combinations(market.catalog, 2)]
+    result = await optimizer.tool({'combinations': pairs})
+    assert result['candidates']
+    assert all(len(row['allocations']) >= 2 for row in result['candidates'])
+
+
+def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient():
+    optimizer = Optimizer(None)
+    optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+    final = SimpleNamespace(recommendation=None, selected_candidate_id=None, return_forecast=None)
+    assert optimizer.validate(final) is None
+    final.selected_candidate_id = 'candidate-1'
+    with pytest.raises(ValueError):
+        optimizer.validate(final)

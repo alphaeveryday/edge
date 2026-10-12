@@ -7,6 +7,7 @@ from typing import get_args
 
 from pydantic import ValidationError
 from pydantic_core import ErrorType
+import httpx
 
 from . import store
 from .agent import run_analysis
@@ -20,6 +21,8 @@ HEARTBEAT = Path('/tmp/portfolio-worker-ready')
 def failure_codes(error):
     if isinstance(error, BaseExceptionGroup):
         return [code for child in error.exceptions for code in failure_codes(child)]
+    if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 429 and error.request.url.host == 'mcp.exa.ai':
+        return ['EXA_RATE_LIMIT']
     prefix = str(error).split(':', 1)[0]
     allowed = {'EXA_FAILED', 'EMPTY_SOURCE', 'TOOL_NOT_ALLOWED', 'TOOL_LIMIT', 'INVALID_TOOL_ARGUMENT', 'OUTPUT_INVALID', 'MODEL_BUDGET', 'MODEL_CALL_BUDGET', 'MODEL_CONTEXT_BUDGET', 'MODEL_TRUNCATED'}
     if prefix == 'OUTPUT_INVALID':
@@ -61,9 +64,10 @@ async def work_once():
         store.finish(job["id"], result=result)
         log.info("job=%s status=succeeded seconds=%s", job["id"], result.get("elapsed_seconds"))
     except Exception as error:
-        failure = "TIMED_OUT" if isinstance(error, TimeoutError) else "ANALYSIS_FAILED"
+        codes = failure_codes(error)
+        failure = 'SEARCH_RATE_LIMIT' if 'EXA_RATE_LIMIT' in codes else "TIMED_OUT" if isinstance(error, TimeoutError) else "ANALYSIS_FAILED"
         store.finish(job["id"], failure=failure)
-        log.warning("job=%s status=failed codes=%s", job["id"], failure_codes(error))
+        log.warning("job=%s status=failed codes=%s", job["id"], codes)
     return True
 
 

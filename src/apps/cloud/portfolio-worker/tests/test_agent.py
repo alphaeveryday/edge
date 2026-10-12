@@ -2,9 +2,27 @@ import json
 import httpx
 import pytest
 from itertools import combinations
+from types import SimpleNamespace
 from edge_portfolio.agent import run_analysis
 from edge_portfolio.contracts import AnalysisInput, ROLES, LIMITS
 from report_fixtures import final_payload
+
+
+async def test_research_context_keeps_citable_passages_once_and_all_discovered_urls():
+    from edge_portfolio.agent import ExaEvidence
+    class Session:
+        async def call_tool(self, name, args):
+            body = ('URL: https://official.example/first\n' + 'research ' * 1000 + '\nURL: https://official.example/last\n') if name == 'web_search_exa' else 'Official ETF research paragraph.\n' * 200
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text=body)])
+    evidence = ExaEvidence(Session())
+    found = await evidence.call('search_sources', {'query': 'ETF', 'objective': 'verify alternative'})
+    assert len(found['search_results']) <= 2500
+    assert 'https://official.example/last' in found['fetchable_urls']
+    result = await evidence.call('fetch_source', {'url': 'https://official.example/last'})
+    assert result['passages'] == evidence.sources[0]['passages']
+    assert result['passages']
+    assert 'excerpt' not in result  # The same text must not consume context twice.
+    assert evidence.sources[0]['excerpt']  # Original evidence stays in the saved report.
 
 
 class Evidence:
@@ -156,12 +174,48 @@ async def test_runaway_tool_loop_still_stops_after_twenty_four_model_calls():
     assert calls == 24
 
 
+async def test_backtest_candidates_remain_auditable_when_rating_prevents_recommendation(monkeypatch):
+    async def optimize(self, args):
+        self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+        return self.result
+    monkeypatch.setattr('edge_portfolio.optimizer.Optimizer.tool', optimize)
+    phases = []
+    async def model(payload):
+        role = phases[-1]
+        if role == 'portfolio' and (call := optimization_call(payload)):
+            return call
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
+                                'test', phases.append, model_call=model, evidence=Evidence())
+    assert result['recommendation'] is None
+    assert result['optimization']['reason'] == 'RATING_BELOW_MINIMUM'
+    assert result['optimization']['candidates'] == [{'candidate_id': 'candidate-1'}]
+    assert result['optimization']['selected_candidate_id'] is None
+
+
 def test_diagnostic_codes_distinguish_budget_and_validation_failures_without_raw_content():
     from edge_portfolio.worker import failure_codes
     assert failure_codes(ValueError('MODEL_CALL_BUDGET')) == ['MODEL_CALL_BUDGET']
     assert failure_codes(ValueError('MODEL_CONTEXT_BUDGET')) == ['MODEL_CONTEXT_BUDGET']
     assert failure_codes(ValueError('OUTPUT_INVALID: Final allocation must exactly match private-data')) == ['OUTPUT_INVALID', 'ALLOCATION_MISMATCH']
     assert failure_codes(ValueError('OUTPUT_INVALID: unexpected private-data')) == ['OUTPUT_INVALID', 'OUTPUT_SCHEMA']
+
+
+async def test_exa_rate_limit_survives_exception_groups_as_a_specific_job_failure(monkeypatch):
+    from edge_portfolio import worker
+    request = httpx.Request('POST', 'https://mcp.exa.ai/mcp')
+    error = httpx.HTTPStatusError('private provider response', request=request, response=httpx.Response(429, request=request))
+    async def fail(*args, **kwargs):
+        raise ExceptionGroup('MCP', [error])
+    monkeypatch.setattr(worker, 'run_analysis', fail)
+    monkeypatch.setattr(worker.store, 'claim', lambda: {'id': 'test', 'kind': 'analysis', 'input': {'holdings': [{'name': 'cash', 'kind': 'cash', 'amount_krw': 1000000}], 'horizon': '10년 이상'}})
+    monkeypatch.setattr(worker.HEARTBEAT.__class__, 'touch', lambda self: None)
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test')
+    completed = []
+    monkeypatch.setattr(worker.store, 'finish', lambda job, **kwargs: completed.append(kwargs))
+    assert await worker.work_once()
+    assert completed == [{'failure': 'SEARCH_RATE_LIMIT'}]
 
 
 def test_output_diagnostics_identify_schema_field_without_logging_values_or_unknown_keys():
