@@ -42,10 +42,10 @@ export function PerformanceChart({ history }: { history: History }) {
       const time = first + Math.max(0, Math.min(1, ((event.clientX - rect.left) / rect.width * 320 - 42) / 260)) * (last - first);
       setSelected(points.reduce((best, p, i) => Math.abs(Date.parse(p.date) - time) < Math.abs(Date.parse(points[best].date) - time) ? i : best, 0));
     }}>
-      {[min, (min + max) / 2, max].map(v => <g key={v}><line className="base" x1="42" x2="302" y1={y(v)} y2={y(v)} /><text className="x" x="37" y={y(v) + 3} textAnchor="end">{isKRW ? `${(v / 10000).toFixed(1)}만` : v.toFixed(1)}</text></g>)}
+      {[min, (min + max) / 2, max].map(v => <g key={v}><line className="base" x1="42" x2="302" y1={y(v)} y2={y(v)} /><text className="x" x="37" y={y(v) + 3} style={{ textAnchor: "end" }}>{isKRW ? `${(v / 10000).toFixed(1)}만` : v.toFixed(1)}</text></g>)}
       {hasCurrent && <polyline className="a history-line" pathLength="1" points={line('current')} />}<polyline className="b history-line" pathLength="1" points={line('recommended')} />
       {selected !== null && <><line className="history-cursor" x1={x(active)} x2={x(active)} y1="20" y2="148" /><circle className="b" cx={x(active)} cy={y(points[active].recommended)} r="3" /></>}
-      {[0, Math.floor((points.length - 1) / 2), points.length - 1].map(i => <text key={i} className="x" x={x(i)} y="174" textAnchor={i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}>{points[i].date.slice(2).replaceAll('-', '.')}</text>)}
+      {[0, Math.floor((points.length - 1) / 2), points.length - 1].map(i => <text key={i} className="x" x={x(i)} y="174" style={{ textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle' }}>{points[i].date.slice(2).replaceAll('-', '.')}</text>)}
     </svg>
     <input className="history-slider" type="range" min="0" max={points.length - 1} value={active} onChange={event => setSelected(Number(event.target.value))} aria-label="과거 성과 날짜 선택" aria-valuetext={points[active].date} />
     <p className="history-date">{points[active].date}</p><div className="history-values"><span>추천 구성 <b>{valueLabel(points[active].recommended)}</b></span>{hasCurrent && <span>현재 구성 <b>{valueLabel(points[active].current!)}</b></span>}</div>

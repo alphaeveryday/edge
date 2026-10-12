@@ -32,6 +32,7 @@ test('recommended holdings and final amounts are distinct from input; opinion th
   await expect(page.locator('.report-history')).not.toHaveClass(/is-visible/);
   await page.locator('.report-history').scrollIntoViewIfNeeded();
   await expect(page.locator('.report-history')).toHaveClass(/is-visible/);
+  await expect(page.locator('.report-history svg text').last()).toHaveCSS('text-anchor', 'end');
   expect((await page.locator('polyline.b').getAttribute('points'))!.split(' ')).toHaveLength(366);
   await page.getByRole('slider', { name: '과거 성과 날짜 선택' }).fill('100');
   await expect(page.locator('.history-values')).toContainText('1,010,000원');
