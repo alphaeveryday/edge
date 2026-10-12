@@ -10,6 +10,13 @@ class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
+@pytest.fixture(autouse=True)
+def offline_prices(monkeypatch):
+    async def unavailable(self, rows):
+        return {'status': 'unavailable', 'reason': 'TEST_PRICE_PROVIDER_OFFLINE'}
+    monkeypatch.setattr('edge_portfolio.market_data.MarketData.get', unavailable)
+
+
 @pytest.mark.parametrize('disconnect_once', [False, True])
 async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_once):
     phases, conversations = [], []

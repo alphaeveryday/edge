@@ -17,6 +17,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
 from .recommendation import search_etfs, publish_recommendation
+from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -37,7 +38,7 @@ class ExaEvidence:
 
     async def call(self, name, args):
         self.calls += 1
-        if self.calls > 12:
+        if self.calls > 24:
             raise ValueError("TOOL_LIMIT")
         if name == "search_sources" and set(args) == {"query", "objective"}:
             if any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in args.values()):
@@ -73,7 +74,7 @@ class ExaEvidence:
         return source
 
 
-async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None):
+async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None):
     started = time.monotonic()
     metrics = calculate(request)
     system = (PROMPTS / "system.md").read_text(encoding="utf8")
@@ -84,6 +85,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
     sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
+    market = market or MarketData(request, datetime.fromisoformat(context['as_of']).date())
     async with asyncio.timeout(300), AsyncExitStack() as stack:
         if evidence is None:
             streams = await stack.enter_async_context(streamablehttp_client(EXA_URL))
@@ -112,7 +114,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if calls > 18 or len(json.dumps(messages).encode()) > 350000:
                     raise ValueError("MODEL_BUDGET")
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL],
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL],
                         "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
                         "max_tokens": 10000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
@@ -143,6 +145,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     answer = search_etfs(args.get('query'))
                                 except ValueError as error:
                                     answer = {'status': 'rejected', 'reason': str(error)}
+                        elif function['name'] == 'read_portfolio_history':
+                            try:
+                                answer = await market.tool(json.loads(function['arguments']))
+                            except ValueError as error:
+                                answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_etf_outlook':
                             try:
                                 answer = await outlook.call(json.loads(function['arguments']), evidence.sources)
@@ -165,6 +172,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         final = FinalReport.model_validate(raw)
                         sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources)
+                        await enrich_report(published, final, market, evidence.sources)
                     else:
                         sections[role] = validate_section(role, raw, evidence.sources)
                     break

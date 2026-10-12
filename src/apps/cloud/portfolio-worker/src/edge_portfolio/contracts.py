@@ -115,8 +115,9 @@ class Section(StrictModel):
     def nonempty(self):
         if any(not p.strip() for p in self.paragraphs):
             raise ValueError("Empty paragraph")
-        if any(len(p) > 180 or multiple_sentences(p.strip()) for p in self.paragraphs):
-            raise ValueError('Each bullet must be one sentence of at most 180 characters')
+        for i, paragraph in enumerate(self.paragraphs, 1):
+            if len(paragraph) > 180 or multiple_sentences(paragraph.strip()):
+                raise ValueError(f'Bullet {i}: each bullet must be one sentence of at most 180 characters; merge clauses into one sentence or remove the second sentence')
         if any(len(p) > 100 for p in self.limitations):
             raise ValueError("Limitation exceeds 100 characters")
         return self
@@ -159,6 +160,12 @@ class Insight(StrictModel):
     content: Section
 
 
+class ReturnForecast(StrictModel):
+    percent: float = Field(ge=-100, le=200, allow_inf_nan=False)
+    reason: str = Field(min_length=40, max_length=350)
+    evidence: list[Evidence] = Field(min_length=1, max_length=4)
+
+
 class FinalReport(StrictModel):
     question: Section
     portfolio: Section
@@ -167,6 +174,7 @@ class FinalReport(StrictModel):
     current_evaluation: Evaluation
     recommendation: Recommendation
     insights: list[Insight] = Field(min_length=1, max_length=3)
+    return_forecast: ReturnForecast | None = None
 
 
 def validate_section(role, raw, sources):
