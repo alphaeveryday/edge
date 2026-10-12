@@ -79,6 +79,8 @@ def test_a_name_nothing_matches_comes_back_with_what_each_word_matches(tmp_path)
     assert scope['nothing_has_the_whole_query']['each_word_alone_matches'] == names
     # WHY: an empty search of one type was read as absence from the whole data, and other types were never checked.
     assert 'under these filters' in scope['nothing_has_the_whole_query']['meaning'] and 'not in this data' not in scope['nothing_has_the_whole_query']['meaning']
+    # WHY: 'SAMSUNG ELECTRONICS' matched nothing where 'Samsung Electronics' is stored, and the result said other spellings would not find it.
+    assert 'letter case' in scope['nothing_has_the_whole_query']['meaning'] and 'will not find it' not in scope['nothing_has_the_whole_query']['meaning']
     assert 'An id matches only when given whole' in scope['nothing_matches']
     found = tools.call('search_objects', {'object_type': 'Equity', 'query': '방산'})['result']
     assert found['total_rows'] == 1 and 'nothing_has_the_whole_query' not in found['data_scope']

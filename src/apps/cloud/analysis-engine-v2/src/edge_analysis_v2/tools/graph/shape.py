@@ -3,9 +3,9 @@ from collections import Counter
 
 CATEGORIES = ('event_type', 'stage', 'role', 'kind', 'object_type', 'document_type', 'evidence_type', 'metric', 'metricCode',
               'factor', 'investor', 'series', 'name', 'ticker', 'companyName', 'securityName', 'seriesId', 'fiscalYear',
-              'periodType', 'fsBasis', 'segmentName')
+              'periodType', 'fsBasis', 'segmentName', 'eventType', 'lifecycleStage', 'currentStage')
 DATES = ('reported_date', 'event_date', 'date', 'trade_date', 'as_of_date', 'published_at', 'available_at', 'period', 'observation_date',
-         'tradeDate', 'observationDate', 'holdingsDate')
+         'tradeDate', 'observationDate', 'holdingsDate', 'eventDate', 'publishedAt', 'availableAt', 'snapshotDate')
 
 
 def overview(rows):
@@ -13,7 +13,7 @@ def overview(rows):
     counts = {}
 
     def add(key, value):
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and 0 < len(value) <= 60:
             counts.setdefault(key, Counter())[value] += 1
 
     for row in rows:
@@ -26,13 +26,8 @@ def overview(rows):
                 flat = {**flat[nested], **flat}
         if isinstance(flat.get('properties'), dict):
             flat = {**flat['properties'], **flat}
-        if 'event_ref' in row and isinstance(row.get('title'), str):   # event titles lead with the type code
-            flat.setdefault('event_type', row['title'].split(' / ')[0])
         for key in CATEGORIES:
             add(key, str(flat[key]) if isinstance(flat.get(key), int) else flat.get(key))
-        for person in row.get('participants') or []:
-            if isinstance(person, dict):
-                add('participant', person.get('name'))
         for key in DATES:
             value = flat.get(key)
             if isinstance(value, str) and len(value) >= 7:

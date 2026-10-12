@@ -4,20 +4,25 @@ from types import SimpleNamespace
 from edge_analysis_v2.tools.graph.provider import GraphTools
 
 
+def event(i, kind, **more):
+    """A stored event as the graph returns it: its fields are properties under the catalog's names."""
+    return {'object_type': 'SourceEvent', 'object_id': f'e{i}', 'title': f'event {i}', 'properties': {'eventType': kind, **more}}
+
+
 def test_a_result_larger_than_its_page_says_so_first_and_profiles_every_row():
     # WHY: nine benchmark runs concluded from the first 20 of several hundred rows.
     tools = object.__new__(GraphTools)
     tools.store = SimpleNamespace(cutoff='2026-10-05T14:59:59+00:00')
-    events = [{'event_ref': {'object_id': f'e{i}'}, 'title': ('CONTRACT.SIGNED' if i % 4 else 'ORDER.PREFERRED_BIDDER') + ' / x',
-               'event_date': f'2026-0{8 + i % 2}-1{i % 9}', 'stage': 'ONGOING',
-               'participants': [{'name': 'A' if i < 30 else 'B', 'role': 'SUPPLIER'}]} for i in range(45)]
+    events = [event(i, 'CONTRACT.SIGNED' if i % 4 else 'ORDER.PREFERRED_BIDDER', eventDate=f'2026-0{8 + i % 2}-1{i % 9}',
+                    lifecycleStage='ONGOING') for i in range(45)]
     value, dataset = tools.result(events, limit=20)
     assert list(value)[:4] == ['total_rows', 'page', 'notice', 'overview']
     assert '20 of 45 rows' in value['notice'] and len(value['items']) == 20 and len(dataset['items']) == 45
     shape = {key: {r['value']: r['rows'] for r in rows} for key, rows in value['overview'].items()}
-    assert shape['event_type'] == {'CONTRACT.SIGNED': 33, 'ORDER.PREFERRED_BIDDER': 12}
-    assert shape['participant'] == {'A': 30, 'B': 15} and sum(shape['event_date_by_month'].values()) == 45
-    assert 'stage' not in shape   # one value for every row tells nothing
+    # WHY: the shape looked for event_type and event_date, names no stored object has, and a search of 135 events came back with no shape.
+    assert shape['eventType'] == {'CONTRACT.SIGNED': 33, 'ORDER.PREFERRED_BIDDER': 12}
+    assert sum(shape['eventDate_by_month'].values()) == 45
+    assert 'lifecycleStage' not in shape   # one value for every row tells nothing
     small, _ = tools.result(events[:5], limit=20)
     assert small['page']['complete'] and 'notice' not in small and 'overview' not in small
 
@@ -26,9 +31,9 @@ def test_a_search_too_broad_to_read_returns_its_shape_and_no_rows():
     # WHY: telling the agent what a page left out did not make it narrow the search; withholding the rows did.
     tools = object.__new__(GraphTools)
     tools.store = SimpleNamespace(cutoff='2026-10-05T14:59:59+00:00')
-    broad = [{'event_ref': {'object_id': f'b{i}'}, 'title': ('A' if i % 3 else 'B') + ' / x'} for i in range(135)]
+    broad = [event(i, 'A' if i % 3 else 'B') for i in range(135)]
     value, dataset = tools.result(broad, limit=20, search=True)
-    assert value['items'] == [] and '135 rows match' in value['notice'] and 'event_type' in value['overview']
+    assert value['items'] == [] and '135 rows match' in value['notice'] and 'eventType' in value['overview']
     assert len(dataset['items']) == 135 and value['page'] == {'complete': False, 'next_offset': 0}
     assert len(tools.result(broad, limit=20)[0]['items']) == 20                      # a set asked for by identity keeps its first page
     assert len(tools.result(broad[:45], limit=20, search=True)[0]['items']) == 45    # 45 matches can be read, so all are shown
@@ -50,7 +55,7 @@ def test_observations_come_back_as_a_table_that_fits_one_response():
     assert table(bars[:1], keep_id=True)[0] == ['object_type', 'securityName', 'tradeDate', 'closePrice', 'object_id']
     assert len(tools.result(bars, limit=5, table=True)[0]['rows']) == 30   # short rows that were asked for are all shown
     assert len(tools.result(bars * 7, limit=5, table=True)[0]['rows']) == 210   # bounded by size, not by a row count
-    wide = [{'event_ref': {'object_id': f'e{i}'}, 'title': 'A / x', 'text': '가' * 2000} for i in range(60)]
+    wide = [{'object_id': f'e{i}', 'title': 'A / x', 'text': '가' * 2000} for i in range(60)]
     shown, _ = tools.result(wide, limit=100, search=True)
     import json
     assert 0 < len(shown['items']) < 60 and len(json.dumps(shown, ensure_ascii=False)) < BUDGET + 4000
@@ -114,3 +119,14 @@ def test_what_every_row_shares_counts_toward_the_size_of_a_response():
     rows = [['x' * 1000]] * 60
     assert fit(rows, 60) > fit(rows, 60, used=BUDGET // 2) > 1
     assert fit(rows, 60, used=BUDGET * 2) == 1   # one row is always shown
+
+
+def test_the_shape_of_a_cut_result_counts_toward_the_size_of_its_response():
+    # WHY: 50 rows with long distinct names were cut to 13 rows, and the shape listing those names made the response twice the limit.
+    import json
+    from edge_analysis_v2.tools.graph.shape import BUDGET
+    rows = [{'object_type': 'Company', 'object_id': f'c{i}', 'title': f'c{i}', 'properties': {'name': f'{i:04d}' + '가' * 3000, 'countryCode': 'KR' if i % 2 else 'US'}}
+            for i in range(50)]
+    value, _ = table_tools().result(rows, limit=50)
+    assert 0 < len(value['items']) < 50 and len(json.dumps(value, ensure_ascii=False)) < BUDGET + 4000
+    assert 'name' not in value['overview']   # a text that long is not a category to narrow by

@@ -158,7 +158,13 @@ class GraphTools:
         columns = same = None
         if table and items:
             columns, visible, same = shape.table(visible, keep_id=table in ('ids', 'objects'), keep_title=table == 'objects')
-        asked, limit = limit, shape.fit(visible, limit, used=len(json.dumps(same, ensure_ascii=False, default=str)) if same else 0)
+        used = len(json.dumps(same, ensure_ascii=False, default=str)) if same else 0
+        asked, limit = limit, shape.fit(visible, limit, used=used)
+        summary = None
+        if len(items) > limit:
+            # The shape of the whole set travels with a cut page, so it takes its room from the rows.
+            summary = overview(items if columns is not None else visible)
+            limit = shape.fit(visible, limit, used=used + len(json.dumps(summary, ensure_ascii=False)))
         value = {'total_rows': len(items), 'page': {'complete': len(items) <= limit, 'next_offset': limit if len(items) > limit else None}}
         if len(items) > limit:
             # A first page of a large result was read as the whole answer. What the page leaves out comes
@@ -167,7 +173,7 @@ class GraphTools:
                 + f'. The {len(items) - limit} not shown belong to the same answer set: '
                 'do not describe, count or rule anything out from this page alone. overview summarises the whole set; '
                 "narrow the request with this tool's filters, or read further pages with get_result_page.")
-            value['overview'] = overview(items if columns is not None else visible)
+            value['overview'] = summary
             if search and len(items) > BROAD:
                 # Saying what a page leaves out did not change what the agent did. A search too broad to
                 # read returns no rows, so the next step has to be a narrower search it can read whole.
@@ -244,8 +250,8 @@ class GraphTools:
         words = query.split()
         if not items and query:
             # After "한화" matched nothing, the same search was repeated with "한화오션" and "한화에어로스페이스".
-            scope['nothing_matches'] = ('No stored object of this type has this text in its name, title or ticker under these filters, so a '
-                                        'longer text that includes it cannot match those either. An id matches only when given whole.')
+            scope['nothing_matches'] = ('No stored object of this type has this text, in this letter case, in its name, title or ticker under '
+                                        'these filters, so a longer text that includes it cannot match those either. An id matches only when given whole.')
         if not items and len(words) > 1:
             # A fund that is not stored was looked for 12 times under other spellings. Showing what each word
             # alone matches lets one call settle that nothing stored carries all of them.
@@ -253,9 +259,10 @@ class GraphTools:
             cut = {word: len(titles) for word, titles in matches.items() if len(titles) > 30}
             scope['nothing_has_the_whole_query'] = {
                 'each_word_alone_matches': {word: titles[:30] for word, titles in matches.items()},
-                'meaning': 'No stored object of this type has the whole query in its name, title or ticker under these filters. If the '
-                           'object you want is not among these, it is not stored as this type under these filters: other spellings '
-                           'will not find it. Check the object type and the filters before saying it is absent.'}
+                'meaning': 'No stored object of this type has the whole query in its name, title or ticker under these filters. '
+                           'Matching keeps letter case and spacing as stored. If the object you want is not among these, search one '
+                           'distinctive word the way these stored names write it, and check the object type and the filters, '
+                           'before saying it is absent. Do not cycle through further variants after that.'}
             if cut:
                 # A list cut at 30 hid the 31st match while the text above said it was not stored.
                 scope['nothing_has_the_whole_query'].update(
