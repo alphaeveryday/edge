@@ -10,7 +10,7 @@ import boto3
 HOST_SCRIPT = r'''
 import json,re,subprocess
 compose = ['docker','compose','--env-file','/opt/edge-portfolio/runtime.env','-f','/opt/edge-portfolio/current/deploy/compose.yml']
-for name in ('api','worker','outlook','db'):
+for name in ('api','worker','outlook','db','proxy'):
     cid=subprocess.check_output(compose+['ps','--all','-q',name],text=True).strip()
     if not cid:
         print(json.dumps({'service':name,'state':'missing'}))
