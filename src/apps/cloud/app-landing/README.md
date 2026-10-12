@@ -30,6 +30,14 @@
 
 버킷·CloudFront·도메인 레코드는 `infra/terraform/envs/dev` 의 `landing_site` 가, 영역과 인증서는 `infra/terraform/foundation` 이 소유한다.
 
+## 종목 검색과 전망
+
+"다루는 ETF" 의 검색 칸은 `landing.html` 에 적어 둔 대상 ETF 148종(`코드:이름`)에서 이름으로 찾는다. 목록은 `data-pipeline` 의 `sources.toml` `[krx_etf.source.etf_map]` 을 옮긴 것이라, 대상이 바뀌면 함께 고친다.
+
+- 종목을 누르면 같은 도메인의 `outlook/<코드>.json` 을 읽어 리포트를 그린다. 파일은 앱의 전망 화면 응답과 같은 모양이다.
+- 이 파일은 랜딩 배포가 아니라 `infra/terraform/modules/landing-export` 의 람다가 매일 08:00 KST 에 쓴다. 파일이 없으면 "준비 중" 안내를 보여 준다.
+- 목록에 없는 이름에서 "추가 신청하기" 를 누르면 PostHog 이벤트 `etf_request`(속성 `etf` = 입력한 이름)를 보낸다.
+
 ## 검색과 공유 미리보기
 
 `landing.html` 머리에 설명(`description`), 대표 주소(`canonical`), 공유 미리보기(Open Graph), 아이콘, 사이트 이름 구조화 데이터가 있다.
@@ -55,6 +63,6 @@
 ## 알려진 한계
 
 - `www.etforca.com` 은 서빙하지 않는다.
-- 전망 조회는 예시 데이터다(`getOutlook` 이 이름으로 값을 만든다).
-- "추가 신청하기" 는 전송 주소(`REQ_URL`)가 비어 있어 아무 데도 보내지 않는다.
+- 종목 전망은 하루 한 번(08:00 KST) 갱신된다. 그 뒤에 새로 발행된 전망은 다음 날 반영된다.
+- 로컬 미리보기에는 `outlook/` 파일이 없어 종목을 눌러도 "준비 중" 안내가 뜬다. 실제 리포트를 보려면 `dist/outlook/` 에 파일을 받아 둔다(예: `curl --create-dirs -o dist/outlook/091160.json https://etforca.com/outlook/091160.json`).
 - 없는 경로는 403 을 돌려준다.

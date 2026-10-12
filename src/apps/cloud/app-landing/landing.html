@@ -545,7 +545,6 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
 .find .btn{font-family:inherit;cursor:pointer}
 .find__card{display:grid;gap:1rem;padding:1rem .875rem .875rem}
 .find__name{display:flex;align-items:center;justify-content:space-between;gap:.625rem;font-size:max(calc(var(--tk) * 15.7),1.0625rem)}
-.find__tag{flex:none;padding:.1875rem .5625rem;border:1px solid var(--border-strong);border-radius:999px;font-size:max(calc(var(--tk) * 12),.75rem);font-weight:700;color:var(--t2)}
 .find__card .report__body{padding:.25rem 0 0}
 .find__meta{font-size:max(calc(var(--tk) * 12.8),.8125rem);color:var(--t3)}
 .find__card .btn{width:100%;height:2.875rem;font-size:max(calc(var(--tk) * 14.3),.9375rem)}
@@ -1409,99 +1408,71 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     qr.addEventListener('wheel', (e) => e.preventDefault(), { passive: false }); // 떠 있는 동안 뒤 화면이 굴러가지 않게
   }
 
-  // 다루는 ETF 섹션의 ETF 찾기. 이름은 edge의 대상 ETF 148종(ADR-0059)을 옮긴 것이라, 대상이 바뀌면 함께 고친다
-  const ETFS = 'PLUS 한화그룹주|RISE 바이오TOP10액티브|SOL 전고체배터리&실리콘음극재|IBK K-AI반도체코어테크|SOL 화장품TOP3플러스|KODEX 방산TOP10|PLUS K방산소부장|TIGER 코리아원자력|SOL 한국원자력SMR|RISE AI반도체TOP10|KODEX 원자력SMR|RISE AI전력인프라|1Q K소버린AI|SOL 한국AI소프트웨어|KODEX 조선TOP10|KODEX 코리아소버린AI|TIGER 코리아AI전력기기TOP3플러스|SOL 조선기자재|TIGER 코리아휴머노이드로봇산업|HANARO K휴머노이드테마TOP10|SOL AI반도체TOP2플러스|TIGER 기술이전바이오액티브|WON 두산그룹포커스|ACE K휴머노이드로봇산업TOP2+|1Q K반도체TOP2+|RISE 현대차고정피지컬AI|SOL 우주항공밸류체인|KODEX 전고체배터리ESS TOP2플러스|ACE 코리아AI전력TOP10|ACE K반도체TOP2+|ACE K방산TOP5+|KoAct 광통신&위성네트워크액티브|ACE K바이오코스닥액티브|마이티 AI데이터센터밸류체인|KIWOOM 삼성SK그룹TOP4+|RISE 삼성SK그룹|파워 SK그룹|KODEX 200|KODEX 반도체|KODEX 은행|KODEX 자동차|TIGER 은행|TIGER 반도체|KODEX 삼성그룹|KODEX 기계장비|KODEX 증권|KODEX 에너지화학|KODEX 철강|KODEX 건설|TIGER 삼성그룹|TIGER LG그룹플러스|TIGER 현대차그룹플러스|TIGER 200 건설|TIGER 200 중공업|TIGER 200 철강소재|TIGER 200 에너지화학|TIGER 200 IT|TIGER 200 금융|TIGER 경기방어|TIGER 200 경기소비재|KODEX 보험|KODEX 운송|TIGER 헬스케어|TIGER 중국소비테마|TIGER 소프트웨어|TIGER 증권|TIGER 200 산업재|TIGER 200 생활소비재|TIGER 화장품|TIGER 여행레저|TIGER 미디어컨텐츠|KODEX 코스닥150|KODEX 바이오|TIGER 코스닥150IT|TIGER 코스닥150바이오테크|KODEX K콘텐츠|KODEX IT|KODEX 필수소비재|KODEX 헬스케어|KODEX 200TR|RISE 200금융|TIGER K게임|KODEX 게임산업|TIGER 2차전지테마|KODEX 2차전지산업|TIGER 200커뮤니케이션서비스|KODEX 200IT TR|TIGER 바이오TOP10|TIGER 2차전지TOP10|TIGER 게임TOP10|TIGER 인터넷TOP10|RISE 수소경제테마|TIGER Fn신재생에너지|KODEX 신재생에너지액티브|KODEX 자율주행액티브|TIGER 퓨처모빌리티액티브|RISE 비메모리반도체액티브|KODEX AI반도체TOP2플러스|HANARO Fn K-반도체|HANARO Fn K-POP&미디어|TIGER 반도체TOP10|TIGER Fn메타버스|RISE 메타버스|KODEX 메타버스액티브|TIGER KRX기후변화솔루션|TIME K컬처액티브|PLUS 우주항공|RISE 2차전지액티브|ACE 원자력TOP10|HANARO 원자력iSelect|HANARO Fn K-푸드|HANARO Fn조선해운|SOL 코리아메가테크액티브|KODEX 친환경조선해운액티브|KODEX 로봇액티브|PLUS K방산|SOL AI반도체소부장|SOL 2차전지소부장Fn|PLUS 태양광&ESS|KODEX 2차전지핵심소재10|TIGER 2차전지소재Fn|KoAct 바이오헬스케어액티브|TIME K바이오액티브|TIGER K방산&우주|SOL 자동차소부장Fn|RISE 2차전지TOP10|SOL 조선TOP3플러스|SOL 자동차TOP3플러스|RISE AI&로봇|ACE AI반도체TOP3+|ACE 포스코그룹포커스|KIWOOM 코리아테크TOP10|TIGER AI반도체핵심공정|TIGER 코리아테크액티브|KODEX AI반도체핵심장비|WON 반도체밸류체인액티브|ACE KPOP포커스|SOL 반도체전공정|SOL 반도체후공정|HANARO 반도체핵심공정주도주|HANARO K-뷰티|KoAct 반도체&2차전지핵심소재액티브|DAISHIN AI반도체&인프라액티브|KODEX AI전력핵심설비|SOL K방산|HANARO 전력설비투자|UNICORN SK하이닉스밸류체인액티브|TIGER 조선TOP10'.split('|');
-  // 배포 전 필수: 신청을 받을 주소와 입력 칸 이름(Google Forms라면 formResponse 주소와 entry.숫자). 비어 있으면 아무 데도 보내지 않는다
-  const REQ_URL = '', REQ_FIELD = 'etf';
+  // 다루는 ETF 섹션의 ETF 찾기. 코드와 이름은 edge의 대상 ETF 148종(ADR-0059, data-pipeline sources.toml의 etf_map)을 옮긴 것이라, 대상이 바뀌면 함께 고친다
+  const ETFS = '0000J0:PLUS 한화그룹주|0000Z0:RISE 바이오TOP10액티브|0005D0:SOL 전고체배터리&실리콘음극재|0005G0:IBK K-AI반도체코어테크|0008T0:SOL 화장품TOP3플러스|0080G0:KODEX 방산TOP10|0090B0:PLUS K방산소부장|0091P0:TIGER 코리아원자력|0092B0:SOL 한국원자력SMR|0093A0:RISE AI반도체TOP10|0098F0:KODEX 원자력SMR|0101N0:RISE AI전력인프라|0103T0:1Q K소버린AI|0105D0:SOL 한국AI소프트웨어|0115D0:KODEX 조선TOP10|0115E0:KODEX 코리아소버린AI|0117V0:TIGER 코리아AI전력기기TOP3플러스|0141S0:SOL 조선기자재|0148J0:TIGER 코리아휴머노이드로봇산업|0155N0:HANARO K휴머노이드테마TOP10|0167A0:SOL AI반도체TOP2플러스|0168K0:TIGER 기술이전바이오액티브|0177A0:WON 두산그룹포커스|0177X0:ACE K휴머노이드로봇산업TOP2+|0182R0:1Q K반도체TOP2+|0190C0:RISE 현대차고정피지컬AI|0207G0:SOL 우주항공밸류체인|0209D0:KODEX 전고체배터리ESS TOP2플러스|0209Z0:ACE 코리아AI전력TOP10|0210A0:ACE K반도체TOP2+|0216Z0:ACE K방산TOP5+|0219B0:KoAct 광통신&위성네트워크액티브|0221Z0:ACE K바이오코스닥액티브|0222F0:마이티 AI데이터센터밸류체인|0234N0:KIWOOM 삼성SK그룹TOP4+|0240J0:RISE 삼성SK그룹|0242S0:파워 SK그룹|069500:KODEX 200|091160:KODEX 반도체|091170:KODEX 은행|091180:KODEX 자동차|091220:TIGER 은행|091230:TIGER 반도체|102780:KODEX 삼성그룹|102960:KODEX 기계장비|102970:KODEX 증권|117460:KODEX 에너지화학|117680:KODEX 철강|117700:KODEX 건설|138520:TIGER 삼성그룹|138530:TIGER LG그룹플러스|138540:TIGER 현대차그룹플러스|139220:TIGER 200 건설|139230:TIGER 200 중공업|139240:TIGER 200 철강소재|139250:TIGER 200 에너지화학|139260:TIGER 200 IT|139270:TIGER 200 금융|139280:TIGER 경기방어|139290:TIGER 200 경기소비재|140700:KODEX 보험|140710:KODEX 운송|143860:TIGER 헬스케어|150460:TIGER 중국소비테마|157490:TIGER 소프트웨어|157500:TIGER 증권|227550:TIGER 200 산업재|227560:TIGER 200 생활소비재|228790:TIGER 화장품|228800:TIGER 여행레저|228810:TIGER 미디어컨텐츠|229200:KODEX 코스닥150|244580:KODEX 바이오|261060:TIGER 코스닥150IT|261070:TIGER 코스닥150바이오테크|266360:KODEX K콘텐츠|266370:KODEX IT|266410:KODEX 필수소비재|266420:KODEX 헬스케어|278530:KODEX 200TR|284980:RISE 200금융|300610:TIGER K게임|300950:KODEX 게임산업|305540:TIGER 2차전지테마|305720:KODEX 2차전지산업|315270:TIGER 200커뮤니케이션서비스|363580:KODEX 200IT TR|364970:TIGER 바이오TOP10|364980:TIGER 2차전지TOP10|364990:TIGER 게임TOP10|365000:TIGER 인터넷TOP10|367770:RISE 수소경제테마|377990:TIGER Fn신재생에너지|385510:KODEX 신재생에너지액티브|385520:KODEX 자율주행액티브|387280:TIGER 퓨처모빌리티액티브|388420:RISE 비메모리반도체액티브|395160:KODEX AI반도체TOP2플러스|395270:HANARO Fn K-반도체|395290:HANARO Fn K-POP&미디어|396500:TIGER 반도체TOP10|400970:TIGER Fn메타버스|401170:RISE 메타버스|401470:KODEX 메타버스액티브|404540:TIGER KRX기후변화솔루션|410870:TIME K컬처액티브|421320:PLUS 우주항공|422420:RISE 2차전지액티브|433500:ACE 원자력TOP10|434730:HANARO 원자력iSelect|438900:HANARO Fn K-푸드|441540:HANARO Fn조선해운|444200:SOL 코리아메가테크액티브|445150:KODEX 친환경조선해운액티브|445290:KODEX 로봇액티브|449450:PLUS K방산|455850:SOL AI반도체소부장|455860:SOL 2차전지소부장Fn|457990:PLUS 태양광&ESS|461950:KODEX 2차전지핵심소재10|462010:TIGER 2차전지소재Fn|462900:KoAct 바이오헬스케어액티브|463050:TIME K바이오액티브|463250:TIGER K방산&우주|464600:SOL 자동차소부장Fn|465330:RISE 2차전지TOP10|466920:SOL 조선TOP3플러스|466930:SOL 자동차TOP3플러스|469070:RISE AI&로봇|469150:ACE AI반도체TOP3+|469170:ACE 포스코그룹포커스|469790:KIWOOM 코리아테크TOP10|471760:TIGER AI반도체핵심공정|471780:TIGER 코리아테크액티브|471990:KODEX AI반도체핵심장비|474590:WON 반도체밸류체인액티브|475050:ACE KPOP포커스|475300:SOL 반도체전공정|475310:SOL 반도체후공정|476260:HANARO 반도체핵심공정주도주|479850:HANARO K-뷰티|482030:KoAct 반도체&2차전지핵심소재액티브|486240:DAISHIN AI반도체&인프라액티브|487240:KODEX AI전력핵심설비|490480:SOL K방산|491820:HANARO 전력설비투자|494220:UNICORN SK하이닉스밸류체인액티브|494670:TIGER 조선TOP10'.split('|').map((s) => s.split(':'));
   const KO = { 코덱스: 'kodex', 타이거: 'tiger', 에이스: 'ace', 라이즈: 'rise', 하나로: 'hanaro', 플러스: 'plus', 쏠: 'sol', 솔: 'sol', 키움: 'kiwoom' };
   // 띄어쓰기, 기호, 조합 중인 자모를 떼고 한글로 친 운용사 이름을 맞춘다. 목록과 입력에 똑같이 적용한다
   const norm = (v) => v.toLowerCase().replace(/[^0-9a-z가-힣]/g, '').replace(/코덱스|타이거|에이스|라이즈|하나로|플러스|쏠|솔|키움/g, (m) => KO[m]);
-  const etfKeys = ETFS.map(norm);
+  const etfKeys = ETFS.map(([, name]) => norm(name));
   // 입력은 낱말로 나눠 모두 들어 있는 이름을 찾는다("타이거 방산" → TIGER K방산&우주). 붙여 쓴 운용사 이름도 떼어 낸다
   const terms = (v) => v.trim().split(/\s+/).map(norm).flatMap((t) => t.replace(/^(kodex|tiger|ace|rise|hanaro|plus|sol|kiwoom|koact|time|won|1q|ibk)(?=.)/, '$1 ').split(' ')).filter(Boolean);
   const find = $('[data-find]'), fIn = $('.find__in', find), fOut = $('.find__out', find);
   const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; n.textContent = text; return n; };
   let missT, cardSeq = 0;
-  // 시안용 예시 전망이다. 전망 조회 API가 정해지면 이 함수만 fetch로 바꾼다.
-  // KODEX 반도체는 위 리포트 목업(10월 5일 앱 화면)과 같은 값이고, 나머지는 이름으로 만든 가짜 값이라 카드에 "예시 데이터"를 붙인다.
-  // 스티커 낱말은 앱과 같다(edge 분석 엔진의 STICKERS). 시안에서는 상승·중립·하락 셋만 쓴다
-  const FAC = ['이슈', '차트', '매크로', '밸류', '수급'];
-  const STK = [['grade grade--down', '▼ 하락'], ['grade grade--flat', '■ 중립'], ['grade', '▲ 상승']];
-  const FAC_SAY = [
-    ['실적에 부담이 되는 소식이 더 많아요.', '눈에 띄는 소식이 많지 않아요.', '실적에 도움이 되는 소식이 더 많아요.'],
-    ['주가가 내리는 흐름이에요.', '뚜렷한 방향이 없어요.', '주가가 오르는 흐름이에요.'],
-    ['금리와 환율이 부담을 주는 쪽이에요.', '금리와 환율의 영향이 크지 않아요.', '금리와 환율이 도와주는 쪽이에요.'],
-    ['버는 돈에 비해 비싼 편이에요.', '버는 돈에 비해 적당한 가격이에요.', '버는 돈에 비해 싼 편이에요.'],
-    ['큰손이 파는 쪽이에요.', '큰손의 움직임이 엇갈려요.', '큰손이 사는 쪽이에요.'],
-  ];
-  const sumUp = (marks, word) => {
-    const pick = (v) => FAC.filter((_, i) => marks[i] === v), up = pick(1), dn = pick(-1);
-    const topic = (a) => a.join('·') + (a.at(-1) === '수급' ? '은' : '는');
-    const why = up.length && dn.length ? `${topic(up)} 상승 쪽이고 ${topic(dn)} 하락 쪽입니다.`
-      : up.length ? `${topic(up)} 상승 쪽이고 나머지는 중립입니다.`
-      : dn.length ? `${topic(dn)} 하락 쪽이고 나머지는 중립입니다.` : '다섯 기준이 모두 중립입니다.';
-    return `기본 전망은 ${word}입니다. ${why}`;
-  };
-  const titleOf = (marks) => {
-    const pick = (v) => FAC.filter((_, i) => marks[i] === v).join('·'), up = pick(1), dn = pick(-1);
-    return up && dn ? `${up} 상승과 ${dn} 하락의 공존` : up ? `${up} 상승이 이끄는 흐름` : dn ? `${dn} 하락이 누르는 흐름` : '뚜렷한 방향이 없는 구간';
-  };
-  // 응답 모양은 edge 분석 엔진의 발행본(전망 방향 + 요인마다 스티커와 한 문장)을 따랐다
-  const getOutlook = (name) => new Promise((done) => {
-    let h = 7;
-    for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 9973;
-    const marks = FAC.map((_, i) => (Math.floor(h / 3 ** i) % 3) - 1), dir = Math.sign(marks.reduce((a, b) => a + b, 0));
-    setTimeout(done, 450, name === 'KODEX 반도체' ? { real: true, asOf: '10월 5일' } : {
-      dir, asOf: '오늘 08:30 기준', title: titleOf(marks), summary: sumUp(marks, STK[dir + 1][1].slice(2)),
-      factors: FAC.map((type, i) => ({ type, mark: marks[i], sentence: FAC_SAY[i][marks[i] + 1] })),
-    });
-  });
-  // 받아온 전망을 '분석 자세히 보기'와 같은 리포트 모양으로 짠다
+  // 전망은 같은 도메인의 outlook/<코드>.json 에서 읽는다. 매일 08:00에 그날 발행된 앱 화면 응답이 그대로 올라온다(infra/terraform/modules/landing-export).
+  // 파일이 없으면 null. 읽다 실패하면(통신 오류, 깨진 파일) 던진다 — 어느 쪽이든 카드가 준비 중이라고 알린다
+  const getOutlook = (code) => fetch(`outlook/${code}.json`).then((r) => (r.ok ? r.json() : null));
+  // 방향 낱말은 앱과 같은 다섯 가지(강력상승·상승·중립·하락·강력하락)이고, 색과 기호는 상승·중립·하락 셋으로 묶는다
+  const tone = (word) => (word.includes('상승') ? 1 : word.includes('하락') ? -1 : 0);
+  const GLYPH = '▼■▲', GRADE = ['grade grade--down', 'grade grade--flat', 'grade'];
+  const asOf = (iso) => new Date(iso).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  // 받아온 전망을 '분석 자세히 보기'와 같은 리포트 모양으로 짠다. 이유는 앞의 다섯 개만 보여 주고 나머지는 앱으로 넘긴다
   const reportOf = (d) => {
-    if (d.real) { // 실제 리포트가 있는 종목은 위 섹션의 리포트를 그대로 옮긴다
-      const body = $('.report__body').cloneNode(true);
-      body.removeAttribute('style');
-      $$('[data-n]', body).forEach((n) => (n.textContent = n.dataset.n));
-      $$('details', body).forEach((x, i) => (x.open = !i));
-      return body;
-    }
     const kid = (tag, cls, text, ...kids) => { const n = el(tag, cls, text); n.append(...kids); return n; };
-    const word = (mark) => STK[mark + 1][1].slice(2);
+    const dir = tone(d.outlook.direction);
     const marks = kid('ul', 'marks', '', ...d.factors.map((fa) => {
-      const ic = el('i', ['is-down', 'is-flat', 'is-up'][fa.mark + 1], STK[fa.mark + 1][1][0]);
+      const t = tone(fa.sticker), ic = el('i', ['is-down', 'is-flat', 'is-up'][t + 1], GLYPH[t + 1]);
       ic.setAttribute('aria-hidden', 'true');
       return kid('li', '', '', ic, fa.type);
     }));
-    marks.setAttribute('aria-label', '다섯 기준. ' + d.factors.map((fa) => `${fa.type} ${word(fa.mark)}`).join(', '));
-    // 이유 사슬은 상승 요인, 하락 요인, 중립 요인 순으로 놓는다
-    const chain = kid('ol', 'chain', '', ...[1, -1, 0].flatMap((v) => d.factors.filter((fa) => fa.mark === v)).map((fa) => {
-      const li = el('li', '', `${fa.type} · ${fa.sentence}`);
-      li.dataset.node = ['down', 'check', 'up'][fa.mark + 1];
+    marks.setAttribute('aria-label', '다섯 기준. ' + d.factors.map((fa) => `${fa.type} ${fa.sticker}`).join(', '));
+    const ups = (d.detail.updates?.items ?? []).filter((u) => u.change_type !== 'deleted' && u.sentence).slice(0, 2);
+    // 파일은 하루 한 번 갱신된다. 자정부터 갱신 전까지, 또는 그날 발행이 없던 종목은 지난 날짜의 파일이라 '오늘'이라고 부르지 않는다
+    const [, mon, day] = (d.detail.updates?.date ?? '').split('-'), today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+    const changed = ups.length ? [kid('section', 'changed', '', el('h4', '', d.detail.updates.date === today ? '오늘 달라진 점' : `${+mon}월 ${+day}일에 달라진 점`), kid('ul', '', '', ...ups.map((u) => el('li', '', u.sentence.split('\n')[0]))))] : [];
+    const shown = d.detail.items.slice(0, 5), rest = d.detail.items.length - shown.length;
+    const chain = kid('ol', 'chain', '', ...shown.map((it, i) => {
+      const box = kid('details', '', '', el('summary', '', it.title_keyword), kid('div', 'chain__more', '', ...it.sentences.map((s) => el('p', s.is_updated ? 'is-new' : '', s.sentence))));
+      box.open = !i;
+      const li = kid('li', '', '', box);
+      li.dataset.node = { positive: 'up', negative: 'down' }[it.sentiment] || 'check';
       return li;
     }));
-    const chips = (v, cls, label) => {
-      const fs = d.factors.filter((fa) => fa.mark === v);
-      return fs.length ? [kid('div', '', '', el('dt', cls, label), kid('dd', '', '', ...fs.map((fa) => el('span', `chip chip--${cls}`, fa.type))))] : [];
-    };
+    const chips = (list, cls, label) => (list.length ? [kid('div', '', '', el('dt', cls, label), kid('dd', '', '', ...list.map((k) => el('span', `chip chip--${cls}`, k.label))))] : []);
     return kid('div', 'report__body', '',
-      kid('div', 'report__head', '', kid('p', 'report__grade', '', el('span', STK[d.dir + 1][0], STK[d.dir + 1][1]), el('span', '', '한 달 전망')), el('h3', 'report__title', d.title), marks),
-      kid('section', 'reasons', '', el('h4', 'report__sub', '왜 이렇게 봤을까요'), chain),
-      kid('section', 'so', '', el('h4', '', `그래서 ${word(d.dir)}이에요`), kid('dl', '', '', ...chips(-1, 'down', '부담'), ...chips(1, 'up', '개선')), el('p', 'so__line', d.summary)));
+      kid('div', 'report__head', '', kid('p', 'report__grade', '', el('span', GRADE[dir + 1], `${GLYPH[dir + 1]} ${d.outlook.direction}`), el('span', '', '한 달 전망')), el('h3', 'report__title', d.summary_card.title), marks),
+      ...changed,
+      kid('section', 'reasons', '', el('h4', 'report__sub', '왜 이렇게 봤을까요'), chain, ...(rest > 0 ? [el('p', 'find__more', `이유 ${rest}개는 앱에서 더 볼 수 있어요.`)] : [])),
+      kid('section', 'so', '', el('h4', '', `그래서 ${d.outlook.direction}이에요`), kid('dl', '', '', ...chips(d.conclusion.burdens, 'down', '부담'), ...chips(d.conclusion.supports, 'up', '개선')), el('p', 'so__line', d.conclusion.sentence)));
   };
-  const showCard = async (name) => {
+  const showCard = async (code, name) => {
     clearTimeout(missT);
     const seq = ++cardSeq, card = el('div', 'find__card', ''), head = el('p', 'find__name', '');
     fIn.value = name;
-    head.append(el('strong', '', `${name} 한 달 전망`), el('span', 'find__tag', '예시 데이터'));
+    head.append(el('strong', '', `${name} 한 달 전망`));
     card.append(head, el('i', 'find__sk', ''), el('i', 'find__sk', ''), el('i', 'find__sk', ''));
     fOut.replaceChildren(card);
     fOut.hidden = false;
-    const d = await getOutlook(name);
+    let report = null;
+    try {
+      const d = await getOutlook(code);
+      if (d) report = [reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${asOf(d.publication.analysis_at)} 기준 · 투자 추천이 아니에요.`)];
+    } catch { /* 깨졌거나 모양이 다른 파일은 없는 파일처럼 다룬다 — 뼈대 화면을 남기지 않는다 */ }
     if (seq !== cardSeq) return; // 기다리는 사이에 다른 것을 찾았다
     const go = el('button', 'btn btn--point', '앱에서 매일 새 전망 보기');
     go.type = 'button';
     go.onclick = () => $('.cta .btn--point').click(); // 다운로드 버튼과 같은 길: 휴대폰은 스토어, 데스크톱은 QR 창
-    card.replaceChildren(head, reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${d.asOf} · 투자 추천이 아니에요.`), go);
+    card.replaceChildren(head, ...(report || [el('p', 'find__meta', '오늘 전망을 준비하고 있어요. 앱에서는 바로 볼 수 있어요.')]), go);
     if (window.ScrollTrigger) window.ScrollTrigger.refresh(); // 리포트만큼 길어졌으니 아래쪽 위치를 다시 잰다
   };
   const showMiss = (raw) => {
@@ -1509,11 +1480,9 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     const btn = el('button', 'btn btn--ghost btn--sm', '추가 신청하기');
     btn.type = 'button';
     btn.onclick = () => {
-      btn.disabled = true;
-      const ok = () => { p.textContent = '신청했어요. 지금은 국내 주식형 ETF 148종을 볼 수 있어요.'; btn.remove(); };
-      if (!REQ_URL) return ok();
-      fetch(REQ_URL, { method: 'POST', mode: 'no-cors', body: new URLSearchParams({ [REQ_FIELD]: raw }) })
-        .then(ok, () => { p.textContent = '보내지 못했어요. 잠시 뒤 다시 눌러 주세요.'; btn.disabled = false; });
+      if (window.posthog) window.posthog.capture('etf_request', { etf: raw }); // 신청은 방문 분석 이벤트로 모은다
+      p.textContent = '신청했어요. 지금은 국내 주식형 ETF 148종을 볼 수 있어요.';
+      btn.remove();
     };
     const box = el('div', 'find__miss', '');
     box.append(el('strong', '', raw), p, btn);
@@ -1532,11 +1501,11 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       else fOut.hidden = true;
       return;
     }
-    fOut.replaceChildren(...hits.slice(0, 4).map(([, name]) => {
+    fOut.replaceChildren(...hits.slice(0, 4).map(([, [code, name]]) => {
       const row = el('button', 'find__row', name);
       row.type = 'button';
       row.append(el('span', '', '전망 보기'));
-      row.onclick = () => showCard(name);
+      row.onclick = () => showCard(code, name);
       return row;
     }));
     if (hits.length > 4) fOut.append(el('p', 'find__more', `외 ${hits.length - 4}종이 더 있어요.`));
