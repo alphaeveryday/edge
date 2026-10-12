@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 from edge_analysis_v2.tools.graph.provider import GraphTools
+from edge_analysis_v2.tools.graph.shape import won_text
 
 
 def event(i, kind, **more):
@@ -130,3 +131,18 @@ def test_the_shape_of_a_cut_result_counts_toward_the_size_of_its_response():
     value, _ = table_tools().result(rows, limit=50)
     assert 0 < len(value['items']) < 50 and len(json.dumps(value, ensure_ascii=False)) < BUDGET + 4000
     assert 'name' not in value['overview']   # a text that long is not a category to narrow by
+
+
+def test_a_won_amount_is_written_out_exactly_so_no_digit_is_left_to_count():
+    # WHY: answers wrote 1,447,000,000원 as 145억 and 2,004,376,374,000원 as 2조 437억.
+    assert won_text(1447000000) == '14억 4,700만원'
+    assert won_text('2004376374000.00000000') == '2조 43억 7,637만 4,000원'
+    assert won_text(-2069000000) == '-20억 6,900만원'
+    assert won_text(1000000000000) == '1조원'
+    assert won_text(12345678901234567) == '12,345조 6,789억 123만 4,567원'
+    assert won_text(0) == '0원' and won_text(None) is None
+
+
+def test_market_days_become_a_half_open_korean_range(tmp_path):
+    tools = GraphTools(lambda s, p: [], {'modelChanged': False, 'relations': [], 'objects': []}, tmp_path, '2026-10-04T16:00:00+00:00')
+    assert tools.time_bounds('2026-10-05', '2026-10-05') == {'start_at': '2026-10-05T00:00:00+09:00', 'end_at': '2026-10-06T00:00:00+09:00'}

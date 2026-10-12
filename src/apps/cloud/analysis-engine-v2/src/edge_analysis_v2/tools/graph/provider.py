@@ -20,6 +20,15 @@ REFS = {'type': 'array', 'items': REF, 'minItems': 1, 'maxItems': 1000}
 # path is accepted and not needed: the run id names the stored result and the receiving tool knows which part it reads.
 RESULT_REF = {'type': 'object', 'properties': {'tool_run_id': STRING, 'path': {'enum': ['/selection', '/dataset']}},
               'required': ['tool_run_id'], 'additionalProperties': False}
+# The securities or actors a tool works on: named objects, the constituents of a fund on a date, or a stored selection.
+SELECTOR = {'oneOf': [
+    {'type': 'object', 'properties': {'kind': {'const': 'objects'}, 'object_refs': REFS},
+     'required': ['kind', 'object_refs'], 'additionalProperties': False},
+    {'type': 'object', 'properties': {'kind': {'const': 'etf_holdings'}, 'etf_ref': REF, 'holdings_date': STRING,
+                                      'date_policy': {'enum': ['exact', 'latest_on_or_before']}},
+     'required': ['kind', 'etf_ref', 'holdings_date', 'date_policy'], 'additionalProperties': False},
+    {'type': 'object', 'properties': {'kind': {'const': 'selection_ref'}, 'ref': RESULT_REF},
+     'required': ['kind', 'ref'], 'additionalProperties': False}]}
 BROAD = 100   # a search matching more rows than this returns their shape, not the rows
 
 
@@ -40,8 +49,9 @@ class GraphTools:
 
     data_source = 'graph'
 
-    def __init__(self, run, catalog, directory, cutoff, expose=None):
+    def __init__(self, run, catalog, directory, cutoff, expose=None, web=None):
         self._expose = None if expose is None else set(expose)
+        self.web = web   # fetches the page behind a stored article link; None where no web credential is configured
         self.store = EvidenceStore(directory, cutoff)
         self.graph = GraphFacts(run, catalog, self.store.cutoff)
         self.schemas = []
@@ -77,6 +87,9 @@ class GraphTools:
             ['tickers', 'market_code'], self.find_securities_by_ticker, sources=['ontology_view.equity', 'ontology_view.etf'])
         self.register('get_objects',
             {'object_refs': REFS}, ['object_refs'], self.get, sources=['ontology_view의 해당 객체 뷰'])
+        # Imported here because the module takes its argument schemas from this one.
+        from edge_analysis_v2.tools.graph.events import EventTools
+        self.events = EventTools(self)
         unknown = (self._expose or set()) - self.defined
         if unknown:
             raise ValueError('Unknown tools to expose: ' + ', '.join(sorted(unknown)))
@@ -295,6 +308,38 @@ class GraphTools:
         rows = [{**(item.get('object') or {k: item[k] for k in ('object_type', 'object_id')} | {'properties': {}}), 'status': item['status']}
                 for item in selection['items']]
         return self.result(selection['items'], selection=selection, limit=100, display_items=rows, table='objects')
+
+    def select(self, targets):
+        """Resolve a SELECTOR argument to its members."""
+        if targets['kind'] == 'objects':
+            return self.graph.get(targets['object_refs'])
+        if targets['kind'] == 'selection_ref':
+            return self.store.reference(targets['ref'], 'selection')
+        return self.holdings(targets['etf_ref'], targets['holdings_date'], targets['date_policy'])[1]['selection']
+
+    def actors(self, selection):
+        """Companies and organizations behind a selection: named directly, or the issuers of its equities."""
+        actors, mapping, equities = {}, [], []
+        for item in selection['items']:
+            if item['status'] != 'resolved':
+                continue
+            ref = {k: item[k] for k in ('object_type', 'object_id')}
+            if ref['object_type'] in ('Company', 'Organization'):
+                actors[(ref['object_type'], ref['object_id'])] = ref
+            elif ref['object_type'] == 'Equity':
+                equities.append(ref)
+        for row in self.graph.linked(equities, 'Company_Issues_Equity', 'reverse'):
+            ref = {k: row['target'][k] for k in ('object_type', 'object_id')}
+            actors[(ref['object_type'], ref['object_id'])] = ref
+            mapping.append({'security': row['source'], 'actor': ref})
+        return list(actors.values()), mapping
+
+    def time_bounds(self, start_date, end_date):
+        """Korean market days as a half-open instant range."""
+        start, end = self.check_date(start_date), self.check_date(end_date)
+        if start > end:
+            raise ValueError('Invalid dates')
+        return {'start_at': start.isoformat() + 'T00:00:00+09:00', 'end_at': (end + timedelta(days=1)).isoformat() + 'T00:00:00+09:00'}
 
     def check_date(self, value):
         """Reject a Korean market day that begins after the analysis cutoff."""
