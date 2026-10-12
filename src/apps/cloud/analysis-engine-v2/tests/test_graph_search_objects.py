@@ -77,6 +77,9 @@ def test_a_name_nothing_matches_comes_back_with_what_each_word_matches(tmp_path)
     tools = GraphTools(run, CATALOG, tmp_path, '2026-10-05T00:00:00+00:00')
     scope = tools.call('search_objects', {'object_type': 'Equity', 'query': 'KODEX 방산'})['result']['data_scope']
     assert scope['nothing_has_the_whole_query']['each_word_alone_matches'] == names
+    # WHY: an empty search of one type was read as absence from the whole data, and other types were never checked.
+    assert 'under these filters' in scope['nothing_has_the_whole_query']['meaning'] and 'not in this data' not in scope['nothing_has_the_whole_query']['meaning']
+    assert 'An id matches only when given whole' in scope['nothing_matches']
     found = tools.call('search_objects', {'object_type': 'Equity', 'query': '방산'})['result']
     assert found['total_rows'] == 1 and 'nothing_has_the_whole_query' not in found['data_scope']
 

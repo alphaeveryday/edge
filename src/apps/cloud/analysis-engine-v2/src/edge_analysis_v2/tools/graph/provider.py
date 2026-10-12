@@ -244,7 +244,8 @@ class GraphTools:
         words = query.split()
         if not items and query:
             # After "한화" matched nothing, the same search was repeated with "한화오션" and "한화에어로스페이스".
-            scope['nothing_matches'] = 'No stored object of this type contains this text, so no longer text that includes it can match either.'
+            scope['nothing_matches'] = ('No stored object of this type has this text in its name, title or ticker under these filters, so a '
+                                        'longer text that includes it cannot match those either. An id matches only when given whole.')
         if not items and len(words) > 1:
             # A fund that is not stored was looked for 12 times under other spellings. Showing what each word
             # alone matches lets one call settle that nothing stored carries all of them.
@@ -252,13 +253,14 @@ class GraphTools:
             cut = {word: len(titles) for word, titles in matches.items() if len(titles) > 30}
             scope['nothing_has_the_whole_query'] = {
                 'each_word_alone_matches': {word: titles[:30] for word, titles in matches.items()},
-                'meaning': 'No stored object of this type has the whole query in its name, title or ticker. If the object you want '
-                           'is not among these, it is not in this data: say so instead of searching other spellings or types.'}
+                'meaning': 'No stored object of this type has the whole query in its name, title or ticker under these filters. If the '
+                           'object you want is not among these, it is not stored as this type under these filters: other spellings '
+                           'will not find it. Check the object type and the filters before saying it is absent.'}
             if cut:
                 # A list cut at 30 hid the 31st match while the text above said it was not stored.
                 scope['nothing_has_the_whole_query'].update(
                     lists_cut_at_30={word: {'matches': total} for word, total in cut.items()},
-                    meaning='No stored object of this type has the whole query in its name, title or ticker. A list cut at 30 does not '
+                    meaning='No stored object of this type has the whole query in its name, title or ticker under these filters. A list cut at 30 does not '
                             'show every match of that word, so an object missing from it may still be stored: search a word '
                             'whose list is complete, or that word with a filter.')
         return self.result(items, limit=limit, search=True, scope=scope, table='objects')

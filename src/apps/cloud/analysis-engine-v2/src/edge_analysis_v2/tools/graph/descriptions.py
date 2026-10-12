@@ -19,8 +19,8 @@ TOOLS = {
         'summary': 'Find objects of one type by part of their name, title or ticker.',
         'returns': 'A table of every match with its object_id. data_scope says how many objects of the type exist and which properties were matched. '
                    'When nothing matches, it says so and shows what each word alone matches: do not repeat the search with other spellings.',
-        'follow_up': 'Pass object_type and object_id to the tool that reads the object (get_etf_holdings, get_price_observations, list_events).',
-        'alternative': 'find_securities_by_ticker when you have exchange tickers. find_similar_events to find an event by words.',
+        'follow_up': 'Pass object_type and object_id to the tool that reads the object (get_etf_holdings, get_linked_objects, get_objects).',
+        'alternative': 'find_securities_by_ticker when you have exchange tickers.',
         'args': {'object_type': 'A security is Equity or ETF. An issuer is Company.',
                  'query': 'Part of the name, title or ticker. Leave out to list every object of the type.',
                  'filters': 'Exact property values, as {"property":"value"}. Property names come from get_ontology_schema.', 'limit': LIMIT}},
@@ -55,7 +55,7 @@ TOOLS = {
         'returns': 'A table of holdings with weight_ratio (0.05 means 5%) and status, and selected_date: the snapshot date actually used. '
                    'Weights are as stored: not rescaled to 100%, and the snapshot is not certified complete.',
         'prerequisite': 'The fund id from search_objects or find_securities_by_ticker.',
-        'follow_up': 'sum_holding_weights for any total of weights. compare_etf_overlap for two funds. Pass this result as targets to read all holdings at once.',
+        'follow_up': 'sum_holding_weights for any total of weights. compare_holdings_between_dates for the same fund on two dates.',
         'args': {'etf_ref': 'The fund, as {"object_type":"ETF","object_id":"..."}.', 'holdings_date': 'YYYY-MM-DD, a Korean market day.',
                  'date_policy': 'exact fails when that day has no snapshot. latest_on_or_before takes the nearest earlier snapshot; state selected_date in the answer.',
                  'limit': LIMIT}},

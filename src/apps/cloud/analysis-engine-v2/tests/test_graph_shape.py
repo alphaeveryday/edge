@@ -85,6 +85,20 @@ def test_a_later_page_of_a_table_repeats_what_every_row_shares(tmp_path):
     assert page['same_for_all_rows'] == {'object_type': 'Equity', 'marketCode': 'XKRX'}
 
 
+def test_a_later_page_counts_what_every_row_shares_toward_its_size():
+    # WHY: the first page held 19 rows beside a long shared value and the next page 40, over the size a response can have.
+    import json
+    from edge_analysis_v2.tools.graph.shape import BUDGET
+    from edge_analysis_v2.tools.graph.store import EvidenceStore
+    rows = [{'object_type': 'Document', 'object_id': f'd{i}', 'title': f'T{i}', 'properties': {'body': 'x' * 22000, 'part': 'y' * 1000 + str(i)}}
+            for i in range(60)]
+    value, dataset = table_tools().result(rows, table='plain')
+    store = object.__new__(EvidenceStore)
+    store.reference = lambda ref, kind: dataset
+    page = store.page({'tool_run_id': 'r'}, len(value['rows']), 100)
+    assert len(json.dumps(page, ensure_ascii=False)) < BUDGET + 2000 and len(page['rows']) <= len(value['rows']) + 1
+
+
 def test_the_shape_of_linked_rows_counts_the_objects_they_lead_to():
     # WHY: a cut list of linked objects came with an empty overview, because their names sit under target.
     from edge_analysis_v2.tools.graph.shape import overview

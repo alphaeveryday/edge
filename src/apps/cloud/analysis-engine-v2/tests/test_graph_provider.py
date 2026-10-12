@@ -76,7 +76,7 @@ def test_a_tool_left_out_of_the_exposed_set_does_not_exist_for_the_agent(tmp_pat
     tools = GraphTools(lambda s, p: [], CATALOG, tmp_path, '2026-10-05T00:00:00+00:00', expose=['search_objects', 'get_result_page'])
     assert [s['function']['name'] for s in tools.schemas] == [d['function_name'] for d in tools.definitions] == ['get_result_page', 'search_objects']
     with pytest.raises(ValueError, match='Unknown tool'):
-        tools.call('list_events', {})
+        tools.call('get_objects', {'object_refs': []})   # registered when nothing is left out
     assert tools.call('search_objects', {'object_type': 'Company'})['result']['total_rows'] == 0
     with pytest.raises(ValueError, match='Unknown tools to expose: search_evnets'):
         GraphTools(lambda s, p: [], CATALOG, tmp_path, '2026-10-05T00:00:00+00:00', expose=['search_evnets'])
@@ -102,3 +102,14 @@ def test_every_graph_tool_is_described_in_the_standard_order(tmp_path):
         assert lines[1].startswith('Returns: ')
         assert all(line.split(': ')[0] in ('Returns', 'Prerequisite', 'Follow-up', 'Alternative') for line in lines[1:])
         assert all(p.get('description') for p in function['parameters']['properties'].values())
+
+
+def test_every_tool_a_description_points_to_is_one_the_agent_can_call(tmp_path):
+    # WHY: a description sent the agent to compare_etf_overlap and list_events, which this surface does not have.
+    import re
+    from edge_analysis_v2.tools.graph import descriptions
+    tools, _ = make(tmp_path)
+    names = {s['function']['name'] for s in tools.schemas}
+    for name in names & set(descriptions.TOOLS):
+        mentioned = set(re.findall(r'\b[a-z]+(?:_[a-z]+)+\b', descriptions.text(name)))
+        assert {m for m in mentioned if m.startswith(('get_', 'find_', 'sum_', 'compare_', 'list_', 'search_', 'read_', 'calculate_'))} <= names, name

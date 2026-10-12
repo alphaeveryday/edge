@@ -69,8 +69,9 @@ class EvidenceStore:
             raise ValueError('Page requires nonnegative offset and limit 1..100')
         dataset=self.reference(ref,'dataset')
         items=dataset.get('display_items',dataset['items'])
-        limit=fit(items[offset:],limit)
-        shown=({'columns':dataset['display_columns'],'rows':items[offset:offset+limit],'same_for_all_rows':dataset.get('display_same',{})}
+        same=dataset.get('display_same') or {}
+        limit=fit(items[offset:],limit,used=len(json.dumps(same,ensure_ascii=False,default=str)) if same else 0)
+        shown=({'columns':dataset['display_columns'],'rows':items[offset:offset+limit],'same_for_all_rows':same}
                if 'display_columns' in dataset else {'items':items[offset:offset+limit]})
         return {**shown,'page':{'offset':offset,'complete':offset+limit>=len(items),
             'next_offset':offset+limit if offset+limit<len(items) else None},'data_scope':dataset['scope'],
