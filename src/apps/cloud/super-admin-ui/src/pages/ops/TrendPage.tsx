@@ -207,6 +207,12 @@ export function TrendPage() {
     <div className="flex flex-col gap-4">
       <AxisHeader q={q} question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
 
+      {minute.isPending && (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          분봉 상태를 불러오는 중입니다 — 분봉 지표는 응답 뒤에 표시합니다.
+        </p>
+      )}
+
       {minute.isError && (
         <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
           분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 판정하지 않습니다.'}

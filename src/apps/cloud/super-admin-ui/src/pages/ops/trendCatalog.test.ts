@@ -347,12 +347,23 @@ test('🔴 값을 응답에서 읽지 못하는 카드는 목록에 없다 — �
   }
 });
 
+test('응답이 목이라고 밝힌 데이터셋의 지연은 목 점이다 — 출처 칩과 점이 갈리지 않는다', () => {
+  const mocked = {
+    ...WIRED,
+    datasets: [{ id: 'etf_nav', actual_as_of: '2026-08-03', expected_as_of: '2026-08-03', mock: true }],
+  } as unknown as Facts;
+  const m = byId(mocked, 'b.etf_nav');
+  assert.equal(m.source, 'MOCK');
+  assert.deepEqual(m.series, [{ date: '2026-08-03', value: 0, isMock: true }]);
+});
+
 test('🔴 분봉 응답이 없으면 분봉 지표는 판정 불가다 — 숫자를 대신 넣지 않는다', () => {
   for (const id of ['i.no_evidence', 'i.dead_jobs']) {
     const m = byId(WIRED, id);
     assert.deepEqual(m.series, [], `${id} 에 없는 값이 생겼다`);
     assert.equal(evaluateMetric(m).kind, 'uninstrumented', id);
   }
+  assert.match(byId(WIRED, 'i.dead_jobs').help, /응답을 받지 못해/, '조회 중일 수도 있다 — 없다고 단정하지 않는다');
   /* 다른 날짜의 분봉 응답도 조회일의 값이 아니다 */
   const stale = { date: '2026-08-02', sessions: [] } as unknown as MinuteStatus;
   assert.deepEqual(buildMetrics(WIRED, stale).find((m) => m.id === 'i.dead_jobs')!.series, []);

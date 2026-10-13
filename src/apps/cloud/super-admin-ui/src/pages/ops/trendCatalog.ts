@@ -209,7 +209,7 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
     threshold: lag === null ? null : 0,
     direction: 'lowerIsBetter',
     source: d?.mock ? 'MOCK' : 'DB_LEDGER',
-    series: lag === null ? [] : onePoint(TODAY, lag),
+    series: lag === null ? [] : onePoint(TODAY, lag, d?.mock === true),
     help: [
       '기준일 지연 = 기대 기준일과 실제 기준일 사이의 주말 제외 평일 수.',
       '거래소 휴장 캘린더 축은 이 응답에 없어 공휴일·임시 휴장일은 제외하지 못한다.',
@@ -257,7 +257,7 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
     today === undefined
       ? uninstrumented(m)
       : { ...m, comparisonType: 'maxCount', threshold: 0, series: onePoint(TODAY, today) };
-  const MINUTE_ABSENT = '조회일의 분봉 상태 응답이 없어 값을 그리지 않는다.';
+  const MINUTE_ABSENT = '조회일의 분봉 상태 응답을 받지 못해 값을 그리지 않는다.';
 
   return [
   /* 일배치 */
