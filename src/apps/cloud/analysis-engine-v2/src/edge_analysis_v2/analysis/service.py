@@ -31,6 +31,16 @@ KST = timezone(timedelta(hours=9))
 _LATEST = object()
 
 
+def swap_references(value, table):
+    """Replace each known entry of every ``tool_run_ids`` list; unknown entries pass through for the store to reject."""
+    if isinstance(value, dict):
+        return {k: [table.get(i, i) if isinstance(i, str) else i for i in v] if k == 'tool_run_ids' and isinstance(v, list)
+                else swap_references(v, table) for k, v in value.items()}
+    if isinstance(value, list):
+        return [swap_references(v, table) for v in value]
+    return value
+
+
 def _previous(connection, kind, etf_code, cutoff, data_source="synthetic"):
     with connection.cursor(row_factory=dict_row) as cur:
         query = sql.SQL('SELECT analysis_id FROM {} WHERE etf_code=%s AND status=\'completed\' AND analysis_at<%s AND data_source=%s').format(sql.Identifier(kind + '_analyses'))
@@ -206,12 +216,20 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                     editor = previous_editor
                 raise
             return output
+        # The model cites a call as f1, f2, ...; the 32-character execution ID never enters its text.
+        references = {}
+        def cited_call(name, arguments):
+            output = call(name, swap_references(arguments, references))
+            reference = f'f{len(references) + 1}'
+            references[reference] = output['tool_run_id']
+            return swap_references(output, {v: k for k, v in references.items()}) | {'tool_run_id': reference}
         if kind == 'outlook':
             factor_output = call('get_instrument_factors', {'instrument_id': context['etf_code']})
-        response = asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
-            schemas=schemas,call=call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
+            references['f1'] = factor_output['tool_run_id']
+        response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
+            schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
             artifacts=artifacts,key=key,model=model,skills=TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,
-            timeout_seconds=600 if kind=='outlook' else 300,compare_explanations=kind=='outlook'))
+            timeout_seconds=600 if kind=='outlook' else 300,compare_explanations=kind=='outlook')), references)
         if kind == 'outlook':
             issue = response['issue_detail']
             metrics = project_factor_metrics(factor_output, context['etf_code'])
