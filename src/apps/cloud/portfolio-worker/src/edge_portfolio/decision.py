@@ -100,11 +100,12 @@ def check_constraints(decision, rows, request, catalog):
                     account_weights[key] = account_weights.get(key, Decimal(0)) + Decimal(str(row['weight_pct']))
                 for holding in request.holdings:
                     key = (holding.instrument_id, holding.account) if account_specific else holding.instrument_id
-                    current[key] = current.get(key, Decimal(0)) + holding.amount_krw / total * 100
+                    current[key] = current.get(key, Decimal(0)) + holding.amount_krw
                 # A funding quote needs a separately verified execution plan before relaxing this check.
                 targets = account_weights if account_specific else weights
-                passed = all(targets.get(key, 0) >= weight for key, weight in current.items()
-                             if (key[0] if account_specific else key) != 'CASH:KRW')
+                passed = all(targets.get(key, 0) * total >= amount * 100 for key, amount in current.items()
+                             if (key[0] if account_specific else key) != 'CASH:KRW'
+                             and (not rule.instrument_ids or (key[0] if account_specific else key) in rule.instrument_ids))
             elif not request.holdings:
                 passed = True
         checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source,

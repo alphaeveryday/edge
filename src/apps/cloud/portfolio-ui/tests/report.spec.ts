@@ -88,6 +88,17 @@ test('customer constraint rejection is not mislabeled as a low star rating', asy
   await expect(page.getByText('조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.')).toHaveCount(0);
 });
 
+test('an unselected recommendation does not invent a constraint or rating failure', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'withheld'));
+  await page.route('**/api/portfolio/analyses/withheld', route => route.fulfill({ json: {
+    id: 'withheld', state: 'succeeded', result: { ...report, recommendation: null,
+      optimization: { status: 'available', candidates: [{}], reason: 'RECOMMENDATION_WITHHELD' } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByText('현재 확보한 근거로 추천 구성을 확정하지 못했어요.')).toBeVisible();
+  await expect(page.getByText('필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.')).toHaveCount(0);
+});
+
 test('a batch without eligible candidates publishes analysis without a recommendation or invented chart', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'no-match'));
   await page.route('**/api/portfolio/analyses/no-match', route => route.fulfill({ json: { id: 'no-match', state: 'succeeded',

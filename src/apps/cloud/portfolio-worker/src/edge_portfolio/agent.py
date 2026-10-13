@@ -248,7 +248,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if final.recommendation:
                             checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
                         elif not checks:
-                            checks = [{'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': 'unknown'}
+                            checks = [{'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': 'unknown',
+                                       'reason': 'UNVERIFIED_CONSTRAINT' if rule.kind == 'unverified' else 'NO_ALLOCATION_SELECTED'}
                                       for number, rule in enumerate(decision.constraints, 1)]
                         if final.recommendation and any(check['status'] != 'pass' for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
@@ -256,7 +257,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         published = publish_recommendation(final, request, metrics, evidence.sources)
                         published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
                         if not selected and optimizer.result['candidates']:
-                            published['optimization']['reason'] = 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if any(check['status'] != 'pass' for check in checks) else 'RATING_BELOW_MINIMUM'
+                            blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
+                            published['optimization']['reason'] = 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD' if checks else 'RATING_BELOW_MINIMUM'
                         if selected:
                             await enrich_report(published, final, market, evidence.sources)
                     else:

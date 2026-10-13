@@ -57,8 +57,26 @@ def test_no_sell_cannot_move_existing_positions_to_another_account():
     assert checks[0]['status'] == 'fail'
 
 
-@pytest.mark.parametrize('reject_first', [True, False])
-async def test_service_eligible_candidate_cannot_publish_after_customer_constraint_failure(monkeypatch, reject_first):
+def test_no_sell_scope_does_not_prohibit_changes_to_other_holdings():
+    req = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': amount}
+        for key, amount in [('US:VOO', 50), ('US:QQQ', 40), ('CASH:KRW', 10)]], horizon='10년 이상')
+    rows = [{'instrument_id': key, 'weight_pct': 50, 'account': '일반 계좌'} for key in ['US:VOO', 'US:VTI']]
+    scoped = Decision(constraints=[{'kind': 'no_sell', 'instrument_ids': ['US:VOO'], 'source': 'VOO 매도 금지'}])
+    assert check_constraints(scoped, rows, req, {})[0]['status'] == 'pass'
+    global_rule = Decision(constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    assert check_constraints(global_rule, rows, req, {})[0]['status'] == 'fail'
+
+
+def test_repeated_holdings_do_not_fail_no_sell_due_to_fractional_percentage_rounding():
+    req = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}] * 3
+        + [{'name': 'QQQ', 'instrument_id': 'US:QQQ', 'amount_krw': 3000000}], horizon='10년 이상')
+    decision = Decision(constraints=[{'kind': 'no_sell', 'instrument_ids': ['US:VOO'], 'source': 'VOO 매도 금지'}])
+    rows = [{'instrument_id': key, 'weight_pct': 50, 'account': '일반 계좌'} for key in ['US:VOO', 'US:QQQ']]
+    assert check_constraints(decision, rows, req, {})[0]['status'] == 'pass'
+
+
+@pytest.mark.parametrize('reject_first,unverified', [(True, False), (False, False), (False, True)])
+async def test_service_eligible_candidate_cannot_publish_after_customer_constraint_failure(monkeypatch, reject_first, unverified):
     import json
     from edge_portfolio.agent import run_analysis
     from report_fixtures import final_payload
@@ -75,7 +93,7 @@ async def test_service_eligible_candidate_cannot_publish_after_customer_constrai
         content = final_payload() if role == 'opinion' else final_payload()[role]
         if role == 'question':
             content = {**content, 'decision': {'kind': 'rebalance', 'constraints': [
-                {'kind': 'max_weight', 'instrument_ids': ['US:VOO'], 'value': 30, 'source': 'VOO는 30% 이하'}]}}
+                {'kind': 'unverified' if unverified else 'max_weight', 'instrument_ids': ['US:VOO'], 'value': 30, 'source': 'VOO는 30% 이하'}]}}
         if role == 'opinion':
             if repairs or not reject_first:
                 if repairs:
@@ -88,5 +106,5 @@ async def test_service_eligible_candidate_cannot_publish_after_customer_constrai
     assert len(repairs) == (2 if reject_first else 1)
     assert result['recommendation'] is None
     assert result['customer_constraint_checks'][0]['status'] == ('fail' if reject_first else 'unknown')
-    assert result['optimization']['reason'] == 'CUSTOMER_CONSTRAINT_NOT_SATISFIED'
+    assert result['optimization']['reason'] == ('CUSTOMER_CONSTRAINT_NOT_SATISFIED' if reject_first or unverified else 'RECOMMENDATION_WITHHELD')
     assert result['input']['question'] == 'VOO는 30% 이하'
