@@ -35,6 +35,13 @@ def overview():
             AND created_at >= date_trunc('day',now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul' GROUP BY state""").fetchall()
         result['today_jobs'] = {state: 0 for state in ('queued', 'running', 'succeeded', 'failed')}
         result['today_jobs'].update({row['state']: row['n'] for row in rows})
+        result.update(db.execute("""SELECT
+            count(DISTINCT nullif(lower(btrim(email)), '')) FILTER (WHERE
+                created_at >= date_trunc('day',now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'
+                AND created_at < (date_trunc('day',now() AT TIME ZONE 'Asia/Seoul')+interval '1 day') AT TIME ZONE 'Asia/Seoul'
+            ) AS today_unique_emails,
+            count(DISTINCT nullif(lower(btrim(email)), '')) AS total_unique_emails,
+            count(*) AS total_report_requests FROM portfolio_report_requests""").fetchone())
         result['daily'] = db.execute("""SELECT g.day::date,
             (SELECT count(*) FROM portfolio_visit_days v WHERE v.day=g.day::date) AS visitors,
             (SELECT count(*) FROM portfolio_jobs j WHERE j.kind='analysis'
