@@ -106,6 +106,17 @@ def batch():
     return request, market, groups
 
 
+async def test_saved_holdings_removed_from_catalog_are_reported_without_losing_recovery():
+    request, market, groups = batch()
+    market.current = {'KR:REMOVED': 1}
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'unavailable'
+    assert result['reason'] == 'CURRENT_INSTRUMENT_UNAVAILABLE'
+    assert result['missing_instrument_ids'] == ['KR:REMOVED']
+    assert not result['candidates'] and not market.records
+    assert market.current == {'KR:REMOVED': 1}  # Never fabricate a cash baseline.
+
+
 async def test_customer_cap_filters_vectors_before_the_group_winner_is_chosen():
     from edge_portfolio.decision import Decision
     request, market, groups = batch()
