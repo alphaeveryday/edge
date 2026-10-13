@@ -1,0 +1,11 @@
+{
+  "start": "2024-10-14",
+  "end": "2026-10-13",
+  "initial_cash": "100000000",
+  "fee_bps": null,
+  "slippage_bps": null,
+  "model": "deepseek-chat",
+  "instructions": "아래 연구 지시문의 투자 가설과 비용 가정을 확정한 후 새 실험을 생성한다.",
+  "split": "development",
+  "price_lookback": 60
+}

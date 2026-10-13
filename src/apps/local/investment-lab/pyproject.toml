@@ -1,0 +1,27 @@
+[project]
+name = "investment-lab"
+version = "0.1.0"
+description = "Local point-in-time ETF investment research"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+cloud = ["boto3>=1.34", "psycopg[binary]>=3.1"]
+agent = ["claude-agent-sdk>=0.2.158,<0.3", "jsonschema>=4", "PyYAML>=6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/investment_lab"]
+
+[tool.uv.workspace]
+members = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

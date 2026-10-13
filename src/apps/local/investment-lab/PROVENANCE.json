@@ -1,0 +1,27 @@
+{
+  "source_commit": "a4252ba019e423aa8702e045c5398952145e1314",
+  "ticket": "ALPHA-1308",
+  "selection": "latest v2 agent loop; deployment workflow still targets v1, actual deployed revision not attested",
+  "files": [
+    {
+      "source": "src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/agent/runner.py",
+      "destination": "src/investment_lab/agent/runner.py",
+      "original_sha256": "01459ecdd5762d9ca0cc2067b3307fe9c91b64becc6b65d65b9783698a31c230"
+    },
+    {
+      "source": "src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/tools/model_schema.py",
+      "destination": "src/investment_lab/tools/model_schema.py",
+      "original_sha256": "d4ee357d466d196a14c749c88b53de2a684ff0fd52cec414f6a0d87bf2c5c88c"
+    }
+  ],
+  "adaptations": [
+    "package namespace only in copied runner",
+    "research-only schemas and decision adapter added separately"
+  ],
+  "excluded": [
+    "operational writers",
+    "deployment files",
+    "credentials",
+    "fixture generators"
+  ]
+}

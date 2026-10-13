@@ -20,6 +20,8 @@ src/
 │   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
 │   │   ├── airflow/          # Python · 유한 배치의 Airflow DAG(SFN 에서 레인별 이관 중) · ECS on EC2 이미지·검증 경로(ALPHA-1119)
 │   │   └── analysis-engine/  # Python · 분봉 트리거 큐 상주 소비자 → 분석 결과 DB 저장
+│   ├── local/                 #   로컬 연구 전용 (운영 배포 없음)
+│   │   └── investment-lab/    # Python · PIT ETF 투자 실험·회계·감사 대시보드 (독립 uv workspace)
 │   └── onprem/               #   edge-onprem (증권사 관리 환경)
 │       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
 │       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
