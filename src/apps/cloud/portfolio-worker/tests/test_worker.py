@@ -21,7 +21,7 @@ def test_shutdown_finishes_the_claimed_job_without_claiming_another(monkeypatch,
         return old
     monkeypatch.setattr(worker.signal, 'signal', install)
     events = []
-    async def work():
+    async def work(*args):
         events.append('claimed')
         assert len(events) == 1, 'A draining worker must not claim another customer job'
         installed[stop_signal](stop_signal, None)
@@ -33,6 +33,20 @@ def test_shutdown_finishes_the_claimed_job_without_claiming_another(monkeypatch,
     assert events == ['claimed', 'saved']
     assert not marker.exists()
     assert installed == {signal.SIGTERM: previous, signal.SIGINT: previous}
+
+
+async def test_shutdown_during_database_claim_returns_unstarted_job(monkeypatch, tmp_path):
+    stopping = asyncio.Event()
+    monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
+    job = {'id': 'new-job', 'started_at': 'claim-version'}
+    def claim():
+        stopping.set()  # SIGTERM while the database call was completing.
+        return job
+    released = []
+    monkeypatch.setattr(worker.store, 'claim', claim)
+    monkeypatch.setattr(worker.store, 'release_claim', lambda *args: released.append(args), raising=False)
+    assert await worker.work_once(stopping) is False
+    assert released == [('new-job', 'claim-version')]
 
 
 def test_worker_only_marks_ready_after_db_initialization_and_cleans_up(monkeypatch, tmp_path):

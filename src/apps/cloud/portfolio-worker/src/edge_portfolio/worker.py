@@ -49,10 +49,14 @@ def failure_codes(error):
     return [prefix if prefix in allowed else type(error).__name__]
 
 
-async def work_once():
+async def work_once(stopping=None):
     job = store.claim()
     HEARTBEAT.touch()
     if not job:
+        return False
+    if stopping is not None and stopping.is_set():
+        store.release_claim(job['id'], job['started_at'])
+        log.info('job=%s released unstarted claim during shutdown', job['id'])
         return False
     try:
         if job["kind"] == "chat":
@@ -86,7 +90,7 @@ async def main():
     handlers = {number: signal.signal(number, request_stop) for number in (signal.SIGTERM, signal.SIGINT)}
     try:
         while not stopping.is_set():
-            worked = await work_once()
+            worked = await work_once(stopping)
             if not worked:
                 await asyncio.sleep(1)
     finally:

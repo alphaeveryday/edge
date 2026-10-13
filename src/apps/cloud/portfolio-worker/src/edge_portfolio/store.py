@@ -133,6 +133,15 @@ def stage(job_id, name):
         db.execute("INSERT INTO portfolio_events(job_id,stage) VALUES (%s,%s)", (job_id, name))
 
 
+def release_claim(job_id, started_at):
+    """Return only this unstarted claim; never reset work begun by a newer worker."""
+    with connect() as db:
+        row = db.execute("""UPDATE portfolio_jobs SET state='queued',started_at=NULL
+            WHERE id=%s AND started_at=%s AND state='running' AND stage IS NULL RETURNING id""",
+            (job_id, started_at)).fetchone()
+        return row is not None
+
+
 def finish(job_id, result=None, failure=None):
     with connect() as db:
         row = db.execute("""UPDATE portfolio_jobs SET state=%s,result=%s,failure=%s,finished_at=now()
