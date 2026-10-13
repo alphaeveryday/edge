@@ -44,3 +44,6 @@ try { & $launcher -Profile edge-portfolio-admin; throw 'Failed authentication ac
 catch { if ($_.Exception.Message -notlike '*Unable to assume*') { throw } }
 if ($global:adminTestCalls | Where-Object { $_ -like 'ssm *' }) { throw 'Failed authentication accessed SSM.' }
 Write-Output 'Launcher contracts passed: fixed role and tunnel, no IAM-user/wrong-role/failure fallback.'
+
+# Clear the intentionally mocked authentication failure for the CI native-exit wrapper.
+$global:LASTEXITCODE = 0
