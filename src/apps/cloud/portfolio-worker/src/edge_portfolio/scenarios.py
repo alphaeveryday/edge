@@ -23,8 +23,8 @@ def principal_declaration(clause):
     return bool(PRINCIPAL_AMOUNT.search(clause) or PRINCIPAL_DECLARATION.match(clause) and not re.search(r'\d+(?:\.\d+)?\s*년', clause))
 
 
-def stated_principal(text):
-    """Accept one unconditional standalone statement of total current principal."""
+def principal_statements(text):
+    """Parse only fully understood amount declarations and accompanying clauses."""
     if any(word in text for word in ('취소', '철회', '미정', '아니', '정도', '대략', '정정')):
         return None
     values = []
@@ -49,7 +49,17 @@ def stated_principal(text):
             commitment = re.fullmatch(r'\s*(.+?원(?:씩)?)\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요))?\s*', clause)
             if not commitment or parse_funding(commitment[1]) is None:
                 return None  # Unrecognized clauses may qualify or replace the amount.
-    return values[0] if len(values) == statements == 1 else None
+    return values if len(values) == statements else None
+
+
+def stated_principal(text):
+    values = principal_statements(text)
+    return values[0] if values is not None and len(values) == 1 else None
+
+
+def principal_context_matches(text, principal):
+    values = principal_statements(text)
+    return values is not None and len(values) <= 1 and all(value == principal for value in values)
 
 
 class ScenarioInput(StrictModel):

@@ -35,6 +35,13 @@ def test_future_target_amount_is_not_a_current_principal_correction():
     assert principal_declaration('앞서 말한 금액은 취소합니다')
 
 
+@pytest.mark.parametrize('context', ['이 돈은 아직 수중에 없습니다.', '보너스가 나오면 마련할 금액입니다.', '부가 조건을 확인해 주세요.'])
+def test_separate_unrecognized_context_cannot_certify_a_saved_principal(context):
+    from edge_portfolio.scenarios import principal_context_matches
+    assert not principal_context_matches(context, 10000000)
+    assert principal_context_matches('5년 뒤 얼마인가요?', 10000000)
+
+
 def test_known_principal_allows_scenarios_without_a_return_forecast():
     result = build_scenarios(1000000, {'annual_returns': [0], 'years': [5, 10, 15]}, monthly_krw=100000)
     assert [row['future_krw'] for row in result['rows']] == ['7000000', '13000000', '19000000']
