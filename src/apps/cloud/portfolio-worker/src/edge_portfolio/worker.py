@@ -1,8 +1,11 @@
 import asyncio
+import copy
+from contextlib import suppress
 import json
 import logging
 import os
 import signal
+import time
 from pathlib import Path
 from typing import get_args
 
@@ -58,6 +61,41 @@ async def work_once(stopping=None):
         store.release_claim(job['id'], job['started_at'])
         log.info('job=%s released unstarted claim during shutdown', job['id'])
         return False
+    started = time.monotonic()
+    diagnostics = {'events': [], 'termination_reason': 'RUNNING'}
+    partial = {}
+    pending = {}
+    changed = asyncio.Event()
+
+    def save_checkpoint(result):
+        pending.update(result)
+        changed.set()
+
+    async def write_checkpoints():
+        while True:
+            await changed.wait()
+            changed.clear()
+            snapshot = copy.deepcopy(pending)
+            try:
+                await asyncio.to_thread(store.checkpoint, job['id'], snapshot)
+            except Exception as error:
+                log.warning('job=%s checkpoint_failed code=%s', job['id'], type(error).__name__)
+
+    def on_event(event):
+        diagnostics['events'].append(event)
+        if event['event'] == 'run_started':
+            diagnostics.update({key: event[key] for key in ('model', 'prompt_version', 'code_version', 'limits')})
+        if event['event'] == 'model_started':
+            diagnostics['model_calls'] = event['call']
+        if 'counters' in event:
+            diagnostics.update(event['counters'])
+        save_checkpoint({'diagnostics': diagnostics})
+
+    def on_checkpoint(result):
+        partial.clear()
+        partial.update(result)
+        save_checkpoint({'partial_report': partial})
+    checkpoint_writer = asyncio.create_task(write_checkpoints())
     try:
         if job["kind"] == "chat":
             store.stage(job["id"], "opinion")
@@ -65,14 +103,20 @@ async def work_once(stopping=None):
             result = await answer_question(job["input"]["question"], parent["result"], os.environ["DEEPSEEK_API_KEY"])
         else:
             result = await run_analysis(AnalysisInput.model_validate(job["input"]), os.environ["DEEPSEEK_API_KEY"],
-                                        lambda role: store.stage(job["id"], role))
+                                        lambda role: store.stage(job["id"], role), on_event=on_event, on_checkpoint=on_checkpoint)
         store.finish(job["id"], result=result)
         log.info("job=%s status=succeeded seconds=%s", job["id"], result.get("elapsed_seconds"))
     except Exception as error:
         codes = failure_codes(error)
-        failure = 'SEARCH_RATE_LIMIT' if 'EXA_RATE_LIMIT' in codes else "TIMED_OUT" if isinstance(error, TimeoutError) else "ANALYSIS_FAILED"
-        store.finish(job["id"], failure=failure)
+        failure = 'SEARCH_RATE_LIMIT' if 'EXA_RATE_LIMIT' in codes else "TIMED_OUT" if any(code in {'TimeoutError', 'ReadTimeout', 'ConnectTimeout', 'WriteTimeout', 'PoolTimeout'} for code in codes) else "ANALYSIS_FAILED"
+        diagnostics.update({'termination_reason': failure, 'failure_codes': codes})
+        store.finish(job["id"], failure=failure, result={'diagnostics': diagnostics, 'partial_report': partial,
+            'elapsed_seconds': round(time.monotonic() - started, 2)})
         log.warning("job=%s status=failed codes=%s", job["id"], codes)
+    finally:
+        checkpoint_writer.cancel()
+        with suppress(asyncio.CancelledError):
+            await checkpoint_writer
     return True
 
 
