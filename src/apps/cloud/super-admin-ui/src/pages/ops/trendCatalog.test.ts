@@ -153,7 +153,8 @@ test('추이 화면은 facts가 본 날짜로 해소율을 조회하고 직전 �
   assert.doesNotMatch(source, /entityResolution\.isError\s*\?\s*undefined\s*:\s*entityResolution\.data/);
   assert.match(source, /entityResolution\.data !== undefined \|\| m\.id !== 'n\.entity_resolution_rate'/);
   /* R15 사건은 분석 실패 카드로 넘어온다 — 그 카드는 분석 추이 응답 뒤에야 DOM 에 선다 */
-  assert.match(source, /useFocusRow\(q\.ready && !analysis\.isPending\)/);
+  assert.match(source, /useFocusRow\(q\.ready && \(!focusNeedsAnalysis \|\| analysis\.data !== undefined\)\)/);
+  assert.match(source, /startsWith\('metric-a\.'\)/, '분석 카드 앵커만 분석 응답을 기다린다');
   assert.match(source, /조회 중이라 전체 이상 여부가 아직 확정되지 않았습니다/);
   assert.match(source, /조회 실패로 전체 이상 여부를 확인할 수 없습니다/);
   assert.match(source, /\$\{values\.length\}개 관측 추이/);

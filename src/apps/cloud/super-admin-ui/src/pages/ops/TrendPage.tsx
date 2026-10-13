@@ -15,7 +15,7 @@
  * 뉴스 단계별 감소(퍼널)는 데이터 화면 소관이라 여기서 반복하지 않는다.
  */
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import { InfoPopover } from '../_shared/InfoPopover';
@@ -178,9 +178,12 @@ export function TrendPage() {
   const entityResolution = useEntityResolutionTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   const analysis = useAnalysisTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   /* 분석 카드는 분석 추이 응답이 와야 값이 서고, 기본 필터(이상 지표)에서는 그 전까지 DOM 에 없다.
-   * 사건에서 그 카드로 넘어온 포커스(R15)가 빈 화면에 대고 한 번 돌고 끝나지 않게, 그 조회가
-   * 끝난 뒤(성공이든 실패든)에 건다. */
-  useFocusRow(q.ready && !analysis.isPending);
+   * 사건에서 그 카드로 넘어온 포커스(R15)는 **그 응답이 온 뒤에** 건다 — 첫 조회가 실패하고 나중
+   * 재조회가 성공해도 그때 걸린다. 다른 앵커(산출 축 표 등)는 그 조회를 기다리지 않는다: 그
+   * 엔드포인트가 없는 API 에서도 그쪽 포커스는 살아야 한다. */
+  const [params] = useSearchParams();
+  const focusNeedsAnalysis = params.get('focus')?.startsWith('metric-a.') ?? false;
+  useFocusRow(q.ready && (!focusNeedsAnalysis || analysis.data !== undefined));
 
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
