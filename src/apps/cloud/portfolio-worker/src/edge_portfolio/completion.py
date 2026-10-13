@@ -112,7 +112,7 @@ def assess_completion(final, request, decision, published, sources, as_of):
         needs_input = True
     if not recommendation and optimization.get('reason') in (None, 'RECOMMENDATION_WITHHELD') and not final.withheld_reason:
         reasons.append('WITHHOLDING_REASON_MISSING')
-    executed_saved_target = not recommendation and decision.kind in {'rebalance', 'new_money'} and execution and execution['status'] in {'ready', 'conditional'}
+    executed_saved_target = decision.execute_saved_target and not recommendation and decision.kind in {'rebalance', 'new_money'} and execution and execution['status'] in {'ready', 'conditional'}
     status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if decision.kind == 'scenario' or executed_saved_target else 'no_match' if not recommendation else 'complete'
     return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': decision.missing_inputs,
             'evidence_coverage': list(coverage.values()), 'missing_research': missing_research,

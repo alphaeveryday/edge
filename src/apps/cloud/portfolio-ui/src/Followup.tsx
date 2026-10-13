@@ -20,7 +20,7 @@ export function Followup({ jobId, recoveryOnly = false }: { jobId: string; recov
   const [emailError, setEmailError] = useState('');
   const limit = useRef<HTMLDialogElement>(null);
   const premium = useRef<HTMLDialogElement>(null);
-  const pending = useRef<{ question: string; key: string } | null>(null);
+  const pending = useRef<Record<string, { question: string; key: string }>>({});
   useEffect(() => {
     if (!chatId) return;
     let stopped = false;
@@ -31,22 +31,22 @@ export function Followup({ jobId, recoveryOnly = false }: { jobId: string; recov
         const job = await request<ChatJob>('/analyses/' + chatId);
         if (stopped) return;
         if (job.state === 'succeeded') { setAnswer(job.result!.answer); setRevision(job.result!.revision || null); setRevisionId(job.id); setBusy(false); return; }
-        if (job.state === 'failed') { setError('답변을 만들지 못했어요. 다시 질문할 수 있어요.'); setBusy(false); localStorage.removeItem(storageKey); setChatId(null); pending.current = null; return; }
+        if (job.state === 'failed') { setError('답변을 만들지 못했어요. 다시 질문할 수 있어요.'); setBusy(false); localStorage.removeItem(storageKey); setChatId(null); delete pending.current[storageKey]; return; }
       } catch { if (!stopped) setError('답변을 기다리고 있어요. 연결을 다시 확인할게요.'); }
       if (!stopped) timer = setTimeout(poll, 2000);
     }
     void poll(); return () => { stopped = true; clearTimeout(timer); };
   }, [chatId, jobId, storageKey]);
   function changeMode(value: 'question' | 'recovery') {
-    setMode(value); setBlocked(false); setError(''); setAnswer(null); setRevision(null); pending.current = null;
+    setMode(value); setBlocked(false); setError(''); setAnswer(null); setRevision(null);
     setChatId(localStorage.getItem('edge-chat-' + jobId + (value === 'recovery' ? '-recovery' : '')));
   }
   async function ask(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('');
-    if (pending.current?.question !== question) pending.current = { question, key: crypto.randomUUID() };
+    if (pending.current[storageKey]?.question !== question) pending.current[storageKey] = { question, key: crypto.randomUUID() };
     try {
-      const job = await request<ChatJob>('/analyses/' + jobId + '/chat', { method: 'POST', headers: { 'Idempotency-Key': pending.current.key }, body: JSON.stringify({ question, ...(mode === 'recovery' ? { mode } : {}) }) });
-      localStorage.setItem(storageKey, job.id); setChatId(job.id); pending.current = null;
+      const job = await request<ChatJob>('/analyses/' + jobId + '/chat', { method: 'POST', headers: { 'Idempotency-Key': pending.current[storageKey].key }, body: JSON.stringify({ question, ...(mode === 'recovery' ? { mode } : {}) }) });
+      localStorage.setItem(storageKey, job.id); setChatId(job.id); delete pending.current[storageKey];
     } catch (e) {
       if ((e as Error).message === 'CHAT_LIMIT') { setBlocked(true); limit.current!.showModal(); }
       else if ((e as Error).message === 'RECOVERY_LIMIT') { setBlocked(true); setError('이 분석의 보완 요청 2회를 모두 사용했어요. 입력 내용을 보완해 새 분석을 시작해 주세요.'); }

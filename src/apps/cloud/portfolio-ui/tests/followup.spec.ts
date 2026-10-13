@@ -4,6 +4,31 @@ const section = { paragraphs: ['입력 내용을 바탕으로 판단했어요.',
 const report = { sections: { question: section, portfolio: section, outlook: section, opinion: section },
   sources: [], metrics: { total_krw: '1000000', holdings: [], unavailable_reason: '' }, as_of: '2026-10-14T00:00:00Z' };
 
+test('an unresolved recovery keeps its idempotency key across mode changes', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'parent'));
+  const keys: string[] = [];
+  await page.route('**/api/portfolio/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/session')) return route.fulfill({ json: {} });
+    if (path.endsWith('/chat')) {
+      keys.push(route.request().headers()['idempotency-key']);
+      return keys.length === 1 ? route.abort('failed') : route.fulfill({ status: 202, json: { id: 'child', state: 'queued' } });
+    }
+    if (path.endsWith('/child')) return route.fulfill({ json: { id: 'child', state: 'succeeded', result: { answer: section } } });
+    return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
+  });
+  await page.goto('/portfolio/');
+  await page.getByLabel('질문 종류').selectOption('recovery');
+  await page.getByLabel('추가 질문', { exact: true }).fill('계산을 보완해 주세요');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect(page.getByLabel('질문 종류')).toBeEnabled();
+  await page.getByLabel('질문 종류').selectOption('question');
+  await page.getByLabel('질문 종류').selectOption('recovery');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await expect.poll(() => keys.length).toBe(2);
+  expect(keys[1]).toBe(keys[0]);
+});
+
 test('an unavailable saved target renders its reason instead of crashing the revision', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'parent'));
   await page.route('**/api/portfolio/**', route => {

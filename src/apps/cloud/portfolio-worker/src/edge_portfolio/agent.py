@@ -288,9 +288,15 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 funding = resolve_funding(request, decision)
                                 known_principal = bool(request.holdings) and all(h.amount_krw is not None for h in request.holdings)
                                 principal = sum(h.amount_krw for h in request.holdings) if request.input_mode == 'amount' and known_principal else None
-                                supplied_principal = stated_principal(followup_question or request.question)
-                                if supplied_principal is not None:
-                                    principal = supplied_principal
+                                original_question = getattr(request, 'funding_questions', [request.question])[0]
+                                for statement in ([followup_question, original_question] if followup_question else [request.question]):
+                                    supplied_principal = stated_principal(statement)
+                                    if supplied_principal is not None:
+                                        principal = supplied_principal
+                                        break
+                                    if re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액)[^!?;\n]*(?:\d[^!?;\n]*원|취소|철회|미정|모르|불명|확인\s*필요)', statement):
+                                        principal = None  # An ambiguous correction must not silently reuse the old amount.
+                                        break
                                 answer = build_scenarios(principal, args, **{name: value or 0 for name, value in (funding or {}).items()})
                                 if funding is None:
                                     answer = {'status': 'needs_input', 'reason': 'ADDITIONAL_FUNDING_REQUIRED', 'rows': []}
@@ -371,7 +377,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                       for number, rule in enumerate(decision.constraints, 1)]
                         if final.recommendation and any(check['status'] != 'pass' for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
-                        sections = {name: validate_section('question' if source_free_allowed and not evidence.sources and getattr(final, name).limitations else name,
+                        sections = {name: validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and getattr(final, name).limitations else name,
                                     getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources, decision)
                         if final.recommendation and published['recommendation']['execution']['status'] == 'infeasible':
@@ -393,7 +399,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['withheld_reason'] = final.withheld_reason
                         if scenario_result is not None:
                             published['scenarios'] = scenario_result
-                        if followup_execution is not None and not published.get('recommendation'):
+                        if decision.execute_saved_target and followup_execution is not None and not published.get('recommendation'):
                             published['execution'] = followup_execution
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'])
                         if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
@@ -439,7 +445,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 decision.constraints = list(rules.values())
                                 decision.objectives = decision.objectives or inherited.objectives
                                 decision.funding_text = decision.funding_text or inherited.funding_text
-                                decision.questions = [followup_question] if followup_question else decision.questions
+                                if followup_question:
+                                    decision.questions = [question for question in decision.questions if question in followup_question] or [followup_question]
                                 # Each extraction is bounded and validated already; merging
                                 # must not discard inherited rules at the extraction limit.
                                 context['active_decision'] = decision.model_dump(mode='json')
@@ -461,7 +468,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                             followup_execution.update(status='needs_input' if any(check['status'] == 'unknown' for check in current_checks) else 'infeasible',
                                                 rows=[], reasons=['CUSTOMER_CONSTRAINT_NOT_SATISFIED'])
                                         context['saved_target_execution'] = followup_execution
-                                        if followup_execution['status'] in {'ready', 'conditional'}:
+                                        if decision.execute_saved_target and followup_execution['status'] in {'ready', 'conditional'}:
                                             optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SAVED_TARGET_ONLY'}
                             if decision.kind == 'scenario':
                                 optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SCENARIO_ONLY'}
@@ -469,7 +476,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
-                        sections[role] = validate_section('question' if source_free_allowed and not evidence.sources and raw.get('limitations') else role, raw, evidence.sources)
+                        sections[role] = validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and raw.get('limitations') else role, raw, evidence.sources)
                     emit('stage_completed', role=role)
                     checkpoint()
                     break
