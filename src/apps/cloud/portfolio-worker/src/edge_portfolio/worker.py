@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import get_args
 
@@ -48,10 +49,14 @@ def failure_codes(error):
     return [prefix if prefix in allowed else type(error).__name__]
 
 
-async def work_once():
+async def work_once(stopping=None):
     job = store.claim()
     HEARTBEAT.touch()
     if not job:
+        return False
+    if stopping is not None and stopping.is_set():
+        store.release_claim(job['id'], job['started_at'])
+        log.info('job=%s released unstarted claim during shutdown', job['id'])
         return False
     try:
         if job["kind"] == "chat":
@@ -76,13 +81,23 @@ async def main():
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise RuntimeError("DEEPSEEK_API_KEY is required")
     store.initialize()
+    stopping = asyncio.Event()
+
+    def request_stop(number, frame):
+        stopping.set()
+        log.info('worker draining signal=%s; finishing the current job', number)
+
+    handlers = {number: signal.signal(number, request_stop) for number in (signal.SIGTERM, signal.SIGINT)}
     try:
-        while True:
-            worked = await work_once()
+        while not stopping.is_set():
+            worked = await work_once(stopping)
             if not worked:
                 await asyncio.sleep(1)
     finally:
+        for number, handler in handlers.items():
+            signal.signal(number, handler)
         HEARTBEAT.unlink(missing_ok=True)
+        log.info('worker stopped')
 
 
 if __name__ == "__main__":

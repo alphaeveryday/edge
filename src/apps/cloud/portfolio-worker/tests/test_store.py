@@ -41,6 +41,20 @@ def test_two_workers_cannot_claim_same_job(isolated_db):
     assert sum(row is not None for row in claimed) == 1
 
 
+def test_shutdown_release_preserves_job_and_cannot_release_a_newer_claim(isolated_db):
+    original = store.submit('owner', 'same', {})
+    claimed = store.claim()
+    assert store.release_claim(claimed['id'], claimed['started_at'])
+    queued = store.read(original['id'], 'owner')
+    assert queued['state'] == 'queued'
+    assert queued['created_at'] == original['created_at']
+    again = store.claim()
+    assert again['id'] == original['id']
+    assert not store.release_claim(claimed['id'], claimed['started_at'])
+    store.stage(again['id'], 'question')
+    assert not store.release_claim(again['id'], again['started_at'])
+
+
 def test_crashed_worker_result_cannot_overwrite_expiration(isolated_db):
     job = store.submit("owner", "same", {})
     store.claim()
