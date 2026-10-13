@@ -794,8 +794,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			 * 두 사유 모두 "이 날의 값은 비교 대상이 아니다"이지 "표본이 없다"가 아니다. */
 			Double median = targetDayIsIncomplete || (spec.marketBound() && targetIsNonMarketDay)
 					? null : median(base);
+			/* 기준일별 건수를 그대로 싣는다(ALPHA-1289) — 조회는 위 한 번뿐이다. 날짜 오름차순으로
+			 * 뒤집고, 조회일은 넣지 않는다(미완결일의 값이 마지막 점으로 서면 매일 급락으로 읽힌다). */
+			List<OutputDay> history = baseDays.stream().sorted()
+					.map(d -> new OutputDay(d, byDay.getOrDefault(d, 0L))).toList();
 			return new OutputRow(spec.id(), spec.label(), spec.unit(),
-					byDay.getOrDefault(day, 0L), median);
+					byDay.getOrDefault(day, 0L), median, history);
 		}).toList();
 	}
 
