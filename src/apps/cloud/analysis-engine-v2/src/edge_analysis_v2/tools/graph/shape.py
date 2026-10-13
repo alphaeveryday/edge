@@ -1,11 +1,27 @@
-"""What a tool says about a result beyond its rows: the shape of a large set, and rows as a table."""
+"""What a tool says about a result beyond its rows: the shape of a large set, rows as a table, and amounts as written."""
 from collections import Counter
+from decimal import ROUND_HALF_UP, Decimal
 
 CATEGORIES = ('event_type', 'stage', 'role', 'kind', 'object_type', 'document_type', 'evidence_type', 'metric', 'metricCode',
               'factor', 'investor', 'series', 'name', 'ticker', 'companyName', 'securityName', 'seriesId', 'fiscalYear',
               'periodType', 'fsBasis', 'segmentName', 'eventType', 'lifecycleStage', 'currentStage')
 DATES = ('reported_date', 'event_date', 'date', 'trade_date', 'as_of_date', 'published_at', 'available_at', 'period', 'observation_date',
          'tradeDate', 'observationDate', 'holdingsDate', 'eventDate', 'publishedAt', 'availableAt', 'snapshotDate')
+
+
+def won_text(value):
+    """A won amount as it is written, exact to the won: 2004376374000 -> '2조 43억 7,637만 4,000원'.
+
+    Answers moved raw won into 억 and 조 by hand and landed a digit off (14.47억 written as 145억,
+    2조 44억 as 2조 437억). The tool converts once so the answer can copy it.
+    """
+    if value is None:
+        return None
+    won = int(Decimal(str(value)).to_integral_value(ROUND_HALF_UP))
+    # 조 is the largest unit written, so it carries everything above it: 12,345조, not 1경 2,345조.
+    counts = [(abs(won) // 10**12, '조')] + [(abs(won) // unit % 10**4, name) for unit, name in ((10**8, '억'), (10**4, '만'), (1, ''))]
+    parts = [f'{count:,}{name}' for count, name in counts if count]
+    return ('-' if won < 0 else '') + (' '.join(parts) or '0') + '원'
 
 
 def overview(rows):
@@ -26,8 +42,13 @@ def overview(rows):
                 flat = {**flat[nested], **flat}
         if isinstance(flat.get('properties'), dict):
             flat = {**flat['properties'], **flat}
+        if 'event_ref' in row and isinstance(row.get('title'), str):   # event titles lead with the type code
+            flat.setdefault('event_type', row['title'].split(' / ')[0])
         for key in CATEGORIES:
             add(key, str(flat[key]) if isinstance(flat.get(key), int) else flat.get(key))
+        for person in row.get('participants') or []:
+            if isinstance(person, dict):
+                add('participant', person.get('name'))
         for key in DATES:
             value = flat.get(key)
             if isinstance(value, str) and len(value) >= 7:
