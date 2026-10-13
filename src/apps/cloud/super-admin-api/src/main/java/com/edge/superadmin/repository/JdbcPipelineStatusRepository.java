@@ -133,6 +133,9 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 			       CASE WHEN t.task_key = 'LOAD_ETF_HOLDINGS' THEN t.unsupported_records END AS unsupported_records,
 			       t.failed_records, t.skip_reason, t.outcome_reason,
 			       a.attempt_id, a.quality_diagnostics::text AS quality_diagnostics,
+			       a.started_at, a.finished_at, a.exit_code,
+			       (t.completeness ->> 'expected')::bigint AS completeness_expected,
+			       (t.completeness ->> 'received')::bigint AS completeness_received,
 			       (a.execution_status = 'SUCCEEDED' AND a.exit_code = 0
 			        AND NOT EXISTS (SELECT 1 FROM ops_task_attempt live
 			                        WHERE live.expected_task_id = t.expected_task_id
@@ -260,7 +263,12 @@ public class JdbcPipelineStatusRepository implements PipelineStatusRepository {
 						rs.getString("skip_reason"),
 						rs.getString("outcome_reason"),
 						rs.getBoolean("running"), parseQualityDiagnostics(rs),
-						rs.getBoolean("quality_evidence_current"), rs.getBoolean("completeness_gap")));
+						rs.getBoolean("quality_evidence_current"), rs.getBoolean("completeness_gap"),
+						rs.getObject("started_at", OffsetDateTime.class),
+						rs.getObject("finished_at", OffsetDateTime.class),
+						nullableInt(rs, "exit_code"),
+						nullableLong(rs, "completeness_expected"),
+						nullableLong(rs, "completeness_received")));
 			}
 		}, days);
 		return headers.entrySet().stream()

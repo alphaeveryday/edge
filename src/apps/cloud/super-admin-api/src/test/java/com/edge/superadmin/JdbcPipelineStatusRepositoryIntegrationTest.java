@@ -531,12 +531,27 @@ class JdbcPipelineStatusRepositoryIntegrationTest extends CloudPostgresIntegrati
 		assertThat(cell.qualityDiagnostics().path("metrics").path("anchorless").asInt()).isEqualTo(24);
 		assertThat(com.edge.superadmin.dto.SourceGridResponse.CellResponse.from(cell).qualityAssessment().status()).isEqualTo("WITHIN_LIMITS");
 
+		// 실행 추이 축(ALPHA-1284) — 지목된 시도의 시각·종료 코드가 실리고, 완전성 축이 없는 동안
+		// 그 숫자는 0 이 아니라 null 이다.
+		assertThat(cell.exitCode()).isZero();
+		assertThat(cell.startedAt()).isNotNull();
+		assertThat(cell.finishedAt()).isNotNull();
+		assertThat(cell.completenessExpected()).isNull();
+		assertThat(cell.completenessReceived()).isNull();
+
 		setCompleteness("quality-task", "{\"expected\":300,\"received\":296,\"missing\":4}");
 		assertThat(repository.grid(30).getFirst().tasks().getFirst().completenessGap()).isTrue();
+		assertThat(repository.grid(30).getFirst().tasks().getFirst().completenessExpected()).isEqualTo(300L);
+		assertThat(repository.grid(30).getFirst().tasks().getFirst().completenessReceived()).isEqualTo(296L);
 		insertAttempt("quality-retry", "quality-task", "arn:aws:ecs:task/quality2", "RUNNING", null, daysAgo(0));
 		assertThat(repository.grid(30).getFirst().tasks().getFirst().qualityEvidenceCurrent()).isFalse();
 		jdbc.update("UPDATE ops_expected_task SET current_attempt_id=NULL WHERE expected_task_id='quality-task'");
 		assertThat(repository.grid(30).getFirst().tasks().getFirst().qualityDiagnostics()).isNull();
+		// 지목된 시도가 없으면 실행 기록도 없다 — 다른 시도의 값을 대신 싣지 않는다.
+		var unpointed = repository.grid(30).getFirst().tasks().getFirst();
+		assertThat(unpointed.exitCode()).isNull();
+		assertThat(unpointed.startedAt()).isNull();
+		assertThat(unpointed.finishedAt()).isNull();
 	}
 
 	@Test
