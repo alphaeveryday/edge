@@ -24,9 +24,25 @@ def test_amounts_and_score_are_computed_and_current_input_is_not_the_recommendat
     assert plan['allocations'][0]['amount_krw'] == '500001'
     assert plan['evaluation']['overall'] == 4
     assert result['current_evaluation']['overall'] == 3.5
-    assert [a['action'] for a in plan['actions']] == ['줄이기', '새로 담기', '새로 담기', '새로 담기']
+    assert [a['action'] for a in plan['actions']] == ['현금 투입', '새로 담기', '새로 담기', '새로 담기']
     assert result['insights'][0]['title'] == '지금 가장 먼저 판단할 것'
     assert plan['expected_return_1y'] is None and plan['historical_performance'] is None
+
+
+def test_unchanged_percentage_does_not_hide_a_required_top_up():
+    from types import SimpleNamespace
+    request = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': 500000} for key in ['US:VOO', 'US:QQQ']],
+                            horizon='10년 이상', question='추가 100만원')
+    raw = final_payload()
+    raw['recommendation']['allocations'] = [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': weight}
+        for key, weight in [('US:VOO', 50), ('US:QQQ', 30), ('US:VTI', 20)]]
+    decision = SimpleNamespace(kind='rebalance', funding_text='추가 100만원', constraints=[])
+    plan = publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, decision)['recommendation']
+    voo = next(action for action in plan['actions'] if action['instrument_id'] == 'US:VOO')
+    assert voo['before_pct'] == voo['after_pct'] == 50
+    assert voo['buy_krw'] == '500000'
+    assert voo['action'] == '추가 매수'
+    assert plan['total_krw'] == '2000000'
 
 
 @pytest.mark.parametrize('scores', [None, {'leadership': 4, 'profitability': 4, 'stability': 3.5}])

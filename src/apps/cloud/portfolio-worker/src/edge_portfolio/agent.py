@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from decimal import Decimal
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
+from .execution import execution_tool, TOOL as EXECUTION_TOOL
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -109,6 +111,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     optimizer = Optimizer(market, request)
     decision = Decision()
     checks = []
+    execution_rejection = None
+    execution_failures = {}
+    execution_feasible = set()
 
     def checkpoint():
         if on_checkpoint:
@@ -152,7 +157,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raise ValueError("MODEL_CONTEXT_BUDGET")
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL],
                         "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
@@ -179,7 +184,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if message.get("tool_calls"):
                     for call in message["tool_calls"]:
                         function = call["function"]
-                        tool = function['name'] if function['name'] in {'search_etfs', 'search_sources', 'fetch_source', 'optimize_portfolios', 'read_portfolio_history', 'read_etf_outlook'} else 'unknown'
+                        tool = function['name'] if function['name'] in {'search_etfs', 'search_sources', 'fetch_source', 'optimize_portfolios', 'read_portfolio_history', 'read_etf_outlook', 'calculate_rebalance'} else 'unknown'
                         emit('tool_started', role=role, tool=tool)
                         try:
                             args = json.loads(function['arguments'])
@@ -200,6 +205,23 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     answer = search_etfs(args.get('query'))
                                 except ValueError as error:
                                     answer = {'status': 'rejected', 'reason': str(error)}
+                        elif function['name'] == 'calculate_rebalance':
+                            try:
+                                answer = execution_tool(request, args, decision, market.catalog)
+                                target = {}
+                                for row in args['allocations']:
+                                    target[row['instrument_id']] = target.get(row['instrument_id'], Decimal(0)) + Decimal(str(row['weight_pct']))
+                                for candidate in (optimizer.result or {}).get('candidates', []):
+                                    expected = {row['instrument_id']: row['weight_pct'] for row in candidate.get('allocations', [])}
+                                    if target == expected:
+                                        if answer['status'] in {'ready', 'conditional'}:
+                                            execution_feasible.add(candidate['candidate_id'])
+                                        if answer['status'] == 'infeasible' and candidate['candidate_id'] not in execution_feasible:
+                                            execution_failures[candidate['candidate_id']] = answer
+                                        else:
+                                            execution_failures.pop(candidate['candidate_id'], None)
+                            except ValueError as error:
+                                answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'optimize_portfolios':
                             try:
                                 answer = await optimizer.tool(args)
@@ -234,9 +256,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         reason = answer.get('reason') if isinstance(answer, dict) else None
                         codes = {'INVALID_TOOL_ARGUMENT', 'TOOL_LIMIT', 'TOOL_NOT_ALLOWED', 'EXA_FAILED', 'EMPTY_SOURCE',
                                  'CURRENT_WEIGHTS_REQUIRED', 'COMPARISON_DATA_UNAVAILABLE', 'NO_COMMON_PRICE_HISTORY',
-                                 'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE'}
+                                 'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE',
+                                 'CURRENT_AMOUNTS_REQUIRED', 'INVESTMENT_AMOUNT_REQUIRED', 'ADDITIONAL_FUNDING_REQUIRED',
+                                 'NO_SELL_ZERO_TARGET', 'NO_SELL_VIOLATION', 'ACCOUNT_OPENING_REQUIRED',
+                                 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED'}
+                        reason_codes = sorted({value.split(':')[0] for value in answer.get('reasons', []) if isinstance(value, str) and value.split(':')[0] in codes}) if isinstance(answer, dict) else []
                         emit('tool_finished', role=role, tool=tool,
-                             status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected'} else 'unknown',
+                             status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected', 'ready', 'conditional', 'needs_input', 'infeasible'} else 'unknown',
+                             reason_codes=reason_codes,
                              code=reason if reason in codes else 'TOOL_REJECTED' if status in {'rejected', 'unavailable'} else None,
                              counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
                         checkpoint()
@@ -246,6 +273,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
+                        execution_rejection = None
                         selected = optimizer.validate(final)
                         if final.recommendation:
                             checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
@@ -256,11 +284,20 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if final.recommendation and any(check['status'] != 'pass' for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
                         sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
-                        published = publish_recommendation(final, request, metrics, evidence.sources)
+                        published = publish_recommendation(final, request, metrics, evidence.sources, decision)
+                        if final.recommendation and published['recommendation']['execution']['status'] == 'infeasible':
+                            execution_rejection = published['recommendation']['execution']
+                            if final.selected_candidate_id not in execution_feasible:
+                                execution_failures[final.selected_candidate_id] = execution_rejection
+                            raise ValueError('EXECUTION_INFEASIBLE: choose another candidate or account placement: ' + json.dumps(execution_rejection['reasons']))
                         published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
                         if not selected and optimizer.result['candidates']:
+                            if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
+                                execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
                             blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
-                            published['optimization']['reason'] = 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD' if checks else 'RATING_BELOW_MINIMUM'
+                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD' if checks else 'RATING_BELOW_MINIMUM'
+                            if execution_rejection:
+                                published['execution_rejection'] = execution_rejection
                         if selected:
                             await enrich_report(published, final, market, evidence.sources)
                     else:

@@ -15,6 +15,42 @@ const report = {
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
 
+test('rebalance instructions show cash amounts and hide transactions when execution is infeasible', async ({ page }) => {
+  const execution = { status: 'ready', reasons: [], assumptions: ['입력 평가금액 기준이에요.'],
+    additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null,
+    accounts: [{ account: '일반 계좌', deposit_krw: '0', withdrawal_krw: '0' }],
+    rows: [{ instrument_id: 'US:QQQ', name: 'Invesco QQQ', account: '일반 계좌', before_krw: '0',
+      target_krw: '600000', buy_krw: '600000', sell_krw: '0', cash_used_krw: '0' },
+      { instrument_id: 'CASH:KRW', name: '현금', account: '일반 계좌', before_krw: '200000',
+        target_krw: '0', buy_krw: '0', sell_krw: '0', cash_used_krw: '200000' }] };
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'execution'));
+  await page.route('**/api/portfolio/analyses/execution', route => route.fulfill({ json: {
+    id: 'execution', state: 'succeeded', result: { ...report, recommendation: { ...report.recommendation, execution } }
+  } }));
+  await page.goto('/portfolio/');
+  const table = page.locator('.execution-plan table');
+  await expect(table.getByRole('columnheader', { name: '매수', exact: true })).toBeVisible();
+  await expect(table.getByRole('cell', { name: '600,000원', exact: true })).toHaveCount(2);
+  await expect(table.getByRole('columnheader', { name: '현금 투입', exact: true })).toBeVisible();
+  await expect(table.getByRole('row').filter({ hasText: '현금 ·' }).getByRole('cell').last()).toHaveText('200,000원');
+  execution.status = 'infeasible';
+  execution.reasons = ['NO_SELL_ZERO_TARGET'];
+  await page.reload();
+  await expect(page.locator('.execution-plan')).toContainText('이미 보유한 종목의 목표를 0%로 만들려면 매도가 필요해요.');
+  await expect(page.locator('.execution-plan table')).toHaveCount(0);
+});
+
+test('an execution rejection explains funding or account constraints without blaming ratings', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'blocked-execution'));
+  await page.route('**/api/portfolio/analyses/blocked-execution', route => route.fulfill({ json: {
+    id: 'blocked-execution', state: 'succeeded', result: { ...report, recommendation: null,
+      optimization: { status: 'available', reason: 'EXECUTION_INFEASIBLE' } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.ans:not(.lead)')).toContainText('매도·추가 자금 또는 계좌 한도를 만족하는 실행 방법');
+  await expect(page.locator('.ans:not(.lead)')).not.toContainText('종합 4점');
+});
+
 test('a newly listed ETF displays both series over their actual common period', async ({ page }) => {
   const history = { ...report.recommendation.historical_performance,
     basis: '2026-07-07 ~ 2026-10-09 · 공통 자료 기간 · 100만 원을 넣었다면 (원)',

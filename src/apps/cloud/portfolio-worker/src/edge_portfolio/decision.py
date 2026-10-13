@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from .contracts import Section, StrictModel
+from .execution import plan_execution
 
 
 class Constraint(StrictModel):
@@ -93,6 +94,18 @@ def check_constraints(decision, rows, request, catalog):
         elif rule.kind == 'accounts':
             passed = all(row['account'] in rule.accounts for row in rows) if all('account' in row for row in rows) else None
         elif rule.kind == 'no_sell':
+            if rows and all('account' in row for row in rows) and request.input_mode == 'amount':
+                plan = plan_execution(request, rows, decision)
+                protected = [h for h in request.holdings if h.kind != 'cash' and (not rule.instrument_ids or h.instrument_id in rule.instrument_ids)]
+                if not protected:
+                    passed = True
+                elif plan['rows']:
+                    passed = all(Decimal(row['sell_krw']) == 0 for row in plan['rows'] if not rule.instrument_ids or row['instrument_id'] in rule.instrument_ids)
+                else:
+                    passed = False if plan['status'] == 'infeasible' else None
+                checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source,
+                               'status': 'unknown' if passed is None else 'pass' if passed else 'fail'})
+                continue
             total = sum(h.amount_krw or 0 for h in request.holdings)
             if request.input_mode != 'names' and total and all(h.instrument_id for h in request.holdings):
                 current = {}
