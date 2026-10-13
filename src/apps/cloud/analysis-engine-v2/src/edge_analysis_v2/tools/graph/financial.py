@@ -16,7 +16,9 @@ def one_per_figure(rows, identity, version):
     kept=[]
     for same in groups.values():
         same.sort(key=lambda r:str(r['properties'].get(version) or ''))
-        if len({str(r['properties'].get('value')) for r in same})==1:kept.append({**same[-1],'stored_versions':len(same)})
+        # "10" and "10.0" are one value; a value that is not a number is compared as written.
+        written=lambda r:(lambda v:str(r['properties'].get('value')) if v is None else v)(number(r['properties'].get('value')))
+        if len({written(r) for r in same})==1:kept.append({**same[-1],'stored_versions':len(same)})
         else:kept.extend({**r,'stored_versions':len(same),'versions_disagree':True} for r in same)
     return kept
 
@@ -31,7 +33,6 @@ class FinancialTools:
         tools.register('get_macro_observations',{'start_date':STRING,'end_date':STRING,'series_ids':{'type':'array','items':STRING},'query':{'type':'string'},'limit':LIMIT},
             ['start_date','end_date'],self.macro,sources=['MacroObservation'])
         tools.register('compare_two_figures',{'dataset_ref':RESULT_REF,'earlier_id':STRING,'later_id':STRING},['dataset_ref','earlier_id','later_id'],self.compare,sources=['저장한 재무·매크로 관측'])
-        tools.register('derive_fourth_quarter',{'dataset_ref':RESULT_REF,'annual_id':STRING,'nine_month_id':STRING},['dataset_ref','annual_id','nine_month_id'],self.derive,sources=['저장한 재무 관측'])
         tools.register('estimate_contract_profit',{'event_ref':REF,'company_ref':REF,'years_low':{'type':'number','exclusiveMinimum':0,'maximum':100},'years_high':{'type':'number','exclusiveMinimum':0,'maximum':100},
              'margin_low':{'type':'number','minimum':-1,'maximum':1},'margin_high':{'type':'number','minimum':-1,'maximum':1},'company_share':{'type':'number','exclusiveMinimum':0,'maximum':1},
              'etf_ref':REF,'holdings_date':STRING,'holding_weight':{'type':'number','minimum':0,'maximum':1}},
@@ -70,20 +71,35 @@ class FinancialTools:
         # The contract of one company was scaled against the accounts of another, and of its customer.
         if roles and mine not in roles:raise ValueError('company_ref is not a participant of this event. Pass the company that earns the contract, from the participants of the event row.')
         if roles.get(mine)=='CUSTOMER':raise ValueError('company_ref is the customer of this contract. Pass the company that earns it.')
-        # Two contracts of one company on one day are two events of one type and date: a report that names other
-        # counterparties than the event asked for is another contract, and its amount and period are not this one's.
+        # Two contracts of one company on one day are two events of one type and date, and the amount and period of
+        # one are not the other's. A report is this contract when the data puts it in the thread of the event asked
+        # for, or when it names one of its counterparties. A report that shows neither is not read: a missing
+        # counterparty link is not a sign of the same contract.
+        refs=[{'object_type':'SourceEvent','object_id':r['event']['object_id']} for r in reports]
+        thread={r['source']['object_id']:r['target']['object_id'] for r in self.graph.linked(refs,'SourceEvent_InEventThread_EventThread')
+            if r['target'].get('object_type')=='EventThread'}
+        same_thread=lambda r:thread.get(event_ref['object_id']) is not None and thread.get(r['event']['object_id'])==thread[event_ref['object_id']]
+        other_thread=lambda r:None not in (thread.get(event_ref['object_id']),thread.get(r['event']['object_id'])) and not same_thread(r)
         others=set(roles)-{mine};total=len(reports)
-        reports=[r for r in reports if r is asked or not others or not set(parties(r))-{mine} or others&set(parties(r))]
-        # A stored amount that is not a finite number is an amount the report does not state.
-        feature=lambda code,unit:[v for v in (number(m['properties'].get('value')) for report in reports for m in report['features']
-            if m['properties'].get('metricCode')==code and m['properties'].get('unit')==unit) if v is not None]
-        values=feature('CONTRACT_VALUE','KRW')
+        reports=[r for r in reports if r is asked or same_thread(r) or (not other_thread(r) and others&set(parties(r)))]
+        # A stored amount that is not a finite number, or that the pipeline marks as not read from the text
+        # (the same marks the event filters treat as unknown), is an amount the report does not state.
+        read=lambda m:m['properties'].get('valueSource')!='UNRESOLVED' and m['properties'].get('parseStatus') in (None,'ok')
+        measures=lambda code,unit:[m for report in reports for m in report['features']
+            if m['properties'].get('metricCode')==code and m['properties'].get('unit')==unit and read(m) and number(m['properties'].get('value')) is not None]
+        feature=lambda code,unit:[number(m['properties']['value']) for m in measures(code,unit)]
+        # An amount a year is not a contract total: 100억 a year over five years came back as 20억 a year.
+        amounts=[m for m in measures('CONTRACT_VALUE','KRW') if m['properties'].get('periodBasis')!='ANNUAL']
+        values=[number(m['properties']['value']) for m in amounts]
+        if not values and len(amounts)<len(measures('CONTRACT_VALUE','KRW')):
+            yearly_amounts=sorted({number(m['properties']['value']) for m in measures('CONTRACT_VALUE','KRW')})
+            raise ValueError('The reports of this event state an amount a year ('+', '.join(won_text(v) for v in yearly_amounts)+'), not a contract total, so there is no total to spread over a period. '
+                'That amount is the yearly revenue as reported: compare it with the last full-year revenue from get_financial_observations.')
         if not values:
             raise ValueError('No report of this event states a won contract value, so there is nothing to scale. '
                 'Pick an event row whose amounts list a won value (get_event_timeline lists the amounts of an event).')
         # The filing's own amount when a report carries it (news rounds 6,410억 9,538만원 to 6,400억원); else the amount most reports give.
-        filed=[v for v in (number(m['properties'].get('value')) for report in reports for m in report['features'] if m['properties'].get('metricCode')=='CONTRACT_VALUE'
-            and m['properties'].get('unit')=='KRW' and m['properties'].get('valueSource')=='DART') if v is not None]
+        filed=[number(m['properties']['value']) for m in amounts if m['properties'].get('valueSource')=='DART']
         value=max(set(filed or values),key=(filed or values).count)
         other_values=sorted(set(values)-{value})
         days=set(feature('CONTRACT_DURATION','DAY'))
@@ -98,12 +114,13 @@ class FinancialTools:
             selection=self.tools.holdings(etf_ref,day,'latest_on_or_before')[1]['selection']
             _,mapping=self.tools.actors(selection)
             issued={m['security']['object_id'] for m in mapping if m['actor']['object_id']==company_ref['object_id']}
-            weights=[w for w in (number(i.get('weight_ratio')) for i in selection['items'] if i['object_id'] in issued) if w is not None]
-            holding_weight=sum(weights,Decimal(0)) if weights else None
+            weights=[number(i.get('weight_ratio')) for i in selection['items'] if i['object_id'] in issued]
+            # Common and preferred shares held at 10% and an unknown weight are not a 10% holding of the company.
+            holding_weight=sum(weights,Decimal(0)) if weights and None not in weights else None
             # Left out without a word, a fund that does not hold the company read the same as one whose weight is unknown.
             if holding_weight is None:
-                weight_missing=(f'The fund holds no security issued by this company in its holdings on or before {day}' if not issued else
-                    f'The fund holds the company on or before {day}, but no weight is stored for it')+', so no fund-weighted figure is given.'
+                weight_missing=(f'The fund holds no security issued by this company in its holdings on or before {day}' if not weights else
+                    f'The fund holds the company on or before {day}, but a weight is not stored for every security of it')+', so no fund-weighted figure is given.'
         low,high=(Decimal(str(y)) if y is not None else stored_years for y in (years_low,years_high))
         if low is None or high is None:
             raise ValueError('No contract period is stored for this report. Pass years_low and years_high: your assumption of how many years the amount is recognised over.')
@@ -193,7 +210,8 @@ class FinancialTools:
             kept=one_per_figure([r['target'] for r in rows],('corpCode','fiscalYear','fiscalPeriod','metric','periodKind','fsBasis','derivation'),'receivedAt')
             source={r['target']['object_id']:r['source'] for r in rows}
             rows=[{'target':target,'source':source[target['object_id']]} for target in kept]
-            items=[{**({'value_text':won_text(row['target']['properties'].get('value'))} if row['target']['properties'].get('unit')=='KRW' else {}),
+            items=[{**({'value_text':won_text(row['target']['properties']['value'])} if row['target']['properties'].get('unit')=='KRW'
+                    and number(row['target']['properties'].get('value')) is not None else {}),
                 **row['target'],'company_ref':row['source']} for row in rows]
         elif kind=='segment':
             if fiscal_years or metrics or fs_basis:raise ValueError('Segment fiscal/accounting dimensions are not mapped; these filters cannot be honored')
@@ -228,10 +246,16 @@ class FinancialTools:
             # Series are named in English ("USD/KRW exchange rate"), so a Korean word matched nothing and read as no data.
             stored,_=self.series()
             known={row['series_id'] for row in stored['items']}
-            if query or any(s not in known for s in series_ids or []):
+            named=[row for row in stored['items'] if query and (query in row['series_id'] or query in (row['name'] or ''))]
+            if (query and not named) or any(s not in known for s in series_ids or []):
                 raise ValueError('No macro series matches '+repr(query or series_ids)+'. Stored series: '
                     +'; '.join(f"{row['series_id']} ({row['name']}, {row['first_date']}..{row['last_date']})" for row in stored['items'])
                     +'. This is a wrong argument, not missing data; repeat with series_ids from this list.')
+            # The series is stored and the range holds none of it: a weekend, or days before the series begins.
+            asked=[row for row in stored['items'] if row in named or row['series_id'] in (series_ids or [])]
+            return self.tools.result([],scope={'dataset_kind':'macro_observations','start_date':start_date,'end_date':end_date,
+                'no_observation_in_range':'These series are stored but have no observation between the two dates: '
+                    +'; '.join(f"{row['series_id']} ({row['first_date']}..{row['last_date']})" for row in asked)})
         items=one_per_figure(items,('seriesId','observationDate'),'availableAt')
         return self.tools.result(items,scope={'dataset_kind':'macro_observations','start_date':start_date,'end_date':end_date},limit=limit,table='ids')
 
@@ -265,7 +289,9 @@ class FinancialTools:
         a,data=self.observation(dataset_ref,earlier_id);b,_=self.observation(dataset_ref,later_id)
         if a['object_type']!=b['object_type']:raise ValueError('Observation types differ')
         if a['object_type']=='FinancialMetric':
-            keys=['corpCode','metric','unit','fsBasis','periodKind','derivation']
+            # How a figure was arrived at is not a dimension of it: asking for the same derivation refused every
+            # change from a reported third quarter to the fourth quarter, which is stored as full year minus nine months.
+            keys=['corpCode','metric','unit','fsBasis','periodKind']
             # Three-month and six-month cumulative revenue are different durations.
             if a['properties'].get('periodKind') in ('CUMULATIVE','YTD'):
                 keys.append('fiscalPeriod')
@@ -278,21 +304,9 @@ class FinancialTools:
         return self.tools.result([{'earlier_id':earlier_id,'later_id':later_id,'difference':str(y-x),
             **({'difference_text':won_text(y-x)} if a['properties']['unit']=='KRW' else {}),
             'change_ratio':str(y/x-1) if x>0 else None,'ratio_reason':None if x>0 else 'nonpositive_denominator',
+            **({'derivations':[a['properties'].get('derivation'),b['properties'].get('derivation')]}
+                if a['properties'].get('derivation')!=b['properties'].get('derivation') else {}),
             'unit':a['properties']['unit']}],selection=data.get('selection'),scope={'dataset_kind':'observation_comparison','input_ref':dataset_ref})
-
-    def derive(self,dataset_ref,annual_id,nine_month_id):
-        a,data=self.observation(dataset_ref,annual_id);b,_=self.observation(dataset_ref,nine_month_id)
-        if a['object_type']!='FinancialMetric' or b['object_type']!='FinancialMetric':raise ValueError('FinancialMetric inputs required')
-        p,q=a['properties'],b['properties']
-        if p.get('metric') not in ('revenue','operating_income','net_income','REVENUE','OPERATING_INCOME','NET_INCOME'):
-            raise ValueError('Only verified additive financial flow metrics may be differenced')
-        if p.get('fiscalPeriod')!='FY' or q.get('fiscalPeriod') not in ('9M','Q3') or q.get('periodKind') not in ('YTD','CUMULATIVE'):
-            raise ValueError('Verified full-year and cumulative nine-month periods required')
-        x,y=self.comparable(p,q,['corpCode','metric','unit','fsBasis','fiscalYear'])
-        if not p.get('rceptNo') or p.get('rceptNo')!=q.get('rceptNo'):
-            raise ValueError('Cross-report revision compatibility is not established; choose compatible inputs')
-        return self.tools.result([{'value':str(x-y),**({'value_text':won_text(x-y)} if p['unit']=='KRW' else {}),'metric':p['metric'],'unit':p['unit'],'fiscal_period':'Q4',
-            'formula':'FY - 9M','input_ids':[annual_id,nine_month_id]}],selection=data.get('selection'),scope={'dataset_kind':'derived_financial','input_ref':dataset_ref})
 
     def expectation(self,actual_ref,actual_id,expectation_ref,expectation_id):
         a,data=self.observation(actual_ref,actual_id);e,expected=self.observation(expectation_ref,expectation_id)

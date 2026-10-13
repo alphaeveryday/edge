@@ -193,7 +193,8 @@ TOOLS = {
                    'and fsBasis (CFS consolidated, OFS separate). value_text is the amount as written. Say which period and basis the answer uses. '
                    'There are no analyst consensus figures and no segment figures in this data.',
         'prerequisite': 'Company or security ids from a search, or a get_etf_holdings result as targets.',
-        'follow_up': 'compare_two_figures for a change between two rows. derive_fourth_quarter for a fourth quarter.',
+        'follow_up': 'compare_two_figures for a change between two rows. A fourth quarter alone is a stored row: fiscalPeriod Q4, periodKind QUARTER, '
+                     'derivation FY_MINUS_9M, which says it was calculated as the full year minus nine months and not reported.',
         'args': {'targets': TARGETS + ' A security is mapped to its issuing company.',
                  'kind': 'actual for reported figures. guidance returns reported events, not numbers. consensus and segment return nothing in this data.',
                  'fiscal_years': 'Years to read, as [2026].', 'metrics': 'revenue, operating_income, eps_basic, eps_diluted, bps, bps_total_shares.',
@@ -201,14 +202,9 @@ TOOLS = {
     'compare_two_figures': {
         'summary': 'Calculate the difference and the change ratio between two figures of one financial or macro result.',
         'returns': 'One row with the difference as written and change_ratio. It refuses two figures that differ in company, metric, unit, accounting basis or period kind, '
-                   'and says which one differs.',
+                   'and says which one differs. derivations is given when one figure was reported and the other calculated: say so.',
         'prerequisite': 'A get_financial_observations or get_macro_observations result. The ids are the object_id of two rows.',
         'args': {'dataset_ref': RESULT, 'earlier_id': 'object_id of the earlier figure.', 'later_id': 'object_id of the later figure.'}},
-    'derive_fourth_quarter': {
-        'summary': 'Calculate a fourth-quarter figure as the full year minus the first nine months.',
-        'returns': 'One row with the derived value. Only for revenue and income, never for EPS or balances.',
-        'prerequisite': 'A get_financial_observations result with the FY row and the Q3 CUMULATIVE row of the same company, year and basis.',
-        'args': {'dataset_ref': RESULT, 'annual_id': 'object_id of the FY row.', 'nine_month_id': 'object_id of the Q3 CUMULATIVE row.'}},
     'compare_actual_to_expectation': {
         'summary': 'Compare a reported figure with an expectation published before it.',
         'returns': 'The difference, only when both figures have the same metric, period, unit and accounting basis. '

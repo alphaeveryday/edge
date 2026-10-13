@@ -57,12 +57,6 @@ class FinancialTests(unittest.TestCase):
         result,_=self.tools.financial.compare(ref,'a','b')
         self.assertEqual(result['items'][0]['change_ratio'],'1')
 
-    def test_eps_and_unmatched_revision_are_not_derived_as_fourth_quarter(self):
-        for metric in ('EPS','revenue'):
-            ref=self.save([self.obs('a','100',metric=metric,fiscalPeriod='FY',periodKind='YTD',rceptNo='r1'),
-                self.obs('b','60',metric=metric,fiscalPeriod='Q3',periodKind='YTD',rceptNo='r2')])
-            with self.assertRaises(ValueError):self.tools.financial.derive(ref,'a','b')
-
     def test_later_expectation_and_untyped_news_value_are_rejected(self):
         actual=self.save([self.obs('actual','120')])
         expected=self.save([self.obs('estimate','100',availableAt='2026-08-02T00:00:00+00:00')],'expected_financial_observations')
@@ -205,9 +199,15 @@ def test_another_contract_of_the_same_day_does_not_lend_its_amount():
                {'event': {**event, 'object_id': 'other'}, 'features': [filed], 'participants': [mine, party('Organization', 'buyer-b', 'CUSTOMER')]},
                {'event': {**event, 'object_id': 'news'}, 'features': [], 'participants': [mine]}]
     tool.tools.events.enrich = lambda found: reports
+    tool_metrics = tool.graph.linked
     (row,), _ = tool.impact(*REFS)
-    assert row['confirmed_inputs']['contract_value'] == '6,000억원' and row['confirmed_inputs']['reports_of_this_event'] == 2
-    assert row['same_day_reports_of_other_contracts_not_used'] == 1 and 'other_reported_amounts' not in row
+    # WHY: the report that names no counterparty is not shown to be this contract either; a missing link is not a match.
+    assert row['confirmed_inputs']['contract_value'] == '6,000억원' and row['confirmed_inputs']['reports_of_this_event'] == 1
+    assert row['same_day_reports_of_other_contracts_not_used'] == 2 and 'other_reported_amounts' not in row
+    # A report the data puts in the same thread is this contract, whatever it names.
+    tool.graph.linked = lambda refs, link, *a, **k: [{'source': {'object_id': i}, 'target': {'object_type': 'EventThread', 'object_id': 't'}} for i in ('e', 'news')] if 'EventThread' in link else tool_metrics(refs, link, *a, **k)
+    (row,), _ = tool.impact(*REFS)
+    assert row['confirmed_inputs']['reports_of_this_event'] == 2 and row['same_day_reports_of_other_contracts_not_used'] == 1
 
 
 def test_a_stored_amount_that_is_not_a_finite_number_is_an_amount_not_stated():
@@ -231,10 +231,97 @@ def test_the_fund_weight_is_read_on_the_korean_day_and_its_absence_is_said():
     (absent,), _ = contract_tool(holdings=[{'object_id': 's', 'issuer': 'x', 'weight_ratio': '0.25'}])[0].impact(*REFS, etf_ref=fund)
     assert 'holds no security issued by this company' in absent['fund_weight_not_found'] and 'weighted_by_fund_holding' not in absent['estimate']
     (unknown,), _ = contract_tool(holdings=[{'object_id': 's', 'issuer': 'c', 'weight_ratio': None}])[0].impact(*REFS, etf_ref=fund)
-    assert 'no weight is stored' in unknown['fund_weight_not_found']
+    assert 'not stored for every security' in unknown['fund_weight_not_found']
 
 
 def test_a_weight_the_caller_passes_is_an_assumption_and_not_a_stored_input():
     # WHY: a weight passed by hand was listed under confirmed_inputs, which the description calls stored.
     (row,), _ = contract_tool()[0].impact(*REFS, holding_weight=0.25)
     assert 'holding_weight' not in row['confirmed_inputs'] and 'supplied by the caller' in row['assumptions']['holding_weight']
+
+
+def test_an_amount_a_year_is_not_spread_over_the_contract_period():
+    # WHY: 100억 a year over five years was divided by five and came back as 20억 a year.
+    import pytest
+    tool, _, _, measure, _ = contract_tool()
+    yearly = measure('CONTRACT_VALUE', '10000000000', 'KRW'); yearly['properties']['periodBasis'] = 'ANNUAL'
+    tool.tools.events.enrich = lambda found: [{'event': {'object_id': 'e', 'properties': {}}, 'features': [yearly, measure('CONTRACT_DURATION', '1825', 'DAY')]}]
+    with pytest.raises(ValueError, match='an amount a year \\(100억원\\), not a contract total'):
+        tool.impact(*REFS)
+
+
+def test_an_amount_the_pipeline_did_not_read_from_the_text_is_not_scaled():
+    # WHY: a value left beside parseStatus unit_mismatch or valueSource UNRESOLVED became the confirmed contract value.
+    import pytest
+    for mark in ({'parseStatus': 'unit_mismatch'}, {'valueSource': 'UNRESOLVED'}):
+        tool, _, _, measure, _ = contract_tool()
+        bad = measure('CONTRACT_VALUE', '600000000000', 'KRW'); bad['properties'].update(mark)
+        tool.tools.events.enrich = lambda found, bad=bad: [{'event': {'object_id': 'e', 'properties': {}}, 'features': [bad]}]
+        with pytest.raises(ValueError, match='states a won contract value'):
+            tool.impact(*REFS, years_low=1, years_high=2)
+
+
+def test_a_weight_stored_for_only_some_securities_of_the_company_is_not_its_weight():
+    # WHY: common shares at 10% and preferred shares with no weight were confirmed as a 10% holding.
+    fund = {'object_type': 'ETF', 'object_id': 'f'}
+    held = [{'object_id': 'common', 'issuer': 'c', 'weight_ratio': '0.10'}, {'object_id': 'preferred', 'issuer': 'c', 'weight_ratio': None}]
+    (row,), _ = contract_tool(holdings=held)[0].impact(*REFS, etf_ref=fund)
+    assert 'not stored for every security' in row['fund_weight_not_found'] and 'holding_weight' not in row['confirmed_inputs']
+
+
+def graph_tools():
+    import tempfile
+    directory = tempfile.TemporaryDirectory()
+    return GraphTools(lambda q, p: [], catalog(), directory.name, '2026-10-05T00:00:00+00:00'), directory
+
+
+def test_a_reported_quarter_is_compared_with_the_calculated_fourth_quarter():
+    # WHY: asking for the same derivation refused every change from the third quarter to the fourth.
+    tools, directory = graph_tools()
+    row = lambda identifier, value, **more: {'object_type': 'FinancialMetric', 'object_id': identifier, 'properties': {
+        'corpCode': 'c', 'metric': 'revenue', 'unit': 'KRW', 'fsBasis': 'CFS', 'periodKind': 'QUARTER', 'value': value, **more}}
+    ref = tools.store.commit('fixture', {}, {}, elapsed_ms=0, queries=[], dataset={'selection': None, 'scope': {'dataset_kind': 'financial_observations'}, 'items': [
+        row('q3', '100', fiscalPeriod='Q3', periodEnd='2025-09-30', derivation='REPORTED'),
+        row('q4', '120', fiscalPeriod='Q4', periodEnd='2025-12-31', derivation='FY_MINUS_9M')]})['result']['dataset_ref']
+    result = tools.financial.compare(ref, 'q3', 'q4')[0]['items'][0]
+    assert result['change_ratio'] == '0.2' and result['derivations'] == ['REPORTED', 'FY_MINUS_9M']
+    directory.cleanup()
+
+
+def test_copies_of_one_value_written_two_ways_are_one_figure():
+    # WHY: "10" and "10.0" were kept as two versions that disagree.
+    from edge_analysis_v2.tools.graph.financial import one_per_figure
+    rows = [{'object_id': at, 'properties': {'k': 1, 'value': value, 'receivedAt': at}} for at, value in (('1', '10'), ('2', '10.0'))]
+    (kept,) = one_per_figure(rows, ('k',), 'receivedAt')
+    assert kept['stored_versions'] == 2 and 'versions_disagree' not in kept
+    assert len(one_per_figure([*rows, {'object_id': '3', 'properties': {'k': 1, 'value': '11', 'receivedAt': '3'}}], ('k',), 'receivedAt')) == 3
+
+
+def test_a_figure_that_is_not_a_number_is_returned_as_stored_without_a_written_amount():
+    # WHY: writing "Infinity" or "abc" as an amount raised an error the tool record never saw.
+    from unittest.mock import patch
+    tools, directory = graph_tools()
+    company = {'object_type': 'Company', 'object_id': 'c'}
+    stored = [{'source': company, 'target': {'object_type': 'FinancialMetric', 'object_id': value, 'title': value, 'properties': {'unit': 'KRW', 'value': value, 'metric': 'revenue'}}}
+              for value in ('Infinity', 'abc', '100000000')]
+    with patch.object(tools, 'select', return_value={'items': []}), patch.object(tools, 'actors', return_value=([company], [])), \
+         patch.object(tools.graph, 'linked', return_value=stored):
+        _, dataset = tools.financial.observations({}, 'actual')
+    assert [item.get('value_text') for item in dataset['items']] == [None, None, '1억원']
+    directory.cleanup()
+
+
+def test_a_stored_series_with_no_observation_in_the_range_is_an_empty_range_and_not_a_wrong_argument():
+    # WHY: a weekend asked of a series that exists came back as "no macro series matches, wrong argument".
+    import pytest
+    tools, directory = graph_tools()
+    series = [{'series_id': 'FX.USDKRW', 'name': 'USD/KRW exchange rate', 'first_date': '2020-01-02', 'last_date': '2026-10-02'}]
+    tools.graph.nodes = lambda *a, **k: []
+    tools.financial.series = lambda: ({'items': series}, None)
+    for asked in ({'query': 'USD/KRW'}, {'series_ids': ['FX.USDKRW']}):
+        result, _ = tools.financial.macro('2026-10-03', '2026-10-04', **asked)
+        assert result['total_rows'] == 0 and 'FX.USDKRW (2020-01-02..2026-10-02)' in result['data_scope']['no_observation_in_range']
+    for asked in ({'query': '환율'}, {'series_ids': ['NOPE']}):
+        with pytest.raises(ValueError, match='wrong argument, not missing data'):
+            tools.financial.macro('2026-10-03', '2026-10-04', **asked)
+    directory.cleanup()
