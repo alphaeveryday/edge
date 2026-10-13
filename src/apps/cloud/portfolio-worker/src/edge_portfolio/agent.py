@@ -159,6 +159,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     def checkpoint():
         if on_checkpoint:
             on_checkpoint({**accepted_report, 'sections': accepted_report.get('sections', dict(sections)), 'sources': list(evidence.sources), 'metrics': metrics,
+                           **({'scenarios': deepcopy(scenario_result)} if scenario_result is not None else {}),
                            'optimization': accepted_report.get('optimization', optimizer.result), 'as_of': context['as_of'],
                            'decision': decision.model_dump(mode='json'), 'input': request.model_dump(mode='json')})
 

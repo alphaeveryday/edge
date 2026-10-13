@@ -48,7 +48,7 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'preferences': {'contribution': '매월 10만원'}},
         'decision': {'funding_text': '매월 10만원'}, 'sources': Evidence.sources}
-    stages, calculated = [], []
+    stages, calculated, checkpoints = [], [], []
     async def model(payload):
         if stages[-1] == 'question':
             return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'], 'decision': {'kind': 'scenario'}})}}]}
@@ -64,7 +64,8 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
         return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
             'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': json.dumps({'annual_returns': [0], 'years': [5]})}}]}}]}
     with pytest.raises(RuntimeError, match='ZERO_CONTRIBUTION_CHECKED'):
-        await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+        await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append, on_checkpoint=checkpoints.append)
+    assert checkpoints[-1]['scenarios']['rows'][0]['future_krw'] == '1000000'
 
 
 @pytest.mark.parametrize('supplied', [False, True])
@@ -167,7 +168,7 @@ def test_projection_horizon_does_not_cancel_a_separate_monthly_commitment():
     for rate in ['5', '3.5', '-2.5']:
         request.funding_questions = ['', f'연 {rate}% 수익률을 가정하면 10년 뒤 얼마인가요?']
         assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
-    for question in ['원금은 5년 뒤 얼마인가요?', '현재 자산은 5년 뒤 얼마가 되나요?', '현재 자산은 연 3% 수익률로 5년 뒤 얼마가 되나요?']:
+    for question in ['원금은 5년 뒤 얼마인가요?', '현재 자산은 5년 뒤 얼마가 되나요?', '현재 자산은 연 3% 수익률로 5년 뒤 얼마가 되나요?', '연 3%로 5년 뒤 얼마인가요?']:
         request.funding_questions = ['', question]
         assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
     request.funding_questions = ['', '납입은 3개월만 할게요. 5년 뒤 금액을 계산해 주세요.']

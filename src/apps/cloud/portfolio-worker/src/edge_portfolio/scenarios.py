@@ -27,6 +27,8 @@ def stated_principal(text):
     """Accept one unconditional standalone statement of total current principal."""
     if any(word in text for word in ('취소', '철회', '미정', '아니', '정도', '대략', '정정')):
         return None
+    if re.search(r'조건|경우|승인|대출|후에만|전에는|(?:들어오|입금되|받으|가능하)면', text):
+        return None  # A qualifying sentence may make the stated amount contingent.
     values = []
     statements = 0
     clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', text)
