@@ -25,7 +25,7 @@ variable "spa" {
 }
 
 variable "redirect_www" {
-  description = "true 면 www.<domain_name> 을 대체 도메인과 Route53 레코드로 더하고, www 로 온 요청을 https://<domain_name> 으로 301 이동시킨다. 인증서가 www.<domain_name> 을 포함해야 한다. spa 와 함께 켤 수 없다."
+  description = "true 면 www.<domain_name> 을 대체 도메인과 Route53 레코드로 더하고, www 로 온 요청을 https://<domain_name> 으로 영구 이동시킨다(GET·HEAD 301, 그 밖 308). 인증서가 www.<domain_name> 을 포함해야 한다. spa 와 함께 켤 수 없다."
   type        = bool
   default     = false
 }

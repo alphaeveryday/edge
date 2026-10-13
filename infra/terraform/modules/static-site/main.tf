@@ -52,7 +52,7 @@ resource "aws_cloudfront_function" "spa_rewrite" {
 }
 
 # ── www 이동 함수 (redirect_www=true 전용) ──────────────
-# www.<도메인> 으로 온 요청을 https://<도메인> 으로 301 이동시킨다(viewer-request).
+# www.<도메인> 으로 온 요청을 https://<도메인> 으로 영구 이동시킨다(viewer-request, GET·HEAD 301·그 밖 308).
 # viewer-request 함수는 behavior 당 하나라 SPA fallback 과 같이 쓸 수 없다.
 resource "aws_cloudfront_function" "www_redirect" {
   count   = var.redirect_www ? 1 : 0

@@ -8,8 +8,8 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, 'www-redirect.js'), 'utf8');
 const handler = new Function(`${source}; return handler;`)();
 
-const request = (host, uri, querystring) => ({
-  request: { uri, querystring: querystring || {}, headers: { host: { value: host } } },
+const request = (host, uri, querystring, method) => ({
+  request: { method: method || 'GET', uri, querystring: querystring || {}, headers: { host: { value: host } } },
 });
 
 test('대표 주소로 온 요청은 그대로 통과한다 — 이동시키면 고리가 된다', () => {
@@ -31,4 +31,10 @@ test('쿼리스트링은 여러 값까지 그대로 옮긴다 — 유입 경로 
     }),
   );
   assert.strictEqual(response.headers.location.value, 'https://etforca.com/?utm_source=insta&tag=a&tag=b%20c');
+});
+
+test('POST 는 308 로 이동한다 — 301 이면 브라우저가 GET 으로 바꿔 쓰기 요청의 본문이 사라진다', () => {
+  const response = handler(request('www.etforca.com', '/api/portfolio/items', {}, 'POST'));
+  assert.strictEqual(response.statusCode, 308);
+  assert.strictEqual(response.headers.location.value, 'https://etforca.com/api/portfolio/items');
 });
