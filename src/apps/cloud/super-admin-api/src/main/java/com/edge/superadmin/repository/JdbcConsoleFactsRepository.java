@@ -852,6 +852,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * <p>트리거의 날짜 범위는 {@code window_start} 에 직접 건다. 요청은 트리거보다 먼저 만들어질 수
 	 * 없으므로 {@code created_at} 하한으로 훑는 범위를 좁힌다(상한은 없다 — 늦게 수용된 요청도 그
 	 * 트리거의 자손이다). {@code data_source = 'database'} 인 분석만 센다.
+	 *
+	 * <p>🔴 <b>요청은 수용된 것만 센다</b>({@code accepted_at IS NOT NULL}). v2 는 워크플로를 띄우기
+	 * 전에 요청 행을 먼저 예약하고, 수용이 확인돼야 {@code accepted_at} 을 채운다
+	 * ({@code storage/requests.py}). 예약만 된 행까지 세면 워크플로가 뜨지도 않은 건이 "요청은 됐는데
+	 * 분석이 시작 안 됨"으로 보인다 — 실제로는 트리거가 요청으로 이어지지 못한 것이다. 첫 요청일도
+	 * 같은 기준이다(봇 리뷰가 짚었다).
 	 */
 	private static final String ANALYSIS_CHAIN_SQL = """
 			WITH intraday_trigger AS (
@@ -869,6 +875,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			      FROM intraday_trigger t
 			      LEFT JOIN analysis_execution_requests q
 			             ON q.created_at >= ?
+			            AND q.accepted_at IS NOT NULL
 			            AND q.input_json::jsonb -> 'source' ->> 'trigger_id' = t.trigger_id
 			      LEFT JOIN movement_analyses a
 			             ON a.analysis_id = q.analysis_id AND a.data_source = 'database'
@@ -879,7 +886,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			       count(*) FILTER (WHERE completed) AS completed,
 			       count(*) FILTER (WHERE published) AS published,
 			       (SELECT min((created_at AT TIME ZONE 'Asia/Seoul')::date)
-			          FROM analysis_execution_requests) AS first_request_day
+			          FROM analysis_execution_requests
+			         WHERE accepted_at IS NOT NULL) AS first_request_day
 			  FROM reached
 			""";
 

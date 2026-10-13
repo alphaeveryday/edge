@@ -720,6 +720,9 @@ super-admin-api 가 넣는다. 순서를 지키는 것은 writer 수가 아니�
   다른 날 트리거에서 온 분석은 그날 만들어졌어도 세지 않는다. 한 트리거에 요청이 여럿이어도 한 번만 센다.
 - 잇는 열: 트리거 ↔ 요청은 요청 입력의 `source.trigger_id`(`analysis_execution_requests.input_json`),
   요청 ↔ 분석은 `analysis_id`. 분석은 `data_source = 'database'` 만 센다.
+- 요청은 **수용된 것만** 센다(`accepted_at IS NOT NULL`). 예약만 되고 수용이 확인되지 않은 행은
+  워크플로가 뜨지 않은 것이라 요청으로 세지 않는다 — 그 건은 "트리거 → 분석 요청"의 감소로 보인다.
+  `blind` 의 첫 요청일도 같은 기준이다.
 - 분석 시작 = 분석 행이 있다. 분석 완료 = `status = 'completed'`. 게시 = 완료이고 `published_at` 이 있다.
 - **`batch` 는 항상 `null` 이다 — 대상 아님.** 배치 트리거는 새 분석 엔진이 소비하지 않는다. 0 이
   아니다(0 이면 "배치 트리거가 전부 사라졌다"가 된다). 배치 트리거 수 자체는 `feeds[0]` 이 계속 낸다.

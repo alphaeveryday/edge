@@ -1987,7 +1987,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void v2_단계는_조회일에_발화한_트리거에서_이어진_것만_트리거_단위로_센다() {
 		insertTrigger("g-day", DAY.toString(), "etf-batch");   // 배치 트리거 — v2 의 대상이 아니다
-		for (int i = 1; i <= 7; i++) {
+		for (int i = 1; i <= 8; i++) {
 			insertMinuteTrigger("m" + i, DAY.toString(), "etf-" + i, "FIRE",
 					"2026-08-03T09:%02d:00+09:00".formatted(30 + i));
 		}
@@ -1996,6 +1996,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		for (String m : List.of("m1", "m2", "m3", "m4", "m5", "m7")) {
 			insertRequest(m, m, "2026-08-03T09:40:00+09:00");
 		}
+		/* m8 은 요청 행이 예약만 됐고 수용되지 않았다(워크플로가 뜨지 않았다) — 요청으로 세지 않는다.
+		 * 세면 이 건이 "요청 → 분석 시작"의 손실로 옮겨 가 원인이 틀린 자리에 선다. */
+		insertRequest("m8", "m8", "2026-08-03T09:40:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("m8"));
 		// m1 은 한 트리거에 요청이 둘이다(재발화 세대) — 트리거 단위라 한 번만 센다.
 		insertRequest("m1-again", "m1", "2026-08-03T10:40:00+09:00");
 		insertAnalysis("movement", analysisId("m1"), "etf-1", "2026-08-03T09:41:00+09:00", "completed", "database");
@@ -2014,11 +2019,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		var chain = repository.facts(DAY).chain();
 		assertThat(chain.feeds()).extracting(f -> f.id(), f -> f.v())
-				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 7L));
+				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 8L));
 		assertThat(chain.analysisStages())
 				.extracting(s -> s.id(), s -> s.label(), s -> s.intraday(), s -> s.batch(), s -> s.blind())
 				.containsExactly(
-						tuple("c.req", "분석 요청", 6L, null, false),     // m6 은 요청이 없다
+						tuple("c.req", "분석 요청", 6L, null, false),     // m6 은 요청이 없고 m8 은 수용되지 않았다
 						tuple("c.start", "분석 시작", 4L, null, false),   // m5 는 분석 행이 없고 m7 은 합성 입력이다
 						tuple("c.done", "분석 완료", 2L, null, false),    // m3 실패 · m4 진행 중
 						tuple("c.pub", "게시", 1L, null, false));         // m2 는 게시 시각이 없다
@@ -2087,6 +2092,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void v2_요청이_아예_없으면_v2_단계는_관측_불가다() {
 		insertMinuteTrigger("m-only", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+		// 수용되지 않은 예약은 v2 가 돌았다는 근거가 아니다 — 이 행만으로 관측 가능해지면 안 된다.
+		insertMinuteTrigger("m-early", "2026-08-01", "etf-b", "FIRE", "2026-08-01T09:31:00+09:00");
+		insertRequest("m-early", "m-early", "2026-08-01T09:32:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("m-early"));
 		assertThat(repository.facts(DAY).chain().analysisStages())
 				.allSatisfy(s -> assertThat(s.blind()).isTrue());
 	}
