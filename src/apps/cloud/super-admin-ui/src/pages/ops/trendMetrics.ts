@@ -136,7 +136,7 @@ export function evaluateMetric(m: Metric): Verdict {
         kind: 'uninstrumented',
         label: '기준 없음',
         tone: 'neutral',
-        basis: '중앙값을 낼 계열이 없어 편차를 계산하지 않는다.',
+        basis: '비교할 기준값이 없거나 0이라 편차를 계산하지 않는다.',
         actual,
         expected: null,
         deltaPct: null,
