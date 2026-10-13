@@ -79,14 +79,16 @@ def plan_execution(request, allocations, decision=None):
             context = before + after
             return bool(re.search(r'\d+(?:\.\d+)?\s*(?:년|개월|달|월간|회|번|일|주|분기)|(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇)\s*(?:개월|달|년|회)|동안|까지|이후|부터', context))
         def complete_funding_clause(after):
-            tail = re.split(r'[.!?;\n]', after, maxsplit=1)[0].strip()
+            clauses = [part.strip() for part in re.split(r'[.!?;\n]', after) if part.strip()]
+            tail = clauses[0] if clauses else ''
             plain = r'(?:씩)?\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요|기|할 예정입니다|을 예정입니다|할 계획입니다|을 계획입니다)?)?'
             names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
             no_sale = r'(?:(?:' + (names or r'(?!)') + r'|보유 종목|기존 종목)(?:는|은|을|를)?\s*)?(?:팔지|매도하지)\s*않(?:을게요|겠습니다|아요|습니다)'
             combined = r'(?:을|를)?\s*(?:넣|납입하|투자하|입금하|추가하)(?:고|며|으며)\s*' + no_sale
-            return bool(re.fullmatch(plain + r'(?:\s*매도\s*금지)?|' + combined, tail))
+            return bool(re.fullmatch(plain + r'(?:\s*매도\s*금지)?|' + combined, tail)) and all(
+                re.fullmatch(no_sale + r'|매도\s*금지', clause) for clause in clauses[1:])
         def unconditional_prefix(before):
-            prefix = re.split(r'[.!?;\n]', before)[-1].strip()
+            prefix = before.strip()
             if prefix in {'', '저는', '저희는', '일단'}:
                 return True
             names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
@@ -95,7 +97,12 @@ def plan_execution(request, allocations, decision=None):
             asset = r'(?:' + (names or r'(?!)') + r'|[A-Z]{1,10})\s*\d+(?:\.\d+)?\s*%'
             return bool(re.fullmatch(asset + r'(?:\s*,\s*' + asset + r')*\s*(?:로 구성하고|로 하고|를 목표로 하고)', prefix))
         funding_contexts = [request.question, request.preferences.contribution, request.preferences.note]
-        scoped_restrictions = any(has_duration(source, '') or re.search(r'[가-힣]+면|경우|조건|가정', source) for source in funding_contexts)
+        scoped_restrictions = any(has_duration(source, '') or re.search(r'[가-힣]+면|경우|조건|가정|후에|뒤에|전에는', source) for source in funding_contexts)
+        # A separate free-form note may qualify the commitment. Without a
+        # complete verified funding clause there, do not infer its independence.
+        separate_note = request.preferences.note.strip()
+        if separate_note and text not in separate_note and not re.fullmatch(r'매도\s*금지', separate_note):
+            scoped_restrictions = True
         ambiguous = scoped_restrictions or len(commitments) > 1 or any(any(word in source for word in ('또는', '미정', '아마', '가능하면', '취소', '철회', '중단', '보류'))
             or re.search(r'(?:자금|돈|예산).{0,12}(?:없|부족|미확보)|(?:납입|입금|투자|추가)\s*(?:을|를|은|는)?\s*(?:하지\s*(?:않|못)|중단|안\s*(?:할|해))', source) for source in funding_contexts)
         if ambiguous or not occurrences or any(re.search(r'(?:약|대략|최대|최소|아마|가능하면)\s*$', before)

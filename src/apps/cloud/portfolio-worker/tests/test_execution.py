@@ -1,4 +1,5 @@
 from decimal import Decimal
+import pytest
 
 from edge_portfolio.contracts import AnalysisInput
 from edge_portfolio.execution import build_execution, parse_funding
@@ -218,6 +219,7 @@ def test_funding_restrictions_survive_sentence_and_input_field_boundaries():
         ('납입은 3개월만 할게요. 매도 금지.', '매월 10만원', ''),
         ('추가 납입할 자금이 없어요. 매도 금지.', '매월 10만원', '매월 10만원'),
         ('보너스를 받으면요. 추가 100만원을 넣겠습니다.', '', '추가 100만원'),
+        ('추가 100만원을 넣겠습니다. 대출 승인 후에만 납입할 수 있습니다.', '', '추가 100만원'),
     ]:
         req = request([('US:VOO', 1000000, '일반 계좌')], question=question, preferences={'contribution': contribution})
         decision = Decision(funding_text=quote, constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
@@ -234,6 +236,8 @@ def test_standard_affirmative_funding_can_be_cancelled_by_another_input_field():
         decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
         assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)['status'] == 'ready'
         req.preferences.note = '추가 납입은 취소했습니다.'
+        assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)['status'] == 'needs_input'
+        req.preferences.note = '대출 승인 후에만 납입할 수 있습니다.'
         assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)['status'] == 'needs_input'
 
 
@@ -257,14 +261,16 @@ def test_unknown_funding_does_not_hide_an_already_exceeded_account_limit():
     assert plan['reasons'] == ['ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:ISA']
 
 
-async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatch):
+@pytest.mark.parametrize('feasible_retry', [False, True])
+async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatch, feasible_retry):
     import json
     from edge_portfolio.agent import run_analysis
     from report_fixtures import final_payload
     from test_agent import Evidence
     class Optimizer:
         def __init__(self, *args):
-            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1',
+                'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100}]}]}
         def validate(self, final):
             return self.result['candidates'][0] if final.recommendation else None
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
@@ -275,20 +281,32 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
         if role == 'question':
             content = {**content, 'decision': {}}
         if role == 'opinion':
+            if feasible_retry and len(repairs) == 1:
+                repairs.append('retry')
+                return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+                    'id': 'retry-account', 'type': 'function', 'function': {'name': 'calculate_rebalance',
+                        'arguments': json.dumps({'allocations': [{'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 100}]})}}]}}]}
             content['recommendation']['allocations'] = [{'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': 100}]
+            content['selected_candidate_id'] = 'candidate-1'
             if repairs:
-                assert 'EXECUTION_INFEASIBLE' in payload['messages'][-1]['content']
+                assert ('ready' if feasible_retry else 'EXECUTION_INFEASIBLE') in payload['messages'][-1]['content']
                 content['recommendation'] = None
+                content['selected_candidate_id'] = None
             repairs.append(1)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
-    req = request([('CASH:KRW', 1000000, '일반 계좌')], preferences={'accounts': ['ISA'], 'tax_profile': {
+    req = request([('CASH:KRW', 1000000, '일반 계좌')], preferences={'accounts': ['ISA', '일반 계좌'], 'tax_profile': {
         'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '확인 필요',
         'accounts': [{'account': 'ISA', 'opened': '2020-01-01', 'remaining_man': '0'}]}})
     result = await run_analysis(req, 'test-only', phases.append, model_call=model, evidence=Evidence())
-    assert len(repairs) == 2
+    assert len(repairs) == (3 if feasible_retry else 2)
     assert result['recommendation'] is None
-    assert result['optimization']['reason'] == 'EXECUTION_INFEASIBLE'
-    assert result['execution_rejection']['reasons'] == ['ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:ISA']
+    assert result['optimization']['reason'] == ('RATING_BELOW_MINIMUM' if feasible_retry else 'EXECUTION_INFEASIBLE')
+    if feasible_retry:
+        assert 'execution_rejection' not in result
+        execution_events = [event for event in result['diagnostics']['events'] if event['event'] == 'tool_finished' and event['tool'] == 'calculate_rebalance']
+        assert execution_events[-1]['status'] == 'ready'
+    else:
+        assert result['execution_rejection']['reasons'] == ['ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:ISA']
 
 
 def test_rebalance_tool_does_not_accept_model_invented_funding_or_accounts():

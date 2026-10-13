@@ -113,6 +113,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     checks = []
     execution_rejection = None
     execution_failures = {}
+    execution_feasible = set()
 
     def checkpoint():
         if on_checkpoint:
@@ -213,7 +214,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 for candidate in (optimizer.result or {}).get('candidates', []):
                                     expected = {row['instrument_id']: row['weight_pct'] for row in candidate.get('allocations', [])}
                                     if target == expected:
-                                        if answer['status'] == 'infeasible':
+                                        if answer['status'] in {'ready', 'conditional'}:
+                                            execution_feasible.add(candidate['candidate_id'])
+                                        if answer['status'] == 'infeasible' and candidate['candidate_id'] not in execution_feasible:
                                             execution_failures[candidate['candidate_id']] = answer
                                         else:
                                             execution_failures.pop(candidate['candidate_id'], None)
@@ -253,9 +256,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         reason = answer.get('reason') if isinstance(answer, dict) else None
                         codes = {'INVALID_TOOL_ARGUMENT', 'TOOL_LIMIT', 'TOOL_NOT_ALLOWED', 'EXA_FAILED', 'EMPTY_SOURCE',
                                  'CURRENT_WEIGHTS_REQUIRED', 'COMPARISON_DATA_UNAVAILABLE', 'NO_COMMON_PRICE_HISTORY',
-                                 'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE'}
+                                 'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE',
+                                 'CURRENT_AMOUNTS_REQUIRED', 'INVESTMENT_AMOUNT_REQUIRED', 'ADDITIONAL_FUNDING_REQUIRED',
+                                 'NO_SELL_ZERO_TARGET', 'NO_SELL_VIOLATION', 'ACCOUNT_OPENING_REQUIRED',
+                                 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED'}
+                        reason_codes = sorted({value.split(':')[0] for value in answer.get('reasons', []) if isinstance(value, str) and value.split(':')[0] in codes}) if isinstance(answer, dict) else []
                         emit('tool_finished', role=role, tool=tool,
-                             status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected'} else 'unknown',
+                             status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected', 'ready', 'conditional', 'needs_input', 'infeasible'} else 'unknown',
+                             reason_codes=reason_codes,
                              code=reason if reason in codes else 'TOOL_REJECTED' if status in {'rejected', 'unavailable'} else None,
                              counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
                         checkpoint()
@@ -265,6 +273,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
+                        execution_rejection = None
                         selected = optimizer.validate(final)
                         if final.recommendation:
                             checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
@@ -278,6 +287,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         published = publish_recommendation(final, request, metrics, evidence.sources, decision)
                         if final.recommendation and published['recommendation']['execution']['status'] == 'infeasible':
                             execution_rejection = published['recommendation']['execution']
+                            if final.selected_candidate_id not in execution_feasible:
+                                execution_failures[final.selected_candidate_id] = execution_rejection
                             raise ValueError('EXECUTION_INFEASIBLE: choose another candidate or account placement: ' + json.dumps(execution_rejection['reasons']))
                         published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
                         if not selected and optimizer.result['candidates']:
