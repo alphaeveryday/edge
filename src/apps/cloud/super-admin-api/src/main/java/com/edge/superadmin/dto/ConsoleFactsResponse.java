@@ -43,7 +43,25 @@ import java.util.List;
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
-		ChainResponse chain, EtfLedgerResponse etfLedger, MetaResponse meta) {
+		ChainResponse chain, EtfLedgerResponse etfLedger,
+		List<AnalysisFailureResponse> analysisFailures, MetaResponse meta) {
+
+	/**
+	 * 조회일에 v2 분석이 <b>끝내 완료되지 못한</b> ETF(R15, ALPHA-1291). 항목은 항상
+	 * {@code outlook}·{@code movement} 둘이고 이 순서다. {@code failedEtfs} 는 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다(코드 오름차순). 실패했다가 같은 날 다시 돌아
+	 * 완료된 ETF, running 만 있는 ETF 는 들어 있지 않다. 빈 배열은 "그런 ETF 가 없다"이다.
+	 */
+	public record AnalysisFailureResponse(String kind, List<String> failedEtfs) {
+
+		private static final List<String> KINDS = List.of("outlook", "movement");
+
+		public static List<AnalysisFailureResponse> from(
+				List<com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow> rows) {
+			return KINDS.stream().map(kind -> new AnalysisFailureResponse(kind, rows.stream()
+					.filter(r -> r.kind().equals(kind)).map(r -> r.etfCode()).toList())).toList();
+		}
+	}
 
 	public record EtfLedgerResponse(List<EtfLedgerRowResponse> rows) {
 		public static EtfLedgerResponse from(List<EtfAnalysisRow> rows) {

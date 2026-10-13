@@ -1417,6 +1417,13 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertAnalysis("outlook", "o5", "etf-d", "2026-08-02T06:00:00+09:00", "running", "database");
 		insertAnalysis("outlook", "o6", "etf-e", "2026-08-02T06:00:00+09:00", "running", "database");
 		insertAnalysis("outlook", "o7", "etf-f", "2026-08-02T06:00:00+09:00", "completed", "synthetic");
+		/* 🔴 실패했다가 **같은 날 다시 돌아 완료된** ETF(ALPHA-1291) — 실패 건수에는 들고 실패 ETF 에는
+		 * 안 든다. v2 는 이 형태가 흔해서, "실패한 적 있는 ETF"로 세면 카드가 매일 임계를 넘는다. */
+		insertAnalysis("outlook", "o-retry1", "etf-g", "2026-08-02T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "o-retry2", "etf-g", "2026-08-02T08:00:00+09:00", "completed", "database");
+		// 실패한 뒤 다시 도는 중(완료 없음) — 아직 끝내 완료하지 못했으므로 실패 ETF 다.
+		insertAnalysis("outlook", "o-again1", "etf-h", "2026-08-02T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "o-again2", "etf-h", "2026-08-02T08:00:00+09:00", "running", "database");
 		insertAnalysis("outlook", "o8", "etf-a", "2026-08-03T23:59:00+09:00", "completed", "database");
 		insertAnalysis("outlook", "o-out", "etf-a", "2026-08-04T00:00:00+09:00", "completed", "database"); // 범위 밖
 		insertAnalysis("outlook", "o-old", "etf-a", "2026-07-31T23:59:00+09:00", "completed", "database"); // 범위 밖
@@ -1425,6 +1432,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertAnalysis("movement", "m3", "etf-b", "2026-08-03T11:00:00+09:00", "failed", "database");
 		insertAnalysis("movement", "m4", "etf-b", "2026-08-03T11:30:00+09:00", "failed", "database");
 		insertAnalysis("movement", "m5", "etf-c", "2026-08-03T11:30:00+09:00", "failed", "database");
+		// 가격변동 쪽에도 같은 형태를 둔다 — 실패했다가 같은 날 완료된 ETF 는 실패 ETF 가 아니다.
+		insertAnalysis("movement", "m-retry1", "etf-f", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "m-retry2", "etf-f", "2026-08-03T10:30:00+09:00", "completed", "database");
 		// 가격변동 쪽 SELECT 는 전망과 따로다 — 같은 반례(진행 중·합성 입력)를 여기에도 둔다.
 		insertAnalysis("movement", "m-run", "etf-d", "2026-08-03T11:30:00+09:00", "running", "database");
 		insertAnalysis("movement", "m-syn", "etf-e", "2026-08-03T11:30:00+09:00", "completed", "synthetic");
@@ -1436,11 +1446,48 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 08-01 ~ 08-03 의 3일 — 08-01 에는 어느 종류도 행이 없다.
 		assertThat(repository.analysisTrend(DAY, 3)).containsExactly(
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
-						"movement", LocalDate.parse("2026-08-03"), 3, 3, 1, 1, 2),
+						"movement", LocalDate.parse("2026-08-03"), 4, 4, 1, 2, 2),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
-						"outlook", LocalDate.parse("2026-08-02"), 2, 2, 3, 1, 1),
+						"outlook", LocalDate.parse("2026-08-02"), 3, 4, 4, 2, 2),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
 						"outlook", LocalDate.parse("2026-08-03"), 1, 0, 0, 1, 0));
+	}
+
+	/**
+	 * 🔴 <b>분석 실패 축은 끝내 완료하지 못한 ETF 만 낸다</b>(R15, ALPHA-1291). 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없는 ETF 다.
+	 *
+	 * <p>들어가면 안 되는 것을 하나씩 둔다 — 실패했다가 같은 날 완료된 ETF · running 만 있는 ETF ·
+	 * 합성 입력 · 날짜 밖(KST 자정 양쪽). 종류도 가른다: 같은 ETF 가 전망은 완료, 가격변동은 실패일 수
+	 * 있다({@code etf-a}). 한 종류의 완료가 다른 종류의 실패를 지우면 안 된다.
+	 */
+	@Test
+	void 분석_실패_축은_끝내_완료하지_못한_ETF_만_종류별로_낸다() {
+		insertTradingDay(DAY.toString());
+		insertAnalysis("outlook", "f-o-ok", "etf-a", "2026-08-03T06:00:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "f-o-fail", "etf-b", "2026-08-03T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-fail2", "etf-b", "2026-08-03T23:59:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-retry1", "etf-c", "2026-08-03T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-retry2", "etf-c", "2026-08-03T07:00:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "f-o-run", "etf-d", "2026-08-03T06:00:00+09:00", "running", "database");
+		insertAnalysis("outlook", "f-o-syn", "etf-e", "2026-08-03T06:00:00+09:00", "failed", "synthetic");
+		insertAnalysis("outlook", "f-o-next", "etf-f", "2026-08-04T00:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-prev", "etf-g", "2026-08-02T23:59:00+09:00", "failed", "database");
+		// 날짜 밖의 완료는 그날의 실패를 지우지 못한다 — 다음 날 00:05 에 다시 돌아 완료됐다.
+		insertAnalysis("outlook", "f-o-late1", "etf-h", "2026-08-03T23:50:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-late2", "etf-h", "2026-08-04T00:05:00+09:00", "completed", "database");
+		insertAnalysis("movement", "f-m-fail", "etf-a", "2026-08-03T00:10:00+09:00", "failed", "database");
+		insertAnalysis("movement", "f-m-retry1", "etf-c", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "f-m-retry2", "etf-c", "2026-08-03T10:30:00+09:00", "completed", "database");
+
+		assertThat(repository.facts(DAY).analysisFailures()).containsExactly(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow("movement", "etf-a"),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow("outlook", "etf-b"),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow("outlook", "etf-h"));
+		// 분석 추이의 실패 ETF 수와 같은 기준이다 — 두 조회가 갈리면 카드와 규칙이 다른 수를 말한다.
+		assertThat(repository.analysisTrend(DAY, 1))
+				.extracting(p -> p.kind() + ":" + p.failedEtfs())
+				.containsExactly("movement:1", "outlook:2");
 	}
 
 	/**

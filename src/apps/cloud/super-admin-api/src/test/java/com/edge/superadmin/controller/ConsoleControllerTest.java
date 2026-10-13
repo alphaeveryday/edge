@@ -1013,4 +1013,28 @@ class ConsoleControllerTest {
 						.param("maxDate", "0001-01-01").param("days", "31"))
 				.andExpect(status().isBadRequest());
 	}
+
+	/**
+	 * 분석 실패 축(R15, ALPHA-1291) — 두 종류가 항상 이 순서로 나가고, 실패 ETF 가 없는 종류는
+	 * <b>빈 배열</b>이다. 키가 빠지면 소비자는 "이 축을 안 싣는 배포본"으로 읽어 규칙을 못 돌린다.
+	 */
+	@Test
+	void 분석_실패_축은_종류별_ETF_코드를_내리고_없으면_빈_배열이다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts withFailures = new ConsoleFacts(base.today(), base.dbNow(), base.runs(),
+				base.tasks(), base.outputs(), base.boundary(), base.chain(), base.etfLedger(),
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
+								"movement", "069500"),
+						new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
+								"movement", "229200")));
+
+		mvc(withFailures).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.analysisFailures.length()").value(2))
+				.andExpect(jsonPath("$.result.analysisFailures[0].kind").value("outlook"))
+				.andExpect(jsonPath("$.result.analysisFailures[0].failedEtfs.length()").value(0))
+				.andExpect(jsonPath("$.result.analysisFailures[1].kind").value("movement"))
+				.andExpect(jsonPath("$.result.analysisFailures[1].failedEtfs[0]").value("069500"))
+				.andExpect(jsonPath("$.result.analysisFailures[1].failedEtfs[1]").value("229200"));
+	}
 }
