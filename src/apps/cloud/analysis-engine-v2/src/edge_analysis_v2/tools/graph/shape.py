@@ -90,8 +90,9 @@ def table(rows, keep_id=False, keep_title=False):
     for row in rows:
         # A graph object keeps its values under properties; a calculated row is its values.
         values = {k: v for k, v in row.get('properties', row).items() if k not in NOISE and not isinstance(v, (dict, list))}
+        values.update(row.get('money_text') or {})   # the written amount stands in for raw won
         values.update({k: v for k, v in row.items()
-                       if k not in ('object_type', 'object_id', 'title', 'properties') and not isinstance(v, (dict, list))})
+                       if k not in ('object_type', 'object_id', 'title', 'properties', 'money_text') and not isinstance(v, (dict, list))})
         if keep_title and row.get('title') not in values.values():
             values['title'] = row.get('title')   # an event or a document is named only by its title
         if keep_id:

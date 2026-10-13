@@ -131,6 +131,40 @@ TOOLS = {
         'prerequisite': 'document_ref from a get_event_timeline or find_similar_events row.',
         'args': {'document_refs': 'Documents to read, as [{"object_type":"NewsArticle","object_id":"..."}].',
                  'offset': 'Character to start from. Leave out to start at the beginning.', 'length': 'Characters to read at most.'}},
+    'get_price_observations': {
+        'summary': 'Read daily closing prices and volume of securities, and the NAV of funds when asked.',
+        'returns': 'A table with one row per security and trading day. data_scope.dates_returned lists the days found and latest_date_available_at_cutoff the last day published. '
+                   'A later day is not published yet, which is different from a day without trading. There is no open, high, low or adjusted close, '
+                   'and whether a close is adjusted is not recorded: write "observed close".',
+        'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
+        'follow_up': 'calculate_returns for a change between two days. count_rising_and_falling for how many holdings rose. calculate_nav_premium for price against NAV.',
+        'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'include_nav': 'true to add the fund NAV rows.', 'limit': LIMIT}},
+    'calculate_returns': {
+        'summary': 'Calculate the price change of each security between two exact trading days.',
+        'returns': 'One row per security with both prices and return_ratio (0.05 means +5%). A day without a price gives status unavailable and names the days that have one. '
+                   'It is the change between two recorded closes, not a total return.',
+        'prerequisite': 'A get_price_observations result that contains both days.',
+        'args': {'dataset_ref': RESULT, 'start_date': 'The earlier trading day.', 'end_date': 'The later trading day.',
+                 'price_field': 'closePrice for the market price. nav for the fund NAV.',
+                 'basis_policy': 'Leave out. require_recorded_basis answers only when the price basis is recorded, which it is not in this data.'}},
+    'count_rising_and_falling': {
+        'summary': 'Count how many of the securities rose, fell, stayed flat or have no price between two days, with the fund weight of each group.',
+        'returns': 'One row per group with the number of securities and their summed stored weight. It is breadth, not performance attribution.',
+        'prerequisite': 'A get_price_observations result with start_date and end_date, or a calculate_returns result alone.',
+        'args': {'dataset_ref': RESULT, 'start_date': 'The earlier trading day. Only with a price result.', 'end_date': 'The later trading day. Only with a price result.'}},
+    'calculate_nav_premium': {
+        'summary': 'Compare the closing price of a fund with its NAV on one day.',
+        'returns': 'One row with price, NAV and premium_ratio (negative means the price is below NAV).',
+        'prerequisite': 'A get_price_observations result of the fund with include_nav true.',
+        'args': {'dataset_ref': RESULT, 'trade_date': 'The trading day, YYYY-MM-DD.'}},
+    'get_flow_observations': {
+        'summary': 'Read net buying and selling by individuals, foreigners and institutions for securities, per day or as intraday estimates.',
+        'returns': 'A table per security and day with net amounts as written in won. For daily flows, data_scope.net_value_runs says which securities each investor '
+                   'has been net buying or selling and since which day: say "turned" only for the securities listed under that day. '
+                   'Intraday values are estimates whose meaning (cumulative or per interval) is not known: do not sum them or compare them with daily flows.',
+        'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
+        'follow_up': 'Flows of holdings are not the flows of the fund itself.',
+        'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'frequency': 'daily for finalized flows. intraday for estimates during the day.', 'limit': LIMIT}},
 }
 
 
