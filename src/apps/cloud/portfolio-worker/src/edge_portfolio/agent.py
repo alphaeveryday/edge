@@ -430,7 +430,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if role == 'question':
                             interpreted = QuestionSection.model_validate(raw)
                             validate_section('question', interpreted.model_dump(exclude={'decision'}), evidence.sources)
-                            decision = validate_decision(interpreted.decision, request, market.catalog)
+                            decision = validate_decision(interpreted.decision, request, market.catalog, question_text=followup_question or request.question)
                             if prior_report:
                                 inherited = Decision.model_validate(prior_report.get('decision') or {})
                                 rules = {}
