@@ -23,6 +23,14 @@ export type Report = {
 };
 export type Job = { id: string; state: 'queued' | 'running' | 'succeeded' | 'failed'; stage: Role | null; result: Report | null; failure: string | null; started_at: string | null };
 
+let visitorSession: Promise<unknown> | null = null;
+export function ensureVisitorSession() {
+  visitorSession ??= (navigator.locks
+    ? navigator.locks.request('orca-portfolio-visitor', () => request('/session'))
+    : request('/session')).finally(() => { visitorSession = null; });
+  return visitorSession;
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch('/api/portfolio' + path, { ...init, signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', ...init?.headers } });
   if (!response.ok) {

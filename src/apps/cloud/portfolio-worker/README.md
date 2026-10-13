@@ -61,5 +61,18 @@ pnpm --filter portfolio-ui test:e2e
 - `GET /api/portfolio/analyses/{id}`: 소유한 작업의 queued/running/succeeded/failed 상태.
 - `POST /api/portfolio/analyses/{id}/chat`: question과 멱등 키. 무료 1회 초과는 409 CHAT_LIMIT.
 - `POST /api/portfolio/analyses/{id}/report-request`: email. 접수만 저장, 발송은 미구현.
+- `POST /api/portfolio/presence`: 방문자 쿠키로 현재 활동 기록. 화면이 보일 때 30초 주기.
+- `POST /api/portfolio/admin/login`, `/logout`: 일반 방문자와 분리된 관리자 인증.
+- `GET /api/portfolio/admin/overview`: 최근 2분 활동, 한국 날짜 기준 방문·분석 집계.
+- `GET /api/portfolio/admin/records?kind=analyses|drafts|reports&days=7&page=1`: 관리자 목록, 페이지당 50건. 분석은 `state` 필터 지원.
+- `GET /api/portfolio/admin/records/{kind}/{id}`: 관리자 전용 입력·결과 상세.
+
+## 관리자 화면
+
+`/portfolio/admin.html`에서 별도 계정 `admin`으로 로그인한다. 운영 비밀번호는 `edge/portfolio/admin` Secrets Manager에 있으며 Terraform은 비밀 메타데이터와 최소 IAM 권한을 소유한다. dev GitHub 배포가 최초 값이 없을 때만 32바이트 난수 비밀번호를 만들며 기존 값은 바꾸지 않는다. 일반 배포 출력이나 Terraform state에 비밀번호를 넣지 않는다.
+
+API에만 `PORTFOLIO_ADMIN_PASSWORD_SHA256`를 전달한다. 로그인 세션은 8시간이며 로그아웃·비밀번호 해시 변경 시 무효다. 로그인 시도는 서비스 전체에서 15분당 20회로 제한한다. 로컬 검증은 테스트 전용 비밀번호의 SHA-256을 해당 API 환경변수에 넣는다. 운영 비밀번호를 로컬 개발에 재사용하지 않는다.
+
+조회는 10초마다 갱신한다. 방문자 기록은 90일 유지하며 같은 쿠키의 여러 탭은 한 방문자다. 실제 사람 수가 아니며 이전 방문 기록은 소급 생성하지 않는다. 설계와 검증 기준은 [관리자 설계](../../../../docs/design/portfolio-admin.md)에 있다.
 
 AWS 운영 구성과 배포·롤백 절차는 [배포 기록](../../../../docs/design/portfolio-deployment.md)을 따른다. 전망 조회는 ETF 한 종목과 명시적인 목적이 필수다. 이메일은 1일 이내 발송을 안내하지만 자동 발송은 구현하지 않는다.

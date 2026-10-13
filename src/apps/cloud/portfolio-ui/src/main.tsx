@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { request, type Input, type Job } from './api';
+import { request, ensureVisitorSession, type Input, type Job } from './api';
 import { InputForm } from './InputForm';
 import { ReportView } from './ReportView';
 import { Followup } from './Followup';
 import './styles.css';
 import { ProgressView } from './ProgressView';
+import { startPresence } from './presence';
 
 function App() {
+  useEffect(startPresence, []);
   const [jobId, setJobId] = useState(() => localStorage.getItem('edge-portfolio-job'));
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
@@ -43,7 +45,7 @@ function App() {
     const key = pending?.input === serialized ? pending.key : crypto.randomUUID();
     sessionStorage.setItem('edge-portfolio-pending', JSON.stringify({ input: serialized, key }));
     try {
-      await request('/session');
+      await ensureVisitorSession();
       const next = await request<Job>('/analyses', { method: 'POST', headers: { 'Idempotency-Key': key }, body: serialized });
       localStorage.setItem('edge-portfolio-job', next.id); sessionStorage.removeItem('edge-portfolio-pending');
       setJob(next); setJobId(next.id); window.scrollTo(0, 0);

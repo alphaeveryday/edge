@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import secrets
 import tarfile
 import tempfile
 import time
@@ -13,6 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 REGION = 'ap-northeast-2'
 
 
+def ensure_admin_secret(client):
+    name = 'edge/portfolio/admin'
+    # Terraform must already have created metadata and granted scoped permissions.
+    client.describe_secret(SecretId=name)
+    try:
+        client.get_secret_value(SecretId=name)
+    except client.exceptions.ResourceNotFoundException:
+        client.put_secret_value(SecretId=name, SecretString=json.dumps({'username': 'admin', 'password': secrets.token_urlsafe(32)}))
+
+
 def main():
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()) if os.getenv('GITHUB_EVENT_PATH') else {}
     trusted_run = os.getenv('GITHUB_EVENT_NAME') == 'workflow_run' and event.get('workflow_run', {}).get('head_branch') == 'dev' and event['workflow_run']['conclusion'] == 'success'
@@ -20,6 +31,7 @@ def main():
         raise RuntimeError('Release through the GitHub dev workflow only')
     session = boto3.Session(region_name=REGION)
     ssm, s3 = session.client('ssm'), session.client('s3')
+    ensure_admin_secret(session.client('secretsmanager'))
     config = json.loads(ssm.get_parameter(Name='/edge/portfolio/deployment')['Parameter']['Value'])
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / 'release.tar.gz'
@@ -41,6 +53,7 @@ def main():
         'umask 077',
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/portfolio/runtime --query SecretString --output text > /opt/edge-portfolio/runtime.json',
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/analysis-v2/api-reader --query SecretString --output text > /opt/edge-portfolio/reader.json',
+        f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/portfolio/admin --query SecretString --output text > /opt/edge-portfolio/admin.json',
         f'python3 {directory}/deploy/runtime_env.py', f'cd {directory}/deploy',
         'docker compose --env-file /opt/edge-portfolio/runtime.env up -d --build --wait --wait-timeout 120',
         'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -c "import urllib.request; urllib.request.urlopen(\'http://127.0.0.1:8092/health\')"',

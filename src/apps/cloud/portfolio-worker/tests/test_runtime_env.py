@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 from pathlib import Path
 
 from psycopg.conninfo import conninfo_to_dict
@@ -16,3 +17,10 @@ def test_database_password_is_encoded_but_postgres_receives_the_original():
     for key in ('PORTFOLIO_DATABASE_URL', 'PORTFOLIO_OUTLOOK_DSN'):
         assert conninfo_to_dict(values[key])['password'] == password
     assert 'PORTFOLIO_DB_PASSWORD="a@:/?#%$$\'z"' in runtime_env.dotenv(values)
+
+
+def test_admin_secret_is_injected_as_hash_only():
+    password = 'a-random-high-entropy-admin-password'
+    values = runtime_env.admin_environment({'username': 'admin', 'password': password})
+    assert values == {'PORTFOLIO_ADMIN_PASSWORD_SHA256': hashlib.sha256(password.encode()).hexdigest()}
+    assert password not in runtime_env.dotenv(values)

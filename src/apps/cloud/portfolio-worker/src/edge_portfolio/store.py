@@ -39,6 +39,8 @@ def initialize():
             db.execute(f"""CREATE TABLE IF NOT EXISTS portfolio_input_{name} (
                 draft_id uuid PRIMARY KEY REFERENCES portfolio_input_drafts(id) ON DELETE CASCADE,
                 payload jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())""")
+        from . import admin_store
+        admin_store.initialize(db)
 
 
 def save_draft(draft_id, owner, payload):
