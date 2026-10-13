@@ -25,6 +25,14 @@ def zero_contribution(text, decision):
     if NO_CONTRIBUTION.fullmatch(text):
         return text
     remainder = projection_context(text, decision).strip(' .!?;\n')
+    if decision and decision.kind == 'scenario':
+        from .scenarios import stated_principal
+        if stated_principal(text) is not None:
+            clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', remainder)
+            for index in range(0, len(clauses), 2):
+                if stated_principal(clauses[index]) is not None:
+                    clauses[index] = ''
+            remainder = ''.join(clauses).strip(' .!?;\n')
     return remainder if NO_CONTRIBUTION.fullmatch(remainder) else None
 
 

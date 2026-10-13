@@ -13,12 +13,20 @@ from edge_portfolio.scenarios import build_scenarios
     ('원금은 약 1000만원입니다.', None), ('원금은 1000만원이면 좋겠어요.', None),
     ('원금은 1000만원입니다. 원금은 2000만원입니다.', None), ('원금은 1000만원입니다. 취소합니다.', None),
     ('원금은 1000만원입니다. 원금은 2000만원으로 정정합니다.', None),
+    ('원금은 1000만원입니다. 2000만원으로 정정합니다. 5년 뒤 금액을 계산해 주세요.', None),
     ('원금은 1000만원입니다. 원금은 확인 필요합니다.', None),
     ('원금은 1000만원입니다. 현재 평가금액은 모릅니다.', None),
     ('원금은 1000만원입니다. 원금이 불명확합니다.', None)])
 def test_followup_principal_requires_one_exact_standalone_statement(text, expected):
     from edge_portfolio.scenarios import stated_principal
     assert stated_principal(text) == expected
+
+
+def test_future_target_amount_is_not_a_current_principal_correction():
+    from edge_portfolio.scenarios import principal_declaration
+    assert not principal_declaration('현재 자산이 연 3%로 5년 뒤 2000만원이 되나요')
+    assert principal_declaration('원금은 1000만원이고 5년 뒤 2000만원이 되나요')
+    assert principal_declaration('2000만원으로 정정합니다')
 
 
 def test_known_principal_allows_scenarios_without_a_return_forecast():

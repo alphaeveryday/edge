@@ -15,12 +15,13 @@ def target(**weights):
     return [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': value} for key, value in weights.items()]
 
 
-def test_initial_scenario_explicit_zero_overrides_saved_monthly_preference():
+@pytest.mark.parametrize('principal', ['', '원금은 1000만원입니다. '])
+def test_initial_scenario_explicit_zero_overrides_saved_monthly_preference(principal):
     from edge_portfolio.decision import Decision
     from edge_portfolio.execution import resolve_funding
     req = request([('US:VOO', 1000000, '일반 계좌')],
         preferences={'contribution': '매월 10만원'},
-        question='이번에는 추가 납입 없이 계산해 주세요. 5년 뒤 금액을 알려 주세요.')
+        question=principal + '이번에는 추가 납입 없이 계산해 주세요. 5년 뒤 금액을 알려 주세요.')
     assert resolve_funding(req, Decision(kind='scenario')) == {'additional_krw': Decimal(0), 'monthly_krw': None}
 
 

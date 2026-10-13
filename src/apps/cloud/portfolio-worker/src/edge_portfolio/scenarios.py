@@ -13,14 +13,19 @@ PRINCIPAL_AMOUNT = re.compile(r'(?:\d[\d,.\s천백십만억]*|[일이삼사오�
 
 
 def principal_declaration(clause):
+    if '정정' in clause and PRINCIPAL_AMOUNT.search(clause):
+        return True  # An unlabeled correction must not reuse a superseded amount.
     if not re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause):
         return False
+    horizon = re.search(r'\d+(?:\.\d+)?\s*년\s*(?:뒤|후)', clause)
+    if horizon and not PRINCIPAL_AMOUNT.search(clause[:horizon.start()]) and re.search(r'(?:되나요|될까요)\s*$', clause):
+        return False  # A future target question does not replace today's principal.
     return bool(PRINCIPAL_AMOUNT.search(clause) or PRINCIPAL_DECLARATION.match(clause) and not re.search(r'\d+(?:\.\d+)?\s*년', clause))
 
 
 def stated_principal(text):
     """Accept one unconditional standalone statement of total current principal."""
-    if any(word in text for word in ('취소', '철회', '미정', '아니', '정도', '대략')):
+    if any(word in text for word in ('취소', '철회', '미정', '아니', '정도', '대략', '정정')):
         return None
     values = []
     statements = 0
