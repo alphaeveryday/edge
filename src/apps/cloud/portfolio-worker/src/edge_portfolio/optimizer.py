@@ -143,11 +143,25 @@ class Optimizer:
                     group.clear()
             if not any(eligible):
                 raise ValueError('NO_COMPARABLE_PRICE_HISTORY')
+            available = [list(group) for group in eligible]
             # Removing unusable groups may expand the shared window, so revalidate survivors.
             while True:
                 valid_ids = set(self.market.current).union(*(set(group) for group in eligible))
                 bounds = comparison_bounds(valid_ids, self.market.records, self.market.as_of)
                 rejected = False
+                for number, group in enumerate(eligible):
+                    if not group:
+                        continue
+                    try:
+                        normalized_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of, bounds)
+                    except (KeyError, ValueError):
+                        available[number] = []
+                        rejected = True
+                if rejected:
+                    eligible = [list(group) for group in available]
+                    if not any(eligible):
+                        raise ValueError('NO_COMMON_PRICE_HISTORY')
+                    continue
                 records = {key: {**value, 'frame': value['frame'].loc[:bounds[1]]} for key, value in self.market.records.items()}
                 for group in eligible:
                     if not group:
@@ -161,18 +175,7 @@ class Optimizer:
                     if not any(eligible):
                         raise ValueError('NO_COMMON_PRICE_HISTORY')
                     continue
-                for group in eligible:
-                    if not group:
-                        continue
-                    try:
-                        optimization_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of, bounds)
-                    except (KeyError, ValueError):
-                        group.clear()
-                        rejected = True
-                if not any(eligible):
-                    raise ValueError('NO_COMMON_PRICE_HISTORY')
-                if not rejected:
-                    break
+                break
             frame, sources = optimization_prices(valid_ids, self.market.records, self.market.as_of, bounds)
             # NumPy releases the GIL; all ten searches are scheduled together, sharing prices.
             with ThreadPoolExecutor(max_workers=10) as pool:

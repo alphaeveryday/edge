@@ -194,6 +194,23 @@ async def test_null_close_column_excludes_only_the_malformed_candidate():
     assert len(result['candidates']) == 9
 
 
+async def test_invalid_endpoint_does_not_permanently_discard_new_valid_candidates():
+    from edge_portfolio.market_data import expected_sessions
+    request, market, groups = batch()
+    market.as_of = date(2026, 10, 14)
+    short = expected_sessions('KR:A', pd.Timestamp('2026-09-01'), pd.Timestamp('2026-10-13'))[-11:]
+    def loader(symbol, _):
+        data = record(dates=pd.bdate_range('2025-10-09', '2026-10-12') if symbol == 'E.KS' else short)
+        if symbol == 'E.KS':
+            data['frame']['Close'] = None
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
+    assert result['end_date'] == '2026-10-13'
+
+
 async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():
     request, market, groups = batch()
     request.holdings[0].account = 'ISA'
