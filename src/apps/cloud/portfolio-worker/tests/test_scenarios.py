@@ -15,6 +15,9 @@ from edge_portfolio.scenarios import build_scenarios
     ('원금은 1000만원입니다. 원금은 2000만원으로 정정합니다.', None),
     ('원금은 1000만원입니다. 2000만원으로 정정합니다. 5년 뒤 금액을 계산해 주세요.', None),
     ('원금은 1000만원입니다. 단, 대출 승인 후에만 마련할 수 있는 돈입니다. 5년 뒤 금액을 알려 주세요.', None),
+    ('원금은 1000만원입니다. 보너스가 나오면 이 금액을 마련할 수 있어요.', None),
+    ('원금은 1000만원입니다. 이 돈은 아직 수중에 없습니다.', None),
+    ('원금은 1000만원입니다. 부가 조건을 확인해 주세요.', None),
     ('원금은 1000만원입니다. 원금은 확인 필요합니다.', None),
     ('원금은 1000만원입니다. 현재 평가금액은 모릅니다.', None),
     ('원금은 1000만원입니다. 원금이 불명확합니다.', None)])
@@ -29,6 +32,7 @@ def test_future_target_amount_is_not_a_current_principal_correction():
     assert principal_declaration('원금은 1000만원이고 5년 뒤 2000만원이 되나요')
     assert principal_declaration('2000만원으로 정정합니다')
     assert principal_declaration('앞서 말한 1000만원은 취소합니다')
+    assert principal_declaration('앞서 말한 금액은 취소합니다')
 
 
 def test_known_principal_allows_scenarios_without_a_return_forecast():

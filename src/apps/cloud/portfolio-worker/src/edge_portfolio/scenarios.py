@@ -6,14 +6,14 @@ from typing import Annotated
 from pydantic import Field
 
 from .contracts import StrictModel
-from .execution import parse_funding
+from .execution import parse_funding, projection_question, NO_CONTRIBUTION
 
 PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))')
 PRINCIPAL_AMOUNT = re.compile(r'(?:\d[\d,.\s천백십만억]*|[일이삼사오육칠팔구십백천만억]+)\s*(?:원(?!금)|달러|USD|KRW|유로|엔|위안|불)|[$₩€£¥]\s*\d')
 
 
 def principal_declaration(clause):
-    if any(word in clause for word in ('정정', '취소', '철회')) and PRINCIPAL_AMOUNT.search(clause):
+    if any(word in clause for word in ('정정', '취소', '철회')):
         return True  # An unlabeled correction must not reuse a superseded amount.
     if not re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause):
         return False
@@ -27,8 +27,6 @@ def stated_principal(text):
     """Accept one unconditional standalone statement of total current principal."""
     if any(word in text for word in ('취소', '철회', '미정', '아니', '정도', '대략', '정정')):
         return None
-    if re.search(r'조건|경우|승인|대출|후에만|전에는|(?:들어오|입금되|받으|가능하)면', text):
-        return None  # A qualifying sentence may make the stated amount contingent.
     values = []
     statements = 0
     clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', text)
@@ -47,6 +45,10 @@ def stated_principal(text):
                 values.append(funding['additional_krw'])
             elif re.fullmatch(r'0\s*원', match[1]):
                 values.append(Decimal(0))
+        elif clause.strip() and not (projection_question(clause) or NO_CONTRIBUTION.fullmatch(clause) or re.fullmatch(r'\s*매도\s*금지\s*', clause)):
+            commitment = re.fullmatch(r'\s*(.+?원(?:씩)?)\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요))?\s*', clause)
+            if not commitment or parse_funding(commitment[1]) is None:
+                return None  # Unrecognized clauses may qualify or replace the amount.
     return values[0] if len(values) == statements == 1 else None
 
 
