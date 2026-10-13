@@ -142,7 +142,11 @@ resource "aws_iam_role_policy" "portfolio_deploy" {
     { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.portfolio_releases.arn}/releases/*" },
     { Effect = "Allow", Action = ["ssm:SendCommand"], Resource = [aws_instance.portfolio.arn, "arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript"] },
     { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
-    { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = aws_ssm_parameter.portfolio_deploy.arn }
+    { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = [aws_ssm_parameter.portfolio_deploy.arn, aws_ssm_parameter.portfolio_admin_connection.arn] },
+    { Effect = "Allow", Action = ["ssm:StartSession"], Resource = aws_instance.portfolio.arn, Condition = { Bool = { "ssm:SessionDocumentAccessCheck" = "true" } } },
+    { Effect = "Allow", Action = ["ssm:StartSession"], Resource = aws_ssm_document.portfolio_admin.arn },
+    { Effect = "Allow", Action = ["ssmmessages:OpenDataChannel"], Resource = "arn:aws:ssm:ap-northeast-2:393229433969:session/$${aws:userid}-*" },
+    { Effect = "Allow", Action = ["ssm:TerminateSession"], Resource = "arn:aws:ssm:ap-northeast-2:393229433969:session/*", Condition = { StringEquals = { "ssm:resourceTag/aws:ssmmessages:target-id" = aws_instance.portfolio.id, "ssm:resourceTag/aws:ssmmessages:session-id" = "$${aws:userid}" } } }
   ] })
 }
 
@@ -152,6 +156,25 @@ resource "aws_ssm_parameter" "portfolio_deploy" {
   value = jsonencode({ instance_id = aws_instance.portfolio.id, bucket = aws_s3_bucket.portfolio_releases.id, landing_bucket = module.landing_site.bucket_name, distribution_id = module.landing_site.distribution_id })
 }
 
+# This document has no caller-selectable port or remote host: only the loopback admin service.
+resource "aws_ssm_document" "portfolio_admin" {
+  name            = "edge-portfolio-admin-tunnel"
+  document_type   = "Session"
+  document_format = "JSON"
+  content = jsonencode({
+    schemaVersion = "1.0"
+    description   = "Portfolio administrator on fixed port 18080; no shell or remote host"
+    sessionType   = "Port"
+    properties    = { portNumber = "18080", localPortNumber = "18080", type = "LocalPortForwarding" }
+  })
+}
+
+resource "aws_ssm_parameter" "portfolio_admin_connection" {
+  name  = "/edge/portfolio/admin-connection"
+  type  = "String"
+  value = jsonencode({ instance_id = aws_instance.portfolio.id, document = aws_ssm_document.portfolio_admin.name })
+}
+
 # Attach only to the operator identity designated by the user. No IAM user/access key is created.
 resource "aws_iam_policy" "portfolio_operator" {
   name        = "edge-portfolio-ssm-operator"
@@ -159,5 +182,18 @@ resource "aws_iam_policy" "portfolio_operator" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["ssm:StartSession"], Resource = [aws_instance.portfolio.arn, "arn:aws:ssm:ap-northeast-2:393229433969:document/SSM-SessionManagerRunShell"] },
     { Effect = "Allow", Action = ["ssm:ResumeSession", "ssm:TerminateSession"], Resource = "arn:aws:ssm:ap-northeast-2:393229433969:session/$${aws:userid}-*" }
+  ] })
+}
+
+# Attach only to the operator identity designated by the user. No IAM user/access key is created.
+resource "aws_iam_policy" "portfolio_admin_access" {
+  name        = "edge-portfolio-admin-access"
+  description = "Fixed administrator tunnel only; no shell, arbitrary port, remote host or cloud mutation"
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["ssm:GetParameter"], Resource = aws_ssm_parameter.portfolio_admin_connection.arn },
+    { Effect = "Allow", Action = ["ssm:StartSession"], Resource = aws_instance.portfolio.arn, Condition = { Bool = { "ssm:SessionDocumentAccessCheck" = "true" } } },
+    { Effect = "Allow", Action = ["ssm:StartSession"], Resource = aws_ssm_document.portfolio_admin.arn },
+    { Effect = "Allow", Action = ["ssmmessages:OpenDataChannel"], Resource = "arn:aws:ssm:ap-northeast-2:393229433969:session/$${aws:userid}-*" },
+    { Effect = "Allow", Action = ["ssm:ResumeSession", "ssm:TerminateSession"], Resource = "arn:aws:ssm:ap-northeast-2:393229433969:session/*", Condition = { StringEquals = { "ssm:resourceTag/aws:ssmmessages:target-id" = aws_instance.portfolio.id, "ssm:resourceTag/aws:ssmmessages:session-id" = "$${aws:userid}" } } }
   ] })
 }
