@@ -69,6 +69,11 @@ def records(directory):
     return sorted(calls,key=lambda r:(r.get('finished_at',''),r['response']['tool_run_id']))
 
 
+def saved_records(directory):
+    """Which of the run's own records exist to be cited: the workspace it kept and the trace of what it did."""
+    return [name for name,file in (('workspace','workspace.json'),('trace','events.jsonl')) if (Path(directory)/'model'/file).exists()]
+
+
 def fingerprint(directory, report, calls, contract):
     payload={k:report.get(k) for k in ('question','cutoff','status','response','agent_version')}
     payload.update(calls=calls,contract=contract)
@@ -132,12 +137,18 @@ def efficiency(directory,report,calls):
         'unnecessary_calls':None,'unnecessary_tool_ms':None}
 
 
-def validate_review(review,checks,report,calls):
+def validate_review(review,checks,report,calls,own=('workspace','trace')):
+    """Refuse a review that is incomplete, misquotes the answer or cites what was not saved.
+
+    Args:
+        own: The saved records of the run a verdict may cite beside tool calls. A run without a workspace file
+            passed a verdict that cited "workspace", so the callers pass only the ones that exist.
+    """
     if not isinstance(review,dict):raise ValueError('Review must be an object')
     expected={r['id'] for r in checks};rows=review.get('checks',[])
     if not isinstance(rows,list) or not all(isinstance(r,dict) and isinstance(r.get('id'),str) for r in rows) or len(rows)!=len(expected) or {r.get('id') for r in rows}!=expected:
         raise ValueError('Every criterion must be reviewed exactly once')
-    evidence={c['response']['tool_run_id'] for c in calls}|{'workspace','trace'}
+    called={c['response']['tool_run_id'] for c in calls};evidence=called|set(own)
     response=report.get('response') or {}
     if not isinstance(response,dict):response={}
     text='\n'.join([s for s in [response.get('answer',''),*(response.get('limitations') or []),
@@ -155,7 +166,7 @@ def validate_review(review,checks,report,calls):
     if not isinstance(duplicates,list) or not all(isinstance(r,dict) for r in duplicates):raise ValueError('Invalid unnecessary calls')
     for row in duplicates:
         identifier=row.get('tool_run_id')
-        if identifier not in evidence or identifier in seen or not str(row.get('reason','')).strip():
+        if identifier not in called or identifier in seen or not str(row.get('reason','')).strip():
             raise ValueError('Unnecessary calls need distinct saved IDs and reasons')
         seen.add(identifier)
 
@@ -174,7 +185,7 @@ def evaluate(directory):
             review=read(path)
             if review['fingerprint']!=signature:review_status='stale'
             else:
-                validate_review(review,checks,report,calls)
+                validate_review(review,checks,report,calls,saved_records(directory))
                 review_status='current';reviewer=review.get('reviewer')
                 by_id={r['id']:r for r in review['checks']}
                 checks=[{**r,**by_id[r['id']]} for r in checks]
@@ -201,7 +212,7 @@ def save_review(directory,review,*,reviewer,expected_fingerprint=None):
     directory=Path(directory);result=evaluate(directory)
     if expected_fingerprint and result['fingerprint']!=expected_fingerprint:raise ValueError('Run changed during evaluation')
     if not result['contract']:raise ValueError('Canonical CQ contract required')
-    validate_review(review,result['agent_checks'],read(directory/'benchmark.json'),records(directory))
+    validate_review(review,result['agent_checks'],read(directory/'benchmark.json'),records(directory),saved_records(directory))
     value={**review,'fingerprint':result['fingerprint'],'reviewer':reviewer,
         'reviewed_at':datetime.now(timezone.utc).isoformat(),'version':1}
     path=directory/'evaluation.json';temp=path.with_suffix('.tmp')

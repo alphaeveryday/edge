@@ -79,6 +79,15 @@ class EvaluationTests(unittest.TestCase):
         evaluation.save_review(self.run,review,reviewer={'model':'test','method':'fixture'})
         self.assertEqual(self.result()['overall'],'review_needed')
 
+    def test_a_verdict_cites_the_workspace_only_when_the_run_kept_one(self):
+        # WHY: a run with no workspace file passed a verdict whose evidence was "workspace".
+        review=self.review();review['checks'][0]['evidence_ids']=['workspace']
+        with self.assertRaisesRegex(ValueError,'unsaved evidence'):evaluation.save_review(self.run,review,reviewer={'model':'test'})
+        (self.run/'model').mkdir();(self.run/'model/workspace.json').write_text('{}',encoding='utf8')
+        review=self.review();review['checks'][0]['evidence_ids']=['workspace']
+        evaluation.save_review(self.run,review,reviewer={'model':'test'})
+        self.assertEqual(self.result()['review_status'],'current')
+
     def test_uncalibrated_agent_pass_is_a_proposal_not_a_verified_pass(self):
         evaluation.save_review(self.run,self.review(),reviewer={'model':'test','calibration':'not_calibrated'})
         self.assertEqual(self.result()['overall'],'review_needed')

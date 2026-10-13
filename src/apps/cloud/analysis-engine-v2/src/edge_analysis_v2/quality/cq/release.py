@@ -6,8 +6,6 @@
 import argparse
 import hashlib
 import json
-import platform
-from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -77,21 +75,6 @@ def bump(summary, manifest=MANIFEST, root=SOURCE):
              'source_digest': source_digest(root), 'history': history}
     manifest.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
     return value
-
-
-def snapshot(registered, catalog_digest, model, exposed):
-    """Identity of one run's agent: release, graph catalog, model, the tools it could see and the SDK underneath."""
-    packages = {}
-    for name in ('claude-agent-sdk', 'anthropic'):
-        try:
-            packages[name] = package_version(name)
-        except PackageNotFoundError:
-            packages[name] = 'not_installed'
-    value = {'release': registered['version'], 'summary': registered['summary'], 'source_digest': registered['source_digest'],
-             'catalog_digest': catalog_digest, 'model': model, 'exposed_tools': sorted(exposed),
-             'runtime': {'python': platform.python_version(), 'packages': packages}}
-    identifier = digest(value)[:20]
-    return {**value, 'id': 'agent-' + identifier, 'label': f"v{registered['version']} · {identifier[:8]}"}
 
 
 if __name__ == '__main__':
