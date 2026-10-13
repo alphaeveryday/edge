@@ -209,7 +209,7 @@ export function TrendPage() {
 
       {minute.isPending && (
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-          분봉 상태를 불러오는 중입니다 — 분봉 지표는 응답 뒤에 표시합니다.
+          분봉 상태를 불러오는 중입니다 — 분봉 지표는 응답 뒤에 판정합니다.
         </p>
       )}
 
