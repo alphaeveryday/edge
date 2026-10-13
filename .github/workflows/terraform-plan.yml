@@ -47,6 +47,11 @@ jobs:
           role-to-assume: ${{ vars.TF_PLAN_ROLE_ARN }}
           aws-region: ap-northeast-2
 
+      - name: Inspect existing administrator SSO instances (read only)
+        run: |
+          aws sso-admin list-instances --region ap-northeast-2 --query 'Instances[].{Arn:InstanceArn,IdentityStoreId:IdentityStoreId,OwnerAccountId:OwnerAccountId,Status:Status}' --output json
+          aws sso-admin list-instances --region us-east-1 --query 'Instances[].{Arn:InstanceArn,IdentityStoreId:IdentityStoreId,OwnerAccountId:OwnerAccountId,Status:Status}' --output json
+
       - name: terraform init
         # CI preserves the already deployed origin gate; no Secrets Manager value permission.
         run: |
