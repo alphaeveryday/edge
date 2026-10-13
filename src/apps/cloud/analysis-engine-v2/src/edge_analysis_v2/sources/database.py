@@ -285,7 +285,9 @@ class DatabaseTools(FixtureTools):
             tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v5',
                                'get_issue_evidence': 'database-v3', 'get_etf_holdings': 'database-v2',
                                'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v2',
-                               'sum_weighted_net_flow': 'database-v2'}.get(name, 'database-v1')
+                               'sum_weighted_net_flow': 'database-v2',
+                               # Their sources were first recorded as the news tables; a stored definition cannot change.
+                               'calculate_window_returns': 'database-v2', 'get_daily_returns': 'database-v2'}.get(name, 'database-v1')
             if name in ('get_instrument_factors', 'get_instrument_factor_table'):
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot',
                                    'macro_observations_as_of','financial_quarters_as_of']
