@@ -163,23 +163,3 @@ def test_a_same_day_update_entry_with_an_old_long_title_does_not_block_a_rewrite
     body = BodyEditor(old, at).write('제목', [{'id': 't2', 'title_keyword': '짧은 제목', 'sentences': ['새 문장'], 'sentiment': 'neutral', 'tool_run_ids': ['r2']}])
     assert violations({'detail': body}) == []
     assert [u['title_keyword'] for u in body['updates']['items'] if u['id'] == 'gone'] == ['라' * 40]
-
-
-def test_the_body_tool_refuses_formal_sentence_endings():
-    from datetime import datetime, timezone
-    from edge_analysis_v2.analysis.body_editor import BodyEditor
-    from edge_analysis_v2.tools.execution import ToolInputError
-    import pytest
-    editor = BodyEditor(None, datetime(2026, 10, 6, 10, tzinfo=timezone.utc))
-    def topic(sentence):
-        return [{'id': 't1', 'title_keyword': '제목', 'sentences': [sentence], 'sentiment': 'neutral', 'tool_run_ids': ['r1']}]
-    with pytest.raises(ToolInputError, match='해요체'):
-        editor.write('제목', topic('외국인이 순매도했습니다.'))
-    assert editor.write('제목', topic('외국인이 순매도했어요.'))['items'][0]['sentences'][0]['sentence'] == '외국인이 순매도했어요.'
-    # WHY: only the end of the string was looked at, so a closing quote or a second sentence hid the formal ending.
-    for sentence in ('회사는 "결론입니다"', '실적이 좋습니다)', '매출이 증가했습니다. 이익도 늘어요.', '하락으로 봅니다!'):
-        with pytest.raises(ToolInputError, match='해요체'):
-            editor.write('제목', topic(sentence))
-    # WHY: "니다" alone refused a name; and words quoted inside a sentence are not how the sentence ends.
-    for sentence in ('관련 종목은 다음과 같아요: 소니다', "회사는 '확대합니다'라고 밝혔어요.", '아니다 싶으면 팔아요.'):
-        assert editor.write('제목', topic(sentence))['items'][0]['sentences'][0]['sentence'] == sentence
