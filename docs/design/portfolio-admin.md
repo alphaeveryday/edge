@@ -30,9 +30,9 @@
 
 SSM은 IAM이 허용한 사용자만 연결할 수 있다. 별도 공용 관리자 비밀번호를 사용하지 않는다. 관리자 앱은 읽기 전용이며 허용 Host는 `localhost:18080`, `127.0.0.1:18080`뿐이다. 다른 Origin·cross-site 브라우저 요청을 거부하고 응답에 no-store·프레임 차단을 적용한다. 서버나 사용자 PC 자체가 장악된 경우까지 SSM이 보호한다고 주장하지 않는다.
 
-`edge-portfolio-admin-tunnel` Session 문서는 서버·로컬 포트 18080을 고정하며 임의 포트·원격 호스트·셸 매개변수를 받지 않는다. `edge-portfolio-admin-access` 정책은 지정 EC2와 이 문서, 접속 설정 조회 및 자기 세션 제어만 허용한다. 관리자용 역할에는 기존 셸 정책이나 광범위한 SSM 정책을 추가하지 않는다. 권한을 연결할 사용자 IAM/SSO 역할은 사용자의 지정이 필요하다. 정책 생성과 사용자 연결 완료를 구분해 보고한다.
+`edge-portfolio-admin-tunnel` Session 문서는 서버·로컬 포트 18080을 고정하며 임의 포트·원격 호스트·셸 매개변수를 받지 않는다. `edge-portfolio-admin-access` 정책은 지정 EC2와 이 문서, 접속 설정 조회 및 자기 세션 제어만 허용한다. 관리자용 역할에는 기존 셸 정책이나 광범위한 SSM 정책을 추가하지 않는다. 사용자가 승인한 기존 work 인증으로 edge-portfolio-admin-local 역할을 AssumeRole한다. 이 역할은 확인된 IAM 사용자 junyoung727만 신뢰하고 관리자 접속 정책만 연결한다. SSO 생성은 조직 SCP에 막혀 사용하지 않는다.
 
-PC의 `scripts/open-admin.ps1 -Profile <SSO프로필>`이 연결과 브라우저 열기를 수행한다. AWS CLI v2와 Session Manager plugin이 필요하며 정적 마스터키로 대체하지 않는다. 접속 종료는 스크립트 창에서 Ctrl+C다. 마지막 화면의 데이터는 다음 조회가 실패하면 제거된다(10초 갱신 + 최대 15초 요청 제한).
+PC의 `scripts/open-admin.ps1 -Profile edge-portfolio-admin`이 연결과 브라우저 열기를 수행한다. AWS CLI v2와 Session Manager plugin이 필요하다. work의 기존 자격은 역할 발급에만 사용하고 SSM에는 1시간짜리 전용 역할 자격으로 접속한다. 스크립트는 직접 IAM 사용자나 다른 역할을 거부한다. 접속 종료는 스크립트 창에서 Ctrl+C다. 마지막 화면의 데이터는 다음 조회가 실패하면 제거된다(10초 갱신 + 최대 15초 요청 제한).
 
 ## 저장과 배포
 

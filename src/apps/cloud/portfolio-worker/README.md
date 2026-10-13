@@ -71,13 +71,24 @@ pnpm --filter portfolio-ui test:e2e
 
 SSM 터널을 연 뒤 `http://localhost:18080/portfolio/admin.html`에서 확인한다. 공개 도메인의 관리자 HTML·API는 차단하며 별도 공용 비밀번호는 사용하지 않는다. AWS IAM이 SSM 접속을 인증한다.
 
-Windows에서 AWS CLI v2·Session Manager plugin을 설치하고, `edge-portfolio-admin-access` 정책만 부여된 SSO 기반 프로필로 실행한다:
+Windows에서 AWS CLI v2·Session Manager plugin을 설치하고, 기존 work 인증에서 전용 역할을 발급받는 프로필로 실행한다. `~/.aws/config`의 다른 프로필을 유지하고 아래 항목을 추가한다:
+
+```ini
+[profile edge-portfolio-admin]
+role_arn = arn:aws:iam::393229433969:role/edge-portfolio-admin-local
+source_profile = work
+role_session_name = portfolio-admin
+duration_seconds = 3600
+region = ap-northeast-2
+```
+
+관리자 역할에는 `edge-portfolio-admin-access`만 연결되며, 기존 work 사용자만 역할을 발급받을 수 있다:
 
 ```powershell
 ./scripts/open-admin.ps1 -Profile edge-portfolio-admin
 ```
 
-접속 후 브라우저가 자동으로 열리며 Ctrl+C로 터널을 종료한다. 프로필 이름은 예시다. 실제 사용자 역할 연결은 별도 확인이 필요하고 마스터키로 대체하지 않는다. 정책에 광범위한 셸·임의 포트 권한을 더하지 않는다.
+접속 후 브라우저가 자동으로 열리며 Ctrl+C로 터널을 종료한다. 스크립트는 전용 역할 설정과 실제 STS 신원을 모두 검사하며 IAM 사용자나 다른 역할의 직접 접속을 거부한다. SSO 계정 생성은 필요 없다. 정책에 광범위한 셸·임의 포트 권한을 더하지 않는다.
 
 UI 빌드는 공개 `dist`와 내부 `dist-admin`으로 분리한다. 관리자 프로세스는 호스트 루프백 18080에만 게시한다. 로컬 실행은 `PORTFOLIO_DATABASE_URL` 및 `PORTFOLIO_ADMIN_UI_DIR`(빌드된 dist-admin 경로)을 지정한 뒤 `uv run uvicorn edge_portfolio.admin_app:app --host 127.0.0.1 --port 18080`을 사용한다.
 

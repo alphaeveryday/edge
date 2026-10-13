@@ -197,3 +197,17 @@ resource "aws_iam_policy" "portfolio_admin_access" {
     { Effect = "Allow", Action = ["ssm:ResumeSession", "ssm:TerminateSession"], Resource = "arn:aws:ssm:ap-northeast-2:393229433969:session/*", Condition = { StringEquals = { "ssm:resourceTag/aws:ssmmessages:target-id" = aws_instance.portfolio.id, "ssm:resourceTag/aws:ssmmessages:session-id" = "$${aws:userid}" } } }
   ] })
 }
+
+# Local operator authenticates with the existing work profile, then uses temporary tunnel-only credentials.
+resource "aws_iam_role" "portfolio_admin_local" {
+  name                 = "edge-portfolio-admin-local"
+  max_session_duration = 3600
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = "sts:AssumeRole", Principal = { AWS = "arn:aws:iam::393229433969:user/junyoung727" } }
+  ] })
+}
+
+resource "aws_iam_role_policy_attachment" "portfolio_admin_local" {
+  role       = aws_iam_role.portfolio_admin_local.name
+  policy_arn = aws_iam_policy.portfolio_admin_access.arn
+}

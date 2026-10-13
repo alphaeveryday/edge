@@ -9,27 +9,11 @@ $url = 'http://localhost:18080/portfolio/admin.html'
 if (-not (Get-Command aws -ErrorAction SilentlyContinue)) { throw 'AWS CLI v2 is required.' }
 if (-not (Get-Command session-manager-plugin -ErrorAction SilentlyContinue)) { throw 'AWS Session Manager plugin is required.' }
 
-# Never fall back to a default/master access key. Require an SSO-backed profile chain.
-$source = $Profile
-$visited = @{}
-while ($true) {
-    if ($visited.ContainsKey($source)) { throw 'AWS profile source cycle detected.' }
-    $visited[$source] = $true
-    foreach ($credentialSetting in @('aws_access_key_id', 'aws_secret_access_key', 'aws_session_token', 'credential_process', 'credential_source', 'web_identity_token_file')) {
-        $credentialValue = & aws configure get $credentialSetting --profile $source
-        if ($credentialValue) { throw 'Use an SSO-backed restricted admin profile without static credentials or alternate credential providers.' }
-    }
-    $sso = & aws configure get sso_session --profile $source
-    $legacySso = & aws configure get sso_start_url --profile $source
-    $nextSource = & aws configure get source_profile --profile $source
-    $role = & aws configure get role_arn --profile $source
-    if ($sso -or $legacySso) {
-        if ($nextSource -or $role) { throw 'Use an unambiguous SSO profile; do not mix SSO metadata with AssumeRole settings.' }
-        break
-    }
-    if ($nextSource -and -not $role) { throw 'A non-SSO source_profile requires role_arn; credential fallback is not allowed.' }
-    $source = $nextSource
-    if (-not $source) { throw 'Use an SSO-backed restricted admin profile. Static/default access keys are not used.' }
+# Only the dedicated temporary role may call SSM; never use the source IAM user directly.
+$expectedRole = 'arn:aws:iam::393229433969:role/edge-portfolio-admin-local'
+$configuredRole = & aws configure get role_arn --profile $Profile
+if ($configuredRole -ne $expectedRole) {
+    throw 'Use the edge-portfolio-admin profile configured for the dedicated administrator role.'
 }
 
 $probe = [System.Net.Sockets.TcpClient]::new()
@@ -39,21 +23,10 @@ try {
     if ($probe.Connected) { throw 'Local port 18080 is already in use. Close the previous tunnel before reconnecting.' }
 } finally { $probe.Dispose() }
 
-$savedErrorPreference = $ErrorActionPreference
-try {
-    # Windows PowerShell treats native stderr as an error; an expired SSO token is recoverable.
-    $ErrorActionPreference = 'Continue'
-    $identity = & aws sts get-caller-identity --profile $Profile --region $region --output json 2>$null
-    $identityExit = $LASTEXITCODE
-} finally { $ErrorActionPreference = $savedErrorPreference }
-if ($identityExit -ne 0) {
-    & aws sso login --profile $source
-    if ($LASTEXITCODE -ne 0) { throw 'AWS SSO login failed.' }
-    $identity = & aws sts get-caller-identity --profile $Profile --region $region --output json
-    if ($LASTEXITCODE -ne 0) { throw 'AWS identity verification failed.' }
-}
-if (($identity | ConvertFrom-Json).Arn -notmatch '^arn:aws:sts::393229433969:assumed-role/') {
-    throw 'Use an assumed role in the EDGE account, not an IAM user or root credential.'
+$identity = & aws sts get-caller-identity --profile $Profile --region $region --output json
+if ($LASTEXITCODE -ne 0) { throw 'Unable to assume the administrator role. Check the source profile authentication.' }
+if (($identity | ConvertFrom-Json).Arn -notmatch '^arn:aws:sts::393229433969:assumed-role/edge-portfolio-admin-local/[^/]+$') {
+    throw 'The resolved AWS identity is not the dedicated administrator role. SSM access stopped.'
 }
 $raw = & aws ssm get-parameter --name /edge/portfolio/admin-connection --profile $Profile --region $region --output json
 if ($LASTEXITCODE -ne 0) { throw 'The profile needs the portfolio administrator tunnel policy.' }
