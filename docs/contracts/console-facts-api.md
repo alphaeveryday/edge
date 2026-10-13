@@ -701,6 +701,41 @@ super-admin-api 가 넣는다. 순서를 지키는 것은 writer 수가 아니�
 }
 ```
 
+### 새 분석 엔진의 단계 — `analysisStages` (ALPHA-1296)
+
+`chain` 은 `stages` 옆에 **`analysisStages`** 를 함께 싣는다. 화면(`/ops/chain`)과 R10 이 읽는 것은
+이 목록이다. `stages`(옛 설명 엔진의 단계)는 그 목록만 아는 옛 화면을 위해 그대로 남긴다.
+
+```jsonc
+"analysisStages": [
+  { "id": "c.req",   "label": "분석 요청", "batch": null, "intraday": 256, "src": "analysis_execution_requests", "blind": false },
+  { "id": "c.start", "label": "분석 시작", "batch": null, "intraday": 214, "src": "movement_analyses",           "blind": false },
+  { "id": "c.done",  "label": "분석 완료", "batch": null, "intraday": 195, "src": "status=completed",            "blind": false },
+  { "id": "c.pub",   "label": "게시",      "batch": null, "intraday": 195, "src": "published_at IS NOT NULL",    "blind": false }
+]
+```
+
+- **코호트는 조회일에 발화한 장중 트리거다**(`minute_price_trigger`, `FIRE`, `window_start` 의 KST 날짜).
+  수는 그 트리거 가운데 **그 단계에 도달한 트리거 수**다 — 그날 만들어진 요청·분석 전체가 아니다.
+  다른 날 트리거에서 온 분석은 그날 만들어졌어도 세지 않는다. 한 트리거에 요청이 여럿이어도 한 번만 센다.
+- 잇는 열: 트리거 ↔ 요청은 요청 입력의 `source.trigger_id`(`analysis_execution_requests.input_json`),
+  요청 ↔ 분석은 `analysis_id`. 분석은 `data_source = 'database'` 만 센다.
+- 분석 시작 = 분석 행이 있다. 분석 완료 = `status = 'completed'`. 게시 = 완료이고 `published_at` 이 있다.
+- **`batch` 는 항상 `null` 이다 — 대상 아님.** 배치 트리거는 새 분석 엔진이 소비하지 않는다. 0 이
+  아니다(0 이면 "배치 트리거가 전부 사라졌다"가 된다). 배치 트리거 수 자체는 `feeds[0]` 이 계속 낸다.
+- **`blind`**: 그날 코호트에 요청이 하나도 없고 첫 요청(`analysis_execution_requests.created_at` 의 KST
+  날짜 중 가장 이른 날)이 조회일보다 뒤면 참이다(요청이 아예 없어도 참). 새 분석 엔진이 아직 없던
+  날이라 `intraday` 의 0 은 실측이 아니다. 첫 요청이 조회일과 같거나 앞인데 요청이 0 이면 그것은
+  진짜 손실이라 가리지 않는다. 옛 설명 엔진이 돌던 때의 값은 이 목록에 다시 싣지 않는다.
+- **R10 이 손실로 보는 구간은 둘이다**: 트리거 → 분석 요청, 분석 요청 → 분석 시작. 분석 시작 → 완료의
+  감소는 실패했거나 진행 중인 분석이고(실패는 R15 가 맡는다), 완료 → 게시의 감소는 고른 항목이 없어
+  게시하지 않은 분석이다(설계). 이 둘은 수만 보여 준다.
+- ⚠️ 요청은 수용됐는데 분석 행이 없는 경우의 **사유는 DB 에 남지 않는다**. 새 분석 엔진은 분석 행을
+  원천 조회 뒤에 만들므로, 그 전에 끝난 실행(자리 획득 실패·원천 조회 실패·작업 시간 초과)과 아직
+  자리를 기다리는 실행이 모두 "행 없음"으로 보인다. 지난 날의 행 없음은 분석이 시작되지 못한 것이다.
+- 이 목록이 없는 응답(옛 API)을 받은 소비자는 체인 축이 없는 것으로 읽는다 — `stages` 로 대신 채우지
+  않는다.
+
 🔴 **단계에는 `blind` 가 붙을 수 있다**(ALPHA-1293). 단계 다섯은 전부 옛 설명 엔진의 표에서 센다.
 그 엔진이 멈춘 뒤에도 트리거는 계속 쓰이므로, 그대로 두면 "트리거 N → 관측 0"이 매일 나오고 R10 이
 그 0 을 손실로 읽는다. 그래서 서버가 아래 **둘 다** 참일 때 단계 다섯에 `"blind": true` 를 싣는다.

@@ -200,7 +200,26 @@ export interface BoundaryDto {
  */
 export interface ChainDto {
   feeds: ChainFeedDto[];
+  /** 옛 설명 엔진의 단계다. **화면과 규칙은 더는 읽지 않는다**(ALPHA-1296) — 형상 검증만 한다 */
   stages: ChainStageDto[];
+  /**
+   * 새 분석 엔진(v2)의 단계(ALPHA-1296) — 분석 요청 → 분석 시작 → 분석 완료 → 게시. 화면과 R10 이
+   * 읽는 목록이다. **옵셔널이다**: 이 목록을 안 싣는 API(롤백·UI 선배포)에서는 오지 않고, 그때
+   * 체인은 축이 없는 것으로 읽는다(R10 은 `못 돎`).
+   */
+  analysisStages?: AnalysisStageDto[];
+}
+
+/** 수는 조회일에 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다. */
+export interface AnalysisStageDto {
+  id: string;
+  label: string;
+  /** 항상 `null` — 배치 트리거는 새 분석 엔진의 대상이 아니다(0 이 아니다) */
+  batch: number | null;
+  intraday: number;
+  src: string;
+  /** 그날 코호트에 요청이 없고 첫 v2 요청이 조회일보다 뒤일 때 참 — `intraday` 의 0 은 실측이 아니다 */
+  blind?: boolean;
 }
 
 /** `unit` 이 갈래마다 다르다 — 배치는 ETF 종수, 장중은 발화 건수다. */

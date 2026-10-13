@@ -441,34 +441,87 @@ test('R10 경계 — blind(관측 불가) 단계는 0으로 세지 않고 비교
   assert.equal(hits(f, 'R10').length, 0);
 });
 
-test('🔴 R10 — 단계가 전부 관측 불가면 위반을 세우지 않고 못 돎이다 (멈춘 옛 엔진의 0 을 손실로 읽던 자리)', () => {
-  /* dev 의 형상이다: 배치 트리거 41, 장중 트리거 256, 그 뒤 다섯 단계는 옛 설명 엔진의 표라 전부 0.
-   * 서버가 그 단계들을 관측 불가로 내린다. 0 을 실측으로 읽으면 "장중 트리거 → 관측 · 256건" P0 가
-   * 트리거가 생기는 날마다 선다. */
-  const f = emptyFacts();
-  const stage = (id: string, label: string) => ({ id, label, batch: 0, intraday: 0, src: 'x', blind: true });
-  f.chain = {
+/** 새 분석 엔진의 체인 — 배치 칸은 대상 아님, 분석 완료·게시는 수만 보여 주는 단계다 */
+const v2Chain = (n: { fired: number; req: number; start: number; done: number; pub: number }, blind = false) => {
+  const stage = (id: string, label: string, intraday: number, shown = false) => ({
+    id, label, batch: null, intraday, src: 'x', batch_na: true,
+    ...(shown ? { shown_only: true } : {}),
+    ...(blind ? { blind: true } : {}),
+  });
+  return {
     feeds: [
       { id: 'feed.batch', label: '배치 트리거', v: 41, unit: 'ETF', src: 'price_movement_trigger' },
-      { id: 'feed.intraday', label: '장중 트리거', v: 256, unit: '건', src: 'minute_price_trigger' },
+      { id: 'feed.intraday', label: '장중 트리거', v: n.fired, unit: '건', src: 'minute_price_trigger' },
     ],
-    stages: [stage('c.obs', '관측'), stage('c.route', '라우트'), stage('c.run', '런'), stage('c.res', '결과'), stage('c.pub', '게시')],
+    stages: [
+      stage('c.req', '분석 요청', n.req),
+      stage('c.start', '분석 시작', n.start),
+      stage('c.done', '분석 완료', n.done, true),
+      stage('c.pub', '게시', n.pub, true),
+    ],
   };
+};
+
+test('🔴 R10 — 새 단계에서는 트리거 → 분석 요청, 분석 요청 → 분석 시작의 감소만 손실이다', () => {
+  /* dev 10-13 의 형상이다: 장중 트리거 256 → 요청 256 → 분석 행 214 → 완료 195 → 게시 195.
+   * 요청은 수용됐는데 분석 행이 없는 42건이 손실이고, 그 전에는 어디에도 안 보였다. */
+  const f = emptyFacts();
+  f.chain = v2Chain({ fired: 256, req: 256, start: 214, done: 195, pub: 195 });
+  let v = hits(f, 'R10');
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric, x.sev]), [['intraday:c.start', 42, 'P0']]);
+  assert.equal(v[0].target, '분석 요청 → 분석 시작');
+
+  /* 트리거가 요청으로 안 이어진 것도 손실이다 — 여기는 1:1 이어야 한다 */
+  f.chain = v2Chain({ fired: 256, req: 250, start: 250, done: 250, pub: 250 });
+  v = hits(f, 'R10');
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric]), [['intraday:c.req', 6]]);
+  assert.equal(v[0].target, '장중 트리거 → 분석 요청');
+});
+
+test('🔴 R10 — 분석 시작 → 완료, 완료 → 게시의 감소로는 손실을 세우지 않는다', () => {
+  /* 분석 시작 → 완료의 감소는 실패했거나 진행 중인 분석이다 — 실패는 R15 가 맡고 진행 중은 실패가
+   * 아니다. 완료 → 게시의 감소는 고른 항목이 없어 게시하지 않은 분석이다(설계). 이 둘을 손실로
+   * 세우면 분석이 도는 내내, 그리고 미게시가 있는 날마다 P0 가 선다. */
+  const f = emptyFacts();
+  f.chain = v2Chain({ fired: 256, req: 256, start: 256, done: 195, pub: 120 });
+  assert.equal(hits(f, 'R10').length, 0);
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.equal(rr.evaluated, true, '판정할 구간(트리거 → 요청 → 시작)은 실제로 봤다');
+  /* 무엇을 봤고 무엇을 안 봤는지 밝힌다 */
+  assert.match(rr.note ?? '', /배치 트리거는 새 분석 엔진의 대상이 아니다/);
+  assert.match(rr.note ?? '', /분석 시작 뒤의 감소/);
+});
+
+test('🔴 R10 — 배치 갈래는 대상이 아니다: 배치 트리거가 있어도 뒤 단계의 빈 칸을 손실로 읽지 않는다', () => {
+  /* 배치 트리거는 새 분석 엔진이 소비하지 않는다. 배치 칸을 0 으로 읽으면 "배치 트리거 41 → 분석
+   * 요청 0" P0 가 배치 트리거가 생기는 날마다 선다. */
+  const f = emptyFacts();
+  f.chain = v2Chain({ fired: 10, req: 10, start: 10, done: 10, pub: 10 });
+  assert.equal(hits(f, 'R10').length, 0);
+  assert.ok(f.chain.feeds[0].v > 0, '전제: 배치 트리거가 있다');
+  /* 대조 — 같은 자리에 0 이 실리면(대상 아님 표시 없이) 손실로 선다. 표시를 무시하는 변이가 죽는다 */
+  f.chain.stages = f.chain.stages.map(({ batch_na: _na, ...s }) => ({ ...s, batch: 0 }));
+  assert.ok(hits(f, 'R10').some((x) => x.targetId === 'batch:c.req' && x.metric === 41));
+});
+
+test('🔴 R10 — 단계가 전부 관측 불가면 위반을 세우지 않고 못 돎이다 (새 분석 엔진의 요청이 아직 없던 날)', () => {
+  /* 옛 설명 엔진이 돌던 과거 날짜를 조회한 형상이다: 트리거는 있고 새 분석 엔진의 단계는 전부 0.
+   * 서버가 그 단계들을 관측 불가로 내린다. 0 을 실측으로 읽으면 "장중 트리거 → 분석 요청" P0 가 선다. */
+  const f = emptyFacts();
+  f.chain = v2Chain({ fired: 256, req: 0, start: 0, done: 0, pub: 0 }, true);
   assert.equal(hits(f, 'R10').length, 0, '관측 불가 단계의 0 을 손실로 세웠다');
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
   assert.equal(rr.evaluated, false, '위반 0건으로 평가됐다고 선다 — 손실이 없다는 뜻이 아니다');
   assert.equal(rr.notRun, 'axis');
   /* 사유가 원인을 말한다 — "배포본에 축이 없다"가 아니다(축은 왔고, 셀 쪽이 없다) */
   assert.match(rr.notRunWhy ?? '', /관측 불가/, '화면이 읽는 사유 자리에 원인이 없다');
-  assert.match(rr.note ?? '', /관측 불가/);
-  assert.match(rr.note ?? '', /옛 설명 엔진/);
+  assert.match(rr.note ?? '', /새 분석 엔진의 요청이 아직 없었다/);
   assert.doesNotMatch(rr.note ?? '', /배포본/);
 
-  /* 대조 — 같은 수인데 관측 가능하면 지금처럼 P0 손실이다. 표시를 무시하는 변이도, 0 이면 무조건
-   * 못 돎으로 접는 변이도 여기서 죽는다. */
-  f.chain.stages = f.chain.stages.map(({ blind: _blind, ...s }) => s);
-  const v = hits(f, 'R10');
-  assert.deepEqual(v.map((x) => [x.targetId, x.metric]), [['batch:c.obs', 41], ['intraday:c.obs', 256]]);
+  /* 대조 — 같은 수인데 관측 가능하면 P0 손실이다(그 엔진이 돌던 날 요청이 하나도 안 만들어졌다).
+   * 표시를 무시하는 변이도, 0 이면 무조건 못 돎으로 접는 변이도 여기서 죽는다. */
+  f.chain = v2Chain({ fired: 256, req: 0, start: 0, done: 0, pub: 0 });
+  assert.deepEqual(hits(f, 'R10').map((x) => [x.targetId, x.metric]), [['intraday:c.req', 256]]);
 
   /* 축이 아예 없는 응답의 사유는 종전 그대로다 */
   delete f.chain;

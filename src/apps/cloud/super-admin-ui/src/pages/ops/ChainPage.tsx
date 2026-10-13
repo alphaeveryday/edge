@@ -6,7 +6,7 @@
 import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { ChainStrip } from './ChainStrip';
-import { intradayLostAtEntry, legacyStagesBlind } from './chainView';
+import { intradayLostAtEntry, stagesBlind } from './chainView';
 import { Absent, AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import '../../styles/ops.css';
 
@@ -34,18 +34,22 @@ export function ChainPage() {
             각 칸은 배치 / 장중
             <Info
               tip={
-                '체인은 하나다.\n배치 트리거와 장중 트리거는 별개 흐름이 아니라 같은 체인에 들어오는 두 갈래 입력이다 — ' +
-                'etf_contribution_observation 이 두 트리거 FK 를 모두 갖는다.'
+                '단계는 새 분석 엔진의 것이다: 분석 요청 → 분석 시작 → 분석 완료 → 게시.\n' +
+                '각 수는 조회일에 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다(그날 만들어진 분석 전체가 아니다).\n\n' +
+                '배치 트리거는 새 분석 엔진이 소비하지 않아 뒤 단계의 배치 칸은 "대상 아님"이다.\n\n' +
+                '손실로 판정하는 구간(R10)은 트리거 → 분석 요청, 분석 요청 → 분석 시작이다. ' +
+                '분석 시작 → 완료의 감소는 실패했거나 진행 중인 분석이고(실패는 R15 가 맡는다), ' +
+                '완료 → 게시의 감소는 고른 항목이 없어 게시하지 않은 분석이다 — 둘 다 수만 보여 준다.'
               }
               label="체인 구조"
             />
           </span>
         </div>
-        {legacyStagesBlind(q.facts.chain) && (
+        {stagesBlind(q.facts.chain) && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
-            트리거 뒤 단계(관측부터 Cloud 게시까지)는 옛 설명 엔진의 표에서 셉니다. 그 엔진이 조회일보다
-            앞서 멈춰 이 날의 값이 없습니다 — 0건이 아니라 관측 불가입니다. 구간 손실(R10)도 같은
-            이유로 판정하지 못합니다.
+            이 날에는 새 분석 엔진의 요청이 아직 없었습니다 — 트리거 뒤 단계는 0건이 아니라 관측
+            불가입니다. 옛 설명 엔진이 돌던 때의 값은 여기서 다시 보여 주지 않습니다. 구간 손실(R10)도
+            같은 이유로 판정하지 못합니다.
           </p>
         )}
         <ChainStrip chain={q.facts.chain} />
@@ -53,12 +57,12 @@ export function ChainPage() {
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
             {/* 🔴 이 문장은 **관측 결과**다 — 축이 있는지가 아니라 **이번 응답의 값**이 정한다.
                 축이 오기 전에는 "축이 있으면 참"이었지만(목 스냅샷이 늘 0 이었다) 이제 실 원장이
-                오므로, 조건을 값에서 다시 세운다: 장중이 발화했는데 관측이 0 인 날에만 참이다.
+                오므로, 조건을 값에서 다시 세운다: 장중이 발화했는데 첫 단계가 0 인 날에만 참이다.
                 안 그러면 장중 계보가 살아난 날 화면이 "전량 사라진다"를 계속 단정한다. */}
             {intradayLostAtEntry(q.facts.chain) && (
               <>
-                장중 갈래는 관측 단계에서 전량이 사라집니다 — 체인에서 실패한 것이 아니라 체인에
-                들어가지 못한 것입니다.{' '}
+                장중 트리거가 분석 요청으로 하나도 이어지지 않았습니다 — 분석이 실패한 것이 아니라
+                요청이 만들어지지 않은 것입니다.{' '}
               </>
             )}
             이 흐름은 <b>Cloud 게시</b>에서 끝납니다 — 발번 이후는{' '}
@@ -98,7 +102,7 @@ export function ChainPage() {
         </div>
         {/* ⛔ 축이 없을 때 빈 격자를 그리지 않는다 — 칸이 0개인 격자는 "오늘 실패한 ETF 가 없다"로
             읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). */}
-        {ledger && legacyStagesBlind(q.facts.chain) && (
+        {ledger && q.facts.chain?.legacy_blind && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
             이 표도 옛 설명 엔진의 실행 상태를 읽습니다. 그 엔진이 조회일보다 앞서 멈춰 이 날의 귀결은
             비어 있습니다 — 새 분석 엔진의 실행은 이 표에 나오지 않습니다. 분석 실패는{' '}
