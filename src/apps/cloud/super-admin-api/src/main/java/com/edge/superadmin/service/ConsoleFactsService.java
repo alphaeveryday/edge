@@ -148,6 +148,9 @@ public class ConsoleFactsService {
 			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
 		}
 		LocalDate end = maxDate == null ? LocalDate.now(KST) : parseDateParam(maxDate);
+		if (end.minusDays(days - 1L).getYear() < 1) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
 		return AnalysisTrendResponse.from(end.minusDays(days - 1L), end,
 				facts.analysisTrend(end, days));
 	}

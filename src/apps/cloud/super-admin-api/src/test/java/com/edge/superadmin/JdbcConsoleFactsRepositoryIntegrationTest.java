@@ -1409,6 +1409,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	@Test
 	void 분석_추이는_running_을_실패로_세지_않고_행이_없는_날은_점이_없다() {
 		insertAnalysis("outlook", "o1", "etf-a", "2026-08-02T06:00:00+09:00", "completed", "database");
+		// 같은 종목을 한 번 더 완료 — 건수 2 · 종 수 1 로 갈라야 두 열을 맞바꾸는 변이가 죽는다.
+		insertAnalysis("outlook", "o1b", "etf-a", "2026-08-02T07:00:00+09:00", "completed", "database");
 		insertAnalysis("outlook", "o2", "etf-b", "2026-08-02T06:00:00+09:00", "failed", "database");
 		insertAnalysis("outlook", "o3", "etf-b", "2026-08-02T06:30:00+09:00", "failed", "database"); // 같은 종목 두 번 실패
 		insertAnalysis("outlook", "o4", "etf-c", "2026-08-02T06:00:00+09:00", "running", "database");
@@ -1419,13 +1421,17 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertAnalysis("outlook", "o-out", "etf-a", "2026-08-04T00:00:00+09:00", "completed", "database"); // 범위 밖
 		insertAnalysis("outlook", "o-old", "etf-a", "2026-07-31T23:59:00+09:00", "completed", "database"); // 범위 밖
 		insertAnalysis("movement", "m1", "etf-a", "2026-08-03T10:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m2", "etf-a", "2026-08-03T11:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m3", "etf-b", "2026-08-03T11:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "m4", "etf-b", "2026-08-03T11:30:00+09:00", "failed", "database");
+		insertAnalysis("movement", "m5", "etf-c", "2026-08-03T11:30:00+09:00", "failed", "database");
 
 		// 08-01 ~ 08-03 의 3일 — 08-01 에는 어느 종류도 행이 없다.
 		assertThat(repository.analysisTrend(DAY, 3)).containsExactly(
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
-						"movement", LocalDate.parse("2026-08-03"), 1, 0, 0, 1, 0),
+						"movement", LocalDate.parse("2026-08-03"), 2, 3, 0, 1, 2),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
-						"outlook", LocalDate.parse("2026-08-02"), 1, 2, 3, 1, 1),
+						"outlook", LocalDate.parse("2026-08-02"), 2, 2, 3, 1, 1),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
 						"outlook", LocalDate.parse("2026-08-03"), 1, 0, 0, 1, 0));
 	}

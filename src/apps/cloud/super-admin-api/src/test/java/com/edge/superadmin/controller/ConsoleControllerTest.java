@@ -1008,5 +1008,9 @@ class ConsoleControllerTest {
 				.andExpect(status().isBadRequest());
 		mvc.perform(get("/api/v1/console/trends/analysis").param("maxDate", "9999-12-31"))
 				.andExpect(status().isBadRequest());
+		// 시작일이 1년 앞으로 넘어가는 범위도 거부한다(장중 분석 추이와 같은 하한).
+		mvc.perform(get("/api/v1/console/trends/analysis")
+						.param("maxDate", "0001-01-01").param("days", "31"))
+				.andExpect(status().isBadRequest());
 	}
 }
