@@ -109,8 +109,9 @@ def test_projection_horizon_does_not_cancel_a_separate_monthly_commitment():
         preferences={'contribution': '매월 10만원'})
     decision = Decision(kind='scenario', funding_text='매월 10만원')
     assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
-    request.funding_questions = ['', '연 5% 수익률을 가정하면 10년 뒤 얼마인가요?']
-    assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
+    for rate in ['5', '3.5', '-2.5']:
+        request.funding_questions = ['', f'연 {rate}% 수익률을 가정하면 10년 뒤 얼마인가요?']
+        assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
     request.funding_questions = ['', '납입은 3개월만 할게요. 5년 뒤 금액을 계산해 주세요.']
     assert resolve_funding(request, decision) is None
     request.funding_questions = ['', '투자는 3년 후에 시작할 계획이고, 5년 후 자산을 계산해 주세요.']
