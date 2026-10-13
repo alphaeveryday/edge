@@ -62,6 +62,7 @@ services:
   worker:
     build: ../
     restart: unless-stopped
+    stop_grace_period: 330s
     command: ["python", "-m", "edge_portfolio.worker"]
     environment:
       PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}

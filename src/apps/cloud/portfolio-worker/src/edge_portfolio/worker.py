@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import get_args
 
@@ -76,13 +77,23 @@ async def main():
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise RuntimeError("DEEPSEEK_API_KEY is required")
     store.initialize()
+    stopping = asyncio.Event()
+
+    def request_stop(number, frame):
+        stopping.set()
+        log.info('worker draining signal=%s; finishing the current job', number)
+
+    handlers = {number: signal.signal(number, request_stop) for number in (signal.SIGTERM, signal.SIGINT)}
     try:
-        while True:
+        while not stopping.is_set():
             worked = await work_once()
             if not worked:
                 await asyncio.sleep(1)
     finally:
+        for number, handler in handlers.items():
+            signal.signal(number, handler)
         HEARTBEAT.unlink(missing_ok=True)
+        log.info('worker stopped')
 
 
 if __name__ == "__main__":
