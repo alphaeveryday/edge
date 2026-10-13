@@ -33,7 +33,7 @@ try {
     actual[row.instrument_id] = (actual[row.instrument_id] || 0) + row.weight_pct;
   }
   expect(actual).toEqual(Object.fromEntries(selected.allocations.map(row => [row.instrument_id, row.weight_pct])));
-  expect(Object.values(actual).every(value => value % 5 === 0)).toBe(true);
+  expect(Object.values(actual).every(value => value % 10 === 0)).toBe(true);
   expect(plan.historical_performance?.interval).toBe('1d');
   expect(plan.historical_performance?.currency).toBe('KRW');
   expect(plan.historical_performance.points.length).toBeGreaterThanOrEqual(200);
