@@ -15,6 +15,15 @@ def target(**weights):
     return [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': value} for key, value in weights.items()]
 
 
+def test_projection_rejection_cannot_block_the_worker_with_regex_backtracking():
+    import subprocess
+    import sys
+    cases = ['5년 뒤 ' + '계산해' * 60 + 'X', ' ' * 900 + 'X']
+    code = 'from edge_portfolio.execution import projection_question\n' + '\n'.join(
+        f'assert not projection_question({value!r})' for value in cases)
+    subprocess.run([sys.executable, '-X', 'utf8', '-c', code], check=True, capture_output=True, timeout=10)
+
+
 @pytest.mark.parametrize('principal', ['', '원금은 1000만원입니다. '])
 def test_initial_scenario_explicit_zero_overrides_saved_monthly_preference(principal):
     from edge_portfolio.decision import Decision
