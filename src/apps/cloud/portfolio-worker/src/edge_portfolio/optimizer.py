@@ -6,10 +6,28 @@ from itertools import combinations
 
 import numpy as np
 
-from .market_data import fetch_prices, normalized_prices, expected_sessions
+from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns
 from .recommendation import selected_accounts, allocation_error
 
 PRICE_TIMEOUT_SECONDS = 65
+
+
+def optimization_bounds(ids, records, as_of):
+    start, end = comparison_bounds(ids, records, as_of)
+    sessions = set().union(*(set(expected_sessions(key, start, end)) for key in ids - {'CASH:KRW'}))
+    if len(sessions) < 11:
+        raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
+    return start, end
+
+
+def optimization_prices(ids, records, as_of, bounds=None):
+    frame, sources = normalized_prices(ids, records, as_of, bounds)
+    sessions = set().union(*(set(expected_sessions(key, frame.index[0], frame.index[-1])) for key in ids - {'CASH:KRW'}))
+    if sessions:
+        frame = frame.loc[frame.index.isin(sessions)]
+    if len(frame) < 11:
+        raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
+    return frame / frame.iloc[0], sources
 
 
 def grid(size):
@@ -19,6 +37,8 @@ def grid(size):
 
 
 def search(ids, frame, current):
+    if len(frame) < 11:
+        return []  # Ten measured sessions plus the initial normalization date.
     allocation = grid(len(ids))
     prices = frame[ids].to_numpy()
     baseline = sum(frame[key].to_numpy() * value for key, value in current.items())
@@ -27,8 +47,9 @@ def search(ids, frame, current):
         target = allocation[:, ids.index(key)] if key in ids else 0
         turnover += np.abs(target - current.get(key, 0)) / 2
     accepted = []
-    for start in range(0, len(allocation), 256):
-        batch = allocation[start:start + 256]
+    chunk = max(1, min(256, 500000 // len(frame)))
+    for start in range(0, len(allocation), chunk):
+        batch = allocation[start:start + chunk]
         # Avoid nested BLAS thread pools inside the ten parallel searches.
         values = np.einsum('ij,kj->ik', batch, prices)
         ahead = values[:, 1:] > baseline[None, 1:] + 1e-10
@@ -113,29 +134,38 @@ class Optimizer:
             eligible = [group if not set(group).intersection(failed) else [] for group in groups]
             if set(self.market.current).intersection(failed):
                 raise ValueError('BASELINE_PRICE_UNAVAILABLE')
-            # Reject short/gapped histories individually before establishing one shared window.
+            # Exclude too-short ranges first, then validate prices within one shared window.
             for group in eligible:
                 try:
                     if group:
-                        normalized_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of)
+                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of)
                 except (KeyError, ValueError):
                     group.clear()
             if not any(eligible):
                 raise ValueError('NO_COMPARABLE_PRICE_HISTORY')
-            # One common endpoint must not let a short-history candidate invalidate its peers.
+            # Removing unusable groups may expand the shared window, so revalidate survivors.
             while True:
                 valid_ids = set(self.market.current).union(*(set(group) for group in eligible))
-                keys = valid_ids - {'CASH:KRW'}
-                if any(self.market.catalog[key]['market'] == 'US' for key in keys):
-                    keys = keys | {'FX'}
-                end = min(self.market.records[key]['frame'].index[-1] for key in keys)
-                records = {key: {**value, 'frame': value['frame'].loc[:end]} for key, value in self.market.records.items()}
+                bounds = comparison_bounds(valid_ids, self.market.records, self.market.as_of)
                 rejected = False
+                records = {key: {**value, 'frame': value['frame'].loc[:bounds[1]]} for key, value in self.market.records.items()}
                 for group in eligible:
                     if not group:
                         continue
                     try:
-                        normalized_prices(set(group) | set(self.market.current), records, self.market.as_of)
+                        optimization_bounds(set(group) | set(self.market.current), records, self.market.as_of)
+                    except (KeyError, ValueError):
+                        group.clear()
+                        rejected = True
+                if rejected:
+                    if not any(eligible):
+                        raise ValueError('NO_COMMON_PRICE_HISTORY')
+                    continue
+                for group in eligible:
+                    if not group:
+                        continue
+                    try:
+                        optimization_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of, bounds)
                     except (KeyError, ValueError):
                         group.clear()
                         rejected = True
@@ -143,11 +173,7 @@ class Optimizer:
                     raise ValueError('NO_COMMON_PRICE_HISTORY')
                 if not rejected:
                     break
-            frame, sources = normalized_prices(valid_ids, records, self.market.as_of)
-            trading_days = set().union(*(set(expected_sessions(key, frame.index[0], frame.index[-1])) for key in valid_ids - {'CASH:KRW'}))
-            if trading_days:
-                frame = frame.loc[frame.index.isin(trading_days)]
-                frame = frame / frame.iloc[0]
+            frame, sources = optimization_prices(valid_ids, self.market.records, self.market.as_of, bounds)
             # NumPy releases the GIL; all ten searches are scheduled together, sharing prices.
             with ThreadPoolExecutor(max_workers=10) as pool:
                 loop = asyncio.get_running_loop()
@@ -165,12 +191,11 @@ class Optimizer:
                 history = {'points': [{'date': str(day.date()), 'recommended': round(float(values.loc[day] * 1000000), 2),
                                        'current': round(float(baseline.loc[day] * 1000000), 2)} for day in frame.index],
                            'interval': '1d', 'currency': 'KRW', 'initial_krw': 1000000,
-                           'basis': '최근 1년 · 100만 원을 넣었다면 (원)',
+                           'basis': history_basis(self.result['start_date'], self.result['end_date']),
                            'method': '시작 비중으로 매수 후 유지 · 분배금 재투자 · 환율 반영 · 세금·매매비용 제외',
                            'source_url': 'https://finance.yahoo.com/', 'sources': sources,
                            'start_date': self.result['start_date'], 'end_date': self.result['end_date']}
-                self.market.results[tuple(sorted(target.items()))] = {'status': 'available', 'history': history,
-                    'return_1y_pct': round(float((values.iloc[-1] - 1) * 100), 2)}
+                self.market.results[tuple(sorted(target.items()))] = {'status': 'available', 'history': history, **history_returns(history)}
         except (ValueError, KeyError, TimeoutError):
             self.result = {'status': 'unavailable', 'candidates': [], 'reason': 'COMPARISON_DATA_UNAVAILABLE'}
         return self.result

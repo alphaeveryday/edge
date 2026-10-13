@@ -9,6 +9,38 @@ from edge_portfolio.market_data import MarketData, comparison, enrich_report, we
 from report_fixtures import final_payload
 
 
+def test_provider_requests_maximum_history_with_the_analysis_cutoff(monkeypatch):
+    from edge_portfolio.market_data import load_prices
+    calls = []
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            return record()['frame']
+    monkeypatch.setattr('edge_portfolio.market_data.yf.Ticker', lambda _: Ticker())
+    load_prices('069500.KS', date(2026, 10, 12))
+    assert calls[0].get('period') == 'max'
+    assert calls[0]['end'] == '2026-10-12'
+    assert 'start' not in calls[0]
+
+
+def test_old_price_defect_outside_common_window_does_not_hide_new_etf_graph(monkeypatch):
+    from edge_portfolio.market_data import load_prices
+    older = record()['frame']
+    older.iloc[10, :] = float('nan')
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs): return older
+    monkeypatch.setattr('edge_portfolio.market_data.yf.Ticker', lambda _: Ticker())
+    records = {'KR:069500': load_prices('069500.KS', date(2026, 10, 12)),
+               'KR:360750': record(dates=pd.bdate_range('2026-07-07', '2026-10-09'))}
+    history = comparison({'KR:069500': 1}, {'KR:360750': 1}, records, date(2026, 10, 12))
+    assert history['start_date'] == '2026-07-07'
+    records['KR:069500']['frame'].loc['2026-07-08', 'Adj Close'] = -1
+    with pytest.raises(ValueError, match='PRICE_INVALID'):
+        comparison({'KR:069500': 1}, {'KR:360750': 1}, records, date(2026, 10, 12))
+
+
 def record(currency='KRW', start=100, finish=110, dates=None):
     dates = dates if dates is not None else pd.bdate_range('2025-10-09', '2026-10-09')
     values = [start + (finish - start) * i / (len(dates) - 1) for i in range(len(dates))]
@@ -26,13 +58,15 @@ def test_daily_buy_and_hold_preserves_cash_and_fx_and_initial_money():
     assert history['points'][-1]['current'] == pytest.approx(1320000)
 
 
-def test_missing_year_and_internal_long_gap_are_not_backfilled_or_drawn_as_zero():
+def test_short_history_is_drawn_but_internal_long_gap_is_not_backfilled():
     short = pd.bdate_range('2026-03-01', '2026-10-09')
-    with pytest.raises(ValueError, match='ONE_YEAR_HISTORY_INCOMPLETE|MISSING_TRADING_SESSIONS'):
-        comparison({'KR:069500': 1}, None, {'KR:069500': record(dates=short)}, date(2026, 10, 12))
+    history = comparison({'KR:069500': 1}, None, {'KR:069500': record(dates=short)}, date(2026, 10, 12))
+    assert history['start_date'] == '2026-03-02'
+    assert history['end_date'] == '2026-10-09'
+    assert '최근 1년' not in history['basis']
     broken = record()
     broken['frame'].iloc[50:70] = float('nan')
-    with pytest.raises(ValueError, match='ONE_YEAR_HISTORY_INCOMPLETE|MISSING_TRADING_SESSIONS'):
+    with pytest.raises(ValueError, match='MISSING_TRADING_SESSIONS'):
         comparison({'KR:069500': 1}, None, {'KR:069500': broken}, date(2026, 10, 12))
 
 
@@ -122,18 +156,100 @@ def test_missing_fx_on_a_us_trading_day_is_not_carried_forward():
         comparison({'US:VOO': 1}, None, {'US:VOO': record('USD'), 'FX': fx}, date(2026, 10, 12))
 
 
-async def test_current_new_fund_does_not_hide_recommendation_and_limit_is_partial():
+async def test_new_current_fund_sets_common_window_without_inventing_an_annual_return():
     request = AnalysisInput(holdings=[{'name': 'current', 'instrument_id': 'KR:360750', 'amount_krw': 100}], horizon='10년 이상')
     def loader(symbol, as_of):
         return record(dates=pd.bdate_range('2026-09-01', '2026-10-09')) if symbol == '360750.KS' else record()
     market = MarketData(request, date(2026, 10, 12), loader)
     result = await market.get([{'instrument_id': 'KR:069500', 'weight_pct': 100}])
     assert result['status'] == 'available'
-    assert result['history']['points'][-1]['current'] is None
-    assert result['history']['current_unavailable_reason']
+    assert result['history']['points'][-1]['current'] is not None
+    assert result['history']['start_date'] == '2026-09-01'
+    assert 'current_unavailable_reason' not in result['history']
+    assert result['return_1y_pct'] is None
+    assert result['return_period_pct'] is not None
     market.calls = 3
     result = await market.get([{'instrument_id': 'CASH:KRW', 'weight_pct': 100}])
     assert result == {'status': 'unavailable', 'reason': 'MARKET_DATA_LIMIT'}
+
+
+async def test_market_entry_point_ignores_defects_before_the_current_funds_inception():
+    request = AnalysisInput(holdings=[{'name': 'current', 'instrument_id': 'KR:360750', 'amount_krw': 100}], horizon='10년 이상')
+    def loader(symbol, as_of):
+        if symbol == '360750.KS':
+            return record(dates=pd.bdate_range('2026-09-01', '2026-10-09'))
+        data = record()
+        data['frame'].iloc[10, :] = float('nan')
+        return data
+    result = await MarketData(request, date(2026, 10, 12), loader).get([{'instrument_id': 'KR:069500', 'weight_pct': 100}])
+    assert result['status'] == 'available'
+    assert result['history']['start_date'] == '2026-09-01'
+    assert result['history']['points'][-1]['current'] is not None
+
+
+def test_holiday_carry_cannot_import_a_negative_price_from_before_common_start():
+    kr = record(dates=pd.bdate_range('2026-07-16', '2026-07-24'))
+    kr['frame'] = kr['frame'].drop(pd.Timestamp('2026-07-17'))
+    kr['frame'].loc['2026-07-16', 'Adj Close'] = -100
+    records = {'KR:069500': kr,
+               'US:VOO': record('USD', dates=pd.bdate_range('2026-07-17', '2026-07-24')),
+               'FX': record(dates=pd.bdate_range('2026-07-16', '2026-07-24'))}
+    with pytest.raises(ValueError, match='PRICE_INVALID'):
+        comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
+
+
+def test_initial_holiday_price_must_cover_the_preceding_trading_session():
+    kr = record(dates=pd.DatetimeIndex(['2026-07-01', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24']))
+    records = {'KR:069500': kr,
+               'US:VOO': record('USD', dates=pd.bdate_range('2026-07-17', '2026-07-24')),
+               'FX': record(dates=pd.bdate_range('2026-07-16', '2026-07-24'))}
+    with pytest.raises(ValueError, match='MISSING_TRADING_SESSIONS'):
+        comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
+
+
+@pytest.mark.parametrize('fx_starts_on_common_day', [False, True])
+def test_kr_start_on_us_holiday_uses_preceding_us_and_fx_quotes(fx_starts_on_common_day):
+    us_dates = pd.DatetimeIndex(['2026-07-02', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10'])
+    records = {'KR:069500': record(dates=pd.bdate_range('2026-07-03', '2026-07-10')),
+               'US:VOO': record('USD', dates=us_dates),
+               'FX': record(dates=pd.bdate_range('2026-07-03', '2026-07-10') if fx_starts_on_common_day else us_dates)}
+    history = comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 13))
+    assert history['start_date'] == '2026-07-03'
+    assert history['points'][0]['recommended'] == 1000000
+
+
+def test_comparison_keeps_the_longest_common_history_instead_of_capping_at_one_year():
+    records = {'KR:069500': record(dates=pd.bdate_range('2022-01-03', '2026-10-09')),
+               'KR:360750': record(dates=pd.bdate_range('2023-05-02', '2026-10-08'))}
+    history = comparison({'KR:069500': 1}, {'KR:360750': 1}, records, date(2026, 10, 12))
+    assert history['start_date'] == '2023-05-02'
+    assert history['end_date'] == '2026-10-08'
+    assert history['points'][0]['recommended'] == history['points'][0]['current'] == 1000000
+
+
+def test_short_fx_sets_common_start_without_backfilling_before_fx_exists():
+    records = {'US:VOO': record('USD'), 'FX': record(dates=pd.bdate_range('2026-06-01', '2026-10-09'))}
+    history = comparison({'US:VOO': 1}, None, records, date(2026, 10, 12))
+    assert history['start_date'] == '2026-06-01'
+    assert history['points'][0]['recommended'] == 1000000
+
+
+async def test_multiyear_period_return_is_not_published_as_an_annual_return():
+    market = MarketData(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), date(2026, 10, 12),
+                        lambda *_: record(finish=140, dates=pd.bdate_range('2023-01-02', '2026-10-09')))
+    result = await market.get([{'instrument_id': 'KR:069500', 'weight_pct': 100}])
+    assert result['return_period_pct'] == 40
+    assert 0 < result['return_1y_pct'] < result['return_period_pct']
+
+
+def test_annual_return_uses_last_known_price_on_a_holiday_anniversary():
+    from edge_portfolio.market_data import history_returns
+    result = history_returns({'points': [
+        {'date': '2025-10-10', 'recommended': 100},
+        {'date': '2025-10-13', 'recommended': 120},
+        {'date': '2026-10-12', 'recommended': 150},
+    ]})
+    assert result['return_1y_pct'] == 50  # October 12, 2025 was Sunday, before the jump.
 
 
 async def test_current_timeout_keeps_completed_recommended_history(monkeypatch):

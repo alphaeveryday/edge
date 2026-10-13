@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from datetime import date, timedelta
 from decimal import Decimal
+from functools import lru_cache
+from numbers import Real
 from urllib.parse import quote
 
 import pandas as pd
@@ -24,7 +26,11 @@ KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
 
 
 def expected_sessions(instrument_id, start, end):
-    is_kr = instrument_id.startswith('KR:')
+    return _market_sessions(instrument_id.startswith('KR:'), start, end)
+
+
+@lru_cache(maxsize=128)
+def _market_sessions(is_kr, start, end):
     calendar = calendars.get_calendar('XKRX' if is_kr else 'XNYS', start=start - pd.Timedelta(days=30), end=end + pd.Timedelta(days=30))
     sessions = calendar.sessions_in_range(start, end).tz_localize(None)
     return sessions.difference(KRX_EXTRA_CLOSURES) if is_kr else sessions
@@ -37,10 +43,14 @@ def year_before(day, years=1):
         return day.replace(year=day.year - years, day=28)
 
 
+def positive_price(value):
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
 def load_prices(symbol, as_of):
     yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
-    frame = ticker.history(start=(year_before(as_of) - timedelta(days=10)).isoformat(), end=as_of.isoformat(),
+    frame = ticker.history(period='max', end=as_of.isoformat(),
                            interval='1d', auto_adjust=False, actions=True, timeout=12)
     metadata = ticker.history_metadata
     if frame.empty or not {'Adj Close', 'Close'} <= set(frame.columns):
@@ -50,8 +60,7 @@ def load_prices(symbol, as_of):
     frame = frame.loc[frame.index < pd.Timestamp(as_of)]
     if frame.empty or (as_of - frame.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
-    if not frame[['Adj Close', 'Close']].map(lambda v: math.isfinite(v) and v > 0).all().all():
-        raise ValueError('PRICE_INVALID')
+    # Validate values inside the chosen comparison window, not unrelated older history.
     return {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol,
             'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
 
@@ -92,47 +101,95 @@ def weights(rows):
     return {k: float(v / total) for k, v in result.items()}
 
 
-def normalized_prices(ids, records, as_of):
+def comparison_bounds(ids, records, as_of):
+    keys = ids - {'CASH:KRW'}
+    required = [records[key]['frame']['Adj Close'] for key in keys]
+    needs_fx = any(records[key]['currency'] == 'USD' for key in keys)
+    if needs_fx:
+        required.append(records['FX']['frame']['Close'])
+    if required:
+        if any(s.dropna().empty for s in required):
+            raise ValueError('PRICE_UNAVAILABLE')
+        start = max(s.first_valid_index() for s in required)
+        end = min(s.last_valid_index() for s in required)
+        if start >= end:
+            raise ValueError('NO_COMMON_PRICE_HISTORY')
+        if (as_of - end.date()).days > 7:
+            raise ValueError('PRICE_STALE')
+        return start, end
+    end = pd.Timestamp(as_of - timedelta(days=1))
+    return pd.Timestamp(year_before(end.date())), end
+
+
+def normalized_prices(ids, records, as_of, bounds=None):
     series, urls = {}, []
-    for key in ids - {'CASH:KRW'}:
+    keys = ids - {'CASH:KRW'}
+    needs_fx = any(records[key]['currency'] == 'USD' for key in keys)
+    start, end = bounds or comparison_bounds(ids, records, as_of)
+    for key in keys:
         record = records[key]
         values = record['frame']['Adj Close']
+        sessions = expected_sessions(key, start - pd.Timedelta(days=30), end)
+        expected = sessions[sessions >= start]
+        preceding = sessions[sessions <= start]
+        if len(preceding) and preceding[-1] >= values.first_valid_index():
+            expected = expected.union(preceding[-1:])
+        if len(expected.difference(values.dropna().index)):
+            raise ValueError('MISSING_TRADING_SESSIONS')
+        if not record['frame'].loc[start:end, ['Adj Close', 'Close']].map(positive_price).all().all():
+            raise ValueError('PRICE_INVALID')
         if record['currency'] == 'USD':
             fx = records['FX']['frame']['Close']
-            start = pd.Timestamp(year_before(min(values.index[-1], fx.index[-1]).date()))
-            expected_fx = expected_sessions(key, start, min(values.index[-1], fx.index[-1]))
-            if len(expected_fx.difference(fx.dropna().index)):
+            fx_expected = sessions[sessions >= start]
+            if start not in fx.dropna().index and len(preceding) and preceding[-1] >= fx.first_valid_index():
+                fx_expected = fx_expected.union(preceding[-1:])
+            if len(fx_expected.difference(fx.dropna().index)):
                 raise ValueError('MISSING_FX_SESSIONS')
-            index = values.index.union(fx.index)
-            # No backward filling: a future FX quote must never value an earlier day.
-            values = values.reindex(index).ffill(limit=5) * fx.reindex(index).ffill(limit=5)
-            values = values.loc[:min(record['frame'].index[-1], fx.index[-1])]
+            if not fx.loc[start:end].map(positive_price).all():
+                raise ValueError('PRICE_INVALID')
+            index = values.index.union(fx.index).union(pd.DatetimeIndex([start]))
+            # Trading-day gaps were checked above; only holidays carry an earlier quote.
+            carried_prices = values.reindex(index).ffill().loc[start:end]
+            carried_fx = fx.reindex(index).ffill().loc[start:end]
+            if not all(s.map(positive_price).all() for s in (carried_prices, carried_fx)):
+                raise ValueError('PRICE_INVALID')
+            values = carried_prices * carried_fx
         elif record['currency'] != 'KRW':
             raise ValueError('UNSUPPORTED_CURRENCY')
         series[key] = values
         urls.append({'instrument_id': key, 'url': record['source_url']})
-    if 'FX' in records:
+    if needs_fx:
         urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url']})
     if series:
-        end = min(s.last_valid_index() for s in series.values())
-        start = pd.Timestamp(year_before(end.date()))
-        for key in ids - {'CASH:KRW'}:
-            expected = expected_sessions(key, start, end)
-            raw = records[key]['frame']['Adj Close']
-            if len(expected.difference(raw.dropna().index)):
-                raise ValueError('MISSING_TRADING_SESSIONS')
         union = pd.DatetimeIndex(sorted(set().union(*(s.index for s in series.values()))))
-        frame = pd.DataFrame({key: s.reindex(union).ffill(limit=5) for key, s in series.items()})
+        frame = pd.DataFrame({key: s.reindex(union).ffill() for key, s in series.items()})
         frame = frame.loc[(frame.index >= start) & (frame.index <= end)]
-        if len(frame) < 200 or (frame.index[0] - start).days > 7 or frame.isna().any().any():
-            raise ValueError('ONE_YEAR_HISTORY_INCOMPLETE')
+        if len(frame) < 2 or frame.isna().any().any():
+            raise ValueError('NO_COMMON_PRICE_HISTORY')
+        if not frame.map(positive_price).all().all():
+            raise ValueError('PRICE_INVALID')
         if any((end.date() - records[key]['frame'].index[-1].date()).days > 7 for key in ids - {'CASH:KRW'}):
             raise ValueError('PRICE_STALE')
     else:
-        end = pd.Timestamp(as_of - timedelta(days=1))
-        frame = pd.DataFrame(index=pd.bdate_range(year_before(end.date()), end))
+        frame = pd.DataFrame(index=pd.bdate_range(start, end))
     frame['CASH:KRW'] = 1.0
     return frame / frame.iloc[0], urls
+
+
+def history_basis(start, end):
+    return f'{str(start)[:10]} ~ {str(end)[:10]} · 공통 자료 기간 · 100만 원을 넣었다면 (원)'
+
+
+def history_returns(history):
+    points = history['points']
+    period = round((points[-1]['recommended'] / points[0]['recommended'] - 1) * 100, 2)
+    cutoff = year_before(date.fromisoformat(points[-1]['date']))
+    # A short common period is not annualized or mislabeled as one year.
+    annual = None
+    if date.fromisoformat(points[0]['date']) <= cutoff:
+        base = next(point for point in reversed(points) if date.fromisoformat(point['date']) <= cutoff)
+        annual = round((points[-1]['recommended'] / base['recommended'] - 1) * 100, 2)
+    return {'return_period_pct': period, 'return_1y_pct': annual}
 
 
 def comparison(target, current, records, as_of):
@@ -146,7 +203,7 @@ def comparison(target, current, records, as_of):
     points = [{'date': day.date().isoformat(), 'recommended': round(float(recommended.loc[day]), 2),
                'current': round(float(existing.loc[day]), 2) if existing is not None else None} for day in frame.index]
     return {'points': points, 'interval': '1d', 'currency': 'KRW', 'initial_krw': 1000000,
-            'basis': '최근 1년 · 100만 원을 넣었다면 (원)',
+            'basis': history_basis(points[0]['date'], points[-1]['date']),
             'method': '시작 비중으로 매수 후 유지 · 수정 종가 기준 분배금 재투자 · 미국 상장 ETF 환율 반영 · 세금·매매비용 제외 · 휴장일 직전 가격 유지',
             'source_url': 'https://finance.yahoo.com/', 'sources': urls,
             'start_date': points[0]['date'], 'end_date': points[-1]['date']}
@@ -199,14 +256,15 @@ class MarketData:
             except TimeoutError:
                 # A slow optional comparison must not discard ready recommendation data.
                 log.warning('Price collection deadline; publishing only complete series')
-            history = comparison(target, None, self.records, self.as_of)
             if self.current:
                 try:
                     history = comparison(target, self.current, self.records, self.as_of)
                 except (KeyError, ValueError):
-                    history['current_unavailable_reason'] = '현재 구성은 최근 1년 자료가 부족해 비교에서 제외했어요.'
-            result = {'status': 'available', 'history': history,
-                      'return_1y_pct': round((history['points'][-1]['recommended'] / 1000000 - 1) * 100, 2)}
+                    history = comparison(target, None, self.records, self.as_of)
+                    history['current_unavailable_reason'] = '현재 구성의 유효한 공통 가격·환율 자료를 확보하지 못해 비교에서 제외했어요.'
+            else:
+                history = comparison(target, None, self.records, self.as_of)
+            result = {'status': 'available', 'history': history, **history_returns(history)}
         except Exception as error:
             # Optional market data failure must not destroy the research report.
             log.warning('Market history unavailable: %s', type(error).__name__)
@@ -241,7 +299,10 @@ class MarketData:
         if values.isna().any() or not values.map(lambda value: math.isfinite(value) and value >= 0).all():
             return None
         total = float(values.sum())
-        price = float(frame['Close'].iloc[-1])
+        price = frame['Close'].iloc[-1]
+        if not positive_price(price):
+            return None
+        price = float(price)
         return {'instrument_id': instrument_id, 'trailing_yield_pct': round(total / price * 100, 4),
                 'as_of': end.isoformat(), 'period_start': start.isoformat(), 'dividends_per_share': total,
                 'price': price, 'currency': record['currency'], 'source_url': record['source_url'],
@@ -251,7 +312,7 @@ class MarketData:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'read_portfolio_history',
-        'description': '등록 ETF와 현금의 추천 비중으로 최근 1년 일별 원화 총수익률을 계산한다. 최종 추천 비중 확정 후 호출한다. 최대 3개 구성.',
+        'description': '등록 ETF와 현금의 최대 가용 공통 기간 일별 원화 총수익률을 계산한다. 시작·종료일을 확인하며 기간 수익률과 최근 1년 수익률을 구분한다. 최종 추천 비중 확정 후 호출한다. 최대 3개 구성.',
         'parameters': {'type': 'object', 'properties': {'allocations': {'type': 'array', 'minItems': 1, 'maxItems': 20,
             'items': {'type': 'object', 'properties': {'instrument_id': {'type': 'string'}, 'weight_pct': {'type': 'number'}},
                       'required': ['instrument_id', 'weight_pct'], 'additionalProperties': False}}},
@@ -289,11 +350,12 @@ async def enrich_report(published, final, market, sources):
     if result['status'] == 'available':
         plan['historical_performance'] = result['history']
         plan['historical_return_1y'] = result['return_1y_pct']
+        plan['historical_return_period'] = result.get('return_period_pct')
         plan['unavailable_reason'] = ''
         if final.return_forecast and queried:
             plan['expected_return_1y'] = final.return_forecast.percent
             plan['return_forecast'] = {'reason': final.return_forecast.reason, 'evidence': forecast_evidence,
-                                       'method': '최근 1년 과거 성과와 시장 근거를 고려한 AI 추정 · 수익 보장 아님'}
+                                       'method': '표시된 공통 기간의 과거 성과와 시장 근거를 고려한 AI 추정 · 수익 보장 아님'}
     else:
-        plan['unavailable_reason'] = '최근 1년 전체의 일별 가격·환율을 확보하지 못해 과거 성과를 표시하지 못했어요.'
+        plan['unavailable_reason'] = '비교할 공통 기간의 유효한 일별 가격·환율을 확보하지 못해 과거 성과를 표시하지 못했어요.'
         plan['market_data_failure'] = result['reason']

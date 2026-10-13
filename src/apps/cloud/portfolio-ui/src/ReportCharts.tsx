@@ -39,7 +39,7 @@ export function PerformanceChart({ history }: { history: History }) {
   const valueLabel = (value: number) => `${Math.round(value).toLocaleString('ko-KR')}${isKRW ? '원' : ''}`;
   return <figure ref={ref} className={'perf report-history' + (visible ? ' is-visible' : '')}>
     <figcaption>{history.basis}</figcaption><div className="history-legend"><span>● 추천 구성</span>{hasCurrent && <span>● 현재 구성</span>}</div>
-    <svg viewBox="0 0 320 180" role="img" aria-label={history.interval === '1d' ? '최근 1년 일별 추천 구성과 현재 구성의 과거 성과' : '추천 구성과 현재 구성의 과거 성과'} onPointerMove={event => {
+    <svg viewBox="0 0 320 180" role="img" aria-label={`${points[0].date}부터 ${points.at(-1)!.date}까지 추천 구성과 현재 구성의 과거 성과`} onPointerMove={event => {
       const rect = event.currentTarget.getBoundingClientRect();
       const time = first + Math.max(0, Math.min(1, ((event.clientX - rect.left) / rect.width * 320 - 42) / 260)) * (last - first);
       setSelected(points.reduce((best, p, i) => Math.abs(Date.parse(p.date) - time) < Math.abs(Date.parse(points[best].date) - time) ? i : best, 0));
