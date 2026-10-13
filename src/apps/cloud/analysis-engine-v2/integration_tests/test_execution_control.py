@@ -10,7 +10,7 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 import pytest
 
-from edge_analysis_v2.cloud.control import control
+from edge_analysis_v2.cloud.control import SCAN_SECONDS, _RUNNING, control
 
 
 @pytest.fixture
@@ -19,6 +19,7 @@ def capacity():
     args = conninfo_to_dict(dsn)
     if (args.get('host'), args.get('port'), args.get('dbname')) != ('127.0.0.1', '55439', 'analysis_v2'):
         raise ValueError('Requires isolated local analysis_v2 database')
+    _RUNNING.clear()  # what was seen running is remembered per process, not per test
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute('TRUNCATE analysis_execution_slots')
         conn.execute('SET ROLE edge_analysis_v2_writer')
@@ -214,3 +215,65 @@ def test_concurrent_acquires_and_reclaim_keep_the_cap_and_one_per_etf(capacity):
         acquired = sum(pool.map(acquire, range(len(keys))))
     rows = conn.execute('SELECT execution_arn, request_key FROM analysis_execution_slots').fetchall()
     assert acquired == 1 and len(rows) == 3 and len({key for _, key in rows}) == 3 and 'done' not in {arn for arn, _ in rows}
+
+
+# ── A call looks up only the slots that can change its answer (ALPHA-1286) ───────────────────────
+# Every call used to ask Step Functions about every other slot. With forty held, one call took seconds,
+# three concurrent calls could not serve a burst of 95 workflows, and 39 gave up before analysing (2026-10-13).
+def test_room_left_owner_retry_and_release_ask_about_no_other_slot(capacity):
+    conn, _, workflows, ecs = capacity
+    for index in range(3):
+        assert control(conn, workflows, ecs, 'cluster', f'run{index}', 'acquire', slots=5, request_key=f'outlook:{index}')['acquired']
+    assert control(conn, workflows, ecs, 'cluster', 'run0', 'acquire', slots=5, request_key='outlook:0')['acquired']
+    control(conn, workflows, ecs, 'cluster', 'run0', 'release', slots=5)
+    workflows.describe_execution.assert_not_called()
+    assert slots_left(conn) == ['run1', 'run2']
+
+
+def test_slot_seen_running_is_not_looked_up_again_within_the_interval(capacity):
+    # Waiting workflows ask again every 30 seconds; each must not repeat the lookup of every held slot.
+    conn, _, workflows, ecs = capacity
+    now = [100.0]
+    def ask(arn):
+        return control(conn, workflows, ecs, 'cluster', arn, 'acquire', slots=2, request_key=arn, clock=lambda: now[0])['acquired']
+    assert ask('a') and ask('b')
+    assert not ask('c') and workflows.describe_execution.call_count == 2
+    assert not ask('d') and workflows.describe_execution.call_count == 2
+    now[0] += SCAN_SECONDS
+    assert not ask('c') and workflows.describe_execution.call_count == 4
+    # Slots turn over while workflows wait: only the slot not seen yet is looked up, at once.
+    control(conn, workflows, ecs, 'cluster', 'a', 'release', slots=2)
+    assert ask('d') and not ask('c') and workflows.describe_execution.call_count == 5
+
+
+def test_workflow_that_ended_without_releasing_is_found_after_the_interval(capacity):
+    # Skipping lookups may delay reclaiming such a slot by the interval; it must never keep the slot forever.
+    conn, _, workflows, ecs = capacity
+    now = [100.0]
+    def ask(arn):
+        return control(conn, workflows, ecs, 'cluster', arn, 'acquire', slots=1, request_key=arn, clock=lambda: now[0])['acquired']
+    assert ask('old') and not ask('new')
+    workflows.describe_execution.return_value = {'status': 'FAILED'}
+    assert not ask('new')
+    now[0] += SCAN_SECONDS
+    assert ask('new') and slots_left(conn) == ['new']
+
+
+def test_finished_slot_is_kept_while_room_is_left_and_reclaimed_when_room_is_needed(capacity):
+    conn, _, workflows, ecs = capacity
+    leftover(conn, workflows, status='FAILED')
+    assert control(conn, workflows, ecs, 'cluster', 'one', 'acquire', slots=2, request_key='outlook:091160')['acquired']
+    assert slots_left(conn) == ['old', 'one']
+    assert control(conn, workflows, ecs, 'cluster', 'two', 'acquire', slots=2, request_key='outlook:102110')['acquired']
+    assert slots_left(conn) == ['one', 'two']
+
+
+def test_unjudgeable_slot_is_looked_up_again_on_the_next_call(capacity):
+    # Only a running answer is remembered; a failed lookup proves nothing about the next moment.
+    conn, _, workflows, ecs = capacity
+    assert control(conn, workflows, ecs, 'cluster', 'one', 'acquire')['acquired']
+    workflows.describe_execution.side_effect = RuntimeError('AWS unavailable')
+    assert not control(conn, workflows, ecs, 'cluster', 'two', 'acquire')['acquired']
+    workflows.describe_execution.side_effect = None
+    workflows.describe_execution.return_value = {'status': 'SUCCEEDED'}
+    assert control(conn, workflows, ecs, 'cluster', 'two', 'acquire')['acquired']
