@@ -1,7 +1,7 @@
 {
   "version": 111,
   "summary": "시한의 70%가 지나면 에이전트에게 한 번 알림: 새 조사를 시작하지 말고 확인한 것으로 최종 응답을 내라. 시한에 걸려 실행 전체를 잃는 일을 줄임",
-  "source_digest": "bac9e574ffb6da3a6e973e7958ce87773011b3d4c1ef76d36fb2d6b3b836d714",
+  "source_digest": "388106181fc9e5d180aa1f6bf2ca2145a5da060a36f995a4883e58260eff18a2",
   "history": [
     {
       "version": 1,
