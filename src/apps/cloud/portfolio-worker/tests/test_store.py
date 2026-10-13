@@ -17,6 +17,7 @@ def isolated_db(monkeypatch):
     def connect():
         db = original()
         db.execute(f'SET search_path TO "{schema}"')
+        db.commit()
         return db
     monkeypatch.setattr(store, "connect", connect)
     store.initialize()
@@ -62,6 +63,48 @@ def test_crashed_worker_result_cannot_overwrite_expiration(isolated_db):
         db.execute("UPDATE portfolio_jobs SET started_at=now()-interval '7 minutes'")
     assert store.read(job["id"], "owner")["failure"] == "WORKER_INTERRUPTED"
     assert store.finish(job["id"], result={"late": True}) is False
+
+
+def test_interrupted_job_retains_last_checkpoint_without_becoming_a_completed_report(isolated_db):
+    job = store.submit('owner', 'checkpoint', {})
+    store.claim()
+    store.checkpoint(job['id'], {'diagnostics': {'events': [{'event': 'tool_started', 'tool': 'fetch_source'}]}})
+    store.checkpoint(job['id'], {'partial_report': {'sections': {'question': {'summary': 'saved'}}}})
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_jobs SET started_at=now()-interval '7 minutes' WHERE id=%s", (job['id'],))
+    failed = store.read(job['id'], 'owner')
+    assert failed['state'] == 'failed'
+    assert failed['failure'] == 'WORKER_INTERRUPTED'
+    assert failed['result']['diagnostics']['events'][0]['tool'] == 'fetch_source'
+    assert failed['result']['partial_report']['sections']['question']['summary'] == 'saved'
+    assert not store.checkpoint(job['id'], {'late': True})
+
+
+def test_slow_checkpoint_transaction_releases_lock_before_final_publication(isolated_db):
+    import time
+    import psycopg
+    job = store.submit('owner', 'slow-checkpoint', {})
+    store.claim()
+    with store.connect() as db:
+        db.execute("""CREATE FUNCTION delay_checkpoint() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.state='running' AND NEW.result IS NOT NULL THEN PERFORM pg_sleep(8); END IF;
+            RETURN NEW; END $$""")
+        db.execute('CREATE TRIGGER delay_checkpoint AFTER UPDATE ON portfolio_jobs FOR EACH ROW EXECUTE FUNCTION delay_checkpoint()')
+    with ThreadPoolExecutor(1) as pool:
+        saving = pool.submit(store.checkpoint, job['id'], {'diagnostics': {}})
+        # Wait until the checkpoint UPDATE really holds the job row lock.
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            with store.connect() as db:
+                blocked = db.execute("SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event='PgSleep' AND query LIKE 'UPDATE portfolio_jobs SET result=COALESCE%'").fetchone()['n']
+            if blocked:
+                break
+            time.sleep(.01)
+        assert blocked
+        assert store.finish(job['id'], result={'complete': True})
+        with pytest.raises(psycopg.errors.QueryCanceled):
+            saving.result()
+    assert store.read(job['id'], 'owner')['result'] == {'complete': True}
 
 
 def test_api_rejects_other_origins_and_preserves_idempotency(isolated_db):

@@ -234,7 +234,8 @@ async def test_exa_rate_limit_survives_exception_groups_as_a_specific_job_failur
     completed = []
     monkeypatch.setattr(worker.store, 'finish', lambda job, **kwargs: completed.append(kwargs))
     assert await worker.work_once()
-    assert completed == [{'failure': 'SEARCH_RATE_LIMIT'}]
+    assert completed[0]['failure'] == 'SEARCH_RATE_LIMIT'
+    assert completed[0]['result']['diagnostics']['failure_codes'] == ['EXA_RATE_LIMIT']
 
 
 def test_output_diagnostics_identify_schema_field_without_logging_values_or_unknown_keys():

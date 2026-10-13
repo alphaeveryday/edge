@@ -24,6 +24,10 @@ from .exa_transport import ExaTransport
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
 EXA_URL = "https://mcp.exa.ai/mcp"
+MAX_EXA_CALLS = 70
+MAX_MODEL_CALLS = 24
+MAX_CONTEXT_BYTES = 350000
+ANALYSIS_TIMEOUT_SECONDS = 300
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "추천할 ETF의 등록 ID를 이름 또는 티커로 찾는다. 상품 근거 조회와는 별개다. 한 번에 8개까지 반환한다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
@@ -40,7 +44,7 @@ class ExaEvidence:
 
     async def call(self, name, args):
         self.calls += 1
-        if self.calls > 70:
+        if self.calls > MAX_EXA_CALLS:
             raise ValueError("TOOL_LIMIT")
         if name == "search_sources" and set(args) == {"query", "objective"}:
             if any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in args.values()):
@@ -76,12 +80,25 @@ class ExaEvidence:
         return {key: value for key, value in source.items() if key != 'excerpt'}
 
 
-async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None):
+async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None,
+                       on_event=None, on_checkpoint=None):
     started = time.monotonic()
     metrics = calculate(request)
     system = (PROMPTS / "system.md").read_text(encoding="utf8")
     skills = {role: (PROMPTS / role / "SKILL.md").read_text(encoding="utf8") for role in ROLES}
     version = hashlib.sha256((system + "".join(skills.values())).encode()).hexdigest()
+    code_version = hashlib.sha256(b''.join(path.name.encode() + path.read_bytes() for path in sorted(PROMPTS.parent.glob('*.py')))).hexdigest()
+    events = []
+    limits = {'model_calls': MAX_MODEL_CALLS, 'context_bytes': MAX_CONTEXT_BYTES, 'exa_calls': MAX_EXA_CALLS,
+              'elapsed_seconds': ANALYSIS_TIMEOUT_SECONDS}
+
+    def emit(event, **fields):
+        entry = {'event': event, 'elapsed_seconds': round(time.monotonic() - started, 2), **fields}
+        events.append(entry)
+        if on_event:
+            on_event(entry)
+
+    emit('run_started', model=MODEL, prompt_version=version, code_version=code_version, limits=limits)
     context = {"input": request.model_dump(mode="json"), "computed": metrics,
                "as_of": datetime.now(timezone.utc).isoformat(), "aws_outlook": {"status": "available_on_purpose" if os.getenv('PORTFOLIO_OUTLOOK_URL') else "not_connected"}}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
@@ -89,7 +106,13 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
     market = market or MarketData(request, datetime.fromisoformat(context['as_of']).date())
     optimizer = Optimizer(market, request)
-    async with asyncio.timeout(300), AsyncExitStack() as stack:
+
+    def checkpoint():
+        if on_checkpoint:
+            on_checkpoint({'sections': dict(sections), 'sources': list(evidence.sources), 'metrics': metrics,
+                           'optimization': optimizer.result, 'as_of': context['as_of']})
+
+    async with asyncio.timeout(ANALYSIS_TIMEOUT_SECONDS), AsyncExitStack() as stack:
         if evidence is None:
             exa_client = await stack.enter_async_context(httpx.AsyncClient(transport=ExaTransport(api_key=os.environ['EXA_API_KEY']), timeout=httpx.Timeout(30, read=300)))
             streams = await stack.enter_async_context(streamable_http_client(EXA_URL, http_client=exa_client))
@@ -110,26 +133,37 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         catalog_calls = 0
         for role in ROLES:
             on_stage(role)
+            emit('stage_started', role=role)
             schema = FinalReport if role == 'opinion' else Section
             messages.append({"role": "user", "content": skills[role] + "\n현재 등록된 근거 ID: " + json.dumps([s['id'] for s in evidence.sources]) + "\n등록되지 않은 ID를 만들지 마세요. 첫 질문 해석 단계에서는 사용자 입력만 해석하고 evidence는 빈 배열로 둡니다. 그 다음 역할은 search_sources 후 fetch_source로 실제 근거를 등록해야 합니다.\n출력 JSON 스키마:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)})
             repairs = 0
             while True:
                 calls += 1
-                if calls > 24:
+                if calls > MAX_MODEL_CALLS:
+                    emit('limit_reached', budget='model_calls', used=calls - 1, limit=MAX_MODEL_CALLS)
                     raise ValueError("MODEL_CALL_BUDGET")
-                if len(json.dumps(messages, ensure_ascii=False).encode('utf8')) > 350000:
+                context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
+                if context_bytes > MAX_CONTEXT_BYTES:
+                    emit('limit_reached', budget='context_bytes', used=context_bytes, limit=MAX_CONTEXT_BYTES)
                     raise ValueError("MODEL_CONTEXT_BUDGET")
+                emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
                     result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
                         "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
+                    emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
                     if read_retries:
                         raise
                     read_retries += 1
                     await asyncio.sleep(1)
                     continue
                 choice = result["choices"][0]
+                usage = {name: value for name, value in result.get('usage', {}).items()
+                         if name in {'prompt_tokens', 'completion_tokens', 'total_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens'}
+                         and isinstance(value, int) and not isinstance(value, bool) and value >= 0}
+                emit('model_finished', role=role, call=calls, usage=usage,
+                     finish_reason=choice.get('finish_reason') if choice.get('finish_reason') in {'stop', 'tool_calls', 'length', 'content_filter'} else 'unknown')
                 if choice.get("finish_reason") == "length":
                     raise ValueError("MODEL_TRUNCATED")
                 message = choice["message"]
@@ -137,13 +171,22 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     observe({"role": role, "content": message.get("content"), "tools": message.get("tool_calls"), "sources": evidence.sources})
                 # Preserve reasoning_content in the private conversation for DeepSeek tool turns.
                 messages.append(message)
-                trace.append({"role": role, "call": calls, "usage": result.get("usage", {}), "elapsed_seconds": round(time.monotonic() - started, 2)})
+                trace.append({"role": role, "call": calls, "usage": usage, "elapsed_seconds": round(time.monotonic() - started, 2)})
                 if message.get("tool_calls"):
                     for call in message["tool_calls"]:
                         function = call["function"]
-                        if function['name'] == 'search_etfs':
-                            catalog_calls += 1
+                        tool = function['name'] if function['name'] in {'search_etfs', 'search_sources', 'fetch_source', 'optimize_portfolios', 'read_portfolio_history', 'read_etf_outlook'} else 'unknown'
+                        emit('tool_started', role=role, tool=tool)
+                        try:
                             args = json.loads(function['arguments'])
+                            if not isinstance(args, dict):
+                                args = None
+                        except (ValueError, TypeError):
+                            args = None
+                        if args is None:
+                            answer = {'status': 'rejected', 'reason': 'INVALID_TOOL_ARGUMENT'}
+                        elif function['name'] == 'search_etfs':
+                            catalog_calls += 1
                             if catalog_calls > 6:
                                 answer = {'status': 'rejected', 'reason': 'Catalog search limit reached; use registered IDs already returned'}
                             else:
@@ -153,28 +196,44 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     answer = {'status': 'rejected', 'reason': str(error)}
                         elif function['name'] == 'optimize_portfolios':
                             try:
-                                answer = await optimizer.tool(json.loads(function['arguments']))
+                                answer = await optimizer.tool(args)
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_portfolio_history':
                             try:
-                                answer = await market.tool(json.loads(function['arguments']))
+                                answer = await market.tool(args)
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_etf_outlook':
                             try:
-                                answer = await outlook.call(json.loads(function['arguments']), evidence.sources)
+                                answer = await outlook.call(args, evidence.sources)
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         else:
                             try:
-                                answer = await evidence.call(function["name"], json.loads(function["arguments"]))
+                                answer = await evidence.call(function["name"], args)
                             except ValueError as error:
                                 if str(error) not in {'TOOL_NOT_ALLOWED', 'INVALID_TOOL_ARGUMENT', 'EMPTY_SOURCE', 'EXA_FAILED'}:
+                                    emit('tool_failed', role=role, tool=tool, code='TOOL_LIMIT' if str(error) == 'TOOL_LIMIT' else type(error).__name__,
+                                         counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
                                     raise
                                 answer = {'status': 'unavailable' if str(error) in {'EMPTY_SOURCE', 'EXA_FAILED'} else 'rejected',
                                           'reason': str(error), 'fetchable_urls': sorted(getattr(evidence, 'discovered', set())),
                                           'instruction': '본문을 읽지 못했습니다. 등록된 URL을 정확히 사용하거나 다른 공식 근거를 검색하세요. 실패한 응답을 근거로 인용하지 마세요.'}
+                            except BaseException as error:
+                                emit('tool_failed', role=role, tool=tool, code=type(error).__name__,
+                                     counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
+                                raise
+                        status = answer.get('status', 'available') if isinstance(answer, dict) else 'available'
+                        reason = answer.get('reason') if isinstance(answer, dict) else None
+                        codes = {'INVALID_TOOL_ARGUMENT', 'TOOL_LIMIT', 'TOOL_NOT_ALLOWED', 'EXA_FAILED', 'EMPTY_SOURCE',
+                                 'CURRENT_WEIGHTS_REQUIRED', 'COMPARISON_DATA_UNAVAILABLE', 'NO_COMMON_PRICE_HISTORY',
+                                 'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE'}
+                        emit('tool_finished', role=role, tool=tool,
+                             status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected'} else 'unknown',
+                             code=reason if reason in codes else 'TOOL_REJECTED' if status in {'rejected', 'unavailable'} else None,
+                             counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
+                        checkpoint()
                         messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(answer, ensure_ascii=False)})
                     continue
                 try:
@@ -193,16 +252,24 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
                         sections[role] = validate_section(role, raw, evidence.sources)
+                    emit('stage_completed', role=role)
+                    checkpoint()
                     break
                 except (ValueError, TypeError) as error:
                     repairs += 1
+                    emit('validation_failed', role=role, attempt=repairs, code=type(error).__name__)
                     if repairs > (2 if role == 'opinion' else 1):
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
                     low, high = LIMITS[role]
                     messages.append({"role": "user", "content": f"출력 검증 실패: {str(error)[:400]}. 현재 역할의 JSON을 한 번 수정하세요. 본문은 {(low + high) // 2}자 목표, 최대 {high}자. 근거는 실제 도구가 준 source_id와 passage_id를 고르세요. 등록 근거가 없는 질문 해석 단계는 evidence: []로 고치세요."})
                     if role == 'opinion':
                         messages[-1]['content'] += f' 최종 출력에는 네 칸 모두 필요합니다. 오류가 난 칸의 한도를 적용하세요: {LIMITS}.'
+        emit('run_completed', counters={'model_calls': calls, 'exa_calls': getattr(evidence, 'calls', 0),
+             'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
         return {**published, "sections": sections, "metrics": metrics, "sources": evidence.sources,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
                 "elapsed_seconds": round(time.monotonic() - started, 2), "trace": trace,
+                'diagnostics': {'events': events, 'termination_reason': 'COMPLETED', 'model_calls': calls,
+                    'exa_calls': getattr(evidence, 'calls', 0), 'limits': limits, 'code_version': code_version,
+                    'model': MODEL, 'prompt_version': version},
                 "aws_outlook": {'queries': outlook.queries, 'status': 'queried' if outlook.queries else 'not_requested'}}

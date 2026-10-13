@@ -148,3 +148,16 @@ def finish(job_id, result=None, failure=None):
                            WHERE id=%s AND state='running' RETURNING id""",
                          ("failed" if failure else "succeeded", Jsonb(result), failure, job_id)).fetchone()
         return row is not None
+
+
+def checkpoint(job_id, result):
+    """Keep partial diagnostics without completing or reviving an expired job."""
+    with connect() as db:
+        # Optional telemetry must release its row lock before required writes time out.
+        # Autocommit also avoids holding the lock across a separate COMMIT round trip.
+        db.autocommit = True
+        db.execute("SET statement_timeout='500ms'")
+        db.execute("SET lock_timeout='100ms'")
+        row = db.execute("""UPDATE portfolio_jobs SET result=COALESCE(result,'{}'::jsonb) || %s
+            WHERE id=%s AND state='running' RETURNING id""", (Jsonb(result), job_id)).fetchone()
+        return row is not None
