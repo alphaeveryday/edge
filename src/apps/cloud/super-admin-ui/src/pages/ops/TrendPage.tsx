@@ -177,7 +177,10 @@ export function TrendPage() {
   const minute = useMinuteStatus(q.ready ? q.facts.meta.today : undefined, q.ready);
   const entityResolution = useEntityResolutionTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   const analysis = useAnalysisTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
-  useFocusRow(q.ready);
+  /* 분석 카드는 분석 추이 응답이 와야 값이 서고, 기본 필터(이상 지표)에서는 그 전까지 DOM 에 없다.
+   * 사건에서 그 카드로 넘어온 포커스(R15)가 빈 화면에 대고 한 번 돌고 끝나지 않게, 그 조회가
+   * 끝난 뒤(성공이든 실패든)에 건다. */
+  useFocusRow(q.ready && !analysis.isPending);
 
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
