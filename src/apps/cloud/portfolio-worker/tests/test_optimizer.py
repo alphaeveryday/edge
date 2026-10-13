@@ -211,6 +211,34 @@ async def test_invalid_endpoint_does_not_permanently_discard_new_valid_candidate
     assert result['end_date'] == '2026-10-13'
 
 
+async def test_optimizer_retains_the_failed_instrument_and_provider_cause():
+    request, market, groups = batch()
+    def loader(symbol, _):
+        if symbol == 'E.KS':
+            raise ValueError('PRICE_STALE')
+        return record()
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['failures'] == {'KR:E': 'PRICE_STALE'}
+    assert result['rejected_combinations'] == [{'combination': 5, 'reason': 'INSTRUMENT_PRICE_UNAVAILABLE'}]
+
+
+async def test_collection_timeout_does_not_overwrite_an_already_known_price_failure(monkeypatch):
+    request, market, groups = batch()
+    async def fetch(symbol, _):
+        if symbol == 'E.KS':
+            raise ValueError('PRICE_STALE')
+        if symbol == 'D.KS':
+            await asyncio.sleep(10)
+        return record()
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['failures']['KR:E'] == 'PRICE_STALE'
+    assert result['failures']['KR:D'] == 'PRICE_PROVIDER_TIMEOUT'
+
+
 async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():
     request, market, groups = batch()
     request.holdings[0].account = 'ISA'

@@ -6,7 +6,7 @@ from itertools import combinations
 
 import numpy as np
 
-from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns
+from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure
 from .recommendation import selected_accounts, allocation_error
 
 PRICE_TIMEOUT_SECONDS = 65
@@ -120,14 +120,22 @@ class Optimizer:
 
         async def fetch(key, symbol):
             if key not in self.market.records:
+                self.market.failures.pop(key, None)
                 async with self.market.semaphore:
-                    self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of)
+                    try:
+                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of)
+                        self.market.failures.pop(key, None)
+                    except Exception as error:
+                        self.market.failures[key] = price_failure(error)
+        rejections = {}
         try:
             try:
                 async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
                     await asyncio.gather(*(fetch(key, symbol) for key, symbol in needed.items()), return_exceptions=True)
             except TimeoutError:
-                pass  # Completed records remain usable; incomplete groups are excluded below.
+                for key in needed:
+                    if key not in self.market.records:
+                        self.market.failures.setdefault(key, 'PRICE_PROVIDER_TIMEOUT')
             failed = set(needed) - set(self.market.records)
             if 'FX' in failed:
                 failed.update(key for key in ids - {'CASH:KRW'} if self.market.catalog[key]['market'] == 'US')
@@ -135,11 +143,12 @@ class Optimizer:
             if set(self.market.current).intersection(failed):
                 raise ValueError('BASELINE_PRICE_UNAVAILABLE')
             # Exclude too-short ranges first, then validate prices within one shared window.
-            for group in eligible:
+            for number, group in enumerate(eligible):
                 try:
                     if group:
                         optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of)
-                except (KeyError, ValueError):
+                except (KeyError, ValueError) as error:
+                    rejections[number] = price_failure(error)
                     group.clear()
             if not any(eligible):
                 raise ValueError('NO_COMPARABLE_PRICE_HISTORY')
@@ -154,7 +163,8 @@ class Optimizer:
                         continue
                     try:
                         normalized_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of, bounds)
-                    except (KeyError, ValueError):
+                    except (KeyError, ValueError) as error:
+                        rejections[number] = price_failure(error)
                         available[number] = []
                         rejected = True
                 if rejected:
@@ -163,12 +173,13 @@ class Optimizer:
                         raise ValueError('NO_COMMON_PRICE_HISTORY')
                     continue
                 records = {key: {**value, 'frame': value['frame'].loc[:bounds[1]]} for key, value in self.market.records.items()}
-                for group in eligible:
+                for number, group in enumerate(eligible):
                     if not group:
                         continue
                     try:
                         optimization_bounds(set(group) | set(self.market.current), records, self.market.as_of)
-                    except (KeyError, ValueError):
+                    except (KeyError, ValueError) as error:
+                        rejections[number] = price_failure(error)
                         group.clear()
                         rejected = True
                 if rejected:
@@ -185,7 +196,9 @@ class Optimizer:
             candidates = rank(results, eligible)
             self.result = {'status': 'available' if candidates else 'no_match', 'candidates': candidates,
                            'start_date': str(frame.index[0].date()), 'end_date': str(frame.index[-1].date()),
-                           'sources': sources, 'submitted_combinations': 10, 'tested_combinations': sum(bool(group) for group in eligible)}
+                           'sources': sources, 'submitted_combinations': 10, 'tested_combinations': sum(bool(group) for group in eligible),
+                           'rejected_combinations': [{'combination': number + 1, 'reason': rejections.get(number, 'INSTRUMENT_PRICE_UNAVAILABLE')}
+                               for number, group in enumerate(eligible) if not group]}
             # Reuse the identical comparison window for final publication.
             baseline = sum(frame[key] * value for key, value in self.market.current.items())
             for candidate in candidates:
@@ -199,8 +212,11 @@ class Optimizer:
                            'source_url': 'https://finance.yahoo.com/', 'sources': sources,
                            'start_date': self.result['start_date'], 'end_date': self.result['end_date']}
                 self.market.results[tuple(sorted(target.items()))] = {'status': 'available', 'history': history, **history_returns(history)}
-        except (ValueError, KeyError, TimeoutError):
-            self.result = {'status': 'unavailable', 'candidates': [], 'reason': 'COMPARISON_DATA_UNAVAILABLE'}
+        except (ValueError, KeyError, TimeoutError) as error:
+            reason = str(error) if isinstance(error, ValueError) else price_failure(error)
+            self.result = {'status': 'unavailable', 'candidates': [], 'reason': reason,
+                           'rejected_combinations': [{'combination': number + 1, 'reason': reason} for number, reason in sorted(rejections.items())]}
+        self.result['failures'] = {key: self.market.failures[key] for key in needed if key in self.market.failures}
         return self.result
 
     def validate(self, final):

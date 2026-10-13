@@ -23,6 +23,20 @@ log = logging.getLogger(__name__)
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
+PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_INVALID', 'PRICE_PROVIDER_UNAVAILABLE',
+                  'PRICE_PROVIDER_TIMEOUT', 'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID',
+                  'MISSING_TRADING_SESSIONS', 'MISSING_FX_SESSIONS', 'NO_COMMON_PRICE_HISTORY',
+                  'UNSUPPORTED_CURRENCY', 'INSUFFICIENT_COMPARISON_SESSIONS'}
+TRANSIENT_PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_PROVIDER_UNAVAILABLE', 'PRICE_PROVIDER_TIMEOUT',
+                            'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID'}
+
+
+def price_failure(error):
+    if isinstance(error, TimeoutError) or type(error).__name__ in {'Timeout', 'ReadTimeout', 'ConnectTimeout'}:
+        return 'PRICE_PROVIDER_TIMEOUT'
+    if type(error).__name__ == 'YFRateLimitError':
+        return 'PRICE_PROVIDER_RATE_LIMIT'
+    return str(error) if isinstance(error, ValueError) and str(error) in PRICE_FAILURES else 'PRICE_PROVIDER_UNAVAILABLE'
 
 
 def expected_sessions(instrument_id, start, end):
@@ -47,7 +61,50 @@ def positive_price(value):
     return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
-def load_prices(symbol, as_of):
+def repair_prices(ticker, frame, symbol, as_of, currency):
+    columns = ['Adj Close', 'Close']
+    instrument = ('KR:' if symbol.endswith('.KS') else 'US:') + symbol
+    start = max(frame.index[0], pd.Timestamp(year_before(as_of, 2)))
+    expected = expected_sessions(instrument, start, frame.index[-1])
+    valid = frame[columns].map(positive_price).all(axis=1)
+    missing = expected.difference(frame.index[valid])
+    if missing.empty:
+        return frame, {'status': 'not_needed', 'dates': []}
+    try:
+        repaired = ticker.history(start=start.date().isoformat(), end=as_of.isoformat(), interval='1d',
+                                  auto_adjust=False, actions=True, repair=True, timeout=12)
+        repaired.index = pd.to_datetime([i.date() for i in repaired.index])
+        repaired = repaired[~repaired.index.duplicated(keep='last')].sort_index()
+        if ticker.history_metadata.get('currency') != currency:
+            return frame, {'status': 'rejected', 'reason': 'REPAIR_CURRENCY_MISMATCH', 'dates': []}
+        if not set(columns) <= set(repaired.columns):
+            return frame, {'status': 'unavailable', 'reason': 'PRICE_RESPONSE_INVALID', 'dates': []}
+        anchors = frame.index[valid].intersection(repaired.index)
+        overlap = frame.index.intersection(repaired.index)
+        if len(anchors) < 2 or not all(not positive_price(a) or (positive_price(b) and math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-8))
+                for a, b in zip(frame.loc[overlap, columns].to_numpy().flat, repaired.loc[overlap, columns].to_numpy().flat)):
+            return frame, {'status': 'rejected', 'reason': 'REPAIR_BASIS_MISMATCH', 'dates': []}
+        result = frame.copy()
+        recovered = []
+        for day in missing.intersection(repaired.index):
+            if not repaired.loc[day, columns].map(positive_price).all():
+                continue
+            if day in result.index:
+                for column in columns:
+                    if not positive_price(result.loc[day, column]):
+                        result.loc[day, column] = repaired.loc[day, column]
+            else:
+                result.loc[day] = repaired.loc[day].reindex(result.columns)
+            recovered.append(day.date().isoformat())
+        return result.sort_index(), {'status': 'repaired' if len(recovered) == len(missing) else 'partial',
+            'dates': recovered, 'unresolved_dates': [d.date().isoformat() for d in missing if d.date().isoformat() not in recovered],
+            'method': 'Yahoo Finance intraday reconstruction; original valid prices and dividend events retained'}
+    except Exception as error:
+        # Retain the original history: a defect outside the common window need not block it.
+        return frame, {'status': 'unavailable', 'reason': price_failure(error), 'dates': []}
+
+
+def load_prices(symbol, as_of, *, on_raw=None):
     yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
     frame = ticker.history(period='max', end=as_of.isoformat(),
@@ -60,24 +117,66 @@ def load_prices(symbol, as_of):
     frame = frame.loc[frame.index < pd.Timestamp(as_of)]
     if frame.empty or (as_of - frame.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
+    original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol,
+                'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
+    if on_raw:
+        on_raw(original)
+    frame, recovery = repair_prices(ticker, frame, symbol, as_of, metadata.get('currency'))
     # Validate values inside the chosen comparison window, not unrelated older history.
-    return {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol,
-            'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
+    return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
 async def fetch_prices(symbol, as_of):
+    for attempt in range(2):
+        try:
+            return await _fetch_prices(symbol, as_of)
+        except (ValueError, TimeoutError) as error:
+            code = price_failure(error)
+            if attempt or code not in TRANSIENT_PRICE_FAILURES:
+                raise ValueError(code) from error
+            await asyncio.sleep(.5)
+
+
+async def _fetch_prices(symbol, as_of):
+    with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
+        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json')
+
+
+async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint):
     """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(),
+    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
     try:
-        async with asyncio.timeout(25):
-            stdout, _ = await process.communicate()
-        if process.returncode:
-            raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
-        record = json.loads(stdout)
-        record['frame'] = pd.DataFrame(record['frame']).set_index('date')
-        record['frame'].index = pd.to_datetime(record['frame'].index)
+        repair_failure = None
+        try:
+            async with asyncio.timeout(25):
+                stdout, _ = await process.communicate()
+        except TimeoutError:
+            if not checkpoint.is_file():
+                raise
+            stdout = checkpoint.read_bytes()
+            repair_failure = 'PRICE_PROVIDER_TIMEOUT'
+        if process.returncode and checkpoint.is_file():
+            stdout = checkpoint.read_bytes()
+            repair_failure = 'PRICE_PROVIDER_UNAVAILABLE'
+        try:
+            record = json.loads(stdout)
+        except (ValueError, UnicodeError) as error:
+            raise ValueError('PRICE_RESPONSE_INVALID') from error
+        if not isinstance(record, dict):
+            raise ValueError('PRICE_RESPONSE_INVALID')
+        if (process.returncode and not repair_failure) or 'error' in record:
+            raise ValueError(record.get('error') if record.get('error') in PRICE_FAILURES else 'PRICE_PROVIDER_UNAVAILABLE')
+        try:
+            record['frame'] = pd.DataFrame(record['frame']).set_index('date')
+            record['frame'].index = pd.to_datetime(record['frame'].index)
+            if not {'Adj Close', 'Close'} <= set(record['frame'].columns):
+                raise ValueError('PRICE_RESPONSE_INVALID')
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError('PRICE_RESPONSE_INVALID') from error
+        if repair_failure:
+            record['price_recovery'] = {'status': 'unavailable', 'reason': repair_failure, 'dates': []}
         return record
     finally:
         if process.returncode is None:
@@ -128,15 +227,18 @@ def normalized_prices(ids, records, as_of, bounds=None):
     start, end = bounds or comparison_bounds(ids, records, as_of)
     for key in keys:
         record = records[key]
-        values = record['frame']['Adj Close']
         sessions = expected_sessions(key, start - pd.Timedelta(days=30), end)
+        prices = record['frame'][['Adj Close', 'Close']]
+        event_only = prices.isna().all(axis=1) & ~prices.index.isin(sessions)
+        prices = prices.loc[~event_only]
+        values = prices['Adj Close']
         expected = sessions[sessions >= start]
         preceding = sessions[sessions <= start]
         if len(preceding) and preceding[-1] >= values.first_valid_index():
             expected = expected.union(preceding[-1:])
         if len(expected.difference(values.dropna().index)):
             raise ValueError('MISSING_TRADING_SESSIONS')
-        if not record['frame'].loc[start:end, ['Adj Close', 'Close']].map(positive_price).all().all():
+        if not prices.loc[start:end].map(positive_price).all().all():
             raise ValueError('PRICE_INVALID')
         if record['currency'] == 'USD':
             fx = records['FX']['frame']['Close']
@@ -157,7 +259,7 @@ def normalized_prices(ids, records, as_of, bounds=None):
         elif record['currency'] != 'KRW':
             raise ValueError('UNSUPPORTED_CURRENCY')
         series[key] = values
-        urls.append({'instrument_id': key, 'url': record['source_url']})
+        urls.append({'instrument_id': key, 'url': record['source_url'], 'price_recovery': record.get('price_recovery')})
     if needs_fx:
         urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url']})
     if series:
@@ -214,6 +316,7 @@ class MarketData:
         self.as_of = as_of or date.today()
         self.loader = loader
         self.records = {}
+        self.failures = {}
         self.results = {}
         self.queried = set()
         self.calls = 0
@@ -241,11 +344,14 @@ class MarketData:
         try:
             async def fetch(instrument, symbol):
                 if instrument not in self.records:
+                    self.failures.pop(instrument, None)
                     async with self.semaphore:
                         try:
                             self.records[instrument] = self.loader(symbol, self.as_of) if self.loader else await fetch_prices(symbol, self.as_of)
+                            self.failures.pop(instrument, None)
                         except Exception as error:
-                            log.warning('Price provider failed for %s: %s', instrument, type(error).__name__)
+                            self.failures[instrument] = price_failure(error)
+                            log.warning('Price provider failed for %s: %s', instrument, self.failures[instrument])
             primary = set(target) - {'CASH:KRW'}
             if any(self.catalog[i]['market'] == 'US' for i in primary):
                 primary.add('FX')
@@ -256,6 +362,9 @@ class MarketData:
             except TimeoutError:
                 # A slow optional comparison must not discard ready recommendation data.
                 log.warning('Price collection deadline; publishing only complete series')
+                for instrument in needed:
+                    if instrument not in self.records:
+                        self.failures.setdefault(instrument, 'PRICE_PROVIDER_TIMEOUT')
             if self.current:
                 try:
                     history = comparison(target, self.current, self.records, self.as_of)
@@ -268,8 +377,11 @@ class MarketData:
         except Exception as error:
             # Optional market data failure must not destroy the research report.
             log.warning('Market history unavailable: %s', type(error).__name__)
-            result = {'status': 'unavailable', 'reason': str(error)[:120] if isinstance(error, ValueError) else 'PRICE_PROVIDER_UNAVAILABLE'}
-        self.results[key] = result
+            reason = self.failures.get(error.args[0], 'PRICE_PROVIDER_UNAVAILABLE') if isinstance(error, KeyError) else price_failure(error)
+            result = {'status': 'unavailable', 'reason': reason}
+        result['failures'] = {i: self.failures[i] for i in needed if i in self.failures}
+        if result['status'] == 'available' and not result['failures'] and 'current_unavailable_reason' not in result['history']:
+            self.results[key] = result
         return result
 
     async def tool(self, args):

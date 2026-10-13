@@ -78,7 +78,7 @@ def test_common_end_and_known_weights_only():
         weights([{'instrument_id': 'US:VOO', 'weight_pct': None}])
 
 
-async def test_provider_failure_is_visible_and_cached_without_aborting_analysis():
+async def test_provider_failure_is_visible_and_can_be_retried_without_aborting_analysis():
     calls = []
     def unavailable(symbol, as_of):
         calls.append(symbol)
@@ -88,7 +88,7 @@ async def test_provider_failure_is_visible_and_cached_without_aborting_analysis(
     first = await market.get(rows)
     assert first['status'] == 'unavailable'
     assert await market.get(rows) == first
-    assert calls == ['069500.KS']
+    assert calls == ['069500.KS', '069500.KS']
 
 
 async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage():
