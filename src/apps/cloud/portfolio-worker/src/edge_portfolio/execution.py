@@ -36,7 +36,7 @@ def parse_funding(text):
         return None
     match = matches[0]
     prefix, suffix = text[:match.start()].strip(), text[match.end():].strip()
-    if prefix not in {'매월', '매달', '월마다', '월', '추가', '추가로', '일시', '일시금', '목돈', '한 번'} or suffix not in {'', '씩'}:
+    if prefix not in {'매월', '매달', '매달 꾸준히', '월마다', '월', '추가', '추가로', '일시', '일시금', '목돈', '한 번'} or suffix not in {'', '씩'}:
         return None  # Require a complete commitment quote; do not ignore qualifiers or payment counts.
     amount = sum((Decimal(value.replace(',', '')) * unit for value, unit in zip(match.groups(), (100000000, 10000, 1)) if value), Decimal(0))
     if amount <= 0 or amount > 10**13 or amount != amount.to_integral_value():
@@ -72,7 +72,7 @@ def plan_execution(request, allocations, decision=None):
                     yield from strings(item)
         sources = [request.question, *strings(request.preferences.model_dump())]
         commitments = {re.sub(r'\s+', '', match[0]) for source in sources for match in re.finditer(
-            r'(?:매월|매달|월마다|월|추가로?|일시금?|목돈|한 번)\s*[0-9][0-9,.\s억만천백십]*원(?:씩)?', source)}
+            r'(?:매월|매달(?:\s+꾸준히)?|월마다|월|추가로?|일시금?|목돈|한 번)\s*[0-9][0-9,.\s억만천백십]*원(?:씩)?', source)}
         occurrences = [(source[:match.start()], source[match.end():]) for source in sources
                        for match in re.finditer(re.escape(text), source)]
         def has_duration(before, after):
@@ -96,7 +96,7 @@ def plan_execution(request, allocations, decision=None):
             # could make the quoted funding contingent on income or a future event.
             asset = r'(?:' + (names or r'(?!)') + r'|[A-Z]{1,10})\s*\d+(?:\.\d+)?\s*%'
             return bool(re.fullmatch(asset + r'(?:\s*,\s*' + asset + r')*\s*(?:로 구성하고|로 하고|를 목표로 하고)', prefix))
-        funding_contexts = [request.question, request.preferences.contribution, request.preferences.note]
+        funding_contexts = sources
         scoped_restrictions = any(has_duration(source, '') or re.search(r'[가-힣]+면|경우|조건|가정|후에|뒤에|전에는', source) for source in funding_contexts)
         # A separate free-form note may qualify the commitment. Without a
         # complete verified funding clause there, do not infer its independence.
@@ -104,7 +104,7 @@ def plan_execution(request, allocations, decision=None):
         if separate_note and text not in separate_note and not re.fullmatch(r'매도\s*금지', separate_note):
             scoped_restrictions = True
         ambiguous = scoped_restrictions or len(commitments) > 1 or any(any(word in source for word in ('또는', '미정', '아마', '가능하면', '취소', '철회', '중단', '보류'))
-            or re.search(r'(?:자금|돈|예산).{0,12}(?:없|부족|미확보)|(?:납입|입금|투자|추가)\s*(?:을|를|은|는)?\s*(?:하지\s*(?:않|못)|중단|안\s*(?:할|해))', source) for source in funding_contexts)
+            or re.search(r'(?:자금|돈|예산).{0,12}(?:없|부족|미확보)|(?:납입|입금|투자|추가)(?:금|금액)?\s*(?:을|를|은|는)?\s*(?:하지\s*(?:않|못)|중단|못|안\s*(?:하|합|할|해|넣|낼|내))', source) for source in funding_contexts)
         if ambiguous or not occurrences or any(re.search(r'(?:약|대략|최대|최소|아마|가능하면)\s*$', before)
                 or re.match(r'\s*(?:정도|내외|가량|쯤|이상|이하|미만|초과|전후|예상|한도|또는|[~±-])', after)
                 or not complete_funding_clause(after)

@@ -58,6 +58,25 @@ def test_new_portfolio_monthly_amount_is_an_explicit_first_installment():
     assert '첫 월 납입금' in plan['assumptions'][-1]
 
 
+def test_monthly_contribution_serialized_by_the_input_form_is_executable():
+    from edge_portfolio.execution import plan_execution
+    from edge_portfolio.decision import Decision
+    req = request([], planning=True, preferences={'contribution': '매달 꾸준히 100만 원'})
+    for decision in (Decision(), Decision(funding_text='매달 꾸준히 100만 원')):
+        plan = plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)
+        assert plan['status'] == 'conditional'
+        assert plan['monthly_krw'] == '1000000'
+        assert sum(int(row['buy_krw']) for row in plan['rows']) == 1000000
+    req.preferences.interests = ['추가 납입은 취소했습니다.']
+    assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), Decision())['status'] == 'needs_input'
+    req.preferences.interests = []
+    for refusal in ('추가 납입은 안 합니다.', '추가 납입을 못 합니다.', '추가 납입은 하지 않겠습니다.', '추가 투자금은 안 넣습니다.'):
+        req.question = refusal + ' 매도 금지.'
+        plan = plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), Decision())
+        assert plan['status'] == 'needs_input', refusal
+        assert plan['rows'] == []
+
+
 def test_percent_input_does_not_become_krw_principal():
     req = request([('US:VOO', 100, '일반 계좌')], input_mode='percent')
     plan = build_execution(req, target(**{'US:QQQ': 100}))
