@@ -102,6 +102,12 @@ def test_single_labelled_fee_value_is_readable_product_evidence():
     assert inspect_body('# Navigation\nURL: https://issuer.example\nHome\nAbout\nContact', 24000)['status'] == 'unavailable'
 
 
+@pytest.mark.parametrize('amount', ['$0.50', '500원', '0.50 USD', '₩500'])
+def test_dated_distribution_amounts_are_readable_without_prose_or_percentage(amount):
+    from edge_portfolio.evidence_quality import inspect_body
+    assert inspect_body(f'# Distributions\nURL: https://issuer.example/distributions\n2026-09-30 | {amount}\n2026-08-31 | {amount}', 24000)['status'] == 'available'
+
+
 async def test_server_constraint_rejection_triggers_alternatives_without_model_withholding_reason(monkeypatch):
     import json
     from edge_portfolio.agent import run_analysis
