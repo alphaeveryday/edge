@@ -176,3 +176,10 @@ def test_the_body_tool_refuses_formal_sentence_endings():
     with pytest.raises(ToolInputError, match='해요체'):
         editor.write('제목', topic('외국인이 순매도했습니다.'))
     assert editor.write('제목', topic('외국인이 순매도했어요.'))['items'][0]['sentences'][0]['sentence'] == '외국인이 순매도했어요.'
+    # WHY: only the end of the string was looked at, so a closing quote or a second sentence hid the formal ending.
+    for sentence in ('회사는 "결론입니다"', '실적이 좋습니다)', '매출이 증가했습니다. 이익도 늘어요.', '하락으로 봅니다!'):
+        with pytest.raises(ToolInputError, match='해요체'):
+            editor.write('제목', topic(sentence))
+    # WHY: "니다" alone refused a name; and words quoted inside a sentence are not how the sentence ends.
+    for sentence in ('관련 종목은 다음과 같아요: 소니다', "회사는 '확대합니다'라고 밝혔어요.", '아니다 싶으면 팔아요.'):
+        assert editor.write('제목', topic(sentence))['items'][0]['sentences'][0]['sentence'] == sentence
