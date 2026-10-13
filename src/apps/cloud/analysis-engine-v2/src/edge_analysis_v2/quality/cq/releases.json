@@ -1,7 +1,7 @@
 {
   "version": 105,
   "summary": "지시문을 기본 규칙(base.md)과 스킬로 재구성: 조사 규칙은 cause-investigation, 작성 원칙은 analysis-report-writing 스킬로 옮기고 호출자가 작업의 스킬을 선언함",
-  "source_digest": "23a97fb36686f729cc6696251988d604e574fd75fc8d80a0e1ee85e1bc9bf28c",
+  "source_digest": "cf7f9e4770c840600e124241c5885d7e3eaaa3aaf093d62203c156f56621361a",
   "history": [
     {
       "version": 1,

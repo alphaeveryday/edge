@@ -31,7 +31,9 @@ def main():
                'Do not conduct ETF research or fetch the cited references.',
         schemas=[{'type':'function','function':{'name':'runtime_probe','description':'Return runtime status',
                  'parameters':{'type':'object','properties':{},'additionalProperties':False}}}],
-        call=call, output_schema=schema, artifacts=args.artifacts, **settings))
+        call=call, output_schema=schema, artifacts=args.artifacts,
+        # A run is told of skills only when its caller names them; without these the test could not load any.
+        optional_skills=() if args.without_skills else ('hypothesis-analysis-workflow', 'etf-hypothesis-analysis'), **settings))
     if calls != ['runtime_probe']:
         raise ValueError('Probe did not execute exactly once through the internal MCP')
     if args.without_skills:
