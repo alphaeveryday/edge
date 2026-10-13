@@ -31,12 +31,16 @@ const TIP = [
 const W = 160;
 const H = 28;
 
-/** 빈 값에서 선을 끊는 작은 그래프. `dashed` 는 받은 수 옆에 겹쳐 그리는 대상 수다 */
-function RunSpark({ label, runs, values, dashed }: {
+/**
+ * 빈 값에서 선을 끊는 작은 그래프. `dashed` 는 받은 수 옆에 겹쳐 그리는 대상 수다.
+ * 일별 계열도 이 그래프를 쓴다 — 그때 `runs` 는 날짜이고 `unit` 으로 세는 말을 바꾼다.
+ */
+export function RunSpark({ label, runs, values, dashed, unit = '실행' }: {
   label: string;
   runs: string[];
   values: (number | null)[];
   dashed?: (number | null)[];
+  unit?: string;
 }) {
   if (values.length === 0) return null;
   const known = [...values, ...(dashed ?? [])].filter((v): v is number => v !== null);
@@ -50,7 +54,7 @@ function RunSpark({ label, runs, values, dashed }: {
       .join(' ');
   return (
     <svg className="rs-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img"
-      aria-label={`${label} — 실행 ${values.length}회 중 값 있는 실행 ${values.filter((v) => v !== null).length}회`}>
+      aria-label={`${label} — ${unit} ${values.length}개 중 값 있는 ${unit} ${values.filter((v) => v !== null).length}개`}>
       {dashed && <path d={line(dashed)} className="rs-line rs-line-dashed" />}
       {/* 선은 이웃한 두 값이 있어야 그려진다 — 혼자 선 대상 수도 점으로는 남긴다 */}
       {dashed?.map((v, i) =>

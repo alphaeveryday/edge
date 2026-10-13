@@ -114,8 +114,24 @@ public interface ConsoleFactsRepository {
 	 * <p>{@code today} 는 {@code long} 이다: 그 날 0건인 것은 <b>실측</b>이지 모름이 아니다.
 	 * 반대로 {@code base} 는 {@code Double} 이라 <b>null 이 곧 "비교할 평소가 없다"</b>이고,
 	 * 소비자는 그런 산출을 편차 판정에서 뺀다. 두 축의 nullability 가 다른 것이 이 record 의 핵심이다.
+	 *
+	 * <p>{@code history} 는 중앙값을 낸 <b>기준일별 건수</b>다(날짜 오름차순, 최대 10일, ALPHA-1289).
+	 * <b>조회일은 들어 있지 않다</b> — 조회일 값은 {@code today} 이고, 그날이 미완결이면 아직 쌓이는
+	 * 중이라 기준일과 같은 축이 아니다. {@code base} 가 null 인 날에도 이 목록은 실린다: 기준을
+	 * 비우는 것은 "이 날을 비교하지 않는다"이지 기준일의 실측이 없다는 뜻이 아니다. 기준일 후보가
+	 * 하나도 없으면 빈 목록이다.
 	 */
-	record OutputRow(String id, String label, String unit, long today, Double base) {
+	record OutputRow(String id, String label, String unit, long today, Double base,
+			List<OutputDay> history) {
+
+		/** 기준일 목록 없이 만든다 — 그 목록은 빈 목록이다. */
+		public OutputRow(String id, String label, String unit, long today, Double base) {
+			this(id, label, unit, today, base, List.of());
+		}
+	}
+
+	/** 기준일 하루의 건수. 0 은 그날 산출이 없었다는 실측이다. */
+	record OutputDay(LocalDate date, long count) {
 	}
 
 	/**

@@ -140,11 +140,21 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 *
 	 * <p>{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고, 표시 문자열은 만들지 않는다
 	 * (건수는 raw 로 내리고 포맷은 UI 소관 — 이 응답의 규약).
+	 *
+	 * <p>{@code history} 는 {@code base} 를 낸 기준일별 건수다(날짜 오름차순). 조회일은 들어 있지
+	 * 않고, {@code base} 가 null 인 날에도 실린다. 기준일 후보가 없으면 빈 배열이다.
 	 */
-	public record OutputResponse(String id, String label, long today, Double base, String unit) {
+	public record OutputResponse(String id, String label, long today, Double base, String unit,
+			List<OutputDayResponse> history) {
+
+		/** 기준일 하루 — {@code count} 0 은 실측이다. */
+		public record OutputDayResponse(String date, long count) {
+		}
 
 		public static OutputResponse from(OutputRow o) {
-			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit());
+			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit(),
+					o.history().stream()
+							.map(d -> new OutputDayResponse(d.date().toString(), d.count())).toList());
 		}
 	}
 

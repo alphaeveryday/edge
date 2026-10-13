@@ -185,6 +185,9 @@ export interface OutputFact {
    *  **`0` 은 표본 부재가 아니라 관측된 0** 이고, 비율 판정만 안 선다. */
   base?: number | null;
   unit: string;
+  /** `base` 를 낸 기준일별 건수(날짜 오름차순). 조회일은 들어 있지 않다. 규칙은 쓰지 않고
+   *  추이 화면이 그린다. 이 필드가 없는 응답에서는 없다. */
+  history?: { date: string; count: number }[];
 }
 
 export interface BoundaryFact {

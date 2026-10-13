@@ -798,10 +798,20 @@ class ConsoleControllerTest {
 	@Test
 	void 산출은_실측_0_과_기준_없음을_가른다() throws Exception {
 		String body = mvc(factsWithOutput(
-				new OutputRow("o.pub", "게시 ETF", "종", 16L, 32.0d),
+				new OutputRow("o.pub", "게시 ETF", "종", 16L, 32.0d, List.of(
+						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
+								java.time.LocalDate.of(2026, 7, 30), 0L),
+						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
+								java.time.LocalDate.of(2026, 7, 31), 32L))),
 				new OutputRow("o.trig", "배치 트리거", "종", 0L, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
+				// 기준일별 건수(ALPHA-1289) — 0 은 실측이라 그대로 나가고, 표본이 없으면 빈 배열이다.
+				.andExpect(jsonPath("$.result.outputs[0].history.length()").value(2))
+				.andExpect(jsonPath("$.result.outputs[0].history[0].date").value("2026-07-30"))
+				.andExpect(jsonPath("$.result.outputs[0].history[0].count").value(0))
+				.andExpect(jsonPath("$.result.outputs[0].history[1].count").value(32))
+				.andExpect(jsonPath("$.result.outputs[1].history.length()").value(0))
 				.andExpect(jsonPath("$.result.outputs.length()").value(2))
 				.andExpect(jsonPath("$.result.outputs[0].id").value("o.pub"))
 				.andExpect(jsonPath("$.result.outputs[0].label").value("게시 ETF"))

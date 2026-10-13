@@ -229,8 +229,12 @@ export const DATASET_FIELDS: Record<string, Check> = {
   id: text, contract: bool, expectedAsOf: nullableDate, actualAsOf: nullableDate,
   collectedAt: nullableInstant, unverifiable: nullableText,
 };
+/** 기준일별 건수 — 없어도 되지만(옛 API) 오면 날짜·건수의 배열이어야 한다 */
+const optionalHistory: Check = (v) =>
+  v === undefined ||
+  (Array.isArray(v) && v.every((d) => isRow(d) && isoDate(d.date) && count(d.count)));
 export const OUTPUT_FIELDS: Record<string, Check> = {
-  id: text, label: text, unit: text, today: count, base: nullableRatio,
+  id: text, label: text, unit: text, today: count, base: nullableRatio, history: optionalHistory,
 };
 export const QUEUE_FIELDS: Record<string, Check> = {
   name: text, visible: count, inFlight: count, dlq: count,
@@ -410,6 +414,7 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       today: o.today,
       base: o.base,
       unit: o.unit,
+      ...(o.history ? { history: o.history } : {}),
     })),
     ...(Array.isArray(dto.queues)
       ? { queues: dto.queues.map((q) => ({

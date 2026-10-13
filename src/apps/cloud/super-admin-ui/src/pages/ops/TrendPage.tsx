@@ -27,7 +27,9 @@ import { buildMetrics } from './trendCatalog';
 import { useMinuteStatus } from '../../domains/sources/hooks';
 import { useEntityResolutionTrend } from '../../domains/console/hooks';
 import { extent, points } from './trendSeries';
-import { RunSeriesSection } from './RunSeriesSection';
+import { RunSeriesSection, RunSpark } from './RunSeriesSection';
+import { MinuteSeriesSection } from './MinuteSeriesSection';
+import { outputSeries } from '../../domains/sources/dailySeries';
 import '../../styles/ops.css';
 
 type Filter = 'abnormal' | MetricGroup;
@@ -241,16 +243,37 @@ export function TrendPage() {
           </span>
         </div>
         <table className="table">
-          <thead><tr><th>산출</th><th className="num">오늘</th><th className="num">기준</th><th>단위</th></tr></thead>
+          <thead>
+            <tr>
+              <th>산출</th><th className="num">오늘</th><th className="num">기준</th><th>단위</th>
+              <th>
+                기준일 추이
+                <Info
+                  tip={'기준을 낸 직전 거래일들의 건수입니다(최대 10일). 조회일 값은 이 그래프에 들어 있지 않습니다 — 조회일이 오늘이면 아직 쌓이는 중인 값이라 왼쪽 "오늘" 칸에 따로 둡니다.\n\n0 은 그날 산출이 없었다는 실측입니다.'}
+                  label="기준일 추이 읽는 법"
+                />
+              </th>
+            </tr>
+          </thead>
           <tbody>
-            {q.facts.outputs.map((output) => (
-              <tr key={output.id} id={`out-${output.id}`}>
-                <td>{output.label} <span className="mono t-xs">{output.id}</span></td>
-                <td className="num">{output.today.toLocaleString('ko-KR')}</td>
-                <td className="num">{output.base?.toLocaleString('ko-KR') ?? '—'}</td>
-                <td>{output.unit}</td>
-              </tr>
-            ))}
+            {q.facts.outputs.map((output) => {
+              const series = outputSeries(output);
+              return (
+                <tr key={output.id} id={`out-${output.id}`}>
+                  <td>{output.label} <span className="mono t-xs">{output.id}</span></td>
+                  <td className="num">{output.today.toLocaleString('ko-KR')}</td>
+                  <td className="num">{output.base?.toLocaleString('ko-KR') ?? '—'}</td>
+                  <td>{output.unit}</td>
+                  <td>
+                    {series && series.values.length > 0 ? (
+                      <RunSpark label={`${output.label} 기준일 추이`} runs={series.dates} values={series.values} unit="기준일" />
+                    ) : (
+                      <span className="rs-latest" style={{ color: 'var(--fg-3)' }}>기록 없음</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -317,6 +340,8 @@ export function TrendPage() {
       </div>
 
       <RunSeriesSection />
+
+      <MinuteSeriesSection />
     </div>
   );
 }

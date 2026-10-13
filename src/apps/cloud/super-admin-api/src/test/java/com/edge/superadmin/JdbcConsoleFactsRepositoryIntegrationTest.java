@@ -946,6 +946,17 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(trig.today()).isEqualTo(1L);
 		// 정렬 [0, 1, 5] 의 가운데 = 1.0 (평균이면 2.0 이다)
 		assertThat(trig.base()).isEqualTo(1.0d);
+		/* 기준일별 건수(ALPHA-1289) — 중앙값을 낸 바로 그 표본이 날짜 오름차순으로 실린다.
+		 * 🔴 조회일(DAY, 1종)은 **들어 있지 않다** — 미완결일의 값이 마지막 점이 되면 매일 급락으로
+		 * 읽힌다. 산출이 없던 기준일의 0 은 빠지지 않고 0 으로 실린다(실측이지 모름이 아니다). */
+		assertThat(trig.history()).extracting(d -> d.date().toString()).doesNotContain(DAY.toString());
+		assertThat(trig.history()).isSortedAccordingTo(
+				java.util.Comparator.comparing(com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay::date));
+		assertThat(trig.history()).extracting(com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay::count)
+				.containsExactlyInAnyOrder(0L, 1L, 5L);
+		assertThat(trig.history()).filteredOn(d -> d.date().toString().equals("2026-07-30"))
+				.extracting(com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay::count)
+				.containsExactly(5L);
 	}
 
 	/**

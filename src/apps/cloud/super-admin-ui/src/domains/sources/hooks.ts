@@ -74,10 +74,10 @@ export function useMinuteJudgments(sessionId: string, enabled: boolean) {
   });
 }
 
-export function useMinuteDailyStatus(days = 7) {
+export function useMinuteDailyStatus(days = 7, refetchInterval: number | false = 60_000) {
   return useQuery({
     queryKey: ['sources', 'minute', 'daily', days],
     queryFn: () => sourcesRepository.minuteDailyStatus(days),
-    refetchInterval: 60_000,
+    refetchInterval,
   });
 }

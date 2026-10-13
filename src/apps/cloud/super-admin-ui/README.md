@@ -48,7 +48,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/ops/incidents` | 파이프라인 문제·사건 목록 |
 | `/ops/incidents/detail?vid=` | 사건 상세 (점 든 대상도 안전하도록 식별자는 쿼리) |
 | `/ops/runs` · `/ops/runs/:runId` | 런·작업 귀결 목록 · 실행 상세 |
-| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이(뉴스 엔티티 해소율 실측, 60% 미만은 주황 주의) + 데이터셋별 실행 추이(실행 단위의 행 수·소요 시간·종료 상태·대상 수 대비 받은 수 — 판정 없음, ALPHA-1284) |
+| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이(뉴스 엔티티 해소율 실측, 60% 미만은 주황 주의) + 데이터셋별 실행 추이(실행 단위의 행 수·소요 시간·종료 상태·대상 수 대비 받은 수 — 판정 없음, ALPHA-1284) + 산출 축의 기준일 추이·1분 세션 일별 창 수(판정 없음, ALPHA-1289) |
 | `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계 |
 | `/ops/summary` | 파이프라인 개요 — **은퇴**(라우트·컴포넌트만 존치). 사이드바·인바운드 링크 없음이 의도다 |
 | `/overview` | 레인 원장 요약 (구 첫 화면) — **은퇴**(라우트·컴포넌트만 존치). 개요는 자기 질문("지금 정상인가")에 답할 수 없어 메뉴에서 뺐다 |
@@ -111,7 +111,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `styles/` 5 | ops·grid·minute·info-popover·mock-preview |
 | `pages/_shared/` | `InfoPopover`(portal 팝오버 — 포커스·Escape 처리) · `MockPreview` |
 | `mock/preview.ts` | 실 데이터 0건일 때 화면을 검수하는 미리보기 픽스처. `mock/preview.test.ts` 가 **서버가 낼 수 있는 응답인가**를 고정한다 |
-| `domains/sources/` 파생 8 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `runSeries`(격자 응답 → 데이터셋별 실행 단위 계열, 값 없는 실행은 빈 점) · `holdingsFlow`(구성종목 최종 완전성) · `minuteHistory`(선택 날짜 조회 상태 + 날짜별 캐시 선택) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤 + 뉴스 품질 진단 검증·표시) |
+| `domains/sources/` 파생 9 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `runSeries`(격자 응답 → 데이터셋별 실행 단위 계열, 값 없는 실행은 빈 점) · `dailySeries`(산출의 기준일별 건수·1분 세션의 일별 창 수 계열 — 산출의 0 은 0, 세션 없는 날은 빈 점) · `holdingsFlow`(구성종목 최종 완전성) · `minuteHistory`(선택 날짜 조회 상태 + 날짜별 캐시 선택) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤 + 뉴스 품질 진단 검증·표시) |
 | `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
 | `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
 | `pages/ops/` 판정 11 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4·ALPHA-979 조각 1·ALPHA-1003). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `chainView`(장중 갈래가 입구에서 사라졌는가 — **관측 결과이지 축의 유무가 아니다**) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기, 엔티티 해소율 60% 미만 주황) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
