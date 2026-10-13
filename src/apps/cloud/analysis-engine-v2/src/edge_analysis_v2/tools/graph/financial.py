@@ -99,7 +99,7 @@ class FinancialTools:
         # (the same marks the event filters treat as unknown), is an amount the report does not state.
         read=lambda m:m['properties'].get('valueSource')!='UNRESOLVED' and m['properties'].get('parseStatus') in (None,'ok')
         measures=lambda code,unit:[m for report in reports for m in report['features']
-            if m['properties'].get('metricCode')==code and m['properties'].get('unit')==unit and read(m) and number(m['properties'].get('value')) is not None]
+            if m['properties'].get('metricCode')==code and m['properties'].get('unit')==unit and read(m) and (number(m['properties'].get('value')) or 0)>0]
         feature=lambda code,unit:[number(m['properties']['value']) for m in measures(code,unit)]
         # An amount a year is not a contract total: 100억 a year over five years came back as 20억 a year.
         amounts=[m for m in measures('CONTRACT_VALUE','KRW') if m['properties'].get('periodBasis')!='ANNUAL']
@@ -127,7 +127,7 @@ class FinancialTools:
             selection=self.tools.holdings(etf_ref,day,'latest_on_or_before')[1]['selection']
             _,mapping=self.tools.actors(selection)
             issued={m['security']['object_id'] for m in mapping if m['actor']['object_id']==company_ref['object_id']}
-            weights=[number(i.get('weight_ratio')) for i in selection['items'] if i['object_id'] in issued]
+            weights=[w if w is not None and w>=0 else None for w in (number(i.get('weight_ratio')) for i in selection['items'] if i['object_id'] in issued)]
             # Common and preferred shares held at 10% and an unknown weight are not a 10% holding of the company.
             holding_weight=sum(weights,Decimal(0)) if weights and None not in weights else None
             # Left out without a word, a fund that does not hold the company read the same as one whose weight is unknown.
@@ -210,7 +210,9 @@ class FinancialTools:
                 if value:
                     conditions.append('n.'+key+(' IN $' if isinstance(value,list) else '=$')+key);params[key]=value
             rows=self.graph.linked(companies,'FinancialMetric_ForCompany_Company','reverse',where=' AND '.join(conditions) or None,parameters=params)
-            if not rows and params:
+            asked={key:wanted if isinstance(wanted,list) else [wanted] for key,wanted in params.items()}
+            # Beside a name that has rows, a wrong name was dropped without a word: revenue came back and operatingIncome was not missed.
+            if any(v not in {row['target']['properties'].get(key) for row in rows} for key,wanted in asked.items() for v in wanted):
                 # An empty answer to a filtered request is ambiguous: no data, or a value the data never uses
                 # (operatingIncome for operating_income). The unfiltered rows settle which, so a wrong argument
                 # comes back as an error naming the values that exist instead of reading as absence.

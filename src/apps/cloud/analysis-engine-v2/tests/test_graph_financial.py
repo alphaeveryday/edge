@@ -36,6 +36,21 @@ class FinancialTests(unittest.TestCase):
             result,_=self.tools.financial.observations({'kind':'objects'},'actual',metrics=['revenue'])
             self.assertEqual(result['total_rows'],0)
 
+    def test_a_wrong_metric_name_beside_a_right_one_is_still_an_error(self):
+        # WHY: with revenue in the same request, operatingIncome was dropped without a word.
+        from unittest.mock import patch
+        company={'object_type':'Company','object_id':'c'}
+        stored=[{'source':company,'target':self.obs(m,'1',metric=m)} for m in ('operating_income','revenue')]
+        def linked(refs,link,direction,where=None,parameters=None):
+            wanted=(parameters or {}).get('metric')
+            return [r for r in stored if not wanted or r['target']['properties']['metric'] in wanted]
+        with patch.object(self.tools,'select',return_value={'items':[]}),patch.object(self.tools,'actors',return_value=([company],[])),\
+             patch.object(self.tools.graph,'linked',side_effect=linked):
+            with self.assertRaisesRegex(ValueError,r"metric in \['operatingIncome'\]"):
+                self.tools.financial.observations({},'actual',metrics=['revenue','operatingIncome'])
+            result,_=self.tools.financial.observations({},'actual',metrics=['revenue'])
+            self.assertEqual(result['total_rows'],1)
+
     def test_cross_company_and_accounting_basis_cannot_create_growth_rate(self):
         first=self.obs('a','100',periodEnd='2026-03-31',fiscalPeriod='Q1')
         for change in ({'corpCode':'other'},{'fsBasis':'OFS'},{'periodKind':'YTD'},{'unit':'USD'}):
