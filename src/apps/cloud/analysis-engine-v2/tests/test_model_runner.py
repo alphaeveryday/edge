@@ -12,18 +12,22 @@ from pathlib import Path
 
 from edge_analysis_v2.agent.runner import run_model, make_server, load_prompt
 
+RIVALS = {'explanations': ['Demand grew', 'Price rose']}
+ANSWERED = RIVALS | {'closure': 'resolved', 'answer': 'Volume data separates the two; demand grew.'}
+
 
 SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': False,
           'properties': {'summary': {'type': 'string'}}}
 
 
 @pytest.mark.parametrize('kind', ['movement', 'outlook'])
-def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_path, kind):
+def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_path, kind):
     """Keep the reviewed instructions identical to the model and audit inputs."""
     import edge_analysis_v2.agent.runner as runner
+    from edge_analysis_v2.agent.skill_session import SOURCE, body
+    from edge_analysis_v2.analysis.service import TASK_SKILLS
 
-    prompt_path = Path(runner.__file__).parents[1] / 'prompts' / f'{kind}.yaml'
-    prompt = load_prompt(prompt_path)
+    prompt = load_prompt(Path(runner.__file__).parents[1] / 'prompts' / f'{kind}.yaml')
     captured = []
     base = client_for(ResultMessage(structured_output={'summary': 'ok'}))
 
@@ -34,22 +38,36 @@ def test_canonical_prompt_is_sent_and_recorded_without_external_documents(tmp_pa
 
     result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
         call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path,
-        key='test-secret', model='deepseek-flash', client_factory=Client, kind=kind))
+        key='test-secret', model='deepseek-flash', client_factory=Client, skills=TASK_SKILLS))
 
     assert result == {'summary': 'ok'}
-    assert len(captured) == 1
-    research = (prompt_path.parent/'research.md').read_text(encoding='utf-8')
-    contract = (prompt_path.parent/'output-contract.md').read_text(encoding='utf-8')
-    writing = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
-    assert research in writing and prompt in writing and contract in writing
-    assert research not in captured[0]
+    base = (SOURCE.parent/'prompts/base.md').read_text(encoding='utf-8')
+    assert len(captured) == 1 and captured[0].startswith(base) and '스킬은 특정한 종류의 일을 하는 방법' in captured[0]
     assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
+    task = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
+    # The method comes first, then the task, then how to write the result.
+    assert task.index('# 원인 조사') < task.index(prompt) < task.index('# 분석 결과 작성')
+    # The declared skills reach the task in full, once, without a Skill or Read call; the others do not.
+    for name in TASK_SKILLS:
+        assert task.count(body((SOURCE/name/'SKILL.md').read_text(encoding='utf-8'))) == 1
+    assert '사건에서 ETF 가격 판단까지' not in task and '재귀 분석의 적용 방법' not in task
     query = json.loads((tmp_path/'model_input.json').read_text(encoding='utf-8'))
-    assert query['workspace_instructions']['content'] == writing
-    # Project instructions reach both tasks without forcing a Skill or Read call.
-    for name in ('research.md', 'output-contract.md'):
-        content = (prompt_path.parent/name).read_text(encoding='utf-8')
-        assert writing.count(content) == 1
+    assert query['workspace_instructions']['content'] == task
+    assert json.loads((tmp_path/'skills.json').read_text(encoding='utf-8'))['declared'] == list(TASK_SKILLS)
+
+
+def test_a_question_gets_the_base_rules_and_its_prompt_and_is_handed_over_as_it_is(tmp_path):
+    # WHY: a one-line question carried the investigation and report rules, and its text had to be fetched with two calls.
+    class client(client_for(ResultMessage(structured_output={'summary': 'ok'}))):
+        async def query(self, text):   # the shared fake expects a source catalog; a question has none
+            pass
+    asyncio.run(run_model(initial={'question': '종목코드는?', 'analysis_cutoff': '2026-10-05T14:59:59+00:00'}, prompt='질문에 답한다.',
+        schemas=[], call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path, key='test-secret',
+        model='deepseek-flash', client_factory=client))
+    assert (tmp_path/'AGENTS.md').read_text(encoding='utf-8') == '질문에 답한다.'
+    assert '스킬' not in (tmp_path/'system_prompt.txt').read_text(encoding='utf-8')   # a run without skills never hears of them
+    query = json.loads((tmp_path/'model_input.json').read_text(encoding='utf-8'))
+    assert query['input'] == {'question': '종목코드는?', 'analysis_cutoff': '2026-10-05T14:59:59+00:00'}
 
 
 def test_valid_json_after_work_registration_needs_no_skill_call_and_workspace_is_removed(tmp_path):
@@ -95,18 +113,18 @@ def test_research_is_bounded_by_elapsed_time_not_a_fixed_turn_count(tmp_path):
     assert not (tmp_path/'response.json').exists()
 
 
-@pytest.mark.parametrize('kind,seconds',[('outlook',600),('movement',300)])
-def test_deep_outlook_has_more_time_without_expanding_movement(monkeypatch,tmp_path,kind,seconds):
+@pytest.mark.parametrize('seconds', [600, 300])
+def test_the_caller_sets_the_deadline(monkeypatch, tmp_path, seconds):
     original = asyncio.timeout
     deadlines = []
     def timeout(value):
         deadlines.append(value)
         return original(value)
-    monkeypatch.setattr(asyncio,'timeout',timeout)
-    asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[],
-        call=lambda name,args:None, output_schema=SCHEMA, artifacts=tmp_path,
-        key='test-secret', model='deepseek-flash', kind=kind,
-        client_factory=client_for(ResultMessage(structured_output={'summary':'ok'}))))
+    monkeypatch.setattr(asyncio, 'timeout', timeout)
+    asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[],
+        call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path,
+        key='test-secret', model='deepseek-flash', timeout_seconds=seconds,
+        client_factory=client_for(ResultMessage(structured_output={'summary': 'ok'}))))
     assert deadlines == [seconds]
 
 
@@ -144,7 +162,7 @@ def client_for(message):
         async def receive_response(self):
             if message:
                 state = self.options.hooks['PostToolUse'][0].hooks[0].__self__
-                state.update_tasks([{'content':'Answer the fixture question', 'status':'completed'}])
+                state.update_tasks([{'content':'Answer the fixture question', 'status':'completed', **ANSWERED}])
                 yield message
     return Client
 
@@ -199,7 +217,7 @@ def test_unfinished_tasks_resume_same_client_and_only_last_result_is_accepted(tm
             done = len(queries) == 2
             hook = self.options.hooks['PostToolUse'][0].hooks[0]
             hook.__self__.update_tasks([{'content':'Resolve contradictory filing',
-                'status':'completed' if done else 'pending'}])
+                'status':'completed' if done else 'pending', **ANSWERED}])
             yield ResultMessage(structured_output={'summary':'resolved' if done else 'premature'})
     result = asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[], call=lambda *a:None,
         output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
@@ -227,7 +245,7 @@ def test_compaction_recovery_precedes_publication_even_when_model_skips_tools(tm
             else:
                 assert 'Read AGENTS.md again' in queries[-1]
                 state = self.options.hooks['PostToolUse'][0].hooks[0].__self__
-                state.update_tasks([{'content':'Recover the research question', 'status':'completed'}])
+                state.update_tasks([{'content':'Recover the research question', 'status':'completed', **ANSWERED}])
                 yield ResultMessage(structured_output={'summary':'after recovery'})
     result = asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[], call=lambda *a:None,
         output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
@@ -250,7 +268,8 @@ def test_text_only_final_without_registered_questions_is_never_published(tmp_pat
             yield ResultMessage(structured_output={'summary':'Looks finished but has no questions'})
     with pytest.raises(ValueError, match='Unfinished'):
         asyncio.run(run_model(initial={'news':[]}, prompt='system', schemas=[], call=lambda *a:None,
-            output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+            output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client,
+            skills=('cause-investigation',)))
     assert len(queries) == 4
     assert all('workspace.update_tasks' in query for query in queries[1:])
     assert not (tmp_path/'response.json').exists()
@@ -279,14 +298,14 @@ def test_resume_restores_work_and_rejects_changed_observations(tmp_path):
     initial = {'news':[]}
     (tmp_path/'input.json').write_text(json.dumps(initial))
     (tmp_path/'workspace.json').write_text(json.dumps({'status':'interrupted', 'reminders':1,
-        'todos':[{'content':'Use recovered IR', 'status':'pending'}], 'notes':{'evidence.md':'Saved IR'}}))
+        'todos':[{'content':'Use recovered IR', 'status':'pending', **RIVALS}], 'notes':{'evidence.md':'Saved IR'}}))
     class Client(client_for(ResultMessage(structured_output={'summary':'resumed'}))):
         async def query(self, text):
             value = json.loads(text)
             assert value['resumed_work']['todos'][0]['content'] == 'Use recovered IR'
             state = self.options.hooks['PostToolUse'][0].hooks[0].__self__
             assert state.note_path('notes/evidence.md').read_text() == 'Saved IR'
-            state.update_tasks([{'content':'Use recovered IR', 'status':'completed'}])
+            state.update_tasks([{'content':'Use recovered IR', 'status':'completed', **ANSWERED}])
     args = dict(prompt='system', schemas=[], call=lambda *a:None, output_schema=SCHEMA,
         artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client, resume=True)
     with pytest.raises(ValueError, match='same original'):
@@ -310,7 +329,7 @@ def test_an_overlong_final_answer_is_never_accepted(tmp_path):
         async def query(self, text):
             pass
         async def receive_response(self):
-            self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed'}])
+            self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed', **ANSWERED}])
             yield ResultMessage(structured_output={'summary': 'far too long'})
     with pytest.raises(ValidationError):
         asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None,

@@ -24,6 +24,9 @@ from edge_analysis_v2.storage.publications import PublicationStore
 from edge_analysis_v2.storage.tool_runs import ToolStore
 
 LOG = logging.getLogger(__name__)
+# Both reports are investigations written up in a fixed form, so both carry the same two skills.
+TASK_SKILLS = ('cause-investigation', 'analysis-report-writing')
+OPTIONAL_SKILLS = ('hypothesis-analysis-workflow', 'etf-hypothesis-analysis')   # opened when the investigation needs them
 KST = timezone(timedelta(hours=9))
 _LATEST = object()
 
@@ -207,7 +210,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             factor_output = call('get_instrument_factors', {'instrument_id': context['etf_code']})
         response = asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
             schemas=schemas,call=call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
-            artifacts=artifacts,key=key,model=model,kind=kind))
+            artifacts=artifacts,key=key,model=model,skills=TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,
+            timeout_seconds=600 if kind=='outlook' else 300))
         if kind == 'outlook':
             issue = response['issue_detail']
             metrics = project_factor_metrics(factor_output, context['etf_code'])

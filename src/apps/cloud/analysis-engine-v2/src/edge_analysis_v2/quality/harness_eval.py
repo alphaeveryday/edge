@@ -54,7 +54,9 @@ async def evaluate(folder, case, key, model):
         'source_gaps':{'financials':['Not loaded in the local database']}, 'web_research':{'enabled':True}}
     result = await run_model(initial=initial,
         prompt='고정 합성 자료의 조사 평가다. 실제 ETF 보고서를 작성하지 않는다. Nova의 수주 증가가 이번 분기 영업이익 증가를 뜻하는지 현재 가능한 최선의 결론을 내라. 성장, 납품 시차, 비용 변화의 설명을 구별하고 필요한 공백을 조사하라. 초기 기사와 DB 범위 밖에 필요한 정보가 있을 수 있다. 이 평가에서는 제공된 도구 응답 ID를 근거로 쓰고 제공된 작은 출력 스키마만 따른다. 근거 없이 숫자를 계산하지 않는다.',
-        schemas=schemas, call=call, output_schema=schema, artifacts=folder, key=key, model=model)
+        schemas=schemas, call=call, output_schema=schema, artifacts=folder, key=key, model=model,
+        # This evaluation judges an investigation: its checks expect registered questions, which only the skill asks for.
+        skills=('cause-investigation',), timeout_seconds=600)
     expected = 'decrease' if case == 'available' else 'unknown'
     read_ir = any(c['name']=='read_web_document' and c['args']['url'].endswith('/ir') for c in calls)
     named = {c['tool_run_id']: c for c in calls}
