@@ -1572,8 +1572,8 @@
   },
   "outputs": [
     {
-      "id": "o.pub",
-      "label": "게시 ETF",
+      "id": "o.outlook",
+      "label": "전망 완료 ETF",
       "today": 16,
       "base": null,
       "unit": "종"

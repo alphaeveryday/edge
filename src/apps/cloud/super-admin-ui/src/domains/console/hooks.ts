@@ -35,3 +35,16 @@ export function useIntradayAnalysisTrend(maxDate?: string, days = 30) {
     refetchInterval: 60_000,
   });
 }
+
+/**
+ * v2 분석(전망·가격변동)의 일별 건수. facts 가 실제로 본 날짜로 끝나는 기간을 본다.
+ * 이 엔드포인트가 없는 API 에서는 실패한다 — 화면은 그때 해당 카드·구역을 기록 없음으로 둔다.
+ */
+export function useAnalysisTrend(maxDate?: string, enabled = true, days = 30) {
+  return useQuery({
+    queryKey: ['console', 'trends', 'analysis', maxDate ?? null, days],
+    queryFn: () => consoleRepository.analysisTrend(maxDate, days),
+    enabled,
+    refetchInterval: 60_000,
+  });
+}

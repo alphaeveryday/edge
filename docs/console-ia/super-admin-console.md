@@ -48,7 +48,7 @@ session=인증 세션 주체(SessionOperator) 투영(ALPHA-608) · analyses 쓰�
 | Event Pipeline — 뉴스 계보 | `GET /api/v1/sources/lineage/news` |
 | Event Pipeline — 장중 1분 수집 | `GET /api/v1/sources/minute` · `GET /api/v1/sources/minute/daily`(최근 일별 Grid 판정) · `GET /api/v1/sources/minute/judgments?sessionId=`(원장 근거 화면의 가격 판정 근거 — 저장된 판정 근거 조회, 원본 본문 재검증 없음, 재계산 미제공) |
 | Event Pipeline — 구성종목 결손 영향 | `GET /api/v1/sources/impact/holdings` |
-| 콘솔 규칙 엔진 사실 표면(하루 사실·최근 일별 추이) | `GET /api/v1/console/facts` · `GET /api/v1/console/trends/entity-resolution` · `GET /api/v1/console/trends/intraday-analysis` (계약은 [../contracts/console-facts-api.md](../contracts/console-facts-api.md), ADR-0050) |
+| 콘솔 규칙 엔진 사실 표면(하루 사실·최근 일별 추이) | `GET /api/v1/console/facts` · `GET /api/v1/console/trends/entity-resolution` · `GET /api/v1/console/trends/intraday-analysis` · `GET /api/v1/console/trends/analysis` (계약은 [../contracts/console-facts-api.md](../contracts/console-facts-api.md), ADR-0050) |
 | Event Pipeline — 분석 목록/무효화 | `GET /api/v1/analyses` · `POST /api/v1/analyses/{id}/invalidate` (사유 필수 — 게시본 WITHDRAWN 전이 + NEW 수신 테넌트 INVALIDATION 발번, ALPHA-440. 구 정정/제외/복원 엔드포인트는 ALPHA-737 로 은퇴) |
 | 운영자 컨텍스트(헤더·프로필) | `GET /api/v1/session` · `PATCH /api/v1/session/profile` |
 | 인증 | `POST /api/v1/auth/login`(유일 공개) · `POST /api/v1/auth/logout` · `GET /api/v1/auth/session` |

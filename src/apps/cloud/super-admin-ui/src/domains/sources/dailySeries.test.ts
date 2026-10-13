@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ALL_DATASETS } from './datasetCatalog.ts';
-import { minuteDailySeries, outputSeries } from './dailySeries.ts';
+import { analysisDailySeries, minuteDailySeries, outputSeries } from './dailySeries.ts';
 import type { MinuteDailyDataset, MinuteDailyDay } from './types.ts';
 
 const REALTIME = ALL_DATASETS.filter((d) => !d.inOpsGrid);
@@ -93,4 +93,35 @@ test('행은 카탈로그의 1분 데이터셋 전부이고 점은 응답의 날
   assert.deepEqual(result.map((s) => s.dataset.id), REALTIME.map((d) => d.id));
   assert.ok(result.length >= 5, `1분 데이터셋 ${result.length}종`);
   for (const s of result) assert.deepEqual(s.points.map((p) => p.date), ['2026-10-09', '2026-10-12'], s.dataset.id);
+});
+
+test('🔴 분석 추이는 행이 없던 날을 빈 점으로 둔다 — 0 건으로 채우지 않고, 행이 있던 날의 0 은 0 이다', () => {
+  /* 가격변동 분석은 장이 열린 날에만 생기고, v2 표가 생기기 전 날짜에는 값이 없다. 그 날들을 0 으로
+   * 그리면 "분석이 돌았는데 하나도 완료되지 않았다"가 된다. */
+  const series = analysisDailySeries({
+    from: '2026-09-30',
+    to: '2026-10-03',
+    kinds: [
+      {
+        kind: 'outlook',
+        points: [
+          { date: '2026-10-02', completed: 150, failed: 3, running: 0, completedEtfs: 148, failedEtfs: 3 },
+          { date: '2026-10-03', completed: 0, failed: 0, running: 4, completedEtfs: 0, failedEtfs: 0 },
+        ],
+      },
+      { kind: 'movement', points: [] },
+    ],
+  });
+  assert.deepEqual(series.map((s) => s.kind), ['outlook', 'movement']);
+  assert.deepEqual(series[0].points, [
+    { date: '2026-09-30', completed: null, failed: null, running: null },
+    { date: '2026-10-01', completed: null, failed: null, running: null },
+    { date: '2026-10-02', completed: 150, failed: 3, running: 0 },
+    /* 끝나지 않은 4건은 실패 칸에 더해지지 않는다 */
+    { date: '2026-10-03', completed: 0, failed: 0, running: 4 },
+  ]);
+  /* 기간 내내 행이 없던 종류도 날짜만큼 빈 점을 갖는다 — 계열이 사라지지 않는다 */
+  assert.deepEqual(series[1].points.map((p) => [p.date, p.completed]), [
+    ['2026-09-30', null], ['2026-10-01', null], ['2026-10-02', null], ['2026-10-03', null],
+  ]);
 });

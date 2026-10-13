@@ -17,6 +17,7 @@
  */
 import type { DatasetEntry } from './datasetCatalog.ts';
 import type { MinuteDailyDay } from './types.ts';
+import type { AnalysisTrendDto, AnalysisTrendKind } from '../console/types.ts';
 
 export interface OutputHistory {
   history?: { date: string; count: number }[];
@@ -66,4 +67,44 @@ export function minuteDailySeries(days: MinuteDailyDay[], datasets: DatasetEntry
       };
     }),
   }));
+}
+
+export interface AnalysisDayPoint {
+  date: string;
+  completed: number | null;
+  failed: number | null;
+  /** 끝나지 않은 건수 — 실패가 아니다 */
+  running: number | null;
+}
+
+export interface AnalysisDailySeries {
+  kind: AnalysisTrendKind;
+  points: AnalysisDayPoint[];
+}
+
+/**
+ * v2 분석 추이 → 종류별 일별 계열(ALPHA-1290). 날짜 축은 응답의 조회 범위(`from`~`to`)를 하루씩
+ * 편 것이고, **분석 행이 없던 날은 세 값이 모두 `null`** 이다 — 0 이 아니다. 가격변동 분석은 장이
+ * 열린 날에만 생기고, v2 표가 생기기 전 날짜에는 값이 없다. 행이 있던 날의 0 은 0 이다.
+ */
+export function analysisDailySeries(trend: AnalysisTrendDto): AnalysisDailySeries[] {
+  const dates: string[] = [];
+  const cursor = new Date(`${trend.from}T00:00:00Z`);
+  const end = new Date(`${trend.to}T00:00:00Z`);
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return trend.kinds.map(({ kind, points }) => {
+    const byDate = new Map(points.map((p) => [p.date, p]));
+    return {
+      kind,
+      points: dates.map((date) => {
+        const p = byDate.get(date);
+        return p
+          ? { date, completed: p.completed, failed: p.failed, running: p.running }
+          : { date, completed: null, failed: null, running: null };
+      }),
+    };
+  });
 }

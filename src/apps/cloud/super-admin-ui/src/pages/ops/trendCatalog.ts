@@ -14,7 +14,12 @@
  *   · Cloud 게시·테넌트 발번·소비자 전달은 전달 화면 소관이라 지표로 두지 않는다.
  */
 import type { Facts } from '../../rules/types.ts';
-import type { EntityResolutionTrendDto } from '../../domains/console/types.ts';
+import type {
+  AnalysisTrendDto,
+  AnalysisTrendKind,
+  AnalysisTrendPointDto,
+  EntityResolutionTrendDto,
+} from '../../domains/console/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 import type { Metric, SeriesPoint } from './trendMetrics.ts';
 
@@ -39,9 +44,6 @@ export const latestTask = (f: Facts, key: string) =>
     .filter((t) => t.task_key === key)
     .sort((a, b) => b.run_id.localeCompare(a.run_id))[0];
 const dataset = (f: Facts, id: string) => f.datasets.find((d) => d.id === id);
-/* 축이 통째로 없으면 `null` — 부재를 0 으로 그리면 "결과 생성률 0%" 라는 거짓 경보가 된다
- * (`coverageMetric`·`lagMetric` 의 `comparisonType: 'uninstrumented'` 규약과 같은 방향). */
-const chain = (f: Facts, id: string) => f.chain?.stages.find((s) => s.id === id)?.batch ?? null;
 const output = (f: Facts, id: string) => f.outputs.find((o) => o.id === id);
 
 /**
@@ -79,12 +81,6 @@ const OUTPUT_ABSENT = (id: string) =>
     '',
     '0 으로 그리면 "오늘 하나도 안 나왔다"가 되는데, 그건 이 응답이 답하지 못하는 말이다.',
   ].join('\n');
-
-const CHAIN_ABSENT = [
-  '체인 단계 집계(`chain`)가 이번 응답에 없다 — 그 축을 안 싣는 배포본을 보고 있다(계약 §체인 축).',
-  '',
-  '부재를 0 으로 접으면 "결과 생성률 0%" 라는 거짓 경보가 뜬다.',
-].join('\n');
 
 /**
  * 조회일 값 한 점 — **실측 과거가 없으면 과거를 만들지 않는다.**
@@ -226,6 +222,82 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
   };
 }
 
+/* ── 분석 결과 ── v2 분석 표의 조회일 값 */
+
+const ANALYSIS_LABEL: Record<AnalysisTrendKind, string> = { outlook: '전망', movement: '가격변동 분석' };
+
+/**
+ * 조회일의 v2 분석 건수. 세 갈래다:
+ *   · `undefined` — 분석 추이 응답이 없다(조회 전·실패, 또는 그 엔드포인트가 없는 API).
+ *   · `null` — 응답은 왔는데 **조회일에 그 종류의 분석 행이 없다**. 0 이 아니다: 가격변동 분석은
+ *     장이 열린 날에만 생긴다.
+ *   · 값 — 그날 행이 있었다. 이때의 0 은 0 이다.
+ */
+function analysisDay(
+  trend: AnalysisTrendDto | undefined,
+  kind: AnalysisTrendKind,
+  today: string,
+): AnalysisTrendPointDto | null | undefined {
+  if (!trend) return undefined;
+  return trend.kinds.find((k) => k.kind === kind)?.points.find((p) => p.date === today) ?? null;
+}
+
+function analysisCards(
+  kind: AnalysisTrendKind,
+  day: AnalysisTrendPointDto | null | undefined,
+  today: string,
+): Metric[] {
+  const name = ANALYSIS_LABEL[kind];
+  const absent =
+    day === undefined
+      ? '분석 추이 응답을 받지 못해 값을 그리지 않는다.'
+      : `조회일에 ${name} 행이 없다 — 0건이 아니라 기록이 없는 날이다.`;
+  const drill = { href: '/ops/trend', label: '분석 일별 추이' };
+  const completed = {
+    id: `a.${kind}_completed`,
+    label: `${name} 완료 건수`,
+    group: 'analysis' as const,
+    unit: '건',
+    metricType: 'volume' as const,
+    direction: 'stable' as const,
+    source: 'DB_LEDGER' as const,
+    help: [
+      `조회일(분석 시각의 KST 날짜)에 완료된 ${name} 건수. 같은 ETF 를 여러 번 분석하면 각각 센다.`,
+      '완료는 분석이 끝까지 돌았다는 뜻이고, 게시 여부와는 다르다.',
+      '',
+      day ? `조회일 완료 ${day.completed}건 · ${day.completedEtfs}종.` : absent,
+      '',
+      '판정: 중앙값 대비 ±25%로 보는 지표지만, 기준값을 주는 응답이 없어 지금은 판정하지 않는다.',
+      '날짜별 값은 아래 분석 일별 추이에 있다.',
+    ].join('\n'),
+    drill,
+  };
+  const failed = {
+    id: `a.${kind}_failed_etfs`,
+    label: `${name} 실패 ETF`,
+    group: 'analysis' as const,
+    unit: '종',
+    metricType: 'defect' as const,
+    direction: 'lowerIsBetter' as const,
+    source: 'DB_LEDGER' as const,
+    help: [
+      `조회일에 ${name}이 실패로 끝난 행이 하나라도 있는 ETF 수.`,
+      '같은 ETF 가 실패한 뒤 다시 완료됐어도 센다 — 이 수는 지금 실패 상태인 ETF 수가 아니다.',
+      '끝나지 않은 채 남은 분석(running)은 실패로 세지 않는다.',
+      '',
+      day ? `조회일 실패 ${day.failed}건 · ${day.failedEtfs}종, 끝나지 않은 ${day.running}건.` : absent,
+      '',
+      '판정: 1종 이상이면 이상.',
+    ].join('\n'),
+    drill,
+  };
+  if (!day) return [uninstrumented(completed), uninstrumented(failed)];
+  return [
+    { ...completed, comparisonType: 'medianDelta', threshold: 0.25, series: onePoint(today, day.completed) },
+    { ...failed, comparisonType: 'maxCount', threshold: 0, series: onePoint(today, day.failedEtfs) },
+  ];
+}
+
 /* ── 지표 목록 ── */
 
 /**
@@ -236,7 +308,12 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
  * ErrorBoundary 밖이라 **흰 화면**이 된다. 사실을 인자로 받으면 그 `!` 들이 함께 없어진다 —
  * 부재는 죽을 자리가 아니라 `uninstrumented` 로 그릴 자리다.
  */
-export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?: EntityResolutionTrendDto): Metric[] {
+export function buildMetrics(
+  f: Facts,
+  minute?: MinuteStatus,
+  entityResolution?: EntityResolutionTrendDto,
+  analysis?: AnalysisTrendDto,
+): Metric[] {
   const TODAY = f.meta.today;
   const minuteObserved = minute?.date === TODAY;
   const priceSessions = minuteObserved
@@ -250,8 +327,6 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
     : undefined;
   const doc = output(f, 'o.doc');
   const trig = output(f, 'o.trig');
-  const res = chain(f, 'c.res');
-  const run = chain(f, 'c.run');
   /* 분봉 응답이 없으면 값이 없다 — 숫자를 대신 넣지 않고 판정 불가로 둔다 */
   const minuteDefect = (m: Omit<Metric, 'comparisonType' | 'threshold' | 'series'>, today: number | undefined): Metric =>
     today === undefined
@@ -354,116 +429,10 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
       }),
   entityResolutionMetric(entityResolution),
 
-  /* 분석 결과 — 단위가 같은 것끼리만 비율을 낸다 */
-  res !== null
-    ? {
-        id: 'a.results',
-        label: '분석 결과 생성 수',
-        group: 'analysis',
-        unit: '건',
-        metricType: 'volume',
-        comparisonType: 'medianDelta',
-        threshold: 0.25,
-        direction: 'stable',
-        source: 'DB_LEDGER',
-        series: onePoint(TODAY, res),
-        help: [
-          '일별 분석 결과(explanation_result) 생성 건수 — 배치 레인.',
-          '',
-          '오늘 값은 체인 관측에서 온다.',
-          '',
-          '판정: 중앙값 대비 ±25%로 보는 지표지만, 기준값과 일별 계열을 주는 응답이 없어 지금은 판정하지 않는다.',
-        ].join('\n'),
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }
-    : uninstrumented({
-        id: 'a.results',
-        label: '분석 결과 생성 수',
-        group: 'analysis',
-        unit: '건',
-        metricType: 'volume',
-        direction: 'stable',
-        source: 'DB_LEDGER',
-        help: CHAIN_ABSENT,
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }),
-  /* 🔴 `chain('c.res') ?? 0` 이던 자리다. 부재를 0 으로 접으면 "결과 생성률 0%" 라는 거짓
-   * 경보가 매일 뜬다 — 체인 축은 계측이 없어 실 응답에 아예 없다(계약 §축별 소스). */
-  res !== null && run !== null && run !== 0
-    ? {
-        id: 'a.run_to_result',
-        label: '분석 실행 → 결과 생성률',
-        group: 'analysis',
-        unit: '비율',
-        metricType: 'rate',
-        comparisonType: 'minRatio',
-        threshold: 0.99,
-        direction: 'higherIsBetter',
-        source: 'DB_LEDGER',
-        series: onePoint(TODAY, res / run),
-        help: [
-          '결과 생성률 = 분석 결과 / 분석 실행. **단위가 같은 두 값**이라 비율을 낸다.',
-          `오늘 ${res} / ${run}.`,
-          '',
-          '판정: 최소 99% — 실행이 끝났는데 결과가 안 남는 것은 분포 문제가 아니라 결손이다.',
-          '',
-          '트리거 이벤트 수와는 단위가 달라 그쪽과는 비율을 만들지 않는다.',
-        ].join('\n'),
-        drill: { href: '/ops/chain', label: '설명 생성 흐름' },
-      }
-    : uninstrumented({
-        id: 'a.run_to_result',
-        label: '분석 실행 → 결과 생성률',
-        group: 'analysis',
-        unit: '비율',
-        metricType: 'rate',
-        direction: 'higherIsBetter',
-        source: 'DB_LEDGER',
-        /* 분모가 0 인 것도 판정 불가다 — `|| 1` 로 메우면 실행 0건인 날 100% 가 선다 */
-        help: run === 0 ? '분석 실행이 0건인 날은 생성률이 정의되지 않는다 — 분모를 1로 메우지 않는다.' : CHAIN_ABSENT,
-        drill: { href: '/ops/chain', label: '설명 생성 흐름' },
-      }),
-  f.etf_ledger
-    ? {
-        id: 'a.failed_etfs',
-        label: '분석 실패 ETF',
-        group: 'analysis',
-        unit: '종',
-        metricType: 'defect',
-        comparisonType: 'maxCount',
-        threshold: 0,
-        direction: 'lowerIsBetter',
-        source: f.etf_ledger.mock === true ? 'MOCK' : 'DB_LEDGER',
-        series: onePoint(
-          TODAY,
-          f.etf_ledger.rows.filter((r) => r.outcome === 'FAILED').length,
-          f.etf_ledger.mock === true,
-        ),
-        help: [
-          '조회일 ETF별 최신 트리거의 최신 설명 실행이 실패로 끝난 ETF 수.',
-          '',
-          '판정: 1종 이상이면 이상.',
-          ...(f.etf_ledger.mock === true
-            ? ['⚠️ 이 응답의 ETF 원장은 목 데이터다.']
-            : ['오늘 값은 설명 실행 원장에서 왔다. 일별 계열을 주는 응답이 없어 한 점만 그린다.']),
-        ].join('\n'),
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }
-    : uninstrumented({
-        id: 'a.failed_etfs',
-        label: '분석 실패 ETF',
-        group: 'analysis',
-        unit: '종',
-        metricType: 'defect',
-        direction: 'lowerIsBetter',
-        source: 'DB_LEDGER',
-        help: [
-          'per-ETF 분석 귀결 원장이 없어 실패 ETF 수를 셀 수 없다(계약 §축별 소스: `etf_ledger`).',
-          '',
-          '0 으로 그리면 "오늘 실패한 ETF 가 없다"가 되는데, 그건 이 응답이 답하지 못하는 말이다.',
-        ].join('\n'),
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }),
+  /* 분석 결과 — v2 분석 표(전망·가격변동)의 조회일 값이다(ALPHA-1290). 옛 설명 엔진의 표를 읽던
+   * 카드(결과 생성 수·실행→결과 생성률·실패 ETF)는 그 표가 10-01 에 멈춰 옮기거나 지웠다.
+   * 실행→결과 생성률은 v2 에 실행과 결과가 따로 없어(분석 한 행이 곧 실행이자 결과다) 지웠다. */
+  ...(['outlook', 'movement'] as const).flatMap((kind) => analysisCards(kind, analysisDay(analysis, kind, TODAY), TODAY)),
   trig
     ? {
         id: 'a.trigger_events',

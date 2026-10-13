@@ -612,7 +612,7 @@ test('R12 DLQ 유실 — dlq>0 만 위반, 0은 "봤는데 0"으로 조용', () 
 test('R13 산출 이상 — ±25% 이상만, 기준(base) 없으면 평가 대상 아님', () => {
   const f = emptyFacts();
   f.outputs = [
-    { id: 'half', label: '게시', today: 16, base: 32, unit: '종' }, // -50%
+    { id: 'half', label: '전망', today: 16, base: 32, unit: '종' }, // -50%
     { id: 'near', label: '문서', today: 76, base: 100, unit: '건' }, // -24%
     /* 경계 정확히 ±25% — 계약이 "이상"이라 **걸려야 한다**. 이 두 줄이 없으면 `>= 0.25` 를
      * `> 0.25` 로 바꿔도 전건 초록이라, 임계값이 조용히 한 칸 옮겨간다. 양쪽 부호를 다 둔다. */
@@ -681,7 +681,7 @@ test('R13 note — 관측된 0 과 표본 부재를 같은 사유로 접지 않�
   /* ⚠️ `base: null` 의 사유는 **셋**이고 와이어는 하나로 온다(표본 부재·장 안 서는 날·그 날이
    * 안 끝남 — ALPHA-946). 그래서 이 사유는 갈래를 **나열**하고 어느 하나를 단정하지 않는다.
    * `/표본 없음/` 으로 못 박고 있었는데, 그 문면이면 지난 주말 조회에서 표본이 멀쩡한
-   * `o.pub`·`o.trig` 에 거짓 사유가 붙는다. 재는 것은 "기준이 없다고 말하되 원인을 지목하지
+   * `o.movement`·`o.trig` 에 거짓 사유가 붙는다. 재는 것은 "기준이 없다고 말하되 원인을 지목하지
    * 않는가" 다. */
   assert.match(reasonOf('표본없음'), /기준이 없다/);
   /* 재는 것은 **나열했는가** 다. "표본 탓으로 단정하지 마라"를 부정형 정규식으로 썼더니
@@ -750,13 +750,13 @@ test('R13 경계 — 기준(base)이 있는 산출이 하나도 없으면 evalua
   /* 실 응답은 일별 계열을 주는 데가 없어 이 축이 통째로 빈다. canRun 이 없으면 R13 이
    * "전부 분포 안"이라고 말한다 — 오늘 값이 뭐든. */
   const f = emptyFacts();
-  f.outputs = [{ id: 'o', label: '게시', today: 16, base: null, unit: '종' }];
+  f.outputs = [{ id: 'o', label: '전망', today: 16, base: null, unit: '종' }];
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
   assert.equal(rr.evaluated, false);
   assert.equal(rr.notRun, 'axis');
   /* `base: 0` 은 기준이 아니다 — 나눗셈이 성립하지 않아 `run()` 도 거른다. `canRun` 만
    * `!= null` 로 느슨해지면 '평가됨 · 위반 0'("분포 안")이 서고 오늘 값이 뭐든 조용하다. */
-  f.outputs = [{ id: 'zero', label: '게시', today: 999, base: 0, unit: '종' }];
+  f.outputs = [{ id: 'zero', label: '전망', today: 999, base: 0, unit: '종' }];
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
   f.outputs.push({ id: 'p', label: '문서', today: 100, base: 100, unit: '건' });
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, true);
@@ -795,7 +795,7 @@ test('검증 안 된 응답이 판정을 통과하지 못한다 — `NaN`·타�
   /* R13 — 기준이 NaN 이면 기준이 아니다. `today` 가 NaN 이면 판정 자체가 성립 안 하므로
    * 위반이 아니라 **note 가 그 산출을 밝혀야** 한다(안 밝히면 봤다고 착각한다) */
   const nanOut = emptyFacts();
-  nanOut.outputs = [{ id: 'x', label: '게시', today: 10, base: NaN, unit: '종' }];
+  nanOut.outputs = [{ id: 'x', label: '전망', today: 10, base: NaN, unit: '종' }];
   assert.equal(buildReport(nanOut, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
 
   /* 기준은 있는데 오늘 값이 수가 아닌 산출도 **판정 불가**다 — 그것뿐이면 못 돎이지
@@ -1758,7 +1758,7 @@ test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수
   const f = emptyFacts();
   f.runs = [run({ id: 'news:2026-08-03T15:30', ledger_status: 'TIMED_OUT' })]; // 대상에 콜론
   f.tasks = [task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:30', task_outcome: 'FAILED' })];
-  f.outputs = [{ id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' }]; // 대상에 점
+  f.outputs = [{ id: 'o.outlook', label: '전망', today: 10, base: 100, unit: '건' }]; // 대상에 점
   f.minute = {
     date: '2026-08-03',
     sessions: [
@@ -1785,8 +1785,8 @@ test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 �
    * 유일성을 보증하는 제약이 없다(`datasets`·`chain.stages` 도 같다). */
   const f = emptyFacts();
   f.outputs = [
-    { id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' },
-    { id: 'o.pub', label: '게시(중복 행)', today: 20, base: 100, unit: '건' },
+    { id: 'o.outlook', label: '전망', today: 10, base: 100, unit: '건' },
+    { id: 'o.outlook', label: '전망(중복 행)', today: 20, base: 100, unit: '건' },
   ];
   /* 다른 규칙이 낼 위반 — 충돌한 규칙 때문에 **이게 사라지면 안 된다**. 던져서 평가를 통째로
    * 죽이면 파이프라인이 깨진 날 콘솔이 오류 카드 하나가 되고, 정작 볼 사건이 전부 없어진다. */
@@ -1803,7 +1803,7 @@ test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 �
    * 없구나"로 읽힌다(계약 §「배선 시 함께」가 막으려던 오독이 한 층 아래로 옮겨간다).
    * 화면은 이 필드로 갈라 그리고, 사유는 호버가 아니라 본문으로 낸다. */
   assert.equal(r13.notRun, 'identity');
-  assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.pub/);
+  assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.outlook/);
   /* 계측 부재는 같은 `evaluated:false` 여도 종류가 다르다 — 둘이 구분되지 않으면 이 필드가 무의미하다 */
   assert.equal(rep.rules.find((r) => r.id === 'R17')!.notRun, 'axis'); // minute 축 부재
   /* 충돌한 규칙의 위반은 하나도 안 실린다 — 반쯤 실으면 무엇이 빠졌는지 화면이 못 말한다 */
@@ -1832,7 +1832,7 @@ test('대상 축이 빈 문자열이어도 못 돎이다 (사건 키의 나머�
   /* `targetId: ''` 는 `??` 를 통과해 `R13:` 이라는 정상처럼 보이는 vid 를 만든다. 범위 축만
    * 막으면 같은 뿌리의 구멍이 대상 축에 그대로 남는다 — 위반이 하나면 충돌도 안 난다. */
   const f = emptyFacts();
-  f.outputs = [{ id: '', label: '게시', today: 10, base: 100, unit: '건' }];
+  f.outputs = [{ id: '', label: '전망', today: 10, base: 100, unit: '건' }];
   const r13 = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
   assert.equal(r13.evaluated, false, '빈 대상 축이 정상 vid 로 통과했다');
   assert.equal(r13.notRun, 'identity');
