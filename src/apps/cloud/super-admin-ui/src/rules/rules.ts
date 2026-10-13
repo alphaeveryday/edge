@@ -822,36 +822,40 @@ export const RULES: Rule[] = [
     name: 'ETF 분석 실패',
     kls: '고장',
     base: 'P0',
-    desc: 'ETF 단위로 분석이 실패해 설명이 만들어지지 않았다',
-    dep: 'ETF별 최신 트리거 설명 실행 축',
-    /* `source: 'MOCK'` 이었다 — 규칙의 `source` 는 **정적**이라, 실 원장이 붙은 뒤에도 리포트가
-     * `mock:false` 와 `source:'MOCK'` 을 동시에 낸다(모순). 목 여부는 사실이 `etf_ledger.mock` 로
-     * 말하고 위반의 `mock` 이 나르므로, 여기는 축의 성격만 적는다. */
+    desc: '그날 분석이 실패한 뒤 끝내 완료되지 않은 ETF 가 있다',
+    /* ✅ **새 분석 엔진(v2)의 표를 본다**(ALPHA-1291). 옛 설명 엔진의 ETF 원장(`etf_ledger`)을 읽던
+     * 규칙이고, 그 엔진은 10-01 이 마지막 실행이라 위반이 없어서가 아니라 **행이 없어서** 조용했다.
+     *
+     * 세는 것은 "실패한 적 있는 ETF"가 아니라 **끝내 완료하지 못한 ETF** 다 — 그날 그 종류의 분석에
+     * 실패 행이 있고 완료 행이 하나도 없다. v2 는 실패한 분석을 다시 돌려 끝내는 일이 흔해서 앞의
+     * 뜻으로 세면 이 규칙이 매일 선다. 진행 중(running)만 있는 ETF 는 서버가 넣지 않는다.
+     *
+     * ⚠️ 조회일이 오늘이면 아직 다시 돌 분석이 남았을 수 있다 — 그래도 유예하지 않는다(예전에도
+     * 이 규칙에는 당일 유예가 없었다). 그날 다시 돌아 완료되면 다음 조회에서 빠진다.
+     *
+     * 못 도는 유일한 길은 응답에 그 축이 없는 것이다 — 그 축을 안 싣는 배포본(API 롤백·UI 선배포)을
+     * 보고 있다는 뜻이고, 그때 위반 0건으로 읽히면 안 된다. */
+    dep: '이 응답에 v2 분석 실패 축이 없다 — 그 축을 안 싣는 배포본이다',
     source: 'DB_LEDGER',
-    canRun: (f) => f.etf_ledger != null,
-    mockBacked: (f) => !!f.etf_ledger?.mock,
-    run: (f) => {
-      const bad = (f.etf_ledger?.rows ?? []).filter((r) => r.outcome === 'FAILED');
-      return bad.length
-        ? [
-            {
-              target: 'ETF 분석',
-              targetId: 'analyze.failed',
-              title: 'ETF 분석 실패',
-              metric: bad.length,
-              unit: 'ETF',
-              /* error 가 null 인 것은 "오류가 없다"가 아니라 원장이 사유를 안 남긴 것이다 */
-              why: bad[0].error
-                ? `설명 미생성 — ${bad[0].error}`
-                : '설명 미생성 — per-ETF 원장에 오류 사유 기록이 없다',
-              list: bad.map((r) => r.name),
-              mock: !!f.etf_ledger?.mock,
-              evidence: `ETF별 분석 원장${f.etf_ledger?.mock ? '(목)' : ''}`,
-              drill: ['chain', 'etf-ledger'] as [string, string],
-            },
-          ]
-        : [];
-    },
+    canRun: (f) => f.analysis_failures != null,
+    run: (f) =>
+      (f.analysis_failures ?? [])
+        .filter((a) => a.failed_etfs.length > 0)
+        .map((a) => {
+          const label = a.kind === 'outlook' ? '전망' : '가격변동 분석';
+          return {
+            /* 전망과 가격변동 분석은 다른 배치·다른 표라 사건도 따로 선다 */
+            target: label,
+            targetId: `${a.kind}.failed`,
+            title: `${label} 실패 ETF`,
+            metric: a.failed_etfs.length,
+            unit: 'ETF',
+            why: `${label}이 그날 실패한 뒤 끝내 완료되지 않았다 — 다시 돌아 완료된 ETF 는 세지 않는다`,
+            list: a.failed_etfs,
+            evidence: a.kind === 'outlook' ? 'outlook_analyses' : 'movement_analyses',
+            drill: ['trend', `metric-a.${a.kind}_failed_etfs`] as [string, string],
+          };
+        }),
   },
 
   {

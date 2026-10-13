@@ -359,6 +359,42 @@ test('산출의 기준일별 건수는 있으면 그대로 싣고, 없는 옛 �
   assert.equal(empty.ok && empty.facts.outputs[0].history?.length, 0, '빈 목록(표본 없음)을 버렸다');
 });
 
+test('🔴 v2 분석 실패 축은 있으면 싣고 없으면 만들지 않는다 — 빈 배열로 메우면 R15 가 "실패 없음"으로 선다', () => {
+  /* 이 축이 없는 옛 응답(UI 선배포)도 통과해야 한다. 그때 사실에는 그 축이 **없어야** 한다 —
+   * 어댑터가 `[]` 로 채우면 R15 의 canRun 이 참이 되어 못 돎이 "평가됨 · 위반 0"으로 바뀐다. */
+  const old = parseFacts(WIRE());
+  assert.equal(old.ok, true, old.ok ? '' : old.reason);
+  if (old.ok) assert.ok(!('analysis_failures' in old.facts), '없는 축을 만들어 냈다');
+
+  const w = WIRE();
+  w.analysisFailures = [{ kind: 'outlook', failedEtfs: [] }, { kind: 'movement', failedEtfs: ['069500', '229200'] }];
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.deepEqual(r.facts.analysis_failures, [
+      { kind: 'outlook', failed_etfs: [] },
+      { kind: 'movement', failed_etfs: ['069500', '229200'] },
+    ]);
+  }
+});
+
+test('거부 — v2 분석 실패 축의 형상이 틀리면 응답을 버린다', () => {
+  /* 종류 하나가 빠진 채 통과하면 R15 가 그 종류를 "실패 없음"으로 읽는다 */
+  for (const [name, value] of [
+    ['배열 아님', {}],
+    ['원소가 객체 아님', [null, null]],
+    ['모르는 종류', [{ kind: 'outlook', failedEtfs: [] }, { kind: 'forecast', failedEtfs: [] }]],
+    ['종류 하나 누락', [{ kind: 'outlook', failedEtfs: [] }]],
+    ['같은 종류 둘', [{ kind: 'outlook', failedEtfs: [] }, { kind: 'outlook', failedEtfs: [] }]],
+    ['목록이 수', [{ kind: 'outlook', failedEtfs: 3 }, { kind: 'movement', failedEtfs: [] }]],
+    ['빈 코드', [{ kind: 'outlook', failedEtfs: [''] }, { kind: 'movement', failedEtfs: [] }]],
+  ] as const) {
+    const w = WIRE() as unknown as { analysisFailures: unknown };
+    w.analysisFailures = value;
+    assert.equal(parseFacts(w).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
 test('거부 — 컬렉션 원소가 객체가 아니면 응답 전체를 버린다', () => {
   /* 규칙 층이 의도적으로 안 막은 자리다. 여기서 통과시키면 `outputs[null].today` 가 규칙 안에서
    * 터지고, 그건 그 규칙이 아니라 **평가 전체**를 죽인다. */

@@ -220,6 +220,27 @@ test('🔴 끝나지 않은 분석(running)은 실패 ETF 수에 들어가지 �
   assert.equal(evaluateMetric(analysisCard('a.outlook_completed', onlyRunning)).actual, 0);
 });
 
+test('🔴 실패했다가 같은 날 완료된 ETF 는 실패 ETF 카드에 들지 않는다 — 카드는 실패 건수가 아니라 끝내 완료하지 못한 ETF 수를 그린다', () => {
+  /* dev 10-13 의 형상이다: 가격변동 분석은 실패 행이 22건인데 끝내 완료하지 못한 ETF 는 3종,
+   * 전망은 실패 3건에 0종. 실패 건수나 "실패한 적 있는 ETF"를 그리면 이 카드가 매일 임계를 넘는다. */
+  const retried: AnalysisTrendDto = {
+    ...ANALYSIS,
+    kinds: [
+      { kind: 'outlook', points: [{ date: '2026-08-03', completed: 150, failed: 3, running: 0, completedEtfs: 148, failedEtfs: 0 }] },
+      { kind: 'movement', points: [{ date: '2026-08-03', completed: 195, failed: 22, running: 0, completedEtfs: 119, failedEtfs: 3 }] },
+    ],
+  };
+  const outlook = analysisCard('a.outlook_failed_etfs', retried);
+  assert.equal(evaluateMetric(outlook).actual, 0, '다시 돌아 완료된 실패를 실패 ETF 로 그렸다');
+  assert.equal(evaluateMetric(outlook).kind, 'normal');
+  const movement = analysisCard('a.movement_failed_etfs', retried);
+  assert.equal(evaluateMetric(movement).actual, 3, '실패 건수(22)를 실패 ETF 수로 그렸다');
+  assert.equal(evaluateMetric(movement).kind, 'abnormal', '끝내 완료하지 못한 ETF 는 여전히 이상이다');
+  /* 도움말이 새 정의를 말하고, 실패 건수는 따로 밝힌다 */
+  assert.match(movement.help, /끝내 완료되지 않은 ETF/);
+  assert.match(movement.help, /실패 22건, 끝내 완료하지 못한 ETF 3종/);
+});
+
 test('🔴 조회일에 분석 행이 없으면 0 이 아니라 계측 없음이다 — 가격변동 분석은 장이 열린 날에만 생긴다', () => {
   for (const id of ['a.movement_completed', 'a.movement_failed_etfs']) {
     const m = analysisCard(id, ANALYSIS);

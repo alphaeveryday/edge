@@ -25,6 +25,12 @@ export interface ConsoleFactsDto {
   chain?: ChainDto;
   /** 나중에 붙은 축 — 롤백·UI 선배포 때는 부재할 수 있다. */
   etfLedger?: EtfLedgerDto;
+  /**
+   * 조회일에 v2 분석이 끝내 완료되지 못한 ETF(ALPHA-1291). 항목은 `outlook`·`movement` 둘이다.
+   * `failedEtfs` 는 그날 그 종류의 분석에 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다.
+   * **옵셔널이다** — 이 축을 안 싣는 API 에서는 오지 않고, 그때 R15 는 `못 돎` 이다.
+   */
+  analysisFailures?: { kind: AnalysisTrendKind; failedEtfs: string[] }[];
   meta: MetaDto;
 }
 
@@ -52,7 +58,11 @@ export interface AnalysisTrendDto {
   kinds: { kind: AnalysisTrendKind; points: AnalysisTrendPointDto[] }[];
 }
 
-/** `running` 은 실패가 아니라 끝나지 않은 건수다. `*Etfs` 는 그 상태의 행이 있는 ETF 종 수다. */
+/**
+ * `running` 은 실패가 아니라 끝나지 않은 건수다. `completedEtfs` 는 그날 완료 행이 있는 ETF 종
+ * 수이고, `failedEtfs` 는 **그날 실패 행이 있고 완료 행이 하나도 없는** ETF 종 수다(ALPHA-1291) —
+ * 실패했다가 같은 날 다시 돌아 완료된 ETF 는 들어 있지 않다.
+ */
 export interface AnalysisTrendPointDto {
   date: string;
   completed: number;

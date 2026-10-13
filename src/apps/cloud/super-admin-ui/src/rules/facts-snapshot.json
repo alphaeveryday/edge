@@ -1526,6 +1526,10 @@
     "mock": true,
     "why": "AnalyzeOne per-ETF ops 원장 부재 — '미생성 4종이 어느 ETF인지' 를 못 답하던 항목. 백로그: ETF·거래일·attempt grain 전용 outcome ledger"
   },
+  "analysis_failures": [
+    { "kind": "outlook", "failed_etfs": [] },
+    { "kind": "movement", "failed_etfs": ["etf_e4e7df6c", "etf_c57032d3", "etf_ce0599f5", "etf_c32d3aca"] }
+  ],
   "queues": [
     {
       "name": "news-extraction-backfill",
