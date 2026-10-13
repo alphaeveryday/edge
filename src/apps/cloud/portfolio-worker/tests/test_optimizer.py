@@ -106,6 +106,17 @@ def batch():
     return request, market, groups
 
 
+async def test_unexpected_optimizer_exception_never_publishes_internal_details(monkeypatch):
+    request, market, groups = batch()
+    market.loader = lambda *_: record(finish=120)
+    def broken_search(*_):
+        raise ValueError('private internal provider payload')
+    monkeypatch.setattr('edge_portfolio.optimizer.search', broken_search)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['reason'] == 'PRICE_PROVIDER_UNAVAILABLE'
+    assert 'private' not in str(result)
+
+
 @pytest.mark.parametrize('failure', ['timeout', 'fx', 'shared-window'])
 async def test_partial_price_failures_preserve_nine_independent_combinations(monkeypatch, failure):
     request, market, groups = batch()
@@ -115,7 +126,7 @@ async def test_partial_price_failures_preserve_nine_independent_combinations(mon
         market.catalog['KR:E']['market'] = 'US'
     if failure == 'shared-window':
         market.as_of = date(2026, 10, 2)
-    async def fetch(symbol, as_of):
+    async def fetch(symbol, as_of, **kwargs):
         if failure == 'timeout' and symbol == 'E.KS':
             await asyncio.sleep(10)
         if symbol == 'KRW=X':
@@ -209,6 +220,45 @@ async def test_invalid_endpoint_does_not_permanently_discard_new_valid_candidate
     assert result['status'] == 'available'
     assert result['tested_combinations'] == 9
     assert result['end_date'] == '2026-10-13'
+
+
+async def test_optimizer_retains_the_failed_instrument_and_provider_cause():
+    request, market, groups = batch()
+    def loader(symbol, _):
+        if symbol == 'E.KS':
+            raise ValueError('PRICE_STALE')
+        return record()
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['failures'] == {'KR:E': 'PRICE_STALE'}
+    assert result['rejected_combinations'] == [{'combination': 5, 'reason': 'INSTRUMENT_PRICE_UNAVAILABLE'}]
+
+
+async def test_collection_timeout_does_not_overwrite_an_already_known_price_failure(monkeypatch):
+    request, market, groups = batch()
+    async def fetch(symbol, _, **kwargs):
+        if symbol == 'E.KS':
+            raise ValueError('PRICE_STALE')
+        if symbol == 'D.KS':
+            await asyncio.sleep(10)
+        return record()
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['failures']['KR:E'] == 'PRICE_STALE'
+    assert result['failures']['KR:D'] == 'PRICE_PROVIDER_TIMEOUT'
+
+
+async def test_all_provider_failed_combinations_are_accounted_for_in_diagnostics():
+    request, market, groups = batch()
+    def loader(*args):
+        raise ValueError('PRICE_STALE')
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'unavailable'
+    assert len(result['rejected_combinations']) == 10
+    assert {row['reason'] for row in result['rejected_combinations']} == {'INSTRUMENT_PRICE_UNAVAILABLE'}
 
 
 async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():

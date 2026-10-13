@@ -78,7 +78,7 @@ def test_common_end_and_known_weights_only():
         weights([{'instrument_id': 'US:VOO', 'weight_pct': None}])
 
 
-async def test_provider_failure_is_visible_and_cached_without_aborting_analysis():
+async def test_provider_failure_is_visible_and_can_be_retried_without_aborting_analysis():
     calls = []
     def unavailable(symbol, as_of):
         calls.append(symbol)
@@ -88,7 +88,7 @@ async def test_provider_failure_is_visible_and_cached_without_aborting_analysis(
     first = await market.get(rows)
     assert first['status'] == 'unavailable'
     assert await market.get(rows) == first
-    assert calls == ['069500.KS']
+    assert calls == ['069500.KS', '069500.KS']
 
 
 async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage():
@@ -256,7 +256,7 @@ async def test_current_timeout_keeps_completed_recommended_history(monkeypatch):
     request = AnalysisInput(holdings=[{'name': 'current', 'instrument_id': 'KR:360750', 'amount_krw': 100}], horizon='10년 이상')
     market = MarketData(request, date(2026, 10, 12))
     market.records['KR:069500'] = record()
-    async def slow(*args):
+    async def slow(*args, **kwargs):
         await asyncio.sleep(1)
     original_timeout = asyncio.timeout
     monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', slow)
