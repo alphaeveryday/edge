@@ -38,7 +38,7 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
     assert (await answer_question('b' * 1000, report, 'test'))['status'] == 'partial'
 
 
-@pytest.mark.parametrize('has_principal,supplied,retained,withdrawn', [(True, False, False, False), (False, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, True, True)])
+@pytest.mark.parametrize('has_principal,supplied,retained,withdrawn', [(True, False, False, False), (False, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, True, True), (False, False, True, 'uncertain'), (False, False, True, 'unknown')])
 async def test_scenario_followup_uses_verified_principal_and_retains_original_constraints(monkeypatch, has_principal, supplied, retained, withdrawn):
     import json
     from report_fixtures import final_payload
@@ -48,7 +48,7 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
     if supplied:
         question = '원금은 1000만원입니다. ' + question
     if withdrawn:
-        question = '앞서 말한 원금은 취소합니다. ' + question
+        question = {True: '앞서 말한 원금은 취소합니다. ', 'uncertain': '원금은 1000만원입니다. 원금은 확인 필요합니다. ', 'unknown': '원금은 모릅니다. '}[withdrawn] + question
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
         'sources': Evidence.sources, 'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}

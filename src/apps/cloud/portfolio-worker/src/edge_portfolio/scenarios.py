@@ -16,6 +16,8 @@ def stated_principal(text):
     values = []
     statements = 0
     for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', text):
+        if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'모르|모릅|몰라|불명|확인\s*필요', clause):
+            return None
         if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'\d.*원', clause):
             statements += 1
         match = re.fullmatch(r'\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가)?\s*([0-9][0-9,.\s억만]*원)\s*(?:입니다|이에요|예요|이야|임)?\s*', clause)

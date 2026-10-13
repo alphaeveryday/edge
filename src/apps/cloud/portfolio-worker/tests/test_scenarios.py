@@ -7,7 +7,10 @@ from edge_portfolio.scenarios import build_scenarios
     ('제 원금은 1억 5000만원이에요.', 150000000), ('원금은 0원입니다.', 0),
     ('원금은 약 1000만원입니다.', None), ('원금은 1000만원이면 좋겠어요.', None),
     ('원금은 1000만원입니다. 원금은 2000만원입니다.', None), ('원금은 1000만원입니다. 취소합니다.', None),
-    ('원금은 1000만원입니다. 원금은 2000만원으로 정정합니다.', None)])
+    ('원금은 1000만원입니다. 원금은 2000만원으로 정정합니다.', None),
+    ('원금은 1000만원입니다. 원금은 확인 필요합니다.', None),
+    ('원금은 1000만원입니다. 현재 평가금액은 모릅니다.', None),
+    ('원금은 1000만원입니다. 원금이 불명확합니다.', None)])
 def test_followup_principal_requires_one_exact_standalone_statement(text, expected):
     from edge_portfolio.scenarios import stated_principal
     assert stated_principal(text) == expected
