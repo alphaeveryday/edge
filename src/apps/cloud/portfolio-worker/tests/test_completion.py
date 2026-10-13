@@ -80,7 +80,7 @@ def test_explicit_written_dates_support_coverage_without_using_the_fetch_date():
     payload = final_payload()
     payload['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'holdings', 'status': 'supported',
         'evidence': [{'source_id': 's1', 'passage_id': 'p1'}, {'source_id': 's1', 'passage_id': 'p2'}], 'claim_as_of': '2026-09-30'}]
-    for text in ['Holdings as of September 30, 2026', '30 Sep 2026', '2026년 9월 30일 보유내역', '2026/9/30', '09/30/2026', '30/09/2026', '2026. 09. 30.']:
+    for text in ['Holdings as of September 30, 2026', '30 Sep 2026', '2026년 9월 30일 보유내역', '2026/9/30', '09/30/2026', '30/09/2026', '2026. 09. 30.', 'Holdings as of 2026-09-30 16:00', '2026-09-30 005930 Samsung']:
         sources = [{'id': 's1', 'passages': [{'id': 'p1', 'text': text}, {'id': 'p2', 'text': '005930 Samsung Electronics 5%'}]}]
         result = assess_completion(FinalReport.model_validate(payload), request, Decision(),
             {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
@@ -89,9 +89,15 @@ def test_explicit_written_dates_support_coverage_without_using_the_fetch_date():
     result = assess_completion(FinalReport.model_validate(payload), request, Decision(),
         {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
     assert result['evidence_coverage'][0]['status'] != 'supported'
+    payload['evidence_coverage'][0]['claim_as_of'] = '2026-10-10'
+    sources[0]['passages'][0]['text'] = 'As of 10/10/2026'
+    result = assess_completion(FinalReport.model_validate(payload), request, Decision(),
+        {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
+    assert result['evidence_coverage'][0]['status'] == 'supported'
 
 
-async def test_missing_answer_reenters_research_without_consuming_format_repairs(monkeypatch):
+@pytest.mark.parametrize('format_errors', [False, True])
+async def test_missing_answer_reenters_research_without_consuming_format_repairs(monkeypatch, format_errors):
     import json
     from edge_portfolio.agent import run_analysis
     from test_agent import Evidence
@@ -108,16 +114,18 @@ async def test_missing_answer_reenters_research_without_consuming_format_repairs
         if role == 'question':
             content = {**content, 'decision': {'questions': ['어떤 대안을 확인했나요?']}}
         if role == 'opinion':
-            if final_calls:
-                content['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': '검토한 대안에서 서비스 비교 기준을 통과한 구성이 없어서 추천을 보류했어요.'}]
             final_calls.append(1)
+            if format_errors and len(final_calls) in {1, 2, 4}:
+                return {'choices': [{'message': {'role': 'assistant', 'content': '[]'}}]}
+            if len(final_calls) > (3 if format_errors else 1):
+                content['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': '검토한 대안에서 서비스 비교 기준을 통과한 구성이 없어서 추천을 보류했어요.'}]
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='어떤 대안을 확인했나요?')
     result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence(), on_event=events.append)
-    assert len(final_calls) == 2
+    assert len(final_calls) == (5 if format_errors else 2)
     assert result['completion']['status'] == 'no_match'
     assert any(event['event'] == 'research_recovery' for event in events)
-    assert not any(event['event'] == 'validation_failed' for event in events)
+    assert sum(event['event'] == 'validation_failed' for event in events) == (3 if format_errors else 0)
 
 
 @pytest.mark.parametrize('missing_input', [False, True])
@@ -249,3 +257,44 @@ async def test_recovery_timeout_keeps_the_accepted_opinion_and_completion_checkp
     assert 'opinion' in snapshots[-1]['sections']
     assert snapshots[-1]['completion']['status'] == 'partial'
     assert snapshots[-1]['completion']['tasks'][0]['question'] == request.question
+
+
+@pytest.mark.parametrize('failed_urls', [1, 2])
+async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, failed_urls):
+    import json
+    from edge_portfolio.agent import run_analysis
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET'}
+            self.batches = {'first', 'alternative'}
+        def validate(self, final): return None
+    class Evidence:
+        sources = []
+        async def call(self, *args): return {'status': 'unavailable', 'reason': 'EXA_FAILED'}
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, fetched = [], []
+    async def model(payload):
+        role = stages[-1]
+        if role == 'portfolio' and not fetched:
+            fetched.append(1)
+            return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': str(i), 'type': 'function', 'function': {'name': 'fetch_source', 'arguments': json.dumps({'url': f'https://issuer.example/{i}'})}}
+                for i in range(failed_urls)]}}]}
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'opinion':
+            for name in ('question', 'portfolio', 'outlook', 'opinion'):
+                content[name].update(evidence=[], limitations=['본문 자료를 확보하지 못했어요.'])
+            content['current_evaluation'] = {'scores': None, 'reason': content['portfolio']}
+            content['insights'][0]['content'] = content['portfolio']
+        else:
+            content.update(evidence=[], limitations=['본문 자료를 확보하지 못했어요.'])
+        if role == 'question': content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    if failed_urls == 1:
+        with pytest.raises(ValueError, match='OUTPUT_INVALID'):
+            await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+    else:
+        result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+        assert result['completion']['status'] == 'partial'
+        assert 'MISSING_RESEARCH_DATA' in result['completion']['reasons']

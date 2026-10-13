@@ -57,11 +57,11 @@ def assess_completion(final, request, decision, published, sources, as_of):
                 f'{claim_date.year}/{claim_date.month}/{claim_date.day}', f'{claim_date.year}년{claim_date.month}월{claim_date.day}일',
                 *[f'{month}{claim_date.day}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])],
                 *[f'{claim_date.day}{month}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])]} if claim_date else set()
-            normalized = [re.sub(r'[\s,]', '', passage).casefold() for passage in text if not re.match(r'^(?:URL|Published|Author):', passage)]
-            if claim_date and claim_date.day > 12:
+            normalized = [passage.replace(',', '').casefold() for passage in text if not re.match(r'^\s*(?:URL|Published|Author):', passage)]
+            if claim_date and (claim_date.day > 12 or claim_date.day == claim_date.month):
                 date_texts.update({claim_date.strftime('%m/%d/%Y'), claim_date.strftime('%d/%m/%Y'),
                     f'{claim_date.month}/{claim_date.day}/{claim_date.year}', f'{claim_date.day}/{claim_date.month}/{claim_date.year}'})
-            if claim_date and any(re.search(r'(?<!\d)' + re.escape(value.casefold()) + r'(?!\d)', passage) for value in date_texts for passage in normalized):
+            if claim_date and any(re.search(r'(?<!\d)' + r'\s*'.join(re.escape(char) for char in value.casefold()) + r'(?!\d)', passage) for value in date_texts for passage in normalized):
                 age = (today - claim_date).days
                 status = 'supported' if 0 <= age <= max_age[item.field] else 'stale'
             else:

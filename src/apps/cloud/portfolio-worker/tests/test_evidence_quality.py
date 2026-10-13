@@ -18,6 +18,8 @@ def test_collected_time_never_replaces_publication_or_claim_date():
 def test_short_factsheet_table_rows_are_readable_research():
     body = '# Fund holdings\nAs of September 30, 2026\n| Holding | Weight |\n| Apple | 10.2% |\n| Microsoft | 9.5% |\nExpense ratio: 0.03%'
     assert inspect_body(body, 24000)['status'] == 'available'
+    linked = body.replace('Apple', '[Apple](https://issuer.example/apple)').replace('Microsoft', '[Microsoft](https://issuer.example/microsoft)')
+    assert inspect_body(linked, 24000)['status'] == 'available'
 
 
 def test_source_pagination_retains_stable_passage_ids_and_tail_facts():

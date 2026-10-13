@@ -91,9 +91,10 @@ class ExaEvidence:
                   "fetched_at": datetime.now(timezone.utc).isoformat()}
         chunks = []
         for line in source['excerpt'].splitlines():
-            if re.match(r'^(?:URL|Published|Author):', line):
+            if re.match(r'^\s*(?:URL|Published|Author):', line):
                 continue
-            for start in range(0, len(line), 280):
+            for start in range(0, len(line), 240):
+                # Overlap keeps standard written dates intact at passage boundaries.
                 chunk = line[start:start + 280].strip()
                 # The document already passed the body-quality check. Short rows
                 # can carry dates, labels, or amounts needed to cite its tables.
@@ -133,6 +134,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     decision = Decision()
     checks = []
     observed_data = {}
+    failed_source_urls = set()
     execution_rejection = None
     execution_failures = {}
     execution_feasible = set()
@@ -291,6 +293,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         status = answer.get('status', 'available') if isinstance(answer, dict) else 'available'
                         if tool in {'fetch_source', 'read_portfolio_history'} and status in {'available', 'partial', 'unavailable'}:
                             observed_data['sources' if tool == 'fetch_source' else 'history'] = status
+                        if tool == 'fetch_source' and status == 'unavailable' and isinstance(args.get('url'), str):
+                            failed_source_urls.add(args['url'])
                         reason = answer.get('reason') if isinstance(answer, dict) else None
                         codes = {'INVALID_TOOL_ARGUMENT', 'TOOL_LIMIT', 'TOOL_NOT_ALLOWED', 'EXA_FAILED', 'EMPTY_SOURCE',
                                  'CURRENT_WEIGHTS_REQUIRED', 'COMPARISON_DATA_UNAVAILABLE', 'NO_COMMON_PRICE_HISTORY',
@@ -311,7 +315,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
-                    source_free_allowed = observed_data.get('sources') == 'unavailable' or bool(decision.missing_inputs) or (optimizer.result or {}).get('reason') == 'SERVICE_CUSTOMER_POLICY_CONFLICT'
+                    source_free_allowed = len(failed_source_urls) >= 2 or bool(decision.missing_inputs) or (optimizer.result or {}).get('reason') == 'SERVICE_CUSTOMER_POLICY_CONFLICT'
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         execution_rejection = None
@@ -362,6 +366,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
                             checkpoint()
                             recovery_rounds += 1
+                            repairs = 0
                             emit('research_recovery', role=role, attempt=recovery_rounds)
                             messages.append({'role': 'user', 'content': '고객 과제가 아직 해결되지 않았습니다. 형식 수정과 별개로 빠진 질문에 답하고 근거를 추가로 읽거나 다른 후보 조합을 탐색하세요. 필수 조건은 완화하지 않습니다. 해결되지 않는 부분은 필요한 입력과 실제 사유를 명시하세요.\n' + json.dumps(published['completion'], ensure_ascii=False)})
                             continue

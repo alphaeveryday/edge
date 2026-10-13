@@ -7,7 +7,7 @@ def inspect_body(body, limit):
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     content = [line for line in lines if not re.match(r'^(?:URL|Published|Author):|^#', line)]
     # Navigation labels and link lists alone are not a readable product document.
-    cleaned = [re.sub(r'https?://\S+|\[[^]]*\]\([^)]*\)', '', line) for line in content]
+    cleaned = [re.sub(r'https?://\S+', '', re.sub(r'\[([^]]*)\]\([^)]*\)', r'\1', line)) for line in content]
     readable = [line for line in cleaned if len(line) >= 60 or len(line) >= 20 and line.endswith(('.', '。'))]
     tabular = sum(bool(re.search(r'[A-Za-z가-힣]', line) and re.search(r'\d+(?:\.\d+)?\s*%', line)) for line in cleaned) >= 2
     failure = bool(re.search(r'^(?:Error fetching|No content found|Access denied|403 Forbidden|404 Not Found)', body, re.I | re.M))

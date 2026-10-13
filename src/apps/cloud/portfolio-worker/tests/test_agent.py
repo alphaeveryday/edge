@@ -64,6 +64,17 @@ async def test_short_readable_table_has_citable_passages():
     assert [row['text'] for row in result['passages']] == ['Fees 0.03%', 'Yield 2.5%']
 
 
+async def test_date_at_a_passage_boundary_remains_citable():
+    from edge_portfolio.agent import ExaEvidence
+    class Session:
+        async def call_tool(self, *args):
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text='x' * 276 + '2026-09-30 holdings')])
+    evidence = ExaEvidence(Session())
+    evidence.discovered.add('https://issuer.example/fund')
+    result = await evidence.call('fetch_source', {'url': 'https://issuer.example/fund'})
+    assert any('2026-09-30' in passage['text'] for passage in result['passages'])
+
+
 @pytest.mark.parametrize('date', ['2026-09-30', '30 Sep 2026', '09/30/2026', '30/09/2026', '2026년9월30일', '2026. 09. 30.'])
 async def test_standalone_source_date_remains_citable_for_freshness_checks(date):
     from edge_portfolio.agent import ExaEvidence
