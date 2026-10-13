@@ -24,7 +24,7 @@ from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
-from .execution import execution_tool, resolve_funding, NO_CONTRIBUTION, TOOL as EXECUTION_TOOL
+from .execution import execution_tool, resolve_funding, zero_contribution, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, stated_principal, principal_declaration, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status
@@ -295,7 +295,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     if supplied_principal is not None:
                                         principal = supplied_principal
                                         break
-                                    if any(principal_declaration(clause) or re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액).*(?:\d.*원(?!금)|취소|철회|미정|아니|정도|대략|모르|모릅|몰라|불명|확인\s*필요)', clause)
+                                    if any(principal_declaration(clause) or re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액).*(?:취소|철회|미정|아니|정도|대략|모르|모릅|몰라|불명|확인\s*필요)', clause)
                                            for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', statement)):
                                         principal = None  # An ambiguous correction must not silently reuse the old amount.
                                         break
@@ -452,7 +452,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     rules[rule.model_dump_json()] = rule
                                 decision.constraints = list(rules.values())
                                 decision.objectives = decision.objectives or inherited.objectives
-                                decision.funding_text = followup_question if NO_CONTRIBUTION.fullmatch(followup_question or '') else decision.funding_text or inherited.funding_text
+                                decision.funding_text = zero_contribution(followup_question or '', decision) or decision.funding_text or inherited.funding_text
                                 if followup_question:
                                     decision.questions = [question for question in decision.questions if question in followup_question] or [followup_question]
                                 # Each extraction is bounded and validated already; merging

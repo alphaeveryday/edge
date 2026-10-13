@@ -7,6 +7,27 @@ from .contracts import Allocation
 NO_CONTRIBUTION = re.compile(r'\s*(?:이번에는\s*)?(?:추가\s*)?(?:납입|입금|투자)(?:금)?\s*없이(?:\s*계산(?:해\s*주세요|해줘|해주세요)?)?[.!?]?\s*')
 
 
+def projection_context(value, decision):
+    if not decision or decision.kind != 'scenario':
+        return value
+    clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', value)
+    for index, clause in enumerate(clauses):
+        periods = r'(?:\d+\s*년\s*(?:(?:뒤|후)(?:에)?)?\s*(?:[,·/]|및|그리고)?\s*)+'
+        projection = r'(?:금액|자산|원금|이자|과|와|은|는|이|가|을|를|몇|원|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|되나요|인가요|예상|의|\s)+'
+        assumption = r'(?:(?:연|연간)?\s*-?\d+(?:\.\d+)?\s*%\s*수익률(?:을|로)?\s*(?:가정하면|가정할 때|가정해서)?\s*)?'
+        subject = r'(?:(?:원금|현재\s*자산|현재\s*평가금액|보유금액)(?:은|는|이|가)?\s*)?'
+        if re.fullmatch(r'\s*' + subject + assumption + periods + projection, clause):
+            clauses[index] = ''  # A complete projection question, never a funding schedule.
+    return ''.join(clauses)
+
+
+def zero_contribution(text, decision):
+    if NO_CONTRIBUTION.fullmatch(text):
+        return text
+    remainder = projection_context(text, decision).strip(' .!?;\n')
+    return remainder if NO_CONTRIBUTION.fullmatch(remainder) else None
+
+
 def execution_tool(request, args, decision, catalog):
     from .recommendation import selected_accounts, allocation_error
     if set(args) != {'allocations'} or not isinstance(args['allocations'], list) or not 1 <= len(args['allocations']) <= 10:
@@ -61,7 +82,7 @@ def allocate_amounts(total, weights):
 
 def resolve_funding(request, decision=None):
     questions = getattr(request, 'funding_questions', None)
-    if questions and NO_CONTRIBUTION.fullmatch(questions[-1]):
+    if questions and zero_contribution(questions[-1], decision):
         return {'additional_krw': Decimal(0), 'monthly_krw': None}
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
     funding = parse_funding(text) if text else None
@@ -82,17 +103,7 @@ def resolve_funding(request, decision=None):
         occurrences = [(source[:match.start()], source[match.end():]) for source in sources
                        for match in re.finditer(re.escape(text), source)]
         def duration_context(value):
-            if not decision or decision.kind != 'scenario':
-                return value
-            clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', value)
-            for index, clause in enumerate(clauses):
-                periods = r'(?:\d+\s*년\s*(?:(?:뒤|후)(?:에)?)?\s*(?:[,·/]|및|그리고)?\s*)+'
-                projection = r'(?:금액|자산|원금|이자|과|와|은|는|이|가|을|를|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|되나요|인가요|예상|의|\s)+'
-                assumption = r'(?:(?:연|연간)?\s*-?\d+(?:\.\d+)?\s*%\s*수익률(?:을|로)?\s*(?:가정하면|가정할 때|가정해서)?\s*)?'
-                subject = r'(?:(?:원금|현재\s*자산|현재\s*평가금액|보유금액)(?:은|는|이|가)?\s*)?'
-                if re.fullmatch(r'\s*' + subject + assumption + periods + projection, clause):
-                    clauses[index] = ''  # A complete projection question, never a funding schedule.
-            return ''.join(clauses)
+            return projection_context(value, decision)
         def has_duration(before, after):
             context = duration_context(before + after)
             return bool(re.search(r'\d+(?:\.\d+)?\s*(?:년|개월|달|월간|회|번|일|주|분기)|(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇)\s*(?:개월|달|년|회)|동안|까지|이후|부터', context))

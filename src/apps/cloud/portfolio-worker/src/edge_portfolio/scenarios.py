@@ -9,11 +9,13 @@ from .contracts import StrictModel
 from .execution import parse_funding
 
 PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))')
+PRINCIPAL_AMOUNT = re.compile(r'(?:\d[\d,.\s천백십만억]*|[일이삼사오육칠팔구십백천만억]+)\s*(?:원(?!금)|달러|USD|KRW|유로|엔|위안|불)|[$₩€£¥]\s*\d')
 
 
 def principal_declaration(clause):
-    projection = re.search(r'\d+(?:\.\d+)?\s*년', clause) and not re.search(r'원(?!금)|달러|USD|KRW|[$₩€£¥]', clause)
-    return bool(PRINCIPAL_DECLARATION.match(clause) and not projection)
+    if not re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause):
+        return False
+    return bool(PRINCIPAL_AMOUNT.search(clause) or PRINCIPAL_DECLARATION.match(clause) and not re.search(r'\d+(?:\.\d+)?\s*년', clause))
 
 
 def stated_principal(text):
@@ -27,7 +29,7 @@ def stated_principal(text):
         clause = clauses[index]
         if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'모르|모릅|몰라|불명|확인\s*필요', clause):
             return None
-        if principal_declaration(clause) or re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'\d.*원(?!금)', clause):
+        if principal_declaration(clause):
             statements += 1
             if index + 1 < len(clauses) and clauses[index + 1] == '?':
                 return None
