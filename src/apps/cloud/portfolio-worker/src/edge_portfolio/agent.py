@@ -294,7 +294,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     if supplied_principal is not None:
                                         principal = supplied_principal
                                         break
-                                    if re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액)[^!?;\n]*(?:\d[^!?;\n]*원|취소|철회|미정|모르|모릅|몰라|불명|확인\s*필요)', statement):
+                                    if re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액)[^!?;\n]*(?:\d[\d,.\s억만]*원(?!금)|취소|철회|미정|모르|모릅|몰라|불명|확인\s*필요)', statement):
                                         principal = None  # An ambiguous correction must not silently reuse the old amount.
                                         break
                                 answer = build_scenarios(principal, args, **{name: value or 0 for name, value in (funding or {}).items()})

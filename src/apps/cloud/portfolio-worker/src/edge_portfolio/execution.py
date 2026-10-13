@@ -82,7 +82,7 @@ def resolve_funding(request, decision=None):
             clauses = re.split(r'([.!?;\n])', value)
             for index, clause in enumerate(clauses):
                 periods = r'(?:\d+\s*년\s*(?:(?:뒤|후)(?:에)?)?\s*(?:[,·/]|및|그리고)?\s*)+'
-                projection = r'(?:금액|자산|원금|은|는|이|가|을|를|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|인가요|예상|의|\s)+'
+                projection = r'(?:금액|자산|원금|이자|과|와|은|는|이|가|을|를|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|인가요|예상|의|\s)+'
                 assumption = r'(?:(?:연|연간)?\s*-?\d+(?:\.\d+)?\s*%\s*수익률(?:을|로)?\s*(?:가정하면|가정할 때|가정해서)\s*)?'
                 if re.fullmatch(r'\s*' + assumption + periods + projection, clause):
                     clauses[index] = ''  # A complete projection question, never a funding schedule.

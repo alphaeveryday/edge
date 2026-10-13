@@ -44,7 +44,7 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
     from report_fixtures import final_payload
     from test_agent import Evidence
     stages, calculated = [], []
-    question = '5년 10년 15년 후 금액을 가정별로 계산해 주세요.'
+    question = '5년 10년 15년 후 원금과 이자는 얼마인가요?'
     if supplied:
         question = '원금은 1000만원입니다. ' + question
     if withdrawn:
