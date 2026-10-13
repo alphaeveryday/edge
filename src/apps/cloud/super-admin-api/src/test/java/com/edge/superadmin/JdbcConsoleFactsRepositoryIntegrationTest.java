@@ -1428,11 +1428,15 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 가격변동 쪽 SELECT 는 전망과 따로다 — 같은 반례(진행 중·합성 입력)를 여기에도 둔다.
 		insertAnalysis("movement", "m-run", "etf-d", "2026-08-03T11:30:00+09:00", "running", "database");
 		insertAnalysis("movement", "m-syn", "etf-e", "2026-08-03T11:30:00+09:00", "completed", "synthetic");
+		// KST 경계와 범위 밖 — 00:10 KST 는 UTC 로 전날이라, 시간대를 빼면 08-02 로 넘어간다.
+		insertAnalysis("movement", "m-early", "etf-a", "2026-08-03T00:10:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m-out-next", "etf-a", "2026-08-04T00:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m-out-prev", "etf-a", "2026-07-31T23:59:00+09:00", "completed", "database");
 
 		// 08-01 ~ 08-03 의 3일 — 08-01 에는 어느 종류도 행이 없다.
 		assertThat(repository.analysisTrend(DAY, 3)).containsExactly(
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
-						"movement", LocalDate.parse("2026-08-03"), 2, 3, 1, 1, 2),
+						"movement", LocalDate.parse("2026-08-03"), 3, 3, 1, 1, 2),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
 						"outlook", LocalDate.parse("2026-08-02"), 2, 2, 3, 1, 1),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
