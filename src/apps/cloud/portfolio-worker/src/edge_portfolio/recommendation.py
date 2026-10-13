@@ -1,8 +1,9 @@
 """Validate model choices; derive amounts, deltas and totals in code."""
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 
 from .catalog import directory
 from .contracts import validate_section
+from .execution import allocate_amounts, plan_execution
 
 
 def search_etfs(query):
@@ -32,7 +33,7 @@ def allocation_error(item, account, tax):
     return None
 
 
-def publish_recommendation(final, request, metrics, sources):
+def publish_recommendation(final, request, metrics, sources, decision=None):
     def evaluation(value, current=False):
         scores = value.scores.model_dump() if value.scores else None
         overall = float((sum(Decimal(str(v)) for v in scores.values()) / 3).quantize(Decimal('.1'), rounding=ROUND_HALF_UP)) if scores else None
@@ -61,12 +62,16 @@ def publish_recommendation(final, request, metrics, sources):
         rows.append({'instrument_id': allocation.instrument_id, 'name': item['name'], 'ticker': item['ticker'],
                      'kind': item['kind'], 'account': allocation.account, 'weight_pct': float(allocation.weight_pct), 'amount_krw': None})
     total = Decimal(metrics['total_krw']) if metrics['total_krw'] is not None else None
+    execution = plan_execution(request, rows, decision)
+    if execution['reasons'] == ['ADDITIONAL_FUNDING_REQUIRED']:
+        total = None
+    for row in execution['rows']:
+        row['name'] = by_id.get(row['instrument_id'], {}).get('name', row['instrument_id'])
+    execution_amounts = {(row['instrument_id'], row['account']): row['target_krw'] for row in execution['rows']}
+    if execution_amounts:
+        total = sum((Decimal(value) for value in execution_amounts.values()), Decimal(0))
     if total is not None:
-        exact = [total * a.weight_pct / 100 for a in final.recommendation.allocations]
-        amounts = [int(v.to_integral_value(rounding=ROUND_FLOOR)) for v in exact]
-        remainder = int(total) - sum(amounts)
-        for i in sorted(range(len(rows)), key=lambda i: exact[i] - amounts[i], reverse=True)[:remainder]:
-            amounts[i] += 1
+        amounts = allocate_amounts(total, [a.weight_pct for a in final.recommendation.allocations])
         for row, amount in zip(rows, amounts):
             row['amount_krw'] = str(amount)
 
@@ -81,15 +86,25 @@ def publish_recommendation(final, request, metrics, sources):
         target = targets.get(key)
         before = current.get(key, 0) if known or not request.holdings else None
         after = target['weight_pct'] if target else 0
-        if before is not None and abs(before - after) < .005:
+        transition = next((row for row in execution['rows'] if (row['instrument_id'], row['account']) == key), None)
+        money_changes = transition and execution['status'] in {'ready', 'conditional'} and any(int(transition[field]) for field in ('buy_krw', 'sell_krw', 'cash_used_krw'))
+        if before is not None and abs(before - after) < .005 and not money_changes:
             continue
         item = by_id.get(key[0], {'name': next((h['name'] for h in metrics['holdings'] if (h['instrument_id'], h['account']) == key), '기존 종목'), 'ticker': ''})
         actions.append({'instrument_id': key[0], 'name': item['name'], 'ticker': item['ticker'], 'account': key[1],
                         'before_pct': before, 'after_pct': after,
                         'action': '비중 설정' if before is None else '새로 담기' if before == 0 else '줄이기' if before > after else '늘리기'})
+        if transition and execution['status'] in {'ready', 'conditional'}:
+            actions[-1].update({field: transition[field] for field in ('buy_krw', 'sell_krw', 'cash_used_krw')})
+            actions[-1]['action'] = ('현금 투입' if int(transition['cash_used_krw']) > 0 else
+                '전량 매도' if int(transition['sell_krw']) and int(transition['target_krw']) == 0 else
+                '일부 매도' if int(transition['sell_krw']) else
+                '새로 담기' if int(transition['buy_krw']) and int(transition['before_krw']) == 0 else
+                '추가 매수' if int(transition['buy_krw']) else '보유 금액 유지')
     return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation, current=True),
             'recommendation': {'title': final.recommendation.title, 'allocations': rows,
                                'evaluation': evaluation(final.recommendation.evaluation), 'actions': actions,
-                               'total_krw': metrics['total_krw'], 'expected_return_1y': None, 'dividend_yield_1y': None,
+                               'total_krw': str(total) if total is not None else None, 'execution': execution,
+                               'expected_return_1y': None, 'dividend_yield_1y': None,
                                'historical_performance': None, 'unavailable_reason': metrics['unavailable_reason']},
             'insights': [{'title': item.title, 'content': validate_section('question', item.content.model_dump(), sources)} for item in final.insights]}
