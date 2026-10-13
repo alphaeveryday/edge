@@ -106,6 +106,126 @@ def batch():
     return request, market, groups
 
 
+async def test_customer_cap_filters_vectors_before_the_group_winner_is_chosen():
+    from edge_portfolio.decision import Decision
+    request, market, groups = batch()
+    market.loader = lambda symbol, _: record(finish=200 if symbol == 'A.KS' else 120)
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(objectives=['growth'], constraints=[{'kind': 'max_weight', 'instrument_ids': ['KR:A'], 'value': 30, 'source': 'A 30% 이하'}])
+    result = await optimizer.tool({'combinations': groups})
+    mixed = next(row for row in result['candidates'] if {a['instrument_id'] for a in row['allocations']} == {'KR:A', 'KR:B'})
+    assert next(a['weight_pct'] for a in mixed['allocations'] if a['instrument_id'] == 'KR:A') == 30
+    assert result['customer_rejected_vectors'] > 0
+    assert all(a['weight_pct'] <= 30 for row in result['candidates'] for a in row['allocations'] if a['instrument_id'] == 'KR:A')
+
+
+def test_customer_objective_order_precedes_service_score_and_unknown_income_is_not_zero():
+    groups = [[{'weights': [1], 'duration_pct': 100, 'excess_pp': 10, 'preservation_pct': 0, 'max_drawdown_pct': -20, 'income_yield_pct': None}],
+              [{'weights': [1], 'duration_pct': 50, 'excess_pp': 5, 'preservation_pct': 100, 'max_drawdown_pct': -2, 'income_yield_pct': 0}]]
+    assert rank(groups, [['A'], ['B']], ['growth', 'stability'])[0]['allocations'][0]['instrument_id'] == 'A'
+    assert rank(groups, [['A'], ['B']], ['stability', 'growth'])[0]['allocations'][0]['instrument_id'] == 'B'
+    assert rank(groups, [['A'], ['B']], ['income'])[0]['allocations'][0]['instrument_id'] == 'B'
+
+
+async def test_new_batch_reopens_search_and_recomputes_previous_candidates_on_one_window():
+    request, market, groups = batch()
+    market.catalog['KR:F'] = {'ticker': 'F', 'market': 'KR', 'kind': 'etf'}
+    market.loader = lambda symbol, _: record(finish=140, dates=pd.bdate_range('2026-07-07', '2026-10-09')) if symbol == 'F.KS' else record(finish=120)
+    optimizer = Optimizer(market, request)
+    first = await optimizer.tool({'combinations': groups})
+    old = first['candidates'][0]
+    old_weights = {row['instrument_id']: row['weight_pct'] / 100 for row in old['allocations']}
+    market.queried.add(tuple(sorted(old_weights.items())))
+    second_groups = [['KR:F'] if group == ['KR:E'] else group for group in groups]
+    second = await optimizer.tool({'combinations': second_groups})
+    assert second['submitted_combinations'] == 11
+    assert second['start_date'] == '2026-07-07'
+    assert second['revision'] == 2
+    assert not market.queried
+    assert all(row['candidate_id'].startswith('r2-') for row in second['candidates'])
+    for row in second['candidates']:
+        key = tuple(sorted((a['instrument_id'], a['weight_pct'] / 100) for a in row['allocations']))
+        assert market.results[key]['history']['start_date'] == second['start_date']
+    with pytest.raises(ValueError, match='eligible candidate'):
+        optimizer.validate(SimpleNamespace(selected_candidate_id=old['candidate_id'], recommendation=SimpleNamespace(allocations=[])))
+
+
+async def test_a_failed_price_batch_can_recover_without_a_frozen_unavailable_result():
+    request, market, groups = batch()
+    def unavailable(*_):
+        raise TimeoutError()
+    market.loader = unavailable
+    optimizer = Optimizer(market, request)
+    assert (await optimizer.tool({'combinations': groups}))['status'] == 'unavailable'
+    market.loader = lambda *_: record(finish=120)
+    assert (await optimizer.tool({'combinations': groups}))['status'] == 'available'
+
+
+async def test_static_service_policy_conflict_does_not_blame_missing_price_data():
+    from edge_portfolio.decision import Decision
+    request, market, groups = batch()
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[{'kind': 'min_weight', 'instrument_ids': ['CASH:KRW'], 'value': 20, 'source': '현금 최소 20%'}])
+    result = await optimizer.tool({'combinations': groups})
+    assert result['reason'] == 'SERVICE_CUSTOMER_POLICY_CONFLICT'
+    assert result['policy_conflicts'] == ['CASH_REQUIRED_BUT_SERVICE_CASH_ZERO']
+    assert not market.records
+
+
+def test_vector_filter_uses_funded_amounts_before_rejecting_diluted_no_sale_weights():
+    from edge_portfolio.decision import Decision
+    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        horizon='10년 이상', question='추가 100만원. 매도 금지.')
+    market = MarketData(request)
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    rows = [{'instrument_id': key, 'weight_pct': 50} for key in ['US:VOO', 'US:QQQ']]
+    assert all(check['status'] == 'pass' for check in optimizer.vector_checks(rows))
+    optimizer.decision.funding_text = ''
+    assert any(check['status'] == 'fail' for check in optimizer.vector_checks(rows))
+
+
+async def test_bad_dividends_do_not_destroy_price_eligible_candidates():
+    from edge_portfolio.decision import Decision
+    request, market, groups = batch()
+    def loader(*_):
+        data = record(finish=120)
+        data['frame']['Dividends'] = 'bad provider value'
+        return data
+    market.loader = loader
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(objectives=['income'])
+    result = await optimizer.tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert all(row['income_yield_pct'] is None for row in result['candidates'])
+    assert result['income_failures']
+
+
+def test_global_no_sale_filter_preserves_potentially_feasible_account_rounding():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    request = AnalysisInput(holdings=[{'name': 'A', 'instrument_id': 'KR:A', 'amount_krw': 700001, 'account': account} for account in ['ISA', '일반 계좌']]
+        + [{'name': 'cash', 'kind': 'cash', 'instrument_id': 'CASH:KRW', 'amount_krw': 5600005}], horizon='10년 이상')
+    market = MarketData(request)
+    market.catalog = {key: {'kind': 'etf', 'market': 'KR'} for key in ['KR:A', 'KR:B']}
+    decision = Decision(constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    optimizer = Optimizer(market, request)
+    optimizer.decision = decision
+    assert all(check['status'] == 'pass' for check in optimizer.vector_checks([{'instrument_id': 'KR:A', 'weight_pct': 20}, {'instrument_id': 'KR:B', 'weight_pct': 80}]))
+    rows = [{'instrument_id': 'KR:A', 'weight_pct': 10, 'account': account} for account in ['ISA', '일반 계좌']] + [{'instrument_id': 'KR:B', 'weight_pct': 80, 'account': '일반 계좌'}]
+    assert plan_execution(request, rows, decision)['status'] == 'ready'
+
+
+def test_percentage_input_can_verify_no_sale_weights_without_a_krw_principal():
+    from edge_portfolio.decision import Decision
+    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 50},
+        {'name': 'cash', 'kind': 'cash', 'instrument_id': 'CASH:KRW', 'amount_krw': 50}], input_mode='percent', horizon='10년 이상')
+    optimizer = Optimizer(MarketData(request), request)
+    optimizer.decision = Decision(constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    rows = [{'instrument_id': key, 'weight_pct': 50} for key in ['US:VOO', 'US:QQQ']]
+    assert all(check['status'] == 'pass' for check in optimizer.vector_checks(rows))
+
+
 async def test_unexpected_optimizer_exception_never_publishes_internal_details(monkeypatch):
     request, market, groups = batch()
     market.loader = lambda *_: record(finish=120)
