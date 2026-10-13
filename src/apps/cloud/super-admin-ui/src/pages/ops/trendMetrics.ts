@@ -6,14 +6,14 @@
  *   · **판정 규칙이 지표마다 다르다.** 완전성 95% 미만과 뉴스 문서 −35% 를 같은 ±25% 자로 재면
  *     둘 다 틀린다. 그래서 지표가 `comparisonType` + `threshold` 를 들고 다니고, 문구는
  *     하드코딩이 아니라 그 값에서 계산된다.
- *   · **중앙값·정상 범위·편차·판정은 전부 같은 계열에서 나온다.** 오늘 값과 중앙값을 따로
- *     들고 있으면 그래프와 숫자가 어긋난다.
+ *   · **정상 범위·편차·판정은 전부 같은 기준에서 나온다.** 기준은 응답이 준 값(`baseline`)이고,
+ *     없으면 계열의 중앙값이다 — 화면이 기준을 따로 만들지 않는다.
  *   · **계측 없음은 정상도 실패도 아니다.** 분모가 없으면 비율을 지어내지 않는다.
  *   · 이 화면의 범위는 파이프라인 실행·데이터셋 산출/완전성·장중 수집·분석 결과 생성까지다.
  *     Cloud 게시·테넌트 발번·소비자 전달은 전달 화면 소관이라 지표로 두지 않는다.
  *
- * 실측과 목: 일별 API가 없는 지표는 과거 점을 구조화된 목으로 만들고, 일별 API가 있는 지표는
- * 실측 계열을 그대로 준다. 점마다 `isMock` 을 들고 다니고 카드가 그 사실을 배지로 낸다.
+ * 계열: 일별 API가 있는 지표는 실측 계열을 그대로 주고, 없는 지표는 **조회일 값 한 점만** 준다.
+ * 과거 점을 만들지 않는다. 응답이 스스로 목이라고 밝힌 값만 `isMock` 으로 표시한다.
  */
 import type { FactSource } from '../../rules/types.ts';
 import { median } from './trendSeries.ts';
@@ -52,7 +52,7 @@ export type Direction = 'higherIsBetter' | 'lowerIsBetter' | 'stable';
 export interface SeriesPoint {
   date: string;
   value: number;
-  /** 이 점이 목인가 — 오늘 점만 실측인 지표가 많다 */
+  /** 응답이 이 값을 목이라고 밝혔는가(`cmpl_mock`·`etf_ledger.mock`) */
   isMock: boolean;
 }
 
@@ -74,6 +74,8 @@ export interface Metric {
    * 두지 않는다. 소비자가 0이었고, 두 벌이면 갈린다: 기준(`base`)이 없는 날의 계열은 실측
    * 한 점뿐인데 지표 플래그는 `true` 로 남아 카드가 없는 목을 말한다. */
   series: SeriesPoint[];
+  /** medianDelta 의 기준을 응답이 직접 줄 때(산출 축의 `base`). 없으면 계열의 중앙값을 쓴다 */
+  baseline?: number | null;
   /** 집계 단위·정의 — 팝오버 본문 */
   help: string;
   drill: { href: string; label: string };
@@ -128,7 +130,7 @@ export function evaluateMetric(m: Metric): Verdict {
   const th = m.threshold;
 
   if (m.comparisonType === 'medianDelta') {
-    const base = median(history);
+    const base = m.baseline ?? median(history);
     if (base === null || base === 0 || th === null) {
       return {
         kind: 'uninstrumented',
@@ -149,7 +151,7 @@ export function evaluateMetric(m: Metric): Verdict {
       kind: out ? 'abnormal' : 'normal',
       label: out ? `분포 밖 · ${pct > 0 ? '증가' : '감소'}` : '정상 범위',
       tone: out ? (m.abnormalTone ?? 'blocked') : 'active',
-      basis: `직전 ${history.length}영업일 중앙값 대비 ${pct > 0 ? '+' : ''}${pct}% (임계 ±${Math.round(th * 100)}%)`,
+      basis: `${m.baseline != null ? '응답 기준값(중앙값)' : `직전 ${history.length}개 관측 중앙값`} 대비 ${pct > 0 ? '+' : ''}${pct}% (임계 ±${Math.round(th * 100)}%)`,
       actual,
       expected: base,
       deltaPct: pct,
@@ -209,68 +211,4 @@ export function evaluateMetric(m: Metric): Verdict {
     band: [Math.min(0, ...history, actual), th],
     direction: out ? 'up' : null,
   };
-}
-
-/* ── 계열 만들기 ──
- *
- * 일별 계열을 주는 응답이 없다. 그래서 과거 점은 구조화된 목이되 **오늘 점은 실측**이고,
- * 중앙값·정상 범위·편차는 전부 이 계열에서 계산된다(따로 들고 있으면 어긋난다).
- */
-
-/**
- * 거래일 축 — 주말을 건너뛰며 뒤로 센다. 고정 계산이라 새로고침해도 흔들리지 않는다.
- *
- * 🔴 **마지막 점은 `endISO` 그 자체다 — 주말이어도 건너뛰지 않는다.** `endISO` 는 `meta.today`
- * 이고 그건 "응답이 실제로 본 날"이라 거래일 보장이 없다(`rules/types.ts` 의 `meta` 계약, 그리고
- * `?date=` 로 아무 날짜나 들어온다). 건너뛰면 그 날 원장에서 온 **실측값이 전 영업일 날짜를
- * 달고**, `TrendPage` 의 규약("카드 날짜가 조회일과 다르면 그 지표는 응답 밖 축")이 그것을
- * 정적 스냅샷으로 읽게 한다 — 값이 관대해지는 게 아니라 **출처가 뒤바뀐다**.
- * 과거 점만 영업일로 센다.
- */
-export function businessDays(endISO: string, count: number): string[] {
-  const out = [endISO];
-  const d = new Date(`${endISO}T00:00:00Z`);
-  while (out.length < count) {
-    d.setUTCDate(d.getUTCDate() - 1);
-    const day = d.getUTCDay();
-    if (day !== 0 && day !== 6) out.push(d.toISOString().slice(0, 10));
-  }
-  return out.reverse();
-}
-
-/**
- * 과거 계열의 모양. 가운데 두 점을 **정확히 `pin`** 으로 두면 median(history) === pin 이
- * 반올림·부동소수 오차 없이 성립한다 — 규칙(R13)이 쓰는 중앙값과 화면의 중앙값을 맞출 때 쓴다.
- */
-const SHAPE = [-0.14, -0.09, 0.11, -0.05, 0, 0, 0.06, 0.14, -0.12, 0.09];
-
-export interface SeriesSpec {
-  today: number;
-  /** 과거 계열의 중앙값을 이 값으로 고정한다. 없으면 today 기준으로 만든다 */
-  pin?: number;
-  /** 흔들림 폭 배율 — 완전성처럼 좁게 움직이는 지표는 작게 준다 */
-  amplitude?: number;
-  /** 정수 단위 지표는 반올림한다(창 수·건수) */
-  integer?: boolean;
-  /** 값의 하한(예: 0 미만 결손 수는 없다) */
-  min?: number;
-  /** 오늘 값이 실측인가 */
-  todayIsMock: boolean;
-  endDate: string;
-}
-
-export function buildSeries(spec: SeriesSpec): SeriesPoint[] {
-  const pin = spec.pin ?? spec.today;
-  const amp = spec.amplitude ?? 1;
-  const dates = businessDays(spec.endDate, SHAPE.length + 1);
-  const history = SHAPE.map((k) => {
-    /* 가운데 두 점(k === 0)은 흔들지 않는다 — 그래야 중앙값이 정확히 pin 이다 */
-    const raw = k === 0 ? pin : pin * (1 + k * amp);
-    const v = spec.integer ? Math.round(raw) : raw;
-    return spec.min !== undefined ? Math.max(spec.min, v) : v;
-  });
-  return [
-    ...history.map((value, i) => ({ date: dates[i], value, isMock: true })),
-    { date: dates[dates.length - 1], value: spec.today, isMock: spec.todayIsMock },
-  ];
 }
