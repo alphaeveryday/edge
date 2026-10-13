@@ -77,7 +77,7 @@ def test_email_metrics_count_normalized_addresses_and_saved_records_on_korean_da
     empty = client.get('/api/portfolio/admin/overview').json()
     assert [empty[k] for k in ('today_unique_emails', 'total_unique_emails', 'total_report_requests')] == [0, 0, 0]
     with store.connect() as db:
-        db.execute("INSERT INTO portfolio_jobs(id,owner,request_key,input) VALUES ('report','owner','report','{}')")
+        db.execute("INSERT INTO portfolio_jobs(id,owner,request_key,input,state) VALUES ('report','midnight','report','{}','succeeded')")
         # Two owners and repeated submissions must not imply two people or a click log.
         for owner, email, offset in [
             ('before', 'old@example.test', "-interval '1 microsecond'"),
@@ -94,7 +94,7 @@ def test_email_metrics_count_normalized_addresses_and_saved_records_on_korean_da
     assert result['today_unique_emails'] == 2
     assert result['total_unique_emails'] == 4
     assert result['total_report_requests'] == 6
-    store.request_report('report', 'midnight', 'reader@example.test')
+    assert store.request_report('report', 'midnight', 'reader@example.test') is True
     assert client.get('/api/portfolio/admin/overview').json()['total_report_requests'] == 6
 
 

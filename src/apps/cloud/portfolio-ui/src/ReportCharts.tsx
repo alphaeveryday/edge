@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { safeReportUrl } from './reportUrl';
 import type { History } from './api';
 
 export const chartColors = ['#7089fb', '#9fd0ff', '#f2b866', '#b49ee8', '#75c6b0', '#eaa4be'];
@@ -22,16 +23,17 @@ export function PerformanceChart({ history }: { history: History }) {
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
   }, []);
-  const points = history.points;
+  const points = history.points ?? [];
   if (points.length < 2) return <p className="notice">성과를 비교할 기간의 자료가 부족해요.</p>;
-  const values = points.flatMap(p => [p.recommended, ...(p.current === null ? [] : [p.current])]);
+  if (points.some(p => !Number.isFinite(p.recommended) || !Number.isFinite(Date.parse(p.date)))) return <p className="notice">저장된 성과 수치가 불완전해 차트를 표시하지 않았어요.</p>;
+  const hasCurrent = points.every(p => Number.isFinite(p.current));
+  const values = points.flatMap(p => [p.recommended, ...(hasCurrent ? [p.current!] : [])]);
   const low = Math.min(...values), high = Math.max(...values), span = high - low || Math.max(high * .05, 1);
   const min = low - span * .1, max = high + span * .1;
   const first = Date.parse(points[0].date), last = Date.parse(points.at(-1)!.date);
   const x = (i: number) => 42 + (Date.parse(points[i].date) - first) / (last - first || 1) * 260;
   const y = (value: number) => 148 - (value - min) / (max - min) * 128;
   const line = (key: 'recommended' | 'current') => points.map((p, i) => p[key] === null ? '' : `${x(i)},${y(p[key]!)}`).join(' ');
-  const hasCurrent = points.every(p => p.current !== null);
   const active = selected ?? points.length - 1;
   const isKRW = history.currency === 'KRW';
   const valueLabel = (value: number) => `${Math.round(value).toLocaleString('ko-KR')}${isKRW ? '원' : ''}`;
@@ -49,6 +51,6 @@ export function PerformanceChart({ history }: { history: History }) {
     </svg>
     <input className="history-slider" type="range" min="0" max={points.length - 1} value={active} onChange={event => setSelected(Number(event.target.value))} aria-label="과거 성과 날짜 선택" aria-valuetext={points[active].date} />
     <p className="history-date">{points[active].date}</p><div className="history-values"><span>추천 구성 <b>{valueLabel(points[active].recommended)}</b></span>{hasCurrent && <span>현재 구성 <b>{valueLabel(points[active].current!)}</b></span>}</div>
-    {history.current_unavailable_reason && <p className="notice">{history.current_unavailable_reason}</p>}<details><summary>계산 기준과 출처</summary><p>{history.method}</p>{history.sources?.length ? history.sources.map(source => <a key={source.instrument_id} href={source.url} target="_blank" rel="noreferrer">{source.instrument_id} ↗</a>) : <a href={history.source_url} target="_blank" rel="noreferrer">성과 자료 출처 ↗</a>}</details>
+    {history.current_unavailable_reason && <p className="notice">{history.current_unavailable_reason}</p>}<details><summary>계산 기준과 출처</summary><p>{history.method}</p>{history.sources?.length ? history.sources.map(source => <a key={source.instrument_id} href={safeReportUrl(source.url)} target="_blank" rel="noreferrer">{source.instrument_id} ↗</a>) : <a href={safeReportUrl(history.source_url)} target="_blank" rel="noreferrer">성과 자료 출처 ↗</a>}</details>
   </figure>;
 }
