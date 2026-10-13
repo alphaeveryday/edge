@@ -1,9 +1,9 @@
 export type Kind = 'analyses' | 'drafts' | 'reports';
 export type State = 'queued' | 'running' | 'succeeded' | 'failed';
-export type Overview = { as_of: string; active_visitors: number; today_visitors: number; tracking_since: string | null; queued: number; running: number; today_jobs: Record<State, number>; daily: { day: string; visitors: number; analyses: number }[] };
+export type Overview = { as_of: string; today_unique_emails: number; total_unique_emails: number; total_report_requests: number; active_visitors: number; today_visitors: number; tracking_since: string | null; queued: number; running: number; today_jobs: Record<State, number>; daily: { day: string; visitors: number; analyses: number }[] };
 export type Row = { id: string; visitor: string; at: string; state?: State; stage?: string; failure?: string; email?: string; started_at?: string; finished_at?: string };
 export type Records = { items: Row[]; total: number; page: number; page_size: number };
-export type Detail = { id: string; visitor: string; input: import('../api').Input; result?: Record<string, unknown> | null; state?: State; stage?: string; started_at?: string; finished_at?: string; failure?: string; events?: { at: string; stage: string }[]; followups?: { input: { question: string }; result: unknown; state: State }[] };
+export type Detail = { id: string; visitor: string; input: import('../api').Input; result?: Record<string, unknown> | null; state?: State; stage?: string; started_at?: string; finished_at?: string; failure?: string; events?: { at: string; stage: string }[]; followups?: { input: { question: string }; result: { answer?: Partial<import('../api').Section> } | null; state: State; failure?: string | null; created_at?: string }[] };
 
 export function progress(row: { stage?: string; started_at?: string; finished_at?: string }, asOf?: string) {
   const stage = row.stage ? ({ question: '질문 해석', portfolio: '구성 분석', outlook: '전망 검토', opinion: '최종 의견' }[row.stage] || row.stage) : '';

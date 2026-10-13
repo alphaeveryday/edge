@@ -63,7 +63,7 @@ pnpm --filter portfolio-ui test:e2e
 - `POST /api/portfolio/analyses/{id}/report-request`: email. 접수만 저장, 발송은 미구현.
 - `POST /api/portfolio/presence`: 방문자 쿠키로 현재 활동 기록. 화면이 보일 때 30초 주기.
 - 아래 관리자 GET API는 SSM 전용 프로세스에만 존재하며 공개 API에서는 404다.
-- `GET /api/portfolio/admin/overview`: 최근 2분 활동, 한국 날짜 기준 방문·분석 집계.
+- `GET /api/portfolio/admin/overview`: 최근 2분 활동, 한국 날짜 기준 방문·분석 집계. `today_unique_emails`·`total_unique_emails`는 공백 제거·소문자 기준 오늘/누적 이메일 고유 수, `total_report_requests`는 누적 신청 레코드 수다. 사람 수나 반복 클릭 횟수가 아니다.
 - `GET /api/portfolio/admin/records?kind=analyses|drafts|reports&days=7&page=1`: 관리자 목록, 페이지당 50건. 분석은 `state` 필터 지원.
 - `GET /api/portfolio/admin/records/{kind}/{id}`: 관리자 전용 입력·결과 상세.
 

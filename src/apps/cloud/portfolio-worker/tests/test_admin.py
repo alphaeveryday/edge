@@ -73,6 +73,31 @@ def test_korean_day_boundary_and_daily_counts_do_not_mix_days(client):
     assert client.get('/api/portfolio/admin/records?kind=analyses&days=1').json()['total'] == 1
 
 
+def test_email_metrics_count_normalized_addresses_and_saved_records_on_korean_day(client):
+    empty = client.get('/api/portfolio/admin/overview').json()
+    assert [empty[k] for k in ('today_unique_emails', 'total_unique_emails', 'total_report_requests')] == [0, 0, 0]
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_jobs(id,owner,request_key,input,state) VALUES ('report','midnight','report','{}','succeeded')")
+        # Two owners and repeated submissions must not imply two people or a click log.
+        for owner, email, offset in [
+            ('before', 'old@example.test', "-interval '1 microsecond'"),
+            ('midnight', ' Reader@Example.test ', ""),
+            ('same-email', 'reader@example.test', "+interval '1 second'"),
+            ('other', 'other@example.test', "+interval '2 seconds'"),
+            ('blank', '   ', "+interval '3 seconds'"),
+            ('tomorrow', 'future@example.test', "+interval '1 day'"),
+        ]:
+            db.execute(f"""INSERT INTO portfolio_report_requests(job_id,owner,email,created_at)
+                VALUES ('report',%s,%s,(date_trunc('day',now() AT TIME ZONE 'Asia/Seoul')
+                    AT TIME ZONE 'Asia/Seoul'){offset})""", (owner, email))
+    result = client.get('/api/portfolio/admin/overview').json()
+    assert result['today_unique_emails'] == 2
+    assert result['total_unique_emails'] == 4
+    assert result['total_report_requests'] == 6
+    assert store.request_report('report', 'midnight', 'reader@example.test') is True
+    assert client.get('/api/portfolio/admin/overview').json()['total_report_requests'] == 6
+
+
 @pytest.mark.parametrize('change', ['save', 'delete'])
 def test_draft_detail_cannot_mix_two_concurrent_saves(client, monkeypatch, change):
     from edge_portfolio import admin_store

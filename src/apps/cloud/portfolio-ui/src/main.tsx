@@ -4,6 +4,7 @@ import { request, ensureVisitorSession, type Input, type Job } from './api';
 import { InputForm } from './InputForm';
 import { ReportView } from './ReportView';
 import { Followup } from './Followup';
+import './report.css';
 import './styles.css';
 import { ProgressView } from './ProgressView';
 import { startPresence } from './presence';
