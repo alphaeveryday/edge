@@ -10,10 +10,10 @@ def data_status(market, optimizer, sources, observed=None):
     history = 'available' if any(row.get('status') == 'available' for row in results) else 'unavailable' if market.failures else 'not_requested'
     if history == 'available' and market.failures:
         history = 'partial'
-    if history == 'not_requested' and optimizer.result and optimizer.result.get('status') == 'unavailable':
+    if history == 'not_requested' and optimizer.result and optimizer.result.get('status') == 'unavailable' and optimizer.result.get('reason') != 'CURRENT_WEIGHTS_REQUIRED':
         history = 'unavailable'
-    if history == 'not_requested' and optimizer.result and optimizer.result.get('start_date') and optimizer.result.get('end_date'):
-        history = 'available'
+    if optimizer.result and optimizer.result.get('start_date') and optimizer.result.get('end_date'):
+        history = 'partial' if market.failures else 'available'
     if history == 'not_requested':
         history = observed.get('history', history)
     source_status = 'available' if sources else observed.get('sources', 'not_requested')
@@ -57,8 +57,8 @@ def assess_completion(final, request, decision, published, sources, as_of):
                 f'{claim_date.year}/{claim_date.month}/{claim_date.day}', f'{claim_date.year}년{claim_date.month}월{claim_date.day}일',
                 *[f'{month}{claim_date.day}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])],
                 *[f'{claim_date.day}{month}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])]} if claim_date else set()
-            normalized = re.sub(r'[\s,]', '', '\n'.join(text)).casefold()
-            if claim_date and any(re.search(r'(?<!\d)' + re.escape(value.casefold()) + r'(?!\d)', normalized) for value in date_texts):
+            normalized = [re.sub(r'[\s,]', '', passage).casefold() for passage in text if not re.match(r'^(?:URL|Published|Author):', passage)]
+            if claim_date and any(re.search(r'(?<!\d)' + re.escape(value.casefold()) + r'(?!\d)', passage) for value in date_texts for passage in normalized):
                 age = (today - claim_date).days
                 status = 'supported' if 0 <= age <= max_age[item.field] else 'stale'
             else:

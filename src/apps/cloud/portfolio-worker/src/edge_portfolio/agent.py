@@ -91,9 +91,11 @@ class ExaEvidence:
                   "fetched_at": datetime.now(timezone.utc).isoformat()}
         chunks = []
         for line in re.split(r'(?<=[.!?])\s+|\n+', source['excerpt']):
+            if re.match(r'^(?:URL|Published|Author):', line):
+                continue
             for start in range(0, len(line), 280):
                 chunk = line[start:start + 280].strip()
-                if len(chunk) >= 12:
+                if len(chunk) >= 12 or re.fullmatch(r'\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}', chunk) or re.search(r'[A-Za-z가-힣].*\d+(?:\.\d+)?\s*%', chunk):
                     chunks.append(chunk)
         source['passages'] = [{'id': f'p{i + 1}', 'text': text} for i, text in enumerate(chunks)]
         self.sources.append(source)
@@ -132,11 +134,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     execution_rejection = None
     execution_failures = {}
     execution_feasible = set()
+    accepted_report = {}
 
     def checkpoint():
         if on_checkpoint:
-            on_checkpoint({'sections': dict(sections), 'sources': list(evidence.sources), 'metrics': metrics,
-                           'optimization': optimizer.result, 'as_of': context['as_of'],
+            on_checkpoint({**accepted_report, 'sections': accepted_report.get('sections', dict(sections)), 'sources': list(evidence.sources), 'metrics': metrics,
+                           'optimization': accepted_report.get('optimization', optimizer.result), 'as_of': context['as_of'],
                            'decision': decision.model_dump(mode='json'), 'input': request.model_dump(mode='json')})
 
     async with asyncio.timeout(ANALYSIS_TIMEOUT_SECONDS), AsyncExitStack() as stack:
@@ -306,6 +309,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
+                    source_free_allowed = observed_data.get('sources') == 'unavailable' or bool(decision.missing_inputs) or (optimizer.result or {}).get('reason') == 'SERVICE_CUSTOMER_POLICY_CONFLICT'
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         execution_rejection = None
@@ -318,7 +322,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                       for number, rule in enumerate(decision.constraints, 1)]
                         if final.recommendation and any(check['status'] != 'pass' for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
-                        sections = {name: validate_section('question' if not evidence.sources and getattr(final, name).limitations else name,
+                        sections = {name: validate_section('question' if source_free_allowed and not evidence.sources and getattr(final, name).limitations else name,
                                     getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources, decision)
                         if final.recommendation and published['recommendation']['execution']['status'] == 'infeasible':
@@ -339,14 +343,21 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if not selected and final.withheld_reason:
                             published['withheld_reason'] = final.withheld_reason
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'])
-                        needs_alternative = not selected and len(getattr(optimizer, 'batches', [])) < 2 and (
+                        if not evidence.sources and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT':
+                            published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
+                            if published['completion']['status'] != 'needs_input':
+                                published['completion']['status'] = 'partial'
+                        needs_alternative = not selected and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT' and len(getattr(optimizer, 'batches', [])) < 2 and (
                             final.withheld_reason in {'quality_failed', 'customer_failed', 'search_exhausted'} or
                             optimizer.result.get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
                         if needs_alternative:
                             published['completion']['status'] = 'partial'
                             published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
+                        from copy import deepcopy
+                        accepted_report = deepcopy({**published, 'sections': sections})
                         recoverable = published['completion']['status'] == 'partial'
                         if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
+                            checkpoint()
                             recovery_rounds += 1
                             emit('research_recovery', role=role, attempt=recovery_rounds)
                             messages.append({'role': 'user', 'content': '고객 과제가 아직 해결되지 않았습니다. 형식 수정과 별개로 빠진 질문에 답하고 근거를 추가로 읽거나 다른 후보 조합을 탐색하세요. 필수 조건은 완화하지 않습니다. 해결되지 않는 부분은 필요한 입력과 실제 사유를 명시하세요.\n' + json.dumps(published['completion'], ensure_ascii=False)})
@@ -359,7 +370,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
-                        sections[role] = validate_section('question' if not evidence.sources and raw.get('limitations') else role, raw, evidence.sources)
+                        sections[role] = validate_section('question' if source_free_allowed and not evidence.sources and raw.get('limitations') else role, raw, evidence.sources)
                     emit('stage_completed', role=role)
                     checkpoint()
                     break

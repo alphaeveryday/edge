@@ -53,6 +53,30 @@ class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
+async def test_short_readable_table_has_citable_passages():
+    from edge_portfolio.agent import ExaEvidence
+    class Session:
+        async def call_tool(self, *args):
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text='Fees 0.03%\nYield 2.5%')])
+    evidence = ExaEvidence(Session())
+    evidence.discovered.add('https://issuer.example/fund')
+    result = await evidence.call('fetch_source', {'url': 'https://issuer.example/fund'})
+    assert [row['text'] for row in result['passages']] == ['Fees 0.03%', 'Yield 2.5%']
+
+
+@pytest.mark.parametrize('date', ['2026-09-30', '30 Sep 2026'])
+async def test_standalone_source_date_remains_citable_for_freshness_checks(date):
+    from edge_portfolio.agent import ExaEvidence
+    class Session:
+        async def call_tool(self, *args):
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text='Published: 2026-10-14\nAs of\n' + date + '\nThe fund invests in a diversified portfolio and reports its holdings and expense ratio.')])
+    evidence = ExaEvidence(Session())
+    evidence.discovered.add('https://issuer.example/fund')
+    result = await evidence.call('fetch_source', {'url': 'https://issuer.example/fund'})
+    assert any(passage['text'] == date for passage in result['passages'])
+    assert not any(passage['text'].startswith('Published:') for passage in result['passages'])
+
+
 @pytest.fixture(autouse=True)
 def offline_prices(monkeypatch):
     async def unavailable(self, rows):

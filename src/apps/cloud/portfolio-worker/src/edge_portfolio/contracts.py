@@ -120,6 +120,8 @@ class Section(StrictModel):
                 raise ValueError(f'Bullet {i}: each bullet must be one sentence of at most 180 characters; merge clauses into one sentence or remove the second sentence')
         if any(len(p) > 100 for p in self.limitations):
             raise ValueError("Limitation exceeds 100 characters")
+        if any(not p.strip() for p in self.limitations):
+            raise ValueError('Empty limitation')
         return self
 
 
@@ -186,6 +188,8 @@ class TaskAnswer(StrictModel):
     def meaningful_answer(self):
         if len(self.answer.strip()) < 10 or any(not value.strip() for value in self.missing):
             raise ValueError('Task answer and missing reasons must contain meaningful text')
+        if self.status == 'answered' and self.missing:
+            raise ValueError('Answered task cannot have missing requirements')
         return self
 
 

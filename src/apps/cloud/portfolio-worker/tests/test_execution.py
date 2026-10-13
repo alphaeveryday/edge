@@ -290,6 +290,7 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
         def __init__(self, *args):
             self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1',
                 'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100}]}]}
+            self.batches = {'first', 'alternative'}
         def validate(self, final):
             return self.result['candidates'][0] if final.recommendation else None
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
@@ -311,6 +312,8 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
                 assert ('ready' if feasible_retry else 'EXECUTION_INFEASIBLE') in payload['messages'][-1]['content']
                 content['recommendation'] = None
                 content['selected_candidate_id'] = None
+                if feasible_retry:
+                    content['withheld_reason'] = 'quality_failed'
             repairs.append(1)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     req = request([('CASH:KRW', 1000000, '일반 계좌')], preferences={'accounts': ['ISA', '일반 계좌'], 'tax_profile': {

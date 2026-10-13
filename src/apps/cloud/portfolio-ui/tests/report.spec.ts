@@ -250,10 +250,14 @@ test('legacy index values keep their units and account transfers stay identifiab
 test('interrupted analysis exposes saved work without publishing its draft recommendation', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'interrupted'));
   await page.route('**/api/portfolio/analyses/interrupted', route => route.fulfill({ json: {
-    id: 'interrupted', state: 'failed', failure: 'WORKER_INTERRUPTED', result: { partial_report: report },
+    id: 'interrupted', state: 'failed', failure: 'WORKER_INTERRUPTED', result: { partial_report: { ...report,
+      completion: { status: 'partial', tasks: [{ question: '매수 금액은 얼마인가요?', status: 'partial', answer: '납입 가능 금액을 확인하고 있어요.', missing: [] }],
+        missing_research: [], missing_inputs: ['현재 납입 가능 금액을 확인해야 해요.'] } } },
   } }));
   await page.goto('/portfolio/');
   await page.getByText('중단 전 작성된 분석 보기').click();
   await expect(page.locator('.completion-summary')).toBeVisible();
+  await expect(page.locator('.completion-summary')).toContainText('매수 금액은 얼마인가요?');
+  await expect(page.locator('.completion-summary')).toContainText('현재 납입 가능 금액을 확인해야 해요.');
   await expect(page.locator('.portfolio-hero')).toHaveCount(0);
 });
