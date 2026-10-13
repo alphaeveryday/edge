@@ -191,11 +191,11 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 발번 건수) {@code deliveryRows} 에는 {@code INVALIDATION} 도 들어간다.
 	 */
 	public record BoundaryResponse(long publishedWithoutDelivery, long deliveryNowNonpublished,
-			long deliveryRows) {
+			long deliveryRows, boolean blind) {
 
 		public static BoundaryResponse from(BoundaryRow b) {
 			return new BoundaryResponse(b.publishedWithoutDelivery(), b.deliveryNowNonpublished(),
-					b.deliveryRows());
+					b.deliveryRows(), b.blind());
 		}
 	}
 
@@ -233,12 +233,16 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	/**
 	 * 단계 하나 — 두 갈래를 나란히 낸다. 갈래는 {@code etf_contribution_observation} 의 트리거 FK
 	 * 하나가 가르고, 그 아래 단계에는 배치/장중을 가르는 컬럼이 <b>없다</b>(관측에서 상속한다).
+	 *
+	 * <p>{@code blind} 가 참이면 <b>이 단계를 셀 수 없다</b> — 두 수의 0 은 실측이 아니다(ALPHA-1293).
+	 * 옛 설명 엔진이 조회일보다 앞서 멈췄고 그날 코호트에 그 엔진의 행이 없을 때다.
 	 */
 	public record ChainStageResponse(String id, String label, long batch, long intraday,
-			String src) {
+			String src, boolean blind) {
 
 		public static ChainStageResponse from(ChainStage s) {
-			return new ChainStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src());
+			return new ChainStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src(),
+					s.blind());
 		}
 	}
 

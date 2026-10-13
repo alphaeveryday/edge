@@ -125,8 +125,21 @@ public interface ConsoleFactsRepository {
 	record ChainFeed(String id, String label, String unit, String src, long v) {
 	}
 
-	/** 단계 하나 — 두 갈래를 나란히 낸다. 갈래를 가르는 것은 관측의 트리거 FK 하나뿐이다. */
-	record ChainStage(String id, String label, String src, long batch, long intraday) {
+	/**
+	 * 단계 하나 — 두 갈래를 나란히 낸다. 갈래를 가르는 것은 관측의 트리거 FK 하나뿐이다.
+	 *
+	 * <p>{@code blind} 는 <b>이 단계를 셀 수 없다</b>는 뜻이다(ALPHA-1293). 단계 다섯은 전부 옛 설명
+	 * 엔진의 표에서 세는데, 그 엔진이 조회일보다 앞서 멈췄고 그날 코호트에 행이 하나도 없으면 두 수의
+	 * 0 은 "하나도 안 남았다"가 아니라 <b>세는 쪽이 없다</b>이다. 그때 두 수는 0 으로 두되(와이어에
+	 * null 자리가 없다) 소비자는 {@code blind} 를 먼저 보고 그 0 을 읽지 않는다.
+	 */
+	record ChainStage(String id, String label, String src, long batch, long intraday,
+			boolean blind) {
+
+		/** 관측 가능한 단계 — 수가 실측이다. */
+		public ChainStage(String id, String label, String src, long batch, long intraday) {
+			this(id, label, src, batch, intraday, false);
+		}
 	}
 
 	/**
@@ -139,9 +152,20 @@ public interface ConsoleFactsRepository {
 	 * <p>{@code deliveryRows} 는 <b>"발번이 돌고는 있나"</b>를 답한다 — 앞의 둘이 0 일 때 그것이
 	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 가른다. ⚠️ 비율의 분모로는 못 쓴다:
 	 * 앞의 둘은 단위가 다르고 여기엔 {@code INVALIDATION} 도 들어간다.
+	 *
+	 * <p>{@code blind} 는 <b>앞의 둘이 지금의 게시를 못 본다</b>는 뜻이다(ALPHA-1293). 두 수는
+	 * 옛 설명 엔진의 {@code explanation_result} 와 발번을 맞대는데, 그 엔진이 조회일보다 앞서 멈췄으면
+	 * 그 뒤의 게시(새 분석 엔진이 쓴다)는 이 조인에 안 걸린다. 그때 0 은 "어긋난 것이 없다"가 아니라
+	 * "옛 엔진 분에는 없다"이다. 0 이 아닌 수는 여전히 실측이다 — 옛 엔진 분의 어긋남은 그대로 센다.
 	 */
 	record BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,
-			long deliveryRows) {
+			long deliveryRows, boolean blind) {
+
+		/** 관측 가능한 경계 — 0 이 정합을 뜻한다. */
+		public BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,
+				long deliveryRows) {
+			this(publishedWithoutDelivery, deliveryNowNonpublished, deliveryRows, false);
+		}
 	}
 
 	/**

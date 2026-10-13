@@ -1952,6 +1952,85 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
+	 * 🔴 <b>옛 설명 엔진이 멈춘 뒤의 날은 단계 다섯이 관측 불가다</b>(ALPHA-1293). 트리거는 지금도
+	 * 쓰이는데 그 뒤 단계는 옛 엔진의 표에서 세므로, 엔진이 멈춘 뒤에는 "트리거 N → 관측 0"이 매일
+	 * 나온다 — 그 0 은 손실이 아니라 <b>세는 쪽이 없다</b>이다.
+	 *
+	 * <p>기준은 날짜 상수가 아니라 원장이다: 옛 엔진의 마지막 실행이 조회일보다 앞이고, 그날 코호트에
+	 * 그 엔진의 행이 하나도 없다. 입력 두 갈래는 실측 그대로 나간다.
+	 */
+	@Test
+	void 옛_엔진이_멈춘_뒤의_날은_체인_단계와_전달_경계가_관측_불가다() {
+		insertPublished("old", "2026-07-31", "etf-old", "PUBLISHED");   // 마지막 실행 = 07-31
+		insertTrigger("g-day", DAY.toString(), "etf-a");
+		insertMinuteTrigger("m-day", DAY.toString(), "etf-b", "FIRE", "2026-08-03T09:31:00+09:00");
+
+		var facts = repository.facts(DAY);
+		// 트리거는 실측이다 — 가리지 않는다.
+		assertThat(facts.chain().feeds()).extracting(f -> f.id(), f -> f.v())
+				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 1L));
+		assertThat(facts.chain().stages()).hasSize(5)
+				.allSatisfy(s -> assertThat(s.blind()).as("%s 관측 불가", s.id()).isTrue());
+		assertThat(facts.boundary().blind()).isTrue();
+
+		/* 대조 — 같은 원장으로 **엔진이 돌던 날**을 물으면 종전 값이 나온다. 조건을 날짜 상수나
+		 * "항상 관측 불가"로 바꾸는 변이가 여기서 죽는다. */
+		var before = repository.facts(LocalDate.parse("2026-07-31"));
+		assertThat(before.chain().stages())
+				.allSatisfy(s -> assertThat(s.blind()).as("%s 는 실측이다", s.id()).isFalse());
+		assertThat(before.chain().stages()).filteredOn(s -> s.id().equals("c.pub")).singleElement()
+				.satisfies(s -> assertThat(s.batch()).isEqualTo(1L));
+		assertThat(before.boundary().blind()).isFalse();
+	}
+
+	/**
+	 * 🔴 <b>관측 불가는 두 조건이 다 참일 때만이다.</b> 하나만 보면 진짜 사실을 가린다.
+	 *
+	 * <p>① 엔진이 <b>돌고 있는데</b> 그날 단계가 전부 0 — 진짜 손실이다(트리거는 있는데 관측이 안
+	 * 생겼다). 0 만 보고 가리면 R10 이 잡아야 할 P0 가 사라진다.
+	 * ② 엔진은 멈췄는데 그날 코호트에 <b>행이 있다</b> — 그 수는 실측이다. 엔진이 멈춘 것만 보고
+	 * 가리면 남아 있는 사실이 사라진다.
+	 */
+	@Test
+	void 엔진이_도는_날의_0_과_엔진이_멈췄어도_남은_행은_실측이다() {
+		// ① 엔진의 마지막 실행이 조회일 뒤(08-04) — 08-03 의 0 은 실측이다.
+		insertPublished("later", "2026-08-04", "etf-later", "PUBLISHED");
+		insertTrigger("g-day", DAY.toString(), "etf-a");
+		var alive = repository.facts(DAY);
+		assertThat(alive.chain().stages())
+				.allSatisfy(s -> {
+					assertThat(s.blind()).as("%s — 엔진이 도는 날의 0 은 손실이다", s.id()).isFalse();
+					assertThat(s.batch()).isZero();
+				});
+		assertThat(alive.boundary().blind()).isFalse();
+
+		// ② 08-05 를 물으면 엔진은 멈췄다(마지막 실행 08-04). 그날 트리거의 자손이 옛 표에 남아 있으면
+		//    (실행 시각만 앞이다) 그 수는 실측이다.
+		insertPublished("residue", "2026-08-05", "etf-res", "PUBLISHED");
+		jdbc.update("""
+				UPDATE explanation_run SET started_at = '2026-08-04T10:00:00+09:00',
+				       finished_at = '2026-08-04T10:00:00+09:00'
+				 WHERE explanation_run_id = 'run-residue'
+				""");
+		var stopped = repository.facts(LocalDate.parse("2026-08-05"));
+		assertThat(stopped.chain().stages())
+				.allSatisfy(s -> assertThat(s.blind()).as("%s — 행이 있으면 실측이다", s.id()).isFalse());
+		assertThat(stopped.chain().stages()).filteredOn(s -> s.id().equals("c.res")).singleElement()
+				.satisfies(s -> assertThat(s.batch()).isEqualTo(1L));
+		// 경계는 날짜 창을 안 탄다 — 엔진이 멈춘 뒤의 게시를 못 본다는 사실은 그대로다.
+		assertThat(stopped.boundary().blind()).isTrue();
+	}
+
+	/** 옛 엔진의 실행이 <b>하나도 없는</b> 원장도 관측 불가다 — 그 엔진이 돈 적이 없으니 셀 쪽이 없다. */
+	@Test
+	void 옛_엔진_실행이_아예_없으면_관측_불가다() {
+		insertTrigger("g-day", DAY.toString(), "etf-a");
+		var facts = repository.facts(DAY);
+		assertThat(facts.chain().stages()).allSatisfy(s -> assertThat(s.blind()).isTrue());
+		assertThat(facts.boundary().blind()).isTrue();
+	}
+
+	/**
 	 * 흐름은 <b>Cloud 게시에서 끝난다</b> — 발번은 안 싣는다(ADR-0026 경계). 한 번 실었다가 뺐다:
 	 * R10 은 실린 단계까지 전부 비교해 <b>"게시 → 전달" P0</b> 를 낼 수 있는데, 화면은 게시에서
 	 * 잘라 그려({@code ChainStrip.LAST_STAGE_ID}) 그 단계 노드가 렌더된 적이 없다 — 사건 딥링크가
