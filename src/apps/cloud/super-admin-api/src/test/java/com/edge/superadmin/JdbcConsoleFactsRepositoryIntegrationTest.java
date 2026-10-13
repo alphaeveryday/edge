@@ -2066,6 +2066,23 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				});
 	}
 
+	/**
+	 * 경계: <b>첫 v2 요청이 조회일 당일</b>인데 그 요청은 전날 트리거의 것이고, 조회일 트리거에는
+	 * 요청이 없다. 그날 v2 는 이미 돌고 있었으므로 0 은 손실이다 — "첫 요청일이 조회일과 같거나
+	 * 뒤"로 넓히는 변이가 이 0 을 관측 불가로 가린다.
+	 */
+	@Test
+	void 첫_v2_요청이_조회일_당일이면_그날의_0_은_가리지_않는다() {
+		insertMinuteTrigger("m-prev", "2026-08-02", "etf-p", "FIRE", "2026-08-02T15:20:00+09:00");
+		insertRequest("m-prev", "m-prev", "2026-08-03T08:00:00+09:00");   // 첫 요청 = 조회일
+		insertMinuteTrigger("m-day", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+
+		assertThat(repository.facts(DAY).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).as("%s — v2 가 돌던 날이다", s.id()).isFalse())
+				.filteredOn(s -> s.id().equals("c.req")).singleElement()
+				.satisfies(s -> assertThat(s.intraday()).isZero());
+	}
+
 	/** v2 요청이 <b>하나도 없는</b> 원장도 관측 불가다 — 그 엔진이 돈 적이 없으니 셀 쪽이 없다. */
 	@Test
 	void v2_요청이_아예_없으면_v2_단계는_관측_불가다() {
