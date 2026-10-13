@@ -116,7 +116,8 @@ test('anonymous visitor heartbeat is separate from the admin page', async ({ pag
   expect(pulses).toBe(before);
 });
 
-test('a fast refresh error cannot hide a later session-expiry response', async ({ page }) => {
+test('a fast polling error clears private data despite a later failed response', async ({ page }) => {
+  await page.clock.install();
   let expired = false;
   await page.route('**/api/portfolio/admin/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -131,7 +132,7 @@ test('a fast refresh error cannot hide a later session-expiry response', async (
   await page.goto('/portfolio/admin.html');
   await expect(page.getByText('privatevisitor', { exact: true })).toBeVisible();
   expired = true;
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await page.clock.runFor(10000);
   await expect(page.getByRole('button', { name: '다시 연결' })).toBeVisible();
   await expect(page.getByText('privatevisitor', { exact: true })).toHaveCount(0);
 });
