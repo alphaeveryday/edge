@@ -341,8 +341,13 @@ class MarketData:
         self.catalog = {r['id']: r for r in directory()['instruments']}
         total = sum(h.amount_krw or 0 for h in request.holdings)
         self.current = None
+        self.baseline_kind = 'unknown_weights'
         if request.input_mode != 'names' and total and all(h.instrument_id for h in request.holdings):
             self.current = weights([{'instrument_id': h.instrument_id, 'weight_pct': float(h.amount_krw / total * 100)} for h in request.holdings])
+            self.baseline_kind = 'current_holdings'
+        elif request.planning and not request.holdings:
+            self.current = {'CASH:KRW': 1}
+            self.baseline_kind = 'new_cash'
 
     async def get(self, rows):
         target = weights(rows)
@@ -478,7 +483,7 @@ async def enrich_report(published, final, market, sources):
     plan['dividend_yield_1y'] = round(sum(weight * dividends[key]['trailing_yield_pct'] for key, weight in target.items() if key != 'CASH:KRW'), 2) if covered else None
     plan['dividend_basis'] = '최근 12개월 세전 분배금 수익률 · 추천 비중 가중 평균 · 미래 배당 보장 아님' if covered else '추천 ETF의 최근 12개월 배당률을 웹 자료에서 모두 확인하지 못했어요.'
     if result['status'] == 'available':
-        plan['historical_performance'] = result['history']
+        plan['historical_performance'] = {**result['history'], 'baseline_kind': market.baseline_kind}
         plan['historical_return_1y'] = result['return_1y_pct']
         plan['historical_return_period'] = result.get('return_period_pct')
         plan['unavailable_reason'] = ''

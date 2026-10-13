@@ -20,6 +20,7 @@ from .recommendation import search_etfs, publish_recommendation
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
+from .decision import Decision, QuestionSection, validate_decision, check_constraints
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -106,11 +107,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
     market = market or MarketData(request, datetime.fromisoformat(context['as_of']).date())
     optimizer = Optimizer(market, request)
+    decision = Decision()
+    checks = []
 
     def checkpoint():
         if on_checkpoint:
             on_checkpoint({'sections': dict(sections), 'sources': list(evidence.sources), 'metrics': metrics,
-                           'optimization': optimizer.result, 'as_of': context['as_of']})
+                           'optimization': optimizer.result, 'as_of': context['as_of'],
+                           'decision': decision.model_dump(mode='json'), 'input': request.model_dump(mode='json')})
 
     async with asyncio.timeout(ANALYSIS_TIMEOUT_SECONDS), AsyncExitStack() as stack:
         if evidence is None:
@@ -134,7 +138,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         for role in ROLES:
             on_stage(role)
             emit('stage_started', role=role)
-            schema = FinalReport if role == 'opinion' else Section
+            schema = FinalReport if role == 'opinion' else QuestionSection if role == 'question' else Section
             messages.append({"role": "user", "content": skills[role] + "\n현재 등록된 근거 ID: " + json.dumps([s['id'] for s in evidence.sources]) + "\n등록되지 않은 ID를 만들지 마세요. 첫 질문 해석 단계에서는 사용자 입력만 해석하고 evidence는 빈 배열로 둡니다. 그 다음 역할은 search_sources 후 fetch_source로 실제 근거를 등록해야 합니다.\n출력 JSON 스키마:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)})
             repairs = 0
             while True:
@@ -148,8 +152,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raise ValueError("MODEL_CONTEXT_BUDGET")
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
-                        "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
+                        "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -185,6 +189,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             args = None
                         if args is None:
                             answer = {'status': 'rejected', 'reason': 'INVALID_TOOL_ARGUMENT'}
+                        elif role == 'question' and function['name'] != 'search_etfs':
+                            answer = {'status': 'rejected', 'reason': 'QUESTION_STAGE_CATALOG_ONLY'}
                         elif function['name'] == 'search_etfs':
                             catalog_calls += 1
                             if catalog_calls > 6:
@@ -241,14 +247,27 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         selected = optimizer.validate(final)
+                        if final.recommendation:
+                            checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
+                        elif not checks:
+                            checks = [{'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': 'unknown',
+                                       'reason': 'UNVERIFIED_CONSTRAINT' if rule.kind == 'unverified' else 'NO_ALLOCATION_SELECTED'}
+                                      for number, rule in enumerate(decision.constraints, 1)]
+                        if final.recommendation and any(check['status'] != 'pass' for check in checks):
+                            raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
                         sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources)
                         published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
                         if not selected and optimizer.result['candidates']:
-                            published['optimization']['reason'] = 'RATING_BELOW_MINIMUM'
+                            blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
+                            published['optimization']['reason'] = 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD' if checks else 'RATING_BELOW_MINIMUM'
                         if selected:
                             await enrich_report(published, final, market, evidence.sources)
                     else:
+                        if role == 'question':
+                            interpreted = QuestionSection.model_validate(raw)
+                            decision = validate_decision(interpreted.decision, request, market.catalog)
+                            raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
                         sections[role] = validate_section(role, raw, evidence.sources)
@@ -267,6 +286,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         emit('run_completed', counters={'model_calls': calls, 'exa_calls': getattr(evidence, 'calls', 0),
              'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
         return {**published, "sections": sections, "metrics": metrics, "sources": evidence.sources,
+                'input': request.model_dump(mode='json'), 'decision': decision.model_dump(mode='json'),
+                'baseline_kind': market.baseline_kind, 'customer_constraint_checks': checks,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
                 "elapsed_seconds": round(time.monotonic() - started, 2), "trace": trace,
                 'diagnostics': {'events': events, 'termination_reason': 'COMPLETED', 'model_calls': calls,

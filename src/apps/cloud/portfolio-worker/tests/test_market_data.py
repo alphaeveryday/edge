@@ -97,6 +97,7 @@ async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage
                              evidence=[{'source_id': 's1', 'passage_id': 'p1'}])
     class FakeMarket:
         as_of = date(2026, 10, 12)
+        baseline_kind = 'current_holdings'
         queried = {(('US:VOO', 1.0),)}
         async def get(self, rows):
             return {'status': 'available', 'history': {}, 'return_1y_pct': -12}

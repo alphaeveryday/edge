@@ -72,6 +72,8 @@ async def test_malformed_tool_json_is_repairable_and_execution_records_are_safe(
             assert json.loads(rejected['content'])['reason'] == 'INVALID_TOOL_ARGUMENT'
             return call
         content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content), 'reasoning_content': 'private reasoning'},
                              'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 10, 'completion_tokens': 20, 'total_tokens': 30, 'private': 'not allowed'}}
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
@@ -94,7 +96,7 @@ async def test_failed_exa_call_is_included_in_attempt_count():
             raise TimeoutError('provider details must remain private')
     async def model(payload):
         if phases[-1] == 'question':
-            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(final_payload()['question'])}}]}
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'], 'decision': {}})}}]}
         return {'choices': [{'message': {'role': 'assistant', 'tool_calls': [{'id': 'timeout', 'type': 'function',
             'function': {'name': 'search_sources', 'arguments': '{"query":"ETF","objective":"evidence"}'}}]}}]}
     with pytest.raises(TimeoutError):

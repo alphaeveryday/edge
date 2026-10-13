@@ -32,6 +32,19 @@ test('a newly listed ETF displays both series over their actual common period', 
   await expect(page.locator('.report-history')).not.toContainText('최근 1년');
 });
 
+test('new portfolio history labels its hypothetical cash baseline explicitly', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'new-cash'));
+  await page.route('**/api/portfolio/analyses/new-cash', route => route.fulfill({ json: {
+    id: 'new-cash', state: 'succeeded', result: { ...report,
+      recommendation: { ...report.recommendation, historical_performance: {
+        ...report.recommendation.historical_performance, baseline_kind: 'new_cash' } } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.history-legend')).toContainText('투자 전 현금');
+  await expect(page.locator('.history-values')).toContainText('투자 전 현금');
+  await expect(page.locator('.history-legend')).not.toContainText('현재 구성');
+});
+
 test('a cash-only current portfolio does not hide the recommended total and three star ratings', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'cash-rating'));
   await page.route('**/api/portfolio/analyses/cash-rating', route => route.fulfill({ json: { id: 'cash-rating', state: 'succeeded', result: {
@@ -62,6 +75,28 @@ test('withholding a backtest winner below the rating threshold explains rating r
   await page.goto('/portfolio/');
   await expect(page.getByText('조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.')).toBeVisible();
   await expect(page.locator('.portfolio-hero')).toHaveCount(0);
+});
+
+test('customer constraint rejection is not mislabeled as a low star rating', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'customer-constraint'));
+  await page.route('**/api/portfolio/analyses/customer-constraint', route => route.fulfill({ json: {
+    id: 'customer-constraint', state: 'succeeded', result: { ...report, recommendation: null,
+      optimization: { status: 'available', candidates: [{}], reason: 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByText('필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.')).toBeVisible();
+  await expect(page.getByText('조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.')).toHaveCount(0);
+});
+
+test('an unselected recommendation does not invent a constraint or rating failure', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'withheld'));
+  await page.route('**/api/portfolio/analyses/withheld', route => route.fulfill({ json: {
+    id: 'withheld', state: 'succeeded', result: { ...report, recommendation: null,
+      optimization: { status: 'available', candidates: [{}], reason: 'RECOMMENDATION_WITHHELD' } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByText('현재 확보한 근거로 추천 구성을 확정하지 못했어요.')).toBeVisible();
+  await expect(page.getByText('필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.')).toHaveCount(0);
 });
 
 test('a batch without eligible candidates publishes analysis without a recommendation or invented chart', async ({ page }) => {
