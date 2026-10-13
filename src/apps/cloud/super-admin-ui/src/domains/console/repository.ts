@@ -1,5 +1,5 @@
 /* console 도메인 — repository 인터페이스 (다른 도메인과 같은 관례) */
-import type { ConsoleFactsDto, EntityResolutionTrendDto, IntradayAnalysisTrendDto } from './types';
+import type { AnalysisTrendDto, ConsoleFactsDto, EntityResolutionTrendDto, IntradayAnalysisTrendDto } from './types';
 
 export interface ConsoleRepository {
   /**
@@ -15,4 +15,7 @@ export interface ConsoleRepository {
 
   /** 기준일 이하 최근 장중 FIRE 코호트의 분석 귀결 실측. */
   intradayAnalysisTrend(maxDate?: string, days?: number): Promise<IntradayAnalysisTrendDto>;
+
+  /** 기준일로 끝나는 기간의 v2 분석(전망·가격변동) 일별 건수. */
+  analysisTrend(maxDate?: string, days?: number): Promise<AnalysisTrendDto>;
 }

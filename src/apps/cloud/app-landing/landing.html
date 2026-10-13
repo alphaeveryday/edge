@@ -17,7 +17,7 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"ETF Orca","url":"https://etforca.com/"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://etforca.com/#website","name":"ETF Orca","url":"https://etforca.com/","inLanguage":"ko","publisher":{"@id":"https://etforca.com/#organization"}},{"@type":"Organization","@id":"https://etforca.com/#organization","name":"ETF Orca","url":"https://etforca.com/","logo":"https://etforca.com/assets/icon.png","sameAs":["https://www.instagram.com/etf_orca/"]},{"@type":"MobileApplication","@id":"https://etforca.com/#app","name":"ETF Orca","operatingSystem":"iOS","applicationCategory":"FinanceApplication","description":"국내 주식형 ETF의 한 달 전망과 그 근거를 매일 정리해요. 뉴스와 공시, 수급을 읽고 이유를 문장으로 보여주는 무료 앱이에요.","url":"https://etforca.com/","installUrl":"https://apps.apple.com/kr/app/etf-orca/id6816826436","offers":{"@type":"Offer","price":"0","priceCurrency":"KRW"},"publisher":{"@id":"https://etforca.com/#organization"}}]}</script>
 <!--
   Claude Artifact용 조각 문서입니다. 게시할 때 doctype, head, body가 자동으로 감싸집니다.
   B안: PokeClip의 이야기 순서를 따른다. 약속 → 공감(ETF 투자자의 큰 문제 넷) → 문제마다 해결 섹션 하나씩(ETF 단위 분석, 한 달 전망, 오늘 움직임, 커뮤니티) → 조건 → 걱정 해소 → 행동.
@@ -1002,8 +1002,10 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   <div class="container footer__in">
     <a class="nav__logo" href="#top"><img src="assets/logo-white.png" alt="" width="34" height="34">ETF Orca</a>
     <p>ETF Orca는 정보 제공 앱이며 투자 권유가 아닙니다. 주식 거래, 계좌 연결, 자금 이동 기능이 없습니다. 화면은 예시를 위해 다시 그린 목업입니다.</p>
-    <!-- TODO: 이용약관, 개인정보 처리방침 주소가 정해지면 링크 추가 -->
     <div class="footer__row">
+      <a href="https://etforca.edgesignal.dev/terms.html" target="_blank" rel="noopener">이용약관</a>
+      <a href="https://etforca.edgesignal.dev/privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>
+      <a href="https://etforca.edgesignal.dev/support.html" target="_blank" rel="noopener">고객 지원</a>
       <a href="https://www.instagram.com/etf_orca/" target="_blank" rel="noopener">Instagram</a>
       <span>© 2026 ETF Orca</span>
     </div>

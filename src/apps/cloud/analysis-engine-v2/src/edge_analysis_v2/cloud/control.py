@@ -14,6 +14,10 @@ from edge_analysis_v2.storage.database import connect_results
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 TERMINAL = ('SUCCEEDED', 'FAILED', 'TIMED_OUT', 'ABORTED')
+# Waiting workflows ask again every 30 seconds; an execution seen running is not asked about again for this long.
+SCAN_SECONDS = 10
+# When each slot's execution was last seen running, by ARN. One table per process (warm Lambda container).
+_RUNNING = {}
 
 
 def _run_task(details):
@@ -86,11 +90,38 @@ def reclaimable(connection, workflows, ecs, cluster, slot):
     return True, 'stopped'
 
 
-def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots=1, request_key=None):
+def slots_to_check(existing, execution_arn, action, slots, request_key, clock):
+    """Pick the slots whose state can change this call's answer.
+
+    Asking Step Functions about every other slot on every call made one call take seconds once forty
+    slots were held; three concurrent calls then could not serve a burst, and workflows gave up before
+    analysing (2026-10-13 09:03). A slot whose workflow ended without releasing is still found: by the
+    next acquire that needs its room or its kind and ETF.
+    """
+    own = [slot for slot in existing if slot['execution_arn'] == execution_arn]
+    if action == 'release':
+        return own
+    if own:
+        return []  # Already reserved; a retry by the owner needs no lookup.
+    others = [slot for slot in existing if slot['execution_arn'] != execution_arn]
+    same = [slot for slot in others if slot['request_key'] == request_key]
+    if same:
+        return same  # Only the slot holding this kind and ETF can unblock the caller.
+    if len(others) < slots:
+        return []  # Room is left; the insert is decided under the lock.
+    # Full: any finished slot would make room. One seen running moments ago is not asked about again yet.
+    now = clock()
+    return [slot for slot in others
+            if (seen := _RUNNING.get(slot['execution_arn'])) is None or now - seen >= SCAN_SECONDS]
+
+
+def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots=1, request_key=None, clock=time.monotonic):
     """Acquire one shared slot or release it after the owning task stops.
 
     A slot whose release cannot be proven stays occupied and keeps counting against the capacity,
-    but its failed check never fails the call for other executions.
+    but its failed check never fails the call for other executions. Only the slots chosen by
+    slots_to_check are looked up; the capacity and the one-per-kind-and-ETF rule are always decided
+    from the whole table under the lock.
 
     Args:
         connection: Idle result-writer connection.
@@ -101,9 +132,10 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
         action: Acquire or release.
         slots: Shared configured capacity, from one through forty (the batch's inline Map bound).
         request_key: Analysis kind and ETF code; one execution at a time per pair.
+        clock: Monotonic seconds, for the interval before a running execution is asked about again.
 
     Returns:
-        Acquired flag, stable reservation identity, and slots kept occupied without proof of release.
+        Acquired flag, stable reservation identity, and checked slots kept occupied without proof of release.
     """
     if action not in ('acquire', 'release'):
         raise ValueError('Unknown execution control action')
@@ -115,14 +147,19 @@ def control(connection, workflows, ecs, cluster, execution_arn, action, *, slots
     with connection.cursor(row_factory=dict_row) as cur:
         cur.execute('SELECT execution_arn,started_by,request_key,task_arns FROM analysis_execution_slots')
         existing_slots = cur.fetchall()
+    for arn in set(_RUNNING) - {slot['execution_arn'] for slot in existing_slots}:
+        _RUNNING.pop(arn, None)  # Its slot is gone; the table stays as small as the slot table.
     removable, held = [], []
-    for slot in existing_slots:
+    for slot in slots_to_check(existing_slots, execution_arn, action, slots, request_key, clock):
         arn = slot['execution_arn']
         try:
             if arn == execution_arn:
                 finished = action == 'release'
             else:
                 finished = workflows.describe_execution(executionArn=arn)['status'] in TERMINAL
+                if not finished:
+                    # Only a running answer is remembered; a finished or unjudgeable slot is asked about again.
+                    _RUNNING[arn] = clock()
             if not finished:
                 continue
             free, reason = reclaimable(connection, workflows, ecs, cluster, slot)

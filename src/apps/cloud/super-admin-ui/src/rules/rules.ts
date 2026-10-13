@@ -715,7 +715,7 @@ export const RULES: Rule[] = [
         /* ⚠️ **`null` 을 "표본 없음"이라 단정하지 않는다**(ALPHA-946). 사유가 셋인데 와이어는
          * 하나로 온다: 표본 부재 · 장 안 서는 날의 장 산출 · 그 날이 안 끝남
          * (`OutputFact.base` 주석이 정본). 전에 '기준 표본 없음' 이라고 적었는데, **지난 주말을
-         * 조회하면** 서버가 뉴스 셋에는 기준을 주고 `o.pub`·`o.trig` 만 비우므로 이 규칙이 돌면서
+         * 조회하면** 서버가 장에 안 매인 산출에는 기준을 주고 `o.movement`·`o.trig` 만 비우므로 이 규칙이 돌면서
          * 그 둘에 거짓 사유를 단다 — 원장에 표본은 멀쩡히 있다. 어느 하나를 지목하려면 이 층이
          * 날짜·달력을 다시 재야 하고, 그러면 판정 주체가 서버와 둘이 된다(`dep` 과 같은 판단). */
         if (b == null) return '기준이 없다(표본 부재·장 안 서는 날·그 날이 안 끝남 중 하나)';
@@ -745,7 +745,7 @@ export const RULES: Rule[] = [
           (o) => judgeable(o) && Math.abs((o.today - (o.base as number)) / (o.base as number)) >= 0.25,
         )
         .map((o) => ({
-          /* `o.pub` 은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
+          /* `o.outlook` 같은 값은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
           target: o.label,
           targetId: o.id,
           title: o.label,
@@ -822,36 +822,42 @@ export const RULES: Rule[] = [
     name: 'ETF 분석 실패',
     kls: '고장',
     base: 'P0',
-    desc: 'ETF 단위로 분석이 실패해 설명이 만들어지지 않았다',
-    dep: 'ETF별 최신 트리거 설명 실행 축',
-    /* `source: 'MOCK'` 이었다 — 규칙의 `source` 는 **정적**이라, 실 원장이 붙은 뒤에도 리포트가
-     * `mock:false` 와 `source:'MOCK'` 을 동시에 낸다(모순). 목 여부는 사실이 `etf_ledger.mock` 로
-     * 말하고 위반의 `mock` 이 나르므로, 여기는 축의 성격만 적는다. */
+    desc: '그날 분석이 실패한 뒤 끝내 완료되지 않은 ETF 가 있다',
+    /* ✅ **새 분석 엔진(v2)의 표를 본다**(ALPHA-1291). 옛 설명 엔진의 ETF 원장(`etf_ledger`)을 읽던
+     * 규칙이고, 그 엔진은 10-01 이 마지막 실행이라 위반이 없어서가 아니라 **행이 없어서** 조용했다.
+     *
+     * 세는 것은 "실패한 적 있는 ETF"가 아니라 **끝내 완료하지 못한 ETF** 다 — 그날 그 종류의 분석에
+     * 실패 행이 있고 완료 행이 하나도 없다. v2 는 실패한 분석을 다시 돌려 끝내는 일이 흔해서 앞의
+     * 뜻으로 세면 이 규칙이 매일 선다. 진행 중(running)만 있는 ETF 는 서버가 넣지 않는다.
+     *
+     * ⚠️ 조회일이 오늘이면 아직 다시 돌 분석이 남았을 수 있다 — 그래도 유예하지 않는다(예전에도
+     * 이 규칙에는 당일 유예가 없었다). 그날 다시 돌아 완료되면 다음 조회에서 빠진다.
+     *
+     * 못 도는 유일한 길은 응답에 그 축이 없는 것이다 — 그 축을 안 싣는 배포본(API 롤백·UI 선배포)을
+     * 보고 있다는 뜻이고, 그때 위반 0건으로 읽히면 안 된다. */
+    dep: '이 응답에 v2 분석 실패 축이 없다 — 그 축을 안 싣는 배포본이다',
     source: 'DB_LEDGER',
-    canRun: (f) => f.etf_ledger != null,
-    mockBacked: (f) => !!f.etf_ledger?.mock,
-    run: (f) => {
-      const bad = (f.etf_ledger?.rows ?? []).filter((r) => r.outcome === 'FAILED');
-      return bad.length
-        ? [
-            {
-              target: 'ETF 분석',
-              targetId: 'analyze.failed',
-              title: 'ETF 분석 실패',
-              metric: bad.length,
-              unit: 'ETF',
-              /* error 가 null 인 것은 "오류가 없다"가 아니라 원장이 사유를 안 남긴 것이다 */
-              why: bad[0].error
-                ? `설명 미생성 — ${bad[0].error}`
-                : '설명 미생성 — per-ETF 원장에 오류 사유 기록이 없다',
-              list: bad.map((r) => r.name),
-              mock: !!f.etf_ledger?.mock,
-              evidence: `ETF별 분석 원장${f.etf_ledger?.mock ? '(목)' : ''}`,
-              drill: ['chain', 'etf-ledger'] as [string, string],
-            },
-          ]
-        : [];
-    },
+    canRun: (f) => f.analysis_failures != null,
+    mockBacked: (f) => (f.analysis_failures ?? []).some((a) => a.mock),
+    run: (f) =>
+      (f.analysis_failures ?? [])
+        .filter((a) => a.failed_etfs.length > 0)
+        .map((a) => {
+          const label = a.kind === 'outlook' ? '전망' : '가격변동 분석';
+          return {
+            /* 전망과 가격변동 분석은 다른 배치·다른 표라 사건도 따로 선다 */
+            target: label,
+            targetId: `${a.kind}.failed`,
+            title: `${label} 실패 ETF`,
+            metric: a.failed_etfs.length,
+            unit: 'ETF',
+            why: `${label}이 그날 실패한 뒤 끝내 완료되지 않았다 — 다시 돌아 완료된 ETF 는 세지 않는다`,
+            list: a.failed_etfs,
+            mock: !!a.mock,
+            evidence: (a.kind === 'outlook' ? 'outlook_analyses' : 'movement_analyses') + (a.mock ? '(목)' : ''),
+            drill: ['trend', `metric-a.${a.kind}_failed_etfs`] as [string, string],
+          };
+        }),
   },
 
   {

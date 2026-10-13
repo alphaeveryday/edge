@@ -35,6 +35,9 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.9
+      - name: SSM launcher contract
+        shell: pwsh
+        run: ./src/apps/cloud/portfolio-worker/scripts/test-open-admin.ps1
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -45,5 +48,8 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter portfolio-ui build
+          test ! -f apps/cloud/portfolio-ui/dist/admin.html
+          test -f apps/cloud/portfolio-ui/dist-admin/admin.html
+          test -z "$(find apps/cloud/portfolio-ui/dist/assets -name 'admin-*' -print)"
           pnpm --filter portfolio-ui exec playwright install --with-deps chromium
           pnpm --filter portfolio-ui test:e2e

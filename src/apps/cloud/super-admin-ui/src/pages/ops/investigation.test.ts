@@ -90,7 +90,7 @@ test('사건 조회는 흡수된 위반의 vid 로도 찾는다 — 뿌리만 �
   assert.equal(asMember?.incident, I, '흡수된 위반의 vid 로 사건을 못 찾았다');
   assert.equal(asMember?.member, true, '멤버인데 뿌리라고 했다 — 뿌리 상세가 멤버 주소로 그려진다');
 
-  assert.equal(incidentOfVid([I], 'R13:o.pub'), null, '없는 vid 에 사건을 붙였다');
+  assert.equal(incidentOfVid([I], 'R13:o.outlook'), null, '없는 vid 에 사건을 붙였다');
   assert.equal(incidentOfVid([], 'R04:run-1'), null);
 });
 
@@ -242,14 +242,14 @@ test('배치 데이터셋 사건은 실행에 매이지 않는다 — 원장을 
 });
 
 test('산출 축 사건도 조사 대상 id 는 식별자다 — 표시 문구를 실어 보내지 않는다', () => {
-  /* R13(산출 이상)은 `target` 이 라벨('게시 ETF')이고 `targetId` 가 산출 id('o.pub')다.
+  /* R13(산출 이상)은 `target` 이 라벨('전망 완료 ETF')이고 `targetId` 가 산출 id('o.outlook')다.
    * 라벨을 넘기면 추이 화면이 조회할 키가 없어 지목이 조용히 빈 화면이 된다. */
   const r = investigate(
-    incident(violation({ layer: '산출', drill: ['trend', 'out-o.pub'], target: '게시 ETF', targetId: 'o.pub' })),
+    incident(violation({ layer: '산출', drill: ['trend', 'out-o.outlook'], target: '전망 완료 ETF', targetId: 'o.outlook' })),
     FACTS,
   );
   assert.equal(r.targets[0].kind, 'output');
-  assert.equal(r.targets[0].id, 'o.pub');
+  assert.equal(r.targets[0].id, 'o.outlook');
   assert.equal(r.ledger, null, '산출 축은 원장 근거로 좁힐 문맥이 없다');
 });
 
@@ -326,12 +326,12 @@ test('실 API 화면 3곳은 실행 상세로 가는 길을 만들지 않는다 
 /* ── 사건 딥링크는 CDN 을 통과해야 한다 ──────────────────────────────────────────
  * CloudFront 의 SPA fallback(`infra/terraform/modules/static-site/spa-rewrite.js`)은
  * **마지막 경로 조각에 점(.)이 있으면 정적 파일**로 갈라 index.html 을 안 준다. 대상 id 에
- * 점이 든 사건이 실재하므로(산출 `o.pub` · ETF 원장 `analyze.failed` · 체인 `batch:c.pub`)
+ * 점이 든 사건이 실재하므로(산출 `o.outlook` · ETF 원장 `analyze.failed` · 체인 `batch:c.pub`)
  * vid 를 경로에 두면 **공유 링크와 새로고침만** 죽는다 — 앱 안 클릭은 서버를 안 타서 멀쩡하다.
  * 그게 vid 를 안정화한 목적 자체라, 여기서 경로 모양을 못박는다. */
 test('사건 딥링크 — 점 든 대상이어도 경로 조각에 점이 없다 (CDN SPA fallback 통과)', () => {
-  const dotted = violation({ rule: 'R13', target: '게시', targetId: 'o.pub' });
-  const href = incidentHref({ ...dotted, vid: 'R13:o.pub' });
+  const dotted = violation({ rule: 'R13', target: '전망', targetId: 'o.outlook' });
+  const href = incidentHref({ ...dotted, vid: 'R13:o.outlook' });
 
   const path = href.split('?')[0];
   assert.doesNotMatch(
@@ -344,7 +344,7 @@ test('사건 딥링크 — 점 든 대상이어도 경로 조각에 점이 없�
    * 점 검사만 두면 그 회귀가 통과한다(변이로 실증). */
   assert.notEqual(path, '/ops/incidents', `목록 주소다 — 사건 상세가 아니라 목록이 열린다 (${href})`);
   /* 값이 사라지지도 않아야 한다 — 점 없는 경로를 만드느라 식별자를 잘라내면 딥링크가 무의미하다 */
-  assert.equal(new URLSearchParams(href.split('?')[1]).get('vid'), 'R13:o.pub');
+  assert.equal(new URLSearchParams(href.split('?')[1]).get('vid'), 'R13:o.outlook');
 });
 
 test('생산자↔소비자 왕복 — 조사 문맥이 실제 세션 행과 맞는다 (문자열 모양이 아니라 사실로 검사한다)', () => {

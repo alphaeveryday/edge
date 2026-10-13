@@ -24,6 +24,12 @@ variable "spa" {
   default     = false
 }
 
+variable "redirect_www" {
+  description = "true 면 www.<domain_name> 을 대체 도메인과 Route53 레코드로 더하고, www 로 온 요청을 https://<domain_name> 으로 영구 이동시킨다(GET·HEAD 301, 그 밖 308). 인증서가 www.<domain_name> 을 포함해야 한다. spa 와 함께 켤 수 없다."
+  type        = bool
+  default     = false
+}
+
 variable "price_class" {
   description = "CloudFront 엣지 범위. dev 는 비용 절감으로 좁혀도 됨(PriceClass_100=북미·유럽)."
   type        = string
