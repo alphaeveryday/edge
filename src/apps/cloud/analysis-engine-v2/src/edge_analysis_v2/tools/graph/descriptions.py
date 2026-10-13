@@ -131,6 +131,43 @@ TOOLS = {
         'prerequisite': 'document_ref from a get_event_timeline or find_similar_events row.',
         'args': {'document_refs': 'Documents to read, as [{"object_type":"NewsArticle","object_id":"..."}].',
                  'offset': 'Character to start from. Leave out to start at the beginning.', 'length': 'Characters to read at most.'}},
+    'get_price_observations': {
+        'summary': 'Read daily closing prices and volume of securities, and the NAV of funds when asked.',
+        'returns': 'A table with one row per security and trading day; with include_nav a fund has a second row for the day that holds its NAV. '
+                   'data_scope.dates_returned lists the days found and latest_date_available_at_cutoff the last day published; '
+                   'with NAV, nav_dates_returned and latest_nav_date_available_at_cutoff say the same for the NAV rows. '
+                   'A later day is not published yet, which is different from a day without trading. There is no open, high, low or adjusted close, '
+                   'and whether a close is adjusted is not recorded: write "observed close".',
+        'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
+        'follow_up': 'calculate_returns for a change between two days. count_rising_and_falling for how many holdings rose. calculate_nav_premium for price against NAV.',
+        'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'include_nav': 'true to add the fund NAV rows.'}},
+    'calculate_returns': {
+        'summary': 'Calculate the price change of each security between two exact trading days.',
+        'returns': 'One row per security with start_price, end_price and return_ratio (0.05 means +5%). A day without a price gives status unavailable and names the days that have one. '
+                   'It is the change between two recorded closes, not a total return.',
+        'prerequisite': 'A get_price_observations result that contains both days.',
+        'args': {'dataset_ref': RESULT, 'start_date': 'The earlier trading day.', 'end_date': 'The later trading day.',
+                 'price_field': 'closePrice for the market price. nav for the fund NAV.',
+                 'basis_policy': 'Leave out. require_recorded_basis answers only when the price basis is recorded, which it is not in this data.'}},
+    'count_rising_and_falling': {
+        'summary': 'Count how many of the securities rose, fell, stayed flat or have no price between two days, with the fund weight of each group.',
+        'returns': 'One row per group with the number of securities and their summed stored weight. It is breadth, not performance attribution.',
+        'prerequisite': 'A get_price_observations result with start_date and end_date, or a calculate_returns result alone.',
+        'args': {'dataset_ref': RESULT, 'start_date': 'The earlier trading day. Only with a price result.', 'end_date': 'The later trading day. Only with a price result.'}},
+    'calculate_nav_premium': {
+        'summary': 'Compare the closing price of a fund with its NAV on one day.',
+        'returns': 'One row per fund with close_price, nav and premium_ratio (negative means the price is below NAV).',
+        'prerequisite': 'A get_price_observations result of the fund with include_nav true.',
+        'args': {'dataset_ref': RESULT, 'trade_date': 'The trading day, YYYY-MM-DD.'}},
+    'get_flow_observations': {
+        'summary': 'Read net buying and selling of securities: per day by individuals, foreigners and institutions, or as intraday estimates for foreigners and institutions.',
+        'returns': 'A table per security and day. Daily rows have net amounts as written in won and net share quantities. data_scope.net_value_runs says which securities each investor '
+                   'has been net buying or selling and since which day: say "turned" only for the securities listed under that day. '
+                   'Intraday rows are estimated net share quantities, not won amounts, and have no figure for individuals. Whether they are cumulative or per interval '
+                   'is not known: do not sum them or compare them with daily flows.',
+        'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
+        'follow_up': 'Flows of holdings are not the flows of the fund itself.',
+        'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'frequency': 'daily for finalized flows. intraday for estimates during the day.'}},
 }
 
 

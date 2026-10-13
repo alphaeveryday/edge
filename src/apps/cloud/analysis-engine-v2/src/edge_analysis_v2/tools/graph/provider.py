@@ -87,9 +87,11 @@ class GraphTools:
             ['tickers', 'market_code'], self.find_securities_by_ticker, sources=['ontology_view.equity', 'ontology_view.etf'])
         self.register('get_objects',
             {'object_refs': REFS}, ['object_refs'], self.get, sources=['ontology_view의 해당 객체 뷰'])
-        # Imported here because the module takes its argument schemas from this one.
+        # Imported here because these modules take their argument schemas from this one.
         from edge_analysis_v2.tools.graph.events import EventTools
+        from edge_analysis_v2.tools.graph.market import MarketTools
         self.events = EventTools(self)
+        self.market = MarketTools(self)
         unknown = (self._expose or set()) - self.defined
         if unknown:
             raise ValueError('Unknown tools to expose: ' + ', '.join(sorted(unknown)))
