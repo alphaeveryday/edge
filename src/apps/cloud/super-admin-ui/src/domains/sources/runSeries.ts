@@ -94,6 +94,8 @@ function durationOf(cells: GridCell[]): number | null {
  * 격자 응답 → 데이터셋별 실행 계열. 행은 `datasets` 순서, 점은 `slots` 순서(계획 시각 오름차순).
  *
  * 한 실행이 그 데이터셋의 점이 되는 조건은 **그 데이터셋의 작업 셀이 하나라도 있는 것**이다.
+ * 작업이 하나도 안 적힌 실행(기동 실패 등)은 실행 키의 레인으로 귀속한다(`dailyRollup` 과 같은
+ * 규칙) — 빼면 못 뜬 실행이 추이에서 사라진다. 그 점은 값이 전부 없다.
  * 소요 시간·종료 상태는 계획된(DUE) 작업만 센다 — 휴장으로 건너뛴 작업은 돌 일이 없었다.
  */
 export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): DatasetRunSeries[] {
@@ -108,7 +110,8 @@ export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): Dat
       const cells = slot.tasks
         .filter((c) => order.has(c.taskKey))
         .sort((a, b) => order.get(a.taskKey)! - order.get(b.taskKey)!);
-      if (cells.length === 0) continue;
+      const taskless = slot.tasks.length === 0 && slot.runKey.split(':')[0] === dataset.lane;
+      if (cells.length === 0 && !taskless) continue;
       const due = cells.filter((c) => c.planStatus === 'DUE');
       const counted = cells.find((c) => c.completenessExpected != null);
       points.push({

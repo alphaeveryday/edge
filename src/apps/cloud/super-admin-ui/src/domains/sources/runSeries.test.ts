@@ -180,6 +180,18 @@ test('데이터셋의 작업이 하나도 없는 실행은 그 데이터셋의 �
   assert.equal(result.find((s) => s.dataset.id === 'etf_nav')!.representative, null);
 });
 
+test('🔴 작업이 하나도 안 적힌 실행(기동 실패)은 그 레인 데이터셋의 빈 점이다 — 못 뜬 실행이 추이에서 사라지지 않는다', () => {
+  const failed: GridSlot = { ...slot('etf-daily:2026-10-09T15:40', []), launchStatus: 'LAUNCH_FAILED', orchestrationStatus: null };
+  const result = buildRunSeries([priceRun('etf-daily:2026-10-08T15:40'), failed], GRID);
+  const price = result.find((s) => s.dataset.id === 'price_daily')!;
+  assert.deepEqual(price.points.map((p) => [p.runKey, p.rows, p.durationSec, p.exit]), [
+    ['etf-daily:2026-10-08T15:40', 148, 60, 'ok'],
+    ['etf-daily:2026-10-09T15:40', null, null, 'none'],
+  ]);
+  /* 다른 레인의 데이터셋에는 귀속하지 않는다 */
+  assert.deepEqual(result.find((s) => s.dataset.id === 'stock_news')!.points, []);
+});
+
 test('시각이 뒤집힌 기록으로 음수 시간을 내지 않는다', () => {
   const [series] = buildRunSeries(
     [priceRun('etf-daily:2026-10-12T15:40', {

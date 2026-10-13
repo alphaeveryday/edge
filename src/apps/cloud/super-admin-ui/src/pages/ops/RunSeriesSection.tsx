@@ -38,9 +38,10 @@ function RunSpark({ label, runs, values, dashed }: {
   values: (number | null)[];
   dashed?: (number | null)[];
 }) {
+  if (values.length === 0) return null;
   const known = [...values, ...(dashed ?? [])].filter((v): v is number => v !== null);
-  if (known.length === 0) return null;
-  const [lo, hi] = extent(known);
+  /* 값이 하나도 없어도 실행 수만큼 빈 점은 그린다 — 그래프를 통째로 빼면 "실행이 없었다"로 읽힌다 */
+  const [lo, hi] = known.length > 0 ? extent(known) : [0, 1];
   const x = (i: number) => (values.length === 1 ? W : (i / (values.length - 1)) * W);
   const y = (v: number) => (1 - (v - lo) / (hi - lo)) * H;
   const line = (series: (number | null)[]) =>
@@ -138,6 +139,11 @@ export function RunSeriesSection() {
           <Info tip={TIP} label="실행 추이 읽는 법" />
         </span>
       </div>
+      {grid.data && grid.isError && (
+        <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
+          실행 이력 재조회에 실패했습니다 — 직전 조회 결과를 유지합니다.
+        </p>
+      )}
       {grid.data ? (
         <table className="table rs-table">
           <thead>
