@@ -324,4 +324,45 @@ def test_a_stored_series_with_no_observation_in_the_range_is_an_empty_range_and_
     for asked in ({'query': '환율'}, {'series_ids': ['NOPE']}):
         with pytest.raises(ValueError, match='wrong argument, not missing data'):
             tools.financial.macro('2026-10-03', '2026-10-04', **asked)
+    # WHY: beside a series that had rows, an id that is not stored was dropped without a word, and so was a stored one with no rows.
+    series.append({'series_id': 'RATE.KR', 'name': 'Korea base rate', 'first_date': '2020-01-02', 'last_date': '2026-09-30'})
+    tools.graph.nodes = lambda *a, **k: [{'object_type': 'MacroObservation', 'object_id': 'o', 'title': 'o', 'properties': {'seriesId': 'FX.USDKRW', 'observationDate': '2026-10-02', 'value': '1400'}}]
+    with pytest.raises(ValueError, match='wrong argument, not missing data'):
+        tools.financial.macro('2026-10-01', '2026-10-02', series_ids=['FX.USDKRW', 'NOPE'])
+    result, _ = tools.financial.macro('2026-10-01', '2026-10-02', series_ids=['FX.USDKRW', 'RATE.KR'])
+    assert result['total_rows'] == 1 and result['data_scope']['no_observation_in_range'].endswith('RATE.KR (2020-01-02..2026-09-30)')
+    assert 'no_observation_in_range' not in tools.financial.macro('2026-10-01', '2026-10-02', series_ids=['FX.USDKRW'])[0]['data_scope']
+    directory.cleanup()
+
+
+def test_every_role_of_the_company_is_read_and_an_event_without_participants_says_so():
+    # WHY: the last role read replaced the others, so a customer that is also a partner was scaled as the earner;
+    # and with no participants stored, any company passed was taken as the earner without a word.
+    import pytest
+    party = lambda role: {'actor': {'object_type': 'Company', 'object_id': 'c'}, 'role': role}
+    with pytest.raises(ValueError, match='customer of this contract'):
+        contract_tool(participants=[party('CUSTOMER'), party('PARTNER')])[0].impact(*REFS)
+    (row,), _ = contract_tool(participants=[party('SUPPLIER')])[0].impact(*REFS)
+    assert 'company_not_confirmed' not in row
+    (bare,), _ = contract_tool()[0].impact(*REFS)
+    assert 'stores no participants' in bare['company_not_confirmed']
+
+
+def test_a_weight_by_hand_and_a_fund_to_read_it_from_are_not_passed_together():
+    # WHY: with a weight passed by hand the fund was never read, so a fund that does not exist went through.
+    import pytest
+    fund = {'object_type': 'ETF', 'object_id': 'f'}
+    with pytest.raises(ValueError, match='not both'):
+        contract_tool()[0].impact(*REFS, holding_weight=0.25, etf_ref=fund)
+    with pytest.raises(ValueError, match='pass etf_ref with it'):
+        contract_tool()[0].impact(*REFS, holdings_date='2026-10-01')
+
+
+def test_the_recognition_period_has_a_floor_the_arithmetic_can_carry():
+    # WHY: 1e-30 years passed the schema and overflowed the rounding with an error the tool record never saw.
+    import jsonschema, pytest
+    tools, directory = graph_tools()
+    arguments = {'event_ref': REFS[0], 'company_ref': REFS[1], 'years_low': 1e-30, 'years_high': 1}
+    with pytest.raises(jsonschema.ValidationError):
+        tools.call('estimate_contract_profit', arguments)
     directory.cleanup()

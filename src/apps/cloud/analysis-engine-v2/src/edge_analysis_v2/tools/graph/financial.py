@@ -33,7 +33,7 @@ class FinancialTools:
         tools.register('get_macro_observations',{'start_date':STRING,'end_date':STRING,'series_ids':{'type':'array','items':STRING},'query':{'type':'string'},'limit':LIMIT},
             ['start_date','end_date'],self.macro,sources=['MacroObservation'])
         tools.register('compare_two_figures',{'dataset_ref':RESULT_REF,'earlier_id':STRING,'later_id':STRING},['dataset_ref','earlier_id','later_id'],self.compare,sources=['저장한 재무·매크로 관측'])
-        tools.register('estimate_contract_profit',{'event_ref':REF,'company_ref':REF,'years_low':{'type':'number','exclusiveMinimum':0,'maximum':100},'years_high':{'type':'number','exclusiveMinimum':0,'maximum':100},
+        tools.register('estimate_contract_profit',{'event_ref':REF,'company_ref':REF,'years_low':{'type':'number','minimum':0.01,'maximum':100},'years_high':{'type':'number','minimum':0.01,'maximum':100},
              'margin_low':{'type':'number','minimum':-1,'maximum':1},'margin_high':{'type':'number','minimum':-1,'maximum':1},'company_share':{'type':'number','exclusiveMinimum':0,'maximum':1},
              'etf_ref':REF,'holdings_date':STRING,'holding_weight':{'type':'number','minimum':0,'maximum':1}},
             ['event_ref','company_ref'],self.impact,sources=['SourceEvent', 'EventMeasurement', 'FinancialMetric'])
@@ -50,6 +50,10 @@ class FinancialTools:
         period and the margin are assumptions, and each is named as stored or as supplied by the caller.
         """
         if event_ref['object_type']!='SourceEvent':raise ValueError('event_ref is a SourceEvent: the event_id of a list_events row')
+        # With a weight passed by hand the fund was not read at all, so a fund that does not exist or a date after the cutoff went through.
+        if holding_weight is not None and (etf_ref is not None or holdings_date is not None):
+            raise ValueError('Pass holding_weight, or etf_ref to have the weight read from the fund, not both.')
+        if holdings_date is not None and etf_ref is None:raise ValueError('holdings_date is the date of the holdings of etf_ref; pass etf_ref with it.')
         if company_ref['object_type']!='Company':
             # 3 of 22 calls passed the stock instead of its issuer; the issuer is one stored link away.
             issuers,_=self.tools.actors(self.graph.get([company_ref]))
@@ -65,12 +69,18 @@ class FinancialTools:
         same=self.graph.linked([company_ref],'Company_ParticipatesIn_SourceEvent',where='n.eventType=$type AND n.eventDate=date($day)',
             parameters={'type':properties.get('eventType'),'day':properties.get('eventDate')}) if properties.get('eventDate') else []
         reports=self.tools.events.enrich(list({o['object_id']:o for o in [*found,*(r['target'] for r in same)]}.values()))
-        parties=lambda report:{(p['actor']['object_type'],p['actor']['object_id']):p.get('role') for p in report.get('participants') or []}
+        def parties(report):
+            # One company can have several roles in one event; keeping the last one read let a customer through as a partner.
+            found={}
+            for p in report.get('participants') or []:found.setdefault((p['actor']['object_type'],p['actor']['object_id']),set()).add(p.get('role'))
+            return found
         asked=next(r for r in reports if r['event']['object_id']==event_ref['object_id']);roles=parties(asked)
         mine=('Company',company_ref['object_id'])
         # The contract of one company was scaled against the accounts of another, and of its customer.
         if roles and mine not in roles:raise ValueError('company_ref is not a participant of this event. Pass the company that earns the contract, from the participants of the event row.')
-        if roles.get(mine)=='CUSTOMER':raise ValueError('company_ref is the customer of this contract. Pass the company that earns it.')
+        if 'CUSTOMER' in roles.get(mine,()) and 'SUPPLIER' not in roles[mine]:raise ValueError('company_ref is the customer of this contract. Pass the company that earns it.')
+        # No participant is stored for some events. The estimate is still made, and says that the company's part is the caller's word.
+        unconfirmed=None if roles else 'This event stores no participants, so the data does not confirm that this company earns the contract. Say that the company is taken from the report text.'
         # Two contracts of one company on one day are two events of one type and date, and the amount and period of
         # one are not the other's. A report is this contract when the data puts it in the thread of the event asked
         # for, or when it names one of its counterparties. A report that shows neither is not read: a missing
@@ -170,6 +180,7 @@ class FinancialTools:
             'estimate':estimate,
             'most_sensitive_assumption':max(swing,key=swing.get) if max(swing.values())>0 else 'none varied: pass a low and a high value to see the range',
             **({'fund_weight_not_found':weight_missing} if weight_missing else {}),
+            **({'company_not_confirmed':unconfirmed} if unconfirmed else {}),
             **({'same_day_reports_of_other_contracts_not_used':total-len(reports)} if total>len(reports) else {}),
             **({'other_reported_amounts':[won_text(v) for v in other_values]} if other_values else {}),
             'confirmed_inputs':{'contract_value':won_text(value/share),'reports_of_this_event':len(reports),'last_full_year':year,'revenue':won_text(revenue),'operating_profit':won_text(profit),
@@ -242,22 +253,23 @@ class FinancialTools:
         if self.tools.check_date(start_date)>self.tools.check_date(end_date):raise ValueError('Invalid dates')
         items=self.graph.nodes('MacroObservation',query=query,filters={'seriesId':series_ids} if series_ids else {},
             where='n.observationDate>=date($start) AND n.observationDate<=date($end)',parameters={'start':start_date,'end':end_date})
-        if not items and (query or series_ids):
+        scope={'dataset_kind':'macro_observations','start_date':start_date,'end_date':end_date}
+        present={item['properties'].get('seriesId') for item in items}
+        if (not items and query) or any(s not in present for s in series_ids or []):
             # Series are named in English ("USD/KRW exchange rate"), so a Korean word matched nothing and read as no data.
             stored,_=self.series()
             known={row['series_id'] for row in stored['items']}
-            named=[row for row in stored['items'] if query and (query in row['series_id'] or query in (row['name'] or ''))]
-            if (query and not named) or any(s not in known for s in series_ids or []):
+            named=[row for row in stored['items'] if query and not items and (query in row['series_id'] or query in (row['name'] or ''))]
+            if (query and not items and not named) or any(s not in known for s in series_ids or []):
                 raise ValueError('No macro series matches '+repr(query or series_ids)+'. Stored series: '
                     +'; '.join(f"{row['series_id']} ({row['name']}, {row['first_date']}..{row['last_date']})" for row in stored['items'])
                     +'. This is a wrong argument, not missing data; repeat with series_ids from this list.')
             # The series is stored and the range holds none of it: a weekend, or days before the series begins.
-            asked=[row for row in stored['items'] if row in named or row['series_id'] in (series_ids or [])]
-            return self.tools.result([],scope={'dataset_kind':'macro_observations','start_date':start_date,'end_date':end_date,
-                'no_observation_in_range':'These series are stored but have no observation between the two dates: '
-                    +'; '.join(f"{row['series_id']} ({row['first_date']}..{row['last_date']})" for row in asked)})
+            asked=[row for row in stored['items'] if row in named or (row['series_id'] in (series_ids or []) and row['series_id'] not in present)]
+            scope['no_observation_in_range']=('These series are stored but have no observation between the two dates: '
+                +'; '.join(f"{row['series_id']} ({row['first_date']}..{row['last_date']})" for row in asked))
         items=one_per_figure(items,('seriesId','observationDate'),'availableAt')
-        return self.tools.result(items,scope={'dataset_kind':'macro_observations','start_date':start_date,'end_date':end_date},limit=limit,table='ids')
+        return self.tools.result(items,scope=scope,limit=limit,table='ids')
 
     def observation(self,ref,identifier):
         data=self.tools.store.reference(ref,'dataset')
