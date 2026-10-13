@@ -216,6 +216,8 @@ export interface EtfLedgerRow {
 export interface AnalysisFailures {
   kind: 'outlook' | 'movement';
   failed_etfs: string[];
+  /** 동봉 스냅샷이 이 항목을 목으로 채웠는가 — 실 응답에는 없다. 위반의 `mock` 으로 전파된다 */
+  mock?: boolean;
 }
 
 export interface EtfLedger {

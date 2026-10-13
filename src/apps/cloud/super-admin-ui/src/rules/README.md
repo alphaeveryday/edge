@@ -65,7 +65,7 @@ import 에 확장자를 붙인다.
    그래서 `canRun` 목록을 "evaluated:false 인 규칙의 전부"로 읽으면 안 된다.
    동봉 스냅샷 기준 실측: **`evaluated:false` 는 R17~R19 셋**이다 — 스냅샷은 배치 원장만 담고
    실시간 세션 축은 화면이 `/sources/minute` 응답을 실어 줄 때만 채워진다. 나머지는 evaluated:true
-   이고, 그중 목으로 채워진 것이 `depends_on_mock`(R07·R08·R11·R16 — R12 는 evaluated:true
+   이고, 그중 목으로 채워진 것이 `depends_on_mock`(R07·R08·R11·R15·R16 — R12 는 evaluated:true
    지만 목이 아니고, R07 은 canRun 이 없지만 목이다) — **MOCK 배지 수 = 남은 계측 부채**.
 4. **§5 예시에 없는 필드** — 전부 "명세가 요구한 성질을 기계 검증할 수 있게" 붙인 것이다.
    - `violations[].absorbed_into` — 흡수된 위반이 리포트에서도 지워지지 않았음을 뿌리 사건 키로 증명.

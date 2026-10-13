@@ -921,6 +921,15 @@ test('R15 분석 실패 — 끝내 완료하지 못한 ETF 를 종류별 위반�
   assert.deepEqual(v[1].drill, ['trend', 'metric-a.movement_failed_etfs']);
   assert.match(v[0].why, /끝내 완료되지 않았다/);
 
+  /* 실 응답의 축에는 목 표시가 없다 — 위반도 실측으로 선다. 동봉 스냅샷처럼 목으로 채운 항목은
+   * 그 사실이 위반까지 따라간다(실측으로 둔갑하지 않는다). */
+  assert.deepEqual(v.map((x) => x.mock), [false, false]);
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: ['069500'], mock: true }, { kind: 'movement', failed_etfs: [] }];
+  const mocked = hits(f, 'R15')[0];
+  assert.equal(mocked.mock, true);
+  assert.match(mocked.evidence, /\(목\)/);
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R15')!.depends_on_mock, true);
+
   /* 한 종류만 실패 — 나머지 종류는 위반이 없다 */
   f.analysis_failures = [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: ['229200'] }];
   assert.deepEqual(hits(f, 'R15').map((x) => x.targetId), ['movement.failed']);

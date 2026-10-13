@@ -838,6 +838,7 @@ export const RULES: Rule[] = [
     dep: '이 응답에 v2 분석 실패 축이 없다 — 그 축을 안 싣는 배포본이다',
     source: 'DB_LEDGER',
     canRun: (f) => f.analysis_failures != null,
+    mockBacked: (f) => (f.analysis_failures ?? []).some((a) => a.mock),
     run: (f) =>
       (f.analysis_failures ?? [])
         .filter((a) => a.failed_etfs.length > 0)
@@ -852,7 +853,8 @@ export const RULES: Rule[] = [
             unit: 'ETF',
             why: `${label}이 그날 실패한 뒤 끝내 완료되지 않았다 — 다시 돌아 완료된 ETF 는 세지 않는다`,
             list: a.failed_etfs,
-            evidence: a.kind === 'outlook' ? 'outlook_analyses' : 'movement_analyses',
+            mock: !!a.mock,
+            evidence: (a.kind === 'outlook' ? 'outlook_analyses' : 'movement_analyses') + (a.mock ? '(목)' : ''),
             drill: ['trend', `metric-a.${a.kind}_failed_etfs`] as [string, string],
           };
         }),
