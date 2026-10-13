@@ -43,6 +43,8 @@
 
 > **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
 
+- [포트폴리오 관리자 대시보드 설계](design/portfolio-admin.md): 별도 관리자 인증, 활동 집계, 사용자 입력 조회의 구현 전 검토안.
+
 ## 읽는 순서
 1. [context.md](context.md) — 제품이 무엇이고 왜 피벗했는지, 컴포넌트 경계
 2. [scope.md](scope.md) — 무엇을 만들지 않는지
