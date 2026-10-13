@@ -85,7 +85,8 @@ def make_server(schemas: list[dict], call):
 async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     output_schema: dict, artifacts: Path, key: str, model: str,
                     timeout_seconds: int = 300, client_factory=ClaudeSDKClient, skills: tuple[str, ...] = (),
-                    optional_skills: tuple[str, ...] = (), resume: bool = False) -> dict:
+                    optional_skills: tuple[str, ...] = (), resume: bool = False,
+                    compare_explanations: bool = False, final_check=None) -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -102,6 +103,9 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         skills: Skills the task always uses; their text is given with the task.
         optional_skills: Skills the agent may open when it needs them. With neither, the agent has only the
             base rules and the task prompt and is never told that skills exist.
+        compare_explanations: Require a recorded question with competing explanations before submission.
+        final_check: Optional callable(final) returning a repair message or None. A defect the schema cannot
+            express (a cited ID that does not exist) is sent back to the same conversation, at most twice.
         resume: Restore interrupted notes and TODOs with identical original observations.
 
     Returns:
@@ -120,11 +124,13 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     def encode(value):
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
+    repairs = 0
     server, allowed = make_server(schemas, call)
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
         workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
         session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
+        session.compare_explanations = compare_explanations
         source_context = WorkContext(initial)
         prompt = session.system_prompt(prompt)
         query_input = {'workspace_instructions': {'path': 'AGENTS.md',
@@ -188,6 +194,12 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                         final = value
                     if final is None:
                         raise ValueError('SDK ended without a final result')
+                    problem = final_check(final) if final_check else None
+                    if problem and repairs < 2:
+                        # One mistyped evidence ID should cost a correction, not the whole investigation.
+                        repairs += 1
+                        await client.query(problem)
+                        continue
                     continuation = session.continuation()
                     if continuation is None:
                         (artifacts / 'response.json').write_text(encode(final), encoding='utf-8')

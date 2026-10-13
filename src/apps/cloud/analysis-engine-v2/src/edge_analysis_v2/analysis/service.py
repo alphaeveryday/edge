@@ -211,7 +211,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         response = asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
             schemas=schemas,call=call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
             artifacts=artifacts,key=key,model=model,skills=TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,
-            timeout_seconds=600 if kind=='outlook' else 300))
+            timeout_seconds=600 if kind=='outlook' else 300,compare_explanations=kind=='outlook'))
         if kind == 'outlook':
             issue = response['issue_detail']
             metrics = project_factor_metrics(factor_output, context['etf_code'])

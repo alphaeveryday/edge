@@ -1,7 +1,7 @@
 {
-  "version": 105,
-  "summary": "지시문을 기본 규칙(base.md)과 스킬로 재구성: 조사 규칙은 cause-investigation, 작성 원칙은 analysis-report-writing 스킬로 옮기고 호출자가 작업의 스킬을 선언함",
-  "source_digest": "cf7f9e4770c840600e124241c5885d7e3eaaa3aaf093d62203c156f56621361a",
+  "version": 106,
+  "summary": "질문 목록이 경쟁 설명(explanations)과 닫는 이유(closure·answer)를 갖고, 전망은 경쟁 설명이 있는 질문을 요구함. 마지막 답의 인용 결함은 같은 대화에서 두 번까지 고치게 함",
+  "source_digest": "eb37a4fc89bc144e40bcfca8b93827b7aedb0333683ce52e51585eda854df675",
   "history": [
     {
       "version": 1,
@@ -522,6 +522,11 @@
       "version": 104,
       "summary": "그래프 도구 30개를 dev로 옮김: 로컬 리뷰 지적을 반영하고 derive_fourth_quarter를 뺌. 판정 계약과 릴리스 기록을 dev에 둠",
       "source_digest": "2077072b90665d9880abd0aeec4634d15adc84afb12f79113fe3173c55b6cb74"
+    },
+    {
+      "version": 105,
+      "summary": "지시문을 기본 규칙(base.md)과 스킬로 재구성: 조사 규칙은 cause-investigation, 작성 원칙은 analysis-report-writing 스킬로 옮기고 호출자가 작업의 스킬을 선언함",
+      "source_digest": "cf7f9e4770c840600e124241c5885d7e3eaaa3aaf093d62203c156f56621361a"
     }
   ]
 }

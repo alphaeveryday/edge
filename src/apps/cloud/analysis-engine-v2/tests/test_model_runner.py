@@ -335,3 +335,28 @@ def test_an_overlong_final_answer_is_never_accepted(tmp_path):
         asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None,
             output_schema=schema, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
     assert not (tmp_path/'response.json').exists()
+
+
+def test_a_final_answer_the_caller_rejects_is_sent_back_twice_at_most_then_returned_for_the_caller_to_fail(tmp_path):
+    # WHY: three benchmark runs were lost because one of ten claims cited a mistyped evidence ID.
+    queries = []
+    class Client:
+        def __init__(self, *, options):
+            self.options = options
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def query(self, text):
+            queries.append(text)
+        async def receive_response(self):
+            self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed', **ANSWERED}])
+            yield ResultMessage(structured_output={'summary': 'fixed' if len(queries) == 2 else 'bad id'})
+    check = lambda final: None if final['summary'] == 'fixed' else 'claims[3] cites an unknown ID'
+    result = asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None, output_schema=SCHEMA,
+        artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client, final_check=check))
+    assert result == {'summary': 'fixed'} and queries[1] == 'claims[3] cites an unknown ID'
+    queries.clear()
+    stubborn = asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None, output_schema=SCHEMA,
+        artifacts=tmp_path / 'again', key='test-secret', model='deepseek-flash', client_factory=Client, final_check=lambda final: 'still wrong'))
+    assert len(queries) == 3 and stubborn == {'summary': 'bad id'}   # the caller's own check then fails the run
