@@ -24,7 +24,6 @@ services:
       PORTFOLIO_ORIGIN: https://etforca.com
       PORTFOLIO_COOKIE_SECURE: "1"
       PORTFOLIO_ORIGIN_SECRET: ${PORTFOLIO_ORIGIN_SECRET}
-      PORTFOLIO_ADMIN_PASSWORD_SHA256: ${PORTFOLIO_ADMIN_PASSWORD_SHA256}
     mem_limit: 256m
     read_only: true
     tmpfs: [/tmp]
@@ -32,6 +31,28 @@ services:
     security_opt: [no-new-privileges:true]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    depends_on:
+      db: {condition: service_healthy}
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  admin:
+    build: ../
+    restart: unless-stopped
+    command: ["uvicorn", "edge_portfolio.admin_app:app", "--host", "0.0.0.0", "--port", "8094", "--no-access-log"]
+    ports: ["127.0.0.1:18080:8094"]
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
+      AWS_EC2_METADATA_DISABLED: "true"
+    volumes: ["../admin-ui:/app/admin-ui:ro"]
+    mem_limit: 192m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8094/health',headers={'Host':'localhost:18080'}))"]
       interval: 5s
       timeout: 3s
       retries: 24
