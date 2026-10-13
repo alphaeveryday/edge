@@ -15,7 +15,7 @@ export class ApiError extends Error { constructor(public status: number, message
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch('/api/portfolio/admin' + path, { ...init, signal: init?.signal ?? AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', ...init?.headers } });
   if (!response.ok) {
-    const messages: Record<number, string> = { 401: '관리자 아이디와 비밀번호를 확인해 주세요.', 429: '로그인 시도가 많습니다. 15분 후 다시 시도해 주세요.', 503: path === '/login' ? '관리자 자격이 아직 설정되지 않았습니다.' : '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.', 404: '기록을 찾을 수 없습니다.' };
+    const messages: Record<number, string> = { 403: 'SSM 연결 주소를 확인해 주세요.', 503: '서버에 연결하지 못했습니다.', 404: '기록을 찾을 수 없습니다.' };
     throw new ApiError(response.status, messages[response.status] || '불러오지 못했습니다. 연결 상태를 확인해 주세요.');
   }
   return response.json();

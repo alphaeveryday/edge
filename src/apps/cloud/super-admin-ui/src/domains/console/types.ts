@@ -25,6 +25,12 @@ export interface ConsoleFactsDto {
   chain?: ChainDto;
   /** 나중에 붙은 축 — 롤백·UI 선배포 때는 부재할 수 있다. */
   etfLedger?: EtfLedgerDto;
+  /**
+   * 조회일에 v2 분석이 끝내 완료되지 못한 ETF(ALPHA-1291). 항목은 `outlook`·`movement` 둘이다.
+   * `failedEtfs` 는 그날 그 종류의 분석에 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다.
+   * **옵셔널이다** — 이 축을 안 싣는 API 에서는 오지 않고, 그때 R15 는 `못 돎` 이다.
+   */
+  analysisFailures?: { kind: AnalysisTrendKind; failedEtfs: string[] }[];
   meta: MetaDto;
 }
 
@@ -38,6 +44,32 @@ export interface EntityResolutionTrendPointDto {
   totalArguments: number;
   resolvedArguments: number;
   rate: number | null;
+}
+
+export type AnalysisTrendKind = 'outlook' | 'movement';
+
+/**
+ * v2 분석(전망·가격변동)의 최근 일별 건수(ALPHA-1290). `kinds` 는 항상 두 종류다.
+ * `points` 는 **분석 행이 있던 날짜만** 담는다 — 없는 날은 0 이 아니라 기록이 없는 날이다.
+ */
+export interface AnalysisTrendDto {
+  from: string;
+  to: string;
+  kinds: { kind: AnalysisTrendKind; points: AnalysisTrendPointDto[] }[];
+}
+
+/**
+ * `running` 은 실패가 아니라 끝나지 않은 건수다. `completedEtfs` 는 그날 완료 행이 있는 ETF 종
+ * 수이고, `failedEtfs` 는 **그날 실패 행이 있고 완료 행이 하나도 없는** ETF 종 수다(ALPHA-1291) —
+ * 실패했다가 같은 날 다시 돌아 완료된 ETF 는 들어 있지 않다.
+ */
+export interface AnalysisTrendPointDto {
+  date: string;
+  completed: number;
+  failed: number;
+  running: number;
+  completedEtfs: number;
+  failedEtfs: number;
 }
 
 /** 장중 FIRE 코호트가 분석·게시 단계에 도달한 최근 일별 실측. */
@@ -126,6 +158,11 @@ export interface OutputDto {
   today: number;
   base: number | null;
   unit: string;
+  /**
+   * `base` 를 낸 기준일별 건수(날짜 오름차순, ALPHA-1289). **조회일은 들어 있지 않다.**
+   * 선택 필드다 — 이 필드가 없는 API 에서는 오지 않는다. `count` 0 은 실측이다.
+   */
+  history?: { date: string; count: number }[];
 }
 
 export interface QueueDto {

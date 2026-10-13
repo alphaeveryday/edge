@@ -9,7 +9,7 @@
  * 반드시 화면에 낸다 — 안 내면 운영자가 오늘 값으로 읽는다. 날짜를 밖에서 주지 않고 여기서
  * 함께 내보내는 이유가 그것이다(값과 그 값이 언제 것인지는 갈리면 안 된다).
  *
- * ⚠️ JSX 를 쓰지 않는다 — `node --test` 가 import 해야 `trendCatalog` 의 변이가 잡힌다.
+ * ⚠️ JSX 를 쓰지 않는다 — `node --test` 가 import 할 수 있어야 한다.
  */
 import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
 
@@ -57,11 +57,7 @@ export const FUNNEL: FunnelStep[] = SNAPSHOT.news_funnel;
 /** 이 퍼널이 관측된 날 — **응답의 거래일이 아니다.** 화면·지표가 이 날짜를 그대로 밝힌다 */
 export const FUNNEL_DATE: string = SNAPSHOT.meta.today;
 
-/** 스냅샷 출처를 한 문장으로 — 화면과 추이 지표가 **같은 문장**을 쓴다(두 벌이면 갈린다) */
+/** 스냅샷 출처를 한 문장으로 */
 export const FUNNEL_ORIGIN =
   `뉴스 퍼널은 이 응답 밖 축이라 앱에 동봉된 ${FUNNEL_DATE} 스냅샷입니다 — ` +
   `같은 화면의 다른 값과 날짜가 다를 수 있고, 오늘의 관측이 아닙니다.`;
-
-/** 단계 접두사로 값 하나 — 없으면 `null`(0 이 아니다) */
-export const funnelValue = (stage: string): number | null =>
-  FUNNEL.find((s) => s.stage.startsWith(stage))?.value ?? null;

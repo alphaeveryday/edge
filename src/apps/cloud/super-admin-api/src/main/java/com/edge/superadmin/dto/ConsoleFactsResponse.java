@@ -43,7 +43,25 @@ import java.util.List;
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
-		ChainResponse chain, EtfLedgerResponse etfLedger, MetaResponse meta) {
+		ChainResponse chain, EtfLedgerResponse etfLedger,
+		List<AnalysisFailureResponse> analysisFailures, MetaResponse meta) {
+
+	/**
+	 * 조회일에 v2 분석이 <b>끝내 완료되지 못한</b> ETF(R15, ALPHA-1291). 항목은 항상
+	 * {@code outlook}·{@code movement} 둘이고 이 순서다. {@code failedEtfs} 는 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다(코드 오름차순). 실패했다가 같은 날 다시 돌아
+	 * 완료된 ETF, running 만 있는 ETF 는 들어 있지 않다. 빈 배열은 "그런 ETF 가 없다"이다.
+	 */
+	public record AnalysisFailureResponse(String kind, List<String> failedEtfs) {
+
+		private static final List<String> KINDS = List.of("outlook", "movement");
+
+		public static List<AnalysisFailureResponse> from(
+				List<com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow> rows) {
+			return KINDS.stream().map(kind -> new AnalysisFailureResponse(kind, rows.stream()
+					.filter(r -> r.kind().equals(kind)).map(r -> r.etfCode()).toList())).toList();
+		}
+	}
 
 	public record EtfLedgerResponse(List<EtfLedgerRowResponse> rows) {
 		public static EtfLedgerResponse from(List<EtfAnalysisRow> rows) {
@@ -140,11 +158,21 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 *
 	 * <p>{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고, 표시 문자열은 만들지 않는다
 	 * (건수는 raw 로 내리고 포맷은 UI 소관 — 이 응답의 규약).
+	 *
+	 * <p>{@code history} 는 {@code base} 를 낸 기준일별 건수다(날짜 오름차순). 조회일은 들어 있지
+	 * 않고, {@code base} 가 null 인 날에도 실린다. 기준일 후보가 없으면 빈 배열이다.
 	 */
-	public record OutputResponse(String id, String label, long today, Double base, String unit) {
+	public record OutputResponse(String id, String label, long today, Double base, String unit,
+			List<OutputDayResponse> history) {
+
+		/** 기준일 하루 — {@code count} 0 은 실측이다. */
+		public record OutputDayResponse(String date, long count) {
+		}
 
 		public static OutputResponse from(OutputRow o) {
-			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit());
+			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit(),
+					o.history().stream()
+							.map(d -> new OutputDayResponse(d.date().toString(), d.count())).toList());
 		}
 	}
 

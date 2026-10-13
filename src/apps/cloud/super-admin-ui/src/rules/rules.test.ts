@@ -26,6 +26,7 @@ function emptyFacts(): Facts {
     outputs: [],
     boundary: { published_without_delivery: 0, delivery_now_nonpublished: 0 },
     etf_ledger: { rows: [] },
+    analysis_failures: [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: [] }],
     runbook: {},
     meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
   };
@@ -44,6 +45,7 @@ function bareFacts(): Facts {
   delete f.chain;
   delete f.queues;
   delete f.etf_ledger;
+  delete f.analysis_failures;
   delete f.minute;
   delete f.runbook;
   delete f.meta.aws;
@@ -612,7 +614,7 @@ test('R12 DLQ 유실 — dlq>0 만 위반, 0은 "봤는데 0"으로 조용', () 
 test('R13 산출 이상 — ±25% 이상만, 기준(base) 없으면 평가 대상 아님', () => {
   const f = emptyFacts();
   f.outputs = [
-    { id: 'half', label: '게시', today: 16, base: 32, unit: '종' }, // -50%
+    { id: 'half', label: '전망', today: 16, base: 32, unit: '종' }, // -50%
     { id: 'near', label: '문서', today: 76, base: 100, unit: '건' }, // -24%
     /* 경계 정확히 ±25% — 계약이 "이상"이라 **걸려야 한다**. 이 두 줄이 없으면 `>= 0.25` 를
      * `> 0.25` 로 바꿔도 전건 초록이라, 임계값이 조용히 한 칸 옮겨간다. 양쪽 부호를 다 둔다. */
@@ -681,7 +683,7 @@ test('R13 note — 관측된 0 과 표본 부재를 같은 사유로 접지 않�
   /* ⚠️ `base: null` 의 사유는 **셋**이고 와이어는 하나로 온다(표본 부재·장 안 서는 날·그 날이
    * 안 끝남 — ALPHA-946). 그래서 이 사유는 갈래를 **나열**하고 어느 하나를 단정하지 않는다.
    * `/표본 없음/` 으로 못 박고 있었는데, 그 문면이면 지난 주말 조회에서 표본이 멀쩡한
-   * `o.pub`·`o.trig` 에 거짓 사유가 붙는다. 재는 것은 "기준이 없다고 말하되 원인을 지목하지
+   * `o.movement`·`o.trig` 에 거짓 사유가 붙는다. 재는 것은 "기준이 없다고 말하되 원인을 지목하지
    * 않는가" 다. */
   assert.match(reasonOf('표본없음'), /기준이 없다/);
   /* 재는 것은 **나열했는가** 다. "표본 탓으로 단정하지 마라"를 부정형 정규식으로 썼더니
@@ -750,13 +752,13 @@ test('R13 경계 — 기준(base)이 있는 산출이 하나도 없으면 evalua
   /* 실 응답은 일별 계열을 주는 데가 없어 이 축이 통째로 빈다. canRun 이 없으면 R13 이
    * "전부 분포 안"이라고 말한다 — 오늘 값이 뭐든. */
   const f = emptyFacts();
-  f.outputs = [{ id: 'o', label: '게시', today: 16, base: null, unit: '종' }];
+  f.outputs = [{ id: 'o', label: '전망', today: 16, base: null, unit: '종' }];
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
   assert.equal(rr.evaluated, false);
   assert.equal(rr.notRun, 'axis');
   /* `base: 0` 은 기준이 아니다 — 나눗셈이 성립하지 않아 `run()` 도 거른다. `canRun` 만
    * `!= null` 로 느슨해지면 '평가됨 · 위반 0'("분포 안")이 서고 오늘 값이 뭐든 조용하다. */
-  f.outputs = [{ id: 'zero', label: '게시', today: 999, base: 0, unit: '종' }];
+  f.outputs = [{ id: 'zero', label: '전망', today: 999, base: 0, unit: '종' }];
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
   f.outputs.push({ id: 'p', label: '문서', today: 100, base: 100, unit: '건' });
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R13')!.evaluated, true);
@@ -795,7 +797,7 @@ test('검증 안 된 응답이 판정을 통과하지 못한다 — `NaN`·타�
   /* R13 — 기준이 NaN 이면 기준이 아니다. `today` 가 NaN 이면 판정 자체가 성립 안 하므로
    * 위반이 아니라 **note 가 그 산출을 밝혀야** 한다(안 밝히면 봤다고 착각한다) */
   const nanOut = emptyFacts();
-  nanOut.outputs = [{ id: 'x', label: '게시', today: 10, base: NaN, unit: '종' }];
+  nanOut.outputs = [{ id: 'x', label: '전망', today: 10, base: NaN, unit: '종' }];
   assert.equal(buildReport(nanOut, NOW).rules.find((r) => r.id === 'R13')!.evaluated, false);
 
   /* 기준은 있는데 오늘 값이 수가 아닌 산출도 **판정 불가**다 — 그것뿐이면 못 돎이지
@@ -897,40 +899,68 @@ test('R14 전달 정합 — 두 방향 다 P0 다. 시드 기록은 표시일 �
   assert.ok(!bare.why.includes('기록:'), '기록이 없는데 기록 문구가 붙었다');
 });
 
-test('R15 ETF 분석 실패 — FAILED 행들이 위반 1건으로 집계되고 목록이 남는다', () => {
+test('R15 분석 실패 — 끝내 완료하지 못한 ETF 를 종류별 위반으로 세운다', () => {
+  /* 서버가 준 목록이 곧 "그날 실패 행이 있고 완료 행이 하나도 없는 ETF"다(실패했다가 다시 돌아
+   * 완료된 ETF 는 거기 없다). 규칙은 그 목록을 종류별로 한 건씩 세운다 — 전망과 가격변동 분석은
+   * 다른 배치·다른 표라 한 사건으로 뭉치면 어느 쪽이 깨졌는지 안 보인다. */
   const f = emptyFacts();
-  f.etf_ledger = {
-    rows: [
-      { etf: 'a', name: 'A', triggered: true, outcome: 'FAILED', error: 'NaN weight' },
-      { etf: 'b', name: 'B', triggered: true, outcome: 'FAILED', error: 'NaN weight' },
-      { etf: 'c', name: 'C', triggered: true, outcome: 'FULFILLED' },
-    ],
-    mock: true,
-  };
+  f.analysis_failures = [
+    { kind: 'outlook', failed_etfs: ['069500'] },
+    { kind: 'movement', failed_etfs: ['091160', '229200', '305720'] },
+  ];
   const v = hits(f, 'R15');
-  assert.equal(v.length, 1);
-  assert.equal(v[0].metric, 2);
-  /* 룰 단위 런북(`R15`)으로 폴백하더라도 사건 키는 식별자여야 한다 — R14 와 같은 이유 */
-  assert.equal(v[0].targetId, 'analyze.failed');
-  assert.deepEqual(v[0].list, ['A', 'B']);
-  /* 원장이 사유를 안 남긴 실패 — R14 와 같은 이유로 이 갈래를 밟는 픽스처가 있어야 한다.
-   * `error: null` 을 "오류가 없다"로 읽으면 실패인데 사유가 빈 채로 화면에 선다. */
-  f.etf_ledger = {
-    rows: [{ etf: 'd', name: 'D', triggered: true, outcome: 'FAILED', error: null }],
-    mock: true,
-  };
-  assert.match(hits(f, 'R15')[0].why, /기록이 없다/, '사유 부재를 사유 없음으로 그리지 않는다');
+  assert.equal(v.length, 2);
+  assert.deepEqual(v.map((x) => [x.target, x.targetId, x.metric]), [
+    ['전망', 'outlook.failed', 1],
+    ['가격변동 분석', 'movement.failed', 3],
+  ]);
+  assert.deepEqual(v[1].list, ['091160', '229200', '305720']);
+  /* 사건 키가 종류마다 달라야 한다 — 같으면 vid 충돌로 규칙 전체가 못 돎이 된다 */
+  assert.equal(new Set(v.map((x) => x.vid)).size, 2);
+  /* 추이 화면의 그 종류 카드로 간다 */
+  assert.deepEqual(v[1].drill, ['trend', 'metric-a.movement_failed_etfs']);
+  assert.match(v[0].why, /끝내 완료되지 않았다/);
 
-  f.etf_ledger = { rows: [{ etf: 'c', name: 'C', triggered: true, outcome: 'FULFILLED' }] };
+  /* 실 응답의 축에는 목 표시가 없다 — 위반도 실측으로 선다. 동봉 스냅샷처럼 목으로 채운 항목은
+   * 그 사실이 위반까지 따라간다(실측으로 둔갑하지 않는다). */
+  assert.deepEqual(v.map((x) => x.mock), [false, false]);
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: ['069500'], mock: true }, { kind: 'movement', failed_etfs: [] }];
+  const mocked = hits(f, 'R15')[0];
+  assert.equal(mocked.mock, true);
+  assert.match(mocked.evidence, /\(목\)/);
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R15')!.depends_on_mock, true);
+
+  /* 한 종류만 실패 — 나머지 종류는 위반이 없다 */
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: ['229200'] }];
+  assert.deepEqual(hits(f, 'R15').map((x) => x.targetId), ['movement.failed']);
+
+  /* 실패 ETF 가 없으면 조용하다 — 그리고 그때는 **평가된** 조용함이다 */
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: [] }];
   assert.equal(hits(f, 'R15').length, 0);
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R15')!.evaluated, true);
 });
 
-test('R15 경계 — per-ETF 원장 계측이 없으면 evaluated:false (계측 없음 ≠ 0)', () => {
+test('🔴 R15 는 옛 엔진의 ETF 원장을 읽지 않는다 — 멈춘 표의 실패 행으로 서지도, 빈 표로 안심하지도 않는다', () => {
   const f = emptyFacts();
-  delete f.etf_ledger;
+  f.etf_ledger = { rows: [{ etf: 'a', name: 'A', triggered: true, outcome: 'FAILED', error: 'NaN weight' }] };
+  assert.equal(hits(f, 'R15').length, 0, '옛 원장의 FAILED 로 위반을 세웠다');
+  /* 반대 방향: 옛 원장이 비어 있어도 v2 축의 실패는 선다 */
+  f.etf_ledger = { rows: [] };
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: ['069500'] }, { kind: 'movement', failed_etfs: [] }];
+  assert.equal(hits(f, 'R15').length, 1);
+});
+
+test('🔴 R15 경계 — v2 분석 실패 축이 없는 옛 응답에서는 못 돎이다 (위반 0건으로 읽히면 안 된다)', () => {
+  /* UI 가 API 보다 먼저 배포되면 그 축이 없는 응답을 받는다. 옛 원장(`etf_ledger`)이 실려 있어도
+   * 그걸로 대신 판정하지 않는다 — 그 표는 10-01 에 멈췄다. */
+  const f = emptyFacts();
+  delete f.analysis_failures;
+  f.etf_ledger = { rows: [{ etf: 'a', name: 'A', triggered: true, outcome: 'FAILED' }] };
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R15')!;
   assert.equal(rr.evaluated, false);
   assert.equal(rr.violations, 0);
+  assert.equal(rr.notRun, 'axis');
+  assert.match(rr.note ?? '', /v2 분석 실패 축이 없다/);
 });
 
 test('R16 재시도 소진 — 상한 도달+미귀결만, FULFILLED·정책 미선언은 아님', () => {
@@ -1400,7 +1430,7 @@ test('정렬 3순위 — 수치는 크기순이다. 부호가 아니라 절댓�
 
 test('리포트 — evaluated:false 와 violations:0 이 구분되고, 흡수 위반에 absorbed_into 가 붙는다', () => {
   const f = emptyFacts();
-  delete f.etf_ledger; // R15 못 돈다
+  delete f.analysis_failures; // R15 못 돈다
   f.queues = [{ name: 'clean', visible: 0, in_flight: 0, dlq: 0, subscribers: ['svc'] }]; // R12 돌았는데 0
   const runId = 'news:2026-08-03T15:30';
   f.runs = [run({ id: runId, lane: 'news', ledger_status: 'TIMED_OUT' })];
@@ -1699,16 +1729,16 @@ test('계측 공백으로 못 도는 규칙 목록이 문서의 티켓 표와 �
   /* R10·R03 이 여기 있었다 — ALPHA-979 조각 1·2가 `chain`·`aws_status` 를 배선하며 빠졌다.
    * 티켓 행은 남고 `queues[]` 조각 3만 남았다. 그래서 이 목록과 문서의
    * 표는 **행 단위로 안 맞는다** — 아래 대조는 "티켓 키가 문서에 있는가"까지다. */
-  const BLOCKED = ['R07', 'R08', 'R11', 'R15', 'R16'];
+  const BLOCKED = ['R07', 'R08', 'R11', 'R16'];
   /* `dep` 이 있어도 **계측 공백이 아닌** 규칙들. 판별자는 "그 축이 배선되면 사라지는가"다.
    * · R13 — "오늘 판정할 산출이 없다"는 날마다 갈리는 조건부 사유다.
-   * · R03·R10·R12 — 축은 배선됐다. 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
+   * · R03·R10·R12·R15 — 축은 배선됐다(R15 는 v2 분석 실패 축, ALPHA-1291). 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
    *   계측이 아니라 배포 시차다. ⚠️ **도달 가능한 갈래다** — 검증 경계가 이 축만 옵셔널로
    *   받으므로(`consoleFacts.test.ts` 의 「체인 축이 통째로 없는 응답은 거부하지 않는다」)
    *   API 롤백 한 번에 실제로 이 상태가 된다.
    * 여기 넣는 것이 세는 것보다 나은 이유: 같이 세면 계측 공백의 규모가 부풀려지고, 그 수가
    * 그대로 "아무도 안 보는 축이 몇 개인가"로 읽힌다. */
-  const CONDITIONAL = ['R13', 'R03', 'R10', 'R12'];
+  const CONDITIONAL = ['R13', 'R03', 'R10', 'R12', 'R15'];
 
   const withDep = RULES.filter((R) => R.dep).map((R) => R.id);
   assert.deepEqual(
@@ -1758,7 +1788,7 @@ test('vid 왕복 — 엔진이 낸 모든 vid 에서 규칙 id 를 되찾을 수
   const f = emptyFacts();
   f.runs = [run({ id: 'news:2026-08-03T15:30', ledger_status: 'TIMED_OUT' })]; // 대상에 콜론
   f.tasks = [task({ task_key: 'LOAD_DOCUMENTS', run_id: 'news:2026-08-03T15:30', task_outcome: 'FAILED' })];
-  f.outputs = [{ id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' }]; // 대상에 점
+  f.outputs = [{ id: 'o.outlook', label: '전망', today: 10, base: 100, unit: '건' }]; // 대상에 점
   f.minute = {
     date: '2026-08-03',
     sessions: [
@@ -1785,8 +1815,8 @@ test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 �
    * 유일성을 보증하는 제약이 없다(`datasets`·`chain.stages` 도 같다). */
   const f = emptyFacts();
   f.outputs = [
-    { id: 'o.pub', label: '게시', today: 10, base: 100, unit: '건' },
-    { id: 'o.pub', label: '게시(중복 행)', today: 20, base: 100, unit: '건' },
+    { id: 'o.outlook', label: '전망', today: 10, base: 100, unit: '건' },
+    { id: 'o.outlook', label: '전망(중복 행)', today: 20, base: 100, unit: '건' },
   ];
   /* 다른 규칙이 낼 위반 — 충돌한 규칙 때문에 **이게 사라지면 안 된다**. 던져서 평가를 통째로
    * 죽이면 파이프라인이 깨진 날 콘솔이 오류 카드 하나가 되고, 정작 볼 사건이 전부 없어진다. */
@@ -1803,7 +1833,7 @@ test('vid 충돌 — 그 규칙만 못 돎으로 세우고 나머지 규칙은 �
    * 없구나"로 읽힌다(계약 §「배선 시 함께」가 막으려던 오독이 한 층 아래로 옮겨간다).
    * 화면은 이 필드로 갈라 그리고, 사유는 호버가 아니라 본문으로 낸다. */
   assert.equal(r13.notRun, 'identity');
-  assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.pub/);
+  assert.match(r13.note ?? '', /사건 식별자 충돌 R13:o\.outlook/);
   /* 계측 부재는 같은 `evaluated:false` 여도 종류가 다르다 — 둘이 구분되지 않으면 이 필드가 무의미하다 */
   assert.equal(rep.rules.find((r) => r.id === 'R17')!.notRun, 'axis'); // minute 축 부재
   /* 충돌한 규칙의 위반은 하나도 안 실린다 — 반쯤 실으면 무엇이 빠졌는지 화면이 못 말한다 */
@@ -1832,7 +1862,7 @@ test('대상 축이 빈 문자열이어도 못 돎이다 (사건 키의 나머�
   /* `targetId: ''` 는 `??` 를 통과해 `R13:` 이라는 정상처럼 보이는 vid 를 만든다. 범위 축만
    * 막으면 같은 뿌리의 구멍이 대상 축에 그대로 남는다 — 위반이 하나면 충돌도 안 난다. */
   const f = emptyFacts();
-  f.outputs = [{ id: '', label: '게시', today: 10, base: 100, unit: '건' }];
+  f.outputs = [{ id: '', label: '전망', today: 10, base: 100, unit: '건' }];
   const r13 = buildReport(f, NOW).rules.find((r) => r.id === 'R13')!;
   assert.equal(r13.evaluated, false, '빈 대상 축이 정상 vid 로 통과했다');
   assert.equal(r13.notRun, 'identity');

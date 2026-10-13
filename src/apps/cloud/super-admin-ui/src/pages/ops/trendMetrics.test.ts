@@ -1,8 +1,8 @@
-/* 지표 판정과 목 계열 (ALPHA-738).
+/* 지표 판정과 카탈로그 계약 (ALPHA-738).
  *
  * 지키는 의도:
  *   · **모든 지표에 ±25% 를 적용하지 않는다** — 완전성·지연·결손 수는 각자의 규칙이 있다.
- *   · 중앙값·정상 범위·편차·판정이 **같은 계열**에서 나온다(따로 들고 있으면 어긋난다).
+ *   · 정상 범위·편차·판정이 **같은 기준**에서 나온다 — 응답의 기준값, 없으면 계열의 중앙값.
  *   · 계측 없음은 정상도 실패도 아니다.
  *   · 판정 문구는 하드코딩이 아니라 구조화 값에서 만들어진다.
  *
@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildSeries, businessDays, evaluateMetric, formatValue } from './trendMetrics.ts';
+import { evaluateMetric, formatValue } from './trendMetrics.ts';
 import type { ComparisonType, Metric } from './trendMetrics.ts';
 import { median } from './trendSeries.ts';
 import { buildMetrics, tradingLag } from './trendCatalog.ts';
@@ -145,24 +145,19 @@ test('중앙값·정상 범위·편차가 모두 같은 계열에서 계산된�
   assert.deepEqual(v.band, [75, 125]);
 });
 
-test('목 계열의 중앙값을 규칙이 쓰는 기준선에 고정할 수 있다', () => {
-  /* 두 화면이 다른 편차를 말하면 안 된다 — pin 이 그 계약이다 */
-  for (const pin of [6122, 31.5, 22, 0.42]) {
-    const s = buildSeries({ today: 1, pin, todayIsMock: true, endDate: '2026-08-03' });
-    assert.equal(median(s.slice(0, -1).map((p) => p.value)), pin, `pin=${pin}`);
-  }
-});
-
-test('계열의 날짜 축은 주말을 건너뛴다', () => {
-  const days = businessDays('2026-08-03', 4);
-  assert.deepEqual(days, ['2026-07-29', '2026-07-30', '2026-07-31', '2026-08-03']);
-});
-
-test('결손 수 계열은 정수이고 음수가 되지 않는다', () => {
-  const s = buildSeries({ today: 4, pin: 0, integer: true, min: 0, todayIsMock: true, endDate: '2026-08-03' });
-  for (const p of s) {
-    assert.ok(Number.isInteger(p.value), `정수: ${p.value}`);
-    assert.ok(p.value >= 0, `음수 아님: ${p.value}`);
+test('응답이 기준값을 주면 한 점만으로도 그 기준에 판정한다 — 과거 점이 필요 없다', () => {
+  const one = flat([70]);
+  const v = evaluateMetric(metric({ series: one, baseline: 100 }));
+  assert.equal(v.kind, 'abnormal');
+  assert.equal(v.expected, 100);
+  assert.equal(v.deltaPct, -30);
+  assert.match(v.basis, /응답 기준값/);
+  /* 기준값이 없으면 한 점으로는 판정하지 않는다 — 오늘 값을 기준으로 삼으면 늘 `정상 범위` 다 */
+  for (const baseline of [undefined, null]) {
+    const none = evaluateMetric(metric({ series: one, baseline }));
+    assert.equal(none.label, '기준 없음');
+    assert.equal(none.actual, 70);
+    assert.equal(none.expected, null);
   }
 });
 
@@ -178,7 +173,8 @@ test('기준일 지연은 두 실측 날짜 사이의 거래일 수다', () => {
 test('네 분류가 모두 지표를 갖는다 — 뉴스가 화면을 대표하지 않는다', () => {
   for (const g of ['batch', 'intraday', 'news', 'analysis'] as const) {
     const n = METRICS.filter((m) => m.group === g).length;
-    assert.ok(n >= 3, `${g} 지표 ${n}개`);
+    /* 값을 응답에서 읽지 못하는 카드는 목록에 두지 않는다 — 그래서 분류당 하한은 2다 */
+    assert.ok(n >= 2, `${g} 지표 ${n}개`);
   }
   const news = METRICS.filter((m) => m.group === 'news');
   assert.ok(news.length <= 3, `뉴스는 2~3개로 줄인다 — ${news.length}개`);
@@ -198,15 +194,6 @@ test('일배치는 데이터셋마다 식별되고 트리거가 대표하지 않
   );
   assert.ok(!batch.some((m) => m.label.includes('트리거')), '트리거는 일배치 대표 지표가 아니다');
   assert.ok(METRICS.some((m) => m.group === 'analysis' && m.label.includes('트리거')), '트리거는 분석 보조로 남는다');
-});
-
-test('공시 관측량은 현재 1분 세션으로 이동한다 — 은퇴한 배치 상세를 가리키지 않는다', () => {
-  const disclosure = METRICS.find((m) => m.id === 'i.disclosures');
-  assert.ok(disclosure, '공시 관측량 지표가 있어야 한다');
-  assert.equal(disclosure.group, 'intraday');
-  assert.match(disclosure.drill.href, /\/minute\?.*dataset=disclosure_minute/);
-  assert.doesNotMatch(disclosure.drill.href, /ds-disclosures/);
-  assert.match(disclosure.help, /고유 신규 공시 수는 아니다/);
 });
 
 test('전달 지표는 하나도 없다', () => {

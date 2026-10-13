@@ -1,5 +1,6 @@
 /* console 도메인 — super-admin-api 연동 구현 (ALPHA-738) */
 import { apiClient } from '../../api/client';
+import { parseAnalysisTrend } from './analysisTrend';
 import { parseEntityResolutionTrend } from './entityResolutionTrend';
 import { parseIntradayAnalysisTrend } from './intradayAnalysisTrend';
 import type { ConsoleRepository } from './repository';
@@ -24,5 +25,10 @@ export const realConsoleRepository: ConsoleRepository = {
     return apiClient
       .get<unknown>(`/console/trends/intraday-analysis?${query.toString()}`)
       .then((value) => parseIntradayAnalysisTrend(value, maxDate, days));
+  },
+  analysisTrend: (maxDate, days = 30) => {
+    const query = new URLSearchParams({ days: String(days) });
+    if (maxDate !== undefined) query.set('maxDate', maxDate);
+    return apiClient.get<unknown>(`/console/trends/analysis?${query.toString()}`).then(parseAnalysisTrend);
   },
 };
