@@ -13,7 +13,7 @@ PRINCIPAL_AMOUNT = re.compile(r'(?:\d[\d,.\s천백십만억]*|[일이삼사오�
 
 
 def principal_declaration(clause):
-    if '정정' in clause and PRINCIPAL_AMOUNT.search(clause):
+    if any(word in clause for word in ('정정', '취소', '철회')) and PRINCIPAL_AMOUNT.search(clause):
         return True  # An unlabeled correction must not reuse a superseded amount.
     if not re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause):
         return False
