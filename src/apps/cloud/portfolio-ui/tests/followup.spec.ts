@@ -64,7 +64,8 @@ test('recovery remains available after the question quota and keeps the original
     if (path.endsWith('/recovered')) return route.fulfill({ json: { id: 'recovered', state: 'succeeded', result: {
       answer: section, status: 'complete', revision: { ...report, scenarios: { status: 'available',
         principal_krw: '1000000', monthly_krw: '0', assumptions: ['미래 수익을 보장하지 않아요.'],
-        rows: [{ annual_return_pct: '0', years: 5, paid_krw: '1000000', future_krw: '1000000' }] },
+        rows: [{ annual_return_pct: '0', years: 5, paid_krw: '1000000', future_krw: '1000000' },
+          { annual_return_pct: '100', years: 50, paid_krw: '1000000', future_krw: '9007199254740993' }] },
         completion: { status: 'complete', tasks: [], missing_inputs: [], missing_research: [] } },
     } } });
     return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
@@ -80,6 +81,7 @@ test('recovery remains available after the question quota and keeps the original
   await page.getByText('보완 분석과 계산표 보기').click();
   await expect(page.locator('.followup-revision .scenario-plan')).toContainText('5년');
   await expect(page.locator('.followup-revision .scenario-plan')).toContainText('1,000,000원');
+  await expect(page.locator('.followup-revision .scenario-plan')).toContainText('9,007,199,254,740,993원');
   expect(modes).toEqual(['question', 'recovery']);
   expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBe('parent');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

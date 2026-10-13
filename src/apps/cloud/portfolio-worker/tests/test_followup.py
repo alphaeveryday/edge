@@ -38,6 +38,32 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
     assert (await answer_question('b' * 1000, report, 'test'))['status'] == 'partial'
 
 
+async def test_no_contribution_followup_overrides_the_saved_monthly_commitment():
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    question = '이번에는 추가 납입 없이 계산해 주세요.'
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상', 'preferences': {'contribution': '매월 10만원'}},
+        'decision': {'funding_text': '매월 10만원'}, 'sources': Evidence.sources}
+    stages, calculated = [], []
+    async def model(payload):
+        if stages[-1] == 'question':
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'], 'decision': {'kind': 'scenario'}})}}]}
+        assert json.loads(payload['messages'][1]['content'])['active_decision']['funding_text'] == question
+        if calculated:
+            result = json.loads(payload['messages'][-1]['content'])
+            assert result['status'] == 'available'
+            assert result['rows'][0]['future_krw'] == '1000000'
+            assert result['monthly_krw'] == '0'
+            raise RuntimeError('ZERO_CONTRIBUTION_CHECKED')
+        calculated.append(1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': json.dumps({'annual_returns': [0], 'years': [5]})}}]}}]}
+    with pytest.raises(RuntimeError, match='ZERO_CONTRIBUTION_CHECKED'):
+        await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
 @pytest.mark.parametrize('supplied', [False, True])
 async def test_separate_contribution_sentence_does_not_invalidate_the_known_principal(supplied):
     import json

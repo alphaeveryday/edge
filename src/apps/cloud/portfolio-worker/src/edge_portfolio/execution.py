@@ -4,6 +4,8 @@ import re
 
 from .contracts import Allocation
 
+NO_CONTRIBUTION = re.compile(r'\s*(?:이번에는\s*)?(?:추가\s*)?(?:납입|입금|투자)(?:금)?\s*없이(?:\s*계산(?:해\s*주세요|해줘|해주세요)?)?[.!?]?\s*')
+
 
 def execution_tool(request, args, decision, catalog):
     from .recommendation import selected_accounts, allocation_error
@@ -58,6 +60,9 @@ def allocate_amounts(total, weights):
 
 
 def resolve_funding(request, decision=None):
+    questions = getattr(request, 'funding_questions', None)
+    if questions and NO_CONTRIBUTION.fullmatch(questions[-1]):
+        return {'additional_krw': Decimal(0), 'monthly_krw': None}
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
     funding = parse_funding(text) if text else None
     if funding:
@@ -120,7 +125,7 @@ def resolve_funding(request, decision=None):
         if separate_note and text not in separate_note and not re.fullmatch(r'매도\s*금지', separate_note):
             scoped_restrictions = True
         ambiguous = scoped_restrictions or len(commitments) > 1 or any(any(word in source for word in ('또는', '미정', '아마', '가능하면', '취소', '철회', '중단', '보류'))
-            or re.search(r'(?:자금|돈|예산).{0,12}(?:없|부족|미확보)|(?:납입|입금|투자|추가)(?:금|금액)?\s*(?:을|를|은|는)?\s*(?:하지\s*(?:않|못)|중단|못|안\s*(?:하|합|할|해|넣|낼|내))', source) for source in funding_contexts)
+            or re.search(r'(?:자금|돈|예산).{0,12}(?:없|부족|미확보)|(?:납입|입금|투자|추가)(?:금|금액)?\s*(?:을|를|은|는)?\s*(?:없|하지\s*(?:않|못)|중단|못|안\s*(?:하|합|할|해|넣|낼|내))', source) for source in funding_contexts)
         if ambiguous or not occurrences or any(re.search(r'(?:약|대략|최대|최소|아마|가능하면)\s*$', before)
                 or re.match(r'\s*(?:정도|내외|가량|쯤|이상|이하|미만|초과|전후|예상|한도|또는|[~±-])', after)
                 or not complete_funding_clause(after)

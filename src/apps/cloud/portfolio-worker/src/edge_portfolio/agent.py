@@ -24,7 +24,7 @@ from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
-from .execution import execution_tool, resolve_funding, TOOL as EXECUTION_TOOL
+from .execution import execution_tool, resolve_funding, NO_CONTRIBUTION, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, stated_principal, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status
@@ -452,7 +452,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     rules[rule.model_dump_json()] = rule
                                 decision.constraints = list(rules.values())
                                 decision.objectives = decision.objectives or inherited.objectives
-                                decision.funding_text = decision.funding_text or inherited.funding_text
+                                decision.funding_text = followup_question if NO_CONTRIBUTION.fullmatch(followup_question or '') else decision.funding_text or inherited.funding_text
                                 if followup_question:
                                     decision.questions = [question for question in decision.questions if question in followup_question] or [followup_question]
                                 # Each extraction is bounded and validated already; merging

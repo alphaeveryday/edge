@@ -5,6 +5,7 @@ from edge_portfolio.scenarios import build_scenarios
 
 @pytest.mark.parametrize('text,expected', [('원금은 1000만원입니다. 5년 뒤 얼마인가요?', 10000000),
     ('원금은 1000만원입니다. 5년 뒤 원금과 이자는 얼마인가요?', 10000000),
+    ('원금은 1000만원? 2000만원? 연 3%로 5년 뒤 얼마인가요?', None),
     ('제 원금은 1억 5000만원이에요.', 150000000), ('원금은 0원입니다.', 0),
     ('원금은 약 1000만원입니다.', None), ('원금은 1000만원이면 좋겠어요.', None),
     ('원금은 1000만원입니다. 원금은 2000만원입니다.', None), ('원금은 1000만원입니다. 취소합니다.', None),
@@ -22,6 +23,13 @@ def test_known_principal_allows_scenarios_without_a_return_forecast():
     assert [row['future_krw'] for row in result['rows']] == ['7000000', '13000000', '19000000']
     assert all(row['future_krw'] == row['paid_krw'] for row in result['rows'])
     assert '예측하거나 보장하지' in result['assumptions'][1]
+
+
+def test_integral_decimal_inputs_use_exact_integer_strings_for_browser_formatting():
+    result = build_scenarios('1000000.00', {'annual_returns': [0], 'years': [5]}, monthly_krw='10000.0')
+    assert result['principal_krw'] == '1000000'
+    assert result['monthly_krw'] == '10000'
+    assert result['rows'][0]['paid_krw'] == result['rows'][0]['future_krw'] == '1600000'
 
 
 def test_compound_growth_does_not_confuse_percent_with_money_or_linear_growth():

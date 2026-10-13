@@ -15,11 +15,15 @@ def stated_principal(text):
         return None
     values = []
     statements = 0
-    for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', text):
+    clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', text)
+    for index in range(0, len(clauses), 2):
+        clause = clauses[index]
         if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'모르|모릅|몰라|불명|확인\s*필요', clause):
             return None
         if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'\d[\d,.\s억만]*원(?!금)', clause):
             statements += 1
+            if index + 1 < len(clauses) and clauses[index + 1] == '?':
+                return None
         match = re.fullmatch(r'\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가)?\s*([0-9][0-9,.\s억만]*원)\s*(?:입니다|이에요|예요|이야|임)?\s*', clause)
         if match:
             funding = parse_funding('추가 ' + match[1])
@@ -61,7 +65,7 @@ def build_scenarios(principal_krw, args, *, monthly_krw=0, additional_krw=0):
                 deposits = monthly * 12 * years if monthly_rate == 0 else monthly * (factor - 1) / monthly_rate
                 value = (principal * factor + deposits).quantize(Decimal(1), rounding=ROUND_HALF_UP)
                 rows.append({'annual_return_pct': str(rate), 'years': years, 'future_krw': str(value),
-                             'paid_krw': str(principal + monthly * years * 12)})
-    return {'status': 'available', 'principal_krw': str(principal), 'monthly_krw': str(monthly), 'rows': rows,
+                             'paid_krw': str(int(principal + monthly * years * 12))})
+    return {'status': 'available', 'principal_krw': str(int(principal)), 'monthly_krw': str(int(monthly)), 'rows': rows,
             'assumptions': ['연수익률이 매년 같고 월말에 같은 금액을 납입하는 가정이에요.',
                             '세금·수수료·물가 상승은 제외했으며 미래 수익을 예측하거나 보장하지 않아요.']}

@@ -1,7 +1,7 @@
 export type Scenarios = { status: string; reason?: string; principal_krw?: string; monthly_krw?: string;
   assumptions?: string[]; rows: { annual_return_pct: string; years: number; future_krw: string; paid_krw: string }[] };
 
-const money = (value: string) => `${Number(value).toLocaleString('ko-KR')}원`;
+const money = (value: string) => `${BigInt(value).toLocaleString('ko-KR')}원`;
 export function ScenarioTable({ scenarios }: { scenarios: Scenarios }) {
   return <section className="scenario-plan">
     <h4>수익률 가정별 금액 비교</h4>
