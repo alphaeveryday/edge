@@ -7,7 +7,9 @@ from urllib.parse import quote
 def build_runtime(runtime, reader):
     if reader['host'] != 'edge-dev.cru6wwggoppd.ap-northeast-2.rds.amazonaws.com' or reader['dbname'] != 'edge' or reader['username'] != 'edge_analysis_v2_api_reader':
         raise ValueError('Unexpected outlook database identity')
-    values = {key: runtime[key] for key in ('DEEPSEEK_API_KEY', 'PORTFOLIO_DB_PASSWORD', 'PORTFOLIO_ORIGIN_SECRET')}
+    values = {key: runtime[key] for key in ('DEEPSEEK_API_KEY', 'EXA_API_KEY', 'PORTFOLIO_DB_PASSWORD', 'PORTFOLIO_ORIGIN_SECRET')}
+    if not isinstance(values['EXA_API_KEY'], str) or not values['EXA_API_KEY'].strip():
+        raise ValueError('EXA_API_KEY is required')
     values['PORTFOLIO_DATABASE_URL'] = 'postgresql://portfolio:' + quote(values['PORTFOLIO_DB_PASSWORD'], safe='') + '@db/portfolio'
     values['PORTFOLIO_OUTLOOK_DSN'] = ('postgresql://' + quote(reader['username'], safe='') + ':' + quote(reader['password'], safe='')
         + '@' + reader['host'] + ':5432/edge?sslmode=verify-full&sslrootcert=/app/rds-ca.pem')

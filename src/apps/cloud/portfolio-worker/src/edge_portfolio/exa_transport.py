@@ -8,10 +8,15 @@ import httpx
 
 
 class ExaTransport(httpx.AsyncBaseTransport):
-    def __init__(self, transport=None):
+    def __init__(self, transport=None, *, api_key=None):
         self.transport = transport or httpx.AsyncHTTPTransport()
+        self.api_key = api_key
 
     async def handle_async_request(self, request):
+        if self.api_key and request.url.scheme == 'https' and request.url.host == 'mcp.exa.ai' and request.url.port in (None, 443):
+            request.headers['x-api-key'] = self.api_key
+        else:
+            request.headers.pop('x-api-key', None)
         await request.aread()
         for attempt in range(3):
             response = await self.transport.handle_async_request(request)

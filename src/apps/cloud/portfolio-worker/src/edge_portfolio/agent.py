@@ -40,7 +40,7 @@ class ExaEvidence:
 
     async def call(self, name, args):
         self.calls += 1
-        if self.calls > 100:
+        if self.calls > 70:
             raise ValueError("TOOL_LIMIT")
         if name == "search_sources" and set(args) == {"query", "objective"}:
             if any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in args.values()):
@@ -91,7 +91,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     optimizer = Optimizer(market, request)
     async with asyncio.timeout(300), AsyncExitStack() as stack:
         if evidence is None:
-            exa_client = await stack.enter_async_context(httpx.AsyncClient(transport=ExaTransport(), timeout=httpx.Timeout(30, read=300)))
+            exa_client = await stack.enter_async_context(httpx.AsyncClient(transport=ExaTransport(api_key=os.environ['EXA_API_KEY']), timeout=httpx.Timeout(30, read=300)))
             streams = await stack.enter_async_context(streamable_http_client(EXA_URL, http_client=exa_client))
             session = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
             await session.initialize()

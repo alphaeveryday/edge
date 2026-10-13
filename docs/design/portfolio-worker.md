@@ -25,7 +25,7 @@ flowchart LR
 - [AWS: Asynchronous communication](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-integrating-microservices/asynchronous.html): 접수 응답과 실제 실행을 분리하고 작업 ID로 상태를 조회한다. UI는 실패 시 조회 간격을 늘리고 새로고침 뒤 작업 ID를 복원한다.
 - [PostgreSQL SELECT / SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html): 큐의 원자적 claim을 위해 트랜잭션과 `FOR UPDATE SKIP LOCKED`를 사용한다. 기존 DB 의존 없이 전용 저장소 하나로 작업·결과를 관리한다. 초기 규모에 SQS와 별도 상태 저장소를 동시에 추가하지 않는다.
 - [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/): `deepseek-flash`, thinking enabled, effort low. 도구 대화에 필요한 `reasoning_content`는 메모리에서 전달하되 보고서·UI·관측 파일에 저장하지 않는다.
-- [Exa 공식 MCP](https://exa.ai/mcp): 공개 endpoint `https://mcp.exa.ai/mcp`의 `web_search_exa`, `web_fetch_exa`만 사용한다. 별도 Exa 비밀키 없이 연결하며 서비스 가용성·호출 제한에 대한 보장은 하지 않는다.
+- [Exa 공식 MCP](https://github.com/exa-labs/exa-mcp-server#authentication): endpoint `https://mcp.exa.ai/mcp`의 `web_search_exa`, `web_fetch_exa`만 사용한다. `EXA_API_KEY`를 해당 HTTPS 원본의 `x-api-key` 헤더로 전달한다. 운영 키는 Secrets Manager `edge/portfolio/runtime`에서 워커에만 주입하며 URL·모델 입력에 넣지 않는다. 인증 후에도 공급자 요금제의 호출 제한은 적용된다.
 
 ## 단일 에이전트의 실행 계약
 
@@ -47,7 +47,7 @@ flowchart LR
 
 ## 운영 한계와 실패 처리
 
-- 예상 분석 시간 5분. 실행 전체 deadline 300초, 모델 최대 24회, Exa 검색·본문 읽기 합계 최대 100회, 최종 응답 수정 최대 2회·다른 역할 최대 1회.
+- 예상 분석 시간 5분. 실행 전체 deadline 300초, 모델 최대 24회, Exa 검색·본문 읽기 합계 최대 70회(도구 호출 기준, 아래 HTTP 429 재시도는 별도), 최종 응답 수정 최대 2회·다른 역할 최대 1회.
 - 검색 미리보기는 2,500자로 제한하되 발견 URL 목록은 원 응답에서 수집한다. 읽은 원문의 excerpt와 인용 문장을 모델에 중복 전달하지 않으며, 인용 문장·ID와 저장하는 원문은 보존한다.
 - Exa MCP의 일시적인 429는 HTTP 전송 단계에서 최대 2회 재시도한다. Retry-After를 따르며 안내가 없으면 2초·4초 간격, 안내가 10초를 넘으면 조기 재시도하지 않는다. 도구 35초·분석 300초 제한은 유지한다. 제한이 계속되면 SEARCH_RATE_LIMIT으로 저장해 방문자 체험 횟수 제한과 구분한다.
 - 현금만 보유한 현재 평가가 점수 보류인 경우 입력 사실만 설명하는 reason에는 외부 인용을 요구하지 않는다. ETF 평가·추천 별점·전망의 외부 근거 검증은 유지한다.
