@@ -57,6 +57,20 @@ def test_no_sell_cannot_move_existing_positions_to_another_account():
     assert checks[0]['status'] == 'fail'
 
 
+@pytest.mark.parametrize('kind,scope,status', [('max_weight', 'each', 'pass'), ('max_weight', 'combined', 'fail'),
+                                              ('min_weight', 'each', 'fail'), ('min_weight', 'combined', 'pass')])
+def test_individual_and_combined_weight_limits_have_distinct_meanings(kind, scope, status):
+    decision = Decision(constraints=[{'kind': kind, 'instrument_ids': ['US:VOO', 'US:QQQ'],
+                                     'value': 30, 'scope': scope, 'source': '고객 비중 조건'}])
+    rows = [{'instrument_id': key, 'weight_pct': 20} for key in ['US:VOO', 'US:QQQ']]
+    assert check_constraints(decision, rows, request(), {})[0]['status'] == status
+
+
+def test_multiple_instrument_thresholds_require_explicit_scope():
+    with pytest.raises(ValueError, match='scope=each or combined'):
+        Decision(constraints=[{'kind': 'max_weight', 'instrument_ids': ['US:VOO', 'US:QQQ'], 'value': 30, 'source': '각각 30% 이하'}])
+
+
 def test_no_sell_scope_does_not_prohibit_changes_to_other_holdings():
     req = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': amount}
         for key, amount in [('US:VOO', 50), ('US:QQQ', 40), ('CASH:KRW', 10)]], horizon='10년 이상')

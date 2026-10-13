@@ -14,6 +14,7 @@ class Constraint(StrictModel):
     accounts: list[Literal['일반 계좌', 'ISA', '연금저축', 'IRP']] = Field(default_factory=list, max_length=4)
     markets: list[Literal['KR', 'US']] = Field(default_factory=list, max_length=2)
     value: Decimal | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    scope: Literal['each', 'combined'] | None = None
 
     @model_validator(mode='after')
     def sufficient_arguments(self):
@@ -21,6 +22,8 @@ class Constraint(StrictModel):
             raise ValueError('Constraint needs registered instrument IDs; use unverified for unknown exposure')
         if self.kind in {'min_weight', 'max_weight', 'max_positions'} and self.value is None:
             raise ValueError('Constraint needs a numeric threshold')
+        if self.kind in {'min_weight', 'max_weight'} and len(self.instrument_ids) > 1 and self.scope is None:
+            raise ValueError('Multiple instrument weight limits must specify scope=each or combined')
         if self.kind == 'max_positions' and (self.value < 1 or self.value != self.value.to_integral_value()):
             raise ValueError('Position count must be a positive integer')
         if self.kind == 'accounts' and not self.accounts or self.kind == 'markets' and not self.markets:
@@ -75,9 +78,9 @@ def check_constraints(decision, rows, request, catalog):
         actual = sum((weights.get(key, Decimal(0)) for key in set(rule.instrument_ids)), Decimal(0))
         passed = None
         if rule.kind == 'min_weight':
-            passed = actual >= rule.value
+            passed = all(weights.get(key, 0) >= rule.value for key in rule.instrument_ids) if rule.scope == 'each' else actual >= rule.value
         elif rule.kind == 'max_weight':
-            passed = actual <= rule.value
+            passed = all(weights.get(key, 0) <= rule.value for key in rule.instrument_ids) if rule.scope == 'each' else actual <= rule.value
         elif rule.kind == 'exclude':
             passed = actual == 0
         elif rule.kind == 'require':
