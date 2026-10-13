@@ -369,7 +369,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 */
 	private static final List<OutputSpec> OUTPUTS = List.of(
 			/* 분석 산출은 v2 표에서 센다(ALPHA-1290). 옛 설명 엔진의 `explanation_result` 는 10-01
-			 * 이 마지막 실행이라 그 표를 세던 `o.pub`(게시 ETF)은 계속 0 이었다.
+			 * 이 마지막 실행이라 그 표를 세던 옛 게시 ETF 산출은 계속 0 이었다.
 			 *
 			 * 🔴 **"게시"가 아니라 "완료"를 센다.** 전망은 완료될 때 항상 `published_at` 이 찍혀 둘이
 			 * 같지만, 가격변동 분석은 고른 항목이 없으면 완료돼도 `published_at` 이 NULL 이고 회수되면
@@ -806,7 +806,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 한 문장으로 센다.
 	 *
 	 * <p>⚠️ <b>일관성을 주는 것은 이 문장 구성이 아니라 트랜잭션이다.</b> {@link #facts} 전체가
-	 * REPEATABLE READ 라 나눠 세도 같은 스냅샷을 읽는다 — 산출 다섯이 서로 다른 문장인데도
+	 * REPEATABLE READ 라 나눠 세도 같은 스냅샷을 읽는다 — 산출 여섯이 서로 다른 문장인데도
 	 * 서로 일관된 것이 그 증거다. 한 문장으로 세는 이유는 왕복을 줄이는 것뿐이고, <b>격리수준을
 	 * 낮추면</b> 그때야 나눠 센 값들이 갈린다.
 	 */
@@ -820,13 +820,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		/* 🔴 <b>그 날의 적재 창이 아직 안 지났으면 비교 대상이 아니다</b>(ALPHA-946). 기준일 후보는
 		 * {@code day} 미만이라 <b>적재 창이 지난</b> 하루의 값인데, {@code day} 가 KST 오늘이면 그
 		 * 값은 아직 쌓이는 중이다 — 같은 축이 아닌 둘을 나눠 임계에 건다. dev 실측(08-11 14:27 KST)
-		 * 에서 산출 다섯 중 <b>넷</b>이 그 이유로 거짓 P1 이었다({@code o.trig} −100%·{@code o.pub}
+		 * 에서 당시 산출 다섯 중 <b>넷</b>이 그 이유로 거짓 P1 이었다({@code o.trig} −100%·옛 게시 ETF 산출
 		 * −71%·{@code o.asr} −29%·{@code o.evt} −59%). 미래 날짜를 400 으로 막는
 		 * {@code ConsoleFactsService.parseDateParam} 이 같은 논거를 이미 쓴다 — 오늘은 그
 		 * "아직"이 <b>부분</b>으로 오는 날이다.
 		 *
 		 * <p>⚠️ <b>"완결"이 아니라 "창이 지났다"이다.</b> 지난 날의 값도 <b>양방향으로</b> 움직인다:
-		 * {@code o.pub} 은 {@code trade_date} 가 적재와 분리돼 며칠 뒤에도 늘고, 뉴스 셋의
+		 * 분석 산출은 재실행으로 뒤에도 늘 수 있고, 뉴스 셋의
 		 * {@code available_at} 은 writer 마다 뜻이 다르다 — 배치 둘({@code steps/assemble_events.py}
 		 * 은 <b>{@code published_at}</b>, {@code steps/load_documents.py} 는 {@code fetched_at} 폴백
 		 * {@code published_at})은 {@code ON CONFLICT DO NOTHING} 이라 <b>먼저 넣은 쪽이 값을 정하고</b>
@@ -835,11 +835,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		 * 과거 버킷을 <b>줄인다</b>. 이 술어는 완결을 증명하지 않고 <b>정직한 하한</b>을 준다 —
 		 * 장중 거짓 −100% 는 구조적으로 없애되 지난 날의 값은 여전히 흔들린다.
 		 *
-		 * <p>⚠️ <b>다섯 전부에 건다.</b> 적재 창이 산출마다 다르기 때문이다: {@code o.trig} 은
+		 * <p>⚠️ <b>산출 전부에 건다.</b> 적재 창이 산출마다 다르기 때문이다: {@code o.trig} 은
 		 * 시장 SFN 한 번({@code schedule_expression} 기본 15:40)이 통째로 넣는 계단 함수고
 		 * (행에 박힌 {@code detected_at}=15:30 은 <b>멱등 키의 결정적 이벤트 시각</b>이지 적재
-		 * 시각이 아니다 — {@code steps/load_price_triggers.py}), 뉴스 셋은 하루 종일, {@code o.pub}
-		 * 은 상주 소비자라 날짜 경계를 넘는다. 다섯 전부에 참인 술어는 "그 날이 다 지났는가"
+		 * 시각이 아니다 — {@code steps/load_price_triggers.py}), 뉴스 셋은 하루 종일, 전망은
+		 * 06:00 배치, 가격변동 분석은 장중 내내다. 전부에 참인 술어는 "그 날이 다 지났는가"
 		 * 하나뿐이라 산출별로 가르지 않는다. 가르려면 산출↔작업 완료 바인딩이 있어야 하고 없다.
 		 *
 		 * <p>🔴 <b>대가: 그 날의 진짜 결손이 자정까지 조용해진다.</b> 산출이 통째로 0 인 장애를

@@ -40,6 +40,28 @@ export interface EntityResolutionTrendPointDto {
   rate: number | null;
 }
 
+export type AnalysisTrendKind = 'outlook' | 'movement';
+
+/**
+ * v2 분석(전망·가격변동)의 최근 일별 건수(ALPHA-1290). `kinds` 는 항상 두 종류다.
+ * `points` 는 **분석 행이 있던 날짜만** 담는다 — 없는 날은 0 이 아니라 기록이 없는 날이다.
+ */
+export interface AnalysisTrendDto {
+  from: string;
+  to: string;
+  kinds: { kind: AnalysisTrendKind; points: AnalysisTrendPointDto[] }[];
+}
+
+/** `running` 은 실패가 아니라 끝나지 않은 건수다. `*Etfs` 는 그 상태의 행이 있는 ETF 종 수다. */
+export interface AnalysisTrendPointDto {
+  date: string;
+  completed: number;
+  failed: number;
+  running: number;
+  completedEtfs: number;
+  failedEtfs: number;
+}
+
 /** 장중 FIRE 코호트가 분석·게시 단계에 도달한 최근 일별 실측. */
 export interface IntradayAnalysisTrendDto {
   asOf: string;

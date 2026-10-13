@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
 import type { Facts } from '../../rules/types.ts';
+import type { AnalysisTrendDto } from '../../domains/console/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 import { buildMetrics, entityResolutionMetric, latestTask } from './trendCatalog.ts';
 import { evaluateMetric } from './trendMetrics.ts';
@@ -94,7 +95,7 @@ test('오늘 분봉 응답이 빈 배열이어도 관측된 0이다 — 세션 �
 
 test('추이 화면은 재조회 오류만으로 React Query가 보존한 분봉 실측을 버리지 않는다', () => {
   const source = readFileSync(new URL('./TrendPage.tsx', import.meta.url), 'utf8');
-  assert.match(source, /buildMetrics\(q\.facts, minute\.data, entityResolution\.data\)/);
+  assert.match(source, /buildMetrics\(q\.facts, minute\.data, entityResolution\.data, analysis\.data\)/);
   assert.doesNotMatch(source, /minute\.isError\s*\?\s*undefined\s*:\s*minute\.data/);
 });
 
@@ -148,7 +149,7 @@ test('추이 화면은 facts가 본 날짜로 해소율을 조회하고 직전 �
   const source = readFileSync(new URL('./TrendPage.tsx', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../../styles/ops.css', import.meta.url), 'utf8');
   assert.match(source, /useEntityResolutionTrend\(q\.ready \? q\.facts\.meta\.today : undefined, q\.ready\)/);
-  assert.match(source, /buildMetrics\(q\.facts, minute\.data, entityResolution\.data\)/);
+  assert.match(source, /buildMetrics\(q\.facts, minute\.data, entityResolution\.data, analysis\.data\)/);
   assert.doesNotMatch(source, /entityResolution\.isError\s*\?\s*undefined\s*:\s*entityResolution\.data/);
   assert.match(source, /entityResolution\.data !== undefined \|\| m\.id !== 'n\.entity_resolution_rate'/);
   assert.match(source, /조회 중이라 전체 이상 여부가 아직 확정되지 않았습니다/);
@@ -161,52 +162,82 @@ test('추이 화면은 facts가 본 날짜로 해소율을 조회하고 직전 �
   assert.doesNotMatch(source, /카드의 날짜가 조회일과\s*다르면 그 지표는 이 응답 밖 축/);
 });
 
-test('🔴 체인 축 부재를 0 으로 그리지 않는다 — "결과 생성률 0%" 는 거짓 경보다', () => {
-  /* 축이 배선된 뒤에도(ALPHA-979 조각 1) 이 갈래는 살아 있다 — 그 축을 안 싣던 배포본을 보는
-   * 동안이다. 부재를 0 으로 접으면 그때 "결과 생성률 0%" 가 매일 뜬다. */
-  const noChain: Facts = { ...WIRED, chain: undefined };
-  for (const id of ['a.results', 'a.run_to_result']) {
-    const m = byId(noChain, id);
-    assert.equal(m.comparisonType, 'uninstrumented', `${id} 가 판정을 만들어 냈다`);
-    assert.deepEqual(m.series, [], `${id} 에 없는 계열이 생겼다`);
-    const v = evaluateMetric(m);
-    assert.equal(v.kind, 'uninstrumented', `${id} 판정 종류`);
-    assert.equal(v.actual, null, `${id} 오늘 값이 0 으로 그려졌다`);
+/** v2 분석 추이 응답 — 조회일(08-03)에 전망은 행이 있고 가격변동 분석은 없다 */
+const ANALYSIS: AnalysisTrendDto = {
+  from: '2026-08-01',
+  to: '2026-08-03',
+  kinds: [
+    {
+      kind: 'outlook',
+      points: [
+        { date: '2026-08-02', completed: 140, failed: 0, running: 0, completedEtfs: 140, failedEtfs: 0 },
+        /* 완료 150건·148종, 실패 5건·3종, 끝나지 않은 2건 — 다섯 수를 서로 다르게 둔다 */
+        { date: '2026-08-03', completed: 150, failed: 5, running: 2, completedEtfs: 148, failedEtfs: 3 },
+      ],
+    },
+    { kind: 'movement', points: [{ date: '2026-08-02', completed: 9, failed: 1, running: 0, completedEtfs: 8, failedEtfs: 1 }] },
+  ],
+};
+const analysisCard = (id: string, analysis?: AnalysisTrendDto) => {
+  const m = buildMetrics(WIRED, undefined, undefined, analysis).find((x) => x.id === id);
+  assert.ok(m, `${id} 지표가 사라졌다`);
+  return m;
+};
+
+test('🔴 분석 결과 카드는 v2 분석 추이의 조회일 값을 읽는다 — 멈춘 옛 엔진 표를 읽지 않는다', () => {
+  /* 값 넷을 서로 다른 수로 건다 — 완료 건수와 종 수, 실패 건수와 종 수를 맞바꾸는 변이가 죽는다 */
+  const completed = analysisCard('a.outlook_completed', ANALYSIS);
+  assert.deepEqual(completed.series, [{ date: '2026-08-03', value: 150, isMock: false }]);
+  const failed = analysisCard('a.outlook_failed_etfs', ANALYSIS);
+  assert.deepEqual(failed.series, [{ date: '2026-08-03', value: 3, isMock: false }]);
+  assert.equal(evaluateMetric(failed).kind, 'abnormal', '실패 ETF 1종 이상이면 이상이다');
+  /* 완료 건수는 기준값을 주는 응답이 없어 판정하지 않는다 — 임계를 새로 만들지 않았다 */
+  assert.equal(evaluateMetric(completed).label, '기준 없음');
+  /* 옛 엔진의 체인·ETF 원장이 실려 와도 분석 카드는 그것을 읽지 않는다 */
+  const withV1 = buildMetrics(
+    { ...WIRED, etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }] } },
+    undefined, undefined, ANALYSIS,
+  );
+  assert.equal(evaluateMetric(withV1.find((m) => m.id === 'a.outlook_failed_etfs')!).actual, 3);
+  for (const id of ['a.results', 'a.run_to_result', 'a.failed_etfs']) {
+    assert.ok(!withV1.some((m) => m.id === id), `옛 엔진 표를 읽는 카드 ${id} 가 남아 있다`);
   }
 });
 
-test('🔴 체인 축이 오면 그 두 지표가 실제로 선다 — 부재 갈래가 값 갈래를 잡아먹지 않았다', () => {
-  /* ⭐ 부재만 단언하면 **축을 아예 안 읽는 회귀가 초록**이다(부재가 통과 조건이라 공허하게 참).
-   * 값 갈래를 같이 건다 — 그래야 어댑터가 `chain` 을 떨구거나 여기가 계속 `null` 을 읽는 변이가
-   * 죽는다. 값은 픽스처의 `c.res`/`c.run` = 12/16 이라 **1.0 이 아니다**: 둘을 맞바꾸는 변이는
-   * 비율이 1 일 때 안 보인다. */
-  const results = byId(WIRED, 'a.results');
-  assert.notEqual(results.comparisonType, 'uninstrumented', '축이 왔는데 계속 판정 불가다');
-  assert.equal(evaluateMetric(results).actual, 12);
-
-  const rate = byId(WIRED, 'a.run_to_result');
-  assert.notEqual(rate.comparisonType, 'uninstrumented', '축이 왔는데 계속 판정 불가다');
-  assert.equal(evaluateMetric(rate).actual, 12 / 16);
+test('🔴 끝나지 않은 분석(running)은 실패 ETF 수에 들어가지 않는다', () => {
+  const onlyRunning: AnalysisTrendDto = {
+    ...ANALYSIS,
+    kinds: [
+      { kind: 'outlook', points: [{ date: '2026-08-03', completed: 0, failed: 0, running: 7, completedEtfs: 0, failedEtfs: 0 }] },
+      { kind: 'movement', points: [] },
+    ],
+  };
+  const failed = analysisCard('a.outlook_failed_etfs', onlyRunning);
+  assert.equal(evaluateMetric(failed).actual, 0, '진행 중인 분석을 실패로 셌다');
+  assert.equal(evaluateMetric(failed).kind, 'normal');
+  assert.match(failed.help, /끝나지 않은 7건/, '끝나지 않은 건수는 따로 밝힌다');
+  /* 행이 있던 날의 완료 0건은 0 이다 — 부재와 다르다 */
+  assert.equal(evaluateMetric(analysisCard('a.outlook_completed', onlyRunning)).actual, 0);
 });
 
-test('🔴 per-ETF 원장 부재를 "실패 0종" 으로 그리지 않는다', () => {
-  const m = byId(WIRED, 'a.failed_etfs');
-  assert.equal(m.comparisonType, 'uninstrumented');
-  assert.equal(evaluateMetric(m).actual, null, '0 이면 "오늘 실패한 ETF 가 없다"가 된다');
-  /* 축이 있으면 그때는 실제로 센다 — 부재 갈래가 값 갈래를 잡아먹지 않았는지 함께 본다 */
-  const withLedger = byId(
-    { ...WIRED, etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }], mock: true } },
-    'a.failed_etfs',
-  );
-  assert.equal(evaluateMetric(withLedger).actual, 1);
-  assert.equal(withLedger.source, 'MOCK');
+test('🔴 조회일에 분석 행이 없으면 0 이 아니라 계측 없음이다 — 가격변동 분석은 장이 열린 날에만 생긴다', () => {
+  for (const id of ['a.movement_completed', 'a.movement_failed_etfs']) {
+    const m = analysisCard(id, ANALYSIS);
+    assert.deepEqual(m.series, [], `${id} 에 없는 값이 생겼다`);
+    assert.equal(evaluateMetric(m).kind, 'uninstrumented', id);
+    assert.match(m.help, /행이 없다/, `${id} 가 사유를 안 밝힌다`);
+  }
+});
 
-  const withRealLedger = byId(
-    { ...WIRED, etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }] } },
-    'a.failed_etfs',
-  );
-  assert.equal(withRealLedger.source, 'DB_LEDGER', '실원장을 목으로 표시했다');
-  assert.doesNotMatch(withRealLedger.help, /계측되지 않아|목 데이터/, '실원장을 목이라고 설명했다');
+test('🔴 분석 추이 응답이 없어도 카드는 서고 계측 없음이다 — 그 엔드포인트가 없는 API 에서 화면이 깨지지 않는다', () => {
+  /* UI 가 API 보다 먼저 배포되면 `/console/trends/analysis` 가 404 다 — `buildMetrics` 는 넷째
+   * 인자 없이 불린다. 카드가 목록에서 빠지면 계측 부채가 화면에서 사라진다. */
+  for (const id of ['a.outlook_completed', 'a.outlook_failed_etfs', 'a.movement_completed', 'a.movement_failed_etfs']) {
+    const m = analysisCard(id);
+    assert.deepEqual(m.series, [], id);
+    assert.equal(evaluateMetric(m).kind, 'uninstrumented', id);
+    assert.match(m.help, /응답을 받지 못해/, id);
+  }
 });
 
 test('산출 축이 안 실린 날 그 지표는 판정 불가다 — `!` 로 죽지도, 0 으로 서지도 않는다', () => {
@@ -308,7 +339,19 @@ test('🔴 실측 과거가 없으면 한 점만 낸다 — 과거 구간을 만
       { date: '2026-08-03', totalArguments: 10, resolvedArguments: 8, rate: 0.8 },
     ],
   };
-  const metrics = buildMetrics(full, minute, trend);
+  /* 조회일(08-03)에 두 종류 모두 행이 있는 분석 추이 */
+  const analysis: AnalysisTrendDto = {
+    from: '2026-08-02',
+    to: '2026-08-03',
+    kinds: (['outlook', 'movement'] as const).map((kind) => ({
+      kind,
+      points: [
+        { date: '2026-08-02', completed: 9, failed: 0, running: 0, completedEtfs: 9, failedEtfs: 0 },
+        { date: '2026-08-03', completed: 12, failed: 1, running: 0, completedEtfs: 11, failedEtfs: 1 },
+      ],
+    })),
+  };
+  const metrics = buildMetrics(full, minute, trend, analysis);
   const drawn = metrics.filter((m) => m.series.length > 0);
   assert.deepEqual(
     drawn.map((m) => m.id),
@@ -316,7 +359,8 @@ test('🔴 실측 과거가 없으면 한 점만 낸다 — 과거 구간을 만
       'b.price_daily', 'b.etf_holdings', 'b.investor_flow', 'b.etf_nav',
       'i.no_evidence', 'i.dead_jobs',
       'n.documents', 'n.entity_resolution_rate',
-      'a.results', 'a.run_to_result', 'a.failed_etfs', 'a.trigger_events',
+      'a.outlook_completed', 'a.outlook_failed_etfs', 'a.movement_completed', 'a.movement_failed_etfs',
+      'a.trigger_events',
     ],
     '전제: 계측 없는 한 장을 뺀 모든 카드가 값을 그린다',
   );
@@ -337,7 +381,7 @@ test('🔴 실측 과거가 없으면 한 점만 낸다 — 과거 구간을 만
   /* 기준은 응답의 `base` 다 — 화면이 과거를 만들어 중앙값을 맞추던 자리다 */
   assert.equal(evaluateMetric(metrics.find((m) => m.id === 'a.trigger_events')!).expected, 51);
   /* 기준을 주는 응답이 없는 산출량은 숫자를 지어 판정하지 않는다 */
-  assert.equal(evaluateMetric(metrics.find((m) => m.id === 'a.results')!).label, '기준 없음');
+  assert.equal(evaluateMetric(metrics.find((m) => m.id === 'a.movement_completed')!).label, '기준 없음');
 });
 
 test('🔴 값을 응답에서 읽지 못하는 카드는 목록에 없다 — 코드에 박힌 숫자·얼린 스냅샷을 오늘 값으로 그리지 않는다', () => {

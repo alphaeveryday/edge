@@ -715,7 +715,7 @@ export const RULES: Rule[] = [
         /* ⚠️ **`null` 을 "표본 없음"이라 단정하지 않는다**(ALPHA-946). 사유가 셋인데 와이어는
          * 하나로 온다: 표본 부재 · 장 안 서는 날의 장 산출 · 그 날이 안 끝남
          * (`OutputFact.base` 주석이 정본). 전에 '기준 표본 없음' 이라고 적었는데, **지난 주말을
-         * 조회하면** 서버가 뉴스 셋에는 기준을 주고 `o.pub`·`o.trig` 만 비우므로 이 규칙이 돌면서
+         * 조회하면** 서버가 장에 안 매인 산출에는 기준을 주고 `o.movement`·`o.trig` 만 비우므로 이 규칙이 돌면서
          * 그 둘에 거짓 사유를 단다 — 원장에 표본은 멀쩡히 있다. 어느 하나를 지목하려면 이 층이
          * 날짜·달력을 다시 재야 하고, 그러면 판정 주체가 서버와 둘이 된다(`dep` 과 같은 판단). */
         if (b == null) return '기준이 없다(표본 부재·장 안 서는 날·그 날이 안 끝남 중 하나)';
@@ -745,7 +745,7 @@ export const RULES: Rule[] = [
           (o) => judgeable(o) && Math.abs((o.today - (o.base as number)) / (o.base as number)) >= 0.25,
         )
         .map((o) => ({
-          /* `o.pub` 은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
+          /* `o.outlook` 같은 값은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
           target: o.label,
           targetId: o.id,
           title: o.label,

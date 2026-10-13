@@ -25,10 +25,11 @@ import { asOfLabel } from './trendAsOf';
 import type { Metric, MetricGroup, Verdict } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
 import { useMinuteStatus } from '../../domains/sources/hooks';
-import { useEntityResolutionTrend } from '../../domains/console/hooks';
+import { useAnalysisTrend, useEntityResolutionTrend } from '../../domains/console/hooks';
 import { extent, points } from './trendSeries';
 import { RunSeriesSection, RunSpark } from './RunSeriesSection';
 import { MinuteSeriesSection } from './MinuteSeriesSection';
+import { AnalysisSeriesSection } from './AnalysisSeriesSection';
 import { outputSeries } from '../../domains/sources/dailySeries';
 import '../../styles/ops.css';
 
@@ -175,6 +176,7 @@ export function TrendPage() {
   const q = useConsoleFactsQuery();
   const minute = useMinuteStatus(q.ready ? q.facts.meta.today : undefined, q.ready);
   const entityResolution = useEntityResolutionTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
+  const analysis = useAnalysisTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   useFocusRow(q.ready);
 
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
@@ -183,12 +185,12 @@ export function TrendPage() {
   const evaluated = useMemo(
     () => {
       if (!q.ready) return [];
-      const metrics = buildMetrics(q.facts, minute.data, entityResolution.data);
+      const metrics = buildMetrics(q.facts, minute.data, entityResolution.data, analysis.data);
       return metrics
         .filter((m) => entityResolution.data !== undefined || m.id !== 'n.entity_resolution_rate')
         .map((m) => ({ m, v: evaluateMetric(m) }));
     },
-    [q, minute.data, entityResolution.data],
+    [q, minute.data, entityResolution.data, analysis.data],
   );
   if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
@@ -338,6 +340,8 @@ export function TrendPage() {
           </p>
         </div>
       </div>
+
+      <AnalysisSeriesSection trend={analysis} />
 
       <RunSeriesSection />
 

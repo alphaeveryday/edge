@@ -178,7 +178,7 @@ const WIRE = (): ConsoleFactsDto => ({
     id: 'etf_holdings', contract: true, expectedAsOf: '2026-08-03', actualAsOf: null,
     collectedAt: '2026-08-03T15:41:58+09:00', unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
   }],
-  outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+  outputs: [{ id: 'o.outlook', label: '전망 완료 ETF', today: 16, base: 32, unit: '종' }],
   queues: [{ name: 'news-realtime', visible: 7, inFlight: 3, dlq: 2 }],
   boundary: { publishedWithoutDelivery: 0, deliveryNowNonpublished: 1, deliveryRows: 114 },
   /* 네 수를 전부 다르게 둔다 — 갈래(batch↔intraday)나 피드↔단계를 맞바꾸는 변이는 같은 값
@@ -253,7 +253,7 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       collected_at: '2026-08-03T15:41:58+09:00',
       unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
     }],
-    outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+    outputs: [{ id: 'o.outlook', label: '전망 완료 ETF', today: 16, base: 32, unit: '종' }],
     queues: [{ name: 'news-realtime', visible: 7, in_flight: 3, dlq: 2 }],
     boundary: {
       published_without_delivery: 0,
