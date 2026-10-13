@@ -51,7 +51,7 @@ class QuestionSection(Section):
     decision: Decision
 
 
-def validate_decision(decision, request, catalog):
+def validate_decision(decision, request, catalog, *, question_text=None):
     def strings(value):
         if isinstance(value, str):
             yield value
@@ -64,6 +64,12 @@ def validate_decision(decision, request, catalog):
     text = '\n'.join([request.question, *strings(request.preferences.model_dump(mode='json'))])
     if any(not question.strip() or question not in text for question in decision.questions):
         raise ValueError('QUESTION_SOURCE: quote each customer question exactly')
+    if decision.questions:
+        remaining = request.question if question_text is None else question_text
+        for question in decision.questions:
+            remaining = remaining.replace(question, '')
+        if any(char.isalnum() for char in remaining):
+            raise ValueError('QUESTION_COVERAGE: preserve the entire customer request across questions; include its context, or quote the complete request')
     for rule in decision.constraints:
         if rule.source not in text:
             raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the exact customer input')

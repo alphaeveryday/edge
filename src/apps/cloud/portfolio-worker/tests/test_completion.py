@@ -15,6 +15,20 @@ def test_valid_json_without_an_answer_is_not_customer_completion():
     assert result['reasons'] == ['UNANSWERED_QUESTIONS', 'EXECUTION_PLAN_MISSING']
 
 
+def test_partial_question_extraction_cannot_hide_an_unanswered_customer_request():
+    from edge_portfolio.decision import validate_decision
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='First? Second?')
+    with pytest.raises(ValueError, match='QUESTION_COVERAGE'):
+        validate_decision(Decision(questions=['First?']), request, {})
+    assert validate_decision(Decision(questions=['First?', 'Second?']), request, {}).questions == ['First?', 'Second?']
+    assert validate_decision(Decision(questions=['First? Second?']), request, {}).questions == [request.question]
+    # An empty extraction falls back to the entire request in assess_completion.
+    result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(), {'recommendation': None}, [], '2026-10-14')
+    assert result['tasks'][0]['question'] == request.question
+    assert result['tasks'][0]['status'] == 'partial'
+    assert validate_decision(Decision(questions=['Second?']), request, {}, question_text='Second?').questions == ['Second?']
+
+
 def test_recovery_keeps_omitted_answers_and_evidence_for_the_same_target():
     from edge_portfolio.completion import retain_research
     first = FinalReport.model_validate({**final_payload(), 'answers': [
