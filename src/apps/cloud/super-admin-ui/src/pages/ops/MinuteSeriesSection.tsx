@@ -18,6 +18,9 @@ const MINUTE_DATASETS = ALL_DATASETS.filter((d) => !d.inOpsGrid && d.sessionData
 
 /** 실행 추이 구역과 같은 기간을 본다. 서버 상한은 31일이다 */
 const DAYS = 30;
+/* 30일 범위 집계를 1분마다 다시 부르지 않는다 — 지난 날의 창 수는 분 단위로 움직이지 않고,
+ * 이 범위 조회의 원장 부하는 재 보지 않았다. 화면을 다시 열면 새로 읽는다. */
+const NO_POLLING = false;
 
 const TIP = [
   '점 하나가 하루다. 그날 그 데이터셋 세션들의 창 수를 합친 값이다.',
@@ -34,11 +37,11 @@ export function MinuteSeriesRow({ series }: { series: MinuteDailySeries }) {
   const { dataset, points } = series;
   const dates = points.map((p) => p.date);
   const last = points[points.length - 1];
-  if (!last || points.every((p) => p.expected === null)) {
+  if (!last) {
     return (
       <tr>
         <td>{dataset.label}</td>
-        <td colSpan={2} style={{ color: 'var(--fg-3)' }}>기록 없음</td>
+        <td colSpan={2} style={{ color: 'var(--fg-3)' }}>조회 기간에 날짜가 없습니다</td>
       </tr>
     );
   }
@@ -69,7 +72,7 @@ export function MinuteSeriesRow({ series }: { series: MinuteDailySeries }) {
 }
 
 export function MinuteSeriesSection() {
-  const daily = useMinuteDailyStatus(DAYS);
+  const daily = useMinuteDailyStatus(DAYS, NO_POLLING);
   return (
     <div className="card">
       <div className="card-head">
