@@ -4,6 +4,21 @@ import calendar
 import re
 
 
+def retain_research(final, previous):
+    """Keep omitted work when recovery is still evaluating the same allocation."""
+    if previous is None:
+        return final
+    def target(report):
+        return sorted((row.instrument_id, row.account, row.weight_pct) for row in report.recommendation.allocations) if report.recommendation else None
+    if target(final) != target(previous):
+        return final
+    answer_ids = {answer.question_index for answer in final.answers}
+    answers = [*final.answers, *(answer for answer in previous.answers if answer.question_index not in answer_ids)]
+    coverage_ids = {(item.instrument_id, item.field) for item in final.evidence_coverage}
+    coverage = [*final.evidence_coverage, *(item for item in previous.evidence_coverage if (item.instrument_id, item.field) not in coverage_ids)]
+    return type(final).model_validate({**final.model_dump(), 'answers': answers, 'evidence_coverage': coverage})
+
+
 def data_status(market, optimizer, sources, observed=None):
     observed = observed or {}
     results = list(market.results.values())

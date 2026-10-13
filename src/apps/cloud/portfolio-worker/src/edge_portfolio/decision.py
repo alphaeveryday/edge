@@ -40,6 +40,12 @@ class Decision(StrictModel):
     missing_inputs: list[str] = Field(default_factory=list, max_length=10)
     funding_text: str = Field(default='', max_length=100)
 
+    @model_validator(mode='after')
+    def meaningful_missing_inputs(self):
+        if any(not value.strip() for value in self.missing_inputs):
+            raise ValueError('Missing inputs must identify the required customer information')
+        return self
+
 
 class QuestionSection(Section):
     decision: Decision

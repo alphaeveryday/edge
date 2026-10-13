@@ -15,6 +15,53 @@ def test_valid_json_without_an_answer_is_not_customer_completion():
     assert result['reasons'] == ['UNANSWERED_QUESTIONS', 'EXECUTION_PLAN_MISSING']
 
 
+def test_recovery_keeps_omitted_answers_and_evidence_for_the_same_target():
+    from edge_portfolio.completion import retain_research
+    first = FinalReport.model_validate({**final_payload(), 'answers': [
+        {'question_index': 1, 'status': 'answered', 'answer': 'The first question has been answered.'}],
+        'evidence_coverage': [{'instrument_id': 'US:VOO', 'field': 'fees', 'status': 'missing'}]})
+    second = FinalReport.model_validate({**final_payload(), 'answers': [
+        {'question_index': 2, 'status': 'answered', 'answer': 'The second question has been answered.'}]})
+    merged = retain_research(second, first)
+    assert {answer.question_index for answer in merged.answers} == {1, 2}
+    assert merged.evidence_coverage == first.evidence_coverage
+    second.answers *= 2
+    with pytest.raises(ValueError, match='ANSWER_QUESTION_INDEX'):
+        assess_completion(retain_research(second, first),
+            AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), Decision(questions=['First?', 'Second?']),
+            {'recommendation': None}, [], '2026-10-14')
+    second.answers = second.answers[:1]
+    second.recommendation = None
+    assert [answer.question_index for answer in retain_research(second, first).answers] == [2]
+    assert retain_research(second, first).evidence_coverage == []
+
+
+async def test_recovery_returns_both_answers_when_the_second_round_omits_the_first(monkeypatch):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET'}
+            self.batches = {'first', 'alternative'}
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, opinions = [], []
+    async def model(payload):
+        role = stages[-1]
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {'questions': ['First?', 'Second?']}}
+        if role == 'opinion':
+            opinions.append(1)
+            content['answers'] = [{'question_index': len(opinions), 'status': 'answered', 'answer': 'This question has a complete answer.'}]
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='First? Second?')
+    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+    assert len(opinions) == 2
+    assert result['completion']['status'] == 'no_match'
+    assert all(task['status'] == 'answered' for task in result['completion']['tasks'])
+
+
 def test_blank_answer_cannot_certify_a_customer_task_as_answered():
     from edge_portfolio.contracts import TaskAnswer
     with pytest.raises(ValueError, match='meaningful'):
@@ -24,6 +71,9 @@ def test_blank_answer_cannot_certify_a_customer_task_as_answered():
     from edge_portfolio.contracts import Section
     with pytest.raises(ValueError, match='Empty limitation'):
         Section.model_validate({**final_payload()['portfolio'], 'limitations': [' ']})
+    for value in ['', ' ', '\n\t']:
+        with pytest.raises(ValueError, match='Missing inputs must identify'):
+            Decision(missing_inputs=[value])
 
 
 def test_old_holdings_source_or_fetch_date_cannot_prove_current_coverage():
@@ -259,8 +309,8 @@ async def test_recovery_timeout_keeps_the_accepted_opinion_and_completion_checkp
     assert snapshots[-1]['completion']['tasks'][0]['question'] == request.question
 
 
-@pytest.mark.parametrize('failed_urls', [1, 2])
-async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, failed_urls):
+@pytest.mark.parametrize('failed_urls,untried', [(1, False), (2, False), (2, True)])
+async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, failed_urls, untried):
     import json
     from edge_portfolio.agent import run_analysis
     class Optimizer:
@@ -270,6 +320,7 @@ async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, f
         def validate(self, final): return None
     class Evidence:
         sources = []
+        discovered = {'https://issuer.example/untried'} if untried else set()
         async def call(self, *args): return {'status': 'unavailable', 'reason': 'EXA_FAILED'}
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
     stages, fetched = [], []
@@ -291,7 +342,7 @@ async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, f
         if role == 'question': content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
-    if failed_urls == 1:
+    if failed_urls == 1 or untried:
         with pytest.raises(ValueError, match='OUTPUT_INVALID'):
             await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
     else:
