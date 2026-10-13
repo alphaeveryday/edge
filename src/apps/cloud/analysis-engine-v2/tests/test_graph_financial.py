@@ -317,7 +317,8 @@ def test_a_stored_series_with_no_observation_in_the_range_is_an_empty_range_and_
     tools, directory = graph_tools()
     series = [{'series_id': 'FX.USDKRW', 'name': 'USD/KRW exchange rate', 'first_date': '2020-01-02', 'last_date': '2026-10-02'}]
     tools.graph.nodes = lambda *a, **k: []
-    tools.financial.series = lambda: ({'items': series}, None)
+    # The response of the series list is one page; the stored result behind it has every series.
+    tools.financial.series = lambda: ({'items': []}, {'items': series})
     for asked in ({'query': 'USD/KRW'}, {'series_ids': ['FX.USDKRW']}):
         result, _ = tools.financial.macro('2026-10-03', '2026-10-04', **asked)
         assert result['total_rows'] == 0 and 'FX.USDKRW (2020-01-02..2026-10-02)' in result['data_scope']['no_observation_in_range']
@@ -366,3 +367,11 @@ def test_the_recognition_period_has_a_floor_the_arithmetic_can_carry():
     with pytest.raises(jsonschema.ValidationError):
         tools.call('estimate_contract_profit', arguments)
     directory.cleanup()
+
+
+def test_an_assumption_that_is_not_a_finite_number_is_a_wrong_argument():
+    # WHY: NaN passes a schema's bounds and then raised inside the arithmetic, past the tool record.
+    import pytest
+    for name in ('years_low', 'margin_high', 'company_share', 'holding_weight'):
+        with pytest.raises(ValueError, match='must be finite numbers'):
+            contract_tool()[0].impact(*REFS, **{name: float('nan')})

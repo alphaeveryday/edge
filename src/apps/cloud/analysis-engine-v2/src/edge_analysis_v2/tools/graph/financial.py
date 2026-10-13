@@ -50,6 +50,9 @@ class FinancialTools:
         period and the margin are assumptions, and each is named as stored or as supplied by the caller.
         """
         if event_ref['object_type']!='SourceEvent':raise ValueError('event_ref is a SourceEvent: the event_id of a list_events row')
+        # NaN passes a schema's minimum and maximum, and then raised inside the arithmetic past the tool record.
+        if any(v is not None and number(v) is None for v in (years_low,years_high,margin_low,margin_high,holding_weight,company_share)):
+            raise ValueError('years, margins, company_share and holding_weight must be finite numbers')
         # With a weight passed by hand the fund was not read at all, so a fund that does not exist or a date after the cutoff went through.
         if holding_weight is not None and (etf_ref is not None or holdings_date is not None):
             raise ValueError('Pass holding_weight, or etf_ref to have the weight read from the fund, not both.')
@@ -257,7 +260,7 @@ class FinancialTools:
         present={item['properties'].get('seriesId') for item in items}
         if (not items and query) or any(s not in present for s in series_ids or []):
             # Series are named in English ("USD/KRW exchange rate"), so a Korean word matched nothing and read as no data.
-            stored,_=self.series()
+            stored=self.series()[1]   # every stored series: the response shows one page of them, and a series past it was called a wrong argument
             known={row['series_id'] for row in stored['items']}
             named=[row for row in stored['items'] if query and not items and (query in row['series_id'] or query in (row['name'] or ''))]
             if (query and not items and not named) or any(s not in known for s in series_ids or []):
