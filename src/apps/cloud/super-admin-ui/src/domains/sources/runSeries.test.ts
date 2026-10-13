@@ -192,6 +192,23 @@ test('🔴 작업이 하나도 안 적힌 실행(기동 실패)은 그 레인 �
   assert.deepEqual(result.find((s) => s.dataset.id === 'stock_news')!.points, []);
 });
 
+test('🔴 점은 슬롯 시각 순서다 — 나중에 백필한 과거 실행이 최근 값이 되지 않는다', () => {
+  /* 응답 배열은 원장에 계획이 적힌 순서라, 오늘 백필한 10-02 슬롯이 맨 끝에 온다 */
+  const [series] = buildRunSeries(
+    [
+      priceRun('etf-daily:2026-10-08T15:40'),
+      priceRun('etf-daily:2026-10-12T15:40', { feature: { recordsOut: 150 } }),
+      priceRun('etf-daily:2026-10-02T15:40', { feature: { recordsOut: 39 } }),
+    ],
+    only('price_daily'),
+  );
+  assert.deepEqual(series.points.map((p) => [p.runKey, p.rows]), [
+    ['etf-daily:2026-10-02T15:40', 39],
+    ['etf-daily:2026-10-08T15:40', 148],
+    ['etf-daily:2026-10-12T15:40', 150],
+  ]);
+});
+
 test('시각이 뒤집힌 기록으로 음수 시간을 내지 않는다', () => {
   const [series] = buildRunSeries(
     [priceRun('etf-daily:2026-10-12T15:40', {

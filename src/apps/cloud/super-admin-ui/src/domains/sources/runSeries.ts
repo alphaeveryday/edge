@@ -91,7 +91,11 @@ function durationOf(cells: GridCell[]): number | null {
 }
 
 /**
- * 격자 응답 → 데이터셋별 실행 계열. 행은 `datasets` 순서, 점은 `slots` 순서(계획 시각 오름차순).
+ * 격자 응답 → 데이터셋별 실행 계열. 행은 `datasets` 순서, 점은 **슬롯 시각 순서**다.
+ *
+ * 응답의 배열 순서(원장에 계획이 적힌 순서)를 그대로 쓰지 않는다 — 과거 슬롯을 오늘 백필하면 그
+ * 실행이 배열 끝에 와서 "최근" 값이 된다. 실행 키가 0 패딩 ISO 시각을 담으므로 사전순이 곧
+ * 슬롯 시간순이다(서버의 개요 조회가 최신 실행을 고르는 기준과 같다).
  *
  * 한 실행이 그 데이터셋의 점이 되는 조건은 **그 데이터셋의 작업 셀이 하나라도 있는 것**이다.
  * 작업이 하나도 안 적힌 실행(기동 실패 등)은 실행 키의 레인으로 귀속한다(`dailyRollup` 과 같은
@@ -123,6 +127,8 @@ export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): Dat
         received: counted?.completenessReceived ?? null,
       });
     }
+    const slotTime = (runKey: string) => runKey.slice(runKey.indexOf(':') + 1);
+    points.sort((a, b) => slotTime(a.runKey).localeCompare(slotTime(b.runKey)));
     return { dataset, representative, points };
   });
 }
