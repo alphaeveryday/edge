@@ -28,7 +28,7 @@
             "Lambda.SdkClientException"
           ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 8,
+          "MaxAttempts": 12,
           "BackoffRate": 2,
           "MaxDelaySeconds": 20,
           "JitterStrategy": "FULL"
