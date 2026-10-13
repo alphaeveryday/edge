@@ -62,7 +62,7 @@
 
 ## 알려진 한계
 
-- `www.etforca.com` 은 서빙하지 않는다.
+- `www.etforca.com` 은 같은 경로의 `etforca.com` 으로 영구 이동한다(GET·HEAD 301, 그 밖 308). 내용을 따로 서빙하지 않는다.
 - 종목 전망은 하루 한 번(08:00 KST) 갱신된다. 그 뒤에 새로 발행된 전망은 다음 날 반영된다.
 - 로컬 미리보기에는 `outlook/` 파일이 없어 종목을 눌러도 "준비 중" 안내가 뜬다. 실제 리포트를 보려면 `dist/outlook/` 에 파일을 받아 둔다(예: `curl --create-dirs -o dist/outlook/091160.json https://etforca.com/outlook/091160.json`).
-- 없는 경로는 403 을 돌려준다.
+- 없는 경로는 404 를 돌려준다. 안내 페이지는 없고 본문은 S3 의 XML 이다.
