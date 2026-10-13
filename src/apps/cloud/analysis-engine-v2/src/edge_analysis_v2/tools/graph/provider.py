@@ -345,10 +345,14 @@ class GraphTools:
             raise ValueError('Invalid dates')
         return {'start_at': start.isoformat() + 'T00:00:00+09:00', 'end_at': (end + timedelta(days=1)).isoformat() + 'T00:00:00+09:00'}
 
+    def cutoff_day(self):
+        """The Korean day of the cutoff. The cutoff is stored in UTC, whose date is a day earlier for nine hours of every day."""
+        return datetime.fromisoformat(self.store.cutoff).astimezone(timezone(timedelta(hours=9))).date()
+
     def check_date(self, value):
         """Reject a Korean market day that begins after the analysis cutoff."""
         parsed = date.fromisoformat(value)
-        if parsed > datetime.fromisoformat(self.store.cutoff).astimezone(timezone(timedelta(hours=9))).date():
+        if parsed > self.cutoff_day():
             raise ValueError('Requested date is after the analysis cutoff')
         return parsed
 

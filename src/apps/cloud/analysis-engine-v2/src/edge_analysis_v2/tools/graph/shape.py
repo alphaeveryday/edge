@@ -9,6 +9,15 @@ DATES = ('reported_date', 'event_date', 'date', 'trade_date', 'as_of_date', 'pub
          'tradeDate', 'observationDate', 'holdingsDate', 'eventDate', 'publishedAt', 'availableAt', 'snapshotDate')
 
 
+def number(value):
+    """A stored figure as a finite Decimal, or None: "abc" raised past the tool record and "Infinity" was calculated with."""
+    try:
+        parsed = Decimal(str(value))
+    except ArithmeticError:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
 def won_text(value):
     """A won amount as it is written, exact to the won: 2004376374000 -> '2조 43억 7,637만 4,000원'.
 

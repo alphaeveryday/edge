@@ -1,7 +1,7 @@
 """Comparable financial and macro evidence; report absent semantic dimensions explicitly."""
 from decimal import Decimal
 from edge_analysis_v2.tools.graph.provider import SELECTOR,STRING,LIMIT,RESULT_REF,REF
-from edge_analysis_v2.tools.graph.shape import won_text
+from edge_analysis_v2.tools.graph.shape import number,won_text
 
 
 def one_per_figure(rows, identity, version):
@@ -32,8 +32,8 @@ class FinancialTools:
             ['start_date','end_date'],self.macro,sources=['MacroObservation'])
         tools.register('compare_two_figures',{'dataset_ref':RESULT_REF,'earlier_id':STRING,'later_id':STRING},['dataset_ref','earlier_id','later_id'],self.compare,sources=['저장한 재무·매크로 관측'])
         tools.register('derive_fourth_quarter',{'dataset_ref':RESULT_REF,'annual_id':STRING,'nine_month_id':STRING},['dataset_ref','annual_id','nine_month_id'],self.derive,sources=['저장한 재무 관측'])
-        tools.register('estimate_contract_profit',{'event_ref':REF,'company_ref':REF,'years_low':{'type':'number','exclusiveMinimum':0},'years_high':{'type':'number','exclusiveMinimum':0},
-             'margin_low':{'type':'number'},'margin_high':{'type':'number'},'company_share':{'type':'number','exclusiveMinimum':0,'maximum':1},
+        tools.register('estimate_contract_profit',{'event_ref':REF,'company_ref':REF,'years_low':{'type':'number','exclusiveMinimum':0,'maximum':100},'years_high':{'type':'number','exclusiveMinimum':0,'maximum':100},
+             'margin_low':{'type':'number','minimum':-1,'maximum':1},'margin_high':{'type':'number','minimum':-1,'maximum':1},'company_share':{'type':'number','exclusiveMinimum':0,'maximum':1},
              'etf_ref':REF,'holdings_date':STRING,'holding_weight':{'type':'number','minimum':0,'maximum':1}},
             ['event_ref','company_ref'],self.impact,sources=['SourceEvent', 'EventMeasurement', 'FinancialMetric'])
         tools.register('compare_actual_to_expectation',{'actual_ref':RESULT_REF,'actual_id':STRING,'expectation_ref':RESULT_REF,'expectation_id':STRING},
@@ -64,15 +64,26 @@ class FinancialTools:
         same=self.graph.linked([company_ref],'Company_ParticipatesIn_SourceEvent',where='n.eventType=$type AND n.eventDate=date($day)',
             parameters={'type':properties.get('eventType'),'day':properties.get('eventDate')}) if properties.get('eventDate') else []
         reports=self.tools.events.enrich(list({o['object_id']:o for o in [*found,*(r['target'] for r in same)]}.values()))
-        feature=lambda code,unit:[Decimal(m['properties']['value']) for report in reports for m in report['features']
-            if m['properties'].get('metricCode')==code and m['properties'].get('unit')==unit and m['properties'].get('value') is not None]
+        parties=lambda report:{(p['actor']['object_type'],p['actor']['object_id']):p.get('role') for p in report.get('participants') or []}
+        asked=next(r for r in reports if r['event']['object_id']==event_ref['object_id']);roles=parties(asked)
+        mine=('Company',company_ref['object_id'])
+        # The contract of one company was scaled against the accounts of another, and of its customer.
+        if roles and mine not in roles:raise ValueError('company_ref is not a participant of this event. Pass the company that earns the contract, from the participants of the event row.')
+        if roles.get(mine)=='CUSTOMER':raise ValueError('company_ref is the customer of this contract. Pass the company that earns it.')
+        # Two contracts of one company on one day are two events of one type and date: a report that names other
+        # counterparties than the event asked for is another contract, and its amount and period are not this one's.
+        others=set(roles)-{mine};total=len(reports)
+        reports=[r for r in reports if r is asked or not others or not set(parties(r))-{mine} or others&set(parties(r))]
+        # A stored amount that is not a finite number is an amount the report does not state.
+        feature=lambda code,unit:[v for v in (number(m['properties'].get('value')) for report in reports for m in report['features']
+            if m['properties'].get('metricCode')==code and m['properties'].get('unit')==unit) if v is not None]
         values=feature('CONTRACT_VALUE','KRW')
         if not values:
             raise ValueError('No report of this event states a won contract value, so there is nothing to scale. '
                 'Pick an event row whose amounts list a won value (get_event_timeline lists the amounts of an event).')
         # The filing's own amount when a report carries it (news rounds 6,410억 9,538만원 to 6,400억원); else the amount most reports give.
-        filed=[Decimal(m['properties']['value']) for report in reports for m in report['features'] if m['properties'].get('metricCode')=='CONTRACT_VALUE'
-            and m['properties'].get('unit')=='KRW' and m['properties'].get('value') is not None and m['properties'].get('valueSource')=='DART']
+        filed=[v for v in (number(m['properties'].get('value')) for report in reports for m in report['features'] if m['properties'].get('metricCode')=='CONTRACT_VALUE'
+            and m['properties'].get('unit')=='KRW' and m['properties'].get('valueSource')=='DART') if v is not None]
         value=max(set(filed or values),key=(filed or values).count)
         other_values=sorted(set(values)-{value})
         days=set(feature('CONTRACT_DURATION','DAY'))
@@ -80,13 +91,19 @@ class FinancialTools:
         share=Decimal(str(company_share)) if company_share is not None else Decimal(1)
         if not 0<share<=1:raise ValueError('company_share is the part of the contract this company earns, above 0 and at most 1')
         value*=share
+        supplied_weight=holding_weight is not None;weight_missing=None
         if holding_weight is None and etf_ref is not None:
             # The weight was left out in most calls, so the answer had no fund-level size. Look it up from the fund.
-            selection=self.tools.holdings(etf_ref,holdings_date or self.tools.store.cutoff[:10],'latest_on_or_before')[1]['selection']
+            day=holdings_date or self.tools.cutoff_day().isoformat()
+            selection=self.tools.holdings(etf_ref,day,'latest_on_or_before')[1]['selection']
             _,mapping=self.tools.actors(selection)
             issued={m['security']['object_id'] for m in mapping if m['actor']['object_id']==company_ref['object_id']}
-            weights=[Decimal(str(i['weight_ratio'])) for i in selection['items'] if i['object_id'] in issued and i.get('weight_ratio') is not None]
+            weights=[w for w in (number(i.get('weight_ratio')) for i in selection['items'] if i['object_id'] in issued) if w is not None]
             holding_weight=sum(weights,Decimal(0)) if weights else None
+            # Left out without a word, a fund that does not hold the company read the same as one whose weight is unknown.
+            if holding_weight is None:
+                weight_missing=(f'The fund holds no security issued by this company in its holdings on or before {day}' if not issued else
+                    f'The fund holds the company on or before {day}, but no weight is stored for it')+', so no fund-weighted figure is given.'
         low,high=(Decimal(str(y)) if y is not None else stored_years for y in (years_low,years_high))
         if low is None or high is None:
             raise ValueError('No contract period is stored for this report. Pass years_low and years_high: your assumption of how many years the amount is recognised over.')
@@ -96,16 +113,22 @@ class FinancialTools:
             ('corpCode','fiscalYear','metric','periodKind','derivation'),'receivedAt')
         years={}
         for row in rows:
-            p=row['properties']
-            if p.get('unit')=='KRW' and p.get('value') is not None:years.setdefault(p['fiscalYear'],{})[p['metric']]=Decimal(p['value'])
-        full=[y for y,v in years.items() if len(v)==2 and v['revenue']>0]
+            p=row['properties'];figure=number(p.get('value'))
+            if p.get('unit')=='KRW' and figure is not None:years.setdefault(p['fiscalYear'],{}).setdefault(p['metric'],set()).add(figure)
+        full=[y for y,v in years.items() if len(v)==2 and max(v['revenue'])>0]
         if not full:raise ValueError('No full-year consolidated revenue and operating profit are stored for this company, so there is no base to compare with')
-        year=max(full);revenue,profit=years[year]['revenue'],years[year]['operating_income']
+        year=max(full)
+        # Stored versions that disagree are all kept as rows; the last one read was then taken as the base without a word.
+        unsettled=[metric for metric,figures in years[year].items() if len(figures)>1]
+        if unsettled:raise ValueError(f'The stored versions of {year} full-year {" and ".join(sorted(unsettled))} disagree, so there is no single base to compare with. '
+            'Read them with get_financial_observations and say which version you use; no estimate is made from an unsettled base.')
+        (revenue,),(profit,)=years[year]['revenue'],years[year]['operating_income']
         stored_margin=profit/revenue
         margins=[Decimal(str(m)) if m is not None else stored_margin for m in (margin_low,margin_high)]
         if not margins[0]<=margins[1]:raise ValueError('margin_low must not exceed margin_high')
         yearly=(value/high,value/low)                                   # recognised evenly: a longer period means less per year
-        earned=(yearly[0]*margins[0],yearly[1]*margins[1])
+        corners=[y*m for y in yearly for m in margins]                  # a loss-making margin puts the long period at the high end
+        earned=(min(corners),max(corners))
         percent=lambda x:f'{x*100:.1f}%'
         round_won=lambda x:won_text((x/10**8).quantize(Decimal(1))*10**8) if abs(x)>=10**9 else won_text(x)   # an estimate is not exact to the won
         span=lambda pair,show:show(pair[0]) if pair[0]==pair[1] else show(pair[0])+' ~ '+show(pair[1])
@@ -119,27 +142,37 @@ class FinancialTools:
             weight=Decimal(str(holding_weight))
             estimate['weighted_by_fund_holding']=span(tuple(x/profit*weight for x in earned),percent)
             estimate['weighted_by_fund_holding_means']="the company's operating-profit uplift times its weight in the fund; a size of the earnings effect, not an expected price move"
-        swing={'recognition_years':high/low,'operating_margin':margins[1]/margins[0] if margins[0]>0 else Decimal(1)}
+        # Width against the larger end: a ratio of the ends called a margin of 0% to 20% "not varied".
+        widest=max(abs(margins[0]),abs(margins[1]))
+        swing={'recognition_years':(high-low)/high,'operating_margin':(margins[1]-margins[0])/widest if widest else Decimal(0)}
         # The tool scaled a five-year tally of past awards that an answer took for a September contract. What the
         # reports say the stage is comes first, so an unsigned or unstaged amount is read as that.
         stages=sorted({r['event']['properties'].get('lifecycleStage') for r in reports if r['event']['properties'].get('lifecycleStage')})
         item={'contract_stage':(', '.join(stages) or 'not reported')+('' if 'DEFINITIVE_SIGNED' in stages else
                 ': no report of this event says the contract is signed. Read the report before using this amount, and say the estimate is for an unsigned contract.'),
             'estimate':estimate,
-            'most_sensitive_assumption':max(swing,key=swing.get) if max(swing.values())>1 else 'none varied: pass a low and a high value to see the range',
+            'most_sensitive_assumption':max(swing,key=swing.get) if max(swing.values())>0 else 'none varied: pass a low and a high value to see the range',
+            **({'fund_weight_not_found':weight_missing} if weight_missing else {}),
+            **({'same_day_reports_of_other_contracts_not_used':total-len(reports)} if total>len(reports) else {}),
             **({'other_reported_amounts':[won_text(v) for v in other_values]} if other_values else {}),
             'confirmed_inputs':{'contract_value':won_text(value/share),'reports_of_this_event':len(reports),'last_full_year':year,'revenue':won_text(revenue),'operating_profit':won_text(profit),
-                'operating_margin':percent(stored_margin),**({'holding_weight':percent(Decimal(str(holding_weight)))} if holding_weight is not None else {})},
+                'operating_margin':percent(stored_margin),**({'holding_weight':percent(holding_weight)} if holding_weight is not None and not supplied_weight else {})},
             'assumptions':{'company_share':percent(share)+(' (the whole contract; pass company_share when it is shared with another company)' if company_share is None else ' (supplied by the caller)'),
                 'recognition_years':span((low,high),lambda y:f'{y:.1f}')+(' (stored contract period)' if years_low is None and years_high is None else ' (supplied by the caller)'),
                 'operating_margin':span(tuple(margins),percent)+(' (the company\'s last full-year margin)' if margin_low is None and margin_high is None else ' (supplied by the caller)'),
-                'recognition':'even over the period; the first year and the month ahead recognise less than a full year'},
+                'recognition':'even over the period; the first year and the month ahead recognise less than a full year',
+                **({'holding_weight':percent(Decimal(str(holding_weight)))+' (supplied by the caller, not read from the fund)'} if supplied_weight else {})},
             'reading':'An estimate from the stated assumptions, not reported or forecast earnings. Say it as an estimate with its assumptions, and say which assumption would change it most.'}
         return self.tools.result([item],limit=1,scope={'dataset_kind':'contract_impact_estimate','event_ref':event_ref,'company_ref':company_ref})
 
     def observations(self,targets,kind,fiscal_years=None,metrics=None,fs_basis=None,limit=20):
         selection=self.tools.select(targets);actors,mapping=self.tools.actors(selection)
         companies=[a for a in actors if a['object_type']=='Company']
+        # Financial figures hang on companies. A fund named as an object, or a share with no stored issuer, leads to
+        # none, and the request then came back as a company with no figures.
+        if not companies:
+            raise ValueError('None of the targets is a company or a share with a stored issuing company, so no financial figure can be looked up for them. '
+                'For a fund, pass targets {"kind":"etf_holdings",...} to look at its constituents. This is a wrong argument, not missing data.')
         if kind=='actual':
             conditions=[];params={}
             for key,value in [('fiscalYear',fiscal_years),('metric',metrics),('fsBasis',fs_basis)]:
@@ -224,8 +257,8 @@ class FinancialTools:
                       'fsBasis':' One is consolidated (CFS) and the other separate (OFS); pick two rows with the same fsBasis.'}.get(key,'')
                 raise ValueError(f'The two observations differ in {key} ({a.get(key)} vs {b.get(key)}), so they cannot be compared.'+hint)
         if a.get('value') is None or b.get('value') is None:raise ValueError('Comparison value is missing')
-        x,y=Decimal(a['value']),Decimal(b['value'])
-        if not x.is_finite() or not y.is_finite():raise ValueError('Comparison values must be finite')
+        x,y=number(a['value']),number(b['value'])
+        if x is None or y is None:raise ValueError('Comparison values must be finite numbers')
         return x,y
 
     def compare(self,dataset_ref,earlier_id,later_id):

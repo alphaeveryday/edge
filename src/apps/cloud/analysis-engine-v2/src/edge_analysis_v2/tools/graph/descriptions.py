@@ -171,15 +171,16 @@ TOOLS = {
     'estimate_contract_profit': {
         'summary': 'Estimate how much one contract adds to a company\'s yearly revenue and operating profit, as a range, against its last full year.',
         'returns': 'contract_stage (signed or not, read it first), estimate (per year: revenue, operating profit, each as a share of last year, and weighted by the fund), '
-                   'confirmed_inputs (stored), assumptions (which are yours), and most_sensitive_assumption. Every figure is per year of recognition, not per month. '
+                   'confirmed_inputs (stored), assumptions (which are yours, a holding_weight you pass among them), and most_sensitive_assumption. '
+                   'fund_weight_not_found says why no fund-weighted figure is given. Every figure is per year of recognition, not per month. '
                    'Say it as an estimate with its assumptions.',
         'prerequisite': 'The event_id of a list_events row or event_ref of a find_similar_events row of a contract, and the company that earns it.',
         'alternative': 'Use this whenever the answer says how much an order matters for earnings or for a fund, instead of writing "large" or "limited".',
         'args': {'event_ref': 'The event, as {"object_type":"SourceEvent","object_id":"..."}. The amount and period are read from every report of that event.',
-                 'company_ref': 'The company that earns the contract. Its security is accepted and mapped to the issuer.',
+                 'company_ref': 'The company that earns the contract: a participant of the event, not its customer. Its security is accepted and mapped to the issuer.',
                  'years_low': 'Shortest recognition period in years. Most reports store no period, so give your assumption with years_high.',
-                 'years_high': 'Longest recognition period in years.',
-                 'margin_low': 'Lowest operating margin to test, 0.08 means 8%. Default: the company\'s last full-year margin.',
+                 'years_high': 'Longest recognition period in years, at most 100.',
+                 'margin_low': 'Lowest operating margin to test, 0.08 means 8%, between -1 and 1. Default: the company\'s last full-year margin.',
                  'margin_high': 'Highest operating margin to test.',
                  'company_share': 'This company\'s part of a shared contract, 0.5 means half. Default: the whole contract.',
                  'etf_ref': 'A fund. The result is then also weighted by the company\'s weight in that fund.',

@@ -70,6 +70,19 @@ class FinancialTests(unittest.TestCase):
         expected=self.save([self.obs('estimate','100')],'guidance_events')
         with self.assertRaisesRegex(ValueError,'consensus'):self.tools.financial.expectation(actual,'actual',expected,'estimate')
 
+    def test_targets_that_lead_to_no_company_are_a_wrong_argument_and_not_a_company_without_figures(self):
+        # WHY: a fund named as an object reached no company and came back as zero financial rows.
+        from unittest.mock import patch
+        with patch.object(self.tools,'select',return_value={'items':[{'object_type':'ETF','object_id':'f','status':'resolved'}]}),patch.object(self.tools,'actors',return_value=([],[])):
+            for kind in ('actual','segment','guidance'):
+                with self.assertRaisesRegex(ValueError,'wrong argument, not missing data'):self.tools.financial.observations({},kind)
+
+    def test_a_stored_value_that_is_not_a_finite_number_cannot_be_compared(self):
+        # WHY: the conversion raised an error the tool record never saw.
+        for bad in ('abc','NaN','Infinity'):
+            ref=self.save([self.obs('a','100'),self.obs('b',bad,periodEnd='2026-09-30',fiscalPeriod='Q3')])
+            with self.assertRaisesRegex(ValueError,'finite numbers'):self.tools.financial.compare(ref,'a','b')
+
 
 class StoredVersionTests(unittest.TestCase):
     def test_a_figure_stored_several_times_with_one_value_is_returned_once(self):
@@ -114,3 +127,114 @@ def test_a_contract_is_scaled_to_yearly_revenue_and_profit_with_its_assumptions_
     import pytest
     with pytest.raises(ValueError, match='years_low and years_high'):
         tool.impact(*refs)
+
+
+def contract_tool(features=None, participants=None, metrics=None, reports=None, holdings=None, cutoff_day='2026-10-05'):
+    """The contract estimate over one event 'e' of company 'c' with last-year revenue 10조 and operating profit 1조."""
+    from datetime import date
+    from types import SimpleNamespace
+    from edge_analysis_v2.tools.graph.financial import FinancialTools
+    event = {'object_type': 'SourceEvent', 'object_id': 'e', 'title': 'x', 'properties': {'eventType': 'COMPANY.CONTRACT.SIGNING', 'eventDate': '2026-09-04'}}
+    measure = lambda code, value, unit: {'object_id': code, 'properties': {'metricCode': code, 'value': value, 'unit': unit}}
+    metric = lambda name, value, at='1': {'target': {'object_type': 'FinancialMetric', 'object_id': name + at, 'properties': {
+        'corpCode': 'c', 'fiscalYear': 2025, 'metric': name, 'periodKind': 'CUMULATIVE', 'derivation': 'REPORTED', 'unit': 'KRW', 'value': value, 'receivedAt': at}}}
+    metrics = metrics or [metric('revenue', '10000000000000'), metric('operating_income', '1000000000000')]
+    features = [measure('CONTRACT_VALUE', '600000000000', 'KRW'), measure('CONTRACT_DURATION', '1095', 'DAY')] if features is None else features
+    reports = reports or [{'event': event, 'features': features, 'participants': participants or []}]
+    graph = SimpleNamespace(get=lambda refs: {'items': [{'status': 'resolved', 'object': event}]},
+        linked=lambda refs, link, *a, **k: [] if 'SourceEvent' in link else metrics)
+    asked = []
+    def held(etf_ref, day, policy):
+        asked.append(day)
+        return None, {'selection': {'items': holdings or []}}
+    owner = SimpleNamespace(graph=graph, register=lambda *a, **k: None, result=lambda items, **k: (items, k),
+        events=SimpleNamespace(enrich=lambda found: reports), holdings=held, cutoff_day=lambda: date.fromisoformat(cutoff_day),
+        actors=lambda selection: ([], [{'security': {'object_id': i['object_id']}, 'actor': {'object_id': 'c'}} for i in selection['items'] if i.get('issuer') == 'c']))
+    return FinancialTools(owner), asked, metric, measure, event
+
+
+REFS = ({'object_type': 'SourceEvent', 'object_id': 'e'}, {'object_type': 'Company', 'object_id': 'c'})
+
+
+def test_a_loss_making_margin_gives_the_whole_range_of_the_loss():
+    # WHY: the low period was paired with the low margin, so margins of -15% to -5% over 2 to 6 years came back as -150억 alone.
+    tool = contract_tool()[0]
+    (row,), _ = tool.impact(*REFS, years_low=2, years_high=6, margin_low=-0.15, margin_high=-0.05)
+    assert row['estimate']['yearly_operating_profit'] == '-450억원 ~ -50억원'
+
+
+def test_a_margin_that_starts_at_zero_is_a_varied_assumption():
+    # WHY: the width was a ratio of the two ends, so 0% to 20% was "none varied" while the profit ran from 0 to 400억.
+    tool = contract_tool()[0]
+    (row,), _ = tool.impact(*REFS, margin_low=0, margin_high=0.2)
+    assert row['most_sensitive_assumption'] == 'operating_margin' and row['estimate']['yearly_operating_profit'] == '0원 ~ 400억원'
+    (fixed,), _ = tool.impact(*REFS)
+    assert fixed['most_sensitive_assumption'].startswith('none varied')
+
+
+def test_stored_versions_of_the_base_year_that_disagree_stop_the_estimate():
+    # WHY: both versions were kept as rows and the last one read became the base, so the order of the rows set the margin.
+    import pytest
+    tool, _, metric, _, _ = contract_tool()
+    tool.graph.linked = lambda refs, link, *a, **k: [] if 'SourceEvent' in link else [
+        metric('revenue', '10000000000000'), metric('operating_income', '1000000000000', '1'), metric('operating_income', '2000000000000', '2')]
+    with pytest.raises(ValueError, match='versions of 2025 full-year operating_income disagree'):
+        tool.impact(*REFS)
+
+
+def test_the_company_must_take_part_in_the_contract_and_not_be_its_customer():
+    # WHY: the contract of one company was scaled against the accounts of another, and of the customer.
+    import pytest
+    party = lambda kind, identifier, role: {'actor': {'object_type': kind, 'object_id': identifier}, 'role': role}
+    with pytest.raises(ValueError, match='not a participant'):
+        contract_tool(participants=[party('Company', 'other', 'SUPPLIER')])[0].impact(*REFS)
+    with pytest.raises(ValueError, match='customer of this contract'):
+        contract_tool(participants=[party('Company', 'c', 'CUSTOMER')])[0].impact(*REFS)
+    (row,), _ = contract_tool(participants=[party('Company', 'c', 'SUPPLIER'), party('Organization', 'buyer', 'CUSTOMER')])[0].impact(*REFS)
+    assert row['estimate']['yearly_revenue'] == '2,000억원'
+
+
+def test_another_contract_of_the_same_day_does_not_lend_its_amount():
+    # WHY: two contracts of one company on one day were read as one, and the filing amount of the other was scaled.
+    tool, _, _, measure, event = contract_tool()
+    party = lambda kind, identifier, role: {'actor': {'object_type': kind, 'object_id': identifier}, 'role': role}
+    mine = party('Company', 'c', 'SUPPLIER')
+    filed = {'object_id': 'big', 'properties': {'metricCode': 'CONTRACT_VALUE', 'value': '9000000000000', 'unit': 'KRW', 'valueSource': 'DART'}}
+    reports = [{'event': event, 'features': [measure('CONTRACT_VALUE', '600000000000', 'KRW'), measure('CONTRACT_DURATION', '1095', 'DAY')],
+                'participants': [mine, party('Organization', 'buyer-a', 'CUSTOMER')]},
+               {'event': {**event, 'object_id': 'other'}, 'features': [filed], 'participants': [mine, party('Organization', 'buyer-b', 'CUSTOMER')]},
+               {'event': {**event, 'object_id': 'news'}, 'features': [], 'participants': [mine]}]
+    tool.tools.events.enrich = lambda found: reports
+    (row,), _ = tool.impact(*REFS)
+    assert row['confirmed_inputs']['contract_value'] == '6,000억원' and row['confirmed_inputs']['reports_of_this_event'] == 2
+    assert row['same_day_reports_of_other_contracts_not_used'] == 1 and 'other_reported_amounts' not in row
+
+
+def test_a_stored_amount_that_is_not_a_finite_number_is_an_amount_not_stated():
+    # WHY: "not-a-number" and "Infinity" raised errors the tool record never saw.
+    import pytest
+    for bad in ('not-a-number', 'Infinity', 'NaN'):
+        tool, _, _, measure, _ = contract_tool(features=[])
+        tool.tools.events.enrich = lambda found, bad=bad: [{'event': {'object_id': 'e', 'properties': {}}, 'features': [measure('CONTRACT_VALUE', bad, 'KRW')]}]
+        with pytest.raises(ValueError, match='states a won contract value'):
+            tool.impact(*REFS, years_low=1, years_high=2)
+
+
+def test_the_fund_weight_is_read_on_the_korean_day_and_its_absence_is_said():
+    # WHY: the UTC date of the cutoff is a day early for nine hours of every day, and a fund that does not hold the
+    # company gave the same answer as no fund at all.
+    fund = {'object_type': 'ETF', 'object_id': 'f'}
+    tool, asked, *_ = contract_tool(holdings=[{'object_id': 's', 'issuer': 'c', 'weight_ratio': '0.25'}])
+    (row,), _ = tool.impact(*REFS, etf_ref=fund)
+    assert asked == ['2026-10-05'] and row['estimate']['weighted_by_fund_holding'] == '0.5%'
+    assert row['confirmed_inputs']['holding_weight'] == '25.0%' and 'holding_weight' not in row['assumptions']
+    (absent,), _ = contract_tool(holdings=[{'object_id': 's', 'issuer': 'x', 'weight_ratio': '0.25'}])[0].impact(*REFS, etf_ref=fund)
+    assert 'holds no security issued by this company' in absent['fund_weight_not_found'] and 'weighted_by_fund_holding' not in absent['estimate']
+    (unknown,), _ = contract_tool(holdings=[{'object_id': 's', 'issuer': 'c', 'weight_ratio': None}])[0].impact(*REFS, etf_ref=fund)
+    assert 'no weight is stored' in unknown['fund_weight_not_found']
+
+
+def test_a_weight_the_caller_passes_is_an_assumption_and_not_a_stored_input():
+    # WHY: a weight passed by hand was listed under confirmed_inputs, which the description calls stored.
+    (row,), _ = contract_tool()[0].impact(*REFS, holding_weight=0.25)
+    assert 'holding_weight' not in row['confirmed_inputs'] and 'supplied by the caller' in row['assumptions']['holding_weight']
