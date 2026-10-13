@@ -63,3 +63,25 @@ def test_a_day_in_the_daily_table_equals_the_one_day_window_and_contributions_us
     assert daily(data, 3, 'B')['rows'][0][1] == 0
     with pytest.raises(ToolInputError):
         daily(data, 5, 'UNKNOWN')
+
+
+def test_a_day_the_market_series_lacks_is_not_bridged_into_one_daily_return():
+    # WHY: with Tuesday missing from the market series, Monday to Wednesday was shown as Wednesday's daily return.
+    data, dates = fixture()
+    gap = dates[-3]
+    data['market_prices'] = [r for r in data['market_prices'] if r['date'] != gap]
+    rows = daily(data, 30)['rows']
+    shown = [row[0] for row in rows]
+    assert gap not in shown and dates[-2] not in shown and dates[-1] in shown   # neither side of the gap is a one-day return
+    whole = daily(fixture()[0], 30)['rows']
+    assert rows[-1] == whole[-1]                                                # the days that are shown are unchanged
+
+
+def test_a_holding_without_both_closes_is_named_and_not_dropped():
+    # WHY: a holding listed after the start date vanished from a table that says it lists every constituent.
+    data, dates = fixture()
+    data['prices'] = [r for r in data['prices'] if not (r['instrument_id'] == 'B' and r['date'] <= dates[-5])]
+    result = window(data, dates[-5], dates[-2])
+    assert [row[0] for row in result['constituents']['rows']] == ['A']
+    assert [c['instrument_id'] for c in result['not_measured']['constituents']] == ['B'] and result['not_measured']['constituents'][0]['weight'] == 0.4
+    assert 'not_measured' not in window(fixture()[0], dates[-5], dates[-2])

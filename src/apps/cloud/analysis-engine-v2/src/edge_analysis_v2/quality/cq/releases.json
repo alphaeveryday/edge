@@ -1,7 +1,7 @@
 {
   "version": 107,
   "summary": "조사 도구 추가: 기간 수익률을 시장 몫과 나머지로 나눔(calculate_window_returns, get_daily_returns), 종목 요인 표(get_instrument_factor_table), 웹 문서의 발행처와 수정 시각, 검색 도구의 가설·찾는 것 인자",
-  "source_digest": "24554a8d4d25387e396fc632b75e38813fa50bac8ad450ca0884d43312fb748b",
+  "source_digest": "ce257fbd1b03bf51a524d31c7076e37c941535d81e8d63c85b1a9577f2937699",
   "history": [
     {
       "version": 1,

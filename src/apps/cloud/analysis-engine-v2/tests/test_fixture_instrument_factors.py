@@ -213,7 +213,7 @@ def test_the_factor_table_has_one_row_per_holding_and_the_same_values_as_the_sin
     assert by[codes[0]]['momentum_index'] == single['chart']['momentum_index']
     assert by[codes[0]]['foreign_net_5d_krw'] == sum(day[1] for day in single['flow']['history']['rows'][-5:])
     top = tools.call('get_instrument_factor_table', {'instrument_ids': ['091160'], 'top_n': 1, 'factors': ['valuation']})['result']
-    assert [row[0] for row in top['rows']] == codes[:1] and top['columns'] == ['instrument_id', 'name', 'weight_pct', 'per', 'pbr']
+    assert [row[0] for row in top['rows']] == codes[:1] and top['columns'] == ['instrument_id', 'name', 'weight_pct', 'per', 'pbr', 'eps_approximate']
     for bad in ({'instrument_ids': ['unknown']}, {'top_n': 0}, {'factors': ['macro']}, {'instrument_ids': []}):
         with pytest.raises(ValueError):
             tools.call('get_instrument_factor_table', bad)

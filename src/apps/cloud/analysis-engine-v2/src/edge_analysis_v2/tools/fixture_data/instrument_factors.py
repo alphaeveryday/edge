@@ -324,7 +324,7 @@ TABLE_COLUMNS = {
               'distance_from_52w_closing_high_pct'],
     'flow': ['foreign_net_5d_krw', 'foreign_net_20d_krw', 'institution_net_5d_krw', 'institution_net_20d_krw',
              'individual_net_5d_krw', 'individual_net_20d_krw'],
-    'valuation': ['per', 'pbr'],
+    'valuation': ['per', 'pbr', 'eps_approximate'],   # the single read marks a PER whose EPS has a derived quarter; so does the table
 }
 
 

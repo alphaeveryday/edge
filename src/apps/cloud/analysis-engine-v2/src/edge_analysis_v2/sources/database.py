@@ -293,6 +293,8 @@ class DatabaseTools(FixtureTools):
                 tool['sources'] = ['macro_observations_as_of']
             elif 'valuation' in name:
                 tool['sources'] = ['financial_quarters_as_of','price_daily','etf_holding_snapshot']
+            elif name in ('calculate_window_returns','get_daily_returns'):
+                tool['sources'] = ['price_daily','etf_holding_snapshot']
             elif name in ('calculate_chart_indicators','evaluate_indicator_transition'):
                 tool['sources'] = ['price_daily','minute_price_trigger']
             elif 'flow' in name:
