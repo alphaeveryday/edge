@@ -141,6 +141,35 @@ class MinuteDailyStatusResponseTest {
 		assertThat(first(response).basis()).contains("품질·원장 결함").doesNotContain("job 대기");
 	}
 
+	@Test
+	void 창_수는_세션을_합쳐_그대로_싣고_판정은_그대로다() {
+		/* 판정에 쓰던 숫자를 접지 않고 싣는다(ALPHA-1289). 두 vendor 세션의 합이고, 상태 판정은
+		 * 이 필드가 생기기 전과 같다 — 결손 창이 있는 종료 세션은 여전히 주의다. */
+		DailyWindowCounts defect = new DailyWindowCounts(1, 2, 380, 3, 2, 1, 1, 0, 0);
+		MinuteDailyStatusResponse.DatasetResponse dataset = first(response(List.of(
+				session("kis", "FINALIZED", false, defect),
+				session("toss", "FINALIZED", false, windows(390, 0)))));
+
+		assertThat(dataset.windows()).isEqualTo(new MinuteDailyStatusResponse.WindowsResponse(
+				780, 1, 2, 770, 3, 2, 1, 1));
+		assertThat(dataset.state()).isEqualTo(MinuteDailyStatusResponse.State.CAUTION);
+		assertThat(dataset.totalSessions()).isEqualTo(2);
+		// 와이어 이름 — UI 타입(MinuteDailyWindows)이 읽는 키 그대로 나간다.
+		var json = tools.jackson.databind.json.JsonMapper.builder().build().valueToTree(dataset).path("windows");
+		assertThat(json.propertyNames()).containsExactlyInAnyOrder("expected", "due", "claimed",
+				"valid", "validEmpty", "incomplete", "missing", "invalid");
+		assertThat(json.path("validEmpty").asLong()).isEqualTo(3L);
+	}
+
+	@Test
+	void 세션_없이_날짜_축_job_만으로_선_항목은_창_수가_없다() {
+		// 0 이 아니라 null 이다 — 그 날짜에 세션이 없었다는 뜻이고, 0 으로 내리면 "기대 창 0"이 된다.
+		MinuteDailyStatusResponse response = MinuteDailyStatusResponse.from(1, DAY, DAY,
+				new DailyStatus(List.of(), Map.of(DAY, new JobCounts(2, 0, 0, 0, 0, 0))));
+		assertThat(first(response).totalSessions()).isZero();
+		assertThat(first(response).windows()).isNull();
+	}
+
 	private static MinuteDailyStatusResponse response(List<DailySessionSummary> sessions) {
 		return MinuteDailyStatusResponse.from(1, DAY, DAY, new DailyStatus(sessions, Map.of()));
 	}

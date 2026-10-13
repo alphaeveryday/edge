@@ -39,7 +39,7 @@ const ev = {
   rules: [
     R('R08'), //  dep 있음(계측 공백)
     R('R17'), //  dep 없음 + axis:'minute'(실시간 응답 축)
-    R('R13', { notRun: 'identity', note: 'R13: 사건 식별자 충돌 R13:o.pub — …' }),
+    R('R13', { notRun: 'identity', note: 'R13: 사건 식별자 충돌 R13:o.outlook — …' }),
     R('R04', { evaluated: true, notRun: undefined, violations: 2 }),
     R('R12'), // dep 있음(구 API의 SQS 축 부재) — 실시간 조회 상태를 붙이면 안 되는 규칙
   ],

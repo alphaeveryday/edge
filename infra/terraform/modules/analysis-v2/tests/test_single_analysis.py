@@ -4,6 +4,7 @@ Run: AWS_PROFILE=work python -m unittest discover -s infra/terraform/modules/ana
 """
 import json
 from pathlib import Path
+import re
 import unittest
 
 import boto3
@@ -73,15 +74,34 @@ class SingleAnalysis(unittest.TestCase):
 
     def test_control_throttle_retries_longer_with_jitter_than_function_errors(self):
         # A throttled control call never reached the slot table, so it may wait; a function error must not hide.
-        for state in ('Acquire','Release','ReleaseFailed'):
-            for count in range(8):
+        # Acquire waits longer: 95 workflows started in one minute on 2026-10-13 and 39 ended without analysis
+        # after 8 throttled attempts. Release keeps 8: while it retries, the finished analysis still owns its slot.
+        for state,limit in (('Acquire',12),('Release',8),('ReleaseFailed',8)):
+            for count in sorted({0,1,2,3,4,7,limit-1}):
                 status,details=self.retry(state,'Lambda.TooManyRequestsException',count)
                 self.assertEqual((status,details['retryIndex']),('RETRIABLE',0),(state,count))
                 self.assertLessEqual(details['retryBackoffIntervalSeconds'],20,(state,count))
-            self.assertEqual(self.retry(state,'Lambda.TooManyRequestsException',8)[0],'FAILED',state)
+            self.assertEqual(self.retry(state,'Lambda.TooManyRequestsException',limit)[0],'FAILED',state)
+            # The sampled waits above are jittered, so the cap itself is asserted on the definition.
+            self.assertEqual(self.definition['States'][state]['Retry'][0]['MaxDelaySeconds'],20,state)
             status,details=self.retry(state,'RuntimeError',0)
             self.assertEqual((status,details['retryIndex'],details['retryBackoffIntervalSeconds']),('RETRIABLE',1,5),state)
             self.assertEqual(self.retry(state,'RuntimeError',3)[0],'FAILED',state)
+
+    def test_throttle_waits_and_analysis_fit_inside_the_batch_wait_for_one_workflow(self):
+        # The outlook batch waits a fixed time for each workflow. If throttled Acquire and Release retries,
+        # the control calls that finally run, and the longest analysis could exceed it, the batch would give
+        # up on a workflow that still finishes. Waiting 30 seconds for a free slot is outside this sum: the
+        # batch starts only as many workflows as there are slots.
+        def wait(state):
+            rule=self.definition['States'][state]['Retry'][0]
+            return sum(min(rule['IntervalSeconds']*rule['BackoffRate']**n,rule['MaxDelaySeconds']) for n in range(rule['MaxAttempts']))
+        module=Path(__file__).parents[1]
+        batch_wait=int(re.search(r'startExecution\.sync:2".*?"TimeoutSeconds": (\d+)',(module/'outlook_batch.asl.json').read_text(),re.S).group(1))
+        call=int(re.search(r'resource "aws_lambda_function" "control".*?\n  timeout\s*=\s*(\d+)',(module/'control.tf').read_text(),re.S).group(1))
+        analysis=self.definition['States']['Analyze']['TimeoutSeconds']
+        for release in ('Release','ReleaseFailed'):
+            self.assertLess(wait('Acquire')+call+analysis+wait(release)+call,batch_wait,release)
 
     def test_slot_key_is_kind_and_etf_not_analysis_id(self):
         result=self.step('Acquire',{'request':self.request},{'result':'{"acquired":true,"started_by":"x"}','fieldValidationMode':'NONE'})

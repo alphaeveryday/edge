@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
-test('separate admin login, private detail, tabs, refresh and expired-session clearing', async ({ page }) => {
-  let loggedIn = false;
+test('SSM dashboard detail, tabs, refresh and disconnected-data clearing', async ({ page }) => {
+  let loggedIn = true;
   let expired = false;
   let count = 2;
   let listQueries: string[] = [];
@@ -19,8 +19,6 @@ test('separate admin login, private detail, tabs, refresh and expired-session cl
     return route.fulfill({ json: { id: 'one', visitor: 'testvisitor1', state: 'failed', input: { holdings: [{ name: 'KODEX 200', instrument_id: 'KR:069500', account: '일반 계좌', amount_krw: '1000000' }], input_mode: 'amount', question: '<img src=x onerror=alert(1)>', horizon: '10년 이상', preferences: { note: '내 입력 메모', interests: ['반도체'], accounts: ['일반 계좌'], contribution: '매달 100만 원' } } } });
   });
   await page.goto('/portfolio/admin.html');
-  await page.getByLabel('비밀번호').fill('test password');
-  await page.getByRole('button', { name: '관리자 로그인' }).click();
   await expect(page.getByRole('heading', { name: '지금, ORCA' })).toBeVisible();
   await expect(page.locator('.stat').first().locator('strong')).toHaveText('2');
   await expect(page.locator('.records')).toContainText('최종 의견 · 2분 5초');
@@ -45,7 +43,7 @@ test('separate admin login, private detail, tabs, refresh and expired-session cl
   await page.screenshot({ path: `test-results/admin-${test.info().project.name}.png`, fullPage: true });
   expired = true;
   await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect(page.getByRole('button', { name: '관리자 로그인' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '다시 연결' })).toBeVisible();
   await expect(page.getByText('user@example.com')).toHaveCount(0);
 });
 
@@ -65,8 +63,11 @@ test('refresh failures remain visible and pagination does not mix records', asyn
   await expect(page.getByText('visitor-page-1', { exact: true })).toHaveCount(0);
   failing = true;
   await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('마지막으로 성공한 조회 결과');
-  await expect(page.locator('.sync')).toContainText('갱신 지연');
+  await expect(page.getByRole('heading', { name: '연결이 끊겼어요' })).toBeVisible();
+  await expect(page.getByText('visitor-page-2', { exact: true })).toHaveCount(0);
+  failing = false;
+  await page.getByRole('button', { name: '다시 연결' }).click();
+  await expect(page.getByText('visitor-page-2', { exact: true })).toBeVisible();
 });
 
 test('deleted selected drafts do not freeze live overview and records', async ({ page }) => {
@@ -115,7 +116,8 @@ test('anonymous visitor heartbeat is separate from the admin page', async ({ pag
   expect(pulses).toBe(before);
 });
 
-test('a fast refresh error cannot hide a later session-expiry response', async ({ page }) => {
+test('a fast polling error clears private data despite a later failed response', async ({ page }) => {
+  await page.clock.install();
   let expired = false;
   await page.route('**/api/portfolio/admin/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -130,8 +132,8 @@ test('a fast refresh error cannot hide a later session-expiry response', async (
   await page.goto('/portfolio/admin.html');
   await expect(page.getByText('privatevisitor', { exact: true })).toBeVisible();
   expired = true;
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect(page.getByRole('button', { name: '관리자 로그인' })).toBeVisible();
+  await page.clock.runFor(10000);
+  await expect(page.getByRole('button', { name: '다시 연결' })).toBeVisible();
   await expect(page.getByText('privatevisitor', { exact: true })).toHaveCount(0);
 });
 
@@ -153,63 +155,6 @@ test('presence and first input save share one in-flight visitor session', async 
   expect(sessionCalls).toBe(1);
   release();
   await expect(page.getByRole('button', { name: '매달 꾸준히', exact: true })).toBeVisible();
-});
-
-test('refresh restart cannot discard session revocation from the same login', async ({ page }) => {
-  let phase = 'ready';
-  let release!: () => void;
-  let waiting = false;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/portfolio/admin/**', async route => {
-    const path = new URL(route.request().url()).pathname;
-    if (phase === 'delayed' && path.endsWith('/records')) {
-      waiting = true; await gate;
-      return route.fulfill({ status: 401, json: {} });
-    }
-    if (phase !== 'ready') return route.fulfill({ status: 503, json: {} });
-    if (path.endsWith('/overview')) return route.fulfill({ json: { as_of: new Date().toISOString(), active_visitors: 1, today_visitors: 1, queued: 0, running: 0, today_jobs: { queued: 0, running: 0, succeeded: 0, failed: 0 }, daily: [] } });
-    return route.fulfill({ json: { total: 1, page: 1, page_size: 50, items: [{ id: 'private-id', visitor: 'privatevisitor', at: new Date().toISOString(), state: 'queued' }] } });
-  });
-  await page.goto('/portfolio/admin.html');
-  await expect(page.getByText('privatevisitor', { exact: true })).toBeVisible();
-  phase = 'delayed';
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect.poll(() => waiting).toBe(true);
-  await expect(page.getByRole('alert')).toBeVisible();
-  phase = 'outage';
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  release();
-  await expect(page.getByRole('button', { name: '관리자 로그인' })).toBeVisible();
-  await expect(page.getByText('privatevisitor', { exact: true })).toHaveCount(0);
-});
-
-test('a stale expiry response cannot revoke a subsequent administrator login', async ({ page }) => {
-  let phase = 'ready';
-  let release!: () => void;
-  let waiting = false;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/portfolio/admin/**', async route => {
-    const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/login')) { phase = 'ready'; return route.fulfill({ json: { authenticated: true } }); }
-    if (phase === 'expire') {
-      if (path.endsWith('/records')) { waiting = true; await gate; }
-      return route.fulfill({ status: 401, json: {} });
-    }
-    if (path.endsWith('/overview')) return route.fulfill({ json: { as_of: new Date().toISOString(), active_visitors: 1, today_visitors: 1, queued: 0, running: 0, today_jobs: { queued: 0, running: 0, succeeded: 0, failed: 0 }, daily: [] } });
-    return route.fulfill({ json: { total: 1, page: 1, page_size: 50, items: [{ id: 'private-id', visitor: 'privatevisitor', at: new Date().toISOString(), state: 'queued' }] } });
-  });
-  await page.goto('/portfolio/admin.html');
-  await expect(page.getByText('privatevisitor', { exact: true })).toBeVisible();
-  phase = 'expire';
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect.poll(() => waiting).toBe(true);
-  await page.getByLabel('비밀번호').fill('test password');
-  await page.getByRole('button', { name: '관리자 로그인' }).click();
-  await expect(page.getByText('privatevisitor', { exact: true })).toBeVisible();
-  const staleResponse = page.waitForResponse(response => response.url().includes('/records?') && response.status() === 401);
-  release(); await staleResponse;
-  await page.waitForTimeout(100);
-  await expect(page.getByRole('heading', { name: '지금, ORCA' })).toBeVisible();
 });
 
 test('two first-visit tabs share the cookie before recording presence', async ({ context, page }) => {

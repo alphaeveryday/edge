@@ -809,8 +809,10 @@ def control_exp(args):
 
     # 아래는 AWS 응답을 대역으로 준 제어 로직 확인이다. 응답 형식은 2026-10-03 dev 읽기 조회로 맞췄다
     # (13시간 지난 STOPPED 태스크의 DescribeTasks → tasks [], failures [{reason: MISSING}]).
-    def stale(status, events, describe=None, history_error=None):
-        """끝난 실행 'old'(다른 ETF)의 자리가 남은 상태에서 새 실행이 다른 ETF 의 자리를 청한다."""
+    def stale(status, events, describe=None, history_error=None, slots=3):
+        """끝난 실행 'old'(다른 ETF)의 자리가 남은 상태에서 새 실행이 다른 ETF 의 자리를 청한다.
+
+        ALPHA-1286 뒤로 빈 자리가 있으면 남은 자리를 확인하지 않는다. 회수를 보려면 slots=1 로 자리를 꽉 채운다."""
         with admin() as c:
             c.execute('TRUNCATE analysis_execution_slots')
             c.execute("INSERT INTO analysis_execution_slots(execution_arn, started_by, request_key) VALUES ('old', 'x', %s)",
@@ -824,7 +826,7 @@ def control_exp(args):
         ecs.describe_tasks.return_value = describe or {'tasks': [], 'failures': []}
         with psycopg.connect(DSN['writer'], autocommit=True) as connection:
             try:
-                outcome = 'acquired' if control(connection, flow, ecs, 'cluster', 'new', 'acquire', slots=3,
+                outcome = 'acquired' if control(connection, flow, ecs, 'cluster', 'new', 'acquire', slots=slots,
                                                 request_key='outlook:' + codes[2])['acquired'] else 'waiting'
             except Exception as exc:
                 outcome = 'raised ' + type(exc).__name__ + ': ' + str(exc)
@@ -838,9 +840,14 @@ def control_exp(args):
     results['stale-slot-task-missing'] = stale('ABORTED', submitted, describe={
         'tasks': [], 'failures': [{'arn': 'task', 'reason': 'MISSING'}]})
     # 2) 태스크 제출 기록이 없는 끝난 실행(태스크를 띄우지 않았거나, RunTask 도중 중단돼 기록이 안 남음) → ECS 를 묻지 않고 회수
-    results['stale-slot-no-task-recorded'] = stale('ABORTED', [])
+    results['stale-slot-no-task-recorded'] = stale('ABORTED', [], slots=1)
     # 3) 실행 이력 조회 실패 → 끝난 다른 실행의 자리를 판정 못 하면 새 자리 확보 전체가 실패
     results['stale-slot-history-error'] = stale('ABORTED', [], history_error=RuntimeError('ThrottlingException'))
+    # ALPHA-1286 뒤: 빈 자리가 있으면(위 1·3, 자리 3) 남은 자리를 확인하지 않는다. 자리가 꽉 차야(자리 1) 확인하고,
+    # 판정 못 한 자리는 예외 없이 점유로 남아 새 실행이 기다린다.
+    results['stale-slot-task-missing-full'] = stale('ABORTED', submitted, slots=1, describe={
+        'tasks': [], 'failures': [{'arn': 'task', 'reason': 'MISSING'}]})
+    results['stale-slot-history-error-full'] = stale('ABORTED', [], slots=1, history_error=RuntimeError('ThrottlingException'))
     assert results['stale-slot-no-task-recorded'] == {'acquire': 'acquired', 'slots_left': ['new'],
                                                       'describe_tasks_called': False}, results
     # 검토 기준 코드(604e5e9f)는 판정 못 한 자리 하나로 자리 확보 전체가 예외로 끝났다(C1).
@@ -848,9 +855,13 @@ def control_exp(args):
     before = (results['stale-slot-task-missing']['acquire'].startswith('raised RuntimeError')
               and results['stale-slot-history-error']['acquire'].startswith('raised'))
     after = (results['stale-slot-task-missing'] == {'acquire': 'acquired', 'slots_left': ['new', 'old'],
-                                                   'describe_tasks_called': True}
+                                                   'describe_tasks_called': False}
              and results['stale-slot-history-error'] == {'acquire': 'acquired', 'slots_left': ['new', 'old'],
-                                                        'describe_tasks_called': False})
+                                                        'describe_tasks_called': False}
+             and results['stale-slot-task-missing-full'] == {'acquire': 'waiting', 'slots_left': ['old'],
+                                                            'describe_tasks_called': True}
+             and results['stale-slot-history-error-full'] == {'acquire': 'waiting', 'slots_left': ['old'],
+                                                             'describe_tasks_called': False})
     assert before or after, results
     results['stale-slot-behavior'] = 'before-ALPHA-1166' if before else 'after-ALPHA-1166'
 

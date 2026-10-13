@@ -1,6 +1,7 @@
 package com.edge.superadmin.controller;
 
 import com.edge.common.apipayload.ApiResponse;
+import com.edge.superadmin.dto.AnalysisTrendResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.EntityResolutionTrendResponse;
 import com.edge.superadmin.dto.IntradayAnalysisTrendResponse;
@@ -38,6 +39,14 @@ public class ConsoleController {
 	public ApiResponse<EntityResolutionTrendResponse> entityResolutionTrend(
 			@RequestParam(required = false) String date) {
 		return ApiResponse.onSuccess(consoleFacts.entityResolutionTrend(date));
+	}
+
+	/** v2 분석(전망·가격변동)의 최근 일별 완료·실패·끝나지 않은 건수. */
+	@GetMapping("/api/v1/console/trends/analysis")
+	public ApiResponse<AnalysisTrendResponse> analysisTrend(
+			@RequestParam(required = false) String maxDate,
+			@RequestParam(defaultValue = "30") int days) {
+		return ApiResponse.onSuccess(consoleFacts.analysisTrend(maxDate, days));
 	}
 
 	/** 장중 발화 코호트의 최근 일별 분석·게시 도달 사실. */

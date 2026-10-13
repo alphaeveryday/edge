@@ -1,6 +1,7 @@
 package com.edge.superadmin.service;
 
 import com.edge.common.exception.GeneralException;
+import com.edge.superadmin.dto.AnalysisTrendResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.BoundaryResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.ChainResponse;
@@ -124,6 +125,7 @@ public class ConsoleFactsService {
 				BoundaryResponse.from(f.boundary()),
 				ChainResponse.from(f.chain()),
 				EtfLedgerResponse.from(f.etfLedger()),
+				ConsoleFactsResponse.AnalysisFailureResponse.from(f.analysisFailures()),
 				new MetaResponse(f.dbNow().toString(), f.today().toString(),
 						aws.at() == null ? null : aws.at().toString()));
 	}
@@ -135,6 +137,23 @@ public class ConsoleFactsService {
 	public EntityResolutionTrendResponse entityResolutionTrend(String date) {
 		return EntityResolutionTrendResponse.from(
 				facts.entityResolutionTrend(date == null ? LocalDate.now(KST) : parseDateParam(date)));
+	}
+
+	/**
+	 * v2 분석의 일별 건수. 행이 없던 날은 점이 없다. 범위 상한은 31일이다(추이 한 화면 용도).
+	 *
+	 * @param maxDate 마지막 날짜(KST). 생략하면 애플리케이션 시계의 KST 오늘이다.
+	 */
+	public AnalysisTrendResponse analysisTrend(String maxDate, int days) {
+		if (days < 1 || days > 31) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		LocalDate end = maxDate == null ? LocalDate.now(KST) : parseDateParam(maxDate);
+		if (end.minusDays(days - 1L).getYear() < 1) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		return AnalysisTrendResponse.from(end.minusDays(days - 1L), end,
+				facts.analysisTrend(end, days));
 	}
 
 	/** 장중 분석 귀결의 연속 날짜 사실. 빈 날도 0인 점으로 남긴다. */
