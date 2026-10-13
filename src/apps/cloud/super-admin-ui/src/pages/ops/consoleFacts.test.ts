@@ -651,6 +651,15 @@ test('🔴 옛 단계만 실린 응답은 체인 축이 없는 것으로 옮긴�
   assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
   assert.equal(r.facts.chain, undefined, '옛 단계 목록으로 체인을 만들어 냈다');
+  /* 체인은 없는 것으로 옮겨도, 같은 엔진을 읽는 ETF 표가 비어 있는 이유는 남겨야 한다 — 옛 단계가
+   * 관측 불가로 왔으면 그 엔진이 멈췄다는 뜻이고, 표는 이 응답에도 온다. */
+  assert.equal(r.facts.etf_ledger?.legacy_stopped, undefined, '멈췄다는 표시가 없는데 만들어 냈다');
+  const stopped = WIRE();
+  delete stopped.chain!.analysisStages;
+  stopped.chain!.stages = stopped.chain!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
+  const sr = parseFacts(stopped);
+  assert.equal(sr.ok && sr.facts.etf_ledger?.legacy_stopped, true, 'ETF 표의 안내 근거를 떨궜다');
+  assert.equal(sr.ok && sr.facts.chain, undefined);
   const report = evaluate(r.facts);
   const r10 = report.rules.find((x) => x.id === 'R10')!;
   assert.equal(r10.evaluated, false, 'R10 이 평가됐다고 선다');

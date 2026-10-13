@@ -498,7 +498,6 @@ function toFacts(dto: ConsoleFactsDto): Facts {
               ...(s.batch === null ? { batch_na: true } : {}),
               ...(SHOWN_ONLY_STAGES.has(s.id) ? { shown_only: true } : {}),
             })),
-            ...(dto.chain.stages[0]?.blind ? { legacy_blind: true } : {}),
           },
         }
       : {}),
@@ -506,7 +505,9 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       ? { etf_ledger: { rows: dto.etfLedger.rows.map((r) => ({
           etf: r.etf, name: r.name, triggered: r.triggered,
           outcome: r.outcome, error: r.error,
-        })) } }
+        })),
+        /* 옛 체인 단계의 관측 불가 표시에서 읽는다 — 서버가 그 엔진이 멈췄다고 답한 유일한 자리다 */
+        ...(dto.chain?.stages[0]?.blind ? { legacy_stopped: true } : {}) } }
       : {}),
     ...(dto.analysisFailures
       ? { analysis_failures: dto.analysisFailures.map((a) => ({ kind: a.kind, failed_etfs: a.failedEtfs })) }

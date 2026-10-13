@@ -102,7 +102,7 @@ export function ChainPage() {
         </div>
         {/* ⛔ 축이 없을 때 빈 격자를 그리지 않는다 — 칸이 0개인 격자는 "오늘 실패한 ETF 가 없다"로
             읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). */}
-        {ledger && q.facts.chain?.legacy_blind && (
+        {ledger?.legacy_stopped && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
             이 표도 옛 설명 엔진의 실행 상태를 읽습니다. 그 엔진이 조회일보다 앞서 멈춰 이 날의 귀결은
             비어 있습니다 — 새 분석 엔진의 실행은 이 표에 나오지 않습니다. 분석 실패는{' '}

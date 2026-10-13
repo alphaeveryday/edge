@@ -242,6 +242,12 @@ export interface EtfLedger {
   rows: EtfLedgerRow[];
   mock?: boolean;
   why?: string;
+  /**
+   * 이 원장을 쓰는 옛 설명 엔진이 조회일보다 앞서 멈췄는가(ALPHA-1296) — 서버가 옛 체인 단계를
+   * 관측 불가로 내린 날이다. 흐름 화면이 표의 귀결이 비어 있는 이유를 적을 때만 쓴다. 체인 축과
+   * 따로 싣는다: 새 단계 목록이 없는 응답에서도 이 표는 오고, 그때도 이유는 적어야 한다.
+   */
+  legacy_stopped?: boolean;
 }
 
 export interface RunbookEntry {
@@ -327,13 +333,7 @@ export interface Facts {
    * ⚠️ 빈 객체(`{feeds:[],stages:[]}`)로 메우지 마라 — 계측 없음이 실측 0 으로 위조되고,
    * R10 이 `못 돎` 대신 `평가됨 · 위반 0`("손실 없음")을 선다. 읽는 쪽이 부재를 다뤄야 한다.
    */
-  chain?: {
-    feeds: ChainFeed[];
-    stages: ChainStage[];
-    /** 옛 설명 엔진의 단계가 관측 불가로 내려왔는가 — 흐름 화면의 ETF 표(같은 엔진의 실행 상태)가
-     *  비어 있는 이유를 적을 때만 쓴다. 판정에 안 쓴다 */
-    legacy_blind?: boolean;
-  };
+  chain?: { feeds: ChainFeed[]; stages: ChainStage[] };
   queues?: QueueFact[];
   outputs: OutputFact[];
   boundary: BoundaryFact;
