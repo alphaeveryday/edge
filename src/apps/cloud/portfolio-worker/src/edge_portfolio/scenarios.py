@@ -8,7 +8,7 @@ from pydantic import Field
 from .contracts import StrictModel
 from .execution import parse_funding
 
-PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))')
+PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))(?!\s*\d+(?:\.\d+)?\s*년(?:\s|뒤|후))')
 
 
 def stated_principal(text):
