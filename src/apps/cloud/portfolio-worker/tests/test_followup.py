@@ -39,7 +39,7 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
 
 
 @pytest.mark.parametrize('separate_projection', [False, True])
-@pytest.mark.parametrize('inherited', [False, True, 'principal'])
+@pytest.mark.parametrize('inherited', [False, True, 'principal', 'qualified'])
 async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(separate_projection, inherited):
     import json
     from report_fixtures import final_payload
@@ -53,6 +53,7 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
         report['input']['question'] = question
         question = '10년 뒤 금액을 알려 주세요.'
         if inherited == 'principal': question = '원금은 1000만원입니다. ' + question
+        if inherited == 'qualified': question = '같은 조건으로 10년 뒤 금액도 보여 주세요.'
     expected_principal = '10000000' if inherited == 'principal' else '1000000'
     stages, calculated, checkpoints = [], [], []
     async def model(payload):

@@ -9,11 +9,12 @@ NO_CONTRIBUTION = re.compile(r'\s*(?:이번에는\s*)?(?:추가\s*)?(?:납입|�
 
 def projection_question(clause):
     periods = r'(?:\d+\s*+년\s*+(?:(?:뒤|후)(?:에)?)?\s*+(?:[,·/]|및|그리고)?\s*+)+'
-    words = '금액|자산|원금|이자|과|와|은|는|이|가|을|를|몇|원|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|되나요|인가요|예상|의'.split('|')
+    words = '금액|자산|원금|이자|과|와|은|는|이|가|을|를|도|몇|원|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|되나요|인가요|예상|의'.split('|')
     projection = r'(?:' + '|'.join(sorted(words, key=len, reverse=True)) + r'|\s)++'
     assumption = r'(?:(?:연|연간)?\s*+-?\d+(?:\.\d+)?\s*+%\s*+(?:수익률)?(?:을|로)?\s*+(?:가정하면|가정할 때|가정해서)?\s*+)?'
     subject = r'(?:(?:원금|현재\s*+자산|현재\s*+평가금액|보유금액)(?:은|는|이|가)?\s*+)?'
-    return bool(re.fullmatch(r'\s*+' + subject + assumption + periods + projection, clause))
+    unchanged = r'(?:(?:같은|동일한?)\s*+조건으로\s*+)?'
+    return bool(re.fullmatch(r'\s*+' + unchanged + subject + assumption + periods + projection, clause))
 
 
 def projection_context(value, decision):
