@@ -168,6 +168,62 @@ TOOLS = {
         'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
         'follow_up': 'Flows of holdings are not the flows of the fund itself.',
         'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'frequency': 'daily for finalized flows. intraday for estimates during the day.'}},
+    'estimate_contract_profit': {
+        'summary': 'Estimate how much one contract adds to a company\'s yearly revenue and operating profit, as a range, against its last full year.',
+        'returns': 'contract_stage (signed or not, read it first), estimate (per year: revenue, operating profit, each as a share of last year, and weighted by the fund), '
+                   'confirmed_inputs (stored), assumptions (which are yours, a holding_weight you pass among them), and most_sensitive_assumption. '
+                   'fund_weight_not_found says why no fund-weighted figure is given, and company_not_confirmed that the event stores no participants. '
+                   'Every figure is per year of recognition, not per month. '
+                   'Say it as an estimate with its assumptions.',
+        'prerequisite': 'The event_id of a list_events row or event_ref of a find_similar_events row of a contract, and the company that earns it.',
+        'alternative': 'Use this whenever the answer says how much an order matters for earnings or for a fund, instead of writing "large" or "limited".',
+        'args': {'event_ref': 'The event, as {"object_type":"SourceEvent","object_id":"..."}. The amount and period are read from every report of that event.',
+                 'company_ref': 'The company that earns the contract: a participant of the event, not its customer. Its security is accepted and mapped to the issuer.',
+                 'years_low': 'Shortest recognition period in years, at least 0.01. Most reports store no period, so give your assumption with years_high.',
+                 'years_high': 'Longest recognition period in years, at most 100.',
+                 'margin_low': 'Lowest operating margin to test, 0.08 means 8%, between -1 and 1. Default: the company\'s last full-year margin.',
+                 'margin_high': 'Highest operating margin to test.',
+                 'company_share': 'This company\'s part of a shared contract, 0.5 means half. Default: the whole contract.',
+                 'etf_ref': 'A fund. The result is then also weighted by the company\'s weight in that fund.',
+                 'holdings_date': 'Date of the fund holdings to use, YYYY-MM-DD. Default: the latest at the cutoff.',
+                 'holding_weight': 'The weight to use instead of looking it up, 0.24 means 24%. Not together with etf_ref.'}},
+
+    'get_financial_observations': {
+        'summary': 'Read reported company financials: revenue, operating income, EPS and BPS.',
+        'returns': 'A table with one figure per fiscal year, fiscalPeriod (Q1 to Q4, FY), periodKind (QUARTER is that three months alone, CUMULATIVE is from the start of the year) '
+                   'and fsBasis (CFS consolidated, OFS separate). value_text is the amount as written. Say which period and basis the answer uses. '
+                   'There are no analyst consensus figures and no segment figures in this data.',
+        'prerequisite': 'Company or security ids from a search, or a get_etf_holdings result as targets.',
+        'follow_up': 'compare_two_figures for a change between two rows. A fourth quarter alone is a stored row: fiscalPeriod Q4, periodKind QUARTER, '
+                     'derivation FY_MINUS_9M, which says it was calculated as the full year minus nine months and not reported.',
+        'args': {'targets': TARGETS + ' A security is mapped to its issuing company.',
+                 'kind': 'actual for reported figures. guidance returns reported events, not numbers. consensus and segment return nothing in this data.',
+                 'fiscal_years': 'Years to read, as [2026].', 'metrics': 'revenue, operating_income, eps_basic, eps_diluted, bps, bps_total_shares.',
+                 'fs_basis': 'CFS or OFS.', 'limit': LIMIT}},
+    'compare_two_figures': {
+        'summary': 'Calculate the difference and the change ratio between two figures of one financial or macro result.',
+        'returns': 'One row with the difference as written and change_ratio. It refuses two figures that differ in company, metric, unit, accounting basis or period kind, '
+                   'and says which one differs. derivations is given when one figure was reported and the other calculated: say so.',
+        'prerequisite': 'A get_financial_observations or get_macro_observations result. The ids are the object_id of two rows.',
+        'args': {'dataset_ref': RESULT, 'earlier_id': 'object_id of the earlier figure.', 'later_id': 'object_id of the later figure.'}},
+    'compare_actual_to_expectation': {
+        'summary': 'Compare a reported figure with an expectation published before it.',
+        'returns': 'The difference, only when both figures have the same metric, period, unit and accounting basis. '
+                   'This data has no comparable expectation figures, so the call normally reports that the comparison is not possible.',
+        'prerequisite': 'An actual figure and an expectation figure from get_financial_observations.',
+        'args': {'actual_ref': RESULT, 'actual_id': 'object_id of the reported figure.', 'expectation_ref': RESULT, 'expectation_id': 'object_id of the expectation.'}},
+    'list_macro_series': {
+        'summary': 'List the macro series this data has, with their ids, units and date range.',
+        'returns': 'One row per series. Names are English. A name search that fails does not mean the series is missing: read this list.',
+        'follow_up': 'get_macro_observations with the series ids.', 'args': {}},
+    'get_macro_observations': {
+        'summary': 'Read the values of macro series over a period: exchange rate, yields, oil price, inflation.',
+        'returns': 'A table with one row per series and day, with unit and source. No causation is implied.',
+        'prerequisite': 'series ids from list_macro_series.',
+        'follow_up': 'compare_two_figures for a change between two days.',
+        'args': {'start_date': START, 'end_date': END, 'series_ids': 'Ids from list_macro_series, as ["usd_krw"].',
+                 'query': 'Part of an English series name. Prefer series_ids.', 'limit': LIMIT}},
+
 }
 
 

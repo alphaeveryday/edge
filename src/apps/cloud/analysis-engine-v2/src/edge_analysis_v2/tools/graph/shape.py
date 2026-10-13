@@ -9,6 +9,15 @@ DATES = ('reported_date', 'event_date', 'date', 'trade_date', 'as_of_date', 'pub
          'tradeDate', 'observationDate', 'holdingsDate', 'eventDate', 'publishedAt', 'availableAt', 'snapshotDate')
 
 
+def number(value):
+    """A stored figure as a finite Decimal, or None: "abc" raised past the tool record and "Infinity" was calculated with."""
+    try:
+        parsed = Decimal(str(value))
+    except ArithmeticError:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
 def won_text(value):
     """A won amount as it is written, exact to the won: 2004376374000 -> '2조 43억 7,637만 4,000원'.
 
@@ -93,6 +102,8 @@ def table(rows, keep_id=False, keep_title=False):
         values.update(row.get('money_text') or {})   # the written amount stands in for raw won
         values.update({k: v for k, v in row.items()
                        if k not in ('object_type', 'object_id', 'title', 'properties', 'money_text') and not isinstance(v, (dict, list))})
+        if values.get('value_text') is not None:
+            values.pop('value', None)   # the written amount stands in for raw won
         if keep_title and row.get('title') not in values.values():
             values['title'] = row.get('title')   # an event or a document is named only by its title
         if keep_id:

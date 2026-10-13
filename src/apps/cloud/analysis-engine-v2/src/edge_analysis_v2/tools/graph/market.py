@@ -1,16 +1,7 @@
 """Market observations and exact Decimal calculations over stored graph evidence."""
 from decimal import Decimal
 from edge_analysis_v2.tools.graph.provider import SELECTOR,STRING,RESULT_REF
-from edge_analysis_v2.tools.graph.shape import won_text
-
-
-def number(value):
-    """A stored figure as a finite Decimal, or None: "abc" raised past the tool record and "Infinity" was calculated with."""
-    try:
-        parsed=Decimal(str(value))
-    except ArithmeticError:
-        return None
-    return parsed if parsed.is_finite() else None
+from edge_analysis_v2.tools.graph.shape import number,won_text
 
 
 class MarketTools:
