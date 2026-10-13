@@ -126,6 +126,11 @@ export interface OutputDto {
   today: number;
   base: number | null;
   unit: string;
+  /**
+   * `base` 를 낸 기준일별 건수(날짜 오름차순, ALPHA-1289). **조회일은 들어 있지 않다.**
+   * 선택 필드다 — 이 필드가 없는 API 에서는 오지 않는다. `count` 0 은 실측이다.
+   */
+  history?: { date: string; count: number }[];
 }
 
 export interface QueueDto {

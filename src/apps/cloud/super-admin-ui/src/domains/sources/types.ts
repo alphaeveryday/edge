@@ -484,6 +484,24 @@ export interface MinuteDailyDataset {
   basis: string;
   failedSessions: number;
   totalSessions: number;
+  /**
+   * 그 날짜·데이터셋 세션들의 창 수 합(ALPHA-1289). **선택 필드다** — UI 가 API 보다 먼저
+   * 배포되면 이 필드가 없는 응답을 받는다. `null` 은 세션 없이 날짜 축 job 만으로 선 항목이다.
+   * 둘 다 0 이 아니라 "기록 없음"이다.
+   */
+  windows?: MinuteDailyWindows | null;
+}
+
+/** `expected` 는 세션들의 기대 창 수 합이고 나머지는 상태별 창 수다. */
+export interface MinuteDailyWindows {
+  expected: number;
+  due: number;
+  claimed: number;
+  valid: number;
+  validEmpty: number;
+  incomplete: number;
+  missing: number;
+  invalid: number;
 }
 
 export interface MinuteDailyDay {

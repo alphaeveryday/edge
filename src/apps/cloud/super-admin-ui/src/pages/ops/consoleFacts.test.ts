@@ -341,6 +341,24 @@ test('런 행이 없는 슬롯의 계획 표시는 실린 것만 옮긴다', () 
   assert.equal(r.facts.runs[1].no_run_row, true);
 });
 
+test('산출의 기준일별 건수는 있으면 그대로 싣고, 없는 옛 응답도 받는다', () => {
+  /* UI 와 API 는 따로 배포된다 — `history` 가 없는 응답을 거부하면 UI 가 먼저 나간 동안 콘솔
+   * 전체가 선다. 0 은 실측이라 0 그대로 지나가야 한다. */
+  const old = parseFacts(WIRE());
+  assert.equal(old.ok, true, old.ok ? '' : old.reason);
+  if (old.ok) assert.ok(!('history' in old.facts.outputs[0]), '없는 필드를 만들어 냈다');
+
+  const w = WIRE();
+  w.outputs[0].history = [{ date: '2026-07-31', count: 0 }, { date: '2026-08-01', count: 32 }];
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) assert.deepEqual(r.facts.outputs[0].history, w.outputs[0].history);
+
+  w.outputs[0].history = [];
+  const empty = parseFacts(w);
+  assert.equal(empty.ok && empty.facts.outputs[0].history?.length, 0, '빈 목록(표본 없음)을 버렸다');
+});
+
 test('거부 — 컬렉션 원소가 객체가 아니면 응답 전체를 버린다', () => {
   /* 규칙 층이 의도적으로 안 막은 자리다. 여기서 통과시키면 `outputs[null].today` 가 규칙 안에서
    * 터지고, 그건 그 규칙이 아니라 **평가 전체**를 죽인다. */
@@ -361,6 +379,9 @@ test('거부 — 세는 값이 수가 아니거나 음수면 버린다', () => {
     ['today: NaN', (w: ConsoleFactsDto) => { w.outputs[0].today = NaN; }],
     ['today: 문자열', (w: ConsoleFactsDto) => { (w.outputs[0] as { today: unknown }).today = '16'; }],
     ['base: 음수', (w: ConsoleFactsDto) => { w.outputs[0].base = -1; }],
+    ['history: 배열 아님', (w: ConsoleFactsDto) => { (w.outputs[0] as { history: unknown }).history = {}; }],
+    ['history: 음수 건수', (w: ConsoleFactsDto) => { w.outputs[0].history = [{ date: '2026-08-01', count: -1 }]; }],
+    ['history: 날짜 아님', (w: ConsoleFactsDto) => { w.outputs[0].history = [{ date: '어제', count: 1 }]; }],
     ['attempts: 음수', (w: ConsoleFactsDto) => { w.tasks[0].attempts = -1; }],
     ['recordsOut: Infinity', (w: ConsoleFactsDto) => { w.tasks[0].recordsOut = Infinity; }],
     ['completenessExpected: 문자열', (w: ConsoleFactsDto) =>
@@ -449,7 +470,7 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.runs[0], RUN_FIELDS, 'runs', ['planned', 'noRunRow']);
   both(w.tasks[0], TASK_FIELDS, 'tasks');
   both(w.datasets[0], DATASET_FIELDS, 'datasets');
-  both(w.outputs[0], OUTPUT_FIELDS, 'outputs');
+  both(w.outputs[0], OUTPUT_FIELDS, 'outputs', ['history']);
   both(w.queues![0], QUEUE_FIELDS, 'queues');
   both(w.boundary, BOUNDARY_FIELDS, 'boundary');
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
