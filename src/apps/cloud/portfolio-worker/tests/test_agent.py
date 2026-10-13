@@ -82,6 +82,8 @@ async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_o
         if role == 'opinion':
             section = final_payload({name: {**section, 'paragraphs': ['가' * (LIMITS[name][0] // 3)] * 3} for name in ROLES})
             section['recommendation'] = None  # Missing input weights must never produce a recommendation.
+        if role == 'question':
+            section = {**section, 'decision': {}}
         return {"choices": [{"message": {"role": "assistant", "content": json.dumps(section), "reasoning_content": "private"}}]}
     result = await run_analysis(AnalysisInput(holdings=[{"name": "VOO", "amount_krw": 100}], horizon="10년 이상"), "test", phases.append, model_call=model, evidence=Evidence())
     assert phases == list(ROLES)
@@ -135,6 +137,8 @@ async def test_unregistered_url_is_rejected_without_losing_the_whole_analysis():
         content = final_payload({name: section(name) for name in ROLES}) if role == 'opinion' else section(role)
         if role == 'opinion':
             content['recommendation'] = None
+        if role == 'question':
+            content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'), 'test', phases.append, model_call=model, evidence=RestrictedEvidence())
     assert phases == list(ROLES)
@@ -164,6 +168,8 @@ async def test_candidate_research_budget_and_korean_utf8_size_allow_final_public
             repairs_used += 1
             return {'choices': [{'message': {'role': 'assistant', 'content': '{}'}}]}
         content = {**final_payload(), 'recommendation': None} if role == 'opinion' else section
+        if role == 'question':
+            content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상')
     if expected_error:
@@ -204,6 +210,8 @@ async def test_backtest_candidates_remain_auditable_when_rating_prevents_recomme
         if role == 'portfolio' and (call := optimization_call(payload)):
             return call
         content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
                                 'test', phases.append, model_call=model, evidence=Evidence())
