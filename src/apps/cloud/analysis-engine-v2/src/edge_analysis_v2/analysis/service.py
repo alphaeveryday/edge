@@ -61,6 +61,16 @@ def total_measurement(stages):
     return total | {'stages': stages}
 
 
+def listed_references(value):
+    """Every entry of every ``tool_run_ids`` list in a response."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield from (inner if key == 'tool_run_ids' and isinstance(inner, list) else listed_references(inner))
+    elif isinstance(value, list):
+        for inner in value:
+            yield from listed_references(inner)
+
+
 def swap_references(value, table):
     """Replace each known entry of every ``tool_run_ids`` list; unknown entries pass through for the store to reject."""
     if isinstance(value, dict):
@@ -300,9 +310,16 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             written = step('writing', initial={'investigation': report} | ({'previous_body': encode(editor.result())} if previous else {}),
                            schemas=EDIT_SCHEMAS, output_schema=WRITING,
                            skills=('analysis-report-writing',), timeout_seconds=480)
+            # The report's numbers were checked above and the factor values are f1. The fields stage can type any
+            # number that exists: one that points at a call the store refuses lost a finished outlook at publication.
+            checked = set(re.findall(r'\[(f\d+)\]', report)) | {'f1'}
+            def unchecked(final):
+                bad = sorted({r for r in listed_references(final) if r not in checked}, key=str)
+                return ('이 번호는 조사 보고에 근거로 적히지 않았어요: ' + ', '.join(map(str, bad)) + '. 조사 보고에 [f3]처럼 적힌 번호와 '
+                        'factor_values의 f1만 쓸 수 있어요. 전체를 다시 내세요.') if bad else None
             fields = step('fields', initial={'investigation': report, 'body': encode(editor.result()),
                                              'summary': encode(written), 'factor_values': encode(factor_output | {'tool_run_id': 'f1'})},
-                          schemas=[], output_schema=FIELDS, timeout_seconds=300)
+                          schemas=[], output_schema=FIELDS, timeout_seconds=300, final_check=unchecked)
             response = swap_references(written | fields, references)
         else:
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
