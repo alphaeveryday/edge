@@ -33,18 +33,25 @@ class Constraint(StrictModel):
 
 
 class Decision(StrictModel):
+    questions: list[str] = Field(default_factory=list, max_length=5)
     kind: Literal['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'] = 'review'
     objectives: list[Literal['growth', 'stability', 'income', 'preserve', 'simplicity']] = Field(default_factory=list, max_length=5)
     constraints: list[Constraint] = Field(default_factory=list, max_length=20)
     missing_inputs: list[str] = Field(default_factory=list, max_length=10)
     funding_text: str = Field(default='', max_length=100)
 
+    @model_validator(mode='after')
+    def meaningful_missing_inputs(self):
+        if any(not value.strip() for value in self.missing_inputs):
+            raise ValueError('Missing inputs must identify the required customer information')
+        return self
+
 
 class QuestionSection(Section):
     decision: Decision
 
 
-def validate_decision(decision, request, catalog):
+def validate_decision(decision, request, catalog, *, question_text=None):
     def strings(value):
         if isinstance(value, str):
             yield value
@@ -55,6 +62,18 @@ def validate_decision(decision, request, catalog):
             for item in value:
                 yield from strings(item)
     text = '\n'.join([request.question, *strings(request.preferences.model_dump(mode='json'))])
+    if any(not question.strip() or question not in text for question in decision.questions):
+        raise ValueError('QUESTION_SOURCE: quote each customer question exactly')
+    if decision.questions:
+        original = request.question if question_text is None else question_text
+        covered = set()
+        for question in decision.questions:
+            start = original.find(question)
+            while start >= 0:
+                covered.update(range(start, start + len(question)))
+                start = original.find(question, start + 1)
+        if any(char.isalnum() and index not in covered for index, char in enumerate(original)):
+            raise ValueError('QUESTION_COVERAGE: preserve the entire customer request across questions; include its context, or quote the complete request')
     for rule in decision.constraints:
         if rule.source not in text:
             raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the exact customer input')

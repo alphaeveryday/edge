@@ -74,11 +74,16 @@ class OutlookReader:
                 answer = {'status': 'unavailable'}
         audit['status'] = answer['status']
         if answer['status'] != 'found':
-            return answer
+            return {**answer, 'etf_code': query.etf_code, 'purpose': query.purpose,
+                    'coverage': 'one_requested_KR_ETF', 'forecast_horizon': None,
+                    'instruction': '이 종목의 저장 전망 조회 상태이며 전체 외부 자료의 가용성이 아닙니다. 공식 자료로 보완하고 단기 목표가 부재를 장기 배분 불가로 해석하지 마세요.'}
         text = json.dumps(answer, ensure_ascii=False, default=str)[:10000]
         source = {'id': f's{len(sources) + 1}', 'kind': 'prior_analysis',
                   'url': '', 'excerpt': text, 'fetched_at': datetime.now(timezone.utc).isoformat(),
                   'analysis_id': answer['analysis_id'], 'etf_code': query.etf_code,
+                  'published_at': str(answer.get('published_at')) if answer.get('published_at') else None,
+                  'claim_as_of': str(answer.get('analysis_at')) if answer.get('analysis_at') else None,
+                  'purpose': query.purpose, 'forecast_horizon': None, 'coverage': 'one_requested_KR_ETF',
                   'passages': [{'id': f'p{i + 1}', 'text': value} for i, value in enumerate(
                       str(answer[k]) for k in ('summary_title', 'summary', 'conclusion_sentence', 'change_condition') if answer.get(k))]}
         sources.append(source)

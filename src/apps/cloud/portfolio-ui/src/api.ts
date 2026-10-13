@@ -12,6 +12,8 @@ export type Execution = { status: 'ready' | 'conditional' | 'needs_input' | 'inf
 export type History = { points: { date: string; recommended: number; current: number | null }[]; basis: string; source_url: string; baseline_kind?: 'new_cash' | 'current_holdings' | 'unknown_weights'; current_unavailable_reason?: string; interval?: '1d'; currency?: 'KRW'; initial_krw?: number; method?: string; sources?: { instrument_id: string; url: string }[] };
 export type Recommendation = { title: string; execution?: Execution; allocations: Allocation[]; evaluation: Evaluation; total_krw: string | null; actions: { instrument_id: string; name: string; ticker: string; account: string; before_pct: number | null; after_pct: number; action: string }[]; expected_return_1y: number | null; dividend_yield_1y: number | null; historical_performance: History | null; unavailable_reason: string; target_return_1y?: number; dividend_basis?: string; return_forecast?: { reason: string; method: string }; dividend_observations?: { instrument_id: string; as_of: string; trailing_yield_pct: number; source_url?: string; method?: string; evidence: { url: string; quote: string }[] }[] };
 export type Report = {
+  partial_report?: Report;
+  completion?: { status: 'complete' | 'partial' | 'needs_input' | 'no_match'; tasks: { question: string; status: string; answer: string; missing: string[] }[]; missing_inputs: string[]; missing_research: { instrument_id: string; field: string; status: string }[] };
   schema_version?: number;
   current_evaluation?: Evaluation;
   recommendation?: Recommendation | null;
