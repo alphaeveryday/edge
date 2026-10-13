@@ -170,3 +170,26 @@ def test_the_question_list_is_demanded_only_while_the_investigation_skill_is_in_
     assert _json.loads((tmp_path/'a2/skills.json').read_text(encoding='utf-8'))['opened'] == ['cause-investigation']
     # A task that declares the skill has it on from the start.
     assert decide(make(tmp_path/'other'), 'StructuredOutput') == 'deny' and '이렇게 조사해' in (tmp_path/'other/work/AGENTS.md').read_text(encoding='utf-8') + make(tmp_path/'third').system_prompt('x') + (tmp_path/'third/work/AGENTS.md').read_text(encoding='utf-8')
+
+
+def test_an_outlook_question_list_must_carry_competing_explanations_and_close_them_with_an_answer(tmp_path):
+    # WHY: real runs registered collection steps only, so nothing showed that rival explanations were compared.
+    session = WorkSession(tmp_path / 'w', tmp_path / 'a', ('cause-investigation', 'analysis-report-writing'), [])
+    session.compare_explanations = True   # what the outlook task asks for
+    step = {'content': 'Confirm holdings', 'status': 'pending'}
+    with pytest.raises(ValueError, match='at least one question with explanations'):
+        session.update_tasks([step])
+    question = {'content': 'Why did the fund fall?', 'status': 'pending'}
+    for rivals in (['De-rating'], ['De-rating', 'De-rating'], ['De-rating', ' ']):
+        with pytest.raises(ValueError, match='at least two different'):
+            session.update_tasks([step, question | {'explanations': rivals}])
+    question['explanations'] = ['De-rating on higher US yields', 'Order news already priced in']
+    session.update_tasks([step, question])
+    with pytest.raises(ValueError, match='closure'):
+        session.update_tasks([step, question | {'status': 'completed'}])
+    with pytest.raises(ValueError, match='closure'):
+        session.update_tasks([step, question | {'status': 'completed', 'closure': 'done', 'answer': 'x'}])
+    session.update_tasks([step | {'status': 'completed'}, question | {'status': 'completed', 'closure': 'resolved',
+        'answer': 'De-rating: earnings estimates were unchanged while the multiple fell.'}])
+    # A movement note is short and needs no competing set: nothing is demanded unless the task asks.
+    WorkSession(tmp_path / 'w2', tmp_path / 'a2', ('cause-investigation', 'analysis-report-writing'), []).update_tasks([step])

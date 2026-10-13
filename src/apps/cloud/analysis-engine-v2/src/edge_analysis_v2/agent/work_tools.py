@@ -2,6 +2,7 @@
 import json
 from claude_agent_sdk import create_sdk_mcp_server, tool
 from edge_analysis_v2.agent.work_context import SourceInputError
+from edge_analysis_v2.agent.work_session import CLOSURES
 
 
 def make_workspace_server(context, session):
@@ -32,9 +33,16 @@ def make_workspace_server(context, session):
         except (ValueError, OSError) as error:
             return response({'error': str(error)}) | {'is_error': True}
 
-    @tool('update_tasks', 'Register questions before using analysis tools. Replace the nonempty work list, retaining important unanswered questions; complete only actually resolved tasks.',
+    @tool('update_tasks', 'Register questions before using analysis tools. Replace the nonempty work list, retaining important unanswered questions; complete only actually resolved tasks. '
+          'Every question about a cause whose answer would change the direction carries explanations: the competing explanations being compared. Up, down and neutral are answer options, not explanations. '
+          'Revise them as evidence arrives. Completing such a question needs closure and answer.',
           {'type':'object', 'properties':{'todos':{'type':'array', 'minItems':1, 'items':{'type':'object',
-           'properties':{'content':{'type':'string'}, 'status':{'type':'string','enum':['pending','in_progress','completed']}},
+           'properties':{'content':{'type':'string'}, 'status':{'type':'string','enum':['pending','in_progress','completed']},
+                         'explanations':{'type':'array', 'items':{'type':'string'},
+                                         'description':'Two or more competing explanations that answer this same question. Omit for a plain work step.'},
+                         'closure':{'type':'string', 'enum':list(CLOSURES),
+                                    'description':'resolved: answered and reflected in the conclusion. no_effect: the conclusion holds under every explanation. structural_limit: unanswerable after alternative research.'},
+                         'answer':{'type':'string', 'description':'Which explanation holds, the observation that separates it from the others, what it means for earnings or valuation, and what was weakened or left open.'}},
            'required':['content','status'], 'additionalProperties':False}}}, 'required':['todos'], 'additionalProperties':False})
     async def update_tasks(args):
         try:

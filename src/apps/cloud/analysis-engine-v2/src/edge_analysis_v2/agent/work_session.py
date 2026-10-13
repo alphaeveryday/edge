@@ -5,6 +5,8 @@ from pathlib import Path
 from edge_analysis_v2.agent.skill_session import SkillSession
 
 
+CLOSURES = ('resolved', 'no_effect', 'structural_limit')
+
 INVESTIGATION = 'cause-investigation'   # the skill whose procedure the hooks below enforce
 
 
@@ -12,6 +14,8 @@ class WorkSession(SkillSession):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.notes = self.workspace / 'notes'
+        # Set by the caller for a task that must show rival explanations were compared.
+        self.compare_explanations = False
         self.notes.mkdir()
         self.todos = []
         self.reminders = 0
@@ -118,6 +122,23 @@ class WorkSession(SkillSession):
         if not isinstance(todos, list) or not todos or any(not isinstance(t, dict) or not isinstance(t.get('content'), str)
                 or not t['content'].strip() or t.get('status') not in ('pending', 'in_progress', 'completed') for t in todos):
             raise ValueError('Register a nonempty question list with pending, in_progress or completed items')
+        contested = [t for t in todos if 'explanations' in t]
+        for item in contested:
+            rivals = item['explanations']
+            if (not isinstance(rivals, list) or len(rivals) < 2 or len(set(rivals)) != len(rivals)
+                    or any(not isinstance(r, str) or not r.strip() for r in rivals)):
+                raise ValueError(f"'{item['content'][:40]}': explanations needs at least two different competing explanations "
+                                 'that answer the same question. A checklist step has no explanations; leave the field out.')
+            if item['status'] == 'completed' and (item.get('closure') not in CLOSURES
+                    or not isinstance(item.get('answer'), str) or not item['answer'].strip()):
+                raise ValueError(f"'{item['content'][:40]}': a question with competing explanations is completed only with "
+                                 f"closure ({', '.join(CLOSURES)}) and answer: which explanation holds, "
+                                 'the observation that separates it from the others, and what was weakened or left open.')
+        if self.compare_explanations and not contested:
+            # A list of collection steps cannot show that rival explanations were ever compared.
+            raise ValueError('An outlook needs at least one question with explanations: competing explanations of a cause '
+                             '(what changed in the business or earnings, what the market expects or has priced in, why a gap '
+                             'remains). Up, down and neutral are the answer options, not explanations.')
         self.todos = todos
         self.calls_since_update = 0
         self.checkpoint()
