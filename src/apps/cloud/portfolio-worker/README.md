@@ -5,7 +5,7 @@
 
 ## 로컬 실행
 
-프로젝트 루트에서 `PORTFOLIO_DB_PASSWORD`에 별도 DB 암호, `DEEPSEEK_API_KEY`에 모델 키를 설정한다.
+프로젝트 루트에서 `PORTFOLIO_DB_PASSWORD`에 별도 DB 암호, `DEEPSEEK_API_KEY`에 모델 키, `EXA_API_KEY`에 Exa 키를 설정한다.
 `PORTFOLIO_DATABASE_URL`은 `postgresql://portfolio:<퍼센트 인코딩한 암호>@db/portfolio`로 설정한다. DB 암호 원문과 접속 URL을 분리해 특수문자가 있어도 같은 암호로 접속한다.
 비밀값을 커밋하거나 터미널 출력에 포함하지 않는다.
 
