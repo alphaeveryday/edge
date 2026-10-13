@@ -190,6 +190,12 @@ test('🔴 작업이 하나도 안 적힌 실행(기동 실패)은 그 레인 �
   ]);
   /* 다른 레인의 데이터셋에는 귀속하지 않는다 */
   assert.deepEqual(result.find((s) => s.dataset.id === 'stock_news')!.points, []);
+  /* 기동 실패가 확정되지 않은 빈 실행은 점이 아니다 — 돌았는지 모르는 실행이 최근 값이 되면 안 된다 */
+  for (const launchStatus of ['PLANNING', 'LAUNCH_UNKNOWN', 'LAUNCHED', null] as const) {
+    const pending = { ...slot('etf-daily:2026-10-12T15:40', []), launchStatus } as GridSlot;
+    const [price2] = buildRunSeries([priceRun('etf-daily:2026-10-08T15:40'), pending], only('price_daily'));
+    assert.deepEqual(price2.points.map((p) => p.runKey), ['etf-daily:2026-10-08T15:40'], String(launchStatus));
+  }
 });
 
 test('🔴 점은 슬롯 시각 순서다 — 나중에 백필한 과거 실행이 최근 값이 되지 않는다', () => {

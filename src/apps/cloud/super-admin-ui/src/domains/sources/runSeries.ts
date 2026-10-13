@@ -16,6 +16,9 @@
 import type { DatasetEntry } from './datasetCatalog.ts';
 import type { GridCell, GridSlot } from './types.ts';
 
+/** 기동 실패가 확정된 상태 — `dailyRollup` 의 귀속 조건과 같은 집합이다 */
+const NOT_LAUNCHED = new Set(['LAUNCH_FAILED', 'LAUNCH_CONFLICT']);
+
 /** 0 은 정상, 2 는 부분 성공, 그 밖의 숫자는 실패, 종료 코드가 없으면 기록 없음 */
 export type ExitState = 'ok' | 'partial' | 'failed' | 'none';
 
@@ -98,8 +101,10 @@ function durationOf(cells: GridCell[]): number | null {
  * 슬롯 시간순이다(서버의 개요 조회가 최신 실행을 고르는 기준과 같다).
  *
  * 한 실행이 그 데이터셋의 점이 되는 조건은 **그 데이터셋의 작업 셀이 하나라도 있는 것**이다.
- * 작업이 하나도 안 적힌 실행(기동 실패 등)은 실행 키의 레인으로 귀속한다(`dailyRollup` 과 같은
- * 규칙) — 빼면 못 뜬 실행이 추이에서 사라진다. 그 점은 값이 전부 없다.
+ * 작업이 하나도 안 적힌 실행은 **기동 실패가 확정된 것만** 실행 키의 레인으로 귀속한다
+ * (`dailyRollup` 과 같은 규칙) — 빼면 못 뜬 실행이 추이에서 사라진다. 그 점은 값이 전부 없다.
+ * 계획 중이거나 기동 여부를 모르는 실행은 점으로 세지 않는다 — 돌았는지 모르는 실행이 최근 값
+ * 자리를 차지한다.
  * 소요 시간·종료 상태는 계획된(DUE) 작업만 센다 — 휴장으로 건너뛴 작업은 돌 일이 없었다.
  */
 export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): DatasetRunSeries[] {
@@ -114,7 +119,10 @@ export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): Dat
       const cells = slot.tasks
         .filter((c) => order.has(c.taskKey))
         .sort((a, b) => order.get(a.taskKey)! - order.get(b.taskKey)!);
-      const taskless = slot.tasks.length === 0 && slot.runKey.split(':')[0] === dataset.lane;
+      const taskless =
+        slot.tasks.length === 0 &&
+        NOT_LAUNCHED.has(slot.launchStatus ?? '') &&
+        slot.runKey.split(':')[0] === dataset.lane;
       if (cells.length === 0 && !taskless) continue;
       const due = cells.filter((c) => c.planStatus === 'DUE');
       const counted = cells.find((c) => c.completenessExpected != null);
