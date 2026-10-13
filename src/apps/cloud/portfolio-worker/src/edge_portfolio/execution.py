@@ -103,6 +103,10 @@ def resolve_funding(request, decision=None):
             prefix = duration_context(before).strip(' .!?;\n')
             if prefix in {'', '저는', '저희는', '일단'}:
                 return True
+            if decision and decision.kind == 'scenario' and not re.search(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', prefix):
+                from .scenarios import stated_principal
+                if stated_principal(prefix) is not None:
+                    return True
             names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
             # Accept a complete allocation clause, never an arbitrary clause that
             # could make the quoted funding contingent on income or a future event.

@@ -38,12 +38,14 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
     assert (await answer_question('b' * 1000, report, 'test'))['status'] == 'partial'
 
 
-async def test_separate_contribution_sentence_does_not_invalidate_the_known_principal():
+@pytest.mark.parametrize('supplied', [False, True])
+async def test_separate_contribution_sentence_does_not_invalidate_the_known_principal(supplied):
     import json
     from report_fixtures import final_payload
     from test_agent import Evidence
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'preferences': {'contribution': '매월 10만원'}}, 'sources': Evidence.sources}
+    if supplied: report['input'].update(holdings=[], planning=True)
     stages, calculated = [], []
     async def model(payload):
         if stages[-1] == 'question':
@@ -52,16 +54,17 @@ async def test_separate_contribution_sentence_does_not_invalidate_the_known_prin
         if calculated:
             result = json.loads(payload['messages'][-1]['content'])
             assert result['status'] == 'available'
-            assert result['rows'][0]['future_krw'] == '7000000'
+            assert result['rows'][0]['future_krw'] == ('16000000' if supplied else '7000000')
             raise RuntimeError('CALCULATION_CHECKED')
         calculated.append(1)
         return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
             'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': json.dumps({'annual_returns': [0], 'years': [5]})}}]}}]}
     with pytest.raises(RuntimeError, match='CALCULATION_CHECKED'):
-        await answer_question('5년 뒤 원금과 이자를 계산해 주세요. 매월 10만원 넣을게요.', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+        question = '원금은 1000만원입니다. 매월 10만원 넣을게요. 5년 뒤 금액을 계산해 주세요.' if supplied else '5년 뒤 원금과 이자를 계산해 주세요. 매월 10만원 넣을게요.'
+        await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
 
 
-@pytest.mark.parametrize('has_principal,supplied,retained,withdrawn', [(True, False, False, False), (False, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, True, True), (False, False, True, 'uncertain'), (False, False, True, 'unknown')])
+@pytest.mark.parametrize('has_principal,supplied,retained,withdrawn', [(True, False, False, False), (False, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, True, True), (False, False, True, 'uncertain'), (False, False, True, 'unknown'), (False, False, True, 'negated')])
 async def test_scenario_followup_uses_verified_principal_and_retains_original_constraints(monkeypatch, has_principal, supplied, retained, withdrawn):
     import json
     from report_fixtures import final_payload
@@ -71,7 +74,7 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
     if supplied:
         question = '원금은 1000만원입니다. ' + question
     if withdrawn:
-        question = {True: '앞서 말한 원금은 취소합니다. ', 'uncertain': '원금은 1000만원입니다. 원금은 확인 필요합니다. ', 'unknown': '원금은 모릅니다. '}[withdrawn] + question
+        question = {True: '앞서 말한 원금은 취소합니다. ', 'uncertain': '원금은 1000만원입니다. 원금은 확인 필요합니다. ', 'unknown': '원금은 모릅니다. ', 'negated': '원금은 확정된 금액이 아니에요. '}[withdrawn] + question
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
         'sources': Evidence.sources, 'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
