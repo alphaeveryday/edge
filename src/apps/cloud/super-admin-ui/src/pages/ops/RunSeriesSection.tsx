@@ -52,6 +52,10 @@ function RunSpark({ label, runs, values, dashed }: {
     <svg className="rs-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img"
       aria-label={`${label} — 실행 ${values.length}회 중 값 있는 실행 ${values.filter((v) => v !== null).length}회`}>
       {dashed && <path d={line(dashed)} className="rs-line rs-line-dashed" />}
+      {/* 선은 이웃한 두 값이 있어야 그려진다 — 혼자 선 대상 수도 점으로는 남긴다 */}
+      {dashed?.map((v, i) =>
+        v === null ? null : <path key={runs[i]} d={`M${x(i)} ${y(v)}h0`} className="rs-dot rs-dot-target" />,
+      )}
       <path d={line(values)} className="rs-line" />
       {values.map((v, i) => (
         <path key={runs[i]} d={`M${x(i)} ${v === null ? H : y(v)}h0`} className={v === null ? 'rs-dot rs-dot-empty' : 'rs-dot'}>

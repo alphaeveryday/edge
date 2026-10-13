@@ -752,6 +752,7 @@ button.kpi.ops-sev.ops-sev-on {
 .rs-line-dashed { stroke: var(--fg-4); stroke-dasharray: 3 3; }
 .rs-dot { stroke: var(--fg-2); stroke-width: 3.5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .rs-dot-empty { stroke: var(--fg-4); stroke-width: 2.5; }
+.rs-dot-target { stroke: var(--fg-4); stroke-width: 2.5; }
 /* 종료 상태 — 색과 높이가 함께 바뀐다(색만으로 말하지 않는다) */
 .rs-exits { display: flex; align-items: flex-end; gap: 1px; height: 28px; width: 160px; }
 .rs-exit { flex: 1 1 0; min-width: 1px; max-width: 8px; }

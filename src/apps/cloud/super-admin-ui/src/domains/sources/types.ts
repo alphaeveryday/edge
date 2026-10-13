@@ -180,7 +180,8 @@ export interface SourceReport {
 
 /**
  * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축 분리(plan·outcome·data)와 건수 null
- * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도·시각 축은 안 온다 — 셀에서 드릴다운으로 넘어가 본다.
+ * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도는 **현재 시도의 시각·종료 코드만** 온다(ALPHA-1284) —
+ * 시도 전량과 나머지 시각 축은 셀에서 드릴다운으로 넘어가 본다.
  */
 export interface NewsQualityAssessment {
   status: 'WITHIN_LIMITS' | 'CAUTION' | 'UNMEASURED';
