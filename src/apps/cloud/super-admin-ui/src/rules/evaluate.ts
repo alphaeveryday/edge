@@ -118,6 +118,8 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
       mine.length = 0;
     }
     violations.push(...mine);
+    /* 사실에 따라 갈리는 못 돈 사유 — 충돌로 못 돈 것은 그쪽 사유가 따로 있어 묻지 않는다 */
+    const notRunWhy = !evaluated && !collision ? R.notRunWhy?.(f) ?? undefined : undefined;
     ruleResults.push({
       id: R.id,
       name: R.name,
@@ -126,6 +128,7 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
       /* 못 돎의 종류를 **구조로** 낸다 — 화면이 문구를 파싱해 추측하면 새 사유가 생길 때마다
        * 조용히 틀린 칸에 그린다. `identity` 는 계측 공백이 아니라 응답의 계약 위반이다. */
       notRun: evaluated ? undefined : collision ? 'identity' : 'axis',
+      ...(notRunWhy ? { notRunWhy } : {}),
       violations: mine.length,
       depends_on_mock:
         evaluated && (mine.some((v) => v.mock) || !!R.mockBacked?.(f)),
@@ -138,7 +141,7 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
        * 주석과 `*` 표가 영구히 붙는다(R03·R10·R13 에 `dep` 을 넣자마자 실제로 그랬다).
        * ⚠️ 세 항을 통째로 `evaluated &&` 로 감싸면 **충돌 사유가 지워진다** — 충돌이 나면
        * 위에서 `evaluated` 를 이미 false 로 바꾸므로, `collision` 은 반드시 밖에 있어야 한다. */
-      note: collision ?? (evaluated ? R.note?.(f) ?? null : R.dep),
+      note: collision ?? (evaluated ? R.note?.(f) ?? null : notRunWhy ?? R.dep),
     });
   }
 

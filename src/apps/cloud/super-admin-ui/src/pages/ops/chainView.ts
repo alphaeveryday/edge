@@ -20,5 +20,18 @@ export function intradayLostAtEntry(chain: Facts['chain']): boolean {
   const fired = chain.feeds[1]?.v;
   /* 첫 단계가 곧 입구다 — id 로 찾지 않는다. 순서가 흐름이라는 계약을 여기서도 그대로 쓴다. */
   const observed = chain.stages[0]?.intraday;
+  /* 입구 단계가 관측 불가면 **거짓**이다 — 그 0 은 "하나도 안 들어갔다"가 아니라 셀 쪽이 없다 */
+  if (chain.stages[0]?.blind) return false;
   return Number.isFinite(fired) && (fired as number) > 0 && observed === 0;
+}
+
+/**
+ * 체인 단계가 **관측 불가**로 내려왔는가(ALPHA-1293) — 트리거 뒤 단계는 옛 설명 엔진의 표에서
+ * 세는데, 그 엔진이 조회일보다 앞서 멈췄을 때 서버가 그 단계들을 관측 불가로 표시한다.
+ * 흐름 화면이 이유를 한 줄로 적을지 이걸로 정한다. ETF 표도 같은 엔진의 실행 상태를 읽는다.
+ */
+export function legacyStagesBlind(chain: Facts['chain']): boolean {
+  /* **입구 단계**(첫 단계)의 표시로 본다 — 서버는 옛 엔진 단계 다섯을 한꺼번에 표시한다. 끝 단계
+   * 하나만 관측 불가인 사실(온프렘 수신처럼 원래 못 보는 단계)은 이 사정이 아니다. */
+  return chain?.stages[0]?.blind === true;
 }

@@ -701,14 +701,27 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		 * `run_key` 는 UNIQUE 라(`uq_ops_pipeline_run_key`) 이 키 하나로 전순서가 정해진다. */
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
+		/* 옛 설명 엔진이 조회일보다 앞서 멈췄는가(ALPHA-1293). 날짜 상수가 아니라 원장이 답한다 —
+		 * 그 엔진의 마지막 실행이 조회일보다 앞이거나, 실행이 아예 없으면 멈춘 것이다. 그 엔진이 돌던
+		 * 날짜를 조회하면 거짓이라 체인·경계가 종전 값 그대로 나간다. */
+		LocalDate lastLegacyRunDay = jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class);
+		boolean legacyEngineStopped = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(day);
+		/* 🔴 **경계는 조회일이 아니라 지금을 기준으로 묻는다.** 경계 축은 날짜 창을 안 타는 현재 상태
+		 * 조회라, 과거 날짜를 골라도 수는 "지금" 값이다. 조회일로 물으면 엔진이 돌던 날을 고르는 것만으로
+		 * 표시가 꺼지고, 지금의 게시를 못 보는 0 이 다시 정합으로 읽힌다(봇 리뷰가 짚었다). */
+		boolean legacyEngineStoppedNow =
+				lastLegacyRunDay == null || lastLegacyRunDay.isBefore(meta.kstToday());
+
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
 				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day),
 				outputs(day, meta.kstToday()),
 				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
-						rs.getLong("delivery_rows"))),
-				jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
+						rs.getLong("delivery_rows"), legacyEngineStoppedNow)),
+				blindIfUnobservable(
+						jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
+						legacyEngineStopped),
 				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
 						rs.getString("etf_id"), rs.getString("display_name"),
 						rs.getString("outcome")), day, day),
@@ -823,6 +836,33 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 					rs.getLong("published")));
 		}, maxDate, days, maxDate, maxDate, days, maxDate);
 		return new IntradayAnalysisTrend(asOf[0], List.copyOf(points));
+	}
+
+	/**
+	 * 옛 설명 엔진이 마지막으로 돈 날(KST). 체인의 다섯 단계와 전달 경계가 <b>그 엔진의 표</b>에서
+	 * 세므로, 이 날이 조회일보다 앞이면 그 축들은 조회일의 일을 못 본다(ALPHA-1293).
+	 */
+	private static final String LAST_LEGACY_RUN_DAY_SQL = """
+			SELECT max((started_at AT TIME ZONE 'Asia/Seoul')::date) FROM explanation_run
+			""";
+
+	/**
+	 * 단계 다섯을 <b>관측 불가</b>로 표시한다 — 옛 엔진이 조회일보다 앞서 멈췄고, 그날 코호트에 그
+	 * 엔진의 행이 하나도 없을 때만이다(다섯 단계의 수가 전부 0).
+	 *
+	 * <p>🔴 <b>둘 다여야 한다.</b> 엔진이 멈춘 것만 보면, 멈추기 전 트리거의 자손이 남아 있는 날
+	 * (수가 0 이 아니다)까지 가린다. 수가 0 인 것만 보면, 엔진이 돌던 날의 진짜 "하나도 안 남았다"
+	 * (손실)를 가린다. 입력 두 갈래는 건드리지 않는다 — 트리거는 지금도 쓰이고 실측이다.
+	 */
+	private static ChainRow blindIfUnobservable(ChainRow chain, boolean legacyEngineStopped) {
+		boolean noLegacyRows = chain.stages().stream()
+				.allMatch(s -> s.batch() == 0 && s.intraday() == 0);
+		if (!legacyEngineStopped || !noLegacyRows) {
+			return chain;
+		}
+		return new ChainRow(chain.feeds(), chain.stages().stream()
+				.map(s -> new ChainStage(s.id(), s.label(), s.src(), s.batch(), s.intraday(), true))
+				.toList());
 	}
 
 	/**

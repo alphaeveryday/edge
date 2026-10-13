@@ -177,6 +177,13 @@ export interface BoundaryDto {
   /** 무효화 통지가 **안 간** 발번만 센다 — 정상 무효화는 여기 안 들어온다 */
   deliveryNowNonpublished: number;
   deliveryRows: number;
+  /**
+   * 앞의 두 수가 **지금의 게시를 못 본다**(ALPHA-1293). 두 수는 옛 설명 엔진의 게시만 발번과
+   * 맞대는데, 그 엔진이 **지금** 멈춰 있을 때 참이다(이 축은 날짜 창을 안 타 조회일과 무관하다).
+   * 그때 0 은 정합이 아니라 관측 불가다.
+   * 이 필드가 없는 API 에서는 오지 않는다(없으면 종전처럼 읽는다).
+   */
+  blind?: boolean;
 }
 
 /**
@@ -211,6 +218,12 @@ export interface ChainStageDto {
   batch: number;
   intraday: number;
   src: string;
+  /**
+   * 이 단계를 **셀 수 없다**(ALPHA-1293) — 참이면 두 수의 0 은 실측이 아니다. 옛 설명 엔진이
+   * 조회일보다 앞서 멈췄고 그날 코호트에 그 엔진의 행이 없을 때다. 이 필드가 없는 API 에서는
+   * 오지 않는다(없으면 종전처럼 읽는다).
+   */
+  blind?: boolean;
 }
 
 /** `today` 는 **응답이 실제로 본 날**이다 — 조회 기준일이지 "지금"도 거래일도 아니다.

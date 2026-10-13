@@ -441,6 +441,42 @@ test('R10 경계 — blind(관측 불가) 단계는 0으로 세지 않고 비교
   assert.equal(hits(f, 'R10').length, 0);
 });
 
+test('🔴 R10 — 단계가 전부 관측 불가면 위반을 세우지 않고 못 돎이다 (멈춘 옛 엔진의 0 을 손실로 읽던 자리)', () => {
+  /* dev 의 형상이다: 배치 트리거 41, 장중 트리거 256, 그 뒤 다섯 단계는 옛 설명 엔진의 표라 전부 0.
+   * 서버가 그 단계들을 관측 불가로 내린다. 0 을 실측으로 읽으면 "장중 트리거 → 관측 · 256건" P0 가
+   * 트리거가 생기는 날마다 선다. */
+  const f = emptyFacts();
+  const stage = (id: string, label: string) => ({ id, label, batch: 0, intraday: 0, src: 'x', blind: true });
+  f.chain = {
+    feeds: [
+      { id: 'feed.batch', label: '배치 트리거', v: 41, unit: 'ETF', src: 'price_movement_trigger' },
+      { id: 'feed.intraday', label: '장중 트리거', v: 256, unit: '건', src: 'minute_price_trigger' },
+    ],
+    stages: [stage('c.obs', '관측'), stage('c.route', '라우트'), stage('c.run', '런'), stage('c.res', '결과'), stage('c.pub', '게시')],
+  };
+  assert.equal(hits(f, 'R10').length, 0, '관측 불가 단계의 0 을 손실로 세웠다');
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.equal(rr.evaluated, false, '위반 0건으로 평가됐다고 선다 — 손실이 없다는 뜻이 아니다');
+  assert.equal(rr.notRun, 'axis');
+  /* 사유가 원인을 말한다 — "배포본에 축이 없다"가 아니다(축은 왔고, 셀 쪽이 없다) */
+  assert.match(rr.notRunWhy ?? '', /관측 불가/, '화면이 읽는 사유 자리에 원인이 없다');
+  assert.match(rr.note ?? '', /관측 불가/);
+  assert.match(rr.note ?? '', /옛 설명 엔진/);
+  assert.doesNotMatch(rr.note ?? '', /배포본/);
+
+  /* 대조 — 같은 수인데 관측 가능하면 지금처럼 P0 손실이다. 표시를 무시하는 변이도, 0 이면 무조건
+   * 못 돎으로 접는 변이도 여기서 죽는다. */
+  f.chain.stages = f.chain.stages.map(({ blind: _blind, ...s }) => s);
+  const v = hits(f, 'R10');
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric]), [['batch:c.obs', 41], ['intraday:c.obs', 256]]);
+
+  /* 축이 아예 없는 응답의 사유는 종전 그대로다 */
+  delete f.chain;
+  const absent = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.match(absent.note ?? '', /배포본/);
+  assert.equal(absent.notRunWhy, undefined, '축이 없는데 관측 불가 사유를 붙였다');
+});
+
 test('R10 경계 — 비교할 점이 두 개 없으면 evaluated:false (인접 감소라는 물음이 성립하지 않는다)', () => {
   /* 실 응답에는 체인 축의 소스가 아예 없다. canRun 이 없으면 R10 이 "손실 없음"을 주장한다. */
   assert.equal(buildReport(emptyFacts(), NOW).rules.find((r) => r.id === 'R10')!.evaluated, false);
@@ -854,6 +890,34 @@ test('축이 통째로 없어도 평가는 산다 — `canRun` 은 evaluated 와
   assert.equal(rep.rules.find((r) => r.id === 'R13')!.evaluated, false);
   /* 다른 축의 규칙은 그대로 돈다 — 한 축의 부재가 남의 판정을 지우지 않는다 */
   assert.equal(rep.rules.find((r) => r.id === 'R01')!.evaluated, true);
+});
+
+test('🔴 R14 — 전달 경계가 관측 불가인 날의 0 은 정합이 아니다: 못 돎이다', () => {
+  /* 이 축은 옛 설명 엔진의 게시만 발번과 맞댄다. 그 엔진이 멈춘 뒤 새 분석 엔진이 쓴 게시·발번은
+   * 조인에 안 걸려, 0 은 "어긋난 것이 없다"가 아니라 "못 봤다"이다. */
+  const f = emptyFacts();
+  f.boundary = { published_without_delivery: 0, delivery_now_nonpublished: 0, blind: true };
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R14')!;
+  assert.equal(rr.evaluated, false, '평가됨 · 위반 0 으로 선다');
+  assert.equal(rr.notRun, 'axis');
+  assert.match(rr.note ?? '', /관측 불가/);
+  assert.match(rr.note ?? '', /새 분석 엔진/);
+
+  /* 0 이 아닌 수는 관측 불가여도 실측이다 — 옛 엔진 분의 미발번을 못 돎으로 접으면 진짜 위반이
+   * 화면에서 사라진다. 심각도도 그대로 P0 다. */
+  f.boundary = { published_without_delivery: 2, delivery_now_nonpublished: 0, blind: true };
+  const v = hits(f, 'R14');
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric, x.sev]), [['pub_no_delivery', 2, 'P0']]);
+  const ran = buildReport(f, NOW).rules.find((r) => r.id === 'R14')!;
+  assert.equal(ran.evaluated, true);
+  assert.match(ran.note ?? '', /옛 설명 엔진의 게시만 봤다/, '본 범위를 밝히지 않았다');
+
+  /* 표시가 없는 응답(옛 API·엔진이 돌던 날)은 지금과 같다 — 0 이면 평가된 조용함이다 */
+  f.boundary = { published_without_delivery: 0, delivery_now_nonpublished: 0 };
+  const clean = buildReport(f, NOW).rules.find((r) => r.id === 'R14')!;
+  assert.equal(clean.evaluated, true);
+  assert.equal(clean.violations, 0);
+  assert.equal(clean.note ?? null, null);
 });
 
 test('R14 전달 정합 — 두 방향 다 P0 다. 시드 기록은 표시일 뿐 심각도를 내리지 않는다', () => {
@@ -1732,13 +1796,14 @@ test('계측 공백으로 못 도는 규칙 목록이 문서의 티켓 표와 �
   const BLOCKED = ['R07', 'R08', 'R11', 'R16'];
   /* `dep` 이 있어도 **계측 공백이 아닌** 규칙들. 판별자는 "그 축이 배선되면 사라지는가"다.
    * · R13 — "오늘 판정할 산출이 없다"는 날마다 갈리는 조건부 사유다.
-   * · R03·R10·R12·R15 — 축은 배선됐다(R15 는 v2 분석 실패 축, ALPHA-1291). 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
+   * · R03·R10·R12·R15 — 축은 배선됐다(R15 는 v2 분석 실패 축, ALPHA-1291).
+   * · R14 — 축은 늘 온다. 못 도는 것은 서버가 그 축을 관측 불가로 표시한 날뿐이다(ALPHA-1293). 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
    *   계측이 아니라 배포 시차다. ⚠️ **도달 가능한 갈래다** — 검증 경계가 이 축만 옵셔널로
    *   받으므로(`consoleFacts.test.ts` 의 「체인 축이 통째로 없는 응답은 거부하지 않는다」)
    *   API 롤백 한 번에 실제로 이 상태가 된다.
    * 여기 넣는 것이 세는 것보다 나은 이유: 같이 세면 계측 공백의 규모가 부풀려지고, 그 수가
    * 그대로 "아무도 안 보는 축이 몇 개인가"로 읽힌다. */
-  const CONDITIONAL = ['R13', 'R03', 'R10', 'R12', 'R15'];
+  const CONDITIONAL = ['R13', 'R03', 'R10', 'R12', 'R15', 'R14'];
 
   const withDep = RULES.filter((R) => R.dep).map((R) => R.id);
   assert.deepEqual(

@@ -6,7 +6,7 @@
 import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { ChainStrip } from './ChainStrip';
-import { intradayLostAtEntry } from './chainView';
+import { intradayLostAtEntry, legacyStagesBlind } from './chainView';
 import { Absent, AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import '../../styles/ops.css';
 
@@ -41,6 +41,13 @@ export function ChainPage() {
             />
           </span>
         </div>
+        {legacyStagesBlind(q.facts.chain) && (
+          <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
+            트리거 뒤 단계(관측부터 Cloud 게시까지)는 옛 설명 엔진의 표에서 셉니다. 그 엔진이 조회일보다
+            앞서 멈춰 이 날의 값이 없습니다 — 0건이 아니라 관측 불가입니다. 구간 손실(R10)도 같은
+            이유로 판정하지 못합니다.
+          </p>
+        )}
         <ChainStrip chain={q.facts.chain} />
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
@@ -78,12 +85,12 @@ export function ChainPage() {
               tip={
                 (ledger?.why ?? '') +
                 (ledger
-                  ? `\n\n이 원장이 있으면 "설명 미생성 ${failed.length}종이 어느 ETF인지"에 답할 수 있고, R15 가 대상을 지목한다. ` +
+                  ? `\n\n옛 설명 엔진의 실행 상태다. 분석 실패 판정(R15)은 이 표가 아니라 새 분석 엔진의 표를 본다. ` +
                     (ledger.mock
                       ? '이 값은 목 원장이다.'
                       : '조회일에 발화한 ETF별 최신 트리거의 최신 설명 실행 상태다.')
                   : 'per-ETF 분석 귀결 원장이 이번 응답에 없다 — 표를 비워 두는 것이 아니라 축 자체가 없다. ' +
-                    '조회일의 ETF별 최신 트리거·설명 실행 상태가 없어 셀 값이 없고, R15 도 그래서 판정하지 못한다.')
+                    '조회일의 ETF별 최신 트리거·설명 실행 상태가 없어 셀 값이 없다.')
               }
               label="ETF별 분석 귀결"
             />
@@ -91,12 +98,18 @@ export function ChainPage() {
         </div>
         {/* ⛔ 축이 없을 때 빈 격자를 그리지 않는다 — 칸이 0개인 격자는 "오늘 실패한 ETF 가 없다"로
             읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). */}
+        {ledger && legacyStagesBlind(q.facts.chain) && (
+          <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
+            이 표도 옛 설명 엔진의 실행 상태를 읽습니다. 그 엔진이 조회일보다 앞서 멈춰 이 날의 귀결은
+            비어 있습니다 — 새 분석 엔진의 실행은 이 표에 나오지 않습니다. 분석 실패는{' '}
+            <Link to="/ops/trend">추이 화면의 분석 실패 ETF 카드</Link>가 답합니다.
+          </p>
+        )}
         {!ledger ? (
           <div className="card-pad">
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
               ETF별 분석 귀결 원장은 <Absent kind="uninstrumented" /> 입니다 — 이번 응답에는
-              최신 트리거 실행 축이 없어 <b>어느 ETF가 실패했는지</b> 이 콘솔이 답하지 못합니다.
-              R15 도 같은 이유로 판정하지 못합니다.
+              최신 트리거 실행 축이 없어 이 표를 그리지 못합니다.
             </p>
           </div>
         ) : (

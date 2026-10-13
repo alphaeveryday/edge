@@ -69,6 +69,17 @@ test('실시간 축을 안 읽는 규칙에는 조회 상태가 새면 안 된�
   assert.match(notRunReason(R('R17'), 'pending'), /도착하지 않았다/);
 });
 
+test('🔴 규칙이 이번 사실에서 고른 사유가 정적 사유보다 먼저다 — 축은 왔는데 관측 불가인 날에 "배포본에 축이 없다"고 쓰지 않는다', () => {
+  /* R10 의 `dep` 은 "이 응답에 체인 축이 없다 — 그 축을 안 싣는 배포본이다"이다. 단계가 관측 불가라
+   * 못 돈 날에 그걸 그리면 운영자는 배포를 의심한다 — 원인은 옛 설명 엔진이 멈춘 것이다. */
+  const why = '체인 단계가 관측 불가다 — 옛 설명 엔진의 표에서 세는데 그 엔진이 조회일보다 앞서 멈췄다';
+  const reason = notRunReason({ ...R('R10'), notRunWhy: why }, 'loaded');
+  assert.match(reason, /관측 불가/);
+  assert.doesNotMatch(reason, /배포본/);
+  /* 고른 사유가 없으면 종전대로 정적 사유다 */
+  assert.match(notRunReason(R('R10'), 'loaded'), /배포본/);
+});
+
 test('못 돈 규칙은 종류를 안 가리고 전부 나온다 — `identity` 만 세면 계측 공백이 정상으로 읽힌다', () => {
   assert.deepEqual(unevaluatedRules(ev).map((r) => r.id), ['R08', 'R17', 'R13', 'R12']);
   /* 돈 규칙은 위반이 0이어도 여기 없다 — "봤고 괜찮다"와 "모른다"는 다른 칸이다 */

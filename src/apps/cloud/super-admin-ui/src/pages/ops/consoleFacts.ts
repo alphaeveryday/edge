@@ -241,6 +241,7 @@ export const QUEUE_FIELDS: Record<string, Check> = {
 };
 export const BOUNDARY_FIELDS: Record<string, Check> = {
   publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
+  blind: optionalBool,
 };
 /* 🔴 **체인의 수에는 `null` 자리가 없다.** 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없다.
  * `nullableCount` 를 쓰면 손상된 응답의 `null` 이 규칙 층까지 흘러가 그 단계만 비교에서 조용히
@@ -249,7 +250,7 @@ export const CHAIN_FEED_FIELDS: Record<string, Check> = {
   id: text, label: text, v: count, unit: text, src: text,
 };
 export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
-  id: text, label: text, batch: count, intraday: count, src: text,
+  id: text, label: text, batch: count, intraday: count, src: text, blind: optionalBool,
 };
 export const ETF_LEDGER_ROW_FIELDS: Record<string, Check> = {
   etf: text, name: text, triggered: bool, outcome: nullableText, error: nullableText,
@@ -444,6 +445,7 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       published_without_delivery: dto.boundary.publishedWithoutDelivery,
       delivery_now_nonpublished: dto.boundary.deliveryNowNonpublished,
       delivery_rows: dto.boundary.deliveryRows,
+      ...(dto.boundary.blind ? { blind: true } : {}),
     },
     /* 순서를 **그대로 옮긴다** — 목록 순서가 곧 흐름이라 정렬하거나 id 로 다시 찾으면 서버가
      * 정한 선후가 사라진다. 원장에는 단계 간 선후가 없어 여기서 복원할 방법도 없다.
@@ -465,6 +467,8 @@ function toFacts(dto: ConsoleFactsDto): Facts {
               batch: s.batch,
               intraday: s.intraday,
               src: s.src,
+              /* 참일 때만 싣는다 — 없는 응답(옛 API)과 false 를 같은 형상으로 둔다 */
+              ...(s.blind ? { blind: true } : {}),
             })),
           },
         }
