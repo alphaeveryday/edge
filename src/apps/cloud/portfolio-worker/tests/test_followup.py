@@ -39,7 +39,7 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
 
 
 @pytest.mark.parametrize('separate_projection', [False, True])
-@pytest.mark.parametrize('inherited', [False, True])
+@pytest.mark.parametrize('inherited', [False, True, 'principal'])
 async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(separate_projection, inherited):
     import json
     from report_fixtures import final_payload
@@ -52,6 +52,8 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
     if inherited:
         report['input']['question'] = question
         question = '10년 뒤 금액을 알려 주세요.'
+        if inherited == 'principal': question = '원금은 1000만원입니다. ' + question
+    expected_principal = '10000000' if inherited == 'principal' else '1000000'
     stages, calculated, checkpoints = [], [], []
     async def model(payload):
         if stages[-1] == 'question':
@@ -61,7 +63,7 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
         if calculated:
             result = json.loads(payload['messages'][-1]['content'])
             assert result['status'] == 'available'
-            assert result['rows'][0]['future_krw'] == '1000000'
+            assert result['rows'][0]['future_krw'] == expected_principal
             assert result['monthly_krw'] == '0'
             raise RuntimeError('ZERO_CONTRIBUTION_CHECKED')
         calculated.append(1)
@@ -69,7 +71,7 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
             'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': json.dumps({'annual_returns': [0], 'years': [5]})}}]}}]}
     with pytest.raises(RuntimeError, match='ZERO_CONTRIBUTION_CHECKED'):
         await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append, on_checkpoint=checkpoints.append)
-    assert checkpoints[-1]['scenarios']['rows'][0]['future_krw'] == '1000000'
+    assert checkpoints[-1]['scenarios']['rows'][0]['future_krw'] == expected_principal
 
 
 @pytest.mark.parametrize('supplied', [False, True])

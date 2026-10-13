@@ -25,9 +25,7 @@ def projection_context(value, decision):
     return ''.join(clauses)
 
 
-def zero_contribution(text, decision):
-    if NO_CONTRIBUTION.fullmatch(text):
-        return text
+def funding_context(text, decision):
     remainder = projection_context(text, decision).strip(' .!?;\n')
     if decision and decision.kind == 'scenario':
         from .scenarios import stated_principal
@@ -37,6 +35,13 @@ def zero_contribution(text, decision):
                 if stated_principal(clauses[index]) is not None:
                     clauses[index] = ''
             remainder = ''.join(clauses).strip(' .!?;\n')
+    return remainder
+
+
+def zero_contribution(text, decision):
+    if NO_CONTRIBUTION.fullmatch(text):
+        return text
+    remainder = funding_context(text, decision)
     return remainder if NO_CONTRIBUTION.fullmatch(remainder) else None
 
 
@@ -45,7 +50,7 @@ def zero_funding_quote(request, decision):
     quote = zero_contribution(questions[-1], decision)
     if quote:
         return quote
-    if len(questions) > 1 and not projection_context(questions[-1], decision).strip(' .!?;\n'):
+    if len(questions) > 1 and not funding_context(questions[-1], decision):
         return zero_contribution(questions[0], decision)
     return None
 

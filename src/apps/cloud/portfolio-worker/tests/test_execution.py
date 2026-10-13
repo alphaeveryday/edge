@@ -29,7 +29,7 @@ def test_changed_funding_is_not_silently_replaced_by_an_older_zero_instruction()
     from edge_portfolio.decision import Decision
     from edge_portfolio.followup import FollowupInput
     from edge_portfolio.execution import zero_funding_quote
-    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상',
+    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', question='매월 20만원 넣을게요.',
         funding_questions=['추가 납입 없이 계산해 주세요.', '매월 20만원 넣을게요. 10년 뒤 금액을 알려 주세요.'])
     assert zero_funding_quote(req, Decision(kind='scenario')) is None
 
