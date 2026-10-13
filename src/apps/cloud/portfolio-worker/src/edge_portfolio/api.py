@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from . import store
+from . import admin, admin_store
 from .catalog import canonicalize, directory
 from starlette.middleware.gzip import GZipMiddleware
 from .contracts import AnalysisInput, DraftInput, StrictModel
@@ -21,6 +22,7 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.include_router(admin.router)
 COOKIE = "edge_portfolio_session"
 
 
@@ -62,6 +64,12 @@ def session(request: Request, response: Response):
 @app.get('/api/portfolio/catalog')
 def catalog():
     return directory()
+
+
+@app.post('/api/portfolio/presence')
+def presence(request: Request):
+    admin_store.heartbeat(owner(request))
+    return {'status': 'recorded'}
 
 
 def public(row):

@@ -1,5 +1,6 @@
 """Executed as root on the isolated host; never print credentials."""
 import json
+import hashlib
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,13 +22,21 @@ def dotenv(values):
     return '\n'.join(key + '=' + json.dumps(value.replace('$', '$$'), ensure_ascii=False) for key, value in values.items()) + '\n'
 
 
+def admin_environment(admin):
+    if admin.get('username') != 'admin' or not isinstance(admin.get('password'), str) or len(admin['password']) < 32:
+        raise ValueError('Invalid administrator credential configuration')
+    return {'PORTFOLIO_ADMIN_PASSWORD_SHA256': hashlib.sha256(admin['password'].encode()).hexdigest()}
+
+
 def main():
     root = Path('/opt/edge-portfolio')
     values = build_runtime(json.loads((root / 'runtime.json').read_text()), json.loads((root / 'reader.json').read_text()))
+    values.update(admin_environment(json.loads((root / 'admin.json').read_text())))
     (root / 'runtime.env').write_text(dotenv(values))
     (root / 'runtime.env').chmod(0o600)
     (root / 'runtime.json').unlink()
     (root / 'reader.json').unlink()
+    (root / 'admin.json').unlink()
 
 
 if __name__ == '__main__':

@@ -24,6 +24,7 @@ services:
       PORTFOLIO_ORIGIN: https://etforca.com
       PORTFOLIO_COOKIE_SECURE: "1"
       PORTFOLIO_ORIGIN_SECRET: ${PORTFOLIO_ORIGIN_SECRET}
+      PORTFOLIO_ADMIN_PASSWORD_SHA256: ${PORTFOLIO_ADMIN_PASSWORD_SHA256}
     mem_limit: 256m
     read_only: true
     tmpfs: [/tmp]

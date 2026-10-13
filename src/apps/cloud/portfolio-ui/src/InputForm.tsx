@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { request, type Catalog, type Instrument, type Holding, type Input } from './api';
+import { request, ensureVisitorSession, type Catalog, type Instrument, type Holding, type Input } from './api';
 import { InstrumentSearch } from './InstrumentSearch';
 import { PortfolioPreview } from './PortfolioPreview';
 import { TaxAccounts, missingTaxAnswers, type TaxProfile } from './TaxAccounts';
@@ -41,7 +41,7 @@ export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void
       preferences: { accounts: selected, contribution: how + (contribution && how === '매달 꾸준히' ? ` ${contribution}만 원` : ''), interests, note, tax_profile: profile ? { ...profile, accounts: profile.accounts.filter(a => selected.includes(a.account)) } : null } };
   }
   async function save(profile = tax, planning = fresh) {
-    await request('/session');
+    await ensureVisitorSession();
     await request('/drafts/' + draftId, { method: 'POST', body: JSON.stringify(payload(profile, planning)) });
   }
   async function advance(recommend = false) {
