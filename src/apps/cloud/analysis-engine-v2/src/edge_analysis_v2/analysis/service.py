@@ -71,6 +71,16 @@ def listed_references(value):
             yield from listed_references(inner)
 
 
+def keep_references(value, allowed, fallback):
+    """Drop every ``tool_run_ids`` entry that is not allowed; a list left empty takes the fallback entries."""
+    if isinstance(value, dict):
+        return {k: ([i for i in v if i in allowed] or list(fallback)) if k == 'tool_run_ids' and isinstance(v, list)
+                else keep_references(v, allowed, fallback) for k, v in value.items()}
+    if isinstance(value, list):
+        return [keep_references(v, allowed, fallback) for v in value]
+    return value
+
+
 def swap_references(value, table):
     """Replace each known entry of every ``tool_run_ids`` list; unknown entries pass through for the store to reject."""
     if isinstance(value, dict):
@@ -280,29 +290,37 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                                 if (path := artifacts/stage/'measurement.json').is_file()}
                     if measured:
                         (artifacts/'measurement.json').write_text(json.dumps(total_measurement(measured), ensure_ascii=False, indent=2), encoding='utf-8')
-            def uncitable(final):
-                # The writer can only copy these numbers, so one that the store would refuse is settled here.
-                cited = sorted(set(re.findall(r'\[(f\d+)\]', final['report'])), key=lambda r: int(r[1:]))
-                if not cited:
-                    return '사실 옆에 그 사실을 준 도구 호출의 번호를 [f3]처럼 적어 주세요. 번호가 없는 문장은 글에서 사실로 쓰이지 않습니다.'
-                problems = []
-                for reference in cited:
+            def refused(report):
+                """The numbers a report cites that cannot be evidence, each with the reason."""
+                problems = {}
+                for reference in sorted(set(re.findall(r'\[(f\d+)\]', report)), key=lambda r: int(r[1:])):
                     if reference not in references:
-                        problems.append(f'[{reference}]: 이번 조사에 없는 번호입니다.')
+                        problems[reference] = '이번 조사에 없는 번호입니다.'
                         continue
                     try:
                         run(lambda connection: store(connection).validate_outlook_body_evidence(analysis_id,
                             {'items': [{'tool_run_ids': [references[reference]]}], 'updates': {'items': []}}))
                     except ToolInputError as error:
-                        problems.append(f'[{reference}]: ' + str(error).replace(references[reference], reference))
+                        problems[reference] = str(error).replace(references[reference], reference)
+                return problems
+            def uncitable(final):
+                # The writer can only copy these numbers, so one that the store would refuse is settled here.
+                if not re.search(r'\[f\d+\]', final['report']):
+                    return '사실 옆에 그 사실을 준 도구 호출의 번호를 [f3]처럼 적어 주세요. 번호가 없는 문장은 글에서 사실로 쓰이지 않습니다.'
+                problems = refused(final['report'])
                 return ('이 번호들은 글의 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나, '
-                        '그 문장에서 번호를 떼고 추측으로 옮기세요. report 전체를 다시 내세요.\n' + '\n'.join(problems)) if problems else None
+                        '그 문장에서 번호를 떼고 추측으로 옮기세요. report 전체를 다시 내세요.\n'
+                        + '\n'.join(f'[{r}]: {why}' for r, why in problems.items())) if problems else None
             # With a web budget the investigator searches through the attached search MCP and reads through ours;
             # our own search_web stays offered for when that outside server is down or refuses.
             web = any(s['function']['name'] == 'read_web_document' for s in source_schemas)
             report = step('investigation', initial=initial, schemas=source_schemas, output_schema=INVESTIGATION, web_search=web,
                           skills=('cause-investigation',), optional_skills=OPTIONAL_SKILLS, timeout_seconds=600,
                           compare_explanations=True, final_check=uncitable)['report']
+            # The check gives two chances to repair and then returns the report as it is. A number it still refuses
+            # loses its mark here, so the sentence stays as the investigator's word and is not copied as a fact.
+            for reference in refused(report):
+                report = report.replace(f'[{reference}]', '')
             # Judgments and the explanation table stay here for review; only cited facts reach the server.
             (artifacts/'investigation.md').write_text(report, encoding='utf-8')
             encode = lambda value: json.dumps(shorten(value), ensure_ascii=False, default=str)
@@ -320,6 +338,9 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             fields = step('fields', initial={'investigation': report, 'body': encode(editor.result()),
                                              'summary': encode(written), 'factor_values': encode(factor_output | {'tool_run_id': 'f1'})},
                           schemas=[], output_schema=FIELDS, timeout_seconds=300, final_check=unchecked)
+            # The same for the fields: an entry still unchecked after the repairs is dropped, and a list left empty
+            # takes the evidence of the body's first topic, which states the judgment those fields repeat.
+            fields = keep_references(fields, checked, shorten(editor.result())['items'][0]['tool_run_ids'])
             response = swap_references(written | fields, references)
         else:
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),

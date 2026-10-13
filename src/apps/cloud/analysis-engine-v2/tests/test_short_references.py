@@ -19,3 +19,12 @@ def test_every_listed_reference_of_a_response_is_found_wherever_it_is_nested():
                 'conclusion': {'supports': [{'label': 'x', 'tool_run_ids': ['f3', 'f7']}], 'burdens': []},
                 'issue_detail': {'items': [{'tool_run_ids': ['f12']}]}}
     assert sorted(listed_references(response)) == ['f1', 'f12', 'f3', 'f7']
+
+
+def test_an_unchecked_reference_is_dropped_and_an_emptied_list_takes_the_fallback():
+    # WHY: after its two repairs the last check returned the answer as it was, and an unchecked number went on to publication.
+    from edge_analysis_v2.analysis.service import keep_references
+    fields = {'factors': [{'sentence': 's', 'tool_run_ids': ['f1', 'f9']}],
+              'conclusion': {'supports': [{'label': 'x', 'tool_run_ids': ['f9']}]}}
+    assert keep_references(fields, {'f1', 'f3'}, ['f3']) == {
+        'factors': [{'sentence': 's', 'tool_run_ids': ['f1']}], 'conclusion': {'supports': [{'label': 'x', 'tool_run_ids': ['f3']}]}}

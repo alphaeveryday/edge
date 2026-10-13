@@ -107,11 +107,10 @@ class WorkSession(SkillSession):
 
     async def after(self, data, tool_use_id, context):
         response = data.get('tool_response')
-        if isinstance(response, dict) and (response.get('isError') or response.get('is_error')):
-            return {}
-        if data['tool_name'].startswith('mcp__analysis__'):
+        failed = isinstance(response, dict) and (response.get('isError') or response.get('is_error'))
+        if not failed and data['tool_name'].startswith('mcp__analysis__'):
             self.calls_since_update += 1
-        if data['tool_name'] in ('Write', 'Edit'):
+        if not failed and data['tool_name'] in ('Write', 'Edit'):
             self.checkpoint()
         if self.wrap_up_at is not None and monotonic() >= self.wrap_up_at:
             # An investigation still reading sources at its deadline was cut off and its whole run was lost.
@@ -121,6 +120,8 @@ class WorkSession(SkillSession):
             return {'hookSpecificOutput': {'hookEventName': 'PostToolUse',
                     'additionalContext': '이 작업의 시간이 거의 끝났어. 새 조사를 시작하지 마. 지금까지 확인한 것으로 열린 질문을 닫고 '
                                          '최종 응답을 바로 내. 확인하지 못한 것은 확인하지 못했다고 적어.'}}
+        if failed:
+            return {}
         pending = [item['content'] for item in self.todos if item['status'] != 'completed']
         if pending and self.calls_since_update >= 12 and self.mid_run_reminders < 2:
             self.calls_since_update = 0
