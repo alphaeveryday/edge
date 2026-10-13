@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 const section = { paragraphs: ['사용자의 투자 기간을 기준으로 판단해요.', '추천 구성에 영향을 주는 근거를 확인해요.', '전망이 달라지면 추천 비중도 다시 검토해요.'], evidence: [], limitations: [] };
-const evaluation = { scores: { leadership: 5, profitability: 4, stability: 3 }, overall: 4, reason: section, method: 'AI 정성 평가' };
+const evaluation = { scores: { leadership: 5, profitability: 4, stability: 3 }, overall: 4, reason: section, method: 'AI 정성 평가', rubric_version: 1 };
 const report = {
   schema_version: 2, sections: { opinion: section, outlook: section, question: section, portfolio: section },
   sources: [], as_of: '2026-10-12T00:00:00Z', current_evaluation: evaluation,
@@ -14,6 +14,38 @@ const report = {
     historical_performance: { basis: '최근 1년 · 100만 원을 넣었다면 (원)', source_url: 'https://example.com/history', interval: '1d', currency: 'KRW', points: Array.from({ length: 366 }, (_, i) => ({ date: new Date(Date.UTC(2025, 9, 12 + i)).toISOString().slice(0, 10), recommended: 1000000 + i * 100, current: 1000000 - i * 100 })) } },
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
+
+test('a cash-only current portfolio does not hide the recommended total and three star ratings', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'cash-rating'));
+  await page.route('**/api/portfolio/analyses/cash-rating', route => route.fulfill({ json: { id: 'cash-rating', state: 'succeeded', result: {
+    ...report, current_evaluation: { ...evaluation, scores: null, overall: null }
+  } } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.recommended-rating b')).toHaveText('4');
+  await expect(page.locator('.recommended-axes .stars')).toHaveCount(3);
+  await expect(page.locator('.recommended-axes .pending-score')).toHaveCount(0);
+});
+
+test('older scores are not relabeled as having used the restored rubric', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'old-rubric'));
+  await page.route('**/api/portfolio/analyses/old-rubric', route => route.fulfill({ json: { id: 'old-rubric', state: 'succeeded', result: {
+    ...report, current_evaluation: { ...evaluation, rubric_version: undefined }
+  } } }));
+  await page.goto('/portfolio/');
+  await page.getByLabel('판단 기준 보기').click();
+  await expect(page.locator('.crit')).toContainText('이전 평가 기준');
+  await expect(page.locator('.crit')).not.toContainText('사용자의 선호는 점수에 넣지');
+});
+
+test('withholding a backtest winner below the rating threshold explains rating rather than missing prices', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'rating-withheld'));
+  await page.route('**/api/portfolio/analyses/rating-withheld', route => route.fulfill({ json: { id: 'rating-withheld', state: 'succeeded', result: {
+    ...report, recommendation: null, optimization: { status: 'available', reason: 'RATING_BELOW_MINIMUM', selected_candidate_id: null }
+  } } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByText('조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.')).toBeVisible();
+  await expect(page.locator('.portfolio-hero')).toHaveCount(0);
+});
 
 test('a batch without eligible candidates publishes analysis without a recommendation or invented chart', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'no-match'));
@@ -36,6 +68,13 @@ test('recommended holdings and final amounts are distinct from input; opinion th
   await expect(page.locator('.account-plan td')).toHaveText(['60만 원', '40만 원']);
   await expect(page.locator('.recommended-rating b')).toHaveText('4');
   await expect(page.locator('.portfolio-hero .axes li')).toHaveCount(3);
+  await expect(page.locator('.portfolio-hero .axes .stars')).toHaveCount(3);
+  await expect(page.locator('.portfolio-hero .axes .stars').first()).toBeVisible();
+  await page.getByLabel('판단 기준 보기').click();
+  await expect(page.locator('.crit')).toContainText('시가총액 상위 기업');
+  await expect(page.locator('.crit')).toContainText('나쁜 해의 하락 폭');
+  await expect(page.locator('.crit')).not.toContainText('AI 정성 평가');
+  await page.getByLabel('판단 기준 보기').click();
   await expect(page.locator('.forecast b')).toHaveText(['-3%', '0.8%']);
   await expect(page.locator('.evaluation__part h4')).toHaveText(['최종 투자 의견과 실행할 행동', '앞으로의 전망', '결혼 자금은 따로 확보하세요']);
   await expect(page.locator('.evaluation__part').first().locator('li')).toHaveCount(3);

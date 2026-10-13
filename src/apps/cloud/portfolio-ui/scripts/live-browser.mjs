@@ -25,6 +25,8 @@ try {
   if (plan) {
   const selected = optimization.candidates.find(c => c.candidate_id === optimization.selected_candidate_id);
   expect(selected).toBeTruthy();
+  expect(plan.evaluation.overall).toBeGreaterThanOrEqual(4);
+  expect(plan.evaluation.scores).not.toBeNull();
   const actual = {};
   for (const row of plan.allocations) {
     expect(row.kind).toBe('etf');
@@ -49,7 +51,7 @@ try {
   await expect(page.locator('.evaluation__part h4').nth(1)).toHaveText('앞으로의 전망');
   await expect(page.getByRole('heading', { name: '계좌별 최종 투자 제안' })).toBeVisible();
   } else {
-    expect(optimization.candidates).toEqual([]);
+    if (optimization.reason !== 'RATING_BELOW_MINIMUM') expect(optimization.candidates).toEqual([]);
     expect(optimization.selected_candidate_id).toBeNull();
     await expect(page.locator('.portfolio-hero')).toHaveCount(0);
   }

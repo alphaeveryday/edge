@@ -76,6 +76,8 @@ class Optimizer:
                len(set(group)) != len(group) for group in groups):
             raise ValueError('Each combination needs 1..5 distinct registered ETF IDs, without cash')
         groups = [sorted(group) for group in groups]
+        if self.request and self.request.planning and any(len(group) < 2 for group in groups):
+            raise ValueError('Planning requires at least two distinct ETFs in every combination; pair a representative ETF with a researched alternative')
         if len({tuple(group) for group in groups}) != 10:
             raise ValueError('The ten ETF combinations must be distinct')
         ids = set().union(*map(set, groups))
@@ -181,6 +183,8 @@ class Optimizer:
             if final.recommendation is not None or final.selected_candidate_id is not None or final.return_forecast is not None:
                 raise ValueError('No eligible candidate: recommendation, selected_candidate_id and return_forecast must be null')
             return None
+        if final.recommendation is None and final.selected_candidate_id is None and final.return_forecast is None:
+            return None  # Backtest eligibility alone does not establish a four-star recommendation.
         candidate = next((row for row in candidates if row['candidate_id'] == final.selected_candidate_id), None)
         if candidate is None or final.recommendation is None:
             raise ValueError('Select an eligible candidate ID and its exact allocation')
@@ -188,6 +192,8 @@ class Optimizer:
         for row in final.recommendation.allocations:
             actual[row.instrument_id] = actual.get(row.instrument_id, Decimal(0)) + Decimal(str(row.weight_pct))
         expected = {row['instrument_id']: row['weight_pct'] for row in candidate['allocations']}
+        if self.request and self.request.planning and len(actual) < 2:
+            raise ValueError('Planning requires at least two distinct ETFs')
         if actual != expected:
             raise ValueError(f'Final allocation must exactly match {candidate["candidate_id"]}: {expected}; use candidate_id, not rank, to identify the candidate')
         return candidate

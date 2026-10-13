@@ -2,9 +2,32 @@
 import base64
 import json
 import os
+import re
 import time
 
 import boto3
+
+
+REPLAY_SCRIPT = r'''
+import asyncio,json,os,sys
+from edge_portfolio import store
+from edge_portfolio.agent import run_analysis
+from edge_portfolio.contracts import AnalysisInput
+from edge_portfolio.worker import failure_codes
+async def replay():
+    with store.connect() as db:
+        job=db.execute("SELECT input FROM portfolio_jobs WHERE id=%s AND state='failed' AND kind='analysis'",(sys.argv[1],)).fetchone()
+    if not job:
+        print('REPLAY '+json.dumps({'status':'not_found'}))
+        return
+    try:
+        result=await run_analysis(AnalysisInput.model_validate(job['input']),os.environ['DEEPSEEK_API_KEY'],lambda role: None)
+        optimization=result.get('optimization',{})
+        print('REPLAY '+json.dumps({'status':'succeeded','seconds':result.get('elapsed_seconds'),'optimization':optimization.get('status'),'candidates':len(optimization.get('candidates',[]))}))
+    except Exception as error:
+        print('REPLAY '+json.dumps({'status':'failed','codes':failure_codes(error)}))
+asyncio.run(replay())
+'''
 
 
 HOST_SCRIPT = r'''
@@ -27,15 +50,28 @@ print(jobs.stdout if jobs.returncode == 0 else json.dumps({'jobs':'unavailable'}
 '''
 
 
+def host_script(job_id):
+    if not job_id:
+        return HOST_SCRIPT
+    if not re.fullmatch(r'[a-f0-9]{32}', job_id):
+        raise ValueError('Invalid replay job ID')
+    return HOST_SCRIPT + f'''
+replay=subprocess.run(compose+['exec','-T','worker','python','-c',{REPLAY_SCRIPT!r},{job_id!r}],capture_output=True,text=True,timeout=330)
+safe=[line for line in replay.stdout.splitlines() if line.startswith('REPLAY ')]
+print(safe[-1] if safe else '{{"replay":"unavailable"}}')
+'''
+
+
 def main():
     if os.getenv('GITHUB_ACTIONS') != 'true' or os.getenv('GITHUB_REF') != 'refs/heads/dev':
         raise RuntimeError('Diagnostics require the GitHub dev workflow')
+    script = host_script(os.getenv('PORTFOLIO_REPLAY_JOB_ID', ''))
     ssm = boto3.client('ssm', region_name='ap-northeast-2')
     config = json.loads(ssm.get_parameter(Name='/edge/portfolio/deployment')['Parameter']['Value'])
-    encoded = base64.b64encode(HOST_SCRIPT.encode()).decode()
+    encoded = base64.b64encode(script.encode()).decode()
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
-        Parameters={'commands': [f"python3 -c \"import base64; exec(base64.b64decode('{encoded}'))\""], 'executionTimeout': ['120']})['Command']['CommandId']
-    for _ in range(24):
+        Parameters={'commands': [f"python3 -c \"import base64; exec(base64.b64decode('{encoded}'))\""], 'executionTimeout': ['360']})['Command']['CommandId']
+    for _ in range(78):
         time.sleep(5)
         result = ssm.get_command_invocation(CommandId=command, InstanceId=config['instance_id'])
         if result['Status'] == 'Success':

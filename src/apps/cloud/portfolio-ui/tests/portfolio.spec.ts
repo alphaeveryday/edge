@@ -3,6 +3,14 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
+test('external search throttling is distinguished from the visitors trial quota', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'search-limited'));
+  await page.route('**/api/portfolio/analyses/search-limited', route => route.fulfill({ json: { id: 'search-limited', state: 'failed', failure: 'SEARCH_RATE_LIMIT' } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByText(/외부 검색 서비스의 요청 제한/)).toBeVisible();
+  await expect(page.locator('.ans')).not.toContainText('오늘 체험 횟수');
+});
+
 test('an unavailable saved analysis can return to input without clearing browser storage manually', async ({ page }) => {
   await page.route('**/api/portfolio/catalog', route => route.fulfill({ json: catalog }));
   await page.route('**/api/portfolio/analyses/missing-job', route => route.fulfill({ status: 404, json: {} }));
