@@ -25,6 +25,11 @@ def test_publication_requires_half_the_period_and_all_ten_recent_sessions():
     assert search(['A'], frame, {'CASH:KRW': 1}) == []
 
 
+def test_less_than_ten_measured_sessions_cannot_claim_ten_days_of_outperformance():
+    frame = pd.DataFrame({'A': [1] + [1.1] * 9, 'CASH:KRW': 1.0})
+    assert search(['A'], frame, {'CASH:KRW': 1}) == []
+
+
 def test_every_grid_is_fully_invested_in_ten_percent_units():
     for n in range(1, 6):
         values = grid(n)
@@ -122,8 +127,88 @@ async def test_partial_price_failures_preserve_nine_independent_combinations(mon
     monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
+    assert len(result['candidates']) == (10 if failure == 'shared-window' else 9)
+    if failure != 'shared-window':
+        assert all(c['candidate_id'] != 'candidate-5' for c in result['candidates'])
+
+
+async def test_new_baseline_etf_uses_its_available_period_for_all_candidates():
+    request, market, groups = batch()
+    market.current = {'KR:E': 1}
+    market.loader = lambda symbol, _: record(finish=95, dates=pd.bdate_range('2026-07-07', '2026-10-09')) if symbol == 'E.KS' else record(finish=120)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['start_date'] == '2026-07-07'
+    assert result['candidates']
+
+
+async def test_candidate_too_new_for_ten_days_does_not_shorten_usable_peers():
+    request, market, groups = batch()
+    market.loader = lambda symbol, _: record(dates=pd.bdate_range('2026-10-01', '2026-10-09')) if symbol == 'E.KS' else record()
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
     assert len(result['candidates']) == 9
-    assert all(c['candidate_id'] != 'candidate-5' for c in result['candidates'])
+    assert result['start_date'] < '2026-10-01'
+
+
+async def test_candidates_are_validated_within_the_shared_window_not_their_full_histories():
+    request, market, groups = batch()
+    def loader(symbol, _):
+        if symbol == 'E.KS':
+            return record(dates=pd.bdate_range('2026-07-07', '2026-10-09'))
+        data = record(dates=pd.bdate_range('2023-01-02', '2026-10-09'))
+        data['frame'].iloc[10, :] = float('nan')
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 10
+    assert len(result['candidates']) == 10
+    assert result['start_date'] == '2026-07-07'
+
+
+async def test_shared_endpoint_does_not_let_a_short_candidate_disqualify_longer_peers():
+    from edge_portfolio.market_data import expected_sessions
+    request, market, groups = batch()
+    market.as_of = date(2026, 10, 14)
+    short = expected_sessions('KR:E', pd.Timestamp('2026-09-01'), pd.Timestamp('2026-10-13'))[-11:]
+    market.loader = lambda symbol, _: record(dates=short if symbol == 'E.KS' else pd.bdate_range('2025-10-09', '2026-10-12'))
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
+    assert len(result['candidates']) == 9
+
+
+async def test_null_close_column_excludes_only_the_malformed_candidate():
+    request, market, groups = batch()
+    def loader(symbol, _):
+        data = record()
+        if symbol == 'E.KS':
+            data['frame']['Close'] = None  # JSON nulls from the provider subprocess.
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
+    assert len(result['candidates']) == 9
+
+
+async def test_invalid_endpoint_does_not_permanently_discard_new_valid_candidates():
+    from edge_portfolio.market_data import expected_sessions
+    request, market, groups = batch()
+    market.as_of = date(2026, 10, 14)
+    short = expected_sessions('KR:A', pd.Timestamp('2026-09-01'), pd.Timestamp('2026-10-13'))[-11:]
+    def loader(symbol, _):
+        data = record(dates=pd.bdate_range('2025-10-09', '2026-10-12') if symbol == 'E.KS' else short)
+        if symbol == 'E.KS':
+            data['frame']['Close'] = None
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
+    assert result['end_date'] == '2026-10-13'
 
 
 async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():

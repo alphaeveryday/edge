@@ -15,6 +15,23 @@ const report = {
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
 
+test('a newly listed ETF displays both series over their actual common period', async ({ page }) => {
+  const history = { ...report.recommendation.historical_performance,
+    basis: '2026-07-07 ~ 2026-10-09 · 공통 자료 기간 · 100만 원을 넣었다면 (원)',
+    points: [{ date: '2026-07-07', recommended: 1000000, current: 1000000 },
+      { date: '2026-10-09', recommended: 1100000, current: 950000 }] };
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'short-history'));
+  await page.route('**/api/portfolio/analyses/short-history', route => route.fulfill({ json: {
+    id: 'short-history', state: 'succeeded', result: { ...report,
+      recommendation: { ...report.recommendation, historical_performance: history } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.getByRole('img', { name: '2026-07-07부터 2026-10-09까지 추천 구성과 현재 구성의 과거 성과' })).toBeVisible();
+  await expect(page.locator('.report-history figcaption')).toHaveText(history.basis);
+  await expect(page.locator('.history-line')).toHaveCount(2);
+  await expect(page.locator('.report-history')).not.toContainText('최근 1년');
+});
+
 test('a cash-only current portfolio does not hide the recommended total and three star ratings', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'cash-rating'));
   await page.route('**/api/portfolio/analyses/cash-rating', route => route.fulfill({ json: { id: 'cash-rating', state: 'succeeded', result: {
