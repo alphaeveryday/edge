@@ -6,7 +6,7 @@ from typing import Annotated
 from pydantic import Field
 
 from .contracts import StrictModel
-from .execution import parse_funding, projection_question, NO_CONTRIBUTION
+from .execution import parse_funding, projection_question, NO_CONTRIBUTION, FUNDING_CALCULATION_SUFFIX
 
 PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))')
 PRINCIPAL_AMOUNT = re.compile(r'(?:\d[\d,.\s천백십만억]*|[일이삼사오육칠팔구십백천만억]+)\s*(?:원(?!금)|달러|USD|KRW|유로|엔|위안|불)|[$₩€£¥]\s*\d')
@@ -46,7 +46,7 @@ def principal_statements(text):
             elif re.fullmatch(r'0\s*원', match[1]):
                 values.append(Decimal(0))
         elif clause.strip() and not (projection_question(clause) or NO_CONTRIBUTION.fullmatch(clause) or re.fullmatch(r'\s*매도\s*금지\s*', clause)):
-            commitment = re.fullmatch(r'\s*(.+?원(?:씩)?)\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요))?\s*', clause)
+            commitment = re.fullmatch(r'\s*(.+?원(?:씩)?)\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요)|' + FUNDING_CALCULATION_SUFFIX + r')?\s*', clause)
             if not commitment or parse_funding(commitment[1]) is None:
                 return None  # Unrecognized clauses may qualify or replace the amount.
     return values if len(values) == statements else None

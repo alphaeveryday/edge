@@ -43,6 +43,19 @@ def test_changed_funding_is_not_silently_replaced_by_an_older_zero_instruction()
     assert zero_funding_quote(req, Decision(kind='scenario')) is None
 
 
+@pytest.mark.parametrize('original', ['매달 10만원', '추가 납입 없이 계산해 주세요.'])
+@pytest.mark.parametrize('qualification', ['', '납입은 3개월만 가능합니다.'])
+def test_explicit_latest_monthly_amount_replaces_an_unconditional_prior_commitment(original, qualification):
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.followup import FollowupInput
+    from edge_portfolio.execution import resolve_funding
+    question = '매달 20만원으로 계산해 주세요. 5년 뒤 금액을 알려 주세요.'
+    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', question=question,
+        funding_questions=[original, question], preferences={'contribution': '매달 10만원', 'note': qualification})
+    result = resolve_funding(req, Decision(kind='scenario', funding_text='매달 20만원'))
+    assert result is None if qualification else result == {'additional_krw': Decimal(0), 'monthly_krw': Decimal(200000)}
+
+
 def test_rebalance_amounts_conserve_cash_and_explain_actual_buys_and_sales():
     req = request([('US:VOO', 600001, '일반 계좌'), ('US:QQQ', 200000, '일반 계좌'), ('CASH:KRW', 200000, '일반 계좌')])
     plan = build_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), additional_krw=100000)

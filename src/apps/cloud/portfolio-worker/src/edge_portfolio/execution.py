@@ -5,6 +5,7 @@ import re
 from .contracts import Allocation
 
 NO_CONTRIBUTION = re.compile(r'\s*(?:이번에는\s*)?(?:추가\s*)?(?:납입|입금|투자)(?:금)?\s*없이(?:\s*계산(?:해\s*주세요|해줘|해주세요)?)?[.!?]?\s*')
+FUNDING_CALCULATION_SUFFIX = r'(?:으로|로)\s*계산(?:해\s*주세요|해주세요|해줘)'
 
 
 def projection_question(clause):
@@ -125,7 +126,14 @@ def resolve_funding(request, decision=None):
                 for item in value:
                     yield from strings(item)
         questions = getattr(request, 'funding_questions', None) or [request.question]
-        sources = [*questions, *strings(request.preferences.model_dump())]
+        preferences = request.preferences.model_dump()
+        if len(questions) > 1 and text in questions[-1]:
+            from .scenarios import principal_statements
+            if principal_statements(questions[0]) is not None:
+                questions = questions[-1:]  # Supersede only a fully understood old commitment.
+            if parse_funding(preferences['contribution']) is not None:
+                preferences['contribution'] = ''
+        sources = [*questions, *strings(preferences)]
         commitments = {re.sub(r'\s+', '', match[0]) for source in sources for match in re.finditer(
             r'(?:매월|매달(?:\s+꾸준히)?|월마다|월|추가로?|일시금?|목돈|한 번)\s*[0-9][0-9,.\s억만천백십]*원(?:씩)?', source)}
         occurrences = [(source[:match.start()], source[match.end():]) for source in sources
@@ -142,7 +150,7 @@ def resolve_funding(request, decision=None):
             names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
             no_sale = r'(?:(?:' + (names or r'(?!)') + r'|보유 종목|기존 종목)(?:는|은|을|를)?\s*)?(?:팔지|매도하지)\s*않(?:을게요|겠습니다|아요|습니다)'
             combined = r'(?:을|를)?\s*(?:넣|납입하|투자하|입금하|추가하)(?:고|며|으며)\s*' + no_sale
-            return bool(re.fullmatch(plain + r'(?:\s*매도\s*금지)?|' + combined, tail)) and all(
+            return bool(re.fullmatch(plain + r'(?:\s*매도\s*금지)?|' + combined + '|' + FUNDING_CALCULATION_SUFFIX, tail)) and all(
                 re.fullmatch(no_sale + r'|매도\s*금지', clause) for clause in clauses[1:])
         def unconditional_prefix(before):
             prefix = duration_context(before).strip(' .!?;\n')

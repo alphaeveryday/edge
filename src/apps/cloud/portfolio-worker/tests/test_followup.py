@@ -38,6 +38,33 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
     assert (await answer_question('b' * 1000, report, 'test'))['status'] == 'partial'
 
 
+@pytest.mark.parametrize('original', ['매달 10만원', '추가 납입 없이 계산해 주세요.'])
+async def test_new_explicit_funding_reaches_the_scenario_calculator(original):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상', 'question': original, 'preferences': {'contribution': '매달 10만원'}},
+        'decision': {'funding_text': '매달 10만원'}, 'sources': Evidence.sources}
+    stages, calculated = [], []
+    async def model(payload):
+        if stages[-1] == 'question':
+            content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'funding_text': '매달 20만원'}}
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+        if calculated:
+            result = json.loads(payload['messages'][-1]['content'])
+            assert result['status'] == 'available' and result['monthly_krw'] == '200000'
+            assert result['rows'][0]['future_krw'] == '13000000'
+            raise RuntimeError('NEW_FUNDING_CHECKED')
+        calculated.append(1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios',
+                'arguments': json.dumps({'annual_returns': [0], 'years': [5]})}}]}}]}
+    with pytest.raises(RuntimeError, match='NEW_FUNDING_CHECKED'):
+        await answer_question('매달 20만원으로 계산해 주세요. 5년 뒤 금액을 알려 주세요.', report, 'test',
+            model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
 @pytest.mark.parametrize('separate_projection', [False, True])
 @pytest.mark.parametrize('inherited', [False, True, 'principal', 'qualified'])
 async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(separate_projection, inherited):
