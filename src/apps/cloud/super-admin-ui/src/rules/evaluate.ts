@@ -138,7 +138,7 @@ export function evaluate(f: Facts, now: Date = snapshotNow(f)): Evaluation {
        * 주석과 `*` 표가 영구히 붙는다(R03·R10·R13 에 `dep` 을 넣자마자 실제로 그랬다).
        * ⚠️ 세 항을 통째로 `evaluated &&` 로 감싸면 **충돌 사유가 지워진다** — 충돌이 나면
        * 위에서 `evaluated` 를 이미 false 로 바꾸므로, `collision` 은 반드시 밖에 있어야 한다. */
-      note: collision ?? (evaluated ? R.note?.(f) ?? null : R.dep),
+      note: collision ?? (evaluated ? R.note?.(f) ?? null : R.notRunWhy?.(f) ?? R.dep),
     });
   }
 

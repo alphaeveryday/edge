@@ -18,6 +18,9 @@ export function DeliveryPage() {
   useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
   const b = q.facts.boundary;
+  /* 경계가 관측 불가인 날의 0 은 정합이 아니다(ALPHA-1293) — 0 으로 그리지 않는다. 0 이 아닌 수는
+   * 옛 설명 엔진 분의 실측이라 그대로 그린다. */
+  const boundaryCount = (n: number) => (b.blind && n === 0 ? <Absent kind="blind" /> : n);
   /* 🔴 `tenants.data` 존재만 보면 **stale 을 현재 값으로** 그린다 — react-query 는 에러에도
    * 직전 데이터를 남기므로, 값이 있다는 것이 "이번에 읽었다"를 뜻하지 않는다. 사실 축과 같은
    * 판별자(`axisOf`)를 쓴다: 여기만 다른 관용구를 쓰면 한쪽만 고쳐진다. */
@@ -42,7 +45,9 @@ export function DeliveryPage() {
         </div>
         <div className="kpi">
           <div className="kpi-label">Cloud 게시·미발번</div>
-          <div className="kpi-value">{fmt(b.published_without_delivery)}</div>
+          <div className="kpi-value">
+            {b.blind && b.published_without_delivery === 0 ? <Absent kind="blind" /> : fmt(b.published_without_delivery)}
+          </div>
           <div className="kpi-sub">구조상 0이어야 함</div>
         </div>
         <div className="kpi">
@@ -79,6 +84,12 @@ export function DeliveryPage() {
             Cloud 게시와 테넌트 발번은 같은 트랜잭션이라 어긋나면 구조 문제입니다
           </span>
         </div>
+        {b.blind && (
+          <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
+            이 검사는 옛 설명 엔진의 게시만 발번과 맞댑니다. 그 엔진이 조회일보다 앞서 멈춰, 새 분석
+            엔진의 게시·발번은 여기서 보지 못합니다 — 0건이 아니라 관측 불가입니다.
+          </p>
+        )}
         <table className="table">
           <thead>
             <tr>
@@ -90,7 +101,7 @@ export function DeliveryPage() {
           <tbody>
             <tr id="b-pub">
               <td>Cloud 게시됐는데 미발번</td>
-              <td className="num">{b.published_without_delivery}</td>
+              <td className="num">{boundaryCount(b.published_without_delivery)}</td>
               <td className="col-muted">같은 트랜잭션이라 구조상 0</td>
             </tr>
             <tr>
@@ -100,7 +111,7 @@ export function DeliveryPage() {
                   이 표는 "로컬 시드"라고 말한다). 기록은 아래 해석 칸이 그대로 나른다. */}
               <td>발번됐는데 현재 Cloud 비게시</td>
               <td className="num" style={{ color: 'var(--warn)' }}>
-                {b.delivery_now_nonpublished}
+                {boundaryCount(b.delivery_now_nonpublished)}
               </td>
               <td className="col-muted">{b.seed_note ?? '무효화 통지가 안 간 발번만 셉니다'}</td>
             </tr>

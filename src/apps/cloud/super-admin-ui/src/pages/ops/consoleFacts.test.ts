@@ -378,6 +378,37 @@ test('🔴 v2 분석 실패 축은 있으면 싣고 없으면 만들지 않는�
   }
 });
 
+test('🔴 관측 불가 표시는 참일 때만 사실로 싣는다 — 0 과 같은 값으로 접지 않는다', () => {
+  /* 서버는 관측 불가 단계의 수를 0 으로 함께 보낸다(와이어에 null 자리가 없다). 어댑터가 `blind` 를
+   * 떨구면 그 0 이 실측이 되어 R10 이 "트리거 → 관측" 손실을 매일 P0 로 세운다. */
+  const w = WIRE();
+  w.chain!.stages = w.chain!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
+  w.boundary.blind = true;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.ok(r.facts.chain!.stages.every((s) => s.blind === true), '단계의 관측 불가 표시를 떨궜다');
+    assert.equal(r.facts.boundary.blind, true, '경계의 관측 불가 표시를 떨궜다');
+  }
+  /* 표시가 없는 옛 응답과 false 는 같은 형상이다 — 키를 만들지 않는다 */
+  const old = parseFacts(WIRE());
+  const explicit = WIRE();
+  explicit.chain!.stages[0].blind = false;
+  explicit.boundary.blind = false;
+  const off = parseFacts(explicit);
+  for (const p of [old, off]) {
+    assert.equal(p.ok, true, p.ok ? '' : p.reason);
+    if (p.ok) {
+      assert.ok(!('blind' in p.facts.chain!.stages[0]), '없는 표시를 만들어 냈다');
+      assert.ok(!('blind' in p.facts.boundary), '없는 표시를 만들어 냈다');
+    }
+  }
+  /* 불리언이 아닌 값은 거부한다 — `"false"` 는 truthy 라 통과시키면 멀쩡한 축이 관측 불가가 된다 */
+  const broken = WIRE() as unknown as { boundary: { blind: unknown } };
+  broken.boundary.blind = 'false';
+  assert.equal(parseFacts(broken).ok, false);
+});
+
 test('거부 — v2 분석 실패 축의 형상이 틀리면 응답을 버린다', () => {
   /* 종류 하나가 빠진 채 통과하면 R15 가 그 종류를 "실패 없음"으로 읽는다 */
   for (const [name, value] of [
@@ -508,9 +539,9 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.datasets[0], DATASET_FIELDS, 'datasets');
   both(w.outputs[0], OUTPUT_FIELDS, 'outputs', ['history']);
   both(w.queues![0], QUEUE_FIELDS, 'queues');
-  both(w.boundary, BOUNDARY_FIELDS, 'boundary');
+  both(w.boundary, BOUNDARY_FIELDS, 'boundary', ['blind']);
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
-  both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
+  both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
   both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
   both(w.meta, META_FIELDS, 'meta');
 });

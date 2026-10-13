@@ -57,8 +57,9 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
       {S.map((s, i) => {
         const prevB = i === 0 ? feeds[0]?.v : S[i - 1].batch;
         const prevI = i === 0 ? feeds[1]?.v : S[i - 1].intraday;
-        const lostB = prevB != null && s.batch != null && s.batch < prevB ? prevB - s.batch : 0;
-        const lostI = prevI != null && s.intraday != null && s.intraday < prevI ? prevI - s.intraday : 0;
+        /* 관측 불가 단계에는 감소분을 그리지 않는다 — 그 0 은 실측이 아니라, 빼면 없는 손실이 선다 */
+        const lostB = !s.blind && prevB != null && s.batch != null && s.batch < prevB ? prevB - s.batch : 0;
+        const lostI = !s.blind && prevI != null && s.intraday != null && s.intraday < prevI ? prevI - s.intraday : 0;
         return (
           <div key={s.id} style={{ display: 'contents' }}>
             {/* 감소분은 그 손실이 난 단계 **앞**에 둔다 — 뒤에 두면 어느 단계에서 사라졌는지 오독된다 */}
@@ -78,7 +79,7 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
               title={
                 `${DISPLAY_LABEL[s.id] ?? s.label}\n출처: ${s.src}` +
                 (s.note ? `\n${s.note}` : '') +
-                (s.blind ? '\n관측 불가 — 클라우드에 소비 확인 채널이 없다(0이 아니다)' : '')
+                (s.blind ? '\n관측 불가 — 이 단계를 셀 쪽이 없다(0이 아니다)' : '')
               }
             >
               {s.blind ? (

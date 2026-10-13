@@ -157,7 +157,8 @@ export interface ChainStage {
   intraday?: number | null;
   src: string;
   note?: string;
-  /** 관측 불가 — 접근 채널 자체가 없다. 0 과 다르다 */
+  /** 관측 불가 — 이 단계를 셀 쪽이 없다. 0 과 다르다. 서버가 싣는다: 옛 설명 엔진이 조회일보다
+   *  앞서 멈췄고 그날 코호트에 그 엔진의 행이 없을 때(ALPHA-1293) */
   blind?: boolean;
 }
 
@@ -197,6 +198,12 @@ export interface BoundaryFact {
    * WITHDRAWN 전이 + INVALIDATION 발번만 하므로, 상태만 세면 정상 무효화가 P0 로 영구히 쌓인다(B1).
    */
   delivery_now_nonpublished: number;
+  /**
+   * 앞의 두 수가 **지금의 게시를 못 본다**(ALPHA-1293) — 옛 설명 엔진의 게시만 발번과 맞대는데 그
+   * 엔진이 조회일보다 앞서 멈췄다. 이때 0 은 "어긋난 것이 없다"가 아니라 관측 불가다. 0 이 아닌 수는
+   * 여전히 실측이다(옛 엔진 분의 어긋남).
+   */
+  blind?: boolean;
   /** 전달 원장 누적 행 수 — 표시용. 판정에 안 쓴다 */
   delivery_rows?: number;
   sync_cursor_rows?: number;
@@ -470,6 +477,14 @@ export interface Rule {
    * `dep` 이 비면 안 되고, 그 사유 문장들은 서로 달라야 한다.
    */
   axis?: 'minute';
+  /**
+   * 못 돈 사유가 **사실에 따라 갈릴 때** 그 문장(ALPHA-1293). `canRun` 이 거짓일 때만 불리고,
+   * `null` 이면 `dep` 을 쓴다. R10 이 그렇다: 축이 아예 없는 것(배포 시차)과 축은 왔는데 단계가
+   * 전부 관측 불가인 것은 다른 사유다. 사유가 하나뿐인 규칙은 이걸 두지 않고 `dep` 만 쓴다.
+   *
+   * ⚠️ 축이 없는 사실에도 불린다 — 널 안전해야 한다.
+   */
+  notRunWhy?: (f: Facts) => string | null;
   /** 이 규칙이 읽는 사실이 목으로 채워져 있는가 (위반 0건이어도 표시하기 위함) */
   mockBacked?: (f: Facts) => boolean;
   /** 리포트 note — 규칙이 **무엇을 실제로 봤는지** 밝힌다(예: R07 의 분모 배선 작업 수).
