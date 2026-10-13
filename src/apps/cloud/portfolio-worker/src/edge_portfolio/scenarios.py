@@ -8,6 +8,8 @@ from pydantic import Field
 from .contracts import StrictModel
 from .execution import parse_funding
 
+PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))')
+
 
 def stated_principal(text):
     """Accept one unconditional standalone statement of total current principal."""
@@ -20,7 +22,7 @@ def stated_principal(text):
         clause = clauses[index]
         if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'모르|모릅|몰라|불명|확인\s*필요', clause):
             return None
-        if re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'\d[\d,.\s억만]*원(?!금)', clause):
+        if PRINCIPAL_DECLARATION.match(clause) or re.search(r'원금|현재\s*평가금액|현재\s*자산|보유금액', clause) and re.search(r'\d.*원(?!금)', clause):
             statements += 1
             if index + 1 < len(clauses) and clauses[index + 1] == '?':
                 return None
