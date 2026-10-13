@@ -25,6 +25,25 @@ async def test_research_context_keeps_citable_passages_once_and_all_discovered_u
     assert evidence.sources[0]['excerpt']  # Original evidence stays in the saved report.
 
 
+async def test_search_and_fetch_share_48_calls_then_stop_before_remote_request():
+    from edge_portfolio.agent import ExaEvidence
+    calls = []
+    class Session:
+        async def call_tool(self, name, args):
+            calls.append(name)
+            body = 'URL: https://official.example/etf\n' + 'Official ETF research. ' * 5
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text=body)])
+    evidence = ExaEvidence(Session())
+    for _ in range(24):
+        await evidence.call('search_sources', {'query': 'ETF', 'objective': 'verify facts'})
+        await evidence.call('fetch_source', {'url': 'https://official.example/etf'})
+    assert calls.count('web_search_exa') == 24
+    assert calls.count('web_fetch_exa') == 24
+    with pytest.raises(ValueError, match='TOOL_LIMIT'):
+        await evidence.call('search_sources', {'query': 'ETF', 'objective': 'verify facts'})
+    assert len(calls) == 48  # Do not spend another provider request after the shared budget.
+
+
 class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
