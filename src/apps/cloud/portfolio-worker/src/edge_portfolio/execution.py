@@ -40,6 +40,16 @@ def zero_contribution(text, decision):
     return remainder if NO_CONTRIBUTION.fullmatch(remainder) else None
 
 
+def zero_funding_quote(request, decision):
+    questions = getattr(request, 'funding_questions', None) or [request.question]
+    quote = zero_contribution(questions[-1], decision)
+    if quote:
+        return quote
+    if len(questions) > 1 and not projection_context(questions[-1], decision).strip(' .!?;\n'):
+        return zero_contribution(questions[0], decision)
+    return None
+
+
 def execution_tool(request, args, decision, catalog):
     from .recommendation import selected_accounts, allocation_error
     if set(args) != {'allocations'} or not isinstance(args['allocations'], list) or not 1 <= len(args['allocations']) <= 10:
@@ -93,8 +103,7 @@ def allocate_amounts(total, weights):
 
 
 def resolve_funding(request, decision=None):
-    questions = getattr(request, 'funding_questions', None) or [request.question]
-    if zero_contribution(questions[-1], decision):
+    if zero_funding_quote(request, decision):
         return {'additional_krw': Decimal(0), 'monthly_krw': None}
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
     funding = parse_funding(text) if text else None

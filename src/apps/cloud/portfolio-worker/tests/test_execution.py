@@ -25,6 +25,15 @@ def test_initial_scenario_explicit_zero_overrides_saved_monthly_preference(princ
     assert resolve_funding(req, Decision(kind='scenario')) == {'additional_krw': Decimal(0), 'monthly_krw': None}
 
 
+def test_changed_funding_is_not_silently_replaced_by_an_older_zero_instruction():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.followup import FollowupInput
+    from edge_portfolio.execution import zero_funding_quote
+    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상',
+        funding_questions=['추가 납입 없이 계산해 주세요.', '매월 20만원 넣을게요. 10년 뒤 금액을 알려 주세요.'])
+    assert zero_funding_quote(req, Decision(kind='scenario')) is None
+
+
 def test_rebalance_amounts_conserve_cash_and_explain_actual_buys_and_sales():
     req = request([('US:VOO', 600001, '일반 계좌'), ('US:QQQ', 200000, '일반 계좌'), ('CASH:KRW', 200000, '일반 계좌')])
     plan = build_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), additional_krw=100000)

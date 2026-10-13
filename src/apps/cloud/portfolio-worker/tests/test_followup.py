@@ -39,7 +39,8 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
 
 
 @pytest.mark.parametrize('separate_projection', [False, True])
-async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(separate_projection):
+@pytest.mark.parametrize('inherited', [False, True])
+async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(separate_projection, inherited):
     import json
     from report_fixtures import final_payload
     from test_agent import Evidence
@@ -48,12 +49,15 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'preferences': {'contribution': '매월 10만원'}},
         'decision': {'funding_text': '매월 10만원'}, 'sources': Evidence.sources}
+    if inherited:
+        report['input']['question'] = question
+        question = '10년 뒤 금액을 알려 주세요.'
     stages, calculated, checkpoints = [], [], []
     async def model(payload):
         if stages[-1] == 'question':
             return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'], 'decision': {'kind': 'scenario'}})}}]}
         quote = json.loads(payload['messages'][1]['content'])['active_decision']['funding_text']
-        assert quote in question and '없이' in quote
+        assert quote in question + report['input'].get('question', '') and '없이' in quote
         if calculated:
             result = json.loads(payload['messages'][-1]['content'])
             assert result['status'] == 'available'
