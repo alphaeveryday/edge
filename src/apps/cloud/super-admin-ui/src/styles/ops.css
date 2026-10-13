@@ -742,3 +742,21 @@ button.kpi.ops-sev.ops-sev-on {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── 데이터셋별 실행 추이 (ALPHA-1284) ──
+   점 하나가 실행 하나다. 값이 없는 실행은 선을 끊고 바닥의 빈 점으로 둔다. */
+.rs-table td { vertical-align: top; }
+.rs-spark { display: block; width: 160px; height: 28px; overflow: visible; }
+.rs-latest { display: block; font-size: var(--xs-size, 12px); font-variant-numeric: tabular-nums; }
+.rs-line { fill: none; stroke: var(--fg-3); stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+.rs-line-dashed { stroke: var(--fg-4); stroke-dasharray: 3 3; }
+.rs-dot { stroke: var(--fg-2); stroke-width: 3.5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.rs-dot-empty { stroke: var(--fg-4); stroke-width: 2.5; }
+.rs-dot-target { stroke: var(--fg-4); stroke-width: 2.5; }
+/* 종료 상태 — 색과 높이가 함께 바뀐다(색만으로 말하지 않는다) */
+.rs-exits { display: flex; align-items: flex-end; gap: 1px; height: 28px; width: 160px; }
+.rs-exit { flex: 1 1 0; min-width: 1px; max-width: 8px; }
+.rs-exit-ok { height: 35%; background: var(--up); }
+.rs-exit-partial { height: 70%; background: var(--warn); }
+.rs-exit-failed { height: 100%; background: var(--down); }
+.rs-exit-none { height: 100%; background: transparent; outline: 1px dashed var(--fg-4); outline-offset: -1px; }

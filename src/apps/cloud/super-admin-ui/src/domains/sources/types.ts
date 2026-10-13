@@ -180,7 +180,8 @@ export interface SourceReport {
 
 /**
  * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축 분리(plan·outcome·data)와 건수 null
- * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도·시각 축은 안 온다 — 셀에서 드릴다운으로 넘어가 본다.
+ * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도는 **현재 시도의 시각·종료 코드만** 온다(ALPHA-1284) —
+ * 시도 전량과 나머지 시각 축은 셀에서 드릴다운으로 넘어가 본다.
  */
 export interface NewsQualityAssessment {
   status: 'WITHIN_LIMITS' | 'CAUTION' | 'UNMEASURED';
@@ -211,6 +212,16 @@ export interface GridCell {
    * "실행 중"으로 만들지 않기 위해서다(서버가 판정한다 — 화면에서 다시 계산하지 마라).
    */
   running: boolean;
+  /**
+   * 실행 추이 축(ALPHA-1284) — 현재 시도의 시각(ISO-8601)·종료 코드와 완전성 숫자.
+   * **선택 필드다**: UI 가 API 보다 먼저 배포되면 이 필드가 없는 응답을 받는다. 없거나 null 이면
+   * 0 이 아니라 "기록 없음"이다.
+   */
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  exitCode?: number | null;
+  completenessExpected?: number | null;
+  completenessReceived?: number | null;
 }
 
 /** 격자 한 열 — 슬롯(런) 하나. tasks 가 빈 런(기동 실패 등)도 열로 온다 — 부재가 1급 신호다. */

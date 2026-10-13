@@ -27,6 +27,7 @@ import { buildMetrics } from './trendCatalog';
 import { useMinuteStatus } from '../../domains/sources/hooks';
 import { useEntityResolutionTrend } from '../../domains/console/hooks';
 import { extent, points } from './trendSeries';
+import { RunSeriesSection } from './RunSeriesSection';
 import '../../styles/ops.css';
 
 type Filter = 'abnormal' | MetricGroup;
@@ -314,6 +315,8 @@ export function TrendPage() {
           </p>
         </div>
       </div>
+
+      <RunSeriesSection />
     </div>
   );
 }

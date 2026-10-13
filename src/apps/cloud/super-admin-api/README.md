@@ -97,7 +97,10 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   exclusionRate)를 추가한다(ALPHA-1076). `NewsQualityAssessment`가 현재 성공 시도의 진단과
   원장 카운터를 대사해 `WITHIN_LIMITS`·`CAUTION`·`UNMEASURED`를 내며 원장 필드는 바꾸지 않는다.
   다른 작업은 null이다. 상세 표본은 이 응답에 복제하지 않는다. 비율은 0~1이며 분모가 없거나
-  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. sources 는 `ops_*` 에 더해
+  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. `/sources/grid` 셀은
+  현재 시도의 `startedAt`·`finishedAt`·`exitCode`와 완전성 숫자 `completenessExpected`·
+  `completenessReceived`도 싣는다(ALPHA-1284). 현재 시도나 완전성 축이 없으면 null이고 null은 0이
+  아니다. sources 는 `ops_*` 에 더해
   **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
   세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)도 읽는다. 일별 판정은 날짜별 상세 조회를
   반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다.
