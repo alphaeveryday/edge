@@ -38,7 +38,7 @@
   }
  },
  "tools": {
-  "resolve_securities": {
+  "find_securities_by_ticker": {
    "hypotheses": [
     {
      "id": "RS.select",
@@ -47,11 +47,11 @@
      "claim": "코드 목록이 주어지면 이 도구를 불러 종목을 확인한다",
      "check": {
       "count": {
-       "tool": "resolve_securities",
+       "tool": "find_securities_by_ticker",
        "min": 1
       },
       "errors": {
-       "tool": "resolve_securities"
+       "tool": "find_securities_by_ticker"
       }
      }
     },
@@ -62,7 +62,7 @@
      "claim": "첫 호출에 세 코드를 한 배열로, 한국거래소 코드 XKRX로 넘긴다",
      "check": {
       "first_arguments": {
-       "tool": "resolve_securities",
+       "tool": "find_securities_by_ticker",
        "equals": {
         "market_code": "XKRX",
         "tickers": [
@@ -81,7 +81,7 @@
      "claim": "없는 코드를 다른 시장이나 다른 코드로 바꿔 다시 찾지 않는다",
      "check": {
       "count": {
-       "tool": "resolve_securities",
+       "tool": "find_securities_by_ticker",
        "max": 1
       }
      }
@@ -201,7 +201,7 @@
      "claim": "기억하고 있던 종목코드로 코드 조회를 하지 않는다",
      "check": {
       "count": {
-       "tool": "resolve_securities",
+       "tool": "find_securities_by_ticker",
        "max": 0
       }
      }
@@ -459,11 +459,11 @@
      "claim": "코드가 주어진 ETF는 코드 조회 한 번으로 찾고, 구조 읽기·이름 검색·관계 따라가기를 하지 않는다",
      "check": {
       "count": {
-       "tool": "resolve_securities",
+       "tool": "find_securities_by_ticker",
        "max": 1
       },
       "errors": {
-       "tool": "resolve_securities"
+       "tool": "find_securities_by_ticker"
       }
      }
     },
@@ -565,7 +565,7 @@
     }
    ]
   },
-  "summarize_etf_holdings": {
+  "sum_holding_weights": {
    "hypotheses": [
     {
      "id": "SH.select",
@@ -574,11 +574,11 @@
      "claim": "답에 쓸 비중 합계는 직접 더하지 않고 이 도구로 계산한다",
      "check": {
       "count": {
-       "tool": "summarize_etf_holdings",
+       "tool": "sum_holding_weights",
        "min": 2
       },
       "errors": {
-       "tool": "summarize_etf_holdings"
+       "tool": "sum_holding_weights"
       }
      }
     },
@@ -589,7 +589,7 @@
      "claim": "상위 3종목은 top_n=3으로 요청한다",
      "check": {
       "called_with": {
-       "tool": "summarize_etf_holdings",
+       "tool": "sum_holding_weights",
        "equals": {
         "top_n": 3
        }
@@ -605,7 +605,7 @@
       "passes_reference": {
        "tool": "get_etf_holdings",
        "to": [
-        "summarize_etf_holdings"
+        "sum_holding_weights"
        ]
       },
       "count": {
@@ -635,14 +635,14 @@
      "claim": "구성과 무관한 질문에는 부르지 않는다 (구성 나열에서 합계를 언급할 때 부르는 것은 의도한 동작으로 확인)",
      "check": {
       "count": {
-       "tool": "summarize_etf_holdings",
+       "tool": "sum_holding_weights",
        "max": 0
       }
      }
     }
    ]
   },
-  "compare_holdings_dates": {
+  "compare_holdings_between_dates": {
    "hypotheses": [
     {
      "id": "CH.select",
@@ -651,11 +651,11 @@
      "claim": "두 날짜의 비중 차이는 직접 빼지 않고 이 도구로 계산한다",
      "check": {
       "count": {
-       "tool": "compare_holdings_dates",
+       "tool": "compare_holdings_between_dates",
        "min": 1
       },
       "errors": {
-       "tool": "compare_holdings_dates"
+       "tool": "compare_holdings_between_dates"
       }
      }
     },
@@ -668,7 +668,7 @@
       "passes_reference": {
        "tool": "get_etf_holdings",
        "to": [
-        "compare_holdings_dates"
+        "compare_holdings_between_dates"
        ]
       },
       "count": {
@@ -704,7 +704,7 @@
      "claim": "한 날짜만 묻는 질문에는 부르지 않는다",
      "check": {
       "count": {
-       "tool": "compare_holdings_dates",
+       "tool": "compare_holdings_between_dates",
        "max": 0
       }
      }

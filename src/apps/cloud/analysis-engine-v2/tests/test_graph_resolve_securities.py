@@ -19,7 +19,7 @@ def make(tmp_path, kinds=('Equity',)):
 
 def test_missing_and_duplicate_codes_stay_in_the_selection_and_one_query_serves_the_batch(tmp_path):
     tools, calls = make(tmp_path)
-    output = tools.call('resolve_securities', {'tickers': ['001234', '999999', '001234'], 'market_code': 'XKRX',
+    output = tools.call('find_securities_by_ticker', {'tickers': ['001234', '999999', '001234'], 'market_code': 'XKRX',
                                                'security_type': 'Equity'})
     result = output['result']
     assert len(calls) == 1 and calls[0][1]['filter_0'] == ['001234', '999999'] and calls[0][1]['filter_1'] == 'XKRX'
@@ -35,7 +35,7 @@ def test_missing_and_duplicate_codes_stay_in_the_selection_and_one_query_serves_
 
 def test_a_code_shared_by_a_stock_and_a_fund_is_ambiguous_with_both_candidates_not_the_first_match(tmp_path):
     tools, calls = make(tmp_path, kinds=('Equity', 'ETF'))
-    item = tools.call('resolve_securities', {'tickers': ['001234'], 'market_code': 'XKRX'})['result']['items'][0]
+    item = tools.call('find_securities_by_ticker', {'tickers': ['001234'], 'market_code': 'XKRX'})['result']['items'][0]
     assert len(calls) == 2
     assert item['status'] == 'ambiguous' and item['object_id'] is None and item['name'] is None
     assert sorted(c['object_id'] for c in item['candidates']) == ['eq_a', 'etf_dup']
@@ -43,7 +43,7 @@ def test_a_code_shared_by_a_stock_and_a_fund_is_ambiguous_with_both_candidates_n
 
 def test_all_codes_resolved_is_complete_and_the_selection_is_reusable_by_reference(tmp_path):
     tools, _ = make(tmp_path, kinds=('Equity', 'ETF'))
-    output = tools.call('resolve_securities', {'tickers': ['449450'], 'market_code': 'XKRX'})
+    output = tools.call('find_securities_by_ticker', {'tickers': ['449450'], 'market_code': 'XKRX'})
     assert output['result']['selection']['completeness'] == 'complete'
     stored = tools.store.reference({'tool_run_id': output['tool_run_id'], 'path': '/selection'}, 'selection')
     assert stored['items'][0]['object_type'] == 'ETF' and stored['items'][0]['object_id'] == 'etf_b'

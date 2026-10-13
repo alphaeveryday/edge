@@ -19,9 +19,12 @@ class EvidenceStoreTests(unittest.TestCase):
         self.assertEqual(self.store.reference(ref,'dataset')['items'],[1,2,3])
         self.assertFalse(self.store.page(ref,0,1)['page']['complete'])
 
-    def test_cross_analysis_and_kind_substitution_are_rejected(self):
+    def test_another_analysis_cannot_read_a_run_and_the_tool_not_the_path_picks_the_part(self):
         ref={'tool_run_id':self.save()['tool_run_id'],'path':'/dataset'}
-        with self.assertRaises(ValueError):self.store.reference(ref,'selection')
+        # WHY: a run has one id; 9 calls in 45 runs passed it with the other path and were refused.
+        self.assertEqual(self.store.reference(ref,'selection'),{'items':[1,2,3]})
+        with self.assertRaises(ValueError):self.store.reference({**ref,'path':'/elsewhere'},'dataset')
+        self.assertEqual(self.store.reference({'tool_run_id':ref['tool_run_id']},'dataset')['items'],[1,2,3])   # the run id is the reference
         other=EvidenceStore(self.tmp.name,self.store.cutoff)
         with self.assertRaises(ValueError):other.reference(ref,'dataset')
 
