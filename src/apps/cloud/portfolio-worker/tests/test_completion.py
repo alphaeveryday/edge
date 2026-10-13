@@ -62,6 +62,20 @@ async def test_recovery_returns_both_answers_when_the_second_round_omits_the_fir
     assert all(task['status'] == 'answered' for task in result['completion']['tasks'])
 
 
+def test_explicit_research_correction_can_withdraw_a_previously_complete_answer():
+    from edge_portfolio.completion import retain_research
+    payload = final_payload()
+    payload['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': 'Previously considered answered.'}]
+    payload['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'fees', 'status': 'supported'}]
+    previous = FinalReport.model_validate(payload)
+    payload['answers'] = [{'question_index': 1, 'status': 'partial', 'answer': 'New research requires a correction.', 'missing': ['Updated fee schedule']}]
+    payload['evidence_coverage'][0]['status'] = 'missing'
+    corrected = retain_research(FinalReport.model_validate(payload), previous)
+    assert corrected.answers[0].status == 'partial'
+    assert corrected.answers[0].missing == ['Updated fee schedule']
+    assert corrected.evidence_coverage[0].status == 'missing'
+
+
 def test_blank_answer_cannot_certify_a_customer_task_as_answered():
     from edge_portfolio.contracts import TaskAnswer
     with pytest.raises(ValueError, match='meaningful'):
@@ -86,6 +100,21 @@ def test_old_holdings_source_or_fetch_date_cannot_prove_current_coverage():
         {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
     assert result['evidence_coverage'][0]['status'] == 'stale'
     assert result['status'] == 'partial'
+
+
+def test_another_sources_date_cannot_make_an_undated_holdings_table_current():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    payload = final_payload()
+    payload['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'holdings', 'status': 'supported',
+        'claim_as_of': '2026-10-14', 'evidence': [{'source_id': 's1', 'passage_id': 'p1'}, {'source_id': 's2', 'passage_id': 'p1'}]}]
+    sources = [{'id': 's1', 'passages': [{'id': 'p1', 'text': 'Market commentary as of 2026-10-14'}]},
+               {'id': 's2', 'passages': [{'id': 'p1', 'text': 'Holdings: Apple 8%'}]}]
+    def check():
+        return assess_completion(FinalReport.model_validate(payload), request, Decision(),
+            {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
+    assert check()['evidence_coverage'][0]['status'] == 'date_unknown'
+    sources[1]['passages'][0]['text'] += ' as of 2026-10-14'
+    assert check()['evidence_coverage'][0]['status'] == 'supported'
 
 
 def test_observed_history_overrides_the_initial_not_requested_state():

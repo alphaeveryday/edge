@@ -63,7 +63,7 @@ def assess_completion(final, request, decision, published, sources, as_of):
             passage = next((p for p in by_id.get(evidence.source_id, {}).get('passages', []) if p['id'] == evidence.passage_id), None)
             if passage is None:
                 raise ValueError('COVERAGE_EVIDENCE_NOT_REGISTERED')
-            text.append(passage['text'])
+            text.append((evidence.source_id, passage['text']))
         status = 'missing'
         if item.status == 'supported' and text:
             claim_date = item.claim_as_of
@@ -72,11 +72,13 @@ def assess_completion(final, request, decision, published, sources, as_of):
                 f'{claim_date.year}/{claim_date.month}/{claim_date.day}', f'{claim_date.year}년{claim_date.month}월{claim_date.day}일',
                 *[f'{month}{claim_date.day}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])],
                 *[f'{claim_date.day}{month}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])]} if claim_date else set()
-            normalized = [passage.replace(',', '').casefold() for passage in text if not re.match(r'^\s*(?:URL|Published|Author):', passage)]
+            normalized = [(source_id, passage.replace(',', '').casefold()) for source_id, passage in text if not re.match(r'^\s*(?:URL|Published|Author):', passage)]
             if claim_date and (claim_date.day > 12 or claim_date.day == claim_date.month):
                 date_texts.update({claim_date.strftime('%m/%d/%Y'), claim_date.strftime('%d/%m/%Y'),
                     f'{claim_date.month}/{claim_date.day}/{claim_date.year}', f'{claim_date.day}/{claim_date.month}/{claim_date.year}'})
-            if claim_date and any(re.search(r'(?<!\d)' + r'\s*'.join(re.escape(char) for char in value.casefold()) + r'(?!\d)', passage) for value in date_texts for passage in normalized):
+            dated_sources = {source_id for source_id, passage in normalized if any(
+                re.search(r'(?<!\d)' + r'\s*'.join(re.escape(char) for char in value.casefold()) + r'(?!\d)', passage) for value in date_texts)}
+            if claim_date and dated_sources == {source_id for source_id, _ in text}:
                 age = (today - claim_date).days
                 status = 'supported' if 0 <= age <= max_age[item.field] else 'stale'
             else:
