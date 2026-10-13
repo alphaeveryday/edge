@@ -38,9 +38,14 @@ MOVEMENT = obj({
 })
 def keywords(side):
     return {'type': 'array', 'items': obj({'label': limited(f'conclusion.{side}[].label'), 'tool_run_ids': REFS})}
-OUTLOOK = obj({
+# A staged outlook answers in three parts: the investigator's report, what the writer decides with the body,
+# and the remaining screen fields filled from the finished body. OUTLOOK is the last two together.
+INVESTIGATION = obj({'report': TEXT})
+WRITING = obj({
     'outlook': obj({'direction': STICKER}),
     'summary_card': obj({'title': limited('summary_card.title'), 'summary': limited('summary_card.summary')}),
+})
+FIELDS = obj({
     'factors': {'type': 'array', 'minItems': 5, 'maxItems': 5, 'items': obj({
         'type': {'enum': ['이슈', '차트', '매크로', '밸류', '수급']}, 'sticker': STICKER, 'sentence': limited('factors[].sentence')})},
     'conclusion': obj({'title': limited('conclusion.title'), 'supports': keywords('supports'), 'burdens': keywords('burdens'),
@@ -49,6 +54,7 @@ OUTLOOK = obj({
     'issue_detail': obj({'headline': TEXT | {'maxLength': TITLE_MAX_LENGTH},
                          'items': {'type': 'array', 'items': ITEM}}),
 })
+OUTLOOK = obj(WRITING['properties'] | FIELDS['properties'])
 EDIT_SCHEMAS = [
     {'type': 'function', 'function': {'name': 'write_outlook_body',
      'description': '최초 본문 또는 중요한 논점 10개 이상 변경 시 전체 본문을 작성합니다. 유지할 논점 ID는 그대로 씁니다. 재작성에서 새 정보가 있는 불릿은 updated_sentence_numbers에 1부터 시작하는 번호로 지정합니다. 단순 표현 변경은 지정하지 않습니다. 저장 전 초안과 오늘 업데이트를 반환합니다.',

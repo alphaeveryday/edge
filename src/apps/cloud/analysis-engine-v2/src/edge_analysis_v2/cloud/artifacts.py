@@ -8,7 +8,10 @@ from edge_analysis_v2.cloud.contract import decode_json, decode_request
 from edge_analysis_v2.dashboard.jobs import ARTIFACTS
 
 PREFIX = 'analysis-v2/runs/'
-FILES = frozenset(ARTIFACTS) - {'events.jsonl'} | {'evidence.json', 'storage.json', 'screens.json'}
+# investigation.md is the staged outlook's report with its judgment table; it is kept as a record of the run.
+FILES = frozenset(ARTIFACTS) - {'events.jsonl'} | {'evidence.json', 'storage.json', 'screens.json', 'investigation.md'}
+# A staged outlook keeps each conversation's files in a folder of its own; their events are already in the run's event file.
+FILES |= {f'{stage}/{name}' for stage in ('investigation', 'writing', 'fields') for name in ARTIFACTS if name != 'events.jsonl'}
 LIMIT = 32 * 1024 * 1024
 
 
@@ -89,6 +92,15 @@ class Publisher:
                            **({} if self.claimed else {'IfNoneMatch':'*'}))
         self.claimed=True
         return manifest
+
+
+def was_staged(s3, bucket, identity):
+    """Whether that run left an investigation report; only the staged outlook writes one."""
+    try:
+        manifest = decode_json(s3.get_object(Bucket=bucket, Key=PREFIX+identity+'/manifest.json')['Body'].read())
+    except s3.exceptions.NoSuchKey:
+        return False
+    return 'investigation.md' in manifest.get('files', {})
 
 
 def validate_manifest(manifest):

@@ -63,6 +63,23 @@ def test_mid_run_reminder_is_bounded_and_names_open_question(tmp_path):
     assert all('Explain margin decline' in value for value in reminders)
 
 
+def test_the_agent_is_told_once_when_its_time_is_nearly_spent(tmp_path):
+    # WHY: an investigation still reading sources at its deadline was cut off and the whole outlook was lost.
+    from time import monotonic
+    state = make(tmp_path)
+    state.todos = [{'content':'Explain margin decline', 'status':'pending', **RIVALS}]
+    call = lambda: asyncio.run(state.after({'tool_name':'mcp__analysis__search_web', 'tool_input':{}, 'tool_response':{}}, 'search', {}))
+    state.wrap_up_at = monotonic() + 3600
+    assert call() == {}
+    state.wrap_up_at = monotonic() - 1
+    assert '최종 응답을 바로 내' in call()['hookSpecificOutput']['additionalContext']
+    assert all(call() == {} for _ in range(30))   # said once, and no "keep working" reminder after it
+    # WHY: a run failing call after call near its deadline never reached the notice.
+    state.wrap_up_at = monotonic() - 1
+    failing = asyncio.run(state.after({'tool_name':'mcp__analysis__search_web', 'tool_input':{}, 'tool_response':{'is_error': True}}, 'search', {}))
+    assert '최종 응답을 바로 내' in failing['hookSpecificOutput']['additionalContext']
+
+
 def test_interrupted_notes_and_tasks_resume_in_a_fresh_workspace(tmp_path):
     state = make(tmp_path)
     state.note_path('notes/findings.md', create=True).write_text('IR contradicts order headline', encoding='utf-8')
