@@ -7,8 +7,8 @@ import re
 def data_status(market, optimizer, sources, observed=None):
     observed = observed or {}
     results = list(market.results.values())
-    history = 'available' if any(row.get('status') == 'available' for row in results) else 'unavailable' if market.failures else 'not_requested'
-    if history == 'available' and market.failures:
+    history = 'available' if observed.get('history') in {'available', 'partial'} or any(row.get('status') == 'available' for row in results) else 'unavailable' if market.failures else 'not_requested'
+    if history == 'available' and (market.failures or observed.get('history') == 'partial'):
         history = 'partial'
     if history == 'not_requested' and optimizer.result and optimizer.result.get('status') == 'unavailable' and optimizer.result.get('reason') != 'CURRENT_WEIGHTS_REQUIRED':
         history = 'unavailable'
@@ -58,6 +58,9 @@ def assess_completion(final, request, decision, published, sources, as_of):
                 *[f'{month}{claim_date.day}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])],
                 *[f'{claim_date.day}{month}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])]} if claim_date else set()
             normalized = [re.sub(r'[\s,]', '', passage).casefold() for passage in text if not re.match(r'^(?:URL|Published|Author):', passage)]
+            if claim_date and claim_date.day > 12:
+                date_texts.update({claim_date.strftime('%m/%d/%Y'), claim_date.strftime('%d/%m/%Y'),
+                    f'{claim_date.month}/{claim_date.day}/{claim_date.year}', f'{claim_date.day}/{claim_date.month}/{claim_date.year}'})
             if claim_date and any(re.search(r'(?<!\d)' + re.escape(value.casefold()) + r'(?!\d)', passage) for value in date_texts for passage in normalized):
                 age = (today - claim_date).days
                 status = 'supported' if 0 <= age <= max_age[item.field] else 'stale'

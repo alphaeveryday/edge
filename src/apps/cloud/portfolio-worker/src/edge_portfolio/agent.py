@@ -90,12 +90,14 @@ class ExaEvidence:
         source = {"id": f"s{len(self.sources) + 1}", "url": args["url"], "excerpt": body, **quality,
                   "fetched_at": datetime.now(timezone.utc).isoformat()}
         chunks = []
-        for line in re.split(r'(?<=[.!?])\s+|\n+', source['excerpt']):
+        for line in source['excerpt'].splitlines():
             if re.match(r'^(?:URL|Published|Author):', line):
                 continue
             for start in range(0, len(line), 280):
                 chunk = line[start:start + 280].strip()
-                if len(chunk) >= 12 or re.fullmatch(r'\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}', chunk) or re.search(r'[A-Za-z가-힣].*\d+(?:\.\d+)?\s*%', chunk):
+                # The document already passed the body-quality check. Short rows
+                # can carry dates, labels, or amounts needed to cite its tables.
+                if chunk:
                     chunks.append(chunk)
         source['passages'] = [{'id': f'p{i + 1}', 'text': text} for i, text in enumerate(chunks)]
         self.sources.append(source)
@@ -351,7 +353,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             final.withheld_reason in {'quality_failed', 'customer_failed', 'search_exhausted'} or
                             optimizer.result.get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
                         if needs_alternative:
-                            published['completion']['status'] = 'partial'
+                            if published['completion']['status'] != 'needs_input':
+                                published['completion']['status'] = 'partial'
                             published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
                         from copy import deepcopy
                         accepted_report = deepcopy({**published, 'sections': sections})

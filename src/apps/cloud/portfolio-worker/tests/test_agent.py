@@ -64,7 +64,7 @@ async def test_short_readable_table_has_citable_passages():
     assert [row['text'] for row in result['passages']] == ['Fees 0.03%', 'Yield 2.5%']
 
 
-@pytest.mark.parametrize('date', ['2026-09-30', '30 Sep 2026'])
+@pytest.mark.parametrize('date', ['2026-09-30', '30 Sep 2026', '09/30/2026', '30/09/2026', '2026년9월30일', '2026. 09. 30.'])
 async def test_standalone_source_date_remains_citable_for_freshness_checks(date):
     from edge_portfolio.agent import ExaEvidence
     class Session:

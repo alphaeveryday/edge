@@ -52,6 +52,8 @@ def test_observed_history_overrides_the_initial_not_requested_state():
     assert data_status(market, optimizer, [])['history'] == 'available'
     market.failures = {'US:OTHER': 'PRICE_UNAVAILABLE'}
     assert data_status(market, optimizer, [])['history'] == 'partial'
+    optimizer.result = None
+    assert data_status(market, optimizer, [], {'history': 'available'})['history'] == 'partial'
 
 
 def test_unavailable_comparison_is_not_evidence_that_no_candidate_qualifies():
@@ -78,7 +80,7 @@ def test_explicit_written_dates_support_coverage_without_using_the_fetch_date():
     payload = final_payload()
     payload['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'holdings', 'status': 'supported',
         'evidence': [{'source_id': 's1', 'passage_id': 'p1'}, {'source_id': 's1', 'passage_id': 'p2'}], 'claim_as_of': '2026-09-30'}]
-    for text in ['Holdings as of September 30, 2026', '30 Sep 2026', '2026년 9월 30일 보유내역', '2026/9/30']:
+    for text in ['Holdings as of September 30, 2026', '30 Sep 2026', '2026년 9월 30일 보유내역', '2026/9/30', '09/30/2026', '30/09/2026', '2026. 09. 30.']:
         sources = [{'id': 's1', 'passages': [{'id': 'p1', 'text': text}, {'id': 'p2', 'text': '005930 Samsung Electronics 5%'}]}]
         result = assess_completion(FinalReport.model_validate(payload), request, Decision(),
             {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
@@ -118,7 +120,8 @@ async def test_missing_answer_reenters_research_without_consuming_format_repairs
     assert not any(event['event'] == 'validation_failed' for event in events)
 
 
-async def test_quality_withholding_requires_a_new_search_before_no_match(monkeypatch):
+@pytest.mark.parametrize('missing_input', [False, True])
+async def test_quality_withholding_requires_a_new_search_before_no_match(monkeypatch, missing_input):
     import json
     from edge_portfolio.agent import run_analysis
     from test_agent import Evidence
@@ -142,12 +145,12 @@ async def test_quality_withholding_requires_a_new_search_before_no_match(monkeyp
                 return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
                     {'id': 'alternative', 'type': 'function', 'function': {'name': 'optimize_portfolios', 'arguments': json.dumps({'combinations': [['new-alternative']]})}}]}}]}
         content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'} if role == 'opinion' else final_payload()[role]
-        if role == 'question': content = {**content, 'decision': {}}
+        if role == 'question': content = {**content, 'decision': {'missing_inputs': ['납입 금액이 필요해요.']} if missing_input else {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
     result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
-    assert len(opinions) == 3
-    assert result['completion']['status'] == 'no_match'
+    assert len(opinions) == (1 if missing_input else 3)
+    assert result['completion']['status'] == ('needs_input' if missing_input else 'no_match')
 
 
 async def test_truncated_output_recovers_without_discarding_prior_tool_evidence(monkeypatch):
