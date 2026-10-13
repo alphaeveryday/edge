@@ -1,4 +1,4 @@
-"""One batch of ten independent, deterministic 5%-grid searches."""
+"""One batch of ten independent, deterministic 10%-grid searches."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
@@ -13,9 +13,9 @@ PRICE_TIMEOUT_SECONDS = 65
 
 
 def grid(size):
-    # Every supplied ETF is held: twenty 5% units, at least one unit per ETF.
-    return np.array([np.diff((0, *cuts, 20)) / 20
-                     for cuts in combinations(range(1, 20), size - 1)])
+    # Every supplied ETF is held: ten 10% units, at least one unit per ETF.
+    return np.array([np.diff((0, *cuts, 10)) / 10
+                     for cuts in combinations(range(1, 10), size - 1)])
 
 
 def search(ids, frame, current):
@@ -200,7 +200,7 @@ class Optimizer:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': 'ETF 조합 10개를 한 번에 병렬 최적화한다; 현금 0%, 5% 단위, 우세 거래일 50% 이상 및 최근 10거래일 모두 우세한 후보만 40/40/20 점수순으로 반환한다; 분석당 한 배치, 조합당 최대 5종, 전체 후보 ETF 최대 20종.',
+    'description': 'ETF 조합 10개를 한 번에 병렬 최적화한다; 현금 0%, 10% 단위, 우세 거래일 50% 이상 및 최근 10거래일 모두 우세한 후보만 40/40/20 점수순으로 반환한다; 분석당 한 배치, 조합당 최대 5종, 전체 후보 ETF 최대 20종.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 10, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}}},
         'required': ['combinations'], 'additionalProperties': False}}}

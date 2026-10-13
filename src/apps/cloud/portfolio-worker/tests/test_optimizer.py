@@ -25,13 +25,13 @@ def test_publication_requires_half_the_period_and_all_ten_recent_sessions():
     assert search(['A'], frame, {'CASH:KRW': 1}) == []
 
 
-def test_every_grid_is_fully_invested_in_five_percent_units():
+def test_every_grid_is_fully_invested_in_ten_percent_units():
     for n in range(1, 6):
         values = grid(n)
-        assert (values >= .05).all()
+        assert (values >= .1).all()
         assert np.allclose(values.sum(axis=1), 1)
-        assert np.allclose(values * 20, np.round(values * 20))
-    assert len(grid(5)) == 3876
+        assert np.allclose(values * 10, np.round(values * 10))
+    assert len(grid(5)) == 126
 
 
 def test_ranking_applies_global_40_40_20_and_excludes_failed_groups():
@@ -83,13 +83,13 @@ def test_no_candidate_cannot_be_replaced_with_an_invented_recommendation():
 
 def test_exact_decimal_account_splits_preserve_candidate_weights():
     optimizer = Optimizer(None)
-    candidate = {'candidate_id': 'candidate-1', 'allocations': [{'instrument_id': 'A', 'weight_pct': 5}, {'instrument_id': 'B', 'weight_pct': 95}]}
+    candidate = {'candidate_id': 'candidate-1', 'allocations': [{'instrument_id': 'A', 'weight_pct': 10}, {'instrument_id': 'B', 'weight_pct': 90}]}
     optimizer.result = {'candidates': [candidate]}
     final = SimpleNamespace(selected_candidate_id='candidate-1', recommendation=SimpleNamespace(allocations=[
-        SimpleNamespace(instrument_id='A', weight_pct=weight) for weight in ['1.4', '1.4', '1.4', '0.8']
-    ] + [SimpleNamespace(instrument_id='B', weight_pct='95')]))
+        SimpleNamespace(instrument_id='A', weight_pct=weight) for weight in ['2.8', '2.8', '2.8', '1.6']
+    ] + [SimpleNamespace(instrument_id='B', weight_pct='90')]))
     assert optimizer.validate(final) == candidate
-    assert weights([{'instrument_id': row.instrument_id, 'weight_pct': row.weight_pct} for row in final.recommendation.allocations]) == {'A': .05, 'B': .95}
+    assert weights([{'instrument_id': row.instrument_id, 'weight_pct': row.weight_pct} for row in final.recommendation.allocations]) == {'A': .1, 'B': .9}
 
 
 def batch():
