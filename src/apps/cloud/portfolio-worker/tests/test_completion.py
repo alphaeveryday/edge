@@ -149,6 +149,19 @@ def test_missing_scenario_inputs_prevent_completion_even_for_mixed_requests(kind
     assert result['status'] == 'needs_input'
 
 
+@pytest.mark.parametrize('kind', ['rebalance', 'new_money', 'new_portfolio', 'review'])
+def test_mixed_request_cannot_complete_from_generated_prose_without_a_calculation(kind):
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    published = {'recommendation': {'allocations': [], 'execution': {'status': 'ready'}}}
+    decision = Decision(kind=kind, scenario_requested=True)
+    final = FinalReport.model_validate(final_payload())
+    result = assess_completion(final, request, decision, published, [], '2026-10-14')
+    assert result['status'] == 'partial'
+    assert 'SCENARIO_CALCULATION_REQUIRED' in result['reasons']
+    published['scenarios'] = {'status': 'available', 'rows': [{'future_krw': '1000000'}]}
+    assert assess_completion(final, request, decision, published, [], '2026-10-14')['status'] == 'complete'
+
+
 def test_blank_answer_cannot_certify_a_customer_task_as_answered():
     from edge_portfolio.contracts import TaskAnswer
     with pytest.raises(ValueError, match='meaningful'):

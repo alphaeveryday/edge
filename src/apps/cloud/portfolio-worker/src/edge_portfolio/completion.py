@@ -98,7 +98,7 @@ def assess_completion(final, request, decision, published, sources, as_of):
     if decision.kind in {'rebalance', 'new_money'} and recommendation and not execution:
         reasons.append('EXECUTION_PLAN_MISSING')
     needs_input = bool(decision.missing_inputs or final.withheld_reason == 'missing_input' or any(task['status'] == 'needs_input' for task in tasks) or execution and execution['status'] == 'needs_input')
-    if decision.kind == 'scenario':
+    if decision.kind == 'scenario' or decision.scenario_requested:
         if not published.get('scenarios'):
             reasons.append('SCENARIO_CALCULATION_REQUIRED')
     if published.get('scenarios', {}).get('status') == 'needs_input':
