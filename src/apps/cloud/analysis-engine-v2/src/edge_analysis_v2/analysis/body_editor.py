@@ -4,7 +4,13 @@ from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
+import re
+
 from edge_analysis_v2.contracts.outlook_limits import TEXT_LIMITS, violations
+
+FORMAL_ENDING = re.compile(r'니다[.!?]?\s*$')
+
+
 from edge_analysis_v2.tools.execution import ToolInputError
 
 
@@ -139,6 +145,11 @@ class BodyEditor:
         return self._commit(draft, self.mode)
 
     def _commit(self, draft, mode):
+        formal = [item['id'] for item in draft['items'] for s in item['sentences']
+                  if FORMAL_ENDING.search(s['sentence'] if isinstance(s, dict) else s)]
+        if formal:
+            raise ToolInputError('본문 문장은 해요체로 씁니다. 합니다체 문장이 논점 ' + ', '.join(dict.fromkeys(formal))
+                                 + '에 있습니다. "~했습니다"는 "~했어요", "~봅니다"는 "~봐요"로 고칩니다.')
         over = violations({'detail': draft})
         if over:
             # A body inherited from before the limits existed is over in many topics; one rewrite is the short way out.
