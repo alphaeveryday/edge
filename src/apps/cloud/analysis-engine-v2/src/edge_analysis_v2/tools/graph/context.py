@@ -29,7 +29,11 @@ class ContextTools:
             elif factor=='valuation':
                 # Read without a metric filter and keep the three: asked by name, a company that stores no BPS was a
                 # wrong argument, and the prices and flows already gathered were lost with it.
-                result,dataset=self.tools.financial.observations(targets,'actual',limit=limit)
+                try:
+                    result,dataset=self.tools.financial.observations(targets,'actual',limit=limit)
+                except ValueError as error:
+                    # A fund named as an object has no company figures; that refusal dropped its prices and flows too.
+                    scopes[factor]={'unavailable':str(error)};continue
                 dataset={**dataset,'items':[row for row in dataset['items'] if row['properties'].get('metric') in ('eps_basic','bps','bps_total_shares')]}
             else:result,dataset=self.tools.financial.macro(start_date,end_date,limit=limit)
             scopes[factor]=result['data_scope']
@@ -84,7 +88,9 @@ class ContextTools:
             for o in output:merged.setdefault(o['security_ref']['object_id'],{'security_ref':o['security_ref'],'observations':[]})['observations'].append(o)
             weight={i['object_id']:i.get('weight_ratio') for i in selection['items']}
             def row(item):
-                found={o['factor']:o['observation']['properties'] for o in item['observations']}
+                # A security classified twice for one day came in id order, and the older collection could be the one kept.
+                latest=sorted(item['observations'],key=lambda o:str(o['observation']['properties'].get('availableAt') or ''))
+                found={o['factor']:o['observation']['properties'] for o in latest}
                 first=item['observations'][0]['observation']['properties'];a=found.get('industry',{});b=found.get('exchange_classification',{})
                 return {'security':first.get('securityName'),'ticker':first.get('securityTicker'),
                     **({'weight_percent':round(weight[item['security_ref']['object_id']]*100,2)} if weight.get(item['security_ref']['object_id']) is not None else {}),
@@ -100,6 +106,9 @@ class ContextTools:
         # A fund's 198 classifications came back 903 characters each, and the answer was written from the first 45.
         return self.tools.result(output,selection=selection,scope={'dataset_kind':'instrument_factors','requested_factors':factors,
             **({'targets_not_searched':skipped} if skipped else {}),
+            'securities_without_any_record':len(securities)-len({o['security_ref']['object_id'] for o in output}),
+            **({'market_capitalization':'The amount, currency and valuation date are not mapped in this data yet, so the rows carry no amount. '
+                'Say that market capitalization is not available here; it is not missing for these securities only.'} if 'market_capitalization' in factors else {}),
             'classification_dates':'snapshot/collection dates are not certified historical effective dates'},limit=limit,
             display_items=[{**o['observation'],'factor':o['factor']} for o in output],table=True)
 

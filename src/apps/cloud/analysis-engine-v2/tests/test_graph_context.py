@@ -58,6 +58,27 @@ class ContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Invalid dates'):
             self.tools.context.instrument_factors({},'2026-10-02','2026-10-01',['valuation'])
 
+    def test_a_fund_keeps_its_prices_when_it_has_no_company_figures(self):
+        # WHY: valuation asked of a fund raised, and the prices gathered in the same call were dropped with it.
+        price={'object_type':'DailyBar','object_id':'p','title':'p','properties':{'tradeDate':'2026-10-02','closePrice':'100'}}
+        self.tools.select=lambda targets:{'items':[]}
+        self.tools.market.prices=lambda *a,**k:({'data_scope':{}},{'items':[price]})
+        def refuse(*a,**k):raise ValueError('None of the targets is a company')
+        self.tools.financial.observations=refuse
+        _,dataset=self.tools.context.instrument_factors({},'2026-10-01','2026-10-02',['chart','valuation'])
+        self.assertEqual([i['factor'] for i in dataset['items']],['chart'])
+        self.assertIn('None of the targets is a company',dataset['scope']['factor_scopes']['valuation']['unavailable'])
+
+    def test_listing_rows_say_how_many_securities_have_none_and_that_capitalization_has_no_amount(self):
+        # WHY: the count was given for industry only, and capitalization rows without an amount read as data missing for these securities.
+        self.tools.select=lambda targets:{'items':[{'object_type':'Equity','object_id':i,'status':'resolved'} for i in ('a','b')]}
+        record=lambda ref:{'source':ref,'target':{'object_type':'X','object_id':'r','title':'r','properties':{'securityName':'가'}}}
+        self.tools.context.graph=type('G',(),{'links':{k+'_ForSecurity_'+b:{} for k in ('SecurityListingSnapshot','MarketCapitalization') for b in ('Equity','ETF')},
+            'linked':staticmethod(lambda refs,relation,direction:[record(r) for r in refs if r['object_id']=='a' and 'Listing' in relation])})()
+        _,dataset=self.tools.context.factors({},['listing','market_capitalization'])
+        self.assertEqual(dataset['scope']['securities_without_any_record'],1)
+        self.assertIn('not available here',dataset['scope']['market_capitalization'])
+
     def test_classifications_of_a_fund_are_one_row_per_security_and_all_are_shown(self):
         # WHY: 201 holdings came back as 399 rows over two pages, and two runs named the sectors from the first page.
         ids=[f's{n}' for n in range(30)]
