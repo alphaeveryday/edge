@@ -22,6 +22,42 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(result['data_scope']['overlap_weight'],'0.2')
         self.assertEqual(result['data_scope']['unresolved_left'],['unknown'])
 
+    def test_a_holding_with_no_stored_weight_is_shared_with_an_unknown_weight_and_not_absent(self):
+        # WHY: held on both sides with no weight on one, it was shown at 0 and left out of the shared count.
+        left=self.selection([('a',None),('b',0.4)]);right=self.selection([('a',0.5),('b',0.1)])
+        result,_=self.tools.context.exposure(left,right,'security')
+        rows={row[result['columns'].index('object_id')]:dict(zip(result['columns'],row)) for row in result['rows']}
+        self.assertEqual((rows['a']['left_weight'],rows['a']['overlap_weight'],rows['a']['right_weight']),(None,None,'0.5'))
+        scope=result['data_scope']
+        self.assertEqual((scope['shared_count'],scope['shared_with_unknown_weight'],scope['overlap_weight']),(2,1,'0.1'))
+        # A company whose share classes are not all weighted has no known weight.
+        self.tools.actors=lambda selection: ([],[{'security':{'object_id':r['object_id']},'actor':{'object_id':'issuer'}} for r in selection['items']])
+        result,_=self.tools.context.exposure(self.selection([('common',0.2),('preferred',None)]),self.selection([('common',0.4)]),'company')
+        row=dict(zip(result['columns'],result['rows'][0]))|(result.get('same_for_all_rows') or {})
+        # A column that is empty in every row is not shown; the count says why.
+        self.assertEqual((row.get('left_weight'),row.get('overlap_weight'),row['right_weight']),(None,None,'0.4'))
+        self.assertEqual(result['data_scope']['shared_with_unknown_weight'],1)
+
+    def test_a_company_is_a_wrong_target_for_classifications_and_not_a_security_without_one(self):
+        # WHY: a company came back as an empty table that counted one security without a classification.
+        self.tools.select=lambda targets:{'items':[{'object_type':'Company','object_id':'c','status':'resolved'}]}
+        with self.assertRaisesRegex(ValueError,'wrong argument, not a missing classification'):
+            self.tools.context.factors({},['industry'])
+
+    def test_valuation_inputs_that_exist_are_returned_when_another_is_not_stored_and_dates_are_always_checked(self):
+        # WHY: asked for by name, a company with EPS and no BPS was a wrong argument, and the gathered prices were lost.
+        row=lambda metric:{'object_type':'FinancialMetric','object_id':metric,'title':metric,'properties':{'metric':metric,'value':'1'}}
+        asked=[]
+        def observations(targets,kind,**kw):
+            asked.append(kw);return {'data_scope':{}},{'items':[row('eps_basic'),row('revenue')]}
+        self.tools.select=lambda targets:{'items':[]}
+        self.tools.financial.observations=observations
+        _,dataset=self.tools.context.instrument_factors({},'2026-10-01','2026-10-02',['valuation'])
+        self.assertEqual([i['observation']['object_id'] for i in dataset['items']],['eps_basic'])
+        self.assertNotIn('metrics',asked[0])
+        with self.assertRaisesRegex(ValueError,'Invalid dates'):
+            self.tools.context.instrument_factors({},'2026-10-02','2026-10-01',['valuation'])
+
     def test_classifications_of_a_fund_are_one_row_per_security_and_all_are_shown(self):
         # WHY: 201 holdings came back as 399 rows over two pages, and two runs named the sectors from the first page.
         ids=[f's{n}' for n in range(30)]

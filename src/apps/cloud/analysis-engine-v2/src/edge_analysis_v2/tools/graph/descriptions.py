@@ -226,7 +226,8 @@ TOOLS = {
 
     'get_security_classifications': {
         'summary': 'Read the industry, exchange classification, listing and market capitalization records of securities.',
-        'returns': 'A table with one row per security and record. Two providers classify the same security differently; a security without a record has no row.',
+        'returns': 'For industry and exchange_classification, a table with one row per security: weight_percent, sector and industry (FMP), exchange_large and exchange_medium (the exchange). '
+                   'For listing and market_capitalization, one row per security and record. A security without a record has no row; data_scope counts those.',
         'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
         'args': {'targets': TARGETS, 'factors': 'industry is the FMP sector and industry. exchange_classification is the Korean exchange classification. Ask for both to compare providers.',
                  'limit': LIMIT}},

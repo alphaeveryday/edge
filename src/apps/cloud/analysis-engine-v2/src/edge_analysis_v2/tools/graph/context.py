@@ -21,12 +21,16 @@ class ContextTools:
              'before':STRING,'kind':{'enum':['outlook','movement','both']},'limit':LIMIT},['etf_ref','before'],self.previous,sources=['ETFOutlookReport', 'ETFPriceExplanation'])
 
     def instrument_factors(self,targets,start_date,end_date,factors,limit=20):
+        self.tools.time_bounds(start_date,end_date)   # valuation alone read no date, so a reversed range or a day after the cutoff went through
         selection=self.tools.select(targets);items=[];scopes={}
         for factor in factors:
             if factor=='chart':result,dataset=self.tools.market.prices(targets,start_date,end_date)
             elif factor=='flow':result,dataset=self.tools.market.flows(targets,start_date,end_date,'daily')
             elif factor=='valuation':
-                result,dataset=self.tools.financial.observations(targets,'actual',metrics=['eps_basic','bps','bps_total_shares'],limit=limit)
+                # Read without a metric filter and keep the three: asked by name, a company that stores no BPS was a
+                # wrong argument, and the prices and flows already gathered were lost with it.
+                result,dataset=self.tools.financial.observations(targets,'actual',limit=limit)
+                dataset={**dataset,'items':[row for row in dataset['items'] if row['properties'].get('metric') in ('eps_basic','bps','bps_total_shares')]}
             else:result,dataset=self.tools.financial.macro(start_date,end_date,limit=limit)
             scopes[factor]=result['data_scope']
             items.extend({'factor':factor,'observation':row} for row in dataset['items'])
@@ -54,6 +58,13 @@ class ContextTools:
 
     def factors(self,targets,factors,limit=20):
         selection=self.tools.select(targets);output=[]
+        resolved=[i for i in selection['items'] if i['status']=='resolved']
+        securities=[i for i in resolved if i['object_type'] in ('Equity','ETF')]
+        # Classifications hang on securities. A company came back as a security with no classification.
+        if resolved and not securities:
+            raise ValueError('None of the targets is a stock or a fund, so no classification can be looked up for them. '
+                'For a company, pass its stock from a search. This is a wrong argument, not a missing classification.')
+        skipped=[{k:i[k] for k in ('object_type','object_id')} for i in resolved if i not in securities]
         for kind in ('Equity','ETF'):
             refs=[{k:r[k] for k in ('object_type','object_id')} for r in selection['items'] if r['status']=='resolved' and r['object_type']==kind]
             for factor in factors:
@@ -83,10 +94,12 @@ class ContextTools:
                 scope={'dataset_kind':'security_classifications','requested_factors':factors,
                     'columns_mean':'weight_percent is the stored weight in the fund. sector and industry are the FMP classification; exchange_large and exchange_medium are the exchange (KIS) classification. '
                         'Name a security\'s sector from these columns, not from what the company is known for. null means no stored classification.',
-                    'securities_without_any_classification':len([i for i in selection['items'] if i['status']=='resolved'])-len(items),
+                    'securities_without_any_classification':len(securities)-len(items),
+                    **({'targets_not_searched':skipped} if skipped else {}),
                     'classification_dates':'snapshot/collection dates are not certified historical effective dates'})
         # A fund's 198 classifications came back 903 characters each, and the answer was written from the first 45.
         return self.tools.result(output,selection=selection,scope={'dataset_kind':'instrument_factors','requested_factors':factors,
+            **({'targets_not_searched':skipped} if skipped else {}),
             'classification_dates':'snapshot/collection dates are not certified historical effective dates'},limit=limit,
             display_items=[{**o['observation'],'factor':o['factor']} for o in output],table=True)
 
@@ -97,7 +110,7 @@ class ContextTools:
         if left.get('selected_date')!=right.get('selected_date') or not left.get('selected_date'):
             raise ValueError('Both holdings selections must have the same actual date')
         def group(selection):
-            weights={};unknown=[]
+            weights={};unknown=[];open_keys=set()
             issuer_map={}
             if group_by=='company':
                 _,mapping=self.tools.actors(selection)
@@ -107,22 +120,31 @@ class ContextTools:
                 else:
                     key=('Company',issuer_map.get(item['object_id'])) if item['object_type']=='Equity' else (None,None)
                 weight=number(item.get('weight_ratio'))
-                if item['status']!='resolved' or key[1] is None or weight is None or weight<0:
+                if item['status']!='resolved' or key[1] is None:
                     unknown.append(item['object_id']);continue
-                weights[key]=weights.get(key,Decimal(0))+weight
                 held=item.get('object') or {}
                 names[key]=held.get('title') if group_by=='security' else held.get('properties',{}).get('issuerName')
-            return weights,unknown
-        names={};a,ua=group(left);b,ub=group(right)
+                if weight is None or weight<0:
+                    unknown.append(item['object_id']);open_keys.add(key);continue
+                weights[key]=weights.get(key,Decimal(0))+weight
+            # A company held as common shares at 20% and preferred shares of unknown weight is not held at 20%.
+            for key in open_keys:weights.pop(key,None)
+            return weights,unknown,open_keys
+        names={};a,ua,oa=group(left);b,ub,ob=group(right)
         # Rows came as bare identifiers in identifier order: the few shared holdings were buried among two hundred
         # and could not be named without another lookup. Shared holdings lead, each with its name.
-        rows=[{'name':names.get(k),'object_type':k[0],'object_id':k[1],'left_weight':str(a.get(k,0)),'right_weight':str(b.get(k,0)),
-            'overlap_weight':str(min(a.get(k,Decimal(0)),b.get(k,Decimal(0))))} for k in a.keys()|b.keys()]
-        rows.sort(key=lambda r:(-Decimal(r['overlap_weight']),-Decimal(r['left_weight'])-Decimal(r['right_weight']),r['object_id']))
+        # A holding whose weight is not stored on one side was shown at 0 there and left out of the shared count:
+        # it is held, and its weight and its overlap are not known.
+        shown=lambda held,open_keys,k:None if k in open_keys else str(held.get(k,0))
+        rows=[{'name':names.get(k),'object_type':k[0],'object_id':k[1],'left_weight':shown(a,oa,k),'right_weight':shown(b,ob,k),
+            'overlap_weight':None if k in oa|ob else str(min(a.get(k,Decimal(0)),b.get(k,Decimal(0))))} for k in a.keys()|b.keys()|oa|ob]
+        rows.sort(key=lambda r:(-Decimal(r['overlap_weight'] or 0),-Decimal(r['left_weight'] or 0)-Decimal(r['right_weight'] or 0),r['object_id']))
         result,dataset=self.tools.result(rows,scope={'dataset_kind':'exposure_comparison','group_by':group_by,
             'date':left['selected_date'],'input_refs':[left_ref,right_ref],'unresolved_left':ua,'unresolved_right':ub,
             'overlap_weight':str(sum((min(a.get(k,Decimal(0)),b.get(k,Decimal(0))) for k in a.keys()|b.keys()),Decimal(0))),
-            'shared_count':sum(1 for k in a.keys()&b.keys()),'left_count':len(a),'right_count':len(b),
+            'shared_count':len((a.keys()|oa)&(b.keys()|ob)),'left_count':len(a.keys()|oa),'right_count':len(b.keys()|ob),
+            **({'shared_with_unknown_weight':len(((a.keys()|oa)&(b.keys()|ob))&(oa|ob)),
+                'overlap_weight_means':'The sum over holdings whose weight is stored on both sides. Holdings with a null weight are held, and their overlap is not in the sum.'} if oa|ob else {}),
             'interpretation':'raw weight overlap; incomplete holdings cannot establish full fund diversification'},table=True)
         return result,dataset
 
