@@ -15,7 +15,7 @@
  * 뉴스 단계별 감소(퍼널)는 데이터 화면 소관이라 여기서 반복하지 않는다.
  */
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import { InfoPopover } from '../_shared/InfoPopover';
@@ -177,8 +177,6 @@ export function TrendPage() {
   const minute = useMinuteStatus(q.ready ? q.facts.meta.today : undefined, q.ready);
   const entityResolution = useEntityResolutionTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   const analysis = useAnalysisTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
-  useFocusRow(q.ready);
-
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
    * 한 번만 돌아 화면이 첫 응답에 영원히 고정된다. */
@@ -192,6 +190,18 @@ export function TrendPage() {
     },
     [q, minute.data, entityResolution.data, analysis.data],
   );
+  const isShown = (x: (typeof evaluated)[number]) =>
+    filter === 'abnormal' ? x.v.kind === 'abnormal' : x.m.group === filter;
+  /* 지표 카드로 넘어온 포커스(예: R15 → 분석 실패 ETF 카드)는 **그 카드가 실제로 그려진 뒤에** 건다.
+   * 카드는 별도 조회(분석 추이·엔티티 해소율·분봉)의 응답이 와야 값이 서고, 기본 필터(이상 지표)
+   * 에서는 이상이 되기 전까지 DOM 에 없다. 조회 상태로 조건을 걸면 첫 조회 실패 뒤의 재조회 성공,
+   * 캐시된 옛 응답 뒤의 갱신처럼 빠지는 경우가 계속 나온다 — 그래서 조회가 아니라 **카드의 존재**를
+   * 본다. 카드가 아닌 앵커(산출 축 표 등)는 사실 조회만 기다린다. */
+  const [params] = useSearchParams();
+  const focus = params.get('focus');
+  const focusMounted =
+    !focus?.startsWith('metric-') || evaluated.some((x) => `metric-${x.m.id}` === focus && isShown(x));
+  useFocusRow(q.ready && focusMounted);
   if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
     abnormal: evaluated.filter((x) => x.v.kind === 'abnormal').length,
@@ -200,10 +210,7 @@ export function TrendPage() {
     news: evaluated.filter((x) => x.m.group === 'news').length,
     analysis: evaluated.filter((x) => x.m.group === 'analysis').length,
   };
-  const shown =
-    filter === 'abnormal'
-      ? evaluated.filter((x) => x.v.kind === 'abnormal')
-      : evaluated.filter((x) => x.m.group === filter);
+  const shown = evaluated.filter(isShown);
   const uninstrumented = evaluated.filter((x) => x.v.kind === 'uninstrumented').length;
   const entityResolutionPending = entityResolution.isPending && entityResolution.data === undefined;
   const entityResolutionFailed = entityResolution.isError && entityResolution.data === undefined;

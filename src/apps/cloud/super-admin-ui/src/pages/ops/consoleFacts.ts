@@ -358,6 +358,25 @@ export function parseFacts(body: unknown): FactsParse {
     }
   }
 
+  /* v2 분석 실패 축 — 없어도 된다(이 축을 안 싣는 API). 오면 두 종류의 ETF 코드 목록이어야 한다.
+   * 종류가 빠진 채 통과시키면 R15 가 그 종류를 "실패 없음"으로 읽는다. */
+  const analysisFailures = body.analysisFailures;
+  if (analysisFailures !== undefined) {
+    if (!Array.isArray(analysisFailures)) return bad('analysisFailures 축이 배열이 아니다');
+    for (const row of analysisFailures) {
+      if (!isRow(row)) return bad('analysisFailures 원소가 객체가 아니다');
+      if (row.kind !== 'outlook' && row.kind !== 'movement') return bad('analysisFailures[].kind 의 값이 계약과 다르다');
+      if (!Array.isArray(row.failedEtfs) || !row.failedEtfs.every((code) => typeof code === 'string' && code !== '')) {
+        return bad('analysisFailures[].failedEtfs 의 값이 계약과 다르다');
+      }
+    }
+    for (const kind of ['outlook', 'movement']) {
+      if (analysisFailures.filter((row) => (row as { kind: string }).kind === kind).length !== 1) {
+        return bad(`analysisFailures 에 ${kind} 항목이 정확히 하나가 아니다`);
+      }
+    }
+  }
+
   return { ok: true, facts: toFacts(body as unknown as ConsoleFactsDto) };
 }
 
@@ -455,6 +474,9 @@ function toFacts(dto: ConsoleFactsDto): Facts {
           etf: r.etf, name: r.name, triggered: r.triggered,
           outcome: r.outcome, error: r.error,
         })) } }
+      : {}),
+    ...(dto.analysisFailures
+      ? { analysis_failures: dto.analysisFailures.map((a) => ({ kind: a.kind, failed_etfs: a.failedEtfs })) }
       : {}),
     meta: {
       db: dto.meta.db,

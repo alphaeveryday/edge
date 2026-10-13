@@ -125,6 +125,7 @@ public class ConsoleFactsService {
 				BoundaryResponse.from(f.boundary()),
 				ChainResponse.from(f.chain()),
 				EtfLedgerResponse.from(f.etfLedger()),
+				ConsoleFactsResponse.AnalysisFailureResponse.from(f.analysisFailures()),
 				new MetaResponse(f.dbNow().toString(), f.today().toString(),
 						aws.at() == null ? null : aws.at().toString()));
 	}

@@ -711,7 +711,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
 				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
 						rs.getString("etf_id"), rs.getString("display_name"),
-						rs.getString("outcome")), day, day));
+						rs.getString("outcome")), day, day),
+				analysisFailures(day));
+	}
+
+	private List<AnalysisFailureRow> analysisFailures(LocalDate day) {
+		OffsetDateTime from = day.atStartOfDay(KST).toOffsetDateTime();
+		OffsetDateTime to = day.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
+		return jdbc.query(ANALYSIS_FAILURES_SQL, (rs, i) -> new AnalysisFailureRow(
+				rs.getString("kind"), rs.getString("etf_code")), from, to, from, to);
 	}
 
 	@Override
@@ -728,29 +736,64 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 데만 쓴다. {@code data_source = 'database'} 만 센다(산출 축과 같은 이유 — 합성 입력으로 돈
 	 * 분석은 운영 산출이 아니다).
 	 *
+	 * <p>ETF 종 수는 ETF 별로 먼저 묶은 뒤에 센다 — {@code failed_etfs} 는 그날 실패 행이 있고 완료 행이
+	 * 하나도 없는 ETF 수다(ALPHA-1291). 실패했다가 같은 날 다시 돌아 완료된 ETF 는 빠진다.
+	 *
 	 * <p>🔴 {@code running} 을 {@code failed} 에 더하지 않는다. 진행 중인 분석과 끝나지 못하고 남은
 	 * 행이 같은 상태값이라, 실패로 세면 분석이 도는 동안 실패 수가 올라갔다 내려간다.
 	 */
 	private static final String ANALYSIS_TREND_SQL = """
-			SELECT 'outlook' AS kind, (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d,
-			       count(*) FILTER (WHERE status = 'completed') AS completed,
-			       count(*) FILTER (WHERE status = 'failed') AS failed,
-			       count(*) FILTER (WHERE status = 'running') AS running,
-			       count(DISTINCT etf_code) FILTER (WHERE status = 'completed') AS completed_etfs,
-			       count(DISTINCT etf_code) FILTER (WHERE status = 'failed') AS failed_etfs
+			SELECT 'outlook' AS kind, d,
+			       sum(completed) AS completed, sum(failed) AS failed, sum(running) AS running,
+			       count(*) FILTER (WHERE completed > 0) AS completed_etfs,
+			       count(*) FILTER (WHERE failed > 0 AND completed = 0) AS failed_etfs
+			  FROM (SELECT (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d, etf_code,
+			               count(*) FILTER (WHERE status = 'completed') AS completed,
+			               count(*) FILTER (WHERE status = 'failed') AS failed,
+			               count(*) FILTER (WHERE status = 'running') AS running
+			          FROM outlook_analyses
+			         WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
+			         GROUP BY 1, 2) per_etf
+			 GROUP BY d
+			UNION ALL
+			SELECT 'movement' AS kind, d,
+			       sum(completed) AS completed, sum(failed) AS failed, sum(running) AS running,
+			       count(*) FILTER (WHERE completed > 0) AS completed_etfs,
+			       count(*) FILTER (WHERE failed > 0 AND completed = 0) AS failed_etfs
+			  FROM (SELECT (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d, etf_code,
+			               count(*) FILTER (WHERE status = 'completed') AS completed,
+			               count(*) FILTER (WHERE status = 'failed') AS failed,
+			               count(*) FILTER (WHERE status = 'running') AS running
+			          FROM movement_analyses
+			         WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
+			         GROUP BY 1, 2) per_etf
+			 GROUP BY d
+			 ORDER BY 1, 2
+			""";
+
+	/**
+	 * 조회일에 v2 분석이 끝내 완료되지 못한 ETF(R15, ALPHA-1291) — 그날 그 종류의 분석에 실패 행이
+	 * 있고 완료 행이 하나도 없는 ETF 다. 분석 추이의 {@code failed_etfs} 와 <b>같은 기준</b>이고,
+	 * 그쪽이 수를 낼 때 여기는 어느 ETF 인지를 낸다.
+	 *
+	 * <p>running 만 있는 ETF 는 넣지 않는다 — 진행 중인지 끝나지 못한 것인지 이 표만으로 못 가른다.
+	 * 날짜는 {@code analysis_at} 의 KST 날짜라, 자정 직전에 실패하고 자정 뒤에 다시 돌아 완료된 ETF 는
+	 * 앞 날짜의 실패로 남는다.
+	 */
+	private static final String ANALYSIS_FAILURES_SQL = """
+			SELECT 'outlook' AS kind, etf_code
 			  FROM outlook_analyses
 			 WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
-			 GROUP BY 2
+			 GROUP BY etf_code
+			HAVING count(*) FILTER (WHERE status = 'failed') > 0
+			   AND count(*) FILTER (WHERE status = 'completed') = 0
 			UNION ALL
-			SELECT 'movement' AS kind, (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d,
-			       count(*) FILTER (WHERE status = 'completed') AS completed,
-			       count(*) FILTER (WHERE status = 'failed') AS failed,
-			       count(*) FILTER (WHERE status = 'running') AS running,
-			       count(DISTINCT etf_code) FILTER (WHERE status = 'completed') AS completed_etfs,
-			       count(DISTINCT etf_code) FILTER (WHERE status = 'failed') AS failed_etfs
+			SELECT 'movement' AS kind, etf_code
 			  FROM movement_analyses
 			 WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
-			 GROUP BY 2
+			 GROUP BY etf_code
+			HAVING count(*) FILTER (WHERE status = 'failed') > 0
+			   AND count(*) FILTER (WHERE status = 'completed') = 0
 			 ORDER BY 1, 2
 			""";
 

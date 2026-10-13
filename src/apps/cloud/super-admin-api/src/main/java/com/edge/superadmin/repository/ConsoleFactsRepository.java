@@ -58,8 +58,11 @@ public interface ConsoleFactsRepository {
 	List<AnalysisDayPoint> analysisTrend(LocalDate maxDate, int days);
 
 	/**
-	 * v2 분석 한 종류의 하루. 건수는 분석 행 수이고 {@code *Etfs} 는 그 상태의 행이 하나라도 있는
-	 * ETF 종 수다(같은 ETF 가 그날 실패한 뒤 다시 완료되면 양쪽에 다 든다).
+	 * v2 분석 한 종류의 하루. 건수는 분석 행 수다. {@code completedEtfs} 는 그날 완료 행이 하나라도
+	 * 있는 ETF 종 수이고, {@code failedEtfs} 는 <b>그날 실패 행이 있고 완료 행이 하나도 없는</b> ETF
+	 * 종 수다(ALPHA-1291) — 실패했다가 같은 날 다시 돌아 완료된 ETF 는 넣지 않는다. v2 는 실패한
+	 * 분석을 다시 돌려 끝내는 일이 흔해, "실패한 적 있는 ETF"로 세면 거의 매일 0 을 넘는다.
+	 * running 만 있는 ETF 도 넣지 않는다.
 	 *
 	 * <p>{@code running} 은 <b>실패가 아니다</b> — 상태가 running 인 채 남은 행이고, 아직 도는
 	 * 중인지 끝나지 못한 것인지 이 표만으로는 가를 수 없다.
@@ -79,7 +82,21 @@ public interface ConsoleFactsRepository {
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-			List<EtfAnalysisRow> etfLedger) {
+			List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures) {
+
+		/** v2 분석 실패 축 없이 만든다 — 그 축은 빈 목록이다. */
+		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
+				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
+				List<EtfAnalysisRow> etfLedger) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, List.of());
+		}
+	}
+
+	/**
+	 * 조회일에 v2 분석이 <b>끝내 완료되지 못한</b> ETF 하나(R15, ALPHA-1291) — 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없다. {@code kind} 는 {@code outlook}·{@code movement} 다.
+	 */
+	record AnalysisFailureRow(String kind, String etfCode) {
 	}
 
 	/** 조회일에 발화한 ETF별 <b>최신 트리거</b>의 최신 설명 실행 상태(R15). */

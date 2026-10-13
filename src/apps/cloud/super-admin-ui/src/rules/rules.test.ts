@@ -26,6 +26,7 @@ function emptyFacts(): Facts {
     outputs: [],
     boundary: { published_without_delivery: 0, delivery_now_nonpublished: 0 },
     etf_ledger: { rows: [] },
+    analysis_failures: [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: [] }],
     runbook: {},
     meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
   };
@@ -44,6 +45,7 @@ function bareFacts(): Facts {
   delete f.chain;
   delete f.queues;
   delete f.etf_ledger;
+  delete f.analysis_failures;
   delete f.minute;
   delete f.runbook;
   delete f.meta.aws;
@@ -897,40 +899,68 @@ test('R14 전달 정합 — 두 방향 다 P0 다. 시드 기록은 표시일 �
   assert.ok(!bare.why.includes('기록:'), '기록이 없는데 기록 문구가 붙었다');
 });
 
-test('R15 ETF 분석 실패 — FAILED 행들이 위반 1건으로 집계되고 목록이 남는다', () => {
+test('R15 분석 실패 — 끝내 완료하지 못한 ETF 를 종류별 위반으로 세운다', () => {
+  /* 서버가 준 목록이 곧 "그날 실패 행이 있고 완료 행이 하나도 없는 ETF"다(실패했다가 다시 돌아
+   * 완료된 ETF 는 거기 없다). 규칙은 그 목록을 종류별로 한 건씩 세운다 — 전망과 가격변동 분석은
+   * 다른 배치·다른 표라 한 사건으로 뭉치면 어느 쪽이 깨졌는지 안 보인다. */
   const f = emptyFacts();
-  f.etf_ledger = {
-    rows: [
-      { etf: 'a', name: 'A', triggered: true, outcome: 'FAILED', error: 'NaN weight' },
-      { etf: 'b', name: 'B', triggered: true, outcome: 'FAILED', error: 'NaN weight' },
-      { etf: 'c', name: 'C', triggered: true, outcome: 'FULFILLED' },
-    ],
-    mock: true,
-  };
+  f.analysis_failures = [
+    { kind: 'outlook', failed_etfs: ['069500'] },
+    { kind: 'movement', failed_etfs: ['091160', '229200', '305720'] },
+  ];
   const v = hits(f, 'R15');
-  assert.equal(v.length, 1);
-  assert.equal(v[0].metric, 2);
-  /* 룰 단위 런북(`R15`)으로 폴백하더라도 사건 키는 식별자여야 한다 — R14 와 같은 이유 */
-  assert.equal(v[0].targetId, 'analyze.failed');
-  assert.deepEqual(v[0].list, ['A', 'B']);
-  /* 원장이 사유를 안 남긴 실패 — R14 와 같은 이유로 이 갈래를 밟는 픽스처가 있어야 한다.
-   * `error: null` 을 "오류가 없다"로 읽으면 실패인데 사유가 빈 채로 화면에 선다. */
-  f.etf_ledger = {
-    rows: [{ etf: 'd', name: 'D', triggered: true, outcome: 'FAILED', error: null }],
-    mock: true,
-  };
-  assert.match(hits(f, 'R15')[0].why, /기록이 없다/, '사유 부재를 사유 없음으로 그리지 않는다');
+  assert.equal(v.length, 2);
+  assert.deepEqual(v.map((x) => [x.target, x.targetId, x.metric]), [
+    ['전망', 'outlook.failed', 1],
+    ['가격변동 분석', 'movement.failed', 3],
+  ]);
+  assert.deepEqual(v[1].list, ['091160', '229200', '305720']);
+  /* 사건 키가 종류마다 달라야 한다 — 같으면 vid 충돌로 규칙 전체가 못 돎이 된다 */
+  assert.equal(new Set(v.map((x) => x.vid)).size, 2);
+  /* 추이 화면의 그 종류 카드로 간다 */
+  assert.deepEqual(v[1].drill, ['trend', 'metric-a.movement_failed_etfs']);
+  assert.match(v[0].why, /끝내 완료되지 않았다/);
 
-  f.etf_ledger = { rows: [{ etf: 'c', name: 'C', triggered: true, outcome: 'FULFILLED' }] };
+  /* 실 응답의 축에는 목 표시가 없다 — 위반도 실측으로 선다. 동봉 스냅샷처럼 목으로 채운 항목은
+   * 그 사실이 위반까지 따라간다(실측으로 둔갑하지 않는다). */
+  assert.deepEqual(v.map((x) => x.mock), [false, false]);
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: ['069500'], mock: true }, { kind: 'movement', failed_etfs: [] }];
+  const mocked = hits(f, 'R15')[0];
+  assert.equal(mocked.mock, true);
+  assert.match(mocked.evidence, /\(목\)/);
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R15')!.depends_on_mock, true);
+
+  /* 한 종류만 실패 — 나머지 종류는 위반이 없다 */
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: ['229200'] }];
+  assert.deepEqual(hits(f, 'R15').map((x) => x.targetId), ['movement.failed']);
+
+  /* 실패 ETF 가 없으면 조용하다 — 그리고 그때는 **평가된** 조용함이다 */
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: [] }];
   assert.equal(hits(f, 'R15').length, 0);
+  assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R15')!.evaluated, true);
 });
 
-test('R15 경계 — per-ETF 원장 계측이 없으면 evaluated:false (계측 없음 ≠ 0)', () => {
+test('🔴 R15 는 옛 엔진의 ETF 원장을 읽지 않는다 — 멈춘 표의 실패 행으로 서지도, 빈 표로 안심하지도 않는다', () => {
   const f = emptyFacts();
-  delete f.etf_ledger;
+  f.etf_ledger = { rows: [{ etf: 'a', name: 'A', triggered: true, outcome: 'FAILED', error: 'NaN weight' }] };
+  assert.equal(hits(f, 'R15').length, 0, '옛 원장의 FAILED 로 위반을 세웠다');
+  /* 반대 방향: 옛 원장이 비어 있어도 v2 축의 실패는 선다 */
+  f.etf_ledger = { rows: [] };
+  f.analysis_failures = [{ kind: 'outlook', failed_etfs: ['069500'] }, { kind: 'movement', failed_etfs: [] }];
+  assert.equal(hits(f, 'R15').length, 1);
+});
+
+test('🔴 R15 경계 — v2 분석 실패 축이 없는 옛 응답에서는 못 돎이다 (위반 0건으로 읽히면 안 된다)', () => {
+  /* UI 가 API 보다 먼저 배포되면 그 축이 없는 응답을 받는다. 옛 원장(`etf_ledger`)이 실려 있어도
+   * 그걸로 대신 판정하지 않는다 — 그 표는 10-01 에 멈췄다. */
+  const f = emptyFacts();
+  delete f.analysis_failures;
+  f.etf_ledger = { rows: [{ etf: 'a', name: 'A', triggered: true, outcome: 'FAILED' }] };
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R15')!;
   assert.equal(rr.evaluated, false);
   assert.equal(rr.violations, 0);
+  assert.equal(rr.notRun, 'axis');
+  assert.match(rr.note ?? '', /v2 분석 실패 축이 없다/);
 });
 
 test('R16 재시도 소진 — 상한 도달+미귀결만, FULFILLED·정책 미선언은 아님', () => {
@@ -1400,7 +1430,7 @@ test('정렬 3순위 — 수치는 크기순이다. 부호가 아니라 절댓�
 
 test('리포트 — evaluated:false 와 violations:0 이 구분되고, 흡수 위반에 absorbed_into 가 붙는다', () => {
   const f = emptyFacts();
-  delete f.etf_ledger; // R15 못 돈다
+  delete f.analysis_failures; // R15 못 돈다
   f.queues = [{ name: 'clean', visible: 0, in_flight: 0, dlq: 0, subscribers: ['svc'] }]; // R12 돌았는데 0
   const runId = 'news:2026-08-03T15:30';
   f.runs = [run({ id: runId, lane: 'news', ledger_status: 'TIMED_OUT' })];
@@ -1699,16 +1729,16 @@ test('계측 공백으로 못 도는 규칙 목록이 문서의 티켓 표와 �
   /* R10·R03 이 여기 있었다 — ALPHA-979 조각 1·2가 `chain`·`aws_status` 를 배선하며 빠졌다.
    * 티켓 행은 남고 `queues[]` 조각 3만 남았다. 그래서 이 목록과 문서의
    * 표는 **행 단위로 안 맞는다** — 아래 대조는 "티켓 키가 문서에 있는가"까지다. */
-  const BLOCKED = ['R07', 'R08', 'R11', 'R15', 'R16'];
+  const BLOCKED = ['R07', 'R08', 'R11', 'R16'];
   /* `dep` 이 있어도 **계측 공백이 아닌** 규칙들. 판별자는 "그 축이 배선되면 사라지는가"다.
    * · R13 — "오늘 판정할 산출이 없다"는 날마다 갈리는 조건부 사유다.
-   * · R03·R10·R12 — 축은 배선됐다. 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
+   * · R03·R10·R12·R15 — 축은 배선됐다(R15 는 v2 분석 실패 축, ALPHA-1291). 남은 사유는 "그 축을 안 싣는 **배포본**을 보고 있다"이고, 그건
    *   계측이 아니라 배포 시차다. ⚠️ **도달 가능한 갈래다** — 검증 경계가 이 축만 옵셔널로
    *   받으므로(`consoleFacts.test.ts` 의 「체인 축이 통째로 없는 응답은 거부하지 않는다」)
    *   API 롤백 한 번에 실제로 이 상태가 된다.
    * 여기 넣는 것이 세는 것보다 나은 이유: 같이 세면 계측 공백의 규모가 부풀려지고, 그 수가
    * 그대로 "아무도 안 보는 축이 몇 개인가"로 읽힌다. */
-  const CONDITIONAL = ['R13', 'R03', 'R10', 'R12'];
+  const CONDITIONAL = ['R13', 'R03', 'R10', 'R12', 'R15'];
 
   const withDep = RULES.filter((R) => R.dep).map((R) => R.id);
   assert.deepEqual(
