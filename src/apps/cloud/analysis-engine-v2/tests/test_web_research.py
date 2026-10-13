@@ -63,6 +63,18 @@ def test_document_pages_are_reused_and_missing_text_is_not_called_complete():
     assert first['content_kind'] == 'extracted_text'
 
 
+def test_the_publisher_is_the_name_the_page_gives_or_else_only_its_host():
+    named = article(page_metadata={'og': {'site_name': ' 세계일보 '}, 'article': {'modified_time': '2026-10-09T13:43:40+09:00'}})
+    web, calls = client(named)
+    document = web.read(url='https://example.com/a', offset=0)
+    assert calls[0][1]['page_metadata'] is True
+    assert (document['publisher'], document['publisher_source'], document['modified_at']) == (
+        '세계일보', 'page', '2026-10-09T13:43:40+09:00')
+    for metadata in ({}, {'page_metadata': None}, {'page_metadata': {'og': {'site_name': ''}}}, {'page_metadata': {'og': 'x'}}):
+        document = client(article(**metadata))[0].read(url='https://example.com/a', offset=0)
+        assert (document['publisher'], document['publisher_source'], document['modified_at']) == ('example.com', 'domain', None)
+
+
 @pytest.mark.parametrize('published', [None, '2026-10-05', '2026-10-04', 'nonsense'])
 def test_future_unknown_and_same_day_date_only_are_not_final_evidence(published):
     response = article()

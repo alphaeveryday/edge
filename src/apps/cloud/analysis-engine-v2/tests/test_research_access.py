@@ -124,3 +124,14 @@ def test_weight_sum_is_judged_at_the_precision_a_stored_double_carries(monkeypat
         assert (loaded['observed_weight_ratio'], loaded['coverage']) == (ratio, 'partial')
         with pytest.raises(ValueError, match='summing to one'):
             _load_stored_weights(monkeypatch, over, len(over))
+
+
+def test_a_search_may_state_the_hypothesis_it_checks_and_what_it_looks_for():
+    data = source()
+    data['news'] = [dict(news_id='1', title='납기 비교', body='고객 구성', body_kind='excerpt',
+        published_at='2026-09-29T09:00:00+09:00', available_at='2026-09-29T09:01:00+09:00')]
+    tools = database.DatabaseTools(data)
+    plain = tools.call('search_news_articles', {'query': '납기', 'offset': 0})['result']
+    stated = tools.call('search_news_articles', {'query': '납기', 'offset': 0, 'hypothesis': '납기가 늦어져 매출 인식이 밀렸다',
+                                                 'looking_for': '고객사가 납기 지연을 밝힌 날짜'})['result']
+    assert {k: v for k, v in plain.items() if k != 'tool_run_id'} == {k: v for k, v in stated.items() if k != 'tool_run_id'}

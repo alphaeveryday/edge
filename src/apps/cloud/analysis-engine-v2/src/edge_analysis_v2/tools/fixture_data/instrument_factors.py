@@ -316,3 +316,77 @@ def macro_data(fixture, instrument_id):
     events = sorted([r for r in available(fixture.get('policy_decisions', []), cutoff) if instant(r['decision_at']) > cutoff], key=lambda r: instant(r['decision_at']))
     result['next_policy_decision'] = {k: events[0][k] for k in ('decision_at', 'available_at', 'subject')} if events else None
     return result, None
+
+
+TABLE_FACTORS = ('chart', 'flow', 'valuation')
+TABLE_COLUMNS = {
+    'chart': ['price_krw', 'ma20_distance_pct', 'momentum_index', 'bottom_index', 'new_closing_high_count_20d',
+              'distance_from_52w_closing_high_pct'],
+    'flow': ['foreign_net_5d_krw', 'foreign_net_20d_krw', 'institution_net_5d_krw', 'institution_net_20d_krw',
+             'individual_net_5d_krw', 'individual_net_20d_krw'],
+    'valuation': ['per', 'pbr'],
+}
+
+
+def table(fixture, instrument_ids=None, top_n=None, factors=TABLE_FACTORS):
+    """Read the same factors for many instruments, one row per instrument.
+
+    Args:
+        fixture: Raw observations and fixed analysis context.
+        instrument_ids: Instruments to read; the ETF code stands for all of its holdings. Omitted means the ETF's holdings.
+        top_n: Keep only this many rows by holding weight.
+        factors: Nonempty unique selection of chart, flow and valuation.
+
+    Returns:
+        columns and rows sorted by weight, each instrument's own values (not weighted), nulls where unavailable.
+
+    Raises:
+        ValueError: Unsupported arguments or an instrument outside this analysis.
+    """
+    if not isinstance(factors, (list, tuple)) or not factors or len(set(factors)) != len(factors) or not set(factors) <= set(TABLE_FACTORS):
+        raise ValueError('choose unique factors from chart, flow, valuation')
+    if top_n is not None and (type(top_n) is not int or top_n < 1):
+        raise ValueError('top_n must be a positive integer')
+    etf_code = fixture['context']['etf_code']
+    names = {row['instrument_id']: row.get('name') for row in fixture.get('instruments', [])}
+    portfolio = holdings(fixture, require_complete=False)
+    weights = {row['instrument_id']: row['weight'] for row in portfolio['holdings']}
+    wanted = list(weights) if instrument_ids is None else instrument_ids
+    if not isinstance(wanted, (list, tuple)) or not wanted or any(not isinstance(i, str) for i in wanted):
+        raise ValueError('instrument_ids must be a nonempty list of codes')
+    selected = []
+    for identity in wanted:
+        for code in (list(weights) if identity == etf_code else [identity]):
+            if code not in weights and code not in names:
+                raise ValueError('unknown instrument_id: ' + code)
+            if code not in selected:
+                selected.append(code)
+    selected.sort(key=lambda code: -decimal(weights.get(code, 0)))
+    total = len(selected)
+    selected = selected[:top_n]
+    readers = {'chart': chart_data, 'flow': flow_data, 'valuation': valuation_data}
+    columns = ['instrument_id', 'name', 'weight_pct'] + [c for f in factors for c in TABLE_COLUMNS[f]]
+    rows, unavailable, through = [], {}, {}
+    for code in selected:
+        row = [code, names.get(code), number(decimal(weights[code]) * 100) if code in weights else None]
+        for factor in factors:
+            value, reason = readers[factor](fixture, code)
+            if reason:
+                unavailable.setdefault(code, {})[factor] = reason
+            value = value or {}
+            if factor == 'flow':
+                history = value.get('history', {}).get('rows', [])
+                for index in (1, 2, 3):
+                    for days in (5, 20):
+                        row.append(number(sum(decimal(day[index]) for day in history[-days:])) if len(history) >= days else None)
+            else:
+                row.extend(value.get(column) for column in TABLE_COLUMNS[factor])
+            if value.get('finalized_through'):
+                through[factor] = max(through.get(factor, ''), value['finalized_through'])
+        rows.append(row)
+    result = {'analysis_at': fixture['context']['analysis_at'], 'holdings_as_of': portfolio['as_of_date'],
+              'scope': 'each row is that instrument alone; nothing is weighted or summed across rows',
+              'finalized_through': through, 'instruments_matched': total, 'columns': columns, 'rows': rows}
+    if unavailable:
+        result['unavailable'] = unavailable
+    return result
