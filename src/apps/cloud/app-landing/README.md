@@ -40,8 +40,9 @@
 
 ## 검색과 공유 미리보기
 
-`landing.html` 머리에 설명(`description`), 대표 주소(`canonical`), 공유 미리보기(Open Graph), 아이콘, 사이트 이름 구조화 데이터가 있다.
+`landing.html` 머리에 설명(`description`), 대표 주소(`canonical`), 공유 미리보기(Open Graph), 아이콘, 구조화 데이터(JSON-LD)가 있다.
 
+- 구조화 데이터는 사이트(`WebSite`), 운영 주체(`Organization`), 앱(`MobileApplication`) 세 개체다. 페이지와 App Store 목록에 실제로 있는 값만 넣는다. 평점은 넣지 않았다(HTML 에 고정하면 낡는다). App Store 주소나 인스타그램 계정이 바뀌면 함께 고친다.
 - 주소는 `https://etforca.com` 을 그대로 적었다. 도메인을 바꾸면 `landing.html` 머리와 `robots.txt`, `sitemap.xml` 을 함께 고친다.
 - `assets/og.png`(1200x630)에는 페이지 제목 문구가 그림으로 들어 있다. 제목을 바꾸면 그림도 다시 만든다.
 - 구글 서치 콘솔에는 URL 접두어 속성 `https://etforca.com` 으로 등록했다(팀 구글 계정). 소유 확인은 머리의 `google-site-verification` 메타 태그로 한다. 이 태그를 지우면 소유 확인이 풀린다.
