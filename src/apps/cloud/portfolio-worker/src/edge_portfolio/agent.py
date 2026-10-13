@@ -25,7 +25,7 @@ from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
 from .execution import execution_tool, resolve_funding, zero_contribution, TOOL as EXECUTION_TOOL
-from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, TOOL as SCENARIO_TOOL
+from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status
 
@@ -300,10 +300,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                            for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', statement)):
                                         principal = None  # An ambiguous correction must not silently reuse the old amount.
                                         break
-                                for statement in (followup_question or request.question, request.preferences.note, request.preferences.contribution, request.preferences.dividend_goal, *request.preferences.interests):
-                                    if not principal_context_matches(statement, principal):
-                                        principal = None  # Accompanying customer fields may withdraw or contradict the amount.
-                                        break
+                                contexts = [followup_question or request.question]
+                                if followup_question and stated_principal(followup_question) is None:
+                                    contexts.append(original_question)
+                                preferences = (request.preferences.note, request.preferences.contribution, request.preferences.dividend_goal, *request.preferences.interests)
+                                if not all(principal_context_matches(text, principal) for text in contexts) or not all(principal_preference_matches(text, principal) for text in preferences):
+                                    principal = None  # Preserve unresolved qualifications when reusing an older amount.
                                 answer = build_scenarios(principal, args, **{name: value or 0 for name, value in (funding or {}).items()})
                                 if funding is None:
                                     answer = {'status': 'needs_input', 'reason': 'ADDITIONAL_FUNDING_REQUIRED', 'rows': []}

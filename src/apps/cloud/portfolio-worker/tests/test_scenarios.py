@@ -42,6 +42,13 @@ def test_separate_unrecognized_context_cannot_certify_a_saved_principal(context)
     assert principal_context_matches('5년 뒤 얼마인가요?', 10000000)
 
 
+@pytest.mark.parametrize('choice', ['이미 다 매수한 상태에요', '목돈 한 번에', '아직 고민 중', '성장', '미국 주식'])
+def test_fixed_form_choices_are_not_free_text_principal_qualifications(choice):
+    from edge_portfolio.scenarios import principal_preference_matches
+    assert principal_preference_matches(choice, 1000000)
+    assert not principal_preference_matches(choice + '. 이 돈은 아직 수중에 없습니다.', 1000000)
+
+
 def test_known_principal_allows_scenarios_without_a_return_forecast():
     result = build_scenarios(1000000, {'annual_returns': [0], 'years': [5, 10, 15]}, monthly_krw=100000)
     assert [row['future_krw'] for row in result['rows']] == ['7000000', '13000000', '19000000']

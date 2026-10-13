@@ -62,6 +62,15 @@ def principal_context_matches(text, principal):
     return values is not None and len(values) <= 1 and all(value == principal for value in values)
 
 
+def principal_preference_matches(text, principal):
+    # InputForm's fixed choices describe funding mode/interests, not amount qualifications.
+    form_values = {'이미 다 매수한 상태에요', '매달 꾸준히', '목돈 한 번에', '아직 고민 중',
+        '지수 따라가기', '배당', '성장', '안정 (채권·금)', '반도체', 'AI·빅테크', '방산', '로봇',
+        '원자력', '전력 인프라', '바이오·헬스케어', '소비재', '금융', '리츠·부동산', '친환경 에너지',
+        '한국 주식', '미국 주식', '선진국', '신흥국', '단기채', '장기채', '금·원자재'}
+    return text in form_values or principal_context_matches(text, principal)
+
+
 class ScenarioInput(StrictModel):
     annual_returns: list[Annotated[Decimal, Field(ge=-100, le=100, allow_inf_nan=False)]] = Field(default_factory=lambda: [Decimal(-3), Decimal(0), Decimal(3), Decimal(6)], min_length=1, max_length=7)
     years: list[Annotated[int, Field(ge=1, le=50, strict=True)]] = Field(default_factory=lambda: [5, 10, 15], min_length=1, max_length=5)

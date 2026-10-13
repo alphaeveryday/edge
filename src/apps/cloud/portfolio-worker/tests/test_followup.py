@@ -94,7 +94,7 @@ async def test_separate_contribution_sentence_does_not_invalidate_the_known_prin
         await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
 
 
-@pytest.mark.parametrize('has_principal,supplied,retained,withdrawn', [(True, False, False, False), (False, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, True, True), (False, False, True, 'uncertain'), (False, False, True, 'unknown'), (False, False, True, 'negated'), (False, False, True, 'unsupported'), (False, False, True, 'unlabeled'), (False, False, True, 'note'), (False, False, True, 'note_unknown'), (False, False, True, 'context_unknown')])
+@pytest.mark.parametrize('has_principal,supplied,retained,withdrawn', [(True, False, False, False), (False, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, True, True), (False, False, True, 'uncertain'), (False, False, True, 'unknown'), (False, False, True, 'negated'), (False, False, True, 'unsupported'), (False, False, True, 'unlabeled'), (False, False, True, 'note'), (False, False, True, 'note_unknown'), (False, False, True, 'context_unknown'), (True, False, False, 'original_unknown')])
 async def test_scenario_followup_uses_verified_principal_and_retains_original_constraints(monkeypatch, has_principal, supplied, retained, withdrawn):
     import json
     from report_fixtures import final_payload
@@ -103,11 +103,11 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
     question = '5년 10년 15년 후 원금과 이자는 얼마인가요?'
     if supplied:
         question = '원금은 1000만원입니다. ' + question
-    if withdrawn and withdrawn not in {'note', 'note_unknown', 'context_unknown'}:
+    if withdrawn and withdrawn not in {'note', 'note_unknown', 'context_unknown', 'original_unknown'}:
         question = {True: '앞서 말한 원금은 취소합니다. ', 'uncertain': '원금은 1000만원입니다. 원금은 확인 필요합니다. ', 'unknown': '원금은 모릅니다. ', 'negated': '원금은 확정된 금액이 아니에요. ', 'unsupported': '원금은 1천만원입니다. ', 'unlabeled': '앞서 말한 1000만원은 취소합니다. '}[withdrawn] + question
     if withdrawn == 'context_unknown': question = '이 돈은 아직 수중에 없습니다. ' + question
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
-        'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
+        'horizon': '10년 이상', 'question': '매도 금지', 'preferences': {'contribution': '이미 다 매수한 상태에요', 'interests': ['성장']}}, 'as_of': '2026-10-12',
         'sources': Evidence.sources, 'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
     if not has_principal:
         report['input'].update(holdings=[], planning=True, preferences={'contribution': '매월 10만원'})
@@ -119,6 +119,8 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
         report['input']['preferences']['note'] = '앞서 말한 원금은 취소합니다.'
     if withdrawn == 'note_unknown':
         report['input']['preferences']['note'] = '이 돈은 아직 수중에 없습니다.'
+    if withdrawn == 'original_unknown':
+        report['input']['question'] = '이 돈은 아직 수중에 없습니다. 매도 금지'
     report['recommendation'] = {'allocations': [], 'historical_performance': {
         'points': [{'date': '2000-01-01', 'recommended': 1000000, 'current': 1000000}] * 10000}}
     async def model(payload):
