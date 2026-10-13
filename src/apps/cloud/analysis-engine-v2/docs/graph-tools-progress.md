@@ -16,7 +16,8 @@
 | 그래프 도구 바탕 정리 (ALPHA-1271): 큰 결과는 남은 행 수와 전체의 모양을 먼저 돌려줌, 100행이 넘는 검색은 행 없이 모양만, 짧은 행은 표로, 도구 설명은 `tools/graph/descriptions.py` 한 파일, 노출할 도구를 실행마다 지정, `get_objects` 추가로 9개, 이름 셋 변경(`find_securities_by_ticker`·`sum_holding_weights`·`compare_holdings_between_dates`) | dev에 머지됨, dev 배포 성공 |
 | 사건 도구 5개 (ALPHA-1272): `list_events`·`find_similar_events`·`get_event_timeline`·`read_article`·`read_document_excerpts`. 그래프 도구는 14개. 사건 링크의 `noveltyStatus`는 온톨로지 변경 전이라 비어 있고, 타임라인은 그 사실을 결과에 밝힘 | dev에 머지됨, dev 배포 성공 |
 | 시세 도구 5개 (ALPHA-1273): `get_price_observations`·`get_flow_observations`·`calculate_returns`·`count_rising_and_falling`·`calculate_nav_premium`. 그래프 도구는 19개. 시가·고가·저가와 수정주가 여부는 저장돼 있지 않아 결과에 그렇게 밝힘 | dev에 머지됨, dev 배포 성공 |
-| 재무·거시 도구 6개 (ALPHA-1274): `get_financial_observations`·`compare_two_figures`·`compare_actual_to_expectation`·`estimate_contract_profit`·`list_macro_series`·`get_macro_observations`. 그래프 도구는 25개. 컨센서스 자료는 그래프에 없어 그렇게 답함. 4분기 단독 값은 저장된 행(`derivation`이 `FY_MINUS_9M`)이라 4분기를 구하는 도구는 두지 않음 | 로컬 리뷰 5회, PR 대기 |
+| 재무·거시 도구 6개 (ALPHA-1274): `get_financial_observations`·`compare_two_figures`·`compare_actual_to_expectation`·`estimate_contract_profit`·`list_macro_series`·`get_macro_observations`. 그래프 도구는 25개. 컨센서스 자료는 그래프에 없어 그렇게 답함. 4분기 단독 값은 저장된 행(`derivation`이 `FY_MINUS_9M`)이라 4분기를 구하는 도구는 두지 않음 | dev에 머지됨, dev 배포 성공 |
+| 맥락 도구 5개 (ALPHA-1275): `get_security_classifications`·`get_instrument_factors`·`compare_etf_overlap`·`sum_investor_flows`·`get_previous_reports`. 그래프 도구는 30개. 이것으로 그래프 도구 옮기기가 끝남 | 로컬 리뷰 2회, PR 대기 |
 | 1. 측정 기준 (이미지 고정·환경·측정 기록, 상한 정의, 판정 기준 초안) | dev에 머지됨(#1163), dev 배포 성공 |
 | 2. 기준선 판정 (로컬 컨테이너 3회, 과정·보고서·제시·형식) | 판정 진행 중 |
 | 3. 글자수 상한 강제 (ALPHA-1241) | 커밋 `323df0bf`, 단위 테스트 561개 통과. 로컬 3회 실행과 독립 리뷰 진행 중 |

@@ -166,7 +166,7 @@ TOOLS = {
                    'Intraday rows are estimated net share quantities, not won amounts, and have no figure for individuals. Whether they are cumulative or per interval '
                    'is not known: do not sum them or compare them with daily flows.',
         'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
-        'follow_up': 'Flows of holdings are not the flows of the fund itself.',
+        'follow_up': 'sum_investor_flows for a total over the days. Flows of holdings are not the flows of the fund itself.',
         'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'frequency': 'daily for finalized flows. intraday for estimates during the day.'}},
     'estimate_contract_profit': {
         'summary': 'Estimate how much one contract adds to a company\'s yearly revenue and operating profit, as a range, against its last full year.',
@@ -224,6 +224,41 @@ TOOLS = {
         'args': {'start_date': START, 'end_date': END, 'series_ids': 'Ids from list_macro_series, as ["usd_krw"].',
                  'query': 'Part of an English series name. Prefer series_ids.', 'limit': LIMIT}},
 
+    'get_security_classifications': {
+        'summary': 'Read the industry, exchange classification, listing and market capitalization records of securities.',
+        'returns': 'For industry and exchange_classification, a table with one row per security: weight_percent, sector and industry (FMP), exchange_large and exchange_medium (the exchange). '
+                   'For listing and market_capitalization, one row per security and record. A security without a record has no row; data_scope counts those.',
+        'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
+        'args': {'targets': TARGETS, 'factors': 'industry is the FMP sector and industry. exchange_classification is the Korean exchange classification. Ask for both to compare providers.',
+                 'limit': LIMIT}},
+    'get_instrument_factors': {
+        'summary': 'Read prices, daily flows, valuation inputs and macro values for securities in one call.',
+        'returns': 'A table of the raw observations with a factor column. Nothing is scored or calculated.',
+        'prerequisite': 'Security ids from a search, or a get_etf_holdings result as targets.',
+        'alternative': 'get_price_observations, get_flow_observations, get_financial_observations and get_macro_observations read the same data one kind at a time.',
+        'args': {'targets': TARGETS, 'start_date': START, 'end_date': END, 'factors': 'chart is prices, flow is daily flows, valuation is EPS and BPS, macro is the macro series.',
+                 'limit': LIMIT}},
+    'compare_etf_overlap': {
+        'summary': 'Compare the holdings of two funds on the same date: what both hold and how much the weights overlap.',
+        'returns': 'A table with each holding, its weight in either fund and overlap_weight (the smaller of the two). Shared holdings come first. '
+                   'data_scope.overlap_weight is the total overlap and shared_count the number held by both.',
+        'prerequisite': 'Two get_etf_holdings results with the same selected_date.',
+        'args': {'left_ref': RESULT, 'right_ref': RESULT, 'group_by': 'security compares share classes. company joins the share classes of one issuer.'}},
+
+    'sum_investor_flows': {
+        'summary': 'Add one investor\'s daily net flow over the days of an earlier flow result, per security.',
+        'returns': 'One row per security with the total as written, the first and last day covered, and how many days had no value.',
+        'prerequisite': 'A daily get_flow_observations result.',
+        'args': {'dataset_ref': RESULT, 'field': 'Which investor and unit: netVal... is money, netQty... is shares.'}},
+
+    'get_previous_reports': {
+        'summary': 'Read the outlook reports and price explanations published earlier for one fund.',
+        'returns': 'A table with one row per report: when it was analysed, when it was published (availableAt) and its summary. '
+                   'These are earlier interpretations, not observed facts: do not cite one as evidence of a new fact.',
+        'prerequisite': 'The fund id from search_objects or find_securities_by_ticker.',
+        'args': {'etf_ref': 'The fund, as {"object_type":"ETF","object_id":"..."}.',
+                 'before': 'Only reports analysed and published before this time, with a timezone. A time after the cutoff means the cutoff.',
+                 'kind': 'outlook, movement (price explanations), or both.', 'limit': LIMIT}},
 }
 
 

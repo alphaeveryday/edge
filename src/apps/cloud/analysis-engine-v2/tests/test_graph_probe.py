@@ -12,7 +12,8 @@ def test_a_probe_records_its_calls_and_judges_only_its_hypotheses(tmp_path):
         assert [s['function']['name'] for s in schemas] == ['get_result_page', 'get_ontology_schema', 'search_objects', 'get_linked_objects', 'get_etf_holdings', 'sum_holding_weights', 'compare_holdings_between_dates', 'find_securities_by_ticker', 'get_objects', 'list_events', 'find_similar_events', 'get_event_timeline', 'read_article', 'read_document_excerpts',
             'get_price_observations', 'get_flow_observations', 'calculate_returns', 'count_rising_and_falling', 'calculate_nav_premium',
             'list_macro_series', 'get_financial_observations', 'get_macro_observations', 'compare_two_figures',
-            'estimate_contract_profit', 'compare_actual_to_expectation']
+            'estimate_contract_profit', 'compare_actual_to_expectation',
+            'get_security_classifications', 'get_instrument_factors', 'compare_etf_overlap', 'sum_investor_flows', 'get_previous_reports']
         artifacts.mkdir(parents=True)
         (artifacts/'events.jsonl').write_text(json.dumps({'message_type': 'ResultMessage',
             'message': {'usage': {'input_tokens': 7, 'output_tokens': 2}}}) + '\n', encoding='utf8')
