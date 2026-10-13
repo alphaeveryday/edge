@@ -128,6 +128,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     optimizer = Optimizer(market, request)
     decision = Decision()
     checks = []
+    observed_data = {}
     execution_rejection = None
     execution_failures = {}
     execution_feasible = set()
@@ -165,7 +166,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             repairs = 0
             recovery_rounds = 0
             while True:
-                state = data_status(market, optimizer, evidence.sources)
+                state = data_status(market, optimizer, evidence.sources, observed_data)
                 metrics['data_status'] = state
                 metrics['unavailable_reason'] = ('과거 가격 자료를 확인했어요. 미래 전망과 배당 자료는 별도로 확인해요.' if state['history'] in {'available', 'partial'}
                     else '과거 가격 자료를 아직 조회하지 않았어요.' if state['history'] == 'not_requested' else '가격 자료의 일부가 없거나 비교 조건을 충족하지 못했어요.')
@@ -283,6 +284,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                      counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
                                 raise
                         status = answer.get('status', 'available') if isinstance(answer, dict) else 'available'
+                        if tool in {'fetch_source', 'read_portfolio_history'} and status in {'available', 'partial', 'unavailable'}:
+                            observed_data['sources' if tool == 'fetch_source' else 'history'] = status
                         reason = answer.get('reason') if isinstance(answer, dict) else None
                         codes = {'INVALID_TOOL_ARGUMENT', 'TOOL_LIMIT', 'TOOL_NOT_ALLOWED', 'EXA_FAILED', 'EMPTY_SOURCE',
                                  'CURRENT_WEIGHTS_REQUIRED', 'COMPARISON_DATA_UNAVAILABLE', 'NO_COMMON_PRICE_HISTORY',
@@ -301,6 +304,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     continue
                 try:
                     raw = json.loads(message.get("content") or "")
+                    if not isinstance(raw, dict):
+                        raise ValueError('OUTPUT_OBJECT_REQUIRED')
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         execution_rejection = None

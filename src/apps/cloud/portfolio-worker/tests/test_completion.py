@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import pytest
 
 from edge_portfolio.completion import assess_completion, data_status
 from edge_portfolio.contracts import AnalysisInput, FinalReport
@@ -12,6 +13,12 @@ def test_valid_json_without_an_answer_is_not_customer_completion():
         {'recommendation': {'allocations': []}}, [], '2026-10-14')
     assert result['status'] == 'partial'
     assert result['reasons'] == ['UNANSWERED_QUESTIONS', 'EXECUTION_PLAN_MISSING']
+
+
+def test_blank_answer_cannot_certify_a_customer_task_as_answered():
+    from edge_portfolio.contracts import TaskAnswer
+    with pytest.raises(ValueError, match='meaningful'):
+        TaskAnswer(question_index=1, status='answered', answer=' ' * 10)
 
 
 def test_old_holdings_source_or_fetch_date_cannot_prove_current_coverage():
@@ -33,6 +40,40 @@ def test_observed_history_overrides_the_initial_not_requested_state():
     market.results['portfolio'] = {'status': 'available'}
     assert data_status(market, optimizer, [])['history'] == 'available'
     assert data_status(market, optimizer, [])['forecast'] == 'not_estimated'
+    market.results = {}
+    optimizer.result = {'status': 'no_match', 'start_date': '2026-01-01', 'end_date': '2026-10-13'}
+    assert data_status(market, optimizer, [])['history'] == 'available'
+
+
+def test_unavailable_comparison_is_not_evidence_that_no_candidate_qualifies():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    result = assess_completion(FinalReport.model_validate({**final_payload(), 'recommendation': None}), request,
+        Decision(), {'recommendation': None, 'optimization': {'status': 'unavailable', 'reason': 'BASELINE_PRICE_UNAVAILABLE'}}, [], '2026-10-14')
+    assert result['status'] == 'partial'
+    assert 'COMPARISON_DATA_UNAVAILABLE' in result['reasons']
+    result = assess_completion(FinalReport.model_validate({**final_payload(), 'recommendation': None}), request,
+        Decision(), {'recommendation': None, 'optimization': {'status': 'available', 'reason': 'RECOMMENDATION_WITHHELD'}}, [], '2026-10-14')
+    assert result['status'] == 'partial'
+    assert 'WITHHOLDING_REASON_MISSING' in result['reasons']
+
+
+def test_unsuccessful_lookup_is_retained_even_without_cache_entries():
+    market = SimpleNamespace(results={}, failures={})
+    optimizer = SimpleNamespace(result=None)
+    result = data_status(market, optimizer, [], {'sources': 'unavailable', 'history': 'unavailable'})
+    assert result['sources'] == result['history'] == 'unavailable'
+
+
+def test_explicit_written_dates_support_coverage_without_using_the_fetch_date():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    payload = final_payload()
+    payload['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'holdings', 'status': 'supported',
+        'evidence': [{'source_id': 's1', 'passage_id': 'p1'}], 'claim_as_of': '2026-09-30'}]
+    for text in ['Holdings as of September 30, 2026', '30 Sep 2026', '2026년 9월 30일 보유내역', '2026/9/30']:
+        sources = [{'id': 's1', 'passages': [{'id': 'p1', 'text': text}]}]
+        result = assess_completion(FinalReport.model_validate(payload), request, Decision(),
+            {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
+        assert result['evidence_coverage'][0]['status'] == 'supported'
 
 
 async def test_missing_answer_reenters_research_without_consuming_format_repairs(monkeypatch):
@@ -122,3 +163,34 @@ async def test_truncated_output_recovers_without_discarding_prior_tool_evidence(
     assert result['sources'] == Evidence.sources
     assert result['completion']['status'] == 'no_match'
     assert any(event.get('code') == 'MODEL_TRUNCATED' for event in result['diagnostics']['events'])
+
+
+@pytest.mark.parametrize('invalid', [None, []])
+async def test_nonobject_source_free_response_uses_the_repair_path(monkeypatch, invalid):
+    import json
+    from edge_portfolio.agent import run_analysis
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
+            self.batches = {'first'}
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, broken = [], []
+    async def model(payload):
+        role = stages[-1]
+        if role == 'portfolio' and not broken:
+            broken.append(1)
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(invalid)}}]}
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'opinion':
+            for name in ('question', 'portfolio', 'outlook', 'opinion'):
+                content[name].update(evidence=[], limitations=['상품 자료를 확보하지 못했어요.'])
+            content['current_evaluation'] = {'scores': None, 'reason': content['portfolio']}
+            content['insights'][0]['content'] = content['portfolio']
+        else:
+            content.update(evidence=[], limitations=['상품 자료를 확보하지 못했어요.'])
+        if role == 'question': content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=SimpleNamespace(sources=[]))
+    assert any(event.get('code') == 'OUTPUT_CONTRACT' for event in result['diagnostics']['events'])

@@ -1,17 +1,27 @@
 """Record task completion separately from a syntactically valid report."""
 from datetime import date
+import calendar
+import re
 
 
-def data_status(market, optimizer, sources):
+def data_status(market, optimizer, sources, observed=None):
+    observed = observed or {}
     results = list(market.results.values())
     history = 'available' if any(row.get('status') == 'available' for row in results) else 'unavailable' if market.failures else 'not_requested'
     if history == 'available' and market.failures:
         history = 'partial'
     if history == 'not_requested' and optimizer.result and optimizer.result.get('status') == 'unavailable':
         history = 'unavailable'
+    if history == 'not_requested' and optimizer.result and optimizer.result.get('start_date') and optimizer.result.get('end_date'):
+        history = 'available'
+    if history == 'not_requested':
+        history = observed.get('history', history)
+    source_status = 'available' if sources else observed.get('sources', 'not_requested')
+    if sources and observed.get('sources') == 'unavailable':
+        source_status = 'partial'
     return {'history': history, 'price_failures': dict(market.failures),
             'candidate_search': optimizer.result['status'] if optimizer.result else 'not_requested',
-            'sources': 'available' if sources else 'not_requested', 'forecast': 'not_estimated'}
+            'sources': source_status, 'forecast': 'not_estimated'}
 
 
 def assess_completion(final, request, decision, published, sources, as_of):
@@ -42,8 +52,13 @@ def assess_completion(final, request, decision, published, sources, as_of):
         status = 'missing'
         if item.status == 'supported' and text:
             claim_date = item.claim_as_of
-            date_texts = {claim_date.isoformat(), claim_date.strftime('%Y.%m.%d'), claim_date.strftime('%Y/%m/%d')} if claim_date else set()
-            if claim_date and any(value in '\n'.join(text) for value in date_texts):
+            date_texts = {claim_date.isoformat(), claim_date.strftime('%Y.%m.%d'), claim_date.strftime('%Y/%m/%d'),
+                f'{claim_date.year}-{claim_date.month}-{claim_date.day}', f'{claim_date.year}.{claim_date.month}.{claim_date.day}',
+                f'{claim_date.year}/{claim_date.month}/{claim_date.day}', f'{claim_date.year}년{claim_date.month}월{claim_date.day}일',
+                *[f'{month}{claim_date.day}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])],
+                *[f'{claim_date.day}{month}{claim_date.year}' for month in (calendar.month_name[claim_date.month], calendar.month_abbr[claim_date.month])]} if claim_date else set()
+            normalized = re.sub(r'[\s,]', '', '\n'.join(text)).casefold()
+            if claim_date and any(re.search(r'(?<!\d)' + re.escape(value.casefold()) + r'(?!\d)', normalized) for value in date_texts):
                 age = (today - claim_date).days
                 status = 'supported' if 0 <= age <= max_age[item.field] else 'stale'
             else:
@@ -66,9 +81,11 @@ def assess_completion(final, request, decision, published, sources, as_of):
     if final.withheld_reason == 'missing_data':
         reasons.append('MISSING_RESEARCH_DATA')
     optimization = published.get('optimization') or {}
+    if not recommendation and optimization.get('status') == 'unavailable':
+        reasons.append('COMPARISON_DATA_UNAVAILABLE')
     if not recommendation and optimization.get('reason') in {'CURRENT_WEIGHTS_REQUIRED', 'CUSTOMER_CONSTRAINT_UNVERIFIED'}:
         needs_input = True
-    if not recommendation and not optimization.get('reason') and not final.withheld_reason:
+    if not recommendation and optimization.get('reason') in (None, 'RECOMMENDATION_WITHHELD') and not final.withheld_reason:
         reasons.append('WITHHOLDING_REASON_MISSING')
     status = 'needs_input' if needs_input else 'partial' if reasons else 'no_match' if not recommendation else 'complete'
     return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': decision.missing_inputs,

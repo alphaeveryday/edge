@@ -182,6 +182,12 @@ class TaskAnswer(StrictModel):
     answer: str = Field(min_length=10, max_length=500)
     missing: list[str] = Field(default_factory=list, max_length=5)
 
+    @model_validator(mode='after')
+    def meaningful_answer(self):
+        if len(self.answer.strip()) < 10 or any(not value.strip() for value in self.missing):
+            raise ValueError('Task answer and missing reasons must contain meaningful text')
+        return self
+
 
 class EvidenceCoverage(StrictModel):
     instrument_id: str = Field(min_length=1, max_length=32)

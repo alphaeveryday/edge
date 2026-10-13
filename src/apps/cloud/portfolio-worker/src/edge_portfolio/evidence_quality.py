@@ -9,8 +9,9 @@ def inspect_body(body, limit):
     # Navigation labels and link lists alone are not a readable product document.
     cleaned = [re.sub(r'https?://\S+|\[[^]]*\]\([^)]*\)', '', line) for line in content]
     readable = [line for line in cleaned if len(line) >= 60 or len(line) >= 20 and line.endswith(('.', '。'))]
+    tabular = sum(bool(re.search(r'[A-Za-z가-힣]', line) and re.search(r'\d+(?:\.\d+)?\s*%', line)) for line in cleaned) >= 2
     failure = bool(re.search(r'^(?:Error fetching|No content found|Access denied|403 Forbidden|404 Not Found)', body, re.I | re.M))
-    if failure or not readable:
+    if failure or not (readable or tabular):
         return {'status': 'unavailable', 'reason': 'INSUFFICIENT_SOURCE_BODY'}
     published = re.search(r'^Published:\s*(\d{4}-\d{2}-\d{2})', body, re.M)
     published_at = None

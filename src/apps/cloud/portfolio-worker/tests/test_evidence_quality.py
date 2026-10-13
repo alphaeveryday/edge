@@ -15,6 +15,11 @@ def test_collected_time_never_replaces_publication_or_claim_date():
     assert result['coverage_status'] == 'requires_field_review'
 
 
+def test_short_factsheet_table_rows_are_readable_research():
+    body = '# Fund holdings\nAs of September 30, 2026\n| Holding | Weight |\n| Apple | 10.2% |\n| Microsoft | 9.5% |\nExpense ratio: 0.03%'
+    assert inspect_body(body, 24000)['status'] == 'available'
+
+
 def test_source_pagination_retains_stable_passage_ids_and_tail_facts():
     source = {'id': 's1', 'excerpt': 'original', 'passages': [{'id': f'p{i}', 'text': f'fact {i}'} for i in range(50)]}
     first = source_page(source)
