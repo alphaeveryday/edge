@@ -82,6 +82,39 @@ def test_explicit_research_correction_can_withdraw_a_previously_complete_answer(
     assert corrected.evidence_coverage[0].status == 'missing'
 
 
+def test_single_labelled_fee_value_is_readable_product_evidence():
+    from edge_portfolio.evidence_quality import inspect_body
+    assert inspect_body('# Fund fees\nURL: https://issuer.example/fees\nAs of 2026-09-30\nTotal expense ratio: 0.03%', 24000)['status'] == 'available'
+    assert inspect_body('# Navigation\nURL: https://issuer.example\nHome\nAbout\nContact', 24000)['status'] == 'unavailable'
+
+
+async def test_server_constraint_rejection_triggers_alternatives_without_model_withholding_reason(monkeypatch):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'c1'}], 'reason': None}
+            self.batches = {'first'}
+        def validate(self, final): return {'candidate_id': 'c1'} if final.recommendation else None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    monkeypatch.setattr('edge_portfolio.agent.check_constraints', lambda *args: [{'status': 'fail', 'reason': 'EXCLUDED_INSTRUMENT'}])
+    stages, opinions, events = [], [], []
+    async def model(payload):
+        role = stages[-1]
+        content = final_payload() if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {}}
+        if role == 'opinion':
+            opinions.append(1)
+            if len(opinions) == 3: raise RuntimeError('ALTERNATIVE_REQUIRED')
+            if len(opinions) == 2: content['recommendation'] = None
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='ALTERNATIVE_REQUIRED'):
+        await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), 'test', stages.append,
+            model_call=model, evidence=Evidence(), on_event=events.append)
+    assert any(event['event'] == 'research_recovery' for event in events)
+
+
 def test_blank_answer_cannot_certify_a_customer_task_as_answered():
     from edge_portfolio.contracts import TaskAnswer
     with pytest.raises(ValueError, match='meaningful'):

@@ -360,7 +360,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 published['completion']['status'] = 'partial'
                         needs_alternative = not selected and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT' and len(getattr(optimizer, 'batches', [])) < 2 and (
                             final.withheld_reason in {'quality_failed', 'customer_failed', 'search_exhausted'} or
-                            optimizer.result.get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
+                            published['optimization'].get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'EXECUTION_INFEASIBLE', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
                         if needs_alternative:
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
