@@ -154,8 +154,9 @@ public interface ConsoleFactsRepository {
 	 * 앞의 둘은 단위가 다르고 여기엔 {@code INVALIDATION} 도 들어간다.
 	 *
 	 * <p>{@code blind} 는 <b>앞의 둘이 지금의 게시를 못 본다</b>는 뜻이다(ALPHA-1293). 두 수는
-	 * 옛 설명 엔진의 {@code explanation_result} 와 발번을 맞대는데, 그 엔진이 조회일보다 앞서 멈췄으면
-	 * 그 뒤의 게시(새 분석 엔진이 쓴다)는 이 조인에 안 걸린다. 그때 0 은 "어긋난 것이 없다"가 아니라
+	 * 옛 설명 엔진의 {@code explanation_result} 와 발번을 맞대는데, 그 엔진이 <b>오늘(KST)보다 앞서</b>
+	 * 멈췄으면 그 뒤의 게시(새 분석 엔진이 쓴다)는 이 조인에 안 걸린다. 이 축은 날짜 창을 안 타므로
+	 * 기준도 조회일이 아니라 지금이다 — 과거 날짜를 조회해도 표시는 같다. 그때 0 은 "어긋난 것이 없다"가 아니라
 	 * "옛 엔진 분에는 없다"이다. 0 이 아닌 수는 여전히 실측이다 — 옛 엔진 분의 어긋남은 그대로 센다.
 	 */
 	record BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,

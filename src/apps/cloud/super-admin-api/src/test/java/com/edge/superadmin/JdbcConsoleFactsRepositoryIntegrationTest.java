@@ -1980,7 +1980,22 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.allSatisfy(s -> assertThat(s.blind()).as("%s 는 실측이다", s.id()).isFalse());
 		assertThat(before.chain().stages()).filteredOn(s -> s.id().equals("c.pub")).singleElement()
 				.satisfies(s -> assertThat(s.batch()).isEqualTo(1L));
-		assertThat(before.boundary().blind()).isFalse();
+		/* 🔴 **경계는 조회일을 안 탄다** — 엔진이 돌던 날(07-31)을 골라도 수는 지금 값이고, 지금 그
+		 * 엔진은 멈춰 있다. 조회일로 물으면 과거 날짜를 고르는 것만으로 표시가 꺼진다. */
+		assertThat(before.boundary().blind()).isTrue();
+	}
+
+	/**
+	 * 전달 경계의 관측 불가는 <b>지금</b>을 기준으로 한다 — 옛 엔진이 오늘도 돌았으면 어느 날짜를
+	 * 조회하든 거짓이다(그 엔진의 게시를 지금도 본다).
+	 */
+	@Test
+	void 전달_경계의_관측_불가는_조회일이_아니라_지금을_기준으로_한다() {
+		LocalDate today = kstToday();
+		insertPublished("now", today.toString(), "etf-now", "PUBLISHED");   // 마지막 실행 = 오늘
+		assertThat(repository.facts(today).boundary().blind()).isFalse();
+		// 같은 원장으로 과거 날짜를 물어도 같다 — 경계의 수는 그날 것이 아니라 지금 것이다.
+		assertThat(repository.facts(DAY).boundary().blind()).isFalse();
 	}
 
 	/**
@@ -2002,7 +2017,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 					assertThat(s.blind()).as("%s — 엔진이 도는 날의 0 은 손실이다", s.id()).isFalse();
 					assertThat(s.batch()).isZero();
 				});
-		assertThat(alive.boundary().blind()).isFalse();
 
 		// ② 08-05 를 물으면 엔진은 멈췄다(마지막 실행 08-04). 그날 트리거의 자손이 옛 표에 남아 있으면
 		//    (실행 시각만 앞이다) 그 수는 실측이다.
@@ -2017,7 +2031,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.allSatisfy(s -> assertThat(s.blind()).as("%s — 행이 있으면 실측이다", s.id()).isFalse());
 		assertThat(stopped.chain().stages()).filteredOn(s -> s.id().equals("c.res")).singleElement()
 				.satisfies(s -> assertThat(s.batch()).isEqualTo(1L));
-		// 경계는 날짜 창을 안 탄다 — 엔진이 멈춘 뒤의 게시를 못 본다는 사실은 그대로다.
+		// 경계는 조회일과 무관하다 — 지금 그 엔진은 멈춰 있다(마지막 실행 08-04).
 		assertThat(stopped.boundary().blind()).isTrue();
 	}
 

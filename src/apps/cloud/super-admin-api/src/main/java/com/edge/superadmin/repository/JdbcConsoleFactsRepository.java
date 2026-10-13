@@ -706,6 +706,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		 * 날짜를 조회하면 거짓이라 체인·경계가 종전 값 그대로 나간다. */
 		LocalDate lastLegacyRunDay = jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class);
 		boolean legacyEngineStopped = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(day);
+		/* 🔴 **경계는 조회일이 아니라 지금을 기준으로 묻는다.** 경계 축은 날짜 창을 안 타는 현재 상태
+		 * 조회라, 과거 날짜를 골라도 수는 "지금" 값이다. 조회일로 물으면 엔진이 돌던 날을 고르는 것만으로
+		 * 표시가 꺼지고, 지금의 게시를 못 보는 0 이 다시 정합으로 읽힌다(봇 리뷰가 짚었다). */
+		boolean legacyEngineStoppedNow =
+				lastLegacyRunDay == null || lastLegacyRunDay.isBefore(meta.kstToday());
 
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
 				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day),
@@ -713,7 +718,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
-						rs.getLong("delivery_rows"), legacyEngineStopped)),
+						rs.getLong("delivery_rows"), legacyEngineStoppedNow)),
 				blindIfUnobservable(
 						jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
 						legacyEngineStopped),

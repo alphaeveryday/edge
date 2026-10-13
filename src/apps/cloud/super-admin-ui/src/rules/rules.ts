@@ -787,7 +787,7 @@ export const RULES: Rule[] = [
      *
      * 0 이 아닌 수는 관측 불가여도 **그대로 위반으로 세운다** — 옛 엔진 분의 어긋남은 실측이고,
      * 못 돎으로 접으면 진짜 미발번이 화면에서 사라진다. 그때는 `note` 가 본 범위를 밝힌다. */
-    dep: '전달 경계가 관측 불가다 — 옛 설명 엔진의 게시만 발번과 맞대는데 그 엔진이 조회일보다 앞서 멈췄다(새 분석 엔진의 게시·발번은 이 축이 보지 못한다)',
+    dep: '전달 경계가 관측 불가다 — 옛 설명 엔진의 게시만 발번과 맞대는데 그 엔진이 지금 멈춰 있다(새 분석 엔진의 게시·발번은 이 축이 보지 못한다)',
     source: 'DB_LEDGER',
     canRun: (f) =>
       !f.boundary.blind || f.boundary.published_without_delivery > 0 || f.boundary.delivery_now_nonpublished > 0,

@@ -86,7 +86,7 @@ export function DeliveryPage() {
         </div>
         {b.blind && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
-            이 검사는 옛 설명 엔진의 게시만 발번과 맞댑니다. 그 엔진이 조회일보다 앞서 멈춰, 새 분석
+            이 검사는 옛 설명 엔진의 게시만 발번과 맞댑니다. 그 엔진이 지금 멈춰 있어, 새 분석
             엔진의 게시·발번은 여기서 보지 못합니다 — 0건이 아니라 관측 불가입니다.
           </p>
         )}
