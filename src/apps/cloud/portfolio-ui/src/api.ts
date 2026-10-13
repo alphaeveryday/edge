@@ -6,7 +6,7 @@ export type Instrument = { id: string; market: string; ticker: string; code: str
 export type Catalog = { fetched_at: string; counts: { KR: number; US: number }; instruments: Instrument[] };
 export type Input = { draft_id?: string; holdings: Holding[]; question: string; horizon: string; input_mode?: string; planning?: boolean; preferences?: { accounts: string[]; contribution: string; interests: string[]; note: string; tax_profile: import('./TaxAccounts').TaxProfile | null } };
 export type Section = { paragraphs: string[]; evidence: { source_id: string; quote: string }[]; limitations: string[] };
-export type Evaluation = { scores: { leadership: number; profitability: number; stability: number } | null; overall: number | null; reason: Section; method: string };
+export type Evaluation = { scores: { leadership: number; profitability: number; stability: number } | null; overall: number | null; reason: Section; method: string; rubric_version?: number };
 export type Allocation = { instrument_id: string; name: string; ticker: string; kind: 'cash' | 'etf'; account: string; weight_pct: number; amount_krw: string | null };
 export type History = { points: { date: string; recommended: number; current: number | null }[]; basis: string; source_url: string; current_unavailable_reason?: string; interval?: '1d'; currency?: 'KRW'; initial_krw?: number; method?: string; sources?: { instrument_id: string; url: string }[] };
 export type Recommendation = { title: string; allocations: Allocation[]; evaluation: Evaluation; total_krw: string | null; actions: { instrument_id: string; name: string; ticker: string; account: string; before_pct: number | null; after_pct: number; action: string }[]; expected_return_1y: number | null; dividend_yield_1y: number | null; historical_performance: History | null; unavailable_reason: string; target_return_1y?: number; dividend_basis?: string; return_forecast?: { reason: string; method: string }; dividend_observations?: { instrument_id: string; as_of: string; trailing_yield_pct: number; source_url?: string; method?: string; evidence: { url: string; quote: string }[] }[] };
@@ -14,7 +14,7 @@ export type Report = {
   schema_version?: number;
   current_evaluation?: Evaluation;
   recommendation?: Recommendation | null;
-  optimization?: { status: 'available' | 'no_match' | 'unavailable'; selected_candidate_id: string | null };
+  optimization?: { status: 'available' | 'no_match' | 'unavailable'; selected_candidate_id: string | null; reason?: string };
   insights?: { title: string; content: Section }[];
   sections: Record<Role, Section>;
   metrics: { holdings: { name: string; account: string; weight_pct: number | null }[]; total_krw: string | null; unavailable_reason: string };

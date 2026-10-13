@@ -22,10 +22,37 @@ def test_amounts_and_score_are_computed_and_current_input_is_not_the_recommendat
     plan = result['recommendation']
     assert sum(int(h['amount_krw']) for h in plan['allocations']) == 1000001
     assert plan['allocations'][0]['amount_krw'] == '500001'
-    assert plan['evaluation']['overall'] == 3.5
+    assert plan['evaluation']['overall'] == 4
+    assert result['current_evaluation']['overall'] == 3.5
     assert [a['action'] for a in plan['actions']] == ['줄이기', '새로 담기', '새로 담기', '새로 담기']
     assert result['insights'][0]['title'] == '지금 가장 먼저 판단할 것'
     assert plan['expected_return_1y'] is None and plan['historical_performance'] is None
+
+
+@pytest.mark.parametrize('scores', [None, {'leadership': 4, 'profitability': 4, 'stability': 3.5}])
+def test_recommended_rating_is_required_and_low_scores_are_rejected_not_inflated(scores):
+    raw = final_payload()
+    raw['recommendation']['evaluation']['scores'] = scores
+    with pytest.raises(ValueError):
+        FinalReport.model_validate(raw)
+
+
+def test_cash_current_rating_can_be_absent_without_hiding_recommended_stars():
+    raw = final_payload()
+    raw['current_evaluation']['scores'] = None
+    raw['current_evaluation']['reason']['evidence'] = []
+    result = publish(raw)
+    assert result['current_evaluation']['overall'] is None
+    assert result['recommendation']['evaluation']['overall'] == 4
+
+
+def test_unrated_etf_current_evaluation_still_requires_external_evidence():
+    raw = final_payload()
+    raw['current_evaluation']['scores'] = None
+    raw['current_evaluation']['reason']['evidence'] = []
+    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}], horizon='10년 이상')
+    with pytest.raises(ValueError, match='require source evidence'):
+        publish(raw, request)
 
 
 @pytest.mark.parametrize('change,match', [
@@ -36,9 +63,10 @@ def test_invalid_model_recommendations_are_not_published(change, match):
     with pytest.raises(ValueError, match=match): publish(raw)
 
 
-def test_account_restriction_and_unknown_budget_are_preserved():
-    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO'}], horizon='10년 이상', input_mode='names', preferences={'accounts': ['일반 계좌', 'ISA']})
-    raw = final_payload(); raw['recommendation']['allocations'][0]['account'] = 'ISA'
+@pytest.mark.parametrize('account', ['ISA', 'IRP', '연금저축'])
+def test_account_restriction_and_unknown_budget_are_preserved(account):
+    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO'}], horizon='10년 이상', input_mode='names', preferences={'accounts': ['일반 계좌', account]})
+    raw = final_payload(); raw['recommendation']['allocations'][0]['account'] = account
     with pytest.raises(ValueError, match='US-listed'): publish(raw, request)
     raw['recommendation']['allocations'][0]['account'] = '일반 계좌'
     result = publish(raw, request)['recommendation']

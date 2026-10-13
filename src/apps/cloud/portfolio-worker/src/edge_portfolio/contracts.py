@@ -134,6 +134,16 @@ class Evaluation(StrictModel):
     reason: Section
 
 
+class RecommendationEvaluation(Evaluation):
+    scores: Scores
+
+    @model_validator(mode='after')
+    def recommendation_quality(self):
+        if sum(self.scores.model_dump().values()) < 12:
+            raise ValueError('Recommended rating must average at least 4; select a better-supported candidate or return recommendation=null, never inflate scores')
+        return self
+
+
 class Allocation(StrictModel):
     instrument_id: str = Field(min_length=1, max_length=32)
     account: Literal['일반 계좌', 'ISA', '연금저축', 'IRP']
@@ -143,7 +153,7 @@ class Allocation(StrictModel):
 class Recommendation(StrictModel):
     title: str = Field(min_length=1, max_length=40)
     allocations: list[Allocation] = Field(min_length=1, max_length=10)
-    evaluation: Evaluation
+    evaluation: RecommendationEvaluation
 
     @model_validator(mode='after')
     def full_allocation(self):

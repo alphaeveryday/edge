@@ -25,13 +25,15 @@ try {
   if (plan) {
   const selected = optimization.candidates.find(c => c.candidate_id === optimization.selected_candidate_id);
   expect(selected).toBeTruthy();
+  expect(plan.evaluation.overall).toBeGreaterThanOrEqual(4);
+  expect(plan.evaluation.scores).not.toBeNull();
   const actual = {};
   for (const row of plan.allocations) {
     expect(row.kind).toBe('etf');
     actual[row.instrument_id] = (actual[row.instrument_id] || 0) + row.weight_pct;
   }
   expect(actual).toEqual(Object.fromEntries(selected.allocations.map(row => [row.instrument_id, row.weight_pct])));
-  expect(Object.values(actual).every(value => value % 5 === 0)).toBe(true);
+  expect(Object.values(actual).every(value => value % 10 === 0)).toBe(true);
   expect(plan.historical_performance?.interval).toBe('1d');
   expect(plan.historical_performance?.currency).toBe('KRW');
   expect(plan.historical_performance.points.length).toBeGreaterThanOrEqual(200);
@@ -49,7 +51,7 @@ try {
   await expect(page.locator('.evaluation__part h4').nth(1)).toHaveText('앞으로의 전망');
   await expect(page.getByRole('heading', { name: '계좌별 최종 투자 제안' })).toBeVisible();
   } else {
-    expect(optimization.candidates).toEqual([]);
+    if (optimization.reason !== 'RATING_BELOW_MINIMUM') expect(optimization.candidates).toEqual([]);
     expect(optimization.selected_candidate_id).toBeNull();
     await expect(page.locator('.portfolio-hero')).toHaveCount(0);
   }

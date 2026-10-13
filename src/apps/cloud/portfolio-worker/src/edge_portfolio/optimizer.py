@@ -1,4 +1,4 @@
-"""One batch of ten independent, deterministic 5%-grid searches."""
+"""One batch of ten independent, deterministic 10%-grid searches."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
@@ -13,9 +13,9 @@ PRICE_TIMEOUT_SECONDS = 65
 
 
 def grid(size):
-    # Every supplied ETF is held: twenty 5% units, at least one unit per ETF.
-    return np.array([np.diff((0, *cuts, 20)) / 20
-                     for cuts in combinations(range(1, 20), size - 1)])
+    # Every supplied ETF is held: ten 10% units, at least one unit per ETF.
+    return np.array([np.diff((0, *cuts, 10)) / 10
+                     for cuts in combinations(range(1, 10), size - 1)])
 
 
 def search(ids, frame, current):
@@ -76,6 +76,8 @@ class Optimizer:
                len(set(group)) != len(group) for group in groups):
             raise ValueError('Each combination needs 1..5 distinct registered ETF IDs, without cash')
         groups = [sorted(group) for group in groups]
+        if self.request and self.request.planning and any(len(group) < 2 for group in groups):
+            raise ValueError('Planning requires at least two distinct ETFs in every combination; pair a representative ETF with a researched alternative')
         if len({tuple(group) for group in groups}) != 10:
             raise ValueError('The ten ETF combinations must be distinct')
         ids = set().union(*map(set, groups))
@@ -181,6 +183,8 @@ class Optimizer:
             if final.recommendation is not None or final.selected_candidate_id is not None or final.return_forecast is not None:
                 raise ValueError('No eligible candidate: recommendation, selected_candidate_id and return_forecast must be null')
             return None
+        if final.recommendation is None and final.selected_candidate_id is None and final.return_forecast is None:
+            return None  # Backtest eligibility alone does not establish a four-star recommendation.
         candidate = next((row for row in candidates if row['candidate_id'] == final.selected_candidate_id), None)
         if candidate is None or final.recommendation is None:
             raise ValueError('Select an eligible candidate ID and its exact allocation')
@@ -188,13 +192,15 @@ class Optimizer:
         for row in final.recommendation.allocations:
             actual[row.instrument_id] = actual.get(row.instrument_id, Decimal(0)) + Decimal(str(row.weight_pct))
         expected = {row['instrument_id']: row['weight_pct'] for row in candidate['allocations']}
+        if self.request and self.request.planning and len(actual) < 2:
+            raise ValueError('Planning requires at least two distinct ETFs')
         if actual != expected:
             raise ValueError(f'Final allocation must exactly match {candidate["candidate_id"]}: {expected}; use candidate_id, not rank, to identify the candidate')
         return candidate
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': 'ETF 조합 10개를 한 번에 병렬 최적화한다; 현금 0%, 5% 단위, 우세 거래일 50% 이상 및 최근 10거래일 모두 우세한 후보만 40/40/20 점수순으로 반환한다; 분석당 한 배치, 조합당 최대 5종, 전체 후보 ETF 최대 20종.',
+    'description': 'ETF 조합 10개를 한 번에 병렬 최적화한다; 현금 0%, 10% 단위, 우세 거래일 50% 이상 및 최근 10거래일 모두 우세한 후보만 40/40/20 점수순으로 반환한다; 분석당 한 배치, 조합당 최대 5종, 전체 후보 ETF 최대 20종.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 10, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}}},
         'required': ['combinations'], 'additionalProperties': False}}}

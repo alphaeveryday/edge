@@ -10,6 +10,7 @@ export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: numbe
   return <article className="step progress in">
     <span className="eyebrow">준비 끝</span><h2>전문가 AI가<br /><em>내 구성</em>을 봐요</h2>
     <div className="stage"><canvas ref={canvas} aria-hidden="true" /><p className="stage__t" role="status">{job?.state === 'running' && job.stage ? titles[job.stage] : '분석 준비 중'}</p></div>
+    <p className="notice">약 5분 정도 걸려요.<br />나갔다 들어와도 분석이 계속돼요.</p>
     <ul className="vals agents tree">
       {card('개별 종목 분석 AI', 'ETF 안의 회사', 1, 'M16.5 10.5a6 6 0 1 1-12 0a6 6 0 1 1 12 0M15 15l5 5M8 12v-2M10.5 12V8M13 12v-3', true)}
       {card('산업 분석 AI', '실려 있는 산업', 1, 'M3 20V10l6 3.5V10l6 3.5V5h4v15zM3 20h18', true)}
@@ -19,8 +20,7 @@ export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: numbe
       <li className="hand"><svg viewBox="0 0 300 40" preserveAspectRatio="none" aria-hidden="true"><path d="M150 0V40" /></svg><span>결론 전달</span></li>
       {card('리스크 매니저', '결론에 반대 의견을 내고 흠을 찾아요', 3, 'M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5-4.5-1.5-7.5-4.9-7.5-9.5V6zM8.8 12l2.3 2.3 4.2-4.4')}
     </ul>
-    <p className="notice">한 AI가 위 관점들을 순서대로 검토해요. 분석에 약 5분이 걸려요. 대기 요청이 있으면 조금 더 걸릴 수 있어요.</p>
+    <p className="notice">한 AI가 위 관점들을 순서대로 검토해요. 대기 요청이 있으면 조금 더 걸릴 수 있어요.</p>
     {job?.state === 'running' && <p className="notice">{Math.floor(elapsed / 60)}분 {elapsed % 60}초 경과</p>}
-    <p className="notice">화면을 새로고침해도 같은 분석을 이어서 확인해요.</p>
   </article>;
 }
