@@ -147,6 +147,33 @@ def test_email_is_bound_to_owned_completed_analysis(isolated_db):
     assert store.request_report(parent['id'], 'owner', 'reader@example.com') is True
 
 
+def test_service_recovery_does_not_consume_the_commercial_question_and_is_bounded(isolated_db):
+    parent = store.submit('owner', 'parent', {})
+    store.claim(); store.finish(parent['id'], result={})
+    for number in range(2):
+        recovery = store.submit('owner', f'recovery-{number}', {'question': 'finish the missing answer', 'mode': 'recovery'}, parent_id=parent['id'])
+        assert store.submit('owner', f'recovery-{number}', recovery['input'], parent_id=parent['id'])['id'] == recovery['id']
+        store.claim(); store.finish(recovery['id'], result={})
+    with pytest.raises(ValueError, match='RECOVERY_LIMIT'):
+        store.submit('owner', 'third-recovery', {'question': 'again', 'mode': 'recovery'}, parent_id=parent['id'])
+    normal = store.submit('owner', 'normal', {'question': 'new question'}, parent_id=parent['id'])
+    store.claim(); store.finish(normal['id'], result={})
+    with pytest.raises(ValueError, match='CHAT_LIMIT'):
+        store.submit('owner', 'second-normal', {'question': 'again'}, parent_id=parent['id'])
+
+
+def test_failed_parent_can_be_recovered_only_by_its_owner_and_failed_attempts_are_refunded(isolated_db):
+    parent = store.submit('owner', 'parent', {})
+    store.claim(); store.finish(parent['id'], failure='WORKER_INTERRUPTED')
+    with pytest.raises(ValueError, match='PARENT_NOT_FOUND'):
+        store.submit('other', 'wrong-owner', {'question': 'retry', 'mode': 'recovery'}, parent_id=parent['id'])
+    with pytest.raises(ValueError, match='PARENT_NOT_FOUND'):
+        store.submit('owner', 'normal', {'question': 'question'}, parent_id=parent['id'])
+    for number in range(3):
+        recovery = store.submit('owner', f'recovery-{number}', {'question': 'retry', 'mode': 'recovery'}, parent_id=parent['id'])
+        store.claim(); store.finish(recovery['id'], failure='MODEL_TIMEOUT')
+
+
 def test_draft_sections_are_saved_atomically_and_private(isolated_db):
     from edge_portfolio.contracts import DraftInput
     draft_id = str(uuid4())

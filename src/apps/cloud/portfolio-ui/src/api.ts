@@ -14,10 +14,12 @@ export type Recommendation = { title: string; execution?: Execution; allocations
 export type Report = {
   partial_report?: Report;
   completion?: { status: 'complete' | 'partial' | 'needs_input' | 'no_match'; tasks: { question: string; status: string; answer: string; missing: string[] }[]; missing_inputs: string[]; missing_research: { instrument_id: string; field: string; status: string }[] };
+  scenarios?: import('./ScenarioTable').Scenarios;
+  execution?: Execution;
   schema_version?: number;
   current_evaluation?: Evaluation;
   recommendation?: Recommendation | null;
-  optimization?: { status: 'available' | 'no_match' | 'unavailable'; selected_candidate_id: string | null; reason?: string };
+  optimization?: { status: 'available' | 'no_match' | 'unavailable' | 'not_requested'; selected_candidate_id: string | null; reason?: string };
   insights?: { title: string; content: Section }[];
   sections: Record<Role, Section>;
   metrics: { holdings: { name: string; account: string; weight_pct: number | null }[]; total_krw: string | null; unavailable_reason: string };
@@ -39,6 +41,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
+    if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
     if (response.status === 422) throw new Error('목록에서 ETF 또는 현금을 선택하고 금액을 확인해 주세요.');
     if (response.status === 429) throw new Error('현재 요청이 많거나 오늘 체험 횟수를 모두 사용했어요. 잠시 후 다시 시도해 주세요.');
     if (response.status === 401) throw new Error('분석을 시작한 브라우저에서 다시 열어 주세요.');

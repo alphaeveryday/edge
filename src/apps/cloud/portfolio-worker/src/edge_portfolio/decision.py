@@ -35,6 +35,8 @@ class Constraint(StrictModel):
 class Decision(StrictModel):
     questions: list[str] = Field(default_factory=list, max_length=5)
     kind: Literal['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'] = 'review'
+    execute_saved_target: bool = False
+    scenario_requested: bool = False
     objectives: list[Literal['growth', 'stability', 'income', 'preserve', 'simplicity']] = Field(default_factory=list, max_length=5)
     constraints: list[Constraint] = Field(default_factory=list, max_length=20)
     missing_inputs: list[str] = Field(default_factory=list, max_length=10)

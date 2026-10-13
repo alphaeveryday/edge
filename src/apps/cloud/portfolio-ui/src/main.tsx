@@ -59,6 +59,7 @@ function App() {
       {job.result?.partial_report && Object.keys(job.result.partial_report.sections || {}).length > 0 && <details><summary>중단 전 작성된 분석 보기</summary><ReportView report={{ ...job.result.partial_report, recommendation: null,
         completion: { tasks: [], missing_research: [], ...job.result.partial_report.completion, status: 'partial',
           missing_inputs: [...(job.result.partial_report.completion?.missing_inputs || []), '분석이 중단되어 최종 검토가 끝나지 않았어요.'] } }} /></details>}
+      <Followup jobId={jobId} recoveryOnly />
     </> : <><ProgressView job={job} elapsed={elapsed} />{error && <button className="secondary" onClick={reset}>입력 화면으로</button>}</>}
   </main>;
 }

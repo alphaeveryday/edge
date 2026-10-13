@@ -145,6 +145,10 @@ class Optimizer:
         if not self.market.current:
             return self.result
         ids |= set(self.market.current)
+        missing = sorted(ids - {'CASH:KRW'} - self.market.catalog.keys())
+        if missing:
+            self.result.update(reason='CURRENT_INSTRUMENT_UNAVAILABLE', missing_instrument_ids=missing)
+            return self.result
         needed = {key: self.market.catalog[key]['ticker'] + ('.KS' if self.market.catalog[key]['market'] == 'KR' else '')
                   for key in ids - {'CASH:KRW'}}
         if any(self.market.catalog[key]['market'] == 'US' for key in ids - {'CASH:KRW'}):

@@ -2,6 +2,8 @@ import type { Execution } from './api';
 
 const money = (value: string) => `${Number(value).toLocaleString('ko-KR')}원`;
 const reasons: Record<string, string> = {
+  SAVED_TARGET_UNAVAILABLE: '기존 목표의 종목이나 계좌를 현재 조건으로 사용할 수 없어 대안을 다시 확인해야 해요.',
+  CUSTOMER_CONSTRAINT_NOT_SATISFIED: '기존 목표가 현재 고객 필수 조건을 만족하는지 확인해야 해요.',
   CURRENT_AMOUNTS_REQUIRED: '보유 종목별 현재 평가금액이 필요해요.',
   INVESTMENT_AMOUNT_REQUIRED: '처음 투자할 금액이 필요해요.',
   ADDITIONAL_FUNDING_REQUIRED: '추가로 넣을 금액과 납입 주기를 확인해야 해요.',

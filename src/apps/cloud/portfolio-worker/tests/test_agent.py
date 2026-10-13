@@ -53,6 +53,24 @@ class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
+async def test_evidence_connection_is_lazy_and_reused_after_the_first_remote_lookup():
+    from edge_portfolio.agent import ExaEvidence
+    connected = []
+    class Session:
+        async def call_tool(self, *args):
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text='URL: https://issuer.example/fund')])
+    async def connect():
+        connected.append(1)
+        return Session()
+    evidence = ExaEvidence(None, connect)
+    evidence.sources = [{'id': 'saved', 'url': 'https://issuer.example/fund', 'passages': [{'id': 'p1', 'text': 'Saved evidence'}]}]
+    await evidence.call('fetch_source', {'url': 'https://issuer.example/fund'})
+    assert connected == []
+    for _ in range(2):
+        await evidence.call('search_sources', {'query': 'ETF factsheet', 'objective': 'verify holdings'})
+    assert connected == [1]
+
+
 async def test_short_readable_table_has_citable_passages():
     from edge_portfolio.agent import ExaEvidence
     class Session:
