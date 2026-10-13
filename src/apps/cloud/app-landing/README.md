@@ -40,12 +40,17 @@
 
 ## 검색과 공유 미리보기
 
-`landing.html` 머리에 설명(`description`), 대표 주소(`canonical`), 공유 미리보기(Open Graph), 아이콘, 사이트 이름 구조화 데이터가 있다.
+`landing.html` 머리에 설명(`description`), 대표 주소(`canonical`), 공유 미리보기(Open Graph), 아이콘, 구조화 데이터(JSON-LD)가 있다.
 
+- 구조화 데이터는 사이트(`WebSite`), 운영 주체(`Organization`), 앱(`MobileApplication`) 세 개체다. 페이지와 App Store 목록에 실제로 있는 값만 넣는다. 평점은 넣지 않았다(HTML 에 고정하면 낡는다). App Store 주소나 인스타그램 계정이 바뀌면 함께 고친다.
 - 주소는 `https://etforca.com` 을 그대로 적었다. 도메인을 바꾸면 `landing.html` 머리와 `robots.txt`, `sitemap.xml` 을 함께 고친다.
 - `assets/og.png`(1200x630)에는 페이지 제목 문구가 그림으로 들어 있다. 제목을 바꾸면 그림도 다시 만든다.
 - 구글 서치 콘솔에는 URL 접두어 속성 `https://etforca.com` 으로 등록했다(팀 구글 계정). 소유 확인은 머리의 `google-site-verification` 메타 태그로 한다. 이 태그를 지우면 소유 확인이 풀린다.
 - 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
+
+## 푸터 링크
+
+푸터의 이용약관·개인정보 처리방침·고객 지원은 앱이 App Store 에 등록한 페이지(`https://etforca.edgesignal.dev/` 의 `terms.html`·`privacy.html`·`support.html`)를 가리킨다. 이 페이지들은 랜딩 배포 대상이 아니다. 주소가 바뀌면 `landing.html` 푸터를 함께 고친다.
 
 ## 방문 분석 (PostHog)
 
@@ -62,7 +67,7 @@
 
 ## 알려진 한계
 
-- `www.etforca.com` 은 서빙하지 않는다.
+- `www.etforca.com` 은 같은 경로의 `etforca.com` 으로 영구 이동한다(GET·HEAD 301, 그 밖 308). 내용을 따로 서빙하지 않는다.
 - 종목 전망은 하루 한 번(08:00 KST) 갱신된다. 그 뒤에 새로 발행된 전망은 다음 날 반영된다.
 - 로컬 미리보기에는 `outlook/` 파일이 없어 종목을 눌러도 "준비 중" 안내가 뜬다. 실제 리포트를 보려면 `dist/outlook/` 에 파일을 받아 둔다(예: `curl --create-dirs -o dist/outlook/091160.json https://etforca.com/outlook/091160.json`).
-- 없는 경로는 403 을 돌려준다.
+- 없는 경로는 404 를 돌려준다. 안내 페이지는 없고 본문은 S3 의 XML 이다.

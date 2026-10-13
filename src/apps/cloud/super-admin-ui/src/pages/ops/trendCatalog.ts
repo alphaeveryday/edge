@@ -1,7 +1,8 @@
 /* 추이 지표 카탈로그 — facts 를 지표로 옮긴다 (ALPHA-738).
  *
- * 여기서만 사실을 읽는다(trendMetrics 는 순수 계산). 일별 API가 없는 지표의 과거 점은
- * 구조화된 목이고, 엔티티 해소율은 별도 API의 실측만 쓴다 — 점마다 isMock 을 들고 다닌다.
+ * 여기서만 사실을 읽는다(trendMetrics 는 순수 계산). 일별 API가 없는 지표는 조회일 값 한 점만
+ * 내고 과거를 만들지 않는다. 엔티티 해소율은 별도 API의 실측 계열을 쓴다. 값을 응답에서 읽지
+ * 못하는 지표는 목록에 두지 않는다.
  *
  * 지표를 고른 기준(요구 §3):
  *   · 일배치는 데이터셋마다 하나씩 식별되게 — 트리거 하나가 일배치 전체를 대표하지 않는다.
@@ -12,11 +13,14 @@
  *     중복 제거된 분석 대상 계측이 없어 계산하지 않고 `계측 없음` 으로 둔다.
  *   · Cloud 게시·테넌트 발번·소비자 전달은 전달 화면 소관이라 지표로 두지 않는다.
  */
-import type { Facts, OutputFact } from '../../rules/types.ts';
-import type { EntityResolutionTrendDto } from '../../domains/console/types.ts';
+import type { Facts } from '../../rules/types.ts';
+import type {
+  AnalysisTrendDto,
+  AnalysisTrendKind,
+  AnalysisTrendPointDto,
+  EntityResolutionTrendDto,
+} from '../../domains/console/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
-import { FUNNEL_DATE, FUNNEL_ORIGIN, funnelValue } from './newsFunnelSnapshot.ts';
-import { buildSeries } from './trendMetrics.ts';
 import type { Metric, SeriesPoint } from './trendMetrics.ts';
 
 /** 기준일 지연 — 거래소 휴장 캘린더 축이 없어 (actual, expected] 사이의 평일 수만 센다. */
@@ -40,9 +44,6 @@ export const latestTask = (f: Facts, key: string) =>
     .filter((t) => t.task_key === key)
     .sort((a, b) => b.run_id.localeCompare(a.run_id))[0];
 const dataset = (f: Facts, id: string) => f.datasets.find((d) => d.id === id);
-/* 축이 통째로 없으면 `null` — 부재를 0 으로 그리면 "결과 생성률 0%" 라는 거짓 경보가 된다
- * (`coverageMetric`·`lagMetric` 의 `comparisonType: 'uninstrumented'` 규약과 같은 방향). */
-const chain = (f: Facts, id: string) => f.chain?.stages.find((s) => s.id === id)?.batch ?? null;
 const output = (f: Facts, id: string) => f.outputs.find((o) => o.id === id);
 
 /**
@@ -81,73 +82,15 @@ const OUTPUT_ABSENT = (id: string) =>
     '0 으로 그리면 "오늘 하나도 안 나왔다"가 되는데, 그건 이 응답이 답하지 못하는 말이다.',
   ].join('\n');
 
-const CHAIN_ABSENT = [
-  '체인 단계 집계(`chain`)가 이번 응답에 없다 — 그 축을 안 싣는 배포본을 보고 있다(계약 §체인 축).',
-  '',
-  '부재를 0 으로 접으면 "결과 생성률 0%" 라는 거짓 경보가 뜬다.',
-].join('\n');
-
 /**
- * 산출량 계열 — **기준이 없으면 과거를 지어내지 않는다.**
+ * 조회일 값 한 점 — **실측 과거가 없으면 과거를 만들지 않는다.**
  *
- * 🔴 `buildSeries` 는 `pin` 이 없으면 오늘 값 둘레로 과거를 만든다. 그러면 중앙값이 오늘 값과
- * 같아져 편차 0% → **`정상 범위`** 가 선다: 서버가 "평소를 모른다"(`base: null`)고 말한 날에
- * 화면이 "평소와 같다"고 답하는 것이다. 그날이 정확히 **휴장일**이다 — 서버가 장에 매인 산출의
- * 기준을 일부러 비운다(계약 §무엇이 실제로 나가는가). 오늘 점 하나만 두면 `evaluateMetric` 의
- * 기존 `기준 없음` 갈래가 그대로 답한다: 오늘 값은 실측으로 그리고 판정만 하지 않는다.
+ * 🔴 오늘 값 둘레로 과거를 만들면 중앙값이 오늘 값과 같아져 편차 0% → **`정상 범위`** 가 선다:
+ * 서버가 "평소를 모른다"(`base: null`)고 말한 날에 화면이 "평소와 같다"고 답하는 것이다.
+ * 한 점만 두면 기준은 응답이 준 값(`Metric.baseline`)뿐이고, 그것도 없으면 `evaluateMetric` 의
+ * `기준 없음` 갈래가 답한다: 오늘 값은 그리고 판정만 하지 않는다.
  */
-function volumeSeries(o: OutputFact, endDate: string, integer: boolean): SeriesPoint[] {
-  if (o.base == null) return [{ date: endDate, value: o.today, isMock: false }];
-  return buildSeries({ today: o.today, pin: o.base, integer, min: 0, todayIsMock: false, endDate });
-}
-
-/**
- * 퍼널 비율 지표 — **분자·분모 둘 다 있어야** 판정한다.
- *
- * `(a ?? 0) / (b ?? 1)` 이던 자리다: 분자가 없으면 0%, 분모가 없으면 분자를 그대로 비율로
- * 그려 둘 다 거짓 판정이 된다. 그리고 값이 있어도 출처가 응답이 아니라 스냅샷이라
- * (`news_funnel` 은 이 응답 밖) **오늘 점도 목이다**.
- */
-function funnelRate(spec: {
-  id: string;
-  label: string;
-  numerator: number | null;
-  denominator: number | null;
-  pin: number;
-  endDate: string;
-  help: string[];
-}): Metric {
-  const base = {
-    id: spec.id,
-    label: spec.label,
-    group: 'news' as const,
-    unit: '비율',
-    metricType: 'rate' as const,
-    direction: 'stable' as const,
-    /* `MOCK` 이 아니다 — 이 값은 **한때 실제로 관측한** 스냅샷이다(계측이 없어 지어낸 값과
-     * 다르다). 다만 이번 응답의 값도 아니라, 계열 점은 여전히 `isMock` 으로 실측과 가른다. */
-    source: 'SNAPSHOT' as const,
-    help: spec.help.join('\n'),
-    drill: { href: '/ops/datasets?focus=news-funnel', label: '뉴스 처리 퍼널' },
-  };
-  if (spec.numerator === null || spec.denominator === null || spec.denominator === 0) {
-    return uninstrumented(base);
-  }
-  return {
-    ...base,
-    comparisonType: 'medianDelta',
-    threshold: 0.25,
-    series: buildSeries({
-      today: spec.numerator / spec.denominator,
-      pin: spec.pin,
-      amplitude: 0.3,
-      min: 0,
-      /* 오늘 점도 스냅샷이다 — `false` 로 두면 카드가 "오늘 실측 · 과거 MOCK" 이라고 말한다 */
-      todayIsMock: true,
-      endDate: spec.endDate,
-    }),
-  };
-}
+const onePoint = (date: string, value: number, isMock = false): SeriesPoint[] => [{ date, value, isMock }];
 
 function nextDay(date: string): string {
   const value = new Date(`${date}T00:00:00Z`);
@@ -230,17 +173,7 @@ function coverageMetric(
     threshold: c.value === null ? null : 0.95,
     direction: 'higherIsBetter',
     source: c.mock ? 'MOCK' : 'DB_LEDGER',
-    series:
-      c.value === null
-        ? []
-        : buildSeries({
-            today: c.value,
-            pin: Math.min(1, c.value * 1.001),
-            amplitude: 0.05,
-            todayIsMock: c.mock,
-            endDate: TODAY,
-            min: 0,
-          }),
+    series: c.value === null ? [] : onePoint(TODAY, c.value, c.mock),
     help: [
       `완전성 = 적재 ${denomLabel} / 기대 ${denomLabel} (원장 completeness 축).`,
       t?.completeness_expected == null
@@ -252,7 +185,7 @@ function coverageMetric(
       '판정: 계약 최소 95% 미만이면 기준 미달이다 — 산출량 지표의 ±25% 자를 쓰지 않는다.',
       '레코드 수가 아니라 엔티티 커버리지다(행 수는 하루 거래량에 따라 흔들린다).',
       '',
-      '과거 계열은 응답에 없어 검수용 목이다 — 오늘 값만 원장에서 온다.',
+      '일별 계열을 주는 응답이 없어 오늘 값 한 점만 그린다.',
     ].join('\n'),
     drill: dsDrill(datasetId),
   };
@@ -272,10 +205,7 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
     threshold: lag === null ? null : 0,
     direction: 'lowerIsBetter',
     source: d?.mock ? 'MOCK' : 'DB_LEDGER',
-    series:
-      lag === null
-        ? []
-        : buildSeries({ today: lag, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: false, endDate: TODAY }),
+    series: lag === null ? [] : onePoint(TODAY, lag, d?.mock === true),
     help: [
       '기준일 지연 = 기대 기준일과 실제 기준일 사이의 주말 제외 평일 수.',
       '거래소 휴장 캘린더 축은 이 응답에 없어 공휴일·임시 휴장일은 제외하지 못한다.',
@@ -284,12 +214,88 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
       '판정: 허용 지연 0거래일 — 하루라도 밀리면 분석이 오래된 스냅샷 위에서 돈다.',
       '수집 시각(collected_at)과는 다른 축이다 — 오늘 수집해도 담긴 기준일은 어제일 수 있다.',
       '',
-      '과거 계열은 응답에 없어 검수용 목이다.',
+      '일별 계열을 주는 응답이 없어 오늘 값 한 점만 그린다.',
     ]
       .filter(Boolean)
       .join('\n'),
     drill: dsDrill(datasetId),
   };
+}
+
+/* ── 분석 결과 ── v2 분석 표의 조회일 값 */
+
+const ANALYSIS_LABEL: Record<AnalysisTrendKind, string> = { outlook: '전망', movement: '가격변동 분석' };
+
+/**
+ * 조회일의 v2 분석 건수. 세 갈래다:
+ *   · `undefined` — 분석 추이 응답이 없다(조회 전·실패, 또는 그 엔드포인트가 없는 API).
+ *   · `null` — 응답은 왔는데 **조회일에 그 종류의 분석 행이 없다**. 0 이 아니다: 가격변동 분석은
+ *     장이 열린 날에만 생긴다.
+ *   · 값 — 그날 행이 있었다. 이때의 0 은 0 이다.
+ */
+function analysisDay(
+  trend: AnalysisTrendDto | undefined,
+  kind: AnalysisTrendKind,
+  today: string,
+): AnalysisTrendPointDto | null | undefined {
+  if (!trend) return undefined;
+  return trend.kinds.find((k) => k.kind === kind)?.points.find((p) => p.date === today) ?? null;
+}
+
+function analysisCards(
+  kind: AnalysisTrendKind,
+  day: AnalysisTrendPointDto | null | undefined,
+  today: string,
+): Metric[] {
+  const name = ANALYSIS_LABEL[kind];
+  const absent =
+    day === undefined
+      ? '분석 추이 응답을 받지 못해 값을 그리지 않는다.'
+      : `조회일에 ${name} 행이 없다 — 0건이 아니라 기록이 없는 날이다.`;
+  const drill = { href: '/ops/trend', label: '분석 일별 추이' };
+  const completed = {
+    id: `a.${kind}_completed`,
+    label: `${name} 완료 건수`,
+    group: 'analysis' as const,
+    unit: '건',
+    metricType: 'volume' as const,
+    direction: 'stable' as const,
+    source: 'DB_LEDGER' as const,
+    help: [
+      `조회일(분석 시각의 KST 날짜)에 완료된 ${name} 건수. 같은 ETF 를 여러 번 분석하면 각각 센다.`,
+      '완료는 분석이 끝까지 돌았다는 뜻이고, 게시 여부와는 다르다.',
+      '',
+      day ? `조회일 완료 ${day.completed}건 · ${day.completedEtfs}종.` : absent,
+      '',
+      '판정: 중앙값 대비 ±25%로 보는 지표지만, 기준값을 주는 응답이 없어 지금은 판정하지 않는다.',
+      '날짜별 값은 아래 분석 일별 추이에 있다.',
+    ].join('\n'),
+    drill,
+  };
+  const failed = {
+    id: `a.${kind}_failed_etfs`,
+    label: `${name} 실패 ETF`,
+    group: 'analysis' as const,
+    unit: '종',
+    metricType: 'defect' as const,
+    direction: 'lowerIsBetter' as const,
+    source: 'DB_LEDGER' as const,
+    help: [
+      `조회일에 ${name}이 실패한 뒤 끝내 완료되지 않은 ETF 수 — 그날 실패 행이 있고 완료 행이 하나도 없는 ETF 다.`,
+      '실패했다가 같은 날 다시 돌아 완료된 ETF 는 세지 않는다. 실패 건수(아래)는 그런 실패도 포함한 행 수다.',
+      '끝나지 않은 채 남은 분석(running)만 있는 ETF 도 세지 않는다.',
+      '',
+      day ? `조회일 실패 ${day.failed}건, 끝내 완료하지 못한 ETF ${day.failedEtfs}종, 끝나지 않은 ${day.running}건.` : absent,
+      '',
+      '판정: 1종 이상이면 이상.',
+    ].join('\n'),
+    drill,
+  };
+  if (!day) return [uninstrumented(completed), uninstrumented(failed)];
+  return [
+    { ...completed, comparisonType: 'medianDelta', threshold: 0.25, series: onePoint(today, day.completed) },
+    { ...failed, comparisonType: 'maxCount', threshold: 0, series: onePoint(today, day.failedEtfs) },
+  ];
 }
 
 /* ── 지표 목록 ── */
@@ -302,7 +308,12 @@ function lagMetric(f: Facts, id: string, label: string, datasetId: string): Metr
  * ErrorBoundary 밖이라 **흰 화면**이 된다. 사실을 인자로 받으면 그 `!` 들이 함께 없어진다 —
  * 부재는 죽을 자리가 아니라 `uninstrumented` 로 그릴 자리다.
  */
-export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?: EntityResolutionTrendDto): Metric[] {
+export function buildMetrics(
+  f: Facts,
+  minute?: MinuteStatus,
+  entityResolution?: EntityResolutionTrendDto,
+  analysis?: AnalysisTrendDto,
+): Metric[] {
   const TODAY = f.meta.today;
   const minuteObserved = minute?.date === TODAY;
   const priceSessions = minuteObserved
@@ -316,11 +327,12 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
     : undefined;
   const doc = output(f, 'o.doc');
   const trig = output(f, 'o.trig');
-  const res = chain(f, 'c.res');
-  const run = chain(f, 'c.run');
-  /* 유니버스 매칭률의 분자·분모 — 응답 밖 축(스냅샷)이다 */
-  const universe = funnelValue('유니버스 매칭');
-  const deduped = funnelValue('중복 제거');
+  /* 분봉 응답이 없으면 값이 없다 — 숫자를 대신 넣지 않고 판정 불가로 둔다 */
+  const minuteDefect = (m: Omit<Metric, 'comparisonType' | 'threshold' | 'series'>, today: number | undefined): Metric =>
+    today === undefined
+      ? uninstrumented(m)
+      : { ...m, comparisonType: 'maxCount', threshold: 0, series: onePoint(TODAY, today) };
+  const MINUTE_ABSENT = '조회일의 분봉 상태 응답을 받지 못해 값을 그리지 않는다.';
 
   return [
   /* 일배치 */
@@ -328,121 +340,56 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
   coverageMetric(f, 'b.etf_holdings', 'ETF 구성종목 완전성', 'ETF_HOLDINGS_COLLECTION_KRX', 'etf_holdings', 'ETF'),
   lagMetric(f, 'b.investor_flow', '수급 기준일 지연', 'investor_flow'),
   lagMetric(f, 'b.etf_nav', 'ETF NAV 기준일 지연', 'etf_nav'),
-  {
-    id: 'i.disclosures',
-    label: '공시 1분 poll 관측량',
-    group: 'intraday',
-    unit: '건',
-    metricType: 'volume',
-    comparisonType: 'medianDelta',
-    threshold: 0.25,
-    direction: 'stable',
-    source: 'MOCK',
-    /* 공시 1분 원장의 일별 관측량을 주는 응답이 없다 — 계열 전체가 목이다 */
-    series: buildSeries({ today: 41, pin: 38, amplitude: 1, integer: true, min: 0, todayIsMock: true, endDate: TODAY }),
-    help: [
-      '공시 1분 poll이 manifest 관측 범위에서 본 접수번호 건수의 일별 합계.',
-      '주기 전량 대사와 증분 관측이 섞이므로 고유 신규 공시 수는 아니다.',
-      '',
-      '판정: 직전 10영업일 중앙값 대비 ±25%(산출량 지표).',
-      '관측량은 제출량과 전량 대사 시점에 따라 흔들려서 완전성이 아니라 분포로 본다.',
-      '',
-      '⚠️ 오늘 값을 포함해 계열 전체가 검수용 목이다 — 일별 poll 관측량을 주는 응답이 없다.',
-    ].join('\n'),
-    drill: { href: `/minute?date=${TODAY}&dataset=disclosure_minute`, label: '세션 상세' },
-  },
 
   /* 장중 — 분 단위 원시 개수가 아니라 비율·지연·결손 수로 */
-  {
-    id: 'i.evidence_ratio',
-    label: '1분 가격 · 증거 창 비율',
-    group: 'intraday',
-    unit: '비율',
-    metricType: 'coverage',
-    comparisonType: 'minRatio',
-    threshold: 0.98,
-    direction: 'higherIsBetter',
-    source: 'MOCK',
-    series: buildSeries({ today: 386 / 390, pin: 0.995, amplitude: 0.01, min: 0, todayIsMock: true, endDate: TODAY }),
-    help: [
-      '증거 창 비율 = 결과가 기록된 창 / 기대 창(390). 오늘은 386/390.',
-      '',
-      '판정: 최소 98% — 하루 8창 이상 비면 분석 입력이 흔들린다.',
-      '빈 데이터(VALID_EMPTY)는 실행 증거가 있으므로 증거 창에 포함된다 — 무증거와 다른 사실이다.',
-      '',
-      '⚠️ 계열 전체가 검수용 목이다 — 최근 일별 상태 API는 이 지표의 비율 계열을 제공하지 않는다.',
-    ].join('\n'),
-    drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
-  },
-  {
-    id: 'i.no_evidence',
-    label: '1분 가격 · 무증거 창',
-    group: 'intraday',
-    unit: '창',
-    metricType: 'defect',
-    comparisonType: 'maxCount',
-    threshold: 0,
-    direction: 'lowerIsBetter',
-    source: noEvidenceToday === undefined ? 'MOCK' : 'DB_LEDGER',
-    series: buildSeries({ today: noEvidenceToday ?? 4, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: noEvidenceToday === undefined, endDate: TODAY }),
-    help: [
-      '무증거 창 = 수집 가능 시각(scheduled_at)이 지났는데 결과 증거가 없는 창(DUE 또는 유효 lease 없는 CLAIMED).',
-      '',
-      '판정: 1개 이상이면 이상 — 결손은 분포로 보지 않는다.',
-      '이 수치만으로 미실행·실행체 사망을 확정하지 않는다.',
-      '',
-      noEvidenceToday === undefined
-        ? '⚠️ 계열 전체가 검수용 목이다 — 최근 일별 상태 API는 이 지표의 과거 수치를 제공하지 않는다.'
-        : '오늘 값은 분봉 원장 실측이고 과거 값만 검수용 목이다.',
-    ].join('\n'),
-    drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
-  },
-  {
-    id: 'i.watermark_delay',
-    label: '1분 가격 · 연속 완결 지연',
-    group: 'intraday',
-    unit: '분',
-    metricType: 'delay',
-    comparisonType: 'maxDelayMinutes',
-    threshold: 5,
-    direction: 'lowerIsBetter',
-    source: 'MOCK',
-    series: buildSeries({ today: 3, pin: 2, amplitude: 1, integer: true, min: 0, todayIsMock: true, endDate: TODAY }),
-    help: [
-      '연속 완결 워터마크가 마지막 기록보다 얼마나 뒤처져 있는가(분).',
-      '',
-      '판정: 허용 지연 5분 초과면 이상.',
-      '워터마크는 빈 창 없이 연속으로 완결된 지점이라, 뒤처짐은 중간에 구멍이 있다는 뜻이다.',
-      '',
-      '⚠️ 계열 전체가 검수용 목이다.',
-    ].join('\n'),
-    drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
-  },
-  {
-    id: 'i.dead_jobs',
-    label: '1분 가격 · DEAD job',
-    group: 'intraday',
-    unit: '건',
-    metricType: 'defect',
-    comparisonType: 'maxCount',
-    threshold: 0,
-    direction: 'lowerIsBetter',
-    source: deadJobsToday === undefined ? 'MOCK' : 'DB_LEDGER',
-    series: buildSeries({ today: deadJobsToday ?? 2, pin: 0, amplitude: 1, integer: true, min: 0, todayIsMock: deadJobsToday === undefined, endDate: TODAY }),
-    help: [
-      '재시도가 소진된 처리 job 수(DB job 원장의 status=DEAD). 실제 큐 지표가 아니다.',
-      '',
-      '판정: 1건 이상이면 이상.',
-      '이 응답에는 해소 축이 없어 당일 누적이다 — 이미 복구됐는지는 알 수 없다.',
-      '',
-      deadJobsToday === undefined
-        ? '⚠️ 계열 전체가 검수용 목이다.'
-        : '오늘 값은 분봉 원장 실측이고 과거 값만 검수용 목이다.',
-    ].join('\n'),
-    drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
-  },
+  minuteDefect(
+    {
+      id: 'i.no_evidence',
+      label: '1분 가격 · 무증거 창',
+      group: 'intraday',
+      unit: '창',
+      metricType: 'defect',
+      direction: 'lowerIsBetter',
+      source: 'DB_LEDGER',
+      help: [
+        '무증거 창 = 수집 가능 시각(scheduled_at)이 지났는데 결과 증거가 없는 창(DUE 또는 유효 lease 없는 CLAIMED).',
+        '',
+        '판정: 1개 이상이면 이상 — 결손은 분포로 보지 않는다.',
+        '이 수치만으로 미실행·실행체 사망을 확정하지 않는다.',
+        '',
+        noEvidenceToday === undefined
+          ? MINUTE_ABSENT
+          : '오늘 값은 분봉 원장 실측이다. 일별 계열을 주는 응답이 없어 한 점만 그린다.',
+      ].join('\n'),
+      drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
+    },
+    noEvidenceToday,
+  ),
+  minuteDefect(
+    {
+      id: 'i.dead_jobs',
+      label: '1분 가격 · DEAD job',
+      group: 'intraday',
+      unit: '건',
+      metricType: 'defect',
+      direction: 'lowerIsBetter',
+      source: 'DB_LEDGER',
+      help: [
+        '재시도가 소진된 처리 job 수(DB job 원장의 status=DEAD). 실제 큐 지표가 아니다.',
+        '',
+        '판정: 1건 이상이면 이상.',
+        '이 응답에는 해소 축이 없어 당일 누적이다 — 이미 복구됐는지는 알 수 없다.',
+        '',
+        deadJobsToday === undefined
+          ? MINUTE_ABSENT
+          : '오늘 값은 분봉 원장 실측이다. 일별 계열을 주는 응답이 없어 한 점만 그린다.',
+      ].join('\n'),
+      drill: { href: `/minute?date=${TODAY}&dataset=price_minute`, label: '세션 상세' },
+    },
+    deadJobsToday,
+  ),
 
-  /* 뉴스 — 2~3개로. 단계별 감소는 퍼널이 답한다 */
+  /* 뉴스 — 단계별 감소는 퍼널이 답한다 */
   doc
     ? {
         id: 'n.documents',
@@ -454,17 +401,18 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
         threshold: 0.25,
         direction: 'stable',
         source: 'DB_LEDGER',
-        /* 중앙값을 규칙(R13)이 쓰는 기준선에 고정한다 — 두 화면이 다른 편차를 말하면 안 된다 */
-        series: volumeSeries(doc, TODAY, true),
+        /* 기준은 규칙(R13)이 쓰는 `base` 그대로다 — 두 화면이 다른 편차를 말하면 안 된다 */
+        series: onePoint(TODAY, doc.today),
+        baseline: doc.base,
         help: [
           '수집 시각(available_at) 기준 일별 canonical 뉴스 문서 수.',
           '',
-          '판정: 직전 10영업일 중앙값 대비 ±25%(R13 과 같은 식).',
-          '중앙값은 이 계열에서 계산되며 규칙이 쓰는 기준선과 같은 값이다.',
+          '판정: 응답의 기준값(최근 기준일들의 중앙값) 대비 ±25%(R13 과 같은 식).',
+          '기준값은 규칙이 쓰는 기준선과 같은 값이다.',
           '',
           doc.base == null
-            ? '⚠️ 이 응답은 기준(중앙값)을 주지 않았다 — 오늘 값만 실측이고 과거 점은 아예 없다. 휴장일처럼 비교할 평소가 없는 날이다.'
-            : '과거 계열은 검수용 목이고 오늘 값은 원장 실측이다.',
+            ? '⚠️ 이 응답은 기준(중앙값)을 주지 않았다 — 오늘 값만 그리고 판정하지 않는다.'
+            : '오늘 값은 원장 실측이다. 일별 계열을 주는 응답이 없어 한 점만 그린다.',
         ].join('\n'),
         drill: { href: '/ops/datasets?focus=news-funnel', label: '뉴스 처리 퍼널' },
       }
@@ -479,158 +427,12 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
         help: OUTPUT_ABSENT('o.doc'),
         drill: { href: '/ops/datasets?focus=news-funnel', label: '뉴스 처리 퍼널' },
       }),
-  /* 🔴 아래 지표는 **응답이 아니라 스냅샷**을 읽는다(`news_funnel` 은 이 응답 밖 축이다).
-   * 그래서 오늘 점도 실측이 아니고 — 계열 전체가 목이라 카드가 `MOCK 계열` 로 선다.
-   * `source: 'DB_LEDGER'` 로 두면 오늘 값이 실 원장에서 온 것처럼 읽힌다. */
-  funnelRate({
-    id: 'n.universe_rate',
-    label: '뉴스 유니버스 매칭률',
-    numerator: universe,
-    denominator: deduped,
-    pin: 0.42,
-    /* ⚠️ **응답의 조회일이 아니라 스냅샷 자신의 날**이다. `TODAY` 를 넘기면 값은 08-03 스냅샷인데
-     * 계열의 날짜 축만 오늘로 움직여, 다른 날짜를 조회해도 "오늘 이 값"이 따라온다. */
-    endDate: FUNNEL_DATE,
-    help: [
-      '유니버스 매칭률 = 유니버스 매칭 기사 / 중복 제거 후 canonical 기사.',
-      `${FUNNEL_DATE} 스냅샷 기준 ${universe?.toLocaleString('ko-KR') ?? '—'} / ${deduped?.toLocaleString('ko-KR') ?? '—'}.`,
-      '',
-      '판정: 계약된 최소 비율이 없어 분포(중앙값 ±25%)로 본다.',
-      '실질 탈락 단계는 여기다 — 앞 단계의 감소는 중복 제거·축 차이라 유실이 아니다.',
-      '단계별 감소 자체는 데이터 화면의 뉴스 처리 퍼널이 답한다.',
-      '',
-      `⚠️ ${FUNNEL_ORIGIN}`,
-    ],
-  }),
   entityResolutionMetric(entityResolution),
 
-  /* 분석 결과 — 단위가 같은 것끼리만 비율을 낸다 */
-  res !== null
-    ? {
-        id: 'a.results',
-        label: '분석 결과 생성 수',
-        group: 'analysis',
-        unit: '건',
-        metricType: 'volume',
-        comparisonType: 'medianDelta',
-        threshold: 0.25,
-        direction: 'stable',
-        source: 'DB_LEDGER',
-        series: buildSeries({
-          today: res,
-          pin: 22,
-          integer: true,
-          min: 0,
-          todayIsMock: false,
-          endDate: TODAY,
-        }),
-        help: [
-          '일별 분석 결과(explanation_result) 생성 건수 — 배치 레인.',
-          '',
-          '판정: 직전 10영업일 중앙값 대비 ±25%.',
-          '',
-          '과거 계열은 검수용 목이고 오늘 값은 체인 관측에서 온다.',
-        ].join('\n'),
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }
-    : uninstrumented({
-        id: 'a.results',
-        label: '분석 결과 생성 수',
-        group: 'analysis',
-        unit: '건',
-        metricType: 'volume',
-        direction: 'stable',
-        source: 'DB_LEDGER',
-        help: CHAIN_ABSENT,
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }),
-  /* 🔴 `chain('c.res') ?? 0` 이던 자리다. 부재를 0 으로 접으면 "결과 생성률 0%" 라는 거짓
-   * 경보가 매일 뜬다 — 체인 축은 계측이 없어 실 응답에 아예 없다(계약 §축별 소스). */
-  res !== null && run !== null && run !== 0
-    ? {
-        id: 'a.run_to_result',
-        label: '분석 실행 → 결과 생성률',
-        group: 'analysis',
-        unit: '비율',
-        metricType: 'rate',
-        comparisonType: 'minRatio',
-        threshold: 0.99,
-        direction: 'higherIsBetter',
-        source: 'DB_LEDGER',
-        series: buildSeries({
-          today: res / run,
-          pin: 1,
-          amplitude: 0.02,
-          min: 0,
-          todayIsMock: false,
-          endDate: TODAY,
-        }),
-        help: [
-          '결과 생성률 = 분석 결과 / 분석 실행. **단위가 같은 두 값**이라 비율을 낸다.',
-          `오늘 ${res} / ${run}.`,
-          '',
-          '판정: 최소 99% — 실행이 끝났는데 결과가 안 남는 것은 분포 문제가 아니라 결손이다.',
-          '',
-          '트리거 이벤트 수와는 단위가 달라 그쪽과는 비율을 만들지 않는다.',
-        ].join('\n'),
-        drill: { href: '/ops/chain', label: '설명 생성 흐름' },
-      }
-    : uninstrumented({
-        id: 'a.run_to_result',
-        label: '분석 실행 → 결과 생성률',
-        group: 'analysis',
-        unit: '비율',
-        metricType: 'rate',
-        direction: 'higherIsBetter',
-        source: 'DB_LEDGER',
-        /* 분모가 0 인 것도 판정 불가다 — `|| 1` 로 메우면 실행 0건인 날 100% 가 선다 */
-        help: run === 0 ? '분석 실행이 0건인 날은 생성률이 정의되지 않는다 — 분모를 1로 메우지 않는다.' : CHAIN_ABSENT,
-        drill: { href: '/ops/chain', label: '설명 생성 흐름' },
-      }),
-  f.etf_ledger
-    ? {
-        id: 'a.failed_etfs',
-        label: '분석 실패 ETF',
-        group: 'analysis',
-        unit: '종',
-        metricType: 'defect',
-        comparisonType: 'maxCount',
-        threshold: 0,
-        direction: 'lowerIsBetter',
-        source: f.etf_ledger.mock === true ? 'MOCK' : 'DB_LEDGER',
-        series: buildSeries({
-          today: f.etf_ledger.rows.filter((r) => r.outcome === 'FAILED').length,
-          pin: 0,
-          integer: true,
-          min: 0,
-          todayIsMock: f.etf_ledger.mock === true,
-          endDate: TODAY,
-        }),
-        help: [
-          '조회일 ETF별 최신 트리거의 최신 설명 실행이 실패로 끝난 ETF 수.',
-          '',
-          '판정: 1종 이상이면 이상.',
-          ...(f.etf_ledger.mock === true
-            ? ['⚠️ 이 응답의 ETF 원장은 목 데이터다.']
-            : ['오늘 값은 설명 실행 원장에서 왔다. 과거 계열은 응답에 없어 검수용 목이다.']),
-        ].join('\n'),
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }
-    : uninstrumented({
-        id: 'a.failed_etfs',
-        label: '분석 실패 ETF',
-        group: 'analysis',
-        unit: '종',
-        metricType: 'defect',
-        direction: 'lowerIsBetter',
-        source: 'DB_LEDGER',
-        help: [
-          'per-ETF 분석 귀결 원장이 없어 실패 ETF 수를 셀 수 없다(계약 §축별 소스: `etf_ledger`).',
-          '',
-          '0 으로 그리면 "오늘 실패한 ETF 가 없다"가 되는데, 그건 이 응답이 답하지 못하는 말이다.',
-        ].join('\n'),
-        drill: { href: '/analyses', label: '분석 결과 목록' },
-      }),
+  /* 분석 결과 — v2 분석 표(전망·가격변동)의 조회일 값이다(ALPHA-1290). 옛 설명 엔진의 표를 읽던
+   * 카드(결과 생성 수·실행→결과 생성률·실패 ETF)는 그 표가 10-01 에 멈춰 옮기거나 지웠다.
+   * 실행→결과 생성률은 v2 에 실행과 결과가 따로 없어(분석 한 행이 곧 실행이자 결과다) 지웠다. */
+  ...(['outlook', 'movement'] as const).flatMap((kind) => analysisCards(kind, analysisDay(analysis, kind, TODAY), TODAY)),
   trig
     ? {
         id: 'a.trigger_events',
@@ -642,14 +444,15 @@ export function buildMetrics(f: Facts, minute?: MinuteStatus, entityResolution?:
         threshold: 0.25,
         direction: 'stable',
         source: 'DB_LEDGER',
-        series: volumeSeries(trig, TODAY, false),
+        series: onePoint(TODAY, trig.today),
+        baseline: trig.base,
         help: [
           '트리거 이벤트 수 — 분석 결과의 **보조 지표**다(일배치의 대표 지표가 아니다).',
           '',
           '단위 사슬: 트리거 이벤트 → 중복 제거된 분석 대상 → 분석 실행 → 생성 결과.',
           '같은 ETF 에서 트리거가 여러 번 날 수 있어 결과 수와 직접 비교하지 않는다.',
           '',
-          '판정: 직전 10영업일 중앙값 대비 ±25%.',
+          '판정: 응답의 기준값(최근 기준일들의 중앙값) 대비 ±25%.',
           ...(trig.base == null
             ? ['', '⚠️ 이 응답은 기준(중앙값)을 주지 않았다 — 오늘 값만 실측이고 비교할 평소가 없다.']
             : []),

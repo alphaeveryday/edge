@@ -798,13 +798,23 @@ class ConsoleControllerTest {
 	@Test
 	void 산출은_실측_0_과_기준_없음을_가른다() throws Exception {
 		String body = mvc(factsWithOutput(
-				new OutputRow("o.pub", "게시 ETF", "종", 16L, 32.0d),
+				new OutputRow("o.outlook", "전망 완료 ETF", "종", 16L, 32.0d, List.of(
+						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
+								java.time.LocalDate.of(2026, 7, 30), 0L),
+						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
+								java.time.LocalDate.of(2026, 7, 31), 32L))),
 				new OutputRow("o.trig", "배치 트리거", "종", 0L, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
+				// 기준일별 건수(ALPHA-1289) — 0 은 실측이라 그대로 나가고, 표본이 없으면 빈 배열이다.
+				.andExpect(jsonPath("$.result.outputs[0].history.length()").value(2))
+				.andExpect(jsonPath("$.result.outputs[0].history[0].date").value("2026-07-30"))
+				.andExpect(jsonPath("$.result.outputs[0].history[0].count").value(0))
+				.andExpect(jsonPath("$.result.outputs[0].history[1].count").value(32))
+				.andExpect(jsonPath("$.result.outputs[1].history.length()").value(0))
 				.andExpect(jsonPath("$.result.outputs.length()").value(2))
-				.andExpect(jsonPath("$.result.outputs[0].id").value("o.pub"))
-				.andExpect(jsonPath("$.result.outputs[0].label").value("게시 ETF"))
+				.andExpect(jsonPath("$.result.outputs[0].id").value("o.outlook"))
+				.andExpect(jsonPath("$.result.outputs[0].label").value("전망 완료 ETF"))
 				.andExpect(jsonPath("$.result.outputs[0].unit").value("종"))
 				.andExpect(jsonPath("$.result.outputs[0].today").value(16))
 				.andExpect(jsonPath("$.result.outputs[0].base").value(32.0))
@@ -958,5 +968,73 @@ class ConsoleControllerTest {
 		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
 						.param("maxDate", "0001-01-01").param("days", "366"))
 				.andExpect(status().isBadRequest());
+	}
+
+	/**
+	 * v2 분석 추이(ALPHA-1290) — 두 종류가 항상 이 순서로 나가고, 행이 없던 종류는 빈 배열이다.
+	 * {@code running} 은 {@code failed} 와 다른 키로 나간다(끝나지 않은 건수는 실패가 아니다).
+	 */
+	@Test
+	void 분석_추이는_종류별_일별_건수를_내리고_범위를_제한한다() throws Exception {
+		MockMvc mvc = mvc(facts());
+		repository.analysisTrend = List.of(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
+						"outlook", LocalDate.parse("2026-08-02"), 150L, 3L, 2L, 148L, 3L));
+
+		mvc.perform(get("/api/v1/console/trends/analysis")
+						.param("maxDate", "2026-08-03").param("days", "3"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.from").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.to").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.kinds.length()").value(2))
+				.andExpect(jsonPath("$.result.kinds[0].kind").value("outlook"))
+				.andExpect(jsonPath("$.result.kinds[0].points.length()").value(1))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].date").value("2026-08-02"))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].completed").value(150))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].failed").value(3))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].running").value(2))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].completedEtfs").value(148))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].failedEtfs").value(3))
+				.andExpect(jsonPath("$.result.kinds[1].kind").value("movement"))
+				.andExpect(jsonPath("$.result.kinds[1].points.length()").value(0));
+		assertThat(repository.requestedAnalysisMaxDate).isEqualTo(LocalDate.parse("2026-08-03"));
+		assertThat(repository.requestedAnalysisDays).isEqualTo(3);
+
+		mvc.perform(get("/api/v1/console/trends/analysis")).andExpect(status().isOk());
+		assertThat(repository.requestedAnalysisDays).isEqualTo(30);
+		mvc.perform(get("/api/v1/console/trends/analysis").param("days", "0"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/analysis").param("days", "32"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/analysis").param("maxDate", "9999-12-31"))
+				.andExpect(status().isBadRequest());
+		// 시작일이 1년 앞으로 넘어가는 범위도 거부한다(장중 분석 추이와 같은 하한).
+		mvc.perform(get("/api/v1/console/trends/analysis")
+						.param("maxDate", "0001-01-01").param("days", "31"))
+				.andExpect(status().isBadRequest());
+	}
+
+	/**
+	 * 분석 실패 축(R15, ALPHA-1291) — 두 종류가 항상 이 순서로 나가고, 실패 ETF 가 없는 종류는
+	 * <b>빈 배열</b>이다. 키가 빠지면 소비자는 "이 축을 안 싣는 배포본"으로 읽어 규칙을 못 돌린다.
+	 */
+	@Test
+	void 분석_실패_축은_종류별_ETF_코드를_내리고_없으면_빈_배열이다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts withFailures = new ConsoleFacts(base.today(), base.dbNow(), base.runs(),
+				base.tasks(), base.outputs(), base.boundary(), base.chain(), base.etfLedger(),
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
+								"movement", "069500"),
+						new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
+								"movement", "229200")));
+
+		mvc(withFailures).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.analysisFailures.length()").value(2))
+				.andExpect(jsonPath("$.result.analysisFailures[0].kind").value("outlook"))
+				.andExpect(jsonPath("$.result.analysisFailures[0].failedEtfs.length()").value(0))
+				.andExpect(jsonPath("$.result.analysisFailures[1].kind").value("movement"))
+				.andExpect(jsonPath("$.result.analysisFailures[1].failedEtfs[0]").value("069500"))
+				.andExpect(jsonPath("$.result.analysisFailures[1].failedEtfs[1]").value("229200"));
 	}
 }

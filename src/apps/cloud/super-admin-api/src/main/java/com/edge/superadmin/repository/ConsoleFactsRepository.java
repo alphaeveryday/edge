@@ -49,6 +49,28 @@ public interface ConsoleFactsRepository {
 	 */
 	IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days);
 
+	/**
+	 * {@code maxDate} 로 끝나는 {@code days}일 동안 v2 분석(전망·가격변동)의 일별 건수(ALPHA-1290).
+	 * 날짜는 {@code analysis_at} 의 KST 날짜다. <b>행이 하나도 없는 날짜는 점이 없다</b> — 0 인 점을
+	 * 만들지 않는다. 가격변동 분석은 장이 열린 날에만 생기고, v2 표가 생기기 전 날짜에는 값이 없다.
+	 * 반환 순서는 종류, 그다음 오래된 날부터다.
+	 */
+	List<AnalysisDayPoint> analysisTrend(LocalDate maxDate, int days);
+
+	/**
+	 * v2 분석 한 종류의 하루. 건수는 분석 행 수다. {@code completedEtfs} 는 그날 완료 행이 하나라도
+	 * 있는 ETF 종 수이고, {@code failedEtfs} 는 <b>그날 실패 행이 있고 완료 행이 하나도 없는</b> ETF
+	 * 종 수다(ALPHA-1291) — 실패했다가 같은 날 다시 돌아 완료된 ETF 는 넣지 않는다. v2 는 실패한
+	 * 분석을 다시 돌려 끝내는 일이 흔해, "실패한 적 있는 ETF"로 세면 거의 매일 0 을 넘는다.
+	 * running 만 있는 ETF 도 넣지 않는다.
+	 *
+	 * <p>{@code running} 은 <b>실패가 아니다</b> — 상태가 running 인 채 남은 행이고, 아직 도는
+	 * 중인지 끝나지 못한 것인지 이 표만으로는 가를 수 없다.
+	 */
+	record AnalysisDayPoint(String kind, LocalDate date, long completed, long failed, long running,
+			long completedEtfs, long failedEtfs) {
+	}
+
 	record IntradayAnalysisTrend(OffsetDateTime asOf, List<IntradayAnalysisPoint> points) {
 	}
 
@@ -60,7 +82,21 @@ public interface ConsoleFactsRepository {
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-			List<EtfAnalysisRow> etfLedger) {
+			List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures) {
+
+		/** v2 분석 실패 축 없이 만든다 — 그 축은 빈 목록이다. */
+		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
+				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
+				List<EtfAnalysisRow> etfLedger) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, List.of());
+		}
+	}
+
+	/**
+	 * 조회일에 v2 분석이 <b>끝내 완료되지 못한</b> ETF 하나(R15, ALPHA-1291) — 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없다. {@code kind} 는 {@code outlook}·{@code movement} 다.
+	 */
+	record AnalysisFailureRow(String kind, String etfCode) {
 	}
 
 	/** 조회일에 발화한 ETF별 <b>최신 트리거</b>의 최신 설명 실행 상태(R15). */
@@ -114,8 +150,24 @@ public interface ConsoleFactsRepository {
 	 * <p>{@code today} 는 {@code long} 이다: 그 날 0건인 것은 <b>실측</b>이지 모름이 아니다.
 	 * 반대로 {@code base} 는 {@code Double} 이라 <b>null 이 곧 "비교할 평소가 없다"</b>이고,
 	 * 소비자는 그런 산출을 편차 판정에서 뺀다. 두 축의 nullability 가 다른 것이 이 record 의 핵심이다.
+	 *
+	 * <p>{@code history} 는 중앙값을 낸 <b>기준일별 건수</b>다(날짜 오름차순, 최대 10일, ALPHA-1289).
+	 * <b>조회일은 들어 있지 않다</b> — 조회일 값은 {@code today} 이고, 그날이 미완결이면 아직 쌓이는
+	 * 중이라 기준일과 같은 축이 아니다. {@code base} 가 null 인 날에도 이 목록은 실린다: 기준을
+	 * 비우는 것은 "이 날을 비교하지 않는다"이지 기준일의 실측이 없다는 뜻이 아니다. 기준일 후보가
+	 * 하나도 없으면 빈 목록이다.
 	 */
-	record OutputRow(String id, String label, String unit, long today, Double base) {
+	record OutputRow(String id, String label, String unit, long today, Double base,
+			List<OutputDay> history) {
+
+		/** 기준일 목록 없이 만든다 — 그 목록은 빈 목록이다. */
+		public OutputRow(String id, String label, String unit, long today, Double base) {
+			this(id, label, unit, today, base, List.of());
+		}
+	}
+
+	/** 기준일 하루의 건수. 0 은 그날 산출이 없었다는 실측이다. */
+	record OutputDay(LocalDate date, long count) {
 	}
 
 	/**

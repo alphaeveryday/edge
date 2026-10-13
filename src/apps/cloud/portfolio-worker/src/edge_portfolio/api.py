@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from . import store
-from . import admin, admin_store
+from . import admin_store
 from .catalog import canonicalize, directory
 from starlette.middleware.gzip import GZipMiddleware
 from .contracts import AnalysisInput, DraftInput, StrictModel
@@ -22,7 +22,6 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.include_router(admin.router)
 COOKIE = "edge_portfolio_session"
 
 

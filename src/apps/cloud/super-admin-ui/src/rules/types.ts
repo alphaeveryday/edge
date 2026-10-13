@@ -11,7 +11,7 @@
  *
  * ⚠️ **계측 없는 축을 목값으로 메우지 않는다.** 동봉 스냅샷에는 목으로 채운 축이 일부 있고
  * (`mock` 플래그가 그걸 밝히며 규칙 결과에 전파된다), 실 응답은 **그 축을 아예 안 보낸다** —
- * 그래서 `chain`·`queues`·`etf_ledger`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
+ * 그래서 `chain`·`queues`·`etf_ledger`·`analysis_failures`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
  * `evaluated:false` 다. 빈 배열·빈 객체로 메우면 계측 공백이 실측 0 으로 위조되고
  * "못 돎"이 "봤고 괜찮다"가 된다.
  */
@@ -185,6 +185,9 @@ export interface OutputFact {
    *  **`0` 은 표본 부재가 아니라 관측된 0** 이고, 비율 판정만 안 선다. */
   base?: number | null;
   unit: string;
+  /** `base` 를 낸 기준일별 건수(날짜 오름차순). 조회일은 들어 있지 않다. 규칙은 쓰지 않고
+   *  추이 화면이 그린다. 이 필드가 없는 응답에서는 없다. */
+  history?: { date: string; count: number }[];
 }
 
 export interface BoundaryFact {
@@ -208,6 +211,13 @@ export interface EtfLedgerRow {
   error?: string | null;
   published?: boolean;
   delivered?: boolean;
+}
+
+export interface AnalysisFailures {
+  kind: 'outlook' | 'movement';
+  failed_etfs: string[];
+  /** 동봉 스냅샷이 이 항목을 목으로 채웠는가 — 실 응답에는 없다. 위반의 `mock` 으로 전파된다 */
+  mock?: boolean;
 }
 
 export interface EtfLedger {
@@ -303,8 +313,17 @@ export interface Facts {
   queues?: QueueFact[];
   outputs: OutputFact[];
   boundary: BoundaryFact;
-  /** ETF별 분석 귀결 원장 — 계측이 없으면 아예 부재(undefined) → R15 evaluated:false */
+  /** ETF별 분석 귀결 원장(옛 설명 엔진의 표) — 흐름 화면의 표가 읽는다. R15 는 더는 안 읽는다 */
   etf_ledger?: EtfLedger;
+  /**
+   * 조회일에 v2 분석이 **끝내 완료되지 못한** ETF(ALPHA-1291) — 종류(전망·가격변동 분석)별로 그날
+   * 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다. 실패했다가 같은 날 다시 돌아 완료된 ETF,
+   * 진행 중(running)만 있는 ETF 는 들어 있지 않다.
+   *
+   * 이 축을 안 싣는 응답에서는 부재(undefined)이고 그때 R15 는 evaluated:false 다. 빈 배열로
+   * 메우지 마라 — "실패 ETF 없음"으로 위조된다.
+   */
+  analysis_failures?: AnalysisFailures[];
   /**
    * 실시간 수집 세션 — **스냅샷에는 없다**(facts-snapshot 은 배치 원장만 담는다).
    * 화면이 `/sources/minute` 응답을 실어 줄 때만 채워지고, 없으면 R17~R19 는
@@ -333,7 +352,7 @@ export interface Facts {
  *
  * **필드 규약 — 한 필드는 한 용도다.** 이전에는 세 필드가 서로의 일을 했다: `unit` 이 레인
  * 이름(`news`)과 비교 문장(`기대 … 실제 …`)을 담고, `metric` 이 `'-50%'`·`'STALE'` 같은
- * 문자열을 담고, `target` 이 `'o.pub'` 같은 내부 id 였다. 그래서 화면이
+ * 문자열을 담고, `target` 이 `'o.outlook'` 같은 내부 id 였다. 그래서 화면이
  * `typeof metric === 'number'` 로 용도를 **추측해서** 갈라 그렸다 — 룰이 새 문자열을 넣으면
  * 화면이 조용히 다르게 그린다. 규약을 여기 박아 그 추측을 없앤다.
  */

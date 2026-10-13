@@ -827,6 +827,7 @@ module "landing_site" {
 
   name                    = "${local.prefix}-landing"
   domain_name             = var.landing_domain
+  redirect_www            = true # www.etforca.com → etforca.com (인증서가 *.etforca.com 을 포함한다)
   zone_id                 = data.aws_route53_zone.etforca.zone_id
   certificate_arn         = data.aws_acm_certificate.etforca_cdn.arn
   api_origin_domain       = aws_route53_record.portfolio_origin.fqdn

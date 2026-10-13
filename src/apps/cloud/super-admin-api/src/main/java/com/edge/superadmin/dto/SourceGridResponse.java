@@ -17,6 +17,10 @@ import java.util.List;
  *
  * <p>표시 문자열을 만들지 않는 것, 건수 null(모름 ≠ 0) 계약은 {@link SourceReportResponse} 와
  * 같다.
+ *
+ * <p>셀의 {@code startedAt}·{@code finishedAt}(ISO-8601)·{@code exitCode}·
+ * {@code completenessExpected}·{@code completenessReceived} 는 실행 추이 화면이 쓴다
+ * (ALPHA-1284). 전부 null 가능하고 null 은 0 이 아니라 "기록 없음"이다.
  */
 public record SourceGridResponse(int days, List<SlotResponse> slots) {
 
@@ -34,13 +38,18 @@ public record SourceGridResponse(int days, List<SlotResponse> slots) {
 	public record CellResponse(String stage, String taskKey, String planStatus, String outcome,
 			String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
 			String skipReason,
-			String outcomeReason, boolean running, NewsQualityAssessment qualityAssessment) {
+			String outcomeReason, boolean running, NewsQualityAssessment qualityAssessment,
+			String startedAt, String finishedAt, Integer exitCode,
+			Long completenessExpected, Long completenessReceived) {
 
 		public static CellResponse from(GridCell cell) {
 			return new CellResponse(cell.stage(), cell.taskKey(), cell.planStatus(),
 					cell.outcome(), cell.dataStatus(), cell.recordsOut(), cell.unsupportedRecords(),
 					cell.failedRecords(),
-					cell.skipReason(), cell.outcomeReason(), cell.running(), NewsQualityAssessment.from(cell));
+					cell.skipReason(), cell.outcomeReason(), cell.running(), NewsQualityAssessment.from(cell),
+					cell.startedAt() == null ? null : cell.startedAt().toString(),
+					cell.finishedAt() == null ? null : cell.finishedAt().toString(),
+					cell.exitCode(), cell.completenessExpected(), cell.completenessReceived());
 		}
 	}
 

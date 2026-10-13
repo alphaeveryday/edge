@@ -65,6 +65,14 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 장중 `FIRE` 트리거와 분석·게시 단계 도달 수를 낸다. 재실행 행 수가 아니라 코호트 관측의 도달
 여부를 세며, 상세 계약은 같은 문서의 「장중 분석 귀결 추이」 절이 정본이다(ALPHA-1005).
 
+`GET /api/v1/console/trends/analysis?maxDate=&days=30`는 새 분석 엔진(v2)의 전망·가격변동 분석이
+날짜별로 완료·실패·끝나지 않은(running) 건수를 낸다. `outlook_analyses`·`movement_analyses` 를
+읽고, 행이 없던 날은 점을 만들지 않는다. 산출 축의 분석 산출(`o.outlook`·`o.movement`)도 같은 두
+표에서 센다 — 옛 설명 엔진 표를 세던 게시 ETF 산출은 없앴다. 상세 계약은 같은 문서의 「v2 분석
+일별 추이」 절이 정본이다(ALPHA-1290). 이 응답의 `failedEtfs` 는 그날 실패 행이 있고 완료 행이
+하나도 없는 ETF 수이고, `/console/facts` 의 `analysisFailures` 축이 같은 기준으로 그 ETF 코드를
+종류별로 싣는다(R15 가 읽는다, ALPHA-1291).
+
 **사실 축(런·작업·데이터셋·산출·경계·체인)은 조각별로 하나씩 붙는다** — 무엇이 dev 에 있는지는
 계약 문서 머리의 표가 정본이다. ⚠️ 그 현황을 여기 숫자로 옮겨 적지 마라: 조각마다 두 곳을
 고쳐야 하고, 한 번 놓치면 이 문단이 조용히 낡는다(실제로 조각 2~4 동안 그랬다).
@@ -97,7 +105,13 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   exclusionRate)를 추가한다(ALPHA-1076). `NewsQualityAssessment`가 현재 성공 시도의 진단과
   원장 카운터를 대사해 `WITHIN_LIMITS`·`CAUTION`·`UNMEASURED`를 내며 원장 필드는 바꾸지 않는다.
   다른 작업은 null이다. 상세 표본은 이 응답에 복제하지 않는다. 비율은 0~1이며 분모가 없거나
-  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. sources 는 `ops_*` 에 더해
+  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. `/sources/grid` 셀은
+  현재 시도의 `startedAt`·`finishedAt`·`exitCode`와 완전성 숫자 `completenessExpected`·
+  `completenessReceived`도 싣는다(ALPHA-1284). 현재 시도나 완전성 축이 없으면 null이고 null은 0이
+  아니다. `/sources/minute/daily`의 날짜×데이터셋 항목은 세션들의 창 수 합 `windows`(기대 창 수와
+  상태별 창 수)를 싣고, `/console/facts`의 `outputs[]`는 기준일별 건수 `history`(조회일 제외)를
+  싣는다(ALPHA-1289). 둘 다 이미 조회한 값이고 판정(`state`·`basis`·`base`)은 그대로다.
+  sources 는 `ops_*` 에 더해
   **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
   세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)도 읽는다. 일별 판정은 날짜별 상세 조회를
   반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다.

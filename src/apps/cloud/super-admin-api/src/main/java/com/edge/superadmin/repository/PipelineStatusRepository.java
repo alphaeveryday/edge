@@ -72,12 +72,32 @@ public interface PipelineStatusRepository {
 	 * 화면의 STALLED 이슈 표가 그 잔재를 드러내지만 격자엔 그 장치가 없다. 귀결이 적히는 순간
 	 * 이 신호가 걷히므로 오표시가 유계다. 대가로 "판정 후 재시도 중"(FAILED+새 시도)은 격자에선
 	 * 안 보인다 — 그 정밀도는 시도 전량을 싣는 드릴다운(574) 소관이다.
+	 *
+	 * <p>{@code startedAt}·{@code finishedAt}·{@code exitCode} 는 <b>현재 시도</b>
+	 * ({@code current_attempt_id})의 값이다(ALPHA-1284). 현재 시도가 없으면 셋 다 null 이고,
+	 * 아직 도는 시도는 {@code finishedAt}·{@code exitCode} 가 null 이다. 시도 없이 완료로 적힌
+	 * 작업이 실제로 있으므로 null 을 0 으로 읽지 않는다. {@code completenessExpected}·
+	 * {@code completenessReceived} 는 작업의 completeness 축에서 온 숫자이고, 그 축을 안 쓰는
+	 * 작업은 null 이다.
 	 */
 	record GridCell(String stage, String taskKey, String planStatus, String outcome,
 			String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
 			String skipReason,
 			String outcomeReason, boolean running, JsonNode qualityDiagnostics,
-			boolean qualityEvidenceCurrent, boolean completenessGap) {
+			boolean qualityEvidenceCurrent, boolean completenessGap,
+			OffsetDateTime startedAt, OffsetDateTime finishedAt, Integer exitCode,
+			Long completenessExpected, Long completenessReceived) {
+
+		/** 실행 추이 축(시각·종료 코드·완전성 숫자) 없이 만든다 — 그 축은 전부 null(모름)이다. */
+		public GridCell(String stage, String taskKey, String planStatus, String outcome,
+				String dataStatus, Long recordsOut, Long unsupportedRecords, Long failedRecords,
+				String skipReason,
+				String outcomeReason, boolean running, JsonNode qualityDiagnostics,
+				boolean qualityEvidenceCurrent, boolean completenessGap) {
+			this(stage, taskKey, planStatus, outcome, dataStatus, recordsOut, unsupportedRecords,
+					failedRecords, skipReason, outcomeReason, running, qualityDiagnostics,
+					qualityEvidenceCurrent, completenessGap, null, null, null, null, null);
+		}
 	}
 
 	/**
