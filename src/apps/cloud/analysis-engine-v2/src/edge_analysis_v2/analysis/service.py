@@ -110,7 +110,7 @@ class _ToolRecords:
 
 def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None, connection_factory, key: str,
                     artifacts: Path, analysis_id: str, model='deepseek-flash',
-                    model_call=run_model, previous_analysis_id=_LATEST, system_prompt=None, owner=None, staged=False, continues=None) -> dict:
+                    model_call=run_model, previous_analysis_id=_LATEST, system_prompt=None, owner=None, staged=False, staged_since=None) -> dict:
     """Run one idempotent request with independently committed tool evidence.
 
     Args:
@@ -135,8 +135,8 @@ def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None
             from the report alone, fill the remaining fields from the body) instead of one. A pinned
             system_prompt is one conversation's instructions, so it cannot be combined with this.
             Only an outlook without a predecessor is staged; one that follows another edits it in one conversation.
-        continues: Given the predecessor's ID, says whether a staged outlook may continue it; a refused one
-            is ignored and the outlook starts fresh. None continues every predecessor.
+        staged_since: A predecessor analysed before this instant was written in one conversation; a staged
+            outlook does not continue it and starts fresh. None continues every predecessor.
 
     Returns:
         Final screen objects reassembled from committed database rows.
@@ -156,7 +156,7 @@ def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None
     artifacts.mkdir(parents=True, exist_ok=True)
     settings = dict(kind=kind, tools=tools, cutoff=cutoff, key=key, artifacts=artifacts, analysis_id=analysis_id,
                     model=model, model_call=model_call, previous_analysis_id=previous_analysis_id,
-                    system_prompt=system_prompt, owner=owner, staged=staged, continues=continues)
+                    system_prompt=system_prompt, owner=owner, staged=staged, staged_since=staged_since)
     if staged and (kind != 'outlook' or system_prompt is not None):
         raise ValueError('Only an outlook without a pinned prompt can be staged')
     if owner is None:
@@ -175,7 +175,7 @@ def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None
 
 
 def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_call, previous_analysis_id,
-             system_prompt, owner, run, tool_store, staged=False, continues=None):
+             system_prompt, owner, run, tool_store, staged=False, staged_since=None):
     """Body of execute_request; ``run(step)`` gives each database step a connection."""
     data_source = tools.data_source
     context = tools.fixture['context']
@@ -192,8 +192,12 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             existing = cur.fetchone()
         previous_id = existing['previous_analysis_id'] if existing else (
             _previous(connection, kind, context['etf_code'], cutoff, data_source) if previous_analysis_id is _LATEST else previous_analysis_id)
-        if staged and previous_id and not existing and continues and not continues(previous_id):
-            previous_id = None
+        if staged and previous_id and not existing and staged_since:
+            with connection.cursor(row_factory=dict_row) as cur:
+                cur.execute('SELECT analysis_at FROM outlook_analyses WHERE analysis_id=%s', (previous_id,))
+                written = cur.fetchone()
+            if written and written['analysis_at'] < staged_since:
+                previous_id = None
         parent = store(connection).begin(kind, analysis_id, context['etf_code'], cutoff, previous_id, data_source=data_source)
         return previous_id, parent, read(connection, analysis_id) if parent['status'] == 'completed' else None
     previous_id, parent, completed = run(begin)

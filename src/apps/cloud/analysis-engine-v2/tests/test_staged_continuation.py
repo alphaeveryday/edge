@@ -1,30 +1,6 @@
 import json
 
-from edge_analysis_v2.cloud.artifacts import FILES, PREFIX, was_staged
-
-
-class Store:
-    class exceptions:
-        class NoSuchKey(Exception):
-            pass
-
-    def __init__(self, objects):
-        self.objects = objects
-
-    def get_object(self, Bucket, Key):
-        if Key not in self.objects:
-            raise self.exceptions.NoSuchKey(Key)
-        return {'Body': type('Body', (), {'read': lambda _: json.dumps(self.objects[Key]).encode()})()}
-
-
-def test_only_a_run_that_left_an_investigation_report_counts_as_staged():
-    staged, single, unknown = 'a' * 32, 'b' * 32, 'c' * 32
-    store = Store({PREFIX + staged + '/manifest.json': {'files': {'investigation.md': {}, 'screen.json': {}}},
-                   PREFIX + single + '/manifest.json': {'files': {'screen.json': {}}}})
-    assert was_staged(store, 'bucket', staged)
-    assert not was_staged(store, 'bucket', single)
-    assert not was_staged(store, 'bucket', unknown)
-    assert 'investigation.md' in FILES
+from edge_analysis_v2.cloud.artifacts import FILES
 
 
 def test_a_staged_run_uploads_its_stage_files_and_one_total_measurement(tmp_path):
@@ -51,3 +27,7 @@ def test_a_staged_run_uploads_its_stage_files_and_one_total_measurement(tmp_path
     assert {'investigation/measurement.json', 'measurement.json', 'investigation.md'} <= set(manifest['files'])
     download(s3, 'bucket', manifest, tmp_path / 'local')
     assert json.loads((tmp_path / 'local' / 'investigation' / 'measurement.json').read_text())['tool_calls'] == 60
+
+
+def test_the_staged_run_report_is_among_the_published_files():
+    assert 'investigation.md' in FILES and 'writing/response.json' in FILES
