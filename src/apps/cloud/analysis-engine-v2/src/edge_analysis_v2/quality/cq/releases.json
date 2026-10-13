@@ -1,7 +1,7 @@
 {
-  "version": 107,
-  "summary": "조사 도구 추가: 기간 수익률을 시장 몫과 나머지로 나눔(calculate_window_returns, get_daily_returns), 종목 요인 표(get_instrument_factor_table), 웹 문서의 발행처와 수정 시각, 검색 도구의 가설·찾는 것 인자",
-  "source_digest": "ce257fbd1b03bf51a524d31c7076e37c941535d81e8d63c85b1a9577f2937699",
+  "version": 108,
+  "summary": "화면 한도(요약 제목 25, 본문 제목 50, 논점 제목 40자)와 문체: 논점 제목은 결론을 말하는 해요체 문장, 본문은 해요체만, 전망·가격변동 지시문에 읽는 사람과 글의 구성과 항목 순서를 적음",
+  "source_digest": "fcda3da494af43cf4e576336c999b4cbb41dfcc2e4a29c6e273308f89bb8b7b3",
   "history": [
     {
       "version": 1,
@@ -532,6 +532,11 @@
       "version": 106,
       "summary": "질문 목록이 경쟁 설명(explanations)과 닫는 이유(closure·answer)를 갖고, 전망은 경쟁 설명이 있는 질문을 요구함. 마지막 답의 인용 결함은 같은 대화에서 두 번까지 고치게 함",
       "source_digest": "eb37a4fc89bc144e40bcfca8b93827b7aedb0333683ce52e51585eda854df675"
+    },
+    {
+      "version": 107,
+      "summary": "조사 도구 추가: 기간 수익률을 시장 몫과 나머지로 나눔(calculate_window_returns, get_daily_returns), 종목 요인 표(get_instrument_factor_table), 웹 문서의 발행처와 수정 시각, 검색 도구의 가설·찾는 것 인자",
+      "source_digest": "ce257fbd1b03bf51a524d31c7076e37c941535d81e8d63c85b1a9577f2937699"
     }
   ]
 }

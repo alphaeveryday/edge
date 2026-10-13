@@ -21,7 +21,9 @@ STICKER = {'type': 'string', 'enum': ['강력상승', '상승', '중립', '하�
 SENTIMENT = {'type': 'string', 'enum': ['positive', 'neutral', 'negative']}
 ITEM = obj({'title_keyword': TEXT | {'maxLength': TITLE_MAX_LENGTH},
             'sentence': TEXT, 'sentiment': SENTIMENT, 'tool_run_ids': REFS})
-TOPIC = obj({'id': TEXT, 'title_keyword': limited('detail.items[].title_keyword'),
+TOPIC = obj({'id': TEXT,
+             # The field is named a keyword, and the model wrote keywords; say here what the screen shows it as.
+             'title_keyword': limited('detail.items[].title_keyword') | {'description': '논점의 제목입니다. 핵심어가 아니라 이 논점의 결론을 평소 말로 쓴 해요체 문장입니다. 제목만 읽어도 누구에게 무슨 일이 있고 그래서 어떻다는 것인지 알 수 있어야 합니다. 예: "LIG는 새 주문이 끊겼는데 주가는 여전히 비싸요"'},
              'sentences': {'type': 'array', 'minItems': 1, 'maxItems': MAX_BULLETS_PER_TOPIC,
                            'items': limited('detail.items[].sentences[].sentence')},
              'sentiment': SENTIMENT | {'description': 'Required for every new topic. When editing, submit sentiment together with changed sentence text; sentiment-only edits are invalid.'},

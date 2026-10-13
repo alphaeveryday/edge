@@ -23,12 +23,9 @@ def test_screen_metadata_and_cards_are_not_model_outputs():
 
 
 @pytest.mark.parametrize('schema', [
-    OUTLOOK['properties']['summary_card']['properties']['title'],
     OUTLOOK['properties']['issue_detail']['properties']['headline'],
     OUTLOOK['properties']['issue_detail']['properties']['items']['items']['properties']['title_keyword'],
     MOVEMENT['properties']['new_items']['items']['properties']['title_keyword'],
-    EDIT_SCHEMAS[0]['function']['parameters']['properties']['title'],
-    EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['items']['properties']['title_keyword'],
 ])
 def test_customer_titles_fit_twenty_characters_including_spaces_and_punctuation(schema):
     # Long explanations belong in the body, including for issue and movement titles.

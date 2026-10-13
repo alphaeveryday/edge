@@ -4,9 +4,9 @@ from edge_analysis_v2.contracts.outlook_limits import TEXT_LIMITS, checked_texts
 
 def screen(**changes):
     value = {
-        'summary_card': {'title': '가' * 20, 'summary': '나' * 80},
-        'detail': {'title': '다' * 20, 'items': [
-            {'title_keyword': '라' * 20, 'sentences': [{'sentence': '마' * 60, 'is_updated': False} for _ in range(5)]}
+        'summary_card': {'title': '가' * 25, 'summary': '나' * 80},
+        'detail': {'title': '다' * 50, 'items': [
+            {'title_keyword': '라' * 40, 'sentences': [{'sentence': '마' * 60, 'is_updated': False} for _ in range(5)]}
             for _ in range(15)]},
         'factors': [{'type': t, 'sticker': '중립', 'sentence': '바' * 60} for t in ('이슈', '차트', '매크로', '밸류', '수급')],
         'conclusion': {'title': '사' * 12, 'supports': [{'label': '아' * 15}], 'burdens': [{'label': '자' * 15}],
@@ -50,8 +50,8 @@ def test_too_many_topics_bullets_or_a_missing_factor_are_count_violations():
 
 
 def test_a_partial_screen_and_an_absent_change_condition_are_not_violations():
-    assert violations({'summary_card': {'title': '가' * 21}}) == [
-        {'location': 'summary_card.title', 'limit': 20, 'actual': 21, 'kind': 'characters'}]
+    assert violations({'summary_card': {'title': '가' * 26}}) == [
+        {'location': 'summary_card.title', 'limit': 25, 'actual': 26, 'kind': 'characters'}]
     assert violations(screen(**{'conclusion.change_condition': None})) == []
 
 
@@ -64,8 +64,8 @@ def test_the_agent_schemas_carry_the_same_limits_as_the_checker():
     assert properties['conclusion']['properties']['supports']['items']['properties']['label']['maxLength'] == 15
     topic = EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['items']['properties']
     assert topic['sentences']['maxItems'] == 5 and topic['sentences']['items']['maxLength'] == 60
-    assert topic['title_keyword']['maxLength'] == 20
-    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['title']['maxLength'] == 20
+    assert topic['title_keyword']['maxLength'] == 40
+    assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['title']['maxLength'] == 50
     assert EDIT_SCHEMAS[0]['function']['parameters']['properties']['items']['maxItems'] == 15
     assert properties['summary_card']['properties']['title']['maxLength'] == TEXT_LIMITS['summary_card.title']
     assert properties['conclusion']['properties']['burdens']['items']['properties']['label']['maxLength'] == TEXT_LIMITS['conclusion.burdens[].label']
@@ -144,12 +144,12 @@ def test_removing_a_topic_whose_old_title_is_too_long_still_leaves_a_publishable
     from datetime import datetime, timezone
     from edge_analysis_v2.analysis.body_editor import BodyEditor
     old = {'title': '제목', 'items': [
-        {'id': 't1', 'title_keyword': '라' * 33, 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r1']},
+        {'id': 't1', 'title_keyword': '라' * 53, 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r1']},
         {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}]}
     body = BodyEditor(old, datetime(2026, 10, 6, 10, tzinfo=timezone.utc)).apply([{'action': 'remove', 'id': 't1'}])
-    assert [u['title_keyword'] for u in body['updates']['items'] if u['change_type'] == 'deleted'] == ['라' * 20]
+    assert [u['title_keyword'] for u in body['updates']['items'] if u['change_type'] == 'deleted'] == ['라' * 40]
     assert violations({'detail': body}) == []
-    body['updates']['items'][0]['title_keyword'] = '라' * 21
+    body['updates']['items'][0]['title_keyword'] = '라' * 41
     assert violations({'detail': body})[0]['location'] == 'detail.updates.items[0].title_keyword'
 
 
@@ -159,7 +159,7 @@ def test_a_same_day_update_entry_with_an_old_long_title_does_not_block_a_rewrite
     at = datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
     topic = {'id': 't2', 'title_keyword': '짧은 제목', 'sentences': [{'sentence': '마', 'is_updated': False}], 'tool_run_ids': ['r2']}
     old = {'title': '제목', 'items': [topic], 'updates': {'date': '2026-10-06', 'items': [
-        {'id': 'gone', 'change_type': 'deleted', 'title_keyword': '라' * 33, 'sentence': None, 'tool_run_ids': ['r1']}]}}
+        {'id': 'gone', 'change_type': 'deleted', 'title_keyword': '라' * 53, 'sentence': None, 'tool_run_ids': ['r1']}]}}
     body = BodyEditor(old, at).write('제목', [{'id': 't2', 'title_keyword': '짧은 제목', 'sentences': ['새 문장'], 'sentiment': 'neutral', 'tool_run_ids': ['r2']}])
     assert violations({'detail': body}) == []
-    assert [u['title_keyword'] for u in body['updates']['items'] if u['id'] == 'gone'] == ['라' * 20]
+    assert [u['title_keyword'] for u in body['updates']['items'] if u['id'] == 'gone'] == ['라' * 40]

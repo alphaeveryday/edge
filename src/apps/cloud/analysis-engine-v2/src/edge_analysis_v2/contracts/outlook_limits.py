@@ -8,10 +8,10 @@ TITLE_MAX_LENGTH = 20
 
 # Field path in the outlook screen -> maximum characters.
 TEXT_LIMITS = {
-    'summary_card.title': TITLE_MAX_LENGTH,
+    'summary_card.title': 25,
     'summary_card.summary': 80,
-    'detail.title': TITLE_MAX_LENGTH,
-    'detail.items[].title_keyword': TITLE_MAX_LENGTH,
+    'detail.title': 50,
+    'detail.items[].title_keyword': 40,
     'detail.items[].sentences[].sentence': 60,
     'factors[].sentence': 60,
     'conclusion.title': 12,
