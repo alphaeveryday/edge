@@ -152,8 +152,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raise ValueError("MODEL_CONTEXT_BUDGET")
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
-                        "tool_choice": "none" if role == "question" else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL],
+                        "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -189,6 +189,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             args = None
                         if args is None:
                             answer = {'status': 'rejected', 'reason': 'INVALID_TOOL_ARGUMENT'}
+                        elif role == 'question' and function['name'] != 'search_etfs':
+                            answer = {'status': 'rejected', 'reason': 'QUESTION_STAGE_CATALOG_ONLY'}
                         elif function['name'] == 'search_etfs':
                             catalog_calls += 1
                             if catalog_calls > 6:

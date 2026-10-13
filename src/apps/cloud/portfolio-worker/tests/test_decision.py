@@ -89,6 +89,38 @@ def test_repeated_holdings_do_not_fail_no_sell_due_to_fractional_percentage_roun
     assert check_constraints(decision, rows, req, {})[0]['status'] == 'pass'
 
 
+@pytest.mark.parametrize('tool_name', ['search_etfs', 'fetch_source'])
+async def test_question_stage_resolves_registered_ids_without_external_research(monkeypatch, tool_name):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args): self.result = {'status': 'no_match', 'candidates': []}
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, calls = [], []
+    async def model(payload):
+        role = stages[-1]
+        if role == 'question':
+            assert [tool['function']['name'] for tool in payload['tools']] == ['search_etfs']
+            if not calls:
+                calls.append(1)
+                return {'choices': [{'message': {'role': 'assistant', 'tool_calls': [{'id': 'identify', 'type': 'function',
+                    'function': {'name': tool_name, 'arguments': json.dumps({'query': 'VOO'})}}]}}]}
+            answer = json.loads(payload['messages'][-1]['content'])
+            if tool_name == 'search_etfs':
+                assert answer[0]['instrument_id'] == 'US:VOO'
+            else:
+                assert answer['reason'] == 'QUESTION_STAGE_CATALOG_ONLY'
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {'constraints': [{'kind': 'max_weight', 'instrument_ids': ['US:VOO'], 'value': 30, 'source': 'VOO는 30% 이하'}]}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    result = await run_analysis(request(question='VOO는 30% 이하'), 'test-only', stages.append, model_call=model, evidence=Evidence())
+    assert result['decision']['constraints'][0]['kind'] == 'max_weight'
+
+
 @pytest.mark.parametrize('reject_first,unverified', [(True, False), (False, False), (False, True)])
 async def test_service_eligible_candidate_cannot_publish_after_customer_constraint_failure(monkeypatch, reject_first, unverified):
     import json
