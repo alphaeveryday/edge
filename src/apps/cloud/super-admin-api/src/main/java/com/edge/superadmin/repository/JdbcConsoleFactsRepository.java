@@ -719,9 +719,9 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 						rs.getLong("published_without_delivery"),
 						rs.getLong("delivery_now_nonpublished"),
 						rs.getLong("delivery_rows"), legacyEngineStoppedNow)),
-				blindIfUnobservable(
+				withAnalysisStages(blindIfUnobservable(
 						jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
-						legacyEngineStopped),
+						legacyEngineStopped), day),
 				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
 						rs.getString("etf_id"), rs.getString("display_name"),
 						rs.getString("outcome")), day, day),
@@ -836,6 +836,94 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 					rs.getLong("published")));
 		}, maxDate, days, maxDate, maxDate, days, maxDate);
 		return new IntradayAnalysisTrend(asOf[0], List.copyOf(points));
+	}
+
+	/**
+	 * 새 분석 엔진(v2)의 단계 — 조회일에 발화한 장중 트리거가 단계마다 몇 건 도달했나(ALPHA-1296).
+	 *
+	 * <p>코호트는 옛 체인과 같다: <b>그 날 발화한 트리거</b>이고, 뒤 단계는 그 트리거에서 이어진
+	 * 것만 센다(그날 만들어진 요청·분석 전체가 아니다). 트리거와 요청은 요청 입력의
+	 * {@code source.trigger_id} 로 잇는다 — v2 가 요청을 만들 때 원 트리거의 id 를 그대로 싣는다
+	 * ({@code sources/triggers.py}). 요청과 분석은 {@code analysis_id} 가 같다.
+	 *
+	 * <p><b>단위는 트리거다.</b> 단계마다 "그 단계에 도달한 트리거 수"를 세므로 한 트리거에 요청이
+	 * 여럿(재발화 세대)이어도 한 번만 세고, 단계가 내려가며 늘지 않는다.
+	 *
+	 * <p>트리거의 날짜 범위는 {@code window_start} 에 직접 건다. 요청은 트리거보다 먼저 만들어질 수
+	 * 없으므로 {@code created_at} 하한으로 훑는 범위를 좁힌다(상한은 없다 — 늦게 수용된 요청도 그
+	 * 트리거의 자손이다). {@code data_source = 'database'} 인 분석만 센다.
+	 *
+	 * <p>🔴 <b>요청은 수용된 것만 센다</b>({@code accepted_at IS NOT NULL}). v2 는 워크플로를 띄우기
+	 * 전에 요청 행을 먼저 예약하고, 수용이 확인돼야 {@code accepted_at} 을 채운다
+	 * ({@code storage/requests.py}). 예약만 된 행까지 세면 워크플로가 뜨지도 않은 건이 "요청은 됐는데
+	 * 분석이 시작 안 됨"으로 보인다 — 실제로는 트리거가 요청으로 이어지지 못한 것이다. 첫 요청일도
+	 * 같은 기준이다(봇 리뷰가 짚었다).
+	 */
+	private static final String ANALYSIS_CHAIN_SQL = """
+			WITH intraday_trigger AS (
+			    SELECT trigger_id
+			      FROM minute_price_trigger
+			     WHERE trigger_kind = 'FIRE'
+			       AND window_start >= ? AND window_start < ?
+			), reached AS (
+			    SELECT t.trigger_id,
+			           bool_or(q.analysis_id IS NOT NULL) AS requested,
+			           bool_or(a.analysis_id IS NOT NULL) AS started,
+			           COALESCE(bool_or(a.status = 'completed'), false) AS completed,
+			           COALESCE(bool_or(a.status = 'completed' AND a.published_at IS NOT NULL), false)
+			               AS published
+			      FROM intraday_trigger t
+			      LEFT JOIN analysis_execution_requests q
+			             ON q.created_at >= ?
+			            AND q.accepted_at IS NOT NULL
+			            AND q.input_json::jsonb -> 'source' ->> 'trigger_id' = t.trigger_id
+			      LEFT JOIN movement_analyses a
+			             ON a.analysis_id = q.analysis_id AND a.data_source = 'database'
+			     GROUP BY t.trigger_id
+			)
+			SELECT count(*) FILTER (WHERE requested) AS req,
+			       count(*) FILTER (WHERE started) AS started,
+			       count(*) FILTER (WHERE completed) AS completed,
+			       count(*) FILTER (WHERE published) AS published,
+			       (SELECT min((created_at AT TIME ZONE 'Asia/Seoul')::date)
+			          FROM analysis_execution_requests
+			         WHERE accepted_at IS NOT NULL) AS first_request_day
+			  FROM reached
+			""";
+
+	/** v2 단계의 명세 — <b>순서가 흐름</b>이다. {@code column} 은 {@link #ANALYSIS_CHAIN_SQL} 의 컬럼이다. */
+	private static final List<StageSpec> ANALYSIS_STAGES = List.of(
+			new StageSpec("c.req", "분석 요청", "analysis_execution_requests", "req"),
+			new StageSpec("c.start", "분석 시작", "movement_analyses", "started"),
+			new StageSpec("c.done", "분석 완료", "status=completed", "completed"),
+			new StageSpec("c.pub", "게시", "published_at IS NOT NULL", "published"));
+
+	/**
+	 * 체인에 v2 단계를 붙인다. 옛 단계 목록({@code stages})은 건드리지 않는다 — 그 목록만 아는 옛
+	 * 화면이 배포 시차 동안 이 응답을 받는다.
+	 *
+	 * <p>🔴 <b>v2 가 아직 없던 날은 관측 불가다</b> — 그날 코호트에 요청이 하나도 없고, 첫 v2 요청이
+	 * 조회일보다 뒤다(요청이 아예 없어도 같다). 옛 엔진이 멈춘 뒤를 가리는 것과 같은 기준을 뒤집은
+	 * 것이고, 날짜 상수가 아니라 원장이 답한다. 요청이 하나라도 있으면 그날의 수는 실측이다.
+	 * 첫 요청이 조회일과 같거나 앞인데 요청이 0 이면 그것은 <b>진짜 손실</b>이다(트리거는 있는데
+	 * 요청이 안 만들어졌다) — 가리지 않는다.
+	 */
+	private ChainRow withAnalysisStages(ChainRow chain, LocalDate day) {
+		OffsetDateTime from = day.atStartOfDay(KST).toOffsetDateTime();
+		OffsetDateTime to = day.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
+		List<AnalysisStage> stages = jdbc.queryForObject(ANALYSIS_CHAIN_SQL, (rs, i) -> {
+			LocalDate firstRequestDay = rs.getObject("first_request_day", LocalDate.class);
+			boolean blind = rs.getLong("req") == 0
+					&& (firstRequestDay == null || firstRequestDay.isAfter(day));
+			List<AnalysisStage> out = new ArrayList<>();
+			for (StageSpec s : ANALYSIS_STAGES) {
+				// 배치 칸은 null — 배치 트리거는 v2 의 대상이 아니다(0 이 아니다).
+				out.add(new AnalysisStage(s.id(), s.label(), s.src(), null,
+						rs.getLong(s.column()), blind));
+			}
+			return List.copyOf(out);
+		}, from, to, from);
+		return new ChainRow(chain.feeds(), chain.stages(), stages);
 	}
 
 	/**

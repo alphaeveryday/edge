@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  ANALYSIS_STAGE_FIELDS,
   awsObservation,
   axisOf,
   BOUNDARY_FIELDS,
@@ -24,6 +25,7 @@ import {
   TASK_FIELDS,
 } from './consoleFacts.ts';
 import type { ConsoleFactsDto } from '../../domains/console/types.ts';
+import { evaluate } from '../../rules/evaluate.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 
 const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead, deliveryFailed: 0 });
@@ -192,6 +194,13 @@ const WIRE = (): ConsoleFactsDto => ({
       { id: 'c.obs', label: '관측', batch: 18, intraday: 3, src: 'etf_contribution_observation' },
       { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
     ],
+    /* 새 분석 엔진의 단계 — 화면과 규칙이 읽는 목록이다. 옛 단계(위)와 수를 전부 다르게 둔다:
+     * 어댑터가 옛 목록을 읽으면 값이 갈린다. 판정하는 단계(c.start)와 수만 보여 주는 단계(c.done)를
+     * 하나씩 둔다. */
+    analysisStages: [
+      { id: 'c.start', label: '분석 시작', batch: null, intraday: 50, src: 'movement_analyses' },
+      { id: 'c.done', label: '분석 완료', batch: null, intraday: 44, src: 'status=completed' },
+    ],
   },
   etfLedger: { rows: [
     { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
@@ -265,9 +274,10 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
         { id: 'feed.batch', label: '배치 트리거', v: 20, unit: 'ETF', src: 'price_movement_trigger' },
         { id: 'feed.intraday', label: '장중 트리거', v: 65, unit: '건', src: 'minute_price_trigger' },
       ],
+      /* 단계는 새 분석 엔진의 목록에서만 온다 — 옛 단계(관측·라우트)는 옮기지 않는다 */
       stages: [
-        { id: 'c.obs', label: '관측', batch: 18, intraday: 3, src: 'etf_contribution_observation' },
-        { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
+        { id: 'c.start', label: '분석 시작', batch: null, intraday: 50, src: 'movement_analyses', batch_na: true },
+        { id: 'c.done', label: '분석 완료', batch: null, intraday: 44, src: 'status=completed', batch_na: true, shown_only: true },
       ],
     },
     etf_ledger: { rows: [
@@ -296,12 +306,12 @@ test('🔴 체인의 순서를 어댑터가 바꾸지 않는다 — 목록 순�
    * 정렬하면, 원장에 단계 간 선후가 없어 복원할 방법이 없는 순서가 조용히 뒤집힌다.
    * 뒤집힌 순서 위에서 R10 은 감소를 증가로 읽어 **P0 손실을 통째로 놓친다**. */
   const w = WIRE();
-  w.chain!.stages.reverse();
+  w.chain!.analysisStages!.reverse();
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.deepEqual(r.facts.chain?.stages.map((s) => s.id), ['c.route', 'c.obs']);
-  assert.deepEqual(r.facts.chain?.stages.map((s) => s.batch), [17, 18]);
+  assert.deepEqual(r.facts.chain?.stages.map((s) => s.id), ['c.done', 'c.start']);
+  assert.deepEqual(r.facts.chain?.stages.map((s) => s.intraday), [44, 50]);
 });
 
 test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는다', () => {
@@ -379,10 +389,10 @@ test('🔴 v2 분석 실패 축은 있으면 싣고 없으면 만들지 않는�
 });
 
 test('🔴 관측 불가 표시는 참일 때만 사실로 싣는다 — 0 과 같은 값으로 접지 않는다', () => {
-  /* 서버는 관측 불가 단계의 수를 0 으로 함께 보낸다(와이어에 null 자리가 없다). 어댑터가 `blind` 를
-   * 떨구면 그 0 이 실측이 되어 R10 이 "트리거 → 관측" 손실을 매일 P0 로 세운다. */
+  /* 서버는 관측 불가 단계의 수를 0 으로 함께 보낸다(장중 칸에 null 자리가 없다). 어댑터가 `blind` 를
+   * 떨구면 그 0 이 실측이 되어 R10 이 "트리거 → 분석 요청" 손실을 P0 로 세운다. */
   const w = WIRE();
-  w.chain!.stages = w.chain!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
+  w.chain!.analysisStages = w.chain!.analysisStages!.map((s) => ({ ...s, intraday: 0, blind: true }));
   w.boundary.blind = true;
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : r.reason);
@@ -393,7 +403,7 @@ test('🔴 관측 불가 표시는 참일 때만 사실로 싣는다 — 0 과 �
   /* 표시가 없는 옛 응답과 false 는 같은 형상이다 — 키를 만들지 않는다 */
   const old = parseFacts(WIRE());
   const explicit = WIRE();
-  explicit.chain!.stages[0].blind = false;
+  explicit.chain!.analysisStages![0].blind = false;
   explicit.boundary.blind = false;
   const off = parseFacts(explicit);
   for (const p of [old, off]) {
@@ -542,6 +552,7 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.boundary, BOUNDARY_FIELDS, 'boundary', ['blind']);
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
   both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
+  both(w.chain!.analysisStages![0], ANALYSIS_STAGE_FIELDS, 'chain.analysisStages', ['blind']);
   both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
   both(w.meta, META_FIELDS, 'meta');
 });
@@ -627,6 +638,63 @@ test('갈래가 늘어난 체인은 거부하지 않는다 — 전진 배포가 
   /* 앞 두 갈래는 그대로 위치를 지킨다 — 늘어난 축이 기존 판정을 밀어내지 않는다 */
   assert.deepEqual(r.facts.chain?.feeds.map((f) => f.id),
     ['feed.batch', 'feed.intraday', 'feed.third']);
+});
+
+test('🔴 옛 단계만 실린 응답은 체인 축이 없는 것으로 옮긴다 — 멈춘 엔진의 수로 화면과 R10 을 채우지 않는다', () => {
+  /* UI 가 먼저 배포되면 받는 형상이다: `stages`(옛 설명 엔진의 단계)는 있고 `analysisStages` 는 없다.
+   * 옛 단계로 대신 채우면 R10 이 "트리거 → 관측" 감소를 손실로 세운다 — 그 엔진은 멈췄다. */
+  const w = WIRE();
+  delete w.chain!.analysisStages;
+  /* 관측 가능하고 줄어드는 옛 단계 — 이걸 읽으면 손실이 서는 형상을 그대로 둔다 */
+  assert.ok(w.chain!.stages[0].intraday < w.chain!.feeds[1].v, '전제: 옛 단계가 감소를 담고 있다');
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
+  if (!r.ok) return;
+  assert.equal(r.facts.chain, undefined, '옛 단계 목록으로 체인을 만들어 냈다');
+  /* 체인은 없는 것으로 옮겨도, 같은 엔진을 읽는 ETF 표가 비어 있는 이유는 남겨야 한다 — 옛 단계가
+   * 관측 불가로 왔으면 그 엔진이 멈췄다는 뜻이고, 표는 이 응답에도 온다. */
+  assert.equal(r.facts.etf_ledger?.legacy_stopped, undefined, '멈췄다는 표시가 없는데 만들어 냈다');
+  const stopped = WIRE();
+  delete stopped.chain!.analysisStages;
+  stopped.chain!.stages = stopped.chain!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
+  const sr = parseFacts(stopped);
+  assert.equal(sr.ok && sr.facts.etf_ledger?.legacy_stopped, true, 'ETF 표의 안내 근거를 떨궜다');
+  assert.equal(sr.ok && sr.facts.chain, undefined);
+  const report = evaluate(r.facts);
+  const r10 = report.rules.find((x) => x.id === 'R10')!;
+  assert.equal(r10.evaluated, false, 'R10 이 평가됐다고 선다');
+  assert.equal(r10.notRun, 'axis');
+  assert.equal(report.violations.filter((v) => v.rule === 'R10').length, 0, '없는 손실을 세웠다');
+});
+
+test('새 분석 엔진의 단계 — 배치 칸의 null 은 대상 아님이고, 수만 보여 주는 단계는 표시가 붙는다', () => {
+  const r = parseFacts(WIRE());
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (!r.ok) return;
+  const [start, done] = r.facts.chain!.stages;
+  /* 0 이 아니다 — 0 이면 "배치 트리거가 전부 사라졌다"가 된다 */
+  assert.equal(start.batch, null);
+  assert.equal(start.batch_na, true);
+  /* 분석 요청·분석 시작은 판정하고, 분석 완료·게시는 수만 보여 준다 */
+  assert.equal(start.shown_only, undefined);
+  assert.equal(done.shown_only, true);
+  const pub = WIRE();
+  pub.chain!.analysisStages = [
+    { id: 'c.req', label: '분석 요청', batch: null, intraday: 60, src: 'x' },
+    { id: 'c.pub', label: '게시', batch: null, intraday: 40, src: 'x' },
+  ];
+  const p = parseFacts(pub);
+  assert.equal(p.ok, true);
+  if (p.ok) assert.deepEqual(p.facts.chain!.stages.map((s) => s.shown_only), [undefined, true]);
+  /* 형상이 틀리면 거부한다 — 장중 칸은 수여야 하고 빈 목록은 축이 온 척하는 빈 체인이다 */
+  for (const [name, mutate] of [
+    ['장중 칸이 null', (w: ConsoleFactsDto) => { (w.chain!.analysisStages![0] as { intraday: unknown }).intraday = null; }],
+    ['배치 칸이 음수', (w: ConsoleFactsDto) => { w.chain!.analysisStages![0].batch = -1; }],
+    ['빈 목록', (w: ConsoleFactsDto) => { w.chain!.analysisStages = []; }],
+    ['객체', (w: ConsoleFactsDto) => { (w.chain as unknown as { analysisStages: unknown }).analysisStages = {}; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
 });
 
 test('🔴 체인 축이 통째로 없는 응답은 거부하지 않는다 — 그 축만 못 돎으로 선다', () => {

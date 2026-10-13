@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { intradayLostAtEntry, legacyStagesBlind } from './chainView.ts';
+import { intradayLostAtEntry, stagesBlind } from './chainView.ts';
 import type { Facts } from '../../rules/types.ts';
 
 const chain = (fired: number, observed: number | null): Facts['chain'] => ({
@@ -46,18 +46,18 @@ test('🔴 화면이 그 판정을 실제로 쓴다 — 순수 모듈로 내려�
 });
 
 test('🔴 입구 단계가 관측 불가면 "전량이 사라졌다"고 말하지 않는다 — 그 0 은 셀 쪽이 없다는 뜻이다', () => {
-  /* 옛 설명 엔진이 멈춘 뒤의 날: 장중 트리거 256, 관측 0(관측 불가). 0 만 보면 이 문장이 매일 선다. */
+  /* 새 분석 엔진의 요청이 아직 없던 날: 장중 트리거 256, 첫 단계 0(관측 불가). 0 만 보면 이 문장이 선다. */
   const blind = chain(256, 0);
   blind!.stages = blind!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
   assert.equal(intradayLostAtEntry(blind), false);
-  assert.equal(legacyStagesBlind(blind), true);
+  assert.equal(stagesBlind(blind), true);
   /* 대조 — 같은 수인데 관측 가능하면 진짜 손실이다 */
   assert.equal(intradayLostAtEntry(chain(256, 0)), true);
-  assert.equal(legacyStagesBlind(chain(256, 0)), false);
-  assert.equal(legacyStagesBlind(undefined), false, '축이 없는 것은 관측 불가 표시가 아니다');
+  assert.equal(stagesBlind(chain(256, 0)), false);
+  assert.equal(stagesBlind(undefined), false, '축이 없는 것은 관측 불가 표시가 아니다');
   /* 끝 단계 하나만 관측 불가인 사실(동봉 스냅샷의 온프렘 수신)은 이 사정이 아니다 — 앞 단계는
    * 실측이고 R10 도 돈다. 여기서 참이면 흐름 화면이 "관측부터 값이 없다"고 거짓 안내를 한다. */
   const tail = chain(65, 3);
   tail!.stages = [...tail!.stages, { id: 'c.onprem', label: '온프렘 수신', src: 'x', blind: true }];
-  assert.equal(legacyStagesBlind(tail), false);
+  assert.equal(stagesBlind(tail), false);
 });

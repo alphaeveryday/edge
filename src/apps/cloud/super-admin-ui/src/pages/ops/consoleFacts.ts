@@ -252,6 +252,13 @@ export const CHAIN_FEED_FIELDS: Record<string, Check> = {
 export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
   id: text, label: text, batch: count, intraday: count, src: text, blind: optionalBool,
 };
+/* 새 분석 엔진의 단계(ALPHA-1296). 배치 칸만 `null` 을 받는다 — "대상 아님"이지 "못 셌다"가 아니다. */
+export const ANALYSIS_STAGE_FIELDS: Record<string, Check> = {
+  id: text, label: text, batch: nullableCount, intraday: count, src: text, blind: optionalBool,
+};
+/* R10 이 판정하지 않고 수만 보여 주는 단계(ALPHA-1296). 분석 시작 → 완료의 감소는 실패·진행 중이고
+ * (실패는 R15 가 맡는다) 완료 → 게시의 감소는 설계다(고른 항목이 없으면 게시되지 않는다). */
+const SHOWN_ONLY_STAGES = new Set(['c.done', 'c.pub']);
 export const ETF_LEDGER_ROW_FIELDS: Record<string, Check> = {
   etf: text, name: text, triggered: bool, outcome: nullableText, error: nullableText,
 };
@@ -345,6 +352,19 @@ export function parseFacts(body: unknown): FactsParse {
      * 배포가 화면을 멈추면 안 된다). 대가를 밝혀 둔다: 셋째 갈래가 생기면 R10 이 그 갈래를
      * **한 번도 안 본다**. 축이 늘 때 규칙을 같이 고치는 것 말고 이걸 잡는 자동 가드는 없다. */
     if ((chain.feeds as unknown[]).length < 2) return bad('chain.feeds 가 두 갈래가 아니다');
+    /* 새 분석 엔진의 단계 — 없어도 된다(이 목록을 안 싣는 API). 오면 전 필드를 검사한다. 빈 목록은
+     * 거부한다: 단계가 0개면 R10 이 비교할 점이 없는데 축은 온 것처럼 보인다. */
+    const analysisStages = chain.analysisStages;
+    if (analysisStages !== undefined) {
+      if (!Array.isArray(analysisStages) || analysisStages.length === 0) {
+        return bad('chain.analysisStages 가 비었다');
+      }
+      for (const row of analysisStages) {
+        if (!isRow(row)) return bad('chain.analysisStages 원소가 객체가 아니다');
+        const field = offendingField(row, ANALYSIS_STAGE_FIELDS);
+        if (field) return bad(`chain.analysisStages[].${field} 의 값이 계약과 다르다`);
+      }
+    }
   }
 
   const etfLedger = body.etfLedger;
@@ -450,8 +470,13 @@ function toFacts(dto: ConsoleFactsDto): Facts {
     /* 순서를 **그대로 옮긴다** — 목록 순서가 곧 흐름이라 정렬하거나 id 로 다시 찾으면 서버가
      * 정한 선후가 사라진다. 원장에는 단계 간 선후가 없어 여기서 복원할 방법도 없다.
      * 안 온 축은 **만들지 않는다**(다른 부재 축과 같은 규약) — 빈 목록으로 채우면 R10 이
-     * `못 돎` 대신 `평가됨 · 위반 0` 을 세운다. */
-    ...(dto.chain
+     * `못 돎` 대신 `평가됨 · 위반 0` 을 세운다.
+     *
+     * 🔴 **단계는 새 분석 엔진의 목록(`analysisStages`)에서만 온다**(ALPHA-1296). 그 목록이 없는
+     * 응답(옛 API)은 체인 축이 **없는 것**으로 옮긴다 — 옛 단계 목록(`stages`)으로 대신 채우지
+     * 않는다. 옛 단계는 멈춘 엔진의 표라, 그걸 읽으면 R10 이 없는 손실을 세우거나 화면이 지난
+     * 엔진의 수를 지금 것처럼 그린다. */
+    ...(dto.chain?.analysisStages
       ? {
           chain: {
             feeds: dto.chain.feeds.map((f) => ({
@@ -461,14 +486,17 @@ function toFacts(dto: ConsoleFactsDto): Facts {
               unit: f.unit,
               src: f.src,
             })),
-            stages: dto.chain.stages.map((s) => ({
+            stages: dto.chain.analysisStages.map((s) => ({
               id: s.id,
               label: s.label,
               batch: s.batch,
               intraday: s.intraday,
               src: s.src,
-              /* 참일 때만 싣는다 — 없는 응답(옛 API)과 false 를 같은 형상으로 둔다 */
+              /* 참일 때만 싣는다 — 없는 응답과 false 를 같은 형상으로 둔다 */
               ...(s.blind ? { blind: true } : {}),
+              /* 배치 칸의 `null` 은 "대상 아님"이다 — 집계 없음과 가르려고 표시를 따로 싣는다 */
+              ...(s.batch === null ? { batch_na: true } : {}),
+              ...(SHOWN_ONLY_STAGES.has(s.id) ? { shown_only: true } : {}),
             })),
           },
         }
@@ -477,7 +505,9 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       ? { etf_ledger: { rows: dto.etfLedger.rows.map((r) => ({
           etf: r.etf, name: r.name, triggered: r.triggered,
           outcome: r.outcome, error: r.error,
-        })) } }
+        })),
+        /* 옛 체인 단계의 관측 불가 표시에서 읽는다 — 서버가 그 엔진이 멈췄다고 답한 유일한 자리다 */
+        ...(dto.chain?.stages[0]?.blind ? { legacy_stopped: true } : {}) } }
       : {}),
     ...(dto.analysisFailures
       ? { analysis_failures: dto.analysisFailures.map((a) => ({ kind: a.kind, failed_etfs: a.failedEtfs })) }

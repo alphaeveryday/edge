@@ -157,9 +157,20 @@ export interface ChainStage {
   intraday?: number | null;
   src: string;
   note?: string;
-  /** 관측 불가 — 이 단계를 셀 쪽이 없다. 0 과 다르다. 서버가 싣는다: 옛 설명 엔진이 조회일보다
-   *  앞서 멈췄고 그날 코호트에 그 엔진의 행이 없을 때(ALPHA-1293) */
+  /** 관측 불가 — 이 단계를 셀 쪽이 없다. 0 과 다르다. 서버가 싣는다: 그날 코호트에 새 분석
+   *  엔진의 요청이 하나도 없고 첫 요청이 조회일보다 뒤일 때(ALPHA-1296) */
   blind?: boolean;
+  /**
+   * 배치 갈래가 이 단계의 **대상이 아니다**(ALPHA-1296) — 배치 트리거는 새 분석 엔진이 소비하지
+   * 않는다. 이때 `batch` 는 `null` 이고, 0 건도 집계 없음도 아니다. R10 은 그 갈래를 비교하지 않는다.
+   */
+  batch_na?: boolean;
+  /**
+   * 이 단계로의 감소를 **손실로 판정하지 않는다**(ALPHA-1296) — 수는 보여 주기만 한다.
+   * 분석 시작 → 분석 완료(실패는 R15 가 맡고 진행 중은 실패가 아니다)와 분석 완료 → 게시(고른
+   * 항목이 없으면 게시되지 않는 것이 설계다)가 그렇다.
+   */
+  shown_only?: boolean;
 }
 
 export interface QueueFact {
@@ -231,6 +242,12 @@ export interface EtfLedger {
   rows: EtfLedgerRow[];
   mock?: boolean;
   why?: string;
+  /**
+   * 이 원장을 쓰는 옛 설명 엔진이 조회일보다 앞서 멈췄는가(ALPHA-1296) — 서버가 옛 체인 단계를
+   * 관측 불가로 내린 날이다. 흐름 화면이 표의 귀결이 비어 있는 이유를 적을 때만 쓴다. 체인 축과
+   * 따로 싣는다: 새 단계 목록이 없는 응답에서도 이 표는 오고, 그때도 이유는 적어야 한다.
+   */
+  legacy_stopped?: boolean;
 }
 
 export interface RunbookEntry {

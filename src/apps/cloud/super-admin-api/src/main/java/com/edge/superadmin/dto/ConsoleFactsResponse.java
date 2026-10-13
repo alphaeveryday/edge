@@ -214,11 +214,33 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 앞 단계도 0 이면 아무 위반도 안 선다(그 갈래는 애초에 아무것도 안 흘렀다). 그렇게 적었다가
 	 * 정정했다 — "0 이면 손실"은 이 응답이 하지 않는 판정이다.
 	 */
-	public record ChainResponse(List<ChainFeedResponse> feeds, List<ChainStageResponse> stages) {
+	public record ChainResponse(List<ChainFeedResponse> feeds, List<ChainStageResponse> stages,
+			List<AnalysisStageResponse> analysisStages) {
 
 		public static ChainResponse from(ChainRow c) {
 			return new ChainResponse(c.feeds().stream().map(ChainFeedResponse::from).toList(),
-					c.stages().stream().map(ChainStageResponse::from).toList());
+					c.stages().stream().map(ChainStageResponse::from).toList(),
+					c.analysisStages().stream().map(AnalysisStageResponse::from).toList());
+		}
+	}
+
+	/**
+	 * 새 분석 엔진(v2)의 단계(ALPHA-1296) — 분석 요청 → 분석 시작 → 분석 완료 → 게시. 수는 조회일에
+	 * 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다.
+	 *
+	 * <p>{@code batch} 는 <b>항상 null</b> 이다 — 배치 트리거는 v2 의 대상이 아니다(0 이 아니다).
+	 * {@code blind} 가 참이면 {@code intraday} 의 0 은 실측이 아니다(v2 가 아직 없던 날).
+	 *
+	 * <p>⚠️ 옛 단계 목록({@code stages})과 <b>따로</b> 낸다. 같은 목록에 넣으면 그 목록만 아는 옛
+	 * 화면이 "분석 시작 → 완료" 같은 설계된 감소와 배치 칸의 0 을 손실로 읽는다.
+	 */
+	public record AnalysisStageResponse(String id, String label, Long batch, long intraday,
+			String src, boolean blind) {
+
+		public static AnalysisStageResponse from(
+				com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage s) {
+			return new AnalysisStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src(),
+					s.blind());
 		}
 	}
 

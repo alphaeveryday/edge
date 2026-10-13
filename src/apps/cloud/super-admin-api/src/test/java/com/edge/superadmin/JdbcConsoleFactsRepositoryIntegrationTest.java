@@ -1951,6 +1951,156 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(stages.get(4).batch()).isEqualTo(1L);   // c.pub — 초안은 게시가 아니다
 	}
 
+	/** 요청·분석이 공유하는 v2 분석 id — 32자리 16진수여야 한다({@code analysis_execution_requests} 의 CHECK). */
+	private static String analysisId(String name) {
+		return java.util.UUID.nameUUIDFromBytes(name.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+				.toString().replace("-", "");
+	}
+
+	/**
+	 * 장중 트리거에서 이어진 v2 분석 요청 한 건(ALPHA-1296). 요청 입력의 {@code source.trigger_id} 가
+	 * 트리거와의 유일한 연결이다 — v2 가 요청을 만들 때 그렇게 싣는다({@code sources/triggers.py}).
+	 */
+	private void insertRequest(String name, String triggerId, String createdAt) {
+		jdbc.update("""
+				INSERT INTO analysis_execution_requests (analysis_id, source_event_id, input_json,
+				       execution_arn, created_at, accepted_at)
+				VALUES (?,?,?,?,?::timestamptz,?::timestamptz)
+				""", analysisId(name), "PriceTriggerFired:" + triggerId + ":" + name,
+				"{\"kind\":\"movement\",\"source\":{\"trigger_id\":\"" + triggerId + "\"}}",
+				"arn:aws:states:ap-northeast-2:1:execution:single:" + analysisId(name), createdAt, createdAt);
+	}
+
+	/**
+	 * 🔴 <b>v2 단계는 조회일에 발화한 트리거에서 이어진 것만 센다</b>(ALPHA-1296). 단계마다 그 단계에
+	 * 도달한 <b>트리거 수</b>다: 분석 요청 → 분석 시작(분석 행이 있음) → 분석 완료 → 게시.
+	 *
+	 * <p>칸을 하나씩 가른다 — 요청은 있는데 분석 행이 없는 트리거({@code m5})가 "분석 시작"의 감소로
+	 * 보여야 하고(dev 10-13 에 256건 중 42건이 그랬는데 어디에도 안 보였다), 요청조차 없는 트리거
+	 * ({@code m6})는 "분석 요청"의 감소다. 실패·진행 중은 시작에는 들고 완료에는 안 든다. 완료됐지만
+	 * 게시 시각이 없는 분석은 완료에는 들고 게시에는 안 든다(고른 항목이 없으면 그렇다 — 설계다).
+	 *
+	 * <p>⚠️ <b>다른 날 트리거에서 온 분석이 섞이면 안 된다</b>: {@code m-prev} 는 전날 발화했고 그
+	 * 분석은 조회일에 만들어졌다. "그날 만들어진 분석"으로 세면 이 행이 들어온다. 합성 입력
+	 * ({@code m7})의 분석도 세지 않는다.
+	 */
+	@Test
+	void v2_단계는_조회일에_발화한_트리거에서_이어진_것만_트리거_단위로_센다() {
+		insertTrigger("g-day", DAY.toString(), "etf-batch");   // 배치 트리거 — v2 의 대상이 아니다
+		for (int i = 1; i <= 8; i++) {
+			insertMinuteTrigger("m" + i, DAY.toString(), "etf-" + i, "FIRE",
+					"2026-08-03T09:%02d:00+09:00".formatted(30 + i));
+		}
+		insertMinuteTrigger("m-prev", "2026-08-02", "etf-p", "FIRE", "2026-08-02T14:00:00+09:00");
+
+		for (String m : List.of("m1", "m2", "m3", "m4", "m5", "m7")) {
+			insertRequest(m, m, "2026-08-03T09:40:00+09:00");
+		}
+		/* m8 은 요청 행이 예약만 됐고 수용되지 않았다(워크플로가 뜨지 않았다) — 요청으로 세지 않는다.
+		 * 세면 이 건이 "요청 → 분석 시작"의 손실로 옮겨 가 원인이 틀린 자리에 선다. */
+		insertRequest("m8", "m8", "2026-08-03T09:40:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("m8"));
+		// m1 은 한 트리거에 요청이 둘이다(재발화 세대) — 트리거 단위라 한 번만 센다.
+		insertRequest("m1-again", "m1", "2026-08-03T10:40:00+09:00");
+		insertAnalysis("movement", analysisId("m1"), "etf-1", "2026-08-03T09:41:00+09:00", "completed", "database");
+		insertAnalysis("movement", analysisId("m1-again"), "etf-1", "2026-08-03T10:41:00+09:00", "completed", "database");
+		insertAnalysis("movement", analysisId("m2"), "etf-2", "2026-08-03T09:41:00+09:00", "completed", "database");
+		insertAnalysis("movement", analysisId("m3"), "etf-3", "2026-08-03T09:41:00+09:00", "failed", "database");
+		insertAnalysis("movement", analysisId("m4"), "etf-4", "2026-08-03T09:41:00+09:00", "running", "database");
+		insertAnalysis("movement", analysisId("m7"), "etf-7", "2026-08-03T09:41:00+09:00", "completed", "synthetic");
+		jdbc.update("UPDATE movement_analyses SET published_at = analysis_at WHERE analysis_id IN (?,?)",
+				analysisId("m1"), analysisId("m7"));
+		// 전날 트리거의 요청·분석이 조회일에 만들어졌다 — 조회일 코호트가 아니다.
+		insertRequest("m-prev", "m-prev", "2026-08-03T09:00:00+09:00");
+		insertAnalysis("movement", analysisId("m-prev"), "etf-p", "2026-08-03T09:01:00+09:00", "completed", "database");
+		jdbc.update("UPDATE movement_analyses SET published_at = analysis_at WHERE analysis_id = ?",
+				analysisId("m-prev"));
+
+		var chain = repository.facts(DAY).chain();
+		assertThat(chain.feeds()).extracting(f -> f.id(), f -> f.v())
+				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 8L));
+		assertThat(chain.analysisStages())
+				.extracting(s -> s.id(), s -> s.label(), s -> s.intraday(), s -> s.batch(), s -> s.blind())
+				.containsExactly(
+						tuple("c.req", "분석 요청", 6L, null, false),     // m6 은 요청이 없고 m8 은 수용되지 않았다
+						tuple("c.start", "분석 시작", 4L, null, false),   // m5 는 분석 행이 없고 m7 은 합성 입력이다
+						tuple("c.done", "분석 완료", 2L, null, false),    // m3 실패 · m4 진행 중
+						tuple("c.pub", "게시", 1L, null, false));         // m2 는 게시 시각이 없다
+
+		// 전날을 물으면 그날 트리거의 자손만 나온다 — 분석이 언제 만들어졌는지는 상관없다.
+		assertThat(repository.facts(LocalDate.parse("2026-08-02")).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday())
+				.containsExactly(tuple("c.req", 1L), tuple("c.start", 1L), tuple("c.done", 1L), tuple("c.pub", 1L));
+	}
+
+	/**
+	 * 🔴 <b>v2 요청이 아직 없던 날은 v2 단계가 관측 불가다</b>(ALPHA-1296) — 그날 코호트에 요청이
+	 * 하나도 없고 첫 v2 요청이 조회일보다 뒤다. 그 0 은 "요청이 하나도 안 만들어졌다"가 아니라 그때
+	 * v2 가 없었다는 뜻이다. 날짜 상수가 아니라 원장이 답한다.
+	 *
+	 * <p>대조를 같은 원장으로 둔다: v2 가 이미 돌던 날(첫 요청이 조회일과 같거나 앞)에 요청이 0 이면
+	 * 그것은 <b>진짜 손실</b>이라 가리지 않는다. "요청이 0 이면 무조건 관측 불가"로 바꾸는 변이와
+	 * "항상 관측 불가"로 바꾸는 변이가 여기서 죽는다.
+	 */
+	@Test
+	void v2_요청이_아직_없던_날은_관측_불가이고_v2_가_돌던_날의_0_은_손실이다() {
+		insertMinuteTrigger("m-old", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+		insertMinuteTrigger("m-first", "2026-08-05", "etf-b", "FIRE", "2026-08-05T09:31:00+09:00");
+		insertRequest("m-first", "m-first", "2026-08-05T09:32:00+09:00");   // 첫 v2 요청 = 08-05
+		insertMinuteTrigger("m-lost", "2026-08-06", "etf-c", "FIRE", "2026-08-06T09:31:00+09:00");
+
+		// 08-03: 첫 요청보다 앞 — 관측 불가다. 트리거 수는 실측 그대로다.
+		var before = repository.facts(DAY).chain();
+		assertThat(before.feeds()).filteredOn(f -> f.id().equals("feed.intraday")).singleElement()
+				.satisfies(f -> assertThat(f.v()).isEqualTo(1L));
+		assertThat(before.analysisStages()).hasSize(4)
+				.allSatisfy(s -> assertThat(s.blind()).as("%s 관측 불가", s.id()).isTrue());
+
+		// 08-05: 첫 요청이 있는 날 — 실측이다.
+		assertThat(repository.facts(LocalDate.parse("2026-08-05")).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).isFalse())
+				.filteredOn(s -> s.id().equals("c.req")).singleElement()
+				.satisfies(s -> assertThat(s.intraday()).isEqualTo(1L));
+
+		// 08-06: v2 가 돌던 날인데 요청이 0 — 진짜 손실이라 가리지 않는다.
+		assertThat(repository.facts(LocalDate.parse("2026-08-06")).chain().analysisStages())
+				.allSatisfy(s -> {
+					assertThat(s.blind()).as("%s — v2 가 돌던 날의 0 은 손실이다", s.id()).isFalse();
+					assertThat(s.intraday()).isZero();
+				});
+	}
+
+	/**
+	 * 경계: <b>첫 v2 요청이 조회일 당일</b>인데 그 요청은 전날 트리거의 것이고, 조회일 트리거에는
+	 * 요청이 없다. 그날 v2 는 이미 돌고 있었으므로 0 은 손실이다 — "첫 요청일이 조회일과 같거나
+	 * 뒤"로 넓히는 변이가 이 0 을 관측 불가로 가린다.
+	 */
+	@Test
+	void 첫_v2_요청이_조회일_당일이면_그날의_0_은_가리지_않는다() {
+		insertMinuteTrigger("m-prev", "2026-08-02", "etf-p", "FIRE", "2026-08-02T15:20:00+09:00");
+		insertRequest("m-prev", "m-prev", "2026-08-03T08:00:00+09:00");   // 첫 요청 = 조회일
+		insertMinuteTrigger("m-day", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+
+		assertThat(repository.facts(DAY).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).as("%s — v2 가 돌던 날이다", s.id()).isFalse())
+				.filteredOn(s -> s.id().equals("c.req")).singleElement()
+				.satisfies(s -> assertThat(s.intraday()).isZero());
+	}
+
+	/** v2 요청이 <b>하나도 없는</b> 원장도 관측 불가다 — 그 엔진이 돈 적이 없으니 셀 쪽이 없다. */
+	@Test
+	void v2_요청이_아예_없으면_v2_단계는_관측_불가다() {
+		insertMinuteTrigger("m-only", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+		// 수용되지 않은 예약은 v2 가 돌았다는 근거가 아니다 — 이 행만으로 관측 가능해지면 안 된다.
+		insertMinuteTrigger("m-early", "2026-08-01", "etf-b", "FIRE", "2026-08-01T09:31:00+09:00");
+		insertRequest("m-early", "m-early", "2026-08-01T09:32:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("m-early"));
+		assertThat(repository.facts(DAY).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).isTrue());
+	}
+
 	/**
 	 * 🔴 <b>옛 설명 엔진이 멈춘 뒤의 날은 단계 다섯이 관측 불가다</b>(ALPHA-1293). 트리거는 지금도
 	 * 쓰이는데 그 뒤 단계는 옛 엔진의 표에서 세므로, 엔진이 멈춘 뒤에는 "트리거 N → 관측 0"이 매일
