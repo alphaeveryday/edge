@@ -256,7 +256,7 @@ async def test_current_timeout_keeps_completed_recommended_history(monkeypatch):
     request = AnalysisInput(holdings=[{'name': 'current', 'instrument_id': 'KR:360750', 'amount_krw': 100}], horizon='10년 이상')
     market = MarketData(request, date(2026, 10, 12))
     market.records['KR:069500'] = record()
-    async def slow(*args):
+    async def slow(*args, **kwargs):
         await asyncio.sleep(1)
     original_timeout = asyncio.timeout
     monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', slow)

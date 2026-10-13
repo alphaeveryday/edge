@@ -115,7 +115,7 @@ async def test_partial_price_failures_preserve_nine_independent_combinations(mon
         market.catalog['KR:E']['market'] = 'US'
     if failure == 'shared-window':
         market.as_of = date(2026, 10, 2)
-    async def fetch(symbol, as_of):
+    async def fetch(symbol, as_of, **kwargs):
         if failure == 'timeout' and symbol == 'E.KS':
             await asyncio.sleep(10)
         if symbol == 'KRW=X':
@@ -226,7 +226,7 @@ async def test_optimizer_retains_the_failed_instrument_and_provider_cause():
 
 async def test_collection_timeout_does_not_overwrite_an_already_known_price_failure(monkeypatch):
     request, market, groups = batch()
-    async def fetch(symbol, _):
+    async def fetch(symbol, _, **kwargs):
         if symbol == 'E.KS':
             raise ValueError('PRICE_STALE')
         if symbol == 'D.KS':
@@ -237,6 +237,17 @@ async def test_collection_timeout_does_not_overwrite_an_already_known_price_fail
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['failures']['KR:E'] == 'PRICE_STALE'
     assert result['failures']['KR:D'] == 'PRICE_PROVIDER_TIMEOUT'
+
+
+async def test_all_provider_failed_combinations_are_accounted_for_in_diagnostics():
+    request, market, groups = batch()
+    def loader(*args):
+        raise ValueError('PRICE_STALE')
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'unavailable'
+    assert len(result['rejected_combinations']) == 10
+    assert {row['reason'] for row in result['rejected_combinations']} == {'INSTRUMENT_PRICE_UNAVAILABLE'}
 
 
 async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():

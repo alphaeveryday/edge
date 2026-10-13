@@ -57,6 +57,14 @@ def test_nontrading_dividend_event_is_kept_without_becoming_a_missing_quote():
     assert data['frame']['Dividends'].sum() == 210
 
 
+def test_fx_recovery_provenance_stays_attached_to_the_krw_comparison():
+    fx = record()
+    fx['price_recovery'] = {'status': 'repaired', 'dates': ['2026-07-08'], 'method': 'intraday reconstruction'}
+    history = comparison({'US:VOO': 1}, None, {'US:VOO': record('USD'), 'FX': fx}, date(2026, 10, 12))
+    source = next(source for source in history['sources'] if source['instrument_id'] == 'USD/KRW')
+    assert source['price_recovery'] == fx['price_recovery']
+
+
 async def test_transient_unavailability_does_not_freeze_future_success():
     attempts = []
     def loader(*args):
@@ -84,7 +92,7 @@ async def test_instrument_failure_code_survives_to_the_market_result():
 async def test_provider_retry_is_bounded_and_only_for_transient_errors(monkeypatch, failure, attempts):
     from edge_portfolio.market_data import fetch_prices
     calls = []
-    async def fetch(*args):
+    async def fetch(*args, **kwargs):
         calls.append(1)
         raise ValueError(failure)
     async def sleep(*args):
@@ -155,3 +163,34 @@ async def test_optional_repair_failure_retains_raw_history_and_reaps_process(mon
     assert result['price_recovery']['reason'] == ('PRICE_PROVIDER_TIMEOUT' if repair_failure == 'timeout' else 'PRICE_PROVIDER_UNAVAILABLE')
     if repair_failure == 'timeout':
         assert process.killed and process.waited
+
+
+@pytest.mark.parametrize('collection_deadline', [False, True])
+async def test_collection_deadline_retains_raw_prices_without_swallowing_analysis_cancellation(monkeypatch, collection_deadline):
+    from edge_portfolio.price_fetch import serialize
+    ready = asyncio.Event()
+    class Process:
+        returncode = None
+        async def communicate(self):
+            ready.set()
+            await asyncio.sleep(10)
+        def kill(self):
+            pass
+        async def wait(self):
+            self.returncode = -1
+    async def spawn(*args, **kwargs):
+        Path(args[-1]).write_text(serialize(record()), encoding='utf-8')
+        return Process()
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr('edge_portfolio.market_data.asyncio.create_subprocess_exec', spawn)
+    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout(.03 if collection_deadline and seconds == 65 else seconds))
+    market = MarketData(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), date(2026, 10, 12))
+    task = asyncio.create_task(market.get([{'instrument_id': 'KR:069500', 'weight_pct': 100}]))
+    await ready.wait()
+    if collection_deadline:
+        assert (await task)['status'] == 'available'
+    else:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert 'KR:069500' in market.records

@@ -123,7 +123,8 @@ class Optimizer:
                 self.market.failures.pop(key, None)
                 async with self.market.semaphore:
                     try:
-                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of)
+                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
+                            on_raw=lambda record: self.market.records.__setitem__(key, record))
                         self.market.failures.pop(key, None)
                     except Exception as error:
                         self.market.failures[key] = price_failure(error)
@@ -140,6 +141,7 @@ class Optimizer:
             if 'FX' in failed:
                 failed.update(key for key in ids - {'CASH:KRW'} if self.market.catalog[key]['market'] == 'US')
             eligible = [group if not set(group).intersection(failed) else [] for group in groups]
+            rejections.update({number: 'INSTRUMENT_PRICE_UNAVAILABLE' for number, group in enumerate(eligible) if not group})
             if set(self.market.current).intersection(failed):
                 raise ValueError('BASELINE_PRICE_UNAVAILABLE')
             # Exclude too-short ranges first, then validate prices within one shared window.

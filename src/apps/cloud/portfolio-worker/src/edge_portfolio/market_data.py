@@ -126,10 +126,10 @@ def load_prices(symbol, as_of, *, on_raw=None):
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
-async def fetch_prices(symbol, as_of):
+async def fetch_prices(symbol, as_of, *, on_raw=None):
     for attempt in range(2):
         try:
-            return await _fetch_prices(symbol, as_of)
+            return await _fetch_prices(symbol, as_of, on_raw=on_raw)
         except (ValueError, TimeoutError) as error:
             code = price_failure(error)
             if attempt or code not in TRANSIENT_PRICE_FAILURES:
@@ -137,12 +137,12 @@ async def fetch_prices(symbol, as_of):
             await asyncio.sleep(.5)
 
 
-async def _fetch_prices(symbol, as_of):
+async def _fetch_prices(symbol, as_of, *, on_raw=None):
     with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json')
+        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw)
 
 
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint):
+async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None):
     """A cancellable process bounds library calls that can block beyond HTTP timeout."""
     process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
@@ -160,28 +160,44 @@ async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint):
         if process.returncode and checkpoint.is_file():
             stdout = checkpoint.read_bytes()
             repair_failure = 'PRICE_PROVIDER_UNAVAILABLE'
-        try:
-            record = json.loads(stdout)
-        except (ValueError, UnicodeError) as error:
-            raise ValueError('PRICE_RESPONSE_INVALID') from error
-        if not isinstance(record, dict):
-            raise ValueError('PRICE_RESPONSE_INVALID')
-        if (process.returncode and not repair_failure) or 'error' in record:
-            raise ValueError(record.get('error') if record.get('error') in PRICE_FAILURES else 'PRICE_PROVIDER_UNAVAILABLE')
-        try:
-            record['frame'] = pd.DataFrame(record['frame']).set_index('date')
-            record['frame'].index = pd.to_datetime(record['frame'].index)
-            if not {'Adj Close', 'Close'} <= set(record['frame'].columns):
-                raise ValueError('PRICE_RESPONSE_INVALID')
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError('PRICE_RESPONSE_INVALID') from error
+        record = decode_prices(stdout)
+        if process.returncode and not repair_failure:
+            raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
         if repair_failure:
             record['price_recovery'] = {'status': 'unavailable', 'reason': repair_failure, 'dates': []}
         return record
+    except asyncio.CancelledError:
+        if on_raw and checkpoint.is_file():
+            try:
+                record = decode_prices(checkpoint.read_bytes())
+                record['price_recovery'] = {'status': 'unavailable', 'reason': 'PRICE_REPAIR_INTERRUPTED', 'dates': []}
+                on_raw(record)
+            except Exception as error:
+                log.warning('Price checkpoint unavailable: %s', type(error).__name__)
+        raise  # Preserve whole-analysis cancellation; the collector may use saved prices.
     finally:
         if process.returncode is None:
             process.kill()
             await process.wait()
+
+
+def decode_prices(body):
+    try:
+        record = json.loads(body)
+    except (ValueError, UnicodeError) as error:
+        raise ValueError('PRICE_RESPONSE_INVALID') from error
+    if not isinstance(record, dict):
+        raise ValueError('PRICE_RESPONSE_INVALID')
+    if 'error' in record:
+        raise ValueError(record['error'] if record['error'] in PRICE_FAILURES else 'PRICE_PROVIDER_UNAVAILABLE')
+    try:
+        record['frame'] = pd.DataFrame(record['frame']).set_index('date')
+        record['frame'].index = pd.to_datetime(record['frame'].index)
+        if not {'Adj Close', 'Close'} <= set(record['frame'].columns):
+            raise ValueError('PRICE_RESPONSE_INVALID')
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError('PRICE_RESPONSE_INVALID') from error
+    return record
 
 
 def weights(rows):
@@ -261,7 +277,7 @@ def normalized_prices(ids, records, as_of, bounds=None):
         series[key] = values
         urls.append({'instrument_id': key, 'url': record['source_url'], 'price_recovery': record.get('price_recovery')})
     if needs_fx:
-        urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url']})
+        urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url'], 'price_recovery': records['FX'].get('price_recovery')})
     if series:
         union = pd.DatetimeIndex(sorted(set().union(*(s.index for s in series.values()))))
         frame = pd.DataFrame({key: s.reindex(union).ffill() for key, s in series.items()})
@@ -320,7 +336,8 @@ class MarketData:
         self.results = {}
         self.queried = set()
         self.calls = 0
-        self.semaphore = asyncio.Semaphore(3)
+        # Repair imports SciPy/sklearn in each child; three leave no usable 512 MiB headroom.
+        self.semaphore = asyncio.Semaphore(2)
         self.catalog = {r['id']: r for r in directory()['instruments']}
         total = sum(h.amount_krw or 0 for h in request.holdings)
         self.current = None
@@ -347,7 +364,8 @@ class MarketData:
                     self.failures.pop(instrument, None)
                     async with self.semaphore:
                         try:
-                            self.records[instrument] = self.loader(symbol, self.as_of) if self.loader else await fetch_prices(symbol, self.as_of)
+                            self.records[instrument] = self.loader(symbol, self.as_of) if self.loader else await fetch_prices(symbol, self.as_of,
+                                on_raw=lambda record: self.records.__setitem__(instrument, record))
                             self.failures.pop(instrument, None)
                         except Exception as error:
                             self.failures[instrument] = price_failure(error)
