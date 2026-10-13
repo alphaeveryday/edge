@@ -133,7 +133,8 @@ TOOLS = {
                  'offset': 'Character to start from. Leave out to start at the beginning.', 'length': 'Characters to read at most.'}},
     'get_price_observations': {
         'summary': 'Read daily closing prices and volume of securities, and the NAV of funds when asked.',
-        'returns': 'A table with one row per security and trading day. data_scope.dates_returned lists the days found and latest_date_available_at_cutoff the last day published; '
+        'returns': 'A table with one row per security and trading day; with include_nav a fund has a second row for the day that holds its NAV. '
+                   'data_scope.dates_returned lists the days found and latest_date_available_at_cutoff the last day published; '
                    'with NAV, nav_dates_returned and latest_nav_date_available_at_cutoff say the same for the NAV rows. '
                    'A later day is not published yet, which is different from a day without trading. There is no open, high, low or adjusted close, '
                    'and whether a close is adjusted is not recorded: write "observed close".',

@@ -68,7 +68,10 @@ class MarketCalculationTests(unittest.TestCase):
     def test_a_day_with_no_figure_ends_a_run_of_buying(self):
         # WHY: days without a figure were dropped, so [1, none, 1] was a run over a day nobody knows, and [1, none] buying up to the last day.
         runs=self.flow_runs([('a','가','2026-09-29',1),('a','가','2026-09-30',None),('a','가','2026-10-01',1)])
-        self.assertEqual([(r['since'],r['days_in_a_row']) for r in runs],[('2026-10-01',1)])
+        self.assertEqual([(r['since'],r['days_in_a_row']) for r in runs],[('2026-10-01 or earlier (no figure for the day before)','at least 1')])
+        # WHY: a run that stops at a change of direction did begin on that day; only a gap leaves the start open.
+        runs=self.flow_runs([('a','가','2026-09-29',-1),('a','가','2026-09-30',1),('a','가','2026-10-01',1)])
+        self.assertEqual([(r['since'],r['days_in_a_row']) for r in runs],[('2026-09-30',2)])
         self.assertEqual(self.flow_runs([('a','가','2026-09-29',1),('a','가','2026-09-30',None)]),[])
 
     def test_runs_are_counted_per_security_and_not_per_name(self):

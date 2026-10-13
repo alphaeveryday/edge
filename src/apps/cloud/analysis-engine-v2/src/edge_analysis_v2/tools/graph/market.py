@@ -90,9 +90,11 @@ class MarketTools:
                     count+=1
                 # A run that fills the whole range was written as "9/22부터 7일 연속", the length of the query. The day
                 # before the range was not read, so the run began on the first day returned or earlier.
-                whole=count==len(days)
-                runs.append((field[6:],{1:'net buying',-1:'net selling',0:'flat'}[last],
-                    days[0][0]+' or earlier (every day returned)' if whole else days[-count][0],f'at least {count}' if whole else count,names[identifier]))
+                # The same holds for a run that stops at a day with no figure: the direction of that day is not known,
+                # so the first day after it is not the day the investor turned.
+                whole=count==len(days);gap=not whole and days[-count-1][1] is None
+                since=days[-count][0]+(' or earlier (every day returned)' if whole else ' or earlier (no figure for the day before)' if gap else '')
+                runs.append((field[6:],{1:'net buying',-1:'net selling',0:'flat'}[last],since,f'at least {count}' if whole or gap else count,names[identifier]))
             # One line per investor, direction and start day, with the securities it holds for: five securities written
             # as "turned on 10/1" included one that had turned on 9/29.
             grouped={}
@@ -103,7 +105,7 @@ class MarketTools:
             'frequency':frequency,'intraday_interval_semantics':'not_certified' if frequency=='intraday' else None,
             **({'net_value_runs':runs,'net_value_runs_mean':'Up to the last day returned: which securities each investor has been net buying or selling, and since when. '
                 'A security turned direction on its own `since` day; say "turned" only for the securities listed under that day. '
-                '"or earlier" means every day returned has that direction: the run may have begun before the range, so read earlier days before saying when it began.'} if runs else {})},
+                '"or earlier" means the day before that day was not read or has no figure: the run may have begun earlier, so do not say the investor turned on that day.'} if runs else {})},
             table=True)
 
     def returns(self,dataset_ref,start_date,end_date,price_field,basis_policy='observed_close_only'):
