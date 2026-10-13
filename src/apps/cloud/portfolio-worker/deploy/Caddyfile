@@ -4,6 +4,9 @@ portfolio-origin.etforca.com {
             disable_tlsalpn_challenge
         }
     }
+    handle /api/portfolio/admin* {
+        respond 404
+    }
     handle /api/portfolio/* {
         reverse_proxy api:8092
     }

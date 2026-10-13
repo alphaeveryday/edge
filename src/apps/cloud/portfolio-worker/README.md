@@ -62,17 +62,25 @@ pnpm --filter portfolio-ui test:e2e
 - `POST /api/portfolio/analyses/{id}/chat`: question과 멱등 키. 무료 1회 초과는 409 CHAT_LIMIT.
 - `POST /api/portfolio/analyses/{id}/report-request`: email. 접수만 저장, 발송은 미구현.
 - `POST /api/portfolio/presence`: 방문자 쿠키로 현재 활동 기록. 화면이 보일 때 30초 주기.
-- `POST /api/portfolio/admin/login`, `/logout`: 일반 방문자와 분리된 관리자 인증.
+- 아래 관리자 GET API는 SSM 전용 프로세스에만 존재하며 공개 API에서는 404다.
 - `GET /api/portfolio/admin/overview`: 최근 2분 활동, 한국 날짜 기준 방문·분석 집계.
 - `GET /api/portfolio/admin/records?kind=analyses|drafts|reports&days=7&page=1`: 관리자 목록, 페이지당 50건. 분석은 `state` 필터 지원.
 - `GET /api/portfolio/admin/records/{kind}/{id}`: 관리자 전용 입력·결과 상세.
 
 ## 관리자 화면
 
-`/portfolio/admin.html`에서 별도 계정 `admin`으로 로그인한다. 운영 비밀번호는 `edge/portfolio/admin` Secrets Manager에 있으며 Terraform은 비밀 메타데이터와 최소 IAM 권한을 소유한다. dev GitHub 배포가 최초 값이 없을 때만 32바이트 난수 비밀번호를 만들며 기존 값은 바꾸지 않는다. 일반 배포 출력이나 Terraform state에 비밀번호를 넣지 않는다.
+SSM 터널을 연 뒤 `http://localhost:18080/portfolio/admin.html`에서 확인한다. 공개 도메인의 관리자 HTML·API는 차단하며 별도 공용 비밀번호는 사용하지 않는다. AWS IAM이 SSM 접속을 인증한다.
 
-API에만 `PORTFOLIO_ADMIN_PASSWORD_SHA256`를 전달한다. 로그인 세션은 8시간이며 로그아웃·비밀번호 해시 변경 시 무효다. 로그인 시도는 서비스 전체에서 15분당 20회로 제한한다. 로컬 검증은 테스트 전용 비밀번호의 SHA-256을 해당 API 환경변수에 넣는다. 운영 비밀번호를 로컬 개발에 재사용하지 않는다.
+Windows에서 AWS CLI v2·Session Manager plugin을 설치하고, `edge-portfolio-admin-access` 정책만 부여된 SSO 기반 프로필로 실행한다:
 
-조회는 10초마다 갱신한다. 방문자 기록은 90일 유지하며 같은 쿠키의 여러 탭은 한 방문자다. 실제 사람 수가 아니며 이전 방문 기록은 소급 생성하지 않는다. 설계와 검증 기준은 [관리자 설계](../../../../docs/design/portfolio-admin.md)에 있다.
+```powershell
+./scripts/open-admin.ps1 -Profile edge-portfolio-admin
+```
+
+접속 후 브라우저가 자동으로 열리며 Ctrl+C로 터널을 종료한다. 프로필 이름은 예시다. 실제 사용자 역할 연결은 별도 확인이 필요하고 마스터키로 대체하지 않는다. 정책에 광범위한 셸·임의 포트 권한을 더하지 않는다.
+
+UI 빌드는 공개 `dist`와 내부 `dist-admin`으로 분리한다. 관리자 프로세스는 호스트 루프백 18080에만 게시한다. 로컬 실행은 `PORTFOLIO_DATABASE_URL` 및 `PORTFOLIO_ADMIN_UI_DIR`(빌드된 dist-admin 경로)을 지정한 뒤 `uv run uvicorn edge_portfolio.admin_app:app --host 127.0.0.1 --port 18080`을 사용한다.
+
+조회는 10초마다 갱신하며 실패 시 화면의 입력값을 지운다. 방문 기록은 90일 유지하고 같은 쿠키의 여러 탭은 한 방문자다. 실제 사람 수가 아니며 과거 방문 기록은 소급 생성하지 않는다. [설계·접속 경계](../../../../docs/design/portfolio-admin.md)를 참고한다.
 
 AWS 운영 구성과 배포·롤백 절차는 [배포 기록](../../../../docs/design/portfolio-deployment.md)을 따른다. 전망 조회는 ETF 한 종목과 명시적인 목적이 필수다. 이메일은 1일 이내 발송을 안내하지만 자동 발송은 구현하지 않는다.

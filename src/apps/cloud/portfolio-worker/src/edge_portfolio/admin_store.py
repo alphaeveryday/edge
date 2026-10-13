@@ -5,43 +5,12 @@ from . import store
 
 
 def initialize(db):
-    db.execute('''CREATE TABLE IF NOT EXISTS portfolio_admin_sessions (
-        token_hash text PRIMARY KEY, credential_version text NOT NULL,
-        expires_at timestamptz NOT NULL)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS portfolio_admin_login_attempts (
-        at timestamptz NOT NULL DEFAULT now())''')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_presence (
         owner text PRIMARY KEY, first_seen timestamptz NOT NULL DEFAULT now(),
         last_seen timestamptz NOT NULL DEFAULT now())''')
     db.execute('CREATE INDEX IF NOT EXISTS portfolio_presence_seen ON portfolio_presence(last_seen)')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_visit_days (
         day date NOT NULL, owner text NOT NULL, PRIMARY KEY(day,owner))''')
-
-
-def allow_login():
-    with store.connect() as db:
-        db.execute('SELECT pg_advisory_xact_lock(1266002)')
-        db.execute("DELETE FROM portfolio_admin_login_attempts WHERE at < now()-interval '15 minutes'")
-        if db.execute('SELECT count(*) AS n FROM portfolio_admin_login_attempts').fetchone()['n'] >= 20:
-            return False
-        db.execute('INSERT INTO portfolio_admin_login_attempts DEFAULT VALUES')
-        return True
-
-
-def create_session(token_hash, version):
-    with store.connect() as db:
-        db.execute('DELETE FROM portfolio_admin_sessions WHERE expires_at <= now() OR credential_version <> %s', (version,))
-        db.execute("INSERT INTO portfolio_admin_sessions VALUES (%s,%s,now()+interval '8 hours')", (token_hash, version))
-
-
-def authenticated(token_hash, version):
-    with store.connect() as db:
-        return db.execute('SELECT 1 FROM portfolio_admin_sessions WHERE token_hash=%s AND credential_version=%s AND expires_at>now()', (token_hash, version)).fetchone() is not None
-
-
-def logout(token_hash):
-    with store.connect() as db:
-        db.execute('DELETE FROM portfolio_admin_sessions WHERE token_hash=%s', (token_hash,))
 
 
 def heartbeat(owner):

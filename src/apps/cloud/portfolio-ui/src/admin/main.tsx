@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, ApiError, progress, type Kind, type Overview, type Records, type Detail as DetailData, type State } from './api';
 import { Detail } from './Detail';
@@ -13,86 +13,52 @@ const states: Record<State, string> = { queued: '대기', running: '분석 중',
 const date = (value: string) => new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 function App() {
-  const [auth, setAuth] = useState<'checking' | 'login' | 'ready'>('checking');
+  const [connection, setConnection] = useState<'checking' | 'disconnected' | 'ready'>('checking');
   const [overview, setOverview] = useState<Overview | null>(null);
   const [records, setRecords] = useState<Records | null>(null);
   const [kind, setKind] = useState<Kind>('analyses');
   const [days, setDays] = useState(7);
   const [state, setState] = useState('');
   const [page, setPage] = useState(1);
-  const [error, setError] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const authGeneration = useRef(0);
-  function clearPrivate() { authGeneration.current++; setAuth('login'); setOverview(null); setRecords(null); setDetail(null); setSelected(null); setError(''); }
+  function disconnect() { setConnection('disconnected'); setOverview(null); setRecords(null); setDetail(null); setSelected(null); }
 
   useEffect(() => {
-    let stopped = false;
-    api<Overview>('/overview').then(value => { if (!stopped) { setOverview(value); setAuth('ready'); } }).catch(e => { if (!stopped) { setAuth('login'); if (!(e instanceof ApiError && e.status === 401)) setLoginError(e.message); } });
-    return () => { stopped = true; };
-  }, []);
-  useEffect(() => {
-    if (auth !== 'ready') return;
-    const generation = authGeneration.current;
+    if (connection === 'disconnected') return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     let pending = false;
-    let unauthorized = false;
-    async function read<T>(path: string) {
-      try { return await api<T>(path); }
-      catch (e) {
-        // Every response must revoke private UI, even after another request failed first.
-        if (generation === authGeneration.current && e instanceof ApiError && e.status === 401) {
-          unauthorized = true; clearPrivate(); setLoginError('로그인이 만료되었습니다. 다시 로그인해 주세요.');
-        }
-        throw e;
-      }
-    }
+    let failed = false;
     async function poll() {
       clearTimeout(timer);
-      if (stopped || generation !== authGeneration.current || document.visibilityState !== 'visible' || pending) return;
+      if (stopped || pending || document.visibilityState !== 'visible') return;
       pending = true;
       try {
         const [summary, list, expanded] = await Promise.all([
-          read<Overview>('/overview'), read<Records>(`/records?kind=${kind}&days=${days}&state=${kind === 'analyses' ? state : ''}&page=${page}`),
-          selected ? read<DetailData>(`/records/${kind}/${selected}`).catch(e => {
+          api<Overview>('/overview'), api<Records>(`/records?kind=${kind}&days=${days}&state=${kind === 'analyses' ? state : ''}&page=${page}`),
+          selected ? api<DetailData>(`/records/${kind}/${selected}`).catch(e => {
             if (e instanceof ApiError && e.status === 404) return null;
             throw e;
           }) : Promise.resolve(null),
         ]);
-        if (!stopped && !unauthorized && generation === authGeneration.current) { setOverview(summary); setRecords(list); setDetail(expanded); if (selected && !expanded) setSelected(null); setError(''); }
-      } catch (e) {
-        if (!stopped && !unauthorized && generation === authGeneration.current) setError((e as Error).message);
-      } finally { pending = false; if (!stopped && !unauthorized && generation === authGeneration.current) timer = setTimeout(poll, 10000); }
+        if (!stopped) { setOverview(summary); setRecords(list); setDetail(expanded); setConnection('ready'); if (selected && !expanded) setSelected(null); }
+      } catch {
+        failed = true;
+        if (!stopped) disconnect();
+      } finally { pending = false; if (!stopped && !failed) timer = setTimeout(poll, 10000); }
     }
     void poll();
     document.addEventListener('visibilitychange', poll);
     return () => { stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', poll); };
-  }, [auth, kind, days, state, page, selected, refresh]);
+  }, [connection, kind, days, state, page, selected, refresh]);
 
-  async function login(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); authGeneration.current++; setBusy(true); setLoginError('');
-    const form = event.currentTarget;
-    const fields = new FormData(form);
-    try { await api('/login', { method: 'POST', body: JSON.stringify({ username: fields.get('username'), password: fields.get('password') }) }); form.reset(); setAuth('ready'); }
-    catch (e) { setLoginError((e as Error).message); }
-    finally { setBusy(false); }
-  }
-  async function logout() {
-    setBusy(true);
-    try { await api('/logout', { method: 'POST' }); clearPrivate(); }
-    catch { setError('로그아웃에 실패했습니다. 연결을 확인한 뒤 다시 시도해 주세요.'); }
-    finally { setBusy(false); }
-  }
   const tab = tabs.find(t => t.id === kind)!;
   function resetSelection() { setSelected(null); setDetail(null); setRecords(null); setPage(1); }
-  if (auth !== 'ready') return <main className="login-page"><div className="login-brand"><span className="orca-mark">O</span><span>ORCA <small>OPERATIONS</small></span></div><form className="login-card" onSubmit={login}><span className="eyebrow">관리자 전용</span><h1>운영 현황을<br />한눈에.</h1><p>방문부터 분석 결과까지 확인하세요.</p>{auth === 'checking' ? <p role="status">로그인 상태를 확인하고 있어요.</p> : <><label>아이디<input name="username" autoComplete="username" defaultValue="admin" required /></label><label>비밀번호<input name="password" type="password" autoComplete="current-password" required maxLength={256} /></label>{loginError && <p role="alert" className="error">{loginError}</p>}<button className="primary" disabled={busy}>{busy ? '확인 중…' : '관리자 로그인'}</button></>}<footer>일반 방문자 계정과 별도로 관리됩니다.</footer></form></main>;
-  return <div className="dashboard"><aside className="sidebar"><a className="brand" href="/portfolio/admin.html"><span className="orca-mark">O</span>ORCA<small>운영 대시보드</small></a><nav aria-label="관리 메뉴">{tabs.map(t => <button key={t.id} aria-current={kind === t.id ? 'page' : undefined} onClick={() => { resetSelection(); setKind(t.id); }}>{t.label}<span>↗</span></button>)}</nav><div className="sidebar-bottom"><span>관리자</span><button onClick={logout} disabled={busy}>로그아웃</button></div></aside>
-    <main className="workspace"><header className="topbar"><div><span className="eyebrow">PORTFOLIO OPERATIONS</span><h1>지금, ORCA</h1></div><div className="sync"><span className={error ? 'dot error-dot' : 'dot'} />{error ? '갱신 지연' : '10초마다 자동 갱신'}<small>{overview ? date(overview.as_of) + ' 기준 · KST' : '불러오는 중'}</small><button className="quiet" onClick={() => setRefresh(n => n + 1)}>새로고침</button></div></header>
-      {error && <p className="error banner" role="alert">{error} 표시된 값은 마지막으로 성공한 조회 결과입니다.</p>}
+  if (connection !== 'ready') return <main className="login-page"><div className="login-card"><span className="eyebrow">SSM 전용 관리자</span><h1>{connection === 'checking' ? '연결 확인 중' : '연결이 끊겼어요'}</h1><p role="status">{connection === 'checking' ? '관리자 서버에 연결하고 있어요.' : '관리자 접속 스크립트를 실행한 뒤 다시 연결해 주세요.'}</p>{connection === 'disconnected' && <button className="primary" onClick={() => setConnection('checking')}>다시 연결</button>}</div></main>;
+  return <div className="dashboard"><aside className="sidebar"><a className="brand" href="/portfolio/admin.html"><span className="orca-mark">O</span>ORCA<small>운영 대시보드</small></a><nav aria-label="관리 메뉴">{tabs.map(t => <button key={t.id} aria-current={kind === t.id ? 'page' : undefined} onClick={() => { resetSelection(); setKind(t.id); }}>{t.label}<span>↗</span></button>)}</nav><div className="sidebar-bottom"><span>SSM 전용 연결</span><small>접속 종료: 터널 창에서 Ctrl+C</small></div></aside>
+    <main className="workspace"><header className="topbar"><div><span className="eyebrow">PORTFOLIO OPERATIONS</span><h1>지금, ORCA</h1></div><div className="sync"><span className="dot" />10초마다 자동 갱신<small>{overview ? date(overview.as_of) + ' 기준 · KST' : '불러오는 중'}</small><button className="quiet" onClick={() => setRefresh(n => n + 1)}>새로고침</button></div></header>
       <section className="stats" aria-label="운영 지표">{[
         ['현재 활성 방문자', overview?.active_visitors, '최근 2분 내 활동', 'accent'],
         ['오늘 방문자', overview?.today_visitors, '브라우저 쿠키 기준', ''],
