@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from decimal import Decimal
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +112,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     decision = Decision()
     checks = []
     execution_rejection = None
+    execution_failures = {}
 
     def checkpoint():
         if on_checkpoint:
@@ -205,7 +207,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         elif function['name'] == 'calculate_rebalance':
                             try:
                                 answer = execution_tool(request, args, decision, market.catalog)
-                                execution_rejection = answer if answer['status'] == 'infeasible' else None
+                                target = {}
+                                for row in args['allocations']:
+                                    target[row['instrument_id']] = target.get(row['instrument_id'], Decimal(0)) + Decimal(str(row['weight_pct']))
+                                for candidate in (optimizer.result or {}).get('candidates', []):
+                                    expected = {row['instrument_id']: row['weight_pct'] for row in candidate.get('allocations', [])}
+                                    if target == expected:
+                                        if answer['status'] == 'infeasible':
+                                            execution_failures[candidate['candidate_id']] = answer
+                                        else:
+                                            execution_failures.pop(candidate['candidate_id'], None)
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'optimize_portfolios':
@@ -270,6 +281,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             raise ValueError('EXECUTION_INFEASIBLE: choose another candidate or account placement: ' + json.dumps(execution_rejection['reasons']))
                         published['optimization'] = {**optimizer.result, 'selected_candidate_id': final.selected_candidate_id}
                         if not selected and optimizer.result['candidates']:
+                            if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
+                                execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
                             blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
                             published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD' if checks else 'RATING_BELOW_MINIMUM'
                             if execution_rejection:

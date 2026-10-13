@@ -60,7 +60,7 @@ def allocate_amounts(total, weights):
 def plan_execution(request, allocations, decision=None):
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
     funding = parse_funding(text) if text else None
-    if funding and decision and decision.funding_text:
+    if funding:
         def strings(value):
             if isinstance(value, str):
                 yield value
@@ -76,12 +76,33 @@ def plan_execution(request, allocations, decision=None):
         occurrences = [(source[:match.start()], source[match.end():]) for source in sources
                        for match in re.finditer(re.escape(text), source)]
         def has_duration(before, after):
-            context = re.split(r'[.!?;\n]', before)[-1] + re.split(r'[.!?;\n]', after)[0]
+            context = before + after
             return bool(re.search(r'\d+(?:\.\d+)?\s*(?:년|개월|달|월간|회|번|일|주|분기)|(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇)\s*(?:개월|달|년|회)|동안|까지|이후|부터', context))
-        ambiguous = len(commitments) > 1 or any(text in source and any(word in source for word in ('또는', '미정', '아마', '가능하면')) for source in sources)
+        def complete_funding_clause(after):
+            tail = re.split(r'[.!?;\n]', after, maxsplit=1)[0].strip()
+            plain = r'(?:씩)?\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요|기|할 예정입니다|을 예정입니다|할 계획입니다|을 계획입니다)?)?'
+            names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
+            no_sale = r'(?:(?:' + (names or r'(?!)') + r'|보유 종목|기존 종목)(?:는|은|을|를)?\s*)?(?:팔지|매도하지)\s*않(?:을게요|겠습니다|아요|습니다)'
+            combined = r'(?:을|를)?\s*(?:넣|납입하|투자하|입금하|추가하)(?:고|며|으며)\s*' + no_sale
+            return bool(re.fullmatch(plain + r'(?:\s*매도\s*금지)?|' + combined, tail))
+        def unconditional_prefix(before):
+            prefix = re.split(r'[.!?;\n]', before)[-1].strip()
+            if prefix in {'', '저는', '저희는', '일단'}:
+                return True
+            names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
+            # Accept a complete allocation clause, never an arbitrary clause that
+            # could make the quoted funding contingent on income or a future event.
+            asset = r'(?:' + (names or r'(?!)') + r'|[A-Z]{1,10})\s*\d+(?:\.\d+)?\s*%'
+            return bool(re.fullmatch(asset + r'(?:\s*,\s*' + asset + r')*\s*(?:로 구성하고|로 하고|를 목표로 하고)', prefix))
+        funding_contexts = [request.question, request.preferences.contribution, request.preferences.note]
+        scoped_restrictions = any(has_duration(source, '') or re.search(r'[가-힣]+면|경우|조건|가정', source) for source in funding_contexts)
+        ambiguous = scoped_restrictions or len(commitments) > 1 or any(any(word in source for word in ('또는', '미정', '아마', '가능하면', '취소', '철회', '중단', '보류'))
+            or re.search(r'(?:자금|돈|예산).{0,12}(?:없|부족|미확보)|(?:납입|입금|투자|추가)\s*(?:을|를|은|는)?\s*(?:하지\s*(?:않|못)|중단|안\s*(?:할|해))', source) for source in funding_contexts)
         if ambiguous or not occurrences or any(re.search(r'(?:약|대략|최대|최소|아마|가능하면)\s*$', before)
                 or re.match(r'\s*(?:정도|내외|가량|쯤|이상|이하|미만|초과|전후|예상|한도|또는|[~±-])', after)
-                or re.search(r'(?:않|못|불가|미정|안\s*(?:넣|하|할|낼))', after[:24]) or has_duration(before, after) for before, after in occurrences):
+                or not complete_funding_clause(after)
+                or not unconditional_prefix(before)
+                or has_duration(before, after) for before, after in occurrences):
             funding = None
     if funding is None and not (decision and decision.funding_text) and not any(word in text for word in ('매달', '매월', '원')):
         funding = {'additional_krw': Decimal(0), 'monthly_krw': None}

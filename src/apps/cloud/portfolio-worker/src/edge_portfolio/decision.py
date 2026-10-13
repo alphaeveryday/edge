@@ -96,7 +96,13 @@ def check_constraints(decision, rows, request, catalog):
         elif rule.kind == 'no_sell':
             if rows and all('account' in row for row in rows) and request.input_mode == 'amount':
                 plan = plan_execution(request, rows, decision)
-                passed = plan['status'] in {'ready', 'conditional'} if plan['status'] != 'needs_input' else None
+                protected = [h for h in request.holdings if h.kind != 'cash' and (not rule.instrument_ids or h.instrument_id in rule.instrument_ids)]
+                if not protected:
+                    passed = True
+                elif plan['rows']:
+                    passed = all(Decimal(row['sell_krw']) == 0 for row in plan['rows'] if not rule.instrument_ids or row['instrument_id'] in rule.instrument_ids)
+                else:
+                    passed = False if plan['status'] == 'infeasible' else None
                 checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source,
                                'status': 'unknown' if passed is None else 'pass' if passed else 'fail'})
                 continue

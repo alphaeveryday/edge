@@ -129,11 +129,21 @@ def test_funded_no_sale_is_checked_on_amounts_not_diluted_weights():
 def test_model_cannot_trim_an_approximate_funding_quote_into_a_commitment():
     from edge_portfolio.decision import Decision
     from edge_portfolio.execution import plan_execution
-    for question in ['추가 100만원 정도', '추가 100만원 가량', '추가 100만원 넣지 않을 거예요']:
+    for question in ['추가 100만원 정도', '추가 100만원 가량', '추가 100만원 넣지 않을 거예요', '추가 100만원에서 200만원 사이로 넣을 예정입니다.', '추가 100만원을 넣고 싶지만 지금은 자금이 없어요.']:
         req = request([('CASH:KRW', 1000000, '일반 계좌')], question=question)
         result = plan_execution(req, target(**{'US:VOO': 100}), Decision(funding_text='추가 100만원'))
         assert result['status'] == 'needs_input'
         assert result['rows'] == []
+
+
+def test_account_readiness_does_not_change_the_separate_no_sale_verdict():
+    from edge_portfolio.decision import Decision, check_constraints
+    from edge_portfolio.execution import plan_execution
+    req = request([('CASH:KRW', 1000000, '일반 계좌')], preferences={'accounts': ['ISA']})
+    decision = Decision(constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    rows = [{'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': 100}]
+    assert plan_execution(req, rows, decision)['status'] == 'needs_input'
+    assert check_constraints(decision, rows, req, {})[0]['status'] == 'pass'
 
 
 def test_finite_monthly_commitment_cannot_become_unlimited_contributions():
@@ -171,12 +181,60 @@ def test_allocation_percentages_are_not_mistaken_for_payment_duration():
     assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)['status'] == 'ready'
 
 
+def test_refusing_to_sell_does_not_negate_a_separate_funding_commitment():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 1000000, '일반 계좌')], question='추가 100만원을 넣고 VOO는 팔지 않을게요.')
+    decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '팔지 않을게요'}])
+    result = plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)
+    assert result['status'] == 'ready'
+    assert all(row['sell_krw'] == '0' for row in result['rows'])
+
+
 def test_first_monthly_installment_is_also_checked_for_rounding_preservation():
     req = request([('US:QQQ', 1, '일반 계좌'), ('US:VTI', 1, '일반 계좌'), ('US:VOO', 2, '일반 계좌')])
     plan = build_execution(req, target(**{'US:QQQ': 30, 'US:VTI': 10, 'US:VOO': 60}), no_sell=True, monthly_krw=1)
     assert plan['status'] == 'conditional'
     assert plan['months'] == 2
     assert all(row['sell_krw'] == '0' for row in plan['rows'])
+
+
+def test_conditional_income_is_not_spendable_even_when_the_quote_omits_it():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    for prefix in ['보너스를 받으면', '돈이 생기는 경우', '대출 승인 후에는']:
+        req = request([('US:VOO', 1000000, '일반 계좌')], question=f'{prefix} 추가 100만원을 넣겠습니다. 매도 금지.')
+        decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+        result = plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)
+        assert result['status'] == 'needs_input'
+        assert result['rows'] == []
+
+
+def test_funding_restrictions_survive_sentence_and_input_field_boundaries():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    for question, contribution, quote in [
+        ('매월 10만원씩. 납입은 3개월만 할게요. 매도 금지.', '', '매월 10만원씩'),
+        ('납입은 3개월만 할게요. 매도 금지.', '매월 10만원', ''),
+        ('추가 납입할 자금이 없어요. 매도 금지.', '매월 10만원', '매월 10만원'),
+        ('보너스를 받으면요. 추가 100만원을 넣겠습니다.', '', '추가 100만원'),
+    ]:
+        req = request([('US:VOO', 1000000, '일반 계좌')], question=question, preferences={'contribution': contribution})
+        decision = Decision(funding_text=quote, constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+        result = plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)
+        assert result['status'] == 'needs_input'
+        assert result['rows'] == []
+
+
+def test_standard_affirmative_funding_can_be_cancelled_by_another_input_field():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    for verb in ['납입하겠습니다', '투자하겠습니다', '입금하겠습니다']:
+        req = request([('US:VOO', 1000000, '일반 계좌')], question=f'추가 100만원을 {verb}.')
+        decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+        assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)['status'] == 'ready'
+        req.preferences.note = '추가 납입은 취소했습니다.'
+        assert plan_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), decision)['status'] == 'needs_input'
 
 
 def test_unknown_new_money_does_not_hide_an_impossible_zero_target():
