@@ -19,6 +19,13 @@ from edge_analysis_v2.tools.execution import ToolExecutionError
 from edge_analysis_v2.quality.measure import describe_environment, measure
 
 
+# Exa's public search MCP, attached as it is. Its results are leads to read, never evidence: only
+# read_web_document establishes a publication time and gives a citable call.
+# ponytail: keyless and rate-limited by Exa; add the key to this address once one is issued.
+SEARCH_SERVER = {'type': 'http', 'url': 'https://mcp.exa.ai/mcp?tools=web_search_exa'}
+SEARCH_TOOL = 'mcp__search__web_search_exa'
+
+
 def load_prompt(path: Path) -> str:
     """Load a nonempty system_prompt from an explicit YAML file."""
     document = yaml.safe_load(path.read_text(encoding='utf-8'))
@@ -85,8 +92,9 @@ def make_server(schemas: list[dict], call):
 async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     output_schema: dict, artifacts: Path, key: str, model: str,
                     timeout_seconds: int = 300, client_factory=ClaudeSDKClient, skills: tuple[str, ...] = (),
-                    optional_skills: tuple[str, ...] = (), resume: bool = False,
-                    compare_explanations: bool = False, final_check=None) -> dict:
+                    optional_skills: tuple[str, ...] = (),
+                    resume: bool = False, compare_explanations: bool = False, final_check=None,
+                    web_search: bool = False, events_log: Path | None = None) -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -96,17 +104,21 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         call: Audited callback; output must already be committed.
         output_schema: Expected final response JSON schema.
         artifacts: Local execution folder for inspection.
+        events_log: Second file that receives every event line as it is written; a run of several
+            conversations names one file here so the whole run reads as one record.
         key: DeepSeek key, never persisted.
         model: DeepSeek model name.
-        timeout_seconds: Total deadline, 1..600 seconds.
+        timeout_seconds: Total deadline, 1..600 seconds; default outlook 600, movement 300.
         client_factory: SDK constructor; replaced by a fake for offline tests.
         skills: Skills the task always uses; their text is given with the task.
         optional_skills: Skills the agent may open when it needs them. With neither, the agent has only the
             base rules and the task prompt and is never told that skills exist.
+        resume: Restore interrupted notes and TODOs with identical original observations.
         compare_explanations: Require a recorded question with competing explanations before submission.
         final_check: Optional callable(final) returning a repair message or None. A defect the schema cannot
             express (a cited ID that does not exist) is sent back to the same conversation, at most twice.
-        resume: Restore interrupted notes and TODOs with identical original observations.
+        web_search: Attach the public search MCP. The model then reaches a search service directly, so
+            its queries are in events.jsonl but not in the audited tool records.
 
     Returns:
         Validated final response. Meaning is reviewed separately by a reviewer.
@@ -126,6 +138,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     started_at = datetime.now(timezone.utc)
     repairs = 0
     server, allowed = make_server(schemas, call)
+    if web_search:
+        allowed = allowed + [SEARCH_TOOL]
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
         workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
@@ -149,7 +163,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             hooks={'PreToolUse':[HookMatcher(hooks=[session.before])],
                    'PreCompact':[HookMatcher(hooks=[session.precompact])],
                    'PostToolUse':[HookMatcher(hooks=[session.after])]},
-            mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}, strict_mcp_config=True,
+            mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}
+                        | ({'search': SEARCH_SERVER} if web_search else {}), strict_mcp_config=True,
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
             settings=json.dumps({'autoCompactEnabled': True}),
@@ -178,9 +193,11 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                         if type(message).__name__ == 'SystemMessage' and event.get('subtype') == 'thinking_tokens':
                             # Per-token progress ticks: tens of thousands per run and nothing reads them.
                             continue
-                        with (artifacts / 'events.jsonl').open('a', encoding='utf-8') as stream:
-                            stream.write(json.dumps({'message_type': type(message).__name__, 'at': datetime.now(timezone.utc).isoformat(),
-                                                     'message': event}, ensure_ascii=False) + '\n')
+                        line = json.dumps({'message_type': type(message).__name__, 'at': datetime.now(timezone.utc).isoformat(),
+                                           'message': event}, ensure_ascii=False) + '\n'
+                        for log in filter(None, (artifacts / 'events.jsonl', events_log)):
+                            with log.open('a', encoding='utf-8') as stream:
+                                stream.write(line)
                         if type(message).__name__ != 'ResultMessage':
                             continue
                         (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
