@@ -15,6 +15,13 @@ resource "aws_secretsmanager_secret" "portfolio" {
   lifecycle { prevent_destroy = true }
 }
 
+# Secret value is bootstrapped by the dev release workflow, never stored in Terraform state.
+resource "aws_secretsmanager_secret" "portfolio_admin" {
+  name = "edge/portfolio/admin"
+  tags = { Project = "edge-portfolio" }
+  lifecycle { prevent_destroy = true }
+}
+
 resource "aws_s3_bucket" "portfolio_releases" {
   bucket = "edge-portfolio-deploy-393229433969"
   lifecycle { prevent_destroy = true }
@@ -48,7 +55,7 @@ resource "aws_iam_role_policy" "portfolio_runtime" {
   name = "portfolio-runtime"
   role = aws_iam_role.portfolio.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.portfolio.arn, "arn:aws:secretsmanager:ap-northeast-2:393229433969:secret:edge/analysis-v2/api-reader-am6PPC"] },
+    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [aws_secretsmanager_secret.portfolio.arn, aws_secretsmanager_secret.portfolio_admin.arn, "arn:aws:secretsmanager:ap-northeast-2:393229433969:secret:edge/analysis-v2/api-reader-am6PPC"] },
     { Effect = "Allow", Action = ["s3:GetObject"], Resource = "${aws_s3_bucket.portfolio_releases.arn}/*" }
   ] })
 }
@@ -131,6 +138,7 @@ resource "aws_iam_role_policy" "portfolio_deploy" {
   name = "portfolio-release"
   role = split("/", module.gha_deploy_dev.role_arn)[1]
   policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"], Resource = aws_secretsmanager_secret.portfolio_admin.arn },
     { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.portfolio_releases.arn}/releases/*" },
     { Effect = "Allow", Action = ["ssm:SendCommand"], Resource = [aws_instance.portfolio.arn, "arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript"] },
     { Effect = "Allow", Action = ["ssm:GetCommandInvocation"], Resource = "*" },
