@@ -84,8 +84,8 @@ def make_server(schemas: list[dict], call):
 
 async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     output_schema: dict, artifacts: Path, key: str, model: str,
-                    timeout_seconds: int | None = None, client_factory=ClaudeSDKClient, kind: str = 'outlook',
-                    resume: bool = False) -> dict:
+                    timeout_seconds: int = 300, client_factory=ClaudeSDKClient, skills: tuple[str, ...] = (),
+                    optional_skills: tuple[str, ...] = (), resume: bool = False) -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -97,9 +97,11 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         artifacts: Local execution folder for inspection.
         key: DeepSeek key, never persisted.
         model: DeepSeek model name.
-        timeout_seconds: Total deadline, 1..600 seconds; default outlook 600, movement 300.
+        timeout_seconds: Total deadline, 1..600 seconds.
         client_factory: SDK constructor; replaced by a fake for offline tests.
-        kind: Analysis scope; movement must not expand into a forecast report.
+        skills: Skills the task always uses; their text is given with the task.
+        optional_skills: Skills the agent may open when it needs them. With neither, the agent has only the
+            base rules and the task prompt and is never told that skills exist.
         resume: Restore interrupted notes and TODOs with identical original observations.
 
     Returns:
@@ -110,8 +112,6 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         TimeoutError: Conversation deadline exceeded.
         jsonschema.ValidationError: Final JSON violates the output contract.
     """
-    if timeout_seconds is None:
-        timeout_seconds = 600 if kind == 'outlook' else 300
     if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
         raise ValueError('API key and a 1..600 second deadline are required')
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -124,25 +124,26 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
         workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
-        skills = WorkSession(workspace, artifacts, kind, allowed + workspace_allowed)
+        session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
         source_context = WorkContext(initial)
-        prompt = skills.system_prompt(prompt)
+        prompt = session.system_prompt(prompt)
         query_input = {'workspace_instructions': {'path': 'AGENTS.md',
                        'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
-                       'input': source_context.initial}
+                       # A question is handed over as it is; only a set of data sources is turned into a catalog to read from.
+                       'input': initial if all(isinstance(v, str) for v in initial.values()) else source_context.initial}
         if resume:
-            query_input['resumed_work'] = skills.restore()
+            query_input['resumed_work'] = session.restore()
         (artifacts / 'model_input.json').write_text(encode(query_input), encoding='utf-8')
         # DeepSeek's documented SDK model tag prevents the unknown-model 200K default.
         sdk_model = model if model.endswith('[1m]') else model + '[1m]'
         options = ClaudeAgentOptions(
             model=sdk_model, system_prompt=prompt, tools=['Skill', 'Read', 'Write', 'Edit'],
             allowed_tools=allowed + workspace_allowed + ['Read', 'Write', 'Edit'],
-            skills=skills.names, plugins=[{'type':'local', 'path':str(skills.plugin)}],
-            hooks={'PreToolUse':[HookMatcher(hooks=[skills.before])],
-                   'PreCompact':[HookMatcher(hooks=[skills.precompact])],
-                   'PostToolUse':[HookMatcher(hooks=[skills.after])]},
-            mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, skills)}, strict_mcp_config=True,
+            skills=session.names, plugins=[{'type':'local', 'path':str(session.plugin)}],
+            hooks={'PreToolUse':[HookMatcher(hooks=[session.before])],
+                   'PreCompact':[HookMatcher(hooks=[session.precompact])],
+                   'PostToolUse':[HookMatcher(hooks=[session.after])]},
+            mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}, strict_mcp_config=True,
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
             settings=json.dumps({'autoCompactEnabled': True}),
@@ -187,16 +188,16 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                         final = value
                     if final is None:
                         raise ValueError('SDK ended without a final result')
-                    continuation = skills.continuation()
+                    continuation = session.continuation()
                     if continuation is None:
                         (artifacts / 'response.json').write_text(encode(final), encoding='utf-8')
                         return final
                     await client.query(continuation)
         finally:
-            if skills.status == 'running':
-                skills.status = 'interrupted'
+            if session.status == 'running':
+                session.status = 'interrupted'
             try:
-                skills.checkpoint()
+                session.checkpoint()
             except (OSError, ValueError):
                 # Saving notes must not replace the timeout, cancellation or model error being raised.
                 pass

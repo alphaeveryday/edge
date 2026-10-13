@@ -14,7 +14,7 @@ ARG IMAGE_REVISION=unknown
 ENV IMAGE_REVISION=$IMAGE_REVISION
 RUN pip install --no-cache-dir --require-hashes -r ./analysis-engine-v2/requirements.lock \
     && pip install --no-cache-dir --no-deps ./analysis-engine-v2 \
-    && python -c "from importlib.resources import files; assert (files('edge_analysis_v2.cloud') / 'request.schema.json').is_file(); assert (files('edge_analysis_v2.prompts') / 'outlook.yaml').is_file(); assert (files('edge_analysis_v2.skills') / 'hypothesis-analysis-workflow' / 'SKILL.md').is_file(); assert (files('edge_analysis_v2.skills') / 'etf-hypothesis-analysis' / 'SKILL.md').is_file()"
+    && python -c "from importlib.resources import files; root = files('edge_analysis_v2'); needed = ['cloud/request.schema.json', 'prompts/outlook.yaml', 'prompts/movement.yaml', 'prompts/base.md', 'prompts/skills.md', 'prompts/question.md'] + ['skills/' + name + '/SKILL.md' for name in ('cause-investigation', 'analysis-report-writing', 'hypothesis-analysis-workflow', 'etf-hypothesis-analysis')]; missing = [name for name in needed if not root.joinpath(name).is_file()]; assert not missing, missing"
 VOLUME ["/tmp"]
 USER analysis
 ENTRYPOINT ["python", "-m", "edge_analysis_v2.cloud.worker"]

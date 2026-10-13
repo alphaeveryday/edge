@@ -184,16 +184,13 @@ def test_instruction_library_exposes_complete_worker_documents_only():
         code, body = request(port, '/api/instructions')
         assert code == 200
         documents = json.loads(body)['documents']
-        assert {d['id'] for d in documents} == {'AGENTS.md', 'harness.md', 'research.md', 'output-contract.md', *SKILLS}
-        for name in ('research.md', 'output-contract.md'):
-            record = next(d for d in documents if d['id'] == name)
-            assert record['content'] == (SOURCE.parent/'prompts'/name).read_text(encoding='utf-8')
+        assert {d['id'] for d in documents} == {'base.md', 'skills.md', 'question.md', *SKILLS}
+        record = next(d for d in documents if d['id'] == 'base.md')
+        assert record['content'] == (SOURCE.parent/'prompts/base.md').read_text(encoding='utf-8')
         for name in SKILLS:
             record = next(d for d in documents if d['id'] == name)
             assert record['content'] == (SOURCE/name/'SKILL.md').read_text(encoding='utf-8')
-            assert record['usage'] == '필요할 때 선택해서 읽는 스킬'
-        agents = next(d for d in documents if d['id'] == 'AGENTS.md')
-        assert agents['content'] == (SOURCE.parent/'agent/workspace/AGENTS.md').read_text(encoding='utf-8')
+            assert ('항상 실리는' in record['usage']) == (name in ('cause-investigation', 'analysis-report-writing'))
         assert request(port, '/api/instructions/../../secrets')[0] == 404
 
 

@@ -17,7 +17,7 @@ def allowed(result):
 
 
 def session(tmp_path):
-    return SkillSession(tmp_path/'workspace', tmp_path/'artifacts', 'outlook', ['mcp__analysis__observe'])
+    return SkillSession(tmp_path/'workspace', tmp_path/'artifacts', ('cause-investigation', 'analysis-report-writing'), ['mcp__analysis__observe'], optional=('hypothesis-analysis-workflow', 'etf-hypothesis-analysis'))
 
 
 def test_analysis_and_final_output_do_not_require_skill_calls(tmp_path):

@@ -1,7 +1,7 @@
 {
-  "version": 104,
-  "summary": "그래프 도구 30개를 dev로 옮김: 로컬 리뷰 지적을 반영하고 derive_fourth_quarter를 뺌. 판정 계약과 릴리스 기록을 dev에 둠",
-  "source_digest": "2077072b90665d9880abd0aeec4634d15adc84afb12f79113fe3173c55b6cb74",
+  "version": 105,
+  "summary": "지시문을 기본 규칙(base.md)과 스킬로 재구성: 조사 규칙은 cause-investigation, 작성 원칙은 analysis-report-writing 스킬로 옮기고 호출자가 작업의 스킬을 선언함",
+  "source_digest": "23a97fb36686f729cc6696251988d604e574fd75fc8d80a0e1ee85e1bc9bf28c",
   "history": [
     {
       "version": 1,
@@ -517,6 +517,11 @@
       "version": 103,
       "summary": "Staged outlook leaves one event record and one total measurement; stage files are uploaded",
       "source_digest": "0882b26ad41622926e36e192ac9e6c3ec6ab35c19d77fda2d29c05724eaf839a"
+    },
+    {
+      "version": 104,
+      "summary": "그래프 도구 30개를 dev로 옮김: 로컬 리뷰 지적을 반영하고 derive_fourth_quarter를 뺌. 판정 계약과 릴리스 기록을 dev에 둠",
+      "source_digest": "2077072b90665d9880abd0aeec4634d15adc84afb12f79113fe3173c55b6cb74"
     }
   ]
 }

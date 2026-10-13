@@ -5,6 +5,9 @@ from pathlib import Path
 from edge_analysis_v2.agent.skill_session import SkillSession
 
 
+INVESTIGATION = 'cause-investigation'   # the skill whose procedure the hooks below enforce
+
+
 class WorkSession(SkillSession):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -66,7 +69,8 @@ class WorkSession(SkillSession):
     async def before(self, data, tool_use_id, context):
         result = await self._before_tool(data, tool_use_id, context)
         output = result['hookSpecificOutput']
-        if not self.todos and (data['tool_name'].startswith('mcp__analysis__') or data['tool_name'] == 'StructuredOutput'):
+        # The question list belongs to an investigation. A question answered by a lookup is the whole task.
+        if not self.todos and self.uses(INVESTIGATION) and (data['tool_name'].startswith('mcp__analysis__') or data['tool_name'] == 'StructuredOutput'):
             output.update(permissionDecision='deny', permissionDecisionReason=self.registration_message())
         if self.recovery_context and output['permissionDecision'] == 'allow':
             if data['tool_name'] == 'StructuredOutput':
@@ -155,7 +159,7 @@ class WorkSession(SkillSession):
             message, self.recovery_context = self.recovery_context, None
             return message
         pending = [item['content'] for item in self.todos if item['status'] != 'completed']
-        if not self.todos:
+        if not self.todos and self.uses(INVESTIGATION):
             pending = [self.registration_message()]
         if not pending:
             self.status = 'completed'
