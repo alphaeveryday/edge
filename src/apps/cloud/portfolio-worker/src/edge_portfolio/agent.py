@@ -40,7 +40,7 @@ class ExaEvidence:
 
     async def call(self, name, args):
         self.calls += 1
-        if self.calls > 48:
+        if self.calls > 100:
             raise ValueError("TOOL_LIMIT")
         if name == "search_sources" and set(args) == {"query", "objective"}:
             if any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in args.values()):
