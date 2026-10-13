@@ -140,6 +140,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     execution_feasible = set()
     accepted_report = {}
     accepted_final = None
+    accepted_search = None
 
     def checkpoint():
         if on_checkpoint:
@@ -321,7 +322,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_research
-                        final = retain_research(final, accepted_final)
+                        final = retain_research(final, accepted_final if optimizer.result == accepted_search else None)
                         execution_rejection = None
                         selected = optimizer.validate(final)
                         if final.recommendation:
@@ -367,6 +368,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         from copy import deepcopy
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
+                        accepted_search = deepcopy(optimizer.result)
                         recoverable = published['completion']['status'] == 'partial'
                         if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
                             checkpoint()

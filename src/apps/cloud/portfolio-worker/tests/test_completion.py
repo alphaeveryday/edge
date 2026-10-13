@@ -36,12 +36,15 @@ def test_recovery_keeps_omitted_answers_and_evidence_for_the_same_target():
     assert retain_research(second, first).evidence_coverage == []
 
 
-async def test_recovery_returns_both_answers_when_the_second_round_omits_the_first(monkeypatch):
+@pytest.mark.parametrize('change_search', [False, True])
+async def test_recovery_returns_both_answers_when_the_second_round_omits_the_first(monkeypatch, change_search):
     import json
     from edge_portfolio.agent import run_analysis
     from test_agent import Evidence
     class Optimizer:
+        instances = []
         def __init__(self, *args):
+            self.instances.append(self)
             self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET'}
             self.batches = {'first', 'alternative'}
         def validate(self, final): return None
@@ -53,13 +56,16 @@ async def test_recovery_returns_both_answers_when_the_second_round_omits_the_fir
         if role == 'question': content = {**content, 'decision': {'questions': ['First?', 'Second?']}}
         if role == 'opinion':
             opinions.append(1)
-            content['answers'] = [{'question_index': len(opinions), 'status': 'answered', 'answer': 'This question has a complete answer.'}]
+            if change_search and len(opinions) > 1:
+                Optimizer.instances[0].result.update(revision=2)
+            content['answers'] = [{'question_index': min(2, len(opinions)), 'status': 'answered', 'answer': 'This question has a complete answer.'}]
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='First? Second?')
     result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
-    assert len(opinions) == 2
-    assert result['completion']['status'] == 'no_match'
-    assert all(task['status'] == 'answered' for task in result['completion']['tasks'])
+    assert len(opinions) == (3 if change_search else 2)
+    assert result['completion']['status'] == ('partial' if change_search else 'no_match')
+    assert (result['completion']['tasks'][0]['status'] == 'answered') is (not change_search)
+    assert result['completion']['tasks'][1]['status'] == 'answered'
 
 
 def test_explicit_research_correction_can_withdraw_a_previously_complete_answer():
