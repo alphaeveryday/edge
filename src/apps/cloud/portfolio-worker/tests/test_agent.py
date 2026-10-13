@@ -19,7 +19,12 @@ async def test_research_context_keeps_citable_passages_once_and_all_discovered_u
     assert len(found['search_results']) <= 2500
     assert 'https://official.example/last' in found['fetchable_urls']
     result = await evidence.call('fetch_source', {'url': 'https://official.example/last'})
-    assert result['passages'] == evidence.sources[0]['passages']
+    passages = list(result['passages'])
+    while result['next_offset'] is not None:
+        result = await evidence.call('fetch_source', {'url': 'https://official.example/last', 'offset': result['next_offset']})
+        passages.extend(result['passages'])
+    assert passages == evidence.sources[0]['passages']
+    assert evidence.calls == 2  # Reading saved passages does not spend another provider request.
     assert result['passages']
     assert 'excerpt' not in result  # The same text must not consume context twice.
     assert evidence.sources[0]['excerpt']  # Original evidence stays in the saved report.
@@ -36,7 +41,7 @@ async def test_search_and_fetch_share_70_calls_then_stop_before_remote_request()
     evidence = ExaEvidence(Session())
     for _ in range(35):
         await evidence.call('search_sources', {'query': 'ETF', 'objective': 'verify facts'})
-        await evidence.call('fetch_source', {'url': 'https://official.example/etf'})
+        await evidence.call('fetch_source', {'url': 'https://official.example/etf', 'expand': True})
     assert calls.count('web_search_exa') == 35
     assert calls.count('web_fetch_exa') == 35
     with pytest.raises(ValueError, match='TOOL_LIMIT'):
@@ -202,6 +207,7 @@ async def test_runaway_tool_loop_still_stops_after_twenty_four_model_calls():
 async def test_backtest_candidates_remain_auditable_when_rating_prevents_recommendation(monkeypatch):
     async def optimize(self, args):
         self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+        self.batches = {'first', 'alternative'}
         return self.result
     monkeypatch.setattr('edge_portfolio.optimizer.Optimizer.tool', optimize)
     phases = []
@@ -209,7 +215,7 @@ async def test_backtest_candidates_remain_auditable_when_rating_prevents_recomme
         role = phases[-1]
         if role == 'portfolio' and (call := optimization_call(payload)):
             return call
-        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'} if role == 'opinion' else final_payload()[role]
         if role == 'question':
             content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}

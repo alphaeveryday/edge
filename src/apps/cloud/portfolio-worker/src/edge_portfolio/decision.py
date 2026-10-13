@@ -33,6 +33,7 @@ class Constraint(StrictModel):
 
 
 class Decision(StrictModel):
+    questions: list[str] = Field(default_factory=list, max_length=5)
     kind: Literal['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'] = 'review'
     objectives: list[Literal['growth', 'stability', 'income', 'preserve', 'simplicity']] = Field(default_factory=list, max_length=5)
     constraints: list[Constraint] = Field(default_factory=list, max_length=20)
@@ -55,6 +56,8 @@ def validate_decision(decision, request, catalog):
             for item in value:
                 yield from strings(item)
     text = '\n'.join([request.question, *strings(request.preferences.model_dump(mode='json'))])
+    if any(not question.strip() or question not in text for question in decision.questions):
+        raise ValueError('QUESTION_SOURCE: quote each customer question exactly')
     for rule in decision.constraints:
         if rule.source not in text:
             raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the exact customer input')

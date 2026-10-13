@@ -1,0 +1,124 @@
+from types import SimpleNamespace
+
+from edge_portfolio.completion import assess_completion, data_status
+from edge_portfolio.contracts import AnalysisInput, FinalReport
+from edge_portfolio.decision import Decision
+from report_fixtures import final_payload
+
+
+def test_valid_json_without_an_answer_is_not_customer_completion():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='리밸런싱 어떻게 하나요?')
+    result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(kind='rebalance'),
+        {'recommendation': {'allocations': []}}, [], '2026-10-14')
+    assert result['status'] == 'partial'
+    assert result['reasons'] == ['UNANSWERED_QUESTIONS', 'EXECUTION_PLAN_MISSING']
+
+
+def test_old_holdings_source_or_fetch_date_cannot_prove_current_coverage():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    payload = final_payload()
+    payload['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'holdings', 'status': 'supported',
+        'evidence': [{'source_id': 's1', 'passage_id': 'p1'}], 'claim_as_of': '2023-01-01'}]
+    sources = [{'id': 's1', 'fetched_at': '2026-10-14', 'passages': [{'id': 'p1', 'text': 'Holdings as of 2023-01-01'}]}]
+    result = assess_completion(FinalReport.model_validate(payload), request, Decision(),
+        {'recommendation': {'allocations': [{'instrument_id': 'US:VOO'}]}}, sources, '2026-10-14')
+    assert result['evidence_coverage'][0]['status'] == 'stale'
+    assert result['status'] == 'partial'
+
+
+def test_observed_history_overrides_the_initial_not_requested_state():
+    market = SimpleNamespace(results={}, failures={})
+    optimizer = SimpleNamespace(result=None)
+    assert data_status(market, optimizer, [])['history'] == 'not_requested'
+    market.results['portfolio'] = {'status': 'available'}
+    assert data_status(market, optimizer, [])['history'] == 'available'
+    assert data_status(market, optimizer, [])['forecast'] == 'not_estimated'
+
+
+async def test_missing_answer_reenters_research_without_consuming_format_repairs(monkeypatch):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET'}
+            self.batches = {'first', 'alternative'}
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, final_calls, events = [], [], []
+    async def model(payload):
+        role = stages[-1]
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {'questions': ['어떤 대안을 확인했나요?']}}
+        if role == 'opinion':
+            if final_calls:
+                content['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': '검토한 대안에서 서비스 비교 기준을 통과한 구성이 없어서 추천을 보류했어요.'}]
+            final_calls.append(1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='어떤 대안을 확인했나요?')
+    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence(), on_event=events.append)
+    assert len(final_calls) == 2
+    assert result['completion']['status'] == 'no_match'
+    assert any(event['event'] == 'research_recovery' for event in events)
+    assert not any(event['event'] == 'validation_failed' for event in events)
+
+
+async def test_quality_withholding_requires_a_new_search_before_no_match(monkeypatch):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET'}
+            self.batches = {'first'}
+        def validate(self, final): return None
+        async def tool(self, args):
+            assert args == {'combinations': [['new-alternative']]}
+            self.batches.add('alternative')
+            return self.result
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, opinions = [], []
+    async def model(payload):
+        role = stages[-1]
+        if role == 'opinion':
+            opinions.append(1)
+            if len(opinions) == 2:
+                assert 'ALTERNATIVE_SEARCH_NOT_PERFORMED' in payload['messages'][-1]['content']
+                return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+                    {'id': 'alternative', 'type': 'function', 'function': {'name': 'optimize_portfolios', 'arguments': json.dumps({'combinations': [['new-alternative']]})}}]}}]}
+        content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+    assert len(opinions) == 3
+    assert result['completion']['status'] == 'no_match'
+
+
+async def test_truncated_output_recovers_without_discarding_prior_tool_evidence(monkeypatch):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
+            self.batches = {'first'}
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, attempts = [], []
+    async def model(payload):
+        role = stages[-1]
+        if role == 'opinion' and not attempts:
+            attempts.append(1)
+            return {'choices': [{'finish_reason': 'length', 'message': {'role': 'assistant', 'content': '{'}}]}
+        if role == 'opinion':
+            assert '길이 한도' in payload['messages'][-1]['content']
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+    assert result['sources'] == Evidence.sources
+    assert result['completion']['status'] == 'no_match'
+    assert any(event.get('code') == 'MODEL_TRUNCATED' for event in result['diagnostics']['events'])

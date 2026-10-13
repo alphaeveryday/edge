@@ -176,7 +176,25 @@ class ReturnForecast(StrictModel):
     evidence: list[Evidence] = Field(min_length=1, max_length=4)
 
 
+class TaskAnswer(StrictModel):
+    question_index: int = Field(ge=1, le=5)
+    status: Literal['answered', 'partial', 'needs_input']
+    answer: str = Field(min_length=10, max_length=500)
+    missing: list[str] = Field(default_factory=list, max_length=5)
+
+
+class EvidenceCoverage(StrictModel):
+    instrument_id: str = Field(min_length=1, max_length=32)
+    field: Literal['structure', 'holdings', 'fees', 'distributions']
+    status: Literal['supported', 'missing']
+    evidence: list[Evidence] = Field(default_factory=list, max_length=3)
+    claim_as_of: date | None = None
+
+
 class FinalReport(StrictModel):
+    answers: list[TaskAnswer] = Field(default_factory=list, max_length=5)
+    evidence_coverage: list[EvidenceCoverage] = Field(default_factory=list, max_length=80)
+    withheld_reason: Literal['quality_failed', 'missing_input', 'missing_data', 'customer_failed', 'search_exhausted'] | None = None
     question: Section
     portfolio: Section
     outlook: Section
@@ -213,4 +231,4 @@ def calculate(request: AnalysisInput):
         for h in request.holdings
     ], "expected_return_1y": None, "dividend_yield_1y": None,
         "scores": None, "historical_performance": None,
-        "unavailable_reason": "검증된 가격·분배금 시계열과 전망 모형이 아직 연결되지 않았어요."}
+        "unavailable_reason": "과거 가격·분배금 자료를 아직 조회하지 않았어요. 미래 전망은 별도로 확인해요."}

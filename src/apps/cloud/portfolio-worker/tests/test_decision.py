@@ -145,6 +145,7 @@ async def test_service_eligible_candidate_cannot_publish_after_customer_constrai
                 if repairs:
                     assert 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' in payload['messages'][-1]['content']
                 content['recommendation'] = None
+            content['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': '필수 비중 조건을 확인했으며 이를 만족하는 추천이 검증되지 않아 보류합니다.'}]
             repairs.append(1)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(request(question='VOO는 30% 이하'), 'test-only', phases.append,

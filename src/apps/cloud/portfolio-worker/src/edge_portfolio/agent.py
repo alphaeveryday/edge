@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ValidationError
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -23,6 +24,8 @@ from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
 from .execution import execution_tool, TOOL as EXECUTION_TOOL
+from .evidence_quality import inspect_body, source_page
+from .completion import assess_completion, data_status
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -32,9 +35,9 @@ MAX_MODEL_CALLS = 24
 MAX_CONTEXT_BYTES = 350000
 ANALYSIS_TIMEOUT_SECONDS = 300
 TOOLS = [
-    {"type": "function", "function": {"name": "search_etfs", "description": "추천할 ETF의 등록 ID를 이름 또는 티커로 찾는다. 상품 근거 조회와는 별개다. 한 번에 8개까지 반환한다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
-    {"type": "function", "function": {"name": "fetch_source", "description": "검색에서 발견한 URL의 본문을 읽고 근거 ID를 받는다.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "fetch_source", "description": "검색에서 발견한 URL의 본문을 읽고 근거 ID를 받는다. next_offset으로 다음 문단을 읽으며 절단된 문서는 expand로 확장하거나 다른 공식 자료를 찾는다.", "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "expand": {"type": "boolean"}}, "required": ["url"], "additionalProperties": False}}},
 ]
 
 
@@ -46,6 +49,16 @@ class ExaEvidence:
         self.calls = 0
 
     async def call(self, name, args):
+        if name == 'fetch_source' and isinstance(args.get('url'), str) and set(args) <= {'url', 'offset', 'expand'}:
+            if not isinstance(args.get('offset', 0), int) or isinstance(args.get('offset', 0), bool) or args.get('offset', 0) < 0:
+                raise ValueError('INVALID_PASSAGE_OFFSET')
+            cached = next((source for source in reversed(self.sources) if source['url'] == args['url']), None)
+            if not isinstance(args.get('expand', False), bool):
+                raise ValueError('INVALID_TOOL_ARGUMENT')
+            if cached and not args.get('expand'):
+                return source_page(cached, args.get('offset', 0))
+            if args.get('offset', 0) != 0:
+                raise ValueError('INVALID_PASSAGE_OFFSET')
         self.calls += 1
         if self.calls > MAX_EXA_CALLS:
             raise ValueError("TOOL_LIMIT")
@@ -53,24 +66,28 @@ class ExaEvidence:
             if any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in args.values()):
                 raise ValueError("INVALID_TOOL_ARGUMENT")
             remote, arguments = "web_search_exa", {**args, "numResults": 3}
-        elif name == "fetch_source" and set(args) == {"url"} and args["url"] in self.discovered:
-            remote, arguments = "web_fetch_exa", {"urls": [args["url"]], "maxCharacters": 6000}
+        elif name == "fetch_source" and set(args) <= {'url', 'offset', 'expand'} and isinstance(args.get('url'), str) and args['url'] in self.discovered:
+            remote, arguments = "web_fetch_exa", {"urls": [args["url"]], "maxCharacters": 48000 if args.get('expand') else 24000}
         else:
             raise ValueError("TOOL_NOT_ALLOWED")
         async with asyncio.timeout(35):
             result = await self.session.call_tool(remote, arguments)
         if result.isError:
             raise ValueError("EXA_FAILED")
-        body = "\n".join(b.text for b in result.content if b.type == "text")[:24000]
+        body = "\n".join(b.text for b in result.content if b.type == "text")[:arguments.get('maxCharacters', 24000) + 2000]
         if remote == "web_search_exa":
             for url in re.findall(r"^URL:\s*(https://\S+)", body, re.M):
-                parsed = urlsplit(url)
-                if parsed.hostname and not parsed.username and not parsed.password and parsed.port in (None, 443):
-                    self.discovered.add(url)
+                try:
+                    parsed = urlsplit(url)
+                    if parsed.hostname and not parsed.username and not parsed.password and parsed.port in (None, 443):
+                        self.discovered.add(url)
+                except ValueError:
+                    continue
             return {"search_results": body[:2500], "fetchable_urls": sorted(self.discovered)}
-        if len(body.strip()) < 50:
-            raise ValueError("EMPTY_SOURCE")
-        source = {"id": f"s{len(self.sources) + 1}", "url": args["url"], "excerpt": body[:6500],
+        quality = inspect_body(body, arguments['maxCharacters'])
+        if quality['status'] == 'unavailable':
+            raise ValueError(quality['reason'])
+        source = {"id": f"s{len(self.sources) + 1}", "url": args["url"], "excerpt": body, **quality,
                   "fetched_at": datetime.now(timezone.utc).isoformat()}
         chunks = []
         for line in re.split(r'(?<=[.!?])\s+|\n+', source['excerpt']):
@@ -80,7 +97,7 @@ class ExaEvidence:
                     chunks.append(chunk)
         source['passages'] = [{'id': f'p{i + 1}', 'text': text} for i, text in enumerate(chunks)]
         self.sources.append(source)
-        return {key: value for key, value in source.items() if key != 'excerpt'}
+        return source_page(source)
 
 
 async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None,
@@ -146,7 +163,15 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             schema = FinalReport if role == 'opinion' else QuestionSection if role == 'question' else Section
             messages.append({"role": "user", "content": skills[role] + "\n현재 등록된 근거 ID: " + json.dumps([s['id'] for s in evidence.sources]) + "\n등록되지 않은 ID를 만들지 마세요. 첫 질문 해석 단계에서는 사용자 입력만 해석하고 evidence는 빈 배열로 둡니다. 그 다음 역할은 search_sources 후 fetch_source로 실제 근거를 등록해야 합니다.\n출력 JSON 스키마:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)})
             repairs = 0
+            recovery_rounds = 0
             while True:
+                state = data_status(market, optimizer, evidence.sources)
+                metrics['data_status'] = state
+                metrics['unavailable_reason'] = ('과거 가격 자료를 확인했어요. 미래 전망과 배당 자료는 별도로 확인해요.' if state['history'] in {'available', 'partial'}
+                    else '과거 가격 자료를 아직 조회하지 않았어요.' if state['history'] == 'not_requested' else '가격 자료의 일부가 없거나 비교 조건을 충족하지 못했어요.')
+                context['computed'] = metrics
+                context['data_status'] = state
+                messages[1]['content'] = json.dumps(context, ensure_ascii=False)
                 calls += 1
                 if calls > MAX_MODEL_CALLS:
                     emit('limit_reached', budget='model_calls', used=calls - 1, limit=MAX_MODEL_CALLS)
@@ -158,7 +183,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
                     result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL],
-                        "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low",
+                        "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -174,7 +199,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 emit('model_finished', role=role, call=calls, usage=usage,
                      finish_reason=choice.get('finish_reason') if choice.get('finish_reason') in {'stop', 'tool_calls', 'length', 'content_filter'} else 'unknown')
                 if choice.get("finish_reason") == "length":
-                    raise ValueError("MODEL_TRUNCATED")
+                    repairs += 1
+                    emit('validation_failed', role=role, attempt=repairs, code='MODEL_TRUNCATED')
+                    if repairs > (2 if role == 'opinion' else 1):
+                        raise ValueError("MODEL_TRUNCATED")
+                    messages.append({'role': 'user', 'content': '응답이 길이 한도로 잘렸습니다. 이미 성공한 도구 결과는 유지하고 필수 답변만 짧은 JSON으로 다시 작성하세요.'})
+                    continue
                 message = choice["message"]
                 if observe:
                     observe({"role": role, "content": message.get("content"), "tools": message.get("tool_calls"), "sources": evidence.sources})
@@ -198,11 +228,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             answer = {'status': 'rejected', 'reason': 'QUESTION_STAGE_CATALOG_ONLY'}
                         elif function['name'] == 'search_etfs':
                             catalog_calls += 1
-                            if catalog_calls > 6:
+                            if catalog_calls > 20:
                                 answer = {'status': 'rejected', 'reason': 'Catalog search limit reached; use registered IDs already returned'}
                             else:
                                 try:
-                                    answer = search_etfs(args.get('query'))
+                                    answer = search_etfs(args.get('query'), args.get('offset', 0))
                                 except ValueError as error:
                                     answer = {'status': 'rejected', 'reason': str(error)}
                         elif function['name'] == 'calculate_rebalance':
@@ -241,11 +271,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             try:
                                 answer = await evidence.call(function["name"], args)
                             except ValueError as error:
-                                if str(error) not in {'TOOL_NOT_ALLOWED', 'INVALID_TOOL_ARGUMENT', 'EMPTY_SOURCE', 'EXA_FAILED'}:
+                                if str(error) not in {'TOOL_NOT_ALLOWED', 'INVALID_TOOL_ARGUMENT', 'INVALID_PASSAGE_OFFSET', 'EMPTY_SOURCE', 'INSUFFICIENT_SOURCE_BODY', 'EXA_FAILED'}:
                                     emit('tool_failed', role=role, tool=tool, code='TOOL_LIMIT' if str(error) == 'TOOL_LIMIT' else type(error).__name__,
                                          counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
                                     raise
-                                answer = {'status': 'unavailable' if str(error) in {'EMPTY_SOURCE', 'EXA_FAILED'} else 'rejected',
+                                answer = {'status': 'unavailable' if str(error) in {'EMPTY_SOURCE', 'INSUFFICIENT_SOURCE_BODY', 'EXA_FAILED'} else 'rejected',
                                           'reason': str(error), 'fetchable_urls': sorted(getattr(evidence, 'discovered', set())),
                                           'instruction': '본문을 읽지 못했습니다. 등록된 URL을 정확히 사용하거나 다른 공식 근거를 검색하세요. 실패한 응답을 근거로 인용하지 마세요.'}
                             except BaseException as error:
@@ -283,7 +313,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                       for number, rule in enumerate(decision.constraints, 1)]
                         if final.recommendation and any(check['status'] != 'pass' for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
-                        sections = {name: validate_section(name, getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
+                        sections = {name: validate_section('question' if not evidence.sources and getattr(final, name).limitations else name,
+                                    getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         published = publish_recommendation(final, request, metrics, evidence.sources, decision)
                         if final.recommendation and published['recommendation']['execution']['status'] == 'infeasible':
                             execution_rejection = published['recommendation']['execution']
@@ -295,11 +326,26 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
                                 execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
                             blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
-                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD' if checks else 'RATING_BELOW_MINIMUM'
+                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
                         if selected:
                             await enrich_report(published, final, market, evidence.sources)
+                        if not selected and final.withheld_reason:
+                            published['withheld_reason'] = final.withheld_reason
+                        published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'])
+                        needs_alternative = not selected and len(getattr(optimizer, 'batches', [])) < 2 and (
+                            final.withheld_reason in {'quality_failed', 'customer_failed', 'search_exhausted'} or
+                            optimizer.result.get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
+                        if needs_alternative:
+                            published['completion']['status'] = 'partial'
+                            published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
+                        recoverable = published['completion']['status'] == 'partial'
+                        if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
+                            recovery_rounds += 1
+                            emit('research_recovery', role=role, attempt=recovery_rounds)
+                            messages.append({'role': 'user', 'content': '고객 과제가 아직 해결되지 않았습니다. 형식 수정과 별개로 빠진 질문에 답하고 근거를 추가로 읽거나 다른 후보 조합을 탐색하세요. 필수 조건은 완화하지 않습니다. 해결되지 않는 부분은 필요한 입력과 실제 사유를 명시하세요.\n' + json.dumps(published['completion'], ensure_ascii=False)})
+                            continue
                     else:
                         if role == 'question':
                             interpreted = QuestionSection.model_validate(raw)
@@ -308,13 +354,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
-                        sections[role] = validate_section(role, raw, evidence.sources)
+                        sections[role] = validate_section('question' if not evidence.sources and raw.get('limitations') else role, raw, evidence.sources)
                     emit('stage_completed', role=role)
                     checkpoint()
                     break
                 except (ValueError, TypeError) as error:
                     repairs += 1
-                    emit('validation_failed', role=role, attempt=repairs, code=type(error).__name__)
+                    emit('validation_failed', role=role, attempt=repairs,
+                         code='OUTPUT_JSON' if isinstance(error, json.JSONDecodeError) else 'OUTPUT_SCHEMA' if isinstance(error, ValidationError) else 'OUTPUT_CONTRACT')
                     if repairs > (2 if role == 'opinion' else 1):
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
                     low, high = LIMITS[role]

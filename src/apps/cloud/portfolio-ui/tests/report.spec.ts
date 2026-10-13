@@ -51,6 +51,21 @@ test('an execution rejection explains funding or account constraints without bla
   await expect(page.locator('.ans:not(.lead)')).not.toContainText('종합 4점');
 });
 
+test('partial research shows unanswered questions without a final-conclusion label', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'partial'));
+  await page.route('**/api/portfolio/analyses/partial', route => route.fulfill({ json: {
+    id: 'partial', state: 'succeeded', result: { ...report, completion: { status: 'partial',
+      tasks: [{ question: '어떻게 리밸런싱하나요?', status: 'partial', answer: '', missing: ['QUESTION_NOT_ANSWERED'] }],
+      missing_inputs: [], missing_research: [{ instrument_id: 'US:QQQ', field: 'holdings', status: 'stale' }] } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.completion-summary')).toContainText('이 질문에 답하기 위한 확인이 남아 있어요.');
+  await expect(page.locator('.headrow').first()).toContainText('현재 분석 결과');
+  await expect(page.locator('.headrow').first()).not.toContainText('최종 결론');
+  await page.getByText('추가로 확인할 상품 자료', { exact: true }).click();
+  await expect(page.locator('.completion-summary')).toContainText('Invesco QQQ · 보유내역 · 최신 자료 필요');
+});
+
 test('a newly listed ETF displays both series over their actual common period', async ({ page }) => {
   const history = { ...report.recommendation.historical_performance,
     basis: '2026-07-07 ~ 2026-10-09 · 공통 자료 기간 · 100만 원을 넣었다면 (원)',
@@ -230,4 +245,15 @@ test('legacy index values keep their units and account transfers stay identifiab
   await expect(page.locator('.history-values')).toContainText('110');
   await expect(page.locator('.history-values')).not.toContainText('원');
   await expect(page.locator('.action-note')).toHaveText(['ISA', '일반 계좌']);
+});
+
+test('interrupted analysis exposes saved work without publishing its draft recommendation', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'interrupted'));
+  await page.route('**/api/portfolio/analyses/interrupted', route => route.fulfill({ json: {
+    id: 'interrupted', state: 'failed', failure: 'WORKER_INTERRUPTED', result: { partial_report: report },
+  } }));
+  await page.goto('/portfolio/');
+  await page.getByText('중단 전 작성된 분석 보기').click();
+  await expect(page.locator('.completion-summary')).toBeVisible();
+  await expect(page.locator('.portfolio-hero')).toHaveCount(0);
 });

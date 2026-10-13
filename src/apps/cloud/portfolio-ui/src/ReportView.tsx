@@ -26,6 +26,9 @@ function Evidence({ section, report, hidden }: { section?: Section; report: Repo
 }
 
 export function ReportView({ report, separateEvidence = false, allSections = false }: { report: Report; separateEvidence?: boolean; allSections?: boolean }) {
+  const pending = report.completion && report.completion.status !== 'complete';
+  const conclusionTitle = pending ? 'ORCA AI의 현재 분석 결과' : 'ORCA AI의 최종 결론';
+  const fields: Record<string, string> = { structure: '상품 구조', holdings: '보유내역', fees: '보수', distributions: '분배' };
   const current = report.current_evaluation;
   const plan = report.recommendation;
   const allocations = plan?.allocations ?? [];
@@ -39,9 +42,15 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
     return { ...rows[0], weight_pct: rows.every(h => Number.isFinite(h.weight_pct)) ? Number(rows.reduce((sum, h) => sum + h.weight_pct, 0).toFixed(2)) : null };
   });
   const free = !allSections && report.insights ? report.insights : [{ title: '질문에 대한 답', content: sections.question }, { title: '포트폴리오 분석', content: sections.portfolio }];
-  const parts = [{ title: '최종 투자 의견과 실행할 행동', content: sections.opinion }, { title: '앞으로의 전망', content: sections.outlook }, ...free, ...(allSections ? report.insights ?? [] : [])];
+  const parts = [{ title: pending ? '현재 투자 의견과 확인할 조건' : '최종 투자 의견과 실행할 행동', content: sections.opinion }, { title: '앞으로의 전망', content: sections.outlook }, ...free, ...(allSections ? report.insights ?? [] : [])];
   return <div id="report" className="step">
-    <article className="ans lead"><div className="headrow"><small>ORCA AI의 최종 결론</small><details className="crit"><summary aria-label="판단 기준 보기">?</summary><div>{current?.rubric_version === 1 ? <><b>판단 기준</b><ul><li><b>등급</b>세 축 별점의 평균으로 정해요. 4.5 이상 매우 훌륭, 3.5 이상 훌륭, 2.5 이상 보통, 1.5 이상 개선 필요, 그 아래는 심각이에요.</li><li><b>시장 주도성</b>시가총액 상위 기업과 산업이 포트폴리오에서 차지하는 비중이에요.</li><li><b>수익성</b>담은 지수의 장기 수익률, 레버리지 여부, 보수율을 살펴봐요.</li><li><b>안정성</b>나라·통화·자산 종류의 수와 나쁜 해의 하락 폭을 살펴봐요.</li><li><b>자료</b>ETF 구성 종목과 과거 가격·보수율을 확인해 평가해요. 사용자의 선호는 점수에 넣지 않아요.</li></ul></> : <p>이전 평가 기준으로 작성된 분석이에요. 다시 분석하면 새 판단 기준이 적용돼요.</p>}</div></details></div>
+    {report.completion && <article className="completion-summary">
+      <h3>{report.completion.status === 'complete' ? '요청한 분석을 마쳤어요' : report.completion.status === 'needs_input' ? '추가 확인이 필요해요' : report.completion.status === 'no_match' ? '검토 범위에서 조건에 맞는 추천을 찾지 못했어요' : '분석한 내용과 남은 확인 사항'}</h3>
+      {report.completion.tasks.map((task, index) => <section key={index}><h4>{task.question}</h4><p>{task.answer || '이 질문에 답하기 위한 확인이 남아 있어요.'}</p>{task.status !== 'answered' && <p className="notice">{task.missing.filter(value => !/^[A-Z_]+$/.test(value)).join(' ') || '필요한 자료 또는 입력을 더 확인해야 해요.'}</p>}</section>)}
+      {!!report.completion.missing_inputs.length && <p className="notice">{report.completion.missing_inputs.join(' ')}</p>}
+      {!!report.completion.missing_research.length && <details><summary>추가로 확인할 상품 자료</summary><ul>{report.completion.missing_research.map(item => <li key={`${item.instrument_id}:${item.field}`}>{report.recommendation?.allocations.find(row => row.instrument_id === item.instrument_id)?.name || item.instrument_id} · {fields[item.field] || '상품 자료'} · {item.status === 'stale' ? '최신 자료 필요' : item.status === 'date_unknown' ? '자료 기준일 확인 필요' : '본문 확인 필요'}</li>)}</ul></details>}
+    </article>}
+    <article className="ans lead"><div className="headrow"><small>{conclusionTitle}</small><details className="crit"><summary aria-label="판단 기준 보기">?</summary><div>{current?.rubric_version === 1 ? <><b>판단 기준</b><ul><li><b>등급</b>세 축 별점의 평균으로 정해요. 4.5 이상 매우 훌륭, 3.5 이상 훌륭, 2.5 이상 보통, 1.5 이상 개선 필요, 그 아래는 심각이에요.</li><li><b>시장 주도성</b>시가총액 상위 기업과 산업이 포트폴리오에서 차지하는 비중이에요.</li><li><b>수익성</b>담은 지수의 장기 수익률, 레버리지 여부, 보수율을 살펴봐요.</li><li><b>안정성</b>나라·통화·자산 종류의 수와 나쁜 해의 하락 폭을 살펴봐요.</li><li><b>자료</b>ETF 구성 종목과 과거 가격·보수율을 확인해 평가해요. 사용자의 선호는 점수에 넣지 않아요.</li></ul></> : <p>이전 평가 기준으로 작성된 분석이에요. 다시 분석하면 새 판단 기준이 적용돼요.</p>}</div></details></div>
       <p className="verdict"><em>{Number.isFinite(current?.overall) ? grades[gradeIndex(current!.overall!)] : '내 구성 검토'}</em></p>
       {Number.isFinite(current?.overall) && <><p className="total"><Stars value={current!.overall!} /><b>{current!.overall}</b><span>/ 5</span></p><ol className="grade">{grades.map((g, i) => <li className={i === gradeIndex(current!.overall!) ? 'on' : ''} key={g}>{g}</li>)}</ol></>}
       <Axes evaluation={current} /><div className="why"><i>이유</i><Bullets section={current?.reason || sections.portfolio} /><Evidence section={current?.reason || sections.portfolio} report={report} hidden={separateEvidence} /></div>

@@ -1,19 +1,23 @@
 """Validate model choices; derive amounts, deltas and totals in code."""
 from decimal import Decimal, ROUND_HALF_UP
+import re
 
 from .catalog import directory
 from .contracts import validate_section
 from .execution import allocate_amounts, plan_execution
 
 
-def search_etfs(query):
+def search_etfs(query, offset=0):
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 80:
         raise ValueError('INVALID_CATALOG_QUERY')
     q = query.casefold().strip()
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0 or offset > 200:
+        raise ValueError('INVALID_CATALOG_OFFSET')
     rows = directory()['instruments']
     exact = [r for r in rows if q in (r['id'].casefold(), r['ticker'].casefold())]
-    matches = exact or [r for r in rows if q in r['name'].casefold() or q in r['ticker'].casefold()]
-    return [{'instrument_id': r['id'], 'name': r['name'], 'ticker': r['ticker'], 'market': r['market']} for r in matches[:8]]
+    normalize = lambda value: re.sub(r'[\s_\-]', '', value.casefold())
+    matches = exact or [r for r in rows if normalize(q) in normalize(r['name']) or q in r['ticker'].casefold()]
+    return [{'instrument_id': r['id'], 'name': r['name'], 'ticker': r['ticker'], 'market': r['market']} for r in matches[offset:offset + 8]]
 
 
 def selected_accounts(request):
@@ -37,7 +41,7 @@ def publish_recommendation(final, request, metrics, sources, decision=None):
     def evaluation(value, current=False):
         scores = value.scores.model_dump() if value.scores else None
         overall = float((sum(Decimal(str(v)) for v in scores.values()) / 3).quantize(Decimal('.1'), rounding=ROUND_HALF_UP)) if scores else None
-        input_only = current and scores is None and bool(request.holdings) and all(h.kind == 'cash' for h in request.holdings)
+        input_only = current and scores is None and (not sources or bool(request.holdings) and all(h.kind == 'cash' for h in request.holdings))
         return {'scores': scores, 'overall': overall, 'rubric_version': 1, 'reason': validate_section('question' if input_only else 'portfolio', value.reason.model_dump(), sources),
                 'method': '시장 주도성·수익성·안정성 세 항목의 평균이에요. ETF 구성 종목·과거 가격·보수율을 확인해 평가하며, 사용자 선호는 점수에 넣지 않아요.'}
 
