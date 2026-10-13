@@ -431,7 +431,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if prior_report:
                                 inherited = Decision.model_validate(prior_report.get('decision') or {})
                                 rules = {}
+                                resolved_sources = {rule.source for rule in decision.constraints if rule.kind != 'unverified'}
                                 for rule in [*inherited.constraints, *decision.constraints]:
+                                    if rule.kind == 'unverified' and rule.source in resolved_sources:
+                                        continue
                                     identity = rule.model_dump(mode='json', exclude={'source'})
                                     if rule.kind == 'unverified':
                                         identity['source'] = rule.source

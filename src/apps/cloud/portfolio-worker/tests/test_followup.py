@@ -206,3 +206,29 @@ async def test_distinct_followup_questions_keep_separate_completion_tasks():
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='QUESTIONS_CHECKED'):
         await answer_question(first + ' ' + second, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
+@pytest.mark.parametrize('same_source', [True, False])
+async def test_recovery_resolves_only_the_exact_inherited_unknown_condition(same_source):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    original, other = 'VOO를 반드시 포함해 주세요.', '다른 조건도 지켜 주세요.'
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상', 'question': original + other},
+        'decision': {'constraints': [{'kind': 'unverified', 'source': original}, {'kind': 'unverified', 'source': other}]},
+        'sources': Evidence.sources}
+    stages = []
+    followup = 'VOO는 미국 Vanguard S&P 500 ETF입니다.'
+    async def model(payload):
+        if stages[-1] != 'question':
+            rules = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
+            assert len(rules) == (2 if same_source else 3)
+            unknown = {rule['source'] for rule in rules if rule['kind'] == 'unverified'}
+            assert unknown == ({other} if same_source else {original, other})
+            assert any(rule['kind'] == 'require' and rule['instrument_ids'] == ['US:VOO'] for rule in rules)
+            raise RuntimeError('RESOLUTION_CHECKED')
+        content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'constraints': [
+            {'kind': 'require', 'source': original if same_source else followup, 'instrument_ids': ['US:VOO']}]}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='RESOLUTION_CHECKED'):
+        await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
