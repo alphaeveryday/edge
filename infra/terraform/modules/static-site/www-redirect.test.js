@@ -8,8 +8,14 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, 'www-redirect.js'), 'utf8');
 const handler = new Function(`${source}; return handler;`)();
 
-const request = (host, uri, querystring, method) => ({
-  request: { method: method || 'GET', uri, querystring: querystring || {}, headers: { host: { value: host } } },
+// rawQuery: CloudFront 의 rawQueryString() 이 주는 값 — '?' 를 뺀 원문, '?' 가 없으면 undefined.
+const request = (host, uri, rawQuery, method) => ({
+  request: {
+    method: method || 'GET',
+    uri,
+    rawQueryString: () => rawQuery,
+    headers: { host: { value: host } },
+  },
 });
 
 test('대표 주소로 온 요청은 그대로 통과한다 — 이동시키면 고리가 된다', () => {
@@ -23,18 +29,16 @@ test('www 로 온 요청은 같은 경로의 대표 주소로 301 이동한다',
   assert.strictEqual(response.headers.location.value, 'https://etforca.com/outlook/091160.json');
 });
 
-test('쿼리스트링은 여러 값까지 그대로 옮긴다 — 유입 경로 표시(utm)가 이동 중에 사라지면 안 된다', () => {
-  const response = handler(
-    request('www.etforca.com', '/', {
-      utm_source: { value: 'insta' },
-      tag: { value: 'a', multiValue: [{ value: 'a' }, { value: 'b%20c' }] },
-    }),
+test('쿼리스트링은 원문 그대로 옮긴다 — 같은 키의 순서나 값 없는 키가 이동 중에 바뀌면 안 된다', () => {
+  const response = handler(request('www.etforca.com', '/', 'utm_source=insta&a=1&b=2&a=3&flag&q=b%20c'));
+  assert.strictEqual(
+    response.headers.location.value,
+    'https://etforca.com/?utm_source=insta&a=1&b=2&a=3&flag&q=b%20c',
   );
-  assert.strictEqual(response.headers.location.value, 'https://etforca.com/?utm_source=insta&tag=a&tag=b%20c');
 });
 
 test('POST 는 308 로 이동한다 — 301 이면 브라우저가 GET 으로 바꿔 쓰기 요청의 본문이 사라진다', () => {
-  const response = handler(request('www.etforca.com', '/api/portfolio/items', {}, 'POST'));
+  const response = handler(request('www.etforca.com', '/api/portfolio/items', undefined, 'POST'));
   assert.strictEqual(response.statusCode, 308);
   assert.strictEqual(response.headers.location.value, 'https://etforca.com/api/portfolio/items');
 });
