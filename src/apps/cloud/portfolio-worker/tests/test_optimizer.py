@@ -106,6 +106,17 @@ def batch():
     return request, market, groups
 
 
+async def test_unexpected_optimizer_exception_never_publishes_internal_details(monkeypatch):
+    request, market, groups = batch()
+    market.loader = lambda *_: record(finish=120)
+    def broken_search(*_):
+        raise ValueError('private internal provider payload')
+    monkeypatch.setattr('edge_portfolio.optimizer.search', broken_search)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['reason'] == 'PRICE_PROVIDER_UNAVAILABLE'
+    assert 'private' not in str(result)
+
+
 @pytest.mark.parametrize('failure', ['timeout', 'fx', 'shared-window'])
 async def test_partial_price_failures_preserve_nine_independent_combinations(monkeypatch, failure):
     request, market, groups = batch()

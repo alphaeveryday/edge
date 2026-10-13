@@ -215,7 +215,9 @@ class Optimizer:
                            'start_date': self.result['start_date'], 'end_date': self.result['end_date']}
                 self.market.results[tuple(sorted(target.items()))] = {'status': 'available', 'history': history, **history_returns(history)}
         except (ValueError, KeyError, TimeoutError) as error:
-            reason = str(error) if isinstance(error, ValueError) else price_failure(error)
+            reason = str(error) if isinstance(error, ValueError) and str(error) in {
+                'BASELINE_PRICE_UNAVAILABLE', 'NO_COMPARABLE_PRICE_HISTORY', 'NO_COMMON_PRICE_HISTORY'
+            } else price_failure(error)
             self.result = {'status': 'unavailable', 'candidates': [], 'reason': reason,
                            'rejected_combinations': [{'combination': number + 1, 'reason': reason} for number, reason in sorted(rejections.items())]}
         self.result['failures'] = {key: self.market.failures[key] for key in needed if key in self.market.failures}
