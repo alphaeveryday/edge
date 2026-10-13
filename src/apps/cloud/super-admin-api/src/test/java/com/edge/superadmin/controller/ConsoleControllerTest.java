@@ -1062,4 +1062,35 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.chain.stages[0].blind").value(false))
 				.andExpect(jsonPath("$.result.boundary.blind").value(false));
 	}
+
+	/**
+	 * v2 단계(ALPHA-1296)는 옛 단계 목록과 <b>따로</b> 나간다. 배치 칸은 null 이 <b>키를 유지한 채</b>
+	 * 나가야 한다 — 0 이면 "배치 트리거가 전부 사라졌다"가 되고, 키가 빠지면 소비자가 수를 못 읽는다.
+	 */
+	@Test
+	void v2_단계는_옛_단계와_따로_나가고_배치_칸은_null_이다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts v2 = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), base.boundary(),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
+						base.chain().feeds(), base.chain().stages(),
+						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
+										"c.req", "분석 요청", "analysis_execution_requests", null, 256L, false),
+								new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
+										"c.start", "분석 시작", "movement_analyses", null, 214L, false))),
+				base.etfLedger());
+
+		String body = mvc(v2).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.chain.analysisStages.length()").value(2))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].id").value("c.req"))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].label").value("분석 요청"))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(256))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(false))
+				.andExpect(jsonPath("$.result.chain.analysisStages[1].intraday").value(214))
+				// 옛 단계 목록은 그대로다 — 그 목록만 아는 옛 화면이 이 응답을 받는다.
+				.andExpect(jsonPath("$.result.chain.stages.length()").value(base.chain().stages().size()))
+				.andReturn().getResponse().getContentAsString();
+		assertThat(body).contains("\"batch\":null");
+	}
 }

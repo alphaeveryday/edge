@@ -118,7 +118,28 @@ public interface ConsoleFactsRepository {
 	 * <p>흐름은 <b>Cloud 게시에서 끝난다</b> — 발번 이후는 전달 경계의 물음이고
 	 * {@link BoundaryRow} 가 답한다(ADR-0026).
 	 */
-	record ChainRow(List<ChainFeed> feeds, List<ChainStage> stages) {
+	record ChainRow(List<ChainFeed> feeds, List<ChainStage> stages,
+			List<AnalysisStage> analysisStages) {
+
+		/** 새 분석 엔진 단계 없이 만든다 — 그 목록은 비어 있다. */
+		public ChainRow(List<ChainFeed> feeds, List<ChainStage> stages) {
+			this(feeds, stages, List.of());
+		}
+	}
+
+	/**
+	 * 새 분석 엔진(v2)의 단계 하나(ALPHA-1296) — 조회일에 발화한 장중 트리거 가운데 <b>이 단계에
+	 * 도달한 트리거 수</b>다. 단위가 트리거라 한 트리거에 요청·분석이 여럿이어도 한 번만 센다.
+	 *
+	 * <p>{@code batch} 가 null 이면 <b>대상이 아니다</b> — 배치 트리거는 v2 가 소비하지 않는다(v2 의
+	 * 큐 소비자는 장중 발화 이벤트만 받는다). 0 으로 내면 "배치 트리거가 전부 사라졌다"가 된다.
+	 *
+	 * <p>{@code blind} 는 이 단계를 셀 수 없다는 뜻이다 — 그날 코호트에 v2 요청이 하나도 없고 첫 v2
+	 * 요청이 조회일보다 뒤일 때(또는 v2 요청이 아예 없을 때)다. 그때 {@code intraday} 의 0 은 실측이
+	 * 아니다.
+	 */
+	record AnalysisStage(String id, String label, String src, Long batch, long intraday,
+			boolean blind) {
 	}
 
 	/** 체인의 입력 한 갈래. {@code unit} 이 갈래마다 다르다 — 배치는 ETF, 장중은 발화 건이다. */
