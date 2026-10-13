@@ -12,6 +12,7 @@ from edge_analysis_v2.sources.calendar import trading_dates
 from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.tools.fixture_data.common import holdings, instant, number
 from edge_analysis_v2.tools.fixture_data.news import search_articles
+from edge_analysis_v2.tools.fixture_data.returns import MARKET_PROXY
 
 
 def connect_sources(ca_path: Path, *, session=None, cloud=False):
@@ -209,6 +210,13 @@ def load_prices(connection, data, *, request=None):
                 break
             continuous.append(by_date[day])
     data['prices'] = sorted(continuous,key=lambda r:(r['instrument_id'],r['date']))
+    market = _rows(connection, '''SELECT p.trade_date,p.close_price,p.available_at FROM price_daily p
+        JOIN instrument i ON i.instrument_id=p.instrument_id
+        WHERE i.ticker=%s AND i.market_code='XKRX' AND i.instrument_type='ETF' AND p.close_price IS NOT NULL
+        AND p.trade_date>=%s AND p.trade_date<%s AND p.available_at<=%s ORDER BY p.trade_date''',
+        (MARKET_PROXY['instrument_id'],data['trading_dates'][0],at.date(),at))
+    data['market_prices'] = [{'date':r['trade_date'].isoformat(), 'close':number(r['close_price']),
+        'available_at':r['available_at'].isoformat()} for r in market]
     # A source basis is not an adjusted-close guarantee. Keep its actual values.
     data['price_basis'] = sorted({r['price_basis'] for r in rows if r['price_basis'] is not None}) or ['unverified']
     points = _rows(connection, '''SELECT * FROM (
@@ -251,16 +259,19 @@ class DatabaseTools(FixtureTools):
         if 'flow' in source:
             enabled |= {'calculate_investor_flow','calculate_weighted_flow','sum_investor_net_flow','sum_weighted_net_flow'}
         if 'prices' in source:
-            enabled |= {'calculate_chart_indicators','evaluate_indicator_transition','get_instrument_factors'}
+            enabled |= {'calculate_chart_indicators','evaluate_indicator_transition','get_instrument_factors','get_instrument_factor_table'}
+        if source.get('market_prices'):
+            enabled |= {'calculate_window_returns', 'get_daily_returns'}
         if 'macro' in source:
-            enabled |= {'get_macro_observations','compare_macro_observations','get_instrument_factors'}
+            enabled |= {'get_macro_observations','compare_macro_observations','get_instrument_factors','get_instrument_factor_table'}
         if 'financials' in source:
-            enabled |= {'calculate_valuation','calculate_weighted_valuation','get_instrument_factors'}
+            enabled |= {'calculate_valuation','calculate_weighted_valuation','get_instrument_factors','get_instrument_factor_table'}
         self._tools = {name:tool for name,tool in self._tools.items() if name in enabled}
         self._register('search_news_articles',
             '확보된 뉴스 제목·발췌를 모든 검색어 포함으로 검색합니다. 빈 query는 전체 목록이며 offset으로 다음 페이지를 읽습니다. 기업명·납기·마진 등으로 검색하고 없으면 검색어를 넓히세요. 공개 웹 검색이 아닙니다. 읽기·최종 근거는 get_issue_evidence를 사용합니다.',
-            {'query':{'type':'string','maxLength':200}, 'offset':{'type':'integer','minimum':0}},
-            lambda **args:search_articles(self.fixture, **args), '', ['document','news_document'])
+            {'hypothesis': {'type': 'string', 'maxLength': 200, 'description': '지금 네가 가진 가설을 한 문장으로. 아직 없으면 비워.'}, 'looking_for': {'type': 'string', 'maxLength': 200, 'description': '이 검색으로 알고 싶은 것을 네 말로. 넓게 훑는 중이면 무엇을 훑는지 적어.'}, 'query':{'type':'string','maxLength':200}, 'offset':{'type':'integer','minimum':0}},
+            lambda hypothesis=None, looking_for=None, **args:search_articles(self.fixture, **args), '', ['document','news_document'],
+            required=['query', 'offset'])
         self._tools['get_etf_holdings'].update(
             callback=lambda:holdings(self.fixture, require_complete=False),
             description='조회 시점에 확보된 구성종목과 원래 비중입니다. observed_weight_ratio는 확인된 비중의 합입니다. 70% 이상이면 ETF 전체 가중 계산에 쓰이며, 그 결과는 이 비중만큼의 펀드를 설명합니다.',
@@ -274,14 +285,18 @@ class DatabaseTools(FixtureTools):
             tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v5',
                                'get_issue_evidence': 'database-v3', 'get_etf_holdings': 'database-v2',
                                'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v2',
-                               'sum_weighted_net_flow': 'database-v2'}.get(name, 'database-v1')
-            if name == 'get_instrument_factors':
+                               'sum_weighted_net_flow': 'database-v2',
+                               # Their sources were first recorded as the news tables; a stored definition cannot change.
+                               'calculate_window_returns': 'database-v2', 'get_daily_returns': 'database-v2'}.get(name, 'database-v1')
+            if name in ('get_instrument_factors', 'get_instrument_factor_table'):
                 tool['sources'] = ['price_daily','minute_price_trigger','investor_flow_daily','etf_holding_snapshot',
                                    'macro_observations_as_of','financial_quarters_as_of']
             elif 'macro' in name:
                 tool['sources'] = ['macro_observations_as_of']
             elif 'valuation' in name:
                 tool['sources'] = ['financial_quarters_as_of','price_daily','etf_holding_snapshot']
+            elif name in ('calculate_window_returns','get_daily_returns'):
+                tool['sources'] = ['price_daily','etf_holding_snapshot']
             elif name in ('calculate_chart_indicators','evaluate_indicator_transition'):
                 tool['sources'] = ['price_daily','minute_price_trigger']
             elif 'flow' in name:

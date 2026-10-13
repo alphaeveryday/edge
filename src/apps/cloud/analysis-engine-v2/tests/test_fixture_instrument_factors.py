@@ -198,3 +198,22 @@ def test_weighted_flow_states_the_share_of_the_fund_it_covers_and_survives_unpub
         row['available_at'] = '2099-01-01T00:00:00+09:00'
     result = read(late)
     assert result['chart'] is not None and result['macro'] is not None
+
+
+def test_the_factor_table_has_one_row_per_holding_and_the_same_values_as_the_single_read():
+    fixture = make_fixture()
+    tools = FixtureTools(fixture)
+    table = tools.call('get_instrument_factor_table', {})['result']
+    codes = [row[0] for row in table['rows']]
+    weights = [row[2] for row in table['rows']]
+    assert len(codes) == len(set(codes)) == table['instruments_matched'] and weights == sorted(weights, reverse=True)
+    by = {row[0]: dict(zip(table['columns'], row)) for row in table['rows']}
+    single = read(fixture, codes[0])
+    assert by[codes[0]]['per'] == single['valuation']['per']
+    assert by[codes[0]]['momentum_index'] == single['chart']['momentum_index']
+    assert by[codes[0]]['foreign_net_5d_krw'] == sum(day[1] for day in single['flow']['history']['rows'][-5:])
+    top = tools.call('get_instrument_factor_table', {'instrument_ids': ['091160'], 'top_n': 1, 'factors': ['valuation']})['result']
+    assert [row[0] for row in top['rows']] == codes[:1] and top['columns'] == ['instrument_id', 'name', 'weight_pct', 'per', 'pbr', 'eps_approximate']
+    for bad in ({'instrument_ids': ['unknown']}, {'top_n': 0}, {'factors': ['macro']}, {'instrument_ids': []}):
+        with pytest.raises(ValueError):
+            tools.call('get_instrument_factor_table', bad)

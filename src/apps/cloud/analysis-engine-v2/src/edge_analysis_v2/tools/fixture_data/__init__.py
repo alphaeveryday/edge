@@ -3,7 +3,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from edge_analysis_v2.tools.fixture_data.common import available, holdings, instant, table
-from edge_analysis_v2.tools.fixture_data import instrument_factors, chart, flow, macro, news, valuation, financial_observations
+from edge_analysis_v2.tools.fixture_data import instrument_factors, chart, flow, macro, news, returns, valuation, financial_observations
 from edge_analysis_v2.tools.fixture_data.demo import make_fixture
 from edge_analysis_v2.tools.fixture_data.replay import make_replay_fixture
 
@@ -17,7 +17,7 @@ class FixtureTools:
 
     data_source = "synthetic"
 
-    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_instrument_factors", "compare_financial_observations", "calculate_valuation_range"}
+    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_instrument_factors", "get_instrument_factor_table", "compare_financial_observations", "calculate_valuation_range"}
 
     def __init__(self, fixture):
         self.fixture = deepcopy(fixture)
@@ -43,6 +43,33 @@ class FixtureTools:
         self._register("calculate_valuation", "개별 종목의 PER(공개 4분기 EPS 합)과 PBR(최신 분기 BPS)을 계산합니다. 두 비율은 각자의 자료만 있으면 계산되고, 계산되지 않은 쪽은 null이며 unavailable에 사유가 있습니다. null·적자를 중립으로 읽지 않습니다.", {"instrument_id": {"type": "string"}}, lambda **args: valuation.calculate(self.fixture, **args), r"PER=P/\sum_{q=1}^{4}EPS_q;\ PBR=P/BPS", ["종목 종가", "공개 분기 EPS와 BPS"], version="v4")
         self._register("calculate_weighted_valuation", "구성종목의 PER·PBR을 편입비중으로 가중평균합니다. 비율마다 그 값이 있는 종목의 비중 합이 70% 이상일 때만 계산하고 아니면 null입니다. ratio_coverage가 각 비율이 설명하는 펀드 비중, missing_constituents가 빠진 종목과 사유입니다.", {}, lambda: valuation.weighted(self.fixture), r"\bar x=\frac{\sum_iw_ix_i}{\sum_iw_i}", ["종목 종가", "공개 분기 EPS와 BPS", "ETF 구성종목 비중"], version="v4")
 
+        day = {'type': 'string', 'pattern': r'^\d{4}-\d{2}-\d{2}$'}
+        self._register('calculate_window_returns',
+            '구간의 수익률을 시장 몫과 나머지로 나눕니다. start_date 종가에서 end_date 종가까지 잽니다. 하루만 보려면 전 거래일과 그날을 넣습니다. '
+            f'시장은 {returns.MARKET_PROXY["name"]}(코스피200 추종 ETF)으로 대신합니다. 베타는 start_date까지의 일간 수익률 최대 60개로 구하고 20개 미만이면 null입니다. '
+            '시장 몫=베타×시장 수익률, 초과수익률=수익률−시장 몫입니다. ETF와 구성종목 전체를 초과수익률이 낮은 순으로 돌려줍니다. '
+            '기여도=비중×수익률이며 ETF 수익률 중 그 종목의 몫(%p)입니다. 초과수익률은 원인이 아닙니다. 네가 설명해야 할 크기입니다. 구간은 get_daily_returns로 먼저 정합니다.',
+            {'start_date': day | {'description': '구간 시작 거래일. 이 날의 종가가 기준입니다. 예: 2026-10-01'},
+             'end_date': day | {'description': '구간 끝 거래일. 분석일 당일은 종가가 확정되지 않아 쓸 수 없습니다.'}},
+            lambda **args: returns.window(self.fixture, **args), returns.FORMULA_LATEX, ['종목 종가', '시장 대용 ETF 종가', 'ETF 구성종목 비중'])
+        self._register('get_daily_returns',
+            '날짜마다 수익률, 시장 수익률, 초과수익률을 표로 읽습니다. 행 하나가 거래일 하나입니다. 어느 날이 크게 움직였는지 찾아 구간을 정할 때, 그리고 과거의 큰 움직임을 찾을 때 씁니다. '
+            'instrument_id를 생략하면 이 ETF이고, 구성종목 코드를 넣으면 그 종목입니다. 구간 안에서 종목끼리 견주는 일은 calculate_window_returns가 합니다. '
+            '각 날의 값은 그 하루를 구간으로 한 calculate_window_returns의 값과 같습니다.',
+            {'lookback_days': {'type': 'integer', 'minimum': 1, 'maximum': 120, 'description': '최근 몇 거래일. 최근 움직임은 10~20, 과거 사례를 찾을 때는 120.'},
+             'instrument_id': {'type': 'string', 'minLength': 1}},
+            lambda **args: returns.daily(self.fixture, **args), returns.FORMULA_LATEX, ['종목 종가', '시장 대용 ETF 종가'],
+            required=['lookback_days'])
+        self.final_tool_names = self.final_tool_names | {'calculate_window_returns', 'get_daily_returns'}
+        self._register('get_instrument_factor_table',
+            '여러 종목의 차트·확정 수급·밸류를 한 번에 표로 읽습니다. 행 하나가 종목 하나입니다. 구성종목을 하나씩 get_instrument_factors로 부르지 말고 이 도구를 씁니다. instrument_ids를 생략하거나 ETF 코드를 넣으면 그 ETF의 구성종목 전체이고, top_n=5이면 비중 상위 5종목만 읽습니다. 값은 종목 각자의 값이며 비중으로 가중하거나 행끼리 합친 값이 아닙니다. 수급은 확정 거래일 기준 최근 5·20거래일 순매수 합(KRW)입니다. ETF 전체의 가중 수급·밸류와 날짜별 이력은 get_instrument_factors로 읽습니다.',
+            {'instrument_ids': {'type': 'array', 'minItems': 1, 'uniqueItems': True, 'items': {'type': 'string', 'minLength': 1}},
+             'top_n': {'type': 'integer', 'minimum': 1},
+             'factors': {'type': 'array', 'minItems': 1, 'uniqueItems': True,
+                         'items': {'type': 'string', 'enum': list(instrument_factors.TABLE_FACTORS)}}},
+            lambda **args: instrument_factors.table(self.fixture, **args),
+            instrument_factors.FORMULA_LATEX, ['종목 가격', '확정 수급', '구성종목 비중', '공개 재무'],
+            required=[], version='v1')
         self._register('get_instrument_factors',
             '종목의 차트·확정 수급·밸류·공통 매크로를 읽고 다음 조사 대상을 고릅니다. instrument_id는 초기 종목 목록에서 선택합니다. factors를 생략하면 전체, 지정하면 해당 요인만 반환합니다. 예: factors=["flow","valuation"]. 이력은 columns/rows, 시점은 이번 분석에 고정됩니다. ETF 수급·밸류는 구성종목 가중값입니다. null은 미확보입니다. 반환값은 근거로 사용 가능하고 이력의 새 계산은 해당 계산 툴로 확인합니다.',
             {'instrument_id': {'type': 'string', 'minLength': 1},
