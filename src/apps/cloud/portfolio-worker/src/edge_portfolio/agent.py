@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
 from decimal import Decimal
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
@@ -23,7 +24,8 @@ from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
-from .execution import execution_tool, TOOL as EXECUTION_TOOL
+from .execution import execution_tool, resolve_funding, TOOL as EXECUTION_TOOL
+from .scenarios import build_scenarios, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status
 
@@ -106,7 +108,7 @@ class ExaEvidence:
 
 
 async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None,
-                       on_event=None, on_checkpoint=None):
+                       on_event=None, on_checkpoint=None, prior_report=None, followup_question=None):
     started = time.monotonic()
     metrics = calculate(request)
     system = (PROMPTS / "system.md").read_text(encoding="utf8")
@@ -126,6 +128,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     emit('run_started', model=MODEL, prompt_version=version, code_version=code_version, limits=limits)
     context = {"input": request.model_dump(mode="json"), "computed": metrics,
                "as_of": datetime.now(timezone.utc).isoformat(), "aws_outlook": {"status": "available_on_purpose" if os.getenv('PORTFOLIO_OUTLOOK_URL') else "not_connected"}}
+    if prior_report:
+        context['prior_report'] = {key: prior_report[key] for key in ('sections', 'as_of', 'decision', 'completion', 'recommendation', 'current_evaluation', 'insights') if key in prior_report}
+        if prior_report.get('recommendation'):
+            context['prior_report']['recommendation'] = {key: value for key, value in prior_report['recommendation'].items() if key != 'historical_performance'}
+        context['followup_question'] = followup_question
+        context['followup_instruction'] = '후속 질문에 직접 답하고 저장된 결정을 설명하거나 보완하세요. 기존 고객 필수 제약은 유지합니다. 이전 보고서는 과거 판단이며 이번에 새로 확인한 사실과 구분합니다. 리밸런싱은 기존 추천의 실행표부터 확인하고 변경이 필요할 때만 새 후보를 제안하세요.'
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
     sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
@@ -135,6 +143,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     checks = []
     observed_data = {}
     failed_source_urls = set()
+    scenario_result = None
+    followup_execution = None
     execution_rejection = None
     execution_failures = {}
     execution_feasible = set()
@@ -155,6 +165,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             session = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
             await session.initialize()
             evidence = ExaEvidence(session)
+        if prior_report:
+            evidence.sources = deepcopy(prior_report.get('sources', []))
+            if hasattr(evidence, 'discovered'):
+                evidence.discovered.update(source['url'] for source in evidence.sources if source.get('url'))
         if model_call is None:
             client = await stack.enter_async_context(httpx.AsyncClient(timeout=90))
 
@@ -192,7 +206,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raise ValueError("MODEL_CONTEXT_BUDGET")
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL],
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL],
                         "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
@@ -224,7 +238,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if message.get("tool_calls"):
                     for call in message["tool_calls"]:
                         function = call["function"]
-                        tool = function['name'] if function['name'] in {'search_etfs', 'search_sources', 'fetch_source', 'optimize_portfolios', 'read_portfolio_history', 'read_etf_outlook', 'calculate_rebalance'} else 'unknown'
+                        tool = function['name'] if function['name'] in {'search_etfs', 'search_sources', 'fetch_source', 'optimize_portfolios', 'read_portfolio_history', 'read_etf_outlook', 'calculate_rebalance', 'calculate_scenarios'} else 'unknown'
                         emit('tool_started', role=role, tool=tool)
                         try:
                             args = json.loads(function['arguments'])
@@ -260,6 +274,17 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                             execution_failures[candidate['candidate_id']] = answer
                                         else:
                                             execution_failures.pop(candidate['candidate_id'], None)
+                            except ValueError as error:
+                                answer = {'status': 'rejected', 'reason': str(error)[:300]}
+                        elif function['name'] == 'calculate_scenarios':
+                            try:
+                                funding = resolve_funding(request, decision)
+                                known_principal = bool(request.holdings)
+                                principal = sum(h.amount_krw for h in request.holdings) if request.input_mode == 'amount' and known_principal else None
+                                answer = build_scenarios(principal, args, **{name: value or 0 for name, value in (funding or {}).items()})
+                                if funding is None:
+                                    answer = {'status': 'needs_input', 'reason': 'ADDITIONAL_FUNDING_REQUIRED', 'rows': []}
+                                scenario_result = answer
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'optimize_portfolios':
@@ -318,7 +343,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
                     research_exhausted = len(failed_source_urls) >= 2 and not (getattr(evidence, 'discovered', set()) - failed_source_urls)
-                    source_free_allowed = research_exhausted or bool(decision.missing_inputs) or (optimizer.result or {}).get('reason') == 'SERVICE_CUSTOMER_POLICY_CONFLICT'
+                    source_free_allowed = decision.kind == 'scenario' or research_exhausted or bool(decision.missing_inputs) or (optimizer.result or {}).get('reason') == 'SERVICE_CUSTOMER_POLICY_CONFLICT'
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_research
@@ -353,8 +378,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             await enrich_report(published, final, market, evidence.sources)
                         if not selected and final.withheld_reason:
                             published['withheld_reason'] = final.withheld_reason
+                        if scenario_result is not None:
+                            published['scenarios'] = scenario_result
+                        if followup_execution is not None and not published.get('recommendation'):
+                            published['execution'] = followup_execution
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'])
-                        if not evidence.sources and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT':
+                        if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT':
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
@@ -365,7 +394,6 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
                             published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
-                        from copy import deepcopy
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
                         accepted_search = deepcopy(optimizer.result)
@@ -381,6 +409,38 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if role == 'question':
                             interpreted = QuestionSection.model_validate(raw)
                             decision = validate_decision(interpreted.decision, request, market.catalog)
+                            if prior_report:
+                                inherited = Decision.model_validate(prior_report.get('decision') or {})
+                                rules = {rule.model_dump_json(): rule for rule in [*inherited.constraints, *decision.constraints]}
+                                if inherited.kind == 'new_money' and not any(rule.kind == 'no_sell' and not rule.instrument_ids for rule in rules.values()):
+                                    from .decision import Constraint
+                                    rule = Constraint(kind='no_sell', source='기존 신규 자금 전용 결정의 매도 금지')
+                                    rules[rule.model_dump_json()] = rule
+                                decision.constraints = list(rules.values())
+                                decision.objectives = decision.objectives or inherited.objectives
+                                decision.funding_text = decision.funding_text or inherited.funding_text
+                                decision.questions = [followup_question] if followup_question else decision.questions
+                                decision = Decision.model_validate(decision.model_dump())
+                                context['active_decision'] = decision.model_dump(mode='json')
+                                if decision.kind in {'rebalance', 'new_money'} and prior_report.get('recommendation'):
+                                    rows = [{name: row[name] for name in ('instrument_id', 'account', 'weight_pct')}
+                                            for row in prior_report['recommendation'].get('allocations', [])]
+                                    if rows:
+                                        try:
+                                            followup_execution = execution_tool(request, {'allocations': rows}, decision, market.catalog)
+                                            current_checks = check_constraints(decision, rows, request, market.catalog)
+                                        except ValueError:
+                                            followup_execution = {'status': 'needs_input', 'rows': [], 'accounts': [],
+                                                'reasons': ['SAVED_TARGET_UNAVAILABLE'], 'assumptions': [], 'months': None,
+                                                'required_additional_krw': None, 'additional_krw': '0', 'monthly_krw': None,
+                                                'allocation_scope': 'total_portfolio'}
+                                            current_checks = []
+                                        if any(check['status'] != 'pass' for check in current_checks):
+                                            followup_execution.update(status='needs_input' if any(check['status'] == 'unknown' for check in current_checks) else 'infeasible',
+                                                rows=[], reasons=['CUSTOMER_CONSTRAINT_NOT_SATISFIED'])
+                                        context['saved_target_execution'] = followup_execution
+                            if decision.kind == 'scenario':
+                                optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SCENARIO_ONLY'}
                             optimizer.decision = decision
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:

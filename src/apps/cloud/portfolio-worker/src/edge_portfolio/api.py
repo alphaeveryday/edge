@@ -3,6 +3,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from uuid import UUID
+from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
@@ -77,6 +78,7 @@ def public(row):
 
 class ChatInput(StrictModel):
     question: str = Field(min_length=1, max_length=1000)
+    mode: Literal['question', 'recovery'] = 'question'
 
 
 class ReportRequest(StrictModel):
@@ -88,10 +90,10 @@ def chat(job_id: str, body: ChatInput, request: Request, idempotency_key: UUID =
     if not body.question.strip():
         raise HTTPException(422, "EMPTY_QUESTION")
     try:
-        return public(store.submit(owner(request), str(idempotency_key), body.model_dump(), parent_id=job_id))
+        return public(store.submit(owner(request), str(idempotency_key), body.model_dump(exclude_defaults=True), parent_id=job_id))
     except ValueError as error:
         code = str(error)
-        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
+        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "RECOVERY_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
 
 
 @app.post("/api/portfolio/analyses/{job_id}/report-request", status_code=201)

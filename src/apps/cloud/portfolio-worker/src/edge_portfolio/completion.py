@@ -89,7 +89,7 @@ def assess_completion(final, request, decision, published, sources, as_of):
     required = {(row['instrument_id'], field) for row in recommendation['allocations'] for field in fields} if recommendation else set()
     missing_research = [{'instrument_id': key, 'field': field, 'status': coverage.get((key, field), {}).get('status', 'missing')}
                         for key, field in sorted(required) if coverage.get((key, field), {}).get('status') != 'supported']
-    execution = recommendation.get('execution') if recommendation else None
+    execution = recommendation.get('execution') if recommendation else published.get('execution')
     reasons = []
     if any(task['status'] != 'answered' for task in tasks):
         reasons.append('UNANSWERED_QUESTIONS')
@@ -98,6 +98,11 @@ def assess_completion(final, request, decision, published, sources, as_of):
     if decision.kind in {'rebalance', 'new_money'} and recommendation and not execution:
         reasons.append('EXECUTION_PLAN_MISSING')
     needs_input = bool(decision.missing_inputs or final.withheld_reason == 'missing_input' or any(task['status'] == 'needs_input' for task in tasks) or execution and execution['status'] == 'needs_input')
+    if decision.kind == 'scenario':
+        if not published.get('scenarios'):
+            reasons.append('SCENARIO_CALCULATION_REQUIRED')
+        elif published['scenarios']['status'] == 'needs_input':
+            needs_input = True
     if final.withheld_reason == 'missing_data':
         reasons.append('MISSING_RESEARCH_DATA')
     optimization = published.get('optimization') or {}
@@ -107,7 +112,8 @@ def assess_completion(final, request, decision, published, sources, as_of):
         needs_input = True
     if not recommendation and optimization.get('reason') in (None, 'RECOMMENDATION_WITHHELD') and not final.withheld_reason:
         reasons.append('WITHHOLDING_REASON_MISSING')
-    status = 'needs_input' if needs_input else 'partial' if reasons else 'no_match' if not recommendation else 'complete'
+    executed_saved_target = not recommendation and decision.kind in {'rebalance', 'new_money'} and execution and execution['status'] in {'ready', 'conditional'}
+    status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if decision.kind == 'scenario' or executed_saved_target else 'no_match' if not recommendation else 'complete'
     return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': decision.missing_inputs,
             'evidence_coverage': list(coverage.values()), 'missing_research': missing_research,
             'note': '자료 항목·날짜·실행 조건의 충족 상태이며 주장 자체의 사실 정확성을 보증하지 않습니다.'}

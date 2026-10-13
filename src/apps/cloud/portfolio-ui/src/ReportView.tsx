@@ -3,6 +3,7 @@ import type { Evaluation, Report, Section } from './api';
 import { chartColors, PerformanceChart, PortfolioDonut } from './ReportCharts';
 import { safeReportUrl } from './reportUrl';
 import { ExecutionPlan } from './ExecutionPlan';
+import { ScenarioTable } from './ScenarioTable';
 
 const axes = [['leadership', '시장 주도성'], ['profitability', '수익성'], ['stability', '안정성']] as const;
 const grades = ['심각', '개선 필요', '보통', '훌륭', '매우 훌륭'];
@@ -44,6 +45,8 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
   const free = !allSections && report.insights ? report.insights : [{ title: '질문에 대한 답', content: sections.question }, { title: '포트폴리오 분석', content: sections.portfolio }];
   const parts = [{ title: pending ? '현재 투자 의견과 확인할 조건' : '최종 투자 의견과 실행할 행동', content: sections.opinion }, { title: '앞으로의 전망', content: sections.outlook }, ...free, ...(allSections ? report.insights ?? [] : [])];
   return <div id="report" className="step">
+    {report.scenarios && <ScenarioTable scenarios={report.scenarios} />}
+    {report.execution && !report.recommendation && <><p className="notice">저장된 기존 목표 구성의 실행 조건이에요.</p><ExecutionPlan plan={report.execution} /></>}
     {report.completion && <article className="completion-summary">
       <h3>{report.completion.status === 'complete' ? '요청한 분석을 마쳤어요' : report.completion.status === 'needs_input' ? '추가 확인이 필요해요' : report.completion.status === 'no_match' ? '검토 범위에서 조건에 맞는 추천을 찾지 못했어요' : '분석한 내용과 남은 확인 사항'}</h3>
       {report.completion.tasks.map((task, index) => <section key={index}><h4>{task.question}</h4><p>{task.answer || '이 질문에 답하기 위한 확인이 남아 있어요.'}</p>{task.status !== 'answered' && <p className="notice">{task.missing.filter(value => !/^[A-Z_]+$/.test(value)).join(' ') || '필요한 자료 또는 입력을 더 확인해야 해요.'}</p>}</section>)}
@@ -70,7 +73,7 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
       {plan.execution && <ExecutionPlan plan={plan.execution} />}
       <div className="why"><i>이렇게 고른 이유</i><Bullets section={plan.evaluation?.reason} /><Evidence section={plan.evaluation?.reason} report={report} hidden={separateEvidence} /></div>
       <section className="performance"><h4>과거 성과</h4>{plan.historical_performance ? <PerformanceChart history={plan.historical_performance} /> : <p className="notice">{plan.unavailable_reason}</p>}</section>
-    </article> : <article className="ans"><p className="notice">{report.optimization ? report.optimization.reason === 'EXECUTION_INFEASIBLE' ? '매도·추가 자금 또는 계좌 한도를 만족하는 실행 방법을 찾지 못해 추천을 보류했어요.' : report.optimization.reason === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' ? '필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.' : report.optimization.reason === 'RECOMMENDATION_WITHHELD' ? '현재 확보한 근거로 추천 구성을 확정하지 못했어요.' : report.optimization.reason === 'RATING_BELOW_MINIMUM' ? '조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.' : report.optimization.status === 'no_match' ? '이번 비교에서 추천 기준을 충족한 구성을 찾지 못했어요.' : '기존 비중 또는 비교 자료가 충분하지 않아 추천을 보류했어요.' : '이전 형식의 분석입니다. 추천 구성·점수는 새 분석에서 확인할 수 있어요.'}</p>{report.metrics?.total_krw != null && <p className="fee"><span>입력한 평가금액</span><b>{money(report.metrics.total_krw)}</b></p>}<ul className="report-bullets">{(report.metrics?.holdings ?? []).map((h, i) => <li key={i}>{h.name} · {h.account} · {h.weight_pct == null ? '비중 미입력' : `${h.weight_pct}%`}</li>)}</ul>{!report.optimization && <section className="performance"><h4>과거 성과</h4><p className="notice">{report.metrics?.unavailable_reason}</p></section>}</article>}
+    </article> : report.scenarios ? null : <article className="ans"><p className="notice">{report.optimization ? report.optimization.reason === 'EXECUTION_INFEASIBLE' ? '매도·추가 자금 또는 계좌 한도를 만족하는 실행 방법을 찾지 못해 추천을 보류했어요.' : report.optimization.reason === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' ? '필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.' : report.optimization.reason === 'RECOMMENDATION_WITHHELD' ? '현재 확보한 근거로 추천 구성을 확정하지 못했어요.' : report.optimization.reason === 'RATING_BELOW_MINIMUM' ? '조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.' : report.optimization.status === 'no_match' ? '이번 비교에서 추천 기준을 충족한 구성을 찾지 못했어요.' : '기존 비중 또는 비교 자료가 충분하지 않아 추천을 보류했어요.' : '이전 형식의 분석입니다. 추천 구성·점수는 새 분석에서 확인할 수 있어요.'}</p>{report.metrics?.total_krw != null && <p className="fee"><span>입력한 평가금액</span><b>{money(report.metrics.total_krw)}</b></p>}<ul className="report-bullets">{(report.metrics?.holdings ?? []).map((h, i) => <li key={i}>{h.name} · {h.account} · {h.weight_pct == null ? '비중 미입력' : `${h.weight_pct}%`}</li>)}</ul>{!report.optimization && <section className="performance"><h4>과거 성과</h4><p className="notice">{report.metrics?.unavailable_reason}</p></section>}</article>}
     <article className="evaluation"><h3>핵심 평가 정리</h3>{parts.map((part, i) => <section className={'evaluation__part' + (i === 0 ? ' action-first' : '')} key={i}><h4>{part.title}</h4><Bullets section={part.content} /><Evidence section={part.content} report={report} hidden={separateEvidence} /></section>)}</article>
   </div>;
 }

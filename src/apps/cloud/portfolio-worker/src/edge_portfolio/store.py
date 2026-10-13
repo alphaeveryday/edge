@@ -78,15 +78,21 @@ def submit(owner, key, payload, parent_id=None):
         if payload.get('draft_id') and not db.execute('SELECT id FROM portfolio_input_drafts WHERE id=%s AND owner=%s', (payload['draft_id'], owner)).fetchone():
             raise ValueError('NOT_FOUND')
         db.execute("SELECT pg_advisory_xact_lock(1266)")
+        recovery = bool(parent_id and payload.get('mode') == 'recovery')
         if parent_id:
-            parent = db.execute("SELECT id FROM portfolio_jobs WHERE id=%s AND owner=%s AND state='succeeded' AND kind='analysis'", (parent_id, owner)).fetchone()
+            parent = db.execute("SELECT id FROM portfolio_jobs WHERE id=%s AND owner=%s AND (state='succeeded' OR (%s AND state='failed')) AND kind='analysis'", (parent_id, owner, recovery)).fetchone()
             if not parent:
                 raise ValueError("PARENT_NOT_FOUND")
-            used = db.execute("SELECT id FROM portfolio_jobs WHERE owner=%s AND kind='chat' AND state IN ('queued','running','succeeded')", (owner,)).fetchone()
-            if used:
-                raise ValueError("CHAT_LIMIT")
-        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND NOT (kind='chat' AND state='failed') AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
-        if active >= 3:
+            if recovery:
+                used = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND parent_id=%s AND kind='chat' AND input->>'mode'='recovery' AND state IN ('queued','running','succeeded')", (owner, parent_id)).fetchone()['n']
+                if used >= 2:
+                    raise ValueError('RECOVERY_LIMIT')
+            else:
+                used = db.execute("SELECT id FROM portfolio_jobs WHERE owner=%s AND kind='chat' AND COALESCE(input->>'mode','question')='question' AND state IN ('queued','running','succeeded')", (owner,)).fetchone()
+                if used:
+                    raise ValueError("CHAT_LIMIT")
+        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND NOT (kind='chat' AND (state='failed' OR COALESCE(input->>'mode','question')='recovery')) AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
+        if not recovery and active >= 3:
             raise ValueError("REQUEST_LIMIT")
         queued = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE state IN ('queued','running')").fetchone()["n"]
         if queued >= 20:

@@ -41,6 +41,8 @@ ETF 구성 종목·과거 가격·보수율을 실제 자료로 확인하며 사
 
 answers에는 decision.questions의 각 질문을 question_index(1부터)로 연결해 직접 답한다. 명시적 질문이 있으나 questions가 비었으면 전체 질문을 1번으로 답한다. 답할 수 없는 부분은 partial 또는 needs_input과 구체적인 missing을 적는다. 리밸런싱 방법에는 코드 실행표를 사용하고 무관한 상품 설명으로 대체하지 않는다.
 
+기간별 자산 금액 질문은 calculate_scenarios로 계산한다. 연수익률은 고객이 제시한 가정 또는 비교용 가정임을 명시하고 예상·보장 수익률로 표현하지 않는다. 원금과 납입금은 코드가 확인하므로 임의로 도구 인자에 넣지 않는다. scenario 종류의 질문은 새로운 종목 추천 없이 계산표와 질문 답변으로 완료할 수 있다.
+
 evidence_coverage에는 최종 추천 ETF마다 structure(상품 구조), holdings(보유내역), fees(보수), 소득 목적일 때 distributions(분배)에 대한 근거 충족 상태를 작성한다. 실제 읽은 문장 ID와 그 사실의 기준일 claim_as_of를 함께 제시한다. 날짜가 나온 문장도 인용하며 수집일을 기준일로 대신하지 않는다. 확인하지 못한 항목은 missing이다. 보유내역 90일, 보수·구조 365일, 분배 450일을 넘은 근거는 현재 검토 완료로 취급하지 않는 서비스 검토 기준이다. 그 기준 자체가 사실 정확성을 보증하지 않는다. 본문이 짧거나 메뉴뿐이면 공식 팩트시트·PDF·다른 공식 페이지를 찾는다. next_offset이 있으면 필요한 뒷부분을 읽고 truncated이면 expand 또는 다른 자료로 보완한다.
 
 추천을 보류하면 withheld_reason을 실제 원인으로 지정한다: quality_failed(평가 기준 미달), missing_input(고객 입력 필요), missing_data(조사 자료 부족), customer_failed(필수 제약 미충족), search_exhausted(검색 범위 내 미발견). quality_failed는 다른 후보·배치를 탐색한 뒤에도 해결하지 못한 경우다. 형식이 맞는 것만으로 고객 과제가 끝난 것은 아니며 미해결 질문과 확인할 자료를 숨기지 않는다.

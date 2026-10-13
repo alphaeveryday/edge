@@ -100,7 +100,12 @@ async def work_once(stopping=None):
         if job["kind"] == "chat":
             store.stage(job["id"], "opinion")
             parent = store.read(job["parent_id"], job["owner"])
-            result = await answer_question(job["input"]["question"], parent["result"], os.environ["DEEPSEEK_API_KEY"])
+            saved = parent.get('result') or {}
+            report = saved.get('partial_report', {}) if parent['state'] == 'failed' else saved
+            report = {**report, 'input': parent['input']}
+            result = await answer_question(job["input"]["question"], report, os.environ["DEEPSEEK_API_KEY"],
+                on_stage=lambda role: store.stage(job['id'], role), on_event=on_event,
+                on_checkpoint=on_checkpoint, revision_id=job['id'])
         else:
             result = await run_analysis(AnalysisInput.model_validate(job["input"]), os.environ["DEEPSEEK_API_KEY"],
                                         lambda role: store.stage(job["id"], role), on_event=on_event, on_checkpoint=on_checkpoint)

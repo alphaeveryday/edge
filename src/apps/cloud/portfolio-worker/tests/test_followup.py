@@ -1,24 +1,127 @@
-import json
+from copy import deepcopy
+import pytest
+
 from edge_portfolio.followup import answer_question
-from report_fixtures import section
 
 
-async def test_followup_receives_the_current_score_and_recommended_portfolio(monkeypatch):
-    report = {'sections': {}, 'sources': [{'id': 's1', 'passages': [{'id': 'p1', 'text': 'evidence'}]}],
-              'metrics': {}, 'as_of': '2026-10-12', 'current_evaluation': {'overall': 3.5},
-              'recommendation': {'title': '추천안', 'evaluation': {'overall': 4}}, 'insights': []}
-    class Response:
-        def raise_for_status(self): pass
-        def json(self): return {'choices': [{'message': {'content': json.dumps(section())}}]}
-    class Client:
-        def __init__(self, **kwargs): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): pass
-        async def post(self, url, headers, json):
-            context = __import__('json').loads(json['messages'][1]['content'])['report']
-            assert context['current_evaluation']['overall'] == 3.5
-            assert context['recommendation']['evaluation']['overall'] == 4
-            return Response()
-    monkeypatch.setattr('edge_portfolio.followup.httpx.AsyncClient', Client)
-    answer = await answer_question('현재 점수가 왜 이 점수인가요?', report, 'test')
-    assert len(answer['answer']['paragraphs']) == 3
+async def test_followup_reuses_research_checks_without_overwriting_the_original(monkeypatch):
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
+        'current_evaluation': {'overall': 3.5}, 'recommendation': {'title': 'saved target'},
+        'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
+    original = deepcopy(report)
+    async def analyze(request, key, on_stage, **kwargs):
+        assert request.holdings[0].amount_krw == 1000000
+        assert '매도 금지' in request.question
+        assert kwargs['followup_question'] == '리밸런싱은 어떻게 해요?'
+        assert kwargs['prior_report']['current_evaluation']['overall'] == 3.5
+        kwargs['prior_report']['recommendation']['title'] = 'changed in isolated context'
+        return {'sections': {'opinion': {'paragraphs': ['answer']}}, 'sources': [],
+            'as_of': '2026-10-14', 'completion': {'status': 'needs_input'}, 'elapsed_seconds': 1, 'diagnostics': {}}
+    monkeypatch.setattr('edge_portfolio.followup.run_analysis', analyze)
+    result = await answer_question('리밸런싱은 어떻게 해요?', report, 'test', revision_id='revision-1')
+    assert report == original
+    assert result['parent_as_of'] == '2026-10-12'
+    assert result['as_of'] == '2026-10-14'
+    assert result['status'] == 'needs_input'
+    assert result['revision_id'] == 'revision-1'
+    assert result['revision']['sections']['opinion'] == result['answer']
+
+
+async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상', 'question': 'a' * 1000}}
+    async def analyze(request, *args, **kwargs):
+        assert 'a' * 1000 in request.question and 'b' * 1000 in request.question
+        return {'sections': {'opinion': {}}, 'sources': [], 'as_of': '2026-10-14',
+            'completion': {'status': 'partial'}, 'elapsed_seconds': 1, 'diagnostics': {}}
+    monkeypatch.setattr('edge_portfolio.followup.run_analysis', analyze)
+    assert (await answer_question('b' * 1000, report, 'test'))['status'] == 'partial'
+
+
+@pytest.mark.parametrize('has_principal', [True, False])
+async def test_scenario_followup_uses_verified_principal_and_retains_original_constraints(monkeypatch, has_principal):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    stages, calculated = [], []
+    question = '5년 10년 15년 후 금액을 가정별로 계산해 주세요.'
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
+        'sources': Evidence.sources, 'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
+    if not has_principal:
+        report['input'].update(holdings=[], planning=True, preferences={'contribution': '매월 10만원'})
+    report['recommendation'] = {'allocations': [], 'historical_performance': {
+        'points': [{'date': '2000-01-01', 'recommended': 1000000, 'current': 1000000}] * 10000}}
+    async def model(payload):
+        role = stages[-1]
+        assert 'historical_performance' not in json.loads(payload['messages'][1]['content'])['prior_report']['recommendation']
+        if role == 'portfolio' and not calculated:
+            calculated.append(1)
+            context = json.loads(payload['messages'][1]['content'])
+            assert context['active_decision']['constraints'][0]['kind'] == 'no_sell'
+            return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+                'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios',
+                    'arguments': json.dumps({'annual_returns': [0], 'years': [5, 10, 15]})}}]}}]}
+        content = {**final_payload(), 'recommendation': None,
+            'answers': [{'question_index': 1, 'status': 'answered', 'answer': '수익률이 0%이고 추가 납입이 없다면 각 기간의 금액은 현재 원금과 같아요.'}]} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {'kind': 'scenario'}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    async def forbidden_price_lookup(*args): raise AssertionError('A cash-flow scenario needs no new ETF comparison')
+    monkeypatch.setattr('edge_portfolio.market_data.MarketData.get', forbidden_price_lookup)
+    result = await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+    assert result['status'] == ('complete' if has_principal else 'needs_input')
+    assert [row['future_krw'] for row in result['revision']['scenarios']['rows']] == (['1000000'] * 3 if has_principal else [])
+    assert result['revision']['decision']['constraints'][0]['kind'] == 'no_sell'
+    assert result['revision']['recommendation'] is None
+
+
+def test_projection_horizon_does_not_cancel_a_separate_monthly_commitment():
+    from edge_portfolio.followup import FollowupInput
+    from edge_portfolio.execution import resolve_funding
+    from edge_portfolio.decision import Decision
+    from decimal import Decimal
+    request = FollowupInput(holdings=[], planning=True, horizon='10년 이상',
+        question='5년 뒤 금액을 가정별로 계산해 주세요', funding_questions=['', '5년 뒤 금액을 가정별로 계산해 주세요'],
+        preferences={'contribution': '매월 10만원'})
+    decision = Decision(kind='scenario', funding_text='매월 10만원')
+    assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
+    request.funding_questions = ['', '연 5% 수익률을 가정하면 10년 뒤 얼마인가요?']
+    assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
+    request.funding_questions = ['', '납입은 3개월만 할게요. 5년 뒤 금액을 계산해 주세요.']
+    assert resolve_funding(request, decision) is None
+    request.funding_questions = ['', '투자는 3년 후에 시작할 계획이고, 5년 후 자산을 계산해 주세요.']
+    assert resolve_funding(request, decision) is None
+
+
+@pytest.mark.parametrize('available', [False, True])
+async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, available):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
+            self.batches = set()
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    question = '기존 목표로 리밸런싱하려면 어떻게 해야 하나요?'
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상'}, 'sources': Evidence.sources, 'recommendation': {'allocations': [
+        {'instrument_id': 'US:VOO' if available else 'US:REMOVED', 'account': '일반 계좌', 'weight_pct': 100}]}}
+    stages = []
+    async def model(payload):
+        role = stages[-1]
+        if role != 'question':
+            context = json.loads(payload['messages'][1]['content'])
+            assert context['saved_target_execution']['status'] == ('ready' if available else 'needs_input')
+        content = {**final_payload(), 'recommendation': None, 'answers': [
+            {'question_index': 1, 'status': 'answered', 'answer': '기존 목표의 종목을 사용할 수 없어 새로운 대안을 확인해야 해요.'}]} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {'kind': 'rebalance'}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    result = await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+    if not available:
+        assert result['revision']['execution']['reasons'] == ['SAVED_TARGET_UNAVAILABLE']
+        assert result['revision']['execution']['rows'] == []
+        assert result['revision']['execution']['assumptions'] == []
+    assert result['status'] == ('complete' if available else 'needs_input')
+    assert 'opinion' in stages

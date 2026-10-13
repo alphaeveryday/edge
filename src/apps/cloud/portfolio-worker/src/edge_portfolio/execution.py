@@ -57,7 +57,7 @@ def allocate_amounts(total, weights):
     return amounts
 
 
-def plan_execution(request, allocations, decision=None):
+def resolve_funding(request, decision=None):
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
     funding = parse_funding(text) if text else None
     if funding:
@@ -70,16 +70,28 @@ def plan_execution(request, allocations, decision=None):
             elif isinstance(value, list):
                 for item in value:
                     yield from strings(item)
-        sources = [request.question, *strings(request.preferences.model_dump())]
+        questions = getattr(request, 'funding_questions', None) or [request.question]
+        sources = [*questions, *strings(request.preferences.model_dump())]
         commitments = {re.sub(r'\s+', '', match[0]) for source in sources for match in re.finditer(
             r'(?:매월|매달(?:\s+꾸준히)?|월마다|월|추가로?|일시금?|목돈|한 번)\s*[0-9][0-9,.\s억만천백십]*원(?:씩)?', source)}
         occurrences = [(source[:match.start()], source[match.end():]) for source in sources
                        for match in re.finditer(re.escape(text), source)]
+        def duration_context(value):
+            if not decision or decision.kind != 'scenario':
+                return value
+            clauses = re.split(r'([.!?;\n])', value)
+            for index, clause in enumerate(clauses):
+                periods = r'(?:\d+\s*년\s*(?:(?:뒤|후)(?:에)?)?\s*(?:[,·/]|및|그리고)?\s*)+'
+                projection = r'(?:금액|자산|원금|은|는|이|가|을|를|얼마나|얼마|가정별로|가정별|수익률별로|계산해|계산|알려|보여|주세요|줘|해|요|될까요|인가요|예상|의|\s)+'
+                assumption = r'(?:(?:연|연간)?\s*-?\d+(?:\.\d+)?\s*%\s*수익률(?:을|로)?\s*(?:가정하면|가정할 때|가정해서)\s*)?'
+                if re.fullmatch(r'\s*' + assumption + periods + projection, clause):
+                    clauses[index] = ''  # A complete projection question, never a funding schedule.
+            return ''.join(clauses)
         def has_duration(before, after):
-            context = before + after
+            context = duration_context(before + after)
             return bool(re.search(r'\d+(?:\.\d+)?\s*(?:년|개월|달|월간|회|번|일|주|분기)|(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇)\s*(?:개월|달|년|회)|동안|까지|이후|부터', context))
         def complete_funding_clause(after):
-            clauses = [part.strip() for part in re.split(r'[.!?;\n]', after) if part.strip()]
+            clauses = [part.strip() for part in re.split(r'[.!?;\n]', duration_context(after)) if part.strip()]
             tail = clauses[0] if clauses else ''
             plain = r'(?:씩)?\s*(?:(?:을|를)?\s*(?:넣|납입|투자|입금|추가)(?:을게요|할게요|합니다|해요|하겠습니다|하겠어요|겠습니다|습니다|어요|기|할 예정입니다|을 예정입니다|할 계획입니다|을 계획입니다)?)?'
             names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
@@ -88,7 +100,7 @@ def plan_execution(request, allocations, decision=None):
             return bool(re.fullmatch(plain + r'(?:\s*매도\s*금지)?|' + combined, tail)) and all(
                 re.fullmatch(no_sale + r'|매도\s*금지', clause) for clause in clauses[1:])
         def unconditional_prefix(before):
-            prefix = before.strip()
+            prefix = duration_context(before).strip(' .!?;\n')
             if prefix in {'', '저는', '저희는', '일단'}:
                 return True
             names = '|'.join(re.escape(name) for h in request.holdings for name in (h.name, (h.instrument_id or '').split(':')[-1]) if name)
@@ -96,7 +108,7 @@ def plan_execution(request, allocations, decision=None):
             # could make the quoted funding contingent on income or a future event.
             asset = r'(?:' + (names or r'(?!)') + r'|[A-Z]{1,10})\s*\d+(?:\.\d+)?\s*%'
             return bool(re.fullmatch(asset + r'(?:\s*,\s*' + asset + r')*\s*(?:로 구성하고|로 하고|를 목표로 하고)', prefix))
-        funding_contexts = sources
+        funding_contexts = [duration_context(value) for value in sources]
         scoped_restrictions = any(has_duration(source, '') or re.search(r'[가-힣]+면|경우|조건|가정|후에|뒤에|전에는', source) for source in funding_contexts)
         # A separate free-form note may qualify the commitment. Without a
         # complete verified funding clause there, do not infer its independence.
@@ -113,6 +125,11 @@ def plan_execution(request, allocations, decision=None):
             funding = None
     if funding is None and not (decision and decision.funding_text) and not any(word in text for word in ('매달', '매월', '원')):
         funding = {'additional_krw': Decimal(0), 'monthly_krw': None}
+    return funding
+
+
+def plan_execution(request, allocations, decision=None):
+    funding = resolve_funding(request, decision)
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     new_money = bool(decision and decision.kind == 'new_money')
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) and not new_money else set()
