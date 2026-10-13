@@ -459,6 +459,7 @@ test('🔴 R10 — 단계가 전부 관측 불가면 위반을 세우지 않고 
   assert.equal(rr.evaluated, false, '위반 0건으로 평가됐다고 선다 — 손실이 없다는 뜻이 아니다');
   assert.equal(rr.notRun, 'axis');
   /* 사유가 원인을 말한다 — "배포본에 축이 없다"가 아니다(축은 왔고, 셀 쪽이 없다) */
+  assert.match(rr.notRunWhy ?? '', /관측 불가/, '화면이 읽는 사유 자리에 원인이 없다');
   assert.match(rr.note ?? '', /관측 불가/);
   assert.match(rr.note ?? '', /옛 설명 엔진/);
   assert.doesNotMatch(rr.note ?? '', /배포본/);
@@ -471,7 +472,9 @@ test('🔴 R10 — 단계가 전부 관측 불가면 위반을 세우지 않고 
 
   /* 축이 아예 없는 응답의 사유는 종전 그대로다 */
   delete f.chain;
-  assert.match(buildReport(f, NOW).rules.find((r) => r.id === 'R10')!.note ?? '', /배포본/);
+  const absent = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.match(absent.note ?? '', /배포본/);
+  assert.equal(absent.notRunWhy, undefined, '축이 없는데 관측 불가 사유를 붙였다');
 });
 
 test('R10 경계 — 비교할 점이 두 개 없으면 evaluated:false (인접 감소라는 물음이 성립하지 않는다)', () => {

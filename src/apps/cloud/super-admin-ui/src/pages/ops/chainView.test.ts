@@ -55,4 +55,9 @@ test('🔴 입구 단계가 관측 불가면 "전량이 사라졌다"고 말하�
   assert.equal(intradayLostAtEntry(chain(256, 0)), true);
   assert.equal(legacyStagesBlind(chain(256, 0)), false);
   assert.equal(legacyStagesBlind(undefined), false, '축이 없는 것은 관측 불가 표시가 아니다');
+  /* 끝 단계 하나만 관측 불가인 사실(동봉 스냅샷의 온프렘 수신)은 이 사정이 아니다 — 앞 단계는
+   * 실측이고 R10 도 돈다. 여기서 참이면 흐름 화면이 "관측부터 값이 없다"고 거짓 안내를 한다. */
+  const tail = chain(65, 3);
+  tail!.stages = [...tail!.stages, { id: 'c.onprem', label: '온프렘 수신', src: 'x', blind: true }];
+  assert.equal(legacyStagesBlind(tail), false);
 });

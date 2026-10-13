@@ -101,7 +101,7 @@ export function ChainPage() {
         {ledger && legacyStagesBlind(q.facts.chain) && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
             이 표도 옛 설명 엔진의 실행 상태를 읽습니다. 그 엔진이 조회일보다 앞서 멈춰 이 날의 귀결은
-            비어 있습니다 — 분석이 안 돈 것이 아닙니다. 분석 실패는{' '}
+            비어 있습니다 — 새 분석 엔진의 실행은 이 표에 나오지 않습니다. 분석 실패는{' '}
             <Link to="/ops/trend">추이 화면의 분석 실패 ETF 카드</Link>가 답합니다.
           </p>
         )}

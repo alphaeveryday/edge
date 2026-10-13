@@ -522,6 +522,12 @@ export interface RuleResult {
    *   "아직 계측이 없구나"로 읽힌다. 사유는 `note` 에 있다.
    */
   notRun?: 'axis' | 'identity';
+  /**
+   * 못 돈 사유가 **이번 사실에서 갈렸을 때** 그 문장(ALPHA-1293) — 규칙의 `notRunWhy` 가 낸 값이다.
+   * 있으면 화면은 정적 사유(`dep`)보다 이것을 먼저 쓴다. 축이 왔는데 관측 불가라 못 돈 R10 에
+   * "배포본에 축이 없다"고 쓰면 원인이 틀린다.
+   */
+  notRunWhy?: string;
   violations: number;
   depends_on_mock: boolean;
   note: string | null;

@@ -31,5 +31,7 @@ export function intradayLostAtEntry(chain: Facts['chain']): boolean {
  * 흐름 화면이 이유를 한 줄로 적을지 이걸로 정한다. ETF 표도 같은 엔진의 실행 상태를 읽는다.
  */
 export function legacyStagesBlind(chain: Facts['chain']): boolean {
-  return (chain?.stages ?? []).some((s) => s.blind);
+  /* **입구 단계**(첫 단계)의 표시로 본다 — 서버는 옛 엔진 단계 다섯을 한꺼번에 표시한다. 끝 단계
+   * 하나만 관측 불가인 사실(온프렘 수신처럼 원래 못 보는 단계)은 이 사정이 아니다. */
+  return chain?.stages[0]?.blind === true;
 }
