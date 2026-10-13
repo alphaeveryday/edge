@@ -23,6 +23,11 @@ from edge_analysis_v2.storage.delivery import enqueue_movement
 from edge_analysis_v2.storage.inspection import read_analysis_evidence, read_storage
 
 LOG = logging.getLogger(__name__)
+# The first outlook of an ETF runs as investigation, writing, then fields; a later day edits that text in one stage.
+# An outlook analysed before this instant was written in one conversation and is not continued, so its ETF
+# starts again from a staged one. Read from the database: this role may put run records in S3 but not read them.
+# ponytail: a fixed instant; remove it with the rule once every ETF has a staged outlook.
+STAGED_SINCE = datetime(2026, 10, 13, 21, 0, tzinfo=timezone.utc)   # the 06:00 KST batch of 2026-10-14
 # The workflow stops the task at 1100 seconds; waiting longer would leave no time to analyze.
 SLOT_WAIT_SECONDS = 600
 
@@ -149,7 +154,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
             web = WebResearch(web_key, request['analysis_at']) if web_key else None
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source, web=web),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
-                artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,owner=owner)
+                artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,owner=owner,
+                staged=request['kind'] == 'outlook', staged_since=STAGED_SINCE)
             if request['kind'] == 'movement':
                 # Ownership is checked when the publication commits; delivery only enqueues that commit.
                 job['delivery_tenants'] = db(lambda connection: enqueue_movement(connection, request['analysis_id']))
@@ -167,7 +173,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
                 web = WebResearch(web_key, request['analysis_at']) if web_key else None
                 execute_request(kind=request['kind'],source_tools=DatabaseTools(source, web=web),
                     connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
-                    artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model)
+                    artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,
+                    staged=request['kind'] == 'outlook', staged_since=STAGED_SINCE)
                 if request['kind'] == 'movement':
                     job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
         job['status']='completed'

@@ -94,15 +94,6 @@ class Publisher:
         return manifest
 
 
-def was_staged(s3, bucket, identity):
-    """Whether that run left an investigation report; only the staged outlook writes one."""
-    try:
-        manifest = decode_json(s3.get_object(Bucket=bucket, Key=PREFIX+identity+'/manifest.json')['Body'].read())
-    except s3.exceptions.NoSuchKey:
-        return False
-    return 'investigation.md' in manifest.get('files', {})
-
-
 def validate_manifest(manifest):
     """Reject cross-run keys and filesystem paths supplied by remote objects."""
     if not isinstance(manifest,dict) or set(manifest)!={'job','files','events'}:
