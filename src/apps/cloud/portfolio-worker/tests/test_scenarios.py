@@ -3,6 +3,15 @@ import pytest
 from edge_portfolio.scenarios import build_scenarios
 
 
+@pytest.mark.parametrize('text,expected', [('원금은 1000만원입니다. 5년 뒤 얼마인가요?', 10000000),
+    ('제 원금은 1억 5000만원이에요.', 150000000), ('원금은 0원입니다.', 0),
+    ('원금은 약 1000만원입니다.', None), ('원금은 1000만원이면 좋겠어요.', None),
+    ('원금은 1000만원입니다. 원금은 2000만원입니다.', None), ('원금은 1000만원입니다. 취소합니다.', None)])
+def test_followup_principal_requires_one_exact_standalone_statement(text, expected):
+    from edge_portfolio.scenarios import stated_principal
+    assert stated_principal(text) == expected
+
+
 def test_known_principal_allows_scenarios_without_a_return_forecast():
     result = build_scenarios(1000000, {'annual_returns': [0], 'years': [5, 10, 15]}, monthly_krw=100000)
     assert [row['future_krw'] for row in result['rows']] == ['7000000', '13000000', '19000000']

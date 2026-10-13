@@ -22,6 +22,7 @@ test('an unavailable saved target renders its reason instead of crashing the rev
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByText('보완 분석과 계산표 보기').click();
   await expect(page.locator('.followup-revision .execution-plan')).toContainText('기존 목표의 종목이나 계좌를 현재 조건으로 사용할 수 없어');
+  await expect(page.locator('.followup-revision')).not.toContainText('추천을 보류했어요.');
 });
 
 test('recovery remains available after the question quota and keeps the original report', async ({ page }) => {

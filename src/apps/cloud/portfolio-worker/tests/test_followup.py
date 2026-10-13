@@ -38,13 +38,15 @@ async def test_full_length_questions_keep_both_customer_messages(monkeypatch):
     assert (await answer_question('b' * 1000, report, 'test'))['status'] == 'partial'
 
 
-@pytest.mark.parametrize('has_principal', [True, False])
-async def test_scenario_followup_uses_verified_principal_and_retains_original_constraints(monkeypatch, has_principal):
+@pytest.mark.parametrize('has_principal,supplied', [(True, False), (False, False), (False, True)])
+async def test_scenario_followup_uses_verified_principal_and_retains_original_constraints(monkeypatch, has_principal, supplied):
     import json
     from report_fixtures import final_payload
     from test_agent import Evidence
     stages, calculated = [], []
     question = '5년 10년 15년 후 금액을 가정별로 계산해 주세요.'
+    if supplied:
+        question = '원금은 1000만원입니다. ' + question
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
         'sources': Evidence.sources, 'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
@@ -68,9 +70,11 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     async def forbidden_price_lookup(*args): raise AssertionError('A cash-flow scenario needs no new ETF comparison')
     monkeypatch.setattr('edge_portfolio.market_data.MarketData.get', forbidden_price_lookup)
-    result = await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
-    assert result['status'] == ('complete' if has_principal else 'needs_input')
-    assert [row['future_krw'] for row in result['revision']['scenarios']['rows']] == (['1000000'] * 3 if has_principal else [])
+    def forbidden_evidence_connection(*args, **kwargs): raise AssertionError('Arithmetic must not require an Exa connection')
+    monkeypatch.setattr('edge_portfolio.agent.streamable_http_client', forbidden_evidence_connection)
+    result = await answer_question(question, report, 'test', model_call=model, on_stage=stages.append)
+    assert result['status'] == ('complete' if has_principal or supplied else 'needs_input')
+    assert [row['future_krw'] for row in result['revision']['scenarios']['rows']] == (['16000000', '22000000', '28000000'] if supplied else ['1000000'] * 3 if has_principal else [])
     assert result['revision']['decision']['constraints'][0]['kind'] == 'no_sell'
     assert result['revision']['recommendation'] is None
 
@@ -103,10 +107,11 @@ async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, av
             self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
             self.batches = set()
         def validate(self, final): return None
-    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    if not available:
+        monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
     question = '기존 목표로 리밸런싱하려면 어떻게 해야 하나요?'
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
-        'horizon': '10년 이상'}, 'sources': Evidence.sources, 'recommendation': {'allocations': [
+        'horizon': '10년 이상'}, 'sources': Evidence.sources, 'completion': {'status': 'complete'}, 'recommendation': {'allocations': [
         {'instrument_id': 'US:VOO' if available else 'US:REMOVED', 'account': '일반 계좌', 'weight_pct': 100}]}}
     stages = []
     async def model(payload):
@@ -125,3 +130,42 @@ async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, av
         assert result['revision']['execution']['assumptions'] == []
     assert result['status'] == ('complete' if available else 'needs_input')
     assert 'opinion' in stages
+
+
+@pytest.mark.parametrize('parent_state,completion', [('failed', 'complete'), ('succeeded', 'partial')])
+async def test_tentative_saved_target_cannot_skip_research(parent_state, completion):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상'}, 'sources': Evidence.sources, 'parent_state': parent_state,
+        'completion': {'status': completion, 'missing_research': [{'instrument_id': 'US:VOO', 'field': 'holdings'}]},
+        'recommendation': {'allocations': [{'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 100}]}}
+    stages = []
+    async def model(payload):
+        role = stages[-1]
+        content = final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {'kind': 'rebalance'}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(ValueError, match='Before completing portfolio'):
+        await answer_question('기존 목표를 실행해도 되나요?', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
+async def test_followup_retains_twenty_existing_rules_and_adds_new_distinct_rules():
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    rules = [{'kind': 'unverified', 'source': f'기존 필수 조건 {i}'} for i in range(20)]
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상',
+        'question': '\n'.join(rule['source'] for rule in rules)}, 'decision': {'constraints': rules}, 'sources': Evidence.sources}
+    stages = []
+    async def model(payload):
+        if stages[-1] != 'question':
+            active = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
+            assert len(active) == 21
+            assert {rule['source'] for rule in active} == {*(rule['source'] for rule in rules), '새 필수 조건'}
+            raise RuntimeError('MERGE_CHECKED')
+        content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'constraints': [rules[0], {'kind': 'unverified', 'source': '새 필수 조건'}]}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='MERGE_CHECKED'):
+        await answer_question('새 필수 조건', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)

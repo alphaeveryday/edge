@@ -102,7 +102,7 @@ async def work_once(stopping=None):
             parent = store.read(job["parent_id"], job["owner"])
             saved = parent.get('result') or {}
             report = saved.get('partial_report', {}) if parent['state'] == 'failed' else saved
-            report = {**report, 'input': parent['input']}
+            report = {**report, 'input': parent['input'], 'parent_state': parent['state']}
             result = await answer_question(job["input"]["question"], report, os.environ["DEEPSEEK_API_KEY"],
                 on_stage=lambda role: store.stage(job['id'], role), on_event=on_event,
                 on_checkpoint=on_checkpoint, revision_id=job['id'])

@@ -19,7 +19,7 @@ export type Report = {
   schema_version?: number;
   current_evaluation?: Evaluation;
   recommendation?: Recommendation | null;
-  optimization?: { status: 'available' | 'no_match' | 'unavailable'; selected_candidate_id: string | null; reason?: string };
+  optimization?: { status: 'available' | 'no_match' | 'unavailable' | 'not_requested'; selected_candidate_id: string | null; reason?: string };
   insights?: { title: string; content: Section }[];
   sections: Record<Role, Section>;
   metrics: { holdings: { name: string; account: string; weight_pct: number | null }[]; total_krw: string | null; unavailable_reason: string };

@@ -1,10 +1,28 @@
 """Conditional compound-growth arithmetic; these are assumptions, not forecasts."""
 from decimal import Decimal, ROUND_HALF_UP, localcontext
+import re
 from typing import Annotated
 
 from pydantic import Field
 
 from .contracts import StrictModel
+from .execution import parse_funding
+
+
+def stated_principal(text):
+    """Accept one unconditional standalone statement of total current principal."""
+    if any(word in text for word in ('취소', '철회', '미정', '아니', '정도', '대략')):
+        return None
+    values = []
+    for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', text):
+        match = re.fullmatch(r'\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가)?\s*([0-9][0-9,.\s억만]*원)\s*(?:입니다|이에요|예요|이야|임)?\s*', clause)
+        if match:
+            funding = parse_funding('추가 ' + match[1])
+            if funding:
+                values.append(funding['additional_krw'])
+            elif re.fullmatch(r'0\s*원', match[1]):
+                values.append(Decimal(0))
+    return values[0] if len(values) == 1 else None
 
 
 class ScenarioInput(StrictModel):

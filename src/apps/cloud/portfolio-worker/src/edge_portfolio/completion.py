@@ -101,8 +101,8 @@ def assess_completion(final, request, decision, published, sources, as_of):
     if decision.kind == 'scenario':
         if not published.get('scenarios'):
             reasons.append('SCENARIO_CALCULATION_REQUIRED')
-        elif published['scenarios']['status'] == 'needs_input':
-            needs_input = True
+    if published.get('scenarios', {}).get('status') == 'needs_input':
+        needs_input = True
     if final.withheld_reason == 'missing_data':
         reasons.append('MISSING_RESEARCH_DATA')
     optimization = published.get('optimization') or {}
