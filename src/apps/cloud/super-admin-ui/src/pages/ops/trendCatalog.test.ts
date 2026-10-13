@@ -9,7 +9,8 @@
  *      그 자리는 ErrorBoundary 밖이라 화면이 아니라 **흰 화면**이 된다.
  *   ② 부재를 0 으로 그리지 않는다 — `chain('c.res') ?? 0` 은 "결과 생성률 0%" 라는 거짓
  *      경보를 매일 낸다. 계측 없음은 정상도 실패도 아니다.
- *   ③ 스냅샷을 실측이라 말하지 않는다 — 뉴스 퍼널은 응답 밖 축이라 오늘 점도 목이다.
+ *   ③ 없는 과거를 그리지 않는다 — 일별 계열을 주는 응답이 없는 지표는 조회일 값 한 점뿐이고,
+ *      값을 응답에서 읽지 못하는 지표는 목록에 없다.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -18,7 +19,6 @@ import factsJson from '../../rules/facts-snapshot.json' with { type: 'json' };
 import type { Facts } from '../../rules/types.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 import { buildMetrics, entityResolutionMetric, latestTask } from './trendCatalog.ts';
-import { FUNNEL_DATE } from './newsFunnelSnapshot.ts';
 import { evaluateMetric } from './trendMetrics.ts';
 
 /** 서버가 실제로 보내는 축만 — `runbook` 은 없다(계약 §축별 소스). */
@@ -278,38 +278,93 @@ test('같은 작업 키의 여러 슬롯은 배열 순서가 아니라 가장 �
   assert.equal(evaluateMetric(byId(facts, 'b.price_daily')).actual, 0.99);
 });
 
-test('🔴 뉴스 퍼널 지표는 오늘 점도 스냅샷이다 — "오늘 실측" 이라고 말하면 안 된다', () => {
-  /* `news_funnel` 은 이 응답 밖 축이라(계약 §범위 결정) 값이 응답의 거래일 것이 아니다.
-   * `todayIsMock: false` 로 두면 카드가 "오늘 실측 · 과거 MOCK" 칩을 달아 **응답에서 온 값**
-   * 이라고 말한다 — 화면에서 이 둘을 가르는 유일한 축이 그 플래그다. */
-  for (const id of ['n.universe_rate']) {
-    const m = byId(WIRED, id);
-    /* `SNAPSHOT` 이지 `MOCK` 이 아니다 — 한때 관측한 값과 지어낸 값을 한 칸에 그리지 않는다.
-     * `DB_LEDGER` 였다면 오늘 원장에서 온 수라고 말하는 것이라 그쪽이 가장 나쁘다. */
-    assert.equal(m.source, 'SNAPSHOT', `${id} 출처 표기 — 원장도 목도 아니다`);
-    assert.ok(m.series.length > 0, `${id} 계열 없음`);
-    assert.ok(
-      m.series.every((p) => p.isMock),
-      `${id} 의 오늘 점이 실측으로 서 있다`,
+test('🔴 실측 과거가 없으면 한 점만 낸다 — 과거 구간을 만들면 없는 추이가 그려진다', () => {
+  /* 모든 축이 실린 응답이다. 축이 비면 계열이 `[]` 라 "한 점 이하" 단언이 공허하게 참이 된다 —
+   * 그래서 **정확히 한 점**을 지표 id 목록과 함께 건다. */
+  const task = {
+    run_id: 'r', pipeline_type: 'etf-daily', trading_date: '2026-08-03', stage: 'raw', required: true,
+    plan_status: 'DUE', task_outcome: 'FULFILLED', data_status: 'VALID',
+    completeness_expected: 100, completeness_received: 99, attempts: 1,
+  };
+  const full = {
+    ...WIRED,
+    tasks: [
+      { ...task, task_key: 'PRICE_COLLECTION_KIS', dataset: 'price_daily' },
+      { ...task, task_key: 'ETF_HOLDINGS_COLLECTION_KRX', dataset: 'etf_holdings' },
+    ],
+    datasets: [
+      { id: 'investor_flow', actual_as_of: '2026-07-31', expected_as_of: '2026-08-03' },
+      { id: 'etf_nav', actual_as_of: '2026-08-03', expected_as_of: '2026-08-03' },
+    ],
+    etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }] },
+  } as unknown as Facts;
+  const minute = {
+    date: WIRED.meta.today,
+    sessions: [{ dataset: 'price_minute', windows: { overdueNoEvidence: 1 }, priceJobs: { dead: 1 } }],
+  } as unknown as MinuteStatus;
+  const trend = {
+    points: [
+      { date: '2026-08-02', totalArguments: 10, resolvedArguments: 7, rate: 0.7 },
+      { date: '2026-08-03', totalArguments: 10, resolvedArguments: 8, rate: 0.8 },
+    ],
+  };
+  const metrics = buildMetrics(full, minute, trend);
+  const drawn = metrics.filter((m) => m.series.length > 0);
+  assert.deepEqual(
+    drawn.map((m) => m.id),
+    [
+      'b.price_daily', 'b.etf_holdings', 'b.investor_flow', 'b.etf_nav',
+      'i.no_evidence', 'i.dead_jobs',
+      'n.documents', 'n.entity_resolution_rate',
+      'a.results', 'a.run_to_result', 'a.failed_etfs', 'a.trigger_events',
+    ],
+    '전제: 계측 없는 한 장을 뺀 모든 카드가 값을 그린다',
+  );
+  for (const m of drawn) {
+    assert.ok(m.series.every((p) => !p.isMock), `${m.id} 가 목 점을 그린다`);
+    if (m.id === 'n.entity_resolution_rate') continue;
+    assert.deepEqual(
+      m.series.map((p) => p.date),
+      [full.meta.today],
+      `${m.id} 가 조회일 한 점이 아니다 — 없는 과거를 만들었다`,
     );
-    assert.ok(m.help.includes('스냅샷'), `${id} 설명이 출처를 안 밝힌다`);
+  }
+  /* 실측 계열은 그대로다 — 한 점 규칙이 일별 API 의 계열까지 자르면 안 된다 */
+  assert.deepEqual(
+    metrics.find((m) => m.id === 'n.entity_resolution_rate')!.series,
+    trend.points.map((p) => ({ date: p.date, value: p.rate, isMock: false })),
+  );
+  /* 기준은 응답의 `base` 다 — 화면이 과거를 만들어 중앙값을 맞추던 자리다 */
+  assert.equal(evaluateMetric(metrics.find((m) => m.id === 'a.trigger_events')!).expected, 51);
+  /* 기준을 주는 응답이 없는 산출량은 숫자를 지어 판정하지 않는다 */
+  assert.equal(evaluateMetric(metrics.find((m) => m.id === 'a.results')!).label, '기준 없음');
+});
+
+test('🔴 값을 응답에서 읽지 못하는 카드는 목록에 없다 — 코드에 박힌 숫자·얼린 스냅샷을 오늘 값으로 그리지 않는다', () => {
+  const ids = buildMetrics(factsJson as unknown as Facts).map((m) => m.id);
+  for (const id of ['i.disclosures', 'i.evidence_ratio', 'i.watermark_delay', 'n.universe_rate']) {
+    assert.ok(!ids.includes(id), `${id} 가 돌아왔다`);
   }
 });
 
-test('🔴 퍼널 계열은 **스냅샷 날**에 찍힌다 — 조회일에 찍으면 과거 값이 오늘 값으로 따라온다', () => {
-  /* ⚠️ 이 단언은 **조회일 ≠ 스냅샷 날**인 사실 위에서만 축을 가른다. `WIRED.meta.today` 는
-   * 스냅샷과 같은 날이라 그대로 쓰면 두 축이 겹쳐 맞바꿔도 통과한다(이 트랙에서 이미 겪은
-   * 함정: 픽스처의 두 자리가 같은 값이면 deepEqual 로도 안 잡힌다). */
-  const other = '2026-08-07';
-  assert.notEqual(other, FUNNEL_DATE, '전제: 조회일과 스냅샷 날이 달라야 축이 갈린다');
-  const later: Facts = { ...WIRED, meta: { ...WIRED.meta, today: other } };
-  const last = (id: string) => {
-    const s = byId(later, id).series;
-    return s[s.length - 1]?.date;
-  };
-  for (const id of ['n.universe_rate']) {
-    assert.equal(last(id), FUNNEL_DATE, `${id} 계열이 조회일에 찍혔다`);
+test('응답이 목이라고 밝힌 데이터셋의 지연은 목 점이다 — 출처 칩과 점이 갈리지 않는다', () => {
+  const mocked = {
+    ...WIRED,
+    datasets: [{ id: 'etf_nav', actual_as_of: '2026-08-03', expected_as_of: '2026-08-03', mock: true }],
+  } as unknown as Facts;
+  const m = byId(mocked, 'b.etf_nav');
+  assert.equal(m.source, 'MOCK');
+  assert.deepEqual(m.series, [{ date: '2026-08-03', value: 0, isMock: true }]);
+});
+
+test('🔴 분봉 응답이 없으면 분봉 지표는 판정 불가다 — 숫자를 대신 넣지 않는다', () => {
+  for (const id of ['i.no_evidence', 'i.dead_jobs']) {
+    const m = byId(WIRED, id);
+    assert.deepEqual(m.series, [], `${id} 에 없는 값이 생겼다`);
+    assert.equal(evaluateMetric(m).kind, 'uninstrumented', id);
   }
-  /* 응답에서 온 지표는 반대로 **조회일**에 찍힌다 — 한쪽만 맞추면 축이 뒤바뀌어도 통과한다 */
-  assert.equal(last('n.documents'), other, '응답 지표가 스냅샷 날에 찍혔다');
+  assert.match(byId(WIRED, 'i.dead_jobs').help, /응답을 받지 못해/, '조회 중일 수도 있다 — 없다고 단정하지 않는다');
+  /* 다른 날짜의 분봉 응답도 조회일의 값이 아니다 */
+  const stale = { date: '2026-08-02', sessions: [] } as unknown as MinuteStatus;
+  assert.deepEqual(buildMetrics(WIRED, stale).find((m) => m.id === 'i.dead_jobs')!.series, []);
 });

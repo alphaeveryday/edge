@@ -9,7 +9,7 @@
  *   · 지표마다 **판정 규칙이 다르다**(trendMetrics 의 comparisonType) — 완전성 95% 미만과
  *     산출량 ±25% 를 같은 자로 재지 않는다.
  *   · 단위·규모가 다른 지표를 한 y 축에 겹치지 않는다 — 지표마다 독립 그래프.
- *   · 중앙값·정상 범위·편차·판정이 **전부 같은 계열**에서 나온다.
+ *   · 실측 과거가 없는 지표는 조회일 값 한 점만 그린다 — 과거를 만들지 않는다.
  *   · 이 화면은 이상을 지목하기만 하고 원인은 말하지 않는다.
  *
  * 뉴스 단계별 감소(퍼널)는 데이터 화면 소관이라 여기서 반복하지 않는다.
@@ -46,14 +46,13 @@ const SCOPE_TIP = [
   'Cloud 게시 · 테넌트 발번 · 소비자 전달 · 테넌트별 상태는 전달 화면 소관이라 지표로 두지 않는다.',
   '',
   '판정 규칙은 지표마다 다르다:',
-  '  산출량 — 직전 10영업일 중앙값 대비 ±25%',
+  '  산출량 — 응답의 기준값(최근 기준일들의 중앙값) 대비 ±25%',
   '  완전성·비율 — 계약된 최소 비율 미만',
   '  기준일 지연 — 허용 거래일 초과',
-  '  워터마크 — 허용 지연 시간 초과',
   '  무증거·실패 수 — 임계 초과',
   '  계측 없음 — 근거가 없으면 정상으로도 실패로도 세지 않는다',
   '',
-  '중앙값 · 정상 범위 · 편차 · 판정은 모두 같은 계열에서 계산된다.',
+  '일별 계열을 주는 응답이 없는 지표는 조회일 값 한 점만 그린다. 과거 값을 만들지 않는다.',
 ].join('\n');
 
 /** 지표 하나의 작은 그래프 — 자기 y 범위를 갖는다(공통 축 금지) */
@@ -154,17 +153,11 @@ function MetricCard({ metric, today }: { metric: Metric; today: string }) {
       </div>
 
       <div className="tr-foot t-xs">
-        {/* 실측과 목을 시각적으로 가른다 — 계열 전체가 목인지, 오늘만 실측인지까지 */}
+        {/* 응답이 목이라고 밝힌 값은 칩으로 가른다 */}
         {mockPoints === 0 ? (
           <span className="chip">{metric.source}</span>
-        ) : mockPoints === metric.series.length ? (
-          /* 계열 전체가 실측이 아닐 때 **무엇이 아닌지**는 출처가 정한다 — 지어낸 값(MOCK)과
-             한때 관측한 스냅샷을 한 칩에 그리면 그 둘을 못 가른다. */
-          <span className="chip chip-warn">
-            {metric.source === 'SNAPSHOT' ? `${asOf ?? ''} 스냅샷 계열`.trim() : 'MOCK 계열'}
-          </span>
         ) : (
-          <span className="chip">{asOf} 실측 · 과거 MOCK</span>
+          <span className="chip chip-warn">MOCK 계열</span>
         )}
         <Link to={metric.drill.href} className="tr-drill">
           {metric.drill.label} →
@@ -214,9 +207,15 @@ export function TrendPage() {
     <div className="flex flex-col gap-4">
       <AxisHeader q={q} question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
 
+      {minute.isPending && (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          분봉 상태를 불러오는 중입니다 — 분봉 지표는 응답 뒤에 판정합니다.
+        </p>
+      )}
+
       {minute.isError && (
         <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
-          분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 MOCK 계열입니다.'}
+          분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 판정하지 않습니다.'}
         </p>
       )}
 
@@ -308,8 +307,8 @@ export function TrendPage() {
 
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 12 }}>
             조회일 {q.facts.meta.today} 기준(원장이 아는 가장 최근 날 — 거래일 달력이 아닙니다) ·
-            DB_LEDGER 계열은 카드에 표시된 날짜의 실측입니다. 일별 API가 없는 지표의 과거 점만
-            검수용 목이며, 응답 밖 값은 스냅샷 칩으로 구분합니다. 뉴스의 단계별 감소는{' '}
+            DB_LEDGER 계열은 카드에 표시된 날짜의 실측입니다. 일별 API가 없는 지표는 조회일 값
+            한 점만 그립니다. 뉴스의 단계별 감소는{' '}
             <Link to="/ops/datasets?focus=news-funnel">데이터 화면의 뉴스 처리 퍼널</Link>이 답합니다 —
             여기서 반복하지 않습니다.
           </p>
