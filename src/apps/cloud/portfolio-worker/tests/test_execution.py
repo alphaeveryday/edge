@@ -15,6 +15,15 @@ def target(**weights):
     return [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': value} for key, value in weights.items()]
 
 
+def test_initial_scenario_explicit_zero_overrides_saved_monthly_preference():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import resolve_funding
+    req = request([('US:VOO', 1000000, '일반 계좌')],
+        preferences={'contribution': '매월 10만원'},
+        question='이번에는 추가 납입 없이 계산해 주세요. 5년 뒤 금액을 알려 주세요.')
+    assert resolve_funding(req, Decision(kind='scenario')) == {'additional_krw': Decimal(0), 'monthly_krw': None}
+
+
 def test_rebalance_amounts_conserve_cash_and_explain_actual_buys_and_sales():
     req = request([('US:VOO', 600001, '일반 계좌'), ('US:QQQ', 200000, '일반 계좌'), ('CASH:KRW', 200000, '일반 계좌')])
     plan = build_execution(req, target(**{'US:VOO': 50, 'US:QQQ': 50}), additional_krw=100000)

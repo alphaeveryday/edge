@@ -81,8 +81,8 @@ def allocate_amounts(total, weights):
 
 
 def resolve_funding(request, decision=None):
-    questions = getattr(request, 'funding_questions', None)
-    if questions and zero_contribution(questions[-1], decision):
+    questions = getattr(request, 'funding_questions', None) or [request.question]
+    if zero_contribution(questions[-1], decision):
         return {'additional_krw': Decimal(0), 'monthly_krw': None}
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
     funding = parse_funding(text) if text else None
