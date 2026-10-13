@@ -12,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -341,13 +342,22 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 산출 축의 명세 — {@code id}·{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고 {@code sql} 은
 	 * <b>날짜별 카운트</b>를 낸다({@code %s} 자리에 날짜 플레이스홀더가 들어간다).
 	 *
+	 * <p>{@code analysisAtRange} 가 참이면 SQL 이 날짜 목록 앞에 <b>시각 범위 둘</b>
+	 * ({@code analysis_at >= ? AND analysis_at < ?})을 더 받는다(ALPHA-1290). v2 분석 표는 날짜 컬럼이
+	 * 아니라 {@code analysis_at}(timestamptz)이 축이라, KST 날짜 식만으로 거르면 열에 함수가 씌어
+	 * 범위를 못 좁힌다. 범위는 조회한 날짜들의 처음부터 끝까지다.
+	 *
 	 * <p>{@code marketBound} 는 <b>이 산출이 장이 서야 나오는가</b>다. 휴장일에는 0 이 실측이 아니라
 	 * "그날 나올 것이 아니었다"인데 응답에는 그 둘을 가르는 자리가 없다({@code today} 는 수 하나다).
 	 * 그래서 그날은 <b>기준을 안 준다</b> — 소비자는 기준 없는 산출을 편차 판정에서 뺀다. 뉴스 갈래는
 	 * 휴장일에도 도니까 해당 없다.
 	 */
 	private record OutputSpec(String id, String label, String unit, boolean marketBound,
-			String sql) {
+			boolean analysisAtRange, String sql) {
+
+		OutputSpec(String id, String label, String unit, boolean marketBound, String sql) {
+			this(id, label, unit, marketBound, false, sql);
+		}
 	}
 
 	/**
@@ -358,11 +368,35 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 먼저 붙을 자리다.
 	 */
 	private static final List<OutputSpec> OUTPUTS = List.of(
-			new OutputSpec("o.pub", "게시 ETF", "종", true, """
-					SELECT trade_date AS d, count(DISTINCT etf_instrument_id) AS n
-					  FROM explanation_result
-					 WHERE publication_status = 'PUBLISHED' AND trade_date IN (%s)
-					 GROUP BY trade_date"""),
+			/* 분석 산출은 v2 표에서 센다(ALPHA-1290). 옛 설명 엔진의 `explanation_result` 는 10-01
+			 * 이 마지막 실행이라 그 표를 세던 `o.pub`(게시 ETF)은 계속 0 이었다.
+			 *
+			 * 🔴 **"게시"가 아니라 "완료"를 센다.** 전망은 완료될 때 항상 `published_at` 이 찍혀 둘이
+			 * 같지만, 가격변동 분석은 고른 항목이 없으면 완료돼도 `published_at` 이 NULL 이고 회수되면
+			 * `withdrawn_at` 이 찍힌다 — 완료가 곧 지금 보이는 게시본은 아니다. 이 산출은 "분석이 그날
+			 * 그 ETF 에 대해 끝까지 돌았는가"를 답한다.
+			 *
+			 * `data_source = 'database'` 만 센다 — 합성 입력(`synthetic`)으로 돈 분석은 운영 산출이
+			 * 아니다(v2 조회 API 가 같은 조건으로 거른다, `api/publications.py`).
+			 *
+			 * 전망은 주말·휴일에도 매일 돈다(`marketBound=false` — 휴장일에도 기준을 준다). 가격변동
+			 * 분석은 장이 열린 날에만 생긴다(`marketBound=true`). */
+			new OutputSpec("o.outlook", "전망 완료 ETF", "종", false, true, """
+					SELECT (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+					       count(DISTINCT etf_code) AS n
+					  FROM outlook_analyses
+					 WHERE analysis_at >= ? AND analysis_at < ?
+					   AND status = 'completed' AND data_source = 'database'
+					   AND (analysis_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
+					 GROUP BY 1"""),
+			new OutputSpec("o.movement", "가격변동 분석 완료 ETF", "종", true, true, """
+					SELECT (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+					       count(DISTINCT etf_code) AS n
+					  FROM movement_analyses
+					 WHERE analysis_at >= ? AND analysis_at < ?
+					   AND status = 'completed' AND data_source = 'database'
+					   AND (analysis_at AT TIME ZONE 'Asia/Seoul')::date IN (%s)
+					 GROUP BY 1"""),
 			new OutputSpec("o.trig", "배치 트리거", "종", true, """
 					SELECT trade_date AS d, count(DISTINCT etf_instrument_id) AS n
 					  FROM price_movement_trigger
@@ -689,6 +723,48 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getLong("resolved_arguments")), date);
 	}
 
+	/**
+	 * v2 분석의 일별 건수(ALPHA-1290). 범위는 {@code analysis_at} 에 직접 건다 — KST 날짜 식은 묶는
+	 * 데만 쓴다. {@code data_source = 'database'} 만 센다(산출 축과 같은 이유 — 합성 입력으로 돈
+	 * 분석은 운영 산출이 아니다).
+	 *
+	 * <p>🔴 {@code running} 을 {@code failed} 에 더하지 않는다. 진행 중인 분석과 끝나지 못하고 남은
+	 * 행이 같은 상태값이라, 실패로 세면 분석이 도는 동안 실패 수가 올라갔다 내려간다.
+	 */
+	private static final String ANALYSIS_TREND_SQL = """
+			SELECT 'outlook' AS kind, (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+			       count(*) FILTER (WHERE status = 'completed') AS completed,
+			       count(*) FILTER (WHERE status = 'failed') AS failed,
+			       count(*) FILTER (WHERE status = 'running') AS running,
+			       count(DISTINCT etf_code) FILTER (WHERE status = 'completed') AS completed_etfs,
+			       count(DISTINCT etf_code) FILTER (WHERE status = 'failed') AS failed_etfs
+			  FROM outlook_analyses
+			 WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
+			 GROUP BY 2
+			UNION ALL
+			SELECT 'movement' AS kind, (analysis_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+			       count(*) FILTER (WHERE status = 'completed') AS completed,
+			       count(*) FILTER (WHERE status = 'failed') AS failed,
+			       count(*) FILTER (WHERE status = 'running') AS running,
+			       count(DISTINCT etf_code) FILTER (WHERE status = 'completed') AS completed_etfs,
+			       count(DISTINCT etf_code) FILTER (WHERE status = 'failed') AS failed_etfs
+			  FROM movement_analyses
+			 WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
+			 GROUP BY 2
+			 ORDER BY 1, 2
+			""";
+
+	@Override
+	@Transactional(readOnly = true)
+	public List<AnalysisDayPoint> analysisTrend(LocalDate maxDate, int days) {
+		OffsetDateTime from = maxDate.minusDays(days - 1L).atStartOfDay(KST).toOffsetDateTime();
+		OffsetDateTime to = maxDate.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
+		return jdbc.query(ANALYSIS_TREND_SQL, (rs, i) -> new AnalysisDayPoint(
+				rs.getString("kind"), rs.getObject("d", LocalDate.class),
+				rs.getLong("completed"), rs.getLong("failed"), rs.getLong("running"),
+				rs.getLong("completed_etfs"), rs.getLong("failed_etfs")), from, to, from, to);
+	}
+
 	@Override
 	@Transactional(readOnly = true)
 	public IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days) {
@@ -734,6 +810,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 서로 일관된 것이 그 증거다. 한 문장으로 세는 이유는 왕복을 줄이는 것뿐이고, <b>격리수준을
 	 * 낮추면</b> 그때야 나눠 센 값들이 갈린다.
 	 */
+	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
 	private List<OutputRow> outputs(LocalDate day, LocalDate kstToday) {
 		/* 휴장일 목록을 한 번만 읽어 두 자리가 같은 술어를 쓰게 한다 — 표본에서 빼는 자리와
 		 * "오늘이 휴장인가"를 묻는 자리가 갈리면 이 파일이 이미 겪은 종류의 결함이 된다. */
@@ -778,6 +856,14 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		List<LocalDate> queried = new ArrayList<>(baseDays);
 		queried.add(day);   // 기준일 후보는 day 미만이라 오늘과 겹치지 않는다
 		String placeholders = queried.stream().map(d -> "?").collect(Collectors.joining(","));
+		/* `analysisAtRange` 산출이 받는 시각 범위 — 조회한 날짜들의 첫날 00:00 부터 마지막 날 다음
+		 * 00:00(KST)까지. 날짜 목록이 그 안에서 다시 거르므로 범위는 넓혀도 값이 안 바뀐다. */
+		List<Object> ranged = new ArrayList<>();
+		ranged.add(queried.stream().min(Comparator.naturalOrder()).orElseThrow()
+				.atStartOfDay(KST).toOffsetDateTime());
+		ranged.add(queried.stream().max(Comparator.naturalOrder()).orElseThrow().plusDays(1)
+				.atStartOfDay(KST).toOffsetDateTime());
+		ranged.addAll(queried);
 
 		return OUTPUTS.stream().map(spec -> {
 			Map<LocalDate, Long> byDay = new HashMap<>();
@@ -785,7 +871,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			jdbc.query(spec.sql().formatted(placeholders),
 					(RowCallbackHandler) rs -> byDay.put(rs.getObject("d", LocalDate.class),
 							rs.getLong("n")),
-					queried.toArray());
+					spec.analysisAtRange() ? ranged.toArray() : queried.toArray());
 			// 결과에 없는 거래일은 0 이다 — 그날 산출이 없었다는 실측이지 모름이 아니다.
 			List<Long> base = baseDays.stream().map(d -> byDay.getOrDefault(d, 0L)).toList();
 			/* 🔴 휴장일에 장 산출의 기준을 주면 소비자가 −100% 편차로 판정한다. `today` 의 0 은

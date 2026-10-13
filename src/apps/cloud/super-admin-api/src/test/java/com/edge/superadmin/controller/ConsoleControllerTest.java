@@ -798,7 +798,7 @@ class ConsoleControllerTest {
 	@Test
 	void 산출은_실측_0_과_기준_없음을_가른다() throws Exception {
 		String body = mvc(factsWithOutput(
-				new OutputRow("o.pub", "게시 ETF", "종", 16L, 32.0d, List.of(
+				new OutputRow("o.outlook", "전망 완료 ETF", "종", 16L, 32.0d, List.of(
 						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
 								java.time.LocalDate.of(2026, 7, 30), 0L),
 						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
@@ -813,8 +813,8 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.outputs[0].history[1].count").value(32))
 				.andExpect(jsonPath("$.result.outputs[1].history.length()").value(0))
 				.andExpect(jsonPath("$.result.outputs.length()").value(2))
-				.andExpect(jsonPath("$.result.outputs[0].id").value("o.pub"))
-				.andExpect(jsonPath("$.result.outputs[0].label").value("게시 ETF"))
+				.andExpect(jsonPath("$.result.outputs[0].id").value("o.outlook"))
+				.andExpect(jsonPath("$.result.outputs[0].label").value("전망 완료 ETF"))
 				.andExpect(jsonPath("$.result.outputs[0].unit").value("종"))
 				.andExpect(jsonPath("$.result.outputs[0].today").value(16))
 				.andExpect(jsonPath("$.result.outputs[0].base").value(32.0))
@@ -967,6 +967,46 @@ class ConsoleControllerTest {
 				.andExpect(status().isBadRequest());
 		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
 						.param("maxDate", "0001-01-01").param("days", "366"))
+				.andExpect(status().isBadRequest());
+	}
+
+	/**
+	 * v2 분석 추이(ALPHA-1290) — 두 종류가 항상 이 순서로 나가고, 행이 없던 종류는 빈 배열이다.
+	 * {@code running} 은 {@code failed} 와 다른 키로 나간다(끝나지 않은 건수는 실패가 아니다).
+	 */
+	@Test
+	void 분석_추이는_종류별_일별_건수를_내리고_범위를_제한한다() throws Exception {
+		MockMvc mvc = mvc(facts());
+		repository.analysisTrend = List.of(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
+						"outlook", LocalDate.parse("2026-08-02"), 150L, 3L, 2L, 148L, 3L));
+
+		mvc.perform(get("/api/v1/console/trends/analysis")
+						.param("maxDate", "2026-08-03").param("days", "3"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.from").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.to").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.kinds.length()").value(2))
+				.andExpect(jsonPath("$.result.kinds[0].kind").value("outlook"))
+				.andExpect(jsonPath("$.result.kinds[0].points.length()").value(1))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].date").value("2026-08-02"))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].completed").value(150))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].failed").value(3))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].running").value(2))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].completedEtfs").value(148))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].failedEtfs").value(3))
+				.andExpect(jsonPath("$.result.kinds[1].kind").value("movement"))
+				.andExpect(jsonPath("$.result.kinds[1].points.length()").value(0));
+		assertThat(repository.requestedAnalysisMaxDate).isEqualTo(LocalDate.parse("2026-08-03"));
+		assertThat(repository.requestedAnalysisDays).isEqualTo(3);
+
+		mvc.perform(get("/api/v1/console/trends/analysis")).andExpect(status().isOk());
+		assertThat(repository.requestedAnalysisDays).isEqualTo(30);
+		mvc.perform(get("/api/v1/console/trends/analysis").param("days", "0"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/analysis").param("days", "32"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/analysis").param("maxDate", "9999-12-31"))
 				.andExpect(status().isBadRequest());
 	}
 }

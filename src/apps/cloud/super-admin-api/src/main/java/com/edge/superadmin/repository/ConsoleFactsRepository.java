@@ -49,6 +49,25 @@ public interface ConsoleFactsRepository {
 	 */
 	IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days);
 
+	/**
+	 * {@code maxDate} 로 끝나는 {@code days}일 동안 v2 분석(전망·가격변동)의 일별 건수(ALPHA-1290).
+	 * 날짜는 {@code analysis_at} 의 KST 날짜다. <b>행이 하나도 없는 날짜는 점이 없다</b> — 0 인 점을
+	 * 만들지 않는다. 가격변동 분석은 장이 열린 날에만 생기고, v2 표가 생기기 전 날짜에는 값이 없다.
+	 * 반환 순서는 종류, 그다음 오래된 날부터다.
+	 */
+	List<AnalysisDayPoint> analysisTrend(LocalDate maxDate, int days);
+
+	/**
+	 * v2 분석 한 종류의 하루. 건수는 분석 행 수이고 {@code *Etfs} 는 그 상태의 행이 하나라도 있는
+	 * ETF 종 수다(같은 ETF 가 그날 실패한 뒤 다시 완료되면 양쪽에 다 든다).
+	 *
+	 * <p>{@code running} 은 <b>실패가 아니다</b> — 상태가 running 인 채 남은 행이고, 아직 도는
+	 * 중인지 끝나지 못한 것인지 이 표만으로는 가를 수 없다.
+	 */
+	record AnalysisDayPoint(String kind, LocalDate date, long completed, long failed, long running,
+			long completedEtfs, long failedEtfs) {
+	}
+
 	record IntradayAnalysisTrend(OffsetDateTime asOf, List<IntradayAnalysisPoint> points) {
 	}
 
