@@ -304,6 +304,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if role == 'question':
                             interpreted = QuestionSection.model_validate(raw)
                             decision = validate_decision(interpreted.decision, request, market.catalog)
+                            optimizer.decision = decision
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
