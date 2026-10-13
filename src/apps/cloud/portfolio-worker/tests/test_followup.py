@@ -234,3 +234,22 @@ async def test_recovery_resolves_only_the_exact_inherited_unknown_condition(same
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='RESOLUTION_CHECKED'):
         await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
+async def test_invalid_question_prose_cannot_leave_a_scenario_optimization_exemption():
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상'}, 'sources': Evidence.sources}
+    stages, attempts = [], []
+    async def model(payload):
+        role = stages[-1]
+        content = final_payload()[role]
+        if role == 'question':
+            attempts.append(1)
+            content = {**content, 'decision': {'kind': 'scenario' if len(attempts) == 1 else 'review'}}
+            if len(attempts) == 1: content['paragraphs'] = ['too short']
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(ValueError, match='Before completing portfolio'):
+        await answer_question('구성을 검토해 주세요.', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+    assert len(attempts) == 2
