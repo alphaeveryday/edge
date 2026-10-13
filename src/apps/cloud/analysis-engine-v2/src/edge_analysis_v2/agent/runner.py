@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, create_sdk_mcp_server, tool
 from jsonschema import Draft202012Validator
@@ -24,6 +25,9 @@ from edge_analysis_v2.quality.measure import describe_environment, measure
 # ponytail: keyless and rate-limited by Exa; add the key to this address once one is issued.
 SEARCH_SERVER = {'type': 'http', 'url': 'https://mcp.exa.ai/mcp?tools=web_search_exa'}
 SEARCH_TOOL = 'mcp__search__web_search_exa'
+
+
+WRAP_UP_SHARE = 0.7   # of the deadline: the rest is for writing the answer
 
 
 def load_prompt(path: Path) -> str:
@@ -145,6 +149,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
         session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
         session.compare_explanations = compare_explanations
+        session.wrap_up_at = monotonic() + timeout_seconds * WRAP_UP_SHARE
         source_context = WorkContext(initial)
         prompt = session.system_prompt(prompt)
         query_input = {'workspace_instructions': {'path': 'AGENTS.md',
