@@ -130,7 +130,7 @@ async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, av
         def validate(self, final): return None
     if not available:
         monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
-    question = '기존 목표로 리밸런싱하려면 어떻게 해야 하나요?'
+    question = '기존 목표로 리밸런싱하려면 어떻게 해야 하나요? 매도 금지'
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상'}, 'sources': Evidence.sources, 'completion': {'status': 'complete'}, 'recommendation': {'allocations': [
         {'instrument_id': 'US:VOO' if available else 'US:REMOVED', 'account': '일반 계좌', 'weight_pct': 100}]}}
@@ -142,7 +142,8 @@ async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, av
             assert context['saved_target_execution']['status'] == ('ready' if available else 'needs_input')
         content = {**final_payload(), 'recommendation': None, 'answers': [
             {'question_index': 1, 'status': 'answered', 'answer': '기존 목표의 종목을 사용할 수 없어 새로운 대안을 확인해야 해요.'}]} if role == 'opinion' else final_payload()[role]
-        if role == 'question': content = {**content, 'decision': {'kind': 'rebalance', 'execute_saved_target': True}}
+        if role == 'question': content = {**content, 'decision': {'kind': 'rebalance', 'execute_saved_target': True,
+            'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await answer_question(question, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
     if not available:
@@ -150,6 +151,9 @@ async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, av
         assert result['revision']['execution']['rows'] == []
         assert result['revision']['execution']['assumptions'] == []
     assert result['status'] == ('complete' if available else 'needs_input')
+    if available:
+        assert result['revision']['customer_constraint_checks'][0]['kind'] == 'no_sell'
+        assert result['revision']['customer_constraint_checks'][0]['status'] == 'pass'
     assert 'opinion' in stages
 
 

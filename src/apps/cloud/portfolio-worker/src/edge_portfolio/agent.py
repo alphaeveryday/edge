@@ -148,6 +148,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     failed_source_urls = set()
     scenario_result = None
     followup_execution = None
+    followup_checks = []
     execution_rejection = None
     execution_failures = {}
     execution_feasible = set()
@@ -401,6 +402,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['scenarios'] = scenario_result
                         if decision.execute_saved_target and followup_execution is not None and not published.get('recommendation'):
                             published['execution'] = followup_execution
+                            checks = followup_checks or checks
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'])
                         if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
@@ -473,6 +475,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                             followup_execution.update(status='needs_input' if any(check['status'] == 'unknown' for check in current_checks) else 'infeasible',
                                                 rows=[], reasons=['CUSTOMER_CONSTRAINT_NOT_SATISFIED'])
                                         context['saved_target_execution'] = followup_execution
+                                        followup_checks = current_checks
                                         if decision.execute_saved_target and followup_execution['status'] in {'ready', 'conditional'}:
                                             optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SAVED_TARGET_ONLY'}
                             if decision.kind == 'scenario':
