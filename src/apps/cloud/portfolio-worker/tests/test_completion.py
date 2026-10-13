@@ -27,6 +27,11 @@ def test_partial_question_extraction_cannot_hide_an_unanswered_customer_request(
     assert result['tasks'][0]['question'] == request.question
     assert result['tasks'][0]['status'] == 'partial'
     assert validate_decision(Decision(questions=['Second?']), request, {}, question_text='Second?').questions == ['Second?']
+    request.question = 'VOO는 어떤가요? QQQ와 비교하면 VOO는 어떤가요?'
+    questions = ['VOO는 어떤가요?', 'QQQ와 비교하면 VOO는 어떤가요?']
+    assert validate_decision(Decision(questions=questions), request, {}).questions == questions
+    with pytest.raises(ValueError, match='QUESTION_COVERAGE'):
+        validate_decision(Decision(questions=questions[:1]), request, {})
 
 
 def test_recovery_keeps_omitted_answers_and_evidence_for_the_same_target():

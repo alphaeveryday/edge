@@ -65,10 +65,14 @@ def validate_decision(decision, request, catalog, *, question_text=None):
     if any(not question.strip() or question not in text for question in decision.questions):
         raise ValueError('QUESTION_SOURCE: quote each customer question exactly')
     if decision.questions:
-        remaining = request.question if question_text is None else question_text
+        original = request.question if question_text is None else question_text
+        covered = set()
         for question in decision.questions:
-            remaining = remaining.replace(question, '')
-        if any(char.isalnum() for char in remaining):
+            start = original.find(question)
+            while start >= 0:
+                covered.update(range(start, start + len(question)))
+                start = original.find(question, start + 1)
+        if any(char.isalnum() and index not in covered for index, char in enumerate(original)):
             raise ValueError('QUESTION_COVERAGE: preserve the entire customer request across questions; include its context, or quote the complete request')
     for rule in decision.constraints:
         if rule.source not in text:
