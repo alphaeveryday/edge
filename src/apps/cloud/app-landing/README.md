@@ -48,6 +48,10 @@
 - 구글 서치 콘솔에는 URL 접두어 속성 `https://etforca.com` 으로 등록했다(팀 구글 계정). 소유 확인은 머리의 `google-site-verification` 메타 태그로 한다. 이 태그를 지우면 소유 확인이 풀린다.
 - 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
 
+## 푸터 링크
+
+푸터의 이용약관·개인정보 처리방침·고객 지원은 앱이 App Store 에 등록한 페이지(`https://etforca.edgesignal.dev/` 의 `terms.html`·`privacy.html`·`support.html`)를 가리킨다. 이 페이지들은 랜딩 배포 대상이 아니다. 주소가 바뀌면 `landing.html` 푸터를 함께 고친다.
+
 ## 방문 분석 (PostHog)
 
 `landing.html` 머리에 PostHog 웹 스니펫이 있다. 로더는 PostHog 저장소의 스니펫 생성 코드(`docs/onboarding/product-analytics/_snippets/js-snippet-builder.ts`)로 만든 것 그대로다.
