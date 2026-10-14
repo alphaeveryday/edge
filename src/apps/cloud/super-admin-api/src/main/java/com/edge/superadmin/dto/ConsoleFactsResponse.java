@@ -317,7 +317,8 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 않고 {@code kind} 는 {@code db}·{@code aws}·{@code app} 이다. {@code totalMs} 는 요청 날짜를
 	 * 읽을 때부터 이 값을 만들 때까지다 — 구간의 합보다 크고, 그 차이는 구간으로 재지 않은 시간이다
 	 * (원장 행을 응답 형으로 옮기는 일). 응답을 JSON 으로 쓰는 시간과 그 앞뒤(필터·네트워크)는 들어
-	 * 있지 않다. 밀리초는 반올림한 정수라 구간의 합이 전체보다 1~2 클 수 있다.
+	 * 있지 않다. 밀리초는 구간마다 따로 반올림한 정수라, 오차가 쌓이면 구간의 합이 전체보다 몇 ms 클 수
+	 * 있다.
 	 *
 	 * <p>이 서버에는 사실 조회의 캐시가 없다 — 값은 언제나 이 요청이 실제로 쓴 시간이다.
 	 */
