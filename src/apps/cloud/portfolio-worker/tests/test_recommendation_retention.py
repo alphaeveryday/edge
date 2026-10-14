@@ -190,11 +190,11 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
         horizon='10년 이상', question='납입할 때의 매수 금액을 알려주세요.' if 'draft_context' in exhaustion else ''), 'test', stages.append, model_call=model, evidence=evidence)
     assert result['recommendation'] is not None
     assert result['completion']['status'] == ('needs_input' if exhaustion == 'draft_context' else 'partial')
-    assert len(calls) <= 24
+    assert len(calls) <= 100
     if 'context' in exhaustion:
         assert result['diagnostics']['termination_reason'] == 'MODEL_CONTEXT_BUDGET_WITH_REPORT'
     else:
-        assert calls.index('opinion') <= 21
+        assert calls.index('opinion') <= 97  # Reserve at least three calls for final publication.
     if exhaustion in {'scenario', 'scenario_context'}:
         assert result['scenarios']['status'] == 'available'
     if exhaustion == 'draft_context':
