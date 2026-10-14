@@ -84,11 +84,33 @@ export interface IntradayAnalysisTrendDto {
 export interface IntradayAnalysisTrendPointDto {
   date: string;
   triggers: number;
+  /* 아래 여섯은 옛 설명 엔진의 단계라 10-02 이후 0 이다(ALPHA-1329). 서버가 다음 배포에서 지운다 —
+   * 화면은 `analysis` 를 읽는다. */
   observations: number;
   runs: number;
   activeRuns: number;
   failedRuns: number;
   results: number;
+  published: number;
+  /**
+   * 새 분석 엔진의 단계(ALPHA-1329) — 흐름 띠(`chain.analysisStages`)와 같은 조회로 센 수다. 이 필드를
+   * 싣기 전의 API 에서는 없다.
+   */
+  analysis?: IntradayAnalysisDto;
+}
+
+/**
+ * 그날 발화한 장중 트리거가 새 분석 엔진의 단계마다 몇 건 도달했나. `requestPending`·`startPending` 은
+ * 아직 판정할 수 없는 트리거 수다(도달 수에 들어 있지 않다). `blind` 가 참이면 새 분석 엔진의 요청이
+ * 아직 없던 날이라 수의 0 은 실측이 아니다.
+ */
+export interface IntradayAnalysisDto {
+  blind: boolean;
+  requested: number;
+  requestPending: number;
+  started: number;
+  startPending: number;
+  completed: number;
   published: number;
 }
 

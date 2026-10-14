@@ -512,139 +512,25 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			""";
 
 	/**
-	 * 설명 생산 체인의 <b>그 날 코호트</b> — 트리거에서 발번까지 각 단계에 몇 건이 남았나(ALPHA-979).
+	 * 체인의 입력 두 갈래 — 조회일에 생긴 배치 트리거 수와 장중 발화(FIRE) 수(ALPHA-1329).
 	 *
-	 * <p><b>이 축의 전부는 "같은 무리를 끝까지 따라간다"이다.</b> 단계마다 자기 테이블을 자기
-	 * 날짜 컬럼으로 따로 세면 안 된다 — 그 수들은 서로 다른 무리를 센 것이라 인접 비교(R10 이
-	 * 하는 일)가 의미를 잃는다. 예: 15:40 배치가 만든 관측을 자정 넘겨 게시하면 날짜별 집계는
-	 * 관측 20 · 게시 0 을 내지만 실제로 사라진 건 하나도 없다. 그래서 <b>그 날의 트리거</b>만
-	 * 날짜로 고르고, 나머지 단계는 전부 그 트리거의 자손을 {@code LEFT JOIN} 으로 따라간다.
-	 *
-	 * <p><b>갈래는 관측이 가른다.</b> {@code etf_contribution_observation} 은 두 트리거 FK 중
-	 * 정확히 하나를 갖고({@code ck_etf_contribution_one_trigger}), 그 뒤 단계는 관측 하나에서
-	 * 뻗으므로 갈래가 자동으로 따라온다 — 하류 테이블에는 배치/장중을 가르는 컬럼이 없다.
-	 *
-	 * <p><b>분봉 트리거는 {@code FIRE} 만 센다.</b> {@code REVERT} 는 노출 <b>회수</b> 마커라
-	 * 설명을 만들지 않는다(ALPHA-799 — 무효화만 한다). ⚠️ "큐로도 안 나간다"고 적었다가 정정했다:
-	 * {@code ExposureReverted} 의 destination 은 발화와 <b>같은 큐</b>다
-	 * ({@code data_pipeline/minute/jobs.py} 의 {@code TRIGGER_EVENT_DESTINATIONS}). 세지 않는
-	 * 근거는 <b>설명을 안 만든다</b>는 것 하나다. 지금은 writer 가 종류를 안 적어 실제 행이
-	 * 0 이지만, 안 거르면 그 writer 가 착지하는 날 피드만 조용히 부풀어 <b>없던 손실</b>이 선다.
-	 *
-	 * <p>🔴 <b>단계는 "그 단계의 행 수"가 아니라 "코호트 구성원이 그 단계에 도달했는가"를 센다.</b>
-	 * 행을 세면 <b>다중도가 손실로 읽힌다</b> — 리뷰가 실 스키마에서 두 형상을 실증했다:
-	 * ① <b>재실행</b>({@code explanation_route_id} 에 UNIQUE 가 없다). 엔진은 그 경로에 이미
-	 *    PUBLISHED 가 있으면 새 결과를 <b>DRAFT 로</b> 넣으므로
-	 *    ({@code edge_analysis/adapters/eventstore.py}) 결과 2 · 게시 1 이 되어 R10 이
-	 *    <b>"결과 → 게시 2 → 1"</b> 을 P0 로 낸다. 규칙 문구가 배제하는 "설계된 감소" 그 자체다.
-	 * ② <b>재실행이 진짜 결손을 상쇄</b>. 경로 20 중 10 은 런이 없고 10 이 두 번 돌면 런 행도
-	 *    20 이라, 화면에 "ETF 10종이 설명을 아예 못 받았다"가 <b>어디에도 안 뜬다</b>.
-	 * 도달 여부로 세면 각 단계의 집합이 앞 단계의 부분집합이라 <b>단조성이 구조적으로 보장</b>되고,
-	 * 남는 감소는 전부 "여기서 멈춘 구성원 수"라는 한 가지 뜻이 된다.
-	 *
-	 * <p>⚠️ 그래도 <b>결과→게시의 감소에는 설계된 것이 섞인다</b>. 원장에 남는 것은
-	 * {@code publication_status} 하나이고 사유가 없다. 그 감소를 만드는 것은 <b>정확히 둘</b>이다:
-	 * <b>표면 부재</b>(내용 없는 결과라 자리를 안 준다 — 엔진 로그의 {@code surface_absent})와
-	 * <b>운영자 무효화</b>({@code WITHDRAWN} 전이, ALPHA-440). 둘 다 설계된 것이다.
-	 *
-	 * <p>⚠️ 여기 "아직 처리 중"과 "재실행"도 섞인다고 적었다가 정정했다 — 둘 다 <b>이 비교에
-	 * 도달하지 않는다</b>. 처리 중이면 {@code explanation_result} 행 자체가 없어 <b>런에서
-	 * 멈추고</b>({@code publication_status} 는 INSERT 시점에 확정된다), 재실행분이 DRAFT 로
-	 * 떨어져도 그 경로의 첫 결과는 여전히 게시본이라 <b>도달 여부로 세면 관측이 게시에 닿는다</b>.
-	 * 후자는 이 커밋이 바꾼 셈법이 없앤 것이고, 없앤 것을 남은 사유로 적으면 안 된다.
-	 *
-	 * <p>⚠️ <b>테스트로 못 죽이는 변이 둘</b>(변이 실증 — 억지로 안 죽인다):
-	 * ① 라우트 단계를 {@code count(DISTINCT route_id)} 로 되돌리기 — {@code explanation_route}
-	 *    의 {@code contribution_observation_id} 가 UNIQUE 라 관측과 1:1 이고 <b>동치</b>다.
-	 * ② 게시 단계를 {@code count(DISTINCT published_id)} 로 되돌리기 — 한 관측에 게시본이 둘인
-	 *    상태를 <b>프로듀서가 만들지 않는다</b>(엔진이 이미 게시본이 있으면 DRAFT 로 넣는다).
-	 *    스키마는 허용하므로 방어로는 유효하다. 없는 상태를 픽스처가 지어내면서까지 죽이지 않는다.
-	 *
-	 * <p>⚠️ <b>진행 중인 하루는 손실처럼 보인다</b>(알려진 천장). 이 축은 "지금까지 몇 건이
-	 * 도착했나"이지 "몇 건이 끝내 사라졌나"가 아니다 — 아직 처리 중인 트리거는 하류 단계에
-	 * 없으므로 감소로 보인다. 그것을 서버가 가리려면 "이 트리거는 처리될 기회를 가졌나"를 답하는
-	 * 사실이 필요한데 원장에 없다. 값을 접지 않고 그대로 낸다(계약 §체인 축에 등재).
+	 * <p>옛 설명 엔진의 다섯 단계를 함께 세던 조회({@code CHAIN_SQL})에서 입력 부분만 남겼다. 갈래의
+	 * 정의는 그대로다. <b>분봉 트리거는 {@code FIRE} 만 센다</b> — {@code REVERT} 는 노출 회수
+	 * 마커라 분석을 만들지 않는다.
 	 */
-	private static final String CHAIN_SQL = """
-			WITH batch_trigger AS (
-			    SELECT price_movement_trigger_id AS trigger_id
-			      FROM price_movement_trigger
-			     WHERE trade_date = ?
-			), intraday_trigger AS (
-			    SELECT trigger_id
-			      FROM minute_price_trigger
-			     WHERE trigger_kind = 'FIRE'
-			       AND (window_start AT TIME ZONE 'Asia/Seoul')::date = ?
-			), obs AS (
-			    SELECT o.contribution_observation_id AS obs_id,
-			           o.price_movement_trigger_id IS NOT NULL AS is_batch
-			      FROM etf_contribution_observation o
-			     WHERE o.price_movement_trigger_id IN (SELECT trigger_id FROM batch_trigger)
-			        OR o.minute_price_trigger_id IN (SELECT trigger_id FROM intraday_trigger)
-			), cohort AS (
-			    SELECT o.obs_id, o.is_batch,
-			           rt.explanation_route_id AS route_id,
-			           er.explanation_run_id AS run_id,
-			           rs.explanation_result_id AS result_id,
-			           CASE WHEN rs.publication_status = 'PUBLISHED'
-			                THEN rs.explanation_result_id END AS published_id
-			      FROM obs o
-			      LEFT JOIN explanation_route rt
-			             ON rt.contribution_observation_id = o.obs_id
-			      LEFT JOIN explanation_run er
-			             ON er.explanation_route_id = rt.explanation_route_id
-			      LEFT JOIN explanation_result rs
-			             ON rs.explanation_run_id = er.explanation_run_id
-			)
-			SELECT (SELECT count(*) FROM batch_trigger) AS feed_batch,
-			       (SELECT count(*) FROM intraday_trigger) AS feed_intraday,
-			       count(DISTINCT obs_id) FILTER (WHERE is_batch) AS obs_batch,
-			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch) AS obs_intraday,
-			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND route_id IS NOT NULL)
-			           AS route_batch,
-			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND route_id IS NOT NULL)
-			           AS route_intraday,
-			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND run_id IS NOT NULL)
-			           AS run_batch,
-			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND run_id IS NOT NULL)
-			           AS run_intraday,
-			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND result_id IS NOT NULL)
-			           AS result_batch,
-			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND result_id IS NOT NULL)
-			           AS result_intraday,
-			       count(DISTINCT obs_id) FILTER (WHERE is_batch AND published_id IS NOT NULL)
-			           AS published_batch,
-			       count(DISTINCT obs_id) FILTER (WHERE NOT is_batch AND published_id IS NOT NULL)
-			           AS published_intraday
-			  FROM cohort
+	private static final String FEEDS_SQL = """
+			SELECT (SELECT count(*) FROM price_movement_trigger WHERE trade_date = ?) AS feed_batch,
+			       (SELECT count(*) FROM minute_price_trigger
+			         WHERE trigger_kind = 'FIRE'
+			           AND (window_start AT TIME ZONE 'Asia/Seoul')::date = ?) AS feed_intraday
 			""";
 
 	/**
-	 * 체인 단계 하나 — {@code column} 은 {@link #CHAIN_SQL} 이 낸 컬럼의 <b>접두어</b>이고 갈래마다
-	 * {@code _batch}·{@code _intraday} 가 붙는다. {@code label}·{@code src} 를 서버가 내는 것은
-	 * 산출 축({@link OutputSpec})과 같은 규약이다 — 개체 이름은 사실의 일부이고, 이 응답이 안 만드는
-	 * 것은 <b>포맷된 문자열</b>(날짜·수의 표기)이다.
+	 * 새 분석 엔진의 단계 하나 — {@code column} 은 {@link #ANALYSIS_CHAIN_SQL} 의 컬럼이다.
+	 * {@code label}·{@code src} 를 서버가 내는 것은 산출 축({@link OutputSpec})과 같은 규약이다.
 	 */
 	private record StageSpec(String id, String label, String src, String column) {
 	}
-
-	/**
-	 * <b>순서가 계약이다</b> — 소비자는 이 배열을 순서대로 인접 비교한다(R10). 정렬 키가 따로 없고
-	 * 단계 사이의 선후는 원장 어디에도 없다(테이블 이름으로는 복원 안 된다).
-	 *
-	 * <p><b>Cloud 게시에서 끝난다.</b> 발번({@code tenant_delivery})도 온프렘 수신도 안 싣는다 —
-	 * 그 뒤는 전달 경계의 물음이고(ADR-0026) 화면도 거기서 잘라 그린다({@code ChainStrip} 의
-	 * {@code LAST_STAGE_ID}). ⚠️ 한 번 {@code c.dlv} 를 실었다가 뺐다: R10 은 그 단계까지 비교해
-	 * <b>"게시 → 전달" P0 를 낼 수 있는데</b> 화면에는 그 단계 노드가 없어 딥링크가 조용히
-	 * 아무 데도 안 닿았다(리뷰가 잡았다). 게시했는데 발번이 없는 것은
-	 * {@code boundary.publishedWithoutDelivery} 가 이미 답한다 — 답이 둘이면 한쪽만 낡는다.
-	 */
-	private static final List<StageSpec> CHAIN_STAGES = List.of(
-			new StageSpec("c.obs", "관측", "etf_contribution_observation", "obs"),
-			new StageSpec("c.route", "라우트", "explanation_route", "route"),
-			new StageSpec("c.run", "런", "explanation_run", "run"),
-			new StageSpec("c.res", "결과", "explanation_result", "result"),
-			new StageSpec("c.pub", "게시", "publication_status=PUBLISHED", "published"));
 
 	/**
 	 * 두 갈래의 입력. <b>순서가 계약이다</b> — 소비자가 {@code feeds[0]}=배치·{@code feeds[1]}=장중
@@ -659,7 +545,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			new FeedSpec("feed.intraday", "장중 트리거", "건", "minute_price_trigger",
 					"feed_intraday"));
 
-	/** {@code column} 은 {@link #CHAIN_SQL} 의 컬럼 이름 그대로다(갈래가 하나라 접두어가 아니다). */
+	/** {@code column} 은 {@link #FEEDS_SQL} 의 컬럼 이름 그대로다. */
 	private record FeedSpec(String id, String label, String unit, String src, String column) {
 	}
 
@@ -692,15 +578,6 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		 * `run_key` 는 UNIQUE 라(`uq_ops_pipeline_run_key`) 이 키 하나로 전순서가 정해진다. */
 		runs.sort(Comparator.comparing(RunRow::runKey));
 
-		/* 옛 설명 엔진이 조회일보다 앞서 멈췄는가(ALPHA-1293). 날짜 상수가 아니라 원장이 답한다 —
-		 * 그 엔진의 마지막 실행이 조회일보다 앞이거나, 실행이 아예 없으면 멈춘 것이다. 그 엔진이 돌던
-		 * 날짜를 조회하면 거짓이라 체인·경계가 종전 값 그대로 나간다. */
-		LocalDate lastLegacyRunDay = timer.time(FactsSegment.LEGACY_ENGINE,
-				() -> jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class));
-		boolean legacyEngineStopped = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(day);
-		/* 전달 경계는 더는 옛 엔진을 안 본다(ALPHA-1326) — 새 분석 엔진의 게시를 지금 상태로 세므로
-		 * 관측 불가가 없다. 그래서 "지금 그 엔진이 멈췄나"를 따로 묻지 않는다. */
-
 		/* 인자는 왼쪽부터 차례로 평가된다 — 감싸기 전과 같은 조회 순서다. 구간 시간은 마지막 인자라
 		 * 앞의 조회가 모두 끝난 뒤의 값이다. */
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
@@ -712,10 +589,9 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 								rs.getLong("published_without_delivery"),
 								rs.getLong("delivery_now_nonpublished"),
 								rs.getLong("delivery_rows")), ANALYSIS_GRACE_SECONDS)),
-				withAnalysisStages(blindIfUnobservable(
-						timer.time(FactsSegment.CHAIN, () -> jdbc.queryForObject(CHAIN_SQL,
-								JdbcConsoleFactsRepository::mapChain, day, day)),
-						legacyEngineStopped), day, timer),
+				withAnalysisStages(timer.time(FactsSegment.FEEDS,
+						() -> jdbc.queryForObject(FEEDS_SQL, JdbcConsoleFactsRepository::mapFeeds, day, day)),
+						day, timer),
 				timer.time(FactsSegment.ANALYSIS_FAILURES, () -> analysisFailures(day)),
 				timer.time(FactsSegment.ETF_ANALYSES, () -> etfAnalyses(day)),
 				timer.nanos());
@@ -914,8 +790,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getLong("completed_etfs"), rs.getLong("failed_etfs")), from, to, from, to);
 	}
 
+	/**
+	 * 🔴 <b>REPEATABLE READ 한 스냅샷이다</b>(ALPHA-1329). 트리거 수와 날짜별 v2 단계를 다른 문장으로 세므로,
+	 * 그 사이에 트리거나 요청이 커밋되면 "트리거 0 · 요청 1" 같은 존재한 적 없는 조합이 나간다 — 화면은
+	 * 단계 불변식이 깨진 응답을 통째로 거부한다.
+	 */
 	@Override
-	@Transactional(readOnly = true)
+	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 	public IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days) {
 		List<IntradayAnalysisPoint> points = new ArrayList<>();
 		OffsetDateTime[] asOf = new OffsetDateTime[1];
@@ -926,9 +807,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			points.add(new IntradayAnalysisPoint(rs.getObject("d", LocalDate.class),
 					rs.getLong("triggers"), rs.getLong("observations"), rs.getLong("runs"),
 					rs.getLong("active_runs"), rs.getLong("failed_runs"), rs.getLong("results"),
-					rs.getLong("published")));
+					rs.getLong("published"), List.of()));
 		}, maxDate, days, maxDate, maxDate, days, maxDate);
-		return new IntradayAnalysisTrend(asOf[0], List.copyOf(points));
+		/* 새 분석 엔진의 단계는 날짜마다 흐름 띠와 <b>같은 조회</b>로 센다(ALPHA-1329) — 같은 날짜를
+		 * 물으면 두 화면이 같은 수를 낸다. 하루 한 번씩이라 조회 수가 날짜 수만큼 는다. */
+		return new IntradayAnalysisTrend(asOf[0], points.stream()
+				.map(p -> new IntradayAnalysisPoint(p.date(), p.triggers(), p.observations(), p.runs(),
+						p.activeRuns(), p.failedRuns(), p.results(), p.published(),
+						analysisStages(p.date())))
+				.toList());
 	}
 
 	/**
@@ -1040,20 +927,24 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	/** 감소를 손실로 판정하는 단계 — 판정 불가 수({@code pending})가 있는 단계다. */
 	private static final java.util.Set<String> PENDING_STAGES = java.util.Set.of("c.req", "c.start");
 
+	/** 체인 입력에 v2 단계를 붙인다. 단계를 세는 일은 {@link #analysisStages} 가 한다. */
+	private ChainRow withAnalysisStages(List<ChainFeed> feeds, LocalDate day, FactsSegment.Timer timer) {
+		return new ChainRow(feeds, timer.time(FactsSegment.ANALYSIS_STAGES, () -> analysisStages(day)));
+	}
+
 	/**
-	 * 체인에 v2 단계를 붙인다. 옛 단계 목록({@code stages})은 건드리지 않는다 — 그 목록만 아는 옛
-	 * 화면이 배포 시차 동안 이 응답을 받는다.
+	 * 조회일의 v2 단계(ALPHA-1296). 흐름 띠와 장중 분석 귀결 추이가 <b>같은 이 메서드</b>를 부른다 —
+	 * 같은 날짜를 물으면 두 화면이 같은 수를 낸다(ALPHA-1329).
 	 *
 	 * <p>🔴 <b>v2 가 아직 없던 날은 관측 불가다</b> — 그날 코호트에 요청이 하나도 없고, 첫 v2 요청이
-	 * 조회일보다 뒤다(요청이 아예 없어도 같다). 옛 엔진이 멈춘 뒤를 가리는 것과 같은 기준을 뒤집은
-	 * 것이고, 날짜 상수가 아니라 원장이 답한다. 요청이 하나라도 있으면 그날의 수는 실측이다.
-	 * 첫 요청이 조회일과 같거나 앞인데 요청이 0 이면 그것은 <b>진짜 손실</b>이다(트리거는 있는데
-	 * 요청이 안 만들어졌다) — 가리지 않는다.
+	 * 조회일보다 뒤다(요청이 아예 없어도 같다). 날짜 상수가 아니라 원장이 답한다. 요청이 하나라도
+	 * 있으면 그날의 수는 실측이다. 첫 요청이 조회일과 같거나 앞인데 요청이 0 이면 그것은 <b>진짜
+	 * 손실</b>이다(트리거는 있는데 요청이 안 만들어졌다) — 가리지 않는다.
 	 */
-	private ChainRow withAnalysisStages(ChainRow chain, LocalDate day, FactsSegment.Timer timer) {
+	private List<AnalysisStage> analysisStages(LocalDate day) {
 		OffsetDateTime from = day.atStartOfDay(KST).toOffsetDateTime();
 		OffsetDateTime to = day.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
-		List<AnalysisStage> stages = timer.time(FactsSegment.ANALYSIS_STAGES, () -> jdbc.queryForObject(ANALYSIS_CHAIN_SQL, (rs, i) -> {
+		return jdbc.queryForObject(ANALYSIS_CHAIN_SQL, (rs, i) -> {
 			LocalDate firstRequestDay = rs.getObject("first_request_day", LocalDate.class);
 			boolean blind = rs.getLong("req") == 0
 					&& (firstRequestDay == null || firstRequestDay.isAfter(day));
@@ -1067,54 +958,16 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 						rs.getLong(s.column()), blind, pending));
 			}
 			return List.copyOf(out);
-		}, from, to, ANALYSIS_GRACE_SECONDS, ANALYSIS_GRACE_SECONDS, from));
-		return new ChainRow(chain.feeds(), chain.stages(), stages);
+		}, from, to, ANALYSIS_GRACE_SECONDS, ANALYSIS_GRACE_SECONDS, from);
 	}
 
-	/**
-	 * 옛 설명 엔진이 마지막으로 돈 날(KST). 체인의 다섯 단계와 전달 경계가 <b>그 엔진의 표</b>에서
-	 * 세므로, 이 날이 조회일보다 앞이면 그 축들은 조회일의 일을 못 본다(ALPHA-1293).
-	 */
-	private static final String LAST_LEGACY_RUN_DAY_SQL = """
-			SELECT max((started_at AT TIME ZONE 'Asia/Seoul')::date) FROM explanation_run
-			""";
-
-	/**
-	 * 단계 다섯을 <b>관측 불가</b>로 표시한다 — 옛 엔진이 조회일보다 앞서 멈췄고, 그날 코호트에 그
-	 * 엔진의 행이 하나도 없을 때만이다(다섯 단계의 수가 전부 0).
-	 *
-	 * <p>🔴 <b>둘 다여야 한다.</b> 엔진이 멈춘 것만 보면, 멈추기 전 트리거의 자손이 남아 있는 날
-	 * (수가 0 이 아니다)까지 가린다. 수가 0 인 것만 보면, 엔진이 돌던 날의 진짜 "하나도 안 남았다"
-	 * (손실)를 가린다. 입력 두 갈래는 건드리지 않는다 — 트리거는 지금도 쓰이고 실측이다.
-	 */
-	private static ChainRow blindIfUnobservable(ChainRow chain, boolean legacyEngineStopped) {
-		boolean noLegacyRows = chain.stages().stream()
-				.allMatch(s -> s.batch() == 0 && s.intraday() == 0);
-		if (!legacyEngineStopped || !noLegacyRows) {
-			return chain;
-		}
-		return new ChainRow(chain.feeds(), chain.stages().stream()
-				.map(s -> new ChainStage(s.id(), s.label(), s.src(), s.batch(), s.intraday(), true))
-				.toList());
-	}
-
-	/**
-	 * 한 행짜리 집계를 두 목록으로 편다 — 목록의 <b>순서는 스펙 상수가 정한다</b>({@link #CHAIN_STAGES}·
-	 * {@link #CHAIN_FEEDS}). SQL 의 SELECT 순서에 기대지 않는 이유는 그 순서가 흐름을 뜻한다는
-	 * 계약이 어디에도 안 적히기 때문이다 — 컬럼을 재배치하는 흔한 편집이 소비자의 인접 비교를
-	 * 조용히 뒤섞는다.
-	 */
-	private static ChainRow mapChain(ResultSet rs, int rowNum) throws SQLException {
+	/** 입력 두 갈래 — 목록의 <b>순서는 스펙 상수가 정한다</b>({@link #CHAIN_FEEDS}). */
+	private static List<ChainFeed> mapFeeds(ResultSet rs, int rowNum) throws SQLException {
 		List<ChainFeed> feeds = new ArrayList<>();
 		for (FeedSpec f : CHAIN_FEEDS) {
 			feeds.add(new ChainFeed(f.id(), f.label(), f.unit(), f.src(), rs.getLong(f.column())));
 		}
-		List<ChainStage> stages = new ArrayList<>();
-		for (StageSpec s : CHAIN_STAGES) {
-			stages.add(new ChainStage(s.id(), s.label(), s.src(), rs.getLong(s.column() + "_batch"),
-					rs.getLong(s.column() + "_intraday")));
-		}
-		return new ChainRow(List.copyOf(feeds), List.copyOf(stages));
+		return List.copyOf(feeds);
 	}
 
 	/**

@@ -164,12 +164,29 @@ GET /api/v1/console/trends/intraday-analysis[?maxDate=YYYY-MM-DD&days=30]
         "activeRuns": 2,
         "failedRuns": 1,
         "results": 57,
-        "published": 55
+        "published": 55,
+        "analysis": {
+          "blind": false,
+          "requested": 60, "requestPending": 2,
+          "started": 52, "startPending": 5,
+          "completed": 48, "published": 45
+        }
       }
     ]
   }
 }
 ```
+
+✅ **`analysis` — 새 분석 엔진의 단계**(ALPHA-1329). 그날 발화한 장중 트리거 가운데 분석 요청 → 분석
+시작 → 분석 완료 → 게시에 도달한 트리거 수다. 날짜마다 `/console/facts` 의 `chain.analysisStages` 와
+**같은 조회**를 불러 세므로 같은 날짜면 흐름 띠와 같은 수다. `requestPending`·`startPending` 은 아직
+판정할 수 없는 트리거 수(흐름 띠의 `pending`)이고 도달 수에 들어 있지 않다. `blind` 가 참이면 그날은
+새 분석 엔진의 요청이 아직 없던 날이라(첫 요청이 그날보다 뒤) 수의 0 은 실측이 아니다 — 관측 불가.
+날짜 수만큼 조회가 는다(30일이면 30번).
+
+⏭ 아래 `observations`~`published` 는 **옛 설명 엔진**의 단계라 10-02 이후 0 이다. ALPHA-1329 이전의 UI 가
+이 필드를 요구해(없으면 응답 전체를 거부한다) 이번에는 남기고, 그 UI 가 배포된 뒤 지운다. 화면은
+`analysis` 를 읽고, 그 필드가 없는 응답(옛 API)은 "상태 미제공"으로 그린다.
 
 - 코호트는 그 날짜의 `minute_price_trigger.trigger_kind='FIRE'` 행이다. `REVERT`는 설명을 만들지
   않는 회수 마커라 제외한다.
@@ -733,25 +750,20 @@ NEW 에만, `target_movement_analysis_id` 를 INVALIDATION 에만 허용한다 �
     { "id": "feed.batch",    "label": "배치 트리거", "v": 20, "unit": "ETF", "src": "price_movement_trigger" },
     { "id": "feed.intraday", "label": "장중 트리거", "v": 65, "unit": "건",  "src": "minute_price_trigger" }
   ],
-  "stages": [
-    { "id": "c.obs",   "label": "관측",   "batch": 20, "intraday": 0, "src": "etf_contribution_observation" },
-    { "id": "c.route", "label": "라우트", "batch": 20, "intraday": 0, "src": "explanation_route" },
-    { "id": "c.run",   "label": "런",     "batch": 16, "intraday": 0, "src": "explanation_run" },
-    { "id": "c.res",   "label": "결과",   "batch": 16, "intraday": 0, "src": "explanation_result" },
-    { "id": "c.pub",   "label": "게시",   "batch": 16, "intraday": 0, "src": "publication_status=PUBLISHED" }
-  ]
+  "analysisStages": [ /* 아래 절 */ ]
 }
 ```
 
+✅ **옛 설명 엔진의 단계 목록(`stages`)은 지웠다**(2026-10-14, ALPHA-1329). 그 엔진은 10-01 이 마지막
+실행이고 화면·규칙이 읽지 않았다. 그 목록을 세던 조회, 옛 엔진 마지막 실행일 조회, 관측 불가 판정도
+함께 지웠다. `feeds` 는 트리거 수만 세는 조회로 바꿨다(정의는 그대로 — 배치 트리거, 장중은 `FIRE`
+만). 이 아래의 `stages`·관측·라우트·런 서술은 그 목록이 있던 때의 기록이다.
+
 ### 새 분석 엔진의 단계 — `analysisStages` (ALPHA-1296)
 
-`chain` 은 `stages` 옆에 **`analysisStages`** 를 함께 싣는다. 화면(`/ops/chain`)과 R10 이 읽는 것은
-이 목록이다. `stages`(옛 설명 엔진의 단계)는 그 목록만 아는 옛 화면을 위해 그대로 남긴다.
-
-⏭ **`stages` 는 다음 배포에서 지운다**(ALPHA-1328). ALPHA-1328 이전의 UI 는 `chain` 이 오면 `stages` 가
-비어 있지 않은 배열이어야 응답 전체를 받는다 — 빼거나 빈 목록으로 두면 그 UI 의 운영 화면 전체가
-멈춘다. 그래서 이번에는 서버가 종전 값을 계속 싣고, UI 만 `stages` 가 없어도 받게 했다. 그 UI 가
-배포된 뒤 서버에서 `stages`·그 조회·옛 엔진 마지막 실행일 조회를 지운다.
+`chain` 은 `feeds` 옆에 **`analysisStages`** 를 싣는다. 화면(`/ops/chain`)과 R10 이 읽는 것은 이
+목록이다. 옛 설명 엔진의 단계 목록(`stages`)은 ALPHA-1328 에서 UI 가 부재를 받게 한 뒤 ALPHA-1329 에서
+서버가 지웠다. 실행 이력 화면의 장중 분석 귀결 추이도 날짜마다 이 목록과 같은 조회로 센다.
 
 ```jsonc
 "analysisStages": [
@@ -1003,11 +1015,10 @@ COALESCE(r.trading_date, (r.created_at AT TIME ZONE 'Asia/Seoul')::date)
   |---|---|---|
   | `meta` | `db` | 조회 시각·KST 오늘·최신 런 날짜. 날짜를 생략한 요청이면 기본 조회일을 고르는 조회까지 |
   | `runs.db` | `db` | 런과 계획 결손 슬롯 |
-  | `legacyEngine` | `db` | 옛 설명 엔진의 마지막 실행일(옛 체인 단계의 관측 불가 표시가 쓴다) |
   | `tasks` | `db` | 작업 축 |
   | `outputs` | `db` | 산출 축 — 휴장일·기준일 조회와 산출별 건수 조회 전부 |
   | `boundary` | `db` | 경계 축 |
-  | `chain` | `db` | 옛 설명 엔진의 단계(`chain.feeds`·`chain.stages`) |
+  | `feeds` | `db` | 체인의 입력 두 갈래(`chain.feeds`) — 배치 트리거 수와 장중 발화 수 |
   | `analysisStages` | `db` | 새 분석 엔진의 단계(`chain.analysisStages`) |
   | `analysisFailures` | `db` | v2 분석 실패 축 |
   | `etfAnalyses` | `db` | ETF별 v2 분석 귀결 축 |

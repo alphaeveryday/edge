@@ -21,14 +21,12 @@ public enum FactsSegment {
 	META("meta", Kind.DB),
 	/** 런과 계획 결손 슬롯 */
 	RUNS_DB("runs.db", Kind.DB),
-	/** 옛 설명 엔진의 마지막 실행일 — 옛 체인 단계의 관측 불가 표시가 쓴다 */
-	LEGACY_ENGINE("legacyEngine", Kind.DB),
 	TASKS("tasks", Kind.DB),
 	/** 휴장일·기준일 조회와 산출별 건수 조회 전부 */
 	OUTPUTS("outputs", Kind.DB),
 	BOUNDARY("boundary", Kind.DB),
-	/** 옛 설명 엔진의 단계({@code chain.feeds}·{@code chain.stages}) */
-	CHAIN("chain", Kind.DB),
+	/** 체인의 입력 두 갈래({@code chain.feeds}) — 배치 트리거 수와 장중 발화 수 */
+	FEEDS("feeds", Kind.DB),
 	/** 새 분석 엔진의 단계({@code chain.analysisStages}) */
 	ANALYSIS_STAGES("analysisStages", Kind.DB),
 	ANALYSIS_FAILURES("analysisFailures", Kind.DB),

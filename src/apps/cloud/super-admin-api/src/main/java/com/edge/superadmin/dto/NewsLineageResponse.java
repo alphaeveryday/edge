@@ -24,12 +24,17 @@ import java.util.List;
 public record NewsLineageResponse(String date, String stage, SummaryResponse summary,
 		List<DocumentResponse> documents, ExtractionResponse extraction) {
 
+	/**
+	 * {@code usedInAnalysisBlind} 가 참이면 "분석 사용"({@code documentsUsedInAnalysis}, 문서의
+	 * {@code usedInAnalysis})을 <b>다 볼 수 없다</b>(ALPHA-1329) — 그 단계는 옛 설명 엔진의 근거 연결만
+	 * 보는데, 조회 범위에 그 엔진이 멈춘 뒤의 날이 있다. 그 범위의 0 은 "분석에 안 쓰였다"가 아니다.
+	 */
 	public record SummaryResponse(long totalDocuments, long documentsWithAssertion,
-			long documentsUsedInAnalysis) {
+			long documentsUsedInAnalysis, boolean usedInAnalysisBlind) {
 
 		public static SummaryResponse from(LineageSummary s) {
 			return new SummaryResponse(s.totalDocuments(), s.documentsWithAssertion(),
-					s.documentsUsedInAnalysis());
+					s.documentsUsedInAnalysis(), s.usedInAnalysisBlind());
 		}
 	}
 

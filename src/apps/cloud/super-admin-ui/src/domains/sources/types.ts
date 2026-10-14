@@ -311,6 +311,11 @@ export interface NewsLineageSummary {
   totalDocuments: number;
   documentsWithAssertion: number;
   documentsUsedInAnalysis: number;
+  /**
+   * "분석 사용"을 다 볼 수 없다(ALPHA-1329) — 그 단계는 옛 설명 엔진의 근거 연결만 보는데 조회 범위에
+   * 그 엔진이 멈춘 뒤의 날이 있다. 이 필드를 싣기 전의 API 에서는 없다(없으면 볼 수 있는 것으로 읽는다).
+   */
+  usedInAnalysisBlind?: boolean;
 }
 
 export interface NewsLineageDocument {
@@ -367,6 +372,11 @@ export interface HoldingsImpact {
   missing: MissingEtf[];
   /** 권장 재실행 안내(정적) — 자동 실행 없음. 결손 없거나 적재 미귀결이면 null */
   recommendedAction: string | null;
+  /**
+   * 누락 ETF 의 기준일 분석을 볼 수 없다(ALPHA-1329) — 그 목록은 옛 설명 엔진의 결과만 보는데 기준일에
+   * 그 엔진이 멈춰 있었다. 이 필드를 싣기 전의 API 에서는 없다(없으면 볼 수 있는 것으로 읽는다).
+   */
+  analysesBlind?: boolean;
 }
 
 export interface MissingEtf {

@@ -43,6 +43,16 @@ public class JdbcNewsLineageRepository implements NewsLineageRepository {
 			         WHERE a.document_id = d.document_id)""";
 
 	/**
+	 * 옛 설명 엔진이 마지막으로 돈 날(KST, ALPHA-1329). "분석 사용" 단계는 그 엔진의 근거 연결
+	 * ({@code explanation_run_event_evidence})만 본다 — 새 분석 엔진은 쓴 뉴스를 관계형으로 남기지 않고
+	 * 도구 실행 결과 JSON({@code tool_runs.output}) 안에만 담아, 같은 뜻의 값을 조회 하나로 낼 수 없다.
+	 * 그래서 조회 범위에 그 엔진이 멈춘 뒤의 날이 들어 있으면 "분석 사용"은 0 이 아니라 관측 불가다.
+	 */
+	private static final String LAST_LEGACY_RUN_DAY_SQL = """
+			SELECT max((started_at AT TIME ZONE 'Asia/Seoul')::date) FROM explanation_run
+			""";
+
+	/**
 	 * 세 카운트를 한 문장으로 — 분리하면 조회 사이에 writer 가 끼어 "with > total" 같은
 	 * 존재한 적 없는 조합이 화면에 조립된다(드릴다운 네 조회를 한 스냅샷으로 묶는 것과 같은 이유).
 	 */
@@ -109,7 +119,14 @@ public class JdbcNewsLineageRepository implements NewsLineageRepository {
 		String sql = dateKst == null ? SUMMARY_SQL
 				: SUMMARY_SQL + "   AND " + KST_DATE + " = ?";
 		Object[] args = dateKst == null ? new Object[]{} : new Object[]{dateKst};
-		return jdbc.query(sql, JdbcNewsLineageRepository::mapSummary, args).get(0);
+		LineageSummary counts = jdbc.query(sql, JdbcNewsLineageRepository::mapSummary, args).get(0);
+		/* 날짜가 없으면 전체 누적이라 범위의 끝은 오늘(KST)이다 — 옛 엔진이 오늘보다 앞서 멈췄으면 그 뒤의
+		 * 날이 범위에 들어 있다. 날짜가 있으면 그 날 하나다. */
+		LocalDate lastLegacyRunDay = jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class);
+		LocalDate rangeEnd = dateKst != null ? dateKst : LocalDate.now(KST);
+		boolean blind = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(rangeEnd);
+		return new LineageSummary(counts.totalDocuments(), counts.documentsWithAssertion(),
+				counts.documentsUsedInAnalysis(), blind);
 	}
 
 	@Override

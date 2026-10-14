@@ -7,7 +7,6 @@ import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
-import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EntityResolutionPoint;
 import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisPoint;
@@ -70,7 +69,7 @@ class ConsoleControllerTest {
 	 * 통째로 건너뛰고, 그러면 다른 축을 겨눈 테스트들이 <b>체인이 없어도 통과하는</b> 응답 위에서
 	 * 돈다 — 축이 사라지는 회귀를 잡을 자리가 없어진다.
 	 */
-	private static final ChainRow EMPTY_CHAIN = chain(0L, 0L, 0L, 0L);
+	private static final ChainRow EMPTY_CHAIN = chain(0L, 0L, 0L);
 
 	private FakeConsoleFactsRepository repository;
 
@@ -94,18 +93,17 @@ class ConsoleControllerTest {
 	}
 
 	/**
-	 * 피드 둘 + 단계 하나짜리 체인. <b>네 수를 전부 다르게</b> 받는다 — 같은 값을 두면 갈래
+	 * 피드 둘 + v2 단계 하나짜리 체인. <b>세 수를 전부 다르게</b> 받는다 — 같은 값을 두면 갈래
 	 * 맞바꿈(batch↔intraday)도 피드↔단계 맞바꿈도 안 보인다.
 	 */
-	private static ChainRow chain(long feedBatch, long feedIntraday, long obsBatch,
-			long obsIntraday) {
+	private static ChainRow chain(long feedBatch, long feedIntraday, long requested) {
 		return new ChainRow(
 				List.of(new ChainFeed("feed.batch", "배치 트리거", "ETF", "price_movement_trigger",
 								feedBatch),
 						new ChainFeed("feed.intraday", "장중 트리거", "건", "minute_price_trigger",
 								feedIntraday)),
-				List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", obsBatch,
-						obsIntraday)));
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.req", "분석 요청",
+						"analysis_execution_requests", null, requested, false)));
 	}
 
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
@@ -242,7 +240,7 @@ class ConsoleControllerTest {
 	@Test
 	void 체인_축은_피드와_단계를_순서대로_싣는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				chain(20L, 65L, 18L, 3L), List.of()))
+				chain(20L, 65L, 3L), List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.chain.feeds[0].id").value("feed.batch"))
@@ -251,12 +249,11 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.chain.feeds[1].id").value("feed.intraday"))
 				.andExpect(jsonPath("$.result.chain.feeds[1].v").value(65))
 				.andExpect(jsonPath("$.result.chain.feeds[1].unit").value("건"))
-				.andExpect(jsonPath("$.result.chain.stages[0].id").value("c.obs"))
-				.andExpect(jsonPath("$.result.chain.stages[0].label").value("관측"))
-				.andExpect(jsonPath("$.result.chain.stages[0].src")
-						.value("etf_contribution_observation"))
-				.andExpect(jsonPath("$.result.chain.stages[0].batch").value(18))
-				.andExpect(jsonPath("$.result.chain.stages[0].intraday").value(3));
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].id").value("c.req"))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(3))
+				// 옛 설명 엔진의 단계 목록은 지웠다(ALPHA-1329)
+				.andExpect(jsonPath("$.result.chain", org.hamcrest.Matchers.not(
+						org.hamcrest.Matchers.hasKey("stages"))));
 	}
 
 	/**
@@ -267,11 +264,11 @@ class ConsoleControllerTest {
 	@Test
 	void 체인의_0_은_필드를_빼지_않는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				chain(20L, 65L, 0L, 0L), List.of()))
+				chain(0L, 65L, 0L), List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"batch\":0")))
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"intraday\":0")));
+				.andExpect(jsonPath("$.result.chain.feeds[0].v").value(0))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(0));
 	}
 
 	/**
@@ -915,11 +912,18 @@ class ConsoleControllerTest {
 	@Test
 	void 장중_분석_추이는_기준시각과_서로_다른_단계_계수를_그대로_내린다() throws Exception {
 		MockMvc mvc = mvc(facts());
+		/* 새 분석 엔진 단계(ALPHA-1329) — 네 단계의 수와 판정 보류 둘을 전부 다르게 둔다. 둘째 날은
+		 * v2 요청이 없던 날이라 관측 불가다. */
+		java.util.function.BiFunction<Boolean, long[], List<com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage>> stages = (blind, n) -> List.of(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.req", "분석 요청", "analysis_execution_requests", null, n[0], blind, n[1]),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.start", "분석 시작", "movement_analyses", null, n[2], blind, n[3]),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.done", "분석 완료", "status=completed", null, n[4], blind),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.pub", "게시", "published_at IS NOT NULL", null, n[5], blind));
 		repository.intradayTrend = new IntradayAnalysisTrend(DB_NOW, List.of(
 				new IntradayAnalysisPoint(LocalDate.parse("2026-08-01"), 8L, 7L, 6L, 2L,
-						1L, 5L, 4L),
+						1L, 5L, 4L, stages.apply(false, new long[] {7, 1, 5, 2, 3, 1})),
 				new IntradayAnalysisPoint(LocalDate.parse("2026-08-02"), 0L, 0L, 0L, 0L,
-						0L, 0L, 0L)));
+						0L, 0L, 0L, stages.apply(true, new long[] {0, 0, 0, 0, 0, 0}))));
 
 		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
 						.param("maxDate", "2026-08-02").param("days", "2"))
@@ -934,7 +938,15 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.points[0].failedRuns").value(1))
 				.andExpect(jsonPath("$.result.points[0].results").value(5))
 				.andExpect(jsonPath("$.result.points[0].published").value(4))
-				.andExpect(jsonPath("$.result.points[1].published").value(0));
+				.andExpect(jsonPath("$.result.points[1].published").value(0))
+				.andExpect(jsonPath("$.result.points[0].analysis.blind").value(false))
+				.andExpect(jsonPath("$.result.points[0].analysis.requested").value(7))
+				.andExpect(jsonPath("$.result.points[0].analysis.requestPending").value(1))
+				.andExpect(jsonPath("$.result.points[0].analysis.started").value(5))
+				.andExpect(jsonPath("$.result.points[0].analysis.startPending").value(2))
+				.andExpect(jsonPath("$.result.points[0].analysis.completed").value(3))
+				.andExpect(jsonPath("$.result.points[0].analysis.published").value(1))
+				.andExpect(jsonPath("$.result.points[1].analysis.blind").value(true));
 
 		assertThat(repository.requestedIntradayMaxDate).isEqualTo(LocalDate.parse("2026-08-02"));
 		assertThat(repository.requestedIntradayDays).isEqualTo(2);
@@ -1022,10 +1034,10 @@ class ConsoleControllerTest {
 	 */
 	@Test
 	void 소요_시간은_구간_정의를_순서대로_전부_싣는다() throws Exception {
-		List<String> names = List.of("meta", "runs.db", "legacyEngine", "tasks", "outputs", "boundary",
-				"chain", "analysisStages", "analysisFailures", "etfAnalyses", "transaction",
+		List<String> names = List.of("meta", "runs.db", "tasks", "outputs", "boundary",
+				"feeds", "analysisStages", "analysisFailures", "etfAnalyses", "transaction",
 				"runs.aws", "queues", "datasets");
-		List<String> kinds = List.of("db", "db", "db", "db", "db", "db", "db", "db", "db", "db", "db",
+		List<String> kinds = List.of("db", "db", "db", "db", "db", "db", "db", "db", "db", "db",
 				"aws", "aws", "app");
 		assertThat(java.util.Arrays.stream(com.edge.superadmin.repository.FactsSegment.values())
 				.map(com.edge.superadmin.repository.FactsSegment::wireName).toList())
@@ -1057,11 +1069,11 @@ class ConsoleControllerTest {
 						com.edge.superadmin.repository.FactsSegment.OUTPUTS, 6_600_000L));
 
 		mvc(timed).perform(get("/api/v1/console/facts"))
-				.andExpect(jsonPath("$.result.meta.timing.segments[3].name").value("tasks"))
-				.andExpect(jsonPath("$.result.meta.timing.segments[3].ms").value(5))
-				.andExpect(jsonPath("$.result.meta.timing.segments[4].ms").value(7))
-				.andExpect(jsonPath("$.result.meta.timing.segments[10].name").value("transaction"))
-				.andExpect(jsonPath("$.result.meta.timing.segments[10].ms").value(0))
+				.andExpect(jsonPath("$.result.meta.timing.segments[2].name").value("tasks"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[2].ms").value(5))
+				.andExpect(jsonPath("$.result.meta.timing.segments[3].ms").value(7))
+				.andExpect(jsonPath("$.result.meta.timing.segments[9].name").value("transaction"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[9].ms").value(0))
 				// 못 잰 구간은 빠지지 않고 0 이다
 				.andExpect(jsonPath("$.result.meta.timing.segments[0].ms").value(0));
 	}
@@ -1113,43 +1125,44 @@ class ConsoleControllerTest {
 	}
 
 	/**
-	 * 관측 불가 표시(ALPHA-1293) — 체인 단계의 {@code blind} 가 그대로 나간다. 수는 0 으로 함께 나가지만
-	 * (와이어에 null 자리가 없다) 소비자는 {@code blind} 를 먼저 본다. 평소에는 false 다.
+	 * 관측 불가 표시 — v2 단계의 {@code blind}(ALPHA-1296, v2 요청이 없던 날)가 그대로 나간다. 수는 0 으로
+	 * 함께 나가지만(와이어에 null 자리가 없다) 소비자는 {@code blind} 를 먼저 본다. 평소에는 false 다.
 	 *
 	 * <p>전달 경계에는 이 키가 <b>없다</b>(ALPHA-1326) — 경계는 새 분석 엔진을 지금 상태로 세서 관측
 	 * 불가가 없다. 키가 없으면 소비자는 관측 가능으로 읽는다.
 	 */
 	@Test
-	void 관측_불가_표시는_체인_단계에만_실린다() throws Exception {
+	void 관측_불가_표시는_v2_단계에만_실린다() throws Exception {
 		ConsoleFacts base = facts();
 		ConsoleFacts blind = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
 				base.outputs(), new BoundaryRow(0L, 0L, 12L),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
 						base.chain().feeds(),
-						List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", 0L, 0L, true))));
+						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.req", "분석 요청",
+								"analysis_execution_requests", null, 0L, true))));
 
 		mvc(blind).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.chain.stages[0].blind").value(true))
-				.andExpect(jsonPath("$.result.chain.stages[0].batch").value(0))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(true))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(0))
 				.andExpect(jsonPath("$.result.boundary", org.hamcrest.Matchers.not(
 						org.hamcrest.Matchers.hasKey("blind"))));
 		mvc(base).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.chain.stages[0].blind").value(false));
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(false));
 	}
 
 	/**
-	 * v2 단계(ALPHA-1296)는 옛 단계 목록과 <b>따로</b> 나간다. 배치 칸은 null 이 <b>키를 유지한 채</b>
-	 * 나가야 한다 — 0 이면 "배치 트리거가 전부 사라졌다"가 되고, 키가 빠지면 소비자가 수를 못 읽는다.
+	 * v2 단계(ALPHA-1296)의 배치 칸은 null 이 <b>키를 유지한 채</b> 나가야 한다 — 0 이면 "배치 트리거가
+	 * 전부 사라졌다"가 되고, 키가 빠지면 소비자가 수를 못 읽는다.
 	 */
 	@Test
-	void v2_단계는_옛_단계와_따로_나가고_배치_칸은_null_이다() throws Exception {
+	void v2_단계의_배치_칸은_null_이다() throws Exception {
 		ConsoleFacts base = facts();
 		ConsoleFacts v2 = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
 				base.outputs(), base.boundary(),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
-						base.chain().feeds(), base.chain().stages(),
+						base.chain().feeds(),
 						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
 										"c.req", "분석 요청", "analysis_execution_requests", null, 256L, false),
 								new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
@@ -1166,8 +1179,6 @@ class ConsoleControllerTest {
 				// 판정 불가 수(ALPHA-1309)는 단계마다 나간다 — 없으면 0 이다.
 				.andExpect(jsonPath("$.result.chain.analysisStages[0].pending").value(0))
 				.andExpect(jsonPath("$.result.chain.analysisStages[1].pending").value(7))
-				// 옛 단계 목록은 그대로다 — 그 목록만 아는 옛 화면이 이 응답을 받는다.
-				.andExpect(jsonPath("$.result.chain.stages.length()").value(base.chain().stages().size()))
 				.andReturn().getResponse().getContentAsString();
 		assertThat(body).contains("\"batch\":null");
 	}
