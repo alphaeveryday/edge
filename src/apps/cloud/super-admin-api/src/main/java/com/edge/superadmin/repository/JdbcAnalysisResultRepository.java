@@ -34,8 +34,9 @@ public class JdbcAnalysisResultRepository implements AnalysisResultRepository {
 	 * 목록 — 조회 한 번이다. 전체 행 수는 걸러진 행({@code f})에서 세고, 페이지는 같은 {@code f} 를
 	 * 잘라 붙인다. 페이지가 범위를 넘어 비어도 전체 행 수는 나간다(그때는 행 열이 전부 null 인 한 줄).
 	 *
-	 * <p>날짜 범위는 {@code analysis_at} 에 직접 건다 — 색인 {@code (etf_code, analysis_at desc)} 를
-	 * 그대로 탄다. 이름은 흐름 화면의 ETF 표와 같은 출처다({@code instrument} XKRX → {@code entity}).
+	 * <p>날짜 범위는 {@code analysis_at} 에 직접 건다. ⚠️ 색인 {@code (etf_code, analysis_at desc)} 는 ETF 를
+	 * 줄 때만 탄다 — ETF 없는 기본 목록은 표를 처음부터 읽는다(dev 10-14: 가격변동 하루 214건 조회 8.7ms).
+	 * {@code analysis_at} 으로 시작하는 색인은 마이그레이션이라 이 변경 범위 밖이다(ALPHA-1333). 이름은 흐름 화면의 ETF 표와 같은 출처다({@code instrument} XKRX → {@code entity}).
 	 * {@code (market_code, ticker)} 가 유일이라 행이 불어나지 않는다.
 	 */
 	private static final String LIST_SQL = """
