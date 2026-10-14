@@ -99,7 +99,7 @@ resource "aws_iam_role_policy" "outlook_scheduler" {
 
 # 업무 기준시각(analysis_at) = 스케줄의 **예정 시각**이다. 실제 시작이 늦어지거나 재전달돼도 같은
 # 값이라 같은 작업으로 합쳐진다(분석 ID 가 이 문자열에서 나온다). 마감은 그날 08:00 KST 로 정의가 계산한다.
-# 요일·휴일을 가리지 않는다 — 스케줄 식이 정하는 날마다 뜬다(dev 는 매일).
+# dev 는 평일만 예약한다. 정의도 예정 시각의 한국 날짜가 주말이면 단건 실행 전에 건너뛴다. 공휴일은 별도 판정하지 않는다.
 resource "aws_scheduler_schedule" "outlook_batch" {
   name                         = local.outlook_batch_name
   state                        = var.outlook_schedule_state
