@@ -249,6 +249,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             repairs = 0
             recovery_rounds = 0
             structured_retry = False
+            structured_repairs = 0
             while True:
                 state = data_status(market, optimizer, evidence.sources, observed_data)
                 metrics['data_status'] = state
@@ -268,14 +269,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
                 source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                 required_tools = []
-                if finalizing and role == 'portfolio' and decision.kind != 'scenario':
+                if role == 'portfolio' and decision.kind != 'scenario':
                     if optimizer.result is None:
                         required_tools.extend([TOOLS[0], OPTIMIZER_TOOL])
                     if not evidence.sources and not source_free_allowed:
                         required_tools.extend(TOOLS[1:])
-                if finalizing and role != 'question' and (decision.kind == 'scenario' or decision.scenario_requested) and scenario_result is None:
+                if role != 'question' and (decision.kind == 'scenario' or decision.scenario_requested) and scenario_result is None:
                     required_tools.append(SCENARIO_TOOL)
-                if required_tools:
+                if required_tools and finalizing:
                     model_tools, tool_choice = required_tools, 'auto'
                     messages.append({'role': 'user', 'content': '답변에 필수인 후보 비교·최소 출처·요청 계산 중 아직 수행하지 않은 작업만 남았습니다. 허용된 필수 도구를 완료한 뒤 현재 역할의 JSON을 작성하세요. 추가적인 부가 자료 조사는 종료합니다.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
@@ -314,7 +315,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
                     result = await model_call({"model": MODEL, "messages": messages, "tools": model_tools,
-                        "tool_choice": tool_choice, "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
+                        "tool_choice": tool_choice, "allow_report": not required_tools, "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -326,13 +327,15 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 except ValueError as error:
                     if str(error) not in {'STRUCTURED_OUTPUT_REQUIRED', 'STRUCTURED_OUTPUT_MIXED_CALLS'}:
                         raise
-                    repairs += 1
-                    emit('validation_failed', role=role, attempt=repairs, code=str(error))
-                    if repairs > (2 if role == 'opinion' else 1):
+                    structured_repairs += 1
+                    emit('validation_failed', role=role, attempt=structured_repairs, code=str(error))
+                    if structured_repairs > 2:
                         raise
                     structured_retry = True
                     messages.append({'role': 'user', 'content': 'submit_report 도구 하나로 현재 역할의 보고서를 제출하세요. 일반 텍스트 응답은 제출이 아닙니다.'})
                     continue
+                if result.get('structured_output_fallback'):
+                    emit('structured_output_fallback', role=role, status='json_parsed')
                 choice = result["choices"][0]
                 usage = {name: value for name, value in result.get('usage', {}).items()
                          if name in {'prompt_tokens', 'completion_tokens', 'total_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens'}
@@ -340,9 +343,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 emit('model_finished', role=role, call=calls, usage=usage,
                      finish_reason=choice.get('finish_reason') if choice.get('finish_reason') in {'stop', 'tool_calls', 'length', 'content_filter'} else 'unknown')
                 if choice.get("finish_reason") == "length":
-                    repairs += 1
-                    emit('validation_failed', role=role, attempt=repairs, code='MODEL_TRUNCATED')
-                    if repairs > (2 if role == 'opinion' else 1):
+                    structured_repairs += 1
+                    structured_retry = True
+                    emit('validation_failed', role=role, attempt=structured_repairs, code='MODEL_TRUNCATED')
+                    if structured_repairs > 2:
                         raise ValueError("MODEL_TRUNCATED")
                     messages.append({'role': 'user', 'content': '응답이 길이 한도로 잘렸습니다. 이미 성공한 도구 결과는 유지하고 필수 답변만 짧은 JSON으로 다시 작성하세요.'})
                     continue
@@ -635,10 +639,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     checkpoint()
                     break
                 except (ValueError, TypeError) as error:
-                    repairs += 1
-                    emit('validation_failed', role=role, attempt=repairs,
+                    if isinstance(error, json.JSONDecodeError):
+                        structured_repairs += 1
+                        structured_retry = True
+                        attempt, limit = structured_repairs, 2
+                    else:
+                        repairs += 1
+                        attempt, limit = repairs, 2 if role == 'opinion' else 1
+                    emit('validation_failed', role=role, attempt=attempt,
                          code='OUTPUT_JSON' if isinstance(error, json.JSONDecodeError) else 'OUTPUT_SCHEMA' if isinstance(error, ValidationError) else 'OUTPUT_CONTRACT')
-                    if repairs > (2 if role == 'opinion' else 1):
+                    if attempt > limit:
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
                     low, high = LIMITS[role]
                     messages.append({"role": "user", "content": f"출력 검증 실패: {str(error)[:400]}. 현재 역할의 JSON을 한 번 수정하세요. 본문은 {(low + high) // 2}자 목표, 최대 {high}자. 근거는 실제 도구가 준 source_id와 passage_id를 고르세요. 등록 근거가 없는 질문 해석 단계는 evidence: []로 고치세요."})

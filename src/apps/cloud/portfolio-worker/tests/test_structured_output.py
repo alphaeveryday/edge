@@ -77,7 +77,7 @@ async def test_research_tools_remain_available_with_required_structured_submissi
 
 async def test_unstructured_provider_response_is_not_silently_accepted():
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200,
-        json={'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}))) as client:
+        json={'choices': [{'finish_reason': 'stop', 'message': {'content': 'not json'}}]}))) as client:
         with pytest.raises(ValueError, match='STRUCTURED_OUTPUT_REQUIRED'):
             await structured_call(client, 'test-key', {'tools': [], 'tool_choice': 'none', 'messages': []}, Section)
 
@@ -120,3 +120,54 @@ async def test_optional_tool_choice_without_submission_retries_with_forced_repor
         await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'),
                            'test', stages.append, model_call=model, evidence=Evidence())
     assert calls == ['auto', 'none']
+
+
+async def test_valid_plain_report_is_validated_instead_of_discarded():
+    body = '{"paragraphs":["a","b","c"],"evidence":[],"limitations":[]}'
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200,
+        json={'choices': [{'finish_reason': 'stop', 'message': {'content': body}}]}))) as client:
+        result = await structured_call(client, 'test-key', {'tools': [], 'messages': []}, Section)
+    assert Section.model_validate_json(result['choices'][0]['message']['content']).paragraphs == ['a', 'b', 'c']
+    assert result['structured_output_fallback'] is True
+
+
+async def test_report_tool_is_unavailable_until_required_research_is_done():
+    def handler(request):
+        body = json.loads(request.content)
+        assert 'allow_report' not in body
+        assert [tool['function']['name'] for tool in body['tools']] == ['lookup']
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'role': 'assistant', 'tool_calls': [{'id': 'lookup-1', 'type': 'function',
+            'function': {'name': 'lookup', 'arguments': '{}'}}]}}]})
+    payload = {'tools': [{'type': 'function', 'function': {'name': 'lookup', 'parameters': {
+        'type': 'object', 'properties': {}}}}], 'messages': [], 'allow_report': False}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await structured_call(client, 'test-key', payload, Section)
+
+
+@pytest.mark.parametrize('format_failure', ['syntax', 'truncated'])
+async def test_json_syntax_retry_does_not_consume_business_validation_retry(format_failure):
+    from edge_portfolio.agent import run_analysis
+    from edge_portfolio.contracts import AnalysisInput
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    stages, calls = [], []
+    async def model(payload):
+        if stages[-1] != 'question':
+            raise RuntimeError('REPORT_RECOVERED')
+        calls.append(payload)
+        content = '{' if len(calls) == 1 else '{}' if len(calls) == 2 else json.dumps({**final_payload()['question'], 'decision': {}})
+        return {'choices': [{'finish_reason': 'length' if len(calls) == 1 and format_failure == 'truncated' else 'stop',
+                             'message': {'role': 'assistant', 'content': content}}]}
+    with pytest.raises(RuntimeError, match='REPORT_RECOVERED'):
+        await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 100}],
+            horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=Evidence())
+    assert len(calls) == 3
+
+
+async def test_plain_json_business_errors_reach_existing_report_validation():
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200,
+        json={'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}))) as client:
+        result = await structured_call(client, 'test-key', {'tools': [], 'messages': []}, Section)
+    with pytest.raises(ValueError):
+        Section.model_validate_json(result['choices'][0]['message']['content'])
