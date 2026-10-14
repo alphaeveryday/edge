@@ -99,11 +99,13 @@ def test_duplicate_allocation_and_fabricated_evidence_fail():
     with pytest.raises(ValueError, match='passage'): publish(raw)
 
 
-def test_bullets_have_bounded_count_and_one_sentence_not_multiple_paragraphs():
-    for paragraphs in [['설명'] * 2, ['설명'] * 6, ['첫 문장이에요. 두 번째 문장이에요.'] * 3]:
+def test_bullets_have_bounded_count_without_rejecting_valid_multi_sentence_explanations():
+    for paragraphs in [['설명'] * 2, ['설명'] * 6, ['설명' * 100] * 3]:
         with pytest.raises(ValueError): Section.model_validate({**section(), 'paragraphs': paragraphs})
     assert len(Section.model_validate(section()).paragraphs) == 3
     assert search_etfs('VOO')[0]['instrument_id'] == 'US:VOO'
+    paragraphs = ['현재 구성은 유지해도 됩니다. 추가 투자는 분산에 우선 배치하세요.'] * 3
+    assert Section.model_validate({**section(), 'paragraphs': paragraphs}).paragraphs == paragraphs
 
 
 def test_sentence_boundary_preserves_etf_initialisms_and_decimal_values():
