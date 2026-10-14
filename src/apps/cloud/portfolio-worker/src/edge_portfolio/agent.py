@@ -261,9 +261,20 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
                 model_tools = TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
                 tool_choice = 'none' if finalizing else 'auto'
-                if finalizing and role == 'portfolio' and decision.kind != 'scenario' and optimizer.result is None:
-                    model_tools, tool_choice = [TOOLS[0], OPTIMIZER_TOOL], 'auto'
-                    messages.append({'role': 'user', 'content': '최종 답변에 필요한 후보 비교가 아직 없습니다. 등록 ETF 확인과 optimize_portfolios만 수행해 후보 비교를 먼저 완료하세요.'})
+                research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
+                research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
+                source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
+                required_tools = []
+                if finalizing and role == 'portfolio' and decision.kind != 'scenario':
+                    if optimizer.result is None:
+                        required_tools.extend([TOOLS[0], OPTIMIZER_TOOL])
+                    if not evidence.sources and not source_free_allowed:
+                        required_tools.extend(TOOLS[1:])
+                if finalizing and role != 'question' and (decision.kind == 'scenario' or decision.scenario_requested) and scenario_result is None:
+                    required_tools.append(SCENARIO_TOOL)
+                if required_tools:
+                    model_tools, tool_choice = required_tools, 'auto'
+                    messages.append({'role': 'user', 'content': '답변에 필수인 후보 비교·최소 출처·요청 계산 중 아직 수행하지 않은 작업만 남았습니다. 허용된 필수 도구를 완료한 뒤 현재 역할의 JSON을 작성하세요. 추가적인 부가 자료 조사는 종료합니다.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
                 limit_reason = 'MODEL_CALL_BUDGET' if calls > MAX_MODEL_CALLS else 'MODEL_CONTEXT_BUDGET' if context_bytes > MAX_CONTEXT_BYTES else None
                 if limit_reason:
@@ -436,9 +447,6 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
-                    research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
-                    research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
-                    source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_recommendation, retain_research

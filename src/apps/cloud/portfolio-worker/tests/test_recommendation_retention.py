@@ -118,7 +118,7 @@ async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_searc
             assert result['completion']['status'] == 'needs_input'
 
 
-@pytest.mark.parametrize('exhaustion', ['context', 'earlier_role', 'final_tools', 'prerequisite'])
+@pytest.mark.parametrize('exhaustion', ['context', 'earlier_role', 'final_tools', 'prerequisite', 'source', 'scenario'])
 async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypatch, exhaustion):
     import json
     from edge_portfolio.agent import run_analysis
@@ -136,10 +136,27 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', CandidateSearch)
     async def enrich(*_): pass
     monkeypatch.setattr('edge_portfolio.agent.enrich_report', enrich)
+    evidence = Evidence()
+    if exhaustion == 'source':
+        evidence.sources = []
+        async def fetch_source(*_):
+            evidence.sources = Evidence.sources
+            return Evidence.sources[0]
+        evidence.call = fetch_source
     stages, calls = [], []
     async def model(payload):
         role = stages[-1]
         calls.append(role)
+        if exhaustion == 'source' and role == 'portfolio' and payload['tool_choice'] == 'auto':
+            names = {tool['function']['name'] for tool in payload['tools']}
+            name = 'fetch_source' if names == {'search_sources', 'fetch_source'} else 'search_etfs'
+            return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': str(len(calls)), 'type': 'function', 'function': {'name': name, 'arguments': '{"query":"VOO"}'}}]}}]}
+        if exhaustion == 'scenario' and role == 'opinion' and payload['tool_choice'] == 'auto':
+            names = {tool['function']['name'] for tool in payload['tools']}
+            name = 'calculate_scenarios' if names == {'calculate_scenarios'} else 'search_etfs'
+            return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': str(len(calls)), 'type': 'function', 'function': {'name': name, 'arguments': '{}' if name == 'calculate_scenarios' else '{"query":"VOO"}'}}]}}]}
         if exhaustion == 'prerequisite' and role == 'portfolio' and payload['tool_choice'] == 'auto':
             names = {tool['function']['name'] for tool in payload['tools']}
             name = 'optimize_portfolios' if names == {'search_etfs', 'optimize_portfolios'} else 'search_etfs'
@@ -149,13 +166,15 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
             return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
                 {'id': str(len(calls)), 'type': 'function', 'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO"}'}}]}}]}
         content = final_payload() if role == 'opinion' else final_payload()[role]
-        if role == 'question': content['decision'] = {}
+        if role == 'question':
+            content['decision'] = {'scenario_requested': exhaustion == 'scenario'}
+            if exhaustion == 'source': content['evidence'] = []
         if role == 'opinion':
             content['selected_candidate_id'] = 'candidate-1'
             if exhaustion == 'context': monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 100}],
-        horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=Evidence())
+        horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=evidence)
     assert result['recommendation'] is not None
     assert result['completion']['status'] == 'partial'
     assert len(calls) <= 24
@@ -163,3 +182,5 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
         assert result['diagnostics']['termination_reason'] == 'MODEL_CONTEXT_BUDGET_WITH_REPORT'
     else:
         assert calls.index('opinion') <= 21
+    if exhaustion == 'scenario':
+        assert result['scenarios']['status'] == 'available'
