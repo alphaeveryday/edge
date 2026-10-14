@@ -478,6 +478,36 @@ test('🔴 R10 — 새 단계에서는 트리거 → 분석 요청, 분석 요�
   assert.equal(v[0].target, '장중 트리거 → 분석 요청');
 });
 
+test('🔴 R10 — 아직 판정할 수 없는 트리거는 손실에 넣지 않는다 (장중 내내 P0 가 서던 자리)', () => {
+  /* 장중의 형상이다: 트리거 100 가운데 요청 90, 분석 행 60. 요청이 없는 10 가운데 7건, 분석 행이
+   * 없는 30 가운데 25건은 발화한 지 유예 시간이 안 지났다 — 자리를 기다리거나 방금 발화한 건이다.
+   * 차이를 그대로 손실로 세면 분석이 도는 내내 P0 가 선다. */
+  const f = emptyFacts();
+  f.chain = v2Chain({ fired: 100, req: 90, start: 60, done: 50, pub: 50 });
+  f.chain.stages[0].pending = 7;
+  f.chain.stages[1].pending = 25;
+  const v = hits(f, 'R10');
+  /* 손실은 판정 가능한 것만이다: 100−90−7 = 3, 90−60−25 = 5 */
+  assert.deepEqual(v.map((x) => [x.targetId, x.metric, x.sev]), [
+    ['intraday:c.req', 3, 'P0'],
+    ['intraday:c.start', 5, 'P0'],
+  ]);
+  assert.match(v[1].why, /아직 판정할 수 없는 25건은 세지 않았다/);
+
+  /* 차이가 전부 판정 불가면 위반이 없다 — 그리고 그건 **평가된** 조용함이다(못 돎이 아니다) */
+  f.chain.stages[0].pending = 10;
+  f.chain.stages[1].pending = 30;
+  assert.equal(hits(f, 'R10').length, 0, '진행 중일 수 있는 건을 손실로 세웠다');
+  const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R10')!;
+  assert.equal(rr.evaluated, true);
+  /* 판정에서 뺀 건수를 밝힌다 — 위반 0건이 "전부 도달했다"로 읽히면 안 된다 */
+  assert.match(rr.note ?? '', /40건은 아직 판정하지 않았다/);
+
+  /* 수가 없는 응답(옛 API)은 종전대로 차이 전부가 손실이다 */
+  f.chain = v2Chain({ fired: 100, req: 90, start: 60, done: 50, pub: 50 });
+  assert.deepEqual(hits(f, 'R10').map((x) => x.metric), [10, 30]);
+});
+
 test('🔴 R10 — 분석 시작 → 완료, 완료 → 게시의 감소로는 손실을 세우지 않는다', () => {
   /* 분석 시작 → 완료의 감소는 실패했거나 진행 중인 분석이다 — 실패는 R15 가 맡고 진행 중은 실패가
    * 아니다. 완료 → 게시의 감소는 고른 항목이 없어 게시하지 않은 분석이다(설계). 이 둘을 손실로

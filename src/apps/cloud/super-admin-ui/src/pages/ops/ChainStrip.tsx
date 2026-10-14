@@ -58,7 +58,11 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
         const prevI = i === 0 ? feeds[1]?.v : S[i - 1].intraday;
         /* 관측 불가 단계에는 감소분을 그리지 않는다 — 그 0 은 실측이 아니라, 빼면 없는 손실이 선다 */
         const lostB = !s.blind && prevB != null && s.batch != null && s.batch < prevB ? prevB - s.batch : 0;
-        const lostI = !s.blind && prevI != null && s.intraday != null && s.intraday < prevI ? prevI - s.intraday : 0;
+        /* 아직 판정할 수 없는 건(ALPHA-1309)은 감소분에서 뺀다 — 진행 중일 수 있는 건을 사라진 것으로
+         * 그리지 않는다. 그 수는 화면이 띠 옆에 따로 적는다. */
+        const heldI = s.pending ?? 0;
+        const lostI =
+          !s.blind && prevI != null && s.intraday != null && s.intraday + heldI < prevI ? prevI - s.intraday - heldI : 0;
         return (
           <div key={s.id} style={{ display: 'contents' }}>
             {/* 감소분은 그 손실이 난 단계 **앞**에 둔다 — 뒤에 두면 어느 단계에서 사라졌는지 오독된다 */}
@@ -80,7 +84,8 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
                 (s.note ? `\n${s.note}` : '') +
                 (s.blind ? '\n관측 불가 — 이 단계를 셀 쪽이 없다(0이 아니다)' : '') +
                 (s.batch_na ? '\n배치 칸은 대상 아님 — 배치 트리거는 새 분석 엔진이 소비하지 않는다' : '') +
-                (s.shown_only ? '\n이 단계로의 감소는 손실로 판정하지 않는다(R10 대상 아님)' : '')
+                (s.shown_only ? '\n이 단계로의 감소는 손실로 판정하지 않는다(R10 대상 아님)' : '') +
+                (s.pending ? `\n아직 판정하지 않은 트리거 ${s.pending}건 — 발화한 지 유예 시간이 안 지났다` : '')
               }
             >
               {s.blind ? (

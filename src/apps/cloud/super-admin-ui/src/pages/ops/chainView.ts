@@ -22,7 +22,19 @@ export function intradayLostAtEntry(chain: Facts['chain']): boolean {
   const observed = chain.stages[0]?.intraday;
   /* 입구 단계가 관측 불가면 **거짓**이다 — 그 0 은 "하나도 안 이어졌다"가 아니라 셀 쪽이 없다 */
   if (chain.stages[0]?.blind) return false;
-  return Number.isFinite(fired) && (fired as number) > 0 && observed === 0;
+  /* 전부가 아직 판정할 수 없는 건이면 **거짓**이다(ALPHA-1309) — 방금 발화해 요청이 수용되기 전일
+   * 수 있다. 판정 가능한 트리거가 하나라도 요청 없이 남았을 때만 참이다. */
+  const pending = chain.stages[0]?.pending ?? 0;
+  return Number.isFinite(fired) && (fired as number) > pending && observed === 0;
+}
+
+/**
+ * 아직 판정할 수 없는 트리거 수(ALPHA-1309) — 발화한 지 유예 시간이 안 지나, 다음 단계에 못 간
+ * 것이 손실인지 진행 중인지 가를 수 없는 건이다. 단계별 수는 서로 겹치지 않아(요청 전 / 요청은
+ * 됐고 분석 시작 전) 더하면 트리거 수다. 흐름 화면이 이 수를 띠 옆에 한 줄로 적는다.
+ */
+export function pendingTriggers(chain: Facts['chain']): number {
+  return (chain?.stages ?? []).reduce((n, s) => n + (Number.isFinite(s.pending) ? (s.pending as number) : 0), 0);
 }
 
 /**

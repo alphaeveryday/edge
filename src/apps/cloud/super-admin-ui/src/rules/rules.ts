@@ -565,11 +565,14 @@ export const RULES: Rule[] = [
     note: (f) => {
       const seen = (['batch', 'intraday'] as const).filter((src) => chainPoints(f, src) >= 2);
       if (seen.length === 2) return null;
+      /* 판정에서 뺀 건수를 밝힌다(ALPHA-1309) — 위반 0건이 "전부 도달했다"로 읽히면 안 된다 */
+      const pending = (f.chain?.stages ?? []).reduce((n, s) => n + (Number.isFinite(s.pending) ? (s.pending as number) : 0), 0);
+      const held = pending > 0 ? ` 발화한 지 유예 시간이 안 지난 ${pending}건은 아직 판정하지 않았다.` : '';
       const label = (src: string) => (src === 'batch' ? '배치' : '장중');
       /* 배치 갈래가 **대상이 아닌** 것은 비교를 못 한 것과 다르다(ALPHA-1296) — 배치 트리거는 새 분석
        * 엔진이 소비하지 않는다. "점이 모자라 비교가 없었다"고 쓰면 계측 공백으로 읽힌다. */
       if (seen.length === 1 && seen[0] === 'intraday' && (f.chain?.stages ?? []).some((s) => s.batch_na)) {
-        return '장중 갈래만 비교했다 — 배치 트리거는 새 분석 엔진의 대상이 아니다. 분석 시작 뒤의 감소(실패·진행 중·미게시)는 이 규칙이 판정하지 않는다';
+        return `장중 갈래만 비교했다 — 배치 트리거는 새 분석 엔진의 대상이 아니다. 분석 시작 뒤의 감소(실패·진행 중·미게시)는 이 규칙이 판정하지 않는다.${held}`;
       }
       return `비교한 갈래 ${seen.map(label).join('·') || '없음'} — 나머지 갈래는 점이 2개 미만이라 비교 자체가 없었다(위반 0건이 "손실 없음"을 뜻하지 않는다)`;
     },
@@ -595,7 +598,11 @@ export const RULES: Rule[] = [
            * 갈려 "평가됨 · 위반 0"이 선다 — 이 파일에서 두 번 난 바로 그 갈림이다. */
           if (!Number.isFinite(s[src])) return;
           const v = s[src] as number;
-          if (prev != null && v < prev) {
+          /* 아직 판정할 수 없는 트리거(ALPHA-1309)는 손실이 아니다 — 발화한 지 유예 시간이 안 지나
+           * 진행 중일 수 있다. 앞 단계와의 차이에서 그 수를 뺀 것만 손실이다. 판정 불가는 장중 갈래의
+           * 수다(배치 갈래는 새 분석 엔진의 대상이 아니라 여기 오지 않는다). */
+          const pending = src === 'intraday' && Number.isFinite(s.pending) ? (s.pending as number) : 0;
+          if (prev != null && v + pending < prev) {
             out.push({
               /* 대상은 어느 인접 단계에서 줄었는가다. `batch:c.res` 는 앵커용 id 라 targetId 로 내린다.
                * 세션 축과 **같은 합성**이라 같은 조각 가드를 탄다 — 단계 id 가 비면 `batch:` 라는
@@ -603,9 +610,11 @@ export const RULES: Rule[] = [
               target: `${prevLabel} → ${s.label}`,
               targetId: compose(':', src, s.id),
               title: `${prevLabel} → ${s.label}`,
-              metric: prev - v,
+              metric: prev - v - pending,
               unit: '건',
-              why: `${prev} → ${v} 로 줄었다 — 설계된 감소가 아니다`,
+              why:
+                `${prev} → ${v} 로 줄었다 — 설계된 감소가 아니다` +
+                (pending > 0 ? ` (아직 판정할 수 없는 ${pending}건은 세지 않았다)` : ''),
               src,
               evidence: '산출 체인 인접 단계 비교',
               drill: ['chain', 'chain-' + s.id],

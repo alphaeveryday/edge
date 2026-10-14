@@ -200,6 +200,7 @@ const optionalBool: Check = (v) => v === undefined || bool(v);
 const count: Check = (v) => Number.isSafeInteger(v) && (v as number) >= 0;
 const nullableCount: Check = (v) => v === null || count(v);
 const optionalNullableCount: Check = (v) => v === undefined || nullableCount(v);
+const optionalCount: Check = (v) => v === undefined || count(v);
 /** 기준값 — 짝수 표본의 중앙값이라 소수가 정상이다. */
 const ratio: Check = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const nullableRatio: Check = (v) => v === null || ratio(v);
@@ -255,6 +256,7 @@ export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
 /* 새 분석 엔진의 단계(ALPHA-1296). 배치 칸만 `null` 을 받는다 — "대상 아님"이지 "못 셌다"가 아니다. */
 export const ANALYSIS_STAGE_FIELDS: Record<string, Check> = {
   id: text, label: text, batch: nullableCount, intraday: count, src: text, blind: optionalBool,
+  pending: optionalCount,
 };
 /* R10 이 판정하지 않고 수만 보여 주는 단계(ALPHA-1296). 분석 시작 → 완료의 감소는 실패·진행 중이고
  * (실패는 R15 가 맡는다) 완료 → 게시의 감소는 설계다(고른 항목이 없으면 게시되지 않는다). */
@@ -497,6 +499,8 @@ function toFacts(dto: ConsoleFactsDto): Facts {
               /* 배치 칸의 `null` 은 "대상 아님"이다 — 집계 없음과 가르려고 표시를 따로 싣는다 */
               ...(s.batch === null ? { batch_na: true } : {}),
               ...(SHOWN_ONLY_STAGES.has(s.id) ? { shown_only: true } : {}),
+              /* 0 과 부재(옛 API)를 같은 형상으로 둔다 — 있을 때만 싣는다 */
+              ...(s.pending ? { pending: s.pending } : {}),
             })),
           },
         }
