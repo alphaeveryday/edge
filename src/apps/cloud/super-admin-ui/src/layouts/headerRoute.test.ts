@@ -191,13 +191,13 @@ test('모르는 경로는 이름을 지어내지 않는다', () => {
   assert.equal(r.title, '');
 });
 
-test('🔴 옛 설명 엔진 화면(분석 목록·종목)은 맨 위에 옛 기록이라는 안내와 흐름 화면 링크를 둔다', () => {
+test('🔴 옛 설명 엔진 화면(분석 목록·종목·상세)은 맨 위에 옛 기록이라는 안내와 흐름 화면 링크를 둔다', () => {
   /* 메뉴에서 뺀 대신 주소로 들어온 사람에게 무엇을 보고 있는지 밝힌다(ALPHA-1328). 화면 컴포넌트가
    * 안내를 그리는지를 소스로 잰다 — `.tsx` 는 import 할 수 없다. */
   const notice = readFileSync(new URL('../pages/_shared/LegacyEngineNotice.tsx', import.meta.url), 'utf8');
   assert.match(notice, /10-01까지의 옛 설명 엔진 기록입니다/);
   assert.match(notice, /to="\/ops\/chain\?focus=etf-ledger"/);
-  for (const page of ['AnalysesPage', 'AnalysisSymbolPage']) {
+  for (const page of ['AnalysesPage', 'AnalysisSymbolPage', 'AnalysisDetailPage']) {
     const src = readFileSync(new URL(`../pages/${page}.tsx`, import.meta.url), 'utf8');
     const exported = new RegExp(`export function ${page}\\(\\) \\{[\\s\\S]*?\\n\\}`).exec(src)?.[0] ?? '';
     assert.match(exported, /<LegacyEngineNotice \/>/, `${page}: 내보내는 화면이 안내를 그리지 않는다`);

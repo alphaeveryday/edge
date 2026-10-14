@@ -61,7 +61,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/impact/holdings` | 구성종목 결손 영향 (누락 ETF → 기준일 분석 지목 + 권장 조치 — ALPHA-686) |
 | `/analyses` | 가격 변동 분석 목록 (종목별 최신 / 분석 이력 두 보기 · 검색·상태·시장 필터). 옛 설명 엔진의 기록(10-01까지)이라 사이드 메뉴에서 뺐다 — 화면 위에 그 안내와 흐름 화면 ETF 표 링크가 있다(ALPHA-1328) |
 | `/analyses/symbol?market=&code=` | 종목 분석 이력 (최신 유효 설명 + 그 종목의 시도 전량 — ALPHA-738). 목록과 같은 안내가 위에 있다 |
-| `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴) |
+| `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴). 목록과 같은 안내가 위에 있다 |
 
 ⚠️ **종목 이력은 시장·코드를 경로가 아니라 쿼리로 받는다.** CloudFront 의 SPA fallback
 ([`spa-rewrite.js`](../../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
