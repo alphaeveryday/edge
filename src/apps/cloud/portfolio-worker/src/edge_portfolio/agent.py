@@ -285,6 +285,26 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if role == 'opinion' and accepted_final and accepted_final.recommendation and optimizer.result == accepted_search:
                         published = deepcopy(accepted_report)
                         sections = published['sections']
+                        if scenario_result is not None:
+                            published['scenarios'] = deepcopy(scenario_result)
+                        final = accepted_final
+                        if reconciliation_draft is not None:
+                            from .completion import retain_research
+                            try:
+                                candidate = retain_research(accepted_final.model_copy(deep=True, update={
+                                    'answers': reconciliation_draft.answers,
+                                    'evidence_coverage': reconciliation_draft.evidence_coverage}), accepted_final)
+                                assess_completion(candidate, request, decision, published, evidence.sources, context['as_of'])
+                            except ValueError:
+                                emit('research_draft_rejected', role=role, code='OUTPUT_CONTRACT')
+                            else:
+                                final = candidate
+                        published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
+                            considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
+                        if reconciliation_draft is not None or 'RECOMMENDATION_TEXT_RETAINED' in accepted_report['completion']['reasons']:
+                            published['completion']['reasons'].append('RECOMMENDATION_TEXT_RETAINED')
+                            if published['completion']['status'] != 'needs_input':
+                                published['completion']['status'] = 'partial'
                         termination_reason = limit_reason + '_WITH_REPORT'
                         break
                     raise ValueError(limit_reason)

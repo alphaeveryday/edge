@@ -118,7 +118,7 @@ async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_searc
             assert result['completion']['status'] == 'needs_input'
 
 
-@pytest.mark.parametrize('exhaustion', ['context', 'earlier_role', 'final_tools', 'prerequisite', 'source', 'scenario'])
+@pytest.mark.parametrize('exhaustion', ['context', 'draft_context', 'invalid_draft_context', 'oversized_draft_context', 'scenario_context', 'earlier_role', 'final_tools', 'prerequisite', 'source', 'scenario'])
 async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypatch, exhaustion):
     import json
     from edge_portfolio.agent import run_analysis
@@ -167,20 +167,38 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
                 {'id': str(len(calls)), 'type': 'function', 'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO"}'}}]}}]}
         content = final_payload() if role == 'opinion' else final_payload()[role]
         if role == 'question':
-            content['decision'] = {'scenario_requested': exhaustion == 'scenario'}
+            content['decision'] = {'scenario_requested': exhaustion in {'scenario', 'scenario_context'}}
             if exhaustion == 'source': content['evidence'] = []
         if role == 'opinion':
             content['selected_candidate_id'] = 'candidate-1'
             if exhaustion == 'context': monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
+            if exhaustion == 'oversized_draft_context':
+                offset = 0 if calls.count('opinion') == 1 else 200
+                content['evidence_coverage'] = [{'instrument_id': f'US:TEST{number}', 'field': 'fees', 'status': 'missing'}
+                    for number in range(offset, offset + 200)]
+            if calls.count('opinion') == 2 and 'draft_context' in exhaustion:
+                content.update(recommendation=None, withheld_reason='missing_data', answers=[{
+                    'question_index': 2 if exhaustion == 'invalid_draft_context' else 1,
+                    'status': 'needs_input', 'answer': '실제 매수 금액 계산에는 납입 금액이 필요합니다.', 'missing': ['납입 금액']}])
+                monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
+            if calls.count('opinion') == 2 and exhaustion == 'scenario_context':
+                monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
+                return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+                    {'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': '{}'}}]}}]}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 100}],
-        horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=evidence)
+        horizon='10년 이상', question='납입할 때의 매수 금액을 알려주세요.' if 'draft_context' in exhaustion else ''), 'test', stages.append, model_call=model, evidence=evidence)
     assert result['recommendation'] is not None
-    assert result['completion']['status'] == 'partial'
+    assert result['completion']['status'] == ('needs_input' if exhaustion == 'draft_context' else 'partial')
     assert len(calls) <= 24
-    if exhaustion == 'context':
+    if 'context' in exhaustion:
         assert result['diagnostics']['termination_reason'] == 'MODEL_CONTEXT_BUDGET_WITH_REPORT'
     else:
         assert calls.index('opinion') <= 21
-    if exhaustion == 'scenario':
+    if exhaustion in {'scenario', 'scenario_context'}:
         assert result['scenarios']['status'] == 'available'
+    if exhaustion == 'draft_context':
+        assert result['completion']['tasks'][0]['missing'] == ['납입 금액']
+        assert 'RECOMMENDATION_TEXT_RETAINED' in result['completion']['reasons']
+    if exhaustion in {'invalid_draft_context', 'oversized_draft_context'}:
+        assert any(event['event'] == 'research_draft_rejected' for event in result['diagnostics']['events'])
