@@ -245,11 +245,14 @@ test('🔴 하루 안 누적 속성은 하루 여러 번 도는 레인의 데이
     'etf-daily': 1,   // 스케줄이 문자열 하나다(`schedule_expression`)
   };
   for (const [lane, n] of Object.entries(slotsPerDay)) assert.ok(n >= 1, `${lane}: 일정 정의를 못 읽었다`);
+  /* 아래 단언이 타입을 리터럴로 좁히므로 레인 이름으로 읽을 표를 먼저 떼어 둔다 */
+  const slotsOf = new Map(Object.entries(slotsPerDay));
   assert.deepEqual(slotsPerDay, { 'investor-intraday': 5, 'source-daily': 1, news: 2, disclosure: 1, 'etf-daily': 1 });
 
   const cumulative = ALL_DATASETS.filter((d) => d.rowsCumulativeWithinDay);
   for (const d of cumulative) {
-    assert.ok(d.lane && slotsPerDay[d.lane] >= 2, `${d.id}: 하루 ${d.lane ? slotsPerDay[d.lane] : '?'}회 도는 레인인데 누적 속성이 붙었다`);
+    const n = d.lane ? slotsOf.get(d.lane) ?? 0 : 0;
+    assert.ok(n >= 2, `${d.id}: 하루 ${n}회 도는 레인인데 누적 속성이 붙었다`);
   }
   /* 코드에서 누적으로 확인한 것은 장중 수급 하나다 — 뉴스는 수집 창이 겹치는 다른 형상이다 */
   assert.deepEqual(cumulative.map((d) => d.id), ['investor_flow_intraday']);

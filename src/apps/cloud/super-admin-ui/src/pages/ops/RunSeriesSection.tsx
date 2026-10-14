@@ -18,7 +18,8 @@ import { Info } from './shared';
 const GRID_DATASETS = ALL_DATASETS.filter((d) => d.inOpsGrid);
 
 const TIP = [
-  '점 하나가 실행 하나다. 하루에 여러 번 도는 데이터셋(뉴스·장중 수급)도 소요 시간·종료 상태는 실행마다 그린다.',
+  '점 하나가 실행 하나다. 하루에 여러 번 도는 데이터셋(뉴스·장중 수급)도 소요 시간·종료 상태는 실행마다 그린다. ' +
+    '예외는 장중 수급의 행 수 하나다 — 그 칸은 점 하나가 하루 하나다(아래).',
   '',
   '행 수 — 대표 작업(적재 단계의 첫 작업)이 원장에 적은 건수.',
   '장중 수급의 행 수는 실행마다 그날 그 시점까지의 누적이라, 하루 마지막 실행의 값을 하루 한 점으로 그린다. ' +
@@ -165,7 +166,7 @@ export function RunSeriesSection() {
       <div className="card-head">
         <span className="t-label">데이터셋별 실행 추이</span>
         <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-          {grid.data ? `최근 ${grid.data.days}일 · ` : ''}점 하나가 실행 하나입니다 · 판정은 하지 않습니다
+          {grid.data ? `최근 ${grid.data.days}일 · ` : ''}점 하나가 실행 하나입니다(장중 수급의 행 수는 하루 하나) · 판정은 하지 않습니다
           <Info tip={TIP} label="실행 추이 읽는 법" />
         </span>
       </div>
