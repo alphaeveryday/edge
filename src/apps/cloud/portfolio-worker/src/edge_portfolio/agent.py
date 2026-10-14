@@ -28,6 +28,7 @@ from .execution import execution_tool, resolve_funding, zero_funding_quote, TOOL
 from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status, research_inventory
+from .structured_output import structured_call
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -230,10 +231,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             client = await stack.enter_async_context(httpx.AsyncClient(timeout=90))
 
             async def model_call(payload):
-                response = await client.post("https://api.deepseek.com/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"}, json=payload)
-                response.raise_for_status()
-                return response.json()
+                return await structured_call(client, key, payload, schema)
 
         checkpoint()
         calls = 0

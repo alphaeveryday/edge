@@ -1,0 +1,81 @@
+"""The provider must constrain report shape before the application validates its meaning."""
+import json
+
+import httpx
+import pytest
+from jsonschema import Draft202012Validator
+
+from edge_portfolio.contracts import FinalReport, Section
+from edge_portfolio.decision import QuestionSection
+from edge_portfolio.structured_output import strict_schema, structured_call
+
+
+@pytest.mark.parametrize('model', [Section, QuestionSection, FinalReport])
+def test_provider_schema_retains_required_fields_and_references(model):
+    schema = strict_schema(model.model_json_schema())
+    Draft202012Validator.check_schema(schema)
+    def check(node):
+        if isinstance(node, dict):
+            assert not {'minItems', 'maxItems', 'minLength', 'maxLength', 'default', 'title'} & node.keys()
+            if node.get('type') == 'object':
+                assert set(node['required']) == set(node['properties'])
+                assert node['additionalProperties'] is False
+            for name in ('properties', '$defs'):
+                for value in node.get(name, {}).values():
+                    check(value)
+            for name in ('items', 'anyOf', 'allOf', 'oneOf'):
+                if name in node:
+                    check(node[name])
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+    check(schema)
+    assert schema['properties'].keys() == model.model_json_schema()['properties'].keys()
+    assert not Draft202012Validator(schema).is_valid({})
+
+
+async def test_report_is_forced_to_strict_tool_and_restored_to_existing_contract():
+    payload = {'model': 'deepseek-flash', 'messages': [{'role': 'user', 'content': 'finish'}],
+               'tools': [], 'tool_choice': 'none', 'response_format': {'type': 'json_object'}}
+    def handler(request):
+        assert str(request.url) == 'https://api.deepseek.com/beta/chat/completions'
+        body = json.loads(request.content)
+        assert 'response_format' not in body
+        assert body['tool_choice'] == {'type': 'function', 'function': {'name': 'submit_report'}}
+        function = body['tools'][-1]['function']
+        assert function['strict'] is True
+        assert 'paragraphs' in function['parameters']['required']
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'role': 'assistant', 'content': '', 'reasoning_content': 'done',
+            'tool_calls': [{'id': 'report', 'type': 'function', 'function': {
+                'name': 'submit_report', 'arguments': '{"paragraphs":["a","b","c"],"evidence":[],"limitations":[]}'}}]}}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await structured_call(client, 'test-key', payload, Section)
+    message = result['choices'][0]['message']
+    assert 'tool_calls' not in message
+    assert message['reasoning_content'] == 'done'
+    assert Section.model_validate_json(message['content']).paragraphs == ['a', 'b', 'c']
+    assert payload['tools'] == []  # Request history must not accumulate stage schemas.
+
+
+async def test_research_tools_remain_available_with_required_structured_submission():
+    def handler(request):
+        body = json.loads(request.content)
+        assert body['tool_choice'] == 'required'
+        assert [tool['function']['name'] for tool in body['tools']] == ['lookup', 'submit_report']
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'role': 'assistant', 'tool_calls': [{'id': 'lookup-1', 'type': 'function',
+            'function': {'name': 'lookup', 'arguments': '{"query":"VOO"}'}}]}}]})
+    payload = {'tools': [{'type': 'function', 'function': {'name': 'lookup', 'parameters': {
+        'type': 'object', 'properties': {'query': {'type': 'string'}}, 'required': ['query']}}}],
+        'tool_choice': 'auto', 'messages': []}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await structured_call(client, 'test-key', payload, QuestionSection)
+    assert result['choices'][0]['message']['tool_calls'][0]['id'] == 'lookup-1'
+
+
+async def test_unstructured_provider_response_is_not_silently_accepted():
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200,
+        json={'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}))) as client:
+        with pytest.raises(ValueError, match='STRUCTURED_OUTPUT_REQUIRED'):
+            await structured_call(client, 'test-key', {'tools': [], 'tool_choice': 'none', 'messages': []}, Section)
