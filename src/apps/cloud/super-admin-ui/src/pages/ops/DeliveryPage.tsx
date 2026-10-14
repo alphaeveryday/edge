@@ -18,8 +18,9 @@ export function DeliveryPage() {
   useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
   const b = q.facts.boundary;
-  /* 경계가 관측 불가인 날의 0 은 정합이 아니다(ALPHA-1293) — 0 으로 그리지 않는다. 0 이 아닌 수는
-   * 옛 설명 엔진 분의 실측이라 그대로 그린다. */
+  /* 경계가 관측 불가인 0 은 정합이 아니다(ALPHA-1293) — 0 으로 그리지 않는다. 0 이 아닌 수는 옛 설명
+   * 엔진 분의 실측이라 그대로 그린다. ⚠️ 관측 불가는 옛 API 에서만 온다 — 새 API 는 새 분석 엔진의
+   * 게시를 세서 그 표시가 없다(ALPHA-1326). */
   const boundaryCount = (n: number) => (b.blind && n === 0 ? <Absent kind="blind" /> : n);
   /* 🔴 `tenants.data` 존재만 보면 **stale 을 현재 값으로** 그린다 — react-query 는 에러에도
    * 직전 데이터를 남기므로, 값이 있다는 것이 "이번에 읽었다"를 뜻하지 않는다. 사실 축과 같은
@@ -48,7 +49,7 @@ export function DeliveryPage() {
           <div className="kpi-value">
             {b.blind && b.published_without_delivery === 0 ? <Absent kind="blind" /> : fmt(b.published_without_delivery)}
           </div>
-          <div className="kpi-sub">구조상 0이어야 함</div>
+          <div className="kpi-sub">0이어야 함</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">운영 테넌트</div>
@@ -81,13 +82,15 @@ export function DeliveryPage() {
         <div className="card-head">
           <span className="t-label">경계 정합 (R14)</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            Cloud 게시와 테넌트 발번은 같은 트랜잭션이라 어긋나면 구조 문제입니다
+            새 분석 엔진은 가격변동 분석을 게시한 뒤 같은 작업 안에서 테넌트에 전달합니다. 전망은
+            전달하지 않습니다
           </span>
         </div>
         {b.blind && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
-            이 검사는 옛 설명 엔진의 게시만 발번과 맞댑니다. 그 엔진이 지금 멈춰 있어, 새 분석
-            엔진의 게시·발번은 여기서 보지 못합니다 — 0건이 아니라 관측 불가입니다.
+            이 응답은 옛 설명 엔진의 게시만 발번과 맞댄 값입니다(새 분석 엔진을 세기 전의 API). 그
+            엔진이 멈춰 있어 새 분석 엔진의 게시·발번은 여기서 보지 못합니다 — 0건이 아니라 관측
+            불가입니다.
           </p>
         )}
         <table className="table">
@@ -102,7 +105,10 @@ export function DeliveryPage() {
             <tr id="b-pub">
               <td>Cloud 게시됐는데 미발번</td>
               <td className="num">{boundaryCount(b.published_without_delivery)}</td>
-              <td className="col-muted">같은 트랜잭션이라 구조상 0</td>
+              <td className="col-muted">
+                설계상 건너뛴 것(같은 ETF 의 더 늦은 분석이 이미 전달됨, 직전 게시를 그대로 물려받음)과
+                전달 대기 중인 것(단일 분석 워크플로의 시간 제한 안)은 뺍니다
+              </td>
             </tr>
             <tr>
               {/* 🔴 SEED 칩을 안 단다. 이 수는 **합계**이고 `seed_note` 는 그중 일부를 설명하는
@@ -113,7 +119,9 @@ export function DeliveryPage() {
               <td className="num" style={{ color: 'var(--warn)' }}>
                 {boundaryCount(b.delivery_now_nonpublished)}
               </td>
-              <td className="col-muted">{b.seed_note ?? '무효화 통지가 안 간 발번만 셉니다'}</td>
+              <td className="col-muted">
+                {b.seed_note ?? '회수 통지가 안 간 발번만 테넌트별로 셉니다. 전달된 적 없는 분석의 회수는 통지 대상이 아닙니다'}
+              </td>
             </tr>
             <tr>
               <td>소비 커서 행</td>
