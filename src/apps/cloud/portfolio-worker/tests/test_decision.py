@@ -36,6 +36,47 @@ def test_structured_account_selection_is_a_valid_customer_constraint_source():
     assert validate_decision(decision, req, {}) == decision
 
 
+@pytest.mark.parametrize('source', ['accounts: 일반 계좌', 'accounts": ["일반 계좌"]', '계좌를 일반 계좌로 입력했어요.'])
+def test_verified_account_selection_does_not_depend_on_model_source_format(source):
+    req = request(preferences={'accounts': ['일반 계좌']})
+    decision = Decision(constraints=[{'kind': 'accounts', 'accounts': ['일반 계좌'], 'source': source}])
+    result = validate_decision(decision, req, {})
+    assert result.constraints[0].source == '일반 계좌'
+    assert result.constraints[0].accounts == ['일반 계좌']
+
+
+def test_unselected_or_arbitrary_subset_accounts_still_need_customer_evidence():
+    req = request(preferences={'accounts': ['일반 계좌', 'ISA']})
+    for accounts, source in [(['IRP'], 'invented'), (['ISA'], 'invented'), (['ISA'], 'ISA')]:
+        decision = Decision(constraints=[{'kind': 'accounts', 'accounts': accounts, 'source': source}])
+        with pytest.raises(ValueError, match='CUSTOMER_CONSTRAINT_SOURCE'):
+            validate_decision(decision, req, {})
+
+
+def test_explicit_written_account_subset_is_preserved():
+    req = request(question='이번에는 ISA에서만 투자할게요.', preferences={'accounts': ['일반 계좌', 'ISA']})
+    decision = Decision(constraints=[{'kind': 'accounts', 'accounts': ['ISA'], 'source': req.question}])
+    assert validate_decision(decision, req, {}).constraints[0].accounts == ['ISA']
+
+
+async def test_later_roles_receive_the_repaired_full_customer_question():
+    import json
+    from edge_portfolio.agent import run_analysis
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    stages = []
+    original = '추천 비중을 알려주세요. 리밸런싱 금액도 알려주세요.'
+    async def model(payload):
+        if stages[-1] != 'question':
+            active = json.loads(payload['messages'][1]['content'])['active_decision']
+            assert active['questions'] == [original]
+            raise RuntimeError('CANONICAL_QUESTION_CHECKED')
+        content = {**final_payload()['question'], 'decision': {'questions': ['추천 비중을 알려주세요.']}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='CANONICAL_QUESTION_CHECKED'):
+        await run_analysis(request(question=original), 'test', stages.append, model_call=model, evidence=Evidence())
+
+
 def test_no_sell_with_unknown_holdings_is_unknown_and_does_not_become_cash():
     req = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO'}], input_mode='names',
         horizon='10년 이상', question='매도 금지')
