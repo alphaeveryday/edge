@@ -24,7 +24,7 @@ flowchart LR
 - [Anthropic: Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): 고정된 하위 작업은 prompt chaining과 단계별 코드 검증으로 처리한다. 네 역할은 독립 에이전트가 아니라 같은 대화의 순차 단계다. 서브에이전트·자유 라우팅·토론은 추가하지 않는다.
 - [AWS: Asynchronous communication](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-integrating-microservices/asynchronous.html): 접수 응답과 실제 실행을 분리하고 작업 ID로 상태를 조회한다. UI는 실패 시 조회 간격을 늘리고 새로고침 뒤 작업 ID를 복원한다.
 - [PostgreSQL SELECT / SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html): 큐의 원자적 claim을 위해 트랜잭션과 `FOR UPDATE SKIP LOCKED`를 사용한다. 기존 DB 의존 없이 전용 저장소 하나로 작업·결과를 관리한다. 초기 규모에 SQS와 별도 상태 저장소를 동시에 추가하지 않는다.
-- [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/): `deepseek-flash`, thinking enabled, effort low. 도구 대화에 필요한 `reasoning_content`는 메모리에서 전달하되 보고서·UI·관측 파일에 저장하지 않는다.
+- [DeepSeek strict 도구 호출](https://api-docs.deepseek.com/guides/tool_calls/): `deepseek-flash`의 beta 엔드포인트를 사용한다. 각 역할의 결과는 `strict: true`인 `submit_report`로 제출한다. 필수 도구 선택이 thinking mode와 함께 지원되지 않아 thinking을 비활성화한다. 자료 조사 도구의 선택 인자는 유지한다.
 - [Exa 공식 MCP](https://github.com/exa-labs/exa-mcp-server#authentication): endpoint `https://mcp.exa.ai/mcp`의 `web_search_exa`, `web_fetch_exa`만 사용한다. `EXA_API_KEY`를 해당 HTTPS 원본의 `x-api-key` 헤더로 전달한다. 운영 키는 Secrets Manager `edge/portfolio/runtime`에서 워커에만 주입하며 URL·모델 입력에 넣지 않는다. 인증 후에도 공급자 요금제의 호출 제한은 적용된다.
 
 ## 단일 에이전트의 실행 계약
@@ -65,7 +65,7 @@ flowchart LR
 - 현재 자료 상태를 매 모델 호출 전에 갱신한다. 아직 조회하지 않음과 실제 조회 실패를 구분하고 과거 가격 가용성을 미래 전망 부재와 혼동하지 않는다. 자료가 없으면 한계를 명시한 부분 분석을 허용하되 출처 없는 추천 평가를 만들지 않는다.
 - 자료 실패만으로 출처 없는 부분 분석을 허용하려면 서로 다른 URL 두 개 이상이 실패하고 발견된 미조회 URL도 없어야 한다. 같은 추천 구성을 보완하는 동안 생략된 질문 답변과 자료 항목은 이미 검증한 내용으로 유지하며 새로 명시한 내용은 다시 검증한다. 추천 구성이 바뀌면 이전 답을 자동으로 이월하지 않는다.
 - 웹 본문의 메뉴/오류 응답은 근거로 등록하지 않는다. 기본 24,000자, 확장 48,000자를 수집하고 저장된 문단을 24개씩 안정된 ID로 페이지 조회한다. 로컬 페이지 조회·캐시 재사용은 Exa 호출을 추가로 쓰지 않는다. `published_at`은 공급자의 발행 메타데이터이고 `claim_as_of`는 인용 문장에 드러난 사실 기준일이며 수집일로 대체하지 않는다. 추천 ETF의 구조·보유내역·보수 및 소득 목적의 분배 자료를 항목별로 기록한다. 서비스 검토 기준은 보유내역 90일, 보수/구조 365일, 분배 450일이며 날짜 미확인은 완료가 아니다. 이는 사실의 의미적 정확성 검증을 대신하지 않는다.
-- JSON 출력 모드와 서버 스키마 검증을 함께 사용한다. 잘린 응답은 도구 결과를 유지한 채 짧게 재작성하고 JSON 문법·스키마·업무 계약 오류를 구분한다. API 계약은 [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)과 [Exa 본문 도구](https://github.com/exa-labs/exa-mcp-server/blob/main/src/tools/webFetch.ts)를 확인했다.
+- 보고서 제출 도구의 스키마를 공급자에서 강제하고 서버의 업무 검증을 함께 사용한다. Pydantic 참조는 펼치고 모든 필드를 명시하도록 하며, 공급자가 지원하지 않는 길이·배열 개수 제한은 기존 서버 검증에 남긴다. 일반 텍스트 응답은 구조화 출력 성공으로 처리하지 않는다. 잘린 응답은 도구 결과를 유지한 채 짧게 재작성하고 JSON 문법·스키마·업무 계약 오류를 구분한다. API 계약은 [DeepSeek strict 도구 호출](https://api-docs.deepseek.com/guides/tool_calls/)과 [Exa 본문 도구](https://github.com/exa-labs/exa-mcp-server/blob/main/src/tools/webFetch.ts)를 확인했다.
 - 질문 단계에서도 로컬 `search_etfs`로 고객이 지정한 ETF의 등록 ID를 확인한다. 이 단계의 외부 자료 도구는 허용하지 않는다.
 - 질문 해석 단계는 의사결정 종류, 고객 목적 우선순위, 필수 제약, 추가 자금 원문, 확인할 입력을 별도 `decision`으로 반환한다. 원본 `input`과 함께 결과에 보존한다. 제약은 입력 원문을 인용하고 등록 종목 ID를 사용해야 한다. 종목 비중·제외/필수 종목·종목 수·계좌·상장시장·매도 금지는 코드로 검사하며 ETF 내부 노출 등 검증하지 못한 조건은 `unknown`이다. 최종 추천은 모든 필수 제약이 `pass`일 때만 발행한다. 모델의 자연어 요구 추출 자체가 완전하다는 보장은 아니며 추출 내용과 판정 근거를 함께 남긴다.
 - 보유 없는 신규 설계만 현금 기준으로 비교하며 차트에 “투자 전 현금”으로 표시한다. 비중을 모르는 기존 보유를 현금으로 대체하지 않는다. 추가 자금 인용만으로 매도 금지 검사를 완화하지 않으며 실제 실행 가능성 계산이 필요하다.
