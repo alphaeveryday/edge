@@ -171,6 +171,12 @@ export interface ChainStage {
    * 항목이 없으면 게시되지 않는 것이 설계다)가 그렇다.
    */
   shown_only?: boolean;
+  /**
+   * 이 단계에 **아직 판정할 수 없는** 장중 트리거 수(ALPHA-1309) — 앞 단계에 도달한 지 유예 시간(단일 분석
+   * 워크플로의 전체 시간 제한)이 안 지나 진행 중일 수 있는 건이다. `intraday`(도달)에는 들어 있지
+   * 않다. R10 은 앞 단계와의 차이에서 이 수를 뺀 것만 손실로 본다. 없으면 0 이다.
+   */
+  pending?: number;
 }
 
 export interface QueueFact {

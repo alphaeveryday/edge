@@ -231,16 +231,21 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * <p>{@code batch} 는 <b>항상 null</b> 이다 — 배치 트리거는 v2 의 대상이 아니다(0 이 아니다).
 	 * {@code blind} 가 참이면 {@code intraday} 의 0 은 실측이 아니다(v2 가 아직 없던 날).
 	 *
+	 * <p>{@code pending} 은 이 단계에 <b>아직 판정할 수 없는</b> 트리거 수다(ALPHA-1309) — 앞 단계에는
+	 * 도달했고 이 단계에는 못 갔는데 앞 단계에 도달한 지 유예 시간(단일 분석 워크플로의 전체 시간 제한)이 안
+	 * 지났다. {@code intraday}(도달)에는 들어 있지 않다. 손실은 앞 단계와의 차이에서 이 수를 뺀
+	 * 것이다. 분석 완료·게시는 항상 0 이다.
+	 *
 	 * <p>⚠️ 옛 단계 목록({@code stages})과 <b>따로</b> 낸다. 같은 목록에 넣으면 그 목록만 아는 옛
 	 * 화면이 "분석 시작 → 완료" 같은 설계된 감소와 배치 칸의 0 을 손실로 읽는다.
 	 */
 	public record AnalysisStageResponse(String id, String label, Long batch, long intraday,
-			String src, boolean blind) {
+			String src, boolean blind, long pending) {
 
 		public static AnalysisStageResponse from(
 				com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage s) {
 			return new AnalysisStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src(),
-					s.blind());
+					s.blind(), s.pending());
 		}
 	}
 

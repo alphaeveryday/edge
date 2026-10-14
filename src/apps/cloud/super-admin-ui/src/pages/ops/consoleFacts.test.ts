@@ -552,7 +552,7 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.boundary, BOUNDARY_FIELDS, 'boundary', ['blind']);
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
   both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
-  both(w.chain!.analysisStages![0], ANALYSIS_STAGE_FIELDS, 'chain.analysisStages', ['blind']);
+  both(w.chain!.analysisStages![0], ANALYSIS_STAGE_FIELDS, 'chain.analysisStages', ['blind', 'pending']);
   both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
   both(w.meta, META_FIELDS, 'meta');
 });
@@ -694,6 +694,28 @@ test('새 분석 엔진의 단계 — 배치 칸의 null 은 대상 아님이고
     ['객체', (w: ConsoleFactsDto) => { (w.chain as unknown as { analysisStages: unknown }).analysisStages = {}; }],
   ] as const) {
     assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('아직 판정할 수 없는 트리거 수는 있을 때만 싣는다 — 없는 응답(옛 API)은 0 과 같다', () => {
+  /* 옛 서버는 `pending` 을 안 보낸다. 그때 R10 은 종전대로(차이 전부를 손실로) 판정한다. */
+  const old = parseFacts(WIRE());
+  assert.equal(old.ok, true, old.ok ? '' : old.reason);
+  if (old.ok) assert.ok(old.facts.chain!.stages.every((s) => !('pending' in s)), '없는 수를 만들어 냈다');
+
+  const w = WIRE();
+  w.chain!.analysisStages![0].pending = 9;
+  w.chain!.analysisStages![1].pending = 0;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.equal(r.facts.chain!.stages[0].pending, 9);
+    assert.ok(!('pending' in r.facts.chain!.stages[1]), '0 과 부재가 다른 형상이 됐다');
+  }
+  for (const bad of [-1, 1.5, '9', null]) {
+    const b = WIRE() as unknown as { chain: { analysisStages: { pending: unknown }[] } };
+    b.chain.analysisStages[0].pending = bad;
+    assert.equal(parseFacts(b).ok, false, `pending: ${String(bad)} 을 통과시켰다`);
   }
 });
 

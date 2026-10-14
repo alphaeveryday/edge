@@ -137,9 +137,20 @@ public interface ConsoleFactsRepository {
 	 * <p>{@code blind} 는 이 단계를 셀 수 없다는 뜻이다 — 그날 코호트에 v2 요청이 하나도 없고 첫 v2
 	 * 요청이 조회일보다 뒤일 때(또는 v2 요청이 아예 없을 때)다. 그때 {@code intraday} 의 0 은 실측이
 	 * 아니다.
+	 *
+	 * <p>{@code pending} 은 <b>아직 판정할 수 없는 트리거 수</b>다(ALPHA-1309) — 앞 단계에는 도달했고
+	 * 이 단계에는 아직 못 갔는데, 앞 단계에 도달한 지 유예 시간이 안 지난 트리거다. 그 트리거는 {@code intraday}
+	 * (도달)에 들어 있지 않고 손실도 아니다. 소비자는 앞 단계와의 차이에서 이 수를 뺀 것만 손실로
+	 * 읽는다. 판정하지 않는 단계(분석 완료·게시)는 항상 0 이다.
 	 */
 	record AnalysisStage(String id, String label, String src, Long batch, long intraday,
-			boolean blind) {
+			boolean blind, long pending) {
+
+		/** 판정 불가 트리거 없이 만든다 — 그 수는 0 이다. */
+		public AnalysisStage(String id, String label, String src, Long batch, long intraday,
+				boolean blind) {
+			this(id, label, src, batch, intraday, blind, 0L);
+		}
 	}
 
 	/** 체인의 입력 한 갈래. {@code unit} 이 갈래마다 다르다 — 배치는 ETF, 장중은 발화 건이다. */

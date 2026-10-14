@@ -853,6 +853,17 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 없으므로 {@code created_at} 하한으로 훑는 범위를 좁힌다(상한은 없다 — 늦게 수용된 요청도 그
 	 * 트리거의 자손이다). {@code data_source = 'database'} 인 분석만 센다.
 	 *
+	 * <p><b>아직 판정할 수 없는 트리거</b>(ALPHA-1309): 유예 시간 안에 있어 다음 단계에 못 간 것이
+	 * 손실도 도달도 아닌 트리거다. {@code req_pending} 은 트리거 행이 만들어진 지({@code created_at})
+	 * 유예 시간이 안 지났고 요청이 아직 수용되지 않은 트리거, {@code started_pending} 은 요청이 수용된
+	 * 지({@code accepted_at}) 유예 시간이 안 지났고 분석 행이 아직 없는 트리거다. 이미 도달한 트리거는
+	 * 유예 안이어도 도달로 센다. 시각은 DB 시각({@code now()} — 트랜잭션 시작 시각이라 한 조회 안에서
+	 * 같다)과 비교하고 조회일과 무관하다(어제 저녁의 트리거는 자정 뒤에도 유예 안일 수 있다).
+	 *
+	 * <p>⚠️ 유예의 기점은 창 시각({@code window_start})이 <b>아니다</b>. 워크플로의 시간 제한은 수용
+	 * 시점부터 흐르고, 밀린 큐나 복구 경로는 오래된 창의 트리거를 뒤늦게 만들고 수용한다 — 창 시각으로
+	 * 재면 그런 건이 돌고 있는 동안 손실로 세어진다(봇 리뷰가 짚었다).
+	 *
 	 * <p>🔴 <b>요청은 수용된 것만 센다</b>({@code accepted_at IS NOT NULL}). v2 는 워크플로를 띄우기
 	 * 전에 요청 행을 먼저 예약하고, 수용이 확인돼야 {@code accepted_at} 을 채운다
 	 * ({@code storage/requests.py}). 예약만 된 행까지 세면 워크플로가 뜨지도 않은 건이 "요청은 됐는데
@@ -861,12 +872,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 */
 	private static final String ANALYSIS_CHAIN_SQL = """
 			WITH intraday_trigger AS (
-			    SELECT trigger_id
+			    SELECT trigger_id, created_at
 			      FROM minute_price_trigger
 			     WHERE trigger_kind = 'FIRE'
 			       AND window_start >= ? AND window_start < ?
 			), reached AS (
 			    SELECT t.trigger_id,
+			           t.created_at > now() - (? * interval '1 second') AS young,
+			           COALESCE(bool_or(q.accepted_at > now() - (? * interval '1 second')), false)
+			               AS request_young,
 			           bool_or(q.analysis_id IS NOT NULL) AS requested,
 			           bool_or(a.analysis_id IS NOT NULL) AS started,
 			           COALESCE(bool_or(a.status = 'completed'), false) AS completed,
@@ -879,10 +893,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			            AND q.input_json::jsonb -> 'source' ->> 'trigger_id' = t.trigger_id
 			      LEFT JOIN movement_analyses a
 			             ON a.analysis_id = q.analysis_id AND a.data_source = 'database'
-			     GROUP BY t.trigger_id
+			     GROUP BY t.trigger_id, t.created_at
 			)
 			SELECT count(*) FILTER (WHERE requested) AS req,
 			       count(*) FILTER (WHERE started) AS started,
+			       count(*) FILTER (WHERE young AND NOT requested) AS req_pending,
+			       count(*) FILTER (WHERE request_young AND NOT started) AS started_pending,
 			       count(*) FILTER (WHERE completed) AS completed,
 			       count(*) FILTER (WHERE published) AS published,
 			       (SELECT min((created_at AT TIME ZONE 'Asia/Seoul')::date)
@@ -891,12 +907,45 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			  FROM reached
 			""";
 
+	/**
+	 * 아직 판정할 수 없는 트리거의 유예 시간(초) — 앞 단계에 도달한 지 이만큼 안 지난 트리거가 다음
+	 * 단계에 못 갔으면 손실이 아니라 <b>판정 불가</b>로 센다(ALPHA-1309).
+	 *
+	 * <p><b>값의 출처</b>: 단일 분석 워크플로의 전체 시간 제한이다
+	 * ({@code infra/terraform/modules/analysis-v2/single_analysis.asl.json} 의 최상위
+	 * {@code "TimeoutSeconds": 28800}). 요청 하나가 분석 행 없이 머물 수 있는 가장 긴 시간이 이 값이다:
+	 * <ul>
+	 *   <li>자리 대기({@code Acquire → Capacity → Wait 30초 → Acquire})에는 횟수 상한이 없다 — 같은
+	 *       종류·같은 ETF 는 한 번에 하나만 돌아, 앞 분석이 끝날 때까지 기다린다. 이 대기를 끊는 것은
+	 *       워크플로 전체 시간 제한뿐이다.</li>
+	 *   <li>분석 작업({@code Analyze})은 재시도 없이 한 번이고 1,100초에 끊긴다. 분석 행은 그 작업
+	 *       안에서 원천 조회 뒤에 생긴다.</li>
+	 * </ul>
+	 * 시간 제한이 지나면 실행이 끝나 그 뒤로는 분석 행이 생길 수 없다. 같은 요청이 다시 전달돼도
+	 * 이미 있는 실행을 새로 띄우지 않는다({@code cloud/admission.py}).
+	 *
+	 * <p>⚠️ 기점은 단계마다 다르고 창 시각({@code window_start})이 아니다({@link #ANALYSIS_CHAIN_SQL}):
+	 * 분석 시작 단계는 요청이 수용된 시각({@code accepted_at}), 분석 요청 단계는 트리거 행이 만들어진
+	 * 시각({@code created_at})이다. 이 값의 근거는 수용 뒤의 상한뿐이다 — 분석 요청 단계에는 같은 값을
+	 * 빌려 쓴 것이고, 트리거 생성에서 수용까지(큐 전달)의 상한을 따로 구한 것이 아니다.
+	 *
+	 * <p>⚠️ {@code accepted_at} 은 워크플로가 실제로 시작된 시각과 다를 수 있다. 실행은 떴는데 수용
+	 * 기록이 실패하면 재전달 때 그 시각이 찍힌다 — 그 사이 실행이 이미 끝났어도 그때부터 유예가 다시
+	 * 흐른다(손실이 그만큼 늦게 선다). 실행 시작 시각은 DB 에 없다.
+	 *
+	 * <p>워크플로 정의의 시간 제한이 바뀌면 이 값도 같이 바꿔야 한다(두 곳을 잇는 자동 검사는 없다).
+	 */
+	private static final long ANALYSIS_GRACE_SECONDS = 28_800L;
+
 	/** v2 단계의 명세 — <b>순서가 흐름</b>이다. {@code column} 은 {@link #ANALYSIS_CHAIN_SQL} 의 컬럼이다. */
 	private static final List<StageSpec> ANALYSIS_STAGES = List.of(
 			new StageSpec("c.req", "분석 요청", "analysis_execution_requests", "req"),
 			new StageSpec("c.start", "분석 시작", "movement_analyses", "started"),
 			new StageSpec("c.done", "분석 완료", "status=completed", "completed"),
 			new StageSpec("c.pub", "게시", "published_at IS NOT NULL", "published"));
+
+	/** 감소를 손실로 판정하는 단계 — 판정 불가 수({@code pending})가 있는 단계다. */
+	private static final java.util.Set<String> PENDING_STAGES = java.util.Set.of("c.req", "c.start");
 
 	/**
 	 * 체인에 v2 단계를 붙인다. 옛 단계 목록({@code stages})은 건드리지 않는다 — 그 목록만 아는 옛
@@ -917,12 +966,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 					&& (firstRequestDay == null || firstRequestDay.isAfter(day));
 			List<AnalysisStage> out = new ArrayList<>();
 			for (StageSpec s : ANALYSIS_STAGES) {
+				/* 판정 불가 수는 판정하는 두 단계에만 있다 — 그 단계의 컬럼 이름에 `_pending` 을 붙인
+				 * 컬럼이다. 분석 완료·게시는 감소를 판정하지 않으므로 0 이다. */
+				long pending = PENDING_STAGES.contains(s.id()) ? rs.getLong(s.column() + "_pending") : 0L;
 				// 배치 칸은 null — 배치 트리거는 v2 의 대상이 아니다(0 이 아니다).
 				out.add(new AnalysisStage(s.id(), s.label(), s.src(), null,
-						rs.getLong(s.column()), blind));
+						rs.getLong(s.column()), blind, pending));
 			}
 			return List.copyOf(out);
-		}, from, to, from);
+		}, from, to, ANALYSIS_GRACE_SECONDS, ANALYSIS_GRACE_SECONDS, from);
 		return new ChainRow(chain.feeds(), chain.stages(), stages);
 	}
 

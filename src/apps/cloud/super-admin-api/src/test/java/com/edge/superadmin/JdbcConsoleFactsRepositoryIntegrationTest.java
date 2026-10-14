@@ -447,9 +447,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		jdbc.update("""
 				INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id, window_start,
 				       generation, detection_policy_version, open_price, close_price, change_rate,
-				       threshold, cooldown_bucket, trigger_kind)
-				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?)
-				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind);
+				       threshold, cooldown_bucket, trigger_kind, created_at)
+				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?,?::timestamptz)
+				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind, windowStart);
 	}
 
 	/**
@@ -2028,10 +2028,120 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 						tuple("c.done", "분석 완료", 2L, null, false),    // m3 실패 · m4 진행 중
 						tuple("c.pub", "게시", 1L, null, false));         // m2 는 게시 시각이 없다
 
+		/* 🔴 **지난 날짜의 결과는 유예가 생기기 전과 같다**(ALPHA-1309) — 발화가 모두 유예 밖이라 판정
+		 * 불가가 하나도 없다. 분석 행이 없는 m5, 요청이 없는 m6 은 그대로 감소(손실)로 남는다. 유예를
+		 * 조회일 기준으로 걸거나 지난 날짜에도 적용하는 변이가 여기서 죽는다. */
+		assertThat(chain.analysisStages()).extracting(s -> s.id(), s -> s.pending())
+				.containsExactly(tuple("c.req", 0L), tuple("c.start", 0L), tuple("c.done", 0L), tuple("c.pub", 0L));
+
 		// 전날을 물으면 그날 트리거의 자손만 나온다 — 분석이 언제 만들어졌는지는 상관없다.
 		assertThat(repository.facts(LocalDate.parse("2026-08-02")).chain().analysisStages())
 				.extracting(s -> s.id(), s -> s.intraday())
 				.containsExactly(tuple("c.req", 1L), tuple("c.start", 1L), tuple("c.done", 1L), tuple("c.pub", 1L));
+	}
+
+	/**
+	 * 🔴 <b>방금 발화한 트리거는 아직 판정할 수 없다</b>(ALPHA-1309). 새 분석 엔진은 같은 종류·같은
+	 * ETF 를 한 번에 하나만 돌리고 자리를 얻을 때까지 다시 묻고, 분석 행은 원천 조회 뒤에야 생긴다.
+	 * 유예(단일 분석 워크플로의 전체 시간 제한) 안의 트리거가 다음 단계에 못 간 것을 손실로 세면
+	 * 장중 내내 P0 가 선다.
+	 *
+	 * <p>칸을 하나씩 가른다(모두 한 시간 전에 발화):
+	 * <ul>
+	 *   <li>{@code y-none} — 요청이 아직 수용되지 않았다 → 분석 요청의 판정 불가</li>
+	 *   <li>{@code y-wait} — 요청은 수용됐고 분석 행이 없다(자리 대기) → 분석 시작의 판정 불가</li>
+	 *   <li>{@code y-run} — 이미 분석이 시작됐다 → 유예 안이어도 <b>도달</b>이다</li>
+	 * </ul>
+	 * 대조는 같은 형상의 <b>25시간 전</b> 트리거다({@code o-none}·{@code o-wait}) — 유예 밖이라 판정
+	 * 불가가 아니고 감소(손실)로 남는다. 시각은 조회일이 아니라 지금과 비교한다.
+	 */
+	@Test
+	void 유예_안의_트리거는_판정_불가이고_유예_밖의_같은_형상은_손실이다() {
+		java.time.OffsetDateTime young = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul"))
+				.minusHours(1).withNano(0);
+		java.time.OffsetDateTime old = young.minusHours(24);   // 25시간 전 — 유예(8시간) 밖
+		LocalDate youngDay = young.toLocalDate();
+		LocalDate oldDay = old.toLocalDate();
+		/* 트리거·요청·분석을 **같은 시각**에 둔다 — 분 단위로 벌리면 자정 직전에 도는 실행에서 일부가
+		 * 다음 날로 넘어가 코호트가 갈린다(종목이 달라 같은 창 시각이어도 겹치지 않는다). */
+
+		insertMinuteTrigger("y-none", youngDay.toString(), "etf-1", "FIRE", young.toString());
+		insertMinuteTrigger("y-wait", youngDay.toString(), "etf-2", "FIRE", young.toString());
+		insertMinuteTrigger("y-run", youngDay.toString(), "etf-3", "FIRE", young.toString());
+		insertRequest("y-wait", "y-wait", young.toString());
+		insertRequest("y-run", "y-run", young.toString());
+		insertAnalysis("movement", analysisId("y-run"), "etf-3", young.toString(), "running", "database");
+
+		insertMinuteTrigger("o-none", oldDay.toString(), "etf-1", "FIRE", old.toString());
+		insertMinuteTrigger("o-wait", oldDay.toString(), "etf-2", "FIRE", old.toString());
+		insertRequest("o-wait", "o-wait", old.toString());
+
+		// 유예 안: 도달은 실제로 도달한 것만, 나머지는 판정 불가로 따로 센다.
+		var recent = repository.facts(youngDay).chain();
+		assertThat(recent.feeds()).filteredOn(f -> f.id().equals("feed.intraday")).singleElement()
+				.satisfies(f -> assertThat(f.v()).isEqualTo(3L));
+		assertThat(recent.analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(
+						tuple("c.req", 2L, 1L),     // y-none 은 판정 불가 — 손실(3−2)이 아니다
+						tuple("c.start", 1L, 1L),   // y-wait 는 판정 불가, y-run 은 유예 안이어도 도달
+						tuple("c.done", 0L, 0L),    // 판정하지 않는 단계는 항상 0
+						tuple("c.pub", 0L, 0L));
+
+		// 유예 밖: 같은 형상이 판정 불가 없이 감소로 남는다.
+		assertThat(repository.facts(oldDay).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(
+						tuple("c.req", 1L, 0L),     // o-none: 2 → 1 의 감소는 손실이다
+						tuple("c.start", 0L, 0L),   // o-wait: 1 → 0 의 감소는 손실이다
+						tuple("c.done", 0L, 0L),
+						tuple("c.pub", 0L, 0L));
+	}
+
+	/**
+	 * 유예의 <b>경계</b>는 8시간이다(단일 분석 워크플로의 전체 시간 제한, 28,800초). 경계 양쪽 10분에
+	 * 표본을 둔다 — 한 시간·25시간 표본만으로는 유예를 2시간이나 24시간으로 바꾸는 변이가 통과한다.
+	 *
+	 * <p>두 표본의 KST 날짜는 실행 시각에 따라 같을 수도 다를 수도 있어, 날짜별로 기대값을 가른다.
+	 */
+	@Test
+	void 유예의_경계는_8시간이다() {
+		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		java.time.OffsetDateTime inside = now.minusHours(8).plusMinutes(10);    // 7시간 50분 전 — 유예 안
+		java.time.OffsetDateTime outside = now.minusHours(8).minusMinutes(10);  // 8시간 10분 전 — 유예 밖
+		insertMinuteTrigger("b-in", inside.toLocalDate().toString(), "etf-in", "FIRE", inside.toString());
+		insertMinuteTrigger("b-out", outside.toLocalDate().toString(), "etf-out", "FIRE", outside.toString());
+
+		java.util.function.Function<LocalDate, Long> requestPending = day -> repository.facts(day).chain()
+				.analysisStages().stream().filter(s -> s.id().equals("c.req")).findFirst().orElseThrow().pending();
+		boolean sameDay = inside.toLocalDate().equals(outside.toLocalDate());
+		// 유예 안의 표본만 판정 불가다 — 같은 날이면 그날의 수는 1, 다른 날이면 유예 밖 표본의 날은 0 이다.
+		assertThat(requestPending.apply(inside.toLocalDate())).isEqualTo(1L);
+		assertThat(requestPending.apply(outside.toLocalDate())).isEqualTo(sameDay ? 1L : 0L);
+	}
+
+	/**
+	 * 🔴 <b>유예의 기점은 창 시각이 아니다</b>(ALPHA-1309, 봇 리뷰). 밀린 큐나 복구 경로는 오래된 창의
+	 * 트리거를 뒤늦게 만들고 수용한다. 워크플로의 시간 제한은 수용 시점부터 흐르므로, 창이 25시간 전이어도
+	 * 방금 수용된 요청({@code late-wait})과 방금 만들어진 트리거({@code late-none})는 아직 판정할 수
+	 * 없다. 창 시각으로 재면 둘 다 손실로 세어진다.
+	 */
+	@Test
+	void 오래된_창의_트리거도_방금_만들어지고_수용됐으면_판정_불가다() {
+		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		java.time.OffsetDateTime window = now.minusHours(25);
+		LocalDate day = window.toLocalDate();
+		insertMinuteTrigger("late-none", day.toString(), "etf-1", "FIRE", window.toString());
+		insertMinuteTrigger("late-wait", day.toString(), "etf-2", "FIRE", window.toString());
+		// 트리거 행은 방금 만들어졌다(late-wait 는 생성은 오래됐고 수용만 방금이다 — 두 기점을 가른다).
+		jdbc.update("UPDATE minute_price_trigger SET created_at = ?::timestamptz WHERE trigger_id = 'late-none'",
+				now.minusMinutes(5).toString());
+		insertRequest("late-wait", "late-wait", now.minusMinutes(5).toString());
+
+		assertThat(repository.facts(day).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(tuple("c.req", 1L, 1L), tuple("c.start", 0L, 1L),
+						tuple("c.done", 0L, 0L), tuple("c.pub", 0L, 0L));
 	}
 
 	/**

@@ -708,10 +708,10 @@ super-admin-api 가 넣는다. 순서를 지키는 것은 writer 수가 아니�
 
 ```jsonc
 "analysisStages": [
-  { "id": "c.req",   "label": "분석 요청", "batch": null, "intraday": 256, "src": "analysis_execution_requests", "blind": false },
-  { "id": "c.start", "label": "분석 시작", "batch": null, "intraday": 214, "src": "movement_analyses",           "blind": false },
-  { "id": "c.done",  "label": "분석 완료", "batch": null, "intraday": 195, "src": "status=completed",            "blind": false },
-  { "id": "c.pub",   "label": "게시",      "batch": null, "intraday": 195, "src": "published_at IS NOT NULL",    "blind": false }
+  { "id": "c.req",   "label": "분석 요청", "batch": null, "intraday": 256, "src": "analysis_execution_requests", "blind": false, "pending": 0 },
+  { "id": "c.start", "label": "분석 시작", "batch": null, "intraday": 214, "src": "movement_analyses",           "blind": false, "pending": 0 },
+  { "id": "c.done",  "label": "분석 완료", "batch": null, "intraday": 195, "src": "status=completed",            "blind": false, "pending": 0 },
+  { "id": "c.pub",   "label": "게시",      "batch": null, "intraday": 195, "src": "published_at IS NOT NULL",    "blind": false, "pending": 0 }
 ]
 ```
 
@@ -730,6 +730,23 @@ super-admin-api 가 넣는다. 순서를 지키는 것은 writer 수가 아니�
   날짜 중 가장 이른 날)이 조회일보다 뒤면 참이다(요청이 아예 없어도 참). 새 분석 엔진이 아직 없던
   날이라 `intraday` 의 0 은 실측이 아니다. 첫 요청이 조회일과 같거나 앞인데 요청이 0 이면 그것은
   진짜 손실이라 가리지 않는다. 옛 설명 엔진이 돌던 때의 값은 이 목록에 다시 싣지 않는다.
+- **`pending`** (ALPHA-1309): 이 단계에 **아직 판정할 수 없는** 트리거 수다. 앞 단계에 도달한 지
+  유예 시간(28,800초)이 안 지났고 이 단계에는 아직 못 간 트리거다. 기점은 단계마다 다르다 — 분석
+  요청은 트리거 행이 만들어진 시각(`created_at`), 분석 시작은 요청이 수용된 시각(`accepted_at`)이다.
+  `intraday`(도달)에는 들어 있지 않고 손실도 아니다 — 소비자는 **앞 단계와의 차이에서 이 수를 뺀
+  것**만 손실로 읽는다. 예: 트리거 100 · 요청 90(`pending` 7) · 시작 60(`pending` 25) → 손실은
+  3건과 5건이다. 이미 도달한 트리거는 유예 안이어도 도달로 센다. 분석 완료·게시는 항상 0 이다.
+  - 유예 시간 28,800초는 단일 분석 워크플로의 전체 시간 제한이다
+    (`infra/terraform/modules/analysis-v2/single_analysis.asl.json` 의 `TimeoutSeconds`). 자리 대기에는
+    별도 상한이 없고 분석 작업은 재시도 없이 1,100초라, 요청이 분석 행 없이 머물 수 있는 가장 긴
+    시간이 이 값이다. 서버 상수 하나(`ANALYSIS_GRACE_SECONDS`)에 있다.
+  - DB 시각과 비교하고 **조회일과 무관하다**. 기점에서 유예 시간이 지난 트리거는 어느 날짜를
+    조회하든 `pending` 에 들지 않는다. 어제 저녁에 발화한 트리거는 자정 뒤에도 유예 안일 수 있다.
+  - 기점은 창 시각(`window_start`)이 아니다. 워크플로의 시간 제한은 수용 시점부터 흐르고, 밀린 큐나
+    복구 경로는 오래된 창의 트리거를 뒤늦게 만들고 수용한다.
+  - 분석 요청 단계에도 같은 28,800초를 쓴다. 트리거가 만들어진 뒤 요청이 수용되기까지의 상한을 따로
+    구한 값은 아니다.
+  - 이 필드가 없는 응답(옛 API)은 0 으로 읽는다.
 - **R10 이 손실로 보는 구간은 둘이다**: 트리거 → 분석 요청, 분석 요청 → 분석 시작. 분석 시작 → 완료의
   감소는 실패했거나 진행 중인 분석이고(실패는 R15 가 맡는다), 완료 → 게시의 감소는 고른 항목이 없어
   게시하지 않은 분석이다(설계). 이 둘은 수만 보여 준다.
@@ -806,6 +823,10 @@ R10 은 실린 단계를 전부 비교해 "게시 → 전달" P0 를 낼 수 있
 
 가리려면 "이 트리거는 처리될 기회를 가졌나"를 답하는 사실이 필요한데 **원장에 없다**. 값을
 접지 않는 쪽을 택했다: 접으면 진짜 손실도 같이 사라지고, 그건 이 콘솔이 없애려는 칸 혼동이다.
+
+✅ **새 분석 엔진의 단계(`analysisStages`)에서는 이 천장이 풀렸다**(ALPHA-1309). 유예 시간 안에 있어
+아직 판정할 수 없는 트리거를 단계마다 `pending` 으로 따로 싣고, R10 은 감소에서 그 수를 뺀다. 도달
+수는 접지 않는다. 위 서술은 옛 단계 목록(`stages`)과 `pending` 을 안 싣는 응답에만 남는다.
 
 ### `0` 은 실측이고 축 부재는 아니다
 
