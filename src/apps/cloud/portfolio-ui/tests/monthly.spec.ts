@@ -7,6 +7,7 @@ test('monthly amount opens immediately below its option and is visible on a smal
   await page.getByRole('button', { name: '종목부터 추천받기' }).click();
   await page.getByRole('button', { name: '매달 꾸준히', exact: true }).click();
   const input = page.getByRole('textbox', { name: '추가 투자금액' });
+  await expect(page.locator('.bar .btn')).toBeDisabled();
   await expect(input).toBeInViewport({ ratio: 1 });
   const option = await page.getByRole('button', { name: '매달 꾸준히', exact: true }).boundingBox();
   const field = await input.boundingBox();
@@ -14,6 +15,7 @@ test('monthly amount opens immediately below its option and is visible on a smal
   expect(field!.y).toBeGreaterThanOrEqual(option!.y + option!.height);
   expect(field!.y + field!.height).toBeLessThanOrEqual(next!.y);
   await input.fill('100');
+  await expect(page.locator('.bar .btn')).toBeEnabled();
   await page.getByRole('button', { name: '목돈 한 번에', exact: true }).click();
   await expect(input).toHaveCount(0);
 });

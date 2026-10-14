@@ -36,6 +36,91 @@ def test_structured_account_selection_is_a_valid_customer_constraint_source():
     assert validate_decision(decision, req, {}) == decision
 
 
+@pytest.mark.parametrize('source', ['accounts: 일반 계좌', 'accounts": ["일반 계좌"]', '계좌를 일반 계좌로 입력했어요.'])
+def test_verified_account_selection_does_not_depend_on_model_source_format(source):
+    req = request(preferences={'accounts': ['일반 계좌']})
+    decision = Decision(constraints=[{'kind': 'accounts', 'accounts': ['일반 계좌'], 'source': source}])
+    result = validate_decision(decision, req, {})
+    assert result.constraints[0].source == '일반 계좌'
+    assert result.constraints[0].accounts == ['일반 계좌']
+
+
+def test_unselected_or_arbitrary_subset_accounts_still_need_customer_evidence():
+    req = request(preferences={'accounts': ['일반 계좌', 'ISA']})
+    for accounts, source in [(['IRP'], 'invented'), (['ISA'], 'invented'), (['ISA'], 'ISA')]:
+        decision = Decision(constraints=[{'kind': 'accounts', 'accounts': accounts, 'source': source}])
+        with pytest.raises(ValueError, match='CUSTOMER_CONSTRAINT_SOURCE'):
+            validate_decision(decision, req, {})
+
+
+def test_explicit_written_account_subset_is_preserved():
+    req = request(question='이번에는 ISA에서만 투자할게요.', preferences={'accounts': ['일반 계좌', 'ISA']})
+    decision = Decision(constraints=[{'kind': 'accounts', 'accounts': ['ISA'], 'source': req.question}])
+    assert validate_decision(decision, req, {}).constraints[0].accounts == ['ISA']
+
+
+async def test_later_roles_receive_the_repaired_full_customer_question():
+    import json
+    from edge_portfolio.agent import run_analysis
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    stages = []
+    original = '추천 비중을 알려주세요. 리밸런싱 금액도 알려주세요.'
+    async def model(payload):
+        if stages[-1] != 'question':
+            active = json.loads(payload['messages'][1]['content'])['active_decision']
+            assert active['questions'] == [original]
+            raise RuntimeError('CANONICAL_QUESTION_CHECKED')
+        content = {**final_payload()['question'], 'decision': {'questions': ['추천 비중을 알려주세요.']}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='CANONICAL_QUESTION_CHECKED'):
+        await run_analysis(request(question=original), 'test', stages.append, model_call=model, evidence=Evidence())
+
+
+@pytest.mark.parametrize('interest', ['균형 잡힌 분산', '성장', '배당', '안정 (채권·금)', '반도체', '미국 주식'])
+def test_standard_interest_is_a_ranking_preference_not_an_unknown_hard_constraint(interest):
+    req = request(preferences={'interests': [interest]})
+    decision = Decision(objectives=['growth', 'stability'], constraints=[{'kind': 'unverified', 'source': interest}])
+    result = validate_decision(decision, req, {})
+    assert result.constraints == []
+    assert result.objectives == ['growth', 'stability']
+    assert check_constraints(result, [], req, {}) == []
+
+
+def test_explicit_customer_limit_is_preserved_even_when_it_mentions_a_standard_interest():
+    req = request(question='반도체 비중은 반드시 20% 이하로 유지', preferences={'interests': ['반도체']})
+    rule = {'kind': 'unverified', 'source': '반도체 비중은 반드시 20% 이하로 유지'}
+    result = validate_decision(Decision(constraints=[rule]), req, {})
+    assert len(result.constraints) == 1
+    assert check_constraints(result, [], req, {})[0]['status'] == 'unknown'
+
+
+def test_custom_interest_with_an_explicit_limit_remains_a_customer_constraint():
+    text = '기술주 비중 30% 이하'
+    req = request(preferences={'interests': [text]})
+    result = validate_decision(Decision(constraints=[{'kind': 'unverified', 'source': text}]), req, {})
+    assert len(result.constraints) == 1
+
+
+def test_followup_written_limit_is_preserved_when_source_is_also_an_interest_chip():
+    req = request(preferences={'interests': ['반도체']})
+    result = validate_decision(Decision(constraints=[{'kind': 'unverified', 'source': '반도체'}]),
+                               req, {}, question_text='반도체 비중은 20% 이하로 제한해 주세요.')
+    assert len(result.constraints) == 1
+
+
+def test_selected_us_interest_does_not_prohibit_korean_etfs():
+    req = request(preferences={'interests': ['미국 주식']})
+    result = validate_decision(Decision(constraints=[{'kind': 'markets', 'source': '미국 주식', 'markets': ['US']}]), req, {})
+    assert result.constraints == []
+
+
+def test_written_dividend_condition_is_not_erased_by_a_matching_interest_chip():
+    req = request(preferences={'interests': ['배당'], 'dividend_goal': '배당 월 100만원 이상 필수'})
+    result = validate_decision(Decision(constraints=[{'kind': 'unverified', 'source': '배당'}]), req, {})
+    assert len(result.constraints) == 1
+
+
 def test_no_sell_with_unknown_holdings_is_unknown_and_does_not_become_cash():
     req = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO'}], input_mode='names',
         horizon='10년 이상', question='매도 금지')

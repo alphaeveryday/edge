@@ -7,6 +7,12 @@ from pydantic import Field, model_validator
 from .contracts import Section, StrictModel
 from .execution import plan_execution
 
+# These input chips express preferences; a custom written limit still needs verification.
+SOFT_INTERESTS = {'균형 잡힌 분산', '지수 따라가기', '배당', '성장', '안정 (채권·금)',
+                  '반도체', 'AI·빅테크', '방산', '로봇', '원자력', '전력 인프라', '바이오·헬스케어',
+                  '소비재', '금융', '리츠·부동산', '친환경 에너지', '한국 주식', '미국 주식',
+                  '선진국', '신흥국', '단기채', '장기채', '금·원자재'}
+
 
 class Constraint(StrictModel):
     kind: Literal['min_weight', 'max_weight', 'exclude', 'require', 'max_positions', 'accounts', 'markets', 'no_sell', 'unverified']
@@ -64,10 +70,10 @@ def validate_decision(decision, request, catalog, *, question_text=None):
             for item in value:
                 yield from strings(item)
     text = '\n'.join([request.question, *strings(request.preferences.model_dump(mode='json'))])
+    original = request.question if question_text is None else question_text
     if any(not question.strip() or question not in text for question in decision.questions):
-        raise ValueError('QUESTION_SOURCE: quote each customer question exactly')
+        decision.questions = [original] if original.strip() else []
     if decision.questions:
-        original = request.question if question_text is None else question_text
         covered = set()
         for question in decision.questions:
             start = original.find(question)
@@ -75,8 +81,15 @@ def validate_decision(decision, request, catalog, *, question_text=None):
                 covered.update(range(start, start + len(question)))
                 start = original.find(question, start + 1)
         if any(char.isalnum() and index not in covered for index, char in enumerate(original)):
-            raise ValueError('QUESTION_COVERAGE: preserve the entire customer request across questions; include its context, or quote the complete request')
+            # Preserve all customer context without asking the model to copy it again.
+            decision.questions = [original]
     for rule in decision.constraints:
+        if rule.kind == 'accounts' and set(rule.accounts) == set(request.preferences.accounts):
+            rule.source = '\n'.join(request.preferences.accounts)
+        elif rule.kind == 'accounts':
+            written = '\n'.join([request.question, *strings(request.preferences.model_dump(mode='json', exclude={'accounts'}))])
+            if rule.source not in written:
+                raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the written account restriction')
         if rule.source not in text:
             raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the exact customer input')
         if any(key != 'CASH:KRW' and key not in catalog for key in rule.instrument_ids):
@@ -87,7 +100,16 @@ def validate_decision(decision, request, catalog, *, question_text=None):
         raise ValueError('Objective priorities must be distinct')
     if decision.kind == 'new_portfolio' and any(h.kind != 'cash' for h in request.holdings):
         raise ValueError('Existing holdings cannot be replaced with a cash baseline')
+    filter_preference_constraints(decision, request, question_text=question_text)
     return decision
+
+
+def filter_preference_constraints(decision, request, *, question_text=None):
+    soft_sources = SOFT_INTERESTS.intersection(request.preferences.interests)
+    written = '\n'.join([request.question, request.preferences.note, request.preferences.dividend_goal,
+                         request.preferences.contribution, question_text or ''])
+    decision.constraints = [rule for rule in decision.constraints
+                            if not (rule.source in soft_sources and rule.source not in written)]
 
 
 def check_constraints(decision, rows, request, catalog):

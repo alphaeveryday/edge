@@ -105,6 +105,20 @@ def report_request(job_id: str, body: ReportRequest, request: Request):
 
 @app.post("/api/portfolio/analyses", status_code=202)
 def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header()):
+    # Drafts and historical reports may be incomplete; new paid/trial jobs must be computable.
+    if body.input_mode == 'names':
+        raise HTTPException(422, 'HOLDING_WEIGHTS_REQUIRED')
+    from .execution import parse_funding
+    contribution = body.preferences.contribution.strip()
+    if not contribution:
+        raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
+    if not any(value.strip() for value in body.preferences.interests):
+        raise HTTPException(422, 'INVESTMENT_OBJECTIVE_REQUIRED')
+    if contribution.startswith('매달 꾸준히'):
+        if not parse_funding(contribution):
+            raise HTTPException(422, 'MONTHLY_AMOUNT_REQUIRED')
+    elif contribution not in {'이미 다 매수한 상태에요', '목돈 한 번에', '아직 고민 중'} and not parse_funding(contribution):
+        raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
     try:
         body = canonicalize(body)
     except ValueError as error:
