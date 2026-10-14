@@ -50,7 +50,15 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         c.execute("INSERT INTO entity VALUES ('zero','Zero')")
         c.execute("INSERT INTO etf_holding_snapshot VALUES ('etf','zero','2026-09-30',%s,'2026-09-30T08:00:00+09:00','current')", (extra_weight,))
         c.execute('UPDATE etf_holding_snapshot_status SET input_row_count=3,valid_row_count=%s', (valid_count,))
+        # The current basket is independent of historical coverage; later-acquired snapshots cannot leak in.
+        c.execute("""INSERT INTO etf_holding_snapshot_status VALUES
+            ('etf','2026-09-28',1,1,'old','2026-09-29T08:00:00+09:00'),
+            ('etf','2026-10-01',1,1,'future','2026-09-30T08:00:00+09:00');
+            INSERT INTO etf_holding_snapshot VALUES
+            ('etf','stock','2026-09-28',1,'2026-09-29T08:00:00+09:00','old'),
+            ('etf','stock','2026-10-01',1,'2026-09-30T08:00:00+09:00','future');""")
         c.execute("""INSERT INTO investor_flow_daily VALUES
+            ('etf','2026-09-28',999999,999999,999999,'2026-09-28T18:00:00+09:00'),
             ('stock','2026-09-28',100,NULL,-100,'2026-09-28T18:00:00+09:00'),
             ('stock','2026-09-29',200,300,-500,'2026-09-30T13:00:00+09:00'),
             ('stock','2026-09-30',999,999,999,'2026-09-30T09:00:00+09:00')""")
@@ -75,10 +83,12 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         assert data['holdings'][0]['weight'] == .9971
         assert data['source_instrument_ids']['000001'] == 'stock'
         assert len(data['holdings']) == valid_count
+        assert {r['as_of_date'] for r in data['holdings']} == {'2026-09-30'}
         load_flow(c, data)
         assert data['context']['flow_as_of_date'] == '2026-09-29'
         assert {r['date'] for r in data['flow']} == {'2026-09-28'}
         assert {r['investor'] for r in data['flow']} == {'foreign','individual'}
+        assert {r['instrument_id'] for r in data['flow']} == {'000001'}
         load_prices(c,data)
         assert [r['close'] for r in data['prices']]==[100,101]
         assert all(r['turnover'] is None and r['high'] is None and r['low'] is None for r in data['prices'])

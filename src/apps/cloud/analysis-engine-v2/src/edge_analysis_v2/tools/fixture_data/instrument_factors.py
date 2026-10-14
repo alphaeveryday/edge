@@ -1,12 +1,12 @@
 """Common factor observations for one instrument at a fixed analysis cutoff."""
 from calendar import monthrange
 from datetime import date
-import logging
 import re
 
-from edge_analysis_v2.tools.fixture_data import chart, etf, macro
+from edge_analysis_v2.tools.fixture_data import chart, etf, flow, macro
 from edge_analysis_v2.tools.fixture_data.common import MIN_WEIGHT_COVERAGE, available, covers_whole_etf, decimal, holdings, instant, number
 from edge_analysis_v2.tools.fixture_data.valuation import covered_weight
+from edge_analysis_v2.tools.execution import ToolInputError
 
 FORMULA_LATEX = (
     r"M_n=\frac1n\sum_{j=0}^{n-1}C_j;\ d_{20}=100(P/M_{20}-1);\ "
@@ -17,7 +17,7 @@ FORMULA_LATEX = (
     r"ATR_d=(13ATR_{d-1}+TR_d)/14;\ ATR\%=100ATR_D/C_D;\ "
     r"R_{20}=100(X_D/X_{D-20}-1);\ "
     r"PER_i=P_i/\sum_{q=1}^{4}EPS_{i,q};\ PBR_i=P_i/BPS_i;\ "
-    r"\bar x=\sum_iw_ix_i;\ F_d=\sum_iw_{i,d}f_{i,d};\ S_{20}=\sum_{d=D-19}^{D}F_d;\ "
+    r"\bar x=\sum_iw_ix_i;\ F_d=\sum_iw_i^{latest}f_{i,d};\ S_{20}=\sum_{d=D-19}^{D}F_d;\ "
     r"streak=\max\{k:\forall j\in[0,k),F_{D-j}>0\}"
     r";\ distribution\%=100\sum_{T-1y<t\le T}cash_t/P;\ units\%=100(U_D/U_{D-20}-1)"
 )
@@ -25,7 +25,6 @@ FORMULA_LATEX += (r";\ G=RMA_{14}(\max(\Delta C,0));\ L=RMA_{14}(\max(-\Delta C,
     r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})")
 
 FACTORS = ('chart', 'flow', 'valuation', 'macro')
-LOG = logging.getLogger(__name__)
 
 
 def read(fixture, instrument_id, factors=FACTORS):
@@ -112,14 +111,6 @@ def chart_data(fixture, instrument_id):
     return result, None
 
 
-def _below_coverage(fixture):
-    """Whether published holdings exist but cover too little of the fund for a whole-ETF figure."""
-    try:
-        return not covers_whole_etf(holdings(fixture, require_complete=False))
-    except ValueError:
-        return False  # nothing published at the cutoff: the day loop reports that case itself
-
-
 def flow_data(fixture, instrument_id):
     """Return up to thirty contiguous finalized sessions without filling gaps."""
     context = fixture['context']
@@ -132,24 +123,21 @@ def flow_data(fixture, instrument_id):
     if not dates or dates[-1] != end:
         return None, 'Finalized flow date is absent from the trading calendar.'
     weighted = instrument_id == context['etf_code']
-    if weighted and _below_coverage(fixture):
-        return None, 'Observed constituent weights are below 70%; whole-ETF weighted flow unavailable.'
+    portfolio, unavailable = None, None
+    if weighted:
+        try:
+            portfolio = holdings(fixture)
+            if any(row['instrument_id'] == context['etf_code'] for row in portfolio['holdings']):
+                raise ToolInputError('INVALID_HOLDINGS: ETF own flow cannot be a constituent. Do not retry this snapshot; holdings repair is required.')
+        except ToolInputError as error:
+            unavailable = str(error)
+    elif instrument_id not in flow.constituent_ids(fixture):
+        return None, 'UNSUPPORTED_FLOW_TARGET: outside latest constituent scope; use get_etf_holdings to select a constituent.'
     source = available(fixture.get('flow', []), cutoff)
     investors = ('foreign', 'institution', 'individual')
-    history, observed, covered = [], [], []
-    for day in reversed(dates):
-        if weighted and not any(r['as_of_date'] <= day for r in available(fixture.get('holdings', []), min(cutoff, instant(day + 'T23:59:59.999999+09:00')))):
-            break
-        try:
-            portfolio = holdings(fixture, day, require_complete=False) if weighted else None
-        except ValueError as error:
-            # An unreadable past snapshot ends the history like a missing one: this tool runs before the model,
-            # so one bad day must not fail the whole outlook (ALPHA-1162).
-            LOG.warning('Weighted flow history stopped etf=%s day=%s type=%s', instrument_id, day, type(error).__name__)
-            break
-        if portfolio and not covers_whole_etf(portfolio):
-            break
-        weights = portfolio['holdings'] if weighted else [{'instrument_id': instrument_id, 'weight': 1}]
+    history, observed = [], []
+    weights = portfolio['holdings'] if portfolio else [{'instrument_id': instrument_id, 'weight': 1}]
+    for day in reversed(dates) if unavailable is None else []:
         values = []
         day_times = []
         complete = True
@@ -158,31 +146,31 @@ def flow_data(fixture, instrument_id):
             for weight in weights:
                 if decimal(weight['weight']) == 0:
                     continue
-                rows = [r for r in source if r['date'] == day and r['instrument_id'] == weight['instrument_id'] and r['investor'] == investor]
-                if len(rows) > 1:
-                    raise ValueError('duplicate investor flow observation')
-                if not rows or not rows[0].get('finalized'):
+                try:
+                    row = flow.observation(source, weight['instrument_id'], day, investor,
+                                           f'up to 30 sessions ending {end}')
+                except ToolInputError as error:
+                    unavailable = str(error)
                     complete = False
                     break
-                if type(rows[0]['net_amount_krw']) is not int:
-                    raise ValueError('source flow must be integer KRW')
-                total += decimal(weight['weight']) * rows[0]['net_amount_krw']
-                day_times.append(rows[0]['available_at'])
+                total += decimal(weight['weight']) * row['net_amount_krw']
+                day_times.append(row['available_at'])
+            if not complete:
+                break
             values.append(number(total))
         if not complete:
             break
         history.append([day] + values)
-        if portfolio:
-            covered.append(decimal(portfolio['observed_weight_ratio']))
         observed.extend(day_times)
     units = etf.units_change(fixture) if weighted else None
     if not history and units is None:
-        return None, 'No complete finalized flow session or units history is available.'
+        return None, unavailable or 'No complete finalized flow session or units history is available.'
     history.reverse()
     result = {'scope': 'holdings_weighted' if weighted else 'instrument', 'finalized_through': end, 'observed_at': max(observed, key=instant) if observed else None, 'unit': 'KRW', 'history': {'columns': ['date'] + list(investors), 'rows': history}}
     if weighted:
-        # Amounts are not scaled up: they describe this share of the fund's weight (lowest day shown).
-        result['observed_weight_ratio'] = number(min(covered)) if covered else None
+        result.update(observed_weight_ratio=portfolio['observed_weight_ratio'] if portfolio else None,
+                      holdings_as_of=portfolio['as_of_date'] if portfolio else None,
+                      weight_basis='latest_snapshot_at_analysis')
         for investor in ('foreign', 'institution'):
             values = [decimal(row[investors.index(investor)+1]) for row in history]
             result[f'weighted_{investor}_net_amount_20d'] = number(sum(values[-20:])) if len(values) >= 20 else None
@@ -194,7 +182,7 @@ def flow_data(fixture, instrument_id):
             result[f'weighted_{investor}_net_buy_streak'] = streak if streak < len(values) else None
         result['etf_units_change_20d_pct'] = units['value'] if units else None
         result['units_observed_at'] = units['observed_at'] if units else None
-    return result, None
+    return result, unavailable
 
 
 def valuation_data(fixture, instrument_id):

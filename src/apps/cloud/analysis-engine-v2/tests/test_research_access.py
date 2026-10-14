@@ -122,7 +122,7 @@ def test_weight_sum_is_judged_at_the_precision_a_stored_double_carries(monkeypat
         over = [pct / 100.0 for pct in over_pcts]
         loaded = holdings(_load_stored_weights(monkeypatch, over, len(over) + 1), require_complete=False)
         assert (loaded['observed_weight_ratio'], loaded['coverage']) == (ratio, 'partial')
-        with pytest.raises(ValueError, match='summing to one'):
+        with pytest.raises(ValueError, match='INVALID_HOLDINGS_WEIGHT'):
             _load_stored_weights(monkeypatch, over, len(over))
 
 

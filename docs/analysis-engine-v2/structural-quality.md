@@ -43,7 +43,7 @@
 | `calculate_valuation_range` | `eps_id`, `per_low`, `per_high` | EPS 원천·배수 가정·현재가·가격 범위·현재가 대비 변화 | 예. 배수의 타당성은 내용 검수 |
 | `get_instrument_factors` | `instrument_id`, 선택 `factors` | 요청 종목의 차트·수급·밸류·매크로 자료와 시점. 전체 또는 일부 요인 | 예. 반환값의 새로운 계산은 전용 툴 사용 |
 | `sum_investor_net_flow` | `instrument_id`, `investor`, `lookback_days` | 확정일의 부호 있는 순매수 합계·기간 | 예 |
-| `sum_weighted_net_flow` | `investor`, `lookback_days` | 전 구성종목을 일별 비중으로 반영한 순매수 합계·기간 | 예 |
+| `sum_weighted_net_flow` | `investor`, `lookback_days` | 최신 구성 비중을 전 기간에 고정한 순매수 합계·기간·구성 기준일·관측 비중 | 예 |
 
 첫 실제 실행에서 합계와 방향 선택의 충돌이 5회 발생했다. 합계는 방향 인수가 없는 함수로 분리하고 기존 함수는 에이전트에게 빈도·연속만 노출한다. 기존 함수의 서버 구현·감사 정의는 과거 실행 재현을 위해 보존한다.
 
