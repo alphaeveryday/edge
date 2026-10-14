@@ -21,8 +21,9 @@ TEXT_LIMITS = {
     'conclusion.change_condition': 60,
 }
 # The movement explanation: one summary and up to five items, each a title and one short paragraph.
-# Without a limit the item paragraph grew to a median of 193 characters and the summary to 193.
-MOVEMENT_LIMITS = {'summary': 100, 'title_keyword': TITLE_MAX_LENGTH, 'sentence': 120}
+# Without a limit the item paragraph grew to a median of 193 characters and the summary to 193. The summary is read
+# where a headline would be, so it is one sentence (user decision 2026-10-14; 45 to 53 characters were enough).
+MOVEMENT_LIMITS = {'summary': 70, 'title_keyword': TITLE_MAX_LENGTH, 'sentence': 120}
 MAX_TOPICS = 15
 MAX_BULLETS_PER_TOPIC = 5
 FACTOR_COUNT = 5
