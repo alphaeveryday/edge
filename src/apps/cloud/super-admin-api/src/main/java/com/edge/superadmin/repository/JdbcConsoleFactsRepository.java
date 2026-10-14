@@ -908,8 +908,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			""";
 
 	/**
-	 * 아직 판정할 수 없는 트리거의 유예 시간(초) — 발화한 지 이만큼 안 지난 트리거가 다음 단계에 못
-	 * 갔으면 손실이 아니라 <b>판정 불가</b>로 센다(ALPHA-1309).
+	 * 아직 판정할 수 없는 트리거의 유예 시간(초) — 앞 단계에 도달한 지 이만큼 안 지난 트리거가 다음
+	 * 단계에 못 갔으면 손실이 아니라 <b>판정 불가</b>로 센다(ALPHA-1309).
 	 *
 	 * <p><b>값의 출처</b>: 단일 분석 워크플로의 전체 시간 제한이다
 	 * ({@code infra/terraform/modules/analysis-v2/single_analysis.asl.json} 의 최상위
@@ -924,9 +924,16 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 시간 제한이 지나면 실행이 끝나 그 뒤로는 분석 행이 생길 수 없다. 같은 요청이 다시 전달돼도
 	 * 이미 있는 실행을 새로 띄우지 않는다({@code cloud/admission.py}).
 	 *
-	 * <p>⚠️ 유예는 <b>발화 시각</b>({@code window_start})부터 잰다. 발화에서 요청 수용까지의 시간(큐
-	 * 전달)은 이 값에 들어 있지 않다 — 수용이 늦으면 그만큼 일찍 손실로 선다. 워크플로 정의의 시간
-	 * 제한이 바뀌면 이 값도 같이 바꿔야 한다(두 곳을 잇는 자동 검사는 없다).
+	 * <p>⚠️ 기점은 단계마다 다르고 창 시각({@code window_start})이 아니다({@link #ANALYSIS_CHAIN_SQL}):
+	 * 분석 시작 단계는 요청이 수용된 시각({@code accepted_at}), 분석 요청 단계는 트리거 행이 만들어진
+	 * 시각({@code created_at})이다. 이 값의 근거는 수용 뒤의 상한뿐이다 — 분석 요청 단계에는 같은 값을
+	 * 빌려 쓴 것이고, 트리거 생성에서 수용까지(큐 전달)의 상한을 따로 구한 것이 아니다.
+	 *
+	 * <p>⚠️ {@code accepted_at} 은 워크플로가 실제로 시작된 시각과 다를 수 있다. 실행은 떴는데 수용
+	 * 기록이 실패하면 재전달 때 그 시각이 찍힌다 — 그 사이 실행이 이미 끝났어도 그때부터 유예가 다시
+	 * 흐른다(손실이 그만큼 늦게 선다). 실행 시작 시각은 DB 에 없다.
+	 *
+	 * <p>워크플로 정의의 시간 제한이 바뀌면 이 값도 같이 바꿔야 한다(두 곳을 잇는 자동 검사는 없다).
 	 */
 	private static final long ANALYSIS_GRACE_SECONDS = 28_800L;
 
