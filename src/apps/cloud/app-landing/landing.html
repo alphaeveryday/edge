@@ -499,6 +499,7 @@ a[role="button"]{cursor:pointer}
   .tcard__t strong{font-size:max(calc(var(--tk) * 17.6),1.25rem)}
 }
 @media (max-width:767px){
+  [data-mode]:not([data-mode="reduce"]) .cover{gap:2.875rem} /* 가운데 알약(2.375rem)이 위아래 띠를 덮지 않게 */
   .tcard{gap:.75rem;padding:.75rem 1rem .75rem .75rem;border-radius:1.125rem}
   .tcard__n{width:2.75rem;height:2.75rem;border-radius:.75rem;font-size:max(calc(var(--tk) * 15.7),1.0625rem);line-height:2.75rem}
   .tcard__t strong{font-size:max(calc(var(--tk) * 14.3),.9375rem)}
@@ -533,6 +534,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
 .find__in{width:100%;height:3.625rem;padding:0 1.5rem;border:1px solid var(--border-strong);border-radius:999px;background:var(--bg-raised);color:var(--t1);font:inherit;font-size:max(calc(var(--tk) * 15.7),1.0625rem);font-weight:500;transition:border-color .2s,box-shadow .2s}
 .find__in::placeholder{color:var(--t3)}
 .find__in:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 .25rem var(--accent-subtle)}
+.find__picks{display:flex;flex-wrap:wrap;justify-content:center;gap:.5rem;margin-top:.875rem}
 .find__out{margin-top:.625rem;padding:.375rem;border:1px solid var(--border);border-radius:1.5rem;background:var(--bg-raised);text-align:left}
 .find__row{display:flex;align-items:center;justify-content:space-between;gap:.75rem;width:100%;min-height:3rem;padding:.5rem .875rem;border:0;border-radius:1.125rem;background:transparent;color:var(--t1);font:inherit;font-size:max(calc(var(--tk) * 15),1rem);font-weight:600;text-align:left;cursor:pointer}
 .find__row span{flex:none;font-size:max(calc(var(--tk) * 13.6),.875rem);color:var(--accent-300)}
@@ -674,10 +676,59 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       <p class="lead"><span class="nw">뉴스와 공시, 수급을 매일 읽고</span> <span class="nw"><strong>전망의 근거</strong>를 문장으로 정리해요.</span></p>
       <div class="hero__ctas">
         <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
-        <a class="btn btn--ghost btn--lg" href="#engine">미리 보기</a>
+        <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
       </div>
     </div>
     <div class="hero__scroll" aria-hidden="true"><span></span></div>
+  </div>
+</section>
+
+<!-- S7 다루는 ETF -->
+<section class="section facts" id="facts">
+  <div class="container">
+    <header class="section-head section-head--center">
+      <p class="eyebrow">다루는 ETF</p>
+      <h2 class="h2">국내 ETF <span data-count="148" data-from="100">148</span>종을<br>무료로 봐요.</h2>
+      <p class="body"><span class="nw">테마마다 거래가 많은 ETF를 골랐어요.</span> <span class="nw">로그인 없이 바로 써요.</span></p>
+    </header>
+  </div>
+  <div class="cover" aria-label="다루는 테마와 ETF 예시">
+    <ul class="cover__track" data-marquee="left" role="list">
+      <li class="tcard"><b class="tcard__n">23<small>종</small></b><p class="tcard__t"><strong>반도체</strong></p></li>
+      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>그룹주</strong></p></li>
+      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>전력·원자력</strong></p></li>
+      <li class="tcard"><b class="tcard__n">9<small>종</small></b><p class="tcard__t"><strong>인터넷·소프트웨어</strong></p></li>
+      <li class="tcard"><b class="tcard__n">7<small>종</small></b><p class="tcard__t"><strong>자동차</strong></p></li>
+      <li class="tcard"><b class="tcard__n">6<small>종</small></b><p class="tcard__t"><strong>조선</strong></p></li>
+      <li class="tcard"><b class="tcard__n">5<small>종</small></b><p class="tcard__t"><strong>신재생에너지</strong></p></li>
+      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>게임</strong></p></li>
+      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>엔터·미디어</strong></p></li>
+      <li class="tcard"><b class="tcard__n">3<small>종</small></b><p class="tcard__t"><strong>대표지수</strong></p></li>
+      <li class="tcard"><b class="tcard__n">1<small>종</small></b><p class="tcard__t"><strong>운송</strong></p></li>
+    </ul>
+    <p class="cover__pill"><img src="assets/logo-white.png" alt="" width="52" height="52" loading="lazy">ETF Orca<span class="live"><i></i>148종 분석 중</span></p>
+    <ul class="cover__track" data-marquee="right" role="list">
+      <li class="tcard"><b class="tcard__n">11<small>종</small></b><p class="tcard__t"><strong>2차전지</strong></p></li>
+      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>바이오·헬스케어</strong></p></li>
+      <li class="tcard"><b class="tcard__n">9<small>종</small></b><p class="tcard__t"><strong>방산·우주</strong></p></li>
+      <li class="tcard"><b class="tcard__n">8<small>종</small></b><p class="tcard__t"><strong>소비재</strong></p></li>
+      <li class="tcard"><b class="tcard__n">7<small>종</small></b><p class="tcard__t"><strong>금융</strong></p></li>
+      <li class="tcard"><b class="tcard__n">6<small>종</small></b><p class="tcard__t"><strong>IT·전자</strong></p></li>
+      <li class="tcard"><b class="tcard__n">5<small>종</small></b><p class="tcard__t"><strong>로봇</strong></p></li>
+      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>소재</strong></p></li>
+      <li class="tcard"><b class="tcard__n">3<small>종</small></b><p class="tcard__t"><strong>기계·산업재</strong></p></li>
+      <li class="tcard"><b class="tcard__n">2<small>종</small></b><p class="tcard__t"><strong>건설</strong></p></li>
+      <li class="tcard"><b class="tcard__n">1<small>종</small></b><p class="tcard__t"><strong>여행·레저</strong></p></li>
+    </ul>
+  </div>
+  <div class="container cover__foot">
+    <form class="find" id="find" role="search" data-find>
+      <label class="h3" for="find-in">보고 싶은 ETF가 있나요?</label>
+      <input class="find__in" id="find-in" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" placeholder="예: KODEX 반도체">
+      <p class="find__picks"><button class="btn btn--ghost btn--sm" type="button" data-pick="069500">KODEX 200</button><button class="btn btn--ghost btn--sm" type="button" data-pick="229200">KODEX 코스닥150</button><button class="btn btn--ghost btn--sm" type="button" data-pick="396500">TIGER 반도체TOP10</button><button class="btn btn--ghost btn--sm" type="button" data-pick="091160">KODEX 반도체</button></p>
+      <div class="find__out" aria-live="polite" hidden></div>
+    </form>
+    <p class="extras">그 밖에 <strong>관심 그룹</strong>, <strong>오늘의 전망 순위</strong>, <strong>분석 기준 시각 표시</strong>가 있어요.</p>
   </div>
 </section>
 
@@ -893,54 +944,6 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   </div>
 </section>
 
-<!-- S7 다루는 ETF -->
-<section class="section facts" id="facts">
-  <div class="container">
-    <header class="section-head section-head--center">
-      <p class="eyebrow">다루는 ETF</p>
-      <h2 class="h2">국내 ETF <span data-count="148" data-from="100">148</span>종을<br>무료로 봐요.</h2>
-      <p class="body"><span class="nw">테마마다 거래가 많은 ETF를 골랐어요.</span> <span class="nw">로그인 없이 바로 써요.</span></p>
-    </header>
-  </div>
-  <div class="cover" aria-label="다루는 테마와 ETF 예시">
-    <ul class="cover__track" data-marquee="left" role="list">
-      <li class="tcard"><b class="tcard__n">23<small>종</small></b><p class="tcard__t"><strong>반도체</strong></p></li>
-      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>그룹주</strong></p></li>
-      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>전력·원자력</strong></p></li>
-      <li class="tcard"><b class="tcard__n">9<small>종</small></b><p class="tcard__t"><strong>인터넷·소프트웨어</strong></p></li>
-      <li class="tcard"><b class="tcard__n">7<small>종</small></b><p class="tcard__t"><strong>자동차</strong></p></li>
-      <li class="tcard"><b class="tcard__n">6<small>종</small></b><p class="tcard__t"><strong>조선</strong></p></li>
-      <li class="tcard"><b class="tcard__n">5<small>종</small></b><p class="tcard__t"><strong>신재생에너지</strong></p></li>
-      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>게임</strong></p></li>
-      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>엔터·미디어</strong></p></li>
-      <li class="tcard"><b class="tcard__n">3<small>종</small></b><p class="tcard__t"><strong>대표지수</strong></p></li>
-      <li class="tcard"><b class="tcard__n">1<small>종</small></b><p class="tcard__t"><strong>운송</strong></p></li>
-    </ul>
-    <p class="cover__pill"><img src="assets/logo-white.png" alt="" width="52" height="52" loading="lazy">ETF Orca<span class="live"><i></i>148종 분석 중</span></p>
-    <ul class="cover__track" data-marquee="right" role="list">
-      <li class="tcard"><b class="tcard__n">11<small>종</small></b><p class="tcard__t"><strong>2차전지</strong></p></li>
-      <li class="tcard"><b class="tcard__n">10<small>종</small></b><p class="tcard__t"><strong>바이오·헬스케어</strong></p></li>
-      <li class="tcard"><b class="tcard__n">9<small>종</small></b><p class="tcard__t"><strong>방산·우주</strong></p></li>
-      <li class="tcard"><b class="tcard__n">8<small>종</small></b><p class="tcard__t"><strong>소비재</strong></p></li>
-      <li class="tcard"><b class="tcard__n">7<small>종</small></b><p class="tcard__t"><strong>금융</strong></p></li>
-      <li class="tcard"><b class="tcard__n">6<small>종</small></b><p class="tcard__t"><strong>IT·전자</strong></p></li>
-      <li class="tcard"><b class="tcard__n">5<small>종</small></b><p class="tcard__t"><strong>로봇</strong></p></li>
-      <li class="tcard"><b class="tcard__n">4<small>종</small></b><p class="tcard__t"><strong>소재</strong></p></li>
-      <li class="tcard"><b class="tcard__n">3<small>종</small></b><p class="tcard__t"><strong>기계·산업재</strong></p></li>
-      <li class="tcard"><b class="tcard__n">2<small>종</small></b><p class="tcard__t"><strong>건설</strong></p></li>
-      <li class="tcard"><b class="tcard__n">1<small>종</small></b><p class="tcard__t"><strong>여행·레저</strong></p></li>
-    </ul>
-  </div>
-  <div class="container cover__foot">
-    <form class="find" role="search" data-find>
-      <label class="h3" for="find-in">보고 싶은 ETF가 있나요?</label>
-      <input class="find__in" id="find-in" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" placeholder="예: KODEX 반도체">
-      <div class="find__out" aria-live="polite" hidden></div>
-    </form>
-    <p class="extras">그 밖에 <strong>관심 그룹</strong>, <strong>오늘의 전망 순위</strong>, <strong>분석 기준 시각 표시</strong>가 있어요.</p>
-  </div>
-</section>
-
 <!-- S8 걱정 해소 -->
 <section class="section faq" id="faq">
   <div class="container container--narrow">
@@ -990,7 +993,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     <h2 class="display">관심 ETF만 담아 두세요.<br>전망은 Orca가 챙길게요.</h2>
     <div class="hero__ctas">
       <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
-      <a class="btn btn--ghost btn--lg" href="#engine">미리 보기</a>
+      <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
     </div>
     <p class="cta__note">Android는 곧 출시돼요.</p>
   </div>
@@ -1014,7 +1017,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
 
 <div class="cta-bar is-hidden" data-cta-bar>
   <a class="btn btn--point" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
-  <a class="btn btn--ghost" href="#engine">미리 보기</a>
+  <a class="btn btn--ghost" href="#find" data-preview>미리 보기</a>
 </div>
 
 <!-- 데스크톱에서 다운로드를 누르면 스토어로 보내지 않고 이 창을 띄운다(휴대폰으로 찍어 받도록). QR은 App Store 링크를 미리 그려 둔 것이라, 링크가 바뀌면 다시 만들어야 한다 -->
@@ -1517,6 +1520,9 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   fIn.addEventListener('input', () => lookup());
   // 엔터는 맨 위 결과의 전망을 연다. 결과가 없으면 없다는 안내를 바로 띄운다
   find.addEventListener('submit', (e) => { e.preventDefault(); fIn.blur(); if (lookup(true)) $('.find__row', fOut).click(); });
+  // 이름을 치지 않아도 한 번에 전망을 연다. '미리 보기'도 첫 버튼을 누른 것과 같다(아래 앵커 처리)
+  const picks = $$('[data-pick]', find);
+  picks.forEach((b) => { b.onclick = () => showCard(...ETFS.find(([code]) => code === b.dataset.pick)); });
 
   // 조건의 숫자가 굴러서 자리를 잡는다
   const countIO = new IntersectionObserver((es) => es.forEach((e) => {
@@ -1579,10 +1585,11 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     const y = (spacer || target).getBoundingClientRect().top + window.scrollY;
     return spacer ? y : y - 72;
   }
-  $$('a[href^="#"]').forEach((a) => a.addEventListener('click', (e) => {
+  $$('a[href^="#"]').forEach((a) => a.addEventListener('click', async (e) => {
     const id = a.getAttribute('href'), target = id.length > 1 && document.querySelector(id);
     if (!target) return;
     e.preventDefault();
+    if ('preview' in a.dataset) await picks[0].onclick(); // 전망을 먼저 연다: 내려가는 도중에 리포트가 뜨면 위치를 다시 재면서 스크롤이 끊긴다
     if (lenis) lenis.scrollTo(anchorY(target), { duration: 1.4 });
     else window.scrollTo({ top: anchorY(target), behavior: 'smooth' });
     if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
