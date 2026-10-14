@@ -286,8 +286,8 @@ async def test_unregistered_url_is_rejected_without_losing_the_whole_analysis():
 
 @pytest.mark.parametrize('research_calls,passage,invalid_final,expected_error', [
     (30, '', 2, None), (1, '가' * 70000, 0, None),
-    (1, '가' * 120000, 0, 'MODEL_CONTEXT_BUDGET'), (1, '', 3, 'OUTPUT_INVALID')],
-    ids=['research-budget', 'utf8-size', 'context-ceiling', 'repair-ceiling'])
+    (1, '가' * 120000, 0, None), (1, '가' * 340000, 0, 'MODEL_CONTEXT_BUDGET'), (1, '', 3, 'OUTPUT_INVALID')],
+    ids=['research-budget', 'utf8-size', 'large-research-context', 'context-ceiling', 'repair-ceiling'])
 async def test_candidate_research_budget_and_korean_utf8_size_allow_final_publication(research_calls, passage, invalid_final, expected_error):
     class ResearchEvidence(Evidence):
         async def call(self, name, args):

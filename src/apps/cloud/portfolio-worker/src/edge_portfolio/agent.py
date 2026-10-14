@@ -36,7 +36,7 @@ MODEL = "deepseek-flash"
 EXA_URL = "https://mcp.exa.ai/mcp"
 MAX_EXA_CALLS = 70
 MAX_MODEL_CALLS = 100
-MAX_CONTEXT_BYTES = 350000
+MAX_CONTEXT_BYTES = 1000000
 ANALYSIS_TIMEOUT_SECONDS = 600
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
