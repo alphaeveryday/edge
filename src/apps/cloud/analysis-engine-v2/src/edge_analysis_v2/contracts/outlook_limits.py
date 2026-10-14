@@ -20,6 +20,9 @@ TEXT_LIMITS = {
     'conclusion.sentence': 80,
     'conclusion.change_condition': 60,
 }
+# The movement explanation: one summary and up to five items, each a title and one short paragraph.
+# Without a limit the item paragraph grew to a median of 193 characters and the summary to 193.
+MOVEMENT_LIMITS = {'summary': 100, 'title_keyword': TITLE_MAX_LENGTH, 'sentence': 120}
 MAX_TOPICS = 15
 MAX_BULLETS_PER_TOPIC = 5
 FACTOR_COUNT = 5
@@ -73,6 +76,33 @@ def violations(screen):
     factors = screen.get('factors')
     if isinstance(factors, list) and len(factors) != FACTOR_COUNT:
         found.append({'location': 'factors', 'limit': FACTOR_COUNT, 'actual': len(factors), 'kind': 'count'})
+    return found
+
+
+def movement_violations(response, previous_items=()):
+    """Texts of a movement response over their limit, with what to do about each.
+
+    Args:
+        response: The agent's movement response (new_items, selected_item_ids, summary).
+        previous_items: Earlier items of the day; one that is selected again is shown again, so it counts.
+
+    Returns:
+        One sentence per violation, in Korean, for the agent. Empty when compliant.
+    """
+    found = []
+    summary = response.get('summary')
+    if isinstance(summary, str) and len(summary) > MOVEMENT_LIMITS['summary']:
+        found.append(f"summary가 {len(summary)}자입니다. {MOVEMENT_LIMITS['summary']}자 안으로 줄이세요.")
+    for item in response.get('new_items') or []:
+        for field in ('title_keyword', 'sentence'):
+            text = item.get(field)
+            if isinstance(text, str) and len(text) > MOVEMENT_LIMITS[field]:
+                found.append(f"새 항목 {item.get('candidate_id')}의 {field}가 {len(text)}자입니다. {MOVEMENT_LIMITS[field]}자 안으로 줄이세요.")
+    selected = set(response.get('selected_item_ids') or [])
+    for item in previous_items or ():
+        if item.get('item_id') in selected and any(len(item.get(field) or '') > MOVEMENT_LIMITS[field] for field in ('title_keyword', 'sentence')):
+            found.append(f"기존 항목 {item['item_id']}는 지금의 글자 수 상한을 넘습니다. 다시 고르지 말고, 여전히 중요하면 근거를 다시 확인해 "
+                         '상한 안의 새 항목으로 바꾸세요.')
     return found
 
 

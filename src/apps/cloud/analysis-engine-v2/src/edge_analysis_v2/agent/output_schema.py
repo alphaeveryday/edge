@@ -1,5 +1,5 @@
 """Agent response schemas; body text is submitted through editing tools."""
-from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, TEXT_LIMITS, TITLE_MAX_LENGTH
+from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, MOVEMENT_LIMITS, TEXT_LIMITS, TITLE_MAX_LENGTH
 
 
 def obj(properties, required=None):
@@ -30,11 +30,14 @@ TOPIC = obj({'id': TEXT,
              'tool_run_ids': REFS | {'description': '이 논점의 전체 근거 목록을 교체합니다. 바뀐 문장뿐 아니라 유지한 문장의 숫자·비중 근거도 포함합니다. 서로 다른 종류의 숫자를 쓰면 각 계산 호출 ID를 모두 넣습니다.'},
              'updated_sentence_numbers': {'type': 'array', 'items': {'type': 'integer', 'minimum': 1}}},
             ['id', 'title_keyword', 'sentences', 'sentiment', 'tool_run_ids'])
+# The lengths are said here and checked before publication with a chance to shorten; a schema maximum would
+# fail the whole explanation over one long sentence.
 MOVEMENT = obj({
     'new_items': {'type': 'array', 'items': obj(ITEM['properties'] | {
+        'sentence': TEXT | {'description': f"공백·문장부호 포함 최대 {MOVEMENT_LIMITS['sentence']}자. 사건과 그것이 이 ETF에 뜻하는 것을 한두 문장으로."},
         'candidate_id': TEXT, 'type': {'enum': ['이슈', '차트', '매크로', '수급']}})},
     'selected_item_ids': {'type': 'array', 'maxItems': 5, 'uniqueItems': True, 'items': TEXT},
-    'summary': {'type': ['string', 'null']},
+    'summary': {'type': ['string', 'null'], 'description': f"공백·문장부호 포함 최대 {MOVEMENT_LIMITS['summary']}자, 최대 두 문장."},
 })
 def keywords(side):
     return {'type': 'array', 'items': obj({'label': limited(f'conclusion.{side}[].label'), 'tool_run_ids': REFS})}

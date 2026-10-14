@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, WRITING
 from edge_analysis_v2.tools.execution import AuditedExecution, ToolInputError
 from edge_analysis_v2.analysis.body_editor import BodyEditor
-from edge_analysis_v2.contracts.outlook_limits import violations
+from edge_analysis_v2.contracts.outlook_limits import movement_violations, violations
 from edge_analysis_v2.storage.factors import read_factor_details, project_factor_metrics
 from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.agent.runner import load_prompt, run_model
@@ -360,8 +360,12 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                         run(lambda connection: store(connection).validate_evidence(kind, analysis_id, [actual]))
                     except ToolInputError as error:
                         problems.append(f'{reference}: ' + str(error).replace(str(actual), str(reference)))
-                return ('이 번호들은 최종 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나 그 항목을 빼세요. '
-                        '전체 응답을 다시 내세요.\n' + '\n'.join(problems)) if problems else None
+                message = ('이 번호들은 최종 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나 그 항목을 빼세요.\n'
+                           + '\n'.join(problems) + '\n') if problems else ''
+                long = movement_violations(final, previous_items) if kind == 'movement' else []
+                if long:
+                    message += '글자 수 상한을 넘은 곳이 있습니다. 내용을 버리지 말고 가장 중요한 것만 남겨 줄이세요.\n' + '\n'.join(long) + '\n'
+                return message + '전체 응답을 다시 내세요.' if message else None
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
