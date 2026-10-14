@@ -1,3 +1,4 @@
+import asyncio
 import json
 import httpx
 import pytest
@@ -51,6 +52,86 @@ async def test_search_and_fetch_share_70_calls_then_stop_before_remote_request()
 
 class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
+
+
+@pytest.mark.parametrize('complete', [False, True])
+async def test_analysis_shares_ten_minutes_across_roles(monkeypatch, complete):
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    monkeypatch.setattr(loop, 'time', lambda: now)
+    phases, events = [], []
+    release_question, release_opinion = asyncio.Event(), asyncio.Event()
+
+    async def model(payload):
+        role = phases[-1]
+        if role == 'question':
+            await release_question.wait()
+        if role == 'portfolio' and (call := optimization_call(payload)):
+            return call
+        if role == 'opinion':
+            await release_opinion.wait()
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+
+    task = asyncio.create_task(run_analysis(
+        AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
+        'test', phases.append, model_call=model, evidence=Evidence(), on_event=events.append))
+    try:
+        await asyncio.sleep(0)
+        now += 301
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert not task.done(), 'Research must continue beyond the former five-minute deadline'
+        release_question.set()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert phases == list(ROLES)
+        now += 298
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert not task.done(), 'The final role still has time at 599 seconds'
+        assert events[0]['limits']['elapsed_seconds'] == 600
+        if complete:
+            release_opinion.set()
+            result = await task
+            assert result['diagnostics']['termination_reason'] == 'COMPLETED'
+        else:
+            now += 1
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert task.done(), 'Changing roles must not reset the shared 600-second deadline'
+            with pytest.raises(TimeoutError):
+                await task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_followup_keeps_its_five_minute_deadline(monkeypatch):
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    monkeypatch.setattr(loop, 'time', lambda: now)
+    events = []
+    async def model(payload):
+        await asyncio.Event().wait()
+    task = asyncio.create_task(run_analysis(
+        AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), 'test', lambda _: None,
+        model_call=model, evidence=Evidence(), followup_question='Explain the saved report',
+        prior_report={'sources': []}, on_event=events.append))
+    try:
+        await asyncio.sleep(0)
+        assert events[0]['limits']['elapsed_seconds'] == 300
+        now += 300
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert task.done(), 'Extending initial analysis must not extend followup limits'
+        with pytest.raises(TimeoutError):
+            await task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def test_evidence_connection_is_lazy_and_reused_after_the_first_remote_lookup():

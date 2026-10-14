@@ -3,6 +3,14 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
+test('timeout explains the ten-minute maximum without claiming every request lasted ten minutes', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'timed-out'));
+  await page.route('**/api/portfolio/**', route => route.fulfill({ json: { id: 'timed-out', state: 'failed', failure: 'TIMED_OUT' } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.ans')).toContainText('전체 분석은 최대 10분');
+  await expect(page.locator('.ans')).not.toContainText('5분 안에');
+});
+
 test('external search throttling is distinguished from the visitors trial quota', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'search-limited'));
   await page.route('**/api/portfolio/analyses/search-limited', route => route.fulfill({ json: { id: 'search-limited', state: 'failed', failure: 'SEARCH_RATE_LIMIT' } }));
@@ -38,6 +46,7 @@ test('default account, real stages, result restoration, chat gate and email rece
   await expect(page.locator('.acct__name').first()).toHaveText('\uC77C\uBC18 \uACC4\uC88C');
   await fillForm(page);
   await expect(page.locator('.progress')).toContainText('약 5분');
+  await expect(page.locator('.progress')).toContainText('최대 10분');
   await expect(page.locator('.agents.tree .mini')).toHaveCount(3);
   await expect(page.locator('.agents.tree .wide')).toHaveCount(2);
   await expect(page.locator('.agents [data-s=run]')).toHaveCount(2);

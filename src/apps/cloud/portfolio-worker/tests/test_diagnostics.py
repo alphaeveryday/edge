@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import json
 import sys
@@ -41,6 +42,12 @@ def test_replay_reads_only_failed_analysis_without_mutation_or_private_output(di
     call = AsyncMock(side_effect=ValueError('private-error-text') if fail else None,
                      return_value={'elapsed_seconds': 12, 'optimization': {'status': 'available', 'candidates': [1]}, 'private': 'private-result'})
     monkeypatch.setattr(agent, 'run_analysis', call)
+    deadlines = []
+    original_timeout = asyncio.timeout
+    def timeout(seconds):
+        deadlines.append(seconds)
+        return original_timeout(seconds)
+    monkeypatch.setattr(asyncio, 'timeout', timeout)
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'private-key')
     monkeypatch.setattr(sys, 'argv', ['-c', 'a' * 32])
     exec(compile(diagnostics.REPLAY_SCRIPT, 'replay', 'exec'), {})
@@ -51,5 +58,6 @@ def test_replay_reads_only_failed_analysis_without_mutation_or_private_output(di
     assert "state='failed' AND kind='analysis'" in queries[0][0]
     assert queries[0][1] == ('a' * 32,)
     assert call.await_count == int(exists)
+    assert deadlines == ([300] if exists else []), 'Manual replay must stay inside its existing SSM watchdog'
     report = json.loads(output.removeprefix('REPLAY '))
     assert report['status'] == ('not_found' if not exists else 'failed' if fail else 'succeeded')

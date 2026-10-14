@@ -121,7 +121,9 @@ def read(job_id, owner):
 
 
 def expire(db):
-    db.execute("UPDATE portfolio_jobs SET state='failed',failure='WORKER_INTERRUPTED',finished_at=now() WHERE state='running' AND started_at < now()-interval '6 minutes'")
+    db.execute("""UPDATE portfolio_jobs SET state='failed',failure='WORKER_INTERRUPTED',finished_at=now()
+        WHERE state='running' AND started_at < now()-CASE WHEN kind='analysis'
+        THEN interval '11 minutes' ELSE interval '6 minutes' END""")
     db.execute("UPDATE portfolio_jobs SET state='failed',failure='QUEUE_EXPIRED',finished_at=now() WHERE state='queued' AND created_at < now()-interval '30 minutes'")
 
 

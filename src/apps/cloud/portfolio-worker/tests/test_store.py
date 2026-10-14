@@ -60,7 +60,7 @@ def test_crashed_worker_result_cannot_overwrite_expiration(isolated_db):
     job = store.submit("owner", "same", {})
     store.claim()
     with store.connect() as db:
-        db.execute("UPDATE portfolio_jobs SET started_at=now()-interval '7 minutes'")
+        db.execute("UPDATE portfolio_jobs SET started_at=now()-interval '12 minutes'")
     assert store.read(job["id"], "owner")["failure"] == "WORKER_INTERRUPTED"
     assert store.finish(job["id"], result={"late": True}) is False
 
@@ -71,13 +71,28 @@ def test_interrupted_job_retains_last_checkpoint_without_becoming_a_completed_re
     store.checkpoint(job['id'], {'diagnostics': {'events': [{'event': 'tool_started', 'tool': 'fetch_source'}]}})
     store.checkpoint(job['id'], {'partial_report': {'sections': {'question': {'summary': 'saved'}}}})
     with store.connect() as db:
-        db.execute("UPDATE portfolio_jobs SET started_at=now()-interval '7 minutes' WHERE id=%s", (job['id'],))
+        db.execute("UPDATE portfolio_jobs SET started_at=now()-interval '12 minutes' WHERE id=%s", (job['id'],))
     failed = store.read(job['id'], 'owner')
     assert failed['state'] == 'failed'
     assert failed['failure'] == 'WORKER_INTERRUPTED'
     assert failed['result']['diagnostics']['events'][0]['tool'] == 'fetch_source'
     assert failed['result']['partial_report']['sections']['question']['summary'] == 'saved'
     assert not store.checkpoint(job['id'], {'late': True})
+
+
+@pytest.mark.parametrize('kind,age,state', [
+    ('analysis', 7, 'running'), ('analysis', 10, 'running'), ('analysis', 12, 'failed'),
+    ('chat', 5, 'running'), ('chat', 7, 'failed'),
+])
+def test_polling_does_not_expire_analysis_before_its_deadline(isolated_db, kind, age, state):
+    job = store.submit('owner', 'deadline', {})
+    store.claim()
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_jobs SET kind=%s,started_at=now()-%s*interval '1 minute' WHERE id=%s",
+                   (kind, age, job['id']))
+    assert store.read(job['id'], 'owner')['state'] == state
+    if state == 'running':
+        assert store.finish(job['id'], result={'completed': True}), 'Polling must not discard a valid late result'
 
 
 def test_slow_checkpoint_transaction_releases_lock_before_final_publication(isolated_db):

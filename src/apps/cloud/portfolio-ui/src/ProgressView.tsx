@@ -10,7 +10,7 @@ export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: numbe
   return <article className="step progress in">
     <span className="eyebrow">준비 끝</span><h2>전문가 AI가<br /><em>내 구성</em>을 봐요</h2>
     <div className="stage"><canvas ref={canvas} aria-hidden="true" /><p className="stage__t" role="status">{job?.state === 'running' && job.stage ? titles[job.stage] : '분석 준비 중'}</p></div>
-    <p className="notice">약 5분 정도 걸려요.<br />나갔다 들어와도 분석이 계속돼요.</p>
+    <p className="notice">약 5분 정도 걸리며, 최대 10분까지 분석해요.<br />나갔다 들어와도 분석이 계속돼요.</p>
     <ul className="vals agents tree">
       {card('개별 종목 분석 AI', 'ETF 안의 회사', 1, 'M16.5 10.5a6 6 0 1 1-12 0a6 6 0 1 1 12 0M15 15l5 5M8 12v-2M10.5 12V8M13 12v-3', true)}
       {card('산업 분석 AI', '실려 있는 산업', 1, 'M3 20V10l6 3.5V10l6 3.5V5h4v15zM3 20h18', true)}

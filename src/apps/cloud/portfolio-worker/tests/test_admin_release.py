@@ -47,6 +47,6 @@ def test_release_builds_before_draining_and_keeps_dependencies_until_worker_stop
     release.main()
     compose = [command for command in submitted if command.startswith('docker compose')]
     assert compose[0].endswith(' build'), 'Failed builds must leave the running worker intact'
-    assert compose[1].endswith(' stop --timeout 330 worker'), 'Only the worker drains; its dependencies stay alive'
+    assert compose[1].endswith(' stop --timeout 630 worker'), 'A ten-minute analysis must finish and save before replacement'
     assert ' up -d --wait' in compose[2], 'Service replacement must wait until the current analysis is saved'
     assert '--build' not in compose[2]
