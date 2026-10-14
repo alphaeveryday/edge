@@ -790,8 +790,13 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				rs.getLong("completed_etfs"), rs.getLong("failed_etfs")), from, to, from, to);
 	}
 
+	/**
+	 * 🔴 <b>REPEATABLE READ 한 스냅샷이다</b>(ALPHA-1329). 트리거 수와 날짜별 v2 단계를 다른 문장으로 세므로,
+	 * 그 사이에 트리거나 요청이 커밋되면 "트리거 0 · 요청 1" 같은 존재한 적 없는 조합이 나간다 — 화면은
+	 * 단계 불변식이 깨진 응답을 통째로 거부한다.
+	 */
 	@Override
-	@Transactional(readOnly = true)
+	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 	public IntradayAnalysisTrend intradayAnalysisTrend(LocalDate maxDate, int days) {
 		List<IntradayAnalysisPoint> points = new ArrayList<>();
 		OffsetDateTime[] asOf = new OffsetDateTime[1];
