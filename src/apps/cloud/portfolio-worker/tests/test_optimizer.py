@@ -520,3 +520,19 @@ async def test_batch_deadline_distinguishes_unstarted_prices_from_interrupted_pr
     if completed:
         assert market.records['KR:A'] is completed_record
         assert result['tested_combinations'] == 1
+
+
+async def test_timeout_checkpoint_is_not_reported_as_an_unavailable_instrument(monkeypatch):
+    request, market, groups = batch()
+    async def fetch(symbol, _, **kwargs):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            kwargs['on_raw'](record())
+            raise
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .03)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 10
+    assert result['failures'] == {}

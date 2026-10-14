@@ -182,7 +182,8 @@ class Optimizer:
                                 on_raw=lambda record: self.market.records.__setitem__(key, record))
                         self.market.failures.pop(key, None)
                     except Exception as error:
-                        self.market.failures[key] = price_failure(error)
+                        if key not in self.market.records:
+                            self.market.failures[key] = price_failure(error)
         rejections = {}
         try:
             try:
