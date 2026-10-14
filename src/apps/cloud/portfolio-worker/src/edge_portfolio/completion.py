@@ -97,7 +97,10 @@ def assess_completion(final, request, decision, published, sources, as_of):
         reasons.append('RESEARCH_COVERAGE_INCOMPLETE')
     if decision.kind in {'rebalance', 'new_money'} and recommendation and not execution:
         reasons.append('EXECUTION_PLAN_MISSING')
-    needs_input = bool(decision.missing_inputs or final.withheld_reason == 'missing_input' or any(task['status'] == 'needs_input' for task in tasks) or execution and execution['status'] == 'needs_input')
+    # Interpretation-stage questions are suggestions, not requirements for every task.
+    # Only an unanswered customer task or a calculator can require customer input.
+    missing_inputs = list(dict.fromkeys(value for task in tasks if task['status'] == 'needs_input' for value in task['missing']))
+    needs_input = bool(any(task['status'] == 'needs_input' for task in tasks) or execution and execution['status'] == 'needs_input')
     if decision.kind == 'scenario' or decision.scenario_requested:
         if not published.get('scenarios'):
             reasons.append('SCENARIO_CALCULATION_REQUIRED')
@@ -110,10 +113,37 @@ def assess_completion(final, request, decision, published, sources, as_of):
         reasons.append('COMPARISON_DATA_UNAVAILABLE')
     if not recommendation and optimization.get('reason') in {'CURRENT_WEIGHTS_REQUIRED', 'CUSTOMER_CONSTRAINT_UNVERIFIED'}:
         needs_input = True
+    input_labels = {
+        'CURRENT_WEIGHTS_REQUIRED': '종목별 평가금액 또는 보유 비중',
+        'CURRENT_AMOUNTS_REQUIRED': '종목별 현재 평가금액 또는 투자 원금',
+        'ADDITIONAL_FUNDING_REQUIRED': '추가 투자금 또는 매달 납입할 금액',
+        'INVESTMENT_AMOUNT_REQUIRED': '투자할 금액',
+        'ACCOUNT_OPENING_REQUIRED': '계좌 보유 여부 또는 개설 가능 여부',
+        'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED': '계좌에서 인출 가능한 금액과 중도 인출 조건',
+        'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED': '계좌의 남은 납입 가능 금액',
+    }
+    input_reasons = [optimization.get('reason')] if not recommendation else []
+    for calculation in (execution, published.get('scenarios')):
+        if calculation and calculation.get('status') == 'needs_input':
+            input_reasons.extend(calculation.get('reasons', []) or [calculation.get('reason')])
+    for reason in input_reasons:
+        code, _, account = (reason or '').partition(':')
+        if code in input_labels:
+            missing_inputs.append((account + ' ' if account else '') + input_labels[code])
+        elif code == 'CUSTOMER_CONSTRAINT_UNVERIFIED':
+            missing_inputs.extend(f'요청 조건 확인: {rule.source}' for rule in decision.constraints if rule.kind == 'unverified')
+            if decision.kind == 'new_money' or any(rule.kind == 'no_sell' for rule in decision.constraints):
+                from .execution import resolve_funding
+                funding = resolve_funding(request, decision)
+                if funding is None or decision.kind == 'new_money' and not (funding['additional_krw'] or funding['monthly_krw']):
+                    missing_inputs.append(input_labels['ADDITIONAL_FUNDING_REQUIRED'])
+    missing_inputs = list(dict.fromkeys(missing_inputs))
+    if final.withheld_reason == 'missing_input' and not needs_input:
+        reasons.append('INPUT_REQUIREMENT_UNVERIFIED')
     if not recommendation and optimization.get('reason') in (None, 'RECOMMENDATION_WITHHELD') and not final.withheld_reason:
         reasons.append('WITHHOLDING_REASON_MISSING')
     executed_saved_target = decision.execute_saved_target and not recommendation and decision.kind in {'rebalance', 'new_money'} and execution and execution['status'] in {'ready', 'conditional'}
     status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if decision.kind == 'scenario' or executed_saved_target else 'no_match' if not recommendation else 'complete'
-    return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': decision.missing_inputs,
+    return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': missing_inputs,
             'evidence_coverage': list(coverage.values()), 'missing_research': missing_research,
             'note': '자료 항목·날짜·실행 조건의 충족 상태이며 주장 자체의 사실 정확성을 보증하지 않습니다.'}

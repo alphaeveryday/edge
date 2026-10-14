@@ -7,6 +7,70 @@ from edge_portfolio.decision import Decision
 from report_fixtures import final_payload
 
 
+@pytest.mark.parametrize('kind', ['review', 'new_portfolio'])
+def test_optional_profile_questions_do_not_block_the_available_analysis(kind):
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    decision = Decision(kind=kind, missing_inputs=['구체적 질문', '목표 배당금', '매도 허용 여부'])
+    published = {'recommendation': None, 'optimization': {'status': 'no_match', 'reason': 'SERVICE_CRITERIA_NOT_MET'}}
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'search_exhausted'})
+    result = assess_completion(final, request, decision, published, [], '2026-10-14')
+    assert result['status'] == 'no_match'
+    assert result['missing_inputs'] == []
+
+
+def test_claiming_missing_input_without_a_dependent_task_requires_correction():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'missing_input'})
+    result = assess_completion(final, request, Decision(missing_inputs=['목표 배당금']),
+        {'recommendation': None, 'optimization': {'status': 'no_match', 'reason': 'SERVICE_CRITERIA_NOT_MET'}}, [], '2026-10-14')
+    assert result['status'] == 'partial'
+    assert 'INPUT_REQUIREMENT_UNVERIFIED' in result['reasons']
+    assert result['missing_inputs'] == []
+
+
+def test_an_actual_customer_question_preserves_its_specific_missing_input():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='매달 얼마를 넣어야 하나요?')
+    payload = {**final_payload(), 'recommendation': None, 'withheld_reason': 'missing_input', 'answers': [
+        {'question_index': 1, 'status': 'needs_input', 'answer': '목표 금액에 맞는 월 납입액을 계산하려면 목표 금액이 필요해요.', 'missing': ['목표 금액']}]}
+    result = assess_completion(FinalReport.model_validate(payload), request,
+        Decision(missing_inputs=['목표 금액', '매도 허용 여부']), {'recommendation': None}, [], '2026-10-14')
+    assert result['status'] == 'needs_input'
+    assert result['missing_inputs'] == ['목표 금액']
+
+
+def test_execution_inputs_remain_required_even_without_an_explicit_question():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(kind='new_money'),
+        {'recommendation': {'allocations': [], 'execution': {'status': 'needs_input', 'reasons': ['ADDITIONAL_FUNDING_REQUIRED']}}}, [], '2026-10-14')
+    assert result['status'] == 'needs_input'
+    assert result['missing_inputs'] == ['추가 투자금 또는 매달 납입할 금액']
+
+
+@pytest.mark.parametrize('published, expected', [
+    ({'optimization': {'status': 'unavailable', 'reason': 'CURRENT_WEIGHTS_REQUIRED'}}, '종목별 평가금액 또는 보유 비중'),
+    ({'scenarios': {'status': 'needs_input', 'reason': 'CURRENT_AMOUNTS_REQUIRED'}}, '종목별 현재 평가금액 또는 투자 원금'),
+    ({'execution': {'status': 'needs_input', 'reasons': ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA']}}, 'ISA 계좌의 남은 납입 가능 금액'),
+])
+def test_calculator_requirements_are_visible_without_optional_profile_questions(published, expected):
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None})
+    result = assess_completion(final, request, Decision(missing_inputs=['목표 배당금']), published, [], '2026-10-14')
+    assert result['status'] == 'needs_input'
+    assert result['missing_inputs'] == [expected]
+
+
+@pytest.mark.parametrize('contribution', ['', '매달 꾸준히'])
+def test_implicit_no_sell_check_keeps_the_actual_funding_requirement(contribution):
+    request = AnalysisInput(input_mode='amount', holdings=[{'kind': 'etf', 'name': 'VOO',
+        'instrument_id': 'US:VOO', 'account': '일반 계좌', 'amount_krw': 1000000}],
+        horizon='10년 이상', preferences={'contribution': contribution})
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None})
+    result = assess_completion(final, request, Decision(kind='new_money', missing_inputs=['목표 배당금']),
+        {'optimization': {'status': 'no_match', 'reason': 'CUSTOMER_CONSTRAINT_UNVERIFIED'}}, [], '2026-10-14')
+    assert result['status'] == 'needs_input'
+    assert result['missing_inputs'] == ['추가 투자금 또는 매달 납입할 금액']
+
+
 def test_valid_json_without_an_answer_is_not_customer_completion():
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='리밸런싱 어떻게 하나요?')
     result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(kind='rebalance'),
@@ -322,8 +386,8 @@ async def test_quality_withholding_requires_a_new_search_before_no_match(monkeyp
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
     result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
-    assert len(opinions) == (1 if missing_input else 3)
-    assert result['completion']['status'] == ('needs_input' if missing_input else 'no_match')
+    assert len(opinions) == 3
+    assert result['completion']['status'] == 'no_match'
 
 
 async def test_truncated_output_recovers_without_discarding_prior_tool_evidence(monkeypatch):
