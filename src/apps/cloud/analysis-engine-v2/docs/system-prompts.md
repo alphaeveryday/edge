@@ -2,6 +2,11 @@
 
 에이전트가 받는 지시는 세 층이다. 기본 지침은 모든 작업에 같고 짧다. 깊이는 스킬에 있고, 작업이 그 스킬을 선언했거나 에이전트가 스킬을 열었을 때만 적용된다.
 
+완성된 전망에서 화면 칸을 채우는 필드 단계는 `structured_only=True`를 쓴다. 이 단계에는 작업 노트 규칙이 든
+`base.md` 대신 `outlook_fields.yaml`을 시스템 지침으로 직접 전달하고, 네 입력을 최초 메시지에 모두 넣는다.
+스킬·작업 폴더의 문서·작업관리 도구는 제공하지 않는다. `system_prompt.txt`, `model_input.json`,
+`events.jsonl`, `response.json`, `measurement.json`으로 입력·출력과 비용을 확인한다.
+
 | 층 | 문서 | 언제 전달되나 |
 |---|---|---|
 | 기본 지침 | [base.md](../src/edge_analysis_v2/prompts/base.md) | 항상. 시스템 지침으로 전달. 어떤 작업에나 맞는 규칙만 둔다 |

@@ -98,7 +98,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     timeout_seconds: int = 300, client_factory=ClaudeSDKClient, skills: tuple[str, ...] = (),
                     optional_skills: tuple[str, ...] = (),
                     resume: bool = False, compare_explanations: bool = False, final_check=None,
-                    web_search: bool = False, events_log: Path | None = None) -> dict:
+                    web_search: bool = False, events_log: Path | None = None,
+                    structured_only: bool = False) -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -123,6 +124,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             express (a cited ID that does not exist) is sent back to the same conversation, at most twice.
         web_search: Attach the public search MCP. The model then reaches a search service directly, so
             its queries are in events.jsonl but not in the audited tool records.
+        structured_only: Fill a schema from completed input, without research, files, skills or task tracking.
+            The SDK's StructuredOutput mechanism and final validation/repair remain enabled.
 
     Returns:
         Validated final response. Meaning is reviewed separately by a reviewer.
@@ -134,6 +137,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     """
     if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
         raise ValueError('API key and a 1..600 second deadline are required')
+    if structured_only and (schemas or skills or optional_skills or resume or web_search or compare_explanations):
+        raise ValueError('structured_only cannot use research tools, skills, resume or task tracking')
     artifacts.mkdir(parents=True, exist_ok=True)
     if resume and json.loads((artifacts / 'input.json').read_text(encoding='utf-8')) != initial:
         raise ValueError('Resume requires the same original observations and cutoff')
@@ -141,35 +146,41 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
     repairs = 0
-    server, allowed = make_server(schemas, call)
+    server, allowed = make_server(schemas, call) if not structured_only else (None, [])
     if web_search:
         allowed = allowed + [SEARCH_TOOL]
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
         workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
-        session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
-        session.compare_explanations = compare_explanations
-        session.wrap_up_at = monotonic() + timeout_seconds * WRAP_UP_SHARE
-        source_context = WorkContext(initial)
-        prompt = session.system_prompt(prompt)
-        query_input = {'workspace_instructions': {'path': 'AGENTS.md',
-                       'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
-                       # A question is handed over as it is; only a set of data sources is turned into a catalog to read from.
-                       'input': initial if all(isinstance(v, str) for v in initial.values()) else source_context.initial}
-        if resume:
-            query_input['resumed_work'] = session.restore()
+        session = None
+        if structured_only:
+            query_input = {'input': initial}
+            work_options = dict(tools=[], allowed_tools=[], mcp_servers={})
+        else:
+            session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
+            session.compare_explanations = compare_explanations
+            session.wrap_up_at = monotonic() + timeout_seconds * WRAP_UP_SHARE
+            source_context = WorkContext(initial)
+            prompt = session.system_prompt(prompt)
+            query_input = {'workspace_instructions': {'path': 'AGENTS.md',
+                           'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
+                           # A question is handed over as it is; only a set of data sources is turned into a catalog to read from.
+                           'input': initial if all(isinstance(v, str) for v in initial.values()) else source_context.initial}
+            if resume:
+                query_input['resumed_work'] = session.restore()
+            work_options = dict(tools=['Skill', 'Read', 'Write', 'Edit'],
+                allowed_tools=allowed + workspace_allowed + ['Read', 'Write', 'Edit'],
+                skills=session.names, plugins=[{'type':'local', 'path':str(session.plugin)}],
+                hooks={'PreToolUse':[HookMatcher(hooks=[session.before])],
+                       'PreCompact':[HookMatcher(hooks=[session.precompact])],
+                       'PostToolUse':[HookMatcher(hooks=[session.after])]},
+                mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}
+                            | ({'search': SEARCH_SERVER} if web_search else {}))
         (artifacts / 'model_input.json').write_text(encode(query_input), encoding='utf-8')
         # DeepSeek's documented SDK model tag prevents the unknown-model 200K default.
         sdk_model = model if model.endswith('[1m]') else model + '[1m]'
         options = ClaudeAgentOptions(
-            model=sdk_model, system_prompt=prompt, tools=['Skill', 'Read', 'Write', 'Edit'],
-            allowed_tools=allowed + workspace_allowed + ['Read', 'Write', 'Edit'],
-            skills=session.names, plugins=[{'type':'local', 'path':str(session.plugin)}],
-            hooks={'PreToolUse':[HookMatcher(hooks=[session.before])],
-                   'PreCompact':[HookMatcher(hooks=[session.precompact])],
-                   'PostToolUse':[HookMatcher(hooks=[session.after])]},
-            mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}
-                        | ({'search': SEARCH_SERVER} if web_search else {}), strict_mcp_config=True,
+            model=sdk_model, system_prompt=prompt, **work_options, strict_mcp_config=True,
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
             settings=json.dumps({'autoCompactEnabled': True}),
@@ -222,16 +233,17 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                         repairs += 1
                         await client.query(problem)
                         continue
-                    continuation = session.continuation()
+                    continuation = session.continuation() if session else None
                     if continuation is None:
                         (artifacts / 'response.json').write_text(encode(final), encoding='utf-8')
                         return final
                     await client.query(continuation)
         finally:
-            if session.status == 'running':
+            if session and session.status == 'running':
                 session.status = 'interrupted'
             try:
-                session.checkpoint()
+                if session:
+                    session.checkpoint()
             except (OSError, ValueError):
                 # Saving notes must not replace the timeout, cancellation or model error being raised.
                 pass
