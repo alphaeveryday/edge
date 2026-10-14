@@ -24,7 +24,7 @@ flowchart LR
 - [Anthropic: Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): 고정된 하위 작업은 prompt chaining과 단계별 코드 검증으로 처리한다. 네 역할은 독립 에이전트가 아니라 같은 대화의 순차 단계다. 서브에이전트·자유 라우팅·토론은 추가하지 않는다.
 - [AWS: Asynchronous communication](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-integrating-microservices/asynchronous.html): 접수 응답과 실제 실행을 분리하고 작업 ID로 상태를 조회한다. UI는 실패 시 조회 간격을 늘리고 새로고침 뒤 작업 ID를 복원한다.
 - [PostgreSQL SELECT / SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html): 큐의 원자적 claim을 위해 트랜잭션과 `FOR UPDATE SKIP LOCKED`를 사용한다. 기존 DB 의존 없이 전용 저장소 하나로 작업·결과를 관리한다. 초기 규모에 SQS와 별도 상태 저장소를 동시에 추가하지 않는다.
-- [DeepSeek strict 도구 호출](https://api-docs.deepseek.com/guides/tool_calls/): `deepseek-flash`의 beta 엔드포인트를 사용한다. 각 역할의 결과는 `strict: true`인 `submit_report`로 제출한다. 일반 조사·판단은 auto 도구 선택으로 thinking을 유지한다. 종료 또는 출력 복구에서 submit_report를 강제할 때만 공급자 제약에 따라 thinking을 비활성화한다. 도구 제출이 없는 응답은 기존 역할별 수정 한도 안에서 강제 제출로 복구한다. 자료 조사 도구도 모두 strict 스키마를 적용한다. 선택 인자는 null을 허용하는 필수 키로 전송하고 호출 실행 전에 생략값으로 복원해 기존 의미를 유지한다.
+- [DeepSeek strict 도구 호출](https://api-docs.deepseek.com/guides/tool_calls/): `deepseek-flash`의 beta 엔드포인트를 사용한다. 각 역할의 결과는 `strict: true`인 `submit_report`로 제출한다. 일반 조사·판단은 auto 도구 선택으로 thinking을 유지한다. 종료 또는 출력 복구에서 submit_report를 강제할 때만 공급자 제약에 따라 thinking을 비활성화한다. 필수 후보 계산·최소 출처·요청 계산이 끝나기 전에는 보고 제출 도구를 제공하지 않는다. 공급자가 일반 JSON으로 답해도 유효한 JSON 객체라면 기존 스키마·업무 검증으로 넘기고 진단에 기록한다. 전송 형식·JSON 문법·응답 잘림 오류의 복구는 역할별 최대 두 번이며 업무 검증 수정 횟수와 분리한다. 자료 조사 도구도 모두 strict 스키마를 적용한다. 선택 인자는 null을 허용하는 필수 키로 전송하고 호출 실행 전에 생략값으로 복원해 기존 의미를 유지한다.
 - [Exa 공식 MCP](https://github.com/exa-labs/exa-mcp-server#authentication): endpoint `https://mcp.exa.ai/mcp`의 `web_search_exa`, `web_fetch_exa`만 사용한다. `EXA_API_KEY`를 해당 HTTPS 원본의 `x-api-key` 헤더로 전달한다. 운영 키는 Secrets Manager `edge/portfolio/runtime`에서 워커에만 주입하며 URL·모델 입력에 넣지 않는다. 인증 후에도 공급자 요금제의 호출 제한은 적용된다.
 
 ## 단일 에이전트의 실행 계약
@@ -147,7 +147,7 @@ flowchart LR
 - 동일한 최대 가용 공통 기간의 원화 총수익률 구간에서 기존 구성과 비교한다. 가장 늦은 유효 시작일과 가장 이른 종료일로 맞춘다. 과거 초과수익률·우세 거래일 비율·최근 우세 거래일 수는 비교 정보이며 후보를 탈락시키는 조건이 아니다. 기준일 포함 최소 11개 거래일 관측은 유지한다. 첫 기준일과 FX만 거래된 날은 우세 비율 집계에서 빼고, 동률은 우세로 세지 않는다.
 - 점수는 `0.4 × 우세 거래일 비율(%) + 0.4 × 상대 초과 수익률(%) + 0.2 × 구성 보존율(%)`이다. 상대 초과 수익률은 고객 제약 통과 격자의 초과 수익률 범위에 0을 포함해 최솟값을 0%, 최댓값을 100%로 환산하며 범위가 0이면 0%다. 음수 수익률에서도 순서를 유지한다. 구성 보존율은 `100 − 0.5 × 종목별 비중 차이 절댓값의 합`이며 기존 현금도 포함한다. 고객 제약을 통과한 벡터 중 목적 우선순위로 조합별 한 건을 반환하고 이 점수는 보조 기준으로 사용한다. 동점이면 초과 수익률·구성 보존율·비중 배열 순으로 결정한다.
 - 함수는 탈락 구성·비중을 반환하지 않는다. 에이전트는 통과 후보의 순위와 전망을 종합해 하나를 선택하고 이유를 쓴다. 1위 이외를 고르면 전망 근거로 차이를 설명한다. 선택 후보의 ETF·비중 수정은 서버가 거부한다. 전부 탈락하면 추천을 발행하지 않으며, 자료 부족과 실제 기준 미달을 구분한다. 기존 비중 미입력 시에도 임의 비교 대상을 만들지 않는다.
-- 후보 준비·최적화는 포트폴리오 역할 완료 전에 강제한다. 마지막 투자 의견 역할의 최대 응답 토큰은 16,000이며 다른 역할은 6,000이다. 모든 역할의 추론을 유지하고 전체 분석은 600초·모델 호출 100회·실제 UTF-8 컨텍스트 350KB로 제한한다. 최종 응답의 형식 수정은 최대 두 번, 다른 역할은 한 번이다. 호출 횟수와 컨텍스트 초과를 서로 다른 오류 코드로 기록하며 결과 검증 실패도 원문 입력 없이 정해진 사유 코드로 구분한다.
+- 후보 준비·최적화는 포트폴리오 역할 완료 전에 강제한다. 마지막 투자 의견 역할의 최대 응답 토큰은 16,000이며 다른 역할은 6,000이다. 모든 역할의 추론을 유지하고 전체 분석은 600초·모델 호출 100회·실제 UTF-8 컨텍스트 1MB로 제한한다. 최종 응답의 형식 수정은 최대 두 번, 다른 역할은 한 번이다. [공급자 공식 문서](https://api-docs.deepseek.com/quick_start/pricing/)의 1M 토큰 문맥보다 여유 있는 1MB 바이트 상한을 사용한다. 호출 횟수와 컨텍스트 초과를 서로 다른 오류 코드로 기록하며 결과 검증 실패도 원문 입력 없이 정해진 사유 코드로 구분한다.
 
 별점 세 축은 근거에 대한 AI 정성 평가이며 종합 점수는 서버가 평균을 계산한다. 현재와 추천에 같은 기준을 적용하며 비교 근거가 부족하면 점수를 비운다. 예상 수익률은 과거 성과와 시장 근거를 고려한 AI 추정이며 검증된 예측 모형이 아니다. 양수나 7%로 보정하지 않는다.
 
