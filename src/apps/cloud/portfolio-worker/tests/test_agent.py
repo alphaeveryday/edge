@@ -285,7 +285,7 @@ async def test_unregistered_url_is_rejected_without_losing_the_whole_analysis():
 
 
 @pytest.mark.parametrize('research_calls,passage,invalid_final,expected_error', [
-    (17, '', 2, None), (1, '가' * 70000, 0, None),
+    (30, '', 2, None), (1, '가' * 70000, 0, None),
     (1, '가' * 120000, 0, 'MODEL_CONTEXT_BUDGET'), (1, '', 3, 'OUTPUT_INVALID')],
     ids=['research-budget', 'utf8-size', 'context-ceiling', 'repair-ceiling'])
 async def test_candidate_research_budget_and_korean_utf8_size_allow_final_publication(research_calls, passage, invalid_final, expected_error):
@@ -322,7 +322,7 @@ async def test_candidate_research_budget_and_korean_utf8_size_allow_final_public
     assert result['trace'][-1]['call'] == research_calls + 5 + repairs_used
 
 
-async def test_runaway_tool_loop_still_stops_after_twenty_four_model_calls():
+async def test_runaway_tool_loop_still_stops_after_one_hundred_model_calls():
     class ResearchEvidence(Evidence):
         async def call(self, name, args):
             return {}
@@ -335,7 +335,7 @@ async def test_runaway_tool_loop_still_stops_after_twenty_four_model_calls():
     with pytest.raises(ValueError, match='MODEL_CALL_BUDGET'):
         await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
             'test', lambda _: None, model_call=model, evidence=ResearchEvidence())
-    assert calls == 24
+    assert calls == 100
 
 
 async def test_unverified_customer_failure_cannot_hide_available_candidates(monkeypatch):

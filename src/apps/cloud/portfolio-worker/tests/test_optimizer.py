@@ -369,7 +369,27 @@ async def test_null_close_column_excludes_only_the_malformed_candidate():
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
     assert result['tested_combinations'] == 9
+
+
+async def test_short_fallback_group_does_not_choose_the_basis_for_surviving_groups():
+    request, market, groups = batch()
+    def loader(symbol, _):
+        data = record()
+        if symbol == 'E.KS':
+            data['frame'] = data['frame'].iloc[-5:]
+            data['return_basis'] = 'price'
+        else:
+            data['frame'].iloc[-20:, data['frame'].columns.get_loc('Close')] = float('nan')
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
     assert len(result['candidates']) == 9
+    for value in market.results.values():
+        history = value['history']
+        assert '분배금 제외' not in history['basis']
+        assert history['points'][-1]['recommended'] > history['points'][-2]['recommended']
 
 
 async def test_invalid_endpoint_does_not_permanently_discard_new_valid_candidates():

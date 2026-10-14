@@ -10,12 +10,13 @@ from .market_data import fetch_prices, normalized_prices, comparison_bounds, exp
 from .recommendation import selected_accounts, allocation_error
 from .decision import Constraint, Decision, check_constraints
 from .execution import plan_execution
+from .market_data import comparison_method, comparison_column
 
 PRICE_TIMEOUT_SECONDS = 65
 
 
-def optimization_bounds(ids, records, as_of):
-    start, end = comparison_bounds(ids, records, as_of)
+def optimization_bounds(ids, records, as_of, *, column=None):
+    start, end = comparison_bounds(ids, records, as_of, column=column)
     sessions = set().union(*(set(expected_sessions(key, start, end)) for key in ids - {'CASH:KRW'}))
     if len(sessions) < 11:
         raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
@@ -196,9 +197,13 @@ class Optimizer:
                 raise ValueError('BASELINE_PRICE_UNAVAILABLE')
             # Exclude too-short ranges first, then validate prices within one shared window.
             for number, group in enumerate(eligible):
+                if not group:
+                    continue
                 try:
-                    if group:
-                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of)
+                    try:
+                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of, column='Adj Close')
+                    except (KeyError, ValueError):
+                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of, column='Close')
                 except (KeyError, ValueError) as error:
                     rejections[number] = price_failure(error)
                     group.clear()
@@ -208,13 +213,29 @@ class Optimizer:
             # Removing unusable groups may expand the shared window, so revalidate survivors.
             while True:
                 valid_ids = set(self.market.current).union(*(set(group) for group in eligible))
+                column = comparison_column(self.market.records, valid_ids)
+                rejected = False
+                for number, group in enumerate(eligible):
+                    if not group:
+                        continue
+                    try:
+                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of, column=column)
+                    except (KeyError, ValueError) as error:
+                        rejections[number] = price_failure(error)
+                        available[number] = []
+                        rejected = True
+                if rejected:
+                    eligible = [list(group) for group in available]
+                    if not any(eligible):
+                        raise ValueError('NO_COMMON_PRICE_HISTORY')
+                    continue
                 bounds = comparison_bounds(valid_ids, self.market.records, self.market.as_of)
                 rejected = False
                 for number, group in enumerate(eligible):
                     if not group:
                         continue
                     try:
-                        normalized_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of, bounds)
+                        normalized_prices(set(group) | set(self.market.current), self.market.records, self.market.as_of, bounds, column=column)
                     except (KeyError, ValueError) as error:
                         rejections[number] = price_failure(error)
                         available[number] = []
@@ -229,10 +250,11 @@ class Optimizer:
                     if not group:
                         continue
                     try:
-                        optimization_bounds(set(group) | set(self.market.current), records, self.market.as_of)
+                        optimization_bounds(set(group) | set(self.market.current), records, self.market.as_of, column=column)
                     except (KeyError, ValueError) as error:
                         rejections[number] = price_failure(error)
                         group.clear()
+                        available[number] = []
                         rejected = True
                 if rejected:
                     if not any(eligible):
@@ -288,6 +310,7 @@ class Optimizer:
                            'rejected_combinations': [{'combination': number + 1, 'reason': rejections.get(number, 'INSTRUMENT_PRICE_UNAVAILABLE')}
                                for number, group in enumerate(eligible) if not group]}
             # Reuse the identical comparison window for final publication.
+            comparison_records = {key: record for key, record in self.market.records.items() if key in valid_ids}
             baseline = sum(frame[key] * value for key, value in self.market.current.items())
             for candidate in candidates:
                 target = {row['instrument_id']: row['weight_pct'] / 100 for row in candidate['allocations']}
@@ -295,9 +318,9 @@ class Optimizer:
                 history = {'points': [{'date': str(day.date()), 'recommended': round(float(values.loc[day] * 1000000), 2),
                                        'current': round(float(baseline.loc[day] * 1000000), 2)} for day in frame.index],
                            'interval': '1d', 'currency': 'KRW', 'initial_krw': 1000000,
-                           'basis': history_basis(self.result['start_date'], self.result['end_date']),
-                           'method': '시작 비중으로 매수 후 유지 · 분배금 재투자 · 환율 반영 · 세금·매매비용 제외 · 결측일·휴장일 직전 관측 가격 유지',
-                           'source_url': 'https://finance.yahoo.com/', 'sources': sources,
+                           'basis': history_basis(self.result['start_date'], self.result['end_date'], comparison_records),
+                           'method': comparison_method(comparison_records),
+                           'source_url': sources[0]['url'] if sources else 'https://finance.yahoo.com/', 'sources': sources,
                            'start_date': self.result['start_date'], 'end_date': self.result['end_date']}
                 self.market.results[tuple(sorted(target.items()))] = {'status': 'available', 'history': history, **history_returns(history)}
         except (ValueError, KeyError, TimeoutError) as error:

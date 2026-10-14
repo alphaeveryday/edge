@@ -37,8 +37,8 @@ def test_old_price_defect_outside_common_window_does_not_hide_new_etf_graph(monk
     history = comparison({'KR:069500': 1}, {'KR:360750': 1}, records, date(2026, 10, 12))
     assert history['start_date'] == '2026-07-07'
     records['KR:069500']['frame'].loc['2026-07-08', 'Adj Close'] = -1
-    with pytest.raises(ValueError, match='PRICE_INVALID'):
-        comparison({'KR:069500': 1}, {'KR:360750': 1}, records, date(2026, 10, 12))
+    recovered = comparison({'KR:069500': 1}, {'KR:360750': 1}, records, date(2026, 10, 12))
+    assert recovered['points'][1]['recommended'] == recovered['points'][0]['recommended']
 
 
 def record(currency='KRW', start=100, finish=110, dates=None):
@@ -238,8 +238,8 @@ def test_holiday_carry_cannot_import_a_negative_price_from_before_common_start()
     records = {'KR:069500': kr,
                'US:VOO': record('USD', dates=pd.bdate_range('2026-07-17', '2026-07-24')),
                'FX': record(dates=pd.bdate_range('2026-07-16', '2026-07-24'))}
-    with pytest.raises(ValueError, match='PRICE_INVALID'):
-        comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
+    result = comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
+    assert result['start_date'] == '2026-07-20'  # First valid common price; no backward fill from the future.
 
 
 def test_initial_holiday_can_carry_the_last_observed_price_across_a_gap():

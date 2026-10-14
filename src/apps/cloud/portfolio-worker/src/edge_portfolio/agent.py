@@ -29,12 +29,13 @@ from .scenarios import build_scenarios, stated_principal, principal_declaration,
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status, research_inventory
 from .structured_output import structured_call
+from .data_providers import fetch_official_source
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
 EXA_URL = "https://mcp.exa.ai/mcp"
 MAX_EXA_CALLS = 70
-MAX_MODEL_CALLS = 24
+MAX_MODEL_CALLS = 100
 MAX_CONTEXT_BYTES = 350000
 ANALYSIS_TIMEOUT_SECONDS = 600
 TOOLS = [
@@ -104,13 +105,16 @@ class ExaEvidence:
         if self.calls >= MAX_EXA_CALLS:
             raise ValueError("TOOL_LIMIT")
         self.calls += 1
-        async with asyncio.timeout(35):
-            if self.session is None:
-                self.session = await self.session_factory()
-            result = await self.session.call_tool(remote, arguments)
-        if result.isError:
-            raise ValueError("EXA_FAILED")
-        body = "\n".join(b.text for b in result.content if b.type == "text")[:arguments.get('maxCharacters', 24000) + 2000]
+        body = await fetch_official_source(args['url']) if name == 'fetch_source' else None
+        if body is None:
+            async with asyncio.timeout(35):
+                if self.session is None:
+                    self.session = await self.session_factory()
+                result = await self.session.call_tool(remote, arguments)
+            if result.isError:
+                raise ValueError("EXA_FAILED")
+            body = "\n".join(b.text for b in result.content if b.type == "text")
+        body = body[:arguments.get('maxCharacters', 24000) + 2000]
         links = []
         markdown_links = re.findall(r'\[([^\]\n]*)\]\((https://(?:[^\s()]|\([^()\s]*\))+)\)', body)
         urls = re.findall(r'^URL:\s*(https://\S+)', body, re.M) + [url for _, url in markdown_links]
@@ -244,6 +248,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             messages.append({"role": "user", "content": skills[role] + "\n현재 등록된 근거 ID: " + json.dumps([s['id'] for s in evidence.sources]) + "\n등록되지 않은 ID를 만들지 마세요. 첫 질문 해석 단계에서는 사용자 입력만 해석하고 evidence는 빈 배열로 둡니다. 그 다음 역할은 search_sources 후 fetch_source로 실제 근거를 등록해야 합니다.\n출력 JSON 스키마:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)})
             repairs = 0
             recovery_rounds = 0
+            structured_retry = False
             while True:
                 state = data_status(market, optimizer, evidence.sources, observed_data)
                 metrics['data_status'] = state
@@ -254,7 +259,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 messages[1]['content'] = json.dumps(context, ensure_ascii=False)
                 calls += 1
                 reserved = 3 * (len(ROLES) - ROLES.index(role) - 1)
-                finalizing = calls >= MAX_MODEL_CALLS - reserved - 2
+                finalizing = structured_retry or calls >= MAX_MODEL_CALLS - reserved - 2
                 if finalizing:
                     messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
                 model_tools = TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
@@ -317,6 +322,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         raise
                     read_retries += 1
                     await asyncio.sleep(1)
+                    continue
+                except ValueError as error:
+                    if str(error) not in {'STRUCTURED_OUTPUT_REQUIRED', 'STRUCTURED_OUTPUT_MIXED_CALLS'}:
+                        raise
+                    repairs += 1
+                    emit('validation_failed', role=role, attempt=repairs, code=str(error))
+                    if repairs > (2 if role == 'opinion' else 1):
+                        raise
+                    structured_retry = True
+                    messages.append({'role': 'user', 'content': 'submit_report 도구 하나로 현재 역할의 보고서를 제출하세요. 일반 텍스트 응답은 제출이 아닙니다.'})
                     continue
                 choice = result["choices"][0]
                 usage = {name: value for name, value in result.get('usage', {}).items()
