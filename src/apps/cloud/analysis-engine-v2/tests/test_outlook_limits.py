@@ -169,13 +169,13 @@ def test_a_movement_text_over_its_limit_is_named_and_an_earlier_long_item_is_not
     # WHY: without a limit the item paragraph grew to a median of 193 characters; and an earlier long item that is
     # selected again is shown again, so shortening only the new ones would leave the screen as it was.
     from edge_analysis_v2.contracts.outlook_limits import MOVEMENT_LIMITS, movement_violations
-    fits = {'summary': '가' * 100, 'selected_item_ids': ['n1', 'old-short'],
+    fits = {'summary': '가' * 70, 'selected_item_ids': ['n1', 'old-short'],
             'new_items': [{'candidate_id': 'n1', 'title_keyword': '나' * 20, 'sentence': '다' * 120}]}
     earlier = [{'item_id': 'old-short', 'title_keyword': '라', 'sentence': '마' * 120}, {'item_id': 'old-long', 'title_keyword': '바', 'sentence': '사' * 121}]
     assert movement_violations(fits, earlier) == []
-    over = {'summary': '가' * 101, 'selected_item_ids': ['n1', 'old-long'],
+    over = {'summary': '가' * 71, 'selected_item_ids': ['n1', 'old-long'],
             'new_items': [{'candidate_id': 'n1', 'title_keyword': '나' * 21, 'sentence': '다' * 121}]}
     found = movement_violations(over, earlier)
-    assert len(found) == 4 and 'summary가 101자' in found[0] and 'old-long' in found[3] and '다시 고르지 말고' in found[3]
+    assert len(found) == 4 and 'summary가 71자' in found[0] and 'old-long' in found[3] and '다시 고르지 말고' in found[3]
     assert movement_violations({'summary': None, 'selected_item_ids': [], 'new_items': []}) == []
-    assert MOVEMENT_LIMITS == {'summary': 100, 'title_keyword': 20, 'sentence': 120}
+    assert MOVEMENT_LIMITS == {'summary': 70, 'title_keyword': 20, 'sentence': 120}
