@@ -289,7 +289,7 @@ class Optimizer:
                                        'current': round(float(baseline.loc[day] * 1000000), 2)} for day in frame.index],
                            'interval': '1d', 'currency': 'KRW', 'initial_krw': 1000000,
                            'basis': history_basis(self.result['start_date'], self.result['end_date']),
-                           'method': '시작 비중으로 매수 후 유지 · 분배금 재투자 · 환율 반영 · 세금·매매비용 제외',
+                           'method': '시작 비중으로 매수 후 유지 · 분배금 재투자 · 환율 반영 · 세금·매매비용 제외 · 결측일·휴장일 직전 관측 가격 유지',
                            'source_url': 'https://finance.yahoo.com/', 'sources': sources,
                            'start_date': self.result['start_date'], 'end_date': self.result['end_date']}
                 self.market.results[tuple(sorted(target.items()))] = {'status': 'available', 'history': history, **history_returns(history)}

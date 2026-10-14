@@ -134,7 +134,7 @@ def test_tools_whose_results_changed_for_alpha_1130_carry_new_definition_version
     assert {name: versions[name] for name in ('get_macro_observations', 'compare_macro_observations',
             'calculate_valuation', 'calculate_weighted_valuation', 'get_instrument_factors')} == {
         'get_macro_observations': 'v3', 'compare_macro_observations': 'v2', 'calculate_valuation': 'v4',
-        'calculate_weighted_valuation': 'v4', 'get_instrument_factors': 'v4'}
+        'calculate_weighted_valuation': 'v4', 'get_instrument_factors': 'v5'}
 
 
 def test_a_weighted_ratio_over_part_of_the_fund_is_an_average_of_that_part_not_a_shrunken_number():
