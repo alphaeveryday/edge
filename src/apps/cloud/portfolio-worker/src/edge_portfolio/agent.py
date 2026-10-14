@@ -115,6 +115,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     started = time.monotonic()
     metrics = calculate(request)
     system = (PROMPTS / "system.md").read_text(encoding="utf8")
+    system += '\n\n' + (PROMPTS / 'account-tax' / 'SKILL.md').read_text(encoding='utf8')
     skills = {role: (PROMPTS / role / "SKILL.md").read_text(encoding="utf8") for role in ROLES}
     version = hashlib.sha256((system + "".join(skills.values())).encode()).hexdigest()
     code_version = hashlib.sha256(b''.join(path.name.encode() + path.read_bytes() for path in sorted(PROMPTS.parent.glob('*.py')))).hexdigest()
