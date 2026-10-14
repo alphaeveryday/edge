@@ -490,7 +490,8 @@ async def test_recovery_timeout_keeps_the_accepted_opinion_and_completion_checkp
 
 
 @pytest.mark.parametrize('failed_urls,untried', [(1, False), (2, False), (2, True)])
-async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, failed_urls, untried):
+@pytest.mark.parametrize('navigation_links', [False, True])
+async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, failed_urls, untried, navigation_links):
     import json
     from edge_portfolio.agent import run_analysis
     class Optimizer:
@@ -502,6 +503,9 @@ async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, f
         sources = []
         discovered = {'https://issuer.example/untried'} if untried else set()
         async def call(self, *args): return {'status': 'unavailable', 'reason': 'EXA_FAILED'}
+    if navigation_links:
+        Evidence.search_targets = Evidence.discovered.copy()
+        Evidence.discovered = Evidence.discovered | {f'https://issuer.example/navigation/{i}' for i in range(100)}
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
     stages, fetched = [], []
     async def model(payload):
