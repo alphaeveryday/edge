@@ -276,4 +276,9 @@ export interface MetaDto {
   /** 키 부재=미배선, null=조회 실패라 두 형상을 보존한다. */
   aws?: string | null;
   today: string;
+  /**
+   * 이 응답을 만드는 데 서버가 쓴 시간(ALPHA-1314) — 구간별 밀리초와 전체 밀리초다. 이 필드를 싣기
+   * 전의 API 에서는 없다. 화면은 그리지 않고 규칙도 읽지 않는다 — 응답을 직접 볼 때 쓰는 값이다.
+   */
+  timing?: { totalMs: number; segments: { name: string; kind: string; ms: number }[] };
 }

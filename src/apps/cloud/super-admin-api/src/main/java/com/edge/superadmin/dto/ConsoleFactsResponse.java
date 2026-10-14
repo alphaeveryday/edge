@@ -5,6 +5,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
+import com.edge.superadmin.repository.FactsSegment;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.RunControlPlane;
@@ -306,7 +307,36 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 물어봤는데 못 봤다(권한·장애). 화면이 그 둘을 다르게 그린다({@code awsObservation}).
 	 * 그래서 이 필드는 <b>{@code null} 이어도 싣는다</b>.
 	 */
-	public record MetaResponse(String db, String today, String aws) {
+	public record MetaResponse(String db, String today, String aws, TimingResponse timing) {
+	}
+
+	/**
+	 * 이 응답을 만드는 데 걸린 시간(ALPHA-1314) — <b>재기만 한 값</b>이고 판정에 쓰지 않는다.
+	 *
+	 * <p>{@code segments} 는 {@link FactsSegment} 를 선언 순서대로 <b>전부</b> 싣는다. 구간은 서로 겹치지
+	 * 않고 {@code kind} 는 {@code db}·{@code aws}·{@code app} 이다. {@code totalMs} 는 요청 날짜를
+	 * 읽을 때부터 이 값을 만들 때까지다 — 구간의 합보다 크고, 그 차이는 구간으로 재지 않은 시간이다
+	 * (원장 행을 응답 형으로 옮기는 일). 응답을 JSON 으로 쓰는 시간과 그 앞뒤(필터·네트워크)는 들어
+	 * 있지 않다. 밀리초는 구간마다 따로 반올림한 정수라, 오차가 쌓이면 구간의 합이 전체보다 몇 ms 클 수
+	 * 있다.
+	 *
+	 * <p>이 서버에는 사실 조회의 캐시가 없다 — 값은 언제나 이 요청이 실제로 쓴 시간이다.
+	 */
+	public record TimingResponse(long totalMs, List<SegmentResponse> segments) {
+
+		public static TimingResponse from(java.util.Map<FactsSegment, Long> nanos, long totalNanos) {
+			return new TimingResponse(millis(totalNanos), java.util.Arrays.stream(FactsSegment.values())
+					.map(s -> new SegmentResponse(s.wireName(), s.kind().name().toLowerCase(java.util.Locale.ROOT),
+							millis(nanos.getOrDefault(s, 0L))))
+					.toList());
+		}
+
+		private static long millis(long nanos) {
+			return Math.round(nanos / 1_000_000.0);
+		}
+	}
+
+	public record SegmentResponse(String name, String kind, long ms) {
 	}
 
 	private static String iso(OffsetDateTime at) {

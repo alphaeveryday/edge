@@ -273,8 +273,14 @@ export const ETF_ANALYSIS_ROW_FIELDS: Record<string, Check> = {
   outlook: (v) => typeof v === 'string' && OUTLOOK_STATES.has(v),
   movement: (v) => typeof v === 'string' && MOVEMENT_STATES.has(v),
 };
+/* 서버가 이 응답에 쓴 시간(ALPHA-1314) — 없어도 된다(이 필드를 싣기 전의 API). 오면 형상만 본다.
+ * 규칙 사실로 옮기지 않는다 — 화면도 규칙도 읽지 않는 값이다. */
+const optionalTiming: Check = (v) =>
+  v === undefined ||
+  (isRow(v) && count(v.totalMs) && Array.isArray(v.segments) &&
+    v.segments.every((s) => isRow(s) && text(s.name) && text(s.kind) && count(s.ms)));
 export const META_FIELDS: Record<string, Check> = {
-  db: isoInstant, aws: optionalNullableInstant, today: isoDate,
+  db: isoInstant, aws: optionalNullableInstant, today: isoDate, timing: optionalTiming,
 };
 
 /** 배열 원소는 **객체**여야 한다 — `[null]`·`[1]`·`[[]]` 가 여기서 걸린다. */
