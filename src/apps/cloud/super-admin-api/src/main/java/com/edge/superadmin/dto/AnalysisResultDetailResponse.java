@@ -5,6 +5,7 @@ import com.edge.superadmin.repository.AnalysisResultRepository.Movement;
 import com.edge.superadmin.repository.AnalysisResultRepository.Outlook;
 import tools.jackson.databind.JsonNode;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -20,17 +21,23 @@ public record AnalysisResultDetailResponse(String analysisId, String kind, Strin
 
 	public record OutlookResponse(String sticker, String summaryTitle, String summary,
 			String detailTitle, String detailMode, String conclusionTitle, String conclusionSentence,
-			String changeCondition, List<OutlookItemResponse> items, List<FactorResponse> factors,
-			List<KeywordResponse> conclusionKeywords) {
+			String changeCondition, String issueHeadline, List<OutlookItemResponse> items,
+			List<FactorResponse> factors, List<FactorMetricResponse> factorMetrics,
+			List<IssueItemResponse> issueItems, List<KeywordResponse> conclusionKeywords) {
 
 		static OutlookResponse from(Outlook o) {
 			return new OutlookResponse(o.sticker(), o.summaryTitle(), o.summary(), o.detailTitle(),
 					o.detailMode(), o.conclusionTitle(), o.conclusionSentence(), o.changeCondition(),
-					o.items().stream().map(i -> new OutlookItemResponse(i.itemId(), i.section(),
+					o.issueHeadline(), o.items().stream().map(i -> new OutlookItemResponse(i.itemId(), i.section(),
 							i.changeType(), i.position(), i.titleKeyword(), i.bullets(), i.sentence(),
 							i.sentiment(), i.sourceLinks(), i.sourceAsOf(), i.toolRunIds())).toList(),
 					o.factors().stream().map(f -> new FactorResponse(f.type(), f.sticker(),
 							f.sentence())).toList(),
+					o.factorMetrics().stream().map(m -> new FactorMetricResponse(m.factorType(),
+							m.metricKey(), m.numericValue(), m.textValue(), m.observedDate(),
+							m.observedAt(), m.subject(), m.position(), m.toolRunIds())).toList(),
+					o.issueItems().stream().map(i -> new IssueItemResponse(i.position(),
+							i.titleKeyword(), i.sentence(), i.sentiment(), i.toolRunIds())).toList(),
 					o.conclusionKeywords().stream().map(k -> new KeywordResponse(k.kind(),
 							k.position(), k.label(), k.toolRunIds())).toList());
 		}
@@ -42,6 +49,15 @@ public record AnalysisResultDetailResponse(String analysisId, String kind, Strin
 	}
 
 	public record FactorResponse(String type, String sticker, String sentence) {
+	}
+
+	public record FactorMetricResponse(String factorType, String metricKey, BigDecimal numericValue,
+			String textValue, LocalDate observedDate, OffsetDateTime observedAt, String subject,
+			int position, List<String> toolRunIds) {
+	}
+
+	public record IssueItemResponse(int position, String titleKeyword, String sentence,
+			String sentiment, List<String> toolRunIds) {
 	}
 
 	public record KeywordResponse(String kind, int position, String label, List<String> toolRunIds) {

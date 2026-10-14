@@ -88,10 +88,19 @@ public class JdbcAnalysisResultRepository implements AnalysisResultRepository {
 			  FROM outlook_items WHERE analysis_id = ? ORDER BY section, position
 			""";
 
-	/** 요인에는 순서 열이 없다 — 표의 CHECK 가 적은 유형 순으로 놓는다. */
 	private static final String OUTLOOK_FACTORS_SQL = """
-			SELECT type, sticker, sentence FROM outlook_factors WHERE analysis_id = ?
-			 ORDER BY array_position(ARRAY['이슈', '차트', '매크로', '밸류', '수급'], type)
+			SELECT type, sticker, sentence FROM outlook_factors WHERE analysis_id = ? ORDER BY type
+			""";
+
+	private static final String OUTLOOK_METRICS_SQL = """
+			SELECT factor_type, metric_key, numeric_value, text_value, observed_date, observed_at, subject,
+			       position, tool_run_ids
+			  FROM outlook_factor_metrics WHERE analysis_id = ? ORDER BY factor_type, position
+			""";
+
+	private static final String OUTLOOK_ISSUES_SQL = """
+			SELECT position, title_keyword, sentence, sentiment, tool_run_ids
+			  FROM outlook_issue_items WHERE analysis_id = ? ORDER BY position
 			""";
 
 	private static final String OUTLOOK_KEYWORDS_SQL = """
@@ -99,9 +108,13 @@ public class JdbcAnalysisResultRepository implements AnalysisResultRepository {
 			 WHERE analysis_id = ? ORDER BY kind, position
 			""";
 
+	/** 고른 항목은 같은 날 앞선 분석의 것일 수 있다 — {@code analysis_id} 만 보면 빠진다. */
 	private static final String MOVEMENT_ITEMS_SQL = """
 			SELECT item_id, type, title_keyword, sentence, sentiment, source_as_of, tool_run_ids
-			  FROM movement_items WHERE analysis_id = ? ORDER BY created_at, item_id
+			  FROM movement_items
+			 WHERE analysis_id = ?
+			    OR item_id = ANY(SELECT unnest(selected_item_ids) FROM movement_analyses WHERE analysis_id = ?)
+			 ORDER BY created_at, item_id
 			""";
 
 	private final JdbcTemplate jdbc;
@@ -136,7 +149,8 @@ public class JdbcAnalysisResultRepository implements AnalysisResultRepository {
 	}
 
 	/**
-	 * 상세 — 전망은 조회 4번(분석·근거 항목·요인·결론 키워드), 가격변동은 2번(분석·항목)이다.
+	 * 상세 — 전망은 조회 6번(분석·근거 항목·요인·요인 지표·이슈 항목·결론 키워드), 가격변동은 2번
+	 * (분석·항목)이다.
 	 * 한 스냅샷에서 읽는다 — 분석 엔진이 그 사이에 항목을 써도 머리와 항목이 다른 시점이 되지 않는다.
 	 */
 	@Override
@@ -162,7 +176,7 @@ public class JdbcAnalysisResultRepository implements AnalysisResultRepository {
 					rs.getString("item_id"), rs.getString("type"), rs.getString("title_keyword"),
 					rs.getString("sentence"), rs.getString("sentiment"),
 					rs.getObject("source_as_of", OffsetDateTime.class), strings(rs, "tool_run_ids")),
-					analysisId);
+					analysisId, analysisId);
 			return withMovement(head, new Movement(m.tradingDate(), m.summary(), m.selectedItemIds(),
 					m.withdrawn(), m.withdrawnAt(), List.copyOf(items)));
 		}
@@ -175,19 +189,30 @@ public class JdbcAnalysisResultRepository implements AnalysisResultRepository {
 				analysisId);
 		List<OutlookFactor> factors = jdbc.query(OUTLOOK_FACTORS_SQL, (rs, i) -> new OutlookFactor(
 				rs.getString("type"), rs.getString("sticker"), rs.getString("sentence")), analysisId);
+		List<FactorMetric> metrics = jdbc.query(OUTLOOK_METRICS_SQL, (rs, i) -> new FactorMetric(
+				rs.getString("factor_type"), rs.getString("metric_key"),
+				rs.getBigDecimal("numeric_value"), rs.getString("text_value"),
+				rs.getObject("observed_date", LocalDate.class),
+				rs.getObject("observed_at", OffsetDateTime.class), rs.getString("subject"),
+				rs.getInt("position"), strings(rs, "tool_run_ids")), analysisId);
+		List<IssueItem> issues = jdbc.query(OUTLOOK_ISSUES_SQL, (rs, i) -> new IssueItem(
+				rs.getInt("position"), rs.getString("title_keyword"), rs.getString("sentence"),
+				rs.getString("sentiment"), strings(rs, "tool_run_ids")), analysisId);
 		List<ConclusionKeyword> keywords = jdbc.query(OUTLOOK_KEYWORDS_SQL,
 				(rs, i) -> new ConclusionKeyword(rs.getString("kind"), rs.getInt("position"),
 						rs.getString("label"), strings(rs, "tool_run_ids")), analysisId);
 		return withOutlook(head, new Outlook(o.sticker(), o.summaryTitle(), o.summary(),
 				o.detailTitle(), o.detailMode(), o.conclusionTitle(), o.conclusionSentence(),
-				o.changeCondition(), List.copyOf(items), List.copyOf(factors), List.copyOf(keywords)));
+				o.changeCondition(), o.issueHeadline(), List.copyOf(items), List.copyOf(factors),
+				List.copyOf(metrics), List.copyOf(issues), List.copyOf(keywords)));
 	}
 
 	private static Outlook outlookHead(ResultSet rs) throws SQLException {
 		return new Outlook(rs.getString("outlook_sticker"), rs.getString("summary_title"),
 				rs.getString("summary"), rs.getString("detail_title"), rs.getString("detail_mode"),
 				rs.getString("conclusion_title"), rs.getString("conclusion_sentence"),
-				rs.getString("change_condition"), List.of(), List.of(), List.of());
+				rs.getString("change_condition"), rs.getString("issue_headline"), List.of(), List.of(),
+				List.of(), List.of(), List.of());
 	}
 
 	private static Movement movementHead(ResultSet rs) throws SQLException {

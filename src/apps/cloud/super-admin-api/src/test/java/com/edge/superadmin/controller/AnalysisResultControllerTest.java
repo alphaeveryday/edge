@@ -93,6 +93,14 @@ class AnalysisResultControllerTest {
 	}
 
 	@Test
+	void 시작일만_주면_그날_하루다() throws Exception {
+		mvc.perform(get("/api/v1/analysis-results?kind=outlook&from=2026-10-01")).andExpect(status().isOk());
+		var q = seen.get(0);
+		assertThat(q.from()).isEqualTo(OffsetDateTime.parse("2026-10-01T00:00:00+09:00"));
+		assertThat(q.to()).as("오늘까지가 아니다").isEqualTo(OffsetDateTime.parse("2026-10-02T00:00:00+09:00"));
+	}
+
+	@Test
 	void 틀린_요청은_400이고_저장소까지_가지_않는다() throws Exception {
 		for (String query : List.of("", "kind=etf", "kind=outlook&from=2026-13-01",
 				"kind=outlook&from=2026-10-13&to=2026-10-12", "kind=outlook&status=withdrawn",
