@@ -82,7 +82,16 @@ public interface ConsoleFactsRepository {
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-			List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures) {
+			List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures,
+			List<EtfAnalysisStateRow> etfAnalyses) {
+
+		/** ETF별 v2 분석 귀결 없이 만든다 — 그 축은 빈 목록이다. */
+		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
+				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
+				List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, analysisFailures,
+					List.of());
+		}
 
 		/** v2 분석 실패 축 없이 만든다 — 그 축은 빈 목록이다. */
 		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
@@ -97,6 +106,16 @@ public interface ConsoleFactsRepository {
 	 * 실패 행이 있고 완료 행이 하나도 없다. {@code kind} 는 {@code outlook}·{@code movement} 다.
 	 */
 	record AnalysisFailureRow(String kind, String etfCode) {
+	}
+
+	/**
+	 * 조회일의 ETF 하나의 <b>v2 분석 귀결</b>(ALPHA-1312) — 전망과 가격변동 분석 각각의 그날 상태다.
+	 * {@code outlook} 은 {@code completed}·{@code failed}·{@code running}·{@code none} 중 하나이고,
+	 * {@code movement} 는 거기에 {@code not_started}·{@code pending} 이 더 있다. 기준은
+	 * {@code JdbcConsoleFactsRepository.ETF_ANALYSES_SQL} 에 있다. {@code name} 은 표시 이름이고,
+	 * 이름을 못 찾은 코드는 코드 그대로다.
+	 */
+	record EtfAnalysisStateRow(String etf, String name, String outlook, String movement) {
 	}
 
 	/** 조회일에 발화한 ETF별 <b>최신 트리거</b>의 최신 설명 실행 상태(R15). */

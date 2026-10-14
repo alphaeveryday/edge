@@ -2359,4 +2359,98 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.isEqualTo(jdbc.queryForObject(
 						"SELECT (now() AT TIME ZONE 'Asia/Seoul')::date", LocalDate.class));
 	}
+
+	/**
+	 * 🔴 <b>ETF 표는 새 분석 엔진의 표에서 종류별 상태를 낸다</b>(ALPHA-1312). 전망과 가격변동 분석을
+	 * 따로 가르고, 상태는 완료 → 실패 → 진행 중 → 시작 못 함 → 대상 아님의 순서로 정한다.
+	 *
+	 * <p>칸을 하나씩 가른다:
+	 * <ul>
+	 *   <li>{@code etf-a} — 전망 완료, 가격변동 분석은 실패했다가 다시 돌아 완료 → 둘 다 완료</li>
+	 *   <li>{@code etf-b} — 둘 다 실패 행만 있다 → 둘 다 실패</li>
+	 *   <li>{@code etf-c} — 전망이 진행 중인 행뿐이다 → <b>실패가 아니라</b> 진행 중</li>
+	 *   <li>{@code etf-d} — 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없다 → 시작 못 함</li>
+	 *   <li>{@code etf-e} — 트리거만 발화했고 요청이 없다 → 행은 나오고 대상 아님이다</li>
+	 *   <li>{@code etf-f} — 요청이 예약만 됐고 수용되지 않았다 → 시작 못 함이 아니다</li>
+	 *   <li>{@code etf-g} — 합성 입력의 분석뿐이다 → 행이 없다</li>
+	 * </ul>
+	 * 지난 날짜(08-03)라 요청은 모두 유예 밖이다.
+	 *
+	 * <p>⚠️ <b>이 표의 실패 ETF 는 R15 의 목록과 같아야 한다</b> — 같은 응답에서 두 축을 함께 단언한다.
+	 * 기준이 갈리면 표와 규칙이 다른 ETF 를 실패라고 말한다.
+	 */
+	@Test
+	void ETF별_v2_분석_귀결은_종류별_상태를_내고_실패는_R15_의_목록과_같다() {
+		insertAnalysis("outlook", "s-o-a", "etf-a", "2026-08-03T06:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "s-m-a1", "etf-a", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "s-m-a2", "etf-a", "2026-08-03T10:30:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "s-o-b", "etf-b", "2026-08-03T06:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "s-m-b", "etf-b", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "s-o-c", "etf-c", "2026-08-03T06:00:00+09:00", "running", "database");
+		insertMinuteTrigger("s-t-d", DAY.toString(), "etf-d", "FIRE", "2026-08-03T10:00:00+09:00");
+		insertRequest("s-q-d", "s-t-d", "2026-08-03T10:01:00+09:00");
+		insertMinuteTrigger("s-t-e", DAY.toString(), "etf-e", "FIRE", "2026-08-03T10:00:00+09:00");
+		insertMinuteTrigger("s-t-f", DAY.toString(), "etf-f", "FIRE", "2026-08-03T10:00:00+09:00");
+		insertRequest("s-q-f", "s-t-f", "2026-08-03T10:01:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("s-q-f"));
+		insertAnalysis("outlook", "s-o-g", "etf-g", "2026-08-03T06:00:00+09:00", "failed", "synthetic");
+		// 이름은 옛 ETF 표와 같은 출처다 — 종목 코드로 instrument 를 찾고 entity 의 표시 이름을 읽는다.
+		jdbc.update("INSERT INTO entity (entity_id, entity_type, display_name) VALUES ('inst-a', 'INSTRUMENT', '이름 있는 ETF')");
+		jdbc.update("INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type) VALUES ('inst-a', 'XKRX', 'etf-a', 'ETF')");
+
+		ConsoleFactsRepository.ConsoleFacts facts = repository.facts(DAY);
+		assertThat(facts.etfAnalyses())
+				.extracting(r -> r.etf(), r -> r.name(), r -> r.outlook(), r -> r.movement())
+				.containsExactly(
+						tuple("etf-a", "이름 있는 ETF", "completed", "completed"),
+						tuple("etf-b", "etf-b", "failed", "failed"),   // 이름을 못 찾은 코드는 코드 그대로
+						tuple("etf-c", "etf-c", "running", "none"),
+						tuple("etf-d", "etf-d", "none", "not_started"),
+						tuple("etf-e", "etf-e", "none", "none"),
+						tuple("etf-f", "etf-f", "none", "none"));
+
+		for (String kind : List.of("outlook", "movement")) {
+			assertThat(facts.etfAnalyses().stream()
+					.filter(r -> (kind.equals("outlook") ? r.outlook() : r.movement()).equals("failed"))
+					.map(r -> r.etf()))
+					.as(kind)
+					.containsExactlyElementsOf(facts.analysisFailures().stream()
+							.filter(f -> f.kind().equals(kind)).map(f -> f.etfCode()).toList())
+					.containsExactly("etf-b");
+		}
+	}
+
+	/**
+	 * 🔴 <b>수용된 요청은 있는데 분석 행이 없는 ETF 는 유예 안이면 판정 보류, 유예 밖이면 시작 못
+	 * 함이다</b>(ALPHA-1312). 기준은 흐름 띠의 것과 같다(ALPHA-1309) — 같은 유예 시간, 같은 기점(요청이
+	 * 수용된 시각).
+	 *
+	 * <p>{@code etf-mix} 는 같은 날 두 번 발화했고 한 요청은 유예 밖, 한 요청은 유예 안이다 — 하나라도
+	 * 유예 밖이면 시작 못 함이다(판정 보류가 손실을 가리면 안 된다).
+	 */
+	@Test
+	void 분석_행이_없는_요청은_유예_안이면_판정_보류이고_유예_밖이면_시작_못_함이다() {
+		OffsetDateTime young = OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).minusHours(1).withNano(0);
+		OffsetDateTime old = young.minusHours(24);   // 25시간 전 — 유예(8시간) 밖
+		String youngDay = young.toLocalDate().toString();
+		insertMinuteTrigger("g-young", youngDay, "etf-young", "FIRE", young.toString());
+		insertRequest("g-young", "g-young", young.toString());
+		insertMinuteTrigger("g-old", old.toLocalDate().toString(), "etf-old", "FIRE", old.toString());
+		insertRequest("g-old", "g-old", old.toString());
+		insertMinuteTrigger("g-mix1", youngDay, "etf-mix", "FIRE", young.toString());
+		insertMinuteTrigger("g-mix2", youngDay, "etf-mix", "FIRE", young.plusSeconds(1).toString());
+		insertRequest("g-mix1", "g-mix1", young.toString());
+		insertRequest("g-mix2", "g-mix2", young.toString());
+		// 수용 시각만 유예 밖으로 옮긴다 — 기점은 요청이 만들어진 시각이 아니라 수용된 시각이다.
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = now() - interval '9 hours' WHERE analysis_id = ?",
+				analysisId("g-mix1"));
+
+		assertThat(repository.facts(young.toLocalDate()).etfAnalyses())
+				.extracting(r -> r.etf(), r -> r.movement())
+				.containsExactly(tuple("etf-mix", "not_started"), tuple("etf-young", "pending"));
+		assertThat(repository.facts(old.toLocalDate()).etfAnalyses())
+				.extracting(r -> r.etf(), r -> r.movement())
+				.containsExactly(tuple("etf-old", "not_started"));
+	}
 }
