@@ -35,9 +35,10 @@ TOPIC = obj({'id': TEXT,
 MOVEMENT = obj({
     'new_items': {'type': 'array', 'items': obj(ITEM['properties'] | {
         'sentence': TEXT | {'description': f"공백·문장부호 포함 최대 {MOVEMENT_LIMITS['sentence']}자. 사건과 그것이 이 ETF에 뜻하는 것을 한두 문장으로."},
+        'title_keyword': ITEM['properties']['title_keyword'] | {'description': '누가 + 무슨 일을 쉬운 말로. 수치·줄임말·업계 용어 없이.'},
         'candidate_id': TEXT, 'type': {'enum': ['이슈', '차트', '매크로', '수급']}})},
     'selected_item_ids': {'type': 'array', 'maxItems': 5, 'uniqueItems': True, 'items': TEXT},
-    'summary': {'type': ['string', 'null'], 'description': f"공백·문장부호 포함 최대 {MOVEMENT_LIMITS['summary']}자의 한 문장. 그날 가장 중요한 일 하나와 그것이 이 ETF에 뜻하는 것."},
+    'summary': {'type': ['string', 'null'], 'description': f"공백·문장부호 포함 최대 {MOVEMENT_LIMITS['summary']}자의 한 문장. 그날 가장 중요한 일 하나와 그것이 이 ETF에 뜻하는 것을 쉬운 말로. 수치는 쓰지 않음."},
 })
 def keywords(side):
     return {'type': 'array', 'items': obj({'label': limited(f'conclusion.{side}[].label'), 'tool_run_ids': REFS})}
