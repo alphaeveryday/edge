@@ -338,7 +338,7 @@ async def test_runaway_tool_loop_still_stops_after_twenty_four_model_calls():
     assert calls == 24
 
 
-async def test_backtest_candidates_remain_auditable_when_rating_prevents_recommendation(monkeypatch):
+async def test_unverified_customer_failure_cannot_hide_available_candidates(monkeypatch):
     candidates = [{'candidate_id': 'candidate-1', 'allocations': [{'instrument_id': 'US:SPY', 'weight_pct': 100}]}]
     async def optimize(self, args):
         self.result = {'status': 'available', 'candidates': candidates}
@@ -350,19 +350,15 @@ async def test_backtest_candidates_remain_auditable_when_rating_prevents_recomme
         role = phases[-1]
         if role == 'portfolio' and (call := optimization_call(payload)):
             return call
-        content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'} if role == 'opinion' else final_payload()[role]
+        content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'customer_failed'} if role == 'opinion' else final_payload()[role]
         if role == 'question':
             content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     checkpoints = []
-    result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
-                                'test', phases.append, model_call=model, evidence=Evidence(), on_checkpoint=checkpoints.append)
-    assert result['recommendation'] is None
-    assert result['optimization']['reason'] == 'RATING_BELOW_MINIMUM'
-    assert result['optimization']['candidates'] == candidates
-    assert result['optimization']['selected_candidate_id'] is None
-    rejected = [row for row in checkpoints[-1]['research_inventory'] if row['instrument_id'] == 'US:SPY']
-    assert rejected and all(not row['required'] for row in rejected)
+    with pytest.raises(ValueError, match='Available candidates require a recommendation'):
+        await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
+                           'test', phases.append, model_call=model, evidence=Evidence(), on_checkpoint=checkpoints.append)
+    assert checkpoints[-1]['optimization']['candidates'] == candidates
 
 
 def test_diagnostic_codes_distinguish_budget_and_validation_failures_without_raw_content():

@@ -383,7 +383,9 @@ class Optimizer:
                 raise ValueError('No eligible candidate: recommendation, selected_candidate_id and return_forecast must be null')
             return None
         if final.recommendation is None and final.selected_candidate_id is None and final.return_forecast is None:
-            return None  # Backtest eligibility alone does not establish a four-star recommendation.
+            if getattr(final, 'withheld_reason', None) in {None, 'quality_failed', 'missing_data', 'missing_input'}:
+                raise ValueError('Available candidates cannot be withheld for rating or missing optional information: select a customer-compliant candidate, report honest scores, and leave unavailable fields empty')
+            return None  # Customer or execution constraints may still prevent a recommendation.
         candidate = next((row for row in candidates if row['candidate_id'] == final.selected_candidate_id), None)
         if candidate is None or final.recommendation is None:
             raise ValueError('Select an eligible candidate ID and its exact allocation')

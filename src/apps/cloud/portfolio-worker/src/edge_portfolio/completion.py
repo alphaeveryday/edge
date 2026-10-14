@@ -6,7 +6,7 @@ import re
 
 def retain_recommendation(final, previous):
     """Retain an accepted judgment when only optional research or inputs remain."""
-    if previous is None or previous.recommendation is None or final.recommendation is not None or final.withheld_reason not in {'missing_data', 'missing_input'}:
+    if previous is None or previous.recommendation is None or final.recommendation is not None or final.withheld_reason not in {'quality_failed', 'missing_data', 'missing_input'}:
         return final
     fields = ('recommendation', 'selected_candidate_id')
     return type(final).model_validate({**final.model_dump(), **{key: previous.model_dump()[key] for key in fields},

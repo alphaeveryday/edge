@@ -6,7 +6,7 @@ from edge_portfolio.optimizer import Optimizer
 from report_fixtures import final_payload
 
 
-@pytest.mark.parametrize('reason', ['missing_data', 'missing_input'])
+@pytest.mark.parametrize('reason', ['quality_failed', 'missing_data', 'missing_input'])
 def test_optional_gaps_cannot_erase_an_already_qualified_recommendation(reason):
     previous = FinalReport.model_validate({**final_payload(), 'selected_candidate_id': 'candidate-1'})
     final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': reason,
@@ -19,18 +19,19 @@ def test_optional_gaps_cannot_erase_an_already_qualified_recommendation(reason):
     assert result.return_forecast is None
 
 
-@pytest.mark.parametrize('reason', ['quality_failed', 'customer_failed', 'search_exhausted'])
+@pytest.mark.parametrize('reason', ['customer_failed', 'search_exhausted'])
 def test_new_disqualifying_findings_are_not_overridden_by_an_earlier_recommendation(reason):
     previous = FinalReport.model_validate(final_payload())
     final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': reason})
     assert retain_recommendation(final, previous).recommendation is None
 
 
-def test_missing_all_judgment_evidence_can_still_publish_a_truthful_partial_report():
+def test_missing_optional_evidence_cannot_hide_available_recommendations():
     optimizer = Optimizer(None)
     optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
     final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'missing_data'})
-    assert optimizer.validate(final) is None
+    with pytest.raises(ValueError, match='Available candidates cannot be withheld'):
+        optimizer.validate(final)
     optimizer.result = {'status': 'no_match', 'candidates': []}
     assert optimizer.validate(final) is None
 
