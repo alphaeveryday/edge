@@ -42,9 +42,6 @@ def strict_schema(schema):
 async def structured_call(client, key, payload, report_model):
     request = deepcopy(payload)
     request.pop('response_format', None)
-    # DeepSeek rejects required/forced tool choice in thinking mode.
-    request['thinking'] = {'type': 'disabled'}
-    request.pop('reasoning_effort', None)
     request['parallel_tool_calls'] = False
     report = {'type': 'function', 'function': {'name': 'submit_report', 'strict': True,
         'description': 'Complete the current role by submitting its report. Use the research tools first when needed; never return the report as plain text.',
@@ -60,12 +57,18 @@ async def structured_call(client, key, payload, report_model):
         function['parameters'] = strict_schema(parameters)
         function['strict'] = True
     if request.get('tool_choice') == 'none':
+        # DeepSeek rejects forced tool choice in thinking mode.
+        request['thinking'] = {'type': 'disabled'}
+        request.pop('reasoning_effort', None)
         request['tools'] = [report]
         request['tool_choice'] = {'type': 'function', 'function': {'name': 'submit_report'}}
     else:
         # Null represents an omitted research argument in an all-required strict schema.
         request['tools'] = [*request.get('tools', []), report]
-        request['tool_choice'] = 'required'
+        request['tool_choice'] = 'auto'
+        request.setdefault('thinking', {'type': 'enabled'})
+        request['messages'].append({'role': 'user', 'content':
+            'Complete this role by calling submit_report. Do not return plain text or plain JSON.'})
     response = await client.post('https://api.deepseek.com/beta/chat/completions',
         headers={'Authorization': f'Bearer {key}'}, json=request)
     response.raise_for_status()

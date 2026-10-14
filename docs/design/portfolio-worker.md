@@ -24,7 +24,7 @@ flowchart LR
 - [Anthropic: Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): 고정된 하위 작업은 prompt chaining과 단계별 코드 검증으로 처리한다. 네 역할은 독립 에이전트가 아니라 같은 대화의 순차 단계다. 서브에이전트·자유 라우팅·토론은 추가하지 않는다.
 - [AWS: Asynchronous communication](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-integrating-microservices/asynchronous.html): 접수 응답과 실제 실행을 분리하고 작업 ID로 상태를 조회한다. UI는 실패 시 조회 간격을 늘리고 새로고침 뒤 작업 ID를 복원한다.
 - [PostgreSQL SELECT / SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html): 큐의 원자적 claim을 위해 트랜잭션과 `FOR UPDATE SKIP LOCKED`를 사용한다. 기존 DB 의존 없이 전용 저장소 하나로 작업·결과를 관리한다. 초기 규모에 SQS와 별도 상태 저장소를 동시에 추가하지 않는다.
-- [DeepSeek strict 도구 호출](https://api-docs.deepseek.com/guides/tool_calls/): `deepseek-flash`의 beta 엔드포인트를 사용한다. 각 역할의 결과는 `strict: true`인 `submit_report`로 제출한다. 필수 도구 선택이 thinking mode와 함께 지원되지 않아 thinking을 비활성화한다. 자료 조사 도구도 모두 strict 스키마를 적용한다. 선택 인자는 null을 허용하는 필수 키로 전송하고 호출 실행 전에 생략값으로 복원해 기존 의미를 유지한다.
+- [DeepSeek strict 도구 호출](https://api-docs.deepseek.com/guides/tool_calls/): `deepseek-flash`의 beta 엔드포인트를 사용한다. 각 역할의 결과는 `strict: true`인 `submit_report`로 제출한다. 일반 조사·판단은 auto 도구 선택으로 thinking을 유지한다. 종료 또는 출력 복구에서 submit_report를 강제할 때만 공급자 제약에 따라 thinking을 비활성화한다. 도구 제출이 없는 응답은 기존 역할별 수정 한도 안에서 강제 제출로 복구한다. 자료 조사 도구도 모두 strict 스키마를 적용한다. 선택 인자는 null을 허용하는 필수 키로 전송하고 호출 실행 전에 생략값으로 복원해 기존 의미를 유지한다.
 - [Exa 공식 MCP](https://github.com/exa-labs/exa-mcp-server#authentication): endpoint `https://mcp.exa.ai/mcp`의 `web_search_exa`, `web_fetch_exa`만 사용한다. `EXA_API_KEY`를 해당 HTTPS 원본의 `x-api-key` 헤더로 전달한다. 운영 키는 Secrets Manager `edge/portfolio/runtime`에서 워커에만 주입하며 URL·모델 입력에 넣지 않는다. 인증 후에도 공급자 요금제의 호출 제한은 적용된다.
 
 ## 단일 에이전트의 실행 계약
