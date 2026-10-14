@@ -116,7 +116,7 @@ def test_recovery_keeps_omitted_answers_and_evidence_for_the_same_target():
     second.answers = second.answers[:1]
     second.recommendation = None
     assert [answer.question_index for answer in retain_research(second, first).answers] == [2]
-    assert retain_research(second, first).evidence_coverage == []
+    assert retain_research(second, first).evidence_coverage == first.evidence_coverage
 
 
 @pytest.mark.parametrize('change_search', [False, True])
@@ -183,7 +183,7 @@ async def test_server_constraint_rejection_triggers_alternatives_without_model_w
     from test_agent import Evidence
     class Optimizer:
         def __init__(self, *args):
-            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'c1'}], 'reason': None}
+            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'c1', 'allocations': [{'instrument_id': 'US:VOO', 'weight_pct': 100}]}], 'reason': None}
             self.batches = {'first'}
         def validate(self, final): return {'candidate_id': 'c1'} if final.recommendation else None
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
