@@ -42,7 +42,15 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => ({}));
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
-    if (response.status === 422) throw new Error('목록에서 ETF 또는 현금을 선택하고 금액을 확인해 주세요.');
+    if (response.status === 422) {
+      const messages: Record<string, string> = {
+        HOLDING_WEIGHTS_REQUIRED: '보유 종목의 금액 또는 비율을 입력해 주세요.',
+        CONTRIBUTION_CHOICE_REQUIRED: '투자금을 넣는 방법을 선택해 주세요.',
+        INVESTMENT_OBJECTIVE_REQUIRED: '투자 목적을 하나 이상 골라 주세요.',
+        MONTHLY_AMOUNT_REQUIRED: '매달 투자할 금액을 입력해 주세요.',
+      };
+      throw new Error(messages[body.detail] || '목록에서 ETF 또는 현금을 선택하고 금액을 확인해 주세요.');
+    }
     if (response.status === 429) throw new Error('현재 요청이 많거나 오늘 체험 횟수를 모두 사용했어요. 잠시 후 다시 시도해 주세요.');
     if (response.status === 401) throw new Error('분석을 시작한 브라우저에서 다시 열어 주세요.');
     throw new Error('요청을 처리하지 못했어요. 연결 상태를 확인해 주세요.');

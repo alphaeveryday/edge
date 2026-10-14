@@ -3,6 +3,18 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
+test('required investment objective error identifies the missing field', async ({ page }) => {
+  await page.route('**/api/portfolio/**', route => {
+    if (route.request().url().endsWith('/catalog')) return route.fulfill({ json: catalog });
+    if (route.request().url().endsWith('/analyses')) return route.fulfill({ status: 422, json: { detail: 'INVESTMENT_OBJECTIVE_REQUIRED' } });
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/portfolio/');
+  await expect(page.getByRole('button', { name: '종목만 입력할래요' })).toHaveCount(0);
+  await fillForm(page);
+  await expect(page.getByRole('alert')).toContainText('투자 목적을 하나 이상 골라 주세요.');
+});
+
 test('timeout explains the ten-minute maximum without claiming every request lasted ten minutes', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'timed-out'));
   await page.route('**/api/portfolio/**', route => route.fulfill({ json: { id: 'timed-out', state: 'failed', failure: 'TIMED_OUT' } }));
@@ -102,6 +114,8 @@ test('cash default, live donut, ETF-only search and direct recommendation flow',
   await find.fill('현금');
   await page.getByRole('option', { name: '현금 원화 현금' }).click();
   await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toBeVisible();
+  await page.getByRole('spinbutton', { name: '현금 금액' }).fill('100');
+  await page.getByRole('spinbutton', { name: 'Vanguard S&P 500 ETF 금액' }).fill('100');
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
   await expect(page.getByRole('heading', { name: '어떻게 넣나요?' })).toBeVisible();
   await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요' })).toBeVisible();
@@ -160,6 +174,7 @@ test('tax details and custom interests persist without a dividend step', async (
   await page.getByRole('button', { name: '3년 안', exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.getByRole('heading', { name: '더 담고 싶은 쪽이 있나요?' })).toBeVisible();
+  await expect(page.locator('.bar .btn')).toBeDisabled();
   await page.getByLabel('관심 키워드 직접 입력').fill('환율 부담');
   await page.getByRole('button', { name: '추가', exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
