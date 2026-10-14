@@ -61,6 +61,18 @@ test('종목 상세가 분석 상세 정규식에 먹히지 않는다 (순서를
   assert.equal(r.entity, undefined, '시장·코드는 쿼리에 있다 — 경로 판정이 지어내면 안 된다');
 });
 
+test('새 분석 결과 상세는 종류·id 두 조각이고 목록 이름에 먹히지 않는다', () => {
+  /* 목록 접두어(`/analysis-results`)는 상세 주소의 앞부분이기도 하다. 상세를 먼저 안 물으면 헤더가
+   * 상세 화면에서 "분석 결과"(목록)를 말하고 뒤로가기가 사라진다. */
+  const r = headerRoute('/analysis-results/movement/mv-1');
+  assert.equal(r.kind, 'analysisResultDetail');
+  assert.equal(r.title, '분석 결과 상세');
+  assert.equal(r.entity?.id, 'mv-1');
+  assert.equal(headerRoute('/analysis-results').kind, 'list');
+  /* 옛 목록과 접두어가 겹치지 않는다 — `/analyses` 는 `/analysis-results` 의 앞부분이 아니다 */
+  assert.equal(headerRoute('/analyses/an-1').kind, 'analysisDetail');
+});
+
 test('세 갈래가 같은 접두어를 나눠 쓴다', () => {
   assert.equal(headerRoute('/analyses').kind, 'list');
   assert.equal(headerRoute('/analyses/symbol').kind, 'symbol');
@@ -117,6 +129,9 @@ test('뒤로가기는 목적지 하나에서 파생된다 — 버튼과 목적�
     ['/analyses/symbol', '/analyses'],
     ['/ops/incidents/detail', '/ops/incidents'],
     ['/ops/runs/run-1', '/ops/runs'],
+    ['/analysis-results/outlook/an-1', '/analysis-results?kind=outlook'],
+    /* 가격변동 상세에서 돌아가면 가격변동 목록이다 — 종류를 잃으면 전망 목록이 열린다 */
+    ['/analysis-results/movement/mv-1', '/analysis-results?kind=movement'],
   ];
   for (const [p, dest] of opened) {
     const r = headerRoute(p);
@@ -124,7 +139,7 @@ test('뒤로가기는 목적지 하나에서 파생된다 — 버튼과 목적�
     assert.equal(showBack(r), true, `${p} 에 뒤로가기가 있어야 한다`);
   }
   /* 반대 방향도 재야 한다 — `showBack` 을 상수 true 로 바꿔도 위만으로는 안 잡힌다 */
-  for (const p of ['/', '/tenants', '/analyses', '/sources', '/없는경로']) {
+  for (const p of ['/', '/tenants', '/analyses', '/analysis-results', '/sources', '/없는경로']) {
     const r = headerRoute(p);
     assert.equal(r.backTo, null, `${p} 에는 돌아갈 목록이 없어야 한다`);
     assert.equal(showBack(r), false);
@@ -155,6 +170,7 @@ test('화면명 표가 기대 목록과 **양방향**으로 맞는다', () => {
     '/lineage/news': '뉴스 계보',
     '/impact/holdings': '구성종목 결손 영향',
     '/analyses': '가격 변동 분석 목록',
+    '/analysis-results': '분석 결과',
     '/ops/incidents': '파이프라인 문제',
     '/ops/runs': '런·작업 귀결',
     '/ops/chain': '설명 생성 흐름',
@@ -191,12 +207,13 @@ test('모르는 경로는 이름을 지어내지 않는다', () => {
   assert.equal(r.title, '');
 });
 
-test('🔴 옛 설명 엔진 화면(분석 목록·종목·상세)은 맨 위에 옛 기록이라는 안내와 흐름 화면 링크를 둔다', () => {
+test('🔴 옛 설명 엔진 화면(분석 목록·종목·상세)은 맨 위에 옛 기록이라는 안내와 새 분석 결과 목록 링크를 둔다', () => {
   /* 메뉴에서 뺀 대신 주소로 들어온 사람에게 무엇을 보고 있는지 밝힌다(ALPHA-1328). 화면 컴포넌트가
    * 안내를 그리는지를 소스로 잰다 — `.tsx` 는 import 할 수 없다. */
   const notice = readFileSync(new URL('../pages/_shared/LegacyEngineNotice.tsx', import.meta.url), 'utf8');
   assert.match(notice, /10-01까지의 옛 설명 엔진 기록입니다/);
-  assert.match(notice, /to="\/ops\/chain\?focus=etf-ledger"/);
+  /* 새 분석 엔진의 목록이 생겨(ALPHA-1333) 안내는 그 목록을 가리킨다 — 흐름 화면의 ETF 표는 상태만 있다 */
+  assert.match(notice, /to="\/analysis-results"/);
   for (const page of ['AnalysesPage', 'AnalysisSymbolPage', 'AnalysisDetailPage']) {
     const src = readFileSync(new URL(`../pages/${page}.tsx`, import.meta.url), 'utf8');
     const exported = new RegExp(`export function ${page}\\(\\) \\{[\\s\\S]*?\\n\\}`).exec(src)?.[0] ?? '';

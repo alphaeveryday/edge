@@ -49,7 +49,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/ops/incidents/detail?vid=` | 사건 상세 (점 든 대상도 안전하도록 식별자는 쿼리) |
 | `/ops/runs` · `/ops/runs/:runId` | 런·작업 귀결 목록 · 실행 상세 |
 | `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이(뉴스 엔티티 해소율 실측, 60% 미만은 주황 주의) + 데이터셋별 실행 추이(실행 단위의 행 수·소요 시간·종료 상태·대상 수 대비 받은 수 — 판정 없음, ALPHA-1284) + 산출 축의 기준일 추이·1분 세션 일별 창 수(판정 없음, ALPHA-1289) + v2 분석(전망·가격변동) 일별 추이와 분석 결과 카드(ALPHA-1290) |
-| `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계 |
+| `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계. 흐름 화면 ETF 표의 종류별 상태 글자는 그 ETF 의 그날 분석 결과 목록으로 간다(ALPHA-1333) |
 | `/ops/summary` | 파이프라인 개요 — **은퇴**(라우트·컴포넌트만 존치). 사이드바·인바운드 링크 없음이 의도다 |
 | `/overview` | 레인 원장 요약 (구 첫 화면) — **은퇴**(라우트·컴포넌트만 존치). 개요는 자기 질문("지금 정상인가")에 답할 수 없어 메뉴에서 뺐다 |
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
@@ -59,9 +59,11 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/minute` | 장중 1분 수집 (세션 생존·창 집계·결손 창 목록 — 무증거 vs 빈 데이터 구분, ALPHA-651) |
 | `/lineage/news` | 뉴스 계보 (funnel 타일 N/M%+(i) 산출 정의·단계 필터·언론사·원문 링크·1분 추출 요약 — ALPHA-685·697) |
 | `/impact/holdings` | 구성종목 결손 영향 (누락 ETF → 기준일 분석 지목 + 권장 조치 — ALPHA-686) |
-| `/analyses` | 가격 변동 분석 목록 (종목별 최신 / 분석 이력 두 보기 · 검색·상태·시장 필터). 옛 설명 엔진의 기록(10-01까지)이라 사이드 메뉴에서 뺐다 — 화면 위에 그 안내와 흐름 화면 ETF 표 링크가 있다(ALPHA-1328) |
+| `/analyses` | 가격 변동 분석 목록 (종목별 최신 / 분석 이력 두 보기 · 검색·상태·시장 필터). 옛 설명 엔진의 기록(10-01까지)이라 사이드 메뉴에서 뺐다 — 화면 위에 그 안내와 새 분석 결과 목록 링크가 있다(ALPHA-1328·1333) |
 | `/analyses/symbol?market=&code=` | 종목 분석 이력 (최신 유효 설명 + 그 종목의 시도 전량 — ALPHA-738). 목록과 같은 안내가 위에 있다 |
 | `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴). 목록과 같은 안내가 위에 있다 |
+| `/analysis-results` | 분석 결과 — 새 분석 엔진(v2)의 전망·가격변동 분석 목록 (종류 탭 · 기간 · ETF · 상태 · 합성·출처 미상 입력 포함 필터, 필터는 주소에 둔다 — ALPHA-1333) |
+| `/analysis-results/:kind/:id` | 분석 결과 상세 — 저장된 내용 그대로(전망: 스티커·요약·상세 항목·요인·요인 상세·결론 / 가격변동: 요약·항목(앞선 분석에서 고른 것 포함)·고른 순서·회수 / 실패: 오류 메시지 전체). 코드 값의 화면 말은 `domains/analysisResults/labels` 가 정한다. 읽기 전용 |
 
 ⚠️ **종목 이력은 시장·코드를 경로가 아니라 쿼리로 받는다.** CloudFront 의 SPA fallback
 ([`spa-rewrite.js`](../../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
@@ -141,7 +143,7 @@ API 쪽에서 도메인 단위로 진행돼 끝났고(API 의 `mock` 패키지�
 
 tenant-console-ui 와 거의 동일 규약 — 공통 fetch 래퍼 [`src/api/client.ts`](src/api/client.ts)
 (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증), TanStack Query hook, 페이지는 도메인
-hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `session` · `console`.
+hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `analysisResults` · `session` · `console`.
 super-admin-api 성공 응답도 공통 봉투(`ApiResponse`)라 client.ts 가 `.result` 를
 중앙에서 벗겨 반환한다 — tenant-console-ui 도 동일하다(ALPHA-521·522, 도메인별
 repository 는 무변경). 그 밖 상세 규약은

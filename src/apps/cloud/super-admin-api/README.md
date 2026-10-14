@@ -1,7 +1,7 @@
 # super-admin-api
 
-벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses
-는 DB, session 은 실세션 주체 투영). 화면·금지 항목의 SSOT 는
+벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses·
+analysisResults 는 DB, session 은 실세션 주체 투영). 화면·금지 항목의 SSOT 는
 [docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
@@ -50,7 +50,7 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 
 ## 규칙 엔진 사실 표면 (ALPHA-738)
 
-`GET /api/v1/console/facts?date=` — 콘솔 규칙 엔진이 읽는 **사실**. 화면 표면 4종과 성격이
+`GET /api/v1/console/facts?date=` — 콘솔 규칙 엔진이 읽는 **사실**. 화면 표면 5종과 성격이
 다르다: UI 도메인 계약과 1:1 이 아니고, 수집 축을 넘어 전달 경계·산출까지 한 응답에 담을 자리다
 (그래서 `/sources/*` 아래 두지 않는다). 계약 정본은
 [docs/contracts/console-facts-api.md](../../../../docs/contracts/console-facts-api.md),
@@ -116,9 +116,31 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 
 ## 콘솔 화면 표면 (ALPHA-515 → 도메인별 DB 전환 완료)
 
-super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 4종 —
+super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 5종 —
 tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파이프라인 실행 이력) · analyses(가격 변동
-분석 목록·무효화) · session(운영자 컨텍스트·프로필).
+분석 목록·무효화) · analysisResults(새 분석 엔진 결과 목록·상세) · session(운영자 컨텍스트·프로필).
+
+**새 분석 엔진 결과(ALPHA-1333)** — 읽기 전용 조회 둘이다. 표는 `outlook_*`·`movement_*`(소유는
+analysis-engine-v2)이고 `repository/JdbcAnalysisResultRepository` 가 JPA 없이 읽는다.
+
+- `GET /api/v1/analysis-results?kind=&from=&to=&etf=&status=&allSources=&page=&size=` — 목록. `kind` 는
+  `outlook`(전망)·`movement`(가격변동) 가운데 하나(필수). `from`·`to` 는 `analysis_at` 의 KST 날짜(양끝
+  포함)이고 둘 다 생략하면 오늘 하루, `from` 만 주면 그날 하루다(`to` 가 `from` 보다 이르면 400). `status` 는 행 값 그대로(`completed`·`failed`·`running`). 기본은
+  `data_source='database'` 만이고 `allSources=true` 면 합성 입력(`synthetic`)·출처 표기 전 행
+  (`unknown`)도 싣는다. 최신순, `size` 기본 50·최대 200. 조회 한 번으로 전체 행 수(`total`)와 그
+  페이지를 낸다.
+- `GET /api/v1/analysis-results/{kind}/{analysisId}` — 상세. 엔진의 확인용 조회(`storage/inspection.py`)와
+  같은 행을 같은 순서로 읽는다. 전망은 조회 6번(분석·근거 항목·요인·요인 지표·이슈 항목·결론 키워드),
+  가격변동은 2번(분석·항목)을 한 스냅샷(REPEATABLE READ)에서 한다. 가격변동 항목은 그 분석이 만든 것
+  전부(고르지 않은 것도)에 더해, 고른 항목 가운데 같은 날 앞선 분석이 만든 것이다 — 엔진은 앞선 분석의
+  항목을 다시 고를 수 있고 고른 목록이 직전과 같으면 그대로 물려받는다. 실패 행은 오류 메시지 전체를
+  낸다. 없으면 404.
+- **게시·회수 기준은 v2 테넌트 조회와 같다**(`analysis-engine-v2 api/publications.py`
+  `PublicationReader.latest`): `published` = `status='completed' AND data_source='database' AND
+  published_at IS NOT NULL`, 가격변동은 `withdrawn_at IS NULL` 이 더해진다. 전망에는 회수 열이 없어
+  `withdrawn` 이 null 이다. ⚠️ `latest` 는 이 조건을 만족하는 행 가운데 ETF 마다 최근 한 건만 내므로
+  `published` 는 "지금 테넌트가 받는 한 건"이 아니라 그 후보 조건이다. 통합 테스트가 저쪽 원문 파일에서
+  이 조건 문자열을 찾는다 — 저쪽이 바뀌면 그 테스트가 먼저 깨진다.
 
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
@@ -156,7 +178,8 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, `XxxResponse.from(원천 record)` 로 매핑해 반환한다
-  (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record —
+  (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record,
+  analysisResults=v2 분석 표 조회 record —
   service 가 변환, analyses 쓰기=무효화 실전이(응답 본문 없음), session=세션 주체(`SessionOperator`) 투영을
   `AdminSessionService` 가 구성). 원천 형과 형식이
   같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다

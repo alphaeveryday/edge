@@ -20,6 +20,7 @@ const LIST_TITLES: readonly (readonly [prefix: string, title: string])[] = [
   ['/lineage/news', '뉴스 계보'],
   ['/impact/holdings', '구성종목 결손 영향'],
   ['/analyses', '가격 변동 분석 목록'],
+  ['/analysis-results', '분석 결과'],
   ['/ops/incidents', '파이프라인 문제'],
   ['/ops/runs', '런·작업 귀결'],
   ['/ops/chain', '설명 생성 흐름'],
@@ -36,6 +37,7 @@ export type HeaderKind =
   | 'tenantDetail'
   | 'symbol'
   | 'analysisDetail'
+  | 'analysisResultDetail'
   | 'incidentDetail'
   | 'runDetail'
   | 'list'
@@ -125,6 +127,18 @@ export function headerRoute(raw: string): HeaderRoute {
       title: '가격 변동 분석 상세',
       backTo: '/analyses',
       entity: { id: analysis[1] },
+    };
+  }
+
+  /* 새 분석 엔진의 상세(ALPHA-1333) — 종류와 id 두 조각이다. 목록 접두어보다 먼저 묻는다. */
+  const result = /^\/analysis-results\/([^/]+)\/([^/]+)$/.exec(path);
+  if (result) {
+    return {
+      kind: 'analysisResultDetail',
+      title: '분석 결과 상세',
+      /* 종류는 경로에 있으니 그 종류의 목록으로 돌아간다 — 기간·ETF 필터는 경로에 없어 못 살린다 */
+      backTo: `/analysis-results?kind=${result[1]}`,
+      entity: { id: result[2] },
     };
   }
 
