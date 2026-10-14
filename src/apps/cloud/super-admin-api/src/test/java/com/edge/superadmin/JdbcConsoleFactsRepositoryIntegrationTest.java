@@ -447,9 +447,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		jdbc.update("""
 				INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id, window_start,
 				       generation, detection_policy_version, open_price, close_price, change_rate,
-				       threshold, cooldown_bucket, trigger_kind)
-				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?)
-				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind);
+				       threshold, cooldown_bucket, trigger_kind, created_at)
+				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?,?::timestamptz)
+				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind, windowStart);
 	}
 
 	/**
@@ -2105,7 +2105,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * <p>두 표본의 KST 날짜는 실행 시각에 따라 같을 수도 다를 수도 있어, 날짜별로 기대값을 가른다.
 	 */
 	@Test
-	void 유예의_경계는_발화_뒤_8시간이다() {
+	void 유예의_경계는_8시간이다() {
 		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
 		java.time.OffsetDateTime inside = now.minusHours(8).plusMinutes(10);    // 7시간 50분 전 — 유예 안
 		java.time.OffsetDateTime outside = now.minusHours(8).minusMinutes(10);  // 8시간 10분 전 — 유예 밖
@@ -2118,6 +2118,30 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 유예 안의 표본만 판정 불가다 — 같은 날이면 그날의 수는 1, 다른 날이면 유예 밖 표본의 날은 0 이다.
 		assertThat(requestPending.apply(inside.toLocalDate())).isEqualTo(1L);
 		assertThat(requestPending.apply(outside.toLocalDate())).isEqualTo(sameDay ? 1L : 0L);
+	}
+
+	/**
+	 * 🔴 <b>유예의 기점은 창 시각이 아니다</b>(ALPHA-1309, 봇 리뷰). 밀린 큐나 복구 경로는 오래된 창의
+	 * 트리거를 뒤늦게 만들고 수용한다. 워크플로의 시간 제한은 수용 시점부터 흐르므로, 창이 25시간 전이어도
+	 * 방금 수용된 요청({@code late-wait})과 방금 만들어진 트리거({@code late-none})는 아직 판정할 수
+	 * 없다. 창 시각으로 재면 둘 다 손실로 세어진다.
+	 */
+	@Test
+	void 오래된_창의_트리거도_방금_만들어지고_수용됐으면_판정_불가다() {
+		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		java.time.OffsetDateTime window = now.minusHours(25);
+		LocalDate day = window.toLocalDate();
+		insertMinuteTrigger("late-none", day.toString(), "etf-1", "FIRE", window.toString());
+		insertMinuteTrigger("late-wait", day.toString(), "etf-2", "FIRE", window.toString());
+		// 트리거 행은 방금 만들어졌다(late-wait 는 생성은 오래됐고 수용만 방금이다 — 두 기점을 가른다).
+		jdbc.update("UPDATE minute_price_trigger SET created_at = ?::timestamptz WHERE trigger_id = 'late-none'",
+				now.minusMinutes(5).toString());
+		insertRequest("late-wait", "late-wait", now.minusMinutes(5).toString());
+
+		assertThat(repository.facts(day).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(tuple("c.req", 1L, 1L), tuple("c.start", 0L, 1L),
+						tuple("c.done", 0L, 0L), tuple("c.pub", 0L, 0L));
 	}
 
 	/**

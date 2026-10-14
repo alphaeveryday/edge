@@ -853,12 +853,16 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 없으므로 {@code created_at} 하한으로 훑는 범위를 좁힌다(상한은 없다 — 늦게 수용된 요청도 그
 	 * 트리거의 자손이다). {@code data_source = 'database'} 인 분석만 센다.
 	 *
-	 * <p><b>아직 판정할 수 없는 트리거</b>(ALPHA-1309): 발화한 지 유예 시간이 안 지난 트리거
-	 * ({@code young})가 다음 단계에 못 갔으면 손실도 도달도 아니다. {@code req_pending} 은 요청이 아직
-	 * 수용되지 않은 트리거, {@code started_pending} 은 요청은 수용됐는데 분석 행이 아직 없는 트리거다.
-	 * 이미 도달한 트리거는 유예 안이어도 도달로 센다. 시각은 DB 시각({@code now()} — 트랜잭션 시작
-	 * 시각이라 한 조회 안에서 같다)과 비교하고 조회일과 무관하다: 발화한 지 유예 시간이 지난 트리거는
-	 * 어느 날짜를 조회하든 판정 불가가 아니다(어제 저녁의 트리거는 자정 뒤에도 유예 안일 수 있다).
+	 * <p><b>아직 판정할 수 없는 트리거</b>(ALPHA-1309): 유예 시간 안에 있어 다음 단계에 못 간 것이
+	 * 손실도 도달도 아닌 트리거다. {@code req_pending} 은 트리거 행이 만들어진 지({@code created_at})
+	 * 유예 시간이 안 지났고 요청이 아직 수용되지 않은 트리거, {@code started_pending} 은 요청이 수용된
+	 * 지({@code accepted_at}) 유예 시간이 안 지났고 분석 행이 아직 없는 트리거다. 이미 도달한 트리거는
+	 * 유예 안이어도 도달로 센다. 시각은 DB 시각({@code now()} — 트랜잭션 시작 시각이라 한 조회 안에서
+	 * 같다)과 비교하고 조회일과 무관하다(어제 저녁의 트리거는 자정 뒤에도 유예 안일 수 있다).
+	 *
+	 * <p>⚠️ 유예의 기점은 창 시각({@code window_start})이 <b>아니다</b>. 워크플로의 시간 제한은 수용
+	 * 시점부터 흐르고, 밀린 큐나 복구 경로는 오래된 창의 트리거를 뒤늦게 만들고 수용한다 — 창 시각으로
+	 * 재면 그런 건이 돌고 있는 동안 손실로 세어진다(봇 리뷰가 짚었다).
 	 *
 	 * <p>🔴 <b>요청은 수용된 것만 센다</b>({@code accepted_at IS NOT NULL}). v2 는 워크플로를 띄우기
 	 * 전에 요청 행을 먼저 예약하고, 수용이 확인돼야 {@code accepted_at} 을 채운다
@@ -868,13 +872,15 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 */
 	private static final String ANALYSIS_CHAIN_SQL = """
 			WITH intraday_trigger AS (
-			    SELECT trigger_id, window_start
+			    SELECT trigger_id, created_at
 			      FROM minute_price_trigger
 			     WHERE trigger_kind = 'FIRE'
 			       AND window_start >= ? AND window_start < ?
 			), reached AS (
 			    SELECT t.trigger_id,
-			           t.window_start > now() - (? * interval '1 second') AS young,
+			           t.created_at > now() - (? * interval '1 second') AS young,
+			           COALESCE(bool_or(q.accepted_at > now() - (? * interval '1 second')), false)
+			               AS request_young,
 			           bool_or(q.analysis_id IS NOT NULL) AS requested,
 			           bool_or(a.analysis_id IS NOT NULL) AS started,
 			           COALESCE(bool_or(a.status = 'completed'), false) AS completed,
@@ -887,12 +893,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			            AND q.input_json::jsonb -> 'source' ->> 'trigger_id' = t.trigger_id
 			      LEFT JOIN movement_analyses a
 			             ON a.analysis_id = q.analysis_id AND a.data_source = 'database'
-			     GROUP BY t.trigger_id, t.window_start
+			     GROUP BY t.trigger_id, t.created_at
 			)
 			SELECT count(*) FILTER (WHERE requested) AS req,
 			       count(*) FILTER (WHERE started) AS started,
 			       count(*) FILTER (WHERE young AND NOT requested) AS req_pending,
-			       count(*) FILTER (WHERE young AND requested AND NOT started) AS started_pending,
+			       count(*) FILTER (WHERE request_young AND NOT started) AS started_pending,
 			       count(*) FILTER (WHERE completed) AS completed,
 			       count(*) FILTER (WHERE published) AS published,
 			       (SELECT min((created_at AT TIME ZONE 'Asia/Seoul')::date)
@@ -961,7 +967,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 						rs.getLong(s.column()), blind, pending));
 			}
 			return List.copyOf(out);
-		}, from, to, ANALYSIS_GRACE_SECONDS, from);
+		}, from, to, ANALYSIS_GRACE_SECONDS, ANALYSIS_GRACE_SECONDS, from);
 		return new ChainRow(chain.feeds(), chain.stages(), stages);
 	}
 

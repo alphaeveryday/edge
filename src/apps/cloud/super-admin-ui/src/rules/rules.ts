@@ -567,7 +567,7 @@ export const RULES: Rule[] = [
       if (seen.length === 2) return null;
       /* 판정에서 뺀 건수를 밝힌다(ALPHA-1309) — 위반 0건이 "전부 도달했다"로 읽히면 안 된다 */
       const pending = (f.chain?.stages ?? []).reduce((n, s) => n + (Number.isFinite(s.pending) ? (s.pending as number) : 0), 0);
-      const held = pending > 0 ? ` 발화한 지 유예 시간이 안 지난 ${pending}건은 아직 판정하지 않았다.` : '';
+      const held = pending > 0 ? ` 유예 시간 안에 있는 ${pending}건은 아직 판정하지 않았다.` : '';
       const label = (src: string) => (src === 'batch' ? '배치' : '장중');
       /* 배치 갈래가 **대상이 아닌** 것은 비교를 못 한 것과 다르다(ALPHA-1296) — 배치 트리거는 새 분석
        * 엔진이 소비하지 않는다. "점이 모자라 비교가 없었다"고 쓰면 계측 공백으로 읽힌다. */
@@ -598,7 +598,7 @@ export const RULES: Rule[] = [
            * 갈려 "평가됨 · 위반 0"이 선다 — 이 파일에서 두 번 난 바로 그 갈림이다. */
           if (!Number.isFinite(s[src])) return;
           const v = s[src] as number;
-          /* 아직 판정할 수 없는 트리거(ALPHA-1309)는 손실이 아니다 — 발화한 지 유예 시간이 안 지나
+          /* 아직 판정할 수 없는 트리거(ALPHA-1309)는 손실이 아니다 — 앞 단계에 도달한 지 유예 시간이 안 지나
            * 진행 중일 수 있다. 앞 단계와의 차이에서 그 수를 뺀 것만 손실이다. 판정 불가는 장중 갈래의
            * 수다(배치 갈래는 새 분석 엔진의 대상이 아니라 여기 오지 않는다). */
           const pending = src === 'intraday' && Number.isFinite(s.pending) ? (s.pending as number) : 0;

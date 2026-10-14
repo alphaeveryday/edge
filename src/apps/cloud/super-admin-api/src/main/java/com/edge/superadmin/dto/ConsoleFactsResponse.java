@@ -232,7 +232,7 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * {@code blind} 가 참이면 {@code intraday} 의 0 은 실측이 아니다(v2 가 아직 없던 날).
 	 *
 	 * <p>{@code pending} 은 이 단계에 <b>아직 판정할 수 없는</b> 트리거 수다(ALPHA-1309) — 앞 단계에는
-	 * 도달했고 이 단계에는 못 갔는데 발화한 지 유예 시간(단일 분석 워크플로의 전체 시간 제한)이 안
+	 * 도달했고 이 단계에는 못 갔는데 앞 단계에 도달한 지 유예 시간(단일 분석 워크플로의 전체 시간 제한)이 안
 	 * 지났다. {@code intraday}(도달)에는 들어 있지 않다. 손실은 앞 단계와의 차이에서 이 수를 뺀
 	 * 것이다. 분석 완료·게시는 항상 0 이다.
 	 *
