@@ -65,7 +65,8 @@ configs:
       [databases]
       analysis_v2 = host=postgres port=5432 dbname=analysis_v2
       [users]
-      edge_analysis_v2_writer = max_user_connections=20
+      # POOL_WRITER: 워커 풀의 writer 서버 연결 상한. 역할 한도(20)는 그대로 두고 줄이면 남는 몫을 직접 연결(실행 제어)이 쓴다
+      edge_analysis_v2_writer = max_user_connections=${POOL_WRITER:-20}
       edge_analysis_v2_reader = max_user_connections=6
       [pgbouncer]
       listen_addr = 0.0.0.0
