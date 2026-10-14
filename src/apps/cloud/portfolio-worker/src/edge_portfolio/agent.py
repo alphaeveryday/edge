@@ -611,6 +611,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if decision.kind == 'scenario':
                                 optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SCENARIO_ONLY'}
                             optimizer.decision = decision
+                            context['active_decision'] = decision.model_dump(mode='json')
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
