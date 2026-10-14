@@ -127,24 +127,28 @@ def load_prices(symbol, as_of, *, on_raw=None):
 
 
 async def fetch_prices(symbol, as_of, *, on_raw=None):
-    for attempt in range(2):
-        try:
-            return await _fetch_prices(symbol, as_of, on_raw=on_raw)
-        except (ValueError, TimeoutError) as error:
-            code = price_failure(error)
-            if attempt or code not in TRANSIENT_PRICE_FAILURES:
-                raise ValueError(code) from error
-            await asyncio.sleep(.5)
+    try:
+        original = await _fetch_prices(symbol, as_of, on_raw=on_raw)
+        columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
+        valid = [column[column.map(positive_price)] for column in columns]
+        if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
+            return original
+        primary_failure = 'PRICE_INVALID' if any(column.empty for column in valid) else 'PRICE_STALE'
+    except (ValueError, TimeoutError) as error:
+        primary_failure = price_failure(error)
+    record = await _fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback')
+    record['primary_failure'] = primary_failure
+    return record
 
 
-async def _fetch_prices(symbol, as_of, *, on_raw=None):
+async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo'):
     with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw)
+        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider)
 
 
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None):
+async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo'):
     """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint),
+    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
     try:
@@ -216,12 +220,14 @@ def weights(rows):
     return {k: float(v / total) for k, v in result.items()}
 
 
-def comparison_bounds(ids, records, as_of):
+def comparison_bounds(ids, records, as_of, *, column=None):
     keys = ids - {'CASH:KRW'}
-    required = [records[key]['frame']['Adj Close'] for key in keys]
+    column = column or comparison_column(records, ids)
+    required = [records[key]['frame'][column] for key in keys]
     needs_fx = any(records[key]['currency'] == 'USD' for key in keys)
     if needs_fx:
         required.append(records['FX']['frame']['Close'])
+    required = [series.where(series.map(positive_price)) for series in required]
     if required:
         if any(s.dropna().empty for s in required):
             raise ValueError('PRICE_UNAVAILABLE')
@@ -246,6 +252,7 @@ def model_price_payload(value):
 
 
 def carry_missing_prices(prices, expected, start, end):
+    prices = prices.where(prices.map(positive_price))
     expanded = prices.reindex(prices.index.union(expected).sort_values())
     missing = expanded.index[expanded.isna().any(axis=1)]
     lower = min(start, expected[0]) if len(expected) else start
@@ -256,16 +263,19 @@ def carry_missing_prices(prices, expected, start, end):
     return filled, {'method': 'previous_observation', 'count': len(dates), 'dates': dates}
 
 
-def normalized_prices(ids, records, as_of, bounds=None):
+def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
     series, urls = {}, []
     fx_fill_dates = set()
     keys = ids - {'CASH:KRW'}
     needs_fx = any(records[key]['currency'] == 'USD' for key in keys)
-    start, end = bounds or comparison_bounds(ids, records, as_of)
+    column = column or comparison_column(records, ids)
+    start, end = bounds or comparison_bounds(ids, records, as_of, column=column)
     for key in keys:
         record = records[key]
+        if not record['frame']['Close'].map(positive_price).any():
+            raise ValueError('PRICE_INVALID')
         sessions = expected_sessions(key, start - pd.Timedelta(days=30), end)
-        prices = record['frame'][['Adj Close', 'Close']]
+        prices = record['frame'][[column]].rename(columns={column: 'Adj Close'})
         event_only = prices.isna().all(axis=1) & ~prices.index.isin(sessions)
         prices = prices.loc[~event_only]
         values = prices['Adj Close']
@@ -313,8 +323,19 @@ def normalized_prices(ids, records, as_of, bounds=None):
     return frame / frame.iloc[0], urls
 
 
-def history_basis(start, end):
-    return f'{str(start)[:10]} ~ {str(end)[:10]} · 공통 자료 기간 · 100만 원을 넣었다면 (원)'
+def history_basis(start, end, records=None):
+    suffix = ' · 가격 수익률(분배금 제외)' if records and comparison_column(records) == 'Close' else ''
+    return f'{str(start)[:10]} ~ {str(end)[:10]} · 공통 자료 기간 · 100만 원을 넣었다면 (원){suffix}'
+
+
+def comparison_column(records, ids=None):
+    return 'Close' if any(record.get('return_basis') == 'price' for key, record in records.items()
+                         if key != 'FX' and (ids is None or key in ids)) else 'Adj Close'
+
+
+def comparison_method(records):
+    basis = '가격 수익률 · 분배금 제외' if comparison_column(records) == 'Close' else '수정 종가 기준 분배금 재투자'
+    return f'시작 비중으로 매수 후 유지 · {basis} · 환율 반영 · 세금·매매비용 제외 · 결측일·휴장일 직전 관측 가격 유지'
 
 
 def history_returns(history):
@@ -330,6 +351,8 @@ def history_returns(history):
 
 
 def comparison(target, current, records, as_of):
+    active = set(target) | set(current or {}) | {'FX'}
+    records = {key: record for key, record in records.items() if key in active}
     frame, urls = normalized_prices(set(target) | set(current or {}), records, as_of)
 
     def value(allocation):
@@ -340,9 +363,9 @@ def comparison(target, current, records, as_of):
     points = [{'date': day.date().isoformat(), 'recommended': round(float(recommended.loc[day]), 2),
                'current': round(float(existing.loc[day]), 2) if existing is not None else None} for day in frame.index]
     return {'points': points, 'interval': '1d', 'currency': 'KRW', 'initial_krw': 1000000,
-            'basis': history_basis(points[0]['date'], points[-1]['date']),
-            'method': '시작 비중으로 매수 후 유지 · 수정 종가 기준 분배금 재투자 · 미국 상장 ETF 환율 반영 · 세금·매매비용 제외 · 결측일·휴장일 직전 관측 가격 유지',
-            'source_url': 'https://finance.yahoo.com/', 'sources': urls,
+            'basis': history_basis(points[0]['date'], points[-1]['date'], records),
+            'method': comparison_method(records),
+            'source_url': urls[0]['url'] if urls else 'https://finance.yahoo.com/', 'sources': urls,
             'start_date': points[0]['date'], 'end_date': points[-1]['date']}
 
 
