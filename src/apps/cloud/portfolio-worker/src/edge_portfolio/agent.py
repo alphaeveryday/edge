@@ -20,7 +20,7 @@ from mcp.client.streamable_http import streamable_http_client
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
 from .recommendation import search_etfs, publish_recommendation
-from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report
+from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_price_payload
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints
@@ -322,12 +322,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'optimize_portfolios':
                             try:
-                                answer = await optimizer.tool(args)
+                                answer = model_price_payload(await optimizer.tool(args))
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_portfolio_history':
                             try:
-                                answer = await market.tool(args)
+                                answer = model_price_payload(await market.tool(args))
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_etf_outlook':
