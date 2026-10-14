@@ -23,7 +23,7 @@ from .recommendation import search_etfs, publish_recommendation
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_price_payload
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
-from .decision import Decision, QuestionSection, validate_decision, check_constraints
+from .decision import Decision, QuestionSection, validate_decision, check_constraints, filter_preference_constraints
 from .execution import execution_tool, resolve_funding, zero_funding_quote, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
@@ -579,6 +579,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     rule = Constraint(kind='no_sell', source='기존 신규 자금 전용 결정의 매도 금지')
                                     rules[rule.model_dump_json()] = rule
                                 decision.constraints = list(rules.values())
+                                filter_preference_constraints(decision, request, question_text=followup_question)
                                 decision.objectives = decision.objectives or inherited.objectives
                                 decision.funding_text = zero_funding_quote(request, decision) or decision.funding_text or inherited.funding_text
                                 if followup_question:

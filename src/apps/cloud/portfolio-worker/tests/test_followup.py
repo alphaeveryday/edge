@@ -358,3 +358,25 @@ async def test_invalid_question_prose_cannot_leave_a_scenario_optimization_exemp
     with pytest.raises(ValueError, match='Before completing portfolio'):
         await answer_question('구성을 검토해 주세요.', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
     assert len(attempts) == 2
+
+
+@pytest.mark.parametrize('explicit_limit', [False, True])
+async def test_followup_does_not_restore_misclassified_interest_constraints(explicit_limit):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상',
+                       'preferences': {'interests': ['반도체']}},
+              'decision': {'constraints': [{'kind': 'unverified', 'source': '반도체'}]},
+              'sources': Evidence.sources}
+    stages = []
+    followup = '반도체 비중은 20% 이하로 제한해 주세요.' if explicit_limit else '추천을 다시 검토해 주세요.'
+    async def model(payload):
+        if stages[-1] != 'question':
+            rules = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
+            assert len(rules) == int(explicit_limit)
+            raise RuntimeError('PREFERENCE_CHECKED')
+        content = {**final_payload()['question'], 'decision': {'kind': 'scenario'}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='PREFERENCE_CHECKED'):
+        await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)

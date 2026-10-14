@@ -77,6 +77,50 @@ async def test_later_roles_receive_the_repaired_full_customer_question():
         await run_analysis(request(question=original), 'test', stages.append, model_call=model, evidence=Evidence())
 
 
+@pytest.mark.parametrize('interest', ['균형 잡힌 분산', '성장', '배당', '안정 (채권·금)', '반도체', '미국 주식'])
+def test_standard_interest_is_a_ranking_preference_not_an_unknown_hard_constraint(interest):
+    req = request(preferences={'interests': [interest]})
+    decision = Decision(objectives=['growth', 'stability'], constraints=[{'kind': 'unverified', 'source': interest}])
+    result = validate_decision(decision, req, {})
+    assert result.constraints == []
+    assert result.objectives == ['growth', 'stability']
+    assert check_constraints(result, [], req, {}) == []
+
+
+def test_explicit_customer_limit_is_preserved_even_when_it_mentions_a_standard_interest():
+    req = request(question='반도체 비중은 반드시 20% 이하로 유지', preferences={'interests': ['반도체']})
+    rule = {'kind': 'unverified', 'source': '반도체 비중은 반드시 20% 이하로 유지'}
+    result = validate_decision(Decision(constraints=[rule]), req, {})
+    assert len(result.constraints) == 1
+    assert check_constraints(result, [], req, {})[0]['status'] == 'unknown'
+
+
+def test_custom_interest_with_an_explicit_limit_remains_a_customer_constraint():
+    text = '기술주 비중 30% 이하'
+    req = request(preferences={'interests': [text]})
+    result = validate_decision(Decision(constraints=[{'kind': 'unverified', 'source': text}]), req, {})
+    assert len(result.constraints) == 1
+
+
+def test_followup_written_limit_is_preserved_when_source_is_also_an_interest_chip():
+    req = request(preferences={'interests': ['반도체']})
+    result = validate_decision(Decision(constraints=[{'kind': 'unverified', 'source': '반도체'}]),
+                               req, {}, question_text='반도체 비중은 20% 이하로 제한해 주세요.')
+    assert len(result.constraints) == 1
+
+
+def test_selected_us_interest_does_not_prohibit_korean_etfs():
+    req = request(preferences={'interests': ['미국 주식']})
+    result = validate_decision(Decision(constraints=[{'kind': 'markets', 'source': '미국 주식', 'markets': ['US']}]), req, {})
+    assert result.constraints == []
+
+
+def test_written_dividend_condition_is_not_erased_by_a_matching_interest_chip():
+    req = request(preferences={'interests': ['배당'], 'dividend_goal': '배당 월 100만원 이상 필수'})
+    result = validate_decision(Decision(constraints=[{'kind': 'unverified', 'source': '배당'}]), req, {})
+    assert len(result.constraints) == 1
+
+
 def test_no_sell_with_unknown_holdings_is_unknown_and_does_not_become_cash():
     req = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO'}], input_mode='names',
         horizon='10년 이상', question='매도 금지')

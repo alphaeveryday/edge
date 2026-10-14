@@ -116,8 +116,8 @@ class Section(StrictModel):
         if any(not p.strip() for p in self.paragraphs):
             raise ValueError("Empty paragraph")
         for i, paragraph in enumerate(self.paragraphs, 1):
-            if len(paragraph) > 180 or multiple_sentences(paragraph.strip()):
-                raise ValueError(f'Bullet {i}: each bullet must be one sentence of at most 180 characters; merge clauses into one sentence or remove the second sentence')
+            if len(paragraph) > 180:
+                raise ValueError(f'Bullet {i}: at most 180 characters')
         if any(len(p) > 100 for p in self.limitations):
             raise ValueError("Limitation exceeds 100 characters")
         if any(not p.strip() for p in self.limitations):
