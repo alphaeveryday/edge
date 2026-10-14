@@ -1520,9 +1520,11 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   fIn.addEventListener('input', () => lookup());
   // 엔터는 맨 위 결과의 전망을 연다. 결과가 없으면 없다는 안내를 바로 띄운다
   find.addEventListener('submit', (e) => { e.preventDefault(); fIn.blur(); if (lookup(true)) $('.find__row', fOut).click(); });
-  // 이름을 치지 않아도 한 번에 전망을 연다. '미리 보기'도 첫 버튼을 누른 것과 같다(아래 앵커 처리)
+  // 이름을 치지 않아도 한 번에 전망을 연다. '미리 보기'도 첫 버튼을 누른 것과 같다. 찾기 칸으로 내려가는 것은 아래 앵커 처리가 맡는다
   const picks = $$('[data-pick]', find);
   picks.forEach((b) => { b.onclick = () => showCard(...ETFS.find(([code]) => code === b.dataset.pick)); });
+  let opening;
+  $$('[data-preview]').forEach((a) => a.addEventListener('click', () => { opening = picks[0].onclick(); }));
 
   // 조건의 숫자가 굴러서 자리를 잡는다
   const countIO = new IntersectionObserver((es) => es.forEach((e) => {
@@ -1589,7 +1591,8 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     const id = a.getAttribute('href'), target = id.length > 1 && document.querySelector(id);
     if (!target) return;
     e.preventDefault();
-    if ('preview' in a.dataset) await picks[0].onclick(); // 전망을 먼저 연다: 내려가는 도중에 리포트가 뜨면 위치를 다시 재면서 스크롤이 끊긴다
+    // 전망이 뜬 뒤에 내려간다: 내려가는 도중에 리포트가 뜨면 위치를 다시 재면서 스크롤이 끊긴다. 파일이 늦으면 기다리지 않는다
+    if ('preview' in a.dataset) await Promise.race([opening, new Promise((r) => setTimeout(r, 600))]);
     if (lenis) lenis.scrollTo(anchorY(target), { duration: 1.4 });
     else window.scrollTo({ top: anchorY(target), behavior: 'smooth' });
     if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
