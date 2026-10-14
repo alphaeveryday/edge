@@ -55,9 +55,9 @@ export function ChainPage() {
         {/* 단계가 관측 불가인 날에는 띄우지 않는다 — 유예가 지나도 그 단계들은 판정하지 못한다 */}
         {!stagesBlind(q.facts.chain) && pendingTriggers(q.facts.chain) > 0 && (
           <p className="card-pad t-xs m-0" style={{ color: 'var(--fg-3)', paddingBottom: 0 }}>
-            진행 중일 수 있어 아직 세지 않은 트리거 {pendingTriggers(q.facts.chain)}건 — 발화한 지 유예
-            시간(단일 분석 워크플로의 시간 제한)이 안 지났습니다. 그 뒤에도 다음 단계에 못 가면 손실로
-            셉니다.
+            진행 중일 수 있어 아직 세지 않은 트리거 {pendingTriggers(q.facts.chain)}건 — 앞 단계에 도달한 지
+            유예 시간(단일 분석 워크플로의 시간 제한)이 안 지났습니다. 그 뒤에도 다음 단계에 못 가면
+            손실로 셉니다.
           </p>
         )}
         <ChainStrip chain={q.facts.chain} />

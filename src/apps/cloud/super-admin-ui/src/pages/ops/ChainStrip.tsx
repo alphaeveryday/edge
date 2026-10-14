@@ -85,7 +85,7 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
                 (s.blind ? '\n관측 불가 — 이 단계를 셀 쪽이 없다(0이 아니다)' : '') +
                 (s.batch_na ? '\n배치 칸은 대상 아님 — 배치 트리거는 새 분석 엔진이 소비하지 않는다' : '') +
                 (s.shown_only ? '\n이 단계로의 감소는 손실로 판정하지 않는다(R10 대상 아님)' : '') +
-                (s.pending ? `\n아직 판정하지 않은 트리거 ${s.pending}건 — 발화한 지 유예 시간이 안 지났다` : '')
+                (s.pending ? `\n아직 판정하지 않은 트리거 ${s.pending}건 — 앞 단계에 도달한 지 유예 시간이 안 지났다` : '')
               }
             >
               {s.blind ? (
