@@ -23,6 +23,8 @@ _QUERY_ROLE = "agent_ro"
 # `/* x */ DELETE` 를 통과시키지 않기 위해서다.
 _LEADING_NOISE = re.compile(r"(?:\s+|--[^\n]*\n|/\*.*?\*/)+", re.DOTALL)
 _READ_PREFIX = re.compile(r"^(?:select|with|table|explain|show)\b", re.IGNORECASE)
+# EXPLAIN·SHOW 는 SELECT 의 FROM 절에 올 수 없어 감싸지 못한다. 그대로 보낸다.
+_UNWRAPPED = re.compile(r"^(?:explain|show)\b", re.IGNORECASE)
 
 
 def _int_env(name: str, default: int) -> int:
@@ -51,11 +53,16 @@ def guard(sql: str) -> str:
     text = text.rstrip().removesuffix(";").rstrip()
     if ";" in _strip_literals(text):
         raise PipelineError("multiple statements are not allowed; send one query")
-    head = _LEADING_NOISE.sub("", text, count=1) if _LEADING_NOISE.match(text) else text
+    head = _head(text)
     if not _READ_PREFIX.match(head):
         verb = head.split(None, 1)[0] if head.split() else head
         raise PipelineError(f"read-only path accepts SELECT/WITH/TABLE/EXPLAIN/SHOW, got {verb!r}")
     return text
+
+
+def _head(text: str) -> str:
+    """선행 공백·주석을 벗긴 문장 머리. 동사 판정은 여기서 한다."""
+    return _LEADING_NOISE.sub("", text, count=1) if _LEADING_NOISE.match(text) else text
 
 
 def _strip_literals(sql: str) -> str:
@@ -130,14 +137,19 @@ def run_query(conn, sql: str, *, row_cap: int | None = None) -> tuple[list[str],
 
     상한은 SQL 을 파싱해 LIMIT 를 끼우지 않고 **감싼다**. 파싱은 틀리고, 틀린 파서는
     상한을 조용히 빠뜨린다. 감싸면 안쪽이 무엇이든 상한이 걸린다.
+
+    EXPLAIN·SHOW 만은 감쌀 수 없어 그대로 보내고, 상한은 읽는 쪽에서 건다. `EXPLAIN ANALYZE` 는
+    안쪽 문장을 실제로 실행한다 - 쓰기가 들어 있으면 읽기전용 트랜잭션과 agent_ro 권한이 서버에서
+    막는다(가드가 아니라. tests/e2e 가 확인한다).
     """
     cap = row_cap if row_cap is not None else _int_env("EDGE_QUERY_ROW_CAP", _ROW_CAP)
     inner = guard(sql)
+    statement = inner if _UNWRAPPED.match(_head(inner)) else f"SELECT * FROM ({inner}) AS _capped LIMIT {cap}"
     started = time.monotonic()
     with conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM ({inner}) AS _capped LIMIT {cap}")
+        cur.execute(statement)
         columns = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchall()
+        rows = cur.fetchmany(cap)
     elapsed_ms = round((time.monotonic() - started) * 1000, 1)
     # 질의 전문을 남긴다. 감사 로그가 요약이면 무엇을 봤는지 사후에 알 수 없다.
     log("query.done", sql=inner, rows=len(rows), capped=len(rows) >= cap, ms=elapsed_ms)

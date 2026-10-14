@@ -10,7 +10,7 @@ import io
 
 import pytest
 
-from edge_db_query.readonly import emit, guard
+from edge_db_query.readonly import emit, guard, run_query
 from edge_db_query.config import PipelineError
 
 
@@ -81,3 +81,62 @@ def test_emit_stringifies_types_json_does_not_know():
     out = io.StringIO()
     emit(["d", "n"], [(date(2026, 7, 29), Decimal("1.5"))], stream=out)
     assert out.getvalue().strip() == '{"d": "2026-07-29", "n": "1.5"}'
+
+
+
+class _Cursor:
+    """보낸 문장과 읽은 방식만 기록하는 커서. SQL 을 해석하지 않는다(그 검사는 tests/e2e)."""
+
+    description = [("QUERY PLAN",)]
+
+    def __init__(self):
+        self.sent, self.fetched = [], []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, statement):
+        self.sent.append(statement)
+
+    def fetchmany(self, size):
+        self.fetched.append(size)
+        return [("row",)] * size
+
+
+class _Conn:
+    def __init__(self):
+        self.cur = _Cursor()
+
+    def cursor(self):
+        return self.cur
+
+
+@pytest.mark.parametrize("sql", [
+    "EXPLAIN SELECT 1",
+    "explain (analyze, buffers) SELECT 1",
+    "/* why slow */ EXPLAIN SELECT 1",
+    "SHOW statement_timeout",
+])
+def test_explain_and_show_are_sent_as_written(sql):
+    """EXPLAIN·SHOW 는 하위 질의가 될 수 없다 - 감싸면 가드를 통과한 문장이 문법 오류로 죽는다."""
+    conn = _Conn()
+    run_query(conn, sql, row_cap=7)
+    assert conn.cur.sent == [sql]
+
+
+@pytest.mark.parametrize("sql", ["SELECT 1", "WITH x AS (SELECT 1) SELECT * FROM x", "TABLE instrument"])
+def test_other_reads_stay_wrapped_with_the_row_cap(sql):
+    """감싸야 안쪽이 무엇이든 상한이 걸린다 - EXPLAIN 예외가 다른 문장으로 번지면 안 된다."""
+    conn = _Conn()
+    run_query(conn, sql, row_cap=7)
+    assert conn.cur.sent == [f"SELECT * FROM ({sql}) AS _capped LIMIT 7"]
+
+
+def test_unwrapped_statements_are_still_capped_when_read():
+    """감싸지 못하는 문장도 상한 없이 다 읽지 않는다."""
+    conn = _Conn()
+    _, rows = run_query(conn, "EXPLAIN SELECT 1", row_cap=7)
+    assert conn.cur.fetched == [7] and len(rows) == 7

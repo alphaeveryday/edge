@@ -104,3 +104,39 @@ def test_statement_timeout_kills_a_hanging_query(ro_conn):
     with pytest.raises(psycopg2.errors.QueryCanceled):
         run_query(ro_conn, "SELECT pg_sleep(30)")
     ro_conn.rollback()
+
+
+
+def test_explain_returns_the_plan(ro_conn):
+    """가드가 받는 EXPLAIN 이 실제로 돈다 - 느린 조회의 원인을 운영 DB 에서 볼 수 있어야 한다."""
+    columns, rows = run_query(ro_conn, "EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM instrument")
+    assert columns == ["QUERY PLAN"]
+    assert any("Execution Time" in row[0] for row in rows)
+
+
+def test_show_returns_the_setting(ro_conn):
+    columns, rows = run_query(ro_conn, "SHOW default_transaction_read_only")
+    assert rows == [("on",)]
+
+
+@pytest.mark.parametrize("sql", [
+    "EXPLAIN ANALYZE DELETE FROM instrument",
+    "EXPLAIN (ANALYZE) UPDATE instrument SET ticker = 'zz'",
+    "EXPLAIN ANALYZE INSERT INTO instrument (instrument_id) VALUES ('x')",
+])
+def test_explain_analyze_cannot_carry_a_write(ro_conn, sql):
+    """EXPLAIN ANALYZE 는 안쪽 문장을 실행한다. 가드는 머리만 보므로 **서버가** 막아야 한다."""
+    with pytest.raises(psycopg2.Error) as caught:
+        run_query(ro_conn, sql)
+    message = str(caught.value).lower()
+    assert "read-only transaction" in message or "permission denied" in message, message
+    ro_conn.rollback()
+    _, rows = run_query(ro_conn, "SELECT count(*) FROM instrument WHERE ticker = 'zz' OR instrument_id = 'x'")
+    assert rows == [(0,)]
+
+
+def test_explain_analyze_is_bounded_by_the_statement_timeout(ro_conn):
+    """감싸지 않는 문장도 시간 제한 안에서만 돈다."""
+    with pytest.raises(psycopg2.errors.QueryCanceled):
+        run_query(ro_conn, "EXPLAIN ANALYZE SELECT pg_sleep(30)")
+    ro_conn.rollback()
