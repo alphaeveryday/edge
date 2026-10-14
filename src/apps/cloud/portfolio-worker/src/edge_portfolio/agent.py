@@ -427,13 +427,19 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
                         accepted_search = deepcopy(optimizer.result)
-                        recoverable = published['completion']['status'] == 'partial'
+                        completion = published['completion']
+                        research_tasks = [task for task in completion['tasks'] if task['status'] == 'partial']
+                        research_reasons = [reason for reason in completion['reasons'] if reason != 'UNANSWERED_QUESTIONS'
+                            and not (reason == 'COMPARISON_DATA_UNAVAILABLE' and optimizer.result.get('reason') == 'CURRENT_WEIGHTS_REQUIRED')]
+                        research_work = {'tasks': research_tasks, 'reasons': research_reasons,
+                                         'missing_research': completion['missing_research']}
+                        recoverable = bool(research_tasks or research_reasons or completion['missing_research'])
                         if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
                             checkpoint()
                             recovery_rounds += 1
                             repairs = 0
                             emit('research_recovery', role=role, attempt=recovery_rounds)
-                            messages.append({'role': 'user', 'content': '고객 과제가 아직 해결되지 않았습니다. 형식 수정과 별개로 빠진 질문에 답하고 근거를 추가로 읽거나 다른 후보 조합을 탐색하세요. 필수 조건은 완화하지 않습니다. 해결되지 않는 부분은 필요한 입력과 실제 사유를 명시하세요.\n' + json.dumps(published['completion'], ensure_ascii=False)})
+                            messages.append({'role': 'user', 'content': '고객 답변을 기다리는 항목과 별개로 아래의 조사 가능한 과제를 진행하세요. 빠진 답을 보완하고 근거를 추가로 읽거나 다른 후보 조합을 탐색하세요. 이미 확인한 추천과 답은 유지하고 필수 조건은 완화하지 않습니다. 고객에게 같은 질문을 반복하지 말고 확인하지 못한 항목만 남기세요.\n' + json.dumps(research_work, ensure_ascii=False)})
                             continue
                     else:
                         if role == 'question':
