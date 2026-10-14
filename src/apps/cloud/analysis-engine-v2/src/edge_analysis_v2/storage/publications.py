@@ -172,6 +172,21 @@ class PublicationStore:
             unique.setdefault(link["url"], link)
         return list(unique.values())
 
+    def validate_evidence(self, kind, identity, ids):
+        """Reject references that cannot be final evidence of a running analysis, before it is published.
+
+        Raises:
+            ToolInputError: A reference cannot be used as final evidence.
+            ValueError: The analysis is missing or no longer running.
+        """
+        self._idle()
+        with self.connection.transaction(), self.connection.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.SQL("SELECT * FROM {} WHERE analysis_id=%s").format(self._table(kind)), (identity,))
+            analysis = cur.fetchone()
+            if not analysis or analysis['status'] != 'running':
+                raise ValueError('Running analysis required for evidence validation')
+            self._evidence(cur, ids, analysis)
+
     def validate_outlook_body_evidence(self, identity, body):
         """Reject invalid draft references before a successful edit is returned.
 

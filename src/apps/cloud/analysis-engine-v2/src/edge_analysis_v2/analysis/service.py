@@ -46,6 +46,9 @@ def _previous(connection, kind, etf_code, cutoff, data_source="synthetic"):
 
 
 STAGES = ('investigation', 'writing', 'fields')
+# With the instructions rebuilt as skills a movement explanation took 80 seconds longer and a third ran into the
+# old 300 seconds. ponytail: more time, not less work; bring the limit down once the note-taking is trimmed.
+MOVEMENT_SECONDS = 480
 
 
 def total_measurement(stages):
@@ -347,10 +350,22 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             fields = keep_references(fields, checked, shorten(editor.result())['items'][0]['tool_run_ids'])
             response = swap_references(written | fields, references)
         else:
+            def unciteable(final):
+                # A cited call the store refuses was found only at publication, where it lost the whole analysis:
+                # 5 of 45 movement analyses on the first morning. Named here, it costs the agent one correction.
+                problems = []
+                for reference in sorted(set(listed_references(final)), key=str):
+                    actual = references.get(reference, reference)
+                    try:
+                        run(lambda connection: store(connection).validate_evidence(kind, analysis_id, [actual]))
+                    except ToolInputError as error:
+                        problems.append(f'{reference}: ' + str(error).replace(str(actual), str(reference)))
+                return ('이 번호들은 최종 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나 그 항목을 빼세요. '
+                        '전체 응답을 다시 내세요.\n' + '\n'.join(problems)) if problems else None
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
-                artifacts=artifacts,key=key,model=model,skills=TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else 300,
-                compare_explanations=kind=='outlook')), references)
+                artifacts=artifacts,key=key,model=model,skills=TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
+                compare_explanations=kind=='outlook', final_check=unciteable)), references)
         if kind == 'outlook':
             issue = response['issue_detail']
             metrics = project_factor_metrics(factor_output, context['etf_code'])
