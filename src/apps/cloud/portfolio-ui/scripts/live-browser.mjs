@@ -48,7 +48,11 @@ try {
   await expect(page.locator('.evaluation__part h4').nth(1)).toHaveText('앞으로의 전망');
   await expect(page.getByRole('heading', { name: '계좌별 최종 투자 제안' })).toBeVisible();
   } else {
-    expect(['RATING_BELOW_MINIMUM']).not.toContain(optimization.reason);
+    if (optimization.candidates.length) {
+      expect(['CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'CUSTOMER_CONSTRAINT_UNVERIFIED', 'EXECUTION_INFEASIBLE']).toContain(optimization.reason);
+      if (optimization.reason === 'EXECUTION_INFEASIBLE') expect(completed.result.execution_rejection?.status).toBe('infeasible');
+      else expect(completed.result.customer_constraint_checks.some(check => check.status !== 'pass' && check.reason !== 'NO_ALLOCATION_SELECTED')).toBe(true);
+    } else expect(optimization.reason).toBeTruthy();
     expect(optimization.selected_candidate_id).toBeNull();
     await expect(page.locator('.portfolio-hero')).toHaveCount(0);
   }

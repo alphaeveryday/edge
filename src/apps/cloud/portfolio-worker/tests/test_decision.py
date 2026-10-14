@@ -229,14 +229,16 @@ async def test_service_eligible_candidate_cannot_publish_after_customer_constrai
         if role == 'opinion':
             if repairs or not reject_first:
                 if repairs:
-                    assert any(reason in payload['messages'][-1]['content'] for reason in ('CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'Available candidates require a recommendation'))
+                    assert 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' in payload['messages'][-1]['content']
                 content['recommendation'] = None
             content['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': '필수 비중 조건을 확인했으며 이를 만족하는 추천이 검증되지 않아 보류합니다.'}]
             content['withheld_reason'] = 'customer_failed'
             repairs.append(1)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
-    with pytest.raises(ValueError, match='Available candidates require a recommendation'):
-        await run_analysis(request(question='VOO는 30% 이하'), 'test-only', phases.append,
-                           model_call=model, evidence=Evidence())
-    assert len(repairs) == 3  # Invalid allocations and invented withholding must never publish.
-
+    result = await run_analysis(request(question='VOO는 30% 이하'), 'test-only', phases.append,
+                                model_call=model, evidence=Evidence())
+    assert len(repairs) == (2 if reject_first else 1)
+    assert result['recommendation'] is None
+    assert result['customer_constraint_checks'][0]['status'] == ('fail' if reject_first else 'unknown')
+    assert result['optimization']['reason'] == ('CUSTOMER_CONSTRAINT_NOT_SATISFIED' if reject_first or unverified else 'RECOMMENDATION_WITHHELD')
+    assert result['input']['question'] == 'VOO는 30% 이하'

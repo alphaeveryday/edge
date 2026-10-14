@@ -26,12 +26,11 @@ def test_new_disqualifying_findings_are_not_overridden_by_an_earlier_recommendat
     assert retain_recommendation(final, previous).recommendation is None
 
 
-def test_missing_optional_evidence_cannot_hide_available_recommendations():
+def test_missing_all_judgment_evidence_can_still_publish_a_truthful_partial_report():
     optimizer = Optimizer(None)
     optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
     final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'missing_data'})
-    with pytest.raises(ValueError, match='Available candidates cannot be withheld'):
-        optimizer.validate(final)
+    assert optimizer.validate(final) is None
     optimizer.result = {'status': 'no_match', 'candidates': []}
     assert optimizer.validate(final) is None
 

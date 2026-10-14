@@ -499,10 +499,6 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         final = retain_research(final, reconciliation_draft, retain_answers=optimizer.result == accepted_search)
                         final = retain_research(final, accepted_final, retain_answers=optimizer.result == accepted_search)
                         execution_rejection = None
-                        if (final.recommendation is None and final.withheld_reason in {'customer_failed', 'search_exhausted'}
-                                and (optimizer.result or {}).get('candidates')
-                                and not all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates'])):
-                            raise ValueError('Available candidates require a recommendation unless execution failure was verified; do not invent a customer failure')
                         selected = optimizer.validate(final)
                         if final.recommendation:
                             checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
@@ -525,7 +521,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
                                 execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
                             blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
-                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked or final.withheld_reason == 'customer_failed' else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
+                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
                         if selected:

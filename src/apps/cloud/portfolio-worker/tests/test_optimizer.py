@@ -96,7 +96,7 @@ def test_no_candidate_cannot_be_replaced_with_an_invented_recommendation():
     optimizer.result = {'candidates': []}
     with pytest.raises(ValueError, match='No eligible candidate'):
         optimizer.validate(SimpleNamespace(recommendation=object(), selected_candidate_id=None, return_forecast=None))
-    assert optimizer.validate(SimpleNamespace(recommendation=None, selected_candidate_id=None, return_forecast=None, withheld_reason='customer_failed')) is None
+    assert optimizer.validate(SimpleNamespace(recommendation=None, selected_candidate_id=None, return_forecast=None)) is None
 
 
 def test_exact_decimal_account_splits_preserve_candidate_weights():
@@ -477,21 +477,20 @@ async def test_planning_never_optimizes_single_etf_recommendations():
 def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient():
     optimizer = Optimizer(None)
     optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
-    final = SimpleNamespace(recommendation=None, selected_candidate_id=None, return_forecast=None, withheld_reason='customer_failed')
+    final = SimpleNamespace(recommendation=None, selected_candidate_id=None, return_forecast=None)
     assert optimizer.validate(final) is None
     final.selected_candidate_id = 'candidate-1'
     with pytest.raises(ValueError):
         optimizer.validate(final)
 
 
-@pytest.mark.parametrize('reason', [None, 'quality_failed', 'missing_data', 'missing_input'])
-def test_rating_or_optional_information_cannot_withhold_an_available_candidate(reason):
+def test_rating_alone_cannot_withhold_an_available_candidate():
     from edge_portfolio.contracts import FinalReport
     from report_fixtures import final_payload
     optimizer = Optimizer(None)
     optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
-    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': reason})
-    with pytest.raises(ValueError, match='Available candidates cannot be withheld'):
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'})
+    with pytest.raises(ValueError, match='Rating is not a recommendation threshold'):
         optimizer.validate(final)
     optimizer.result = {'status': 'no_match', 'candidates': []}
     assert optimizer.validate(final) is None
