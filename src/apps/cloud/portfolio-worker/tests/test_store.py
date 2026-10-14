@@ -127,7 +127,8 @@ def test_api_rejects_other_origins_and_preserves_idempotency(isolated_db):
     from edge_portfolio.api import app
     with TestClient(app) as client:
         client.get('/api/portfolio/session')
-        payload = {"holdings": [{"name": "VOO", "amount_krw": 100}], "horizon": "10년 이상"}
+        payload = {"holdings": [{"name": "VOO", "amount_krw": 100}], "horizon": "10년 이상",
+                   "preferences": {"contribution": "이미 다 매수한 상태에요", "interests": ["성장"]}}
         headers = {"Idempotency-Key": str(uuid4()), "Origin": "https://untrusted.example"}
         assert client.post('/api/portfolio/analyses', json=payload, headers=headers).status_code == 403
         headers['Origin'] = 'http://localhost:5180'
