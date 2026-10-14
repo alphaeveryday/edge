@@ -172,6 +172,29 @@ async def test_a_failed_price_batch_can_recover_without_a_frozen_unavailable_res
     assert (await optimizer.tool({'combinations': groups}))['status'] == 'available'
 
 
+async def test_shared_baseline_and_fx_are_loaded_before_slow_optional_candidates(monkeypatch):
+    request, market, groups = batch()
+    market.current = {'US:VOO': 1}
+    market.catalog['US:VOO'] = {'ticker': 'VOO', 'market': 'US', 'kind': 'etf'}
+    market.semaphore = asyncio.Semaphore(1)
+    calls = []
+    async def fetch(symbol, *_args, **_kwargs):
+        calls.append(symbol)
+        if symbol == 'KRW=X':
+            return record(start=1000, finish=1000)
+        if symbol == 'VOO':
+            return record('USD', finish=105)
+        if symbol == 'A.KS':
+            return record(finish=120)
+        await asyncio.Event().wait()
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
+    result = await Optimizer(market).tool({'combinations': groups})
+    assert calls[:2] == ['KRW=X', 'VOO']
+    assert result['status'] == 'available'
+    assert result['candidates'][0]['allocations'] == [{'instrument_id': 'KR:A', 'weight_pct': 100}]
+
+
 async def test_static_service_policy_conflict_does_not_blame_missing_price_data():
     from edge_portfolio.decision import Decision
     request, market, groups = batch()
