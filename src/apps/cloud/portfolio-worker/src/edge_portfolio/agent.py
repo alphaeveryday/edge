@@ -421,7 +421,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
-                        needs_alternative = not selected and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT' and len(getattr(optimizer, 'batches', [])) < 2 and (
+                        search_progress = optimizer.result.get('search_progress')
+                        needs_more_search = (not search_progress['alternatives_explored'] and search_progress['remaining_batches'] > 0) if search_progress else len(getattr(optimizer, 'batches', [])) < 2
+                        needs_alternative = not selected and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT' and needs_more_search and (
                             final.withheld_reason in {'quality_failed', 'customer_failed', 'search_exhausted'} or
                             published['optimization'].get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'EXECUTION_INFEASIBLE', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
                         if needs_alternative:
@@ -436,7 +438,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         research_reasons = [reason for reason in completion['reasons'] if reason != 'UNANSWERED_QUESTIONS'
                             and not (reason == 'COMPARISON_DATA_UNAVAILABLE' and optimizer.result.get('reason') == 'CURRENT_WEIGHTS_REQUIRED')]
                         research_work = {'tasks': research_tasks, 'reasons': research_reasons,
-                                         'missing_research': completion['missing_research']}
+                                         'missing_research': completion['missing_research'], 'search_progress': search_progress}
                         recoverable = bool(research_tasks or research_reasons or completion['missing_research'])
                         if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
                             checkpoint()
