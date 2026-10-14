@@ -22,7 +22,7 @@
 | 산출 축 | `outputs[]` + 기준선(중앙값) | ✅ |
 | 경계 축 | `boundary` | ✅ |
 | 체인 축 | `chain` — 그 날 트리거의 자손을 단계마다 센다 | ✅ |
-| ETF 귀결 축 | `etfLedger` — ETF별 최신 트리거의 최신 설명 실행 상태(옛 설명 엔진) | ✅ |
+| ETF 귀결 축 | `etfLedger` — 지웠다(ALPHA-1328, 아래 절) | — |
 | ETF별 v2 분석 귀결 축 | `etfAnalyses` — ETF별 전망·가격변동 분석의 그날 상태 | ✅ |
 | SFN 제어면 축 | `runs[].awsStatus`·`awsStop` + `meta.aws` | ✅ |
 | SQS 제어면 축 | `queues[]` | ✅ |
@@ -651,29 +651,11 @@ NEW 에만, `target_movement_analysis_id` 를 INVALIDATION 에만 허용한다 �
 ⏭ **남는 것**: 게시 **뒤**에 테넌트가 생기면 그 과거 게시본은 그 테넌트에 전달되지 않지만, 이 수는
 "어느 테넌트에도 NEW 가 없는 분석"이라 잡지 않는다. 테넌트별 전달 누락은 아직 세지 않는다.
 
-## ETF 귀결 축
+## ETF 귀결 축 — 지웠다 (2026-10-14, ALPHA-1328)
 
-조회일에 발화한 배치(`price_movement_trigger`)와 장중 FIRE(`minute_price_trigger`)를 합쳐
-**ETF마다 가장 늦은 트리거 하나**를 고른다. 그 트리거에 실행이 여러 번 있으면
-`explanation_as_of`가 가장 늦은 실행의 `run_status`를 그대로 싣는다.
-
-```json
-"etfLedger": { "rows": [
-  { "etf": "etf-1", "name": "첫 ETF", "triggered": true,
-    "outcome": "FAILED", "error": null }
-] }
-```
-
-실행이 아직 없으면 `outcome: null`이다. 진행 중 상태와 실행 부재를 실패로 만들지 않는다. 원장에 오류 문자열이 없어 `error`는 `null`이고, 설명을 꾸며내지 않는다.
-구 API 응답에는 축 자체가 없을 수 있으므로 UI 경계는 `etfLedger` 부재를 허용한다. 서버가 축을
-보낸 빈 `rows`는 “조회일에 트리거 ETF가 0종”이라는 실측이다.
-
-⚠️ **R15 는 이 축을 더는 읽지 않는다**(ALPHA-1291). 이 축은 옛 설명 엔진의 표에서 오고 그 엔진은
-10-01 이 마지막 실행이라, 그 뒤 날짜에서는 `outcome` 이 전부 `null` 이다. 분석 실패 판정은 아래
-「v2 분석 실패 축」이 한다.
-
-⚠️ **흐름 화면의 ETF 표도 이 축을 더는 읽지 않는다**(ALPHA-1312) — 아래 「ETF별 v2 분석 귀결 축」을
-읽는다. 이 축은 그 축을 모르는 옛 화면을 위해 응답에 남긴다. 두 앱이 배포된 뒤에 지운다.
+옛 설명 엔진의 ETF별 실행 상태(`etfLedger`)는 응답에서 지웠다. 그 엔진은 10-01 이 마지막 실행이고 이
+축을 읽는 화면·규칙이 없었다(R15 는 ALPHA-1291, 흐름 화면의 ETF 표는 ALPHA-1312 에서 새 분석 엔진의
+축으로 옮겼다). ETF별 상태는 아래 「ETF별 v2 분석 귀결 축」이 답한다.
 
 ## ETF별 v2 분석 귀결 축
 
@@ -716,9 +698,8 @@ NEW 에만, `target_movement_analysis_id` 를 INVALIDATION 에만 허용한다 �
 - `name` 은 옛 ETF 표와 같은 출처다: `etf` 는 종목 코드라 `instrument(market_code='XKRX', ticker)` 로
   `instrument_id` 를 얻고 `entity.display_name` 을 읽는다. 이어지지 않는 코드는 코드 그대로 낸다
   (행을 버리지 않는다).
-- 구 API 응답에는 축 자체가 없다. UI 경계는 부재를 허용하고, 그때 표는 "기록 없음"이다 — 옛 축
-  (`etfLedger`)으로 대신 그리지 않는다. 서버가 보낸 빈 `rows` 는 "그날 분석도 트리거도 없었다"는
-  실측이다.
+- 구 API 응답에는 축 자체가 없다. UI 경계는 부재를 허용하고, 그때 표는 "기록 없음"이다. 서버가 보낸
+  빈 `rows` 는 "그날 분석도 트리거도 없었다"는 실측이다.
 
 ## v2 분석 실패 축
 
@@ -766,6 +747,11 @@ NEW 에만, `target_movement_analysis_id` 를 INVALIDATION 에만 허용한다 �
 
 `chain` 은 `stages` 옆에 **`analysisStages`** 를 함께 싣는다. 화면(`/ops/chain`)과 R10 이 읽는 것은
 이 목록이다. `stages`(옛 설명 엔진의 단계)는 그 목록만 아는 옛 화면을 위해 그대로 남긴다.
+
+⏭ **`stages` 는 다음 배포에서 지운다**(ALPHA-1328). ALPHA-1328 이전의 UI 는 `chain` 이 오면 `stages` 가
+비어 있지 않은 배열이어야 응답 전체를 받는다 — 빼거나 빈 목록으로 두면 그 UI 의 운영 화면 전체가
+멈춘다. 그래서 이번에는 서버가 종전 값을 계속 싣고, UI 만 `stages` 가 없어도 받게 했다. 그 UI 가
+배포된 뒤 서버에서 `stages`·그 조회·옛 엔진 마지막 실행일 조회를 지운다.
 
 ```jsonc
 "analysisStages": [
@@ -1023,7 +1009,6 @@ COALESCE(r.trading_date, (r.created_at AT TIME ZONE 'Asia/Seoul')::date)
   | `boundary` | `db` | 경계 축 |
   | `chain` | `db` | 옛 설명 엔진의 단계(`chain.feeds`·`chain.stages`) |
   | `analysisStages` | `db` | 새 분석 엔진의 단계(`chain.analysisStages`) |
-  | `etfLedger` | `db` | ETF 귀결 축 |
   | `analysisFailures` | `db` | v2 분석 실패 축 |
   | `etfAnalyses` | `db` | ETF별 v2 분석 귀결 축 |
   | `transaction` | `db` | 원장 조회 호출 전체에서 위 구간의 합을 **뺀 나머지** — 커넥션을 얻고 트랜잭션을 열고 닫는 시간이다 |

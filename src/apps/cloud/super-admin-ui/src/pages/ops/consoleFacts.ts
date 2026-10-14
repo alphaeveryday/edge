@@ -261,9 +261,6 @@ export const ANALYSIS_STAGE_FIELDS: Record<string, Check> = {
 /* R10 이 판정하지 않고 수만 보여 주는 단계(ALPHA-1296). 분석 시작 → 완료의 감소는 실패·진행 중이고
  * (실패는 R15 가 맡는다) 완료 → 게시의 감소는 설계다(고른 항목이 없으면 게시되지 않는다). */
 const SHOWN_ONLY_STAGES = new Set(['c.done', 'c.pub']);
-export const ETF_LEDGER_ROW_FIELDS: Record<string, Check> = {
-  etf: text, name: text, triggered: bool, outcome: nullableText, error: nullableText,
-};
 /* ETF별 v2 분석 귀결(ALPHA-1312). 상태는 계약이 열거한 코드만 받는다 — 모르는 코드를 통과시키면
  * 표가 그 칸을 이름 없는 상태로 그린다. */
 const OUTLOOK_STATES = new Set(['completed', 'failed', 'running', 'none']);
@@ -355,6 +352,9 @@ export function parseFacts(body: unknown): FactsParse {
     for (const [part, fields] of [['feeds', CHAIN_FEED_FIELDS],
       ['stages', CHAIN_STAGE_FIELDS]] as const) {
       const rows = chain[part];
+      /* 옛 설명 엔진의 단계(`stages`)는 없어도 된다(ALPHA-1328) — 화면과 규칙이 안 읽고, 서버가 다음
+       * 배포에서 지운다. 오면 지금처럼 검사한다. */
+      if (part === 'stages' && rows === undefined) continue;
       if (!Array.isArray(rows) || rows.length === 0) return bad(`chain.${part} 가 비었다`);
       for (const row of rows) {
         if (!isRow(row)) return bad(`chain.${part} 원소가 객체가 아니다`);
@@ -381,18 +381,6 @@ export function parseFacts(body: unknown): FactsParse {
         const field = offendingField(row, ANALYSIS_STAGE_FIELDS);
         if (field) return bad(`chain.analysisStages[].${field} 의 값이 계약과 다르다`);
       }
-    }
-  }
-
-  const etfLedger = body.etfLedger;
-  if (etfLedger !== undefined) {
-    if (!isRow(etfLedger) || !Array.isArray(etfLedger.rows)) {
-      return bad('etfLedger.rows 축이 배열이 아니다');
-    }
-    for (const row of etfLedger.rows) {
-      if (!isRow(row)) return bad('etfLedger.rows 원소가 객체가 아니다');
-      const field = offendingField(row, ETF_LEDGER_ROW_FIELDS);
-      if (field) return bad(`etfLedger.rows[].${field} 의 값이 계약과 다르다`);
     }
   }
 
@@ -533,13 +521,7 @@ function toFacts(dto: ConsoleFactsDto): Facts {
           },
         }
       : {}),
-    ...(dto.etfLedger
-      ? { etf_ledger: { rows: dto.etfLedger.rows.map((r) => ({
-          etf: r.etf, name: r.name, triggered: r.triggered,
-          outcome: r.outcome, error: r.error,
-        })) } }
-      : {}),
-    /* 옛 축(`etfLedger`)으로 대신 채우지 않는다 — 없으면 없는 것으로 옮긴다(ALPHA-1312) */
+    /* 없으면 없는 것으로 옮긴다(ALPHA-1312) */
     ...(dto.etfAnalyses
       ? { etf_analyses: { rows: dto.etfAnalyses.rows.map((r) => ({
           etf: r.etf, name: r.name, outlook: r.outlook, movement: r.movement,

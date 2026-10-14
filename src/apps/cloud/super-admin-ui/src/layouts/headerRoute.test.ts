@@ -32,7 +32,13 @@ test('🔴 화면명이 있는 경로는 사이드바에 있거나, 없다고 **
    * ⚠️ 도달성만 보는 리뷰는 이걸 "죽은 라우트"라고 낸다. ALPHA-738 에서 실제로 그 지적을 받아
    * `/overview` 를 사이드바에 넣었다가 되돌렸다(ALPHA-977) — 이 집합이 그 왕복을 막는 자리다.
    * 목록에 더할 때는 **은퇴 결정이 문서에 있는지** 먼저 확인해라. 없으면 그건 그냥 죽은 라우트다. */
-  const RETIRED_ROUTE_ONLY = new Set(['/ops/summary', '/overview']);
+  const RETIRED_ROUTE_ONLY = new Set([
+    '/ops/summary',
+    '/overview',
+    /* 옛 설명 엔진의 기록이라 메뉴에서 뺐다(ALPHA-1328, 사용자 결정 — docs/console-ia.md). 화면 위에
+     * 그 사실과 흐름 화면 링크를 둔다(아래 테스트가 잰다). */
+    '/analyses',
+  ]);
 
   const orphans = HEADER_LIST_TITLES.map(([p]) => p).filter(
     (p) => !nav.has(p) && !LINKED_ONLY.has(p) && !RETIRED_ROUTE_ONLY.has(p),
@@ -183,4 +189,17 @@ test('모르는 경로는 이름을 지어내지 않는다', () => {
   const r = headerRoute('/전혀-없는-경로');
   assert.equal(r.kind, 'unknown');
   assert.equal(r.title, '');
+});
+
+test('🔴 옛 설명 엔진 화면(분석 목록·종목·상세)은 맨 위에 옛 기록이라는 안내와 흐름 화면 링크를 둔다', () => {
+  /* 메뉴에서 뺀 대신 주소로 들어온 사람에게 무엇을 보고 있는지 밝힌다(ALPHA-1328). 화면 컴포넌트가
+   * 안내를 그리는지를 소스로 잰다 — `.tsx` 는 import 할 수 없다. */
+  const notice = readFileSync(new URL('../pages/_shared/LegacyEngineNotice.tsx', import.meta.url), 'utf8');
+  assert.match(notice, /10-01까지의 옛 설명 엔진 기록입니다/);
+  assert.match(notice, /to="\/ops\/chain\?focus=etf-ledger"/);
+  for (const page of ['AnalysesPage', 'AnalysisSymbolPage', 'AnalysisDetailPage']) {
+    const src = readFileSync(new URL(`../pages/${page}.tsx`, import.meta.url), 'utf8');
+    const exported = new RegExp(`export function ${page}\\(\\) \\{[\\s\\S]*?\\n\\}`).exec(src)?.[0] ?? '';
+    assert.match(exported, /<LegacyEngineNotice \/>/, `${page}: 내보내는 화면이 안내를 그리지 않는다`);
+  }
 });

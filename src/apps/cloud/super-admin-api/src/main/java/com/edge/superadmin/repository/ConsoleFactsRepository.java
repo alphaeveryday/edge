@@ -82,31 +82,28 @@ public interface ConsoleFactsRepository {
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-			List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures,
-			List<EtfAnalysisStateRow> etfAnalyses, java.util.Map<FactsSegment, Long> segmentNanos) {
+			List<AnalysisFailureRow> analysisFailures, List<EtfAnalysisStateRow> etfAnalyses,
+			java.util.Map<FactsSegment, Long> segmentNanos) {
 
 		/** 구간별 소요 시간 없이 만든다(ALPHA-1314) — 잰 구간이 없다. */
 		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-				List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures,
-				List<EtfAnalysisStateRow> etfAnalyses) {
-			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, analysisFailures,
-					etfAnalyses, java.util.Map.of());
+				List<AnalysisFailureRow> analysisFailures, List<EtfAnalysisStateRow> etfAnalyses) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, analysisFailures, etfAnalyses,
+					java.util.Map.of());
 		}
 
 		/** ETF별 v2 분석 귀결 없이 만든다 — 그 축은 빈 목록이다. */
 		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-				List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures) {
-			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, analysisFailures,
-					List.of());
+				List<AnalysisFailureRow> analysisFailures) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, analysisFailures, List.of());
 		}
 
 		/** v2 분석 실패 축 없이 만든다 — 그 축은 빈 목록이다. */
 		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
-				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
-				List<EtfAnalysisRow> etfLedger) {
-			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, List.of());
+				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, List.of());
 		}
 	}
 
@@ -125,10 +122,6 @@ public interface ConsoleFactsRepository {
 	 * 이름을 못 찾은 코드는 코드 그대로다.
 	 */
 	record EtfAnalysisStateRow(String etf, String name, String outlook, String movement) {
-	}
-
-	/** 조회일에 발화한 ETF별 <b>최신 트리거</b>의 최신 설명 실행 상태(R15). */
-	record EtfAnalysisRow(String etf, String name, String outcome) {
 	}
 
 	/**

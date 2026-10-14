@@ -11,7 +11,7 @@
  *
  * ⚠️ **계측 없는 축을 목값으로 메우지 않는다.** 동봉 스냅샷에는 목으로 채운 축이 일부 있고
  * (`mock` 플래그가 그걸 밝히며 규칙 결과에 전파된다), 실 응답은 **그 축을 아예 안 보낸다** —
- * 그래서 `chain`·`queues`·`etf_ledger`·`analysis_failures`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
+ * 그래서 `chain`·`queues`·`analysis_failures`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
  * `evaluated:false` 다. 빈 배열·빈 객체로 메우면 계측 공백이 실측 0 으로 위조되고
  * "못 돎"이 "봤고 괜찮다"가 된다.
  */
@@ -229,27 +229,11 @@ export interface BoundaryFact {
   seed_note?: string;
 }
 
-export interface EtfLedgerRow {
-  etf: string;
-  name: string;
-  triggered: boolean;
-  outcome: string | null;
-  error?: string | null;
-  published?: boolean;
-  delivered?: boolean;
-}
-
 export interface AnalysisFailures {
   kind: 'outlook' | 'movement';
   failed_etfs: string[];
   /** 동봉 스냅샷이 이 항목을 목으로 채웠는가 — 실 응답에는 없다. 위반의 `mock` 으로 전파된다 */
   mock?: boolean;
-}
-
-export interface EtfLedger {
-  rows: EtfLedgerRow[];
-  mock?: boolean;
-  why?: string;
 }
 
 /** 전망의 그날 상태 — `none` 은 그날 분석 행이 없다는 뜻이다 */
@@ -355,8 +339,6 @@ export interface Facts {
   queues?: QueueFact[];
   outputs: OutputFact[];
   boundary: BoundaryFact;
-  /** ETF별 분석 귀결 원장(옛 설명 엔진의 표) — 흐름 화면의 표도 R15 도 더는 안 읽는다 */
-  etf_ledger?: EtfLedger;
   /**
    * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. 규칙은 읽지 않는다
    * (실패는 `analysis_failures` 로 R15 가, 시작 못 함은 체인으로 R10 이 판정한다). 이 축을 싣기 전의

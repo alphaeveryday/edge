@@ -23,6 +23,7 @@ import { useAnalyses } from '../domains/analyses/hooks';
 import { findGroup, hasResult } from '../domains/analyses/symbols';
 import { MOCK_ANALYSES } from '../mock/preview';
 import { MockChip, MockPreview } from './_shared/MockPreview';
+import { LegacyEngineNotice } from './_shared/LegacyEngineNotice';
 import { LoadError } from './_shared/LoadError';
 
 /** 조회 창 크기 — 서버 `JdbcAnalysisRepository.LIST_LIMIT` 과 같은 수. 문구가 이 값을 쓴다. */
@@ -41,7 +42,17 @@ function resultTexts(a: Analysis): string[] {
   return blocks.length > 0 ? blocks : [a.result];
 }
 
+/** 옛 설명 엔진의 기록이라 화면 맨 위에 그 사실을 밝힌다(ALPHA-1328) — 조회 상태와 무관하게 늘 보인다 */
 export function AnalysisSymbolPage() {
+  return (
+    <div className="flex flex-col gap-4">
+      <LegacyEngineNotice />
+      <AnalysisSymbolContent />
+    </div>
+  );
+}
+
+function AnalysisSymbolContent() {
   const [params] = useSearchParams();
   /* 🔴 시장·코드는 **쿼리**로 받는다(`symbols.symbolHref` 가 그렇게 만든다) — 경로에 두면
    * 점 든 티커의 공유 링크가 CDN 에서 정적 파일로 갈려 죽는다. 거기 근거를 적어 뒀다. */

@@ -9,7 +9,6 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
-import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EntityResolutionPoint;
 import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisPoint;
 import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisTrend;
@@ -275,17 +274,16 @@ class ConsoleControllerTest {
 				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"intraday\":0")));
 	}
 
+	/**
+	 * 옛 설명 엔진의 ETF 원장({@code etfLedger})은 응답에 <b>없다</b>(ALPHA-1328) — 읽는 화면이 없다.
+	 * 옛 화면은 이 키가 없어도 응답을 받는다(검증 경계가 부재를 허용한다).
+	 */
 	@Test
-	void ETF_원장은_최신_트리거의_실행_상태를_싣는다() throws Exception {
-		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				EMPTY_CHAIN, List.of(new EtfAnalysisRow("ETF-1", "첫 ETF", "FAILED"),
-						new EtfAnalysisRow("ETF-2", "둘째 ETF", null))))
-				.perform(get("/api/v1/console/facts"))
+	void 옛_엔진의_ETF_원장은_응답에_없다() throws Exception {
+		mvc(facts()).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.etfLedger.rows[0].etf").value("ETF-1"))
-				.andExpect(jsonPath("$.result.etfLedger.rows[0].triggered").value(true))
-				.andExpect(jsonPath("$.result.etfLedger.rows[0].outcome").value("FAILED"))
-				.andExpect(jsonPath("$.result.etfLedger.rows[1].outcome").value(org.hamcrest.Matchers.nullValue()));
+				.andExpect(jsonPath("$.result", org.hamcrest.Matchers.not(
+						org.hamcrest.Matchers.hasKey("etfLedger"))));
 	}
 
 	/**
@@ -1025,9 +1023,9 @@ class ConsoleControllerTest {
 	@Test
 	void 소요_시간은_구간_정의를_순서대로_전부_싣는다() throws Exception {
 		List<String> names = List.of("meta", "runs.db", "legacyEngine", "tasks", "outputs", "boundary",
-				"chain", "analysisStages", "etfLedger", "analysisFailures", "etfAnalyses", "transaction",
+				"chain", "analysisStages", "analysisFailures", "etfAnalyses", "transaction",
 				"runs.aws", "queues", "datasets");
-		List<String> kinds = List.of("db", "db", "db", "db", "db", "db", "db", "db", "db", "db", "db", "db",
+		List<String> kinds = List.of("db", "db", "db", "db", "db", "db", "db", "db", "db", "db", "db",
 				"aws", "aws", "app");
 		assertThat(java.util.Arrays.stream(com.edge.superadmin.repository.FactsSegment.values())
 				.map(com.edge.superadmin.repository.FactsSegment::wireName).toList())
@@ -1053,7 +1051,7 @@ class ConsoleControllerTest {
 	void 리포지토리가_잰_구간은_밀리초로_실리고_나머지는_음수가_되지_않는다() throws Exception {
 		ConsoleFacts base = facts();
 		ConsoleFacts timed = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
-				base.outputs(), base.boundary(), base.chain(), base.etfLedger(), base.analysisFailures(),
+				base.outputs(), base.boundary(), base.chain(), base.analysisFailures(),
 				base.etfAnalyses(), java.util.Map.of(
 						com.edge.superadmin.repository.FactsSegment.TASKS, 5_400_000L,
 						com.edge.superadmin.repository.FactsSegment.OUTPUTS, 6_600_000L));
@@ -1062,26 +1060,24 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.meta.timing.segments[3].name").value("tasks"))
 				.andExpect(jsonPath("$.result.meta.timing.segments[3].ms").value(5))
 				.andExpect(jsonPath("$.result.meta.timing.segments[4].ms").value(7))
-				.andExpect(jsonPath("$.result.meta.timing.segments[11].name").value("transaction"))
-				.andExpect(jsonPath("$.result.meta.timing.segments[11].ms").value(0))
+				.andExpect(jsonPath("$.result.meta.timing.segments[10].name").value("transaction"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[10].ms").value(0))
 				// 못 잰 구간은 빠지지 않고 0 이다
 				.andExpect(jsonPath("$.result.meta.timing.segments[0].ms").value(0));
 	}
 
 	/**
-	 * ETF별 v2 분석 귀결(ALPHA-1312) — 새 축으로 나가고, 옛 축({@code etfLedger})은 그대로 남는다.
-	 * 옛 화면은 그 축만 읽으므로 새 서버를 만나도 종전과 같다. 행이 없어도 축은 나간다 — 키가 빠지면
-	 * 새 화면은 "이 축을 안 싣는 배포본"으로 읽는다.
+	 * ETF별 v2 분석 귀결(ALPHA-1312) — 새 축으로 나간다. 행이 없어도 축은 나간다 — 키가 빠지면 화면은
+	 * "이 축을 안 싣는 배포본"으로 읽는다.
 	 */
 	@Test
-	void ETF별_v2_분석_귀결은_새_축으로_나가고_옛_축은_그대로다() throws Exception {
+	void ETF별_v2_분석_귀결은_새_축으로_나간다() throws Exception {
 		ConsoleFacts base = facts();
 		mvc(base).perform(get("/api/v1/console/facts"))
-				.andExpect(jsonPath("$.result.etfAnalyses.rows.length()").value(0))
-				.andExpect(jsonPath("$.result.etfLedger.rows").isArray());
+				.andExpect(jsonPath("$.result.etfAnalyses.rows.length()").value(0));
 
 		ConsoleFacts withRows = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
-				base.outputs(), base.boundary(), base.chain(), base.etfLedger(), base.analysisFailures(),
+				base.outputs(), base.boundary(), base.chain(), base.analysisFailures(),
 				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisStateRow(
 						"069500", "KODEX 200", "completed", "pending")));
 		mvc(withRows).perform(get("/api/v1/console/facts"))
@@ -1100,7 +1096,7 @@ class ConsoleControllerTest {
 	void 분석_실패_축은_종류별_ETF_코드를_내리고_없으면_빈_배열이다() throws Exception {
 		ConsoleFacts base = facts();
 		ConsoleFacts withFailures = new ConsoleFacts(base.today(), base.dbNow(), base.runs(),
-				base.tasks(), base.outputs(), base.boundary(), base.chain(), base.etfLedger(),
+				base.tasks(), base.outputs(), base.boundary(), base.chain(),
 				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
 								"movement", "069500"),
 						new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
@@ -1130,8 +1126,7 @@ class ConsoleControllerTest {
 				base.outputs(), new BoundaryRow(0L, 0L, 12L),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
 						base.chain().feeds(),
-						List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", 0L, 0L, true))),
-				base.etfLedger());
+						List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", 0L, 0L, true))));
 
 		mvc(blind).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
@@ -1158,8 +1153,7 @@ class ConsoleControllerTest {
 						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
 										"c.req", "분석 요청", "analysis_execution_requests", null, 256L, false),
 								new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
-										"c.start", "분석 시작", "movement_analyses", null, 214L, false, 7L))),
-				base.etfLedger());
+										"c.start", "분석 시작", "movement_analyses", null, 214L, false, 7L))));
 
 		String body = mvc(v2).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())

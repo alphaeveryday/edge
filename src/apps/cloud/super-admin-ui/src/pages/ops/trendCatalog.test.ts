@@ -196,11 +196,8 @@ test('🔴 분석 결과 카드는 v2 분석 추이의 조회일 값을 읽는�
   assert.equal(evaluateMetric(failed).kind, 'abnormal', '실패 ETF 1종 이상이면 이상이다');
   /* 완료 건수는 기준값을 주는 응답이 없어 판정하지 않는다 — 임계를 새로 만들지 않았다 */
   assert.equal(evaluateMetric(completed).label, '기준 없음');
-  /* 옛 엔진의 체인·ETF 원장이 실려 와도 분석 카드는 그것을 읽지 않는다 */
-  const withV1 = buildMetrics(
-    { ...WIRED, etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }] } },
-    undefined, undefined, ANALYSIS,
-  );
+  /* 옛 엔진의 체인이 실려 와도 분석 카드는 그것을 읽지 않는다 */
+  const withV1 = buildMetrics(WIRED, undefined, undefined, ANALYSIS);
   assert.equal(evaluateMetric(withV1.find((m) => m.id === 'a.outlook_failed_etfs')!).actual, 3);
   for (const id of ['a.results', 'a.run_to_result', 'a.failed_etfs']) {
     assert.ok(!withV1.some((m) => m.id === id), `옛 엔진 표를 읽는 카드 ${id} 가 남아 있다`);
@@ -351,7 +348,6 @@ test('🔴 실측 과거가 없으면 한 점만 낸다 — 과거 구간을 만
       { id: 'investor_flow', actual_as_of: '2026-07-31', expected_as_of: '2026-08-03' },
       { id: 'etf_nav', actual_as_of: '2026-08-03', expected_as_of: '2026-08-03' },
     ],
-    etf_ledger: { rows: [{ etf: 'A', name: 'a', triggered: true, outcome: 'FAILED' }] },
   } as unknown as Facts;
   const minute = {
     date: WIRED.meta.today,
