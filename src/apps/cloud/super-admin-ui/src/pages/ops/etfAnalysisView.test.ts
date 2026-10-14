@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { EtfAnalysisRow } from '../../rules/types.ts';
 import { etfTable, rowTone, stateTone } from './etfAnalysisView.ts';
@@ -66,4 +67,15 @@ test('🔴 진행 중과 판정 보류는 문제 색이 아니다 — 아직 끝
   assert.equal(rowTone(row('B', 'running', 'completed')), 'wait');
   assert.equal(rowTone(row('C', 'completed', 'none')), 'ok');
   assert.equal(rowTone(row('D', 'none', 'none')), 'none');
+});
+
+test('ETF 표의 종류별 상태는 그 ETF 의 그날 분석 결과 목록으로 간다 (ALPHA-1333)', () => {
+  /* `.tsx` 는 import 할 수 없어 소스로 잰다. 종류·ETF·날짜 셋 중 하나라도 빠지면 다른 목록이 열린다 —
+   * 날짜는 이 응답이 본 날(`meta.today`)이어야 표와 목록이 같은 날을 본다. */
+  const src = readFileSync(new URL('./ChainPage.tsx', import.meta.url), 'utf8');
+  assert.match(
+    src,
+    /to=\{`\/analysis-results\?kind=\$\{kind\}&etf=\$\{encodeURIComponent\(r\.etf\)\}&from=\$\{q\.facts\.meta\.today\}`\}/,
+  );
+  assert.match(src, /\['전망', 'outlook', r\.outlook\], \['가격변동', 'movement', r\.movement\]/);
 });

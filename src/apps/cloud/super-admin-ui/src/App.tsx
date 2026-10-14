@@ -1,7 +1,7 @@
 /* EDGE Admin — 라우트 트리 (디자인 v0.1 IA + 로그인 ALPHA-616).
  *
  *   /login (공개)                  — 운영자 로그인
- *   RequireSession ▸ AdminLayout  — /ops/* · /overview · /tenants(/:id) · /sources · /grid · /analyses(/:id)
+ *   RequireSession ▸ AdminLayout  — /ops/* · /overview · /tenants(/:id) · /sources · /grid · /analysis-results(/:kind/:id) · /analyses(/:id)
  *
  * 로그인 외 전 표면은 세션 필수(API fail-closed 와 짝) — 미인증·만료는 /login 으로 보낸다.
  * 첫 화면은 사건 목록이다(ALPHA-738) — 운영자의 첫 질문("지금 무엇이 걸렸나")을 먼저 답한다.
@@ -26,6 +26,8 @@ import { GridPage } from './pages/GridPage';
 import { MinutePage } from './pages/MinutePage';
 import { NewsLineagePage } from './pages/NewsLineagePage';
 import { HoldingsImpactPage } from './pages/HoldingsImpactPage';
+import { AnalysisResultDetailPage } from './pages/AnalysisResultDetailPage';
+import { AnalysisResultsPage } from './pages/AnalysisResultsPage';
 import { AnalysesPage } from './pages/AnalysesPage';
 import { AnalysisSymbolPage } from './pages/AnalysisSymbolPage';
 import { AnalysisDetailPage } from './pages/AnalysisDetailPage';
@@ -54,6 +56,8 @@ export function App() {
           <Route path="/minute" element={<MinutePage />} />
           <Route path="/lineage/news" element={<NewsLineagePage />} />
           <Route path="/impact/holdings" element={<HoldingsImpactPage />} />
+          <Route path="/analysis-results" element={<AnalysisResultsPage />} />
+          <Route path="/analysis-results/:kind/:id" element={<AnalysisResultDetailPage />} />
           <Route path="/analyses" element={<AnalysesPage />} />
           {/* 종목 상세 — 시장·코드를 **경로가 아니라 쿼리**로 받는다(`symbols.symbolHref`).
               CloudFront SPA fallback(`spa-rewrite.js`)이 마지막 조각의 점(.)을 정적 파일로 갈라,

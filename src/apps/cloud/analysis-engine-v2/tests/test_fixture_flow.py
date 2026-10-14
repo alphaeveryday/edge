@@ -38,12 +38,31 @@ def test_streak_is_lower_bound_when_boundary_is_unobserved():
     assert result["streak_days"] == 5 and result["exact"] is False
 
 
-def test_new_holdings_cannot_be_applied_to_earlier_day():
+def test_latest_known_holdings_are_fixed_across_the_whole_flow_window():
     data = flow_fixture()
     for row in data["holdings"]:
         row["available_at"] = "2026-09-18T08:00:00+09:00"
-    with pytest.raises(ValueError, match="weight"):
-        run(data, "sum")
+        row["as_of_date"] = "2026-09-18"
+    result = run(data, "sum")
+    assert result["amount_krw"] == 8
+    assert result["weight_basis"] == "latest_snapshot_at_analysis"
+    assert result["holdings_as_of"] == "2026-09-18"
+    # Older weights are irrelevant: this explains the current basket's past flows.
+    data['holdings'] += [dict(r, weight=1-r['weight'], as_of_date='2026-09-14',
+                             available_at='2026-09-14T08:00:00+09:00') for r in data['holdings']]
+    assert run(data, 'sum') == result
+
+
+@pytest.mark.parametrize('field', ['as_of_date', 'available_at'])
+def test_latest_snapshot_never_looks_beyond_analysis_time(field):
+    data = flow_fixture()
+    before = run(data, 'sum')
+    newer = [dict(r, weight=1-r['weight'], as_of_date='2026-09-18',
+                  available_at='2026-09-18T08:00:00+09:00') for r in data['holdings']]
+    for row in newer:
+        row[field] = '2026-09-22' if field == 'as_of_date' else '2026-09-21T11:00:00+09:00'
+    data['holdings'] += newer
+    assert run(data, 'sum') == before
 
 
 @pytest.mark.parametrize("change", ["future", "unfinalized", "duplicate"])

@@ -7,7 +7,8 @@ from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 import pytest
 
-from edge_analysis_v2.sources.database import load_source, load_flow, load_prices
+from edge_analysis_v2.sources.database import DatabaseTools, load_source, load_flow, load_prices
+from edge_analysis_v2.storage.factors import prepare_metrics, project_factor_metrics
 
 
 @pytest.mark.parametrize('extra_weight,valid_count', [(0, 2), (None, 1)])
@@ -36,7 +37,7 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
             INSERT INTO instrument VALUES ('etf','091160','XKRX','ETF'),('stock','000001','XKOS','EQUITY');
             INSERT INTO entity VALUES ('etf','ETF'),('stock','Stock');
             INSERT INTO equity_profile VALUES ('stock','issuer');
-            INSERT INTO etf_holding_snapshot_status VALUES ('etf','2026-09-30',2,1,'current','2026-09-30T08:00:00+09:00');
+            INSERT INTO etf_holding_snapshot_status VALUES ('etf','2026-09-30',2,1,'current','2026-09-30T09:00:00+09:00');
             INSERT INTO etf_holding_snapshot VALUES ('etf','stock','2026-09-30',.9971,'2026-09-30T08:00:00+09:00','current');
             INSERT INTO document VALUES ('known','Known','NEWS','2026-09-30T09:00:00+09:00','2026-09-30T09:01:00+09:00','https://news.example.com/known'),
                 ('future','Future','NEWS','2026-09-30T13:00:00+09:00','2026-09-30T13:01:00+09:00','https://news.example.com/future');
@@ -50,7 +51,15 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         c.execute("INSERT INTO entity VALUES ('zero','Zero')")
         c.execute("INSERT INTO etf_holding_snapshot VALUES ('etf','zero','2026-09-30',%s,'2026-09-30T08:00:00+09:00','current')", (extra_weight,))
         c.execute('UPDATE etf_holding_snapshot_status SET input_row_count=3,valid_row_count=%s', (valid_count,))
+        # The current basket is independent of historical coverage; later-acquired snapshots cannot leak in.
+        c.execute("""INSERT INTO etf_holding_snapshot_status VALUES
+            ('etf','2026-09-28',1,1,'old','2026-09-29T08:00:00+09:00'),
+            ('etf','2026-10-01',1,1,'future','2026-09-30T08:00:00+09:00');
+            INSERT INTO etf_holding_snapshot VALUES
+            ('etf','stock','2026-09-28',1,'2026-09-29T08:00:00+09:00','old'),
+            ('etf','stock','2026-10-01',1,'2026-09-30T08:00:00+09:00','future');""")
         c.execute("""INSERT INTO investor_flow_daily VALUES
+            ('etf','2026-09-28',999999,999999,999999,'2026-09-28T18:00:00+09:00'),
             ('stock','2026-09-28',100,NULL,-100,'2026-09-28T18:00:00+09:00'),
             ('stock','2026-09-29',200,300,-500,'2026-09-30T13:00:00+09:00'),
             ('stock','2026-09-30',999,999,999,'2026-09-30T09:00:00+09:00')""")
@@ -75,16 +84,26 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
         assert data['holdings'][0]['weight'] == .9971
         assert data['source_instrument_ids']['000001'] == 'stock'
         assert len(data['holdings']) == valid_count
+        assert {r['as_of_date'] for r in data['holdings']} == {'2026-09-30'}
         load_flow(c, data)
         assert data['context']['flow_as_of_date'] == '2026-09-29'
         assert {r['date'] for r in data['flow']} == {'2026-09-28'}
         assert {r['investor'] for r in data['flow']} == {'foreign','individual'}
+        assert {r['instrument_id'] for r in data['flow']} == {'000001'}
         load_prices(c,data)
         assert [r['close'] for r in data['prices']]==[100,101]
         assert all(r['turnover'] is None and r['high'] is None and r['low'] is None for r in data['prices'])
         assert len(data['price_snapshots'])==1
         assert data['price_snapshots'][0]['price']==105
         assert datetime.fromisoformat(data['price_snapshots'][0]['observed_at']).astimezone(timezone.utc).hour==1
+        # Exercise the queried status timestamp through the same factor-card projection used for storage.
+        data['flow'] = [dict(instrument_id='000001', date=day, investor=investor, net_amount_krw=amount,
+                            finalized=True, available_at=day+'T18:00:00+09:00')
+                        for day, amount in [('2026-09-28', -10), ('2026-09-29', 20)]
+                        for investor in ('foreign', 'institution', 'individual')]
+        output = DatabaseTools(data).call('get_instrument_factors', dict(instrument_id='091160', factors=['flow']))
+        metrics = prepare_metrics(project_factor_metrics(output, '091160'))
+        assert metrics and all(row['observed_at'] == datetime.fromisoformat('2026-09-30T09:00:00+09:00') for row in metrics)
         c.rollback()
         c.read_only = False
         c.execute('UPDATE etf_holding_snapshot_status SET valid_row_count=99')

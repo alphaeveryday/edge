@@ -52,7 +52,7 @@ MIN_WEIGHT_COVERAGE = Decimal('0.7')
 
 
 def holdings(fixture, day=None, *, require_complete=True):
-    """Read one complete equity portfolio without renormalizing missing weights."""
+    """Read the latest available equity snapshot without renormalizing its weights."""
     cutoff = instant(fixture["context"]["analysis_at"])
     if day is not None:
         cutoff = min(cutoff, instant(day + "T23:59:59.999999+09:00"))
@@ -61,29 +61,38 @@ def holdings(fixture, day=None, *, require_complete=True):
     rows = [r for r in available(fixture.get("holdings", []), cutoff) if r["as_of_date"] <= day]
     latest = max((r["as_of_date"] for r in rows), default=None)
     rows = [r for r in rows if r["as_of_date"] == latest]
-    weights = [decimal(r["weight"]) for r in rows]
+    detail = f'as_of_date={latest}, analysis_at={cutoff.isoformat()}. Do not retry this snapshot; report unavailable holdings or repair source data.'
+    if not rows:
+        raise ToolInputError('NO_HOLDINGS: no holdings available at the analysis cutoff. ' + detail)
+    try:
+        weights = [decimal(r["weight"]) for r in rows]
+    except (ValueError, ArithmeticError):
+        raise ToolInputError('INVALID_HOLDINGS_WEIGHT: finite numeric weights required. ' + detail) from None
     # Weights are stored as doubles, which carry 15 significant decimal digits, so the sum is judged at 15 digits:
     # a snapshot whose equities are exactly 100.00% must not read as 1.0000000000000000362 because 27.94% was
     # stored as 0.27940000000000004 (ALPHA-1162). This is deliberate: a sum that differs from one only below
     # that precision (1.000000000000004) is not told apart from one. Sources publish weights to four decimals.
     total = Context(prec=15).plus(sum(weights))
-    statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
+    statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest
+                and (not r.get('available_at') or instant(r['available_at']) <= cutoff)]
     # Equities above one are explained only by source rows that were not loaded: a negative cash row leaves the
     # loaded equities above 100% (ALPHA-1162). With every source row loaded the excess has no explanation and is
     # rejected; without an ingestion status (fixtures) it cannot be explained either.
     unloaded = len(statuses) == 1 and statuses[0]['input_count'] > len(rows)
-    if not rows or len({r["instrument_id"] for r in rows}) != len(rows) or any(w < 0 for w in weights) or total <= 0 or total > 1 and not unloaded:
-        raise ValueError("complete positive equity weights summing to one required")
+    if len({r["instrument_id"] for r in rows}) != len(rows):
+        raise ToolInputError('DUPLICATE_HOLDINGS: duplicate constituent in latest snapshot. ' + detail)
+    if any(w < 0 for w in weights) or total <= 0 or total > 1 and not unloaded:
+        raise ToolInputError('INVALID_HOLDINGS_WEIGHT: positive equity weights with a valid total required. ' + detail)
     complete = total == 1
     if statuses:
         if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
-            raise ValueError('holdings status does not match observed rows')
+            raise ToolInputError('INVALID_HOLDINGS_STATUS: holdings status does not match observed rows. ' + detail)
         complete = complete and statuses[0]['input_count'] == len(rows)
     # A whole-ETF weighted figure is allowed once the observed weights cover MIN_WEIGHT_COVERAGE of the fund.
     # Weights are never renormalized, so every such figure must be shown with observed_weight_ratio.
     if require_complete and total < MIN_WEIGHT_COVERAGE:
         # ToolInputError text is what the agent is shown; a plain ValueError reaches it as a generic failure.
-        raise ToolInputError('INSUFFICIENT_HOLDINGS_COVERAGE: observed constituent weights below the 70% coverage required for a whole-ETF figure')
+        raise ToolInputError('INSUFFICIENT_HOLDINGS_COVERAGE: observed constituent weights below the 70% coverage required for a whole-ETF figure. ' + detail)
     return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows],
             "coverage": 'full' if complete else 'partial', "observed_weight_ratio": number(total)}
 

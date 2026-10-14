@@ -140,11 +140,19 @@ export function ChainPage() {
                   <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {r.name}
                   </div>
-                  {([['전망', r.outlook], ['가격변동', r.movement]] as const).map(([kind, state]) => (
-                    <div key={kind} className="t-xs" style={{ color: TONE_COLOR[stateTone(state)] }}>
-                      {kind} {STATE_LABEL[state]}
-                    </div>
-                  ))}
+                  {/* 종류마다 그 ETF 의 그날 분석 목록으로 간다(ALPHA-1333). 날짜는 이 응답이 본 날이다 */}
+                  {([['전망', 'outlook', r.outlook], ['가격변동', 'movement', r.movement]] as const).map(
+                    ([label, kind, state]) => (
+                      <Link
+                        key={kind}
+                        to={`/analysis-results?kind=${kind}&etf=${encodeURIComponent(r.etf)}&from=${q.facts.meta.today}`}
+                        className="t-xs block"
+                        style={{ color: TONE_COLOR[stateTone(state)] }}
+                      >
+                        {label} {STATE_LABEL[state]}
+                      </Link>
+                    ),
+                  )}
                 </div>
               );
             })}

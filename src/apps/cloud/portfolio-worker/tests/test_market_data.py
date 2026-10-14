@@ -58,7 +58,7 @@ def test_daily_buy_and_hold_preserves_cash_and_fx_and_initial_money():
     assert history['points'][-1]['current'] == pytest.approx(1320000)
 
 
-def test_short_history_is_drawn_but_internal_long_gap_is_not_backfilled():
+def test_short_history_and_consecutive_gaps_keep_the_last_observed_price():
     short = pd.bdate_range('2026-03-01', '2026-10-09')
     history = comparison({'KR:069500': 1}, None, {'KR:069500': record(dates=short)}, date(2026, 10, 12))
     assert history['start_date'] == '2026-03-02'
@@ -66,8 +66,44 @@ def test_short_history_is_drawn_but_internal_long_gap_is_not_backfilled():
     assert '최근 1년' not in history['basis']
     broken = record()
     broken['frame'].iloc[50:70] = float('nan')
-    with pytest.raises(ValueError, match='MISSING_TRADING_SESSIONS'):
-        comparison({'KR:069500': 1}, None, {'KR:069500': broken}, date(2026, 10, 12))
+    original = broken['frame'].copy(deep=True)
+    history = comparison({'KR:069500': 1}, None, {'KR:069500': broken}, date(2026, 10, 12))
+    points = {p['date']: p['recommended'] for p in history['points']}
+    for day in expected_sessions('KR:069500', original.index[50], original.index[69]):
+        assert points[str(day.date())] == points[str(original.index[49].date())]
+    assert points[str(original.index[70].date())] > points[str(original.index[49].date())]
+    pd.testing.assert_frame_equal(broken['frame'], original)
+    assert history['sources'][0]['price_fill']['method'] == 'previous_observation'
+    assert history['sources'][0]['price_fill']['count'] > 0
+
+
+async def test_price_gaps_do_not_eliminate_all_optimizer_candidates():
+    from test_optimizer import batch
+    from edge_portfolio.optimizer import Optimizer
+    request, market, groups = batch()
+    def loader(*_):
+        data = record(finish=120)
+        data['frame'] = data['frame'].drop(data['frame'].index[50:70])
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert len(result['candidates']) == 10
+    assert all(source['price_fill']['count'] > 0 for source in result['sources'])
+    candidate = result['candidates'][0]
+    history = await market.get(candidate['allocations'])
+    assert history['status'] == 'available'
+    assert history['history']['sources'] == result['sources']
+
+
+def test_price_fill_diagnostics_are_bounded_only_in_model_context():
+    from edge_portfolio.market_data import model_price_payload
+    dates = [str(day.date()) for day in pd.bdate_range('2026-01-01', periods=100)]
+    saved = {'sources': [{'price_fill': {'method': 'previous_observation', 'count': 100, 'dates': dates}}]}
+    response = model_price_payload(saved)
+    assert response['sources'][0]['price_fill']['dates'] == dates[:20]
+    assert response['sources'][0]['price_fill']['count'] == 100
+    assert len(saved['sources'][0]['price_fill']['dates']) == 100
 
 
 def test_common_end_and_known_weights_only():
@@ -143,18 +179,25 @@ def test_dividend_cash_history_uses_only_trailing_year_and_missing_is_not_zero()
     assert observation['as_of'] == '2026-10-09'
 
 
-def test_missing_trading_dates_are_detected_even_without_nan_rows():
+def test_missing_rows_are_restored_without_using_future_prices():
     broken = record()
+    before = broken['frame'].index[49]
+    missing = broken['frame'].index[50:65]
     broken['frame'] = broken['frame'].drop(broken['frame'].index[50:65])
-    with pytest.raises(ValueError, match='MISSING_TRADING_SESSIONS'):
-        comparison({'US:VOO': 1}, None, {'US:VOO': broken}, date(2026, 10, 12))
+    history = comparison({'US:VOO': 1}, None, {'US:VOO': broken}, date(2026, 10, 12))
+    points = {p['date']: p['recommended'] for p in history['points']}
+    for day in expected_sessions('US:VOO', missing[0], missing[-1]):
+        assert points[str(day.date())] == points[str(before.date())]
 
 
-def test_missing_fx_on_a_us_trading_day_is_not_carried_forward():
+def test_missing_fx_carries_only_fx_and_keeps_the_observed_stock_return():
     fx = record(start=1000, finish=1200)
     fx['frame'] = fx['frame'].drop(pd.Timestamp('2026-03-10'))
-    with pytest.raises(ValueError, match='MISSING_FX_SESSIONS'):
-        comparison({'US:VOO': 1}, None, {'US:VOO': record('USD'), 'FX': fx}, date(2026, 10, 12))
+    stock = record('USD')
+    history = comparison({'US:VOO': 1}, None, {'US:VOO': stock, 'FX': fx}, date(2026, 10, 12))
+    point = next(p for p in history['points'] if p['date'] == '2026-03-10')
+    assert point['recommended'] == pytest.approx(round(1000000 * stock['frame'].loc['2026-03-10', 'Adj Close'] / 100 * fx['frame'].loc['2026-03-09', 'Close'] / 1000, 2))
+    assert history['sources'][-1]['price_fill']['dates'] == ['2026-03-10']
 
 
 async def test_new_current_fund_sets_common_window_without_inventing_an_annual_return():
@@ -199,13 +242,16 @@ def test_holiday_carry_cannot_import_a_negative_price_from_before_common_start()
         comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
 
 
-def test_initial_holiday_price_must_cover_the_preceding_trading_session():
+def test_initial_holiday_can_carry_the_last_observed_price_across_a_gap():
     kr = record(dates=pd.DatetimeIndex(['2026-07-01', '2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', '2026-07-24']))
     records = {'KR:069500': kr,
                'US:VOO': record('USD', dates=pd.bdate_range('2026-07-17', '2026-07-24')),
                'FX': record(dates=pd.bdate_range('2026-07-16', '2026-07-24'))}
-    with pytest.raises(ValueError, match='MISSING_TRADING_SESSIONS'):
-        comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
+    history = comparison({'KR:069500': .5, 'US:VOO': .5}, None, records, date(2026, 7, 27))
+    assert history['start_date'] == '2026-07-17'
+    assert history['points'][0]['recommended'] == 1000000
+    source = next(s for s in history['sources'] if s['instrument_id'] == 'KR:069500')
+    assert '2026-07-16' in source['price_fill']['dates']
 
 
 @pytest.mark.parametrize('fx_starts_on_common_day', [False, True])

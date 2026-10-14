@@ -236,8 +236,29 @@ def comparison_bounds(ids, records, as_of):
     return pd.Timestamp(year_before(end.date())), end
 
 
+def model_price_payload(value):
+    if isinstance(value, dict):
+        return {key: item[:20] if key == 'dates' and isinstance(item, list) else model_price_payload(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [model_price_payload(item) for item in value]
+    return value
+
+
+def carry_missing_prices(prices, expected, start, end):
+    expanded = prices.reindex(prices.index.union(expected).sort_values())
+    missing = expanded.index[expanded.isna().any(axis=1)]
+    lower = min(start, expected[0]) if len(expected) else start
+    dates = [str(day.date()) for day in missing if lower <= day <= end]
+    filled = expanded.ffill()
+    if not filled.loc[start:end].map(positive_price).all().all():
+        raise ValueError('PRICE_INVALID')
+    return filled, {'method': 'previous_observation', 'count': len(dates), 'dates': dates}
+
+
 def normalized_prices(ids, records, as_of, bounds=None):
     series, urls = {}, []
+    fx_fill_dates = set()
     keys = ids - {'CASH:KRW'}
     needs_fx = any(records[key]['currency'] == 'USD' for key in keys)
     start, end = bounds or comparison_bounds(ids, records, as_of)
@@ -252,21 +273,18 @@ def normalized_prices(ids, records, as_of, bounds=None):
         preceding = sessions[sessions <= start]
         if len(preceding) and preceding[-1] >= values.first_valid_index():
             expected = expected.union(preceding[-1:])
-        if len(expected.difference(values.dropna().index)):
-            raise ValueError('MISSING_TRADING_SESSIONS')
-        if not prices.loc[start:end].map(positive_price).all().all():
-            raise ValueError('PRICE_INVALID')
+        prices, price_fill = carry_missing_prices(prices, expected, start, end)
+        values = prices['Adj Close']
         if record['currency'] == 'USD':
             fx = records['FX']['frame']['Close']
             fx_expected = sessions[sessions >= start]
             if start not in fx.dropna().index and len(preceding) and preceding[-1] >= fx.first_valid_index():
                 fx_expected = fx_expected.union(preceding[-1:])
-            if len(fx_expected.difference(fx.dropna().index)):
-                raise ValueError('MISSING_FX_SESSIONS')
-            if not fx.loc[start:end].map(positive_price).all():
-                raise ValueError('PRICE_INVALID')
+            fx_frame, fx_fill = carry_missing_prices(fx.to_frame(), fx_expected, start, end)
+            fx = fx_frame['Close']
+            fx_fill_dates.update(fx_fill['dates'])
             index = values.index.union(fx.index).union(pd.DatetimeIndex([start]))
-            # Trading-day gaps were checked above; only holidays carry an earlier quote.
+            # Carry only earlier observations; never invent pre-inception prices.
             carried_prices = values.reindex(index).ffill().loc[start:end]
             carried_fx = fx.reindex(index).ffill().loc[start:end]
             if not all(s.map(positive_price).all() for s in (carried_prices, carried_fx)):
@@ -275,9 +293,10 @@ def normalized_prices(ids, records, as_of, bounds=None):
         elif record['currency'] != 'KRW':
             raise ValueError('UNSUPPORTED_CURRENCY')
         series[key] = values
-        urls.append({'instrument_id': key, 'url': record['source_url'], 'price_recovery': record.get('price_recovery')})
+        urls.append({'instrument_id': key, 'url': record['source_url'], 'price_recovery': record.get('price_recovery'), 'price_fill': price_fill})
     if needs_fx:
-        urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url'], 'price_recovery': records['FX'].get('price_recovery')})
+        urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url'], 'price_recovery': records['FX'].get('price_recovery'),
+                     'price_fill': {'method': 'previous_observation', 'count': len(fx_fill_dates), 'dates': sorted(fx_fill_dates)}})
     if series:
         union = pd.DatetimeIndex(sorted(set().union(*(s.index for s in series.values()))))
         frame = pd.DataFrame({key: s.reindex(union).ffill() for key, s in series.items()})
@@ -322,7 +341,7 @@ def comparison(target, current, records, as_of):
                'current': round(float(existing.loc[day]), 2) if existing is not None else None} for day in frame.index]
     return {'points': points, 'interval': '1d', 'currency': 'KRW', 'initial_krw': 1000000,
             'basis': history_basis(points[0]['date'], points[-1]['date']),
-            'method': '시작 비중으로 매수 후 유지 · 수정 종가 기준 분배금 재투자 · 미국 상장 ETF 환율 반영 · 세금·매매비용 제외 · 휴장일 직전 가격 유지',
+            'method': '시작 비중으로 매수 후 유지 · 수정 종가 기준 분배금 재투자 · 미국 상장 ETF 환율 반영 · 세금·매매비용 제외 · 결측일·휴장일 직전 관측 가격 유지',
             'source_url': 'https://finance.yahoo.com/', 'sources': urls,
             'start_date': points[0]['date'], 'end_date': points[-1]['date']}
 
