@@ -14,18 +14,14 @@ public record IntradayAnalysisTrendResponse(String asOf, List<PointResponse> poi
 	}
 
 	/**
-	 * {@code observations}·{@code runs}·{@code activeRuns}·{@code failedRuns}·{@code results}·
-	 * {@code published} 는 <b>옛 설명 엔진</b>의 단계라 10-02 이후 0 이다. 그 필드만 아는 옛 화면이
-	 * 응답을 거부하지 않도록 남기고 다음 배포에서 지운다. {@code analysis} 가 새 분석 엔진의 단계다
-	 * (ALPHA-1329).
+	 * {@code triggers} 는 그날의 장중 발화(FIRE) 수 — 체인 입력의 장중 수와 같은 정의다. {@code analysis}
+	 * 가 새 분석 엔진의 단계다(ALPHA-1329). 옛 설명 엔진의 단계 필드는 지웠다(ALPHA-1330).
 	 */
-	public record PointResponse(String date, long triggers, long observations, long runs,
-			long activeRuns, long failedRuns, long results, long published, AnalysisResponse analysis) {
+	public record PointResponse(String date, long triggers, AnalysisResponse analysis) {
 
 		private static PointResponse from(IntradayAnalysisPoint point) {
-			return new PointResponse(point.date().toString(), point.triggers(), point.observations(),
-					point.runs(), point.activeRuns(), point.failedRuns(), point.results(),
-					point.published(), AnalysisResponse.from(point.analysis()));
+			return new PointResponse(point.date().toString(), point.triggers(),
+					AnalysisResponse.from(point.analysis()));
 		}
 	}
 

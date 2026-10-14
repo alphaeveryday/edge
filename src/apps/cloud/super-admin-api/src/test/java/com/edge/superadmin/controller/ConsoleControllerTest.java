@@ -920,10 +920,10 @@ class ConsoleControllerTest {
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.done", "분석 완료", "status=completed", null, n[4], blind),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.pub", "게시", "published_at IS NOT NULL", null, n[5], blind));
 		repository.intradayTrend = new IntradayAnalysisTrend(DB_NOW, List.of(
-				new IntradayAnalysisPoint(LocalDate.parse("2026-08-01"), 8L, 7L, 6L, 2L,
-						1L, 5L, 4L, stages.apply(false, new long[] {7, 1, 5, 2, 3, 1})),
-				new IntradayAnalysisPoint(LocalDate.parse("2026-08-02"), 0L, 0L, 0L, 0L,
-						0L, 0L, 0L, stages.apply(true, new long[] {0, 0, 0, 0, 0, 0}))));
+				new IntradayAnalysisPoint(LocalDate.parse("2026-08-01"), 8L,
+						stages.apply(false, new long[] {7, 1, 5, 2, 3, 1})),
+				new IntradayAnalysisPoint(LocalDate.parse("2026-08-02"), 0L,
+						stages.apply(true, new long[] {0, 0, 0, 0, 0, 0}))));
 
 		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
 						.param("maxDate", "2026-08-02").param("days", "2"))
@@ -932,13 +932,14 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.points.length()").value(2))
 				.andExpect(jsonPath("$.result.points[0].date").value("2026-08-01"))
 				.andExpect(jsonPath("$.result.points[0].triggers").value(8))
-				.andExpect(jsonPath("$.result.points[0].observations").value(7))
-				.andExpect(jsonPath("$.result.points[0].runs").value(6))
-				.andExpect(jsonPath("$.result.points[0].activeRuns").value(2))
-				.andExpect(jsonPath("$.result.points[0].failedRuns").value(1))
-				.andExpect(jsonPath("$.result.points[0].results").value(5))
-				.andExpect(jsonPath("$.result.points[0].published").value(4))
-				.andExpect(jsonPath("$.result.points[1].published").value(0))
+				// 옛 설명 엔진의 단계 필드는 지웠다(ALPHA-1330)
+				.andExpect(jsonPath("$.result.points[0]", org.hamcrest.Matchers.allOf(
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("observations")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("runs")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("activeRuns")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("failedRuns")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("results")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("published")))))
 				.andExpect(jsonPath("$.result.points[0].analysis.blind").value(false))
 				.andExpect(jsonPath("$.result.points[0].analysis.requested").value(7))
 				.andExpect(jsonPath("$.result.points[0].analysis.requestPending").value(1))

@@ -207,10 +207,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			""".formatted(RUN_DAY, RUN_DAY, RUN_DAY);
 
 	/**
-	 * 장중 발화 코호트의 일별 도달 사실. 날짜는 트리거에서만 자르고 하류는 그 자손을 따라간다.
-	 * 라우트별 최신 실행은 현재 상태(active/failed)를, 전체 실행은 결과 존재와 <b>현재</b>
-	 * PUBLISHED 결과 보유 여부를 답한다. 그래서 재실행이 수를 부풀리지 않고, 새 DRAFT 재실행만으로
-	 * 기존 게시본이 사라지지는 않는다. WITHDRAWN 전이는 게시 이력이 아니라 현재 상태라 감소한다.
+	 * 장중 발화의 일별 트리거 수(ALPHA-1330). 날짜 범위의 날마다 한 행이고, 발화가 없던 날은 0 이다.
+	 *
+	 * <p>트리거의 정의는 체인 입력({@link #FEEDS_SQL} 의 {@code feed_intraday})과 같다 — {@code FIRE} 만
+	 * 세고, 날짜는 {@code window_start} 의 KST 날짜다. 범위는 시각 열에 직접 건다. 단계 수는 날짜마다
+	 * {@link #analysisStages} 가 센다. 옛 설명 엔진의 표를 따라가던 단계(관측·실행·결과·게시)는 지웠다.
 	 */
 	private static final String INTRADAY_ANALYSIS_TREND_SQL = """
 			WITH days AS (
@@ -225,49 +226,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			                              AT TIME ZONE 'Asia/Seoul')
 			       AND m.window_start < ((CAST(? AS date) + 1)::timestamp
 			                             AT TIME ZONE 'Asia/Seoul')
-			), observation AS (
-			    SELECT t.d, t.trigger_id, o.contribution_observation_id AS obs_id,
-			           rt.explanation_route_id AS route_id
-			      FROM trigger_cohort t
-			      LEFT JOIN etf_contribution_observation o
-			        ON o.minute_price_trigger_id = t.trigger_id
-			      LEFT JOIN explanation_route rt
-			        ON rt.contribution_observation_id = o.contribution_observation_id
-			), latest_run AS (
-			    SELECT DISTINCT ON (r.explanation_route_id)
-			           r.explanation_route_id AS route_id, r.explanation_run_id AS run_id,
-			           r.run_status
-			      FROM explanation_run r
-			      JOIN observation o ON o.route_id = r.explanation_route_id
-			     ORDER BY r.explanation_route_id, r.explanation_as_of DESC,
-			              r.started_at DESC, r.explanation_run_id DESC
-			), reached AS (
-			    SELECT r.explanation_route_id AS route_id,
-			           bool_or(x.explanation_result_id IS NOT NULL) AS has_result,
-			           bool_or(x.publication_status = 'PUBLISHED') AS has_published
-			      FROM explanation_run r
-			      JOIN observation o ON o.route_id = r.explanation_route_id
-			      LEFT JOIN explanation_result x ON x.explanation_run_id = r.explanation_run_id
-			     GROUP BY r.explanation_route_id
-			), cohort AS (
-			    SELECT o.*, lr.run_id, lr.run_status,
-			           COALESCE(re.has_result, false) AS has_result,
-			           COALESCE(re.has_published, false) AS has_published
-			      FROM observation o
-			      LEFT JOIN latest_run lr ON lr.route_id = o.route_id
-			      LEFT JOIN reached re ON re.route_id = o.route_id
 			)
-			SELECT now() AS as_of, d.d,
-			       count(DISTINCT c.trigger_id) AS triggers,
-			       count(DISTINCT c.obs_id) AS observations,
-			       count(DISTINCT c.obs_id) FILTER (WHERE c.run_id IS NOT NULL) AS runs,
-			       count(DISTINCT c.obs_id) FILTER (
-			           WHERE c.run_status IN ('PENDING', 'RUNNING')) AS active_runs,
-			       count(DISTINCT c.obs_id) FILTER (WHERE c.run_status = 'FAILED') AS failed_runs,
-			       count(DISTINCT c.obs_id) FILTER (WHERE c.has_result) AS results,
-			       count(DISTINCT c.obs_id) FILTER (WHERE c.has_published) AS published
+			SELECT now() AS as_of, d.d, count(c.trigger_id) AS triggers
 			  FROM days d
-			  LEFT JOIN cohort c ON c.d = d.d
+			  LEFT JOIN trigger_cohort c ON c.d = d.d
 			 GROUP BY d.d
 			 ORDER BY d.d
 			""";
@@ -805,16 +767,12 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				asOf[0] = rs.getObject("as_of", OffsetDateTime.class);
 			}
 			points.add(new IntradayAnalysisPoint(rs.getObject("d", LocalDate.class),
-					rs.getLong("triggers"), rs.getLong("observations"), rs.getLong("runs"),
-					rs.getLong("active_runs"), rs.getLong("failed_runs"), rs.getLong("results"),
-					rs.getLong("published"), List.of()));
+					rs.getLong("triggers"), List.of()));
 		}, maxDate, days, maxDate, maxDate, days, maxDate);
 		/* 새 분석 엔진의 단계는 날짜마다 흐름 띠와 <b>같은 조회</b>로 센다(ALPHA-1329) — 같은 날짜를
 		 * 물으면 두 화면이 같은 수를 낸다. 하루 한 번씩이라 조회 수가 날짜 수만큼 는다. */
 		return new IntradayAnalysisTrend(asOf[0], points.stream()
-				.map(p -> new IntradayAnalysisPoint(p.date(), p.triggers(), p.observations(), p.runs(),
-						p.activeRuns(), p.failedRuns(), p.results(), p.published(),
-						analysisStages(p.date())))
+				.map(p -> new IntradayAnalysisPoint(p.date(), p.triggers(), analysisStages(p.date())))
 				.toList());
 	}
 

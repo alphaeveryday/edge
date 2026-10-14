@@ -75,15 +75,10 @@ public interface ConsoleFactsRepository {
 	}
 
 	/**
-	 * 단계 수는 행 수가 아니라 그 단계에 도달한 장중 관측 수라 재실행에도 단조성을 지킨다.
-	 *
-	 * <p>{@code observations}~{@code published} 는 <b>옛 설명 엔진</b>의 단계라 10-02 이후 0 이다. 그
-	 * 필드만 아는 옛 화면을 위해 남기고 다음 배포에서 지운다. 화면은 {@code analysis}(새 분석 엔진의
-	 * 단계, ALPHA-1329)를 읽는다.
+	 * 그날의 장중 발화 수와 새 분석 엔진의 단계(ALPHA-1329). 옛 설명 엔진의 단계(관측·실행·결과·게시)는
+	 * 지웠다(ALPHA-1330).
 	 */
-	record IntradayAnalysisPoint(LocalDate date, long triggers, long observations, long runs,
-			long activeRuns, long failedRuns, long results, long published,
-			List<AnalysisStage> analysis) {
+	record IntradayAnalysisPoint(LocalDate date, long triggers, List<AnalysisStage> analysis) {
 	}
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */

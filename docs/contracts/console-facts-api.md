@@ -159,12 +159,6 @@ GET /api/v1/console/trends/intraday-analysis[?maxDate=YYYY-MM-DD&days=30]
       {
         "date": "2026-08-20",
         "triggers": 65,
-        "observations": 61,
-        "runs": 60,
-        "activeRuns": 2,
-        "failedRuns": 1,
-        "results": 57,
-        "published": 55,
         "analysis": {
           "blind": false,
           "requested": 60, "requestPending": 2,
@@ -184,27 +178,18 @@ GET /api/v1/console/trends/intraday-analysis[?maxDate=YYYY-MM-DD&days=30]
 새 분석 엔진의 요청이 아직 없던 날이라(첫 요청이 그날보다 뒤) 수의 0 은 실측이 아니다 — 관측 불가.
 날짜 수만큼 조회가 는다(30일이면 30번).
 
-⏭ 아래 `observations`~`published` 는 **옛 설명 엔진**의 단계라 10-02 이후 0 이다. ALPHA-1329 이전의 UI 가
-이 필드를 요구해(없으면 응답 전체를 거부한다) 이번에는 남기고, 그 UI 가 배포된 뒤 지운다. 화면은
-`analysis` 를 읽고, 그 필드가 없는 응답(옛 API)은 "상태 미제공"으로 그린다.
+✅ **옛 설명 엔진의 단계 필드(`observations`·`runs`·`activeRuns`·`failedRuns`·`results`·`published`)는
+지웠다**(2026-10-14, ALPHA-1330). 그 엔진은 10-01 이 마지막 실행이라 10-02 이후 전부 0 이었고, 화면은
+`analysis` 만 읽는다. 그 필드를 세던 옛 엔진 표 조인도 지웠다. 그 필드가 있는 응답(이 변경 앞의 API)도
+UI 는 그대로 받는다.
 
-- 코호트는 그 날짜의 `minute_price_trigger.trigger_kind='FIRE'` 행이다. `REVERT`는 설명을 만들지
-  않는 회수 마커라 제외한다.
-- `observations`·`runs`·`results`·`published`는 행 수가 아니라 그 단계에 도달한 코호트 관측
-  수다. 따라서 재실행이 단계를 부풀리거나 결손을 상쇄하지 않고
-  `triggers >= observations >= runs >= results >= published`가 구조적으로 성립한다.
-- `activeRuns`·`failedRuns`는 라우트별 최신 실행을 `explanation_as_of`·`started_at`·ID 순으로
-  골라 각각 `PENDING|RUNNING`, `FAILED`인 관측 수다. `CANCELLED`는 `runs`에는 들지만 두 부분
-  상태에는 들지 않는다.
-- `results`는 전체 재실행 중 결과에 한 번이라도 도달했는지를 센다. `published`는 그 결과들 중
-  **현재** `PUBLISHED`인 것이 있는 관측 수다. 새 실패/DRAFT 재실행만으로 기존 게시본이
-  사라지지는 않지만, 운영자가 `WITHDRAWN`으로 전이하면 현재 게시 수는 감소한다. 상태 전이 이력은
-  이 원장에 없으므로 "과거에 게시된 적 있음"을 뜻하지 않는다.
+- `triggers` 는 그 날짜의 `minute_price_trigger.trigger_kind='FIRE'` 행 수다(`window_start` 의 KST
+  날짜). `REVERT`는 분석을 만들지 않는 회수 마커라 제외한다. 체인 입력(`chain.feeds` 의 장중 수)과 같은
+  정의라 같은 날짜면 같은 수다.
 - 서버는 정상·이상, 색상, 감소 원인을 판정하지 않는다.
 
-dev 실데이터 사전 성능 게이트(2026-08-20)는 장중 트리거 678건에서 30일 집계 22.45ms,
-임시 파일 0이었다. 트리거 표 순차 스캔은 16 shared-hit blocks/0.35ms이고 하류는 기존 인덱스를
-사용했다. 현재 유입률 약 38건/일에서는 선행 인덱스를 추가하지 않는다. 실행계획이 악화되면
+dev 실데이터 사전 성능 게이트(2026-08-20, 옛 엔진 조인이 있던 때)는 장중 트리거 678건에서 30일 집계
+22.45ms, 임시 파일 0이었다. 트리거 표 순차 스캔은 16 shared-hit blocks/0.35ms였다. 현재 유입률 약 38건/일에서는 선행 인덱스를 추가하지 않는다. 실행계획이 악화되면
 `window_start` 선두 인덱스를 먼저 검토한다.
 
 ## 큐 축

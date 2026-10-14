@@ -64,8 +64,8 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 `GET /api/v1/console/trends/intraday-analysis?maxDate=&days=30`는 선택 기준일까지 연속 날짜의
 장중 `FIRE` 트리거와 분석·게시 단계 도달 수를 낸다. 점마다 `analysis` 가 새 분석 엔진의 단계(분석
 요청·시작·완료·게시, 판정 보류 포함)이고 날짜마다 흐름 띠와 같은 조회로 센다. v2 요청이 없던 날은
-`analysis.blind` 다(ALPHA-1329). 옛 설명 엔진의 단계 필드는 옛 화면을 위해 남겼다. 상세 계약은 같은
-문서의 「장중 분석 귀결 추이」 절이 정본이다(ALPHA-1005).
+`analysis.blind` 다(ALPHA-1329). 옛 설명 엔진의 단계 필드와 그 조인은 지웠다(ALPHA-1330). 상세 계약은
+같은 문서의 「장중 분석 귀결 추이」 절이 정본이다(ALPHA-1005).
 
 `GET /api/v1/console/trends/analysis?maxDate=&days=30`는 새 분석 엔진(v2)의 전망·가격변동 분석이
 날짜별로 완료·실패·끝나지 않은(running) 건수를 낸다. `outlook_analyses`·`movement_analyses` 를
