@@ -3,18 +3,40 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { intradayOutcome, kstDateAt, parseIntradayAnalysisTrend } from './intradayAnalysisTrend.ts';
 
-const point = (date: string, triggers = 5, results = triggers) => ({
-  date, triggers, observations: triggers, runs: triggers, activeRuns: 0, failedRuns: 0,
-  results, published: results,
+/* 옛 설명 엔진 단계는 10-02 이후 0 이다 — 판정이 그 값을 읽으면 아래 완료 판정이 전부 "미완료"가 된다.
+ * 그래서 옛 단계는 0 으로 두고 새 분석 엔진 단계(`analysis`)만 다르게 둔다. */
+const point = (date: string, triggers = 5, completed = triggers, blind = false) => ({
+  date, triggers, observations: 0, runs: 0, activeRuns: 0, failedRuns: 0, results: 0, published: 0,
+  analysis: { blind, requested: triggers, requestPending: 0, started: triggers, startPending: 0, completed, published: completed },
 });
 
-test('현재일과 과거의 0/완료/부분/전량 미생성을 서로 다른 결과로 판정한다', () => {
+test('현재일과 과거의 0/완료/부분/전량 미완료를 서로 다른 결과로 판정한다 — 새 분석 엔진의 분석 완료를 본다', () => {
   assert.equal(intradayOutcome(point('2026-08-20', 5, 0), '2026-08-20').label, '집계 중');
   assert.equal(intradayOutcome(point('2026-08-19', 0, 0), '2026-08-20').label, '발화 없음');
-  assert.equal(intradayOutcome(point('2026-08-19', 5, 5), '2026-08-20').label, '결과 생성 완료');
-  assert.equal(intradayOutcome(point('2026-08-19', 5, 4), '2026-08-20').label, '일부 미생성 1건');
-  assert.equal(intradayOutcome(point('2026-08-19', 5, 0), '2026-08-20').label, '결과 미생성');
+  assert.equal(intradayOutcome(point('2026-08-19', 5, 5), '2026-08-20').label, '분석 완료');
+  assert.equal(intradayOutcome(point('2026-08-19', 5, 4), '2026-08-20').label, '일부 미완료 1건');
+  assert.equal(intradayOutcome(point('2026-08-19', 5, 0), '2026-08-20').label, '분석 미완료');
   assert.equal(intradayOutcome(point('2026-08-21', 5, 0), '2026-08-20').label, '집계 중');
+});
+
+test('🔴 새 분석 엔진의 요청이 없던 날은 관측 불가이고, 그 단계가 없는 옛 응답은 상태 미제공이다 — 어느 쪽도 미완료로 그리지 않는다', () => {
+  assert.equal(intradayOutcome(point('2026-09-20', 5, 0, true), '2026-10-20').kind, 'blind');
+  const { analysis: _dropped, ...old } = point('2026-09-20', 5, 0);
+  assert.equal(intradayOutcome(old, '2026-10-20').kind, 'unavailable');
+});
+
+test('옛 응답(새 분석 엔진 단계 없음)도 받고, 오면 단계 불변식을 본다', () => {
+  const asOf = '2026-08-20T01:00:00Z';
+  const { analysis: _dropped, ...old } = point('2026-08-20');
+  assert.deepEqual(parseIntradayAnalysisTrend({ asOf, points: [old] }, '2026-08-20', 1).points[0], old);
+  const bad = (analysis: Record<string, unknown>) =>
+    assert.throws(() => parseIntradayAnalysisTrend({ asOf, points: [{ ...point('2026-08-20'), analysis }] }, '2026-08-20', 1),
+      JSON.stringify(analysis));
+  const base = point('2026-08-20').analysis;
+  bad({ ...base, completed: 6, published: 0 });           // 완료가 시작보다 많다
+  bad({ ...base, requested: 4, requestPending: 2 });       // 도달 + 판정 보류가 트리거보다 많다
+  bad({ ...base, blind: 'false' });                        // 관측 불가 표시가 불리언이 아니다
+  bad({ ...base, startPending: -1 });                      // 음수
 });
 
 test('DB asOf의 KST 날짜를 현재일 경계로 사용한다', () => {

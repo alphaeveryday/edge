@@ -553,7 +553,14 @@ function GridBody({
 
 const OUTCOME_TONE: Record<IntradayOutcomeKind, BadgeTone> = {
   collecting: 'env', none: 'neutral', complete: 'active', partial: 'warn', missing: 'blocked',
+  blind: 'neutral', unavailable: 'neutral',
 };
+
+/** 띠의 비율 — 새 분석 엔진의 분석 완료 수. 셀 수 없는 날(관측 불가·상태 미제공)은 숫자를 내지 않는다 */
+function outcomeRatio(point: IntradayAnalysisTrendDto['points'][number]): string {
+  const a = point.analysis;
+  return a && !a.blind ? `완료 ${a.completed}/${point.triggers}` : '—';
+}
 
 function IntradayOutcomeStrip({ trend, pending, failed, selectedDate, onSelectDate }: {
   trend?: IntradayAnalysisTrendDto;
@@ -589,21 +596,22 @@ function IntradayOutcomeStrip({ trend, pending, failed, selectedDate, onSelectDa
                   id={`gd-outcome-day-${point.date}`}
                   type="button"
                   className={`gd-outcome-day gd-outcome-${outcome.kind}${selectedDate === point.date ? ' gd-outcome-selected' : ''}`}
-                  aria-label={`${point.date} ${outcome.label}, 결과 ${point.results}/${point.triggers}, 게시 ${point.published}`}
+                  aria-label={`${point.date} ${outcome.label}, ${outcomeRatio(point)}`}
                   aria-pressed={selectedDate === point.date}
                   onClick={() => onSelectDate(point.date)}
                 >
                   <span className="gd-outcome-date">{mmdd(point.date)}</span>
                   <span className="gd-outcome-mark" aria-hidden="true" />
                   <span className="gd-outcome-label">{outcome.label}</span>
-                  <span className="gd-outcome-ratio">결과 {point.results}/{point.triggers}</span>
+                  <span className="gd-outcome-ratio">{outcomeRatio(point)}</span>
                 </button>
               );
             })}
           </div>
         )}
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
-          판정은 FIRE 트리거의 결과 도달 여부만 봅니다. 현재일은 완료 여부를 확정하지 않으며,
+          그날 발화한 장중 트리거가 새 분석 엔진의 분석 완료까지 갔는지만 봅니다(흐름 화면과 같은 수).
+          새 분석 엔진의 요청이 아직 없던 날은 관측 불가입니다. 현재일은 완료 여부를 확정하지 않으며,
           데이터셋 수집 상태를 이 색으로 덮어쓰지 않습니다.
         </p>
       </div>
@@ -634,15 +642,35 @@ function IntradayOutcomeDetail({ date, trend, pending, failed, onClose }: {
         {point ? (
           <>
             {failed && <p className="t-xs" style={{ color: 'var(--warn)', marginTop: 0 }}>재조회에 실패해 이 날짜의 직전 실측을 유지합니다.</p>}
-            <div className="gd-outcome-flow" aria-label={`장중 분석 흐름: 트리거 ${point.triggers}, 관측 ${point.observations}, 실행 ${point.runs}, 결과 ${point.results}, 게시 ${point.published}`}>
-              <OutcomeStage label="트리거" value={point.triggers} denominator={point.triggers} />
-              <OutcomeStage label="관측" value={point.observations} denominator={point.triggers} />
-              <OutcomeStage label="실행" value={point.runs} denominator={point.triggers} />
-              <OutcomeStage label="결과" value={point.results} denominator={point.triggers} />
-              <OutcomeStage label="게시" value={point.published} denominator={point.triggers} last />
-            </div>
+            {!point.analysis ? (
+              <p className="t-sm m-0" style={{ color: 'var(--fg-3)' }}>
+                이 응답에는 새 분석 엔진의 단계가 없습니다(그 단계를 싣기 전의 API) — 장중 트리거{' '}
+                {point.triggers}건이 어디까지 갔는지 보여 주지 않습니다.
+              </p>
+            ) : point.analysis.blind ? (
+              <p className="t-sm m-0" style={{ color: 'var(--fg-3)' }}>
+                이 날에는 새 분석 엔진의 요청이 아직 없었습니다 — 장중 트리거 {point.triggers}건 뒤의 단계는
+                0건이 아니라 관측 불가입니다.
+              </p>
+            ) : (
+              <>
+                <div className="gd-outcome-flow" aria-label={`장중 분석 흐름: 트리거 ${point.triggers}, 분석 요청 ${point.analysis.requested}, 분석 시작 ${point.analysis.started}, 분석 완료 ${point.analysis.completed}, 게시 ${point.analysis.published}`}>
+                  <OutcomeStage label="트리거" value={point.triggers} denominator={point.triggers} />
+                  <OutcomeStage label="분석 요청" value={point.analysis.requested} denominator={point.triggers} />
+                  <OutcomeStage label="분석 시작" value={point.analysis.started} denominator={point.triggers} />
+                  <OutcomeStage label="분석 완료" value={point.analysis.completed} denominator={point.triggers} />
+                  <OutcomeStage label="게시" value={point.analysis.published} denominator={point.triggers} last />
+                </div>
+                {(point.analysis.requestPending > 0 || point.analysis.startPending > 0) && (
+                  <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 8 }}>
+                    진행 중일 수 있어 아직 세지 않은 트리거 — 분석 요청 {point.analysis.requestPending}건 · 분석
+                    시작 {point.analysis.startPending}건(유예 시간 안)
+                  </p>
+                )}
+              </>
+            )}
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 10 }}>
-              최신 실행 상태 중 진행 {point.activeRuns} · 실패 {point.failedRuns} · DB 기준시각{' '}
+              DB 기준시각{' '}
               {new Date(trend!.asOf).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false })}
             </p>
           </>
