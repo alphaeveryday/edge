@@ -29,6 +29,7 @@ from .scenarios import build_scenarios, stated_principal, principal_declaration,
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status, research_inventory
 from .structured_output import structured_call
+from .data_providers import fetch_official_source
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -104,13 +105,16 @@ class ExaEvidence:
         if self.calls >= MAX_EXA_CALLS:
             raise ValueError("TOOL_LIMIT")
         self.calls += 1
-        async with asyncio.timeout(35):
-            if self.session is None:
-                self.session = await self.session_factory()
-            result = await self.session.call_tool(remote, arguments)
-        if result.isError:
-            raise ValueError("EXA_FAILED")
-        body = "\n".join(b.text for b in result.content if b.type == "text")[:arguments.get('maxCharacters', 24000) + 2000]
+        body = await fetch_official_source(args['url']) if name == 'fetch_source' else None
+        if body is None:
+            async with asyncio.timeout(35):
+                if self.session is None:
+                    self.session = await self.session_factory()
+                result = await self.session.call_tool(remote, arguments)
+            if result.isError:
+                raise ValueError("EXA_FAILED")
+            body = "\n".join(b.text for b in result.content if b.type == "text")
+        body = body[:arguments.get('maxCharacters', 24000) + 2000]
         links = []
         markdown_links = re.findall(r'\[([^\]\n]*)\]\((https://(?:[^\s()]|\([^()\s]*\))+)\)', body)
         urls = re.findall(r'^URL:\s*(https://\S+)', body, re.M) + [url for _, url in markdown_links]
@@ -611,6 +615,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if decision.kind == 'scenario':
                                 optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SCENARIO_ONLY'}
                             optimizer.decision = decision
+                            context['active_decision'] = decision.model_dump(mode='json')
                             raw = interpreted.model_dump(exclude={'decision'})
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')

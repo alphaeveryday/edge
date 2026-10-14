@@ -88,8 +88,8 @@ async def test_instrument_failure_code_survives_to_the_market_result():
     assert result['reason'] == 'PRICE_STALE'
 
 
-@pytest.mark.parametrize('failure,attempts', [('PRICE_STALE', 1), ('PRICE_PROVIDER_TIMEOUT', 2)])
-async def test_provider_retry_is_bounded_and_only_for_transient_errors(monkeypatch, failure, attempts):
+@pytest.mark.parametrize('failure,attempts', [('PRICE_STALE', 2), ('PRICE_PROVIDER_TIMEOUT', 2)])
+async def test_provider_failover_is_bounded_including_stale_data(monkeypatch, failure, attempts):
     from edge_portfolio.market_data import fetch_prices
     calls = []
     async def fetch(*args, **kwargs):
@@ -152,7 +152,7 @@ async def test_optional_repair_failure_retains_raw_history_and_reaps_process(mon
             self.returncode = -1
     process = Process()
     async def spawn(*args, **kwargs):
-        Path(args[-1]).write_text(serialize(record()), encoding='utf-8')
+        Path(args[5]).write_text(serialize(record()), encoding='utf-8')
         return process
     original_timeout = asyncio.timeout
     monkeypatch.setattr('edge_portfolio.market_data.asyncio.create_subprocess_exec', spawn)
@@ -179,7 +179,7 @@ async def test_collection_deadline_retains_raw_prices_without_swallowing_analysi
         async def wait(self):
             self.returncode = -1
     async def spawn(*args, **kwargs):
-        Path(args[-1]).write_text(serialize(record()), encoding='utf-8')
+        Path(args[5]).write_text(serialize(record()), encoding='utf-8')
         return Process()
     original_timeout = asyncio.timeout
     monkeypatch.setattr('edge_portfolio.market_data.asyncio.create_subprocess_exec', spawn)
