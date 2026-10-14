@@ -42,6 +42,7 @@ def strict_schema(schema):
 async def structured_call(client, key, payload, report_model):
     request = deepcopy(payload)
     request.pop('response_format', None)
+    allow_report = request.pop('allow_report', True)
     request['parallel_tool_calls'] = False
     report = {'type': 'function', 'function': {'name': 'submit_report', 'strict': True,
         'description': 'Complete the current role by submitting its report. Use the research tools first when needed; never return the report as plain text.',
@@ -56,7 +57,7 @@ async def structured_call(client, key, payload, report_model):
             parameters['properties'][name] = {'anyOf': [parameters['properties'][name], {'type': 'null'}]}
         function['parameters'] = strict_schema(parameters)
         function['strict'] = True
-    if request.get('tool_choice') == 'none':
+    if allow_report and request.get('tool_choice') == 'none':
         # DeepSeek rejects forced tool choice in thinking mode.
         request['thinking'] = {'type': 'disabled'}
         request.pop('reasoning_effort', None)
@@ -64,11 +65,12 @@ async def structured_call(client, key, payload, report_model):
         request['tool_choice'] = {'type': 'function', 'function': {'name': 'submit_report'}}
     else:
         # Null represents an omitted research argument in an all-required strict schema.
-        request['tools'] = [*request.get('tools', []), report]
+        request['tools'] = [*request.get('tools', []), *([report] if allow_report else [])]
         request['tool_choice'] = 'auto'
         request.setdefault('thinking', {'type': 'enabled'})
         request['messages'].append({'role': 'user', 'content':
-            'Complete this role by calling submit_report. Do not return plain text or plain JSON.'})
+            'Complete this role by calling submit_report. Do not return plain text or plain JSON.' if allow_report else
+            'Required research is incomplete. Call the available research tools; report submission is not available yet.'})
     response = await client.post('https://api.deepseek.com/beta/chat/completions',
         headers={'Authorization': f'Bearer {key}'}, json=request)
     response.raise_for_status()
@@ -80,9 +82,21 @@ async def structured_call(client, key, payload, report_model):
     if choice.get('finish_reason') == 'length':
         return result
     if not calls:
+        if allow_report:
+            try:
+                parsed = json.loads(message.get('content') or '')
+                if not isinstance(parsed, dict):
+                    raise ValueError('Report must be an object')
+            except ValueError:
+                pass
+            else:
+                result['structured_output_fallback'] = True
+                return result
         raise ValueError('STRUCTURED_OUTPUT_REQUIRED')
     submitted = [call for call in calls if call['function']['name'] == 'submit_report']
     if submitted:
+        if not allow_report:
+            raise ValueError('STRUCTURED_OUTPUT_REQUIRED')
         if len(calls) != 1:
             raise ValueError('STRUCTURED_OUTPUT_MIXED_CALLS')
         message['content'] = submitted[0]['function']['arguments']
