@@ -52,7 +52,7 @@
       "Type": "Pass",
       "Parameters": { "deadline.$": "$.deadline" },
       "ResultPath": "$.limits",
-      "Next": "CheckWeekday"
+      "Next": "RunItems"
     },
     "DeriveDeadline": {
       "Type": "Pass",
@@ -60,27 +60,7 @@
         "deadline.$": "States.Format('{}T${deadline_utc}', States.ArrayGetItem(States.StringSplit($.analysis_at, 'T'), 0))"
       },
       "ResultPath": "$.limits",
-      "Next": "CheckWeekday"
-    },
-    "CheckWeekday": {
-      "Type": "Choice",
-      "QueryLanguage": "JSONata",
-      "Choices": [{
-        "Condition": "{% $number($fromMillis($toMillis($states.input.analysis_at), '[F1]', '+0900')) >= 6 %}",
-        "Next": "SkippedWeekend"
-      }],
-      "Default": "RunItems"
-    },
-    "SkippedWeekend": {
-      "Type": "Succeed",
-      "QueryLanguage": "JSONata",
-      "Output": {
-        "analysis_at": "{% $states.input.analysis_at %}",
-        "reason": "weekend_in_Asia_Seoul",
-        "items": "{% [$states.input.etf_codes.{'etf_code': $, 'outcome': 'skipped_weekend'}] %}",
-        "summary": {"total": "{% $count($states.input.etf_codes) %}", "completed": 0,
-                    "skipped": "{% $count($states.input.etf_codes) %}", "unfinished": []}
-      }
+      "Next": "RunItems"
     },
     "RunItems": {
       "Type": "Map",

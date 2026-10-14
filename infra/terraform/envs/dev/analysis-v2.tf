@@ -36,10 +36,10 @@ module "analysis_v2" {
   outlook_etf_codes = local.outlook_etf_codes
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
   scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
-  # 평일(월~금, 공휴일 포함) 06:00 KST 시작, 08:00 KST 마감. 휴장일에는 기준시각까지 보이는 마지막 거래일 가격·수급을 읽는다.
+  # 매일(주말·휴일 포함) 06:00 KST 시작, 08:00 KST 마감. 휴장일에는 기준시각까지 보이는 마지막 거래일 가격·수급을 읽는다.
   # 동시 3건으로 dev 37종 실측 81분 32초(2026-10-03, 37종 저장), 동시 37 1회 13분 5초(2026-10-04).
   # 여유와 한계는 tests/loadtest/analysis-v2/README.md '시작 시각'.
-  outlook_schedule_expression = "cron(0 6 ? * MON-FRI *)"
+  outlook_schedule_expression = "cron(0 6 * * ? *)"
   outlook_schedule_state      = "ENABLED"
 }
 output "analysis_v2_state_machine_arn" { value = module.analysis_v2.state_machine_arn }
