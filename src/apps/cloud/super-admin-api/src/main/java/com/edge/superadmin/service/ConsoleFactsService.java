@@ -19,6 +19,7 @@ import com.edge.superadmin.repository.ConsoleFactsRepository;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.TaskRow;
+import com.edge.superadmin.repository.FactsSegment;
 import com.edge.superadmin.repository.RunControlPlane;
 import com.edge.superadmin.repository.QueueControlPlane;
 import org.slf4j.Logger;
@@ -108,18 +109,29 @@ public class ConsoleFactsService {
 	 * @throws GeneralException 날짜 형식이 틀리거나 <b>미래</b>면 400 ({@link #parseDateParam})
 	 */
 	public ConsoleFactsResponse facts(String date) {
-		ConsoleFacts f = facts.facts(date == null ? null : parseDateParam(date));
+		/* 구간별 소요 시간(ALPHA-1314) — 재기만 한다. 순서와 트랜잭션 경계는 그대로다. */
+		long started = System.nanoTime();
+		FactsSegment.Timer timer = new FactsSegment.Timer();
+		LocalDate parsed = date == null ? null : parseDateParam(date);
+		long ledgerStarted = System.nanoTime();
+		ConsoleFacts f = facts.facts(parsed);
+		long ledgerNanos = System.nanoTime() - ledgerStarted;
+		f.segmentNanos().forEach(timer::add);
+		/* 원장 조회 호출 전체에서 리포지토리가 잰 구간을 뺀 나머지 — 커넥션·트랜잭션 시작과 커밋이다 */
+		timer.add(FactsSegment.TRANSACTION, Math.max(0L,
+				ledgerNanos - f.segmentNanos().values().stream().mapToLong(Long::longValue).sum()));
 		/* 🔴 **제어면은 원장을 읽은 뒤에 묻는다.** 원장 스냅샷(REPEATABLE READ)이 준 런 집합이
 		 * 곧 물어볼 대상이라, 순서를 뒤집으면 원장에 없는 실행을 묻거나 새로 생긴 런을 빠뜨린다.
 		 * 그리고 이 조회는 **트랜잭션 밖**이다 — 외부 호출을 DB 트랜잭션 안에 넣으면 AWS 지연이
 		 * 그대로 커넥션 점유가 된다. */
-		RunControlPlane.Observation aws = controlPlane.describe(
-				f.runs().stream().map(RunRow::executionArn).filter(Objects::nonNull).toList());
-		List<QueueControlPlane.QueueState> queues = queueControlPlane.observe();
+		RunControlPlane.Observation aws = timer.time(FactsSegment.RUNS_AWS, () -> controlPlane.describe(
+				f.runs().stream().map(RunRow::executionArn).filter(Objects::nonNull).toList()));
+		List<QueueControlPlane.QueueState> queues =
+				timer.time(FactsSegment.QUEUES, queueControlPlane::observe);
 		return new ConsoleFactsResponse(
 				f.runs().stream().map(r -> RunResponse.from(r, awsOf(aws, r))).toList(),
 				f.tasks().stream().map(TaskResponse::from).toList(),
-				datasets(f.tasks()),
+				timer.time(FactsSegment.DATASETS, () -> datasets(f.tasks())),
 				f.outputs().stream().map(OutputResponse::from).toList(),
 				queues == null ? null : queues.stream().map(QueueResponse::from).toList(),
 				BoundaryResponse.from(f.boundary()),
@@ -127,8 +139,10 @@ public class ConsoleFactsService {
 				EtfLedgerResponse.from(f.etfLedger()),
 				ConsoleFactsResponse.AnalysisFailureResponse.from(f.analysisFailures()),
 				ConsoleFactsResponse.EtfAnalysesResponse.from(f.etfAnalyses()),
+				/* 마지막 인자라 앞의 인자(원장 행을 응답 형으로 옮기는 일)가 끝난 뒤의 시각이다 */
 				new MetaResponse(f.dbNow().toString(), f.today().toString(),
-						aws.at() == null ? null : aws.at().toString()));
+						aws.at() == null ? null : aws.at().toString(),
+						ConsoleFactsResponse.TimingResponse.from(timer.nanos(), System.nanoTime() - started)));
 	}
 
 	/**

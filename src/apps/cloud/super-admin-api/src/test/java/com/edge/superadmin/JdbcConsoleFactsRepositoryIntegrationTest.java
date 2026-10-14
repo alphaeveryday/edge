@@ -2468,4 +2468,27 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.extracting(r -> r.etf(), r -> r.movement())
 				.containsExactly(tuple("etf-old", "not_started"));
 	}
+
+	/**
+	 * 🔴 <b>리포지토리는 DB 구간을 전부 잰다</b>(ALPHA-1314) — 구간 정의에서 종류가 DB 인 것 가운데
+	 * {@code transaction}(서비스가 뺄셈으로 내는 나머지)을 뺀 전부다. 조회 하나를 감싸는 것을 빠뜨리면
+	 * 그 구간이 응답에 0 으로 나가 "빠르다"로 읽힌다.
+	 *
+	 * <p>날짜를 준 요청과 생략한 요청 둘 다 같은 목록이어야 한다 — 생략하면 기본 조회일을 고르는 조회가
+	 * 더 돌지만 그 시간은 {@code meta} 에 더해진다(구간이 늘지 않는다).
+	 */
+	@Test
+	void 리포지토리는_DB_구간을_전부_잰다() {
+		List<com.edge.superadmin.repository.FactsSegment> expected =
+				java.util.Arrays.stream(com.edge.superadmin.repository.FactsSegment.values())
+						.filter(s -> s.kind() == com.edge.superadmin.repository.FactsSegment.Kind.DB
+								&& s != com.edge.superadmin.repository.FactsSegment.TRANSACTION)
+						.toList();
+		for (LocalDate date : new LocalDate[] {DAY, null}) {
+			java.util.Map<com.edge.superadmin.repository.FactsSegment, Long> nanos =
+					repository.facts(date).segmentNanos();
+			assertThat(nanos.keySet()).as("date=%s", date).containsExactlyElementsOf(expected);
+			assertThat(nanos.values()).as("date=%s", date).allSatisfy(n -> assertThat(n).isPositive());
+		}
+	}
 }

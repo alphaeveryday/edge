@@ -83,7 +83,16 @@ public interface ConsoleFactsRepository {
 	record ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
 			List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
 			List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures,
-			List<EtfAnalysisStateRow> etfAnalyses) {
+			List<EtfAnalysisStateRow> etfAnalyses, java.util.Map<FactsSegment, Long> segmentNanos) {
+
+		/** 구간별 소요 시간 없이 만든다(ALPHA-1314) — 잰 구간이 없다. */
+		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,
+				List<TaskRow> tasks, List<OutputRow> outputs, BoundaryRow boundary, ChainRow chain,
+				List<EtfAnalysisRow> etfLedger, List<AnalysisFailureRow> analysisFailures,
+				List<EtfAnalysisStateRow> etfAnalyses) {
+			this(today, dbNow, runs, tasks, outputs, boundary, chain, etfLedger, analysisFailures,
+					etfAnalyses, java.util.Map.of());
+		}
 
 		/** ETF별 v2 분석 귀결 없이 만든다 — 그 축은 빈 목록이다. */
 		public ConsoleFacts(LocalDate today, OffsetDateTime dbNow, List<RunRow> runs,

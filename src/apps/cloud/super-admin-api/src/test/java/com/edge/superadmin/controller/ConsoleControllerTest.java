@@ -1015,6 +1015,60 @@ class ConsoleControllerTest {
 	}
 
 	/**
+	 * 🔴 <b>구간 목록은 계약이다</b>(ALPHA-1314). {@code meta.timing.segments} 는 구간 정의
+	 * ({@link com.edge.superadmin.repository.FactsSegment})를 선언 순서대로 <b>전부</b> 싣는다 — 재지
+	 * 못한 구간도 0 으로 나간다(빠지면 "그 구간이 없다"와 "0ms 였다"를 못 가른다).
+	 *
+	 * <p>이름을 <b>글자 그대로</b> 고정한다. 구간을 더하거나 빼거나 이름을 바꾸면 이 목록과 계약 문서를
+	 * 함께 고쳐야 한다 — 정의에서 읽어 비교하기만 하면 구간이 조용히 늘거나 줄어도 초록이다.
+	 */
+	@Test
+	void 소요_시간은_구간_정의를_순서대로_전부_싣는다() throws Exception {
+		List<String> names = List.of("meta", "runs.db", "legacyEngine", "tasks", "outputs", "boundary",
+				"chain", "analysisStages", "etfLedger", "analysisFailures", "etfAnalyses", "transaction",
+				"runs.aws", "queues", "datasets");
+		List<String> kinds = List.of("db", "db", "db", "db", "db", "db", "db", "db", "db", "db", "db", "db",
+				"aws", "aws", "app");
+		assertThat(java.util.Arrays.stream(com.edge.superadmin.repository.FactsSegment.values())
+				.map(com.edge.superadmin.repository.FactsSegment::wireName).toList())
+				.as("구간 정의가 바뀌었다 — 이 목록과 계약 문서의 「소요 시간」을 함께 고친다")
+				.isEqualTo(names);
+
+		String body = mvc(facts()).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.meta.timing.totalMs").isNumber())
+				.andReturn().getResponse().getContentAsString();
+		assertThat(com.jayway.jsonpath.JsonPath.<List<String>>read(body,
+				"$.result.meta.timing.segments[*].name")).isEqualTo(names);
+		assertThat(com.jayway.jsonpath.JsonPath.<List<String>>read(body,
+				"$.result.meta.timing.segments[*].kind")).isEqualTo(kinds);
+	}
+
+	/**
+	 * 리포지토리가 잰 구간은 그대로 실리고, {@code transaction} 은 원장 조회 호출 전체에서 그 합을 뺀
+	 * 나머지다(ALPHA-1314). 가짜 리포지토리는 즉시 돌려주므로 잰 합(12ms)이 호출 시간보다 크다 — 그때
+	 * 나머지는 음수가 아니라 0 이다.
+	 */
+	@Test
+	void 리포지토리가_잰_구간은_밀리초로_실리고_나머지는_음수가_되지_않는다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts timed = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), base.boundary(), base.chain(), base.etfLedger(), base.analysisFailures(),
+				base.etfAnalyses(), java.util.Map.of(
+						com.edge.superadmin.repository.FactsSegment.TASKS, 5_400_000L,
+						com.edge.superadmin.repository.FactsSegment.OUTPUTS, 6_600_000L));
+
+		mvc(timed).perform(get("/api/v1/console/facts"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[3].name").value("tasks"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[3].ms").value(5))
+				.andExpect(jsonPath("$.result.meta.timing.segments[4].ms").value(7))
+				.andExpect(jsonPath("$.result.meta.timing.segments[11].name").value("transaction"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[11].ms").value(0))
+				// 못 잰 구간은 빠지지 않고 0 이다
+				.andExpect(jsonPath("$.result.meta.timing.segments[0].ms").value(0));
+	}
+
+	/**
 	 * ETF별 v2 분석 귀결(ALPHA-1312) — 새 축으로 나가고, 옛 축({@code etfLedger})은 그대로 남는다.
 	 * 옛 화면은 그 축만 읽으므로 새 서버를 만나도 종전과 같다. 행이 없어도 축은 나간다 — 키가 빠지면
 	 * 새 화면은 "이 축을 안 싣는 배포본"으로 읽는다.

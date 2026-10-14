@@ -685,17 +685,21 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	@Override
 	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 	public ConsoleFacts facts(LocalDate date) {
-		Meta meta = jdbc.queryForObject(META_SQL, (rs, i) -> new Meta(
+		/* 구간별 소요 시간(ALPHA-1314) — 재기만 한다. 조회문·순서·트랜잭션은 그대로이고, 각 조회를
+		 * `timer.time` 으로 감쌌을 뿐이다. 구간의 정의는 `FactsSegment` 에 있다. */
+		FactsSegment.Timer timer = new FactsSegment.Timer();
+		Meta meta = timer.time(FactsSegment.META, () -> jdbc.queryForObject(META_SQL, (rs, i) -> new Meta(
 				rs.getObject("db_now", OffsetDateTime.class),
 				rs.getObject("kst_today", LocalDate.class),
-				rs.getObject("run_latest", LocalDate.class)));
-		LocalDate day = date != null ? date : latestDay(meta);
+				rs.getObject("run_latest", LocalDate.class))));
+		LocalDate day = date != null ? date : timer.time(FactsSegment.META, () -> latestDay(meta));
 
 		/* 두 소스가 한 축으로 합쳐진다 — 실재하는 런과, 런 행이 없는 계획 슬롯. 합친 뒤 다시
 		 * 정렬하는 이유: 각 소스가 자기 안에서만 정렬돼 있어 그냥 이어 붙이면 전체 순서가 깨진다. */
-		List<RunRow> runs = new ArrayList<>(
-				jdbc.query(RUNS_SQL, JdbcConsoleFactsRepository::mapRun, day));
-		jdbc.queryForList(MISSING_SLOTS_SQL, String.class, day.toString())
+		List<RunRow> runs = new ArrayList<>(timer.time(FactsSegment.RUNS_DB,
+				() -> jdbc.query(RUNS_SQL, JdbcConsoleFactsRepository::mapRun, day)));
+		timer.time(FactsSegment.RUNS_DB,
+				() -> jdbc.queryForList(MISSING_SLOTS_SQL, String.class, day.toString()))
 				.forEach(runKey -> runs.add(missingSlot(runKey)));
 		/* 순서의 계약은 여기 하나다 — SQL 쪽에도 두면 둘이 서로를 가린다(RUNS_SQL 주석).
 		 * `run_key` 는 UNIQUE 라(`uq_ops_pipeline_run_key`) 이 키 하나로 전순서가 정해진다. */
@@ -704,7 +708,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		/* 옛 설명 엔진이 조회일보다 앞서 멈췄는가(ALPHA-1293). 날짜 상수가 아니라 원장이 답한다 —
 		 * 그 엔진의 마지막 실행이 조회일보다 앞이거나, 실행이 아예 없으면 멈춘 것이다. 그 엔진이 돌던
 		 * 날짜를 조회하면 거짓이라 체인·경계가 종전 값 그대로 나간다. */
-		LocalDate lastLegacyRunDay = jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class);
+		LocalDate lastLegacyRunDay = timer.time(FactsSegment.LEGACY_ENGINE,
+				() -> jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class));
 		boolean legacyEngineStopped = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(day);
 		/* 🔴 **경계는 조회일이 아니라 지금을 기준으로 묻는다.** 경계 축은 날짜 창을 안 타는 현재 상태
 		 * 조회라, 과거 날짜를 골라도 수는 "지금" 값이다. 조회일로 물으면 엔진이 돌던 날을 고르는 것만으로
@@ -712,20 +717,28 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		boolean legacyEngineStoppedNow =
 				lastLegacyRunDay == null || lastLegacyRunDay.isBefore(meta.kstToday());
 
+		/* 인자는 왼쪽부터 차례로 평가된다 — 감싸기 전과 같은 조회 순서다. 구간 시간은 마지막 인자라
+		 * 앞의 조회가 모두 끝난 뒤의 값이다. */
 		return new ConsoleFacts(day, meta.dbNow(), List.copyOf(runs),
-				jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day),
-				outputs(day, meta.kstToday()),
-				jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
-						rs.getLong("published_without_delivery"),
-						rs.getLong("delivery_now_nonpublished"),
-						rs.getLong("delivery_rows"), legacyEngineStoppedNow)),
+				timer.time(FactsSegment.TASKS,
+						() -> jdbc.query(TASKS_SQL, JdbcConsoleFactsRepository::mapTask, day)),
+				timer.time(FactsSegment.OUTPUTS, () -> outputs(day, meta.kstToday())),
+				timer.time(FactsSegment.BOUNDARY,
+						() -> jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
+								rs.getLong("published_without_delivery"),
+								rs.getLong("delivery_now_nonpublished"),
+								rs.getLong("delivery_rows"), legacyEngineStoppedNow))),
 				withAnalysisStages(blindIfUnobservable(
-						jdbc.queryForObject(CHAIN_SQL, JdbcConsoleFactsRepository::mapChain, day, day),
-						legacyEngineStopped), day),
-				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
-						rs.getString("etf_id"), rs.getString("display_name"),
-						rs.getString("outcome")), day, day),
-				analysisFailures(day), etfAnalyses(day));
+						timer.time(FactsSegment.CHAIN, () -> jdbc.queryForObject(CHAIN_SQL,
+								JdbcConsoleFactsRepository::mapChain, day, day)),
+						legacyEngineStopped), day, timer),
+				timer.time(FactsSegment.ETF_LEDGER,
+						() -> jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
+								rs.getString("etf_id"), rs.getString("display_name"),
+								rs.getString("outcome")), day, day)),
+				timer.time(FactsSegment.ANALYSIS_FAILURES, () -> analysisFailures(day)),
+				timer.time(FactsSegment.ETF_ANALYSES, () -> etfAnalyses(day)),
+				timer.nanos());
 	}
 
 	private List<EtfAnalysisStateRow> etfAnalyses(LocalDate day) {
@@ -1057,10 +1070,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 첫 요청이 조회일과 같거나 앞인데 요청이 0 이면 그것은 <b>진짜 손실</b>이다(트리거는 있는데
 	 * 요청이 안 만들어졌다) — 가리지 않는다.
 	 */
-	private ChainRow withAnalysisStages(ChainRow chain, LocalDate day) {
+	private ChainRow withAnalysisStages(ChainRow chain, LocalDate day, FactsSegment.Timer timer) {
 		OffsetDateTime from = day.atStartOfDay(KST).toOffsetDateTime();
 		OffsetDateTime to = day.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
-		List<AnalysisStage> stages = jdbc.queryForObject(ANALYSIS_CHAIN_SQL, (rs, i) -> {
+		List<AnalysisStage> stages = timer.time(FactsSegment.ANALYSIS_STAGES, () -> jdbc.queryForObject(ANALYSIS_CHAIN_SQL, (rs, i) -> {
 			LocalDate firstRequestDay = rs.getObject("first_request_day", LocalDate.class);
 			boolean blind = rs.getLong("req") == 0
 					&& (firstRequestDay == null || firstRequestDay.isAfter(day));
@@ -1074,7 +1087,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 						rs.getLong(s.column()), blind, pending));
 			}
 			return List.copyOf(out);
-		}, from, to, ANALYSIS_GRACE_SECONDS, ANALYSIS_GRACE_SECONDS, from);
+		}, from, to, ANALYSIS_GRACE_SECONDS, ANALYSIS_GRACE_SECONDS, from));
 		return new ChainRow(chain.feeds(), chain.stages(), stages);
 	}
 
