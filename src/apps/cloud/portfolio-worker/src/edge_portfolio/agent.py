@@ -197,6 +197,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     accepted_report = {}
     accepted_final = None
     accepted_search = None
+    recommendation_reconciled = False
+    reconciliation_draft = None
+    retained_prior_text = False
+    termination_reason = 'COMPLETED'
 
     def checkpoint():
         if on_checkpoint:
@@ -251,17 +255,63 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 context['data_status'] = state
                 messages[1]['content'] = json.dumps(context, ensure_ascii=False)
                 calls += 1
-                if calls > MAX_MODEL_CALLS:
-                    emit('limit_reached', budget='model_calls', used=calls - 1, limit=MAX_MODEL_CALLS)
-                    raise ValueError("MODEL_CALL_BUDGET")
+                reserved = 3 * (len(ROLES) - ROLES.index(role) - 1)
+                finalizing = calls >= MAX_MODEL_CALLS - reserved - 2
+                if finalizing:
+                    messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
+                model_tools = TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
+                tool_choice = 'none' if finalizing else 'auto'
+                research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
+                research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
+                source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
+                required_tools = []
+                if finalizing and role == 'portfolio' and decision.kind != 'scenario':
+                    if optimizer.result is None:
+                        required_tools.extend([TOOLS[0], OPTIMIZER_TOOL])
+                    if not evidence.sources and not source_free_allowed:
+                        required_tools.extend(TOOLS[1:])
+                if finalizing and role != 'question' and (decision.kind == 'scenario' or decision.scenario_requested) and scenario_result is None:
+                    required_tools.append(SCENARIO_TOOL)
+                if required_tools:
+                    model_tools, tool_choice = required_tools, 'auto'
+                    messages.append({'role': 'user', 'content': '답변에 필수인 후보 비교·최소 출처·요청 계산 중 아직 수행하지 않은 작업만 남았습니다. 허용된 필수 도구를 완료한 뒤 현재 역할의 JSON을 작성하세요. 추가적인 부가 자료 조사는 종료합니다.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
-                if context_bytes > MAX_CONTEXT_BYTES:
-                    emit('limit_reached', budget='context_bytes', used=context_bytes, limit=MAX_CONTEXT_BYTES)
-                    raise ValueError("MODEL_CONTEXT_BUDGET")
+                limit_reason = 'MODEL_CALL_BUDGET' if calls > MAX_MODEL_CALLS else 'MODEL_CONTEXT_BUDGET' if context_bytes > MAX_CONTEXT_BYTES else None
+                if limit_reason:
+                    calls -= 1
+                    emit('limit_reached', budget='model_calls' if limit_reason == 'MODEL_CALL_BUDGET' else 'context_bytes',
+                         used=calls if limit_reason == 'MODEL_CALL_BUDGET' else context_bytes,
+                         limit=MAX_MODEL_CALLS if limit_reason == 'MODEL_CALL_BUDGET' else MAX_CONTEXT_BYTES)
+                    if role == 'opinion' and accepted_final and accepted_final.recommendation and optimizer.result == accepted_search:
+                        published = deepcopy(accepted_report)
+                        sections = published['sections']
+                        if scenario_result is not None:
+                            published['scenarios'] = deepcopy(scenario_result)
+                        final = accepted_final
+                        if reconciliation_draft is not None:
+                            from .completion import retain_research
+                            try:
+                                candidate = retain_research(accepted_final.model_copy(deep=True, update={
+                                    'answers': reconciliation_draft.answers,
+                                    'evidence_coverage': reconciliation_draft.evidence_coverage}), accepted_final)
+                                assess_completion(candidate, request, decision, published, evidence.sources, context['as_of'])
+                            except ValueError:
+                                emit('research_draft_rejected', role=role, code='OUTPUT_CONTRACT')
+                            else:
+                                final = candidate
+                        published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
+                            considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
+                        if reconciliation_draft is not None or 'RECOMMENDATION_TEXT_RETAINED' in accepted_report['completion']['reasons']:
+                            published['completion']['reasons'].append('RECOMMENDATION_TEXT_RETAINED')
+                            if published['completion']['status'] != 'needs_input':
+                                published['completion']['status'] = 'partial'
+                        termination_reason = limit_reason + '_WITH_REPORT'
+                        break
+                    raise ValueError(limit_reason)
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL],
-                        "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": model_tools,
+                        "tool_choice": tool_choice, "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -417,12 +467,23 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
-                    research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
-                    research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
-                    source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
-                        from .completion import retain_research
+                        from .completion import retain_recommendation, retain_research
+                        retained = retain_recommendation(final, accepted_final if optimizer.result == accepted_search else None)
+                        retained_prior_text = False
+                        if retained is not final:
+                            if not recommendation_reconciled and calls < MAX_MODEL_CALLS - 1:
+                                recommendation_reconciled = True
+                                reconciliation_draft = retained
+                                messages.append({'role': 'user', 'content': '이미 검증된 추천은 유지합니다. 아래 초안의 추천과 새로 확인한 답을 함께 반영하여 최종 JSON 전체를 다시 작성하세요. 배당 등 빈 항목만 남기고, opinion·portfolio·insights·answers에서 추천을 보류한다는 설명을 제거하세요. 추천의 필수 제약과 점수는 그대로 검증합니다.\n' + retained.model_dump_json()})
+                                continue
+                            # A refused rewrite must not publish mutually contradictory text.
+                            final = accepted_final.model_copy(deep=True, update={
+                                'answers': retained.answers, 'evidence_coverage': retained.evidence_coverage,
+                                'return_forecast': None})
+                            retained_prior_text = True
+                        final = retain_research(final, reconciliation_draft, retain_answers=optimizer.result == accepted_search)
                         final = retain_research(final, accepted_final, retain_answers=optimizer.result == accepted_search)
                         execution_rejection = None
                         selected = optimizer.validate(final)
@@ -461,6 +522,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             checks = followup_checks or checks
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
                             considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
+                        if retained_prior_text:
+                            published['completion']['reasons'].append('RECOMMENDATION_TEXT_RETAINED')
+                            if published['completion']['status'] != 'needs_input':
+                                published['completion']['status'] = 'partial'
                         if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
                             if published['completion']['status'] != 'needs_input':
@@ -476,15 +541,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
+                        reconciliation_draft = None
                         accepted_search = deepcopy(optimizer.result)
                         completion = published['completion']
                         research_tasks = [task for task in completion['tasks'] if task['status'] == 'partial']
-                        research_reasons = [reason for reason in completion['reasons'] if reason != 'UNANSWERED_QUESTIONS'
+                        research_reasons = [reason for reason in completion['reasons'] if reason not in {'UNANSWERED_QUESTIONS', 'RECOMMENDATION_TEXT_RETAINED'}
                             and not (reason == 'COMPARISON_DATA_UNAVAILABLE' and optimizer.result.get('reason') == 'CURRENT_WEIGHTS_REQUIRED')]
                         research_work = {'tasks': research_tasks, 'reasons': research_reasons,
                                          'missing_research': completion['missing_research'], 'search_progress': search_progress}
                         recoverable = bool(research_tasks or research_reasons or completion['missing_research'])
-                        if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
+                        if recoverable and not finalizing and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
                             checkpoint()
                             recovery_rounds += 1
                             repairs = 0
@@ -571,7 +637,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 'baseline_kind': market.baseline_kind, 'customer_constraint_checks': checks,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
                 "elapsed_seconds": round(time.monotonic() - started, 2), "trace": trace,
-                'diagnostics': {'events': events, 'termination_reason': 'COMPLETED', 'model_calls': calls,
+                'diagnostics': {'events': events, 'termination_reason': termination_reason, 'model_calls': calls,
                     'exa_calls': getattr(evidence, 'calls', 0), 'limits': limits, 'code_version': code_version,
                     'model': MODEL, 'prompt_version': version},
                 "aws_outlook": {'queries': outlook.queries, 'status': 'queried' if outlook.queries else 'not_requested'}}

@@ -4,6 +4,15 @@ import calendar
 import re
 
 
+def retain_recommendation(final, previous):
+    """Retain an accepted judgment when only optional research or inputs remain."""
+    if previous is None or previous.recommendation is None or final.recommendation is not None or final.withheld_reason not in {'missing_data', 'missing_input'}:
+        return final
+    fields = ('recommendation', 'selected_candidate_id')
+    return type(final).model_validate({**final.model_dump(), **{key: previous.model_dump()[key] for key in fields},
+                                      'withheld_reason': None, 'return_forecast': None})
+
+
 def retain_research(final, previous, *, retain_answers=True):
     """Keep product evidence across allocations; answers belong to the same decision."""
     if previous is None:
