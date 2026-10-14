@@ -56,10 +56,10 @@ def search(ids, frame, current):
         values = np.einsum('ij,kj->ik', batch, prices)
         ahead = values[:, 1:] > baseline[None, 1:] + 1e-10
         duration = ahead.mean(axis=1)
-        recent = ahead[:, -10:].all(axis=1)
-        valid = np.flatnonzero((duration >= .5) & recent)
-        for i in valid:
+        recent = ahead[:, -10:].sum(axis=1)
+        for i in range(len(batch)):
             accepted.append({'weights': batch[i].tolist(), 'duration_pct': float(duration[i] * 100),
+                             'recent_outperform_days': int(recent[i]),
                              'excess_pp': float((values[i, -1] - baseline[-1]) * 100),
                              'max_drawdown_pct': float(np.min(values[i] / np.maximum.accumulate(values[i]) - 1) * 100),
                              'preservation_pct': float((1 - turnover[start + i]) * 100)})
@@ -67,7 +67,9 @@ def search(ids, frame, current):
 
 
 def rank(groups, ids_by_group, objectives=()):
-    maximum = max((row['excess_pp'] for group in groups for row in group), default=0)
+    excess = [row['excess_pp'] for group in groups for row in group]
+    minimum, maximum = min([0, *excess]), max([0, *excess])
+    span = maximum - minimum
     winners = []
     def priority(row, size):
         values = {'growth': row['excess_pp'], 'stability': row.get('max_drawdown_pct', 0),
@@ -78,13 +80,14 @@ def rank(groups, ids_by_group, objectives=()):
         if not group:
             continue
         for row in group:
-            row['score'] = .4 * row['duration_pct'] + .4 * row['excess_pp'] / maximum * 100 + .2 * row['preservation_pct']
+            relative_excess = (row['excess_pp'] - minimum) / span if span else 0
+            row['score'] = .4 * row['duration_pct'] + .4 * relative_excess * 100 + .2 * row['preservation_pct']
         best = max(group, key=lambda r: priority(r, len(ids)))
         winners.append({'candidate_id': f'candidate-{number}',
                         'allocations': [{'instrument_id': key, 'weight_pct': round(weight * 100)} for key, weight in zip(ids, best['weights'])],
                         **{key: round(best[key], 6) for key in ('score', 'duration_pct', 'excess_pp', 'preservation_pct')},
                         'max_drawdown_pct': best.get('max_drawdown_pct'), 'income_yield_pct': best.get('income_yield_pct'),
-                        'recent_outperform_days': 10})
+                        'recent_outperform_days': best.get('recent_outperform_days', 0)})
     winners.sort(key=lambda r: priority(r, len(r['allocations'])), reverse=True)
     return [dict(row, rank=i) for i, row in enumerate(winners, 1)]
 

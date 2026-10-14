@@ -13,16 +13,28 @@ from edge_portfolio.contracts import AnalysisInput
 from test_market_data import record
 
 
-def test_publication_requires_half_the_period_and_all_ten_recent_sessions():
-    # 20 measured days, exactly half ahead, including the last ten: passes.
+def test_past_underperformance_does_not_disqualify_customer_objectives():
+    # Diversification may sacrifice recent returns; comparison is information, not eligibility.
     frame = pd.DataFrame({'A': [1] + [.9] * 10 + [1.1] * 10, 'CASH:KRW': 1.0})
     assert len(search(['A'], frame, {'CASH:KRW': 1})) == 1
     frame.loc[11, 'A'] = .9
-    assert search(['A'], frame, {'CASH:KRW': 1}) == []
-    # Overall win rate is ample, but one tie within the last ten still disqualifies.
-    frame['A'] = [1] + [1.1] * 20
-    frame.loc[12, 'A'] = 1
-    assert search(['A'], frame, {'CASH:KRW': 1}) == []
+    result = search(['A'], frame, {'CASH:KRW': 1})
+    assert result[0]['recent_outperform_days'] == 9
+    frame['A'] = [1] + [.9] * 20
+    result = search(['A'], frame, {'CASH:KRW': 1})
+    assert result[0]['excess_pp'] == pytest.approx(-10)
+    assert result[0]['duration_pct'] == 0
+    assert result[0]['recent_outperform_days'] == 0
+
+
+@pytest.mark.parametrize('excess', [[0, 0], [-20, -10], [-10, 10]])
+def test_ranking_is_finite_and_ordered_with_zero_or_negative_excess(excess):
+    groups = [[{'weights': [1], 'duration_pct': 0, 'excess_pp': value,
+                'preservation_pct': 100, 'recent_outperform_days': 0}] for value in excess]
+    result = rank(groups, [['A'], ['B']])
+    assert all(np.isfinite(row['score']) and 0 <= row['score'] <= 100 for row in result)
+    assert [row['excess_pp'] for row in result] == sorted(excess, reverse=True)
+    assert all(row['recent_outperform_days'] == 0 for row in result)
 
 
 def test_less_than_ten_measured_sessions_cannot_claim_ten_days_of_outperformance():
@@ -65,8 +77,9 @@ async def test_batch_fetches_prices_once_and_runs_all_ten_searches_concurrently(
     optimizer = Optimizer(market)
     result = await optimizer.tool({'combinations': combinations})
     assert result['status'] == 'available'
-    assert len(result['candidates']) == 9
-    assert 'candidate-5' not in {c['candidate_id'] for c in result['candidates']}
+    assert len(result['candidates']) == 10
+    assert any(row['excess_pp'] < 0 for row in result['candidates'])
+    assert 'candidate-5' in {c['candidate_id'] for c in result['candidates']}
     assert sorted(calls) == [f'{key}.KS' for key in 'ABCDE']
     assert await optimizer.tool({'combinations': combinations}) == result
     selected = result['candidates'][-1]
