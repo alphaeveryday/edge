@@ -6,6 +6,24 @@ import pytest
 from edge_portfolio import worker
 
 
+def test_healthcheck_allows_ten_minute_analysis_but_detects_a_stalled_worker(monkeypatch):
+    import ast
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    compose = (Path(__file__).parents[1] / 'deploy/compose.yml').read_text()
+    command = next(line.split('test: ', 1)[1] for line in compose.splitlines() if 'portfolio-worker-ready' in line)
+    script = ast.literal_eval(command)[-1]
+    marker = SimpleNamespace(exists=lambda: True, stat=lambda: SimpleNamespace(st_mtime=0))
+    monkeypatch.setitem(sys.modules, 'pathlib', SimpleNamespace(Path=lambda _: marker))
+    monkeypatch.setitem(sys.modules, 'time', SimpleNamespace(time=lambda: 600))
+    exec(script)
+    monkeypatch.setitem(sys.modules, 'time', SimpleNamespace(time=lambda: 660))
+    with pytest.raises(AssertionError):
+        exec(script)
+
+
 @pytest.mark.parametrize('stop_signal', [signal.SIGTERM, signal.SIGINT])
 def test_shutdown_finishes_the_claimed_job_without_claiming_another(monkeypatch, tmp_path, stop_signal):
     marker = tmp_path / 'ready'

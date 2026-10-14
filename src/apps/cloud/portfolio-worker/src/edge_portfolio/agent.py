@@ -35,7 +35,7 @@ EXA_URL = "https://mcp.exa.ai/mcp"
 MAX_EXA_CALLS = 70
 MAX_MODEL_CALLS = 24
 MAX_CONTEXT_BYTES = 350000
-ANALYSIS_TIMEOUT_SECONDS = 300
+ANALYSIS_TIMEOUT_SECONDS = 600
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
@@ -119,8 +119,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     version = hashlib.sha256((system + "".join(skills.values())).encode()).hexdigest()
     code_version = hashlib.sha256(b''.join(path.name.encode() + path.read_bytes() for path in sorted(PROMPTS.parent.glob('*.py')))).hexdigest()
     events = []
+    timeout_seconds = 300 if followup_question is not None else ANALYSIS_TIMEOUT_SECONDS
     limits = {'model_calls': MAX_MODEL_CALLS, 'context_bytes': MAX_CONTEXT_BYTES, 'exa_calls': MAX_EXA_CALLS,
-              'elapsed_seconds': ANALYSIS_TIMEOUT_SECONDS}
+              'elapsed_seconds': timeout_seconds}
 
     def emit(event, **fields):
         entry = {'event': event, 'elapsed_seconds': round(time.monotonic() - started, 2), **fields}
@@ -163,7 +164,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                            'optimization': accepted_report.get('optimization', optimizer.result), 'as_of': context['as_of'],
                            'decision': decision.model_dump(mode='json'), 'input': request.model_dump(mode='json')})
 
-    async with asyncio.timeout(ANALYSIS_TIMEOUT_SECONDS), AsyncExitStack() as stack:
+    async with asyncio.timeout(timeout_seconds), AsyncExitStack() as stack:
         if evidence is None:
             async def connect_evidence():
                 exa_client = await stack.enter_async_context(httpx.AsyncClient(transport=ExaTransport(api_key=os.environ['EXA_API_KEY']), timeout=httpx.Timeout(30, read=300)))

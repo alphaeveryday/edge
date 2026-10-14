@@ -53,7 +53,7 @@ def main():
         f'python3 {directory}/deploy/runtime_env.py', f'cd {directory}/deploy',
         'docker compose --env-file /opt/edge-portfolio/runtime.env build',
         # Keep the old API, database and outlook service alive until the worker finishes.
-        'docker compose --env-file /opt/edge-portfolio/runtime.env stop --timeout 330 worker',
+        'docker compose --env-file /opt/edge-portfolio/runtime.env stop --timeout 630 worker',
         'docker compose --env-file /opt/edge-portfolio/runtime.env up -d --wait --wait-timeout 120',
         'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -c "import urllib.request; urllib.request.urlopen(\'http://127.0.0.1:8092/health\')"',
         f'python3 {directory}/deploy/admin_smoke.py',

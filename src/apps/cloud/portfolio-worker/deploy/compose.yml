@@ -62,7 +62,7 @@ services:
   worker:
     build: ../
     restart: unless-stopped
-    stop_grace_period: 330s
+    stop_grace_period: 630s
     command: ["python", "-m", "edge_portfolio.worker"]
     environment:
       PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
@@ -72,7 +72,7 @@ services:
       AWS_EC2_METADATA_DISABLED: "true"
     mem_limit: 512m
     healthcheck:
-      test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/portfolio-worker-ready'); assert p.exists() and time.time()-p.stat().st_mtime < 360"]
+      test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/portfolio-worker-ready'); assert p.exists() and time.time()-p.stat().st_mtime < 660"]
       interval: 5s
       timeout: 3s
       retries: 24

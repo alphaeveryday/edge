@@ -21,7 +21,8 @@ async def replay():
         print('REPLAY '+json.dumps({'status':'not_found'}))
         return
     try:
-        result=await run_analysis(AnalysisInput.model_validate(job['input']),os.environ['DEEPSEEK_API_KEY'],lambda role: None)
+        async with asyncio.timeout(300):
+            result=await run_analysis(AnalysisInput.model_validate(job['input']),os.environ['DEEPSEEK_API_KEY'],lambda role: None)
         optimization=result.get('optimization',{})
         print('REPLAY '+json.dumps({'status':'succeeded','seconds':result.get('elapsed_seconds'),'optimization':optimization.get('status'),'candidates':len(optimization.get('candidates',[]))}))
     except Exception as error:
