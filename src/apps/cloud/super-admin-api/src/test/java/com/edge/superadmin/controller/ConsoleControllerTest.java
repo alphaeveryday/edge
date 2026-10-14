@@ -1117,14 +1117,17 @@ class ConsoleControllerTest {
 	}
 
 	/**
-	 * 관측 불가 표시(ALPHA-1293) — 체인 단계와 전달 경계의 {@code blind} 가 그대로 나간다. 수는 0 으로
-	 * 함께 나가지만(와이어에 null 자리가 없다) 소비자는 {@code blind} 를 먼저 본다. 평소에는 false 다.
+	 * 관측 불가 표시(ALPHA-1293) — 체인 단계의 {@code blind} 가 그대로 나간다. 수는 0 으로 함께 나가지만
+	 * (와이어에 null 자리가 없다) 소비자는 {@code blind} 를 먼저 본다. 평소에는 false 다.
+	 *
+	 * <p>전달 경계에는 이 키가 <b>없다</b>(ALPHA-1326) — 경계는 새 분석 엔진을 지금 상태로 세서 관측
+	 * 불가가 없다. 키가 없으면 소비자는 관측 가능으로 읽는다.
 	 */
 	@Test
-	void 관측_불가_표시가_체인_단계와_전달_경계에_실린다() throws Exception {
+	void 관측_불가_표시는_체인_단계에만_실린다() throws Exception {
 		ConsoleFacts base = facts();
 		ConsoleFacts blind = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
-				base.outputs(), new BoundaryRow(0L, 0L, 12L, true),
+				base.outputs(), new BoundaryRow(0L, 0L, 12L),
 				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
 						base.chain().feeds(),
 						List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", 0L, 0L, true))),
@@ -1134,11 +1137,11 @@ class ConsoleControllerTest {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.chain.stages[0].blind").value(true))
 				.andExpect(jsonPath("$.result.chain.stages[0].batch").value(0))
-				.andExpect(jsonPath("$.result.boundary.blind").value(true));
+				.andExpect(jsonPath("$.result.boundary", org.hamcrest.Matchers.not(
+						org.hamcrest.Matchers.hasKey("blind"))));
 		mvc(base).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.chain.stages[0].blind").value(false))
-				.andExpect(jsonPath("$.result.boundary.blind").value(false));
+				.andExpect(jsonPath("$.result.chain.stages[0].blind").value(false));
 	}
 
 	/**

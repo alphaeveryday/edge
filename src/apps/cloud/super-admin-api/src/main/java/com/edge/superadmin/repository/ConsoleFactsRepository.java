@@ -213,20 +213,13 @@ public interface ConsoleFactsRepository {
 	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 가른다. ⚠️ 비율의 분모로는 못 쓴다:
 	 * 앞의 둘은 단위가 다르고 여기엔 {@code INVALIDATION} 도 들어간다.
 	 *
-	 * <p>{@code blind} 는 <b>앞의 둘이 지금의 게시를 못 본다</b>는 뜻이다(ALPHA-1293). 두 수는
-	 * 옛 설명 엔진의 {@code explanation_result} 와 발번을 맞대는데, 그 엔진이 <b>오늘(KST)보다 앞서</b>
-	 * 멈췄으면 그 뒤의 게시(새 분석 엔진이 쓴다)는 이 조인에 안 걸린다. 이 축은 날짜 창을 안 타므로
-	 * 기준도 조회일이 아니라 지금이다 — 과거 날짜를 조회해도 표시는 같다. 그때 0 은 "어긋난 것이 없다"가 아니라
-	 * "옛 엔진 분에는 없다"이다. 0 이 아닌 수는 여전히 실측이다 — 옛 엔진 분의 어긋남은 그대로 센다.
+	 * <p>두 수는 <b>새 분석 엔진의 가격변동 분석</b>을 센다(ALPHA-1326) — 설계상 전달하지 않는 경우와
+	 * 아직 전달 대기 중인 것은 뺀 수다. 기준은 {@code JdbcConsoleFactsRepository.BOUNDARY_SQL} 에 있다.
+	 * 옛 설명 엔진을 세던 때 있던 관측 불가 표시({@code blind}, ALPHA-1293)는 지웠다 — 지금 상태 조회라
+	 * 새 엔진의 게시를 늘 본다.
 	 */
 	record BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,
-			long deliveryRows, boolean blind) {
-
-		/** 관측 가능한 경계 — 0 이 정합을 뜻한다. */
-		public BoundaryRow(long publishedWithoutDelivery, long deliveryNowNonpublished,
-				long deliveryRows) {
-			this(publishedWithoutDelivery, deliveryNowNonpublished, deliveryRows, false);
-		}
+			long deliveryRows) {
 	}
 
 	/**

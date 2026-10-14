@@ -427,61 +427,84 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * 적 없는 조합</b>이 조립된다(뉴스 계보 요약과 같은 이유). 격리수준이 지켜 주는 것과 별개로,
 	 * 세 수가 서로를 설명하는 한 벌이라 한 문장이 그 관계를 코드에 남긴다.
 	 *
-	 * <p>⚠️ <b>{@code delivery_type} 을 따로 거르지 않는다.</b> 발번은 2형상이고
-	 * (NEW·INVALIDATION — CORRECTION 은 <a href="../../../../../../../../docs/adr/0044-correction-abolition.md">ADR-0044</a>
-	 * 로 폐지), {@code ck_tenant_delivery_payload} 가 {@code explanation_result_id} 를
-	 * <b>NEW 에만</b> 허용한다 — INVALIDATION 은 그 자리가 NULL 이라 아래 두 조건에 애초에 안 걸린다.
-	 * 유형 술어를 덧붙이면 <b>어떤 행도 못 거르는 가드</b>가 하나 늘고 그건 테스트로 겨눌 수도 없다
-	 * (같은 이유로 {@code V202608011200} 이 자기참조 금지 제약을 "죽은 제약"이라며 지웠다).
-	 * 3형상이 돌아오면 이 두 조건에 유형 술어가 <b>같이</b> 필요하다.
+	 * <p><b>새 분석 엔진(v2)의 가격변동 분석을 본다</b>(ALPHA-1326). 옛 설명 엔진의
+	 * {@code explanation_result} 는 10-01 이 마지막 게시라 그 조인으로는 지금의 게시를 못 봤다(#1256 이
+	 * 그래서 관측 불가로 내렸다). v2 는 같은 {@code tenant_delivery} 에 쓴다 — 게시 전달(NEW)은
+	 * {@code movement_analysis_id}, 회수 전달(INVALIDATION)은 {@code target_movement_analysis_id} 다.
+	 * 전망({@code outlook_analyses})은 테넌트에 전달하지 않는다(이 표에 전망을 가리키는 열이 없고 v2 에
+	 * 그 writer 가 없다). {@code data_source = 'database'} 만 센다.
 	 *
-	 * <p>🔴 <b>무효화 통지가 간 발번은 비게시로 안 센다.</b> 운영자 무효화
-	 * ({@link JdbcAnalysisWriteRepository#invalidate})는 결과를 WITHDRAWN 으로 전이하고 그 NEW 를
-	 * 받은 테넌트에 INVALIDATION 을 발번하되 <b>원래 NEW 행은 남긴다</b>. 상태만 보면 정상 무효화한
-	 * 분석이 전부 "발번했는데 현재 비게시"로 남아 그 수가 <b>영구히 단조 증가</b>한다. 실제 정합
-	 * 위반은 "비게시인데 <b>무효화 통지도 안 갔다</b>"이고, 상관은 결과만이 아니라 <b>테넌트까지</b>다
-	 * — 무효화는 그 NEW 를 받은 테넌트에만 나가므로({@code invalidate} 의 {@code EXISTS} 제한),
-	 * 받고도 통지 못 받은 테넌트가 있으면 그건 진짜 위반이다.
+	 * <p><b>게시됐는데 전달 없음</b> — 지금 게시본(완료 ∧ {@code published_at} 있음 ∧ 회수 안 됨)인데
+	 * 그 분석을 가리키는 NEW 가 없는 것. 단, v2 가 <b>설계상 전달하지 않는</b> 경우를 뺀다. 전달은
+	 * {@code storage/delivery.py} 의 {@code enqueue_movement} 하나가 하고, 거기서 NEW 를 안 만드는
+	 * 갈래가 넷이다:
+	 * <ol>
+	 *   <li>전달 시점에 이미 회수됐다 — {@code withdrawn_at} 을 채우고 끝난다. 지금 게시본이 아니라
+	 *       애초에 이 수에 안 든다.</li>
+	 *   <li>같은 ETF 에 같거나 더 늦은 분석이 이미 전달됐다({@code delivered.analysis_at >=
+	 *       current.analysis_at}).</li>
+	 *   <li>같은 거래일·같은 게시 시각·같은 고른 항목의 분석이 이미 전달됐다 — 직전 분석의 게시를
+	 *       그대로 물려받은 경우다({@code storage/publications.py} 가 고른 항목이 같으면 직전의
+	 *       {@code published_at} 을 물려준다).</li>
+	 *   <li>테넌트가 한 곳도 없다 — 전 테넌트에 넣는 문장이 0행이다.</li>
+	 * </ol>
+	 * 2·3 은 그 함수의 조건을 <b>그대로</b> 옮겼다. 지금 시점에 평가하므로, 전달이 실패한 분석이라도
+	 * 뒤에 같은 ETF 의 더 늦은 분석이 전달됐으면 빠진다 — 테넌트는 그 ETF 의 최신 게시본을 받았다.
 	 *
-	 * <p>🔴 <b>테넌트가 하나도 없으면 미발번은 위반이 아니다.</b> {@code _fanout_new}
-	 * ({@code analysis-engine} 의 {@code eventstore.py})는 {@code tenant} <b>전건</b>에 발번하므로
-	 * 테넌트가 0명이면 0행을 넣고, 호출부는 그걸 {@code fanout_tenants: 0} 인 <b>정상 성공</b>으로
-	 * 기록한다. 그 상태를 안 막으면 새 환경 부트스트랩에서 게시본 전건이 위반으로 선다 —
-	 * 정상 무효화를 위반으로 세면 안 되는 것과 같은 부류다(리뷰가 잡았다).
-	 * ⚠️ dev 실측(2026-08-11)으로는 테넌트 1명이라 이 값이 <b>0</b> 이었다 — 잠복이지 발화가 아니다.
+	 * <p><b>전달 대기 시간</b> — 전달은 게시와 같은 분석 작업 안에서 게시 직후에 일어난다
+	 * ({@code cloud/worker.py}). 그래서 그 작업이 끝나기 전의 분석은 아직 판정하지 않는다. 작업은 단일
+	 * 분석 워크플로 안에서 돌고 그 워크플로는 시작 뒤 {@link #ANALYSIS_GRACE_SECONDS} 를 못 넘긴다.
+	 * 요청이 수용된 시각({@code accepted_at})과 게시 시각은 둘 다 워크플로 시작보다 늦으므로, 수용
+	 * 시각(요청이 없으면 게시 시각)에서 그만큼이 지나야 전달이 없다고 말할 수 있다. 게시 시각만 쓰지
+	 * 않는 이유: 물려받은 게시 시각은 직전 분석의 것이라 지금 도는 작업보다 앞선다.
 	 *
-	 * <p>⏭ <b>남는 것</b>: 게시 <b>뒤</b>에 테넌트가 생기면 그 과거 게시본은 발번이 백필되지 않아
-	 * 계속 잡힌다. 가르려면 {@code tenant.created_at} 과 결과 시각을 상관시켜야 하는데 그게 계약인지
-	 * 정해진 바 없어 여기서 지어내지 않는다.
+	 * <p><b>전달됐는데 지금 게시본이 아니고 회수 전달도 없음</b> — 테넌트별 NEW 행 단위다(옛 수와 같은
+	 * 단위). 회수({@code storage/retractions.py} 의 {@code retract_movement})는 {@code withdrawn_at} 을
+	 * 채우는 문장과 INVALIDATION 을 넣는 문장이 한 트랜잭션이라 대기 시간이 없다. 회수됐는데 전달된 적이
+	 * 없는 분석은 회수 전달을 만들지 않는 것이 설계다 — 이 수는 NEW 가 있는 분석만 보므로 애초에 안 든다.
+	 * 무효화 통지와의 상관은 결과만이 아니라 <b>테넌트까지</b>다(받고도 통지 못 받은 테넌트가 있으면
+	 * 위반이다).
 	 *
-	 * <p>⚠️ <b>무효화 통지의 cursor 순서는 안 본다.</b> {@code INVALIDATION} 을 넣는 경로가
-	 * {@link JdbcAnalysisWriteRepository#invalidate} <b>하나뿐</b>이고, 그 문장이 그 결과의 NEW 를
-	 * <b>이미 받은</b> 테넌트에만({@code EXISTS} 제한) {@code MAX(cursor)+1} 로 넣어 언제나 NEW 보다
-	 * 뒤다. 그래서 {@code inv.cursor > d.cursor} 를 더하면 <b>어떤 행도 못 거르는 가드</b>가 하나
-	 * 는다 — {@code delivery_type} 을 안 거르는 것과 같은 판단이다.
+	 * <p>⚠️ <b>{@code delivery_type} 을 따로 거르지 않는다.</b> {@code ck_tenant_delivery_payload} 가
+	 * {@code movement_analysis_id} 를 NEW 에만, {@code target_movement_analysis_id} 를 INVALIDATION 에만
+	 * 허용한다 — 유형 술어를 덧붙이면 어떤 행도 못 거르는 가드가 하나 는다.
 	 *
-	 * <p>⚠️ 이 표의 writer 가 <b>하나라는 뜻은 아니다</b>(그렇게 적었다가 정정했다): {@code NEW} 는
-	 * analysis-engine 의 {@code _fanout_new} 가, {@code INVALIDATION} 은 여기 super-admin-api 가
-	 * 넣는다. 순서를 지키는 것은 writer 수가 아니라 <b>무효화 쪽 문장의 {@code EXISTS}</b> 다.
+	 * <p>⚠️ 옛 엔진의 게시·전달은 더는 세지 않는다. 그 엔진 분에 어긋남이 남아 있어도 이 축에는 안
+	 * 보인다(마지막 게시가 10-01 이다).
 	 *
 	 * <p>⚠️ <b>날짜 창을 안 탄다</b> — 인터페이스 {@link BoundaryRow} 주석의 이유. 이 수들의 기준
 	 * 시각은 {@code meta.today} 가 아니라 <b>{@code meta.db}</b>(DB 시계)다.
 	 */
 	private static final String BOUNDARY_SQL = """
-			SELECT (SELECT count(*) FROM explanation_result r
-			         WHERE r.publication_status = 'PUBLISHED'
+			SELECT (SELECT count(*) FROM movement_analyses a
+			         WHERE a.data_source = 'database'
+			           AND a.status = 'completed'
+			           AND a.published_at IS NOT NULL
+			           AND a.withdrawn_at IS NULL
 			           AND EXISTS (SELECT 1 FROM tenant)
+			           AND COALESCE((SELECT q.accepted_at FROM analysis_execution_requests q
+			                          WHERE q.analysis_id = a.analysis_id), a.published_at)
+			               <= now() - (? * interval '1 second')
 			           AND NOT EXISTS (SELECT 1 FROM tenant_delivery d
-			                            WHERE d.explanation_result_id = r.explanation_result_id))
+			                             JOIN movement_analyses delivered
+			                               ON delivered.analysis_id = d.movement_analysis_id
+			                            WHERE delivered.etf_code = a.etf_code
+			                              AND (delivered.analysis_id = a.analysis_id
+			                                   OR delivered.analysis_at >= a.analysis_at
+			                                   OR (delivered.trading_date = a.trading_date
+			                                       AND delivered.published_at = a.published_at
+			                                       AND delivered.selected_item_ids
+			                                           = a.selected_item_ids))))
 			         AS published_without_delivery,
 			       (SELECT count(*) FROM tenant_delivery d
-			          JOIN explanation_result r
-			            ON r.explanation_result_id = d.explanation_result_id
-			         WHERE r.publication_status <> 'PUBLISHED'
+			          JOIN movement_analyses a ON a.analysis_id = d.movement_analysis_id
+			         WHERE a.data_source = 'database'
+			           AND NOT (a.status = 'completed' AND a.published_at IS NOT NULL
+			                    AND a.withdrawn_at IS NULL)
 			           AND NOT EXISTS (SELECT 1 FROM tenant_delivery inv
 			                            WHERE inv.tenant_id = d.tenant_id
-			                              AND inv.target_explanation_result_id
-			                                  = d.explanation_result_id)) AS delivery_now_nonpublished,
+			                              AND inv.target_movement_analysis_id
+			                                  = d.movement_analysis_id)) AS delivery_now_nonpublished,
 			       (SELECT count(*) FROM tenant_delivery) AS delivery_rows
 			""";
 
@@ -711,11 +734,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 		LocalDate lastLegacyRunDay = timer.time(FactsSegment.LEGACY_ENGINE,
 				() -> jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class));
 		boolean legacyEngineStopped = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(day);
-		/* 🔴 **경계는 조회일이 아니라 지금을 기준으로 묻는다.** 경계 축은 날짜 창을 안 타는 현재 상태
-		 * 조회라, 과거 날짜를 골라도 수는 "지금" 값이다. 조회일로 물으면 엔진이 돌던 날을 고르는 것만으로
-		 * 표시가 꺼지고, 지금의 게시를 못 보는 0 이 다시 정합으로 읽힌다(봇 리뷰가 짚었다). */
-		boolean legacyEngineStoppedNow =
-				lastLegacyRunDay == null || lastLegacyRunDay.isBefore(meta.kstToday());
+		/* 전달 경계는 더는 옛 엔진을 안 본다(ALPHA-1326) — 새 분석 엔진의 게시를 지금 상태로 세므로
+		 * 관측 불가가 없다. 그래서 "지금 그 엔진이 멈췄나"를 따로 묻지 않는다. */
 
 		/* 인자는 왼쪽부터 차례로 평가된다 — 감싸기 전과 같은 조회 순서다. 구간 시간은 마지막 인자라
 		 * 앞의 조회가 모두 끝난 뒤의 값이다. */
@@ -727,7 +747,7 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 						() -> jdbc.queryForObject(BOUNDARY_SQL, (rs, i) -> new BoundaryRow(
 								rs.getLong("published_without_delivery"),
 								rs.getLong("delivery_now_nonpublished"),
-								rs.getLong("delivery_rows"), legacyEngineStoppedNow))),
+								rs.getLong("delivery_rows")), ANALYSIS_GRACE_SECONDS)),
 				withAnalysisStages(blindIfUnobservable(
 						timer.time(FactsSegment.CHAIN, () -> jdbc.queryForObject(CHAIN_SQL,
 								JdbcConsoleFactsRepository::mapChain, day, day)),

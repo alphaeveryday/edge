@@ -1519,120 +1519,245 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 경계 축의 세 수. <b>게시했는데 발번이 없다</b> · <b>발번했는데 지금 비게시다</b> · 발번 전체.
+	 * v2 가격변동 분석 한 건(ALPHA-1326) — 완료 상태다. {@code publishedAt} 이 null 이면 고른 항목이
+	 * 없어 게시하지 않은 분석이다. 거래일은 분석 시각의 KST 날짜다.
+	 */
+	private void insertMovement(String id, String etf, String analysisAt, String publishedAt,
+			String dataSource, String... selected) {
+		jdbc.update("""
+				INSERT INTO movement_analyses (analysis_id, etf_code, analysis_at, status, data_source,
+				       trading_date, published_at, selected_item_ids)
+				VALUES (?,?,?::timestamptz,'completed',?, (?::timestamptz AT TIME ZONE 'Asia/Seoul')::date,
+				        ?::timestamptz, ?::text[])
+				""", id, etf, analysisAt, dataSource, analysisAt, publishedAt,
+				"{" + String.join(",", selected) + "}");
+	}
+
+	/** v2 의 게시 전달(NEW) — 그 테넌트의 다음 cursor 로 넣는다({@code storage/delivery.py} 와 같은 형상). */
+	private void deliverMovement(long tenantId, String analysisId) {
+		jdbc.update("""
+				INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, movement_analysis_id)
+				SELECT ?, COALESCE(MAX(cursor), 0) + 1, 'NEW', ?
+				  FROM tenant_delivery WHERE tenant_id = ?
+				""", tenantId, analysisId, tenantId);
+	}
+
+	/** v2 의 회수 전달(INVALIDATION) — {@code storage/retractions.py} 와 같은 형상. */
+	private void invalidateMovement(long tenantId, String analysisId) {
+		jdbc.update("""
+				INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, target_movement_analysis_id,
+				       reason)
+				SELECT ?, COALESCE(MAX(cursor), 0) + 1, 'INVALIDATION', ?, '가격 복귀'
+				  FROM tenant_delivery WHERE tenant_id = ?
+				""", tenantId, analysisId, tenantId);
+	}
+
+	private void withdrawMovement(String analysisId) {
+		jdbc.update("UPDATE movement_analyses SET withdrawn_at = '2026-08-03T15:00:00+09:00' WHERE analysis_id = ?",
+				analysisId);
+	}
+
+	/**
+	 * 경계 축의 세 수(ALPHA-1326, v2). <b>게시했는데 전달이 없다</b> · <b>전달했는데 지금 게시본이 아니다</b>
+	 * · 전달 전체.
 	 *
-	 * <p>⚠️ 셋을 <b>서로 다른 값</b>으로 만든다 — 같으면 SQL 셋을 맞바꾸는 변이가 통과한다.
+	 * <p>⚠️ 셋을 <b>서로 다른 값</b>으로 만든다 — 같으면 서브쿼리를 맞바꾸는 변이가 통과한다.
 	 */
 	@Test
-	void 경계_축은_게시와_발번이_어긋난_건수를_낸다() {
+	void 경계_축은_v2_게시와_전달이_어긋난_건수를_낸다() {
 		long t1 = insertTenant("증권사A");
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");    // 발번 있음 → 안 셈
-		insertPublished("p-ok2", DAY.toString(), "etf-d", "PUBLISHED");   // 〃
-		deliverNew(t1, "p-ok");
-		deliverNew(t1, "p-ok2");
+		insertMovement("m-ok", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		insertMovement("m-ok2", "etf-d", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t1, "m-ok");
+		deliverMovement(t1, "m-ok2");
 
-		/* 🔴 게시했는데 발번 없음 → 3건. **셋을 같은 ETF 로 둔다** — 다르게 두면 이 수를
-		 * `count(DISTINCT etf_instrument_id)` 로 바꾸는 변이가 통과하고, 운영에선 한 ETF 에 as-of
-		 * 다른 설명이 하루 여럿이라 **축소 보고**된다(변이 리뷰가 잡았다). */
-		insertPublished("p-nodev1", DAY.toString(), "etf-b", "PUBLISHED");
-		insertPublished("p-nodev2", DAY.toString(), "etf-b", "PUBLISHED");
-		insertPublished("p-nodev3", DAY.toString(), "etf-b", "PUBLISHED");
+		/* 🔴 게시했는데 전달 없음 → 3건. **셋을 같은 ETF 로 둔다** — ETF 수로 세는 변이가 죽는다. 같은
+		 * ETF 에 전달된 분석이 없어야 한다(있으면 설계상 건너뛴 것이다 — 아래 별도 테스트). */
+		insertMovement("m-no1", "etf-b", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		insertMovement("m-no2", "etf-b", "2026-08-03T11:00:00+09:00", "2026-08-03T11:05:00+09:00", "database");
+		insertMovement("m-no3", "etf-b", "2026-08-03T12:00:00+09:00", "2026-08-03T12:05:00+09:00", "database");
 
-		/* 🔴 **게시본이 아닌 무발번은 안 센다** — 초안·철회는 애초에 발번 대상이 아니라 무발번이
-		 * 정상이다. 둘 다 둬야 술어를 `true` 로 여는 변이와 `IN ('PUBLISHED','WITHDRAWN')` 로
-		 * 넓히는 변이가 **각각** 죽는다. 안 그러면 이 수가 초안 수만큼 상시 올라 절대 0 이 안 된다. */
-		insertPublished("p-draft", DAY.toString(), "etf-f", "DRAFT");
-		insertPublished("p-wd", DAY.toString(), "etf-g", "WITHDRAWN");
+		/* 🔴 **게시본이 아닌 무전달은 안 센다** — 게시하지 않은 분석(고른 항목 없음)과 회수된 분석. 둘 다
+		 * 둬야 술어를 넓히는 변이가 각각 죽는다. */
+		insertMovement("m-unpub", "etf-f", "2026-08-03T10:00:00+09:00", null, "database");
+		insertMovement("m-wd", "etf-g", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		withdrawMovement("m-wd");
 
-		/* 🔴 발번했는데 지금 비게시 → 2건. **비게시가 WITHDRAWN 뿐이 아니다** — 초안으로 되돌아간
-		 * 것도 테넌트는 페이로드를 들고 있으므로 위반이다. 철회만 두면 `<> 'PUBLISHED'` 를
-		 * `= 'WITHDRAWN'` 으로 좁히는 변이가 통과한다(0 이 사실이 아닌데 0 으로 보이는 방향). */
-		insertPublished("p-gone", DAY.toString(), "etf-c", "PUBLISHED");
-		deliverNew(t1, "p-gone");
-		withdraw("p-gone");
-		insertPublished("p-back", DAY.toString(), "etf-h", "PUBLISHED");
-		deliverNew(t1, "p-back");
-		draft("p-back");
+		/* 🔴 전달했는데 지금 게시본이 아니고 회수 전달도 없음 → 2건. */
+		insertMovement("m-gone", "etf-c", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t1, "m-gone");
+		withdrawMovement("m-gone");
+		insertMovement("m-gone2", "etf-h", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t1, "m-gone2");
+		withdrawMovement("m-gone2");
 
-		// ⚠️ 셋을 **서로 다른 값**으로 둔다 — 같으면 와이어/서브쿼리를 맞바꾸는 변이가 통과한다.
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
-			assertThat(b.publishedWithoutDelivery()).isEqualTo(3L);   // p-nodev1·2·3
-			assertThat(b.deliveryNowNonpublished()).isEqualTo(2L);    // p-gone · p-back
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(3L);   // m-no1·2·3
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(2L);    // m-gone · m-gone2
 			assertThat(b.deliveryRows()).isEqualTo(4L);               // NEW 넷
 		});
 	}
 
 	/**
-	 * 🔴 <b>테넌트가 하나도 없으면 미발번은 위반이 아니다.</b> {@code _fanout_new} 는 {@code tenant}
-	 * 전건에 발번하므로 0명이면 0행이고, 호출부는 그걸 <b>정상 성공</b>으로 기록한다
-	 * ({@code fanout_tenants: 0}). 안 막으면 새 환경 부트스트랩에서 게시본 전건이 위반으로 선다.
+	 * 🔴 <b>설계상 전달하지 않는 게시본은 세지 않는다</b>(ALPHA-1326). {@code enqueue_movement}
+	 * ({@code storage/delivery.py})는 같은 ETF 에 ① 같거나 더 늦은 분석이 이미 전달됐거나 ② 같은
+	 * 거래일·같은 게시 시각·같은 고른 항목의 분석이 이미 전달됐으면(직전 게시를 물려받은 경우) NEW 를
+	 * 만들지 않는다.
+	 *
+	 * <p>대조를 둘 둔다 — 조건을 느슨하게 옮기는 변이가 각각 죽는다:
+	 * <ul>
+	 *   <li>{@code z2} — 더 <b>이른</b> 분석이 전달됐다. 늦은 분석의 무전달은 위반이다.</li>
+	 *   <li>{@code v2} — 게시 시각은 같은데 고른 항목이 다르다. 물려받은 게시가 아니다.</li>
+	 * </ul>
 	 */
 	@Test
-	void 테넌트가_없으면_미발번은_위반이_아니다() {
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");   // 테넌트 0명
+	void 설계상_전달하지_않는_게시본은_세지_않는다() {
+		long t = insertTenant("증권사A");
+		// ① 더 늦은 분석(x2)이 전달됐다 — x1 은 건너뛴 것이다.
+		insertMovement("x1", "etf-x", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database");
+		insertMovement("x2", "etf-x", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "x2");
+		// ② 직전 분석(y1)의 게시를 그대로 물려받았다 — y2 는 건너뛴 것이다.
+		insertMovement("y1", "etf-y", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i1");
+		insertMovement("y2", "etf-y", "2026-08-03T10:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i1");
+		deliverMovement(t, "y1");
+		// 대조: 더 이른 분석만 전달됐다.
+		insertMovement("z1", "etf-z", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database");
+		insertMovement("z2", "etf-z", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "z1");
+		// 대조: 게시 시각은 같은데 고른 항목이 다르다.
+		insertMovement("v1", "etf-v", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i1");
+		insertMovement("v2", "etf-v", "2026-08-03T10:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i2");
+		deliverMovement(t, "v1");
 
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(2L);   // z2 · v2
+	}
+
+	/**
+	 * 🔴 <b>전달 대기 시간 안의 게시본은 아직 세지 않는다</b>(ALPHA-1326). 전달은 게시와 같은 분석 작업
+	 * 안에서 일어나고 그 작업은 단일 분석 워크플로의 시간 제한(28,800초)을 못 넘긴다. 기점은 요청이
+	 * 수용된 시각이고, 요청이 없으면 게시 시각이다.
+	 *
+	 * <p>{@code g-inherit} 가 기점의 이유다 — 게시 시각은 직전 분석에서 물려받아 오래됐지만 요청은 방금
+	 * 수용됐다. 게시 시각으로 재면 작업이 도는 동안 위반으로 선다.
+	 */
+	@Test
+	void 전달_대기_시간_안의_게시본은_아직_세지_않는다() {
+		insertTenant("증권사A");
+		OffsetDateTime now = OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		String hourAgo = now.minusHours(1).toString();
+		String nineHoursAgo = now.minusHours(9).toString();
+		// 요청 없이 한 시간 전에 게시 — 대기 중
+		insertMovement("g-fresh", "etf-1", hourAgo, hourAgo, "database");
+		// 게시 시각은 오래됐지만 요청이 한 시간 전에 수용됐다 — 대기 중
+		insertMovement(analysisId("g-inherit"), "etf-2", hourAgo, "2026-08-03T09:05:00+09:00", "database");
+		insertRequest("g-inherit", "t-inherit", hourAgo);
+		// 요청이 9시간 전에 수용됐다 — 대기 시간이 지났다
+		insertMovement(analysisId("g-late"), "etf-3", nineHoursAgo, nineHoursAgo, "database");
+		insertRequest("g-late", "t-late", nineHoursAgo);
+		// 요청 없이 오래전에 게시 — 대기 시간이 지났다
+		insertMovement("g-old", "etf-4", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(2L);   // g-late · g-old
+	}
+
+	/**
+	 * 🔴 <b>테넌트가 하나도 없으면 미전달은 위반이 아니다.</b> {@code enqueue_movement} 는 {@code tenant}
+	 * 전건에 넣으므로 0명이면 0행이다. 안 막으면 새 환경에서 게시본 전건이 위반으로 선다.
+	 */
+	@Test
+	void 테넌트가_없으면_미전달은_위반이_아니다() {
+		insertMovement("m-ok", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
 		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isZero();
 
-		/* 테넌트가 생기는 순간 같은 행이 위반으로 선다 — 가드가 그 경계에 있다.
-		 * ⚠️ **DEV·ACTIVE 가 아닌 테넌트**로 만든다: `_fanout_new` 는 필터 없이 전건에 발번하므로
-		 * 가드도 전건이어야 하고, 여기서 DEV·ACTIVE 를 쓰면 가드를 좁히는 변이가 통과한다. */
+		/* 테넌트가 생기는 순간 같은 행이 위반으로 선다. ⚠️ DEV·ACTIVE 가 아닌 테넌트로 만든다 — 전달은
+		 * 필터 없이 전건에 넣으므로 가드도 전건이어야 한다. */
 		insertTenant("증권사A", "PROD", "ONBOARDING");
 		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(1L);
 	}
 
 	/**
-	 * 🔴 <b>정상 무효화는 위반이 아니다.</b> 운영자 무효화는 결과를 WITHDRAWN 으로 전이하고 그 NEW 를
-	 * 받은 테넌트에 INVALIDATION 을 발번하되 <b>원래 NEW 행을 남긴다</b>
-	 * ({@code JdbcAnalysisWriteRepository.invalidate}). 상태만 보면 "발번했는데 현재 비게시"라
-	 * 정상 무효화한 분석이 전부 위반으로 남아 그 수가 <b>영구히 단조 증가</b>한다.
+	 * 🔴 <b>회수 전달은 테넌트별로 본다</b>(ALPHA-1326). {@code retract_movement}
+	 * ({@code storage/retractions.py})는 회수된 분석을 받은 테넌트마다 INVALIDATION 을 넣고 원래 NEW 행은
+	 * 남긴다. 그래서 상태만 보면 정상 회수가 전부 위반으로 남는다 — 위반은 "받고도 회수 통지를 못 받은
+	 * 테넌트"다.
 	 *
-	 * <p>🔴 그리고 상관은 결과만이 아니라 <b>테넌트까지</b>다 — 무효화는 그 NEW 를 받은 테넌트에만
-	 * 나가므로, <b>받고도 통지 못 받은 테넌트</b>가 있으면 그건 진짜 위반이다. 그래서 테넌트 둘을
-	 * 두고 한쪽에만 통지한다: 결과 단위로만 상관시키면 이 픽스처가 <b>0건</b>으로 나온다.
+	 * <p>🔴 <b>전달된 적 없는 분석의 회수는 회수 전달을 만들지 않는 것이 설계다</b> — 그 함수는 NEW 가
+	 * 있는 분석만 대상으로 고른다. {@code p-never} 가 그 형상이고 세지 않는다.
 	 */
 	@Test
-	void 무효화_통지가_간_발번은_비게시로_안_센다() {
+	void 회수_전달은_테넌트별로_보고_전달된_적_없는_회수는_세지_않는다() {
 		long a = insertTenant("증권사A");
 		long b = insertTenant("증권사B");
-
-		// ① A·B 가 받았고 A 만 통지받았다 → B 의 행이 위반.
-		insertPublished("p-inv", DAY.toString(), "etf-a", "PUBLISHED");
-		deliverNew(a, "p-inv");
-		deliverNew(b, "p-inv");
-		withdraw("p-inv");
-		deliverInvalidation(a, "p-inv");
-
-		/* ② 🔴 **B 에게 "다른 결과"의 무효화를 준다.** 면제가 "그 테넌트가 아무 무효화나 한 번
-		 * 받았으면"으로 미끄러지면 ①의 B 행이 조용히 면제된다 — 운영 며칠이면 모든 테넌트가
-		 * 무효화를 한 번씩 받으므로 그 뒤로는 이 수가 **영구히 0** 이고 콘솔은 "정합"을 계속
-		 * 띄운다(변이 리뷰가 잡았다 — 위반을 숨기는 방향이라 가장 나쁘다). */
-		insertPublished("p-other", DAY.toString(), "etf-b", "PUBLISHED");
-		deliverNew(b, "p-other");
-		withdraw("p-other");
-		deliverInvalidation(b, "p-other");   // B 는 이 결과에 대해서는 정상
-
-		/* ③ 통지가 아예 없는 철회 — A·B 둘 다 위반. 이걸로 위반 행이 **셋**이 되고
-		 * (b/p-inv · a/p-third · b/p-third) 서로 다른 테넌트 2 · 서로 다른 결과 2 라,
-		 * `count(*)` 를 테넌트나 결과 단위로 바꾸는 변이가 **각각** 죽는다. 행 수로 안 세면
-		 * 팬아웃 사고가 축소 보고된다(한 결과가 20개 테넌트에 나가 있어도 1 로 뜬다). */
-		insertPublished("p-third", DAY.toString(), "etf-c", "PUBLISHED");
-		deliverNew(a, "p-third");
-		deliverNew(b, "p-third");
-		withdraw("p-third");
+		// ① A·B 가 받았고 A 만 회수 통지를 받았다 → B 의 행이 위반.
+		insertMovement("p-inv", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(a, "p-inv");
+		deliverMovement(b, "p-inv");
+		withdrawMovement("p-inv");
+		invalidateMovement(a, "p-inv");
+		/* ② 🔴 B 에게 "다른 분석"의 회수 통지를 준다 — 면제가 "그 테넌트가 아무 회수나 받았으면"으로
+		 * 미끄러지면 ①의 B 행이 조용히 면제된다. */
+		insertMovement("p-other", "etf-b", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(b, "p-other");
+		withdrawMovement("p-other");
+		invalidateMovement(b, "p-other");
+		// ③ 회수 통지가 아예 없다 — A·B 둘 다 위반. 테넌트별 행 수로 센다.
+		insertMovement("p-third", "etf-c", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(a, "p-third");
+		deliverMovement(b, "p-third");
+		withdrawMovement("p-third");
+		// ④ 전달된 적 없이 회수됐다 — 회수 전달을 만들지 않는 것이 설계다.
+		insertMovement("p-never", "etf-d", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		withdrawMovement("p-never");
 
 		assertThat(repository.facts(DAY).boundary()).satisfies(x -> {
-			assertThat(x.deliveryNowNonpublished()).isEqualTo(3L);
-			assertThat(x.deliveryRows()).isEqualTo(7L);   // NEW 다섯 + INVALIDATION 둘
+			assertThat(x.deliveryNowNonpublished()).isEqualTo(3L);   // b/p-inv · a/p-third · b/p-third
+			assertThat(x.publishedWithoutDelivery()).isZero();       // 회수된 분석은 게시본이 아니다
+			assertThat(x.deliveryRows()).isEqualTo(7L);              // NEW 다섯 + INVALIDATION 둘
+		});
+	}
+
+	/** 🔴 <b>합성 입력의 분석은 세지 않는다</b> — 실데이터({@code data_source='database'})만 테넌트에 간다. */
+	@Test
+	void 합성_입력_분석은_경계_축에서_세지_않는다() {
+		long t = insertTenant("증권사A");
+		insertMovement("s-pub", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "synthetic");
+		insertMovement("s-gone", "etf-b", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "synthetic");
+		deliverMovement(t, "s-gone");
+		withdrawMovement("s-gone");
+
+		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
+			assertThat(b.publishedWithoutDelivery()).isZero();
+			assertThat(b.deliveryNowNonpublished()).isZero();
+		});
+		// 대조 — 같은 형상의 실데이터는 센다.
+		insertMovement("r-pub", "etf-c", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		insertMovement("r-gone", "etf-d", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "r-gone");
+		withdrawMovement("r-gone");
+		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
 		});
 	}
 
 	/**
-	 * 🔴 <b>{@code deliveryRows} 는 "발번이 돌고는 있나"를 답한다.</b> 앞의 둘이 0 일 때 그것이
-	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 이 값이 가른다 — 없으면 "아무 문제 없음"과
-	 * "아직 아무것도 안 나감"이 화면에서 같은 칸이 된다.
+	 * ⚠️ <b>옛 설명 엔진의 게시는 더는 세지 않는다</b>(ALPHA-1326). 그 엔진은 10-01 이 마지막 게시라 이
+	 * 축은 새 분석 엔진만 본다 — 옛 엔진 분에 어긋남이 남아 있어도 여기에는 안 나온다.
 	 */
 	@Test
-	void 발번이_하나도_없는_것과_정합인_것을_가른다() {
+	void 옛_엔진의_게시는_경계_축이_세지_않는다() {
+		insertTenant("증권사A");
+		insertPublished("p-old", DAY.toString(), "etf-a", "PUBLISHED");   // 옛 엔진 게시, 전달 없음
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isZero();
+	}
+
+	/**
+	 * 🔴 <b>{@code deliveryRows} 는 "전달이 돌고는 있나"를 답한다.</b> 앞의 둘이 0 일 때 그것이 정합인지
+	 * 전달이 아직 하나도 없음인지 이 값이 가른다.
+	 */
+	@Test
+	void 전달이_하나도_없는_것과_정합인_것을_가른다() {
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isZero();
 			assertThat(b.deliveryNowNonpublished()).isZero();
@@ -1640,10 +1765,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		});
 
 		long t = insertTenant("증권사A");
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");
-		deliverNew(t, "p-ok");
+		insertMovement("m-ok", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "m-ok");
 
-		// 위반은 여전히 0 인데 분모가 1 — 이제 "정합"이라고 말할 수 있다.
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isZero();
 			assertThat(b.deliveryNowNonpublished()).isZero();
@@ -1652,28 +1776,22 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * ⚠️ <b>경계 축만 날짜 창을 안 탄다.</b> 나머지 축은 "그 날 무슨 일이 있었나"이고 이건 "지금
-	 * 어긋난 것이 몇 건인가"라 누적이다 — 날짜로 자르면 조회한 날에 안 생긴 위반이 화면에서 사라지고,
-	 * 어제 난 사고가 오늘 조회에서 저절로 나은 것처럼 보인다.
+	 * ⚠️ <b>경계 축만 날짜 창을 안 탄다.</b> "지금 어긋난 것이 몇 건인가"라 누적이다 — 날짜로 자르면
+	 * 어제 난 사고가 오늘 조회에서 저절로 나은 것처럼 보인다. 두 수를 함께 잰다.
 	 */
 	@Test
 	void 경계_축은_조회한_날과_무관하게_누적을_낸다() {
 		long t = insertTenant("증권사A");
-		// 조회 날(08-03)과 **다른 날**의 게시본이 발번 없이 남아 있다.
-		insertPublished("p-old", "2026-07-31", "etf-a", "PUBLISHED");
-		/* 🔴 **둘째 수도 함께 잰다.** 첫째만 단언하면 둘째 서브쿼리에 날짜 창을 붙이는 변이가
-		 * 통과하고, 그러면 통지 없이 철회된 발번이 **다음 날 화면에서 사라진다** — 이 축의 존재
-		 * 이유로 내건 문장("어제 어긋난 것이 오늘 저절로 낫지 않는다")이 정작 그 수에서 깨진다
-		 * (변이 리뷰가 잡았다). */
-		insertPublished("p-old-gone", "2026-07-31", "etf-b", "PUBLISHED");
-		deliverNew(t, "p-old-gone");
-		withdraw("p-old-gone");
+		// 조회 날(08-03)과 **다른 날**의 게시본
+		insertMovement("m-old", "etf-a", "2026-07-31T10:00:00+09:00", "2026-07-31T10:05:00+09:00", "database");
+		insertMovement("m-old-gone", "etf-b", "2026-07-31T10:00:00+09:00", "2026-07-31T10:05:00+09:00", "database");
+		deliverMovement(t, "m-old-gone");
+		withdrawMovement("m-old-gone");
 
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
 			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
 		});
-		// 그 날을 직접 조회해도 같은 수다 — 창이 없다는 뜻이다.
 		assertThat(repository.facts(LocalDate.parse("2026-07-31")).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
 			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
@@ -2220,7 +2338,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 그 엔진의 행이 하나도 없다. 입력 두 갈래는 실측 그대로 나간다.
 	 */
 	@Test
-	void 옛_엔진이_멈춘_뒤의_날은_체인_단계와_전달_경계가_관측_불가다() {
+	void 옛_엔진이_멈춘_뒤의_날은_체인_단계가_관측_불가다() {
 		insertPublished("old", "2026-07-31", "etf-old", "PUBLISHED");   // 마지막 실행 = 07-31
 		insertTrigger("g-day", DAY.toString(), "etf-a");
 		insertMinuteTrigger("m-day", DAY.toString(), "etf-b", "FIRE", "2026-08-03T09:31:00+09:00");
@@ -2231,7 +2349,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 1L));
 		assertThat(facts.chain().stages()).hasSize(5)
 				.allSatisfy(s -> assertThat(s.blind()).as("%s 관측 불가", s.id()).isTrue());
-		assertThat(facts.boundary().blind()).isTrue();
 
 		/* 대조 — 같은 원장으로 **엔진이 돌던 날**을 물으면 종전 값이 나온다. 조건을 날짜 상수나
 		 * "항상 관측 불가"로 바꾸는 변이가 여기서 죽는다. */
@@ -2240,22 +2357,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.allSatisfy(s -> assertThat(s.blind()).as("%s 는 실측이다", s.id()).isFalse());
 		assertThat(before.chain().stages()).filteredOn(s -> s.id().equals("c.pub")).singleElement()
 				.satisfies(s -> assertThat(s.batch()).isEqualTo(1L));
-		/* 🔴 **경계는 조회일을 안 탄다** — 엔진이 돌던 날(07-31)을 골라도 수는 지금 값이고, 지금 그
-		 * 엔진은 멈춰 있다. 조회일로 물으면 과거 날짜를 고르는 것만으로 표시가 꺼진다. */
-		assertThat(before.boundary().blind()).isTrue();
-	}
-
-	/**
-	 * 전달 경계의 관측 불가는 <b>지금</b>을 기준으로 한다 — 옛 엔진이 오늘도 돌았으면 어느 날짜를
-	 * 조회하든 거짓이다(그 엔진의 게시를 지금도 본다).
-	 */
-	@Test
-	void 전달_경계의_관측_불가는_조회일이_아니라_지금을_기준으로_한다() {
-		LocalDate today = kstToday();
-		insertPublished("now", today.toString(), "etf-now", "PUBLISHED");   // 마지막 실행 = 오늘
-		assertThat(repository.facts(today).boundary().blind()).isFalse();
-		// 같은 원장으로 과거 날짜를 물어도 같다 — 경계의 수는 그날 것이 아니라 지금 것이다.
-		assertThat(repository.facts(DAY).boundary().blind()).isFalse();
 	}
 
 	/**
@@ -2291,8 +2392,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				.allSatisfy(s -> assertThat(s.blind()).as("%s — 행이 있으면 실측이다", s.id()).isFalse());
 		assertThat(stopped.chain().stages()).filteredOn(s -> s.id().equals("c.res")).singleElement()
 				.satisfies(s -> assertThat(s.batch()).isEqualTo(1L));
-		// 경계는 조회일과 무관하다 — 지금 그 엔진은 멈춰 있다(마지막 실행 08-04).
-		assertThat(stopped.boundary().blind()).isTrue();
 	}
 
 	/** 옛 엔진의 실행이 <b>하나도 없는</b> 원장도 관측 불가다 — 그 엔진이 돈 적이 없으니 셀 쪽이 없다. */
@@ -2301,7 +2400,6 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertTrigger("g-day", DAY.toString(), "etf-a");
 		var facts = repository.facts(DAY);
 		assertThat(facts.chain().stages()).allSatisfy(s -> assertThat(s.blind()).isTrue());
-		assertThat(facts.boundary().blind()).isTrue();
 	}
 
 	/**
