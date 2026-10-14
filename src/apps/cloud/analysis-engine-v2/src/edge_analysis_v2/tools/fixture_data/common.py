@@ -73,7 +73,8 @@ def holdings(fixture, day=None, *, require_complete=True):
     # stored as 0.27940000000000004 (ALPHA-1162). This is deliberate: a sum that differs from one only below
     # that precision (1.000000000000004) is not told apart from one. Sources publish weights to four decimals.
     total = Context(prec=15).plus(sum(weights))
-    statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest]
+    statuses = [r for r in fixture.get('holdings_status', []) if r['as_of_date'] == latest
+                and (not r.get('available_at') or instant(r['available_at']) <= cutoff)]
     # Equities above one are explained only by source rows that were not loaded: a negative cash row leaves the
     # loaded equities above 100% (ALPHA-1162). With every source row loaded the excess has no explanation and is
     # rejected; without an ingestion status (fixtures) it cannot be explained either.

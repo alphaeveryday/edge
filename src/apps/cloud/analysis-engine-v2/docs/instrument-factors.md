@@ -64,9 +64,10 @@
 |---|---|
 | `weighted_foreign_net_amount_20d`, `weighted_institution_net_amount_20d` | 최근 20확정 거래일 가중 순매수 합계, 원 |
 | `holdings_as_of`, `weight_basis`, `observed_weight_ratio` | 고정한 구성의 기준일, `latest_snapshot_at_analysis`, 확인된 비중 합. 금액을 비중 합으로 나누거나 확대하지 않음 |
+| `holdings_available_at` | 선택한 구성 행과 스냅샷 수집 상태의 가용시각 중 최댓값. 분석 시각 이후의 수집 상태는 구성 검증에 사용하지 않음 |
 | `weighted_foreign_net_buy_streak`, `weighted_institution_net_buy_streak` | 최신 확정일까지 연속 순매수 일수. 중단 경계 미확인이면 null |
 | `etf_units_change_20d_pct`, `units_observed_at` | 20거래일 전 대비 좌수 변화율(%)과 공개시각. 21개 일별 좌수 필요 |
-| `observed_at` | 반환한 수급 원천의 가장 늦은 공개시각 |
+| `observed_at` | 반환한 수급 원천의 가장 늦은 공개시각. 가중 수급은 `holdings_available_at`도 포함하여 최댓값 사용 |
 
 ### 밸류
 

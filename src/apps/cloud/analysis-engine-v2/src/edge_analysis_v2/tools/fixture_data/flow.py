@@ -15,6 +15,19 @@ def constituent_ids(fixture):
             and r['instrument_id'] != fixture['context']['etf_code']}
 
 
+def weight_basis(fixture, portfolio):
+    """Identify the selected basket and when all its weights became available."""
+    cutoff = instant(fixture['context']['analysis_at'])
+    stamps = [r['available_at'] for r in available(fixture['holdings'], cutoff)
+              if r['as_of_date'] == portfolio['as_of_date']]
+    stamps += [r['available_at'] for r in fixture.get('holdings_status', [])
+               if r['as_of_date'] == portfolio['as_of_date'] and r.get('available_at')
+               and instant(r['available_at']) <= cutoff]
+    return dict(observed_weight_ratio=portfolio['observed_weight_ratio'],
+                holdings_as_of=portfolio['as_of_date'], weight_basis='latest_snapshot_at_analysis',
+                holdings_available_at=max(stamps, key=instant))
+
+
 def observation(rows, instrument_id, day, investor, window):
     """Require one finalized integer-KRW observation, with safe actionable errors."""
     matches = [r for r in rows if r['instrument_id'] == instrument_id
@@ -50,8 +63,11 @@ def input_tables(rows):
         days = grouped.setdefault(row["instrument_id"], {})
         values = days.setdefault(row["date"], {})
         investor = row["investor"]
-        if investor not in columns[1:] or investor in values:
-            raise ValueError("duplicate or unknown investor observation")
+        if investor not in columns[1:]:
+            raise ToolInputError('INVALID_FLOW_INVESTOR: unknown investor observation in initial input. Do not retry this snapshot; repair source data.')
+        if investor in values:
+            # Preserve fail-fast for corrupt input; use the same safe diagnostic as direct tools.
+            observation(rows, row['instrument_id'], row['date'], investor, 'initial input up to 30 sessions')
         values[investor] = row["net_amount_krw"]
     return {target: {"unit": "KRW", "metric": "net_amount", "columns": columns.copy(),
                      "rows": [[day] + [days[day].get(key) for key in columns[1:]] for day in sorted(days)]}
@@ -113,8 +129,7 @@ def calculate(fixture, investor, lookback_days, operation, direction, instrument
     if instrument_id:
         result["instrument_id"] = instrument_id
     else:
-        result.update(observed_weight_ratio=portfolio['observed_weight_ratio'],
-                      holdings_as_of=portfolio['as_of_date'], weight_basis='latest_snapshot_at_analysis')
+        result.update(weight_basis(fixture, portfolio))
     if operation == "sum":
         return result | {"amount_krw": number(sum(values))}
     sign = 1 if direction == "net_buy" else -1

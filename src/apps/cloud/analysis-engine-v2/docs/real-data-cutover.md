@@ -34,7 +34,7 @@
 | 툴 | 데이터 | 계산 |
 |---|---|---|
 | calculate_investor_flow / sum_investor_net_flow | 최신 구성에 있는 개별 편입종목의 investor_flow_daily, 이전 확정 거래일부터 최대 30일 | 합계·부호 일수·최신일부터 연속. ETF 자체 수급은 조회·초기 입력·계산에서 제외 |
-| calculate_weighted_flow / sum_weighted_net_flow | 분석 시각까지 확보된 최신 구성 스냅샷 한 개와 전 종목 확정 수급 | 최신 비중을 전 기간에 고정 → 합계/빈도/연속. `holdings_as_of`, `weight_basis=latest_snapshot_at_analysis`, `observed_weight_ratio` 반환. 0 비중은 기여 0이며 필요한 수급 누락은 계산 거부 |
+| calculate_weighted_flow / sum_weighted_net_flow | 분석 시각까지 확보된 최신 구성 스냅샷 한 개와 전 종목 확정 수급 | 최신 비중을 전 기간에 고정 → 합계/빈도/연속. `holdings_as_of`, `holdings_available_at`(구성 행·수집 상태의 가장 늦은 가용시각), `weight_basis=latest_snapshot_at_analysis`, `observed_weight_ratio` 반환. 0 비중은 기여 0이며 필요한 수급 누락은 계산 거부 |
 
 - 외국인=net_val_foreign, 기관=net_val_institution_total, 개인=net_val_individual. 원 단위 정수. NULL을 0으로 대체하지 않음.
 - 기준일은 분석일 직전 KRX 거래일. 당일 수급은 제외. 조회 누락 때문에 기준일을 더 과거로 옮기지 않음.

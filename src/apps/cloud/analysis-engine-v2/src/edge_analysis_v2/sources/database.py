@@ -71,7 +71,7 @@ def load_source(connection, ticker, analysis_at):
     if len(etfs) != 1:
         raise ValueError('Exact KRX ETF not found')
     etf = etfs[0]
-    statuses = _rows(connection, """SELECT trade_date,input_row_count,valid_row_count,data_version
+    statuses = _rows(connection, """SELECT trade_date,input_row_count,valid_row_count,data_version,loaded_at
         FROM etf_holding_snapshot_status WHERE etf_instrument_id=%s
         AND trade_date<=%s AND loaded_at<=%s ORDER BY trade_date DESC LIMIT 1""", (etf['instrument_id'],at.date(),at))
     if not statuses:
@@ -91,7 +91,8 @@ def load_source(connection, ticker, analysis_at):
         if len(valid) != status['valid_row_count']:
             raise ValueError('Holdings rows and ingestion status disagree')
         day = status['trade_date'].isoformat()
-        status_rows.append({'as_of_date':day,'input_count':status['input_row_count'],'valid_count':len(valid)})
+        status_rows.append({'as_of_date':day,'input_count':status['input_row_count'],'valid_count':len(valid),
+                            'available_at':status['loaded_at'].isoformat()})
         for row in valid:
             symbol = row['ticker']
             if row['market_code'] not in ('XKRX','XKOS') or symbol in source_ids and source_ids[symbol] != row['constituent_instrument_id']:

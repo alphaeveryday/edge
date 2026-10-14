@@ -166,11 +166,14 @@ def flow_data(fixture, instrument_id):
     if not history and units is None:
         return None, unavailable or 'No complete finalized flow session or units history is available.'
     history.reverse()
+    basis = flow.weight_basis(fixture, portfolio) if portfolio else dict(
+        observed_weight_ratio=None, holdings_as_of=None, holdings_available_at=None,
+        weight_basis='latest_snapshot_at_analysis')
+    if weighted and history:
+        observed.append(basis['holdings_available_at'])
     result = {'scope': 'holdings_weighted' if weighted else 'instrument', 'finalized_through': end, 'observed_at': max(observed, key=instant) if observed else None, 'unit': 'KRW', 'history': {'columns': ['date'] + list(investors), 'rows': history}}
     if weighted:
-        result.update(observed_weight_ratio=portfolio['observed_weight_ratio'] if portfolio else None,
-                      holdings_as_of=portfolio['as_of_date'] if portfolio else None,
-                      weight_basis='latest_snapshot_at_analysis')
+        result.update(basis)
         for investor in ('foreign', 'institution'):
             values = [decimal(row[investors.index(investor)+1]) for row in history]
             result[f'weighted_{investor}_net_amount_20d'] = number(sum(values[-20:])) if len(values) >= 20 else None

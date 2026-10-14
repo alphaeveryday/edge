@@ -16,7 +16,7 @@ def test_news_scope_includes_sixth_constituent_and_uses_publication_and_acquisit
     at = datetime.fromisoformat(source()['context']['analysis_at'])
     responses = [
         [{'instrument_id':'etf', 'display_name':'ETF'}],
-        [{'trade_date':at.date(), 'input_row_count':6, 'valid_row_count':6, 'data_version':1}],
+        [{'trade_date':at.date(), 'input_row_count':6, 'valid_row_count':6, 'data_version':1, 'loaded_at':at}],
         [dict(constituent_instrument_id=f'id{i}', ticker=f'{i:06}', market_code='XKRX',
               display_name=str(i), issuer_actor_id=f'actor{i}', weight_ratio=1/6, available_at=at)
          for i in range(6)], [], [],
@@ -91,7 +91,7 @@ def _load_stored_weights(monkeypatch, stored, input_rows):
     at = datetime.fromisoformat(source()['context']['analysis_at'])
     responses = [
         [{'instrument_id':'etf', 'display_name':'ETF'}],
-        [{'trade_date':at.date(), 'input_row_count':input_rows, 'valid_row_count':len(stored), 'data_version':1}],
+        [{'trade_date':at.date(), 'input_row_count':input_rows, 'valid_row_count':len(stored), 'data_version':1, 'loaded_at':at}],
         [dict(constituent_instrument_id=f'id{i}', ticker=f'{i:06}', market_code='XKRX', display_name=str(i),
               issuer_actor_id=None, weight_ratio=weight, available_at=at) for i, weight in enumerate(stored)], [], [],
     ]

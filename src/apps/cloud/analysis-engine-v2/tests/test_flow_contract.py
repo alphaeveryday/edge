@@ -135,3 +135,48 @@ def test_factor_history_preserves_first_gap_and_still_exposes_other_factors():
     assert 'MISSING_FLOW' not in result['unavailable']['flow']
     assert 'secret' not in result['unavailable']['flow']
     assert result['macro'] is not None
+
+
+@pytest.mark.parametrize('later_source', ['holdings', 'flow', 'holdings_status'])
+def test_weighted_evidence_is_not_observable_before_its_latest_input(later_source):
+    from edge_analysis_v2.storage.factors import project_factor_metrics, prepare_metrics
+    data = make_fixture()
+    holdings_at = '2026-09-21T08:00:00+09:00'
+    for row in data['holdings']:
+        row['available_at'] = holdings_at
+    expected = holdings_at
+    if later_source == 'flow':
+        expected = '2026-09-21T09:00:00+09:00'
+        data['flow'][-1]['available_at'] = expected
+    if later_source == 'holdings_status':
+        expected = holdings_at = '2026-09-21T09:00:00+09:00'
+        data['holdings_status'] = [dict(as_of_date=data['holdings'][0]['as_of_date'],
+            valid_count=len(data['holdings']), input_count=len(data['holdings']), available_at=expected)]
+    tools = FixtureTools(data)
+    output = tools.call('get_instrument_factors',
+        dict(instrument_id=data['context']['etf_code'], factors=['flow']))
+    assert output['result']['flow']['observed_at'] == expected
+    assert output['result']['flow']['holdings_available_at'] == holdings_at
+    assert call(data)['holdings_available_at'] == holdings_at
+    cards = prepare_metrics(project_factor_metrics(output, data['context']['etf_code']))
+    weighted = [card for card in cards if card['metric_key'].startswith('weighted_')]
+    assert weighted and all(card['observed_at'].isoformat() == expected for card in weighted)
+
+
+def test_future_status_cannot_authorize_excess_equity_weights():
+    data = flow_fixture()
+    data['holdings'][0]['weight'] = .61
+    data['holdings_status'] = [dict(as_of_date='2026-09-14', valid_count=2, input_count=3,
+                                  available_at='2026-09-22T08:00:00+09:00')]
+    with pytest.raises(ToolInputError, match='INVALID_HOLDINGS_WEIGHT'):
+        call(data)
+
+
+def test_duplicate_initial_observations_fail_with_the_same_actionable_data_error():
+    data = make_fixture()
+    row = deepcopy(data['flow'][0])
+    data['flow'].append(row)
+    with pytest.raises(ToolInputError, match='DUPLICATE_FLOW') as raised:
+        FixtureTools(data).initial_input()
+    assert row['instrument_id'] in str(raised.value) and row['date'] in str(raised.value)
+    assert 'Do not retry' in str(raised.value)
