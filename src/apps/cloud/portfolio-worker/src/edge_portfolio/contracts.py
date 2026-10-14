@@ -139,12 +139,6 @@ class Evaluation(StrictModel):
 class RecommendationEvaluation(Evaluation):
     scores: Scores
 
-    @model_validator(mode='after')
-    def recommendation_quality(self):
-        if sum(self.scores.model_dump().values()) < 12:
-            raise ValueError('Recommended rating must average at least 4; select a better-supported candidate or return recommendation=null, never inflate scores')
-        return self
-
 
 class Allocation(StrictModel):
     instrument_id: str = Field(min_length=1, max_length=32)

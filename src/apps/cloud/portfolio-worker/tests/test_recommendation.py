@@ -45,12 +45,20 @@ def test_unchanged_percentage_does_not_hide_a_required_top_up():
     assert plan['total_krw'] == '2000000'
 
 
-@pytest.mark.parametrize('scores', [None, {'leadership': 4, 'profitability': 4, 'stability': 3.5}])
-def test_recommended_rating_is_required_and_low_scores_are_rejected_not_inflated(scores):
+def test_recommended_rating_is_required():
     raw = final_payload()
-    raw['recommendation']['evaluation']['scores'] = scores
+    raw['recommendation']['evaluation']['scores'] = None
     with pytest.raises(ValueError):
         FinalReport.model_validate(raw)
+
+
+def test_suitable_recommendation_keeps_honest_scores_below_four():
+    raw = final_payload()
+    scores = {'leadership': 3, 'profitability': 3.5, 'stability': 4.5}
+    raw['recommendation']['evaluation']['scores'] = scores
+    result = publish(raw)
+    assert result['recommendation']['evaluation']['scores'] == scores
+    assert result['recommendation']['evaluation']['overall'] == 3.7
 
 
 def test_cash_current_rating_can_be_absent_without_hiding_recommended_stars():
