@@ -118,7 +118,7 @@ async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_searc
             assert result['completion']['status'] == 'needs_input'
 
 
-@pytest.mark.parametrize('exhaustion', ['context', 'draft_context', 'invalid_draft_context', 'oversized_draft_context', 'scenario_context', 'earlier_role', 'final_tools', 'prerequisite', 'source', 'scenario'])
+@pytest.mark.parametrize('exhaustion', ['context', 'draft_context', 'invalid_draft_context', 'oversized_draft_context', 'scenario_context', 'call_budget', 'earlier_role', 'final_tools', 'prerequisite', 'source', 'scenario'])
 async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypatch, exhaustion):
     import json
     from edge_portfolio.agent import run_analysis
@@ -143,10 +143,12 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
             evidence.sources = Evidence.sources
             return Evidence.sources[0]
         evidence.call = fetch_source
-    stages, calls = [], []
+    stages, calls, forced_calls = [], [], []
     async def model(payload):
         role = stages[-1]
         calls.append(role)
+        if role == 'opinion' and payload['tool_choice'] == 'none':
+            forced_calls.append(len(calls))
         if exhaustion == 'source' and role == 'portfolio' and payload['tool_choice'] == 'auto':
             names = {tool['function']['name'] for tool in payload['tools']}
             name = 'fetch_source' if names == {'search_sources', 'fetch_source'} else 'search_etfs'
@@ -181,6 +183,10 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
                     'question_index': 2 if exhaustion == 'invalid_draft_context' else 1,
                     'status': 'needs_input', 'answer': '실제 매수 금액 계산에는 납입 금액이 필요합니다.', 'missing': ['납입 금액']}])
                 monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
+            if calls.count('opinion') == 2 and exhaustion == 'call_budget':
+                monkeypatch.setattr('edge_portfolio.agent.MAX_MODEL_CALLS', len(calls))
+                return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+                    {'id': 'extra', 'type': 'function', 'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO"}'}}]}}]}
             if calls.count('opinion') == 2 and exhaustion == 'scenario_context':
                 monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
                 return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
@@ -190,11 +196,15 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
         horizon='10년 이상', question='납입할 때의 매수 금액을 알려주세요.' if 'draft_context' in exhaustion else ''), 'test', stages.append, model_call=model, evidence=evidence)
     assert result['recommendation'] is not None
     assert result['completion']['status'] == ('needs_input' if exhaustion == 'draft_context' else 'partial')
-    assert len(calls) <= 24
-    if 'context' in exhaustion:
+    assert len(calls) <= 100
+    if exhaustion == 'call_budget':
+        assert result['diagnostics']['termination_reason'] == 'MODEL_CALL_BUDGET_WITH_REPORT'
+    elif 'context' in exhaustion:
         assert result['diagnostics']['termination_reason'] == 'MODEL_CONTEXT_BUDGET_WITH_REPORT'
     else:
-        assert calls.index('opinion') <= 21
+        assert calls.index('opinion') <= 97  # Reserve at least three calls for final publication.
+    if exhaustion == 'final_tools':
+        assert forced_calls[0] <= 98, 'Final submission must start with three calls available, including repairs'
     if exhaustion in {'scenario', 'scenario_context'}:
         assert result['scenarios']['status'] == 'available'
     if exhaustion == 'draft_context':
