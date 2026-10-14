@@ -19,6 +19,17 @@ test('현재일과 과거의 0/완료/부분/전량 미완료를 서로 다른 �
   assert.equal(intradayOutcome(point('2026-08-21', 5, 0), '2026-08-20').label, '집계 중');
 });
 
+test('🔴 유예 시간 안의 트리거가 남은 지난 날은 미완료가 아니라 판정 보류다 — 흐름 띠와 같은 판단이다', () => {
+  const p = point('2026-08-19', 3, 1);
+  p.analysis = { ...p.analysis, requested: 3, started: 1, startPending: 2 };
+  const outcome = intradayOutcome(p, '2026-08-20');
+  assert.equal(outcome.kind, 'collecting');
+  assert.equal(outcome.label, '판정 보류 2건');
+  /* 판정 보류가 없으면 같은 수가 미완료로 선다 */
+  p.analysis = { ...p.analysis, startPending: 0 };
+  assert.equal(intradayOutcome(p, '2026-08-20').kind, 'partial');
+});
+
 test('🔴 새 분석 엔진의 요청이 없던 날은 관측 불가이고, 그 단계가 없는 옛 응답은 상태 미제공이다 — 어느 쪽도 미완료로 그리지 않는다', () => {
   assert.equal(intradayOutcome(point('2026-09-20', 5, 0, true), '2026-10-20').kind, 'blind');
   const { analysis: _dropped, ...old } = point('2026-09-20', 5, 0);

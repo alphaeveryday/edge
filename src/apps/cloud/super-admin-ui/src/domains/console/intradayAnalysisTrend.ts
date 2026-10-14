@@ -118,6 +118,10 @@ export function intradayOutcome(
   if (analysis.blind) return { kind: 'blind', label: '관측 불가', missing: 0 };
   if (point.triggers === 0) return { kind: 'none', label: '발화 없음', missing: 0 };
   if (analysis.completed === point.triggers) return { kind: 'complete', label: '분석 완료', missing: 0 };
+  /* 유예 시간 안의 트리거가 남은 날은 결손으로 확정하지 않는다 — 흐름 띠가 같은 트리거를 판정 보류로
+   * 둔다(ALPHA-1309). 지난 날도 그렇다: 자정 직전에 수용된 요청은 다음 날까지 유예 안이다. */
+  const pending = analysis.requestPending + analysis.startPending;
+  if (pending > 0) return { kind: 'collecting', label: `판정 보류 ${pending}건`, missing: 0 };
   const missing = point.triggers - analysis.completed;
   if (analysis.completed > 0) return { kind: 'partial', label: `일부 미완료 ${missing}건`, missing };
   return { kind: 'missing', label: '분석 미완료', missing };
