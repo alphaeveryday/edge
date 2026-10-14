@@ -1639,7 +1639,8 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 수용된 시각이고, 요청이 없으면 게시 시각이다.
 	 *
 	 * <p>{@code g-inherit} 가 기점의 이유다 — 게시 시각은 직전 분석에서 물려받아 오래됐지만 요청은 방금
-	 * 수용됐다. 게시 시각으로 재면 작업이 도는 동안 위반으로 선다.
+	 * 수용됐다. 게시 시각으로 재면 작업이 도는 동안 위반으로 선다. {@code g-unaccepted} 는 같은 형상인데
+	 * 수용 기록이 없다(실행은 떴는데 수용 기록이 실패한 경우) — 요청이 만들어진 시각으로 잰다.
 	 */
 	@Test
 	void 전달_대기_시간_안의_게시본은_아직_세지_않는다() {
@@ -1652,6 +1653,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		// 게시 시각은 오래됐지만 요청이 한 시간 전에 수용됐다 — 대기 중
 		insertMovement(analysisId("g-inherit"), "etf-2", hourAgo, "2026-08-03T09:05:00+09:00", "database");
 		insertRequest("g-inherit", "t-inherit", hourAgo);
+		// 물려받은 게시 시각 + 수용 기록이 없는 요청(한 시간 전 생성) — 대기 중
+		insertMovement(analysisId("g-unaccepted"), "etf-5", hourAgo, "2026-08-03T09:05:00+09:00", "database");
+		insertRequest("g-unaccepted", "t-unaccepted", hourAgo);
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("g-unaccepted"));
 		// 요청이 9시간 전에 수용됐다 — 대기 시간이 지났다
 		insertMovement(analysisId("g-late"), "etf-3", nineHoursAgo, nineHoursAgo, "database");
 		insertRequest("g-late", "t-late", nineHoursAgo);

@@ -454,9 +454,11 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * <p><b>전달 대기 시간</b> — 전달은 게시와 같은 분석 작업 안에서 게시 직후에 일어난다
 	 * ({@code cloud/worker.py}). 그래서 그 작업이 끝나기 전의 분석은 아직 판정하지 않는다. 작업은 단일
 	 * 분석 워크플로 안에서 돌고 그 워크플로는 시작 뒤 {@link #ANALYSIS_GRACE_SECONDS} 를 못 넘긴다.
-	 * 요청이 수용된 시각({@code accepted_at})과 게시 시각은 둘 다 워크플로 시작보다 늦으므로, 수용
-	 * 시각(요청이 없으면 게시 시각)에서 그만큼이 지나야 전달이 없다고 말할 수 있다. 게시 시각만 쓰지
-	 * 않는 이유: 물려받은 게시 시각은 직전 분석의 것이라 지금 도는 작업보다 앞선다.
+	 * 요청이 수용된 시각({@code accepted_at})은 워크플로 시작보다 늦으므로, 그 시각에서 그만큼이 지나야
+	 * 전달이 없다고 말할 수 있다. 게시 시각만 쓰지 않는 이유: 물려받은 게시 시각은 직전 분석의 것이라
+	 * 지금 도는 작업보다 앞선다. 요청은 있는데 수용 기록이 없으면(실행은 떴는데 수용 기록이 실패한
+	 * 경우 — {@code cloud/admission.py} 는 실행을 띄운 뒤 수용을 기록한다) 요청이 만들어진 시각과 게시
+	 * 시각 중 늦은 쪽을 쓰고, 요청이 없으면 게시 시각을 쓴다.
 	 *
 	 * <p><b>전달됐는데 지금 게시본이 아니고 회수 전달도 없음</b> — 테넌트별 NEW 행 단위다(옛 수와 같은
 	 * 단위). 회수({@code storage/retractions.py} 의 {@code retract_movement})는 {@code withdrawn_at} 을
@@ -482,7 +484,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			           AND a.published_at IS NOT NULL
 			           AND a.withdrawn_at IS NULL
 			           AND EXISTS (SELECT 1 FROM tenant)
-			           AND COALESCE((SELECT q.accepted_at FROM analysis_execution_requests q
+			           AND COALESCE((SELECT COALESCE(q.accepted_at, GREATEST(q.created_at, a.published_at))
+			                           FROM analysis_execution_requests q
 			                          WHERE q.analysis_id = a.analysis_id), a.published_at)
 			               <= now() - (? * interval '1 second')
 			           AND NOT EXISTS (SELECT 1 FROM tenant_delivery d
