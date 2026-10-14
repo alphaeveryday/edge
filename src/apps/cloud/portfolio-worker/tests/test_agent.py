@@ -40,8 +40,8 @@ async def test_search_and_fetch_share_70_calls_then_stop_before_remote_request()
             body = 'URL: https://official.example/etf\n' + 'Official ETF research. ' * 5
             return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text=body)])
     evidence = ExaEvidence(Session())
-    for _ in range(35):
-        await evidence.call('search_sources', {'query': 'ETF', 'objective': 'verify facts'})
+    for index in range(35):
+        await evidence.call('search_sources', {'query': f'ETF {index}', 'objective': 'verify facts'})
         await evidence.call('fetch_source', {'url': 'https://official.example/etf', 'expand': True})
     assert calls.count('web_search_exa') == 35
     assert calls.count('web_fetch_exa') == 35

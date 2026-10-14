@@ -49,22 +49,49 @@ class ExaEvidence:
         self.session_factory = session_factory
         self.sources = []
         self.discovered = set()
+        self.search_targets = set()
         self.calls = 0
+        self.attempts = []
+        self.search_cache = {}
+        self.failed_paths = {}
 
     async def call(self, name, args):
         if name == 'fetch_source' and isinstance(args.get('url'), str) and set(args) <= {'url', 'offset', 'expand'}:
             if not isinstance(args.get('offset', 0), int) or isinstance(args.get('offset', 0), bool) or args.get('offset', 0) < 0:
                 raise ValueError('INVALID_PASSAGE_OFFSET')
-            cached = next((source for source in reversed(self.sources) if source['url'] == args['url']), None)
             if not isinstance(args.get('expand', False), bool):
                 raise ValueError('INVALID_TOOL_ARGUMENT')
+            args = {'offset': 0, 'expand': False, **args}
+        identity = (name, json.dumps(args, sort_keys=True))
+        if name == 'search_sources' and identity in self.search_cache:
+            return {**deepcopy(self.search_cache[identity]), 'fetchable_urls': sorted(self.discovered), 'cached': True}
+        failures = self.failed_paths.get(identity, [])
+        cached_source = name == 'fetch_source' and not args.get('expand') and any(source['url'] == args.get('url') for source in self.sources)
+        if not cached_source and ('INSUFFICIENT_SOURCE_BODY' in failures or len(failures) >= 2):
+            raise ValueError('SOURCE_PATH_EXHAUSTED')
+        before = self.calls
+        try:
+            answer = await self._call(name, args)
+        except (ValueError, TimeoutError, httpx.HTTPError) as error:
+            reason = str(error) if isinstance(error, ValueError) else 'EXA_FAILED'
+            if self.calls > before:
+                self.attempts.append({'tool': name, 'request': dict(args), 'status': 'unavailable', 'reason': reason})
+                self.failed_paths.setdefault(identity, []).append(reason)
+            raise ValueError(reason) from error
+        if self.calls > before:
+            self.attempts.append({'tool': name, 'request': dict(args), 'status': answer.get('status', 'available')})
+        if name == 'search_sources':
+            self.search_cache[identity] = deepcopy(answer)
+        return answer
+
+    async def _call(self, name, args):
+        if name == 'fetch_source' and isinstance(args.get('url'), str) and set(args) <= {'url', 'offset', 'expand'}:
+            cached = next((source for source in reversed(self.sources) if source['url'] == args['url']), None)
             if cached and not args.get('expand'):
+                self.discovered.update(cached.get('fetchable_urls', []))
                 return source_page(cached, args.get('offset', 0))
             if args.get('offset', 0) != 0:
                 raise ValueError('INVALID_PASSAGE_OFFSET')
-        self.calls += 1
-        if self.calls > MAX_EXA_CALLS:
-            raise ValueError("TOOL_LIMIT")
         if name == "search_sources" and set(args) == {"query", "objective"}:
             if any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in args.values()):
                 raise ValueError("INVALID_TOOL_ARGUMENT")
@@ -73,6 +100,9 @@ class ExaEvidence:
             remote, arguments = "web_fetch_exa", {"urls": [args["url"]], "maxCharacters": 48000 if args.get('expand') else 24000}
         else:
             raise ValueError("TOOL_NOT_ALLOWED")
+        if self.calls >= MAX_EXA_CALLS:
+            raise ValueError("TOOL_LIMIT")
+        self.calls += 1
         async with asyncio.timeout(35):
             if self.session is None:
                 self.session = await self.session_factory()
@@ -80,19 +110,29 @@ class ExaEvidence:
         if result.isError:
             raise ValueError("EXA_FAILED")
         body = "\n".join(b.text for b in result.content if b.type == "text")[:arguments.get('maxCharacters', 24000) + 2000]
+        links = []
+        markdown_links = re.findall(r'\[([^\]\n]*)\]\((https://(?:[^\s()]|\([^()\s]*\))+)\)', body)
+        urls = re.findall(r'^URL:\s*(https://\S+)', body, re.M) + [url for _, url in markdown_links]
+        for url in urls:
+            try:
+                parsed = urlsplit(url)
+                if parsed.hostname and not parsed.username and not parsed.password and parsed.port in (None, 443):
+                    if url not in links:
+                        links.append(url)
+            except ValueError:
+                continue
+        self.discovered.update(links)
         if remote == "web_search_exa":
-            for url in re.findall(r"^URL:\s*(https://\S+)", body, re.M):
-                try:
-                    parsed = urlsplit(url)
-                    if parsed.hostname and not parsed.username and not parsed.password and parsed.port in (None, 443):
-                        self.discovered.add(url)
-                except ValueError:
-                    continue
+            self.search_targets.update(links)
             return {"search_results": body[:2500], "fetchable_urls": sorted(self.discovered)}
+        document_pattern = r'\.pdf(?:$|[?#&])|fact.?sheet|prospectus|annual.?report|disclosure|holdings|fees|보유|보수|공시|투자설명서|운용보고서'
+        document_links = {url for label, url in markdown_links if re.search(document_pattern, label, re.I)}
+        self.search_targets.update(url for url in links if url in document_links or re.search(document_pattern, url, re.I))
         quality = inspect_body(body, arguments['maxCharacters'])
         if quality['status'] == 'unavailable':
             raise ValueError(quality['reason'])
         source = {"id": f"s{len(self.sources) + 1}", "url": args["url"], "excerpt": body, **quality,
+                  'fetchable_urls': links,
                   "fetched_at": datetime.now(timezone.utc).isoformat()}
         chunks = []
         for line in source['excerpt'].splitlines():
@@ -161,6 +201,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     def checkpoint():
         if on_checkpoint:
             on_checkpoint({**accepted_report, 'sections': accepted_report.get('sections', dict(sections)), 'sources': list(evidence.sources), 'metrics': metrics,
+                           'research_attempts': deepcopy(getattr(evidence, 'attempts', [])),
                            'research_inventory': research_inventory(request, decision, {'optimization': accepted_report.get('optimization', optimizer.result), 'recommendation': accepted_report.get('recommendation')},
                                (accepted_report.get('completion') or {}).get('evidence_coverage', []), [key for group in getattr(optimizer, 'groups', []) for key in group]),
                            **({'scenarios': deepcopy(scenario_result)} if scenario_result is not None else {}),
@@ -180,6 +221,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             evidence.sources = deepcopy(prior_report.get('sources', []))
             if hasattr(evidence, 'discovered'):
                 evidence.discovered.update(source['url'] for source in evidence.sources if source.get('url'))
+                evidence.discovered.update(url for source in evidence.sources for url in source.get('fetchable_urls', []))
         if model_call is None:
             client = await stack.enter_async_context(httpx.AsyncClient(timeout=90))
 
@@ -339,11 +381,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             try:
                                 answer = await evidence.call(function["name"], args)
                             except ValueError as error:
-                                if str(error) not in {'TOOL_NOT_ALLOWED', 'INVALID_TOOL_ARGUMENT', 'INVALID_PASSAGE_OFFSET', 'EMPTY_SOURCE', 'INSUFFICIENT_SOURCE_BODY', 'EXA_FAILED'}:
+                                if str(error) not in {'TOOL_NOT_ALLOWED', 'INVALID_TOOL_ARGUMENT', 'INVALID_PASSAGE_OFFSET', 'EMPTY_SOURCE', 'INSUFFICIENT_SOURCE_BODY', 'EXA_FAILED', 'SOURCE_PATH_EXHAUSTED'}:
                                     emit('tool_failed', role=role, tool=tool, code='TOOL_LIMIT' if str(error) == 'TOOL_LIMIT' else type(error).__name__,
                                          counters={'exa_calls': getattr(evidence, 'calls', 0), 'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
                                     raise
-                                answer = {'status': 'unavailable' if str(error) in {'EMPTY_SOURCE', 'INSUFFICIENT_SOURCE_BODY', 'EXA_FAILED'} else 'rejected',
+                                answer = {'status': 'unavailable' if str(error) in {'EMPTY_SOURCE', 'INSUFFICIENT_SOURCE_BODY', 'EXA_FAILED', 'SOURCE_PATH_EXHAUSTED'} else 'rejected',
                                           'reason': str(error), 'fetchable_urls': sorted(getattr(evidence, 'discovered', set())),
                                           'instruction': '본문을 읽지 못했습니다. 등록된 URL을 정확히 사용하거나 다른 공식 근거를 검색하세요. 실패한 응답을 근거로 인용하지 마세요.'}
                             except BaseException as error:
@@ -375,7 +417,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raw = json.loads(message.get("content") or "")
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
-                    research_exhausted = len(failed_source_urls) >= 2 and not (getattr(evidence, 'discovered', set()) - failed_source_urls)
+                    research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
+                    research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
                     source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
@@ -523,6 +566,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         emit('run_completed', counters={'model_calls': calls, 'exa_calls': getattr(evidence, 'calls', 0),
              'catalog_calls': catalog_calls, 'source_count': len(evidence.sources)})
         return {**published, "sections": sections, "metrics": metrics, "sources": evidence.sources,
+                'research_attempts': getattr(evidence, 'attempts', []),
                 'input': request.model_dump(mode='json'), 'decision': decision.model_dump(mode='json'),
                 'baseline_kind': market.baseline_kind, 'customer_constraint_checks': checks,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
