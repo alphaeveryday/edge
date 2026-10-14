@@ -969,3 +969,33 @@ test('서버가 쓴 시간이 오면 형상은 본다', () => {
     assert.match(r.ok ? '' : r.reason, /meta\.timing/, label);
   }
 });
+
+test('🔴 전달 경계 — 새 API 와 옛 API 어느 쪽에서도 R14 가 거짓 위반을 세우지 않는다', () => {
+  const r14 = (w: ConsoleFactsDto) => {
+    const r = parseFacts(w);
+    if (!r.ok) throw new Error(`응답을 거부했다: ${r.reason}`);
+    const ev = evaluate(r.facts);
+    return {
+      evaluated: ev.rules.find((x) => x.id === 'R14')!.evaluated,
+      violations: ev.violations.filter((v) => v.rule === 'R14'),
+    };
+  };
+  /* 새 API(ALPHA-1326) — 관측 불가 키가 없고 두 수는 새 분석 엔진에서 센 값이다. 0 이면 정합으로
+   * 평가된다(못 돎이 아니다). */
+  const fresh = WIRE();
+  fresh.boundary = { publishedWithoutDelivery: 0, deliveryNowNonpublished: 0, deliveryRows: 12 };
+  const clean = r14(fresh);
+  assert.equal(clean.evaluated, true, '새 API 의 0 을 못 돎으로 접었다');
+  assert.equal(clean.violations.length, 0);
+  /* 새 API 의 0 이 아닌 수는 그대로 위반이고, 근거는 새 분석 엔진의 표다. */
+  fresh.boundary = { publishedWithoutDelivery: 2, deliveryNowNonpublished: 1, deliveryRows: 12 };
+  const hit = r14(fresh);
+  assert.deepEqual(hit.violations.map((v) => [v.metric, v.evidence]),
+    [[2, 'movement_analyses ⋈ tenant_delivery'], [1, 'tenant_delivery ⋈ movement_analyses']]);
+  /* 옛 API — 옛 설명 엔진만 맞대던 때라 관측 불가가 참이다. 두 수가 0 이면 못 돎이지 정합이 아니다. */
+  const old = WIRE();
+  old.boundary = { publishedWithoutDelivery: 0, deliveryNowNonpublished: 0, deliveryRows: 12, blind: true };
+  const blind = r14(old);
+  assert.equal(blind.evaluated, false, '옛 API 의 관측 불가 0 을 정합으로 읽었다');
+  assert.equal(blind.violations.length, 0);
+});

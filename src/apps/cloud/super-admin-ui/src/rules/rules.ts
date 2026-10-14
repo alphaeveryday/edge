@@ -799,13 +799,13 @@ export const RULES: Rule[] = [
     kls: '정합 위반',
     base: 'P0',
     desc: '게시했는데 미발번, 또는 발번했는데 현재 비게시',
-    /* 🔴 **0 이 정합을 뜻하지 않는 날이 있다**(ALPHA-1293). 이 축의 두 수는 옛 설명 엔진의 게시
-     * (`explanation_result`)만 발번과 맞댄다. 그 엔진이 멈춘 뒤의 게시는 새 분석 엔진이 다른 표에
-     * 쓰고 이 조인에 안 걸린다 — 서버가 그때 `blind` 를 싣는다. 그 상태에서 두 수가 0 이면 "어긋난
-     * 것이 없다"가 아니라 **못 봤다**라 못 돎이다.
+    /* ✅ **새 분석 엔진의 게시·회수를 본다**(ALPHA-1326). 두 수는 서버가 v2 가격변동 분석에서 세고,
+     * 설계상 전달하지 않는 경우(더 늦은 분석이 이미 전달됨·직전 게시를 물려받음·테넌트 없음)와
+     * 전달 대기 시간 안의 것은 이미 뺀 수다. 그래서 0 이 아닌 수는 그대로 위반이다.
      *
-     * 0 이 아닌 수는 관측 불가여도 **그대로 위반으로 세운다** — 옛 엔진 분의 어긋남은 실측이고,
-     * 못 돎으로 접으면 진짜 미발번이 화면에서 사라진다. 그때는 `note` 가 본 범위를 밝힌다. */
+     * ⚠️ `blind` 는 **옛 API 에서만** 온다(ALPHA-1293) — 옛 설명 엔진의 게시만 맞대던 때의 표시다.
+     * 그 응답에서 두 수가 0 이면 "어긋난 것이 없다"가 아니라 **못 봤다**라 못 돎이고, 0 이 아닌 수는
+     * 옛 엔진 분의 실측이라 그대로 세운다(`note` 가 본 범위를 밝힌다). 새 API 는 이 키를 싣지 않는다. */
     dep: '전달 경계가 관측 불가다 — 옛 설명 엔진의 게시만 발번과 맞대는데 그 엔진이 지금 멈춰 있다(새 분석 엔진의 게시·발번은 이 축이 보지 못한다)',
     source: 'DB_LEDGER',
     canRun: (f) =>
@@ -822,8 +822,10 @@ export const RULES: Rule[] = [
           title: '게시됐는데 미발번',
           metric: b.published_without_delivery,
           unit: '건',
-          why: '같은 트랜잭션이라 구조상 0이어야 한다',
-          evidence: 'explanation_result ⋈ tenant_delivery',
+          why: b.blind
+            ? '옛 설명 엔진의 게시본인데 발번이 없다'
+            : '게시된 가격변동 분석인데 테넌트 전달이 없다 — 설계상 건너뛴 것과 전달 대기 중인 것은 뺀 수다',
+          evidence: b.blind ? 'explanation_result ⋈ tenant_delivery' : 'movement_analyses ⋈ tenant_delivery',
           drill: ['delivery', 'b-pub'],
         });
       }
@@ -849,7 +851,7 @@ export const RULES: Rule[] = [
           why:
             '발번됐는데 현재 비게시이고 무효화 통지도 안 갔다 — 테넌트가 철회를 못 받은 상태다' +
             (b.seed_note ? ` · 기록: ${b.seed_note}` : ''),
-          evidence: 'tenant_delivery ⋈ explanation_result',
+          evidence: b.blind ? 'tenant_delivery ⋈ explanation_result' : 'tenant_delivery ⋈ movement_analyses',
           drill: ['delivery', 'b-dlv'],
         });
       }

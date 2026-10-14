@@ -21,7 +21,7 @@ public enum FactsSegment {
 	META("meta", Kind.DB),
 	/** 런과 계획 결손 슬롯 */
 	RUNS_DB("runs.db", Kind.DB),
-	/** 옛 설명 엔진의 마지막 실행일 — 체인·경계의 관측 불가 표시가 쓴다 */
+	/** 옛 설명 엔진의 마지막 실행일 — 옛 체인 단계의 관측 불가 표시가 쓴다 */
 	LEGACY_ENGINE("legacyEngine", Kind.DB),
 	TASKS("tasks", Kind.DB),
 	/** 휴장일·기준일 조회와 산출별 건수 조회 전부 */

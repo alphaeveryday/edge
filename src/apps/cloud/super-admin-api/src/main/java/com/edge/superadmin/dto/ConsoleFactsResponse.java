@@ -216,11 +216,11 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 발번 건수) {@code deliveryRows} 에는 {@code INVALIDATION} 도 들어간다.
 	 */
 	public record BoundaryResponse(long publishedWithoutDelivery, long deliveryNowNonpublished,
-			long deliveryRows, boolean blind) {
+			long deliveryRows) {
 
 		public static BoundaryResponse from(BoundaryRow b) {
 			return new BoundaryResponse(b.publishedWithoutDelivery(), b.deliveryNowNonpublished(),
-					b.deliveryRows(), b.blind());
+					b.deliveryRows());
 		}
 	}
 
