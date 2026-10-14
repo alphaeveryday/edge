@@ -4,30 +4,24 @@
  * 상태어는 ETF 표와 같은 말을 쓴다(`STATE_LABEL`). 상태·게시·회수는 서버가 정한 값을 그대로 보여 준다.
  */
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { PageSkeleton, StatusBadge, type BadgeTone } from 'ui-kit';
+import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { AnalysisKind, AnalysisResultRow, AnalysisResultStatus } from '../domains/analysisResults';
+import { KIND_LABEL, SOURCE_LABEL, STATUS_TONE, labelOf, publicationLabel } from '../domains/analysisResults';
 import { useAnalysisResults } from '../domains/analysisResults/hooks';
 import { STATE_LABEL } from './ops/etfAnalysisView';
 import { kst } from './ops/shared';
 import { LoadError } from './_shared/LoadError';
 
-export const KIND_LABEL: Record<AnalysisKind, string> = { outlook: '전망', movement: '가격변동 분석' };
-export const STATUS_TONE: Record<AnalysisResultStatus, BadgeTone> = {
-  completed: 'active',
-  failed: 'blocked',
-  running: 'neutral',
-};
 const STATUSES: AnalysisResultStatus[] = ['completed', 'failed', 'running'];
 const PAGE_SIZE = 50;
 
 /** KST 오늘(YYYY-MM-DD) — 서버의 기본 기간과 같은 날이다 */
 const kstToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
 
-/** 게시 칸 — 테넌트가 받는 게시본인지(서버 판정)와 회수 여부를 따로 보여 준다 */
-export function publicationText(r: { published: boolean; publishedAt: string | null; withdrawn: boolean | null }) {
-  if (r.withdrawn) return `회수됨 (게시 ${kst(r.publishedAt)})`;
-  if (r.published) return `게시 ${kst(r.publishedAt)}`;
-  return '게시 안 됨';
+/** 게시 칸 — 말은 `publicationLabel` 이 정하고 여기서는 시각만 붙인다 */
+function publicationText(r: { published: boolean; publishedAt: string | null; withdrawn: boolean | null }) {
+  const p = publicationLabel(r);
+  return p.at ? `${p.label} (게시 ${kst(p.at)})` : p.label;
 }
 
 export function AnalysisResultsPage() {
@@ -54,12 +48,15 @@ export function AnalysisResultsPage() {
     size: PAGE_SIZE,
   });
 
-  /** 필터가 바뀌면 첫 페이지로 돌아간다 */
+  /** 필터가 바뀌면 첫 페이지로 돌아간다. 시작일이 종료일을 넘으면 종료일을 지워 시작일을 따르게 한다
+   *  — 남겨 두면 서버가 400 을 내고 화면은 "새로고침" 안내만 남는다. */
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
     else next.delete(key);
     if (key !== 'page') next.delete('page');
+    const end = next.get('to');
+    if (end && end < (next.get('from') || today)) next.delete('to');
     setParams(next, { replace: true });
   };
 
@@ -81,7 +78,6 @@ export function AnalysisResultsPage() {
           className="select"
           aria-label="시작일"
           value={from}
-          max={to}
           onChange={(e) => set('from', e.target.value)}
         />
         <span className="t-xs">~</span>
@@ -116,7 +112,7 @@ export function AnalysisResultsPage() {
         </select>
         <label className="t-xs flex items-center gap-1">
           <input type="checkbox" checked={allSources} onChange={(e) => set('all', e.target.checked ? '1' : null)} />
-          합성 입력 포함
+          합성·출처 미상 입력 포함
         </label>
         <div className="flex-1" />
         {data && (
@@ -186,7 +182,7 @@ function ResultRow({ row: r, onOpen }: { row: AnalysisResultRow; onOpen: () => v
           <span className="font-semibold">{r.etfName}</span>
           <span className="mono t-xs" style={{ color: 'var(--fg-3)' }}>
             {r.etfCode}
-            {r.dataSource !== 'database' && ` · ${r.dataSource}`}
+            {r.dataSource !== 'database' && ` · ${labelOf(SOURCE_LABEL, r.dataSource)}`}
           </span>
         </div>
       </td>

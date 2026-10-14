@@ -129,7 +129,9 @@ test('뒤로가기는 목적지 하나에서 파생된다 — 버튼과 목적�
     ['/analyses/symbol', '/analyses'],
     ['/ops/incidents/detail', '/ops/incidents'],
     ['/ops/runs/run-1', '/ops/runs'],
-    ['/analysis-results/outlook/an-1', '/analysis-results'],
+    ['/analysis-results/outlook/an-1', '/analysis-results?kind=outlook'],
+    /* 가격변동 상세에서 돌아가면 가격변동 목록이다 — 종류를 잃으면 전망 목록이 열린다 */
+    ['/analysis-results/movement/mv-1', '/analysis-results?kind=movement'],
   ];
   for (const [p, dest] of opened) {
     const r = headerRoute(p);

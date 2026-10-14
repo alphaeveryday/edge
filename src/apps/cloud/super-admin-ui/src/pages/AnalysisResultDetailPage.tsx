@@ -7,25 +7,40 @@ import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageSkeleton, StatusBadge } from 'ui-kit';
 import type { AnalysisKind, MovementDetail, OutlookDetail, OutlookItem } from '../domains/analysisResults';
+import {
+  CHANGE_TYPE_LABEL,
+  DETAIL_MODE_LABEL,
+  KEYWORD_KIND_LABEL,
+  KIND_LABEL,
+  SENTIMENT_LABEL,
+  SOURCE_LABEL,
+  STATUS_TONE,
+  labelOf,
+  publicationLabel,
+} from '../domains/analysisResults';
 import { useAnalysisResult } from '../domains/analysisResults/hooks';
-import { KIND_LABEL, STATUS_TONE, publicationText } from './AnalysisResultsPage';
 import { STATE_LABEL } from './ops/etfAnalysisView';
 import { kst } from './ops/shared';
 import { LoadError } from './_shared/LoadError';
 
-const SENTIMENT_LABEL: Record<string, string> = { positive: '긍정', neutral: '중립', negative: '부정' };
-const sentiment = (s: string | null) => (s ? (SENTIMENT_LABEL[s] ?? s) : '—');
+const sentiment = (s: string | null) => labelOf(SENTIMENT_LABEL, s);
 /** JSON 열은 저장된 값을 그대로 적는다 — 문자열은 문자열로, 나머지는 JSON 으로 */
 const raw = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : v == null ? [] : [v]);
 
 export function AnalysisResultDetailPage() {
-  const { kind: kindParam = '', id = '' } = useParams();
-  const kind: AnalysisKind = kindParam === 'movement' ? 'movement' : 'outlook';
-  const { data: d, isPending, isError, error } = useAnalysisResult(kind, id);
+  /* 종류는 주소 그대로 서버에 넘긴다 — 여기서 모르는 값을 전망으로 바꾸면 틀린 주소가 다른 분석을 연다.
+   * 서버가 모르는 종류를 400 으로 거부한다. */
+  const { kind = '', id = '' } = useParams();
+  const { data: d, isPending, isError, error } = useAnalysisResult(kind as AnalysisKind, id);
 
   if (isPending) return <PageSkeleton rows={6} />;
   if (isError) return <LoadError error={error} />;
+  const publication = publicationLabel({
+    published: d.published,
+    publishedAt: d.publishedAt,
+    withdrawn: d.movement ? d.movement.withdrawn : null,
+  });
 
   return (
     <div className="flex max-w-[1200px] flex-col gap-4">
@@ -35,15 +50,8 @@ export function AnalysisResultDetailPage() {
             ['분석 id', <span className="mono">{d.analysisId}</span>],
             ['분석 시각', kst(d.analysisAt)],
             ['상태', <StatusBadge tone={STATUS_TONE[d.status]}>{STATE_LABEL[d.status]}</StatusBadge>],
-            [
-              '게시',
-              publicationText({
-                published: d.published,
-                publishedAt: d.publishedAt,
-                withdrawn: d.movement ? d.movement.withdrawn : null,
-              }),
-            ],
-            ['입력 출처', d.dataSource],
+            ['게시', publication.at ? `${publication.label} (게시 ${kst(publication.at)})` : publication.label],
+            ['입력 출처', labelOf(SOURCE_LABEL, d.dataSource)],
             [
               '직전 분석',
               d.previousAnalysisId ? (
@@ -82,7 +90,7 @@ function Outlook({ o }: { o: OutlookDetail }) {
           ]}
         />
       </Section>
-      <Section title={`상세 — ${o.detailTitle ?? '제목 없음'} (${o.detailMode ?? '—'})`}>
+      <Section title={`상세 — ${o.detailTitle ?? '제목 없음'} (${labelOf(DETAIL_MODE_LABEL, o.detailMode)})`}>
         <Items items={detail} />
         {update.length > 0 && (
           <>
@@ -113,12 +121,58 @@ function Outlook({ o }: { o: OutlookDetail }) {
           </tbody>
         </table>
       </Section>
+      <Section title={`요인 상세 — 이슈 헤드라인: ${o.issueHeadline ?? '없음'}`}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>요인</th>
+              <th>지표</th>
+              <th>값</th>
+              <th>대상</th>
+              <th>관측</th>
+            </tr>
+          </thead>
+          <tbody>
+            {o.factorMetrics.map((m) => (
+              <tr key={`${m.factorType}-${m.metricKey}`}>
+                <td>{m.factorType}</td>
+                <td className="mono t-xs">{m.metricKey}</td>
+                <td className="num">{m.numericValue ?? m.textValue}</td>
+                <td className="t-xs">{m.subject ?? '—'}</td>
+                <td className="t-xs whitespace-nowrap">{m.observedDate ?? kst(m.observedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {o.factorMetrics.length === 0 && <p className="card-pad t-xs m-0">지표 없음</p>}
+        <table className="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>이슈 키워드</th>
+              <th>문장</th>
+              <th>감성</th>
+            </tr>
+          </thead>
+          <tbody>
+            {o.issueItems.map((i) => (
+              <tr key={i.position}>
+                <td className="num">{i.position + 1}</td>
+                <td>{i.titleKeyword}</td>
+                <td className="t-xs">{i.sentence}</td>
+                <td className="t-xs">{sentiment(i.sentiment)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {o.issueItems.length === 0 && <p className="card-pad t-xs m-0">이슈 항목 없음</p>}
+      </Section>
       <Section title={`결론 — ${o.conclusionTitle ?? '제목 없음'}`}>
         <Fields
           rows={[
             ['결론 문장', <Text v={o.conclusionSentence} />],
-            ['지지 키워드', keywords(o, 'support')],
-            ['부담 키워드', keywords(o, 'burden')],
+            [`${KEYWORD_KIND_LABEL.support} 키워드`, keywords(o, 'support')],
+            [`${KEYWORD_KIND_LABEL.burden} 키워드`, keywords(o, 'burden')],
             ['전망이 바뀌는 조건', <Text v={o.changeCondition} />],
           ]}
         />
@@ -152,7 +206,7 @@ function Items({ items }: { items: OutlookItem[] }) {
             <td className="num">{i.position + 1}</td>
             <td>
               {i.titleKeyword}
-              {i.changeType && <span className="tag ml-1">{i.changeType}</span>}
+              {i.changeType && <span className="tag ml-1">{labelOf(CHANGE_TYPE_LABEL, i.changeType)}</span>}
             </td>
             <td className="t-xs">
               {list(i.bullets).map((b, n) => (
@@ -185,7 +239,7 @@ function Movement({ m }: { m: MovementDetail }) {
           ]}
         />
       </Section>
-      <Section title={`항목 — 저장 ${m.items.length}건 · 고른 항목 ${m.selectedItemIds.length}건`}>
+      <Section title={`항목 ${m.items.length}건 · 고른 항목 ${m.selectedItemIds.length}건 — 앞선 분석에서 고른 항목도 함께`}>
         <table className="table">
           <thead>
             <tr>

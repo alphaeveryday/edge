@@ -5,4 +5,5 @@ import type { AnalysisResultsRepository } from './repository';
 export const analysisResultsRepository: AnalysisResultsRepository = realAnalysisResultsRepository;
 
 export * from './types';
+export * from './labels';
 export type { AnalysisResultsRepository } from './repository';

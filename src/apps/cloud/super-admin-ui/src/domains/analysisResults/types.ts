@@ -25,7 +25,7 @@ export interface AnalysisResultRow {
   analysisAt: string;
   status: AnalysisResultStatus;
   dataSource: string;
-  /** 테넌트 조회가 게시본으로 내는가 — v2 테넌트 조회와 같은 기준 */
+  /** v2 테넌트 최신 게시본 조회의 조건을 만족하는가. 그 조회는 이 가운데 ETF 마다 최근 한 건만 낸다 */
   published: boolean;
   publishedAt: string | null;
   /** 가격변동만 값이 있다. 전망은 회수 열이 없어 null */
@@ -65,8 +65,21 @@ export interface OutlookDetail {
   conclusionTitle: string | null;
   conclusionSentence: string | null;
   changeCondition: string | null;
+  issueHeadline: string | null;
   items: OutlookItem[];
   factors: { type: string; sticker: string; sentence: string }[];
+  factorMetrics: {
+    factorType: string;
+    metricKey: string;
+    numericValue: number | null;
+    textValue: string | null;
+    observedDate: string | null;
+    observedAt: string | null;
+    subject: string | null;
+    position: number;
+    toolRunIds: string[];
+  }[];
+  issueItems: { position: number; titleKeyword: string; sentence: string; sentiment: string; toolRunIds: string[] }[];
   conclusionKeywords: { kind: string; position: number; label: string; toolRunIds: string[] }[];
 }
 
@@ -86,6 +99,7 @@ export interface MovementDetail {
   selectedItemIds: string[];
   withdrawn: boolean;
   withdrawnAt: string | null;
+  /** 이 분석이 만든 항목 전부 + 고른 항목 가운데 같은 날 앞선 분석이 만든 것 */
   items: MovementItem[];
 }
 

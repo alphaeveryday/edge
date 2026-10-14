@@ -136,7 +136,8 @@ export function headerRoute(raw: string): HeaderRoute {
     return {
       kind: 'analysisResultDetail',
       title: '분석 결과 상세',
-      backTo: '/analysis-results',
+      /* 종류는 경로에 있으니 그 종류의 목록으로 돌아간다 — 기간·ETF 필터는 경로에 없어 못 살린다 */
+      backTo: `/analysis-results?kind=${result[1]}`,
       entity: { id: result[2] },
     };
   }
