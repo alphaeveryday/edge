@@ -160,6 +160,10 @@ class Optimizer:
                   for key in ids - {'CASH:KRW'}}
         if any(self.market.catalog[key]['market'] == 'US' for key in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
+        priority = set(self.market.current) - {'CASH:KRW'}
+        if any(self.market.catalog[key]['market'] == 'US' for key in priority):
+            priority.add('FX')
+        ordered = sorted(needed, key=lambda key: (key not in priority, key != 'FX', key))
 
         async def fetch(key, symbol):
             if key not in self.market.records:
@@ -175,7 +179,7 @@ class Optimizer:
         try:
             try:
                 async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
-                    await asyncio.gather(*(fetch(key, symbol) for key, symbol in needed.items()), return_exceptions=True)
+                    await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
             except TimeoutError:
                 for key in needed:
                     if key not in self.market.records:
