@@ -211,7 +211,13 @@ const WIRE = (): ConsoleFactsDto => ({
   etfAnalyses: { rows: [
     { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
   ] },
-  meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03' },
+  meta: {
+    db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03',
+    timing: { totalMs: 5600, segments: [
+      { name: 'outputs', kind: 'db', ms: 4200 },
+      { name: 'queues', kind: 'aws', ms: 900 },
+    ] },
+  },
 });
 
 /** 한 자리만 망가뜨린 응답 — 나머지는 정상이라 거부가 그 자리 때문임이 분명하다. */
@@ -927,5 +933,39 @@ test('ETF별 분석 귀결의 상태는 계약이 열거한 코드만 받는다'
     const r = parseFacts(w);
     assert.equal(r.ok, false, `${label}: 통과시켰다`);
     assert.match(r.ok ? '' : r.reason, /etfAnalyses/, label);
+  }
+});
+
+test('서버가 쓴 시간은 있어도 없어도 받는다 — 규칙 사실로는 옮기지 않는다', () => {
+  /* 재기만 하는 값이다(ALPHA-1314). 화면도 규칙도 읽지 않으므로 사실에 싣지 않는다. */
+  const withTiming = parseFacts(WIRE());
+  assert.equal(withTiming.ok, true, withTiming.ok ? '' : withTiming.reason);
+  assert.equal(withTiming.ok && 'timing' in withTiming.facts.meta, false, '사실에 실었다');
+  /* 이 필드를 싣기 전의 API */
+  const w = WIRE();
+  delete w.meta.timing;
+  const without = parseFacts(w);
+  assert.equal(without.ok, true, without.ok ? '' : without.reason);
+  assert.deepEqual(without.ok && without.facts, withTiming.ok && withTiming.facts);
+  /* 서버가 구간을 더하거나 이름을 바꿔도 받는다 — 이름과 종류는 문자열이기만 하면 된다 */
+  const grown = WIRE();
+  grown.meta.timing!.segments.push({ name: 'new.segment', kind: 'cache', ms: 0 });
+  assert.equal(parseFacts(grown).ok, true);
+});
+
+test('서버가 쓴 시간이 오면 형상은 본다', () => {
+  const cases: [string, (w: ConsoleFactsDto) => void][] = [
+    ['전체 시간이 수가 아니다', (w) => { (w.meta.timing as { totalMs: unknown }).totalMs = '5600'; }],
+    ['구간이 배열이 아니다', (w) => { (w.meta.timing as { segments: unknown }).segments = {}; }],
+    ['구간의 시간이 음수다', (w) => { w.meta.timing!.segments[0].ms = -1; }],
+    ['구간에 이름이 없다', (w) => { (w.meta.timing!.segments[0] as { name: unknown }).name = null; }],
+    ['객체가 아니다', (w) => { (w.meta as { timing: unknown }).timing = 5600; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const w = WIRE();
+    mutate(w);
+    const r = parseFacts(w);
+    assert.equal(r.ok, false, `${label}: 통과시켰다`);
+    assert.match(r.ok ? '' : r.reason, /meta\.timing/, label);
   }
 });
