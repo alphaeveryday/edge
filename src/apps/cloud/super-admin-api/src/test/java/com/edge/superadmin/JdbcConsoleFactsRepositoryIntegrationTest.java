@@ -2099,6 +2099,28 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
+	 * 유예의 <b>경계</b>는 8시간이다(단일 분석 워크플로의 전체 시간 제한, 28,800초). 경계 양쪽 10분에
+	 * 표본을 둔다 — 한 시간·25시간 표본만으로는 유예를 2시간이나 24시간으로 바꾸는 변이가 통과한다.
+	 *
+	 * <p>두 표본의 KST 날짜는 실행 시각에 따라 같을 수도 다를 수도 있어, 날짜별로 기대값을 가른다.
+	 */
+	@Test
+	void 유예의_경계는_발화_뒤_8시간이다() {
+		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		java.time.OffsetDateTime inside = now.minusHours(8).plusMinutes(10);    // 7시간 50분 전 — 유예 안
+		java.time.OffsetDateTime outside = now.minusHours(8).minusMinutes(10);  // 8시간 10분 전 — 유예 밖
+		insertMinuteTrigger("b-in", inside.toLocalDate().toString(), "etf-in", "FIRE", inside.toString());
+		insertMinuteTrigger("b-out", outside.toLocalDate().toString(), "etf-out", "FIRE", outside.toString());
+
+		java.util.function.Function<LocalDate, Long> requestPending = day -> repository.facts(day).chain()
+				.analysisStages().stream().filter(s -> s.id().equals("c.req")).findFirst().orElseThrow().pending();
+		boolean sameDay = inside.toLocalDate().equals(outside.toLocalDate());
+		// 유예 안의 표본만 판정 불가다 — 같은 날이면 그날의 수는 1, 다른 날이면 유예 밖 표본의 날은 0 이다.
+		assertThat(requestPending.apply(inside.toLocalDate())).isEqualTo(1L);
+		assertThat(requestPending.apply(outside.toLocalDate())).isEqualTo(sameDay ? 1L : 0L);
+	}
+
+	/**
 	 * 🔴 <b>v2 요청이 아직 없던 날은 v2 단계가 관측 불가다</b>(ALPHA-1296) — 그날 코호트에 요청이
 	 * 하나도 없고 첫 v2 요청이 조회일보다 뒤다. 그 0 은 "요청이 하나도 안 만들어졌다"가 아니라 그때
 	 * v2 가 없었다는 뜻이다. 날짜 상수가 아니라 원장이 답한다.

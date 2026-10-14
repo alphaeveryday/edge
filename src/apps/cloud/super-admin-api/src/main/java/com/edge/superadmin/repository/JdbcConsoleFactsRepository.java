@@ -857,7 +857,8 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 * ({@code young})가 다음 단계에 못 갔으면 손실도 도달도 아니다. {@code req_pending} 은 요청이 아직
 	 * 수용되지 않은 트리거, {@code started_pending} 은 요청은 수용됐는데 분석 행이 아직 없는 트리거다.
 	 * 이미 도달한 트리거는 유예 안이어도 도달로 센다. 시각은 DB 시각({@code now()} — 트랜잭션 시작
-	 * 시각이라 한 조회 안에서 같다)과 비교하고 조회일과 무관하다: 지난 날짜의 트리거는 모두 유예 밖이다.
+	 * 시각이라 한 조회 안에서 같다)과 비교하고 조회일과 무관하다: 발화한 지 유예 시간이 지난 트리거는
+	 * 어느 날짜를 조회하든 판정 불가가 아니다(어제 저녁의 트리거는 자정 뒤에도 유예 안일 수 있다).
 	 *
 	 * <p>🔴 <b>요청은 수용된 것만 센다</b>({@code accepted_at IS NOT NULL}). v2 는 워크플로를 띄우기
 	 * 전에 요청 행을 먼저 예약하고, 수용이 확인돼야 {@code accepted_at} 을 채운다
