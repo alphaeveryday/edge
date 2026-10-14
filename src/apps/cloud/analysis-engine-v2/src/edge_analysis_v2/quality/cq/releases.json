@@ -1,7 +1,7 @@
 {
-  "version": 115,
-  "summary": "가격변동 요약과 항목 제목에서 수치를 빼고 쉬운 말로: 누가 + 무슨 일, 크기는 말로, 수치는 상세 본문에",
-  "source_digest": "426e90af4a9f0d9ed59a2c224a54e63c35da6b81c943661efc92127cc095d2c1",
+  "version": 116,
+  "summary": "가격변동 제목·요약에서 잘 알려지지 않은 회사 이름을 하는 일로 바꿈 (CXMT → 중국 메모리 회사)",
+  "source_digest": "47e340e103ee105c439d9fc3caf80c1879675a9f3524d309076655830c249ea9",
   "history": [
     {
       "version": 1,
@@ -572,6 +572,11 @@
       "version": 114,
       "summary": "가격변동 요약을 70자 안의 한 문장으로: 그날 가장 중요한 일 하나와 그것이 이 ETF에 뜻하는 것. 두 번째 사건과 세부 숫자는 상세 항목에",
       "source_digest": "10340f514d0441aa820c269c4d137aaab44b93c1a0d7c2d0b51052b413c58d3d"
+    },
+    {
+      "version": 115,
+      "summary": "가격변동 요약과 항목 제목에서 수치를 빼고 쉬운 말로: 누가 + 무슨 일, 크기는 말로, 수치는 상세 본문에",
+      "source_digest": "426e90af4a9f0d9ed59a2c224a54e63c35da6b81c943661efc92127cc095d2c1"
     }
   ]
 }
