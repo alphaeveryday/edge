@@ -35,10 +35,12 @@ async def test_duplicate_search_reuses_results_and_budget_for_a_different_path()
     assert evidence.calls == len(calls) == 2
 
 
-async def test_empty_navigation_is_recorded_and_its_pdf_link_is_still_discovered():
+@pytest.mark.parametrize('document_url', ['https://issuer.example/factsheet.pdf', 'https://issuer.example/download?id=123',
+                                          'https://issuer.example/download?file=report.pdf'])
+async def test_empty_navigation_is_recorded_and_its_pdf_link_is_still_discovered(document_url):
     class Session:
         async def call_tool(self, *args):
-            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text='Home\n[Factsheet](https://issuer.example/factsheet.pdf)')])
+            return SimpleNamespace(isError=False, content=[SimpleNamespace(type='text', text=f'Home\n[Factsheet]({document_url})')])
     evidence = ExaEvidence(Session())
     evidence.discovered.add('https://issuer.example/fund')
     with pytest.raises(ValueError, match='INSUFFICIENT_SOURCE_BODY'):
@@ -46,8 +48,8 @@ async def test_empty_navigation_is_recorded_and_its_pdf_link_is_still_discovered
     with pytest.raises(ValueError, match='SOURCE_PATH_EXHAUSTED'):
         await evidence.call('fetch_source', {'url': 'https://issuer.example/fund'})
     assert evidence.calls == 1
-    assert 'https://issuer.example/factsheet.pdf' in evidence.discovered
-    assert 'https://issuer.example/factsheet.pdf' in evidence.search_targets
+    assert document_url in evidence.discovered
+    assert document_url in evidence.search_targets
     assert evidence.attempts[-1]['reason'] == 'INSUFFICIENT_SOURCE_BODY'
     assert evidence.sources == []
 

@@ -111,7 +111,8 @@ class ExaEvidence:
             raise ValueError("EXA_FAILED")
         body = "\n".join(b.text for b in result.content if b.type == "text")[:arguments.get('maxCharacters', 24000) + 2000]
         links = []
-        urls = re.findall(r'^URL:\s*(https://\S+)', body, re.M) + re.findall(r'\]\((https://(?:[^\s()]|\([^()\s]*\))+)\)', body)
+        markdown_links = re.findall(r'\[([^\]\n]*)\]\((https://(?:[^\s()]|\([^()\s]*\))+)\)', body)
+        urls = re.findall(r'^URL:\s*(https://\S+)', body, re.M) + [url for _, url in markdown_links]
         for url in urls:
             try:
                 parsed = urlsplit(url)
@@ -124,8 +125,9 @@ class ExaEvidence:
         if remote == "web_search_exa":
             self.search_targets.update(links)
             return {"search_results": body[:2500], "fetchable_urls": sorted(self.discovered)}
-        self.search_targets.update(url for url in links if re.search(
-            r'\.pdf$|factsheet|fact-sheet|prospectus|annual-report|disclosure', urlsplit(url).path, re.I))
+        document_pattern = r'\.pdf(?:$|[?#&])|fact.?sheet|prospectus|annual.?report|disclosure|holdings|fees|보유|보수|공시|투자설명서|운용보고서'
+        document_links = {url for label, url in markdown_links if re.search(document_pattern, label, re.I)}
+        self.search_targets.update(url for url in links if url in document_links or re.search(document_pattern, url, re.I))
         quality = inspect_body(body, arguments['maxCharacters'])
         if quality['status'] == 'unavailable':
             raise ValueError(quality['reason'])
