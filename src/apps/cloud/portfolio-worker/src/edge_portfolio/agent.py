@@ -372,7 +372,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
                     research_exhausted = len(failed_source_urls) >= 2 and not (getattr(evidence, 'discovered', set()) - failed_source_urls)
-                    source_free_allowed = decision.kind == 'scenario' or research_exhausted or bool(decision.missing_inputs) or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
+                    source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_research

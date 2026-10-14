@@ -420,7 +420,8 @@ async def test_truncated_output_recovers_without_discarding_prior_tool_evidence(
 
 @pytest.mark.parametrize('invalid', [None, []])
 @pytest.mark.parametrize('policy_conflict', [True, False])
-async def test_nonobject_source_free_response_uses_the_repair_path(monkeypatch, invalid, policy_conflict):
+@pytest.mark.parametrize('optional_input', [False, True])
+async def test_nonobject_source_free_response_uses_the_repair_path(monkeypatch, invalid, policy_conflict, optional_input):
     import json
     from edge_portfolio.agent import run_analysis
     class Optimizer:
@@ -443,7 +444,7 @@ async def test_nonobject_source_free_response_uses_the_repair_path(monkeypatch, 
             content['insights'][0]['content'] = content['portfolio']
         else:
             content.update(evidence=[], limitations=['상품 자료를 확보하지 못했어요.'])
-        if role == 'question': content = {**content, 'decision': {}}
+        if role == 'question': content = {**content, 'decision': {'missing_inputs': ['목표 배당금']} if optional_input else {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
     if not policy_conflict:
