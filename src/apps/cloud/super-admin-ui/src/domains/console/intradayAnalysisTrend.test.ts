@@ -30,6 +30,17 @@ test('🔴 유예 시간 안의 트리거가 남은 지난 날은 미완료가 �
   assert.equal(intradayOutcome(p, '2026-08-20').kind, 'partial');
 });
 
+test('🔴 판정 보류가 확정된 미완료를 가리지 않는다 — 미완료는 판정 보류를 뺀 나머지다', () => {
+  /* 트리거 5 · 완료 1 · 요청 판정 보류 1 → 확정된 미완료 3 */
+  const p = point('2026-08-19', 5, 1);
+  p.analysis = { ...p.analysis, requested: 4, requestPending: 1, started: 1 };
+  assert.deepEqual(intradayOutcome(p, '2026-08-20'), { kind: 'partial', label: '일부 미완료 3건', missing: 3 });
+  /* 완료가 0 이어도 판정 보류가 있으면 "전량 미완료"가 아니다 */
+  const q = point('2026-08-19', 2, 0);
+  q.analysis = { ...q.analysis, requested: 1, requestPending: 1, started: 0 };
+  assert.deepEqual(intradayOutcome(q, '2026-08-20'), { kind: 'partial', label: '일부 미완료 1건', missing: 1 });
+});
+
 test('🔴 새 분석 엔진의 요청이 없던 날은 관측 불가이고, 그 단계가 없는 옛 응답은 상태 미제공이다 — 어느 쪽도 미완료로 그리지 않는다', () => {
   assert.equal(intradayOutcome(point('2026-09-20', 5, 0, true), '2026-10-20').kind, 'blind');
   const { analysis: _dropped, ...old } = point('2026-09-20', 5, 0);
