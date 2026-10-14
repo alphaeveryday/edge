@@ -406,7 +406,8 @@ async def test_truncated_output_recovers_without_discarding_prior_tool_evidence(
             attempts.append(1)
             return {'choices': [{'finish_reason': 'length', 'message': {'role': 'assistant', 'content': '{'}}]}
         if role == 'opinion':
-            assert '길이 한도' in payload['messages'][-1]['content']
+            assert any('길이 한도' in message.get('content', '') for message in payload['messages'] if message['role'] == 'user')
+            assert payload['tool_choice'] == 'none'
         content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
         if role == 'question': content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
