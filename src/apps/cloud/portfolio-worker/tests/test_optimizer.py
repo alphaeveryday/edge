@@ -484,6 +484,60 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
         optimizer.validate(final)
 
 
+async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch):
+    request, market, groups = batch()
+    started = []
+    async def fetch(symbol, _, **kwargs):
+        started.append(symbol)
+        await asyncio.sleep(.04)
+        return record()
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .07)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
+    assert not market.failures
+    assert result['tested_combinations'] == 10
+
+
+@pytest.mark.parametrize('completed', [False, True])
+async def test_batch_deadline_distinguishes_unstarted_prices_from_interrupted_providers(monkeypatch, completed):
+    request, market, groups = batch()
+    started = []
+    completed_record = record()
+    async def fetch(symbol, _, **kwargs):
+        started.append(symbol)
+        if completed and symbol == 'A.KS':
+            return completed_record
+        await asyncio.sleep(10)
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert len(started) == 2 + int(completed)
+    assert set(market.failures.values()) == {'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT'}
+    assert sum(reason == 'PRICE_QUEUE_TIMEOUT' for reason in market.failures.values()) == 3 - int(completed)
+    assert bool(result['candidates']) == completed
+    if completed:
+        assert market.records['KR:A'] is completed_record
+        assert result['tested_combinations'] == 1
+
+
+async def test_timeout_checkpoint_is_not_reported_as_an_unavailable_instrument(monkeypatch):
+    request, market, groups = batch()
+    async def fetch(symbol, _, **kwargs):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            kwargs['on_raw'](record())
+            raise
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .03)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 10
+    assert result['failures'] == {}
+
+
 def test_rating_alone_cannot_withhold_an_available_candidate():
     from edge_portfolio.contracts import FinalReport
     from report_fixtures import final_payload
@@ -494,3 +548,27 @@ def test_rating_alone_cannot_withhold_an_available_candidate():
         optimizer.validate(final)
     optimizer.result = {'status': 'no_match', 'candidates': []}
     assert optimizer.validate(final) is None
+
+
+async def test_price_retries_share_collection_time_and_keep_completed_candidates(monkeypatch):
+    from itertools import combinations
+    request, market, groups = batch()
+    started = []
+    async def fetch(symbol, _, **kwargs):
+        started.append(symbol)
+        if symbol == 'A.KS':
+            return record()
+        await asyncio.sleep(10)
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .03)
+    optimizer = Optimizer(market, request)
+    first = await optimizer.tool({'combinations': groups})
+    attempts = list(started)
+    second = await optimizer.tool({'combinations': groups})
+    assert started == attempts  # Retrying cannot consume the report-writing time again.
+    assert first['status'] == second['status'] == 'available'
+    assert [row['allocations'] for row in first['candidates']] == [row['allocations'] for row in second['candidates']]
+    assert first['failures'] == second['failures']
+    third = await optimizer.tool({'combinations': [list(group) for group in combinations(market.catalog, 3)]})
+    assert started == attempts  # A different candidate batch shares the same collection budget.
+    assert [row['allocations'] for row in third['candidates']] == [row['allocations'] for row in first['candidates']]

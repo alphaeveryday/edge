@@ -3,6 +3,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, ROUND_CEILING
 from itertools import combinations
+from time import monotonic
 
 import numpy as np
 
@@ -13,6 +14,7 @@ from .execution import plan_execution
 from .market_data import comparison_method, comparison_column
 
 PRICE_TIMEOUT_SECONDS = 65
+PRICE_COLLECTION_BUDGET_SECONDS = 180
 
 
 def optimization_bounds(ids, records, as_of, *, column=None):
@@ -103,6 +105,7 @@ class Optimizer:
         self.batches = set()
         self.attempts = {}
         self.revision = 0
+        self.price_collection_seconds = 0
 
     async def tool(self, args):
         result = await self._tool(args)
@@ -169,25 +172,35 @@ class Optimizer:
             priority.add('FX')
         ordered = sorted(needed, key=lambda key: (key not in priority, key != 'FX', key))
 
+        attempted = set()
         async def fetch(key, symbol):
             if key not in self.market.records:
                 self.market.failures.pop(key, None)
                 async with self.market.semaphore:
+                    attempted.add(key)
                     try:
-                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
-                            on_raw=lambda record: self.market.records.__setitem__(key, record))
+                        async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
+                            self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
+                                on_raw=lambda record: self.market.records.__setitem__(key, record))
                         self.market.failures.pop(key, None)
                     except Exception as error:
-                        self.market.failures[key] = price_failure(error)
+                        if key not in self.market.records:
+                            self.market.failures[key] = price_failure(error)
         rejections = {}
+        collection_started = monotonic()
         try:
             try:
-                async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
+                remaining = PRICE_COLLECTION_BUDGET_SECONDS - self.price_collection_seconds
+                if remaining <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(remaining):
                     await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
             except TimeoutError:
                 for key in needed:
                     if key not in self.market.records:
-                        self.market.failures.setdefault(key, 'PRICE_PROVIDER_TIMEOUT')
+                        self.market.failures.setdefault(key, 'PRICE_COLLECTION_TIMEOUT' if key in attempted else 'PRICE_QUEUE_TIMEOUT')
+            finally:
+                self.price_collection_seconds += monotonic() - collection_started
             failed = set(needed) - set(self.market.records)
             if 'FX' in failed:
                 failed.update(key for key in ids - {'CASH:KRW'} if self.market.catalog[key]['market'] == 'US')
