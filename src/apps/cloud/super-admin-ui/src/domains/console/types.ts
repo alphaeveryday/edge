@@ -23,11 +23,9 @@ export interface ConsoleFactsDto {
   /** 🔴 **옵셔널이다** — 이 축을 안 싣는 배포본(롤백·UI 선배포)이 실재할 수 있고, 그때
    *  응답을 거부하면 체인 카드 하나 때문에 **ops 전 화면**이 빈다. 없으면 R10 이 `못 돎`. */
   chain?: ChainDto;
-  /** 나중에 붙은 축 — 롤백·UI 선배포 때는 부재할 수 있다. */
-  etfLedger?: EtfLedgerDto;
   /**
    * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. 이 축을 싣기 전의 API
-   * 에서는 없다. 없으면 표는 "기록 없음"이고 옛 축(`etfLedger`)으로 대신 그리지 않는다.
+   * 에서는 없다. 없으면 표는 "기록 없음"이다.
    */
   etfAnalyses?: EtfAnalysesDto;
   /**
@@ -104,18 +102,6 @@ export type MovementStateDto = OutlookStateDto | 'not_started' | 'pending';
 
 export interface EtfAnalysesDto {
   rows: { etf: string; name: string; outlook: OutlookStateDto; movement: MovementStateDto }[];
-}
-
-export interface EtfLedgerDto {
-  rows: EtfLedgerRowDto[];
-}
-
-export interface EtfLedgerRowDto {
-  etf: string;
-  name: string;
-  triggered: boolean;
-  outcome: string | null;
-  error: string | null;
 }
 
 /**
@@ -217,8 +203,12 @@ export interface BoundaryDto {
  */
 export interface ChainDto {
   feeds: ChainFeedDto[];
-  /** 옛 설명 엔진의 단계다. **화면과 규칙은 더는 읽지 않는다**(ALPHA-1296) — 형상 검증만 한다 */
-  stages: ChainStageDto[];
+  /**
+   * 옛 설명 엔진의 단계다. **화면과 규칙은 더는 읽지 않는다**(ALPHA-1296) — 오면 형상 검증만 한다.
+   * **옵셔널이다**(ALPHA-1328): 서버가 다음 배포에서 이 목록을 지운다. 지금 서버가 계속 싣는 이유는
+   * 그 앞의 UI 가 이 목록이 없거나 비면 응답 전체를 거부하기 때문이다.
+   */
+  stages?: ChainStageDto[];
   /**
    * 새 분석 엔진(v2)의 단계(ALPHA-1296) — 분석 요청 → 분석 시작 → 분석 완료 → 게시. 화면과 R10 이
    * 읽는 목록이다. **옵셔널이다**: 이 목록을 안 싣는 API(롤백·UI 선배포)에서는 오지 않고, 그때

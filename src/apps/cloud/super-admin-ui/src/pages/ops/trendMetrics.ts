@@ -52,7 +52,7 @@ export type Direction = 'higherIsBetter' | 'lowerIsBetter' | 'stable';
 export interface SeriesPoint {
   date: string;
   value: number;
-  /** 응답이 이 값을 목이라고 밝혔는가(`cmpl_mock`·`etf_ledger.mock`) */
+  /** 응답이 이 값을 목이라고 밝혔는가(`cmpl_mock`) */
   isMock: boolean;
 }
 

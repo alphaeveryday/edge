@@ -25,7 +25,6 @@ function emptyFacts(): Facts {
     queues: [],
     outputs: [],
     boundary: { published_without_delivery: 0, delivery_now_nonpublished: 0 },
-    etf_ledger: { rows: [] },
     analysis_failures: [{ kind: 'outlook', failed_etfs: [] }, { kind: 'movement', failed_etfs: [] }],
     runbook: {},
     meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:00+09:00', today: '2026-08-03' },
@@ -34,7 +33,7 @@ function emptyFacts(): Facts {
 
 /**
  * **옵셔널 축을 전부 뺀** 사실 — 실 응답의 최소 형상이다(계약 §「무엇이 실제로 나가는가」:
- * 구 서버가 `queues`·`etf_ledger`·`runbook`을 안 보내고, 나중에 붙은 `chain`·`meta.aws`도
+ * 구 서버가 `queues`·`runbook`을 안 보내고, 나중에 붙은 `chain`·`meta.aws`도
  * API 롤백·UI 선배포 때는 없을 수 있다).
  *
  * 빼는 목록을 각 테스트가 손으로 적으면 축이 하나 늘 때 한 곳만 갱신된다 — 이 트랙에서 반복된
@@ -44,7 +43,6 @@ function bareFacts(): Facts {
   const f = emptyFacts();
   delete f.chain;
   delete f.queues;
-  delete f.etf_ledger;
   delete f.analysis_failures;
   delete f.minute;
   delete f.runbook;
@@ -1087,22 +1085,17 @@ test('R15 분석 실패 — 끝내 완료하지 못한 ETF 를 종류별 위반�
   assert.equal(buildReport(f, NOW).rules.find((r) => r.id === 'R15')!.evaluated, true);
 });
 
-test('🔴 R15 는 옛 엔진의 ETF 원장을 읽지 않는다 — 멈춘 표의 실패 행으로 서지도, 빈 표로 안심하지도 않는다', () => {
+test('🔴 R15 는 v2 분석 실패 축의 실패를 세운다', () => {
+  /* 옛 엔진의 ETF 원장은 사실에서 지웠다(ALPHA-1328) — R15 가 읽을 수 있는 실패는 이 축뿐이다 */
   const f = emptyFacts();
-  f.etf_ledger = { rows: [{ etf: 'a', name: 'A', triggered: true, outcome: 'FAILED', error: 'NaN weight' }] };
-  assert.equal(hits(f, 'R15').length, 0, '옛 원장의 FAILED 로 위반을 세웠다');
-  /* 반대 방향: 옛 원장이 비어 있어도 v2 축의 실패는 선다 */
-  f.etf_ledger = { rows: [] };
   f.analysis_failures = [{ kind: 'outlook', failed_etfs: ['069500'] }, { kind: 'movement', failed_etfs: [] }];
   assert.equal(hits(f, 'R15').length, 1);
 });
 
 test('🔴 R15 경계 — v2 분석 실패 축이 없는 옛 응답에서는 못 돎이다 (위반 0건으로 읽히면 안 된다)', () => {
-  /* UI 가 API 보다 먼저 배포되면 그 축이 없는 응답을 받는다. 옛 원장(`etf_ledger`)이 실려 있어도
-   * 그걸로 대신 판정하지 않는다 — 그 표는 10-01 에 멈췄다. */
+  /* UI 가 API 보다 먼저 배포되면 그 축이 없는 응답을 받는다. */
   const f = emptyFacts();
   delete f.analysis_failures;
-  f.etf_ledger = { rows: [{ etf: 'a', name: 'A', triggered: true, outcome: 'FAILED' }] };
   const rr = buildReport(f, NOW).rules.find((r) => r.id === 'R15')!;
   assert.equal(rr.evaluated, false);
   assert.equal(rr.violations, 0);

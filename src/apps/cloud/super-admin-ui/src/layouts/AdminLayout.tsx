@@ -36,12 +36,9 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
     section: '테넌트 관리',
     items: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
-  {
-    section: '분석 결과',
-    items: [
-      { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
-    ],
-  },
+  /* '분석 결과'(가격 변동 분석 목록)는 메뉴에서 뺐다(ALPHA-1328). 옛 설명 엔진의 표를 읽어 10-02 이후가
+   * 비어 있고, 새 분석 엔진 기준으로 다시 만들지 않기로 했다(사용자 결정). 라우트·화면은 남기고 화면
+   * 위에 그 사실과 흐름 화면의 ETF 표 링크를 밝힌다(`LegacyEngineNotice`). */
 ];
 
 export function AdminLayout() {

@@ -21,6 +21,7 @@ import { groupBySymbol, hasResult, symbolHref } from '../domains/analyses/symbol
 import type { SymbolGroup } from '../domains/analyses/symbols';
 import { MOCK_ANALYSES } from '../mock/preview';
 import { EmptyRealNotice, MockChip, MockPreview } from './_shared/MockPreview';
+import { LegacyEngineNotice } from './_shared/LegacyEngineNotice';
 import { LoadError } from './_shared/LoadError';
 
 type View = 'symbol' | 'history';
@@ -257,7 +258,17 @@ function HistoryTable({
   );
 }
 
+/** 옛 설명 엔진의 기록이라 화면 맨 위에 그 사실을 밝힌다(ALPHA-1328) — 조회 상태와 무관하게 늘 보인다 */
 export function AnalysesPage() {
+  return (
+    <div className="flex flex-col gap-4">
+      <LegacyEngineNotice />
+      <AnalysesContent />
+    </div>
+  );
+}
+
+function AnalysesContent() {
   const analysesQuery = useAnalyses();
 
   if (analysesQuery.isError) return <LoadError error={analysesQuery.error} />;

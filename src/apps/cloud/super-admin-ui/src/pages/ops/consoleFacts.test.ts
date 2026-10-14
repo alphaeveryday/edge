@@ -15,7 +15,6 @@ import {
   CHAIN_STAGE_FIELDS,
   DATASET_FIELDS,
   ETF_ANALYSIS_ROW_FIELDS,
-  ETF_LEDGER_ROW_FIELDS,
   factsAxis,
   META_FIELDS,
   minuteFacts,
@@ -204,9 +203,6 @@ const WIRE = (): ConsoleFactsDto => ({
       { id: 'c.done', label: '분석 완료', batch: null, intraday: 44, src: 'status=completed' },
     ],
   },
-  etfLedger: { rows: [
-    { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
-  ] },
   /* 옛 축(위)과 ETF·상태를 다르게 둔다 — 어댑터가 옛 축을 읽으면 값이 갈린다 */
   etfAnalyses: { rows: [
     { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
@@ -292,9 +288,6 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
         { id: 'c.done', label: '분석 완료', batch: null, intraday: 44, src: 'status=completed', batch_na: true, shown_only: true },
       ],
     },
-    etf_ledger: { rows: [
-      { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
-    ] },
     etf_analyses: { rows: [
       { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
     ] },
@@ -338,7 +331,6 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   delete w.runs[0].awsStop;
   delete w.meta.aws;
   delete w.queues;
-  delete w.etfLedger;
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
@@ -347,7 +339,6 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   assert.equal(r.facts.runs[0].aws_status, undefined, 'AWS 상태를 만들어 냈다');
   assert.equal(r.facts.runs[0].aws_stop, undefined, 'AWS 종료 시각을 만들어 냈다');
   assert.equal(r.facts.queues, undefined, 'queues 축을 만들어 냈다');
-  assert.equal(r.facts.etf_ledger, undefined, 'etf_ledger 축을 만들어 냈다');
   /* 체인은 이제 **온다** — 이 단언이 없으면 위 셋을 지키느라 축을 통째로 떨구는 회귀가 초록이다 */
   assert.notEqual(r.facts.chain, undefined, 'chain 축을 떨궜다');
 });
@@ -424,7 +415,7 @@ test('🔴 관측 불가 표시는 참일 때만 사실로 싣는다 — 0 과 �
   for (const p of [old, off]) {
     assert.equal(p.ok, true, p.ok ? '' : p.reason);
     if (p.ok) {
-      assert.ok(!('blind' in p.facts.chain!.stages[0]), '없는 표시를 만들어 냈다');
+      assert.ok(!('blind' in p.facts.chain!.stages![0]), '없는 표시를 만들어 냈다');
       assert.ok(!('blind' in p.facts.boundary), '없는 표시를 만들어 냈다');
     }
   }
@@ -509,25 +500,11 @@ test('허용 — 정당한 null 은 거부하지 않는다', () => {
   w.tasks[0].recordsOut = null;
   w.outputs[0].base = null;
   w.datasets[0].unverifiable = null;
-  w.etfLedger!.rows[0].outcome = null;
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : `정상 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
   assert.equal(r.facts.runs[0].lane, null);
   assert.equal(r.facts.outputs[0].base, null);
-});
-
-test('거부 — ETF 원장 상태 형상이 틀리면 R15에 흘리지 않는다', () => {
-  for (const [name, mutate] of [
-    ['rows가 배열 아님', (w: ConsoleFactsDto) =>
-      { (w.etfLedger as { rows: unknown }).rows = {}; }],
-    ['triggered가 문자열', (w: ConsoleFactsDto) =>
-      { (w.etfLedger!.rows[0] as { triggered: unknown }).triggered = 'true'; }],
-    ['outcome이 수', (w: ConsoleFactsDto) =>
-      { (w.etfLedger!.rows[0] as { outcome: unknown }).outcome = 1; }],
-  ] as const) {
-    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
-  }
 });
 
 test('거부 사유는 어느 축인지 말한다 — 조회 실패 문장이 원인을 가리켜야 한다', () => {
@@ -566,9 +543,8 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.queues![0], QUEUE_FIELDS, 'queues');
   both(w.boundary, BOUNDARY_FIELDS, 'boundary', ['blind']);
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
-  both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
+  both(w.chain!.stages![0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
   both(w.chain!.analysisStages![0], ANALYSIS_STAGE_FIELDS, 'chain.analysisStages', ['blind', 'pending']);
-  both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
   both(w.etfAnalyses!.rows[0], ETF_ANALYSIS_ROW_FIELDS, 'etfAnalyses.rows');
   both(w.meta, META_FIELDS, 'meta');
 });
@@ -615,14 +591,14 @@ test('🔴 거부 — 체인의 수 자리에 null 이 오면 버린다 (그 단
    * 갈래 하나만 망가진 응답도 같다: 나머지 갈래가 멀쩡해 화면은 정상으로 보인다. */
   for (const [name, mutate] of [
     ['stages[].batch 가 null', (w: ConsoleFactsDto) =>
-      { (w.chain!.stages[0] as { batch: unknown }).batch = null; }],
+      { (w.chain!.stages![0] as { batch: unknown }).batch = null; }],
     ['stages[].intraday 가 null', (w: ConsoleFactsDto) =>
-      { (w.chain!.stages[0] as { intraday: unknown }).intraday = null; }],
+      { (w.chain!.stages![0] as { intraday: unknown }).intraday = null; }],
     ['feeds[].v 가 null', (w: ConsoleFactsDto) => { (w.chain!.feeds[0] as { v: unknown }).v = null; }],
     ['feeds[].v 가 NaN', (w: ConsoleFactsDto) => { w.chain!.feeds[0].v = NaN; }],
-    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain!.stages[0].batch = -1; }],
+    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain!.stages![0].batch = -1; }],
     ['stages[].label 이 null', (w: ConsoleFactsDto) =>
-      { (w.chain!.stages[0] as { label: unknown }).label = null; }],
+      { (w.chain!.stages![0] as { label: unknown }).label = null; }],
     ['chain 이 배열', (w: ConsoleFactsDto) => { (w as { chain: unknown }).chain = []; }],
     ['chain.stages 가 객체', (w: ConsoleFactsDto) => { (w.chain as unknown as { stages: unknown }).stages = {}; }],
     ['chain.stages 원소가 스칼라', (w: ConsoleFactsDto) =>
@@ -662,7 +638,7 @@ test('🔴 옛 단계만 실린 응답은 체인 축이 없는 것으로 옮긴�
   const w = WIRE();
   delete w.chain!.analysisStages;
   /* 관측 가능하고 줄어드는 옛 단계 — 이걸 읽으면 손실이 서는 형상을 그대로 둔다 */
-  assert.ok(w.chain!.stages[0].intraday < w.chain!.feeds[1].v, '전제: 옛 단계가 감소를 담고 있다');
+  assert.ok(w.chain!.stages![0].intraday < w.chain!.feeds[1].v, '전제: 옛 단계가 감소를 담고 있다');
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
@@ -692,7 +668,7 @@ test('새 분석 엔진의 단계 — 배치 칸의 null 은 대상 아님이고
   ];
   const p = parseFacts(pub);
   assert.equal(p.ok, true);
-  if (p.ok) assert.deepEqual(p.facts.chain!.stages.map((s) => s.shown_only), [undefined, true]);
+  if (p.ok) assert.deepEqual(p.facts.chain!.stages!.map((s) => s.shown_only), [undefined, true]);
   /* 형상이 틀리면 거부한다 — 장중 칸은 수여야 하고 빈 목록은 축이 온 척하는 빈 체인이다 */
   for (const [name, mutate] of [
     ['장중 칸이 null', (w: ConsoleFactsDto) => { (w.chain!.analysisStages![0] as { intraday: unknown }).intraday = null; }],
@@ -716,8 +692,8 @@ test('아직 판정할 수 없는 트리거 수는 있을 때만 싣는다 — �
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : r.reason);
   if (r.ok) {
-    assert.equal(r.facts.chain!.stages[0].pending, 9);
-    assert.ok(!('pending' in r.facts.chain!.stages[1]), '0 과 부재가 다른 형상이 됐다');
+    assert.equal(r.facts.chain!.stages![0].pending, 9);
+    assert.ok(!('pending' in r.facts.chain!.stages![1]), '0 과 부재가 다른 형상이 됐다');
   }
   for (const bad of [-1, 1.5, '9', null]) {
     const b = WIRE() as unknown as { chain: { analysisStages: { pending: unknown }[] } };
@@ -905,10 +881,10 @@ test('거부 — 응답 자체가 객체가 아니면 그 사실을 사유로 �
 
 test('🔴 새 축이 없는 응답에서 ETF 표는 기록 없음이다 — 옛 축으로 대신 그리지 않는다', () => {
   /* UI 가 먼저 배포되면 받는 형상이다(ALPHA-1312): 옛 설명 엔진의 `etfLedger` 는 있고 `etfAnalyses`
-   * 는 없다. 옛 축에 실패 행을 그대로 둔다 — 그걸 읽으면 표가 그 행으로 그려진다. */
+   * 는 없다. 옛 축에 실패 행을 둔다 — 그걸 읽으면 표가 그 행으로 그려진다. */
   const w = WIRE();
   delete w.etfAnalyses;
-  assert.equal(w.etfLedger!.rows[0].outcome, 'FAILED', '전제: 옛 축에 그릴 행이 있다');
+  Object.assign(w, { etfLedger: { rows: [{ etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null }] } });
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
@@ -998,4 +974,24 @@ test('🔴 전달 경계 — 새 API 와 옛 API 어느 쪽에서도 R14 가 거
   const blind = r14(old);
   assert.equal(blind.evaluated, false, '옛 API 의 관측 불가 0 을 정합으로 읽었다');
   assert.equal(blind.violations.length, 0);
+});
+
+test('🔴 옛 서버 응답을 받아도 깨지지 않는다 — 지운 축은 무시하고, 옛 단계 목록은 없어도 된다', () => {
+  /* 이 UI 앞의 서버(ALPHA-1328 이전)는 옛 설명 엔진의 ETF 원장(`etfLedger`)을 싣는다. 이 UI 는 그 축을
+   * 모른다 — 검증 경계는 모르는 필드를 거부하지 않으므로 응답 전체가 그대로 받아져야 한다. */
+  const old = WIRE();
+  Object.assign(old, { etfLedger: { rows: [{ etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null }] } });
+  const r = parseFacts(old);
+  assert.equal(r.ok, true, r.ok ? '' : `옛 서버 응답을 거부했다: ${r.reason}`);
+  assert.equal(r.ok && 'etf_ledger' in r.facts, false, '지운 축을 사실로 옮겼다');
+  /* 다음 서버는 옛 단계 목록(`chain.stages`)을 지운다 — 없어도 체인은 새 분석 엔진의 단계로 선다 */
+  const next = WIRE();
+  delete next.chain!.stages;
+  const n = parseFacts(next);
+  assert.equal(n.ok, true, n.ok ? '' : `옛 단계 목록이 없는 응답을 거부했다: ${n.reason}`);
+  assert.deepEqual(n.ok && n.facts.chain?.stages.map((s) => s.id), ['c.start', 'c.done']);
+  /* 오면 지금처럼 검사한다 — 비어 있거나 형상이 틀린 목록은 거부한다 */
+  const empty = WIRE();
+  empty.chain!.stages = [];
+  assert.equal(parseFacts(empty).ok, false, '빈 옛 단계 목록을 통과시켰다');
 });
