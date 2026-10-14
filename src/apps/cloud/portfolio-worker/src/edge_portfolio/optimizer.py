@@ -13,6 +13,7 @@ from .execution import plan_execution
 from .market_data import comparison_method, comparison_column
 
 PRICE_TIMEOUT_SECONDS = 65
+BATCH_PRICE_TIMEOUT_SECONDS = 180
 
 
 def optimization_bounds(ids, records, as_of, *, column=None):
@@ -169,10 +170,12 @@ class Optimizer:
             priority.add('FX')
         ordered = sorted(needed, key=lambda key: (key not in priority, key != 'FX', key))
 
+        attempted = set()
         async def fetch(key, symbol):
             if key not in self.market.records:
                 self.market.failures.pop(key, None)
                 async with self.market.semaphore:
+                    attempted.add(key)
                     try:
                         async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
                             self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
@@ -182,7 +185,13 @@ class Optimizer:
                         self.market.failures[key] = price_failure(error)
         rejections = {}
         try:
-            await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
+            try:
+                async with asyncio.timeout(BATCH_PRICE_TIMEOUT_SECONDS):
+                    await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
+            except TimeoutError:
+                for key in needed:
+                    if key not in self.market.records:
+                        self.market.failures.setdefault(key, 'PRICE_COLLECTION_TIMEOUT' if key in attempted else 'PRICE_QUEUE_TIMEOUT')
             failed = set(needed) - set(self.market.records)
             if 'FX' in failed:
                 failed.update(key for key in ids - {'CASH:KRW'} if self.market.catalog[key]['market'] == 'US')

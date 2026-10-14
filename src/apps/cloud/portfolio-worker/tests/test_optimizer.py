@@ -498,3 +498,25 @@ async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch
     assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
     assert not market.failures
     assert result['tested_combinations'] == 10
+
+
+@pytest.mark.parametrize('completed', [False, True])
+async def test_batch_deadline_distinguishes_unstarted_prices_from_interrupted_providers(monkeypatch, completed):
+    request, market, groups = batch()
+    started = []
+    completed_record = record()
+    async def fetch(symbol, _, **kwargs):
+        started.append(symbol)
+        if completed and symbol == 'A.KS':
+            return completed_record
+        await asyncio.sleep(10)
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.BATCH_PRICE_TIMEOUT_SECONDS', .05)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert len(started) == 2 + int(completed)
+    assert set(market.failures.values()) == {'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT'}
+    assert sum(reason == 'PRICE_QUEUE_TIMEOUT' for reason in market.failures.values()) == 3 - int(completed)
+    assert bool(result['candidates']) == completed
+    if completed:
+        assert market.records['KR:A'] is completed_record
+        assert result['tested_combinations'] == 1
