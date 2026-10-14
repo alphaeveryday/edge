@@ -84,14 +84,8 @@ export interface IntradayAnalysisTrendDto {
 export interface IntradayAnalysisTrendPointDto {
   date: string;
   triggers: number;
-  /* 아래 여섯은 옛 설명 엔진의 단계라 10-02 이후 0 이다(ALPHA-1329). 서버가 다음 배포에서 지운다 —
-   * 화면은 `analysis` 를 읽는다. */
-  observations: number;
-  runs: number;
-  activeRuns: number;
-  failedRuns: number;
-  results: number;
-  published: number;
+  /* 옛 설명 엔진의 단계 필드(observations·runs·activeRuns·failedRuns·results·published)는 읽지도
+   * 검사하지도 않는다(ALPHA-1330) — 서버가 지운다. 그 필드를 아직 싣는 서버의 응답도 그대로 받는다. */
   /**
    * 새 분석 엔진의 단계(ALPHA-1329) — 흐름 띠(`chain.analysisStages`)와 같은 조회로 센 수다. 이 필드를
    * 싣기 전의 API 에서는 없다.
