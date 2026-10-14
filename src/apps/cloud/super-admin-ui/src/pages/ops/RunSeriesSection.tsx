@@ -11,16 +11,18 @@
 import { ALL_DATASETS } from '../../domains/sources/datasetCatalog';
 import { useSourceGrid } from '../../domains/sources/hooks';
 import { EXIT_LABEL, buildRunSeries, formatDuration } from '../../domains/sources/runSeries';
-import type { DatasetRunSeries, ExitState } from '../../domains/sources/runSeries';
+import type { DatasetRunSeries, DayRowPoint, ExitState } from '../../domains/sources/runSeries';
 import { extent } from './trendSeries';
 import { Info } from './shared';
 
 const GRID_DATASETS = ALL_DATASETS.filter((d) => d.inOpsGrid);
 
 const TIP = [
-  '점 하나가 실행 하나다. 하루에 여러 번 도는 데이터셋(뉴스·장중 수급)을 하루로 합치지 않는다.',
+  '점 하나가 실행 하나다. 하루에 여러 번 도는 데이터셋(뉴스·장중 수급)도 소요 시간·종료 상태는 실행마다 그린다.',
   '',
   '행 수 — 대표 작업(적재 단계의 첫 작업)이 원장에 적은 건수.',
+  '장중 수급의 행 수는 실행마다 그날 그 시점까지의 누적이라, 하루 마지막 실행의 값을 하루 한 점으로 그린다. ' +
+    '뉴스 기사는 실행마다 어제~오늘 창의 기사 수라 실행마다 그린다.',
   '소요 시간 — 그 실행에서 이 데이터셋의 작업들이 쓴 시간의 합. 작업 하나라도 시각이 없으면 값을 내지 않는다.',
   '종료 상태 — 작업들의 종료 코드 중 가장 나쁜 것. 0 은 정상, 2 는 부분 성공, 그 밖은 실패.',
   '대상 수 대비 받은 수 — 원장에 대상 수가 적히는 작업만 낸다. 없으면 분모 없음이다.',
@@ -72,6 +74,20 @@ export function RunSpark({ label, runs, values, dashed, unit = '실행' }: {
 
 const count = (states: ExitState[], state: ExitState) => states.filter((s) => s === state).length;
 
+/** 하루 안에서 누적되는 행 수 — 하루 한 점(그날 마지막 실행 값, ALPHA-1327) */
+function DailyRows({ label, days }: { label: string; days: DayRowPoint[] }) {
+  const last = days[days.length - 1];
+  return (
+    <>
+      <RunSpark label={label} runs={days.map((d) => `${d.day} (${d.runKey})`)} values={days.map((d) => d.rows)} unit="일" />
+      <span className="rs-latest">
+        최근 {last.rows === null ? '기록 없음' : `${last.rows.toLocaleString('ko-KR')}행`}
+        <span style={{ color: 'var(--fg-3)' }}> · 하루 마지막 실행 기준</span>
+      </span>
+    </>
+  );
+}
+
 export function RunSeriesRow({ series }: { series: DatasetRunSeries }) {
   const { dataset, points } = series;
   const runs = points.map((p) => p.runKey);
@@ -93,8 +109,14 @@ export function RunSeriesRow({ series }: { series: DatasetRunSeries }) {
         <div className="t-xs mono" style={{ color: 'var(--fg-3)' }}>{series.representative ?? '대표 작업 없음'}</div>
       </td>
       <td>
-        <RunSpark label={`${dataset.label} 행 수`} runs={runs} values={points.map((p) => p.rows)} />
-        <span className="rs-latest">최근 {last.rows === null ? '기록 없음' : `${last.rows.toLocaleString('ko-KR')}행`}</span>
+        {series.dailyRows ? (
+          <DailyRows label={`${dataset.label} 행 수`} days={series.dailyRows} />
+        ) : (
+          <>
+            <RunSpark label={`${dataset.label} 행 수`} runs={runs} values={points.map((p) => p.rows)} />
+            <span className="rs-latest">최근 {last.rows === null ? '기록 없음' : `${last.rows.toLocaleString('ko-KR')}행`}</span>
+          </>
+        )}
       </td>
       <td>
         <RunSpark label={`${dataset.label} 소요 시간`} runs={runs} values={points.map((p) => p.durationSec)} />

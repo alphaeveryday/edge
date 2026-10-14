@@ -74,6 +74,14 @@ export interface DatasetEntry {
    * 세션 상세를 지목한다 — 어휘 정본은 `data_pipeline/minute/states.py` 다.
    */
   sessionDataset?: string;
+  /**
+   * 대표 작업의 행 수(`records_out`)가 **그날 그 시점까지의 누적**인가(ALPHA-1327). 참이면 실행 추이의
+   * 행 수 계열을 하루 마지막 실행 값 한 점으로 그린다 — 실행마다 그리면 하루 안에서 커졌다가 다음 날
+   * 아침 다시 작아지는 톱니가 되어 "어제보다 줄었나"를 읽을 수 없다. 응답 값으로 추측하지 않고
+   * 파이프라인 코드에서 확인한 데이터셋에만 붙인다(근거는 항목 주석). 하루 한 번 도는 레인에는 붙지
+   * 않는다(테스트가 일정 정의와 대조한다).
+   */
+  rowsCumulativeWithinDay?: true;
 }
 
 /** @deprecated 그룹 롤업 행은 제거됐다. 남은 용도는 필터 목록 생성뿐이다. */
@@ -188,6 +196,13 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         ],
         cadence: daily('평일 5슬롯 · 장중'),
         inOpsGrid: true,
+        /* 누적이다(ALPHA-1327). 수집 API(`HHPTJ04160200`)는 종목당 한 번에 **그날 지금까지의 모든
+         * 슬롯**을 준다(`sources/kis_investor_estimate.py` 머리 주석). 정제는 그 실행이 받은 모든
+         * (종목, 슬롯)을 manifest winner 로 싣고(`normalize_investor_estimate._write_canonical`),
+         * 적재의 `records_out` 은 그 winner 전부의 `already + created + updated` 다
+         * (`load_investor_intraday.run`). 그래서 값이 슬롯마다 앞 슬롯분을 포함한다 — dev 10-12:
+         * 521 → 1,096 → 1,700 → 2,308 → 2,919. */
+        rowsCumulativeWithinDay: true,
       },
       {
         id: 'etf_nav',
@@ -236,6 +251,10 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         ],
         cadence: daily('일 여러 슬롯 · 뉴스 레인'),
         inOpsGrid: true,
+        /* 누적이 아니다(ALPHA-1327) — 실행마다 그린다. 수집 창이 매 실행 "KST 어제~오늘"이라
+         * (`run.default_window`, `DEFAULT_LOOKBACK_DAYS = 1`) 00:10·08:10 두 실행의 창이 겹치고,
+         * `load_documents` 의 `records_out` 은 그 실행 창의 기사 전부(`already + created`)다. 하루 안
+         * 누적도 증분도 아니다 — dev 10-13: 00:10 6,154 · 08:10 6,768. */
       },
     ],
   },

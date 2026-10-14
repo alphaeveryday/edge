@@ -41,11 +41,25 @@ export interface RunPoint {
   received: number | null;
 }
 
+/** 하루 한 점 — 그날 마지막 실행의 행 수(ALPHA-1327) */
+export interface DayRowPoint {
+  /** 실행 키의 슬롯 시각의 KST 날짜(YYYY-MM-DD) */
+  day: string;
+  /** 그날 마지막 실행 */
+  runKey: string;
+  rows: number | null;
+}
+
 export interface DatasetRunSeries {
   dataset: DatasetEntry;
   /** 대표 작업 — 응답에 이 데이터셋의 feature 작업이 한 번도 없으면 `null` */
   representative: string | null;
   points: RunPoint[];
+  /**
+   * 행 수가 하루 안에서 누적되는 데이터셋(`rowsCumulativeWithinDay`)만 — 하루 한 점의 행 수 계열이다.
+   * 그 밖은 `null` 이고 행 수도 실행 단위(`points`)로 그린다.
+   */
+  dailyRows: DayRowPoint[] | null;
 }
 
 /**
@@ -135,10 +149,31 @@ export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): Dat
         received: counted?.completenessReceived ?? null,
       });
     }
-    const slotTime = (runKey: string) => runKey.slice(runKey.indexOf(':') + 1);
     points.sort((a, b) => slotTime(a.runKey).localeCompare(slotTime(b.runKey)));
-    return { dataset, representative, points };
+    return {
+      dataset,
+      representative,
+      points,
+      dailyRows: dataset.rowsCumulativeWithinDay ? dailyLastRows(points) : null,
+    };
   });
+}
+
+/** 실행 키(`레인:YYYY-MM-DDTHH:MM`)의 슬롯 시각 — 원장이 KST 로 적는다 */
+const slotTime = (runKey: string) => runKey.slice(runKey.indexOf(':') + 1);
+
+/**
+ * 하루 안에서 누적되는 행 수를 **하루 한 점**으로 — 그날 마지막 실행의 값이다(ALPHA-1327).
+ *
+ * "그날"은 실행 키의 슬롯 시각의 KST 날짜다. 점은 슬롯 시각 순이어야 한다(`buildRunSeries` 가 정렬한
+ * 뒤 부른다). 마지막 실행에 행 수가 없으면 **빈 점**이다 — 앞 실행의 값으로 채우지 않는다. 채우면
+ * 마지막 실행이 못 쓴 날이 그 앞 슬롯까지의 누적으로 서서, 하루치가 다 쌓인 날처럼 보인다.
+ * 오늘처럼 아직 끝나지 않은 날은 지금까지의 마지막 실행 값이다.
+ */
+export function dailyLastRows(points: RunPoint[]): DayRowPoint[] {
+  const last = new Map<string, RunPoint>();
+  for (const point of points) last.set(slotTime(point.runKey).slice(0, 10), point);
+  return [...last].map(([day, point]) => ({ day, runKey: point.runKey, rows: point.rows }));
 }
 
 export function formatDuration(seconds: number | null): string {
