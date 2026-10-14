@@ -2,6 +2,7 @@
 from copy import deepcopy
 from uuid import uuid4
 
+from edge_analysis_v2.tools.execution import ToolInputError
 from edge_analysis_v2.tools.fixture_data.common import available, holdings, instant, table
 from edge_analysis_v2.tools.fixture_data import instrument_factors, chart, flow, macro, news, returns, valuation, financial_observations
 from edge_analysis_v2.tools.fixture_data.demo import make_fixture
@@ -31,10 +32,10 @@ class FixtureTools:
         self._register("get_etf_holdings", "분석 시각까지 공개된 구성종목과 저장된 비중을 확인합니다. observed_weight_ratio는 확인된 비중의 합이며 100%로 환산하지 않습니다.", {}, lambda: holdings(self.fixture), r"W=\sum_i w_i\ge 0.7", ["ETF 구성종목 비중"], version="v2")
         parameters = {"investor": {"type": "string", "enum": ["foreign", "institution", "individual"]}, "lookback_days": {"type": "integer", "minimum": 1, "maximum": 30}, "operation": {"type": "string", "enum": ["sum", "frequency", "streak"]}, "direction": {"type": "string", "enum": ["net_buy", "net_sell", "none"]}}
         for name, extra in (('sum_investor_net_flow',{'instrument_id':{'type':'string'}}), ('sum_weighted_net_flow',{})):
-            self._register(name, '확정된 최근 N거래일의 순매수 금액을 부호 그대로 합산합니다. 양수 순매수, 음수 순매도. 매수일만 골라 더하지 않습니다. weighted는 전체 구성종목 비중을 반영한 값입니다. 예: investor=foreign, lookback_days=5.', {k:parameters[k] for k in ('investor','lookback_days')} | extra, lambda **args:flow.calculate(self.fixture,operation='sum',direction='none',**args), r'S=\sum_d x_d;\ S_w=\sum_d\sum_iw_{i,d}x_{i,d}', ['투자자별 확정 순매수','일별 ETF 구성종목 비중'])
+            self._register(name, '확정된 최근 N거래일의 순매수 금액을 부호 그대로 합산합니다. 양수 순매수, 음수 순매도. 매수일만 골라 더하지 않습니다. ETF 자체 수급은 사용하지 않습니다. 개별 대상은 최신 구성종목만 허용합니다. weighted는 분석 시각에 확보된 최신 구성 비중 한 개를 전 기간에 고정한 값이며 비중을 재정규화하지 않습니다. 예: investor=foreign, lookback_days=5.', {k:parameters[k] for k in ('investor','lookback_days')} | extra, lambda **args:flow.calculate(self.fixture,operation='sum',direction='none',**args), r'S=\sum_d x_d;\ S_w=\sum_d\sum_iw_i^{latest}x_{i,d}', ['구성종목 투자자별 확정 순매수','분석 시각에 확보된 최신 ETF 구성종목 비중'], version='v2')
         self.final_tool_names = self.final_tool_names | {'sum_investor_net_flow','sum_weighted_net_flow'}
         for name, extra in (("calculate_investor_flow", {"instrument_id": {"type": "string"}}), ("calculate_weighted_flow", {})):
-            self._register(name, "확정 거래일의 순매수 합계·빈도·최신일부터 연속을 계산합니다. sum은 direction=none. 가중 수급은 ETF 구성종목 기준이며 ETF 자체 거래가 아닙니다. exact=false인 연속은 최소 일수입니다.", parameters | extra, lambda **args: flow.calculate(self.fixture, **args), r"F_d=\sum_iw_{i,d}x_{i,d};\ S=\sum_dF_d;\ M=\sum_d[sF_d>0]", ["투자자별 확정 순매수", "일별 ETF 구성종목 비중"])
+            self._register(name, "확정 거래일의 순매수 합계·빈도·최신일부터 연속을 계산합니다. sum은 direction=none. ETF 자체 수급은 사용하지 않습니다. 개별 대상은 최신 구성종목만 허용합니다. 가중 수급은 분석 시각에 확보된 최신 구성 비중을 전 기간에 고정하며 재정규화하지 않습니다. exact=false인 연속은 최소 일수입니다.", parameters | extra, lambda **args: flow.calculate(self.fixture, **args), r"F_d=\sum_iw_i^{latest}x_{i,d};\ S=\sum_dF_d;\ M=\sum_d[sF_d>0]", ["구성종목 투자자별 확정 순매수", "분석 시각에 확보된 최신 ETF 구성종목 비중"], version="v2")
         self._register("calculate_chart_indicators", "ETF 가격으로 RSI14 모멘텀과 반전 Williams14 바닥지수를 계산합니다. 높은 바닥지수는 과매도 관찰이며 반등확률이 아닙니다.", {}, lambda: chart.indicators(self.fixture), r"RSI=100G/(G+L);\ B=100(H_{14}-P)/(H_{14}-L_{14})", ["ETF 일봉과 장중 가격"])
         self._register("evaluate_indicator_transition", "최근 지수 관측의 80/20 진입·이탈을 확인합니다. 구간 유지에는 최근5개 관측이 모두 필요합니다.", {"indicator": {"type": "string", "enum": ["momentum", "bottom"]}}, lambda **args: chart.transition(self.fixture, **args), r"U(x)=[x\ge80];\ L(x)=[x\le20]", ["ETF 일봉과 장중 가격"], version="v2")
         series = {"type": "string", "enum": list(macro.SERIES)}
@@ -69,15 +70,15 @@ class FixtureTools:
                          'items': {'type': 'string', 'enum': list(instrument_factors.TABLE_FACTORS)}}},
             lambda **args: instrument_factors.table(self.fixture, **args),
             instrument_factors.FORMULA_LATEX, ['종목 가격', '확정 수급', '구성종목 비중', '공개 재무'],
-            required=[], version='v1')
+            required=[], version='v2')
         self._register('get_instrument_factors',
-            '종목의 차트·확정 수급·밸류·공통 매크로를 읽고 다음 조사 대상을 고릅니다. instrument_id는 초기 종목 목록에서 선택합니다. factors를 생략하면 전체, 지정하면 해당 요인만 반환합니다. 예: factors=["flow","valuation"]. 이력은 columns/rows, 시점은 이번 분석에 고정됩니다. ETF 수급·밸류는 구성종목 가중값입니다. null은 미확보입니다. 반환값은 근거로 사용 가능하고 이력의 새 계산은 해당 계산 툴로 확인합니다.',
+            '종목의 차트·확정 수급·밸류·공통 매크로를 읽고 다음 조사 대상을 고릅니다. instrument_id는 초기 종목 목록에서 선택합니다. factors를 생략하면 전체, 지정하면 해당 요인만 반환합니다. 예: factors=["flow","valuation"]. 이력은 columns/rows, 시점은 이번 분석에 고정됩니다. ETF 자체 수급은 사용하지 않습니다. ETF의 수급·밸류는 구성종목 가중값이고, 수급은 분석 시각에 확보된 최신 구성 비중을 과거 전 기간에 고정합니다. null은 미확보입니다. 반환값은 근거로 사용 가능하고 이력의 새 계산은 해당 계산 툴로 확인합니다.',
             {'instrument_id': {'type': 'string', 'minLength': 1},
              'factors': {'type': 'array', 'minItems': 1, 'uniqueItems': True,
                          'items': {'type': 'string', 'enum': list(instrument_factors.FACTORS)}}},
             lambda **args: instrument_factors.read(self.fixture, **args),
             instrument_factors.FORMULA_LATEX, ['종목 가격', '확정 수급', '구성종목 비중', '공개 재무', '거시 관측', 'ETF 분배금·좌수'],
-            required=['instrument_id'], version='v4')
+            required=['instrument_id'], version='v5')
 
     def _register(self, name, description, parameters, callback, formula, sources, *, version="v1", required=None):
         self._tools[name] = {"description": description, "parameters": parameters, "callback": callback, "formula": formula, "sources": sources, "version": version, "required": list(parameters) if required is None else required}
@@ -94,19 +95,30 @@ class FixtureTools:
 
     def call(self, name, arguments):
         """Calculate once and return the exact object to be stored and shown."""
+        if name in ('calculate_investor_flow', 'calculate_weighted_flow', 'sum_investor_net_flow', 'sum_weighted_net_flow') and not isinstance(arguments, dict):
+            raise ToolInputError('INVALID_FLOW_ARGUMENTS: supply an object matching the tool schema before retrying.')
         if name not in self._tools or not isinstance(arguments, dict):
             raise ValueError("unknown tool or invalid arguments")
         tool = self._tools[name]
         if not set(tool["required"]) <= set(arguments) <= set(tool["parameters"]):
+            if name in ('calculate_investor_flow', 'calculate_weighted_flow', 'sum_investor_net_flow', 'sum_weighted_net_flow'):
+                raise ToolInputError('INVALID_FLOW_ARGUMENTS: arguments must match the tool schema. '
+                                     + 'Required: ' + ', '.join(tool['required'])
+                                     + '. Remove extra arguments and supply missing required arguments before retrying.')
             raise ValueError("arguments must exactly match the tool schema")
+        if name in ('calculate_investor_flow', 'sum_investor_net_flow') and not isinstance(arguments['instrument_id'], str):
+            raise ToolInputError('UNSUPPORTED_FLOW_TARGET: instrument_id must be a constituent code from get_etf_holdings. ETF own flow is not used.')
         result = tool["callback"](**deepcopy(arguments))
         return {"tool_run_id": uuid4().hex, "result": result}
 
     def initial_input(self):
         """Return bounded raw data, without model answers or reference labels."""
         context = self.fixture["context"]
-        dates = sorted({r["date"] for r in self.fixture.get("flow", []) if r["date"] <= context["flow_as_of_date"]})[-30:]
-        rows = [r for r in available(self.fixture.get("flow", []), instant(context["analysis_at"])) if r["date"] in dates and r.get("finalized") is True]
+        members = flow.constituent_ids(self.fixture)
+        rows = [r for r in available(self.fixture.get("flow", []), instant(context["analysis_at"]))
+                if r["instrument_id"] in members and r["date"] <= context["flow_as_of_date"] and r.get("finalized") is True]
+        dates = sorted({r['date'] for r in rows})[-30:]
+        rows = [r for r in rows if r['date'] in dates]
         cutoff = instant(context["analysis_at"])
         prices = []
         source_prices = [r for r in available(self.fixture.get("prices", []), cutoff) if r["date"] < cutoff.date().isoformat()]

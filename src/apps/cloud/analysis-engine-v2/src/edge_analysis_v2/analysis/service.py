@@ -246,7 +246,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             if function['name'] in ('calculate_investor_flow','calculate_weighted_flow'):
                 function['parameters']['properties']['operation']['enum'] = ['frequency','streak']
                 function['parameters']['properties']['direction']['enum'] = ['net_buy','net_sell']
-                function['description'] = '[최종 근거 가능] 확정 순매수 이력의 빈도 또는 최신일부터의 연속을 계산합니다. frequency는 N일 중 해당 방향 일수, streak는 마지막 날까지 이어진 일수입니다. exact=false는 최소 일수입니다. 금액 합계는 sum_investor_net_flow 또는 sum_weighted_net_flow를 사용하세요.'
+                function['description'] = '[최종 근거 가능] ETF 자체 수급은 사용하지 않으며 개별 대상은 최신 구성종목만 허용합니다. weighted는 분석 시각에 확보된 최신 구성 비중을 전 기간에 고정합니다. 확정 순매수 이력의 빈도 또는 최신일부터의 연속을 계산합니다. frequency는 N일 중 해당 방향 일수, streak는 마지막 날까지 이어진 일수입니다. exact=false는 최소 일수입니다. 금액 합계는 sum_investor_net_flow 또는 sum_weighted_net_flow를 사용하세요.'
         source_schemas = list(schemas)
         if kind == 'outlook':
             schemas += EDIT_SCHEMAS

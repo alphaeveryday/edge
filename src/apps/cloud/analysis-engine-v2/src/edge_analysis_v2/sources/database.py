@@ -71,9 +71,9 @@ def load_source(connection, ticker, analysis_at):
     if len(etfs) != 1:
         raise ValueError('Exact KRX ETF not found')
     etf = etfs[0]
-    statuses = _rows(connection, """SELECT trade_date,input_row_count,valid_row_count,data_version
+    statuses = _rows(connection, """SELECT trade_date,input_row_count,valid_row_count,data_version,loaded_at
         FROM etf_holding_snapshot_status WHERE etf_instrument_id=%s
-        AND trade_date<=%s AND loaded_at<=%s ORDER BY trade_date DESC LIMIT 40""", (etf['instrument_id'],at.date(),at))
+        AND trade_date<=%s AND loaded_at<=%s ORDER BY trade_date DESC LIMIT 1""", (etf['instrument_id'],at.date(),at))
     if not statuses:
         raise ValueError('No holdings snapshot available at analysis time')
     portfolio, instruments, status_rows = [], {ticker: {'instrument_id': ticker, 'name': etf['display_name']}}, []
@@ -91,7 +91,8 @@ def load_source(connection, ticker, analysis_at):
         if len(valid) != status['valid_row_count']:
             raise ValueError('Holdings rows and ingestion status disagree')
         day = status['trade_date'].isoformat()
-        status_rows.append({'as_of_date':day,'input_count':status['input_row_count'],'valid_count':len(valid)})
+        status_rows.append({'as_of_date':day,'input_count':status['input_row_count'],'valid_count':len(valid),
+                            'available_at':status['loaded_at'].isoformat()})
         for row in valid:
             symbol = row['ticker']
             if row['market_code'] not in ('XKRX','XKOS') or symbol in source_ids and source_ids[symbol] != row['constituent_instrument_id']:
@@ -151,7 +152,9 @@ def load_flow(connection, data):
     data['trading_dates'] = dates
     data['context']['flow_as_of_date'] = previous[-1]
     source_ids = data['source_instrument_ids']
-    symbols = {identity:ticker for ticker,identity in source_ids.items()}
+    members = {r['instrument_id'] for r in holdings(data, require_complete=False)['holdings']}
+    symbols = {identity:ticker for ticker,identity in source_ids.items()
+               if ticker in members and ticker != data['context']['etf_code']}
     rows = _rows(connection, '''SELECT instrument_id,trade_date,net_val_foreign,
         net_val_institution_total,net_val_individual,available_at
         FROM investor_flow_daily WHERE instrument_id=ANY(%s) AND trade_date BETWEEN %s AND %s
@@ -282,10 +285,12 @@ class DatabaseTools(FixtureTools):
             self._tools['evaluate_indicator_transition']['description'] += ' 실제 FIRE 가격 관측 사이의 전이입니다. 연속 분봉이 아니며 관측 부족은 null입니다.'
         for name,tool in self._tools.items():
             # Source definitions are immutable; connecting stored observations needs a new factor version.
-            tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v5',
+            tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v6',
+                               'get_instrument_factor_table': 'database-v2',
                                'get_issue_evidence': 'database-v3', 'get_etf_holdings': 'database-v2',
-                               'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v2',
-                               'sum_weighted_net_flow': 'database-v2',
+                               'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v3',
+                               'sum_weighted_net_flow': 'database-v3',
+                               'calculate_investor_flow': 'database-v2', 'sum_investor_net_flow': 'database-v2',
                                # Their sources were first recorded as the news tables; a stored definition cannot change.
                                'calculate_window_returns': 'database-v2', 'get_daily_returns': 'database-v2'}.get(name, 'database-v1')
             if name in ('get_instrument_factors', 'get_instrument_factor_table'):
@@ -314,7 +319,7 @@ class DatabaseTools(FixtureTools):
         result['source_gaps'] = self.fixture.get('source_gaps', {})
         result['news_scope'] = self.fixture.get('news_scope', {})
         result['source_notes'] = [
-            'ETF 전체 가중 수급·밸류는 확인된 구성 비중의 합(observed_weight_ratio)이 70% 이상일 때 계산합니다. 수급 금액은 확대하지 않고, 밸류 평균은 확인된 비중으로 나눕니다.',
+            'ETF 자체 투자자 수급은 사용하지 않습니다. 가중 수급은 분석 시각에 확보된 최신 구성 비중 한 개를 과거 전 기간에 고정합니다. ETF 전체 가중 수급·밸류는 확인된 구성 비중의 합(observed_weight_ratio)이 70% 이상일 때 계산합니다. 수급 금액은 확대하지 않고, 밸류 평균은 확인된 비중으로 나눕니다.',
             '뉴스 본문은 확보 발췌입니다. 스레드는 현존 관계이며 과거 정정·삭제까지 복원하지 않습니다.',
             '가격 조정 방식 미확인. 고가·저가 미확보로 바닥지수·ATR은 미제공. 장중 관측은 실제 트리거 가격이며 연속 분봉이 아닙니다.',
             '2026년 거래일만 검증되어 52주 지표는 미제공. 매크로·재무의 시점별 조회 결과는 macro·financials와 source_gaps를 확인하세요.',
