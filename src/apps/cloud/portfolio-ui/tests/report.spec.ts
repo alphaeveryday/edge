@@ -51,7 +51,7 @@ test('an execution rejection explains funding or account constraints without bla
   await expect(page.locator('.ans:not(.lead)')).not.toContainText('종합 4점');
 });
 
-test('partial research shows unanswered questions without a final-conclusion label', async ({ page }) => {
+test('optional research gaps preserve a clear recommendation while unfinished questions remain visible', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'partial'));
   await page.route('**/api/portfolio/analyses/partial', route => route.fulfill({ json: {
     id: 'partial', state: 'succeeded', result: { ...report, completion: { status: 'partial',
@@ -60,10 +60,42 @@ test('partial research shows unanswered questions without a final-conclusion lab
   } }));
   await page.goto('/portfolio/');
   await expect(page.locator('.completion-summary')).toContainText('이 질문에 답하기 위한 확인이 남아 있어요.');
-  await expect(page.locator('.headrow').first()).toContainText('현재 분석 결과');
-  await expect(page.locator('.headrow').first()).not.toContainText('최종 결론');
+  await expect(page.locator('.headrow').first()).toContainText('최종 결론');
+  await expect(page.locator('.recommendation-label')).toHaveText('추천 포트폴리오');
   await page.getByText('추가로 확인할 상품 자료', { exact: true }).click();
   await expect(page.locator('.completion-summary')).toContainText('Invesco QQQ · 보유내역 · 최신 자료 필요');
+});
+
+test('missing optional yields stay blank and input codes never appear to customers', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'optional-yields'));
+  await page.route('**/api/portfolio/analyses/optional-yields', route => route.fulfill({ json: {
+    id: 'optional-yields', state: 'succeeded', result: { ...report,
+      recommendation: { ...report.recommendation, expected_return_1y: null, dividend_yield_1y: null },
+      completion: { status: 'needs_input', tasks: [], missing_research: [],
+        missing_inputs: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA', 'INTERNAL_UNKNOWN_REASON', '요청 조건 확인: NASDAQ_100 비중을 확인해 주세요'] } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.completion-summary')).toContainText('ISA의 남은 납입 가능 금액');
+  await expect(page.locator('.completion-summary')).toContainText('NASDAQ_100 비중을 확인해 주세요');
+  await expect(page.locator('#report')).not.toContainText('ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED');
+  await expect(page.locator('#report')).not.toContainText('INTERNAL_UNKNOWN_REASON');
+  await expect(page.locator('.forecast')).toHaveCount(0);
+  await expect(page.locator('.recommendation-label')).toBeVisible();
+});
+
+test('missing allocation weights are distinguished from missing market prices', async ({ page }) => {
+  let reason = 'CURRENT_WEIGHTS_REQUIRED';
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'specific-reason'));
+  await page.route('**/api/portfolio/analyses/specific-reason', route => route.fulfill({ json: {
+    id: 'specific-reason', state: 'succeeded', result: { ...report, recommendation: null,
+      optimization: { status: 'unavailable', reason } }
+  } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.ans:not(.lead)')).toContainText('종목별 평가금액 또는 보유 비중');
+  reason = 'NO_COMMON_PRICE_HISTORY';
+  await page.reload();
+  await expect(page.locator('.ans:not(.lead)')).toContainText('겹치는 가격 이력');
+  await expect(page.locator('.ans:not(.lead)')).not.toContainText('평가금액 또는 보유 비중');
 });
 
 test('a newly listed ETF displays both series over their actual common period', async ({ page }) => {
@@ -124,7 +156,7 @@ test('withholding a backtest winner below the rating threshold explains rating r
     ...report, recommendation: null, optimization: { status: 'available', reason: 'RATING_BELOW_MINIMUM', selected_candidate_id: null }
   } } }));
   await page.goto('/portfolio/');
-  await expect(page.getByText('조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.')).toBeVisible();
+  await expect(page.getByText('검토한 후보 중 시장 주도성·수익성·안정성 평가의 추천 기준을 충족한 구성을 찾지 못했어요.')).toBeVisible();
   await expect(page.locator('.portfolio-hero')).toHaveCount(0);
 });
 
@@ -135,8 +167,8 @@ test('customer constraint rejection is not mislabeled as a low star rating', asy
       optimization: { status: 'available', candidates: [{}], reason: 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' } }
   } }));
   await page.goto('/portfolio/');
-  await expect(page.getByText('필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.')).toBeVisible();
-  await expect(page.getByText('조사한 근거로 종합 4점 이상을 줄 수 있는 구성을 찾지 못해 추천을 보류했어요.')).toHaveCount(0);
+  await expect(page.getByText('검토한 후보에서 요청하신 필수 조건을 모두 만족하는 구성을 찾지 못했어요.')).toBeVisible();
+  await expect(page.getByText('검토한 후보 중 시장 주도성·수익성·안정성 평가의 추천 기준을 충족한 구성을 찾지 못했어요.')).toHaveCount(0);
 });
 
 test('an unselected recommendation does not invent a constraint or rating failure', async ({ page }) => {
@@ -146,8 +178,8 @@ test('an unselected recommendation does not invent a constraint or rating failur
       optimization: { status: 'available', candidates: [{}], reason: 'RECOMMENDATION_WITHHELD' } }
   } }));
   await page.goto('/portfolio/');
-  await expect(page.getByText('현재 확보한 근거로 추천 구성을 확정하지 못했어요.')).toBeVisible();
-  await expect(page.getByText('필수 조건을 모두 만족하는지 확인하지 못해 추천을 보류했어요.')).toHaveCount(0);
+  await expect(page.getByText('이번 분석에서 추천 구성을 완성하지 못했어요.')).toBeVisible();
+  await expect(page.getByText('검토한 후보에서 요청하신 필수 조건을 모두 만족하는 구성을 찾지 못했어요.')).toHaveCount(0);
 });
 
 test('a batch without eligible candidates publishes analysis without a recommendation or invented chart', async ({ page }) => {
@@ -205,7 +237,7 @@ test('unknown budget and unconnected history do not fabricate amounts or perform
   await page.route('**/api/portfolio/analyses/unknown', route => route.fulfill({ json: { id: 'unknown', state: 'succeeded', result: unavailable } }));
   await page.goto('/portfolio/');
   await expect(page.locator('.account-plan td')).toHaveText(['60%', '40%']);
-  await expect(page.locator('.forecast b')).toHaveText(['산출 전', '산출 전']);
+  await expect(page.locator('.forecast')).toHaveCount(0);
   await expect(page.locator('.performance')).toContainText('검증된 자료 부족');
   await expect(page.locator('.performance svg')).toHaveCount(0);
 });
