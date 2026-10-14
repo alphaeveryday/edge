@@ -248,12 +248,22 @@ export interface EtfLedger {
   rows: EtfLedgerRow[];
   mock?: boolean;
   why?: string;
-  /**
-   * 이 원장을 쓰는 옛 설명 엔진이 조회일보다 앞서 멈췄는가(ALPHA-1296) — 서버가 옛 체인 단계를
-   * 관측 불가로 내린 날이다. 흐름 화면이 표의 귀결이 비어 있는 이유를 적을 때만 쓴다. 체인 축과
-   * 따로 싣는다: 새 단계 목록이 없는 응답에서도 이 표는 오고, 그때도 이유는 적어야 한다.
-   */
-  legacy_stopped?: boolean;
+}
+
+/** 전망의 그날 상태 — `none` 은 그날 분석 행이 없다는 뜻이다 */
+export type OutlookState = 'completed' | 'failed' | 'running' | 'none';
+/**
+ * 가격변동 분석의 그날 상태. `not_started` 는 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없고
+ * 유예 밖인 것, `pending` 은 같은 형상인데 유예 안이라 아직 판정할 수 없는 것이다.
+ */
+export type MovementState = OutlookState | 'not_started' | 'pending';
+
+/** 조회일의 ETF 하나의 v2 분석 귀결(ALPHA-1312). `name` 은 이름을 못 찾으면 코드 그대로다 */
+export interface EtfAnalysisRow {
+  etf: string;
+  name: string;
+  outlook: OutlookState;
+  movement: MovementState;
 }
 
 export interface RunbookEntry {
@@ -343,8 +353,14 @@ export interface Facts {
   queues?: QueueFact[];
   outputs: OutputFact[];
   boundary: BoundaryFact;
-  /** ETF별 분석 귀결 원장(옛 설명 엔진의 표) — 흐름 화면의 표가 읽는다. R15 는 더는 안 읽는다 */
+  /** ETF별 분석 귀결 원장(옛 설명 엔진의 표) — 흐름 화면의 표도 R15 도 더는 안 읽는다 */
   etf_ledger?: EtfLedger;
+  /**
+   * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. 규칙은 읽지 않는다
+   * (실패는 `analysis_failures` 로 R15 가, 시작 못 함은 체인으로 R10 이 판정한다). 이 축을 싣기 전의
+   * API 에서는 없고, 그때 표는 "기록 없음"이다.
+   */
+  etf_analyses?: { rows: EtfAnalysisRow[] };
   /**
    * 조회일에 v2 분석이 **끝내 완료되지 못한** ETF(ALPHA-1291) — 종류(전망·가격변동 분석)별로 그날
    * 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다. 실패했다가 같은 날 다시 돌아 완료된 ETF,

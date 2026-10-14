@@ -26,6 +26,11 @@ export interface ConsoleFactsDto {
   /** 나중에 붙은 축 — 롤백·UI 선배포 때는 부재할 수 있다. */
   etfLedger?: EtfLedgerDto;
   /**
+   * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. 이 축을 싣기 전의 API
+   * 에서는 없다. 없으면 표는 "기록 없음"이고 옛 축(`etfLedger`)으로 대신 그리지 않는다.
+   */
+  etfAnalyses?: EtfAnalysesDto;
+  /**
    * 조회일에 v2 분석이 끝내 완료되지 못한 ETF(ALPHA-1291). 항목은 `outlook`·`movement` 둘이다.
    * `failedEtfs` 는 그날 그 종류의 분석에 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다.
    * **옵셔널이다** — 이 축을 안 싣는 API 에서는 오지 않고, 그때 R15 는 `못 돎` 이다.
@@ -87,6 +92,18 @@ export interface IntradayAnalysisTrendPointDto {
   failedRuns: number;
   results: number;
   published: number;
+}
+
+/** 전망의 그날 상태 — `none` 은 그날 분석 행이 없다는 뜻이다 */
+export type OutlookStateDto = 'completed' | 'failed' | 'running' | 'none';
+/**
+ * 가격변동 분석의 그날 상태. `not_started` 는 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없고
+ * 유예 밖인 것, `pending` 은 같은 형상인데 유예 안이라 아직 판정할 수 없는 것이다.
+ */
+export type MovementStateDto = OutlookStateDto | 'not_started' | 'pending';
+
+export interface EtfAnalysesDto {
+  rows: { etf: string; name: string; outlook: OutlookStateDto; movement: MovementStateDto }[];
 }
 
 export interface EtfLedgerDto {

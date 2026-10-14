@@ -44,7 +44,31 @@ import java.util.List;
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
 		ChainResponse chain, EtfLedgerResponse etfLedger,
-		List<AnalysisFailureResponse> analysisFailures, MetaResponse meta) {
+		List<AnalysisFailureResponse> analysisFailures, EtfAnalysesResponse etfAnalyses,
+		MetaResponse meta) {
+
+	/**
+	 * 조회일의 ETF별 <b>v2 분석 귀결</b>(ALPHA-1312). 행은 그날 전망 분석이나 가격변동 분석 행이 있거나
+	 * 장중 트리거가 발화한 ETF 이고 코드 오름차순이다. 옛 설명 엔진의 실행 상태({@code etfLedger})와
+	 * 따로 싣는다 — 그 축만 아는 옛 화면이 그대로 돌아야 한다.
+	 *
+	 * <p>상태는 소문자 코드다. {@code outlook}: {@code completed}(그날 완료 행이 있다) ·
+	 * {@code failed}(실패 행이 있고 완료 행이 없다 — {@code analysisFailures} 와 같은 기준) ·
+	 * {@code running}(진행 중인 행만 있다) · {@code none}(그날 분석 행이 없다). {@code movement} 는
+	 * 거기에 둘이 더 있다: {@code not_started}(그날 그 ETF 의 트리거에서 이어진 수용된 요청이 있는데
+	 * 분석 행이 없고 유예 밖이다) · {@code pending}(같은 형상인데 유예 안이라 아직 판정할 수 없다).
+	 * 유예는 체인 축의 {@code pending} 과 같이 <b>트리거 단위</b>로 잰다.
+	 */
+	public record EtfAnalysesResponse(List<EtfAnalysisStateResponse> rows) {
+		public static EtfAnalysesResponse from(
+				List<com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisStateRow> rows) {
+			return new EtfAnalysesResponse(rows.stream().map(r -> new EtfAnalysisStateResponse(
+					r.etf(), r.name(), r.outlook(), r.movement())).toList());
+		}
+	}
+
+	public record EtfAnalysisStateResponse(String etf, String name, String outlook, String movement) {
+	}
 
 	/**
 	 * 조회일에 v2 분석이 <b>끝내 완료되지 못한</b> ETF(R15, ALPHA-1291). 항목은 항상

@@ -14,6 +14,7 @@ import {
   CHAIN_FEED_FIELDS,
   CHAIN_STAGE_FIELDS,
   DATASET_FIELDS,
+  ETF_ANALYSIS_ROW_FIELDS,
   ETF_LEDGER_ROW_FIELDS,
   factsAxis,
   META_FIELDS,
@@ -26,6 +27,7 @@ import {
 } from './consoleFacts.ts';
 import type { ConsoleFactsDto } from '../../domains/console/types.ts';
 import { evaluate } from '../../rules/evaluate.ts';
+import { etfTable } from './etfAnalysisView.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 
 const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead, deliveryFailed: 0 });
@@ -205,6 +207,10 @@ const WIRE = (): ConsoleFactsDto => ({
   etfLedger: { rows: [
     { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
   ] },
+  /* 옛 축(위)과 ETF·상태를 다르게 둔다 — 어댑터가 옛 축을 읽으면 값이 갈린다 */
+  etfAnalyses: { rows: [
+    { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
+  ] },
   meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03' },
 });
 
@@ -282,6 +288,9 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
     },
     etf_ledger: { rows: [
       { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
+    ] },
+    etf_analyses: { rows: [
+      { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
     ] },
     meta: {
       db: '2026-08-03T16:20:00+09:00',
@@ -554,6 +563,7 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
   both(w.chain!.analysisStages![0], ANALYSIS_STAGE_FIELDS, 'chain.analysisStages', ['blind', 'pending']);
   both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
+  both(w.etfAnalyses!.rows[0], ETF_ANALYSIS_ROW_FIELDS, 'etfAnalyses.rows');
   both(w.meta, META_FIELDS, 'meta');
 });
 
@@ -651,15 +661,6 @@ test('🔴 옛 단계만 실린 응답은 체인 축이 없는 것으로 옮긴�
   assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
   assert.equal(r.facts.chain, undefined, '옛 단계 목록으로 체인을 만들어 냈다');
-  /* 체인은 없는 것으로 옮겨도, 같은 엔진을 읽는 ETF 표가 비어 있는 이유는 남겨야 한다 — 옛 단계가
-   * 관측 불가로 왔으면 그 엔진이 멈췄다는 뜻이고, 표는 이 응답에도 온다. */
-  assert.equal(r.facts.etf_ledger?.legacy_stopped, undefined, '멈췄다는 표시가 없는데 만들어 냈다');
-  const stopped = WIRE();
-  delete stopped.chain!.analysisStages;
-  stopped.chain!.stages = stopped.chain!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
-  const sr = parseFacts(stopped);
-  assert.equal(sr.ok && sr.facts.etf_ledger?.legacy_stopped, true, 'ETF 표의 안내 근거를 떨궜다');
-  assert.equal(sr.ok && sr.facts.chain, undefined);
   const report = evaluate(r.facts);
   const r10 = report.rules.find((x) => x.id === 'R10')!;
   assert.equal(r10.evaluated, false, 'R10 이 평가됐다고 선다');
@@ -893,5 +894,38 @@ test('거부 — 응답 자체가 객체가 아니면 그 사실을 사유로 �
     assert.equal(r.ok, false, `${JSON.stringify(body)} 를 통과시켰다`);
     if (r.ok) continue;
     assert.match(r.reason, /응답이 객체가 아니다/, `${JSON.stringify(body)} 의 사유가 원인을 안 가리킨다`);
+  }
+});
+
+test('🔴 새 축이 없는 응답에서 ETF 표는 기록 없음이다 — 옛 축으로 대신 그리지 않는다', () => {
+  /* UI 가 먼저 배포되면 받는 형상이다(ALPHA-1312): 옛 설명 엔진의 `etfLedger` 는 있고 `etfAnalyses`
+   * 는 없다. 옛 축에 실패 행을 그대로 둔다 — 그걸 읽으면 표가 그 행으로 그려진다. */
+  const w = WIRE();
+  delete w.etfAnalyses;
+  assert.equal(w.etfLedger!.rows[0].outcome, 'FAILED', '전제: 옛 축에 그릴 행이 있다');
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
+  if (!r.ok) return;
+  assert.equal(r.facts.etf_analyses, undefined, '없는 축을 만들어 냈다');
+  assert.equal(etfTable(r.facts.etf_analyses), null, '표를 그렸다');
+  /* 새 축이 오면 그 축의 행으로 그린다 — 옛 축의 ETF 는 섞이지 않는다 */
+  const full = parseFacts(WIRE());
+  assert.deepEqual(full.ok && etfTable(full.facts.etf_analyses)!.rows.map((x) => x.etf), ['069500']);
+});
+
+test('ETF별 분석 귀결의 상태는 계약이 열거한 코드만 받는다', () => {
+  const cases: [string, (w: ConsoleFactsDto) => void][] = [
+    ['rows 가 배열이 아니다', (w) => { (w.etfAnalyses as { rows: unknown }).rows = {}; }],
+    ['모르는 상태', (w) => { (w.etfAnalyses!.rows[0] as { movement: unknown }).movement = 'FAILED'; }],
+    /* 시작 못 함·판정 보류는 가격변동 분석에만 있다 */
+    ['전망에 없는 상태', (w) => { (w.etfAnalyses!.rows[0] as { outlook: unknown }).outlook = 'pending'; }],
+    ['이름이 없다', (w) => { (w.etfAnalyses!.rows[0] as { name: unknown }).name = null; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const w = WIRE();
+    mutate(w);
+    const r = parseFacts(w);
+    assert.equal(r.ok, false, `${label}: 통과시켰다`);
+    assert.match(r.ok ? '' : r.reason, /etfAnalyses/, label);
   }
 });

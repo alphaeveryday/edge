@@ -725,7 +725,16 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 				jdbc.query(ETF_LEDGER_SQL, (rs, i) -> new EtfAnalysisRow(
 						rs.getString("etf_id"), rs.getString("display_name"),
 						rs.getString("outcome")), day, day),
-				analysisFailures(day));
+				analysisFailures(day), etfAnalyses(day));
+	}
+
+	private List<EtfAnalysisStateRow> etfAnalyses(LocalDate day) {
+		OffsetDateTime from = day.atStartOfDay(KST).toOffsetDateTime();
+		OffsetDateTime to = day.plusDays(1).atStartOfDay(KST).toOffsetDateTime();
+		return jdbc.query(ETF_ANALYSES_SQL, (rs, i) -> new EtfAnalysisStateRow(
+				rs.getString("etf_code"), rs.getString("name"),
+				rs.getString("outlook"), rs.getString("movement")),
+				from, to, from, to, ANALYSIS_GRACE_SECONDS, from, from, to);
 	}
 
 	private List<AnalysisFailureRow> analysisFailures(LocalDate day) {
@@ -808,6 +817,97 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 			HAVING count(*) FILTER (WHERE status = 'failed') > 0
 			   AND count(*) FILTER (WHERE status = 'completed') = 0
 			 ORDER BY 1, 2
+			""";
+
+	/**
+	 * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. ETF 하나에 전망과
+	 * 가격변동 분석 각각의 그날 상태가 온다. 이 조회는 <b>보여 주기만 한다</b> — 판정은 R15·R10 이 한다.
+	 *
+	 * <p><b>행</b>: 그날 전망 분석 행이 있거나, 가격변동 분석 행이 있거나, 장중 트리거가 발화한 ETF 다.
+	 * 셋 다 없는 ETF 는 나오지 않는다 — 전망 배치의 대상 목록은 DB 에 없어(배치 정의에 박힌 Terraform
+	 * 변수다) "대상인데 빠진 ETF"를 이 조회가 알 수 없다.
+	 *
+	 * <p><b>종류별 상태</b>는 이 순서로 정한다:
+	 * <ol>
+	 *   <li>{@code completed} — 그날 완료 행이 하나라도 있다.</li>
+	 *   <li>{@code failed} — 실패 행이 있고 완료 행이 없다. {@link #ANALYSIS_FAILURES_SQL} 과 <b>같은
+	 *       기준</b>이라 이 표의 실패 ETF 와 R15 의 목록이 같다.</li>
+	 *   <li>{@code running} — 진행 중인 행만 있다.</li>
+	 *   <li>(가격변동 분석만) 그날 그 ETF 의 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없다.
+	 *       그런 <b>트리거</b> 가운데 유예 밖인 것이 하나라도 있으면 {@code not_started}, 모두 유예
+	 *       안이면 {@code pending}. 단위가 요청이 아니라 트리거다 — 한 트리거에 요청이 여럿(재발화
+	 *       세대)이면 가장 늦게 수용된 요청이 유예 안인 동안 그 트리거는 유예 안이다. 흐름 띠가 그렇게
+	 *       세므로 여기서 요청 단위로 가르면 띠는 판정 보류, 표는 시작 못 함으로 갈린다.
+	 *       기준은 {@link #ANALYSIS_CHAIN_SQL} 의 {@code started_pending} 과 같다 — 같은 상수
+	 *       ({@link #ANALYSIS_GRACE_SECONDS}), 같은 기점(요청의 {@code accepted_at}), 같은 연결
+	 *       (요청 입력의 {@code source.trigger_id}).</li>
+	 *   <li>{@code none} — 위 어느 것도 아니다. 트리거는 발화했는데 수용된 요청이 없는 ETF 도 여기에
+	 *       든다(그 감소는 R10 의 트리거 → 분석 요청이 센다).</li>
+	 * </ol>
+	 * 분석 행의 날짜는 {@code analysis_at} 의 KST 날짜이고, 트리거의 날짜는 {@code window_start} 다.
+	 * {@code data_source = 'database'} 만 센다.
+	 *
+	 * <p><b>이름</b>은 옛 ETF 표와 같은 출처다 — v2 의 {@code etf_code} 는 종목 코드(트리거의
+	 * {@code entity_id})라 {@code instrument(market_code='XKRX', ticker)} 로 {@code instrument_id} 를
+	 * 얻고 {@code entity.display_name} 을 읽는다. 이어지지 않는 코드는 코드 그대로 낸다.
+	 */
+	private static final String ETF_ANALYSES_SQL = """
+			WITH outlook AS (
+			    SELECT etf_code,
+			           CASE WHEN count(*) FILTER (WHERE status = 'completed') > 0 THEN 'completed'
+			                WHEN count(*) FILTER (WHERE status = 'failed') > 0 THEN 'failed'
+			                ELSE 'running' END AS state
+			      FROM outlook_analyses
+			     WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
+			     GROUP BY etf_code
+			), movement AS (
+			    SELECT etf_code,
+			           CASE WHEN count(*) FILTER (WHERE status = 'completed') > 0 THEN 'completed'
+			                WHEN count(*) FILTER (WHERE status = 'failed') > 0 THEN 'failed'
+			                ELSE 'running' END AS state
+			      FROM movement_analyses
+			     WHERE analysis_at >= ? AND analysis_at < ? AND data_source = 'database'
+			     GROUP BY etf_code
+			), fired AS (
+			    SELECT t.trigger_id, t.entity_id AS etf_code,
+			           bool_or(q.analysis_id IS NOT NULL) AS requested,
+			           bool_or(a.analysis_id IS NOT NULL) AS started,
+			           COALESCE(bool_or(q.accepted_at > now() - (? * interval '1 second')), false)
+			               AS request_young
+			      FROM minute_price_trigger t
+			      LEFT JOIN analysis_execution_requests q
+			             ON q.created_at >= ?
+			            AND q.accepted_at IS NOT NULL
+			            AND q.input_json::jsonb -> 'source' ->> 'trigger_id' = t.trigger_id
+			      LEFT JOIN movement_analyses a
+			             ON a.analysis_id = q.analysis_id AND a.data_source = 'database'
+			     WHERE t.trigger_kind = 'FIRE'
+			       AND t.window_start >= ? AND t.window_start < ?
+			     GROUP BY t.trigger_id, t.entity_id
+			), unstarted AS (
+			    SELECT etf_code,
+			           bool_or(requested AND NOT started AND NOT request_young) AS lost,
+			           bool_or(requested AND NOT started AND request_young) AS held
+			      FROM fired
+			     GROUP BY etf_code
+			), codes AS (
+			    SELECT etf_code FROM outlook
+			    UNION SELECT etf_code FROM movement
+			    UNION SELECT etf_code FROM unstarted
+			)
+			SELECT c.etf_code,
+			       COALESCE(e.display_name, c.etf_code) AS name,
+			       COALESCE(o.state, 'none') AS outlook,
+			       COALESCE(m.state,
+			                CASE WHEN u.lost THEN 'not_started' WHEN u.held THEN 'pending' END,
+			                'none') AS movement
+			  FROM codes c
+			  LEFT JOIN outlook o ON o.etf_code = c.etf_code
+			  LEFT JOIN movement m ON m.etf_code = c.etf_code
+			  LEFT JOIN unstarted u ON u.etf_code = c.etf_code
+			  LEFT JOIN instrument i ON i.market_code = 'XKRX' AND i.ticker = c.etf_code
+			  LEFT JOIN entity e ON e.entity_id = i.instrument_id
+			 ORDER BY c.etf_code
 			""";
 
 	@Override

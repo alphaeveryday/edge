@@ -1015,6 +1015,30 @@ class ConsoleControllerTest {
 	}
 
 	/**
+	 * ETF별 v2 분석 귀결(ALPHA-1312) — 새 축으로 나가고, 옛 축({@code etfLedger})은 그대로 남는다.
+	 * 옛 화면은 그 축만 읽으므로 새 서버를 만나도 종전과 같다. 행이 없어도 축은 나간다 — 키가 빠지면
+	 * 새 화면은 "이 축을 안 싣는 배포본"으로 읽는다.
+	 */
+	@Test
+	void ETF별_v2_분석_귀결은_새_축으로_나가고_옛_축은_그대로다() throws Exception {
+		ConsoleFacts base = facts();
+		mvc(base).perform(get("/api/v1/console/facts"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows.length()").value(0))
+				.andExpect(jsonPath("$.result.etfLedger.rows").isArray());
+
+		ConsoleFacts withRows = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), base.boundary(), base.chain(), base.etfLedger(), base.analysisFailures(),
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisStateRow(
+						"069500", "KODEX 200", "completed", "pending")));
+		mvc(withRows).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].etf").value("069500"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].name").value("KODEX 200"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].outlook").value("completed"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].movement").value("pending"));
+	}
+
+	/**
 	 * 분석 실패 축(R15, ALPHA-1291) — 두 종류가 항상 이 순서로 나가고, 실패 ETF 가 없는 종류는
 	 * <b>빈 배열</b>이다. 키가 빠지면 소비자는 "이 축을 안 싣는 배포본"으로 읽어 규칙을 못 돌린다.
 	 */

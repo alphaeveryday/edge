@@ -264,6 +264,15 @@ const SHOWN_ONLY_STAGES = new Set(['c.done', 'c.pub']);
 export const ETF_LEDGER_ROW_FIELDS: Record<string, Check> = {
   etf: text, name: text, triggered: bool, outcome: nullableText, error: nullableText,
 };
+/* ETF별 v2 분석 귀결(ALPHA-1312). 상태는 계약이 열거한 코드만 받는다 — 모르는 코드를 통과시키면
+ * 표가 그 칸을 이름 없는 상태로 그린다. */
+const OUTLOOK_STATES = new Set(['completed', 'failed', 'running', 'none']);
+const MOVEMENT_STATES = new Set([...OUTLOOK_STATES, 'not_started', 'pending']);
+export const ETF_ANALYSIS_ROW_FIELDS: Record<string, Check> = {
+  etf: text, name: text,
+  outlook: (v) => typeof v === 'string' && OUTLOOK_STATES.has(v),
+  movement: (v) => typeof v === 'string' && MOVEMENT_STATES.has(v),
+};
 export const META_FIELDS: Record<string, Check> = {
   db: isoInstant, aws: optionalNullableInstant, today: isoDate,
 };
@@ -378,6 +387,19 @@ export function parseFacts(body: unknown): FactsParse {
       if (!isRow(row)) return bad('etfLedger.rows 원소가 객체가 아니다');
       const field = offendingField(row, ETF_LEDGER_ROW_FIELDS);
       if (field) return bad(`etfLedger.rows[].${field} 의 값이 계약과 다르다`);
+    }
+  }
+
+  /* ETF별 v2 분석 귀결 — 없어도 된다(이 축을 싣기 전의 API). */
+  const etfAnalyses = body.etfAnalyses;
+  if (etfAnalyses !== undefined) {
+    if (!isRow(etfAnalyses) || !Array.isArray(etfAnalyses.rows)) {
+      return bad('etfAnalyses.rows 축이 배열이 아니다');
+    }
+    for (const row of etfAnalyses.rows) {
+      if (!isRow(row)) return bad('etfAnalyses.rows 원소가 객체가 아니다');
+      const field = offendingField(row, ETF_ANALYSIS_ROW_FIELDS);
+      if (field) return bad(`etfAnalyses.rows[].${field} 의 값이 계약과 다르다`);
     }
   }
 
@@ -509,9 +531,13 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       ? { etf_ledger: { rows: dto.etfLedger.rows.map((r) => ({
           etf: r.etf, name: r.name, triggered: r.triggered,
           outcome: r.outcome, error: r.error,
-        })),
-        /* 옛 체인 단계의 관측 불가 표시에서 읽는다 — 서버가 그 엔진이 멈췄다고 답한 유일한 자리다 */
-        ...(dto.chain?.stages[0]?.blind ? { legacy_stopped: true } : {}) } }
+        })) } }
+      : {}),
+    /* 옛 축(`etfLedger`)으로 대신 채우지 않는다 — 없으면 없는 것으로 옮긴다(ALPHA-1312) */
+    ...(dto.etfAnalyses
+      ? { etf_analyses: { rows: dto.etfAnalyses.rows.map((r) => ({
+          etf: r.etf, name: r.name, outlook: r.outlook, movement: r.movement,
+        })) } }
       : {}),
     ...(dto.analysisFailures
       ? { analysis_failures: dto.analysisFailures.map((a) => ({ kind: a.kind, failed_etfs: a.failedEtfs })) }
