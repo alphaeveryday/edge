@@ -157,6 +157,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     accepted_report = {}
     accepted_final = None
     accepted_search = None
+    recommendation_reconciled = False
+    retained_prior_text = False
 
     def checkpoint():
         if on_checkpoint:
@@ -212,6 +214,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if calls > MAX_MODEL_CALLS:
                     emit('limit_reached', budget='model_calls', used=calls - 1, limit=MAX_MODEL_CALLS)
                     raise ValueError("MODEL_CALL_BUDGET")
+                finalizing = role == 'opinion' and calls >= MAX_MODEL_CALLS - 2
+                if finalizing:
+                    messages.append({'role': 'user', 'content': '이제 확보한 자료로 최종 JSON 전체를 작성하세요. 추가 도구 호출은 종료합니다. 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
                 if context_bytes > MAX_CONTEXT_BYTES:
                     emit('limit_reached', budget='context_bytes', used=context_bytes, limit=MAX_CONTEXT_BYTES)
@@ -219,7 +224,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
                     result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL],
-                        "tool_choice": "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
+                        "tool_choice": "none" if finalizing else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -379,7 +384,19 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
-                        from .completion import retain_research
+                        from .completion import retain_recommendation, retain_research
+                        retained = retain_recommendation(final, accepted_final if optimizer.result == accepted_search else None)
+                        retained_prior_text = False
+                        if retained is not final:
+                            if not recommendation_reconciled and calls < MAX_MODEL_CALLS - 1:
+                                recommendation_reconciled = True
+                                messages.append({'role': 'user', 'content': '이미 검증된 추천은 유지합니다. 아래 초안의 추천과 새로 확인한 답을 함께 반영하여 최종 JSON 전체를 다시 작성하세요. 배당 등 빈 항목만 남기고, opinion·portfolio·insights·answers에서 추천을 보류한다는 설명을 제거하세요. 추천의 필수 제약과 점수는 그대로 검증합니다.\n' + retained.model_dump_json()})
+                                continue
+                            # A refused rewrite must not publish mutually contradictory text.
+                            final = accepted_final.model_copy(deep=True, update={
+                                'answers': retained.answers, 'evidence_coverage': retained.evidence_coverage,
+                                'return_forecast': None})
+                            retained_prior_text = True
                         final = retain_research(final, accepted_final, retain_answers=optimizer.result == accepted_search)
                         execution_rejection = None
                         selected = optimizer.validate(final)
@@ -418,6 +435,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             checks = followup_checks or checks
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
                             considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
+                        if retained_prior_text:
+                            published['completion']['reasons'].append('RECOMMENDATION_TEXT_RETAINED')
+                            if published['completion']['status'] != 'needs_input':
+                                published['completion']['status'] = 'partial'
                         if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
                             if published['completion']['status'] != 'needs_input':
@@ -436,7 +457,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         accepted_search = deepcopy(optimizer.result)
                         completion = published['completion']
                         research_tasks = [task for task in completion['tasks'] if task['status'] == 'partial']
-                        research_reasons = [reason for reason in completion['reasons'] if reason != 'UNANSWERED_QUESTIONS'
+                        research_reasons = [reason for reason in completion['reasons'] if reason not in {'UNANSWERED_QUESTIONS', 'RECOMMENDATION_TEXT_RETAINED'}
                             and not (reason == 'COMPARISON_DATA_UNAVAILABLE' and optimizer.result.get('reason') == 'CURRENT_WEIGHTS_REQUIRED')]
                         research_work = {'tasks': research_tasks, 'reasons': research_reasons,
                                          'missing_research': completion['missing_research'], 'search_progress': search_progress}
