@@ -7,17 +7,23 @@ import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { ChainStrip } from './ChainStrip';
 import { intradayLostAtEntry, pendingTriggers, stagesBlind } from './chainView';
+import { STATE_LABEL, etfTable, rowTone, stateTone, type StateTone } from './etfAnalysisView';
 import { Absent, AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import '../../styles/ops.css';
+
+const TONE_COLOR: Record<StateTone, string> = {
+  bad: 'var(--down)',
+  wait: 'var(--fg-2)',
+  ok: 'var(--up)',
+  none: 'var(--fg-4)',
+};
 
 export function ChainPage() {
   const q = useConsoleFactsQuery();
   useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
-  const { etf_ledger: ledger, queues } = q.facts;
-  const rows = ledger?.rows ?? [];
-  const failed = rows.filter((r) => r.outcome === 'FAILED');
-  const published = rows.filter((r) => r.published);
+  const { queues } = q.facts;
+  const table = etfTable(q.facts.etf_analyses);
 
   return (
     <div className="flex flex-col gap-4">
@@ -81,88 +87,67 @@ export function ChainPage() {
 
       <div className="card" id="etf-ledger">
         <div className="card-head">
-          <span className="t-label">
-            ETF별 분석 귀결 {ledger?.mock && <span className="chip">MOCK</span>}
-          </span>
+          <span className="t-label">ETF별 분석 귀결</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            {ledger ? (
-              <>
-                {rows.length}종 · 실패 {failed.length}
-                {ledger.mock && <> · Cloud 게시 {published.length}</>}
-              </>
-            ) : (
-              <Absent kind="uninstrumented" />
-            )}
+            {table ? table.summary : '기록 없음'}
             <Info
               tip={
-                (ledger?.why ?? '') +
-                (ledger
-                  ? `\n\n옛 설명 엔진의 실행 상태다. 분석 실패 판정(R15)은 이 표가 아니라 새 분석 엔진의 표를 본다. ` +
-                    (ledger.mock
-                      ? '이 값은 목 원장이다.'
-                      : '조회일에 발화한 ETF별 최신 트리거의 최신 설명 실행 상태다.')
-                  : 'per-ETF 분석 귀결 원장이 이번 응답에 없다 — 표를 비워 두는 것이 아니라 축 자체가 없다. ' +
-                    '조회일의 ETF별 최신 트리거·설명 실행 상태가 없어 셀 값이 없다.')
+                table
+                  ? '새 분석 엔진의 조회일 상태다. ETF 마다 전망과 가격변동 분석을 따로 보여 준다.\n' +
+                    '그날 분석 행이 있거나 장중 트리거가 발화한 ETF 만 나온다.\n\n' +
+                    '완료: 그날 완료된 분석이 있다.\n' +
+                    '실패: 실패한 분석이 있고 완료된 분석이 없다(R15 와 같은 기준).\n' +
+                    '진행 중: 진행 중인 분석만 있다.\n' +
+                    '시작 못 함: 트리거에서 이어진 요청이 수용됐는데 분석이 시작되지 않았다.\n' +
+                    '판정 보류: 같은 형상인데 유예 시간 안이라 아직 판정하지 않았다.\n' +
+                    '대상 아님: 위 어느 것도 아니다. 가격변동 분석은 그날 요청으로 이어진 트리거가 없던 ETF 다. ' +
+                    '전망은 그날 분석 행이 없는 ETF 인데, 배치 대상인데 빠진 것인지는 이 표가 가르지 못한다.\n\n' +
+                    '이 표는 보여 주기만 한다. 판정은 R15(분석 실패)와 R10(구간 손실)이 한다.'
+                  : '이 응답에는 새 분석 엔진의 ETF별 상태가 없다 — 그 축을 싣기 전의 API 다. ' +
+                    '옛 설명 엔진의 실행 상태로 대신 그리지 않는다.'
               }
               label="ETF별 분석 귀결"
             />
           </span>
         </div>
         {/* ⛔ 축이 없을 때 빈 격자를 그리지 않는다 — 칸이 0개인 격자는 "오늘 실패한 ETF 가 없다"로
-            읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). */}
-        {ledger?.legacy_stopped && (
-          <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
-            이 표도 옛 설명 엔진의 실행 상태를 읽습니다. 그 엔진이 조회일보다 앞서 멈춰 이 날의 귀결은
-            비어 있습니다 — 새 분석 엔진의 실행은 이 표에 나오지 않습니다. 분석 실패는{' '}
-            <Link to="/ops/trend">추이 화면의 분석 실패 ETF 카드</Link>가 답합니다.
-          </p>
-        )}
-        {!ledger ? (
+            읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). 옛 축으로도 그리지
+            않는다 — 그 엔진은 멈췄고 그 값은 전부 "실행 없음"이다. */}
+        {!table ? (
           <div className="card-pad">
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-              ETF별 분석 귀결 원장은 <Absent kind="uninstrumented" /> 입니다 — 이번 응답에는
-              최신 트리거 실행 축이 없어 이 표를 그리지 못합니다.
+              기록 없음 — 이 응답에는 새 분석 엔진의 ETF별 상태가 실려 있지 않아 이 표를 그리지
+              못합니다.
             </p>
           </div>
         ) : (
         <div className="card-pad">
           <div className="ops-grid-etf">
-            {rows.map((r) => (
-              <div
-                key={r.etf}
-                className={
-                  'ops-etf' +
-                  (r.outcome === 'FAILED' ? ' ops-etf-failed' : r.published ? ' ops-etf-published' : '')
-                }
-                title={
-                  `${r.name} (${r.etf})\n` +
-                  `트리거: ${r.triggered ? '발화' : '미발화(정상 변동)'}\n` +
-                  `귀결: ${r.outcome ?? '실행 없음'}` +
-                  (r.error ? `\n오류: ${r.error}` : '') +
-                  (ledger.mock
-                    ? `\nCloud 게시: ${r.published ? 'PUBLISHED' : '—'}` +
-                      `\n테넌트 발번: ${r.delivered ? 'NEW' : '—'} · 이 화면 책임 밖 — 전달 경계에서 확인`
-                    : '')
-                }
-              >
-                <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {r.name}
-                </div>
+            {table.rows.map((r) => {
+              const tone = rowTone(r);
+              return (
                 <div
-                  className="t-xs"
-                  style={{
-                    color:
-                      r.outcome === 'FAILED' ? 'var(--down)' : r.published ? 'var(--up)' : 'var(--fg-4)',
-                  }}
+                  key={r.etf}
+                  className={
+                    'ops-etf' + (tone === 'bad' ? ' ops-etf-failed' : tone === 'ok' ? ' ops-etf-published' : '')
+                  }
+                  title={
+                    `${r.name} (${r.etf})\n` +
+                    `전망: ${STATE_LABEL[r.outlook]}\n` +
+                    `가격변동 분석: ${STATE_LABEL[r.movement]}`
+                  }
                 >
-                  {r.outcome === 'FAILED'
-                    ? '분석 실패'
-                    : r.outcome === 'SUCCEEDED'
-                      ? '분석 완료'
-                      : r.outcome ?? '실행 없음'}
+                  <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {r.name}
+                  </div>
+                  {([['전망', r.outlook], ['가격변동', r.movement]] as const).map(([kind, state]) => (
+                    <div key={kind} className="t-xs" style={{ color: TONE_COLOR[stateTone(state)] }}>
+                      {kind} {STATE_LABEL[state]}
+                    </div>
+                  ))}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         )}
