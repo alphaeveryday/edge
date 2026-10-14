@@ -79,3 +79,22 @@ async def test_unstructured_provider_response_is_not_silently_accepted():
         json={'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}))) as client:
         with pytest.raises(ValueError, match='STRUCTURED_OUTPUT_REQUIRED'):
             await structured_call(client, 'test-key', {'tools': [], 'tool_choice': 'none', 'messages': []}, Section)
+
+
+async def test_all_tools_use_strict_schemas_without_making_optional_arguments_mandatory():
+    from edge_portfolio.agent import TOOLS
+    def handler(request):
+        body = json.loads(request.content)
+        assert all(tool['function']['strict'] is True for tool in body['tools'])
+        parameters = body['tools'][0]['function']['parameters']
+        assert parameters['properties']['offset']['anyOf'][-1] == {'type': 'null'}
+        assert set(parameters['required']) == {'query', 'offset'}
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'role': 'assistant', 'tool_calls': [{'id': 'search-1', 'type': 'function',
+            'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO","offset":null}'}}]}}]})
+    payload = {'tools': TOOLS, 'tool_choice': 'auto', 'messages': []}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await structured_call(client, 'test-key', payload, QuestionSection)
+    args = json.loads(result['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+    assert args == {'query': 'VOO'}
+    assert 'strict' not in TOOLS[0]['function']

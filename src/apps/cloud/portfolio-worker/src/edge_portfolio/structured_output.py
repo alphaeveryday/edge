@@ -1,5 +1,6 @@
 """DeepSeek strict function output, followed by the existing business validators."""
 from copy import deepcopy
+import json
 
 
 def strict_schema(schema):
@@ -48,11 +49,21 @@ async def structured_call(client, key, payload, report_model):
     report = {'type': 'function', 'function': {'name': 'submit_report', 'strict': True,
         'description': 'Complete the current role by submitting its report. Use the research tools first when needed; never return the report as plain text.',
         'parameters': strict_schema(report_model.model_json_schema())}}
+    optional_arguments = {}
+    for tool in request.get('tools', []):
+        function = tool['function']
+        parameters = function['parameters']
+        optional = set(parameters.get('properties', {})) - set(parameters.get('required', []))
+        optional_arguments[function['name']] = optional
+        for name in optional:
+            parameters['properties'][name] = {'anyOf': [parameters['properties'][name], {'type': 'null'}]}
+        function['parameters'] = strict_schema(parameters)
+        function['strict'] = True
     if request.get('tool_choice') == 'none':
         request['tools'] = [report]
         request['tool_choice'] = {'type': 'function', 'function': {'name': 'submit_report'}}
     else:
-        # Research tools retain their optional arguments; only report submission needs a strict shape.
+        # Null represents an omitted research argument in an all-required strict schema.
         request['tools'] = [*request.get('tools', []), report]
         request['tool_choice'] = 'required'
     response = await client.post('https://api.deepseek.com/beta/chat/completions',
@@ -74,4 +85,16 @@ async def structured_call(client, key, payload, report_model):
         message['content'] = submitted[0]['function']['arguments']
         message.pop('tool_calls')
         choice['finish_reason'] = 'stop'
+    else:
+        for call in calls:
+            function = call['function']
+            optional = optional_arguments.get(function['name'], set())
+            if optional:
+                try:
+                    arguments = json.loads(function['arguments'])
+                except (ValueError, TypeError):
+                    continue  # Existing tool validation reports malformed arguments.
+                if isinstance(arguments, dict):
+                    function['arguments'] = json.dumps({name: value for name, value in arguments.items()
+                                                       if value is not None or name not in optional}, ensure_ascii=False)
     return result
