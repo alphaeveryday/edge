@@ -536,3 +536,15 @@ async def test_timeout_checkpoint_is_not_reported_as_an_unavailable_instrument(m
     assert result['status'] == 'available'
     assert result['tested_combinations'] == 10
     assert result['failures'] == {}
+
+
+def test_rating_alone_cannot_withhold_an_available_candidate():
+    from edge_portfolio.contracts import FinalReport
+    from report_fixtures import final_payload
+    optimizer = Optimizer(None)
+    optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'})
+    with pytest.raises(ValueError, match='Rating is not a recommendation threshold'):
+        optimizer.validate(final)
+    optimizer.result = {'status': 'no_match', 'candidates': []}
+    assert optimizer.validate(final) is None
