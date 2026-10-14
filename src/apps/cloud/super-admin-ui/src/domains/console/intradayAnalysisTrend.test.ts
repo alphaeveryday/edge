@@ -3,10 +3,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { intradayOutcome, kstDateAt, parseIntradayAnalysisTrend } from './intradayAnalysisTrend.ts';
 
-/* 옛 설명 엔진 단계는 10-02 이후 0 이다 — 판정이 그 값을 읽으면 아래 완료 판정이 전부 "미완료"가 된다.
- * 그래서 옛 단계는 0 으로 두고 새 분석 엔진 단계(`analysis`)만 다르게 둔다. */
 const point = (date: string, triggers = 5, completed = triggers, blind = false) => ({
-  date, triggers, observations: 0, runs: 0, activeRuns: 0, failedRuns: 0, results: 0, published: 0,
+  date, triggers,
   analysis: { blind, requested: triggers, requestPending: 0, started: triggers, startPending: 0, completed, published: completed },
 });
 
@@ -70,8 +68,9 @@ test('정확한 연속 일수와 단계 불변식을 가진 응답만 받는다'
   assert.deepEqual(parseIntradayAnalysisTrend(valid, '2026-08-20', 2), valid);
   assert.throws(() => parseIntradayAnalysisTrend({ ...valid, points: valid.points.slice(1) }, undefined, 2));
   assert.throws(() => parseIntradayAnalysisTrend({ ...valid, points: [point('2026-08-18'), point('2026-08-20')] }, undefined, 2));
-  assert.throws(() => parseIntradayAnalysisTrend({ ...valid, points: [{ ...point('2026-08-19'), results: 6 }, point('2026-08-20')] }, undefined, 2));
-  assert.throws(() => parseIntradayAnalysisTrend({ ...valid, points: [{ ...point('2026-08-19'), activeRuns: 4, failedRuns: 2 }, point('2026-08-20')] }, undefined, 2));
+  assert.throws(() => parseIntradayAnalysisTrend({ ...valid, points: [{ ...point('2026-08-19'), triggers: -1 }, point('2026-08-20')] }, undefined, 2));
+  assert.throws(() => parseIntradayAnalysisTrend({ ...valid, points: [{ ...point('2026-08-19'), triggers: 2 }, point('2026-08-20')] }, undefined, 2),
+    '새 분석 엔진의 도달 수가 트리거 수보다 많은 응답을 받았다');
   assert.throws(() => parseIntradayAnalysisTrend(valid, '2026-08-19', 2));
   assert.throws(() => parseIntradayAnalysisTrend(
     { ...valid, points: [point('2026-08-20'), point('2026-08-21')] },
@@ -116,4 +115,14 @@ test('실행 이력은 30일 API를 한 번 조회하고 순수 판정을 스트
   );
   assert.doesNotMatch(source, /OutcomeWithFallback/, '독립 축 상세를 grid query 분기마다 다시 마운트하지 않는다');
   assert.match(source, /id="gd-outcome-detail" tabIndex=\{-1\}/, '선택 상세는 프로그래밍 방식으로 초점을 받을 수 있다');
+});
+
+test('🔴 옛 설명 엔진의 단계 필드는 없어도, 있어도 받는다 — 서버가 지우기 전과 뒤의 응답 둘 다다', () => {
+  /* 이 UI 앞의 UI(#1292)는 그 필드를 요구해서, 서버가 지우는 순간 응답 전체를 거부했다(ALPHA-1330). */
+  const asOf = '2026-08-20T01:00:00Z';
+  const without = point('2026-08-20');
+  assert.equal(parseIntradayAnalysisTrend({ asOf, points: [without] }, '2026-08-20', 1).points[0].triggers, 5);
+  /* 옛 서버는 그 필드를 싣는다 — 값이 불변식을 깨도(10-02 이후 0 이라 트리거보다 작다) 읽지 않으니 받는다 */
+  const legacy = { ...point('2026-08-20'), observations: 0, runs: 0, activeRuns: 0, failedRuns: 0, results: 0, published: 0 };
+  assert.equal(parseIntradayAnalysisTrend({ asOf, points: [legacy] }, '2026-08-20', 1).points[0].analysis?.completed, 5);
 });

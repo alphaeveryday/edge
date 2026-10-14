@@ -12,20 +12,12 @@ const validDate = (value: unknown): value is string => {
 
 function parsePoint(value: unknown, index: number): IntradayAnalysisTrendPointDto {
   if (!object(value)) throw new Error(`장중 분석 귀결 points[${index}]가 객체가 아닙니다.`);
-  const keys = ['triggers', 'observations', 'runs', 'activeRuns', 'failedRuns', 'results', 'published'] as const;
-  if (!validDate(value.date) || keys.some((key) => !count(value[key]))) {
+  /* 옛 설명 엔진의 단계 필드는 검사하지 않는다(ALPHA-1330) — 화면이 읽지 않고 서버가 지운다. 그 필드를
+   * 요구하면 지운 서버의 응답을 통째로 거부한다. 남은 축은 트리거 수와 새 분석 엔진의 단계다. */
+  if (!validDate(value.date) || !count(value.triggers)) {
     throw new Error(`장중 분석 귀결 points[${index}]의 날짜·계수가 유효하지 않습니다.`);
   }
   const point = value as unknown as IntradayAnalysisTrendPointDto;
-  if (
-    point.triggers < point.observations ||
-    point.observations < point.runs ||
-    point.runs < point.results ||
-    point.results < point.published ||
-    point.activeRuns + point.failedRuns > point.runs
-  ) {
-    throw new Error(`장중 분석 귀결 points[${index}]의 단계 불변식이 깨졌습니다.`);
-  }
   /* 새 분석 엔진의 단계(ALPHA-1329) — 없어도 된다(이 필드를 싣기 전의 API). 오면 형상과 단계 불변식을
    * 본다: 각 단계는 앞 단계의 부분집합이고, 판정 보류는 앞 단계에 도달했는데 이 단계에 못 간 것이다. */
   if (value.analysis !== undefined && !validAnalysis(value.analysis, point.triggers)) {
