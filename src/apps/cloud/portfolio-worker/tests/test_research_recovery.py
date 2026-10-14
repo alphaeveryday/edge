@@ -38,6 +38,9 @@ async def test_customer_input_wait_does_not_stop_independent_research(monkeypatc
 
 
 async def test_missing_weights_alone_does_not_trigger_unproductive_research(monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    today = datetime.now(timezone.utc).date().isoformat()
     class Optimizer:
         def __init__(self, *args):
             self.result = {'status': 'unavailable', 'candidates': [], 'reason': 'CURRENT_WEIGHTS_REQUIRED'}
@@ -49,9 +52,13 @@ async def test_missing_weights_alone_does_not_trigger_unproductive_research(monk
         role = stages[-1]
         content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
         if role == 'question': content['decision'] = {}
-        if role == 'opinion': opinions.append(1)
+        if role == 'opinion':
+            opinions.append(1)
+            content['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': field, 'status': 'supported',
+                'claim_as_of': today, 'evidence': [{'source_id': 's1', 'passage_id': 'p1'}]} for field in ('structure', 'holdings', 'fees')]
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(input_mode='names', holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO'}], horizon='10년 이상')
-    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+    evidence = SimpleNamespace(sources=[{'id': 's1', 'passages': [{'id': 'p1', 'text': today + ' Official product research.'}]}])
+    result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=evidence)
     assert len(opinions) == 1
     assert result['completion']['status'] == 'needs_input'

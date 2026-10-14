@@ -4,16 +4,15 @@ import calendar
 import re
 
 
-def retain_research(final, previous):
-    """Keep omitted work when recovery is still evaluating the same allocation."""
+def retain_research(final, previous, *, retain_answers=True):
+    """Keep product evidence across allocations; answers belong to the same decision."""
     if previous is None:
         return final
     def target(report):
         return sorted((row.instrument_id, row.account, row.weight_pct) for row in report.recommendation.allocations) if report.recommendation else None
-    if target(final) != target(previous):
-        return final
     answer_ids = {answer.question_index for answer in final.answers}
-    answers = [*final.answers, *(answer for answer in previous.answers if answer.question_index not in answer_ids)]
+    answers = [*final.answers, *(answer for answer in previous.answers
+        if retain_answers and target(final) == target(previous) and answer.question_index not in answer_ids)]
     coverage_ids = {(item.instrument_id, item.field) for item in final.evidence_coverage}
     coverage = [*final.evidence_coverage, *(item for item in previous.evidence_coverage if (item.instrument_id, item.field) not in coverage_ids)]
     return type(final).model_validate({**final.model_dump(), 'answers': answers, 'evidence_coverage': coverage})
@@ -39,7 +38,25 @@ def data_status(market, optimizer, sources, observed=None):
             'sources': source_status, 'forecast': 'not_estimated'}
 
 
-def assess_completion(final, request, decision, published, sources, as_of):
+def research_inventory(request, decision, published, coverage=(), considered_ids=()):
+    holdings = {row.instrument_id for row in request.holdings if row.kind != 'cash' and row.instrument_id}
+    recommendation = published.get('recommendation')
+    selected = {row['instrument_id'] for row in recommendation['allocations']} if recommendation else set()
+    optimization = published.get('optimization') or {}
+    eligible = {row['instrument_id'] for candidate in optimization.get('candidates', []) for row in candidate.get('allocations', [])}
+    candidates = set(considered_ids) | eligible
+    by_key = {(row['instrument_id'], row['field']): row for row in coverage}
+    fields = ['structure', 'holdings', 'fees'] + (['distributions'] if 'income' in decision.objectives else [])
+    rejected = optimization.get('reason') in {'RATING_BELOW_MINIMUM', 'EXECUTION_INFEASIBLE', 'CUSTOMER_CONSTRAINT_NOT_SATISFIED'}
+    calculation_only = decision.kind == 'scenario' or decision.execute_saved_target and optimization.get('reason') == 'SAVED_TARGET_ONLY'
+    active = set() if calculation_only else holdings | selected | (eligible if not recommendation and not rejected else set())
+    return [{'instrument_id': key, 'field': field, 'status': by_key.get((key, field), {}).get('status', 'missing'),
+             'roles': [role for role, ids in [('holding', holdings), ('candidate', candidates), ('selected', selected)] if key in ids],
+             'required': key in active}
+            for key in sorted((holdings | selected | candidates | {key for key, _ in by_key}) - {'CASH:KRW'}) for field in fields]
+
+
+def assess_completion(final, request, decision, published, sources, as_of, *, considered_ids=()):
     questions = decision.questions or ([request.question] if request.question else [])
     answers = {}
     for answer in final.answers:
@@ -85,10 +102,9 @@ def assess_completion(final, request, decision, published, sources, as_of):
                 status = 'date_unknown'
         coverage[key] = {**item.model_dump(mode='json'), 'status': status}
     recommendation = published.get('recommendation')
-    fields = ['structure', 'holdings', 'fees'] + (['distributions'] if 'income' in decision.objectives else [])
-    required = {(row['instrument_id'], field) for row in recommendation['allocations'] for field in fields} if recommendation else set()
-    missing_research = [{'instrument_id': key, 'field': field, 'status': coverage.get((key, field), {}).get('status', 'missing')}
-                        for key, field in sorted(required) if coverage.get((key, field), {}).get('status') != 'supported']
+    inventory = research_inventory(request, decision, published, coverage.values(), considered_ids)
+    missing_research = [{key: item[key] for key in ('instrument_id', 'field', 'status')}
+                        for item in inventory if item['required'] and item['status'] != 'supported']
     execution = recommendation.get('execution') if recommendation else published.get('execution')
     reasons = []
     if any(task['status'] != 'answered' for task in tasks):
@@ -145,5 +161,5 @@ def assess_completion(final, request, decision, published, sources, as_of):
     executed_saved_target = decision.execute_saved_target and not recommendation and decision.kind in {'rebalance', 'new_money'} and execution and execution['status'] in {'ready', 'conditional'}
     status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if decision.kind == 'scenario' or executed_saved_target else 'no_match' if not recommendation else 'complete'
     return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': missing_inputs,
-            'evidence_coverage': list(coverage.values()), 'missing_research': missing_research,
+            'evidence_coverage': list(coverage.values()), 'missing_research': missing_research, 'research_inventory': inventory,
             'note': '자료 항목·날짜·실행 조건의 충족 상태이며 주장 자체의 사실 정확성을 보증하지 않습니다.'}

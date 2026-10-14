@@ -339,8 +339,9 @@ async def test_runaway_tool_loop_still_stops_after_twenty_four_model_calls():
 
 
 async def test_backtest_candidates_remain_auditable_when_rating_prevents_recommendation(monkeypatch):
+    candidates = [{'candidate_id': 'candidate-1', 'allocations': [{'instrument_id': 'US:SPY', 'weight_pct': 100}]}]
     async def optimize(self, args):
-        self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+        self.result = {'status': 'available', 'candidates': candidates}
         self.batches = {'first', 'alternative'}
         return self.result
     monkeypatch.setattr('edge_portfolio.optimizer.Optimizer.tool', optimize)
@@ -353,12 +354,15 @@ async def test_backtest_candidates_remain_auditable_when_rating_prevents_recomme
         if role == 'question':
             content = {**content, 'decision': {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    checkpoints = []
     result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
-                                'test', phases.append, model_call=model, evidence=Evidence())
+                                'test', phases.append, model_call=model, evidence=Evidence(), on_checkpoint=checkpoints.append)
     assert result['recommendation'] is None
     assert result['optimization']['reason'] == 'RATING_BELOW_MINIMUM'
-    assert result['optimization']['candidates'] == [{'candidate_id': 'candidate-1'}]
+    assert result['optimization']['candidates'] == candidates
     assert result['optimization']['selected_candidate_id'] is None
+    rejected = [row for row in checkpoints[-1]['research_inventory'] if row['instrument_id'] == 'US:SPY']
+    assert rejected and all(not row['required'] for row in rejected)
 
 
 def test_diagnostic_codes_distinguish_budget_and_validation_failures_without_raw_content():

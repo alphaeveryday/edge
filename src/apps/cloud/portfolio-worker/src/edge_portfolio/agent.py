@@ -27,7 +27,7 @@ from .decision import Decision, QuestionSection, validate_decision, check_constr
 from .execution import execution_tool, resolve_funding, zero_funding_quote, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
-from .completion import assess_completion, data_status
+from .completion import assess_completion, data_status, research_inventory
 
 PROMPTS = Path(__file__).parent / "prompts"
 MODEL = "deepseek-flash"
@@ -160,6 +160,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     def checkpoint():
         if on_checkpoint:
             on_checkpoint({**accepted_report, 'sections': accepted_report.get('sections', dict(sections)), 'sources': list(evidence.sources), 'metrics': metrics,
+                           'research_inventory': research_inventory(request, decision, {'optimization': accepted_report.get('optimization', optimizer.result), 'recommendation': accepted_report.get('recommendation')},
+                               (accepted_report.get('completion') or {}).get('evidence_coverage', []), [key for group in getattr(optimizer, 'groups', []) for key in group]),
                            **({'scenarios': deepcopy(scenario_result)} if scenario_result is not None else {}),
                            'optimization': accepted_report.get('optimization', optimizer.result), 'as_of': context['as_of'],
                            'decision': decision.model_dump(mode='json'), 'input': request.model_dump(mode='json')})
@@ -186,6 +188,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 response.raise_for_status()
                 return response.json()
 
+        checkpoint()
         calls = 0
         read_retries = 0
         catalog_calls = 0
@@ -376,7 +379,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if role == 'opinion':
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_research
-                        final = retain_research(final, accepted_final if optimizer.result == accepted_search else None)
+                        final = retain_research(final, accepted_final, retain_answers=optimizer.result == accepted_search)
                         execution_rejection = None
                         selected = optimizer.validate(final)
                         if final.recommendation:
@@ -412,7 +415,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if decision.execute_saved_target and followup_execution is not None and not published.get('recommendation'):
                             published['execution'] = followup_execution
                             checks = followup_checks or checks
-                        published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'])
+                        published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
+                            considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
                         if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
                             if published['completion']['status'] != 'needs_input':

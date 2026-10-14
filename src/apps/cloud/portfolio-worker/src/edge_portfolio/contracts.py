@@ -203,7 +203,7 @@ class EvidenceCoverage(StrictModel):
 
 class FinalReport(StrictModel):
     answers: list[TaskAnswer] = Field(default_factory=list, max_length=5)
-    evidence_coverage: list[EvidenceCoverage] = Field(default_factory=list, max_length=80)
+    evidence_coverage: list[EvidenceCoverage] = Field(default_factory=list, max_length=240)
     withheld_reason: Literal['quality_failed', 'missing_input', 'missing_data', 'customer_failed', 'search_exhausted'] | None = None
     question: Section
     portfolio: Section
