@@ -4,8 +4,10 @@
  * 대상 수 대비 받은 수). 판정은 하지 않는다 — 임계는 추이를 본 뒤에 정한다.
  *
  * 지키는 선:
- *   · **점은 하루가 아니라 실행 하나다.** 하루에 여러 번 도는 레인(뉴스·장중 수급)의 슬롯별
- *     행 수가 증분인지 누적인지 확인되지 않았다. 하루로 합치면 뜻이 달라질 수 있다.
+ *   · **점은 하루가 아니라 실행 하나다.** 하루에 여러 번 도는 레인(뉴스·장중 수급)도 실행마다
+ *     그린다. 예외는 하나 — 행 수가 하루 안에서 누적된다고 파이프라인 코드로 확인한 데이터셋
+ *     (`rowsCumulativeWithinDay`, 지금은 장중 수급)의 **행 수**만 하루 마지막 실행 값 한 점으로
+ *     따로 낸다(`dailyRows`, ALPHA-1327). 근거는 카탈로그 항목 주석에 있다.
  *   · **값이 없는 실행은 `null` 이다 — 0 이 아니다.** 실행 기록 없이 완료로 적힌 작업이 실제로
  *     있고, 그것을 0행·0초로 그리면 거짓이다.
  *   · **옛 응답도 받는다.** UI 와 API 는 따로 배포된다. 새 필드(시각·종료 코드·완전성 숫자)가
@@ -41,11 +43,25 @@ export interface RunPoint {
   received: number | null;
 }
 
+/** 하루 한 점 — 그날 마지막 실행의 행 수(ALPHA-1327) */
+export interface DayRowPoint {
+  /** 실행 키의 슬롯 시각의 KST 날짜(YYYY-MM-DD) */
+  day: string;
+  /** 그날 마지막 실행 */
+  runKey: string;
+  rows: number | null;
+}
+
 export interface DatasetRunSeries {
   dataset: DatasetEntry;
   /** 대표 작업 — 응답에 이 데이터셋의 feature 작업이 한 번도 없으면 `null` */
   representative: string | null;
   points: RunPoint[];
+  /**
+   * 행 수가 하루 안에서 누적되는 데이터셋(`rowsCumulativeWithinDay`)만 — 하루 한 점의 행 수 계열이다.
+   * 그 밖은 `null` 이고 행 수도 실행 단위(`points`)로 그린다.
+   */
+  dailyRows: DayRowPoint[] | null;
 }
 
 /**
@@ -135,10 +151,31 @@ export function buildRunSeries(slots: GridSlot[], datasets: DatasetEntry[]): Dat
         received: counted?.completenessReceived ?? null,
       });
     }
-    const slotTime = (runKey: string) => runKey.slice(runKey.indexOf(':') + 1);
     points.sort((a, b) => slotTime(a.runKey).localeCompare(slotTime(b.runKey)));
-    return { dataset, representative, points };
+    return {
+      dataset,
+      representative,
+      points,
+      dailyRows: dataset.rowsCumulativeWithinDay ? dailyLastRows(points) : null,
+    };
   });
+}
+
+/** 실행 키(`레인:YYYY-MM-DDTHH:MM`)의 슬롯 시각 — 원장이 KST 로 적는다 */
+const slotTime = (runKey: string) => runKey.slice(runKey.indexOf(':') + 1);
+
+/**
+ * 하루 안에서 누적되는 행 수를 **하루 한 점**으로 — 그날 마지막 실행의 값이다(ALPHA-1327).
+ *
+ * "그날"은 실행 키의 슬롯 시각의 KST 날짜다. 점은 슬롯 시각 순이어야 한다(`buildRunSeries` 가 정렬한
+ * 뒤 부른다). 마지막 실행에 행 수가 없으면 **빈 점**이다 — 앞 실행의 값으로 채우지 않는다. 채우면
+ * 마지막 실행이 못 쓴 날이 그 앞 슬롯까지의 누적으로 서서, 하루치가 다 쌓인 날처럼 보인다.
+ * 오늘처럼 아직 끝나지 않은 날은 지금까지의 마지막 실행 값이다.
+ */
+export function dailyLastRows(points: RunPoint[]): DayRowPoint[] {
+  const last = new Map<string, RunPoint>();
+  for (const point of points) last.set(slotTime(point.runKey).slice(0, 10), point);
+  return [...last].map(([day, point]) => ({ day, runKey: point.runKey, rows: point.rows }));
 }
 
 export function formatDuration(seconds: number | null): string {

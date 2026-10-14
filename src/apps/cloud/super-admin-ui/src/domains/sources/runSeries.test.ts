@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ALL_DATASETS } from './datasetCatalog.ts';
-import { buildRunSeries, exitStateOf, formatDuration, representativeTask } from './runSeries.ts';
+import { buildRunSeries, dailyLastRows, exitStateOf, formatDuration, representativeTask } from './runSeries.ts';
 import type { GridCell, GridSlot } from './types.ts';
 
 const cell = (o: Partial<GridCell> & Pick<GridCell, 'taskKey' | 'stage'>): GridCell => ({
@@ -231,4 +231,70 @@ test('소요 시간은 초와 분으로 읽힌다', () => {
   assert.equal(formatDuration(459), '7분 39초');
   assert.equal(formatDuration(8.4), '8초');
   assert.equal(formatDuration(null), '기록 없음');
+});
+
+/** 장중 수급 한 실행 — 대표 작업(LOAD_INVESTOR_INTRADAY)의 행 수와 종료 코드만 다르게 둔다 */
+const intradayRun = (runKey: string, rows: number | null, exitCode: number | null = 0): GridSlot =>
+  slot(runKey, [
+    cell({ taskKey: 'LOAD_INVESTOR_INTRADAY', stage: 'feature', recordsOut: rows, ...at('01:00', 60, exitCode) }),
+  ]);
+
+test('🔴 하루 안에서 누적되는 행 수는 하루 마지막 실행 값 한 점이다 — 소요 시간·종료 상태는 실행마다 남는다', () => {
+  /* 장중 수급의 행 수는 실행마다 그날 그 시점까지의 누적이다(ALPHA-1327 — dev 10-12 521 → 2,919).
+   * 실행마다 그리면 하루 안에서 커졌다가 다음 날 아침 작아지는 톱니가 된다. 날마다 마지막 값이
+   * 다르게 두고, 같은 날의 앞 실행 값(작은 값)이 하루 점으로 새지 않는지 본다. */
+  const [series] = buildRunSeries(
+    [
+      intradayRun('investor-intraday:2026-10-13T14:35', 3021, 2),
+      intradayRun('investor-intraday:2026-10-12T09:35', 521),
+      intradayRun('investor-intraday:2026-10-12T14:35', 2919),
+      intradayRun('investor-intraday:2026-10-13T09:35', 562),
+    ],
+    only('investor_flow_intraday'),
+  );
+  assert.deepEqual(series.dailyRows, [
+    { day: '2026-10-12', runKey: 'investor-intraday:2026-10-12T14:35', rows: 2919 },
+    { day: '2026-10-13', runKey: 'investor-intraday:2026-10-13T14:35', rows: 3021 },
+  ]);
+  // 실행 단위 계열은 그대로다 — 점 네 개, 슬롯 순서, 종료 상태도 실행마다.
+  assert.deepEqual(series.points.map((p) => [p.runKey.slice(-16), p.rows, p.durationSec, p.exit]), [
+    ['2026-10-12T09:35', 521, 60, 'ok'],
+    ['2026-10-12T14:35', 2919, 60, 'ok'],
+    ['2026-10-13T09:35', 562, 60, 'ok'],
+    ['2026-10-13T14:35', 3021, 60, 'partial'],
+  ]);
+});
+
+test('🔴 그날 마지막 실행에 행 수가 없으면 빈 점이다 — 앞 실행의 값으로 채우지 않는다', () => {
+  /* 채우면 마지막 실행이 못 쓴 날이 그 앞 슬롯까지의 누적으로 서서 하루치가 다 쌓인 날처럼 보인다 */
+  const [series] = buildRunSeries(
+    [
+      intradayRun('investor-intraday:2026-10-12T09:35', 521),
+      intradayRun('investor-intraday:2026-10-12T13:25', 2308),
+      intradayRun('investor-intraday:2026-10-12T14:35', null, null),
+    ],
+    only('investor_flow_intraday'),
+  );
+  assert.deepEqual(series.dailyRows, [
+    { day: '2026-10-12', runKey: 'investor-intraday:2026-10-12T14:35', rows: null },
+  ]);
+});
+
+test('그날은 실행 키의 슬롯 시각 날짜다 — 자정 직후 슬롯은 그 날의 점이다', () => {
+  assert.deepEqual(
+    dailyLastRows([
+      { runKey: 'news:2026-10-12T00:10', rows: 1, durationSec: null, exit: 'none', expected: null, received: null },
+      { runKey: 'news:2026-10-12T08:10', rows: 2, durationSec: null, exit: 'none', expected: null, received: null },
+      { runKey: 'news:2026-10-13T00:10', rows: 3, durationSec: null, exit: 'none', expected: null, received: null },
+    ]).map((d) => [d.day, d.rows]),
+    [['2026-10-12', 2], ['2026-10-13', 3]],
+  );
+});
+
+test('누적이 아닌 데이터셋은 하루 계열이 없다 — 뉴스 기사는 실행마다 그린다', () => {
+  const news = slot('news:2026-10-12T00:10', [
+    cell({ taskKey: 'LOAD_DOCUMENTS', stage: 'feature', recordsOut: 300, ...at('00:10', 5) }),
+  ]);
+  const [series] = buildRunSeries([news], only('stock_news'));
+  assert.equal(series.dailyRows, null);
 });

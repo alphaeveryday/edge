@@ -221,3 +221,39 @@ test('데이터셋의 레인 선언이 ops 정본과 같다 — 기동 실패 �
     }
   }
 });
+
+/**
+ * 🔴 **하루 안 누적 속성은 하루 여러 번 도는 레인에만 붙는다**(ALPHA-1327). 하루 한 번 도는 데이터셋에
+ * 붙으면 행 수가 바뀌지 않는 듯 보이지만, 판단 근거(실행마다 앞 실행분을 포함한다)가 그 레인에는
+ * 성립할 수 없다 — 잘못 붙은 표시다.
+ *
+ * 하루 실행 횟수의 정본은 일정 정의다: 장중 수급·원천 관측은 Airflow DAG 의 `CRONS`, 뉴스는 뉴스 SFN
+ * 스케줄 맵의 기본값(dev 가 덮어쓰지 않는다), 공시는 dev 의 스케줄 맵, 시장은 스케줄 하나뿐이다.
+ */
+test('🔴 하루 안 누적 속성은 하루 여러 번 도는 레인의 데이터셋에만 붙는다', () => {
+  const repo = (rel: string) => readFileSync(new URL(`../../../../../../../${rel}`, import.meta.url), 'utf8');
+  const crons = (src: string) => /^CRONS = \(([^)]*)\)/m.exec(src)?.[1].match(/"[^"]+"/g)?.length ?? 0;
+  const mapEntries = (src: string, name: string) =>
+    new RegExp(`${name}\\s*=\\s*\\{([^}]*)\\}`).exec(src)?.[1].match(/"cron\(/g)?.length ?? 0;
+  const newsVar = /variable "news_schedule_expressions" \{[\s\S]*?\n\}/.exec(
+    repo('infra/terraform/modules/data-pipeline/variables.tf'))?.[0] ?? '';
+  const slotsPerDay: Record<string, number> = {
+    'investor-intraday': crons(repo('src/apps/cloud/airflow/dags/edge_investor_intraday.py')),
+    'source-daily': crons(repo('src/apps/cloud/airflow/dags/edge_source_daily.py')),
+    news: mapEntries(newsVar, 'default'),
+    disclosure: mapEntries(repo('infra/terraform/envs/dev/main.tf'), 'disclosure_schedule_expressions'),
+    'etf-daily': 1,   // 스케줄이 문자열 하나다(`schedule_expression`)
+  };
+  for (const [lane, n] of Object.entries(slotsPerDay)) assert.ok(n >= 1, `${lane}: 일정 정의를 못 읽었다`);
+  /* 아래 단언이 타입을 리터럴로 좁히므로 레인 이름으로 읽을 표를 먼저 떼어 둔다 */
+  const slotsOf = new Map(Object.entries(slotsPerDay));
+  assert.deepEqual(slotsPerDay, { 'investor-intraday': 5, 'source-daily': 1, news: 2, disclosure: 1, 'etf-daily': 1 });
+
+  const cumulative = ALL_DATASETS.filter((d) => d.rowsCumulativeWithinDay);
+  for (const d of cumulative) {
+    const n = d.lane ? slotsOf.get(d.lane) ?? 0 : 0;
+    assert.ok(n >= 2, `${d.id}: 하루 ${n}회 도는 레인인데 누적 속성이 붙었다`);
+  }
+  /* 코드에서 누적으로 확인한 것은 장중 수급 하나다 — 뉴스는 수집 창이 겹치는 다른 형상이다 */
+  assert.deepEqual(cumulative.map((d) => d.id), ['investor_flow_intraday']);
+});
