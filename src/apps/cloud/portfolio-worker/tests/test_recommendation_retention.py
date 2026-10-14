@@ -59,7 +59,7 @@ def test_a_forecast_for_another_candidate_is_not_transferred_to_the_retained_can
 
 
 @pytest.mark.parametrize('revise_search,accept_rewrite,needs_input', [(False, True, False), (False, False, False), (True, False, False), (False, False, True)])
-@pytest.mark.parametrize('last_call', [False, True, 'tools', 'resolved'])
+@pytest.mark.parametrize('last_call', [False, 'resolved'])
 async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_search(monkeypatch, revise_search, accept_rewrite, needs_input, last_call):
     import json
     from edge_portfolio.agent import run_analysis
@@ -76,8 +76,6 @@ async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_searc
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', CandidateSearch)
     async def enrich(*args): pass
     monkeypatch.setattr('edge_portfolio.agent.enrich_report', enrich)
-    if last_call and last_call != 'resolved':
-        monkeypatch.setattr('edge_portfolio.agent.MAX_MODEL_CALLS', 6)
     if last_call == 'resolved':
         from edge_portfolio.completion import assess_completion
         assessments = []
@@ -97,12 +95,7 @@ async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_searc
             opinions.append(1)
             if last_call == 'resolved':
                 assert len(opinions) <= 3, 'Resolved research must not be restarted by a text-retention marker'
-            if last_call == 'tools' and payload['tool_choice'] != 'none':
-                return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
-                    {'id': 'extra-search', 'type': 'function', 'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO"}'}}]}}]}
-            if last_call is True and len(opinions) > 2:
-                return {'choices': [{'message': {'role': 'assistant', 'content': '{}'}}]}
-            if needs_input and len(opinions) > 1:
+            if needs_input and len(opinions) == 2:
                 content['answers'] = [{'question_index': 1, 'status': 'needs_input', 'answer': '납입 금액을 알려주시면 실제 매수 금액도 계산할 수 있습니다.', 'missing': ['납입 금액']}]
             if len(opinions) == 1 or accept_rewrite and len(opinions) > 2:
                 content['selected_candidate_id'] = 'candidate-1'
@@ -120,6 +113,53 @@ async def test_recovery_keeps_a_qualified_recommendation_only_for_the_same_searc
         assert result['recommendation']['dividend_yield_1y'] is None
         assert bool(result['completion']['missing_research']) == (last_call != 'resolved')
         assert '보류' not in ''.join(result['sections']['opinion']['paragraphs'])
-        assert ('RECOMMENDATION_TEXT_RETAINED' in result['completion']['reasons']) == (last_call in (True, 'tools') or not accept_rewrite)
+        assert ('RECOMMENDATION_TEXT_RETAINED' in result['completion']['reasons']) == (not accept_rewrite)
         if needs_input:
             assert result['completion']['status'] == 'needs_input'
+
+
+@pytest.mark.parametrize('exhaustion', ['context', 'earlier_role', 'final_tools', 'prerequisite'])
+async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypatch, exhaustion):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from edge_portfolio.contracts import AnalysisInput
+    from test_agent import Evidence
+    class CandidateSearch:
+        def __init__(self, *_):
+            self.result = None if exhaustion == 'prerequisite' else {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+            self.batches = {'first', 'alternative'}
+        async def tool(self, _):
+            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+            return self.result
+        def validate(self, final):
+            return self.result['candidates'][0] if final.recommendation else None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', CandidateSearch)
+    async def enrich(*_): pass
+    monkeypatch.setattr('edge_portfolio.agent.enrich_report', enrich)
+    stages, calls = [], []
+    async def model(payload):
+        role = stages[-1]
+        calls.append(role)
+        if exhaustion == 'prerequisite' and role == 'portfolio' and payload['tool_choice'] == 'auto':
+            names = {tool['function']['name'] for tool in payload['tools']}
+            name = 'optimize_portfolios' if names == {'search_etfs', 'optimize_portfolios'} else 'search_etfs'
+            return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': str(len(calls)), 'type': 'function', 'function': {'name': name, 'arguments': '{"query":"VOO"}'}}]}}]}
+        if ((exhaustion == 'earlier_role' and role == 'outlook') or (exhaustion == 'final_tools' and role == 'opinion')) and payload['tool_choice'] == 'auto':
+            return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': str(len(calls)), 'type': 'function', 'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO"}'}}]}}]}
+        content = final_payload() if role == 'opinion' else final_payload()[role]
+        if role == 'question': content['decision'] = {}
+        if role == 'opinion':
+            content['selected_candidate_id'] = 'candidate-1'
+            if exhaustion == 'context': monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    result = await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 100}],
+        horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=Evidence())
+    assert result['recommendation'] is not None
+    assert result['completion']['status'] == 'partial'
+    assert len(calls) <= 24
+    if exhaustion == 'context':
+        assert result['diagnostics']['termination_reason'] == 'MODEL_CONTEXT_BUDGET_WITH_REPORT'
+    else:
+        assert calls.index('opinion') <= 21

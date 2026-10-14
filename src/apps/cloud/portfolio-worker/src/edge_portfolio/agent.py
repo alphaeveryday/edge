@@ -158,7 +158,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     accepted_final = None
     accepted_search = None
     recommendation_reconciled = False
+    reconciliation_draft = None
     retained_prior_text = False
+    termination_reason = 'COMPLETED'
 
     def checkpoint():
         if on_checkpoint:
@@ -211,20 +213,32 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 context['data_status'] = state
                 messages[1]['content'] = json.dumps(context, ensure_ascii=False)
                 calls += 1
-                if calls > MAX_MODEL_CALLS:
-                    emit('limit_reached', budget='model_calls', used=calls - 1, limit=MAX_MODEL_CALLS)
-                    raise ValueError("MODEL_CALL_BUDGET")
-                finalizing = role == 'opinion' and calls >= MAX_MODEL_CALLS - 2
+                reserved = 3 * (len(ROLES) - ROLES.index(role) - 1)
+                finalizing = calls >= MAX_MODEL_CALLS - reserved - 2
                 if finalizing:
-                    messages.append({'role': 'user', 'content': '이제 확보한 자료로 최종 JSON 전체를 작성하세요. 추가 도구 호출은 종료합니다. 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
+                    messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
+                model_tools = TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
+                tool_choice = 'none' if finalizing else 'auto'
+                if finalizing and role == 'portfolio' and decision.kind != 'scenario' and optimizer.result is None:
+                    model_tools, tool_choice = [TOOLS[0], OPTIMIZER_TOOL], 'auto'
+                    messages.append({'role': 'user', 'content': '최종 답변에 필요한 후보 비교가 아직 없습니다. 등록 ETF 확인과 optimize_portfolios만 수행해 후보 비교를 먼저 완료하세요.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
-                if context_bytes > MAX_CONTEXT_BYTES:
-                    emit('limit_reached', budget='context_bytes', used=context_bytes, limit=MAX_CONTEXT_BYTES)
-                    raise ValueError("MODEL_CONTEXT_BUDGET")
+                limit_reason = 'MODEL_CALL_BUDGET' if calls > MAX_MODEL_CALLS else 'MODEL_CONTEXT_BUDGET' if context_bytes > MAX_CONTEXT_BYTES else None
+                if limit_reason:
+                    calls -= 1
+                    emit('limit_reached', budget='model_calls' if limit_reason == 'MODEL_CALL_BUDGET' else 'context_bytes',
+                         used=calls if limit_reason == 'MODEL_CALL_BUDGET' else context_bytes,
+                         limit=MAX_MODEL_CALLS if limit_reason == 'MODEL_CALL_BUDGET' else MAX_CONTEXT_BYTES)
+                    if role == 'opinion' and accepted_final and accepted_final.recommendation and optimizer.result == accepted_search:
+                        published = deepcopy(accepted_report)
+                        sections = published['sections']
+                        termination_reason = limit_reason + '_WITH_REPORT'
+                        break
+                    raise ValueError(limit_reason)
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL],
-                        "tool_choice": "none" if finalizing else "auto", "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
+                    result = await model_call({"model": MODEL, "messages": messages, "tools": model_tools,
+                        "tool_choice": tool_choice, "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
                         "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
                 except httpx.ReadError:
                     emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
@@ -390,6 +404,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if retained is not final:
                             if not recommendation_reconciled and calls < MAX_MODEL_CALLS - 1:
                                 recommendation_reconciled = True
+                                reconciliation_draft = retained
                                 messages.append({'role': 'user', 'content': '이미 검증된 추천은 유지합니다. 아래 초안의 추천과 새로 확인한 답을 함께 반영하여 최종 JSON 전체를 다시 작성하세요. 배당 등 빈 항목만 남기고, opinion·portfolio·insights·answers에서 추천을 보류한다는 설명을 제거하세요. 추천의 필수 제약과 점수는 그대로 검증합니다.\n' + retained.model_dump_json()})
                                 continue
                             # A refused rewrite must not publish mutually contradictory text.
@@ -397,6 +412,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 'answers': retained.answers, 'evidence_coverage': retained.evidence_coverage,
                                 'return_forecast': None})
                             retained_prior_text = True
+                        final = retain_research(final, reconciliation_draft, retain_answers=optimizer.result == accepted_search)
                         final = retain_research(final, accepted_final, retain_answers=optimizer.result == accepted_search)
                         execution_rejection = None
                         selected = optimizer.validate(final)
@@ -454,6 +470,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
+                        reconciliation_draft = None
                         accepted_search = deepcopy(optimizer.result)
                         completion = published['completion']
                         research_tasks = [task for task in completion['tasks'] if task['status'] == 'partial']
@@ -462,7 +479,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         research_work = {'tasks': research_tasks, 'reasons': research_reasons,
                                          'missing_research': completion['missing_research'], 'search_progress': search_progress}
                         recoverable = bool(research_tasks or research_reasons or completion['missing_research'])
-                        if recoverable and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
+                        if recoverable and not finalizing and recovery_rounds < 2 and calls < MAX_MODEL_CALLS - 1:
                             checkpoint()
                             recovery_rounds += 1
                             repairs = 0
@@ -548,7 +565,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 'baseline_kind': market.baseline_kind, 'customer_constraint_checks': checks,
                 "as_of": context["as_of"], "model": MODEL, "prompt_version": version,
                 "elapsed_seconds": round(time.monotonic() - started, 2), "trace": trace,
-                'diagnostics': {'events': events, 'termination_reason': 'COMPLETED', 'model_calls': calls,
+                'diagnostics': {'events': events, 'termination_reason': termination_reason, 'model_calls': calls,
                     'exa_calls': getattr(evidence, 'calls', 0), 'limits': limits, 'code_version': code_version,
                     'model': MODEL, 'prompt_version': version},
                 "aws_outlook": {'queries': outlook.queries, 'status': 'queried' if outlook.queries else 'not_requested'}}
