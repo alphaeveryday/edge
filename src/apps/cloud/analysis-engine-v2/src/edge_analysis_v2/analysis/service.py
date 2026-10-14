@@ -344,7 +344,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                         'factor_values의 f1만 쓸 수 있어요. 전체를 다시 내세요.') if bad else None
             fields = step('fields', initial={'investigation': report, 'body': encode(editor.result()),
                                              'summary': encode(written), 'factor_values': encode(factor_output | {'tool_run_id': 'f1'})},
-                          schemas=[], output_schema=FIELDS, timeout_seconds=300, final_check=unchecked)
+                          schemas=[], output_schema=FIELDS, timeout_seconds=300, final_check=unchecked, structured_only=True)
             # The same for the fields: an entry still unchecked after the repairs is dropped, and a list left empty
             # takes the evidence of the body's first topic, which states the judgment those fields repeat.
             fields = keep_references(fields, checked, shorten(editor.result())['items'][0]['tool_run_ids'])
