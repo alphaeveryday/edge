@@ -4,7 +4,6 @@ import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
-import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
 import com.edge.superadmin.repository.FactsSegment;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
@@ -44,14 +43,14 @@ import java.util.List;
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
-		ChainResponse chain, EtfLedgerResponse etfLedger,
+		ChainResponse chain,
 		List<AnalysisFailureResponse> analysisFailures, EtfAnalysesResponse etfAnalyses,
 		MetaResponse meta) {
 
 	/**
 	 * 조회일의 ETF별 <b>v2 분석 귀결</b>(ALPHA-1312). 행은 그날 전망 분석이나 가격변동 분석 행이 있거나
-	 * 장중 트리거가 발화한 ETF 이고 코드 오름차순이다. 옛 설명 엔진의 실행 상태({@code etfLedger})와
-	 * 따로 싣는다 — 그 축만 아는 옛 화면이 그대로 돌아야 한다.
+	 * 장중 트리거가 발화한 ETF 이고 코드 오름차순이다. 옛 설명 엔진의 실행 상태를 싣던 {@code etfLedger}
+	 * 축은 읽는 화면이 없어 지웠다(ALPHA-1328).
 	 *
 	 * <p>상태는 소문자 코드다. {@code outlook}: {@code completed}(그날 완료 행이 있다) ·
 	 * {@code failed}(실패 행이 있고 완료 행이 없다 — {@code analysisFailures} 와 같은 기준) ·
@@ -88,18 +87,6 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 		}
 	}
 
-	public record EtfLedgerResponse(List<EtfLedgerRowResponse> rows) {
-		public static EtfLedgerResponse from(List<EtfAnalysisRow> rows) {
-			return new EtfLedgerResponse(rows.stream().map(EtfLedgerRowResponse::from).toList());
-		}
-	}
-
-	public record EtfLedgerRowResponse(String etf, String name, boolean triggered,
-			String outcome, String error) {
-		private static EtfLedgerRowResponse from(EtfAnalysisRow row) {
-			return new EtfLedgerRowResponse(row.etf(), row.name(), true, row.outcome(), null);
-		}
-	}
 
 	public record QueueResponse(String name, long visible, long inFlight, long dlq) {
 		public static QueueResponse from(QueueState q) {

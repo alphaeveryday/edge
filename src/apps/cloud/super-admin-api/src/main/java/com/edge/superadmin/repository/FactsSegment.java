@@ -31,7 +31,6 @@ public enum FactsSegment {
 	CHAIN("chain", Kind.DB),
 	/** 새 분석 엔진의 단계({@code chain.analysisStages}) */
 	ANALYSIS_STAGES("analysisStages", Kind.DB),
-	ETF_LEDGER("etfLedger", Kind.DB),
 	ANALYSIS_FAILURES("analysisFailures", Kind.DB),
 	ETF_ANALYSES("etfAnalyses", Kind.DB),
 	/**

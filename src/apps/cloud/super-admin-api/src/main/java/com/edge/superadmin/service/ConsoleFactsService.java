@@ -6,7 +6,6 @@ import com.edge.superadmin.dto.ConsoleFactsResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.BoundaryResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.ChainResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.DatasetResponse;
-import com.edge.superadmin.dto.ConsoleFactsResponse.EtfLedgerResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.MetaResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.OutputResponse;
 import com.edge.superadmin.dto.ConsoleFactsResponse.RunResponse;
@@ -136,7 +135,6 @@ public class ConsoleFactsService {
 				queues == null ? null : queues.stream().map(QueueResponse::from).toList(),
 				BoundaryResponse.from(f.boundary()),
 				ChainResponse.from(f.chain()),
-				EtfLedgerResponse.from(f.etfLedger()),
 				ConsoleFactsResponse.AnalysisFailureResponse.from(f.analysisFailures()),
 				ConsoleFactsResponse.EtfAnalysesResponse.from(f.etfAnalyses()),
 				/* 마지막 인자라 앞의 인자(원장 행을 응답 형으로 옮기는 일)가 끝난 뒤의 시각이다 */
