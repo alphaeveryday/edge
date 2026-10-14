@@ -71,7 +71,8 @@ export interface OutlookDetail {
   factorMetrics: {
     factorType: string;
     metricKey: string;
-    numericValue: number | null;
+    /** 저장된 수를 글자 그대로 — 숫자로 바꾸면 배정밀도로 잘린다 */
+    numericValue: string | null;
     textValue: string | null;
     observedDate: string | null;
     observedAt: string | null;

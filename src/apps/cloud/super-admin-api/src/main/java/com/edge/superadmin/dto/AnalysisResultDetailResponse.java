@@ -5,7 +5,6 @@ import com.edge.superadmin.repository.AnalysisResultRepository.Movement;
 import com.edge.superadmin.repository.AnalysisResultRepository.Outlook;
 import tools.jackson.databind.JsonNode;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -34,7 +33,8 @@ public record AnalysisResultDetailResponse(String analysisId, String kind, Strin
 					o.factors().stream().map(f -> new FactorResponse(f.type(), f.sticker(),
 							f.sentence())).toList(),
 					o.factorMetrics().stream().map(m -> new FactorMetricResponse(m.factorType(),
-							m.metricKey(), m.numericValue(), m.textValue(), m.observedDate(),
+							m.metricKey(),
+							m.numericValue() == null ? null : m.numericValue().toPlainString(), m.textValue(), m.observedDate(),
 							m.observedAt(), m.subject(), m.position(), m.toolRunIds())).toList(),
 					o.issueItems().stream().map(i -> new IssueItemResponse(i.position(),
 							i.titleKeyword(), i.sentence(), i.sentiment(), i.toolRunIds())).toList(),
@@ -51,7 +51,8 @@ public record AnalysisResultDetailResponse(String analysisId, String kind, Strin
 	public record FactorResponse(String type, String sticker, String sentence) {
 	}
 
-	public record FactorMetricResponse(String factorType, String metricKey, BigDecimal numericValue,
+	/** {@code numericValue} 는 저장된 수를 글자로 낸다 — JSON 숫자는 JS 에서 배정밀도로 잘려 저장값과 달라진다. */
+	public record FactorMetricResponse(String factorType, String metricKey, String numericValue,
 			String textValue, LocalDate observedDate, OffsetDateTime observedAt, String subject,
 			int position, List<String> toolRunIds) {
 	}

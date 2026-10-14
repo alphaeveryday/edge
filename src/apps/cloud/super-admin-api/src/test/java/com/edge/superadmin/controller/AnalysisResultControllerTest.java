@@ -8,8 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -84,9 +85,13 @@ class AnalysisResultControllerTest {
 
 	@Test
 	void 기간을_안_주면_KST_오늘_하루다() throws Exception {
+		LocalDate before = LocalDate.now(ZoneId.of("Asia/Seoul"));
 		mvc.perform(get("/api/v1/analysis-results?kind=outlook&allSources=true")).andExpect(status().isOk());
+		LocalDate after = LocalDate.now(ZoneId.of("Asia/Seoul"));
 		var q = seen.get(0);
-		assertThat(q.from().withOffsetSameInstant(ZoneOffset.ofHours(9)).toLocalTime().toString()).isEqualTo("00:00");
+		/* 날짜 자체가 KST 오늘이다 — 자정을 넘기는 순간에 돌면 앞뒤 어느 날이든 받는다 */
+		assertThat(q.from()).isIn(before.atStartOfDay(ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
+				after.atStartOfDay(ZoneId.of("Asia/Seoul")).toOffsetDateTime());
 		assertThat(q.to()).isEqualTo(q.from().plusDays(1));
 		assertThat(q.etf()).isNull();
 		assertThat(q.allSources()).isTrue();

@@ -223,7 +223,7 @@ class JdbcAnalysisResultRepositoryIntegrationTest extends CloudPostgresIntegrati
 			jdbc.update("""
 					INSERT INTO outlook_factor_metrics (analysis_id, factor_type, metric_key, numeric_value,
 					       observed_date, position, tool_run_ids)
-					VALUES (?, '차트', ?, 1.5, DATE '2026-10-13', ?, ARRAY['run-m'])
+					VALUES (?, '차트', ?, 9007199254740993.123456789, DATE '2026-10-13', ?, ARRAY['run-m'])
 					""", id, "metric-" + i, i);
 			jdbc.update("""
 					INSERT INTO outlook_issue_items (analysis_id, position, title_keyword, sentence, sentiment,
@@ -275,7 +275,7 @@ class JdbcAnalysisResultRepositoryIntegrationTest extends CloudPostgresIntegrati
 
 		/* 저장된 값을 그대로 낸다 */
 		assertThat(d.outlook().issueHeadline()).isEqualTo("이슈 헤드라인");
-		assertThat(d.outlook().factorMetrics().get(0).numericValue()).isEqualByComparingTo("1.5");
+		assertThat(d.outlook().factorMetrics().get(0).numericValue()).isEqualByComparingTo("9007199254740993.123456789");
 		assertThat(d.outlook().factorMetrics().get(0).observedDate()).isEqualTo(DAY);
 		assertThat(d.outlook().items().get(0).bullets().toString()).isEqualTo("[\"a\",\"b\"]");
 		assertThat(d.outlook().items().get(0).sourceLinks().toString()).isEqualTo("[{\"url\":\"https://x\"}]");
