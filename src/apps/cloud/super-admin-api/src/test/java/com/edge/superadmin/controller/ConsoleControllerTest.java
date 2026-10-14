@@ -1077,7 +1077,7 @@ class ConsoleControllerTest {
 						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
 										"c.req", "분석 요청", "analysis_execution_requests", null, 256L, false),
 								new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
-										"c.start", "분석 시작", "movement_analyses", null, 214L, false))),
+										"c.start", "분석 시작", "movement_analyses", null, 214L, false, 7L))),
 				base.etfLedger());
 
 		String body = mvc(v2).perform(get("/api/v1/console/facts"))
@@ -1088,6 +1088,9 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(256))
 				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(false))
 				.andExpect(jsonPath("$.result.chain.analysisStages[1].intraday").value(214))
+				// 판정 불가 수(ALPHA-1309)는 단계마다 나간다 — 없으면 0 이다.
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].pending").value(0))
+				.andExpect(jsonPath("$.result.chain.analysisStages[1].pending").value(7))
 				// 옛 단계 목록은 그대로다 — 그 목록만 아는 옛 화면이 이 응답을 받는다.
 				.andExpect(jsonPath("$.result.chain.stages.length()").value(base.chain().stages().size()))
 				.andReturn().getResponse().getContentAsString();
