@@ -834,7 +834,10 @@ public class JdbcConsoleFactsRepository implements ConsoleFactsRepository {
 	 *       기준</b>이라 이 표의 실패 ETF 와 R15 의 목록이 같다.</li>
 	 *   <li>{@code running} — 진행 중인 행만 있다.</li>
 	 *   <li>(가격변동 분석만) 그날 그 ETF 의 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없다.
-	 *       유예 밖인 것이 하나라도 있으면 {@code not_started}, 모두 유예 안이면 {@code pending}.
+	 *       그런 <b>트리거</b> 가운데 유예 밖인 것이 하나라도 있으면 {@code not_started}, 모두 유예
+	 *       안이면 {@code pending}. 단위가 요청이 아니라 트리거다 — 한 트리거에 요청이 여럿(재발화
+	 *       세대)이면 가장 늦게 수용된 요청이 유예 안인 동안 그 트리거는 유예 안이다. 흐름 띠가 그렇게
+	 *       세므로 여기서 요청 단위로 가르면 띠는 판정 보류, 표는 시작 못 함으로 갈린다.
 	 *       기준은 {@link #ANALYSIS_CHAIN_SQL} 의 {@code started_pending} 과 같다 — 같은 상수
 	 *       ({@link #ANALYSIS_GRACE_SECONDS}), 같은 기점(요청의 {@code accepted_at}), 같은 연결
 	 *       (요청 입력의 {@code source.trigger_id}).</li>

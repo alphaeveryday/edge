@@ -57,6 +57,7 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * {@code running}(진행 중인 행만 있다) · {@code none}(그날 분석 행이 없다). {@code movement} 는
 	 * 거기에 둘이 더 있다: {@code not_started}(그날 그 ETF 의 트리거에서 이어진 수용된 요청이 있는데
 	 * 분석 행이 없고 유예 밖이다) · {@code pending}(같은 형상인데 유예 안이라 아직 판정할 수 없다).
+	 * 유예는 체인 축의 {@code pending} 과 같이 <b>트리거 단위</b>로 잰다.
 	 */
 	public record EtfAnalysesResponse(List<EtfAnalysisStateResponse> rows) {
 		public static EtfAnalysesResponse from(

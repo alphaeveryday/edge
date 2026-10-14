@@ -2426,8 +2426,12 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 함이다</b>(ALPHA-1312). 기준은 흐름 띠의 것과 같다(ALPHA-1309) — 같은 유예 시간, 같은 기점(요청이
 	 * 수용된 시각).
 	 *
-	 * <p>{@code etf-mix} 는 같은 날 두 번 발화했고 한 요청은 유예 밖, 한 요청은 유예 안이다 — 하나라도
-	 * 유예 밖이면 시작 못 함이다(판정 보류가 손실을 가리면 안 된다).
+	 * <p>{@code etf-mix} 는 같은 날 두 번 발화했고 한 트리거는 유예 밖, 한 트리거는 유예 안이다 —
+	 * 하나라도 유예 밖이면 시작 못 함이다(판정 보류가 손실을 가리면 안 된다).
+	 *
+	 * <p>⚠️ 유예의 단위는 요청이 아니라 <b>트리거</b>다. {@code etf-two} 는 한 트리거에 수용된 요청이
+	 * 둘이고(재발화 세대) 하나는 유예 밖, 하나는 유예 안이다 — 흐름 띠가 이 트리거를 판정 보류로 세므로
+	 * 표도 판정 보류여야 한다. 같은 응답에서 띠의 수와 함께 단언한다.
 	 */
 	@Test
 	void 분석_행이_없는_요청은_유예_안이면_판정_보류이고_유예_밖이면_시작_못_함이다() {
@@ -2446,9 +2450,20 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = now() - interval '9 hours' WHERE analysis_id = ?",
 				analysisId("g-mix1"));
 
-		assertThat(repository.facts(young.toLocalDate()).etfAnalyses())
+		insertMinuteTrigger("g-two", youngDay, "etf-two", "FIRE", young.toString());
+		insertRequest("g-two-a", "g-two", young.toString());
+		insertRequest("g-two-b", "g-two", young.toString());
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = now() - interval '9 hours' WHERE analysis_id = ?",
+				analysisId("g-two-a"));
+
+		ConsoleFactsRepository.ConsoleFacts recent = repository.facts(young.toLocalDate());
+		assertThat(recent.etfAnalyses())
 				.extracting(r -> r.etf(), r -> r.movement())
-				.containsExactly(tuple("etf-mix", "not_started"), tuple("etf-young", "pending"));
+				.containsExactly(tuple("etf-mix", "not_started"), tuple("etf-two", "pending"),
+						tuple("etf-young", "pending"));
+		// 띠가 판정 보류로 센 트리거는 셋이다(g-young · g-mix2 · g-two) — 표의 기준과 갈리지 않는다.
+		assertThat(recent.chain().analysisStages()).filteredOn(s -> s.id().equals("c.start"))
+				.singleElement().satisfies(s -> assertThat(s.pending()).isEqualTo(3L));
 		assertThat(repository.facts(old.toLocalDate()).etfAnalyses())
 				.extracting(r -> r.etf(), r -> r.movement())
 				.containsExactly(tuple("etf-old", "not_started"));
