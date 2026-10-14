@@ -101,6 +101,13 @@ class Optimizer:
         self.revision = 0
 
     async def tool(self, args):
+        result = await self._tool(args)
+        result['search_progress'] = {'unique_combinations': len(self.groups),
+            'unique_etfs': len({key for group in self.groups for key in group}),
+            'remaining_batches': max(0, 4 - len(self.batches)), 'alternatives_explored': len(self.groups) >= 20}
+        return result
+
+    async def _tool(self, args):
         groups = args.get('combinations')
         if not isinstance(groups, list) or len(groups) != 10:
             raise ValueError('Submit exactly ten ETF combinations in one call')
