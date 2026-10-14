@@ -511,7 +511,7 @@ async def test_batch_deadline_distinguishes_unstarted_prices_from_interrupted_pr
             return completed_record
         await asyncio.sleep(10)
     monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.BATCH_PRICE_TIMEOUT_SECONDS', .05)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert len(started) == 2 + int(completed)
     assert set(market.failures.values()) == {'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT'}
@@ -548,3 +548,27 @@ def test_rating_alone_cannot_withhold_an_available_candidate():
         optimizer.validate(final)
     optimizer.result = {'status': 'no_match', 'candidates': []}
     assert optimizer.validate(final) is None
+
+
+async def test_price_retries_share_collection_time_and_keep_completed_candidates(monkeypatch):
+    from itertools import combinations
+    request, market, groups = batch()
+    started = []
+    async def fetch(symbol, _, **kwargs):
+        started.append(symbol)
+        if symbol == 'A.KS':
+            return record()
+        await asyncio.sleep(10)
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .03)
+    optimizer = Optimizer(market, request)
+    first = await optimizer.tool({'combinations': groups})
+    attempts = list(started)
+    second = await optimizer.tool({'combinations': groups})
+    assert started == attempts  # Retrying cannot consume the report-writing time again.
+    assert first['status'] == second['status'] == 'available'
+    assert [row['allocations'] for row in first['candidates']] == [row['allocations'] for row in second['candidates']]
+    assert first['failures'] == second['failures']
+    third = await optimizer.tool({'combinations': [list(group) for group in combinations(market.catalog, 3)]})
+    assert started == attempts  # A different candidate batch shares the same collection budget.
+    assert [row['allocations'] for row in third['candidates']] == [row['allocations'] for row in first['candidates']]
