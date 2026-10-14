@@ -63,7 +63,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/analyses/symbol?market=&code=` | 종목 분석 이력 (최신 유효 설명 + 그 종목의 시도 전량 — ALPHA-738). 목록과 같은 안내가 위에 있다 |
 | `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴). 목록과 같은 안내가 위에 있다 |
 | `/analysis-results` | 분석 결과 — 새 분석 엔진(v2)의 전망·가격변동 분석 목록 (종류 탭 · 기간 · ETF · 상태 · 합성·출처 미상 입력 포함 필터, 필터는 주소에 둔다 — ALPHA-1333) |
-| `/analysis-results/:kind/:id` | 분석 결과 상세 — 저장된 내용 그대로(전망: 스티커·요약·상세 항목·요인·요인 상세·결론 / 가격변동: 요약·항목(앞선 분석에서 고른 것 포함)·고른 순서·회수 / 실패: 오류 메시지 전체). 코드 값의 화면 말은 `domains/analysisResults/labels` 가 정한다. 읽기 전용 |
+| `/analysis-results/:kind/:id` | 분석 결과 상세 — 저장된 내용 그대로(전망: 스티커·요약·상세 항목·요인·요인 상세·결론 / 가격변동: 요약·항목(앞선 분석에서 고른 것 포함)·고른 순서·회수 / 실패: 오류 메시지 전체). 코드 값의 화면 말은 `domains/analysisResults/labels`, 전망 근거 문장(갱신 표시)·출처(제목 링크, http·https 만)의 표시 모양은 `domains/analysisResults/evidence` 가 정한다(ALPHA-1337). 읽기 전용 |
 
 ⚠️ **종목 이력은 시장·코드를 경로가 아니라 쿼리로 받는다.** CloudFront 의 SPA fallback
 ([`spa-rewrite.js`](../../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
