@@ -174,20 +174,15 @@ class Optimizer:
                 self.market.failures.pop(key, None)
                 async with self.market.semaphore:
                     try:
-                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
-                            on_raw=lambda record: self.market.records.__setitem__(key, record))
+                        async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
+                            self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
+                                on_raw=lambda record: self.market.records.__setitem__(key, record))
                         self.market.failures.pop(key, None)
                     except Exception as error:
                         self.market.failures[key] = price_failure(error)
         rejections = {}
         try:
-            try:
-                async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
-                    await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
-            except TimeoutError:
-                for key in needed:
-                    if key not in self.market.records:
-                        self.market.failures.setdefault(key, 'PRICE_PROVIDER_TIMEOUT')
+            await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
             failed = set(needed) - set(self.market.records)
             if 'FX' in failed:
                 failed.update(key for key in ids - {'CASH:KRW'} if self.market.catalog[key]['market'] == 'US')

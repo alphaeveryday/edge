@@ -173,3 +173,5 @@ flowchart LR
 외부 동작 근거: [yfinance download](https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html)와 [프로젝트 안내](https://github.com/ranaroussi/yfinance). Yahoo 데이터 이용 조건과 라이브러리 라이선스는 별개이며, 운영 데이터 사용 권한을 라이브러리 설치만으로 취득하는 것은 아니다.
 
 새 평가는 `rubric_version=1`을 포함한다. 이 표시가 없는 저장된 결과는 이전 기준으로 안내하며 기존 점수를 새 기준으로 다시 계산했다고 표시하지 않는다.
+
+가격 최적화 수집은 동시 2개를 유지하며 각 종목이 조회 슬롯을 얻은 뒤 65초 제한을 적용한다. 슬롯 대기 시간 때문에 아직 시작하지 않은 종목을 공급자 시간 초과로 탈락시키지 않는다. 개별 공급자 25초 제한과 전체 분석 600초 제한은 유지한다.

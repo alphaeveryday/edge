@@ -482,3 +482,19 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
     final.selected_candidate_id = 'candidate-1'
     with pytest.raises(ValueError):
         optimizer.validate(final)
+
+
+async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch):
+    request, market, groups = batch()
+    started = []
+    async def fetch(symbol, _, **kwargs):
+        started.append(symbol)
+        await asyncio.sleep(.04)
+        return record()
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .07)
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
+    assert not market.failures
+    assert result['tested_combinations'] == 10
