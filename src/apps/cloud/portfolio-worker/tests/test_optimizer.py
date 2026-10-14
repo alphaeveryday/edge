@@ -482,3 +482,15 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
     final.selected_candidate_id = 'candidate-1'
     with pytest.raises(ValueError):
         optimizer.validate(final)
+
+
+def test_rating_alone_cannot_withhold_an_available_candidate():
+    from edge_portfolio.contracts import FinalReport
+    from report_fixtures import final_payload
+    optimizer = Optimizer(None)
+    optimizer.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'})
+    with pytest.raises(ValueError, match='Rating is not a recommendation threshold'):
+        optimizer.validate(final)
+    optimizer.result = {'status': 'no_match', 'candidates': []}
+    assert optimizer.validate(final) is None

@@ -406,7 +406,9 @@ class Optimizer:
                 raise ValueError('No eligible candidate: recommendation, selected_candidate_id and return_forecast must be null')
             return None
         if final.recommendation is None and final.selected_candidate_id is None and final.return_forecast is None:
-            return None  # Backtest eligibility alone does not establish a four-star recommendation.
+            if getattr(final, 'withheld_reason', None) == 'quality_failed':
+                raise ValueError('Rating is not a recommendation threshold: select a customer-compliant candidate and report its honest scores')
+            return None  # Exact customer constraints and execution still require validation.
         candidate = next((row for row in candidates if row['candidate_id'] == final.selected_candidate_id), None)
         if candidate is None or final.recommendation is None:
             raise ValueError('Select an eligible candidate ID and its exact allocation')
