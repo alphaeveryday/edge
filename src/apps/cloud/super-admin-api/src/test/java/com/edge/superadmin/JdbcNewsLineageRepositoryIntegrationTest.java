@@ -76,6 +76,22 @@ class JdbcNewsLineageRepositoryIntegrationTest extends CloudPostgresIntegrationT
 
 		LineageSummary all = repository.summary(null);
 		assertThat(all.totalDocuments()).isEqualTo(4);
+		// 옛 설명 엔진이 07-31 에 돌았다 — 그날의 "분석 사용"은 실측이다
+		assertThat(day.usedInAnalysisBlind()).isFalse();
+	}
+
+	/**
+	 * 🔴 <b>"분석 사용"은 옛 설명 엔진이 멈춘 뒤의 날을 볼 수 없다</b>(ALPHA-1329). 그 단계는 옛 엔진의
+	 * 근거 연결만 본다 — 새 분석 엔진은 쓴 뉴스를 도구 실행 결과 JSON 안에만 남긴다. 그래서 엔진이 멈춘
+	 * 뒤의 날(08-01)과 그런 날이 들어 있는 전체 누적은 0 이 아니라 관측 불가다.
+	 */
+	@Test
+	void 분석_사용은_옛_엔진이_멈춘_뒤의_날을_관측_불가로_낸다() {
+		LineageSummary after = repository.summary(LocalDate.of(2026, 8, 1));
+		assertThat(after.usedInAnalysisBlind()).isTrue();
+		assertThat(after.documentsUsedInAnalysis()).isZero();   // 수는 0 이지만 실측이 아니다
+		assertThat(repository.summary(null).usedInAnalysisBlind()).isTrue();   // 오늘까지의 누적
+		assertThat(repository.summary(LocalDate.of(2026, 7, 31)).usedInAnalysisBlind()).isFalse();
 	}
 
 	@Test

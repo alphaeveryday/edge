@@ -74,9 +74,16 @@ public interface ConsoleFactsRepository {
 	record IntradayAnalysisTrend(OffsetDateTime asOf, List<IntradayAnalysisPoint> points) {
 	}
 
-	/** 단계 수는 행 수가 아니라 그 단계에 도달한 장중 관측 수라 재실행에도 단조성을 지킨다. */
+	/**
+	 * 단계 수는 행 수가 아니라 그 단계에 도달한 장중 관측 수라 재실행에도 단조성을 지킨다.
+	 *
+	 * <p>{@code observations}~{@code published} 는 <b>옛 설명 엔진</b>의 단계라 10-02 이후 0 이다. 그
+	 * 필드만 아는 옛 화면을 위해 남기고 다음 배포에서 지운다. 화면은 {@code analysis}(새 분석 엔진의
+	 * 단계, ALPHA-1329)를 읽는다.
+	 */
 	record IntradayAnalysisPoint(LocalDate date, long triggers, long observations, long runs,
-			long activeRuns, long failedRuns, long results, long published) {
+			long activeRuns, long failedRuns, long results, long published,
+			List<AnalysisStage> analysis) {
 	}
 
 	/** {@code today} 는 실제로 조회한 날 — 요청이 생략됐을 때 무엇을 봤는지 화면이 알아야 한다. */
@@ -139,13 +146,7 @@ public interface ConsoleFactsRepository {
 	 * <p>흐름은 <b>Cloud 게시에서 끝난다</b> — 발번 이후는 전달 경계의 물음이고
 	 * {@link BoundaryRow} 가 답한다(ADR-0026).
 	 */
-	record ChainRow(List<ChainFeed> feeds, List<ChainStage> stages,
-			List<AnalysisStage> analysisStages) {
-
-		/** 새 분석 엔진 단계 없이 만든다 — 그 목록은 비어 있다. */
-		public ChainRow(List<ChainFeed> feeds, List<ChainStage> stages) {
-			this(feeds, stages, List.of());
-		}
+	record ChainRow(List<ChainFeed> feeds, List<AnalysisStage> analysisStages) {
 	}
 
 	/**
@@ -176,23 +177,6 @@ public interface ConsoleFactsRepository {
 
 	/** 체인의 입력 한 갈래. {@code unit} 이 갈래마다 다르다 — 배치는 ETF, 장중은 발화 건이다. */
 	record ChainFeed(String id, String label, String unit, String src, long v) {
-	}
-
-	/**
-	 * 단계 하나 — 두 갈래를 나란히 낸다. 갈래를 가르는 것은 관측의 트리거 FK 하나뿐이다.
-	 *
-	 * <p>{@code blind} 는 <b>이 단계를 셀 수 없다</b>는 뜻이다(ALPHA-1293). 단계 다섯은 전부 옛 설명
-	 * 엔진의 표에서 세는데, 그 엔진이 조회일보다 앞서 멈췄고 그날 코호트에 행이 하나도 없으면 두 수의
-	 * 0 은 "하나도 안 남았다"가 아니라 <b>세는 쪽이 없다</b>이다. 그때 두 수는 0 으로 두되(와이어에
-	 * null 자리가 없다) 소비자는 {@code blind} 를 먼저 보고 그 0 을 읽지 않는다.
-	 */
-	record ChainStage(String id, String label, String src, long batch, long intraday,
-			boolean blind) {
-
-		/** 관측 가능한 단계 — 수가 실측이다. */
-		public ChainStage(String id, String label, String src, long batch, long intraday) {
-			this(id, label, src, batch, intraday, false);
-		}
 	}
 
 	/**

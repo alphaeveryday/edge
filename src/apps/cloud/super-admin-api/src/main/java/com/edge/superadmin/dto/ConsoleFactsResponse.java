@@ -3,7 +3,6 @@ package com.edge.superadmin.dto;
 import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
-import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.FactsSegment;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
@@ -215,8 +214,11 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 설명 생산 체인 — 그 날 발화한 트리거가 단계마다 몇 건 남았나(ALPHA-979).
 	 *
 	 * <p><b>두 목록의 순서가 계약이다.</b> 소비자는 {@code feeds} 를 각 갈래의 첫 점으로 삼아
-	 * {@code stages} 를 순서대로 인접 비교한다 — 순서를 재배치하면 아무것도 안 깨진 채 손실 판정만
-	 * 뒤섞인다. {@code feeds[0]} 이 배치, {@code feeds[1]} 이 장중이다(위치로 읽는다).
+	 * {@code analysisStages} 를 순서대로 인접 비교한다 — 순서를 재배치하면 아무것도 안 깨진 채 손실
+	 * 판정만 뒤섞인다. {@code feeds[0]} 이 배치, {@code feeds[1]} 이 장중이다(위치로 읽는다).
+	 *
+	 * <p>옛 설명 엔진의 단계 목록({@code stages})은 지웠다(ALPHA-1329) — 그 엔진은 10-01 이 마지막
+	 * 실행이고 읽는 화면이 없다.
 	 *
 	 * <p>⚠️ <b>이 축이 없는 응답과 값이 0 인 응답은 다르다.</b> 축 부재는 "안 물어봤다"이고 0 은
 	 * "코호트를 따라갔더니 그 단계에 아무도 도달 못 했다"는 <b>실측</b>이다. 그래서 수는 전부
@@ -226,12 +228,11 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 앞 단계도 0 이면 아무 위반도 안 선다(그 갈래는 애초에 아무것도 안 흘렀다). 그렇게 적었다가
 	 * 정정했다 — "0 이면 손실"은 이 응답이 하지 않는 판정이다.
 	 */
-	public record ChainResponse(List<ChainFeedResponse> feeds, List<ChainStageResponse> stages,
+	public record ChainResponse(List<ChainFeedResponse> feeds,
 			List<AnalysisStageResponse> analysisStages) {
 
 		public static ChainResponse from(ChainRow c) {
 			return new ChainResponse(c.feeds().stream().map(ChainFeedResponse::from).toList(),
-					c.stages().stream().map(ChainStageResponse::from).toList(),
 					c.analysisStages().stream().map(AnalysisStageResponse::from).toList());
 		}
 	}
@@ -248,8 +249,6 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 지났다. {@code intraday}(도달)에는 들어 있지 않다. 손실은 앞 단계와의 차이에서 이 수를 뺀
 	 * 것이다. 분석 완료·게시는 항상 0 이다.
 	 *
-	 * <p>⚠️ 옛 단계 목록({@code stages})과 <b>따로</b> 낸다. 같은 목록에 넣으면 그 목록만 아는 옛
-	 * 화면이 "분석 시작 → 완료" 같은 설계된 감소와 배치 칸의 0 을 손실로 읽는다.
 	 */
 	public record AnalysisStageResponse(String id, String label, Long batch, long intraday,
 			String src, boolean blind, long pending) {
@@ -266,22 +265,6 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 
 		public static ChainFeedResponse from(ChainFeed f) {
 			return new ChainFeedResponse(f.id(), f.label(), f.v(), f.unit(), f.src());
-		}
-	}
-
-	/**
-	 * 단계 하나 — 두 갈래를 나란히 낸다. 갈래는 {@code etf_contribution_observation} 의 트리거 FK
-	 * 하나가 가르고, 그 아래 단계에는 배치/장중을 가르는 컬럼이 <b>없다</b>(관측에서 상속한다).
-	 *
-	 * <p>{@code blind} 가 참이면 <b>이 단계를 셀 수 없다</b> — 두 수의 0 은 실측이 아니다(ALPHA-1293).
-	 * 옛 설명 엔진이 조회일보다 앞서 멈췄고 그날 코호트에 그 엔진의 행이 없을 때다.
-	 */
-	public record ChainStageResponse(String id, String label, long batch, long intraday,
-			String src, boolean blind) {
-
-		public static ChainStageResponse from(ChainStage s) {
-			return new ChainStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src(),
-					s.blind());
 		}
 	}
 

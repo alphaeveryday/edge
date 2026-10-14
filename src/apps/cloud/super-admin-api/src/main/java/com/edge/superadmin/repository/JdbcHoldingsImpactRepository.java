@@ -119,6 +119,17 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			 ORDER BY r.explanation_result_id
 			""";
 
+	/**
+	 * 옛 설명 엔진이 마지막으로 돈 날(KST, ALPHA-1329). 누락 ETF 의 "기준일 분석"은 그 엔진의 결과
+	 * ({@code explanation_result_latest})만 본다. 기준일이 이 날보다 뒤면 그 목록이 비는 것은 "분석이
+	 * 없다"가 아니라 <b>관측 불가</b>다. 새 분석 엔진의 분석으로 바꾸지 않은 이유: 결과 식별자·상태·
+	 * 링크 대상(옛 분석 상세 화면)이 다른 형상이고, 어느 분석이 어느 날의 구성종목을 읽었는지 원장에
+	 * 남지 않아 "이 결손의 영향을 받은 분석"이라는 같은 뜻을 조회 하나로 낼 수 없다.
+	 */
+	private static final String LAST_LEGACY_RUN_DAY_SQL = """
+			SELECT max((started_at AT TIME ZONE 'Asia/Seoul')::date) FROM explanation_run
+			""";
+
 	private final JdbcTemplate jdbc;
 
 	public JdbcHoldingsImpactRepository(JdbcTemplate jdbc) {
@@ -166,8 +177,10 @@ public class JdbcHoldingsImpactRepository implements HoldingsImpactRepository {
 			}
 			missing.add(missingDetail(ourEtfId, asOf));
 		}
+		LocalDate lastLegacyRunDay = jdbc.queryForObject(LAST_LEGACY_RUN_DAY_SQL, LocalDate.class);
+		boolean analysesBlind = lastLegacyRunDay == null || lastLegacyRunDay.isBefore(asOf);
 		return new Impact(run.runKey(), asOf, expected.size(), loadedExpected, false,
-				loadPending, List.copyOf(missing));
+				loadPending, List.copyOf(missing), analysesBlind);
 	}
 
 	private MissingEtf missingDetail(String ourEtfId, LocalDate asOf) {
