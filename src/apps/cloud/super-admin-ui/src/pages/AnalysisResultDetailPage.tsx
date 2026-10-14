@@ -18,15 +18,13 @@ import {
   labelOf,
   publicationLabel,
 } from '../domains/analysisResults';
+import { bullets, sources } from '../domains/analysisResults/evidence';
 import { useAnalysisResult } from '../domains/analysisResults/hooks';
 import { STATE_LABEL } from './ops/etfAnalysisView';
 import { kst } from './ops/shared';
 import { LoadError } from './_shared/LoadError';
 
 const sentiment = (s: string | null) => labelOf(SENTIMENT_LABEL, s);
-/** JSON 열은 저장된 값을 그대로 적는다 — 문자열은 문자열로, 나머지는 JSON 으로 */
-const raw = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
-const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : v == null ? [] : [v]);
 
 export function AnalysisResultDetailPage() {
   /* 종류는 주소 그대로 서버에 넘긴다 — 여기서 모르는 값을 전망으로 바꾸면 틀린 주소가 다른 분석을 연다.
@@ -209,15 +207,27 @@ function Items({ items }: { items: OutlookItem[] }) {
               {i.changeType && <span className="tag ml-1">{labelOf(CHANGE_TYPE_LABEL, i.changeType)}</span>}
             </td>
             <td className="t-xs">
-              {list(i.bullets).map((b, n) => (
-                <div key={n}>· {raw(b)}</div>
+              {/* 문장·출처의 모양 판단은 `evidence` 가 한다 — 모르는 모양만 원문으로 */}
+              {bullets(i.bullets).map((b, n) => (
+                <div key={n}>
+                  · {b.text}
+                  {b.kind === 'sentence' && b.updated && <span className="tag ml-1">갱신</span>}
+                </div>
               ))}
               {i.sentence && <div>{i.sentence}</div>}
             </td>
             <td className="t-xs">{sentiment(i.sentiment)}</td>
-            <td className="t-xs mono" style={{ wordBreak: 'break-all' }}>
-              {list(i.sourceLinks).map((s, n) => (
-                <div key={n}>{raw(s)}</div>
+            <td className="t-xs" style={{ wordBreak: 'break-all' }}>
+              {sources(i.sourceLinks).map((s, n) => (
+                <div key={n} className={s.kind === 'raw' ? 'mono' : undefined}>
+                  {s.kind === 'link' ? (
+                    <a href={s.href} target="_blank" rel="noreferrer">
+                      {s.text}
+                    </a>
+                  ) : (
+                    s.text
+                  )}
+                </div>
               ))}
               {i.sourceAsOf && <div>기준 {kst(i.sourceAsOf)}</div>}
             </td>

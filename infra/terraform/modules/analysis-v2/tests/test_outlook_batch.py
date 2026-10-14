@@ -179,34 +179,15 @@ def run_batch(world, batch_input, definition=None):
 
 @unittest.skipIf(UNAVAILABLE, f'TestState 를 호출할 수 없다 — {UNAVAILABLE}')
 class OutlookBatchContract(unittest.TestCase):
-    def test_weekend_skip_uses_scheduled_korean_date_before_any_service_call(self):
-        """A delayed weekend delivery must spend no model or lookup calls, even when replayed on a weekday."""
-        for at in ('2026-10-02T15:00:00Z', '2026-10-03T21:00:00Z', '2026-10-04T14:59:59Z'):
+    def test_weekend_outlook_still_reaches_analysis_for_revision(self):
+        """주말에도 새 기준시각으로 분석을 요청해야 엔진이 직전 전망을 이어 수정한다."""
+        for at in ('2026-10-02T21:00:00Z', '2026-10-03T21:00:00Z'):
             with self.subTest(at=at):
                 world = World()
                 state, out = self.batch(world, analysis_at=at)
-                self.assertEqual(state, 'SkippedWeekend')
-                self.assertEqual(out['reason'], 'weekend_in_Asia_Seoul')
-                self.assertEqual(out['analysis_at'], at)
-                self.assertEqual(out['summary']['skipped'], len(ETFS))
-                self.assertEqual(out['items'], [{'etf_code': code, 'outcome': 'skipped_weekend'} for code in ETFS])
-                self.assertEqual(world.trace, [])
-                self.assertEqual(world.runs, [])
-
-    def test_one_skipped_etf_still_returns_an_item_list_for_reporting(self):
-        """The report joins by ETF and must never infer a skipped item was completed."""
-        _, out = self.batch(World(), analysis_at='2026-10-03T21:00:00Z', etf_codes=['069500'])
-        self.assertEqual(out['items'], [{'etf_code': '069500', 'outcome': 'skipped_weekend'}])
-        self.assertEqual(out['summary']['completed'], 0)
-
-    def test_friday_and_monday_korean_boundaries_keep_the_original_batch_input(self):
-        """UTC Sunday afternoon is Korean Monday; UTC Friday before 15:00 is still a weekday."""
-        for at in ('2026-10-02T14:59:59Z', '2026-10-04T15:00:00Z', '2026-10-04T21:00:00Z'):
-            with self.subTest(at=at):
-                data = {'analysis_at': at, 'etf_codes': ETFS, 'limits': {'deadline': FUTURE}, 'max_attempts': 2}
-                result = step(render(), 'CheckWeekday', data)
-                self.assertEqual(result['nextState'], 'RunItems')
-                self.assertEqual(json.loads(result['output']), data)
+                self.assertEqual(state, 'Done')
+                self.assertEqual(world.runs, [(etf, 0, identity(etf, 0, at)) for etf in ETFS])
+                self.assertEqual(out['summary']['completed'], len(ETFS))
 
     def batch(self, world, **extra):
         return run_batch(world, {'analysis_at': AT, 'deadline': FUTURE} | extra)
