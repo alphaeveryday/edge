@@ -245,7 +245,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             on_stage(role)
             emit('stage_started', role=role)
             schema = FinalReport if role == 'opinion' else QuestionSection if role == 'question' else Section
-            messages.append({"role": "user", "content": skills[role] + "\n현재 등록된 근거 ID: " + json.dumps([s['id'] for s in evidence.sources]) + "\n등록되지 않은 ID를 만들지 마세요. 첫 질문 해석 단계에서는 사용자 입력만 해석하고 evidence는 빈 배열로 둡니다. 그 다음 역할은 search_sources 후 fetch_source로 실제 근거를 등록해야 합니다.\n출력 JSON 스키마:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)})
+            messages.append({"role": "user", "content": skills[role] + "\n현재 등록된 근거 ID: " + json.dumps([s['id'] for s in evidence.sources]) + "\n등록되지 않은 ID를 만들지 마세요. 첫 질문 해석 단계에서는 사용자 입력만 해석하고 evidence는 빈 배열로 둡니다. 이후 상품·시장에 대한 외부 사실을 판단할 때는 기존 근거를 활용하고 필요한 자료만 검색·본문 조회하세요. 입력과 계산 결과만 설명하는 답변은 외부 검색 없이 evidence=[]와 계산 가정을 제시합니다.\n출력 JSON 스키마:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)})
             repairs = 0
             recovery_rounds = 0
             structured_retry = False
