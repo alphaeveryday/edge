@@ -68,16 +68,25 @@ def test_unknown_funding_does_not_turn_model_judgment_into_a_customer_input_requ
     result = assess_completion(final, request, Decision(kind='new_money', missing_inputs=['목표 배당금'],
         constraints=[{'kind': 'unverified', 'source': '레버리지 제외'}]),
         {'optimization': {'status': 'no_match', 'reason': 'CUSTOMER_CONSTRAINT_UNVERIFIED'}}, [], '2026-10-14')
-    assert result['status'] == 'needs_input'
-    assert result['missing_inputs'] == ['추가 투자금 또는 매달 납입할 금액']
+    assert result['status'] != 'needs_input'
+    assert result['missing_inputs'] == []
 
 
 def test_valid_json_without_an_answer_is_not_customer_completion():
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='리밸런싱 어떻게 하나요?')
-    result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(kind='rebalance'),
+    result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(kind='rebalance', execution_requested=True),
         {'recommendation': {'allocations': []}}, [], '2026-10-14')
     assert result['status'] == 'partial'
     assert result['reasons'] == ['UNANSWERED_QUESTIONS', 'EXECUTION_PLAN_MISSING']
+
+
+def test_projection_cannot_complete_an_unanswered_allocation_request():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='비중 추천과 10년 후 금액을 알려주세요.')
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': None})
+    result = assess_completion(final, request, Decision(scenario_requested=True),
+        {'scenarios': {'status': 'available'}, 'optimization': {'status': 'not_requested', 'reason': 'SCENARIO_ONLY'}}, [], '2026-10-15')
+    assert result['status'] == 'partial'
+    assert 'UNANSWERED_QUESTIONS' in result['reasons']
 
 
 def test_partial_question_extraction_cannot_hide_an_unanswered_customer_request():
@@ -529,7 +538,7 @@ async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, f
         assert 'MISSING_RESEARCH_DATA' in result['completion']['reasons']
 
 
-@pytest.mark.parametrize('kind,expected', [('review', 'complete'), ('new_portfolio', 'complete'), ('rebalance', 'needs_input'), ('new_money', 'needs_input')])
+@pytest.mark.parametrize('kind,expected', [('review', 'complete'), ('new_portfolio', 'complete'), ('rebalance', 'complete'), ('new_money', 'complete')])
 def test_optional_trade_amounts_do_not_reopen_an_answered_allocation_request(kind, expected):
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='추천 비중을 주세요.')
     final = FinalReport.model_validate({**final_payload(), 'answers': [{'question_index': 1, 'status': 'answered', 'answer': '추천 비중은 VOO 60%, BND 40%입니다.', 'missing': []}]})

@@ -49,7 +49,7 @@ async def test_new_explicit_funding_reaches_the_scenario_calculator(original):
     stages, calculated = [], []
     async def model(payload):
         if stages[-1] == 'question':
-            content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'funding_text': '매달 20만원'}}
+            content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'funding_text': '매달 20만원'}}
             return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
         if calculated:
             result = json.loads(payload['messages'][-1]['content'])
@@ -85,7 +85,7 @@ async def test_no_contribution_followup_overrides_the_saved_monthly_commitment(s
     stages, calculated, checkpoints = [], [], []
     async def model(payload):
         if stages[-1] == 'question':
-            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'], 'decision': {'kind': 'scenario'}})}}]}
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario'}})}}]}
         quote = json.loads(payload['messages'][1]['content'])['active_decision']['funding_text']
         assert quote in question + report['input'].get('question', '') and '없이' in quote
         if calculated:
@@ -113,7 +113,7 @@ async def test_separate_contribution_sentence_does_not_invalidate_the_known_prin
     stages, calculated = [], []
     async def model(payload):
         if stages[-1] == 'question':
-            content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'funding_text': '매월 10만원'}}
+            content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'funding_text': '매월 10만원'}}
             return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
         if calculated:
             result = json.loads(payload['messages'][-1]['content'])
@@ -181,7 +181,7 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
             content['insights'][0]['content'] = content['portfolio']
         else:
             content.update(evidence=[], limitations=['수익률이 일정하다는 계산 가정이에요.'])
-        if role == 'question': content = {**content, 'decision': {'kind': 'scenario'}}
+        if role == 'question': content = {**content, 'decision': {'scenario_requested': True, 'kind': 'scenario'}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     async def forbidden_price_lookup(*args): raise AssertionError('A cash-flow scenario needs no new ETF comparison')
     monkeypatch.setattr('edge_portfolio.market_data.MarketData.get', forbidden_price_lookup)
@@ -204,7 +204,7 @@ def test_projection_horizon_does_not_cancel_a_separate_monthly_commitment():
     request = FollowupInput(holdings=[], planning=True, horizon='10년 이상',
         question='5년 뒤 금액을 가정별로 계산해 주세요', funding_questions=['', '5년 뒤 금액을 가정별로 계산해 주세요'],
         preferences={'contribution': '매월 10만원'})
-    decision = Decision(kind='scenario', funding_text='매월 10만원')
+    decision = Decision(kind='scenario', scenario_requested=True, funding_text='매월 10만원')
     assert resolve_funding(request, decision)['monthly_krw'] == Decimal(100000)
     for rate in ['5', '3.5', '-2.5']:
         request.funding_questions = ['', f'연 {rate}% 수익률을 가정하면 10년 뒤 얼마인가요?']
@@ -327,7 +327,7 @@ async def test_followup_retains_twenty_existing_rules_without_inventing_no_sell(
             assert len(active) == 21
             assert {rule['source'] for rule in active} == {*(rule['source'] for rule in rules), '새 필수 조건'}
             raise RuntimeError('MERGE_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'constraints': [rules[0], {'kind': 'unverified', 'source': '새 필수 조건'}]}}
+        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'constraints': [rules[0], {'kind': 'unverified', 'source': '새 필수 조건'}]}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='MERGE_CHECKED'):
         await answer_question('새 필수 조건', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
@@ -344,7 +344,7 @@ async def test_distinct_followup_questions_keep_separate_completion_tasks():
         if stages[-1] != 'question':
             assert json.loads(payload['messages'][1]['content'])['active_decision']['questions'] == [first, second]
             raise RuntimeError('QUESTIONS_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'questions': [original, first, second]}}
+        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'questions': [original, first, second]}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='QUESTIONS_CHECKED'):
         await answer_question(first + ' ' + second, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
@@ -369,7 +369,7 @@ async def test_recovery_resolves_only_the_exact_inherited_unknown_condition(same
             assert unknown == ({other} if same_source and not still_unknown else {original, other})
             assert any(rule['kind'] == 'require' and rule['instrument_ids'] == ['US:VOO'] for rule in rules)
             raise RuntimeError('RESOLUTION_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'constraints': [
+        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'constraints': [
             {'kind': 'require', 'source': original if same_source else followup, 'instrument_ids': ['US:VOO']}]}}
         if still_unknown:
             content['decision']['constraints'].append({'kind': 'unverified', 'source': original})
@@ -389,7 +389,7 @@ async def test_invalid_question_prose_cannot_leave_a_scenario_optimization_exemp
         content = final_payload()[role]
         if role == 'question':
             attempts.append(1)
-            content = {**content, 'decision': {'kind': 'scenario' if len(attempts) == 1 else 'review'}}
+            content = {**content, 'decision': {'scenario_requested': True, 'kind': 'scenario' if len(attempts) == 1 else 'review'}}
             if len(attempts) == 1: content['paragraphs'] = ['too short']
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(ValueError, match='Before completing portfolio'):
@@ -413,7 +413,7 @@ async def test_followup_does_not_restore_misclassified_interest_constraints(expl
             rules = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
             assert len(rules) == int(explicit_limit)
             raise RuntimeError('PREFERENCE_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'kind': 'scenario'}}
+        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario'}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='PREFERENCE_CHECKED'):
         await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
@@ -431,7 +431,7 @@ async def test_customer_stated_month_end_funding_reaches_real_calculator():
     stages, calculated = [], []
     async def model(payload):
         if stages[-1] == 'question':
-            content = {**final_payload()['question'], 'decision': {'kind': 'scenario',
+            content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario',
                 'funding': {'source': question, 'monthly_krw': 500000, 'principal_krw': 10000000}}}
             return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
         if calculated:

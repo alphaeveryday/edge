@@ -262,7 +262,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 reserved = 3 * (len(ROLES) - ROLES.index(role) - 1)
                 research_budget_exhausted = getattr(evidence, 'calls', 0) >= MAX_EXA_CALLS
                 finalizing = structured_retry or calls >= MAX_MODEL_CALLS - reserved - 2
-                model_tools = TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
+                model_tools = TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
                 if research_budget_exhausted:
                     model_tools = [tool for tool in model_tools if tool['function']['name'] != 'search_sources']
                     if not context.get('research_budget_exhausted'):
@@ -271,14 +271,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 tool_choice = 'none' if finalizing else 'auto'
                 research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
                 research_exhausted = research_budget_exhausted or len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
-                source_free_allowed = decision.kind == 'scenario' or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
+                source_free_allowed = decision.scenario_requested or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                 required_tools = []
-                if role == 'portfolio' and decision.kind != 'scenario':
+                if role == 'portfolio' and not decision.scenario_requested:
                     if optimizer.result is None:
                         required_tools.extend([TOOLS[0], OPTIMIZER_TOOL])
                     if not evidence.sources and not source_free_allowed:
                         required_tools.extend(TOOLS[1:])
-                if role != 'question' and (decision.kind == 'scenario' or decision.scenario_requested) and scenario_result is None:
+                if role != 'question' and decision.scenario_requested and scenario_result is None:
                     required_tools.append(SCENARIO_TOOL)
                 if required_tools and finalizing:
                     model_tools, tool_choice = required_tools, 'required'
@@ -379,8 +379,6 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             answer = {'status': 'rejected', 'reason': 'INVALID_TOOL_ARGUMENT'}
                         elif role == 'question' and function['name'] != 'search_etfs':
                             answer = {'status': 'rejected', 'reason': 'QUESTION_STAGE_CATALOG_ONLY'}
-                        elif role != 'question' and decision.kind == 'scenario' and function['name'] != 'calculate_scenarios':
-                            answer = {'status': 'rejected', 'reason': 'SCENARIO_CALCULATION_ONLY'}
                         elif function['name'] == 'search_etfs':
                             catalog_calls += 1
                             if catalog_calls > 20:
@@ -540,7 +538,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if final.recommendation and any(check['status'] not in {'pass', 'model_review'} for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
                         validation_step = 'report_sections'
-                        sections = {name: validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and getattr(final, name).limitations else name,
+                        sections = {name: validate_section('question' if source_free_allowed and (decision.scenario_requested or not evidence.sources) and getattr(final, name).limitations else name,
                                     getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
                         validation_step = 'recommendation_publication'
                         published = publish_recommendation(final, request, metrics, evidence.sources, decision)
@@ -578,7 +576,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['completion']['reasons'].append('RECOMMENDATION_TEXT_RETAINED')
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
-                        if decision.kind != 'scenario' and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
+                        if not decision.scenario_requested and not evidence.sources and optimizer.result.get('reason') not in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}:
                             published['completion']['reasons'].append('MISSING_RESEARCH_DATA')
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
@@ -639,7 +637,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 # must not discard inherited rules at the extraction limit.
                                 context['active_decision'] = decision.model_dump(mode='json')
                                 saved_target_verified = prior_report.get('parent_state') != 'failed' and (prior_report.get('completion') or {}).get('status') == 'complete'
-                                if decision.kind in {'rebalance', 'new_money'} and prior_report.get('recommendation') and saved_target_verified:
+                                if (decision.execute_saved_target or decision.execution_requested) and prior_report.get('recommendation') and saved_target_verified:
                                     rows = [{name: row[name] for name in ('instrument_id', 'account', 'weight_pct')}
                                             for row in prior_report['recommendation'].get('allocations', [])]
                                     if rows:
@@ -659,16 +657,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                         followup_checks = current_checks
                                         if decision.execute_saved_target and followup_execution['status'] in {'ready', 'conditional'}:
                                             optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SAVED_TARGET_ONLY'}
-                            if decision.kind == 'scenario':
-                                optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SCENARIO_ONLY'}
                             optimizer.decision = decision
                             context['active_decision'] = decision.model_dump(mode='json')
                             raw = interpreted.model_dump(exclude={'decision'})
                         validation_step = 'optimization_required'
+                        if role == 'portfolio' and optimizer.result is None and scenario_result is not None:
+                            optimizer.result = {'status': 'not_requested', 'candidates': [], 'reason': 'SCENARIO_ONLY'}
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios with the registered ETF combinations or preferred weights you want to compare')
                         validation_step = 'role_section'
-                        sections[role] = validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and raw.get('limitations') else role, raw, evidence.sources)
+                        sections[role] = validate_section('question' if source_free_allowed and (decision.scenario_requested or not evidence.sources) and raw.get('limitations') else role, raw, evidence.sources)
                     emit('stage_completed', role=role)
                     checkpoint()
                     break

@@ -115,8 +115,6 @@ def validate_decision(decision, request, catalog, *, question_text=None):
         validate_funding(decision.funding, text)
     if len(set(decision.objectives)) != len(decision.objectives):
         raise ValueError('Objective priorities must be distinct')
-    if decision.kind == 'new_portfolio' and any(h.kind != 'cash' for h in request.holdings):
-        raise ValueError('Existing holdings cannot be replaced with a cash baseline')
     filter_preference_constraints(decision, request, question_text=question_text)
     return decision
 

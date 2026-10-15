@@ -54,6 +54,47 @@ class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
+@pytest.mark.parametrize('kind', ['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'])
+async def test_task_label_cannot_hide_research_or_recommendation_tools(kind):
+    stages = []
+    async def model(payload):
+        if stages[-1] != 'question':
+            names = {tool['function']['name'] for tool in payload['tools']}
+            assert {'search_sources', 'optimize_portfolios', 'calculate_scenarios'} <= names
+            raise RuntimeError('TOOLS_AVAILABLE')
+        content = {**final_payload()['question'], 'decision': {'kind': kind, 'scenario_requested': True}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    with pytest.raises(RuntimeError, match='TOOLS_AVAILABLE'):
+        await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+
+
+async def test_calculation_does_not_block_a_following_model_designed_allocation(monkeypatch):
+    optimized, stages, sent = [], [], []
+    class Optimizer:
+        def __init__(self, *args): self.result = None
+        async def tool(self, args):
+            optimized.append(args)
+            raise RuntimeError('MODEL_ALLOCATION_REACHED')
+    async def model(payload):
+        role = stages[-1]
+        if role == 'question':
+            content = {**final_payload()['question'], 'decision': {'kind': 'scenario', 'scenario_requested': True}}
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+        name, args = ('calculate_scenarios', {'years': [10], 'annual_returns': [5]}) if not sent else (
+            'optimize_portfolios', {'combinations': [['US:VOO', 'US:BND']], 'preferred_allocations': [
+                {'instrument_id': 'US:VOO', 'weight_pct': 60}, {'instrument_id': 'US:BND', 'weight_pct': 40}]})
+        sent.append(name)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': name, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}}]}
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    with pytest.raises(RuntimeError, match='MODEL_ALLOCATION_REACHED'):
+        await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+    assert sent == ['calculate_scenarios', 'optimize_portfolios']
+    assert optimized[0]['preferred_allocations'][0]['weight_pct'] == 60
+
+
 @pytest.mark.parametrize('initial_calls', [69, 70])
 async def test_search_budget_finishes_the_report_without_another_remote_call(monkeypatch, initial_calls):
     class Optimizer:

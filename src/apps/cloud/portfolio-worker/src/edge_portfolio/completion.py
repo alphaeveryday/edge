@@ -57,7 +57,7 @@ def research_inventory(request, decision, published, coverage=(), considered_ids
     by_key = {(row['instrument_id'], row['field']): row for row in coverage}
     fields = ['structure', 'holdings', 'fees'] + (['distributions'] if 'income' in decision.objectives else [])
     rejected = optimization.get('reason') in {'RATING_BELOW_MINIMUM', 'EXECUTION_INFEASIBLE', 'CUSTOMER_CONSTRAINT_NOT_SATISFIED'}
-    calculation_only = decision.kind == 'scenario' or decision.execute_saved_target and optimization.get('reason') == 'SAVED_TARGET_ONLY'
+    calculation_only = not recommendation and bool(published.get('scenarios') or decision.execute_saved_target and optimization.get('reason') == 'SAVED_TARGET_ONLY')
     active = set() if calculation_only else holdings | selected | (eligible if not recommendation and not rejected else set())
     return [{'instrument_id': key, 'field': field, 'status': by_key.get((key, field), {}).get('status', 'missing'),
              'roles': [role for role, ids in [('holding', holdings), ('candidate', candidates), ('selected', selected)] if key in ids],
@@ -115,7 +115,7 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     missing_research = [{key: item[key] for key in ('instrument_id', 'field', 'status')}
                         for item in inventory if item['required'] and item['status'] != 'supported']
     execution = recommendation.get('execution') if recommendation else published.get('execution')
-    optional_trade_amounts = bool(recommendation and decision.kind in {'review', 'new_portfolio'}
+    optional_trade_amounts = bool(recommendation
         and not decision.execute_saved_target and not decision.execution_requested and execution
         and execution.get('reasons') == ['CURRENT_AMOUNTS_REQUIRED'])
     required_execution = None if optional_trade_amounts else execution
@@ -124,13 +124,13 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
         reasons.append('UNANSWERED_QUESTIONS')
     if missing_research:
         reasons.append('RESEARCH_COVERAGE_INCOMPLETE')
-    if decision.kind in {'rebalance', 'new_money'} and recommendation and not execution:
+    if decision.execution_requested and recommendation and not execution:
         reasons.append('EXECUTION_PLAN_MISSING')
     # Interpretation-stage questions are suggestions, not requirements for every task.
     # Only an unanswered customer task or a calculator can require customer input.
     missing_inputs = list(dict.fromkeys(value for task in tasks if task['status'] == 'needs_input' for value in task['missing']))
     needs_input = bool(any(task['status'] == 'needs_input' for task in tasks) or required_execution and required_execution['status'] == 'needs_input')
-    if decision.kind == 'scenario' or decision.scenario_requested:
+    if decision.scenario_requested:
         if not published.get('scenarios'):
             reasons.append('SCENARIO_CALCULATION_REQUIRED')
     if published.get('scenarios', {}).get('status') == 'needs_input':
@@ -140,7 +140,7 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     optimization = published.get('optimization') or {}
     if not recommendation and optimization.get('status') == 'unavailable':
         reasons.append('COMPARISON_DATA_UNAVAILABLE')
-    if not recommendation and optimization.get('reason') in {'CURRENT_WEIGHTS_REQUIRED', 'CUSTOMER_CONSTRAINT_UNVERIFIED'}:
+    if not recommendation and optimization.get('reason') == 'CURRENT_WEIGHTS_REQUIRED':
         needs_input = True
     input_labels = {
         'CURRENT_WEIGHTS_REQUIRED': '종목별 평가금액 또는 보유 비중',
@@ -160,18 +160,18 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
         if code in input_labels:
             missing_inputs.append((account + ' ' if account else '') + input_labels[code])
         elif code == 'CUSTOMER_CONSTRAINT_UNVERIFIED':
-            if decision.kind == 'new_money' or any(rule.kind == 'no_sell' for rule in decision.constraints):
+            if any(rule.kind == 'no_sell' for rule in decision.constraints):
                 from .execution import resolve_funding
                 funding = resolve_funding(request, decision)
-                if funding is None or decision.kind == 'new_money' and not (funding['additional_krw'] or funding['monthly_krw']):
+                if funding is None:
                     missing_inputs.append(input_labels['ADDITIONAL_FUNDING_REQUIRED'])
     missing_inputs = list(dict.fromkeys(missing_inputs))
     if final.withheld_reason == 'missing_input' and not needs_input:
         reasons.append('INPUT_REQUIREMENT_UNVERIFIED')
     if not recommendation and optimization.get('reason') in (None, 'RECOMMENDATION_WITHHELD') and not final.withheld_reason:
         reasons.append('WITHHOLDING_REASON_MISSING')
-    executed_saved_target = decision.execute_saved_target and not recommendation and decision.kind in {'rebalance', 'new_money'} and execution and execution['status'] in {'ready', 'conditional'}
-    status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if decision.kind == 'scenario' or executed_saved_target else 'no_match' if not recommendation else 'complete'
+    executed_saved_target = decision.execute_saved_target and not recommendation and execution and execution['status'] in {'ready', 'conditional'}
+    status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if bool(published.get('scenarios')) or executed_saved_target else 'no_match' if not recommendation else 'complete'
     return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': missing_inputs,
             'evidence_coverage': list(coverage.values()), 'missing_research': missing_research, 'research_inventory': inventory,
             'note': '자료 항목·날짜·실행 조건의 충족 상태이며 주장 자체의 사실 정확성을 보증하지 않습니다.'}
