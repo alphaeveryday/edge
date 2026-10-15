@@ -64,20 +64,23 @@ def read_graph(tree: ET.ElementTree) -> dict:
             labels.append(c.get("id")); own[c.get("id")] = parent.get("id")  # 간선 라벨 셀
             continue
         if c.get("parent") not in layers:
-            continue
+            raise SystemExit(f"셀 {c.get('id')} 의 부모 {c.get('parent')} 가 레이어가 아니다 — 그룹 안 셀은 지원하지 않는다(그룹 해제 후 저장)")
         if c.get("edge") == "1":
             edges.append(c)
         elif c.get("vertex") == "1":
             g = c.find("mxGeometry")
             boxes[c.get("id")] = tuple(float(g.get(k, 0)) for k in ("x", "y", "width", "height"))
 
-    def at_point(pt, pad=30):  # 점을 담는 가장 작은 상자 — 대상 없이 점으로 끝난 화살표용
-        best = None
-        for bid, (x, y, w, h) in boxes.items():
-            if x - pad <= pt[0] <= x + w + pad and y - pad <= pt[1] <= y + h + pad:
-                if best is None or w * h < boxes[best][2] * boxes[best][3]:
-                    best = bid
-        return best
+    def at_point(pt):  # 점을 담는 가장 작은 상자 — 대상 없이 점으로 끝난 화살표용. 담는 상자가 없을 때만 30px 근방을 본다
+        for pad in (0, 30):
+            best = None
+            for bid, (x, y, w, h) in boxes.items():
+                if x - pad <= pt[0] <= x + w + pad and y - pad <= pt[1] <= y + h + pad:
+                    if best is None or w * h < boxes[best][2] * boxes[best][3]:
+                        best = bid
+            if best:
+                return best
+        return None
 
     resolved = []
     for e in edges:
@@ -193,12 +196,13 @@ function mark(id, cls, selCls){
   const childCls=cls==='on'?'on-c':'pk-c';
   const kept=cid=>{let o=OWNER[cid],hop=0; while(o&&hop++<20){if(on[o]) return true; o=OWNER[o];} return false;};
   const vis=cid=>!!on[cid]||kept(cid);
+  // 양끝이 모두 살아 있는 간선은 원래 색 그대로 남긴다 — 그 간선에 달린 라벨 셀도 따라가도록 먼저 정한다
+  EDGES.forEach(e=>{if(id&&!on[e.dataset.cellId]&&vis(e.dataset.a)&&vis(e.dataset.b)) on[e.dataset.cellId]='kept';});
   CELLS.forEach(c=>{
     const cid=c.dataset.cellId;
     const isEdge=c.classList.contains('edge');
-    if(!isEdge) c.classList.toggle(cls,!!on[cid]);
-    // 소유자 안에 든 셀, 그리고 양끝이 모두 살아 있는 간선은 원래 색 그대로 남긴다
-    c.classList.toggle(childCls,!!(id&&!on[cid]&&(isEdge?vis(c.dataset.a)&&vis(c.dataset.b):kept(cid))));
+    if(!isEdge) c.classList.toggle(cls,on[cid]===true);
+    c.classList.toggle(childCls,!!(id&&on[cid]!==true&&(on[cid]==='kept'||kept(cid))));
     c.classList.toggle(selCls,cid===id);
     if(c.classList.contains('node')&&selCls==='sel') c.setAttribute('aria-pressed',String(cid===id));
   });
@@ -230,11 +234,13 @@ document.getElementById('zfit').onclick=e=>{e.stopPropagation(); fit();};
 vp.addEventListener('wheel',ev=>{
   if(!(ev.ctrlKey||ev.metaKey)) return;
   ev.preventDefault();
-  const rect=vp.getBoundingClientRect(), px=ev.clientX-rect.left, py=ev.clientY-rect.top;
-  const wx=(vp.scrollLeft+px)/scale, wy=(vp.scrollTop+py)/scale;
+  // SVG 는 가운데 정렬·여백 때문에 뷰포트 원점에서 시작하지 않는다 — SVG 자체 좌표로 재어 포인터 아래 지점을 고정한다
+  const r=svg.getBoundingClientRect(), wx=(ev.clientX-r.left)/scale, wy=(ev.clientY-r.top)/scale;
   const unit=ev.deltaMode===1?16:ev.deltaMode===2?vp.clientHeight:1;
   scale=Math.min(3,Math.max(.05,scale*Math.exp(-ev.deltaY*unit*.0015)));
-  apply(); vp.scrollLeft=wx*scale-px; vp.scrollTop=wy*scale-py;
+  apply();
+  const r2=svg.getBoundingClientRect();
+  vp.scrollLeft+=r2.left+wx*scale-ev.clientX; vp.scrollTop+=r2.top+wy*scale-ev.clientY;
 },{passive:false});
 // 드래그 팬 — 끌면 팬, 안 끌면 클릭. 드래그 직후 click 1회 무시.
 (function(){

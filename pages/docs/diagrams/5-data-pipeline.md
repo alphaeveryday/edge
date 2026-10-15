@@ -1,17 +1,16 @@
 # 5 데이터 파이프라인 (Data Pipeline)
 
 하루 한 번의 일 배치(v1)에서 장중 1분 레인·배치 레인·분석 엔진 v2 연결(v5)까지, 파이프라인의 발전 단계를 판별로 담았다.
-단계 번호(v1~v5)는 발전 단계이고, 괄호 안은 원본 도면 파일의 판 번호다.
 
 상자를 클릭하면 상위·하위 1단계가 함께 강조된다.
 
 <p class="ep-diagram-meta">버전:
 <select class="ep-version-select" aria-label="다이어그램 버전 선택">
-  <option value="v5" selected>v5 (현재 · 도면 v3.1)</option>
-  <option value="v4">v4 (도면 v2.5)</option>
-  <option value="v3">v3 (도면 v2.0)</option>
-  <option value="v2">v2 (도면 v0.4)</option>
-  <option value="v1">v1 (도면 v0.3)</option>
+  <option value="v5" selected>v5 (현재)</option>
+  <option value="v4">v4</option>
+  <option value="v3">v3</option>
+  <option value="v2">v2</option>
+  <option value="v1">v1</option>
 </select> ·
 <a class="ep-open-full" href="../interactive/5-dp.v5.html" data-href-v4="../interactive/5-dp.v4.html" data-href-v3="../interactive/5-dp.v3.html" data-href-v2="../interactive/5-dp.v2.html" data-href-v1="../interactive/5-dp.v1.html" target="_blank" rel="noopener">전체 화면으로 열기 ↗</a></p>
 
@@ -33,7 +32,8 @@
 
 !!! note "설계 뷰 — 발전 단계별 원본 도면 기준"
     각 판은 그 단계의 설계 시점을 그린 것이며, 현행 사실의 권위는 ops 작업 카탈로그·context 등 SSOT 에 있다.
-    원본 drawio 는 레포 밖에서 판별로 관리되고, 이 뷰어들은 `pages/scripts/build_pipeline_diagram.py` 로 원본에서 다시 만든다.
+    원본 drawio 는 레포 밖에서 관리되고(단계 v1~v5 = 도면 파일 v0.3·v0.4·v2.0·v2.5·v3.1),
+    이 뷰어들은 `pages/scripts/build_pipeline_diagram.py` 로 원본에서 다시 만든다.
     발전 과정의 서술은 [EDGE 데이터 파이프라인 아키텍처](https://jingi723.github.io/posts/edge-pipeline-architecture/) 글에 있다.
 
 근거 문서(설계 뷰): [system-architecture.md](../reference/architecture/system-architecture.md) 의 파이프라인 절
