@@ -142,6 +142,8 @@ async def test_search_budget_finishes_the_report_without_another_remote_call(mon
 
 @pytest.mark.parametrize('complete', [False, True])
 async def test_analysis_shares_ten_minutes_across_roles(monkeypatch, complete):
+    # Isolate the run deadline; per-call recovery has a separate regression test.
+    monkeypatch.setattr('edge_portfolio.agent.MODEL_CALL_TIMEOUT_SECONDS', 1000)
     loop = asyncio.get_running_loop()
     now = loop.time()
     monkeypatch.setattr(loop, 'time', lambda: now)
@@ -196,6 +198,7 @@ async def test_analysis_shares_ten_minutes_across_roles(monkeypatch, complete):
 
 
 async def test_followup_has_the_same_shared_deadline_as_initial_analysis(monkeypatch):
+    monkeypatch.setattr('edge_portfolio.agent.MODEL_CALL_TIMEOUT_SECONDS', 1000)
     loop = asyncio.get_running_loop()
     now = loop.time()
     monkeypatch.setattr(loop, 'time', lambda: now)
@@ -314,7 +317,8 @@ async def test_output_diagnostics_identify_failing_validator_without_customer_te
     assert 'private customer' not in json.dumps(events)
 
 
-@pytest.mark.parametrize('disconnect_once', [False, True])
+@pytest.mark.parametrize('disconnect_once', [None, httpx.ReadError, httpx.ReadTimeout, httpx.RemoteProtocolError,
+                                           httpx.ConnectError, httpx.ConnectTimeout, TimeoutError])
 async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_once):
     phases, conversations = [], []
     disconnected = False
@@ -322,7 +326,7 @@ async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_o
         nonlocal disconnected
         if disconnect_once and not disconnected:
             disconnected = True
-            raise httpx.ReadError('response connection closed')
+            raise disconnect_once('temporary model connection failure')
         conversations.append(len(payload["messages"]))
         role = phases[-1]
         if role == 'portfolio' and (call := optimization_call(payload)):
@@ -344,15 +348,33 @@ async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_o
     assert result['optimization']['reason'] == 'CURRENT_WEIGHTS_REQUIRED'
 
 
-async def test_repeated_model_read_failure_stops_after_one_retry():
+@pytest.mark.parametrize('error_type', [httpx.ReadError, httpx.ReadTimeout, httpx.RemoteProtocolError,
+                                      httpx.ConnectError, httpx.ConnectTimeout, TimeoutError])
+async def test_repeated_model_read_failure_stops_after_one_retry(error_type):
     calls = []
     async def model(payload):
         calls.append(1)
-        raise httpx.ReadError('response connection closed')
-    with pytest.raises(httpx.ReadError):
+        raise error_type('temporary model connection failure')
+    with pytest.raises(error_type):
         await run_analysis(AnalysisInput(holdings=[{"name": "VOO", "amount_krw": 100}], horizon="10년 이상"),
                            'test', lambda _: None, model_call=model, evidence=Evidence())
     assert len(calls) == 2
+
+
+async def test_model_that_never_finishes_cannot_spend_the_whole_analysis_deadline(monkeypatch):
+    monkeypatch.setattr('edge_portfolio.agent.MODEL_CALL_TIMEOUT_SECONDS', 0.01, raising=False)
+    calls, events = [], []
+    async def model(payload):
+        calls.append(1)
+        await asyncio.Event().wait()
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(3):
+            await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'),
+                               'test', lambda _: None, model_call=model, evidence=Evidence(), on_event=events.append)
+    failures = [event for event in events if event['event'] == 'model_failed']
+    assert len(calls) == 2
+    assert [event['retry'] for event in failures] == [True, False]
+    assert all(event['code'] == 'TimeoutError' for event in failures)
 
 
 async def test_invalid_output_stops_after_one_repair():

@@ -38,6 +38,7 @@ MAX_EXA_CALLS = 70
 MAX_MODEL_CALLS = 100
 MAX_CONTEXT_BYTES = 1000000
 ANALYSIS_TIMEOUT_SECONDS = 600
+MODEL_CALL_TIMEOUT_SECONDS = 90
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
@@ -239,7 +240,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
 
         checkpoint()
         calls = 0
-        read_retries = 0
+        model_retries = 0
         catalog_calls = 0
         for role in ROLES:
             on_stage(role)
@@ -320,14 +321,16 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     raise ValueError(limit_reason)
                 emit('model_started', role=role, call=calls, context_bytes=context_bytes)
                 try:
-                    result = await model_call({"model": MODEL, "messages": messages, "tools": model_tools,
-                        "tool_choice": tool_choice, "allow_report": not required_tools, "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
-                        "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
-                except httpx.ReadError:
-                    emit('model_failed', role=role, call=calls, code='ReadError', retry=read_retries == 0)
-                    if read_retries:
+                    async with asyncio.timeout(MODEL_CALL_TIMEOUT_SECONDS):
+                        result = await model_call({"model": MODEL, "messages": messages, "tools": model_tools,
+                            "tool_choice": tool_choice, "allow_report": not required_tools, "thinking": {"type": "enabled"}, "reasoning_effort": "low", "response_format": {"type": "json_object"},
+                            "max_tokens": 16000 if role == 'opinion' else 6000, "stream": False})
+                except (httpx.ReadError, httpx.ReadTimeout, httpx.RemoteProtocolError,
+                        httpx.ConnectError, httpx.ConnectTimeout, TimeoutError) as error:
+                    emit('model_failed', role=role, call=calls, code=type(error).__name__, retry=model_retries == 0)
+                    if model_retries:
                         raise
-                    read_retries += 1
+                    model_retries += 1
                     await asyncio.sleep(1)
                     continue
                 except ValueError as error:
