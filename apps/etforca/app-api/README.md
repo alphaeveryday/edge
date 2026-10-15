@@ -1,4 +1,4 @@
-# app-api — ETF Orca 앱 API
+# app-api: ETF Orca 앱 API
 
 ETF Orca 투자자용 앱(app-ui)의 서버다. 회원·관심 ETF·커뮤니티·알림·분석 조회와 ETF 전망 투표(BUY·WAIT·SELL)를 제공한다.
 
