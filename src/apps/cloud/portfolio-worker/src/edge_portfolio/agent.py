@@ -507,10 +507,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if final.recommendation:
                             checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
                         elif not checks:
-                            checks = [{'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': 'unknown',
-                                       'reason': 'UNVERIFIED_CONSTRAINT' if rule.kind == 'unverified' else 'NO_ALLOCATION_SELECTED'}
+                            checks = [{'constraint': number, 'kind': rule.kind, 'source': rule.source,
+                                       'status': 'model_review' if rule.kind == 'unverified' else 'unknown',
+                                       'reason': 'MODEL_REVIEW' if rule.kind == 'unverified' else 'NO_ALLOCATION_SELECTED'}
                                       for number, rule in enumerate(decision.constraints, 1)]
-                        if final.recommendation and any(check['status'] != 'pass' for check in checks):
+                        if final.recommendation and any(check['status'] not in {'pass', 'model_review'} for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
                         sections = {name: validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and getattr(final, name).limitations else name,
                                     getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
@@ -524,7 +525,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if not selected and optimizer.result['candidates']:
                             if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
                                 execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
-                            blocked = any(check['status'] != 'pass' and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
+                            blocked = any(check['status'] not in {'pass', 'model_review'} and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
                             published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
@@ -535,7 +536,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if scenario_result is not None:
                             published['scenarios'] = scenario_result
                         if decision.execute_saved_target and followup_execution is not None and not published.get('recommendation'):
-                            published['execution'] = followup_execution
+                            published['execution'] = ({**followup_execution, 'status': 'infeasible', 'rows': [], 'accounts': [],
+                                'reasons': ['CUSTOMER_CONSTRAINT_NOT_SATISFIED'], 'months': None,
+                                'required_additional_krw': None, 'assumptions': []}
+                                if final.withheld_reason == 'customer_failed' else followup_execution)
                             checks = followup_checks or checks
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
                             considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
@@ -593,10 +597,6 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     for name in ('instrument_ids', 'accounts', 'markets'):
                                         identity[name] = sorted(identity[name])
                                     rules.setdefault(json.dumps(identity, sort_keys=True), rule)
-                                if inherited.kind == 'new_money' and not any(rule.kind == 'no_sell' and not rule.instrument_ids for rule in rules.values()):
-                                    from .decision import Constraint
-                                    rule = Constraint(kind='no_sell', source='기존 신규 자금 전용 결정의 매도 금지')
-                                    rules[rule.model_dump_json()] = rule
                                 decision.constraints = list(rules.values())
                                 filter_preference_constraints(decision, request, question_text=followup_question)
                                 decision.objectives = decision.objectives or inherited.objectives
@@ -620,7 +620,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                                 'required_additional_krw': None, 'additional_krw': '0', 'monthly_krw': None,
                                                 'allocation_scope': 'total_portfolio'}
                                             current_checks = []
-                                        if any(check['status'] != 'pass' for check in current_checks):
+                                        if any(check['status'] not in {'pass', 'model_review'} for check in current_checks):
                                             followup_execution.update(status='needs_input' if any(check['status'] == 'unknown' for check in current_checks) else 'infeasible',
                                                 rows=[], reasons=['CUSTOMER_CONSTRAINT_NOT_SATISFIED'])
                                         context['saved_target_execution'] = followup_execution

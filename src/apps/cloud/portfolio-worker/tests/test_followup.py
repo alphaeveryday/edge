@@ -276,13 +276,50 @@ async def test_tentative_or_replacement_target_cannot_skip_research(parent_state
         await answer_question('기존 목표를 실행해도 되나요?' if execute_saved else '새로운 대안을 추천해 주세요.', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
 
 
-async def test_followup_retains_twenty_existing_rules_and_adds_new_distinct_rules():
+@pytest.mark.parametrize('rejected', [False, True])
+async def test_model_decides_whether_a_saved_target_satisfies_a_semantic_condition(rejected):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
+        'horizon': '10년 이상'}, 'sources': Evidence.sources, 'completion': {'status': 'complete'},
+        'recommendation': {'allocations': [{'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 100}]}}
+    stages = []
+    async def model(payload):
+        role = stages[-1]
+        content = final_payload() if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {'kind': 'rebalance', 'execute_saved_target': True,
+                'constraints': [{'kind': 'unverified', 'source': '레버리지 제외'}]}}
+        if role == 'opinion':
+            content.update(recommendation=None, withheld_reason='customer_failed' if rejected else None,
+                answers=[{'question_index': 1, 'status': 'answered', 'answer':
+                    '새 조건에 맞지 않는 기존 목표는 실행하지 않고 다른 구성을 검토합니다.' if rejected else '기존 목표가 조건에 맞으므로 현재 비중을 유지합니다.'}])
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    result = await answer_question('기존 목표를 실행해 주세요. 레버리지 제외', report, 'test',
+        model_call=model, evidence=Evidence(), on_stage=stages.append)
+    execution = result['revision']['execution']
+    assert execution['status'] == ('infeasible' if rejected else 'ready')
+    if rejected:
+        assert execution['rows'] == []
+        assert execution['accounts'] == []
+        assert execution['months'] is None
+        assert execution['required_additional_krw'] is None
+        assert execution['reasons'] == ['CUSTOMER_CONSTRAINT_NOT_SATISFIED']
+        assert result['status'] != 'complete'
+    else:
+        assert execution['rows']
+        assert result['status'] == 'complete'
+
+
+@pytest.mark.parametrize('prior_kind', ['review', 'new_money'])
+async def test_followup_retains_twenty_existing_rules_without_inventing_no_sell(prior_kind):
     import json
     from report_fixtures import final_payload
     from test_agent import Evidence
     rules = [{'kind': 'unverified', 'source': f'기존 필수 조건 {i}'} for i in range(20)]
     report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상',
-        'question': '\n'.join(rule['source'] for rule in rules)}, 'decision': {'constraints': rules}, 'sources': Evidence.sources}
+        'question': '\n'.join(rule['source'] for rule in rules)}, 'decision': {'kind': prior_kind, 'constraints': rules}, 'sources': Evidence.sources}
     stages = []
     async def model(payload):
         if stages[-1] != 'question':

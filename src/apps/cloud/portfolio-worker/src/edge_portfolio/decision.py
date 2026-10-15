@@ -119,6 +119,10 @@ def check_constraints(decision, rows, request, catalog):
         weights[key] = weights.get(key, Decimal(0)) + Decimal(str(row['weight_pct']))
     checks = []
     for number, rule in enumerate(decision.constraints, 1):
+        if rule.kind == 'unverified':
+            # Preserve the condition for model judgment without certifying it in code.
+            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': 'model_review'})
+            continue
         actual = sum((weights.get(key, Decimal(0)) for key in set(rule.instrument_ids)), Decimal(0))
         passed = None
         if rule.kind == 'min_weight':

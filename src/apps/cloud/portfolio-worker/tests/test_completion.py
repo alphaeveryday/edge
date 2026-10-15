@@ -60,12 +60,13 @@ def test_calculator_requirements_are_visible_without_optional_profile_questions(
 
 
 @pytest.mark.parametrize('contribution', ['', '매달 꾸준히'])
-def test_implicit_no_sell_check_keeps_the_actual_funding_requirement(contribution):
+def test_unknown_funding_does_not_turn_model_judgment_into_a_customer_input_requirement(contribution):
     request = AnalysisInput(input_mode='amount', holdings=[{'kind': 'etf', 'name': 'VOO',
         'instrument_id': 'US:VOO', 'account': '일반 계좌', 'amount_krw': 1000000}],
         horizon='10년 이상', preferences={'contribution': contribution})
     final = FinalReport.model_validate({**final_payload(), 'recommendation': None})
-    result = assess_completion(final, request, Decision(kind='new_money', missing_inputs=['목표 배당금']),
+    result = assess_completion(final, request, Decision(kind='new_money', missing_inputs=['목표 배당금'],
+        constraints=[{'kind': 'unverified', 'source': '레버리지 제외'}]),
         {'optimization': {'status': 'no_match', 'reason': 'CUSTOMER_CONSTRAINT_UNVERIFIED'}}, [], '2026-10-14')
     assert result['status'] == 'needs_input'
     assert result['missing_inputs'] == ['추가 투자금 또는 매달 납입할 금액']
