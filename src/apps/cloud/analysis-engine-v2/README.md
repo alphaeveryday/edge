@@ -4,7 +4,9 @@
 
 ## 클라우드 실행 자동 관측
 
-AWS에서 실행하고 로컬에서는 S3에 저장된 입력·툴 호출·최종 화면·DB 근거를 자동으로 내려받는다. 로컬에 DeepSeek 키나 DB 터널은 필요 없다. 예약은 없다.
+AWS에서 실행하고 로컬에서는 S3에 저장된 입력·툴 호출·최종 화면·DB 근거를 자동으로 내려받는다. 로컬에 DeepSeek 키나 DB 터널은 필요 없다.
+
+전망 배치는 주말을 포함해 실행한다. 분석 기준시각이 2026-10-16 00:00 KST 이후인 DeepSeek 전망 배치는 추론 강도를 `high`에서 `low`로 낮춘다. 내부 배치 요청 표시로 구분하며 수동 분석과 가격변동 설명은 기존 강도를 유지한다. 적용 강도는 실행 manifest의 `job.reasoning_effort`와 모델 실행 환경에 기록한다.
 
 ```sh
 python -m edge_analysis_v2.cloud.dashboard --profile edge-v2-observer --runs-dir /path/to/cloud-runs --port 8765

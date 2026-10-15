@@ -10,7 +10,7 @@
 - 본문 수정의 `tool_run_ids`는 해당 논점의 전체 근거 목록을 교체. 바뀐 문장뿐 아니라 유지한 숫자의 근거도 함께 전달.
 - 전망 요약·5요인·결론은 각각 완성된 객체. 내부 모델 응답에서는 함께 받아도 저장·화면 조회는 기능별 객체로 분리.
 - 스티커는 모두 에이전트 판단. 자료 부족을 코드가 중립으로 바꾸지 않음.
-- 동일 에이전트의 추론 모드를 켜고 effort=high로 실행. 추가 판정 에이전트는 없음. SDK의 budget_tokens 값은 DeepSeek가 무시하므로 비용·출력 길이의 상한으로 보장하지 않음. [호환 명세](https://api-docs.deepseek.com/guides/anthropic_api/)
+- 동일 에이전트의 추론 모드를 켜고 기본 effort=high로 실행. 분석 기준시각이 2026-10-16 00:00 KST 이후인 내부 전망 배치의 DeepSeek 호출은 effort=low로 실행하며 주말 수정도 포함한다. 수동 요청과 가격변동 설명은 high를 유지한다. 적용 강도는 manifest의 job.reasoning_effort와 모델 environment.json에 기록한다. 추가 판정 에이전트는 없음. SDK의 budget_tokens 값은 DeepSeek가 무시하므로 비용·출력 길이의 상한으로 보장하지 않음. [호환 명세](https://api-docs.deepseek.com/guides/anthropic_api/)
 - 수치 상세는 계산 툴 출력에서 생성. 이슈 상세는 에이전트가 생성하고 이슈 스티커는 부모와 일치.
 - 중복 요청 ID는 새 모델 호출·새 결과를 만들지 않음. 실패 기록은 그대로 남김.
 - 본문 변경과 독립 기능은 모두 준비된 뒤 발행. 실패하면 툴 감사 기록은 남고 미완성 화면은 발행하지 않음.

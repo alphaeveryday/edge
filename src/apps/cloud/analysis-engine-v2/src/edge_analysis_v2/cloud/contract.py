@@ -25,11 +25,14 @@ def decode_json(raw):
 
 
 def decode_request(raw, *, internal=False):
-    """Validate public input, optionally allowing the worker's source coordinates."""
+    """Validate public input, optionally allowing internal source and batch metadata."""
     value = decode_json(raw)
-    base = {k:v for k,v in value.items() if k!='source'} if internal and isinstance(value,dict) else value
+    base = {k:v for k,v in value.items() if k not in ('source', 'execution_mode')} if internal and isinstance(value,dict) else value
     try:
         Draft202012Validator(REQUEST_SCHEMA, format_checker=FORMATS).validate(base)
+        if internal and 'execution_mode' in value:
+            if value['execution_mode'] != 'batch' or value['kind'] != 'outlook':
+                raise ValueError('Only internal outlook batches can set execution_mode')
         if internal and 'source' in value:
             Draft202012Validator(SOURCE_SCHEMA).validate(value['source'])
             if value['kind']!='movement':
