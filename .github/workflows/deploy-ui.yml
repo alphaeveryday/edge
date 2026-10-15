@@ -82,7 +82,7 @@ jobs:
           DISTRIBUTION_ID: ${{ inputs.distribution_id }}
         run: |
           set -euo pipefail
-          # --delete 로 버킷을 dist/ 와 일치시킨다(삭제된 파일 제거). dist 는 src 기준 상대경로.
+          # --delete 로 버킷을 dist/ 와 일치시킨다(삭제된 파일 제거). dist 는 레포 루트 기준 상대경로.
           aws s3 sync "apps/${PRODUCT}/${APP}/dist" "s3://${BUCKET}" --delete
           # 캐시 무효화 후 완료까지 대기 — 실패 시 워크플로가 빨간불이 되게.
           id="$(aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" \

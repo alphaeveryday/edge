@@ -86,7 +86,7 @@ jobs:
           # 전체 트리거 — 빌드 설정·공유 라이브러리(전 앱이 의존)·이 워크플로 자신.
           # herestring(<<<) 사용: pipefail 하에서 echo | grep -q 는 grep 조기 종료 시
           # echo 가 SIGPIPE(141)로 죽어 대형 diff 에서 파이프라인이 실패한다.
-          if grep -qE '^(src/(build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat)$|gradle/|libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml$)' <<< "${changed}"; then
+          if grep -qE '^((build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat)$|gradle/|libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml$)' <<< "${changed}"; then
             targets="${all_targets}"
             echo "전체 트리거(빌드 설정/libs/워크플로 변경) — 전 모듈 실행"
           else

@@ -37,6 +37,6 @@ jobs:
           account_id="$(aws sts get-caller-identity --query Account --output text)"
           repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
           docker build --platform linux/amd64 -f apps/engine/db-query/Dockerfile \
-            -t "${repo}:db-query-${IMAGE_TAG}" -t "${repo}:db-query-latest" src
+            -t "${repo}:db-query-${IMAGE_TAG}" -t "${repo}:db-query-latest" .
           docker push "${repo}:db-query-${IMAGE_TAG}"
           docker push "${repo}:db-query-latest"

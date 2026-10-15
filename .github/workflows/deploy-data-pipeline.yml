@@ -62,7 +62,7 @@ jobs:
             -f apps/engine/data-pipeline/Dockerfile \
             -t "${image_sha}" \
             -t "${image_latest}" \
-            src
+            .
           docker push "${image_sha}"
           docker push "${image_latest}"
 
