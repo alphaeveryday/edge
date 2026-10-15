@@ -10,6 +10,22 @@ from edge_portfolio.decision import QuestionSection
 from edge_portfolio.structured_output import strict_schema, structured_call
 
 
+async def test_optional_calculator_funding_does_not_nest_nullable_provider_unions():
+    from edge_portfolio.scenarios import TOOL
+    def handler(request):
+        schema = json.loads(request.content)['tools'][0]['function']['parameters']
+        variants = schema['properties']['funding']['anyOf']
+        assert [variant['type'] for variant in variants] == ['object', 'null']
+        assert 'anyOf' not in variants[0], 'DeepSeek rejects a nested union branch without a type'
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'tool_calls': [{'id': '1', 'function': {'name': 'calculate_scenarios',
+                'arguments': '{"years":[5],"annual_returns":[5],"funding":null}'}}]}}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await structured_call(client, 'test', {'messages': [], 'tools': [TOOL]}, Section)
+    arguments = json.loads(result['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
+    assert arguments == {'years': [5], 'annual_returns': [5]}
+
+
 async def test_required_research_repair_forces_a_tool_without_enabling_report_submission():
     def handler(request):
         body = json.loads(request.content)

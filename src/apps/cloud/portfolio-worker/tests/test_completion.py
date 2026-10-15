@@ -103,6 +103,20 @@ def test_projection_cannot_complete_an_unanswered_allocation_request():
     assert 'UNANSWERED_QUESTIONS' in result['reasons']
 
 
+@pytest.mark.parametrize('recommended', [False, True])
+def test_rejected_calculation_is_incomplete_without_blocking_an_existing_recommendation(recommended):
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    final = FinalReport.model_validate({**final_payload(), 'recommendation': None, 'withheld_reason': None})
+    published = {'scenarios': {'status': 'rejected', 'reason': 'CUSTOMER_FUNDING_AMOUNT'},
+        'optimization': {'status': 'not_requested', 'reason': 'SCENARIO_ONLY'},
+        'recommendation': {'allocations': []} if recommended else None}
+    result = assess_completion(final, request, Decision(scenario_requested=True), published, [], '2026-10-15')
+    assert result['status'] == 'partial'
+    assert 'SCENARIO_CALCULATION_REQUIRED' in result['reasons']
+    assert result['missing_inputs'] == [], 'A rejected model argument is not a required customer input'
+    assert bool(published['recommendation']) == recommended
+
+
 def test_partial_question_extraction_cannot_hide_an_unanswered_customer_request():
     from edge_portfolio.decision import validate_decision
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='First? Second?')

@@ -24,8 +24,8 @@ from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_p
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints, filter_preference_constraints
-from .execution import execution_tool, resolve_funding, zero_funding_quote, funding_assumptions, TOOL as EXECUTION_TOOL
-from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
+from .execution import execution_tool, resolve_funding, zero_funding_quote, funding_assumptions, validate_funding, TOOL as EXECUTION_TOOL
+from .scenarios import build_scenarios, ScenarioToolInput, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status, research_inventory
 from .structured_output import structured_call
@@ -410,12 +410,18 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'calculate_scenarios':
                             try:
-                                funding = resolve_funding(request, decision)
+                                calculation = ScenarioToolInput.model_validate(args)
+                                calculation_decision = decision
+                                if calculation.funding is not None:
+                                    validate_funding(calculation.funding, followup_question or request.question + '\n' + request.preferences.model_dump_json())
+                                    calculation_decision = decision.model_copy(update={'funding': calculation.funding})
+                                scenario_funding = calculation_decision.funding
+                                funding = resolve_funding(request, calculation_decision)
                                 known_principal = bool(request.holdings) and all(h.amount_krw is not None for h in request.holdings)
                                 principal = sum(h.amount_krw for h in request.holdings) if request.input_mode == 'amount' and known_principal else None
-                                if decision.funding is not None:
-                                    if decision.funding.principal_krw is not None:
-                                        principal = decision.funding.principal_krw
+                                if scenario_funding is not None:
+                                    if scenario_funding.principal_krw is not None:
+                                        principal = scenario_funding.principal_krw
                                 else:
                                     original_question = getattr(request, 'funding_questions', [request.question])[0]
                                     for statement in ([followup_question, original_question] if followup_question else [request.question]):
@@ -433,20 +439,22 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                     preferences = (request.preferences.note, request.preferences.contribution, request.preferences.dividend_goal, *request.preferences.interests)
                                     if not all(principal_context_matches(text, principal) for text in contexts) or not all(principal_preference_matches(text, principal) for text in preferences):
                                         principal = None  # Preserve unresolved qualifications when reusing an older amount.
-                                answer = build_scenarios(principal, args,
-                                    contribution_months=decision.funding.max_months if decision.funding is not None else None,
-                                    start_delay_months=decision.funding.start_delay_months if decision.funding is not None else 0,
+                                answer = build_scenarios(principal, calculation.model_dump(exclude={'funding'}),
+                                    contribution_months=scenario_funding.max_months if scenario_funding is not None else None,
+                                    start_delay_months=scenario_funding.start_delay_months if scenario_funding is not None else 0,
                                     **{name: value or 0 for name, value in (funding or {}).items()})
-                                if decision.funding is not None:
-                                    answer.setdefault('assumptions', []).extend(funding_assumptions(decision.funding))
+                                if scenario_funding is not None:
+                                    answer.setdefault('assumptions', []).extend(funding_assumptions(scenario_funding))
                                 if funding is None:
                                     answer = {'status': 'needs_input', 'reason': 'ADDITIONAL_FUNDING_REQUIRED', 'rows': []}
-                                if scenario_result and scenario_result['status'] == answer['status'] == 'available':
+                                if scenario_result and scenario_result['status'] == answer['status'] == 'available' and all(
+                                    scenario_result.get(key) == answer.get(key) for key in ('principal_krw', 'monthly_krw', 'assumptions')):
                                     rows = {(row['annual_return_pct'], row['years']): row for row in [*scenario_result['rows'], *answer['rows']]}
                                     answer['rows'] = list(rows.values())
                                 scenario_result = answer
                             except ValueError as error:
-                                answer = {'status': 'rejected', 'reason': str(error)[:300]}
+                                answer = {'status': 'rejected', 'reason': str(error)[:300], 'rows': []}
+                                scenario_result = answer
                         elif function['name'] == 'optimize_portfolios':
                             try:
                                 answer = model_price_payload(await optimizer.tool(args))

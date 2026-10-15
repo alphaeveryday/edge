@@ -4,6 +4,83 @@ import pytest
 from edge_portfolio.followup import answer_question
 
 
+@pytest.mark.parametrize('additional,wrong_amount_first', [(0, False), (5000000, False),
+    (0, 'principal'), (5000000, 'principal'), (0, 'stale_additional')])
+async def test_calculator_money_is_independent_of_the_saved_rebalance_funding(additional, wrong_amount_first):
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    original = '추가 투자금 500만원으로 매수 계획을 주세요.'
+    question = '원금 1000만원, 매월 말 50만원 납입으로 5년 뒤 계산만 해주세요.'
+    if additional:
+        question += ' 기존 추가 투자금 500만원도 함께 넣어 계산해 주세요.'
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 10000000}],
+        'horizon': '10년 이상', 'question': original, 'preferences': {'contribution': '추가 투자금 500만원'}},
+        'sources': Evidence.sources, 'decision': {'funding': {'source': original, 'additional_krw': 5000000}}}
+    stages, calculated, snapshots = [], [], []
+    async def model(payload):
+        if stages[-1] == 'question':
+            content = {**final_payload()['question'], 'decision': {'scenario_requested': True,
+                'funding': {'source': original + '\n\n후속 질문: ' + question,
+                    'principal_krw': 10000000, 'monthly_krw': 500000, 'additional_krw': 5000000}}}
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+        if calculated:
+            result = json.loads(payload['messages'][-1]['content'])
+            if wrong_amount_first and len(calculated) == 1:
+                assert result['status'] == 'rejected'
+                assert 'CUSTOMER_FUNDING_AMOUNT' in result['reason']
+            else:
+                assert result['status'] == 'available'
+                assert result['principal_krw'] == str(10000000 + additional)
+                assert result['rows'][0]['future_krw'] == str(40000000 + additional)
+                assert json.loads(payload['messages'][1]['content'])['active_decision']['funding']['additional_krw'] == 5000000
+                raise RuntimeError('CALCULATION_SCOPE_CHECKED')
+        calculated.append(1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': json.dumps({
+                'annual_returns': [0], 'years': [5], 'funding': {'source': original + '\n' + question,
+                    'principal_krw': 100000000 if wrong_amount_first == 'principal' and len(calculated) == 1 else 10000000,
+                    'monthly_krw': 500000,
+                    'additional_krw': 5000000 if wrong_amount_first == 'stale_additional' and len(calculated) == 1 else additional}})}}]}}]}
+    with pytest.raises(RuntimeError, match='CALCULATION_SCOPE_CHECKED'):
+        await answer_question(question, report, 'test', model_call=model, evidence=Evidence(),
+                              on_stage=stages.append, on_checkpoint=snapshots.append)
+    assert snapshots[-1]['scenarios']['principal_krw'] == str(10000000 + additional)
+
+
+async def test_recalculation_keeps_periods_only_when_the_money_assumptions_match():
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    question = '원금 1000만원과 2000만원, 매월 50만원으로 기간별 계산을 비교해 주세요.'
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상'}, 'sources': Evidence.sources}
+    stages, calculated, snapshots = [], [], []
+    async def model(payload):
+        if stages[-1] == 'question':
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
+                **final_payload()['question'], 'decision': {'scenario_requested': True}})}}]}
+        if calculated:
+            result = json.loads(payload['messages'][-1]['content'])
+            if len(calculated) == 4:
+                assert result['status'] == 'rejected'
+                assert snapshots[-1]['scenarios']['status'] == 'rejected'
+                assert snapshots[-1]['scenarios']['rows'] == []
+                raise RuntimeError('CONSISTENT_PERIODS_CHECKED')
+            assert result['status'] == 'available'
+            assert [row['years'] for row in result['rows']] == {1: [5], 2: [10], 3: [10, 15]}[len(calculated)]
+            if len(calculated) == 3:
+                assert result['principal_krw'] == '20000000'
+        calculated.append(1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios', 'arguments': json.dumps({
+                'annual_returns': [0], 'years': [5 * len(calculated)], 'funding': {'source': question,
+                    'principal_krw': {1: 10000000, 2: 20000000, 3: 20000000, 4: 100000000}[len(calculated)],
+                    'monthly_krw': 500000}})}}]}}]}
+    with pytest.raises(RuntimeError, match='CONSISTENT_PERIODS_CHECKED'):
+        await answer_question(question, report, 'test', model_call=model, evidence=Evidence(),
+                              on_stage=stages.append, on_checkpoint=snapshots.append)
+
+
 async def test_followup_reuses_research_checks_without_overwriting_the_original(monkeypatch):
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
