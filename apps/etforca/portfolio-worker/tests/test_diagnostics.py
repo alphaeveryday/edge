@@ -12,7 +12,7 @@ import pytest
 @pytest.fixture
 def diagnostics(monkeypatch):
     monkeypatch.setitem(sys.modules, 'boto3', SimpleNamespace())
-    path = Path(__file__).resolve().parents[5] / '.github/scripts/portfolio_diagnostics.py'
+    path = Path(__file__).resolve().parents[4] / '.github/scripts/portfolio_diagnostics.py'
     spec = importlib.util.spec_from_file_location('portfolio_diagnostics', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

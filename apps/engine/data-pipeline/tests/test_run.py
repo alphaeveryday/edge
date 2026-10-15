@@ -346,7 +346,7 @@ def test_분_레인과_배치가_같은_확정_거부_목록을_본다():
 def test_확정_거부_로그_문구와_알람_필터가_같은_문구를_본다():
     """WHY: 누적 알람은 로그 문구를 세는 metric filter 위에 선다. 문구를 한쪽만 바꾸면 필터가
     아무것도 세지 않고 알람은 영영 조용하다 — 파서가 깨져도 모르는 상태로 돌아간다."""
-    tasks_tf = (pathlib.Path(__file__).resolve().parents[5]
+    tasks_tf = (pathlib.Path(__file__).resolve().parents[4]
                 / "infra/terraform/modules/data-pipeline/tasks.tf").read_text(encoding="utf-8")
     assert f'pattern        = "\\"{run_mod.CONFIRMED_REJECT_LOG}\\""' in tasks_tf
 

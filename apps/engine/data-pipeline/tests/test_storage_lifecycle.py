@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-_STORAGE_TF = (Path(__file__).resolve().parents[5]
+_STORAGE_TF = (Path(__file__).resolve().parents[4]
                / "infra/terraform/modules/pipeline/storage.tf")
 
 

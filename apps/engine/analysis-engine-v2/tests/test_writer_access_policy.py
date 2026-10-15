@@ -2,7 +2,7 @@
 import importlib.util
 from pathlib import Path
 
-path = Path(__file__).parents[5] / "tasks/v2-cloud-access/bootstrap.py"
+path = Path(__file__).parents[4] / "tasks/v2-cloud-access/bootstrap.py"
 spec = importlib.util.spec_from_file_location("writer_bootstrap", path)
 bootstrap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bootstrap)

@@ -8,7 +8,7 @@ from pathlib import Path
 from data_pipeline.ops import catalog
 from data_pipeline.steps import load_market_series_daily
 
-_TF_MODULE = Path(__file__).resolve().parents[5] / "infra/terraform/modules/data-pipeline"
+_TF_MODULE = Path(__file__).resolve().parents[4] / "infra/terraform/modules/data-pipeline"
 _STATEMACHINE_TF = _TF_MODULE / "statemachine.tf"
 _TASKS_TF = _TF_MODULE / "tasks.tf"
 # 뉴스 SFN(ALPHA-553)의 직렬 2개(NewsLoadAssertions·NewsAssembleEvents)는 여기에만 있다 —

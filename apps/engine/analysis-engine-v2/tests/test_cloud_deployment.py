@@ -8,7 +8,7 @@ import yaml
 
 
 def register(monkeypatch, container, volumes):
-    workflow = Path(__file__).resolve().parents[5]/'.github/workflows/deploy-analysis-engine-v2.yml'
+    workflow = Path(__file__).resolve().parents[4]/'.github/workflows/deploy-analysis-engine-v2.yml'
     steps = yaml.safe_load(workflow.read_text(encoding='utf-8'))['jobs']['deploy']['steps']
     script = next(step['run'] for step in steps if step.get('name','').startswith('Register the immutable'))
     python = script.split("python - <<'PY'\n", 1)[1].split('\nPY', 1)[0]

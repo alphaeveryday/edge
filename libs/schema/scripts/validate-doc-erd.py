@@ -17,7 +17,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[3]
 GENERATED_PATH = ROOT / "libs/schema/generated"
 DOCS_PATH = ROOT / "docs/data-model"
 # 세트마다 (라벨, DBML, ERD glob). Cloud 는 73테이블이라 도메인별로 쪼갰고 온프렘은 13테이블이라

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-TF = ROOT.parents[3] / "infra/terraform/modules/data-pipeline"
+TF = ROOT.parents[2] / "infra/terraform/modules/data-pipeline"
 sys.path.insert(0, str(ROOT / "dags"))
 KST = timezone(timedelta(hours=9))
 
