@@ -260,11 +260,17 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 messages[1]['content'] = json.dumps(context, ensure_ascii=False)
                 calls += 1
                 reserved = 3 * (len(ROLES) - ROLES.index(role) - 1)
+                research_budget_exhausted = getattr(evidence, 'calls', 0) >= MAX_EXA_CALLS
                 finalizing = structured_retry or calls >= MAX_MODEL_CALLS - reserved - 2
                 model_tools = TOOLS[:1] if role == 'question' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
+                if research_budget_exhausted:
+                    model_tools = [tool for tool in model_tools if tool['function']['name'] != 'search_sources']
+                    if not context.get('research_budget_exhausted'):
+                        context['research_budget_exhausted'] = True
+                        messages.append({'role': 'user', 'content': '추가 원격 자료 조회는 종료됐습니다. fetch_source로 이미 저장된 URL의 문단 페이지는 읽을 수 있습니다. 새로운 검색·URL·expand 조회는 하지 말고 확보한 근거와 필요한 계산으로 추천과 결론을 완성하세요.'})
                 tool_choice = 'none' if finalizing else 'auto'
                 research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
-                research_exhausted = len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
+                research_exhausted = research_budget_exhausted or len(failed_source_urls) >= 2 and not (research_targets - failed_source_urls)
                 source_free_allowed = decision.scenario_requested or research_exhausted or (optimizer.result or {}).get('reason') in {'SERVICE_CUSTOMER_POLICY_CONFLICT', 'SAVED_TARGET_ONLY'}
                 required_tools = []
                 if role == 'portfolio' and not decision.scenario_requested:
@@ -453,6 +459,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 answer = await outlook.call(args, evidence.sources)
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
+                        elif function['name'] in {'search_sources', 'fetch_source'} and getattr(evidence, 'calls', 0) >= MAX_EXA_CALLS and not (
+                            function['name'] == 'fetch_source' and not args.get('expand') and any(
+                                source.get('url') == args.get('url') for source in evidence.sources)):
+                            answer = {'status': 'unavailable', 'reason': 'TOOL_LIMIT',
+                                      'instruction': '추가 자료 조회를 마치고 확보한 근거로 답변을 완성하세요. 확인하지 못한 항목만 비워 두고 유효한 추천과 계산은 유지하세요.'}
                         else:
                             try:
                                 answer = await evidence.call(function["name"], args)
