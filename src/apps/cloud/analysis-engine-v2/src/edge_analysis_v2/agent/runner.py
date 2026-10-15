@@ -99,7 +99,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     optional_skills: tuple[str, ...] = (),
                     resume: bool = False, compare_explanations: bool = False, final_check=None,
                     web_search: bool = False, events_log: Path | None = None,
-                    structured_only: bool = False) -> dict:
+                    structured_only: bool = False, effort: str = 'high') -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -126,6 +126,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             its queries are in events.jsonl but not in the audited tool records.
         structured_only: Fill a schema from completed input, without research, files, skills or task tracking.
             The SDK's StructuredOutput mechanism and final validation/repair remain enabled.
+        effort: Provider reasoning effort; defaults to high unless the caller selects another level.
 
     Returns:
         Validated final response. Meaning is reviewed separately by a reviewer.
@@ -137,6 +138,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     """
     if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
         raise ValueError('API key and a 1..600 second deadline are required')
+    if effort not in ('low', 'high', 'max'):
+        raise ValueError('effort must be low, high or max')
     if structured_only and (schemas or skills or optional_skills or resume or web_search or compare_explanations):
         raise ValueError('structured_only cannot use research tools, skills, resume or task tracking')
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -185,7 +188,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             permission_mode='dontAsk', setting_sources=[],
             settings=json.dumps({'autoCompactEnabled': True}),
             cwd=str(workspace),
-            thinking={'type': 'enabled', 'budget_tokens': 8192}, effort='high',
+            thinking={'type': 'enabled', 'budget_tokens': 8192}, effort=effort,
             env={'TINYFISH_API_KEY':'', 'CLAUDE_CONFIG_DIR':str(workspace/'config'), 'ANTHROPIC_BASE_URL': 'https://api.deepseek.com/anthropic',
                  'ANTHROPIC_AUTH_TOKEN': key, 'ANTHROPIC_API_KEY': '', 'CLAUDE_CODE_OAUTH_TOKEN': '',
                  'ANTHROPIC_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_HAIKU_MODEL': sdk_model,
@@ -198,7 +201,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                             ('output_schema.json', output_schema)]:
             (artifacts / name).write_text(encode(value), encoding='utf-8')
         (artifacts / 'system_prompt.txt').write_text(prompt.replace(key, '[redacted]'), encoding='utf-8')
-        (artifacts / 'environment.json').write_text(encode(describe_environment()), encoding='utf-8')
+        (artifacts / 'environment.json').write_text(encode(describe_environment() | {'reasoning_effort': effort}), encoding='utf-8')
         try:
             async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
                 await client.query(encode(query_input))

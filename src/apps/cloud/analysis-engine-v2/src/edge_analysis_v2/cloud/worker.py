@@ -1,6 +1,7 @@
 """One real-data cloud execution with durable incremental observations."""
 import argparse
 from datetime import datetime, timezone
+from functools import partial
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import boto3
 from psycopg.rows import dict_row
 
 from edge_analysis_v2.analysis.service import execute_request
+from edge_analysis_v2.agent.runner import run_model
 from edge_analysis_v2.cloud.artifacts import Publisher, atomic, encode
 from edge_analysis_v2.cloud.contract import decode_request
 from edge_analysis_v2.contracts.audit import read_contract_audit
@@ -28,6 +30,15 @@ LOG = logging.getLogger(__name__)
 # starts again from a staged one. Read from the database: this role may put run records in S3 but not read them.
 # ponytail: a fixed instant; remove it with the rule once every ETF has a staged outlook.
 STAGED_SINCE = datetime(2026, 10, 13, 21, 0, tzinfo=timezone.utc)   # the 06:00 KST batch of 2026-10-14
+
+
+def batch_effort(request, model):
+    """Lower DeepSeek effort for explicit outlook batches dated 2026-10-16 KST onward."""
+    return 'low' if (request.get('execution_mode') == 'batch' and request['kind'] == 'outlook'
+        and model.startswith('deepseek-')
+        and datetime.fromisoformat(request['analysis_at']) >= datetime(2026, 10, 15, 15, tzinfo=timezone.utc)) else 'high'
+
+
 # The workflow stops the task at 1100 seconds; waiting longer would leave no time to analyze.
 SLOT_WAIT_SECONDS = 600
 
@@ -132,7 +143,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
             LOG.info('Completed movement delivery recovered analysis_id=%s tenants=%s',request['analysis_id'],count)
             return
     folder.mkdir(parents=True,exist_ok=True)
-    job = request | {'origin':'cloud','scenario':'database','data_source':'database',
+    effort = batch_effort(request, model)
+    job = request | {'origin':'cloud','scenario':'database','data_source':'database', 'reasoning_effort': effort,
                      'status':'running','started_at':datetime.now(timezone.utc).isoformat()}
     publisher = Publisher(session.client('s3'),bucket,request['analysis_id'],folder)
     # Fail before spending model tokens if observation permissions are missing.
@@ -155,7 +167,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
             execute_request(kind=request['kind'],source_tools=DatabaseTools(source, web=web),
                 connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                 artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,owner=owner,
-                staged=request['kind'] == 'outlook', staged_since=STAGED_SINCE)
+                staged=request['kind'] == 'outlook', staged_since=STAGED_SINCE,
+                model_call=partial(run_model, effort=effort))
             if request['kind'] == 'movement':
                 # Ownership is checked when the publication commits; delivery only enqueues that commit.
                 job['delivery_tenants'] = db(lambda connection: enqueue_movement(connection, request['analysis_id']))
@@ -174,7 +187,8 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
                 execute_request(kind=request['kind'],source_tools=DatabaseTools(source, web=web),
                     connection_factory=lambda:connect_results(ca_path,session=session,cloud=True),
                     artifacts=folder,analysis_id=request['analysis_id'],key=key,model=model,
-                    staged=request['kind'] == 'outlook', staged_since=STAGED_SINCE)
+                    staged=request['kind'] == 'outlook', staged_since=STAGED_SINCE,
+                    model_call=partial(run_model, effort=effort))
                 if request['kind'] == 'movement':
                     job['delivery_tenants'] = enqueue_movement(lock_connection, request['analysis_id'])
         job['status']='completed'

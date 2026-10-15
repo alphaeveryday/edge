@@ -9,7 +9,8 @@ from test_cloud_observation import MemoryS3, REQUEST
 
 
 @pytest.mark.parametrize('failure', [None,'source','model','export'])
-def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failure):
+@pytest.mark.parametrize('owner', [None, 'execution-arn'])
+def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failure,owner):
     s3=MemoryS3()
     session=Mock()
     session.client.return_value=s3
@@ -34,19 +35,25 @@ def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failur
     if failure=='export':
         export.side_effect=RuntimeError('SENSITIVE')
     monkeypatch.setattr(worker,'export_records',export)
-    args=dict(bucket='bucket',ca_path=tmp_path/'ca',folder=tmp_path,key='SENSITIVE',model='test',session=session)
+    request=REQUEST | {'kind':'outlook','execution_mode':'batch','analysis_at':'2026-10-15T21:00:00Z'}
+    args=dict(bucket='bucket',ca_path=tmp_path/'ca',folder=tmp_path,key='SENSITIVE',model='deepseek-flash',session=session,owner=owner)
     if failure:
         with pytest.raises(RuntimeError):
-            worker.run(REQUEST,**args)
+            worker.run(request,**args)
     else:
-        worker.run(REQUEST,**args)
+        worker.run(request,**args)
     raw=s3.objects['analysis-v2/runs/'+REQUEST['analysis_id']+'/manifest.json']
     job=decode_json(raw)['job']
+    assert job['reasoning_effort']=='low'
+    if failure!='source':
+        model_call=execute.call_args.kwargs['model_call']
+        assert model_call.func is worker.run_model
+        assert model_call.keywords=={'effort':'low'}
     assert b'SENSITIVE' not in raw
     assert job['status']==('failed' if failure in ('source','model') else 'completed')
     assert job['observation_status']==('incomplete' if failure=='export' else 'complete')
     # A duplicate must not start source reads or erase these terminal observations.
     load.reset_mock()
     with pytest.raises(FileExistsError):
-        worker.run(REQUEST,**args)
+        worker.run(request,**args)
     load.assert_not_called()

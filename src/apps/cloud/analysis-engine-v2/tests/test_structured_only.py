@@ -13,6 +13,7 @@ def invoke(tmp_path, responses, *, check=None, **overrides):
     queries = []
     class Client:
         def __init__(self, *, options):
+            assert options.effort == overrides.get('effort', 'high')
             assert options.tools == []
             assert options.allowed_tools == []
             assert options.mcp_servers == {}
@@ -54,6 +55,16 @@ def test_invalid_fields_cannot_be_recorded_as_success(tmp_path):
         invoke(tmp_path, [{'wrong': 'value'}])
     assert not (tmp_path/'response.json').exists()
     assert (tmp_path/'measurement.json').is_file()
+
+
+def test_bounded_writer_effort_is_explicit_and_recorded(tmp_path):
+    invoke(tmp_path, [{'summary': 'ok'}], effort='low')
+    assert json.loads((tmp_path/'environment.json').read_text())['reasoning_effort'] == 'low'
+
+
+def test_unknown_effort_fails_before_model_calls(tmp_path):
+    with pytest.raises(ValueError, match='effort'):
+        invoke(tmp_path, [{'summary': 'ok'}], effort='typo')
 
 
 @pytest.mark.parametrize('settings', [{'resume': True}, {'skills': ('cause-investigation',)},
