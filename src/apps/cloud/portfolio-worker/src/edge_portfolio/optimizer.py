@@ -69,7 +69,7 @@ def search(ids, frame, current):
     return accepted
 
 
-def rank(groups, ids_by_group, objectives=()):
+def rank(groups, ids_by_group, objectives=(), preferred=()):
     excess = [row['excess_pp'] for group in groups for row in group]
     minimum, maximum = min([0, *excess]), max([0, *excess])
     span = maximum - minimum
@@ -86,11 +86,17 @@ def rank(groups, ids_by_group, objectives=()):
             relative_excess = (row['excess_pp'] - minimum) / span if span else 0
             row['score'] = .4 * row['duration_pct'] + .4 * relative_excess * 100 + .2 * row['preservation_pct']
         best = max(group, key=lambda r: priority(r, len(ids)))
-        winners.append({'candidate_id': f'candidate-{number}',
-                        'allocations': [{'instrument_id': key, 'weight_pct': round(weight * 100)} for key, weight in zip(ids, best['weights'])],
-                        **{key: round(best[key], 6) for key in ('score', 'duration_pct', 'excess_pp', 'preservation_pct')},
-                        'max_drawdown_pct': best.get('max_drawdown_pct'), 'income_yield_pct': best.get('income_yield_pct'),
-                        'recent_outperform_days': best.get('recent_outperform_days', 0)})
+        choices = [(f'candidate-{number}', best)]
+        for index, requested in enumerate(preferred, 1):
+            matched = next((row for row in group if tuple(zip(ids, [round(w * 100) for w in row['weights']])) == requested), None)
+            if matched is not None and matched is not best:
+                choices.append((f'candidate-{number}-preferred-{index}', matched))
+        for candidate_id, chosen in choices:
+            winners.append({'candidate_id': candidate_id,
+                        'allocations': [{'instrument_id': key, 'weight_pct': round(weight * 100)} for key, weight in zip(ids, chosen['weights'])],
+                        **{key: round(chosen[key], 6) for key in ('score', 'duration_pct', 'excess_pp', 'preservation_pct')},
+                        'max_drawdown_pct': chosen.get('max_drawdown_pct'), 'income_yield_pct': chosen.get('income_yield_pct'),
+                        'recent_outperform_days': chosen.get('recent_outperform_days', 0)})
     winners.sort(key=lambda r: priority(r, len(r['allocations'])), reverse=True)
     return [dict(row, rank=i) for i, row in enumerate(winners, 1)]
 
@@ -102,6 +108,7 @@ class Optimizer:
         self.result = None
         self.decision = Decision()
         self.groups = []
+        self.preferred = []
         self.batches = set()
         self.attempts = {}
         self.revision = 0
@@ -111,22 +118,29 @@ class Optimizer:
         result = await self._tool(args)
         result['search_progress'] = {'unique_combinations': len(self.groups),
             'unique_etfs': len({key for group in self.groups for key in group}),
-            'remaining_batches': max(0, 4 - len(self.batches)), 'alternatives_explored': len(self.groups) >= 20}
+            'remaining_batches': max(0, 100 - len(self.batches))}
         return result
 
     async def _tool(self, args):
         groups = args.get('combinations')
-        if not isinstance(groups, list) or len(groups) != 10:
-            raise ValueError('Submit exactly ten ETF combinations in one call')
+        if not isinstance(groups, list) or not 1 <= len(groups) <= 10:
+            raise ValueError('Submit one to ten ETF combinations in one call')
         if any(not isinstance(group, list) or not 1 <= len(group) <= 5 or
                any(not isinstance(key, str) or key == 'CASH:KRW' or key not in self.market.catalog for key in group) or
                len(set(group)) != len(group) for group in groups):
             raise ValueError('Each combination needs 1..5 distinct registered ETF IDs, without cash')
         groups = [sorted(group) for group in groups]
-        if self.request and self.request.planning and any(len(group) < 2 for group in groups):
-            raise ValueError('Planning requires at least two distinct ETFs in every combination; pair a representative ETF with a researched alternative')
-        if len({tuple(group) for group in groups}) != 10:
-            raise ValueError('The ten ETF combinations must be distinct')
+        if len({tuple(group) for group in groups}) != len(groups):
+            raise ValueError('ETF combinations must be distinct')
+        allocations = args.get('preferred_allocations', [])
+        if not isinstance(allocations, list) or len(allocations) > 5 or any(
+            not isinstance(row, dict) or set(row) != {'instrument_id', 'weight_pct'}
+            or not isinstance(row['instrument_id'], str) or type(row['weight_pct']) is not int
+            or not 10 <= row['weight_pct'] <= 100 or row['weight_pct'] % 10 for row in allocations):
+            raise ValueError('Preferred allocations need distinct ETF IDs and positive 10-percent weights totaling 100')
+        preferred = tuple(sorted((row['instrument_id'], row['weight_pct']) for row in allocations))
+        if preferred and (sum(weight for _, weight in preferred) != 100 or [key for key, _ in preferred] not in groups):
+            raise ValueError('Preferred allocations must total 100 and match one submitted ETF combination')
         conflicts = self.policy_conflicts()
         if conflicts:
             self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT',
@@ -141,15 +155,17 @@ class Optimizer:
             if any(not any(allocation_error(self.market.catalog[key], account, self.request.preferences.tax_profile) is None
                            for account in accounts) for key in ids):
                 raise ValueError('Each candidate ETF needs an eligible selected account; replace ineligible ETFs before submitting')
-        batch = tuple(sorted(map(tuple, groups)))
+        batch = (tuple(sorted(map(tuple, groups))), preferred)
         if batch in self.batches and self.result and not self.result.get('failures') and self.result['status'] != 'unavailable':
             return self.result
         if self.attempts.get(batch, 0) >= 2:
             return {**(self.result or {}), 'retry_reason': 'BATCH_RETRY_EXHAUSTED'}
-        if batch not in self.batches and (len(self.batches) >= 4 or len(set().union(*map(set, self.groups), ids)) > 40):
-            raise ValueError('SEARCH_RESOURCE_LIMIT: at most four distinct batches and forty ETFs; preserve constraints and report searched scope')
+        if batch not in self.batches and (len(self.batches) >= 100 or len(set().union(*map(set, self.groups), ids)) > 40):
+            raise ValueError('SEARCH_RESOURCE_LIMIT: at most one hundred batches and forty ETFs; preserve constraints and report searched scope')
         self.attempts[batch] = self.attempts.get(batch, 0) + 1
         self.batches.add(batch)
+        if preferred and preferred not in self.preferred:
+            self.preferred.append(preferred)
         self.groups.extend(group for group in groups if group not in self.groups)
         groups = [list(group) for group in self.groups]
         ids = set().union(*map(set, groups))
@@ -307,7 +323,7 @@ class Optimizer:
                         rows.remove(row)
                         continue
                     row['income_yield_pct'] = sum(weight * dividend['trailing_yield_pct'] for weight, dividend in zip(row['weights'], dividends)) if all(dividends) else None
-            candidates = rank(results, eligible, self.decision.objectives)
+            candidates = rank(results, eligible, self.decision.objectives, self.preferred)
             if self.revision > 1:
                 for candidate in candidates:
                     candidate['candidate_id'] = f'r{self.revision}-' + candidate['candidate_id']
@@ -399,8 +415,6 @@ class Optimizer:
                 required.update(rule.instrument_ids)
             if rule.kind == 'min_weight' and rule.value > 0 and rule.instrument_ids == ['CASH:KRW'] or rule.kind == 'require' and 'CASH:KRW' in rule.instrument_ids:
                 conflicts.append('CASH_REQUIRED_BUT_SERVICE_CASH_ZERO')
-            if self.request and self.request.planning and rule.kind == 'max_positions' and rule.value < 2:
-                conflicts.append('PLANNING_REQUIRES_TWO_ETFS')
         for rule in self.decision.constraints:
             if rule.kind == 'max_weight' and rule.value < 10 and required.intersection(rule.instrument_ids):
                 conflicts.append('REQUIRED_ETF_BELOW_TEN_PERCENT_GRID')
@@ -410,7 +424,7 @@ class Optimizer:
 
     def validate(self, final):
         if self.result is None:
-            raise ValueError('Call optimize_portfolios with ten combinations before publishing')
+            raise ValueError('Call optimize_portfolios before publishing')
         candidates = self.result['candidates']
         if not candidates:
             if final.recommendation is not None or final.selected_candidate_id is not None or final.return_forecast is not None:
@@ -427,15 +441,16 @@ class Optimizer:
         for row in final.recommendation.allocations:
             actual[row.instrument_id] = actual.get(row.instrument_id, Decimal(0)) + Decimal(str(row.weight_pct))
         expected = {row['instrument_id']: row['weight_pct'] for row in candidate['allocations']}
-        if self.request and self.request.planning and len(actual) < 2:
-            raise ValueError('Planning requires at least two distinct ETFs')
         if actual != expected:
             raise ValueError(f'Final allocation must exactly match {candidate["candidate_id"]}: {expected}; use candidate_id, not rank, to identify the candidate')
         return candidate
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': 'ETF 조합 10개를 최적화한다. 서비스 기준 통과 후 고객 제약을 검사하고 목적 우선순위로 정렬한다. 다른 조합으로 재탐색 가능; 누적 전체 후보를 같은 공통 기간으로 재계산한다. 현금 0%, 10% 단위, 조합당 최대 5종, 배치당 20종, 전체 4배치·40종. 현재 revision의 후보만 선택한다.',
-    'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 10, 'maxItems': 10,
-        'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}}},
+    'description': 'ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 과거 성과 순위는 참고다. 원하는 비중은 preferred_allocations로 직접 검산해 선택 후보에 추가한다. 새 ETF 조합이나 같은 조합의 다른 비중도 재검토할 수 있다. 누적 후보는 같은 기간으로 재계산한다. 현금 0%, 10% 단위, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
+        'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
+        'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {
+            'instrument_id': {'type': 'string'}, 'weight_pct': {'type': 'integer', 'minimum': 10, 'maximum': 100}},
+            'required': ['instrument_id', 'weight_pct'], 'additionalProperties': False}}},
         'required': ['combinations'], 'additionalProperties': False}}}

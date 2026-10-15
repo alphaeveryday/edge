@@ -19,10 +19,10 @@ async def test_two_overlapping_batches_do_not_count_as_twenty_distinct_alternati
     assert repeated['search_progress'] == first['search_progress']
     second = await optimizer.tool({'combinations': groups[:8] + groups[10:12]})
     assert second['search_progress']['unique_combinations'] == 12
-    assert not second['search_progress']['alternatives_explored']
+    assert 'alternatives_explored' not in second['search_progress']
     third = await optimizer.tool({'combinations': groups[10:20]})
     assert third['search_progress']['unique_combinations'] == 20
-    assert third['search_progress']['alternatives_explored']
+    assert 'alternatives_explored' not in third['search_progress']
     assert third['search_progress']['unique_etfs'] == 5
 
 
@@ -34,10 +34,10 @@ async def test_failed_price_search_still_reports_its_actual_search_scope():
     result = await Optimizer(market, request).tool({'combinations': [list(pair) for pair in combinations(market.catalog, 2)]})
     assert result['status'] == 'unavailable'
     assert result['search_progress']['unique_combinations'] == 10
-    assert result['search_progress']['remaining_batches'] == 3
+    assert result['search_progress']['remaining_batches'] == 99
 
 
-async def test_agent_continues_after_two_batches_with_only_twelve_unique_combinations(monkeypatch):
+async def test_search_capacity_does_not_falsely_label_explored_alternatives_as_unsearched(monkeypatch):
     import json
     from edge_portfolio.agent import run_analysis
     from report_fixtures import final_payload
@@ -46,7 +46,7 @@ async def test_agent_continues_after_two_batches_with_only_twelve_unique_combina
     class Search:
         def __init__(self, *args):
             self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET',
-                'search_progress': {'unique_combinations': 12, 'unique_etfs': 5, 'remaining_batches': 2, 'alternatives_explored': False}}
+                'search_progress': {'unique_combinations': 20, 'unique_etfs': 5, 'remaining_batches': 2}}
             self.batches = {'first', 'second'}
             instances.append(self)
         def validate(self, final): return None
@@ -58,9 +58,7 @@ async def test_agent_continues_after_two_batches_with_only_twelve_unique_combina
         if role == 'question': content['decision'] = {}
         if role == 'opinion':
             opinions.append(1)
-            if len(opinions) == 2:
-                assert 'ALTERNATIVE_SEARCH_NOT_PERFORMED' in payload['messages'][-1]['content']
-                instances[0].result['search_progress'].update(unique_combinations=20, alternatives_explored=True)
+            assert 'ALTERNATIVE_SEARCH_NOT_PERFORMED' not in payload['messages'][-1]['content']
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=Evidence())
-    assert len(opinions) == 2
+    assert len(opinions) == 1
