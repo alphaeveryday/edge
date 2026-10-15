@@ -29,4 +29,4 @@ ECS 클러스터 분리·RDS·CloudFront 등 실 배포 토폴로지.
 
 ---
 
-[← 3 시스템 아키텍처](3-system-architecture.md) · [목록](index.md)
+[← 3 시스템 아키텍처](3-system-architecture.md) · [목록](index.md) · [다음 → 5 데이터 파이프라인](5-data-pipeline.md)
