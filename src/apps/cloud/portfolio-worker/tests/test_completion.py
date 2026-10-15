@@ -358,7 +358,7 @@ async def test_missing_answer_reenters_research_without_consuming_format_repairs
 
 
 @pytest.mark.parametrize('missing_input', [False, True])
-async def test_quality_withholding_requires_a_new_search_before_no_match(monkeypatch, missing_input):
+async def test_no_match_does_not_require_a_fixed_number_of_search_batches(monkeypatch, missing_input):
     import json
     from edge_portfolio.agent import run_analysis
     from test_agent import Evidence
@@ -367,26 +367,19 @@ async def test_quality_withholding_requires_a_new_search_before_no_match(monkeyp
             self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CRITERIA_NOT_MET'}
             self.batches = {'first'}
         def validate(self, final): return None
-        async def tool(self, args):
-            assert args == {'combinations': [['new-alternative']]}
-            self.batches.add('alternative')
-            return self.result
     monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
     stages, opinions = [], []
     async def model(payload):
         role = stages[-1]
         if role == 'opinion':
             opinions.append(1)
-            if len(opinions) == 2:
-                assert 'ALTERNATIVE_SEARCH_NOT_PERFORMED' in payload['messages'][-1]['content']
-                return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
-                    {'id': 'alternative', 'type': 'function', 'function': {'name': 'optimize_portfolios', 'arguments': json.dumps({'combinations': [['new-alternative']]})}}]}}]}
+            assert 'ALTERNATIVE_SEARCH_NOT_PERFORMED' not in payload['messages'][-1]['content']
         content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'quality_failed'} if role == 'opinion' else final_payload()[role]
         if role == 'question': content = {**content, 'decision': {'missing_inputs': ['납입 금액이 필요해요.']} if missing_input else {}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
     result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
-    assert len(opinions) == 3
+    assert len(opinions) == 1
     assert result['completion']['status'] == 'no_match'
 
 
