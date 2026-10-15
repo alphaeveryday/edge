@@ -133,7 +133,9 @@ def test_movement_calls_commit_before_final_publication_and_retry_does_not_call_
         calls.append(True)
         reference=news_reference(kwargs)
         with factory() as connection:
-            assert connection.execute('SELECT status FROM tool_runs WHERE tool_run_id=%s',(reference,)).fetchone()==('completed',)
+            assert connection.execute('''SELECT r.status FROM tool_runs r JOIN tool_definitions d USING(tool_id)
+                WHERE r.movement_analysis_id=%s AND d.function_name='get_issue_evidence' ''',
+                (kwargs['artifacts'].name,)).fetchone()==('completed',)
         return {'new_items':[dict(candidate_id='new',type='이슈',title_keyword='신규 계약',sentence='공급 물량을 확보했어요.',sentiment='positive',tool_run_ids=[reference])],
                 'selected_item_ids':['new'],'summary':'공급 물량을 확보했어요.'}
     result,identity=request('movement',model)
@@ -152,7 +154,7 @@ def test_model_failure_keeps_committed_evidence_and_never_publishes(run_context)
         request('movement',model,identity=identity)
     with factory() as connection:
         assert connection.execute('SELECT status FROM movement_analyses WHERE analysis_id=%s',(identity,)).fetchone()==('failed',)
-        assert connection.execute('SELECT count(*) FROM tool_runs WHERE movement_analysis_id=%s',(identity,)).fetchone()==(1,)
+        assert connection.execute('SELECT count(*) FROM tool_runs WHERE movement_analysis_id=%s',(identity,)).fetchone()==(5,)
         assert connection.execute('SELECT count(*) FROM movement_items WHERE analysis_id=%s',(identity,)).fetchone()==(0,)
 
 
