@@ -4,6 +4,36 @@ import pytest
 from edge_portfolio.exa_transport import ExaTransport
 
 
+@pytest.mark.parametrize('error_type', [httpx.ConnectError, httpx.ConnectTimeout])
+async def test_temporary_connection_failure_does_not_cancel_the_mcp_analysis(monkeypatch, error_type):
+    calls, waits = [], []
+    async def sleep(delay): waits.append(delay)
+    async def respond(request):
+        calls.append(await request.aread())
+        if len(calls) == 1: raise error_type('temporary connection failure')
+        return httpx.Response(200, json={'ok': True})
+    monkeypatch.setattr('edge_portfolio.exa_transport.asyncio.sleep', sleep)
+    async with httpx.AsyncClient(transport=ExaTransport(httpx.MockTransport(respond))) as client:
+        response = await client.post('https://mcp.exa.ai/mcp', json={'method': 'tools/call'})
+    assert response.status_code == 200
+    assert calls[0] == calls[1]
+    assert waits == [2]
+
+
+@pytest.mark.parametrize('url,expected_calls', [('https://mcp.exa.ai/mcp', 3), ('https://other.example/mcp', 1)])
+async def test_persistent_connection_failure_is_bounded_and_not_hidden(monkeypatch, url, expected_calls):
+    calls = []
+    async def sleep(delay): pass
+    async def respond(request):
+        calls.append(1)
+        raise httpx.ConnectError('offline')
+    monkeypatch.setattr('edge_portfolio.exa_transport.asyncio.sleep', sleep)
+    async with httpx.AsyncClient(transport=ExaTransport(httpx.MockTransport(respond))) as client:
+        with pytest.raises(httpx.ConnectError):
+            await client.post(url, json={'method': 'tools/call'})
+    assert len(calls) == expected_calls
+
+
 async def test_exa_key_only_reaches_the_https_exa_origin_and_survives_retry(monkeypatch):
     requests = []
     async def sleep(delay): pass

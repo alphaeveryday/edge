@@ -1,4 +1,4 @@
-"""Bounded retries for temporary rate limits before MCP sees the response."""
+"""Bounded retries for temporary connection failures and rate limits."""
 import asyncio
 import math
 from datetime import datetime, timezone
@@ -19,7 +19,13 @@ class ExaTransport(httpx.AsyncBaseTransport):
             request.headers.pop('x-api-key', None)
         await request.aread()
         for attempt in range(3):
-            response = await self.transport.handle_async_request(request)
+            try:
+                response = await self.transport.handle_async_request(request)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if attempt == 2 or request.url.host != 'mcp.exa.ai' or request.method not in {'GET', 'POST'}:
+                    raise
+                await asyncio.sleep(2 ** (attempt + 1))
+                continue
             if response.status_code != 429 or attempt == 2 or request.url.host != 'mcp.exa.ai' or request.method not in {'GET', 'POST'}:
                 return response
             raw = response.headers.get('Retry-After', '')
