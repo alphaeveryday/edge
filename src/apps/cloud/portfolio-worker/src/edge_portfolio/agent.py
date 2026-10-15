@@ -507,6 +507,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
                     if role == 'opinion':
                         validation_step = 'report_schema'
+                        if raw.get('withheld_reason') == 'null':
+                            raw['withheld_reason'] = None
+                            emit('structured_output_normalized', role=role, field='withheld_reason', code='QUOTED_NULL')
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_recommendation, retain_research
                         retained = retain_recommendation(final, accepted_final if optimizer.result == accepted_search else None)

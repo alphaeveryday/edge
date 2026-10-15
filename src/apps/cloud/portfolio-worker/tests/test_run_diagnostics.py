@@ -11,6 +11,30 @@ from report_fixtures import final_payload
 from test_agent import Evidence, optimization_call
 
 
+@pytest.mark.parametrize('reason', ['null', 'customer_failed', 'unknown_reason'])
+async def test_nullable_provider_metadata_cannot_discard_an_otherwise_valid_report(monkeypatch, reason):
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
+        def validate(self, final): return None
+    phases = []
+    async def model(payload):
+        role = phases[-1]
+        content = {**final_payload(), 'recommendation': None, 'withheld_reason': reason} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    if reason == 'unknown_reason':
+        with pytest.raises(ValueError, match='withheld_reason'):
+            await run_analysis(request, 'test', phases.append, model_call=model, evidence=Evidence())
+        return
+    result = await run_analysis(request, 'test', phases.append, model_call=model, evidence=Evidence())
+    assert 'opinion' in result['sections']
+    repairs = [event for event in result['diagnostics']['events'] if event['event'] == 'structured_output_normalized']
+    assert len(repairs) == (1 if reason == 'null' else 0)
+
+
 async def test_nested_timeout_preserves_progress_and_has_a_timeout_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-key-must-not-leak')
