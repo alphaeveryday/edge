@@ -69,11 +69,19 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     questions = decision.questions or ([request.question] if request.question else [])
     answers = {}
     for answer in final.answers:
-        if answer.question_index > len(questions) or answer.question_index in answers:
+        index = 1 if len(questions) == 1 else answer.question_index
+        if index > len(questions) or len(questions) != 1 and index in answers:
             raise ValueError('ANSWER_QUESTION_INDEX: answer each actual question once')
         if answer.status != 'answered' and not answer.missing:
             raise ValueError('ANSWER_MISSING_REASON: state the exact input or research still needed')
-        answers[answer.question_index] = answer.model_dump(mode='json')
+        part = {**answer.model_dump(mode='json'), 'question_index': index}
+        if index in answers:
+            previous = answers[index]
+            part['answer'] = previous['answer'] + '\n' + part['answer']
+            part['missing'] = list(dict.fromkeys([*previous['missing'], *part['missing']]))
+            part['status'] = next(status for status in ('needs_input', 'partial', 'answered')
+                                  if status in {previous['status'], part['status']})
+        answers[index] = part
     tasks = [{'question': question, **answers.get(index, {'question_index': index, 'status': 'partial',
                'answer': '', 'missing': ['QUESTION_NOT_ANSWERED']})} for index, question in enumerate(questions, 1)]
     today = date.fromisoformat(as_of[:10])

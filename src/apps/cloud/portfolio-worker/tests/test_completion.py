@@ -38,6 +38,20 @@ def test_an_actual_customer_question_preserves_its_specific_missing_input():
     assert result['missing_inputs'] == ['목표 금액']
 
 
+@pytest.mark.parametrize('second_status,missing', [('answered', []), ('needs_input', ['확인할 실행 금액']), ('partial', ['확인하지 못한 자료'])])
+def test_multiple_answer_parts_to_one_customer_request_preserve_the_report(second_status, missing):
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='추천 비중과 계좌 활용 순서를 알려주세요.')
+    final = FinalReport.model_validate({**final_payload(), 'answers': [
+        {'question_index': 1, 'status': 'answered', 'answer': '추천 구성은 VOO 60%와 BND 40%입니다.'},
+        {'question_index': 2, 'status': second_status, 'answer': '새 납입금은 ISA를 먼저 활용하는 기본안을 제안합니다.', 'missing': missing}]})
+    result = assess_completion(final, request, Decision(), {'recommendation': {'allocations': []}}, [], '2026-10-15')
+    assert len(result['tasks']) == 1
+    assert result['tasks'][0]['question'] == request.question
+    assert all(answer.answer in result['tasks'][0]['answer'] for answer in final.answers)
+    assert result['tasks'][0]['status'] == second_status
+    assert result['tasks'][0]['missing'] == missing
+
+
 def test_execution_inputs_remain_required_even_without_an_explicit_question():
     request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
     result = assess_completion(FinalReport.model_validate(final_payload()), request, Decision(kind='new_money'),
