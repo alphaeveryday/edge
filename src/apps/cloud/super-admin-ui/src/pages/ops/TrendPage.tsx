@@ -9,13 +9,13 @@
  *   · 지표마다 **판정 규칙이 다르다**(trendMetrics 의 comparisonType) — 완전성 95% 미만과
  *     산출량 ±25% 를 같은 자로 재지 않는다.
  *   · 단위·규모가 다른 지표를 한 y 축에 겹치지 않는다 — 지표마다 독립 그래프.
- *   · 중앙값·정상 범위·편차·판정이 **전부 같은 계열**에서 나온다.
+ *   · 실측 과거가 없는 지표는 조회일 값 한 점만 그린다 — 과거를 만들지 않는다.
  *   · 이 화면은 이상을 지목하기만 하고 원인은 말하지 않는다.
  *
  * 뉴스 단계별 감소(퍼널)는 데이터 화면 소관이라 여기서 반복하지 않는다.
  */
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import { InfoPopover } from '../_shared/InfoPopover';
@@ -25,8 +25,12 @@ import { asOfLabel } from './trendAsOf';
 import type { Metric, MetricGroup, Verdict } from './trendMetrics';
 import { buildMetrics } from './trendCatalog';
 import { useMinuteStatus } from '../../domains/sources/hooks';
-import { useEntityResolutionTrend } from '../../domains/console/hooks';
+import { useAnalysisTrend, useEntityResolutionTrend } from '../../domains/console/hooks';
 import { extent, points } from './trendSeries';
+import { RunSeriesSection, RunSpark } from './RunSeriesSection';
+import { MinuteSeriesSection } from './MinuteSeriesSection';
+import { AnalysisSeriesSection } from './AnalysisSeriesSection';
+import { outputSeries } from '../../domains/sources/dailySeries';
 import '../../styles/ops.css';
 
 type Filter = 'abnormal' | MetricGroup;
@@ -46,14 +50,13 @@ const SCOPE_TIP = [
   'Cloud 게시 · 테넌트 발번 · 소비자 전달 · 테넌트별 상태는 전달 화면 소관이라 지표로 두지 않는다.',
   '',
   '판정 규칙은 지표마다 다르다:',
-  '  산출량 — 직전 10영업일 중앙값 대비 ±25%',
+  '  산출량 — 응답의 기준값(최근 기준일들의 중앙값) 대비 ±25%',
   '  완전성·비율 — 계약된 최소 비율 미만',
   '  기준일 지연 — 허용 거래일 초과',
-  '  워터마크 — 허용 지연 시간 초과',
   '  무증거·실패 수 — 임계 초과',
   '  계측 없음 — 근거가 없으면 정상으로도 실패로도 세지 않는다',
   '',
-  '중앙값 · 정상 범위 · 편차 · 판정은 모두 같은 계열에서 계산된다.',
+  '일별 계열을 주는 응답이 없는 지표는 조회일 값 한 점만 그린다. 과거 값을 만들지 않는다.',
 ].join('\n');
 
 /** 지표 하나의 작은 그래프 — 자기 y 범위를 갖는다(공통 축 금지) */
@@ -154,17 +157,11 @@ function MetricCard({ metric, today }: { metric: Metric; today: string }) {
       </div>
 
       <div className="tr-foot t-xs">
-        {/* 실측과 목을 시각적으로 가른다 — 계열 전체가 목인지, 오늘만 실측인지까지 */}
+        {/* 응답이 목이라고 밝힌 값은 칩으로 가른다 */}
         {mockPoints === 0 ? (
           <span className="chip">{metric.source}</span>
-        ) : mockPoints === metric.series.length ? (
-          /* 계열 전체가 실측이 아닐 때 **무엇이 아닌지**는 출처가 정한다 — 지어낸 값(MOCK)과
-             한때 관측한 스냅샷을 한 칩에 그리면 그 둘을 못 가른다. */
-          <span className="chip chip-warn">
-            {metric.source === 'SNAPSHOT' ? `${asOf ?? ''} 스냅샷 계열`.trim() : 'MOCK 계열'}
-          </span>
         ) : (
-          <span className="chip">{asOf} 실측 · 과거 MOCK</span>
+          <span className="chip chip-warn">MOCK 계열</span>
         )}
         <Link to={metric.drill.href} className="tr-drill">
           {metric.drill.label} →
@@ -179,21 +176,32 @@ export function TrendPage() {
   const q = useConsoleFactsQuery();
   const minute = useMinuteStatus(q.ready ? q.facts.meta.today : undefined, q.ready);
   const entityResolution = useEntityResolutionTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
-  useFocusRow(q.ready);
-
+  const analysis = useAnalysisTrend(q.ready ? q.facts.meta.today : undefined, q.ready);
   /* 필터를 바꿔도 다시 평가하지 않는다(상태만 바뀐다). **`useState` 초기화가 아니라
    * `useMemo`** 인 이유: 지표가 이제 응답에서 만들어져 1분마다 갱신되는데, 초기화 함수는
    * 한 번만 돌아 화면이 첫 응답에 영원히 고정된다. */
   const evaluated = useMemo(
     () => {
       if (!q.ready) return [];
-      const metrics = buildMetrics(q.facts, minute.data, entityResolution.data);
+      const metrics = buildMetrics(q.facts, minute.data, entityResolution.data, analysis.data);
       return metrics
         .filter((m) => entityResolution.data !== undefined || m.id !== 'n.entity_resolution_rate')
         .map((m) => ({ m, v: evaluateMetric(m) }));
     },
-    [q, minute.data, entityResolution.data],
+    [q, minute.data, entityResolution.data, analysis.data],
   );
+  const isShown = (x: (typeof evaluated)[number]) =>
+    filter === 'abnormal' ? x.v.kind === 'abnormal' : x.m.group === filter;
+  /* 지표 카드로 넘어온 포커스(예: R15 → 분석 실패 ETF 카드)는 **그 카드가 실제로 그려진 뒤에** 건다.
+   * 카드는 별도 조회(분석 추이·엔티티 해소율·분봉)의 응답이 와야 값이 서고, 기본 필터(이상 지표)
+   * 에서는 이상이 되기 전까지 DOM 에 없다. 조회 상태로 조건을 걸면 첫 조회 실패 뒤의 재조회 성공,
+   * 캐시된 옛 응답 뒤의 갱신처럼 빠지는 경우가 계속 나온다 — 그래서 조회가 아니라 **카드의 존재**를
+   * 본다. 카드가 아닌 앵커(산출 축 표 등)는 사실 조회만 기다린다. */
+  const [params] = useSearchParams();
+  const focus = params.get('focus');
+  const focusMounted =
+    !focus?.startsWith('metric-') || evaluated.some((x) => `metric-${x.m.id}` === focus && isShown(x));
+  useFocusRow(q.ready && focusMounted);
   if (!q.ready) return <ConsoleGate q={q} />;
   const counts: Record<Filter, number> = {
     abnormal: evaluated.filter((x) => x.v.kind === 'abnormal').length,
@@ -202,10 +210,7 @@ export function TrendPage() {
     news: evaluated.filter((x) => x.m.group === 'news').length,
     analysis: evaluated.filter((x) => x.m.group === 'analysis').length,
   };
-  const shown =
-    filter === 'abnormal'
-      ? evaluated.filter((x) => x.v.kind === 'abnormal')
-      : evaluated.filter((x) => x.m.group === filter);
+  const shown = evaluated.filter(isShown);
   const uninstrumented = evaluated.filter((x) => x.v.kind === 'uninstrumented').length;
   const entityResolutionPending = entityResolution.isPending && entityResolution.data === undefined;
   const entityResolutionFailed = entityResolution.isError && entityResolution.data === undefined;
@@ -214,9 +219,15 @@ export function TrendPage() {
     <div className="flex flex-col gap-4">
       <AxisHeader q={q} question="주요 데이터셋의 산출량과 품질이 평소 또는 운영 기준에서 벗어났는가?" />
 
+      {minute.isPending && (
+        <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
+          분봉 상태를 불러오는 중입니다 — 분봉 지표는 응답 뒤에 판정합니다.
+        </p>
+      )}
+
       {minute.isError && (
         <p className="t-xs m-0" style={{ color: 'var(--warn)' }}>
-          분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 MOCK 계열입니다.'}
+          분봉 상태 재조회에 실패했습니다 — {minute.data ? '직전 실측을 유지합니다.' : '분봉 지표는 판정하지 않습니다.'}
         </p>
       )}
 
@@ -241,16 +252,37 @@ export function TrendPage() {
           </span>
         </div>
         <table className="table">
-          <thead><tr><th>산출</th><th className="num">오늘</th><th className="num">기준</th><th>단위</th></tr></thead>
+          <thead>
+            <tr>
+              <th>산출</th><th className="num">오늘</th><th className="num">기준</th><th>단위</th>
+              <th>
+                기준일 추이
+                <Info
+                  tip={'기준을 낸 직전 거래일들의 건수입니다(최대 10일). 조회일 값은 이 그래프에 들어 있지 않습니다 — 조회일이 오늘이면 아직 쌓이는 중인 값이라 왼쪽 "오늘" 칸에 따로 둡니다.\n\n0 은 그날 산출이 없었다는 실측입니다.'}
+                  label="기준일 추이 읽는 법"
+                />
+              </th>
+            </tr>
+          </thead>
           <tbody>
-            {q.facts.outputs.map((output) => (
-              <tr key={output.id} id={`out-${output.id}`}>
-                <td>{output.label} <span className="mono t-xs">{output.id}</span></td>
-                <td className="num">{output.today.toLocaleString('ko-KR')}</td>
-                <td className="num">{output.base?.toLocaleString('ko-KR') ?? '—'}</td>
-                <td>{output.unit}</td>
-              </tr>
-            ))}
+            {q.facts.outputs.map((output) => {
+              const series = outputSeries(output);
+              return (
+                <tr key={output.id} id={`out-${output.id}`}>
+                  <td>{output.label} <span className="mono t-xs">{output.id}</span></td>
+                  <td className="num">{output.today.toLocaleString('ko-KR')}</td>
+                  <td className="num">{output.base?.toLocaleString('ko-KR') ?? '—'}</td>
+                  <td>{output.unit}</td>
+                  <td>
+                    {series && series.values.length > 0 ? (
+                      <RunSpark label={`${output.label} 기준일 추이`} runs={series.dates} values={series.values} unit="기준일" />
+                    ) : (
+                      <span className="rs-latest" style={{ color: 'var(--fg-3)' }}>기록 없음</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -308,13 +340,19 @@ export function TrendPage() {
 
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 12 }}>
             조회일 {q.facts.meta.today} 기준(원장이 아는 가장 최근 날 — 거래일 달력이 아닙니다) ·
-            DB_LEDGER 계열은 카드에 표시된 날짜의 실측입니다. 일별 API가 없는 지표의 과거 점만
-            검수용 목이며, 응답 밖 값은 스냅샷 칩으로 구분합니다. 뉴스의 단계별 감소는{' '}
+            DB_LEDGER 계열은 카드에 표시된 날짜의 실측입니다. 일별 API가 없는 지표는 조회일 값
+            한 점만 그립니다. 뉴스의 단계별 감소는{' '}
             <Link to="/ops/datasets?focus=news-funnel">데이터 화면의 뉴스 처리 퍼널</Link>이 답합니다 —
             여기서 반복하지 않습니다.
           </p>
         </div>
       </div>
+
+      <AnalysisSeriesSection trend={analysis} />
+
+      <RunSeriesSection />
+
+      <MinuteSeriesSection />
     </div>
   );
 }

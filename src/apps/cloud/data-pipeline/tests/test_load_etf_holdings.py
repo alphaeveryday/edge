@@ -10,6 +10,7 @@ ck_etf_holding_weight_ratio([0,1])로 배치가 죽고, 두 FK(ETF·구성종목
 
 import io
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -274,7 +275,7 @@ def test_snapshot_status가_거부행과_정확한_version을_보존한다(tmp_p
     monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
 
     assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
-    assert conn.statuses[("inst_kodex", "2026-07-16")] == (3, 1, "R1")
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (3, 1, "R1", None)
 
 
 def test_snapshot_status의_valid는_실제_stamp_가능한_행만_세는다(tmp_path, monkeypatch):
@@ -292,7 +293,46 @@ def test_snapshot_status의_valid는_실제_stamp_가능한_행만_세는다(tmp
     monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
 
     assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
-    assert conn.statuses[("inst_kodex", "2026-07-16")] == (3, 1, "R1")
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (3, 1, "R1", Decimal("0.2"))
+
+
+def test_snapshot_status는_적재하지_않는_현금_행의_비중_합을_남긴다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1244): 현금이 음수면 적재된 주식만의 합이 1을 넘는다(388420 10-02 주식 100.15%·현금 -0.15%).
+    # 분석 엔진이 그 초과를 오류와 구별하려면 버려지는 현금 행의 비중이 상태 표에 남아야 한다.
+    # 합은 원천 십진값 그대로(이진 부동소수 잡음 없이)이고, 비중을 모르는 현금 행이 섞이거나
+    # 현금 행이 없으면 0 으로 지어내지 않고 NULL(확인 못 함)이다.
+    cash = dict(constituent_mic=None, constituent_asset_type="CASH")
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16", [
+        _hold_row(constituent_ticker="005930", weight_pct=60.15),
+        _hold_row(constituent_ticker="000660", weight_pct=40.0),
+        _hold_row(constituent_ticker="KRD010010001", weight_pct=-0.15, **cash),
+    ])
+    _write_canonical(storage, "KR", "2026-07-17", [
+        _hold_row(as_of_date="2026-07-17", weight_pct=99.36),
+        _hold_row(as_of_date="2026-07-17", constituent_ticker="KRD010010001", weight_pct=0.63, **cash),
+        _hold_row(as_of_date="2026-07-17", constituent_ticker="KRD010010002", weight_pct=0.01, **cash),
+    ])
+    _write_canonical(storage, "KR", "2026-07-20", [
+        _hold_row(as_of_date="2026-07-20", weight_pct=99.0),
+        _hold_row(as_of_date="2026-07-20", constituent_ticker="KRD010010001", weight_pct=0.5, **cash),
+        _hold_row(as_of_date="2026-07-20", constituent_ticker="KRD010010002", weight_pct=None, **cash),
+    ])
+    _write_canonical(storage, "KR", "2026-07-21", [_hold_row(as_of_date="2026-07-21", weight_pct=100.0)])
+    _write_canonical(storage, "KR", "2026-07-22", [  # float64 가 담는 17자리를 그대로 나눈다
+        _hold_row(as_of_date="2026-07-22", weight_pct=99.0),
+        _hold_row(as_of_date="2026-07-22", constituent_ticker="KRD010010001",
+                  weight_pct=0.12345678901234566, **cash),
+    ])
+    conn = _FakeConn()
+    monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
+
+    assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
+    cash_by_day = {day: status[3] for (_etf, day), status in conn.statuses.items()}
+    # 07-17: 현금 행이 여럿이면 더한다(0.0063 + 0.0001).
+    assert cash_by_day == {"2026-07-16": Decimal("-0.0015"), "2026-07-17": Decimal("0.0064"),
+                           "2026-07-20": None, "2026-07-21": None,
+                           "2026-07-22": Decimal("0.0012345678901234566")}
 
 
 def test_snapshot_status_denominator는_part_중복을_논리_행으로_수렴한다(
@@ -314,7 +354,7 @@ def test_snapshot_status_denominator는_part_중복을_논리_행으로_수렴�
     monkeypatch.setattr(load_etf_holdings, "connect", _fake_connect(conn))
 
     assert load_etf_holdings.run(storage, "R1", db=_db()) == 0
-    assert conn.statuses[("inst_kodex", "2026-07-16")] == (1, 1, "R1")
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (1, 1, "R1", None)
 
 
 def test_snapshot_version이_교정에서_제거된_구성종목을_가린다(tmp_path, monkeypatch):
@@ -332,7 +372,7 @@ def test_snapshot_version이_교정에서_제거된_구성종목을_가린다(tm
 
     assert conn.existing_versions[("inst_kodex", "inst_samsung", "2026-07-16")] == "R2"
     assert conn.existing_versions[("inst_kodex", "inst_hynix", "2026-07-16")] == "R1"
-    assert conn.statuses[("inst_kodex", "2026-07-16")] == (1, 1, "R2")
+    assert conn.statuses[("inst_kodex", "2026-07-16")] == (1, 1, "R2", None)
 
 
 def test_미등록_ETF_는_적재하지_않고_수치로_남는다(tmp_path, monkeypatch):
@@ -910,3 +950,21 @@ def test_최신행의_MIC_정정은_구스키마_행과_하나로_수렴한다(t
     assert log["deduplicated_rows"] == 1
     assert log["ops"]["failed_records"] == 0
     assert len(_inserts(conn)) == 1
+
+
+def test_weight_ratio_keeps_the_source_decimal_value():
+    # WHY(ALPHA-1162): 분석 v2 는 저장된 비중을 십진수로 정확히 더해 합이 1 을 넘으면 그 ETF 분석을 시작하지 않는다.
+    # 퍼센트를 이진 부동소수로 나누면(27.94/100) 원천 값에서 한 눈금 어긋난 0.27940000000000004 가 저장되고, 그 잡음이
+    # 더해져 주식 비중 합이 정확히 100.00% 인 스냅샷(069500, 2026-10-02 실측)이 1.0000000000000000362 로 거부됐다.
+    from decimal import Decimal
+
+    assert load_etf_holdings._weight_ratio(27.94) == (0.2794, True)
+    assert repr(load_etf_holdings._weight_ratio(2.84)[0]) == "0.0284"
+    # 2026-10-02 069500 의 상위 비중(%) — 옛 변환은 이 다섯 값 가운데 넷이 한 눈금씩 어긋났다.
+    for pct in (34.25, 27.94, 2.84, 2.33, 1.36):
+        ratio, ok = load_etf_holdings._weight_ratio(pct)
+        assert ok and Decimal(repr(ratio)) * 100 == Decimal(repr(pct))
+    # 합이 정확히 100.00% 인 비중 묶음은 저장값을 십진수로 더해도 정확히 1 이다.
+    pcts = [34.25, 27.94, 2.84, 2.33, 1.36] + [0.31] * 100 + [0.28]
+    assert sum(Decimal(repr(p)) for p in pcts) == 100
+    assert sum(Decimal(repr(load_etf_holdings._weight_ratio(p)[0])) for p in pcts) == 1

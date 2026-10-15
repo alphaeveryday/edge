@@ -7,9 +7,7 @@ import com.edge.common.exception.ExceptionAdvice;
 import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
-import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ConsoleFacts;
-import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.EntityResolutionPoint;
 import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisPoint;
 import com.edge.superadmin.repository.ConsoleFactsRepository.IntradayAnalysisTrend;
@@ -71,7 +69,7 @@ class ConsoleControllerTest {
 	 * 통째로 건너뛰고, 그러면 다른 축을 겨눈 테스트들이 <b>체인이 없어도 통과하는</b> 응답 위에서
 	 * 돈다 — 축이 사라지는 회귀를 잡을 자리가 없어진다.
 	 */
-	private static final ChainRow EMPTY_CHAIN = chain(0L, 0L, 0L, 0L);
+	private static final ChainRow EMPTY_CHAIN = chain(0L, 0L, 0L);
 
 	private FakeConsoleFactsRepository repository;
 
@@ -95,18 +93,17 @@ class ConsoleControllerTest {
 	}
 
 	/**
-	 * 피드 둘 + 단계 하나짜리 체인. <b>네 수를 전부 다르게</b> 받는다 — 같은 값을 두면 갈래
+	 * 피드 둘 + v2 단계 하나짜리 체인. <b>세 수를 전부 다르게</b> 받는다 — 같은 값을 두면 갈래
 	 * 맞바꿈(batch↔intraday)도 피드↔단계 맞바꿈도 안 보인다.
 	 */
-	private static ChainRow chain(long feedBatch, long feedIntraday, long obsBatch,
-			long obsIntraday) {
+	private static ChainRow chain(long feedBatch, long feedIntraday, long requested) {
 		return new ChainRow(
 				List.of(new ChainFeed("feed.batch", "배치 트리거", "ETF", "price_movement_trigger",
 								feedBatch),
 						new ChainFeed("feed.intraday", "장중 트리거", "건", "minute_price_trigger",
 								feedIntraday)),
-				List.of(new ChainStage("c.obs", "관측", "etf_contribution_observation", obsBatch,
-						obsIntraday)));
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.req", "분석 요청",
+						"analysis_execution_requests", null, requested, false)));
 	}
 
 	/** 계약·신선도 여섯 컬럼은 <b>데이터셋 축의 재료</b>다 — 작업 축 와이어에 안 나간다. */
@@ -243,7 +240,7 @@ class ConsoleControllerTest {
 	@Test
 	void 체인_축은_피드와_단계를_순서대로_싣는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				chain(20L, 65L, 18L, 3L), List.of()))
+				chain(20L, 65L, 3L), List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.chain.feeds[0].id").value("feed.batch"))
@@ -252,12 +249,11 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.chain.feeds[1].id").value("feed.intraday"))
 				.andExpect(jsonPath("$.result.chain.feeds[1].v").value(65))
 				.andExpect(jsonPath("$.result.chain.feeds[1].unit").value("건"))
-				.andExpect(jsonPath("$.result.chain.stages[0].id").value("c.obs"))
-				.andExpect(jsonPath("$.result.chain.stages[0].label").value("관측"))
-				.andExpect(jsonPath("$.result.chain.stages[0].src")
-						.value("etf_contribution_observation"))
-				.andExpect(jsonPath("$.result.chain.stages[0].batch").value(18))
-				.andExpect(jsonPath("$.result.chain.stages[0].intraday").value(3));
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].id").value("c.req"))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(3))
+				// 옛 설명 엔진의 단계 목록은 지웠다(ALPHA-1329)
+				.andExpect(jsonPath("$.result.chain", org.hamcrest.Matchers.not(
+						org.hamcrest.Matchers.hasKey("stages"))));
 	}
 
 	/**
@@ -268,24 +264,23 @@ class ConsoleControllerTest {
 	@Test
 	void 체인의_0_은_필드를_빼지_않는다() throws Exception {
 		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				chain(20L, 65L, 0L, 0L), List.of()))
+				chain(0L, 65L, 0L), List.of()))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"batch\":0")))
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("\"intraday\":0")));
+				.andExpect(jsonPath("$.result.chain.feeds[0].v").value(0))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(0));
 	}
 
+	/**
+	 * 옛 설명 엔진의 ETF 원장({@code etfLedger})은 응답에 <b>없다</b>(ALPHA-1328) — 읽는 화면이 없다.
+	 * 옛 화면은 이 키가 없어도 응답을 받는다(검증 경계가 부재를 허용한다).
+	 */
 	@Test
-	void ETF_원장은_최신_트리거의_실행_상태를_싣는다() throws Exception {
-		mvc(new ConsoleFacts(DAY, DB_NOW, List.of(), List.of(), List.of(), CLEAN,
-				EMPTY_CHAIN, List.of(new EtfAnalysisRow("ETF-1", "첫 ETF", "FAILED"),
-						new EtfAnalysisRow("ETF-2", "둘째 ETF", null))))
-				.perform(get("/api/v1/console/facts"))
+	void 옛_엔진의_ETF_원장은_응답에_없다() throws Exception {
+		mvc(facts()).perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.result.etfLedger.rows[0].etf").value("ETF-1"))
-				.andExpect(jsonPath("$.result.etfLedger.rows[0].triggered").value(true))
-				.andExpect(jsonPath("$.result.etfLedger.rows[0].outcome").value("FAILED"))
-				.andExpect(jsonPath("$.result.etfLedger.rows[1].outcome").value(org.hamcrest.Matchers.nullValue()));
+				.andExpect(jsonPath("$.result", org.hamcrest.Matchers.not(
+						org.hamcrest.Matchers.hasKey("etfLedger"))));
 	}
 
 	/**
@@ -798,13 +793,23 @@ class ConsoleControllerTest {
 	@Test
 	void 산출은_실측_0_과_기준_없음을_가른다() throws Exception {
 		String body = mvc(factsWithOutput(
-				new OutputRow("o.pub", "게시 ETF", "종", 16L, 32.0d),
+				new OutputRow("o.outlook", "전망 완료 ETF", "종", 16L, 32.0d, List.of(
+						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
+								java.time.LocalDate.of(2026, 7, 30), 0L),
+						new com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay(
+								java.time.LocalDate.of(2026, 7, 31), 32L))),
 				new OutputRow("o.trig", "배치 트리거", "종", 0L, null)))
 				.perform(get("/api/v1/console/facts"))
 				.andExpect(status().isOk())
+				// 기준일별 건수(ALPHA-1289) — 0 은 실측이라 그대로 나가고, 표본이 없으면 빈 배열이다.
+				.andExpect(jsonPath("$.result.outputs[0].history.length()").value(2))
+				.andExpect(jsonPath("$.result.outputs[0].history[0].date").value("2026-07-30"))
+				.andExpect(jsonPath("$.result.outputs[0].history[0].count").value(0))
+				.andExpect(jsonPath("$.result.outputs[0].history[1].count").value(32))
+				.andExpect(jsonPath("$.result.outputs[1].history.length()").value(0))
 				.andExpect(jsonPath("$.result.outputs.length()").value(2))
-				.andExpect(jsonPath("$.result.outputs[0].id").value("o.pub"))
-				.andExpect(jsonPath("$.result.outputs[0].label").value("게시 ETF"))
+				.andExpect(jsonPath("$.result.outputs[0].id").value("o.outlook"))
+				.andExpect(jsonPath("$.result.outputs[0].label").value("전망 완료 ETF"))
 				.andExpect(jsonPath("$.result.outputs[0].unit").value("종"))
 				.andExpect(jsonPath("$.result.outputs[0].today").value(16))
 				.andExpect(jsonPath("$.result.outputs[0].base").value(32.0))
@@ -907,11 +912,18 @@ class ConsoleControllerTest {
 	@Test
 	void 장중_분석_추이는_기준시각과_서로_다른_단계_계수를_그대로_내린다() throws Exception {
 		MockMvc mvc = mvc(facts());
+		/* 새 분석 엔진 단계(ALPHA-1329) — 네 단계의 수와 판정 보류 둘을 전부 다르게 둔다. 둘째 날은
+		 * v2 요청이 없던 날이라 관측 불가다. */
+		java.util.function.BiFunction<Boolean, long[], List<com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage>> stages = (blind, n) -> List.of(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.req", "분석 요청", "analysis_execution_requests", null, n[0], blind, n[1]),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.start", "분석 시작", "movement_analyses", null, n[2], blind, n[3]),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.done", "분석 완료", "status=completed", null, n[4], blind),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.pub", "게시", "published_at IS NOT NULL", null, n[5], blind));
 		repository.intradayTrend = new IntradayAnalysisTrend(DB_NOW, List.of(
-				new IntradayAnalysisPoint(LocalDate.parse("2026-08-01"), 8L, 7L, 6L, 2L,
-						1L, 5L, 4L),
-				new IntradayAnalysisPoint(LocalDate.parse("2026-08-02"), 0L, 0L, 0L, 0L,
-						0L, 0L, 0L)));
+				new IntradayAnalysisPoint(LocalDate.parse("2026-08-01"), 8L,
+						stages.apply(false, new long[] {7, 1, 5, 2, 3, 1})),
+				new IntradayAnalysisPoint(LocalDate.parse("2026-08-02"), 0L,
+						stages.apply(true, new long[] {0, 0, 0, 0, 0, 0}))));
 
 		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
 						.param("maxDate", "2026-08-02").param("days", "2"))
@@ -920,13 +932,22 @@ class ConsoleControllerTest {
 				.andExpect(jsonPath("$.result.points.length()").value(2))
 				.andExpect(jsonPath("$.result.points[0].date").value("2026-08-01"))
 				.andExpect(jsonPath("$.result.points[0].triggers").value(8))
-				.andExpect(jsonPath("$.result.points[0].observations").value(7))
-				.andExpect(jsonPath("$.result.points[0].runs").value(6))
-				.andExpect(jsonPath("$.result.points[0].activeRuns").value(2))
-				.andExpect(jsonPath("$.result.points[0].failedRuns").value(1))
-				.andExpect(jsonPath("$.result.points[0].results").value(5))
-				.andExpect(jsonPath("$.result.points[0].published").value(4))
-				.andExpect(jsonPath("$.result.points[1].published").value(0));
+				// 옛 설명 엔진의 단계 필드는 지웠다(ALPHA-1330)
+				.andExpect(jsonPath("$.result.points[0]", org.hamcrest.Matchers.allOf(
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("observations")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("runs")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("activeRuns")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("failedRuns")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("results")),
+						org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("published")))))
+				.andExpect(jsonPath("$.result.points[0].analysis.blind").value(false))
+				.andExpect(jsonPath("$.result.points[0].analysis.requested").value(7))
+				.andExpect(jsonPath("$.result.points[0].analysis.requestPending").value(1))
+				.andExpect(jsonPath("$.result.points[0].analysis.started").value(5))
+				.andExpect(jsonPath("$.result.points[0].analysis.startPending").value(2))
+				.andExpect(jsonPath("$.result.points[0].analysis.completed").value(3))
+				.andExpect(jsonPath("$.result.points[0].analysis.published").value(1))
+				.andExpect(jsonPath("$.result.points[1].analysis.blind").value(true));
 
 		assertThat(repository.requestedIntradayMaxDate).isEqualTo(LocalDate.parse("2026-08-02"));
 		assertThat(repository.requestedIntradayDays).isEqualTo(2);
@@ -958,5 +979,208 @@ class ConsoleControllerTest {
 		mvc.perform(get("/api/v1/console/trends/intraday-analysis")
 						.param("maxDate", "0001-01-01").param("days", "366"))
 				.andExpect(status().isBadRequest());
+	}
+
+	/**
+	 * v2 분석 추이(ALPHA-1290) — 두 종류가 항상 이 순서로 나가고, 행이 없던 종류는 빈 배열이다.
+	 * {@code running} 은 {@code failed} 와 다른 키로 나간다(끝나지 않은 건수는 실패가 아니다).
+	 */
+	@Test
+	void 분석_추이는_종류별_일별_건수를_내리고_범위를_제한한다() throws Exception {
+		MockMvc mvc = mvc(facts());
+		repository.analysisTrend = List.of(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
+						"outlook", LocalDate.parse("2026-08-02"), 150L, 3L, 2L, 148L, 3L));
+
+		mvc.perform(get("/api/v1/console/trends/analysis")
+						.param("maxDate", "2026-08-03").param("days", "3"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.from").value("2026-08-01"))
+				.andExpect(jsonPath("$.result.to").value("2026-08-03"))
+				.andExpect(jsonPath("$.result.kinds.length()").value(2))
+				.andExpect(jsonPath("$.result.kinds[0].kind").value("outlook"))
+				.andExpect(jsonPath("$.result.kinds[0].points.length()").value(1))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].date").value("2026-08-02"))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].completed").value(150))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].failed").value(3))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].running").value(2))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].completedEtfs").value(148))
+				.andExpect(jsonPath("$.result.kinds[0].points[0].failedEtfs").value(3))
+				.andExpect(jsonPath("$.result.kinds[1].kind").value("movement"))
+				.andExpect(jsonPath("$.result.kinds[1].points.length()").value(0));
+		assertThat(repository.requestedAnalysisMaxDate).isEqualTo(LocalDate.parse("2026-08-03"));
+		assertThat(repository.requestedAnalysisDays).isEqualTo(3);
+
+		mvc.perform(get("/api/v1/console/trends/analysis")).andExpect(status().isOk());
+		assertThat(repository.requestedAnalysisDays).isEqualTo(30);
+		mvc.perform(get("/api/v1/console/trends/analysis").param("days", "0"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/analysis").param("days", "32"))
+				.andExpect(status().isBadRequest());
+		mvc.perform(get("/api/v1/console/trends/analysis").param("maxDate", "9999-12-31"))
+				.andExpect(status().isBadRequest());
+		// 시작일이 1년 앞으로 넘어가는 범위도 거부한다(장중 분석 추이와 같은 하한).
+		mvc.perform(get("/api/v1/console/trends/analysis")
+						.param("maxDate", "0001-01-01").param("days", "31"))
+				.andExpect(status().isBadRequest());
+	}
+
+	/**
+	 * 🔴 <b>구간 목록은 계약이다</b>(ALPHA-1314). {@code meta.timing.segments} 는 구간 정의
+	 * ({@link com.edge.superadmin.repository.FactsSegment})를 선언 순서대로 <b>전부</b> 싣는다 — 재지
+	 * 못한 구간도 0 으로 나간다(빠지면 "그 구간이 없다"와 "0ms 였다"를 못 가른다).
+	 *
+	 * <p>이름을 <b>글자 그대로</b> 고정한다. 구간을 더하거나 빼거나 이름을 바꾸면 이 목록과 계약 문서를
+	 * 함께 고쳐야 한다 — 정의에서 읽어 비교하기만 하면 구간이 조용히 늘거나 줄어도 초록이다.
+	 */
+	@Test
+	void 소요_시간은_구간_정의를_순서대로_전부_싣는다() throws Exception {
+		List<String> names = List.of("meta", "runs.db", "tasks", "outputs", "boundary",
+				"feeds", "analysisStages", "analysisFailures", "etfAnalyses", "transaction",
+				"runs.aws", "queues", "datasets");
+		List<String> kinds = List.of("db", "db", "db", "db", "db", "db", "db", "db", "db", "db",
+				"aws", "aws", "app");
+		assertThat(java.util.Arrays.stream(com.edge.superadmin.repository.FactsSegment.values())
+				.map(com.edge.superadmin.repository.FactsSegment::wireName).toList())
+				.as("구간 정의가 바뀌었다 — 이 목록과 계약 문서의 「소요 시간」을 함께 고친다")
+				.isEqualTo(names);
+
+		String body = mvc(facts()).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.meta.timing.totalMs").isNumber())
+				.andReturn().getResponse().getContentAsString();
+		assertThat(com.jayway.jsonpath.JsonPath.<List<String>>read(body,
+				"$.result.meta.timing.segments[*].name")).isEqualTo(names);
+		assertThat(com.jayway.jsonpath.JsonPath.<List<String>>read(body,
+				"$.result.meta.timing.segments[*].kind")).isEqualTo(kinds);
+	}
+
+	/**
+	 * 리포지토리가 잰 구간은 그대로 실리고, {@code transaction} 은 원장 조회 호출 전체에서 그 합을 뺀
+	 * 나머지다(ALPHA-1314). 가짜 리포지토리는 즉시 돌려주므로 잰 합(12ms)이 호출 시간보다 크다 — 그때
+	 * 나머지는 음수가 아니라 0 이다.
+	 */
+	@Test
+	void 리포지토리가_잰_구간은_밀리초로_실리고_나머지는_음수가_되지_않는다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts timed = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), base.boundary(), base.chain(), base.analysisFailures(),
+				base.etfAnalyses(), java.util.Map.of(
+						com.edge.superadmin.repository.FactsSegment.TASKS, 5_400_000L,
+						com.edge.superadmin.repository.FactsSegment.OUTPUTS, 6_600_000L));
+
+		mvc(timed).perform(get("/api/v1/console/facts"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[2].name").value("tasks"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[2].ms").value(5))
+				.andExpect(jsonPath("$.result.meta.timing.segments[3].ms").value(7))
+				.andExpect(jsonPath("$.result.meta.timing.segments[9].name").value("transaction"))
+				.andExpect(jsonPath("$.result.meta.timing.segments[9].ms").value(0))
+				// 못 잰 구간은 빠지지 않고 0 이다
+				.andExpect(jsonPath("$.result.meta.timing.segments[0].ms").value(0));
+	}
+
+	/**
+	 * ETF별 v2 분석 귀결(ALPHA-1312) — 새 축으로 나간다. 행이 없어도 축은 나간다 — 키가 빠지면 화면은
+	 * "이 축을 안 싣는 배포본"으로 읽는다.
+	 */
+	@Test
+	void ETF별_v2_분석_귀결은_새_축으로_나간다() throws Exception {
+		ConsoleFacts base = facts();
+		mvc(base).perform(get("/api/v1/console/facts"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows.length()").value(0));
+
+		ConsoleFacts withRows = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), base.boundary(), base.chain(), base.analysisFailures(),
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisStateRow(
+						"069500", "KODEX 200", "completed", "pending")));
+		mvc(withRows).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].etf").value("069500"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].name").value("KODEX 200"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].outlook").value("completed"))
+				.andExpect(jsonPath("$.result.etfAnalyses.rows[0].movement").value("pending"));
+	}
+
+	/**
+	 * 분석 실패 축(R15, ALPHA-1291) — 두 종류가 항상 이 순서로 나가고, 실패 ETF 가 없는 종류는
+	 * <b>빈 배열</b>이다. 키가 빠지면 소비자는 "이 축을 안 싣는 배포본"으로 읽어 규칙을 못 돌린다.
+	 */
+	@Test
+	void 분석_실패_축은_종류별_ETF_코드를_내리고_없으면_빈_배열이다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts withFailures = new ConsoleFacts(base.today(), base.dbNow(), base.runs(),
+				base.tasks(), base.outputs(), base.boundary(), base.chain(),
+				List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
+								"movement", "069500"),
+						new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow(
+								"movement", "229200")));
+
+		mvc(withFailures).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.analysisFailures.length()").value(2))
+				.andExpect(jsonPath("$.result.analysisFailures[0].kind").value("outlook"))
+				.andExpect(jsonPath("$.result.analysisFailures[0].failedEtfs.length()").value(0))
+				.andExpect(jsonPath("$.result.analysisFailures[1].kind").value("movement"))
+				.andExpect(jsonPath("$.result.analysisFailures[1].failedEtfs[0]").value("069500"))
+				.andExpect(jsonPath("$.result.analysisFailures[1].failedEtfs[1]").value("229200"));
+	}
+
+	/**
+	 * 관측 불가 표시 — v2 단계의 {@code blind}(ALPHA-1296, v2 요청이 없던 날)가 그대로 나간다. 수는 0 으로
+	 * 함께 나가지만(와이어에 null 자리가 없다) 소비자는 {@code blind} 를 먼저 본다. 평소에는 false 다.
+	 *
+	 * <p>전달 경계에는 이 키가 <b>없다</b>(ALPHA-1326) — 경계는 새 분석 엔진을 지금 상태로 세서 관측
+	 * 불가가 없다. 키가 없으면 소비자는 관측 가능으로 읽는다.
+	 */
+	@Test
+	void 관측_불가_표시는_v2_단계에만_실린다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts blind = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), new BoundaryRow(0L, 0L, 12L),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
+						base.chain().feeds(),
+						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage("c.req", "분석 요청",
+								"analysis_execution_requests", null, 0L, true))));
+
+		mvc(blind).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(true))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(0))
+				.andExpect(jsonPath("$.result.boundary", org.hamcrest.Matchers.not(
+						org.hamcrest.Matchers.hasKey("blind"))));
+		mvc(base).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(false));
+	}
+
+	/**
+	 * v2 단계(ALPHA-1296)의 배치 칸은 null 이 <b>키를 유지한 채</b> 나가야 한다 — 0 이면 "배치 트리거가
+	 * 전부 사라졌다"가 되고, 키가 빠지면 소비자가 수를 못 읽는다.
+	 */
+	@Test
+	void v2_단계의_배치_칸은_null_이다() throws Exception {
+		ConsoleFacts base = facts();
+		ConsoleFacts v2 = new ConsoleFacts(base.today(), base.dbNow(), base.runs(), base.tasks(),
+				base.outputs(), base.boundary(),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow(
+						base.chain().feeds(),
+						List.of(new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
+										"c.req", "분석 요청", "analysis_execution_requests", null, 256L, false),
+								new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage(
+										"c.start", "분석 시작", "movement_analyses", null, 214L, false, 7L))));
+
+		String body = mvc(v2).perform(get("/api/v1/console/facts"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.chain.analysisStages.length()").value(2))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].id").value("c.req"))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].label").value("분석 요청"))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].intraday").value(256))
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].blind").value(false))
+				.andExpect(jsonPath("$.result.chain.analysisStages[1].intraday").value(214))
+				// 판정 불가 수(ALPHA-1309)는 단계마다 나간다 — 없으면 0 이다.
+				.andExpect(jsonPath("$.result.chain.analysisStages[0].pending").value(0))
+				.andExpect(jsonPath("$.result.chain.analysisStages[1].pending").value(7))
+				.andReturn().getResponse().getContentAsString();
+		assertThat(body).contains("\"batch\":null");
 	}
 }

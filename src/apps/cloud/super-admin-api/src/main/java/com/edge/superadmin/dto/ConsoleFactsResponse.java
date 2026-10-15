@@ -3,8 +3,7 @@ package com.edge.superadmin.dto;
 import com.edge.superadmin.repository.ConsoleFactsRepository.BoundaryRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainFeed;
 import com.edge.superadmin.repository.ConsoleFactsRepository.ChainRow;
-import com.edge.superadmin.repository.ConsoleFactsRepository.ChainStage;
-import com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisRow;
+import com.edge.superadmin.repository.FactsSegment;
 import com.edge.superadmin.repository.ConsoleFactsRepository.OutputRow;
 import com.edge.superadmin.repository.ConsoleFactsRepository.RunRow;
 import com.edge.superadmin.repository.RunControlPlane;
@@ -43,20 +42,50 @@ import java.util.List;
  */
 public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> tasks,
 		List<DatasetResponse> datasets, List<OutputResponse> outputs, List<QueueResponse> queues, BoundaryResponse boundary,
-		ChainResponse chain, EtfLedgerResponse etfLedger, MetaResponse meta) {
+		ChainResponse chain,
+		List<AnalysisFailureResponse> analysisFailures, EtfAnalysesResponse etfAnalyses,
+		MetaResponse meta) {
 
-	public record EtfLedgerResponse(List<EtfLedgerRowResponse> rows) {
-		public static EtfLedgerResponse from(List<EtfAnalysisRow> rows) {
-			return new EtfLedgerResponse(rows.stream().map(EtfLedgerRowResponse::from).toList());
+	/**
+	 * 조회일의 ETF별 <b>v2 분석 귀결</b>(ALPHA-1312). 행은 그날 전망 분석이나 가격변동 분석 행이 있거나
+	 * 장중 트리거가 발화한 ETF 이고 코드 오름차순이다. 옛 설명 엔진의 실행 상태를 싣던 {@code etfLedger}
+	 * 축은 읽는 화면이 없어 지웠다(ALPHA-1328).
+	 *
+	 * <p>상태는 소문자 코드다. {@code outlook}: {@code completed}(그날 완료 행이 있다) ·
+	 * {@code failed}(실패 행이 있고 완료 행이 없다 — {@code analysisFailures} 와 같은 기준) ·
+	 * {@code running}(진행 중인 행만 있다) · {@code none}(그날 분석 행이 없다). {@code movement} 는
+	 * 거기에 둘이 더 있다: {@code not_started}(그날 그 ETF 의 트리거에서 이어진 수용된 요청이 있는데
+	 * 분석 행이 없고 유예 밖이다) · {@code pending}(같은 형상인데 유예 안이라 아직 판정할 수 없다).
+	 * 유예는 체인 축의 {@code pending} 과 같이 <b>트리거 단위</b>로 잰다.
+	 */
+	public record EtfAnalysesResponse(List<EtfAnalysisStateResponse> rows) {
+		public static EtfAnalysesResponse from(
+				List<com.edge.superadmin.repository.ConsoleFactsRepository.EtfAnalysisStateRow> rows) {
+			return new EtfAnalysesResponse(rows.stream().map(r -> new EtfAnalysisStateResponse(
+					r.etf(), r.name(), r.outlook(), r.movement())).toList());
 		}
 	}
 
-	public record EtfLedgerRowResponse(String etf, String name, boolean triggered,
-			String outcome, String error) {
-		private static EtfLedgerRowResponse from(EtfAnalysisRow row) {
-			return new EtfLedgerRowResponse(row.etf(), row.name(), true, row.outcome(), null);
+	public record EtfAnalysisStateResponse(String etf, String name, String outlook, String movement) {
+	}
+
+	/**
+	 * 조회일에 v2 분석이 <b>끝내 완료되지 못한</b> ETF(R15, ALPHA-1291). 항목은 항상
+	 * {@code outlook}·{@code movement} 둘이고 이 순서다. {@code failedEtfs} 는 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다(코드 오름차순). 실패했다가 같은 날 다시 돌아
+	 * 완료된 ETF, running 만 있는 ETF 는 들어 있지 않다. 빈 배열은 "그런 ETF 가 없다"이다.
+	 */
+	public record AnalysisFailureResponse(String kind, List<String> failedEtfs) {
+
+		private static final List<String> KINDS = List.of("outlook", "movement");
+
+		public static List<AnalysisFailureResponse> from(
+				List<com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow> rows) {
+			return KINDS.stream().map(kind -> new AnalysisFailureResponse(kind, rows.stream()
+					.filter(r -> r.kind().equals(kind)).map(r -> r.etfCode()).toList())).toList();
 		}
 	}
+
 
 	public record QueueResponse(String name, long visible, long inFlight, long dlq) {
 		public static QueueResponse from(QueueState q) {
@@ -140,11 +169,21 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 *
 	 * <p>{@code label}·{@code unit} 은 소비자 어휘와 1:1 이고, 표시 문자열은 만들지 않는다
 	 * (건수는 raw 로 내리고 포맷은 UI 소관 — 이 응답의 규약).
+	 *
+	 * <p>{@code history} 는 {@code base} 를 낸 기준일별 건수다(날짜 오름차순). 조회일은 들어 있지
+	 * 않고, {@code base} 가 null 인 날에도 실린다. 기준일 후보가 없으면 빈 배열이다.
 	 */
-	public record OutputResponse(String id, String label, long today, Double base, String unit) {
+	public record OutputResponse(String id, String label, long today, Double base, String unit,
+			List<OutputDayResponse> history) {
+
+		/** 기준일 하루 — {@code count} 0 은 실측이다. */
+		public record OutputDayResponse(String date, long count) {
+		}
 
 		public static OutputResponse from(OutputRow o) {
-			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit());
+			return new OutputResponse(o.id(), o.label(), o.today(), o.base(), o.unit(),
+					o.history().stream()
+							.map(d -> new OutputDayResponse(d.date().toString(), d.count())).toList());
 		}
 	}
 
@@ -175,8 +214,11 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 설명 생산 체인 — 그 날 발화한 트리거가 단계마다 몇 건 남았나(ALPHA-979).
 	 *
 	 * <p><b>두 목록의 순서가 계약이다.</b> 소비자는 {@code feeds} 를 각 갈래의 첫 점으로 삼아
-	 * {@code stages} 를 순서대로 인접 비교한다 — 순서를 재배치하면 아무것도 안 깨진 채 손실 판정만
-	 * 뒤섞인다. {@code feeds[0]} 이 배치, {@code feeds[1]} 이 장중이다(위치로 읽는다).
+	 * {@code analysisStages} 를 순서대로 인접 비교한다 — 순서를 재배치하면 아무것도 안 깨진 채 손실
+	 * 판정만 뒤섞인다. {@code feeds[0]} 이 배치, {@code feeds[1]} 이 장중이다(위치로 읽는다).
+	 *
+	 * <p>옛 설명 엔진의 단계 목록({@code stages})은 지웠다(ALPHA-1329) — 그 엔진은 10-01 이 마지막
+	 * 실행이고 읽는 화면이 없다.
 	 *
 	 * <p>⚠️ <b>이 축이 없는 응답과 값이 0 인 응답은 다르다.</b> 축 부재는 "안 물어봤다"이고 0 은
 	 * "코호트를 따라갔더니 그 단계에 아무도 도달 못 했다"는 <b>실측</b>이다. 그래서 수는 전부
@@ -186,11 +228,35 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 앞 단계도 0 이면 아무 위반도 안 선다(그 갈래는 애초에 아무것도 안 흘렀다). 그렇게 적었다가
 	 * 정정했다 — "0 이면 손실"은 이 응답이 하지 않는 판정이다.
 	 */
-	public record ChainResponse(List<ChainFeedResponse> feeds, List<ChainStageResponse> stages) {
+	public record ChainResponse(List<ChainFeedResponse> feeds,
+			List<AnalysisStageResponse> analysisStages) {
 
 		public static ChainResponse from(ChainRow c) {
 			return new ChainResponse(c.feeds().stream().map(ChainFeedResponse::from).toList(),
-					c.stages().stream().map(ChainStageResponse::from).toList());
+					c.analysisStages().stream().map(AnalysisStageResponse::from).toList());
+		}
+	}
+
+	/**
+	 * 새 분석 엔진(v2)의 단계(ALPHA-1296) — 분석 요청 → 분석 시작 → 분석 완료 → 게시. 수는 조회일에
+	 * 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다.
+	 *
+	 * <p>{@code batch} 는 <b>항상 null</b> 이다 — 배치 트리거는 v2 의 대상이 아니다(0 이 아니다).
+	 * {@code blind} 가 참이면 {@code intraday} 의 0 은 실측이 아니다(v2 가 아직 없던 날).
+	 *
+	 * <p>{@code pending} 은 이 단계에 <b>아직 판정할 수 없는</b> 트리거 수다(ALPHA-1309) — 앞 단계에는
+	 * 도달했고 이 단계에는 못 갔는데 앞 단계에 도달한 지 유예 시간(단일 분석 워크플로의 전체 시간 제한)이 안
+	 * 지났다. {@code intraday}(도달)에는 들어 있지 않다. 손실은 앞 단계와의 차이에서 이 수를 뺀
+	 * 것이다. 분석 완료·게시는 항상 0 이다.
+	 *
+	 */
+	public record AnalysisStageResponse(String id, String label, Long batch, long intraday,
+			String src, boolean blind, long pending) {
+
+		public static AnalysisStageResponse from(
+				com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisStage s) {
+			return new AnalysisStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src(),
+					s.blind(), s.pending());
 		}
 	}
 
@@ -203,18 +269,6 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	}
 
 	/**
-	 * 단계 하나 — 두 갈래를 나란히 낸다. 갈래는 {@code etf_contribution_observation} 의 트리거 FK
-	 * 하나가 가르고, 그 아래 단계에는 배치/장중을 가르는 컬럼이 <b>없다</b>(관측에서 상속한다).
-	 */
-	public record ChainStageResponse(String id, String label, long batch, long intraday,
-			String src) {
-
-		public static ChainStageResponse from(ChainStage s) {
-			return new ChainStageResponse(s.id(), s.label(), s.batch(), s.intraday(), s.src());
-		}
-	}
-
-	/**
 	 * {@code today} 는 실제로 조회한 날 — 요청이 date 를 생략했을 때 무엇을 본 응답인가.
 	 * <b>거래일이라는 보장은 없다</b>(계획만 있던 날·원장이 빈 경우의 KST 오늘).
 	 *
@@ -223,7 +277,36 @@ public record ConsoleFactsResponse(List<RunResponse> runs, List<TaskResponse> ta
 	 * 물어봤는데 못 봤다(권한·장애). 화면이 그 둘을 다르게 그린다({@code awsObservation}).
 	 * 그래서 이 필드는 <b>{@code null} 이어도 싣는다</b>.
 	 */
-	public record MetaResponse(String db, String today, String aws) {
+	public record MetaResponse(String db, String today, String aws, TimingResponse timing) {
+	}
+
+	/**
+	 * 이 응답을 만드는 데 걸린 시간(ALPHA-1314) — <b>재기만 한 값</b>이고 판정에 쓰지 않는다.
+	 *
+	 * <p>{@code segments} 는 {@link FactsSegment} 를 선언 순서대로 <b>전부</b> 싣는다. 구간은 서로 겹치지
+	 * 않고 {@code kind} 는 {@code db}·{@code aws}·{@code app} 이다. {@code totalMs} 는 요청 날짜를
+	 * 읽을 때부터 이 값을 만들 때까지다 — 구간의 합보다 크고, 그 차이는 구간으로 재지 않은 시간이다
+	 * (원장 행을 응답 형으로 옮기는 일). 응답을 JSON 으로 쓰는 시간과 그 앞뒤(필터·네트워크)는 들어
+	 * 있지 않다. 밀리초는 구간마다 따로 반올림한 정수라, 오차가 쌓이면 구간의 합이 전체보다 몇 ms 클 수
+	 * 있다.
+	 *
+	 * <p>이 서버에는 사실 조회의 캐시가 없다 — 값은 언제나 이 요청이 실제로 쓴 시간이다.
+	 */
+	public record TimingResponse(long totalMs, List<SegmentResponse> segments) {
+
+		public static TimingResponse from(java.util.Map<FactsSegment, Long> nanos, long totalNanos) {
+			return new TimingResponse(millis(totalNanos), java.util.Arrays.stream(FactsSegment.values())
+					.map(s -> new SegmentResponse(s.wireName(), s.kind().name().toLowerCase(java.util.Locale.ROOT),
+							millis(nanos.getOrDefault(s, 0L))))
+					.toList());
+		}
+
+		private static long millis(long nanos) {
+			return Math.round(nanos / 1_000_000.0);
+		}
+	}
+
+	public record SegmentResponse(String name, String kind, long ms) {
 	}
 
 	private static String iso(OffsetDateTime at) {

@@ -36,11 +36,11 @@ const NAV_SECTIONS: { section: string; items: NavEntry[] }[] = [
     section: '테넌트 관리',
     items: [{ path: '/tenants', label: '테넌트 목록', icon: 'building' }],
   },
+  /* '분석 결과'는 새 분석 엔진(v2)의 목록이다(ALPHA-1333). 옛 설명 엔진 목록(`/analyses`)은 메뉴에서
+   * 뺀 그대로다(ALPHA-1328) — 라우트·화면은 남기고 화면 위 안내가 이 목록을 가리킨다(`LegacyEngineNotice`). */
   {
-    section: '분석 결과',
-    items: [
-      { path: '/analyses', label: '가격 변동 분석 목록', icon: 'trendChart' },
-    ],
+    section: '분석',
+    items: [{ path: '/analysis-results', label: '분석 결과', icon: 'trendChart' }],
   },
 ];
 

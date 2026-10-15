@@ -11,3 +11,10 @@
 
 [extend]
 useDefault = true
+
+# Public JSON metric identifiers, not credentials. Exact secret text only;
+# keep inspecting every file and every other value, including fields named key.
+[allowlist]
+description = "Public factor metric identifiers"
+regexTarget = "secret"
+regexes = ['''^(ma20_distance_pct|ma60_direction|commodity_return_20d_pct|distribution_yield_12m_pct)$''']

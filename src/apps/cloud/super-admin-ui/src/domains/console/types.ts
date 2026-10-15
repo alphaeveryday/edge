@@ -23,8 +23,17 @@ export interface ConsoleFactsDto {
   /** 🔴 **옵셔널이다** — 이 축을 안 싣는 배포본(롤백·UI 선배포)이 실재할 수 있고, 그때
    *  응답을 거부하면 체인 카드 하나 때문에 **ops 전 화면**이 빈다. 없으면 R10 이 `못 돎`. */
   chain?: ChainDto;
-  /** 나중에 붙은 축 — 롤백·UI 선배포 때는 부재할 수 있다. */
-  etfLedger?: EtfLedgerDto;
+  /**
+   * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. 이 축을 싣기 전의 API
+   * 에서는 없다. 없으면 표는 "기록 없음"이다.
+   */
+  etfAnalyses?: EtfAnalysesDto;
+  /**
+   * 조회일에 v2 분석이 끝내 완료되지 못한 ETF(ALPHA-1291). 항목은 `outlook`·`movement` 둘이다.
+   * `failedEtfs` 는 그날 그 종류의 분석에 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다.
+   * **옵셔널이다** — 이 축을 안 싣는 API 에서는 오지 않고, 그때 R15 는 `못 돎` 이다.
+   */
+  analysisFailures?: { kind: AnalysisTrendKind; failedEtfs: string[] }[];
   meta: MetaDto;
 }
 
@@ -40,6 +49,32 @@ export interface EntityResolutionTrendPointDto {
   rate: number | null;
 }
 
+export type AnalysisTrendKind = 'outlook' | 'movement';
+
+/**
+ * v2 분석(전망·가격변동)의 최근 일별 건수(ALPHA-1290). `kinds` 는 항상 두 종류다.
+ * `points` 는 **분석 행이 있던 날짜만** 담는다 — 없는 날은 0 이 아니라 기록이 없는 날이다.
+ */
+export interface AnalysisTrendDto {
+  from: string;
+  to: string;
+  kinds: { kind: AnalysisTrendKind; points: AnalysisTrendPointDto[] }[];
+}
+
+/**
+ * `running` 은 실패가 아니라 끝나지 않은 건수다. `completedEtfs` 는 그날 완료 행이 있는 ETF 종
+ * 수이고, `failedEtfs` 는 **그날 실패 행이 있고 완료 행이 하나도 없는** ETF 종 수다(ALPHA-1291) —
+ * 실패했다가 같은 날 다시 돌아 완료된 ETF 는 들어 있지 않다.
+ */
+export interface AnalysisTrendPointDto {
+  date: string;
+  completed: number;
+  failed: number;
+  running: number;
+  completedEtfs: number;
+  failedEtfs: number;
+}
+
 /** 장중 FIRE 코호트가 분석·게시 단계에 도달한 최근 일별 실측. */
 export interface IntradayAnalysisTrendDto {
   asOf: string;
@@ -49,24 +84,40 @@ export interface IntradayAnalysisTrendDto {
 export interface IntradayAnalysisTrendPointDto {
   date: string;
   triggers: number;
-  observations: number;
-  runs: number;
-  activeRuns: number;
-  failedRuns: number;
-  results: number;
+  /* 옛 설명 엔진의 단계 필드(observations·runs·activeRuns·failedRuns·results·published)는 읽지도
+   * 검사하지도 않는다(ALPHA-1330) — 서버가 지운다. 그 필드를 아직 싣는 서버의 응답도 그대로 받는다. */
+  /**
+   * 새 분석 엔진의 단계(ALPHA-1329) — 흐름 띠(`chain.analysisStages`)와 같은 조회로 센 수다. 이 필드를
+   * 싣기 전의 API 에서는 없다.
+   */
+  analysis?: IntradayAnalysisDto;
+}
+
+/**
+ * 그날 발화한 장중 트리거가 새 분석 엔진의 단계마다 몇 건 도달했나. `requestPending`·`startPending` 은
+ * 아직 판정할 수 없는 트리거 수다(도달 수에 들어 있지 않다). `blind` 가 참이면 새 분석 엔진의 요청이
+ * 아직 없던 날이라 수의 0 은 실측이 아니다.
+ */
+export interface IntradayAnalysisDto {
+  blind: boolean;
+  requested: number;
+  requestPending: number;
+  started: number;
+  startPending: number;
+  completed: number;
   published: number;
 }
 
-export interface EtfLedgerDto {
-  rows: EtfLedgerRowDto[];
-}
+/** 전망의 그날 상태 — `none` 은 그날 분석 행이 없다는 뜻이다 */
+export type OutlookStateDto = 'completed' | 'failed' | 'running' | 'none';
+/**
+ * 가격변동 분석의 그날 상태. `not_started` 는 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없고
+ * 유예 밖인 것, `pending` 은 같은 형상인데 유예 안이라 아직 판정할 수 없는 것이다.
+ */
+export type MovementStateDto = OutlookStateDto | 'not_started' | 'pending';
 
-export interface EtfLedgerRowDto {
-  etf: string;
-  name: string;
-  triggered: boolean;
-  outcome: string | null;
-  error: string | null;
+export interface EtfAnalysesDto {
+  rows: { etf: string; name: string; outlook: OutlookStateDto; movement: MovementStateDto }[];
 }
 
 /**
@@ -126,6 +177,11 @@ export interface OutputDto {
   today: number;
   base: number | null;
   unit: string;
+  /**
+   * `base` 를 낸 기준일별 건수(날짜 오름차순, ALPHA-1289). **조회일은 들어 있지 않다.**
+   * 선택 필드다 — 이 필드가 없는 API 에서는 오지 않는다. `count` 0 은 실측이다.
+   */
+  history?: { date: string; count: number }[];
 }
 
 export interface QueueDto {
@@ -140,6 +196,13 @@ export interface BoundaryDto {
   /** 무효화 통지가 **안 간** 발번만 센다 — 정상 무효화는 여기 안 들어온다 */
   deliveryNowNonpublished: number;
   deliveryRows: number;
+  /**
+   * 앞의 두 수가 **지금의 게시를 못 본다**(ALPHA-1293) — **옛 API 에서만** 온다. 옛 API 의 두 수는 옛
+   * 설명 엔진의 게시만 발번과 맞대고, 그 엔진이 **지금** 멈춰 있을 때 참이다. 그때 0 은 정합이 아니라
+   * 관측 불가다. 새 API(ALPHA-1326)는 새 분석 엔진의 게시를 세서 이 키를 싣지 않는다.
+   * 이 필드가 없는 API 에서는 오지 않는다(없으면 종전처럼 읽는다).
+   */
+  blind?: boolean;
 }
 
 /**
@@ -156,7 +219,36 @@ export interface BoundaryDto {
  */
 export interface ChainDto {
   feeds: ChainFeedDto[];
-  stages: ChainStageDto[];
+  /**
+   * 옛 설명 엔진의 단계다. **화면과 규칙은 더는 읽지 않는다**(ALPHA-1296) — 오면 형상 검증만 한다.
+   * **옵셔널이다**(ALPHA-1328): 서버가 다음 배포에서 이 목록을 지운다. 지금 서버가 계속 싣는 이유는
+   * 그 앞의 UI 가 이 목록이 없거나 비면 응답 전체를 거부하기 때문이다.
+   */
+  stages?: ChainStageDto[];
+  /**
+   * 새 분석 엔진(v2)의 단계(ALPHA-1296) — 분석 요청 → 분석 시작 → 분석 완료 → 게시. 화면과 R10 이
+   * 읽는 목록이다. **옵셔널이다**: 이 목록을 안 싣는 API(롤백·UI 선배포)에서는 오지 않고, 그때
+   * 체인은 축이 없는 것으로 읽는다(R10 은 `못 돎`).
+   */
+  analysisStages?: AnalysisStageDto[];
+}
+
+/** 수는 조회일에 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다. */
+export interface AnalysisStageDto {
+  id: string;
+  label: string;
+  /** 항상 `null` — 배치 트리거는 새 분석 엔진의 대상이 아니다(0 이 아니다) */
+  batch: number | null;
+  intraday: number;
+  src: string;
+  /** 그날 코호트에 요청이 없고 첫 v2 요청이 조회일보다 뒤일 때 참 — `intraday` 의 0 은 실측이 아니다 */
+  blind?: boolean;
+  /**
+   * 이 단계에 **아직 판정할 수 없는** 트리거 수(ALPHA-1309) — 앞 단계에는 도달했고 이 단계에는 못
+   * 갔는데 앞 단계에 도달한 지 유예 시간이 안 지났다. `intraday`(도달)에는 들어 있지 않고 손실도 아니다.
+   * 이 필드가 없는 API 에서는 오지 않는다(없으면 0 으로 읽는다 — 종전 동작).
+   */
+  pending?: number;
 }
 
 /** `unit` 이 갈래마다 다르다 — 배치는 ETF 종수, 장중은 발화 건수다. */
@@ -174,6 +266,12 @@ export interface ChainStageDto {
   batch: number;
   intraday: number;
   src: string;
+  /**
+   * 이 단계를 **셀 수 없다**(ALPHA-1293) — 참이면 두 수의 0 은 실측이 아니다. 옛 설명 엔진이
+   * 조회일보다 앞서 멈췄고 그날 코호트에 그 엔진의 행이 없을 때다. 이 필드가 없는 API 에서는
+   * 오지 않는다(없으면 종전처럼 읽는다).
+   */
+  blind?: boolean;
 }
 
 /** `today` 는 **응답이 실제로 본 날**이다 — 조회 기준일이지 "지금"도 거래일도 아니다.
@@ -184,4 +282,9 @@ export interface MetaDto {
   /** 키 부재=미배선, null=조회 실패라 두 형상을 보존한다. */
   aws?: string | null;
   today: string;
+  /**
+   * 이 응답을 만드는 데 서버가 쓴 시간(ALPHA-1314) — 구간별 밀리초와 전체 밀리초다. 이 필드를 싣기
+   * 전의 API 에서는 없다. 화면은 그리지 않고 규칙도 읽지 않는다 — 응답을 직접 볼 때 쓰는 값이다.
+   */
+  timing?: { totalMs: number; segments: { name: string; kind: string; ms: number }[] };
 }

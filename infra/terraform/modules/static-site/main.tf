@@ -1,5 +1,5 @@
 # 정적 사이트 호스팅 — S3(프라이빗) + CloudFront(OAC) + Route53 alias.
-# 인증서는 foundation 의 us-east-1 와일드카드를 certificate_arn 으로 받아 쓴다(모듈은 발급 안 함).
+# 인증서는 foundation 의 us-east-1 인증서를 certificate_arn 으로 받아 쓴다(모듈은 발급 안 함).
 # 빌드 산출물 업로드(s3 sync)와 무효화(invalidation)는 CD 가 한다 — 이 모듈은 인프라만 소유한다.
 # widget-ui·tenant-console-ui 등 프론트가 이 모듈을 동일하게 재사용한다.
 
@@ -51,12 +51,30 @@ resource "aws_cloudfront_function" "spa_rewrite" {
   code    = file("${path.module}/spa-rewrite.js")
 }
 
+# ── www 이동 함수 (redirect_www=true 전용) ──────────────
+# www.<도메인> 으로 온 요청을 https://<도메인> 으로 영구 이동시킨다(viewer-request, GET·HEAD 301·그 밖 308).
+# viewer-request 함수는 behavior 당 하나라 SPA fallback 과 같이 쓸 수 없다.
+resource "aws_cloudfront_function" "www_redirect" {
+  count   = var.redirect_www ? 1 : 0
+  name    = "${var.name}-www-redirect"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = file("${path.module}/www-redirect.js")
+
+  lifecycle {
+    precondition {
+      condition     = !var.spa
+      error_message = "redirect_www 와 spa 는 함께 켤 수 없다(viewer-request 함수는 behavior 당 하나)."
+    }
+  }
+}
+
 # ── CloudFront 배포 ─────────────────────────────────────
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
-  aliases             = [var.domain_name]
+  aliases             = concat([var.domain_name], var.redirect_www ? ["www.${var.domain_name}"] : [])
   price_class         = var.price_class
   comment             = var.name
 
@@ -72,7 +90,14 @@ resource "aws_cloudfront_distribution" "this" {
     for_each = var.api_origin_domain != "" ? [1] : []
     content {
       domain_name = var.api_origin_domain
-      origin_id   = "api"
+      origin_id   = var.api_origin_id
+      dynamic "custom_header" {
+        for_each = var.api_origin_header_name == "" ? [] : [1]
+        content {
+          name  = var.api_origin_header_name
+          value = var.api_origin_header_value
+        }
+      }
       custom_origin_config {
         http_port              = var.api_origin_port
         https_port             = 443
@@ -91,12 +116,20 @@ resource "aws_cloudfront_distribution" "this" {
     cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # AWS Managed-CachingOptimized
 
     # SPA fallback — 요청 단계 리라이트라 딥링크가 에러 경로를 타지 않고, 캐시 키도
-    # /index.html 로 수렴한다. 없는 정적 에셋(/assets/nope.js)은 S3 403 이 그대로 노출(정직한 에러).
+    # /index.html 로 수렴한다. 없는 정적 에셋(/assets/nope.js)은 S3 404 가 그대로 노출(정직한 에러).
     dynamic "function_association" {
       for_each = var.spa ? [1] : []
       content {
         event_type   = "viewer-request"
         function_arn = aws_cloudfront_function.spa_rewrite[0].arn
+      }
+    }
+
+    dynamic "function_association" {
+      for_each = var.redirect_www ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.www_redirect[0].arn
       }
     }
   }
@@ -106,13 +139,22 @@ resource "aws_cloudfront_distribution" "this" {
     for_each = var.api_origin_domain != "" ? [1] : []
     content {
       path_pattern             = var.api_path_pattern
-      target_origin_id         = "api"
+      target_origin_id         = var.api_origin_id
       viewer_protocol_policy   = "redirect-to-https"
       allowed_methods          = var.api_allowed_methods
       cached_methods           = ["GET", "HEAD"]
       compress                 = true
       cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
       origin_request_policy_id = "b689b0a8-53d0-40ab-baf2-68738e2966ac" # Managed-AllViewerExceptHostHeader
+
+      # www 로 온 API 요청도 이동시킨다 — www 가 두 번째 API 주소로 남지 않게 한다.
+      dynamic "function_association" {
+        for_each = var.redirect_www ? [1] : []
+        content {
+          event_type   = "viewer-request"
+          function_arn = aws_cloudfront_function.www_redirect[0].arn
+        }
+      }
     }
   }
 
@@ -129,22 +171,37 @@ resource "aws_cloudfront_distribution" "this" {
   }
 }
 
-# ── S3 버킷 정책: 이 배포의 OAC 만 GetObject 허용 ───────
+# ── S3 버킷 정책: 이 배포의 OAC 만 GetObject·ListBucket 허용 ─
+# ListBucket 이 없으면 S3 는 없는 키에 404 대신 403(AccessDenied)을 준다. 검색엔진이 없는 주소를
+# 접근 거부로 읽지 않게 404 로 맞춘다. 뷰어가 목록을 볼 길은 없다 — 버킷 루트 요청은
+# default_root_object 로 바뀌고, 쿼리스트링은 S3 오리진으로 전달하지 않는다.
 resource "aws_s3_bucket_policy" "this" {
   bucket = aws_s3_bucket.this.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "AllowCloudFrontOAC"
-      Effect    = "Allow"
-      Principal = { Service = "cloudfront.amazonaws.com" }
-      Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.this.arn}/*"
-      Condition = {
-        StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.this.arn }
-      }
-    }]
+    Statement = [
+      {
+        Sid       = "AllowCloudFrontOAC"
+        Effect    = "Allow"
+        Principal = { Service = "cloudfront.amazonaws.com" }
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.this.arn}/*"
+        Condition = {
+          StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.this.arn }
+        }
+      },
+      {
+        Sid       = "AllowCloudFrontOACList"
+        Effect    = "Allow"
+        Principal = { Service = "cloudfront.amazonaws.com" }
+        Action    = "s3:ListBucket"
+        Resource  = aws_s3_bucket.this.arn
+        Condition = {
+          StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.this.arn }
+        }
+      },
+    ]
   })
 }
 
@@ -154,6 +211,21 @@ resource "aws_route53_record" "alias" {
 
   zone_id = var.zone_id
   name    = var.domain_name
+  type    = each.value
+
+  alias {
+    name                   = aws_cloudfront_distribution.this.domain_name
+    zone_id                = aws_cloudfront_distribution.this.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+# ── Route53 www alias → CloudFront (redirect_www=true 전용) ─
+resource "aws_route53_record" "www_alias" {
+  for_each = var.redirect_www ? toset(["A", "AAAA"]) : toset([])
+
+  zone_id = var.zone_id
+  name    = "www.${var.domain_name}"
   type    = each.value
 
   alias {

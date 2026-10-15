@@ -1,10 +1,9 @@
 /* 설명 생성 흐름 스트립 (ALPHA-738).
  *
- * 체인은 하나다. 배치 트리거와 장중 트리거는 별개 파이프라인이 아니라 같은 체인의 두 입력이라
- * 단계마다 배치/장중을 나란히 낸다 — 합류 지점이 `etf_contribution_observation` 이다.
- * ⚠️ "두 트리거 FK 를 모두 갖는다"고 적혀 있었는데 거짓이다: 한 행은 **정확히 하나**를 갖는다
- * (`ck_etf_contribution_one_trigger`). 그 표가 두 축을 **받는다**는 뜻이었고, 갈래를 가르는 것도
- * 바로 그 배타성이다(하류 단계에는 배치/장중 컬럼이 없다).
+ * 단계는 새 분석 엔진의 것이다(ALPHA-1296): 분석 요청 → 분석 시작 → 분석 완료 → 게시. 수는
+ * 조회일에 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다. 입력은 두 갈래(배치·장중
+ * 트리거)를 그대로 그리지만, 배치 트리거는 새 분석 엔진이 소비하지 않아 뒤 단계의 배치 칸은
+ * "대상 아님"이다(0 이 아니다).
  *
  * **어디서 끝나는가**: Cloud 게시까지다. tenant_delivery 발번은 Cloud→테넌트 전달 경계이고
  * 그 뒤(Sync Agent·Intake·Screening·온프렘 최종 게시·소비자 노출)는 온프렘 영역이라
@@ -57,8 +56,13 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
       {S.map((s, i) => {
         const prevB = i === 0 ? feeds[0]?.v : S[i - 1].batch;
         const prevI = i === 0 ? feeds[1]?.v : S[i - 1].intraday;
-        const lostB = prevB != null && s.batch != null && s.batch < prevB ? prevB - s.batch : 0;
-        const lostI = prevI != null && s.intraday != null && s.intraday < prevI ? prevI - s.intraday : 0;
+        /* 관측 불가 단계에는 감소분을 그리지 않는다 — 그 0 은 실측이 아니라, 빼면 없는 손실이 선다 */
+        const lostB = !s.blind && prevB != null && s.batch != null && s.batch < prevB ? prevB - s.batch : 0;
+        /* 아직 판정할 수 없는 건(ALPHA-1309)은 감소분에서 뺀다 — 진행 중일 수 있는 건을 사라진 것으로
+         * 그리지 않는다. 그 수는 화면이 띠 옆에 따로 적는다. */
+        const heldI = s.pending ?? 0;
+        const lostI =
+          !s.blind && prevI != null && s.intraday != null && s.intraday + heldI < prevI ? prevI - s.intraday - heldI : 0;
         return (
           <div key={s.id} style={{ display: 'contents' }}>
             {/* 감소분은 그 손실이 난 단계 **앞**에 둔다 — 뒤에 두면 어느 단계에서 사라졌는지 오독된다 */}
@@ -78,7 +82,10 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
               title={
                 `${DISPLAY_LABEL[s.id] ?? s.label}\n출처: ${s.src}` +
                 (s.note ? `\n${s.note}` : '') +
-                (s.blind ? '\n관측 불가 — 클라우드에 소비 확인 채널이 없다(0이 아니다)' : '')
+                (s.blind ? '\n관측 불가 — 이 단계를 셀 쪽이 없다(0이 아니다)' : '') +
+                (s.batch_na ? '\n배치 칸은 대상 아님 — 배치 트리거는 새 분석 엔진이 소비하지 않는다' : '') +
+                (s.shown_only ? '\n이 단계로의 감소는 손실로 판정하지 않는다(R10 대상 아님)' : '') +
+                (s.pending ? `\n아직 판정하지 않은 트리거 ${s.pending}건 — 앞 단계에 도달한 지 유예 시간이 안 지났다` : '')
               }
             >
               {s.blind ? (
@@ -88,9 +95,10 @@ export function ChainStrip({ chain }: { chain: Facts['chain'] }) {
               ) : (
                 <div
                   className="ops-stage-n"
-                  style={s.batch === 0 && s.intraday === 0 ? { color: 'var(--down)' } : undefined}
+                  style={(s.batch_na || s.batch === 0) && s.intraday === 0 ? { color: 'var(--down)' } : undefined}
                 >
-                  {fmt(s.batch)}
+                  {/* 배치 갈래가 대상이 아닌 단계는 0 도 — 도 아니다 — 그 사실을 그대로 적는다 */}
+                  {s.batch_na ? <span style={{ color: 'var(--fg-4)', fontSize: 13 }}>대상 아님</span> : fmt(s.batch)}
                   <span className="sub"> / {fmt(s.intraday)}</span>
                 </div>
               )}

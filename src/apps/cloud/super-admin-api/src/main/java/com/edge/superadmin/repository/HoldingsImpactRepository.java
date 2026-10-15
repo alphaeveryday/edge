@@ -31,7 +31,15 @@ public interface HoldingsImpactRepository {
 	 */
 	record Impact(String runKey, LocalDate expectedAsOf, Integer expectedCount,
 			Integer loadedCount, boolean snapshotMissing, boolean loadPending,
-			List<MissingEtf> missing) {
+			List<MissingEtf> missing, boolean analysesBlind) {
+
+		/** 기준일 분석을 볼 수 있다 — 옛 설명 엔진이 기준일에 돌고 있었다. */
+		public Impact(String runKey, LocalDate expectedAsOf, Integer expectedCount,
+				Integer loadedCount, boolean snapshotMissing, boolean loadPending,
+				List<MissingEtf> missing) {
+			this(runKey, expectedAsOf, expectedCount, loadedCount, snapshotMissing, loadPending,
+					missing, false);
+		}
 	}
 
 	/**

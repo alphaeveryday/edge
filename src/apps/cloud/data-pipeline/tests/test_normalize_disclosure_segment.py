@@ -148,11 +148,17 @@ def test_no_segment_table_is_isolated_failure(tmp_path):
     body = _doc_zip("<html><body><p>사업의 내용 없음</p></body></html>", rcept_no)
     _write_run(storage, [(_report_record(rcept_no), body)])
 
-    assert seg.run(storage, "S1") == 2
+    returned: list[dict] = []
+    assert seg.run(storage, "S1", failures_out=returned) == 2
     assert _canonical_rows(storage, "2026-03-19") == []
     log = _quality_log(storage)
     assert log["records_failed"] == 1
     assert log["failures"][0]["reasons"] == ["no_segments_parsed"]
+    # WHY(ALPHA-1154): 공급계약 정제와 같은 계약 — 재처리 근거(접수번호·원문 위치·사유)가 한
+    #      기록에 남고, 호출자가 받는 목록은 로그에 쓴 것과 같다.
+    assert log["failures"][0]["rcept_no"] == rcept_no
+    assert log["failures"][0]["document_raw_path"].endswith(f"/{rcept_no}.zip")
+    assert returned == log["failures"]
 
 
 def test_non_object_row_is_isolated(tmp_path):

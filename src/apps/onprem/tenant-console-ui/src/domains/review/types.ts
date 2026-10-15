@@ -22,7 +22,9 @@ export interface ReviewItem {
 }
 
 /** 근거 문서 — 경계면 계약 형상(event-bundle) 그대로. */
-export interface ReviewEvidence {
+import type { EvidenceAudit } from '../../lib/evidence';
+
+export interface ReviewEvidence extends EvidenceAudit {
   kind: string;
   title: string;
   source: string;

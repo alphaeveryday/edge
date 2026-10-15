@@ -54,7 +54,12 @@ locals {
   # 조건 자체가 필요한 이유는 같다: 누군가 스케줄을 끄면(사고 대응·비용) 슬롯 기준만 남아
   # Reconciler 가 뜰 리 없는 슬롯을 매번 결측으로 판정해 **참인 PLANNER_MISSING** 을 하루 5개씩
   # 연다(실제로 안 돌았으니 resolve 되지 않는다). 끄는 행위 하나로 두 사실이 함께 꺼져야 한다.
-  investor_intraday_schedule_hhmm = var.investor_intraday_schedule_state != "ENABLED" ? "" : join(",", sort([
+  #
+  # Airflow 가 이 레인을 실행하면(investor_intraday_orchestrator = "AIRFLOW") EventBridge 스케줄은 꺼지지만
+  # 슬롯은 여전히 예정된다 — Reconciler 가 Airflow 런도 같은 run_key 로 대조하고, Airflow 가 슬롯을
+  # 아예 안 돌렸을 때 PLANNER_MISSING 을 열어야 하므로 값을 유지한다(ALPHA-1088).
+  _investor_intraday_slots_expected = var.investor_intraday_schedule_state == "ENABLED" || var.investor_intraday_orchestrator == "AIRFLOW"
+  investor_intraday_schedule_hhmm = !local._investor_intraday_slots_expected ? "" : join(",", sort([
     for hm in local._investor_intraday_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
   ]))
 
@@ -95,6 +100,12 @@ locals {
   # 모델에 요일 축이 없어 혼합은 애초에 표현할 수 없고, 조용히 한쪽으로 접으면 그 레인의 판정이
   # 어느 방향으로든 틀린 채 배포된다. ⚠️ 부수효과로 **빈 맵도 plan 에서 죽는다**(`one([])`=null
   # → Invalid index). 레인을 끄려면 맵을 비우지 말고 `*_schedule_state` 를 DISABLED 로 둬라.
+  # 원천 관측 레인(source-daily)의 슬롯 시각(KST "HH:MM", 쉼표 구분) — Reconciler 결측 판정 기준. Airflow 전용 레인이라
+  # EventBridge cron 이 없어 여기 적는다. DAG(`airflow/dags/edge_source_daily.py` CRONS)와 같은지
+  # `airflow/tests/test_source_daily_dag.py` 가 대조한다. 변수가 아닌 이유: 환경이 재정의하면 그 대조가 기본값만 보고
+  # 통과한다 — DAG 를 끄는 환경이 생기면 그때 변수로 올리고 테스트가 실제 값을 읽게 한다. 빈 값 = 결측 판정 없음.
+  source_daily_schedule_hhmm = "05:20"
+
   daily_schedule_weekend = tostring(local._day_weekend[join("|", regex(local._cron_day_re, var.schedule_expression))])
   news_schedule_weekend = tostring(local._day_weekend[one(distinct([
     for e in values(var.news_schedule_expressions) : join("|", regex(local._cron_day_re, e))
@@ -145,8 +156,10 @@ resource "aws_iam_role_policy" "ops_task" {
       },
       {
         # Reconciler 가 ECS 실제 종료를 확인한다(증거 없이 RUNNING 을 뒤집지 않기 위해, 스펙 §7).
+        # ListTasks: 주기 점검이 원장에 흔적 없이 도는 Airflow 런의 태스크를 찾는다(ALPHA-1088 — DAG 시간 초과 뒤
+        # PENDING 이던 태스크). 같은 클러스터로 한정한다.
         Effect    = "Allow"
-        Action    = ["ecs:DescribeTasks"]
+        Action    = ["ecs:DescribeTasks", "ecs:ListTasks"]
         Resource  = ["*"]
         Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } }
       },
@@ -208,6 +221,9 @@ resource "aws_ecs_task_definition" "ops" {
       OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN = aws_sfn_state_machine.investor_intraday.arn
       OPS_INVESTOR_INTRADAY_SCHED_HHMM        = local.investor_intraday_schedule_hhmm
       OPS_INVESTOR_INTRADAY_SCHED_WEEKEND     = local.investor_intraday_schedule_weekend
+      # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(위 locals).
+      OPS_SOURCE_DAILY_SCHED_HHMM    = local.source_daily_schedule_hhmm
+      OPS_SOURCE_DAILY_SCHED_WEEKEND = "true"
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"

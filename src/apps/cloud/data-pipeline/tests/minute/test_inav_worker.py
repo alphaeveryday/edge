@@ -34,18 +34,19 @@ NOW = datetime(2026, 8, 10, 9, 10, tzinfo=KST)
 # ETF 2 + 참조 계열 1 + 구성종목 2. 기대 집합에서 **구성종목과 참조 계열이 둘 다** 빠지는
 # 것이 이 dataset 의 핵심 차이라, 픽스처가 셋을 구분할 수 있어야 한다.
 #
-# 참조 계열은 prod config 규약대로 **`etf_map` 밖 코드**를 쓴다(`102970` 은 실제
-# `[minute_universe].sector_etf_ids` 47종 중 하나이고 `[krx_etf.source.etf_map]` 에 없다).
+# 참조 계열은 prod config 규약대로 **`etf_map` 밖 코드**를 쓴다(`122630` 은 실제
+# `[minute_universe].sector_etf_ids` 32종 중 하나이고 `[krx_etf.source.etf_map]` 에 없다 — 레버리지라
+# 선정 기준(ADR-0059)의 모집단 밖이어서 판정 축으로 옮겨 갈 일이 없다).
 # ⚠️ 여기 코드를 고를 땐 **그때의 config 를 봐라** — 이 자리엔 원래 `091170` 이 있었는데
 # ALPHA-927 이 그걸 판정 축으로 옮기면서 위 두 명제가 통째로 거짓이 됐고, 로컬 `ETF_MAP`
-# 을 쓰는 이 테스트는 그래도 초록으로 돌았다(침묵 드리프트).
+# 을 쓰는 이 테스트는 그래도 초록으로 돌았다(침묵 드리프트). 그 뒤의 `102970` 도 ALPHA-1249 가 옮겼다.
 # 여기에 `etf_map` 안의 코드를 적으면 `build_minute_universe` 가 `SystemExit` 로 거부하는
 # 조합이라 픽스처가 prod 를 안 비추고, 그러면 아래 `ETF_MAP` 도 거짓말이 된다(ALPHA-903).
 UNIVERSE = Universe(
     universe_version="univ-inav-v1",
     etf_ids=("069500", "091160"),
     constituent_ids=("005930", "000660"),
-    sector_etf_ids=("102970",),
+    sector_etf_ids=("122630",),
 )
 # iNAV 질의 심볼의 출처(`krx_etf.source.etf_map`)를 그대로 흉내낸다 — **판정 축만 있다.**
 # 참조 계열이 여기 없는 것은 픽스처의 사정이 아니라 규약이다(위 주석).
@@ -370,6 +371,37 @@ class TestRunGate:
 
         assert reached == []          # 원장에 닿지도 않았다
         assert code == 1              # bounded 는 확인 게이트다 — 아래 테스트가 짝이다
+
+    def test_호출_간격만으로_표본_주기를_넘기지_않는다(self, monkeypatch, tmp_path):
+        """호출 간격 × 대상 ETF 수가 60초를 넘으면 응답이 아무리 빨라도 다음 분 표본이 밀린다 — iNAV 는 소급이
+        불가라 밀린 만큼 영구 결손이다.
+
+        ETF 마다 매분 1콜을 차례로 보낸다. 대상을 148종까지 넓힌다(ALPHA-1249) — 0.5초 간격이면 74초라 못 맞춘다.
+        ⚠️ **필요조건만 본다.** 실제 한 바퀴는 호출마다 max(응답 시간, 간격)이라, 이 단언이 통과해도 응답이 느리면 밀린다.
+        동봉 설정의 대상 수도 같이 본다: 목록이 이 간격이 감당하는 수를 넘으면 여기서 먼저 깨진다. 동봉 파일을
+        직접 읽는다 — `load_settings()` 는 실행 환경(`DATA_PIPELINE_CONFIG_FILE`·env 재정의)을 따라가 다른 목록을 본다.
+        """
+        import tomllib
+
+        import data_pipeline.minute.worker as module
+        from data_pipeline.config.loader import _DEFAULT_CONFIG_FILE
+        from data_pipeline.minute.inav_collect import _LANE_INTERVAL_SEC
+
+        intervals = []
+        real = module.kis_http_client
+
+        def spy(settings, *, min_interval, **kwargs):
+            intervals.append(min_interval)
+            return real(settings, min_interval=min_interval, **kwargs)
+
+        monkeypatch.setattr(module, "kis_http_client", spy)
+        today = datetime.now(KST).date().isoformat()
+        self._run(monkeypatch, tmp_path, skip_reason="non-trading day", session_date=today, max_ticks=None)
+
+        (interval,) = intervals
+        bundled = tomllib.loads(_DEFAULT_CONFIG_FILE.read_text(encoding="utf-8"))
+        targets = max(148, len(bundled["krx_etf"]["source"]["etf_map"]))
+        assert targets * interval < _LANE_INTERVAL_SEC
 
     def test_상주_모드의_휴장일_skip_만_정상_종료다(self, monkeypatch, tmp_path):
         """`--max-ticks` 없는 상주 실행은 스케줄러가 휴장일마다 정상으로 지나가야 하지만,

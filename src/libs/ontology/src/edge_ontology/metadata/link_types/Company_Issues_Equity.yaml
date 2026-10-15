@@ -1,0 +1,29 @@
+id: Company_Issues_Equity
+source: Company
+definition:
+  name: Issues
+  label: Issues
+  description: Equity securities issued by this company. Follow this link to find
+    its common shares and other share classes.
+  target: Equity
+  sourceProperty: id
+  targetProperty: issuerId
+  cardinality: 1:N
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: issues
+  displayName: Issues
+  pluralDisplayName: Issues
+  inverse:
+    apiName: issuedBy
+    displayName: IssuedBy
+    description: The company that issued this equity security.
+    pluralDisplayName: null
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: Equity
+    foreignKeyProperty: issuerId
+    referencedObjectType: Company

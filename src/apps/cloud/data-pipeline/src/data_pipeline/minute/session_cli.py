@@ -8,6 +8,7 @@
 plan-minute-session   → 하루치 session + window 를 멱등 생성 (Premarket SFN 이 부를 자리)
 drain-minute-session  → phase 를 DRAINING 으로 (EOD SFN 이 부를 자리)
 → Worker 가 ack 하면 DRAINED → run qc-minute-session
+reopen-minute-session → FINALIZED 가격 세션을 ACTIVE 로, 창을 DUE 로 (ALPHA-1135 — 수동 재수집)
 ```
 
 원장(`MinuteLedger.plan_session`·`request_drain`)이 이미 멱등·CAS 를 다 갖고 있으므로 여기는
@@ -26,8 +27,13 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .models import config_set_identity, load_universe_uri, plan_session_windows
-from .repository import MinuteLedger, SessionFinalizedError, UniverseConflictError
+from .models import KST, config_set_identity, load_universe_uri, plan_session_windows
+from .repository import (
+    MinuteLedger,
+    SessionFinalizedError,
+    SessionReopenRejected,
+    UniverseConflictError,
+)
 from .states import (
     DATASET_SECTOR_INDEX_MINUTE,
     EXTENDED_HOURS_DATASETS,
@@ -186,6 +192,64 @@ def drain_session_cli(settings, *, session_id: str | None) -> int:
     if not requested:
         logger.info("이미 drain 이후다(%s) — 재시도로 보고 성공 처리한다: %s",
                     snapshot["phase"], session_id)
+    return 0
+
+
+def reopen_session_cli(settings, *, session_id: str | None, windows: str | None,
+                       reason: str | None) -> int:
+    """`run reopen-minute-session --session-id <id> --reason <사유> [--windows HHMM,...]`.
+
+    확정된 가격 세션을 다시 수집할 수 있게 연다(ALPHA-1135). 연 뒤의 순서(런북): `price-worker
+    --session-date D --universe <그 세션의 universe>`(max-ticks 없이 — DRAINED 까지 산다) →
+    남은 DUE 0 확인 → `drain-minute-session`(살아 있는 Worker 가 ack 하고 끝난다) →
+    `qc-minute-session` → `rollup-minute-session`. 지난 날짜 Worker 는 소급 TR 로 받고
+    트리거를 내지 않는다.
+
+    `--windows` 는 KST `HHMM`(창 **시작**, canonical 경로의 `window=HHMM` 과 같은 축) 목록이다.
+    없으면 전부 연다. `--reason` 필수 — 확정을 깨는 수동 개입이라, 사유와 옛
+    `final_checksum` 이 출력(로그)에 남는 것이 유일한 감사 근거다.
+
+    exit: 0=열었다 / 1=거부(가격 세션 아님·FINALIZED 아님·없는 창 — 재시도로 안 낫는다)
+    / 2=요청 자체를 못 함(설정·인자 결손·없는 세션·DB 장애).
+    """
+    if settings.db is None:
+        logger.error("db 설정 없음 — reopen-minute-session 은 세션 원장 필수(DATA_PIPELINE_DB__* 주입)")
+        return 2
+    if not session_id or not (reason or "").strip():
+        logger.error("--session-id·--reason 이 둘 다 필요하다 — 확정을 깨는 수동 개입이다")
+        return 2
+    ledger = MinuteLedger(db=settings.db)
+    try:
+        snapshot = ledger.session_snapshot(session_id=session_id)
+        if snapshot is None:
+            logger.error("없는 세션이다 — 지목이 틀렸다: %s", session_id)
+            return 2
+        starts = None
+        # `if windows:` 로 거르면 빈 문자열(자동화의 빈 변수)이 "전부 열기"로 확대된다 —
+        # 창 하나 재수집이 하루 전체 재수집이 된다. None 만 전부다.
+        if windows is not None:
+            day = snapshot["session_date"]
+            starts = []
+            for hhmm in (w.strip() for w in windows.split(",")):
+                if len(hhmm) != 4 or not hhmm.isdecimal():
+                    logger.error("--windows 는 HHMM 목록이다: %r", hhmm)
+                    return 2
+                starts.append(datetime(day.year, day.month, day.day,
+                                       int(hhmm[:2]), int(hhmm[2:]), tzinfo=KST))
+        result = ledger.reopen_session(session_id=session_id, window_starts=starts,
+                                       today=datetime.now(KST).date())
+    except SessionReopenRejected as error:
+        logger.error("재오픈 거부: %s", error)
+        return 1
+    except Exception:
+        logger.exception("재오픈 실패: %s", session_id)
+        return 2
+    logger.warning("확정 세션을 다시 열었다: %s 창 %d개 — 사유: %s (옛 final_checksum %s)",
+                   session_id, result["reopened_windows"], reason,
+                   result["previous_final_checksum"])
+    print(json.dumps({**result, "reason": reason,
+                      "session_date": snapshot["session_date"].isoformat()},
+                     ensure_ascii=False, sort_keys=True))
     return 0
 
 

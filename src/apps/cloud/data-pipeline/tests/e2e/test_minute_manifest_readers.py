@@ -1,4 +1,4 @@
-"""공통 lake fixture + 실 PostgreSQL 좌표를 가격 소비자·롤업·분석 엔진이 함께 읽는다."""
+"""공통 lake fixture + 실 PostgreSQL 좌표를 가격 소비자와 롤업이 함께 읽는다."""
 
 import io
 import os
@@ -89,26 +89,9 @@ def _handler(db, storage):
     )
 
 
-class S3:
-    def __init__(self, storage):
-        self.storage = storage
-        self.requested = []
-
-    def get_object(self, *, Bucket, Key):
-        from botocore.exceptions import ClientError
-
-        self.requested.append(Key)
-        try:
-            return {"Body": io.BytesIO(self.storage.get_bytes(Key))}
-        except FileNotFoundError as error:
-            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject") from error
-
-
-def test_three_readers_agree_on_db_winners(committed_lake):
+def test_price_consumer_and_rollup_agree_on_db_winners(committed_lake):
     import pyarrow.parquet as pq
     from data_pipeline.minute.rollup import rollup_session
-    from edge_analysis.adapters.eventstore import EventStore
-    from edge_analysis.adapters.lake import LakeReader
 
     db, ledger, storage, conn, sid, coordinates = committed_lake
     handler = _handler(db, storage)
@@ -122,11 +105,6 @@ def test_three_readers_agree_on_db_winners(committed_lake):
         assert [(r["unit_id"], r["close"]) for r in rows] == [("500000", str(100 + i))]
     assert handler._first_window(sid, "2026-09-07")[4:6] == coordinates[0][3:5]
 
-    s3 = S3(storage)
-    windows = EventStore(conn).fetch_committed_minute_windows(sid, coordinates[0][0], coordinates[-1][1])
-    bars = LakeReader(s3, "fixture").load_committed_minute_bars("KR", windows)
-    assert [b.close for b in bars] == [Decimal(100 + i) for i in range(5)]
-    assert len(s3.requested) == 10  # DB가 가리킨 manifest+artifact 각 5건, 후보 LIST 없음
     output = rollup_session(storage, ledger, dataset="price_minute", session_id=sid,
                             market="KR", session_date="2026-09-07")
     rows = pq.read_table(io.BytesIO(storage.get_bytes(output))).to_pylist()
@@ -142,9 +120,6 @@ def test_corrupt_winner_fails_all_readers_and_preserves_rollup(committed_lake, d
     from data_pipeline.minute.artifact_reader import ArtifactReadError
     from data_pipeline.minute.consumer import TransientJobError
     from data_pipeline.minute.rollup import rollup_session
-    from edge_analysis.adapters.eventstore import EventStore
-    from edge_analysis.adapters.lake import LakeReader
-    from edge_analysis.config import PipelineError, ReturnsNotReadyError
 
     db, ledger, storage, conn, sid, coordinates = committed_lake
     output = rollup_session(storage, ledger, dataset="price_minute", session_id=sid,
@@ -181,9 +156,6 @@ def test_corrupt_winner_fails_all_readers_and_preserves_rollup(committed_lake, d
             "2026-09-07", start, 1, expected_checksum=checksum, session_id=sid,
             window_end=end, manifest_uri=uri, manifest_checksum=manifest_checksum,
         )
-    windows = EventStore(conn).fetch_committed_minute_windows(sid, coordinates[0][0], coordinates[-1][1])
-    with pytest.raises((PipelineError, ReturnsNotReadyError)):
-        LakeReader(S3(storage), "fixture").load_committed_minute_bars("KR", windows)
     with pytest.raises(ArtifactReadError):
         rollup_session(storage, ledger, dataset="price_minute", session_id=sid,
                        market="KR", session_date="2026-09-07")
@@ -194,8 +166,6 @@ def test_legacy_fallback_requires_absent_db_manifest_coordinates(committed_lake)
     import json
     from data_pipeline.lake.storage import canonical_price_minute_artifact_key
     from data_pipeline.minute.rollup import rollup_session
-    from edge_analysis.adapters.eventstore import EventStore
-    from edge_analysis.adapters.lake import LakeReader
 
     db, ledger, storage, conn, sid, coordinates = committed_lake
     for start, end, checksum, uri, manifest_checksum in coordinates:
@@ -204,10 +174,6 @@ def test_legacy_fallback_requires_absent_db_manifest_coordinates(committed_lake)
         storage.put_bytes(legacy_key, storage.get_bytes(key))
     conn.execute("UPDATE minute_ingestion_window SET manifest_uri=NULL, manifest_checksum=NULL WHERE session_id=%s", (sid,))
     conn.commit()
-    windows = EventStore(conn).fetch_committed_minute_windows(sid, coordinates[0][0], coordinates[-1][1])
-    s3 = S3(storage)
-    assert len(LakeReader(s3, "fixture").load_committed_minute_bars("KR", windows)) == 5
-    assert len(s3.requested) == 5
     start, end, checksum, _, _ = coordinates[0]
     assert len(_handler(db, storage)._artifact_rows(
         "2026-09-07", start, 1, expected_checksum=checksum, session_id=sid,

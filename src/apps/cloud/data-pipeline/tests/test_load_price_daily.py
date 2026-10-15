@@ -11,6 +11,7 @@
 import hashlib
 import io
 import json
+from datetime import datetime
 
 import pytest
 
@@ -22,8 +23,8 @@ from data_pipeline.lake import (
 )
 from data_pipeline.steps import load_price_daily
 
-_COLUMNS = ("market", "ticker", "trade_date", "close", "adj_close", "volume",
-            "currency", "source_vendor", "fetched_at")
+_COLUMNS = ("market", "ticker", "trade_date", "open", "high", "low", "close", "adj_close",
+            "volume", "currency", "source_vendor", "fetched_at")
 
 
 def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
@@ -33,6 +34,7 @@ def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
 
     schema = pa.schema([
         ("market", pa.string()), ("ticker", pa.string()), ("trade_date", pa.string()),
+        ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()),
         ("close", pa.float64()), ("adj_close", pa.float64()), ("volume", pa.int64()),
         ("currency", pa.string()), ("source_vendor", pa.string()), ("fetched_at", pa.string()),
     ])
@@ -43,8 +45,13 @@ def _write_canonical(storage, market: str, trade_date: str, rows: list[dict],
         f"{canonical_price_daily_partition(market, trade_date)}/{part}.parquet", buf.getvalue())
 
 
+# 기존 마트 행의 available_at — `_price_row` 기본 fetched_at 과 같다(앞당김 없음).
+_AT = datetime.fromisoformat("2026-07-20T06:00:00+00:00")
+
+
 def _price_row(ticker: str = "005930", trade_date: str = "2026-07-16", **over) -> dict:
     row = {"market": "KR", "ticker": ticker, "trade_date": trade_date,
+           "open": 71000.0, "high": 72000.0, "low": 70500.0,
            "close": 71500.0, "adj_close": 71500.0, "volume": 12_345_678,
            "currency": "KRW", "source_vendor": "kis", "fetched_at": "2026-07-20T06:00:00+00:00"}
     row.update(over)
@@ -102,7 +109,8 @@ class _FailingQualityStorage(_TrackingStorage):
 
 
 class _FakeCursor:
-    """ON CONFLICT DO UPDATE … WHERE distinct 시맨틱 흉내 + instrument 조회 응답."""
+    """ON CONFLICT DO UPDATE … WHERE (값 distinct OR available_at 앞당김) 시맨틱 흉내 +
+    instrument 조회 응답."""
 
     def __init__(self, log: list, instrument_rows: list, existing: dict,
                  fail_instruments: set[str], fail_confirmations: set[str]):
@@ -124,18 +132,21 @@ class _FakeCursor:
         elif upper.startswith("INSERT INTO PRICE_DAILY"):
             if params[0] in self._fail_instruments:
                 raise ValueError("의도된 개별 행 DB 실패")
-            # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신=(True,) /
-            # 같은 값이면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
+            # RETURNING (xmax <> 0): 신규=(False,) / 값 바뀐 갱신·available_at 앞당김=(True,) /
+            # 같은 값이고 시각도 안 앞당겨지면 WHERE 가 걸러 아무 행도 반환하지 않는다(None).
             key = (params[0], params[1])
-            value = (params[2], params[3], params[4])  # close, adj_close, volume
+            # close, adj_close, volume, open, high, low
+            value = (params[2], params[3], params[4], params[7], params[8], params[9])
+            available_at = datetime.fromisoformat(params[5])
             prev = self._existing.get(key)
             if prev is None:
                 self._returning, self.rowcount = (False,), 1
-            elif prev == value:
+            elif prev[0] == value and not prev[1] > available_at:
                 self._returning, self.rowcount = None, 0
+                return
             else:
                 self._returning, self.rowcount = (True,), 1
-            self._existing[key] = value
+            self._existing[key] = (value, available_at)
         elif upper.startswith("UPDATE PRICE_DAILY SET DATA_VERSION"):
             if params[1] in self._fail_confirmations:
                 raise ValueError("의도된 재확정 stamp DB 실패")
@@ -209,7 +220,8 @@ def test_canonical_가격이_마트_행이_된다(tmp_path, monkeypatch):
 
     assert load_price_daily.run(storage, "R1", db=_db()) == 0
 
-    [(instrument_id, trade_date, close, adj, volume, available_at, data_version)] = _inserts(conn)
+    [(instrument_id, trade_date, close, adj, volume, available_at, data_version,
+      open_price, high_price, low_price)] = _inserts(conn)
     assert instrument_id == "inst_samsung"        # (market,ticker) → instrument 해소
     assert trade_date == "2026-07-16"
     assert close == pytest.approx(71500.0)
@@ -217,6 +229,8 @@ def test_canonical_가격이_마트_행이_된다(tmp_path, monkeypatch):
     assert volume == 12_345_678
     assert available_at == "2026-07-20T06:00:00+00:00"  # fetched_at = 우리가 얻은 시각
     assert data_version == "R1"
+    # 시가·고가·저가도 canonical 값 그대로다(ALPHA-1148). 안 실리면 고저 범위·ATR 을 못 만든다.
+    assert (open_price, high_price, low_price) == (71000.0, 72000.0, 70500.0)
 
 
 def test_manifest_정상경로는_KR_winner만_GET하고_건수를_분리한다(tmp_path, monkeypatch):
@@ -239,7 +253,7 @@ def test_manifest_정상경로는_KR_winner만_GET하고_건수를_분리한다(
 
     assert load_price_daily.run(storage, "R1", db=_db(), input_run_id="N1") == 0
     assert [params[0] for params in _inserts(conn)] == ["inst_samsung"]
-    assert _inserts(conn)[0][-1] == "N1", (
+    assert _inserts(conn)[0][6] == "N1", (
         "manifest 재시도에서도 downstream 조인용 version은 producer run_id여야 한다")
     assert storage.listed == []
     assert canonical_run_manifest_key("price_daily", "N1") in storage.gotten
@@ -334,8 +348,12 @@ def test_파생_수익률과_미소스_컬럼은_적재하지_않는다(tmp_path
 
     [(sql, _)] = [(s, p) for s, p in conn.log if s.upper().startswith("INSERT INTO PRICE_DAILY")]
     lowered = sql.lower()
-    for col in ("simple_return", "log_return", "turnover_value", "price_basis"):
+    for col in ("simple_return", "log_return", "turnover_value"):
         assert col not in lowered, col
+    # price_basis 는 값을 넣지 않는다 — INSERT 컬럼에 없고, 덮어쓸 때 NULL 로 되돌리는 것뿐이다
+    # (다른 적재기가 남긴 기준 표지가 값이 바뀐 행에 남지 않게, ALPHA-1148).
+    assert "price_basis" not in lowered.split(" values ")[0]
+    assert lowered.count("price_basis") == 1 and "price_basis = null" in lowered
 
 
 def test_재실행이_중복_적재하지_않는다(tmp_path, monkeypatch):
@@ -364,7 +382,8 @@ def test_실패한_winner는_현재_run_version으로_stamp하지_않는다(tmp_
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16", [_price_row()])
     conn = _FakeConn(
-        existing={("inst_samsung", "2026-07-16"): (70000.0, 70000.0, 1)},
+        existing={("inst_samsung", "2026-07-16"):
+                  ((70000.0, 70000.0, 1, 71000.0, 72000.0, 70500.0), _AT)},
         fail_instruments={"inst_samsung"},
     )
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
@@ -381,10 +400,10 @@ def test_재확정_stamp_실패도_다른_winner를_보존하고_exit2(tmp_path,
     _write_canonical(storage, "KR", "2026-07-16", [
         _price_row("005930"), _price_row("000660"),
     ])
-    same = (71500.0, 71500.0, 12_345_678)
+    same = (71500.0, 71500.0, 12_345_678, 71000.0, 72000.0, 70500.0)
     conn = _FakeConn(
         instruments={"005930": "inst_samsung", "000660": "inst_hynix"},
-        existing={("inst_samsung", "2026-07-16"): same},
+        existing={("inst_samsung", "2026-07-16"): (same, _AT)},
         fail_confirmations={"inst_samsung"},
     )
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
@@ -479,6 +498,25 @@ def test_CHECK_위반_행은_격리하고_센다(tmp_path, monkeypatch):
     assert log["check_violations"][0]["reason"] == "bad_adjusted_close_price"
 
 
+@pytest.mark.parametrize("column", ["open", "high", "low"])
+def test_시고저_CHECK_위반_행도_격리하고_센다(tmp_path, monkeypatch, column):
+    # WHY(ALPHA-1148): ck_price_daily_ohl 은 시가·고가·저가가 양수·유한이길 요구한다. 게이트가
+    #      이 컬럼을 안 보면 DB 가 거부한 뒤에야 row_load_error 로 드러나 어느 값이 나빴는지가
+    #      구조화된 사유로 남지 않는다. 세 컬럼 각각이 적재 전에 걸려야 한다.
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row("005930"), _price_row("000660", **{column: 0.0})])
+    conn = _FakeConn(instruments={"005930": "inst_samsung", "000660": "inst_hynix"})
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+
+    assert load_price_daily.run(storage, "R1", db=_db()) == 2
+
+    assert [p[0] for p in _inserts(conn)] == ["inst_samsung"]
+    log = _log(storage)
+    assert log["skipped_check_violation"] == 1
+    assert log["check_violations"][0]["reason"] == f"bad_{column}_price"
+
+
 def test_비수치_값은_배치를_죽이지_않고_격리된다(tmp_path, monkeypatch):
     # WHY: _check_violation 은 격리 게이트다. 비수치 close(스키마 깨진 parquet)에서 float() 이
     #      예외를 던지면 바깥 try 가 load_error 로 잡아 **정상 행까지 전체 롤백**한다 —
@@ -568,23 +606,47 @@ def test_벤더_정정이_마트까지_흐른다(tmp_path, monkeypatch):
     assert _inserts(conn)[-1][2] == pytest.approx(101.0)
 
 
-def test_같은_키가_여러_part_에_있으면_최신_fetched_at_이_이긴다(tmp_path, monkeypatch):
-    # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 마지막 값이 남아 오래된 가격이 마트에
-    #      고착될 수 있다. canonical 병합과 같은 규칙(최신 fetched_at 우선)을 후보 선정에 적용한다.
+def test_같은_키가_여러_part_에_있으면_canonical_과_같은_승자를_고른다(tmp_path, monkeypatch):
+    # WHY: 과거 잔존 part 파일이 섞이면 파일 순서로 가격이 마트에 고착될 수 있다. 후보 선정은
+    #      canonical 병합과 같은 규칙이어야 한다(ALPHA-1120) — 종가가 같으면 D일 수집분(거래량 D일
+    #      축), 다음 날 재수집분의 시간외 포함 거래량이 이기면 available_at 도 밀린다.
     storage = LocalStorage(tmp_path / "lake")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_price_row(close=101.0, fetched_at="2026-07-21T06:00:00+00:00")],
+                     [_price_row(volume=100, fetched_at="2026-07-16T06:41:00+00:00")],
                      part="part-00000")
     _write_canonical(storage, "KR", "2026-07-16",
-                     [_price_row(close=100.0, fetched_at="2026-07-20T06:00:00+00:00")],
+                     [_price_row(volume=130, fetched_at="2026-07-17T06:41:00+00:00")],
                      part="part-00001")
     conn = _FakeConn()
     monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
 
     assert load_price_daily.run(storage, "R1", db=_db()) == 0
-    [(_, _, close, _, _, available_at, _)] = _inserts(conn)
-    assert close == pytest.approx(101.0)                    # 사전순 마지막 part 가 아니라 최신
-    assert available_at == "2026-07-21T06:00:00+00:00"
+    [(_, _, _, _, volume, available_at, *_)] = _inserts(conn)
+    assert volume == 100                                    # 사전순 마지막 part 도 최신도 아니다
+    assert available_at == "2026-07-16T06:41:00+00:00"      # available_at 도 D일 수집 시각
+
+
+def test_값이_같아도_available_at_이_앞당겨지면_마트를_갱신한다(tmp_path, monkeypatch):
+    # WHY(ALPHA-1120): 옛 raw 재정제로 canonical 승자가 D일 수집분으로 돌아오면 값은 같아도
+    #      "언제 알았나"가 앞당겨진다. 값만 비교해 걸러내면 마트 available_at 이 D+1 에 남아
+    #      복구가 절반만 된다. 반대로 늦은 시각으로는 밀지 않는다(PIT 는 이른 쪽이 사실이다).
+    storage = LocalStorage(tmp_path / "lake")
+    conn = _FakeConn()
+    monkeypatch.setattr(load_price_daily, "connect", _fake_connect(conn))
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row(fetched_at="2026-07-17T06:41:00+00:00")])
+    assert load_price_daily.run(storage, "R1", db=_db()) == 0
+
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row(fetched_at="2026-07-16T06:41:00+00:00")])
+    assert load_price_daily.run(storage, "R2", db=_db()) == 0
+    assert _log(storage, "R2")["updated"] == 1
+    assert _inserts(conn)[-1][5] == "2026-07-16T06:41:00+00:00"
+
+    _write_canonical(storage, "KR", "2026-07-16",
+                     [_price_row(fetched_at="2026-07-18T06:41:00+00:00")])
+    assert load_price_daily.run(storage, "R3", db=_db()) == 0
+    assert _log(storage, "R3")["already_present"] == 1   # 늦은 시각으로는 안 민다
 
 
 def test_적재_실패는_롤백되고_로그에_남는다(tmp_path, monkeypatch):

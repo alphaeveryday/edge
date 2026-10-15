@@ -6,6 +6,8 @@ get() 계약은 그대로여야 한다 — 이 회귀를 코드로 잠근다.
 """
 
 import io
+import socket
+import threading
 import time
 import traceback
 import urllib.error
@@ -210,6 +212,197 @@ def test_serial_sends_are_spaced_from_send_not_from_completion(monkeypatch):
     assert gaps == pytest.approx([interval] * 4)  # 완료 기준이면 rtt + interval = 2.0
 
 
+# ── 응답 없이 끊긴 연결(RemoteDisconnected) 재시도 — ALPHA-1153 ─────────────────────────────
+
+
+def _scripted_client(monkeypatch, script, interval=0):
+    """가상 시계 PoliteClient — script 의 (걸린 가상 시간, 응답 bytes 또는 예외)를 순서대로 낸다."""
+    clock = _FakeClock()
+    sends: list[float] = []
+
+    def handler(req, timeout=None):
+        sends.append(clock.monotonic())
+        took, outcome = script.pop(0)
+        clock.advance(took)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return _Resp(outcome)
+
+    monkeypatch.setattr("urllib.request.urlopen", handler)
+    monkeypatch.setattr("data_pipeline.sources.http.time", clock)
+    client = PoliteClient(min_interval=interval)
+    client._sleep = clock.advance
+    return client, clock, sends
+
+
+def _dropped():
+    import http.client
+
+    return http.client.RemoteDisconnected("Remote end closed connection without response")
+
+
+def test_dropped_connection_is_retried_within_the_call(monkeypatch):
+    # WHY: urllib 은 응답 수신 단계의 끊김을 URLError 로 감싸지 않는다. 그래서 재시도를 통째로 빠져나가
+    #      호출자를 죽였다 — 분 가격은 종목 하나의 끊김이 window 전체 실패였다(ALPHA-1153).
+    client, _, sends = _scripted_client(monkeypatch, [(0.1, _dropped()), (0.1, b"[]")])
+
+    assert client.request("GET", "https://x.example/y") == "[]"
+    assert len(sends) == 2
+
+
+def test_body_cut_mid_read_is_the_same_event(monkeypatch):
+    # WHY: 본문을 읽다 끊긴 것(IncompleteRead)도 같은 사건이다 — 헤더 전에 끊겼느냐 뒤에 끊겼느냐로
+    #      재시도 여부가 갈리면 같은 원인이 두 가지 결과가 된다.
+    import http.client
+
+    client, _, sends = _scripted_client(
+        monkeypatch, [(0.1, http.client.IncompleteRead(b"par")), (0.1, b"[]")])
+
+    assert client.request("GET", "https://x.example/y") == "[]"
+    assert len(sends) == 2
+
+
+def test_dropped_connection_is_retried_only_once_per_call(monkeypatch):
+    # WHY: 계속 끊기는 것은 드문 끊김이 아니라 장애다. 호출마다 여러 번 두드리면 어댑터의 재시도 루프·
+    #      window 재청구와 곱해져 발신이 는다 — 한 번만 다시 보낸다. 그 뒤엔 **그 예외를 그대로** 올린다:
+    #      안전 실패로 바꾸면 분 가격이 종목 결손으로 접어 window 를 커밋하고, 커밋된 window 는 자동
+    #      재청구가 없어 결손이 영구화된다. 예외여야 window 가 실패해 lease 뒤 다시 수집된다.
+    import http.client
+
+    client, _, sends = _scripted_client(monkeypatch, [(0.1, _dropped())] * 4)
+
+    with pytest.raises(http.client.RemoteDisconnected):
+        client.request("GET", "https://x.example/y")
+    assert len(sends) == 2  # 일반 재시도 예산(4회)을 끊김이 다 쓰지 않는다
+
+
+def test_late_drop_is_not_retried(monkeypatch):
+    # WHY: 재시도에는 전체 기한이 있다 — 오래 기다린 끝에 끊긴 호출을 다시 보내면 한 호출이
+    #      기한의 두 배를 쓴다(호출자의 window·lease 예산을 먹는다).
+    from data_pipeline.sources.http import DISCONNECT_RETRY_DEADLINE_SEC
+
+    client, _, sends = _scripted_client(
+        monkeypatch, [(DISCONNECT_RETRY_DEADLINE_SEC + 0.5, _dropped()), (0.1, b"[]")])
+
+    with pytest.raises(ConnectionError):
+        client.request("GET", "https://x.example/y")
+    assert len(sends) == 1
+
+
+def test_drop_retries_are_capped_across_calls(monkeypatch):
+    # WHY: 호출당 한도만으로는 장애 때 "모든 호출이 한 번씩 더" 가 된다(발신 2배). 클라이언트 전체
+    #      예산이 그 상한이다 — 예산을 다 쓰면 재시도 없이 실패하고, 구간이 지나면 다시 허용한다.
+    #      ⚠️ 고정 구간 카운터다: 이 테스트는 "한 구간 안에서 5회"만 고정한다. 임의의 60초에 대한
+    #      보장이 아니다(구간 경계에 걸치면 최대 10회).
+    from data_pipeline.sources.http import (
+        DISCONNECT_RETRY_BUDGET,
+        DISCONNECT_RETRY_BUDGET_WINDOW_SEC,
+    )
+
+    script = [(0.1, _dropped()), (0.1, b"[]")] * DISCONNECT_RETRY_BUDGET + [(0.1, _dropped())]
+    client, clock, sends = _scripted_client(monkeypatch, script)
+
+    for _ in range(DISCONNECT_RETRY_BUDGET):
+        assert client.request("GET", "https://x.example/y") == "[]"
+    with pytest.raises(ConnectionError):
+        client.request("GET", "https://x.example/y")
+    assert len(sends) == 2 * DISCONNECT_RETRY_BUDGET + 1  # 예산 밖 호출은 한 번만 나갔다
+
+    clock.advance(DISCONNECT_RETRY_BUDGET_WINDOW_SEC)
+    script += [(0.1, _dropped()), (0.1, b"[]")]
+    assert client.request("GET", "https://x.example/y") == "[]"
+
+
+def test_drop_retry_shares_the_existing_attempt_budget(monkeypatch):
+    # WHY: 끊김 재시도는 새 루프가 아니라 기존 재시도 루프의 한 칸이다. 5xx 와 섞여도 호출당 발신
+    #      상한(4)이 늘면 안 된다 — 중첩되면 재시도가 곱해진다.
+    def http_503():
+        return urllib.error.HTTPError("https://x.example/y", 503, "unavailable", {}, io.BytesIO(b""))
+
+    client, _, sends = _scripted_client(
+        monkeypatch, [(0.1, http_503()), (0.1, _dropped()), (0.1, http_503()), (0.1, http_503()),
+                      (0.1, b"[]")])
+
+    with pytest.raises(SafeFailureError):
+        client.request("GET", "https://x.example/y")
+    assert len(sends) == 4
+
+
+def test_drop_is_not_retried_when_the_backoff_would_cross_the_deadline(monkeypatch):
+    # WHY: 기한은 **다시 보내는 시각**에 대한 것이다. 기한 직전에 끊긴 호출은 백오프(1초)를 기다리면
+    #      기한을 넘긴다 — 끊긴 시점만 보면 통과해, 넘길 줄 알면서 기다렸다 보내게 된다.
+    from data_pipeline.sources.http import DISCONNECT_RETRY_DEADLINE_SEC
+
+    client, clock, sends = _scripted_client(
+        monkeypatch, [(DISCONNECT_RETRY_DEADLINE_SEC - 0.5, _dropped()), (0.1, b"[]")])
+
+    with pytest.raises(ConnectionError):
+        client.request("GET", "https://x.example/y")
+    assert len(sends) == 1
+    assert clock.now == pytest.approx(DISCONNECT_RETRY_DEADLINE_SEC - 0.5)  # 백오프도 기다리지 않았다
+
+
+def test_drop_is_not_resent_after_a_send_wait_that_outlasts_the_deadline(monkeypatch):
+    # WHY: 끊긴 시점엔 기한 안이어도 발신 간격(또는 공유 허용) 대기가 길면 실제 재발신은 기한 밖이다.
+    #      발신 직전에 다시 보지 않으면 "기한 안에서만 다시 보낸다"가 대기 시간만큼 거짓이 된다.
+    from data_pipeline.sources.http import DISCONNECT_RETRY_DEADLINE_SEC
+
+    client, _, sends = _scripted_client(
+        monkeypatch, [(0.1, _dropped()), (0.1, b"[]")], interval=DISCONNECT_RETRY_DEADLINE_SEC * 2)
+
+    with pytest.raises(ConnectionError):
+        client.request("GET", "https://x.example/y")
+    assert len(sends) == 1
+
+
+def test_drop_on_the_last_attempt_does_not_spend_the_budget(monkeypatch):
+    # WHY: 마지막 칸에서 끊기면 다시 보낼 수 없다. 그때도 예산을 깎으면 보내지도 않은 재시도가 예산을
+    #      비워, 뒤따르는 평범한 일회성 끊김을 복구하지 못한다.
+    from data_pipeline.sources.http import DISCONNECT_RETRY_BUDGET
+
+    def http_503():
+        return urllib.error.HTTPError("https://x.example/y", 503, "unavailable", {}, io.BytesIO(b""))
+
+    exhausted = [(0.0, http_503()), (0.0, http_503()), (0.0, http_503()), (0.0, _dropped())]
+    script = exhausted * DISCONNECT_RETRY_BUDGET + [(0.1, _dropped()), (0.1, b"[]")]
+    client, _, _ = _scripted_client(monkeypatch, script)
+
+    for _ in range(DISCONNECT_RETRY_BUDGET):
+        with pytest.raises(ConnectionError):
+            client.request("GET", "https://x.example/y")
+
+    # 같은 예산 구간 안(백오프 7초 × 5회 = 35초)의 일회성 끊김이 여전히 복구된다
+    assert client.request("GET", "https://x.example/y") == "[]"
+
+
+
+def test_drop_retry_waits_for_the_send_interval_like_any_other_send(monkeypatch):
+    # WHY: 재시도가 발신 간격 제어를 건너뛰면 끊김이 몰릴 때 벤더 한도 위로 발신이 나간다(KIS 는 초당
+    #      한도). 재발신도 직전 발신에서 간격만큼 떨어져야 한다 — 백오프(1초)보다 간격이 길면 간격이 이긴다.
+    interval = 3.0
+    client, _, sends = _scripted_client(
+        monkeypatch, [(0.1, _dropped()), (0.1, b"[]")], interval=interval)
+
+    assert client.request("GET", "https://x.example/y") == "[]"
+    assert sends[1] - sends[0] == pytest.approx(interval)
+
+
+def test_drop_retry_takes_a_new_shared_send_permit(monkeypatch):
+    # WHY: 공유 호출 허용이 켜진 경로에서는 발신마다 허용 한 건이다. 재발신이 첫 허용을 재사용하면
+    #      합산 한도 계산에서 발신 하나가 빠진다.
+    class Pacer:
+        calls = 0
+
+        def pace(self, cost=1):
+            self.calls += 1
+
+    client, _, sends = _scripted_client(monkeypatch, [(0.1, _dropped()), (0.1, b"[]")])
+    client.pacer = Pacer()
+
+    assert client.request("GET", "https://x.example/y") == "[]"
+    assert (len(sends), client.pacer.calls) == (2, 2)
+
+
 def test_first_call_is_not_delayed(monkeypatch):
     # WHY: 첫 요청까지 간격만큼 기다리면 모든 스텝이 매 런마다 공짜로 느려진다 — 슬롯이
     #      0 에서 시작하므로 첫 콜은 즉시 나가야 한다.
@@ -218,3 +411,280 @@ def test_first_call_is_not_delayed(monkeypatch):
     started = time.monotonic()
     client.get("https://x.example/y")
     assert time.monotonic() - started < 1.0
+
+
+def test_stats_separate_send_wait_from_response_time(monkeypatch):
+    # WHY(ALPHA-1124): 수집이 느려졌을 때 벤더 응답이 느린 것인지 발신 간격을 기다린 것인지는 합계
+    #      시간만으로 가를 수 없다 — 둘이 다른 칸에 쌓여야 원인을 고를 수 있다.
+    client, _, _ = _virtual_clock_client(monkeypatch, interval=1.0, rtt=0.25)
+
+    for _ in range(3):
+        client.get("https://x.example/y")
+
+    # 첫 콜은 안 기다리고, 뒤 두 콜은 간격 1.0 에서 응답 0.25 를 뺀 0.75 씩 기다린다
+    assert client.stats.drain() == {
+        "attempts": 3, "rtt_ms": 750, "rtt_max_ms": 250, "pace_wait_ms": 1500,
+    }
+    # 읽으면 비운다 — 다음 구간 요약에 앞 구간이 섞이면 구간별 비교가 무의미해진다
+    assert client.stats.drain() == {}
+
+
+def test_stats_count_every_send_and_name_failures_without_their_text(monkeypatch):
+    # WHY(ALPHA-1124): 재시도로 성공한 호출은 결과만 보면 정상 1건이다. 발신 수·재시도 대기·실패 종류가
+    #      따로 남아야 호출이 늘어난 것을 볼 수 있다. 실패는 상태코드·클래스명으로만 남긴다 — 예외
+    #      문자열에는 URL·프록시 자격증명이 들어갈 수 있다.
+    secret = "proxy-password=sensitive"
+    outcomes = [
+        lambda req: (_ for _ in ()).throw(
+            urllib.error.HTTPError(req.full_url, 503, secret, {}, io.BytesIO(b""))),
+        lambda req: (_ for _ in ()).throw(urllib.error.URLError(TimeoutError(secret))),
+        lambda req: _Resp(b"[]"),
+    ]
+    client = _client(monkeypatch, lambda req: outcomes.pop(0)(req))
+
+    assert client.request("GET", "https://x.example/y?key=" + secret) == "[]"
+
+    stats = client.stats.drain()
+    assert {key: stats[key] for key in stats if not key.endswith("_ms")} == {
+        "attempts": 3, "transport_retry": 2, "err_http_503": 1, "err_TimeoutError": 1,
+    }
+    assert stats["transport_backoff_ms"] == 3000  # 1초 + 2초 — 재시도 대기는 응답 소요와 다른 칸이다
+    assert secret not in str(stats)
+
+
+# ---------- 연결 재사용(keep_alive) — 대역이 아니라 루프백 서버로 실제 소켓을 본다 ----------
+
+
+class _LoopbackServer:
+    """루프백 HTTP/1.1 서버 — 받은 연결 수와 요청 수를 센다.
+
+    `statuses` 를 차례로 답한다(다 쓰면 200). 연결 하나에서 `per_conn` 건을 답하면 헤더로 알리지 않고
+    닫는다 — 쉬는 연결을 서버가 먼저 닫는 경우의 모양이다. `truncate` 면 본문을 선언한 길이보다 짧게
+    보내고 닫는다. `ended` 는 끝난(어느 쪽이든 닫은) 연결 수다.
+    """
+
+    def __init__(self, statuses=(), per_conn=None, truncate=False):
+        self._listener = socket.create_server(("127.0.0.1", 0))
+        self._listener.settimeout(0.05)  # stop() 을 알아채도록 accept 를 짧게 끊는다
+        self.url = f"http://127.0.0.1:{self._listener.getsockname()[1]}/y"
+        self._statuses, self._per_conn, self._truncate = list(statuses), per_conn, truncate
+        self.connections = self.requests = 0
+        self.served = []  # 연결별 요청 수(받은 순서)
+        self.ended = 0
+        self._stopped = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        while not self._stopped.is_set():
+            try:
+                conn, _ = self._listener.accept()
+            except TimeoutError:
+                continue
+            self.connections += 1
+            self.served.append(0)
+            # 연결마다 스레드 — 살아 있는 재사용 연결이 다음 연결의 응답을 막지 않게
+            threading.Thread(target=self._answer, args=(conn, len(self.served) - 1), daemon=True).start()
+        self._listener.close()
+
+    def _answer(self, conn, slot):
+        reader, served = conn.makefile("rb"), 0
+        while self._per_conn is None or served < self._per_conn:
+            if not reader.readline():
+                break  # 클라이언트가 닫았다
+            while reader.readline() not in (b"\r\n", b""):
+                pass  # 헤더 끝까지
+            self.requests += 1
+            self.served[slot] += 1
+            served += 1
+            status = self._statuses.pop(0) if self._statuses else 200
+            length = 9 if self._truncate else 2
+            conn.sendall(f"HTTP/1.1 {status} X\r\nContent-Length: {length}\r\n\r\n[]".encode())
+            if self._truncate:
+                break
+        reader.close()
+        conn.close()
+        self.ended += 1
+
+    def stop(self):
+        self._stopped.set()
+        self._thread.join(2)
+
+
+@pytest.fixture
+def loopback():
+    """루프백 서버를 띄우는 팩토리 — 테스트가 끝나면 리스너와 스레드를 정리한다."""
+    servers = []
+
+    def start(**kwargs):
+        servers.append(_LoopbackServer(**kwargs))
+        return servers[-1]
+
+    yield start
+    for server in servers:
+        server.stop()
+
+
+def _live_client(**kwargs):
+    client = PoliteClient(min_interval=0, **kwargs)
+    client._sleep = lambda secs: None
+    return client
+
+
+def _eventually(predicate, timeout=5.0):
+    """다른 스레드(서버)가 따라올 때까지 잠깐 기다린다."""
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return predicate()
+
+
+def _counts(client):
+    return {key: value for key, value in client.stats.drain().items() if not key.endswith("_ms")}
+
+
+def test_keep_alive_sends_every_call_over_one_connection(loopback):
+    # WHY(ALPHA-1153): 분 가격은 1분에 수백 종목을 한 호스트에 묻는다. 호출마다 TCP·TLS 를 새로 맺으면 그
+    #      수립 시간이 호출 간격보다 길어져 한 창이 1분을 넘긴다 — 재사용을 켠 클라이언트는 연결 하나로
+    #      보내야 한다. 끄면(기본) 종전대로 호출마다 새 연결이다 — 다른 벤더의 운반은 바뀌지 않는다.
+    reused, fresh = loopback(), loopback()
+    keep, plain = _live_client(keep_alive=1), _live_client()
+    for server, client in ((reused, keep), (fresh, plain)):
+        for _ in range(3):
+            assert client.get(server.url) == "[]"
+
+    assert (reused.connections, reused.requests) == (1, 3)
+    assert (fresh.connections, fresh.requests) == (3, 3)
+    # 새로 맺은 횟수가 계측에 남는다 — 운영에서 재사용이 되는지는 이 값으로만 볼 수 있다
+    assert _counts(keep) == {"attempts": 3, "connects": 1}
+
+
+def test_keep_alive_rotates_calls_across_its_connections(loopback):
+    # WHY: 한 연결에 호출을 몰면 벤더가 그 연결을 따로 제한한다(KIS 는 연결 하나에 초당 6건쯤부터 유량 초과로
+    #      거절했다). 연결 N 개를 받았으면 N 개에 고르게 나눠 보내야 연결당 속도가 1/N 로 내려간다.
+    server = loopback()
+    client = _live_client(keep_alive=3)
+
+    for _ in range(9):
+        assert client.get(server.url) == "[]"
+
+    assert server.served == [3, 3, 3]
+    assert _counts(client) == {"attempts": 9, "connects": 3}
+
+
+def test_keep_alive_turns_itself_off_when_5xx_pile_up(loopback, monkeypatch, caplog):
+    # WHY: 벤더가 재사용 연결을 따로 제한하면 호출이 5xx 로 거절되고, 그때마다 1초씩 물러나 종전(호출마다 새
+    #      연결)보다 느려진다. 아무도 보지 않는 장중에 그 상태로 하루를 보내지 않도록 5xx 가 쌓이면 스스로
+    #      종전 경로로 돌아가야 하고, 그 사실을 로그에 남겨야 한다.
+    from data_pipeline.sources import http as transport
+
+    monkeypatch.setattr(transport, "KEEP_ALIVE_5XX_LIMIT", 2)
+    server = loopback(statuses=[503, 503])
+    client = _live_client(keep_alive=1)
+
+    with caplog.at_level("WARNING", logger="data_pipeline.sources.http"):
+        assert client.get(server.url) == "[]"  # 503 → 503(한도) → 재사용을 끄고 종전 경로로 200
+        assert client.get(server.url) == "[]"
+
+    assert client.keep_alive == 0
+    assert server.served == [2, 1, 1]  # 재사용 연결 하나에 2건, 그 뒤로는 호출마다 새 연결
+    assert "연결 재사용을 끈다" in caplog.text
+    assert _counts(client)["keep_alive_off"] == 1  # 창 요약 로그에도 남는다
+    # 쥐고 있던 재사용 연결도 닫는다 — 꺼진 뒤로는 다시 보지 않으므로 여기서 안 닫으면 프로세스가 끝날 때까지 남는다
+    assert _eventually(lambda: server.ended == 3)
+
+
+def test_keep_alive_reconnects_before_sending_when_the_server_closed_the_idle_connection(loopback):
+    # WHY: 서버는 쉬는 연결을 알리지 않고 닫는다(창과 창 사이 공백). 그 연결에 요청을 실으면 응답 없이
+    #      끊긴 것으로 보여 끊김 재시도 예산(60초 5회)을 쓰고, 예산이 바닥나면 창이 실패한다. 닫힌 것을
+    #      **보내기 전에** 알아채 새로 맺어야 한다 — 실패한 발신도 재시도도 없어야 한다.
+    server = loopback(per_conn=1)
+    client = _live_client(keep_alive=1)
+
+    assert client.get(server.url) == "[]"
+    assert _eventually(lambda: server.ended == 1)
+    assert client.get(server.url) == "[]"
+
+    assert server.connections == 2
+    assert _counts(client) == {"attempts": 2, "connects": 2}
+
+
+def test_keep_alive_reports_http_errors_like_urlopen(loopback):
+    # WHY: 재시도·중단 분기는 `urlopen` 의 예외 모양에 걸려 있다. 재사용 경로가 4xx 를 정상 응답으로
+    #      돌려주면 키 오류가 빈 수집으로 커밋되고, 5xx 를 올리지 않으면 재시도가 사라진다.
+    server = loopback(statuses=[503, 200, 403])
+    client = _live_client(keep_alive=1)
+
+    assert client.get(server.url) == "[]"  # 503 → 재시도 → 200
+    with pytest.raises(StopFetch) as stop:
+        client.get(server.url)
+
+    assert (stop.value.status, stop.value.body) == (403, "[]")
+    # 본문을 끝까지 읽은 오류 응답 뒤에도 같은 연결을 쓴다(connects 1)
+    assert _counts(client) == {
+        "attempts": 3, "connects": 1, "transport_retry": 1, "err_http_503": 1, "err_http_403": 1,
+    }
+    assert server.connections == 1
+
+
+def test_keep_alive_stops_on_4xx_even_when_its_body_is_cut(loopback):
+    # WHY: 4xx 는 키·권한 문제라 즉시 중단해야 하고, 그 판정은 상태코드다. 본문이 중간에 끊겼다고 끊김
+    #      재시도로 빠지면 같은 키로 다시 두드리고, 소진되면 종목 결손으로 접혀 다음 종목까지 계속 묻는다.
+    server = loopback(statuses=[403], truncate=True)
+    client = _live_client(keep_alive=1)
+
+    with pytest.raises(StopFetch) as stop:
+        client.get(server.url)
+
+    assert (stop.value.status, server.requests) == (403, 1)
+
+
+def test_keep_alive_never_sends_https_over_a_plain_connection(loopback, monkeypatch):
+    # WHY: 연결을 호스트로만 찾으면 같은 호스트의 http 연결에 https 요청이 실려 인증 헤더가 평문으로 나간다.
+    import http.client
+
+    server = loopback()
+    client = _live_client(keep_alive=1)
+    assert client.get(server.url) == "[]"
+
+    tls_connections = []
+
+    class _Tls(http.client.HTTPConnection):
+        """TLS 없이 같은 루프백 서버로 잇는 대역 — https 요청이 어느 연결 종류를 골랐는지만 본다."""
+
+        def __init__(self, host, **kwargs):
+            tls_connections.append(host)
+            super().__init__(host, **kwargs)
+
+    monkeypatch.setattr("http.client.HTTPSConnection", _Tls)
+    assert client.get(server.url.replace("http://", "https://")) == "[]"
+
+    assert len(tls_connections) == 1
+    assert server.connections == 2
+
+
+def test_keep_alive_treats_a_failed_send_as_a_network_failure():
+    # WHY: `urlopen` 은 발신 단계 실패(연결 거부·DNS)를 URLError 로 감싸고, 그건 재시도 뒤 고정 코드로
+    #      끝난다. 원형 그대로 올리면 '응답 없이 끊긴 연결' 분기로 빠져 재시도가 1회로 줄고 예외 원문이
+    #      호출자에게 나간다.
+    unused = socket.socket()
+    unused.bind(("127.0.0.1", 0))
+    url = f"http://127.0.0.1:{unused.getsockname()[1]}/y"
+    unused.close()  # listen 한 적 없는 포트 — 연결이 거부된다
+    client = _live_client(keep_alive=1)
+
+    with pytest.raises(SafeFailureError):
+        client.get(url)
+
+    assert _counts(client) == {
+        "attempts": 4, "connects": 4, "transport_retry": 3, "err_ConnectionRefusedError": 4,
+    }
+
+
+def test_keep_alive_leaves_requests_with_a_body_on_the_old_path(monkeypatch):
+    # WHY: 본문 있는 요청은 `urlopen` 이 붙이는 헤더(Content-Type 기본값)까지 벤더가 보는 모양의 일부다.
+    #      재사용 경로는 그걸 옮기지 않았으므로, 켜도 이 요청들은 종전 경로로 가야 한다.
+    client = _client(monkeypatch, lambda req: _Resp(b"ok"))
+    client.keep_alive = 1
+
+    assert client.request("POST", "https://x.example/y", data=b"a=1") == "ok"

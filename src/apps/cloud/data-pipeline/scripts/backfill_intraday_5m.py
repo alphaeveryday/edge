@@ -13,7 +13,7 @@ ETF 를 겹침으로 골라 칼만에 배선한다. 그래도 이 파일의 근�
 
 ⚠️ **그러니 "β 표본 복구"로 이 파일을 정당화하지 마라.** `attribute.MIN_BETA_N` 이 아직
 있지만 그건 **갭 β**(직전 미국 세션 대비)의 상수이고 대상 종목 **자신의** 전 이력을 센다.
-참조 계열 47종은 `sector_etf_ids` 축이라 `price_consumer` 의 판정 대상이 아니므로
+참조 계열 32종은 `sector_etf_ids` 축이라 `price_consumer` 의 판정 대상이 아니므로
 (`config/sources.toml` 의 그 목록 주석) 그 경로를 안 탄다 — **그 5분봉 이력의 살아
 있는 소비자는 2026-08-09 현재 확인되지 않았다**(그때는 48종이었다. 091170 은
 ALPHA-927 이 판정 축으로 옮겼고, 그래서 **그 한 종은 이제 이 문단의 예외다**).
@@ -40,6 +40,16 @@ ALPHA-927 이 판정 축으로 옮겼고, 그래서 **그 한 종은 이제 이 
 티커-major, `_collect_kis` 는 날짜-major 인 이유가 그것뿐이다. 5분봉 API 는 어느 벤더에도 없으므로 1분을 받아 롤업한다 —
 롤업 규칙은 `minute/rollup.py` 와 **같은 계약**이다(open=첫 봉 open · high=max ·
 low=min · close=마지막 close · volume=합, ts=구간 시작, available_at=ts+5분).
+
+⚠️ **KIS 로 받은 5분봉은 벤더가 행을 준 분(체결 분)만으로 만들어진다**(ALPHA-1153 — 소급 어댑터가
+행 없는 분을 채우지 않는다). 그래서 ① 저유동 종목의 5분봉은 그 5분 중 체결한 분만 모은 봉이고
+(시가 = 첫 체결 분의 시가, 무거래 분이 있어도 표시가 없다), ② 소급 TR 은 종가 단일가 접수 구간
+(15:20~15:29) 행을 주지 않으므로(10-02 원문 3종목 — 거래소 규칙상 그 구간은 체결이 없다) 15:20 버킷은 15:20~15:24 가 통째로 비어 그 종목·그날 행이 없고,
+15:25 버킷은 15:29 창의 단일가 봉 하나(시가=고가=저가=종가=단일가, 거래량=단일가 거래량)로
+만들어진다. 그래서 KIS 로 받은 날은 전 종목이 많아야 77봉이고, `_warn_partial_days` 는 그날
+최대값을 격자로 잡으므로 이 균일한 빈칸을 경고하지 않는다. 예전(무거래 분 합성 시절)에 받은
+파일과 같은 날을 다시 받으면 모양이 다르다.
+실시간 레인(당일 TR·`part-0` 롤업)은 이 변경과 무관하다 — 벤더가 무거래 분도 flat 행으로 준다.
 
 **왜 별도 파일인가.** `part-0.parquet` 은 롤업이 통째로 덮는 파일이다 — 거기 끼워 넣으면
 다음 재집계에서 지워진다. 같은 파티션에 `part-<vendor>-backfill.parquet` 로 따로 쓴다 —
@@ -111,6 +121,9 @@ VENDORS = {
 }
 TOSS_SECRET = "edge-dev-data-pipeline-toss"
 KIS_SECRET = "edge-dev-data-pipeline/kis/oauth"
+# 공유 호출 허용(ALPHA-1087) 플래그의 **배포된 사실**을 읽을 kis 태스크 정의. 이 스크립트는 로컬에서
+# 돌고 공유 허용을 거치지 않으므로(자기 PoliteClient 간격), 켜진 환경에서 돌면 합산 한도를 깬다.
+KIS_TASK_FAMILY = "edge-dev-data-pipeline-kis"
 # 소급 TR 은 한 콜 120봉이라 하루 4콜이다(실측). 간격이 곧 유량 상한이고 앱키 전역이라
 # 다른 KIS 스텝과 나눠 쓴다. **1분 가격 워커와 같은 간격**이다 — 0.08 → 12.5 req/s 이고
 # 레포 예산선은 15/s, 벤더 한도(EGW00201)는 20/s 다(`config/models.py:min_interval_sec`).
@@ -364,7 +377,7 @@ def _day_candles_kis(client, symbol: str, day: str) -> list:
     """그 하루의 1분 캔들 전부. 첫 호출이 하루를 받아 캐시하고 나머지는 조회다.
 
     window 를 하나씩 묻는 이유는 **워커와 같은 길을 타기 위해서다** — 범위 가드(시간외
-    거부)·무거래 분 합성(`fill_no_trade_minutes`)·결정적 실패 캐시가 전부 그 경로에
+    거부)·종가 단일가 접기(`fold_closing_auction`)·결정적 실패 캐시가 전부 그 경로에
     걸려 있다. 하루 캐시를 직접 들여다보면 그 셋을 우회하고, 그러면 백필과 수집 레인이
     같은 벤더 응답에서 다른 봉을 만든다.
     """
@@ -378,8 +391,8 @@ def _day_candles_kis(client, symbol: str, day: str) -> list:
 def _warn_partial_days(day: str, counts: dict[str, int]) -> list[str]:
     """그날 격자보다 봉이 적게 나온 종목을 드러낸다. 반환은 그 종목들(테스트용).
 
-    🔴 소급 TR 은 **첫 체결 앞 분을 안 준다** — `fill_no_trade_minutes` 도 "첫 관측 앞은
-    안 채운다"가 의도다(없는 값을 지어내지 않는다). 토스는 무거래도 flat 봉을 주므로
+    🔴 소급 TR 은 **무거래 분(첫 체결 앞 포함)을 안 준다** — 어댑터도 그 분을 채우지 않는다
+    (없는 값을 지어내지 않는다, ALPHA-1153 — 종가 단일가 접수 구간도 예외 없다). 토스는 무거래도 flat 봉을 주므로
     하루가 늘 꽉 찼고, 그래서 "그 종목이 그날 파일에 있다 = 그날이 온전하다"가 참이었다.
     벤더 축이 그 전제를 깼다: 한산한 종목은 부분본으로 착지하는데 `coverage` 는 그걸
     온전한 하루로 세므로 ① 재실행이 영영 안 고치고(`covered` 가 막는다) ② `--min-days`
@@ -424,6 +437,7 @@ def _collect_kis(days, targets, covered, a):
     중간에 죽으면 받은 날은 남기고 이어서"가 바로 이 자리다. 다음 실행은 `covered` 가
     이미 쓴 날을 걸러 주므로 이어받는다.
     """
+    refuse_if_call_budget_enabled(boto3.client("ecs"))
     sec = json.loads(boto3.client("secretsmanager")
                      .get_secret_value(SecretId=KIS_SECRET)["SecretString"])
     vendor = VENDORS["kis"]["vendor"]
@@ -513,6 +527,25 @@ def _collect_kis(days, targets, covered, a):
         if failed:
             log.warning("수집 실패 (종목,날짜) %d건 — 상장 전 날짜가 대부분이다. 산출이 "
                         "0이라 다음 실행도 같은 자리에서 콜을 태운다", failed)
+
+
+def refuse_if_call_budget_enabled(ecs) -> None:
+    """공유 호출 허용이 켜진 배포에서는 KIS 백필을 거부한다(fail-closed).
+
+    판정은 배포된 kis 태스크 정의의 env 로 한다 — 이 스크립트를 도는 로컬 셸의 env 는 배포 상태를
+    모른다. 조회 실패(권한·이름 변경)도 그대로 올려 실행을 막는다: 확인 못 한 채 도는 쪽이 합산 한도를
+    깨는 쪽이다.
+
+    ⚠️ **완전한 차단이 아니다.** 보는 것은 "가장 최근 등록된 태스크 정의"이지 지금 실행 중인 태스크가
+    아니다 — 전환 배포 도중이나 정의는 끈 상태인데 이전 공유 모드 태스크가 남아 있는 동안에는 판정이
+    실제와 어긋날 수 있다. 운영 절차(ALPHA-1087: 공유 모드 중 수동 백필 금지)가 1차 통제이고
+    이건 보조 가드다.
+    """
+    td = ecs.describe_task_definition(taskDefinition=KIS_TASK_FAMILY)["taskDefinition"]
+    env = {e["name"]: e["value"] for c in td["containerDefinitions"] for e in c.get("environment", [])}
+    if env.get("DATA_PIPELINE_CALL_BUDGET__ENABLED", "false").strip().lower() == "true":
+        raise SystemExit("공유 호출 허용이 켜진 환경이다 — 이 스크립트는 공유 허용을 거치지 않아 합산 한도를 깬다. "
+                         "끈 시간대·끈 환경에서 실행한다(ALPHA-1087).")
 
 
 def main() -> int:

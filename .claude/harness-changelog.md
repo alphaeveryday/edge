@@ -4,6 +4,7 @@
 
 | 날짜 | 변경 내용 | 대상 | 사유 |
 |------|----------|------|------|
+| 2026-10-05 | v1 소스 제거에 따라 실행 불가능해진 causeflow 스킬 제거 | skills/causeflow | 분석은 analysis-engine-v2, 운영 DB 조회는 db-query로 분리 |
 | 2026-07-02 | 초기 구성 — pr-cycle·docs-sync 스킬 (경량 시작, 에이전트 팀 없음) | skills/pr-cycle, skills/docs-sync | git 히스토리 반복 작업 1·2순위 스킬화 |
 | 2026-07-02 | 티켓 확인을 3단계 에스컬레이션으로 확장 (스프린트→백로그→생성, 스프린트 배치 보장) | skills/pr-cycle | 백로그 미확인 시 중복 이슈 생성 우려 피드백 |
 | 2026-07-04 | edge 특화 코드리뷰 스킬 신설 + PR 전 게이트에 편입 (edge-review → docs-sync 2단계; 빌드/테스트 확인은 edge-review 안에 포함) | skills/edge-review, skills/pr-cycle | 내장 /code-review 대신 AGENTS 규칙·계약(schema SSOT·신뢰경계·레이크) 특화 리뷰를 게이트에 상시화 |

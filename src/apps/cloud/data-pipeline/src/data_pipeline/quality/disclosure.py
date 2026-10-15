@@ -198,3 +198,60 @@ def validate_segment_fact(row: dict, *, max_report_date: str) -> list[str]:
         reasons.append("share_basis_unreliable")
 
     return reasons
+
+
+# **다시 읽어도 결과가 같은** 문서 단위 거부 사유(ALPHA-1154). 전부 "이미 저장한 입력에 대한
+# 판정"이다 — 정제 쪽은 본문 내용 판정이고(본문은 한 번 받으면 다음 poll 이 그 객체를 재사용한다:
+# `ingest_raw_disclosure._existing_documents`), 조립 쪽은 본문에서 계약 대상(체결계약명)을 못 뽑아
+# 적재가 개념 ID 를 만들지 못한 fact 다(`load_disclosure._prepare_supply_rows` — 이름이 비면 None).
+# 어느 쪽도 다시 읽는다고 달라지지 않아, 커서를 막아 얻는 것이 없다.
+#
+# 읽는 곳은 둘이다. 1분 레인(`minute.disclosure_worker`)은 이 사유만 있는 창의 커서를
+# 전진시키고, 저녁 배치(`run._settle_confirmed_rejects`, ALPHA-1163)는 이 사유만 있는 정제를
+# 종료 0 으로 닫는다. 목록이 한 벌이어야 같은 문서가 두 레인에서 같은 판정을 받는다.
+#
+# ⚠️ **여기 없는 사유는 전부 일시 실패로 본다**(모르는 사유 포함) — 1분 레인은 종전대로
+# 커서를 막고, 배치는 종료 2 로 실패한다. 틀리면 막는 쪽으로 틀려야 한다: 확정으로 잘못
+# 접으면 다시 읽어 풀릴 문서가 경계 뒤에 갇히고, 배치는 풀릴 실패를 성공으로 닫는다.
+# 그래서 넣지 않은 것: `missing_document_body`(본문 미도착 — 다음 poll 이 다시 받는다),
+# `parse_error`(본문 객체 읽기 실패가 같은 except 로 접힌다), `raw_read_error`,
+# 목록 행에서 오는 `missing_rcept_no`·`missing_report_date`·`bad_report_date`(목록은 매 poll
+# 다시 읽으므로 값이 달라질 수 있다), 조립의 `missing_supplier_instrument`(발행사의 보통주
+# 기준정보 조인 결과다 — 문서가 아니라 마스터가 채워지면 풀린다. 캐치업을 소진하면 D-1 fact 는
+# 그 뒤 조립 창에서 빠져 다시 시도되지 않는다)와 `event_build_error`(설정 문제).
+CONFIRMED_REJECT_REASONS = frozenset({
+    # 공급계약 본문(quality.validate_supply_fact 의 blocking 중 본문 유래)
+    "empty_parse", "amount_out_of_range", "ratio_not_finite",
+    # 사업부문 본문(normalize_disclosure_segment · quality.validate_segment_fact)
+    "no_segments_parsed", "missing_segment_name", "empty_segment",
+    "revenue_out_of_range", "share_not_finite",
+    # 조립(assemble_disclosure_events._skip_reasons) — 본문에서 계약 대상을 못 뽑은 fact
+    "missing_contract_object",
+})
+
+
+def split_failures(stage: str, items: list[dict]) -> tuple[list[dict], int]:
+    """한 단계의 문서 단위 실패 → `(확정 거부 문서 목록, 확정 거부로 볼 수 없는 실패 수)`.
+
+    확정 거부는 사유 중 하나라도 `CONFIRMED_REJECT_REASONS` 에 들고 **접수번호가 있는** 실패다
+    (게이트는 blocking 사유와 경고를 한 목록에 같이 싣는다 — 확정 사유가 하나면 나머지가 무엇이든
+    그 원문은 다시 읽어도 거부된다). 접수번호가 없으면 나중에 찾아 재처리할 수 없으므로 확정으로
+    접지 않는다. 같은 문서의 여러 실패(사업부문은 부문마다 한 건)는 한 항목으로 합친다.
+    """
+    rejected: dict[str, dict] = {}
+    unresolved = 0
+    for item in items:
+        reasons = item.get("reasons") if isinstance(item, dict) else None
+        rcept_no = item.get("rcept_no") if isinstance(item, dict) else None
+        if (not isinstance(reasons, list) or not isinstance(rcept_no, str) or not rcept_no
+                or not CONFIRMED_REJECT_REASONS.intersection(
+                    reason for reason in reasons if isinstance(reason, str))):
+            unresolved += 1
+            continue
+        entry = rejected.setdefault(rcept_no, {"stage": stage, "rcept_no": rcept_no,
+                                               "reasons": []})
+        entry["reasons"] = sorted({*entry["reasons"], *(str(reason) for reason in reasons)})
+        for location in ("document_raw_path", "document_id", "fact_id"):
+            if item.get(location):
+                entry.setdefault(location, item[location])
+    return [rejected[key] for key in sorted(rejected)], unresolved

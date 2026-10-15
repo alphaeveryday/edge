@@ -14,12 +14,18 @@ variable "zone_id" {
 }
 
 variable "certificate_arn" {
-  description = "CloudFront 뷰어 인증서 ARN. foundation 의 us-east-1 와일드카드(*.edgesignal.dev). 반드시 us-east-1 인증서여야 함."
+  description = "CloudFront 뷰어 인증서 ARN. foundation 의 us-east-1 인증서(*.edgesignal.dev 와일드카드 또는 etforca.com). 반드시 us-east-1 인증서여야 함."
   type        = string
 }
 
 variable "spa" {
   description = "SPA(클라이언트 사이드 라우팅)면 true — 확장자 없는 뷰어 요청을 CloudFront Function(viewer-request, default behavior 한정)으로 /index.html 리라이트. /api/* 의 에러는 손대지 않는다. 라우트 파라미터에 '.' 을 쓰지 않는 것이 전제. 위젯 같은 정적 파일 묶음이면 false."
+  type        = bool
+  default     = false
+}
+
+variable "redirect_www" {
+  description = "true 면 www.<domain_name> 을 대체 도메인과 Route53 레코드로 더하고, www 로 온 요청을 https://<domain_name> 으로 영구 이동시킨다(GET·HEAD 301, 그 밖 308). 인증서가 www.<domain_name> 을 포함해야 한다. spa 와 함께 켤 수 없다."
   type        = bool
   default     = false
 }
@@ -67,4 +73,19 @@ variable "api_path_pattern" {
   description = "API 오리진으로 라우팅할 경로 패턴."
   type        = string
   default     = "/api/*"
+}
+variable "api_origin_id" {
+  type    = string
+  default = "api"
+}
+
+variable "api_origin_header_name" {
+  type    = string
+  default = ""
+}
+
+variable "api_origin_header_value" {
+  type      = string
+  default   = ""
+  sensitive = true
 }

@@ -1,0 +1,30 @@
+id: FinancialMetric_ForCompany_Company
+source: FinancialMetric
+definition:
+  name: ForCompany
+  label: ForCompany
+  description: The company whose financial value is measured, matched using its DART
+    company code.
+  target: Company
+  sourceProperty: corpCode
+  targetProperty: dartCorpCode
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+    declaredForeignKey: false
+  mappingStatus: defined
+  apiName: forCompany
+  displayName: ForCompany
+  pluralDisplayName: null
+  inverse:
+    apiName: financialMetrics
+    displayName: Financial metrics
+    description: Financial measurements for this company by period, basis and collection
+      version.
+    pluralDisplayName: Financial metrics
+  backing:
+    type: foreignKey
+    configurationStatus: requiresPreparation
+    preparation: Prepare the mapped object primary keys in backing data using sourceMapping;
+      this local mapping is not a deployed Foundry datasource.

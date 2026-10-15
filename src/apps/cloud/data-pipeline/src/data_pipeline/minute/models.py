@@ -43,65 +43,59 @@ EXTENDED_OPEN = time(8, 0)
 EXTENDED_CLOSE = time(20, 0)
 WINDOWS_PER_EXTENDED_SESSION = 720
 
-# 종가 단일가 접수 개시. 이 시각부터 마감까지는 **주문만 받고 체결이 없다** — 그 구간
-# window 는 마감이 확정된 뒤에 집는다(`scheduled_at_for`).
+# 종가 단일가 접수 개시. 이 시각부터 마감까지는 **주문만 받고 체결이 없다** — 그 구간의
+# 봉은 무거래(0)가 맞고, 체결은 15:30:00 에 한 번 나 15:30 시작 봉에 실린다.
 CLOSING_AUCTION_OPEN = time(15, 20)
-# 마감 확정을 기다리는 시간. KRX 종가 단일가는 15:20~15:30 접수 후 **15:30:00 에 한 번**
-# 체결되는데, 벤더 캔들에 실리기까지 시차가 있다.
-FINAL_WINDOW_SETTLE_SEC = 60
+# 창이 닫힌 뒤 벤더 봉이 **확정 층**에 들어올 때까지 기다리는 시간(ALPHA-1127, 09-30 프로브).
+# KIS 당일 TR 은 분 M 진행 중에 "라벨 ≤ M−1 = 확정, 라벨 M = 0 자리표시, 요청 라벨 = 형성 중"
+# 세 층으로 답한다. 창 w(라벨 w) 는 w+1 분이 끝나야 자리표시(0)와 확실히 갈리므로 창 끝
+# + 60초 뒤에 묻는다. 확정 자체는 분 끝 뒤 ≤8초였지만(005930·462870 실측), 자리표시 0 은
+# 진짜 무거래 봉과 모양이 같아 몇 초의 시차에 걸리면 **조용히** 틀린다 — 여유를 분 단위로 둔다.
+WINDOW_SETTLE_SEC = 70
+# 마감 창(15:29)도 같은 규칙이다. 종가 단일가 봉(라벨 15:30)은 세션 안에 확정 층으로 안
+# 오므로(09-30 실측: 15:31:00 리셋 뒤 15:57 까지 0) 기다려서 얻을 수 없다 — 실시간 15:29
+# 창은 접수 구간 봉 그대로이고 단일가는 마감 뒤 재수집이 접는다(`kis_minute` 주석·ALPHA-1128).
 # 그 지연이 걸리는 dataset. **가격 캔들 얘기**라 뉴스 세션(news_minute)에는 안 건다 —
-# 같은 `plan_session` 을 쓰지만 15:30 에 기다릴 이유가 없고, 1분 지연은 뉴스 realtime
-# 레인의 추출·조립을 그만큼 늦춘다.
+# 같은 `plan_session` 을 쓰지만 기다릴 이유가 없고, 지연은 뉴스 realtime 레인의 추출·조립을
+# 그만큼 늦춘다. 업종지수도 다른 TR·다른 응답 형상이라 대상이 아니다.
 PRICE_MINUTE_DATASET = "price_minute"
+# 지연이 **필요 없는** 가격 소스. 토스 `timestamp` 는 구간 끝 라벨이고 창이 닫히면 그 봉이
+# 곧 최종이라(ALPHA-682 실측) 기다릴 층이 없다 — 지연은 KIS 응답 형상의 문제다. 새 소스는
+# 실측 전까지 지연 쪽(보수)으로 둔다 — 안 기다려서 틀리는 쪽이 조용하다.
+UNSETTLED_PRICE_SOURCE_GROUPS = frozenset({"toss"})
 
 
-def scheduled_at_for(window_end: datetime, *, dataset: str) -> datetime:
-    """window 가 claim 가능해지는 시각 — 보통 `window_end`(구간이 닫혀야 봉이 있다).
+def scheduled_at_for(window_end: datetime, *, dataset: str,
+                     source_group: str | None = None) -> datetime:
+    """window 가 claim 가능해지는 시각.
 
-    ⚠️ **종가 단일가 접수 구간(15:20~15:30)에 걸친 window 는 예외**다 — 전부 마감 확정
-    뒤(15:31)로 민다. 그 구간은 주문만 받고 체결이 없는데, 벤더는 그 사실을 **제때 말해
-    주지 않는다**. 같은 좌표를 언제 묻느냐로 답이 갈린다(2026-08-05 실측, 005930):
+    가격 창은 `window_end + WINDOW_SETTLE_SEC` 다 — 구간이 닫히는 것만으로는 부족하고,
+    벤더 응답의 **확정 층**에 들어와야 한다(상수 주석). 마감 창(15:29)도 예외가 아니다 —
+    종가 단일가는 세션 안에서 못 받는다(WINDOW_SETTLE_SEC 주석). 토스 세션
+    (`UNSETTLED_PRICE_SOURCE_GROUPS`)은 그 층이 없어 `window_end` 그대로다 — `source_group`
+    을 안 넘기면 지연 쪽으로 둔다(모르는 소스를 안 기다리는 쪽이 조용히 틀린다).
 
-        15:19 봉  O247500 H247500 L247000 C247000  vol 26,328   ← 실제 체결
-        15:20~   그 봉이 여덟 창에 **거래량째 복제**된다        ← 접수 구간에 즉시 물은 답
-        15:29 봉  O246000 …                        vol 1,382,080 ← 단일가 체결
-        같은 좌표를 마감 뒤에 물으면 `vol 0`(무거래) 이 온다  ← 정직한 답
-
-    복제 봉은 `volume != 0` 이라 4분류에서 `received`(정상)로 접히고, 5분봉 롤업이
-    거래량을 합산하므로 마지막 버킷이 부푼다(08-05 실측 중앙 1.37배·최대 60배).
-    08-03 의 마감 봉 종가 불일치(0005G0 수집 43,710 V=0 → 소급 43,305 = 일봉 종가)도
-    같은 결함의 마지막 창 발현이었다.
-
-    요청한 **좌표는 맞다** — 창을 늘릴 문제가 아니라 **묻는 시각**의 문제다. 창을 안
-    만드는 게 아니라 claim 시각만 미루므로 원장에 구멍이 생기지 않고, KIS 는 한 콜이
-    `window_end` 로 끝나는 30분치라 콜 수도 늘지 않는다.
+    ⚠️ 이전 규칙(15:20~15:30 열 창을 통째로 15:31 로)은 "접수 구간에 벤더가 직전 봉을
+    거래량째 복제한다"(08-05 실측)를 벤더 결함으로 읽은 것이었다. 실제로는 **요청 라벨 행 =
+    형성 중 봉** 이라는 응답 형상이었고(ALPHA-1127), 창 끝을 라벨로 물던 옛 수집기만 그
+    행을 봤다. 지금은 창 시작 라벨을 확정 층에서 읽으므로 접수 구간 창은 일반 규칙으로 0 봉이
+    맞게 온다.
 
     지연을 `scheduled_at` 에 두는 이유: worker tick 안에서 자면 `worst_tick` 이 늘어
     `session_lease_seconds` 검증(기본값 여유 **15초**)에 걸리고, lease 가 처리 중 만료되면
     그 window 의 커밋이 fence 에 거부된다. `scheduled_at` 은 claim 조건이라 tick 을
     막지 않고 lease 불변식과 무관하다.
-
-    ⚠️ 시간외 세션(720 window)에도 이 구간이 있고 거기에도 적용된다 — 단일가 체결 시각은
-    세션 길이와 무관하기 때문이다. 15:31 이후 window 는 안 걸린다. drain 은 20:05 이고
-    밀린 10창은 틱당 3창(realtime 1 + recovery budget 2)씩 빠져 여유가 있다.
+    ⭐당일 적용은 DB 한 행 — window INSERT 가 `DO NOTHING` 이라 재계획이 기존 `scheduled_at`
+    을 안 고친다(코드 배포만으론 그날 세션 소급 불가).
     """
     if window_end.tzinfo is None or window_end.tzinfo.utcoffset(window_end) is None:
         # naive 는 실행 환경 TZ 로 해석돼 **호스트마다 다른 결과**가 나온다 — KST 호스트
-        # 에서는 15:30 이 마감으로 잡혀 지연되지만 UTC 호스트에선 KST 00:30 이라 안 걸린다.
+        # 에서는 15:30 이 마감으로 잡히지만 UTC 호스트에선 KST 00:30 이라 안 걸린다.
         # 이 모듈의 계약(모듈 docstring)이 aware 이므로 조용히 넘기지 않는다(Rule 12).
         raise ValueError(f"naive window_end 는 받지 않는다: {window_end!r}")
-    if dataset != PRICE_MINUTE_DATASET:
+    if dataset != PRICE_MINUTE_DATASET or source_group in UNSETTLED_PRICE_SOURCE_GROUPS:
         return window_end
-    local_end = window_end.astimezone(KST)
-    # 반열림이라 접수 개시(15:20)로 **끝나는** window 는 마지막 실거래 분이다 — 안 민다.
-    if not CLOSING_AUCTION_OPEN < local_end.time() <= SESSION_CLOSE:
-        return window_end
-    # 기준은 window_end 가 아니라 **마감 시각**이다 — 구간 전체가 같은 한 번의 체결을
-    # 기다리므로 15:21 창이라고 15:22 에 물어도 답은 여전히 복제 봉이다.
-    settled = local_end.replace(
-        hour=SESSION_CLOSE.hour, minute=SESSION_CLOSE.minute, second=0, microsecond=0
-    )
-    return settled + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
+    return window_end + timedelta(seconds=WINDOW_SETTLE_SEC)
 
 ExecutionMode = Literal["one_shot", "resident"]
 

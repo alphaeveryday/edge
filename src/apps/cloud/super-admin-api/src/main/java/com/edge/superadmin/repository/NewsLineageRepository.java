@@ -61,7 +61,13 @@ public interface NewsLineageRepository {
 	 * 아니라 "구조화 증거가 남은 문서"다(없음 = NO_EVENT·실패·미실행이 한 통 — 구분 미계측).
 	 */
 	record LineageSummary(long totalDocuments, long documentsWithAssertion,
-			long documentsUsedInAnalysis) {
+			long documentsUsedInAnalysis, boolean usedInAnalysisBlind) {
+
+		/** "분석 사용"을 볼 수 있는 범위 — 옛 설명 엔진이 돌던 날만 조회했다. */
+		public LineageSummary(long totalDocuments, long documentsWithAssertion,
+				long documentsUsedInAnalysis) {
+			this(totalDocuments, documentsWithAssertion, documentsUsedInAnalysis, false);
+		}
 	}
 
 	/**

@@ -1,0 +1,55 @@
+name: test-portfolio
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'src/apps/cloud/portfolio-ui/**'
+      - 'src/apps/cloud/portfolio-worker/**'
+      - 'src/pnpm-lock.yaml'
+      - 'src/package.json'
+      - 'src/pnpm-workspace.yaml'
+      - '.github/workflows/*portfolio.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: portfolio
+          POSTGRES_PASSWORD: portfolio-test
+          POSTGRES_DB: portfolio
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U portfolio" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Backend tests
+        working-directory: src/apps/cloud/portfolio-worker
+        env:
+          PORTFOLIO_DATABASE_URL: postgresql://portfolio:portfolio-test@localhost:5432/portfolio
+        run: uv run --frozen pytest -q
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - name: SSM launcher contract
+        shell: pwsh
+        run: ./src/apps/cloud/portfolio-worker/scripts/test-open-admin.ps1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: src/pnpm-lock.yaml
+      - name: Frontend tests
+        working-directory: src
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter portfolio-ui build
+          test ! -f apps/cloud/portfolio-ui/dist/admin.html
+          test -f apps/cloud/portfolio-ui/dist-admin/admin.html
+          test -z "$(find apps/cloud/portfolio-ui/dist/assets -name 'admin-*' -print)"
+          pnpm --filter portfolio-ui exec playwright install --with-deps chromium
+          pnpm --filter portfolio-ui test:e2e

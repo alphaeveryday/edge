@@ -1,0 +1,96 @@
+id: Organization_ParticipatesIn_SourceEvent
+source: Organization
+definition:
+  name: ParticipatesIn
+  label: ParticipatesIn
+  description: A reported participation of this government body or institution in
+    a source-event account. Each role record is a separate link, including multiple
+    roles between the same participant and event.
+  target: SourceEvent
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:N
+  status: experimental
+  sourceMapping:
+    kind: joinTable
+    baseTable: event_argument
+    identity:
+    - event_argument_id
+    sourceEndpoint: event_argument.entity_id
+    targetEndpoint: event_argument.source_event_id
+    properties:
+      roleCode:
+        table: event_argument
+        column: role_code
+      mentionedName:
+        table: event_argument
+        column: mention_text
+      argumentGroup:
+        table: event_argument
+        column: group_ord
+    note: Match the stored entity_id directly to Organization.id and source_event_id
+      to SourceEvent.id. Do not infer company identity from an instrument reference.
+      Missing or unmatched endpoints remain in source rows and are not fabricated
+      as graph links.
+  mappingStatus: defined
+  apiName: participatesIn
+  displayName: ParticipatesIn
+  pluralDisplayName: ParticipatesIn
+  inverse:
+    apiName: participantOrganizations
+    displayName: Participant organizations
+    description: Participation links from organizations named in this source-event
+      account, with the role and supporting text on each link.
+    pluralDisplayName: Participant organizations
+  backing:
+    type: joinTable
+    configurationStatus: requiresPreparation
+    preparation: Map each event_argument_id to one edge and retain its role and supporting
+      text. Do not deduplicate by participant-event endpoints.
+  linkProperties:
+    roleCode:
+      label: Participant role
+      description: Role of this participant in the source-event account, such as SUPPLIER,
+        CUSTOMER, PARTNER, or AUTHORITY.
+      sourceDataType: character varying
+      nullable: false
+      sourceConstraints:
+        nullable: false
+        primaryKey: []
+        foreignKeys: []
+      mappingStatus: ready
+      apiName: roleCode
+      displayName: Participant role
+      status: experimental
+      dataType: String
+    mentionedName:
+      label: Mentioned name
+      description: Name or supporting text recorded for the participant in this source
+        account.
+      sourceDataType: text
+      nullable: true
+      sourceConstraints:
+        nullable: true
+        primaryKey: []
+        foreignKeys: []
+      mappingStatus: ready
+      apiName: mentionedName
+      displayName: Mentioned name
+      status: experimental
+      dataType: String
+    argumentGroup:
+      label: argumentGroup
+      description: Stored group ordinal of this participant within the source-event
+        account. Match a measurement group only within that same event; an absent
+        group is unresolved.
+      sourceDataType: smallint
+      nullable: true
+      sourceConstraints:
+        nullable: true
+        primaryKey: []
+        foreignKeys: []
+      mappingStatus: ready
+      apiName: argumentGroup
+      displayName: argumentGroup
+      status: experimental
+      dataType: Short

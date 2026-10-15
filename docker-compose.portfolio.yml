@@ -1,0 +1,37 @@
+name: edge-portfolio
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: portfolio
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${PORTFOLIO_DB_PASSWORD:?Set a dedicated portfolio DB password}
+    ports: ["127.0.0.1:55439:5432"]
+    volumes: ["portfolio-db:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  api:
+    build: ./src/apps/cloud/portfolio-worker
+    command: ["uvicorn", "edge_portfolio.api:app", "--host", "0.0.0.0", "--port", "8092"]
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL:?Set the percent-encoded portfolio DB URL}
+      PORTFOLIO_ORIGIN: ${PORTFOLIO_ORIGIN:-http://localhost:5180}
+      PORTFOLIO_COOKIE_SECURE: ${PORTFOLIO_COOKIE_SECURE:-0}
+    ports: ["127.0.0.1:8092:8092"]
+    depends_on:
+      db: {condition: service_healthy}
+  worker:
+    build: ./src/apps/cloud/portfolio-worker
+    stop_grace_period: 630s
+    command: ["python", "-m", "edge_portfolio.worker"]
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL:?Set the percent-encoded portfolio DB URL}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?DeepSeek key is required for the worker}
+      EXA_API_KEY: ${EXA_API_KEY:?Exa key is required for the worker}
+    depends_on:
+      db: {condition: service_healthy}
+volumes:
+  portfolio-db:

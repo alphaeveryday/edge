@@ -653,6 +653,23 @@ def test_non_etf_task_cannot_store_unsupported_records():
     assert db.etasks_by_id["et1"]["unsupported_records"] is None
 
 
+def test_financial_normalize_stores_its_classified_gap_count():
+    """WHY(ALPHA-1169): 재무 정제의 분류된 결손은 실패 건수에서 빠진다 — 원장에서도 그 건수를 볼 수 있어야
+    "실패 0" 이 "결손 0" 으로 읽히지 않는다. 그 시도가 쓴 로그일 때만 저장한다(다른 시도의 로그는 NULL)."""
+    db = FakeOpsDB()
+    _seed(db, task_key="NORMALIZE_FINANCIAL_METRIC")
+    wrapper.instrument(
+        lambda: 0, task_key="NORMALIZE_FINANCIAL_METRIC", run_id="R", ledger=_ledger(db),
+        ecs_task_arn="arn:task/1",
+        observe_data_fn=lambda ec: {
+            "records_out": 209, "unsupported_records": 9, "failed_records": 0,
+            "ops_attempt_id": _attempt_id(db),
+        },
+    )
+    row = db.etasks_by_id["et1"]
+    assert row["unsupported_records"] == 9 and row["failed_records"] == 0
+
+
 def test_unsupported_records_is_storage_only_not_incomplete():
     """정상 지원 제외가 있어도 실제 유실이 0이면 데이터는 VALID다."""
     db = FakeOpsDB()

@@ -124,6 +124,23 @@ class JdbcHoldingsImpactRepositoryIntegrationTest extends CloudPostgresIntegrati
 				.filter(m -> m.ourEtfId().equals("9ZZA00")).findFirst().orElseThrow();
 		assertThat(codeOnly.instrumentId()).isNull();
 		assertThat(codeOnly.analyses()).isEmpty();
+		// 옛 설명 엔진이 기준일에 돌았다 — 빈 분석 목록은 "분석 없음"이라는 실측이다
+		assertThat(impact.analysesBlind()).isFalse();
+	}
+
+	/**
+	 * 🔴 <b>옛 설명 엔진이 기준일보다 앞서 멈췄으면 기준일 분석은 관측 불가다</b>(ALPHA-1329). 그 목록은
+	 * 옛 엔진의 결과만 보므로, 그때 비는 것은 "그 ETF 의 분석이 없다"가 아니다. 새 분석 엔진의 분석은
+	 * 결손의 영향을 받았는지 원장이 답하지 못해 대신 싣지 않는다.
+	 */
+	@Test
+	void 옛_엔진이_기준일보다_앞서_멈췄으면_기준일_분석은_관측_불가다() {
+		jdbc.update("UPDATE explanation_run SET started_at = '2026-07-30T06:40:00Z'::timestamptz WHERE explanation_run_id = 'run-a'");
+		assertThat(repository.impact(RUN_KEY).analysesBlind()).isTrue();
+		// 옛 엔진 실행이 아예 없어도 같다
+		jdbc.update("DELETE FROM explanation_result");
+		jdbc.update("DELETE FROM explanation_run");
+		assertThat(repository.impact(RUN_KEY).analysesBlind()).isTrue();
 	}
 
 	@Test

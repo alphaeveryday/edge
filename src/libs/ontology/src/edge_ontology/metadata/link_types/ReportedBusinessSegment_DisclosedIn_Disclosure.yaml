@@ -1,0 +1,28 @@
+id: ReportedBusinessSegment_DisclosedIn_Disclosure
+source: ReportedBusinessSegment
+definition:
+  name: DisclosedIn
+  label: DisclosedIn
+  description: The disclosure document containing this extracted record.
+  target: Disclosure
+  sourceProperty: documentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: disclosedIn
+  displayName: DisclosedIn
+  pluralDisplayName: null
+  inverse:
+    apiName: reportedBusinessSegments
+    displayName: Reported business segments
+    description: Business-segment facts extracted from this disclosure.
+    pluralDisplayName: Reported business segments
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: ReportedBusinessSegment
+    foreignKeyProperty: documentId
+    referencedObjectType: Disclosure

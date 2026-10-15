@@ -55,6 +55,9 @@ locals {
   ]
   # 정제 exit 2는 성공 winner를 canonical+manifest에 commit한 입력 부분 실패다. 둘 중 어느
   # producer든 exit 2까지는 LoadDisclosure로 넘기고, 마지막 strict check에서 FAILED로 닫는다.
+  # 확정 거부(파서 대상이 아닌 서식처럼 다시 읽어도 같은 거부)만 남은 정제는 CLI 가 exit 0 으로
+  # 닫으므로 여기 exit 2 로 오지 않는다(ALPHA-1163, `run.py` `_settle_confirmed_rejects`). 여기 오는
+  # exit 2 는 다시 읽으면 풀릴 수 있는 실패가 섞였거나 확정 거부가 상한을 넘은 경우다.
   disclosure_normalize_continue_checks = [
     for index, _ in local.disclosure_normalize_jobs : {
       Or = [

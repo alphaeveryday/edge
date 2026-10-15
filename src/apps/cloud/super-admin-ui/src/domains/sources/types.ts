@@ -55,7 +55,8 @@ export interface PipelineRun {
 }
 
 /** 원장 기록 출처. 사후 복구를 정상 계측과 뭉개면 "원장이 스스로 메운 행"이 관측된 실행처럼 보인다. */
-export type RecordSource = 'WRAPPER' | 'RECONCILER_BACKFILL';
+/* DUPLICATE_SKIP(ALPHA-1088): 이미 성공한 작업의 재시도 컨테이너가 업무 없이 끝난 흔적 — 실행으로 읽히면 안 된다. */
+export type RecordSource = 'WRAPPER' | 'RECONCILER_BACKFILL' | 'DUPLICATE_SKIP';
 
 export interface QualityDiagnosticIssue {
   reason: string;
@@ -179,12 +180,16 @@ export interface SourceReport {
 
 /**
  * 격자 셀 하나 — 한 슬롯에서 한 작업의 관측 상태. 축 분리(plan·outcome·data)와 건수 null
- * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도·시각 축은 안 온다 — 셀에서 드릴다운으로 넘어가 본다.
+ * 계약(모름 ≠ 0)은 TaskStatus 와 같다. 시도는 **현재 시도의 시각·종료 코드만** 온다(ALPHA-1284) —
+ * 시도 전량과 나머지 시각 축은 셀에서 드릴다운으로 넘어가 본다.
  */
 export interface NewsQualityAssessment {
   status: 'WITHIN_LIMITS' | 'CAUTION' | 'UNMEASURED';
   reason: string;
   resolutionRate: number | null;
+  policyExcluded?: number | null;
+  assessmentResolutionRate?: number | null;
+  assessmentBasis?: 'POLICY_ADJUSTED' | 'LEGACY' | null;
   exclusionRate: number | null;
 }
 
@@ -207,6 +212,16 @@ export interface GridCell {
    * "실행 중"으로 만들지 않기 위해서다(서버가 판정한다 — 화면에서 다시 계산하지 마라).
    */
   running: boolean;
+  /**
+   * 실행 추이 축(ALPHA-1284) — 현재 시도의 시각(ISO-8601)·종료 코드와 완전성 숫자.
+   * **선택 필드다**: UI 가 API 보다 먼저 배포되면 이 필드가 없는 응답을 받는다. 없거나 null 이면
+   * 0 이 아니라 "기록 없음"이다.
+   */
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  exitCode?: number | null;
+  completenessExpected?: number | null;
+  completenessReceived?: number | null;
 }
 
 /** 격자 한 열 — 슬롯(런) 하나. tasks 가 빈 런(기동 실패 등)도 열로 온다 — 부재가 1급 신호다. */
@@ -296,6 +311,11 @@ export interface NewsLineageSummary {
   totalDocuments: number;
   documentsWithAssertion: number;
   documentsUsedInAnalysis: number;
+  /**
+   * "분석 사용"을 다 볼 수 없다(ALPHA-1329) — 그 단계는 옛 설명 엔진의 근거 연결만 보는데 조회 범위에
+   * 그 엔진이 멈춘 뒤의 날이 있다. 이 필드를 싣기 전의 API 에서는 없다(없으면 볼 수 있는 것으로 읽는다).
+   */
+  usedInAnalysisBlind?: boolean;
 }
 
 export interface NewsLineageDocument {
@@ -352,6 +372,11 @@ export interface HoldingsImpact {
   missing: MissingEtf[];
   /** 권장 재실행 안내(정적) — 자동 실행 없음. 결손 없거나 적재 미귀결이면 null */
   recommendedAction: string | null;
+  /**
+   * 누락 ETF 의 기준일 분석을 볼 수 없다(ALPHA-1329) — 그 목록은 옛 설명 엔진의 결과만 보는데 기준일에
+   * 그 엔진이 멈춰 있었다. 이 필드를 싣기 전의 API 에서는 없다(없으면 볼 수 있는 것으로 읽는다).
+   */
+  analysesBlind?: boolean;
 }
 
 export interface MissingEtf {
@@ -469,6 +494,24 @@ export interface MinuteDailyDataset {
   basis: string;
   failedSessions: number;
   totalSessions: number;
+  /**
+   * 그 날짜·데이터셋 세션들의 창 수 합(ALPHA-1289). **선택 필드다** — UI 가 API 보다 먼저
+   * 배포되면 이 필드가 없는 응답을 받는다. `null` 은 세션 없이 날짜 축 job 만으로 선 항목이다.
+   * 둘 다 0 이 아니라 "기록 없음"이다.
+   */
+  windows?: MinuteDailyWindows | null;
+}
+
+/** `expected` 는 세션들의 기대 창 수 합이고 나머지는 상태별 창 수다. */
+export interface MinuteDailyWindows {
+  expected: number;
+  due: number;
+  claimed: number;
+  valid: number;
+  validEmpty: number;
+  incomplete: number;
+  missing: number;
+  invalid: number;
 }
 
 export interface MinuteDailyDay {
@@ -482,4 +525,60 @@ export interface MinuteDailyStatus {
   from: string;
   to: string;
   dates: MinuteDailyDay[];
+}
+
+/* ── 가격 판정 근거(§33.12 로컬) — 서버 계약 MinuteJudgmentResponse ── */
+export interface MinuteJudgmentBaseline {
+  value: number | string;
+  source: 'prev_close' | 'open_fallback';
+  /** 전일 종가 기준일 | 시가 출처 window@세대 | 'pre-record' = 기록 도입 전 확정된 시가(출처 세대 미상) */
+  ref: string;
+}
+
+export interface MinuteJudgmentAttempt {
+  attempt: number;
+  redriveGeneration: number;
+  /** 기록 INSERT 의 관측 시각 — 커밋 순서·인과 순서가 아니다 */
+  judgedAt: string;
+  /** true = 발화·회수 대상 앵커 행을 잠근 뒤 관측, false = 무발화의 비잠금 관측 */
+  txAnchorLocked: boolean;
+  detectionPolicyVersion: string;
+  /** 판정이 쓴 기준선 집합 — 전체는 MinuteJudgments.baselineSets[baselineSetId] */
+  baselineSetId: string;
+  summary: Record<string, string[]>;
+  /** 판정이 실제로 읽은 앵커 [가격, anchor_window] — 키가 없으면 앵커 행이 없었다(기준선=앵커) */
+  anchorsUsed: Record<string, [string, string]>;
+  txAnchor: Record<string, string | null>;
+  /** 요약·앵커에 등장한 종목만 — 집합 전체는 baselineSets 에 */
+  baselines: Record<string, MinuteJudgmentBaseline>;
+  judgedWithBaseline: number;
+}
+
+export interface MinuteJudgmentWindow {
+  /** job 단위 — 같은 window·세대에 trigger_schema_version 이 다른 job 이 둘일 수 있다 */
+  jobId: string;
+  windowStart: string;
+  windowGeneration: number;
+  jobGeneration: number;
+  jobStatus: string;
+  jobAttemptCount: number;
+  /** 이 job 세대 뒤에 window 가 정정됐다(기록은 커밋 당시 세대를 가리킨다) */
+  correctedAfter: boolean;
+  /** 판정 당시 입력의 artifact 이력 **기록** 유무 — NO_HISTORY 는 이력 부재이지 원본 삭제·손상이 아니다 */
+  inputRecord: 'RECORDED' | 'NO_HISTORY';
+  artifactUri: string | null;
+  artifactChecksum: string | null;
+  /** 이 조회는 현재 원본 본문을 읽지 않는다 */
+  sourceRecheck: 'NOT_PERFORMED';
+  /** 비어 있으면 기록 없음 */
+  attempts: MinuteJudgmentAttempt[];
+}
+
+export interface MinuteJudgments {
+  sessionId: string;
+  /** 정정 후 재계산은 제공하지 않는다 */
+  recomputation: 'NOT_GUARANTEED';
+  windows: MinuteJudgmentWindow[];
+  /** set_id → {entity: 기준선}. 집합 단위로 한 번 — 앵커 행이 없는 무발화도 무엇을 봤는지 여기서 답한다. 빈 집합은 키 없음 */
+  baselineSets: Record<string, Record<string, MinuteJudgmentBaseline>>;
 }

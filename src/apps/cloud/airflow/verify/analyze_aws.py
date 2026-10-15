@@ -1,0 +1,648 @@
+"""실제 AWS 단기 검증 판정기(ALPHA-1119) — local/results/aws/<exp>/ 를 verify/criteria_aws.json 기준으로 판정한다.
+
+    python verify/analyze_aws.py <exp>      # → results/aws/<exp>/verdict.json, 요약 출력
+
+판정은 True(통과)·False(실패)·None(판정 불가: 표본 부족·계측 공백·근거 없음) 셋이다. None 을 통과로 세지 않는다.
+관측 원천: 호스트 관측기(samples.log·kmsg.log·docker-events.log — 대상이 죽어도 남는다), 배치 증거(B1~B3.json),
+health.jsonl(15초), deployinfo-*.json, rds-*.json.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+import statistics
+import sys
+from datetime import datetime
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent / "local" / "results" / "aws"
+CRIT = json.loads((HERE / os.environ.get("VERIFY_CRITERIA", "criteria_aws.json")).read_text())
+DAG = "edge_investor_intraday_verify"
+MiB = 2 ** 20
+BUSINESS = {"collect": "ingest-raw-investor-estimate", "normalize": "normalize-investor-estimate",
+            "load": "load-investor-intraday"}
+
+
+def ts(v):
+    if v in (None, ""):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+
+
+def p95(xs):
+    xs = sorted(x for x in xs if x is not None)
+    return round(xs[min(len(xs) - 1, int(0.95 * (len(xs) - 1) + 0.999))], 1) if xs else None
+
+
+def jl(path: Path) -> list[dict]:
+    return [json.loads(x) for x in path.read_text().splitlines() if x.strip()] if path.exists() else []
+
+
+# ── 호스트 관측 ──
+def host_samples(d: Path) -> list[dict]:
+    out, cur = [], None
+    for f in sorted(glob.glob(str(d / "host-obs" / "*" / "edge-obs" / "samples.log"))):
+        for line in open(f, errors="replace"):
+            tag, _, rest = line.rstrip("\n").partition(" ")
+            if tag == "T":
+                cur = {"t": float(rest), "mem": {}, "cg": {}, "ps": [], "psi": {}}
+                out.append(cur)
+            elif cur is None:
+                continue
+            elif tag == "M":
+                k, _, v = rest.partition(":")
+                if v.split() and v.split()[0].isdigit():
+                    cur["mem"][k.strip()] = int(v.split()[0]) * (1024 if "kB" in v else 1)
+            elif tag == "S":
+                cur["psi"][rest.split(" ", 2)[0] + " " + rest.split(" ", 2)[1]] = rest
+            elif tag == "C":
+                path, *kv = rest.split(" ")
+                vals = dict(x.split("=", 1) for x in kv if "=" in x)
+                cur["cg"][path.rstrip("/")] = {k: (int(v) if v.lstrip("-").isdigit() else v) for k, v in vals.items()}
+            elif tag == "P":
+                cur["ps"].append(rest)
+    return out
+
+
+# ECS 태스크 cgroup — systemd 드라이버(ECS AMI 실측: ecstasks.slice/ecstasks-<id>.slice)와 cgroupfs(ecstasks/<id>) 둘 다.
+# 컨테이너 하위(docker-<id>.scope 등)는 제외한다(합이 태스크 값이다).
+TASK_CG = re.compile(r"/ecstasks\.slice/ecstasks-[0-9a-f]+\.slice$|/ecstasks/[^/]+$")
+
+
+def classify(path: str) -> str:
+    if "/ecstasks" in path:
+        return "airflow_task" if TASK_CG.search(path) else "airflow_task_child"
+    for key, name in (("ecs.service", "ecs_agent"), ("docker.service", "dockerd"), ("containerd.service", "containerd"),
+                      ("amazon-ssm-agent", "ssm_agent"), ("edge-obs", "observer"), ("system.slice", "system_other"),
+                      ("user.slice", "user")):
+        if key in path:
+            return name
+    return "other"
+
+
+def host_summary(samples, windows):
+    if not samples:
+        return None
+    total = samples[0]["mem"].get("MemTotal")
+    avail = [s["mem"].get("MemAvailable") for s in samples]
+    swap_total = samples[0]["mem"].get("SwapTotal", 0)
+    swap_used = max(s["mem"].get("SwapTotal", 0) - s["mem"].get("SwapFree", 0) for s in samples)
+    # Airflow 태스크 cgroup(TASK_CG) — 경로별 최댓값, OOM 은 경로별 최댓값의 합(재시작으로 새 경로가 생긴다)
+    task_paths = {p for s in samples for p in s["cg"] if TASK_CG.search(p)}
+    oom = sum(max((s["cg"].get(p, {}).get("ev_oom_kill", 0) or 0) for s in samples) for p in task_paths)
+    comp_max: dict[str, int] = {}
+    comp_mean: dict[str, list] = {}
+    for s in samples:
+        agg: dict[str, int] = {}
+        for p, v in s["cg"].items():
+            c = classify(p)
+            if c in ("airflow_task_child",) or not isinstance(v.get("cur"), int):
+                continue
+            if c == "system_other" and p.count("/") > 4:
+                continue
+            agg[c] = agg.get(c, 0) + v["cur"]
+        for c, v in agg.items():
+            comp_max[c] = max(comp_max.get(c, 0), v)
+            comp_mean.setdefault(c, []).append(v)
+
+    def window_mean(tag, key):
+        if tag not in windows:
+            return None
+        a, b = windows[tag]
+        rows = [s for s in samples if b - 120 <= s["t"] <= b]
+        if key == "avail":
+            vals = [s["mem"].get("MemAvailable") for s in rows]
+        else:
+            vals = [sum(v.get("anon", 0) or 0 for p, v in s["cg"].items() if p in task_paths) for s in rows]
+        return int(statistics.mean(vals) / MiB) if vals else None
+    return {
+        "mem_total_mib": total // MiB if total else None,
+        "mem_available_min_mib": min(a for a in avail if a is not None) // MiB,
+        "mem_available_p50_mib": int(statistics.median(a for a in avail if a is not None) // MiB),
+        "swap_total_mib": swap_total // MiB, "swap_used_max_mib": swap_used // MiB,
+        "task_cgroups": len(task_paths), "task_oom_kill": oom,
+        "task_mem_max_mib": max((max((s["cg"].get(p, {}).get("cur", 0) or 0) for s in samples) for p in task_paths),
+                                default=0) // MiB,
+        "task_mem_limit_mib": max(((s["cg"].get(p, {}).get("limit") if isinstance(s["cg"].get(p, {}).get("limit"), int)
+                                    else 0) for s in samples for p in task_paths), default=0) // MiB,
+        "task_hit_limit_events": sum(max((s["cg"].get(p, {}).get("ev_max", 0) or 0) for s in samples) for p in task_paths),
+        "component_max_mib": {k: v // MiB for k, v in sorted(comp_max.items())},
+        "component_mean_mib": {k: int(statistics.mean(v) // MiB) for k, v in sorted(comp_mean.items())},
+        "idle_task_anon_mib": {t: window_mean(t, "anon") for t in windows},
+        "idle_mem_available_mib": {t: window_mean(t, "avail") for t in windows},
+        "samples": len(samples),
+        "task_paths_seen": len(task_paths),
+        # memory.events 를 못 읽은 샘플 — 있으면 상한 도달 판정(A11)은 판정 불가
+        # 태스크 cgroup 이 처음~마지막으로 보인 사이의 샘플에서 행 자체가 빠진 것도 누락이다(memory.events 는 누적
+        # 카운터라 마지막 읽기까지의 도달은 잡히지만, 중간 공백이 있으면 그 구간을 봤다고 말할 수 없다).
+        "task_events_missing": sum(
+            1 for p in task_paths
+            for idx in [[i for i, s in enumerate(samples) if p in s["cg"]]]
+            for i in range(idx[0], idx[-1] + 1) if p not in samples[i]["cg"] or "ev_max" not in samples[i]["cg"][p]),
+        "first_t": min(s["t"] for s in samples), "last_t": max(s["t"] for s in samples),
+        "max_gap_s": max((b["t"] - a["t"] for a, b in zip(samples, samples[1:])), default=None),
+    }
+
+
+def kernel_ooms(d: Path) -> list[str]:
+    lines = []
+    for f in glob.glob(str(d / "host-obs" / "*" / "edge-obs" / "kmsg.log")):
+        lines += [x.strip() for x in open(f, errors="replace") if re.search(r"oom-kill|Out of memory|Killed process", x)]
+    return lines
+
+
+def docker_events(d: Path) -> dict:
+    ev = []
+    for f in glob.glob(str(d / "host-obs" / "*" / "edge-obs" / "docker-events.log")):
+        for x in open(f, errors="replace"):
+            try:
+                ev.append(json.loads(x))
+            except ValueError:
+                continue
+    af = [e for e in ev if "airflow" in json.dumps(e.get("Actor", {}).get("Attributes", {}))]
+    return {"oom": [e.get("Actor", {}).get("Attributes", {}).get("name") for e in af if e.get("Action") == "oom"],
+            "die": [(e.get("Actor", {}).get("Attributes", {}).get("name"),
+                     e.get("Actor", {}).get("Attributes", {}).get("exitCode"), e.get("time")) for e in af
+                    if e.get("Action") == "die"]}
+
+
+# ── 배치 ──
+def latency(batch: dict, restart_windows) -> dict:
+    tries = [t for t in batch["task_tries"] if t.get("try_number")]
+    key = {(t["dag_run_id"], t["task_id"], t["try_number"]): t for t in tries}
+    gap, queue, submit, detect, unmatched, expected_missing = [], [], [], [], [], []
+    for e in batch["ecs_tasks"]:
+        m = re.match(rf"airflow:{DAG}/(.+)/(\w+)/(\d+)$", e["ref"] or "")
+        tr = key.get((m[1], m[2], int(m[3]))) if m else None
+        if tr is None:
+            unmatched.append(e["arn"])
+            continue
+        if ts(tr["start_date"]) and ts(e["createdAt"]):
+            submit.append(ts(e["createdAt"]) - ts(tr["start_date"]))
+        else:
+            expected_missing.append((e["arn"], tr["task_id"], tr["try_number"], "submit"))
+        if ts(e["stoppedAt"]) and ts(tr["end_date"]):
+            detect.append(ts(tr["end_date"]) - ts(e["stoppedAt"]))
+        else:
+            # 주입 재시작 창에 걸친 try(대기 중 Airflow 가 죽은 try)는 종료 감지 표본이 원래 없다 — 그 밖의 공백은 판정 불가
+            if not any(a <= (ts(tr["start_date"]) or 0) <= b or a <= (ts(tr["end_date"]) or b) <= b + 600
+                       for a, b in restart_windows):
+                expected_missing.append((e["arn"], tr["task_id"], tr["try_number"]))
+    by_run: dict = {}
+    for t in tries:
+        by_run.setdefault(t["dag_run_id"], {})[(t["task_id"], t["try_number"])] = t
+    order = ("plan", "collect", "normalize", "load", "report", "verdict")
+    for rid, rows in by_run.items():
+        for i, step in enumerate(order):
+            t = rows.get((step, 1))
+            if not t:
+                continue
+            if not ts(t["queued_when"]) or not ts(t["start_date"]):
+                expected_missing.append((rid, step, 1, "queue"))   # try 는 있는데 시각이 없다 = 표본 누락
+                continue
+            queue.append(ts(t["start_date"]) - ts(t["queued_when"]))
+            prev = rows.get((order[i - 1], 1)) if i else None
+            if prev and ts(prev.get("end_date")):
+                gap.append(ts(t["queued_when"]) - ts(prev["end_date"]))
+    return {"prev_end_to_queued_p95": p95(gap), "queued_to_start_p95": p95(queue),
+            "start_to_ecs_created_p95": p95(submit), "ecs_stopped_to_end_p95": p95(detect),
+            "n": {"gap": len(gap), "queue": len(queue), "submit": len(submit), "detect": len(detect)},
+            # 표본이 적으면 p95 만으로 판단하지 않는다 — 개별 값·최대를 함께 남긴다
+            "detect_values": sorted(round(x, 1) for x in detect), "detect_max": max(detect, default=None),
+            "ecs_tasks": len(batch["ecs_tasks"]), "unmatched": unmatched, "missing_samples": expected_missing}
+
+
+def run_of(batch, hhmm):
+    return next((r for r in batch["runs"] if r["dag_run_id"].endswith("__" + hhmm.replace(":", ""))), None)
+
+
+def tries_of(batch, rid, task):
+    return sorted((t for t in batch["task_tries"] if t.get("dag_run_id") == rid and t.get("task_id") == task),
+                  key=lambda t: t["try_number"])
+
+
+def ecs_of(batch, rid, cmd):
+    return [e for e in batch["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "") and e["cmd"] == cmd]
+
+
+def starts(batch, rid, step):
+    return len([r for r in batch["state"]["business_starts"] if f"/{rid}/" in (r.get("attempt_ref") or "")
+                and r.get("step") == BUSINESS[step] and r.get("injected_exit") is None])
+
+
+def ok_runs(batch, rid, step):
+    """끝까지 간 업무 실행(주입 exit 아님) 중 exit 0 인 수."""
+    return len([r for r in batch["state"]["business_runs"] if f"/{rid}/" in (r.get("attempt_ref") or "")
+                and r.get("step") == BUSINESS[step] and r.get("exit") == 0])
+
+
+def writes(batch, rid):
+    return len([r for r in batch["state"]["partition_writes"] if f"/{rid}/" in (r.get("attempt_ref") or "")])
+
+
+def ledger_run(batch, hhmm):
+    """검증 원장(verify-ledger) 의 그 슬롯 행 — (orchestrator, orchestration_status, {task_key: outcome}).
+    원장이 없으면 None(판정 불가). 배치마다 verify-reset 으로 비우므로 슬롯 시각으로 짝짓는다."""
+    led = batch.get("ledger")
+    if not led:
+        return None
+    run = next((r for r in led.get("runs", []) if r[0].endswith("T" + hhmm)), None)
+    if run is None:
+        return ("MISSING", None, {})
+    return (run[2], run[4], {t[1]: t[2] for t in led.get("tasks", []) if t[0] == run[1]})
+
+
+def holds(batch, rid):
+    return [h["hold"] for h in batch.get("airflow_holds", []) if h["dag_run_id"] == rid]
+
+
+def ecs_arns(d, rid) -> set:
+    """이 run 의 ECS 태스크 — ListTasks(멈춘 태스크는 약 1시간만 조회된다)와 shim invocation 기록(컨테이너가 자기 ECS
+    메타데이터로 남긴 태스크 ARN, 검증 버킷에 영구)의 합집합. 수집 시각이 늦어도 태스크 수가 0 으로 읽히지 않게."""
+    listed = {e["arn"] for e in d["ecs_tasks"] if f"/{rid}/" in (e["ref"] or "")}
+    rows = d.get("state", {}).get("invocations") or d.get("invocations", [])   # 실행기 수집분 · 사후 복원 파일
+    invoked = {(r.get("ecs_task_arn") or "").rsplit("/", 1)[-1] for r in rows
+               if f"/{rid}/" in (r.get("attempt_ref") or "") and r.get("ecs_task_arn")}
+    return listed | invoked
+
+
+def normal_row(d, key, hhmm):
+    """정상 run 한 건의 대조 — Airflow 상태만이 아니라 업무 시작·exit 0 종료·산출물·ECS·원장까지."""
+    r = run_of(d, hhmm)
+    rid = r and r["dag_run_id"]
+    one = {s: 1 for s in BUSINESS}
+    row = {"key": key, "state": r and r["state"],
+           "starts": {s: starts(d, rid, s) for s in BUSINESS} if rid else None,
+           "ok_runs": {s: ok_runs(d, rid, s) for s in BUSINESS} if rid else None,
+           "writes": writes(d, rid) if rid else None, "ledger": ledger_run(d, hhmm),
+           "ecs": len(ecs_arns(d, rid)) if rid else None}
+    row["ok"] = bool(row["state"] == "success" and row["starts"] == one and row["ok_runs"] == one and row["writes"]
+                     and row["ecs"] == 5 and row["ledger"] and row["ledger"][:2] == ("AIRFLOW", "SUCCEEDED")
+                     and row["ledger"][2] and set(row["ledger"][2].values()) == {"FULFILLED"})
+    return row
+
+
+def outcomes_v(d, marks) -> dict | None:
+    """V 배치(small·1408 후속). 원장이 없으면 None(판정 불가)."""
+    if not d.get("ledger"):
+        return None
+    s = CRIT["scenarios"]["V"]["slots"]
+    rid = lambda k: (run_of(d, s[k]) or {}).get("dag_run_id")  # noqa: E731
+    st = lambda k: (run_of(d, s[k]) or {}).get("state")  # noqa: E731
+    led = lambda k: (ledger_run(d, s[k]) or (None, None, {}))[1]  # noqa: E731
+    normals = {k: normal_row(d, k, s[k]) for k in ("N1", "N2", "N3", "R1", "A1")}
+    # 재시작이 실제로 일어났는지 — 재배포 시작·끝 표시가 있고, R1 제출 때와 다음(F1) 제출 때의 서비스 태스크가 다르다.
+    trig = {m["run"]: {t["arn"] for t in (m.get("deploy") or {}).get("tasks", [])} for m in marks if m["event"] == "trigger"}
+    restarted = (any(m["event"] == "restart_airflow_begin" for m in marks) and any(m["event"] == "restart_airflow_end" for m in marks)
+                 and bool(trig.get(rid("R1"))) and bool(trig.get(rid("F1"))) and not (trig[rid("R1")] & trig[rid("F1")]))
+    chk = {
+        # 재시작 추적: 정제 ECS 가 새로 뜨지 않고(1개) 업무 시작 1회, 원장 성공까지(normal_row).
+        "restart_tracking": restarted and normals["R1"]["ok"] and len(ecs_of(d, rid("R1"), BUSINESS["normalize"])) == 1,
+        "fail_confirmed": st("F1") == "failed" and [t["state"] for t in tries_of(d, rid("F1"), "load")] == ["failed"]
+        # 사후 교정(criteria _post_run_corrections): 사전 식 writes==0 은 틀린 식이었다 — 장중 canonical 파티션은
+        # 정제(normalize)가 쓰고 F1 의 정제는 성공한다. 확정 실패의 요점은 "적재 업무가 돌지 않았다"(업무 시작 0).
+        and len(ecs_of(d, rid("F1"), BUSINESS["load"])) == 1 and led("F1") == "FAILED" and starts(d, rid("F1"), "load") == 0,
+        "fail_confirmed_prefixed_predicate": st("F1") == "failed" and writes(d, rid("F1")) == 0,
+        "hold_state_unknown": st("H1") == "failed"
+        and any(h.get("kind") == "ECS_STATE_UNKNOWN" for h in holds(d, rid("H1")))
+        and len(ecs_of(d, rid("H1"), BUSINESS["collect"])) == 1 and led("H1") != "SUCCEEDED",
+        "blocked_while_held": st("X1") == "failed"
+        and [e["exit"] for e in ecs_of(d, rid("X1"), BUSINESS["collect"])] == [76] and starts(d, rid("X1"), "collect") == 0,
+        "ledger_hold_recorded": "ECS_STATE_UNKNOWN" in {h[2] for h in d["ledger"].get("holds", [])},
+        "recovered_after_release": normals["A1"]["ok"],
+    }
+    n_ok = sum(1 for k in ("N1", "N2", "N3", "R1", "A1") if normals[k]["ok"])
+    return {"normals": normals, "checks": chk, "normal_ok": n_ok,
+            # 사전 식(보고용)은 판정에 넣지 않는다 — 교정 전 결과를 숨기지 않고 함께 남길 뿐이다.
+            "ok": all(v for k, v in chk.items() if k != "fail_confirmed_prefixed_predicate")
+            and all(normals[k]["ok"] for k in ("N1", "N2", "N3"))}
+
+
+def outcomes_l(d) -> dict | None:
+    """L 배치(A4·A5 표적 재검증) — 정상 run 반복. 업무 시작·exit 0 종료·산출물·ECS 5·원장 성공이 모두 확인된 run 만
+    지연 표본이 된다(업무 증거 없는 run 을 성공 표본으로 세지 않는다). 원장이 없으면 None(판정 불가)."""
+    if not d.get("ledger"):
+        return None
+    rows = [normal_row(d, f"N{i + 1}", hhmm) for i, hhmm in enumerate(CRIT["scenarios"]["L"]["slots"])]
+    valid = [(run_of(d, hhmm) or {}).get("dag_run_id") for hhmm, r in zip(CRIT["scenarios"]["L"]["slots"], rows) if r["ok"]]
+    return {"normals": rows, "valid_runs": valid, "normal_ok": len(valid)}
+
+
+def only_runs(d: dict, run_ids: list) -> dict:
+    """배치 증거를 주어진 run 들로 좁힌다(지연 표본용)."""
+    keep = set(run_ids)
+    return {**d, "task_tries": [t for t in d["task_tries"] if t["dag_run_id"] in keep],
+            "ecs_tasks": [e for e in d["ecs_tasks"] if any(f"/{r}/" in (e["ref"] or "") for r in keep)]}
+
+
+def outcomes(batches) -> dict:
+    res = {}
+    for b in ("B1", "B3"):
+        if b not in batches:
+            res[b] = None
+            continue
+        d = batches[b]
+        rows = []
+        for hhmm in CRIT["scenarios"][b]["slots"]:
+            r = run_of(d, hhmm)
+            rid = r["dag_run_id"] if r else None
+            rows.append({"slot": hhmm, "state": r and r["state"],
+                         "starts": {s: starts(d, rid, s) for s in BUSINESS} if rid else None,
+                         "ok_runs": {s: ok_runs(d, rid, s) for s in BUSINESS} if rid else None,
+                         "writes": writes(d, rid) if rid else None,
+                         "ledger": ledger_run(d, hhmm),
+                         "ecs": len(ecs_arns(d, rid)) if rid else None})
+        one = {s: 1 for s in BUSINESS}
+        # Airflow 가 성공이라 말한 것만이 아니라, 업무가 정확히 한 번 끝났고(exit 0) 산출물이 쓰였고
+        # 원장이 AIRFLOW·SUCCEEDED·전 작업 FULFILLED 로 닫았는지까지 본다. 원장이 없으면 판정 불가.
+        res[b] = None if any(x["ledger"] is None for x in rows) else {
+            "runs": rows,
+            "ok": all(x["state"] == "success" and x["starts"] == one and x["ok_runs"] == one and x["writes"]
+                      and x["ecs"] == 5 and x["ledger"][:2] == ("AIRFLOW", "SUCCEEDED") and x["ledger"][2]
+                      and set(x["ledger"][2].values()) == {"FULFILLED"} for x in rows)}
+    if "B2" in batches:
+        d = batches["B2"]
+        s = CRIT["scenarios"]["B2"]["slots"]
+        rid = lambda k: (run_of(d, s[k]) or {}).get("dag_run_id")  # noqa: E731
+        st = lambda k: (run_of(d, s[k]) or {}).get("state")  # noqa: E731
+        if not d.get("ledger"):
+            res["B2"] = None                     # 원장 없음 = 판정 불가
+            return res
+        led = lambda k: ledger_run(d, s[k])[1]  # noqa: E731 — orchestration_status
+        holds_l = d["ledger"].get("holds", [])
+        chk = {
+            "ledger_status": led("fail_confirmed") == "FAILED" and led("retry_not_run") == "SUCCEEDED"
+            and led("restart_tracking") == "SUCCEEDED" and led("after_release") == "SUCCEEDED"
+            and led("hold_result_unknown") != "SUCCEEDED" and led("hold_state_unknown") != "SUCCEEDED",
+            "outputs": writes(d, rid("after_release")) > 0 and writes(d, rid("restart_tracking")) > 0
+            and writes(d, rid("fail_confirmed")) == 0 and writes(d, rid("hold_result_unknown")) == 0,
+            "fail_confirmed": st("fail_confirmed") == "failed"
+            and [t["state"] for t in tries_of(d, rid("fail_confirmed"), "load")] == ["failed"]
+            and len(ecs_of(d, rid("fail_confirmed"), BUSINESS["load"])) == 1,
+            "retry_not_run": st("retry_not_run") == "success"
+            and len(tries_of(d, rid("retry_not_run"), "collect")) == 2
+            and len(ecs_of(d, rid("retry_not_run"), BUSINESS["collect"])) == 2
+            and starts(d, rid("retry_not_run"), "collect") == 1,
+            "hold_result_unknown": st("hold_result_unknown") == "failed"
+            and any(h.get("kind") == "RESULT_UNKNOWN" for h in holds(d, rid("hold_result_unknown")))
+            and starts(d, rid("hold_result_unknown"), "load") == 0,
+            "restart_tracking": st("restart_tracking") == "success"
+            and len(ecs_of(d, rid("restart_tracking"), BUSINESS["normalize"])) == 1
+            and starts(d, rid("restart_tracking"), "normalize") == 1,
+            "hold_state_unknown": st("hold_state_unknown") == "failed"
+            and any(h.get("kind") == "ECS_STATE_UNKNOWN" for h in holds(d, rid("hold_state_unknown")))
+            and len(ecs_of(d, rid("hold_state_unknown"), BUSINESS["collect"])) == 1,
+            "blocked_before_release": st("blocked_before_release") == "failed"
+            and [e["exit"] for e in ecs_of(d, rid("blocked_before_release"), BUSINESS["collect"])] == [76]
+            and starts(d, rid("blocked_before_release"), "collect") == 0,
+            "after_release": st("after_release") == "success" and starts(d, rid("after_release"), "collect") == 1,
+            "ledger_holds_recorded": {h[2] for h in holds_l} >= {"RESULT_UNKNOWN", "ECS_STATE_UNKNOWN"},
+        }
+        res["B2"] = {"checks": chk, "ok": all(chk.values()), "ledger_runs": [r[0] for r in d["ledger"].get("runs", [])]}
+    return res
+
+
+def heartbeat_gaps(ok_ts: list[float], window: tuple[float, float], rw) -> list[float]:
+    """성공한 heartbeat 표본 시각 → 실험 구간과 겹치는 공백들(초). 구간 밖 표본도 경계를 잇는 데 쓴다 — 구간 시작을
+    가로지르는 관측 공백이 '구간 안 첫 표본부터'로 잘려 사라지지 않게(봇 P1). 구간 앞·뒤에 표본이 없으면 그 경계까지가 공백이다.
+    주입 재시작 창(rw) 안에서 시작하는 공백은 세지 않는다."""
+    a0, a1 = window
+    ts = sorted(ok_ts)
+    gaps = [b - a for a, b in zip(ts, ts[1:]) if b >= a0 and a <= a1 and not any(x <= a <= y for x, y in rw)]
+    if not ts or ts[0] > a0:
+        gaps.append((ts[0] if ts else a1) - a0)
+    if ts and ts[-1] < a1:
+        gaps.append(a1 - ts[-1])
+    return gaps
+
+
+def host_health(d: Path) -> list[dict]:
+    """호스트 관측기의 health.log(`H <epoch> <code> <초> <본문>`) → health.jsonl 과 같은 모양의 표본.
+    호스트에서 태스크 네임스페이스로 부른 것이라 운영자 PC·포트 포워딩과 무관하다(ALPHA-1119 A4 재검증)."""
+    out = []
+    for f in sorted(glob.glob(str(d / "host-obs" / "*" / "edge-obs" / "health.log"))):
+        for line in Path(f).read_text(errors="replace").splitlines():
+            parts = line.split(" ", 4)
+            if len(parts) < 4 or parts[0] != "H":
+                continue
+            rec = {"t": int(parts[1]), "code": int(parts[2]) if parts[2].isdigit() else 0, "src": "host"}
+            try:
+                rec["health"] = json.loads(parts[4]) if rec["code"] == 200 else None
+            except (IndexError, json.JSONDecodeError):
+                rec["health"] = None
+            if rec["health"] is None:
+                rec.pop("health")
+                rec["error"] = parts[4][:200] if len(parts) > 4 else f"http {parts[2]}"
+            out.append(rec)
+    return sorted(out, key=lambda r: r["t"])
+
+
+def analyze(exp: str) -> dict:
+    d = ROOT / exp
+    marks = jl(d / "marks.jsonl")
+    health = jl(d / "health.jsonl")
+    batches = {b: json.loads((d / f"{b}.json").read_text()) for b in ("B1", "B2", "B3", "V", "L") if (d / f"{b}.json").exists()}
+    if "V" in batches and (d / "V_invocations.json").exists() and not batches["V"].get("invocations"):
+        batches["V"]["invocations"] = json.loads((d / "V_invocations.json").read_text())
+    deploys = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "deployinfo-*.json")))]
+    rdss = [json.loads(Path(f).read_text()) for f in sorted(glob.glob(str(d / "rds-*.json")))]
+    windows = {}
+    open_ = {}
+    for m in marks:
+        if m["event"] == "idle_begin":
+            open_[m["tag"]] = m["t"]
+        elif m["event"] == "idle_end" and m["tag"] in open_:
+            windows[m["tag"]] = (open_.pop(m["tag"]), m["t"])
+    rw = []
+    for m in marks:
+        if m["event"] == "restart_airflow_begin":
+            end = next((x["t"] for x in marks if x["event"] == "restart_airflow_end" and x["t"] >= m["t"]), m["t"] + 600)
+            rw.append((m["t"] - 10, end + 180))
+    samples = host_samples(d)
+    host = host_summary(samples, windows)
+    kern = kernel_ooms(d)
+    obs_files = {n: bool(glob.glob(str(d / "host-obs" / "*" / "edge-obs" / n)))
+                 for n in ("samples.log", "kmsg.log", "docker-events.log")}
+    dock = docker_events(d)
+    out_come = outcomes({k: v for k, v in batches.items() if k not in ("V", "L")})
+    if "L" in batches:
+        out_come["L"] = outcomes_l(batches["L"])
+    lat = {b: latency(x if b != "L" else only_runs(x, (out_come["L"] or {}).get("valid_runs", [])), rw)
+           for b, x in batches.items()}
+    if "V" in batches:
+        out_come["V"] = outcomes_v(batches["V"], marks)
+    burst = next((m["results"] for m in marks if m["event"] == "burst"), [])
+    # heartbeat 표본: 호스트 관측기 health.log 가 있으면 그것(PC·포워딩과 무관), 없으면 운영자 PC 표본(이전 회차).
+    # import 오류 수는 인증이 필요한 API 라 PC 표본에만 있다 — DAG 파일이 실험 중 바뀌지 않으므로 처음·끝 표본으로 본다.
+    # 실험 구간 — 운영자가 손으로 남긴 주석 표시(기준선 메모·설정 변경·개입 기록)는 실험 시작·끝이 아니다.
+    notes = ("baseline_note", "config_change", "operator_intervention", "unplaceable_by_design", "infra_defect",
+             # 실험 전 준비 기록(인프라 머지·배포 디스패치·사전 시험 뒤 재기동) — 실험 구간의 시작이 아니다
+             # (aws-small-1408-a4a5 사후 교정: 이 기록이 구간 시작을 16:36 으로 당겨 관측 완전성을 판정 불가로 만들었다).
+             "pr1028_merge", "deploy_airflow_dispatch", "reup_after_pretest")
+    # 정리 시작(cleanup_begin) 뒤의 기록(정리 PR 머지 등)도 실험이 아니다 — 구간은 그 앞에서 끝난다.
+    cleanup_at = min((m["t"] for m in marks if m["event"] == "cleanup_begin"), default=float("inf"))
+    ev = [m["t"] for m in marks if m["event"] not in notes and m["event"] != "cleanup_begin" and m["t"] < cleanup_at]
+    need = (min(ev), max(ev)) if ev else None
+    import_samples = [h for h in health if h.get("code") == 200 and h.get("import_errors") is not None]
+    hh = host_health(d)
+    health_source = "host" if hh else "operator_pc"
+    if hh:
+        # 호스트 관측기는 Airflow 보다 먼저 뜬다(호스트 기동 → 서비스 배포). 실험 구간 밖의 오류(기동 전 no_api_container)는
+        # 실험의 heartbeat 실패가 아니다 — 오류·비정상은 구간 안 표본만 센다. 공백은 구간 밖 성공 표본까지 이어서 잰다.
+        hh_ok_ts = [h["t"] for h in hh if "health" in h and h.get("code") == 200]
+        health = [h for h in hh if need and need[0] <= h["t"] <= need[1]]
+    # health 공백: 주입 재시작 창 밖에서 60초 넘게 샘플이 없거나 오류
+    ok_h = [h for h in health if "health" in h and h.get("code") == 200]
+    # 공백은 **성공한** 표본 사이로 잰다 — 실패 행이 촘촘해도 heartbeat 를 확인한 것이 아니다.
+    gaps = (heartbeat_gaps(hh_ok_ts, need, rw) if hh and need else
+            [b["t"] - a["t"] for a, b in zip(ok_h, ok_h[1:]) if not any(x <= a["t"] <= y for x, y in rw)])
+    err_outside = [h for h in health if h not in ok_h and not any(x <= h["t"] <= y for x, y in rw)]
+    bad_h = [h for h in ok_h if not any(x <= h["t"] <= y for x, y in rw) and
+             not (h["health"].get("scheduler", {}).get("status") == "healthy"
+                  and h["health"].get("dag_processor", {}).get("status") == "healthy")]
+    last_deploy = deploys[-1] if deploys else {}
+    # RDS 관측이 실험 전 구간(첫 배포 확인 ~ 마지막 표시)을 덮어야 A8 을 판정한다 — 빈 구간이 2분 넘으면 판정 불가.
+    spans = sorted((datetime.fromisoformat(r["from"]).timestamp(), datetime.fromisoformat(r["to"]).timestamp())
+                   for r in rdss)
+    covered_to, rds_uncovered = (need[0] if need else 0), []
+    for a, b in spans:
+        if need and a > covered_to + 120:
+            rds_uncovered.append((covered_to, a))
+        covered_to = max(covered_to, b)
+    if need and covered_to < need[1] - 120:
+        rds_uncovered.append((covered_to, need[1]))
+    db_roles = [max((sum(s["n"] for s in (st.get("sessions") or []) if s["usename"] == u) for r in rdss
+                     for st in r.get("dbadmin_stats", [])), default=None) for u in ("airflow_meta", "airflow_verify")]
+    out = {
+        "exp": exp, "deploy": {k: last_deploy.get(k) for k in ("task_memory", "hosts", "health_matches_plan",
+                                                                "settings_match_plan", "airflow_version",
+                                                                "running_image_digests")},
+        "host": host, "host_obs_files": obs_files, "kernel_oom_lines": kern, "docker": dock, "latency": lat, "outcomes": out_come,
+        "health": {"samples": len(health), "errors": len(health) - len(ok_h), "errors_outside_restart": len(err_outside),
+                   "unhealthy_outside_restart": len(bad_h), "max_gap_s": max(gaps, default=None),
+                   "source": health_source, "first_t": ok_h[0]["t"] if ok_h else None,
+                   "last_t": ok_h[-1]["t"] if ok_h else None,
+                   "import_errors_missing": (sum(1 for h in ok_h if h.get("import_errors") is None) if not hh else
+                                             # 호스트 표본이면: 실험 처음·끝 15분 안에 PC 표본이 하나씩은 있어야 한다
+                                             int(not (need and any(need[0] - 900 <= h["t"] <= need[0] + 900 for h in import_samples)
+                                                      and any(need[1] - 900 <= h["t"] <= need[1] + 900 for h in import_samples)))),
+                   "import_errors_max": max((h["import_errors"] for h in import_samples), default=None)},
+        "burst": {"n": len(burst), "non_2xx": [x for x in burst if not 200 <= x[1] < 300], "p95_s": p95([x[2] for x in burst])},
+        "rds": {"checks": len(rdss), "uncovered": rds_uncovered, "any_stop": any(any(r["stop"].values()) for r in rdss),
+                "business_failed_sfn": sorted({x for r in rdss for x in r.get("business_failed_sfn", [])}),
+                "data_gap": any(r.get("data_gap") for r in rdss),
+                "freeable_min": min((r["FreeableMemory"]["min"] for r in rdss if r["FreeableMemory"]["min"] is not None), default=None),
+                "connections_max": max((r["DatabaseConnections"]["max"] or 0 for r in rdss), default=None),
+                "cpu_max": max((r["CPUUtilization"]["max"] or 0 for r in rdss), default=None),
+                "role_sessions_max": {"airflow_meta": db_roles[0], "airflow_verify": db_roles[1]},
+                "airflow_db_error_logs": (None if any(r.get("airflow_db_error_logs") is None for r in rdss)
+                                          else [x for r in rdss for x in r["airflow_db_error_logs"]])},
+        "stopped": [m for m in marks if m["event"] in ("abort", "unplaceable")],
+    }
+    unplaceable = [e for dep in deploys for e in dep.get("service", {}).get("events", [])
+                   if "unable to place" in e or "insufficient memory" in e or "insufficient CPU" in e]
+    out["unplaceable_events"] = unplaceable
+    # 정리 시작(서비스 0) 뒤의 종료는 의도한 종료다.
+    end_t = next((m["t"] for m in marks if m["event"] in ("cleanup_begin", "abort")), float("inf"))
+    unexpected_die = [d for d in dock["die"] if d[2] and float(d[2]) < end_t and not any(x <= float(d[2]) <= y for x, y in rw)]
+    out["unexpected_airflow_container_exits"] = unexpected_die
+    lim = CRIT
+    def lat_ok():
+        if not lat:
+            return None
+        if any(v["unmatched"] or v["missing_samples"] for v in lat.values()):
+            return None
+        vals = [v[k] for v in lat.values() for k in v if k.endswith("_p95")]
+        if any(x is None for x in vals):
+            return None
+        return all(v["prev_end_to_queued_p95"] <= 15 and v["queued_to_start_p95"] <= 15 and
+                   v["start_to_ecs_created_p95"] <= 20 and v["ecs_stopped_to_end_p95"] <= 30 for v in lat.values())
+    placement = [h for h in (last_deploy.get("hosts") or [])]
+    swap_used = host and host["swap_used_max_mib"]
+    out["pass"] = {
+        "A0_deploy_matches_plan": (None if not deploys else bool(last_deploy.get("health_matches_plan")
+                                                                   and last_deploy.get("settings_match_plan"))),
+        # 배치·기동: 실제 서비스 태스크가 RUNNING·HEALTHY 로 조회된 적이 있는가(deployinfo). 미배치 이벤트는 실패.
+        "A1_placement": None if not deploys else (
+            not unplaceable and any(t.get("health") == "HEALTHY" and all(v == "HEALTHY" for v in t["containers"].values())
+                                    for dep in deploys for t in dep.get("running_tasks", []))),
+        # OOM(커널·docker·cgroup) 0, 그리고 주입 재시작 창 밖의 Airflow 컨테이너 종료 0.
+        # 관측이 온전해야 판정한다 — 태스크 cgroup 미관측·커널/docker 로그 부재·샘플 공백(5초 주기의 6배 초과)은 판정 불가.
+        # 실패 증거가 하나라도 있으면 관측 공백과 무관하게 실패다 — 공백이 확인된 OOM 을 판정 불가로 덮지 않는다.
+        "A2_no_oom_restart": False if (kern or dock["oom"] or unexpected_die or (host and host["task_oom_kill"])) else
+        None if (host is None or not all(obs_files.values()) or not host["task_paths_seen"]
+                 or host["max_gap_s"] is None or host["max_gap_s"] > 30
+                 # 관측이 실험 처음~끝을 덮어야 한다(수거가 중간에 끊기면 뒤쪽 OOM·종료를 못 본다)
+                 or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else (host["task_oom_kill"] == 0 and not kern and not dock["oom"]
+                                                         and not unexpected_die),
+        "A3_host_memory": None if host is None else (None if swap_used else host["mem_available_min_mib"] >= 64),
+        "A4_heartbeat_parse": None if (not ok_h or out["health"]["max_gap_s"] is None or out["health"]["max_gap_s"] > 60
+                                       or err_outside or out["health"]["import_errors_missing"]
+                                       # 호스트 표본: 구간 경계 공백까지 위 max_gap(60초)에 들어 있다(heartbeat_gaps)
+                                       or (hh and not need)) else (
+            out["health"]["unhealthy_outside_restart"] == 0 and out["health"]["import_errors_max"] == 0),
+        "A5_latency": lat_ok(),
+        "A6_outcomes": None if not all(b in out_come and out_come[b] for b in ("B1", "B2", "B3")) else all(
+            out_come[b]["ok"] for b in ("B1", "B2", "B3")),
+        "A7_business": None if not all(b in out_come and out_come[b] for b in ("B1", "B3")) else all(
+            out_come[b]["ok"] for b in ("B1", "B3")),
+        "A8_db": None if (not rdss or rds_uncovered or out["rds"]["data_gap"] or None in out["rds"]["role_sessions_max"].values()
+                          or out["rds"]["airflow_db_error_logs"] is None) else (
+            not out["rds"]["any_stop"] and not out["rds"]["business_failed_sfn"]
+            and not out["rds"]["airflow_db_error_logs"]
+            and all(x <= 10 for x in out["rds"]["role_sessions_max"].values())),
+        "A9_no_growth": None if host is None or None in (host["idle_task_anon_mib"].get("after_B1"),
+                                                         host["idle_task_anon_mib"].get("after_B3")) else (
+            host["idle_task_anon_mib"]["after_B3"] <= host["idle_task_anon_mib"]["after_B1"] * 1.10
+            and host["idle_mem_available_mib"]["after_B3"] >= host["idle_mem_available_mib"]["after_B1"] * 0.90),
+        "A10_ui": None if len(burst) != 30 else (not out["burst"]["non_2xx"] and out["burst"]["p95_s"] <= 2),
+    }
+    if "V" in batches:
+        v = out_come["V"]
+        fps = [json.dumps(m.get("deploy"), sort_keys=True) for m in marks if m["event"] == "trigger"]
+        tds = {(t["td"], tuple(t["digests"])) for m in marks if m["event"] == "trigger"
+               for t in (m.get("deploy") or {}).get("tasks", [])}
+        out["pass"].update({
+            "A6_outcomes": None if v is None else v["ok"],
+            "A7_business": None if v is None else v["normal_ok"] >= 3 and all(v["normals"][k]["ok"] for k in ("N1", "N2", "N3")),
+            "A9_no_growth": "n/a(V)", "A10_ui": "n/a(V)",
+            # 상한 도달이 관측됐으면 누락 표본과 무관하게 실패다.
+            "A11_task_headroom": False if host and host["task_hit_limit_events"] else
+            # 관측이 실험 전 구간을 덮고 공백이 없어야 "도달 0" 을 말할 수 있다(A2 와 같은 조건).
+            None if (host is None or not host["task_paths_seen"] or host["task_events_missing"]
+                     or host["max_gap_s"] is None or host["max_gap_s"] > 30
+                     or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else True,
+            "A12_deploy_fixed": None if not fps or any('"tasks": []' in f for f in fps) else len(tds) == 1,
+        })
+    if "L" in batches:
+        v, spec = out_come["L"], CRIT["scenarios"]["L"]
+        tds = {(t["td"], tuple(t["digests"])) for m in marks if m["event"] == "trigger"
+               for t in (m.get("deploy") or {}).get("tasks", [])}
+        n_detect = lat["L"]["n"]["detect"]
+        out["pass"].update({
+            "A5_latency": None if n_detect < spec["min_detect_samples"] else lat_ok(),
+            "A6_outcomes": "n/a(L)", "A9_no_growth": "n/a(L)", "A10_ui": "n/a(L)",
+            "A7_business": None if v is None else v["normal_ok"] >= spec["min_valid_runs"],
+            "A11_task_headroom": False if host and host["task_hit_limit_events"] else
+            None if (host is None or not host["task_paths_seen"] or host["task_events_missing"]
+                     or host["max_gap_s"] is None or host["max_gap_s"] > 30
+                     or not need or host["first_t"] > need[0] + 120 or host["last_t"] < need[1] - 120) else True,
+            "A12_deploy_fixed": None if not tds else len(tds) == 1,
+        })
+    del lim, placement
+    (d / "verdict.json").write_text(json.dumps(out, ensure_ascii=False, indent=1, default=str))
+    return out
+
+
+if __name__ == "__main__":
+    for e in sys.argv[1:]:
+        v = analyze(e)
+        print(json.dumps({"exp": e, "pass": v["pass"], "host": v["host"] and {k: v["host"][k] for k in (
+            "mem_total_mib", "mem_available_min_mib", "swap_total_mib", "swap_used_max_mib", "task_oom_kill",
+            "task_mem_max_mib", "component_max_mib")}, "rds": v["rds"]}, ensure_ascii=False, indent=1, default=str))

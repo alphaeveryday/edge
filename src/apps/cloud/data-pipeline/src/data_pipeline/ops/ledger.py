@@ -19,6 +19,7 @@ JSONB 파라미터는 json.dumps 문자열 + `%s::jsonb` 캐스트로 넘긴다(
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -95,14 +96,15 @@ class Ledger:
                 "INSERT INTO ops_pipeline_run (pipeline_run_id, run_key, execution_name,"
                 " pipeline_type, schedule_slot, trading_date, hard_deadline_at,"
                 " catalog_version, catalog_content_hash, image_digest, input_hash,"
-                " expected_execution_arn, launch_status)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " expected_execution_arn, launch_status, orchestrator, orchestrator_run_ref)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                 " ON CONFLICT (run_key) DO NOTHING"
                 " RETURNING pipeline_run_id",
                 (new_id, f["run_key"], f["execution_name"], f["pipeline_type"],
                  f["schedule_slot"], f["trading_date"], f["hard_deadline_at"],
                  f["catalog_version"], f["catalog_content_hash"], f["image_digest"],
-                 f["input_hash"], f["expected_execution_arn"], states.LAUNCH_PLANNING),
+                 f["input_hash"], f["expected_execution_arn"], states.LAUNCH_PLANNING,
+                 f.get("orchestrator", states.ORCHESTRATOR_SFN), f.get("orchestrator_run_ref")),
             )
             row = cur.fetchone()
             if row is not None:
@@ -111,6 +113,14 @@ class Ledger:
                 "SELECT pipeline_run_id FROM ops_pipeline_run WHERE run_key = %s", (f["run_key"],)
             )
             return str(cur.fetchone()[0]), False
+
+    @staticmethod
+    def _run_orchestrator_tx(conn, run_key: str) -> str | None:
+        """이미 계획된 슬롯의 실행 주체 — Planner 가 다른 주체의 재계획을 거부하는 근거."""
+        with conn.cursor() as cur:
+            cur.execute("SELECT orchestrator FROM ops_pipeline_run WHERE run_key = %s", (run_key,))
+            row = cur.fetchone()
+            return None if row is None else row[0]
 
     def set_launch_result(
         self, pipeline_run_id: str, *, launch_status: str,
@@ -199,7 +209,7 @@ class Ledger:
             cur.execute(
                 "SELECT et.expected_task_id, et.plan_status, et.task_outcome, et.data_status,"
                 " et.required, snap.expected_entity_count, et.dataset_contract_key,"
-                " et.expected_as_of_date"
+                " et.expected_as_of_date, et.records_out, et.current_attempt_id"
                 " FROM ops_expected_task et"
                 " LEFT JOIN ops_expectation_snapshot snap"
                 " ON snap.expectation_snapshot_id=et.expectation_snapshot_id"
@@ -212,7 +222,8 @@ class Ledger:
             return {"expected_task_id": str(row[0]), "plan_status": row[1],
                     "task_outcome": row[2], "data_status": row[3], "required": row[4],
                     "expected_count": row[5], "dataset_contract_key": row[6],
-                    "expected_as_of_date": row[7]}
+                    "expected_as_of_date": row[7], "records_out": row[8],
+                    "current_attempt_id": None if row[9] is None else str(row[9])}
 
     def update_task_outcome(
         self, expected_task_id: str, *, task_outcome: str | None = None,
@@ -327,7 +338,7 @@ class Ledger:
     def record_attempt_start(
         self, *, expected_task_id: str, ecs_task_arn: str,
         sfn_execution_arn: str | None = None, sfn_state_name: str | None = None,
-        record_source: str = states.SOURCE_WRAPPER,
+        record_source: str = states.SOURCE_WRAPPER, orchestrator_attempt_ref: str | None = None,
     ) -> str | None:
         """attempt 시작 기록(멱등). 성공 시 attempt_id, 계속 실패 시 None(본 작업은 진행).
 
@@ -344,7 +355,7 @@ class Ledger:
                 return self._insert_attempt(
                     expected_task_id=expected_task_id, ecs_task_arn=ecs_task_arn,
                     sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
-                    record_source=record_source,
+                    record_source=record_source, orchestrator_attempt_ref=orchestrator_attempt_ref,
                 )
             except Exception:
                 if self.clock_fn() >= deadline:
@@ -357,34 +368,46 @@ class Ledger:
 
     def _insert_attempt(
         self, *, expected_task_id: str, ecs_task_arn: str, sfn_execution_arn: str | None,
-        sfn_state_name: str | None, record_source: str,
+        sfn_state_name: str | None, record_source: str, orchestrator_attempt_ref: str | None = None,
+    ) -> str:
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            return self._insert_attempt_tx(
+                cur, expected_task_id=expected_task_id, ecs_task_arn=ecs_task_arn,
+                sfn_execution_arn=sfn_execution_arn, sfn_state_name=sfn_state_name,
+                record_source=record_source, orchestrator_attempt_ref=orchestrator_attempt_ref)
+
+    @staticmethod
+    def _insert_attempt_tx(
+        cur, *, expected_task_id: str, ecs_task_arn: str, sfn_execution_arn: str | None,
+        sfn_state_name: str | None, record_source: str, orchestrator_attempt_ref: str | None,
     ) -> str:
         new_id = domain_id("att")
-        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
-            # attempt_number 는 표시용 — 조회+1(멱등 수단 아님, 경쟁은 표시 부정확만 유발).
-            cur.execute(
-                "SELECT count(*) FROM ops_task_attempt WHERE expected_task_id=%s",
-                (expected_task_id,),
-            )
-            number = int(cur.fetchone()[0]) + 1
-            cur.execute(
-                "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, attempt_number,"
-                " ecs_task_arn, execution_status, started_at, sfn_execution_arn, sfn_state_name,"
-                " record_source) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s)"
-                " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
-                " RETURNING attempt_id",
-                (new_id, expected_task_id, number, ecs_task_arn, states.EXEC_RUNNING,
-                 sfn_execution_arn, sfn_state_name, record_source),
-            )
-            row = cur.fetchone()
-            if row is not None:
-                return str(row[0])
-            cur.execute(
-                "SELECT attempt_id FROM ops_task_attempt"
-                " WHERE expected_task_id=%s AND ecs_task_arn=%s",
-                (expected_task_id, ecs_task_arn),
-            )
-            return str(cur.fetchone()[0])
+        # attempt_number 는 표시용 — 조회+1(멱등 수단 아님, 경쟁은 표시 부정확만 유발).
+        # 업무를 실행한 시도만 센다 — 중복 skip 행이 번호를 건너뛰게 하지 않는다(ALPHA-1088).
+        cur.execute(
+            "SELECT count(*) FROM ops_task_attempt WHERE expected_task_id=%s"
+            " AND record_source <> %s",
+            (expected_task_id, states.SOURCE_DUPLICATE_SKIP),
+        )
+        number = int(cur.fetchone()[0]) + 1
+        cur.execute(
+            "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, attempt_number,"
+            " ecs_task_arn, execution_status, started_at, sfn_execution_arn, sfn_state_name,"
+            " record_source, orchestrator_attempt_ref) VALUES (%s,%s,%s,%s,%s,now(),%s,%s,%s,%s)"
+            " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING"
+            " RETURNING attempt_id",
+            (new_id, expected_task_id, number, ecs_task_arn, states.EXEC_RUNNING,
+             sfn_execution_arn, sfn_state_name, record_source, orchestrator_attempt_ref),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return str(row[0])
+        cur.execute(
+            "SELECT attempt_id FROM ops_task_attempt"
+            " WHERE expected_task_id=%s AND ecs_task_arn=%s",
+            (expected_task_id, ecs_task_arn),
+        )
+        return str(cur.fetchone()[0])
 
     def record_attempt_end(
         self, attempt_id: str, *, execution_status: str, exit_code: int | None = None,
@@ -478,6 +501,146 @@ class Ledger:
                 for r in cur.fetchall()
             ]
 
+    def reprocess_ready(self, run_key: str) -> tuple[bool, str]:
+        """재처리 가능한 기존 슬롯인가 — (가능, 사유). 계획이 있고 raw 단계가 모두 끝났어야(1건 이상 저장한
+        FULFILLED 또는 계획상 SKIPPED) 다시 정제·적재할 입력이 있다. 없는 슬롯·수집 실패·0건 skip 슬롯을
+        재처리하면 빈 입력 정제가 성공으로 끝난다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(et.expected_task_id) FILTER (WHERE et.stage='raw'),"
+                " count(et.expected_task_id) FILTER (WHERE et.stage='raw' AND"
+                "  ((et.task_outcome='FULFILLED' AND et.records_out > 0) OR et.plan_status='SKIPPED'))"
+                " FROM ops_pipeline_run r LEFT JOIN ops_expected_task et"
+                " ON et.pipeline_run_id = r.pipeline_run_id WHERE r.run_key=%s",
+                (run_key,),
+            )
+            row = cur.fetchone()
+        if row is None or row[0] is None:
+            return False, "계획된 run 없음"
+        raw_total, raw_done = int(row[0] or 0), int(row[1] or 0)
+        if raw_total == 0:
+            return False, "계획된 run 없음 또는 raw 단계 없음"
+        if raw_done < raw_total:
+            return False, f"raw 단계 미완료({raw_done}/{raw_total})"
+        return True, "ok"
+
+    def attempt_created_after(self, *, pipeline_run_id: str, stages: list[str], attempt_id: str) -> bool:
+        """같은 run 의 stages 작업에 attempt_id 보다 **나중에 만들어진** attempt 가 있는가.
+
+        비교를 DB 시계(created_at) 한 곳에서 한다 — 컨테이너마다 다른 시계나 같은 밀리초 안에서 순서가
+        무작위인 ULID 로는 "선행 단계가 그 뒤에 다시 돌았다"를 확정할 수 없다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND et.stage = ANY(%s)"
+                " AND a.record_source <> %s"
+                " AND a.created_at > (SELECT created_at FROM ops_task_attempt WHERE attempt_id=%s))",
+                (pipeline_run_id, list(stages), states.SOURCE_DUPLICATE_SKIP, attempt_id),
+            )
+            return bool(cur.fetchone()[0])
+
+    def record_duplicate_skip(self, *, expected_task_id: str, ecs_task_arn: str,
+                              orchestrator_attempt_ref: str | None) -> None:
+        """업무 없이 끝난 중복 재시도 컨테이너를 **완료 상태로 한 번에** 남긴다(DUPLICATE_SKIP).
+
+        시작·종료를 두 번에 나눠 쓰면 종료 기록이 실패할 때 RUNNING 행이 남는다 — 이 행은 업무
+        판정에서 빠지므로 Reconciler 가 닫지 않고, 전환 절차의 "RUNNING 시도 없음" 확인을 영구히 막는다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,"
+                " execution_status, started_at, finished_at, exit_code, record_source,"
+                " orchestrator_attempt_ref) VALUES (%s,%s,%s,%s,now(),now(),0,%s,%s)"
+                " ON CONFLICT (expected_task_id, ecs_task_arn) DO NOTHING",
+                (domain_id("att"), expected_task_id, ecs_task_arn, states.EXEC_SUCCEEDED,
+                 states.SOURCE_DUPLICATE_SKIP, orchestrator_attempt_ref),
+            )
+
+    def clear_orchestration_status(self, pipeline_run_id: str) -> None:
+        """런 판정을 비운다(미귀결). 이미 판정된 슬롯에 결론 안 난 새 업무 시도가 생긴 경우다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ops_pipeline_run SET orchestration_status=NULL, updated_at=now()"
+                " WHERE pipeline_run_id=%s",
+                (pipeline_run_id,),
+            )
+
+    def latest_business_attempts(self, pipeline_run_id: str) -> dict[str, tuple[str, object]]:
+        """작업별 (stage, 마지막 업무 시도 created_at) — 중복 skip 제외. 세대 섞임 판정용(DB 시계)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT et.task_key, et.stage, max(a.created_at) FROM ops_expected_task et"
+                " JOIN ops_task_attempt a ON a.expected_task_id = et.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND a.record_source <> %s"
+                " GROUP BY et.task_key, et.stage",
+                (pipeline_run_id, states.SOURCE_DUPLICATE_SKIP),
+            )
+            return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+    def latest_business_attempt_ref(self, pipeline_run_id: str) -> str | None:
+        """이 런의 가장 최근 업무 시도(중복 skip 제외)를 띄운 오케스트레이터 시도 참조. 없으면 None.
+        늦게 도착한 옛 DAG run 의 보고를 가려낸다(보고한 run 이 최신 업무 시도의 run 이 아니면 옛 보고다)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.orchestrator_attempt_ref FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND a.record_source <> %s"
+                " ORDER BY a.created_at DESC LIMIT 1",
+                (pipeline_run_id, states.SOURCE_DUPLICATE_SKIP),
+            )
+            row = cur.fetchone()
+            return None if row is None else row[0]
+
+    def airflow_run_keys_with_open_attempts(self) -> list[str]:
+        """주기 점검이 슬롯 대조와 별개로 훑을 Airflow 런 — 원장상 끝나지 않은 업무 시도가 남았거나, 수명을 넘긴
+        미종료 시도 기록(OPEN_ATTEMPT 보류)이 아직 열린 런(그 시도가 스스로 끝났으면 대조가 기록을 닫는다). 과거
+        슬롯 재처리 런도 포함한다 — 주기 슬롯 대조는 최근 예정일만 본다."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT r.run_key FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " JOIN ops_pipeline_run r ON r.pipeline_run_id = et.pipeline_run_id"
+                " WHERE a.execution_status=%s AND r.orchestrator=%s"
+                " UNION SELECT r.run_key FROM ops_reconciliation_issue i"
+                " JOIN ops_expected_task et ON i.scope='task' AND et.expected_task_id = i.scope_key"
+                " JOIN ops_pipeline_run r ON r.pipeline_run_id = et.pipeline_run_id"
+                " WHERE i.issue_type=%s AND i.status='OPEN' AND i.dedupe_key LIKE %s AND r.orchestrator=%s"
+                " ORDER BY 1",
+                (states.EXEC_RUNNING, states.ORCHESTRATOR_AIRFLOW, states.ISSUE_EXECUTION_HOLD,
+                 f"%:{states.HOLD_OPEN_ATTEMPT}", states.ORCHESTRATOR_AIRFLOW),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+    def pipeline_run_by_id(self, pipeline_run_id: str) -> dict | None:
+        """pipeline_run_id → {run_key, orchestrator}. 없으면 None."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute("SELECT run_key, orchestrator FROM ops_pipeline_run WHERE pipeline_run_id=%s",
+                        (pipeline_run_id,))
+            row = cur.fetchone()
+            return None if row is None else {"run_key": row[0], "orchestrator": row[1]}
+
+    def record_orchestration_report(self, pipeline_run_id: str, *, status: str) -> None:
+        """오케스트레이터가 보고한 런 판정을 적고 보고 시각을 남긴다(Reconciler 투영의 기준선)."""
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ops_pipeline_run SET orchestration_status=%s,"
+                " orchestration_reported_at=now(), updated_at=now() WHERE pipeline_run_id=%s",
+                (status, pipeline_run_id),
+            )
+
+    def business_attempt_after(self, pipeline_run_id: str, since) -> bool:
+        """since 뒤에 만들어진 업무 시도(중복 skip 제외)가 이 run 에 있는가. since 가 None 이면 True."""
+        if since is None:
+            return True
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXISTS (SELECT 1 FROM ops_task_attempt a"
+                " JOIN ops_expected_task et ON et.expected_task_id = a.expected_task_id"
+                " WHERE et.pipeline_run_id=%s AND a.record_source <> %s AND a.created_at > %s)",
+                (pipeline_run_id, states.SOURCE_DUPLICATE_SKIP, since),
+            )
+            return bool(cur.fetchone()[0])
+
     def correct_backfill_started_at(self, attempt_id: str, *, started_at) -> bool:
         """과거 Reconciler backfill의 대조 시각을 SFN의 실제 진입 시각으로 보정한다."""
         if started_at is None:
@@ -531,6 +694,10 @@ class Ledger:
                 if acquired:
                     cur.execute("SELECT pg_advisory_unlock(%s)", (key,))
 
+    def step_lock(self, task_key: str) -> "StepLock":
+        """작업 하나의 실행권(세션 advisory lock). 사용법은 StepLock 참조."""
+        return StepLock(self, task_key)
+
     # ── Reconciler 조회 ───────────────────────────────────────
     def get_pipeline_run(self, run_key: str) -> dict | None:
         """run_key → pipeline_run 행 dict, 없으면 None."""
@@ -538,7 +705,8 @@ class Ledger:
             cur.execute(
                 "SELECT pipeline_run_id, run_key, execution_name, expected_execution_arn,"
                 " sfn_execution_arn, launch_status, orchestration_status, hard_deadline_at,"
-                " trading_date, input_hash FROM ops_pipeline_run WHERE run_key=%s",
+                " trading_date, input_hash, orchestrator, orchestrator_run_ref,"
+                " orchestration_reported_at FROM ops_pipeline_run WHERE run_key=%s",
                 (run_key,),
             )
             row = cur.fetchone()
@@ -546,7 +714,8 @@ class Ledger:
                 return None
             keys = ("pipeline_run_id", "run_key", "execution_name", "expected_execution_arn",
                     "sfn_execution_arn", "launch_status", "orchestration_status",
-                    "hard_deadline_at", "trading_date", "input_hash")
+                    "hard_deadline_at", "trading_date", "input_hash", "orchestrator",
+                    "orchestrator_run_ref", "orchestration_reported_at")
             return dict(zip(keys, row))
 
     def expected_tasks_for(self, pipeline_run_id: str) -> list[dict]:
@@ -576,3 +745,96 @@ class Ledger:
                 (resolution_reason, resolution_source, dedupe_key),
             )
             return cur.rowcount > 0
+
+
+class StepLock:
+    """같은 작업(task_key)을 동시에 한 실행만 하게 하는 PostgreSQL 세션 advisory lock.
+
+    잡은 커넥션을 작업이 끝날 때까지 열어 둔다. 프로세스·컨테이너가 죽으면 커넥션이 끊겨 lock 이
+    **스스로 풀린다** — 만료 시각을 추정해야 하는 lease 행과 달리 죽은 실행이 실행권을 쥐고 남지 않는다.
+    한계: 커넥션만 끊기고 프로세스는 계속 쓰는 경우(네트워크 분리)엔 lock 이 풀려 다음 실행이 lock 을 얻을
+    수 있다. 그래서 lock 만으로 업무를 시작하지 않는다 — `blocking()` 으로 종료가 확인되지 않은 시도·보류를
+    먼저 보고, 시작 기록은 `start_attempt()` 로 **lock 을 쥔 이 세션에서** 커밋한다. 세션이 살아 있을 때 커밋된
+    시작 기록은 lock 이 풀리기 전에 보이므로, 다음 실행은 lock 을 얻어도 그 RUNNING 시도를 보고 멈춘다. 이미
+    돌고 있는 오래된 실행의 쓰기를 막지는 못한다 — 저장소 쪽 fencing 이 아니다(canonical 병합 CAS 는 ALPHA-1057).
+
+    키가 task_key 만인 이유: 장중 수급처럼 여러 슬롯이 같은 거래일 파티션을 병합하는 레인은 **다른 슬롯의
+    같은 스텝**도 겹치면 안 된다. 슬롯 간 간격이 스텝 시간보다 길어 정상 흐름은 기다리지 않는다.
+    """
+
+    _POLL_SECONDS = 5.0
+
+    def __init__(self, ledger: "Ledger", task_key: str):
+        self.ledger = ledger
+        self.task_key = task_key
+        digest = hashlib.sha256(f"ops-step:{task_key}".encode("utf-8")).digest()
+        self.key = int.from_bytes(digest[:8], "big", signed=True)
+        self._cm = self._cur_cm = self._cur = self._conn = None
+
+    def acquire(self, *, wait_seconds: float) -> bool:
+        """wait_seconds 동안 기다려 잡으면 True, 못 잡으면 False. DB 에 못 닿으면 **예외**(판단 불가)."""
+        self._cm = self.ledger.connect_fn(self.ledger.db)
+        conn = self._conn = self._cm.__enter__()
+        self._cur_cm = conn.cursor()
+        self._cur = self._cur_cm.__enter__()
+        deadline = self.ledger.clock_fn() + wait_seconds
+        while True:
+            self._cur.execute("SELECT pg_try_advisory_lock(%s)", (self.key,))
+            if bool(self._cur.fetchone()[0]):
+                return True
+            if self.ledger.clock_fn() >= deadline:
+                return False
+            self.ledger.sleep_fn(self._POLL_SECONDS)
+
+    def blocking(self) -> list[dict]:
+        """이 작업의 새 업무 시작을 막는 기록(lock 세션에서 조회). 비었을 때만 시작할 수 있다.
+
+        - 같은 task_key(모든 run·모든 실행 주체)의 업무 시도 중 RUNNING — 종료가 원장에 확인되지 않았다.
+          run 이 아니라 작업 단위인 이유: 다른 슬롯·재처리·SFN 도 같은 거래일 파티션을 병합한다. 닫히는 길은
+          그 실행 자신의 종료 기록 또는 Reconciler 의 ECS STOPPED 증거뿐이다(시간 경과로 닫지 않는다).
+        - OPEN 인 EXECUTION_HOLD(ECS_STATE_UNKNOWN) — ECS 태스크 생성·종료를 확인하지 못해 Airflow 가 보류한
+          실행. 운영자가 종료를 확인하고 RESOLVED 로 바꿔야 풀린다.
+        조회 실패는 예외로 올린다(판단 불가 → 호출부가 실행하지 않는다)."""
+        self._cur.execute(
+            "SELECT a.attempt_id, a.ecs_task_arn, et.pipeline_run_id, a.started_at::text"
+            " FROM ops_task_attempt a JOIN ops_expected_task et USING (expected_task_id)"
+            " WHERE et.task_key=%s AND a.execution_status=%s ORDER BY a.created_at",
+            (self.task_key, states.EXEC_RUNNING),
+        )
+        found = [{"kind": states.HOLD_OPEN_ATTEMPT, "attempt_id": str(r[0]), "ecs_task_arn": r[1],
+                  "pipeline_run_id": r[2], "started_at": r[3]} for r in self._cur.fetchall()]
+        self._cur.execute(
+            "SELECT i.dedupe_key, et.pipeline_run_id FROM ops_reconciliation_issue i"
+            " JOIN ops_expected_task et ON i.scope='task' AND et.expected_task_id=i.scope_key"
+            " WHERE i.issue_type=%s AND i.status='OPEN' AND et.task_key=%s"
+            " AND i.evidence->>'kind'=%s ORDER BY i.first_seen_at",
+            (states.ISSUE_EXECUTION_HOLD, self.task_key, states.HOLD_ECS_STATE_UNKNOWN),
+        )
+        found += [{"kind": states.HOLD_ECS_STATE_UNKNOWN, "dedupe_key": r[0], "pipeline_run_id": r[1]}
+                  for r in self._cur.fetchall()]
+        return found
+
+    def start_attempt(self, *, expected_task_id: str, ecs_task_arn: str,
+                      orchestrator_attempt_ref: str | None) -> str:
+        """시작 기록을 lock 을 쥔 세션에서 커밋한다. 세션이 끊겼으면 예외 — 그때는 실행하지 않는다."""
+        attempt_id = Ledger._insert_attempt_tx(
+            self._cur, expected_task_id=expected_task_id, ecs_task_arn=ecs_task_arn,
+            sfn_execution_arn=None, sfn_state_name=None, record_source=states.SOURCE_WRAPPER,
+            orchestrator_attempt_ref=orchestrator_attempt_ref)
+        self._conn.commit()
+        return attempt_id
+
+    def release(self, acquired: bool) -> None:
+        """풀고 커넥션을 닫는다. 실패해도 예외를 올리지 않는다 — 커넥션이 닫히면 lock 도 풀리고,
+        여기서 터지면 이미 끝난 작업의 exit code 가 트레이스백으로 바뀐다."""
+        try:
+            if acquired and self._cur is not None:
+                self._cur.execute("SELECT pg_advisory_unlock(%s)", (self.key,))
+        except Exception:
+            logger.warning("step lock 해제 실패 — 커넥션 종료로 풀린다", exc_info=True)
+        for cm in (self._cur_cm, self._cm):
+            try:
+                if cm is not None:
+                    cm.__exit__(None, None, None)
+            except Exception:
+                logger.warning("step lock 커넥션 정리 실패", exc_info=True)

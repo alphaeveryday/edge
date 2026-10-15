@@ -14,6 +14,12 @@
 # 그 주체는 이 파일 아래의 `aws_scheduler_schedule.minute_session` 이다(ALPHA-712).
 
 locals {
+  # 분 가격 워커가 전용 KIS 키(2번)로 도는가(ALPHA-1248). source 가 toss 면 KIS 를 쓰지 않으므로 변수가 켜져 있어도
+  # 아무것도 바꾸지 않는다 — 아래 시크릿 분기(toss 면 toss 쌍만 주입)와 같은 조건이라, source 롤백(kis↔toss)이
+  # 여전히 변수 하나로 끝나고 kis 로 돌아오면 전용 키 구성이 그대로 되살아난다.
+  price_worker_dedicated_kis  = var.minute_price_dedicated_kis_enabled && var.minute_session_source_group != "toss"
+  price_worker_kis_secret_arn = local.price_worker_dedicated_kis ? data.aws_secretsmanager_secret.kis_price_worker[0].arn : aws_secretsmanager_secret.kis.arn
+
   # 큐 어휘 — jobs.py DESTINATION_JOB_KINDS(3종) + TRIGGER_EVENT_DESTINATIONS(1종)와
   # 같은 이름이어야 한다(relay 기동 검증 KNOWN_DESTINATIONS 가 4종 전부를 요구한다).
   minute_job_destinations = ["price-analysis-realtime", "news-extraction-realtime", "news-extraction-backfill"]
@@ -110,8 +116,26 @@ locals {
         DATA_PIPELINE_MINUTE_PRICE_WORKER__SOURCE = var.minute_session_source_group
         # 토큰 공유 캐시(ALPHA-573). **상주 워커엔 없으면 안 된다** — 매 기동 발급이
         # 분당 1회 제한에 걸리고, 배치의 kis 스텝과도 발급을 다툰다.
-        KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
-      })
+        # 전용 키(2번)면 캐시도 2번이다 — 한 캐시를 두 키가 쓰면 서로 덮어쓴다(storage.tf).
+        KIS_TOKEN_CACHE_PARAM = local.price_worker_dedicated_kis ? local.kis_price_worker_token_param_name : local.kis_token_param_name
+        },
+        # 한 window 안 동시 요청 수(ALPHA-1087). 같은 KIS 키를 다른 호출자와 나눠 쓰는 동안에는 공유 호출 허용과
+        # **같은 변수에서 유도**한다 — 허용 없이 동시성만 켜지면 로컬 간격 안에서 실제 발신률만 올라 합산이 더 나빠진다
+        # (코드도 전용 키가 아니면 1로 강제한다). 전용 키일 때의 동시성은 아래 블록이 싣는다.
+        # 꺼져 있으면 변수를 **싣지 않는다**(코드 기본 1) — 이 필드를 모르는 이전 이미지는 extra_forbidden 으로
+        # 기동을 거부하므로, 머지 배포에서 terraform-apply 가 새 이미지보다 먼저 끝나면 워커가 죽는다.
+        var.call_budget_enabled ? { DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = "2" } : {},
+        # 전용 KIS 키(ALPHA-1248) — 이 키를 쓰는 호출자가 이 워커뿐이라 공유 호출 허용 없이 동시 요청을 켠다.
+        # 발신률은 호출 간격이 정한다: 0.0625초 = 16건/초(2번 키 실측에서 거절 0건인 구간, 계좌 한도 18건/초).
+        # 동시 4는 장중 응답이 느린 분(128~180ms)에도 그 발신률을 채우는 수다.
+        # 위와 같은 이유로 꺼져 있으면 **싣지 않는다** — `dedicated_app_key` 를 모르는 이미지는 기동을 거부한다.
+        # call_budget_enabled 와는 같이 켤 수 없다(아래 태스크 정의의 precondition 이 plan 을 거부한다).
+        local.price_worker_dedicated_kis ? {
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__DEDICATED_APP_KEY = "true"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__FETCH_CONCURRENCY = "4"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__MIN_INTERVAL_SEC  = "0.0625"
+        } : {}
+      )
       # 선택된 source 의 자격증명 쌍**만** 주입한다 — ECS 는 기동 시 secrets 전부를
       # 해석하므로, 미사용 벤더 쌍을 같이 걸면 그 시크릿에 값이 없는 환경(신규 환경·
       # 그릇만 있는 toss)에서 ResourceInitializationError 로 워커가 아예 못 뜬다.
@@ -121,8 +145,9 @@ locals {
           DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_ID     = "${aws_secretsmanager_secret.toss.arn}:client_id::"
           DATA_PIPELINE_MINUTE_PRICE_WORKER__CLIENT_SECRET = "${aws_secretsmanager_secret.toss.arn}:client_secret::"
           } : {
-          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${aws_secretsmanager_secret.kis.arn}:app_key::"
-          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${aws_secretsmanager_secret.kis.arn}:app_secret::"
+          # 전용 키가 켜져 있으면 2번 시크릿이다(위 locals)
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_KEY    = "${local.price_worker_kis_secret_arn}:app_key::"
+          DATA_PIPELINE_MINUTE_PRICE_WORKER__APP_SECRET = "${local.price_worker_kis_secret_arn}:app_secret::"
         }
       )
     }
@@ -206,9 +231,9 @@ locals {
       command = ["inav-worker", "--universe", local.minute_universe_uri]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT = var.minute_artifact_format
-        # 토큰 공유 캐시(ALPHA-573) — price-worker 와 **같은 앱키를 쓴다**. 상주 워커엔
-        # 없으면 안 된다: 매 기동 발급이 분당 1회 제한에 걸리고, 가격 레인·15:40 배치와
-        # 발급을 다툰다.
+        # 토큰 공유 캐시(ALPHA-573) — 1번 KIS 앱키를 쓰는 호출자들이 나눠 쓴다(price-worker 는 전용 키가 꺼져 있을
+        # 때만 여기에 든다 — `minute_price_dedicated_kis_enabled`). 상주 워커엔 없으면 안 된다: 매 기동 발급이 분당
+        # 1회 제한에 걸리고, 같은 키를 쓰는 레인·15:40 배치와 발급을 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
         # 거래일 판정 — `skip_reason` 을 **여는 쪽이 이 컨테이너**다(kis_inav.py). 배치 kis
         # 브랜치(tasks.tf env_sets.kis)와 같은 집합이어야 한다. 안 주면 `is_trading_day` 가
@@ -234,8 +259,9 @@ locals {
       command = ["sector-index-worker"]
       environment = merge(local.env, local.db_env, {
         DATA_PIPELINE_MINUTE_ARTIFACT_FORMAT = var.minute_artifact_format
-        # 토큰 공유 캐시(ALPHA-573) — price-worker·inav-worker 와 **같은 앱키**다. KIS 앱키는
-        # 전역 한도라 이걸 빼면 매 기동 발급이 분당 1회 제한에 걸리고 가격 레인과 다툰다.
+        # 토큰 공유 캐시(ALPHA-573) — inav-worker 와 **같은 앱키**다(price-worker 는 전용 키가 꺼져 있을 때만 같은
+        # 키다 — `minute_price_dedicated_kis_enabled`). KIS 앱키는 전역 한도라 이걸 빼면 매 기동 발급이 분당 1회
+        # 제한에 걸리고 같은 키를 쓰는 레인과 다툰다.
         KIS_TOKEN_CACHE_PARAM = local.kis_token_param_name
         # ⚠️ `OPS_KR_HOLIDAYS` 가 **없는 것이 의도다** — inav-worker 와 갈리는 자리라 적어 둔다.
         # 그 env 는 컨테이너가 여는 가드가 읽을 때만 필요한데(ALPHA-882 가 이걸 빠뜨려
@@ -264,6 +290,12 @@ locals {
 # 여기 안 넣는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관이다.
 locals {
   session_bound_workers = ["news-worker", "disclosure-worker", "inav-worker", "sector-index-worker"]
+
+  # 상주 서비스 사양(minute_service_cpu·memory)을 받지 않고 배치 사양(task_cpu·memory)에
+  # 남는 서비스(ALPHA-1235):
+  # - price-worker: 처리량 저하 원인이 미확정(ALPHA-1153)이라 사양을 함께 바꾸지 않는다.
+  # - disclosure-worker: 14일 실측 CPU 최대(1분 평균) 0.8 vCPU — 0.5 vCPU 로는 모자란다.
+  minute_batch_sized_services = ["price-worker", "disclosure-worker"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -272,8 +304,8 @@ resource "aws_ecs_task_definition" "minute" {
   family                   = "${var.name}-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
+  cpu                      = contains(local.minute_batch_sized_services, each.key) ? var.task_cpu : var.minute_service_cpu
+  memory                   = contains(local.minute_batch_sized_services, each.key) ? var.task_memory : var.minute_service_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
@@ -297,6 +329,19 @@ resource "aws_ecs_task_definition" "minute" {
       options   = local.log_options
     }
   }])
+
+  # 시크릿·토큰 캐시 권한이 먼저 붙은 뒤에 새 revision 이 나간다 — 역할 ARN 만 참조하면 정책 갱신과 병렬로 돌아,
+  # 새 시크릿을 싣는 revision(전용 KIS 키 전환 등)이 권한보다 먼저 기동해 ResourceInitializationError 로 죽을 수 있다.
+  depends_on = [aws_iam_role_policy.execution_secrets, aws_iam_role_policy.task]
+
+  lifecycle {
+    # 두 설정을 같이 싣는 리소스(price-worker 의 태스크 정의)에 둔다 — 그래야 이 서비스만 지목한 plan 도 거부된다.
+    # 다른 서비스의 인스턴스는 조건에서 빼, 오류가 서비스 수만큼 반복되지 않게 한다.
+    precondition {
+      condition     = each.key != "price-worker" || !(var.minute_price_dedicated_kis_enabled && var.call_budget_enabled)
+      error_message = "minute_price_dedicated_kis_enabled 와 call_budget_enabled 는 같이 켤 수 없다 — 공유 호출 예산은 1번 KIS 키의 한도를 나누는 장치인데, 둘 다 켜면 2번 키로 나가는 분 가격 호출이 그 예산을 쓴다."
+    }
+  }
 }
 
 resource "aws_ecs_service" "minute" {
@@ -361,7 +406,7 @@ resource "aws_iam_role_policy" "minute_queues" {
 
 # 전용 역할이다 — 공용 `aws_iam_role.task` 에 붙이면 **모든 수집·정제 배치 task-def**
 # (`aws_ecs_task_definition.this`)가 상주 서비스를 내릴 권한을 함께 갖는다. 권한 자체는
-# 상주 서비스로 좁혀도, 그것을 행사할 수 있는 실행체가 레인 밖까지 넓어진다(analysis_task 선례).
+# 상주 서비스로 좁혀도, 그것을 행사할 수 있는 실행체가 레인 밖까지 넓어진다.
 resource "aws_iam_role" "minute_session" {
   name               = "${var.name}-minute-session"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -386,7 +431,7 @@ resource "aws_iam_role_policy" "minute_session" {
       {
         # 5분 파생 산출 (ALPHA-955 — `rollup-minute-session`). 이 태스크가 레이크에
         # 만드는 파생 데이터이므로 프리픽스를 한정한다
-        # (`aws_iam_role.analysis_task` 가 같은 이유로 쓰기만 prefix 로 가르는 선례).
+        # 쓰기 권한은 해당 prefix 안으로 제한한다.
         # 없으면 매일 AccessDenied 다. Scheduler 자체는 RunTask 제출까지만 보지만 아래
         # ECS Task State Change rule 이 이 task family의 exit≠0 을 알람 토픽으로 올린다.
         Effect   = "Allow"
@@ -691,68 +736,10 @@ resource "aws_iam_role_policy" "minute_session_failure_events" {
   })
 }
 
-# ── 분봉 트리거 설명 소비자 (ALPHA-719) ────────────────────────────────
-# analysis-engine 이미지의 상주 소비자 — price-explanation-realtime 을 폴링해
-# `analyze --trigger-id` 경로를 태운다. data-pipeline 서비스 맵(minute_services)에 넣지
-# 않는 이유: 이미지·컨테이너명·env 네임스페이스(PG*·DEEPSEEK_*)가 전부 다르다(tasks.tf
-# analysis 단서와 동일). 세션 스케일에는 아래 env 파생으로 함께 편입된다.
-
-# ExposureReverted 회수 자격(ALPHA-746) — 소비자가 super-admin 무효화 API 를 부를 때 쓰는
-# 운영자 계정. 그릇(SSM SecureString)은 TF 밖 운영자 CLI 주입이다 — 시크릿 그릇 규약("TF 는
-# 그릇만, 값은 수동")에서 한 칸 더: 여기서는 **이름만 계약**한다(kis 토큰 캐시와 같은 결).
-# 미주입이면 태스크가 ResourceInitializationError 로 시작하지 않는다 — 조용한 자격 공백 대신
-# fail-loud. 주입(1회):
-#   aws ssm put-parameter --name /<var.name>/super-admin/operator-email --type SecureString --value '<email>'
-#   aws ssm put-parameter --name /<var.name>/super-admin/operator-password --type SecureString --value '<password>'
-locals {
-  super_admin_email_param_arn    = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-email"
-  super_admin_password_param_arn = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.name}/super-admin/operator-password"
-}
-
-resource "aws_ecs_task_definition" "analysis_consumer" {
-  family                   = "${var.name}-analysis-consumer"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  # analyze 와 **같은 코드 경로**(`analyze --trigger-id`)를 태우므로 같은 DuckDB 피크를
-  # 받는다 — 공유 `task_memory` 로 두면 상주 소비자만 OOMKilled 로 죽는다(ALPHA-671).
-  memory             = var.analysis_task_memory
-  execution_role_arn = aws_iam_role.execution.arn
-  task_role_arn      = aws_iam_role.analysis_task.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
-  }
-
-  container_definitions = jsonencode([{
-    name      = local.analysis_container_name
-    image     = var.analysis_image
-    essential = true
-    # 진행 중 메시지(LLM 호출 포함)를 끝낼 시간 — 상주 3종과 같은 근거. Fargate 상한 120.
-    stopTimeout = 120
-    # 이미지 ENTRYPOINT 가 `python -m edge_analysis` 라 command 는 서브커맨드 인자다.
-    command = ["consume-triggers"]
-    environment = [for k, v in merge(local.analysis_env, {
-      EDGE_EXPLANATION_QUEUE_URL = aws_sqs_queue.minute["price-explanation-realtime"].url
-      SUPER_ADMIN_API_URL        = var.super_admin_api_url
-    }) : { name = k, value = v }]
-    # 회수 자격은 이 소비자에게만 주입한다 — 배치 analyze(tasks.tf)는 무효화를 부르지 않는다.
-    secrets = [for k, v in merge(local.analysis_secrets, {
-      SUPER_ADMIN_EMAIL    = local.super_admin_email_param_arn
-      SUPER_ADMIN_PASSWORD = local.super_admin_password_param_arn
-    }) : { name = k, valueFrom = v }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options   = merge(local.log_options, { "awslogs-stream-prefix" = "analysis-consumer" })
-    }
-  }])
-}
-
 resource "aws_ecs_service" "analysis_consumer" {
   name            = "${var.name}-analysis-consumer"
   cluster         = var.cluster_arn
-  task_definition = aws_ecs_task_definition.analysis_consumer.arn
+  task_definition = var.analysis_consumer_task_definition_arn
   desired_count   = 0
   launch_type     = "FARGATE"
 
@@ -768,21 +755,7 @@ resource "aws_ecs_service" "analysis_consumer" {
     # (`analysis_autoscaling.tf`). 세션은 이 서비스를 올리지도 내리지도 않는다.
     # 그래서 이 `ignore_changes` 는 그때보다 지금 **더** 필요하다 — 없으면 apply 마다
     # 스케일러가 정한 대수를 terraform 이 0 으로 되돌린다.
-    ignore_changes = [desired_count]
+    # Image revisions belong to application CD; Terraform must not restore the v1 revision.
+    ignore_changes = [desired_count, task_definition]
   }
-}
-
-resource "aws_iam_role_policy" "analysis_consumer_queue" {
-  name = "analysis-consumer-queue"
-  role = aws_iam_role.analysis_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      # 소비 + ReturnsNotReady 지연(ChangeMessageVisibility). 설명 큐 하나뿐이다.
-      Effect   = "Allow"
-      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
-      Resource = [aws_sqs_queue.minute["price-explanation-realtime"].arn]
-    }]
-  })
 }

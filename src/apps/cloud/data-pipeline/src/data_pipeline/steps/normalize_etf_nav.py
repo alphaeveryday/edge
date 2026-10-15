@@ -30,7 +30,10 @@ import logging
 import math
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from ..lake import (
     Storage,
@@ -144,6 +147,62 @@ def _canonical_schema():
     ])
 
 
+@dataclass(frozen=True)
+class FactDataset:
+    """거래일 grain 단일 벤더 fact 의 정제 사양 — 이 모듈의 병합·manifest 장치가 받는다.
+
+    NAV 와 업종지수 일봉(ALPHA-1254)이 같은 형상이다: KIS 단일 벤더·KR 단일 시장, raw 를
+    정규화해 게이트를 통과한 행을 (market, trade_date) 파티션에 행 키로 멱등 병합한다. 갈리는
+    것은 이름·경로·정규화·게이트·값 필드뿐이라 그것만 사양으로 받는다(`ingest_raw_etf` 가
+    dataset·partition 으로만 가르는 것과 같은 방식). 기본값은 NAV 다 — NAV 의 manifest·
+    quality_log 바이트는 이 사양이 생기기 전과 같다(`load_etf_nav` 가 `winner_ids` 를
+    `{"etf_id"}` 로 고정해 읽는다).
+    """
+
+    dataset: str
+    job_name: str
+    vendor: str
+    # 파티션 안의 행 키. manifest 의 winner_ids 항목 키이기도 하다.
+    row_key: str
+    # 같은 fetched_at 에 서로 다르면 어느 쪽도 고르지 않고 격리하는 값 필드.
+    value_fields: tuple[str, ...]
+    conflict_reason: str
+    conflict_values_key: str
+    columns: tuple[str, ...]
+    schema: Callable[[], Any]
+    is_raw_key: Callable[[str], bool]
+    parse_raw_key: Callable[[str], dict[str, str]]
+    canonical_partition: Callable[[str, str], str]
+    normalize: Callable[[str, dict], dict]
+    # (row, *, max_trade_date) → 사유 리스트(정상=[]). 전 사유 blocking 이다.
+    validate: Callable[..., list[str]]
+
+
+def _value(row: dict, spec: FactDataset) -> object:
+    """충돌 판정에 쓰는 값. 필드가 하나면 그 값 자체다 — NAV quality_log 의 `navs` 형식 유지."""
+    if len(spec.value_fields) == 1:
+        return row[spec.value_fields[0]]
+    return tuple(row[f] for f in spec.value_fields)
+
+
+_NAV = FactDataset(
+    dataset=DATASET,
+    job_name=JOB_NAME,
+    vendor="kis",
+    row_key="etf_id",
+    value_fields=("nav",),
+    conflict_reason="same_timestamp_nav_conflict",
+    conflict_values_key="navs",
+    columns=_CANONICAL_COLUMNS,
+    schema=_canonical_schema,
+    is_raw_key=is_raw_etf_nav_key,
+    parse_raw_key=parse_raw_etf_nav_key,
+    canonical_partition=canonical_etf_nav_partition,
+    normalize=_normalize,
+    validate=validate_etf_nav,
+)
+
+
 def _read_parquet_rows(data: bytes) -> list[dict]:
     import io
     import pyarrow.parquet as pq
@@ -151,13 +210,14 @@ def _read_parquet_rows(data: bytes) -> list[dict]:
     return pq.read_table(io.BytesIO(data)).to_pylist()
 
 
-def _write_parquet_rows(rows: list[dict]) -> bytes:
+def _write_parquet_rows(rows: list[dict], *, spec: FactDataset | None = None) -> bytes:
     import io
     import pyarrow as pa
     import pyarrow.parquet as pq
 
+    spec = spec or _NAV
     table = pa.Table.from_pylist(
-        [{c: r.get(c) for c in _CANONICAL_COLUMNS} for r in rows], schema=_canonical_schema()
+        [{c: r.get(c) for c in spec.columns} for r in rows], schema=spec.schema()
     )
     buf = io.BytesIO()
     pq.write_table(table, buf)
@@ -177,31 +237,34 @@ def _fetched_at(row: dict) -> datetime:
 
 def _merge_partition(
     existing: list[dict], new_rows: list[dict], conflicts: list[dict],
+    *, spec: FactDataset | None = None,
 ) -> list[dict]:
-    """한 파티션을 etf_id 키로 병합한다. 최신 fetched_at 이 이기며, 최신 시각에 서로
-    다른 NAV가 있으면 어느 값도 임의 선택하지 않고 해당 ID를 제외한다.
+    """한 파티션을 행 키(NAV 는 etf_id)로 병합한다. 최신 fetched_at 이 이기며, 최신 시각에
+    서로 다른 값이 있으면 어느 값도 임의 선택하지 않고 해당 ID를 제외한다.
 
     NAV 는 구성종목과 달리 **tombstone 문제가 없다** — 한 (etf_id,trade_date)의 NAV 는 확정
     단일값이라 '사라지는 하위 행'이 없고, 벤더 정정은 같은 키를 더 늦은 fetched_at 으로
-    덮어쓰는 것으로 그대로 표현된다.
+    덮어쓰는 것으로 그대로 표현된다. 업종지수 일봉도 같다(한 지수·한 거래일에 봉 하나).
     """
+    spec = spec or _NAV
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in [*existing, *new_rows]:
-        grouped[row["etf_id"]].append(row)
+        grouped[row[spec.row_key]].append(row)
 
     merged: list[dict] = []
-    for etf_id in sorted(grouped):
-        rows = grouped[etf_id]
+    for row_id in sorted(grouped):
+        rows = grouped[row_id]
         latest = max(_fetched_at(row) for row in rows)
         latest_rows = [row for row in rows if _fetched_at(row) == latest]
-        navs = {row["nav"] for row in latest_rows}
-        if len(navs) > 1:
+        values = {_value(row, spec) for row in latest_rows}
+        if len(values) > 1:
             sample = latest_rows[0]
             conflicts.append({
-                "market": sample["market"], "etf_id": etf_id,
+                "market": sample["market"], spec.row_key: row_id,
                 "trade_date": sample["trade_date"],
-                "fetched_at": sample.get("fetched_at"), "navs": sorted(navs),
-                "reasons": ["same_timestamp_nav_conflict"],
+                "fetched_at": sample.get("fetched_at"),
+                spec.conflict_values_key: sorted(values),
+                "reasons": [spec.conflict_reason],
             })
             continue
         merged.append(latest_rows[-1])
@@ -210,10 +273,12 @@ def _merge_partition(
 
 def _write_canonical(
     storage: Storage, passing: list[dict], conflicts: list[dict],
-    superseded: list[dict], run_id: str,
+    superseded: list[dict], run_id: str, *, spec: FactDataset | None = None,
 ) -> tuple[list[dict], int]:
     """통과 행을 (market,trade_date) 파티션별로 기존 canonical 과 멱등 병합해 쓴다.
     반환: (이번 실행 winner manifest 파티션, 병합 뒤 canonical 행 수)."""
+    spec = spec or _NAV
+    key_field = spec.row_key
     by_partition: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in passing:
         by_partition[(row["market"], row["trade_date"])].append(row)
@@ -221,9 +286,9 @@ def _write_canonical(
     partitions: list[dict] = []
     rows_written = 0
     for (market, trade_date), new_rows in sorted(by_partition.items()):
-        prefix = canonical_etf_nav_partition(market, trade_date)
+        prefix = spec.canonical_partition(market, trade_date)
         current_conflicts: list[dict] = []
-        current_winners = _merge_partition([], new_rows, current_conflicts)
+        current_winners = _merge_partition([], new_rows, current_conflicts, spec=spec)
         # part 를 누적하지 않고 항상 하나로 되쓴다 — 재실행이 part-00001, 00002… 를 쌓으면
         # 병합 결과가 아니라 중복이 남는다(가격·구성종목 정제와 동형).
         key = f"{prefix}/part-00000.parquet"
@@ -241,8 +306,8 @@ def _write_canonical(
             if current_bytes is not None:
                 existing.extend(_read_parquet_rows(current_bytes))
             canonical_conflicts: list[dict] = []
-            merged = _merge_partition(existing, new_rows, canonical_conflicts)
-            parquet_bytes = _write_parquet_rows(merged)
+            merged = _merge_partition(existing, new_rows, canonical_conflicts, spec=spec)
+            parquet_bytes = _write_parquet_rows(merged, spec=spec)
             if storage.put_bytes_if_version(key, parquet_bytes, version):
                 break
         else:
@@ -254,7 +319,7 @@ def _write_canonical(
         # shared canonical 은 다음 정제 런이 덮어쓴다. 완료 manifest가 그 가변 객체를 가리키면
         # 다음 런과 consumer가 겹칠 때 앞 manifest의 SHA가 깨진다. 같은 바이트를 run-scoped
         # artifact로 확정하고 하류에는 이 불변 키만 공개한다(공시 manifest와 같은 규약).
-        run_key = canonical_run_partition_key(DATASET, run_id, trade_date)
+        run_key = canonical_run_partition_key(spec.dataset, run_id, trade_date)
         run_bytes, _ = storage.get_bytes_with_version(run_key)
         if run_bytes is None:
             if not storage.put_bytes_if_version(run_key, parquet_bytes, None):
@@ -267,25 +332,25 @@ def _write_canonical(
         if hashlib.sha256(storage.get_bytes(run_key)).hexdigest() != digest:
             raise OSError(f"run canonical parquet 무결성 검증 실패: {run_key}")
         conflicted = {
-            item["etf_id"] for item in conflicts
+            item[key_field] for item in conflicts
             if item["market"] == market and item["trade_date"] == trade_date
         }
-        merged_by_id = {row["etf_id"]: row for row in _read_parquet_rows(run_bytes)}
-        current_by_id = {row["etf_id"]: row for row in current_winners}
-        for etf_id, current in sorted(current_by_id.items()):
-            if etf_id in conflicted or merged_by_id.get(etf_id) == current:
+        merged_by_id = {row[key_field]: row for row in _read_parquet_rows(run_bytes)}
+        current_by_id = {row[key_field]: row for row in current_winners}
+        for row_id, current in sorted(current_by_id.items()):
+            if row_id in conflicted or merged_by_id.get(row_id) == current:
                 continue
-            canonical = merged_by_id.get(etf_id)
+            canonical = merged_by_id.get(row_id)
             superseded.append({
-                "market": market, "etf_id": etf_id, "trade_date": trade_date,
+                "market": market, key_field: row_id, "trade_date": trade_date,
                 "current_fetched_at": current.get("fetched_at"),
                 "canonical_fetched_at": canonical.get("fetched_at") if canonical else None,
                 "reason": "superseded_by_canonical",
             })
         winner_ids = [
-            {"etf_id": etf_id}
-            for etf_id, current in sorted(current_by_id.items())
-            if etf_id not in conflicted and merged_by_id.get(etf_id) == current
+            {key_field: row_id}
+            for row_id, current in sorted(current_by_id.items())
+            if row_id not in conflicted and merged_by_id.get(row_id) == current
         ]
         if winner_ids:
             partitions.append({
@@ -300,10 +365,11 @@ def _manifest_bytes(
     run_id: str, canonical_written: bool, partitions: list[dict],
     *, attempt_id: str | None = None, claimed_at: str | None = None,
     retryable: bool | None = None, producer_exit_code: int | None = None,
+    spec: FactDataset | None = None,
 ) -> bytes:
     payload = {
         "run_id": run_id,
-        "producer": JOB_NAME,
+        "producer": (spec or _NAV).job_name,
         "canonical_written": canonical_written,
         "canonical_partitions": partitions,
     }
@@ -318,14 +384,16 @@ def _manifest_bytes(
     return json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
 
 
-def _completed_manifest_exit(storage: Storage, data: bytes, run_id: str) -> int | None:
+def _completed_manifest_exit(
+    storage: Storage, data: bytes, run_id: str, *, spec: FactDataset | None = None,
+) -> int | None:
     """완료 manifest면 artifact를 재검증하고 원래 exit를, incomplete면 None을 반환한다."""
     manifest = json.loads(data.decode("utf-8"))
     if not isinstance(manifest, dict) or manifest.get("run_id") != run_id:
         raise ValueError(f"같은 key의 canonical manifest 정체성이 다르다: run_id={run_id}")
     if manifest.get("canonical_written") is not True:
         return None
-    if manifest.get("producer") != JOB_NAME:
+    if manifest.get("producer") != (spec or _NAV).job_name:
         raise ValueError(f"canonical manifest producer가 다르다: run_id={run_id}")
     exit_code = manifest.get("producer_exit_code")
     if exit_code not in (0, _PARTIAL_EXIT_CODE):
@@ -345,18 +413,18 @@ def _completed_manifest_exit(storage: Storage, data: bytes, run_id: str) -> int 
 
 
 def _claim_manifest(
-    storage: Storage, key: str, run_id: str,
+    storage: Storage, key: str, run_id: str, *, spec: FactDataset | None = None,
 ) -> tuple[str | None, str | None, str | None, int | None]:
     """run manifest를 CAS claim한다. 명시 실패나 7시간 지난 claim만 인수한다."""
     attempt_id = uuid.uuid4().hex
     claimed_at = datetime.now(timezone.utc).isoformat()
     draft = _manifest_bytes(
-        run_id, False, [], attempt_id=attempt_id, claimed_at=claimed_at,
+        run_id, False, [], attempt_id=attempt_id, claimed_at=claimed_at, spec=spec,
     )
     for _ in range(_CANONICAL_CAS_ATTEMPTS):
         current, version = storage.get_bytes_with_version(key)
         if current is not None:
-            completed_exit = _completed_manifest_exit(storage, current, run_id)
+            completed_exit = _completed_manifest_exit(storage, current, run_id, spec=spec)
             if completed_exit is not None:
                 return None, None, None, completed_exit
             manifest = json.loads(current.decode("utf-8"))
@@ -382,7 +450,7 @@ def _claim_manifest(
 
 def _mark_manifest_retryable(
     storage: Storage, key: str, run_id: str, attempt_id: str,
-    claimed_at: str, partitions: list[dict],
+    claimed_at: str, partitions: list[dict], *, spec: FactDataset | None = None,
 ) -> None:
     """현재 attempt가 가진 incomplete claim만 다음 재시도가 인수할 수 있게 표시한다."""
     current, version = storage.get_bytes_with_version(key)
@@ -395,36 +463,42 @@ def _mark_manifest_retryable(
         return
     retryable = _manifest_bytes(
         run_id, False, partitions, attempt_id=attempt_id,
-        claimed_at=claimed_at, retryable=True,
+        claimed_at=claimed_at, retryable=True, spec=spec,
     )
     if not storage.put_bytes_if_version(key, retryable, version):
         raise OSError(f"canonical run manifest retryable 표시 CAS 실패: {key}")
 
 
-def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
+def run(
+    storage: Storage, run_id: str, input_run_id: str | None = None,
+    *, spec: FactDataset | None = None,
+) -> int:
     """raw etf_nav → canonical winner manifest. 성공 0, 행 부분 실패 2, 저장 실패 1.
 
     input_run_id 지정 시 **그 수집 런의 raw 만** 읽어 canonical 을 멱등 적재한다
-    (ALPHA-389 — SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다."""
+    (ALPHA-389 — SFN 이 이 경로로 돈다). 미지정이면 전체를 읽는다 — 백필·복구 수단이다.
+    `spec` 을 주면 그 데이터셋(업종지수 일봉 등)을 같은 장치로 정제한다(`FactDataset`)."""
+    spec = spec or _NAV
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_trade_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
 
-    manifest_key = canonical_run_manifest_key(DATASET, run_id)
+    manifest_key = canonical_run_manifest_key(spec.dataset, run_id)
     exit_code = 0
     try:
         attempt_id, claimed_at, manifest_version, completed_exit = _claim_manifest(
-            storage, manifest_key, run_id,
+            storage, manifest_key, run_id, spec=spec,
         )
     except Exception:
         logger.exception("canonical run manifest claim 실패")
         return 1
     if completed_exit is not None:
-        logger.info("normalize_etf_nav 완료 manifest 재사용: run_id=%s exit=%d", run_id, completed_exit)
+        logger.info("%s 완료 manifest 재사용: run_id=%s exit=%d",
+                    spec.job_name, run_id, completed_exit)
         return completed_exit
 
     try:
-        raw_keys = [k for k in storage.list_keys("raw/") if is_raw_etf_nav_key(k)]
+        raw_keys = [k for k in storage.list_keys("raw/") if spec.is_raw_key(k)]
     except Exception as exc:
         logger.exception("raw 목록 조회 실패")
         raw_keys = []
@@ -440,7 +514,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
 
     for raw_key in raw_keys:
         try:
-            vendor = parse_raw_etf_nav_key(raw_key)["source"]
+            vendor = spec.parse_raw_key(raw_key)["source"]
             lines = storage.get_bytes(raw_key).decode("utf-8").splitlines()
         except Exception as exc:
             logger.exception("raw 읽기/키 파싱 실패: %s", raw_key)
@@ -461,14 +535,14 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 # AttributeError 로 런 전체를 죽인다 — 행 단위 실패로 격리한다(각도 H, Rule 12).
                 failures.append({"raw_key": raw_key, "reasons": ["non_object_row"]})
                 continue
-            if vendor != "kis":
-                # 알 수 없는 NAV 벤더 — 조용히 통과시키지 않고 사유로 드러낸다(Rule 12).
+            if vendor != spec.vendor:
+                # 알 수 없는 벤더 — 조용히 통과시키지 않고 사유로 드러낸다(Rule 12).
                 failures.append({"raw_key": raw_key, "source_vendor": vendor,
                                  "reasons": ["unsupported_vendor"]})
                 continue
             try:
-                row = _normalize(vendor, record)
-                reasons = validate_etf_nav(row, max_trade_date=max_trade_date)
+                row = spec.normalize(vendor, record)
+                reasons = spec.validate(row, max_trade_date=max_trade_date)
             except Exception as exc:
                 # 예기치 못한 행 단위 크래시도 배치를 죽이지 않게 격리한다(Rule 12).
                 logger.exception("행 정규화 실패(격리): %s", raw_key)
@@ -478,7 +552,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if reasons:
                 # NAV 는 전 사유가 blocking 이다(참고 필드 없음) — 경고 경로가 없다.
                 failures.append({
-                    "market": row["market"], "etf_id": row["etf_id"],
+                    "market": row["market"], spec.row_key: row[spec.row_key],
                     "trade_date": row["trade_date"], "source_vendor": vendor,
                     "raw_key": raw_key, "reasons": reasons,
                 })
@@ -496,7 +570,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if exit_code != 1:
         try:
             partitions, canonical_rows = _write_canonical(
-                storage, passing, conflicts, superseded, run_id,
+                storage, passing, conflicts, superseded, run_id, spec=spec,
             )
             canonical_written = True
         except Exception:
@@ -508,11 +582,11 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if (failures or conflicts) and exit_code == 0:
         exit_code = _PARTIAL_EXIT_CODE
 
-    quality_key = quality_log_key(DATASET, checked_date, run_id)
+    quality_key = quality_log_key(spec.dataset, checked_date, run_id)
     quality_payload = {
         "run_id": run_id,
-        "job_name": JOB_NAME,
-        "dataset": DATASET,
+        "job_name": spec.job_name,
+        "dataset": spec.dataset,
         "input_run_id": input_run_id,
         "raw_files": len(raw_keys),
         "records_read": read,
@@ -555,6 +629,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 raise OSError("canonical run manifest claim 시각이 없다")
             pending = _manifest_bytes(
                 run_id, False, partitions, attempt_id=attempt_id, claimed_at=claimed_at,
+                spec=spec,
             )
             if not storage.put_bytes_if_version(manifest_key, pending, manifest_version):
                 raise OSError("incomplete manifest 소유권을 잃었다")
@@ -562,7 +637,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             if pending_read != pending or pending_version is None:
                 raise OSError("incomplete manifest 무결성 검증 실패")
             completed = _manifest_bytes(
-                run_id, True, partitions, producer_exit_code=exit_code,
+                run_id, True, partitions, producer_exit_code=exit_code, spec=spec,
             )
             if not storage.put_bytes_if_version(manifest_key, completed, pending_version):
                 raise OSError("완료 manifest 소유권을 잃었다")
@@ -580,7 +655,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
                 if owned and current_version is not None:
                     invalid = _manifest_bytes(
                         run_id, False, partitions, attempt_id=attempt_id,
-                        claimed_at=claimed_at, retryable=True,
+                        claimed_at=claimed_at, retryable=True, spec=spec,
                     )
                     storage.put_bytes_if_version(manifest_key, invalid, current_version)
             except Exception:
@@ -589,7 +664,7 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
     if exit_code == 1 and attempt_id is not None and claimed_at is not None:
         try:
             _mark_manifest_retryable(
-                storage, manifest_key, run_id, attempt_id, claimed_at, partitions,
+                storage, manifest_key, run_id, attempt_id, claimed_at, partitions, spec=spec,
             )
         except Exception:
             logger.exception("canonical run manifest retryable 표시 실패")
@@ -609,9 +684,9 @@ def run(storage: Storage, run_id: str, input_run_id: str | None = None) -> int:
             exit_code = 1
 
     logger.info(
-        "normalize_etf_nav 완료: raw_files=%d read=%d passed=%d failed=%d "
+        "%s 완료: raw_files=%d read=%d passed=%d failed=%d "
         "canonical_parts=%d canonical_rows=%d winners=%d conflicts=%d",
-        len(raw_keys), read, len(passing), len(failures), len(partitions), canonical_rows,
-        manifest_winners, len(conflicts),
+        spec.job_name, len(raw_keys), read, len(passing), len(failures), len(partitions),
+        canonical_rows, manifest_winners, len(conflicts),
     )
     return exit_code

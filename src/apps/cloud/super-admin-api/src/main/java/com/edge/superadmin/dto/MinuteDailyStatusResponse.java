@@ -26,7 +26,34 @@ public record MinuteDailyStatusResponse(int days, String from, String to, List<D
 	}
 
 	public record DatasetResponse(String dataset, State state, String basis,
-			int failedSessions, int totalSessions) {
+			int failedSessions, int totalSessions, WindowsResponse windows) {
+	}
+
+	/**
+	 * 그 날짜·데이터셋 세션들의 창 수 합(ALPHA-1289). 판정에 쓰는 값을 접지 않고 그대로 싣는다 —
+	 * 판정({@code state}·{@code basis})은 이 숫자와 무관하게 종전대로 낸다.
+	 * 세션 없이 날짜 축 job 만으로 선 항목은 창이 없으므로 {@code windows} 가 null 이다.
+	 */
+	public record WindowsResponse(long expected, long due, long claimed, long valid,
+			long validEmpty, long incomplete, long missing, long invalid) {
+
+		static WindowsResponse sum(List<DailySessionSummary> sessions) {
+			long expected = 0, due = 0, claimed = 0, valid = 0, validEmpty = 0, incomplete = 0,
+					missing = 0, invalid = 0;
+			for (DailySessionSummary session : sessions) {
+				DailyWindowCounts w = session.windows();
+				expected += session.expectedWindowCount();
+				due += w.due();
+				claimed += w.claimed();
+				valid += w.valid();
+				validEmpty += w.validEmpty();
+				incomplete += w.incomplete();
+				missing += w.missing();
+				invalid += w.invalid();
+			}
+			return new WindowsResponse(expected, due, claimed, valid, validEmpty, incomplete,
+					missing, invalid);
+		}
 	}
 
 	private record SessionDecision(State state, String basis) {
@@ -95,7 +122,8 @@ public record MinuteDailyStatusResponse(int days, String from, String to, List<D
 				basis = "날짜 축 뉴스 후속 job 대기";
 			}
 		}
-		return new DatasetResponse(dataset, state, basis, (int) failed, decisions.size());
+		return new DatasetResponse(dataset, state, basis, (int) failed, decisions.size(),
+				WindowsResponse.sum(sessions));
 	}
 
 	private static SessionDecision decide(DailySessionSummary session, JobCounts jobs) {
@@ -165,14 +193,14 @@ public record MinuteDailyStatusResponse(int days, String from, String to, List<D
 	private static DatasetResponse newsJobsOnly(JobCounts jobs) {
 		if (stuck(jobs)) {
 			return new DatasetResponse("news_minute", State.CAUTION,
-					jobBasis("세션 없이 날짜 축", jobs), 0, 0);
+					jobBasis("세션 없이 날짜 축", jobs), 0, 0, null);
 		}
 		if (jobs.claimed() > jobs.claimedExpired()) {
 			return new DatasetResponse("news_minute", State.RUNNING,
-					"세션 없이 날짜 축 뉴스 후속 job 처리 중", 0, 0);
+					"세션 없이 날짜 축 뉴스 후속 job 처리 중", 0, 0, null);
 		}
 		return new DatasetResponse("news_minute", State.WAITING,
-				"세션 없이 날짜 축 뉴스 후속 job 대기", 0, 0);
+				"세션 없이 날짜 축 뉴스 후속 job 대기", 0, 0, null);
 	}
 
 	private static String jobBasis(String scope, JobCounts jobs) {

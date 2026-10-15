@@ -58,12 +58,16 @@ public class AdminAuthFilter extends OncePerRequestFilter {
 			new Rule("GET", Pattern.compile("/api/v1/sources/lineage/news")),
 			new Rule("GET", Pattern.compile("/api/v1/sources/minute")),
 			new Rule("GET", Pattern.compile("/api/v1/sources/minute/daily")),
+			new Rule("GET", Pattern.compile("/api/v1/sources/minute/judgments")),
 			new Rule("GET", Pattern.compile("/api/v1/sources/impact/holdings")),
 			new Rule("GET", Pattern.compile("/api/v1/console/facts")),
 			new Rule("GET", Pattern.compile("/api/v1/console/trends/entity-resolution")),
 			new Rule("GET", Pattern.compile("/api/v1/console/trends/intraday-analysis")),
+			new Rule("GET", Pattern.compile("/api/v1/console/trends/analysis")),
 			new Rule("GET", Pattern.compile("/api/v1/analyses")),
 			new Rule("POST", Pattern.compile("/api/v1/analyses/[^/]+/invalidate")),
+			new Rule("GET", Pattern.compile("/api/v1/analysis-results")),
+			new Rule("GET", Pattern.compile("/api/v1/analysis-results/[^/]+/[^/]+")),
 			new Rule("GET", Pattern.compile("/api/v1/session")),
 			new Rule("PATCH", Pattern.compile("/api/v1/session/profile")));
 

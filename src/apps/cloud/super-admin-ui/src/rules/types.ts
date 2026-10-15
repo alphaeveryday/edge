@@ -11,7 +11,7 @@
  *
  * ⚠️ **계측 없는 축을 목값으로 메우지 않는다.** 동봉 스냅샷에는 목으로 채운 축이 일부 있고
  * (`mock` 플래그가 그걸 밝히며 규칙 결과에 전파된다), 실 응답은 **그 축을 아예 안 보낸다** —
- * 그래서 `chain`·`queues`·`etf_ledger`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
+ * 그래서 `chain`·`queues`·`analysis_failures`·`runbook`·`minute` 은 옵셔널이고, 없으면 그 규칙은
  * `evaluated:false` 다. 빈 배열·빈 객체로 메우면 계측 공백이 실측 0 으로 위조되고
  * "못 돎"이 "봤고 괜찮다"가 된다.
  */
@@ -157,8 +157,26 @@ export interface ChainStage {
   intraday?: number | null;
   src: string;
   note?: string;
-  /** 관측 불가 — 접근 채널 자체가 없다. 0 과 다르다 */
+  /** 관측 불가 — 이 단계를 셀 쪽이 없다. 0 과 다르다. 서버가 싣는다: 그날 코호트에 새 분석
+   *  엔진의 요청이 하나도 없고 첫 요청이 조회일보다 뒤일 때(ALPHA-1296) */
   blind?: boolean;
+  /**
+   * 배치 갈래가 이 단계의 **대상이 아니다**(ALPHA-1296) — 배치 트리거는 새 분석 엔진이 소비하지
+   * 않는다. 이때 `batch` 는 `null` 이고, 0 건도 집계 없음도 아니다. R10 은 그 갈래를 비교하지 않는다.
+   */
+  batch_na?: boolean;
+  /**
+   * 이 단계로의 감소를 **손실로 판정하지 않는다**(ALPHA-1296) — 수는 보여 주기만 한다.
+   * 분석 시작 → 분석 완료(실패는 R15 가 맡고 진행 중은 실패가 아니다)와 분석 완료 → 게시(고른
+   * 항목이 없으면 게시되지 않는 것이 설계다)가 그렇다.
+   */
+  shown_only?: boolean;
+  /**
+   * 이 단계에 **아직 판정할 수 없는** 장중 트리거 수(ALPHA-1309) — 앞 단계에 도달한 지 유예 시간(단일 분석
+   * 워크플로의 전체 시간 제한)이 안 지나 진행 중일 수 있는 건이다. `intraday`(도달)에는 들어 있지
+   * 않다. R10 은 앞 단계와의 차이에서 이 수를 뺀 것만 손실로 본다. 없으면 0 이다.
+   */
+  pending?: number;
 }
 
 export interface QueueFact {
@@ -185,6 +203,9 @@ export interface OutputFact {
    *  **`0` 은 표본 부재가 아니라 관측된 0** 이고, 비율 판정만 안 선다. */
   base?: number | null;
   unit: string;
+  /** `base` 를 낸 기준일별 건수(날짜 오름차순). 조회일은 들어 있지 않다. 규칙은 쓰지 않고
+   *  추이 화면이 그린다. 이 필드가 없는 응답에서는 없다. */
+  history?: { date: string; count: number }[];
 }
 
 export interface BoundaryFact {
@@ -194,26 +215,41 @@ export interface BoundaryFact {
    * WITHDRAWN 전이 + INVALIDATION 발번만 하므로, 상태만 세면 정상 무효화가 P0 로 영구히 쌓인다(B1).
    */
   delivery_now_nonpublished: number;
+  /**
+   * 앞의 두 수가 **지금의 게시를 못 본다**(ALPHA-1293) — **옛 API 에서만** 온다. 옛 API 는 옛 설명
+   * 엔진의 게시만 발번과 맞대고, 그 엔진이 멈춰 있어 참으로 실었다. 이때 0 은 "어긋난 것이 없다"가
+   * 아니라 관측 불가다. 0 이 아닌 수는 여전히 실측이다(옛 엔진 분의 어긋남).
+   *
+   * 새 API(ALPHA-1326)는 새 분석 엔진의 게시를 지금 상태로 세서 이 키를 싣지 않는다 — 없으면 관측 가능이다.
+   */
+  blind?: boolean;
   /** 전달 원장 누적 행 수 — 표시용. 판정에 안 쓴다 */
   delivery_rows?: number;
   sync_cursor_rows?: number;
   seed_note?: string;
 }
 
-export interface EtfLedgerRow {
-  etf: string;
-  name: string;
-  triggered: boolean;
-  outcome: string | null;
-  error?: string | null;
-  published?: boolean;
-  delivered?: boolean;
+export interface AnalysisFailures {
+  kind: 'outlook' | 'movement';
+  failed_etfs: string[];
+  /** 동봉 스냅샷이 이 항목을 목으로 채웠는가 — 실 응답에는 없다. 위반의 `mock` 으로 전파된다 */
+  mock?: boolean;
 }
 
-export interface EtfLedger {
-  rows: EtfLedgerRow[];
-  mock?: boolean;
-  why?: string;
+/** 전망의 그날 상태 — `none` 은 그날 분석 행이 없다는 뜻이다 */
+export type OutlookState = 'completed' | 'failed' | 'running' | 'none';
+/**
+ * 가격변동 분석의 그날 상태. `not_started` 는 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없고
+ * 유예 밖인 것, `pending` 은 같은 형상인데 유예 안이라 아직 판정할 수 없는 것이다.
+ */
+export type MovementState = OutlookState | 'not_started' | 'pending';
+
+/** 조회일의 ETF 하나의 v2 분석 귀결(ALPHA-1312). `name` 은 이름을 못 찾으면 코드 그대로다 */
+export interface EtfAnalysisRow {
+  etf: string;
+  name: string;
+  outlook: OutlookState;
+  movement: MovementState;
 }
 
 export interface RunbookEntry {
@@ -303,8 +339,21 @@ export interface Facts {
   queues?: QueueFact[];
   outputs: OutputFact[];
   boundary: BoundaryFact;
-  /** ETF별 분석 귀결 원장 — 계측이 없으면 아예 부재(undefined) → R15 evaluated:false */
-  etf_ledger?: EtfLedger;
+  /**
+   * 조회일의 ETF별 v2 분석 귀결(ALPHA-1312) — 흐름 화면의 ETF 표가 그린다. 규칙은 읽지 않는다
+   * (실패는 `analysis_failures` 로 R15 가, 시작 못 함은 체인으로 R10 이 판정한다). 이 축을 싣기 전의
+   * API 에서는 없고, 그때 표는 "기록 없음"이다.
+   */
+  etf_analyses?: { rows: EtfAnalysisRow[] };
+  /**
+   * 조회일에 v2 분석이 **끝내 완료되지 못한** ETF(ALPHA-1291) — 종류(전망·가격변동 분석)별로 그날
+   * 실패 행이 있고 완료 행이 하나도 없는 ETF 코드다. 실패했다가 같은 날 다시 돌아 완료된 ETF,
+   * 진행 중(running)만 있는 ETF 는 들어 있지 않다.
+   *
+   * 이 축을 안 싣는 응답에서는 부재(undefined)이고 그때 R15 는 evaluated:false 다. 빈 배열로
+   * 메우지 마라 — "실패 ETF 없음"으로 위조된다.
+   */
+  analysis_failures?: AnalysisFailures[];
   /**
    * 실시간 수집 세션 — **스냅샷에는 없다**(facts-snapshot 은 배치 원장만 담는다).
    * 화면이 `/sources/minute` 응답을 실어 줄 때만 채워지고, 없으면 R17~R19 는
@@ -333,7 +382,7 @@ export interface Facts {
  *
  * **필드 규약 — 한 필드는 한 용도다.** 이전에는 세 필드가 서로의 일을 했다: `unit` 이 레인
  * 이름(`news`)과 비교 문장(`기대 … 실제 …`)을 담고, `metric` 이 `'-50%'`·`'STALE'` 같은
- * 문자열을 담고, `target` 이 `'o.pub'` 같은 내부 id 였다. 그래서 화면이
+ * 문자열을 담고, `target` 이 `'o.outlook'` 같은 내부 id 였다. 그래서 화면이
  * `typeof metric === 'number'` 로 용도를 **추측해서** 갈라 그렸다 — 룰이 새 문자열을 넣으면
  * 화면이 조용히 다르게 그린다. 규약을 여기 박아 그 추측을 없앤다.
  */
@@ -451,6 +500,14 @@ export interface Rule {
    * `dep` 이 비면 안 되고, 그 사유 문장들은 서로 달라야 한다.
    */
   axis?: 'minute';
+  /**
+   * 못 돈 사유가 **사실에 따라 갈릴 때** 그 문장(ALPHA-1293). `canRun` 이 거짓일 때만 불리고,
+   * `null` 이면 `dep` 을 쓴다. R10 이 그렇다: 축이 아예 없는 것(배포 시차)과 축은 왔는데 단계가
+   * 전부 관측 불가인 것은 다른 사유다. 사유가 하나뿐인 규칙은 이걸 두지 않고 `dep` 만 쓴다.
+   *
+   * ⚠️ 축이 없는 사실에도 불린다 — 널 안전해야 한다.
+   */
+  notRunWhy?: (f: Facts) => string | null;
   /** 이 규칙이 읽는 사실이 목으로 채워져 있는가 (위반 0건이어도 표시하기 위함) */
   mockBacked?: (f: Facts) => boolean;
   /** 리포트 note — 규칙이 **무엇을 실제로 봤는지** 밝힌다(예: R07 의 분모 배선 작업 수).
@@ -488,6 +545,12 @@ export interface RuleResult {
    *   "아직 계측이 없구나"로 읽힌다. 사유는 `note` 에 있다.
    */
   notRun?: 'axis' | 'identity';
+  /**
+   * 못 돈 사유가 **이번 사실에서 갈렸을 때** 그 문장(ALPHA-1293) — 규칙의 `notRunWhy` 가 낸 값이다.
+   * 있으면 화면은 정적 사유(`dep`)보다 이것을 먼저 쓴다. 축이 왔는데 관측 불가라 못 돈 R10 에
+   * "배포본에 축이 없다"고 쓰면 원인이 틀린다.
+   */
+  notRunWhy?: string;
   violations: number;
   depends_on_mock: boolean;
   note: string | null;

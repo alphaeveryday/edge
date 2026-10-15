@@ -1,0 +1,175 @@
+formatVersion: 2
+name: Company
+label: Company
+description: A company identified independently of its issued shares. One company
+  can issue several share classes and have many disclosures.
+group: Company & securities
+primaryKey: id
+identity:
+  columns:
+  - actor_id
+  encoding: sourceString
+properties:
+  id:
+    label: ID
+    description: Internal company identifier, shared by its entity, actor, and company-profile
+      records. Issued securities have different identifiers.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey:
+      - actor_id
+      foreignKeys:
+      - constraint: fk_company_profile_actor
+        table: company_profile
+        columns:
+        - actor_id
+        - actor_type
+        target_table: actor
+        target_columns:
+        - actor_id
+        - actor_type
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  name:
+    label: Name
+    description: Company display name stored in the entity registry.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: name
+    displayName: Name
+    status: experimental
+    dataType: String
+  countryCode:
+    label: Country code
+    description: Two-letter country code recorded in the actor profile. It does not
+      describe all countries where the company or institution operates.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: countryCode
+    displayName: Country code
+    status: experimental
+    dataType: String
+  dartCorpCode:
+    label: Dart corp code
+    description: Eight-digit company identifier assigned by DART. Preserve leading
+      zeros when matching disclosures or financial reports.
+    sourceDataType: character varying
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: dartCorpCode
+    displayName: Dart corp code
+    status: experimental
+    dataType: String
+  profileAsOfDate:
+    label: Profile as of date
+    description: Date for which the stored profile information applies. NULL means
+      the source did not supply a profile date.
+    sourceDataType: date
+    nullable: true
+    sourceConstraints:
+      nullable: true
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: profileAsOfDate
+    displayName: Profile as of date
+    status: experimental
+    dataType: Date
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: company_profile
+  joins:
+  - alias: actor
+    from: base
+    table: actor
+    joinType: left
+    constraint: fk_company_profile_actor
+    'on':
+    - source: actor_id
+      target: actor_id
+    - source: actor_type
+      target: actor_type
+  - alias: entity
+    from: actor
+    table: entity
+    joinType: left
+    constraint: fk_actor_entity
+    'on':
+    - source: actor_id
+      target: entity_id
+    - source: entity_type
+      target: entity_type
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: company_profile
+      column: actor_id
+    name:
+      alias: entity
+      table: entity
+      column: display_name
+    countryCode:
+      alias: actor
+      table: actor
+      column: country_code
+    dartCorpCode:
+      alias: base
+      table: company_profile
+      column: dart_corp_code
+    profileAsOfDate:
+      alias: base
+      table: company_profile
+      column: profile_as_of_date
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey:
+  - actor_id
+  tableConstraints:
+  - name: ck_company_profile_dart_corp_code
+    kind: c
+    definition: CHECK (((dart_corp_code IS NULL) OR ((dart_corp_code)::text ~ '^[0-9]{8}$'::text)))
+    validated: true
+  - name: company_profile_pkey
+    kind: p
+    definition: PRIMARY KEY (actor_id)
+    validated: true
+  - name: fk_company_profile_actor
+    kind: f
+    definition: FOREIGN KEY (actor_id, actor_type) REFERENCES actor(actor_id, actor_type)
+      ON DELETE CASCADE
+    validated: true
+  - name: uq_company_profile_dart_corp_code
+    kind: u
+    definition: UNIQUE (dart_corp_code)
+    validated: true
+apiName: Company
+displayName: Company
+pluralDisplayName: Companies
+titleProperty: name
+status: experimental
+visibility: normal
+linkTypes:
+- Company_Issues_Equity
+- Company_HasDisclosure_Disclosure
+- Company_ParticipatesIn_SourceEvent

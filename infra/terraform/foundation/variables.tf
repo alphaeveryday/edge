@@ -27,3 +27,9 @@ variable "github_org_repo" {
   type        = string
   default     = "alphaeveryday/edge"
 }
+
+variable "etforca_zone_name" {
+  description = "ETF Orca 서비스 도메인의 Route53 호스팅 영역 이름"
+  type        = string
+  default     = "etforca.com"
+}

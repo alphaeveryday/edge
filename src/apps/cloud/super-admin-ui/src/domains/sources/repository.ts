@@ -3,6 +3,7 @@ import type {
   HoldingsImpact,
   MinuteStatus,
   MinuteDailyStatus,
+  MinuteJudgments,
   NewsLineage,
   NewsLineageStage,
   SourceGrid,
@@ -25,4 +26,6 @@ export interface SourcesRepository {
   minuteStatus(date?: string): Promise<MinuteStatus>;
   /** 최근 minute 세션의 서버 판정 일별 요약. 없으면 기본 7일. */
   minuteDailyStatus(days?: number): Promise<MinuteDailyStatus>;
+  /** 가격 세션의 판정 근거(§33.12 로컬). @param sessionId 필수 — 비우면 서버가 400 */
+  minuteJudgments(sessionId: string): Promise<MinuteJudgments>;
 }

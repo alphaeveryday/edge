@@ -1,0 +1,111 @@
+name: edge-portfolio
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: portfolio
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${PORTFOLIO_DB_PASSWORD}
+    volumes: ["portfolio-db:/var/lib/postgresql/data"]
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  api:
+    build: ../
+    restart: unless-stopped
+    command: ["uvicorn", "edge_portfolio.api:app", "--host", "0.0.0.0", "--port", "8092"]
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
+      PORTFOLIO_ORIGIN: https://etforca.com
+      PORTFOLIO_COOKIE_SECURE: "1"
+      PORTFOLIO_ORIGIN_SECRET: ${PORTFOLIO_ORIGIN_SECRET}
+    mem_limit: 256m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    depends_on:
+      db: {condition: service_healthy}
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  admin:
+    build: ../
+    restart: unless-stopped
+    command: ["uvicorn", "edge_portfolio.admin_app:app", "--host", "0.0.0.0", "--port", "8094", "--no-access-log"]
+    ports: ["127.0.0.1:18080:8094"]
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
+      AWS_EC2_METADATA_DISABLED: "true"
+    volumes: ["../admin-ui:/app/admin-ui:ro"]
+    mem_limit: 192m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8094/health',headers={'Host':'localhost:18080'}))"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    depends_on:
+      db: {condition: service_healthy}
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  worker:
+    build: ../
+    restart: unless-stopped
+    stop_grace_period: 630s
+    command: ["python", "-m", "edge_portfolio.worker"]
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      EXA_API_KEY: ${EXA_API_KEY:?Exa key is required for the worker}
+      PORTFOLIO_OUTLOOK_URL: http://outlook:8093/outlook
+      AWS_EC2_METADATA_DISABLED: "true"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/portfolio-worker-ready'); assert p.exists() and time.time()-p.stat().st_mtime < 660"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      db: {condition: service_healthy}
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  outlook:
+    build: ../
+    restart: unless-stopped
+    command: ["uvicorn", "edge_portfolio.outlook_gateway:app", "--host", "0.0.0.0", "--port", "8093"]
+    environment:
+      PORTFOLIO_OUTLOOK_DSN: ${PORTFOLIO_OUTLOOK_DSN}
+      AWS_EC2_METADATA_DISABLED: "true"
+    volumes: ["./rds-ca.pem:/app/rds-ca.pem:ro"]
+    mem_limit: 128m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  proxy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "caddy-data:/data", "caddy-config:/config"]
+    mem_limit: 128m
+    depends_on: [api]
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+volumes:
+  portfolio-db:
+  caddy-data:
+  caddy-config:

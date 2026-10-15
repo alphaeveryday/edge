@@ -53,6 +53,10 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		jdbc.update("DELETE FROM source_event WHERE source_event_id LIKE 'it-%'");
 		jdbc.update("DELETE FROM document WHERE document_id LIKE 'it-%'");
 		jdbc.update("DELETE FROM tenant_delivery");
+        jdbc.update("DELETE FROM movement_items WHERE analysis_id LIKE 'it-v2%'");
+        jdbc.update("DELETE FROM tool_runs WHERE movement_analysis_id LIKE 'it-v2%'");
+        jdbc.update("DELETE FROM movement_analyses WHERE analysis_id LIKE 'it-v2%'");
+        jdbc.update("DELETE FROM tool_definitions WHERE tool_id LIKE 'it-v2%'");
 		jdbc.update("DELETE FROM explanation_result");
 		jdbc.update("DELETE FROM explanation_run");
 		jdbc.update("DELETE FROM release_bundle");
@@ -305,6 +309,95 @@ class BundleEntryStoreIntegrationTest extends CloudPostgresIntegrationTest {
 		assertThat(entries.getFirst().explanationResult().explanationAsOf())
 				.isEqualTo(Instant.parse("2026-07-15T09:30:00Z"));
 	}
+
+    @Test
+    void v2_real_result_keeps_exact_calculations_and_news_with_null_v1_judgments() throws Exception {
+        seedV2();
+        var entry=repository.findAfter(tenantId,0,10).getFirst();
+        assertThat(entry.explanationResult().analysisEngine()).isEqualTo("v2");
+        assertThat(entry.explanationResult().explanationType()).isNull();
+        assertThat(entry.explanationResult().confidenceLevel()).isNull();
+        assertThat(entry.explanationRun().releaseBundleVersion()).isNull();
+        assertThat(entry.evidences()).hasSize(2);
+        var calculation=(com.edge.tenantsync.dto.CalculationEvidenceItem)entry.evidences().get(0);
+        assertThat(calculation.output().path("result").path("amount_krw").asString()).isEqualTo("9007199254740993");
+        assertThat(calculation.arguments().path("days").asInt()).isEqualTo(5);
+        assertThat(calculation.description()).isEqualTo("확정 순매수 금액의 합계");
+        var news=(com.edge.tenantsync.dto.EvidenceItem)entry.evidences().get(1);
+        assertThat(news.newsId()).isEqualTo("it-v2-news");
+        assertThat(news.title()).isEqualTo("분석에 사용한 제목");
+        assertThat(news.source()).isEqualTo("bigkinds");
+        assertThat(news.toolRunId()).isEqualTo("it-v2-run-news");
+        var schema=com.networknt.schema.JsonSchemaFactory.getInstance(com.networknt.schema.SpecVersion.VersionFlag.V202012)
+                .getSchema(getClass().getResourceAsStream("/event-bundle.schema.json"));
+        var payload=tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsString(
+                com.edge.tenantsync.dto.EventBundle.of(tenantId, java.util.List.of(entry)));
+        assertThat(schema.validate(new com.fasterxml.jackson.databind.ObjectMapper().readTree(payload))).isEmpty();
+    }
+
+    @Test
+    void v2_cursor_and_withdrawal_preserve_order_and_tenant_isolation() {
+        seedV2();
+        jdbc.update("INSERT INTO tenant_delivery(tenant_id,cursor,delivery_type,target_movement_analysis_id,reason) VALUES (?,2,'INVALIDATION','it-v2-analysis','가격 복귀')",tenantId);
+        assertThat(repository.findAfter(tenantId,0,10)).hasSize(2);
+        var withdrawal=repository.findAfter(tenantId,1,1).getFirst();
+        assertThat(withdrawal.targetExplanationResultId()).isEqualTo("it-v2-analysis");
+        assertThat(withdrawal.explanationResult()).isNull();
+        assertThat(repository.findAfter(seedTenant("it-other"),0,10)).isEmpty();
+    }
+
+    @Test
+    void synthetic_or_broken_final_evidence_cannot_reach_customer() {
+        seedV2();
+        jdbc.update("UPDATE movement_analyses SET data_source='synthetic' WHERE analysis_id='it-v2-analysis'");
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->repository.findAfter(tenantId,0,10)).hasRootCauseInstanceOf(IllegalStateException.class);
+        jdbc.update("UPDATE movement_analyses SET data_source='database' WHERE analysis_id='it-v2-analysis'");
+        jdbc.update("UPDATE movement_items SET tool_run_ids=ARRAY['missing'] WHERE item_id='it-v2-item'");
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->repository.findAfter(tenantId,0,10)).hasRootCauseInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void shared_tool_evidence_is_not_counted_twice_and_v1_can_share_the_cursor_page() {
+        seedV2();
+        jdbc.update("INSERT INTO movement_items SELECT 'it-v2-item-2',analysis_id,type,title_keyword,sentence,sentiment,source_as_of,tool_run_ids,created_at FROM movement_items WHERE item_id='it-v2-item'");
+        jdbc.update("UPDATE movement_analyses SET selected_item_ids=ARRAY['it-v2-item','it-v2-item-2'] WHERE analysis_id='it-v2-analysis'");
+        Instant at=Instant.parse("2026-07-15T01:01:00Z");
+        seedRun("it-run-mixed",at);
+        seedResult("it-result-mixed","it-run-mixed",LocalDate.of(2026,7,15),at,null);
+        seedDelivery(tenantId,2,"NEW","it-result-mixed",null,null);
+        var entries=repository.findAfter(tenantId,0,10);
+        assertThat(entries).hasSize(2);
+        assertThat(entries.getFirst().evidences()).hasSize(2);
+        assertThat(((com.edge.tenantsync.dto.CalculationEvidenceItem)entries.getFirst().evidences().getFirst()).itemIds())
+                .containsExactly("it-v2-item","it-v2-item-2");
+        assertThat(entries.get(1).explanationResult().explanationResultId()).isEqualTo("it-result-mixed");
+        assertThat(entries.get(1).explanationResult().analysisEngine()).isNull();
+    }
+
+    private void seedV2() {
+        jdbc.update("""
+            INSERT INTO movement_analyses(analysis_id,etf_code,analysis_at,trading_date,status,published_at,summary,selected_item_ids,data_source)
+            VALUES ('it-v2-analysis','069500','2026-07-15T10:00:00+09:00','2026-07-15','completed',now(),'전력망 투자 확대',ARRAY['it-v2-item'],'database')
+            """);
+        jdbc.update("""
+            INSERT INTO tool_definitions(tool_id,function_name,version,description,formula_latex,source_names)
+            VALUES ('it-v2-def','calculate_investor_net_flow','1','확정 순매수 금액의 합계','sum(x)',ARRAY['investor_flow_daily']),
+                   ('it-v2-news-def','get_issue_evidence','1','뉴스 원문 조회',null,ARRAY['document'])
+            """);
+        jdbc.update("""
+            INSERT INTO tool_runs(tool_run_id,tool_id,movement_analysis_id,arguments,output,status,finished_at)
+            VALUES ('it-v2-run','it-v2-def','it-v2-analysis','{"days":5}',
+                    '{"tool_run_id":"it-v2-run","result":{"amount_krw":9007199254740993}}','completed',now()),
+                   ('it-v2-run-news','it-v2-news-def','it-v2-analysis','{"include_body":false}',
+                    '{"tool_run_id":"it-v2-run-news","result":{"news":[{"news_id":"it-v2-news","title":"분석에 사용한 제목"}]}}','completed',now())
+            """);
+        jdbc.update("""
+            INSERT INTO movement_items(item_id,analysis_id,type,title_keyword,sentence,sentiment,tool_run_ids)
+            VALUES ('it-v2-item','it-v2-analysis','이슈','전력망 투자','투자 확대','positive',ARRAY['it-v2-run','it-v2-run-news'])
+            """);
+        seedDocument("it-v2-news","NEWS","bigkinds","현재 원문 제목",OffsetDateTime.parse("2026-07-15T09:30:00+09:00"),null);
+        jdbc.update("INSERT INTO tenant_delivery(tenant_id,cursor,delivery_type,movement_analysis_id) VALUES (?,1,'NEW','it-v2-analysis')",tenantId);
+    }
 
 	private long seedTenant(String name) {
 		return jdbc.queryForObject("""

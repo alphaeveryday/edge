@@ -72,7 +72,8 @@ const runKind = (r: RunFact): string =>
  * R10 이 비교할 수 있는 점의 수 — 그 레인의 피드 + 관측 가능한 단계 값.
  *
  * `run()` 과 같은 축을 세야 한다: blind 는 0이 아니라 **빠짐**이라 점이 아니고, `null` 도 점이
- * 아니다. 두 점이 없으면 "인접 감소"라는 물음 자체가 성립하지 않는다 — 위반 0건이 아니다.
+ * 아니다(배치 갈래가 대상이 아닌 단계가 그렇다). 판정하지 않고 수만 보여 주는 단계(`shown_only`)도
+ * 점이 아니다. 두 점이 없으면 "인접 감소"라는 물음 자체가 성립하지 않는다 — 위반 0건이 아니다.
  */
 /**
  * R13 이 기준으로 쓸 수 있는 산출인가 — **`canRun` 과 `run()` 이 같은 술어를 봐야 한다.**
@@ -122,7 +123,7 @@ const chainPoints = (f: Facts, src: 'batch' | 'intraday'): number => {
   const stages = f.chain?.stages ?? [];
   return [
     (src === 'batch' ? feeds[0] : feeds[1])?.v,
-    ...stages.filter((s) => !s.blind).map((s) => s[src]),
+    ...stages.filter((s) => !s.blind && !s.shown_only).map((s) => s[src]),
   ].filter((v) => Number.isFinite(v)).length;
   /* `!= null` 이 아니라 `Number.isFinite` 다 — `NaN` 은 `!= null` 을 통과하지만 `<` 비교가
    * 언제나 거짓이라 "점은 있는데 손실은 없다"(평가됨 · 위반 0)로 인증된다. 검증 안 된 JSON 에서
@@ -534,15 +535,27 @@ export const RULES: Rule[] = [
      * ⚠️ `dep` 을 비우면 안 된다 — `evaluate` 는 못 돈 규칙의 `note` 를 이 문장 하나로만 채운다.
      * 비면 그 상태에서 규칙이 "못 돌았다"만 말하고 **왜인지는 아무 데도 없다**.
      *
-     * ⚠️ **축이 왔다고 판정이 옳아지는 것은 아니다**: 진행 중인 하루의 감소는 "아직 처리 중"과
-     * "사라졌다"가 같은 모양이고, 그걸 가르는 사실이 원장에 없다(계약 §체인 축의 천장).
-     * 그래서 이 규칙은 지금 **장중에 과민하다** — 그건 축의 부재가 아니라 규칙의 한계다. */
+     * ⚠️ **진행 중인 건은 손실로 세지 않는다**(ALPHA-1309): 서버가 유예 시간 안에 있어 아직 판정할
+     * 수 없는 트리거를 단계마다 `pending` 으로 따로 싣고, 이 규칙은 감소에서 그 수를 뺀다. 그 수를
+     * 안 싣는 응답(옛 API)에서는 "아직 처리 중"과 "사라졌다"를 가르지 못해 장중에 과민하다. */
     dep: '이 응답에 체인 축이 없다 — 그 축을 안 싣는 배포본이다',
     source: 'DB_LEDGER',
     /* 비교할 점이 두 개 없으면 "인접 감소"를 물을 수 없다 — 조용한 것이 아니라 못 돈 것이다.
      * 축이 배선된 뒤에도 이 가드는 남는다: 서버가 그 축을 못 실은 응답(구 배포본)이 여전히
      * 도착할 수 있고, 그때 점 0개는 "손실 없음"이 아니라 **안 물어봤다**이다. */
     canRun: (f) => chainPoints(f, 'batch') >= 2 || chainPoints(f, 'intraday') >= 2,
+    /* 축은 왔는데 **단계가 관측 불가**라 비교할 점이 안 남은 경우(ALPHA-1293). 트리거 뒤 단계는 옛
+     * 설명 엔진의 표에서 세는데 그 엔진이 멈춘 뒤에는 서버가 그 단계들을 관측 불가로 내린다. 그
+     * 전에는 0 을 실측으로 읽어 "트리거 → 관측" 손실을 트리거가 생기는 날마다 P0 로 세웠다.
+     * 사유를 `dep`(배포본에 축이 없다)로 두면 원인이 틀린다 — 축은 있고, 셀 쪽이 없는 것이다. */
+    /* 판별은 **입구 단계**(첫 단계)의 표시다 — 서버는 단계를 한꺼번에 표시한다. "어느 단계든 관측
+     * 불가"로 두면, 끝 단계 하나만 관측 불가인 사실(온프렘 수신처럼 원래 못 보는 단계)에서도 이
+     * 사유가 선다. 단계는 새 분석 엔진의 것이라(ALPHA-1296) 관측 불가는 그 엔진의 요청이 아직 없던
+     * 날을 뜻한다. */
+    notRunWhy: (f) =>
+      f.chain?.stages[0]?.blind
+        ? '체인 단계가 관측 불가다 — 이 날에는 새 분석 엔진의 요청이 아직 없었다(손실이 없다는 뜻이 아니다)'
+        : null,
     /* ⚠️ `canRun` 은 **규칙 단위**라 갈래를 못 가른다. 한 갈래만 도착한 응답에서 나머지 갈래는
      * 점이 0개인데도 "손실 없음"으로 선다. ⚠️ **그 형상은 지금 도착하지 않는다** — 검증 경계가
      * 갈래 둘 미만인 체인을 거부한다(축 전체의 부재만 통과시킨다). 여기 "계약상 그 형상이 먼저
@@ -552,7 +565,15 @@ export const RULES: Rule[] = [
     note: (f) => {
       const seen = (['batch', 'intraday'] as const).filter((src) => chainPoints(f, src) >= 2);
       if (seen.length === 2) return null;
+      /* 판정에서 뺀 건수를 밝힌다(ALPHA-1309) — 위반 0건이 "전부 도달했다"로 읽히면 안 된다 */
+      const pending = (f.chain?.stages ?? []).reduce((n, s) => n + (Number.isFinite(s.pending) ? (s.pending as number) : 0), 0);
+      const held = pending > 0 ? ` 유예 시간 안에 있는 ${pending}건은 아직 판정하지 않았다.` : '';
       const label = (src: string) => (src === 'batch' ? '배치' : '장중');
+      /* 배치 갈래가 **대상이 아닌** 것은 비교를 못 한 것과 다르다(ALPHA-1296) — 배치 트리거는 새 분석
+       * 엔진이 소비하지 않는다. "점이 모자라 비교가 없었다"고 쓰면 계측 공백으로 읽힌다. */
+      if (seen.length === 1 && seen[0] === 'intraday' && (f.chain?.stages ?? []).some((s) => s.batch_na)) {
+        return `장중 갈래만 비교했다 — 배치 트리거는 새 분석 엔진의 대상이 아니다. 분석 시작 뒤의 감소(실패·진행 중·미게시)는 이 규칙이 판정하지 않는다.${held}`;
+      }
       return `비교한 갈래 ${seen.map(label).join('·') || '없음'} — 나머지 갈래는 점이 2개 미만이라 비교 자체가 없었다(위반 0건이 "손실 없음"을 뜻하지 않는다)`;
     },
     run: (f) => {
@@ -569,12 +590,19 @@ export const RULES: Rule[] = [
         let prevLabel = src === 'batch' ? '배치 트리거' : '장중 트리거';
         stages.forEach((s) => {
           if (s.blind) return; // 관측 불가 단계는 비교 축에서 제외 — 0 이 아니다
+          /* 수만 보여 주는 단계는 판정하지 않는다(ALPHA-1296) — 분석 시작 → 완료의 감소는 실패·진행
+           * 중이고(R15 소관) 완료 → 게시의 감소는 설계다. `chainPoints` 와 같은 술어다. */
+          if (s.shown_only) return;
           /* `chainPoints`(canRun)와 **같은 술어**여야 한다. `!= null` 로 두면 수가 아닌 값이
            * `prev` 로 들어가 다음 비교가 언제나 거짓이 되고, canRun 이 센 점 수와 실제 비교 횟수가
            * 갈려 "평가됨 · 위반 0"이 선다 — 이 파일에서 두 번 난 바로 그 갈림이다. */
           if (!Number.isFinite(s[src])) return;
           const v = s[src] as number;
-          if (prev != null && v < prev) {
+          /* 아직 판정할 수 없는 트리거(ALPHA-1309)는 손실이 아니다 — 앞 단계에 도달한 지 유예 시간이 안 지나
+           * 진행 중일 수 있다. 앞 단계와의 차이에서 그 수를 뺀 것만 손실이다. 판정 불가는 장중 갈래의
+           * 수다(배치 갈래는 새 분석 엔진의 대상이 아니라 여기 오지 않는다). */
+          const pending = src === 'intraday' && Number.isFinite(s.pending) ? (s.pending as number) : 0;
+          if (prev != null && v + pending < prev) {
             out.push({
               /* 대상은 어느 인접 단계에서 줄었는가다. `batch:c.res` 는 앵커용 id 라 targetId 로 내린다.
                * 세션 축과 **같은 합성**이라 같은 조각 가드를 탄다 — 단계 id 가 비면 `batch:` 라는
@@ -582,9 +610,11 @@ export const RULES: Rule[] = [
               target: `${prevLabel} → ${s.label}`,
               targetId: compose(':', src, s.id),
               title: `${prevLabel} → ${s.label}`,
-              metric: prev - v,
+              metric: prev - v - pending,
               unit: '건',
-              why: `${prev} → ${v} 로 줄었다 — 설계된 감소가 아니다`,
+              why:
+                `${prev} → ${v} 로 줄었다 — 설계된 감소가 아니다` +
+                (pending > 0 ? ` (아직 판정할 수 없는 ${pending}건은 세지 않았다)` : ''),
               src,
               evidence: '산출 체인 인접 단계 비교',
               drill: ['chain', 'chain-' + s.id],
@@ -715,7 +745,7 @@ export const RULES: Rule[] = [
         /* ⚠️ **`null` 을 "표본 없음"이라 단정하지 않는다**(ALPHA-946). 사유가 셋인데 와이어는
          * 하나로 온다: 표본 부재 · 장 안 서는 날의 장 산출 · 그 날이 안 끝남
          * (`OutputFact.base` 주석이 정본). 전에 '기준 표본 없음' 이라고 적었는데, **지난 주말을
-         * 조회하면** 서버가 뉴스 셋에는 기준을 주고 `o.pub`·`o.trig` 만 비우므로 이 규칙이 돌면서
+         * 조회하면** 서버가 장에 안 매인 산출에는 기준을 주고 `o.movement`·`o.trig` 만 비우므로 이 규칙이 돌면서
          * 그 둘에 거짓 사유를 단다 — 원장에 표본은 멀쩡히 있다. 어느 하나를 지목하려면 이 층이
          * 날짜·달력을 다시 재야 하고, 그러면 판정 주체가 서버와 둘이 된다(`dep` 과 같은 판단). */
         if (b == null) return '기준이 없다(표본 부재·장 안 서는 날·그 날이 안 끝남 중 하나)';
@@ -745,7 +775,7 @@ export const RULES: Rule[] = [
           (o) => judgeable(o) && Math.abs((o.today - (o.base as number)) / (o.base as number)) >= 0.25,
         )
         .map((o) => ({
-          /* `o.pub` 은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
+          /* `o.outlook` 같은 값은 산출 축의 내부 id 다 — 표에 서는 것은 라벨이고 id 는 앵커·런북 키로 남는다 */
           target: o.label,
           targetId: o.id,
           title: o.label,
@@ -769,8 +799,19 @@ export const RULES: Rule[] = [
     kls: '정합 위반',
     base: 'P0',
     desc: '게시했는데 미발번, 또는 발번했는데 현재 비게시',
-    dep: null,
+    /* ✅ **새 분석 엔진의 게시·회수를 본다**(ALPHA-1326). 두 수는 서버가 v2 가격변동 분석에서 세고,
+     * 설계상 전달하지 않는 경우(더 늦은 분석이 이미 전달됨·직전 게시를 물려받음·테넌트 없음)와
+     * 전달 대기 시간 안의 것은 이미 뺀 수다. 그래서 0 이 아닌 수는 그대로 위반이다.
+     *
+     * ⚠️ `blind` 는 **옛 API 에서만** 온다(ALPHA-1293) — 옛 설명 엔진의 게시만 맞대던 때의 표시다.
+     * 그 응답에서 두 수가 0 이면 "어긋난 것이 없다"가 아니라 **못 봤다**라 못 돎이고, 0 이 아닌 수는
+     * 옛 엔진 분의 실측이라 그대로 세운다(`note` 가 본 범위를 밝힌다). 새 API 는 이 키를 싣지 않는다. */
+    dep: '전달 경계가 관측 불가다 — 옛 설명 엔진의 게시만 발번과 맞대는데 그 엔진이 지금 멈춰 있다(새 분석 엔진의 게시·발번은 이 축이 보지 못한다)',
     source: 'DB_LEDGER',
+    canRun: (f) =>
+      !f.boundary.blind || f.boundary.published_without_delivery > 0 || f.boundary.delivery_now_nonpublished > 0,
+    note: (f) =>
+      f.boundary.blind ? '옛 설명 엔진의 게시만 봤다 — 새 분석 엔진의 게시·발번은 이 축이 보지 못한다' : null,
     run: (f) => {
       const b = f.boundary;
       const out: ReturnType<Rule['run']> = [];
@@ -781,8 +822,10 @@ export const RULES: Rule[] = [
           title: '게시됐는데 미발번',
           metric: b.published_without_delivery,
           unit: '건',
-          why: '같은 트랜잭션이라 구조상 0이어야 한다',
-          evidence: 'explanation_result ⋈ tenant_delivery',
+          why: b.blind
+            ? '옛 설명 엔진의 게시본인데 발번이 없다'
+            : '게시된 가격변동 분석인데 테넌트 전달이 없다 — 설계상 건너뛴 것과 전달 대기 중인 것은 뺀 수다',
+          evidence: b.blind ? 'explanation_result ⋈ tenant_delivery' : 'movement_analyses ⋈ tenant_delivery',
           drill: ['delivery', 'b-pub'],
         });
       }
@@ -808,7 +851,7 @@ export const RULES: Rule[] = [
           why:
             '발번됐는데 현재 비게시이고 무효화 통지도 안 갔다 — 테넌트가 철회를 못 받은 상태다' +
             (b.seed_note ? ` · 기록: ${b.seed_note}` : ''),
-          evidence: 'tenant_delivery ⋈ explanation_result',
+          evidence: b.blind ? 'tenant_delivery ⋈ explanation_result' : 'tenant_delivery ⋈ movement_analyses',
           drill: ['delivery', 'b-dlv'],
         });
       }
@@ -822,36 +865,42 @@ export const RULES: Rule[] = [
     name: 'ETF 분석 실패',
     kls: '고장',
     base: 'P0',
-    desc: 'ETF 단위로 분석이 실패해 설명이 만들어지지 않았다',
-    dep: 'ETF별 최신 트리거 설명 실행 축',
-    /* `source: 'MOCK'` 이었다 — 규칙의 `source` 는 **정적**이라, 실 원장이 붙은 뒤에도 리포트가
-     * `mock:false` 와 `source:'MOCK'` 을 동시에 낸다(모순). 목 여부는 사실이 `etf_ledger.mock` 로
-     * 말하고 위반의 `mock` 이 나르므로, 여기는 축의 성격만 적는다. */
+    desc: '그날 분석이 실패한 뒤 끝내 완료되지 않은 ETF 가 있다',
+    /* ✅ **새 분석 엔진(v2)의 표를 본다**(ALPHA-1291). 옛 설명 엔진의 ETF 원장(`etf_ledger`)을 읽던
+     * 규칙이고, 그 엔진은 10-01 이 마지막 실행이라 위반이 없어서가 아니라 **행이 없어서** 조용했다.
+     *
+     * 세는 것은 "실패한 적 있는 ETF"가 아니라 **끝내 완료하지 못한 ETF** 다 — 그날 그 종류의 분석에
+     * 실패 행이 있고 완료 행이 하나도 없다. v2 는 실패한 분석을 다시 돌려 끝내는 일이 흔해서 앞의
+     * 뜻으로 세면 이 규칙이 매일 선다. 진행 중(running)만 있는 ETF 는 서버가 넣지 않는다.
+     *
+     * ⚠️ 조회일이 오늘이면 아직 다시 돌 분석이 남았을 수 있다 — 그래도 유예하지 않는다(예전에도
+     * 이 규칙에는 당일 유예가 없었다). 그날 다시 돌아 완료되면 다음 조회에서 빠진다.
+     *
+     * 못 도는 유일한 길은 응답에 그 축이 없는 것이다 — 그 축을 안 싣는 배포본(API 롤백·UI 선배포)을
+     * 보고 있다는 뜻이고, 그때 위반 0건으로 읽히면 안 된다. */
+    dep: '이 응답에 v2 분석 실패 축이 없다 — 그 축을 안 싣는 배포본이다',
     source: 'DB_LEDGER',
-    canRun: (f) => f.etf_ledger != null,
-    mockBacked: (f) => !!f.etf_ledger?.mock,
-    run: (f) => {
-      const bad = (f.etf_ledger?.rows ?? []).filter((r) => r.outcome === 'FAILED');
-      return bad.length
-        ? [
-            {
-              target: 'ETF 분석',
-              targetId: 'analyze.failed',
-              title: 'ETF 분석 실패',
-              metric: bad.length,
-              unit: 'ETF',
-              /* error 가 null 인 것은 "오류가 없다"가 아니라 원장이 사유를 안 남긴 것이다 */
-              why: bad[0].error
-                ? `설명 미생성 — ${bad[0].error}`
-                : '설명 미생성 — per-ETF 원장에 오류 사유 기록이 없다',
-              list: bad.map((r) => r.name),
-              mock: !!f.etf_ledger?.mock,
-              evidence: `ETF별 분석 원장${f.etf_ledger?.mock ? '(목)' : ''}`,
-              drill: ['chain', 'etf-ledger'] as [string, string],
-            },
-          ]
-        : [];
-    },
+    canRun: (f) => f.analysis_failures != null,
+    mockBacked: (f) => (f.analysis_failures ?? []).some((a) => a.mock),
+    run: (f) =>
+      (f.analysis_failures ?? [])
+        .filter((a) => a.failed_etfs.length > 0)
+        .map((a) => {
+          const label = a.kind === 'outlook' ? '전망' : '가격변동 분석';
+          return {
+            /* 전망과 가격변동 분석은 다른 배치·다른 표라 사건도 따로 선다 */
+            target: label,
+            targetId: `${a.kind}.failed`,
+            title: `${label} 실패 ETF`,
+            metric: a.failed_etfs.length,
+            unit: 'ETF',
+            why: `${label}이 그날 실패한 뒤 끝내 완료되지 않았다 — 다시 돌아 완료된 ETF 는 세지 않는다`,
+            list: a.failed_etfs,
+            mock: !!a.mock,
+            evidence: (a.kind === 'outlook' ? 'outlook_analyses' : 'movement_analyses') + (a.mock ? '(목)' : ''),
+            drill: ['trend', `metric-a.${a.kind}_failed_etfs`] as [string, string],
+          };
+        }),
   },
 
   {

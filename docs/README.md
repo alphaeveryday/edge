@@ -22,8 +22,10 @@
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
 | [contracts/publication-api.md](contracts/publication-api.md) | MTS/HTS 연동 방식 — Publication API | 증권사 연동 접점을 만질 때 |
+| [contracts/analysis-v2-selected-evidence.md](contracts/analysis-v2-selected-evidence.md) | v2 최종 선택 설명의 근거 조회와 기존 관리자 표 연결 범위 | 탐색 근거와 최종 근거를 구분할 때 |
 | [contracts/console-facts-api.md](contracts/console-facts-api.md) | Super Admin Console facts API — 규칙 엔진이 읽는 사실 계약 ([adr/0050](adr/0050-console-facts-endpoint.md)) | 콘솔 규칙 엔진의 입력을 만질 때 |
 | [domain/state-machine.md](domain/state-machine.md) | 데이터 플로우, 정정/무효화 플로우, ERD 방향·상태값·리비전 모델 | 상태·전이·검수 로직을 만들 때 (필독) |
+| [contracts/analysis-v2-admission.md](contracts/analysis-v2-admission.md) | v2 실행 접수·재전달·원본 가격 트리거 계약 | API·큐의 분석 실행 접수를 연결할 때 |
 | [domain/data-residency.md](domain/data-residency.md) | 데이터 저장 위치 기준 (Cloud 가능/금지, On-Prem 필수) | 데이터를 어디에 저장할지 정할 때 |
 | [domain/exposure-log.md](domain/exposure-log.md) | Exposure Log / 고객 식별 — **은퇴(ADR-0053)**, 기록 보존용 | 폐지 경위·현행 재구성 근거를 볼 때 |
 | [domain/data-source-licensing.md](domain/data-source-licensing.md) | 외부 데이터 소스 재제공 리스크 스냅샷 (참고용·비블로커, best-effort) | 실증권사 납품/실사 대비·데이터 소스 라이선스가 궁금할 때 |
@@ -36,8 +38,12 @@
 | [analysis-engine/ontology/ontology-system-spec.md](analysis-engine/ontology/ontology-system-spec.md) | 온톨로지 4층·선언 규칙·로더 게이트·DB 사상 SSOT | 온톨로지 리소스·로더·소비자를 변경할 때 |
 | [design/data-source-unification-spec.md](design/data-source-unification-spec.md) | 분석 소비 데이터 표면 전수표·존 통일 원칙·백필→포워드 전환 목록·수집 파이프라인 스펙 (ALPHA-879) | 데이터 소스를 새로 상시화하거나 수작업 백필을 정리할 때 |
 | [design/open-source-backfill.md](design/open-source-backfill.md) | 오픈소스 백필 수집 방법 기록 (2026-08-02 일회성 — 적재 규약·벤더 함정) | 그 백필 데이터의 출처·함정이 궁금할 때 |
+| [design/etf-data-storage-plan.md](design/etf-data-storage-plan.md) | ETF 데이터 저장 경로·행 키·시점 이력·수급 가중합 설계 초안 | 수집 구현 전 팀과 저장·조회 계약을 검토할 때 |
+| [design/lake-path-transition-ledger.md](design/lake-path-transition-ledger.md) | 레이크 기존 데이터셋별 경로·생산자·소비자·확인된 문제 현황과 후속 작업 (2026-09-28 dev 실측, 통합·이관은 보류) | 기존 경로를 쓰거나 옮기기 전에 현재 상태를 확인할 때 |
 
 > **뷰 vs SSOT**: `architecture/`는 `EDGE_아키텍처_v0_2.pptx` 슬라이드에서 옮긴 **설계 뷰(논리 개요)** 다. 현행 사실·계약의 권위는 위 SSOT 문서(context.md·console-ia·contracts·domain·adr·infra README)에 있고, 뷰는 그 상세로 링크한다. **충돌 시 SSOT 우선.** 뷰가 SSOT보다 앞선 축(설계 의도)은 조용히 뷰를 따르지 말고 ADR/context 결정으로 SSOT를 전진시킨다. (2026-07-13 삭제된 구 `docs/architecture.md`와는 무관 — 아래 이관 기록 참조.)
+
+- [포트폴리오 관리자 대시보드 설계](design/portfolio-admin.md): 별도 관리자 인증, 활동 집계, 사용자 입력 조회의 설계와 운영 기준.
 
 ## 읽는 순서
 1. [context.md](context.md) — 제품이 무엇이고 왜 피벗했는지, 컴포넌트 경계
@@ -95,3 +101,8 @@
 같은 PR에서 구(舊) 구조 문서를 삭제하고 유효분을 흡수했다:
 - `docs/architecture.md` (embed widget/클라우드 단일 구조) → 삭제. 구 구조 요지는 [adr/0010](adr/0010-hybrid-onprem-pivot.md) 맥락, 현행 CD 서술은 [implementation.md](implementation.md) §5로 흡수.
 - `docs/schema.md` → 삭제. 소유권 원칙·확장-수축 절차·체크리스트·generated 규칙은 [implementation.md](implementation.md) §4로 흡수 (피벗 전 서비스 기준 테이블 레지스트리는 폐기). RLS 서사는 [adr/0011](adr/0011-rls-to-physical-isolation.md).
+# 포트폴리오 서비스 문서
+
+- [Terraform 편입과 SSM 권한](design/portfolio-infrastructure.md)
+- [독립 포트폴리오 에이전트](design/portfolio-worker.md)
+- [포트폴리오 배포·입력 저장·검증](design/portfolio-deployment.md)

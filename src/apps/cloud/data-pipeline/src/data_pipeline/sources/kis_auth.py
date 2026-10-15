@@ -21,10 +21,12 @@ import logging
 import math
 import os
 import random
+import threading
 import time
 
 from ..ops.aws import ssm_client
 from .http import PoliteClient, StopFetch
+from .call_budget import CallBudgetError
 
 # env → REST 도메인. 과거 분봉·실전 시세는 prod 권장, 모의는 vps.
 logger = logging.getLogger(__name__)
@@ -53,14 +55,14 @@ TOKEN_RATE_LIMIT_WAIT_SEC = 61  # "1분당 1회" + 시계 오차 여유
 TOKEN_RATE_LIMIT_JITTER_SEC = 20
 # 재시도 횟수 — **동시에 토큰을 발급하는 브랜치 수보다 커야 한다.** 발급이 분당 1회라 N개
 # 브랜치가 동시에 시작하면 최악의 경우 마지막 브랜치가 N-1 분을 기다려야 자기 차례가 온다.
-# 현재 동시 발급자는 SFN raw 페이즈의 kis 브랜치 4개다(CollectKisPrice·CollectKisNav·
-# CollectKisEtfProfile·CollectKisInvestor — 마지막은 ALPHA-482 로 추가). 여기에 직전 1분 내
-# 발급이 겹칠 수 있어 한 칸 더 둔다.
+# 현재 동시 발급자는 SFN raw 페이즈의 kis 브랜치 5개다(CollectKisPrice·CollectKisNav·
+# CollectKisEtfProfile·CollectKisInvestor·CollectKisSectorIndexDaily — 마지막 둘은 ALPHA-482·
+# ALPHA-1254 로 추가). 여기에 직전 1분 내 발급이 겹칠 수 있어 한 칸 더 둔다.
 # **kis 브랜치를 추가하면 이 값도 함께 올려라** — 안 올리면 새 브랜치가 상시 partial 이 된다
 # (edge-review 지적). 무한 대기는 금지(막히면 런이 실패로 드러나야 한다, Rule 12).
 # 아래 공유 캐시가 들어온 뒤로는 이 예산이 실제로 쓰이는 일이 드물다 — 403 을 맞은 쪽이
 # 대기 대신 캐시를 다시 읽어 승자의 토큰을 가져가기 때문이다(캐시가 없는 로컬·폴백에서만 발화).
-TOKEN_RATE_LIMIT_MAX_RETRY = 4
+TOKEN_RATE_LIMIT_MAX_RETRY = 5
 
 # ── 컨테이너 간 공유 캐시(SSM SecureString) ──
 # 파라미터 이름은 terraform(data-pipeline 모듈)이 kis task-def env 로 주입한다. 없으면
@@ -242,6 +244,16 @@ class KisAuth:
         # 캐시 파라미터가 env 에 없으면 None — 로컬·테스트는 캐시 없이 현행대로 돈다.
         self.cache = cache if cache is not None else SsmTokenCache.from_env()
         self._token: str | None = None
+        # 동시 요청(분 워커 fetch_concurrency>1)에서 두 스레드가 동시에 첫 발급하면 분당 1회 제한(403)에
+        # 걸린다 — 발급·폐기를 한 잠금 아래 둔다. 발급 대기 동안 다른 스레드는 어차피 토큰이 필요하다.
+        # ⚠️ 이 잠금은 **프로세스 안**만 묶는다. 컨테이너 사이의 중복 발급은 종전대로 공유 캐시(SSM)
+        # 재확인 + 403 대기·재시도가 맡는다(ALPHA-573·458).
+        self._lock = threading.Lock()
+        # 직전 발급 실패와 실패 세대. 실패가 난 **동안 잠금을 기다리던** 스레드만 같은 실패를 받는다 —
+        # 그 스레드들이 줄줄이 발급을 다시 두드리지 않게. 실패 뒤에 온 호출은 잠금 아래 하나씩 재시도한다
+        # (시간 냉각을 두면 그 동안 모든 후속 unit 이 즉시 실패해 window 가 결손으로 확정된다 — edge-review).
+        self._failure: BaseException | None = None
+        self._failure_seq = 0
 
     def token(self) -> str:
         """공유 캐시에 유효한 토큰이 있으면 그걸 쓰고, 없을 때만 발급한다(run 당 1회 규약).
@@ -252,19 +264,38 @@ class KisAuth:
         그 밖의 4xx(잘못된 키 등)는 기다려도 안 풀리므로 그대로 올린다. 재시도 후에도 403 이면
         포기한다(무한 대기 금지 — 실패는 스텝이 fail-loud 로 드러낸다).
         """
-        if self._token is None:
-            self._token = self._resolve()
-        return self._token
+        seen = self._failure_seq            # 잠금을 기다리기 전의 실패 세대
+        with self._lock:
+            if self._token is not None:
+                return self._token
+            if self._failure_seq != seen and self._failure is not None:
+                raise self._failure         # 내가 기다리는 동안 다른 스레드의 발급이 실패했다
+            try:
+                token = self._resolve()
+            except CallBudgetError:
+                raise   # 로컬 제어면(공유 허용) 장애는 공유하지 않는다 — 저장소가 곧 복구될 수 있다
+            except Exception as exc:
+                self._failure = exc
+                self._failure_seq += 1
+                raise
+            self._token, self._failure = token, None
+            return token
 
-    def invalidate(self) -> None:
+    def invalidate(self, used_token: str | None = None) -> None:
         """메모리 캐시를 버린다 — 다음 `token()` 이 공유 캐시부터 다시 본다.
 
         배치(런 하나가 10분 안쪽)에는 필요 없던 문이다. **상주 워커는 토큰(24h)보다 오래
         살아** 만료를 반드시 만나는데, 이 캐시는 만료를 스스로 못 본다(발급 시각을 안 들고
         있다). 만료 신호를 본 어댑터가 여기로 버린다 — SSM 캐시 쪽은 남은 유효시간을
         검사하므로 만료된 값은 미스가 되고, 결국 새로 발급된다(ALPHA-735).
+
+        `used_token` 은 **실패한 요청이 실제로 쓴 토큰**이다. 그게 지금 토큰과 같을 때만 버린다 —
+        동시 요청에서 다른 스레드가 이미 새로 발급했는데 늦게 도착한 옛 토큰의 실패가 새 토큰을
+        지우면 다시 발급해야 하고, 분당 1회 제한(403)에 걸린다. None 은 쓴 토큰을 모를 때의 무조건 폐기다.
         """
-        self._token = None
+        with self._lock:
+            if used_token is None or used_token == self._token:
+                self._token = None
 
     def _cached(self, fingerprint: str) -> str | None:
         return self.cache.get(fingerprint) if self.cache else None

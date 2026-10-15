@@ -13,6 +13,8 @@
 - [시장 데이터와 수집 상태](domains/market/)
 - [이벤트와 근거](domains/events/)
 - [설명 생성과 계보](domains/explanation/)
+- [v2 분석 결과와 툴 감사](domains/analysis-v2/)
+- [원천 관측(매크로·재무·업종)](domains/source-observations/)
 - [테넌트 전송](domains/delivery/)
 - [운영 원장](domains/operations/)
 
@@ -21,4 +23,4 @@
 ## On-Prem 세트
 
 Flyway 세트는 둘이고 위 도메인은 Cloud 세트다. 증권사 관리 환경에 배포되는 On-Prem 세트는
-13테이블이라 도메인으로 쪼개지 않고 한 장으로 둔다 — [온프렘 테넌트 DB](onprem/).
+14테이블이라 도메인으로 쪼개지 않고 한 장으로 둔다 — [온프렘 테넌트 DB](onprem/).

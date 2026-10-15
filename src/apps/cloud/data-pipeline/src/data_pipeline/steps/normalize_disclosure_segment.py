@@ -234,6 +234,7 @@ def run(
     raw_keys: list[str] | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    failures_out: list[dict] | None = None,
 ) -> int:
     """raw disclosures → 사업보고서 사업부문 파싱 → 게이트 → canonical 멱등 병합 + quality_log.
     성공 0, 격리된 행 실패 2, 저장·무결성 실패 1. input_run_id 지정 시 completed raw
@@ -241,7 +242,8 @@ def run(
     전체를 읽는다 — 백필·복구 수단.
 
     `raw_keys` 를 주면 스캔을 건너뛰고 그 키만 읽는다 — 근거는 `normalize_disclosure.run` 의
-    같은 인자 설명에 있다(ALPHA-875, 1분 레인은 버킷 전량 LIST 를 매 tick 돌릴 수 없다)."""
+    같은 인자 설명에 있다(ALPHA-875, 1분 레인은 버킷 전량 LIST 를 매 tick 돌릴 수 없다).
+    `failures_out` 도 같은 자리의 설명을 따른다(ALPHA-1154 — 실패 사유를 호출자에게 돌려준다)."""
     started_at = datetime.now(timezone.utc)
     checked_date = started_at.isoformat()[:10]
     max_report_date = (started_at.date() + timedelta(days=_FUTURE_SLACK_DAYS)).isoformat()
@@ -320,6 +322,7 @@ def run(
             if not doc_path:
                 failures.append({**ref, "reasons": ["missing_document_body"]})
                 continue
+            ref["document_raw_path"] = doc_path  # 원문 위치 — `normalize_disclosure` 와 같은 이유
             try:
                 html = extract_document_html(storage.get_bytes(doc_path))
                 segments, _stats = parse_segments(html)
@@ -336,9 +339,8 @@ def run(
             segments_extracted += len(facts)
 
             for fact in facts:
-                fref = {"rcept_no": rcept_no, "segment_ordinal": fact["segment_ordinal"],
-                        "segment_name": fact["segment_name"], "report_date": fact["report_date"],
-                        "raw_key": raw_key}
+                fref = {**ref, "segment_ordinal": fact["segment_ordinal"],
+                        "segment_name": fact["segment_name"], "report_date": fact["report_date"]}
                 reasons = validate_segment_fact(fact, max_report_date=max_report_date)
                 blocking = [r for r in reasons if r in BLOCKING_REASONS_SEGMENT]
                 if blocking:
@@ -423,6 +425,8 @@ def run(
 
     if failures and exit_code == 0:
         exit_code = _PARTIAL_EXIT_CODE
+    if failures_out is not None:
+        failures_out.extend(failures)
 
     logger.info(
         "normalize_disclosure_segment 완료: raw_files=%d read=%d routed=%d skipped_type=%d "

@@ -23,6 +23,7 @@ from pydantic_settings import (
 )
 
 from .models import (
+    CallBudgetConfig,
     DbConfig,
     BigKindsNewsSource,
     CollectionTargets,
@@ -47,6 +48,7 @@ from .models import (
     NewsConfig,
     PriceConfig,
     PriceTriggersConfig,
+    SourceObservationsConfig,
     StorageConfig,
     YahooPriceConfig,
 )
@@ -90,6 +92,8 @@ class Settings(BaseSettings):
     # OpenDART 공시(disclosure) 는 재무와 별개 잡·별개 API(list.json/document.xml)다. 미설정이면
     # ingest-raw-disclosure 진입점이 fail-loud 한다(공시를 안 돌리는 환경은 생략 가능).
     dart_disclosure: DartDisclosureConfig | None = None
+    # 분석 v2 원천 관측(ALPHA-1130: 매크로·재무·KIS 지수업종). 미설정이면 그 스텝들이 fail-loud 한다.
+    source_observations: SourceObservationsConfig | None = None
     # BigKinds(국내 뉴스)는 news.sources dict 밖의 독립 벤더다. 미설정이면 ingest-raw
     # --source bigkinds 진입점이 fail-loud 한다(FMP 뉴스만 돌리는 환경은 생략 가능).
     bigkinds_news: BigKindsNewsSource | None = None
@@ -109,6 +113,8 @@ class Settings(BaseSettings):
     # DB(Cloud Event Store)는 적재 스텝(load-*)만 쓴다 — 수집·정제만 돌리는 환경은 생략
     # 가능하고, 미설정이면 load-* 진입점이 fail-loud 한다.
     db: DbConfig | None = None
+    # 외부 API 공유 호출 허용(ALPHA-1087). 기본 비활성 — 켜면 KIS 호출자가 db 의 call_budget 행을 쓴다.
+    call_budget: CallBudgetConfig = CallBudgetConfig()
     # ETF 가격변동 트리거(ALPHA-406)는 load-price-triggers 만 쓴다 — 미설정이면 그 진입점이
     # fail-loud 한다(트리거를 안 돌리는 환경은 생략 가능).
     price_triggers: PriceTriggersConfig | None = None

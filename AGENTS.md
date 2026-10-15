@@ -68,6 +68,14 @@ Default to surfacing uncertainty, not hiding it.
 - Issue-first: feat/fix work requires a Jira issue (key required on the branch). Trivial docs/chore with no issue may be keyless (omit the `Refs:` footer). Branch types are only `feature/*`·`fix/*` — the prefix marks work nature, the commit `type` marks each change. Tracker is Jira; do not add GitHub issue templates.
 - Parallel work: concurrent sessions/branches must each use their own `git worktree` (never share one checkout — branches and working trees entangle) and take non-overlapping tickets/work units. Details in docs/git-conventions.md "병렬 작업".
 
+## PR Writing and Local Review
+- 로컬 리뷰를 마친 변경만 PR로 올린다. 리뷰 방법·수정한 지적·실행한 검증을 사실대로 적고, 리뷰 실행 실패를 통과로 표시하지 않는다. 리뷰 절차는 위 Git Workflow를 따른다.
+- 제목과 설명은 이 대화와 설계 배경을 모르는 개발자가 이해할 수 있게 쓴다. 제목에는 무엇이 어떻게 바뀌는지 적는다.
+- 설명은 **현재 문제 → 변경 후 동작 → 검증 결과** 순서로 쓴다. 필요하면 짧은 전후 예시를 든다.
+- 내부 계획 번호나 추상적인 표현만으로 설명하지 않는다. 예: ‘PR4-A1 선택 근거 투영’ 대신 ‘최종 설명에 사용한 자료만 관리자에게 보여주도록 조회 추가’.
+- DB·API 계약·클라우드 자원이 바뀌면 변경 내용과 실제 적용 여부를 적는다. 구현·테스트·배포 상태를 구분하고, 미검증 사항을 숨기지 않는다.
+- PR에는 해당 문제를 해결하는 파일만 포함한다. 작성 후 제목과 설명만 읽어도 **왜 필요한지, 무엇이 달라지는지, 어디까지 검증했는지** 알 수 있는지 확인한다.
+
 ## Instruction File Convention
 - AGENTS.md is the single source of truth (SSOT) for agent instructions.
 - Add a per-folder AGENTS.md (folder-specific content) plus CLAUDE.md (a single

@@ -73,7 +73,7 @@ import os
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
-from edge_ontology import load_authority_registry, load_relations
+from edge_ontology import is_policy_excluded, load_authority_registry, load_relations
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
@@ -914,6 +914,11 @@ def run(
     # 내용상 제외와 기술 오류를 나눠야 한 건의 미해소가 장애처럼 보이지 않는다.
     excluded_assertions = skipped_partial + skipped_no_resolved_argument
     technical_failures = len(failures) + rows_malformed + missing_document + skipped_incomplete
+    # top10 절단 전 전량 집계이며, 행 롤백 시 복구된 카운터만 사용한다.
+    policy_excluded = sum(
+        count for (reason, role, expression), count in unresolved_issue_counts.items()
+        if reason in {INSTRUMENT_NOT_FOUND, REGISTRY_MISS} and is_policy_excluded(role, expression)
+    )
     quality_diagnostics = build_quality_diagnostics(
         ASSERTION_SCOPE,
         {
@@ -922,6 +927,8 @@ def run(
             "unresolved": args_total - resolved_any,
             "excludedAssertions": excluded_assertions,
             "technicalFailures": technical_failures,
+            "policyExcluded": policy_excluded,
+            "actionableUnresolved": args_total - resolved_any - policy_excluded,
         },
         [
             quality_issue(

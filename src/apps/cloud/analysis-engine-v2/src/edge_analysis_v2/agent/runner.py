@@ -1,0 +1,254 @@
+"""Run the approved SDK loop against DeepSeek with committed tool callbacks."""
+
+import asyncio
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from time import monotonic
+
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, create_sdk_mcp_server, tool
+from jsonschema import Draft202012Validator
+import yaml
+
+from edge_analysis_v2.tools.model_schema import agent_tool_schemas
+from edge_analysis_v2.agent.work_session import WorkSession
+from edge_analysis_v2.agent.work_context import WorkContext
+from edge_analysis_v2.agent.work_tools import make_workspace_server
+from edge_analysis_v2.tools.execution import ToolExecutionError
+from edge_analysis_v2.quality.measure import describe_environment, measure
+
+
+# Exa's public search MCP, attached as it is. Its results are leads to read, never evidence: only
+# read_web_document establishes a publication time and gives a citable call.
+# ponytail: keyless and rate-limited by Exa; add the key to this address once one is issued.
+SEARCH_SERVER = {'type': 'http', 'url': 'https://mcp.exa.ai/mcp?tools=web_search_exa'}
+SEARCH_TOOL = 'mcp__search__web_search_exa'
+
+
+WRAP_UP_SHARE = 0.7   # of the deadline: the rest is for writing the answer
+
+
+def load_prompt(path: Path) -> str:
+    """Load a nonempty system_prompt from an explicit YAML file."""
+    document = yaml.safe_load(path.read_text(encoding='utf-8'))
+    prompt = document.get('system_prompt') if isinstance(document, dict) else None
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError('system_prompt must be a nonempty string')
+    return prompt
+
+
+def describe_schema_error(error) -> str:
+    """Say where an argument or answer is invalid and how large it may be, without echoing the text."""
+    path = '/'.join(str(part) for part in error.absolute_path) or '(root)'
+    if error.validator == 'maxLength':
+        return (f'{path}: {len(error.instance)} characters, limit {error.validator_value}. '
+                'Keep the judgment; move detail into another bullet or topic instead of dropping evidence.')
+    if error.validator == 'maxItems':
+        return f'{path}: {len(error.instance)} items, limit {error.validator_value}.'
+    return f'{path}: {error.message[:300]}'
+
+
+def make_server(schemas: list[dict], call):
+    """Expose registered schemas and return exactly the committed callback result.
+
+    Args:
+        schemas: OpenAI-style nested function descriptors.
+        call: Synchronous audited executor accepting name and arguments.
+
+    Returns:
+        SDK MCP server and its allowed tool names.
+    """
+    registered, allowed = [], []
+    gate = asyncio.Lock()
+    for schema, visible in zip(schemas, agent_tool_schemas(schemas)):
+        function = schema['function']
+        name = function['name']
+        validator = Draft202012Validator(function['parameters'])
+        async def handler(arguments, tool_name=name, validator=validator):
+            invalid = list(validator.iter_errors(arguments))
+            if invalid:
+                # Every failure at once: one round trip per over-long bullet would eat the deadline.
+                lines = [describe_schema_error(error) for error in invalid[:40]]
+                if len(invalid) > 40:
+                    # Never hide that more remain: a fixed draft would be rejected again for the unseen ones.
+                    lines.append(f'{len(invalid) - 40} more fields fail the same way; check every field against its limit.')
+                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(lines)}]}
+            async with gate:
+                # Cancellation must not leave a database write racing publication failure.
+                pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
+                try:
+                    result = await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    try:
+                        await pending
+                    finally:
+                        raise
+                except ToolExecutionError as error:
+                    return {'is_error': True, 'content': [{'type': 'text', 'text': str(error)}]}
+            return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
+        registered.append(tool(name, function['description'], visible['function']['parameters'])(handler))
+        allowed.append('mcp__analysis__' + name)
+    return create_sdk_mcp_server(name='analysis', version='1.0.0', tools=registered), allowed
+
+
+async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
+                    output_schema: dict, artifacts: Path, key: str, model: str,
+                    timeout_seconds: int = 300, client_factory=ClaudeSDKClient, skills: tuple[str, ...] = (),
+                    optional_skills: tuple[str, ...] = (),
+                    resume: bool = False, compare_explanations: bool = False, final_check=None,
+                    web_search: bool = False, events_log: Path | None = None,
+                    structured_only: bool = False) -> dict:
+    """Run one bounded conversation and validate the final JSON structure.
+
+    Args:
+        initial: Time-bounded source context and previous published analysis.
+        prompt: Loaded system instruction text.
+        schemas: Registered MCP function descriptors.
+        call: Audited callback; output must already be committed.
+        output_schema: Expected final response JSON schema.
+        artifacts: Local execution folder for inspection.
+        events_log: Second file that receives every event line as it is written; a run of several
+            conversations names one file here so the whole run reads as one record.
+        key: DeepSeek key, never persisted.
+        model: DeepSeek model name.
+        timeout_seconds: Total deadline, 1..600 seconds; default outlook 600, movement 300.
+        client_factory: SDK constructor; replaced by a fake for offline tests.
+        skills: Skills the task always uses; their text is given with the task.
+        optional_skills: Skills the agent may open when it needs them. With neither, the agent has only the
+            base rules and the task prompt and is never told that skills exist.
+        resume: Restore interrupted notes and TODOs with identical original observations.
+        compare_explanations: Require a recorded question with competing explanations before submission.
+        final_check: Optional callable(final) returning a repair message or None. A defect the schema cannot
+            express (a cited ID that does not exist) is sent back to the same conversation, at most twice.
+        web_search: Attach the public search MCP. The model then reaches a search service directly, so
+            its queries are in events.jsonl but not in the audited tool records.
+        structured_only: Fill a schema from completed input, without research, files, skills or task tracking.
+            The SDK's StructuredOutput mechanism and final validation/repair remain enabled.
+
+    Returns:
+        Validated final response. Meaning is reviewed separately by a reviewer.
+
+    Raises:
+        ValueError: Missing credentials, failed SDK result, or missing final JSON.
+        TimeoutError: Conversation deadline exceeded.
+        jsonschema.ValidationError: Final JSON violates the output contract.
+    """
+    if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
+        raise ValueError('API key and a 1..600 second deadline are required')
+    if structured_only and (schemas or skills or optional_skills or resume or web_search or compare_explanations):
+        raise ValueError('structured_only cannot use research tools, skills, resume or task tracking')
+    artifacts.mkdir(parents=True, exist_ok=True)
+    if resume and json.loads((artifacts / 'input.json').read_text(encoding='utf-8')) != initial:
+        raise ValueError('Resume requires the same original observations and cutoff')
+    def encode(value):
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
+    started_at = datetime.now(timezone.utc)
+    repairs = 0
+    server, allowed = make_server(schemas, call) if not structured_only else (None, [])
+    if web_search:
+        allowed = allowed + [SEARCH_TOOL]
+    with TemporaryDirectory(prefix='analysis-worker-') as directory:
+        workspace = Path(directory)
+        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
+        session = None
+        if structured_only:
+            query_input = {'input': initial}
+            work_options = dict(tools=[], allowed_tools=[], mcp_servers={})
+        else:
+            session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
+            session.compare_explanations = compare_explanations
+            session.wrap_up_at = monotonic() + timeout_seconds * WRAP_UP_SHARE
+            source_context = WorkContext(initial)
+            prompt = session.system_prompt(prompt)
+            query_input = {'workspace_instructions': {'path': 'AGENTS.md',
+                           'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
+                           # A question is handed over as it is; only a set of data sources is turned into a catalog to read from.
+                           'input': initial if all(isinstance(v, str) for v in initial.values()) else source_context.initial}
+            if resume:
+                query_input['resumed_work'] = session.restore()
+            work_options = dict(tools=['Skill', 'Read', 'Write', 'Edit'],
+                allowed_tools=allowed + workspace_allowed + ['Read', 'Write', 'Edit'],
+                skills=session.names, plugins=[{'type':'local', 'path':str(session.plugin)}],
+                hooks={'PreToolUse':[HookMatcher(hooks=[session.before])],
+                       'PreCompact':[HookMatcher(hooks=[session.precompact])],
+                       'PostToolUse':[HookMatcher(hooks=[session.after])]},
+                mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}
+                            | ({'search': SEARCH_SERVER} if web_search else {}))
+        (artifacts / 'model_input.json').write_text(encode(query_input), encoding='utf-8')
+        # DeepSeek's documented SDK model tag prevents the unknown-model 200K default.
+        sdk_model = model if model.endswith('[1m]') else model + '[1m]'
+        options = ClaudeAgentOptions(
+            model=sdk_model, system_prompt=prompt, **work_options, strict_mcp_config=True,
+            output_format={'type': 'json_schema', 'schema': output_schema},
+            permission_mode='dontAsk', setting_sources=[],
+            settings=json.dumps({'autoCompactEnabled': True}),
+            cwd=str(workspace),
+            thinking={'type': 'enabled', 'budget_tokens': 8192}, effort='high',
+            env={'TINYFISH_API_KEY':'', 'CLAUDE_CONFIG_DIR':str(workspace/'config'), 'ANTHROPIC_BASE_URL': 'https://api.deepseek.com/anthropic',
+                 'ANTHROPIC_AUTH_TOKEN': key, 'ANTHROPIC_API_KEY': '', 'CLAUDE_CODE_OAUTH_TOKEN': '',
+                 'ANTHROPIC_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_HAIKU_MODEL': sdk_model,
+                 'ANTHROPIC_DEFAULT_SONNET_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_OPUS_MODEL': sdk_model,
+                 'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0',
+                 'CLAUDE_CODE_DISABLE_1M_CONTEXT': '0',
+                 'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '1000000',
+                 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE': '80'})
+        for name, value in [('input.json', initial), ('tool_schemas.json', agent_tool_schemas(schemas)),
+                            ('output_schema.json', output_schema)]:
+            (artifacts / name).write_text(encode(value), encoding='utf-8')
+        (artifacts / 'system_prompt.txt').write_text(prompt.replace(key, '[redacted]'), encoding='utf-8')
+        (artifacts / 'environment.json').write_text(encode(describe_environment()), encoding='utf-8')
+        try:
+            async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
+                await client.query(encode(query_input))
+                while True:
+                    final = None
+                    async for message in client.receive_response():
+                        event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
+                        if type(message).__name__ == 'SystemMessage' and event.get('subtype') == 'thinking_tokens':
+                            # Per-token progress ticks: tens of thousands per run and nothing reads them.
+                            continue
+                        line = json.dumps({'message_type': type(message).__name__, 'at': datetime.now(timezone.utc).isoformat(),
+                                           'message': event}, ensure_ascii=False) + '\n'
+                        for log in filter(None, (artifacts / 'events.jsonl', events_log)):
+                            with log.open('a', encoding='utf-8') as stream:
+                                stream.write(line)
+                        if type(message).__name__ != 'ResultMessage':
+                            continue
+                        (artifacts / 'raw_response.txt').write_text(event.get('result') or '', encoding='utf-8')
+                        if event.get('is_error') or event.get('subtype') != 'success':
+                            # error_max_structured_output_retries = the answer never fit the output schema.
+                            raise ValueError(f"SDK did not produce a successful final result ({event.get('subtype')})")
+                        value = event.get('structured_output')
+                        if value is None:
+                            value = json.loads(event.get('result') or '')
+                        Draft202012Validator(output_schema).validate(value)
+                        final = value
+                    if final is None:
+                        raise ValueError('SDK ended without a final result')
+                    problem = final_check(final) if final_check else None
+                    if problem and repairs < 2:
+                        # One mistyped evidence ID should cost a correction, not the whole investigation.
+                        repairs += 1
+                        await client.query(problem)
+                        continue
+                    continuation = session.continuation() if session else None
+                    if continuation is None:
+                        (artifacts / 'response.json').write_text(encode(final), encoding='utf-8')
+                        return final
+                    await client.query(continuation)
+        finally:
+            if session and session.status == 'running':
+                session.status = 'interrupted'
+            try:
+                if session:
+                    session.checkpoint()
+            except (OSError, ValueError):
+                # Saving notes must not replace the timeout, cancellation or model error being raised.
+                pass
+            try:
+                # Cost of this run, successful or not, from the events it left behind.
+                (artifacts / 'measurement.json').write_text(encode(measure(artifacts, started_at=started_at, finished_at=datetime.now(timezone.utc))), encoding='utf-8')
+            except (OSError, ValueError, KeyError):
+                pass

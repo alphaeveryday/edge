@@ -26,7 +26,7 @@ const fmt = (iso: string | null) =>
 /** 분모 0 이면 '—' — 0/0 을 0% 로 표기하면 "확인했고 정상"으로 읽힌다. */
 const pct = (n: number, m: number) => (m > 0 ? `${((n / m) * 100).toFixed(1)}%` : '—');
 
-function DocumentRow({ d }: { d: NewsLineageDocument }) {
+function DocumentRow({ d, usedBlind }: { d: NewsLineageDocument; usedBlind: boolean }) {
   return (
     <tr>
       <td style={{ padding: '3px 10px 3px 0', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.title ?? ''}>
@@ -47,7 +47,10 @@ function DocumentRow({ d }: { d: NewsLineageDocument }) {
         )}
       </td>
       <td style={{ padding: '3px 0', textAlign: 'center' }}>
-        {d.usedInAnalysis ? '사용' : <span style={{ color: 'var(--fg-3)' }}>—</span>}
+        {/* 쓰이지 않은 것으로 보이는 문서도, 옛 설명 엔진이 멈춘 범위면 "안 쓰였다"가 아니라 관측 불가다 */}
+        {d.usedInAnalysis ? '사용' : (
+          <span style={{ color: 'var(--fg-3)' }}>{usedBlind ? '관측 불가' : '—'}</span>
+        )}
       </td>
     </tr>
   );
@@ -317,8 +320,13 @@ function LineageBody({
           />
           <StageTile
             label="분석 사용"
-            value={`${s.documentsUsedInAnalysis.toLocaleString()}/${m.toLocaleString()} (${pct(s.documentsUsedInAnalysis, m)})`}
-            info={'분자=assertion→event_evidence→explanation_run 체인이 존재하는 문서 · 분모=수집 문서.'}
+            value={s.usedInAnalysisBlind
+              ? '관측 불가'
+              : `${s.documentsUsedInAnalysis.toLocaleString()}/${m.toLocaleString()} (${pct(s.documentsUsedInAnalysis, m)})`}
+            info={'분자=assertion→event_evidence→explanation_run 체인이 존재하는 문서 · 분모=수집 문서.' +
+              (s.usedInAnalysisBlind
+                ? ' 이 체인은 10-01까지 돈 옛 설명 엔진의 것이다. 새 분석 엔진은 쓴 뉴스를 이 원장에 남기지 않아 이 범위는 셀 수 없다.'
+                : '')}
             active={stage === 'used'}
             onClick={() => toggle('used')}
           />
@@ -326,6 +334,12 @@ function LineageBody({
         <p className="t-xs m-0" style={{ color: 'var(--fg-3)', marginTop: 6 }}>
           ⚠️ 원장이 답할 수 있는 범위: 존재 → 증거 → 분석 사용. 중복 제거·종목 연결 단계는 계측 밖이다.
         </p>
+        {s.usedInAnalysisBlind && (
+          <p className="t-xs m-0" style={{ color: 'var(--warn)', marginTop: 4 }}>
+            분석 사용은 10-01까지의 옛 설명 엔진 기록만 셉니다. 새 분석 엔진은 쓴 뉴스를 이 원장에 남기지 않아
+            그 뒤의 날은 0건이 아니라 관측 불가입니다.
+          </p>
+        )}
       </div>
 
       {/* 장중 1분 추출 — 문서 표와 다른 원장(news_extraction_job)임을 명시한다 */}
@@ -415,7 +429,7 @@ function LineageBody({
               </thead>
               <tbody>
                 {data.documents.map((d) => (
-                  <DocumentRow key={d.documentId} d={d} />
+                  <DocumentRow key={d.documentId} d={d} usedBlind={data.summary.usedInAnalysisBlind === true} />
                 ))}
               </tbody>
             </table>

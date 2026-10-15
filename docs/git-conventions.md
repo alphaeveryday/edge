@@ -22,10 +22,22 @@ fix/*     ─┘
 
 **PR 규칙 (엄격한 사다리)**
 - `feature/*`·`fix/*` → **`dev`에만** PR 한다.
+  - 예외는 쌓인 PR(stacked PR) 하나다. 선행 PR과 나눈 후속 PR은 리뷰 diff를 좁히려고 base를 선행 PR 브랜치로 **열어 둘 수** 있다. 그래도 feature 브랜치로 머지하지 않는다 — 선행 PR이 `dev`에 머지된 뒤 base를 `dev`로 바꾸고, CI를 거쳐 `dev`로 머지한다.
+    - base가 `dev`가 아닌 동안 GitHub의 경로별 테스트 잡은 돌지 않는다. 그동안의 통과 기록은 로컬 실행이지 CI 통과가 아니다.
+    - 선행 PR이 squash 머지되면 후속 브랜치에는 선행 PR의 원래 커밋이 그대로 남는다. 아래 순서로 옮긴다.
+      1. `gh pr edit <N> --base dev` 로 base를 바꾼다.
+      2. 최신 `origin/dev` 를 후속 브랜치에 합치되, 공통 조상을 **후속 브랜치에 들어 있는 선행 PR의 가장 최근 커밋** — `git merge-base HEAD <선행 PR 마지막 head>` — 으로 지정한다. 그냥 `git merge origin/dev` 를 하면 공통 조상이 옛 `dev` 로 잡혀, 후속 PR이 다시 고친 선행 PR의 줄이 전부 충돌로 나타난다(ALPHA-1130 스택 모의 실측: 두 번째 후속 PR부터 충돌, 조상 지정 시 전 단계 충돌 0). 선행 PR 마지막 head 는 머지 뒤에도 `gh pr view <선행 N> --json headRefOid` 로 얻는다. ⚠️ 선행 PR이 후속을 가른 뒤 `dev` 를 합쳤다면 그 마지막 head 를 그대로 조상으로 쓰면 **충돌 없이** 그 사이 `dev` 변경을 되돌린다(ALPHA-1130 #1011 모의: 91파일 변경, 옳은 조상은 28파일) — 그래서 `merge-base` 로 구하고, 3단계 diff 대조를 건너뛰지 않는다. 아래 `merge-tree` 가 0이 아니면 충돌이니 멈추고 푼다. force-push 는 필요 없다.
+         ```bash
+         MB=$(git merge-base HEAD <선행 PR 마지막 head>) && \
+         T=$(git merge-tree --write-tree --merge-base="$MB" HEAD origin/dev) && \
+           git merge --ff-only "$(git commit-tree "$T" -p HEAD -p origin/dev -m "Merge origin/dev (선행 #<선행 N> squash 반영)")"
+         ```
+      3. `git diff origin/dev...HEAD` 가 base를 바꾸기 전의 PR diff(선행 브랜치 대비)와 같은지 확인한다. 후속 PR이 선행 PR 파일을 고쳤다면 그 파일은 원래 diff에도 있었다. 원래 diff에 없던 파일·헌크가 보이면 머지된 선행 내용과 어긋난 것이니 머지하지 않고 원인을 찾는다. `index` 줄이나 `@@` 위치만 다른 것은 `dev` 가 같은 파일의 다른 곳을 고친 것이라 정상이다 — 헌크 본문으로 대조한다(`diff <(grep -v '^index ' 전.diff) <(grep -v '^index ' 후.diff)`, `@@` 차이는 눈으로 확인).
+      4. push 뒤 GitHub CI 전건 통과를 확인하고 머지한다.
 - `dev` → **`main`에만** PR 한다.
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
 
-**스키마 마이그레이션 머지 게이트 (branch protection 도입 전 수동 규율)**
+**스키마 마이그레이션 머지 게이트 (required status check 지정 전 수동 규율)**
 - 마이그레이션(`src/libs/schema/migrations-*`)을 담은 PR은 **머지 직전** 최신 `dev`를 fetch 해 신규 버전이 해당 세트의 최고 버전보다 큰지 재확인한다. CI의 버전 단조성 guard 는 체크 실행 시점의 base 기준이라, 병렬 PR 이 순서대로 머지되면 역행 착지 창이 열린다(2026-07-29 하루 3건 실증, ALPHA-623).
 - 역행이면 **전방 리네임**(내용 그대로 더 큰 버전으로) 후 재검증한다. 규칙 상세와 복구 절차: [src/libs/schema/README.md](../src/libs/schema/README.md) "CI 운영 설정".
 - 릴리스는 `dev → main` 머지 후 `main`에 태그한다.
@@ -53,7 +65,7 @@ git worktree prune                                               # 폴더를 그
 [Conventional Commits](https://www.conventionalcommits.org)를 따릅니다. 제목(subject)은 한국어로 작성합니다.
 Squash 머지 시 **PR 제목이 최종 커밋 메시지**가 되므로, PR 제목도 아래 형식을 그대로 따릅니다.
 `dev` 대상 PR 의 제목 형식(type·scope·마침표·키 위치)은 CI(`pr-title-check`)가 검증해 체크
-실패로 드러냅니다(브랜치 보호 불가 플랜이라 강제 차단은 아님 — 머지 전 체크 확인은 운영 규율).
+실패로 드러냅니다(`dev` 룰셋 `protect-dev` 에 required status check 가 지정돼 있지 않아 강제 차단은 아님 — 머지 전 체크 확인은 운영 규율).
 한국어·50자 규약은 기계 강제하지 않습니다(봇 PR·영문 용어 혼용, 리뷰 소관).
 
 ```
@@ -66,7 +78,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `data-pipeline` · `analysis-engine`
+  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `app-api` · `data-pipeline` · `airflow` · `analysis-engine`(`analysis-engine-v2` 모듈) · `db-query`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common` · `ontology`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").
@@ -106,6 +118,14 @@ Refs: ALPHA-121
 **feature/fix → dev (Squash)**
 - PR 하나 = 커밋 하나 = 되돌릴 수 있는 단위. `dev`에 PR당 커밋 하나만 남습니다.
 - **PR은 작게 유지합니다.** 리뷰 부담이 줄고, 되돌리는 범위가 좁아집니다.
+- **PR 하나는 책임 하나입니다.** 범위는 다음 규칙으로 정합니다(ALPHA-1130 #997 을 PR 여덟 개로 다시 나눈 경위에서 정함).
+  - 착수할 때 이번 PR이 해결할 문제와 완료 조건을 먼저 적습니다.
+  - 작업 중 다른 문제나 기능을 발견하면, 그것이 이번 PR의 완료에 꼭 필요한지 판단합니다.
+  - 꼭 필요하지 않은 독립 변경은 후속 이슈·PR로 분리합니다.
+  - 꼭 필요한 선행 수정도 따로 검증할 수 있고 **단독으로 머지·배포해도 `dev`가 깨지지 않으면**(`dev` 머지 = 경로별 배포·마이그레이션) 선행 PR로 분리합니다(쌓인 PR 절차는 위 [PR 규칙](#브랜치-전략)의 예외 참고).
+  - "테스트가 통과했다"를 "PR 범위가 적절하다"의 근거로 쓰지 않습니다.
+  - 후속 보완을 요청받아도 기존 PR에 무조건 누적하지 않습니다 — 위 판단을 다시 거칩니다.
+  - 작업 지시로 받은 규칙은 기존 지침의 알맞은 자리에 적고, 중복 지침 파일을 만들지 않습니다.
 - PR 안의 중간 커밋은 squash로 합쳐지므로 자유롭게 쌓되, **PR 제목은 정확히** 작성합니다(최종 커밋 메시지가 됨).
 - 머지 후 feature/fix 브랜치는 **삭제**합니다. 다음 작업은 갱신된 `dev`에서 새로 분기합니다.
 

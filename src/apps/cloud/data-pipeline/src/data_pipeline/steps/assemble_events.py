@@ -52,15 +52,17 @@ from edge_ontology import (ProcessRegistry, load_process_registry, load_relation
 
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
-from ..entity_resolution import (ResolutionIndex, load_resolution_index, mint_concept,
-                                 resolve_alias_ticker)
+from ..entity_resolution import (AMBIGUOUS, UNRESOLVED, ResolutionIndex,
+                                 load_resolution_index, mint_concept, resolve, resolve_alias_ticker)
 from ..events.amounts import BASIS_VALUES, parse_amount, parse_basis
+from ..events.participants import actor_arguments, actor_role_values, issuer_mapping, role_entities
 from ..lake import Storage, canonical_news_articles_partition, quality_log_key
 from ..ops.quality_diagnostics import (
     ARGUMENTS_MISSING,
     CONCEPT_REJECTED,
     EVENT_SCOPE,
     INSTRUMENT_NOT_FOUND,
+    INSTRUMENT_AMBIGUOUS,
     REGISTRY_MISS,
     build as build_quality_diagnostics,
     issue as quality_issue,
@@ -108,7 +110,7 @@ GATE_DOC_CLASSES = ("EVENT", "MARKET_COMMENTARY", "OPINION_OR_ANALYSIS", "PROMOT
 
 # event_argument.slot 은 LLM 이 아니라 온톨로지가 정한다(ALPHA-596) — (타입, 역할)만으로
 # 결정되므로 기사를 볼 필요가 없고, LLM 에 물으면 3값 중 무엇을 내도 범위검사를 통과해
-# 오류가 조용하다(AGENTS Rule 5). 어휘는 edge_ontology.relation.slots.SLOT_VALUES.
+# 오류가 조용하다(AGENTS Rule 5). 어휘는 edge_ontology.oms.roles.slots.SLOT_VALUES.
 
 # 추출 콜 confidence(H/M/L) → source_event.confidence_level CHECK 어휘 사상.
 _CONFIDENCE_LEVELS = {"H": "HIGH", "M": "MEDIUM", "L": "LOW"}
@@ -490,7 +492,8 @@ def _extract_batch(complete_fn, system: str, event_type_code: str, chunk: list[d
 
 def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
                          entity_index: dict[str, str], allowed_tickers: set[str],
-                         resolution_index: ResolutionIndex | None = None) -> dict | None:
+                         resolution_index: ResolutionIndex | None = None,
+                         *, allow_aliases: bool = True) -> dict | None:
     """추출 콜 항목 1건 검증 — 라벨이 메뉴에 드는지는 코드가 판정한다(Rule 5).
 
     불량 부분(메뉴 밖 역할·빈 mention)은 그 부분만 떨어뜨리고 이벤트는 살린다
@@ -555,14 +558,29 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
             and not load_relations().sections_for(role)
             and not load_relations().can_mint(role)
         )
-        if entity_id is None and resolution_index is not None and instrument_role:
+        if (entity_id is None and resolution_index is not None
+                and instrument_role and allow_aliases):
             # 실측된 정식명 변형은 canonical ticker가 이 기사 mentions의 허용집합에 있을 때만
             # 쓴다. instrument 역할이 아닌 LOCATION·PRODUCT 등에 적용하면 역할별 해소 축을
             # 우회해 concept가 상장 종목으로 바뀐다.
             alias_ticker = resolve_alias_ticker(resolution_index, mention)
             if alias_ticker in allowed_tickers:
                 entity_id = entity_index.get(alias_ticker)
-        if entity_id is None:
+        instrument_reason = None
+        registry_allowed = True
+        if entity_id is None and relation is not None and relation.registry_fallback_sections:
+            # 기관 폴백도 두 writer가 같은 종목 완전일치/충돌 검사를 거친 뒤에만 허용한다.
+            # 조회 전제가 없거나 기사의 허용 ticker 밖인 종목을 기관으로 바꿔 달지 않는다.
+            registry_allowed = False
+            if resolution_index is not None:
+                candidate, instrument_reason = resolve(
+                    resolution_index, mention, allow_aliases=allow_aliases)
+                if candidate is not None and candidate in {
+                    entity_index[t] for t in allowed_tickers if t in entity_index
+                }:
+                    entity_id = candidate
+                registry_allowed = instrument_reason == UNRESOLVED
+        if entity_id is None and registry_allowed:
             # 티커가 없는 참여자 — 규제기관·법원·중앙은행은 닫힌 집합이라 레지스트리로
             # 해소한다(edge_ontology authority_registry). 이게 없으면 AUTHORITY 를
             # identity 로 쓰는 타입이 통째로 UNKNOWN 이다. 못 찾으면 미해소 유지 —
@@ -583,7 +601,8 @@ def _validate_extraction(item: dict, view: ProcessRegistry, gate_cls: dict,
                 minted_concepts[entity_id] = (mention.strip(), role_entity_kind(role))
         if entity_id is None:
             resolution_reason = (
-                "registry_miss"
+                INSTRUMENT_AMBIGUOUS if instrument_reason == AMBIGUOUS
+                else "registry_miss"
                 if (relation is not None and relation.registry_sections
                     and not load_relations().can_mint(role))
                 else "instrument_not_found" if instrument_role
@@ -766,6 +785,8 @@ def _anchorless_issue_counts(
             issue_keys = [(
                 REGISTRY_MISS
                 if part.get("resolution_reason") == REGISTRY_MISS
+                else INSTRUMENT_AMBIGUOUS
+                if part.get("resolution_reason") == INSTRUMENT_AMBIGUOUS
                 else CONCEPT_REJECTED
                 if part.get("resolution_reason") == CONCEPT_REJECTED
                 else INSTRUMENT_NOT_FOUND,
@@ -1070,7 +1091,7 @@ def persist_normalization(conn, rows: list[dict], classifications: dict[str, dic
             "INSERT INTO event_argument (source_event_id, role_code, entity_id, confidence,"
             " slot, mention_text, entity_kind, group_ord) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT (source_event_id, role_code, entity_id) DO NOTHING",
-            event_args,
+            actor_arguments(conn, event_args),
         )
         cur.executemany(
             "INSERT INTO event_measure (source_event_id, measure_ord, role_code, surface,"
@@ -1189,16 +1210,28 @@ def thread_events(conn, events: list[dict]) -> int:
 
     keyed: list[tuple[dict, str]] = []          # identity 충족 — 스레드 대상
     unknown: list[tuple[dict, list[str]]] = []  # identity 결측 — UNKNOWN
+    issuers = issuer_mapping(conn, (
+        entity for event in events for value in event["role_values"].values() if value
+        for entity in role_entities(value)
+    ))
     for event in events:
-        thread_key, missing = _thread_key(event["event_type_code"], event["role_values"])
+        thread_key, missing = _thread_key(
+            event["event_type_code"], actor_role_values(event["role_values"], issuers))
         (unknown.append((event, missing)) if thread_key is None
          else keyed.append((event, thread_key)))
 
-    prior_counts = _thread_prior_counts(conn, [k for _e, k in keyed])
-    thread_stages = _thread_current_stages(conn, [k for _e, k in keyed])
+    keys = list({key for _event, key in keyed})
+    with conn.cursor() as cur:
+        cur.execute("SELECT thread_key, thread_id FROM event_thread WHERE thread_key = ANY(%s)",
+                    (keys,))
+        existing_ids = dict(cur.fetchall())
+    ids = {key: existing_ids.get(key, _stable_id("thr", key)) for key in keys}
+    prior_counts = _thread_prior_counts(conn, ids)
+    thread_stages = _thread_current_stages(conn, ids)
     per_thread_seen: dict[str, int] = {}
     for event, thread_key in sorted(keyed, key=lambda ek: ek[0]["available_at"]):
-        thread_id = _stable_id("thr", thread_key)
+        # A key migration preserves the historical ID and every external reference.
+        thread_id = ids[thread_key]
         prior = prior_counts.get(thread_key, 0) + per_thread_seen.get(thread_key, 0)
         novelty = _novelty(event, prior, thread_stages.get(thread_key))
         per_thread_seen[thread_key] = per_thread_seen.get(thread_key, 0) + 1
@@ -1340,10 +1373,10 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
     return list(events.values())
 
 
-def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
-    if not thread_keys:
+def _thread_prior_counts(conn, ids: dict[str, str]) -> dict[str, int]:
+    if not ids:
         return {}
-    thread_ids = {_stable_id("thr", tk): tk for tk in thread_keys}
+    thread_ids = {tid: key for key, tid in ids.items()}
     with conn.cursor() as cur:
         cur.execute(
             "SELECT thread_id, COUNT(*) FROM event_thread_link WHERE thread_id = ANY(%s)"
@@ -1354,11 +1387,11 @@ def _thread_prior_counts(conn, thread_keys: list[str]) -> dict[str, int]:
     return {thread_ids[tid]: n for tid, n in counts.items()}
 
 
-def _thread_current_stages(conn, thread_keys: list[str]) -> dict[str, str]:
+def _thread_current_stages(conn, ids: dict[str, str]) -> dict[str, str]:
     """thread_key → 기존 event_thread.current_stage(있는 것만) — novelty 판정의 시드."""
-    if not thread_keys:
+    if not ids:
         return {}
-    thread_ids = {_stable_id("thr", tk): tk for tk in thread_keys}
+    thread_ids = {tid: key for key, tid in ids.items()}
     with conn.cursor() as cur:
         cur.execute(
             "SELECT thread_id, current_stage FROM event_thread WHERE thread_id = ANY(%s)",

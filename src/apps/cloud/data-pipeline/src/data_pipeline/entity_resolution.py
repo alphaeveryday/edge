@@ -8,9 +8,9 @@ tag-news 의 argument `text` 는 기사 원문 표현("삼성전자"·"005930")�
   (b) 회사 정식명(발행사 entity display_name) → 그 회사 보통주 instrument_id
   (c) 종목/ETF display_name                  → instrument_id
 
-**해소 결과는 항상 instrument 엔티티다** — 다운스트림 `event_argument ⋈ instrument`
-조인과 분석엔진 entity_index(ticker→instrument_id) 관례에 맞춘다. 회사명이 와도
-회사(actor)가 아니라 그 발행사의 주식으로 해소한다.
+**이 해소기의 결과는 instrument 엔티티다.** 문서의 종목 매칭과 기존 사건 ID 산식이
+이 값을 사용한다. 사건 참여자는 저장 경계에서 `events.participants`가 Equity를
+발행 Actor로 변환한다. 따라서 이 해소 결과를 사건 참여 대상의 최종 ID로 해석하지 않는다.
 
 동명 충돌(한 키가 서로 다른 엔티티 2개)은 **미해소(ambiguous)** 다 — 아무거나 고르면
 그 순간 조용히 틀린다. 별칭은 정상 런에서 확인된 같은 상장사의 정식명 변형만 canonical
@@ -29,8 +29,8 @@ ALIAS_RESOLVED = "alias_resolved"
 UNRESOLVED = "unresolved"
 AMBIGUOUS = "ambiguous"
 
-# 2026-09-07 dev 정상 런의 상위 미해소 중, 같은 상장사를 가리키는 것이 결정적인 정식명·
-# 상호 표기만 둔다(ALPHA-1067). 그룹명·브랜드·비상장 자회사처럼 상장 instrument 귀속이
+# 2026-09-07·19 dev 정상 런에서 같은 상장사를 가리키는 정식명·상호 표기만 둔다
+# (ALPHA-1067·1080). 그룹명·브랜드·비상장 자회사처럼 상장 instrument 귀속이
 # 해석인 표현(삼성·포스코·CJ온스타일·GS25)은 넣지 않는다.
 _INSTRUMENT_ALIASES = {
     "IBK기업은행": "기업은행",
@@ -38,6 +38,34 @@ _INSTRUMENT_ALIASES = {
     "현대자동차": "현대차",
     "LS일렉트릭": "LS ELECTRIC",
     "한국전력공사": "한국전력",
+    "한국항공우주산업(KAI)": "한국항공우주",
+    "KAI(한국항공우주산업)": "한국항공우주",
+    "신세계아이앤씨": "신세계 I&C",
+    "KG모빌리티(KGM)": "KG모빌리티",
+    "KG 모빌리티(KGM)": "KG모빌리티",
+    "한국지역난방공사": "지역난방공사",
+    "한국타이어": "한국타이어앤테크놀로지",
+    "한국타이어(한국타이어앤테크놀로지)": "한국타이어앤테크놀로지",
+    "한국타이어앤테크놀로지(한국타이어)": "한국타이어앤테크놀로지",
+    "디엑스앤브이엑스": "DXVX",
+    "디엑스앤브이엑스(DXVX)": "DXVX",
+    "디엑스앤브이엑스(Dx&Vx)": "DXVX",
+    "삼성SDS": "삼성에스디에스",
+    "㈜두산": "두산",
+    "롯데칠성음료": "롯데칠성",
+    "GC녹십자": "녹십자",
+    "한국전력기술": "한전기술",
+    "기아(주)": "기아",
+    "기아㈜": "기아",
+    "SKT": "SK텔레콤",
+    "SK텔레콤(SKT)": "SK텔레콤",
+    "한화 에어로스페이스": "한화에어로스페이스",
+    "SOOP(옛 아프리카TV)": "SOOP",
+    "엘앤에프(L&F)": "엘앤에프",
+    "KB금융지주": "KB금융",
+    "네이버": "NAVER",
+    "LGU+": "LG유플러스",
+    "㈜GS": "GS",
 }
 
 
@@ -208,8 +236,8 @@ def plan_resolution(
       MINT      `mint_concept` — **assemble-events 와 같은 그 함수**를 부른다. "같은 원시
                 함수를 각자 조립"으로는 부족했다: 접두사 하나만 달라도 산식이 갈려 같은
                 개념에 ID 가 둘 생기고 조인이 조용히 끊긴다(ALPHA-456 이 겪은 실패 양식).
-      NONE      instrument 인덱스(`resolve`). 못 붙으면 미해소 — 채번하면 상장사가 유령으로
-                갈린다는 게 온톨로지가 NONE 을 고른 이유다.
+      NONE      instrument 인덱스(`resolve`) 우선. 미해소일 때만 역할에 선언된 기관 명부
+                폴백을 허용한다. 충돌은 보존하며 새 실체를 채번하지 않는다.
 
     세 번째 반환값은 **채번한 개념**이다 `(display_name, concept_type)`. 호출부가
     entity(CONCEPT) → concept → assertion_argument 순서로 FK 를 세운다 — 이 함수는 DB 를
@@ -240,7 +268,12 @@ def plan_resolution(
 
     # ── NONE: 티커 축
     if not load_relations().can_mint(role_code):
-        return (*resolve(index, text, allow_aliases=True), None)
+        entity_id, reason = resolve(index, text, allow_aliases=True)
+        if reason == UNRESOLVED and mention and relation.registry_fallback_sections:
+            authority_id = resolve_authority(role_code, mention)
+            if authority_id:
+                return authority_id, REGISTRY_HIT, None
+        return entity_id, reason, None
 
     # ── MINT: 채번. **온톨로지가 정한 것만 판단한다** — 어떤 멘션을 개념으로 볼지는
     # `concept_key` 소관이고(하한·숫자만 배제), 이 함수는 그 판정을 그대로 따른다.

@@ -200,6 +200,7 @@ const optionalBool: Check = (v) => v === undefined || bool(v);
 const count: Check = (v) => Number.isSafeInteger(v) && (v as number) >= 0;
 const nullableCount: Check = (v) => v === null || count(v);
 const optionalNullableCount: Check = (v) => v === undefined || nullableCount(v);
+const optionalCount: Check = (v) => v === undefined || count(v);
 /** 기준값 — 짝수 표본의 중앙값이라 소수가 정상이다. */
 const ratio: Check = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const nullableRatio: Check = (v) => v === null || ratio(v);
@@ -229,14 +230,19 @@ export const DATASET_FIELDS: Record<string, Check> = {
   id: text, contract: bool, expectedAsOf: nullableDate, actualAsOf: nullableDate,
   collectedAt: nullableInstant, unverifiable: nullableText,
 };
+/** 기준일별 건수 — 없어도 되지만(옛 API) 오면 날짜·건수의 배열이어야 한다 */
+const optionalHistory: Check = (v) =>
+  v === undefined ||
+  (Array.isArray(v) && v.every((d) => isRow(d) && isoDate(d.date) && count(d.count)));
 export const OUTPUT_FIELDS: Record<string, Check> = {
-  id: text, label: text, unit: text, today: count, base: nullableRatio,
+  id: text, label: text, unit: text, today: count, base: nullableRatio, history: optionalHistory,
 };
 export const QUEUE_FIELDS: Record<string, Check> = {
   name: text, visible: count, inFlight: count, dlq: count,
 };
 export const BOUNDARY_FIELDS: Record<string, Check> = {
   publishedWithoutDelivery: count, deliveryNowNonpublished: count, deliveryRows: count,
+  blind: optionalBool,
 };
 /* 🔴 **체인의 수에는 `null` 자리가 없다.** 서버가 코호트를 정해 놓고 세므로 "못 셌다"가 없다.
  * `nullableCount` 를 쓰면 손상된 응답의 `null` 이 규칙 층까지 흘러가 그 단계만 비교에서 조용히
@@ -245,13 +251,33 @@ export const CHAIN_FEED_FIELDS: Record<string, Check> = {
   id: text, label: text, v: count, unit: text, src: text,
 };
 export const CHAIN_STAGE_FIELDS: Record<string, Check> = {
-  id: text, label: text, batch: count, intraday: count, src: text,
+  id: text, label: text, batch: count, intraday: count, src: text, blind: optionalBool,
 };
-export const ETF_LEDGER_ROW_FIELDS: Record<string, Check> = {
-  etf: text, name: text, triggered: bool, outcome: nullableText, error: nullableText,
+/* 새 분석 엔진의 단계(ALPHA-1296). 배치 칸만 `null` 을 받는다 — "대상 아님"이지 "못 셌다"가 아니다. */
+export const ANALYSIS_STAGE_FIELDS: Record<string, Check> = {
+  id: text, label: text, batch: nullableCount, intraday: count, src: text, blind: optionalBool,
+  pending: optionalCount,
 };
+/* R10 이 판정하지 않고 수만 보여 주는 단계(ALPHA-1296). 분석 시작 → 완료의 감소는 실패·진행 중이고
+ * (실패는 R15 가 맡는다) 완료 → 게시의 감소는 설계다(고른 항목이 없으면 게시되지 않는다). */
+const SHOWN_ONLY_STAGES = new Set(['c.done', 'c.pub']);
+/* ETF별 v2 분석 귀결(ALPHA-1312). 상태는 계약이 열거한 코드만 받는다 — 모르는 코드를 통과시키면
+ * 표가 그 칸을 이름 없는 상태로 그린다. */
+const OUTLOOK_STATES = new Set(['completed', 'failed', 'running', 'none']);
+const MOVEMENT_STATES = new Set([...OUTLOOK_STATES, 'not_started', 'pending']);
+export const ETF_ANALYSIS_ROW_FIELDS: Record<string, Check> = {
+  etf: text, name: text,
+  outlook: (v) => typeof v === 'string' && OUTLOOK_STATES.has(v),
+  movement: (v) => typeof v === 'string' && MOVEMENT_STATES.has(v),
+};
+/* 서버가 이 응답에 쓴 시간(ALPHA-1314) — 없어도 된다(이 필드를 싣기 전의 API). 오면 형상만 본다.
+ * 규칙 사실로 옮기지 않는다 — 화면도 규칙도 읽지 않는 값이다. */
+const optionalTiming: Check = (v) =>
+  v === undefined ||
+  (isRow(v) && count(v.totalMs) && Array.isArray(v.segments) &&
+    v.segments.every((s) => isRow(s) && text(s.name) && text(s.kind) && count(s.ms)));
 export const META_FIELDS: Record<string, Check> = {
-  db: isoInstant, aws: optionalNullableInstant, today: isoDate,
+  db: isoInstant, aws: optionalNullableInstant, today: isoDate, timing: optionalTiming,
 };
 
 /** 배열 원소는 **객체**여야 한다 — `[null]`·`[1]`·`[[]]` 가 여기서 걸린다. */
@@ -326,6 +352,9 @@ export function parseFacts(body: unknown): FactsParse {
     for (const [part, fields] of [['feeds', CHAIN_FEED_FIELDS],
       ['stages', CHAIN_STAGE_FIELDS]] as const) {
       const rows = chain[part];
+      /* 옛 설명 엔진의 단계(`stages`)는 없어도 된다(ALPHA-1328) — 화면과 규칙이 안 읽고, 서버가 다음
+       * 배포에서 지운다. 오면 지금처럼 검사한다. */
+      if (part === 'stages' && rows === undefined) continue;
       if (!Array.isArray(rows) || rows.length === 0) return bad(`chain.${part} 가 비었다`);
       for (const row of rows) {
         if (!isRow(row)) return bad(`chain.${part} 원소가 객체가 아니다`);
@@ -340,17 +369,50 @@ export function parseFacts(body: unknown): FactsParse {
      * 배포가 화면을 멈추면 안 된다). 대가를 밝혀 둔다: 셋째 갈래가 생기면 R10 이 그 갈래를
      * **한 번도 안 본다**. 축이 늘 때 규칙을 같이 고치는 것 말고 이걸 잡는 자동 가드는 없다. */
     if ((chain.feeds as unknown[]).length < 2) return bad('chain.feeds 가 두 갈래가 아니다');
+    /* 새 분석 엔진의 단계 — 없어도 된다(이 목록을 안 싣는 API). 오면 전 필드를 검사한다. 빈 목록은
+     * 거부한다: 단계가 0개면 R10 이 비교할 점이 없는데 축은 온 것처럼 보인다. */
+    const analysisStages = chain.analysisStages;
+    if (analysisStages !== undefined) {
+      if (!Array.isArray(analysisStages) || analysisStages.length === 0) {
+        return bad('chain.analysisStages 가 비었다');
+      }
+      for (const row of analysisStages) {
+        if (!isRow(row)) return bad('chain.analysisStages 원소가 객체가 아니다');
+        const field = offendingField(row, ANALYSIS_STAGE_FIELDS);
+        if (field) return bad(`chain.analysisStages[].${field} 의 값이 계약과 다르다`);
+      }
+    }
   }
 
-  const etfLedger = body.etfLedger;
-  if (etfLedger !== undefined) {
-    if (!isRow(etfLedger) || !Array.isArray(etfLedger.rows)) {
-      return bad('etfLedger.rows 축이 배열이 아니다');
+  /* ETF별 v2 분석 귀결 — 없어도 된다(이 축을 싣기 전의 API). */
+  const etfAnalyses = body.etfAnalyses;
+  if (etfAnalyses !== undefined) {
+    if (!isRow(etfAnalyses) || !Array.isArray(etfAnalyses.rows)) {
+      return bad('etfAnalyses.rows 축이 배열이 아니다');
     }
-    for (const row of etfLedger.rows) {
-      if (!isRow(row)) return bad('etfLedger.rows 원소가 객체가 아니다');
-      const field = offendingField(row, ETF_LEDGER_ROW_FIELDS);
-      if (field) return bad(`etfLedger.rows[].${field} 의 값이 계약과 다르다`);
+    for (const row of etfAnalyses.rows) {
+      if (!isRow(row)) return bad('etfAnalyses.rows 원소가 객체가 아니다');
+      const field = offendingField(row, ETF_ANALYSIS_ROW_FIELDS);
+      if (field) return bad(`etfAnalyses.rows[].${field} 의 값이 계약과 다르다`);
+    }
+  }
+
+  /* v2 분석 실패 축 — 없어도 된다(이 축을 안 싣는 API). 오면 두 종류의 ETF 코드 목록이어야 한다.
+   * 종류가 빠진 채 통과시키면 R15 가 그 종류를 "실패 없음"으로 읽는다. */
+  const analysisFailures = body.analysisFailures;
+  if (analysisFailures !== undefined) {
+    if (!Array.isArray(analysisFailures)) return bad('analysisFailures 축이 배열이 아니다');
+    for (const row of analysisFailures) {
+      if (!isRow(row)) return bad('analysisFailures 원소가 객체가 아니다');
+      if (row.kind !== 'outlook' && row.kind !== 'movement') return bad('analysisFailures[].kind 의 값이 계약과 다르다');
+      if (!Array.isArray(row.failedEtfs) || !row.failedEtfs.every((code) => typeof code === 'string' && code !== '')) {
+        return bad('analysisFailures[].failedEtfs 의 값이 계약과 다르다');
+      }
+    }
+    for (const kind of ['outlook', 'movement']) {
+      if (analysisFailures.filter((row) => (row as { kind: string }).kind === kind).length !== 1) {
+        return bad(`analysisFailures 에 ${kind} 항목이 정확히 하나가 아니다`);
+      }
     }
   }
 
@@ -410,6 +472,7 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       today: o.today,
       base: o.base,
       unit: o.unit,
+      ...(o.history ? { history: o.history } : {}),
     })),
     ...(Array.isArray(dto.queues)
       ? { queues: dto.queues.map((q) => ({
@@ -420,12 +483,18 @@ function toFacts(dto: ConsoleFactsDto): Facts {
       published_without_delivery: dto.boundary.publishedWithoutDelivery,
       delivery_now_nonpublished: dto.boundary.deliveryNowNonpublished,
       delivery_rows: dto.boundary.deliveryRows,
+      ...(dto.boundary.blind ? { blind: true } : {}),
     },
     /* 순서를 **그대로 옮긴다** — 목록 순서가 곧 흐름이라 정렬하거나 id 로 다시 찾으면 서버가
      * 정한 선후가 사라진다. 원장에는 단계 간 선후가 없어 여기서 복원할 방법도 없다.
      * 안 온 축은 **만들지 않는다**(다른 부재 축과 같은 규약) — 빈 목록으로 채우면 R10 이
-     * `못 돎` 대신 `평가됨 · 위반 0` 을 세운다. */
-    ...(dto.chain
+     * `못 돎` 대신 `평가됨 · 위반 0` 을 세운다.
+     *
+     * 🔴 **단계는 새 분석 엔진의 목록(`analysisStages`)에서만 온다**(ALPHA-1296). 그 목록이 없는
+     * 응답(옛 API)은 체인 축이 **없는 것**으로 옮긴다 — 옛 단계 목록(`stages`)으로 대신 채우지
+     * 않는다. 옛 단계는 멈춘 엔진의 표라, 그걸 읽으면 R10 이 없는 손실을 세우거나 화면이 지난
+     * 엔진의 수를 지금 것처럼 그린다. */
+    ...(dto.chain?.analysisStages
       ? {
           chain: {
             feeds: dto.chain.feeds.map((f) => ({
@@ -435,21 +504,31 @@ function toFacts(dto: ConsoleFactsDto): Facts {
               unit: f.unit,
               src: f.src,
             })),
-            stages: dto.chain.stages.map((s) => ({
+            stages: dto.chain.analysisStages.map((s) => ({
               id: s.id,
               label: s.label,
               batch: s.batch,
               intraday: s.intraday,
               src: s.src,
+              /* 참일 때만 싣는다 — 없는 응답과 false 를 같은 형상으로 둔다 */
+              ...(s.blind ? { blind: true } : {}),
+              /* 배치 칸의 `null` 은 "대상 아님"이다 — 집계 없음과 가르려고 표시를 따로 싣는다 */
+              ...(s.batch === null ? { batch_na: true } : {}),
+              ...(SHOWN_ONLY_STAGES.has(s.id) ? { shown_only: true } : {}),
+              /* 0 과 부재(옛 API)를 같은 형상으로 둔다 — 있을 때만 싣는다 */
+              ...(s.pending ? { pending: s.pending } : {}),
             })),
           },
         }
       : {}),
-    ...(dto.etfLedger
-      ? { etf_ledger: { rows: dto.etfLedger.rows.map((r) => ({
-          etf: r.etf, name: r.name, triggered: r.triggered,
-          outcome: r.outcome, error: r.error,
+    /* 없으면 없는 것으로 옮긴다(ALPHA-1312) */
+    ...(dto.etfAnalyses
+      ? { etf_analyses: { rows: dto.etfAnalyses.rows.map((r) => ({
+          etf: r.etf, name: r.name, outlook: r.outlook, movement: r.movement,
         })) } }
+      : {}),
+    ...(dto.analysisFailures
+      ? { analysis_failures: dto.analysisFailures.map((a) => ({ kind: a.kind, failed_etfs: a.failedEtfs })) }
       : {}),
     meta: {
       db: dto.meta.db,

@@ -83,15 +83,54 @@ def test_authority_registry_matches_seed_migration():
     #      실수를 여기서 잡는다 — 마이그레이션은 레지스트리의 투영이다.
     import re
 
-    seed = Path(__file__).resolve().parents[3] / (
-        "libs/schema/migrations-cloud/V202607291730__seed_authority_actors.sql")
-    sql = seed.read_text(encoding="utf-8")
+    migrations = Path(__file__).resolve().parents[3] / "libs/schema/migrations-cloud"
+    # 이미 적용한 초기 SQL은 불변이다. 전방 증보까지 합쳐 FK 대상과 종별을 대조한다.
+    sql = "\n".join(path.read_text(encoding="utf-8")
+                    for path in sorted(migrations.glob("V*__*authority_actors.sql")))
+    entities = dict(re.findall(
+        r"\('(actor_(?:auth|court|cb|inst)_[a-z0-9_]+)', 'ACTOR', '([^']+)', 'ACTIVE'\)", sql))
+    actors = {entity_id: (actor_type, country) for entity_id, actor_type, country in re.findall(
+        r"\('(actor_(?:auth|court|cb|inst)_[a-z0-9_]+)', '([A-Z]+)', '([A-Z]+)'\)", sql)}
     registry = O.load_authority_registry()
-    for entity_id, entry in registry.entries.items():
-        assert f"'{entity_id}'" in sql, entity_id
-        assert f"'{entry.actor_type}'" in sql, entry.actor_type
-    seeded = set(re.findall(r"'(actor_(?:auth|court|cb|inst)_[a-z0-9_]+)'", sql))
-    assert seeded == set(registry.entries)
+    assert entities == {key: entry.display_name for key, entry in registry.entries.items()}
+    assert actors == {key: (entry.actor_type, entry.country_code)
+                      for key, entry in registry.entries.items()}
+
+
+@pytest.mark.parametrize("mention,entity_id", [
+    ('산업통상부', 'actor_auth_kr_motir'),
+    ('기후에너지환경부', 'actor_auth_kr_mcee'),
+    ('한국인정기구(KOLAS)', 'actor_auth_kr_kolas'),
+    ('한국표준협회(KSA)', 'actor_auth_kr_ksa'),
+    ('한국준법진흥원(KCI)', 'actor_auth_kr_kci'),
+    ('한국환경산업기술원(KEITI)', 'actor_auth_kr_keiti'),
+    ('세종시', 'actor_auth_kr_sejong'),
+    ('과천시', 'actor_auth_kr_gwacheon'),
+    ('경기도', 'actor_auth_kr_gyeonggi'),
+    ('강원도', 'actor_auth_kr_gangwon'),
+    ('수원특례시', 'actor_auth_kr_suwon'),
+    ('경남 하동군', 'actor_auth_kr_hadong'),
+    ('서대문구청', 'actor_auth_kr_seodaemun'),
+    ('통영시', 'actor_auth_kr_tongyeong'),
+    ('미국 농무부(USDA)', 'actor_auth_us_usda'),
+    ("미국 증권거래위원회(SEC)", "actor_auth_us_sec"),
+])
+def test_verified_news_authorities_keep_role_boundaries(mention, entity_id):
+    # WHY: 표기만 보완한다. 기관명과 같아도 발행사나 법원 역할로 오해소되면 안 된다.
+    assert O.resolve_authority("AUTHORITY", mention) == entity_id
+    for role in ("ISSUER", "COURT", "CENTRAL_BANK"):
+        assert O.resolve_authority(role, mention) is None
+
+
+def test_authority_amendment_does_not_reassign_old_or_ambiguous_names():
+    # WHY: 조직개편 때문에 과거 ID/약칭을 재할당하면 이미 저장한 사건의 정체성이 갈린다.
+    assert O.resolve_authority("AUTHORITY", "산업통상자원부") == "actor_auth_kr_motie"
+    assert O.resolve_authority("AUTHORITY", "산업부") == "actor_auth_kr_motie"
+    assert O.resolve_authority("AUTHORITY", "환경부") == "actor_auth_kr_me"
+    for mention in ("정부", "금융당국", "한국준법진", "KCI", "유럽연합(EU)",
+                    "산업통상부·중소벤처기업부", "기후에너지환경부 산하 기관"):
+        assert O.resolve_authority("AUTHORITY", mention) is None
+
 
 
 # ── 2. 속성(Attribute) ─────────────────────────────────────────────────────
@@ -203,7 +242,7 @@ def test_slot_collisions_must_be_declared_with_a_reason():
     # WHY: (종, slot) 이 같은 역할 쌍은 소비자가 구분할 수 없다. 그걸 조용히 통과시키면
     #      어휘 결함(PARTNER_2 같은 arity hack)이 영구 거주한다. 사유 없는 면제를 막아야
     #      게이트가 게임 불가다 — 면제 목록 자체가 정리 대상 원장이 된다.
-    from edge_ontology.relation.slots import COLLISION_REASONS, load_known_collisions
+    from edge_ontology.oms.roles.slots import COLLISION_REASONS, load_known_collisions
 
     collisions = load_known_collisions()
     assert collisions, "면제가 하나도 없으면 게이트가 놀고 있는 것 아닌지 확인할 것"
@@ -336,9 +375,9 @@ def test_unfillable_identity_types_are_declared():
     # WHY: identity 가 비실체 역할을 요구하는 타입은 추출을 아무리 고쳐도 영구 UNKNOWN
     #      이다. 조용한 0% 를 계약에 적어 드러낸다(Rule 12). 특히 off_menu 셋은
     #      required∪optional 에도 없는 역할을 identity 로 요구하는 온톨로지 결함이다.
-    from edge_ontology._resource import load_yaml_resource
+    from edge_ontology.oms.loader import load_yaml_resource
     from edge_ontology.constants import RELATION_DIR
-    from edge_ontology.relation.vocabulary import ROLE_BINDINGS_RESOURCE
+    from edge_ontology.oms.roles.vocabulary import ROLE_BINDINGS_RESOURCE
 
     declared = load_yaml_resource(RELATION_DIR, ROLE_BINDINGS_RESOURCE)["unfillable_identity"]
     non_entity = O.load_relations().non_entity_roles
@@ -353,3 +392,39 @@ def test_unfillable_identity_types_are_declared():
     for type_id in declared["off_menu"]["types"]:
         pt = registry[type_id]
         assert set(pt.identity_required) - (set(pt.required_roles) | set(pt.optional_roles))
+
+
+def test_counterparty_registry_fallback_is_explicit_and_does_not_change_role_kind():
+    # WHY: 미등록 상대방을 채번하거나 전체 기관 명부를 검색하면 잘못된 정체성이 생긴다.
+    vocabulary = O.load_relations()
+    for role in ("PARTNER", "PARTNER_2", "INVESTOR"):
+        assert vocabulary.kind_of(role) == "COMPANY_ENTITY"
+        assert vocabulary.sections_for(role) == ()  # 종목 우선 경로를 유지한다
+        assert vocabulary.get(role).registry_fallback_sections == (
+            "authorities", "foreign_authorities", "institutions")
+        assert not vocabulary.can_mint(role)
+        assert O.resolve_authority(role, "금감원") == "actor_auth_kr_fss"
+        assert O.resolve_authority(role, "대법원") is None
+    for role in ("ISSUER", "TARGET_COMPANY", "PERSON", "CUSTOMER", "SUPPLIER"):
+        assert not vocabulary.get(role).registry_fallback_sections
+    assert O.resolve_authority("AUTHORITY", "한국은행") == "actor_cb_kr_bok"
+    assert O.resolve_authority("COURT", "한국은행") is None
+
+
+@pytest.mark.parametrize("scheme,sections", [("MINT", "authorities"), ("REGISTRY", "authorities"),
+                                           ("NONE", "unknown_section")])
+def test_counterparty_fallback_rejects_invalid_policy(tmp_path, scheme, sections):
+    # WHY: 잘못된 정책 선언을 조용히 무시하면 role별 writer의 해소 결과가 갈린다.
+    import yaml
+    from edge_ontology.constants import RELATION_DIR
+    from edge_ontology.oms.loader import load_yaml_resource
+
+    doc = load_yaml_resource(RELATION_DIR, "role_bindings_v0_1.yaml")
+    doc["identity"]["roles"]["PARTNER"] = {
+        "scheme": scheme, "sections": ["authorities"] if scheme == "REGISTRY" else [],
+        "fallback_sections": [sections],
+    }
+    path = tmp_path / "roles.yaml"
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(ValueError, match="폴백|fallback_sections"):
+        O.load_relations(path)

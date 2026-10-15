@@ -7,6 +7,8 @@
 import hashlib
 import json
 
+import pytest
+
 from data_pipeline.lake import (
     LocalStorage,
     canonical_investor_flow_partition,
@@ -183,9 +185,9 @@ def test_missing_ticker_fails_row(tmp_path):
     assert log["records_passed"] == 0 and "missing_field" in log["failures"][0]["reasons"]
 
 
-def test_canonical_idempotent_and_latest_fetched_at_wins(tmp_path):
-    # WHY: canonical 은 run_id 없이 멱등이라 같은 raw 를 몇 번 정제해도 결과가 같고, 같은
-    #      (market,ticker,trade_date)를 재적재하면 최신 fetched_at 이 이겨야 한다(정정 반영).
+def test_canonical_idempotent_and_intraday_partial_loses(tmp_path):
+    # WHY: canonical 은 run_id 없이 멱등이라 같은 raw 를 몇 번 정제해도 결과가 같다. 그리고
+    #      장중(09:00 KST)에 받은 값은 그날 정규장이 덜 찬 부분값이라 마감 뒤 값에 져야 한다.
     storage = LocalStorage(tmp_path / "lake")
     old = _kis_row(frgn_ntby_qty="000000000000039367", fetched_at="2026-07-01T00:00:00+00:00")
     new = _kis_row(frgn_ntby_qty="000000000000050000", fetched_at="2026-07-02T00:00:00+00:00")
@@ -194,11 +196,61 @@ def test_canonical_idempotent_and_latest_fetched_at_wins(tmp_path):
 
     assert normalize_investor.run(storage, "N1") == 0
     [row] = _canonical_rows(storage, "KR", "2026-07-01")
-    assert row["net_qty_foreign"] == 50000  # 최신 fetched_at 승리
+    assert row["net_qty_foreign"] == 50000  # 장중 부분값은 마감 뒤 값에 진다
     # 재실행해도 part 누적 없이 되쓰기(멱등)
     assert normalize_investor.run(storage, "N2") == 0
     parts = [k for k in storage.list_keys("canonical/") if k.endswith(".parquet")]
     assert len(parts) == 1
+
+
+# ALPHA-1107 픽스처: trade_date 2026-07-01 의 수집 시각들(UTC 저장, 주석은 KST).
+_D_EOD = "2026-07-01T06:41:00+00:00"       # D 15:41 — 정규장 마감 뒤 첫 EOD 수집
+_D1_EOD = "2026-07-02T06:41:00+00:00"      # D+1 15:41 — 시간외 체결이 더해진 재수집
+_D1_MORNING = "2026-07-01T23:00:00+00:00"  # D+1 08:00 — UTC 날짜로는 아직 D 다
+_D_INTRADAY = "2026-07-01T05:00:00+00:00"  # D 14:00 — 장중 부분값
+
+
+def _winner_after(tmp_path, fetches: list[tuple[str, str]]) -> int:
+    """(fetched_at, 외국인 순매수) 를 **런 하나씩 순서대로** 정제한 뒤 canonical 승자 값을 준다.
+    런마다 따로 돌려 '기존 canonical 행 vs 새 행' 병합 경로를 탄다(매일 EOD 가 도는 모양)."""
+    storage = LocalStorage(tmp_path / "lake")
+    for i, (fetched_at, qty) in enumerate(fetches):
+        _write_raw(storage, _raw_key(run_id=f"R{i}"),
+                   [_kis_row(frgn_ntby_qty=qty, fetched_at=fetched_at)])
+        assert normalize_investor.run(storage, f"N{i}", f"R{i}") == 0
+    [row] = _canonical_rows(storage, "KR", "2026-07-01")
+    return row["net_qty_foreign"]
+
+
+@pytest.mark.parametrize("order", ["eod_first", "reprocess_old_raw"])
+def test_정규장_마감_뒤_첫_수집분이_다음날_재수집에_덮이지_않는다(tmp_path, order):
+    # WHY(ALPHA-1107): EOD 는 매일 5일 창을 다시 받고, 다음 날 값은 시간외 체결이 더해진 값이다
+    #      (09-22 실측 408종목 중 346 변경). 최신 승이면 D일 정규장 값이 매일 덮이고 마트
+    #      available_at 이 밀려 과거 시점 조회에서 행이 사라진다. 순서를 뒤집은 경우는 이미
+    #      덮인 파티션에 옛 raw 를 다시 정제하는 복구 경로다 — 거기서도 D일 값이 돌아와야 한다.
+    fetches = [(_D_EOD, "100"), (_D1_EOD, "200")]
+    if order == "reprocess_old_raw":
+        fetches.reverse()
+    assert _winner_after(tmp_path, fetches) == 100
+
+
+def test_당일_수집이_없으면_마감_뒤_가장_이른_수집분이_이긴다(tmp_path):
+    # WHY(ALPHA-1107): D일 수집이 실패하거나 휴장 창으로 D+1 이후 값만 있을 때도 승자가 하나로
+    #      고정돼야 한다 — 그래야 D+2·D+3 재수집이 또 값을 바꾸지 않는다.
+    assert _winner_after(tmp_path, [("2026-07-03T06:41:00+00:00", "300"), (_D1_EOD, "200")]) == 200
+
+
+def test_장중_부분값은_마감_뒤_값보다_이르더라도_진다(tmp_path):
+    # WHY(ALPHA-1107): '가장 이른 수집분' 만으로 고르면 장중에 수동으로 받은 부분값이 이긴다.
+    #      장중 값은 그날 정규장이 덜 찬 값이라 마감 뒤 값이 하나라도 있으면 져야 한다.
+    assert _winner_after(tmp_path, [(_D_INTRADAY, "50"), (_D_EOD, "100")]) == 100
+    assert _winner_after(tmp_path / "rev", [(_D_EOD, "100"), (_D_INTRADAY, "50")]) == 100
+
+
+def test_마감_시각은_KST_로_비교한다(tmp_path):
+    # WHY(ALPHA-1107): fetched_at 은 UTC 로 저장된다. 마감을 UTC 15:30 으로 만들면 D 15:41 KST
+    #      (06:41Z)가 '장중' 으로 밀려 D+1 08:00 KST(UTC 날짜는 아직 D)에 진다.
+    assert _winner_after(tmp_path, [(_D_EOD, "100"), (_D1_MORNING, "200")]) == 100
 
 
 def test_non_object_row_isolated(tmp_path):

@@ -76,86 +76,31 @@ variable "deepseek_secret_arn" {
   type        = string
 }
 
-# ── analyze 페이즈 (구 analysis-engine 모듈 흡수, ALPHA-408) ───────
-# 로직·정확도는 alphamale 레포 소관이고 이 모듈은 실행만 담당한다 — 경계는 이미지다.
-variable "analysis_image" {
-  description = "analysis-engine 컨테이너 이미지 URI(:태그 포함). data-pipeline 과 다른 코드베이스(alphamale)라 이미지가 따로다."
-  type        = string
-}
-
-variable "analysis_release_bundle_version" {
-  description = "ALPHAMALE_RELEASE_BUNDLE_VERSION — explanation_run 번들 고정. RDS 의 release_bundle(PUBLISHED) 행과 일치해야 한다. 기본값도 null 도 없는 이유: 미주입이면 영속 전제 결손으로 런이 실패한다(ALPHA-797 이 S3 폴백을 폐기) — 런타임 exit 1 보다 plan 단계에서 막는 게 싸다."
-  type        = string
-  nullable    = false
-
-  # nullable=false 는 누락·명시적 null 만 막는다 — 빈 문자열은 통과해 런타임 exit 1 이
-  # 되므로(코드가 `if bundle:` 로 거른다) description 이 내건 "plan 에서 막는다"가
-  # 그 한 갈래에서만 깨진다. 둘은 서로 대신하지 못한다.
-  validation {
-    condition     = var.analysis_release_bundle_version != ""
-    error_message = "release_bundle(PUBLISHED) 행과 일치하는 번들 버전이 필요하다 — 빈 값은 런타임 exit 1 이다(ALPHA-797)."
-  }
-}
-
-# 시각창 집계 Athena 오프로드(ALPHA-780). 둘 다 채워야 자격이 붙는다 — 하나만 주면
-# 정책이 반쪽이라 조용히 폴백하므로 함께 비우거나 함께 채운다.
-#
-# 이 버킷은 **이 모듈이 만들지 않는다**(terraform 관리 밖). ARN 을 받기만 하고 소유권을
-# 주장하지 않는다 — `aws_s3_bucket` 리소스를 여기 두면 다음 apply 가 남의 버킷을 집는다.
-variable "analysis_market_data_bucket_arn" {
-  description = "5분봉 Iceberg 표 데이터와 Athena 결과 CSV 가 사는 버킷 ARN. 비우면 Athena 자격을 부여하지 않는다(엔진은 canonical 합집합으로 폴백 — 질의당 376MB 를 컨테이너로 받는다)."
-  type        = string
-  default     = ""
-}
-
-variable "analysis_athena_workgroup" {
-  description = "EDGE_ATHENA_WORKGROUP — 시각창 집계를 보낼 Athena 워크그룹. 결과 위치는 워크그룹이 강제하므로 EDGE_ATHENA_OUTPUT 은 주입하지 않는다(같이 보내면 질의가 시작도 못 한다)."
-  type        = string
-  default     = ""
-}
-
-# ── 설명 소비자의 DuckDB 조인층 (Fargate 실행 조건) ────────────────
-# 이 셋이 비면 컨테이너에서 S3 뷰가 통째로 안 붙거나 OOM 으로 죽는데, 둘 다 **사유 없는
-# 침묵**으로 나타난다(빈 조인 = 0행 = 판정불가). 그래서 코드 기본값에 맡기지 않고 주입한다.
-variable "analysis_duckdb_s3_chain" {
-  description = "DUCKDB_S3_CHAIN — DuckDB CREDENTIAL_CHAIN 순서. Fargate 는 컨테이너 자격증명 엔드포인트(instance)로만 붙으므로 그 항목이 반드시 있어야 한다(sso;config;env 만으로는 S3 뷰 전량 실패)."
-  type        = string
-  default     = "env;instance;config;sso"
-}
-
-variable "analysis_duckdb_memory_limit" {
-  description = "DUCKDB_MEMORY_LIMIT — task_memory 보다 낮아야 DuckDB 가 DUCKDB_TEMP_DIR 로 spill 하며 버틴다. 같거나 크면 컨테이너 한도를 먼저 쳐서 OOMKilled(사유 없는 exit 137)로 끝난다."
-  type        = string
-  default     = "1.5GB"
-}
-
-variable "analysis_duckdb_temp_dir" {
-  description = "DUCKDB_TEMP_DIR — spill 위치. 컨테이너 파일시스템에서 쓰기 가능한 곳은 /tmp(Fargate 임시 스토리지)뿐이다."
-  type        = string
-  default     = "/tmp"
-}
-
 variable "task_cpu" {
   type    = number
   default = 1024
 }
 
 variable "task_memory" {
-  description = "수집·정제·ops·1분 상주 task-def 의 Fargate 메모리(MiB)."
+  description = "수집·정제·ops·1분 세션 task-def 와 배치 사양에 남긴 1분 상주 서비스(minute_batch_sized_services)의 Fargate 메모리(MiB)."
   type        = number
   default     = 2048
 }
 
-# analyze 만 4096 (ALPHA-671). DuckDB 조인층이 `pit_daily`(101MB) 위에 윈도우 함수와 CTE
-# 전개를 얹는데 피크가 실측되지 않았고 OOMKilled 전력이 있다. OOM 은 exit 137 만 남기고 어느
-# 질의였는지 말하지 않아 원인 추적이 런 재현에 달린다 — 그 침묵을 메모리로 산다.
-# **공유 `task_memory` 를 올리지 않은 이유**: 1분 상주 서비스 2개가 24시간 켜져 있어서
-# 전량 인상은 analyze 한 번 실행값이 아니라 상주 요금이 된다(월 $1 이 아니다).
-# 1024 CPU 의 Fargate 유효 조합(2048~8192, 1GB 단위) 안이다.
-variable "analysis_task_memory" {
-  description = "analyze task-def 전용 Fargate 메모리(MiB). DuckDB 피크가 상한을 정한다."
+# 1분 상주 서비스 전용 사양(ALPHA-1235) — 배치 태스크(task_cpu·task_memory)와 따로 둔다.
+# 이 사양을 받는 7개의 14일 실측(2026-09-22~10-05, 1 vCPU·2 GB 기준): 메모리 최대 117 MB,
+# CPU 최대(1분 평균) 0.29 vCPU. 배치 사양에 남는 서비스는 minute_services.tf 의
+# `minute_batch_sized_services` 다.
+variable "minute_service_cpu" {
+  description = "1분 상주 서비스 task-def 의 Fargate CPU 단위."
   type        = number
-  default     = 4096
+  default     = 512
+}
+
+variable "minute_service_memory" {
+  description = "1분 상주 서비스 task-def 의 Fargate 메모리(MiB)."
+  type        = number
+  default     = 1024
 }
 
 variable "cpu_architecture" {
@@ -410,6 +355,19 @@ variable "investor_intraday_schedule_state" {
   default     = "ENABLED"
 }
 
+variable "investor_intraday_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1088). AIRFLOW 로 바꾸면 이 레인의 EventBridge 스케줄이 꺼지고
+  # (SFN 미시작) Reconciler 슬롯 대조는 유지된다. 바꾸기 전에 README 의 종료 확인 절차를 따른다 —
+  # 이 값은 새 실행 생성만 바꾸고 이미 뜬 ECS 태스크를 멈추지 않는다.
+  description = "장중 수급 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.investor_intraday_orchestrator)
+    error_message = "investor_intraday_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 variable "investor_intraday_state_machine_timeout_seconds" {
   # **최소 슬롯 간격(09:35→10:05 = 1800s)보다 짧아야** 한 실행이 다음 실행과 겹치지 않는다.
   # 겹치면 두 실행이 같은 canonical 파티션을 동시에 병합한다.
@@ -450,6 +408,17 @@ variable "premarket_state_machine_timeout_seconds" {
   # 그 엔드포인트의 성질이다, ALPHA-368), 정제·유니버스 재빌드는 각각 canonical 한 벌
   # 읽기라 분 단위다. ECS 3연속 기동(최대 122초/회, ALPHA-688)이 오히려 큰 몫이다.
   # 1500s = 마감까지 300s 를 남긴다 — 타임아웃이 마감보다 **먼저** 울려야 사유가 하나다.
+  # 수집 시한(`krx_etf_deadline_sec`) 660초(ALPHA-1250)에서의 산술 — 나쁜 경우가 겹쳤을 때의 **추정**이다(보장된
+  # 상한이 아니다):
+  #   ECS 기동 3회 × 122초 + 수집 시한 660초 + 마지막 한 건 187초 + 정제 a + 재빌드 b
+  # - "마지막 한 건 187초": 시한은 ETF 요청 **사이**에서만 본다. 시한 직전에 시작한 마지막 ETF 가 재시도 끝에
+  #   성공하면(요청 타임아웃 45초 × 4회 + 백오프 7초) 전량 성공이라 체인이 계속 간다. 45초는 소켓 동작 하나의
+  #   제한이라, 본문이 조금씩 오면 한 건이 이보다 길어질 수 있다 — 그 경우는 아래 여유에서 나간다.
+  # - a·b: 39종 실측(2026-10-01~10-08, 기동 포함)은 정제 71~77초·재빌드 51~70초다. 기동을 약 50초로 보면 실행분은
+  #   각각 25초·20초 안쪽이고, 148종에서는 대상 수만큼(약 3.8배) 는다고 보아 95초·76초로 잡는다(추정).
+  # 39종: 366+660+187+45 = 1,258초(07:21). 148종: 366+660+187+171 = 1,384초(07:23) — 이 타임아웃까지 약 116초,
+  # 교체 마감(07:30)까지 약 7분이다. 로그인과 raw 저장(수 초)은 이 여유에서 나간다.
+  # 같은 식에 900초를 넣으면 148종이 1,624초라 이 타임아웃을 넘긴다 — 그래서 660초다.
   description = "장전 유니버스 SFN 실행 타임아웃. 07:30 교체 마감보다 먼저 울리도록 마감 앞에 둔다."
   type        = number
   default     = 1500
@@ -531,9 +500,17 @@ variable "assemble_window_days" {
 }
 
 variable "krx_etf_deadline_sec" {
+  # 660초(ALPHA-1250, 이전 300초). **대상 ETF 수에 맞춘 값이다** — 요청 간격이 1초라 ETF 수만큼은 무조건 든다.
+  # - 39종: 수집 단계(ECS 기동 포함)가 장전 93~106초·장 마감 86~96초다(2026-10-01~10-08 실행 기록).
+  # - 148종(ALPHA-1249): 최소 148초, 평소 약 190초로 추정한다. 300초면 ETF 당 2초만 넘어도 걸린다.
+  # 걸리면 부분 수집이고, 정제는 전량 성공 런만 반영하므로 **그날 구성 목록 전체가 갱신되지 않는다**(장전에는
+  # 대상 목록 재생성도 건너뛴다). 660초는 148종에서 ETF 당 약 4.5초까지 견딘다.
+  # ⚠️ **위쪽 한계는 장전 레인이다** — 이 값은 15:40 시장 SFN 과 07:00 장전 SFN 이 같이 쓴다. 장전 체인은 SFN
+  # 타임아웃(1500초) 안에 끝나야 하고, 그 산술이 위 `premarket_state_machine_timeout_seconds` 주석에 있다.
+  # 900초면 148종 최악에서 그 타임아웃을 넘긴다. 더 올리려면 그 산술을 다시 하거나 두 레인의 시한을 나눠라.
   description = "KRX ETF 구성종목 수집의 벽시계 상한(초). 닿으면 남은 ETF 를 미시도로 기록하고 받은 것은 저장한 뒤 조기 마감한다(ALPHA-581)."
   type        = number
-  default     = 300
+  default     = 660
   validation {
     # 0·음수는 **첫 대상도 시도하기 전에** 상한에 걸려 매 런이 0건 수집으로 끝난다(상한이
     # 수집을 통째로 막는다). 소수는 command 로 실려도 run.py 의 argparse type=float 가 받으므로
@@ -686,11 +663,6 @@ variable "minute_session_source_group" {
   default = "kis"
 }
 
-variable "super_admin_api_url" {
-  description = "ExposureReverted 회수 집행 대상(ALPHA-746) — analysis-consumer 가 부르는 super-admin-api base URL. 무효화(WITHDRAWN 전이·INVALIDATION 발번·감사)의 발화자를 super-admin 하나로 유지한다"
-  type        = string
-}
-
 variable "analysis_consumer_max_capacity" {
   description = "설명 소비자(analysis-consumer) 오토스케일링 상한(ALPHA-912). ⚠️ 성능이 원하는 수가 아니라 **공유 RDS 가 견디는 수**다 — 2026-08-10 에 수동 12대가 db.t4g.micro 를 메모리로 죽였다(당일 2회). ALPHA-924 로 db.t4g.small(2GB) 상향 뒤의 잠정치이고, 정상 거래일 실측으로 올린다. ⚠️ 그 실측은 코드를 세서 하지 마라 — 태스크당 커넥션은 1개가 아니다(`EventStore` 외에 DuckDB 의 `ATTACH postgres` 가 더 연다). `DatabaseConnections` 를 그때의 대수로 나눠 재고, `FreeableMemory` 를 함께 본다(끊는 것은 커넥션 수가 아니라 메모리다). 계단 상단도 이 값에 맞춰야 한다"
   type        = number
@@ -705,4 +677,20 @@ variable "minute_artifact_format" {
     condition     = contains(["legacy", "content_v2"], var.minute_artifact_format)
     error_message = "minute_artifact_format must be legacy or content_v2."
   }
+}
+
+variable "call_budget_enabled" {
+  description = "KIS 앱키 공유 호출 허용(call_budget) 사용 여부. 켜기·끄기는 모든 KIS 호출자가 멈춘 시간대에 한 번에 한다 — 부분 전환은 합산 한도를 깬다(ALPHA-1087)."
+  type        = bool
+  default     = false
+}
+variable "minute_price_dedicated_kis_enabled" {
+  description = "분 가격 워커(price-worker)를 그 워커만 쓰는 2번 KIS 키(`<name>/kis/oauth-2`)로 돌린다(ALPHA-1248). 켜면 워커의 키·토큰 캐시가 2번으로 바뀌고 전용 키 설정·동시 호출 4·호출 간격 0.0625초가 실린다. ⚠️ `dedicated_app_key` 를 아는 이미지(ALPHA-1247)가 배포된 뒤에만 켠다 — 모르는 이미지는 기동을 거부한다. ⚠️ 2번 시크릿은 Terraform 밖에서 등록한다 — 없는 환경에서 켜면 plan 이 실패한다. `call_budget_enabled` 와 같이 켤 수 없다. source 가 toss 면 KIS 를 쓰지 않으므로 이 값은 아무것도 바꾸지 않는다."
+  type        = bool
+  default     = false
+}
+variable "analysis_consumer_task_definition_arn" {
+  type        = string
+  nullable    = false
+  description = "분석 모듈이 제공하는 v2 소비자 task definition ARN. v1 폴백은 제공하지 않는다."
 }

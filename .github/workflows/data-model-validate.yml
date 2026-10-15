@@ -25,3 +25,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate domain ERD coverage and FK edges
         run: python3 src/libs/schema/scripts/validate-doc-erd.py
+      - name: Validate native analysis ERD columns, defaults and keys
+        run: python3 docs/data-model/domains/analysis-v2/validate.py

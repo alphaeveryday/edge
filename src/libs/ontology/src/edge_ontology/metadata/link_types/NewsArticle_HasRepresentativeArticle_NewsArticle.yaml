@@ -1,0 +1,29 @@
+id: NewsArticle_HasRepresentativeArticle_NewsArticle
+source: NewsArticle
+definition:
+  name: HasRepresentativeArticle
+  label: HasRepresentativeArticle
+  description: The article selected to represent this article's duplicate group. Follow
+    it to find the representative document without merging the article identities.
+  target: NewsArticle
+  sourceProperty: representativeDocumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: mappingReview
+  apiName: hasRepresentativeArticle
+  displayName: HasRepresentativeArticle
+  pluralDisplayName: null
+  inverse:
+    apiName: representedArticles
+    displayName: Represented articles
+    description: Articles represented by this article in the stored duplicate group.
+    pluralDisplayName: Represented articles
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: NewsArticle
+    foreignKeyProperty: representativeDocumentId
+    referencedObjectType: NewsArticle

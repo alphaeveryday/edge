@@ -1,0 +1,29 @@
+id: Concept_HasParentConcept_Concept
+source: Concept
+definition:
+  name: HasParentConcept
+  label: HasParentConcept
+  description: The explicitly recorded broader concept in the concept hierarchy. This
+    link does not represent a supply-chain or ownership relationship.
+  target: Concept
+  sourceProperty: parentConceptId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: hasParentConcept
+  displayName: HasParentConcept
+  pluralDisplayName: null
+  inverse:
+    apiName: childConcepts
+    displayName: Child concepts
+    description: Concepts recorded directly below this broader concept.
+    pluralDisplayName: Child concepts
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: Concept
+    foreignKeyProperty: parentConceptId
+    referencedObjectType: Concept

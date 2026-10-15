@@ -9,6 +9,7 @@ import com.edge.superadmin.dto.SourceOverviewResponse.LaneResponse;
 import com.edge.superadmin.dto.HoldingsImpactResponse;
 import com.edge.superadmin.dto.MinuteStatusResponse;
 import com.edge.superadmin.dto.MinuteDailyStatusResponse;
+import com.edge.superadmin.dto.MinuteJudgmentResponse;
 import com.edge.superadmin.dto.NewsLineageResponse;
 import com.edge.superadmin.dto.SourceReportResponse;
 import com.edge.superadmin.error.AdminErrorStatus;
@@ -173,6 +174,15 @@ public class SourceService {
 		LocalDate sessionDate = date == null ? LocalDate.now(KST) : parseDateParam(date);
 		return MinuteStatusResponse.from(sessionDate.toString(),
 				minuteStatus.status(sessionDate));
+	}
+
+	/** 가격 세션의 판정 근거(§33.12 로컬). 세션 ID 는 필수다 — 비우면 전체 조회로 새지 않게 막는다. */
+	public MinuteJudgmentResponse minuteJudgments(String sessionId) {
+		if (sessionId == null || sessionId.isBlank()) {
+			throw new GeneralException(AdminErrorStatus.INVALID_REQUEST);
+		}
+		return MinuteJudgmentResponse.from(sessionId, minuteStatus.priceJudgments(sessionId),
+				minuteStatus.priceBaselineSets(sessionId));
 	}
 
 	/** 최근 {@code days}일의 minute 일별 판정. 상한은 격자 한 화면 용도에 맞춰 31일이다. */

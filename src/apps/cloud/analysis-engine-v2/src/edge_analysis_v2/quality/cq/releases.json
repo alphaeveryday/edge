@@ -1,0 +1,582 @@
+{
+  "version": 116,
+  "summary": "가격변동 제목·요약에서 잘 알려지지 않은 회사 이름을 하는 일로 바꿈 (CXMT → 중국 메모리 회사)",
+  "source_digest": "47e340e103ee105c439d9fc3caf80c1879675a9f3524d309076655830c249ea9",
+  "history": [
+    {
+      "version": 1,
+      "summary": "전체 CQ 평가표와 에이전트 버전별 실행·평가 계약 기록",
+      "source_digest": "17ee586341ddd65edb63a1aaa7b2538a4303420699cdbc9fc757e809a2a0fe2b"
+    },
+    {
+      "version": 2,
+      "summary": "버전별 전체 CQ 표, 실행 구성·평가 계약 고정, 버전 갱신 강제 검사",
+      "source_digest": "136f1a6951585ad62a90eb61293c2703079ab592a7601b24ea5d85fb63c3d6db"
+    },
+    {
+      "version": 3,
+      "summary": "버전 순서에 따른 공통·CQ별·전체 통과 개수 그래프",
+      "source_digest": "b9323af903dacdd043cf04b7df7de90942f4e8d9727800d45d66cff31d1b4a71"
+    },
+    {
+      "version": 4,
+      "summary": "평가 계약 v4: 판단형 CQ(02·03·05·06·13)에 경쟁 설명 비교 기준 추가. 실행기는 엔진 하네스에 그 요구를 CQ별로 전달",
+      "source_digest": "237d5f9087fe0aff413a08f4aa2af81371f3c308fc253c6a84747db85c67b1f4"
+    },
+    {
+      "version": 5,
+      "summary": "실행기: 최종 답의 근거 ID가 실제 호출과 맞지 않으면 같은 대화에서 고치게 함(엔진 f32b5b51의 final_check). 릴리스 4의 CQ03·05·06은 오타 ID 한 건씩으로 실행이 무효 처리됐다",
+      "source_digest": "6022f7773a511a3ddf824193dc1a4af24e11a7b400f4eef6f366f69d1cfe5558"
+    },
+    {
+      "version": 6,
+      "summary": "도구: 한 페이지를 넘는 결과는 맨 앞에 보이지 않은 건수를 알리고 전체 집합의 분포(사건 유형·단계·참여 기업·월별 건수)를 함께 돌려줌. 릴리스 5에서 조사 완결성 실패 9건 모두가 첫 페이지만 읽고 결론을 낸 것이었다",
+      "source_digest": "afd72a62a31befaeefea2bdf3822afd095129e53588bbda2eaa108a09b1ffb16"
+    },
+    {
+      "version": 7,
+      "summary": "도구: 저장된 값과 맞지 않는 재무 조회 조건(지표·연도·회계 기준)은 빈 결과 대신 저장된 값 목록과 함께 오류로 돌려줌. 큰 결과의 분포를 재무·가격·수급·매크로 관측에도 적용. 릴리스 6의 CQ13이 operatingIncome으로 0건을 받고 재무 미적재라고 답했다",
+      "source_digest": "1edcccf0fc9684cc21bb7743871e8cdf868bcedc9cf8fbff253483e2248c1c82"
+    },
+    {
+      "version": 8,
+      "summary": "도구: 사건·문서·객체 검색이 100건 넘게 맞으면 행 대신 분포만 돌려줘 좁히게 함(릴리스 6·7의 알림·분포 추가는 실행 기록상 행동을 바꾸지 못했다). 판정 없이 후속 행동을 세는 measure_followups와 두 평가자 합산 merge_cq_reviews 추가",
+      "source_digest": "d4fd2661d8e6701fe19441f3a32945123638dbae710510e2f1841d6f31e59bbb"
+    },
+    {
+      "version": 9,
+      "summary": "Won amounts are returned written out (money_text, value_text, difference_text) ahead of the raw value; the trailing decimal-eok flow field is removed",
+      "source_digest": "bd08f1c748ffb7cf93fd83b4dadac29e573dd5df9ba652eee1659efe45209b1d"
+    },
+    {
+      "version": 10,
+      "summary": "벤치마크와 그래프 도구 29개를 엔진(analysis-engine-v2)으로 이전. 도구는 tools/graph, 벤치마크는 quality/cq. 노출 도구 목록을 실행마다 지정하고 기록한다. 릴리스 9까지는 워크벤치 도구로 실행한 기록이다",
+      "source_digest": "1501b0b58c17a1ca68a140a2c9b3dbdf25b4ca6d3569d5d9d76cdbaf4011dd6d"
+    },
+    {
+      "version": 11,
+      "summary": "릴리스 범위를 벤치마크 실행이 실제로 읽는 소스(하네스·도구·프롬프트·스킬·실행기)로 좁힘. 관측 대시보드에 벤치마크 화면 추가. 에이전트 동작은 릴리스 10과 같다",
+      "source_digest": "0b09b285ae9a30101572c099b76f421dc8df0788132813ffa99427b6c4010baf"
+    },
+    {
+      "version": 12,
+      "summary": "의도 검증 실행에 릴리스를 기록하고 도구를 검증 단위로 묶음. 도구 동작은 릴리스 10과 같다",
+      "source_digest": "78a2990e79264643fed7281a76b91b6c338cf50804348cf93ce76172f8f5527c"
+    },
+    {
+      "version": 13,
+      "summary": "하네스에 조회 작업 종류(lookup) 추가: 전망용 조사·작성 원칙과 질문 등록을 싣지 않는다. 의도 검증 질문과 판단형이 아닌 CQ 8개를 조회 종류로 실행",
+      "source_digest": "105efc538eec25c4c30ba844e469f5eb173921bf58cfb2358b23c3aa6bc5316a"
+    },
+    {
+      "version": 14,
+      "summary": "조회 종류는 질문을 입력으로 바로 받음. 구조 읽기 도구 설명에 예비 호출 금지. 조회 지침에 마무리 문장 금지",
+      "source_digest": "a3e0426e633610c55e99018ce06dbdc988bbbbf488e508a33b60710e84290fd1"
+    },
+    {
+      "version": 15,
+      "summary": "지시 구조를 기본 지침 하나와 스킬로 재편: 조사·작성 원칙을 스킬로 옮기고 작업이 스킬을 선언. 질문 등록·경쟁 설명 강제는 조사 스킬이 쓰일 때만 작동. 작업 종류 분기 제거",
+      "source_digest": "8450854f54f3245c603f3a6a1108c41dec1559243a08769332fa404e43168fb4"
+    },
+    {
+      "version": 16,
+      "summary": "스킬은 작업이 내놓은 것만 보인다: 선언(전문)·선택(이름과 설명)을 호출자가 정하고, 스킬이 없는 실행은 스킬 단락도 받지 않는다",
+      "source_digest": "bfadfc7b49f3154e3c980a4c075f30d33fd516dad02d88cdad5961e26fde95fa"
+    },
+    {
+      "version": 17,
+      "summary": "짧게·물은 것에만 답하는 규칙을 기본 지침에서 빼고 질문 작업의 지시(question.md)로 옮김. 기본 지침은 어떤 작업에나 맞는 규칙만 남김",
+      "source_digest": "550683eb674c3e5e29370059b2197cb885d38e54dd1bd5ea6d90cdd55cc181e2"
+    },
+    {
+      "version": 18,
+      "summary": "사건 검색: 저장되지 않은 유형은 오류로, 제목의 발주처·계약 대상·발효일을 arguments로, event_date를 reported_date로, 원화 수치에 value_text. 검증 단위 '사건'의 의도와 가설 추가",
+      "source_digest": "075c58a07b36c3d0308128e6f3d42f40f2aa8e64409b27aeb7519944c3f1f085"
+    },
+    {
+      "version": 19,
+      "summary": "사건 검색이 찾아본 범위(coverage)를 돌려줌: 이 회사·기간에 없는 저장 유형 목록, 유형 지정 0건일 때 전체 건수",
+      "source_digest": "7fa65517ca8c788610b9fb31437167c8896f1ad1e41e9ed93db776f26aa58d56"
+    },
+    {
+      "version": 20,
+      "summary": "가격·수급: 등락률 기본값을 기록된 종가 변화로, 휴장일에는 가격 있는 날짜 목록을, 조회 범위에 공개된 최근 날짜를 돌려줌. 사건 부재는 '이 자료에서 확인되지 않음'으로 안내. 검증 단위 '가격·수급'의 의도와 가설 30개",
+      "source_digest": "d3a5f34c8ddd9c07a8e3c5c90535d5090d602ecdbf2e9b2a992f71e99e03774a"
+    },
+    {
+      "version": 21,
+      "summary": "등락 분포 도구가 가격 조회 결과와 두 날짜를 받아 등락률 계산까지 한 번에 함",
+      "source_digest": "deb5e408d149445d2bafe27aec729f13ae644ca53edb780f41c2b252e7f71eba"
+    },
+    {
+      "version": 22,
+      "summary": "재무·매크로: 같은 값으로 여러 번 저장된 수치를 한 행으로, 맞는 거시 지표가 없으면 목록과 함께 오류로, 비교 거절 이유에 고를 행을 안내, 설명에 지표 이름과 기간·기준의 뜻. 검증 단위 '재무·매크로'의 의도와 가설 22개",
+      "source_digest": "3da1a0b296b680e65ae0c08dddcb1e9483a766a1d0c943fc808ae6341d91e16e"
+    },
+    {
+      "version": 23,
+      "summary": "문서·분류: 문서 검색이 낱말을 모두 포함하면 붙어 있지 않아도 찾음, ETF 노출 비교가 겹치는 종목을 앞에 이름과 함께 돌려줌. 검증 단위 '문서·분류'의 의도와 가설 23개",
+      "source_digest": "6fc9be03328e2ec56bf179b98de576b1ccd09b4d14a0210f6357c8354a980416"
+    },
+    {
+      "version": 24,
+      "summary": "질문 작업 지시에 '못 찾았을 때 멈추는 규칙' 추가: 같은 자료를 검색어만 바꿔 다시 찾지 않는다",
+      "source_digest": "26574036ae72ea027cb319d18b571bd3f68b4884f2f780851fa927be9327ea81"
+    },
+    {
+      "version": 25,
+      "summary": "문서 검색이 찾아본 범위(훑어본 문서 수, 낱말별 문서 수)를 돌려줌. 릴리스 24의 멈춤 지시는 효과가 없어 뺌",
+      "source_digest": "e7d931984bd192aece7e71d5a3d22d62492f14fa4e2a4a0d5580a3811be0b9f9"
+    },
+    {
+      "version": 26,
+      "summary": "선언한 조사 스킬을 작업 지시 앞에, 작성 스킬을 뒤에 둠(재편 전 순서). 전망 3건 중 2건이 사업→이익 연결을 빠뜨렸다",
+      "source_digest": "a5ed2f7356fd18c1ac0f9ded8214f4502d27cf4de128f698174d1ebd2fa822d2"
+    },
+    {
+      "version": 27,
+      "summary": "보고서 작업이 받는 문장을 재편 전과 같게: 빠진 여섯 문장 복원, 스킬 본문의 '쓰지 않을 때' 절 제거, 스킬 안내 단락 축소",
+      "source_digest": "2488f95cbb3d38a07bc5e7a7ee13d18367e4ce344c370be8405dc70106813734"
+    },
+    {
+      "version": 28,
+      "summary": "사건 도구가 요청한 limit을 그대로 따름(20건으로 말없이 줄이던 것 제거)",
+      "source_digest": "50cf36e397d55916639edb095b275af195d49b455b733c055f1ace4deb54c3a3"
+    },
+    {
+      "version": 29,
+      "summary": "사건 검색의 한 행을 기사 하나에서 같은 유형·회사·보도일의 보도 전부로 묶음",
+      "source_digest": "dc6bd8b4b28012f4c1fd8e799d9c07f0a20a353dd4e15af3eeb476e0e99a9e7a"
+    },
+    {
+      "version": 30,
+      "summary": "참조 경로·관계 방향·기준시각 초과를 도구가 처리하고, 여러 단어 이름 검색이 0건이면 단어별로 걸리는 이름을 돌려줌",
+      "source_digest": "14dccb93b2e992667bef236b46defc6302c179a991791d37e11951d8e71fe807"
+    },
+    {
+      "version": 31,
+      "summary": "100건 이하 검색 결과는 전부 표시, 관계 방향은 출발 객체로 결정, 접속 실패가 있던 실행은 실패로 기록",
+      "source_digest": "521fabf282cce638c48fdf6f0c79da6daf5f058fab8eb5dc95d984b68c4554a3"
+    },
+    {
+      "version": 32,
+      "summary": "작업 규칙에 제출 전 점검 절차(값·범위·강도·원인) 추가",
+      "source_digest": "a4085ee6d0c48630d6c62dde5af57acf7d0b886e2ca50584b1264499e22fc768"
+    },
+    {
+      "version": 33,
+      "summary": "관측 결과를 columns/rows 표로, 모든 응답을 크기 예산 안으로, 사건 행 축소, 참조는 실행 ID만",
+      "source_digest": "71a5286a36f359e853687dc17e8e890c8194663d13f539ed1c145752a39fe9ad"
+    },
+    {
+      "version": 34,
+      "summary": "관측 결과를 columns/rows 표로, 모든 응답을 크기 예산 안으로, 사건 행 축소, 참조는 실행 ID만",
+      "source_digest": "3f311f1bafec0272a81331a459be9d12627199fb9564fdb082017b0be725b2a7"
+    },
+    {
+      "version": 35,
+      "summary": "표 형식을 객체 검색·관계 조회·이전 분석에도 적용하고, 표는 크기로만 쪽을 나눔",
+      "source_digest": "d8697eb2c88763084e402d05467899e23983a8814b498db3f48a58a1df01cd32"
+    },
+    {
+      "version": 36,
+      "summary": "표 형식을 객체 검색·관계 조회·이전 분석에도 적용하고, 표는 크기로만 쪽을 나눔",
+      "source_digest": "74692cd82ef891ab262402d857ed49722f22e4f18a8ded857162358bea4fa955"
+    },
+    {
+      "version": 37,
+      "summary": "벤치마크 계약 v5: CQ01 대상을 KODEX 200으로, CQ08 기준일 10-02, CQ04 부재 범위 명시, CQ12 보류, CQ06 경쟁 설명 제외",
+      "source_digest": "28e37bb50214ba9e721265099d9af71f08f1b8563a2bf4f488d50c3a09290b19"
+    },
+    {
+      "version": 38,
+      "summary": "계약 v5에 영향 추정 요구: 전망·영향 질문은 확인된 수치와 가정으로 크기·시점을 추정",
+      "source_digest": "8b4da20b91e95726c133196728f4915cd9c0d5a84b9eb2f893b8e9b42b356553"
+    },
+    {
+      "version": 39,
+      "summary": "수주가 연 매출·영업이익에 더하는 크기를 가정과 함께 계산하는 도구 추가",
+      "source_digest": "0df554d241586399779fff5582f68660b747c59e7f8225471be576b072b85a9b"
+    },
+    {
+      "version": 40,
+      "summary": "추정 도구 설명 보완, 크기 예산 4만 2천 자, CQ08 시간대 명시, 치명 오류는 본문과 한계로 판정",
+      "source_digest": "fd6a6d4f98a3a43f567641743cabf580fe68984a04721023abb32fdd7d9c584a"
+    },
+    {
+      "version": 41,
+      "summary": "추정 도구 설명 보완, 크기 예산 4만 2천 자, CQ08 시간대 명시, 치명 오류는 본문과 한계로 판정",
+      "source_digest": "fa06f8ea629798e4450d1b32ede8e6364bbc6a966401237855090b7c9d7ac682"
+    },
+    {
+      "version": 42,
+      "summary": "분류·요인·중복·수급 합계·객체 조회를 표로, 사건 보도 행에서 발췌 제거",
+      "source_digest": "51fe4b056f7143abe36dec142851f4a3105c87d9876bfa003fb17ed45047fe75"
+    },
+    {
+      "version": 43,
+      "summary": "추정 도구 보완(모든 보도에서 금액·기간, 회사 몫, 펀드 비중, 연간 표기, 민감한 가정), 수급 연속 일수, 사건 행 문서 1개, 구성 표",
+      "source_digest": "4031e7f2cf327ad4a878acba2869e29d777d760b63dfcb7a5f6b7db3862c9f14"
+    },
+    {
+      "version": 44,
+      "summary": "추정 도구 보완(모든 보도에서 금액·기간, 회사 몫, 펀드 비중, 연간 표기, 민감한 가정), 수급 연속 일수, 사건 행 문서 1개, 구성 표",
+      "source_digest": "ed5d2f76859909317d9c7b0e53228a4b193dccccb84d6bf1ccc08dffd8f1cd97"
+    },
+    {
+      "version": 45,
+      "summary": "사건 검색에 키워드와 저장된 쓰레드, 문서 검색 삭제, 도구 12개 이름 변경, 설명을 표준 순서로, 도구 결함 수정",
+      "source_digest": "a344ca392110b3e933d3cca6fed772879bb6d75b77654836224d6946e41fc98c"
+    },
+    {
+      "version": 46,
+      "summary": "사건 검색에 키워드와 저장된 쓰레드, 문서 검색 삭제, 도구 12개 이름 변경, 설명을 표준 순서로, 도구 결함 수정",
+      "source_digest": "e54a7b627870899b678cd73470fa34f1289ad9ab28830d169d87ce4a7fec4fe2"
+    },
+    {
+      "version": 47,
+      "summary": "사건 검색에 키워드와 저장된 쓰레드, 문서 검색 삭제, 도구 12개 이름 변경, 설명을 표준 순서로, 도구 결함 수정",
+      "source_digest": "6e979662d22112ed546d29cb39a382308076937dde0bb44112d781d976ca8e06"
+    },
+    {
+      "version": 48,
+      "summary": "쓰레드 연결의 novelty_status 사용, get_event_timeline이 정보가 바뀐 보도만 행으로 싣고 재보도는 수로",
+      "source_digest": "d95f84a9906d9d023f0d1849f4a88f7c4a5fed7b67724b5f816e2d71208f6716"
+    },
+    {
+      "version": 49,
+      "summary": "분류 조회를 증권당 한 행으로, 사건 검색에 전체 행의 최대 금액, 기준이 없는 금액 표시, stored_versions 설명",
+      "source_digest": "fe6d43b4e3c6df25fcb8d9e86de5744738cfb6b76537d45f932997ff29fc2eaf"
+    },
+    {
+      "version": 50,
+      "summary": "분류 조회를 증권당 한 행으로(비중 포함), 사건 검색에 전체 행의 최대 금액, 기준이 없는 금액 표시, stored_versions 설명",
+      "source_digest": "c74b60872c2130726fef82931408b75abd7a036ed37b51ca33ff3521482b6dab"
+    },
+    {
+      "version": 51,
+      "summary": "타임라인은 바뀐 보도만, 분류는 증권당 한 행, 사건 검색에 금액 순 정렬과 최대 금액, 금액 기준 표시, stored_versions 설명",
+      "source_digest": "92525b49aa3e257c5c2f63f37a64a116e30ed03d2bc94aa3d9eed53faab25edd"
+    },
+    {
+      "version": 52,
+      "summary": "사건 검색을 list_events(전부 보여 주는 한 줄 목차)와 find_similar_events(과거 사례)로 나눔",
+      "source_digest": "09b3260b89c4a713aeb83056d485fa338b737abe166383d4d08ec9f68c97ffc4"
+    },
+    {
+      "version": 53,
+      "summary": "사건 검색을 list_events(전부 보여 주는 한 줄 목차)와 find_similar_events(과거 사례)로 나눔",
+      "source_digest": "09b3260b89c4a713aeb83056d485fa338b737abe166383d4d08ec9f68c97ffc4"
+    },
+    {
+      "version": 54,
+      "summary": "사건 검색을 list_events(전부 보여 주는 한 줄 목차)와 find_similar_events(과거 사례)로 나눔",
+      "source_digest": "a29b23daea59343981d7075a65886d9db7f4bec82d9895f9b4dc70b1cabbfdcd"
+    },
+    {
+      "version": 55,
+      "summary": "read_article: 목차나 타임라인에서 기사 전문을 바로 읽음",
+      "source_digest": "501de8158bf63ca9feb674fce50d563e17a66b7ef61d626c3a1e5383b706d6d1"
+    },
+    {
+      "version": 56,
+      "summary": "read_article 추가, 한 응답에 들어가지 않는 목차는 사건을 나열하지 않고 회사와 유형별로 셈",
+      "source_digest": "c67eb70db5997340990e0ef84ac5d5e7e474e49cc3043bf20692df4b3159ab2d"
+    },
+    {
+      "version": 57,
+      "summary": "read_article 추가, 한 응답에 들어가지 않는 목차는 사건을 나열하지 않고 회사와 유형별로 셈",
+      "source_digest": "c67eb70db5997340990e0ef84ac5d5e7e474e49cc3043bf20692df4b3159ab2d"
+    },
+    {
+      "version": 58,
+      "summary": "작업 노트 체계, 재귀로 정의한 조사 절차와 종료 조건, 스킬과 프롬프트를 중요한 순서로 재구성",
+      "source_digest": "93039a3f6c068cbafb50a160feb376ca7c53845ffd48db0a7bc5e85258405a32"
+    },
+    {
+      "version": 59,
+      "summary": "구체성 규칙, 해석 문장의 구분력 시험, 판단을 제목으로 쓰는 보고서 작성 지침",
+      "source_digest": "1c83f24fdfcb184a3d47873006df36e624e7f30049f32a268150de621c394ce3"
+    },
+    {
+      "version": 60,
+      "summary": "가격이 움직인 쪽의 이유를 먼저, 모든 제목에 이름이나 수치, 논점 제목 40자와 본문 제목 50자, 해요체",
+      "source_digest": "f2abb22bb23b7c5e90d0c367ac243e24cc64d245f658188e6840dc1b719e6bb4"
+    },
+    {
+      "version": 61,
+      "summary": "여러 종목의 요인을 한 번에 표로 읽는 get_instrument_factor_table",
+      "source_digest": "f5c106fe60361ad6d7eaf954e0916e5005ed0a008af5522756884525676917e7"
+    },
+    {
+      "version": 62,
+      "summary": "가르는 관측은 지금 얻을 수 있는 것, 묶은 답으로 닫지 않음, 본문 분량은 사건과 사업에, 차트와 밸류 수치는 가를 때만",
+      "source_digest": "73d9100e892879ca1dde10d93ac8d701eb18565f3752d2a6600377de631dfe86"
+    },
+    {
+      "version": 63,
+      "summary": "차트, 밸류, 수급은 각각 논점 하나까지만",
+      "source_digest": "0a3759d6e34b7921875a98bcf81525288c2f8b9f720652af830f0a93d9474616"
+    },
+    {
+      "version": 64,
+      "summary": "편안한 이해: 불릿마다 영향의 크기와 이유까지, 쉬운 말. 차트·밸류·수급 수치는 논점 하나씩만 받음",
+      "source_digest": "fcd0b83e599046bf986605aff30d82ecc40b3ca60e3e9ff019f455206e6d38b0"
+    },
+    {
+      "version": 65,
+      "summary": "조사를 가설과 흔적의 고리 하나로 줄임, 검색에 확인하려는 것을 적음",
+      "source_digest": "0c3dff43952a855964434322bbe092bab20e74cb8edfd1bba53407935bae5d34"
+    },
+    {
+      "version": 66,
+      "summary": "검색에 내 가설과 찾으려는 사실을 필요할 때만 적음, 누가 팔았다로 끝내지 않음, DB에 없으면 웹",
+      "source_digest": "6cd9f6a49a3c101fbe0ba1d19b994dffb6f07303ffad7d742e67eebf3330678c"
+    },
+    {
+      "version": 67,
+      "summary": "원인 조사 스킬을 말하듯 쓴 짧은 지시로, 검색 의도는 훑는 것도 허용",
+      "source_digest": "4eebfff1b24d57600704646b7413482834f7dd5ff80077331dedf5595d7c43ba"
+    },
+    {
+      "version": 68,
+      "summary": "보고서 작성 스킬을 말하듯 쓴 짧은 지시로",
+      "source_digest": "d959e0997b53470eb8a2b37785311d328391bc725c3c1c2dd3e671379ac411f7"
+    },
+    {
+      "version": 69,
+      "summary": "고객 문장은 해요체, 본문 도구가 합니다체를 거절",
+      "source_digest": "b94fc100d19d8d16e31b9bb547f4d021c5a043f3ba0467a6ea652c1a02a37bed"
+    },
+    {
+      "version": 70,
+      "summary": "보고서 작성 스킬을 본보기 하나와 그것이 읽히는 이유로",
+      "source_digest": "5a5d9faa8e807d11636009d125a3fcdecabf6f15b183e16a99135756ebb4964a"
+    },
+    {
+      "version": 71,
+      "summary": "본문은 이슈가 줄기, 수치는 이슈에 붙여서, 차트와 밸류는 맨 마지막",
+      "source_digest": "fe839604438cd26aa6d13c97f3680a0a087440cfb6fe5583a65e87702b8b5522"
+    },
+    {
+      "version": 72,
+      "summary": "내리는 ETF의 두 번째 본보기, 본문 전에 제목부터 쓰는 걸음",
+      "source_digest": "693038adba459f9e9a49b136793a06a7fce845116ad62dbad6491caa09ca822b"
+    },
+    {
+      "version": 73,
+      "summary": "값이 움직인 뒤에 붙인 이유를 경계, 비중은 숫자만, 본보기의 사후해석을 고침",
+      "source_digest": "2721983c0b744be63a452a2142767be07d1502f2c5170c8cae356a9cca64b677"
+    },
+    {
+      "version": 74,
+      "summary": "본보기를 지우고 남은 참조를 정리",
+      "source_digest": "06faa57f27fabf169e6f630d2df9dc64dfb70523d212f556ce552e5a8430427e"
+    },
+    {
+      "version": 75,
+      "summary": "글쓰기: 말로 먼저 쓰고 옮긴다, 논점 끝은 판단, 좋고 나쁨을 나란히 놓지 않고 해석 하나, 수주·순매도 풀어 쓰기",
+      "source_digest": "f6b78c33b0a44942ec4977553bdf7e22d247491930cf119207143789bf700739"
+    },
+    {
+      "version": 76,
+      "summary": "글쓰기: 읽고 나서 무엇을 다르게 생각하게 되는지를 요약에",
+      "source_digest": "52b7ed671d8f5694505a147bfefabb108bb40fb930e5670ce5187d05736f2faf"
+    },
+    {
+      "version": 77,
+      "summary": "글쓰기 스킬 정리: 해석 하나 / 순서 / 숫자와 말",
+      "source_digest": "d78a86c414662bb211140640434ef8583de87fa646427f883b99c87c9b5c869b"
+    },
+    {
+      "version": 78,
+      "summary": "글쓰기: 정해진 말틀을 빼고 시장 기대와의 차이를 설명",
+      "source_digest": "965bfaaae9e9ec7cc066b0ea38b61167b18169d19da81dd3a3e9ec3db4193c79"
+    },
+    {
+      "version": 79,
+      "summary": "도구 호출을 f1, f2 같은 짧은 번호로 인용하고 저장 전에 실행 ID로 바꾼다. 구간 수익률을 시장 몫과 초과수익률로 나누는 calculate_window_returns 도구를 더한다.",
+      "source_digest": "d954f7b3d4710f49d20fc9d270b5c7763151868c7b54b2089bd638b99919e14b"
+    },
+    {
+      "version": 80,
+      "summary": "날짜별 수익률 도구 get_daily_returns를 더한다. 구간 수익률에 기여도 칸을 더한다. 웹 읽기가 언론사와 수정 시각을 돌려준다.",
+      "source_digest": "980193f81cce9c59d89832e66bdd8684cfca6a1e2f83aeb55f459cfc999d3757"
+    },
+    {
+      "version": 81,
+      "summary": "전망을 조사, 글쓰기, 칸 채우기 세 단계로 나눠 쓸 수 있다(staged). 조사 보고는 사실 옆에 근거 번호를 적는다.",
+      "source_digest": "479a878f6d6ee61db894298a1a8e5c9b85b698a847238e345c5438a6540b70d7"
+    },
+    {
+      "version": 82,
+      "summary": "조사 단계에 Exa 공개 검색 MCP를 붙인다. 조사 지시문: 가장 많이 움직인 회사 이름과 날짜로 찾는다.",
+      "source_digest": "41e1ccdf258ff102262bdfadd3f83a22e25419c5e3a7b9240d9bcdaf38dfe62a"
+    },
+    {
+      "version": 83,
+      "summary": "글쓰기 스킬: 판단을 마지막 불릿에만 두지 않고 불릿마다 사실과 그 뜻을 같이 쓴다. 논점마다 불릿 세 개.",
+      "source_digest": "ba2c562beeee877115705a89afa635828e117a47f492cd081db92e49384ed5e3"
+    },
+    {
+      "version": 84,
+      "summary": "글쓰기: 판단을 자유롭게 쓴다. 근거는 논점을 쓸 때 주로 기댄 출처만. 불릿의 숫자는 두 개까지.",
+      "source_digest": "e236794135ced04a7b20e154844632462ef9165e99a5ebf9634aada13ad2ed1d"
+    },
+    {
+      "version": 85,
+      "summary": "글쓰기: 조사가 버린 설명은 글에 꺼내지 않는다.",
+      "source_digest": "2cc6e9baf87745075f34d6541c3d2b0a92edf3115b0cbc9e280c92a0d9aac096"
+    },
+    {
+      "version": 86,
+      "summary": "글쓰기: 버린 가설은 쓰지 않는다. 읽는 사람이 이미 믿는 설명만, 틀리면 무엇이 달라지는지와 함께 말한다.",
+      "source_digest": "c8a173d52a1a4b176bad7afab55d62cda8741d969a7d484cb9e3b85ccf57baed"
+    },
+    {
+      "version": 87,
+      "summary": "조사: 가격에 든 기대, 한 달 안에 그것을 바꿀 일의 크기, 기대와 사실이 어긋나는 곳을 묻는다. 글: 논점 여섯 개 이상. 차트·밸류를 끝에 두라는 코드 검사를 뺀다.",
+      "source_digest": "d9c189785a78ba9785e3ee412267d76c4fe150a097f0a481d7d6278c7a38a6fe"
+    },
+    {
+      "version": 88,
+      "summary": "전망 조사에서 최근 등락의 이유를 뺀다. 가격에 든 기대, 한 달 안의 일과 크기, 어긋나는 곳, 방향과 폭만 묻는다. 글은 두괄식.",
+      "source_digest": "d95def9ae97efb0057fc751bb6e06d364a313a2ba892d5da3d007eaeec573170"
+    },
+    {
+      "version": 89,
+      "summary": "조사: 판단을 정하기 전에 의심 많은 독자의 다섯 물음에 답한다(이미 가격에 든 것, 많이 빠졌으면 싼가, 같은 증거의 되풀이, 못 찾음과 없음, 틀렸다는 표시).",
+      "source_digest": "134eed22d4873248330ec7ca528cc8ea44bad6dedc51d7afd32f31834f0c891b"
+    },
+    {
+      "version": 90,
+      "summary": "글: 근거 없는 등락 폭 숫자와 매수·매도 권유를 쓰지 않는다. 제목은 평소 말로 쓴 결론 문장.",
+      "source_digest": "1aaa98f9d65909508084d94e7cc5c6bf443c3d2b3074beca721825a35ecf45aa"
+    },
+    {
+      "version": 91,
+      "summary": "본문 도구의 제목 칸에 설명을 붙인다: 핵심어가 아니라 결론을 평소 말로 쓴 문장.",
+      "source_digest": "32ae5151ca3283ff8f44259222f20bd5039ecd07133aabfe4355fa2122d7b9bf"
+    },
+    {
+      "version": 92,
+      "summary": "Writer follows reasoned principles instead of prohibitions; only length limits and polite ending are checked; concrete wording",
+      "source_digest": "a5efbd0692a270ce3f6d9f85d2b87b32c825bfba1c2bed8f045a9cd87dc04d16"
+    },
+    {
+      "version": 93,
+      "summary": "Writer follows reasoned principles instead of prohibitions; only length limits and polite ending are checked; concrete wording",
+      "source_digest": "a5efbd0692a270ce3f6d9f85d2b87b32c825bfba1c2bed8f045a9cd87dc04d16"
+    },
+    {
+      "version": 94,
+      "summary": "Writer judges every sentence by one test: important understanding, intuitive, natural flow",
+      "source_digest": "4261717eb7a92dc0682a5a74c333fd1056330f8f8605e778f5411fa962c772ca"
+    },
+    {
+      "version": 95,
+      "summary": "Writer rereads the accepted body as the reader and does not carry over the report's analyst wording",
+      "source_digest": "5538da638e119f3e076a6940a5c43d9056d5db23af0af9c3597b0ac090b34f9b"
+    },
+    {
+      "version": 96,
+      "summary": "Staged outlook after an earlier one edits yesterday's body: writer sees it, investigator starts from it",
+      "source_digest": "8117353e7ac694b41ef9683a8f911fede59e1ab1e349ba405fa771176cb0937b"
+    },
+    {
+      "version": 97,
+      "summary": "Exa search first with our search_web as fallback; writer gets eight minutes",
+      "source_digest": "cb328e5052c6d377609726832fd8bee41b82bf3bc07cd383c048b2b0f8f810fd"
+    },
+    {
+      "version": 98,
+      "summary": "Merge dev: topic sentiment, 20-character card and issue titles, evidence independence rules; body title 50 and topic title 40 kept",
+      "source_digest": "856339862f43777ad20e9d71c6dbe129c622ffbf4608a46251127bc6b005146d"
+    },
+    {
+      "version": 99,
+      "summary": "Merge dev: topic sentiment, 20-character card and issue titles, evidence independence rules; body title 50 and topic title 40 kept",
+      "source_digest": "856339862f43777ad20e9d71c6dbe129c622ffbf4608a46251127bc6b005146d"
+    },
+    {
+      "version": 100,
+      "summary": "Cloud worker runs the outlook in three stages",
+      "source_digest": "856339862f43777ad20e9d71c6dbe129c622ffbf4608a46251127bc6b005146d"
+    },
+    {
+      "version": 101,
+      "summary": "Summary title 25; investigation report uploaded; staged flow writes the first outlook and later days edit it in one stage; pre-staged outlooks are not continued",
+      "source_digest": "14ba59072654228bb37d3be7155104bb0177e782ebf627567cc9b586d7671f35"
+    },
+    {
+      "version": 102,
+      "summary": "Summary title 25; investigation report uploaded; staged flow writes the first outlook and later days edit it in one stage; pre-staged outlooks are not continued",
+      "source_digest": "14ba59072654228bb37d3be7155104bb0177e782ebf627567cc9b586d7671f35"
+    },
+    {
+      "version": 103,
+      "summary": "Staged outlook leaves one event record and one total measurement; stage files are uploaded",
+      "source_digest": "0882b26ad41622926e36e192ac9e6c3ec6ab35c19d77fda2d29c05724eaf839a"
+    },
+    {
+      "version": 104,
+      "summary": "그래프 도구 30개를 dev로 옮김: 로컬 리뷰 지적을 반영하고 derive_fourth_quarter를 뺌. 판정 계약과 릴리스 기록을 dev에 둠",
+      "source_digest": "2077072b90665d9880abd0aeec4634d15adc84afb12f79113fe3173c55b6cb74"
+    },
+    {
+      "version": 105,
+      "summary": "지시문을 기본 규칙(base.md)과 스킬로 재구성: 조사 규칙은 cause-investigation, 작성 원칙은 analysis-report-writing 스킬로 옮기고 호출자가 작업의 스킬을 선언함",
+      "source_digest": "cf7f9e4770c840600e124241c5885d7e3eaaa3aaf093d62203c156f56621361a"
+    },
+    {
+      "version": 106,
+      "summary": "질문 목록이 경쟁 설명(explanations)과 닫는 이유(closure·answer)를 갖고, 전망은 경쟁 설명이 있는 질문을 요구함. 마지막 답의 인용 결함은 같은 대화에서 두 번까지 고치게 함",
+      "source_digest": "eb37a4fc89bc144e40bcfca8b93827b7aedb0333683ce52e51585eda854df675"
+    },
+    {
+      "version": 107,
+      "summary": "조사 도구 추가: 기간 수익률을 시장 몫과 나머지로 나눔(calculate_window_returns, get_daily_returns), 종목 요인 표(get_instrument_factor_table), 웹 문서의 발행처와 수정 시각, 검색 도구의 가설·찾는 것 인자",
+      "source_digest": "ce257fbd1b03bf51a524d31c7076e37c941535d81e8d63c85b1a9577f2937699"
+    },
+    {
+      "version": 108,
+      "summary": "화면 한도(요약 제목 25, 본문 제목 50, 논점 제목 40자)와 문체: 논점 제목은 결론을 말하는 해요체 문장, 본문은 해요체만, 전망·가격변동 지시문에 읽는 사람과 글의 구성과 항목 순서를 적음",
+      "source_digest": "fcda3da494af43cf4e576336c999b4cbb41dfcc2e4a29c6e273308f89bb8b7b3"
+    },
+    {
+      "version": 109,
+      "summary": "이전 글이 없는 전망을 조사·글·필드 3단계로 씀. 조사 단계에 공개 검색 MCP를 붙이고 조사 보고를 남김. 단계별 기록을 한 실행의 기록으로 합침. 워커의 스위치는 꺼 둠",
+      "source_digest": "c02c2acaf18e9464a69682f25d3c0563f42a8cef400b40c09953b19d6909e12b"
+    },
+    {
+      "version": 110,
+      "summary": "3단계 전망의 판단을 단호하게: 조사 보고가 줄기 한 문장과 그 증거를 내고 확신 등급 대신 판단이 틀리는 조건을 적음. 글은 줄기 하나를 제목과 첫 논점에서 말하고 나머지 논점이 그것을 받침. 흐린 말 대신 조건으로 말함. 기본 규칙의 '확신을 높이지 않는다'를 뺌",
+      "source_digest": "66cc5f0f4bc468a74fb783876f3f0cb94d902c13d4fb5646762e84b71fa550ad"
+    },
+    {
+      "version": 111,
+      "summary": "시한의 70%가 지나면 에이전트에게 한 번 알림: 새 조사를 시작하지 말고 확인한 것으로 최종 응답을 내라. 시한에 걸려 실행 전체를 잃는 일을 줄임",
+      "source_digest": "388106181fc9e5d180aa1f6bf2ca2145a5da060a36f995a4883e58260eff18a2"
+    },
+    {
+      "version": 112,
+      "summary": "가격변동 실패 수정: 근거로 쓸 수 있는 호출의 규칙을 글쓰기 스킬에 되돌림. 가격변동의 시한을 480초로. 한 대화 경로의 마지막 답을 저장 전에 점검",
+      "source_digest": "58da68635d89563975bad9176771cccef06da624952d7cf9ee795d1506b199ad"
+    },
+    {
+      "version": 113,
+      "summary": "가격변동 설명의 글자 수 상한: 요약 100자, 항목 본문 120자, 제목 20자. 넘으면 저장 전에 같은 대화에서 줄이게 하고, 상한을 넘는 기존 항목은 다시 고르지 않음",
+      "source_digest": "9a5f286ae81383d61397d3beed0ea97ea01f8d6d4d59b087a3037d7d6e90b244"
+    },
+    {
+      "version": 114,
+      "summary": "가격변동 요약을 70자 안의 한 문장으로: 그날 가장 중요한 일 하나와 그것이 이 ETF에 뜻하는 것. 두 번째 사건과 세부 숫자는 상세 항목에",
+      "source_digest": "10340f514d0441aa820c269c4d137aaab44b93c1a0d7c2d0b51052b413c58d3d"
+    },
+    {
+      "version": 115,
+      "summary": "가격변동 요약과 항목 제목에서 수치를 빼고 쉬운 말로: 누가 + 무슨 일, 크기는 말로, 수치는 상세 본문에",
+      "source_digest": "426e90af4a9f0d9ed59a2c224a54e63c35da6b81c943661efc92127cc095d2c1"
+    }
+  ]
+}

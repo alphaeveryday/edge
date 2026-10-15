@@ -48,8 +48,8 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/ops/incidents` | 파이프라인 문제·사건 목록 |
 | `/ops/incidents/detail?vid=` | 사건 상세 (점 든 대상도 안전하도록 식별자는 쿼리) |
 | `/ops/runs` · `/ops/runs/:runId` | 런·작업 귀결 목록 · 실행 상세 |
-| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이(뉴스 엔티티 해소율 실측, 60% 미만은 주황 주의) |
-| `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계 |
+| `/ops/datasets` · `/ops/trend` | 데이터셋 신선도 · 산출/품질 추이(뉴스 엔티티 해소율 실측, 60% 미만은 주황 주의) + 데이터셋별 실행 추이(실행 단위의 행 수·소요 시간·종료 상태·대상 수 대비 받은 수 — 판정 없음, ALPHA-1284) + 산출 축의 기준일 추이·1분 세션 일별 창 수(판정 없음, ALPHA-1289) + v2 분석(전망·가격변동) 일별 추이와 분석 결과 카드(ALPHA-1290) |
+| `/ops/chain` · `/ops/delivery` | 설명 생성 흐름 · Cloud 게시/발번 경계. 흐름 화면 ETF 표의 종류별 상태 글자는 그 ETF 의 그날 분석 결과 목록으로 간다(ALPHA-1333) |
 | `/ops/summary` | 파이프라인 개요 — **은퇴**(라우트·컴포넌트만 존치). 사이드바·인바운드 링크 없음이 의도다 |
 | `/overview` | 레인 원장 요약 (구 첫 화면) — **은퇴**(라우트·컴포넌트만 존치). 개요는 자기 질문("지금 정상인가")에 답할 수 없어 메뉴에서 뺐다 |
 | `/tenants` | 테넌트 목록 (검색·상태 필터 + 테넌트 생성 모달) |
@@ -59,9 +59,11 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/minute` | 장중 1분 수집 (세션 생존·창 집계·결손 창 목록 — 무증거 vs 빈 데이터 구분, ALPHA-651) |
 | `/lineage/news` | 뉴스 계보 (funnel 타일 N/M%+(i) 산출 정의·단계 필터·언론사·원문 링크·1분 추출 요약 — ALPHA-685·697) |
 | `/impact/holdings` | 구성종목 결손 영향 (누락 ETF → 기준일 분석 지목 + 권장 조치 — ALPHA-686) |
-| `/analyses` | 가격 변동 분석 목록 (종목별 최신 / 분석 이력 두 보기 · 검색·상태·시장 필터) |
-| `/analyses/symbol?market=&code=` | 종목 분석 이력 (최신 유효 설명 + 그 종목의 시도 전량 — ALPHA-738) |
-| `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴) |
+| `/analyses` | 가격 변동 분석 목록 (종목별 최신 / 분석 이력 두 보기 · 검색·상태·시장 필터). 옛 설명 엔진의 기록(10-01까지)이라 사이드 메뉴에서 뺐다 — 화면 위에 그 안내와 새 분석 결과 목록 링크가 있다(ALPHA-1328·1333) |
+| `/analyses/symbol?market=&code=` | 종목 분석 이력 (최신 유효 설명 + 그 종목의 시도 전량 — ALPHA-738). 목록과 같은 안내가 위에 있다 |
+| `/analyses/:id` | 가격 변동 분석 상세 (근거 · 영향도 · 무효화. 구 정정/제외/복원은 ALPHA-737 로 은퇴). 목록과 같은 안내가 위에 있다 |
+| `/analysis-results` | 분석 결과 — 새 분석 엔진(v2)의 전망·가격변동 분석 목록 (종류 탭 · 기간 · ETF · 상태 · 합성·출처 미상 입력 포함 필터, 필터는 주소에 둔다 — ALPHA-1333) |
+| `/analysis-results/:kind/:id` | 분석 결과 상세 — 저장된 내용 그대로(전망: 스티커·요약·상세 항목·요인·요인 상세·결론 / 가격변동: 요약·항목(앞선 분석에서 고른 것 포함)·고른 순서·회수 / 실패: 오류 메시지 전체). 코드 값의 화면 말은 `domains/analysisResults/labels`, 전망 근거 문장(갱신 표시)·출처(제목 링크, http·https 만)의 표시 모양은 `domains/analysisResults/evidence` 가 정한다(ALPHA-1337). 읽기 전용 |
 
 ⚠️ **종목 이력은 시장·코드를 경로가 아니라 쿼리로 받는다.** CloudFront 의 SPA fallback
 ([`spa-rewrite.js`](../../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
@@ -75,6 +77,9 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 
 실행이력(`/grid`)의 뉴스 품질 색상은 API의 `qualityAssessment`를 사용한다(ALPHA-1076).
 실행 실패·미실행은 장애, 기술 오류·실제 누락은 1건부터 주의다. 성공한 현재 시도에서
+원본 해소율과 정책 제외 건수를 보존하며, 새 계측이 있는 실행은 인물·업종·명시된
+모호어를 분모에서 뺀 판정 해소율을 사용한다. 과거 실행은 이전 기준으로 표시한다.
+부분 계측·모순·판정 분모 0은 미측정이며 기술 오류·실제 누락 판정은 우선한다.
 내용상 제외로 설명되는 건만 비율로 판단한다: 엔티티 해소율 **60% 미만**, 주장 제외율
 **20% 이상**, 기준 종목 없는 이벤트 비율 **20% 이상**이면 주의다. 주장 제외율의 분모는
 적재·기존 주장 수 + 내용상 제외 수, 이벤트 비율의 분모는 이번 실행에서 생성한 이벤트다.
@@ -94,7 +99,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 형상 차이(camelCase vs snake_case), 응답 값 검증, 배치 사실과 `/sources/minute` 실시간 축의
 결합은 그 어댑터·공통 훅에서 한 번만 처리한다. 별도 일별 응답은
 `domains/console/entityResolutionTrend`와 `intradayAnalysisTrend`가 각각 날짜·카운터·비율/단계
-단조성 불변식을 검증한다. 장중 분석 귀결 판정은 수집 상태와 합치지 않는다.
+단조성 불변식을 검증하고, `analysisTrend`가 v2 분석 일별 건수의 날짜 범위·건수를 검증한다. 장중 분석 귀결 판정은 수집 상태와 합치지 않는다.
 
 알려진 결함·설계 노트·계측 부채는 [`src/rules/README.md`](src/rules/README.md)가 정본이다.
 
@@ -108,7 +113,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `styles/` 5 | ops·grid·minute·info-popover·mock-preview |
 | `pages/_shared/` | `InfoPopover`(portal 팝오버 — 포커스·Escape 처리) · `MockPreview` |
 | `mock/preview.ts` | 실 데이터 0건일 때 화면을 검수하는 미리보기 픽스처. `mock/preview.test.ts` 가 **서버가 낼 수 있는 응답인가**를 고정한다 |
-| `domains/sources/` 파생 7 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `holdingsFlow`(구성종목 최종 완전성) · `minuteHistory`(선택 날짜 조회 상태 + 날짜별 캐시 선택) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤 + 뉴스 품질 진단 검증·표시) |
+| `domains/sources/` 파생 9 | `dailyRollup`(데이터셋×날짜 롤업 + 세션별 실행체 상태) · `datasetCatalog`(행 축) · `runSeries`(격자 응답 → 데이터셋별 실행 단위 계열, 값 없는 실행은 빈 점) · `dailySeries`(산출의 기준일별 건수·1분 세션의 일별 창 수 계열 — 산출의 0 은 0, 세션 없는 날은 빈 점) · `holdingsFlow`(구성종목 최종 완전성) · `minuteHistory`(선택 날짜 조회 상태 + 날짜별 캐시 선택) · `minuteView`(1분 세션 표현 + `hasNoSignal`·`healthyClaimed`) · `lanes`(레인 코드→표시 이름) · `taskView`(작업 outcome×시도 → 라벨·톤 + 뉴스 품질 진단 검증·표시) |
 | `domains/analyses/symbols` | 분석 이력을 종목당 한 행으로 접는다 + 종목 상세 주소(`symbolHref`) |
 | `layouts/headerRoute` | 경로 → 헤더 화면명·뒤로가기 목적지 |
 | `pages/ops/` 판정 11 | 운영 조사 화면의 판정을 JSX 밖에 둔 것(ALPHA-738 조각 4·ALPHA-979 조각 1·ALPHA-1003). `consoleFacts`(와이어 DTO 검증 경계 + `Facts` 어댑터) · `investigation`(사건→조사 경로·딥링크 주소) · `notRun`(못 돎·조회 상태 어휘) · `runObservation`(원장↔AWS 두 관측 대조) · `datasetFreshness`(신선도 + 롤업 배지) · `chainView`(장중 갈래가 입구에서 사라졌는가 — **관측 결과이지 축의 유무가 아니다**) · `trendCatalog`·`trendMetrics`·`trendSeries`·`trendAsOf`(추이 지표·계열·as-of 표기, 엔티티 해소율 60% 미만 주황) · `newsFunnelSnapshot`(응답 밖 퍼널 스냅샷) |
@@ -130,13 +135,15 @@ facts-snapshot 을 정본으로 쓰면 안 된다 — 날짜 고정 픽스처라
 
 ## 데이터 레이어
 
-화면 데이터는 전 도메인이 **super-admin-api 호출**이다(ALPHA-515). mock 데이터는
-UI 가 아니라 API 쪽 `mock` 패키지가 반환하며, mock→DB 전환도 API 쪽에서 도메인
-단위로 진행된다 — UI 는 그 전환을 알지 못한다(계약 불변).
+화면 데이터는 전 도메인이 **super-admin-api 호출**이다(ALPHA-515). mock→DB 전환은
+API 쪽에서 도메인 단위로 진행돼 끝났고(API 의 `mock` 패키지는 제거됐다), UI 는 그
+전환을 알지 못한다(계약 불변). UI 의 `mock/preview.ts` 는 화면 검수용 미리보기 픽스처다(위 표) —
+목록은 실 데이터 0건일 때 미리보기로 들어가고, 상세는 `?preview=mock` 이면 데이터 유무와 무관하게
+같은 픽스처를 읽는다.
 
 tenant-console-ui 와 거의 동일 규약 — 공통 fetch 래퍼 [`src/api/client.ts`](src/api/client.ts)
 (baseURL `/api/v1` · 에러 정규화 · 세션 쿠키 인증), TanStack Query hook, 페이지는 도메인
-hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `session` · `console`.
+hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `analysisResults` · `session` · `console`.
 super-admin-api 성공 응답도 공통 봉투(`ApiResponse`)라 client.ts 가 `.result` 를
 중앙에서 벗겨 반환한다 — tenant-console-ui 도 동일하다(ALPHA-521·522, 도메인별
 repository 는 무변경). 그 밖 상세 규약은

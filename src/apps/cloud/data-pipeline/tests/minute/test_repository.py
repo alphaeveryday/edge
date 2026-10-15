@@ -18,7 +18,7 @@ from minutefakes import FakeMinuteDB
 
 from data_pipeline.config import DbConfig
 from data_pipeline.minute.models import (
-    FINAL_WINDOW_SETTLE_SEC,
+    WINDOW_SETTLE_SEC,
     KST,
     plan_session_windows,
 )
@@ -41,7 +41,7 @@ def make_ledger(db):
 def plan(ledger, **overrides):
     args = dict(
         dataset="price_minute",
-        source_group="toss",
+        source_group="kis",   # 지연 규칙(scheduled_at)은 KIS 세션 것이다 — 토스는 window_end 그대로
         session_date=SESSION_DATE,
         universe_version="univ-fixture-v1",
         universe_hash="a" * 64,
@@ -94,37 +94,45 @@ class TestPlanSession:
 
     def test_windows_materialized_upfront(self):
         # 하루치 미리 materialize — 프로세스가 안 떠도 due 시각이 지나면 MISSING 으로
-        # 잡을 수 있는 전제. scheduled_at 은 window_end(구간이 닫혀야 bar 가 있다)
+        # 잡을 수 있는 전제. scheduled_at 은 window_end + WINDOW_SETTLE_SEC(구간이 닫히고
+        # 벤더 확정 층에 들어와야 bar 가 있다 — models.scheduled_at_for)
         db = FakeMinuteDB()
         make_ledger(db).plan_session(
-            dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
+            dataset="price_minute", source_group="kis", session_date=SESSION_DATE,
             universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
         )
         first = min(db.windows.values(), key=lambda w: w["window_start"])
         assert first["data_status"] == "DUE"
-        assert first["scheduled_at"] == first["window_end"]
+        assert first["scheduled_at"] == first["window_end"] + timedelta(seconds=WINDOW_SETTLE_SEC)
 
-    def test_close_window_row_is_scheduled_after_the_auction(self):
-        """마감 window 행이 **원장에** 늦춰져 들어가는지 — `scheduled_at_for` 배선 검증.
+    def test_every_window_row_is_scheduled_after_the_settle(self):
+        """window 행이 **원장에** 늦춰져 들어가는지 — `scheduled_at_for` 배선 검증.
 
         helper 단위 테스트만 두면 INSERT 가 `scheduled_at=window_end` 로 회귀해도
-        전부 통과한다(그러면 미완성 봉 커밋 결함이 그대로 돌아온다). 여기서 원장에
-        저장된 값을 직접 본다.
+        전부 통과한다(그러면 형성 중 봉 커밋 결함이 그대로 돌아온다). 여기서 원장에
+        저장된 값을 직접 본다. 마감 창(15:29)도 예외가 아니다 — 종가 단일가는 세션 안에서
+        못 받으므로 더 밀 이유가 없다(ALPHA-1127·1128).
         """
+        db = FakeMinuteDB()
+        make_ledger(db).plan_session(
+            dataset="price_minute", source_group="kis", session_date=SESSION_DATE,
+            universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
+        )
+        rows = sorted(db.windows.values(), key=lambda w: w["window_start"])
+        assert rows[-1]["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
+        assert all(w["scheduled_at"] == w["window_end"] + timedelta(seconds=WINDOW_SETTLE_SEC)
+                   for w in rows)
+
+    def test_toss_session_windows_are_not_delayed(self):
+        """토스 세션은 `window_end` 그대로다 — 지연은 KIS 응답 형상(확정 층) 때문이고 토스
+        봉은 창이 닫히면 최종이다. 같은 dataset 이라 dataset 만 보면 토스 창과 그 트리거가
+        이유 없이 70초 늦어진다(봇 P2)."""
         db = FakeMinuteDB()
         make_ledger(db).plan_session(
             dataset="price_minute", source_group="toss", session_date=SESSION_DATE,
             universe_version="v", universe_hash="a" * 64, windows=WINDOWS,
         )
-        rows = sorted(db.windows.values(), key=lambda w: w["window_start"])
-        close_row = rows[-1]
-        assert close_row["window_end"] == datetime(2026, 7, 31, 15, 30, tzinfo=KST)
-        settled = close_row["window_end"] + timedelta(seconds=FINAL_WINDOW_SETTLE_SEC)
-        # 단일가 접수 구간(15:20~15:30)에 걸친 10개가 전부 마감 뒤로 — 마감 하나만 밀면
-        # 나머지 아홉이 벤더 복제 봉을 그대로 실어 5분봉 거래량을 부풀린다
-        assert all(w["scheduled_at"] == settled for w in rows[-10:])
-        # 나머지 380개는 그대로 window_end — 장중에 지연을 만들면 안 된다
-        assert all(w["scheduled_at"] == w["window_end"] for w in rows[:-10])
+        assert all(w["scheduled_at"] == w["window_end"] for w in db.windows.values())
 
     def test_news_session_close_window_is_not_delayed(self):
         """같은 plan_session 을 쓰는 뉴스 세션엔 안 건다 — 종가 단일가는 가격 얘기고,
@@ -206,9 +214,10 @@ class TestClaim:
             now=NOW, lease_seconds=60,
         )
         assert first["window_start"] != second["window_start"]
-        # realtime 기본 lane 은 최신 due 부터 — NOW=09:05 에 due 인 최신 window 는 09:04
-        assert first["window_start"] == datetime(2026, 7, 31, 9, 4, tzinfo=KST)
-        assert second["window_start"] == datetime(2026, 7, 31, 9, 3, tzinfo=KST)
+        # realtime 기본 lane 은 최신 due 부터 — NOW=09:05 에 due 인 최신 window 는 09:02
+        # (window_end 09:03 + WINDOW_SETTLE_SEC 70초 = 09:04:10 ≤ 09:05; 09:03 창은 09:05:10)
+        assert first["window_start"] == datetime(2026, 7, 31, 9, 2, tzinfo=KST)
+        assert second["window_start"] == datetime(2026, 7, 31, 9, 1, tzinfo=KST)
 
     def test_stale_fence_cannot_claim(self):
         db, ledger, session_id, token = self._ready()
@@ -404,7 +413,7 @@ class TestLanes:
         token = ledger.acquire_worker_fence(
             session_id=session_id, worker_id="w1", now=NOW, lease_seconds=300
         )
-        late_now = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # window 10개 due
+        late_now = datetime(2026, 7, 31, 9, 10, tzinfo=KST)  # window 8개 due(09:00~09:07)
         newest = ledger.claim_due_window(
             session_id=session_id, worker_id="w1", fence_token=token,
             now=late_now, lease_seconds=60, lane="realtime",
@@ -413,7 +422,7 @@ class TestLanes:
             session_id=session_id, worker_id="w1", fence_token=token,
             now=late_now, lease_seconds=60, lane="recovery",
         )
-        assert newest["window_start"] == datetime(2026, 7, 31, 9, 9, tzinfo=KST)
+        assert newest["window_start"] == datetime(2026, 7, 31, 9, 7, tzinfo=KST)
         assert oldest["window_start"] == datetime(2026, 7, 31, 9, 0, tzinfo=KST)
 
     def test_unknown_lane_rejected(self):

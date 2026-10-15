@@ -1,7 +1,7 @@
 # super-admin-api
 
-벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses
-는 DB, session 은 실세션 주체 투영). 화면·금지 항목의 SSOT 는
+벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses·
+analysisResults 는 DB, session 은 실세션 주체 투영). 화면·금지 항목의 SSOT 는
 [docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
@@ -50,7 +50,7 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 
 ## 규칙 엔진 사실 표면 (ALPHA-738)
 
-`GET /api/v1/console/facts?date=` — 콘솔 규칙 엔진이 읽는 **사실**. 화면 표면 4종과 성격이
+`GET /api/v1/console/facts?date=` — 콘솔 규칙 엔진이 읽는 **사실**. 화면 표면 5종과 성격이
 다르다: UI 도메인 계약과 1:1 이 아니고, 수집 축을 넘어 전달 경계·산출까지 한 응답에 담을 자리다
 (그래서 `/sources/*` 아래 두지 않는다). 계약 정본은
 [docs/contracts/console-facts-api.md](../../../../docs/contracts/console-facts-api.md),
@@ -62,8 +62,39 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 「엔티티 해소 추이」 절이 정본이다(ALPHA-1001).
 
 `GET /api/v1/console/trends/intraday-analysis?maxDate=&days=30`는 선택 기준일까지 연속 날짜의
-장중 `FIRE` 트리거와 분석·게시 단계 도달 수를 낸다. 재실행 행 수가 아니라 코호트 관측의 도달
-여부를 세며, 상세 계약은 같은 문서의 「장중 분석 귀결 추이」 절이 정본이다(ALPHA-1005).
+장중 `FIRE` 트리거와 분석·게시 단계 도달 수를 낸다. 점마다 `analysis` 가 새 분석 엔진의 단계(분석
+요청·시작·완료·게시, 판정 보류 포함)이고 날짜마다 흐름 띠와 같은 조회로 센다. v2 요청이 없던 날은
+`analysis.blind` 다(ALPHA-1329). 옛 설명 엔진의 단계 필드와 그 조인은 지웠다(ALPHA-1330). 상세 계약은
+같은 문서의 「장중 분석 귀결 추이」 절이 정본이다(ALPHA-1005).
+
+`GET /api/v1/console/trends/analysis?maxDate=&days=30`는 새 분석 엔진(v2)의 전망·가격변동 분석이
+날짜별로 완료·실패·끝나지 않은(running) 건수를 낸다. `outlook_analyses`·`movement_analyses` 를
+읽고, 행이 없던 날은 점을 만들지 않는다. 산출 축의 분석 산출(`o.outlook`·`o.movement`)도 같은 두
+표에서 센다 — 옛 설명 엔진 표를 세던 게시 ETF 산출은 없앴다. 상세 계약은 같은 문서의 「v2 분석
+일별 추이」 절이 정본이다(ALPHA-1290). 이 응답의 `failedEtfs` 는 그날 실패 행이 있고 완료 행이
+하나도 없는 ETF 수이고, `/console/facts` 의 `analysisFailures` 축이 같은 기준으로 그 ETF 코드를
+종류별로 싣는다(R15 가 읽는다, ALPHA-1291). `etfAnalyses` 축은 ETF마다 전망과 가격변동 분석의
+그날 상태(완료·실패·진행 중·시작 못 함·판정 보류·대상 아님)를 싣고 흐름 화면의 ETF 표가 그린다
+(ALPHA-1312). 옛 설명 엔진의 `etfLedger` 축은 읽는 화면이 없어 지웠다(ALPHA-1328).
+
+옛 체인 단계(`chain.stages`)와 그 조회·옛 엔진 마지막 실행일 조회·관측 불가 판정은 지웠다
+(ALPHA-1329). 체인 입력(`chain.feeds`)은 트리거 수만 세는 조회다.
+
+종목 영향(`/sources/impact/holdings`)의 누락 ETF 기준일 분석과 뉴스 계보(`/sources/lineage/news`)의
+"분석 사용"은 옛 설명 엔진의 표만 본다. 새 분석 엔진에는 같은 뜻의 관계형 값이 없어(어느 분석이 어느
+날의 구성종목·뉴스를 읽었는지 원장에 남지 않는다) 옮기지 않았고, 조회 범위에 그 엔진이 멈춘 뒤의 날이
+있으면 `analysesBlind`·`summary.usedInAnalysisBlind` 를 참으로 실어 0 이 아니라 관측 불가로 읽게 한다
+(ALPHA-1329).
+
+전달 경계(`boundary`)는 새 분석 엔진의 가격변동 분석을 센다(ALPHA-1326). 게시됐는데 전달이 없는
+분석과, 전달됐는데 지금 게시본이 아니고 회수 전달도 없는 테넌트별 전달을 낸다. 전달 함수가 설계상
+건너뛰는 경우와 전달 대기 시간(단일 분석 워크플로의 시간 제한) 안의 것은 뺀다. 지금 상태 조회라
+관측 불가 표시(`boundary.blind`)는 싣지 않는다.
+
+체인은 새 분석 엔진의 단계를 `chain.analysisStages`(분석 요청 → 분석 시작 → 분석 완료 → 게시)로 함께
+싣는다(ALPHA-1296). 조회일에 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수이고, 배치 칸은
+`null`(대상 아님)이다. 화면과 R10 은 이 목록을 읽는다. 단계마다 `pending`(앞 단계에 도달한 지 유예 시간이 안 지나 아직 판정할 수 없는 트리거 수)을
+함께 싣는다 — 유예 시간은 단일 분석 워크플로의 전체 시간 제한(28,800초)이다(ALPHA-1309).
 
 **사실 축(런·작업·데이터셋·산출·경계·체인)은 조각별로 하나씩 붙는다** — 무엇이 dev 에 있는지는
 계약 문서 머리의 표가 정본이다. ⚠️ 그 현황을 여기 숫자로 옮겨 적지 마라: 조각마다 두 곳을
@@ -83,11 +114,33 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
   `document`·`document_assertion`·`source_event`·`price_movement_trigger`)의 소유는 전부 다른
   모듈이다(ADR-0005 단일 writer).
 
-## 콘솔 화면 표면 (ALPHA-515 → 도메인별 DB 전환 중)
+## 콘솔 화면 표면 (ALPHA-515 → 도메인별 DB 전환 완료)
 
-super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 4종 —
+super-admin-ui 도메인 계약(repository.real.ts)과 1:1 인 화면 표면 5종 —
 tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파이프라인 실행 이력) · analyses(가격 변동
-분석 목록·무효화) · session(운영자 컨텍스트·프로필).
+분석 목록·무효화) · analysisResults(새 분석 엔진 결과 목록·상세) · session(운영자 컨텍스트·프로필).
+
+**새 분석 엔진 결과(ALPHA-1333)** — 읽기 전용 조회 둘이다. 표는 `outlook_*`·`movement_*`(소유는
+analysis-engine-v2)이고 `repository/JdbcAnalysisResultRepository` 가 JPA 없이 읽는다.
+
+- `GET /api/v1/analysis-results?kind=&from=&to=&etf=&status=&allSources=&page=&size=` — 목록. `kind` 는
+  `outlook`(전망)·`movement`(가격변동) 가운데 하나(필수). `from`·`to` 는 `analysis_at` 의 KST 날짜(양끝
+  포함)이고 둘 다 생략하면 오늘 하루, `from` 만 주면 그날 하루다(`to` 가 `from` 보다 이르면 400). `status` 는 행 값 그대로(`completed`·`failed`·`running`). 기본은
+  `data_source='database'` 만이고 `allSources=true` 면 합성 입력(`synthetic`)·출처 표기 전 행
+  (`unknown`)도 싣는다. 최신순, `size` 기본 50·최대 200. 조회 한 번으로 전체 행 수(`total`)와 그
+  페이지를 낸다.
+- `GET /api/v1/analysis-results/{kind}/{analysisId}` — 상세. 엔진의 확인용 조회(`storage/inspection.py`)와
+  같은 행을 같은 순서로 읽는다. 전망은 조회 6번(분석·근거 항목·요인·요인 지표·이슈 항목·결론 키워드),
+  가격변동은 2번(분석·항목)을 한 스냅샷(REPEATABLE READ)에서 한다. 가격변동 항목은 그 분석이 만든 것
+  전부(고르지 않은 것도)에 더해, 고른 항목 가운데 같은 날 앞선 분석이 만든 것이다 — 엔진은 앞선 분석의
+  항목을 다시 고를 수 있고 고른 목록이 직전과 같으면 그대로 물려받는다. 실패 행은 오류 메시지 전체를
+  낸다. 없으면 404.
+- **게시·회수 기준은 v2 테넌트 조회와 같다**(`analysis-engine-v2 api/publications.py`
+  `PublicationReader.latest`): `published` = `status='completed' AND data_source='database' AND
+  published_at IS NOT NULL`, 가격변동은 `withdrawn_at IS NULL` 이 더해진다. 전망에는 회수 열이 없어
+  `withdrawn` 이 null 이다. ⚠️ `latest` 는 이 조건을 만족하는 행 가운데 ETF 마다 최근 한 건만 내므로
+  `published` 는 "지금 테넌트가 받는 한 건"이 아니라 그 후보 조건이다. 통합 테스트가 저쪽 원문 파일에서
+  이 조건 문자열을 찾는다 — 저쪽이 바뀌면 그 테스트가 먼저 깨진다.
 
 - **응답 원천은 도메인별로 다르다** — **tenants 는 JPA**(`entity/Tenant`·`repository/
   TenantRepository`)로 실 `tenant` 테이블을 읽고 쓴다(ALPHA-526). **sources 는 운영 원장
@@ -97,9 +150,15 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
   exclusionRate)를 추가한다(ALPHA-1076). `NewsQualityAssessment`가 현재 성공 시도의 진단과
   원장 카운터를 대사해 `WITHIN_LIMITS`·`CAUTION`·`UNMEASURED`를 내며 원장 필드는 바꾸지 않는다.
   다른 작업은 null이다. 상세 표본은 이 응답에 복제하지 않는다. 비율은 0~1이며 분모가 없거나
-  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. 여기에
+  근거가 불충분하면 null이다. 새 계측이 없는 과거 시도를 추정·백필하지 않는다. `/sources/grid` 셀은
+  현재 시도의 `startedAt`·`finishedAt`·`exitCode`와 완전성 숫자 `completenessExpected`·
+  `completenessReceived`도 싣는다(ALPHA-1284). 현재 시도나 완전성 축이 없으면 null이고 null은 0이
+  아니다. `/sources/minute/daily`의 날짜×데이터셋 항목은 세션들의 창 수 합 `windows`(기대 창 수와
+  상태별 창 수)를 싣고, `/console/facts`의 `outputs[]`는 기준일별 건수 `history`(조회일 제외)를
+  싣는다(ALPHA-1289). 둘 다 이미 조회한 값이고 판정(`state`·`basis`·`base`)은 그대로다.
+  sources 는 `ops_*` 에 더해
   **1분 원장 `minute_*` 요약 관측**(`JdbcMinuteStatusRepository`, ALPHA-651·1066 — 단일 날짜
-  세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)이다. 일별 판정은 날짜별 상세 조회를
+  세션·창 상세와 최근 7일 일별 서버 판정, 행 복제 아님)도 읽는다. 일별 판정은 날짜별 상세 조회를
   반복하지 않고 bounded 범위 집계로 terminal phase·lease·무증거·품질·job·outbox 전달을 함께 본다.
   가격 job의 `delivery_expected`가 실시간 필수 event와 과거 백필 무발행을 영구 구분한다.
   schema→writer 단계 배포 사이 구 writer 행은 outbox 원장으로 대사하고 NOT NULL로 닫는다.
@@ -119,7 +178,8 @@ tenants(테넌트 목록·생성) · sources(데이터 소스 수집 상태·파
 
 - **와이어 타입은 `dto` 패키지** — 요청·응답 계약은 `dto` 의 `XxxRequest`/
   `XxxResponse` record 이고, `XxxResponse.from(원천 record)` 로 매핑해 반환한다
-  (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record —
+  (tenants=JPA entity, sources=원장 조회 record, analyses=설명 원장 조회 record,
+  analysisResults=v2 분석 표 조회 record —
   service 가 변환, analyses 쓰기=무효화 실전이(응답 본문 없음), session=세션 주체(`SessionOperator`) 투영을
   `AdminSessionService` 가 구성). 원천 형과 형식이
   같아도 와이어 형은 별도 타입이다 — tenants 는 `from()` 매핑원이 이미 JPA entity 다

@@ -1,0 +1,46 @@
+formatVersion: 1
+name: Actor
+displayName: Actor
+description: A company, government body, or institution that can participate in a
+  reported event. Concrete object types and their identities remain distinct.
+properties:
+  id:
+    dataType: String
+    nullable: false
+    description: Identifier of the concrete actor object, preserved without conversion.
+  name:
+    dataType: String
+    nullable: false
+    description: Name of the company, government body, or institution.
+  countryCode:
+    dataType: String
+    nullable: true
+    description: Country code recorded for the actor; null means no country was recorded.
+links:
+  participatesIn:
+    target:
+      kind: object
+      name: SourceEvent
+    cardinality: MANY
+    required: true
+    description: Source-event accounts in which the actor participates. The concrete
+      participation links retain each role and supporting mention.
+implementations:
+  Company:
+    properties:
+      id: id
+      name: name
+      countryCode: countryCode
+    links:
+      participatesIn:
+        linkType: Company_ParticipatesIn_SourceEvent
+        direction: forward
+  Organization:
+    properties:
+      id: id
+      name: name
+      countryCode: countryCode
+    links:
+      participatesIn:
+        linkType: Organization_ParticipatesIn_SourceEvent
+        direction: forward

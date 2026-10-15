@@ -1,0 +1,39 @@
+id: FinancialMetric_CalculatedFrom_FinancialMetric
+source: FinancialMetric
+definition:
+  name: CalculatedFrom
+  label: CalculatedFrom
+  description: A financial value used as an input in the stored calculation of this
+    value.
+  target: FinancialMetric
+  sourceProperty: id
+  targetProperty: id
+  cardinality: N:N
+  status: experimental
+  sourceMapping:
+    kind: jsonReferences
+    baseTable: financial_metric
+    column: inputs
+    sourceFilter:
+      derivation:
+      - FY_MINUS_9M
+      - EQUITY_OVER_SHARES
+    implementation: notImplemented
+    acceptance: Resolve each stored input reference to its exact company, metric,
+      period, basis and collection version. For FY_MINUS_9M preserve both annual and
+      nine-month inputs. Do not infer inputs from matching periods alone. Inputs not
+      represented as FinancialMetric objects remain in calculationInputs.
+  mappingStatus: mappingReview
+  apiName: calculatedFrom
+  displayName: CalculatedFrom
+  pluralDisplayName: CalculatedFrom
+  inverse:
+    apiName: usedInCalculations
+    displayName: Used in calculations
+    description: Calculated financial values that use this value as an input.
+    pluralDisplayName: Used in calculations
+  backing:
+    type: joinTable
+    configurationStatus: requiresPreparation
+    preparation: Prepare validated object primary keys from the documented source
+      mapping.

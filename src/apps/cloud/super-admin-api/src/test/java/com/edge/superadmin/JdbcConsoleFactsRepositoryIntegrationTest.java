@@ -52,7 +52,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	private static final LocalDate DAY = LocalDate.parse("2026-08-03");
 
 	/** 장이 서야 나오는 산출({@code marketBound}) — 장 안 서는 날 규칙이 기준을 비우는 대상. */
-	private static final List<String> MARKET_OUTPUTS = List.of("o.pub", "o.trig");
+	private static final List<String> MARKET_OUTPUTS = List.of("o.movement", "o.trig");
 
 	/** 장과 무관하게 도는 산출 — 그래서 <b>미완결일 억제만</b>이 이 셋의 기준을 비운다. */
 	private static final List<String> NEWS_OUTPUTS = List.of("o.doc", "o.asr", "o.evt");
@@ -218,13 +218,30 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 그 날 그 ETF 의 <b>게시된</b> 설명 한 건 — {@code o.pub} 이 세는 것.
-	 *
-	 * <p>{@code o.trig} 로 대신 못 잰다: {@code o.pub} 에는 그쪽에 없는
-	 * <b>{@code publication_status='PUBLISHED'} 술어</b>가 있다(리뷰가 잡았다 — "같은 계약"이라는
-	 * 내 정당화가 틀렸다). 그래서 사슬을 세운다:
+	 * v2 분석 한 건(ALPHA-1290) — {@code o.outlook}·{@code o.movement} 와 분석 추이가 세는 것.
+	 * {@code kind} 는 {@code outlook} 또는 {@code movement} 다. 가격변동 분석은 엔진이 하듯
+	 * {@code trading_date} 를 {@code analysis_at} 의 KST 날짜로 채운다.
+	 */
+	private void insertAnalysis(String kind, String id, String etf, String analysisAt, String status,
+			String dataSource) {
+		if (kind.equals("movement")) {
+			jdbc.update("""
+					INSERT INTO movement_analyses (analysis_id, etf_code, analysis_at, status,
+					       data_source, trading_date)
+					VALUES (?,?,?::timestamptz,?,?, (?::timestamptz AT TIME ZONE 'Asia/Seoul')::date)
+					""", id, etf, analysisAt, status, dataSource, analysisAt);
+		} else {
+			jdbc.update("""
+					INSERT INTO outlook_analyses (analysis_id, etf_code, analysis_at, status, data_source)
+					VALUES (?,?,?::timestamptz,?,?)
+					""", id, etf, analysisAt, status, dataSource);
+		}
+	}
+
+	/**
+	 * 그 날 그 ETF 의 <b>게시된</b> 옛 엔진 설명 한 건 — 체인·전달 경계·ETF 원장 축이 읽는 사슬이다:
 	 * {@code price_movement_trigger → etf_contribution_observation → explanation_route →
-	 * explanation_run → explanation_result}.
+	 * explanation_run → explanation_result}. 산출 축은 이 사슬을 더는 세지 않는다(ALPHA-1290).
 	 */
 	private void insertPublished(String id, String tradingDate, String etf, String status) {
 		insertTrigger("trg-" + id, tradingDate, etf);
@@ -264,9 +281,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 그 날 그 ETF 의 배치 트리거 한 건 — {@code o.trig} 가 세는 것.
 	 *
 	 * <p>표본·창 계약을 재는 대부분의 테스트가 이 테이블을 쓴다 — {@code trade_date} 축이고
-	 * {@code marketBound} 이면서 사슬이 짧기 때문이다. ⚠️ <b>{@code o.pub} 을 이걸로 대신 재지는
-	 * 못한다</b>: 그쪽에는 여기 없는 {@code publication_status} 술어가 있어
-	 * {@link #insertPublished} 가 따로 있다(리뷰가 잡은 자리 — "같은 계약"이라 적었던 것이 틀렸다).
+	 * {@code marketBound} 이면서 사슬이 짧기 때문이다. v2 분석 산출은 {@link #insertAnalysis} 로 잰다.
 	 *
 	 * <p>⚠️ 여기도 FK 가 없지는 않다 — {@code ALTER TABLE} 로 {@code etf_profile} 을 물고 있어
 	 * 아래처럼 종목 사슬 셋을 먼저 세운다.
@@ -432,9 +447,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		jdbc.update("""
 				INSERT INTO minute_price_trigger (trigger_id, entity_id, session_id, window_start,
 				       generation, detection_policy_version, open_price, close_price, change_rate,
-				       threshold, cooldown_bucket, trigger_kind)
-				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?)
-				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind);
+				       threshold, cooldown_bucket, trigger_kind, created_at)
+				VALUES (?,?,?,?::timestamptz,1,'v2',1000,1030,0.03,0.03,?,?,?::timestamptz)
+				""", id, entity, "sess-" + sessionDate, windowStart, minuteTriggerSeq++, kind, windowStart);
 	}
 
 	/**
@@ -767,6 +782,12 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 				null);
 		insertAttempt("a1", "t1");
 		insertAttempt("a2", "t1");
+		/* 업무를 실행하지 않은 중복 재시도 컨테이너(ALPHA-1088) — 시도 수(R16 재시도 소진)에 넣지 않는다 */
+		jdbc.update("""
+				INSERT INTO ops_task_attempt (attempt_id, expected_task_id, ecs_task_arn,
+				       execution_status, exit_code, record_source)
+				VALUES ('a3', 't1', 'arn:aws:ecs:task/a3', 'SUCCEEDED', 0, 'DUPLICATE_SKIP')
+				""");
 
 		assertThat(repository.facts(DAY).tasks()).satisfiesExactly(
 				t -> {
@@ -940,6 +961,17 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(trig.today()).isEqualTo(1L);
 		// 정렬 [0, 1, 5] 의 가운데 = 1.0 (평균이면 2.0 이다)
 		assertThat(trig.base()).isEqualTo(1.0d);
+		/* 기준일별 건수(ALPHA-1289) — 중앙값을 낸 바로 그 표본이 날짜 오름차순으로 실린다.
+		 * 🔴 조회일(DAY, 1종)은 **들어 있지 않다** — 미완결일의 값이 마지막 점이 되면 매일 급락으로
+		 * 읽힌다. 산출이 없던 기준일의 0 은 빠지지 않고 0 으로 실린다(실측이지 모름이 아니다). */
+		assertThat(trig.history()).extracting(d -> d.date().toString()).doesNotContain(DAY.toString());
+		assertThat(trig.history()).isSortedAccordingTo(
+				java.util.Comparator.comparing(com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay::date));
+		assertThat(trig.history()).extracting(com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay::count)
+				.containsExactlyInAnyOrder(0L, 1L, 5L);
+		assertThat(trig.history()).filteredOn(d -> d.date().toString().equals("2026-07-30"))
+				.extracting(com.edge.superadmin.repository.ConsoleFactsRepository.OutputDay::count)
+				.containsExactly(5L);
 	}
 
 	/**
@@ -990,18 +1022,25 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		insertHoliday(DAY.toString());
 		insertTradingDay("2026-07-31");
 		insertTrigger("g1", "2026-07-31", "etf-a");
+		insertAnalysis("outlook", "ol-0731", "etf-a", "2026-07-31T06:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "mv-0731", "etf-a", "2026-07-31T10:00:00+09:00", "completed", "database");
 
 		List<OutputRow> outputs = repository.facts(DAY).outputs();
 		assertThat(outputs).extracting(OutputRow::id)
-				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
+				.containsExactly("o.outlook", "o.movement", "o.trig", "o.doc", "o.asr", "o.evt");
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.trig")).singleElement()
 				.satisfies(o -> {
 					assertThat(o.today()).isZero();   // 실측 0 은 그대로 낸다
 					assertThat(o.base()).isNull();    // 비교할 평소가 없다
 				});
 		// 장에 매인 산출은 **둘 다** 그렇다 — 한쪽만 재면 그 플래그를 개별로 뒤집는 변이가 산다.
-		assertThat(outputs).filteredOn(o -> o.id().equals("o.pub")).singleElement()
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.movement")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isNull());
+		/* 🔴 **전망은 휴장일에도 기준을 준다**(ALPHA-1290) — 전망은 주말·휴일에도 매일 돈다. 장에 매인
+		 * 산출로 두면 휴장일마다 기준이 비어 그날의 결손이 편차 판정에서 빠진다. 값이 1.0 인 것은
+		 * 표본(07-31 의 1종)을 실제로 읽었다는 뜻이다 — 0.0 이면 표를 안 읽어도 통과한다. */
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.outlook")).singleElement()
+				.satisfies(o -> assertThat(o.base()).isEqualTo(1.0d));
 		// 장에 안 매인 산출은 휴장일에도 기준을 준다(표본 하나 → 중앙값 0.0, null 이 아니다).
 		assertThat(outputs).filteredOn(o -> o.id().equals("o.doc")).singleElement()
 				.satisfies(o -> assertThat(o.base()).isEqualTo(0.0d));
@@ -1020,7 +1059,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * <p>⚠️ <b>다섯 전부를 잰다.</b> 적재 창이 산출마다 다르다: {@code o.trig} 은 시장 SFN 한 번
 	 * (기본 15:40)이 통째로 넣는 계단 함수고 — ⚠️ 행에 박힌 {@code detected_at}=15:30 은
 	 * {@code load_price_triggers.py} 의 <b>멱등 키</b>이지 적재 시각이 아니다 — 뉴스 셋은 하루 종일,
-	 * {@code o.pub} 은 날짜 경계를 넘는다. 다섯 전부에 참인 술어가 "그 날이 다 지났는가" 하나뿐이라
+	 * 분석 산출은 날짜 경계를 넘는다. 전부에 참인 술어가 "그 날이 다 지났는가" 하나뿐이라
 	 * 산출별로 가르지 않는다 — 억제를 {@code marketBound} 와 함께 거는 변이가 여기서 죽는다.
 	 *
 	 * <p>⚠️ <b>대조를 같은 픽스처로 둔다</b> — 같은 데이터로 <b>다 지난 날</b>을 물으면 기준이 선다.
@@ -1032,7 +1071,7 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * 칸이라도 비면 억제를 <b>그 칸으로 좁히는</b> 변이가 산다 — 두 라운드 연속 그렇게 뚫렸다:
 	 * 처음엔 다섯을 전부 양수로 둬 {@code && today > 0} 이 살고, 그걸 고치며 장 산출을 전부 0 으로
 	 * 만들었더니 {@code && (today == 0 || !marketBound)} 가 살았다(둘 다 리뷰가 잡았다).
-	 * 그래서 {@code o.trig}=양수 · {@code o.pub}=0 · 뉴스 셋=양수로 갈라 둔다.
+	 * 그래서 {@code o.trig}=양수 · {@code o.movement}=0 · 전망과 뉴스 셋=양수로 갈라 둔다.
 	 */
 	@Test
 	void 오늘은_아직_안_끝났으니_기준을_안_준다() {
@@ -1053,31 +1092,30 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 
 		/* 오늘 — **네 칸을 다 채운다**(위 javadoc):
 		 *   · `o.trig` = 양수 · 장에 매임   ← 이 칸이 비면 `(today == 0 || !marketBound)` 가 산다
-		 *   · `o.pub`  = 0    · 장에 매임   ← 이 칸이 비면 `&& today > 0` 이 산다
+		 *   · `o.movement` = 0 · 장에 매임   ← 이 칸이 비면 `&& today > 0` 이 산다
 		 *                                     ⭐ 그리고 **이게 이 결함의 실제 형상이다**
 		 *                                     (dev 14:27 실측에서 `o.trig` 가 0/28.5 였다)
-		 *   · 뉴스 셋  = 양수 · 안 매임
-		 * ⚠️ `insertPublished` 는 트리거를 **함께** 세우므로 `o.pub` 만 0 으로 두려면 트리거를
-		 * 따로 넣어야 한다(그래서 여기서 `insertTrigger` 를 직접 쓴다). */
+		 *   · 전망·뉴스 셋 = 양수 · 안 매임 */
 		insertTrigger("g-today", today.toString(), "etf-c");
+		insertAnalysis("outlook", "ol-today", "etf-c", today + "T06:00:00+09:00", "completed", "database");
 		insertDocument("d-today", "NEWS", today + "T09:00:00+09:00");
 		insertAssertion("a-today", "d-today", today + "T09:00:00+09:00");
 		insertSourceEvent("e-today", "NEWS", today + "T09:00:00+09:00");
 
 		List<OutputRow> outputs = repository.facts(today).outputs();
 		assertThat(outputs).extracting(OutputRow::id)
-				.containsExactly("o.pub", "o.trig", "o.doc", "o.asr", "o.evt");
+				.containsExactly("o.outlook", "o.movement", "o.trig", "o.doc", "o.asr", "o.evt");
 		assertThat(outputs).allSatisfy(o -> assertThat(o.base()).as("%s 기준", o.id()).isNull());
 		/* 억제는 **기준 쪽만**이고 **값의 크기와 무관**하다 — 그날 값은 실측대로 낸다.
 		 * 양수 쪽에 장 산출({@code o.trig})이 **반드시 하나 있어야** 위 표의 네 칸이 찬다. */
 		assertThat(outputs).filteredOn(o -> o.today() > 0).extracting(OutputRow::id)
-				.containsExactlyInAnyOrder("o.trig", "o.doc", "o.asr", "o.evt");
-		assertThat(outputs).filteredOn(o -> o.id().equals("o.pub")).singleElement()
+				.containsExactlyInAnyOrder("o.outlook", "o.trig", "o.doc", "o.asr", "o.evt");
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.movement")).singleElement()
 				.satisfies(o -> assertThat(o.today()).isZero());
 
 		/* 대조 — 같은 원장으로 다 지난 날을 물으면 기준이 선다. 억제 사유는 데이터가 아니라
 		 * **조회일**이다. ⚠️ **다섯 전부를 잰다**: 한 축만 보면 특정 산출의 기준을 영구히
-		 * 비우는 변이(`|| id.equals("o.pub")`)가 통과한다 — 당일은 어차피 전부 null 이고 휴장
+		 * 비우는 변이(`|| id.equals("o.movement")`)가 통과한다 — 당일은 어차피 전부 null 이고 휴장
 		 * 테스트도 그 축의 null 을 기대하므로 아무 단언도 안 깨진다(리뷰가 잡았다). */
 		assertThat(repository.facts(prior).outputs())
 				.allSatisfy(o -> assertThat(o.base()).as("%s 기준(지난 날)", o.id()).isNotNull());
@@ -1238,9 +1276,11 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		/* 뉴스 갈래 **셋 다** 기준을 그대로 받는다 — marketBound 가 가르는 자리다. 한둘만 재면
 		 * 나머지 spec 의 플래그를 개별로 뒤집는 변이가 산다(리뷰가 잡았다). 라벨·단위도 함께
 		 * 못 박는다 — 그 값들은 소비자 어휘와 1:1 이라 조용히 바뀌면 화면이 딴 이름을 그린다. */
-		assertThat(outputs).filteredOn(o -> !o.id().startsWith("o.pub") && !o.id().equals("o.trig"))
+		assertThat(outputs).filteredOn(o -> !MARKET_OUTPUTS.contains(o.id()))
 				.extracting(OutputRow::id, OutputRow::label, OutputRow::unit, OutputRow::base)
 				.containsExactly(
+						/* 전망은 주말에도 돈다 — 장에 안 매인 산출이라 기준을 받는다(ALPHA-1290) */
+						org.assertj.core.groups.Tuple.tuple("o.outlook", "전망 완료 ETF", "종", 0.0d),
 						org.assertj.core.groups.Tuple.tuple("o.doc", "뉴스 문서", "건", 0.0d),
 						org.assertj.core.groups.Tuple.tuple("o.asr", "assertion", "건", 0.0d),
 						org.assertj.core.groups.Tuple.tuple("o.evt", "source event", "건", 0.0d));
@@ -1317,27 +1357,137 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 🔴 <b>{@code o.pub} 은 게시된 것만 센다.</b> {@code publication_status} 술어는 이 산출에만
-	 * 있고 {@code o.trig} 에는 없다 — 빠지면 초안·철회분이 "게시 ETF" 로 집계돼 산출이 부풀고,
-	 * 그 위에 세운 기준도 함께 부푼다.
+	 * 🔴 <b>분석 산출은 v2 표의 완료된 분석을 ETF 종 단위로 센다</b>(ALPHA-1290). 날짜는
+	 * {@code analysis_at} 의 KST 날짜다.
 	 *
-	 * <p>{@code count(DISTINCT etf_instrument_id)} 도 함께 잰다 — 같은 종목의 게시 둘을 넣는다.
+	 * <p>세지 않는 것을 하나씩 둔다 — 진행 중({@code running})·실패({@code failed})·합성 입력
+	 * ({@code synthetic})·날짜 밖. 하나라도 빠지면 그 술어를 지우는 변이가 통과한다. KST 경계는
+	 * 양쪽에 둔다: 08-03 23:30 KST 는 그날이고 08-04 00:10 KST 는 다음 날이다(UTC 로는 둘 다
+	 * 08-03 이라, 시간대를 빼먹은 변이가 여기서 죽는다).
+	 *
+	 * <p>⚠️ <b>"게시"가 아니라 "완료"다.</b> 가격변동 분석은 완료돼도 {@code published_at} 이 NULL 일
+	 * 수 있다(고른 항목이 없을 때) — 그 행도 센다.
 	 */
 	@Test
-	void 게시_산출은_게시된_것만_종목_단위로_센다() {
+	void 분석_산출은_v2_표의_완료된_분석을_종목_단위로_센다() {
 		insertTradingDay(DAY.toString());
-		insertPublished("p1", DAY.toString(), "etf-a", "PUBLISHED");
-		insertPublished("p2", DAY.toString(), "etf-a", "PUBLISHED");   // 같은 종목 → 여전히 1종
-		insertPublished("p3", DAY.toString(), "etf-b", "DRAFT");       // 게시 아님
-		insertPublished("p4", DAY.toString(), "etf-c", "WITHDRAWN");   // 철회
+		for (String kind : List.of("outlook", "movement")) {
+			insertAnalysis(kind, kind + "-a1", "etf-a", "2026-08-03T06:00:00+09:00", "completed", "database");
+			insertAnalysis(kind, kind + "-a2", "etf-a", "2026-08-03T23:30:00+09:00", "completed", "database"); // 같은 종목 → 여전히 1종
+			insertAnalysis(kind, kind + "-b", "etf-b", "2026-08-03T09:10:00+09:00", "completed", "database");
+			insertAnalysis(kind, kind + "-run", "etf-c", "2026-08-03T09:10:00+09:00", "running", "database");
+			insertAnalysis(kind, kind + "-fail", "etf-d", "2026-08-03T09:10:00+09:00", "failed", "database");
+			insertAnalysis(kind, kind + "-syn", "etf-e", "2026-08-03T09:10:00+09:00", "completed", "synthetic");
+			insertAnalysis(kind, kind + "-next", "etf-f", "2026-08-04T00:10:00+09:00", "completed", "database");
+			insertAnalysis(kind, kind + "-prev", "etf-g", "2026-08-02T23:50:00+09:00", "completed", "database");
+		}
 
-		assertThat(repository.facts(DAY).outputs())
-				.filteredOn(o -> o.id().equals("o.pub")).singleElement()
+		List<OutputRow> outputs = repository.facts(DAY).outputs();
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.outlook")).singleElement()
 				.satisfies(o -> {
-					assertThat(o.label()).isEqualTo("게시 ETF");
+					assertThat(o.label()).isEqualTo("전망 완료 ETF");
 					assertThat(o.unit()).isEqualTo("종");
-					assertThat(o.today()).isEqualTo(1L);
+					assertThat(o.today()).isEqualTo(2L);
 				});
+		assertThat(outputs).filteredOn(o -> o.id().equals("o.movement")).singleElement()
+				.satisfies(o -> {
+					assertThat(o.label()).isEqualTo("가격변동 분석 완료 ETF");
+					assertThat(o.unit()).isEqualTo("종");
+					assertThat(o.today()).isEqualTo(2L);
+				});
+		// 옛 엔진의 게시 산출은 더는 없다.
+		assertThat(outputs).extracting(OutputRow::id).doesNotContain("o" + ".pub");
+	}
+
+	/**
+	 * 🔴 <b>running 은 실패가 아니다</b>(ALPHA-1290). 상태가 running 인 채 남은 행은 아직 도는
+	 * 중인지 끝나지 못한 것인지 이 표만으로 못 가른다 — "끝나지 않은 건수"로 따로 센다.
+	 *
+	 * <p>행이 없던 날은 점이 없다(0 인 점을 만들지 않는다) — 가격변동 분석은 장이 열린 날에만
+	 * 생기고, v2 표가 생기기 전 날짜에는 값이 없다. 범위 밖 날짜와 합성 입력은 세지 않는다.
+	 */
+	@Test
+	void 분석_추이는_running_을_실패로_세지_않고_행이_없는_날은_점이_없다() {
+		insertAnalysis("outlook", "o1", "etf-a", "2026-08-02T06:00:00+09:00", "completed", "database");
+		// 같은 종목을 한 번 더 완료 — 건수 2 · 종 수 1 로 갈라야 두 열을 맞바꾸는 변이가 죽는다.
+		insertAnalysis("outlook", "o1b", "etf-a", "2026-08-02T07:00:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "o2", "etf-b", "2026-08-02T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "o3", "etf-b", "2026-08-02T06:30:00+09:00", "failed", "database"); // 같은 종목 두 번 실패
+		insertAnalysis("outlook", "o4", "etf-c", "2026-08-02T06:00:00+09:00", "running", "database");
+		insertAnalysis("outlook", "o5", "etf-d", "2026-08-02T06:00:00+09:00", "running", "database");
+		insertAnalysis("outlook", "o6", "etf-e", "2026-08-02T06:00:00+09:00", "running", "database");
+		insertAnalysis("outlook", "o7", "etf-f", "2026-08-02T06:00:00+09:00", "completed", "synthetic");
+		/* 🔴 실패했다가 **같은 날 다시 돌아 완료된** ETF(ALPHA-1291) — 실패 건수에는 들고 실패 ETF 에는
+		 * 안 든다. v2 는 이 형태가 흔해서, "실패한 적 있는 ETF"로 세면 카드가 매일 임계를 넘는다. */
+		insertAnalysis("outlook", "o-retry1", "etf-g", "2026-08-02T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "o-retry2", "etf-g", "2026-08-02T08:00:00+09:00", "completed", "database");
+		// 실패한 뒤 다시 도는 중(완료 없음) — 아직 끝내 완료하지 못했으므로 실패 ETF 다.
+		insertAnalysis("outlook", "o-again1", "etf-h", "2026-08-02T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "o-again2", "etf-h", "2026-08-02T08:00:00+09:00", "running", "database");
+		insertAnalysis("outlook", "o8", "etf-a", "2026-08-03T23:59:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "o-out", "etf-a", "2026-08-04T00:00:00+09:00", "completed", "database"); // 범위 밖
+		insertAnalysis("outlook", "o-old", "etf-a", "2026-07-31T23:59:00+09:00", "completed", "database"); // 범위 밖
+		insertAnalysis("movement", "m1", "etf-a", "2026-08-03T10:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m2", "etf-a", "2026-08-03T11:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m3", "etf-b", "2026-08-03T11:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "m4", "etf-b", "2026-08-03T11:30:00+09:00", "failed", "database");
+		insertAnalysis("movement", "m5", "etf-c", "2026-08-03T11:30:00+09:00", "failed", "database");
+		// 가격변동 쪽에도 같은 형태를 둔다 — 실패했다가 같은 날 완료된 ETF 는 실패 ETF 가 아니다.
+		insertAnalysis("movement", "m-retry1", "etf-f", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "m-retry2", "etf-f", "2026-08-03T10:30:00+09:00", "completed", "database");
+		// 가격변동 쪽 SELECT 는 전망과 따로다 — 같은 반례(진행 중·합성 입력)를 여기에도 둔다.
+		insertAnalysis("movement", "m-run", "etf-d", "2026-08-03T11:30:00+09:00", "running", "database");
+		insertAnalysis("movement", "m-syn", "etf-e", "2026-08-03T11:30:00+09:00", "completed", "synthetic");
+		// KST 경계와 범위 밖 — 00:10 KST 는 UTC 로 전날이라, 시간대를 빼면 08-02 로 넘어간다.
+		insertAnalysis("movement", "m-early", "etf-a", "2026-08-03T00:10:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m-out-next", "etf-a", "2026-08-04T00:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "m-out-prev", "etf-a", "2026-07-31T23:59:00+09:00", "completed", "database");
+
+		// 08-01 ~ 08-03 의 3일 — 08-01 에는 어느 종류도 행이 없다.
+		assertThat(repository.analysisTrend(DAY, 3)).containsExactly(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
+						"movement", LocalDate.parse("2026-08-03"), 4, 4, 1, 2, 2),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
+						"outlook", LocalDate.parse("2026-08-02"), 3, 4, 4, 2, 2),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisDayPoint(
+						"outlook", LocalDate.parse("2026-08-03"), 1, 0, 0, 1, 0));
+	}
+
+	/**
+	 * 🔴 <b>분석 실패 축은 끝내 완료하지 못한 ETF 만 낸다</b>(R15, ALPHA-1291). 그날 그 종류의 분석에
+	 * 실패 행이 있고 완료 행이 하나도 없는 ETF 다.
+	 *
+	 * <p>들어가면 안 되는 것을 하나씩 둔다 — 실패했다가 같은 날 완료된 ETF · running 만 있는 ETF ·
+	 * 합성 입력 · 날짜 밖(KST 자정 양쪽). 종류도 가른다: 같은 ETF 가 전망은 완료, 가격변동은 실패일 수
+	 * 있다({@code etf-a}). 한 종류의 완료가 다른 종류의 실패를 지우면 안 된다.
+	 */
+	@Test
+	void 분석_실패_축은_끝내_완료하지_못한_ETF_만_종류별로_낸다() {
+		insertTradingDay(DAY.toString());
+		insertAnalysis("outlook", "f-o-ok", "etf-a", "2026-08-03T06:00:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "f-o-fail", "etf-b", "2026-08-03T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-fail2", "etf-b", "2026-08-03T23:59:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-retry1", "etf-c", "2026-08-03T06:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-retry2", "etf-c", "2026-08-03T07:00:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "f-o-run", "etf-d", "2026-08-03T06:00:00+09:00", "running", "database");
+		insertAnalysis("outlook", "f-o-syn", "etf-e", "2026-08-03T06:00:00+09:00", "failed", "synthetic");
+		insertAnalysis("outlook", "f-o-next", "etf-f", "2026-08-04T00:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-prev", "etf-g", "2026-08-02T23:59:00+09:00", "failed", "database");
+		// 날짜 밖의 완료는 그날의 실패를 지우지 못한다 — 다음 날 00:05 에 다시 돌아 완료됐다.
+		insertAnalysis("outlook", "f-o-late1", "etf-h", "2026-08-03T23:50:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "f-o-late2", "etf-h", "2026-08-04T00:05:00+09:00", "completed", "database");
+		insertAnalysis("movement", "f-m-fail", "etf-a", "2026-08-03T00:10:00+09:00", "failed", "database");
+		insertAnalysis("movement", "f-m-retry1", "etf-c", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "f-m-retry2", "etf-c", "2026-08-03T10:30:00+09:00", "completed", "database");
+
+		assertThat(repository.facts(DAY).analysisFailures()).containsExactly(
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow("movement", "etf-a"),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow("outlook", "etf-b"),
+				new com.edge.superadmin.repository.ConsoleFactsRepository.AnalysisFailureRow("outlook", "etf-h"));
+		// 분석 추이의 실패 ETF 수와 같은 기준이다 — 두 조회가 갈리면 카드와 규칙이 다른 수를 말한다.
+		assertThat(repository.analysisTrend(DAY, 1))
+				.extracting(p -> p.kind() + ":" + p.failedEtfs())
+				.containsExactly("movement:1", "outlook:2");
 	}
 
 	/**
@@ -1369,120 +1519,251 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * 경계 축의 세 수. <b>게시했는데 발번이 없다</b> · <b>발번했는데 지금 비게시다</b> · 발번 전체.
+	 * v2 가격변동 분석 한 건(ALPHA-1326) — 완료 상태다. {@code publishedAt} 이 null 이면 고른 항목이
+	 * 없어 게시하지 않은 분석이다. 거래일은 분석 시각의 KST 날짜다.
+	 */
+	private void insertMovement(String id, String etf, String analysisAt, String publishedAt,
+			String dataSource, String... selected) {
+		jdbc.update("""
+				INSERT INTO movement_analyses (analysis_id, etf_code, analysis_at, status, data_source,
+				       trading_date, published_at, selected_item_ids)
+				VALUES (?,?,?::timestamptz,'completed',?, (?::timestamptz AT TIME ZONE 'Asia/Seoul')::date,
+				        ?::timestamptz, ?::text[])
+				""", id, etf, analysisAt, dataSource, analysisAt, publishedAt,
+				"{" + String.join(",", selected) + "}");
+	}
+
+	/** v2 의 게시 전달(NEW) — 그 테넌트의 다음 cursor 로 넣는다({@code storage/delivery.py} 와 같은 형상). */
+	private void deliverMovement(long tenantId, String analysisId) {
+		jdbc.update("""
+				INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, movement_analysis_id)
+				SELECT ?, COALESCE(MAX(cursor), 0) + 1, 'NEW', ?
+				  FROM tenant_delivery WHERE tenant_id = ?
+				""", tenantId, analysisId, tenantId);
+	}
+
+	/** v2 의 회수 전달(INVALIDATION) — {@code storage/retractions.py} 와 같은 형상. */
+	private void invalidateMovement(long tenantId, String analysisId) {
+		jdbc.update("""
+				INSERT INTO tenant_delivery (tenant_id, cursor, delivery_type, target_movement_analysis_id,
+				       reason)
+				SELECT ?, COALESCE(MAX(cursor), 0) + 1, 'INVALIDATION', ?, '가격 복귀'
+				  FROM tenant_delivery WHERE tenant_id = ?
+				""", tenantId, analysisId, tenantId);
+	}
+
+	private void withdrawMovement(String analysisId) {
+		jdbc.update("UPDATE movement_analyses SET withdrawn_at = '2026-08-03T15:00:00+09:00' WHERE analysis_id = ?",
+				analysisId);
+	}
+
+	/**
+	 * 경계 축의 세 수(ALPHA-1326, v2). <b>게시했는데 전달이 없다</b> · <b>전달했는데 지금 게시본이 아니다</b>
+	 * · 전달 전체.
 	 *
-	 * <p>⚠️ 셋을 <b>서로 다른 값</b>으로 만든다 — 같으면 SQL 셋을 맞바꾸는 변이가 통과한다.
+	 * <p>⚠️ 셋을 <b>서로 다른 값</b>으로 만든다 — 같으면 서브쿼리를 맞바꾸는 변이가 통과한다.
 	 */
 	@Test
-	void 경계_축은_게시와_발번이_어긋난_건수를_낸다() {
+	void 경계_축은_v2_게시와_전달이_어긋난_건수를_낸다() {
 		long t1 = insertTenant("증권사A");
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");    // 발번 있음 → 안 셈
-		insertPublished("p-ok2", DAY.toString(), "etf-d", "PUBLISHED");   // 〃
-		deliverNew(t1, "p-ok");
-		deliverNew(t1, "p-ok2");
+		insertMovement("m-ok", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		insertMovement("m-ok2", "etf-d", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t1, "m-ok");
+		deliverMovement(t1, "m-ok2");
 
-		/* 🔴 게시했는데 발번 없음 → 3건. **셋을 같은 ETF 로 둔다** — 다르게 두면 이 수를
-		 * `count(DISTINCT etf_instrument_id)` 로 바꾸는 변이가 통과하고, 운영에선 한 ETF 에 as-of
-		 * 다른 설명이 하루 여럿이라 **축소 보고**된다(변이 리뷰가 잡았다). */
-		insertPublished("p-nodev1", DAY.toString(), "etf-b", "PUBLISHED");
-		insertPublished("p-nodev2", DAY.toString(), "etf-b", "PUBLISHED");
-		insertPublished("p-nodev3", DAY.toString(), "etf-b", "PUBLISHED");
+		/* 🔴 게시했는데 전달 없음 → 3건. **셋을 같은 ETF 로 둔다** — ETF 수로 세는 변이가 죽는다. 같은
+		 * ETF 에 전달된 분석이 없어야 한다(있으면 설계상 건너뛴 것이다 — 아래 별도 테스트). */
+		insertMovement("m-no1", "etf-b", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		insertMovement("m-no2", "etf-b", "2026-08-03T11:00:00+09:00", "2026-08-03T11:05:00+09:00", "database");
+		insertMovement("m-no3", "etf-b", "2026-08-03T12:00:00+09:00", "2026-08-03T12:05:00+09:00", "database");
 
-		/* 🔴 **게시본이 아닌 무발번은 안 센다** — 초안·철회는 애초에 발번 대상이 아니라 무발번이
-		 * 정상이다. 둘 다 둬야 술어를 `true` 로 여는 변이와 `IN ('PUBLISHED','WITHDRAWN')` 로
-		 * 넓히는 변이가 **각각** 죽는다. 안 그러면 이 수가 초안 수만큼 상시 올라 절대 0 이 안 된다. */
-		insertPublished("p-draft", DAY.toString(), "etf-f", "DRAFT");
-		insertPublished("p-wd", DAY.toString(), "etf-g", "WITHDRAWN");
+		/* 🔴 **게시본이 아닌 무전달은 안 센다** — 게시하지 않은 분석(고른 항목 없음)과 회수된 분석. 둘 다
+		 * 둬야 술어를 넓히는 변이가 각각 죽는다. */
+		insertMovement("m-unpub", "etf-f", "2026-08-03T10:00:00+09:00", null, "database");
+		insertMovement("m-wd", "etf-g", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		withdrawMovement("m-wd");
 
-		/* 🔴 발번했는데 지금 비게시 → 2건. **비게시가 WITHDRAWN 뿐이 아니다** — 초안으로 되돌아간
-		 * 것도 테넌트는 페이로드를 들고 있으므로 위반이다. 철회만 두면 `<> 'PUBLISHED'` 를
-		 * `= 'WITHDRAWN'` 으로 좁히는 변이가 통과한다(0 이 사실이 아닌데 0 으로 보이는 방향). */
-		insertPublished("p-gone", DAY.toString(), "etf-c", "PUBLISHED");
-		deliverNew(t1, "p-gone");
-		withdraw("p-gone");
-		insertPublished("p-back", DAY.toString(), "etf-h", "PUBLISHED");
-		deliverNew(t1, "p-back");
-		draft("p-back");
+		/* 🔴 전달했는데 지금 게시본이 아니고 회수 전달도 없음 → 2건. */
+		insertMovement("m-gone", "etf-c", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t1, "m-gone");
+		withdrawMovement("m-gone");
+		insertMovement("m-gone2", "etf-h", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t1, "m-gone2");
+		withdrawMovement("m-gone2");
 
-		// ⚠️ 셋을 **서로 다른 값**으로 둔다 — 같으면 와이어/서브쿼리를 맞바꾸는 변이가 통과한다.
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
-			assertThat(b.publishedWithoutDelivery()).isEqualTo(3L);   // p-nodev1·2·3
-			assertThat(b.deliveryNowNonpublished()).isEqualTo(2L);    // p-gone · p-back
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(3L);   // m-no1·2·3
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(2L);    // m-gone · m-gone2
 			assertThat(b.deliveryRows()).isEqualTo(4L);               // NEW 넷
 		});
 	}
 
 	/**
-	 * 🔴 <b>테넌트가 하나도 없으면 미발번은 위반이 아니다.</b> {@code _fanout_new} 는 {@code tenant}
-	 * 전건에 발번하므로 0명이면 0행이고, 호출부는 그걸 <b>정상 성공</b>으로 기록한다
-	 * ({@code fanout_tenants: 0}). 안 막으면 새 환경 부트스트랩에서 게시본 전건이 위반으로 선다.
+	 * 🔴 <b>설계상 전달하지 않는 게시본은 세지 않는다</b>(ALPHA-1326). {@code enqueue_movement}
+	 * ({@code storage/delivery.py})는 같은 ETF 에 ① 같거나 더 늦은 분석이 이미 전달됐거나 ② 같은
+	 * 거래일·같은 게시 시각·같은 고른 항목의 분석이 이미 전달됐으면(직전 게시를 물려받은 경우) NEW 를
+	 * 만들지 않는다.
+	 *
+	 * <p>대조를 둘 둔다 — 조건을 느슨하게 옮기는 변이가 각각 죽는다:
+	 * <ul>
+	 *   <li>{@code z2} — 더 <b>이른</b> 분석이 전달됐다. 늦은 분석의 무전달은 위반이다.</li>
+	 *   <li>{@code v2} — 게시 시각은 같은데 고른 항목이 다르다. 물려받은 게시가 아니다.</li>
+	 * </ul>
 	 */
 	@Test
-	void 테넌트가_없으면_미발번은_위반이_아니다() {
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");   // 테넌트 0명
+	void 설계상_전달하지_않는_게시본은_세지_않는다() {
+		long t = insertTenant("증권사A");
+		// ① 더 늦은 분석(x2)이 전달됐다 — x1 은 건너뛴 것이다.
+		insertMovement("x1", "etf-x", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database");
+		insertMovement("x2", "etf-x", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "x2");
+		// ② 직전 분석(y1)의 게시를 그대로 물려받았다 — y2 는 건너뛴 것이다.
+		insertMovement("y1", "etf-y", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i1");
+		insertMovement("y2", "etf-y", "2026-08-03T10:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i1");
+		deliverMovement(t, "y1");
+		// 대조: 더 이른 분석만 전달됐다.
+		insertMovement("z1", "etf-z", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database");
+		insertMovement("z2", "etf-z", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "z1");
+		// 대조: 게시 시각은 같은데 고른 항목이 다르다.
+		insertMovement("v1", "etf-v", "2026-08-03T09:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i1");
+		insertMovement("v2", "etf-v", "2026-08-03T10:00:00+09:00", "2026-08-03T09:05:00+09:00", "database", "i2");
+		deliverMovement(t, "v1");
 
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(2L);   // z2 · v2
+	}
+
+	/**
+	 * 🔴 <b>전달 대기 시간 안의 게시본은 아직 세지 않는다</b>(ALPHA-1326). 전달은 게시와 같은 분석 작업
+	 * 안에서 일어나고 그 작업은 단일 분석 워크플로의 시간 제한(28,800초)을 못 넘긴다. 기점은 요청이
+	 * 수용된 시각이고, 요청이 없으면 게시 시각이다.
+	 *
+	 * <p>{@code g-inherit} 가 기점의 이유다 — 게시 시각은 직전 분석에서 물려받아 오래됐지만 요청은 방금
+	 * 수용됐다. 게시 시각으로 재면 작업이 도는 동안 위반으로 선다. {@code g-unaccepted} 는 같은 형상인데
+	 * 수용 기록이 없다(실행은 떴는데 수용 기록이 실패한 경우) — 요청이 만들어진 시각으로 잰다.
+	 */
+	@Test
+	void 전달_대기_시간_안의_게시본은_아직_세지_않는다() {
+		insertTenant("증권사A");
+		OffsetDateTime now = OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		String hourAgo = now.minusHours(1).toString();
+		String nineHoursAgo = now.minusHours(9).toString();
+		// 요청 없이 한 시간 전에 게시 — 대기 중
+		insertMovement("g-fresh", "etf-1", hourAgo, hourAgo, "database");
+		// 게시 시각은 오래됐지만 요청이 한 시간 전에 수용됐다 — 대기 중
+		insertMovement(analysisId("g-inherit"), "etf-2", hourAgo, "2026-08-03T09:05:00+09:00", "database");
+		insertRequest("g-inherit", "t-inherit", hourAgo);
+		// 물려받은 게시 시각 + 수용 기록이 없는 요청(한 시간 전 생성) — 대기 중
+		insertMovement(analysisId("g-unaccepted"), "etf-5", hourAgo, "2026-08-03T09:05:00+09:00", "database");
+		insertRequest("g-unaccepted", "t-unaccepted", hourAgo);
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("g-unaccepted"));
+		// 요청이 9시간 전에 수용됐다 — 대기 시간이 지났다
+		insertMovement(analysisId("g-late"), "etf-3", nineHoursAgo, nineHoursAgo, "database");
+		insertRequest("g-late", "t-late", nineHoursAgo);
+		// 요청 없이 오래전에 게시 — 대기 시간이 지났다
+		insertMovement("g-old", "etf-4", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(2L);   // g-late · g-old
+	}
+
+	/**
+	 * 🔴 <b>테넌트가 하나도 없으면 미전달은 위반이 아니다.</b> {@code enqueue_movement} 는 {@code tenant}
+	 * 전건에 넣으므로 0명이면 0행이다. 안 막으면 새 환경에서 게시본 전건이 위반으로 선다.
+	 */
+	@Test
+	void 테넌트가_없으면_미전달은_위반이_아니다() {
+		insertMovement("m-ok", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
 		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isZero();
 
-		/* 테넌트가 생기는 순간 같은 행이 위반으로 선다 — 가드가 그 경계에 있다.
-		 * ⚠️ **DEV·ACTIVE 가 아닌 테넌트**로 만든다: `_fanout_new` 는 필터 없이 전건에 발번하므로
-		 * 가드도 전건이어야 하고, 여기서 DEV·ACTIVE 를 쓰면 가드를 좁히는 변이가 통과한다. */
+		/* 테넌트가 생기는 순간 같은 행이 위반으로 선다. ⚠️ DEV·ACTIVE 가 아닌 테넌트로 만든다 — 전달은
+		 * 필터 없이 전건에 넣으므로 가드도 전건이어야 한다. */
 		insertTenant("증권사A", "PROD", "ONBOARDING");
 		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isEqualTo(1L);
 	}
 
 	/**
-	 * 🔴 <b>정상 무효화는 위반이 아니다.</b> 운영자 무효화는 결과를 WITHDRAWN 으로 전이하고 그 NEW 를
-	 * 받은 테넌트에 INVALIDATION 을 발번하되 <b>원래 NEW 행을 남긴다</b>
-	 * ({@code JdbcAnalysisWriteRepository.invalidate}). 상태만 보면 "발번했는데 현재 비게시"라
-	 * 정상 무효화한 분석이 전부 위반으로 남아 그 수가 <b>영구히 단조 증가</b>한다.
+	 * 🔴 <b>회수 전달은 테넌트별로 본다</b>(ALPHA-1326). {@code retract_movement}
+	 * ({@code storage/retractions.py})는 회수된 분석을 받은 테넌트마다 INVALIDATION 을 넣고 원래 NEW 행은
+	 * 남긴다. 그래서 상태만 보면 정상 회수가 전부 위반으로 남는다 — 위반은 "받고도 회수 통지를 못 받은
+	 * 테넌트"다.
 	 *
-	 * <p>🔴 그리고 상관은 결과만이 아니라 <b>테넌트까지</b>다 — 무효화는 그 NEW 를 받은 테넌트에만
-	 * 나가므로, <b>받고도 통지 못 받은 테넌트</b>가 있으면 그건 진짜 위반이다. 그래서 테넌트 둘을
-	 * 두고 한쪽에만 통지한다: 결과 단위로만 상관시키면 이 픽스처가 <b>0건</b>으로 나온다.
+	 * <p>🔴 <b>전달된 적 없는 분석의 회수는 회수 전달을 만들지 않는 것이 설계다</b> — 그 함수는 NEW 가
+	 * 있는 분석만 대상으로 고른다. {@code p-never} 가 그 형상이고 세지 않는다.
 	 */
 	@Test
-	void 무효화_통지가_간_발번은_비게시로_안_센다() {
+	void 회수_전달은_테넌트별로_보고_전달된_적_없는_회수는_세지_않는다() {
 		long a = insertTenant("증권사A");
 		long b = insertTenant("증권사B");
-
-		// ① A·B 가 받았고 A 만 통지받았다 → B 의 행이 위반.
-		insertPublished("p-inv", DAY.toString(), "etf-a", "PUBLISHED");
-		deliverNew(a, "p-inv");
-		deliverNew(b, "p-inv");
-		withdraw("p-inv");
-		deliverInvalidation(a, "p-inv");
-
-		/* ② 🔴 **B 에게 "다른 결과"의 무효화를 준다.** 면제가 "그 테넌트가 아무 무효화나 한 번
-		 * 받았으면"으로 미끄러지면 ①의 B 행이 조용히 면제된다 — 운영 며칠이면 모든 테넌트가
-		 * 무효화를 한 번씩 받으므로 그 뒤로는 이 수가 **영구히 0** 이고 콘솔은 "정합"을 계속
-		 * 띄운다(변이 리뷰가 잡았다 — 위반을 숨기는 방향이라 가장 나쁘다). */
-		insertPublished("p-other", DAY.toString(), "etf-b", "PUBLISHED");
-		deliverNew(b, "p-other");
-		withdraw("p-other");
-		deliverInvalidation(b, "p-other");   // B 는 이 결과에 대해서는 정상
-
-		/* ③ 통지가 아예 없는 철회 — A·B 둘 다 위반. 이걸로 위반 행이 **셋**이 되고
-		 * (b/p-inv · a/p-third · b/p-third) 서로 다른 테넌트 2 · 서로 다른 결과 2 라,
-		 * `count(*)` 를 테넌트나 결과 단위로 바꾸는 변이가 **각각** 죽는다. 행 수로 안 세면
-		 * 팬아웃 사고가 축소 보고된다(한 결과가 20개 테넌트에 나가 있어도 1 로 뜬다). */
-		insertPublished("p-third", DAY.toString(), "etf-c", "PUBLISHED");
-		deliverNew(a, "p-third");
-		deliverNew(b, "p-third");
-		withdraw("p-third");
+		// ① A·B 가 받았고 A 만 회수 통지를 받았다 → B 의 행이 위반.
+		insertMovement("p-inv", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(a, "p-inv");
+		deliverMovement(b, "p-inv");
+		withdrawMovement("p-inv");
+		invalidateMovement(a, "p-inv");
+		/* ② 🔴 B 에게 "다른 분석"의 회수 통지를 준다 — 면제가 "그 테넌트가 아무 회수나 받았으면"으로
+		 * 미끄러지면 ①의 B 행이 조용히 면제된다. */
+		insertMovement("p-other", "etf-b", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(b, "p-other");
+		withdrawMovement("p-other");
+		invalidateMovement(b, "p-other");
+		// ③ 회수 통지가 아예 없다 — A·B 둘 다 위반. 테넌트별 행 수로 센다.
+		insertMovement("p-third", "etf-c", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(a, "p-third");
+		deliverMovement(b, "p-third");
+		withdrawMovement("p-third");
+		// ④ 전달된 적 없이 회수됐다 — 회수 전달을 만들지 않는 것이 설계다.
+		insertMovement("p-never", "etf-d", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		withdrawMovement("p-never");
 
 		assertThat(repository.facts(DAY).boundary()).satisfies(x -> {
-			assertThat(x.deliveryNowNonpublished()).isEqualTo(3L);
-			assertThat(x.deliveryRows()).isEqualTo(7L);   // NEW 다섯 + INVALIDATION 둘
+			assertThat(x.deliveryNowNonpublished()).isEqualTo(3L);   // b/p-inv · a/p-third · b/p-third
+			assertThat(x.publishedWithoutDelivery()).isZero();       // 회수된 분석은 게시본이 아니다
+			assertThat(x.deliveryRows()).isEqualTo(7L);              // NEW 다섯 + INVALIDATION 둘
+		});
+	}
+
+	/** 🔴 <b>합성 입력의 분석은 세지 않는다</b> — 실데이터({@code data_source='database'})만 테넌트에 간다. */
+	@Test
+	void 합성_입력_분석은_경계_축에서_세지_않는다() {
+		long t = insertTenant("증권사A");
+		insertMovement("s-pub", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "synthetic");
+		insertMovement("s-gone", "etf-b", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "synthetic");
+		deliverMovement(t, "s-gone");
+		withdrawMovement("s-gone");
+
+		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
+			assertThat(b.publishedWithoutDelivery()).isZero();
+			assertThat(b.deliveryNowNonpublished()).isZero();
+		});
+		// 대조 — 같은 형상의 실데이터는 센다.
+		insertMovement("r-pub", "etf-c", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		insertMovement("r-gone", "etf-d", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "r-gone");
+		withdrawMovement("r-gone");
+		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
+			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
+			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
 		});
 	}
 
 	/**
-	 * 🔴 <b>{@code deliveryRows} 는 "발번이 돌고는 있나"를 답한다.</b> 앞의 둘이 0 일 때 그것이
-	 * <b>정합</b>인지 <b>발번이 아직 하나도 없음</b>인지 이 값이 가른다 — 없으면 "아무 문제 없음"과
-	 * "아직 아무것도 안 나감"이 화면에서 같은 칸이 된다.
+	 * ⚠️ <b>옛 설명 엔진의 게시는 더는 세지 않는다</b>(ALPHA-1326). 그 엔진은 10-01 이 마지막 게시라 이
+	 * 축은 새 분석 엔진만 본다 — 옛 엔진 분에 어긋남이 남아 있어도 여기에는 안 나온다.
 	 */
 	@Test
-	void 발번이_하나도_없는_것과_정합인_것을_가른다() {
+	void 옛_엔진의_게시는_경계_축이_세지_않는다() {
+		insertTenant("증권사A");
+		insertPublished("p-old", DAY.toString(), "etf-a", "PUBLISHED");   // 옛 엔진 게시, 전달 없음
+		assertThat(repository.facts(DAY).boundary().publishedWithoutDelivery()).isZero();
+	}
+
+	/**
+	 * 🔴 <b>{@code deliveryRows} 는 "전달이 돌고는 있나"를 답한다.</b> 앞의 둘이 0 일 때 그것이 정합인지
+	 * 전달이 아직 하나도 없음인지 이 값이 가른다.
+	 */
+	@Test
+	void 전달이_하나도_없는_것과_정합인_것을_가른다() {
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isZero();
 			assertThat(b.deliveryNowNonpublished()).isZero();
@@ -1490,10 +1771,9 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		});
 
 		long t = insertTenant("증권사A");
-		insertPublished("p-ok", DAY.toString(), "etf-a", "PUBLISHED");
-		deliverNew(t, "p-ok");
+		insertMovement("m-ok", "etf-a", "2026-08-03T10:00:00+09:00", "2026-08-03T10:05:00+09:00", "database");
+		deliverMovement(t, "m-ok");
 
-		// 위반은 여전히 0 인데 분모가 1 — 이제 "정합"이라고 말할 수 있다.
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isZero();
 			assertThat(b.deliveryNowNonpublished()).isZero();
@@ -1502,273 +1782,26 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	}
 
 	/**
-	 * ⚠️ <b>경계 축만 날짜 창을 안 탄다.</b> 나머지 축은 "그 날 무슨 일이 있었나"이고 이건 "지금
-	 * 어긋난 것이 몇 건인가"라 누적이다 — 날짜로 자르면 조회한 날에 안 생긴 위반이 화면에서 사라지고,
-	 * 어제 난 사고가 오늘 조회에서 저절로 나은 것처럼 보인다.
+	 * ⚠️ <b>경계 축만 날짜 창을 안 탄다.</b> "지금 어긋난 것이 몇 건인가"라 누적이다 — 날짜로 자르면
+	 * 어제 난 사고가 오늘 조회에서 저절로 나은 것처럼 보인다. 두 수를 함께 잰다.
 	 */
 	@Test
 	void 경계_축은_조회한_날과_무관하게_누적을_낸다() {
 		long t = insertTenant("증권사A");
-		// 조회 날(08-03)과 **다른 날**의 게시본이 발번 없이 남아 있다.
-		insertPublished("p-old", "2026-07-31", "etf-a", "PUBLISHED");
-		/* 🔴 **둘째 수도 함께 잰다.** 첫째만 단언하면 둘째 서브쿼리에 날짜 창을 붙이는 변이가
-		 * 통과하고, 그러면 통지 없이 철회된 발번이 **다음 날 화면에서 사라진다** — 이 축의 존재
-		 * 이유로 내건 문장("어제 어긋난 것이 오늘 저절로 낫지 않는다")이 정작 그 수에서 깨진다
-		 * (변이 리뷰가 잡았다). */
-		insertPublished("p-old-gone", "2026-07-31", "etf-b", "PUBLISHED");
-		deliverNew(t, "p-old-gone");
-		withdraw("p-old-gone");
+		// 조회 날(08-03)과 **다른 날**의 게시본
+		insertMovement("m-old", "etf-a", "2026-07-31T10:00:00+09:00", "2026-07-31T10:05:00+09:00", "database");
+		insertMovement("m-old-gone", "etf-b", "2026-07-31T10:00:00+09:00", "2026-07-31T10:05:00+09:00", "database");
+		deliverMovement(t, "m-old-gone");
+		withdrawMovement("m-old-gone");
 
 		assertThat(repository.facts(DAY).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
 			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
 		});
-		// 그 날을 직접 조회해도 같은 수다 — 창이 없다는 뜻이다.
 		assertThat(repository.facts(LocalDate.parse("2026-07-31")).boundary()).satisfies(b -> {
 			assertThat(b.publishedWithoutDelivery()).isEqualTo(1L);
 			assertThat(b.deliveryNowNonpublished()).isEqualTo(1L);
 		});
-	}
-
-	/**
-	 * 🔴 <b>체인의 날짜 축은 트리거 하나뿐이다.</b> 단계마다 자기 테이블을 자기 날짜 컬럼으로 따로
-	 * 세면 서로 <b>다른 무리</b>를 센 수가 나란히 서고, 인접 비교(R10)가 없는 손실을 만든다.
-	 * 그래서 하류 행의 날짜를 <b>일부러 다른 날로</b> 밀어 둔다 — 어느 단계든 날짜로 거르는 순간
-	 * 그 단계가 0 이 되어 이 단언이 깨진다.
-	 *
-	 * <p>순서도 여기서 못 박는다. 목록 순서가 곧 흐름이고 원장에는 단계 간 선후가 없어, 순서를
-	 * 재배치하는 편집은 <b>어떤 값 단언도 안 깨뜨린 채</b> 손실 판정만 뒤섞는다.
-	 */
-	@Test
-	void 체인은_그_날_트리거의_자손을_날짜와_무관하게_끝까지_따라간다() {
-		insertPublished("res-a", "2026-08-03", "etf-a", "PUBLISHED");
-		/* 게시본의 거래일을 이틀 뒤로 민다 — 트리거는 08-03 에 있고 결과 행만 다른 날짜를 단다.
-		 * ⚠️ **오늘 이 조합이 실제로 난다고 주장하지 않는다**(그렇게 적었다가 정정했다: 엔진은
-		 * 트리거를 `t.trade_date = settings.trade_date` 로 골라 같은 값을 결과에 적으므로 배치
-		 * 갈래에선 구성상 같다). 재는 것은 **구현이 하류 날짜를 안 본다**는 계약이다 — 어느
-		 * 단계든 자기 날짜 컬럼으로 거르는 순간 그 단계가 0 이 되어 이 단언이 깨진다. */
-		jdbc.update("UPDATE explanation_result SET trade_date = '2026-08-05'::date"
-				+ " WHERE explanation_result_id = 'res-a'");
-		deliverNew(insertTenant("t1"), "res-a");
-
-		var chain = repository.facts(LocalDate.parse("2026-08-03")).chain();
-
-		/* 라벨·단위·출처까지 못 박는다 — 셋 다 서버가 내는 값이고(산출 축과 같은 규약) 화면이
-		 * 그대로 그린다. 값만 재면 라벨을 맞바꾸는 편집이 전건 초록이다(변이 실증). */
-		assertThat(chain.feeds()).extracting(f -> f.id(), f -> f.label(), f -> f.unit(), f -> f.src())
-				.containsExactly(
-						tuple("feed.batch", "배치 트리거", "ETF", "price_movement_trigger"),
-						tuple("feed.intraday", "장중 트리거", "건", "minute_price_trigger"));
-		assertThat(chain.stages()).extracting(s -> s.id(), s -> s.label(), s -> s.src())
-				.containsExactly(
-						tuple("c.obs", "관측", "etf_contribution_observation"),
-						tuple("c.route", "라우트", "explanation_route"),
-						tuple("c.run", "런", "explanation_run"),
-						tuple("c.res", "결과", "explanation_result"),
-						tuple("c.pub", "게시", "publication_status=PUBLISHED"));
-		assertThat(chain.feeds().get(0).v()).isEqualTo(1L);
-		assertThat(chain.stages()).extracting(s -> s.batch()).containsOnly(1L);
-	}
-
-	/**
-	 * 🔴 <b>단계는 행 수가 아니라 "도달한 코호트 구성원 수"다.</b> 리뷰가 실 스키마에서 실증한
-	 * 형상이 이것이다 — 엔진은 그 경로에 이미 게시본이 있으면 재실행 결과를 <b>DRAFT 로</b>
-	 * 넣으므로({@code edge_analysis/adapters/eventstore.py}), 행을 세면 결과 2 · 게시 1 이 되어
-	 * R10 이 <b>"결과 → 게시" P0</b> 를 낸다. <b>설계된 감소</b>인데 규칙 문구가 배제하는 바로 그것이다.
-	 *
-	 * <p>도달 여부로 세면 한 관측이 결과에도 게시에도 <b>한 번씩</b> 세어져 감소가 사라진다.
-	 * ⚠️ 이 테스트의 앞 버전은 {@code c.run == 2} 를 단언하며 <b>그 결함을 고정하고 있었다.</b>
-	 */
-	@Test
-	void 재실행은_단계_수를_부풀리지_않는다_도달_여부로_센다() {
-		insertPublished("res-rerun", "2026-08-03", "etf-j", "PUBLISHED");
-		/* 같은 경로의 둘째 런 + 그 런의 결과 — 엔진이 실제로 만드는 형상이다(재실행분은 DRAFT). */
-		jdbc.update("""
-				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
-				       bundle_version, explanation_as_of, run_status, started_at, finished_at)
-				VALUES ('run-rerun2', 'rt-res-rerun', 'v1', '2026-08-03T16:00:00+09:00'::timestamptz,
-				        'SUCCEEDED', '2026-08-03T16:00:00+09:00'::timestamptz,
-				        '2026-08-03T16:00:00+09:00'::timestamptz)
-				""");
-		jdbc.update("""
-				INSERT INTO explanation_result (explanation_result_id, explanation_run_id,
-				       etf_instrument_id, trade_date, explanation_as_of, explanation_type,
-				       summary, publication_status)
-				VALUES ('res-rerun2', 'run-rerun2', 'etf-j', '2026-08-03'::date,
-				        '2026-08-03T16:00:00+09:00'::timestamptz, 'EVENT_SUPPORTED', '재설명', 'DRAFT')
-				""");
-
-		var stages = repository.facts(LocalDate.parse("2026-08-03")).chain().stages();
-
-		// 관측 하나가 끝까지 갔다 — 어느 단계도 1 을 넘지 않고, 따라서 감소도 없다.
-		assertThat(stages).extracting(s -> s.batch()).containsOnly(1L);
-	}
-
-	/**
-	 * R15의 단위는 그날의 실행 전건이 아니라 <b>ETF별 최신 트리거 하나</b>다. 이전 트리거가
-	 * 실패했어도 더 늦은 트리거가 성공했으면 현재 실패 ETF로 남으면 안 된다.
-	 */
-	@Test
-	void ETF_원장은_그날의_최신_트리거만_고른다() {
-		insertPublished("old", "2026-08-03", "etf-latest", "DRAFT");
-		jdbc.update("UPDATE explanation_run SET run_status = 'FAILED'"
-				+ " WHERE explanation_run_id = 'run-old'");
-		insertPublished("new", "2026-08-03", "etf-latest", "DRAFT");
-
-		assertThat(repository.facts(DAY).etfLedger())
-				.singleElement()
-				.satisfies(row -> {
-					assertThat(row.etf()).isEqualTo("etf-latest");
-					assertThat(row.name()).isEqualTo("etf-latest");
-					assertThat(row.outcome()).isEqualTo("SUCCEEDED");
-				});
-	}
-
-	/** 배치의 instrument id와 장중의 KRX ticker를 같은 ETF 축으로 정규화한 뒤 최신을 고른다. */
-	@Test
-	void ETF_원장은_배치와_장중의_서로_다른_식별자축을_합친다() {
-		insertPublished("batch-cross", "2026-08-03", "etf-cross", "DRAFT");
-		jdbc.update("UPDATE explanation_run SET run_status = 'FAILED'"
-				+ " WHERE explanation_run_id = 'run-batch-cross'");
-		insertMinuteTrigger("minute-cross", "2026-08-03", "ETF-CROSS", "FIRE",
-				"2026-08-03T16:00:00+09:00");
-		insertIntradayObservation("co-cross", "minute-cross", "2026-08-03T16:01:00+09:00");
-		jdbc.update("""
-				INSERT INTO explanation_route (explanation_route_id, contribution_observation_id,
-				       route_code, event_search_required, evaluated_at)
-				VALUES ('rt-cross', 'co-cross', 'PRICE_ONLY', false,
-				        '2026-08-03T16:01:00+09:00'::timestamptz)
-				""");
-		jdbc.update("""
-				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
-				       bundle_version, explanation_as_of, run_status, started_at, finished_at)
-				VALUES ('run-cross', 'rt-cross', 'v1',
-				        '2026-08-03T16:02:00+09:00'::timestamptz, 'SUCCEEDED',
-				        '2026-08-03T16:02:00+09:00'::timestamptz,
-				        '2026-08-03T16:03:00+09:00'::timestamptz)
-				""");
-
-		assertThat(repository.facts(DAY).etfLedger()).singleElement().satisfies(row -> {
-			assertThat(row.etf()).isEqualTo("etf-cross");
-			assertThat(row.outcome()).isEqualTo("SUCCEEDED");
-		});
-	}
-
-	/** 장중 트리거는 entity FK가 없다 — 이름 마스터가 늦어도 실패 행 자체를 버리면 안 된다. */
-	@Test
-	void ETF_원장은_entity가_없는_장중_실패도_식별자로_보존한다() {
-		insertMinuteTrigger("m-orphan", "2026-08-03", "etf-orphan", "FIRE",
-				"2026-08-03T10:00:00+09:00");
-		insertIntradayObservation("co-orphan", "m-orphan", "2026-08-03T10:01:00+09:00");
-		jdbc.update("""
-				INSERT INTO release_bundle (bundle_version, component_versions, component_hash, status)
-				VALUES ('v1', '{"engine":"1"}'::jsonb, ?, 'DRAFT')
-				ON CONFLICT (bundle_version) DO NOTHING
-				""", "a".repeat(64));
-		jdbc.update("""
-				INSERT INTO explanation_route (explanation_route_id, contribution_observation_id,
-				       route_code, event_search_required, evaluated_at)
-				VALUES ('rt-orphan', 'co-orphan', 'PRICE_ONLY', false,
-				        '2026-08-03T10:01:00+09:00'::timestamptz)
-				""");
-		jdbc.update("""
-				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
-				       bundle_version, explanation_as_of, run_status, started_at, finished_at)
-				VALUES ('run-orphan', 'rt-orphan', 'v1',
-				        '2026-08-03T10:02:00+09:00'::timestamptz, 'FAILED',
-				        '2026-08-03T10:02:00+09:00'::timestamptz,
-				        '2026-08-03T10:03:00+09:00'::timestamptz)
-				""");
-
-		assertThat(repository.facts(DAY).etfLedger()).singleElement().satisfies(row -> {
-			assertThat(row.etf()).isEqualTo("etf-orphan");
-			assertThat(row.name()).isEqualTo("etf-orphan");
-			assertThat(row.outcome()).isEqualTo("FAILED");
-		});
-	}
-
-	/**
-	 * 🔴 <b>재실행이 진짜 결손을 상쇄하면 안 된다.</b> 경로 둘 중 하나만 런이 붙고 그 하나가 두 번
-	 * 돌면, 런 <b>행</b>은 2 라 경로→런이 조용해지고 "설명을 아예 못 받은 ETF" 가 화면 어디에도
-	 * 안 뜬다. 도달 여부로 세면 런 단계가 1 로 떨어져 그 손실이 제자리에서 보인다.
-	 *
-	 * <p>🔴 <b>상류에 멈춘 구성원이 하나라도 있어야 하류 단계의 도달 술어가 재진다.</b> 관측만
-	 * 있고 라우트가 없는 형상이 픽스처에 없던 동안 {@code route_id IS NOT NULL} 이 무단언이었다
-	 * (변이 실증). ①을 넣자 그 아래 술어들도 같이 살아난다 — 상류에서 멈춘 구성원이 하류 단계의
-	 * 기대값을 전체 수보다 작게 만들기 때문이다.
-	 *
-	 * <p>⚠️ 여기 "<b>단계마다</b> 하나씩 멈춘 구성원을 둔다"고 적었다가 정정했다 — 이 픽스처가
-	 * 실제로 멈추는 자리는 <b>둘</b>(관측·라우트)이고, 런·결과에는 멈춘 구성원이 없다. 그런데도
-	 * 그 둘의 술어는 죽는다(리뷰가 {@code result_id} 술어를 지워 확인했다). <b>단계마다 전용
-	 * 증인이 있다고 읽으면 안 된다</b>: ②를 지우면 런과 결과가 <b>한 번에</b> 무단언이 된다.
-	 */
-	@Test
-	void 재실행이_진짜_결손을_상쇄하지_않는다() {
-		insertPublished("res-ok", "2026-08-03", "etf-k", "PUBLISHED");
-		/* ① 관측만 있고 라우트가 없다 — 라우터가 못 돈 형상. */
-		insertTrigger("trg-noroute", "2026-08-03", "etf-n");
-		jdbc.update("""
-				INSERT INTO etf_contribution_observation (contribution_observation_id,
-				       price_movement_trigger_id, available_at, data_version)
-				VALUES ('co-noroute', 'trg-noroute', '2026-08-03T15:41:00+09:00'::timestamptz, 'd1')
-				""");
-		/* ② 라우트까지만 가고 런이 없다 — 이것이 재실행에 덮이면 안 되는 손실이다. */
-		insertTrigger("trg-lost", "2026-08-03", "etf-l");
-		jdbc.update("""
-				INSERT INTO etf_contribution_observation (contribution_observation_id,
-				       price_movement_trigger_id, available_at, data_version)
-				VALUES ('co-lost', 'trg-lost', '2026-08-03T15:41:00+09:00'::timestamptz, 'd1')
-				""");
-		jdbc.update("""
-				INSERT INTO explanation_route (explanation_route_id, contribution_observation_id,
-				       route_code, event_search_required, evaluated_at)
-				VALUES ('rt-lost', 'co-lost', 'PRICE_ONLY', false,
-				        '2026-08-03T15:41:00+09:00'::timestamptz)
-				""");
-		/* ③ 살아남은 경로가 두 번 돈다 — 행을 세면 런이 2 라 ②를 정확히 덮는다. */
-		jdbc.update("""
-				INSERT INTO explanation_run (explanation_run_id, explanation_route_id,
-				       bundle_version, explanation_as_of, run_status, started_at)
-				VALUES ('run-ok2', 'rt-res-ok', 'v1', '2026-08-03T16:00:00+09:00'::timestamptz,
-				        'RUNNING', '2026-08-03T16:00:00+09:00'::timestamptz)
-				""");
-
-		var stages = repository.facts(LocalDate.parse("2026-08-03")).chain().stages();
-
-		assertThat(stages.get(0).batch()).isEqualTo(3L);   // c.obs
-		assertThat(stages.get(1).batch()).isEqualTo(2L);   // c.route — ①이 여기서 멈췄다
-		assertThat(stages.get(2).batch()).isEqualTo(1L);   // c.run — ②가 여기서 멈췄다
-		assertThat(stages.get(3).batch()).isEqualTo(1L);   // c.res
-	}
-
-	/**
-	 * 갈래를 가르는 것은 <b>관측의 트리거 FK 하나</b>다 — 그 아래 단계에는 배치/장중을 가르는
-	 * 컬럼이 없다. 두 갈래를 <b>다른 수</b>로 두어야 갈래를 맞바꾸는 변이가 보인다.
-	 *
-	 * <p>🔴 <b>회수({@code REVERT}) 행은 피드가 아니다.</b> 노출을 <b>끝낸</b> 마커라 설명을 만들지
-	 * 않는다(ALPHA-799 — 무효화만 한다). ⚠️ "큐로도 안 나간다"고 적었다가 정정했다: 그 사건의
-	 * destination 은 발화와 <b>같은 큐</b>다({@code data_pipeline/minute/jobs.py}). 세지 않는
-	 * 근거는 설명을 안 만든다는 것 하나다. 종류를 안 거르면 그 writer 가 착지하는 날 피드만
-	 * 조용히 부풀어 <b>없던 체인 손실</b>이 P0 로 선다. 지금 원장에 REVERT 가 0행이라 이 단언이
-	 * 그 계약을 지키는 유일한 자리다.
-	 */
-	@Test
-	void 장중_갈래는_발화_트리거만_세고_관측이_갈래를_가른다() {
-		insertPublished("res-b", "2026-08-03", "etf-b", "PUBLISHED");   // 배치 갈래 1건
-		insertMinuteTrigger("m1", "2026-08-03", "etf-c", "FIRE", "2026-08-03T09:31:00+09:00");
-		insertMinuteTrigger("m2", "2026-08-03", "etf-c", "FIRE", "2026-08-03T10:31:00+09:00");
-		insertMinuteTrigger("m3", "2026-08-03", "etf-c", "REVERT", "2026-08-03T11:31:00+09:00");
-		insertIntradayObservation("co-m1", "m1", "2026-08-03T09:32:00+09:00");
-
-		var chain = repository.facts(LocalDate.parse("2026-08-03")).chain();
-
-		assertThat(chain.feeds().get(0).v()).isEqualTo(1L);   // 배치 트리거
-		assertThat(chain.feeds().get(1).v()).isEqualTo(2L);   // 장중 발화 둘 — 회수는 안 센다
-		var obs = chain.stages().get(0);
-		assertThat(obs.batch()).isEqualTo(1L);
-		assertThat(obs.intraday()).isEqualTo(1L);
-		// 장중은 관측 뒤가 비었다 — 이것이 R10 이 P0 로 읽는 실제 형상이다.
-		assertThat(chain.stages().get(1).intraday()).isEqualTo(0L);
 	}
 
 	/**
@@ -1779,46 +1812,264 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 	 * <p>전자를 그대로 세면 테넌트가 둘인 순간 전달 단계가 설명 수의 두 배가 되어 단위가 조용히
 	 * 바뀐다. dev 는 테넌트가 하나라 <b>실물에서는 잠복</b>이다 — 여기서만 재진다.
 	 */
-	/**
-	 * 🔴 <b>게시 단계는 게시 상태를 실제로 본다.</b> 픽스처가 전부 게시본이면 그 술어를 지워도
-	 * (모든 결과를 게시로 세도) 전건 초록이다 — 변이 실증으로 나온 자리다. 초안 하나를 섞어
-	 * <code>c.res &gt; c.pub</code> 를 만든다.
-	 *
-	 * <p>⚠️ 발번 쪽의 {@code delivery_type = 'NEW'} 는 <b>여기서 겨눌 수 없다</b>. 전달은 2형상이고
-	 * ({@code V202608011200} — CORRECTION 폐지) {@code INVALIDATION} 은 본체 참조가 NULL 이라 조인에
-	 * 안 걸린다 — 그 술어가 거를 행을 <b>스키마가 만들 수 없다</b>(그 형상을 넣으려다 CHECK 에
-	 * 걸렸다). 못 잡는다고 리포지토리 주석에 밝혀 두고 리터럴은 유지한다.
-	 */
-	@Test
-	void 게시_단계는_게시_상태를_실제로_본다() {
-		insertPublished("res-pub", "2026-08-03", "etf-g", "PUBLISHED");
-		insertPublished("res-draft", "2026-08-03", "etf-h", "DRAFT");
-		deliverNew(insertTenant("t-pub"), "res-pub");
-
-		var stages = repository.facts(LocalDate.parse("2026-08-03")).chain().stages();
-
-		assertThat(stages.get(3).batch()).isEqualTo(2L);   // c.res — 둘 다 결과는 있다
-		assertThat(stages.get(4).batch()).isEqualTo(1L);   // c.pub — 초안은 게시가 아니다
+	/** 요청·분석이 공유하는 v2 분석 id — 32자리 16진수여야 한다({@code analysis_execution_requests} 의 CHECK). */
+	private static String analysisId(String name) {
+		return java.util.UUID.nameUUIDFromBytes(name.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+				.toString().replace("-", "");
 	}
 
 	/**
-	 * 흐름은 <b>Cloud 게시에서 끝난다</b> — 발번은 안 싣는다(ADR-0026 경계). 한 번 실었다가 뺐다:
-	 * R10 은 실린 단계까지 전부 비교해 <b>"게시 → 전달" P0</b> 를 낼 수 있는데, 화면은 게시에서
-	 * 잘라 그려({@code ChainStrip.LAST_STAGE_ID}) 그 단계 노드가 렌더된 적이 없다 — 사건 딥링크가
-	 * 조용히 아무 데도 안 닿았다(리뷰가 잡았다). 게시했는데 발번이 없는 것은
-	 * {@code boundary.publishedWithoutDelivery} 가 이미 답한다.
+	 * 장중 트리거에서 이어진 v2 분석 요청 한 건(ALPHA-1296). 요청 입력의 {@code source.trigger_id} 가
+	 * 트리거와의 유일한 연결이다 — v2 가 요청을 만들 때 그렇게 싣는다({@code sources/triggers.py}).
+	 */
+	private void insertRequest(String name, String triggerId, String createdAt) {
+		jdbc.update("""
+				INSERT INTO analysis_execution_requests (analysis_id, source_event_id, input_json,
+				       execution_arn, created_at, accepted_at)
+				VALUES (?,?,?,?,?::timestamptz,?::timestamptz)
+				""", analysisId(name), "PriceTriggerFired:" + triggerId + ":" + name,
+				"{\"kind\":\"movement\",\"source\":{\"trigger_id\":\"" + triggerId + "\"}}",
+				"arn:aws:states:ap-northeast-2:1:execution:single:" + analysisId(name), createdAt, createdAt);
+	}
+
+	/**
+	 * 🔴 <b>v2 단계는 조회일에 발화한 트리거에서 이어진 것만 센다</b>(ALPHA-1296). 단계마다 그 단계에
+	 * 도달한 <b>트리거 수</b>다: 분석 요청 → 분석 시작(분석 행이 있음) → 분석 완료 → 게시.
 	 *
-	 * <p>단계가 늘면 이 단언이 깨진다 — 그때 <b>화면의 절단점과 R10 의 비교 범위가 같은지</b>
-	 * 먼저 보라는 것이 이 단언의 뜻이다.
+	 * <p>칸을 하나씩 가른다 — 요청은 있는데 분석 행이 없는 트리거({@code m5})가 "분석 시작"의 감소로
+	 * 보여야 하고(dev 10-13 에 256건 중 42건이 그랬는데 어디에도 안 보였다), 요청조차 없는 트리거
+	 * ({@code m6})는 "분석 요청"의 감소다. 실패·진행 중은 시작에는 들고 완료에는 안 든다. 완료됐지만
+	 * 게시 시각이 없는 분석은 완료에는 들고 게시에는 안 든다(고른 항목이 없으면 그렇다 — 설계다).
+	 *
+	 * <p>⚠️ <b>다른 날 트리거에서 온 분석이 섞이면 안 된다</b>: {@code m-prev} 는 전날 발화했고 그
+	 * 분석은 조회일에 만들어졌다. "그날 만들어진 분석"으로 세면 이 행이 들어온다. 합성 입력
+	 * ({@code m7})의 분석도 세지 않는다.
 	 */
 	@Test
-	void 체인은_Cloud_게시에서_끝난다_발번은_경계_축의_몫이다() {
-		insertPublished("res-end", "2026-08-03", "etf-m", "PUBLISHED");
-		deliverNew(insertTenant("t-end"), "res-end");
+	void v2_단계는_조회일에_발화한_트리거에서_이어진_것만_트리거_단위로_센다() {
+		insertTrigger("g-day", DAY.toString(), "etf-batch");   // 배치 트리거 — v2 의 대상이 아니다
+		for (int i = 1; i <= 8; i++) {
+			insertMinuteTrigger("m" + i, DAY.toString(), "etf-" + i, "FIRE",
+					"2026-08-03T09:%02d:00+09:00".formatted(30 + i));
+		}
+		insertMinuteTrigger("m-prev", "2026-08-02", "etf-p", "FIRE", "2026-08-02T14:00:00+09:00");
 
-		assertThat(repository.facts(LocalDate.parse("2026-08-03")).chain().stages())
-				.extracting(s -> s.id())
-				.containsExactly("c.obs", "c.route", "c.run", "c.res", "c.pub");
+		for (String m : List.of("m1", "m2", "m3", "m4", "m5", "m7")) {
+			insertRequest(m, m, "2026-08-03T09:40:00+09:00");
+		}
+		/* m8 은 요청 행이 예약만 됐고 수용되지 않았다(워크플로가 뜨지 않았다) — 요청으로 세지 않는다.
+		 * 세면 이 건이 "요청 → 분석 시작"의 손실로 옮겨 가 원인이 틀린 자리에 선다. */
+		insertRequest("m8", "m8", "2026-08-03T09:40:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("m8"));
+		// m1 은 한 트리거에 요청이 둘이다(재발화 세대) — 트리거 단위라 한 번만 센다.
+		insertRequest("m1-again", "m1", "2026-08-03T10:40:00+09:00");
+		insertAnalysis("movement", analysisId("m1"), "etf-1", "2026-08-03T09:41:00+09:00", "completed", "database");
+		insertAnalysis("movement", analysisId("m1-again"), "etf-1", "2026-08-03T10:41:00+09:00", "completed", "database");
+		insertAnalysis("movement", analysisId("m2"), "etf-2", "2026-08-03T09:41:00+09:00", "completed", "database");
+		insertAnalysis("movement", analysisId("m3"), "etf-3", "2026-08-03T09:41:00+09:00", "failed", "database");
+		insertAnalysis("movement", analysisId("m4"), "etf-4", "2026-08-03T09:41:00+09:00", "running", "database");
+		insertAnalysis("movement", analysisId("m7"), "etf-7", "2026-08-03T09:41:00+09:00", "completed", "synthetic");
+		jdbc.update("UPDATE movement_analyses SET published_at = analysis_at WHERE analysis_id IN (?,?)",
+				analysisId("m1"), analysisId("m7"));
+		// 전날 트리거의 요청·분석이 조회일에 만들어졌다 — 조회일 코호트가 아니다.
+		insertRequest("m-prev", "m-prev", "2026-08-03T09:00:00+09:00");
+		insertAnalysis("movement", analysisId("m-prev"), "etf-p", "2026-08-03T09:01:00+09:00", "completed", "database");
+		jdbc.update("UPDATE movement_analyses SET published_at = analysis_at WHERE analysis_id = ?",
+				analysisId("m-prev"));
+
+		var chain = repository.facts(DAY).chain();
+		assertThat(chain.feeds()).extracting(f -> f.id(), f -> f.v())
+				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 8L));
+		assertThat(chain.analysisStages())
+				.extracting(s -> s.id(), s -> s.label(), s -> s.intraday(), s -> s.batch(), s -> s.blind())
+				.containsExactly(
+						tuple("c.req", "분석 요청", 6L, null, false),     // m6 은 요청이 없고 m8 은 수용되지 않았다
+						tuple("c.start", "분석 시작", 4L, null, false),   // m5 는 분석 행이 없고 m7 은 합성 입력이다
+						tuple("c.done", "분석 완료", 2L, null, false),    // m3 실패 · m4 진행 중
+						tuple("c.pub", "게시", 1L, null, false));         // m2 는 게시 시각이 없다
+
+		/* 🔴 **지난 날짜의 결과는 유예가 생기기 전과 같다**(ALPHA-1309) — 발화가 모두 유예 밖이라 판정
+		 * 불가가 하나도 없다. 분석 행이 없는 m5, 요청이 없는 m6 은 그대로 감소(손실)로 남는다. 유예를
+		 * 조회일 기준으로 걸거나 지난 날짜에도 적용하는 변이가 여기서 죽는다. */
+		assertThat(chain.analysisStages()).extracting(s -> s.id(), s -> s.pending())
+				.containsExactly(tuple("c.req", 0L), tuple("c.start", 0L), tuple("c.done", 0L), tuple("c.pub", 0L));
+
+		// 전날을 물으면 그날 트리거의 자손만 나온다 — 분석이 언제 만들어졌는지는 상관없다.
+		assertThat(repository.facts(LocalDate.parse("2026-08-02")).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday())
+				.containsExactly(tuple("c.req", 1L), tuple("c.start", 1L), tuple("c.done", 1L), tuple("c.pub", 1L));
+	}
+
+	/**
+	 * 🔴 <b>방금 발화한 트리거는 아직 판정할 수 없다</b>(ALPHA-1309). 새 분석 엔진은 같은 종류·같은
+	 * ETF 를 한 번에 하나만 돌리고 자리를 얻을 때까지 다시 묻고, 분석 행은 원천 조회 뒤에야 생긴다.
+	 * 유예(단일 분석 워크플로의 전체 시간 제한) 안의 트리거가 다음 단계에 못 간 것을 손실로 세면
+	 * 장중 내내 P0 가 선다.
+	 *
+	 * <p>칸을 하나씩 가른다(모두 한 시간 전에 발화):
+	 * <ul>
+	 *   <li>{@code y-none} — 요청이 아직 수용되지 않았다 → 분석 요청의 판정 불가</li>
+	 *   <li>{@code y-wait} — 요청은 수용됐고 분석 행이 없다(자리 대기) → 분석 시작의 판정 불가</li>
+	 *   <li>{@code y-run} — 이미 분석이 시작됐다 → 유예 안이어도 <b>도달</b>이다</li>
+	 * </ul>
+	 * 대조는 같은 형상의 <b>25시간 전</b> 트리거다({@code o-none}·{@code o-wait}) — 유예 밖이라 판정
+	 * 불가가 아니고 감소(손실)로 남는다. 시각은 조회일이 아니라 지금과 비교한다.
+	 */
+	@Test
+	void 유예_안의_트리거는_판정_불가이고_유예_밖의_같은_형상은_손실이다() {
+		java.time.OffsetDateTime young = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul"))
+				.minusHours(1).withNano(0);
+		java.time.OffsetDateTime old = young.minusHours(24);   // 25시간 전 — 유예(8시간) 밖
+		LocalDate youngDay = young.toLocalDate();
+		LocalDate oldDay = old.toLocalDate();
+		/* 트리거·요청·분석을 **같은 시각**에 둔다 — 분 단위로 벌리면 자정 직전에 도는 실행에서 일부가
+		 * 다음 날로 넘어가 코호트가 갈린다(종목이 달라 같은 창 시각이어도 겹치지 않는다). */
+
+		insertMinuteTrigger("y-none", youngDay.toString(), "etf-1", "FIRE", young.toString());
+		insertMinuteTrigger("y-wait", youngDay.toString(), "etf-2", "FIRE", young.toString());
+		insertMinuteTrigger("y-run", youngDay.toString(), "etf-3", "FIRE", young.toString());
+		insertRequest("y-wait", "y-wait", young.toString());
+		insertRequest("y-run", "y-run", young.toString());
+		insertAnalysis("movement", analysisId("y-run"), "etf-3", young.toString(), "running", "database");
+
+		insertMinuteTrigger("o-none", oldDay.toString(), "etf-1", "FIRE", old.toString());
+		insertMinuteTrigger("o-wait", oldDay.toString(), "etf-2", "FIRE", old.toString());
+		insertRequest("o-wait", "o-wait", old.toString());
+
+		// 유예 안: 도달은 실제로 도달한 것만, 나머지는 판정 불가로 따로 센다.
+		var recent = repository.facts(youngDay).chain();
+		assertThat(recent.feeds()).filteredOn(f -> f.id().equals("feed.intraday")).singleElement()
+				.satisfies(f -> assertThat(f.v()).isEqualTo(3L));
+		assertThat(recent.analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(
+						tuple("c.req", 2L, 1L),     // y-none 은 판정 불가 — 손실(3−2)이 아니다
+						tuple("c.start", 1L, 1L),   // y-wait 는 판정 불가, y-run 은 유예 안이어도 도달
+						tuple("c.done", 0L, 0L),    // 판정하지 않는 단계는 항상 0
+						tuple("c.pub", 0L, 0L));
+
+		// 유예 밖: 같은 형상이 판정 불가 없이 감소로 남는다.
+		assertThat(repository.facts(oldDay).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(
+						tuple("c.req", 1L, 0L),     // o-none: 2 → 1 의 감소는 손실이다
+						tuple("c.start", 0L, 0L),   // o-wait: 1 → 0 의 감소는 손실이다
+						tuple("c.done", 0L, 0L),
+						tuple("c.pub", 0L, 0L));
+	}
+
+	/**
+	 * 유예의 <b>경계</b>는 8시간이다(단일 분석 워크플로의 전체 시간 제한, 28,800초). 경계 양쪽 10분에
+	 * 표본을 둔다 — 한 시간·25시간 표본만으로는 유예를 2시간이나 24시간으로 바꾸는 변이가 통과한다.
+	 *
+	 * <p>두 표본의 KST 날짜는 실행 시각에 따라 같을 수도 다를 수도 있어, 날짜별로 기대값을 가른다.
+	 */
+	@Test
+	void 유예의_경계는_8시간이다() {
+		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		java.time.OffsetDateTime inside = now.minusHours(8).plusMinutes(10);    // 7시간 50분 전 — 유예 안
+		java.time.OffsetDateTime outside = now.minusHours(8).minusMinutes(10);  // 8시간 10분 전 — 유예 밖
+		insertMinuteTrigger("b-in", inside.toLocalDate().toString(), "etf-in", "FIRE", inside.toString());
+		insertMinuteTrigger("b-out", outside.toLocalDate().toString(), "etf-out", "FIRE", outside.toString());
+
+		java.util.function.Function<LocalDate, Long> requestPending = day -> repository.facts(day).chain()
+				.analysisStages().stream().filter(s -> s.id().equals("c.req")).findFirst().orElseThrow().pending();
+		boolean sameDay = inside.toLocalDate().equals(outside.toLocalDate());
+		// 유예 안의 표본만 판정 불가다 — 같은 날이면 그날의 수는 1, 다른 날이면 유예 밖 표본의 날은 0 이다.
+		assertThat(requestPending.apply(inside.toLocalDate())).isEqualTo(1L);
+		assertThat(requestPending.apply(outside.toLocalDate())).isEqualTo(sameDay ? 1L : 0L);
+	}
+
+	/**
+	 * 🔴 <b>유예의 기점은 창 시각이 아니다</b>(ALPHA-1309, 봇 리뷰). 밀린 큐나 복구 경로는 오래된 창의
+	 * 트리거를 뒤늦게 만들고 수용한다. 워크플로의 시간 제한은 수용 시점부터 흐르므로, 창이 25시간 전이어도
+	 * 방금 수용된 요청({@code late-wait})과 방금 만들어진 트리거({@code late-none})는 아직 판정할 수
+	 * 없다. 창 시각으로 재면 둘 다 손실로 세어진다.
+	 */
+	@Test
+	void 오래된_창의_트리거도_방금_만들어지고_수용됐으면_판정_불가다() {
+		java.time.OffsetDateTime now = java.time.OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).withNano(0);
+		java.time.OffsetDateTime window = now.minusHours(25);
+		LocalDate day = window.toLocalDate();
+		insertMinuteTrigger("late-none", day.toString(), "etf-1", "FIRE", window.toString());
+		insertMinuteTrigger("late-wait", day.toString(), "etf-2", "FIRE", window.toString());
+		// 트리거 행은 방금 만들어졌다(late-wait 는 생성은 오래됐고 수용만 방금이다 — 두 기점을 가른다).
+		jdbc.update("UPDATE minute_price_trigger SET created_at = ?::timestamptz WHERE trigger_id = 'late-none'",
+				now.minusMinutes(5).toString());
+		insertRequest("late-wait", "late-wait", now.minusMinutes(5).toString());
+
+		assertThat(repository.facts(day).chain().analysisStages())
+				.extracting(s -> s.id(), s -> s.intraday(), s -> s.pending())
+				.containsExactly(tuple("c.req", 1L, 1L), tuple("c.start", 0L, 1L),
+						tuple("c.done", 0L, 0L), tuple("c.pub", 0L, 0L));
+	}
+
+	/**
+	 * 🔴 <b>v2 요청이 아직 없던 날은 v2 단계가 관측 불가다</b>(ALPHA-1296) — 그날 코호트에 요청이
+	 * 하나도 없고 첫 v2 요청이 조회일보다 뒤다. 그 0 은 "요청이 하나도 안 만들어졌다"가 아니라 그때
+	 * v2 가 없었다는 뜻이다. 날짜 상수가 아니라 원장이 답한다.
+	 *
+	 * <p>대조를 같은 원장으로 둔다: v2 가 이미 돌던 날(첫 요청이 조회일과 같거나 앞)에 요청이 0 이면
+	 * 그것은 <b>진짜 손실</b>이라 가리지 않는다. "요청이 0 이면 무조건 관측 불가"로 바꾸는 변이와
+	 * "항상 관측 불가"로 바꾸는 변이가 여기서 죽는다.
+	 */
+	@Test
+	void v2_요청이_아직_없던_날은_관측_불가이고_v2_가_돌던_날의_0_은_손실이다() {
+		insertMinuteTrigger("m-old", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+		insertMinuteTrigger("m-first", "2026-08-05", "etf-b", "FIRE", "2026-08-05T09:31:00+09:00");
+		insertRequest("m-first", "m-first", "2026-08-05T09:32:00+09:00");   // 첫 v2 요청 = 08-05
+		insertMinuteTrigger("m-lost", "2026-08-06", "etf-c", "FIRE", "2026-08-06T09:31:00+09:00");
+
+		// 08-03: 첫 요청보다 앞 — 관측 불가다. 트리거 수는 실측 그대로다.
+		var before = repository.facts(DAY).chain();
+		assertThat(before.feeds()).filteredOn(f -> f.id().equals("feed.intraday")).singleElement()
+				.satisfies(f -> assertThat(f.v()).isEqualTo(1L));
+		assertThat(before.analysisStages()).hasSize(4)
+				.allSatisfy(s -> assertThat(s.blind()).as("%s 관측 불가", s.id()).isTrue());
+
+		// 08-05: 첫 요청이 있는 날 — 실측이다.
+		assertThat(repository.facts(LocalDate.parse("2026-08-05")).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).isFalse())
+				.filteredOn(s -> s.id().equals("c.req")).singleElement()
+				.satisfies(s -> assertThat(s.intraday()).isEqualTo(1L));
+
+		// 08-06: v2 가 돌던 날인데 요청이 0 — 진짜 손실이라 가리지 않는다.
+		assertThat(repository.facts(LocalDate.parse("2026-08-06")).chain().analysisStages())
+				.allSatisfy(s -> {
+					assertThat(s.blind()).as("%s — v2 가 돌던 날의 0 은 손실이다", s.id()).isFalse();
+					assertThat(s.intraday()).isZero();
+				});
+	}
+
+	/**
+	 * 경계: <b>첫 v2 요청이 조회일 당일</b>인데 그 요청은 전날 트리거의 것이고, 조회일 트리거에는
+	 * 요청이 없다. 그날 v2 는 이미 돌고 있었으므로 0 은 손실이다 — "첫 요청일이 조회일과 같거나
+	 * 뒤"로 넓히는 변이가 이 0 을 관측 불가로 가린다.
+	 */
+	@Test
+	void 첫_v2_요청이_조회일_당일이면_그날의_0_은_가리지_않는다() {
+		insertMinuteTrigger("m-prev", "2026-08-02", "etf-p", "FIRE", "2026-08-02T15:20:00+09:00");
+		insertRequest("m-prev", "m-prev", "2026-08-03T08:00:00+09:00");   // 첫 요청 = 조회일
+		insertMinuteTrigger("m-day", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+
+		assertThat(repository.facts(DAY).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).as("%s — v2 가 돌던 날이다", s.id()).isFalse())
+				.filteredOn(s -> s.id().equals("c.req")).singleElement()
+				.satisfies(s -> assertThat(s.intraday()).isZero());
+	}
+
+	/** v2 요청이 <b>하나도 없는</b> 원장도 관측 불가다 — 그 엔진이 돈 적이 없으니 셀 쪽이 없다. */
+	@Test
+	void v2_요청이_아예_없으면_v2_단계는_관측_불가다() {
+		insertMinuteTrigger("m-only", DAY.toString(), "etf-a", "FIRE", "2026-08-03T09:31:00+09:00");
+		// 수용되지 않은 예약은 v2 가 돌았다는 근거가 아니다 — 이 행만으로 관측 가능해지면 안 된다.
+		insertMinuteTrigger("m-early", "2026-08-01", "etf-b", "FIRE", "2026-08-01T09:31:00+09:00");
+		insertRequest("m-early", "m-early", "2026-08-01T09:32:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("m-early"));
+		assertThat(repository.facts(DAY).chain().analysisStages())
+				.allSatisfy(s -> assertThat(s.blind()).isTrue());
 	}
 
 	/**
@@ -1855,5 +2106,195 @@ class JdbcConsoleFactsRepositoryIntegrationTest extends CloudPostgresIntegration
 		assertThat(repository.facts(null).today())
 				.isEqualTo(jdbc.queryForObject(
 						"SELECT (now() AT TIME ZONE 'Asia/Seoul')::date", LocalDate.class));
+	}
+
+	/**
+	 * 🔴 <b>ETF 표는 새 분석 엔진의 표에서 종류별 상태를 낸다</b>(ALPHA-1312). 전망과 가격변동 분석을
+	 * 따로 가르고, 상태는 완료 → 실패 → 진행 중 → 시작 못 함 → 대상 아님의 순서로 정한다.
+	 *
+	 * <p>칸을 하나씩 가른다:
+	 * <ul>
+	 *   <li>{@code etf-a} — 전망 완료, 가격변동 분석은 실패했다가 다시 돌아 완료 → 둘 다 완료</li>
+	 *   <li>{@code etf-b} — 둘 다 실패 행만 있다 → 둘 다 실패</li>
+	 *   <li>{@code etf-c} — 전망이 진행 중인 행뿐이다 → <b>실패가 아니라</b> 진행 중</li>
+	 *   <li>{@code etf-d} — 트리거에서 이어진 수용된 요청이 있는데 분석 행이 없다 → 시작 못 함</li>
+	 *   <li>{@code etf-e} — 트리거만 발화했고 요청이 없다 → 행은 나오고 대상 아님이다</li>
+	 *   <li>{@code etf-f} — 요청이 예약만 됐고 수용되지 않았다 → 시작 못 함이 아니다</li>
+	 *   <li>{@code etf-g} — 합성 입력의 분석뿐이다 → 행이 없다</li>
+	 * </ul>
+	 * 지난 날짜(08-03)라 요청은 모두 유예 밖이다.
+	 *
+	 * <p>⚠️ <b>이 표의 실패 ETF 는 R15 의 목록과 같아야 한다</b> — 같은 응답에서 두 축을 함께 단언한다.
+	 * 기준이 갈리면 표와 규칙이 다른 ETF 를 실패라고 말한다.
+	 */
+	@Test
+	void ETF별_v2_분석_귀결은_종류별_상태를_내고_실패는_R15_의_목록과_같다() {
+		insertAnalysis("outlook", "s-o-a", "etf-a", "2026-08-03T06:00:00+09:00", "completed", "database");
+		insertAnalysis("movement", "s-m-a1", "etf-a", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "s-m-a2", "etf-a", "2026-08-03T10:30:00+09:00", "completed", "database");
+		insertAnalysis("outlook", "s-o-b", "etf-b", "2026-08-03T06:00:00+09:00", "failed", "database");
+		insertAnalysis("movement", "s-m-b", "etf-b", "2026-08-03T10:00:00+09:00", "failed", "database");
+		insertAnalysis("outlook", "s-o-c", "etf-c", "2026-08-03T06:00:00+09:00", "running", "database");
+		insertMinuteTrigger("s-t-d", DAY.toString(), "etf-d", "FIRE", "2026-08-03T10:00:00+09:00");
+		insertRequest("s-q-d", "s-t-d", "2026-08-03T10:01:00+09:00");
+		insertMinuteTrigger("s-t-e", DAY.toString(), "etf-e", "FIRE", "2026-08-03T10:00:00+09:00");
+		insertMinuteTrigger("s-t-f", DAY.toString(), "etf-f", "FIRE", "2026-08-03T10:00:00+09:00");
+		insertRequest("s-q-f", "s-t-f", "2026-08-03T10:01:00+09:00");
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = NULL WHERE analysis_id = ?",
+				analysisId("s-q-f"));
+		insertAnalysis("outlook", "s-o-g", "etf-g", "2026-08-03T06:00:00+09:00", "failed", "synthetic");
+		// 이름은 옛 ETF 표와 같은 출처다 — 종목 코드로 instrument 를 찾고 entity 의 표시 이름을 읽는다.
+		jdbc.update("INSERT INTO entity (entity_id, entity_type, display_name) VALUES ('inst-a', 'INSTRUMENT', '이름 있는 ETF')");
+		jdbc.update("INSERT INTO instrument (instrument_id, market_code, ticker, instrument_type) VALUES ('inst-a', 'XKRX', 'etf-a', 'ETF')");
+
+		ConsoleFactsRepository.ConsoleFacts facts = repository.facts(DAY);
+		assertThat(facts.etfAnalyses())
+				.extracting(r -> r.etf(), r -> r.name(), r -> r.outlook(), r -> r.movement())
+				.containsExactly(
+						tuple("etf-a", "이름 있는 ETF", "completed", "completed"),
+						tuple("etf-b", "etf-b", "failed", "failed"),   // 이름을 못 찾은 코드는 코드 그대로
+						tuple("etf-c", "etf-c", "running", "none"),
+						tuple("etf-d", "etf-d", "none", "not_started"),
+						tuple("etf-e", "etf-e", "none", "none"),
+						tuple("etf-f", "etf-f", "none", "none"));
+
+		for (String kind : List.of("outlook", "movement")) {
+			assertThat(facts.etfAnalyses().stream()
+					.filter(r -> (kind.equals("outlook") ? r.outlook() : r.movement()).equals("failed"))
+					.map(r -> r.etf()))
+					.as(kind)
+					.containsExactlyElementsOf(facts.analysisFailures().stream()
+							.filter(f -> f.kind().equals(kind)).map(f -> f.etfCode()).toList())
+					.containsExactly("etf-b");
+		}
+	}
+
+	/**
+	 * 🔴 <b>수용된 요청은 있는데 분석 행이 없는 ETF 는 유예 안이면 판정 보류, 유예 밖이면 시작 못
+	 * 함이다</b>(ALPHA-1312). 기준은 흐름 띠의 것과 같다(ALPHA-1309) — 같은 유예 시간, 같은 기점(요청이
+	 * 수용된 시각).
+	 *
+	 * <p>{@code etf-mix} 는 같은 날 두 번 발화했고 한 트리거는 유예 밖, 한 트리거는 유예 안이다 —
+	 * 하나라도 유예 밖이면 시작 못 함이다(판정 보류가 손실을 가리면 안 된다).
+	 *
+	 * <p>⚠️ 유예의 단위는 요청이 아니라 <b>트리거</b>다. {@code etf-two} 는 한 트리거에 수용된 요청이
+	 * 둘이고(재발화 세대) 하나는 유예 밖, 하나는 유예 안이다 — 흐름 띠가 이 트리거를 판정 보류로 세므로
+	 * 표도 판정 보류여야 한다. 같은 응답에서 띠의 수와 함께 단언한다.
+	 */
+	@Test
+	void 분석_행이_없는_요청은_유예_안이면_판정_보류이고_유예_밖이면_시작_못_함이다() {
+		OffsetDateTime young = OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")).minusHours(1).withNano(0);
+		OffsetDateTime old = young.minusHours(24);   // 25시간 전 — 유예(8시간) 밖
+		String youngDay = young.toLocalDate().toString();
+		insertMinuteTrigger("g-young", youngDay, "etf-young", "FIRE", young.toString());
+		insertRequest("g-young", "g-young", young.toString());
+		insertMinuteTrigger("g-old", old.toLocalDate().toString(), "etf-old", "FIRE", old.toString());
+		insertRequest("g-old", "g-old", old.toString());
+		insertMinuteTrigger("g-mix1", youngDay, "etf-mix", "FIRE", young.toString());
+		insertMinuteTrigger("g-mix2", youngDay, "etf-mix", "FIRE", young.plusSeconds(1).toString());
+		insertRequest("g-mix1", "g-mix1", young.toString());
+		insertRequest("g-mix2", "g-mix2", young.toString());
+		// 수용 시각만 유예 밖으로 옮긴다 — 기점은 요청이 만들어진 시각이 아니라 수용된 시각이다.
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = now() - interval '9 hours' WHERE analysis_id = ?",
+				analysisId("g-mix1"));
+
+		insertMinuteTrigger("g-two", youngDay, "etf-two", "FIRE", young.toString());
+		insertRequest("g-two-a", "g-two", young.toString());
+		insertRequest("g-two-b", "g-two", young.toString());
+		jdbc.update("UPDATE analysis_execution_requests SET accepted_at = now() - interval '9 hours' WHERE analysis_id = ?",
+				analysisId("g-two-a"));
+
+		ConsoleFactsRepository.ConsoleFacts recent = repository.facts(young.toLocalDate());
+		assertThat(recent.etfAnalyses())
+				.extracting(r -> r.etf(), r -> r.movement())
+				.containsExactly(tuple("etf-mix", "not_started"), tuple("etf-two", "pending"),
+						tuple("etf-young", "pending"));
+		// 띠가 판정 보류로 센 트리거는 셋이다(g-young · g-mix2 · g-two) — 표의 기준과 갈리지 않는다.
+		assertThat(recent.chain().analysisStages()).filteredOn(s -> s.id().equals("c.start"))
+				.singleElement().satisfies(s -> assertThat(s.pending()).isEqualTo(3L));
+		assertThat(repository.facts(old.toLocalDate()).etfAnalyses())
+				.extracting(r -> r.etf(), r -> r.movement())
+				.containsExactly(tuple("etf-old", "not_started"));
+	}
+
+	/**
+	 * 🔴 <b>리포지토리는 DB 구간을 전부 잰다</b>(ALPHA-1314) — 구간 정의에서 종류가 DB 인 것 가운데
+	 * {@code transaction}(서비스가 뺄셈으로 내는 나머지)을 뺀 전부다. 조회 하나를 감싸는 것을 빠뜨리면
+	 * 그 구간이 응답에 0 으로 나가 "빠르다"로 읽힌다.
+	 *
+	 * <p>날짜를 준 요청과 생략한 요청 둘 다 같은 목록이어야 한다 — 생략하면 기본 조회일을 고르는 조회가
+	 * 더 돌지만 그 시간은 {@code meta} 에 더해진다(구간이 늘지 않는다).
+	 */
+	@Test
+	void 리포지토리는_DB_구간을_전부_잰다() {
+		List<com.edge.superadmin.repository.FactsSegment> expected =
+				java.util.Arrays.stream(com.edge.superadmin.repository.FactsSegment.values())
+						.filter(s -> s.kind() == com.edge.superadmin.repository.FactsSegment.Kind.DB
+								&& s != com.edge.superadmin.repository.FactsSegment.TRANSACTION)
+						.toList();
+		for (LocalDate date : new LocalDate[] {DAY, null}) {
+			java.util.Map<com.edge.superadmin.repository.FactsSegment, Long> nanos =
+					repository.facts(date).segmentNanos();
+			assertThat(nanos.keySet()).as("date=%s", date).containsExactlyElementsOf(expected);
+			assertThat(nanos.values()).as("date=%s", date).allSatisfy(n -> assertThat(n).isPositive());
+		}
+	}
+
+	/**
+	 * 🔴 <b>체인의 입력은 배치 트리거와 장중 발화(FIRE)만 센다</b>(ALPHA-1329 — 옛 체인 조회에서 입력 부분만
+	 * 남겼다). {@code REVERT} 는 노출 회수 마커라 분석을 만들지 않는다 — 세면 입력만 부풀어 "트리거 →
+	 * 분석 요청" 구간에 없던 손실이 선다. 다른 날 발화는 들어오지 않는다.
+	 */
+	@Test
+	void 체인_입력은_배치_트리거와_장중_발화만_센다() {
+		insertTrigger("g-day", DAY.toString(), "etf-a");
+		insertMinuteTrigger("m-fire", DAY.toString(), "etf-b", "FIRE", "2026-08-03T09:31:00+09:00");
+		insertMinuteTrigger("m-revert", DAY.toString(), "etf-b", "REVERT", "2026-08-03T09:41:00+09:00");
+		insertMinuteTrigger("m-prev", "2026-08-02", "etf-c", "FIRE", "2026-08-02T14:00:00+09:00");
+
+		assertThat(repository.facts(DAY).chain().feeds()).extracting(f -> f.id(), f -> f.v())
+				.containsExactly(tuple("feed.batch", 1L), tuple("feed.intraday", 1L));
+	}
+
+	/**
+	 * 🔴 <b>장중 분석 귀결 추이의 새 분석 엔진 단계는 흐름 띠와 같은 수다</b>(ALPHA-1329). 실행 이력 화면과
+	 * 흐름 화면이 같은 날짜를 두고 다른 수를 말하면 둘 중 하나는 거짓이다 — 추이는 날짜마다 흐름 띠와
+	 * <b>같은 조회</b>를 부른다. 한 날짜에 도달·판정 보류·완료·게시를 전부 다르게 두고 두 축을 함께
+	 * 단언한다.
+	 *
+	 * <p>🔴 <b>v2 요청이 없던 날은 0 이 아니라 관측 불가다</b> — 08-02 는 발화가 있었지만 첫 v2 요청이
+	 * 08-03 이라 그날의 0 은 실측이 아니다.
+	 */
+	@Test
+	void 장중_분석_귀결_추이의_v2_단계는_흐름_띠와_같고_v2_가_없던_날은_관측_불가다() {
+		insertMinuteTrigger("t-prev", "2026-08-02", "etf-p", "FIRE", "2026-08-02T10:00:00+09:00");
+		for (int i = 1; i <= 4; i++) {
+			insertMinuteTrigger("t" + i, DAY.toString(), "etf-" + i, "FIRE",
+					"2026-08-03T09:3%d:00+09:00".formatted(i));
+		}
+		insertRequest("q1", "t1", "2026-08-03T09:32:00+09:00");
+		insertRequest("q2", "t2", "2026-08-03T09:33:00+09:00");
+		insertRequest("q3", "t3", "2026-08-03T09:34:00+09:00");
+		insertAnalysis("movement", analysisId("q1"), "etf-1", "2026-08-03T09:32:00+09:00", "completed", "database");
+		jdbc.update("UPDATE movement_analyses SET published_at = '2026-08-03T09:40:00+09:00' WHERE analysis_id = ?",
+				analysisId("q1"));
+		insertAnalysis("movement", analysisId("q2"), "etf-2", "2026-08-03T09:33:00+09:00", "completed", "database");
+		// t3 는 요청만 있고 분석이 없다, t4 는 요청도 없다 — 지난 날이라 둘 다 손실이다(판정 보류 0)
+
+		var trend = repository.intradayAnalysisTrend(DAY, 2).points();
+		var chain = repository.facts(DAY).chain();
+		var day = trend.get(1);
+		assertThat(day.date()).isEqualTo(DAY);
+		assertThat(day.analysis()).isEqualTo(chain.analysisStages());
+		assertThat(day.triggers()).isEqualTo(chain.feeds().get(1).v());
+		assertThat(day.analysis()).extracting(s -> s.id(), s -> s.intraday(), s -> s.blind())
+				.containsExactly(tuple("c.req", 3L, false), tuple("c.start", 2L, false),
+						tuple("c.done", 2L, false), tuple("c.pub", 1L, false));
+
+		var prev = trend.get(0);
+		assertThat(prev.date()).isEqualTo(LocalDate.parse("2026-08-02"));
+		assertThat(prev.triggers()).isEqualTo(1L);
+		assertThat(prev.analysis()).allSatisfy(s -> assertThat(s.blind()).as(s.id()).isTrue());
+		assertThat(prev.analysis()).isEqualTo(repository.facts(LocalDate.parse("2026-08-02")).chain().analysisStages());
 	}
 }

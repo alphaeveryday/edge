@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { intradayLostAtEntry } from './chainView.ts';
+import { intradayLostAtEntry, pendingTriggers, stagesBlind } from './chainView.ts';
 import type { Facts } from '../../rules/types.ts';
 
 const chain = (fired: number, observed: number | null): Facts['chain'] => ({
@@ -43,4 +43,37 @@ test('🔴 화면이 그 판정을 실제로 쓴다 — 순수 모듈로 내려�
     .replace(/\/\*[\s\S]*?\*\//g, '');
   assert.match(code, /intradayLostAtEntry\(q\.facts\.chain\)/);
   assert.doesNotMatch(code, /\{q\.facts\.chain && \(/, '축의 유무로 관측 문장을 그린다');
+});
+
+test('🔴 입구 단계가 관측 불가면 "전량이 사라졌다"고 말하지 않는다 — 그 0 은 셀 쪽이 없다는 뜻이다', () => {
+  /* 새 분석 엔진의 요청이 아직 없던 날: 장중 트리거 256, 첫 단계 0(관측 불가). 0 만 보면 이 문장이 선다. */
+  const blind = chain(256, 0);
+  blind!.stages = blind!.stages.map((s) => ({ ...s, batch: 0, intraday: 0, blind: true }));
+  assert.equal(intradayLostAtEntry(blind), false);
+  assert.equal(stagesBlind(blind), true);
+  /* 대조 — 같은 수인데 관측 가능하면 진짜 손실이다 */
+  assert.equal(intradayLostAtEntry(chain(256, 0)), true);
+  assert.equal(stagesBlind(chain(256, 0)), false);
+  assert.equal(stagesBlind(undefined), false, '축이 없는 것은 관측 불가 표시가 아니다');
+  /* 끝 단계 하나만 관측 불가인 사실(동봉 스냅샷의 온프렘 수신)은 이 사정이 아니다 — 앞 단계는
+   * 실측이고 R10 도 돈다. 여기서 참이면 흐름 화면이 "관측부터 값이 없다"고 거짓 안내를 한다. */
+  const tail = chain(65, 3);
+  tail!.stages = [...tail!.stages, { id: 'c.onprem', label: '온프렘 수신', src: 'x', blind: true }];
+  assert.equal(stagesBlind(tail), false);
+});
+
+test('🔴 아직 판정할 수 없는 트리거는 단계별 수를 더한 것이다 — 그리고 그게 전부면 "하나도 안 이어졌다"고 말하지 않는다', () => {
+  /* 방금 발화한 날의 형상: 장중 트리거 5, 요청 0. 다섯 다 유예 안이면 요청이 수용되기 전일 수 있다. */
+  const fresh = chain(5, 0);
+  fresh!.stages[0].pending = 5;
+  assert.equal(intradayLostAtEntry(fresh), false, '진행 중일 수 있는 건을 유실로 단정했다');
+  assert.equal(pendingTriggers(fresh), 5);
+  /* 판정 가능한 트리거가 하나라도 요청 없이 남으면 참이다 */
+  fresh!.stages[0].pending = 4;
+  assert.equal(intradayLostAtEntry(fresh), true);
+  /* 단계별 수는 겹치지 않아 더한다. 수가 없는 응답은 0 이다 */
+  fresh!.stages[1].pending = 3;
+  assert.equal(pendingTriggers(fresh), 7);
+  assert.equal(pendingTriggers(chain(5, 0)), 0);
+  assert.equal(pendingTriggers(undefined), 0);
 });

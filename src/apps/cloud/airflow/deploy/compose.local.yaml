@@ -1,0 +1,73 @@
+# 배포 이미지의 로컬 리허설 — ECS 태스크와 같은 모양(awsvpc = 세 컨테이너가 localhost 공유)으로 띄운다.
+# 확인하는 것: 마이그레이션을 별도 작업으로 먼저 돌린 뒤 구성요소가 뜨는가, 헬스체크 명령, UI 로그인(시크릿
+# 비밀번호), 예제 DAG 없음·DAG pause. 태스크 정의(modules/airflow)와 같은 설정·헬스체크. 사양(합산 상한) 검증은 local/micro. AWS 는 부르지 않는다(원격 로깅 끔, ECS 값은 가짜).
+#   docker compose -f deploy/compose.local.yaml up -d --build --wait   (migrate 가 먼저 끝나야 api 가 뜬다)
+x-airflow: &airflow
+  build: {context: .., platforms: [linux/arm64]}
+  image: edge-airflow:local
+  platform: linux/arm64
+  environment: &env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/edge/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+    AIRFLOW__CORE__PARALLELISM: "1"
+    AIRFLOW__DAG_PROCESSOR__PARSING_PROCESSES: "1"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8080/execution/
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json
+    AIRFLOW__API__WORKERS: "1"
+    AIRFLOW__API__EXPOSE_CONFIG: "False"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD: cat /opt/airflow/sql_alchemy_conn
+    AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: "2"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: "3"
+    AIRFLOW__API_AUTH__JWT_SECRET: local-jwt-secret-local-jwt-secret-0123
+    AIRFLOW__API__SECRET_KEY: local-api-secret
+    EDGE_AIRFLOW_ADMIN_PASSWORD: "p@ss/w:rd%local"
+    EDGE_AIRFLOW_DB_HOST: meta-db
+    EDGE_AIRFLOW_DB_PORT: "5432"
+    EDGE_AIRFLOW_DB_NAME: airflow
+    EDGE_AIRFLOW_DB_USER: airflow
+    EDGE_AIRFLOW_DB_PASSWORD: "a:b@c/d%e"     # URL 인코딩 확인용 특수문자
+    AIRFLOW_CONN_AWS_DEFAULT: '{"conn_type": "aws", "extra": {"region_name": "ap-northeast-2"}}'
+    EDGE_ECS_CLUSTER: arn:aws:ecs:ap-northeast-2:000000000000:cluster/edge-dev-worker
+    EDGE_ECS_TASKDEF_PREFIX: edge-dev-data-pipeline
+    EDGE_ECS_SUBNETS: subnet-a,subnet-c
+    EDGE_ECS_SECURITY_GROUPS: sg-batch
+    EDGE_VERIFY_CLUSTER: arn:aws:ecs:ap-northeast-2:000000000000:cluster/edge-dev-airflow
+    EDGE_VERIFY_TASKDEF_PREFIX: edge-dev-airflow-verify
+    EDGE_VERIFY_SECURITY_GROUPS: sg-verify
+
+services:
+  meta-db:
+    image: postgres:16
+    environment: {POSTGRES_DB: airflow, POSTGRES_USER: airflow, POSTGRES_PASSWORD: "a:b@c/d%e"}
+    command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem",
+              "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key"]
+    healthcheck: {test: [CMD-SHELL, pg_isready -U airflow -d airflow], interval: 1s, retries: 30}
+
+  migrate:
+    <<: *airflow
+    command: ["db", "migrate"]
+    depends_on: {meta-db: {condition: service_healthy}}
+
+  api-server:
+    <<: *airflow
+    command: ["api-server", "--port", "8080"]
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    ports: ["127.0.0.1:58180:8080"]
+    healthcheck: {test: [CMD-SHELL, "curl -fs --max-time 20 http://localhost:8080/api/v2/monitor/health | grep -q '\"metadatabase\":{\"status\":\"healthy\"'"], interval: 10s, retries: 30, start_period: 60s}
+
+  scheduler:
+    <<: *airflow
+    command: ["scheduler"]
+    network_mode: "service:api-server"
+    depends_on: {api-server: {condition: service_started}}
+    healthcheck: {test: [CMD-SHELL, "curl -fs --max-time 20 http://localhost:8080/api/v2/monitor/health | grep -q '\"scheduler\":{\"status\":\"healthy\"'"], interval: 30s, retries: 10, start_period: 60s}
+
+  dag-processor:
+    <<: *airflow
+    command: ["dag-processor"]
+    network_mode: "service:api-server"
+    depends_on: {api-server: {condition: service_started}}
+    healthcheck: {test: [CMD-SHELL, "curl -fs --max-time 20 http://localhost:8080/api/v2/monitor/health | grep -q '\"dag_processor\":{\"status\":\"healthy\"'"], interval: 30s, retries: 10, start_period: 60s}

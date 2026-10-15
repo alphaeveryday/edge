@@ -7,13 +7,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  ANALYSIS_STAGE_FIELDS,
   awsObservation,
   axisOf,
   BOUNDARY_FIELDS,
   CHAIN_FEED_FIELDS,
   CHAIN_STAGE_FIELDS,
   DATASET_FIELDS,
-  ETF_LEDGER_ROW_FIELDS,
+  ETF_ANALYSIS_ROW_FIELDS,
   factsAxis,
   META_FIELDS,
   minuteFacts,
@@ -24,6 +25,8 @@ import {
   TASK_FIELDS,
 } from './consoleFacts.ts';
 import type { ConsoleFactsDto } from '../../domains/console/types.ts';
+import { evaluate } from '../../rules/evaluate.ts';
+import { etfTable } from './etfAnalysisView.ts';
 import type { MinuteStatus } from '../../domains/sources/types.ts';
 
 const JOBS = (dead = 0) => ({ waiting: 0, claimed: 0, claimedExpired: 0, succeeded: 10, dead, deliveryFailed: 0 });
@@ -178,7 +181,7 @@ const WIRE = (): ConsoleFactsDto => ({
     id: 'etf_holdings', contract: true, expectedAsOf: '2026-08-03', actualAsOf: null,
     collectedAt: '2026-08-03T15:41:58+09:00', unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
   }],
-  outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+  outputs: [{ id: 'o.outlook', label: '전망 완료 ETF', today: 16, base: 32, unit: '종' }],
   queues: [{ name: 'news-realtime', visible: 7, inFlight: 3, dlq: 2 }],
   boundary: { publishedWithoutDelivery: 0, deliveryNowNonpublished: 1, deliveryRows: 114 },
   /* 네 수를 전부 다르게 둔다 — 갈래(batch↔intraday)나 피드↔단계를 맞바꾸는 변이는 같은 값
@@ -192,11 +195,25 @@ const WIRE = (): ConsoleFactsDto => ({
       { id: 'c.obs', label: '관측', batch: 18, intraday: 3, src: 'etf_contribution_observation' },
       { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
     ],
+    /* 새 분석 엔진의 단계 — 화면과 규칙이 읽는 목록이다. 옛 단계(위)와 수를 전부 다르게 둔다:
+     * 어댑터가 옛 목록을 읽으면 값이 갈린다. 판정하는 단계(c.start)와 수만 보여 주는 단계(c.done)를
+     * 하나씩 둔다. */
+    analysisStages: [
+      { id: 'c.start', label: '분석 시작', batch: null, intraday: 50, src: 'movement_analyses' },
+      { id: 'c.done', label: '분석 완료', batch: null, intraday: 44, src: 'status=completed' },
+    ],
   },
-  etfLedger: { rows: [
-    { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
+  /* 옛 축(위)과 ETF·상태를 다르게 둔다 — 어댑터가 옛 축을 읽으면 값이 갈린다 */
+  etfAnalyses: { rows: [
+    { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
   ] },
-  meta: { db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03' },
+  meta: {
+    db: '2026-08-03T16:20:00+09:00', aws: '2026-08-03T16:20:03+09:00', today: '2026-08-03',
+    timing: { totalMs: 5600, segments: [
+      { name: 'outputs', kind: 'db', ms: 4200 },
+      { name: 'queues', kind: 'aws', ms: 900 },
+    ] },
+  },
 });
 
 /** 한 자리만 망가뜨린 응답 — 나머지는 정상이라 거부가 그 자리 때문임이 분명하다. */
@@ -253,7 +270,7 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
       collected_at: '2026-08-03T15:41:58+09:00',
       unverifiable: 'ACTUAL_AS_OF_UNVERIFIED',
     }],
-    outputs: [{ id: 'o.pub', label: '게시 ETF', today: 16, base: 32, unit: '종' }],
+    outputs: [{ id: 'o.outlook', label: '전망 완료 ETF', today: 16, base: 32, unit: '종' }],
     queues: [{ name: 'news-realtime', visible: 7, in_flight: 3, dlq: 2 }],
     boundary: {
       published_without_delivery: 0,
@@ -265,13 +282,14 @@ test('어댑터는 이름만 바꾼다 — 전 필드를 값 그대로 옮긴다
         { id: 'feed.batch', label: '배치 트리거', v: 20, unit: 'ETF', src: 'price_movement_trigger' },
         { id: 'feed.intraday', label: '장중 트리거', v: 65, unit: '건', src: 'minute_price_trigger' },
       ],
+      /* 단계는 새 분석 엔진의 목록에서만 온다 — 옛 단계(관측·라우트)는 옮기지 않는다 */
       stages: [
-        { id: 'c.obs', label: '관측', batch: 18, intraday: 3, src: 'etf_contribution_observation' },
-        { id: 'c.route', label: '라우트', batch: 17, intraday: 1, src: 'explanation_route' },
+        { id: 'c.start', label: '분석 시작', batch: null, intraday: 50, src: 'movement_analyses', batch_na: true },
+        { id: 'c.done', label: '분석 완료', batch: null, intraday: 44, src: 'status=completed', batch_na: true, shown_only: true },
       ],
     },
-    etf_ledger: { rows: [
-      { etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null },
+    etf_analyses: { rows: [
+      { etf: '069500', name: 'KODEX 200', outlook: 'completed', movement: 'not_started' },
     ] },
     meta: {
       db: '2026-08-03T16:20:00+09:00',
@@ -296,12 +314,12 @@ test('🔴 체인의 순서를 어댑터가 바꾸지 않는다 — 목록 순�
    * 정렬하면, 원장에 단계 간 선후가 없어 복원할 방법이 없는 순서가 조용히 뒤집힌다.
    * 뒤집힌 순서 위에서 R10 은 감소를 증가로 읽어 **P0 손실을 통째로 놓친다**. */
   const w = WIRE();
-  w.chain!.stages.reverse();
+  w.chain!.analysisStages!.reverse();
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.deepEqual(r.facts.chain?.stages.map((s) => s.id), ['c.route', 'c.obs']);
-  assert.deepEqual(r.facts.chain?.stages.map((s) => s.batch), [17, 18]);
+  assert.deepEqual(r.facts.chain?.stages.map((s) => s.id), ['c.done', 'c.start']);
+  assert.deepEqual(r.facts.chain?.stages.map((s) => s.intraday), [44, 50]);
 });
 
 test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는다', () => {
@@ -313,7 +331,6 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   delete w.runs[0].awsStop;
   delete w.meta.aws;
   delete w.queues;
-  delete w.etfLedger;
   const r = parseFacts(w);
   assert.equal(r.ok, true);
   if (!r.ok) return;
@@ -322,7 +339,6 @@ test('서버가 안 보낸 옵셔널 축을 어댑터가 만들어 내지 않는
   assert.equal(r.facts.runs[0].aws_status, undefined, 'AWS 상태를 만들어 냈다');
   assert.equal(r.facts.runs[0].aws_stop, undefined, 'AWS 종료 시각을 만들어 냈다');
   assert.equal(r.facts.queues, undefined, 'queues 축을 만들어 냈다');
-  assert.equal(r.facts.etf_ledger, undefined, 'etf_ledger 축을 만들어 냈다');
   /* 체인은 이제 **온다** — 이 단언이 없으면 위 셋을 지키느라 축을 통째로 떨구는 회귀가 초록이다 */
   assert.notEqual(r.facts.chain, undefined, 'chain 축을 떨궜다');
 });
@@ -339,6 +355,91 @@ test('런 행이 없는 슬롯의 계획 표시는 실린 것만 옮긴다', () 
   assert.ok(!('planned' in r.facts.runs[0]), '실재 런에 계획 표시를 만들어 붙였다');
   assert.equal(r.facts.runs[1].planned, true);
   assert.equal(r.facts.runs[1].no_run_row, true);
+});
+
+test('산출의 기준일별 건수는 있으면 그대로 싣고, 없는 옛 응답도 받는다', () => {
+  /* UI 와 API 는 따로 배포된다 — `history` 가 없는 응답을 거부하면 UI 가 먼저 나간 동안 콘솔
+   * 전체가 선다. 0 은 실측이라 0 그대로 지나가야 한다. */
+  const old = parseFacts(WIRE());
+  assert.equal(old.ok, true, old.ok ? '' : old.reason);
+  if (old.ok) assert.ok(!('history' in old.facts.outputs[0]), '없는 필드를 만들어 냈다');
+
+  const w = WIRE();
+  w.outputs[0].history = [{ date: '2026-07-31', count: 0 }, { date: '2026-08-01', count: 32 }];
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) assert.deepEqual(r.facts.outputs[0].history, w.outputs[0].history);
+
+  w.outputs[0].history = [];
+  const empty = parseFacts(w);
+  assert.equal(empty.ok && empty.facts.outputs[0].history?.length, 0, '빈 목록(표본 없음)을 버렸다');
+});
+
+test('🔴 v2 분석 실패 축은 있으면 싣고 없으면 만들지 않는다 — 빈 배열로 메우면 R15 가 "실패 없음"으로 선다', () => {
+  /* 이 축이 없는 옛 응답(UI 선배포)도 통과해야 한다. 그때 사실에는 그 축이 **없어야** 한다 —
+   * 어댑터가 `[]` 로 채우면 R15 의 canRun 이 참이 되어 못 돎이 "평가됨 · 위반 0"으로 바뀐다. */
+  const old = parseFacts(WIRE());
+  assert.equal(old.ok, true, old.ok ? '' : old.reason);
+  if (old.ok) assert.ok(!('analysis_failures' in old.facts), '없는 축을 만들어 냈다');
+
+  const w = WIRE();
+  w.analysisFailures = [{ kind: 'outlook', failedEtfs: [] }, { kind: 'movement', failedEtfs: ['069500', '229200'] }];
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.deepEqual(r.facts.analysis_failures, [
+      { kind: 'outlook', failed_etfs: [] },
+      { kind: 'movement', failed_etfs: ['069500', '229200'] },
+    ]);
+  }
+});
+
+test('🔴 관측 불가 표시는 참일 때만 사실로 싣는다 — 0 과 같은 값으로 접지 않는다', () => {
+  /* 서버는 관측 불가 단계의 수를 0 으로 함께 보낸다(장중 칸에 null 자리가 없다). 어댑터가 `blind` 를
+   * 떨구면 그 0 이 실측이 되어 R10 이 "트리거 → 분석 요청" 손실을 P0 로 세운다. */
+  const w = WIRE();
+  w.chain!.analysisStages = w.chain!.analysisStages!.map((s) => ({ ...s, intraday: 0, blind: true }));
+  w.boundary.blind = true;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.ok(r.facts.chain!.stages.every((s) => s.blind === true), '단계의 관측 불가 표시를 떨궜다');
+    assert.equal(r.facts.boundary.blind, true, '경계의 관측 불가 표시를 떨궜다');
+  }
+  /* 표시가 없는 옛 응답과 false 는 같은 형상이다 — 키를 만들지 않는다 */
+  const old = parseFacts(WIRE());
+  const explicit = WIRE();
+  explicit.chain!.analysisStages![0].blind = false;
+  explicit.boundary.blind = false;
+  const off = parseFacts(explicit);
+  for (const p of [old, off]) {
+    assert.equal(p.ok, true, p.ok ? '' : p.reason);
+    if (p.ok) {
+      assert.ok(!('blind' in p.facts.chain!.stages![0]), '없는 표시를 만들어 냈다');
+      assert.ok(!('blind' in p.facts.boundary), '없는 표시를 만들어 냈다');
+    }
+  }
+  /* 불리언이 아닌 값은 거부한다 — `"false"` 는 truthy 라 통과시키면 멀쩡한 축이 관측 불가가 된다 */
+  const broken = WIRE() as unknown as { boundary: { blind: unknown } };
+  broken.boundary.blind = 'false';
+  assert.equal(parseFacts(broken).ok, false);
+});
+
+test('거부 — v2 분석 실패 축의 형상이 틀리면 응답을 버린다', () => {
+  /* 종류 하나가 빠진 채 통과하면 R15 가 그 종류를 "실패 없음"으로 읽는다 */
+  for (const [name, value] of [
+    ['배열 아님', {}],
+    ['원소가 객체 아님', [null, null]],
+    ['모르는 종류', [{ kind: 'outlook', failedEtfs: [] }, { kind: 'forecast', failedEtfs: [] }]],
+    ['종류 하나 누락', [{ kind: 'outlook', failedEtfs: [] }]],
+    ['같은 종류 둘', [{ kind: 'outlook', failedEtfs: [] }, { kind: 'outlook', failedEtfs: [] }]],
+    ['목록이 수', [{ kind: 'outlook', failedEtfs: 3 }, { kind: 'movement', failedEtfs: [] }]],
+    ['빈 코드', [{ kind: 'outlook', failedEtfs: [''] }, { kind: 'movement', failedEtfs: [] }]],
+  ] as const) {
+    const w = WIRE() as unknown as { analysisFailures: unknown };
+    w.analysisFailures = value;
+    assert.equal(parseFacts(w).ok, false, `${name} 을 통과시켰다`);
+  }
 });
 
 test('거부 — 컬렉션 원소가 객체가 아니면 응답 전체를 버린다', () => {
@@ -361,6 +462,9 @@ test('거부 — 세는 값이 수가 아니거나 음수면 버린다', () => {
     ['today: NaN', (w: ConsoleFactsDto) => { w.outputs[0].today = NaN; }],
     ['today: 문자열', (w: ConsoleFactsDto) => { (w.outputs[0] as { today: unknown }).today = '16'; }],
     ['base: 음수', (w: ConsoleFactsDto) => { w.outputs[0].base = -1; }],
+    ['history: 배열 아님', (w: ConsoleFactsDto) => { (w.outputs[0] as { history: unknown }).history = {}; }],
+    ['history: 음수 건수', (w: ConsoleFactsDto) => { w.outputs[0].history = [{ date: '2026-08-01', count: -1 }]; }],
+    ['history: 날짜 아님', (w: ConsoleFactsDto) => { w.outputs[0].history = [{ date: '어제', count: 1 }]; }],
     ['attempts: 음수', (w: ConsoleFactsDto) => { w.tasks[0].attempts = -1; }],
     ['recordsOut: Infinity', (w: ConsoleFactsDto) => { w.tasks[0].recordsOut = Infinity; }],
     ['completenessExpected: 문자열', (w: ConsoleFactsDto) =>
@@ -396,25 +500,11 @@ test('허용 — 정당한 null 은 거부하지 않는다', () => {
   w.tasks[0].recordsOut = null;
   w.outputs[0].base = null;
   w.datasets[0].unverifiable = null;
-  w.etfLedger!.rows[0].outcome = null;
   const r = parseFacts(w);
   assert.equal(r.ok, true, r.ok ? '' : `정상 응답을 거부했다: ${r.reason}`);
   if (!r.ok) return;
   assert.equal(r.facts.runs[0].lane, null);
   assert.equal(r.facts.outputs[0].base, null);
-});
-
-test('거부 — ETF 원장 상태 형상이 틀리면 R15에 흘리지 않는다', () => {
-  for (const [name, mutate] of [
-    ['rows가 배열 아님', (w: ConsoleFactsDto) =>
-      { (w.etfLedger as { rows: unknown }).rows = {}; }],
-    ['triggered가 문자열', (w: ConsoleFactsDto) =>
-      { (w.etfLedger!.rows[0] as { triggered: unknown }).triggered = 'true'; }],
-    ['outcome이 수', (w: ConsoleFactsDto) =>
-      { (w.etfLedger!.rows[0] as { outcome: unknown }).outcome = 1; }],
-  ] as const) {
-    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
-  }
 });
 
 test('거부 사유는 어느 축인지 말한다 — 조회 실패 문장이 원인을 가리켜야 한다', () => {
@@ -449,12 +539,13 @@ test('검사표가 와이어 형상을 빠짐없이 덮는다 — 안 덮인 필
   both(w.runs[0], RUN_FIELDS, 'runs', ['planned', 'noRunRow']);
   both(w.tasks[0], TASK_FIELDS, 'tasks');
   both(w.datasets[0], DATASET_FIELDS, 'datasets');
-  both(w.outputs[0], OUTPUT_FIELDS, 'outputs');
+  both(w.outputs[0], OUTPUT_FIELDS, 'outputs', ['history']);
   both(w.queues![0], QUEUE_FIELDS, 'queues');
-  both(w.boundary, BOUNDARY_FIELDS, 'boundary');
+  both(w.boundary, BOUNDARY_FIELDS, 'boundary', ['blind']);
   both(w.chain!.feeds[0], CHAIN_FEED_FIELDS, 'chain.feeds');
-  both(w.chain!.stages[0], CHAIN_STAGE_FIELDS, 'chain.stages');
-  both(w.etfLedger!.rows[0], ETF_LEDGER_ROW_FIELDS, 'etfLedger.rows');
+  both(w.chain!.stages![0], CHAIN_STAGE_FIELDS, 'chain.stages', ['blind']);
+  both(w.chain!.analysisStages![0], ANALYSIS_STAGE_FIELDS, 'chain.analysisStages', ['blind', 'pending']);
+  both(w.etfAnalyses!.rows[0], ETF_ANALYSIS_ROW_FIELDS, 'etfAnalyses.rows');
   both(w.meta, META_FIELDS, 'meta');
 });
 
@@ -500,14 +591,14 @@ test('🔴 거부 — 체인의 수 자리에 null 이 오면 버린다 (그 단
    * 갈래 하나만 망가진 응답도 같다: 나머지 갈래가 멀쩡해 화면은 정상으로 보인다. */
   for (const [name, mutate] of [
     ['stages[].batch 가 null', (w: ConsoleFactsDto) =>
-      { (w.chain!.stages[0] as { batch: unknown }).batch = null; }],
+      { (w.chain!.stages![0] as { batch: unknown }).batch = null; }],
     ['stages[].intraday 가 null', (w: ConsoleFactsDto) =>
-      { (w.chain!.stages[0] as { intraday: unknown }).intraday = null; }],
+      { (w.chain!.stages![0] as { intraday: unknown }).intraday = null; }],
     ['feeds[].v 가 null', (w: ConsoleFactsDto) => { (w.chain!.feeds[0] as { v: unknown }).v = null; }],
     ['feeds[].v 가 NaN', (w: ConsoleFactsDto) => { w.chain!.feeds[0].v = NaN; }],
-    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain!.stages[0].batch = -1; }],
+    ['stages[].batch 가 음수', (w: ConsoleFactsDto) => { w.chain!.stages![0].batch = -1; }],
     ['stages[].label 이 null', (w: ConsoleFactsDto) =>
-      { (w.chain!.stages[0] as { label: unknown }).label = null; }],
+      { (w.chain!.stages![0] as { label: unknown }).label = null; }],
     ['chain 이 배열', (w: ConsoleFactsDto) => { (w as { chain: unknown }).chain = []; }],
     ['chain.stages 가 객체', (w: ConsoleFactsDto) => { (w.chain as unknown as { stages: unknown }).stages = {}; }],
     ['chain.stages 원소가 스칼라', (w: ConsoleFactsDto) =>
@@ -539,6 +630,76 @@ test('갈래가 늘어난 체인은 거부하지 않는다 — 전진 배포가 
   /* 앞 두 갈래는 그대로 위치를 지킨다 — 늘어난 축이 기존 판정을 밀어내지 않는다 */
   assert.deepEqual(r.facts.chain?.feeds.map((f) => f.id),
     ['feed.batch', 'feed.intraday', 'feed.third']);
+});
+
+test('🔴 옛 단계만 실린 응답은 체인 축이 없는 것으로 옮긴다 — 멈춘 엔진의 수로 화면과 R10 을 채우지 않는다', () => {
+  /* UI 가 먼저 배포되면 받는 형상이다: `stages`(옛 설명 엔진의 단계)는 있고 `analysisStages` 는 없다.
+   * 옛 단계로 대신 채우면 R10 이 "트리거 → 관측" 감소를 손실로 세운다 — 그 엔진은 멈췄다. */
+  const w = WIRE();
+  delete w.chain!.analysisStages;
+  /* 관측 가능하고 줄어드는 옛 단계 — 이걸 읽으면 손실이 서는 형상을 그대로 둔다 */
+  assert.ok(w.chain!.stages![0].intraday < w.chain!.feeds[1].v, '전제: 옛 단계가 감소를 담고 있다');
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
+  if (!r.ok) return;
+  assert.equal(r.facts.chain, undefined, '옛 단계 목록으로 체인을 만들어 냈다');
+  const report = evaluate(r.facts);
+  const r10 = report.rules.find((x) => x.id === 'R10')!;
+  assert.equal(r10.evaluated, false, 'R10 이 평가됐다고 선다');
+  assert.equal(r10.notRun, 'axis');
+  assert.equal(report.violations.filter((v) => v.rule === 'R10').length, 0, '없는 손실을 세웠다');
+});
+
+test('새 분석 엔진의 단계 — 배치 칸의 null 은 대상 아님이고, 수만 보여 주는 단계는 표시가 붙는다', () => {
+  const r = parseFacts(WIRE());
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (!r.ok) return;
+  const [start, done] = r.facts.chain!.stages;
+  /* 0 이 아니다 — 0 이면 "배치 트리거가 전부 사라졌다"가 된다 */
+  assert.equal(start.batch, null);
+  assert.equal(start.batch_na, true);
+  /* 분석 요청·분석 시작은 판정하고, 분석 완료·게시는 수만 보여 준다 */
+  assert.equal(start.shown_only, undefined);
+  assert.equal(done.shown_only, true);
+  const pub = WIRE();
+  pub.chain!.analysisStages = [
+    { id: 'c.req', label: '분석 요청', batch: null, intraday: 60, src: 'x' },
+    { id: 'c.pub', label: '게시', batch: null, intraday: 40, src: 'x' },
+  ];
+  const p = parseFacts(pub);
+  assert.equal(p.ok, true);
+  if (p.ok) assert.deepEqual(p.facts.chain!.stages!.map((s) => s.shown_only), [undefined, true]);
+  /* 형상이 틀리면 거부한다 — 장중 칸은 수여야 하고 빈 목록은 축이 온 척하는 빈 체인이다 */
+  for (const [name, mutate] of [
+    ['장중 칸이 null', (w: ConsoleFactsDto) => { (w.chain!.analysisStages![0] as { intraday: unknown }).intraday = null; }],
+    ['배치 칸이 음수', (w: ConsoleFactsDto) => { w.chain!.analysisStages![0].batch = -1; }],
+    ['빈 목록', (w: ConsoleFactsDto) => { w.chain!.analysisStages = []; }],
+    ['객체', (w: ConsoleFactsDto) => { (w.chain as unknown as { analysisStages: unknown }).analysisStages = {}; }],
+  ] as const) {
+    assert.equal(broken(mutate).ok, false, `${name} 을 통과시켰다`);
+  }
+});
+
+test('아직 판정할 수 없는 트리거 수는 있을 때만 싣는다 — 없는 응답(옛 API)은 0 과 같다', () => {
+  /* 옛 서버는 `pending` 을 안 보낸다. 그때 R10 은 종전대로(차이 전부를 손실로) 판정한다. */
+  const old = parseFacts(WIRE());
+  assert.equal(old.ok, true, old.ok ? '' : old.reason);
+  if (old.ok) assert.ok(old.facts.chain!.stages.every((s) => !('pending' in s)), '없는 수를 만들어 냈다');
+
+  const w = WIRE();
+  w.chain!.analysisStages![0].pending = 9;
+  w.chain!.analysisStages![1].pending = 0;
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : r.reason);
+  if (r.ok) {
+    assert.equal(r.facts.chain!.stages![0].pending, 9);
+    assert.ok(!('pending' in r.facts.chain!.stages![1]), '0 과 부재가 다른 형상이 됐다');
+  }
+  for (const bad of [-1, 1.5, '9', null]) {
+    const b = WIRE() as unknown as { chain: { analysisStages: { pending: unknown }[] } };
+    b.chain.analysisStages[0].pending = bad;
+    assert.equal(parseFacts(b).ok, false, `pending: ${String(bad)} 을 통과시켰다`);
+  }
 });
 
 test('🔴 체인 축이 통째로 없는 응답은 거부하지 않는다 — 그 축만 못 돎으로 선다', () => {
@@ -716,4 +877,121 @@ test('거부 — 응답 자체가 객체가 아니면 그 사실을 사유로 �
     if (r.ok) continue;
     assert.match(r.reason, /응답이 객체가 아니다/, `${JSON.stringify(body)} 의 사유가 원인을 안 가리킨다`);
   }
+});
+
+test('🔴 새 축이 없는 응답에서 ETF 표는 기록 없음이다 — 옛 축으로 대신 그리지 않는다', () => {
+  /* UI 가 먼저 배포되면 받는 형상이다(ALPHA-1312): 옛 설명 엔진의 `etfLedger` 는 있고 `etfAnalyses`
+   * 는 없다. 옛 축에 실패 행을 둔다 — 그걸 읽으면 표가 그 행으로 그려진다. */
+  const w = WIRE();
+  delete w.etfAnalyses;
+  Object.assign(w, { etfLedger: { rows: [{ etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null }] } });
+  const r = parseFacts(w);
+  assert.equal(r.ok, true, r.ok ? '' : `옛 응답을 거부했다: ${r.reason}`);
+  if (!r.ok) return;
+  assert.equal(r.facts.etf_analyses, undefined, '없는 축을 만들어 냈다');
+  assert.equal(etfTable(r.facts.etf_analyses), null, '표를 그렸다');
+  /* 새 축이 오면 그 축의 행으로 그린다 — 옛 축의 ETF 는 섞이지 않는다 */
+  const full = parseFacts(WIRE());
+  assert.deepEqual(full.ok && etfTable(full.facts.etf_analyses)!.rows.map((x) => x.etf), ['069500']);
+});
+
+test('ETF별 분석 귀결의 상태는 계약이 열거한 코드만 받는다', () => {
+  const cases: [string, (w: ConsoleFactsDto) => void][] = [
+    ['rows 가 배열이 아니다', (w) => { (w.etfAnalyses as { rows: unknown }).rows = {}; }],
+    ['모르는 상태', (w) => { (w.etfAnalyses!.rows[0] as { movement: unknown }).movement = 'FAILED'; }],
+    /* 시작 못 함·판정 보류는 가격변동 분석에만 있다 */
+    ['전망에 없는 상태', (w) => { (w.etfAnalyses!.rows[0] as { outlook: unknown }).outlook = 'pending'; }],
+    ['이름이 없다', (w) => { (w.etfAnalyses!.rows[0] as { name: unknown }).name = null; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const w = WIRE();
+    mutate(w);
+    const r = parseFacts(w);
+    assert.equal(r.ok, false, `${label}: 통과시켰다`);
+    assert.match(r.ok ? '' : r.reason, /etfAnalyses/, label);
+  }
+});
+
+test('서버가 쓴 시간은 있어도 없어도 받는다 — 규칙 사실로는 옮기지 않는다', () => {
+  /* 재기만 하는 값이다(ALPHA-1314). 화면도 규칙도 읽지 않으므로 사실에 싣지 않는다. */
+  const withTiming = parseFacts(WIRE());
+  assert.equal(withTiming.ok, true, withTiming.ok ? '' : withTiming.reason);
+  assert.equal(withTiming.ok && 'timing' in withTiming.facts.meta, false, '사실에 실었다');
+  /* 이 필드를 싣기 전의 API */
+  const w = WIRE();
+  delete w.meta.timing;
+  const without = parseFacts(w);
+  assert.equal(without.ok, true, without.ok ? '' : without.reason);
+  assert.deepEqual(without.ok && without.facts, withTiming.ok && withTiming.facts);
+  /* 서버가 구간을 더하거나 이름을 바꿔도 받는다 — 이름과 종류는 문자열이기만 하면 된다 */
+  const grown = WIRE();
+  grown.meta.timing!.segments.push({ name: 'new.segment', kind: 'cache', ms: 0 });
+  assert.equal(parseFacts(grown).ok, true);
+});
+
+test('서버가 쓴 시간이 오면 형상은 본다', () => {
+  const cases: [string, (w: ConsoleFactsDto) => void][] = [
+    ['전체 시간이 수가 아니다', (w) => { (w.meta.timing as { totalMs: unknown }).totalMs = '5600'; }],
+    ['구간이 배열이 아니다', (w) => { (w.meta.timing as { segments: unknown }).segments = {}; }],
+    ['구간의 시간이 음수다', (w) => { w.meta.timing!.segments[0].ms = -1; }],
+    ['구간에 이름이 없다', (w) => { (w.meta.timing!.segments[0] as { name: unknown }).name = null; }],
+    ['객체가 아니다', (w) => { (w.meta as { timing: unknown }).timing = 5600; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const w = WIRE();
+    mutate(w);
+    const r = parseFacts(w);
+    assert.equal(r.ok, false, `${label}: 통과시켰다`);
+    assert.match(r.ok ? '' : r.reason, /meta\.timing/, label);
+  }
+});
+
+test('🔴 전달 경계 — 새 API 와 옛 API 어느 쪽에서도 R14 가 거짓 위반을 세우지 않는다', () => {
+  const r14 = (w: ConsoleFactsDto) => {
+    const r = parseFacts(w);
+    if (!r.ok) throw new Error(`응답을 거부했다: ${r.reason}`);
+    const ev = evaluate(r.facts);
+    return {
+      evaluated: ev.rules.find((x) => x.id === 'R14')!.evaluated,
+      violations: ev.violations.filter((v) => v.rule === 'R14'),
+    };
+  };
+  /* 새 API(ALPHA-1326) — 관측 불가 키가 없고 두 수는 새 분석 엔진에서 센 값이다. 0 이면 정합으로
+   * 평가된다(못 돎이 아니다). */
+  const fresh = WIRE();
+  fresh.boundary = { publishedWithoutDelivery: 0, deliveryNowNonpublished: 0, deliveryRows: 12 };
+  const clean = r14(fresh);
+  assert.equal(clean.evaluated, true, '새 API 의 0 을 못 돎으로 접었다');
+  assert.equal(clean.violations.length, 0);
+  /* 새 API 의 0 이 아닌 수는 그대로 위반이고, 근거는 새 분석 엔진의 표다. */
+  fresh.boundary = { publishedWithoutDelivery: 2, deliveryNowNonpublished: 1, deliveryRows: 12 };
+  const hit = r14(fresh);
+  assert.deepEqual(hit.violations.map((v) => [v.metric, v.evidence]),
+    [[2, 'movement_analyses ⋈ tenant_delivery'], [1, 'tenant_delivery ⋈ movement_analyses']]);
+  /* 옛 API — 옛 설명 엔진만 맞대던 때라 관측 불가가 참이다. 두 수가 0 이면 못 돎이지 정합이 아니다. */
+  const old = WIRE();
+  old.boundary = { publishedWithoutDelivery: 0, deliveryNowNonpublished: 0, deliveryRows: 12, blind: true };
+  const blind = r14(old);
+  assert.equal(blind.evaluated, false, '옛 API 의 관측 불가 0 을 정합으로 읽었다');
+  assert.equal(blind.violations.length, 0);
+});
+
+test('🔴 옛 서버 응답을 받아도 깨지지 않는다 — 지운 축은 무시하고, 옛 단계 목록은 없어도 된다', () => {
+  /* 이 UI 앞의 서버(ALPHA-1328 이전)는 옛 설명 엔진의 ETF 원장(`etfLedger`)을 싣는다. 이 UI 는 그 축을
+   * 모른다 — 검증 경계는 모르는 필드를 거부하지 않으므로 응답 전체가 그대로 받아져야 한다. */
+  const old = WIRE();
+  Object.assign(old, { etfLedger: { rows: [{ etf: 'ETF-1', name: '첫 ETF', triggered: true, outcome: 'FAILED', error: null }] } });
+  const r = parseFacts(old);
+  assert.equal(r.ok, true, r.ok ? '' : `옛 서버 응답을 거부했다: ${r.reason}`);
+  assert.equal(r.ok && 'etf_ledger' in r.facts, false, '지운 축을 사실로 옮겼다');
+  /* 다음 서버는 옛 단계 목록(`chain.stages`)을 지운다 — 없어도 체인은 새 분석 엔진의 단계로 선다 */
+  const next = WIRE();
+  delete next.chain!.stages;
+  const n = parseFacts(next);
+  assert.equal(n.ok, true, n.ok ? '' : `옛 단계 목록이 없는 응답을 거부했다: ${n.reason}`);
+  assert.deepEqual(n.ok && n.facts.chain?.stages.map((s) => s.id), ['c.start', 'c.done']);
+  /* 오면 지금처럼 검사한다 — 비어 있거나 형상이 틀린 목록은 거부한다 */
+  const empty = WIRE();
+  empty.chain!.stages = [];
+  assert.equal(parseFacts(empty).ok, false, '빈 옛 단계 목록을 통과시켰다');
 });

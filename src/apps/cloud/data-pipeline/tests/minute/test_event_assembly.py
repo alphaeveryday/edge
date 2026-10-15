@@ -107,3 +107,36 @@ def test_unknown_event_type_is_dropped(monkeypatch):
         "predicate_code": "SIGN",
         "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자", "entity_id": None}],
     }) is None
+
+
+def test_institution_partner_resolves_without_enabling_realtime_instrument_aliases():
+    # WHY: 장중 writer도 기관 ID를 보존하되 기존 별칭 비활성화 정책은 유지한다.
+    from data_pipeline.entity_resolution import ResolutionIndex
+
+    index = ResolutionIndex(
+        by_key={"삼성전자": "inst_SAMSUNG", "현대차": "inst_HYUNDAI"},
+        by_ticker={"005930": "inst_SAMSUNG", "005380": "inst_HYUNDAI"},
+        alias_ticker_by_key={"현대자동차": "005380"},
+        alias_keys=frozenset({"현대자동차"}),
+    )
+    cls = _assembler()._to_classification(
+        {
+            "event_type_code": "COMPANY.ALLIANCE.PARTNERSHIP",
+            "predicate_code": "FORM",
+            "arguments": [
+                {"role_code": "PARTNER", "text": "삼성전자"},
+                {"role_code": "PARTNER_2", "text": "금융감독원"},
+                {"role_code": "PARTNER_2", "text": "현대자동차"},
+            ],
+        },
+        article_id="a1", view=event_assembly._process_registry(),
+        entity_index=index.by_ticker,
+        ticker_by_entity={v: k for k, v in index.by_ticker.items()},
+        res_index=index,
+    )
+    assert cls is not None
+    by_mention = {a["mention_text"]: a["entity_id"] for a in cls["arguments"]}
+    assert by_mention == {
+        "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": None,
+    }
+    assert cls["primary_ticker"] == "005930"

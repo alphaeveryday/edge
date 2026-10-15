@@ -5,7 +5,7 @@
 
 고정하는 계약 일곱:
 
-1. ⭐ **`stck_cntg_hour` 는 구간의 시작** — 주식 당일 TR(구간 **끝**)과 **반대 축**이다.
+1. ⭐ **`stck_cntg_hour` 는 구간의 시작** — 주식 당일 TR 과 같은 축이다(ALPHA-1127 정정).
    1005 의 1분봉 5개를 5분봉에 합성 대조해 확정했다(시작 가설 13건 연속 일치, 끝 가설
    13건 전건 불일치). 뒤집히면 전 구간이 1분 밀린 채 커밋되는데 봉 수는 그대로라
    어떤 게이트도 안 걸린다.
@@ -124,11 +124,12 @@ def query_of(url: str) -> dict[str, str]:
 
 
 class TestParse:
-    def test_hour_label_is_window_start_unlike_stock(self):
-        """⭐ 라벨이 구간의 **시작**이다 — 주식 파서와 정확히 1분 어긋나야 한다.
+    def test_hour_label_is_window_start_same_axis_as_stock(self):
+        """⭐ 라벨이 구간의 **시작**이다 — 주식 파서와 같은 칸에 앉아야 한다(ALPHA-1127).
 
-        같은 행을 두 파서에 넣어 대조한다. 한쪽만 단언하면 "우연히 맞는 값"을 고정할 수
-        있는데, 두 파서의 **차이**는 이 축이 뒤집힐 때만 사라진다.
+        예전엔 "주식과 정확히 1분 어긋난다"를 고정했다 — 주식 TR 의 끝 라벨 실측(ALPHA-644)
+        이 요청 라벨 행(형성 중 봉)만 본 오독이라 그 차이가 사라졌다. 같은 행을 두 파서에
+        넣어 대조한다: 한쪽만 단언하면 "우연히 맞는 값"을 고정할 수 있다.
         """
         candle = parse_index_row(row("103000"), UNIT_ID, interval_sec=LANE_INTERVAL_SEC)
         assert candle.window_start == datetime(2026, 8, 7, 10, 30, tzinfo=KST)
@@ -138,8 +139,8 @@ class TestParse:
             {"stck_bsop_date": DAY, "stck_cntg_hour": "103000", "stck_prpr": "100",
              "stck_oprc": "100", "stck_hgpr": "100", "stck_lwpr": "100",
              "cntg_vol": "1"}, "005930")
-        # 같은 라벨인데 지수 봉이 주식 봉보다 정확히 한 칸 뒤에 앉는다
-        assert candle.window_end - stock.window_end == timedelta(seconds=LANE_INTERVAL_SEC)
+        # 같은 라벨이면 지수 봉과 주식 봉이 같은 창이다 — 한쪽이 뒤집히면 1분 어긋난다
+        assert (candle.window_start, candle.window_end) == (stock.window_start, stock.window_end)
 
     def test_values_are_decimal_from_index_fields(self):
         candle = parse_index_row(row(close="5047.39"), UNIT_ID,
@@ -477,12 +478,18 @@ class TestConfigMap:
         assert settings.minute_sector_index is not None, "[minute_sector_index] 가 없다"
         return settings.minute_sector_index
 
-    def test_forty_five_sectors(self):
-        # 정본은 45종이다(레이크 sector_index 코드 집합 · sector_member 스냅샷 둘 다)
+    def test_forty_five_sectors_plus_two_composites(self):
+        # 업종 정본은 45종이다(레이크 sector_index 코드 집합 · sector_member 스냅샷 둘 다).
+        # 종합지수 2종(ALPHA-1255)은 따로 센다 — KRX 코드 대역이 업종과 같아(1xxx·2xxx) 섞어
+        # 세면, 업종 하나가 빠지고 다른 지수가 들어와도 개수가 같아 못 잡는다.
+        # 종합지수 매핑은 값으로 확정했다(2026-10-08 KIS 일봉 종가 = Yahoo ^KS11·^KQ11 4일).
         index_map = self._config().index_map
-        assert len(index_map) == 45
-        assert sum(1 for k in index_map if k.startswith("1")) == 24   # KOSPI
-        assert sum(1 for k in index_map if k.startswith("2")) == 21   # KOSDAQ
+        composites = {"1001": "0001", "2001": "1001"}   # 코스피·코스닥
+        assert {k: index_map.get(k) for k in composites} == composites
+        sectors = {k: v for k, v in index_map.items() if k not in composites}
+        assert len(sectors) == 45
+        assert sum(1 for k in sectors if k.startswith("1")) == 24   # KOSPI
+        assert sum(1 for k in sectors if k.startswith("2")) == 21   # KOSDAQ
 
     def test_kis_codes_are_not_derivable_from_krx_codes(self):
         """🔴 규칙으로 유도할 수 있으면 다음 사람이 표를 지우고 산술을 쓴다.

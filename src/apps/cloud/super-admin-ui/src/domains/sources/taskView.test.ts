@@ -96,6 +96,17 @@ test('성공 시도도 뉴스 진단이 있으면 상세를 열고 모든 판단
   assert.equal(attemptNeedsDetail({ ...attempt, qualityDiagnostics: null }), false);
 });
 
+test('업무를 실행하지 않은 중복 재시도는 exit 0 성공이어도 상세를 연다', () => {
+  /* ALPHA-1088: 성공 줄과 모양이 같아 접히면 "실행 한 번"으로 읽힌다 — 그 시도는 업무를 하지 않았다 */
+  const attempt = {
+    attemptNumber: null, ecsTaskArn: 'arn:aws:ecs:task/skip', executionStatus: 'SUCCEEDED' as const,
+    startedAt: null, finishedAt: null, exitCode: 0, failureReason: null,
+    recordSource: 'DUPLICATE_SKIP' as const, qualityDiagnostics: null,
+  };
+  assert.equal(attemptNeedsDetail(attempt), true);
+  assert.equal(attemptNeedsDetail({ ...attempt, recordSource: 'WRAPPER' as const }), false);
+});
+
 test('anchorless 진단과 새 사유 어휘도 손실 없이 표시한다', () => {
   const diagnostics: QualityDiagnostics = {
     schema: 'news_resolution_v1',
@@ -135,4 +146,16 @@ test('비정상 뉴스 진단은 해당 상세에서 격리해 원장 전체 렌
     issues: [{ ...valid.issues[0], sample: null }],
   }), null);
   assert.equal(parseQualityDiagnostics({ ...valid, issues: null }), null);
+});
+
+
+test('정책 미해소 계측은 완전한 쌍만 표시한다', () => {
+  const d = { schema: 'news_resolution_v1', scope: 'assertion_arguments',
+    metrics: { total: 10, resolved: 4, unresolved: 6, policyExcluded: 5, actionableUnresolved: 1 }, issues: [] };
+  const parsed = parseQualityDiagnostics(d);
+  assert.ok(parsed);
+  assert.match(qualityDiagnosticsSummary(parsed), /미해소 6 · 정책 제외 5 · 판정 대상 미해소 1/);
+  for (const metrics of [{ ...d.metrics, policyExcluded: null }, { ...d.metrics, actionableUnresolved: 2 }]) {
+    assert.equal(parseQualityDiagnostics({ ...d, metrics }), null);
+  }
 });

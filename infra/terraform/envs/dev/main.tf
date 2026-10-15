@@ -2,9 +2,12 @@ locals {
   prefix                           = "edge-dev"
   data_pipeline_ecr_name           = "edge/pipeline"
   data_pipeline_image_tag          = "data-pipeline-latest"
-  analysis_engine_image_tag        = "analysis-engine-latest"
+  db_query_image_tag               = "db-query-latest"
   data_pipeline_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${local.data_pipeline_ecr_name}"
   data_pipeline_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${local.data_pipeline_ecr_name}"
+  # foundation 이 소유하는 edge/airflow(ALPHA-1119). data 로 조회하지 않는다 — foundation apply 전에도 plan 이 선다.
+  airflow_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/edge/airflow"
+  airflow_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/edge/airflow"
 }
 
 # ── DNS / TLS ───────────────────────────────────────────
@@ -76,6 +79,29 @@ data "aws_secretsmanager_secret" "admin_bootstrap_operator" {
 # aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"secret":"..."}'.
 data "aws_secretsmanager_secret" "app_api_jwt" {
   name = "${local.prefix}-app-api/jwt/secret"
+}
+
+# app-api 메일 발송용 Gmail 앱 비밀번호 — 같은 규율: 그릇+값을 TF 밖 CLI 로 선생성, data 조회.
+# 값 교체(앱 비밀번호 재발급) 시:
+# aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"secret":"..."}'.
+data "aws_secretsmanager_secret" "app_api_mail" {
+  name = "${local.prefix}-app-api/mail/password"
+}
+
+# 파이프라인 RDS 읽기 전용 롤(app_sync_ro) 비밀번호. 롤과 시크릿은 수동 선생성(ALPHA-1134)
+data "aws_secretsmanager_secret" "app_api_pipeline" {
+  name = "${local.prefix}-app-api/pipeline/password"
+}
+
+# app-api 소셜 로그인 식별자. 공개값도 저장소에 두지 않아 시크릿으로 주입, 그릇+값은 TF 밖 CLI 선생성.
+# 애플: {"secret": <.p8>, "keyId", "teamId", "clientId"(번들 ID)}. 비공개 키는 탈퇴 시 연결 철회용
+data "aws_secretsmanager_secret" "app_api_apple" {
+  name = "${local.prefix}-app-api/apple/private-key"
+}
+
+# 카카오: {"secret": <네이티브 앱 키>}, idToken aud 대조용
+data "aws_secretsmanager_secret" "app_api_kakao" {
+  name = "${local.prefix}-app-api/kakao/client-id"
 }
 
 # ── 네트워크(VPC·3-tier 서브넷·NAT) ─────────────────────
@@ -417,8 +443,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_schema_migrate" {
 
 # ── 에이전트 읽기전용 질의 one-off task (ALPHA-622) ──────
 # private RDS 는 VPC 밖에서 못 붙는다 — schema-migrate 와 같은 해법(VPC 내부 one-off task).
-# 이미지는 analysis 페이즈와 동일한 것을 쓴다(질의 코드가 같은 파이썬 패키지에 산다) —
-# 아래 data_pipeline 의 analysis_image 와 표현식을 공유해 태그가 갈라지지 않게 한다.
+# 전용 조회 이미지를 기존 ECR 저장소에서 사용한다.
 module "db_query" {
   source = "../../modules/db-query"
 
@@ -426,7 +451,7 @@ module "db_query" {
   region = var.region
   vpc_id = module.network.vpc_id
 
-  image = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
+  image = "${local.data_pipeline_ecr_repository_url}:${local.db_query_image_tag}"
 
   db_host = module.rds.address
   db_port = module.rds.port
@@ -490,13 +515,16 @@ module "gha_deploy_dev" {
     module.app_api.execution_role_arn, module.app_api.task_role_arn,
   ]
 
-  # UI 배포(deploy-ui.yml) 권한 — 프론트 S3 sync + CloudFront 무효화.
-  # tenant-console 은 온프렘 플레인이라 cloud 배포처 없음(ADR-0032) — super-admin 만.
+  # 정적 사이트 배포 권한 — S3 sync + CloudFront 무효화.
+  # super-admin UI(deploy-ui.yml)와 ETF Orca 랜딩페이지(deploy-app-landing.yml)가 쓴다.
+  # tenant-console 은 온프렘 플레인이라 cloud 배포처 없음(ADR-0032).
   ui_bucket_arns = [
     module.super_admin_site.bucket_arn,
+    module.landing_site.bucket_arn,
   ]
   ui_distribution_arns = [
     module.super_admin_site.distribution_arn,
+    module.landing_site.distribution_arn,
   ]
 }
 
@@ -513,7 +541,8 @@ module "pipeline" {
 # 기존 임시 news-pipeline SFN 과 분리된 상태머신. 최초엔 DISABLED 로 생성한다.
 # analyze 페이즈는 구 analysis-engine 모듈의 흡수다(ALPHA-408) — 이미지는 alphamale 코드베이스라 따로다.
 module "data_pipeline" {
-  source = "../../modules/data-pipeline"
+  source                                = "../../modules/data-pipeline"
+  analysis_consumer_task_definition_arn = module.analysis_v2.consumer_task_definition_arn
 
   name             = "${local.prefix}-data-pipeline"
   region           = var.region
@@ -521,7 +550,6 @@ module "data_pipeline" {
   subnet_ids       = module.network.private_subnet_ids
   cluster_arn      = module.worker_cluster.cluster_arn
   image            = "${local.data_pipeline_ecr_repository_url}:${local.data_pipeline_image_tag}"
-  analysis_image   = "${local.data_pipeline_ecr_repository_url}:${local.analysis_engine_image_tag}"
   lake_bucket_name = module.pipeline.lake_bucket
   lake_bucket_arn  = module.pipeline.lake_bucket_arn
 
@@ -536,25 +564,6 @@ module "data_pipeline" {
   db_user                = module.rds.master_username
   db_password_secret_arn = module.rds.master_user_secret_arn
   deepseek_secret_arn    = data.aws_secretsmanager_secret.deepseek.arn
-
-  # ExposureReverted 회수 집행(ALPHA-746) — analysis-consumer 가 super-admin 무효화 API 를
-  # 부른다. 내부 경로(Service Connect)가 아닌 공개 엣지인 이유: 소비자는 worker_cluster,
-  # super-admin-api 는 service_cluster 네임스페이스라 디스커버리가 닿지 않는다 — NAT egress
-  # 로 ALB(admin_api_domain, WAF 부착)를 탄다. 자격은 SSM SecureString 수동 주입
-  # (modules/data-pipeline/minute_services.tf 의 파라미터 이름 계약 참조).
-  super_admin_api_url = "https://${var.admin_api_domain}"
-
-  # explanation_run 번들 고정 — dev RDS 의 release_bundle(PUBLISHED) 시딩 행과 일치해야
-  # explanation_result 가 RDS 로 영속된다. 미주입은 이제 선택지가 아니다(ALPHA-797 이
-  # S3 폴백을 폐기) — 변수에 기본값이 없어 plan 이 막는다. 잠정 번들(ALPHA-406) —
-  # 정식 버저닝은 릴리스 규약 합의 후.
-  analysis_release_bundle_version = "dev-mvp-0"
-
-  # 시각창 집계 Athena 오프로드(ALPHA-780). 5분봉 Iceberg 정본과 Athena 결과 CSV 가 같은
-  # 버킷에 산다 — **terraform 관리 밖**이라 ARN 만 넘기고 리소스로 잡지 않는다.
-  # 이것 없이는 구간 모드가 DuckDB 폴백(질의당 376MB)으로 떨어져 1분 주기를 못 버틴다.
-  analysis_market_data_bucket_arn = "arn:aws:s3:::market-data-${data.aws_caller_identity.current.account_id}"
-  analysis_athena_workgroup       = "market_data"
 
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
@@ -602,9 +611,14 @@ module "data_pipeline" {
   # 공시·뉴스처럼 DISABLED 신설 → 별도 apply 컷오버를 밟지 않는 이유: 이 3스텝은 시장 SFN 이
   # 돌던 것을 뺏어오는 게 아니라 **배선이 0이던 신설**이라(ALPHA-767·768) 두 레인이 같은 스텝을
   # 동시에 소유하는 겹침 창이 없다.
-  # ⚠️ 이 스케줄이 켜져 있으므로 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 도 함께 주입된다
-  # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다.
+  # ⚠️ 이 값(ENABLED) 또는 아래 orchestrator = "AIRFLOW" 이면 `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 이 주입된다
+  # (ops_ledger.tf 조건부) — Reconciler 가 이 5슬롯의 결측을 판정한다. AIRFLOW 인 동안 실제 스케줄은 DISABLED 다.
   investor_intraday_schedule_state = "ENABLED"
+  # 실행 주체(ALPHA-1088). ALPHA-1141 상시 운영 전환(2026-10-03 사용자 승인): 장중 수급 5슬롯은 Airflow 가 실행한다.
+  # 이 값이 AIRFLOW 면 이 레인의 EventBridge 스케줄 5개는 DISABLED, Reconciler 슬롯 대조는 유지된다.
+  # SFN 상태 머신·태스크 정의는 남는다 — 롤백은 이 값을 "SFN" 으로 되돌리는 PR(먼저 Airflow 업무 종료·보류·슬롯
+  # 소유를 확인한다, src/apps/cloud/airflow/README.md "운영 전환·롤백 절차").
+  investor_intraday_orchestrator = "AIRFLOW"
 
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
@@ -622,6 +636,15 @@ module "data_pipeline" {
   # ⚠️ 첫 발화는 다음 거래일 07:45 KST 다. 그때까지 이미지 CD 가 끝나 있어야 `start-minute-session`
   # 스텝이 존재한다(이미지 CD 와 apply 는 순서 보장이 없다 — deploy-order-splits-the-pr).
   minute_session_schedule_state = "ENABLED"
+
+  # 분 가격 워커를 2번 KIS 키로 돌린다(ALPHA-1252 — 코드 ALPHA-1247, 배선 ALPHA-1248). price-worker 만 2번 시크릿
+  # (`edge-dev-data-pipeline/kis/oauth-2`, Terraform 밖에서 등록)과 2번 토큰 캐시로 바뀌고, 동시 호출 4·호출 간격
+  # 0.0625초(초당 16건)로 수집한다. iNAV·업종지수·장중 수급·장 마감 배치는 1번 키에 남는다.
+  # ⚠️ 켜고 끄는 것은 **분 세션이 없는 시간에만** 한다 — price-worker 의 태스크 정의가 바뀐다.
+  # ⚠️ `call_budget_enabled` 와 같이 켤 수 없다(plan 이 거부한다).
+  # 되돌리기는 이 줄을 지우는 PR 이다. 대상 ETF 를 148종으로 넓힌 뒤(ALPHA-1249)에는 이것만 되돌릴 수 없다 —
+  # 1번 키에 한 건씩 보내는 방식은 매분 약 500종목이 한계다.
+  minute_price_dedicated_kis_enabled = true
 
   # KR 평일 휴장일 2026 (ALPHA-387). 비면 Planner 는 휴장일에도 런을 계획하고, KRX 수집은 그날
   # 오는 직전 거래일 PDF 를 휴장일 as-of 로 오라벨한다 — 주말만 코드가 알기 때문이다.
@@ -672,6 +695,77 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
   description                  = "data-pipeline batch tasks to postgres"
 }
 
+# ── Airflow 실행 환경 (ALPHA-1119) ──────────────────────
+# 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README src/apps/cloud/airflow
+# "실행 환경"). 실행 주체 전환은 이 블록이 아니라 data_pipeline 의 investor_intraday_orchestrator 가 한다.
+#
+# 메타DB — **기존 업무 RDS(edge-dev) 인스턴스 안의 전용 DB `airflow`·전용 역할 `airflow_meta`**(검증 구성, ALPHA-1119).
+# 새 RDS 를 만들지 않고 인스턴스 사양·파라미터 그룹도 바꾸지 않는다. DB·역할은 TF 가 아니라 검증 절차의 관리
+# 태스크(src/apps/cloud/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
+# DB·역할을 나눠도 인스턴스 자원(메모리·CPU·IOPS·연결 상한·재부팅)은 공유한다. 재사용 가부는 이 검증(장외)의
+# 관측·중단 기준으로 판단한다(README "기존 RDS 재사용 검증"). 장중 재사용은 미검증이다.
+module "airflow" {
+  source = "../../modules/airflow"
+
+  name       = "${local.prefix}-airflow"
+  region     = var.region
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.private_subnet_ids
+
+  # al2023-ami-ecs-hvm-2023.0.20260922-kernel-6.1-arm64 (2026-09-28 recommended). 교체는 README "호스트 교체".
+  ami_id = "ami-0c15069e7568e5f41"
+  # 실제 AWS 단기 검증(ALPHA-1119, 2026-09-29~30) 결과: micro 는 등록 916MiB·호스트 전역 OOM 으로 불가, small·1024 는
+  # 업무 task 실행 중 태스크 cgroup OOM 으로 불가. 1408 은 유휴·재시작만 확인했다(업무 실행은 검증 도구 결함으로 미검증).
+  # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
+  instance_type = "t4g.small"
+  task_memory   = 1408
+  # ALPHA-1141 상시 운영(2026-10-03 승인) — 장중 수급의 실행 환경. 기간에 따라 내리는 장치는 두지 않는다.
+  # 장애 대응은 중단 경보(modules/airflow/stop.tf)와 README 롤백 절차가 맡는다.
+  host_count    = 1
+  host_observer = false
+
+  # 기준선 태그일 뿐 pull 되지 않는다 — 서비스는 desired 0 으로 생기고 deploy-airflow 가 커밋 태그 리비전으로 올린다.
+  image = "${local.airflow_ecr_repository_url}:bootstrap"
+
+  db_host                = module.rds.address
+  db_port                = module.rds.port
+  db_name                = "airflow"
+  db_user                = "airflow_meta"
+  db_security_group_id   = module.rds.security_group_id # 기존 SG 에 인그레스 규칙만 더한다(SG 자체는 불변)
+  db_instance_identifier = local.prefix                 # modules/rds 의 identifier = name(= local.prefix)
+
+  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
+
+  batch_cluster_arn = module.worker_cluster.cluster_arn
+  batch_task_definition_families = [
+    module.data_pipeline.task_definition_families["kis"],
+    module.data_pipeline.task_definition_families["bigkinds"],
+    module.data_pipeline.task_definition_families["rds"],
+    module.data_pipeline.ops_task_definition_family,
+    # 원천 관측 레인 edge_source_daily(ALPHA-1136): 재무 수집은 기존 dart, 매크로 수집은 macro task-def.
+    # 없으면 financial_collect·macro_collect 가 AccessDeniedException 으로 시작도 못 한다.
+    module.data_pipeline.task_definition_families["dart"],
+    module.data_pipeline.task_definition_families["macro"],
+  ]
+  batch_task_definition_prefix = "${local.prefix}-data-pipeline"
+  batch_pass_role_arns         = module.data_pipeline.batch_pass_role_arns
+  batch_security_group_id      = module.data_pipeline.security_group_id
+  batch_log_group_name         = module.data_pipeline.log_group_name
+  batch_log_group_arn          = module.data_pipeline.log_group_arn
+
+  deploy_role_name   = element(split("/", module.gha_deploy_dev.role_arn), 1) # vars.AWS_DEPLOY_ROLE_ARN 의 역할
+  ecr_repository_arn = local.airflow_ecr_repository_arn
+
+  # 격리 검증(KIS·업무 DB·레이크와 무관). 검증을 마쳐 false 로 걷었다(버킷·태스크 정의·역할·종료 장치).
+  verify_enabled = false
+  verify_image   = "${local.airflow_ecr_repository_url}:verify"
+  kr_holidays    = module.data_pipeline.kr_holidays
+  # 관리 태스크(dbadmin)만: 전용 DB·역할 생성·정리, 검증 원장 스키마 복제(업무 DB 스키마만).
+  master_db_secret_arn = module.rds.master_user_secret_arn
+  master_db_user       = module.rds.master_username
+  business_db_name     = module.rds.db_name
+}
+
 # analysis-engine 모듈은 ALPHA-408 에서 data-pipeline 의 analyze 페이즈로 흡수돼 삭제됐다.
 # analyze 태스크의 RDS 접근은 위 rds_from_data_pipeline 규칙이 덮는다(같은 task SG).
 
@@ -712,6 +806,52 @@ moved {
 moved {
   from = module.news_pipeline
   to   = module.pipeline
+}
+
+# ── ETF Orca 랜딩페이지 (etforca.com) ───────────────────
+# 영역과 인증서는 foundation 이 소유한다(route53.tf·acm.tf 의 etforca). 여기서는 조회만 한다.
+# 파일은 src/apps/cloud/app-landing 에 있고 deploy-app-landing.yml 이 버킷에 올린다(index.html·assets/).
+data "aws_route53_zone" "etforca" {
+  name = var.landing_domain
+}
+
+data "aws_acm_certificate" "etforca_cdn" {
+  provider    = aws.us_east_1
+  domain      = var.landing_domain
+  statuses    = ["ISSUED"]
+  most_recent = true
+}
+
+module "landing_site" {
+  source = "../../modules/static-site"
+
+  name                    = "${local.prefix}-landing"
+  domain_name             = var.landing_domain
+  redirect_www            = true # www.etforca.com → etforca.com (인증서가 *.etforca.com 을 포함한다)
+  zone_id                 = data.aws_route53_zone.etforca.zone_id
+  certificate_arn         = data.aws_acm_certificate.etforca_cdn.arn
+  api_origin_domain       = aws_route53_record.portfolio_origin.fqdn
+  api_origin_id           = "portfolio-api"
+  api_origin_port         = 80
+  api_origin_protocol     = "https-only"
+  api_path_pattern        = "/api/portfolio/*"
+  api_allowed_methods     = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+  api_origin_header_name  = "X-Portfolio-Origin"
+  api_origin_header_value = var.portfolio_origin_header
+}
+
+# 랜딩 종목 검색이 읽는 전망 파일(outlook/<코드>.json)을 매일 08:00 KST 에 갱신한다(ALPHA-1267).
+# 대상은 전망 배치와 같은 목록이다.
+module "landing_export" {
+  source = "../../modules/landing-export"
+
+  name              = "${local.prefix}-landing-export"
+  api_url           = module.analysis_v2.api_url
+  bucket_name       = module.landing_site.bucket_name
+  bucket_arn        = module.landing_site.bucket_arn
+  etf_codes         = local.outlook_etf_codes
+  scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
+  alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
 }
 
 # ── ETF Orca 앱 API: app-api (ADR-0056) ─────────────────
@@ -775,6 +915,10 @@ module "app_api" {
   container_port   = 8080
   cpu_architecture = "X86_64"
 
+  # Service Connect 사이드카 몫(AWS 권장 256 CPU·64MiB 이상)과 JVM 여유를 둔 크기
+  cpu    = "512"
+  memory = "1024"
+
   vpc_id        = module.network.vpc_id
   subnet_ids    = module.network.private_subnet_ids
   desired_count = 1
@@ -798,14 +942,35 @@ module "app_api" {
     SPRING_DATA_REDIS_HOST        = module.app_redis.primary_endpoint
     SPRING_DATA_REDIS_PORT        = tostring(module.app_redis.port)
     SPRING_DATA_REDIS_SSL_ENABLED = "true"
+    # 메일 발송(Gmail SMTP). host 가 없으면 앱은 발송 대신 로그만 남긴다
+    SPRING_MAIL_HOST     = "smtp.gmail.com"
+    SPRING_MAIL_USERNAME = "asm.alphaeveryday@gmail.com"
+    APP_MAIL_OPERATOR    = "asm.alphaeveryday@gmail.com"
+    # 파이프라인 RDS 읽기 동기화. URL 이 없으면 앱은 동기화를 돌리지 않는다
+    APP_PIPELINE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+    APP_PIPELINE_USERNAME = "app_sync_ro"
+    # 앱 심사용 데모 계정. 이 주소만 가입·재설정 코드 고정, 비우면 꺼짐
+    APP_REVIEW_EMAIL = "review@example.com"
   }
   secrets = {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
     APP_JWT_SECRET             = "${data.aws_secretsmanager_secret.app_api_jwt.arn}:secret::"
+    SPRING_MAIL_PASSWORD       = "${data.aws_secretsmanager_secret.app_api_mail.arn}:secret::"
+    APP_PIPELINE_PASSWORD      = "${data.aws_secretsmanager_secret.app_api_pipeline.arn}:secret::"
+    # 소셜 로그인. 비면 해당 제공자 로그인 거절
+    APP_KAKAO_CLIENT_ID   = "${data.aws_secretsmanager_secret.app_api_kakao.arn}:secret::"
+    APP_APPLE_CLIENT_ID   = "${data.aws_secretsmanager_secret.app_api_apple.arn}:clientId::"
+    APP_APPLE_TEAM_ID     = "${data.aws_secretsmanager_secret.app_api_apple.arn}:teamId::"
+    APP_APPLE_KEY_ID      = "${data.aws_secretsmanager_secret.app_api_apple.arn}:keyId::"
+    APP_APPLE_PRIVATE_KEY = "${data.aws_secretsmanager_secret.app_api_apple.arn}:secret::"
   }
   secret_arns = [
     module.app_rds.master_user_secret_arn,
     data.aws_secretsmanager_secret.app_api_jwt.arn,
+    data.aws_secretsmanager_secret.app_api_mail.arn,
+    data.aws_secretsmanager_secret.app_api_pipeline.arn,
+    data.aws_secretsmanager_secret.app_api_apple.arn,
+    data.aws_secretsmanager_secret.app_api_kakao.arn,
   ]
 
   depends_on = [module.app_alb]
@@ -818,6 +983,15 @@ resource "aws_vpc_security_group_ingress_rule" "app_rds_from_app_api" {
   from_port                    = 5432
   to_port                      = 5432
   description                  = "app-api to postgres"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_app_api" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.app_api.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "app-api pipeline read sync to postgres"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "app_redis_from_app_api" {

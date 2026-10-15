@@ -132,6 +132,10 @@ export function unevaluatedFor(
  */
 export function notRunReason(r: RuleResult, fetch: AxisFetch): string {
   if (r.notRun === 'identity') return `응답 결함 — ${r.note ?? '사유 미기록'}`;
+  /* 규칙이 **이번 사실에서** 고른 사유가 있으면 그것이 먼저다(ALPHA-1293) — 정적 `dep` 은 "어떤
+   * 계측이 없는가"이고, 축은 왔는데 관측 불가라 못 돈 날에 그걸 쓰면 원인이 틀린다. `note` 를 읽지
+   * 않는 이유(위)는 그대로다: 이 필드는 못 돈 규칙에만 실린다. */
+  if (r.notRunWhy) return `못 돎 — ${r.notRunWhy}`;
   const R = RULES.find((X) => X.id === r.id);
   if (R?.dep) return `못 돎 — ${R.dep}`;
   /* 조회 상태를 사유로 붙이는 건 **그 축을 읽는 규칙에만** 이다. `dep: null` 이라는 사실은

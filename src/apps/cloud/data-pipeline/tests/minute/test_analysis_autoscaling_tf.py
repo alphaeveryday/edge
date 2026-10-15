@@ -200,4 +200,44 @@ def test_계단_하한이_0_대에_닿는다():
 
     assert _capacity_for(0, _threshold(text), _steps(text)) == 0, \
         "깊이 0 에서 0 대로 못 내려간다 — threshold 와 계단 원점이 어긋났다"
-    assert re.search(r"min_capacity\s*=\s*0", text), "min_capacity 가 0 이 아니다"
+    # ⚠️ 대상 블록 안에서만 찾는다 — 장중 예약(close)도 `min_capacity = 0` 을 가져서 파일
+    # 전체로 찾으면 대상의 min 이 바뀌어도 초록이다.
+    assert re.search(r"min_capacity\s*=\s*0",
+                     _resource(text, "aws_appautoscaling_target", "analysis_consumer")), \
+        "min_capacity 가 0 이 아니다"
+
+
+def _resource(text: str, kind: str, name: str) -> str:
+    block = re.search(rf'resource "{kind}" "{name}"\s*\{{(.*?)\n\}}', text, re.S)
+    assert block, f"{kind}.{name} 이 없다"
+    return block.group(1)
+
+
+def test_장중_예약이_최소_1대를_걸었다가_푼다():
+    """v2 소비자는 접수만 해서(~1초) 0 대 기동 대기(알람 ~3분)가 트리거 뒤 시간의 절반을
+    넘는다(ALPHA-1234). 그래서 장중엔 min 1 로 띄워 두고 장 뒤엔 0 으로 돌린다.
+    ① 여는 시각이 첫 트리거(09:01)보다 늦으면 개장 버스트가 다시 3분을 기다린다
+    ② 닫는 예약이 없거나 min 0 이 아니면 밤새 1대가 남는다(비용 근거 상실)
+    ③ 예약이 max 를 쓰면 DB 보호선 변수가 그 시간 동안 무력화된다
+    ④ 대상이 min 변경을 무시하지 않으면 장중 apply 가 0 으로 되돌려 그날은 3분 대기로 돌아간다
+    """
+    try:
+        text = _tf()
+    except StopIteration:
+        pytest.skip(f"{_REL} 를 찾을 수 없음 — 저장소 체크아웃에서만 도는 계약 검사")
+
+    for name, (hour, minute), capacity in (("analysis_open", (8, 55), 1),
+                                           ("analysis_close", (15, 45), 0)):
+        block = _resource(text, "aws_appautoscaling_scheduled_action", name)
+        assert "aws_appautoscaling_target.analysis_consumer.resource_id" in block, \
+            f"{name} 이 설명 소비자 대상을 안 가리킨다"
+        assert re.search(r'timezone\s*=\s*"Asia/Seoul"', block), f"{name} 시각이 KST 가 아니다"
+        assert re.search(rf'schedule\s*=\s*"cron\({minute} {hour} \? \* MON-FRI \*\)"', block), \
+            f"{name} 이 평일 {hour:02d}:{minute:02d} KST 가 아니다"
+        assert re.search(rf"min_capacity\s*=\s*{capacity}\b", block), f"{name} 의 min 이 {capacity} 가 아니다"
+        assert "max_capacity" not in block, f"{name} 이 max 를 쓴다 — DB 보호선 변수가 무력화된다"
+
+    lifecycle = re.search(r"ignore_changes\s*=\s*\[([^\]]*)\]",
+                          _resource(text, "aws_appautoscaling_target", "analysis_consumer"))
+    assert lifecycle and "min_capacity" in lifecycle.group(1), \
+        "대상이 min 변경을 무시하지 않는다 — 장중 apply 가 예약한 1 대를 0 으로 되돌린다"

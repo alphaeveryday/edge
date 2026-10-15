@@ -1,0 +1,87 @@
+formatVersion: 1
+name: Security
+displayName: Security
+description: An individually identified equity or ETF that can have trading observations
+  and be held in an ETF portfolio. Market indexes are not securities in this contract.
+properties:
+  id:
+    dataType: String
+    nullable: false
+    description: Identifier of the concrete security object, distinct from an issuer
+      identifier.
+  name:
+    dataType: String
+    nullable: false
+    description: Name of the security.
+  ticker:
+    dataType: String
+    nullable: false
+    description: Trading symbol of the security, interpreted together with its market.
+  marketCode:
+    dataType: String
+    nullable: false
+    description: Market on which the trading symbol is identified.
+  currencyCode:
+    dataType: String
+    nullable: true
+    description: Currency recorded for the security.
+links:
+  dailyBars:
+    target:
+      kind: object
+      name: DailyBar
+    cardinality: MANY
+    required: true
+    description: Daily price and volume observations for this security. A configured
+      relationship can return no records.
+  dailyInvestorFlows:
+    target:
+      kind: object
+      name: DailyInvestorFlow
+    cardinality: MANY
+    required: true
+    description: Daily investor trading-flow records for this security; intraday estimates
+      remain a separate type.
+  heldIn:
+    target:
+      kind: object
+      name: ETFHolding
+    cardinality: MANY
+    required: true
+    description: Dated ETF holding records in which this security is a constituent,
+      including the recorded portfolio weight.
+implementations:
+  Equity:
+    properties:
+      id: id
+      name: name
+      ticker: ticker
+      marketCode: marketCode
+      currencyCode: currencyCode
+    links:
+      dailyBars:
+        linkType: DailyBar_ForSecurity_Equity
+        direction: reverse
+      dailyInvestorFlows:
+        linkType: DailyInvestorFlow_ForSecurity_Equity
+        direction: reverse
+      heldIn:
+        linkType: ETFHolding_HoldsSecurity_Equity
+        direction: reverse
+  ETF:
+    properties:
+      id: id
+      name: name
+      ticker: ticker
+      marketCode: marketCode
+      currencyCode: currencyCode
+    links:
+      dailyBars:
+        linkType: DailyBar_ForSecurity_ETF
+        direction: reverse
+      dailyInvestorFlows:
+        linkType: DailyInvestorFlow_ForSecurity_ETF
+        direction: reverse
+      heldIn:
+        linkType: ETFHolding_HoldsSecurity_ETF
+        direction: reverse

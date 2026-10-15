@@ -1,0 +1,220 @@
+formatVersion: 2
+name: ETFPriceExplanation
+label: ETFPriceExplanation
+description: One published v2 explanation of an ETF price movement. The document preserves
+  an earlier interpretation and its analysis cutoff.
+group: Analysis reports
+primaryKey: id
+identity:
+  columns:
+  - analysis_id
+  encoding: sourceString
+properties:
+  id:
+    label: id
+    description: Identifier of this published v2 analysis document.
+    dataType: String
+    nullable: false
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: id
+    displayName: id
+    status: experimental
+  etfInstrumentId:
+    label: etfInstrumentId
+    description: ETF discussed by this report, resolved by the stored Korean exchange
+      ticker.
+    dataType: String
+    nullable: true
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: etfInstrumentId
+    displayName: etfInstrumentId
+    status: experimental
+  analysisAt:
+    label: analysisAt
+    description: Analysis cutoff recorded when this report was produced.
+    dataType: Timestamp
+    nullable: false
+    sourceDataType: timestamp with time zone
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: analysisAt
+    displayName: analysisAt
+    status: experimental
+  availableAt:
+    label: availableAt
+    description: Publication time of this completed report.
+    dataType: Timestamp
+    nullable: false
+    sourceDataType: timestamp with time zone
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: availableAt
+    status: experimental
+  summary:
+    label: summary
+    description: Previously generated analysis text. It is a prior interpretation,
+      not a new observed financial fact.
+    dataType: String
+    nullable: true
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: summary
+    displayName: summary
+    status: experimental
+  previousReportId:
+    label: previousReportId
+    description: Stored identifier of the preceding report of this kind, when present.
+    dataType: String
+    nullable: true
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: previousReportId
+    displayName: previousReportId
+    status: experimental
+  displayTitle:
+    label: displayTitle
+    description: ETF name, report kind and analysis date for reading this report.
+    dataType: String
+    nullable: false
+    sourceDataType: text
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: displayTitle
+    status: experimental
+  evidenceRunIds:
+    label: evidenceRunIds
+    description: IDs of successful stored tool executions supporting this report.
+      These historical references require separate resolution before their outputs
+      can substantiate a new factual claim.
+    dataType: String[]
+    nullable: true
+    sourceDataType: text[]
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: evidenceRunIds
+    displayName: evidenceRunIds
+    status: experimental
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: movement_analyses
+  joins: []
+  filters:
+  - column: status
+    operator: equals
+    value: completed
+  - column: data_source
+    operator: equals
+    value: database
+  properties:
+    id:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: id
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: analysis_id
+    etfInstrumentId:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: etf_instrument_id
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: etf_code
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: instrument
+        column: market_code
+    analysisAt:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: analysis_at
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: analysis_at
+    availableAt:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: available_at
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: published_at
+    summary:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: summary
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: summary
+    previousReportId:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: previous_report_id
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: previous_analysis_id
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: display_title
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: analysis_at
+    evidenceRunIds:
+      kind: view_column
+      schema: ontology_view
+      table: etf_price_explanation
+      column: evidence_run_ids
+      sqlFile: sql/views/etf_price_explanation.sql
+      inputs:
+      - schema: public
+        table: movement_analyses
+        column: analysis_id
+sourceConstraints: {}
+dataIssues:
+- Only completed, published database-backed v2 reports are exposed. Unknown-source
+  and failed runs are excluded.
+- Historical tool-run IDs are preserved but their outputs are not yet graph-resolvable;
+  treat prior report text as interpretation, not fact evidence.
+apiName: ETFPriceExplanation
+displayName: ETFPriceExplanation
+pluralDisplayName: ETFPriceExplanations
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- ETFPriceExplanation_ForETF_ETF

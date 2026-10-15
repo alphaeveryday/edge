@@ -65,10 +65,19 @@ export function useMinuteStatus(date?: string, enabled = true) {
 }
 
 /** Grid 용 minute 일별 판정 — 한 범위 요청이며 상세 날짜 요청과 캐시를 섞지 않는다. */
-export function useMinuteDailyStatus(days = 7) {
+/** 판정 근거는 펼쳤을 때만 조회한다(세션당 수백 window) */
+export function useMinuteJudgments(sessionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['sources', 'minuteJudgments', sessionId],
+    queryFn: () => sourcesRepository.minuteJudgments(sessionId),
+    enabled,
+  });
+}
+
+export function useMinuteDailyStatus(days = 7, refetchInterval: number | false = 60_000) {
   return useQuery({
     queryKey: ['sources', 'minute', 'daily', days],
     queryFn: () => sourcesRepository.minuteDailyStatus(days),
-    refetchInterval: 60_000,
+    refetchInterval,
   });
 }

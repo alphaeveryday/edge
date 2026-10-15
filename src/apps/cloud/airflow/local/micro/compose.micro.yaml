@@ -1,0 +1,57 @@
+# micro·small 사양 검증(ALPHA-1119) — lab compose(../compose.yaml) 위에 덮어 쓴다:
+#   docker compose -f compose.yaml -f micro/compose.micro.yaml ...   (local/ 에서)
+# airflow: standalone 대신 세 구성요소를 한 컨테이너(= 한 cgroup)에 띄우고 **합산** 상한을 건다. swap 금지
+#   (memswap_limit = mem_limit → cgroup memory.swap.max=0). 정기 스케줄 생성 끔(use_job_schedule) — 수동 run 만 돈다.
+# 업무 처리(fake-aws 의 서브프로세스)·업무 DB·메타DB 는 이 상한 밖이다 — 운영에서 Fargate·RDS 인 것과 같은 경계.
+# observer: 상한 밖(특권·호스트 pid·cgroup 네임스페이스)에서 cgroup·프로세스 PSS·메타DB 연결을 읽는다 — 측정이 측정
+#   대상 cgroup 에 부하를 얹지 않게.
+# 호스트 포트는 다른 세션의 lab(project "local")과 겹치지 않게 옮긴다(!override — 목록 병합이 아니라 교체).
+services:
+  postgres:
+    ports: !override ["127.0.0.1:55572:5432"]
+  fake-aws:
+    ports: !override ["127.0.0.1:54666:4566"]
+  airflow:
+    ports: !override ["127.0.0.1:58200:8080"]
+    command: ["bash", "/micro/supervisor.sh"]
+    mem_limit: ${MICRO_MEM:-768m}
+    memswap_limit: ${MICRO_MEM:-768m}
+    cpus: ${MICRO_CPUS:-2}
+    restart: on-failure
+    volumes: ["../dags:/opt/edge/dags:ro", "./micro:/micro:ro"]
+    environment:
+      AIRFLOW__SCHEDULER__USE_JOB_SCHEDULE: "False"
+      # 운영 태스크 정의와 같이 구성요소 공통 서명키를 준다. 없으면 프로세스마다 임의 키를 만들어 scheduler 가 발급한
+      # task 토큰을 api-server(Execution API)가 거부한다(E1 첫 시도에서 관찰 — standalone 은 한 프로세스라 드러나지 않았다).
+      AIRFLOW__API_AUTH__JWT_SECRET: micro-local-jwt-secret-0123456789abcdef
+      AIRFLOW__API__SECRET_KEY: micro-local-api-secret
+      AIRFLOW__API__WORKERS: "1"
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8080/execution/
+      AIRFLOW__DAG_PROCESSOR__PARSING_PROCESSES: ${MICRO_PARSING:-2}
+      AIRFLOW__CORE__PARALLELISM: ${MICRO_PARALLELISM:-4}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: ${MICRO_POOL:-3}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: ${MICRO_OVERFLOW:-5}
+      MICRO_HEALTH: ${MICRO_HEALTH:-cli}
+      MICRO_MALLOC_ARENA_MAX: ${MICRO_MALLOC_ARENA_MAX:-}
+      # lab 의 단축값(30·15)을 운영 기본으로 되돌린다 — 운영 태스크 정의에 없는 값으로 재지 않는다.
+      AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "300"
+      AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "300"
+    healthcheck:
+      test: ["CMD", "/micro/healthcheck.sh"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 180s
+
+  observer:
+    image: edge-airflow-migration-lab:local
+    entrypoint: ["python", "/micro/observe.py"]
+    privileged: true
+    pid: host
+    cgroup: host
+    depends_on: {airflow-db: {condition: service_healthy}}
+    volumes: ["/sys/fs/cgroup:/sys/fs/cgroup:ro", "./micro:/micro:ro", "./results/micro:/out"]
+    environment:
+      OBS_OUT: ${MICRO_OBS_OUT:-/out/samples.jsonl}
+      OBS_INTERVAL: "2"
+      OBS_DSN: "host=airflow-db dbname=airflow user=airflow password=airflow application_name=observer"

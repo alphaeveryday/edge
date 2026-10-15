@@ -20,14 +20,22 @@
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from ..sources.http import CallStats
 from ..sources.kis_minute import KisMinuteClient, KisSourceError, KisUnitError
 from .models import CollectionRequest, CollectionResult
 from .price_collect import Outcome, collect_units, select_window_candle
 
 logger = logging.getLogger(__name__)
+
+# 창 요약 로그에 **0 이어도, 이 순서로 먼저** 싣는 항목. 빠진 키와 0 을 구분해야 "발생 0회"와
+# "미관측"이 갈리고, 순서가 고정돼야 로그 조회의 parse 한 줄이 창마다 맞는다(나머지 키는 뒤에 이름순).
+_STAT_KEYS = ("attempts", "rtt_ms", "rtt_max_ms", "pace_wait_ms", "transport_retry",
+              "transport_backoff_ms", "kis_EGW00201", "rate_sleep_ms", "rate_exhausted")
 
 
 @dataclass
@@ -37,19 +45,81 @@ class KisPriceCollector:
     client: KisMinuteClient
     clock: object = field(default=lambda: datetime.now(timezone.utc), repr=False)
     _artifact_uri: str = field(default="pending://artifact", repr=False)
+    # 한 window 안에서 동시에 진행할 요청 수(ALPHA-1087). 1 이면 종전 순차와 같다.
+    # 동시성은 **한도가 아니다** — 발신률은 여전히 PoliteClient 간격 또는 공유 허용이 정한다.
+    # 순차 호출자는 HTTP 응답을 기다리는 동안 자기 다음 슬롯을 잡지 못해, 공유 허용에서 높은 등급이
+    # 제 몫을 다시 가져오지 못했다(ALPHA-1087 계측) — 그 대기를 겹치는 용도다.
+    concurrency: int = 1
+    # 호출 계측 누적기(ALPHA-1124) — 운반 계층·어댑터와 같은 인스턴스. None 이면 요약 로그를 내지 않는다.
+    stats: CallStats | None = None
 
     def collect(
         self, request: CollectionRequest, now: datetime
     ) -> tuple[CollectionResult, tuple[dict, ...], dict[str, list[str]]]:
         """collector 계약 — `(result, records, manifest)`. 판정·조립은 벤더 공통
         `collect_units` 에 위임하고, 이 벤더가 정하는 건 `_candle_for` 뿐이다."""
-        return collect_units(
-            request, now,
-            candle_for=lambda unit_id: self._candle_for(unit_id, request),
-            retry_count=lambda: self.client.retry_count,
-            clock=self.clock,
-            artifact_uri=self._artifact_uri,
+        candle_for = lambda unit_id: self._candle_for(unit_id, request)  # noqa: E731
+        if self.concurrency > 1:
+            candle_for = self._prefetching(request, candle_for)
+        started = time.monotonic()
+        status = "RAISED"  # 예외로 끝난 창 — 그 창의 계측이 가장 필요하다
+        try:
+            out = collect_units(
+                request, now,
+                candle_for=candle_for,
+                retry_count=lambda: self.client.retry_count,
+                clock=self.clock,
+                artifact_uri=self._artifact_uri,
+            )
+            status = out[0].status
+            return out
+        finally:
+            if self.stats is not None:
+                self._log_call_stats(request, status, time.monotonic() - started)
+
+    def _log_call_stats(self, request: CollectionRequest, status: str, elapsed: float) -> None:
+        """창 하나의 KIS 호출 요약 한 줄 — 수집 소요를 응답 소요·발신 대기·재시도 대기로 가른다.
+
+        `elapsed_ms ≈ rtt_ms + pace_wait_ms + transport_backoff_ms + rate_sleep_ms`(동시성 1 일 때.
+        동시 요청이면 합계가 겹쳐 elapsed 보다 커진다). 응답이 느려지면 `rtt_ms` 가, 유량 제한이면
+        `kis_EGW00201`·`rate_sleep_ms` 가 는다. 종목 코드·토큰·응답 본문은 싣지 않는다.
+        """
+        drained = self.stats.drain()
+        stats = {**{key: drained.pop(key, 0) for key in _STAT_KEYS}, **dict(sorted(drained.items()))}
+        logger.info(
+            "kis.http.window caller=minute-price window=%s status=%s units=%d elapsed_ms=%d %s",
+            request.window_start.isoformat(), status, len(request.unit_ids), round(elapsed * 1000),
+            " ".join(f"{key}={value}" for key, value in stats.items()),
         )
+
+    def _prefetching(self, request: CollectionRequest, fetch):
+        """첫 호출 때 전 unit 을 동시 N 으로 받아 두고, 이후엔 받아 둔 결과를 돌려준다.
+
+        조립(정렬 순회·분류·checksum)은 `collect_units` 가 **그대로** 한다 — 완료 순서가 달라도
+        records·checksum 이 같다. 첫 호출 시점에 받는 이유: `collect_units` 가 재시도 수 기준점을
+        순회 **전에** 읽으므로, 그보다 먼저 받으면 이번 window 의 재시도가 0 으로 사라진다.
+
+        - 진행 중 요청은 최대 N 개(허용을 미리 대량 확보하지 않는다).
+        - 토큰은 병렬 시작 전에 한 번 받는다(동시 첫 발급 → 분당 1회 403 방지).
+        - 소스 전역 실패·공유 허용 오류는 아직 시작 안 한 요청을 취소하고 그대로 전파한다
+          (진행 중 요청은 끝까지 간다 — 이미 허용을 쓴 호출이다). window 판정은 종전과 같다.
+        """
+        got: dict = {}
+
+        def _lookup(unit_id):
+            if not got:
+                self.client.auth.token()
+                with ThreadPoolExecutor(max_workers=self.concurrency, thread_name_prefix="kis-fetch") as pool:
+                    futures = {pool.submit(fetch, u): u for u in sorted(request.unit_ids)}
+                    try:
+                        for f in as_completed(futures):
+                            got[futures[f]] = f.result()
+                    except BaseException:
+                        for f in futures:
+                            f.cancel()
+                        raise
+            return got[unit_id]
+        return _lookup
 
     def _candle_for(self, unit_id: str, request: CollectionRequest):
         """그 window 의 봉 하나, 또는 `Outcome.MISSING`/`Outcome.INVALID`.

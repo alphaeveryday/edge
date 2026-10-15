@@ -27,10 +27,10 @@ public interface AnalysisItemRepository extends Repository<AnalysisItem, String>
 	@Query(value = """
 			INSERT INTO analysis_item (explanation_result_id, etf_instrument_id, etf_ticker, etf_name,
 			    trade_date, explanation_as_of, explanation_type, summary, headline, confidence_level,
-			    primary_thread_id, evidences, source_cursor, status, content_as_of)
+			    primary_thread_id, evidences, source_cursor, status, content_as_of, analysis_engine)
 			VALUES (:explanationResultId, :etfInstrumentId, :etfTicker, :etfName, :tradeDate, :explanationAsOf,
 			    :explanationType, :summary, :headline, :confidenceLevel, :primaryThreadId,
-			    CAST(:evidencesJson AS jsonb), :sourceCursor, :status, :contentAsOf)
+			    CAST(:evidencesJson AS jsonb), :sourceCursor, :status, :contentAsOf, :analysisEngine)
 			ON CONFLICT (explanation_result_id) DO NOTHING
 			""", nativeQuery = true)
 	int upsert(@Param("explanationResultId") String explanationResultId,
@@ -42,7 +42,8 @@ public interface AnalysisItemRepository extends Repository<AnalysisItem, String>
 			@Param("primaryThreadId") String primaryThreadId, @Param("evidencesJson") String evidencesJson,
 			@Param("sourceCursor") long sourceCursor,
 			@Param("status") String status,
-			@Param("contentAsOf") OffsetDateTime contentAsOf);
+			@Param("contentAsOf") OffsetDateTime contentAsOf,
+			@Param("analysisEngine") String analysisEngine);
 
 	/**
 	 * Cloud 이벤트 반영 전이(INVALIDATED). terminal 상태(INVALIDATED)는 덮어쓰지 않는다 —

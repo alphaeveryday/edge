@@ -14,6 +14,11 @@ launch 결과(스펙 §5):
   ExecutionAlreadyExists     → DescribeExecution 으로 입력 비교: 동일=LAUNCHED, 상이=LAUNCH_CONFLICT
   명확한 실패(잘못된 입력 등) → LAUNCH_FAILED
   불분명(네트워크 등)         → LAUNCH_UNKNOWN (Reconciler 가 execution name 으로 확정)
+
+실행 주체(orchestrator): 레인은 SFN 에서 Airflow 로 **슬롯 단위로** 옮겨 간다. Airflow 가 주체면
+계획은 똑같이 남기되 StartExecution 을 하지 않는다 — 실행은 이미 떠 있는 Airflow DAG run 이 한다.
+같은 run_key 를 다른 주체가 다시 계획하면 같은 run_id 로 두 번 실행되므로 LAUNCH_CONFLICT 로
+거부한다(기존 주체의 런 상태는 건드리지 않는다).
 """
 
 from __future__ import annotations
@@ -94,7 +99,7 @@ def _exc_is(exc: Exception, name: str) -> bool:
 def plan_run(
     ledger: Ledger,
     *,
-    state_machine_arn: str,
+    state_machine_arn: str | None,
     scheduled_time: datetime,
     mode: str = "incremental",
     pipeline_type: str = catalog.PIPELINE_TYPE,
@@ -102,6 +107,8 @@ def plan_run(
     universe_provider=None,
     holidays=None,
     hard_deadline_seconds: int = 21600,
+    orchestrator: str = states.ORCHESTRATOR_SFN,
+    orchestrator_run_ref: str | None = None,
 ) -> PlanResult:
     """한 슬롯을 계획하고 SFN 을 시작한다. 멱등 — 같은 scheduled_time 재호출은 run 1개만.
 
@@ -112,7 +119,11 @@ def plan_run(
         raise ValueError(
             f"{pipeline_type}: catalog 등록 작업 0개 — 기대 원장 없이 SFN을 시작할 수 없다"
         )
-    sfn = sfn_client if sfn_client is not None else aws.stepfunctions_client()
+    if orchestrator not in states.ORCHESTRATORS:
+        raise ValueError(f"모르는 orchestrator={orchestrator}")
+    airflow = orchestrator == states.ORCHESTRATOR_AIRFLOW
+    sfn = None if airflow else (
+        sfn_client if sfn_client is not None else aws.stepfunctions_client())
 
     # 무결성 검사는 계획 생성 여부와 무관하게 매 호출 실행한다 — created=False(멱등 재호출)
     # 경로에서만 검사를 건너뛰면, required 가 어긋난 빌드가 이미 계획된 슬롯을 재호출할 때
@@ -127,7 +138,8 @@ def plan_run(
     execution_name = run_key.replace(":", "-")
     input_json = _canonical_input(mode, pipeline_run_id)
     input_hash = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
-    expected_execution_arn = (
+    # Airflow 주체면 SFN 실행이 없으므로 locator 도 없다(Reconciler 가 SFN 을 조회하지 않게).
+    expected_execution_arn = None if airflow else (
         state_machine_arn.replace(":stateMachine:", ":execution:") + ":" + execution_name
     )
     expected_at = scheduled_time.astimezone(timezone.utc).isoformat()
@@ -143,7 +155,9 @@ def plan_run(
             schedule_slot=run_key, trading_date=day.isoformat(), hard_deadline_at=hard_deadline_at,
             catalog_version=catalog.version(), catalog_content_hash=catalog.content_hash(),
             image_digest=None, input_hash=input_hash, expected_execution_arn=expected_execution_arn,
+            orchestrator=orchestrator, orchestrator_run_ref=orchestrator_run_ref,
         )
+        owner = orchestrator if created else Ledger._run_orchestrator_tx(conn, run_key)
         if created:
             _plan_expected_tasks(
                 conn, run_id, pipeline_type=pipeline_type, trading=trading,
@@ -151,6 +165,32 @@ def plan_run(
                 universe_provider=universe_provider, holidays=holidays,
             )
         # `with conn` 정상 종료 = commit. 여기까지 성공해야 아래 StartExecution 이 돈다.
+
+    if owner != orchestrator:
+        # 이관 중 두 주체가 같은 슬롯을 계획했다. 뒤에 온 쪽이 실행하면 같은 run_id 로 수집·적재가
+        # 두 번 돈다 — 실행하지 않고 드러낸다. 기존 주체의 launch_status 는 그 실행의 사실이라
+        # 덮지 않는다(set_launch_result 를 부르지 않는다).
+        ledger.open_or_bump_issue(
+            issue_type=states.ISSUE_LAUNCH_CONFLICT,
+            dedupe_key=f"orchestrator_conflict:{run_key}:{orchestrator}",
+            scope="run", scope_key=run_id,
+            evidence={"run_key": run_key, "owner": owner, "requested_by": orchestrator,
+                      "orchestrator_run_ref": orchestrator_run_ref},
+        )
+        return PlanResult(
+            pipeline_run_id=run_id, run_key=run_key, execution_name=execution_name,
+            trading_day=trading, launch_status=states.LAUNCH_CONFLICT, created=False,
+            sfn_execution_arn=None, input_hash=input_hash, conflict=True,
+        )
+    if airflow:
+        # 실행 요청 = 이 계획을 부른 Airflow DAG run 자체다. 확인할 SFN 실행이 없으므로 바로 LAUNCHED.
+        # 같은 주체의 재호출(task 재시도·clear)은 created=False 로 같은 run 에 수렴한다.
+        ledger.set_launch_result(run_id, launch_status=states.LAUNCH_LAUNCHED)
+        return PlanResult(
+            pipeline_run_id=run_id, run_key=run_key, execution_name=execution_name,
+            trading_day=trading, launch_status=states.LAUNCH_LAUNCHED, created=created,
+            sfn_execution_arn=None, input_hash=input_hash,
+        )
 
     launch_status, sfn_arn, conflict = _start_execution(
         ledger, sfn, run_id=run_id, state_machine_arn=state_machine_arn,

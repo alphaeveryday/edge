@@ -275,6 +275,51 @@ class DartFinancialSource(BaseModel):
     )
 
 
+class MacroObservationSource(BaseModel):
+    """매크로 5계열 원천(ALPHA-1130, 계약은 설계 §10). 인증키는 env 로만 주입한다:
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__ECOS_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__KOSIS_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__EIA_API_KEY=...
+        DATA_PIPELINE_SOURCE_OBSERVATIONS__MACRO__FRED_API_KEY=...
+    FMP 는 쓰지 않는다(2026-10-01 결정, ALPHA-1136) — 미 국채 10년은 FRED `DGS10` 이다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    fred_base_url: NonBlankStr = "https://api.stlouisfed.org/fred"
+    ecos_base_url: NonBlankStr = "https://ecos.bok.or.kr/api"
+    kosis_base_url: NonBlankStr = "https://kosis.kr/openapi"
+    eia_base_url: NonBlankStr = "https://api.eia.gov/v2"
+    ecos_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    kosis_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    eia_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+    fred_api_key: str | None = None  # 비밀값: env 오버라이드 전용
+
+
+class SectorMasterSource(BaseModel):
+    """KIS 종목 마스터 파일(지수업종 대·중·소분류, ALPHA-1130). 공개 다운로드라 인증이 없다 —
+    KIS API(앱키·토큰)가 아니므로 KIS 공유 호출 예산(ADR-0055) 대상이 아니다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    base_url: NonBlankStr = "https://new.real.download.dws.co.kr/common/master"
+
+
+class SourceObservationsConfig(BaseModel):
+    """분석 v2 원천 관측 세 데이터셋(ALPHA-1130). 재무는 `dart_financial.source` 의 DART 키를 쓴다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 재무 수집 대상 뿌리 ETF 를 좁히는 재정의. 비어 있으면 `krx_etf.source.etf_map` 의 ETF 전부다(전망 배치 대상과
+    # 같은 목록, run.py). 대상 종목은 이 ETF 들의 canonical 구성종목 스냅샷에서 **기간별로** 파생한다 — 현재 구성을
+    # 과거 전체에 적용하지 않는다(steps/source_observations). 둘 다 비어 있으면 재무 수집 스텝만 거부한다.
+    etf_ids: list[NonBlankStr] = []
+    macro: MacroObservationSource = MacroObservationSource()
+    sector: SectorMasterSource = SectorMasterSource()
+
+
 class DartDisclosureSource(BaseModel):
     """OpenDART 국내 공시(disclosure filing) 소스 (disclosures raw).
 
@@ -426,6 +471,16 @@ class DartDisclosureConfig(BaseModel):
     # False(기본) = 그림자: 창은 종전대로 두고 계산 결과만 로그로 대조한다. 컷오버
     # terraform 이 `DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW=true` 로 켠다.
     watermark_window: bool = False
+    # 저녁 배치의 정제 한 스텝이 **확정 거부만으로** 성공 종료할 수 있는 문서 수 상한(ALPHA-1163).
+    # 실패가 전부 `quality.disclosure.CONFIRMED_REJECT_REASONS` 이고 문서 수가 이 값 이하면 그
+    # 정제는 종료 0 이다(거부는 quality_log·원장 failed_records 에 남는다). 넘으면 종료 2 —
+    # 파서가 깨져 전건이 거부되는 날을 성공으로 닫지 않으려는 상한이다. 0 이면 한 건도 접지 않는다.
+    # 기본 3 의 근거: 2026-07-26~10-08 배치 86회에서 확정 거부는 실행당 최대 1건이었다.
+    # ⚠️ 3월 사업보고서 철에는 금융사 사업보고서(`no_segments_parsed`)가 하루 여러 건이라 이 값에
+    # 걸린다. 올리는 법: `tasks.tf` `env_sets.bigkinds` 에
+    # `DATA_PIPELINE_DART_DISCLOSURE__MAX_CONFIRMED_REJECTS_PER_RUN` 한 줄(이미지 재배포 없음).
+    # 이 필드를 아는 이미지가 먼저 나가 있어야 한다 — 모르는 이미지는 그 env 로 설정 로드가 죽는다.
+    max_confirmed_rejects_per_run: int = Field(default=3, ge=0)
 
 
 class MinuteRelayConfig(BaseModel):
@@ -511,6 +566,8 @@ class MinutePriceWorkerConfig(BaseModel):
     # KIS 호출 간격(초). 기본 0.08 → 12.5 req/s. 그 유량은 **앱키 단위 전역**이라 다른 kis
     # 스텝과 나눠 쓴다 — 경합이 보이면 재배포 없이 env 로 올린다. toss 소스에는 쓰이지
     # 않는다(어댑터가 자기 상수).
+    # 전용 키(`dedicated_app_key`)로 도는 환경은 아래 합산 논의의 대상이 아니다 — 그 키를 이 워커만 쓰고, 간격도
+    # 배선이 따로 싣는다(dev 는 0.0625초 — ALPHA-1252).
     #
     # ⚠️ **마진 근거가 ALPHA-769 로 바뀌었다.** 종전엔 경합 상대가 15:40 배치뿐이라 시간대가
     # 안 겹치는 것이 마진의 근거였다(1분 세션은 15:30 종료). 이제 장중 수급 레인이 세션
@@ -525,6 +582,12 @@ class MinutePriceWorkerConfig(BaseModel):
     # 아니다. 1분 레인에 EGW00201 이 보이기 시작하면 여기(0.08)를 먼저 늘려라 — 장중 수급은
     # 하루 5회뿐이라 그쪽 간격을 늘리는 것보다 값이 크다.
     min_interval_sec: float = Field(default=0.08, gt=0, le=5)
+    # 한 window 안 동시 요청 수(KIS 당일 경로만). 1 = 종전 순차. 발신률 한도가 아니다 — 간격·공유 허용이 정한다(ALPHA-1087).
+    fetch_concurrency: int = Field(default=1, ge=1, le=4)
+    # 이 워커의 앱키를 다른 KIS 호출자가 쓰지 않는다는 선언(ALPHA-1247). 켜면 공유 허용 없이도 fetch_concurrency 를 그대로 쓴다 —
+    # 합산할 상대가 없어 이 워커의 간격(min_interval_sec)이 곧 그 키의 발신률이다. ⚠️ 같은 키를 쓰는 호출자가 하나라도 있으면
+    # 켜지 마라: 동시 요청은 응답 대기에 묶여 있던 발신을 간격 상한까지 끌어올려, 프로세스마다 따로 둔 간격의 합산이 한도를 넘는다.
+    dedicated_app_key: bool = False
     # price job identity 축 — 판정 규칙(축·임계)이 바뀌면 이 값을 올려 새 job 이 생기게
     # 한다. 기본값을 두지 않는다: 배포마다 조용히 같은 값이면 규칙 변경이 identity 에
     # 안 드러난다.
@@ -871,7 +934,7 @@ class MinuteUniverseConfig(BaseModel):
 
 
 class MinuteSectorIndexConfig(BaseModel):
-    """KRX 업종지수 45종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
+    """KRX 업종지수 45종 + 종합지수 2종의 **수집 대상 정본** — 1분 레인 sector_index dataset (ALPHA-887).
 
     `[minute_universe]` 와 축이 다르다: 저기는 universe.json 을 **만드는 입력**이고 실제
     정본은 S3 객체지만, 여기 값은 그 자체가 정본이다(이 dataset 은 universe 를 쓰지
@@ -980,6 +1043,53 @@ class StorageConfig(BaseModel):
         # bucket 없이 s3 로 부팅하면 첫 put 에서야 죽는다 — 로드 시점에 fail loud.
         if self.backend == "s3" and not (self.bucket or "").strip():
             raise ValueError("storage.backend=s3 인데 storage.bucket 이 없다")
+        return self
+
+
+class CallBudgetConfig(BaseModel):
+    """외부 API 공유 호출 허용(ALPHA-1087) — **기본 비활성**.
+
+    켜면 KIS 앱키를 쓰는 호출자가 프로세스별 간격(`PoliteClient.min_interval`) 대신 DB 의
+    `call_budget` 행에서 발신 슬롯을 예약한다. 속도·등급 정책은 DB 행이 권위이고 여기는 **이 프로세스의
+    대기·폐기 규칙**만 둔다(프로세스마다 속도가 갈리면 합산 한도가 깨진다).
+
+        DATA_PIPELINE_CALL_BUDGET__ENABLED=true
+
+    ⚠️ 켜고 끄는 단위는 프로세스가 아니라 **그 예산을 쓰는 호출자 전체**다 — 일부만 켜면 켠 쪽은 공유
+    예산을, 끈 쪽은 자기 간격을 각자 다 써서 합이 한도를 넘는다(전환 절차는 ALPHA-1087).
+
+    `rtt_max_sec`·`send_window_sec` 기본값은 로컬 실험값이다(ALPHA-1087). 운영 워커→DB 왕복을 재기 전까지
+    최적값이 아니다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    # 비밀값이 아닌 운영 이름(appkey·토큰 금지). DB CHECK 와 같은 패턴.
+    budget_id: str = Field(default="kis", pattern=r"^[a-z][a-z0-9-]{0,62}$")
+    # 허용 요청→응답 왕복이 이보다 길면 그 허용을 버린다 — DB 처리 시각을 이 폭 안에서만 안다.
+    rtt_max_sec: float = Field(default=0.025, gt=0, le=1)
+    # 예약 슬롯부터 이 시간 안에 발신하지 못하면 버린다(늦은 발신이 다음 슬롯과 뭉치지 않게).
+    # 상한 1.0 은 call_budget.MAX_SEND_WINDOW_SEC(일시정지 소진 판정)와 같아야 한다.
+    send_window_sec: float = Field(default=0.05, gt=0, le=1.0)
+    # 한 발신의 허용을 얻기까지 최대 대기. 넘기면 CallBudgetDeadlineExceeded(무한 대기 금지).
+    max_wait_sec: float = Field(default=30.0, gt=0, le=600)
+    # 거절 뒤 재질의 간격 상한(DB 질의량을 묶는다).
+    deny_poll_cap_sec: float = Field(default=0.5, gt=0, le=5)
+    # 저장소 장애 시 발신 없이 재연결을 시도하는 최대 시간. 넘기면 CallBudgetUnavailable(fail-closed).
+    # 첫 실패를 관측한 시각부터 센다 — 첫 실패 호출 1회와 마지막 호출 1회·재시도 간격만큼 늦게 끝날 수 있다
+    # (기본값 최대 12.2s, 그래도 max_wait_sec 안).
+    store_outage_max_sec: float = Field(default=10.0, ge=0, le=300)
+    # 서버 실행 상한(statement_timeout·lock_timeout). 저장소 호출 1회(연결+질의)의 **클라이언트** 상한은
+    # 이 값 + 0.5s 다 — 응답 유실도 그 안에서 끝난다(call_budget.PgBudgetStore).
+    statement_timeout_ms: int = Field(default=500, ge=50, le=10000)
+
+    @model_validator(mode="after")
+    def _window_must_exist(self) -> CallBudgetConfig:
+        # 발신 가능 구간 = [t_resp + wait, t_req + wait + send_window]. 왕복이 send_window 이상이면
+        # 구간이 비어 모든 허용이 폐기된다 — 설정 단계에서 막는다.
+        if self.rtt_max_sec >= self.send_window_sec:
+            raise ValueError("rtt_max_sec 는 send_window_sec 보다 작아야 한다(발신 가능 구간이 비지 않게)")
         return self
 
 

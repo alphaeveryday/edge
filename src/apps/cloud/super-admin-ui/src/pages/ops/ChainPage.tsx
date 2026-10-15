@@ -6,18 +6,24 @@
 import { Link } from 'react-router-dom';
 import { StatusBadge } from 'ui-kit';
 import { ChainStrip } from './ChainStrip';
-import { intradayLostAtEntry } from './chainView';
+import { intradayLostAtEntry, pendingTriggers, stagesBlind } from './chainView';
+import { STATE_LABEL, etfTable, rowTone, stateTone, type StateTone } from './etfAnalysisView';
 import { Absent, AxisHeader, ConsoleGate, Info, useConsoleFactsQuery, useFocusRow } from './shared';
 import '../../styles/ops.css';
+
+const TONE_COLOR: Record<StateTone, string> = {
+  bad: 'var(--down)',
+  wait: 'var(--fg-2)',
+  ok: 'var(--up)',
+  none: 'var(--fg-4)',
+};
 
 export function ChainPage() {
   const q = useConsoleFactsQuery();
   useFocusRow(q.ready);
   if (!q.ready) return <ConsoleGate q={q} />;
-  const { etf_ledger: ledger, queues } = q.facts;
-  const rows = ledger?.rows ?? [];
-  const failed = rows.filter((r) => r.outcome === 'FAILED');
-  const published = rows.filter((r) => r.published);
+  const { queues } = q.facts;
+  const table = etfTable(q.facts.etf_analyses);
 
   return (
     <div className="flex flex-col gap-4">
@@ -34,24 +40,43 @@ export function ChainPage() {
             각 칸은 배치 / 장중
             <Info
               tip={
-                '체인은 하나다.\n배치 트리거와 장중 트리거는 별개 흐름이 아니라 같은 체인에 들어오는 두 갈래 입력이다 — ' +
-                'etf_contribution_observation 이 두 트리거 FK 를 모두 갖는다.'
+                '단계는 새 분석 엔진의 것이다: 분석 요청 → 분석 시작 → 분석 완료 → 게시.\n' +
+                '각 수는 조회일에 발화한 장중 트리거 가운데 그 단계에 도달한 트리거 수다(그날 만들어진 분석 전체가 아니다).\n\n' +
+                '배치 트리거는 새 분석 엔진이 소비하지 않아 뒤 단계의 배치 칸은 "대상 아님"이다.\n\n' +
+                '손실로 판정하는 구간(R10)은 트리거 → 분석 요청, 분석 요청 → 분석 시작이다. ' +
+                '분석 시작 → 완료의 감소는 실패했거나 진행 중인 분석이고(실패는 R15 가 맡는다), ' +
+                '완료 → 게시의 감소는 고른 항목이 없어 게시하지 않은 분석이다 — 둘 다 수만 보여 준다.'
               }
               label="체인 구조"
             />
           </span>
         </div>
+        {stagesBlind(q.facts.chain) && (
+          <p className="card-pad t-xs m-0" style={{ color: 'var(--warn)', paddingBottom: 0 }}>
+            이 날에는 새 분석 엔진의 요청이 아직 없었습니다 — 트리거 뒤 단계는 0건이 아니라 관측
+            불가입니다. 옛 설명 엔진이 돌던 때의 값은 여기서 다시 보여 주지 않습니다. 구간 손실(R10)도
+            같은 이유로 판정하지 못합니다.
+          </p>
+        )}
+        {/* 단계가 관측 불가인 날에는 띄우지 않는다 — 유예가 지나도 그 단계들은 판정하지 못한다 */}
+        {!stagesBlind(q.facts.chain) && pendingTriggers(q.facts.chain) > 0 && (
+          <p className="card-pad t-xs m-0" style={{ color: 'var(--fg-3)', paddingBottom: 0 }}>
+            진행 중일 수 있어 아직 세지 않은 트리거 {pendingTriggers(q.facts.chain)}건 — 앞 단계에 도달한 지
+            유예 시간(단일 분석 워크플로의 시간 제한)이 안 지났습니다. 그 뒤에도 다음 단계에 못 가면
+            손실로 셉니다.
+          </p>
+        )}
         <ChainStrip chain={q.facts.chain} />
         <div className="card-pad" style={{ paddingTop: 0 }}>
           <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
             {/* 🔴 이 문장은 **관측 결과**다 — 축이 있는지가 아니라 **이번 응답의 값**이 정한다.
                 축이 오기 전에는 "축이 있으면 참"이었지만(목 스냅샷이 늘 0 이었다) 이제 실 원장이
-                오므로, 조건을 값에서 다시 세운다: 장중이 발화했는데 관측이 0 인 날에만 참이다.
+                오므로, 조건을 값에서 다시 세운다: 장중이 발화했는데 첫 단계가 0 인 날에만 참이다.
                 안 그러면 장중 계보가 살아난 날 화면이 "전량 사라진다"를 계속 단정한다. */}
             {intradayLostAtEntry(q.facts.chain) && (
               <>
-                장중 갈래는 관측 단계에서 전량이 사라집니다 — 체인에서 실패한 것이 아니라 체인에
-                들어가지 못한 것입니다.{' '}
+                장중 트리거가 분석 요청으로 하나도 이어지지 않았습니다 — 분석이 실패한 것이 아니라
+                요청이 만들어지지 않은 것입니다.{' '}
               </>
             )}
             이 흐름은 <b>Cloud 게시</b>에서 끝납니다 — 발번 이후는{' '}
@@ -62,82 +87,75 @@ export function ChainPage() {
 
       <div className="card" id="etf-ledger">
         <div className="card-head">
-          <span className="t-label">
-            ETF별 분석 귀결 {ledger?.mock && <span className="chip">MOCK</span>}
-          </span>
+          <span className="t-label">ETF별 분석 귀결</span>
           <span className="t-xs" style={{ color: 'var(--fg-3)' }}>
-            {ledger ? (
-              <>
-                {rows.length}종 · 실패 {failed.length}
-                {ledger.mock && <> · Cloud 게시 {published.length}</>}
-              </>
-            ) : (
-              <Absent kind="uninstrumented" />
-            )}
+            {table ? table.summary : '기록 없음'}
             <Info
               tip={
-                (ledger?.why ?? '') +
-                (ledger
-                  ? `\n\n이 원장이 있으면 "설명 미생성 ${failed.length}종이 어느 ETF인지"에 답할 수 있고, R15 가 대상을 지목한다. ` +
-                    (ledger.mock
-                      ? '이 값은 목 원장이다.'
-                      : '조회일에 발화한 ETF별 최신 트리거의 최신 설명 실행 상태다.')
-                  : 'per-ETF 분석 귀결 원장이 이번 응답에 없다 — 표를 비워 두는 것이 아니라 축 자체가 없다. ' +
-                    '조회일의 ETF별 최신 트리거·설명 실행 상태가 없어 셀 값이 없고, R15 도 그래서 판정하지 못한다.')
+                table
+                  ? '새 분석 엔진의 조회일 상태다. ETF 마다 전망과 가격변동 분석을 따로 보여 준다.\n' +
+                    '그날 분석 행이 있거나 장중 트리거가 발화한 ETF 만 나온다.\n\n' +
+                    '완료: 그날 완료된 분석이 있다.\n' +
+                    '실패: 실패한 분석이 있고 완료된 분석이 없다(R15 와 같은 기준).\n' +
+                    '진행 중: 진행 중인 분석만 있다.\n' +
+                    '시작 못 함: 트리거에서 이어진 요청이 수용됐는데 분석이 시작되지 않았다.\n' +
+                    '판정 보류: 같은 형상인데 유예 시간 안이라 아직 판정하지 않았다.\n' +
+                    '대상 아님: 위 어느 것도 아니다. 가격변동 분석은 그날 요청으로 이어진 트리거가 없던 ETF 다. ' +
+                    '전망은 그날 분석 행이 없는 ETF 인데, 배치 대상인데 빠진 것인지는 이 표가 가르지 못한다.\n\n' +
+                    '이 표는 보여 주기만 한다. 판정은 R15(분석 실패)와 R10(구간 손실)이 한다.'
+                  : '이 응답에는 새 분석 엔진의 ETF별 상태가 없다 — 그 축을 싣기 전의 API 다. ' +
+                    '옛 설명 엔진의 실행 상태로 대신 그리지 않는다.'
               }
               label="ETF별 분석 귀결"
             />
           </span>
         </div>
         {/* ⛔ 축이 없을 때 빈 격자를 그리지 않는다 — 칸이 0개인 격자는 "오늘 실패한 ETF 가 없다"로
-            읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). */}
-        {!ledger ? (
+            읽히는데, 이 응답은 그 말을 할 근거가 없다(계약 §부재를 싣는 규약). 옛 축으로도 그리지
+            않는다 — 그 엔진은 멈췄고 그 값은 전부 "실행 없음"이다. */}
+        {!table ? (
           <div className="card-pad">
             <p className="t-xs m-0" style={{ color: 'var(--fg-3)' }}>
-              ETF별 분석 귀결 원장은 <Absent kind="uninstrumented" /> 입니다 — 이번 응답에는
-              최신 트리거 실행 축이 없어 <b>어느 ETF가 실패했는지</b> 이 콘솔이 답하지 못합니다.
-              R15 도 같은 이유로 판정하지 못합니다.
+              기록 없음 — 이 응답에는 새 분석 엔진의 ETF별 상태가 실려 있지 않아 이 표를 그리지
+              못합니다.
             </p>
           </div>
         ) : (
         <div className="card-pad">
           <div className="ops-grid-etf">
-            {rows.map((r) => (
-              <div
-                key={r.etf}
-                className={
-                  'ops-etf' +
-                  (r.outcome === 'FAILED' ? ' ops-etf-failed' : r.published ? ' ops-etf-published' : '')
-                }
-                title={
-                  `${r.name} (${r.etf})\n` +
-                  `트리거: ${r.triggered ? '발화' : '미발화(정상 변동)'}\n` +
-                  `귀결: ${r.outcome ?? '실행 없음'}` +
-                  (r.error ? `\n오류: ${r.error}` : '') +
-                  (ledger.mock
-                    ? `\nCloud 게시: ${r.published ? 'PUBLISHED' : '—'}` +
-                      `\n테넌트 발번: ${r.delivered ? 'NEW' : '—'} · 이 화면 책임 밖 — 전달 경계에서 확인`
-                    : '')
-                }
-              >
-                <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {r.name}
-                </div>
+            {table.rows.map((r) => {
+              const tone = rowTone(r);
+              return (
                 <div
-                  className="t-xs"
-                  style={{
-                    color:
-                      r.outcome === 'FAILED' ? 'var(--down)' : r.published ? 'var(--up)' : 'var(--fg-4)',
-                  }}
+                  key={r.etf}
+                  className={
+                    'ops-etf' + (tone === 'bad' ? ' ops-etf-failed' : tone === 'ok' ? ' ops-etf-published' : '')
+                  }
+                  title={
+                    `${r.name} (${r.etf})\n` +
+                    `전망: ${STATE_LABEL[r.outlook]}\n` +
+                    `가격변동 분석: ${STATE_LABEL[r.movement]}`
+                  }
                 >
-                  {r.outcome === 'FAILED'
-                    ? '분석 실패'
-                    : r.outcome === 'SUCCEEDED'
-                      ? '분석 완료'
-                      : r.outcome ?? '실행 없음'}
+                  <div className="t-xs" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {r.name}
+                  </div>
+                  {/* 종류마다 그 ETF 의 그날 분석 목록으로 간다(ALPHA-1333). 날짜는 이 응답이 본 날이다 */}
+                  {([['전망', 'outlook', r.outlook], ['가격변동', 'movement', r.movement]] as const).map(
+                    ([label, kind, state]) => (
+                      <Link
+                        key={kind}
+                        to={`/analysis-results?kind=${kind}&etf=${encodeURIComponent(r.etf)}&from=${q.facts.meta.today}`}
+                        className="t-xs block"
+                        style={{ color: TONE_COLOR[stateTone(state)] }}
+                      >
+                        {label} {STATE_LABEL[state]}
+                      </Link>
+                    ),
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         )}

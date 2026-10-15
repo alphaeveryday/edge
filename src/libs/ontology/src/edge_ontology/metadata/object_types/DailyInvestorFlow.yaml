@@ -1,0 +1,388 @@
+formatVersion: 2
+name: DailyInvestorFlow
+label: Daily investor flow
+description: End-of-day net purchases by individual, foreign, and institutional investors
+  for one security and trading date. Contains quantities in shares or fund units and
+  trading amounts in KRW.
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns: &id001
+  - instrument_id
+  - trade_date
+  encoding: jsonStringArray
+properties:
+  id:
+    label: ID
+    description: Identifier of this daily investor-flow record, encoded from instrumentId,
+      tradeDate. Every listed key component is preserved.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - &id002
+        constraint: fk_investor_flow_daily_instrument
+        table: investor_flow_daily
+        columns:
+        - instrument_id
+        target_table: instrument
+        target_columns:
+        - instrument_id
+    mappingStatus: ready
+    apiName: id
+    displayName: ID
+    status: experimental
+    dataType: String
+  instrumentId:
+    label: Instrument id
+    description: Internal identifier of the security whose data this record describes.
+      Resolve it to Equity or ETF, not directly to Company.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys:
+      - *id002
+    mappingStatus: ready
+    apiName: instrumentId
+    displayName: Instrument id
+    status: experimental
+    dataType: String
+  tradeDate:
+    label: Trade date
+    description: Trading date to which the recorded market data applies; distinct
+      from the time it was collected.
+    sourceDataType: date
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: *id001
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: tradeDate
+    displayName: Trade date
+    status: experimental
+    dataType: Date
+  netQtyIndividual:
+    label: Individual net-buy quantity
+    description: Purchases minus sales by individual investors during the trading
+      day, in shares or fund units. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: netQtyIndividual
+    displayName: Individual net-buy quantity
+    status: experimental
+    dataType: Long
+  netValIndividual:
+    label: Individual net-buy value (KRW)
+    description: Purchase value minus sale value for individual investors during the
+      trading day, in KRW. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: netValIndividual
+    displayName: Individual net-buy value (KRW)
+    status: experimental
+    dataType: Long
+  netQtyForeign:
+    label: Foreign net-buy quantity
+    description: Purchases minus sales by foreign investors during the trading day,
+      in shares or fund units. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: netQtyForeign
+    displayName: Foreign net-buy quantity
+    status: experimental
+    dataType: Long
+  netValForeign:
+    label: Foreign net-buy value (KRW)
+    description: Purchase value minus sale value for foreign investors during the
+      trading day, in KRW. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: netValForeign
+    displayName: Foreign net-buy value (KRW)
+    status: experimental
+    dataType: Long
+  netQtyInstitutionTotal:
+    label: Institutional net-buy quantity
+    description: Purchases minus sales by institutional investors combined during
+      the trading day, in shares or fund units. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: netQtyInstitutionTotal
+    displayName: Institutional net-buy quantity
+    status: experimental
+    dataType: Long
+  netValInstitutionTotal:
+    label: Institutional net-buy value (KRW)
+    description: Purchase value minus sale value for institutional investors combined
+      during the trading day, in KRW. Negative values mean net selling.
+    sourceDataType: bigint
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: netValInstitutionTotal
+    displayName: Institutional net-buy value (KRW)
+    status: experimental
+    dataType: Long
+  availableAt:
+    label: Available for analysis at
+    description: Time this record is considered available for analysis. Use it to
+      exclude information that was not yet available at the requested analysis time.
+    sourceDataType: timestamp with time zone
+    nullable: false
+    sourceConstraints:
+      nullable: false
+      primaryKey: []
+      foreignKeys: []
+    mappingStatus: ready
+    apiName: availableAt
+    displayName: Available for analysis at
+    status: experimental
+    dataType: Timestamp
+  securityName:
+    label: Security name
+    description: Current stored name of the security identified by instrument_id;
+      not its historical name on the record date.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityName
+    displayName: Security name
+    status: experimental
+    dataType: String
+  securityTicker:
+    label: Security ticker
+    description: Current ticker of the security; leading zeros are preserved.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityTicker
+    displayName: Security ticker
+    status: experimental
+    dataType: String
+  securityMarketCode:
+    label: Security market code
+    description: Current market code of the security, used with its ticker for display.
+    sourceDataType: text
+    nullable: true
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: securityMarketCode
+    displayName: Security market code
+    status: experimental
+    dataType: String
+  displayTitle:
+    label: Display title
+    description: Readable title assembled from stored names and the record context.
+      IDs remain authoritative; labels may change and are not unique.
+    sourceDataType: text
+    nullable: false
+    sourceConstraints: null
+    mappingStatus: ready
+    apiName: displayTitle
+    displayName: Display title
+    status: experimental
+    dataType: String
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: investor_flow_daily
+  joins: []
+  filters: []
+  properties:
+    id:
+      alias: base
+      table: investor_flow_daily
+      column: instrument_id
+    instrumentId:
+      alias: base
+      table: investor_flow_daily
+      column: instrument_id
+    tradeDate:
+      alias: base
+      table: investor_flow_daily
+      column: trade_date
+    netQtyIndividual:
+      alias: base
+      table: investor_flow_daily
+      column: net_qty_individual
+    netValIndividual:
+      alias: base
+      table: investor_flow_daily
+      column: net_val_individual
+    netQtyForeign:
+      alias: base
+      table: investor_flow_daily
+      column: net_qty_foreign
+    netValForeign:
+      alias: base
+      table: investor_flow_daily
+      column: net_val_foreign
+    netQtyInstitutionTotal:
+      alias: base
+      table: investor_flow_daily
+      column: net_qty_institution_total
+    netValInstitutionTotal:
+      alias: base
+      table: investor_flow_daily
+      column: net_val_institution_total
+    availableAt:
+      alias: base
+      table: investor_flow_daily
+      column: available_at
+    securityName:
+      kind: view_column
+      schema: ontology_view
+      table: daily_investor_flow
+      column: security_name
+      sqlFile: sql/views/daily_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_daily
+        column: instrument_id
+      - schema: public
+        table: investor_flow_daily
+        column: trade_date
+    securityTicker:
+      kind: view_column
+      schema: ontology_view
+      table: daily_investor_flow
+      column: security_ticker
+      sqlFile: sql/views/daily_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_daily
+        column: instrument_id
+      - schema: public
+        table: investor_flow_daily
+        column: trade_date
+    securityMarketCode:
+      kind: view_column
+      schema: ontology_view
+      table: daily_investor_flow
+      column: security_market_code
+      sqlFile: sql/views/daily_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_daily
+        column: instrument_id
+      - schema: public
+        table: investor_flow_daily
+        column: trade_date
+    displayTitle:
+      kind: view_column
+      schema: ontology_view
+      table: daily_investor_flow
+      column: display_title
+      sqlFile: sql/views/daily_investor_flow.sql
+      inputs:
+      - schema: public
+        table: entity
+        column: display_name
+      - schema: public
+        table: instrument
+        column: instrument_id
+      - schema: public
+        table: instrument
+        column: market_code
+      - schema: public
+        table: instrument
+        column: ticker
+      - schema: public
+        table: investor_flow_daily
+        column: instrument_id
+      - schema: public
+        table: investor_flow_daily
+        column: trade_date
+sourceConstraints:
+  capturedAt: '2026-10-01 12:09:09.225923+00:00'
+  primaryKey: *id001
+  tableConstraints:
+  - name: fk_investor_flow_daily_instrument
+    kind: f
+    definition: FOREIGN KEY (instrument_id) REFERENCES instrument(instrument_id) ON
+      DELETE CASCADE
+    validated: true
+  - name: investor_flow_daily_pkey
+    kind: p
+    definition: PRIMARY KEY (instrument_id, trade_date)
+    validated: true
+apiName: DailyInvestorFlow
+displayName: Daily investor flow
+pluralDisplayName: Daily investor flows
+titleProperty: displayTitle
+status: experimental
+visibility: normal
+linkTypes:
+- DailyInvestorFlow_ForSecurity_Equity
+- DailyInvestorFlow_ForSecurity_ETF

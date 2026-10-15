@@ -190,9 +190,14 @@ def test_configured_universe_reads_the_declared_sector_candidates():
     WHY: ALPHA-842 가 얹은 48종은 한 번도 수집된 적이 없어 관측 유니버스에 안 잡힌다.
     선언을 못 읽으면 그 종목들이 백필 대상에서 또 빠진다.
     """
+    from data_pipeline.config.loader import load_settings
+
     declared = backfill._configured_universe()
 
-    assert len(declared) >= 40, f"선언된 섹터 후보가 비었다: {len(declared)}종"
+    # 종수 하한(종전 40)을 두지 않는다 — 판정 축(etf_map)으로 옮겨 가면 이 목록은 줄어든다(ALPHA-1249: 47 → 32종).
+    # 대신 선언 집합 **전체**와 대조한다: 일부만 돌려주면 나머지가 백필에서 빠진다.
+    assert declared, "선언된 섹터 후보가 비었다"
+    assert declared == set(load_settings().minute_universe.sector_etf_ids)
     assert all(isinstance(t, str) and t for t in declared)
 
 
@@ -342,6 +347,9 @@ def test_kis_issues_one_token_across_every_day(monkeypatch):
 class _Secrets:
     def get_secret_value(self, SecretId):            # noqa: N803
         return {"SecretString": '{"app_key": "k", "app_secret": "s"}'}
+
+    def describe_task_definition(self, taskDefinition):  # noqa: N803 — 공유 허용 꺼진 배포(가드 통과)
+        return {"taskDefinition": {"containerDefinitions": [{"environment": []}]}}
 
 
 class _Args:
@@ -857,3 +865,17 @@ def test_collectors_skip_ticker_days_another_vendor_already_covers():
 
     assert d1 not in out or not out[d1], "토스가 이미 덮인 날을 다시 받았다"
     assert {r["ticker"] for r in out[d2]} == {"A"}
+
+
+def test_kis_backfill_refuses_when_shared_call_budget_is_enabled():
+    """공유 허용이 켜진 배포에서 로컬 간격으로 도는 백필은 합산 한도를 깬다 — 배포 사실로 거부한다."""
+    def ecs(flag):
+        class E:
+            def describe_task_definition(self, taskDefinition):
+                env = [] if flag is None else [{"name": "DATA_PIPELINE_CALL_BUDGET__ENABLED", "value": flag}]
+                return {"taskDefinition": {"containerDefinitions": [{"environment": env}]}}
+        return E()
+    with pytest.raises(SystemExit):
+        backfill.refuse_if_call_budget_enabled(ecs("true"))
+    backfill.refuse_if_call_budget_enabled(ecs("false"))
+    backfill.refuse_if_call_budget_enabled(ecs(None))

@@ -46,14 +46,13 @@ EDGE 클라우드(컨트롤 플레인)의 AWS 인프라 구성도. 고객사(Cus
 - **Scheduler**: AWS EventBridge → Step Functions 실행 트리거
 - **ECS Cluster (파이프라인)** — VPC 내에서 Step Functions가 태스크를 단계별 실행
 
-현행 SFN은 **4페이즈** ([../adr/0028](../adr/0028-unified-pipeline-sfn.md)):
+현행 SFN은 **3페이즈** ([../adr/0028](../adr/0028-unified-pipeline-sfn.md)) — 설명 생성(analyze)은 SFN 페이즈가 아니라 아래 트래픽 경로 4의 큐 소비자다:
 
 | 페이즈 | Task (대표) |
 |---|---|
 | **raw 수집** | Ingest News/Price/Disclosure 등 — 전체 소스(FMP 재무·KIS NAV·ETF 구성종목 등)는 SFN 정의가 SSOT |
 | **정제 (normalize)** | Process News/Price/Disclosure Task |
-| **feature** | 지표·assertion·event·price-trigger 산출 — analyze의 입력 |
-| **analyze** | Decomposing Prices, Generating Explanations |
+| **feature** | 지표·assertion·event·price-trigger 산출 — 설명 생성의 입력 |
 
 - 파이프라인 태스크는 **AWS S3**(데이터 적재)와 **ECR**(컨테이너 이미지)을 사용하고, 결과를 Data subnet group의 RDS에 적재
 
@@ -82,7 +81,7 @@ EDGE 클라우드(컨트롤 플레인)의 AWS 인프라 구성도. 고객사(Cus
 1. **테넌트 동기화(반입)**: Relay Worker(고객사 DMZ) → Route 53(`sync-dev.edgesignal.dev`) → Internet Gateway → Tenant Sync용 ALB → Tenant Sync Service → Cache/RDS
 2. **슈퍼 어드민 콘솔**: Super Admin → CloudFront(`admin-dev.edgesignal.dev`) 단일 진입 — 정적 UI 자산은 S3, `/api/*` 는 CloudFront 가 Super Admin Console용 ALB(`admin-api-dev.edgesignal.dev`) 오리진으로 프록시(same-origin 세션 쿠키, ALPHA-615) → Super Admin Console Service. ALB 직접 호출 경로도 유효하다(호스트 1:1은 유지 — ADR-0034)
 3. **데이터 파이프라인**: EventBridge → Step Functions → ECS Task (raw → 정제 → **feature**) → S3 / RDS
-4. **설명 생성**: 분봉 트리거 SQS → 상주 ECS 서비스(analysis-engine) → S3 / RDS — SFN 페이즈가 아니라 큐 소비자다(ALPHA-806)
+4. **설명 생성**: 분봉 트리거 SQS → 큐 소비 ECS 서비스(analysis-engine-v2) → 분석 SFN → S3 / RDS — 파이프라인 SFN 페이즈가 아니라 큐 소비자다(ALPHA-806)
 
 > ⚠️ 방화벽 화이트리스트·인증서는 **각 서비스 FQDN 기준**이어야 해당 ALB에 도달한다 — apex `edgesignal.dev`로는 sync ALB에 도달하지 못한다 ([../adr/0034](../adr/0034-host-per-edge-alb.md) 호스트 1:1).
 

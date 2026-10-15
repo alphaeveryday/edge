@@ -24,8 +24,8 @@ raw 행은 **FMP 형태**(date/open/high/low/close/volume/adjClose)로 낸다 �
 **지수 행의 하류 거동(의도):** 지수는 `instrument` 마스터에 없으므로 `load_price_daily`
 가 `skipped_unknown_instrument` 로 **세고 넘긴다**(FK 위반으로 배치를 죽이지 않는다).
 분석엔진은 DB 가 아니라 canonical 레이크에서 수익률을 읽으므로(`adapters/lake.py`
-`load_returns`) 지수는 레이크만으로 즉시 쓸 수 있다. 지수를 DB 에 두려면
-`market_series_daily` 신설이 필요하고 그건 별건이다.
+`load_returns`) 지수는 레이크만으로 즉시 쓸 수 있다. 지수의 DB 자리는 `market_series_daily` 이고
+(ALPHA-1260) KIS 업종 일봉(`sector_index_daily`)에서 싣는다 — 이 어댑터의 행은 그 표로 가지 않는다.
 """
 
 from __future__ import annotations

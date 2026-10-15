@@ -860,7 +860,7 @@ missing_inputs: [peer_residual_daily, analyst_revision_ts]   # (observable, stat
 | FLOW | ✅ | `investor_flow_daily` 26컬럼 |
 | EVENTS | ✅ | `source_event` + `event_measure` |
 | CONTRIB | ✅ | `LakeReader.load_holdings` |
-| **PATH — 점프 시각 · 일중 분산비** | ❌ | `price_daily` 는 일봉. OHLC 없음 |
+| **PATH — 점프 시각 · 일중 분산비** | ❌ | `price_daily` 는 일봉. OHLC 없음(작성 시점 기준 — 시·고·저 컬럼은 ALPHA-1148 에서 추가) |
 | **카탈로그 실체** (매출 · 마진 · 배수) | ❌ | 재무제표 테이블 없음 |
 
 **0세대가 연역만으로 도는 것은 방법론적 선택이다** — 계수 없이 얼마나 갈 수 있는지가 이 단계의 질문이고, 접지 가능한 상수가 많아져도 1단계는 상한·역산으로 채점한다. 계수는 2단계에서 원장이 200건을 넘긴 뒤에 들어온다.

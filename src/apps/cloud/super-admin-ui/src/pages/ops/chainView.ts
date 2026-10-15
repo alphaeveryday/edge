@@ -20,5 +20,30 @@ export function intradayLostAtEntry(chain: Facts['chain']): boolean {
   const fired = chain.feeds[1]?.v;
   /* 첫 단계가 곧 입구다 — id 로 찾지 않는다. 순서가 흐름이라는 계약을 여기서도 그대로 쓴다. */
   const observed = chain.stages[0]?.intraday;
-  return Number.isFinite(fired) && (fired as number) > 0 && observed === 0;
+  /* 입구 단계가 관측 불가면 **거짓**이다 — 그 0 은 "하나도 안 이어졌다"가 아니라 셀 쪽이 없다 */
+  if (chain.stages[0]?.blind) return false;
+  /* 전부가 아직 판정할 수 없는 건이면 **거짓**이다(ALPHA-1309) — 방금 발화해 요청이 수용되기 전일
+   * 수 있다. 판정 가능한 트리거가 하나라도 요청 없이 남았을 때만 참이다. */
+  const pending = chain.stages[0]?.pending ?? 0;
+  return Number.isFinite(fired) && (fired as number) > pending && observed === 0;
+}
+
+/**
+ * 아직 판정할 수 없는 트리거 수(ALPHA-1309) — 앞 단계에 도달한 지 유예 시간이 안 지나, 다음 단계에 못 간
+ * 것이 손실인지 진행 중인지 가를 수 없는 건이다. 단계별 수는 서로 겹치지 않아(요청 전 / 요청은
+ * 됐고 분석 시작 전) 더하면 트리거 수다. 흐름 화면이 이 수를 띠 옆에 한 줄로 적는다.
+ */
+export function pendingTriggers(chain: Facts['chain']): number {
+  return (chain?.stages ?? []).reduce((n, s) => n + (Number.isFinite(s.pending) ? (s.pending as number) : 0), 0);
+}
+
+/**
+ * 체인 단계가 **관측 불가**로 내려왔는가 — 단계는 새 분석 엔진의 것이고(ALPHA-1296), 그날 코호트에
+ * 그 엔진의 요청이 하나도 없고 첫 요청이 조회일보다 뒤일 때 서버가 단계들을 관측 불가로 표시한다.
+ * 흐름 화면이 이유를 한 줄로 적을지 이걸로 정한다.
+ */
+export function stagesBlind(chain: Facts['chain']): boolean {
+  /* **입구 단계**(첫 단계)의 표시로 본다 — 서버는 단계를 한꺼번에 표시한다. 끝 단계 하나만 관측
+   * 불가인 사실(온프렘 수신처럼 원래 못 보는 단계)은 이 사정이 아니다. */
+  return chain?.stages[0]?.blind === true;
 }
