@@ -563,14 +563,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
                         search_progress = optimizer.result.get('search_progress')
-                        needs_more_search = (not search_progress['alternatives_explored'] and search_progress['remaining_batches'] > 0) if search_progress else len(getattr(optimizer, 'batches', [])) < 2
-                        needs_alternative = not selected and optimizer.result.get('reason') != 'SERVICE_CUSTOMER_POLICY_CONFLICT' and needs_more_search and (
-                            final.withheld_reason in {'quality_failed', 'customer_failed', 'search_exhausted'} or
-                            published['optimization'].get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'EXECUTION_INFEASIBLE', 'SERVICE_CRITERIA_NOT_MET', 'NO_COMMON_PRICE_HISTORY', 'NO_COMPARABLE_PRICE_HISTORY'})
-                        if needs_alternative:
+                        if not selected and published['optimization'].get('reason') in {'CUSTOMER_CONSTRAINT_NOT_SATISFIED', 'EXECUTION_INFEASIBLE'}:
                             if published['completion']['status'] != 'needs_input':
                                 published['completion']['status'] = 'partial'
-                            published['completion']['reasons'].append('ALTERNATIVE_SEARCH_NOT_PERFORMED')
+                            published['completion']['reasons'].append(published['optimization']['reason'])
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
                         reconciliation_draft = None
@@ -648,7 +644,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             raw = interpreted.model_dump(exclude={'decision'})
                         validation_step = 'optimization_required'
                         if role == 'portfolio' and optimizer.result is None:
-                            raise ValueError('Before completing portfolio, call optimize_portfolios once with 10 distinct ETF combinations; obtain at least 4 distinct registered ETFs first using search_etfs')
+                            raise ValueError('Before completing portfolio, call optimize_portfolios with the registered ETF combinations or preferred weights you want to compare')
                         validation_step = 'role_section'
                         sections[role] = validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and raw.get('limitations') else role, raw, evidence.sources)
                     emit('stage_completed', role=role)

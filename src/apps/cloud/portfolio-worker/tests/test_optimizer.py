@@ -485,19 +485,18 @@ async def test_unbuyable_candidates_are_rejected_before_batch_is_frozen():
     assert optimizer.result is None
 
 
-async def test_planning_never_optimizes_single_etf_recommendations():
+async def test_planning_can_select_one_diversified_etf_without_an_invented_position_minimum():
     request, market, groups = batch()
     request.planning = True
     market.loader = lambda symbol, as_of: record(currency='KRW')
     optimizer = Optimizer(market, request)
-    with pytest.raises(ValueError, match='at least two'):
-        await optimizer.tool({'combinations': groups})
-    assert optimizer.result is None
+    result = await optimizer.tool({'combinations': [['KR:A']]})
+    assert result['candidates'][0]['allocations'] == [{'instrument_id': 'KR:A', 'weight_pct': 100}]
     from itertools import combinations
     pairs = [list(pair) for pair in combinations(market.catalog, 2)]
     result = await optimizer.tool({'combinations': pairs})
     assert result['candidates']
-    assert all(len(row['allocations']) >= 2 for row in result['candidates'])
+    assert any(len(row['allocations']) >= 2 for row in result['candidates'])
 
 
 def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient():
@@ -598,3 +597,37 @@ async def test_price_retries_share_collection_time_and_keep_completed_candidates
     third = await optimizer.tool({'combinations': [list(group) for group in combinations(market.catalog, 3)]})
     assert started == attempts  # A different candidate batch shares the same collection budget.
     assert [row['allocations'] for row in third['candidates']] == [row['allocations'] for row in first['candidates']]
+
+
+
+def test_model_chosen_balanced_weights_remain_selectable_below_historical_winner():
+    groups = [[{'weights': [.9, .1], 'duration_pct': 100, 'excess_pp': 40, 'preservation_pct': 60},
+               {'weights': [.5, .5], 'duration_pct': 50, 'excess_pp': 10, 'preservation_pct': 100}]]
+    result = rank(groups, [['KR:A', 'KR:B']], ['growth'], preferred=[(('KR:A', 50), ('KR:B', 50))])
+    assert len(result) == 2
+    assert any(row['allocations'] == [{'instrument_id': 'KR:A', 'weight_pct': 50}, {'instrument_id': 'KR:B', 'weight_pct': 50}] for row in result)
+
+
+async def test_single_researched_combination_is_enough_and_model_can_change_its_weights(monkeypatch):
+    from test_market_data import record
+    request, market, _ = batch()
+    market.loader = lambda symbol, as_of: record(finish=120 if symbol == 'A.KS' else 110)
+    optimizer = Optimizer(market, request)
+    first = await optimizer.tool({'combinations': [['KR:A', 'KR:B']]})
+    preferred = [{'instrument_id': 'KR:A', 'weight_pct': 50}, {'instrument_id': 'KR:B', 'weight_pct': 50}]
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': preferred})
+    assert result['revision'] > first['revision']
+    assert any(row['allocations'] == preferred for row in result['candidates'])
+
+
+
+async def test_model_preferred_weights_still_obey_explicit_customer_limits():
+    from edge_portfolio.decision import Decision
+    request, market, _ = batch()
+    market.loader = lambda symbol, as_of: record(finish=120 if symbol == 'A.KS' else 110)
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[{'kind': 'max_weight', 'source': 'A는 30% 이하', 'instrument_ids': ['KR:A'], 'value': 30}])
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': [
+        {'instrument_id': 'KR:A', 'weight_pct': 50}, {'instrument_id': 'KR:B', 'weight_pct': 50}]})
+    assert result['candidates']
+    assert all(next(a['weight_pct'] for a in row['allocations'] if a['instrument_id'] == 'KR:A') <= 30 for row in result['candidates'])

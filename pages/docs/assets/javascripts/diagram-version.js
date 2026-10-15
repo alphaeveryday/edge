@@ -1,5 +1,5 @@
-/* 다이어그램 페이지의 버전 드롭다운 — 뷰어(v2 ↔ v1)·설계 근거 노트와
-   "전체 화면으로 열기" 링크를 선택한 버전으로 전환한다. 기본 v2. */
+/* 다이어그램 페이지의 버전 드롭다운 — 뷰어·설계 근거 노트와 "전체 화면으로 열기" 링크를
+   선택한 버전으로 전환한다. 기본은 selected 옵션(1~4번은 v2, 5번은 v5). */
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll(".ep-version-select").forEach(function (sel) {
     var meta = sel.closest(".ep-diagram-meta");
@@ -9,7 +9,11 @@ document.addEventListener("DOMContentLoaded", function () {
     var scopes = [frame];
     var note = frame.nextElementSibling;
     if (note && note.classList && note.classList.contains("ep-version-note")) scopes.push(note);
-    var hrefs = { v2: link.getAttribute("href"), v1: link.getAttribute("data-href-v1") };
+    // 옵션별 전체 화면 링크 — 기본 선택은 href, 나머지는 data-href-<값>(2판 이상도 같은 규칙)
+    var hrefs = {};
+    Array.prototype.forEach.call(sel.options, function (o) {
+      hrefs[o.value] = link.getAttribute("data-href-" + o.value) || link.getAttribute("href");
+    });
     var apply = function () {
       scopes.forEach(function (scope) {
         scope.querySelectorAll("[data-version]").forEach(function (el) {

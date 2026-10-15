@@ -372,7 +372,7 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
         'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '확인 필요',
         'accounts': [{'account': 'ISA', 'opened': '2020-01-01', 'remaining_man': '0'}]}})
     result = await run_analysis(req, 'test-only', phases.append, model_call=model, evidence=Evidence())
-    assert len(repairs) == (3 if feasible_retry else 2)
+    assert len(repairs) == (3 if feasible_retry else 4), 'Execution failure still receives recovery after two search batches'
     assert result['recommendation'] is None
     assert result['optimization']['reason'] == ('RATING_BELOW_MINIMUM' if feasible_retry else 'EXECUTION_INFEASIBLE')
     if feasible_retry:
