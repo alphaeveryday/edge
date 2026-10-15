@@ -18,6 +18,8 @@ python -m edge_analysis_v2.cloud.dashboard --profile edge-v2-observer --runs-dir
 
 ## 전망 방향 색과 분석 출처 계약
 
+전망과 가격변동 설명은 첫 모델 입력의 `current_flow`에 외국인·기관의 최근 5일·20일 구성종목 가중 수급을 함께 받는다. 계산 결과는 기존 도구 감사 기록에 저장되어 최종 근거로 인용할 수 있다. 계산 실패는 `unavailable`로 표시하며 0으로 바꾸지 않는다. 수급을 설명할 때 최근 반전과 누적 방향을 구분한다.
+
 - DB 조립 응답의 `detail.items[].sentiment`는 이유 행의 방향이며 `positive`·`neutral`·`negative`다.
   중첩된 `sentences[]`의 각 문장에 별도 색을 지정하지 않는다. 색상 코드는 프론트가 매핑한다.
 - 편집 도구는 문장 변경과 센티먼트를 함께 받는다. 센티먼트 단독 변경과 명시적 `null`은 거부한다.

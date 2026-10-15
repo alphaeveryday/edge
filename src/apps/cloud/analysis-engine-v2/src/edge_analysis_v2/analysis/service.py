@@ -14,6 +14,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, WRITING
+from edge_analysis_v2.analysis.current_flow import current_flow
 from edge_analysis_v2.tools.execution import AuditedExecution, ToolInputError
 from edge_analysis_v2.analysis.body_editor import BodyEditor
 from edge_analysis_v2.contracts.outlook_limits import movement_violations, violations
@@ -283,6 +284,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         if kind == 'outlook':
             factor_output = call('get_instrument_factors', {'instrument_id': context['etf_code']})
             references['f1'] = factor_output['tool_run_id']
+        if any(s['function']['name'] == 'sum_weighted_net_flow' for s in source_schemas):
+            initial['current_flow'] = current_flow(cited_call)
         if staged and not previous:
             prompts = Path(__file__).parents[1]/'prompts'
             def step(name, **settings):
