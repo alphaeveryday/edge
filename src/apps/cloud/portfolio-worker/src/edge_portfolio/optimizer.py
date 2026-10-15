@@ -9,7 +9,7 @@ import numpy as np
 
 from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure
 from .recommendation import selected_accounts, allocation_error
-from .decision import Constraint, Decision, check_constraints
+from .decision import Decision, check_constraints
 from .execution import plan_execution
 from .market_data import comparison_method, comparison_column
 
@@ -301,7 +301,7 @@ class Optimizer:
                 for row in rows[:]:
                     allocation = [{'instrument_id': key, 'weight_pct': round(weight * 100)} for key, weight in zip(ids_in_group, row['weights'])]
                     checks = self.vector_checks(allocation)
-                    if any(check['status'] != 'pass' for check in checks):
+                    if any(check['status'] not in {'pass', 'model_review'} for check in checks):
                         unknown_count += any(check['status'] == 'unknown' for check in checks)
                         rejected_count += 1
                         rows.remove(row)
@@ -352,8 +352,6 @@ class Optimizer:
         # The final recommendation still checks the exact accounts and execution amounts.
         rules = [rule for rule in self.decision.constraints if rule.kind not in {'accounts', 'no_sell'}]
         no_sell = [rule for rule in self.decision.constraints if rule.kind == 'no_sell']
-        if self.decision.kind == 'new_money' and not any(not rule.instrument_ids for rule in no_sell):
-            no_sell.append(Constraint(kind='no_sell', source=self.request.question or '추가 투자'))
         request = self.request.model_copy(update={'holdings': [h.model_copy(update={'account': '일반 계좌'}) for h in self.request.holdings]})
         checks = check_constraints(self.decision.model_copy(update={'constraints': rules}),
             [{**row, 'account': '일반 계좌'} for row in rows], request, self.market.catalog)

@@ -143,6 +143,32 @@ async def test_customer_cap_filters_vectors_before_the_group_winner_is_chosen():
     assert all(a['weight_pct'] <= 30 for row in result['candidates'] for a in row['allocations'] if a['instrument_id'] == 'KR:A')
 
 
+async def test_model_reviews_leverage_without_requiring_metadata_and_explicit_caps_still_apply():
+    from edge_portfolio.decision import Decision
+    request, market, groups = batch()
+    market.loader = lambda symbol, _: record(finish=200 if symbol == 'A.KS' else 120)
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[
+        {'kind': 'unverified', 'source': '레버리지 제외'},
+        {'kind': 'max_weight', 'instrument_ids': ['KR:A'], 'value': 30, 'source': 'A 30% 이하'}])
+    result = await optimizer.tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['candidates']
+    assert all(a['weight_pct'] <= 30 for row in result['candidates'] for a in row['allocations'] if a['instrument_id'] == 'KR:A')
+    assert any(c['status'] == 'model_review' for c in optimizer.vector_checks(result['candidates'][0]['allocations']))
+
+
+def test_new_money_kind_does_not_add_an_unrequested_no_sell_constraint():
+    from edge_portfolio.decision import Decision
+    request, market, _ = batch()
+    request.holdings = AnalysisInput(holdings=[{'name': 'A', 'instrument_id': 'KR:A', 'amount_krw': 100}], horizon='10년 이상').holdings
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(kind='new_money')
+    assert optimizer.vector_checks([{'instrument_id': 'KR:B', 'weight_pct': 100}]) == []
+    optimizer.decision = Decision(kind='new_money', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    assert optimizer.vector_checks([{'instrument_id': 'KR:B', 'weight_pct': 100}])[0]['status'] == 'fail'
+
+
 def test_customer_objective_order_precedes_service_score_and_unknown_income_is_not_zero():
     groups = [[{'weights': [1], 'duration_pct': 100, 'excess_pp': 10, 'preservation_pct': 0, 'max_drawdown_pct': -20, 'income_yield_pct': None}],
               [{'weights': [1], 'duration_pct': 50, 'excess_pp': 5, 'preservation_pct': 100, 'max_drawdown_pct': -2, 'income_yield_pct': 0}]]

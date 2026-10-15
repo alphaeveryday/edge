@@ -156,7 +156,6 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
         if code in input_labels:
             missing_inputs.append((account + ' ' if account else '') + input_labels[code])
         elif code == 'CUSTOMER_CONSTRAINT_UNVERIFIED':
-            missing_inputs.extend(f'요청 조건 확인: {rule.source}' for rule in decision.constraints if rule.kind == 'unverified')
             if decision.kind == 'new_money' or any(rule.kind == 'no_sell' for rule in decision.constraints):
                 from .execution import resolve_funding
                 funding = resolve_funding(request, decision)

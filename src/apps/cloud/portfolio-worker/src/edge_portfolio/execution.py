@@ -189,8 +189,8 @@ def plan_execution(request, allocations, decision=None):
     funding = resolve_funding(request, decision)
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     new_money = bool(decision and decision.kind == 'new_money')
-    no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) and not new_money else set()
-    result = build_execution(request, allocations, no_sell=new_money or bool(rules), no_sell_ids=no_sell_ids, **(funding or {}))
+    no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
+    result = build_execution(request, allocations, no_sell=bool(rules), no_sell_ids=no_sell_ids, **(funding or {}))
     definite_failure = any(reason == 'NO_SELL_ZERO_TARGET' or reason.startswith('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:') for reason in result['reasons'])
     if (funding is None or new_money and not (funding['additional_krw'] or funding['monthly_krw'])) and not definite_failure:
         result.update(status='needs_input', reasons=['ADDITIONAL_FUNDING_REQUIRED'], rows=[])

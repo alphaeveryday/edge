@@ -305,9 +305,20 @@ def test_unknown_new_money_does_not_hide_an_impossible_zero_target():
     from edge_portfolio.decision import Decision
     from edge_portfolio.execution import plan_execution
     req = request([('US:VOO', 1000000, '일반 계좌')])
-    plan = plan_execution(req, target(**{'US:QQQ': 100}), Decision(kind='new_money'))
+    plan = plan_execution(req, target(**{'US:QQQ': 100}), Decision(kind='new_money',
+        constraints=[{'kind': 'no_sell', 'source': '매도 금지'}]))
     assert plan['status'] == 'infeasible'
     assert plan['reasons'] == ['NO_SELL_ZERO_TARGET']
+
+
+def test_new_money_classification_does_not_invent_a_sell_prohibition():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 1000000, '일반 계좌')], question='추가 100만원')
+    decision = Decision(kind='new_money', funding_text='추가 100만원')
+    plan = plan_execution(req, target(**{'US:QQQ': 100}), decision)
+    assert plan['status'] == 'ready'
+    assert sum(int(row['sell_krw']) for row in plan['rows']) == 1000000
 
 
 def test_unknown_funding_does_not_hide_an_already_exceeded_account_limit():

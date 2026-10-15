@@ -16,9 +16,11 @@ def test_customer_weight_cap_is_checked_on_aggregate_not_split_accounts():
     assert checks[0]['status'] == 'fail'
 
 
-def test_unverifiable_sector_constraint_can_never_pass_by_model_assertion():
+def test_semantic_constraint_is_preserved_for_model_judgment_without_claiming_code_verification():
     decision = Decision(constraints=[{'kind': 'unverified', 'source': '기술주 노출은 30% 이하'}])
-    assert check_constraints(decision, [], request(), {})[0]['status'] == 'unknown'
+    check = check_constraints(decision, [], request(), {})[0]
+    assert check['status'] == 'model_review'
+    assert check['source'] == '기술주 노출은 30% 이하'
 
 
 def test_extracted_rules_must_quote_customer_input_and_use_registered_ids():
@@ -92,7 +94,7 @@ def test_explicit_customer_limit_is_preserved_even_when_it_mentions_a_standard_i
     rule = {'kind': 'unverified', 'source': '반도체 비중은 반드시 20% 이하로 유지'}
     result = validate_decision(Decision(constraints=[rule]), req, {})
     assert len(result.constraints) == 1
-    assert check_constraints(result, [], req, {})[0]['status'] == 'unknown'
+    assert check_constraints(result, [], req, {})[0]['status'] == 'model_review'
 
 
 def test_custom_interest_with_an_explicit_limit_remains_a_customer_constraint():
@@ -239,6 +241,39 @@ async def test_service_eligible_candidate_cannot_publish_after_customer_constrai
                                 model_call=model, evidence=Evidence())
     assert len(repairs) == (2 if reject_first else 1)
     assert result['recommendation'] is None
-    assert result['customer_constraint_checks'][0]['status'] == ('fail' if reject_first else 'unknown')
-    assert result['optimization']['reason'] == ('CUSTOMER_CONSTRAINT_NOT_SATISFIED' if reject_first or unverified else 'RECOMMENDATION_WITHHELD')
+    assert result['customer_constraint_checks'][0]['status'] == ('model_review' if unverified else 'fail' if reject_first else 'unknown')
+    assert result['optimization']['reason'] == ('CUSTOMER_CONSTRAINT_NOT_SATISFIED' if reject_first else 'RECOMMENDATION_WITHHELD')
     assert result['input']['question'] == 'VOO는 30% 이하'
+
+
+async def test_model_can_publish_its_selected_candidate_with_semantic_customer_constraints(monkeypatch):
+    import json
+    from edge_portfolio.agent import run_analysis
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+            self.batches = {'first'}
+        def validate(self, final):
+            return self.result['candidates'][0] if final.recommendation else None
+
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages = []
+    async def model(payload):
+        role = stages[-1]
+        content = final_payload() if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {'constraints': [{'kind': 'unverified', 'source': '레버리지 제외'}]}}
+        else:
+            active = json.loads(payload['messages'][1]['content'])['active_decision']
+            assert active['constraints'][0]['source'] == '레버리지 제외'
+        if role == 'opinion':
+            content['answers'] = [{'question_index': 1, 'status': 'answered', 'answer': '레버리지 상품을 제외한 ETF 구성과 비중을 추천합니다.'}]
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+
+    result = await run_analysis(request(question='레버리지 제외'), 'test', stages.append, model_call=model, evidence=Evidence())
+    assert result['recommendation']['allocations']
+    assert result['customer_constraint_checks'][0]['status'] == 'model_review'
+    assert stages.count('opinion') == 1

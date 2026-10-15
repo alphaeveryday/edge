@@ -29,14 +29,18 @@ test('an unresolved recovery keeps its idempotency key across mode changes', asy
   expect(keys[1]).toBe(keys[0]);
 });
 
-test('an unavailable saved target renders its reason instead of crashing the revision', async ({ page }) => {
+for (const [status, reason, explanation] of [
+  ['needs_input', 'SAVED_TARGET_UNAVAILABLE', '기존 목표의 종목이나 계좌를 현재 조건으로 사용할 수 없어'],
+  ['needs_input', 'CUSTOMER_CONSTRAINT_NOT_SATISFIED', '기존 목표가 현재 고객 필수 조건을 만족하는지 확인해야 해요.'],
+  ['infeasible', 'CUSTOMER_CONSTRAINT_NOT_SATISFIED', '기존 목표가 요청하신 조건에 맞지 않아 실행할 수 없어요.'],
+]) test(`saved target explains ${status} / ${reason} without displaying trades`, async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'parent'));
   await page.route('**/api/portfolio/**', route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/session')) return route.fulfill({ json: {} });
     if (path.endsWith('/chat')) return route.fulfill({ status: 202, json: { id: 'child', state: 'queued' } });
     if (path.endsWith('/child')) return route.fulfill({ json: { id: 'child', state: 'succeeded', result: {
-      answer: section, revision: { ...report, execution: { status: 'needs_input', reasons: ['SAVED_TARGET_UNAVAILABLE'],
+      answer: section, revision: { ...report, execution: { status, reasons: [reason],
         rows: [], accounts: [], assumptions: [], additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null },
         completion: { status: 'needs_input', tasks: [], missing_inputs: [], missing_research: [] } },
     } } });
@@ -46,7 +50,9 @@ test('an unavailable saved target renders its reason instead of crashing the rev
   await page.getByLabel('추가 질문', { exact: true }).fill('기존 목표를 실행할 수 있나요?');
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByText('보완 분석과 계산표 보기').click();
-  await expect(page.locator('.followup-revision .execution-plan')).toContainText('기존 목표의 종목이나 계좌를 현재 조건으로 사용할 수 없어');
+  await expect(page.locator('.followup-revision .execution-plan')).toContainText(explanation);
+  await expect(page.locator('.followup-revision .execution-plan table')).toHaveCount(0);
+  if (status === 'infeasible') await expect(page.locator('.followup-revision .execution-plan')).not.toContainText('확인해야 해요.');
   await expect(page.locator('.followup-revision')).not.toContainText('추천을 보류했어요.');
 });
 
