@@ -76,7 +76,7 @@ def read_graph(tree: ET.ElementTree, links: list[tuple[str, str]] = ()) -> dict:
 
     def contains(outer, inner):
         ox, oy, ow, oh = boxes[outer]; x, y, w, h = boxes[inner]
-        return outer != inner and ox <= x and oy <= y and x + w <= ox + ow and y + h <= oy + oh
+        return outer != inner and ow * oh > w * h and ox <= x and oy <= y and x + w <= ox + ow and y + h <= oy + oh
 
     def at_point(pt, pad=30):
         """대상 없이 점으로 끝난 화살표의 끝점이 가리키는 상자.
