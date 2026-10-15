@@ -1,5 +1,6 @@
+import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, PanResponder, Pressable, Text, View } from 'react-native';
+import { Animated, PanResponder, Platform, Pressable, Text, View } from 'react-native';
 import type { EtfSummary } from '@/api';
 import { SectorIcon } from '@/components/ui';
 import { createStyles } from '@/theme/theme';
@@ -116,6 +117,9 @@ function Grip({ index, handlers }: { index: number; handlers: React.MutableRefOb
         onPanResponderGrant: () => {
           timer = setTimeout(() => {
             active = true;
+            // 행이 들리는 순간의 진동
+            if (Platform.OS === 'android') Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Long_Press);
+            else Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             handlers.current.start(idx.current);
           }, HOLD_MS);
         },

@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { Platform, Pressable, Text, View } from 'react-native';
 import type { VoteStat, VoteChoice } from '@/api';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
@@ -45,7 +46,13 @@ export function VoteCard({ stat, entry, onGate }: { stat: VoteStat; entry: VoteE
             <Pressable
               key={m.k}
               onPress={() => requireLogin('투표', () => vote.mutate(on ? null : m.k, {
-                onSuccess: () => track(on ? 'vote_canceled' : 'vote_submitted', on ? { etf: stat.code, entry } : { etf: stat.code, choice: m.k, entry }),
+                onSuccess: () => {
+                  track(on ? 'vote_canceled' : 'vote_submitted', on ? { etf: stat.code, entry } : { etf: stat.code, choice: m.k, entry });
+                  // 철회 말고 투표 확정에만 진동
+                  if (on) return;
+                  if (Platform.OS === 'android') Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Confirm);
+                  else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                },
               }), onGate)}
               style={({ pressed }) => [styles.btn, { backgroundColor: on ? m.c : m.bg }, pressed && { transform: [{ scale: 0.97 }] }]}
             >
