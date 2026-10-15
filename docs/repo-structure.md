@@ -3,34 +3,37 @@
 > 루트 README 쇼케이스 재구성으로 옮겨온 문서다. 저장소 구조·워크스페이스·모듈 역할·데이터 흐름의 SSOT.
 
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
-실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
+배포되는 실행 단위는 `apps/<제품>/` 아래, 가져다 쓰는 공유 코드는 `libs/`에 둡니다. 제품은 엔진(`engine`)·B2B(`edgesignal`)·B2C(`etforca`) 셋입니다([ADR-0061](adr/0061-product-axis-directory-layout.md)).
 
 > **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(tenant-console-api·super-admin-api·tenant-sync-api·publication-api·sync-agent·intake)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. 벤더 서빙 embed widget 서버(widget-api)는 하이브리드 온프렘 피벗([ADR-0010](adr/0010-hybrid-onprem-pivot.md))으로, 클라우드 gateway는 [ADR-0032](adr/0032-retire-gateway.md)로 삭제됐고 (위젯 **UI 자체는 빌드 산출물로 납품** — [ADR-0035](adr/0035-widget-ui-build-artifact.md), 벤더 실행 서버 없음), 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](implementation.md) §1). 동기화·반입 경로(sync-agent=DMZ Pull·검증, intake=내부망 수신·저장 — [ADR-0036](adr/0036-sync-agent-intake-topology.md), screening-worker=정책 평가·상태 분기·자동 게시)까지 구현됐습니다.
 
 ## 한눈에 보기
 
 ```
-src/
-├── apps/                     # 배포되는 실행 단위 (플레인별 그룹 — ADR-0029)
-│   ├── cloud/                #   edge-cloud (벤더 운영)
-│   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
-│   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
-│   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
-│   │   ├── app-api/          # JVM    · ETF Orca 앱 API (회원·ETF·커뮤니티·전망 투표, 자체 PostgreSQL·Redis)
-│   │   ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
-│   │   ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
+edge/
+├── apps/                     # 배포되는 실행 단위 (제품별 그룹 — ADR-0061)
+│   ├── engine/               #   수집·분석 공용 상류
 │   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
 │   │   ├── airflow/          # Python · 유한 배치의 Airflow DAG(SFN 에서 레인별 이관 중) · ECS on EC2 이미지·검증 경로(ALPHA-1119)
 │   │   ├── analysis-engine-v2/ # Python · 큐 소비 → SFN 분석 실행 → DB 저장
 │   │   └── db-query/          # Python · 운영 DB 일회성 조회
-│   └── onprem/               #   edge-onprem (증권사 관리 환경)
-│       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
-│       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
-│       ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
-│       ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
-│       ├── screening-worker/   # JVM  · 점검 실행 — 상태 분기·자동 게시 (state-machine)
-│       └── publication-api/        # JVM  · MTS 조회 표면 (Published만)
-├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
+│   ├── edgesignal/           #   B2B 산출물 (모듈별 플레인은 apps/edgesignal/README.md 표)
+│   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
+│   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
+│   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
+│   │   ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
+│   │   ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
+│   │   ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
+│   │   ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
+│   │   ├── screening-worker/   # JVM  · 점검 실행 — 상태 분기·자동 게시 (state-machine)
+│   │   └── publication-api/    # JVM  · MTS 조회 표면 (Published만)
+│   └── etforca/              #   B2C 산출물
+│       ├── app-api/          # JVM    · ETF Orca 앱 API (회원·ETF·커뮤니티·전망 투표, 자체 PostgreSQL·Redis)
+│       ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
+│       ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
+│       ├── portfolio-ui/     # Node   · 포트폴리오 화면 (etforca.com/portfolio, React 19)
+│       └── portfolio-worker/ # Python · 포트폴리오 API·워커 (독립 워크스페이스, 전용 PostgreSQL)
+├── libs/                     # 가져다 쓰는 공유 코드 (제품 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
 │   │   └── generated/        #   스키마 파생물 — 생성기가 있는 것은 물리 ERD(DBML) 둘뿐
@@ -43,7 +46,7 @@ src/
 └── pyproject.toml            # Python 루트
 ```
 
-위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `scripts/`(개발 스크립트 — 로컬 전체 스택 기동 등) · `.dev/`(로컬 스크래치, git 미추적) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
+저장소 최상위에는 위 트리 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `scripts/`(개발 스크립트 — 로컬 전체 스택 기동 등) · `.dev/`(로컬 스크래치, git 미추적) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
 
 ## 런타임별 워크스페이스
 
