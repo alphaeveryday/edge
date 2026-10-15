@@ -149,17 +149,17 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
         calls.append(role)
         if role == 'opinion' and payload['tool_choice'] == 'none':
             forced_calls.append(len(calls))
-        if exhaustion == 'source' and role == 'portfolio' and payload['tool_choice'] == 'auto':
+        if exhaustion == 'source' and role == 'portfolio' and payload['tool_choice'] in {'auto', 'required'}:
             names = {tool['function']['name'] for tool in payload['tools']}
             name = 'fetch_source' if names == {'search_sources', 'fetch_source'} else 'search_etfs'
             return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
                 {'id': str(len(calls)), 'type': 'function', 'function': {'name': name, 'arguments': '{"query":"VOO"}'}}]}}]}
-        if exhaustion == 'scenario' and role == 'opinion' and payload['tool_choice'] == 'auto':
+        if exhaustion == 'scenario' and role == 'opinion' and payload['tool_choice'] in {'auto', 'required'}:
             names = {tool['function']['name'] for tool in payload['tools']}
             name = 'calculate_scenarios' if names == {'calculate_scenarios'} else 'search_etfs'
             return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
                 {'id': str(len(calls)), 'type': 'function', 'function': {'name': name, 'arguments': '{}' if name == 'calculate_scenarios' else '{"query":"VOO"}'}}]}}]}
-        if exhaustion == 'prerequisite' and role == 'portfolio' and payload['tool_choice'] == 'auto':
+        if exhaustion == 'prerequisite' and role == 'portfolio' and payload['tool_choice'] in {'auto', 'required'}:
             names = {tool['function']['name'] for tool in payload['tools']}
             name = 'optimize_portfolios' if names == {'search_etfs', 'optimize_portfolios'} else 'search_etfs'
             return {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [

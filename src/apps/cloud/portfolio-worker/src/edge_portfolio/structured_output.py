@@ -66,7 +66,11 @@ async def structured_call(client, key, payload, report_model):
     else:
         # Null represents an omitted research argument in an all-required strict schema.
         request['tools'] = [*request.get('tools', []), *([report] if allow_report else [])]
-        request['tool_choice'] = 'auto'
+        if request.get('tool_choice') == 'required':
+            request['thinking'] = {'type': 'disabled'}
+            request.pop('reasoning_effort', None)
+        else:
+            request['tool_choice'] = 'auto'
         request.setdefault('thinking', {'type': 'enabled'})
         request['messages'].append({'role': 'user', 'content':
             'Complete this role by calling submit_report. Do not return plain text or plain JSON.' if allow_report else
