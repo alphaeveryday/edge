@@ -1048,12 +1048,12 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 | 태스크 메모리·CPU(1분) | CloudWatch `AWS/ECS` `MemoryUtilization`·`CPUUtilization`(Cluster·Service) | 1분 값 15일 | 남는다 |
 | RDS 여유 메모리·연결·CPU·쓰기 지연·스왑(1분) | CloudWatch `AWS/RDS`(edge-dev) | 1분 값 15일 | 남는다 |
 | 호스트 CPU·크레딧(5분) | CloudWatch `AWS/EC2` | 5분 값 63일 | 남는다 |
-| **호스트 메모리**(MemAvailable·태스크 cgroup·OOM 계수) | 스케줄 `edge-dev-airflow-host-mem`(5분) → SSM 명령 이력 | 30일 | **표본 시작 뒤로만 남는다.** 기동(10-02 19:20)부터 표본 시작 전까지는 연속 자료가 없다 — 수동 표본 2개(23:41 여유 547MiB, 23:44 545MiB)뿐이고 나중에 만들 수 없다 |
+| **호스트 메모리**(MemAvailable·태스크 cgroup·컨테이너별 사용량·OOM 계수) | 스케줄 `edge-dev-airflow-host-mem`(5분) → SSM 명령 이력 | 30일 | **표본 시작 뒤로만 남는다.** 기동(10-02 19:20)부터 표본 시작 전까지는 연속 자료가 없다 — 수동 표본 2개(23:41 여유 547MiB, 23:44 545MiB)뿐이고 나중에 만들 수 없다 |
 | 재시작 | ECS 서비스 이벤트(최근 100건), 구성요소 로그 `/ecs/edge-dev-airflow`(30일), 호스트 표본의 `uptime_s`·`cg_oom_kill` | — | 남는다 |
 | 경보 전이·액션 | CloudWatch 경보 이력 | 14일 | 남는다 |
 | SNS 메일 **수신** | 받은 사람의 메일함 | — | 경보 이력의 "SNS 액션 성공"은 발송 요청 기록이다. 수신은 담당자가 메일함에서 확인해야 한다 |
 
-- 호스트 표본 한 줄: `HOSTMEM t=<epoch> avail_kb=… free_kb=… task_cg_mib=… cg_oom_kill=… kmsg_oom=… uptime_s=…`. 조회는 `aws ssm list-command-invocations --details`(Comment `edge-dev-airflow-host-mem`).
+- 호스트 표본 한 줄: `HOSTMEM t=<epoch> avail_kb=… free_kb=… task_cg_mib=… cg_oom_kill=… kmsg_oom=… uptime_s=… mem_dag_processor_mib=… mem_api_server_mib=… mem_scheduler_mib=…`(컨테이너별 값은 `docker stats`, ALPHA-1363 — docker 가 20초 안에 답하지 않으면 그 필드만 빠진다). 조회는 `aws ssm list-command-invocations --details`(Comment `edge-dev-airflow-host-mem`).
 - 표본 명령은 5분마다 호스트에서 셸 하나를 잠깐 띄운다(관측에 주는 영향은 이 정도다).
 
 #### 전환 실행(10-05 예정 → 10-03 앞당겨 실행)
