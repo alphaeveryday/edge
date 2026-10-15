@@ -15,6 +15,16 @@ def target(**weights):
     return [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': value} for key, value in weights.items()]
 
 
+@pytest.mark.parametrize('kind', ['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'])
+def test_task_label_cannot_invent_funding_requirements(kind):
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 1000000, '일반 계좌')])
+    plan = plan_execution(req, target(**{'US:VOO': 60, 'US:BND': 40}), Decision(kind=kind))
+    assert plan['status'] == 'ready'
+    assert sum(int(row['sell_krw']) for row in plan['rows']) == 400000
+
+
 def test_projection_rejection_cannot_block_the_worker_with_regex_backtracking():
     import subprocess
     import sys
@@ -31,7 +41,7 @@ def test_initial_scenario_explicit_zero_overrides_saved_monthly_preference(princ
     req = request([('US:VOO', 1000000, '일반 계좌')],
         preferences={'contribution': '매월 10만원'},
         question=principal + '이번에는 추가 납입 없이 계산해 주세요. 5년 뒤 금액을 알려 주세요.')
-    assert resolve_funding(req, Decision(kind='scenario')) == {'additional_krw': Decimal(0), 'monthly_krw': None}
+    assert resolve_funding(req, Decision(kind='scenario', scenario_requested=True)) == {'additional_krw': Decimal(0), 'monthly_krw': None}
 
 
 def test_changed_funding_is_not_silently_replaced_by_an_older_zero_instruction():
@@ -40,7 +50,7 @@ def test_changed_funding_is_not_silently_replaced_by_an_older_zero_instruction()
     from edge_portfolio.execution import zero_funding_quote
     req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', question='매월 20만원 넣을게요.',
         funding_questions=['추가 납입 없이 계산해 주세요.', '매월 20만원 넣을게요. 10년 뒤 금액을 알려 주세요.'])
-    assert zero_funding_quote(req, Decision(kind='scenario')) is None
+    assert zero_funding_quote(req, Decision(kind='scenario', scenario_requested=True)) is None
 
 
 @pytest.mark.parametrize('original', ['매달 10만원', '추가 납입 없이 계산해 주세요.'])
@@ -52,7 +62,7 @@ def test_explicit_latest_monthly_amount_replaces_an_unconditional_prior_commitme
     question = '매달 20만원으로 계산해 주세요. 5년 뒤 금액을 알려 주세요.'
     req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', question=question,
         funding_questions=[original, question], preferences={'contribution': '매달 10만원', 'note': qualification})
-    result = resolve_funding(req, Decision(kind='scenario', funding_text='매달 20만원'))
+    result = resolve_funding(req, Decision(kind='scenario', scenario_requested=True, funding_text='매달 20만원'))
     assert result is None if qualification else result == {'additional_krw': Decimal(0), 'monthly_krw': Decimal(200000)}
 
 

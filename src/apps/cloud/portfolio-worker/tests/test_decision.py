@@ -8,6 +8,12 @@ def request(**kwargs):
     return AnalysisInput(holdings=[], planning=True, horizon='10년 이상', **kwargs)
 
 
+def test_new_design_label_does_not_discard_or_reject_existing_holdings():
+    req = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}], horizon='10년 이상')
+    assert validate_decision(Decision(kind='new_portfolio'), req, {'US:VOO': {}}).kind == 'new_portfolio'
+    assert req.holdings[0].amount_krw == 1000000
+
+
 def test_customer_weight_cap_is_checked_on_aggregate_not_split_accounts():
     decision = Decision(constraints=[{'kind': 'max_weight', 'instrument_ids': ['US:VOO'],
         'value': 30, 'source': 'VOO는 30% 이하'}])
