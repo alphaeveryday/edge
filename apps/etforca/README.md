@@ -48,13 +48,9 @@ flowchart LR
 
 ## 3. 모듈
 
-| 모듈 | 런타임 | 역할 |
-|---|---|---|
-| [app-api](app-api/README.md) | Spring Boot | 회원·ETF·분석·커뮤니티·투표·알림 API |
-| [app-ui](app-ui/README.md) | Expo (React Native) | iOS·Android 앱 |
-| [app-landing](app-landing/README.md) | 정적 HTML | etforca.com 랜딩페이지 |
-| portfolio-ui | React | 포트폴리오 화면 (etforca.com/portfolio) |
-| [portfolio-worker](portfolio-worker/README.md) | Python | 포트폴리오 접수 API와 분석 워커 |
+[app-api](app-api/README.md) · [app-ui](app-ui/README.md) · [app-landing](app-landing/README.md) · portfolio-ui · [portfolio-worker](portfolio-worker/README.md)
+
+모듈별 역할과 배포처는 [저장소 구조](../../docs/repo-structure.md#apps--배포-단위)에 있습니다.
 
 ---
 
