@@ -35,13 +35,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { svc: publication-api, dockerfile: src/apps/onprem/publication-api/Dockerfile, context: src }
-          - { svc: screening-worker, dockerfile: src/apps/onprem/screening-worker/Dockerfile, context: src }
-          - { svc: intake, dockerfile: src/apps/onprem/intake/Dockerfile, context: src }
-          - { svc: sync-agent, dockerfile: src/apps/onprem/sync-agent/Dockerfile, context: src }
+          - { svc: publication-api, dockerfile: apps/edgesignal/publication-api/Dockerfile, context: . }
+          - { svc: screening-worker, dockerfile: apps/edgesignal/screening-worker/Dockerfile, context: . }
+          - { svc: intake, dockerfile: apps/edgesignal/intake/Dockerfile, context: . }
+          - { svc: sync-agent, dockerfile: apps/edgesignal/sync-agent/Dockerfile, context: . }
           - { svc: mock-broker, dockerfile: demo/mock-broker/Dockerfile, context: demo }
-          - { svc: tenant-console-api, dockerfile: src/apps/onprem/tenant-console-api/Dockerfile, context: src }
-          - { svc: tenant-console-ui, dockerfile: src/apps/onprem/tenant-console-ui/Dockerfile, context: src }
+          - { svc: tenant-console-api, dockerfile: apps/edgesignal/tenant-console-api/Dockerfile, context: . }
+          - { svc: tenant-console-ui, dockerfile: apps/edgesignal/tenant-console-ui/Dockerfile, context: . }
     steps:
       - uses: actions/checkout@v4
       - name: Configure AWS credentials (OIDC)
@@ -92,7 +92,7 @@ jobs:
           # 번들 = compose + migrations-onprem(옆에 놓여 flyway 가 마운트). base64 인라인 → 박스 S3 권한 불필요.
           stage="$(mktemp -d)"
           cp demo/onprem/docker-compose.yml "${stage}/"
-          cp -r src/libs/schema/migrations-onprem "${stage}/migrations-onprem"
+          cp -r libs/schema/migrations-onprem "${stage}/migrations-onprem"
           bundle="$(tar czf - -C "${stage}" . | base64 -w0)"
 
           # 박스에서 실행할 스크립트. workflow 변수(${...})는 여기서 확장, \$(...) 는 박스에서 실행.

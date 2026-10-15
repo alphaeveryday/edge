@@ -1,6 +1,6 @@
 # Airflow 실행 환경 — ECS on EC2(일반 ASG + Capacity Provider. ECS Managed Instances 아님).
 #
-# 구성(ALPHA-1119, README `src/apps/cloud/airflow` "실행 환경"):
+# 구성(ALPHA-1119, README `apps/engine/airflow` "실행 환경"):
 # - 전용 클러스터 하나 + EC2 1대(ASG 1~2). 업무 클러스터(worker)는 건드리지 않는다 — 그 클러스터의
 #   capacity provider 목록은 aws_ecs_cluster_capacity_providers 가 **통째로** 소유해서, EC2 CP 를 더하면
 #   기존 리소스를 고치게 된다. 클러스터는 무료라 분리해도 비용이 같다.

@@ -2,7 +2,7 @@
 
 > **계약 문서** — 이 파일의 변경은 진기·영서 공동 승인 대상이다(CODEOWNERS). 인터페이스 계약의 정의는 [event-bundle-schema.md](event-bundle-schema.md).
 
-> **문법 명세(기계가독)** — 경로·필드·타입의 기계가독 명세는 [tenant-sync-api/openapi.yaml](../../src/apps/cloud/tenant-sync-api/openapi.yaml)(OpenAPI 3.1). 이 문서(시맨틱 계약)가 상위, openapi 는 하위 문법 층이다(TODO §5 2층 구조) — 의미가 충돌하면 이 문서가 이긴다. 번들 필드 내부 형상은 [event-bundle-schema.md](event-bundle-schema.md).
+> **문법 명세(기계가독)** — 경로·필드·타입의 기계가독 명세는 [tenant-sync-api/openapi.yaml](../../apps/edgesignal/tenant-sync-api/openapi.yaml)(OpenAPI 3.1). 이 문서(시맨틱 계약)가 상위, openapi 는 하위 문법 층이다(TODO §5 2층 구조) — 의미가 충돌하면 이 문서가 이긴다. 번들 필드 내부 형상은 [event-bundle-schema.md](event-bundle-schema.md).
 
 **MVP 구현 스펙**:
 

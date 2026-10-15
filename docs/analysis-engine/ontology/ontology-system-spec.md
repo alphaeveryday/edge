@@ -1,6 +1,6 @@
 ---
 title: 온톨로지 체계와 선언 규칙
-authority: src/libs/ontology/src/edge_ontology/
+authority: libs/ontology/src/edge_ontology/
 status: implemented
 updated: 2026-07-29
 related:

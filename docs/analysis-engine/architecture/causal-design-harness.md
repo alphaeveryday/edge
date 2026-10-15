@@ -15,7 +15,7 @@ related:
 
 > **v1 은퇴(#1140) — 역사 기록.** 이 문서가 다룬 v1 분석엔진(`src/apps/cloud/analysis-engine`)은
 > 2026-10-05 #1140(ALPHA-1173)으로 소스째 제거됐다. 본문의 코드 경로·운영 규약은 작성 시점 기준이며
-> 지금 코드와 대응하지 않는다. 현행 분석 코드는 `src/apps/cloud/analysis-engine-v2` 다.
+> 지금 코드와 대응하지 않는다. 현행 분석 코드는 `apps/engine/analysis-engine-v2` 다.
 
 > **이 문서가 `agent-v1-design.md` §3(에이전트 구성)과 §5(게이트)를 대체한다.**
 > S1-S3 결정론 단계와 §4 도구 계약은 유효하되 도구 목록이 확장된다.

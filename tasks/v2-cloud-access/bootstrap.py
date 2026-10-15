@@ -138,7 +138,7 @@ def setup_database(report: dict) -> None:
                         user=admin["username"], password=admin["password"],
                         sslmode="verify-full", sslrootcert=str(ca), connect_timeout=10, autocommit=True,
                         options="-c statement_timeout=15000") as conn:
-        checks = Path(__file__).parents[2] / "src/libs/schema/tests/analysis_v2_writer.sql"
+        checks = Path(__file__).parents[2] / "libs/schema/tests/analysis_v2_writer.sql"
         with conn.cursor() as cursor:
             cursor.execute(checks.read_text(encoding="utf-8"), prepare=False)
             while cursor.nextset():

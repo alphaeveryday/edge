@@ -6,7 +6,7 @@
 #       않게 잡아 두 스택을 동시에 띄울 수 있다.
 #
 # 핵심 정합성:
-#   - 스키마는 SSOT(src/libs/schema/migrations-onprem) 그대로 — 루트 flyway-onprem 과 같은 명령.
+#   - 스키마는 SSOT(libs/schema/migrations-onprem) 그대로 — 루트 flyway-onprem 과 같은 명령.
 #   - publication-api 이미지는 루트와 같은 빌드 컨텍스트(src/)·Dockerfile 을 쓴다.
 #   - DB 볼륨을 두지 않는다 — 실험 간 상태가 새지 않도록 down 하면 리셋되는 게 원칙.
 #   - 자원은 서비스마다 cpus·mem_limit 로 고정한다(비-swarm 필드). 인스턴스 수를
@@ -48,8 +48,8 @@ x-api-env: &api-env
 
 x-api-common: &api-common
   build:
-    context: ../../../src
-    dockerfile: apps/onprem/publication-api/Dockerfile
+    context: ../../..
+    dockerfile: apps/edgesignal/publication-api/Dockerfile
   depends_on:
     flyway:
       condition: service_completed_successfully
@@ -83,7 +83,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ../../../src/libs/schema/migrations-onprem:/flyway/sql:ro
+      - ../../../libs/schema/migrations-onprem:/flyway/sql:ro
     command: >-
       -url=jdbc:postgresql://postgres:5432/edge_onprem
       -user=edge -password=edge

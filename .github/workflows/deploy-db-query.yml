@@ -5,9 +5,9 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/cloud/db-query/**"
+      - "apps/engine/db-query/**"
       - ".github/workflows/deploy-db-query.yml"
-      - "src/.dockerignore"
+      - ".dockerignore"
 
 permissions:
   id-token: write
@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           account_id="$(aws sts get-caller-identity --query Account --output text)"
           repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
-          docker build --platform linux/amd64 -f src/apps/cloud/db-query/Dockerfile \
-            -t "${repo}:db-query-${IMAGE_TAG}" -t "${repo}:db-query-latest" src
+          docker build --platform linux/amd64 -f apps/engine/db-query/Dockerfile \
+            -t "${repo}:db-query-${IMAGE_TAG}" -t "${repo}:db-query-latest" .
           docker push "${repo}:db-query-${IMAGE_TAG}"
           docker push "${repo}:db-query-latest"

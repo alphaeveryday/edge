@@ -197,7 +197,7 @@ function kstTimeOf(value) {
   });
 }
 
-// count 상한 200(실측: src/apps/cloud/data-pipeline/src/data_pipeline/sources/toss.py 헤더 주석)을
+// count 상한 200(실측: apps/engine/data-pipeline/src/data_pipeline/sources/toss.py 헤더 주석)을
 // nextBefore 로 이어 붙인다. 반환은 상류 그대로 최신순(newest-first)·중복 제거본.
 // stopAtDayBoundary: 최신 봉과 다른 날짜에 닿으면 조기 종료 — 최근 거래일 필터용 수집에서
 // 불필요한 페이지를 막는다(호출측이 날짜 필터를 최종 적용한다).

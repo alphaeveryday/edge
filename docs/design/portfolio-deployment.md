@@ -2,7 +2,7 @@
 
 추적: [ALPHA-1266](https://alphaeveryday.atlassian.net/browse/ALPHA-1266)
 
-페이지 주소는 https://etforca.com/portfolio/ 이다. 기존 랜딩 코드는 `src/apps/cloud/app-landing`, React 분석 페이지는 `src/apps/cloud/portfolio-ui`, API와 워커는 `src/apps/cloud/portfolio-worker`에 둔다. 랜딩과 분석 페이지는 각각의 GitHub 배포가 소유한 S3 경로만 갱신한다.
+페이지 주소는 https://etforca.com/portfolio/ 이다. 기존 랜딩 코드는 `apps/etforca/app-landing`, React 분석 페이지는 `apps/etforca/portfolio-ui`, API와 워커는 `apps/etforca/portfolio-worker`에 둔다. 랜딩과 분석 페이지는 각각의 GitHub 배포가 소유한 S3 경로만 갱신한다.
 
 ## 배포 경계
 

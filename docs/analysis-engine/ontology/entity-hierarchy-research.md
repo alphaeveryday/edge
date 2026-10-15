@@ -7,8 +7,8 @@ updated: 2026-07-28
 related:
   - ontology-design-criteria.md
   - specs/event-argument-schema-v1.md
-  - ../../../src/libs/ontology/src/edge_ontology/metadata/value_types/entity_kinds_v0_1.yaml
-  - ../../../src/libs/ontology/src/edge_ontology/metadata/value_types/role_bindings_v0_1.yaml
+  - ../../../libs/ontology/src/edge_ontology/metadata/value_types/entity_kinds_v0_1.yaml
+  - ../../../libs/ontology/src/edge_ontology/metadata/value_types/role_bindings_v0_1.yaml
 ---
 # 실체층 완전 위계 — 연구
 

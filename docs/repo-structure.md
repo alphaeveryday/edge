@@ -3,34 +3,37 @@
 > 루트 README 쇼케이스 재구성으로 옮겨온 문서다. 저장소 구조·워크스페이스·모듈 역할·데이터 흐름의 SSOT.
 
 세 가지 런타임(JVM · Node · Python)을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
-실제 코드는 `src/` 아래에 있으며, 배포되는 실행 단위는 `apps/`, 가져다 쓰는 공유 코드는 `libs/`에 둡니다.
+배포되는 실행 단위는 `apps/<제품>/` 아래, 가져다 쓰는 공유 코드는 `libs/`에 둡니다. 제품은 엔진(`engine`)·B2B(`edgesignal`)·B2C(`etforca`) 셋입니다([ADR-0061](adr/0061-product-axis-directory-layout.md)).
 
 > **프로젝트 상태 — 하이브리드 피벗 재편 중.** JVM 앱(tenant-console-api·super-admin-api·tenant-sync-api·publication-api·sync-agent·intake)은 Spring Boot로 스캐폴드되어 빌드·기동되며, `libs/schema`(Flyway)·`libs/jvm-common`(공통 응답 규약)도 채워졌습니다. 벤더 서빙 embed widget 서버(widget-api)는 하이브리드 온프렘 피벗([ADR-0010](adr/0010-hybrid-onprem-pivot.md))으로, 클라우드 gateway는 [ADR-0032](adr/0032-retire-gateway.md)로 삭제됐고 (위젯 **UI 자체는 빌드 산출물로 납품** — [ADR-0035](adr/0035-widget-ui-build-artifact.md), 벤더 실행 서버 없음), 배포는 **아티팩트 2종(edge-cloud / edge-onprem)** 경계로 재편됩니다([docs/implementation.md](implementation.md) §1). 동기화·반입 경로(sync-agent=DMZ Pull·검증, intake=내부망 수신·저장 — [ADR-0036](adr/0036-sync-agent-intake-topology.md), screening-worker=정책 평가·상태 분기·자동 게시)까지 구현됐습니다.
 
 ## 한눈에 보기
 
 ```
-src/
-├── apps/                     # 배포되는 실행 단위 (플레인별 그룹 — ADR-0029)
-│   ├── cloud/                #   edge-cloud (벤더 운영)
-│   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
-│   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
-│   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
-│   │   ├── app-api/          # JVM    · ETF Orca 앱 API (회원·ETF·커뮤니티·전망 투표, 자체 PostgreSQL·Redis)
-│   │   ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
-│   │   ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
+edge/
+├── apps/                     # 배포되는 실행 단위 (제품별 그룹 — ADR-0061)
+│   ├── engine/               #   수집·분석 공용 상류
 │   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
 │   │   ├── airflow/          # Python · 유한 배치의 Airflow DAG(SFN 에서 레인별 이관 중) · ECS on EC2 이미지·검증 경로(ALPHA-1119)
 │   │   ├── analysis-engine-v2/ # Python · 큐 소비 → SFN 분석 실행 → DB 저장
 │   │   └── db-query/          # Python · 운영 DB 일회성 조회
-│   └── onprem/               #   edge-onprem (증권사 관리 환경)
-│       ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
-│       ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
-│       ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
-│       ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
-│       ├── screening-worker/   # JVM  · 점검 실행 — 상태 분기·자동 게시 (state-machine)
-│       └── publication-api/        # JVM  · MTS 조회 표면 (Published만)
-├── libs/                     # 가져다 쓰는 공유 코드 (플레인 무관 공유)
+│   ├── edgesignal/           #   B2B 산출물 (모듈별 플레인은 apps/edgesignal/README.md 표)
+│   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
+│   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
+│   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
+│   │   ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
+│   │   ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
+│   │   ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
+│   │   ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
+│   │   ├── screening-worker/   # JVM  · 점검 실행 — 상태 분기·자동 게시 (state-machine)
+│   │   └── publication-api/    # JVM  · MTS 조회 표면 (Published만)
+│   └── etforca/              #   B2C 산출물
+│       ├── app-api/          # JVM    · ETF Orca 앱 API (회원·ETF·커뮤니티·전망 투표, 자체 PostgreSQL·Redis)
+│       ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
+│       ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
+│       ├── portfolio-ui/     # Node   · 포트폴리오 화면 (etforca.com/portfolio, React 19)
+│       └── portfolio-worker/ # Python · 포트폴리오 API·워커 (독립 워크스페이스, 전용 PostgreSQL)
+├── libs/                     # 가져다 쓰는 공유 코드 (제품 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
 │   │   └── generated/        #   스키마 파생물 — 생성기가 있는 것은 물리 ERD(DBML) 둘뿐
@@ -43,23 +46,23 @@ src/
 └── pyproject.toml            # Python 루트
 ```
 
-위 트리는 `src/`(코드) 내부다. 저장소 최상위에는 그 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `scripts/`(개발 스크립트 — 로컬 전체 스택 기동 등) · `.dev/`(로컬 스크래치, git 미추적) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
+저장소 최상위에는 위 트리 밖에 `docs/`(설계 문서) · `tests/`(검증 인프라) · `demo/`(데모 — 가상 MTS 정적 화면·mock-broker 데모 서버·온프렘 박스 compose `onprem/`) · `scripts/`(개발 스크립트 — 로컬 전체 스택 기동 등) · `.dev/`(로컬 스크래치, git 미추적) · `out/`(빌드 산출물, git 미추적) · `.claude/`(에이전트 설정)가 있다.
 
 ## 런타임별 워크스페이스
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 8개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker·app-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 8개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker·app-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker · app-api |
-| Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
-| Python | `src/pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology |
+| JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker · app-api |
+| Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
+| Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology |
 
 ## apps — 배포 단위
 
-포트폴리오 서비스는 `src/apps/cloud/portfolio-ui`(React 19)와 `src/apps/cloud/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 기존 분석 엔진·온톨로지에 의존하지 않는다. [설계와 실행 경계](design/portfolio-worker.md).
+포트폴리오 서비스는 `apps/etforca/portfolio-ui`(React 19)와 `apps/etforca/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 기존 분석 엔진·온톨로지에 의존하지 않는다. [설계와 실행 경계](design/portfolio-worker.md).
 
 | 앱 | 런타임 | 아티팩트 | 역할 |
 |---|---|---|---|
@@ -100,7 +103,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
-- `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](../src/libs/schema/README.md)의 Gradle Flyway 태스크로.
+- `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](../libs/schema/README.md)의 Gradle Flyway 태스크로.
 - `generated/` — 스키마로부터 만드는 파생물을 커밋합니다. 현재 있는 생성기는 **물리 ERD** 하나입니다(`scripts/generate-erd.sh` → `physical-erd.dbml`·`physical-erd-onprem.dbml`, pre-commit 훅 + `schema-validate` CI 가 재생성해 커밋본과 대조 — ALPHA-783). **각 언어용 모델 생성기는 아직 없어**, JVM·Python 소비자는 Flyway SQL 을 계약 SSOT로 직접 따릅니다.
 
 ## 데이터 흐름
@@ -119,14 +122,14 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 
 - `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
 - `analysis-engine-v2`의 큐 소비자가 분석 SFN을 시작합니다. v2 워커가 설명·근거를 저장하고 자동 노출 및 테넌트 전달을 처리합니다. 운영 DB의 일회성 조회는 `db-query`를 사용합니다. v1 소스는 제거됐으며 이전 설계 기록은 ADR과 Git 이력에 남습니다.
-- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../src/apps/cloud/data-pipeline/docs/ops-ledger.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
+- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../apps/engine/data-pipeline/docs/ops-ledger.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)이 관통합니다([docs/context.md](context.md) §3) — Screening 은 활성 정책(policy_version·screening_rule)을 평가해 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 로 분기하며(ALPHA-429), 정정(CORRECTION) 전달은 폐지됐고 무효화(INVALIDATION)가 유일한 사후 조치이며([ADR-0044](adr/0044-correction-abolition.md)), 점검 Audit 은 후속(ALPHA-431)입니다.
 
 
 ## 분석엔진 v2 패키지
 
-위치: `src/apps/cloud/analysis-engine-v2/`. 패키지 이름은 역할을 드러내는 소문자 이름과 snake_case를 사용한다. 일반적인 `utils`, `common` 최상위 폴더나 이전 경로의 호환 모듈을 두지 않는다.
+위치: `apps/engine/analysis-engine-v2/`. 패키지 이름은 역할을 드러내는 소문자 이름과 snake_case를 사용한다. 일반적인 `utils`, `common` 최상위 폴더나 이전 경로의 호환 모듈을 두지 않는다.
 
 ```text
 analysis-engine-v2/

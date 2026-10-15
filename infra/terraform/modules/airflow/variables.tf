@@ -155,7 +155,7 @@ variable "verify_enabled" {
 }
 
 variable "verify_image" {
-  description = "검증 태스크 이미지 — 배포된 data-pipeline 이미지 + 검증 shim(src/apps/cloud/airflow/verify)"
+  description = "검증 태스크 이미지 — 배포된 data-pipeline 이미지 + 검증 shim(apps/engine/airflow/verify)"
   type        = string
   default     = ""
 }

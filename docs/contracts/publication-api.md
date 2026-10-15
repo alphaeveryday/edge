@@ -2,7 +2,7 @@
 
 > 이 문서는 증권사 연동 담당자에게 전달되는 연동 기준의 원본이다(대외 산출물 — 표현은 [../writing-rules.md](../writing-rules.md) 준수).
 >
-> **문법 명세(기계가독)** — 경로·필드·타입의 기계가독 명세는 [publication-api/openapi.yaml](../../src/apps/onprem/publication-api/openapi.yaml)(OpenAPI 3.1, ALPHA-498). 이 문서(시맨틱 계약)가 상위 SSOT이고 openapi 는 하위 문법 층이다(TODO §5 2층 구조) — 의미가 충돌하면 이 문서가 이긴다.
+> **문법 명세(기계가독)** — 경로·필드·타입의 기계가독 명세는 [publication-api/openapi.yaml](../../apps/edgesignal/publication-api/openapi.yaml)(OpenAPI 3.1, ALPHA-498). 이 문서(시맨틱 계약)가 상위 SSOT이고 openapi 는 하위 문법 층이다(TODO §5 2층 구조) — 의미가 충돌하면 이 문서가 이긴다.
 
 ## 원칙 (확정)
 

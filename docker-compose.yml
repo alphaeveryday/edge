@@ -47,7 +47,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # SSOT 스키마(src/libs/schema)를 DB 에 적용하고 종료한다.
+  # SSOT 스키마(libs/schema)를 DB 에 적용하고 종료한다.
   # 로컬 전용 시드(seed-local-cloud — SSOT 밖, CI·CD 미포함)를 함께 태운다.
   flyway:
     image: flyway/flyway:10.21.0
@@ -56,8 +56,8 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./src/libs/schema/migrations-cloud:/flyway/sql:ro
-      - ./src/libs/schema/seed-local-cloud:/flyway/seed:ro
+      - ./libs/schema/migrations-cloud:/flyway/sql:ro
+      - ./libs/schema/seed-local-cloud:/flyway/seed:ro
     command: >-
       -url=jdbc:postgresql://postgres:5432/edge
       -user=edge -password=edge
@@ -68,8 +68,8 @@ services:
   # [edge-onprem] 검수 표면(Review Queue 목록·승인·반려) — 온프렘 PG 조회·전이.
   tenant-console-api:
     build:
-      context: ./src
-      dockerfile: apps/onprem/tenant-console-api/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/tenant-console-api/Dockerfile
     container_name: edge-tenant-console-api
     depends_on:
       flyway-onprem:
@@ -85,8 +85,8 @@ services:
 
   super-admin-api:
     build:
-      context: ./src
-      dockerfile: apps/cloud/super-admin-api/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/super-admin-api/Dockerfile
     container_name: edge-super-admin-api
     depends_on:
       flyway:
@@ -139,10 +139,10 @@ services:
       postgres-onprem:
         condition: service_healthy
     volumes:
-      - ./src/libs/schema/migrations-onprem:/flyway/sql:ro
+      - ./libs/schema/migrations-onprem:/flyway/sql:ro
       # 로컬 전용 시드(seed-local-onprem — SSOT 밖, CI·CD 미포함): 증권사 소유
       # 종목 마스터(etf_instrument)가 "이미 있다"를 재현한다.
-      - ./src/libs/schema/seed-local-onprem:/flyway/seed:ro
+      - ./libs/schema/seed-local-onprem:/flyway/seed:ro
     command: >-
       -url=jdbc:postgresql://postgres-onprem:5432/edge_onprem
       -user=edge -password=edge
@@ -154,8 +154,8 @@ services:
   # [edge-onprem] 증권사 백엔드가 호출하는 조회 표면(Published만) — 온프렘 PG 조회.
   publication-api:
     build:
-      context: ./src
-      dockerfile: apps/onprem/publication-api/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/publication-api/Dockerfile
     container_name: edge-publication-api
     depends_on:
       flyway-onprem:
@@ -194,8 +194,8 @@ services:
   # gateway 를 타지 않는다(sync 전용 mTLS ALB — ADR-0034).
   tenant-sync-api:
     build:
-      context: ./src
-      dockerfile: apps/cloud/tenant-sync-api/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/tenant-sync-api/Dockerfile
     container_name: edge-tenant-sync-api
     depends_on:
       flyway:
@@ -212,8 +212,8 @@ services:
   # [edge-onprem] Sync Agent — DMZ 역할. Cloud pull + 체크섬 검증, DB 접근 없음(ADR-0036).
   sync-agent:
     build:
-      context: ./src
-      dockerfile: apps/onprem/sync-agent/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/sync-agent/Dockerfile
     container_name: edge-sync-agent
     depends_on:
       - tenant-sync-api
@@ -228,8 +228,8 @@ services:
   # committed cursor(sync_state)의 권위 소유자(sync-protocol.md). 로컬은 5초 폴링(시연용).
   intake:
     build:
-      context: ./src
-      dockerfile: apps/onprem/intake/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/intake/Dockerfile
     container_name: edge-intake
     depends_on:
       flyway-onprem:
@@ -251,8 +251,8 @@ services:
   # NEW=무조건 통과(AUTO_PUBLISHED)+자동 게시, INVALIDATION=즉시 비노출 (CORRECTION 은 폐지 — ADR-0044).
   screening-worker:
     build:
-      context: ./src
-      dockerfile: apps/onprem/screening-worker/Dockerfile
+      context: .
+      dockerfile: apps/edgesignal/screening-worker/Dockerfile
     container_name: edge-screening-worker
     depends_on:
       flyway-onprem:

@@ -30,7 +30,7 @@
 실행 위치: `src`. `V2_TEST_DSN`은 로컬 `127.0.0.1:55439/analysis_v2` 접속 문자열로 설정.
 
 ```powershell
-uv run --locked --package analysis-engine-v2 pytest -c apps/cloud/analysis-engine-v2/pyproject.toml apps/cloud/analysis-engine-v2/tests apps/cloud/analysis-engine-v2/integration_tests -q
+uv run --locked --package analysis-engine-v2 pytest -c apps/engine/analysis-engine-v2/pyproject.toml apps/engine/analysis-engine-v2/tests apps/engine/analysis-engine-v2/integration_tests -q
 ```
 
 ## 적용 순서

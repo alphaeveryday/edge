@@ -617,7 +617,7 @@ module "data_pipeline" {
   # 실행 주체(ALPHA-1088). ALPHA-1141 상시 운영 전환(2026-10-03 사용자 승인): 장중 수급 5슬롯은 Airflow 가 실행한다.
   # 이 값이 AIRFLOW 면 이 레인의 EventBridge 스케줄 5개는 DISABLED, Reconciler 슬롯 대조는 유지된다.
   # SFN 상태 머신·태스크 정의는 남는다 — 롤백은 이 값을 "SFN" 으로 되돌리는 PR(먼저 Airflow 업무 종료·보류·슬롯
-  # 소유를 확인한다, src/apps/cloud/airflow/README.md "운영 전환·롤백 절차").
+  # 소유를 확인한다, apps/engine/airflow/README.md "운영 전환·롤백 절차").
   investor_intraday_orchestrator = "AIRFLOW"
 
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
@@ -696,12 +696,12 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 }
 
 # ── Airflow 실행 환경 (ALPHA-1119) ──────────────────────
-# 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README src/apps/cloud/airflow
+# 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README apps/engine/airflow
 # "실행 환경"). 실행 주체 전환은 이 블록이 아니라 data_pipeline 의 investor_intraday_orchestrator 가 한다.
 #
 # 메타DB — **기존 업무 RDS(edge-dev) 인스턴스 안의 전용 DB `airflow`·전용 역할 `airflow_meta`**(검증 구성, ALPHA-1119).
 # 새 RDS 를 만들지 않고 인스턴스 사양·파라미터 그룹도 바꾸지 않는다. DB·역할은 TF 가 아니라 검증 절차의 관리
-# 태스크(src/apps/cloud/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
+# 태스크(apps/engine/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
 # DB·역할을 나눠도 인스턴스 자원(메모리·CPU·IOPS·연결 상한·재부팅)은 공유한다. 재사용 가부는 이 검증(장외)의
 # 관측·중단 기준으로 판단한다(README "기존 RDS 재사용 검증"). 장중 재사용은 미검증이다.
 module "airflow" {
@@ -716,7 +716,7 @@ module "airflow" {
   ami_id = "ami-0c15069e7568e5f41"
   # 실제 AWS 단기 검증(ALPHA-1119, 2026-09-29~30) 결과: micro 는 등록 916MiB·호스트 전역 OOM 으로 불가, small·1024 는
   # 업무 task 실행 중 태스크 cgroup OOM 으로 불가. 1408 은 유휴·재시작만 확인했다(업무 실행은 검증 도구 결함으로 미검증).
-  # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
+  # 근거: apps/engine/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
   task_memory   = 1408
   # ALPHA-1141 상시 운영(2026-10-03 승인) — 장중 수급의 실행 환경. 기간에 따라 내리는 장치는 두지 않는다.
@@ -810,7 +810,7 @@ moved {
 
 # ── ETF Orca 랜딩페이지 (etforca.com) ───────────────────
 # 영역과 인증서는 foundation 이 소유한다(route53.tf·acm.tf 의 etforca). 여기서는 조회만 한다.
-# 파일은 src/apps/cloud/app-landing 에 있고 deploy-app-landing.yml 이 버킷에 올린다(index.html·assets/).
+# 파일은 apps/etforca/app-landing 에 있고 deploy-app-landing.yml 이 버킷에 올린다(index.html·assets/).
 data "aws_route53_zone" "etforca" {
   name = var.landing_domain
 }

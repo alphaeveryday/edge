@@ -2,7 +2,7 @@
 
 > **계약 문서** — 진기-영서 인터페이스는 **Cloud Event Store DB 스키마**다([../adr/0026](../adr/0026-ownership-boundary-db.md), db-as-contract). 이 파일 중 스키마 경계면 서술의 변경은 공동 승인 대상(CODEOWNERS)이고, 번들 와이어 포맷(JSON·체크섬)은 Sync 양단 소유자(영서)의 스펙으로 함께 기록한다.
 
-> **기계가독 계약(JSON Schema)** — 번들 JSON 구조의 기계가독 실체는 [`libs/schema/contracts/event-bundle.schema.json`](../../src/libs/schema/contracts/event-bundle.schema.json)(draft 2020-12, ALPHA-497). 이 문서(시맨틱·필드 정의)가 상위 SSOT이고 schema.json 은 그 기계가독 층이다. producer(tenant-sync-api)와 온프렘 소비자(screening-worker `BundleScreener` wire 적재·publication-api `ExplanationStore` 서빙 파싱)가 이 파일을 로드해 전 구간 계약 테스트로 검증하며(`contract-test.yml` CI), tenant-sync-api `openapi.yaml` 도 이 파일을 `$ref` 한다.
+> **기계가독 계약(JSON Schema)** — 번들 JSON 구조의 기계가독 실체는 [`libs/schema/contracts/event-bundle.schema.json`](../../libs/schema/contracts/event-bundle.schema.json)(draft 2020-12, ALPHA-497). 이 문서(시맨틱·필드 정의)가 상위 SSOT이고 schema.json 은 그 기계가독 층이다. producer(tenant-sync-api)와 온프렘 소비자(screening-worker `BundleScreener` wire 적재·publication-api `ExplanationStore` 서빙 파싱)가 이 파일을 로드해 전 구간 계약 테스트로 검증하며(`contract-test.yml` CI), tenant-sync-api `openapi.yaml` 도 이 파일을 `$ref` 한다.
 
 > **상태: 합의 진행 (v4, 2026-07-24)** — 물리 스키마(V202607150001)와 초안(ALPHA-356)을 병합했고, 전달 레코드(outbox)를 `tenant_delivery`로 확정했다(ALPHA-396). `source_events`·`evidences` 경계면 컬럼까지 확정했다(ALPHA-395, 아래 "경계면 컬럼" 절). 영서 단독 결정은 모두 확정됐고, 열린 항목은 진기 확인 대상(스키마 `tenant`·`tenant_credential` 정의, 선별 nullable 컬럼 채움 보증)뿐이다.
 
@@ -36,7 +36,7 @@
 
 ## Cloud Event Store 스키마
 
-**물리 정의는 [`src/libs/schema/migrations-cloud/`](../../src/libs/schema/migrations-cloud/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), sync cursor 정정은 `V202607150002`(ALPHA-356). 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
+**물리 정의는 [`libs/schema/migrations-cloud/`](../../libs/schema/migrations-cloud/)의 Flyway SQL이다** — generated 모델 생성기가 없는 현재는 이 SQL이 계약을 정의한다([implementation.md](../implementation.md) §4). 최초 도입은 `V202607150001__replace_analysis_mart_with_etf_explanation_schema.sql`(ALPHA-359, 47개 테이블, `public` 스키마), sync cursor 정정은 `V202607150002`(ALPHA-356). 이 경로는 CODEOWNERS로 이 문서와 같은 양자 합의 게이트에 묶여 있다.
 
 **v4 아규먼트 축 확장(ALPHA-544, `V202607242020__add_event_argument_axes.sql`)**: `event_measure` 신규(값형 아규먼트) + `event_argument.slot·mention_text·entity_kind·group_ord` + `source_event.predicate_code·confidence_level·completeness`. 전부 additive(nullable 컬럼·신규 테이블)라 **경계면 컬럼 선별(ALPHA-395)과 번들 형상에 영향 없음** — 번들 미탑재, reader 무영향. 값·참여자 축의 번들 탑재 여부는 검수 UI 요구 발생 시 별도 합의.
 
@@ -157,7 +157,7 @@ reader(영서) 단독 결정. 온프렘 검수 UI 요구(관련 뉴스/공시·�
 - **변경 감지 대상(스키마 의존)**: 위 선별 컬럼은 물리 스키마에 의존하므로 변경 시 계약 영향 검토 대상이다 — `source_event(source_event_id, source_class, event_type_code, event_date)` · `document(document_type, title, source_code, published_at, source_uri)` · lineage 경로 `explanation_run_event_evidence` · `event_evidence(evidence_id, source_event_id, assertion_id)` · `document_assertion(assertion_id, document_id)` · 공시 갈래 `explanation_run_disclosure_fact(explanation_run_id, fact_id)` · `disclosure_fact(fact_id, document_id)`.
 - **채움 보증 확인(진기, CODEOWNERS 리뷰)**: nullable 선별 컬럼은 `source_event.event_date`·`document.title`·`document.published_at`·`document.source_uri`다(`document.document_type`·`source_code`는 NOT NULL). `document.title`·`document.published_at`("관련 뉴스/공시" 제목·날짜)·`source_event.event_date`(타임라인 축)는 결정적 채움 보증 확인 대상. `document.source_uri` 는 실측 완료(2026-08-04, ALPHA-739): 공시=항상(DART 뷰어 URL 을 rcpNo 로 조립)·1분 뉴스=원천 URL 있으면 채움(canonical_news DO UPDATE — bigkinds `PROVIDER_LINK_PAGE` 결측 기사는 NULL)·**EOD 뉴스=조건부 결측**(assemble_events 선적재 시 NULL — 해소는 ALPHA-740). 어느 레인이든 NULL 이 가능하므로 계약은 nullable·optional 이다. 계약·구현(497)은 nullable 필드를 nullable로 모델링한다.
 
-**형상** (두 배열 모두 조립 구현됨(ALPHA-718) — lineage 없는 런은 `[]`. 기계가독 스키마([event-bundle.schema.json](../../src/libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
+**형상** (두 배열 모두 조립 구현됨(ALPHA-718) — lineage 없는 런은 `[]`. 기계가독 스키마([event-bundle.schema.json](../../libs/schema/contracts/event-bundle.schema.json))는 요소 형상을 정의하되 `minItems: 0`이라 빈 배열·populated 둘 다 수용, ALPHA-497):
 
 ```json
 "source_events": [ { "source_event_id": "...", "source_class": "DISCLOSURE", "event_type_code": "...", "event_date": "2026-07-14" } ],

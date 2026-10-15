@@ -25,7 +25,7 @@
 - 기본값 `'{}'` 누락 6곳: `movement_items.tool_run_ids`, `outlook_items.tool_run_ids`, `outlook_conclusion_keywords.tool_run_ids`, `tool_definitions.source_names`, `tool_runs.arguments`, `tool_runs.context`.
 - “8개 테이블”, “지표 카드 범위 밖”, 미적용 계획 설명을 현재 구현과 구분했다. 당일 강조 보존과 발행 검증 범위도 코드에 맞췄다.
 
-`python docs/data-model/domains/analysis-v2/validate.py`는 101개 컬럼의 타입·NULL 허용·PK·기본값, FK 대상 컬럼, 고유키와 draw.io 컬럼을 대조한다. 전체 도메인 그림은 `python -X utf8 src/libs/schema/scripts/validate-doc-erd.py`로 검증한다. 두 검사를 PR CI에서도 실행한다. SQL 파서는 `validate.py`에 명시된 v2 마이그레이션을 대상으로 하므로 후속 변경 때 기준을 확장해야 한다.
+`python docs/data-model/domains/analysis-v2/validate.py`는 101개 컬럼의 타입·NULL 허용·PK·기본값, FK 대상 컬럼, 고유키와 draw.io 컬럼을 대조한다. 전체 도메인 그림은 `python -X utf8 libs/schema/scripts/validate-doc-erd.py`로 검증한다. 두 검사를 PR CI에서도 실행한다. SQL 파서는 `validate.py`에 명시된 v2 마이그레이션을 대상으로 하므로 후속 변경 때 기준을 확장해야 한다.
 
 이 검사는 **DDL·생성 스키마와 문서 일치 검증**이며, 실제 DB 카탈로그와 대조한 것이 아니다.
 

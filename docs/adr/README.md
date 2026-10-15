@@ -8,7 +8,7 @@
 
 | ADR | 제목 | 상태 |
 |---|---|---|
-| [0001](0001-monorepo-structure.md) | 모노레포·폴리글랏 워크스페이스 구조 | 승인됨 |
+| [0001](0001-monorepo-structure.md) | 모노레포·폴리글랏 워크스페이스 구조 | 승인됨 (`src/` 배치는 [0061](0061-product-axis-directory-layout.md)로 대체) |
 | [0002](0002-agent-instructions-ssot.md) | 에이전트 지침은 AGENTS.md 단일 출처 | 승인됨 |
 | [0003](0003-branch-strategy.md) | 브랜치 전략 — dev 경유 엄격한 사다리 | 승인됨 |
 | [0004](0004-squash-only-merge.md) | Squash 전용 머지 | 대체됨 (→ [0007](0007-merge-strategy.md)) |
@@ -36,7 +36,7 @@
 | [0026](0026-ownership-boundary-db.md) | 팀 오너십 경계 정정 — 진기는 DB 적재까지, 인터페이스는 DB 스키마 | 승인됨 |
 | [0027](0027-entity-id-scheme.md) | 도메인 ID 체계 — 불투명 서로게이트(ULID), 외부 식별자는 속성 | 승인됨 |
 | [0028](0028-unified-pipeline-sfn.md) | 파이프라인 SFN 통합 — feature/분석 경계 (분석은 ALPHA-806 에서 예고대로 큐 소비자로 분리 → SFN 은 3페이즈) | 승인됨 (raw 게이트 대체 → [0030](0030-raw-phase-partial-failure.md)) |
-| [0029](0029-apps-plane-grouping.md) | apps 플레인 그룹핑 · schema 마이그레이션 세트 대칭 명명 | 승인됨 |
+| [0029](0029-apps-plane-grouping.md) | apps 플레인 그룹핑 · schema 마이그레이션 세트 대칭 명명 | 승인됨 (플레인 그룹핑은 [0061](0061-product-axis-directory-layout.md)로 대체) |
 | [0030](0030-raw-phase-partial-failure.md) | raw 페이즈는 부분 실패를 격리한다 — 전량 성공 게이트 제거 | 승인됨 |
 | [0031](0031-serving-to-publication.md) | serving-api를 Publication 도메인으로 리네이밍 | 승인됨 (호출자·노출 기록 조항 대체 → [0053](0053-widget-direct-serving-no-personalization.md)) |
 | [0032](0032-retire-gateway.md) | gateway 은퇴 — 클라우드 엣지를 ALB 직결로 | 승인됨 |
@@ -68,3 +68,4 @@
 | [0058](0058-airflow-on-ecs-ec2.md) | 유한 배치의 Airflow 실행 환경 — ECS on EC2 자체 운영 | 승인됨 (메타DB 는 기존 업무 RDS 안 DB — ADR 상태 추기) |
 | [0059](0059-target-etf-selection-criteria.md) | 대상 ETF 선정 기준 — 국내 주식형에서 테마별 거래대금 상위 10종 ([0024](0024-scope-domestic-etf.md) 구체화) | 제안됨 |
 | [0060](0060-dedicated-kis-key-for-minute-price.md) | 분 가격 수집을 전용 KIS 키로 분리 — 공유 호출 예산은 켜지 않는다 ([0055](0055-kis-shared-call-budget-on-postgres.md) 를 대체하지 않음) | 제안됨 |
+| [0061](0061-product-axis-directory-layout.md) | 제품 축 디렉터리 배치와 src/ 제거 ([0001](0001-monorepo-structure.md)·[0029](0029-apps-plane-grouping.md) 일부 대체) | 승인됨 |

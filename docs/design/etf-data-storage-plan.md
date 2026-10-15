@@ -13,7 +13,7 @@ ETF 자체 수급과 구성종목 수급을 모두 확보하고 구성종목 가
 연속일수를 알아낼 때까지만 수집하거나 특정 화면의 조회 기간에 맞춰 이력을 잘라내지 않는다.
 모델의 산식·예측 기간은 모델 담당 영역이며 데이터 수집의 선행 조건이 아니다. 가격 트리거는 기존 방식을 유지한다.
 
-기존 경로의 코드 정본은 [storage.py](../../src/apps/cloud/data-pipeline/src/data_pipeline/lake/storage.py)다.
+기존 경로의 코드 정본은 [storage.py](../../apps/engine/data-pipeline/src/data_pipeline/lake/storage.py)다.
 기존 수작업·백필 경로는 [데이터 소스 통일 스펙](data-source-unification-spec.md)을 따른다.
 이 초안은 두 정본을 대체하지 않으며 신규 이름은 구현 전 제안이다.
 
@@ -252,7 +252,7 @@ DataGuide의 지표를 KIS/FMP의 유사한 이름 지표로 대체하는 것도
 
 ## 10. 분석 v2 원천 관측의 저장·소비 계약 (ALPHA-1130)
 
-상태: **배포·첫 소량 수집 완료(2026-10-02, ALPHA-1136) — 정기 비활성.** dev DB 에 매크로 2계열·업종·재무 표본이 실렸다(실행 기록은 `src/apps/cloud/airflow/README.md` "첫 소량 실행 결과"). 원장 연결 실행·정기 활성화는 ALPHA-1140. §9를 적용한 첫 데이터셋 셋이다. 입력 요구는
+상태: **배포·첫 소량 수집 완료(2026-10-02, ALPHA-1136) — 정기 비활성.** dev DB 에 매크로 2계열·업종·재무 표본이 실렸다(실행 기록은 `apps/engine/airflow/README.md` "첫 소량 실행 결과"). 원장 연결 실행·정기 활성화는 ALPHA-1140. §9를 적용한 첫 데이터셋 셋이다. 입력 요구는
 "v2 필요 데이터와 확보 현황"(2026-09-26 조사): KODEX 반도체(091160)와 **각 분석 시점의** 전체 구성종목, 매크로 5계열.
 결정(2026-09-30 확인): ① 과거 가시시각은 공급자 공개일 증거가 있는 자료(DART 접수일)만 재구성하고 매크로 백필은 수신시각 기준,
 ② 재무 Q4 = FY − 9개월 누적(유도 표시), ③ 연결 우선·연결 재무제표가 없는 회사만 별도.
@@ -558,7 +558,7 @@ KIS 마스터 = 인증 없는 공개 파일, ECOS = 공식 문서의 공개 샘�
 
 **v2 최소 변경안(제안 — 분석 담당 합의 전, 미적용):**
 
-- **현재 필터 위치와 동작**: `src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/sources/database.py` `load_source` 의 status 조회(`… AND trade_date<=%s AND loaded_at<=%s ORDER BY trade_date DESC LIMIT 40`). status 의 `loaded_at` 이 T 이후면 그 스냅샷을 통째로 건너뛴다. 그 뒤 행은 `available_at ≤ T` 로 다시 거르고, 유효 행 수가 `valid_row_count` 와 다르면 `Holdings rows and ingestion status disagree` 로 실패한다.
+- **현재 필터 위치와 동작**: `apps/engine/analysis-engine-v2/src/edge_analysis_v2/sources/database.py` `load_source` 의 status 조회(`… AND trade_date<=%s AND loaded_at<=%s ORDER BY trade_date DESC LIMIT 40`). status 의 `loaded_at` 이 T 이후면 그 스냅샷을 통째로 건너뛴다. 그 뒤 행은 `available_at ≤ T` 로 다시 거르고, 유효 행 수가 `valid_row_count` 와 다르면 `Holdings rows and ingestion status disagree` 로 실패한다.
 - **조건만 지우면 안 된다**: status 는 날짜만으로 보이는데 행은 아직 안 보이는 시각이 생겨 위 불일치 실패가 난다(아래 표 1b·3·5).
 - **제안**: `loaded_at<=%s` 를 "그 스냅샷(같은 `data_version`)에 `available_at > T` 인 행이 없다"로 바꾼다. 스냅샷이 보이는 시각이 적재 시각에서 **마지막 행의 수집 시각**으로 옮겨진다. 아래 로컬 확인의 여덟 경우에서는 새 실패가 없었다(행이 없는 status 는 예외 — 아래 "달라지는 것"). 한 곳의 SQL 만 바뀐다:
 
