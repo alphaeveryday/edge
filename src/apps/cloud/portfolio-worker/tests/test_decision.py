@@ -239,7 +239,7 @@ async def test_service_eligible_candidate_cannot_publish_after_customer_constrai
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     result = await run_analysis(request(question='VOO는 30% 이하'), 'test-only', phases.append,
                                 model_call=model, evidence=Evidence())
-    assert len(repairs) == (2 if reject_first else 1)
+    assert len(repairs) == (4 if reject_first else 1), 'Customer constraint failures still receive recovery after two search batches'
     assert result['recommendation'] is None
     assert result['customer_constraint_checks'][0]['status'] == ('model_review' if unverified else 'fail' if reject_first else 'unknown')
     assert result['optimization']['reason'] == ('CUSTOMER_CONSTRAINT_NOT_SATISFIED' if reject_first else 'RECOMMENDATION_WITHHELD')
