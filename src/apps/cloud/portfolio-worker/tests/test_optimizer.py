@@ -511,14 +511,33 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
 
 async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch):
     request, market, groups = batch()
-    started = []
+    semaphore, timeout = market.semaphore, asyncio.timeout
+    owners, started, deadlines, active_counts = set(), [], [], []
+    class ObservedSlots:
+        async def __aenter__(self):
+            await semaphore.__aenter__()
+            owners.add(asyncio.current_task())
+            active_counts.append(len(owners))
+        async def __aexit__(self, *args):
+            owners.remove(asyncio.current_task())
+            return await semaphore.__aexit__(*args)
+    def provider_timeout(seconds):
+        if seconds == .07:
+            assert asyncio.current_task() in owners, 'Provider timeout must begin after acquiring its slot'
+            deadlines.append(seconds)
+            return timeout(10)  # Ordering, not host scheduling latency, is under test here.
+        return timeout(seconds)
     async def fetch(symbol, _, **kwargs):
         started.append(symbol)
-        await asyncio.sleep(.04)
+        await asyncio.sleep(0)
         return record()
+    market.semaphore = ObservedSlots()
     monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .07)
+    monkeypatch.setattr(asyncio, 'timeout', provider_timeout)
     result = await Optimizer(market, request).tool({'combinations': groups})
+    assert len(deadlines) == 5
+    assert max(active_counts) == 2
     assert result['status'] == 'available'
     assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
     assert not market.failures
