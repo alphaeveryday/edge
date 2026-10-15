@@ -112,7 +112,7 @@ jobs:
 
       - name: pytest ${{ matrix.app }}
         working-directory: .
-        run: uv run --package ${{ matrix.app }} pytest apps/cloud/${{ matrix.app }}/tests -q
+        run: uv run --package ${{ matrix.app }} pytest apps/engine/${{ matrix.app }}/tests -q
 
       - name: pytest ontology contracts
         if: matrix.app == 'data-pipeline'
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: docker build ${{ matrix.app }}
-        run: docker build -f src/apps/cloud/${{ matrix.app }}/Dockerfile .
+        run: docker build -f apps/engine/${{ matrix.app }}/Dockerfile .
 
 
   # ── 뉴스 조립 → v2 조회 계보와 DB 경계 E2E ─────────────────

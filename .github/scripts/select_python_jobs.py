@@ -64,8 +64,8 @@ def select_jobs(paths: list[str], available: set[str]) -> dict:
                 requested.add("analysis-engine-v2")
         elif path.startswith("apps/engine/analysis-engine-v2/"):
             requested.add("analysis-engine-v2")
-        elif any(path.startswith(f"src/apps/cloud/{app}/") for app in APPS):
-            apps.update(app for app in APPS if path.startswith(f"src/apps/cloud/{app}/"))
+        elif any(path.startswith(f"apps/engine/{app}/") for app in APPS):
+            apps.update(app for app in APPS if path.startswith(f"apps/engine/{app}/"))
         elif path.startswith("apps/engine/airflow/dags/") or path == "apps/engine/airflow/tests/ecs_stop_cases.json":
             apps.add("data-pipeline")  # DAG constants and shared ECS termination cases.
         elif path in {"pyproject.toml", "uv.lock", ".dockerignore", ".github/workflows/test-python.yml"} or path.startswith((".github/scripts/", ".github/tests/")):

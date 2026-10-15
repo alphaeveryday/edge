@@ -43,4 +43,4 @@ jobs:
     uses: ./.github/workflows/deploy-app.yml
     with:
       app: app-api
-      plane: cloud
+      product: etforca

@@ -42,4 +42,4 @@ jobs:
     uses: ./.github/workflows/deploy-app.yml
     with:
       app: tenant-sync-api
-      plane: cloud
+      product: edgesignal

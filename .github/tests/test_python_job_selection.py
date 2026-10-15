@@ -30,7 +30,7 @@ class SelectionTests(unittest.TestCase):
     def test_legacy_app_change_keeps_its_tests_build_and_integration(self):
         for app in ("data-pipeline", "db-query"):
             with self.subTest(app=app):
-                result = self.select(f"src/apps/cloud/{app}/source.py")
+                result = self.select(f"apps/engine/{app}/source.py")
                 self.assertEqual(result["legacy"], [app])
                 self.assertEqual(result["images"], [app])
                 self.assertTrue(result["e2e"])
@@ -78,8 +78,7 @@ class SelectionTests(unittest.TestCase):
     def test_optional_package_must_be_registered_and_present(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            source = root / "src"
-            source.mkdir()
+            source = root
             (source / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=[]\n')
             self.assertEqual(selection.available_optional(root), set())
             package = source / "apps/engine/analysis-engine-v2"
@@ -87,7 +86,7 @@ class SelectionTests(unittest.TestCase):
             (package / "pyproject.toml").write_text('[project]\nname="analysis-engine-v2"\n')
             with self.assertRaisesRegex(ValueError, "workspace"):
                 selection.available_optional(root)
-            (source / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["apps/cloud/*"]\n')
+            (source / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["apps/engine/*"]\n')
             self.assertEqual(selection.available_optional(root), {"analysis-engine-v2"})
 
     def test_expected_skips_pass_but_selected_skips_fail(self):
