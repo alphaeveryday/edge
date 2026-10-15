@@ -56,9 +56,10 @@ NODES.forEach(n=>{
   const owned=GRAPH.cells.filter(c=>OWNER[c]===id).map(c=>byId(c)).filter(Boolean).map(text).filter(Boolean);
   n.setAttribute('aria-label',text(n)||owned.join(' · ')||'다이어그램 노드');
 });
+// 가상 간선(--link)은 SVG 요소가 없어 강조 전파에만 쓴다
 GRAPH.edges.forEach(([id,a,b])=>{
-  const g=byId(id); if(!g) return;
-  g.classList.add('cell','edge'); g.dataset.a=a; g.dataset.b=b; CELLS.push(g); EDGES.push(g);
+  const g=byId(id)||document.createElementNS('http://www.w3.org/2000/svg','g');
+  g.classList.add('cell','edge'); g.dataset.a=a; g.dataset.b=b; g.dataset.cellId=id; CELLS.push(g); EDGES.push(g);
 });
 let SEL=null;
 function mark(id, cls, selCls){
@@ -66,7 +67,7 @@ function mark(id, cls, selCls){
   if(id){
     on[id]=true;
     EDGES.forEach(e=>{const hit=e.dataset.a===id||e.dataset.b===id; e.classList.toggle(cls,hit);
-      if(hit){on[e.dataset.a]=true; on[e.dataset.b]=true; on[e.dataset.cellId]=true; e.parentNode.appendChild(e);}});
+      if(hit){on[e.dataset.a]=true; on[e.dataset.b]=true; on[e.dataset.cellId]=true; if(e.parentNode) e.parentNode.appendChild(e);}});
   } else EDGES.forEach(e=>e.classList.remove(cls));
   const childCls=cls==='on'?'on-c':'pk-c';
   const kept=cid=>{let o=OWNER[cid],hop=0; while(o&&hop++<20){if(on[o]) return true; o=OWNER[o];} return false;};

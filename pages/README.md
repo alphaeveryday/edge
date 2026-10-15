@@ -19,4 +19,5 @@ mkdocs build -f pages/mkdocs.yml --strict   # 또는 mkdocs serve -f pages/mkdoc
 다이어그램 5(데이터 파이프라인)의 뷰어 HTML(`interactive/5-dp.v1~v5.html`)은 커밋돼 있고, 원본 drawio(레포 밖,
 판 v0.3·v0.4·v2.0·v2.5·v3.1 = 단계 v1~v5)가 바뀌면
 `python pages/scripts/build_pipeline_diagram.py <원본.drawio> pages/docs/diagrams/interactive/5-dp.v<N>.html --title "…" --hide title`
-로 다시 만든다(`--hide` 는 도면 제목 셀을 뷰어에서만 뺀다) — draw.io 데스크톱 CLI 가 필요하다(`DRAWIO_BIN`).
+로 다시 만든다(`--hide` 는 도면 제목 셀을 뷰어에서만 뺀다. v2 는 화살표 없는 관계를 `--link ds_card:par_evt,ds_card:par_ana` 로 더 잇는다) —
+draw.io 데스크톱 CLI 가 필요하다(`DRAWIO_BIN`).

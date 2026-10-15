@@ -9,6 +9,7 @@ export 한 SVG 를 그대로 품고(셀 id 가 `data-cell-id` 로 남는다), dr
     python pages/scripts/build_pipeline_diagram.py <원본.drawio> <출력.html> --title "…" [--hide 셀id,셀id]
 
 `--hide` 는 도면 안의 제목 같은 장식 셀을 뷰어에서만 뺀다 — 원본은 손대지 않고 임시 사본에서 지운 뒤 export 한다.
+`--link a:b` 는 도면에 화살표가 없는 관계를 강조용으로만 잇는다(그림에는 안 그린다).
 대상 없이 점으로 끝나는 화살표(예: DeepSeek 아이콘을 가리키는 것)는 끝점이 놓인 상자에 연결한 것으로 본다.
 draw.io 데스크톱 CLI 가 필요하다 (DRAWIO_BIN 으로 경로 지정, 기본은 macOS 앱 경로).
 """
@@ -50,7 +51,7 @@ def export_svg(tree: ET.ElementTree) -> str:
             return f.read()
 
 
-def read_graph(tree: ET.ElementTree) -> dict:
+def read_graph(tree: ET.ElementTree, links: list[tuple[str, str]] = ()) -> dict:
     root = tree.getroot()
     cells = root.findall(".//mxCell")
     layers = {c.get("id") for c in cells if c.get("parent") == "0"}
@@ -73,16 +74,21 @@ def read_graph(tree: ET.ElementTree) -> dict:
             g = c.find("mxGeometry")
             boxes[c.get("id")] = tuple(float(g.get(k, 0)) for k in ("x", "y", "width", "height"))
 
-    def at_point(pt):  # 점을 담는 가장 작은 상자 — 대상 없이 점으로 끝난 화살표용. 담는 상자가 없을 때만 30px 근방을 본다
-        for pad in (0, 30):
-            best = None
-            for bid, (x, y, w, h) in boxes.items():
-                if x - pad <= pt[0] <= x + w + pad and y - pad <= pt[1] <= y + h + pad:
-                    if best is None or w * h < boxes[best][2] * boxes[best][3]:
-                        best = bid
-            if best:
-                return best
-        return None
+    def contains(outer, inner):
+        ox, oy, ow, oh = boxes[outer]; x, y, w, h = boxes[inner]
+        return outer != inner and ox <= x and oy <= y and x + w <= ox + ow and y + h <= oy + oh
+
+    def at_point(pt, pad=30):
+        """대상 없이 점으로 끝난 화살표의 끝점이 가리키는 상자.
+        30px 안의 후보 중, 다른 후보를 담고 있는 컨테이너는 빼고(점이 살짝 빗나간 아이콘이 레인에 먹히지 않게),
+        남은 것에서 점을 담는 쪽을 먼저, 없으면 가장 작은 쪽을 고른다(바로 옆 작은 장식 셀이 본 대상을 가로채지 않게,
+        살짝 빗나간 끝점이 가까운 띠보다 아이콘으로 가게)."""
+        def dist(b):
+            x, y, w, h = boxes[b]
+            return max(x - pt[0], 0, pt[0] - (x + w)) + max(y - pt[1], 0, pt[1] - (y + h))
+        cands = [b for b in boxes if dist(b) <= pad]
+        cands = [b for b in cands if not any(contains(b, o) for o in cands)]
+        return min(cands, key=lambda b: (dist(b) > 0, boxes[b][2] * boxes[b][3]), default=None)
 
     resolved = []
     for e in edges:
@@ -96,6 +102,10 @@ def read_graph(tree: ET.ElementTree) -> dict:
         if ends[0] and ends[1] and ends[0] != ends[1]:
             resolved.append([e.get("id"), ends[0], ends[1]])
     edges = resolved
+    for a, b in links:  # 그림에 없는 관계 — 강조용 가상 간선(SVG 요소 없음)
+        if a not in boxes or b not in boxes:
+            raise SystemExit(f"--link {a}:{b}: 도면에 없는 셀")
+        edges.append([f"link:{a}:{b}", a, b])
     conn = {a for _, a, _ in edges} | {b for _, _, b in edges}
     # 모든 셀의 소유자 = 자기를 담는 가장 작은(더 큰) 인터랙티브 셀. 소유자가 강조되면 안쪽이 통째로 따라간다.
     for cid, (x, y, w, h) in boxes.items():
@@ -183,9 +193,10 @@ NODES.forEach(n=>{
   const owned=GRAPH.cells.filter(c=>OWNER[c]===id).map(c=>byId(c)).filter(Boolean).map(text).filter(Boolean);
   n.setAttribute('aria-label',text(n)||owned.join(' · ')||'다이어그램 노드');
 });
+// 가상 간선(--link)은 SVG 요소가 없어 강조 전파에만 쓴다
 GRAPH.edges.forEach(([id,a,b])=>{
-  const g=byId(id); if(!g) return;
-  g.classList.add('cell','edge'); g.dataset.a=a; g.dataset.b=b; CELLS.push(g); EDGES.push(g);
+  const g=byId(id)||document.createElementNS('http://www.w3.org/2000/svg','g');
+  g.classList.add('cell','edge'); g.dataset.a=a; g.dataset.b=b; g.dataset.cellId=id; CELLS.push(g); EDGES.push(g);
 });
 let SEL=null;
 function mark(id, cls, selCls){
@@ -193,7 +204,7 @@ function mark(id, cls, selCls){
   if(id){
     on[id]=true;
     EDGES.forEach(e=>{const hit=e.dataset.a===id||e.dataset.b===id; e.classList.toggle(cls,hit);
-      if(hit){on[e.dataset.a]=true; on[e.dataset.b]=true; on[e.dataset.cellId]=true; e.parentNode.appendChild(e);}});
+      if(hit){on[e.dataset.a]=true; on[e.dataset.b]=true; on[e.dataset.cellId]=true; if(e.parentNode) e.parentNode.appendChild(e);}});
   } else EDGES.forEach(e=>e.classList.remove(cls));
   const childCls=cls==='on'?'on-c':'pk-c';
   const kept=cid=>{let o=OWNER[cid],hop=0; while(o&&hop++<20){if(on[o]) return true; o=OWNER[o];} return false;};
@@ -272,11 +283,13 @@ def main() -> None:
     ap.add_argument("out")
     ap.add_argument("--title", required=True)
     ap.add_argument("--hide", default="", help="뷰어에서 뺄 셀 id (쉼표 구분) — 원본은 그대로")
+    ap.add_argument("--link", default="", help="화살표 없이 강조만 이을 셀 쌍 a:b (쉼표 구분)")
     a = ap.parse_args()
     tree = load(a.drawio, {h for h in a.hide.split(",") if h})
-    graph = read_graph(tree)
+    graph = read_graph(tree, [tuple(l.split(":", 1)) for l in a.link.split(",") if l])
     svg, w, h = slim_svg(export_svg(tree))
-    missing = [i for i in graph["cells"] + [e[0] for e in graph["edges"]] if f'data-cell-id="{i}"' not in svg]
+    drawn = [e[0] for e in graph["edges"] if not e[0].startswith("link:")]
+    missing = [i for i in graph["cells"] + drawn if f'data-cell-id="{i}"' not in svg]
     if missing:
         raise SystemExit(f"SVG 에 없는 셀 id {len(missing)}개 — 뷰어가 그 노드를 잃는다: {missing[:10]}")
     graph.update(w=w, h=h)
