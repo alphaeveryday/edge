@@ -75,7 +75,7 @@ GET count ─▶ VoteService.counts()  Redis, 실패 시 DB 집계로 폴백 (so
 
 **서킷 범위.** `VOTE_CIRCUIT_SCOPE` 로 고른다(기본 `shard`).
 - `global`: 인스턴스 `redis` 하나로 Redis 전체를 한 단위로 판단한다.
-- `shard`: `RedisCircuit` 이 키 슬롯을 소유한 마스터의 첫 슬롯 번호로 서킷(`redis-shard-0`·`redis-shard-5461`·…)을 골라 장애 샤드만 차단한다. 슬롯 표는 Lettuce `Partitions` 를 그대로 쓰므로 페일오버(노드만 바뀜)엔 상태가 이어지고 리샤딩(소유자 바뀜)엔 옮긴 슬롯이 새 샤드 서킷을 따른다. Cluster 가 아니면 `shard` 여도 전역으로 동작한다.
+- `shard`: `RedisCircuit` 이 키 슬롯을 소유한 마스터의 첫 슬롯 번호로 서킷(`redis-shard-0`·`redis-shard-5461`·…)을 골라 장애 샤드만 차단한다. 슬롯 표는 Lettuce `Partitions` 를 그대로 쓰므로 페일오버(노드만 바뀜)에는 상태가 이어지고 리샤딩(소유자 바뀜)에는 옮긴 슬롯이 새 샤드 서킷을 따른다. Cluster 가 아니면 `shard` 여도 전역으로 동작한다.
 
 ## 실측
 
@@ -139,9 +139,9 @@ GET count ─▶ VoteService.counts()  Redis, 실패 시 DB 집계로 폴백 (so
 | C4 샤드 서킷 | SIGKILL | 0% | **0%** | 4 | 0 | 33 |
 | C4 | pause·partition | 0% | 0% | 13 | 0 | 33 |
 
-¹ 서킷 off 는 실패율 임계치 100% 로 무력화한 것이라 완전한 off 가 아니다 — 창(20건)이 전부 실패하면 열린다. C1 두 런은 주입 60초 뒤(during 창 밖), C2 kill 한 런(021853)은 0.2초 만에 열렸다. 표에 쓴 C2 런(022148)은 개방 0건이다.
+¹ 서킷 off 는 실패율 임계치 100% 로 무력화한 것이라 완전한 off 가 아니다. 창(20건)이 전부 실패하면 열린다. C1 두 런은 주입 60초 뒤(during 창 밖), C2 kill 한 런(021853)은 0.2초 만에 열렸다. 표에 쓴 C2 런(022148)은 개방 0건이다.
 
-replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤드 조회 폴백은 전 런 0%. 승격 뒤 장애 샤드 조회가 Redis 로 돌아오기까지는 0.5~2.7초 또는 6.9~7.4초의 두 무리로 갈리며 topology refresh 설정 유무와 무관했다 — 원인은 확인하지 않았다.
+replica 승격(`KILL_REPLICA=false`, C4, 10런): 승격 7.0~9.0초, 정상 샤드 조회 폴백은 전 런 0%. 승격 뒤 장애 샤드 조회가 Redis 로 돌아오기까지는 0.5~2.7초 또는 6.9~7.4초의 두 구간으로 나뉘며 topology refresh 설정 유무와 무관했다. 원인은 확인하지 않았다.
 
 Cluster 개념 설명은 [블로그](https://choyoungseo20.github.io/posts/redis-cluster/)에 있다.
 
@@ -195,13 +195,13 @@ HOT=failed FAULT=kill python3 run-cluster.py C4  # C1 기본값 / C2 500ms·REJE
 
 **Service 는 구체 클래스가 기본.** 구현을 바꿔 끼울 사정이 없으면 클래스 하나. 미리 두는 인터페이스는 추측성 추상화라 두지 않는다.
 
-**도메인 간 참조.** 다른 도메인 것은 Service 가 아니라 Repository 를 직접 읽는다(Service 끼리 부르면 순환·계층 비대). 쓰기는 자기 도메인만 한다. 부수 효과(글 작성 후 알림 생성 등)는 `MemberWithdrawn` 처럼 이벤트로 넘긴다.
+**도메인 간 참조.** 다른 도메인의 데이터는 Service 가 아니라 Repository 를 직접 읽는다(Service 끼리 부르면 순환·계층 비대). 쓰기는 자기 도메인만 한다. 부수 효과(글 작성 후 알림 생성 등)는 `MemberWithdrawn` 처럼 이벤트로 넘긴다.
 
 **인증.** 회원 `Authorization: Bearer` 액세스 JWT + DB 저장 리프레시, 게스트 `X-Device-Id`. 둘 다 있으면 토큰 우선. common 의 `AuthFilter` 가 해석하고 리졸버가 인자 타입으로 넘긴다. `MemberPrincipal` 은 회원만, `AppPrincipal` 은 회원 또는 게스트, 익명이면 COMMON401. 필터는 DB 를 보지 않는다.
 
 **에러 코드.** `AppErrorStatus` enum 이 도메인 코드를 소유하고 openapi.yaml 의 `x-error-codes` 와 1:1 을 유지한다. 형식 `{도메인}{HTTP}{일련}`(예 `ETF4001`, `ANALYSIS4001`). 앱은 code 를 번역 없이 그대로 분기한다.
 
-**구현 순서는 스텁 → 실 구현.** 계약의 operation 전부를 컨트롤러·DTO 로 먼저 만들고 서비스는 고정 예시 데이터를 반환한다. 도메인을 구현하면 그 서비스 본문을 교체한다. mock 모드(플래그로 mock·real 병존)는 두지 않는다. 앱 쪽 mock 클라이언트가 이미 도메인을 덮고 있어 서버 mock 은 가짜 데이터 두 벌이 되고, 플래그·분기가 영구히 남기 때문이다. 실데이터가 아직 없는 도메인은 스텁이 예시를 주거나 준비 중 코드(`ANALYSIS4001`)를 준다.
+**구현 순서는 스텁 → 실 구현.** 계약의 operation 전부를 컨트롤러·DTO 로 먼저 만들고 서비스는 고정 예시 데이터를 반환한다. 도메인을 구현하면 그 서비스 본문을 교체한다. mock 모드(플래그로 mock·real 병존)는 두지 않는다. 앱 쪽 mock 클라이언트가 이미 도메인을 덮고 있어 서버 mock 은 가짜 데이터의 중복이 되고, 플래그·분기가 영구히 남기 때문이다. 실데이터가 아직 없는 도메인은 스텁이 예시를 주거나 준비 중 코드(`ANALYSIS4001`)를 준다.
 
 **데이터.**
 - 쓰기 소유: 사용자·관심·게시물·투표·알림.
@@ -211,4 +211,4 @@ HOT=failed FAULT=kill python3 run-cluster.py C4  # C1 기본값 / C2 500ms·REJE
 - 원천 없는 값(선별 목록·테마·운용사): `etf_curation`·`theme` 마이그레이션.
 - 스키마 소유: `db/etf-migration` Flyway(별도 history table), Hibernate 는 `validate`. `db/migration` 은 이전 스키마 기록이다.
 
-**운영.** `@Scheduled` 작업(재조정 등)은 ShedLock 리스(`shedlock` 테이블)로 다중 인스턴스에서 한 대만 돈다. ElastiCache 에는 `SPRING_DATA_REDIS_SSL_ENABLED=true` 로 붙는다.
+**운영.** `@Scheduled` 작업(재조정 등)은 ShedLock 리스(`shedlock` 테이블)로 다중 인스턴스에서 한 대만 실행된다. ElastiCache 에는 `SPRING_DATA_REDIS_SSL_ENABLED=true` 로 붙는다.

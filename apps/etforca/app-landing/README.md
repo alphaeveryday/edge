@@ -1,6 +1,6 @@
 # app-landing — ETF Orca 랜딩페이지
 
-`https://etforca.com` 에 서빙되는 정적 페이지다. 빌드 도구가 없다. HTML 한 장과 `assets/`, 검색엔진용 파일 두 개가 전부다.
+`https://etforca.com` 에 서빙되는 정적 페이지다. 빌드 도구가 없다. 구성은 HTML 한 장, `assets/`, 검색엔진용 파일 두 개다.
 
 | 파일 | 역할 |
 |---|---|
@@ -36,7 +36,7 @@
 
 - 종목을 누르면 같은 도메인의 `outlook/<코드>.json` 을 읽어 리포트를 그린다. 파일은 앱의 전망 화면 응답과 같은 모양이다.
 - 이 파일은 랜딩 배포가 아니라 `infra/terraform/modules/landing-export` 의 람다가 매일 08:00 KST 에 쓴다. 파일이 없으면 "준비 중" 안내를 보여 준다.
-- 검색 칸 아래의 종목 버튼 네 개(`data-pick`)는 이름을 치지 않고 전망을 연다. 2026-10-14 장중 거래대금 상위 4종을 손으로 적어 둔 것이라 순위가 바뀌어도 따라가지 않는다. 모바일에서 두 줄에 들어가는 개수다.
+- 검색 칸 아래의 종목 버튼 네 개(`data-pick`)는 이름을 치지 않고 전망을 연다. 2026-10-14 장중 거래대금 상위 4종을 수동으로 지정한 값이라 순위가 바뀌어도 따라가지 않는다. 모바일에서 두 줄에 들어가는 개수다.
 - "미리 보기" 버튼(`data-preview`)은 검색 칸으로 내려가 첫 번째 종목 버튼의 전망을 연다.
 - 목록에 없는 이름에서 "추가 신청하기" 를 누르면 PostHog 이벤트 `etf_request`(속성 `etf` = 입력한 이름)를 보낸다.
 
@@ -56,11 +56,11 @@
 
 ## 방문 분석 (PostHog)
 
-`landing.html` 머리에 PostHog 웹 스니펫이 있다. 로더는 PostHog 저장소의 스니펫 생성 코드(`docs/onboarding/product-analytics/_snippets/js-snippet-builder.ts`)로 만든 것 그대로다.
+`landing.html` 머리에 PostHog 웹 스니펫이 있다. 로더는 PostHog 저장소의 스니펫 생성 코드(`docs/onboarding/product-analytics/_snippets/js-snippet-builder.ts`)의 출력과 같다.
 
 - 프로젝트는 랜딩 전용이다(US 리전 `us.i.posthog.com`, 프로젝트 ID 658097). 앱(`app-ui`)이 쓰는 프로젝트와 다르다.
 - 스니펫의 `phc_` 키는 공개 수집용 프로젝트 키다. 비밀이 아니다. 개인 API 키(`phx_`)는 저장소에 넣지 않는다.
-- **쿠키 없는 모드**(`cookieless_mode: 'always'`)로 돈다. 브라우저에 쿠키나 local/session storage 를 남기지 않는다. 랜딩에 개인정보 안내·동의가 없어서 지속 식별자를 두지 않기로 했다. 이 옵션을 빼려면 안내·동의부터 갖춘다.
+- **쿠키 없는 모드**(`cookieless_mode: 'always'`)로 동작한다. 브라우저에 쿠키나 local/session storage 를 남기지 않는다. 랜딩에 개인정보 안내·동의가 없어서 지속 식별자를 두지 않기로 했다. 이 옵션을 빼려면 안내·동의부터 갖춘다.
   - 방문자는 PostHog 서버가 만든 해시로 센다(프로젝트·그날의 salt·IP·User-Agent·호스트). salt 가 매일 바뀌어 같은 사람이 다음 날 오면 새 방문자로 잡힌다.
   - IP 를 버리므로 국가·지역 정보와 봇 판별이 붙지 않는다. 세션 리플레이와 설문은 동작하지 않는다.
   - PostHog 프로젝트 설정(Project Settings > Web analytics > Cookieless server hash mode)에서 켜져 있어야 한다.
