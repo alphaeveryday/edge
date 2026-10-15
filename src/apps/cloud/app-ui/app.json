@@ -8,6 +8,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "icon": "./assets/app.icon",
       "supportsTablet": false,
       "bundleIdentifier": "com.alphaeveryday.etforca",
       "usesAppleSignIn": true,
