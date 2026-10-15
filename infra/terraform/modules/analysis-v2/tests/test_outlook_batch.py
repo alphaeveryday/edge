@@ -134,7 +134,7 @@ def run_item(processor, item, world):
         if state == 'Run':  # 단건 워크플로에 넘기는 요청 계약(추가 키는 워커의 요청 검증에서 거절된다)
             sent = json.loads(result['inspectionData']['afterParameters'])
             assert sent['Name'] == data['analysis_id'] and sent['StateMachineArn'] == SINGLE, sent
-            assert sent['Input'] == {'analysis_id': data['analysis_id'], 'kind': 'outlook',
+            assert sent['Input'] == {'analysis_id': data['analysis_id'], 'kind': 'outlook', 'execution_mode': 'batch',
                                      'etf_code': data['etf_code'], 'analysis_at': data['analysis_at']}, sent
         assert result['status'] in ('SUCCEEDED', 'CAUGHT_ERROR'), (state, result)
         data = json.loads(result['output'])
