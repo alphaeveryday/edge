@@ -63,6 +63,8 @@ def read_graph(tree: ET.ElementTree) -> dict:
         if c.get("vertex") == "1" and parent is not None and parent.get("edge") == "1":
             labels.append(c.get("id")); own[c.get("id")] = parent.get("id")  # 간선 라벨 셀
             continue
+        if c.get("id") == "0" or c.get("id") in layers:
+            continue  # 루트·레이어 셀
         if c.get("parent") not in layers:
             raise SystemExit(f"셀 {c.get('id')} 의 부모 {c.get('parent')} 가 레이어가 아니다 — 그룹 안 셀은 지원하지 않는다(그룹 해제 후 저장)")
         if c.get("edge") == "1":
