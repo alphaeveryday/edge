@@ -180,8 +180,11 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
                     for number in range(offset, offset + 200)]
             if calls.count('opinion') == 2 and 'draft_context' in exhaustion:
                 content.update(recommendation=None, withheld_reason='missing_data', answers=[{
-                    'question_index': 2 if exhaustion == 'invalid_draft_context' else 1,
+                    'question_index': 1,
                     'status': 'needs_input', 'answer': '실제 매수 금액 계산에는 납입 금액이 필요합니다.', 'missing': ['납입 금액']}])
+                if exhaustion == 'invalid_draft_context':
+                    content['evidence_coverage'] = [{'instrument_id': 'US:VOO', 'field': 'fees', 'status': 'supported',
+                        'evidence': [{'source_id': 'unregistered', 'passage_id': 'missing'}]}]
                 monkeypatch.setattr('edge_portfolio.agent.MAX_CONTEXT_BYTES', 1)
             if calls.count('opinion') == 2 and exhaustion == 'call_budget':
                 monkeypatch.setattr('edge_portfolio.agent.MAX_MODEL_CALLS', len(calls))
