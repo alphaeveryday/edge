@@ -138,8 +138,9 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     # Only an unanswered customer task or a calculator can require customer input.
     missing_inputs = list(dict.fromkeys(value for task in tasks if task['status'] == 'needs_input' for value in task['missing']))
     needs_input = bool(any(task['status'] == 'needs_input' for task in tasks) or required_execution and required_execution['status'] == 'needs_input')
-    if decision.scenario_requested:
-        if not published.get('scenarios'):
+    scenario_available = published.get('scenarios', {}).get('status') == 'available'
+    if decision.scenario_requested or published.get('scenarios'):
+        if not scenario_available:
             reasons.append('SCENARIO_CALCULATION_REQUIRED')
     if published.get('scenarios', {}).get('status') == 'needs_input':
         needs_input = True
@@ -179,7 +180,7 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     if not recommendation and optimization.get('reason') in (None, 'RECOMMENDATION_WITHHELD') and not final.withheld_reason:
         reasons.append('WITHHOLDING_REASON_MISSING')
     executed_saved_target = decision.execute_saved_target and not recommendation and execution and execution['status'] in {'ready', 'conditional'}
-    status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if bool(published.get('scenarios')) or executed_saved_target else 'no_match' if not recommendation else 'complete'
+    status = 'needs_input' if needs_input else 'partial' if reasons else 'complete' if scenario_available or executed_saved_target else 'no_match' if not recommendation else 'complete'
     return {'status': status, 'tasks': tasks, 'reasons': reasons, 'missing_inputs': missing_inputs,
             'evidence_coverage': list(coverage.values()), 'missing_research': missing_research, 'research_inventory': inventory,
             'note': '자료 항목·날짜·실행 조건의 충족 상태이며 주장 자체의 사실 정확성을 보증하지 않습니다.'}

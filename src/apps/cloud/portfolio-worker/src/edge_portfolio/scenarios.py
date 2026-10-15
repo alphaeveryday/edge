@@ -6,6 +6,7 @@ from typing import Annotated
 from pydantic import Field
 
 from .contracts import StrictModel
+from .decision import Funding
 from .execution import parse_funding, projection_question, NO_CONTRIBUTION, FUNDING_CALCULATION_SUFFIX
 
 PRINCIPAL_DECLARATION = re.compile(r'^\s*(?:제\s*)?(?:원금|현재\s*평가금액|현재\s*자산|보유금액)(?:은|는|이|가|\s+|(?=\d))')
@@ -76,9 +77,13 @@ class ScenarioInput(StrictModel):
     years: list[Annotated[int, Field(ge=1, le=50, strict=True)]] = Field(default_factory=lambda: [5, 10, 15], min_length=1, max_length=5)
 
 
+class ScenarioToolInput(ScenarioInput):
+    funding: Funding | None = Field(default=None, description='이번 질문의 원문·원금·납입 조건으로만 계산한다. 생략하면 기존 자금 조건을 사용한다. 이전 매수 계획과 별도이며 추가 입금을 원금에 중복 합산하지 않는다.')
+
+
 TOOL = {'type': 'function', 'function': {'name': 'calculate_scenarios',
-    'description': '확인된 원금·납입금으로 명시적 연수익률 가정과 기간별 자산을 계산한다. 기본 -3/0/3/6%, 5/10/15년은 비교 가정이며 예측이 아니다. 원금을 만들어내지 않는다.',
-    'parameters': ScenarioInput.model_json_schema()}}
+    'description': '고객이 이번에 지정한 원금·납입금은 funding에 직접 넣어 계산한다. 이전 매수 계획의 추가 자금을 자동으로 포함하지 않는다. 생략 시 기존 조건을 사용한다. 기본 -3/0/3/6%, 5/10/15년은 비교 가정이며 예측이 아니다.',
+    'parameters': ScenarioToolInput.model_json_schema()}}
 
 
 def build_scenarios(principal_krw, args, *, monthly_krw=0, additional_krw=0, contribution_months=None, start_delay_months=0):

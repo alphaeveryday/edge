@@ -54,7 +54,12 @@ async def structured_call(client, key, payload, report_model):
         optional = set(parameters.get('properties', {})) - set(parameters.get('required', []))
         optional_arguments[function['name']] = optional
         for name in optional:
-            parameters['properties'][name] = {'anyOf': [parameters['properties'][name], {'type': 'null'}]}
+            argument = parameters['properties'][name]
+            if 'anyOf' in argument:
+                if not any(branch.get('type') == 'null' for branch in argument['anyOf']):
+                    argument['anyOf'].append({'type': 'null'})
+            else:
+                parameters['properties'][name] = {'anyOf': [argument, {'type': 'null'}]}
         function['parameters'] = strict_schema(parameters)
         function['strict'] = True
     if allow_report and request.get('tool_choice') == 'none':
