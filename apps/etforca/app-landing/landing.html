@@ -1403,7 +1403,8 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
 
   // 데스크톱(마우스로 쓰는 화면)에서는 다운로드 버튼이 스토어로 가는 대신 QR 창을 띄운다. 휴대폰에서는 그대로 스토어로 간다
   const qr = $('#qr');
-  if (qr.showModal && matchMedia('(hover: hover) and (pointer: fine)').matches) {
+  // 안드로이드는 제외한다 — QR 은 iOS 기기로 찍으라는 창이고, 먼저 href 를 떼면 아래 '곧 출시' 치환이 그 단추를 못 찾는다
+  if (!android && qr.showModal && matchMedia('(hover: hover) and (pointer: fine)').matches) {
     $$('a[href*="apps.apple.com"]').forEach((a) => {
       if (qr.contains(a)) return;
       // 링크로 남겨 두면 아티팩트 뷰어가 클릭을 따로 처리해 새 탭도 함께 연다(preventDefault가 듣지 않는다). 그래서 링크를 떼고 단추로 쓴다
