@@ -116,9 +116,24 @@ class Optimizer:
 
     async def tool(self, args):
         result = await self._tool(args)
+        for index, preferred in enumerate(self.preferred, 1):
+            rows = [{'instrument_id': key, 'weight_pct': weight} for key, weight in preferred]
+            if any(sorted((row['instrument_id'], row['weight_pct']) for row in candidate['allocations']) == list(preferred)
+                   for candidate in result.get('candidates', [])):
+                continue
+            if any(check['status'] not in {'pass', 'model_review'} for check in self.vector_checks(rows)):
+                continue
+            result.setdefault('comparison_status', result['status'])
+            result.setdefault('comparison_reason', result.get('reason'))
+            result['candidates'].append({'candidate_id': f'r{self.revision}-model-{index}', 'allocations': rows,
+                'rank': len(result['candidates']) + 1, 'comparison_status': 'unavailable',
+                **{key: None for key in ('score', 'duration_pct', 'excess_pp', 'preservation_pct',
+                                        'max_drawdown_pct', 'income_yield_pct', 'recent_outperform_days')}})
+            result.update(status='available', reason=None)
         result['search_progress'] = {'unique_combinations': len(self.groups),
             'unique_etfs': len({key for group in self.groups for key in group}),
             'remaining_batches': max(0, 100 - len(self.batches))}
+        self.result = result
         return result
 
     async def _tool(self, args):
@@ -136,8 +151,8 @@ class Optimizer:
         if not isinstance(allocations, list) or len(allocations) > 5 or any(
             not isinstance(row, dict) or set(row) != {'instrument_id', 'weight_pct'}
             or not isinstance(row['instrument_id'], str) or type(row['weight_pct']) is not int
-            or not 10 <= row['weight_pct'] <= 100 or row['weight_pct'] % 10 for row in allocations):
-            raise ValueError('Preferred allocations need distinct ETF IDs and positive 10-percent weights totaling 100')
+            or not 1 <= row['weight_pct'] <= 100 for row in allocations):
+            raise ValueError('Preferred allocations need distinct ETF IDs and positive integer weights totaling 100')
         preferred = tuple(sorted((row['instrument_id'], row['weight_pct']) for row in allocations))
         if preferred and (sum(weight for _, weight in preferred) != 100 or [key for key, _ in preferred] not in groups):
             raise ValueError('Preferred allocations must total 100 and match one submitted ETF combination')
@@ -156,7 +171,7 @@ class Optimizer:
                            for account in accounts) for key in ids):
                 raise ValueError('Each candidate ETF needs an eligible selected account; replace ineligible ETFs before submitting')
         batch = (tuple(sorted(map(tuple, groups))), preferred)
-        if batch in self.batches and self.result and not self.result.get('failures') and self.result['status'] != 'unavailable':
+        if batch in self.batches and self.result and not self.result.get('failures') and self.result['status'] != 'unavailable' and self.result.get('comparison_status') != 'unavailable':
             return self.result
         if self.attempts.get(batch, 0) >= 2:
             return {**(self.result or {}), 'retry_reason': 'BATCH_RETRY_EXHAUSTED'}
@@ -416,8 +431,6 @@ class Optimizer:
             if rule.kind == 'min_weight' and rule.value > 0 and rule.instrument_ids == ['CASH:KRW'] or rule.kind == 'require' and 'CASH:KRW' in rule.instrument_ids:
                 conflicts.append('CASH_REQUIRED_BUT_SERVICE_CASH_ZERO')
         for rule in self.decision.constraints:
-            if rule.kind == 'max_weight' and rule.value < 10 and required.intersection(rule.instrument_ids):
-                conflicts.append('REQUIRED_ETF_BELOW_TEN_PERCENT_GRID')
             if rule.kind == 'exclude' and required.intersection(rule.instrument_ids):
                 conflicts.append('REQUIRED_ETF_EXCLUDED')
         return sorted(set(conflicts))
@@ -447,10 +460,10 @@ class Optimizer:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': 'ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 과거 성과 순위는 참고다. 원하는 비중은 preferred_allocations로 직접 검산해 선택 후보에 추가한다. 새 ETF 조합이나 같은 조합의 다른 비중도 재검토할 수 있다. 누적 후보는 같은 기간으로 재계산한다. 현금 0%, 10% 단위, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'description': 'ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 과거 성과 순위는 참고다. preferred_allocations로 LLM이 설계한 1% 단위 비중을 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
         'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {
-            'instrument_id': {'type': 'string'}, 'weight_pct': {'type': 'integer', 'minimum': 10, 'maximum': 100}},
+            'instrument_id': {'type': 'string'}, 'weight_pct': {'type': 'integer', 'minimum': 1, 'maximum': 100}},
             'required': ['instrument_id', 'weight_pct'], 'additionalProperties': False}}},
         'required': ['combinations'], 'additionalProperties': False}}}
