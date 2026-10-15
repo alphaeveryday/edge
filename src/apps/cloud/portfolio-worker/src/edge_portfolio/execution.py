@@ -89,7 +89,7 @@ def parse_funding(text):
         return None
     match = matches[0]
     prefix, suffix = text[:match.start()].strip(), text[match.end():].strip()
-    if prefix not in {'매월', '매달', '매달 꾸준히', '월마다', '월', '추가', '추가로', '일시', '일시금', '목돈', '한 번'} or suffix not in {'', '씩'}:
+    if prefix not in {'매월', '매월 말', '매달', '매달 꾸준히', '월마다', '월', '추가', '추가로', '추가 투자금', '일시', '일시금', '목돈', '한 번'} or suffix not in {'', '씩'}:
         return None  # Require a complete commitment quote; do not ignore qualifiers or payment counts.
     amount = sum((Decimal(value.replace(',', '')) * unit for value, unit in zip(match.groups(), (100000000, 10000, 1)) if value), Decimal(0))
     if amount <= 0 or amount > 10**13 or amount != amount.to_integral_value():
@@ -110,7 +110,46 @@ def allocate_amounts(total, weights):
     return amounts
 
 
+def validate_funding(funding, text):
+    if not funding.source.strip():
+        raise ValueError('CUSTOMER_FUNDING_SOURCE: quote the customer input')
+    if funding.source not in text:
+        funding.source = text
+    amounts = set()
+    for match in re.finditer(r'(?<![0-9A-Za-z.,+\-])[\d영일이삼사오육칠팔구십백천만억][\d,.\s영일이삼사오육칠팔구십백천만억]*원', funding.source):
+        total, section, number = Decimal(0), Decimal(0), None
+        normalized = match[0].translate(str.maketrans('영일이삼사오육칠팔구', '0123456789'))
+        for token in re.findall(r'\d+(?:,\d{3})*(?:\.\d+)?|[십백천만억]', normalized):
+            if token[0].isdigit():
+                if number is not None:
+                    break
+                number = Decimal(token.replace(',', ''))
+            elif token in '십백천':
+                section += (number if number is not None else 1) * {'십': 10, '백': 100, '천': 1000}[token]
+                number = None
+            else:
+                total += (section + number if number is not None else section or 1) * {'만': 10000, '억': 100000000}[token]
+                section, number = Decimal(0), None
+        else:
+            amounts.add(total + section + (number or 0))
+    if funding.estimated_fields and not any(value.strip() for value in funding.assumptions):
+        raise ValueError('CUSTOMER_FUNDING_ASSUMPTION: explain estimated payment amounts')
+    if any(value is not None and (value != 0 or name == 'principal_krw') and Decimal(value) not in amounts and name not in funding.estimated_fields
+           for name, value in ((name, getattr(funding, name)) for name in ('additional_krw', 'monthly_krw', 'principal_krw'))):
+        raise ValueError('CUSTOMER_FUNDING_AMOUNT: preserve the quoted won amount and units')
+
+
+def funding_assumptions(funding):
+    labels = {'additional_krw': '추가 투자금', 'monthly_krw': '월 납입금'}
+    return [*funding.assumptions, *(f'{labels[name]} {getattr(funding, name):,}원으로 가정한 참고 계산이에요.'
+            for name in dict.fromkeys(funding.estimated_fields) if getattr(funding, name) is not None)]
+
+
 def resolve_funding(request, decision=None):
+    if decision and decision.funding is not None:
+        funding = decision.funding
+        return {'additional_krw': Decimal(funding.additional_krw),
+                'monthly_krw': Decimal(funding.monthly_krw) if funding.monthly_krw is not None else None}
     if zero_funding_quote(request, decision):
         return {'additional_krw': Decimal(0), 'monthly_krw': None}
     text = decision.funding_text if decision and decision.funding_text else request.preferences.contribution
@@ -190,14 +229,23 @@ def plan_execution(request, allocations, decision=None):
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     new_money = bool(decision and decision.kind == 'new_money')
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
-    result = build_execution(request, allocations, no_sell=bool(rules), no_sell_ids=no_sell_ids, **(funding or {}))
+    delay = decision.funding.start_delay_months if decision and decision.funding is not None else 0
+    result = build_execution(request, allocations, no_sell=bool(rules), no_sell_ids=no_sell_ids,
+                             start_delay_months=delay, **(funding or {}))
+    if decision and decision.funding is not None:
+        interpreted = decision.funding
+        result['assumptions'].extend(funding_assumptions(interpreted))
+        if interpreted.assumptions and result['status'] == 'ready':
+            result['status'] = 'conditional'
+        if interpreted.max_months is not None and result['months'] is not None and result['months'] - delay > interpreted.max_months:
+            result.update(status='infeasible', reasons=['FUNDING_DURATION_EXCEEDED'], rows=[])
     definite_failure = any(reason == 'NO_SELL_ZERO_TARGET' or reason.startswith('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:') for reason in result['reasons'])
     if (funding is None or new_money and not (funding['additional_krw'] or funding['monthly_krw'])) and not definite_failure:
         result.update(status='needs_input', reasons=['ADDITIONAL_FUNDING_REQUIRED'], rows=[])
     return result
 
 
-def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None, no_sell=False, no_sell_ids=()):
+def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None, no_sell=False, no_sell_ids=(), start_delay_months=0):
     additional = Decimal(str(additional_krw))
     monthly = Decimal(str(monthly_krw)) if monthly_krw is not None else None
     if any(not value.is_finite() or value < 0 or value > 10**13 or value != value.to_integral_value()
@@ -251,6 +299,9 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
         additional = monthly
         result.update(status='conditional', months=1, additional_krw=str(additional))
         result['assumptions'].append('별도 목돈 없이 첫 월 납입금을 넣는 시점의 계획이며 그때까지 가격이 변하지 않는다고 가정해요.')
+    if result['months'] is not None and start_delay_months:
+        result['months'] += start_delay_months
+        result['assumptions'].append(f'월 납입은 {start_delay_months}개월 뒤부터 시작하는 계획이에요.')
     if total + additional <= 0:
         return {**result, 'reasons': ['INVESTMENT_AMOUNT_REQUIRED']}
     amounts = dict(zip(target, allocate_amounts(total + additional, list(target.values()))))

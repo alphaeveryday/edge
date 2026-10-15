@@ -24,7 +24,7 @@ from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_p
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
 from .decision import Decision, QuestionSection, validate_decision, check_constraints, filter_preference_constraints
-from .execution import execution_tool, resolve_funding, zero_funding_quote, TOOL as EXECUTION_TOOL
+from .execution import execution_tool, resolve_funding, zero_funding_quote, funding_assumptions, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
 from .completion import assess_completion, data_status, research_inventory
@@ -406,23 +406,32 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 funding = resolve_funding(request, decision)
                                 known_principal = bool(request.holdings) and all(h.amount_krw is not None for h in request.holdings)
                                 principal = sum(h.amount_krw for h in request.holdings) if request.input_mode == 'amount' and known_principal else None
-                                original_question = getattr(request, 'funding_questions', [request.question])[0]
-                                for statement in ([followup_question, original_question] if followup_question else [request.question]):
-                                    supplied_principal = stated_principal(statement)
-                                    if supplied_principal is not None:
-                                        principal = supplied_principal
-                                        break
-                                    if any(principal_declaration(clause) or re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액).*(?:취소|철회|미정|아니|정도|대략|모르|모릅|몰라|불명|확인\s*필요)', clause)
-                                           for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', statement)):
-                                        principal = None  # An ambiguous correction must not silently reuse the old amount.
-                                        break
-                                contexts = [followup_question or request.question]
-                                if followup_question and stated_principal(followup_question) is None:
-                                    contexts.append(original_question)
-                                preferences = (request.preferences.note, request.preferences.contribution, request.preferences.dividend_goal, *request.preferences.interests)
-                                if not all(principal_context_matches(text, principal) for text in contexts) or not all(principal_preference_matches(text, principal) for text in preferences):
-                                    principal = None  # Preserve unresolved qualifications when reusing an older amount.
-                                answer = build_scenarios(principal, args, **{name: value or 0 for name, value in (funding or {}).items()})
+                                if decision.funding is not None:
+                                    if decision.funding.principal_krw is not None:
+                                        principal = decision.funding.principal_krw
+                                else:
+                                    original_question = getattr(request, 'funding_questions', [request.question])[0]
+                                    for statement in ([followup_question, original_question] if followup_question else [request.question]):
+                                        supplied_principal = stated_principal(statement)
+                                        if supplied_principal is not None:
+                                            principal = supplied_principal
+                                            break
+                                        if any(principal_declaration(clause) or re.search(r'(?:원금|현재\s*평가금액|현재\s*자산|보유금액).*(?:취소|철회|미정|아니|정도|대략|모르|모릅|몰라|불명|확인\s*필요)', clause)
+                                               for clause in re.split(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', statement)):
+                                            principal = None  # An ambiguous correction must not silently reuse the old amount.
+                                            break
+                                    contexts = [followup_question or request.question]
+                                    if followup_question and stated_principal(followup_question) is None:
+                                        contexts.append(original_question)
+                                    preferences = (request.preferences.note, request.preferences.contribution, request.preferences.dividend_goal, *request.preferences.interests)
+                                    if not all(principal_context_matches(text, principal) for text in contexts) or not all(principal_preference_matches(text, principal) for text in preferences):
+                                        principal = None  # Preserve unresolved qualifications when reusing an older amount.
+                                answer = build_scenarios(principal, args,
+                                    contribution_months=decision.funding.max_months if decision.funding is not None else None,
+                                    start_delay_months=decision.funding.start_delay_months if decision.funding is not None else 0,
+                                    **{name: value or 0 for name, value in (funding or {}).items()})
+                                if decision.funding is not None:
+                                    answer.setdefault('assumptions', []).extend(funding_assumptions(decision.funding))
                                 if funding is None:
                                     answer = {'status': 'needs_input', 'reason': 'ADDITIONAL_FUNDING_REQUIRED', 'rows': []}
                                 if scenario_result and scenario_result['status'] == answer['status'] == 'available':
@@ -610,6 +619,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 decision.constraints = list(rules.values())
                                 filter_preference_constraints(decision, request, question_text=followup_question)
                                 decision.objectives = decision.objectives or inherited.objectives
+                                if decision.funding is None and not decision.funding_text:
+                                    decision.funding = inherited.funding.model_copy(deep=True) if inherited.funding is not None else None
                                 decision.funding_text = zero_funding_quote(request, decision) or decision.funding_text or inherited.funding_text
                                 if followup_question:
                                     decision.questions = [question for question in decision.questions if question in followup_question] or [followup_question]

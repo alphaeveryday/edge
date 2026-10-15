@@ -38,6 +38,18 @@ class Constraint(StrictModel):
         return self
 
 
+class Funding(StrictModel):
+    """Model interpretation of customer money; arithmetic remains deterministic."""
+    source: str = Field(default='', max_length=1000000)
+    additional_krw: int = Field(default=0, ge=0, le=10**13)
+    monthly_krw: int | None = Field(default=None, ge=0, le=10**13)
+    principal_krw: int | None = Field(default=None, ge=0, le=20 * 10**13)
+    max_months: int | None = Field(default=None, ge=1, le=600)
+    start_delay_months: int = Field(default=0, ge=0, le=600)
+    assumptions: list[str] = Field(default_factory=list, max_length=5)
+    estimated_fields: list[Literal['additional_krw', 'monthly_krw']] = Field(default_factory=list, max_length=2)
+
+
 class Decision(StrictModel):
     questions: list[str] = Field(default_factory=list, max_length=5)
     kind: Literal['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'] = 'review'
@@ -48,6 +60,7 @@ class Decision(StrictModel):
     constraints: list[Constraint] = Field(default_factory=list, max_length=20)
     missing_inputs: list[str] = Field(default_factory=list, max_length=10)
     funding_text: str = Field(default='', max_length=100)
+    funding: Funding | None = None
 
     @model_validator(mode='after')
     def meaningful_missing_inputs(self):
@@ -95,8 +108,11 @@ def validate_decision(decision, request, catalog, *, question_text=None):
             raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the exact customer input')
         if any(key != 'CASH:KRW' and key not in catalog for key in rule.instrument_ids):
             raise ValueError('UNREGISTERED_CONSTRAINT_INSTRUMENT: use unverified until resolved')
-    if decision.funding_text and decision.funding_text not in text:
+    if decision.funding is None and decision.funding_text and decision.funding_text not in text:
         raise ValueError('CUSTOMER_FUNDING_SOURCE: quote explicit additional money, not current holdings')
+    if decision.funding is not None:
+        from .execution import validate_funding
+        validate_funding(decision.funding, text)
     if len(set(decision.objectives)) != len(decision.objectives):
         raise ValueError('Objective priorities must be distinct')
     if decision.kind == 'new_portfolio' and any(h.kind != 'cash' for h in request.holdings):
