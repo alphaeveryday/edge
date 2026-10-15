@@ -10,6 +10,43 @@ from edge_portfolio.decision import QuestionSection
 from edge_portfolio.structured_output import strict_schema, structured_call
 
 
+async def test_required_research_repair_forces_a_tool_without_enabling_report_submission():
+    def handler(request):
+        body = json.loads(request.content)
+        assert body['tool_choice'] == 'required'
+        assert body['thinking'] == {'type': 'disabled'}
+        assert 'reasoning_effort' not in body
+        assert [tool['function']['name'] for tool in body['tools']] == ['lookup']
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'tool_calls': [{'id': '1', 'function': {'name': 'lookup', 'arguments': '{}'}}]}}]})
+    payload = {'tools': [{'type': 'function', 'function': {'name': 'lookup', 'parameters': {
+        'type': 'object', 'properties': {}}}}], 'messages': [], 'allow_report': False,
+        'tool_choice': 'required', 'thinking': {'type': 'enabled'}, 'reasoning_effort': 'low'}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await structured_call(client, 'test', payload, Section)
+
+
+async def test_unfinished_research_repair_does_not_order_the_model_to_submit_an_unavailable_report():
+    from edge_portfolio.agent import run_analysis
+    from edge_portfolio.contracts import AnalysisInput
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    stages, attempts = [], []
+    async def model(payload):
+        if stages[-1] == 'question':
+            return {'choices': [{'message': {'content': json.dumps({**final_payload()['question'], 'decision': {}})}}]}
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise ValueError('STRUCTURED_OUTPUT_REQUIRED')
+        assert not payload['allow_report']
+        assert payload['tool_choice'] == 'required'
+        assert not any('submit_report 도구 하나로' in str(message.get('content', '')) for message in payload['messages'])
+        raise RuntimeError('RESEARCH_REPAIR_REACHED')
+    with pytest.raises(RuntimeError, match='RESEARCH_REPAIR_REACHED'):
+        await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), 'test',
+                           stages.append, model_call=model, evidence=Evidence())
+
+
 @pytest.mark.parametrize('model', [Section, QuestionSection, FinalReport])
 def test_provider_schema_retains_required_fields_and_references(model):
     schema = strict_schema(model.model_json_schema())

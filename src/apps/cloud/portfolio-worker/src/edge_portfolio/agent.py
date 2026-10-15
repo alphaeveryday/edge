@@ -261,8 +261,6 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 calls += 1
                 reserved = 3 * (len(ROLES) - ROLES.index(role) - 1)
                 finalizing = structured_retry or calls >= MAX_MODEL_CALLS - reserved - 2
-                if finalizing:
-                    messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
                 model_tools = TOOLS[:1] if role == 'question' else [SCENARIO_TOOL] if decision.kind == 'scenario' else TOOLS + [OUTLOOK_TOOL, MARKET_TOOL, OPTIMIZER_TOOL, EXECUTION_TOOL, SCENARIO_TOOL]
                 tool_choice = 'none' if finalizing else 'auto'
                 research_targets = getattr(evidence, 'search_targets', getattr(evidence, 'discovered', set()))
@@ -277,8 +275,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 if role != 'question' and (decision.kind == 'scenario' or decision.scenario_requested) and scenario_result is None:
                     required_tools.append(SCENARIO_TOOL)
                 if required_tools and finalizing:
-                    model_tools, tool_choice = required_tools, 'auto'
+                    model_tools, tool_choice = required_tools, 'required'
                     messages.append({'role': 'user', 'content': '답변에 필수인 후보 비교·최소 출처·요청 계산 중 아직 수행하지 않은 작업만 남았습니다. 허용된 필수 도구를 완료한 뒤 현재 역할의 JSON을 작성하세요. 추가적인 부가 자료 조사는 종료합니다.'})
+                elif finalizing:
+                    messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
                 limit_reason = 'MODEL_CALL_BUDGET' if calls > MAX_MODEL_CALLS else 'MODEL_CONTEXT_BUDGET' if context_bytes > MAX_CONTEXT_BYTES else None
                 if limit_reason:
@@ -332,7 +332,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     if structured_repairs > 2:
                         raise
                     structured_retry = True
-                    messages.append({'role': 'user', 'content': 'submit_report 도구 하나로 현재 역할의 보고서를 제출하세요. 일반 텍스트 응답은 제출이 아닙니다.'})
+                    messages.append({'role': 'user', 'content':
+                        '아직 필요한 계산·조사를 허용된 도구로 수행하세요. 보고서 제출은 그다음에 합니다.' if required_tools else
+                        'submit_report 도구 하나로 현재 역할의 보고서를 제출하세요. 일반 텍스트 응답은 제출이 아닙니다.'})
                     continue
                 if result.get('structured_output_fallback'):
                     emit('structured_output_fallback', role=role, status='json_parsed')
@@ -489,11 +491,13 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         checkpoint()
                         messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(answer, ensure_ascii=False)})
                     continue
+                validation_step = 'report_json'
                 try:
                     raw = json.loads(message.get("content") or "")
                     if not isinstance(raw, dict):
                         raise ValueError('OUTPUT_OBJECT_REQUIRED')
                     if role == 'opinion':
+                        validation_step = 'report_schema'
                         final = FinalReport.model_validate(raw)
                         from .completion import retain_recommendation, retain_research
                         retained = retain_recommendation(final, accepted_final if optimizer.result == accepted_search else None)
@@ -512,7 +516,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         final = retain_research(final, reconciliation_draft, retain_answers=optimizer.result == accepted_search)
                         final = retain_research(final, accepted_final, retain_answers=optimizer.result == accepted_search)
                         execution_rejection = None
+                        validation_step = 'candidate_selection'
                         selected = optimizer.validate(final)
+                        validation_step = 'customer_constraints'
                         if final.recommendation:
                             checks = check_constraints(decision, [row.model_dump() for row in final.recommendation.allocations], request, market.catalog)
                         elif not checks:
@@ -522,9 +528,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                       for number, rule in enumerate(decision.constraints, 1)]
                         if final.recommendation and any(check['status'] not in {'pass', 'model_review'} for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
+                        validation_step = 'report_sections'
                         sections = {name: validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and getattr(final, name).limitations else name,
                                     getattr(final, name).model_dump(), evidence.sources) for name in ROLES}
+                        validation_step = 'recommendation_publication'
                         published = publish_recommendation(final, request, metrics, evidence.sources, decision)
+                        validation_step = 'execution_feasibility'
                         if final.recommendation and published['recommendation']['execution']['status'] == 'infeasible':
                             execution_rejection = published['recommendation']['execution']
                             if final.selected_candidate_id not in execution_feasible:
@@ -538,6 +547,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
+                        validation_step = 'report_enrichment'
                         if selected:
                             await enrich_report(published, final, market, evidence.sources)
                         if not selected and final.withheld_reason:
@@ -550,6 +560,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 'required_additional_krw': None, 'assumptions': []}
                                 if final.withheld_reason == 'customer_failed' else followup_execution)
                             checks = followup_checks or checks
+                        validation_step = 'report_completion'
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
                             considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
                         if retained_prior_text:
@@ -585,8 +596,11 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             continue
                     else:
                         if role == 'question':
+                            validation_step = 'question_schema'
                             interpreted = QuestionSection.model_validate(raw)
+                            validation_step = 'question_section'
                             validate_section('question', interpreted.model_dump(exclude={'decision'}), evidence.sources)
+                            validation_step = 'customer_decision'
                             decision = validate_decision(interpreted.decision, request, market.catalog, question_text=followup_question or request.question)
                             if prior_report:
                                 inherited = Decision.model_validate(prior_report.get('decision') or {})
@@ -639,8 +653,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             optimizer.decision = decision
                             context['active_decision'] = decision.model_dump(mode='json')
                             raw = interpreted.model_dump(exclude={'decision'})
+                        validation_step = 'optimization_required'
                         if role == 'portfolio' and optimizer.result is None:
                             raise ValueError('Before completing portfolio, call optimize_portfolios with the registered ETF combinations or preferred weights you want to compare')
+                        validation_step = 'role_section'
                         sections[role] = validate_section('question' if source_free_allowed and (decision.kind == 'scenario' or not evidence.sources) and raw.get('limitations') else role, raw, evidence.sources)
                     emit('stage_completed', role=role)
                     checkpoint()
@@ -653,7 +669,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     else:
                         repairs += 1
                         attempt, limit = repairs, 2 if role == 'opinion' else 1
-                    emit('validation_failed', role=role, attempt=attempt,
+                    emit('validation_failed', role=role, attempt=attempt, validation_step=validation_step,
                          code='OUTPUT_JSON' if isinstance(error, json.JSONDecodeError) else 'OUTPUT_SCHEMA' if isinstance(error, ValidationError) else 'OUTPUT_CONTRACT')
                     if attempt > limit:
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
