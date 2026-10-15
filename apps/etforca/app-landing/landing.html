@@ -678,6 +678,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       <p class="lead"><span class="nw">뉴스와 공시, 수급을 매일 읽고</span> <span class="nw"><strong>전망의 근거</strong>를 문장으로 정리해요.</span></p>
       <div class="hero__ctas">
         <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+        <span class="btn btn--ghost btn--lg btn--soon" data-play-soon>Google Play 곧 출시</span>
         <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
       </div>
     </div>
@@ -995,6 +996,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     <h2 class="display">관심 ETF만 담아 두세요.<br>전망은 Orca가 챙길게요.</h2>
     <div class="hero__ctas">
       <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+      <span class="btn btn--ghost btn--lg btn--soon" data-play-soon>Google Play 곧 출시</span>
       <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
     </div>
     <p class="cta__note">Android는 곧 출시돼요.</p>
@@ -1433,6 +1435,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     $('.chip--launch').textContent = 'Android 곧 출시';
     $$('a[href*="apps.apple.com"]').forEach((a) => a.replaceWith(el('span', a.className + ' btn--soon', 'Android 곧 출시')));
     $('.cta__note').textContent = 'iOS 앱은 App Store에 있어요.';
+    $$('[data-play-soon]').forEach((b) => b.remove());
   }
   // 전망은 같은 도메인의 outlook/<코드>.json 에서 읽는다. 매일 08:00에 그날 발행된 앱 화면 응답이 그대로 올라온다(infra/terraform/modules/landing-export).
   // 파일이 없으면 null. 읽다 실패하면(통신 오류, 깨진 파일) 던진다 — 어느 쪽이든 카드가 준비 중이라고 알린다
