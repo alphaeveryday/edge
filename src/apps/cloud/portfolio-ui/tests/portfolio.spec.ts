@@ -3,16 +3,19 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
-test('required investment objective error identifies the missing field', async ({ page }) => {
+test('an unselected investment objective reaches analysis without inventing a preference', async ({ page }) => {
+  let submitted: { preferences: { interests: string[] } } | undefined;
   await page.route('**/api/portfolio/**', route => {
-    if (route.request().url().endsWith('/catalog')) return route.fulfill({ json: catalog });
-    if (route.request().url().endsWith('/analyses')) return route.fulfill({ status: 422, json: { detail: 'INVESTMENT_OBJECTIVE_REQUIRED' } });
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
+    if (path.endsWith('/analyses') && route.request().method() === 'POST') submitted = route.request().postDataJSON();
+    if (path.includes('/analyses')) return route.fulfill({ json: { id: 'test-job', state: 'running', stage: 'question' } });
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  await expect(page.getByRole('button', { name: '종목만 입력할래요' })).toHaveCount(0);
-  await fillForm(page);
-  await expect(page.getByRole('alert')).toContainText('투자 목적을 하나 이상 골라 주세요.');
+  await fillForm(page, { interests: [] });
+  await expect(page.locator('.progress')).toBeVisible();
+  expect(submitted?.preferences.interests).toEqual([]);
 });
 
 test('timeout explains the ten-minute maximum without claiming every request lasted ten minutes', async ({ page }) => {
@@ -174,7 +177,7 @@ test('tax details and custom interests persist without a dividend step', async (
   await page.getByRole('button', { name: '3년 안', exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.getByRole('heading', { name: '더 담고 싶은 쪽이 있나요?' })).toBeVisible();
-  await expect(page.locator('.bar .btn')).toBeDisabled();
+  await expect(page.locator('.bar .btn')).toBeEnabled();
   await page.getByLabel('관심 키워드 직접 입력').fill('환율 부담');
   await page.getByRole('button', { name: '추가', exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
