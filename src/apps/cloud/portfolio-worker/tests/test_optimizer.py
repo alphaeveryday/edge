@@ -631,3 +631,44 @@ async def test_model_preferred_weights_still_obey_explicit_customer_limits():
         {'instrument_id': 'KR:A', 'weight_pct': 50}, {'instrument_id': 'KR:B', 'weight_pct': 50}]})
     assert result['candidates']
     assert all(next(a['weight_pct'] for a in row['allocations'] if a['instrument_id'] == 'KR:A') <= 30 for row in result['candidates'])
+
+
+@pytest.mark.parametrize('missing', ['baseline', 'prices'])
+async def test_missing_comparison_keeps_a_model_proposal_that_passes_customer_constraints(missing):
+    request, market, _ = batch()
+    if missing == 'baseline':
+        market.current = {}
+    def unavailable(*_):
+        raise ValueError('PRICE_UNAVAILABLE')
+    market.loader = unavailable
+    optimizer = Optimizer(market, request)
+    allocations = [{'instrument_id': 'KR:A', 'weight_pct': 50}, {'instrument_id': 'KR:B', 'weight_pct': 50}]
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocations})
+    assert result['status'] == 'available'
+    assert result['candidates'][0]['allocations'] == allocations
+    assert result['candidates'][0]['score'] is None
+    assert result['comparison_status'] == 'unavailable'
+
+
+async def test_missing_prices_never_override_the_customers_weight_limit():
+    from edge_portfolio.decision import Decision
+    request, market, _ = batch()
+    market.current = {}
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[{'kind': 'max_weight', 'source': 'A 30%', 'instrument_ids': ['KR:A'], 'value': 30}])
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': [
+        {'instrument_id': 'KR:A', 'weight_pct': 50}, {'instrument_id': 'KR:B', 'weight_pct': 50}]})
+    assert not result['candidates']
+
+
+async def test_search_grid_does_not_reject_model_weights_that_satisfy_a_five_percent_limit():
+    from edge_portfolio.decision import Decision
+    request, market, _ = batch()
+    market.current = {}
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[
+        {'kind': 'require', 'source': 'A required', 'instrument_ids': ['KR:A']},
+        {'kind': 'max_weight', 'source': 'A 5%', 'instrument_ids': ['KR:A'], 'value': 5}])
+    allocations = [{'instrument_id': 'KR:A', 'weight_pct': 5}, {'instrument_id': 'KR:B', 'weight_pct': 95}]
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocations})
+    assert result['candidates'][0]['allocations'] == allocations

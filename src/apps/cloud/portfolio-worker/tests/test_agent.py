@@ -95,6 +95,51 @@ async def test_calculation_does_not_block_a_following_model_designed_allocation(
     assert optimized[0]['preferred_allocations'][0]['weight_pct'] == 60
 
 
+@pytest.mark.parametrize('initial_calls', [69, 70])
+async def test_search_budget_finishes_the_report_without_another_remote_call(monkeypatch, initial_calls):
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
+        def validate(self, final): return None
+    class LimitedEvidence(Evidence):
+        calls = initial_calls
+        sources = [{**Evidence.sources[0], 'url': 'https://official.example/cached'}]
+        cached_reads = 0
+        async def call(self, name, args):
+            if name == 'fetch_source':
+                self.cached_reads += 1
+                return {'status': 'available', 'passages': self.sources[0]['passages']}
+            assert self.calls < 70, 'The runner must stop new remote requests at the budget'
+            self.calls += 1
+            return {'status': 'available', 'search_results': 'Existing source already registered'}
+    evidence = LimitedEvidence()
+    stages, searched = [], []
+    async def model(payload):
+        role = stages[-1]
+        if role != 'question' and evidence.calls == 70:
+            names = {tool['function']['name'] for tool in payload['tools']}
+            assert 'search_sources' not in names
+            assert 'fetch_source' in names
+        if role == 'portfolio' and not searched:
+            searched.append(True)
+            return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': str(i), 'type': 'function', 'function': {'name': 'search_sources', 'arguments': '{"query":"ETF","objective":"review"}'}}
+                for i in range(2)]}}]}
+        if role == 'portfolio' and not evidence.cached_reads:
+            return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': 'cached', 'type': 'function', 'function': {'name': 'fetch_source',
+                    'arguments': '{"url":"https://official.example/cached","offset":12}'}}]}}]}
+        content = {**final_payload(), 'recommendation': None, 'withheld_reason': 'customer_failed'} if role == 'opinion' else final_payload()[role]
+        if role == 'question': content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    result = await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), 'test', stages.append, model_call=model, evidence=evidence)
+    assert evidence.calls == 70
+    assert evidence.cached_reads == 1
+    assert 'opinion' in result['sections']
+    assert any(event.get('code') == 'TOOL_LIMIT' for event in result['diagnostics']['events'])
+
+
 @pytest.mark.parametrize('complete', [False, True])
 async def test_analysis_shares_ten_minutes_across_roles(monkeypatch, complete):
     loop = asyncio.get_running_loop()
