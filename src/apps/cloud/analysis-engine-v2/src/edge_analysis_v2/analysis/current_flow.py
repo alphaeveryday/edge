@@ -11,5 +11,6 @@ def current_flow(call):
             try:
                 result.append(call('sum_weighted_net_flow', arguments))
             except ToolExecutionError as error:
-                result.append(arguments | {'status': 'unavailable', 'error': str(error)})
+                reason = str(error).removesuffix(f'; tool_run_id={error.tool_run_id}')
+                result.append(arguments | {'status': 'unavailable', 'error': reason})
     return result
