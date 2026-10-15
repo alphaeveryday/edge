@@ -488,7 +488,7 @@ async def test_recovery_timeout_keeps_the_accepted_opinion_and_completion_checkp
         role = stages[-1]
         if role == 'opinion':
             opinions.append(1)
-            if len(opinions) == 4: raise TimeoutError('recovery interrupted')
+            if len(opinions) >= 4: raise TimeoutError('recovery interrupted')
             if len(opinions) == 3:
                 return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
                     {'id': 'catalog', 'type': 'function', 'function': {'name': 'search_etfs', 'arguments': '{"query":"VOO"}'}}]}}]}
