@@ -101,6 +101,8 @@ flowchart LR
 - 이메일 신청은 별도 테이블에 저장한다. 사용자 지시에 따라 UI는 “1일 이내에 리포트를 보내드려요”라고 안내한다. 자동 발송·정기 마케팅·예약 작업은 구현하지 않는다. 접수 후 발송은 운영자가 처리해야 한다.
 - API 키는 워커 환경에만 주입한다. API·React 번들에는 넣지 않는다. 로컬 Compose 포트는 loopback에만 공개한다.
 
+최종 출력의 검증 실패 이벤트에는 고객 입력·모델 원문 대신 고정된 `validation_step`을 기록해 후보 선택, 고객 제약, 실행 가능성, 본문, 완료 판정을 구분한다. 필수 도구 실행 전 형식 오류가 발생하면 보고서 제출을 요구하지 않고 남은 도구 호출을 강제한다. 이 복구 호출은 [DeepSeek 도구 선택 계약](https://api-docs.deepseek.com/api/create-chat-completion/)에 따라 thinking을 끄고 `tool_choice=required`를 사용하며, 필요한 작업이 끝난 뒤 보고서를 제출한다.
+
 ## AWS 전망의 단건 조회 계약
 
 `read_etf_outlook`은 `etf_code` 하나, 20~240자의 `purpose`, 15~240자의 `decision_question`을 필수로 받는다. 사용자 입력 또는 읽은 근거에 등장한 코드만 허용한다. 코드 배열·전체 목록·범위 검색·일괄 조회 기능은 없다.

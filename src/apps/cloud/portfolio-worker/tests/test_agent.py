@@ -244,6 +244,27 @@ def optimization_call(payload):
         {'id': 'optimize', 'type': 'function', 'function': {'name': 'optimize_portfolios', 'arguments': json.dumps({'combinations': groups})}}]}}]}
 
 
+async def test_output_diagnostics_identify_failing_validator_without_customer_text(monkeypatch):
+    phases, events = [], []
+    def reject(*args):
+        raise ValueError('private customer allocation details')
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer.validate', reject)
+    async def model(payload):
+        role = phases[-1]
+        if role == 'portfolio' and (call := optimization_call(payload)):
+            return call
+        content = {**final_payload(), 'recommendation': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(ValueError, match='OUTPUT_INVALID'):
+        await run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'amount_krw': 100}], horizon='10년 이상'),
+                           'test', phases.append, model_call=model, evidence=Evidence(), on_event=events.append)
+    failures = [event for event in events if event['event'] == 'validation_failed']
+    assert failures and all(event['validation_step'] == 'candidate_selection' for event in failures)
+    assert 'private customer' not in json.dumps(events)
+
+
 @pytest.mark.parametrize('disconnect_once', [False, True])
 async def test_one_conversation_visits_four_roles_and_keeps_context(disconnect_once):
     phases, conversations = [], []
