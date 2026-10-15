@@ -112,8 +112,6 @@ def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header
     contribution = body.preferences.contribution.strip()
     if not contribution:
         raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
-    if not any(value.strip() for value in body.preferences.interests):
-        raise HTTPException(422, 'INVESTMENT_OBJECTIVE_REQUIRED')
     if contribution.startswith('매달 꾸준히'):
         if not parse_funding(contribution):
             raise HTTPException(422, 'MONTHLY_AMOUNT_REQUIRED')

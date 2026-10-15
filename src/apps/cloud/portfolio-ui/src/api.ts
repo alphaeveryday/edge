@@ -46,7 +46,6 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const messages: Record<string, string> = {
         HOLDING_WEIGHTS_REQUIRED: '보유 종목의 금액 또는 비율을 입력해 주세요.',
         CONTRIBUTION_CHOICE_REQUIRED: '투자금을 넣는 방법을 선택해 주세요.',
-        INVESTMENT_OBJECTIVE_REQUIRED: '투자 목적을 하나 이상 골라 주세요.',
         MONTHLY_AMOUNT_REQUIRED: '매달 투자할 금액을 입력해 주세요.',
       };
       throw new Error(messages[body.detail] || '목록에서 ETF 또는 현금을 선택하고 금액을 확인해 주세요.');

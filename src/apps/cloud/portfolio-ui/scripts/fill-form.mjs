@@ -1,4 +1,4 @@
-export async function fillForm(page) {
+export async function fillForm(page, { interests = ['균형 잡힌 분산'] } = {}) {
   const find = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
   await find.fill('069500');
   await page.getByRole('option').filter({ hasText: '069500' }).click();
@@ -13,7 +13,7 @@ export async function fillForm(page) {
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await page.getByRole('button', { name: '10년 넘게 뒤', exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '균형 잡힌 분산', exact: true }).click();
+  for (const interest of interests) await page.getByRole('button', { name: interest, exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
 }
