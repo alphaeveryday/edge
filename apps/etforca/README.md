@@ -181,7 +181,7 @@ SLO는 응답 1초 이내입니다.
 * 샤드 서킷 적용 시 장애 샤드 요청의 중앙값 504ms에서 3ms로 감소
 
 측정 조건과 회차별 값은 [app-api README](app-api/README.md#실측)와 [Sentinel 실측 기록](app-api/experiments/FAILOVER_RESULTS.md)에 있습니다.
-측정 코드는 태그 [vote-cluster-isolation-2026-10-04](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-10-04/apps/etforca/app-api)에 있습니다.
+측정 코드는 [app-api/experiments](app-api/experiments/)에 있습니다.
 
 ---
 
