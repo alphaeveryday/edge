@@ -388,7 +388,7 @@ class Optimizer:
                     status = 'pass'
                 elif self.request.input_mode == 'percent':
                     status = check_constraints(self.decision.model_copy(update={'constraints': [rule]}), rows, self.request, self.market.catalog)[0]['status']
-                elif plan['status'] not in {'ready', 'conditional'} or self.decision.kind == 'new_money' and not (Decimal(plan['additional_krw']) or plan['monthly_krw']):
+                elif plan['status'] not in {'ready', 'conditional'}:
                     status = 'unknown'
                 elif plan['monthly_krw'] and Decimal(plan['monthly_krw']) > 0:
                     status = 'pass'  # A necessary existence check; exact months/accounts are checked at publication.
@@ -423,7 +423,7 @@ class Optimizer:
         return sorted(set(conflicts))
 
     def validate(self, final):
-        if self.result is None:
+        if self.result is None or self.result.get('status') == 'not_requested' and final.recommendation is not None:
             raise ValueError('Call optimize_portfolios before publishing')
         candidates = self.result['candidates']
         if not candidates:
