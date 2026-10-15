@@ -52,7 +52,7 @@ const priceRun = (runKey: string, over: Partial<Record<string, Partial<GridCell>
 test('🔴 대표 작업은 taskKeys 순서에서 stage 가 feature 인 첫 작업이다 — 카탈로그 전 데이터셋이 하나씩 얻는다', () => {
   /* stage 의 정본은 파이프라인 소스다. 화면에서는 격자 셀의 stage 로 같은 규칙을 돈다. */
   const src = readFileSync(
-    new URL('../../../../data-pipeline/src/data_pipeline/ops/catalog.py', import.meta.url),
+    new URL('../../../../../engine/data-pipeline/src/data_pipeline/ops/catalog.py', import.meta.url),
     'utf8',
   );
   const stages = new Map([...src.matchAll(/task_key="([^"]+)",(?:\s*flow="[^"]+",)?\s*stage="([^"]+)"/g)].map((m) => [m[1], m[2]]));

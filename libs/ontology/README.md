@@ -29,4 +29,4 @@ Object, link and interface definitions are bundled as data; no runtime code in t
 
 Package data is loaded relative to `edge_ontology`, so YAML ships with the wheel. `oms` contains typed definitions, loaders and existing cross-reference validation. It is not a deployed metadata server. Object-instance writes and threading execution stay in data-pipeline.
 
-Validation: `uv run --no-project --with pytest --with pyyaml --python 3.12 pytest src/libs/ontology/tests -c src/libs/ontology/pyproject.toml -q`.
+Validation: `uv run --no-project --with pytest --with pyyaml --python 3.12 pytest libs/ontology/tests -c libs/ontology/pyproject.toml -q`.

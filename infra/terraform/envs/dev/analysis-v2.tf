@@ -4,7 +4,7 @@
 # 아닌 줄은 invalid:… 로 남겨 모듈의 precondition 이 plan 을 실패시킨다 — 형식이 달라진 줄을
 # 조용히 빼고 성공하지 않기 위해서다.
 locals {
-  sources_toml      = file("${path.module}/../../../../src/apps/cloud/data-pipeline/src/data_pipeline/config/sources.toml")
+  sources_toml      = file("${path.module}/../../../../apps/engine/data-pipeline/src/data_pipeline/config/sources.toml")
   etf_map_section   = split("\n[", split("[krx_etf.source.etf_map]\n", local.sources_toml)[1])[0]
   etf_map_lines     = [for line in split("\n", local.etf_map_section) : line if !can(regex("^\\s*(#.*)?$", line))]
   outlook_etf_codes = [for line in local.etf_map_lines : try(regex("^\\s*\"?([0-9A-Z]{6})\"?\\s*=", line)[0], "invalid:${trimspace(line)}")]

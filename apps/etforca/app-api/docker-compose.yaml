@@ -3,7 +3,7 @@ services:
     build:
       # 루트 gradlew 와 libs 가 필요한 멀티프로젝트라 src 루트의 빌드 컨텍스트
       context: ../../..
-      dockerfile: apps/cloud/app-api/Dockerfile
+      dockerfile: apps/etforca/app-api/Dockerfile
     ports:
       - "8080:8080"
     environment:

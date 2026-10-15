@@ -30,8 +30,8 @@
 #     `up --force-recreate flyway-onprem` 으로 매 릴리스 스키마를 적용한다(배포 CD 구현됨, ALPHA-542).
 #
 # 마이그레이션 SQL 은 이 파일 옆 ${MIGRATIONS_ONPREM_DIR:-./migrations-onprem} 에 있어야 한다 —
-# 박스 배포 CD(deploy-demo-onprem.yml, ALPHA-542)가 src/libs/schema/migrations-onprem 를 번들해 함께 올린다.
-# 레포에서 그대로 테스트하려면 MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem 로 실행.
+# 박스 배포 CD(deploy-demo-onprem.yml, ALPHA-542)가 libs/schema/migrations-onprem 를 번들해 함께 올린다.
+# 레포에서 그대로 테스트하려면 MIGRATIONS_ONPREM_DIR=../../libs/schema/migrations-onprem 로 실행.
 #
 # 배포·tenant_delivery 시드·CloudFront /api 오리진·mTLS cert 는 ALPHA-445. 검수 콘솔은 후속 증분.
 #

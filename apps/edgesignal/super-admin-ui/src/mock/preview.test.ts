@@ -25,7 +25,7 @@ import {
 
 /** 정본은 파이프라인 소스다(datasetCatalog.test 와 같은 이유 — 두 언어를 잇는 가드가 없다) */
 const OPS_SRC = readFileSync(
-  new URL('../../../data-pipeline/src/data_pipeline/ops/catalog.py', import.meta.url),
+  new URL('../../../../engine/data-pipeline/src/data_pipeline/ops/catalog.py', import.meta.url),
   'utf8',
 );
 const OPS_TASK_KEYS = new Set([...OPS_SRC.matchAll(/task_key="([^"]+)"/g)].map((m) => m[1]));

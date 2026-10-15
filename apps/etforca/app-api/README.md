@@ -100,7 +100,7 @@ GET count ─▶ VoteService.counts()  Redis, 실패 시 DB 집계로 폴백 (so
 
 ### Redis Cluster 부분 장애 (2026-10-04)
 
-측정 코드는 태그 [vote-cluster-isolation-2026-10-04](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-10-04/src/apps/cloud/app-api)에 있다. 수정 전 코드는 커밋 ecd74dc8 이다.
+측정 코드는 태그 [vote-cluster-isolation-2026-10-04](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-10-04/apps/etforca/app-api)에 있다. 수정 전 코드는 커밋 ecd74dc8 이다.
 
 마스터 3+replica 3, `cluster-require-full-coverage=no`. 투표·조회·무관 요청(`/terms.html`) 각 50rps 를 3분 넣고 60초 후 샤드 0 의 마스터·replica 에 장애를 주입했다. 주입 후 20초 구간의 정상 샤드 투표 SLO(1초) 초과율과 조회 DB 폴백 비율을, 전파 원인으로 Tomcat busy·HikariCP 대기(풀 10)를 쟀다. 인기 종목(트래픽 50%)을 장애 샤드에 두면 전역 실패율 67%, 정상 샤드에 두면 17% 다. 조합마다 3런이고 표의 값은 런 범위, 별도 표기가 없으면 hot=failed 다. 원본은 `experiments/runs/`(gitignore) 의 result.json 이다.
 
@@ -127,7 +127,7 @@ GET count ─▶ VoteService.counts()  Redis, 실패 시 DB 집계로 폴백 (so
 
 #### 이전 측정 (2026-09-20, MySQL)
 
-측정 코드는 태그 [vote-cluster-isolation-2026-09-20](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-09-20/src/apps/cloud/app-api)에 있다. 리스너 수정 전 코드다.
+측정 코드는 태그 [vote-cluster-isolation-2026-09-20](https://github.com/alphaeveryday/edge/tree/vote-cluster-isolation-2026-09-20/apps/etforca/app-api)에 있다. 리스너 수정 전 코드다.
 
 | 구성 | 장애 | 정상 샤드 투표 SLO 초과 | 정상 샤드 조회 DB 폴백 | busy | HikariCP 대기 | 조회 폴백 qps |
 |---|---|---|---|---|---|---|
@@ -170,7 +170,7 @@ curl -i -X POST localhost:8080/api/v1/admin/votes/reconcile -H 'X-Admin-Token: l
 
 ```sh
 # src 디렉터리에서: 실제 PostgreSQL·Redis Docker 컨테이너 필요
-./gradlew :apps:cloud:app-api:test
+./gradlew :apps:etforca:app-api:test
 # 기존 compose를 내려 포트 8080, 55440, 6390을 비운 후 experiments에서
 python3 run-failover.py S2  # S1·S2·S4·S5(S3 retry 는 제거돼 거부), 각 3분 부하, 60초 후 장애
 # Redis Cluster 부분 장애(6노드 compose, docker-compose.cluster.yaml)

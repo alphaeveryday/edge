@@ -181,7 +181,7 @@ SELECT r.run_key, et.task_key, a.record_source, a.exit_code, a.ecs_task_arn, a.o
 ## 로컬 검증
 
 ```bash
-cd src/apps/cloud/airflow/local
+cd apps/engine/airflow/local
 # 입력: dev 레이크 읽기 전용 복사(inputs/dev-lake)와 배포된 ASL(inputs/deployed-asl.json). 둘 다 커밋하지 않는다.
 docker compose build && EDGE_LAB_TODAY_KST=2026-09-22 docker compose up -d --wait
 python3 lab.py scenario-legacy      # 기존 경로: plan-run → 대역 SFN(배포 ASL) → ECS 대역
@@ -195,11 +195,11 @@ python3 lab.py scenario-lockloss    # 실행권 커넥션 상실 중 다른 실�
 python3 lab.py scenario-hold        # 실행 상태 불명 시 보류(V1~V8, 16개 확인)
 python3 lab.py scenario-unsettled   # 결말 없는 실행(수동 failed·worker 사망·DAG 시간 초과·늦은 보고·같은 증거)
 # 시나리오마다 results/<시나리오>.events.jsonl 을 남긴다(로컬, 커밋하지 않는다). 위 두 시나리오의 사람이 쓴
-# 판정 요약은 `git show 8052842b:src/apps/cloud/airflow/local/results/hold-summary.md` 로 본다.
+# 판정 요약은 `git show 8052842b:apps/engine/airflow/local/results/hold-summary.md` 로 본다.
 # DAG 계약 테스트 — CI(test-airflow.yml)와 같은 이미지·명령
 docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro --entrypoint bash \
   apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1 \
-  -c "pip install -q -r /repo/src/apps/cloud/airflow/requirements-test.txt && cd /tmp && python -m pytest -q -p no:cacheprovider /repo/src/apps/cloud/airflow/tests"
+  -c "pip install -q -r /repo/apps/engine/airflow/requirements-test.txt && cd /tmp && python -m pytest -q -p no:cacheprovider /repo/apps/engine/airflow/tests"
 ```
 
 - `EDGE_LAB_TODAY_KST`는 저장된 과거 슬롯을 재생하려고 "오늘"을 고정하는 로컬 전용 변수다. **운영 환경에는 두지 않는다.**
@@ -711,7 +711,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 ### 배포·롤백
 
-- 평시 배포: `src/apps/cloud/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 서비스 desired 가 0(운영자 정지)이면 리비전만 바꾸고 켜지 않는다 — 켜는 것은 `start_service=true` 뿐이다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
+- 평시 배포: `apps/engine/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 서비스 desired 가 0(운영자 정지)이면 리비전만 바꾸고 켜지 않는다 — 켜는 것은 `start_service=true` 뿐이다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
 - 완료 판정(ALPHA-1138, #1049 `c27ee206`, 2026-10-02 머지). 이전에는 services-stable 직후 PRIMARY 를 한 번만 봐서, 정상 배포도 `IN_PROGRESS` 면 실패로 끝났다. 10-01 두 배포(run 36831907974·36833370844)가 그랬고, 실제로는 21·26초 뒤 완료됐다. 지금은 `update-service` 가 돌려준 **이번 배포 id** 를 `deploy/wait_rollout.sh` 가 따라간다.
   - 그 id 가 PRIMARY·COMPLETED 면 성공이다.
   - PRIMARY 가 다른 배포(롤백·같은 리비전의 다른 배포)이거나 FAILED 면 바로 실패다.
@@ -722,7 +722,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
     - 로그에 `서비스 갱신 요청: … (deployment ecs-svc/…)` 가 찍히는가.
     - `PRIMARY:` 줄이 그 id 로 IN_PROGRESS → COMPLETED 로 바뀌는가.
     - 워크플로가 `success` 로 끝나는가.
-- 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다. 되돌릴 수 있는 범위는 ECR 에 남는 최근 10개 버전이다([foundation README](../../../../infra/terraform/foundation/README.md) "ECR 이미지 보존"). 그보다 오래된 SHA 는 이미지가 지워져 다시 빌드해야 한다.
+- 롤백: `deploy-airflow` workflow_dispatch `image_tag=<이전 커밋 SHA>`. 빌드 없이 같은 경로를 탄다. 되돌릴 수 있는 범위는 ECR 에 남는 최근 10개 버전이다([foundation README](../../../infra/terraform/foundation/README.md) "ECR 이미지 보존"). 그보다 오래된 SHA 는 이미지가 지워져 다시 빌드해야 한다.
 - Airflow **버전을 내리는** 롤백은 이 경로로 하지 않는다. 새 버전의 `db migrate` 가 스키마를 올렸기 때문이다. 업그레이드 전에 메타DB 스냅샷을 찍고, 되돌릴 때는 그 스냅샷으로 복원한 뒤 옛 이미지를 배포한다.
 - Terraform 이 태스크 정의(환경·자원·역할)를 바꾸면 **다음 배포부터** 반영된다. 서비스의 리비전과 desired 는 CD 가 소유한다(`ignore_changes`). 바로 반영하려면 workflow_dispatch 로 같은 태그를 다시 배포한다.
 
@@ -810,7 +810,7 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 판정은 Airflow 상태 표시가 아니라 **네 가지 대조**로 한다: 실제 ECS 태스크 수(`run.py evidence`), 업무 실행 수(`state/business_starts` — 호출 전에 남는다), 원장 상태(`verify-ledger`), 산출물 쓰기(`state/partition_writes`). `clientToken` 이나 ECS 조회를 쓴다고 해서 정확히 한 번 실행이 보장되지는 않는다. KIS 에는 멱등 키가 없고, 저장소에는 fencing·CAS 가 없다(ALPHA-1057). 검증이 보이는 것은 "이 경로들에서 새 태스크를 띄우지 않았다"까지다.
 
 ```bash
-cd src/apps/cloud/airflow
+cd apps/engine/airflow
 docker build --build-arg BASE=<배포된 data-pipeline 이미지 다이제스트> -t <ecr>/edge/airflow:verify verify && docker push <ecr>/edge/airflow:verify
 EDGE_LAKE_BUCKET=<레이크(읽기)> python verify/run.py setup
 AIRFLOW_PASSWORD=... python verify/run.py trigger --slot 10:05 --conf '{"faults": {"collect": {"runtask_response_lost": [1]}}}'

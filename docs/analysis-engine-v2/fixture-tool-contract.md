@@ -92,7 +92,7 @@
 | `calculate_weighted_valuation` | 없음 | 전 구성종목 비중 가중 PER·PBR과 개별 계산 |
 | `get_instrument_factors` | 필수 `instrument_id`, 선택 `factors` | 요청 종목의 요인별 자료. 생략 시 네 요인 전체, 이력은 `columns/rows` |
 
-- [종목별 요인 조회 상세 계약](../../src/apps/cloud/analysis-engine-v2/docs/instrument-factors.md): 전체·부분 조회, 결측 처리, 반환 JSON 예시. 에이전트가 읽은 동일 결과에서 서버가 화면 수치를 조립.
+- [종목별 요인 조회 상세 계약](../../apps/engine/analysis-engine-v2/docs/instrument-factors.md): 전체·부분 조회, 결측 처리, 반환 JSON 예시. 에이전트가 읽은 동일 결과에서 서버가 화면 수치를 조립.
 - 공통 조회는 계산 가능한 값만 반환하며 PER 불가가 PBR을 막지 않음. 아래 두 전용 밸류 계산은 기존 양수 분모·완전 구성 조건 유지.
 - 세 도구 모두 최종 근거 가능. 요인 상태·스티커는 반환하지 않음.
 - `financials`: instrument_id,period(YYYY-Qn),eps,bps,eps_derivation(선택),available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화. 초기 입력 표도 `eps_derivation` 열을 싣는다(원자료에 없으면 null).

@@ -1,5 +1,5 @@
 // AUTO-GENERATED from libs/schema Flyway migrations - DO NOT EDIT.
-// Regenerate: bash src/libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).
+// Regenerate: bash libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).
 // SSOT: libs/schema migrations. Derived physical ERD (dbdiagram.io syntax).
 
 Table "analysis_item" {

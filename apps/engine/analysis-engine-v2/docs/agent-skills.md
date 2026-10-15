@@ -50,7 +50,7 @@ SDK 자식 프로세스는 부모 환경을 상속하며 내부 MCP와 같은 �
 
 ```sh
 python -m pytest tests -q
-docker build -f apps/cloud/analysis-engine-v2/Dockerfile -t analysis-v2:skills . # src/에서 실행
+docker build -f apps/engine/analysis-engine-v2/Dockerfile -t analysis-v2:skills . # src/에서 실행
 docker run --rm --read-only --cap-drop ALL --entrypoint python \
   -e DEEPSEEK_API_KEY -e DEEPSEEK_MODEL analysis-v2:skills \
   -m edge_analysis_v2.agent.smoke --artifacts /tmp/probe

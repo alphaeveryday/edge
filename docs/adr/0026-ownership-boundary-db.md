@@ -10,7 +10,7 @@ ADR-0019(노션 확정 결정 #8 이관)는 진기 범위를 "Cloud Event Store 
 ## 결정
 - **김진기**: Data Pipeline → Common Analysis Engine → **Cloud Event Store 적재까지** (DB 에 쓰는 것까지).
 - **조영서**: DB 에 적재된 데이터를 소비하는 **이후 전부** — Event Bundle 생성(tenant-sync-api 내부 DB 조회·조립), 전달 레코드(fan-out), Tenant Sync API, Sync Agent, 온프렘 전체.
-- **진기-영서 인터페이스 = Cloud Event Store DB 스키마 하나** ([ADR-0005](0005-db-as-contract.md) db-as-contract). 스키마 변경은 양자 합의(CODEOWNERS `/src/libs/schema/`), 번들 JSON·체크섬·프로토콜은 영서 단독 스펙.
+- **진기-영서 인터페이스 = Cloud Event Store DB 스키마 하나** ([ADR-0005](0005-db-as-contract.md) db-as-contract). 스키마 변경은 양자 합의(CODEOWNERS `/libs/schema/`), 번들 JSON·체크섬·프로토콜은 영서 단독 스펙.
 - 유지되는 것: Sync 프로토콜 양단 단일 오너(영서), 정준영 = AI/ML (ADR-0019 의 나머지 내용).
 
 ## 대안

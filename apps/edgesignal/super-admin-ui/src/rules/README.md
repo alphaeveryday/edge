@@ -25,8 +25,8 @@
 — PR 게이트(`.github/workflows/ui-test.yml`)는 Node 24 로 돈다.
 
 ```bash
-cd src && pnpm --filter super-admin-ui test        # 워크스페이스 어디서나 되는 형태
-cd src/apps/cloud/super-admin-ui
+pnpm --filter super-admin-ui test        # 워크스페이스 어디서나 되는 형태
+cd apps/edgesignal/super-admin-ui
 pnpm test          # node --test 'src/**/*.test.ts'
 pnpm eval:rules    # node src/rules/cli.ts [facts.json]
 ```
@@ -83,8 +83,8 @@ import 에 확장자를 붙인다.
    만들면 계측이 끝난다고 읽으면 안 된다(남은 것은 아래 **계측 티켓 표**다 — 수를 여기 적으면
    낡는다. 규모의 정본은 `rules.ts` 의 `dep` 집합이고 `rules.test.ts` 가 표와 맞물려 센다).
    **이 선택은 닫혔다** — 엔드포인트가 사실만 주고 평가는 여기 남는다
-   ([ADR-0050](../../../../../../docs/adr/0050-console-facts-endpoint.md), 계약은
-   [docs/contracts/console-facts-api.md](../../../../../../docs/contracts/console-facts-api.md)).
+   ([ADR-0050](../../../../../docs/adr/0050-console-facts-endpoint.md), 계약은
+   [docs/contracts/console-facts-api.md](../../../../../docs/contracts/console-facts-api.md)).
 6. **구 홈 은퇴 — 라우트만 존치** — `/`는 규칙 엔진 사건 목록(`/ops/incidents`)으로 이동하고,
    이전 `OverviewPage`(실데이터 레인 요약)는 `/overview`에 **라우트·컴포넌트로만** 남는다.
    ⚠️ **"남는다"는 메뉴 병존이 아니다** — 사이드바에서 빼는 것이 은퇴의 내용이다(계획 §6-3:

@@ -26,7 +26,7 @@ super-admin ALPHA-616 패턴 이식) — 미인증·만료는 `RequireSession` �
 정적으로 제거돼 자격증명이 실리지 않고, 로그인 화면이 유일한 진입이다. 데모 박스의
 `VITE_DEMO_AUTOSESSION` 자동 세션 빌드는 콘솔 CloudFront 공개와 함께 폐기 — ALPHA-627).
 데모 배포본은 CloudFront(`demo-console.edgesignal.dev`)가 박스 nginx(:8090)를 오리진으로
-프록시한다 — [demo/onprem/README](../../../../demo/onprem/README.md) "검수 콘솔 접근" 참조.
+프록시한다 — [demo/onprem/README](../../../demo/onprem/README.md) "검수 콘솔 접근" 참조.
 
 ## 라우트 / IA (디자인 v0.2)
 

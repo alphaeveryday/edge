@@ -1,8 +1,8 @@
 """실험 중 감시(shim verify-watchdog)·심장박동 게이트 — data-pipeline 환경에서 실행한다(shim 이 data_pipeline 을 import).
 
-    cd src && VERIFY_CRITERIA=criteria_aws_1408_a4a5.json VERIFY_BUCKET=x AWS_DEFAULT_REGION=ap-northeast-2 \\
-        PYTHONPATH=apps/cloud/airflow/verify uv run --package data-pipeline \\
-        pytest apps/cloud/airflow/verify/test_watchdog.py -q
+    VERIFY_CRITERIA=criteria_aws_1408_a4a5.json VERIFY_BUCKET=x AWS_DEFAULT_REGION=ap-northeast-2 \\
+        PYTHONPATH=apps/engine/airflow/verify uv run --package data-pipeline \\
+        pytest apps/engine/airflow/verify/test_watchdog.py -q
 """
 import json
 import time

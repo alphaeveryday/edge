@@ -23,7 +23,7 @@
 
 실행(레포 루트 기준):
 
-    cd src/apps/cloud/data-pipeline
+    cd apps/engine/data-pipeline
     AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
       DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
       uv run python scripts/build_minute_universe.py --out /tmp/universe.json

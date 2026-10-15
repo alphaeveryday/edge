@@ -5,7 +5,7 @@ repo root 에서 실행한다고 가정한다. reference/ 는 매 실행마다 �
 복사하면서, 복사 트리 밖을 가리키는 상대 링크(루트 README 등)는 GitHub 소스 URL 로
 재작성한다 — 포털에서 404 가 되던 링크를 유효하게 만들기 위함이다.
 원본 docs/ 는 절대 수정하지 않는다(읽기만 하고 reference/ 로만 쓴다).
-브랜드 로고·파비콘의 캐노니컬은 src/libs/ui-kit/src/assets (콘솔과 공용, ALPHA-950·952) —
+브랜드 로고·파비콘의 캐노니컬은 libs/ui-kit/src/assets (콘솔과 공용, ALPHA-950·952) —
 포털은 빌드 시 여기서 복사받고 사본은 커밋하지 않는다(.gitignore).
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from xml.etree import ElementTree
 REPO_ROOT = Path.cwd()
 DOCS = REPO_ROOT / "docs"
 REFERENCE = REPO_ROOT / "pages" / "docs" / "reference"
-BRAND = REPO_ROOT / "src" / "libs" / "ui-kit" / "src" / "assets"
+BRAND = REPO_ROOT / "libs" / "ui-kit" / "src" / "assets"
 IMAGES = REPO_ROOT / "pages" / "docs" / "assets" / "images"
 
 ANIMATED_LOGO_OVERLAY = r"""

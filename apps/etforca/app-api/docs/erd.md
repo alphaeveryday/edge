@@ -270,7 +270,7 @@ PK `(blocker_id, blocked_id)`. 단방향: blocker 의 피드(전체·내 관심�
 원천은 셋이다.
 - 분석 산출물: analysis-engine-v2 엔진 테이블(`movement_*`·`outlook_*`, 파이프라인 RDS). `data_source = 'database'` 인 완료 발행본만 옮긴다.
 - 앱 관리 값: `etf_curation`(선별 목록과 원천 없는 표시 값)과 `theme`, 마이그레이션으로 채운다.
-- 마스터·시장 데이터: 파이프라인 마트 스키마 `src/libs/schema/migrations-cloud`. ETF 정체성은 `instrument.instrument_id`(ULID)이고 자연키는 `UNIQUE(market_code, ticker)`(MIC `XKRX` + 6자리 코드). 이름은 `entity.display_name`, 테마는 `etf_profile.primary_theme_concept_id → concept`, 일별 가격은 `price_daily`, 구성종목은 `etf_holding_snapshot`.
+- 마스터·시장 데이터: 파이프라인 마트 스키마 `libs/schema/migrations-cloud`. ETF 정체성은 `instrument.instrument_id`(ULID)이고 자연키는 `UNIQUE(market_code, ticker)`(MIC `XKRX` + 6자리 코드). 이름은 `entity.display_name`, 테마는 `etf_profile.primary_theme_concept_id → concept`, 일별 가격은 `price_daily`, 구성종목은 `etf_holding_snapshot`.
 
 | 앱 테이블 | 파이프라인 원천 | 비고 |
 |---|---|---|

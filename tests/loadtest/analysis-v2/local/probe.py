@@ -33,7 +33,7 @@ from psycopg.rows import dict_row
 
 HERE = Path(__file__).resolve().parent
 REPO = Path(os.environ.get('EDGE_REPO', HERE.parents[3]))  # tests/loadtest/analysis-v2/local → 저장소 루트
-sys.path.insert(0, str(REPO/'src/apps/cloud/analysis-engine-v2/src'))
+sys.path.insert(0, str(REPO/'apps/engine/analysis-engine-v2/src'))
 HOST = 'host=127.0.0.1 port=55461 dbname=analysis_v2 connect_timeout=10'
 DSN = {'admin': HOST+' user=v2_local password=local_only',
        'writer': HOST+' user=edge_analysis_v2_writer password=local_only',
@@ -47,7 +47,7 @@ TABLES = ('tool_runs', 'movement_items', 'outlook_items', 'outlook_factors', 'ou
 
 def etf_codes():
     """실제 설정의 국내 ETF 목록(스냅샷 해시와 함께)."""
-    path = REPO/'src/apps/cloud/data-pipeline/src/data_pipeline/config/sources.toml'
+    path = REPO/'apps/engine/data-pipeline/src/data_pipeline/config/sources.toml'
     codes = list(tomllib.loads(path.read_text(encoding='utf-8'))['krx_etf']['source']['etf_map'])
     return codes, hashlib.sha256(','.join(codes).encode()).hexdigest()
 

@@ -172,7 +172,7 @@ Reconciler(주기, Airflow): sweep_airflow_runs — 끝나지 않은 시도가 �
 **실행 주체(ALPHA-1088).** `ops_pipeline_run.orchestrator`(SFN|AIRFLOW)가 슬롯의 주체다. 다른 주체가
 이미 계획한 run_key 를 다시 계획하면 Planner 가 실행하지 않고 LAUNCH_CONFLICT 로 드러낸다(두 주체의
 같은 run_id 이중 실행 방지). Airflow 경로의 중복 실행 방지·exit 75·보류(exit 76, `EXECUTION_HOLD`)·재처리(`OPS_REPROCESS`)·
-전환·롤백·보류 해제 절차는 [`src/apps/cloud/airflow/README.md`](../../airflow/README.md)가 정본이다. env 가 없는 SFN·수동
+전환·롤백·보류 해제 절차는 [`apps/engine/airflow/README.md`](../../airflow/README.md)가 정본이다. env 가 없는 SFN·수동
 경로의 wrapper 동작은 종전 그대로다(원장 장애에도 작업 진행).
 
 Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도 "실행 자체가 안 됐다"를 잡기
@@ -313,7 +313,7 @@ DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 # ③원장의 universe_version 과 universe_hash 를 **둘 다** 고치고 ④소비자를 재기동한다.
 AWS_PROFILE=edge DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
-  uv run python apps/cloud/data-pipeline/scripts/build_minute_universe.py --out /tmp/universe.json
+  uv run python apps/engine/data-pipeline/scripts/build_minute_universe.py --out /tmp/universe.json
 # 세션 drain(1분 파이프라인, ALPHA-698) — phase 를 DRAINING 으로 옮긴다(스케줄
 # 경로에서는 아래 `stop-minute-session` 이 건다). Worker 가 ack 하면 DRAINED 가 되고 그다음이 qc-minute-session 이다.
 # ⚠️ **이미 drain 이후인 것도 exit 0** 이다 — DB 커밋 뒤 출력 전에 죽은 실행의 재시도가

@@ -1,6 +1,6 @@
 # 분석엔진 v2 로컬 대시보드
 
-분석 결과, DB 저장 행, 출력 계약 검사, 에이전트 관측, 시스템 프롬프트 관리를 한 화면에서 제공한다. 패키지별 역할은 [저장소 구조](../../../../docs/repo-structure.md#분석엔진-v2-패키지)에 있다.
+분석 결과, DB 저장 행, 출력 계약 검사, 에이전트 관측, 시스템 프롬프트 관리를 한 화면에서 제공한다. 패키지별 역할은 [저장소 구조](../../../docs/repo-structure.md#분석엔진-v2-패키지)에 있다.
 
 ## 클라우드 실행 자동 관측
 
@@ -79,7 +79,7 @@ API 계약: [Search](https://docs.tinyfish.ai/api-reference/search-the-web),
 ## 검증
 
 문서 스킬과 실행 권한, 컨테이너 검증 방법은 [분석 스킬 실행 계약](docs/agent-skills.md)을 참고한다.
-API·가격 사건의 실행 접수와 운영 연결 전 범위는 [v2 실행 접수 계약](../../../../docs/contracts/analysis-v2-admission.md)을 참고한다.
+API·가격 사건의 실행 접수와 운영 연결 전 범위는 [v2 실행 접수 계약](../../../docs/contracts/analysis-v2-admission.md)을 참고한다.
 
 ```sh
 python -m pytest tests -q

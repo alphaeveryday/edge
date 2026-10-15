@@ -1,7 +1,7 @@
 # tenant-sync-api
 
 온프렘 Sync Agent가 Pull하는 Cloud 표면 — `GET /api/v1/sync/bundle?after={cursor}&limit={n}` (엔드포인트 계약 확정 — sync-protocol.md "엔드포인트 계약" 절, ALPHA-397).
-계약은 [docs/contracts/sync-protocol.md](../../../../docs/contracts/sync-protocol.md)·[event-bundle-schema.md](../../../../docs/contracts/event-bundle-schema.md)가 SSOT이고, 경로·필드·타입 문법 명세는 이 모듈의 [openapi.yaml](openapi.yaml)(OpenAPI 3.1)이며, 이 README는 이 모듈만의 비자명한 규율만 적는다.
+계약은 [docs/contracts/sync-protocol.md](../../../docs/contracts/sync-protocol.md)·[event-bundle-schema.md](../../../docs/contracts/event-bundle-schema.md)가 SSOT이고, 경로·필드·타입 문법 명세는 이 모듈의 [openapi.yaml](openapi.yaml)(OpenAPI 3.1)이며, 이 README는 이 모듈만의 비자명한 규율만 적는다.
 
 ## 지켜야 할 로컬 불변식
 
@@ -27,7 +27,7 @@
 docker compose up --build tenant-sync-api   # host 18083
 curl -i "localhost:18083/api/v1/sync/bundle?after=0"   # 200 (공통 응답 포맷, result 아래 번들)
 curl -i "localhost:18083/api/v1/sync/bundle?after=3"   # 200 (신규 없음 — result 필드 생략)
-# bootRun 은 postgres(:55432) 가 떠 있어야 한다 (src/ 에서 :apps:cloud:tenant-sync-api:bootRun)
+# bootRun 은 postgres(:55432) 가 떠 있어야 한다 (src/ 에서 :apps:edgesignal:tenant-sync-api:bootRun)
 ```
 
 로컬 데이터는 `libs/schema/seed-local-cloud`(SSOT 밖, compose 만 마운트)의 전달 레코드다 — NEW 자동 발번은 analysis-engine 소관이지만(ALPHA-493) 엔진이 로컬 compose 에 없어 시드를 유지한다. INVALIDATION 은 super-admin-api 무효화 액션(ALPHA-440)으로 발번된다(CORRECTION 은 폐지 — ADR-0044).

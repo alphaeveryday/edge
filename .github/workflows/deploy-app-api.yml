@@ -15,14 +15,14 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/cloud/app-api/**"
+      - "apps/etforca/app-api/**"
       # 공유 경로. 모든 JVM 앱 이미지에 영향(schema SQL 은 migrate 소관이라 제외).
-      - "src/libs/jvm-common/**"
-      - "src/settings.gradle"
-      - "src/gradle/**"
-      - "src/gradlew"
-      - "src/gradlew.bat"
-      - "src/.dockerignore"
+      - "libs/jvm-common/**"
+      - "settings.gradle"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".dockerignore"
       # 배포 절차 자체의 변경. tenant-sync-api 와 같이 이 파일 자신은 넣지 않는다.
       # 이 워크플로가 신설되는 머지 push 에서 terraform-apply(권한·서비스 생성)와 경주해
       # 첫 실행이 반드시 실패하기 때문. 부트스트랩은 workflow_dispatch 가 담당한다.

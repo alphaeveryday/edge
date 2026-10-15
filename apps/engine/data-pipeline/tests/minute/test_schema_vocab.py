@@ -13,7 +13,7 @@ from pathlib import Path
 
 from data_pipeline.minute import states
 
-# …/src/apps/cloud/data-pipeline/tests/minute/ → parents[5] = src/
+# …/apps/engine/data-pipeline/tests/minute/ → parents[5] = src/
 MIGRATIONS = Path(__file__).parents[5] / "libs" / "schema" / "migrations-cloud"
 
 

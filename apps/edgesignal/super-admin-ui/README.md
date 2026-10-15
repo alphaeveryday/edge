@@ -1,6 +1,6 @@
 # super-admin-ui
 
-> 역할/아키텍처는 [docs/repo-structure.md](../../../../docs/repo-structure.md)·[docs/context.md](../../../../docs/context.md)가 SSOT.
+> 역할/아키텍처는 [docs/repo-structure.md](../../../docs/repo-structure.md)·[docs/context.md](../../../docs/context.md)가 SSOT.
 > 이 문서는 로컬 실행·범위 경계만 둔다.
 
 운영자 콘솔(EDGE Admin). tenant-console-ui 와 동일 스택 — Vite + React 19 + TypeScript +
@@ -9,7 +9,7 @@ Tailwind CSS v4 + TanStack Query, 디자인 시스템은 [`ui-kit`](../../../lib
 
 ## 실행
 
-Node 패키지 매니저는 **pnpm**이다(ADR-0001). Node 워크스페이스 루트는 `src/pnpm-workspace.yaml`.
+Node 패키지 매니저는 **pnpm**이다(ADR-0001). Node 워크스페이스 루트는 `pnpm-workspace.yaml`.
 
 ```bash
 # 백엔드 먼저 (레포 루트에서) — admin API 는 fail-closed 라 API 없이는 화면 데이터가 비어 있다
@@ -24,7 +24,7 @@ pnpm --filter super-admin-ui eval:rules # 규칙 평가 결과 JSON (UI 없이)
 
 ⚠️ `test`·`eval:rules` 는 **Node 23.6+** 가 필요하다 — `.ts` 를 네이티브로 실행한다(레포에
 버전 핀이 없다). 배포 워크플로는 Node 20 이라 못 돌고, PR 게이트
-[`ui-test.yml`](../../../../.github/workflows/ui-test.yml)이 Node 24 로 돌린다. 그 워크플로가
+[`ui-test.yml`](../../../.github/workflows/ui-test.yml)이 Node 24 로 돌린다. 그 워크플로가
 UI 의 **유일한 PR 체크**다 — 그전에는 타입 오류가 PR 이 아니라 dev 배포를 깨뜨렸다.
 
 dev 서버는 `/api` 를 super-admin-api(기본 `http://localhost:18082`, bootRun 직접
@@ -66,7 +66,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 | `/analysis-results/:kind/:id` | 분석 결과 상세 — 저장된 내용 그대로(전망: 스티커·요약·상세 항목·요인·요인 상세·결론 / 가격변동: 요약·항목(앞선 분석에서 고른 것 포함)·고른 순서·회수 / 실패: 오류 메시지 전체). 코드 값의 화면 말은 `domains/analysisResults/labels`, 전망 근거 문장(갱신 표시)·출처(제목 링크, http·https 만)의 표시 모양은 `domains/analysisResults/evidence` 가 정한다(ALPHA-1337). 읽기 전용 |
 
 ⚠️ **종목 이력은 시장·코드를 경로가 아니라 쿼리로 받는다.** CloudFront 의 SPA fallback
-([`spa-rewrite.js`](../../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
+([`spa-rewrite.js`](../../../infra/terraform/modules/static-site/spa-rewrite.js))이 "마지막 경로
 조각에 점(`.`)이 있으면 정적 파일"로 가르기 때문에, 점 든 티커(`BRK.B` 류)를 경로에 두면
 **그 종목의 공유 링크·새로고침만** index.html 을 못 받는다. 주소 조립은
 `domains/analyses/symbols.symbolHref` 한 곳이다.
@@ -92,7 +92,7 @@ Secrets Manager 시크릿으로 주입된다(ALPHA-618) — 로그인하면 실�
 ## 규칙 엔진 (`src/rules/`)
 
 콘솔 홈을 "규칙이 사실 위에서 돌아 나온 결과의 렌더링"으로 바꾸기 위한 **판정 층**이다
-(ALPHA-738 · [ADR-0050](../../../../docs/adr/0050-console-facts-endpoint.md)). 규칙 R01~R19 +
+(ALPHA-738 · [ADR-0050](../../../docs/adr/0050-console-facts-endpoint.md)). 규칙 R01~R19 +
 인과 간선 + `evaluate()` 가 여기 살고 UI 를 모른다.
 
 `pages/ops/*` 화면과 `consoleFacts` 어댑터가 이 결과를 소비한다. 와이어 DTO와 엔진 `Facts`의
@@ -147,4 +147,4 @@ hook 만 의존. 도메인: `tenants` · `sources` · `analyses` · `analysisRes
 super-admin-api 성공 응답도 공통 봉투(`ApiResponse`)라 client.ts 가 `.result` 를
 중앙에서 벗겨 반환한다 — tenant-console-ui 도 동일하다(ALPHA-521·522, 도메인별
 repository 는 무변경). 그 밖 상세 규약은
-[tenant-console-ui README](../../onprem/tenant-console-ui/README.md#데이터-레이어-핵심-규약) 참조 (중복 서술하지 않는다).
+[tenant-console-ui README](../tenant-console-ui/README.md#데이터-레이어-핵심-규약) 참조 (중복 서술하지 않는다).

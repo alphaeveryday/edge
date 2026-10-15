@@ -13,4 +13,4 @@ uv run --package db-query python -m edge_db_query --sql "SELECT 1 AS ok"
 - SELECT·WITH·TABLE은 하위 쿼리로 감싸 행 상한을 겁니다. EXPLAIN·SHOW는 감쌀 수 없어 그대로 실행하고 읽을 때 상한을 겁니다. `EXPLAIN ANALYZE`는 안쪽 문장을 실제로 실행하므로, 쓰기가 들어 있으면 읽기전용 트랜잭션과 `agent_ro` 권한이 서버에서 거부합니다.
 - `deploy-db-query`는 이미지 게시만 수행합니다. 조회 태스크 정의(`infra/terraform/modules/db-query`)는 이미 이 이미지(`db-query-latest`)와 `edge_db_query` 진입점을 씁니다.
 
-검증: 단위 테스트는 `uv run --package db-query pytest apps/cloud/db-query/tests/test_readonly.py -q`. 실제 PostgreSQL 검사는 CI의 일회용 DB에서 실행하며, 운영 DB에서는 실행하지 않습니다.
+검증: 단위 테스트는 `uv run --package db-query pytest apps/engine/db-query/tests/test_readonly.py -q`. 실제 PostgreSQL 검사는 CI의 일회용 DB에서 실행하며, 운영 DB에서는 실행하지 않습니다.

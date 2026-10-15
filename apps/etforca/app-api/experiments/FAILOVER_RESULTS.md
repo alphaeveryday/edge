@@ -101,7 +101,7 @@ Resilience4j 서킷(쓰기=repository, 읽기=service, replace 는 서킷 밖) �
 
 현재 기본값은 REJECT_COMMANDS / 500ms / timeoutOptions=true / MASTER / retry=false다. S1 vs S3 실측으로 즉시 실패 정책의 우월성(스레드 200→2, p99 5,009ms→6.62ms, 부하 유실 139→0)을 같은 빌드에서 확인했다. S3의 “중복 집계 관측이 성공”은 FR-1의 멱등 Lua와 충돌하므로 재시도 중복 방지를 검증하는 것으로 정정했다.
 
-`./gradlew :apps:cloud:app-api:test`: 통합 테스트 **3개 통과, skipped 0**. 동시 16회 중복 요청, 선택지 변경 거부, Lua 재실행, SCRIPT FLUSH 후 EVAL fallback, Redis pause 중 DB 저장·fallback·ping, 데이터 유실 및 연결 단절 후 자동 복구, 관리자 권한과 수동 재조정을 검증했다. 단독 Redis 컨테이너 재시작은 호스트 포트 변경으로 첫 테스트가 실패하여 데이터 유실+CLIENT KILL로 수정했으며, 실제 master 종료·Sentinel 승격은 위 S2에서 별도로 검증했다.
+`./gradlew :apps:etforca:app-api:test`: 통합 테스트 **3개 통과, skipped 0**. 동시 16회 중복 요청, 선택지 변경 거부, Lua 재실행, SCRIPT FLUSH 후 EVAL fallback, Redis pause 중 DB 저장·fallback·ping, 데이터 유실 및 연결 단절 후 자동 복구, 관리자 권한과 수동 재조정을 검증했다. 단독 Redis 컨테이너 재시작은 호스트 포트 변경으로 첫 테스트가 실패하여 데이터 유실+CLIENT KILL로 수정했으며, 실제 master 종료·Sentinel 승격은 위 S2에서 별도로 검증했다.
 
 대규모 voted 집합의 Lua 실행 시간·메모리, 다중 앱 인스턴스 간 재조정 경합, S4·S5의 실험 결과는 미검증이다. 진행 중 투표와 DB snapshot의 경합은 PRD대로 다음 주기에 보정한다. 기존 전망 API 및 PostgreSQL 데이터의 자동 이관은 제공하지 않는다.
 

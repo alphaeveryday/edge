@@ -1,7 +1,7 @@
 # libs/schema
 
 DB 스키마 **단일 진실 공급원(SSOT)** 모듈. 공유 DB가 서비스 간 계약이므로(ADR-0005,
-[docs/implementation.md](../../../docs/implementation.md) §4) 모든 마이그레이션을 여기서 관리한다.
+[docs/implementation.md](../../docs/implementation.md) §4) 모든 마이그레이션을 여기서 관리한다.
 
 이 모듈은 **Spring 앱이 아니다.** Flyway 마이그레이션을 실행하기만 하는 전용 Gradle 모듈이다
 (`application.yml` 없음, JPA 없음). 설정은 전부 `build.gradle`(Groovy)의 Flyway 플러그인 블록에 있다.
@@ -10,7 +10,7 @@ DB 스키마 **단일 진실 공급원(SSOT)** 모듈. 공유 DB가 서비스 �
 (Event Bundle JSON Schema, ALPHA-497). Flyway 가 실행하지 않는 정적 자산이며, producer
 (tenant-sync-api)·consumer(publication-api) 가 `sourceSets.test.resources.srcDir` 로 이 파일을
 테스트 classpath 에 올려 같은 계약으로 검증한다(중복 없이 단일 SSOT). 계약 정의 SSOT 는
-[docs/contracts/event-bundle-schema.md](../../../docs/contracts/event-bundle-schema.md).
+[docs/contracts/event-bundle-schema.md](../../docs/contracts/event-bundle-schema.md).
 
 ## 로컬 DB — Docker Postgres
 
@@ -27,7 +27,6 @@ docker compose -f docker-compose.schema.yml up -d
 > Gradle 명령은 JVM 루트인 `src/`에서 실행한다(`./gradlew`가 거기 있다).
 
 ```bash
-cd src
 ./gradlew :libs:schema:flywayInfo       # 마이그레이션 상태 확인
 ./gradlew :libs:schema:flywayMigrate    # 적용
 ./gradlew :libs:schema:flywayValidate   # 적용본 검증
@@ -65,7 +64,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 공유 DB(dev/staging·prod)를 바꾸는 주체는 각 JVM/Spring 앱이 아니라 CI/CD다.
 
 - **merge 자체는 DB를 바꾸지 않는다.** DB 변경은 파이프라인이 마이그레이션을 실행할 때만 일어난다.
-- **dev 머지** → dev DB 마이그레이션 대상 (`.github/workflows/schema-migrate.yml`, **`src/libs/schema/` 변경 커밋에서만** 실행).
+- **dev 머지** → dev DB 마이그레이션 대상 (`.github/workflows/schema-migrate.yml`, **`libs/schema/` 변경 커밋에서만** 실행).
 - **PR(→dev/main)** → ephemeral Postgres에 `:libs:schema:flywayMigrate`+`flywayValidate` 실제 적용·검증만 한다 (`.github/workflows/schema-validate.yml`). secret을 쓰지 않고 운영 DB는 건드리지 않는다.
 - **prod 마이그레이션(main 머지 → prod DB, 승인 게이트 후)** 은 목표 토폴로지지만 아직 워크플로가 없다. prod 인프라(RDS·클러스터·`production` environment)가 생기면 별도 티켓에서 dev와 같은 패턴으로 재도입한다(현재는 dev 인프라만 존재).
 - **앱 배포(API CD)는 마이그레이션 CD와 분리돼 있다** — 앱 워크플로는 CI에서 `schema-migrate` 완료를 기다리지 않는다. "스키마가 코드보다 먼저"는 확장-수축 + PR 순서 규율로 지킨다: **확장 마이그레이션 PR을 먼저 머지·적용(schema-migrate 초록 확인)한 뒤 의존 코드 PR을 머지한다**(docs/implementation.md §4).
@@ -76,7 +75,7 @@ DB 스키마 변경은 **배포 파이프라인**에서만 일어난다. 위 로
 그래서 배포 워크플로는 러너에서 Flyway를 돌리지 않는다. 대신:
 
 1. 러너가 **OIDC로 AWS 인증**(장기 액세스 키 없음).
-2. 이 커밋의 SQL을 담은 **마이그레이션 이미지**(`src/libs/schema/Dockerfile`, Flyway CLI + SQL)를 ECR에 push.
+2. 이 커밋의 SQL을 담은 **마이그레이션 이미지**(`libs/schema/Dockerfile`, Flyway CLI + SQL)를 ECR에 push.
 3. **ECS Fargate one-off task**(`infra/terraform/modules/schema-migrate`)를 private 서브넷에서 RunTask로 실행 → Flyway가 VPC 안에서 RDS에 적용.
 4. task 완료(STOPPED)까지 대기 후 컨테이너 exit code로 성공/실패 판정.
 
@@ -201,9 +200,9 @@ git config core.hooksPath .githooks
   아래 docker 한 줄로 직접 재생성한다(로컬에 pg18 을 깔 필요 없다):
 
   ```bash
-  chmod -R a+w src/libs/schema/generated   # 컨테이너는 postgres uid(999)로 돈다
+  chmod -R a+w libs/schema/generated   # 컨테이너는 postgres uid(999)로 돈다
   docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
-    bash src/libs/schema/scripts/generate-erd.sh
+    bash libs/schema/scripts/generate-erd.sh
   ```
 
   `chmod` 을 빼면 리눅스에서 `Permission denied` 로 죽는다 — 산출물이 러너/사용자 uid 소유라
@@ -212,7 +211,7 @@ git config core.hooksPath .githooks
   같은 `chmod` 을 먼저 돌린다.
 
 - 훅은 **opt-in 이라 강제되지 않는다** — 미활성·pg18 없는 커밋은 ERD 를 갱신하지 않는다. 그래서
-  **집행은 CI 가 한다**(ALPHA-783): `schema-validate` 가 `src/libs/schema/**` 변경 PR 에서 ERD 를
+  **집행은 CI 가 한다**(ALPHA-783): `schema-validate` 가 `libs/schema/**` 변경 PR 에서 ERD 를
   다시 만들어 커밋본과 대조하고, 어긋나면 빨간불로 드러낸다. 훅은 편의이고 CI 가 방어선이다.
   ⚠️ 단 `dev` 룰셋(`protect-dev`)에 required status check 가 지정돼 있지 않다 — 빨간불이 머지를
   **막지는 못한다**(드러내는 데까지다).

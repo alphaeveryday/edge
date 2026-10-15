@@ -49,17 +49,17 @@ src/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 8개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker·app-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 8개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker·app-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `src/settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker · app-api |
-| Node | `src/pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
-| Python | `src/pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology |
+| JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker · app-api |
+| Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
+| Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology |
 
 ## apps — 배포 단위
 
-포트폴리오 서비스는 `src/apps/cloud/portfolio-ui`(React 19)와 `src/apps/cloud/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 기존 분석 엔진·온톨로지에 의존하지 않는다. [설계와 실행 경계](design/portfolio-worker.md).
+포트폴리오 서비스는 `apps/etforca/portfolio-ui`(React 19)와 `apps/etforca/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 기존 분석 엔진·온톨로지에 의존하지 않는다. [설계와 실행 경계](design/portfolio-worker.md).
 
 | 앱 | 런타임 | 아티팩트 | 역할 |
 |---|---|---|---|
@@ -100,7 +100,7 @@ sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-wo
 
 ### schema — 단일 진실 공급원(SSOT)
 DB 스키마를 `schema/` 한 곳에서 정의합니다.
-- `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](../src/libs/schema/README.md)의 Gradle Flyway 태스크로.
+- `migrations-cloud/`(cloud)·`migrations-onprem/`(온프렘) — Flyway 세트 2개, 아티팩트 분리(ADR-0016). 스키마 변경은 여기서만 관리합니다. 실행은 [`libs/schema`](../libs/schema/README.md)의 Gradle Flyway 태스크로.
 - `generated/` — 스키마로부터 만드는 파생물을 커밋합니다. 현재 있는 생성기는 **물리 ERD** 하나입니다(`scripts/generate-erd.sh` → `physical-erd.dbml`·`physical-erd-onprem.dbml`, pre-commit 훅 + `schema-validate` CI 가 재생성해 커밋본과 대조 — ALPHA-783). **각 언어용 모델 생성기는 아직 없어**, JVM·Python 소비자는 Flyway SQL 을 계약 SSOT로 직접 따릅니다.
 
 ## 데이터 흐름
@@ -119,14 +119,14 @@ DB 스키마를 `schema/` 한 곳에서 정의합니다.
 
 - `data-pipeline`이 raw 수집→정제→feature 페이즈에서 외부 데이터를 raw lake에 보존·정규화하고, feature 산출물(가격 트리거·종목 마스터 등)을 DB에 적재합니다.
 - `analysis-engine-v2`의 큐 소비자가 분석 SFN을 시작합니다. v2 워커가 설명·근거를 저장하고 자동 노출 및 테넌트 전달을 처리합니다. 운영 DB의 일회성 조회는 `db-query`를 사용합니다. v1 소스는 제거됐으며 이전 설계 기록은 ADR과 Git 이력에 남습니다.
-- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../src/apps/cloud/data-pipeline/docs/ops-ledger.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
+- **운영 원장**(ALPHA-530): 스케줄러는 SFN 을 직접 시작하지 않고 **Planner**(`data-pipeline` 의 `plan-run`)를 띄웁니다 — 실행 **전에** 예정 작업(`ops_*` 테이블)을 Postgres 에 남기고 SFN 을 시작해, SFN 이 안 떠도 미실행을 탐지합니다. **Reconciler**(`reconcile`)가 예정↔실제(SFN/ECS 증거)를 대조합니다. 실행을 제어하지 않는 관측 projection 입니다([data-pipeline/README](../apps/engine/data-pipeline/docs/ops-ledger.md#운영-원장--expected_taskplannerreconciler-alpha-530)).
 - API 계층(`tenant-console-api`/`super-admin-api`)이 DB를 읽어 UI에 제공하며, Cloud Event Store 접근은 `jvm-common`이 담당합니다.
 - 고객 대면 흐름(Cloud Event Store → Tenant Sync API → 온프렘 Sync Agent(DMZ) → Intake(내부망) → Screening → Publication API)이 관통합니다([docs/context.md](context.md) §3) — Screening 은 활성 정책(policy_version·screening_rule)을 평가해 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 로 분기하며(ALPHA-429), 정정(CORRECTION) 전달은 폐지됐고 무효화(INVALIDATION)가 유일한 사후 조치이며([ADR-0044](adr/0044-correction-abolition.md)), 점검 Audit 은 후속(ALPHA-431)입니다.
 
 
 ## 분석엔진 v2 패키지
 
-위치: `src/apps/cloud/analysis-engine-v2/`. 패키지 이름은 역할을 드러내는 소문자 이름과 snake_case를 사용한다. 일반적인 `utils`, `common` 최상위 폴더나 이전 경로의 호환 모듈을 두지 않는다.
+위치: `apps/engine/analysis-engine-v2/`. 패키지 이름은 역할을 드러내는 소문자 이름과 snake_case를 사용한다. 일반적인 `utils`, `common` 최상위 폴더나 이전 경로의 호환 모듈을 두지 않는다.
 
 ```text
 analysis-engine-v2/

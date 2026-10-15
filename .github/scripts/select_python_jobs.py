@@ -8,7 +8,7 @@ import tomllib
 
 APPS = ("data-pipeline", "db-query")
 OPTIONAL = {
-    "analysis-engine-v2": "apps/cloud/analysis-engine-v2",
+    "analysis-engine-v2": "apps/engine/analysis-engine-v2",
     "edge-analysis-tools": "libs/analysis-tools",
 }
 
@@ -25,10 +25,10 @@ def available_optional(root: Path) -> set[str]:
     Raises:
         ValueError: A present package is incorrectly named or unregistered.
     """
-    workspace = tomllib.loads((root / "src/pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"]["workspace"]
+    workspace = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"]["workspace"]
     found = set()
     for name, path in OPTIONAL.items():
-        manifest = root / "src" / path / "pyproject.toml"
+        manifest = root / path / "pyproject.toml"
         if not manifest.exists():
             continue
         registered = any(fnmatch.fnmatchcase(path, pattern) for pattern in workspace["members"])
@@ -56,21 +56,21 @@ def select_jobs(paths: list[str], available: set[str]) -> dict:
     apps, requested = set(), set()
     shared = schema = False
     for path in filter(None, paths):
-        if path.startswith("src/libs/schema/migrations-cloud/"):
+        if path.startswith("libs/schema/migrations-cloud/"):
             schema = True
-        elif path.startswith("src/libs/analysis-tools/"):
+        elif path.startswith("libs/analysis-tools/"):
             requested.add("edge-analysis-tools")
             if "analysis-engine-v2" in available:
                 requested.add("analysis-engine-v2")
-        elif path.startswith("src/apps/cloud/analysis-engine-v2/"):
+        elif path.startswith("apps/engine/analysis-engine-v2/"):
             requested.add("analysis-engine-v2")
         elif any(path.startswith(f"src/apps/cloud/{app}/") for app in APPS):
             apps.update(app for app in APPS if path.startswith(f"src/apps/cloud/{app}/"))
-        elif path.startswith("src/apps/cloud/airflow/dags/") or path == "src/apps/cloud/airflow/tests/ecs_stop_cases.json":
+        elif path.startswith("apps/engine/airflow/dags/") or path == "apps/engine/airflow/tests/ecs_stop_cases.json":
             apps.add("data-pipeline")  # DAG constants and shared ECS termination cases.
-        elif path in {"src/pyproject.toml", "src/uv.lock", "src/.dockerignore", ".github/workflows/test-python.yml"} or path.startswith((".github/scripts/", ".github/tests/")):
+        elif path in {"pyproject.toml", "uv.lock", ".dockerignore", ".github/workflows/test-python.yml"} or path.startswith((".github/scripts/", ".github/tests/")):
             shared = True
-        elif path.endswith((".py", ".toml", ".lock")) or path.startswith("src/libs/ontology/"):
+        elif path.endswith((".py", ".toml", ".lock")) or path.startswith("libs/ontology/"):
             shared = True  # Unknown Python source/config: preserve regressions.
     missing = requested - available
     if missing:

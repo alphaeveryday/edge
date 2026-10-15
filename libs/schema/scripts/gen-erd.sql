@@ -96,7 +96,7 @@ fk_line AS (
 )
 SELECT
   '// AUTO-GENERATED from libs/schema Flyway migrations - DO NOT EDIT.' || E'\n' ||
-  '// Regenerate: bash src/libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).' || E'\n' ||
+  '// Regenerate: bash libs/schema/scripts/generate-erd.sh (schema-validate CI enforces no drift).' || E'\n' ||
   '// SSOT: libs/schema migrations. Derived physical ERD (dbdiagram.io syntax).' || E'\n\n' ||
   (SELECT string_agg(block, E'\n\n' ORDER BY relname COLLATE "C") FROM tbl) ||
   COALESCE(E'\n\n' || (SELECT string_agg(line, E'\n' ORDER BY child COLLATE "C", conname COLLATE "C") FROM fk_line), '');

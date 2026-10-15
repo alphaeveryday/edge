@@ -10,7 +10,7 @@
 # 태그(버전)는 build.gradle 의 Flyway 플러그인 버전과 일치시킨다.
 FROM flyway/flyway:10.21.0
 
-# 마이그레이션 SQL — libs/schema 가 SSOT. (빌드 컨텍스트는 src/libs/schema)
+# 마이그레이션 SQL — libs/schema 가 SSOT. (빌드 컨텍스트는 libs/schema)
 COPY migrations-cloud/ /flyway/sql/
 
 # 정책 설정(locations·baselineOnMigrate·cleanDisabled·validateMigrationNaming)

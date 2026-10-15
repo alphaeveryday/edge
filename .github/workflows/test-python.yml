@@ -65,15 +65,15 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: "src/uv.lock"
+          cache-dependency-glob: "uv.lock"
           cache-local-path: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.package }}
       - name: Install selected package
-        working-directory: src
+        working-directory: .
         env:
           PACKAGE: ${{ matrix.package }}
         run: uv sync --locked --python 3.12 --package "$PACKAGE"
       - name: Test selected package offline
-        working-directory: src
+        working-directory: .
         env:
           PACKAGE: ${{ matrix.package }}
           PACKAGE_PATH: ${{ matrix.path }}
@@ -99,11 +99,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: "src/uv.lock"
+          cache-dependency-glob: "uv.lock"
           cache-local-path: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.app }}
 
       - name: uv sync (locked, 앱 스코프)
-        working-directory: src
+        working-directory: .
         # --locked: 락-pyproject 정합 fail-loud (--frozen 은 낡은 락을 통과시킨다).
         # --python 3.12: 프로덕션 이미지(python:3.12-slim)와 러너 인터프리터를 고정 일치.
         # --package: 워크스페이스 합집합이 아니라 그 앱 의존만 설치 — 교차 의존 누수가
@@ -111,12 +111,12 @@ jobs:
         run: uv sync --locked --python 3.12 --package ${{ matrix.app }}
 
       - name: pytest ${{ matrix.app }}
-        working-directory: src
+        working-directory: .
         run: uv run --package ${{ matrix.app }} pytest apps/cloud/${{ matrix.app }}/tests -q
 
       - name: pytest ontology contracts
         if: matrix.app == 'data-pipeline'
-        working-directory: src
+        working-directory: .
         run: uv run --package data-pipeline pytest libs/ontology/tests -q
 
   # ── 이미지 빌드 스모크 (push 없음) ───────────────────────────
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: docker build ${{ matrix.app }}
-        run: docker build -f src/apps/cloud/${{ matrix.app }}/Dockerfile src
+        run: docker build -f src/apps/cloud/${{ matrix.app }}/Dockerfile .
 
 
   # ── 뉴스 조립 → v2 조회 계보와 DB 경계 E2E ─────────────────
@@ -184,21 +184,21 @@ jobs:
           docker run --rm --network host
           -v "$PWD:/workspace:ro"
           flyway/flyway:10.21.0
-          -locations=filesystem:/workspace/src/libs/schema/migrations-cloud
+          -locations=filesystem:/workspace/libs/schema/migrations-cloud
           -url=jdbc:postgresql://localhost:${{ env.E2E_PGPORT }}/edge -user=edge -password=edge migrate
 
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: "src/uv.lock"
+          cache-dependency-glob: "uv.lock"
           cache-local-path: ${{ github.workspace }}/.uv-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
 
       - name: uv sync (locked)
-        working-directory: src
+        working-directory: .
         run: uv sync --locked --python 3.12
 
       - name: source-lineage and database e2e
-        working-directory: src
+        working-directory: .
         env:
           E2E_PGHOST: 127.0.0.1
           # E2E_PGPORT 는 "Start ephemeral Postgres" 스텝이 $GITHUB_ENV 로 넘긴다.
@@ -207,9 +207,9 @@ jobs:
         # 적재와 독립 DB 조회기의 실제 PostgreSQL 경계를 함께 검증한다.
         run: >
           uv run pytest
-          apps/cloud/data-pipeline/tests/e2e
-          apps/cloud/db-query/tests/e2e
-          apps/cloud/data-pipeline/tests/minute/test_schema_vocab.py
+          apps/engine/data-pipeline/tests/e2e
+          apps/engine/db-query/tests/e2e
+          apps/engine/data-pipeline/tests/minute/test_schema_vocab.py
           -q
 
       # 영속 러너에 컨테이너·포트를 남기지 않는다.

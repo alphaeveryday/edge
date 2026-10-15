@@ -106,12 +106,12 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
     ```
   - "no checks reported" 로 끝나면 통과가 아니라 **워크플로가 아예 안 돈 것**이다(Actions 한도 소진기 push 는 job 이 시작되지 않고 소급 실행도 없다). 왜 안 돌았는지 확인 전에는 머지하지 않는다.
 - `feature/*`·`fix/*` → `dev` 머지는 Codex 왕복(6단계) 통과 + 위 체크 전건 통과면 **확인 없이 실행한다** — 그 둘이 곧 머지 게이트라 별도 확인은 중복이다. 단 `dev → main` 릴리스 머지는 되돌리기 훨씬 번거로운 경계이므로 사용자 확인 후 실행한다.
-- **마이그레이션 단조성 재확인 (머지 직전, 브랜치에 `src/libs/schema/migrations-*` 신규 파일이 있을 때만)** — CI 의 단조성 guard 는 체크 시점 base 기준이라 병렬 PR 머지 경합에서 역행 착지 창이 열린다(docs/git-conventions.md "스키마 마이그레이션 머지 게이트", ALPHA-623 실증). `git fetch origin dev` 후 신규 버전이 최신 `origin/dev` 해당 세트의 최고 버전보다 큰지 확인한다:
+- **마이그레이션 단조성 재확인 (머지 직전, 브랜치에 `libs/schema/migrations-*` 신규 파일이 있을 때만)** — CI 의 단조성 guard 는 체크 시점 base 기준이라 병렬 PR 머지 경합에서 역행 착지 창이 열린다(docs/git-conventions.md "스키마 마이그레이션 머지 게이트", ALPHA-623 실증). `git fetch origin dev` 후 신규 버전이 최신 `origin/dev` 해당 세트의 최고 버전보다 큰지 확인한다:
   ```bash
   git fetch origin dev --quiet
-  git ls-tree -r --name-only origin/dev -- src/libs/schema/migrations-cloud/ | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1   # onprem 세트도 동일
+  git ls-tree -r --name-only origin/dev -- libs/schema/migrations-cloud/ | sed -nE 's#.*/V([0-9]+)__.*#\1#p' | sort -n | tail -1   # onprem 세트도 동일
   ```
-  역행이면 머지하지 말고 **전방 리네임**(내용 그대로 더 큰 버전, 버전 인용 주석·테스트 경로 동반 갱신 + `src/libs/schema/rename-recovery.allowlist` 에 쌍 선언 — guard 는 선언된 리네임만 허용) 후 4단계 게이트부터 재진입한다.
+  역행이면 머지하지 말고 **전방 리네임**(내용 그대로 더 큰 버전, 버전 인용 주석·테스트 경로 동반 갱신 + `libs/schema/rename-recovery.allowlist` 에 쌍 선언 — guard 는 선언된 리네임만 허용) 후 4단계 게이트부터 재진입한다.
 - `gh pr merge <N> --squash --delete-branch --subject 'type(scope): 제목 (#<N>)'` — subject 끝의 `(#<N>)`을 유지해 dev 히스토리에서 PR을 추적할 수 있게 한다.
 - **worktree 사이클이면 `--delete-branch` 를 뺀다** — gh 가 로컬 브랜치를 지우려고 base(`dev`)로 전환을 시도하는데 `dev` 는 메인 체크아웃이 잡고 있어 실패한다. 머지 후 원격 브랜치는 `git push origin --delete <브랜치>` 로 지우고, 로컬 브랜치·폴더는 8단계에서 정리한다.
 - `dev → main` 릴리스 PR은 이 사이클 밖의 별도 경계다: Squash가 아니라 **Merge commit** 을 쓴다 — `gh pr merge --merge`(docs/git-conventions.md의 `--no-ff`와 같은 결과: gh의 merge는 항상 머지 커밋을 만든다). Squash는 장수 브랜치 `dev`를 `main`과 발산시킨다 (ADR-0007).
@@ -131,4 +131,4 @@ PR을 올리면 Codex 리뷰어가 자동 리뷰한다. **`codex-review-loop` �
 ## 테스트 시나리오
 
 - **정상 흐름**: "검수 승인 API 구현해줘" → 티켓 확인(예: ALPHA-401) → `feature/ALPHA-401-review-approve` 분기+push → 구현·커밋 → edge-review+docs-sync 게이트 → dev 대상 PR(Refs 푸터) → Codex 리뷰 풀링, finding 1건 수용·수정·`@codex review` 재요청, `+1` 확인 → `gh pr checks` 전건 통과 확인 → 확인 없이 Squash 머지·브랜치 삭제(7단계 — `+1`+체크 통과가 곧 머지 게이트) → 이슈 완료 전환.
-- **에러 흐름**: edge-review 게이트가 `./gradlew :apps:onprem:tenant-console-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.
+- **에러 흐름**: edge-review 게이트가 `./gradlew :apps:edgesignal:tenant-console-api:build` 실패를 최우선 finding 으로 보고 → PR을 올리지 않고 수정 → 게이트 재실행.

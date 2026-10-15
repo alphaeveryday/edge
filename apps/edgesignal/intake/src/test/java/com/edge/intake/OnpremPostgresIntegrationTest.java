@@ -15,7 +15,7 @@ import org.testcontainers.utility.DockerImageName;
  * Hibernate ddl-auto=validate 로 엔티티↔스키마를 대조한다(ADR-0038). H2 는 JSONB·IDENTITY 등
  * Postgres 문법을 지원하지 않아 이 검증을 대체할 수 없다.
  *
- * <p>flyway.locations 는 이 모듈 디렉터리(src/apps/onprem/intake) 기준 상대 경로다 —
+ * <p>flyway.locations 는 이 모듈 디렉터리(apps/edgesignal/intake) 기준 상대 경로다 —
  * Gradle test 태스크의 작업 디렉터리가 모듈 디렉터리라 성립한다.
  */
 @SpringBootTest(properties = {

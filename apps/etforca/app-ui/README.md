@@ -4,7 +4,7 @@ ETF Orca B2C 앱. Expo(React Native) + Expo Router.
 
 ## 이 모듈만 다른 점
 
-- **pnpm 워크스페이스 밖의 독립 패키지**다. Metro 가 pnpm 심볼릭 링크 구조와 충돌해서 `src/pnpm-workspace.yaml` 에서 제외했고, 의존성은 이 폴더의 `package-lock.json`(npm)으로 관리한다. 여기서는 `pnpm` 이 아니라 `npm` / `npx expo install` 을 쓴다.
+- **pnpm 워크스페이스 밖의 독립 패키지**다. Metro 가 pnpm 심볼릭 링크 구조와 충돌해서 `pnpm-workspace.yaml` 에서 제외했고, 의존성은 이 폴더의 `package-lock.json`(npm)으로 관리한다. 여기서는 `pnpm` 이 아니라 `npm` / `npx expo install` 을 쓴다.
 - **Expo Go 를 쓰지 않는다.** 처음부터 development build(`expo-dev-client`)다. `npm run ios` / `npm run android` 가 네이티브 빌드를 만든다(iOS 는 Xcode 필요).
 - 화면은 `src/api` 의 클라이언트 인터페이스만 본다. `EXPO_PUBLIC_API_MODE` 가 `mock`(기본)이면 `src/api/mock`, `http` 이면 `src/api/http` 구현을 쓴다. 택일은 `src/api/index.ts` 에서만 한다.
 

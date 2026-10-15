@@ -21,14 +21,14 @@ on:
   pull_request:
     branches: [dev, main]
     paths:
-      - "src/libs/schema/contracts/**"
-      - "src/apps/cloud/tenant-sync-api/**"
-      - "src/apps/onprem/screening-worker/**"
-      - "src/apps/onprem/publication-api/**"
-      - "src/gradle/**"
-      - "src/gradlew"
-      - "src/settings.gradle"
-      - "src/build.gradle"
+      - "libs/schema/contracts/**"
+      - "apps/edgesignal/tenant-sync-api/**"
+      - "apps/edgesignal/screening-worker/**"
+      - "apps/edgesignal/publication-api/**"
+      - "gradle/**"
+      - "gradlew"
+      - "settings.gradle"
+      - "build.gradle"
       - ".github/workflows/contract-test.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다(어떤 secret 도 쓰지 않는 검증 전용 워크플로).
@@ -59,10 +59,10 @@ jobs:
       # producer·consumer 가 같은 스키마로 번들을 검증한다. --tests 로 계약 테스트 클래스만 —
       # 두 모듈 모두 EventBundleContractTest 를 가지므로 필터가 양쪽에 매치한다.
       - name: Event Bundle 양단 계약 테스트
-        working-directory: src
+        working-directory: .
         run: >
           ./gradlew
-          :apps:cloud:tenant-sync-api:test
-          :apps:onprem:screening-worker:test
-          :apps:onprem:publication-api:test
+          :apps:edgesignal:tenant-sync-api:test
+          :apps:edgesignal:screening-worker:test
+          :apps:edgesignal:publication-api:test
           --tests '*EventBundleContractTest'

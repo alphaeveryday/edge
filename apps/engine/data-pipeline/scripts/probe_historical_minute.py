@@ -5,7 +5,7 @@
 콜만 쓴다 — 그래서 대형주 몇 종의 **원시 행**을 여기서 먼저 본다.
 
     AWS_PROFILE=edge KIS_TOKEN_CACHE_PARAM=/edge-dev-data-pipeline/kis/access-token \\
-      uv run --package data-pipeline python apps/cloud/data-pipeline/scripts/probe_historical_minute.py \\
+      uv run --package data-pipeline python apps/engine/data-pipeline/scripts/probe_historical_minute.py \\
         --date 2026-10-02 --symbols 005930,000660,069500 --windows 1432,1434
 
 - 종목은 그 시간대에 **매 분 체결되는** 대형주·대표 ETF 로 고른다. 저유동 종목은 무거래 분이 정상이라

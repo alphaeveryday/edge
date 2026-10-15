@@ -1,6 +1,6 @@
 """이벤트 타입 온톨로지 — 허용 라벨의 SSOT 접근자 (ALPHA-138, lib 이관 ALPHA-539).
 
-어휘 정본은 `edge_ontology` lib(`src/libs/ontology`)의 resources/ 다 — 구 alphamale JSON
+어휘 정본은 `edge_ontology` lib(`libs/ontology`)의 resources/ 다 — 구 alphamale JSON
 스냅샷(`event_type_profiles_v0_1.json`)은 ALPHA-539 로 은퇴했다. 갱신 규약은 lib 소관:
 실험실(event-ontology repo)에서 확정한 리소스를 통째 교체하고(부분 발췌·현지 수정 금지),
 어휘가 바뀌었으면 `ONTOLOGY_VERSION` 을 함께 올린다. 이 모듈은 태깅이 쓰는 파생 뷰

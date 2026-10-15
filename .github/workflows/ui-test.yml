@@ -19,14 +19,14 @@ on:
   pull_request:
     branches: [dev, main]
     paths:
-      - "src/apps/cloud/super-admin-ui/**"
-      - "src/apps/onprem/tenant-console-ui/**"
-      - "src/libs/ui-kit/**"
+      - "apps/edgesignal/super-admin-ui/**"
+      - "apps/edgesignal/tenant-console-ui/**"
+      - "libs/ui-kit/**"
       # 워크스페이스 루트 manifest — 지금은 name·private 뿐이지만 여기에 스크립트나 공통
       # 의존성이 붙으면 설치·빌드가 통째로 달라진다. 빼면 그 PR 이 게이트 없이 지나간다.
-      - "src/package.json"
-      - "src/pnpm-lock.yaml"
-      - "src/pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/ui-test.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다(어떤 secret 도 쓰지 않는 검증 전용 워크플로).
@@ -44,8 +44,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: src
-
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +57,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: src/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile
 

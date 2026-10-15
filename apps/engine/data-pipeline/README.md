@@ -1,6 +1,6 @@
 # data-pipeline
 
-> 역할/아키텍처는 [docs/repo-structure.md](../../../../docs/repo-structure.md)·[docs/context.md](../../../../docs/context.md)가 SSOT.
+> 역할/아키텍처는 [docs/repo-structure.md](../../../docs/repo-structure.md)·[docs/context.md](../../../docs/context.md)가 SSOT.
 > 이 문서는 로컬 실행·설정 계약·범위 경계만 둔다.
 
 ## 상세 문서
@@ -16,16 +16,16 @@
 
 ## 실행
 
-Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `src/pyproject.toml`.
+Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `pyproject.toml`.
 
 ```bash
 uv sync --package data-pipeline --group dev                         # src/에서 의존성 설치
-uv run --package data-pipeline --group dev pytest apps/cloud/data-pipeline/tests
+uv run --package data-pipeline --group dev pytest apps/engine/data-pipeline/tests
 ```
 
 서브커맨드별 실행 예시(`run ingest-raw`·`normalize-*`·`load-*`·1분 세션 등)는 [docs/run-steps.md](docs/run-steps.md) 에 있다.
 
-> uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/cloud/data-pipeline`에서, pip ≥ 25.1):
+> uv가 없는 환경이면 표준 venv로 같은 일을 한다(`apps/engine/data-pipeline`에서, pip ≥ 25.1):
 > ```bash
 > python3 -m venv .venv
 > .venv/bin/pip install -e . --group dev   # dev 그룹(pytest)은 PEP 735 [dependency-groups]
@@ -80,7 +80,7 @@ KIS 호출자(분봉 워커·업종지수·iNAV·EOD 배치 등)는 기본적으
 저장소 호출 1회(잠금 대기·이름 해석·연결·TLS·질의)는 `statement_timeout_ms` + 0.5s 안에 끝난다. DNS 도 이 기한 안에서
 풀어 libpq 에 주소로 넘긴다(libpq 는 이름을 동기로 푼다 — 무응답 DNS 에서 20초 실측). 응답을 못 받으면 서버가 예약을
 확정했어도 발신하지 않고, 그 커넥션은 버린다. `pace()` 전체는 `max_wait_sec` 안에 끝나고, `pace()` 가 돌아온 뒤 HTTP
-연결까지의 지연은 이 기한에 들지 않는다. 결정과 검증 범위는 [ADR-0055](../../../../docs/adr/0055-kis-shared-call-budget-on-postgres.md)에 있다.
+연결까지의 지연은 이 기한에 들지 않는다. 결정과 검증 범위는 [ADR-0055](../../../docs/adr/0055-kis-shared-call-budget-on-postgres.md)에 있다.
 
 - 켜기: `DATA_PIPELINE_CALL_BUDGET__ENABLED=true`(terraform `call_budget_enabled`, 기본 `false`).
   그 밖의 키(`BUDGET_ID`·`RTT_MAX_SEC`·`SEND_WINDOW_SEC`·`MAX_WAIT_SEC` 등)는 `CallBudgetConfig` 가

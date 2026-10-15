@@ -1,4 +1,4 @@
-<!-- 캐노니컬 src/libs/ui-kit/src/assets/edge-favicon.svg 의 사본 — public/ 은 Vite 가 가공 없이 서빙하므로 import 불가, 갱신은 원본과 함께(ALPHA-952). -->
+<!-- 캐노니컬 libs/ui-kit/src/assets/edge-favicon.svg 의 사본 — public/ 은 Vite 가 가공 없이 서빙하므로 import 불가, 갱신은 원본과 함께(ALPHA-952). -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
   <rect width="300" height="300" rx="36" fill="#00309F"/>
   <g transform="translate(-112.5 40)">

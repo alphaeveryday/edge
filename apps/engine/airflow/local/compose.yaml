@@ -1,7 +1,7 @@
 # 장중 수급 레인 — 기존 경로(배포 ASL 재현)와 Airflow 경로의 로컬 비교. lab.py 가 구동한다.
 # 포트는 127.0.0.1 에만 연다. 운영 AWS·외부 업무 API 를 부르지 않는다(AWS 는 fake-aws 대역).
 x-app: &app
-  build: {context: ../../../.., dockerfile: apps/cloud/airflow/local/Dockerfile}
+  build: {context: ../../../.., dockerfile: apps/engine/airflow/local/Dockerfile}
   image: edge-airflow-migration-lab:local
   environment: &biz
     DATA_PIPELINE_DB__HOST: postgres

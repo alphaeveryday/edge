@@ -18,7 +18,7 @@ import org.testcontainers.utility.DockerImageName;
  * 정리한다. (@Container 로 관리하면 첫 클래스 종료 시 컨테이너가 내려가, 두 번째 클래스가
  * 캐시된 컨텍스트의 죽은 JDBC URL 로 붙어 연결 실패가 난다 — tenant-console-api 베이스와 동일 규약.)
  *
- * <p>flyway.locations 는 이 모듈 디렉터리(src/apps/onprem/screening-worker) 기준 상대 경로다 —
+ * <p>flyway.locations 는 이 모듈 디렉터리(apps/edgesignal/screening-worker) 기준 상대 경로다 —
  * Gradle test 태스크의 작업 디렉터리가 모듈 디렉터리라 성립한다.
  */
 @SpringBootTest(properties = {

@@ -21,7 +21,7 @@ import time
 import psycopg
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[3]/'src/apps/cloud/analysis-engine-v2/src'))
+sys.path.insert(0, str(HERE.parents[3]/'apps/engine/analysis-engine-v2/src'))
 from edge_analysis_v2.api.publications import PublicationReader  # noqa: E402
 from edge_analysis_v2.cloud.control import control  # noqa: E402
 

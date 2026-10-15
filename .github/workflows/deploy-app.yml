@@ -7,7 +7,7 @@
 # 마이그레이션과의 관계: 앱 배포는 스키마 마이그레이션(schema-migrate.yml)과 완전히 분리돼 있다.
 # CI 에서 migrate 완료를 기다리지 않는다 — "스키마가 코드보다 먼저"는 확장-수축(expand-contract)과
 # PR 순서 규율로 지킨다: 확장 마이그레이션 PR 을 먼저 머지·적용한 뒤 의존 코드 PR 을 머지한다.
-# (근거: docs/implementation.md §4 확장-수축·§5 현행 CD · src/libs/schema/README.md)
+# (근거: docs/implementation.md §4 확장-수축·§5 현행 CD · libs/schema/README.md)
 #
 # 배포 방식: 이미지 태그 = semver. ECR 의 최신 semver 태그를 기준으로 squash 커밋 타입에 따라
 # 버전을 올린다(Conventional Commits 파싱 — feat→minor, BREAKING CHANGE/`!`→major, 그 외→patch).
@@ -109,7 +109,7 @@ jobs:
           set -euo pipefail
           image="${REGISTRY}/edge/${APP}:${VERSION}"
           # 빌드 컨텍스트 = src/ 루트(멀티프로젝트 — 각 앱 Dockerfile 헤더 참고). Fargate 는 amd64.
-          docker build --platform linux/amd64 -f "src/apps/${PLANE}/${APP}/Dockerfile" -t "${image}" src
+          docker build --platform linux/amd64 -f "src/apps/${PLANE}/${APP}/Dockerfile" -t "${image}" .
           docker push "${image}"
 
       # TF 소유 base task 정의에서 이미지만 교체해 새 리비전 등록 → 서비스 롤링 업데이트 → 안정화 대기.

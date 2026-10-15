@@ -859,7 +859,7 @@ def _ecs_stop_evidence(task: dict) -> tuple[str, int | None]:
     """DescribeTasks 의 태스크 하나 → 종료 증거 (ALIVE|NOT_STARTED|EXITED|KILLED, exit).
 
     Airflow `edge_batch.ecs_stop_evidence` 와 **같은 규칙**이다 — 두 쪽 테스트가 같은 사례표
-    (`src/apps/cloud/airflow/tests/ecs_stop_cases.json`)로 대조한다. 같은 증거에 한쪽은 보류, 한쪽은 업무 실패로
+    (`apps/engine/airflow/tests/ecs_stop_cases.json`)로 대조한다. 같은 증거에 한쪽은 보류, 한쪽은 업무 실패로
     결론 내면 원장과 Airflow 가 어긋난다.
     - EXITED: 컨테이너가 스스로 끝났다 — exit 0, 또는 128 미만 비0 이면서 stopCode 없음·EssentialContainerExited.
     - KILLED: 스스로 끝났다는 증거가 없다 — exit 없음, exit ≥ 128(신호: SIGKILL·OOM 137, SIGTERM 143), 외부 종료

@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  apps/cloud/portfolio-ui:
+  apps/etforca/portfolio-ui:
     dependencies:
       react:
         specifier: ^19.0.0
@@ -39,7 +39,7 @@ importers:
         specifier: ^5.4.0
         version: 5.4.21(@types/node@22.20.1)(lightningcss@1.32.0)
 
-  apps/cloud/super-admin-ui:
+  apps/edgesignal/super-admin-ui:
     dependencies:
       '@tanstack/react-query':
         specifier: ^5.62.0
@@ -82,7 +82,7 @@ importers:
         specifier: ^5.4.0
         version: 5.4.21(@types/node@22.20.1)(lightningcss@1.32.0)
 
-  apps/onprem/tenant-console-ui:
+  apps/edgesignal/tenant-console-ui:
     dependencies:
       '@tanstack/react-query':
         specifier: ^5.62.0

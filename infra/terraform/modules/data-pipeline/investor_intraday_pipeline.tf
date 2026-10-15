@@ -234,7 +234,7 @@ resource "aws_scheduler_schedule" "investor_intraday" {
 
   name = "${var.name}-investor-intraday-${each.key}"
   # 실행 주체가 Airflow 면 SFN 을 띄우는 이 스케줄은 꺼진다(ALPHA-1088) — 두 주체가 같은 슬롯을
-  # 동시에 계획하지 않게 한 변수로 함께 바꾼다. 전환·롤백 절차는 src/apps/cloud/airflow/README.md.
+  # 동시에 계획하지 않게 한 변수로 함께 바꾼다. 전환·롤백 절차는 apps/engine/airflow/README.md.
   state                        = var.investor_intraday_orchestrator == "AIRFLOW" ? "DISABLED" : var.investor_intraday_schedule_state
   schedule_expression          = each.value
   schedule_expression_timezone = var.schedule_timezone

@@ -2,7 +2,7 @@
 
 Refs: ALPHA-1266
 
-기존 독립 포트폴리오 호스트와 `/api/portfolio/*` 연결을 `envs/dev` 관리 대상으로 편입한다. 기존 랜딩은 `src/apps/cloud/app-landing`과 `deploy-app-landing`이 계속 소유한다. 인프라 변경은 PR plan → dev merge → GitHub Terraform apply 순서로 적용하며 관리자 키·로컬 수동 변경은 사용하지 않는다.
+기존 독립 포트폴리오 호스트와 `/api/portfolio/*` 연결을 `envs/dev` 관리 대상으로 편입한다. 기존 랜딩은 `apps/etforca/app-landing`과 `deploy-app-landing`이 계속 소유한다. 인프라 변경은 PR plan → dev merge → GitHub Terraform apply 순서로 적용하며 관리자 키·로컬 수동 변경은 사용하지 않는다.
 
 `portfolio-imports.tf`는 기존 EC2, SG, RDS 접근 규칙, IAM, EIP, DNS, 배포 버킷, 런타임 비밀 메타데이터 15개를 가져온다. 인스턴스·EIP·버킷·비밀에는 삭제 방지를 둔다. 비밀 값은 Terraform 자원으로 만들지 않는다. CloudFront는 기존 `landing_site` 모듈 하나가 관리한다.
 

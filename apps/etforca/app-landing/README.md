@@ -24,7 +24,7 @@
    ```bash
    ./build.sh && python3 -m http.server -d dist 8000   # http://127.0.0.1:8000
    ```
-3. PR 을 dev 에 머지하면 [`deploy-app-landing.yml`](../../../../.github/workflows/deploy-app-landing.yml) 이 S3 에 올리고 CloudFront 캐시를 비운다.
+3. PR 을 dev 에 머지하면 [`deploy-app-landing.yml`](../../../.github/workflows/deploy-app-landing.yml) 이 S3 에 올리고 CloudFront 캐시를 비운다.
 
 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. `assets/` 에서 지운 파일은 버킷에서도 지워진다.
 

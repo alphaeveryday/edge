@@ -25,21 +25,21 @@ on:
     branches: [dev, main]
     # JVM 모듈 9개 + 빌드 설정 + 이 워크플로 자신. (required check 도입 시 걷어낼 것 — 위 설명)
     paths:
-      - "src/libs/schema/**"
-      - "src/libs/jvm-common/**"
-      - "src/apps/cloud/tenant-sync-api/**"
-      - "src/apps/cloud/super-admin-api/**"
-      - "src/apps/onprem/tenant-console-api/**"
-      - "src/apps/onprem/publication-api/**"
-      - "src/apps/onprem/sync-agent/**"
-      - "src/apps/onprem/intake/**"
-      - "src/apps/onprem/screening-worker/**"
-      - "src/gradle/**"
-      - "src/gradlew"
-      - "src/gradlew.bat"
-      - "src/settings.gradle"
-      - "src/build.gradle"
-      - "src/gradle.properties"
+      - "libs/schema/**"
+      - "libs/jvm-common/**"
+      - "apps/edgesignal/tenant-sync-api/**"
+      - "apps/edgesignal/super-admin-api/**"
+      - "apps/edgesignal/tenant-console-api/**"
+      - "apps/edgesignal/publication-api/**"
+      - "apps/edgesignal/sync-agent/**"
+      - "apps/edgesignal/intake/**"
+      - "apps/edgesignal/screening-worker/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle"
+      - "build.gradle"
+      - "gradle.properties"
       - ".github/workflows/jvm-test.yml"
 
 # 최소 권한 — 체크아웃(읽기)만 필요하다(어떤 secret 도 쓰지 않는 검증 전용 워크플로).
@@ -81,12 +81,12 @@ jobs:
           # :libs:schema 는 Flyway 전용 모듈이라 build 태스크가 없다 — 대상에서 제외하고
           # (마이그레이션 검증은 schema-validate.yml 소관), 스키마 변경의 영향은 아래
           # 전체 트리거로 앱들의 JPA validate IT 가 잡는다.
-          all_targets=":libs:jvm-common:build :apps:cloud:tenant-sync-api:build :apps:cloud:super-admin-api:build :apps:onprem:tenant-console-api:build :apps:onprem:publication-api:build :apps:onprem:sync-agent:build :apps:onprem:intake:build :apps:onprem:screening-worker:build"
+          all_targets=":libs:jvm-common:build :apps:edgesignal:tenant-sync-api:build :apps:edgesignal:super-admin-api:build :apps:edgesignal:tenant-console-api:build :apps:edgesignal:publication-api:build :apps:edgesignal:sync-agent:build :apps:edgesignal:intake:build :apps:edgesignal:screening-worker:build"
 
           # 전체 트리거 — 빌드 설정·공유 라이브러리(전 앱이 의존)·이 워크플로 자신.
           # herestring(<<<) 사용: pipefail 하에서 echo | grep -q 는 grep 조기 종료 시
           # echo 가 SIGPIPE(141)로 죽어 대형 diff 에서 파이프라인이 실패한다.
-          if grep -qE '^(src/(build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat)$|src/gradle/|src/libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml$)' <<< "${changed}"; then
+          if grep -qE '^(src/(build\.gradle|settings\.gradle|gradle\.properties|gradlew|gradlew\.bat)$|gradle/|libs/(schema|jvm-common)/|\.github/workflows/jvm-test\.yml$)' <<< "${changed}"; then
             targets="${all_targets}"
             echo "전체 트리거(빌드 설정/libs/워크플로 변경) — 전 모듈 실행"
           else
@@ -96,13 +96,13 @@ jobs:
                 targets="${targets} ${module}:build"
               fi
             done <<'MAP'
-          src/apps/cloud/tenant-sync-api/ :apps:cloud:tenant-sync-api
-          src/apps/cloud/super-admin-api/ :apps:cloud:super-admin-api
-          src/apps/onprem/tenant-console-api/ :apps:onprem:tenant-console-api
-          src/apps/onprem/publication-api/ :apps:onprem:publication-api
-          src/apps/onprem/sync-agent/ :apps:onprem:sync-agent
-          src/apps/onprem/intake/ :apps:onprem:intake
-          src/apps/onprem/screening-worker/ :apps:onprem:screening-worker
+          apps/edgesignal/tenant-sync-api/ :apps:edgesignal:tenant-sync-api
+          apps/edgesignal/super-admin-api/ :apps:edgesignal:super-admin-api
+          apps/edgesignal/tenant-console-api/ :apps:edgesignal:tenant-console-api
+          apps/edgesignal/publication-api/ :apps:edgesignal:publication-api
+          apps/edgesignal/sync-agent/ :apps:edgesignal:sync-agent
+          apps/edgesignal/intake/ :apps:edgesignal:intake
+          apps/edgesignal/screening-worker/ :apps:edgesignal:screening-worker
           MAP
           fi
 
@@ -129,5 +129,5 @@ jobs:
 
       # build = compile + test + bootJar. Testcontainers IT 포함 — 러너 Docker 로 실행.
       - name: 변경 모듈 빌드/테스트
-        working-directory: src
+        working-directory: .
         run: ./gradlew ${{ steps.detect.outputs.targets }}

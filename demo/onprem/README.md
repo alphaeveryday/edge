@@ -15,7 +15,7 @@ compose 네트워크가 ADR-0036 경계를 구조로 강제한다: `sync-agent` 
 
 ## 마이그레이션 SQL 번들 (필수)
 
-`flyway-onprem` 은 `${MIGRATIONS_ONPREM_DIR:-./migrations-onprem}` 를 마운트한다. 박스엔 레포 소스가 없으므로 **배포 CD(deploy-demo-onprem.yml, ALPHA-542)가 `src/libs/schema/migrations-onprem/` 를 이 파일 옆 `migrations-onprem/` 로 번들**해 함께 올린다. 번들이 없으면 스키마 미적용 → 앱이 `ddl-auto=validate` 로 부팅 실패하므로, CD 는 `compose up` 전에 SQL 개수 preflight 로 fail-loud 중단한다(ALPHA-560 검증 종결).
+`flyway-onprem` 은 `${MIGRATIONS_ONPREM_DIR:-./migrations-onprem}` 를 마운트한다. 박스엔 레포 소스가 없으므로 **배포 CD(deploy-demo-onprem.yml, ALPHA-542)가 `libs/schema/migrations-onprem/` 를 이 파일 옆 `migrations-onprem/` 로 번들**해 함께 올린다. 번들이 없으면 스키마 미적용 → 앱이 `ddl-auto=validate` 로 부팅 실패하므로, CD 는 `compose up` 전에 SQL 개수 preflight 로 fail-loud 중단한다(ALPHA-560 검증 종결).
 
 ## 환경 변수 (기본값)
 
@@ -59,7 +59,7 @@ aws ssm start-session --target <instance-id> \
 ```bash
 # 이미지가 ECR 에 있어야 하고(ALPHA-533), docker 가 ECR 로그인돼 있어야 한다.
 # 콘솔 부트스트랩 비번은 필수 env 라 로컬 검증에도 값을 줘야 한다(로컬은 앱 기본값으로 충분).
-MIGRATIONS_ONPREM_DIR=../../src/libs/schema/migrations-onprem \
+MIGRATIONS_ONPREM_DIR=../../libs/schema/migrations-onprem \
 CONSOLE_BOOTSTRAP_ADMIN_PASSWORD=demo-admin-1 \
 CONSOLE_BOOTSTRAP_REVIEWER_PASSWORD=demo-reviewer-1 \
   docker compose -f docker-compose.yml config      # 문법·해석 확인
@@ -94,7 +94,7 @@ docker compose exec postgres-onprem psql -U edge -d edge_onprem -c \
 
 1. 스키마 확장 커밋까지 포함된 번들(구 서버 — allowlist 판정이라 빈 테이블 무영향)로 재배포
    → flyway 가 `etf_instrument` 를 만든다.
-2. SSM 으로 시드 적재. 내용은 레포 로컬 시드와 동일(`src/libs/schema/seed-local-onprem/`
+2. SSM 으로 시드 적재. 내용은 레포 로컬 시드와 동일(`libs/schema/seed-local-onprem/`
    `R__seed_etf_instrument.sql`, 38종 — 멱등이라 재실행 무해):
 
    ```bash

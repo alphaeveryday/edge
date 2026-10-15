@@ -1,4 +1,4 @@
-"""Airflow DAG(src/apps/cloud/airflow/dags)가 복제한 업무 계약을 업무 코드 정의와 대조한다(ALPHA-1088).
+"""Airflow DAG(apps/engine/airflow/dags)가 복제한 업무 계약을 업무 코드 정의와 대조한다(ALPHA-1088).
 
 DAG 는 Airflow 환경에 업무 패키지를 설치하지 않으려고 상수·env 이름을 복제한다. 어느 한쪽만 바뀌면
 두 쪽 테스트가 모두 초록인 채로 재시도 분류(exit 75)·attempt 참조·중복 가드가 조용히 끊긴다.

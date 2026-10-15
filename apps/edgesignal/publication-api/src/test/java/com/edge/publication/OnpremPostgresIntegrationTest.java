@@ -45,7 +45,7 @@ abstract class OnpremPostgresIntegrationTest {
 	private static String locateOnpremMigrations() {
 		Path dir = Path.of("").toAbsolutePath();
 		for (int depth = 0; depth < 8 && dir != null; depth++, dir = dir.getParent()) {
-			for (String rel : new String[] {"src/libs/schema/migrations-onprem", "libs/schema/migrations-onprem"}) {
+			for (String rel : new String[] {"libs/schema/migrations-onprem", "libs/schema/migrations-onprem"}) {
 				Path candidate = dir.resolve(rel);
 				if (Files.isDirectory(candidate)) {
 					return candidate.toString();

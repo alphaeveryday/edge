@@ -1,7 +1,7 @@
 # Portfolio worker
 
 독립 Python 런타임. 접수 API와 워커는 별도 프로세스이며 전용 PostgreSQL을 공유한다.
-설계와 근거는 [설계 문서](../../../../docs/design/portfolio-worker.md)에 있다.
+설계와 근거는 [설계 문서](../../../docs/design/portfolio-worker.md)에 있다.
 
 ## 로컬 실행
 
@@ -11,7 +11,6 @@
 
 ```powershell
 docker compose -f docker-compose.portfolio.yml up -d --build
-cd src
 pnpm install --filter portfolio-ui
 pnpm --filter portfolio-ui dev
 ```
@@ -92,6 +91,6 @@ region = ap-northeast-2
 
 UI 빌드는 공개 `dist`와 내부 `dist-admin`으로 분리한다. 관리자 프로세스는 호스트 루프백 18080에만 게시한다. 로컬 실행은 `PORTFOLIO_DATABASE_URL` 및 `PORTFOLIO_ADMIN_UI_DIR`(빌드된 dist-admin 경로)을 지정한 뒤 `uv run uvicorn edge_portfolio.admin_app:app --host 127.0.0.1 --port 18080`을 사용한다.
 
-조회는 10초마다 갱신하며 실패 시 화면의 입력값을 지운다. 방문 기록은 90일 유지하고 같은 쿠키의 여러 탭은 한 방문자다. 실제 사람 수가 아니며 과거 방문 기록은 소급 생성하지 않는다. [설계·접속 경계](../../../../docs/design/portfolio-admin.md)를 참고한다.
+조회는 10초마다 갱신하며 실패 시 화면의 입력값을 지운다. 방문 기록은 90일 유지하고 같은 쿠키의 여러 탭은 한 방문자다. 실제 사람 수가 아니며 과거 방문 기록은 소급 생성하지 않는다. [설계·접속 경계](../../../docs/design/portfolio-admin.md)를 참고한다.
 
-AWS 운영 구성과 배포·롤백 절차는 [배포 기록](../../../../docs/design/portfolio-deployment.md)을 따른다. 전망 조회는 ETF 한 종목과 명시적인 목적이 필수다. 이메일은 1일 이내 발송을 안내하지만 자동 발송은 구현하지 않는다.
+AWS 운영 구성과 배포·롤백 절차는 [배포 기록](../../../docs/design/portfolio-deployment.md)을 따른다. 전망 조회는 ETF 한 종목과 명시적인 목적이 필수다. 이메일은 1일 이내 발송을 안내하지만 자동 발송은 구현하지 않는다.

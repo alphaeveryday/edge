@@ -5,7 +5,7 @@
 # 서빙은 "설명 없음"(result 생략 200)으로 수렴하고(ExplanationService.serve), 그건 캐시가 아니라 negative
 # 캐시만 재는 실험이 된다. 그래서 마지막에 실제 HTTP 200 을 확인하고 끝낸다.
 #
-# 스키마 SSOT: src/libs/schema/migrations-onprem — INSERT 컬럼은 거기서 확인했다.
+# 스키마 SSOT: libs/schema/migrations-onprem — INSERT 컬럼은 거기서 확인했다.
 #   analysis_item NOT NULL: explanation_result_id, etf_instrument_id, trade_date,
 #                           explanation_as_of, analysis_type(기본), explanation_type,
 #                           summary, status(기본), received_at/updated_at(기본)

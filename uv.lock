@@ -21,7 +21,7 @@ members = [
 [[package]]
 name = "analysis-engine-v2"
 version = "0.1.0"
-source = { editable = "apps/cloud/analysis-engine-v2" }
+source = { editable = "apps/engine/analysis-engine-v2" }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "jsonschema" },
@@ -407,7 +407,7 @@ wheels = [
 [[package]]
 name = "data-pipeline"
 version = "0.1.0"
-source = { editable = "apps/cloud/data-pipeline" }
+source = { editable = "apps/engine/data-pipeline" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "boto3" },
@@ -450,7 +450,7 @@ local = [{ name = "yfinance", specifier = ">=0.2.40" }]
 [[package]]
 name = "db-query"
 version = "0.1.0"
-source = { editable = "apps/cloud/db-query" }
+source = { editable = "apps/engine/db-query" }
 dependencies = [
     { name = "boto3" },
     { name = "psycopg2-binary" },

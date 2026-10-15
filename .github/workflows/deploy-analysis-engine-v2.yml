@@ -5,7 +5,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/cloud/analysis-engine-v2/**"
+      - "apps/engine/analysis-engine-v2/**"
       - ".github/workflows/deploy-analysis-engine-v2.yml"
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! git diff --name-only HEAD^ HEAD | grep -q '^src/libs/schema/migrations-cloud/'; then exit 0; fi
+          if ! git diff --name-only HEAD^ HEAD | grep -q '^libs/schema/migrations-cloud/'; then exit 0; fi
           for attempt in $(seq 1 90); do
             state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/schema-migrate.yml/runs?head_sha=${GITHUB_SHA}&per_page=1" --jq '.workflow_runs[0] | if .status == "completed" then .conclusion else "waiting" end')"
             if [ "$state" = success ]; then exit 0; fi
@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           account="$(aws sts get-caller-identity --query Account --output text)"
           image="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline:analysis-v2-${GITHUB_SHA}"
-          docker build --platform linux/amd64 --build-arg IMAGE_REVISION="${GITHUB_SHA}" -f src/apps/cloud/analysis-engine-v2/Dockerfile -t "$image" src
+          docker build --platform linux/amd64 --build-arg IMAGE_REVISION="${GITHUB_SHA}" -f apps/engine/analysis-engine-v2/Dockerfile -t "$image" .
           docker run --rm --read-only --cap-drop ALL --entrypoint python "$image" -c "from importlib.resources import files; import os, subprocess, tempfile; assert os.getuid()==1001; tempfile.TemporaryDirectory().cleanup(); subprocess.run([str(files('claude_agent_sdk')/'_bundled'/'claude'),'--version'],check=True)"
           docker push "$image"
           echo "ANALYSIS_IMAGE=$image" >> "$GITHUB_ENV"
@@ -57,7 +57,7 @@ jobs:
           set -euo pipefail
           account="$(aws sts get-caller-identity --query Account --output text)"
           repo="${account}.dkr.ecr.ap-northeast-2.amazonaws.com/edge/pipeline"
-          docker build --platform linux/amd64 --provenance=false -f src/apps/cloud/analysis-engine-v2/Dockerfile.api -t "$repo:analysis-v2-api-${GITHUB_SHA}" src
+          docker build --platform linux/amd64 --provenance=false -f apps/engine/analysis-engine-v2/Dockerfile.api -t "$repo:analysis-v2-api-${GITHUB_SHA}" .
           docker push "$repo:analysis-v2-api-${GITHUB_SHA}"
           echo "ANALYSIS_API_IMAGE=$repo:analysis-v2-api-${GITHUB_SHA}" >> "$GITHUB_ENV"
       - name: Deploy the API image after its infrastructure exists

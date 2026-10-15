@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 # 문법 명세(경로·필드·타입) 층 — 2층 구조의 하위(TODO §5).
 # 시맨틱 계약(멱등성·cursor 규칙·에러 의미·전달 보장)의 SSOT 는
-# ../../../../docs/contracts/sync-protocol.md 이며, 이 문서는 그 하위 문법 층이다.
+# ../../../docs/contracts/sync-protocol.md 이며, 이 문서는 그 하위 문법 층이다.
 # 번들(EventBundle) 필드 표기는 snake_case (DTO @JsonNaming). 성공은 항상 200 공통 응답 포맷(ApiResponse — ADR-0040·0042).
 info:
   title: Tenant Sync API
@@ -12,8 +12,8 @@ info:
     성공은 항상 200 공통 응답 포맷(ApiResponse)이다 — 번들 있음은 result 아래 Event Bundle
     1개, 신규 없음은 result 필드 생략(ADR-0042, 204 폐지). 전송 무결성은 mTLS/TLS 이며,
     앱 레벨 체크섬은 목표 계약(서명)으로 이관됐다(ADR-0040). 시맨틱 계약은
-    ../../../../docs/contracts/sync-protocol.md, 번들 필드 정의는
-    ../../../../docs/contracts/event-bundle-schema.md 가 SSOT.
+    ../../../docs/contracts/sync-protocol.md, 번들 필드 정의는
+    ../../../docs/contracts/event-bundle-schema.md 가 SSOT.
 
 servers:
   - url: /
@@ -40,7 +40,7 @@ paths:
         테넌트 식별은 매 요청 mTLS 인증서-테넌트 바인딩 검증으로 결정된다(계약 필수 —
         sync-auth.md). 쿼리·경로·헤더로 테넌트를 받지 않는다. 현재 인가 강제는
         TenantResolver 데모 스텁(인증서 무관)이라 미구현이며, 실제 강제·401/403 도메인
-        코드는 sync-auth 계약(../../../../docs/contracts/sync-auth.md)에서 구현한다.
+        코드는 sync-auth 계약(../../../docs/contracts/sync-auth.md)에서 구현한다.
 
 
         에러 시맨틱: 401·403·410 외 4xx 는 소비자 버그 신호이므로 재시도로 낫지 않는다

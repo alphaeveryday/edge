@@ -7,8 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && curl --fail --silent --show-error https://truststore.pki.rds.amazonaws.com/ap-northeast-2/ap-northeast-2-bundle.pem -o /app/rds-ca.pem \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1001 analysis
-COPY apps/cloud/analysis-engine-v2 ./analysis-engine-v2
-# Dependencies come from the workspace lock (requirements.lock is exported from src/uv.lock), so two
+COPY apps/engine/analysis-engine-v2 ./analysis-engine-v2
+# Dependencies come from the workspace lock (requirements.lock is exported from uv.lock), so two
 # builds of one commit install the same versions. Regenerate it with the command in its header.
 ARG IMAGE_REVISION=unknown
 ENV IMAGE_REVISION=$IMAGE_REVISION

@@ -88,7 +88,7 @@ class JdbcAnalysisResultRepositoryIntegrationTest extends CloudPostgresIntegrati
 	@Test
 	void 옮겨_적은_조건이_엔진_원문에_있다() throws Exception {
 		Path source = Path.of(System.getProperty("cloud.migrations.dir"))
-				.resolve("../../../apps/cloud/analysis-engine-v2/src/edge_analysis_v2/api/publications.py")
+				.resolve("../../../apps/engine/analysis-engine-v2/src/edge_analysis_v2/api/publications.py")
 				.normalize();
 		String text = Files.readString(source);
 		assertThat(text)

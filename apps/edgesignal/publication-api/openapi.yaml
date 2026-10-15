@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 # 문법 명세(경로·필드·타입) 층 — 2층 구조의 하위(TODO §5).
 # 시맨틱 계약(파라미터 의미·에러 시맨틱·식별자 정책)의 SSOT 는
-# ../../../../docs/contracts/publication-api.md 이며, 이 문서는 그 하위 문법 층이다.
+# ../../../docs/contracts/publication-api.md 이며, 이 문서는 그 하위 문법 층이다.
 # 응답 필드 표기는 snake_case (ExplanationResponse @JsonNaming SnakeCase).
 # 대외 산출물 — 표현은 writing-rules 준수(투자권유·예측이 아닌 "변동 요인 후보" 톤).
 info:

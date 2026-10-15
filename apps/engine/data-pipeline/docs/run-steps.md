@@ -4,11 +4,11 @@
 
 ## 실행
 
-Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `src/pyproject.toml`.
+Python 도구는 **uv**다(ADR-0001). Python 워크스페이스 루트는 `pyproject.toml`.
 
 ```bash
 uv sync --package data-pipeline --group dev                         # src/에서 의존성 설치
-uv run --package data-pipeline --group dev pytest apps/cloud/data-pipeline/tests
+uv run --package data-pipeline --group dev pytest apps/engine/data-pipeline/tests
 
 # 뉴스 원본저장(Step1) — 기본은 local 스토리지(./.lake), FMP 키는 env 로
 # 날짜창 미지정 = 증분(어제~오늘, 앱이 계산). 백필은 --from/--to 로 구간 지정.
@@ -540,7 +540,7 @@ uv run --package data-pipeline python -m data_pipeline.run load-financial-metric
 > 창을 쓰는 스텝이 늘면 달력을 표에 **선언해야** 한다(미선언은 fail-loud) — 기본값을 두면 새
 > 스텝이 조용히 한쪽으로 떨어지고 그 창은 하루가 밀린 채 성공한다.
 
-> uv가 없는 환경이면 표준 venv로 같은 일을 한다(`src/apps/cloud/data-pipeline`에서, pip ≥ 25.1):
+> uv가 없는 환경이면 표준 venv로 같은 일을 한다(`apps/engine/data-pipeline`에서, pip ≥ 25.1):
 > ```bash
 > python3 -m venv .venv
 > .venv/bin/pip install -e . --group dev   # dev 그룹(pytest)은 PEP 735 [dependency-groups]

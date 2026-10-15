@@ -5,7 +5,7 @@
 FROM apache/airflow:3.3.2-python3.12
 USER root
 COPY libs/ontology /build/libs/ontology
-COPY apps/cloud/data-pipeline /build/apps/cloud/data-pipeline
+COPY apps/engine/data-pipeline /build/apps/cloud/data-pipeline
 RUN python -m venv /opt/dp \
  && /opt/dp/bin/pip install --no-cache-dir /build/libs/ontology /build/apps/cloud/data-pipeline \
  && rm -rf /build \

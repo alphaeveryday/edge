@@ -2,7 +2,7 @@
 
 벤더 운영자 콘솔(Cloud)의 백엔드 — 운영자 인증 + 콘솔 화면 표면(tenants·sources·analyses·
 analysisResults 는 DB, session 은 실세션 주체 투영). 화면·금지 항목의 SSOT 는
-[docs/console-ia/super-admin-console.md](../../../../docs/console-ia/super-admin-console.md)이고,
+[docs/console-ia/super-admin-console.md](../../../docs/console-ia/super-admin-console.md)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. DB 는 tenants 도메인부터 배선됐다
 (JPA·`ddl-auto=validate` — Flyway(libs/schema)가 DDL SSOT 라 Hibernate 는 검증만, ALPHA-526).
 sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 행 복제 아님)·analyses
@@ -53,8 +53,8 @@ sources 는 운영 원장(`ops_*`)과 1분 원장(`minute_*`, 요약 관측 — 
 `GET /api/v1/console/facts?date=` — 콘솔 규칙 엔진이 읽는 **사실**. 화면 표면 5종과 성격이
 다르다: UI 도메인 계약과 1:1 이 아니고, 수집 축을 넘어 전달 경계·산출까지 한 응답에 담을 자리다
 (그래서 `/sources/*` 아래 두지 않는다). 계약 정본은
-[docs/contracts/console-facts-api.md](../../../../docs/contracts/console-facts-api.md),
-결정 근거는 [ADR-0050](../../../../docs/adr/0050-console-facts-endpoint.md).
+[docs/contracts/console-facts-api.md](../../../docs/contracts/console-facts-api.md),
+결정 근거는 [ADR-0050](../../../docs/adr/0050-console-facts-endpoint.md).
 
 `GET /api/v1/console/trends/entity-resolution?date=`는 하루 facts와 분리된 최근 일별 사실이다.
 `LOAD_ASSERTIONS`의 성공 wrapper attempt에 직접 저장된 분자·분모만 최대 10개 내리고, 같은 날짜는
@@ -221,5 +221,5 @@ curl -i -X POST localhost:18082/api/v1/auth/login \
 ```bash
 # 테스트 포함 (src/ 에서). Testcontainers(Postgres) 통합 테스트가 있어 Docker 필요 —
 # 컨테이너에 Flyway 로 migrations-cloud 를 적용해 Hibernate validate 로 엔티티↔스키마 검증.
-./gradlew :apps:cloud:super-admin-api:build
+./gradlew :apps:edgesignal:super-admin-api:build
 ```

@@ -1,7 +1,7 @@
 # tenant-console-api
 
 증권사 On-Premise 콘솔의 백엔드 — 검수 표면(Review Queue)·인증 + 콘솔 화면
-표면(실 원장 — 아래 "콘솔 도메인 표면"). 계약·권한의 SSOT 는 [docs/console-ia/](../../../../docs/console-ia/)이고,
+표면(실 원장 — 아래 "콘솔 도메인 표면"). 계약·권한의 SSOT 는 [docs/console-ia/](../../../docs/console-ia/)이고,
 이 README 는 이 모듈만의 비자명한 규율만 적는다. 실 DB 접근은 **JPA**(entity·좁은
 Spring Data repository·도메인 model 매핑)다 — DDL 은 Flyway(libs/schema/migrations-onprem)가
 SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl-auto=validate`·`flyway.enabled=false`).
@@ -11,7 +11,7 @@ SSOT 이므로 Hibernate 는 스키마를 만들지 않고 검증만 한다(`ddl
 ## 지켜야 할 로컬 불변식
 
 - **인가 게이트는 `ConsoleAuthFilter` 하나** — 미인증은 전 `/api/**` 표면 401
-  (fail-closed). 라우트×역할 정책은 [permission-matrix.md](../../../../docs/console-ia/permission-matrix.md)
+  (fail-closed). 라우트×역할 정책은 [permission-matrix.md](../../../docs/console-ia/permission-matrix.md)
   "API 매핑" 표와 **1:1**이다. 엔드포인트를 추가하면 표와 필터 `RULES` 에 함께
   행을 더한다 — 표에 없는 표면은 인증돼도 403 거부가 기본이라, 매핑을 빼먹으면
   그 API 는 배포돼도 닫혀 있다(우회가 아니라 누락이 안전한 쪽으로 실패).
@@ -103,7 +103,7 @@ curl localhost:18081/actuator/health
 curl -i -X POST localhost:18081/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"reviewer@demo.edge.local","password":"demo-reviewer-1"}'   # 200 + 세션 쿠키
-# bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:onprem:tenant-console-api:bootRun)
+# bootRun 은 postgres-onprem(:55433) 이 떠 있어야 한다 (src/ 에서 :apps:edgesignal:tenant-console-api:bootRun)
 ```
 
 테스트 181건 — 검수 계약(승인·수정 승인=전이+스냅샷 게시+기록+감사, 반려·차단

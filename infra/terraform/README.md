@@ -103,8 +103,8 @@ cd ../envs/dev  && terraform apply
 ### ⚪ 비어 있음 (off 아님 — 채워야 함, CD/수동 몫)
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
-- Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../src/apps/cloud/airflow/README.md) "최초 구축")
-- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `src/apps/cloud/app-landing/` 에 있고 ([README](../../src/apps/cloud/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 404 를 돌려준다(`static-site` 버킷 정책이 CloudFront 에 `s3:ListBucket` 을 줘서 없는 키가 403 이 아니라 404 다). `www.etforca.com` 은 `etforca.com` 으로 영구 이동한다(`static-site` 의 `redirect_www`). 같은 버킷의 `outlook/<코드>.json`(종목별 그날 전망)은 배포가 아니라 `landing-export` 람다가 매일 08:00 KST 에 쓴다 — 랜딩 배포는 이 경로를 건드리지 않는다.
+- Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../apps/engine/airflow/README.md) "최초 구축")
+- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `apps/etforca/app-landing/` 에 있고 ([README](../../apps/etforca/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 404 를 돌려준다(`static-site` 버킷 정책이 CloudFront 에 `s3:ListBucket` 을 줘서 없는 키가 403 이 아니라 404 다). `www.etforca.com` 은 `etforca.com` 으로 영구 이동한다(`static-site` 의 `redirect_www`). 같은 버킷의 `outlook/<코드>.json`(종목별 그날 전망)은 배포가 아니라 `landing-export` 람다가 매일 08:00 KST 에 쓴다 — 랜딩 배포는 이 경로를 건드리지 않는다.
 
 ### 🔮 미구축 (후속 증분)
 
@@ -113,7 +113,7 @@ cd ../envs/dev  && terraform apply
 
 > `data-pipeline` 시장 레인은 평일 15:40, 장전 유니버스는 평일 07:00, 뉴스는 매일 00:10·08:10 으로 ENABLED다. 장중 수급(평일 5슬롯)은 Airflow 가 실행한다(`investor_intraday_orchestrator = "AIRFLOW"`) — 이 레인의 SFN 스케줄은 DISABLED 이고 롤백용으로 남아 있다. **공시는 장중 09:00~15:30 390윈도우와 평일 19:30 보충 배치를 함께 운영한다**(ALPHA-1071). 증분 `disclosure-worker`는 minute 원장, 마감 배치는 ops 카탈로그 4작업을 사용한다. 배치 카탈로그 복원 앱을 먼저 배포하고, 기존 세션·워커·배치가 종료된 비거래 경계에서 390 격자 앱과 Terraform 전환을 모두 완료한다. 앱 이미지 CD와 Terraform apply는 독립이므로 다음 거래일 07:45 전에 양쪽 완료를 확인한다. 이미 계획된 720창 세션을 재계획하지 않는다. 실패 시 정상 drain 뒤 minute source group을 비우고 19:30 배치를 유지한다. 종료 실패로 워커가 잔류하면 기존 알림에 따라 정리한 뒤 배치를 실행한다.
 >
-> **Reconciler(`edge-dev-data-pipeline-reconcile`)도 ENABLED**다. ops catalog는 39작업(시장 17 + 뉴스 6 + 공시 4 + 장중 수급 3 + 원천 관측 9 — 원천 관측은 SFN 없는 Airflow 전용)이다. 주말 전환이 만드는 활성화 전 슬롯 경보는 첫 정상 배치 뒤 [공시 전환 절차](../../src/apps/cloud/data-pipeline/docs/deploy-schedule.md)에 따라 해당 이슈만 정리한다. 수동 슬롯은 `OPS_RUN_KEY`를 명시해 reconcile한다.
+> **Reconciler(`edge-dev-data-pipeline-reconcile`)도 ENABLED**다. ops catalog는 39작업(시장 17 + 뉴스 6 + 공시 4 + 장중 수급 3 + 원천 관측 9 — 원천 관측은 SFN 없는 Airflow 전용)이다. 주말 전환이 만드는 활성화 전 슬롯 경보는 첫 정상 배치 뒤 [공시 전환 절차](../../apps/engine/data-pipeline/docs/deploy-schedule.md)에 따라 해당 이슈만 정리한다. 수동 슬롯은 `OPS_RUN_KEY`를 명시해 reconcile한다.
 >
 > **1분 세션 스케줄 3개**는 평일 start 07:45, stop 16:10, 업종지수 rollup 16:00 KST다. start는 가격·뉴스·공시·iNAV·업종지수 세션을 계획하고 세션 결속 서비스 9종을 올린다. 공시 격자는 universe와 무관하게 09:00–15:30이며 종료까지 복구 여유 40분을 둔다. 가격 시간외 선언이 추가되면 종료 시각을 재검토한다. `analysis-consumer`는 이 목록 밖에서 SQS 잔여 기반 오토스케일링이 소유한다. stop은 phase DRAINED, 게이트 큐 0, outbox NEW 0을 연속 확인한 뒤 QC와 scale-down을 수행한다. ECS Task State Change rule은 start/stop 컨테이너의 비0 종료를 alarm SNS로 전달한다.
 >
