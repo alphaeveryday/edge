@@ -531,7 +531,7 @@ a[role="button"]{cursor:pointer}
 .cta__note{margin-top:1.375rem;font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:var(--t3)}
 .find{width:min(100%,32.5rem);margin:0 auto 1.875rem}
 .find label{display:block;margin-bottom:.5rem}
-.find__hint{margin:0 0 1rem;color:var(--t2);font-size:max(calc(var(--tk) * 14.3),.9375rem)}
+.find__hint{margin:0 0 1rem;color:var(--t1);font-size:max(calc(var(--tk) * 14.3),.9375rem)}
 body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-events:none}
 .find__in{width:100%;height:3.625rem;padding:0 1.5rem;border:1px solid var(--border-strong);border-radius:999px;background:var(--bg-raised);color:var(--t1);font:inherit;font-size:max(calc(var(--tk) * 15.7),1.0625rem);font-weight:500;transition:border-color .2s,box-shadow .2s}
 .find__in::placeholder{color:var(--t3)}
@@ -726,7 +726,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   <div class="container cover__foot">
     <form class="find" id="find" role="search" data-find>
       <label class="h3" for="find-in">보고 싶은 ETF가 있나요?</label>
-      <p class="find__hint" id="find-hint">이름을 쳐 보세요. 아래 종목을 눌러도 바로 열려요.</p>
+      <p class="find__hint" id="find-hint">이름을 치거나 아래 종목을 눌러 보세요.</p>
       <input class="find__in" id="find-in" aria-describedby="find-hint" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" placeholder="예: KODEX 반도체">
       <p class="find__picks"><button class="btn btn--ghost btn--sm" type="button" data-pick="069500">KODEX 200</button><button class="btn btn--ghost btn--sm" type="button" data-pick="229200">KODEX 코스닥150</button><button class="btn btn--ghost btn--sm" type="button" data-pick="396500">TIGER 반도체TOP10</button><button class="btn btn--ghost btn--sm" type="button" data-pick="091160">KODEX 반도체</button></p>
       <div class="find__out" aria-live="polite" hidden></div>
