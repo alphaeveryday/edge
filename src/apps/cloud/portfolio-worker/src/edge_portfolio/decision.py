@@ -40,7 +40,7 @@ class Constraint(StrictModel):
 
 class Funding(StrictModel):
     """Model interpretation of customer money; arithmetic remains deterministic."""
-    source: str = Field(default='', max_length=4000)
+    source: str = Field(default='', max_length=1000000)
     additional_krw: int = Field(default=0, ge=0, le=10**13)
     monthly_krw: int | None = Field(default=None, ge=0, le=10**13)
     principal_krw: int | None = Field(default=None, ge=0, le=20 * 10**13)
@@ -107,7 +107,7 @@ def validate_decision(decision, request, catalog, *, question_text=None):
             raise ValueError('CUSTOMER_CONSTRAINT_SOURCE: quote the exact customer input')
         if any(key != 'CASH:KRW' and key not in catalog for key in rule.instrument_ids):
             raise ValueError('UNREGISTERED_CONSTRAINT_INSTRUMENT: use unverified until resolved')
-    if decision.funding_text and decision.funding_text not in text:
+    if decision.funding is None and decision.funding_text and decision.funding_text not in text:
         raise ValueError('CUSTOMER_FUNDING_SOURCE: quote explicit additional money, not current holdings')
     if decision.funding is not None:
         from .execution import validate_funding

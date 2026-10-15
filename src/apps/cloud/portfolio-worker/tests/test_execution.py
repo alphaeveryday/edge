@@ -446,6 +446,32 @@ def test_funding_rejects_empty_customer_evidence():
         validate_funding(Funding(source=''), '매월 50만원')
 
 
+def test_structured_funding_does_not_validate_the_obsolete_legacy_summary():
+    from edge_portfolio.decision import Decision, validate_decision
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='일반계좌에 매달 200만원씩 적립식 투자도 할거야')
+    decision = Decision(funding_text='일반계좌 월 200만원',
+                        funding={'source': req.question, 'monthly_krw': 2000000})
+    validate_decision(decision, req, {})
+
+
+def test_funding_summary_uses_original_input_for_unit_checks_without_requiring_verbatim_copying():
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    text = '월 투자금은 100정도 가능해.\n매달 100만원 isa 계좌에 투자할건데'
+    funding = Funding(source='월 100만원 ISA 투자', monthly_krw=1000000)
+    validate_funding(funding, text)
+    assert funding.source == text
+
+
+def test_canonical_funding_source_survives_saved_decision_roundtrip():
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    text = '고객 설명 ' * 1000 + '매월 50만원'
+    funding = Funding(source='월 50만원 납입', monthly_krw=500000)
+    validate_funding(funding, text)
+    assert Funding.model_validate(funding.model_dump()).source == text
+
+
 @pytest.mark.parametrize('source,amount', [('추가 투자금 5천만원', 50000000), ('추가금 2억 3천만원', 230000000), ('매달 3천 500만원', 35000000), ('매월 백만원을 납입합니다', 1000000), ('매달 오십만원', 500000)])
 def test_extracted_funding_accepts_korean_magnitude_units(source, amount):
     from edge_portfolio.execution import validate_funding

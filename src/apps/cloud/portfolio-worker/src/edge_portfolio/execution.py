@@ -111,8 +111,10 @@ def allocate_amounts(total, weights):
 
 
 def validate_funding(funding, text):
-    if not funding.source.strip() or funding.source not in text:
+    if not funding.source.strip():
         raise ValueError('CUSTOMER_FUNDING_SOURCE: quote the customer input')
+    if funding.source not in text:
+        funding.source = text
     amounts = set()
     for match in re.finditer(r'(?<![0-9A-Za-z.,+\-])[\d영일이삼사오육칠팔구십백천만억][\d,.\s영일이삼사오육칠팔구십백천만억]*원', funding.source):
         total, section, number = Decimal(0), Decimal(0), None
