@@ -1,0 +1,14 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>전망 투표</title>
+<h1>ETF 전망 컨센서스</h1><label>ETF 코드 <input id="etf" value="069500"></label>
+<label>액세스 토큰 <input id="token" size="60"></label>
+<button onclick="vote('buy')">산다</button><button onclick="vote('wait')">기다린다</button><button onclick="vote('sell')">판다</button>
+<button onclick="counts()">집계 조회</button><pre id="result"></pre>
+<script>
+const result = document.getElementById('result');
+const path = () => '/api/v1/etfs/' + encodeURIComponent(document.getElementById('etf').value) + '/vote';
+async function vote(choice) {
+ const r = await fetch(path(), {method:'PUT', headers:{'Authorization':'Bearer ' + document.getElementById('token').value, 'Content-Type':'application/json'}, body:JSON.stringify({choice})});
+ result.textContent = r.status === 200 ? '투표가 반영되었습니다.' : '오류: ' + r.status;
+}
+async function counts() { const r = await fetch(path() + '/count'); result.textContent = JSON.stringify(await r.json(), null, 2); }
+</script></html>

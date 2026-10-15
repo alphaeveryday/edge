@@ -1,16 +1,19 @@
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend, Rate } from 'k6/metrics';
+import { bearer } from './token.js';
 const voteStatus = new Counter('vote_status');
 const voteFailure = new Rate('vote_failure');
 const voteLatency = new Trend('vote_latency', true);
-// 무관 요청 = 정적 / (Redis·DB 무관, 같은 Tomcat 풀) — actuator health 는 Redis 인디케이터를 포함해 부적합.
+// Redis 와 DB 에 무관하고 같은 Tomcat 풀을 쓰는 정적 / 의 무관 요청
+// Redis 인디케이터를 포함하는 actuator health 의 부적합
 const unrelatedLatency = new Trend('unrelated_latency', true);
 const unrelatedFailure = new Rate('unrelated_failure');
 const base = __ENV.BASE_URL || 'http://localhost:8080';
 const etf = __ENV.ETF_ID || '069500';
 const runId = Number(__ENV.USER_OFFSET || '1');
-// USER_POOL 설정 시 같은 사용자가 여러 번, 다른 choice 로 투표한다(재투표 축). 미설정이면 요청마다 고유 사용자.
+// USER_POOL 설정 시 같은 사용자의 다른 choice 재투표
+// 미설정 시 요청마다 고유 사용자
 const userPool = Number(__ENV.USER_POOL || '0');
 export const options = {
   scenarios: {
@@ -23,16 +26,16 @@ export const options = {
 export function vote() {
   const i = exec.scenario.iterationInTest;
   const user = runId + (userPool ? i % userPool : i);
-  const choice = ['BUY', 'HOLD', 'SELL'][(userPool ? Math.floor(i / userPool) + i % userPool : i) % 3];
-  const r = http.post(`${base}/api/v1/forecasts/${etf}/votes`, JSON.stringify({choice}), {
-    headers: {'Content-Type':'application/json', 'X-User-Id': String(user)}, timeout: '10s',
+  const choice = ['buy', 'wait', 'sell'][(userPool ? Math.floor(i / userPool) + i % userPool : i) % 3];
+  const r = http.put(`${base}/api/v1/etfs/${etf}/vote`, JSON.stringify({choice}), {
+    headers: {'Content-Type':'application/json', 'Authorization': bearer(user)}, timeout: '10s',
   });
   voteStatus.add(1, {status: String(r.status), user: String(user), choice});
   voteFailure.add(r.status !== 200);
   voteLatency.add(r.timings.duration);
 }
 export function unrelated() {
-  const r = http.get(`${base}/`, { timeout: '10s' });
+  const r = http.get(`${base}/terms.html`, { timeout: '10s' });
   unrelatedLatency.add(r.timings.duration);
   unrelatedFailure.add(r.status !== 200);
 }

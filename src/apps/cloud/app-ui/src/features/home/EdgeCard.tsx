@@ -1,0 +1,61 @@
+import { useEffect, useRef } from 'react';
+import { Animated, Text, View } from 'react-native';
+import { createStyles, useColors, useSignal } from '@/theme/theme';
+import { SIGNAL_ORDER, type Signal, radius } from '@/theme/tokens';
+import { fam } from '@/theme/typography';
+
+// 관심 그룹 전체의 전망 강도 게이지
+export function EdgeCard({ title, band, score, asOf }: { title: string; band: Signal; score?: number; asOf: string }) {
+  const styles = useStyles();
+  const SIG = useSignal();
+  const colors = useColors();
+  const SEG_BG: Record<Signal, string> = {
+    strongDown: colors.gaugeStrongDown, down: colors.downLight, neutral: colors.lineStrong, up: colors.upLight, strongUp: colors.up,
+  };
+  // 평균값 기준의 점 위치
+  // 평균값 부재 시 단계 칸 가운데
+  const at = score ?? SIGNAL_ORDER.indexOf(band);
+  const pos = ((at + 0.5) / SIGNAL_ORDER.length) * 100;
+  const c = SIG[band].color;
+  // 위치 바뀜의 점 미끄러짐
+  const x = useRef(new Animated.Value(pos)).current;
+  useEffect(() => {
+    Animated.timing(x, { toValue: pos, duration: 220, useNativeDriver: false }).start();
+  }, [x, pos]);
+  const left = x.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] });
+  return (
+    <View style={styles.card}>
+      <View style={styles.head}>
+        <View style={styles.capRow}>
+          <Text style={styles.cap}>{title}</Text>
+          <Text style={styles.asOf}>{asOf}</Text>
+        </View>
+        <Text style={[styles.band, { color: SIG[band].labelColor }]}>{SIG[band].label}</Text>
+      </View>
+      <View style={styles.track}>
+        <View style={styles.segs}>
+          {SIGNAL_ORDER.map((s) => <View key={s} style={[styles.seg, { backgroundColor: SEG_BG[s] }]} />)}
+        </View>
+        <Animated.View style={[styles.knob, { left, borderColor: c }]} />
+      </View>
+      <View style={styles.ticks}>
+        {SIGNAL_ORDER.map((s) => <Text key={s} style={styles.tick}>{SIG[s].label}</Text>)}
+      </View>
+    </View>
+  );
+}
+
+const useStyles = createStyles((colors) => ({
+  card: { marginTop: 14, marginHorizontal: 20, borderRadius: radius.card, backgroundColor: colors.card, paddingTop: 17, paddingHorizontal: 17, paddingBottom: 16, gap: 14 },
+  head: { gap: 5 },
+  capRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
+  cap: { fontFamily: fam.regular, fontSize: 12, color: colors.textSub },
+  asOf: { fontFamily: fam.regular, fontSize: 12, color: colors.textMuted },
+  band: { fontFamily: fam.extrabold, fontSize: 27, letterSpacing: -0.8, lineHeight: 30 },
+  track: { marginTop: 2, height: 9, justifyContent: 'center' },
+  segs: { flexDirection: 'row', gap: 3, height: 9 },
+  seg: { flex: 1, borderRadius: 999 },
+  knob: { position: 'absolute', top: -4, marginLeft: -8.5, width: 17, height: 17, borderRadius: 999, backgroundColor: colors.bg, borderWidth: 3, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  ticks: { flexDirection: 'row', justifyContent: 'space-between' },
+  tick: { fontFamily: fam.regular, fontSize: 11, color: colors.textSub },
+}));

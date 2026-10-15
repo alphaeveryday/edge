@@ -47,4 +47,4 @@ MySQL 이 나은 점도 있다. Redis 장애 실험이 MySQL 기준 실측이고
 
 ## 후속(2026-10-06)
 - write-behind 모드 제거(ALPHA-1179)에 따른 VoteWarmer·VoteFlusher 삭제
-- ShedLock 대상 스케줄 작업은 VoteReconciler 하나
+- ShedLock 대상 스케줄 작업은 VoteReconciler와 SyncService 두 개

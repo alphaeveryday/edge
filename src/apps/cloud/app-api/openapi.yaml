@@ -1,0 +1,1429 @@
+# ETF Orca 앱 API 계약의 정본
+# 노션 PRD 의 정책과 데이터 모델은 참고용
+#
+# 규약
+# - 인증: 회원 Bearer 와 게스트 X-Device-Id 중 토큰 우선
+# - 회원 토큰: 액세스 JWT 와 DB 저장 리프레시 토큰의 조합
+# - 응답 봉투: 실패에도 같은 jvm-common ApiResponse 봉투
+# - 에러 코드: COMMON 계열은 jvm-common, 도메인 코드는 AppErrorStatus 소유
+#   앱의 번역 없는 code 분기와 x-error-codes 기준의 코드 목록
+# - 페이지네이션: 응답 result 의 items[] 와 nextCursor 기반 커서 방식
+#   마지막 페이지의 nextCursor 는 null
+# - 투표: 쓰기 경로에 읽기를 붙이지 않는 현황 없는 PUT 응답
+#   성공 후 앱의 GET count 재조회
+# - 스키마: app-ui 타입 정의에서 옮기되 표시용 값은 제외
+#   표시용 색은 앱의 theme key 와 handle 매핑
+#   시각은 ISO 8601, 상대 문구와 기준 문구는 앱 생성
+# - 앱 단독 처리: 기기 저장의 최근 본 ETF와 앱 번들의 용어 힌트
+# - 로그아웃: 서버의 리프레시 토큰 삭제
+# - 통합 조회: ETF 목록과 검색은 GET /etfs?q=, 커뮤니티 피드류는 GET /posts?scope=&code= 로 통합
+# - Axis: 영문 코드 사용과 앱 소유의 라벨
+# - 정책 위반: 도메인 코드와 400 응답
+#   앱이 해결 가능한 위반은 x-error-codes 의 action 대상 화면으로 이동
+#
+# 출처는 app-ui 의 API 클라이언트와 타입 정의
+
+openapi: 3.1.0
+info:
+  title: ETF Orca App API
+  version: 0.1.0
+  description: ETF 전망·분석·커뮤니티 B2C 앱 API. 뼈대 단계.
+servers:
+  - url: https://etforca.edgesignal.dev/api/v1
+    description: dev (ADR-0056)
+  - url: http://localhost:8080/api/v1
+    description: local compose
+
+tags:
+  - name: auth
+    description: 로그인·가입·토큰. 회원은 Bearer, 게스트는 X-Device-Id
+  - name: member
+    description: 내 계정. 프로필·면책 동의·탈퇴
+  - name: onboarding
+    description: 첫 진입 테마·ETF 선택 저장
+  - name: home
+    description: 홈 화면 전용 조합 응답
+  - name: etf
+    description: ETF 마스터·시세·차트·장중 설명
+  - name: watch
+    description: 관심 그룹과 구성원. 게스트는 디바이스 단위 저장
+  - name: theme
+    description: 테마 목록
+  - name: explore
+    description: 탐색 순위
+  - name: analysis
+    description: AI 일간 분석과 요인·지표 페이지. 미생성은 ANALYSIS4001
+  - name: community
+    description: 글·댓글·좋아요·투표. 쓰기는 회원
+  - name: notification
+    description: 알림 목록·읽음
+
+# AppErrorStatus enum 과 1:1 대응하는 도메인 에러 코드 목록
+# 코드 형식은 {도메인}{4|5}{순번}, 4는 클라이언트 오류와 5는 서버 오류
+# 순번은 도메인 안의 단조 증가
+# action 은 앱이 해결 가능한 위반에서의 이동 화면, 없으면 message 표시로 종료
+# 행별 본문 구현 시점의 코드 추가
+x-error-codes:
+  COMMON400: { http: 400, message: 잘못된 요청입니다. }
+  COMMON401: { http: 401, message: 인증이 필요합니다., action: login }
+  COMMON403: { http: 403, message: 금지된 요청입니다. }
+  COMMON500: { http: 500, message: "서버 에러, 관리자에게 문의 바랍니다." }
+  ETF4001: { http: 404, message: 없는 ETF 입니다. }
+  ANALYSIS4001: { http: 404, message: 분석이 아직 준비되지 않았습니다. }   # 없는 ETF와 구분되는 앱 Pending 화면 분기
+  POST4001: { http: 404, message: 없는 글입니다. }
+  POST4002: { http: 400, message: 관심 ETF 에 대해서만 글을 쓸 수 있습니다., action: watch-edit }   # PRD 의 커뮤니티 정책
+  POST4003: { http: 400, message: 태그는 최대 3개입니다. }
+  POST4004: { http: 404, message: 없는 댓글입니다. }
+  WATCH4001: { http: 400, message: 기본 관심 그룹은 지울 수 없습니다. }
+  WATCH4002: { http: 400, message: 관심 그룹은 최대 10개입니다. }   # PRD 의 관심 정책
+  MEMBER4002: { http: 409, message: 이미 가입된 이메일입니다., action: login }
+  MEMBER4003: { http: 404, message: 없는 회원입니다. }
+  MEMBER4004: { http: 400, message: 자기 자신은 차단할 수 없습니다. }
+  MEMBER4005: { http: 404, message: 가입되지 않은 이메일입니다. }   # 가입 응답이 이미 가입 여부를 드러내므로 재설정에서도 미은닉
+  MEMBER4006: { http: 409, message: 애플로 가입한 계정입니다. 애플로 로그인해 주세요., action: login }   # 같은 이메일의 가입 방법 안내. 로그인·가입 코드·재설정·소셜 공용
+  MEMBER4007: { http: 409, message: 구글로 가입한 계정입니다. 구글로 로그인해 주세요., action: login }
+  MEMBER4008: { http: 409, message: 카카오로 가입한 계정입니다. 카카오로 로그인해 주세요., action: login }
+  MEMBER4009: { http: 409, message: 이메일로 가입한 계정입니다. 이메일로 로그인해 주세요., action: login }
+  AUTH4001: { http: 401, message: 이메일 또는 비밀번호가 맞지 않습니다. }
+  AUTH4002: { http: 400, message: 코드가 맞지 않거나 만료되었습니다. 다시 요청해 주세요. }   # 가입 인증과 비밀번호 재설정 공용의 실패 사유 미구분 응답
+  AUTH4003: { http: 429, message: 오늘은 코드 메일을 더 보낼 수 없습니다. 내일 다시 시도해 주세요. }   # 이메일당 24시간 5회 또는 전체 하루 300통의 초과
+  AUTH4004: { http: 401, message: 소셜 로그인을 확인하지 못했습니다. 다시 시도해 주세요. }
+
+security:
+  - bearerAuth: []
+  - deviceId: []
+
+paths:
+  # ── auth ─────────────────────────────────────────────
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: authLogin
+      summary: 이메일 로그인
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/EmailLogin' }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+        '401': { $ref: '#/components/responses/Error' }   # AUTH4001
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4006~4008 소셜로 가입한 이메일
+  /auth/social:
+    post:
+      tags: [auth]
+      operationId: authSocial
+      summary: 소셜 로그인 (Apple·Google·Kakao)
+      description: idToken 서명·발급자·audience·만료와 카카오·애플 nonce 를 검증한다. 애플은 authorizationCode 를 refresh token 으로 바꿔 보관하고 탈퇴 시 연결을 철회한다. 검증된 이메일만 저장한다. 같은 이메일이 다른 가입 방법의 회원이면 가입하지 않고 MEMBER4006~4009 로 그 방법을 알린다. 처음 생긴 회원은 newMember=true.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, idToken]
+              properties:
+                provider: { type: string, enum: [apple, google, kakao] }
+                idToken: { type: string, description: 플랫폼이 발급한 id 토큰. 서버가 검증 }
+                nonce: { type: string, description: '카카오·애플 필수. 원문을 보낸다. 카카오는 로그인 요청에 원문, 애플은 SHA-256 16진 해시를 넣는다' }
+                authorizationCode: { type: string, description: 애플 전용. 탈퇴 시 연결 철회용 토큰 교환 }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
+        '401': { $ref: '#/components/responses/Error' }   # AUTH4004 토큰·nonce 검증 실패
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4006~4009 다른 가입 방법의 같은 이메일
+  /auth/signup/code:
+    post:
+      tags: [auth]
+      operationId: authSendSignupCode
+      summary: 가입 인증 코드 발송
+      description: 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 이메일당 24시간 5회, 전체 하루 300통을 넘으면 AUTH4003. 발송은 비동기. 테스트용 예약 도메인 example.com 은 발송하지 않고 서버 로그에 남긴다.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 이메일 형식
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4002, MEMBER4006~4008 소셜로 가입한 이메일
+        '429': { $ref: '#/components/responses/Error' }   # AUTH4003
+  /auth/signup:
+    post:
+      tags: [auth]
+      operationId: authSignup
+      summary: 이메일 회원가입
+      description: 메일로 받은 가입 인증 코드가 맞아야 가입된다.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, nick, code]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                nick: { type: string }
+                code: { type: string, pattern: '^\d{6}$', description: 가입 인증 코드 6자리 }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+        '400': { $ref: '#/components/responses/Error' }   # AUTH4002, COMMON400
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4002, MEMBER4006~4008 소셜로 가입한 이메일
+  /auth/password-reset:
+    post:
+      tags: [auth]
+      operationId: authRequestPasswordReset
+      summary: 비밀번호 재설정 코드 발송
+      description: 가입된 이메일이면 6자리 코드(10분 유효, 시도 5회)를 메일로 보낸다. 미가입 이메일은 MEMBER4005. 60초 안의 재요청은 같은 200 이고 메일은 보내지 않는다. 이메일당 24시간 5회, 전체 하루 300통을 넘으면 AUTH4003. 발송은 비동기.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 이메일 형식
+        '404': { $ref: '#/components/responses/Error' }   # MEMBER4005
+        '409': { $ref: '#/components/responses/Error' }   # MEMBER4006~4008 소셜로 가입한 이메일
+        '429': { $ref: '#/components/responses/Error' }   # AUTH4003
+  /auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      operationId: authConfirmPasswordReset
+      summary: 비밀번호 재설정 확정
+      description: 코드가 맞으면 비밀번호를 바꾸고 코드를 지우며 회원의 리프레시 토큰을 전부 폐기한다. 앱은 성공 후 로그인 화면으로 돌아간다.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^\d{6}$' }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # AUTH4002, COMMON400
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: authLogout
+      summary: 로그아웃
+      description: 리프레시 토큰을 DB 에서 지운다. 앱은 성공 후 토큰과 기기 게스트 데이터를 초기화한다(PRD 게스트 데이터 정책).
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: authRefresh
+      summary: 토큰 갱신
+      description: 노션 참고 항목. client.ts 에는 없고 fetch 계층이 쓴다.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/AuthResult' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
+
+  # ── member ─────────────────────────────────────────────
+  /me:
+    get:
+      tags: [member]
+      operationId: memberMe
+      summary: 내 정보 조회
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    patch:
+      tags: [member]
+      operationId: memberUpdate
+      summary: 프로필 수정
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MePatch' }
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    delete:
+      tags: [member]
+      operationId: memberDeleteAccount
+      summary: 회원 탈퇴
+      description: 리프레시 토큰은 즉시 폐기. 이미 발급된 액세스 토큰은 만료까지 서명 검증만으로 통과하며 회원 조회가 있는 엔드포인트만 COMMON401
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /me/disclaimer:
+    post:
+      tags: [member]
+      operationId: memberAcceptDisclaimer
+      summary: 면책 고지 동의
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Me' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+
+  # ── onboarding ───────────────────────────────────────
+  /onboarding/complete:
+    post:
+      tags: [onboarding]
+      operationId: onboardingComplete
+      summary: 온보딩 완료 (테마·ETF 저장)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [themes, etfs]
+              properties:
+                themes: { type: array, items: { type: string } }
+                etfs: { type: array, items: { $ref: '#/components/schemas/EtfCode' } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+
+  # ── home ─────────────────────────────────────────────
+  /home/brief:
+    get:
+      tags: [home]
+      operationId: homeBrief
+      summary: 홈 브리프
+      description: 화면 전용(BFF). 관심 그룹 기준 요약.
+      parameters:
+        - { name: group, in: query, schema: { type: string }, description: 관심 그룹 key. 없으면 기본 그룹 }
+      responses:
+        '200': { $ref: '#/components/responses/HomeBrief' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /home/indices:
+    get:
+      tags: [home]
+      operationId: homeIndices
+      summary: 시장 지수
+      description: 코스피·코스닥의 최근 거래일 종가와 전 거래일 대비 등락률. 파이프라인에 없는 지수는 빠지고, 없으면 빈 목록.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/MarketIndexList' }
+
+  # ── etf ──────────────────────────────────────────────
+  /etfs:
+    get:
+      tags: [etf]
+      operationId: etfList
+      summary: ETF 목록·검색
+      description: 전체 목록 또는 검색. 앱의 etf.list 와 etf.search 가 함께 쓴다. 최근 본 ETF 는 기기 저장(서버 없음).
+      security: []
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: 이름·코드 검색어. 없으면 전체 }
+      responses:
+        '200': { $ref: '#/components/responses/EtfSummaryList' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
+  /etfs/{code}:
+    get:
+      tags: [etf]
+      operationId: etfGet
+      summary: ETF 요약
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: ETF 요약
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/EtfSummary' }
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001
+  /etfs/{code}/chart:
+    get:
+      tags: [etf]
+      operationId: etfChart
+      summary: 가격 차트 (일봉)
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { name: range, in: query, schema: { type: string, enum: [1W, 1M, 3M, 6M, 1Y], default: 1M }, description: 일봉 구간. 앱 화면에 선택 UI 가 없어 기본 1M 만 쓴다(앱 기본값 '1D' 는 연결 때 1M 으로 바꾼다) }
+      responses:
+        '200':
+          description: 일봉 차트
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/ChartData' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001
+  /etfs/{code}/move:
+    get:
+      tags: [etf]
+      operationId: etfMove
+      summary: 왜 움직였을까 (장중 설명)
+      description: 왜 움직였을까 (장중 설명). 발행본이 없거나 summary 가 비어 있으면 ANALYSIS4001(앱은 준비 중 화면).
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 움직임 설명
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/MoveInfo' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001 | ANALYSIS4001
+  /etfs/{code}/detail:
+    get:
+      tags: [etf]
+      operationId: etfDetail
+      summary: 종목 정보 (구성 종목·테마·운용사)
+      description: 화면 전용. 종목 정보 탭(구성 종목·테마·운용사).
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 종목 정보
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/EtfDetailData' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001 | ANALYSIS4001
+
+  # ── watch ────────────────────────────────────────────
+  /watch-groups:
+    get:
+      tags: [watch]
+      operationId: watchGroups
+      summary: 관심 그룹 목록
+      responses:
+        '200':
+          description: 관심 그룹 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    post:
+      tags: [watch]
+      operationId: watchCreateGroup
+      summary: 관심 그룹 생성
+      description: 사용자 그룹 최대 10개 (PRD 정책, 초과 시 WATCH4002).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses:
+        '200':
+          description: 생성된 그룹
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/WatchGroup' }
+        '400': { $ref: '#/components/responses/Error' }   # WATCH4002
+  /watch-groups/{group}:
+    delete:
+      tags: [watch]
+      operationId: watchDeleteGroup
+      summary: 관심 그룹 삭제
+      description: 기본 그룹(base)은 삭제 불가. 그룹에 있던 종목은 기본 그룹에 유지 (PRD 정책).
+      parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # WATCH4001
+  /watch-groups/{group}/etfs:
+    get:
+      tags: [watch]
+      operationId: watchList
+      summary: 관심 그룹 ETF 목록
+      parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
+      responses:
+        '200': { $ref: '#/components/responses/EtfSummaryList' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    put:
+      tags: [watch]
+      operationId: watchSetMembers
+      summary: 관심 그룹 구성원 교체
+      description: 그룹 구성원 전체를 순서 포함 교체.
+      parameters: [{ $ref: '#/components/parameters/WatchGroup' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codes]
+              properties:
+                codes: { type: array, items: { $ref: '#/components/schemas/EtfCode' } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /etfs/{code}/watch-groups:
+    get:
+      tags: [watch]
+      operationId: watchMembership
+      summary: ETF 소속 그룹 조회
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 이 ETF 가 담긴 그룹 key 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { type: string } }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    put:
+      tags: [watch]
+      operationId: watchSetMembership
+      summary: ETF 를 여러 그룹에 담기·빼기
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groups]
+              properties:
+                groups: { type: array, items: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+
+  # ── theme ────────────────────────────────────────────
+  /themes:
+    get:
+      tags: [theme]
+      operationId: themeList
+      summary: 테마 목록
+      security: []
+      responses:
+        '200':
+          description: 테마 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/Theme' } }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
+
+  # ── explore ──────────────────────────────────────────
+  /explore/rank:
+    get:
+      tags: [explore]
+      operationId: exploreRank
+      summary: AI 가 보는 오늘 순위
+      security: []
+      description: AI 가 보는 오늘 순위. 고정 목록이라 페이지네이션 없음.
+      responses:
+        '200':
+          description: 순위
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { type: array, items: { $ref: '#/components/schemas/RankRow' } }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
+
+  # ── analysis ─────────────────────────────────────────
+  /etfs/{code}/analysis:
+    get:
+      tags: [analysis]
+      operationId: analysisDaily
+      summary: 일간 분석
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { name: date, in: query, schema: { type: string, format: date }, description: 없으면 최신 }
+        - { name: week, in: query, schema: { type: string, format: date }, description: "그 날짜가 속한 주의 마지막 발행본, date 가 있으면 무시" }
+      responses:
+        '200':
+          description: 일간 분석
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/DailyAnalysis' }
+        '404': { $ref: '#/components/responses/Error' }   # ETF4001 | ANALYSIS4001
+  /etfs/{code}/analysis/factors/{axis}:
+    get:
+      tags: [analysis]
+      operationId: analysisFactor
+      summary: 요인 상세
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { $ref: '#/components/parameters/Axis' }
+      responses:
+        '200':
+          description: 요인 상세
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/FactorPage' }
+        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
+  /etfs/{code}/analysis/metrics/{axis}:
+    get:
+      tags: [analysis]
+      operationId: analysisMetric
+      summary: 지표 페이지
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/EtfCode' }
+        - { $ref: '#/components/parameters/Axis' }
+      responses:
+        '200':
+          description: 지표 페이지
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/MetricPage' }
+        '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
+
+  # ── community ────────────────────────────────────────
+  /posts:
+    get:
+      tags: [community]
+      operationId: communityFeed
+      summary: 글 목록
+      description: |
+        글 목록 하나로 통합. 앱의 community.feed(all|mine)·mine·posts(code)·hot 이 함께 쓴다.
+        scope=all 전체 최신순, mine 요청자(회원 또는 게스트 디바이스)의 관심 ETF 글, hot 홈 인기글. code 를 주면 그 ETF 글만.
+        회원 요청이면 그 회원이 차단한 작성자의 글은 빠진다.
+      parameters:
+        - { name: scope, in: query, schema: { type: string, enum: [all, mine, hot], default: all } }
+        - { name: code, in: query, schema: { $ref: '#/components/schemas/EtfCode' } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { $ref: '#/components/responses/PostPage' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    post:
+      tags: [community]
+      operationId: communityCreate
+      summary: 글 작성
+      security: [{ bearerAuth: [] }]
+      description: 관심 ETF 에 대해서만 작성 가능(POST4002, 앱은 관심 편집으로 이동), 태그 최대 3개(POST4003).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, tags]
+              properties:
+                body: { type: string, maxLength: 280 }
+                tags: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/EtfCode' } }
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+        '400': { $ref: '#/components/responses/Error' }   # POST4002 | POST4003
+  /posts/{id}:
+    get:
+      tags: [community]
+      operationId: communityGet
+      summary: 글 상세
+      security: []
+      description: 조회수 증가. 회원이 차단한 작성자의 글이면 blocked=true 를 붙여 그대로 준다(앱은 가림막 뒤에 표시).
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+        '404': { $ref: '#/components/responses/Error' }   # POST4001
+    delete:
+      tags: [community]
+      operationId: communityRemove
+      summary: 글 삭제
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '403': { $ref: '#/components/responses/Error' }   # 남의 글
+  /posts/{id}/comments:
+    get:
+      tags: [community]
+      operationId: communityComments
+      summary: 댓글 목록
+      security: []
+      description: 회원 요청이면 그 회원이 차단한 작성자의 댓글은 빠진다.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200':
+          description: 댓글 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        allOf:
+                          - $ref: '#/components/schemas/Page'
+                          - properties:
+                              items: { type: array, items: { $ref: '#/components/schemas/Comment' } }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 파라미터
+    post:
+      tags: [community]
+      operationId: communityComment
+      summary: 댓글 작성
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        '200':
+          description: 작성된 댓글
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/Comment' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /posts/{id}/comments/{commentId}:
+    delete:
+      tags: [community]
+      operationId: communityRemoveComment
+      summary: 댓글 삭제
+      security: [{ bearerAuth: [] }]
+      description: 작성자 본인만. 자리 표시 없이 목록에서 빠지고 글의 comment 가 1 줄며, 그 댓글로 생긴 글쓴이 알림도 지운다.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: commentId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '403': { $ref: '#/components/responses/Error' }   # 남의 댓글
+        '404': { $ref: '#/components/responses/Error' }   # POST4001, POST4004 지운 댓글·다른 글의 댓글
+  /posts/{id}/like:
+    put:
+      tags: [community]
+      operationId: communityLike
+      summary: 좋아요
+      security: [{ bearerAuth: [] }]
+      description: 좋아요 추가. 멱등. 앱 toggleLike 는 현재 liked 에 따라 PUT/DELETE 중 하나를 부른다.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+        '404': { $ref: '#/components/responses/Error' }   # POST4001
+    delete:
+      tags: [community]
+      operationId: communityUnlike
+      summary: 좋아요 취소
+      security: [{ bearerAuth: [] }]
+      description: 좋아요 취소. 멱등.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Post' }
+        '404': { $ref: '#/components/responses/Error' }   # POST4001
+  /reports:
+    post:
+      tags: [community]
+      operationId: communityReport
+      summary: 글·댓글 신고
+      security: [{ bearerAuth: [] }]
+      description: 신고를 저장하고 운영자에게 원문을 메일로 보낸다. 같은 대상을 다시 신고해도 200 이고 저장·메일은 한 번뿐. 운영자는 24시간 안에 확인해 DB 에서 소프트 삭제한다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetType, targetId, reason]
+              properties:
+                targetType: { type: string, enum: [post, comment, reply], description: reply 는 1.1.0 이전 앱 호환, comment 로 저장 }
+                targetId: { type: string }
+                reason: { type: string, enum: [spam, abuse, sexual, scam, etc], description: 스팸·욕설·음란·사기·기타 }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # POST4001 대상 없음
+  /blocks/{handle}:
+    put:
+      tags: [community]
+      operationId: communityBlock
+      summary: 회원 차단
+      security: [{ bearerAuth: [] }]
+      description: 단방향 차단. 요청 회원에게 그 회원의 글·댓글이 목록에서 빠지고 새 댓글 알림이 오지 않는다. 멱등. 차단 해제는 1차 범위 밖.
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string }, description: '@ 포함 handle' }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # MEMBER4004
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+        '404': { $ref: '#/components/responses/Error' }   # MEMBER4003
+  /etfs/{code}/vote:
+    put:
+      tags: [community]
+      operationId: communityVote
+      summary: 투표 (생성·변경)
+      security: [{ bearerAuth: [] }]
+      description: ETF 당 계정별 1건, 변경 무제한, 마감 없음 (upsert). 응답에 현황을 싣지 않는다(투표 쓰기 경로에 읽기를 붙이지 않음). 앱은 성공 후 count 를 다시 읽는다.
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [choice]
+              properties:
+                choice: { $ref: '#/components/schemas/VoteChoice' }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    delete:
+      tags: [community]
+      operationId: communityVoteWithdraw
+      summary: 투표 철회
+      security: [{ bearerAuth: [] }]
+      description: 요청 회원의 이 ETF 투표 삭제. 투표 기록이 없어도 성공(멱등). 앱은 성공 후 count 를 다시 읽는다.
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+    get:
+      tags: [community]
+      operationId: communityMyVote
+      summary: 내 투표
+      security: [{ bearerAuth: [] }]
+      description: 요청 회원의 이 ETF 선택. 미투표는 choice null. 집계 조회와 분리해 count 경로의 조건을 유지한다.
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200':
+          description: 내 투표
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result: { $ref: '#/components/schemas/MyVote' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /etfs/{code}/vote/count:
+    get:
+      tags: [community]
+      operationId: communityVoteCount
+      summary: 투표 집계
+      description: 선택별 인원. 게스트도 조회. 내 선택은 싣지 않는다. source 는 집계를 읽은 경로(Redis 장애면 db 폴백).
+      security: []
+      parameters: [{ $ref: '#/components/parameters/EtfCode' }]
+      responses:
+        '200': { $ref: '#/components/responses/VoteCount' }
+
+  # ── notification ─────────────────────────────────────
+  /notifications:
+    get:
+      tags: [notification]
+      operationId: notificationList
+      summary: 알림 목록
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [all, watch, comm] } }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200':
+          description: 알림 목록
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        allOf:
+                          - $ref: '#/components/schemas/Page'
+                          - properties:
+                              items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /notifications/unread-count:
+    get:
+      tags: [notification]
+      operationId: notificationUnread
+      summary: 안 읽은 알림 수
+      responses:
+        '200':
+          description: 안 읽은 수
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      result:
+                        type: object
+                        properties:
+                          count: { type: integer }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /notifications/{id}/read:
+    post:
+      tags: [notification]
+      operationId: notificationRead
+      summary: 알림 읽음
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /notifications/read-all:
+    post:
+      tags: [notification]
+      operationId: notificationReadAll
+      summary: 알림 전체 읽음
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+  /notifications/push-token:
+    put:
+      tags: [notification]
+      operationId: notificationPushToken
+      summary: 푸시 토큰 등록
+      description: 기기 단위 Expo 푸시 토큰 등록. 회원도 X-Device-Id 필수. 회원이면 이 기기를 회원 알림 대상으로, 게스트면 회원 연결을 해제한다(로그아웃 뒤 재등록). 같은 토큰을 가진 다른 기기에서는 떼어 낸다.
+      parameters:
+        - { name: X-Device-Id, in: header, required: true, schema: { type: string, maxLength: 64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, pattern: '^Expo(nent)?PushToken\[[^\]]{1,200}\]$' }
+      responses:
+        '200': { $ref: '#/components/responses/Empty' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 토큰 형식·기기 헤더 누락
+        '401': { $ref: '#/components/responses/Error' }   # COMMON401
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    deviceId:
+      type: apiKey
+      in: header
+      name: X-Device-Id
+
+  parameters:
+    EtfCode: { name: code, in: path, required: true, schema: { $ref: '#/components/schemas/EtfCode' } }
+    WatchGroup: { name: group, in: path, required: true, schema: { type: string }, description: 관심 그룹 key. 기본 그룹은 base }
+    Axis: { name: axis, in: path, required: true, schema: { $ref: '#/components/schemas/Axis' } }
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    Cursor: { name: cursor, in: query, schema: { type: string }, description: 이전 응답의 nextCursor. 첫 페이지는 생략 }
+    Size: { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+
+  requestBodies:
+    EmailLogin:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email, password]
+            properties:
+              email: { type: string, format: email }
+              password: { type: string }
+
+  responses:
+    Empty:
+      description: 성공, result 없음
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Error:
+      description: 실패. code 는 x-error-codes 참조
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    AuthResult:
+      description: 로그인·가입·갱신 결과
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/AuthResult' }
+    Me:
+      description: 내 정보
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/Me' }
+    HomeBrief:
+      description: 홈 브리프
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/HomeBrief' }
+    MarketIndexList:
+      description: 시장 지수 목록
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { type: array, items: { $ref: '#/components/schemas/MarketIndex' } }
+    EtfSummaryList:
+      description: ETF 요약 목록
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
+    Post:
+      description: 글
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/Post' }
+    PostPage:
+      description: 글 목록 (커서)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result:
+                    allOf:
+                      - $ref: '#/components/schemas/Page'
+                      - properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Post' } }
+    VoteCount:
+      description: 투표 집계
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - properties:
+                  result: { $ref: '#/components/schemas/VoteCount' }
+
+  schemas:
+    # ── 공통 ──
+    ApiResponse:
+      description: libs/jvm-common ApiResponse. 키는 정확히 이 넷, result 는 null 이면 생략.
+      type: object
+      required: [isSuccess, code, message]
+      properties:
+        isSuccess: { type: boolean }
+        code: { type: string, description: "성공 COMMON200, 실패는 x-error-codes" }
+        message: { type: string }
+        result: {}
+    Page:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items: { type: array, items: {} }
+        nextCursor: { type: [string, 'null'] }
+    AuthResult:
+      type: object
+      required: [accessToken, refreshToken, me]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        me: { $ref: '#/components/schemas/Me' }
+        guestMapped: { type: boolean, description: 디바이스 게스트 데이터를 계정에 매핑했는지 (PRD 게스트 데이터 정책) }
+        newMember: { type: boolean, description: 이번 요청으로 회원이 생겼는지. 소셜 첫 로그인의 닉네임 설정 분기 }
+
+    # ── 기본 타입 (types.ts) ──
+    EtfCode: { type: string, description: 'KRX 종목 코드 6자리 (예: 069500)' }
+    Signal: { type: string, enum: [strongDown, down, neutral, up, strongUp] }
+    Dir: { type: string, enum: [help, neutral, burden] }
+    Axis: { type: string, enum: [issue, chart, macro, value, flow], description: 요인 축. 라벨(이슈·차트·매크로·밸류·수급)은 앱이 가진다 }
+    VoteChoice: { type: string, enum: [buy, wait, sell] }
+    NotiKind: { type: string, enum: [watch, comm] }
+
+    EtfSummary:
+      type: object
+      required: [code, name, theme, price, changePct, signal]
+      properties:
+        code: { $ref: '#/components/schemas/EtfCode' }
+        name: { type: string }
+        theme: { type: string, description: 테마 key. 로고 색은 앱이 여기서 매핑 }
+        price: { type: number }
+        changePct: { type: number }
+        signal: { $ref: '#/components/schemas/Signal' }
+        hot: { type: boolean }
+        sub: { type: string }
+    Theme:
+      type: object
+      required: [key, label, group]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        group: { type: string, enum: [industry, asset] }
+        hot: { type: boolean }
+    WatchGroup:
+      type: object
+      required: [key, label, count]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        count: { type: integer }
+    HomeBrief:
+      type: object
+      required: [asOf, groups, group, band, score, changePct, etfs]
+      properties:
+        asOf: { type: string, format: date-time, description: 기준 시각. "오늘 08:30 기준" 문구는 앱이 만든다 }
+        groups: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
+        group: { type: string }
+        band: { $ref: '#/components/schemas/Signal' }
+        score: { type: number, minimum: 0, maximum: 4, description: 그룹 signal 서수 평균(강력하락 0 ~ 강력상승 4), 소수 둘째 자리. band 는 이 값의 반올림 }
+        changePct: { type: number }
+        etfs: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
+    MarketIndex:
+      type: object
+      required: [code, name, value, changePct, asOf]
+      properties:
+        code: { type: string, description: KRX 지수 코드. 1001 코스피, 2001 코스닥 }
+        name: { type: string }
+        value: { type: number, description: 최근 거래일 종가 }
+        changePct: { type: number, description: 전 거래일 종가 대비 등락률 }
+        asOf: { type: string, format: date-time, description: 최근 거래일 15:30 KST }
+    Me:
+      type: object
+      required: [nick, handle]
+      properties:
+        nick: { type: string }
+        handle: { type: string, description: 아바타 색은 앱이 handle 로 매핑 }
+        email: { type: string }
+        disclaimerAcceptedAt: { type: string, format: date-time }
+    MePatch:
+      type: object
+      properties:
+        nick: { type: string }
+        handle: { type: string }
+
+    # ── 커뮤니티 ──
+    Post:
+      type: object
+      required: [id, etf, author, time, body, like, comment, liked]
+      properties:
+        id: { type: string }
+        etf:
+          type: object
+          required: [code, theme, short]
+          properties:
+            code: { $ref: '#/components/schemas/EtfCode' }
+            theme: { type: string }
+            short: { type: string }
+        author:
+          type: object
+          required: [name, handle]
+          properties:
+            name: { type: string }
+            handle: { type: string }
+        time: { type: string, format: date-time, description: 작성 시각. "3분 전" 은 앱이 만든다 }
+        title: { type: string }
+        body: { type: string }
+        quoteTag: { type: string }
+        like: { type: integer }
+        comment: { type: integer }
+        reply: { type: integer, deprecated: true, description: comment 와 같은 값. 1.1.0 이전 앱 호환 }
+        liked: { type: boolean }
+        views: { type: integer }
+        mine: { type: boolean }
+        blocked: { type: boolean, description: 요청 회원이 차단한 작성자의 글. 글 상세에서만 true 로 온다 }
+    Comment:
+      type: object
+      required: [id, author, time, body]
+      properties:
+        id: { type: string }
+        author:
+          type: object
+          required: [name, handle]
+          properties:
+            name: { type: string }
+            handle: { type: string }
+        time: { type: string, format: date-time }
+        body: { type: string }
+    VoteCount:
+      type: object
+      required: [buys, waits, sells, source]
+      properties:
+        buys: { type: integer }
+        waits: { type: integer }
+        sells: { type: integer }
+        source: { type: string, enum: [redis, db] }
+    MyVote:
+      type: object
+      required: [choice]
+      properties:
+        choice: { type: [string, 'null'], enum: [buy, wait, sell, null] }
+
+    # ── ETF 상세 ──
+    Candle:
+      type: object
+      description: 시가·고가·저가는 원천에 없으면 생략. 종가는 항상 있음
+      required: [c]
+      properties:
+        o: { type: number }
+        h: { type: number }
+        l: { type: number }
+        c: { type: number }
+    ChartData:
+      type: object
+      required: [range, candles, ma5, ma20, axis]
+      properties:
+        range: { type: string }
+        candles: { type: array, items: { $ref: '#/components/schemas/Candle' } }
+        ma5: { type: array, items: { type: [number, 'null'] } }
+        ma20: { type: array, items: { type: [number, 'null'] } }
+        axis: { type: array, items: { type: string } }
+    MoveInfo:
+      type: object
+      required: [at, text, foot, sheetTitle, groups]
+      properties:
+        at: { type: string, format: date-time, description: 설명 생성 시각. "10분 전" 은 앱이 만든다 (앱 필드 ago 대체) }
+        text: { type: string }
+        foot: { type: string }
+        sheetTitle: { type: string }
+        groups:
+          type: array
+          items:
+            type: object
+            required: [head, items]
+            properties:
+              head: { type: string }
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [dir, t]
+                  properties:
+                    dir: { $ref: '#/components/schemas/Dir' }
+                    t: { type: string }
+                    sub: { type: string }
+    HeatCell:
+      type: object
+      required: [name, weight, changePct]
+      properties:
+        name: { type: string }
+        weight: { type: number }
+        changePct: { type: number }
+        dir: { $ref: '#/components/schemas/Dir' }
+    HoldingRow:
+      type: object
+      required: [name, weight]
+      properties:
+        name: { type: string }
+        weight: { type: number }
+        dir: { $ref: '#/components/schemas/Dir' }
+        desc: { type: string }
+    EtfDetailData:
+      type: object
+      required: [stocks, holdings, stockCount, info, blurb]
+      properties:
+        insight:
+          type: object
+          required: [dir, text]
+          properties:
+            dir: { $ref: '#/components/schemas/Dir' }
+            text: { type: string }
+        stocks: { type: array, items: { $ref: '#/components/schemas/HeatCell' } }
+        themes: { type: array, items: { $ref: '#/components/schemas/HeatCell' } }
+        holdings: { type: array, items: { $ref: '#/components/schemas/HoldingRow' } }
+        themeRows: { type: array, items: { $ref: '#/components/schemas/HoldingRow' } }
+        stockCount: { type: integer }
+        info:
+          type: array
+          items:
+            type: object
+            required: [k, v]
+            properties:
+              k: { type: string }
+              v: { type: string }
+        blurb: { type: string }
+
+    # ── 분석 ──
+    AxisRead:
+      type: object
+      required: [axis, dir, summary, hasPage]
+      properties:
+        axis: { $ref: '#/components/schemas/Axis' }
+        dir: { $ref: '#/components/schemas/Dir' }
+        summary: { type: string }
+        hasPage: { type: boolean }
+    DailyDate:
+      type: object
+      required: [key, w, d, hasDaily]
+      properties:
+        key: { type: string, format: date }
+        w: { type: string, description: 요일 표시 }
+        d: { type: string, description: 일 표시 }
+        hasDaily: { type: boolean }
+    DailyAnalysis:
+      type: object
+      required: [date, dates, headTitle, question, dateline, now, synth, axes, title, todayDate, today, args, closingTitle, neg, pos, close]
+      properties:
+        date: { type: string, format: date }
+        dates: { type: array, items: { $ref: '#/components/schemas/DailyDate' }, description: date 가 속한 주의 월~일 7칸 }
+        headTitle: { type: string }
+        question: { type: string }
+        dateline: { type: string }
+        now: { $ref: '#/components/schemas/Signal' }
+        prev: { $ref: '#/components/schemas/Signal' }
+        synth: { type: string }
+        axes: { type: array, items: { $ref: '#/components/schemas/AxisRead' } }
+        title: { type: string }
+        todayDate: { type: string }
+        today: { type: array, items: { type: string } }
+        args:
+          type: array
+          items:
+            type: object
+            required: [no, claim, body]
+            properties:
+              no: { type: string }
+              claim: { type: string }
+              body: { type: array, items: { type: string } }
+        closingTitle: { type: string }
+        neg: { type: array, items: { type: string } }
+        pos: { type: array, items: { type: string } }
+        close: { type: string }
+        prevWeek: { type: string, format: date, description: 앞쪽에서 가장 가까운 발행 주의 월요일 }
+        nextWeek: { type: string, format: date, description: 뒤쪽에서 가장 가까운 발행 주의 월요일 }
+    FactorPage:
+      type: object
+      required: [axis, dir, headline]
+      properties:
+        axis: { $ref: '#/components/schemas/Axis' }
+        dir: { $ref: '#/components/schemas/Dir' }
+        headline: { type: string }
+        events:
+          type: array
+          items:
+            type: object
+            required: [dir, k, body]
+            properties:
+              dir: { $ref: '#/components/schemas/Dir' }
+              k: { type: string }
+              body: { type: string }
+        chartInds:
+          type: array
+          items:
+            type: object
+            required: [dir, name, d]
+            properties:
+              dir: { $ref: '#/components/schemas/Dir' }
+              name: { type: string }
+              d: { type: string }
+        judg: { type: array, items: { type: string } }
+    MetricTile:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        dir: { $ref: '#/components/schemas/Dir' }
+        note: { type: string }
+        wide: { type: boolean }
+    MetricPage:
+      type: object
+      required: [axis, dir, verdict, tiles, hasDetail]
+      properties:
+        axis: { $ref: '#/components/schemas/Axis' }
+        dir: { $ref: '#/components/schemas/Dir' }
+        verdict: { type: string }
+        tiles: { type: array, items: { $ref: '#/components/schemas/MetricTile' } }
+        hasDetail: { type: boolean }
+    # ── 탐색·테마 ──
+    RankRow:
+      type: object
+      required: [etf, rank, title, chips, ready]
+      properties:
+        etf: { $ref: '#/components/schemas/EtfSummary' }
+        rank: { type: integer }
+        title: { type: string }
+        chips: { type: array, items: { type: string } }
+        ready: { type: boolean }
+    Notification:
+      type: object
+      required: [id, kind, time, title, body, read]
+      properties:
+        id: { type: string }
+        kind: { $ref: '#/components/schemas/NotiKind' }
+        etf: { $ref: '#/components/schemas/EtfCode' }
+        postId: { type: string }
+        time: { type: string, format: date-time }
+        title: { type: string }
+        body: { type: string }
+        read: { type: boolean }

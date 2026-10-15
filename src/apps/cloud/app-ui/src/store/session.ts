@@ -1,0 +1,64 @@
+import { useRouter } from 'expo-router';
+import { create } from 'zustand';
+import { api, isApiError } from '@/api';
+import { guestDisclaimer, onboarding, tokens } from '@/api/http/storage';
+
+interface SessionState {
+  restored: boolean;
+  onboarded: boolean;
+  loggedIn: boolean;
+  guestDisclaimed: boolean;
+  acceptGuestDisclaimer: () => void;
+  finishOnboarding: () => void;
+  login: () => void;
+  logout: (restart: boolean) => void;
+  expire: () => void;
+  restore: () => Promise<void>;
+}
+
+export const useSession = create<SessionState>((set) => ({
+  restored: false,
+  onboarded: false,
+  loggedIn: false,
+  guestDisclaimed: false,
+  acceptGuestDisclaimer: () => { guestDisclaimer.save(); set({ guestDisclaimed: true }); },
+  finishOnboarding: () => { onboarding.save(true); set({ onboarded: true }); },
+  login: () => set({ loggedIn: true }),
+  // 탈퇴만 온보딩 재시작
+  logout: (restart) => {
+    if (!restart) return set({ loggedIn: false });
+    onboarding.save(false);
+    set({ loggedIn: false, onboarded: false });
+  },
+  // 서버의 토큰 거부 시 온보딩 상태를 둔 로그아웃
+  expire: () => set({ loggedIn: false }),
+  // 기동 시 기기 상태와 회원 확인 기반의 로그인 상태 복원
+  restore: async () => {
+    const onboarded = await onboarding.done();
+    const guestDisclaimed = await guestDisclaimer.done();
+    let loggedIn = false;
+    if (process.env.EXPO_PUBLIC_API_MODE === 'http' && (await tokens.access())) {
+      // 토큰 거부만 로그아웃, 오프라인 기동은 로그인 유지
+      try {
+        await api.member.me();
+        loggedIn = true;
+      } catch (e) {
+        loggedIn = !isApiError(e, 'UNAUTHORIZED');
+      }
+    }
+    set({ restored: true, onboarded, loggedIn, guestDisclaimed });
+  },
+}));
+
+// 비로그인 시 동작 대신 로그인 화면으로 보내는 래퍼
+// reason 은 로그인 화면의 안내 한 줄
+// before 는 이동 전 모달 닫기용
+export const useRequireLogin = () => {
+  const loggedIn = useSession((s) => s.loggedIn);
+  const router = useRouter();
+  return (reason: string, fn: () => void, before?: () => void) => {
+    if (loggedIn) return fn();
+    before?.();
+    router.push({ pathname: '/login', params: { reason } });
+  };
+};

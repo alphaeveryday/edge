@@ -18,7 +18,8 @@ if scenario == 'S3':
     raise SystemExit('S3 (retry) was removed with VOTE_REDIS_RETRY — see README; use S2')
 user_pool = int(os.environ.get('USER_POOL', '0'))
 if user_pool and user_pool < 500:
-    # 50rps 에서 같은 사용자의 요청 간격 = pool/50 초. 겹치면 ack 도착 순서가 커밋 순서와 달라져 사용자별 대조가 무효다.
+    # 50rps 에서 같은 사용자의 요청 간격은 pool/50 초
+    # 간격이 겹치면 ack 도착 순서와 커밋 순서가 달라져 사용자별 대조 무효
     raise SystemExit('USER_POOL must be >= 500 (>= 10s between a user\'s requests at 50rps) or unset')
 root = Path(__file__).resolve().parent
 out = root / 'runs' / (scenario + '-' + time.strftime('%Y%m%d-%H%M%S'))
@@ -35,7 +36,8 @@ def get(path):
     with urllib.request.urlopen('http://localhost:8080' + path, timeout=6) as r:
         return r.read().decode()
 def parse_time(stamp):
-    # k6 는 RFC3339 로 소수초를 가변 자릿수(최대 9)로 찍는다 — 3.11 미만 fromisoformat 은 6자리·Z 미지원.
+    # 최대 9자리 가변 소수초의 k6 RFC3339 시각
+    # 3.11 미만 fromisoformat 의 6자리 초과와 Z 미지원 대응
     stamp = re.sub(r'\.(\d+)', lambda m: '.' + (m.group(1) + '000000')[:6], stamp).replace('Z', '+00:00')
     return datetime.fromisoformat(stamp)
 def sql(query):
@@ -49,7 +51,7 @@ for _ in range(180):
     time.sleep(1)
 else: raise SystemExit('App did not become ready')
 master = dc('ps', '-q', 'redis-master').strip()
-etf = str(int(time.time()))
+etf = str(int(time.time()))[-6:]
 env.update(ETF_ID=etf, SCENARIO=scenario, SUMMARY_PATH=str(out / 'summary.json'))
 threads = []
 start = time.monotonic()
@@ -71,20 +73,20 @@ with (out / 'k6.log').open('w') as log:
 def master_cli(*args):
     address = dc('exec', '-T', 'sentinel-1', 'redis-cli', '-p', '26379', '--raw', 'SENTINEL', 'get-master-addr-by-name', 'mymaster').splitlines()
     return dc('exec', '-T', 'sentinel-1', 'redis-cli', '-h', address[0], '-p', address[1], '--raw', *args)
-(out / 'before-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
-(out / 'db.tsv').write_text(sql("select choice,count(*) from forecast_vote where forecast_id='" + etf + "' group by choice;"))
-(out / 'duplicates.tsv').write_text(sql('select forecast_id,user_id,count(*) from forecast_vote group by forecast_id,user_id having count(*)>1;'))
+(out / 'before-reconcile.json').write_text(get('/api/v1/etfs/' + etf + '/vote/count'))
+(out / 'db.tsv').write_text(sql("select choice,count(*) from vote where etf_code='" + etf + "' group by choice;"))
+(out / 'duplicates.tsv').write_text(sql('select etf_code,member_id,count(*) from vote group by etf_code,member_id having count(*)>1;'))
 # Observe automatic reconciliation for up to five minutes after the load.
 expected = dict(line.split('\t') for line in (out / 'db.tsv').read_text().splitlines())
 for _ in range(300):
     try:
-        result = json.loads(get('/api/v1/forecasts/' + etf + '/votes/count'))['result']
-        if result['source'] == 'redis' and all(result[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL')): break
+        result = json.loads(get('/api/v1/etfs/' + etf + '/vote/count'))['result']
+        if result['source'] == 'redis' and all(result[c + 's'] == int(expected.get(c, 0)) for c in ('buy', 'wait', 'sell')): break
     except Exception: pass
     time.sleep(1)
-(out / 'after-reconcile.json').write_text(get('/api/v1/forecasts/' + etf + '/votes/count'))
+(out / 'after-reconcile.json').write_text(get('/api/v1/etfs/' + etf + '/vote/count'))
 (out / 'master-voted.txt').write_text(master_cli('HLEN', 'vote:{' + etf + '}:choices'))
-# 사용자별 최종 choice 3방향 대조: k6 ack(200 의 마지막 choice) vs DB vs Redis choices 해시.
+# k6 ack 와 DB 와 Redis choices 해시 사이의 사용자별 최종 choice 3방향 대조
 acked = {}
 with (out / 'samples.json').open() as samples:
     for line in samples:
@@ -94,7 +96,7 @@ with (out / 'samples.json').open() as samples:
             if user not in acked or stamp > acked[user][0]:
                 acked[user] = (stamp, point['data']['tags']['choice'])
 acked = {user: choice for user, (_, choice) in acked.items()}
-db_choices = dict(line.split('\t') for line in sql("select user_id,choice from forecast_vote where forecast_id='" + etf + "';").splitlines())
+db_choices = dict(line.split('\t') for line in sql("select member_id,choice from vote where etf_code='" + etf + "';").splitlines())
 redis_pairs = master_cli('HGETALL', 'vote:{' + etf + '}:choices').split()
 redis_choices = dict(zip(redis_pairs[::2], redis_pairs[1::2]))
 per_user = {'acked': len(acked), 'db': len(db_choices), 'redis': len(redis_choices),
@@ -106,7 +108,7 @@ per_user = {'acked': len(acked), 'db': len(db_choices), 'redis': len(redis_choic
 (out / 'app.log').write_text(dc('logs', '--timestamps', 'app'))
 final = json.loads((out / 'after-reconcile.json').read_text())['result']
 correct = (final['source'] == 'redis'
-           and all(final[c.lower()] == int(expected.get(c, 0)) for c in ('BUY', 'HOLD', 'SELL'))
+           and all(final[c + 's'] == int(expected.get(c, 0)) for c in ('buy', 'wait', 'sell'))
            and int((out / 'master-voted.txt').read_text()) == sum(map(int, expected.values()))
            and not (out / 'duplicates.tsv').read_text().strip()
            and not per_user['db_redis_mismatch'] and not per_user['ack_db_mismatch'])

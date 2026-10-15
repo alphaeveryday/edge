@@ -1,0 +1,59 @@
+import { useRouter, useScrollToTop } from 'expo-router';
+import { useRef, useState } from 'react';
+import { Animated, ScrollView, Text, View } from 'react-native';
+import { TopBar } from '@/components/TopBar';
+import { PageTitle } from '@/components/ui';
+import { EtfRow } from '@/features/etf/EtfRow';
+import { MarketTicker } from '@/features/home/MarketTicker';
+import { useIndices } from '@/features/home/queries';
+import { GroupChips } from '@/features/watch/GroupChips';
+import { NewGroupSheet } from '@/features/watch/NewGroupSheet';
+import { useGroupMembers, useWatchList } from '@/features/watch/queries';
+import { useSwapFade } from '@/lib/useSwapFade';
+import { useWatchGroup } from '@/store/watch';
+import { createStyles } from '@/theme/theme';
+import { PAGE_X } from '@/theme/tokens';
+import { fam } from '@/theme/typography';
+import { usePullRefresh } from '@/lib/usePullRefresh';
+
+export default function Watch() {
+  const styles = useStyles();
+  const router = useRouter();
+  const group = useWatchGroup((s) => s.group);
+  const list = useWatchList(group, true);
+  const data = list.data;
+  // 칩 전환의 즉시 표시용 모든 그룹 미리 받기
+  useGroupMembers();
+  const fade = useSwapFade(group, list.isPlaceholderData);
+  const [newOpen, setNewOpen] = useState(false);
+  const pull = usePullRefresh();
+  const indices = useIndices();
+  // 같은 탭 다시 누르기의 맨 위 이동
+  const top = useRef<ScrollView>(null);
+  useScrollToTop(top);
+  return (
+    <View style={styles.root}>
+      <TopBar />
+      <ScrollView ref={top} {...pull.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+        {pull.indicator}
+        <PageTitle title="관심" right={<MarketTicker items={indices.data ?? []} />} />
+        <View style={styles.chips}>
+          <GroupChips onAdd={() => setNewOpen(true)} onEdit={() => router.push('/watch/edit')} />
+        </View>
+        <Animated.View style={{ opacity: fade }}>
+          <View style={{ paddingHorizontal: PAGE_X }}>
+            {data?.map((e) => <EtfRow key={e.code} etf={e} />)}
+          </View>
+          {data && data.length === 0 && <Text style={styles.empty}>이 그룹에 담긴 ETF가 없어요{'\n'}편집에서 종목을 추가해 보세요</Text>}
+        </Animated.View>
+      </ScrollView>
+      <NewGroupSheet open={newOpen} onClose={() => setNewOpen(false)} />
+    </View>
+  );
+}
+
+const useStyles = createStyles((colors) => ({
+  root: { flex: 1, backgroundColor: colors.bg },
+  chips: { paddingVertical: 12, paddingHorizontal: PAGE_X, borderBottomWidth: 1, borderBottomColor: colors.surface },
+  empty: { textAlign: 'center', fontFamily: fam.regular, fontSize: 14, lineHeight: 22, color: colors.textSub, paddingVertical: 34, paddingHorizontal: 20 },
+}));

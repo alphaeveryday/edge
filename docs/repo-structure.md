@@ -16,7 +16,8 @@ src/
 │   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
 │   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
 │   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
-│   │   ├── app-api/          # JVM    · B2C 전망 투표 접수·집계 (실험 트랙, 자체 MySQL·Redis)
+│   │   ├── app-api/          # JVM    · ETF Orca 앱 API (회원·ETF·커뮤니티·전망 투표, 자체 PostgreSQL·Redis)
+│   │   ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
 │   │   ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
 │   │   ├── data-pipeline/    # Python · 파이프라인 SFN raw→정제→feature 페이즈
 │   │   ├── airflow/          # Python · 유한 배치의 Airflow DAG(SFN 에서 레인별 이관 중) · ECS on EC2 이미지·검증 경로(ALPHA-1119)
@@ -75,7 +76,8 @@ JVM은 `src/settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `
 | `airflow` | Python(DAG) | **edge-cloud**(ECS on EC2 `edge-dev-airflow`, 이미지 `edge/airflow` — ALPHA-1119) | 유한 배치 실행 관리를 SFN 에서 레인별로 옮기는 DAG·연결 코드와 배포 이미지·격리 검증 경로. 업무 실행은 data-pipeline 의 기존 ECS 태스크 정의·명령을 그대로 부른다. 첫 레인은 장중 수급 — 2026-10-03 부터 Airflow 가 상시 실행한다(ALPHA-1141, SFN 스케줄 DISABLED·상태 머신은 롤백용). 둘째 `edge_source_daily`(원천 관측, ALPHA-1130)는 SFN 없는 Airflow 전용 레인이다 — 2026-10-03 부터 매일 05:20 정기 운영 |
 | `analysis-engine-v2` | Python | **edge-cloud** | 큐 소비자가 SFN으로 분석을 실행하고 결과·근거를 DB에 저장 |
 | `db-query` | Python | **edge-cloud** | 운영 DB 조회용 일회성 ECS 태스크 |
-| `app-api` | JVM | **edge-cloud** (`etforca.edgesignal.dev`, 별도 RDS·ElastiCache — [ADR-0056](adr/0056-etforca-app-api-infra.md)) | B2C 앱용 ETF 전망 BUY·HOLD·SELL 투표 접수·집계 API — Redis 장애 격리 실험 트랙(Sentinel failover·Cluster 부분 장애, 모듈 README 가 정본). **자체 MySQL 스키마·Flyway 를 모듈 안에 둔다(`libs/schema` 밖)** — 배포 아티팩트·스키마 SSOT 편입은 ADR 미결(ALPHA-1070·1078) |
+| `app-api` | JVM | **edge-cloud** (`etforca.edgesignal.dev`, 별도 RDS·ElastiCache — [ADR-0056](adr/0056-etforca-app-api-infra.md)) | ETF Orca 앱 API. 회원·ETF·커뮤니티·전망 투표 — Redis 장애 격리 실험 트랙(Sentinel failover·Cluster 부분 장애, 모듈 README 가 정본). **자체 PostgreSQL 스키마·Flyway 를 모듈 안에 둔다(`libs/schema` 밖)** — 배포 아티팩트·스키마 SSOT 편입은 ADR 미결(ALPHA-1070·1078) |
+| `app-ui` | Node(Expo) | **앱 스토어** (iOS·Android, EAS 빌드) | ETF Orca 모바일 앱. pnpm 워크스페이스에서 제외하고 자체 npm lock 으로 관리한다(Metro 와 pnpm 심볼릭 링크 충돌, 모듈 README 가 정본) |
 | `app-landing` | 정적(HTML) | **edge-cloud** (`etforca.com`, S3·CloudFront) | ETF Orca 랜딩페이지. 원본은 Claude Artifact용 조각 문서이고 `build.sh` 가 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 서빙용 `index.html` 을 만든다. 워크스페이스(JVM·Node·Python) 어디에도 등록하지 않는다. dev 머지 시 `deploy-app-landing.yml` 이 S3 에 올린다(모듈 README 가 정본) |
 
 sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
