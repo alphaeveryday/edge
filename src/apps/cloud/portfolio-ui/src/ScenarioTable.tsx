@@ -8,7 +8,7 @@ export function ScenarioTable({ scenarios }: { scenarios: Scenarios }) {
     <p className="notice">미래 수익 예측이 아닌 조건부 계산이에요.</p>
     {scenarios.status !== 'available' ? <p>현재 평가금액과 확정된 납입 금액·주기를 확인해야 계산할 수 있어요.</p> : <>
       <p>시작 금액 {money(scenarios.principal_krw!)} · 월말 납입 {money(scenarios.monthly_krw!)}</p>
-      <div style={{ overflowX: 'auto' }}><table><caption>동일한 연수익률과 월 납입을 유지하는 가정</caption>
+      <div style={{ overflowX: 'auto' }}><table><caption>아래 납입 조건과 일정한 연수익률을 적용한 계산</caption>
         <thead><tr><th>연수익률 가정</th><th>기간</th><th>총 납입</th><th>가정 결과</th></tr></thead>
         <tbody>{scenarios.rows.map(row => <tr key={`${row.annual_return_pct}:${row.years}`}><th scope="row">{row.annual_return_pct}%</th><td>{row.years}년</td><td>{money(row.paid_krw)}</td><td>{money(row.future_krw)}</td></tr>)}</tbody>
       </table></div>
