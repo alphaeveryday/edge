@@ -417,3 +417,53 @@ async def test_followup_does_not_restore_misclassified_interest_constraints(expl
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='PREFERENCE_CHECKED'):
         await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
+async def test_customer_stated_month_end_funding_reaches_real_calculator():
+    import json
+    from edge_portfolio.agent import run_analysis
+    from edge_portfolio.contracts import AnalysisInput
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    question = 'ETF 교체 추천 말고 계산만 해주세요. 현재 1000만원에 매월 말 50만원을 더 넣고 연 5% 수익률을 가정하면 10년 뒤 얼마인가요?'
+    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 10000000}],
+        horizon='10년 이상', question=question, preferences={'interests': ['균형 잡힌 분산'], 'contribution': '이미 다 매수한 상태에요'})
+    stages, calculated = [], []
+    async def model(payload):
+        if stages[-1] == 'question':
+            content = {**final_payload()['question'], 'decision': {'kind': 'scenario',
+                'funding': {'source': question, 'monthly_krw': 500000, 'principal_krw': 10000000}}}
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+        if calculated:
+            result = json.loads(payload['messages'][-1]['content'])
+            assert result['status'] == 'available'
+            assert result['monthly_krw'] == '500000'
+            assert result['rows'][0]['future_krw'] == '93470527'
+            raise RuntimeError('CALCULATOR_VERIFIED')
+        calculated.append(1)
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'scenario', 'type': 'function', 'function': {'name': 'calculate_scenarios',
+            'arguments': json.dumps({'annual_returns': [5], 'years': [10]})}}]}}]}
+    with pytest.raises(RuntimeError, match='CALCULATOR_VERIFIED'):
+        await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
+
+
+async def test_unchanged_followup_preserves_structured_funding_schedule():
+    import json
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    question = '월 50만원씩 3개월만 넣습니다.'
+    report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 10000000}],
+        'horizon': '10년 이상', 'question': question}, 'sources': Evidence.sources,
+        'decision': {'funding': {'source': question, 'monthly_krw': 500000, 'max_months': 3}}}
+    stages=[]
+    async def model(payload):
+        if stages[-1] != 'question':
+            context=json.loads(payload['messages'][1]['content'])
+            assert context['active_decision']['funding']['max_months'] == 3
+            assert context['active_decision']['funding']['monthly_krw'] == 500000
+            raise RuntimeError('INHERITED_FUNDING_VERIFIED')
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**final_payload()['question'],
+            'decision': {'kind': 'rebalance', 'execute_saved_target': True}})}}]}
+    with pytest.raises(RuntimeError, match='INHERITED_FUNDING_VERIFIED'):
+        await answer_question('이 목표대로 집행해 주세요.', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)

@@ -81,7 +81,7 @@ TOOL = {'type': 'function', 'function': {'name': 'calculate_scenarios',
     'parameters': ScenarioInput.model_json_schema()}}
 
 
-def build_scenarios(principal_krw, args, *, monthly_krw=0, additional_krw=0):
+def build_scenarios(principal_krw, args, *, monthly_krw=0, additional_krw=0, contribution_months=None, start_delay_months=0):
     assumptions = ScenarioInput.model_validate(args)
     if principal_krw is None:
         return {'status': 'needs_input', 'reason': 'CURRENT_AMOUNTS_REQUIRED', 'rows': []}
@@ -90,6 +90,10 @@ def build_scenarios(principal_krw, args, *, monthly_krw=0, additional_krw=0):
         raise ValueError('INVALID_SCENARIO_PRINCIPAL')
     if principal > 20 * 10**13 or monthly > 10**13 or additional > 10**13:
         raise ValueError('SCENARIO_AMOUNT_LIMIT')
+    if contribution_months is not None and (type(contribution_months) is not int or not 1 <= contribution_months <= 600):
+        raise ValueError('INVALID_CONTRIBUTION_MONTHS')
+    if type(start_delay_months) is not int or not 0 <= start_delay_months <= 600:
+        raise ValueError('INVALID_CONTRIBUTION_START')
     principal += additional
     rows = []
     with localcontext() as context:
@@ -99,10 +103,16 @@ def build_scenarios(principal_krw, args, *, monthly_krw=0, additional_krw=0):
             monthly_rate = yearly ** (Decimal(1) / 12) - 1 if yearly else Decimal(-1)
             for years in dict.fromkeys(assumptions.years):
                 factor = yearly ** years
-                deposits = monthly * 12 * years if monthly_rate == 0 else monthly * (factor - 1) / monthly_rate
+                available_months = max(0, years * 12 - start_delay_months)
+                months = min(available_months, contribution_months) if contribution_months is not None else available_months
+                remainder = max(0, years * 12 - start_delay_months - months)
+                deposits = monthly * months if monthly_rate == 0 or months == 0 else monthly * ((1 + monthly_rate) ** months - 1) / monthly_rate
+                deposits *= (1 + monthly_rate) ** remainder if remainder else 1
                 value = (principal * factor + deposits).quantize(Decimal(1), rounding=ROUND_HALF_UP)
                 rows.append({'annual_return_pct': str(rate), 'years': years, 'future_krw': str(value),
-                             'paid_krw': str(int(principal + monthly * years * 12))})
+                             'paid_krw': str(int(principal + monthly * months))})
     return {'status': 'available', 'principal_krw': str(int(principal)), 'monthly_krw': str(int(monthly)), 'rows': rows,
             'assumptions': ['연수익률이 매년 같고 월말에 같은 금액을 납입하는 가정이에요.',
-                            '세금·수수료·물가 상승은 제외했으며 미래 수익을 예측하거나 보장하지 않아요.']}
+                            '세금·수수료·물가 상승은 제외했으며 미래 수익을 예측하거나 보장하지 않아요.',
+                            *([f'월 납입은 {contribution_months}개월 동안만 반영했어요.'] if contribution_months is not None else []),
+                            *([f'월 납입은 {start_delay_months}개월 뒤부터 시작한다고 가정했어요.'] if start_delay_months else [])]}

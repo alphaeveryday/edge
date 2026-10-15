@@ -399,3 +399,154 @@ def test_rebalance_tool_does_not_accept_model_invented_funding_or_accounts():
     args['allocations'][0]['account'] = 'ISA'
     with pytest.raises(ValueError):
         execution_tool(req, args, decision, catalog)
+
+
+@pytest.mark.parametrize('question,contribution,quote,monthly,additional', [
+    ('기존 보유는 절대 팔지 마세요. 추가 투자금 500만원으로 장기 분산을 개선할 매수 계획을 주세요.', '추가 투자금 500만원', '추가 투자금 500만원', None, 5000000),
+    ('기존 QQQ는 매도하지 않고 월 50만원씩 넣겠습니다. 목표 추천 비중과 매달 무엇을 살지 알려주세요.', '월 50만원', '월 50만원', 500000, 0),
+    ('ETF 교체 추천 말고 계산만 해주세요. 현재 1000만원에 매월 말 50만원을 더 넣고 연 5% 수익률을 가정하면 10년 뒤 얼마인가요?', '이미 다 매수한 상태에요', '매월 말 50만원', 500000, 0),
+])
+def test_model_extracted_funding_survives_normal_customer_prose(question, contribution, quote, monthly, additional):
+    from edge_portfolio.decision import Decision, validate_decision
+    from edge_portfolio.execution import resolve_funding
+    req = request([('US:VOO', 10000000, '일반 계좌')], question=question, preferences={'contribution': contribution})
+    decision = Decision(funding_text=quote, funding={'source': question, 'additional_krw': additional, 'monthly_krw': monthly})
+    validate_decision(decision, req, {})
+    assert resolve_funding(req, decision) == {'additional_krw': Decimal(additional), 'monthly_krw': Decimal(monthly) if monthly else None}
+
+
+def test_extracted_funding_must_quote_input_and_preserve_money_units():
+    from edge_portfolio.decision import Decision, validate_decision
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='매월 말 50만원을 투자합니다.')
+    for source, amount in [('매월 500만원', 5000000), (req.question, 5000000)]:
+        decision = Decision(funding={'source': source, 'monthly_krw': amount})
+        with pytest.raises(ValueError, match='FUNDING'):
+            validate_decision(decision, req, {})
+
+
+def test_finite_and_conditional_model_funding_remains_visible_in_execution():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='월 50만원씩 3개월만 투자할 계획입니다.')
+    decision = Decision(funding={'source': req.question, 'monthly_krw': 500000, 'max_months': 3}, constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    plan = plan_execution(req, target(**{'US:VOO': 50, 'US:BND': 50}), decision)
+    assert plan['status'] == 'infeasible'
+    assert 'FUNDING_DURATION_EXCEEDED' in plan['reasons']
+    decision.funding.max_months = None
+    decision.funding.assumptions = ['월 50만원 납입이 지속되는 경우의 계획입니다.']
+    plan = plan_execution(req, target(**{'US:VOO': 50, 'US:BND': 50}), decision)
+    assert plan['status'] == 'conditional'
+    assert decision.funding.assumptions[0] in plan['assumptions']
+
+
+def test_funding_rejects_empty_customer_evidence():
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    with pytest.raises(ValueError, match='FUNDING'):
+        validate_funding(Funding(source=''), '매월 50만원')
+
+
+def test_structured_funding_does_not_validate_the_obsolete_legacy_summary():
+    from edge_portfolio.decision import Decision, validate_decision
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='일반계좌에 매달 200만원씩 적립식 투자도 할거야')
+    decision = Decision(funding_text='일반계좌 월 200만원',
+                        funding={'source': req.question, 'monthly_krw': 2000000})
+    validate_decision(decision, req, {})
+
+
+def test_funding_summary_uses_original_input_for_unit_checks_without_requiring_verbatim_copying():
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    text = '월 투자금은 100정도 가능해.\n매달 100만원 isa 계좌에 투자할건데'
+    funding = Funding(source='월 100만원 ISA 투자', monthly_krw=1000000)
+    validate_funding(funding, text)
+    assert funding.source == text
+
+
+def test_canonical_funding_source_survives_saved_decision_roundtrip():
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    text = '고객 설명 ' * 1000 + '매월 50만원'
+    funding = Funding(source='월 50만원 납입', monthly_krw=500000)
+    validate_funding(funding, text)
+    assert Funding.model_validate(funding.model_dump()).source == text
+
+
+@pytest.mark.parametrize('source,amount', [('추가 투자금 5천만원', 50000000), ('추가금 2억 3천만원', 230000000), ('매달 3천 500만원', 35000000), ('매월 백만원을 납입합니다', 1000000), ('매달 오십만원', 500000)])
+def test_extracted_funding_accepts_korean_magnitude_units(source, amount):
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    validate_funding(Funding(source=source, additional_krw=amount), source)
+
+
+def test_delayed_monthly_funding_does_not_claim_an_immediate_purchase():
+    from edge_portfolio.execution import plan_execution
+    from edge_portfolio.decision import Decision
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='3년 후부터 월 50만원을 투자합니다.')
+    decision = Decision(funding={'source': req.question, 'monthly_krw': 500000, 'start_delay_months': 36})
+    result = plan_execution(req, target(**{'US:VOO': 100}), decision)
+    assert result['status'] == 'conditional'
+    assert result['months'] == 37
+
+
+
+def test_combined_duration_is_converted_to_total_months():
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    source = '월 50만원씩 1년 6개월만 투자'
+    validate_funding(Funding(source=source, monthly_krw=500000, max_months=18), source)
+
+
+@pytest.mark.parametrize('source', ['월 50만원씩 3회만 납입합니다', '월 50만원씩 세 번만 납입', '월 50만원씩 다음 분기까지만 납입'])
+def test_model_interpreted_payment_count_is_not_rejected_by_a_sentence_whitelist(source):
+    from edge_portfolio.execution import validate_funding
+    from edge_portfolio.decision import Funding
+    validate_funding(Funding(source=source, monthly_krw=500000, max_months=3), source)
+
+
+def test_delayed_tax_account_deposit_keeps_future_limit_uncertainty():
+    from edge_portfolio.execution import plan_execution
+    from edge_portfolio.decision import Decision
+    req = request([('KR:379800', 10000000, 'ISA')], question='3년 후부터 월 50만원을 투자합니다.',
+        preferences={'accounts': ['ISA'], 'tax_profile': {
+            'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '확인 필요',
+            'accounts': [{'account': 'ISA', 'opened': '2020-01-01', 'remaining_man': '2000'}]}})
+    decision = Decision(funding={'source': req.question, 'monthly_krw': 500000, 'start_delay_months': 36})
+    result = plan_execution(req, [{'instrument_id': 'KR:379800', 'account': 'ISA', 'weight_pct': 100}], decision)
+    assert result['months'] == 37
+    assert 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA' in result['reasons']
+
+
+
+def test_reasonable_unit_estimate_is_explicit_and_never_presented_as_confirmed_cash():
+    from edge_portfolio.decision import Decision, validate_decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='월 투자금은 100정도 가능해. 월 적립 계획까지 추천')
+    funding = {'source': req.question, 'monthly_krw': 1000000, 'estimated_fields': ['monthly_krw'],
+               'assumptions': ['월 100은 월 100만원으로 가정한 참고 계획이에요.']}
+    decision = Decision(funding=funding)
+    validate_decision(decision, req, {})
+    plan = plan_execution(req, target(**{'US:VOO': 100}), decision)
+    assert plan['status'] == 'conditional'
+    assert funding['assumptions'][0] in plan['assumptions']
+    decision.funding.assumptions = []
+    with pytest.raises(ValueError, match='FUNDING'):
+        validate_decision(decision, req, {})
+
+
+
+def test_unquoted_zero_cannot_replace_the_current_principal():
+    from edge_portfolio.decision import Funding
+    from edge_portfolio.execution import validate_funding
+    text = '현재 1000만원에 매월 50만원'
+    with pytest.raises(ValueError, match='FUNDING_AMOUNT'):
+        validate_funding(Funding(source=text, principal_krw=0, monthly_krw=500000), text)
+
+
+def test_estimated_money_label_is_generated_even_if_model_explanation_is_generic():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 10000000, '일반 계좌')], question='월 100정도')
+    decision = Decision(funding={'source': req.question, 'monthly_krw': 1000000, 'estimated_fields': ['monthly_krw'], 'assumptions': ['가격 변동 없음']})
+    result = plan_execution(req, target(**{'US:VOO': 100}), decision)
+    assert any('월 납입금 1,000,000원' in text and '가정' in text for text in result['assumptions'])

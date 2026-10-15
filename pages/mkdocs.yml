@@ -56,6 +56,7 @@ nav:
       - 2 애플리케이션 아키텍처: diagrams/2-application-architecture.md
       - 3 시스템 아키텍처: diagrams/3-system-architecture.md
       - 4 클라우드 아키텍처: diagrams/4-cloud-architecture.md
+      - 5 데이터 파이프라인: diagrams/5-data-pipeline.md
   - 설계 · ADR: reference/adr/README.md
   - 계약:
       - Sync Protocol: reference/contracts/sync-protocol.md

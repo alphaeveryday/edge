@@ -115,6 +115,10 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     missing_research = [{key: item[key] for key in ('instrument_id', 'field', 'status')}
                         for item in inventory if item['required'] and item['status'] != 'supported']
     execution = recommendation.get('execution') if recommendation else published.get('execution')
+    optional_trade_amounts = bool(recommendation and decision.kind in {'review', 'new_portfolio'}
+        and not decision.execute_saved_target and not decision.execution_requested and execution
+        and execution.get('reasons') == ['CURRENT_AMOUNTS_REQUIRED'])
+    required_execution = None if optional_trade_amounts else execution
     reasons = []
     if any(task['status'] != 'answered' for task in tasks):
         reasons.append('UNANSWERED_QUESTIONS')
@@ -125,7 +129,7 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
     # Interpretation-stage questions are suggestions, not requirements for every task.
     # Only an unanswered customer task or a calculator can require customer input.
     missing_inputs = list(dict.fromkeys(value for task in tasks if task['status'] == 'needs_input' for value in task['missing']))
-    needs_input = bool(any(task['status'] == 'needs_input' for task in tasks) or execution and execution['status'] == 'needs_input')
+    needs_input = bool(any(task['status'] == 'needs_input' for task in tasks) or required_execution and required_execution['status'] == 'needs_input')
     if decision.kind == 'scenario' or decision.scenario_requested:
         if not published.get('scenarios'):
             reasons.append('SCENARIO_CALCULATION_REQUIRED')
@@ -148,7 +152,7 @@ def assess_completion(final, request, decision, published, sources, as_of, *, co
         'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED': '계좌의 남은 납입 가능 금액',
     }
     input_reasons = [optimization.get('reason')] if not recommendation else []
-    for calculation in (execution, published.get('scenarios')):
+    for calculation in (required_execution, published.get('scenarios')):
         if calculation and calculation.get('status') == 'needs_input':
             input_reasons.extend(calculation.get('reasons', []) or [calculation.get('reason')])
     for reason in input_reasons:

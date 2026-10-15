@@ -3,6 +3,13 @@ import pytest
 from edge_portfolio.scenarios import build_scenarios
 
 
+def test_total_loss_before_delayed_contributions_keeps_unpaid_money_out_of_projection():
+    result = build_scenarios(1000000, {'annual_returns': [-100], 'years': [1]},
+                             monthly_krw=100000, start_delay_months=36)
+    assert result['rows'] == [{'annual_return_pct': '-100', 'years': 1,
+                              'future_krw': '0', 'paid_krw': '1000000'}]
+
+
 @pytest.mark.parametrize('text,expected', [('원금은 1000만원입니다. 5년 뒤 얼마인가요?', 10000000),
     ('원금은 1000만원입니다. 5년 뒤 원금과 이자는 얼마인가요?', 10000000),
     ('원금은 1000만원입니다. 원금은 5년 뒤 얼마인가요?', 10000000),
@@ -82,3 +89,21 @@ def test_maximum_supported_horizon_and_return_do_not_overflow_decimal_precision(
     from edge_portfolio.scenarios import build_scenarios
     result = build_scenarios(20 * 10**13, {'annual_returns': [100], 'years': [50]})
     assert int(result['rows'][0]['future_krw']) == 20 * 10**13 * 2**50
+
+
+def test_finite_contributions_stop_at_customer_end_date_without_blocking_projection():
+    result = build_scenarios(10000000, {'annual_returns': [0, 5], 'years': [1]}, monthly_krw=500000, contribution_months=3)
+    assert result['rows'][0]['future_krw'] == '11500000'
+    assert result['rows'][0]['paid_krw'] == '11500000'
+    monthly_factor = 1.05 ** (1 / 12)
+    expected = round(10000000 * 1.05 + sum(500000 * monthly_factor ** (12 - month) for month in range(1, 4)))
+    assert int(result['rows'][1]['future_krw']) == expected
+
+
+def test_delayed_contributions_are_not_compounded_before_they_arrive():
+    result = build_scenarios(10000000, {'annual_returns': [0, 5], 'years': [2, 5]}, monthly_krw=500000, start_delay_months=36)
+    assert result['rows'][0]['paid_krw'] == '10000000'
+    assert result['rows'][1]['paid_krw'] == '22000000'
+    monthly_factor = 1.05 ** (1 / 12)
+    expected = round(10000000 * 1.05 ** 5 + sum(500000 * monthly_factor ** (60 - month) for month in range(37, 61)))
+    assert int(result['rows'][3]['future_krw']) == expected

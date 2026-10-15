@@ -527,3 +527,25 @@ async def test_one_failed_page_cannot_enable_source_free_research(monkeypatch, f
         result = await run_analysis(request, 'test', stages.append, model_call=model, evidence=Evidence())
         assert result['completion']['status'] == 'partial'
         assert 'MISSING_RESEARCH_DATA' in result['completion']['reasons']
+
+
+@pytest.mark.parametrize('kind,expected', [('review', 'complete'), ('new_portfolio', 'complete'), ('rebalance', 'needs_input'), ('new_money', 'needs_input')])
+def test_optional_trade_amounts_do_not_reopen_an_answered_allocation_request(kind, expected):
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='추천 비중을 주세요.')
+    final = FinalReport.model_validate({**final_payload(), 'answers': [{'question_index': 1, 'status': 'answered', 'answer': '추천 비중은 VOO 60%, BND 40%입니다.', 'missing': []}]})
+    execution = {'status': 'needs_input', 'reasons': ['CURRENT_AMOUNTS_REQUIRED']}
+    published = {'recommendation': {'allocations': [], 'execution': execution}}
+    result = assess_completion(final, request, Decision(kind=kind), published, [], '2026-10-15')
+    assert result['status'] == expected
+    assert result['missing_inputs'] == ([] if expected == 'complete' else ['종목별 현재 평가금액 또는 투자 원금'])
+    assert published['recommendation']['execution'] == execution
+
+
+
+def test_explicit_execution_task_is_required_even_in_a_general_review():
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='추천 비중과 실제 매수 금액을 주세요.')
+    final = FinalReport.model_validate({**final_payload(), 'answers': [{'question_index': 1, 'status': 'answered', 'answer': '추천 비중은 VOO 60%, BND 40%입니다.', 'missing': []}]})
+    result = assess_completion(final, request, Decision(kind='review', execution_requested=True),
+        {'recommendation': {'allocations': [], 'execution': {'status': 'needs_input', 'reasons': ['CURRENT_AMOUNTS_REQUIRED']}}}, [], '2026-10-15')
+    assert result['status'] == 'needs_input'
+    assert result['missing_inputs'] == ['종목별 현재 평가금액 또는 투자 원금']
