@@ -165,7 +165,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     version = hashlib.sha256((system + "".join(skills.values())).encode()).hexdigest()
     code_version = hashlib.sha256(b''.join(path.name.encode() + path.read_bytes() for path in sorted(PROMPTS.parent.glob('*.py')))).hexdigest()
     events = []
-    timeout_seconds = 300 if followup_question is not None else ANALYSIS_TIMEOUT_SECONDS
+    timeout_seconds = ANALYSIS_TIMEOUT_SECONDS
     limits = {'model_calls': MAX_MODEL_CALLS, 'context_bytes': MAX_CONTEXT_BYTES, 'exa_calls': MAX_EXA_CALLS,
               'elapsed_seconds': timeout_seconds}
 

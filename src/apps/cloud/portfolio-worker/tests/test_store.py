@@ -82,7 +82,7 @@ def test_interrupted_job_retains_last_checkpoint_without_becoming_a_completed_re
 
 @pytest.mark.parametrize('kind,age,state', [
     ('analysis', 7, 'running'), ('analysis', 10, 'running'), ('analysis', 12, 'failed'),
-    ('chat', 5, 'running'), ('chat', 7, 'failed'),
+    ('chat', 5, 'running'), ('chat', 7, 'running'), ('chat', 10, 'running'), ('chat', 12, 'failed'),
 ])
 def test_polling_does_not_expire_analysis_before_its_deadline(isolated_db, kind, age, state):
     job = store.submit('owner', 'deadline', {})

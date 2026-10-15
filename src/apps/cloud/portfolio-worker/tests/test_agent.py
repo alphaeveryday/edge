@@ -195,7 +195,7 @@ async def test_analysis_shares_ten_minutes_across_roles(monkeypatch, complete):
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_followup_keeps_its_five_minute_deadline(monkeypatch):
+async def test_followup_has_the_same_shared_deadline_as_initial_analysis(monkeypatch):
     loop = asyncio.get_running_loop()
     now = loop.time()
     monkeypatch.setattr(loop, 'time', lambda: now)
@@ -208,11 +208,15 @@ async def test_followup_keeps_its_five_minute_deadline(monkeypatch):
         prior_report={'sources': []}, on_event=events.append))
     try:
         await asyncio.sleep(0)
-        assert events[0]['limits']['elapsed_seconds'] == 300
+        assert events[0]['limits']['elapsed_seconds'] == 600
         now += 300
         for _ in range(3):
             await asyncio.sleep(0)
-        assert task.done(), 'Extending initial analysis must not extend followup limits'
+        assert not task.done(), 'A followup doing the same research must not lose its report at the former shorter deadline'
+        now += 300
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert task.done(), 'Followups still have one bounded deadline for all roles'
         with pytest.raises(TimeoutError):
             await task
     finally:
