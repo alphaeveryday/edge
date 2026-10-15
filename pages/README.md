@@ -15,3 +15,8 @@ python pages/scripts/sync_reference_docs.py
 python pages/scripts/generate_evolution.py
 mkdocs build -f pages/mkdocs.yml --strict   # 또는 mkdocs serve -f pages/mkdocs.yml
 ```
+
+다이어그램 5(데이터 파이프라인)의 뷰어 HTML(`interactive/5-dp.v1~v5.html`)은 커밋돼 있고, 원본 drawio(레포 밖,
+판 v0.3·v0.4·v2.0·v2.5·v3.1 = 단계 v1~v5)가 바뀌면
+`python pages/scripts/build_pipeline_diagram.py <원본.drawio> pages/docs/diagrams/interactive/5-dp.v<N>.html --title "…"`
+로 다시 만든다 — draw.io 데스크톱 CLI 가 필요하다(`DRAWIO_BIN`).
