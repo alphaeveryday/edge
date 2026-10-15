@@ -19,7 +19,7 @@ def projection_question(clause):
 
 
 def projection_context(value, decision):
-    if not decision or decision.kind != 'scenario':
+    if not decision or not decision.scenario_requested:
         return value
     clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', value)
     for index, clause in enumerate(clauses):
@@ -30,7 +30,7 @@ def projection_context(value, decision):
 
 def funding_context(text, decision):
     remainder = projection_context(text, decision).strip(' .!?;\n')
-    if decision and decision.kind == 'scenario':
+    if decision and decision.scenario_requested:
         from .scenarios import stated_principal
         if stated_principal(text) is not None:
             clauses = re.split(r'((?<!\d)\.|\.(?!\d)|[!?;\n])', remainder)
@@ -195,7 +195,7 @@ def resolve_funding(request, decision=None):
             prefix = duration_context(before).strip(' .!?;\n')
             if prefix in {'', '저는', '저희는', '일단'}:
                 return True
-            if decision and decision.kind == 'scenario' and not re.search(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', prefix):
+            if decision and decision.scenario_requested and not re.search(r'(?<!\d)\.|\.(?!\d)|[!?;\n]', prefix):
                 from .scenarios import stated_principal
                 if stated_principal(prefix) is not None:
                     return True
@@ -227,7 +227,6 @@ def resolve_funding(request, decision=None):
 def plan_execution(request, allocations, decision=None):
     funding = resolve_funding(request, decision)
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
-    new_money = bool(decision and decision.kind == 'new_money')
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
     delay = decision.funding.start_delay_months if decision and decision.funding is not None else 0
     result = build_execution(request, allocations, no_sell=bool(rules), no_sell_ids=no_sell_ids,
@@ -240,7 +239,7 @@ def plan_execution(request, allocations, decision=None):
         if interpreted.max_months is not None and result['months'] is not None and result['months'] - delay > interpreted.max_months:
             result.update(status='infeasible', reasons=['FUNDING_DURATION_EXCEEDED'], rows=[])
     definite_failure = any(reason == 'NO_SELL_ZERO_TARGET' or reason.startswith('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:') for reason in result['reasons'])
-    if (funding is None or new_money and not (funding['additional_krw'] or funding['monthly_krw'])) and not definite_failure:
+    if funding is None and not definite_failure:
         result.update(status='needs_input', reasons=['ADDITIONAL_FUNDING_REQUIRED'], rows=[])
     return result
 
