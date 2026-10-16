@@ -62,6 +62,11 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
   expect(dwell).toBeLessThan(20);
   expect(JSON.stringify(events)).not.toMatch(/private@example|private-customer|#secret|email=/);
   expect(events.every(e => e.properties.distinct_id === '$posthog_cookieless')).toBe(true);
+  // Without the mode flag, ingestion cannot replace the shared sentinel with anonymous visit IDs.
+  for (const event of events) expect(event.properties).toMatchObject({
+    $cookieless_mode: true, $host: 'etforca.com',
+    $current_url: 'https://etforca.com/portfolio/', $pathname: '/portfolio/',
+  });
   expect(await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('ph_')))).toEqual([]);
 });
 

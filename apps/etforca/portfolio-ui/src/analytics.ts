@@ -2,7 +2,7 @@ import posthog from 'posthog-js';
 
 export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed';
 const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause']);
-const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct']);
+const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct']);
 let initialized = false;
 
 function initialize() {
@@ -20,6 +20,7 @@ function initialize() {
           event.properties = Object.fromEntries(Object.entries(event.properties).filter(([key]) => properties.has(key)));
           event.properties.$current_url = 'https://etforca.com/portfolio/';
           event.properties.$pathname = '/portfolio/';
+          event.properties.$host = 'etforca.com';
           return { event: event.event, properties: event.properties, timestamp: event.timestamp, uuid: event.uuid };
         },
       });

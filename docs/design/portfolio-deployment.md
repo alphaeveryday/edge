@@ -16,6 +16,8 @@
 
 포트폴리오 UI는 기존 [PostHog 웹 프로젝트 658097](https://us.posthog.com/project/658097)에 수집한다. `analytics.ts`의 공개 프로젝트 키는 랜딩과 같고, 개인 API 키나 추가 서버 환경변수는 필요 없다. `etforca.com/portfolio/`와 www 도메인의 같은 경로에서만 실행한다. 로컬 미리보기·관리자 진입점에서는 수집하지 않는다. SDK의 봇 제외는 유지한다.
 
+Web analytics의 Top paths에서 `/portfolio/`를 선택하면 랜딩(`/`)과 분리한다. www 방문도 공개 주소인 `etforca.com`으로 합쳐 집계한다. 익명 방문·세션을 서버에서 생성할 수 있도록 `$cookieless_mode`를 보존하고 `$host`를 고정된 `etforca.com`으로 전송한다. 경로가 안 보이면 프로젝트·조회 기간·호스트 필터와 실제 `$pageview` 적재를 확인한다. 브라우저 전송 테스트나 수집 API의 성공 응답만으로 집계 완료를 판정하지 않는다.
+
 PostHog **Product analytics → New insight → Trends**에서 아래 이벤트와 속성을 사용한다. 모든 포트폴리오 이벤트에 `screen`이 있으므로 랜딩과 분리할 수 있다.
 
 | 확인할 내용 | 이벤트·집계 |
