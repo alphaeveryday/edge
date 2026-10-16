@@ -691,3 +691,28 @@ async def test_search_grid_does_not_reject_model_weights_that_satisfy_a_five_per
     allocations = [{'instrument_id': 'KR:A', 'weight_pct': 5}, {'instrument_id': 'KR:B', 'weight_pct': 95}]
     result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocations})
     assert result['candidates'][0]['allocations'] == allocations
+
+
+async def test_model_weights_outside_grid_receive_comparable_metrics_and_history():
+    request, market, _ = batch()
+    market.loader = lambda symbol, as_of: record(finish=120 if symbol == 'A.KS' else 110)
+    optimizer = Optimizer(market, request)
+    allocation = [{'instrument_id': 'KR:A', 'weight_pct': 31}, {'instrument_id': 'KR:B', 'weight_pct': 69}]
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocation})
+    selected = next(c for c in result['candidates'] if c['allocations'] == allocation)
+    assert selected['excess_pp'] is not None
+    assert selected['max_drawdown_pct'] is not None
+    assert selected.get('comparison_status') != 'unavailable'
+    history = market.results[tuple(sorted(weights(allocation).items()))]['history']
+    assert history['start_date'] == result['start_date']
+    assert history['end_date'] == result['end_date']
+    last = history['points'][-1]
+    assert selected['excess_pp'] == pytest.approx((last['recommended'] - last['current']) / 10000, abs=1e-5)
+
+
+def test_preferred_weights_use_the_same_arithmetic_without_duplicating_grid_vectors():
+    frame = pd.DataFrame({'A': [1.] + [1.2] * 10, 'B': [1.] + [.9] * 10, 'CASH:KRW': 1.})
+    rows = search(['A', 'B'], frame, {'CASH:KRW': 1}, [(('A', 31), ('B', 69)), (('A', 50), ('B', 50))])
+    assert len(rows) == 10  # Nine grid vectors plus one new model vector.
+    chosen = next(r for r in rows if r['weights'] == [.31, .69])
+    assert chosen['excess_pp'] == pytest.approx(-.7)

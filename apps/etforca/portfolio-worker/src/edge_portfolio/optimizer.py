@@ -41,10 +41,14 @@ def grid(size):
                      for cuts in combinations(range(1, 10), size - 1)])
 
 
-def search(ids, frame, current):
+def search(ids, frame, current, preferred=()):
     if len(frame) < 11:
         return []  # Ten measured sessions plus the initial normalization date.
     allocation = grid(len(ids))
+    extra = [[weight / 100 for _, weight in proposal] for proposal in preferred
+             if [key for key, _ in proposal] == ids and any(weight % 10 for _, weight in proposal)]
+    if extra:
+        allocation = np.vstack([allocation, extra])
     prices = frame[ids].to_numpy()
     baseline = sum(frame[key].to_numpy() * value for key, value in current.items())
     turnover = np.zeros(len(allocation))
@@ -309,7 +313,7 @@ class Optimizer:
             # NumPy releases the GIL; all ten searches are scheduled together, sharing prices.
             with ThreadPoolExecutor(max_workers=10) as pool:
                 loop = asyncio.get_running_loop()
-                results = await asyncio.gather(*(loop.run_in_executor(pool, search, group, frame, self.market.current) if group
+                results = await asyncio.gather(*(loop.run_in_executor(pool, search, group, frame, self.market.current, self.preferred) if group
                                                 else asyncio.sleep(0, result=[]) for group in eligible))
             service_count = sum(map(len, results))
             unknown_count = rejected_count = 0
