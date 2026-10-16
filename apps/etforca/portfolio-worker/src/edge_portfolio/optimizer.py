@@ -460,7 +460,7 @@ class Optimizer:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': 'ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보는 초과수익률, 오버퍼폼 기간 비율 순으로 우선한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 1% 단위 비중을 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 1% 단위 비중을 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
         'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {
