@@ -1,5 +1,9 @@
 """Project initial observations into a small catalog with paged, read-only access."""
 from copy import deepcopy
+import json
+
+
+TOOL_PAGE_CHARACTERS = 6000
 
 
 class SourceInputError(ValueError):
@@ -14,9 +18,37 @@ class SourceInputError(ValueError):
 class WorkContext:
     def __init__(self, initial):
         self.sources = deepcopy(initial)
+        self.tool_results = {}
         self.initial = {k: deepcopy(initial[k]) for k in ('context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'source_gaps', 'history_preview', 'current_flow') if k in initial}
         self.initial['available_sources'] = {k: self._describe(v) for k, v in initial.items()}
         self.initial['retrieval'] = 'Use workspace.read_source with source from available_sources; source is the only required field. Use a returned next_offset to read another page. These are exploration data, not final evidence IDs.'
+
+    def tool_response(self, result):
+        text = json.dumps(result, ensure_ascii=False)
+        if len(text) <= TOOL_PAGE_CHARACTERS:
+            return result
+        result_id = 'r' + str(len(self.tool_results) + 1)
+        self.tool_results[result_id] = (text, result.get('tool_run_id') if isinstance(result, dict) else None)
+        return self.read_tool_result(result_id)
+
+    def read_tool_result(self, result_id, offset=0, limit=TOOL_PAGE_CHARACTERS):
+        if not isinstance(result_id, str) or result_id not in self.tool_results:
+            raise SourceInputError('result_id', 'Unknown result. Use a result_id returned in this run.',
+                                   allowed_values=list(self.tool_results))
+        if type(offset) is not int or offset < 0:
+            raise SourceInputError('offset', 'Offset must be a nonnegative character index.',
+                                   retry_arguments={'result_id': result_id})
+        if type(limit) is not int or not 1 <= limit <= TOOL_PAGE_CHARACTERS:
+            raise SourceInputError('limit', f'Limit must be 1..{TOOL_PAGE_CHARACTERS} characters.',
+                                   retry_arguments={'result_id': result_id, 'offset': offset})
+        text, reference = self.tool_results[result_id]
+        end = min(offset + limit, len(text))
+        return {'result_id': result_id, 'tool_run_id': reference, 'offset': offset,
+                'total_characters': len(text), 'text': text[offset:end],
+                'next_offset': end if end < len(text) else None,
+                'retrieval': 'Partial original JSON, not a summary. Use workspace.read_tool_result with result_id '
+                             'and next_offset to read more; concatenate text pages for the exact result. '
+                             'Do not infer missing evidence from an unread page. result_id is not an evidence ID.'}
 
     @staticmethod
     def _describe(value):
