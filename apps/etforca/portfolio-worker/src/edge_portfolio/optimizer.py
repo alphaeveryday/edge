@@ -79,10 +79,9 @@ def rank(groups, ids_by_group, objectives=(), preferred=()):
     span = maximum - minimum
     winners = []
     def priority(row, size):
-        values = {'growth': row['excess_pp'], 'stability': row.get('max_drawdown_pct', 0),
-                  'preserve': row['preservation_pct'], 'simplicity': -size, 'income': row.get('income_yield_pct')}
-        ordered = tuple(part for key in objectives for part in (values[key] is not None, values[key] if values[key] is not None else 0))
-        return (*ordered, row['score'], row['excess_pp'], row['preservation_pct'], tuple(row.get('weights', [])))
+        values = {'preserve': row['preservation_pct'], 'simplicity': -size, 'income': row.get('income_yield_pct')}
+        ordered = tuple(part for key in objectives if key in values for part in (values[key] is not None, values[key] if values[key] is not None else 0))
+        return (round(row['excess_pp'], 6), round(row['duration_pct'], 6), *ordered, row['score'], row['preservation_pct'], tuple(row.get('weights', [])))
     for number, (ids, group) in enumerate(zip(ids_by_group, groups), 1):
         if not group:
             continue
@@ -464,7 +463,7 @@ class Optimizer:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': 'ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 과거 성과 순위는 참고다. preferred_allocations로 LLM이 설계한 1% 단위 비중을 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'description': 'ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보는 초과수익률, 오버퍼폼 기간 비율 순으로 우선한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 1% 단위 비중을 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
         'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {
