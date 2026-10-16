@@ -9,6 +9,40 @@ from edge_portfolio.api import app as public_app
 from test_store import isolated_db
 
 ORIGIN = {'Origin': 'http://localhost:5180'}
+
+
+def test_test_records_are_explicit_and_filter_counts_match_rows(client):
+    from edge_portfolio import admin_store
+    customer = store.submit('same-owner', 'customer', {'question': 'same question'})
+    trial = store.submit('same-owner', 'test', {'question': 'same question'})
+    admin_store.mark_tests([trial['id']], '20 scenarios / case 01')
+    admin_store.mark_tests([trial['id']], '20 scenarios / case 01')
+    for scope, expected in [('all', 2), ('customers', 1), ('tests', 1)]:
+        rows = client.get(f'/api/portfolio/admin/records?kind=analyses&scope={scope}').json()
+        summary = client.get(f'/api/portfolio/admin/overview?scope={scope}').json()
+        assert rows['total'] == len(rows['items']) == expected
+        assert summary['queued'] == summary['today_jobs']['queued'] == expected
+        assert sum(day['analyses'] for day in summary['daily']) == expected
+    rows = client.get('/api/portfolio/admin/records?kind=analyses&scope=customers').json()
+    assert rows['items'][0]['id'] == customer['id'], 'Same visitor/question does not identify a test'
+    detail = client.get('/api/portfolio/admin/records/analyses/' + trial['id']).json()
+    assert detail['test_label'] == '20 scenarios / case 01'
+    with pytest.raises(ValueError, match='UNKNOWN_JOB'):
+        admin_store.mark_tests([customer['id'], 'absent'], 'batch')
+    assert admin_store.detail('analyses', customer['id'])['test_label'] is None
+    assert client.get('/api/portfolio/admin/overview?scope=invalid').status_code == 422
+
+
+def test_report_records_inherit_test_label_without_classifying_drafts(client):
+    from edge_portfolio import admin_store
+    job = store.submit('visitor', 'test', {})
+    store.claim()
+    store.finish(job['id'], result={})
+    store.request_report(job['id'], 'visitor', 'test@example.test')
+    admin_store.mark_tests([job['id']], 'confirmed test')
+    assert admin_store.records('reports', 7, '', 1, 'customers')['total'] == 0
+    assert admin_store.records('reports', 7, '', 1, 'tests')['items'][0]['test_label'] == 'confirmed test'
+
 @pytest.fixture
 def client(isolated_db):
     with TestClient(app, base_url='http://localhost:18080') as client:

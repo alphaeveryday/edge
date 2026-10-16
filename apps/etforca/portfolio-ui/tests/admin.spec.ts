@@ -1,5 +1,31 @@
 import { test, expect } from '@playwright/test';
 
+test('test badges and exclusion filter keep list and analysis totals in sync', async ({ page }) => {
+  const queries: string[] = [];
+  await page.route('**/api/portfolio/admin/**', route => {
+    const url = new URL(route.request().url());
+    const scope = url.searchParams.get('scope');
+    queries.push(url.pathname + url.search);
+    const items = [
+      { id: 'customer', visitor: 'customer', at: new Date().toISOString(), state: 'succeeded' },
+      { id: 'test', visitor: 'test', at: new Date().toISOString(), state: 'succeeded', test_label: '20 cases / 01' },
+    ].filter(row => scope === 'customers' ? !row.test_label : scope === 'tests' ? row.test_label : true);
+    if (url.pathname.endsWith('/overview')) return route.fulfill({ json: { as_of: new Date().toISOString(), today_jobs: { succeeded: items.length }, daily: [] } });
+    return route.fulfill({ json: { total: items.length, page: 1, page_size: 50, items } });
+  });
+  await page.goto('/portfolio/admin.html');
+  await expect(page.locator('.records .badge.test')).toHaveText('테스트');
+  await page.getByLabel('요청 구분', { exact: true }).selectOption('customers');
+  await expect(page.locator('.records tbody tr')).toHaveCount(1);
+  await expect(page.locator('.records .badge.test')).toHaveCount(0);
+  await expect(page.locator('.stat').filter({ hasText: '오늘 분석 요청' }).locator('strong')).toHaveText('1');
+  expect(queries.some(q => q.includes('/overview?scope=customers'))).toBeTruthy();
+  expect(queries.some(q => q.includes('/records?') && q.includes('scope=customers'))).toBeTruthy();
+  await page.getByLabel('요청 구분', { exact: true }).selectOption('tests');
+  await expect(page.locator('.records .badge.test')).toHaveText('테스트');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
 test('SSM dashboard detail, tabs, refresh and disconnected-data clearing', async ({ page }) => {
   let loggedIn = true;
   let expired = false;

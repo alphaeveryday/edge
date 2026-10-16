@@ -7,17 +7,18 @@ from . import admin_store
 
 router = APIRouter(prefix='/api/portfolio/admin')
 Kind = Literal['analyses', 'drafts', 'reports']
+Scope = Literal['all', 'customers', 'tests']
 
 
 @router.get('/overview')
-def overview():
-    return admin_store.overview()
+def overview(scope: Scope = 'all'):
+    return admin_store.overview(scope)
 
 
 @router.get('/records')
 def records(kind: Kind, days: int = Query(7, ge=1, le=90),
-            state: Literal['', 'queued', 'running', 'succeeded', 'failed'] = '', page: int = Query(1, ge=1, le=10000)):
-    return admin_store.records(kind, days, state, page)
+            state: Literal['', 'queued', 'running', 'succeeded', 'failed'] = '', page: int = Query(1, ge=1, le=10000), scope: Scope = 'all'):
+    return admin_store.records(kind, days, state, page, scope)
 
 
 @router.get('/records/{kind}/{record_id}')
