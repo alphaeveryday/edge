@@ -1,7 +1,7 @@
 """Read-only observation paging and directory creation for the current workspace."""
 import json
 from claude_agent_sdk import create_sdk_mcp_server, tool
-from edge_analysis_v2.agent.work_context import SourceInputError
+from edge_analysis_v2.agent.work_context import SourceInputError, TOOL_PAGE_CHARACTERS
 from edge_analysis_v2.agent.work_session import CLOSURES
 
 
@@ -22,6 +22,18 @@ def make_workspace_server(context, session):
     async def read_source(args):
         try:
             return response(context.read(**args))
+        except SourceInputError as error:
+            return response({'error': error.details}) | {'is_error': True}
+
+    @tool('read_tool_result', 'Read original JSON text pages from a large analysis tool result in this run. '
+          'Use its result_id and next_offset; no file access or new research. Keep the original tool_run_id for evidence.',
+          {'type': 'object', 'properties': {
+              'result_id': {'type': 'string'}, 'offset': {'type': 'integer', 'minimum': 0, 'default': 0},
+              'limit': {'type': 'integer', 'minimum': 1, 'maximum': TOOL_PAGE_CHARACTERS,
+                        'default': TOOL_PAGE_CHARACTERS}}, 'required': ['result_id'], 'additionalProperties': False})
+    async def read_tool_result(args):
+        try:
+            return response(context.read_tool_result(**args))
         except SourceInputError as error:
             return response({'error': error.details}) | {'is_error': True}
 
@@ -51,4 +63,4 @@ def make_workspace_server(context, session):
         except ValueError as error:
             return response({'error': str(error)}) | {'is_error': True}
 
-    return create_sdk_mcp_server(name='workspace', version='1.0.0', tools=[read_source, create_directory, update_tasks])
+    return create_sdk_mcp_server(name='workspace', version='1.0.0', tools=[read_source, read_tool_result, create_directory, update_tasks])
