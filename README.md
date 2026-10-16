@@ -35,7 +35,7 @@ EDGE는 금융 데이터를 수집하고 ETF 전망과 가격변동을 분석합
 
 기업 검수자는 금칙어·근거 수·확신도 기준을 설정하고, 검수 대기 건을 승인하거나 반려합니다. 투자자 화면에는 게시된 설명을 제공하고, 플랫폼 운영자는 전달과 회수 상태를 확인합니다.
 
-![EDGE SIGNAL의 MTS 분석 화면과 기업 검수·운영 콘솔](docs/assets/readme/feature-showcase.jpg)
+![EDGE SIGNAL: 투자자의 MTS 가격 변동 설명 화면과 기업 검수자의 검수 관리 콘솔](docs/assets/readme/signal-screens.png)
 
 [MTS 데모](https://demo-mts.edgesignal.dev) · [EDGE SIGNAL 상세](apps/edgesignal/README.md)
 
