@@ -150,6 +150,7 @@ class SyncFlowTests {
         Map<String, Object> daily = result(call(port, "GET", "/api/v1/etfs/091160/analysis", null, "X-Device-Id", "sync-1"));
         assertEquals("메모리 값 상승", daily.get("question"));
         assertEquals(List.of("3개월 상승"), ((List<Map<String, Object>>) daily.get("args")).getFirst().get("body"));
+        assertEquals(List.of("신규"), daily.get("today"), "오늘 추가된 것은 본문이 아닌 화면용 제목");
         List<Map<String, Object>> axes = (List<Map<String, Object>>) daily.get("axes");
         assertEquals(List.of("issue", "chart", "flow"), axes.stream().map(a -> a.get("axis")).toList());
         assertEquals(List.of(true, true, true), axes.stream().map(a -> a.get("hasPage")).toList(), "이슈 항목·지표가 있는 축만 페이지");
