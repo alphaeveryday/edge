@@ -13,6 +13,7 @@
 - 동일 에이전트의 추론 모드를 켜고 기본 effort=high로 실행. 분석 기준시각이 2026-10-16 00:00 KST 이후인 내부 전망 배치의 DeepSeek 호출은 effort=low로 실행하며 주말 수정도 포함한다. 수동 요청과 가격변동 설명은 high를 유지한다. 적용 강도는 manifest의 job.reasoning_effort와 모델 environment.json에 기록한다. 추가 판정 에이전트는 없음. SDK의 budget_tokens 값은 DeepSeek가 무시하므로 비용·출력 길이의 상한으로 보장하지 않음. [호환 명세](https://api-docs.deepseek.com/guides/anthropic_api/)
 - 수치 상세는 계산 툴 출력에서 생성. 이슈 상세는 에이전트가 생성하고 이슈 스티커는 부모와 일치.
 - 중복 요청 ID는 새 모델 호출·새 결과를 만들지 않음. 실패 기록은 그대로 남김.
+- 공개 분석의 provider 캐시 식별자는 자료 출처·분석 종류·ETF별로 고정한다. 공식 `CLAUDE_CODE_EXTRA_BODY` 설정으로 `metadata.user_id`만 지정하며, 실제 SDK 세션 ID와 작업공간은 매번 독립적이다. 일반 질문은 이 범위를 지정하지 않는다. 캐시는 적중 여부와 보존 시간을 보장하지 않으므로 최초 미적중 비용도 포함해 측정한다.
 - 본문 변경과 독립 기능은 모두 준비된 뒤 발행. 실패하면 툴 감사 기록은 남고 미완성 화면은 발행하지 않음.
 
 ## 목데이터 계산의 임시 선택
