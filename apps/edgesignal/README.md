@@ -4,7 +4,7 @@
 
 **기업이 ETF 분석을 검수하고 자사 서비스에 제공할 수 있는 B2B 운영 인프라입니다.**
 
-EDGE 분석 엔진은 공시·뉴스·수급 같은 공개 정보를 분석해 ETF 가격변동의 요인 후보와 근거를 만듭니다. EDGE SIGNAL은 기업이 이 분석의 게시 기준을 정하고, 검수·승인·반려·회수를 관리하도록 합니다.
+EDGE 분석 엔진은 공시·뉴스·수급 같은 공개 정보를 분석해 ETF 가격변동의 요인 후보와 근거를 만듭니다. EDGE SIGNAL은 기업이 이 분석의 게시 기준을 정하고, 검수·승인·반려·회수를 관리하도록 합니다. 승인·반려·회수는 전부 감사 로그에 남아 누가 언제 무엇을 노출했는지 사후에 추적할 수 있습니다. 컴플라이언스 통제권이 증권사 안에 있다는 것이 이 제품의 핵심 가치입니다.
 
 공통 분석의 생성은 [EDGE 엔진](../engine/README.md)이, 기업별 전달·검수·게시와 고객 접점은 EDGE SIGNAL이 담당합니다.
 
@@ -101,7 +101,7 @@ edgesignal의 MTS 조회 표면(publication-api)에 총 75회의 부하 실험�
 
 ## 설계 결정
 
-- [ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md): 고객 접점·검수·노출을 증권사 환경으로 옮긴 결정
+- [ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md): 고객 접점·검수·노출을 증권사 환경으로 옮긴 결정. 이전의 Cloud-only·embed widget 구조는 폐기된 방향이다
 - [ADR-0036](../../docs/adr/0036-sync-agent-intake-topology.md): DMZ의 sync-agent와 내부망의 intake 분리
 - [ADR-0044](../../docs/adr/0044-correction-abolition.md): 정정 전달을 폐지하고 무효화 경로를 유지한 결정
 - [ADR-0046](../../docs/adr/0046-confidence-gate-risk-grade-abolition.md): 확신도 게이트를 단순 AND 조건으로 정리한 결정
@@ -112,6 +112,7 @@ edgesignal의 MTS 조회 표면(publication-api)에 총 75회의 부하 실험�
 
 Java·Spring Boot, JPA/JdbcTemplate, Flyway, PostgreSQL, React, 공유 [ui-kit](../../libs/ui-kit/README.md)을 사용합니다. 배포 구성은 AWS ECS·RDS·ALB·CloudFront와 Terraform으로 관리합니다.
 
+- 로컬 전체 스택(cloud·onprem DB 2개, JVM 모듈 7개, 콘솔 UI 2종)은 레포 루트에서 `scripts/up-all.sh`로 띄우고 `scripts/up-all.sh down -v`로 정리합니다(`-v`는 DB 볼륨까지)
 - [데모 온프렘 실행 안내](../../demo/onprem/README.md)
 - [구현·배포 결정](../../docs/implementation.md)
 - [스키마 관리](../../libs/schema/README.md)
