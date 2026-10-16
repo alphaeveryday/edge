@@ -29,22 +29,24 @@ test('rebalance instructions show cash amounts and hide transactions when execut
     id: 'execution', state: 'succeeded', result: { ...report, recommendation: { ...report.recommendation, execution } }
   } }));
   await page.goto('/portfolio/');
-  const trades = page.locator('.execution-actions');
+  const trades = page.locator('.improvements .improvement-list');
   await expect(page.locator('.execution-plan table')).toHaveCount(0);
   await expect(trades.locator('li').filter({ hasText: 'QQQ' })).toContainText('600,000원매수');
   await expect(trades.locator('li').filter({ hasText: 'VOO' })).toContainText('400,000원매도');
   await expect(trades.locator('li').filter({ hasText: '현금' })).toContainText('200,000원현금 투입');
   await expect(trades.locator('[data-trade="buy"]')).toHaveCSS('color', 'rgb(255, 116, 124)');
   await expect(trades.locator('[data-trade="sell"]')).toHaveCSS('color', 'rgb(121, 173, 255)');
-  await expect(page.locator('.improvements .trade-amount')).toHaveText('600,000원매수');
+  await expect(page.locator('.improvements .trade-amount')).toHaveText(['600,000원매수', '200,000원현금 투입', '400,000원매도']);
+  await expect(page.getByRole('heading', { name: '내 포트폴리오에서 바꿀 것' })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: '매수·매도 계획' })).toHaveCount(0);
   await expect(page.locator('.improvements .weight-change')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await page.locator('.execution-plan').screenshot({ path: `test-results/rebalance-${test.info().project.name}.png` });
+  await page.locator('.improvements').screenshot({ path: `test-results/rebalance-${test.info().project.name}.png` });
   execution.status = 'infeasible';
   execution.reasons = ['NO_SELL_ZERO_TARGET'];
   await page.reload();
-  await expect(page.locator('.execution-plan')).toContainText('이미 보유한 종목의 목표를 0%로 만들려면 매도가 필요해요.');
-  await expect(page.locator('.execution-actions')).toHaveCount(0);
+  await expect(page.locator('.improvements')).toContainText('이미 보유한 종목의 목표를 0%로 만들려면 매도가 필요해요.');
+  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
   await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
   await expect(page.locator('.improvements .weight-change')).toContainText('60%');
   // Older non-actionable reports may not have saved execution rows at all.
@@ -52,7 +54,7 @@ test('rebalance instructions show cash amounts and hide transactions when execut
   Object.assign(execution, { rows: undefined });
   await page.reload();
   await expect(page.locator('.improvements .weight-change')).toContainText('60%');
-  await expect(page.locator('.execution-actions')).toHaveCount(0);
+  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
 });
 
 test('saved trade amounts take priority over weight direction and monthly totals stay explicit', async ({ page }) => {
@@ -71,8 +73,31 @@ test('saved trade amounts take priority over weight direction and monthly totals
     rows: [{ instrument_id: 'US:QQQ', name: 'QQQ', account: '일반 계좌', before_krw: '800000', target_krw: '1100000', buy_krw: '300000', sell_krw: '0', cash_used_krw: '0' }] } });
   await page.reload();
   await expect(page.locator('.improvements')).toContainText('6개월 계획의 총 거래 금액');
-  await expect(page.locator('.execution-plan')).toContainText('매월 50,000원 납입 시 6개월');
-  await expect(page.locator('.execution-actions .trade-amount')).toHaveText('300,000원매수');
+  await expect(page.locator('.improvements')).toContainText('매월 50,000원씩 6개월');
+  await expect(page.locator('.funding-summary')).toContainText('300,000원 투입');
+  await expect(page.locator('.improvements .trade-amount')).toHaveText('300,000원매수');
+  Object.assign((result.recommendation as unknown as { execution: Record<string, unknown> }).execution, { status: 'needs_input', reasons: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA'] });
+  await page.reload();
+  await expect(page.locator('.funding-summary')).toContainText('계산에 사용한 추가 현금 300,000원');
+  await expect(page.locator('.funding-summary')).toContainText('매월 50,000원씩 6개월');
+  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
+});
+
+test('a lump-sum cash deposit and execution-only trades appear in the single changes card', async ({ page }) => {
+  const result = structuredClone(report);
+  result.recommendation.actions = [];
+  Object.assign(result.recommendation, { execution: { status: 'ready', reasons: [], assumptions: [],
+    monthly_krw: null, months: null, additional_krw: '200000', required_additional_krw: null,
+    accounts: [{ account: '일반 계좌', deposit_krw: '200000', withdrawal_krw: '0' }],
+    rows: [{ instrument_id: 'US:QQQ', name: 'QQQ', account: '일반 계좌', before_krw: '400000', target_krw: '600000', buy_krw: '200000', sell_krw: '0', cash_used_krw: '0' }] } });
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'cash-deposit'));
+  await page.route('**/api/portfolio/analyses/cash-deposit', route => route.fulfill({ json: { id: 'cash-deposit', state: 'succeeded', result } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.improvements')).toHaveCount(1);
+  await expect(page.locator('.improvements .trade-amount')).toHaveText('200,000원매수');
+  await expect(page.locator('.funding-summary')).toHaveText('추가 현금 200,000원 투입');
+  await expect(page.locator('.improvements')).not.toContainText('현재 구성을 유지');
+  await expect(page.locator('.execution-plan')).toHaveCount(0);
 });
 
 for (const invalid of [undefined, '']) {
@@ -105,12 +130,12 @@ test('the same ETF in different accounts keeps its own trade and cash is not a s
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'accounts'));
   await page.route('**/api/portfolio/analyses/accounts', route => route.fulfill({ json: { id: 'accounts', state: 'succeeded', result } }));
   await page.goto('/portfolio/');
-  await expect(page.locator('.improvements .trade-amount')).toHaveText(['50,000원매수', '30,000원매도']);
-  await expect(page.locator('.improvements .action-note')).toHaveText(['ISA', '일반 계좌']);
-  const cash = page.locator('.execution-actions li').filter({ hasText: '현금' });
+  await expect(page.locator('.improvements .trade-amount')).toHaveText(['50,000원매수', '30,000원매도', '30,000원현금 확보', '보유 유지']);
+  await expect(page.locator('.improvements .action-note')).toHaveText(['ISA', '일반 계좌', '일반 계좌', '일반 계좌']);
+  const cash = page.locator('.improvements li').filter({ hasText: '현금' });
   await expect(cash).toContainText('30,000원현금 확보');
   await expect(cash.locator('[data-trade="sell"]')).toHaveCount(0);
-  await expect(page.locator('.execution-actions li').filter({ hasText: 'VT' })).toContainText('보유 유지');
+  await expect(page.locator('.improvements li').filter({ hasText: 'VT' })).toContainText('보유 유지');
 });
 
 test('an execution rejection explains funding or account constraints without blaming ratings', async ({ page }) => {
