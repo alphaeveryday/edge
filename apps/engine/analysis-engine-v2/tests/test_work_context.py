@@ -2,6 +2,25 @@
 from edge_analysis_v2.agent.work_context import WorkContext
 
 
+def test_revision_body_and_current_research_are_in_first_input_without_retrieval():
+    initial = {'previous_analysis': {'detail': {'original': 'unchanged'}},
+               'previous_items': [{'item_id': 'kept'}],
+               'research_state': {'version': 1, 'materials': {'a': {'text': 'original'}}}}
+    context = WorkContext(initial)
+    for key in initial:
+        assert context.initial[key] == initial[key]
+    context.initial['previous_analysis']['detail']['original'] = 'changed'
+    assert initial['previous_analysis']['detail']['original'] == 'unchanged'
+
+
+def test_research_records_only_pages_actually_read_not_the_unread_database():
+    context = WorkContext({'news': list(range(200))})
+    page = context.read('news', offset=50, limit=10)
+    context.read('news', offset=50, limit=10)
+    assert context.consulted == [page]
+    assert page['rows'] == list(range(50, 60))
+
+
 def test_large_tables_are_retrievable_without_being_in_first_prompt():
     raw = {'context': {'analysis_at': '2026-10-05'},
            'prices': {'A': {'columns': ['date', 'close'], 'rows': [[str(i), i] for i in range(500)]}},

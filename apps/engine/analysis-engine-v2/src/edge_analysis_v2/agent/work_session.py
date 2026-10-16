@@ -27,6 +27,7 @@ class WorkSession(SkillSession):
         self.wrap_up_at = None
         self.recovery_context = None
         self.compactions = 0
+        self.external_research = []
 
     async def precompact(self, data, tool_use_id, context):
         """Persist existing work; PreCompact output is not a model instruction channel."""
@@ -108,6 +109,8 @@ class WorkSession(SkillSession):
     async def after(self, data, tool_use_id, context):
         response = data.get('tool_response')
         failed = isinstance(response, dict) and (response.get('isError') or response.get('is_error'))
+        if not failed and data['tool_name'].startswith('mcp__search__'):
+            self.external_research.append({'tool': data['tool_name'], 'arguments': data.get('tool_input'), 'output': response})
         if not failed and data['tool_name'].startswith('mcp__analysis__'):
             self.calls_since_update += 1
         if not failed and data['tool_name'] in ('Write', 'Edit'):
@@ -162,7 +165,8 @@ class WorkSession(SkillSession):
                 continue
             self.note_path(str(path))
             notes[path.relative_to(self.notes).as_posix()] = path.read_text(encoding='utf-8')
-        value = {'todos': self.todos, 'notes': notes, 'reminders': self.reminders, 'status': self.status}
+        value = {'todos': self.todos, 'notes': notes, 'reminders': self.reminders, 'status': self.status,
+                 'external_research': self.external_research}
         target = self.artifacts / 'workspace.json'
         temporary = target.with_suffix('.tmp')
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -176,6 +180,7 @@ class WorkSession(SkillSession):
         for relative, content in value['notes'].items():
             self.note_path('notes/' + relative, create=True).write_text(content, encoding='utf-8')
         self.todos = value['todos']
+        self.external_research = value.get('external_research', [])
         self.reminders = 0
         return {'todos': self.todos, 'notes': list(value['notes']),
                 'instruction': 'Resume unfinished work. Read notes/ for previous findings and gaps. Reconfirm evidence with current analysis tools before final citation.'}

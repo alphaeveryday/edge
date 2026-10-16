@@ -1,6 +1,7 @@
 """Verify real tool execution and screen assembly around a deterministic model fake."""
 
 import os
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,86 @@ import pytest
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.tools.fixture_data import make_fixture
 from edge_analysis_v2.storage.factors import HEADLINES, read_factor_details
+
+
+def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_context):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from edge_analysis_v2.storage.research import load_research
+    request, factory = run_context
+    fixture = make_fixture()
+    async def first(**kwargs):
+        news_reference(kwargs)  # Consulted but not selected for publication: still research.
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    _, identity = request('movement', first, fixture)
+    with factory() as connection:
+        state = load_research(connection, 'movement', identity).snapshot()
+    assert any(m['definition']['function_name'] == 'get_issue_evidence' for m in state['materials'].values())
+    assert state['gaps'] == []
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    async def revision(**kwargs):
+        assert kwargs['initial']['research_state'] == state
+        assert kwargs['initial']['previous_analysis'] is not None
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    _, revised_id = request('movement', revision, later)
+    with factory() as connection:
+        after = load_research(connection, 'movement', revised_id).snapshot()
+    assert state['materials'].items() <= after['materials'].items()
+
+
+@pytest.mark.parametrize('empty_selection', [False, True])
+def test_retirement_cannot_leave_published_movement_using_retired_evidence(run_context, empty_selection):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from edge_analysis_v2.storage.research import load_research
+    request, factory = run_context
+    fixture = make_fixture()
+    async def first(**kwargs):
+        ref = news_reference(kwargs)
+        return {'new_items': [dict(candidate_id='kept', type='이슈', title_keyword='계약',
+            sentence='판매 물량을 확보했어요.', sentiment='positive', tool_run_ids=[ref])],
+            'selected_item_ids': ['kept'], 'summary': '계약을 확인했어요.'}
+    _, parent_id = request('movement', first, fixture)
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    identity = 'service-test-' + uuid4().hex
+    async def revision(**kwargs):
+        item = kwargs['initial']['previous_items'][0]
+        (kwargs['artifacts'] / 'research_removals.json').write_text(json.dumps([
+            {'id': item['tool_run_ids'][0], 'reason': 'superseded'}]), encoding='utf-8')
+        return {'new_items': [], 'selected_item_ids': [] if empty_selection else [item['item_id']], 'summary': None}
+    with pytest.raises(ValueError, match='Retired research is still cited'):
+        request('movement', revision, later, identity=identity)
+    with factory() as connection:
+        with pytest.raises(ValueError, match='completed'):
+            load_research(connection, 'movement', identity)
+        assert load_research(connection, 'movement', parent_id).snapshot()['removed'] == {}
+
+
+def test_legacy_recovery_includes_uncited_ancestor_research(run_context):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from edge_analysis_v2.storage.research import load_research
+    request, factory = run_context
+    fixture = make_fixture()
+    async def first(**kwargs):
+        news_reference(kwargs)
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    _, first_id = request('movement', first, fixture)
+    with factory() as connection:
+        original = load_research(connection, 'movement', first_id).snapshot()
+        connection.execute("DELETE FROM tool_runs WHERE movement_analysis_id=%s AND tool_id='record_research_state:v1'", (first_id,))
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    async def second(**kwargs):
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    _, second_id = request('movement', second, later)
+    with factory() as connection:
+        connection.execute("DELETE FROM tool_runs WHERE movement_analysis_id=%s AND tool_id='record_research_state:v1'", (second_id,))
+        restored = load_research(connection, 'movement', second_id).snapshot()
+    assert original['materials'].items() <= restored['materials'].items()
+    assert len(restored['gaps']) == 2
 
 
 @pytest.mark.parametrize('kind', ['movement', 'outlook'])

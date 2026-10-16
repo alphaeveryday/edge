@@ -1,5 +1,6 @@
 """Project initial observations into a small catalog with paged, read-only access."""
 from copy import deepcopy
+from edge_analysis_v2.analysis.research_state import ResearchState
 
 
 class SourceInputError(ValueError):
@@ -14,9 +15,17 @@ class SourceInputError(ValueError):
 class WorkContext:
     def __init__(self, initial):
         self.sources = deepcopy(initial)
-        self.initial = {k: deepcopy(initial[k]) for k in ('context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'source_gaps', 'history_preview', 'current_flow') if k in initial}
+        self.consulted = []
+        self.removals = []
+        self.initial = {k: deepcopy(initial[k]) for k in ('context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_items', 'research_state') if k in initial}
         self.initial['available_sources'] = {k: self._describe(v) for k, v in initial.items()}
         self.initial['retrieval'] = 'Use workspace.read_source with source from available_sources; source is the only required field. Use a returned next_offset to read another page. These are exploration data, not final evidence IDs.'
+
+    def retire(self, changes):
+        state = ResearchState(self.sources.get('research_state'))
+        state.remove(self.removals + changes)
+        self.removals.extend(deepcopy(changes))
+        return {'removed': self.removals, 'active_materials': len(state.snapshot()['materials'])}
 
     @staticmethod
     def _describe(value):
@@ -55,6 +64,9 @@ class WorkContext:
         else:
             rows = value if isinstance(value, list) else [value]
         end = min(offset + limit, len(rows))
-        return {'source': source, 'subject': subject, 'columns': columns,
+        page = {'source': source, 'subject': subject, 'columns': columns,
                 'rows': deepcopy(rows[offset:end]), 'total_rows': len(rows),
                 'next_offset': end if end < len(rows) else None}
+        if source not in ('previous_analysis', 'previous_items', 'research_state') and page not in self.consulted:
+            self.consulted.append(deepcopy(page))
+        return page

@@ -12,6 +12,16 @@ def make(tmp_path):
     return WorkSession(tmp_path/'work', tmp_path/'artifacts', ('cause-investigation', 'analysis-report-writing'), [])
 
 
+def test_external_search_original_is_checkpointed_for_the_next_revision(tmp_path):
+    session = make(tmp_path)
+    response = {'content': [{'text': 'original search material'}]}
+    asyncio.run(session.after({'tool_name': 'mcp__search__web_search_exa',
+        'tool_input': {'query': 'sales'}, 'tool_response': response}, 'call', {}))
+    session.checkpoint()
+    saved = json.loads((tmp_path/'artifacts/workspace.json').read_text(encoding='utf-8'))
+    assert saved['external_research'][0]['output'] == response
+
+
 def test_notes_can_create_folders_but_not_escape_or_replace_instructions(tmp_path):
     state = make(tmp_path)
     path = state.note_path('notes/company/answer.md', create=True)

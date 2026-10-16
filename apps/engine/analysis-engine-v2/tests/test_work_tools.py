@@ -9,6 +9,22 @@ from edge_analysis_v2.agent.work_context import WorkContext
 from edge_analysis_v2.agent.work_tools import make_workspace_server
 
 
+def test_explicit_retirement_is_atomic_and_does_not_delete_source_originals(monkeypatch):
+    from edge_analysis_v2.agent import work_tools
+    from edge_analysis_v2.analysis.research_state import ResearchState
+    state = ResearchState()
+    state.add('a', {'text': 'old original'})
+    context = WorkContext({'research_state': state.snapshot()})
+    monkeypatch.setattr(work_tools, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
+    tool = next(t for t in make_workspace_server(context, None)['tools'] if t.name == 'retire_research_materials')
+    bad = asyncio.run(tool.handler({'changes': [{'id': 'unknown', 'reason': 'invalid'}]}))
+    assert bad['is_error'] and context.removals == []
+    result = asyncio.run(tool.handler({'changes': [{'id': 'a', 'reason': 'superseded disclosure'}]}))
+    assert not result.get('is_error')
+    assert context.removals == [{'id': 'a', 'reason': 'superseded disclosure'}]
+    assert context.sources['research_state']['materials']['a']['text'] == 'old original'
+
+
 def read_tool(monkeypatch, sources):
     from edge_analysis_v2.agent import work_tools
     monkeypatch.setattr(work_tools, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
