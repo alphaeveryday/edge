@@ -206,7 +206,7 @@ public class SyncService {
         List<Map<String, Object>> detailItems = items.stream().filter(i -> i.section().equals("detail"))
                 .map(i -> map("title_keyword", i.titleKeyword(), "sentences", JSON.readTree(i.bulletsJson()))).toList();
         List<String> updates = items.stream().filter(i -> i.section().equals("update"))
-                .map(i -> i.sentence() == null ? i.titleKeyword() : i.sentence()).toList();
+                .map(OutlookItem::titleKeyword).toList();
         List<Map<String, Object>> supports = new ArrayList<>();
         List<Map<String, Object>> burdens = new ArrayList<>();
         pipeline.keywords(o.id()).forEach(k -> (k.kind().equals("support") ? supports : burdens).add(map("label", k.label())));
