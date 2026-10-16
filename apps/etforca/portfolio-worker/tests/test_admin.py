@@ -19,10 +19,10 @@ def test_test_records_are_explicit_and_filter_counts_match_rows(client):
     admin_store.mark_tests([trial['id']], '20 scenarios / case 01')
     for scope, expected in [('all', 2), ('customers', 1), ('tests', 1)]:
         rows = client.get(f'/api/portfolio/admin/records?kind=analyses&scope={scope}').json()
-        summary = client.get(f'/api/portfolio/admin/overview?scope={scope}').json()
+        summary = client.get('/api/portfolio/admin/overview').json()
         assert rows['total'] == len(rows['items']) == expected
-        assert summary['queued'] == summary['today_jobs']['queued'] == expected
-        assert sum(day['analyses'] for day in summary['daily']) == expected
+        assert summary['queued'] == summary['today_jobs']['queued'] == 1
+        assert sum(day['analyses'] for day in summary['daily']) == 1
     rows = client.get('/api/portfolio/admin/records?kind=analyses&scope=customers').json()
     assert rows['items'][0]['id'] == customer['id'], 'Same visitor/question does not identify a test'
     detail = client.get('/api/portfolio/admin/records/analyses/' + trial['id']).json()
@@ -30,7 +30,34 @@ def test_test_records_are_explicit_and_filter_counts_match_rows(client):
     with pytest.raises(ValueError, match='UNKNOWN_JOB'):
         admin_store.mark_tests([customer['id'], 'absent'], 'batch')
     assert admin_store.detail('analyses', customer['id'])['test_label'] is None
-    assert client.get('/api/portfolio/admin/overview?scope=invalid').status_code == 422
+    assert client.get('/api/portfolio/admin/records?kind=analyses').json()['total'] == 1
+    assert client.get('/api/portfolio/admin/records?kind=analyses&scope=invalid').status_code == 422
+
+
+def test_customer_metrics_and_email_cleanup_keep_real_requests_from_mixed_visitors(client):
+    from edge_portfolio import admin_store
+    from edge_portfolio.contracts import DraftInput
+    for owner in ('test-only', 'customer', 'mixed'):
+        admin_store.heartbeat(owner)
+        store.save_draft(str(uuid4()), owner, DraftInput(holdings=[]).model_dump(mode='json'))
+    jobs = [store.submit(owner, key, {}) for owner, key in
+            [('test-only', 'test'), ('customer', 'real'), ('mixed', 'test'), ('mixed', 'real')]]
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_jobs SET state='succeeded'")
+    for job, owner in zip(jobs, ('test-only', 'customer', 'mixed', 'mixed')):
+        store.request_report(job['id'], owner, 'same@example.test')
+    admin_store.mark_tests([jobs[0]['id'], jobs[2]['id']], 'confirmed')
+    summary = admin_store.overview()
+    assert summary['active_visitors'] == summary['today_visitors'] == 2
+    assert sum(d['visitors'] for d in summary['daily']) == 2
+    assert summary['today_jobs']['succeeded'] == 2
+    assert summary['total_report_requests'] == 2
+    assert summary['today_unique_emails'] == summary['total_unique_emails'] == 1
+    assert admin_store.records('drafts', 7, '', 1)['total'] == 2
+    assert admin_store.delete_test_reports() == 2
+    assert admin_store.delete_test_reports() == 0
+    with store.connect() as db:
+        assert {r['job_id'] for r in db.execute('SELECT job_id FROM portfolio_report_requests')} == {jobs[1]['id'], jobs[3]['id']}
 
 
 def test_report_records_inherit_test_label_without_classifying_drafts(client):

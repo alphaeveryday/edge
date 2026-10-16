@@ -34,3 +34,24 @@ body:has(#report){background:radial-gradient(ellipse 650px 330px at 50% 0,#20355
 @media(prefers-reduced-motion:reduce){.donut-enter circle{animation:none}.report-history .history-line{stroke-dashoffset:0;transition:none}}
 .followup{padding:0;background:none;border:0}.followup h3{font-size:18px}.report-chat{display:flex;border:1px solid var(--border-strong);border-radius:16px;padding:8px;margin-top:14px;background:var(--bg-raised)}.report-chat input{min-width:0;flex:1;background:none;border:0;padding:10px;font-size:15px}.report-chat button{border:0;border-radius:10px;background:var(--accent);width:40px;flex:none}.followup>.notice{margin-top:8px;font-size:12px}.report-premium{width:100%;border:1px solid #444955;background:linear-gradient(135deg,#212329,#08090c);border-radius:18px;padding:20px 12px;font-size:16px;font-weight:700;line-height:1.6;box-shadow:0 12px 30px #0004}.report-premium svg{vertical-align:middle;margin-right:7px;width:20px;height:20px;fill:none}.report-footnote{text-align:center;color:var(--t3);font-size:11px}
 .followup .report-chat{display:flex;gap:0}.followup .report-chat input{width:auto}.followup .report-chat button{width:40px;min-width:40px;align-self:stretch;margin:0}
+
+#report .execution-scroll{max-width:100%;overflow-x:auto;border:1px solid var(--border);border-radius:12px;margin:16px 0}
+#report .execution-scroll:focus-visible{outline:2px solid var(--t2);outline-offset:2px}
+#report .execution-scroll table{width:100%;min-width:760px;border-collapse:collapse;font-size:14px;line-height:1.5}
+#report .execution-scroll th,#report .execution-scroll td{padding:14px 16px;text-align:right;vertical-align:middle;white-space:nowrap;font-variant-numeric:tabular-nums}
+#report .execution-scroll thead{background:#1b2130;color:var(--t2)}
+#report .execution-scroll th:first-child{min-width:200px;max-width:260px;white-space:normal;overflow-wrap:anywhere;text-align:left}
+#report .execution-scroll th[scope="row"]{font-weight:600}
+#report .execution-scroll th small{display:block;font-size:12px;font-weight:400;color:var(--t3);margin-top:4px}
+#report .execution-scroll tbody tr+tr{border-top:1px solid var(--border)}
+#report .execution-scroll .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+#report .execution-plan{container-type:inline-size}
+@container(max-width:760px){
+  #report .execution-scroll table{min-width:0;display:block}
+  #report .execution-scroll thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  #report .execution-scroll tbody{display:block}
+  #report .execution-scroll tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:8px}
+  #report .execution-scroll th:first-child{grid-column:1/-1;min-width:0;max-width:none;padding:12px}
+  #report .execution-scroll td{padding:10px 12px;white-space:normal;overflow-wrap:anywhere}
+  #report .execution-scroll td::before{content:attr(data-label);display:block;text-align:left;color:var(--t3);font-size:12px;margin-bottom:4px}
+}

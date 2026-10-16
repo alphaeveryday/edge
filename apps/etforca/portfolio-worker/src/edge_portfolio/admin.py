@@ -32,13 +32,13 @@ def verification_attempt(run_id: str, case_id: int, attempt: int):
 
 
 @router.get('/overview')
-def overview(scope: Scope = 'all'):
-    return admin_store.overview(scope)
+def overview():
+    return admin_store.overview()
 
 
 @router.get('/records')
 def records(kind: Kind, days: int = Query(7, ge=1, le=90),
-            state: Literal['', 'queued', 'running', 'succeeded', 'failed'] = '', page: int = Query(1, ge=1, le=10000), scope: Scope = 'all'):
+            state: Literal['', 'queued', 'running', 'succeeded', 'failed'] = '', page: int = Query(1, ge=1, le=10000), scope: Scope = 'customers'):
     return admin_store.records(kind, days, state, page, scope)
 
 

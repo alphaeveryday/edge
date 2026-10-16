@@ -25,6 +25,20 @@ async function openDetail(page: import('@playwright/test').Page, result: unknown
   await page.getByRole('button', { name: 'synthetic 상세 보기' }).click();
 }
 
+test('administrator keeps rebalance amounts readable inside the isolated customer report', async ({ page }) => {
+  const execution = { status: 'ready', reasons: [], assumptions: [], additional_krw: '0', monthly_krw: null,
+    required_additional_krw: null, months: null, accounts: [],
+    rows: [{ instrument_id: 'US:VT', name: 'Vanguard Total World Stock Index ETF', account: '일반 계좌',
+      before_krw: '0', target_krw: '500000', buy_krw: '500000', sell_krw: '0', cash_used_krw: '0' }] };
+  await openDetail(page, { ...report, recommendation: { ...report.recommendation, execution } });
+  const table = page.locator('.execution-scroll');
+  await expect(table.locator('td').nth(1)).toHaveText('500,000원');
+  await expect(table.locator('th small')).toHaveCSS('display', 'block');
+  expect(await table.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.locator('.execution-plan').screenshot({ path: `test-results/admin-rebalance-${test.info().project.name}.png` });
+});
+
 test('administrator sees the complete customer report, separate evidence and expanded followups without changing dashboard styles', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));

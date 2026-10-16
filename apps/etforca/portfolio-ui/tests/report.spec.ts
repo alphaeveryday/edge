@@ -19,7 +19,7 @@ test('rebalance instructions show cash amounts and hide transactions when execut
   const execution = { status: 'ready', reasons: [], assumptions: ['입력 평가금액 기준이에요.'],
     additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null,
     accounts: [{ account: '일반 계좌', deposit_krw: '0', withdrawal_krw: '0' }],
-    rows: [{ instrument_id: 'US:QQQ', name: 'Invesco QQQ', account: '일반 계좌', before_krw: '0',
+    rows: [{ instrument_id: 'US:QQQ', name: 'Vanguard Total World Stock Index ETF', account: '일반 계좌', before_krw: '0',
       target_krw: '600000', buy_krw: '600000', sell_krw: '0', cash_used_krw: '0' },
       { instrument_id: 'CASH:KRW', name: '현금', account: '일반 계좌', before_krw: '200000',
         target_krw: '0', buy_krw: '0', sell_krw: '0', cash_used_krw: '200000' }] };
@@ -29,10 +29,24 @@ test('rebalance instructions show cash amounts and hide transactions when execut
   } }));
   await page.goto('/portfolio/');
   const table = page.locator('.execution-plan table');
-  await expect(table.getByRole('columnheader', { name: '매수', exact: true })).toBeVisible();
-  await expect(table.getByRole('cell', { name: '600,000원', exact: true })).toHaveCount(2);
-  await expect(table.getByRole('columnheader', { name: '현금 투입', exact: true })).toBeVisible();
-  await expect(table.getByRole('row').filter({ hasText: '현금 ·' }).getByRole('cell').last()).toHaveText('200,000원');
+  await expect(table.getByRole('columnheader', { name: '매수', exact: true })).toHaveCount(1);
+  await expect(table.getByRole('cell', { name: /600,000원$/ })).toHaveCount(2);
+  await expect(table.getByRole('columnheader', { name: '현금 투입', exact: true })).toHaveCount(1);
+  await expect(table.getByRole('rowheader').filter({ hasText: '현금' }).locator('..').getByRole('cell').last()).toHaveText('200,000원');
+  const layout = await table.evaluate(el => {
+    const cell = el.querySelector('td')!;
+    const name = el.querySelector('th[scope="row"]')!;
+    return { padding: parseFloat(getComputedStyle(cell).paddingLeft), align: getComputedStyle(cell).textAlign,
+      fits: [...el.querySelectorAll('td')].every(td => td.getBoundingClientRect().right <= el.parentElement!.getBoundingClientRect().right + 1),
+      account: getComputedStyle(name.querySelector('small')!).display,
+      pageFits: document.documentElement.scrollWidth <= innerWidth };
+  });
+  expect(layout.padding).toBeGreaterThanOrEqual(12);
+  expect(layout.align).toBe('right');
+  expect(layout.fits).toBeTruthy();
+  expect(layout.account).toBe('block');
+  expect(layout.pageFits).toBeTruthy();
+  await page.locator('.execution-plan').screenshot({ path: `test-results/rebalance-${test.info().project.name}.png` });
   execution.status = 'infeasible';
   execution.reasons = ['NO_SELL_ZERO_TARGET'];
   await page.reload();
