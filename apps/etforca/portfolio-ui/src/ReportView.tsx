@@ -4,6 +4,7 @@ import { chartColors, PerformanceChart, PortfolioDonut } from './ReportCharts';
 import { safeReportUrl } from './reportUrl';
 import { ExecutionPlan } from './ExecutionPlan';
 import { hasTradeAmounts, TradeAmount } from './TradeAmount';
+import { ReportFeedback } from './ReportFeedback';
 import { ScenarioTable } from './ScenarioTable';
 
 const axes = [['leadership', '시장 주도성'], ['profitability', '수익성'], ['stability', '안정성']] as const;
@@ -58,7 +59,7 @@ function Evidence({ section, report, hidden }: { section?: Section; report: Repo
   return <details className="evaluation__sources"><summary>판단에 사용한 근거</summary>{section.evidence.map((e, i) => { const source = report.sources?.find(s => s.id === e.source_id); return <blockquote key={i}>{e.quote}{source?.url && <a href={safeReportUrl(source.url)} target="_blank" rel="noreferrer">원문 확인 ↗</a>}</blockquote>; })}</details>;
 }
 
-export function ReportView({ report, separateEvidence = false, allSections = false }: { report: Report; separateEvidence?: boolean; allSections?: boolean }) {
+export function ReportView({ report, separateEvidence = false, allSections = false, feedbackJobId }: { report: Report; separateEvidence?: boolean; allSections?: boolean; feedbackJobId?: string }) {
   const pending = !report.recommendation && report.completion && report.completion.status !== 'complete';
   const conclusionTitle = pending ? 'ORCA AI의 현재 분석 결과' : 'ORCA AI의 최종 결론';
   const fields: Record<string, string> = { structure: '상품 구조', holdings: '보유내역', fees: '보수', distributions: '분배' };
@@ -114,6 +115,7 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
       <div className="why"><i>이렇게 고른 이유</i><Bullets section={plan.evaluation?.reason} /><Evidence section={plan.evaluation?.reason} report={report} hidden={separateEvidence} /></div>
       <section className="performance" data-analytics-section="performance"><h4>과거 성과</h4>{plan.historical_performance ? <PerformanceChart history={plan.historical_performance} /> : <p className="notice">{plan.unavailable_reason}</p>}</section>
     </article> : report.scenarios || report.execution ? null : <article className="ans"><p className="notice">{recommendationStatus(report)}</p>{report.metrics?.total_krw != null && <p className="fee"><span>입력한 평가금액</span><b>{money(report.metrics.total_krw)}</b></p>}<ul className="report-bullets">{(report.metrics?.holdings ?? []).map((h, i) => <li key={i}>{h.name} · {h.account} · {h.weight_pct == null ? '비중 미입력' : `${h.weight_pct}%`}</li>)}</ul>{!report.optimization && <section className="performance"><h4>과거 성과</h4><p className="notice">{report.metrics?.unavailable_reason}</p></section>}</article>}
+    {feedbackJobId && <ReportFeedback key={feedbackJobId} jobId={feedbackJobId} />}
     <article className="evaluation" data-analytics-section="evaluation"><h3>핵심 평가 정리</h3>{parts.map((part, i) => <section data-analytics-section={i === 0 ? 'conclusion' : i === 1 ? 'outlook' : 'insights'} className={'evaluation__part' + (i === 0 ? ' action-first' : '')} key={i}><h4>{part.title}</h4><Bullets section={part.content} /><Evidence section={part.content} report={report} hidden={separateEvidence} /></section>)}</article>
   </div>;
 }

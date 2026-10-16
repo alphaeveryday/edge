@@ -26,13 +26,16 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 | 화면별 총 체류 시간 | `portfolio_screen_engagement`의 Sum `visible_seconds`, Breakdown `screen` |
 | 방문 1회당 평균 체류 | 위 체류 합계 ÷ 같은 화면의 `$pageview` 수. 15초 단위 이벤트의 평균을 방문당 평균으로 사용하지 않는다 |
 | 스크롤이 멈춘 구간 | `portfolio_scroll_pause`의 Total count 또는 Sum `pause_seconds`, Breakdown `section`, 필요시 `screen = result` 필터 |
+| 분석 만족도 | `portfolio_feedback`, Filter `action = submitted`, Total count, Breakdown `rating` (`good` 좋아요 / `okay` 그냥 그래요 / `needs_improvement` 개선이 필요해요) |
 | 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
 
-`screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`이며 그 밖의 위치는 화면 이름으로 집계한다.
+`screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`, `feedback`이며 그 밖의 위치는 화면 이름으로 집계한다.
+
+만족도 팝업은 완료된 고객 보고서에서 과거 성과 다음 핵심 평가 구간에 도달하면 표시한다. 이모지 3지 선택이며 닫기·Escape를 지원한다. 같은 분석의 응답·닫기는 브라우저 로컬 저장소에 표시해 다시 묻지 않는다(저장소 차단 시 현재 페이지에서만 유지). `portfolio_feedback`의 `action`은 `shown`, `submitted`, `dismissed`이고, `rating`은 응답에만 들어간다. 관리자·중단된 보고서에는 팝업이 없다. SDK Surveys 대신 앱의 고정 선택 UI와 기존 이벤트 수집 경로를 사용한다.
 
 체류는 탭이 보이는 시간이며 실제 독서·집중 시간을 뜻하지 않는다. 숨긴 화면은 방문으로도 세지 않는다. 스크롤·레이아웃 변화 없이 2초 이상 머문 구간을 다음 이동·숨김·종료 때 기록한다. 화면 가운데의 구간을 기준으로 하며, 펼치기 등으로 레이아웃이 바뀌면 위치를 갱신한다. 앱 전환·페이지 이탈의 마지막 이벤트는 즉시 Beacon으로 넘기지만 네트워크 차단이나 브라우저 강제 종료 시 전달을 보장하지 않는다.
 
-기존 `cookieless_mode: always` 정책을 유지한다. 자동 클릭·본문 수집, 세션 녹화, 설문·기능 플래그는 끄고 이벤트·속성 허용 목록만 전송한다. 입력 내용·이메일·보유 종목·보고서 본문·분석 ID·URL 쿼리·해시는 보내지 않는다. 사용자 식별자를 연결하지 않으며 날짜를 넘긴 동일 사용자 추적은 하지 않는다. 결과별 배치가 달라지는 보고서는 구간별 이벤트로 비교한다. 프로젝트의 세션 녹화·히트맵 설정을 바꾸거나 저장된 대시보드를 자동 생성하지 않는다.
+기존 `cookieless_mode: always` 정책을 유지한다. 자동 클릭·본문 수집, 세션 녹화, SDK 설문·기능 플래그는 끄고 이벤트·속성 허용 목록만 전송한다. 입력 내용·이메일·보유 종목·보고서 본문·분석 ID·URL 쿼리·해시는 보내지 않는다. 사용자 식별자를 연결하지 않으며 날짜를 넘긴 동일 사용자 추적은 하지 않는다. 결과별 배치가 달라지는 보고서는 구간별 이벤트로 비교한다. 프로젝트의 세션 녹화·히트맵 설정을 바꾸거나 저장된 대시보드를 자동 생성하지 않는다.
 
 ## 권한
 
