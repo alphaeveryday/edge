@@ -38,6 +38,7 @@ BYOC(Bring Your Own Cloud)입니다.
 
 오른쪽 EDGE 환경이 공개 정보를 수집·분석해 설명을 만들면, 왼쪽 증권사 환경이 이를 받아 점검을 거쳐 MTS에 서빙합니다.
 두 환경을 잇는 연결은 증권사 쪽에서 여는 단방향 Pull 하나이고, 고객 데이터는 증권사 환경 밖으로 나가지 않습니다.
+그림은 [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)의 목표 구성입니다. 체크섬 검증과 mTLS 인증서 바인딩은 아직 구현 전입니다.
 
 ![시스템 아키텍처. 논리 컴포넌트(Service·Worker·Cache·DB) 조감](../../docs/assets/readme/SA.drawio.png)
 
