@@ -70,4 +70,18 @@ function App() {
 const confirmationToken = new URLSearchParams(location.hash.slice(1)).get('newsletter-confirm');
 // Keep the bearer token out of subsequent navigation, analytics and screenshots of the address bar.
 if (confirmationToken) history.replaceState(null, '', location.pathname);
-createRoot(document.getElementById('root')!).render(<React.StrictMode>{confirmationToken ? <NewsletterConfirmation token={confirmationToken} /> : <App />}</React.StrictMode>);
+function Entry() {
+  const [token, setToken] = useState(confirmationToken);
+  useEffect(() => {
+    function confirmLink() {
+      const next = new URLSearchParams(location.hash.slice(1)).get('newsletter-confirm');
+      if (!next) return;
+      history.replaceState(null, '', location.pathname);
+      setToken(next);
+    }
+    window.addEventListener('hashchange', confirmLink);
+    return () => window.removeEventListener('hashchange', confirmLink);
+  }, []);
+  return token ? <NewsletterConfirmation key={token} token={token} /> : <App />;
+}
+createRoot(document.getElementById('root')!).render(<React.StrictMode><Entry /></React.StrictMode>);

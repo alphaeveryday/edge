@@ -326,6 +326,27 @@ test('newsletter confirmation requires a click and clears the token before any a
   expect(analyticsRequests).toHaveLength(0);
 });
 
+test('newsletter confirmation links work in an existing tab and each token still requires a click', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const confirmations: unknown[] = [];
+  await page.route('**/api/portfolio/newsletter/confirm', route => {
+    confirmations.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: 'confirmed', delivery_ready: false } });
+  });
+  await page.goto('https://etforca.com/portfolio/');
+  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  for (const [index, token] of ['private-first-confirmation-token', 'private-second-confirmation-token'].entries()) {
+    await page.evaluate(value => { location.hash = 'newsletter-confirm=' + value; }, token);
+    await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
+    expect(page.url()).toBe('https://etforca.com/portfolio/');
+    expect(confirmations).toHaveLength(index);
+    await page.getByRole('button', { name: '이메일 확인하고 구독하기' }).click();
+    await expect(page.getByRole('heading', { name: '이메일 확인을 마쳤어요!' })).toBeVisible();
+    expect(confirmations[index]).toEqual({ token });
+  }
+  expect(JSON.stringify(events)).not.toMatch(/private-first|private-second|newsletter-confirm/);
+});
+
 test('dismissed feedback keeps a newsletter retry without asking for another rating', async ({ page, baseURL }) => {
   const events = await instrument(page, baseURL!);
   await feedbackReport(page);
@@ -375,4 +396,21 @@ test('an already open newsletter launcher preserves feedback mode and Escape acc
   await page.keyboard.press('Escape');
   await expect(page.locator('.report-feedback')).toHaveCount(0);
   await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
+});
+
+for (const alreadyShown of [false, true]) test(`newsletter never covers an active followup form (already shown: ${alreadyShown})`, async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  if (alreadyShown) {
+    await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+    await expect(page.locator('.report-feedback')).toBeVisible();
+  }
+  const question = page.getByLabel('추가 질문', { exact: true });
+  await question.fill('이 추천에서 더 궁금한 내용이 있어요');
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await expect(question).toBeFocused();
+  await question.blur();
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(alreadyShown ? ['shown', 'dismissed'] : []);
 });

@@ -24,14 +24,17 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     let shown = false;
     function check() {
       if (shown || finished.has(jobId) || popup.current || document.visibilityState !== 'visible' || !anchor.current || document.querySelector('dialog[open]')) return;
+      if (document.activeElement?.closest('.followup')) return;
       if (anchor.current.getBoundingClientRect().top > innerHeight - 64) return;
       shown = true; setOpen(true); trackFeedback('shown');
     }
+    function followupStarted(event: FocusEvent) { if (event.target instanceof Element && event.target.closest('.followup')) shown = true; }
     const timer = window.setTimeout(check, 0);
     window.addEventListener('scroll', check, { passive: true });
     window.addEventListener('resize', check);
     document.addEventListener('visibilitychange', check);
-    return () => { clearTimeout(timer); window.removeEventListener('scroll', check); window.removeEventListener('resize', check); document.removeEventListener('visibilitychange', check); };
+    document.addEventListener('focusin', followupStarted);
+    return () => { clearTimeout(timer); window.removeEventListener('scroll', check); window.removeEventListener('resize', check); document.removeEventListener('visibilitychange', check); document.removeEventListener('focusin', followupStarted); };
   }, [jobId, storageKey]);
   function remember() {
     finished.add(jobId);
@@ -47,8 +50,10 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     popup.current?.focus({ preventScroll: true });
     function escape(event: KeyboardEvent) { if (event.key === 'Escape' && !document.querySelector('dialog[open]')) close(); }
+    function followupFocus(event: FocusEvent) { if (event.target instanceof Element && event.target.closest('.followup')) close(); }
     document.addEventListener('keydown', escape);
-    return () => document.removeEventListener('keydown', escape);
+    document.addEventListener('focusin', followupFocus);
+    return () => { document.removeEventListener('keydown', escape); document.removeEventListener('focusin', followupFocus); };
   }, [open]);
   function choose(rating: FeedbackRating) {
     if (submitted.current) return;
