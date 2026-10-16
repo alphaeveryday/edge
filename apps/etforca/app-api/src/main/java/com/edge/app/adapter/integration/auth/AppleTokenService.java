@@ -1,5 +1,6 @@
 package com.edge.app.adapter.integration.auth;
 
+import com.edge.app.application.auth.required.AppleTokenClient;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -30,7 +31,7 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-public class AppleTokenService {
+public class AppleTokenService implements AppleTokenClient {
     private static final String APPLE = "https://appleid.apple.com";
     private static final Duration SECRET_TTL = Duration.ofMinutes(5);
 
@@ -48,6 +49,7 @@ public class AppleTokenService {
     }
 
     // 실패 시 null
+    @Override
     public String exchange(String authorizationCode) {
         if (authorizationCode == null || !configured()) {
             return null;
@@ -63,6 +65,7 @@ public class AppleTokenService {
         }
     }
 
+    @Override
     public void revoke(String refreshToken) {
         if (!configured()) {
             log.warn("apple token revoke skipped reason=unconfigured");

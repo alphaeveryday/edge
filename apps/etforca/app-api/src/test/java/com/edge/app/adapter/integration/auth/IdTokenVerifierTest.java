@@ -1,6 +1,7 @@
 package com.edge.app.adapter.integration.auth;
 
 import com.edge.app.application.auth.AuthService;
+import com.edge.app.application.auth.required.SocialIdentityVerifier;
 import com.edge.app.domain.member.Provider;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -31,7 +32,7 @@ class IdTokenVerifierTest {
 
         String good = sign(key, new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com")
                 .audience("com.edge.orca").expirationTime(future).claim("email", "e@x.com").claim("email_verified", "true").build());
-        assertThat(verifier.verify(Provider.APPLE, good, null).orElseThrow()).isEqualTo(new IdTokenVerifier.Identity("s1", "e@x.com"));
+        assertThat(verifier.verify(Provider.APPLE, good, null).orElseThrow()).isEqualTo(new SocialIdentityVerifier.Identity("s1", "e@x.com"));
 
         String wrongKey = sign(other, new JWTClaimsSet.Builder().subject("s1").issuer("https://appleid.apple.com")
                 .audience("com.edge.orca").expirationTime(future).build());

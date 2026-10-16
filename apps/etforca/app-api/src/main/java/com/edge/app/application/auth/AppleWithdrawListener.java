@@ -1,6 +1,6 @@
 package com.edge.app.application.auth;
 
-import com.edge.app.adapter.integration.auth.AppleTokenService;
+import com.edge.app.application.auth.required.AppleTokenClient;
 import com.edge.app.application.member.required.AppleTokenRepository;
 import com.edge.app.domain.member.MemberWithdrawn;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +17,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 @Component
 @RequiredArgsConstructor
 public class AppleWithdrawListener {
-    private final AppleTokenService appleTokens;
+    private final AppleTokenClient appleTokens;
     private final AppleTokenRepository appleTokenRepository;
 
     @TransactionalEventListener

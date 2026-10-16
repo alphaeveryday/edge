@@ -1,7 +1,7 @@
 package com.edge.app.adapter.webapi.member;
 
 import com.edge.app.adapter.security.MemberPrincipal;
-import com.edge.app.application.member.provided.MeResponse;
+import com.edge.app.adapter.webapi.member.dto.MeResponse;
 import com.edge.app.application.member.provided.MeUpdateRequest;
 import com.edge.app.application.member.provided.MemberFinder;
 import com.edge.app.application.member.provided.MemberModifier;

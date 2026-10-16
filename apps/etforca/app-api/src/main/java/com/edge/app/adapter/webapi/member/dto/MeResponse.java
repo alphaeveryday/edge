@@ -1,4 +1,4 @@
-package com.edge.app.application.member.provided;
+package com.edge.app.adapter.webapi.member.dto;
 
 import com.edge.app.domain.member.Member;
 
