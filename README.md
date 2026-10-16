@@ -2,84 +2,64 @@
 
 # edge
 
-증권사 MTS 안에서 ETF 가격 변동의 이유를 공개 정보 기반 변동 요인 후보로 설명하는, 증권사가 통제 가능한 운영 인프라(B2B)입니다.
+ETF 가격 변동의 이유를 공개 정보 기반 변동 요인 후보로 설명하는 분석 엔진과, 그 설명을 증권사(B2B)와 개인 투자자(B2C)에게 전달하는 제품 둘을 한 저장소에서 개발합니다.
 
-<!-- 이 README 는 쇼케이스(포트폴리오) 용도다. 저장소 구조·개발 규약은 하단 "개발 문서" 링크 참조. -->
+<!-- 이 README 는 쇼케이스(포트폴리오) 용도다. 저장소 구조·개발 규약은 하단 "개발 문서" 링크 참조. 제품별 소개는 1-2 의 제품 README 참조. -->
 
 ## 1. 프로젝트 개요
 
 ### 1-1. 프로젝트 소개
 
-MTS에는 내 종목이 오늘 왜 움직였는지 보여주는 화면이 없습니다. EDGE는 공시·뉴스·수급 같은 공개 정보를 수집·분석해 가격 변동의 요인 후보를 만들고, 증권사가 검수를 거쳐 자기 MTS에 게시합니다. 생성한 글을 그대로 내보내는 도구가 아니라, 금칙어·확신도 기준·검수 큐·감사 로그로 증권사가 노출을 통제하는 운영 인프라입니다.
+MTS에는 내 종목이 오늘 왜 움직였는지 보여주는 화면이 없습니다. EDGE 엔진은 공시·뉴스·수급 같은 공개 정보를 수집·분석해 ETF 가격 변동의 요인 후보를 만듭니다. 장중에는 1분 주기로 변동을 판정해 설명을 생성하고, 장 마감 후에는 하루치 데이터를 정제하며, 개장 전에는 ETF별 전망을 만듭니다.
 
-납품 형태는 BYOC(Bring Your Own Cloud)입니다. 벤더가 수집·분석 플레인(control plane)을 운영하고, 서빙·검수 플레인(data plane)은 증권사 명의 클라우드 계정 안에서 돕니다. 고객(투자자) 데이터는 증권사 관리 환경 밖으로 나가지 않습니다.
+엔진의 결과는 두 제품이 받아 씁니다. 증권사에는 검수·정책·감사 로그를 갖춘 운영 인프라로 납품하고, 개인 투자자에게는 모바일 앱으로 제공합니다. 두 제품 모두 엔진의 결과 DB에서 설명을 가져가고, 자기 데이터는 각자의 DB에 둡니다.
 
-### 1-2. 시스템 구성도
+### 1-2. 제품 구성
 
-![BYOC 배포 토폴로지 — 증권사 Cloud 환경(반입·점검·서빙)과 EDGE Cloud 환경(수집·분석)](docs/assets/readme/byoc-topology.drawio.png)
+| 디렉터리 | 제품 | 대상 | 소개 |
+|---|---|---|---|
+| `apps/engine` | EDGE 엔진 | 공용 상류 | 수집·분석 파이프라인. 아래 2-3 |
+| `apps/edgesignal` | edgesignal | 증권사(B2B) | 증권사가 자기 클라우드 계정에서 검수해 MTS에 게시하는 운영 인프라. [제품 README](apps/edgesignal/README.md) |
+| `apps/etforca` | ETF Orca | 개인 투자자(B2C) | 엔진의 ETF 분석을 보고 전망에 투표하는 모바일 앱. [제품 README](apps/etforca/README.md) |
 
-오른쪽 EDGE 환경이 공개 정보를 수집·분석해 설명을 만들면, 왼쪽 증권사 환경이 이를 받아 점검을 거쳐 MTS에 서빙합니다. 두 환경을 잇는 연결은 증권사 쪽에서 여는 단방향 Pull 하나이고, 고객 데이터는 증권사 환경 밖으로 나가지 않습니다.
+디렉터리를 제품 축으로 나눈 결정은 [ADR-0061](docs/adr/0061-product-axis-directory-layout.md)에 있습니다.
 
-아키텍처 다이어그램 전체(인터랙티브)는 [아키텍처 포털](https://alphaeveryday.github.io/edge-pages)에서 확대해 볼 수 있습니다.
-
-### 1-3. 주요 기능 · 데모
-
-데모는 [demo-mts.edgesignal.dev](https://demo-mts.edgesignal.dev)에서 로그인 없이 열립니다.
-
-![edge 주요 기능 — 투자자는 가상 MTS 종목 상세의 AI 분석 탭에서 종목 36종의 실시간 시세(증권사 공식 Open API 프록시)와 게시된 변동 요인 설명·근거 원문 링크를 보고, 증권사 검수자는 테넌트 콘솔에서 자동 제공·검수 대기·점검 차단 현황을 보며 금칙어·최소 근거 수·최소 확신도로 점검 기준을 정하고 기준에 걸린 건을 승인·반려하며 제공 범위를 시장·종목 단위로 켜고 끄고, 플랫폼 운영자는 슈퍼 어드민 콘솔에서 cross-tenant 게시 현황·무효화(회수)와 데이터셋별 수집 상태를 확인한다](docs/assets/readme/feature-showcase.jpg)
-
-### 1-4. 기술 스택
+### 1-3. 기술 스택
 
 세 런타임을 한 저장소에서 관리하는 폴리글랏 모노레포입니다.
 
 - **JVM** — Spring Boot 4 · Gradle 멀티모듈(앱 8 + 라이브러리 2) · Flyway · JPA/JdbcTemplate 병행
-- **Node** — React 콘솔 UI 2종 + 공유 디자인 시스템(ui-kit) · pnpm workspace
-- **Python** — 데이터 파이프라인 · 분석 엔진 · 온톨로지 SSOT · uv workspace
-- **인프라** — AWS(ECS Fargate·Step Functions·RDS PostgreSQL·Athena/Iceberg·CloudFront) · Terraform(그린필드 IaC) · GitHub Actions
+- **Node** — React 콘솔 UI 2종 + 포트폴리오 화면 + 공유 디자인 시스템(ui-kit) · pnpm workspace. 모바일 앱은 Expo(워크스페이스 밖)
+- **Python** — 데이터 파이프라인 · 분석 엔진 · 온톨로지 SSOT · uv workspace. 포트폴리오 워커는 독립 워크스페이스
+- **인프라** — AWS(ECS Fargate·Step Functions·RDS PostgreSQL·ElastiCache·Athena/Iceberg·CloudFront) · Terraform(그린필드 IaC) · GitHub Actions
 
 ## 2. 개발 결과물
 
-### 2-1. Information Architecture
-
-![콘솔 정보구조 화면 맵 — 테넌트 콘솔·슈퍼 어드민 콘솔](docs/assets/readme/IA.drawio.png)
-
-콘솔의 화면과 기능을 트리 하나로 정리한 화면 맵입니다. 왼쪽이 증권사 검수자가 쓰는 테넌트 콘솔(대시보드·설명 관리·검수·점검 기준·설정), 오른쪽이 운영자가 쓰는 슈퍼 어드민 콘솔(테넌트 관리·분석 관측)입니다.
-### 2-2. Application Architecture
-
-![애플리케이션 아키텍처 — UI 화면·API·저장소 단위 상세 매핑](docs/assets/readme/AA.drawio.png)
-
-위 화면들을 UI·API·Repository 단위까지 내려 매핑한 상세도입니다. 화면의 기능 하나가 어느 API를 호출하고 어느 테이블을 읽고 쓰는지 확인할 수 있습니다.
-
-### 2-3. System Architecture
-
-![시스템 아키텍처 — 논리 컴포넌트(Service·Worker·Cache·DB) 조감](docs/assets/readme/SA.drawio.png)
-
-전체 시스템을 Service·Worker·Cache·DB 논리 컴포넌트 단위로 나타낸 구성도입니다. 왼쪽 증권사 통제 환경(위젯·콘솔·서빙·검수 워커)과 오른쪽 EDGE 환경(수집·분석 워커·동기화)은 동기화 경로 하나로만 이어집니다.
-### 2-4. Cloud Architecture
+### 2-1. Cloud Architecture
 
 ![클라우드 아키텍처 — AWS 배치(VPC·서브넷·ECS 클러스터)](docs/assets/readme/CA.drawio.png)
 
-<!-- 그림은 설계 시점 단일 계정 기준 — BYOC 2계정 구도로 재작도 예정 -->
+<!-- 그림은 설계 시점 단일 계정·B2B 기준. 엔진·edgesignal·etforca 세 묶음 배치로 재작도 예정 -->
 
-논리 컴포넌트를 실제 AWS 리소스로 배치한 인프라 구성도입니다. 서브넷을 public/앱/데이터로 분리하고 가용영역을 이중화했으며, 전체를 Terraform으로 관리합니다.
+논리 컴포넌트를 실제 AWS 리소스로 배치한 인프라 구성도입니다. 서브넷을 public/앱/데이터로 분리하고 가용영역을 이중화했으며, 전체를 Terraform으로 관리합니다. 증권사 계정 쪽 배치는 [edgesignal README](apps/edgesignal/README.md#2-구조)의 BYOC 토폴로지에 있습니다.
 
-### 2-5. DB 스키마 SSOT
+### 2-2. DB 스키마 SSOT
 
 [![데이터 모델 개요](docs/data-model/overview.svg)](docs/data-model/README.md)
 
 Cloud DB의 도메인 7개와 데이터 흐름, 그리고 증권사 관리 환경에서 도는 온프렘 세트까지 한 장입니다. 그림을 클릭하면 도메인별 상세 ERD가 열립니다. 스키마 변경은 Flyway 마이그레이션으로만 하고, CI가 이 문서 ERD를 마이그레이션에서 생성한 DBML과 대조하기 때문에 그림과 실제 DB가 어긋나면 빌드가 실패합니다.
 
-Flyway 세트는 둘입니다 — Cloud 세트 97테이블, On-Prem 세트 14테이블. 두 세트를 잇는 경계는 증권사 쪽에서 여는 단방향 Pull 하나뿐이고, 온프렘 쪽 상세는 [온프렘 테넌트 DB ERD](docs/data-model/onprem/) 한 장으로 봅니다. 두 세트 모두 같은 CI 대조를 받습니다.
+Flyway 세트는 둘입니다 — Cloud 세트 97테이블, On-Prem 세트 14테이블. 두 세트를 잇는 경계는 증권사 쪽에서 여는 단방향 Pull 하나뿐이고, 온프렘 쪽 상세는 [온프렘 테넌트 DB ERD](docs/data-model/onprem/) 한 장으로 봅니다. 두 세트 모두 같은 CI 대조를 받습니다. ETF Orca의 app-api는 회원 개인정보와 파이프라인 데이터의 권한 경계를 위해 이 세트 밖의 자체 PostgreSQL·Flyway를 씁니다([ADR-0056](docs/adr/0056-etforca-app-api-infra.md)).
 
-### 2-6. 데이터 파이프라인 · 분석 엔진
+### 2-3. 데이터 파이프라인 · 분석 엔진
 
 ![데이터 파이프라인 아키텍처 — 장중 1분 레인(뉴스·시세·공시)과 배치 오케스트레이션(Planner·SFN·Reconciler)](docs/assets/readme/DPA.drawio.png)
 
 장중에는 1분 주기 파이프라인이 뉴스·시세·공시를 받아 가격 변동을 판정하고 분석 엔진이 설명을 생성합니다. 장 마감 후에는 배치 파이프라인이 하루치 데이터를 정제해 적재합니다. 스케줄러는 실행 전에 작업 목록을 DB에 기록해 두고, 기록과 실제 실행을 대조해 누락된 실행을 탐지합니다.
 
-### 2-7. 성능 실험
+### 2-4. 성능 실험
 
-총 75회의 부하 실험을 수행했고, 네 캐시 전략은 API 서버 4대·1,600 req/s의 공통 조건에서 비교했습니다. 이 조건에서 Caffeine만으로 3분간 DB 조회가 288,000회에서 1,062회로 줄어, 현재 규모에서는 Redis를 도입하지 않았습니다.
+edgesignal의 MTS 조회 표면(publication-api)에 총 75회의 부하 실험을 수행했고, 네 캐시 전략은 API 서버 4대·1,600 req/s의 공통 조건에서 비교했습니다. 이 조건에서 Caffeine만으로 3분간 DB 조회가 288,000회에서 1,062회로 줄어, 현재 규모에서는 Redis를 도입하지 않았습니다.
 
 ![고정 부하에서 캐시 모드별 응답 지연 — 전 모드 1~2ms로 지연 축에서는 차이가 없다](docs/assets/pubcache/1-mode-latency-p95-p99.png)
 
@@ -93,7 +73,7 @@ Flyway 세트는 둘입니다 — Cloud 세트 97테이블, On-Prem 세트 14테
 
 전체 과정은 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis)과 [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler)에서 확인할 수 있습니다.
 
-### 2-8. CI/CD
+### 2-5. CI/CD
 
 ![마이그레이션 버전 순서 게이트가 역행 버전을 잡아 CI를 실패시킨 실제 사례](docs/assets/readme/ci-gate-migration-order.png)
 
@@ -103,14 +83,14 @@ Flyway 세트는 둘입니다 — Cloud 세트 97테이블, On-Prem 세트 14테
 - **러너 운영 이력** — GitHub-hosted에서 self-hosted 4대 자체 운영으로 전환했다가, repo public 전환 시점에 비용을 다시 따져 GitHub-hosted로 돌아왔습니다.
 - **CD** — dev 머지 시 스키마 마이그레이션이 자동 적용되고, 데모 서버는 SSH 접속 없이 SSM Run Command로 배포합니다.
 
-### 2-9. 설계 결정 기록(ADR)
+### 2-6. 설계 결정 기록(ADR)
 
-설계 결정 58건을 ADR로 남겼습니다. 결정을 뒤집을 때도 기존 문서를 지우지 않고 새 ADR로 대체 근거를 기록합니다.
+설계 결정 61건을 ADR로 남겼습니다. 결정을 뒤집을 때도 기존 문서를 지우지 않고 새 ADR로 대체 근거를 기록합니다.
 
 - [ADR-0010 하이브리드 온프렘 피벗](docs/adr/0010-hybrid-onprem-pivot.md) — 제품 방향을 바꾼 결정
-- [ADR-0044 정정(CORRECTION) 전달 폐지](docs/adr/0044-correction-abolition.md) — 자기 기능을 폐지한 결정
-- [ADR-0046 확신도 게이트](docs/adr/0046-confidence-gate-risk-grade-abolition.md) — 융합 산정 설계를 폐기하고 단순 AND 게이트로 회귀
-- [ADR-0051 BYOC 배포 토폴로지](docs/adr/0051-byoc-deployment-topology.md) — 납품 형태 확정
+- [ADR-0016 단일 레포, 배포 아티팩트 2종](docs/adr/0016-single-repo-two-artifacts.md) — 한 저장소에서 벤더·증권사 아티팩트를 나누는 결정
+- [ADR-0056 ETF Orca 앱 API 인프라](docs/adr/0056-etforca-app-api-infra.md) — B2C 제품을 엔진과 다른 DB·캐시에 올린 결정
+- [ADR-0061 제품 축 디렉터리 배치](docs/adr/0061-product-axis-directory-layout.md) — 배포 위치 대신 제품으로 묶은 결정
 - 전체: [docs/adr/](docs/adr/)
 
 ## 3. 수행 방법 · 프로젝트 관리

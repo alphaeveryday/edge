@@ -23,7 +23,7 @@ edge/
 │   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
 │   │   ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
 │   │   ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
-│   │   ├── sync-agent/         # JVM  · DMZ — Cloud pull + 체크섬 검증 (ADR-0036)
+│   │   ├── sync-agent/         # JVM  · DMZ — Cloud pull + 내부망 무변형 릴레이 (ADR-0036·0040)
 │   │   ├── intake/             # JVM  · 내부망 — Raw Event Store 멱등 적재
 │   │   ├── screening-worker/   # JVM  · 점검 실행 — 상태 분기·자동 게시 (state-machine)
 │   │   └── publication-api/    # JVM  · MTS 조회 표면 (Published만)
@@ -70,8 +70,8 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**). 전 도메인이 super-admin-api 호출 — 데이터 경로에 mock 없음. 단 `src/mock/preview.ts` 는 **실 데이터가 0건일 때 화면을 검수하기 위한 미리보기 픽스처**로 별도다(repository 를 대체하지 않는다, ALPHA-738) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API — 검수 표면(Review Queue 목록·승인·반려, 승인=전이+재발행 단일 트랜잭션) + 인증·인가(데모 자체 계정·세션·매 요청 원장 재검증 fail-closed, [permission-matrix](console-ia/permission-matrix.md)) + 사용자 관리(등록·목록·비활성화, 실 DB + 감사 로그 `console_action_log` — ALPHA-119) + 가격 변동 설명(explanations 목록·상세·수신 상태 원장 실조회 — ALPHA-607, 사후 운영 쓰기 — ALPHA-613) + 점검 정책(ALPHA-438)·제공 범위(ALPHA-606). ALPHA-513 의 mock 표면은 도메인별 DB 전환으로 전부 소멸했다 |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](contracts/sync-protocol.md)). tenant_delivery(outbox) 조회로 번들 조립, mTLS 인가는 후속 |
-| `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull + 번들 체크섬 검증, 내부망 무변형 전달. DB 접근 없음 ([ADR-0036](adr/0036-sync-agent-intake-topology.md)) |
-| `intake` | JVM | **edge-onprem** | 내부망 — 검증된 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |
+| `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull(mTLS 클라이언트 인증서는 후속), 내부망 무변형 전달. 앱 수준 체크섬 검증은 서명 계약으로 이관([ADR-0040](adr/0040-sync-integrity-mvp-to-signing.md)). DB 접근 없음 ([ADR-0036](adr/0036-sync-agent-intake-topology.md)) |
+| `intake` | JVM | **edge-onprem** | 내부망 — sync-agent 가 릴레이한 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |
 | `screening-worker` | JVM | **edge-onprem** | 점검 실행 — 미점검 번들 파싱·정책 평가(NEW=활성 정책 룰·임계값으로 AUTO_PUBLISHED/REVIEW_REQUIRED/BLOCKED 분기, 근거는 screening_check — ALPHA-429, 무효화=즉시 비노출, 정정(CORRECTION)은 폐지 유형으로 fail-loud — ADR-0044) |
 | `publication-api` | JVM | **edge-onprem** | MTS 위젯이 직접 호출하는 조회 표면 — **Published만 반환**, 고객 식별 비수취 ([contracts/publication-api.md](contracts/publication-api.md)·[ADR-0053](adr/0053-widget-direct-serving-no-personalization.md)). 온프렘 Published Store(PG) 조회 |
 | `super-admin-api` | JVM | **edge-cloud** | 운영자용 API. **cross-tenant 읽기/쓰기**, 최고 권한 표면 — 운영자 인증(config 부트스트랩·세션·fail-closed 인가) + 콘솔 화면 표면 5종(tenants 는 JPA 로 실 `tenant` 테이블 — ALPHA-526, **sources 는 운영 원장 `ops_*` 읽기 전용 조회** — ALPHA-514, **analyses 읽기는 설명 원장 `explanation_*` 읽기 전용 조회** — ALPHA-601, **analyses 쓰기는 무효화 단독**(게시본 WITHDRAWN 전이 + `tenant_delivery` INVALIDATION 발번 + `admin_activity_log` 감사) — ALPHA-440·737, **analysisResults 는 새 분석 엔진 표(`outlook_*`·`movement_*`) 읽기 전용 조회** — ALPHA-1333, session 은 인증 세션 주체 투영 — ALPHA-608) + **콘솔 규칙 엔진의 사실 표면**(`GET /api/v1/console/facts` 하루 사실 + `GET /api/v1/console/trends/entity-resolution`·`intraday-analysis` 최근 일별 사실 — 판정은 클라이언트. 축과 추이 계약은 [계약 문서](contracts/console-facts-api.md)가 정본 — [ADR-0050](adr/0050-console-facts-endpoint.md) — ALPHA-738·1001·1005) |
@@ -83,7 +83,7 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 | `app-ui` | Node(Expo) | **앱 스토어** (iOS·Android, EAS 빌드) | ETF Orca 모바일 앱. pnpm 워크스페이스에서 제외하고 자체 npm lock 으로 관리한다(Metro 와 pnpm 심볼릭 링크 충돌, 모듈 README 가 정본) |
 | `app-landing` | 정적(HTML) | **edge-cloud** (`etforca.com`, S3·CloudFront) | ETF Orca 랜딩페이지. 원본은 Claude Artifact용 조각 문서이고 `build.sh` 가 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 서빙용 `index.html` 을 만든다. 워크스페이스(JVM·Node·Python) 어디에도 등록하지 않는다. dev 머지 시 `deploy-app-landing.yml` 이 S3 에 올린다(모듈 README 가 정본) |
 
-sync-agent(DMZ Pull·검증) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](implementation.md) §1). `tenant-sync-api`는 별도 엣지로 mTLS 직접 종단해 노출됩니다([ADR-0032](adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
+sync-agent(DMZ Pull·릴레이) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](implementation.md) §1). `tenant-sync-api`는 별도 엣지(sync 전용 ALB)로 노출되며, mTLS 종단은 trust store 주입(ALPHA-447) 전까지 꺼져 있습니다([ADR-0032](adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 
 ### 표면 분리
 - **콘솔 경로**: `tenant-console-ui` → `tenant-console-api` (읽기/쓰기, 한 테넌트 범위 — 온프렘에서 UI·API 동거)
