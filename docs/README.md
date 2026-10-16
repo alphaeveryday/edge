@@ -18,6 +18,7 @@
 | [data-model/](data-model/) | 물리 데이터 모델 ERD — Cloud 7도메인 + On-Prem 세트 (Flyway 파생 DBML 과 CI 대조) | 테이블·FK 관계를 볼 때 |
 | [roadmap.md](roadmap.md) | MVP 이후 확장 가능 영역 | "이건 지금인가 나중인가" 판단 시 |
 | [writing-rules.md](writing-rules.md) | 문서 작성 톤 규칙 (모든 산출물 공통) | 문서·UI 문구·발표 자료 작성 시 |
+| [content-engine.md](content-engine.md) | 콘텐츠 엔진 자리표시 — 채널(인스타그램·유튜브·네이버 프리미엄 콘텐츠) 링크와 목적. 디렉터리는 추가 예정 | 콘텐츠 채널·유입 접점을 찾을 때 |
 | [contracts/sync-protocol.md](contracts/sync-protocol.md) | Sync 프로토콜 계약 (cursor·fan-out·멱등성·목표 계약) — 양단 모두 영서 소유 ([adr/0026](adr/0026-ownership-boundary-db.md)) | Sync 채널 양단을 만질 때 |
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
