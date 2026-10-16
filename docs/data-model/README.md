@@ -1,8 +1,8 @@
 # 데이터 모델
 
-두 Flyway 세트의 도메인 흐름은 overview로, 상세 물리 FK는 각 ERD로 구분한다.
+두 Flyway 세트와 ETF Orca 앱 DB의 흐름은 overview로, 상세 물리 FK는 각 ERD로 구분한다.
 
-## 개요 — 두 세트와 그 경계
+## 개요 — 저장소 셋과 그 경계
 
 ![데이터 모델 개요](overview.svg)
 

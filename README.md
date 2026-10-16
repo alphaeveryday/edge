@@ -80,6 +80,9 @@ docs/           # 설계·계약·데이터 모델·ADR
 
 제품 축으로 디렉터리를 묶되 배포 환경과 데이터 책임은 각 제품에서 구분합니다. 모바일 앱은 자체 npm 구성을, 포트폴리오 워커는 독립 Python 워크스페이스를 사용합니다. [저장소 구조](docs/repo-structure.md) · [ADR-0061](docs/adr/0061-product-axis-directory-layout.md)
 
+[![데이터 모델 개요](docs/data-model/overview.svg)](docs/data-model/README.md)
+
+그림의 저장소는 셋입니다(검증 단계인 포트폴리오의 전용 PostgreSQL은 아래 구성도와 같이 제외). 공통 스키마의 SSOT는 `libs/schema`이고, 여기에 Flyway 세트가 둘 있습니다. 벤더 계정의 cloud 세트(97테이블)는 엔진과 edgesignal이 함께 쓰고, 증권사 계정의 onprem 세트(14테이블)는 검수·게시 상태를 담습니다. ETF Orca의 app-api는 회원·투표 원본을 위해 자체 Flyway 세트를 따로 두고, ETF·분석 데이터는 공통 스키마에서 읽기 전용으로 동기화합니다([ADR-0056](docs/adr/0056-etforca-app-api-infra.md)). 공통 스키마의 변경은 마이그레이션으로만 하고, CI가 마이그레이션에서 DBML을 다시 생성해 커밋본과 대조한 뒤 문서의 도메인별 ERD에 적힌 테이블과 FK 관계를 그 DBML과 대조하기 때문에, 문서가 마이그레이션과 어긋나면 PR 검사가 실패합니다. 그림을 클릭하면 도메인별 상세 ERD가 열립니다.
 
 ![시스템 아키텍처: 증권사 Cloud 환경과 EDGE Cloud 환경의 기능 단위 논리 구성](docs/assets/readme/SA.drawio.png)
 
