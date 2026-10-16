@@ -61,7 +61,7 @@ def collect_research(state, stored, artifacts, references=None):
     add_records(state, stored)
     parent = next(rows[0] for name, rows in stored['tables'].items() if name in ('movement_analyses', 'outlook_analyses'))
     state.value['analysis'] = {key: parent[key] for key in ('analysis_id', 'analysis_at', 'etf_code', 'data_source')}
-    for folder in (artifacts, artifacts / 'investigation'):
+    for folder in (artifacts, artifacts / 'investigation', artifacts / 'writing'):
         for name in ('consulted_sources.json', 'workspace.json'):
             path = folder / name
             if not path.is_file():

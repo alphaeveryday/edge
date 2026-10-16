@@ -50,10 +50,13 @@ def test_invalid_state_version_is_not_silently_treated_as_first_analysis():
         ResearchState({'version': 999, 'materials': {}, 'removed': {}})
 
 
-def test_collector_preserves_large_originals_and_scopes_old_short_references(tmp_path):
+@pytest.mark.parametrize('stage', ['', 'investigation', 'writing'])
+def test_collector_preserves_large_originals_and_scopes_old_short_references(tmp_path, stage):
     from edge_analysis_v2.storage.research import collect_research
     original = 'original ' * 150000
-    (tmp_path / 'workspace.json').write_text(json.dumps({'todos': [],
+    folder = tmp_path / stage
+    folder.mkdir(exist_ok=True)
+    (folder / 'workspace.json').write_text(json.dumps({'todos': [],
         'notes': {'reason.md': original + '[f1]'}, 'external_research': [
             {'tool': 'mcp__search__web_search_exa', 'arguments': {'query': 'q'}, 'output': {'text': 'search original'}}]}), encoding='utf-8')
     parent = {'analysis_id': 'a', 'analysis_at': '2026-10-16T00:00:00+00:00', 'etf_code': 'X', 'data_source': 'synthetic'}
