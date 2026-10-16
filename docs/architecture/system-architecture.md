@@ -2,7 +2,7 @@
 
 > 원본: `EDGE_아키텍처_v0_2.pptx` — Slide 3 (System Architecture)
 >
-> 루트 README 의 `docs/assets/readme/SA.drawio.png` 는 2026-10-16 판(drawio "SA v0.4")이다. 열·기능 단위는 원본 그대로이고 ETF Orca 층(Service 7·App Database·Vote Cache·Sync Worker)과 엔진의 Intraday Worker·Explanation Queue 가 더해졌다. Customer System 상자는 증권사 엣지 프록시(Edge Proxy)로 바뀌었다(ADR-0053 — 구현은 증권사 몫이며 데모는 CloudFront).
+> 루트 README 의 `docs/assets/readme/SA.drawio.png` 는 2026-10-16 판(drawio "SA v0.4")이다. 열·기능 단위는 원본 그대로이고 ETF Orca 층(Service 7·App Database·Vote Cache·Sync Worker)과 엔진의 Intraday Worker·Explanation Queue 가 더해졌다. Customer System 상자는 증권사가 MTS 와 같은 출처에 두는 리버스 프록시(Reverse Proxy)로 바뀌었다(ADR-0053 — 구현은 증권사 몫이며 데모는 CloudFront).
 >
 > **[설계 뷰]** 논리 설계 개요다. 현행 배포·계약의 권위는 SSOT([../context.md](../context.md))에 있다. 이 문서의 Service·Worker는 **논리 단위**이며, 실제 배포 모듈로의 대응은 아래 [논리 → 배포 모듈 매핑](#논리--배포-모듈-매핑)을 따른다. 충돌 시 SSOT 우선.
 >
