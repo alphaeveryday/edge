@@ -11,3 +11,5 @@
 .source-record a{color:#365ba5;text-decoration:underline;overflow-wrap:anywhere}
 .followup-record>p{white-space:pre-wrap}
 @media(max-width:700px){.detail{padding:14px}.detail-tabs{gap:6px}.detail-tabs button{padding:10px 12px}}
+
+.badge.test { background: #eee8ff; color: #553093; }

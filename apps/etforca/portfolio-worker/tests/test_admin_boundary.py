@@ -15,7 +15,7 @@ def test_public_app_has_no_admin_routes_even_with_origin_credentials(monkeypatch
 def test_private_app_blocks_rebinding_and_cross_site_reads(monkeypatch):
     from edge_portfolio.admin_app import app
     from edge_portfolio import admin_store
-    monkeypatch.setattr(admin_store, 'overview', lambda: {'active_visitors': 3})
+    monkeypatch.setattr(admin_store, 'overview', lambda scope='all': {'active_visitors': 3})
     client = TestClient(app, base_url='http://localhost:18080')
     path = '/api/portfolio/admin/overview'
     assert client.get(path).json() == {'active_visitors': 3}

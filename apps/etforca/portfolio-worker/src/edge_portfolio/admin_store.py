@@ -5,6 +5,7 @@ from . import store
 
 
 def initialize(db):
+    db.execute('ALTER TABLE portfolio_jobs ADD COLUMN IF NOT EXISTS test_label text')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_presence (
         owner text PRIMARY KEY, first_seen timestamptz NOT NULL DEFAULT now(),
         last_seen timestamptz NOT NULL DEFAULT now())''')
@@ -22,16 +23,32 @@ def heartbeat(owner):
         db.execute("DELETE FROM portfolio_presence WHERE last_seen < now()-interval '90 days'")
 
 
-def overview():
+def mark_tests(job_ids, label):
+    """Operator-only: identify proven test jobs, never infer them from customer text."""
+    if not job_ids or not isinstance(label, str) or not label.strip() or len(label) > 200:
+        raise ValueError('INVALID_TEST_LABEL')
+    with store.connect() as db:
+        found = db.execute('SELECT id FROM portfolio_jobs WHERE id=ANY(%s) FOR UPDATE', (list(job_ids),)).fetchall()
+        if {row['id'] for row in found} != set(job_ids):
+            raise ValueError('UNKNOWN_JOB')
+        db.execute('UPDATE portfolio_jobs SET test_label=%s WHERE id=ANY(%s)', (label.strip(), list(job_ids)))
+
+
+def scope_filter(scope):
+    return {'all': 'TRUE', 'customers': 'test_label IS NULL', 'tests': 'test_label IS NOT NULL'}[scope]
+
+
+def overview(scope='all'):
+    selected = f'WITH selected_jobs AS (SELECT * FROM portfolio_jobs WHERE {scope_filter(scope)}) '
     with store.connect() as db:
         db.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-        result = db.execute('''SELECT now() AS as_of,
+        result = db.execute(selected + '''SELECT now() AS as_of,
             (SELECT count(*) FROM portfolio_presence WHERE last_seen>now()-interval '2 minutes') AS active_visitors,
             (SELECT count(*) FROM portfolio_visit_days WHERE day=(now() AT TIME ZONE 'Asia/Seoul')::date) AS today_visitors,
             (SELECT min(first_seen) FROM portfolio_presence) AS tracking_since,
-            (SELECT count(*) FROM portfolio_jobs WHERE kind='analysis' AND state='queued') AS queued,
-            (SELECT count(*) FROM portfolio_jobs WHERE kind='analysis' AND state='running') AS running''').fetchone()
-        rows = db.execute("""SELECT state,count(*) AS n FROM portfolio_jobs WHERE kind='analysis'
+            (SELECT count(*) FROM selected_jobs WHERE kind='analysis' AND state='queued') AS queued,
+            (SELECT count(*) FROM selected_jobs WHERE kind='analysis' AND state='running') AS running''').fetchone()
+        rows = db.execute(selected + """SELECT state,count(*) AS n FROM selected_jobs WHERE kind='analysis'
             AND created_at >= date_trunc('day',now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul' GROUP BY state""").fetchall()
         result['today_jobs'] = {state: 0 for state in ('queued', 'running', 'succeeded', 'failed')}
         result['today_jobs'].update({row['state']: row['n'] for row in rows})
@@ -42,9 +59,9 @@ def overview():
             ) AS today_unique_emails,
             count(DISTINCT nullif(lower(btrim(email)), '')) AS total_unique_emails,
             count(*) AS total_report_requests FROM portfolio_report_requests""").fetchone())
-        result['daily'] = db.execute("""SELECT g.day::date,
+        result['daily'] = db.execute(selected + """SELECT g.day::date,
             (SELECT count(*) FROM portfolio_visit_days v WHERE v.day=g.day::date) AS visitors,
-            (SELECT count(*) FROM portfolio_jobs j WHERE j.kind='analysis'
+            (SELECT count(*) FROM selected_jobs j WHERE j.kind='analysis'
                 AND j.created_at >= g.day AT TIME ZONE 'Asia/Seoul'
                 AND j.created_at < (g.day+interval '1 day') AT TIME ZONE 'Asia/Seoul') AS analyses
             FROM generate_series(date_trunc('day',now() AT TIME ZONE 'Asia/Seoul')-interval '6 days',
@@ -52,11 +69,11 @@ def overview():
         return result
 
 
-def records(kind, days, state, page):
+def records(kind, days, state, page, scope='all'):
     # SQL fragments are fixed per validated enum; filters and paging remain parameters.
     if kind == 'analyses':
         table, timestamp = 'portfolio_jobs', 'created_at'
-        fields = 'id, left(owner,12) AS visitor, created_at AS at, state, stage, failure, started_at, finished_at'
+        fields = 'id, left(owner,12) AS visitor, created_at AS at, state, stage, failure, started_at, finished_at, test_label'
         condition, args = "kind='analysis' AND (%s='' OR state=%s)", [state, state]
         order = 'created_at DESC,id DESC'
     elif kind == 'drafts':
@@ -64,11 +81,13 @@ def records(kind, days, state, page):
         fields = 'id, left(owner,12) AS visitor, updated_at AS at'
         condition, args, order = 'TRUE', [], 'updated_at DESC,id DESC'
     elif kind == 'reports':
-        table, timestamp = 'portfolio_report_requests', 'created_at'
-        fields = 'job_id AS id, left(owner,12) AS visitor, email, created_at AS at'
+        table, timestamp = '(SELECT r.*,j.test_label FROM portfolio_report_requests r JOIN portfolio_jobs j ON j.id=r.job_id) AS reports', 'created_at'
+        fields = 'job_id AS id, left(owner,12) AS visitor, email, created_at AS at, test_label'
         condition, args, order = 'TRUE', [], 'created_at DESC,job_id DESC,owner DESC'
     else:
         raise ValueError('Unknown record kind')
+    if kind != 'drafts':
+        condition += ' AND ' + scope_filter(scope)
     condition += f" AND {timestamp} >= (date_trunc('day',now() AT TIME ZONE 'Asia/Seoul')-(%s-1)*interval '1 day') AT TIME ZONE 'Asia/Seoul'"
     args.append(days)
     with store.connect() as db:
@@ -82,11 +101,11 @@ def detail(kind, record_id):
     with store.connect() as db:
         db.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         if kind in ('analyses', 'reports'):
-            row = db.execute("""SELECT id,left(owner,12) AS visitor,input,result,state,stage,failure,created_at,started_at,finished_at
+            row = db.execute("""SELECT id,left(owner,12) AS visitor,input,result,state,stage,failure,created_at,started_at,finished_at,test_label
                 FROM portfolio_jobs WHERE id=%s AND kind='analysis'""", (record_id,)).fetchone()
             if row:
                 row['events'] = db.execute('SELECT at,stage FROM portfolio_events WHERE job_id=%s ORDER BY at', (record_id,)).fetchall()
-                row['followups'] = db.execute("SELECT input,result,state,failure,created_at FROM portfolio_jobs WHERE parent_id=%s AND kind='chat' ORDER BY created_at", (record_id,)).fetchall()
+                row['followups'] = db.execute("SELECT input,result,state,failure,created_at,COALESCE(test_label,%s) AS test_label FROM portfolio_jobs WHERE parent_id=%s AND kind='chat' ORDER BY created_at", (row['test_label'], record_id)).fetchall()
             return row
         try:
             record_id = str(UUID(record_id))

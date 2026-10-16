@@ -20,6 +20,7 @@ export function Detail({ data, onClose }: { data: Data; onClose: () => void }) {
   return <section className="detail" aria-label="입력 상세">
     <header><div><span className="eyebrow">방문자 {data.visitor}</span><h2>요청 상세</h2></div><button className="quiet" onClick={onClose} aria-label="상세 닫기">닫기 ×</button></header>
     <p className="muted">{data.state ? '분석을 요청한 시점의 입력입니다.' : '마지막으로 다음 단계에 넘어갈 때 저장된 입력입니다.'}</p>
+    {data.test_label && <p className="badge test">테스트 · {data.test_label}</p>}
     {data.state && <p className="muted">{progress(data)}</p>}
     {data.failure && <p className="error">실패 사유 · {data.failure}</p>}
     <div className="detail-tabs" role="tablist" aria-label="상세 구분">{[['result', '고객 결과'], ['input', '고객 입력'], ['sources', '출처와 인용']].map(([id, label]) => <button key={id} id={'tab-' + id} role="tab" aria-selected={tab === id} aria-controls={'panel-' + id} onClick={() => setTab(id)}>{label}</button>)}</div>
@@ -37,7 +38,7 @@ export function Detail({ data, onClose }: { data: Data; onClose: () => void }) {
     <div role="tabpanel" id="panel-sources" aria-labelledby="tab-sources" hidden={tab !== 'sources'}><Sources result={result} followups={data.followups} /></div>
     {result && <details><summary>저장된 분석 결과 전체</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}
     <section aria-label="추가 질문과 답변"><h3>추가 질문</h3>{data.followups?.length ? data.followups.map((item, i) => <article className="followup-record" key={i}>
-      <h4>{item.input.question}</h4>
+      <h4>{item.input.question}</h4>{item.test_label && <span className="badge test">테스트 · {item.test_label}</span>}
       <p className="muted">{item.created_at ? new Date(item.created_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + ' KST' : '저장된 시각 없음'} · {{ queued: '답변 대기', running: '답변 작성 중', succeeded: '답변 완료', failed: '답변 실패' }[item.state]}</p>
       {item.result?.answer?.paragraphs?.map((paragraph, j) => <p key={j}>{paragraph}</p>)}
       {item.result?.answer?.limitations?.map((limitation, j) => <p className="muted" key={j}>{limitation}</p>)}
