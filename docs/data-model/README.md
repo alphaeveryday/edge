@@ -20,6 +20,10 @@
 
 도메인 경계를 넘는 FK의 대상 테이블은 관계 이해에 필요한 컨텍스트로 상세 ERD에 포함한다.
 
+## ETF Orca 앱 DB
+
+ETF Orca app-api 의 자체 Flyway 세트(회원·관심종목·투표·커뮤니티 원본)는 `libs/schema` 밖에 있다 — [앱 DB ERD](../../apps/etforca/app-api/docs/erd.md).
+
 ## On-Prem 세트
 
 Flyway 세트는 둘이고 위 도메인은 Cloud 세트다. 증권사 관리 환경에 배포되는 On-Prem 세트는
