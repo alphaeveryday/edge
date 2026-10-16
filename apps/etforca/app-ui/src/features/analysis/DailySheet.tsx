@@ -105,7 +105,7 @@ export function DailySheet({ code, daily: d, open, onClose, entry, withVote, lin
                 <Text style={styles.todayCap}>오늘 추가된 것 · {d.todayDate}</Text>
               </View>
               <View style={{ gap: 9, marginTop: 11 }}>
-                {d.today.map((t) => <Text key={t} style={styles.todayLine}><Text style={styles.hl}>{t}</Text></Text>)}
+                {d.today.map((t) => <Text key={t} style={styles.todayLine}>{t}</Text>)}
               </View>
             </View>
           )}
@@ -186,7 +186,6 @@ const useStyles = createStyles((colors) => ({
   todayDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: colors.down },
   todayCap: { fontFamily: fam.extrabold, fontSize: 13, color: colors.downDeep },
   todayLine: { fontFamily: fam.regular, fontSize: 15, lineHeight: 25, color: colors.text },
-  hl: { backgroundColor: colors.highlight },
   arg: { marginTop: 18, borderRadius: radius.card, padding: 12, marginHorizontal: -12 },
   argHead: { flexDirection: 'row', gap: 10, alignItems: 'baseline' },
   argNo: { fontFamily: fam.monoBold, fontSize: 12, color: colors.textDisabled },
