@@ -1,0 +1,24 @@
+"""Newsletter jobs share the existing analysis worker and its restricted tool harness."""
+import logging
+import os
+
+from . import newsletter_store
+from .newsletter_agent import write_card
+
+log = logging.getLogger('portfolio-newsletter')
+
+
+async def work_once():
+    job = newsletter_store.claim_content()
+    if not job:
+        return False
+    try:
+        result = await write_card({'instrument_id': job['instrument_id'], 'name': job['name']},
+                                  job['edition'], os.environ['DEEPSEEK_API_KEY'])
+        newsletter_store.finish_content(job, value=result)
+        log.info('instrument=%s edition=%s newsletter=ready', job['instrument_id'], job['edition'])
+    except Exception as error:
+        # No raw prompts, account information, recipient addresses or provider response bodies in logs.
+        newsletter_store.finish_content(job, failure=type(error).__name__)
+        log.warning('instrument=%s edition=%s newsletter=failed code=%s', job['instrument_id'], job['edition'], type(error).__name__)
+    return True

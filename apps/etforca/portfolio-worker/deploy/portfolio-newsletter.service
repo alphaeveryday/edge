@@ -1,0 +1,10 @@
+[Unit]
+Description=ETF Orca newsletter delivery
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/edge-portfolio/current/deploy
+ExecStart=/usr/bin/docker compose --env-file /opt/edge-portfolio/runtime.env --profile newsletter run --rm --no-deps newsletter
+TimeoutStartSec=300

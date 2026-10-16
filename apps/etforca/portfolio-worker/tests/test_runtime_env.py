@@ -15,7 +15,7 @@ def test_database_password_is_encoded_but_postgres_receives_the_original():
         {'host': 'edge-dev.cru6wwggoppd.ap-northeast-2.rds.amazonaws.com', 'dbname': 'edge', 'username': 'edge_analysis_v2_api_reader', 'password': password})
     assert values['PORTFOLIO_DB_PASSWORD'] == password
     assert values['EXA_API_KEY'] == 'exa-test'
-    for key in ('PORTFOLIO_DATABASE_URL', 'PORTFOLIO_OUTLOOK_DSN'):
+    for key in ('PORTFOLIO_DATABASE_URL', 'PORTFOLIO_OUTLOOK_DSN', 'PORTFOLIO_NEWSLETTER_DATABASE_URL'):
         assert conninfo_to_dict(values[key])['password'] == password
     assert 'PORTFOLIO_DB_PASSWORD="a@:/?#%$$\'z"' in runtime_env.dotenv(values)
 

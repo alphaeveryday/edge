@@ -1,0 +1,11 @@
+[Unit]
+Description=Check verified subscriptions and published portfolio newsletters
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=20s
+Unit=portfolio-newsletter.service
+
+[Install]
+WantedBy=timers.target

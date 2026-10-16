@@ -35,7 +35,7 @@ def main():
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / 'release.tar.gz'
         with tarfile.open(archive, 'w:gz') as tar:
-            for name in ('Dockerfile', 'pyproject.toml', 'uv.lock', 'src', 'deploy/compose.yml', 'deploy/Caddyfile', 'deploy/runtime_env.py', 'deploy/admin_smoke.py'):
+            for name in ('Dockerfile', 'pyproject.toml', 'uv.lock', 'src', 'deploy/compose.yml', 'deploy/Caddyfile', 'deploy/runtime_env.py', 'deploy/admin_smoke.py', 'deploy/portfolio-newsletter.service', 'deploy/portfolio-newsletter.timer'):
                 path = ROOT / name
                 for child in sorted(path.rglob('*')) if path.is_dir() else [path]:
                     if child.is_file() and '__pycache__' not in child.parts:
@@ -58,14 +58,17 @@ def main():
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/portfolio/runtime --query SecretString --output text > /opt/edge-portfolio/runtime.json',
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/analysis-v2/api-reader --query SecretString --output text > /opt/edge-portfolio/reader.json',
         f'python3 {directory}/deploy/runtime_env.py', f'cd {directory}/deploy',
-        'docker compose --env-file /opt/edge-portfolio/runtime.env build',
+        'docker compose --env-file /opt/edge-portfolio/runtime.env --profile newsletter build',
+        'systemctl stop portfolio-newsletter.timer portfolio-newsletter.service 2>/dev/null || true',
         # Keep the old API, database and outlook service alive until the worker finishes.
         'docker compose --env-file /opt/edge-portfolio/runtime.env stop --timeout 630 worker',
         'docker compose --env-file /opt/edge-portfolio/runtime.env up -d --wait --wait-timeout 120',
         'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -c "import urllib.request; urllib.request.urlopen(\'http://127.0.0.1:8092/health\')"',
         f'python3 {directory}/deploy/admin_smoke.py',
         f'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -m edge_portfolio.verification --version {version} --register-only',
-        f'ln -sfn {directory} /opt/edge-portfolio/current']
+        f'ln -sfn {directory} /opt/edge-portfolio/current',
+        f'install -m 644 {directory}/deploy/portfolio-newsletter.service {directory}/deploy/portfolio-newsletter.timer /etc/systemd/system/',
+        'systemctl daemon-reload', 'systemctl enable --now portfolio-newsletter.timer']
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
         Parameters={'commands': commands, 'executionTimeout': ['1200']})['Command']['CommandId']
     print(f'Release {digest}; SSM {command}', flush=True)
