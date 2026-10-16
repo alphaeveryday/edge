@@ -97,7 +97,6 @@ edgesignal의 MTS 조회 표면(publication-api)에 총 75회의 부하 실험�
 
 전체 과정은 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis)과 [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler)에서 확인할 수 있습니다.
 
-위 수치는 기존 부하 실험의 조건과 결과입니다. 이번 문서 작성에서 부하 실험을 다시 수행한 값이 아닙니다.
 
 ## 설계 결정
 
