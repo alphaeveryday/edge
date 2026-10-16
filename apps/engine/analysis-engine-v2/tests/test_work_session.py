@@ -12,6 +12,14 @@ def make(tmp_path):
     return WorkSession(tmp_path/'work', tmp_path/'artifacts', ('cause-investigation', 'analysis-report-writing'), [])
 
 
+def test_unchanged_revision_can_finish_with_one_maintenance_judgment(tmp_path):
+    session = WorkSession(tmp_path/'work', tmp_path/'artifacts', ('revision-investigation',), [])
+    assert session.continuation() is not None  # An empty list is not a completed review.
+    session.update_tasks([{'content': 'Does new information change the previous explanation?',
+        'status': 'completed', 'answer': 'No new observation or expired claim changes the explanation.'}])
+    assert session.continuation() is None  # No invented rival hypotheses or repeated full investigation.
+
+
 def test_external_search_original_is_checkpointed_for_the_next_revision(tmp_path):
     session = make(tmp_path)
     response = {'content': [{'text': 'original search material'}]}

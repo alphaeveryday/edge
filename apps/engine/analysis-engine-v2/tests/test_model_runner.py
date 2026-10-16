@@ -21,11 +21,13 @@ SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': Fal
 
 
 @pytest.mark.parametrize('kind', ['movement', 'outlook'])
-def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_path, kind):
+@pytest.mark.parametrize('revision', [False, True])
+def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_path, kind, revision):
     """Keep the reviewed instructions identical to the model and audit inputs."""
     import edge_analysis_v2.agent.runner as runner
     from edge_analysis_v2.agent.skill_session import SOURCE, body
-    from edge_analysis_v2.analysis.service import TASK_SKILLS
+    from edge_analysis_v2.analysis.service import TASK_SKILLS, REVISION_SKILLS
+    selected_skills = REVISION_SKILLS if revision else TASK_SKILLS
 
     prompt = load_prompt(Path(runner.__file__).parents[1] / 'prompts' / f'{kind}.yaml')
     captured = []
@@ -38,7 +40,7 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
 
     result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
         call=lambda name, args: None, output_schema=SCHEMA, artifacts=tmp_path,
-        key='test-secret', model='deepseek-flash', client_factory=Client, skills=TASK_SKILLS))
+        key='test-secret', model='deepseek-flash', client_factory=Client, skills=selected_skills))
 
     assert result == {'summary': 'ok'}
     base = (SOURCE.parent/'prompts/base.md').read_text(encoding='utf-8')
@@ -46,14 +48,14 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
     task = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
     # The method comes first, then the task, then how to write the result.
-    assert task.index('# 원인 조사') < task.index(prompt) < task.index('# 분석 결과 작성')
+    assert task.index('# 수정 조사' if revision else '# 원인 조사') < task.index(prompt) < task.index('# 분석 결과 작성')
     # The declared skills reach the task in full, once, without a Skill or Read call; the others do not.
-    for name in TASK_SKILLS:
+    for name in selected_skills:
         assert task.count(body((SOURCE/name/'SKILL.md').read_text(encoding='utf-8'))) == 1
-    assert '사건에서 ETF 가격 판단까지' not in task and '재귀 분석의 적용 방법' not in task
+    assert '사건에서 ETF 가격 판단까지' in task
     query = json.loads((tmp_path/'model_input.json').read_text(encoding='utf-8'))
     assert query['workspace_instructions']['content'] == task
-    assert json.loads((tmp_path/'skills.json').read_text(encoding='utf-8'))['declared'] == list(TASK_SKILLS)
+    assert json.loads((tmp_path/'skills.json').read_text(encoding='utf-8'))['declared'] == list(selected_skills)
 
 
 def test_a_question_gets_the_base_rules_and_its_prompt_and_is_handed_over_as_it_is(tmp_path):
