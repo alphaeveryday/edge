@@ -12,6 +12,26 @@
 - `deploy-portfolio`는 dev 코드만 사용한다. Terraform 성공 후 또는 서비스 코드 변경 시 실행하며, SSM 파라미터 `/edge/portfolio/deployment`에서 배포 대상을 읽는다. SSM으로 API·워커를 배포하고 `/portfolio/` 파일만 업로드한다. CloudFront 작업은 캐시 무효화뿐이다.
 - 기존 `deploy-app-landing`은 루트 HTML·assets만 소유하므로 포트폴리오 배포와 파일이 충돌하지 않는다.
 
+## 고객 화면 이용 분석
+
+포트폴리오 UI는 기존 [PostHog 웹 프로젝트 658097](https://us.posthog.com/project/658097)에 수집한다. `analytics.ts`의 공개 프로젝트 키는 랜딩과 같고, 개인 API 키나 추가 서버 환경변수는 필요 없다. `etforca.com/portfolio/`와 www 도메인의 같은 경로에서만 실행한다. 로컬 미리보기·관리자 진입점에서는 수집하지 않는다. SDK의 봇 제외는 유지한다.
+
+PostHog **Product analytics → New insight → Trends**에서 아래 이벤트와 속성을 사용한다. 모든 포트폴리오 이벤트에 `screen`이 있으므로 랜딩과 분리할 수 있다.
+
+| 확인할 내용 | 이벤트·집계 |
+|---|---|
+| 화면별 실제 방문 수 | `$pageview`의 Total count, Breakdown `screen` |
+| 화면별 총 체류 시간 | `portfolio_screen_engagement`의 Sum `visible_seconds`, Breakdown `screen` |
+| 방문 1회당 평균 체류 | 위 체류 합계 ÷ 같은 화면의 `$pageview` 수. 15초 단위 이벤트의 평균을 방문당 평균으로 사용하지 않는다 |
+| 스크롤이 멈춘 구간 | `portfolio_scroll_pause`의 Total count 또는 Sum `pause_seconds`, Breakdown `section`, 필요시 `screen = result` 필터 |
+| 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
+
+`screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`이며 그 밖의 위치는 화면 이름으로 집계한다.
+
+체류는 탭이 보이는 시간이며 실제 독서·집중 시간을 뜻하지 않는다. 숨긴 화면은 방문으로도 세지 않는다. 스크롤·레이아웃 변화 없이 2초 이상 머문 구간을 다음 이동·숨김·종료 때 기록한다. 화면 가운데의 구간을 기준으로 하며, 펼치기 등으로 레이아웃이 바뀌면 위치를 갱신한다. 앱 전환·페이지 이탈의 마지막 이벤트는 즉시 Beacon으로 넘기지만 네트워크 차단이나 브라우저 강제 종료 시 전달을 보장하지 않는다.
+
+기존 `cookieless_mode: always` 정책을 유지한다. 자동 클릭·본문 수집, 세션 녹화, 설문·기능 플래그는 끄고 이벤트·속성 허용 목록만 전송한다. 입력 내용·이메일·보유 종목·보고서 본문·분석 ID·URL 쿼리·해시는 보내지 않는다. 사용자 식별자를 연결하지 않으며 날짜를 넘긴 동일 사용자 추적은 하지 않는다. 결과별 배치가 달라지는 보고서는 구간별 이벤트로 비교한다. 프로젝트의 세션 녹화·히트맵 설정을 바꾸거나 저장된 대시보드를 자동 생성하지 않는다.
+
 ## 권한
 
 - GitHub는 OIDC 임시 자격증명을 쓴다. 배포 역할에는 지정 버킷·SSM 대상만 추가하고 AWS 관리 키를 저장하지 않는다. Terraform apply 역할은 기존 저장소의 dev 전용 신뢰 정책을 따른다.

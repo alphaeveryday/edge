@@ -8,6 +8,7 @@ import './report.css';
 import './styles.css';
 import { ProgressView } from './ProgressView';
 import { startPresence } from './presence';
+import { trackScreen } from './analytics';
 
 function App() {
   useEffect(startPresence, []);
@@ -16,6 +17,8 @@ function App() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const screen = !jobId ? null : !job ? 'loading' : job.state === 'succeeded' ? 'result' : job.state;
+  useEffect(() => screen ? trackScreen(screen) : undefined, [screen]);
   useEffect(() => {
     if (!jobId) return;
     let stopped = false;
