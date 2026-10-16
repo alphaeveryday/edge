@@ -1,6 +1,5 @@
 package com.edge.app.application.auth;
 
-import com.edge.app.adapter.integration.mail.Mailer;
 import com.edge.app.application.auth.provided.AuthResult;
 import com.edge.app.application.auth.provided.Authenticator;
 import com.edge.app.application.auth.provided.LoginRequest;
@@ -14,6 +13,7 @@ import com.edge.app.application.auth.required.AccessTokenIssuer;
 import com.edge.app.application.auth.required.AppleTokenClient;
 import com.edge.app.application.auth.required.SocialIdentityVerifier;
 import com.edge.app.application.mail.MailQuota;
+import com.edge.app.application.mail.required.EmailSender;
 import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.AppleTokenRepository;
 import com.edge.app.application.member.required.DeviceRepository;
@@ -67,7 +67,7 @@ public class AuthService implements Authenticator, PasswordResetter {
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordResetCodeRepository resetCodeRepository;
     private final SignupCodeRepository signupCodeRepository;
-    private final Mailer mailer;
+    private final EmailSender mailer;
     private final MailQuota mailQuota;
     private final ReviewAccount reviewAccount;
     private final TransactionTemplate tx;

@@ -1,8 +1,8 @@
 package com.edge.app.adapter.webapi.auth;
 
-import com.edge.app.adapter.integration.mail.Mailer;
 import com.edge.app.application.auth.required.AppleTokenClient;
 import com.edge.app.application.auth.required.SocialIdentityVerifier;
+import com.edge.app.application.mail.required.EmailSender;
 import com.edge.app.domain.member.MemberFixture;
 import com.edge.app.domain.member.Provider;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
@@ -39,9 +39,9 @@ import static org.mockito.Mockito.when;
  * 외부 JWKS 에 의존하는 소셜 검증기의 대체
  */
 @WebApiAdapterTest
-@MockitoBean(types = {SocialIdentityVerifier.class, Mailer.class, AppleTokenClient.class})
+@MockitoBean(types = {SocialIdentityVerifier.class, EmailSender.class, AppleTokenClient.class})
 record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTemplate jdbc,
-        SocialIdentityVerifier idTokenVerifier, Mailer mailer, AppleTokenClient appleTokens) {
+        SocialIdentityVerifier idTokenVerifier, EmailSender mailer, AppleTokenClient appleTokens) {
     @Test
     void signupThenTokensWorkAndRotate() {
         var auth = signup("a@example.com");

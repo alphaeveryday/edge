@@ -1,5 +1,6 @@
 package com.edge.app.adapter.integration.mail;
 
+import com.edge.app.application.mail.required.EmailSender;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -20,12 +21,13 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class Mailer {
+public class Mailer implements EmailSender {
     private final ObjectProvider<JavaMailSender> smtp;
 
     @Value("${spring.mail.username:}")
     private String from;
 
+    @Override
     @Async
     public void send(String to, String subject, String text) {
         JavaMailSender sender = smtp.getIfAvailable();
