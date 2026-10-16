@@ -17,7 +17,7 @@ const reasons: Record<string, string> = {
 
 export function ExecutionPlan({ plan }: { plan: Execution }) {
   const actionable = plan.status === 'ready' || plan.status === 'conditional';
-  return <section className="account-plans execution-plan">
+  return <section className="account-plans execution-plan" data-analytics-section="execution">
     <h4>금액으로 보는 리밸런싱</h4>
     <p className="notice">{plan.status === 'ready' ? '입력한 평가금액과 추가 자금으로 계산한 계획이에요.' : plan.status === 'conditional' ? '추가 납입으로 목표에 접근하는 조건부 계획이에요.' : plan.status === 'infeasible' ? '현재 조건으로는 이 목표를 실행할 수 없어요.' : '실행 전에 아래 정보를 확인해야 해요.'}</p>
     {plan.reasons.map(reason => { const [code, account] = reason.split(':'); return <p className="notice" key={reason}>{account && `${account} · `}{code === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' && plan.status === 'infeasible' ? '기존 목표가 요청하신 조건에 맞지 않아 실행할 수 없어요.' : reasons[code] || '실행 조건을 더 확인해야 해요.'}</p>; })}
