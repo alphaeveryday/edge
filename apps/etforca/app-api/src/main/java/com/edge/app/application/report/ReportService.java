@@ -1,7 +1,7 @@
 package com.edge.app.application.report;
 
-import com.edge.app.adapter.integration.mail.Mailer;
 import com.edge.app.application.mail.MailQuota;
+import com.edge.app.application.mail.required.EmailSender;
 import com.edge.app.application.member.required.MemberRepository;
 import com.edge.app.application.post.required.CommentRepository;
 import com.edge.app.application.post.required.PostRepository;
@@ -26,7 +26,7 @@ public class ReportService {
     private final PostRepository postRepository;
     private final CommentRepository commentRepository;
     private final MemberRepository memberRepository;
-    private final Mailer mailer;
+    private final EmailSender mailer;
     private final MailQuota mailQuota;
 
     @Value("${app.mail.operator}")

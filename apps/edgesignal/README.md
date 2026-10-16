@@ -32,27 +32,29 @@ EDGE 분석 엔진은 공시·뉴스·수급 같은 공개 정보를 분석해 E
 
 ## BYOC와 데이터 경계
 
-![기존 BYOC 배포 토폴로지: 벤더 분석 환경과 증권사 검수·서빙 환경](../../docs/assets/readme/byoc-topology.drawio.png)
+![BYOC 배포 토폴로지: 벤더 분석 환경과 증권사 검수·서빙 환경](../../docs/assets/readme/byoc-topology.drawio.png)
+
+그림은 [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)의 목표 구성입니다. 체크섬 검증과 mTLS 인증서 바인딩은 아직 구현 전입니다.
 
 납품 형태는 **BYOC(Bring Your Own Cloud)**입니다. 벤더가 수집·분석 환경을 운영하고, 검수·서빙 환경은 증권사 명의 클라우드 계정에 배치합니다. 벤더는 컨테이너 이미지·IaC·마이그레이션을 제공하고, 실행 주체는 증권사입니다.
 
-두 환경의 연결은 증권사 쪽에서 시작하는 Pull 경로입니다. 고객 데이터는 증권사 관리 환경에 두는 설계입니다. 이 B2B 데이터 경계는 개인 입력을 받는 ORCA의 데이터 구조와 구분합니다. [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)
-
-그림은 [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)의 목표 구성입니다. 체크섬 검증과 mTLS 인증서 바인딩은 아직 구현 전입니다.
+두 환경의 연결은 증권사 쪽에서 시작하는 Pull 경로입니다. 고객 데이터는 증권사 관리 환경에 두는 설계입니다. 이 B2B 데이터 경계는 개인 입력을 받는 ORCA의 데이터 구조와 구분합니다.
 
 ## 상세 아키텍처
 
 ### 콘솔 정보구조
 
-![기존 Information Architecture](../../docs/assets/readme/IA.drawio.png)
+![콘솔 정보구조: 테넌트 콘솔과 슈퍼 어드민 콘솔의 메뉴와 화면](../../docs/assets/readme/IA.drawio.png)
 
 왼쪽이 기업 검수자의 테넌트 콘솔, 오른쪽이 플랫폼 운영자의 슈퍼 어드민 콘솔입니다. 화면과 권한의 상세 계약은 [콘솔 정보구조](../../docs/console-ia)에 있습니다.
 
 ### UI·API·저장소 연결
 
-![기존 Application Architecture](../../docs/assets/readme/AA.drawio.png)
+![애플리케이션 아키텍처: 화면 기능이 호출하는 API와 그 API가 읽고 쓰는 저장소](../../docs/assets/readme/AA.drawio.png)
 
-화면 기능이 어느 API를 호출하고 어느 저장소를 읽고 쓰는지 나타냅니다. 제품별 디렉터리 이동 이후의 모듈 위치는 [저장소 구조](../../docs/repo-structure.md)를 기준으로 읽습니다.
+루트 README의 시스템 아키텍처가 서비스 단위에서 멈추는 데 비해, 이 그림은 그 아래 층인 화면 기능, API, Repository의 대응을 보여줍니다. 왼쪽이 증권사 환경의 테넌트 콘솔, 오른쪽이 EDGE 환경의 슈퍼 어드민 콘솔입니다.
+
+설계 시점 그림이라 현행과 다른 곳이 있습니다. 왼쪽 위 채널계의 "금융사 구축 API에 위젯 임베드" 경로와 계정계의 "종목 보유 여부 확인" 조회는 [ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md)으로 폐기되어 지금은 Reverse Proxy 뒤 MTS 서빙이고, 오른쪽 위 분석 파이프라인의 현행 구성은 [엔진 README](../engine/README.md#데이터-파이프라인)의 그림이 정본입니다. 모듈 위치는 [저장소 구조](../../docs/repo-structure.md)를 기준으로 읽습니다.
 
 ### 테넌트 데이터
 
@@ -62,20 +64,19 @@ Raw Event Store, 정책 평가와 게시 상태의 물리 구조는 [온프렘 �
 
 배포 위치는 디렉터리가 아니라 이 표가 담당합니다([ADR-0061](../../docs/adr/0061-product-axis-directory-layout.md)).
 
-| 모듈 | 런타임 | 플레인 | 역할 |
+| 모듈 | 런타임 | 환경 | 역할 |
 |---|---|---|---|
-| tenant-sync-api | JVM | cloud | Sync Agent Pull 표면 |
-| super-admin-api | JVM | cloud | 플랫폼 운영자 API |
-| super-admin-ui | Node | cloud | 플랫폼 운영자 콘솔 |
-| sync-agent | JVM | onprem | DMZ의 Cloud Pull과 내부망 무변형 릴레이 |
-| intake | JVM | onprem | 내부망 Raw Event Store 적재 |
-| screening-worker | JVM | onprem | 정책 평가와 상태 분기 |
-| publication-api | JVM | onprem | MTS 조회 표면 |
-| tenant-console-api | JVM | onprem | 테넌트 검수·정책 API |
-| tenant-console-ui | Node | onprem | 테넌트 검수·정책 콘솔 |
+| tenant-sync-api | JVM | EDGE Cloud 환경 (edge-cloud) | Sync Agent Pull 표면 |
+| super-admin-api | JVM | EDGE Cloud 환경 (edge-cloud) | 플랫폼 운영자 API |
+| super-admin-ui | Node | EDGE Cloud 환경 (edge-cloud) | 플랫폼 운영자 콘솔 |
+| sync-agent | JVM | 증권사 Cloud 환경 (edge-onprem) | DMZ의 Cloud Pull과 내부망 무변형 릴레이 |
+| intake | JVM | 증권사 Cloud 환경 (edge-onprem) | 내부망 Raw Event Store 적재 |
+| screening-worker | JVM | 증권사 Cloud 환경 (edge-onprem) | 정책 평가와 상태 분기 |
+| publication-api | JVM | 증권사 Cloud 환경 (edge-onprem) | MTS 조회 표면 |
+| tenant-console-api | JVM | 증권사 Cloud 환경 (edge-onprem) | 테넌트 검수·정책 API |
+| tenant-console-ui | Node | 증권사 Cloud 환경 (edge-onprem) | 테넌트 검수·정책 콘솔 |
 
-* cloud: 벤더 운영 환경
-* onprem: 증권사 통제 환경. 증권사 명의 클라우드 계정 포함([ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md))
+환경 이름은 위 그림들과 같고, 괄호 안은 배포 아티팩트 이름입니다. 증권사 Cloud 환경은 증권사 명의 클라우드 계정을 포함합니다([ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md)).
 
 모듈 역할의 상세는 [저장소 구조](../../docs/repo-structure.md#apps--배포-단위)가 정본입니다.
 

@@ -1,6 +1,6 @@
 package com.edge.app.adapter.webapi.report;
 
-import com.edge.app.adapter.integration.mail.Mailer;
+import com.edge.app.application.mail.required.EmailSender;
 import com.edge.app.domain.member.MemberFixture;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
 import org.junit.jupiter.api.BeforeAll;
@@ -29,8 +29,8 @@ import static org.mockito.Mockito.verify;
 
 /** 악성 사용자 차단과 신고 대응이라는 스토어 심사 요건의 서버 쪽 보장 */
 @WebApiAdapterTest
-@MockitoBean(types = Mailer.class)
-record ModerationApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTemplate jdbc, Mailer mailer) {
+@MockitoBean(types = EmailSender.class)
+record ModerationApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTemplate jdbc, EmailSender mailer) {
     record Member(String token, String handle) {
     }
 
