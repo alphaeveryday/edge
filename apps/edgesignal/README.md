@@ -46,7 +46,7 @@ BYOC(Bring Your Own Cloud)입니다.
 
 증권사 환경 안의 경로는 다음 순서입니다.
 
-1. sync-agent(DMZ)가 벤더의 tenant-sync-api를 mTLS로 Pull해 받은 바이트를 무변형으로 내부망에 넘김. 전송 무결성은 mTLS가 맡고, 앱 수준 체크섬 검증은 서명 계약으로 이관([ADR-0040](../../docs/adr/0040-bundle-integrity-deferred-to-signing.md))
+1. sync-agent(DMZ)가 벤더의 tenant-sync-api를 mTLS로 Pull해 받은 바이트를 무변형으로 내부망에 넘김. 전송 무결성은 mTLS가 맡고, 앱 수준 체크섬 검증은 서명 계약으로 이관([ADR-0040](../../docs/adr/0040-sync-integrity-mvp-to-signing.md))
 2. intake(내부망)가 Raw Event Store에 멱등 적재
 3. screening-worker가 금칙어·최소 근거 수·최소 확신도 정책을 평가해 자동 게시·검수 대기·차단으로 분기
 4. 검수자가 tenant-console에서 대기 건을 승인·반려
