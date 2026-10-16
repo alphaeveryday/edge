@@ -64,20 +64,19 @@ Raw Event Store, 정책 평가와 게시 상태의 물리 구조는 [온프렘 �
 
 배포 위치는 디렉터리가 아니라 이 표가 담당합니다([ADR-0061](../../docs/adr/0061-product-axis-directory-layout.md)).
 
-| 모듈 | 런타임 | 플레인 | 역할 |
+| 모듈 | 런타임 | 환경 | 역할 |
 |---|---|---|---|
-| tenant-sync-api | JVM | cloud | Sync Agent Pull 표면 |
-| super-admin-api | JVM | cloud | 플랫폼 운영자 API |
-| super-admin-ui | Node | cloud | 플랫폼 운영자 콘솔 |
-| sync-agent | JVM | onprem | DMZ의 Cloud Pull과 내부망 무변형 릴레이 |
-| intake | JVM | onprem | 내부망 Raw Event Store 적재 |
-| screening-worker | JVM | onprem | 정책 평가와 상태 분기 |
-| publication-api | JVM | onprem | MTS 조회 표면 |
-| tenant-console-api | JVM | onprem | 테넌트 검수·정책 API |
-| tenant-console-ui | Node | onprem | 테넌트 검수·정책 콘솔 |
+| tenant-sync-api | JVM | EDGE Cloud 환경 (edge-cloud) | Sync Agent Pull 표면 |
+| super-admin-api | JVM | EDGE Cloud 환경 (edge-cloud) | 플랫폼 운영자 API |
+| super-admin-ui | Node | EDGE Cloud 환경 (edge-cloud) | 플랫폼 운영자 콘솔 |
+| sync-agent | JVM | 증권사 Cloud 환경 (edge-onprem) | DMZ의 Cloud Pull과 내부망 무변형 릴레이 |
+| intake | JVM | 증권사 Cloud 환경 (edge-onprem) | 내부망 Raw Event Store 적재 |
+| screening-worker | JVM | 증권사 Cloud 환경 (edge-onprem) | 정책 평가와 상태 분기 |
+| publication-api | JVM | 증권사 Cloud 환경 (edge-onprem) | MTS 조회 표면 |
+| tenant-console-api | JVM | 증권사 Cloud 환경 (edge-onprem) | 테넌트 검수·정책 API |
+| tenant-console-ui | Node | 증권사 Cloud 환경 (edge-onprem) | 테넌트 검수·정책 콘솔 |
 
-* cloud: 벤더 운영 환경
-* onprem: 증권사 통제 환경. 증권사 명의 클라우드 계정 포함([ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md))
+환경 이름은 위 그림들과 같고, 괄호 안은 배포 아티팩트 이름입니다. 증권사 Cloud 환경은 증권사 명의 클라우드 계정을 포함합니다([ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md)).
 
 모듈 역할의 상세는 [저장소 구조](../../docs/repo-structure.md#apps--배포-단위)가 정본입니다.
 
