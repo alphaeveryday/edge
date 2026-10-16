@@ -82,9 +82,9 @@ def main():
         f'install -m 644 {directory}/deploy/portfolio-newsletter.service {directory}/deploy/portfolio-newsletter.timer /etc/systemd/system/',
         'systemctl daemon-reload', 'systemctl enable --now portfolio-newsletter.timer', 'trap - EXIT']
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
-        Parameters={'commands': commands, 'executionTimeout': ['1200']})['Command']['CommandId']
+        Parameters={'commands': commands, 'executionTimeout': ['1800']})['Command']['CommandId']
     print(f'Release {digest}; SSM {command}', flush=True)
-    for _ in range(150):
+    for _ in range(195):
         time.sleep(10)
         result = ssm.get_command_invocation(CommandId=command, InstanceId=config['instance_id'])
         if result['Status'] == 'Success':

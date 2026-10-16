@@ -1,6 +1,7 @@
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -96,6 +97,29 @@ def test_signup_api_requires_explicit_consent_and_origin_but_confirmation_needs_
         assert client.post('/api/portfolio/newsletter/confirm', headers=headers, json={'token': token}).json() == {'status': 'confirmed', 'delivery_ready': False}
 
 
+def test_readiness_outage_cannot_turn_a_committed_confirmation_into_an_error(newsletter_db, monkeypatch, caplog):
+    from psycopg import OperationalError
+    job, owner = newsletter_db
+    news.subscribe(job, owner, 'reader@example.test')
+    with store.connect() as db:
+        token = db.execute('SELECT confirmation_token FROM portfolio_newsletter_subscriptions').fetchone()['confirmation_token']
+    original = news.connect
+    calls = 0
+    def connect():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OperationalError('readiness lookup failed')
+        return original()
+    monkeypatch.setattr(news, 'connect', connect)
+    with TestClient(api.app, base_url='http://localhost:5180') as client:
+        response = client.post('/api/portfolio/newsletter/confirm', headers={'origin': 'http://localhost:5180'}, json={'token': token})
+    assert response.status_code == 200 and response.json() == {'status': 'confirmed', 'delivery_ready': False}
+    assert 'newsletter_readiness_unavailable' in caplog.text
+    with store.connect() as db:
+        assert db.execute('SELECT status,token_hash FROM portfolio_newsletter_subscriptions').fetchone() == {'status': 'confirmed', 'token_hash': None}
+
+
 def test_daily_content_claim_is_shared_and_late_result_is_fenced(newsletter_db):
     with store.connect() as db:
         db.execute("INSERT INTO portfolio_newsletter_content(instrument_id,edition,name) VALUES ('US:QQQ',(now() AT TIME ZONE 'Asia/Seoul')::date,'QQQ')")
@@ -106,9 +130,9 @@ def test_daily_content_claim_is_shared_and_late_result_is_fenced(newsletter_db):
     with store.connect() as db:
         db.execute("UPDATE portfolio_newsletter_content SET started_at=now()-interval '13 minutes'")
     new = news.claim_content()
-    news.finish_content(old, value={'issue': 'stale'})
+    assert news.finish_content(old, value={'issue': 'stale'}) is False
     assert news.content('US:QQQ', new['edition']) is None
-    news.finish_content(new, value={'issue': 'current'})
+    assert news.finish_content(new, value={'issue': 'current'}) is True
     assert news.content('US:QQQ', new['edition']) == {'issue': 'current'}
 
 
@@ -154,14 +178,33 @@ def test_activation_retry_cannot_overwrite_a_later_unsubscribe(newsletter_db):
         assert db.execute('SELECT status FROM portfolio_newsletter_subscriptions').fetchone()['status'] == 'confirmed'
 
 
-def test_older_activation_retry_cannot_replace_newer_verified_holdings(newsletter_db, monkeypatch):
+@pytest.mark.parametrize('during_selection', [False, True])
+def test_older_activation_retry_cannot_replace_newer_verified_holdings(newsletter_db, monkeypatch, during_selection):
     job, owner = newsletter_db
     news.subscribe(job, owner, 'reader@example.test')
     with store.connect() as db:
         old = db.execute("UPDATE portfolio_newsletter_subscriptions SET status='confirmed',confirmed_at=now()-interval '1 day',checked_at=now() RETURNING id").fetchone()['id']
-        db.execute("""INSERT INTO portfolio_newsletter_subscriptions(id,owner,email,job_id,holdings,status,confirmed_at)
-            SELECT 'newest',owner,email,job_id,'[{"instrument_id":"US:SPY","name":"SPY"}]'::jsonb,'confirmed',now()
-            FROM portfolio_newsletter_subscriptions WHERE id=%s""", (old,))
+    def confirm_newer():
+        with store.connect() as db:
+            db.execute("""INSERT INTO portfolio_newsletter_subscriptions(id,owner,email,job_id,holdings,status,confirmed_at)
+                SELECT 'newest',owner,email,job_id,'[{"instrument_id":"US:SPY","name":"SPY"}]'::jsonb,'confirmed',now()
+                FROM portfolio_newsletter_subscriptions WHERE id=%s""", (old,))
+    if during_selection:
+        original = sender.connect
+        inserted = False
+        @contextmanager
+        def connect():
+            with original() as db:
+                def execute(query, params=None):
+                    nonlocal inserted
+                    if not inserted and query.startswith('SELECT * FROM portfolio_newsletter_subscriptions'):
+                        inserted = True
+                        confirm_newer()  # Concurrent confirmation after pruning, before selecting the batch.
+                    return db.execute(query, params)
+                yield SimpleNamespace(execute=execute)
+        monkeypatch.setattr(sender, 'connect', connect)
+    else:
+        confirm_newer()
     monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
     ses = SimpleNamespace(get_contact=lambda **kw: {'TopicPreferences': [{'TopicName': sender.TOPIC, 'SubscriptionStatus': 'OPT_IN'}]})
     sender.activate_confirmed(ses)
@@ -277,6 +320,14 @@ async def test_stale_or_unpublished_outlook_falls_back_to_news_research():
         assert await agent.published_outlook(client, 'US:QQQ', date(2026, 10, 16)) is None
 
 
+async def test_future_analysis_cannot_be_reused_as_a_published_morning_outlook(monkeypatch):
+    now = datetime(2026, 10, 16, 8, 30, tzinfo=agent.KST)
+    monkeypatch.setattr(agent, 'datetime', SimpleNamespace(fromisoformat=datetime.fromisoformat, now=lambda tz: now.astimezone(tz)))
+    data = {'publication': {'etf_code': '091160', 'analysis_at': '2026-10-16T18:00:00+09:00', 'published_at': '2026-10-16T08:00:00+09:00'}}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=data))) as client:
+        assert await agent.published_outlook(client, 'KR:091160', date(2026, 10, 16)) is None
+
+
 @pytest.mark.parametrize('value', [None, [], {'publication': ['invalid']}, {'publication': {'etf_code': '091160', 'analysis_at': 1}}])
 async def test_malformed_publication_raises_the_recoverable_error(value):
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=value))) as client:
@@ -317,6 +368,25 @@ async def test_newsletter_harness_reuses_our_outlook_and_does_not_pass_customer_
     assert {tool['function']['name'] for tool in payloads[0]['tools']} == {'search_sources', 'fetch_source'}
 
 
+async def test_newsletter_requires_body_evidence_beyond_a_quote_for_its_issue_and_cause():
+    calls = []
+    evidence = SimpleNamespace(sources=[])
+    card = {'headline': '오늘의 소식', 'issue': '확인한 기업 발표', 'why_moved': '발표와 가격 변동의 관계', 'watch_next': '다음 실적 발표', 'source_ids': ['price']}
+    async def model(payload):
+        calls.append(payload)
+        if len(calls) == 2:
+            evidence.sources.append({'id': 'article', 'url': 'https://example.test/news', 'excerpt': '확인한 기업 발표 본문'})
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**card, 'source_ids': ['article'] if len(calls) == 2 else ['price']})}}]}
+    async def no_outlook(*args):
+        return None
+    from unittest.mock import patch
+    with patch.object(agent, 'published_outlook', no_outlook):
+        result = await agent.write_card({'instrument_id': 'US:QQQ', 'name': 'QQQ'}, date(2026, 10, 16), 'test',
+            model_call=model, evidence=evidence, quote_loader=lambda *_: {'id': 'price', 'url': 'https://example.test/price', 'excerpt': '{}'})
+    assert len(calls) == 2 and result['sources'] == [{'url': 'https://example.test/news'}]
+    assert any('뉴스·공시 본문을 조사' in m.get('content', '') for m in calls[-1]['messages'])
+
+
 def test_price_basis_uses_completed_etf_dates_and_never_intraday_or_index_values(monkeypatch):
     import pandas as pd
     import yfinance
@@ -344,6 +414,21 @@ async def test_long_editorial_output_gets_specific_length_feedback_and_can_finis
     assert result['issue'] == card['issue'] and len(calls) == 2
     assert '120' in json.dumps(calls[-1]['messages'], ensure_ascii=False)
     assert any('필드별 길이' in m['content'] for m in calls[-1]['messages'])
+
+
+async def test_structured_adapter_errors_are_repaired_without_restarting_research():
+    calls = []
+    card = {'headline': '짧은 제목', 'issue': '확인한 소식', 'why_moved': '가격 변동의 배경', 'watch_next': '다음 일정', 'source_ids': ['outlook']}
+    async def model(payload):
+        calls.append(payload)
+        if len(calls) <= 2:
+            raise ValueError(['STRUCTURED_OUTPUT_REQUIRED', 'STRUCTURED_OUTPUT_MIXED_CALLS'][len(calls) - 1])
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(card)}}]}
+    result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 16), 'test',
+        model_call=model, evidence=SimpleNamespace(sources=[]), quote_loader=lambda *_: None,
+        outlook={'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'})
+    assert result['issue'] == card['issue'] and len(calls) == 3
+    assert 'submit_report' in calls[-1]['messages'][-2]['content']
 
 
 def test_email_is_readable_escaped_and_has_plain_text_and_unsubscribe():
@@ -388,6 +473,23 @@ async def test_shutdown_after_newsletter_claim_does_not_start_research_or_spend_
     assert await newsletter_work.work_once(stopping) is False
     with store.connect() as db:
         assert db.execute('SELECT state,attempts FROM portfolio_newsletter_content').fetchone() == {'state': 'queued', 'attempts': 0}
+
+
+@pytest.mark.parametrize('failed', [False, True])
+async def test_discarded_late_result_is_never_logged_as_a_saved_outcome(monkeypatch, caplog, failed):
+    from edge_portfolio import newsletter_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setattr(news, 'claim_content', lambda: {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'edition': date(2026, 10, 16)})
+    monkeypatch.setattr(news, 'finish_content', lambda *args, **kwargs: False)
+    async def write(*args, **kwargs):
+        if failed:
+            raise ValueError('old attempt')
+        return {'issue': 'old result'}
+    monkeypatch.setattr(newsletter_work, 'write_card', write)
+    caplog.set_level('INFO', logger='portfolio-newsletter')
+    assert await newsletter_work.work_once() is True
+    assert 'newsletter=discarded' in caplog.text
+    assert 'newsletter=ready' not in caplog.text and 'newsletter=failed' not in caplog.text
 
 
 def test_daily_deadline_rotates_waiting_recipients_and_skips_already_delivered(newsletter_db, monkeypatch):

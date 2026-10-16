@@ -52,7 +52,7 @@ async def published_outlook(client, instrument_id, edition):
     try:
         stamp = datetime.fromisoformat(publication['analysis_at'].replace('Z', '+00:00'))
         published = datetime.fromisoformat(publication['published_at'].replace('Z', '+00:00'))
-        if not stamp.tzinfo or not published.tzinfo or stamp.astimezone(KST).date() != edition or published > datetime.now(published.tzinfo):
+        if not stamp.tzinfo or not published.tzinfo or stamp.astimezone(KST).date() != edition or stamp > published or published > datetime.now(published.tzinfo):
             return None
     except (KeyError, TypeError, ValueError, AttributeError) as error:
         raise ValueError('OUTLOOK_TIMESTAMP_INVALID') from error
@@ -109,9 +109,16 @@ async def write_card(holding, edition, key, *, model_call=None, evidence=None, o
                         'output_schema': NewsletterCard.model_json_schema()}, ensure_ascii=False)}]
         tools = [tool for tool in TOOLS if tool['function']['name'] in {'search_sources', 'fetch_source'}]
         for turn in range(100):
-            result = await model_call({'model': MODEL, 'messages': messages, 'tools': tools,
-                                       'tool_choice': 'none' if turn == 99 else 'auto', 'max_tokens': 6000,
-                                       'thinking': {'type': 'enabled'}, 'reasoning_effort': 'low'})
+            try:
+                result = await model_call({'model': MODEL, 'messages': messages, 'tools': tools,
+                                           'tool_choice': 'none' if turn == 99 else 'auto', 'max_tokens': 6000,
+                                           'thinking': {'type': 'enabled'}, 'reasoning_effort': 'low'})
+            except ValueError as error:
+                if str(error) not in {'STRUCTURED_OUTPUT_REQUIRED', 'STRUCTURED_OUTPUT_MIXED_CALLS'}:
+                    raise
+                log.info('instrument=%s newsletter_structure_repair code=%s', holding['instrument_id'], str(error))
+                messages.append({'role': 'user', 'content': 'submit_report 도구 하나로 뉴스레터 카드를 제출하세요. 일반 텍스트나 다른 도구와 함께 제출하지 마세요.'})
+                continue
             choice = result['choices'][0]
             log.info('instrument=%s turn=%s finish=%s sources=%s', holding['instrument_id'], turn + 1,
                      choice.get('finish_reason'), len(evidence.sources))
@@ -127,6 +134,8 @@ async def write_card(holding, edition, key, *, model_call=None, evidence=None, o
                     sources = {source['id']: source for source in evidence.sources}
                     if not set(card.source_ids) <= sources.keys():
                         raise ValueError('UNKNOWN_SOURCE')
+                    if not any(source_id != 'price' and sources[source_id].get('excerpt') for source_id in card.source_ids):
+                        raise ValueError('NEWS_EVIDENCE_REQUIRED')
                     return {**{k: holding[k] for k in ('instrument_id', 'name')}, **card.model_dump(exclude={'source_ids'}), 'edition': edition.isoformat(),
                             'sources': [{'url': sources[s]['url']} for s in dict.fromkeys(card.source_ids)],
                             'quote': json.loads(quote['excerpt']) if quote else None,
@@ -137,8 +146,9 @@ async def write_card(holding, edition, key, *, model_call=None, evidence=None, o
                     messages.append({'role': 'user', 'content': '필드별 길이와 형식을 고쳐 짧게 제출하세요: ' +
                                      json.dumps([{'field': e['loc'], 'message': e['msg']} for e in error.errors()], ensure_ascii=False)})
                     continue
-                except ValueError:
-                    messages.append({'role': 'user', 'content': '형식과 출처 ID를 확인하세요. 등록된 본문 출처: ' + json.dumps([s['id'] for s in evidence.sources])})
+                except ValueError as error:
+                    instruction = '가격만으로 뉴스 원인을 설명하지 마세요. 뉴스·공시 본문을 조사하고 실제 사용한 출처를 포함하세요. ' if str(error) == 'NEWS_EVIDENCE_REQUIRED' else '형식과 출처 ID를 확인하세요. '
+                    messages.append({'role': 'user', 'content': instruction + '등록된 본문 출처: ' + json.dumps([s['id'] for s in evidence.sources])})
                     continue
             for call in calls:
                 function = call['function']

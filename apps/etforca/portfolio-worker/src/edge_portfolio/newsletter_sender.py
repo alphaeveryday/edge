@@ -126,9 +126,16 @@ def activate_confirmed(ses, *, deadline=float('inf')):
                 ses.create_contact(**arguments)
                 time.sleep(1)
             with connect() as db:
-                db.execute("UPDATE portfolio_newsletter_subscriptions SET status='unsubscribed',updated_at=now() WHERE email=%s AND status='active'", (row['email'],))
-                db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active',updated_at=now() WHERE id=%s AND status='confirmed'", (row['id'],))
-            log.info('subscription=%s newsletter=active', row['id'])
+                activated = db.execute("""UPDATE portfolio_newsletter_subscriptions candidate SET status='active',updated_at=now()
+                    WHERE candidate.id=%s AND candidate.status='confirmed' AND NOT EXISTS (
+                        SELECT 1 FROM portfolio_newsletter_subscriptions newer WHERE newer.email=candidate.email
+                        AND (newer.confirmed_at,newer.created_at,newer.id)>(candidate.confirmed_at,candidate.created_at,candidate.id))
+                    RETURNING id""", (row['id'],)).fetchone()
+                if activated:
+                    db.execute("UPDATE portfolio_newsletter_subscriptions SET status='unsubscribed',updated_at=now() WHERE email=%s AND status='active' AND id<>%s", (row['email'], row['id']))
+                else:
+                    db.execute("UPDATE portfolio_newsletter_subscriptions SET status='superseded',updated_at=now() WHERE id=%s AND status='confirmed'", (row['id'],))
+            log.info('subscription=%s newsletter=%s', row['id'], 'active' if activated else 'superseded')
         except (ClientError, BotoCoreError) as error:
             code = error.response['Error']['Code'] if isinstance(error, ClientError) else type(error).__name__
             log.warning('subscription=%s activation_failed code=%s', row['id'], code)

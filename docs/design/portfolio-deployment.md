@@ -55,11 +55,11 @@ ETF 목록은 KRX·Nasdaq Trader의 2026-10-12 수집 스냅샷이다. 국내 1,
 
 기존 호스트에 `portfolio-newsletter.timer`를 설치해 5분마다 SES 발송 준비 상태·이메일 확인 대기·일일 콘텐츠 준비를 확인한다. 매일 KST 08:00 이후 발행일별 종목 작업을 등록하고 결과가 준비되면 보낸다. 별도 EC2·DB·Lambda·AWS 스케줄러는 추가하지 않는다. 분석은 기존 워커, 발송은 `newsletter` Compose profile의 128MiB 일회성 프로세스가 맡는다.
 
-발송 프로세스만 host network로 인스턴스 역할을 사용한다. 분석 워커의 `AWS_EC2_METADATA_DISABLED=true`와 IMDSv2 hop limit 1은 유지한다. PostgreSQL은 추가로 호스트 루프백 `127.0.0.1:15432`에만 바인딩하며 `runtime_env.py`가 비밀번호를 인코딩해 `PORTFOLIO_NEWSLETTER_DATABASE_URL`을 만든다. 외부 DB 포트는 열지 않는다. 메일러에는 DeepSeek·Exa 키를 주지 않는다.
+발송 프로세스만 host network로 인스턴스 역할을 사용한다. 분석 워커의 `AWS_EC2_METADATA_DISABLED=true`와 IMDSv2 hop limit 1은 유지한다. PostgreSQL은 추가로 호스트 루프백 `127.0.0.1:15432`에만 바인딩하며 `runtime_env.py`가 비밀번호를 인코딩해 `PORTFOLIO_NEWSLETTER_DATABASE_URL`을 만든다. 외부 DB 포트는 열지 않는다. 메일러에는 DeepSeek·Exa 키를 환경변수로 전달하지 않는다. 이는 IAM 격리를 뜻하지 않는다. 메일러는 모델·외부 도구를 실행하지 않는 신뢰된 코드이며 기존 호스트 역할을 공유하므로, 그 역할의 배포용 런타임 시크릿 읽기 권한도 갖는다.
 
 SES 도메인 인증·발송 허용·운영 액세스가 모두 준비돼야 메일을 보낸다. 최근 준비 상태는 `portfolio_newsletter_runtime`에 보관하고 API는 10분 이상 지난 상태를 준비 완료로 표시하지 않는다. sandbox 해제 전 신청은 대기하며 팝업에서 준비 후 확인 메일을 보낸다고 안내한다. 확인 링크는 발송 후 48시간 유효하다.
 
-발송 장애는 `journalctl -u portfolio-newsletter.service`와 전용 DB의 발송 상태로 확인한다. `sending` 상태로 프로세스가 중단됐거나 `uncertain`이면 SES 수락 여부를 확인하기 전 재발송하지 않는다. 기존 배포 절차가 메일 타이머를 멈추고 새 릴리스·DB 준비가 끝난 뒤 다시 활성화한다. 실제 수신함의 Gmail·Outlook 렌더링은 로컬 브라우저 미리보기와 별도로 검증해야 한다.
+발송 장애는 `journalctl -u portfolio-newsletter.service`와 전용 DB의 발송 상태로 확인한다. `sending` 상태로 프로세스가 중단됐거나 `uncertain`이면 SES 수락 여부를 확인하기 전 재발송하지 않는다. 기존 배포 절차가 메일 타이머를 멈추고 진행 중인 발송을 최대 330초 기다린 뒤 분석 워커를 비운다. 배포 실패 시 기존에 켜져 있던 타이머를 복구하고, 성공 시 새 릴리스·DB 준비가 끝난 뒤 활성화한다. SSM 실행 제한은 1,800초, GitHub 배포 제한은 45분으로 두 대기 구간과 빌드·검증 시간을 포함한다. 실제 수신함의 Gmail·Outlook 렌더링은 로컬 브라우저 미리보기와 별도로 검증해야 한다.
 
 절세 정보 팝업은 카드형 단일 선택과 마지막 IRP·ISA·연금저축 체크박스를 사용한다. `tax_profile.recommended_accounts`는 전략 검토 대상으로 저장하며 실제 보유 계좌와 구분한다. 미확인 항목의 기본값은 ‘확인 필요’다. 금액 입력 방식을 다시 선택해도 기존 금액을 지우지 않으며, 다른 종목의 금액이 비어 있어도 이미 입력한 현금 금액은 표시한다.
 

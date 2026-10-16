@@ -1,9 +1,11 @@
 """Explicit, verified subscriptions and a durable daily email outbox."""
 import hashlib
+import logging
 import secrets
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
+from psycopg import Error as DatabaseError
 
 from .store import connect
 
@@ -78,9 +80,13 @@ def confirm(token):
 
 
 def delivery_ready():
-    with connect() as db:
-        row = db.execute("SELECT ready FROM portfolio_newsletter_runtime WHERE id=true AND checked_at>now()-interval '10 minutes'").fetchone()
-        return bool(row and row['ready'])
+    try:
+        with connect() as db:
+            row = db.execute("SELECT ready FROM portfolio_newsletter_runtime WHERE id=true AND checked_at>now()-interval '10 minutes'").fetchone()
+            return bool(row and row['ready'])
+    except DatabaseError as error:
+        logging.getLogger('portfolio-newsletter').warning('newsletter_readiness_unavailable code=%s', type(error).__name__)
+        return False  # Advisory display state must not mask an already-committed signup or confirmation.
 
 
 def content(instrument_id, edition):
@@ -103,9 +109,9 @@ def claim_content():
 
 def finish_content(job, value=None, failure=None):
     with connect() as db:
-        db.execute("""UPDATE portfolio_newsletter_content SET state=%s,content=%s,failure=%s,retry_at=now()+interval '10 minutes'
+        return db.execute("""UPDATE portfolio_newsletter_content SET state=%s,content=%s,failure=%s,retry_at=now()+interval '10 minutes'
             WHERE instrument_id=%s AND edition=%s AND started_at=%s AND state='running'""",
-            ('ready' if value else 'failed', Jsonb(value) if value else None, failure, job['instrument_id'], job['edition'], job['started_at']))
+            ('ready' if value else 'failed', Jsonb(value) if value else None, failure, job['instrument_id'], job['edition'], job['started_at'])).rowcount == 1
 
 
 def release_content(job):

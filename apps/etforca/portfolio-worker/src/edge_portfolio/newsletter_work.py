@@ -18,10 +18,10 @@ async def work_once(stopping=None):
     try:
         result = await write_card({'instrument_id': job['instrument_id'], 'name': job['name']},
                                   job['edition'], os.environ['DEEPSEEK_API_KEY'])
-        newsletter_store.finish_content(job, value=result)
-        log.info('instrument=%s edition=%s newsletter=ready', job['instrument_id'], job['edition'])
+        saved = newsletter_store.finish_content(job, value=result)
+        log.info('instrument=%s edition=%s newsletter=%s', job['instrument_id'], job['edition'], 'ready' if saved else 'discarded')
     except Exception as error:
         # No raw prompts, account information, recipient addresses or provider response bodies in logs.
-        newsletter_store.finish_content(job, failure=type(error).__name__)
-        log.warning('instrument=%s edition=%s newsletter=failed code=%s', job['instrument_id'], job['edition'], type(error).__name__)
+        saved = newsletter_store.finish_content(job, failure=type(error).__name__)
+        log.warning('instrument=%s edition=%s newsletter=%s code=%s', job['instrument_id'], job['edition'], 'failed' if saved else 'discarded', type(error).__name__)
     return True
