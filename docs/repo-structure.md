@@ -52,11 +52,12 @@ edge/
 
 각 런타임은 독립된 루트 설정 파일로 자기 모듈만 묶습니다.
 
-JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 8개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker·app-api)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지).
+JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs:schema`·`libs:jvm-common`과 7개 앱(tenant-console-api·tenant-sync-api·publication-api·super-admin-api·sync-agent·intake·screening-worker)이 등록되어 있다. 배포는 여전히 서비스별 독립(각 앱이 자기 bootJar·이미지). ETF Orca `app-api` 는 자체 `settings.gradle`·래퍼를 둔 독립 빌드다.
 
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
-| JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker · app-api |
+| JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker |
+| JVM (ETF Orca) | `apps/etforca/app-api/settings.gradle` | app-api |
 | Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology |
 

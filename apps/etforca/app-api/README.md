@@ -169,8 +169,8 @@ curl -i -X POST localhost:8080/api/v1/admin/votes/reconcile -H 'X-Admin-Token: l
 관리자 토큰을 설정하지 않으면 수동 재조정은 403 이다. 경로의 ETF 코드는 6자리 문자열이다.
 
 ```sh
-# src 디렉터리에서: 실제 PostgreSQL·Redis Docker 컨테이너 필요
-./gradlew :apps:etforca:app-api:test
+# 이 디렉터리에서: 실제 PostgreSQL·Redis Docker 컨테이너 필요
+./gradlew test
 # 기존 compose를 내려 포트 8080, 55440, 6390을 비운 후 experiments에서
 python3 run-failover.py S2  # S1·S2·S4·S5(S3 retry 는 제거돼 거부), 각 3분 부하, 60초 후 장애
 # Redis Cluster 부분 장애(6노드 compose, docker-compose.cluster.yaml)
