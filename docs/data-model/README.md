@@ -22,7 +22,7 @@
 
 ## ETF Orca 앱 DB
 
-ETF Orca app-api 의 자체 Flyway 세트(회원·관심종목·투표·커뮤니티 원본)는 `libs/schema` 밖에 있다 — [앱 DB ERD](../../apps/etforca/app-api/docs/erd.md).
+ETF Orca app-api 의 자체 Flyway 세트(회원·관심종목·투표·커뮤니티 원본)는 `libs/schema` 밖에 있다 — [앱 DB ERD 초안](../../apps/etforca/app-api/docs/erd.md)(정본은 `db/etf-migration` 마이그레이션).
 
 ## On-Prem 세트
 
