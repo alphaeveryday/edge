@@ -81,6 +81,10 @@ docs/           # 설계·계약·데이터 모델·ADR
 제품 축으로 디렉터리를 묶되 배포 환경과 데이터 책임은 각 제품에서 구분합니다. 모바일 앱은 자체 npm 구성을, 포트폴리오 워커는 독립 Python 워크스페이스를 사용합니다. [저장소 구조](docs/repo-structure.md) · [ADR-0061](docs/adr/0061-product-axis-directory-layout.md)
 
 
+![시스템 아키텍처: 증권사 Cloud 환경과 EDGE Cloud 환경의 기능 단위 논리 구성](docs/assets/readme/SA.drawio.png)
+
+기능 단위의 논리 구성도입니다. 왼쪽 증권사 Cloud 환경(BYOC)은 DMZ의 Sync Agent가 EDGE Cloud를 outbound Pull로 당겨 오고, 내부망에서 점검·검수를 거쳐 MTS에 서빙합니다. 연결을 여는 쪽은 증권사이고 그 선이 두 환경 사이의 유일한 선입니다. 오른쪽 EDGE Cloud 환경에는 엔진(스케줄러·워커·Explanation Queue·Analysis Database), edgesignal 운영(슈퍼 어드민 콘솔)과 ETF Orca(앱 서비스 일곱·App Database·Vote Cache)가 있습니다. 그림의 ALB 하나는 진입점 셋(super-admin·sync·app)을 묶은 논리 표현이고, 분석 데이터는 Analysis Database를 통해서만 두 제품에 전달됩니다. Delivery Outbox는 큐가 아니라 같은 DB의 테이블입니다. 상자는 논리 단위이며 배포 모듈 대응은 [시스템 아키텍처 매핑표](docs/architecture/system-architecture.md#논리--배포-모듈-매핑)에, AWS 배치는 아래 그림에 있습니다.
+
 ![AWS 배치: 벤더 계정 하나에 엔진·edgesignal·etforca 세 묶음, 증권사 계정에서 들어오는 outbound Pull 하나](docs/assets/readme/CA.drawio.png)
 
 벤더 AWS 계정 하나에 엔진과 제품 둘이 함께 있습니다. 엔진은 파이프라인 RDS를 두 제품과 나눠 쓰고, ETF Orca는 회원·투표 원본을 위해 RDS·Redis를 따로 둡니다. 증권사 계정에서 벤더로 들어오는 연결은 sync ALB로 향하는 outbound Pull 하나이고, 증권사 계정 안의 배치는 [EDGE SIGNAL의 BYOC 토폴로지](apps/edgesignal/README.md#byoc와-데이터-경계)에 있습니다. 그림의 2-AZ 이중화(NAT 2개, RDS Standby, Redis Replica, 양 AZ 태스크)는 prod 목표 구성이고, dev는 NAT 1개·단일 인스턴스·태스크 1개로 돕니다. 포트폴리오 기능은 ETF Orca 사용자 경로로 들어오고 백엔드는 app-api에 편입될 예정이라 그림에서는 app-api가 그 자리를 맡습니다. 지금은 검증 단계라 etforca.com/portfolio 뒤의 별도 EC2(API·워커·전용 PostgreSQL)로 돌고 있습니다. 엔진 박스 안의 태스크 구성은 설계 시점 것이고, 현행 파이프라인(장중 1분 레인, SQS 소비자, 분석 엔진 v2)은 [엔진 README](apps/engine/README.md#데이터-파이프라인)의 그림이 정본입니다.
