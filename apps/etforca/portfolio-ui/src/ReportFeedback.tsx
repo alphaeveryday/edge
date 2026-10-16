@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { trackFeedback, type FeedbackRating } from './analytics';
+import { request } from './api';
 
 const finished = new Set<string>();
 const choices: [FeedbackRating, string, string][] = [['good', '😊', '좋아요'], ['okay', '😐', '그냥 그래요'], ['needs_improvement', '🛠️', '개선이 필요해요']];
@@ -10,6 +11,10 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
   const previousFocus = useRef<HTMLElement | null>(null);
   const [open, setOpen] = useState(false);
   const [answered, setAnswered] = useState(false);
+  const [email, setEmail] = useState('');
+  const [sending, setSending] = useState(false);
+  const [subscription, setSubscription] = useState('');
+  const [error, setError] = useState('');
   const submitted = useRef(false);
   const storageKey = `edge-portfolio-feedback:${jobId}`;
   useEffect(() => {
@@ -49,9 +54,35 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     submitted.current = true; remember(); trackFeedback('submitted', rating); setAnswered(true);
     popup.current?.focus({ preventScroll: true });
   }
+  async function subscribe(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (sending) return;
+    setSending(true); setError('');
+    try {
+      const result = await request<{ status: string; delivery_ready: boolean }>(`/analyses/${jobId}/newsletter`, {
+        method: 'POST', body: JSON.stringify({ email: email.trim(), consent: true }),
+      });
+      setSubscription(result.status === 'active' ? '이미 구독 중이에요. 매일 보유 종목 소식을 보내드릴게요.' : result.delivery_ready
+        ? '신청했어요! 확인 메일의 링크를 눌러 구독을 시작해 주세요.'
+        : '신청했어요! 발송 준비가 끝나면 이메일 확인 링크를 보내드릴게요.');
+      setEmail('');
+    } catch (e) { setError((e as Error).message); } finally { setSending(false); }
+  }
   return <div ref={anchor} className="feedback-anchor">
     {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-labelledby="feedback-title" aria-modal="false" data-analytics-section="feedback">
       <button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</button>
+      <div className="feedback-newsletter">
+        <h3>내 ETF 소식, 매일 메일로</h3>
+        <p>보유 종목의 핵심 이슈와 가격이 움직인 이유를 쉽고 짧게 정리해 드려요.</p>
+        {subscription ? <p role="status">{subscription}</p> : <form onSubmit={subscribe}>
+          <label className="sr-only" htmlFor="newsletter-email">뉴스레터 이메일</label>
+          <input id="newsletter-email" type="email" autoComplete="email" placeholder="이메일 주소" maxLength={254} required value={email} onChange={e => setEmail(e.target.value)} />
+          <label className="newsletter-consent"><input type="checkbox" required />이메일·보유 종목 이용 및 뉴스레터 수신 동의</label>
+          <button className="newsletter-submit" type="submit" disabled={sending}>{sending ? '신청 중…' : '매일 핵심 소식 받기'}</button>
+          {error && <p role="alert">{error}</p>}
+        </form>}
+        <small>언제든 메일에서 수신 거부할 수 있어요.</small>
+      </div>
       <h3 id="feedback-title">이번 분석은 어떠셨나요?</h3>
       {answered ? <p role="status">의견 감사합니다!</p> : <div className="feedback-choices">{choices.map(([rating, emoji, label]) => <button key={rating} onClick={() => choose(rating)}><span aria-hidden="true">{emoji}</span>{label}</button>)}</div>}
     </aside>}

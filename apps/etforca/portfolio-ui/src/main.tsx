@@ -9,6 +9,7 @@ import './styles.css';
 import { ProgressView } from './ProgressView';
 import { startPresence } from './presence';
 import { trackScreen } from './analytics';
+import { NewsletterConfirmation } from './NewsletterConfirmation';
 
 function App() {
   useEffect(startPresence, []);
@@ -66,4 +67,7 @@ function App() {
     </> : <><ProgressView job={job} elapsed={elapsed} />{error && <button className="secondary" onClick={reset}>입력 화면으로</button>}</>}
   </main>;
 }
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
+const confirmationToken = new URLSearchParams(location.hash.slice(1)).get('newsletter-confirm');
+// Keep the bearer token out of subsequent navigation, analytics and screenshots of the address bar.
+if (confirmationToken) history.replaceState(null, '', location.pathname);
+createRoot(document.getElementById('root')!).render(<React.StrictMode>{confirmationToken ? <NewsletterConfirmation token={confirmationToken} /> : <App />}</React.StrictMode>);

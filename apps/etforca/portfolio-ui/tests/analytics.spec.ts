@@ -235,7 +235,9 @@ test('closing the premium modal does not dismiss unanswered feedback', async ({ 
   await feedbackReport(page);
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
   await expect(page.locator('.report-feedback')).toBeVisible();
-  await page.getByRole('button', { name: '프리미엄 투자 전략 설계 리포트 받기' }).click();
+  const premium = page.getByRole('button', { name: '프리미엄 투자 전략 설계 리포트 받기' });
+  await premium.focus();
+  await premium.press('Enter');
   await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).not.toBeVisible();
@@ -273,6 +275,49 @@ test('feedback stays reachable in a short viewport at high zoom', async ({ page,
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(150);
   await popup.getByRole('button', { name: /./ }).last().click();
   await expect(popup.getByRole('status')).toBeVisible();
-  await popup.getByRole('button').click();
+  await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
   await expect(popup).toHaveCount(0);
+});
+
+test('newsletter signup is above the independent rating choices and never enters analytics', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const submissions: unknown[] = [];
+  await page.route('**/api/portfolio/analyses/*/newsletter', route => {
+    submissions.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: 'pending', delivery_ready: true } });
+  });
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  const popup = page.locator('.report-feedback');
+  const form = await popup.locator('form').boundingBox();
+  const choices = await popup.locator('.feedback-choices').boundingBox();
+  expect(form!.y + form!.height).toBeLessThan(choices!.y);
+  await popup.getByLabel('뉴스레터 이메일').fill('newsletter-private@example.test');
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  expect(submissions).toHaveLength(0);
+  await popup.getByRole('checkbox').check();
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('status')).toContainText('확인 메일');
+  expect(submissions).toEqual([{ email: 'newsletter-private@example.test', consent: true }]);
+  await popup.getByRole('button', { name: '좋아요', exact: true }).click();
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'submitted']);
+  expect(JSON.stringify(events)).not.toMatch(/newsletter-private|example.test/);
+});
+
+test('newsletter confirmation requires a click and clears the token before any analytics', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const token = 'private-newsletter-confirmation-token-123456789';
+  const confirmations: unknown[] = [];
+  await page.route('**/api/portfolio/newsletter/confirm', route => {
+    confirmations.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: 'confirmed' } });
+  });
+  await page.goto(`https://etforca.com/portfolio/#newsletter-confirm=${token}`);
+  await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
+  expect(page.url()).toBe('https://etforca.com/portfolio/');
+  expect(confirmations).toHaveLength(0);
+  await page.getByRole('button', { name: '이메일 확인하고 구독하기' }).click();
+  await expect(page.getByRole('heading', { name: '구독이 시작됐어요!' })).toBeVisible();
+  expect(confirmations).toEqual([{ token }]);
+  expect(JSON.stringify(events)).not.toContain(token);
 });
