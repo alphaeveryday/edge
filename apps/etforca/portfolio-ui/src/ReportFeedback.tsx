@@ -74,7 +74,7 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     } catch (e) { setError((e as Error).message); } finally { setSending(false); }
   }
   return <div ref={anchor} className="feedback-anchor">
-    {!open && <button className="secondary" onClick={() => { setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</button>}
+    <button className="secondary" aria-expanded={open} onClick={() => { if (open) return; setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</button>
     {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-labelledby={newsletterOnly ? 'newsletter-title' : 'feedback-title'} aria-modal="false" data-analytics-section="feedback">
       <button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</button>
       <div className="feedback-newsletter">

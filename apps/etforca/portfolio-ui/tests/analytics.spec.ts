@@ -332,7 +332,11 @@ test('dismissed feedback keeps a newsletter retry without asking for another rat
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
   await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
   await page.reload();
-  await page.getByRole('button', { name: '보유 종목 뉴스레터 받기' }).click();
+  const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
+  const launcherBox = await launcher.boundingBox();
+  const evaluationBox = await page.locator('.evaluation').boundingBox();
+  expect(launcherBox!.y + launcherBox!.height).toBeLessThanOrEqual(evaluationBox!.y);
+  await launcher.click();
   const popup = page.getByRole('dialog', { name: '내 ETF 소식, 매일 메일로' });
   await expect(popup.getByLabel('뉴스레터 이메일')).toBeVisible();
   await expect(popup.locator('.feedback-choices')).toHaveCount(0);
@@ -342,7 +346,33 @@ test('dismissed feedback keeps a newsletter retry without asking for another rat
   await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
   await expect(popup.getByRole('status')).toContainText('발송 준비가 끝나면');
   await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await expect(launcher).toBeFocused();
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
   await expect(popup).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
+});
+
+test('newsletter validation explains the email field rather than portfolio holdings', async ({ page, baseURL }) => {
+  await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await page.route('**/api/portfolio/analyses/*/newsletter', route => route.fulfill({ status: 422, json: { detail: [{ loc: ['body', 'email'], type: 'string_pattern_mismatch' }] } }));
+  const popup = page.locator('.report-feedback');
+  await popup.getByLabel('뉴스레터 이메일').fill('reader@example');
+  await popup.getByRole('checkbox').check();
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('alert')).toHaveText('이메일 주소를 확인해 주세요.');
+});
+
+test('an already open newsletter launcher preserves feedback mode and Escape accounting', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
+  await launcher.focus();
+  await launcher.press('Enter');
+  await expect(page.locator('.feedback-choices')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
   await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
 });
