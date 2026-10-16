@@ -418,6 +418,21 @@ async def test_short_fallback_group_does_not_choose_the_basis_for_surviving_grou
         assert history['points'][-1]['recommended'] > history['points'][-2]['recommended']
 
 
+async def test_full_length_price_only_candidate_is_excluded_without_erasing_dividends():
+    request, market, groups = batch()
+    def loader(symbol, _):
+        data = record()
+        if symbol == 'E.KS':
+            data['return_basis'] = 'price'
+        return data
+    market.loader = loader
+    result = await Optimizer(market, request).tool({'combinations': groups})
+    assert result['status'] == 'available'
+    assert result['tested_combinations'] == 9
+    assert result['rejected_combinations'] == [{'combination': 5, 'reason': 'TOTAL_RETURN_UNAVAILABLE'}]
+    assert all('분배금 재투자' in value['history']['method'] for value in market.results.values())
+
+
 async def test_invalid_endpoint_does_not_permanently_discard_new_valid_candidates():
     from edge_portfolio.market_data import expected_sessions
     request, market, groups = batch()
