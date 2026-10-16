@@ -39,6 +39,14 @@ EDGE는 금융 데이터를 수집하고 ETF 전망과 가격변동을 분석합
 
 [MTS 데모](https://demo-mts.edgesignal.dev) · [EDGE SIGNAL 상세](apps/edgesignal/README.md)
 
+### 콘텐츠 엔진 — 분석이 투자자를 만나는 첫 접점
+
+엔진의 ETF 전망과 가격변동 설명을 짧은 영상과 글로 만들어 채널에 올립니다. 콘텐츠를 본 사람이 ETF ORCA에서 전망과 포트폴리오 분석을 이어서 보는 흐름입니다.
+
+![콘텐츠 채널: 인스타그램 릴스, 유튜브 쇼츠, 네이버 프리미엄 콘텐츠 심층 리포트](docs/assets/readme/content-screens.png)
+
+[인스타그램](https://www.instagram.com/etf_orca/) · [유튜브](https://www.youtube.com/@ETFOrca) · [네이버 프리미엄 콘텐츠](https://contents.premium.naver.com/etforca/etforcapremium) · [콘텐츠 엔진 상세](docs/content-engine.md)
+
 ## 분석을 뒷받침하는 기술
 
 | 기술 | 해결하는 문제 | 자세히 보기 |
