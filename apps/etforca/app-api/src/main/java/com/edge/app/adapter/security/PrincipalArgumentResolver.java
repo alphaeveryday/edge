@@ -1,5 +1,6 @@
 package com.edge.app.adapter.security;
 
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import com.edge.common.exception.GeneralException;
 import org.springframework.core.MethodParameter;

@@ -1,6 +1,5 @@
 package com.edge.app.adapter.webapi.auth;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.adapter.webapi.auth.dto.SignupCodeRequest;
 import com.edge.app.application.auth.AuthService;
 import com.edge.app.application.auth.SignupCodeService;
@@ -11,6 +10,7 @@ import com.edge.app.application.auth.provided.PasswordResetRequest;
 import com.edge.app.application.auth.provided.RefreshRequest;
 import com.edge.app.application.auth.provided.SignupRequest;
 import com.edge.app.application.auth.provided.SocialLoginRequest;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.common.apipayload.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

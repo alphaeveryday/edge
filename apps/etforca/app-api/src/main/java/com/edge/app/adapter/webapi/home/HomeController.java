@@ -1,9 +1,9 @@
 package com.edge.app.adapter.webapi.home;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.application.home.HomeService;
 import com.edge.app.application.home.provided.HomeBriefResponse;
 import com.edge.app.application.home.provided.MarketIndexResponse;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;

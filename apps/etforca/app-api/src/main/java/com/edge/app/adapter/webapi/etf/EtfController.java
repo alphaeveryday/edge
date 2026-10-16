@@ -1,11 +1,11 @@
 package com.edge.app.adapter.webapi.etf;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.application.etf.EtfService;
 import com.edge.app.application.etf.provided.ChartResponse;
 import com.edge.app.application.etf.provided.EtfDetailResponse;
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.provided.MoveResponse;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.domain.etf.ChartRange;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;

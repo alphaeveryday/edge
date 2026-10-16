@@ -1,7 +1,7 @@
 package com.edge.app.adapter.webapi.watch;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.watch.WatchService;
 import com.edge.app.application.watch.provided.WatchGroupCreateRequest;
 import com.edge.app.application.watch.provided.WatchGroupResponse;

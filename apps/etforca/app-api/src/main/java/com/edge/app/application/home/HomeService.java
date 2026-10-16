@@ -1,11 +1,11 @@
 package com.edge.app.application.home;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.required.EtfRepository;
 import com.edge.app.application.home.provided.HomeBriefResponse;
 import com.edge.app.application.home.provided.MarketIndexResponse;
 import com.edge.app.application.home.required.MarketIndexRepository;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.PrincipalRepository;
 import com.edge.app.application.watch.provided.WatchGroupResponse;
 import com.edge.app.application.watch.required.WatchGroupRepository;

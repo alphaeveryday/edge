@@ -1,7 +1,7 @@
 package com.edge.app.application.post;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.application.etf.required.EtfRepository;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.MemberRepository;
 import com.edge.app.application.member.required.PrincipalRepository;
 import com.edge.app.application.post.provided.CommentCreateRequest;

@@ -1,7 +1,7 @@
 package com.edge.app.application.notification;
 
 import com.edge.app.adapter.integration.notification.ExpoPushClient;
-import com.edge.app.adapter.security.AppPrincipal;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.DeviceRepository;
 import com.edge.app.application.member.required.PrincipalRepository;
 import com.edge.app.domain.member.Principal;

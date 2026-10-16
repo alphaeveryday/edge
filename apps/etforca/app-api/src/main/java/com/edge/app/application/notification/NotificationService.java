@@ -1,6 +1,6 @@
 package com.edge.app.application.notification;
 
-import com.edge.app.adapter.security.AppPrincipal;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.PrincipalRepository;
 import com.edge.app.application.notification.provided.NotificationResponse;
 import com.edge.app.application.notification.provided.UnreadCountResponse;
