@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, ApiError, progress, type Kind, type Overview, type Records, type Detail as DetailData, type State } from './api';
 import { Detail } from './Detail';
+import { Verification } from './Verification';
 import './styles.css';
 
 const tabs: { id: Kind; label: string; description: string }[] = [
@@ -17,6 +18,7 @@ function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [records, setRecords] = useState<Records | null>(null);
   const [kind, setKind] = useState<Kind>('analyses');
+  const [verification, setVerification] = useState(false);
   const [days, setDays] = useState(7);
   const [scope, setScope] = useState('all');
   const [state, setState] = useState('');
@@ -27,7 +29,7 @@ function App() {
   function disconnect() { setConnection('disconnected'); setOverview(null); setRecords(null); setDetail(null); setSelected(null); }
 
   useEffect(() => {
-    if (connection === 'disconnected') return;
+    if (connection === 'disconnected' || verification) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     let pending = false;
@@ -53,13 +55,14 @@ function App() {
     void poll();
     document.addEventListener('visibilitychange', poll);
     return () => { stopped = true; clearTimeout(timer); document.removeEventListener('visibilitychange', poll); };
-  }, [connection, kind, days, state, page, scope, selected, refresh]);
+  }, [connection, kind, days, state, page, scope, selected, refresh, verification]);
 
   const tab = tabs.find(t => t.id === kind)!;
   function resetSelection() { setSelected(null); setDetail(null); setRecords(null); setPage(1); }
   if (connection !== 'ready') return <main className="login-page"><div className="login-card"><span className="eyebrow">SSM 전용 관리자</span><h1>{connection === 'checking' ? '연결 확인 중' : '연결이 끊겼어요'}</h1><p role="status">{connection === 'checking' ? '관리자 서버에 연결하고 있어요.' : '관리자 접속 스크립트를 실행한 뒤 다시 연결해 주세요.'}</p>{connection === 'disconnected' && <button className="primary" onClick={() => setConnection('checking')}>다시 연결</button>}</div></main>;
-  return <div className="dashboard"><aside className="sidebar"><a className="brand" href="/portfolio/admin.html"><span className="orca-mark">O</span>ORCA<small>운영 대시보드</small></a><nav aria-label="관리 메뉴">{tabs.map(t => <button key={t.id} aria-current={kind === t.id ? 'page' : undefined} onClick={() => { resetSelection(); setKind(t.id); }}>{t.label}<span>↗</span></button>)}</nav><div className="sidebar-bottom"><span>SSM 전용 연결</span><small>접속 종료: 터널 창에서 Ctrl+C</small></div></aside>
+  return <div className="dashboard"><aside className="sidebar"><a className="brand" href="/portfolio/admin.html"><span className="orca-mark">O</span>ORCA<small>운영 대시보드</small></a><nav aria-label="관리 메뉴">{tabs.map(t => <button key={t.id} aria-current={!verification && kind === t.id ? 'page' : undefined} onClick={() => { resetSelection(); setVerification(false); setKind(t.id); }}>{t.label}<span>↗</span></button>)}<button aria-current={verification ? 'page' : undefined} onClick={() => { resetSelection(); setVerification(true); }}>버전별 검증<span>↗</span></button></nav><div className="sidebar-bottom"><span>SSM 전용 연결</span><small>접속 종료: 터널 창에서 Ctrl+C</small></div></aside>
     <main className="workspace"><header className="topbar"><div><span className="eyebrow">PORTFOLIO OPERATIONS</span><h1>지금, ORCA</h1></div><div className="sync"><span className="dot" />10초마다 자동 갱신<small>{overview ? date(overview.as_of) + ' 기준 · KST' : '불러오는 중'}</small><button className="quiet" onClick={() => setRefresh(n => n + 1)}>새로고침</button></div></header>
+      {verification ? <Verification refresh={refresh} onDisconnect={() => { setVerification(false); disconnect(); }} /> : <>
       <div className="filters"><label htmlFor="scope">요청 구분</label><select id="scope" value={scope} onChange={e => { resetSelection(); setOverview(null); setScope(e.target.value); }}><option value="all">전체</option><option value="customers">고객 요청 · 테스트 제외</option><option value="tests">테스트만</option></select><small>분석·리포트 목록과 분석 건수에 적용합니다. 방문자·이메일 지표와 저장된 입력은 전체입니다.</small></div>
       <section className="stats" aria-label="운영 지표">{[
         ['현재 활성 방문자', overview?.active_visitors, '최근 2분 내 활동', 'accent'],
@@ -75,6 +78,7 @@ function App() {
       {!records ? <p className="empty" role="status">기록을 불러오고 있어요.</p> : !records.items.length ? <div className="empty"><b>이 기간에는 기록이 없습니다.</b><p>다른 기간을 선택하거나 새 요청을 기다려 주세요.</p></div> : <div className="table-wrap"><table><thead><tr><th>방문자</th><th>{kind === 'reports' ? '이메일' : '상태'}</th><th>{kind === 'drafts' ? '저장 시각' : '요청 시각'}</th><th><span className="sr-only">상세</span></th></tr></thead><tbody>{records.items.map(row => <tr className={selected === row.id ? 'selected' : ''} key={row.id}><td><b className="visitor">{row.visitor}</b><small>{row.id.slice(0, 8)}</small>{row.test_label && <span className="badge test" title={row.test_label}>테스트</span>}</td><td>{kind === 'reports' ? <span className="email">{row.email}</span> : <span className={'badge ' + (row.state || 'draft')}>{row.state ? states[row.state] : '입력 저장'}</span>}{row.state && <small>{progress(row, overview?.as_of)}</small>}{row.failure && <small className="red">{row.failure}</small>}</td><td className="date">{date(row.at)}</td><td><button className="open-detail" onClick={() => { setDetail(null); setSelected(row.id); }} aria-label={`${row.visitor} 상세 보기`}>보기 ↗</button></td></tr>)}</tbody></table></div>}
       <footer className="pagination"><span>{records ? `${records.total.toLocaleString()}건 · ${page}페이지` : ''}</span><div><button disabled={page === 1} onClick={() => { setSelected(null); setDetail(null); setRecords(null); setPage(n => n - 1); }}>이전</button><button disabled={!records || page * records.page_size >= records.total} onClick={() => { setSelected(null); setDetail(null); setRecords(null); setPage(n => n + 1); }}>다음</button></div></footer></section>
       {selected && (detail ? <Detail key={kind + ':' + detail.id} data={detail} onClose={() => { setSelected(null); setDetail(null); }} /> : <section className="detail"><button className="quiet" onClick={() => setSelected(null)}>상세 닫기</button><p role="status">상세 내용을 불러오고 있어요.</p></section>)}</div>
+    </>}
     </main></div>;
 }
 createRoot(document.getElementById('root')!).render(<App />);

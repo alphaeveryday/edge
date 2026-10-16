@@ -40,6 +40,7 @@ def test_release_builds_before_draining_and_keeps_dependencies_until_worker_stop
     private = tmp_path / 'admin-ui'
     private.mkdir()
     monkeypatch.setattr(release, 'admin_ui_directory', lambda: private)
+    monkeypatch.setattr(release.subprocess, 'check_output', lambda *args, **kwargs: 'a' * 40)
     monkeypatch.setattr(release.time, 'sleep', lambda _: None)
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     monkeypatch.setenv('GITHUB_REF', 'refs/heads/dev')
@@ -50,3 +51,4 @@ def test_release_builds_before_draining_and_keeps_dependencies_until_worker_stop
     assert compose[1].endswith(' stop --timeout 630 worker'), 'A ten-minute analysis must finish and save before replacement'
     assert ' up -d --wait' in compose[2], 'Service replacement must wait until the current analysis is saved'
     assert '--build' not in compose[2]
+    assert any('edge_portfolio.verification --version ' + 'a' * 40 + ' --register-only' in command for command in compose)
