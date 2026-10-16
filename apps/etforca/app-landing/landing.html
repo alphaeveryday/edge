@@ -491,7 +491,6 @@ a[role="button"]{cursor:pointer}
 .cover__pill .live{background:rgb(255 255 255 / .18);color:inherit}
 .cover__pill .live i{background:#fff}
 .cover__foot{margin-top:2.75rem;text-align:center}
-.extras{color:var(--t2)}
 @media (hover:hover){.cover:hover .cover__track{animation-play-state:paused}}
 @media (min-width:1024px){
   .cover{gap:1.875rem}
@@ -531,7 +530,8 @@ a[role="button"]{cursor:pointer}
 .cta__note{margin-top:1.375rem;font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:var(--t3)}
 .btn--soon{opacity:.6;pointer-events:none}
 .find{width:min(100%,32.5rem);margin:0 auto 1.875rem}
-.find label{display:block;margin-bottom:1rem}
+.find label{display:block;margin-bottom:.5rem}
+.find__hint{margin:0 0 1rem;color:var(--t1);font-size:max(calc(var(--tk) * 14.3),.9375rem)}
 body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-events:none}
 .find__in{width:100%;height:3.625rem;padding:0 1.5rem;border:1px solid var(--border-strong);border-radius:999px;background:var(--bg-raised);color:var(--t1);font:inherit;font-size:max(calc(var(--tk) * 15.7),1.0625rem);font-weight:500;transition:border-color .2s,box-shadow .2s}
 .find__in::placeholder{color:var(--t3)}
@@ -727,11 +727,11 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   <div class="container cover__foot">
     <form class="find" id="find" role="search" data-find>
       <label class="h3" for="find-in">보고 싶은 ETF가 있나요?</label>
-      <input class="find__in" id="find-in" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" placeholder="예: KODEX 반도체">
+      <p class="find__hint" id="find-hint">이름을 치거나 아래 종목을 눌러 보세요.</p>
+      <input class="find__in" id="find-in" aria-describedby="find-hint" type="text" inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" placeholder="예: KODEX 반도체">
       <p class="find__picks"><button class="btn btn--ghost btn--sm" type="button" data-pick="069500">KODEX 200</button><button class="btn btn--ghost btn--sm" type="button" data-pick="229200">KODEX 코스닥150</button><button class="btn btn--ghost btn--sm" type="button" data-pick="396500">TIGER 반도체TOP10</button><button class="btn btn--ghost btn--sm" type="button" data-pick="091160">KODEX 반도체</button></p>
       <div class="find__out" aria-live="polite" hidden></div>
     </form>
-    <p class="extras">그 밖에 <strong>관심 그룹</strong>, <strong>오늘의 전망 순위</strong>, <strong>분석 기준 시각 표시</strong>가 있어요.</p>
   </div>
 </section>
 
@@ -1531,6 +1531,22 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     return true;
   };
   fIn.addEventListener('input', () => lookup());
+  // 자리표시자에 종목 이름이 저절로 써졌다 지워진다 — 직접 칠 수 있는 칸이라는 신호(ALPHA-1357). 값(value)은 건드리지 않으므로 검색은 그대로다
+  if (mode !== 'reduce') {
+    const demo = ['KODEX 반도체', 'TIGER 코리아원자력', 'SOL 조선TOP3플러스', 'KODEX 2차전지산업'], still = fIn.placeholder;
+    let di = 0, ci = 0, erase = false;
+    const tick = () => {
+      if (document.activeElement === fIn || fIn.value) { fIn.placeholder = still; setTimeout(tick, 1500); return; } // 쓰는 중이면 원래 문구로 두고 쉰다
+      const w = demo[di];
+      ci += erase ? -1 : 1;
+      fIn.placeholder = w.slice(0, ci);
+      let wait = erase ? 40 : 90;
+      if (!erase && ci === w.length) { erase = true; wait = 1600; }
+      else if (erase && ci === 0) { erase = false; di = (di + 1) % demo.length; wait = 500; }
+      setTimeout(tick, wait);
+    };
+    setTimeout(tick, 1200);
+  }
   // 엔터는 맨 위 결과의 전망을 연다. 결과가 없으면 없다는 안내를 바로 띄운다
   find.addEventListener('submit', (e) => { e.preventDefault(); fIn.blur(); if (lookup(true)) $('.find__row', fOut).click(); });
   // 이름을 치지 않아도 한 번에 전망을 연다. '미리 보기'도 첫 버튼을 누른 것과 같다. 찾기 칸으로 내려가는 것은 아래 앵커 처리가 맡는다
