@@ -13,3 +13,8 @@
 @media(max-width:700px){.detail{padding:14px}.detail-tabs{gap:6px}.detail-tabs button{padding:10px 12px}}
 
 .badge.test { background: #eee8ff; color: #553093; }
+
+.verification { min-width: 0; }
+.verification select { max-width: 100%; }
+.verification td { white-space: normal; overflow-wrap: anywhere; }
+.verification button { display: block; }

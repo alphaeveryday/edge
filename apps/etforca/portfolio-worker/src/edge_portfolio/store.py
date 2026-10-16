@@ -41,6 +41,8 @@ def initialize():
                 payload jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())""")
         from . import admin_store
         admin_store.initialize(db)
+        from . import verification
+        verification.initialize(db)
 
 
 def save_draft(draft_id, owner, payload):

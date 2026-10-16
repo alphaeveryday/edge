@@ -1,7 +1,9 @@
 """Application release only. Terraform owns all AWS infrastructure and routing."""
 import hashlib
+import io
 import json
 import os
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -28,6 +30,7 @@ def main():
     session = boto3.Session(region_name=REGION)
     ssm, s3 = session.client('ssm'), session.client('s3')
     admin_ui = admin_ui_directory()
+    version = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     config = json.loads(ssm.get_parameter(Name='/edge/portfolio/deployment')['Parameter']['Value'])
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / 'release.tar.gz'
@@ -38,6 +41,10 @@ def main():
                     if child.is_file() and '__pycache__' not in child.parts:
                         tar.add(child, arcname=child.relative_to(ROOT))
             tar.add(admin_ui, arcname='admin-ui')
+            metadata = json.dumps({'version': version}).encode()
+            entry = tarfile.TarInfo('src/edge_portfolio/data/deployment.json')
+            entry.size = len(metadata)
+            tar.addfile(entry, io.BytesIO(metadata))
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         key = f'releases/{digest}.tar.gz'
         s3.upload_file(str(archive), config['bucket'], key)
@@ -57,6 +64,7 @@ def main():
         'docker compose --env-file /opt/edge-portfolio/runtime.env up -d --wait --wait-timeout 120',
         'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -c "import urllib.request; urllib.request.urlopen(\'http://127.0.0.1:8092/health\')"',
         f'python3 {directory}/deploy/admin_smoke.py',
+        f'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -m edge_portfolio.verification --version {version} --register-only',
         f'ln -sfn {directory} /opt/edge-portfolio/current']
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
         Parameters={'commands': commands, 'executionTimeout': ['1200']})['Command']['CommandId']
