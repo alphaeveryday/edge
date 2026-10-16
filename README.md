@@ -83,7 +83,7 @@ docs/           # 설계·계약·데이터 모델·ADR
 
 ![AWS 배치: 벤더 계정 하나에 엔진·edgesignal·etforca 세 묶음, 증권사 계정에서 들어오는 outbound Pull 하나](docs/assets/readme/CA.drawio.png)
 
-벤더 AWS 계정 하나에 엔진과 제품 둘이 함께 있습니다. 엔진은 파이프라인 RDS를 두 제품과 나눠 쓰고, ETF Orca는 회원·투표 원본을 위해 RDS·Redis를 따로 둡니다. 증권사 계정에서 벤더로 들어오는 연결은 sync ALB로 향하는 outbound Pull 하나이고, 증권사 계정 안의 배치는 [EDGE SIGNAL의 BYOC 토폴로지](apps/edgesignal/README.md#byoc와-데이터-경계)에 있습니다.
+벤더 AWS 계정 하나에 엔진과 제품 둘이 함께 있습니다. 엔진은 파이프라인 RDS를 두 제품과 나눠 쓰고, ETF Orca는 회원·투표 원본을 위해 RDS·Redis를 따로 둡니다. 증권사 계정에서 벤더로 들어오는 연결은 sync ALB로 향하는 outbound Pull 하나이고, 증권사 계정 안의 배치는 [EDGE SIGNAL의 BYOC 토폴로지](apps/edgesignal/README.md#byoc와-데이터-경계)에 있습니다. 그림의 2-AZ 이중화(NAT 2개, RDS Standby, Redis Replica, 양 AZ 태스크)는 prod 목표 구성이고, dev는 NAT 1개·단일 인스턴스·태스크 1개로 돕니다.
 
 ## 공통 품질 관리
 
