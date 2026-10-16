@@ -1,4 +1,5 @@
 import type { Execution } from './api';
+import { hasTradeAmounts, TradeAmount } from './TradeAmount';
 
 const money = (value: string) => `${Number(value).toLocaleString('ko-KR')}원`;
 const reasons: Record<string, string> = {
@@ -18,17 +19,17 @@ const reasons: Record<string, string> = {
 export function ExecutionPlan({ plan }: { plan: Execution }) {
   const actionable = plan.status === 'ready' || plan.status === 'conditional';
   return <section className="account-plans execution-plan" data-analytics-section="execution">
-    <h4>금액으로 보는 리밸런싱</h4>
+    <h4>매수·매도 계획</h4>
     <p className="notice">{plan.status === 'ready' ? '입력한 평가금액과 추가 자금으로 계산한 계획이에요.' : plan.status === 'conditional' ? '추가 납입으로 목표에 접근하는 조건부 계획이에요.' : plan.status === 'infeasible' ? '현재 조건으로는 이 목표를 실행할 수 없어요.' : '실행 전에 아래 정보를 확인해야 해요.'}</p>
     {plan.reasons.map(reason => { const [code, account] = reason.split(':'); return <p className="notice" key={reason}>{account && `${account} · `}{code === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' && plan.status === 'infeasible' ? '기존 목표가 요청하신 조건에 맞지 않아 실행할 수 없어요.' : reasons[code] || '실행 조건을 더 확인해야 해요.'}</p>; })}
     {plan.required_additional_krw != null && <p>목표에 필요한 최소 추가 자금: <strong>{money(plan.required_additional_krw)}</strong></p>}
     {plan.months != null && <p>매월 {money(plan.monthly_krw!)} 납입 시 <strong>{plan.months}개월</strong> · 총 추가 자금 {money(plan.additional_krw)}</p>}
-    {actionable && <div className="execution-scroll" role="region" aria-label="리밸런싱 금액표" tabIndex={0}><table>
-      <caption className="sr-only">현재 금액, 목표 금액과 필요한 거래</caption>
-      <thead><tr><th>종목 · 계좌</th><th>현재</th><th>목표</th><th>매수</th><th>매도</th><th>현금 투입</th></tr></thead>
-      <tbody>{plan.rows.map(row => <tr key={`${row.instrument_id}:${row.account}`}><th scope="row">{row.name || row.instrument_id}<small>{row.account}</small></th><td data-label="현재">{money(row.before_krw)}</td><td data-label="목표">{money(row.target_krw)}</td><td data-label="매수">{money(row.buy_krw)}</td><td data-label="매도">{money(row.sell_krw)}</td><td data-label="현금 투입">{money(row.cash_used_krw)}</td></tr>)}</tbody>
-    </table></div>}
-    {actionable && plan.accounts.map(account => <p key={account.account}>{account.account} · 납입 {money(account.deposit_krw)} · 인출 {money(account.withdrawal_krw)}</p>)}
+    {actionable && <ul className="improvement-list execution-actions">{plan.rows.map(row => <li key={`${row.instrument_id}:${row.account}`}><div>
+      <div className="action-heading"><h5 title={row.name}>{row.instrument_id.startsWith('US:') ? row.instrument_id.slice(3) : row.name || row.instrument_id}</h5></div>
+      {hasTradeAmounts(row) ? <TradeAmount row={row} /> : <p className="notice">거래 금액 확인 필요</p>}
+      <small className="action-note">{row.account}</small>
+    </div></li>)}</ul>}
+    {actionable && plan.accounts.filter(account => Number(account.deposit_krw) > 0 || Number(account.withdrawal_krw) > 0).map(account => <p key={account.account}>{account.account}{Number(account.deposit_krw) > 0 && ` · 납입 ${money(account.deposit_krw)}`}{Number(account.withdrawal_krw) > 0 && ` · 인출 ${money(account.withdrawal_krw)}`}</p>)}
     <ul className="report-bullets">{plan.assumptions.map(text => <li key={text}>{text}</li>)}</ul>
   </section>;
 }
