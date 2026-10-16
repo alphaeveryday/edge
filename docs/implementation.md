@@ -2,6 +2,8 @@
 
 각 절은 "현행이 무엇인가"를 서술한다. "왜 그렇게 결정했나"는 대응 [ADR](adr/)에 있다.
 
+> ⚠️ **현행 구분 (2026-10-16)**: 이 문서의 Sync 경로 서술 중 번들 체크섬 검증·mTLS 클라이언트 인증서 바인딩·PrivateLink 는 **목표 계약**이다. 현행 구현은 Sync Agent 의 무변형 릴레이와 일반 TLS 이고([ADR-0040](adr/0040-sync-integrity-mvp-to-signing.md), `apps/edgesignal/sync-agent` 의 BundleRelayService), dev sync ALB 의 trust store 는 ALPHA-447 전까지 비어 있다. 현행 배치는 [루트 README](../README.md)의 클라우드 아키텍처 그림과 설명을 본다.
+
 ## 1. 코드베이스
 
 > 결정 배경: [ADR-0016](adr/0016-single-repo-two-artifacts.md), [ADR-0011](adr/0011-rls-to-physical-isolation.md)

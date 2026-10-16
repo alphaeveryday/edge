@@ -7,6 +7,8 @@
 > **[설계 뷰]** 논리 설계 개요다. 현행 배포·계약의 권위는 SSOT([../context.md](../context.md))에 있다. 이 문서의 Service·Worker는 **논리 단위**이며, 실제 배포 모듈로의 대응은 아래 [논리 → 배포 모듈 매핑](#논리--배포-모듈-매핑)을 따른다. 충돌 시 SSOT 우선.
 >
 > ⚠️ **Customer System 경유 서술은 [ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)으로 폐지됨** — 위젯이 증권사 엣지(프록시) 경유로 Publication Service 를 직접 호출하며 고객 식별을 받지 않는다. 루트 README 그림(SA v0.4)에는 반영됐고, 아래 본문의 Customer System 서술은 옛 그림(v0.2) 기준 기록이다.
+>
+> ⚠️ **현행 구분 (2026-10-16)**: 이 문서의 Sync 경로 서술 중 번들 체크섬 검증·mTLS 클라이언트 인증서 바인딩·PrivateLink 는 **목표 계약**이다. 현행 구현은 Sync Agent 의 무변형 릴레이와 일반 TLS 이고([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md), `apps/edgesignal/sync-agent` 의 BundleRelayService), dev sync ALB 의 trust store 는 ALPHA-447 전까지 비어 있다. 현행 배치는 [루트 README](../../README.md)의 클라우드 아키텍처 그림과 설명을 본다.
 
 ## 개요
 
