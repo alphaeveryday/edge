@@ -381,7 +381,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         research_snapshot = collect_research(research, run(lambda connection: read_storage(connection, kind, analysis_id)), artifacts, references)
         published_references = set(listed_references(response))
         if kind == 'outlook':
-            published_references.update(listed_references(body))
+            # Deleted-topic audit rows keep old citations without making that research active again.
+            published_references.update(listed_references(body['items']))
         elif previous:
             inherited = [item for item in previous_items if item['item_id'] in response['selected_item_ids']]
             published_references.update(listed_references(inherited if response['selected_item_ids'] else previous))

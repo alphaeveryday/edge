@@ -14,6 +14,41 @@ from edge_analysis_v2.tools.fixture_data import make_fixture
 from edge_analysis_v2.storage.factors import HEADLINES, read_factor_details
 
 
+def test_removed_topic_audit_does_not_keep_its_research_active(run_context):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from edge_analysis_v2.storage.research import load_research
+    request, factory = run_context
+    fixture = make_fixture()
+    answer = {}
+    async def first(**kwargs):
+        refs = [kwargs['call']('get_issue_evidence', {'news_ids': [n['news_id']], 'include_body': False})['tool_run_id']
+                for n in kwargs['initial']['news'][:2]]
+        kwargs['call']('write_outlook_body', {'title': '계약 확인', 'items': [dict(
+            id=identity, title_keyword='계약', sentences=['확인된 자료를 살펴봐요.'], sentiment='neutral', tool_run_ids=[ref])
+            for identity, ref in zip(('removed', 'kept'), refs)]})
+        answer.update({'outlook': {'direction': '중립'}, 'summary_card': {'title': '계약 확인', 'summary': '자료를 확인해요.'},
+            'factors': [{'type': factor, 'sticker': '중립', 'sentence': '자료를 확인해요.'} for factor in ('이슈', '차트', '매크로', '밸류', '수급')],
+            'conclusion': {'title': '계약 확인', 'supports': [], 'burdens': [], 'sentence': '이행을 확인해요.'},
+            'issue_detail': {'headline': '계약', 'items': [dict(title_keyword='계약', sentence='자료를 확인해요.', sentiment='neutral', tool_run_ids=[refs[1]])]}})
+        return deepcopy(answer)
+    before, _ = request('outlook', first, fixture)
+    old_ref = before['detail']['items'][0]['tool_run_ids'][0]
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    async def revision(**kwargs):
+        kwargs['call']('apply_outlook_body_changes', {'changes': [{'action': 'remove', 'id': 'removed'}]})
+        (kwargs['artifacts']/'research_removals.json').write_text(json.dumps([{'id': old_ref, 'reason': 'topic explicitly removed'}]), encoding='utf-8')
+        result = deepcopy(answer)
+        result['issue_detail']['items'][0]['tool_run_ids'] = before['detail']['items'][1]['tool_run_ids']
+        return result
+    after, identity = request('outlook', revision, later)
+    assert after['detail']['updates']['items'][0]['tool_run_ids'] == [old_ref]
+    with factory() as connection:
+        state = load_research(connection, 'outlook', identity).snapshot()
+    assert old_ref not in state['materials'] and old_ref in state['removed']
+
+
 def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deployment_cutoff(run_context):
     from copy import deepcopy
     from datetime import datetime, timezone
