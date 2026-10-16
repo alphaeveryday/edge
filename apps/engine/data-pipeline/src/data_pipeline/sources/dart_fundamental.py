@@ -89,12 +89,14 @@ _LINE_FIELDS = ("sj_div", "account_id", "account_nm", "currency", "rcept_no", "c
 _SHARE_FIELDS = ("se", "rcept_no", "stlm_dt", "corp_code", "bsns_year", "reprt_code")
 _SHARE_NOTE = "비고"                                                # 주식총수 표의 설명 행 — 수 칸에 글이 온다
 _SHARE_CLASSES = ("합계", "보통주", "우선주")
-# 정책 차단: 값을 만들 수 있어도 팀 결정으로 만들지 않는다.
-POLICY_REASONS = frozenset({"bps_blocked_preferred_shares", "non_krw_currency"})
+# 정책 차단: 값을 만들 수 있어도 팀 결정으로 만들지 않는다. 비12월 결산 회사는 통째로 싣지 않는다 — 결산월은 회사 속성이라
+# 구성종목에 있는 한 매일 거부되므로, 실행 실패로 세면 run 이 영영 FAILED 다(ALPHA-1369).
+POLICY_REASONS = frozenset({"bps_blocked_preferred_shares", "non_krw_currency", "non_december_fiscal_year"})
 # 확인된 원천 부재: 온전한 응답에 그 값·줄이 없다(비슷한 줄도 없다).
 # (missing_value 는 빈 칸뿐이다 — 비지 않았는데 숫자로 읽히지 않는 칸은 `amount_unreadable` 로 따로 나온다.)
 SOURCE_ABSENT_REASONS = frozenset({"account_not_found", "missing_value", "q4_derivation_input_missing",
-                                   "bps_input_missing", "bps_share_class_row_absent"})
+                                   "bps_input_missing", "bps_share_class_row_absent",
+                                   "fiscal_calendar_unconfirmed"})   # 소급 400일 목록에 사업보고서가 없다(신규 상장)
 # 지원하지 않는 표기·계정: 원천에는 있어 보이는데 이 파서가 읽지 않는다. 원천 부재도 정책 차단도 아니다.
 UNSUPPORTED_REASONS = frozenset({"account_unsupported", "bps_share_class_label_unsupported"})
 GAP_CLASSES = frozenset({"policy", "source_absent"})               # 실행 실패로 세지 않는 분류(기록은 남긴다)
@@ -153,22 +155,32 @@ def response_damage(lines: list[dict], shares: dict | None, period_end: str) -> 
                 for field in ("thstrm_amount", "thstrm_add_amount")):
             problems.add("amount_unreadable")
     for row in (shares or {}).get("list", []):
-        if not isinstance(row, dict):
-            continue                        # 파손 행은 상위 정제가 malformed_list_row 로 이미 거부한다
-        kind, receipt = row.get("se"), row.get("rcept_no")
-        if any(row.get(field) is not None and not isinstance(row.get(field), str) for field in _SHARE_FIELDS):
-            problems.add("bad_field_type")
-        if not (isinstance(receipt, str) and RCEPT_NO.fullmatch(receipt)):
-            problems.add("bad_rcept_no")        # 숫자로 온 접수번호는 문자열 검사를 통과해 뒤에서 비교가 깨진다
-        if not (isinstance(kind, str) and kind.strip()):
-            problems.add("bad_share_row")
-        elif _share_class(row) != _SHARE_NOTE and any(
-                _share_count(row, field) is None for field in ("istc_totqy", "tesstk_co")):
-            problems.add("share_count_unreadable")
+        if isinstance(row, dict):           # 파손 행은 상위 정제가 malformed_list_row 로 이미 거부한다
+            problems |= _share_row_damage(row)
     table = share_table_problem(shares, period_end)     # 종류별 수와 합계의 모순(부분합 포함)도 여기서 나온다
     if table:
         problems.add(table)
     return sorted(problems)
+
+
+def _share_row_damage(row: dict) -> set[str]:
+    """주식총수 표 한 행의 파손 사유 — 칸 타입·접수번호 형식·종류명·수(설명 행은 수를 보지 않는다). 온전하면 빈 집합.
+
+    `response_damage` 가 모든 행에 쓰고, `share_table_problem` 이 합계의 차이를 채우는 다른 이름 행의 자격에 쓴다 — 파손 행이
+    합계를 정당화하면 파손 표의 통상 BPS 가 확정 판본에 실린다(로컬 리뷰 3·4라운드).
+    """
+    problems: set[str] = set()
+    kind, receipt = row.get("se"), row.get("rcept_no")
+    if any(row.get(field) is not None and not isinstance(row.get(field), str) for field in _SHARE_FIELDS):
+        problems.add("bad_field_type")
+    if not (isinstance(receipt, str) and RCEPT_NO.fullmatch(receipt)):
+        problems.add("bad_rcept_no")            # 숫자로 온 접수번호는 문자열 검사를 통과해 뒤에서 비교가 깨진다
+    if not (isinstance(kind, str) and kind.strip()):
+        problems.add("bad_share_row")
+    elif _share_class(row) != _SHARE_NOTE and any(
+            _share_count(row, field) is None for field in ("istc_totqy", "tesstk_co")):
+        problems.add("share_count_unreadable")
+    return problems
 
 
 def reject_class(reject: dict) -> str:
@@ -629,6 +641,12 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
     treasury = {se: counts[(se, "tesstk_co")] for se in rows if rows[se] is not None}
     if any(issued[se] is not None and treasury[se] is not None and treasury[se] > issued[se] for se in issued):
         return "share_rows_inconsistent"
+    # 보통주+우선주 < 합계라도 같은 표의 다른 이름 행(`기타` — 대신증권 2우B)이 그 차이를 두 열 모두 정확히 채우면 세 행의
+    # 모순이 아니다(ALPHA-1369). 그 판정(같은 접수번호·기준일, 같은 이름 중복 없음, 자기주식 ≤ 발행수, 두 열의 합)은
+    # `_non_common_shares` 하나다 — 여기서 조건을 느슨하게 다시 쓰면 모순된 기타 행이 합계를 정당화한다(로컬 리뷰 2라운드).
+    # 파손 행(종류명 없음·접수번호 형식·칸 타입·수 — `_share_row_damage`)은 근거가 못 된다(3·4라운드).
+    explained = not any(_share_row_damage(row) for row in _unread_share_rows(shares)) \
+        and _non_common_shares(shares) is not None
     # 발행수·자기주식 합계는 각각 따로 본다 — 한 열의 파손이 다른 열의 확인된 모순을 가리지 않게.
     for column in (issued, treasury):
         whole, parts = column.get("합계"), [column[se] for se in ("보통주", "우선주") if se in column]
@@ -636,7 +654,7 @@ def share_table_problem(shares: dict | None, period_end: str) -> str | None:
             continue
         # 두 종류가 다 있으면 합이 합계와 같아야 한다. 한 종류만 있어도 그 수가 합계를 넘으면 표의 모순이다 — 어느 행이
         # 틀렸는지 알 수 없으므로 합계로 통상 BPS 를 만들지 않는다(ALPHA-1172, 전에는 실패 분류에서만 잡았다).
-        if sum(parts, Decimal(0)) > whole or (len(parts) == 2 and sum(parts, Decimal(0)) != whole):
+        if sum(parts, Decimal(0)) > whole or (len(parts) == 2 and sum(parts, Decimal(0)) != whole and not explained):
             return "share_rows_inconsistent"
     return None
 
