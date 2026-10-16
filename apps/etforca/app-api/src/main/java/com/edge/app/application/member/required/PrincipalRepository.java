@@ -1,6 +1,6 @@
 package com.edge.app.application.member.required;
 
-import com.edge.app.adapter.security.AppPrincipal;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.domain.member.Principal;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;

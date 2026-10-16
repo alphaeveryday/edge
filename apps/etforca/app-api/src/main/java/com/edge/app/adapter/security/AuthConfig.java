@@ -1,5 +1,6 @@
 package com.edge.app.adapter.security;
 
+import com.edge.app.application.member.provided.AppPrincipal;
 import org.springdoc.core.utils.SpringDocUtils;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;

@@ -1,4 +1,4 @@
-package com.edge.app.adapter.security;
+package com.edge.app.application.member.provided;
 
 /** 익명을 COMMON401 로 거절하는 회원 또는 게스트 인자 */
 public record AppPrincipal(Kind kind, Long memberId, String deviceKey) {

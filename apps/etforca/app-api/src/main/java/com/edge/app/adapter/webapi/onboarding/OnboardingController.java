@@ -1,6 +1,6 @@
 package com.edge.app.adapter.webapi.onboarding;
 
-import com.edge.app.adapter.security.AppPrincipal;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.onboarding.OnboardingService;
 import com.edge.app.application.onboarding.provided.OnboardingCompleteRequest;
 import com.edge.common.apipayload.ApiResponse;

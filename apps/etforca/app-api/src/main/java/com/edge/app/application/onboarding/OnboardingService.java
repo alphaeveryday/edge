@@ -1,6 +1,6 @@
 package com.edge.app.application.onboarding;
 
-import com.edge.app.adapter.security.AppPrincipal;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.PrincipalRepository;
 import com.edge.app.application.onboarding.provided.OnboardingCompleteRequest;
 import com.edge.app.application.onboarding.required.PrincipalThemeRepository;

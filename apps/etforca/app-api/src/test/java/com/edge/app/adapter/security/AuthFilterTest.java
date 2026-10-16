@@ -1,5 +1,6 @@
 package com.edge.app.adapter.security;
 
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.exception.ExceptionAdvice;
 import org.junit.jupiter.api.BeforeEach;

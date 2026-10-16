@@ -1,7 +1,7 @@
 package com.edge.app.adapter.webapi.notification;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.adapter.webapi.notification.dto.PushTokenRequest;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.notification.NotificationService;
 import com.edge.app.application.notification.PushService;
 import com.edge.app.application.notification.provided.NotificationResponse;

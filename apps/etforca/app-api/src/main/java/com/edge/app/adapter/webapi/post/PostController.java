@@ -1,7 +1,7 @@
 package com.edge.app.adapter.webapi.post;
 
-import com.edge.app.adapter.security.AppPrincipal;
 import com.edge.app.adapter.security.MemberPrincipal;
+import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.post.PostService;
 import com.edge.app.application.post.provided.CommentCreateRequest;
 import com.edge.app.application.post.provided.CommentResponse;
