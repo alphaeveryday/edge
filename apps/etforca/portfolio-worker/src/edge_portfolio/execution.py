@@ -132,9 +132,13 @@ def validate_funding(funding, text):
                 section, number = Decimal(0), None
         else:
             amounts.add(total + section + (number or 0))
+    components = funding.monthly_components_krw
+    if components and (any(Decimal(value) not in amounts for value in components) or sum(components) != funding.monthly_krw):
+        raise ValueError('CUSTOMER_FUNDING_AMOUNT: monthly components must match quoted amounts and sum to monthly_krw')
     if funding.estimated_fields and not any(value.strip() for value in funding.assumptions):
         raise ValueError('CUSTOMER_FUNDING_ASSUMPTION: explain estimated payment amounts')
     if any(value is not None and (value != 0 or name == 'principal_krw') and Decimal(value) not in amounts and name not in funding.estimated_fields
+           and not (name == 'monthly_krw' and components)
            for name, value in ((name, getattr(funding, name)) for name in ('additional_krw', 'monthly_krw', 'principal_krw'))):
         raise ValueError('CUSTOMER_FUNDING_AMOUNT: preserve the quoted won amount and units')
 
