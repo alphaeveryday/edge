@@ -51,6 +51,26 @@ def test_roundtrip_preserves_cards_and_parent_sticker_and_writer_can_read(factor
     assert read_factor_details(conn,key) == screen
 
 
+@pytest.mark.parametrize('fault', [None, 'foreign', 'source', 'future', 'failed', 'unlinked'])
+def test_issue_reuses_only_successful_matching_ancestor_evidence(factor_db, fault):
+    conn, key, metrics, issue = factor_db
+    ancestor = key + '-previous'
+    conn.execute("UPDATE outlook_analyses SET data_source='synthetic' WHERE analysis_id=%s", (key,))
+    conn.execute("""INSERT INTO outlook_analyses (analysis_id,etf_code,analysis_at,status,data_source)
+        VALUES (%s,%s,%s,%s,%s)""", (ancestor, 'OTHER' if fault == 'foreign' else 'TEST',
+        '2026-09-22T10:00:00+09:00' if fault == 'future' else '2026-09-20T10:00:00+09:00',
+        'failed' if fault == 'failed' else 'completed', 'database' if fault == 'source' else 'synthetic'))
+    if fault != 'unlinked':
+        conn.execute('UPDATE outlook_analyses SET previous_analysis_id=%s WHERE analysis_id=%s', (ancestor, key))
+    conn.execute('UPDATE tool_runs SET outlook_analysis_id=%s WHERE tool_run_id=%s', (ancestor, key))
+    if fault:
+        with pytest.raises(ValueError, match='Evidence'):
+            save_factor_details(conn, key, metrics, issue)
+    else:
+        save_factor_details(conn, key, metrics, issue)
+        assert read_factor_details(conn, key)['이슈']['items'] == issue['items']
+
+
 @pytest.mark.parametrize('fault', ['future','unknown_run','news_body','published'])
 def test_rejected_replacement_preserves_previous_details(factor_db,fault):
     conn,key,metrics,issue = factor_db

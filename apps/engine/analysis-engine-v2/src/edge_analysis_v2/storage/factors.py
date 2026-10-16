@@ -181,7 +181,7 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
         _references(item['tool_run_ids'])
     references = {r for item in rows + items for r in item['tool_run_ids']}
     with connection.transaction(), connection.cursor(row_factory=dict_row) as cur:
-        cur.execute('SELECT status, analysis_at, etf_code FROM outlook_analyses WHERE analysis_id=%s FOR UPDATE', (analysis_id,))
+        cur.execute('SELECT status, analysis_at, etf_code, data_source FROM outlook_analyses WHERE analysis_id=%s FOR UPDATE', (analysis_id,))
         parent = cur.fetchone()
         if not parent or parent['status'] != 'running':
             raise ValueError('Running outlook required')
@@ -189,17 +189,25 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
             if ((row['observed_at'] and row['observed_at'] > parent['analysis_at']) or
                     (row['observed_date'] and row['observed_date'] > parent['analysis_at'].astimezone(ZoneInfo('Asia/Seoul')).date())):
                 raise ValueError('Future observation')
-        cur.execute('''SELECT r.tool_run_id, d.function_name, r.arguments, r.output
-            FROM tool_runs r JOIN tool_definitions d USING (tool_id)
-            WHERE r.tool_run_id=ANY(%s) AND r.outlook_analysis_id=%s AND r.status='completed' ''',
-                    (list(references), analysis_id))
+        cur.execute('''WITH RECURSIVE history AS (
+                SELECT analysis_id,previous_analysis_id,analysis_at FROM outlook_analyses WHERE analysis_id=%s
+                UNION ALL SELECT a.analysis_id,a.previous_analysis_id,a.analysis_at FROM outlook_analyses a
+                JOIN history h ON a.analysis_id=h.previous_analysis_id
+                WHERE a.status='completed' AND a.etf_code=%s AND a.data_source=%s
+                    AND a.data_source IN ('synthetic','database') AND a.analysis_at<h.analysis_at
+            ) SELECT r.tool_run_id, r.outlook_analysis_id, d.function_name, r.arguments, r.output
+            FROM tool_runs r JOIN tool_definitions d USING (tool_id) JOIN history h ON h.analysis_id=r.outlook_analysis_id
+            WHERE r.tool_run_id=ANY(%s) AND r.status='completed' ''',
+                    (analysis_id, parent['etf_code'], parent['data_source'], list(references)))
         evidence = {r['tool_run_id']: r for r in cur.fetchall()}
         if set(evidence) != references:
-            raise ValueError('Evidence must belong to this successful analysis execution')
+            raise ValueError('Evidence must belong to this execution or its completed matching ancestors')
         for run in evidence.values():
             if run['function_name'] == 'get_issue_evidence' and run['arguments'].get('include_body') is not False:
                 raise ValueError('Final news evidence must exclude body')
         for row in rows:
+            if any(evidence[identity]['outlook_analysis_id'] != analysis_id for identity in row['tool_run_ids']):
+                raise ValueError('Metric evidence must belong to this analysis execution')
             if not any(_matches_calculation(row, evidence[identity], parent['etf_code']) for identity in row['tool_run_ids']):
                 raise ValueError('Metric must match its final factor calculation')
         cur.execute('DELETE FROM outlook_factor_metrics WHERE analysis_id=%s', (analysis_id,))

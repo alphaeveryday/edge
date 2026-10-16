@@ -61,7 +61,7 @@ FIELDS = obj({
 OUTLOOK = obj(WRITING['properties'] | FIELDS['properties'])
 EDIT_SCHEMAS = [
     {'type': 'function', 'function': {'name': 'write_outlook_body',
-     'description': '최초 본문 또는 중요한 논점 10개 이상 변경 시 전체 본문을 작성합니다. 유지할 논점 ID는 그대로 씁니다. 재작성에서 새 정보가 있는 불릿은 updated_sentence_numbers에 1부터 시작하는 번호로 지정합니다. 단순 표현 변경은 지정하지 않습니다. 저장 전 초안과 오늘 업데이트를 반환합니다.',
+     'description': '최초 본문을 작성합니다. 기존 본문은 apply_outlook_body_changes로 바뀐 부분만 수정하는 것이 기본입니다. 전체 재작성이 꼭 필요한 경우에도 유지할 논점 ID는 보존하고 새 정보의 불릿 번호만 updated_sentence_numbers에 지정합니다. 저장 전 초안과 오늘 업데이트를 반환합니다.',
      'parameters': obj({'title': limited('detail.title'), 'items': {'type': 'array', 'maxItems': MAX_TOPICS, 'items': TOPIC}})}},
     {'type': 'function', 'function': {'name': 'apply_outlook_body_changes',
      'description': '논점을 ID로 추가·수정·삭제합니다. 여러 변경을 한 번에 적용합니다. 수정 불릿 번호는 1부터 시작합니다. 생략한 필드는 유지합니다. 수정 후 전체 본문을 반환합니다.',
