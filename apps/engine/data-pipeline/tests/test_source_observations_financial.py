@@ -258,12 +258,25 @@ def test_bps_with_an_unverifiable_share_filing_is_not_backdated(tmp_path):
     assert bps["availability_basis"] == "received" and bps["available_at"] == bps["received_at"]
 
 
-def test_unsupported_fiscal_calendar_is_reported_not_silently_skipped(tmp_path):
-    # WHY(리뷰, Rule 12): 비12월 결산을 계획에서 빼기만 하면 수집·정제가 exit 0 으로 끝나 누락이 안 보인다.
+def test_unsupported_fiscal_calendar_is_a_recorded_gap_not_a_run_failure(tmp_path):
+    # WHY(리뷰 Rule 12 → ALPHA-1369): 비12월 결산을 계획에서 빼기만 하면 누락이 안 보인다 — 거부로 남긴다. 다만 결산월은
+    # 회사 속성이라 그 회사가 구성종목에 있는 한 매일 반복되므로, 실행 실패(exit 2)로 세면 run 이 영영 FAILED 라 진짜
+    # 장애와 구분되지 않는다(10-03 이후 매일 FAILED). 결손(정책 차단·확인된 원천 부재)으로 기록하고 exit 0 이다.
     march = {("2026", "11011"): ("사업보고서 (2026.03)", "20260601000505", "20260601")}
-    dart = DartFake([SAMSUNG], {}, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, march)})
-    storage, _ = chain(tmp_path, dart, holdings=("005930",))
-    assert so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric") == 2
+    no_annual = {("2026", "11013"): FILINGS[("2026", "11013")]}          # 소급 400일 목록에 사업보고서가 없다(신규 상장)
+    for name, filings, reason, kind in (("march", march, "non_december_fiscal_year", "policy"),
+                                        ("new", no_annual, "fiscal_calendar_unconfirmed", "source_absent")):
+        folder = tmp_path / name
+        folder.mkdir()
+        dart = DartFake([SAMSUNG], {}, {SAMSUNG["corp_code"]: filing_list(SAMSUNG, filings)})
+        storage, _ = chain(folder, dart, holdings=("005930",))
+        code = so.normalize(storage, so_fin.FINANCIAL, "run_fn", "run_f", producer="normalize_financial_metric")
+        done = _canonical_manifest(storage)
+        log = json.loads(storage.get_bytes(next(k for k in storage.list_keys("operations_archive/data_quality_logs/")
+                                                if "run_id=run_fn/" in k)))
+        assert code == 0 and done["rejected"] == 0 and done["gaps"] == len(log["gaps"]) > 0, name
+        assert {(r, f["class"]) for f in log["gaps"] for r in f["reasons"]} == {(reason, kind)}, name
+        assert log["failures"] == [] and log["ops"]["unsupported_records"] == done["gaps"], name
 
 
 def test_bad_share_receipt_number_is_rejected_not_loaded():
@@ -657,7 +670,9 @@ def test_reject_class_defaults_to_error():
     assert kind({"reasons": ["account_not_found"]}) == "source_absent"
     assert kind({"reasons": ["bps_share_class_label_unsupported"]}) == "unsupported"
     assert kind({"reasons": ["bps_share_rows_unreadable"]}) == "error"          # 있는 행의 수 파손
-    assert kind({"reasons": ["non_december_fiscal_year"]}) == "error"           # 보고서 단위 제외는 계속 드러낸다
+    # 결산월로 회사 전체를 뺀 거부는 결손이다(ALPHA-1369) — 회사 속성이라 매일 반복되므로 실행 실패로 세면 run 이 영영 FAILED 다.
+    assert kind({"reasons": ["non_december_fiscal_year"]}) == "policy"
+    assert kind({"reasons": ["fiscal_calendar_unconfirmed"]}) == "source_absent"
     assert kind({"reasons": ["some_new_reason"]}) == kind({"reasons": []}) == kind({}) == "error"
     assert kind({"reasons": ["account_not_found", "bad_rcept_no"]}) == "error"  # 하나라도 오류 사유면 오류
     assert kind({"reasons": ["account_not_found"], "response_damaged": True}) == "error"
@@ -1289,6 +1304,63 @@ def test_broken_share_table_unconfirms_only_the_denominator(tmp_path):
     assert json.loads(v["detail"])["shares_detail"] == "bad_rcept_no"
     assert ("005930", 2026, "Q2", "eps_basic", "QUARTER", "CFS") in rows
     assert not any(k[1:3] == (2026, "Q2") and k[3].startswith("bps") for k in rows)
+
+
+def test_a_share_table_whose_other_class_row_explains_the_total_is_not_a_contradiction(tmp_path):
+    # WHY(ALPHA-1369): 대신증권 반기 주식총수 표는 보통주·우선주·기타(2우B)·합계 네 행이고 보통주+우선주 < 합계다. "두 종류가
+    # 다 있으면 합이 합계와 같아야 한다"는 검사가 이 표를 무결성 위반(response_damaged → error)으로 거부해 정제가 매일 exit 2
+    # 였다. 다른 이름의 행이 주식을 가지면 차이는 그 행들의 몫이고, 설명되는지는 _non_common_shares 가 본다 — 설명되면
+    # 우선주 있는 회사와 같은 정책 차단 + 통상 BPS, 설명되지 않으면 미지원 표기다. 어느 쪽도 표의 모순이 아니다.
+    def with_other(rows):
+        for r in rows:
+            if r["se"] == "보통주":
+                r["istc_totqy"] = "900"
+        return [*rows, {**next(r for r in rows if r["se"] == "우선주"), "se": "기타", "istc_totqy": "80", "tesstk_co": "-"}]
+
+    table = json.loads(_shares_with(with_other, preferred=20))          # 900 + 20 + 80 = 1,000
+    assert dart_fundamental.share_table_problem(table, "2026-06-30") is None
+    assert dart_fundamental._non_common_shares(table) == Decimal(100)
+    code, versions, rows = _half_after(tmp_path / "explained",
+                                       {**full_responses(SAMSUNG), _HALF_SHARES: json.dumps(table).encode()})
+    assert code == 0 and json.loads(versions[(2026, "11012", "CFS")]["detail"])["shares"] == "ok"
+    assert ("005930", 2026, "Q2", "bps_total_shares", "POINT", "CFS") in rows
+    assert ("005930", 2026, "Q2", "bps", "POINT", "CFS") not in rows        # 보통주가 아닌 주식이 있다 — 정책 차단
+    # 다른 이름의 행은 검사를 끄는 게 아니라 차이를 채워야 한다(로컬 리뷰 1·2라운드): 그 행까지 더해도 합계와 다르거나,
+    # 그 행 자체가 모순·파손이면(다른 표의 행, 같은 이름 중복, 자기주식 > 발행수, 한 열만 맞음, 종류명 없음) 종전대로 표의 모순이다 —
+    # 어느 행이 틀렸는지 모르는 합계로 통상 BPS 를 만들지 않는다.
+    def other_with(**cells):
+        return lambda rows: [dict(r, **cells) if r["se"] == "기타" else r for r in with_other(rows)]
+
+    def duplicate_other(rows):                                       # 같은 기타 행이 두 번 — 40 + 40 으로 차이를 채운다
+        rows = [dict(r, istc_totqy="40") if r["se"] == "기타" else r for r in with_other(rows)]
+        return [*rows, dict(rows[-1])]
+
+    def column_split(rows):                                          # 발행수는 기타 없이, 자기주식은 기타를 더해야 맞는다
+        return [dict(r, tesstk_co="20") if r["se"] == "기타" else dict(r, istc_totqy="920", tesstk_co="20")
+                if r["se"] == "합계" else r for r in with_other(rows)]
+
+    for name, mutate in (("over", lambda rows: [dict(r, istc_totqy="2,000") if r["se"] == "보통주" else r
+                                                 for r in with_other(rows)]),
+                         ("short", other_with(istc_totqy="50")),                     # 900 + 20 + 50 ≠ 1,000
+                         ("treasury_only", other_with(istc_totqy="-", tesstk_co="50")),
+                         ("other_table", other_with(rcept_no="20260901000999")),
+                         ("other_period", other_with(stlm_dt="2025-12-31")),
+                         ("other_over_held", lambda rows: [dict(r, tesstk_co="100") if r["se"] in ("기타", "합계") else r
+                                                           for r in with_other(rows)]),
+                         ("duplicate_other", duplicate_other),
+                         ("column_split", column_split),
+                         ("nameless_other", other_with(se=" ")),                    # 파손 행은 근거가 아니다 — 종류명 없음,
+                         ("other_bad_receipt", other_with(rcept_no=20260814000404)),  # 접수번호가 숫자,
+                         ("other_unreadable", other_with(tesstk_co="x"))):           # 수가 문자
+        broken = json.loads(_shares_with(mutate, preferred=20))
+        assert dart_fundamental.share_table_problem(broken, "2026-06-30") == "share_rows_inconsistent", name
+        _, versions, rows = _half_after(tmp_path / name, {**full_responses(SAMSUNG), _HALF_SHARES: json.dumps(broken).encode()})
+        assert json.loads(versions[(2026, "11012", "CFS")]["detail"])["shares"] == "error", name
+        assert not any(k[1:3] == (2026, "Q2") and k[3].startswith("bps") for k in rows), name
+    # 다른 이름의 행이 없으면 종전대로 두 종류의 합이 합계와 같아야 한다.
+    short = json.loads(_shares_with(lambda rows: [dict(r, istc_totqy="900") if r["se"] == "보통주" else r for r in rows],
+                                    preferred=20))
+    assert dart_fundamental.share_table_problem(short, "2026-06-30") == "share_rows_inconsistent"
 
 
 def test_share_table_validity_is_judged_independently_of_the_equity_line():
