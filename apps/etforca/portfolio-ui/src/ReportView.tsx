@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { Evaluation, Report, Section } from './api';
 import { chartColors, PerformanceChart, PortfolioDonut } from './ReportCharts';
 import { safeReportUrl } from './reportUrl';
-import { ExecutionPlan } from './ExecutionPlan';
+import { ExecutionDetails, ExecutionPlan } from './ExecutionPlan';
 import { hasTradeAmounts, TradeAmount } from './TradeAmount';
 import { ScenarioTable } from './ScenarioTable';
 
@@ -66,6 +66,12 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
   const plan = report.recommendation;
   const allocations = plan?.allocations ?? [];
   const actions = plan?.actions ?? [];
+  const actionable = !plan?.execution || plan.execution.status === 'ready' || plan.execution.status === 'conditional';
+  const changes = [...actions, ...(actionable ? plan?.execution?.rows ?? [] : [])
+    .filter(row => !actions.some(a => a.instrument_id === row.instrument_id && a.account === row.account))
+    .map(row => ({ ...row, name: row.name || row.instrument_id, ticker: row.instrument_id.split(':')[1],
+      before_pct: null, after_pct: allocations.find(a => a.instrument_id === row.instrument_id && a.account === row.account)?.weight_pct,
+      action: '' }))];
   const sections = report.sections ?? {};
   const colors = new Map<string, string>();
   allocations.forEach(h => { if (!colors.has(h.instrument_id)) colors.set(h.instrument_id, chartColors[colors.size % chartColors.length]); });
@@ -100,17 +106,15 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
         {(plan.expected_return_1y != null || plan.dividend_yield_1y != null) && <div className="forecast">{plan.expected_return_1y != null && <div><span>예상 1년 수익률</span><b>{`${plan.expected_return_1y > 0 ? '+' : ''}${plan.expected_return_1y}%`}</b></div>}{plan.dividend_yield_1y != null && <div><span>1년 배당률</span><b>{plan.dividend_yield_1y}%</b></div>}</div>}
         {(plan.return_forecast || plan.dividend_basis) && <details className="forecast-basis"><summary>수익률·배당률 산정 근거</summary>{plan.return_forecast && <><p>{plan.return_forecast.reason}</p><p>{plan.return_forecast.method}</p></>}<p>{plan.dividend_basis}</p>{plan.target_return_1y != null && <p>연 {plan.target_return_1y}%는 목표 수익률이며 예상 수익률의 하한이 아니에요.</p>}{plan.dividend_observations?.map(row => <p key={row.instrument_id}>{row.instrument_id} · {row.trailing_yield_pct}% · {row.as_of}{row.source_url && <a href={safeReportUrl(row.source_url)} target="_blank" rel="noreferrer"> 분배금 내역 ↗</a>}{row.method && <small>{row.method}</small>}{(row.evidence ?? []).map((e, i) => <a key={i} href={safeReportUrl(e.url)} target="_blank" rel="noreferrer"> 배당 출처 ↗</a>)}</p>)}</details>}
       </div>
-      <section className="improvements" data-analytics-section="changes"><div className="improvements-heading"><h4>내 포트폴리오에서 바꿀 것</h4></div>{plan.execution?.status === 'conditional' && plan.execution.months != null && plan.execution.months > 1 && <p className="notice">{plan.execution.months}개월 계획의 총 거래 금액이에요.</p>}{actions.length ? <ul className="improvement-list">{actions.map((a, i) => {
-        const actionable = !plan.execution || plan.execution.status === 'ready' || plan.execution.status === 'conditional';
+      <section className="improvements" data-analytics-section="changes"><div className="improvements-heading"><h4>내 포트폴리오에서 바꿀 것</h4></div>{plan.execution && <ExecutionDetails plan={plan.execution} />}{changes.length ? <ul className="improvement-list">{changes.map((a, i) => {
         const row = actionable ? plan.execution?.rows?.find(row => row.instrument_id === a.instrument_id && row.account === a.account) : undefined;
         const trade = actionable ? hasTradeAmounts(row) ? row : hasTradeAmounts(a) ? a : undefined : undefined;
         return <li key={i}><div><div className="action-heading"><i className="asset-dot" style={{ background: color(a.instrument_id) }} /><h5 title={a.name}>{a.instrument_id?.startsWith('US:') ? a.ticker : a.name}{!trade && ` ${a.action}`}</h5></div>
           {trade ? <TradeAmount row={trade} /> : <p className="weight-change"><span>{a.before_pct == null ? '미입력' : `${a.before_pct}%`}</span><span>→</span><strong>{weight(a.after_pct)}</strong></p>}
-          {new Set(actions.map(action => action.account)).size > 1 && <small className="action-note">{a.account}</small>}
+          {new Set(changes.map(action => action.account)).size > 1 && <small className="action-note">{a.account}</small>}
         </div></li>;
       })}</ul> : <p className="notice">{plan.actions ? '현재 구성을 유지하는 안이에요.' : '저장된 실행 행동이 없습니다.'}</p>}</section>
       <section className="account-plans" data-analytics-section="account_plans"><h4>계좌별 최종 투자 제안</h4>{[...new Set(allocations.map(h => h.account))].map(account => { const rows = allocations.filter(h => h.account === account); const hasAmount = rows.every(h => hasMoney(h.amount_krw)); return <article className="account-plan" key={account}><header><div><h5>{account}</h5></div><div className="account-total"><span>{hasAmount ? '최종 투자금' : '전체 대비 비중'}</span><strong>{hasAmount ? money(String(rows.reduce((sum, h) => sum + Number(h.amount_krw), 0))) : rows.every(h => Number.isFinite(h.weight_pct)) ? weight(Number(rows.reduce((sum, h) => sum + h.weight_pct, 0).toFixed(2))) : '비중 자료 없음'}</strong></div></header><table><caption className="sr-only">{account} 종목별 최종 금액</caption><tbody>{rows.map(h => <tr key={h.instrument_id}><th scope="row" style={{ "--asset-color": color(h.instrument_id) } as CSSProperties}><b title={h.name}>{h.instrument_id?.startsWith('US:') ? h.ticker : h.name}</b></th><td><strong>{h.amount_krw == null ? weight(h.weight_pct) : money(h.amount_krw)}</strong></td></tr>)}</tbody></table></article>; })}{plan.total_krw == null && <p className="notice">투자 총액이 없어 추천 비중만 표시했어요.</p>}</section>
-      {plan.execution && <ExecutionPlan plan={plan.execution} />}
       <div className="why"><i>이렇게 고른 이유</i><Bullets section={plan.evaluation?.reason} /><Evidence section={plan.evaluation?.reason} report={report} hidden={separateEvidence} /></div>
       <section className="performance" data-analytics-section="performance"><h4>과거 성과</h4>{plan.historical_performance ? <PerformanceChart history={plan.historical_performance} /> : <p className="notice">{plan.unavailable_reason}</p>}</section>
     </article> : report.scenarios || report.execution ? null : <article className="ans"><p className="notice">{recommendationStatus(report)}</p>{report.metrics?.total_krw != null && <p className="fee"><span>입력한 평가금액</span><b>{money(report.metrics.total_krw)}</b></p>}<ul className="report-bullets">{(report.metrics?.holdings ?? []).map((h, i) => <li key={i}>{h.name} · {h.account} · {h.weight_pct == null ? '비중 미입력' : `${h.weight_pct}%`}</li>)}</ul>{!report.optimization && <section className="performance"><h4>과거 성과</h4><p className="notice">{report.metrics?.unavailable_reason}</p></section>}</article>}
