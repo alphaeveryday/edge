@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { trackFeedback, type FeedbackRating } from './analytics';
 import { request } from './api';
 
@@ -11,6 +11,7 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
   const previousFocus = useRef<HTMLElement | null>(null);
   const [open, setOpen] = useState(false);
   const [answered, setAnswered] = useState(false);
+  const [newsletterOnly, setNewsletterOnly] = useState(false);
   const [email, setEmail] = useState('');
   const [sending, setSending] = useState(false);
   const [subscription, setSubscription] = useState('');
@@ -22,7 +23,7 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     try { if (localStorage.getItem(storageKey)) return; } catch { /* The in-memory guard still works without storage. */ }
     let shown = false;
     function check() {
-      if (shown || document.visibilityState !== 'visible' || !anchor.current || document.querySelector('dialog[open]')) return;
+      if (shown || finished.has(jobId) || popup.current || document.visibilityState !== 'visible' || !anchor.current || document.querySelector('dialog[open]')) return;
       if (anchor.current.getBoundingClientRect().top > innerHeight - 64) return;
       shown = true; setOpen(true); trackFeedback('shown');
     }
@@ -37,11 +38,11 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     try { localStorage.setItem(storageKey, 'done'); } catch { /* Feedback must not depend on browser storage. */ }
   }
   function close() {
-    if (!submitted.current) trackFeedback('dismissed');
+    if (!submitted.current && !newsletterOnly) trackFeedback('dismissed');
     if (popup.current?.contains(document.activeElement) && previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
     remember(); setOpen(false);
   }
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     popup.current?.focus({ preventScroll: true });
@@ -62,17 +63,22 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
       const result = await request<{ status: string; delivery_ready: boolean }>(`/analyses/${jobId}/newsletter`, {
         method: 'POST', body: JSON.stringify({ email: email.trim(), consent: true }),
       });
-      setSubscription(result.status === 'active' ? '이미 구독 중이에요. 매일 보유 종목 소식을 보내드릴게요.' : result.delivery_ready
-        ? '신청했어요! 확인 메일의 링크를 눌러 구독을 시작해 주세요.'
-        : '신청했어요! 발송 준비가 끝나면 이메일 확인 링크를 보내드릴게요.');
+      if (result.status === 'active' || result.status === 'confirmed') {
+        setSubscription((result.status === 'active' ? '이미 구독 중이에요. ' : '이메일 확인을 마쳤어요. ') + (result.delivery_ready
+          ? '매일 보유 종목 소식을 보내드릴게요.' : '발송 준비가 끝나면 소식을 보내드릴게요.'));
+      } else {
+        setSubscription(result.delivery_ready ? '신청했어요! 확인 메일의 링크를 눌러 구독을 시작해 주세요.'
+          : '신청했어요! 발송 준비가 끝나면 이메일 확인 링크를 보내드릴게요.');
+      }
       setEmail('');
     } catch (e) { setError((e as Error).message); } finally { setSending(false); }
   }
   return <div ref={anchor} className="feedback-anchor">
-    {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-labelledby="feedback-title" aria-modal="false" data-analytics-section="feedback">
+    {!open && <button className="secondary" onClick={() => { setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</button>}
+    {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-labelledby={newsletterOnly ? 'newsletter-title' : 'feedback-title'} aria-modal="false" data-analytics-section="feedback">
       <button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</button>
       <div className="feedback-newsletter">
-        <h3>내 ETF 소식, 매일 메일로</h3>
+        <h3 id="newsletter-title">내 ETF 소식, 매일 메일로</h3>
         <p>보유 종목의 핵심 이슈와 가격이 움직인 이유를 쉽고 짧게 정리해 드려요.</p>
         {subscription ? <p role="status">{subscription}</p> : <form onSubmit={subscribe}>
           <label className="sr-only" htmlFor="newsletter-email">뉴스레터 이메일</label>
@@ -83,8 +89,8 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
         </form>}
         <small>언제든 메일에서 수신 거부할 수 있어요.</small>
       </div>
-      <h3 id="feedback-title">이번 분석은 어떠셨나요?</h3>
-      {answered ? <p role="status">의견 감사합니다!</p> : <div className="feedback-choices">{choices.map(([rating, emoji, label]) => <button key={rating} onClick={() => choose(rating)}><span aria-hidden="true">{emoji}</span>{label}</button>)}</div>}
+      {!newsletterOnly && <><h3 id="feedback-title">이번 분석은 어떠셨나요?</h3>
+      {answered ? <p role="status">의견 감사합니다!</p> : <div className="feedback-choices">{choices.map(([rating, emoji, label]) => <button key={rating} onClick={() => choose(rating)}><span aria-hidden="true">{emoji}</span>{label}</button>)}</div>}</>}
     </aside>}
   </div>;
 }

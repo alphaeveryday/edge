@@ -306,18 +306,43 @@ test('newsletter signup is above the independent rating choices and never enters
 
 test('newsletter confirmation requires a click and clears the token before any analytics', async ({ page, baseURL }) => {
   const events = await instrument(page, baseURL!);
+  const analyticsRequests: string[] = [];
+  page.on('request', request => { if (new URL(request.url()).hostname.endsWith('posthog.com')) analyticsRequests.push(request.url()); });
   const token = 'private-newsletter-confirmation-token-123456789';
   const confirmations: unknown[] = [];
   await page.route('**/api/portfolio/newsletter/confirm', route => {
     confirmations.push(route.request().postDataJSON());
-    return route.fulfill({ json: { status: 'confirmed' } });
+    return route.fulfill({ json: { status: 'confirmed', delivery_ready: false } });
   });
   await page.goto(`https://etforca.com/portfolio/#newsletter-confirm=${token}`);
   await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
   expect(page.url()).toBe('https://etforca.com/portfolio/');
   expect(confirmations).toHaveLength(0);
   await page.getByRole('button', { name: '이메일 확인하고 구독하기' }).click();
-  await expect(page.getByRole('heading', { name: '구독이 시작됐어요!' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '이메일 확인을 마쳤어요!' })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('발송 준비가 끝나면');
   expect(confirmations).toEqual([{ token }]);
-  expect(JSON.stringify(events)).not.toContain(token);
+  expect(events).toHaveLength(0);
+  expect(analyticsRequests).toHaveLength(0);
+});
+
+test('dismissed feedback keeps a newsletter retry without asking for another rating', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await page.reload();
+  await page.getByRole('button', { name: '보유 종목 뉴스레터 받기' }).click();
+  const popup = page.getByRole('dialog', { name: '내 ETF 소식, 매일 메일로' });
+  await expect(popup.getByLabel('뉴스레터 이메일')).toBeVisible();
+  await expect(popup.locator('.feedback-choices')).toHaveCount(0);
+  await page.route('**/api/portfolio/analyses/*/newsletter', route => route.fulfill({ json: { status: 'active', delivery_ready: false } }));
+  await popup.getByLabel('뉴스레터 이메일').fill('reader@example.test');
+  await popup.getByRole('checkbox').check();
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('status')).toContainText('발송 준비가 끝나면');
+  await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(popup).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
 });
