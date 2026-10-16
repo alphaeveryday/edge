@@ -51,12 +51,13 @@ def describe_schema_error(error) -> str:
     return f'{path}: {error.message[:300]}'
 
 
-def make_server(schemas: list[dict], call):
-    """Expose registered schemas and return exactly the committed callback result.
+def make_server(schemas: list[dict], call, format_result=None):
+    """Expose registered schemas and transport the committed callback result, optionally in pages.
 
     Args:
         schemas: OpenAI-style nested function descriptors.
         call: Synchronous audited executor accepting name and arguments.
+        format_result: Optional lossless transport formatter; never changes the audited result.
 
     Returns:
         SDK MCP server and its allowed tool names.
@@ -88,7 +89,7 @@ def make_server(schemas: list[dict], call):
                         raise
                 except ToolExecutionError as error:
                     return {'is_error': True, 'content': [{'type': 'text', 'text': str(error)}]}
-            return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
+            return {'content': [{'type': 'text', 'text': json.dumps(format_result(result) if format_result else result, ensure_ascii=False)}]}
         registered.append(tool(name, function['description'], visible['function']['parameters'])(handler))
         allowed.append('mcp__analysis__' + name)
     return create_sdk_mcp_server(name='analysis', version='1.0.0', tools=registered), allowed
@@ -152,12 +153,13 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
     repairs = 0
-    server, allowed = make_server(schemas, call) if not structured_only else (None, [])
+    source_context = WorkContext(initial) if not structured_only else None
+    server, allowed = make_server(schemas, call, source_context.tool_response) if not structured_only else (None, [])
     if web_search:
         allowed = allowed + [SEARCH_TOOL]
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
-        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
+        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__read_tool_result', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
         session = None
         if structured_only:
             query_input = {'input': initial}
@@ -166,7 +168,6 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
             session.compare_explanations = compare_explanations
             session.wrap_up_at = monotonic() + timeout_seconds * WRAP_UP_SHARE
-            source_context = WorkContext(initial)
             prompt = session.system_prompt(prompt)
             query_input = {'workspace_instructions': {'path': 'AGENTS.md',
                            'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
