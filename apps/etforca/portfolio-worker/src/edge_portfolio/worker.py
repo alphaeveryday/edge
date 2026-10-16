@@ -142,7 +142,7 @@ async def main():
             worked = await work_once(stopping)
             if not worked and not stopping.is_set():
                 from .newsletter_work import work_once as newsletter_once
-                worked = await newsletter_once()
+                worked = await newsletter_once(stopping)
                 HEARTBEAT.touch()
             if not worked:
                 await asyncio.sleep(1)

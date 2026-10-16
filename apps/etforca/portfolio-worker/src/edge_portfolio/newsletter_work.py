@@ -8,9 +8,12 @@ from .newsletter_agent import write_card
 log = logging.getLogger('portfolio-newsletter')
 
 
-async def work_once():
+async def work_once(stopping=None):
     job = newsletter_store.claim_content()
     if not job:
+        return False
+    if stopping is not None and stopping.is_set():
+        newsletter_store.release_content(job)
         return False
     try:
         result = await write_card({'instrument_id': job['instrument_id'], 'name': job['name']},

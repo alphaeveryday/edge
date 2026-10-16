@@ -13,6 +13,18 @@ import boto3
 
 ROOT = Path(__file__).resolve().parents[1]
 REGION = 'ap-northeast-2'
+NEWSLETTER_PAUSE = '''newsletter_timer_was_active=0
+if systemctl is-active --quiet portfolio-newsletter.timer; then newsletter_timer_was_active=1; fi
+trap 'result=$?; if [ "$newsletter_timer_was_active" = 1 ]; then systemctl start portfolio-newsletter.timer || echo NEWSLETTER_TIMER_RESTORE_FAILED >&2; fi; exit "$result"' EXIT
+if systemctl cat portfolio-newsletter.timer >/dev/null 2>&1; then systemctl stop portfolio-newsletter.timer; fi
+newsletter_wait=0
+while true; do
+    newsletter_state=$(systemctl show --property=ActiveState --value portfolio-newsletter.service 2>/dev/null || true)
+    case "$newsletter_state" in active|activating|deactivating) ;; *) break ;; esac
+    if [ "$newsletter_wait" -ge 330 ]; then echo NEWSLETTER_DRAIN_TIMEOUT >&2; exit 1; fi
+    sleep 5
+    newsletter_wait=$((newsletter_wait + 5))
+done'''
 
 
 def admin_ui_directory():
@@ -59,7 +71,7 @@ def main():
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/analysis-v2/api-reader --query SecretString --output text > /opt/edge-portfolio/reader.json',
         f'python3 {directory}/deploy/runtime_env.py', f'cd {directory}/deploy',
         'docker compose --env-file /opt/edge-portfolio/runtime.env --profile newsletter build',
-        'systemctl stop portfolio-newsletter.timer portfolio-newsletter.service 2>/dev/null || true',
+        NEWSLETTER_PAUSE,
         # Keep the old API, database and outlook service alive until the worker finishes.
         'docker compose --env-file /opt/edge-portfolio/runtime.env stop --timeout 630 worker',
         'docker compose --env-file /opt/edge-portfolio/runtime.env up -d --wait --wait-timeout 120',
@@ -68,7 +80,7 @@ def main():
         f'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -m edge_portfolio.verification --version {version} --register-only',
         f'ln -sfn {directory} /opt/edge-portfolio/current',
         f'install -m 644 {directory}/deploy/portfolio-newsletter.service {directory}/deploy/portfolio-newsletter.timer /etc/systemd/system/',
-        'systemctl daemon-reload', 'systemctl enable --now portfolio-newsletter.timer']
+        'systemctl daemon-reload', 'systemctl enable --now portfolio-newsletter.timer', 'trap - EXIT']
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
         Parameters={'commands': commands, 'executionTimeout': ['1200']})['Command']['CommandId']
     print(f'Release {digest}; SSM {command}', flush=True)

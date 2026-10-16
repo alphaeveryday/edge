@@ -30,6 +30,8 @@ def contact_for(ses, email):
         if error.response['Error']['Code'] == 'NotFoundException':
             return None
         raise
+    finally:
+        time.sleep(1)  # SES contact APIs are limited even when no email is sent.
 
 
 def send(ses, email, rendered, *, daily=False):
@@ -52,8 +54,11 @@ def send(ses, email, rendered, *, daily=False):
 
 
 def tick(ses, now):
+    started = time.monotonic()
     account = ses.get_account()
+    time.sleep(1)
     identity = ses.get_email_identity(EmailIdentity='etforca.com')
+    time.sleep(1)
     ready = bool(account.get('ProductionAccessEnabled') and account.get('SendingEnabled') and identity.get('VerifiedForSendingStatus'))
     with connect() as db:
         db.execute("""INSERT INTO portfolio_newsletter_runtime(id,ready) VALUES (true,%s)
@@ -66,19 +71,27 @@ def tick(ses, now):
             return
         lock.commit()
         try:
-            process_confirmations(ses)
-            activate_confirmed(ses)
+            # Acquiring this session lock proves no previous sender is still working.
+            with connect() as db:
+                confirmations = db.execute("UPDATE portfolio_newsletter_subscriptions SET confirmation_state='uncertain',updated_at=now() WHERE confirmation_state='sending'").rowcount
+                deliveries = db.execute("UPDATE portfolio_newsletter_deliveries SET state='uncertain',failure='SENDER_INTERRUPTED',updated_at=now() WHERE state='sending'").rowcount
+            if confirmations or deliveries:
+                log.warning('newsletter_interrupted confirmations=%s deliveries=%s', confirmations, deliveries)
+            process_confirmations(ses, deadline=started + 60)
+            activate_confirmed(ses, deadline=started + 120)
             if now.hour >= 8:
-                process_daily(ses, now)
+                process_daily(ses, now, deadline=started + 180)
         finally:
             lock.execute('SELECT pg_advisory_unlock(13951395)')
 
 
-def process_confirmations(ses):
+def process_confirmations(ses, *, deadline=float('inf')):
     with connect() as db:
         pending = db.execute("""SELECT * FROM portfolio_newsletter_subscriptions WHERE status='pending'
-            AND confirmation_state='queued' AND created_at>now()-interval '7 days' ORDER BY created_at LIMIT 50""").fetchall()
+            AND confirmation_state='queued' ORDER BY updated_at LIMIT 25""").fetchall()
     for row in pending:
+        if time.monotonic() >= deadline:
+            break
         with connect() as db:
             db.execute("UPDATE portfolio_newsletter_subscriptions SET confirmation_state='sending',expires_at=now()+interval '2 days',updated_at=now() WHERE id=%s", (row['id'],))
         state, _, failure = send(ses, row['email'], newsletter_email.confirmation(row['confirmation_token']))
@@ -89,30 +102,58 @@ def process_confirmations(ses):
         time.sleep(1)
 
 
-def activate_confirmed(ses):
+def activate_confirmed(ses, *, deadline=float('inf')):
     with connect() as db:
-        confirmed = db.execute("SELECT * FROM portfolio_newsletter_subscriptions WHERE status='confirmed' ORDER BY confirmed_at").fetchall()
+        db.execute("""UPDATE portfolio_newsletter_subscriptions old SET status='superseded',updated_at=now()
+            WHERE old.status='confirmed' AND EXISTS (SELECT 1 FROM portfolio_newsletter_subscriptions newer
+                WHERE newer.email=old.email AND newer.confirmed_at IS NOT NULL
+                AND (newer.confirmed_at,newer.created_at,newer.id)>(old.confirmed_at,old.created_at,old.id))""")
+        confirmed = db.execute("SELECT * FROM portfolio_newsletter_subscriptions WHERE status='confirmed' ORDER BY checked_at,confirmed_at LIMIT 25").fetchall()
     for row in confirmed:
-        # Only a fresh email confirmation can opt back in after an unsubscribe.
-        contact = contact_for(ses, row['email'])
-        arguments = {'ContactListName': LIST, 'EmailAddress': row['email'], 'UnsubscribeAll': False,
-                     'TopicPreferences': [{'TopicName': TOPIC, 'SubscriptionStatus': 'OPT_IN'}]}
-        if contact is None:
-            ses.create_contact(**arguments)
-        else:
-            ses.update_contact(**arguments)
+        if time.monotonic() >= deadline:
+            break
         with connect() as db:
-            db.execute("UPDATE portfolio_newsletter_subscriptions SET status='unsubscribed',updated_at=now() WHERE email=%s AND status='active'", (row['email'],))
-            db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active',updated_at=now() WHERE id=%s AND status='confirmed'", (row['id'],))
-        log.info('subscription=%s newsletter=active', row['id'])
+            db.execute('UPDATE portfolio_newsletter_subscriptions SET checked_at=now() WHERE id=%s', (row['id'],))
+        try:
+            # SES preferences have no conditional update API. Never overwrite a recipient's opt-out.
+            contact = contact_for(ses, row['email'])
+            if contact and opted_out(contact):
+                log.info('subscription=%s newsletter=waiting_preferences', row['id'])
+                continue
+            arguments = {'ContactListName': LIST, 'EmailAddress': row['email'], 'UnsubscribeAll': False,
+                         'TopicPreferences': [{'TopicName': TOPIC, 'SubscriptionStatus': 'OPT_IN'}]}
+            if contact is None:
+                ses.create_contact(**arguments)
+                time.sleep(1)
+            with connect() as db:
+                db.execute("UPDATE portfolio_newsletter_subscriptions SET status='unsubscribed',updated_at=now() WHERE email=%s AND status='active'", (row['email'],))
+                db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active',updated_at=now() WHERE id=%s AND status='confirmed'", (row['id'],))
+            log.info('subscription=%s newsletter=active', row['id'])
+        except (ClientError, BotoCoreError) as error:
+            code = error.response['Error']['Code'] if isinstance(error, ClientError) else type(error).__name__
+            log.warning('subscription=%s activation_failed code=%s', row['id'], code)
 
 
-def process_daily(ses, now):
+
+def process_daily(ses, now, *, deadline=float('inf')):
     edition = now.date()
     with connect() as db:
-        subscriptions = db.execute("SELECT * FROM portfolio_newsletter_subscriptions WHERE status='active' ORDER BY created_at").fetchall()
+        subscriptions = db.execute("""SELECT s.* FROM portfolio_newsletter_subscriptions s WHERE s.status='active'
+            AND NOT EXISTS (SELECT 1 FROM portfolio_newsletter_deliveries d
+                WHERE d.email=s.email AND d.edition=%s AND d.state<>'queued')
+            ORDER BY s.checked_at,s.created_at LIMIT 50""", (edition,)).fetchall()
     for row in subscriptions:
-        contact = contact_for(ses, row['email'])
+        if time.monotonic() >= deadline:
+            break
+        # Advance before remote calls: a slow or interrupted recipient cannot starve the next batch.
+        with connect() as db:
+            db.execute('UPDATE portfolio_newsletter_subscriptions SET checked_at=now() WHERE id=%s', (row['id'],))
+        try:
+            contact = contact_for(ses, row['email'])
+        except (ClientError, BotoCoreError) as error:
+            code = error.response['Error']['Code'] if isinstance(error, ClientError) else type(error).__name__
+            log.warning('subscription=%s contact_check_failed code=%s', row['id'], code)
+            continue
         if contact is None or opted_out(contact):
             with connect() as db:
                 db.execute("UPDATE portfolio_newsletter_subscriptions SET status='unsubscribed',updated_at=now() WHERE id=%s", (row['id'],))
@@ -139,7 +180,7 @@ def process_daily(ses, now):
             continue
         with connect() as db:
             claimed = db.execute("""INSERT INTO portfolio_newsletter_deliveries(email,edition,subscription_id) VALUES (%s,%s,%s)
-                ON CONFLICT(email,edition) DO UPDATE SET state='sending',updated_at=now()
+                ON CONFLICT(email,edition) DO UPDATE SET state='sending',subscription_id=excluded.subscription_id,updated_at=now()
                     WHERE portfolio_newsletter_deliveries.state='queued' RETURNING email""", (row['email'], edition, row['id'])).fetchone()
         if not claimed:
             continue

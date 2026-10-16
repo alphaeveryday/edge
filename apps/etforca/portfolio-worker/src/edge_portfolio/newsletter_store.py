@@ -19,6 +19,7 @@ def initialize(db):
         token_hash text, confirmation_token text, confirmation_state text NOT NULL DEFAULT 'queued',
         created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL DEFAULT now()+interval '2 days',
         confirmed_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now())""")
+    db.execute("ALTER TABLE portfolio_newsletter_subscriptions ADD COLUMN IF NOT EXISTS checked_at timestamptz NOT NULL DEFAULT 'epoch'")
     db.execute("CREATE INDEX IF NOT EXISTS portfolio_newsletter_email ON portfolio_newsletter_subscriptions(email,status)")
     db.execute("""CREATE TABLE IF NOT EXISTS portfolio_newsletter_content (
         instrument_id text NOT NULL, edition date NOT NULL, name text NOT NULL,
@@ -49,7 +50,8 @@ def subscribe(job_id, owner, email):
             raise ValueError('NO_HOLDINGS')
         existing = db.execute("""SELECT status FROM portfolio_newsletter_subscriptions
             WHERE owner=%s AND email=%s AND job_id=%s AND
-            (status='active' OR (status='pending' AND expires_at>now())) ORDER BY created_at DESC LIMIT 1""",
+            (status='confirmed' OR (status='pending' AND
+                (confirmation_state IN ('queued','sending') OR (confirmation_state='sent' AND expires_at>now())))) ORDER BY created_at DESC LIMIT 1""",
             (owner, email, job_id)).fetchone()
         if existing:
             return existing['status']
@@ -90,6 +92,8 @@ def content(instrument_id, edition):
 
 def claim_content():
     with connect() as db:
+        db.execute("""UPDATE portfolio_newsletter_content SET state='failed',failure='WORKER_INTERRUPTED'
+            WHERE state='running' AND attempts>=3 AND started_at<now()-interval '12 minutes'""")
         return db.execute("""UPDATE portfolio_newsletter_content SET state='running',started_at=now(),attempts=attempts+1
             WHERE (instrument_id,edition)=(SELECT instrument_id,edition FROM portfolio_newsletter_content
                 WHERE edition=(now() AT TIME ZONE 'Asia/Seoul')::date AND attempts<3 AND
@@ -102,3 +106,10 @@ def finish_content(job, value=None, failure=None):
         db.execute("""UPDATE portfolio_newsletter_content SET state=%s,content=%s,failure=%s,retry_at=now()+interval '10 minutes'
             WHERE instrument_id=%s AND edition=%s AND started_at=%s AND state='running'""",
             ('ready' if value else 'failed', Jsonb(value) if value else None, failure, job['instrument_id'], job['edition'], job['started_at']))
+
+
+def release_content(job):
+    with connect() as db:
+        db.execute("""UPDATE portfolio_newsletter_content SET state='queued',started_at=NULL,attempts=attempts-1
+            WHERE instrument_id=%s AND edition=%s AND started_at=%s AND state='running'""",
+            (job['instrument_id'], job['edition'], job['started_at']))

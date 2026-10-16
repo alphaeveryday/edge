@@ -107,7 +107,7 @@ def newsletter_subscribe(job_id: str, body: NewsletterRequest, request: Request)
 def newsletter_confirm(body: NewsletterConfirmation):
     from . import newsletter_store
     try:
-        return {'status': newsletter_store.confirm(body.token)}
+        return {'status': newsletter_store.confirm(body.token), 'delivery_ready': newsletter_store.delivery_ready()}
     except ValueError:
         raise HTTPException(410, 'INVALID_CONFIRMATION') from None
 

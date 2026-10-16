@@ -2,7 +2,7 @@
 import asyncio
 import json
 import logging
-import math
+import inspect
 import os
 from contextlib import AsyncExitStack
 from datetime import datetime
@@ -18,6 +18,7 @@ from .agent import EXA_URL, MODEL, TOOLS, ExaEvidence
 from .contracts import StrictModel
 from .exa_transport import ExaTransport
 from .structured_output import structured_call
+from .newsletter_quote import daily_quote, load_quote
 
 KST = ZoneInfo('Asia/Seoul')
 SKILL = Path(__file__).parent / 'prompts/newsletter/SKILL.md'
@@ -32,23 +33,6 @@ class NewsletterCard(StrictModel):
     source_ids: list[str] = Field(min_length=1, max_length=5)
 
 
-def daily_quote(instrument_id, edition):
-    """Use the last two completed exchange dates, never today's intraday bar."""
-    import yfinance as yf
-    market, ticker = instrument_id.split(':', 1)
-    symbol = ticker + '.KS' if market == 'KR' else ticker
-    frame = yf.Ticker(symbol).history(period='1mo', end=edition.isoformat(), auto_adjust=False, actions=False)
-    rows = [(stamp.date(), float(close)) for stamp, close in frame['Close'].items()
-            if stamp.date() < edition and math.isfinite(float(close)) and float(close) > 0]
-    if len(rows) < 2 or (edition - rows[-1][0]).days > 7:
-        return None
-    previous, latest = rows[-2:]
-    return {'id': 'price', 'url': f'https://finance.yahoo.com/quote/{symbol}/history/',
-            'excerpt': json.dumps({'trading_date': latest[0].isoformat(), 'previous_date': previous[0].isoformat(),
-                                  'close': latest[1], 'change_pct': round((latest[1] / previous[1] - 1) * 100, 2),
-                                  'currency': 'KRW' if market == 'KR' else 'USD', 'basis': 'unadjusted_close'})}
-
-
 async def published_outlook(client, instrument_id, edition):
     if not instrument_id.startswith('KR:') or not instrument_id[3:].isdigit() or len(instrument_id) != 9:
         return None
@@ -58,7 +42,11 @@ async def published_outlook(client, instrument_id, edition):
         return None
     response.raise_for_status()
     value = response.json()
+    if not isinstance(value, dict):
+        raise ValueError('OUTLOOK_RESPONSE_INVALID')
     publication = value.get('publication') or {}
+    if not isinstance(publication, dict):
+        raise ValueError('OUTLOOK_PUBLICATION_INVALID')
     if publication.get('etf_code') != instrument_id[3:]:
         return None
     try:
@@ -66,21 +54,27 @@ async def published_outlook(client, instrument_id, edition):
         published = datetime.fromisoformat(publication['published_at'].replace('Z', '+00:00'))
         if not stamp.tzinfo or not published.tzinfo or stamp.astimezone(KST).date() != edition or published > datetime.now(published.tzinfo):
             return None
-    except (KeyError, TypeError, ValueError):
-        return None
-    links = [link['url'] for item in (value.get('detail') or {}).get('items', [])
-             for link in item.get('source_links', []) if isinstance(link.get('url'), str) and link['url'].startswith('https://')]
-    return {'id': 'outlook', 'url': url, 'excerpt': json.dumps(value, ensure_ascii=False), 'fetchable_urls': links}
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        raise ValueError('OUTLOOK_TIMESTAMP_INVALID') from error
+    detail = value.get('detail') or {}
+    if not isinstance(detail, dict) or not isinstance(detail.get('items', []), list):
+        raise ValueError('OUTLOOK_DETAIL_INVALID')
+    links = [link['url'] for item in detail.get('items', []) if isinstance(item, dict)
+             for link in (item.get('source_links') if isinstance(item.get('source_links'), list) else []) if isinstance(link, dict) and
+             isinstance(link.get('url'), str) and link['url'].startswith('https://')]
+    return {'id': 'outlook', 'url': url, 'excerpt': json.dumps(value, ensure_ascii=False), 'fetchable_urls': links,
+            'analysis_at': stamp.isoformat(), 'published_at': published.isoformat()}
 
 
-async def write_card(holding, edition, key, *, model_call=None, evidence=None, outlook=None, quote_loader=daily_quote):
+async def write_card(holding, edition, key, *, model_call=None, evidence=None, outlook=None, quote_loader=load_quote):
     """Run only newsletter research/structured-output tools; never expose recipient details."""
     async with asyncio.timeout(600), AsyncExitStack() as stack:
         client = await stack.enter_async_context(httpx.AsyncClient(timeout=90))
         if outlook is None:
             try:
                 outlook = await published_outlook(client, holding['instrument_id'], edition)
-            except (httpx.HTTPError, ValueError):
+            except (httpx.HTTPError, ValueError) as error:
+                log.warning('instrument=%s newsletter_outlook_unavailable code=%s', holding['instrument_id'], type(error).__name__)
                 outlook = None  # The research path can cover publication/export failures as well.
         if evidence is None:
             async def connect_evidence():
@@ -96,7 +90,9 @@ async def write_card(holding, edition, key, *, model_call=None, evidence=None, o
             if hasattr(evidence, 'discovered'):
                 evidence.discovered.update(outlook.get('fetchable_urls', []))
         try:
-            quote = await asyncio.to_thread(quote_loader, holding['instrument_id'], edition)
+            quote = quote_loader(holding['instrument_id'], edition)
+            if inspect.isawaitable(quote):
+                quote = await quote
         except Exception as error:
             log.warning('instrument=%s newsletter_quote_unavailable code=%s', holding['instrument_id'], type(error).__name__)
             quote = None
@@ -133,6 +129,8 @@ async def write_card(holding, edition, key, *, model_call=None, evidence=None, o
                         raise ValueError('UNKNOWN_SOURCE')
                     return {**{k: holding[k] for k in ('instrument_id', 'name')}, **card.model_dump(exclude={'source_ids'}), 'edition': edition.isoformat(),
                             'sources': [{'url': sources[s]['url']} for s in dict.fromkeys(card.source_ids)],
+                            'quote': json.loads(quote['excerpt']) if quote else None,
+                            'outlook_at': outlook.get('analysis_at') if outlook else None,
                             'basis': 'published_outlook' if outlook else 'newsletter_research'}
                 except ValidationError as error:
                     log.info('instrument=%s newsletter_output_repair fields=%s', holding['instrument_id'], [e['loc'] for e in error.errors()])
