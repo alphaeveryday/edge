@@ -36,9 +36,14 @@ resource "aws_iam_role_policy" "portfolio_newsletter" {
   role = aws_iam_role.portfolio.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     {
-      Effect    = "Allow"
-      Action    = ["ses:SendEmail"]
-      Resource  = [aws_sesv2_email_identity.portfolio_newsletter.arn, aws_sesv2_configuration_set.portfolio_newsletter.arn]
+      Effect = "Allow"
+      Action = ["ses:SendEmail"]
+      # ListManagementOptions also authorizes SendEmail against this contact list.
+      Resource = [
+        aws_sesv2_email_identity.portfolio_newsletter.arn,
+        aws_sesv2_configuration_set.portfolio_newsletter.arn,
+        "arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:contact-list/${aws_sesv2_contact_list.portfolio_newsletter.contact_list_name}"
+      ]
       Condition = { StringEquals = { "ses:FromAddress" = "newsletter@etforca.com" } }
     },
     {
