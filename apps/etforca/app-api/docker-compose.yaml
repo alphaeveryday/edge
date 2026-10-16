@@ -1,7 +1,7 @@
 services:
   app:
     build:
-      # 루트 gradlew 와 libs 가 필요한 멀티프로젝트라 src 루트의 빌드 컨텍스트
+      # 배포 워크플로와 같은 레포 루트의 빌드 컨텍스트
       context: ../../..
       dockerfile: apps/etforca/app-api/Dockerfile
     ports:

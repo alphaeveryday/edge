@@ -169,12 +169,26 @@ def test_new_money_kind_does_not_add_an_unrequested_no_sell_constraint():
     assert optimizer.vector_checks([{'instrument_id': 'KR:B', 'weight_pct': 100}])[0]['status'] == 'fail'
 
 
-def test_customer_objective_order_precedes_service_score_and_unknown_income_is_not_zero():
+def test_excess_return_precedes_drawdown_income_and_service_score():
     groups = [[{'weights': [1], 'duration_pct': 100, 'excess_pp': 10, 'preservation_pct': 0, 'max_drawdown_pct': -20, 'income_yield_pct': None}],
               [{'weights': [1], 'duration_pct': 50, 'excess_pp': 5, 'preservation_pct': 100, 'max_drawdown_pct': -2, 'income_yield_pct': 0}]]
     assert rank(groups, [['A'], ['B']], ['growth', 'stability'])[0]['allocations'][0]['instrument_id'] == 'A'
-    assert rank(groups, [['A'], ['B']], ['stability', 'growth'])[0]['allocations'][0]['instrument_id'] == 'B'
-    assert rank(groups, [['A'], ['B']], ['income'])[0]['allocations'][0]['instrument_id'] == 'B'
+    assert rank(groups, [['A'], ['B']], ['stability', 'growth'])[0]['allocations'][0]['instrument_id'] == 'A'
+    assert rank(groups, [['A'], ['B']], ['income'])[0]['allocations'][0]['instrument_id'] == 'A'
+
+
+def test_outperform_duration_breaks_equal_excess_before_mdd_or_preservation():
+    groups = [[{'weights': [1], 'duration_pct': 80, 'excess_pp': 10, 'preservation_pct': 0, 'max_drawdown_pct': -50}],
+              [{'weights': [1], 'duration_pct': 60, 'excess_pp': 10, 'preservation_pct': 100, 'max_drawdown_pct': -1}]]
+    assert rank(groups, [['A'], ['B']], ['stability', 'preserve'])[0]['allocations'][0]['instrument_id'] == 'A'
+
+
+def test_unknown_income_remains_unknown_when_performance_is_tied():
+    groups = [[{'weights': [1], 'duration_pct': 80, 'excess_pp': 10, 'preservation_pct': 0, 'income_yield_pct': None}],
+              [{'weights': [1], 'duration_pct': 80, 'excess_pp': 10, 'preservation_pct': 0, 'income_yield_pct': 0}]]
+    result = rank(groups, [['A'], ['B']], ['income'])
+    assert result[0]['allocations'][0]['instrument_id'] == 'B'
+    assert result[1]['income_yield_pct'] is None
 
 
 async def test_new_batch_reopens_search_and_recomputes_previous_candidates_on_one_window():
@@ -706,3 +720,37 @@ async def test_search_grid_does_not_reject_model_weights_that_satisfy_a_five_per
     allocations = [{'instrument_id': 'KR:A', 'weight_pct': 5}, {'instrument_id': 'KR:B', 'weight_pct': 95}]
     result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocations})
     assert result['candidates'][0]['allocations'] == allocations
+
+
+async def test_model_weights_outside_grid_receive_comparable_metrics_and_history():
+    request, market, _ = batch()
+    market.loader = lambda symbol, as_of: record(finish=120 if symbol == 'A.KS' else 110)
+    optimizer = Optimizer(market, request)
+    allocation = [{'instrument_id': 'KR:A', 'weight_pct': 31}, {'instrument_id': 'KR:B', 'weight_pct': 69}]
+    result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocation})
+    selected = next(c for c in result['candidates'] if c['allocations'] == allocation)
+    assert selected['excess_pp'] is not None
+    assert selected['max_drawdown_pct'] is not None
+    assert selected.get('comparison_status') != 'unavailable'
+    history = market.results[tuple(sorted(weights(allocation).items()))]['history']
+    assert history['start_date'] == result['start_date']
+    assert history['end_date'] == result['end_date']
+    last = history['points'][-1]
+    assert selected['excess_pp'] == pytest.approx((last['recommended'] - last['current']) / 10000, abs=1e-5)
+
+
+def test_preferred_weights_use_the_same_arithmetic_without_duplicating_grid_vectors():
+    frame = pd.DataFrame({'A': [1.] + [1.2] * 10, 'B': [1.] + [.9] * 10, 'CASH:KRW': 1.})
+    rows = search(['A', 'B'], frame, {'CASH:KRW': 1}, [(('A', 31), ('B', 69)), (('A', 50), ('B', 50))])
+    assert len(rows) == 10  # Nine grid vectors plus one new model vector.
+    chosen = next(r for r in rows if r['weights'] == [.31, .69])
+    assert chosen['excess_pp'] == pytest.approx(-.7)
+
+
+def test_numerical_noise_cannot_override_outperform_duration_with_equal_final_returns():
+    frame = pd.DataFrame({'A': [1.] + [1.3, .9] * 5 + [1.2],
+                          'B': [1.] + [.9, 1.3] * 5 + [1.2], 'CASH:KRW': 1.})
+    rows = search(['A', 'B'], frame, {'CASH:KRW': 1})
+    result = rank([rows], [['A', 'B']])
+    assert result[0]['excess_pp'] == 20
+    assert result[0]['duration_pct'] == 100

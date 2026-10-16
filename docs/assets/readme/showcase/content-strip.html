@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>edge — 콘텐츠 엔진 한 장</title>
+<!--
+  루트 README "실제 서비스 › 콘텐츠 엔진" 에 박히는 content-screens.png 의 원본이다.
+  ORCA(orca-screens.png)·SIGNAL(signal-screens.png) 과 같은 2800x1440 이다.
+  스크린샷은 이 폴더의 10(인스타그램)/09(유튜브)/08(네이버 프리미엄 콘텐츠) 순으로 — 2026-10-16 아이폰 실캡처.
+  다시 뽑는 법:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+      --window-size=1400,720 --screenshot=/tmp/content-strip.png \
+      "file://$PWD/docs/assets/readme/showcase/content-strip.html"
+    cp /tmp/content-strip.png docs/assets/readme/content-screens.png
+-->
+<style>
+  :root { --bg:#f4f6f9; --ink:#2c3444; --muted:#8891a4; --accent:#2563eb; }
+  * { box-sizing:border-box; }
+  html, body { width:1400px; height:720px; margin:0; overflow:hidden; }
+  body { padding:40px 120px; background:var(--bg); color:var(--ink);
+    font-family:Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",Inter,sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  .row { display:grid; grid-template-columns: repeat(3, 290px); justify-content:space-between; align-items:start; }
+  .cap { height:56px; }
+  .cap .role { font-size:12px; font-weight:600; letter-spacing:.12em; color:var(--accent); margin:0 0 6px; }
+  .cap h2 { font-size:24px; font-weight:700; margin:0; letter-spacing:-.01em; }
+  /* 아이폰 전체 화면 캡처(1179x2556). 상태바는 두고 아래를 잘라 ORCA 그림과 같은 문법으로. */
+  /* 폰 폭을 290 으로 줄여 피드(게시물 그리드·리포트 목록)까지 보이게 한다. 584 = 캔버스 720 - 여백 80 - 캡션 56. */
+  .phone { width:290px; height:584px; overflow:hidden; border-radius:20px 20px 0 0;
+    box-shadow:0 2px 14px rgba(44,52,68,.12); background:#fff; }
+  .phone img { display:block; width:100%; height:auto; }
+</style>
+<div class="row">
+  <div>
+    <div class="cap"><p class="role">인스타그램 · @etf_orca</p><h2>릴스</h2></div>
+    <div class="phone"><img src="10-content-instagram-20261016.png" alt="인스타그램 etf_orca 계정"></div>
+  </div>
+  <div>
+    <div class="cap"><p class="role">유튜브 · @ETFOrca</p><h2>쇼츠</h2></div>
+    <div class="phone"><img src="09-content-youtube-20261016.png" alt="유튜브 ETF Orca 채널"></div>
+  </div>
+  <div>
+    <div class="cap"><p class="role">네이버 프리미엄 콘텐츠 · etforcapremium</p><h2>심층 리포트</h2></div>
+    <div class="phone"><img src="08-content-naver-20261016.png" alt="네이버 프리미엄 콘텐츠 ETF ORCA 채널"></div>
+  </div>
+</div>
