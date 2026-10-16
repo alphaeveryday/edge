@@ -61,6 +61,8 @@ record PostApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
 
     @Test
     void feedScopesAndCursorPaging() {
+        // 같은 컨텍스트 다른 클래스가 만든 글의 피드 혼입 방지
+        jdbc.update("update post set deleted_at = now() where deleted_at is null");
         String a = member("p2@example.com", "A2", List.of("069500", "305720"));
         String b = member("p3@example.com", "B2", List.of("133690"));
         String p1 = (String) post(a, "one", List.of("069500")).get("id");
