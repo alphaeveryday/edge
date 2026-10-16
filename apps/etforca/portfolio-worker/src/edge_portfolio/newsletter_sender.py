@@ -1,7 +1,7 @@
 """Scheduled SES delivery on the existing host; no LLM, search or recipient data in logs."""
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import boto3
@@ -75,12 +75,19 @@ def tick(ses, now):
             with connect() as db:
                 confirmations = db.execute("UPDATE portfolio_newsletter_subscriptions SET confirmation_state='uncertain',updated_at=now() WHERE confirmation_state='sending'").rowcount
                 deliveries = db.execute("UPDATE portfolio_newsletter_deliveries SET state='uncertain',failure='SENDER_INTERRUPTED',updated_at=now() WHERE state='sending'").rowcount
+                expired_content = db.execute("""UPDATE portfolio_newsletter_content SET state='expired',failure=coalesce(failure,'EDITION_EXPIRED')
+                    WHERE edition<%s AND (state IN ('queued','running') OR (state='failed' AND attempts<3))""", (now.date(),)).rowcount
+                expired_deliveries = db.execute("""UPDATE portfolio_newsletter_deliveries SET state='expired',failure='EDITION_EXPIRED',updated_at=now()
+                    WHERE edition<%s AND state IN ('waiting_content','queued')""", (now.date(),)).rowcount
             if confirmations or deliveries:
                 log.warning('newsletter_interrupted confirmations=%s deliveries=%s', confirmations, deliveries)
+            if expired_content or expired_deliveries:
+                log.warning('newsletter_edition_expired content=%s deliveries=%s', expired_content, expired_deliveries)
             process_confirmations(ses, deadline=started + 60)
             activate_confirmed(ses, deadline=started + 120)
             if now.hour >= 8:
-                process_daily(ses, now, deadline=started + 180)
+                midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                process_daily(ses, now, deadline=min(started + 180, started + (midnight - now).total_seconds()))
         finally:
             lock.execute('SELECT pg_advisory_unlock(13951395)')
 
@@ -147,7 +154,7 @@ def process_daily(ses, now, *, deadline=float('inf')):
     with connect() as db:
         subscriptions = db.execute("""SELECT s.* FROM portfolio_newsletter_subscriptions s WHERE s.status='active'
             AND NOT EXISTS (SELECT 1 FROM portfolio_newsletter_deliveries d
-                WHERE d.email=s.email AND d.edition=%s AND d.state<>'queued')
+                WHERE d.email=s.email AND d.edition=%s AND d.state NOT IN ('queued','waiting_content'))
             ORDER BY s.checked_at,s.created_at LIMIT 50""", (edition,)).fetchall()
     for row in subscriptions:
         if time.monotonic() >= deadline:
@@ -164,11 +171,16 @@ def process_daily(ses, now, *, deadline=float('inf')):
         if contact is None or opted_out(contact):
             with connect() as db:
                 db.execute("UPDATE portfolio_newsletter_subscriptions SET status='unsubscribed',updated_at=now() WHERE id=%s", (row['id'],))
+                db.execute("""UPDATE portfolio_newsletter_deliveries SET state='cancelled',failure='UNSUBSCRIBED',updated_at=now()
+                    WHERE email=%s AND edition=%s AND state IN ('queued','waiting_content')""", (row['email'], edition))
             continue
         cards = []
         with connect() as db:
+            db.execute("""INSERT INTO portfolio_newsletter_deliveries(email,edition,subscription_id,state) VALUES (%s,%s,%s,'waiting_content')
+                ON CONFLICT(email,edition) DO UPDATE SET subscription_id=excluded.subscription_id
+                    WHERE portfolio_newsletter_deliveries.state IN ('queued','waiting_content')""", (row['email'], edition, row['id']))
             delivered = db.execute('SELECT state FROM portfolio_newsletter_deliveries WHERE email=%s AND edition=%s', (row['email'], edition)).fetchone()
-            if delivered and delivered['state'] != 'queued':
+            if delivered and delivered['state'] not in {'queued', 'waiting_content'}:
                 continue
             for holding in row['holdings']:
                 db.execute("""INSERT INTO portfolio_newsletter_content(instrument_id,edition,name) VALUES (%s,%s,%s)
@@ -185,13 +197,17 @@ def process_daily(ses, now, *, deadline=float('inf')):
             # Keep the complete watchlist; do not silently omit an ETF or send stale content as today's news.
             log.info('subscription=%s edition=%s newsletter=waiting_content ready=%s total=%s', row['id'], edition, len(cards), len(row['holdings']))
             continue
+        rendered = newsletter_email.daily(edition, cards)
+        if time.monotonic() >= deadline:
+            # A contact lookup or rendering can cross midnight after the loop's initial check.
+            break
         with connect() as db:
             claimed = db.execute("""INSERT INTO portfolio_newsletter_deliveries(email,edition,subscription_id) VALUES (%s,%s,%s)
                 ON CONFLICT(email,edition) DO UPDATE SET state='sending',subscription_id=excluded.subscription_id,updated_at=now()
-                    WHERE portfolio_newsletter_deliveries.state='queued' RETURNING email""", (row['email'], edition, row['id'])).fetchone()
+                    WHERE portfolio_newsletter_deliveries.state IN ('queued','waiting_content') RETURNING email""", (row['email'], edition, row['id'])).fetchone()
         if not claimed:
             continue
-        state, message_id, failure = send(ses, row['email'], newsletter_email.daily(edition, cards), daily=True)
+        state, message_id, failure = send(ses, row['email'], rendered, daily=True)
         with connect() as db:
             db.execute("""UPDATE portfolio_newsletter_deliveries SET state=%s,message_id=%s,failure=%s,updated_at=now()
                 WHERE email=%s AND edition=%s""", (state, message_id, failure, row['email'], edition))

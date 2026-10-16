@@ -328,6 +328,17 @@ async def test_future_analysis_cannot_be_reused_as_a_published_morning_outlook(m
         assert await agent.published_outlook(client, 'KR:091160', date(2026, 10, 16)) is None
 
 
+@pytest.mark.parametrize('body,available', [
+    ({}, False), ({'detail': {'items': []}}, False),
+    ({'summary_card': {'summary': '확인한 반도체 업종 소식'}}, True),
+    ({'detail': {'items': [{'sentences': [{'sentence': '확인한 기업 발표'}]}]}}, True),
+])
+async def test_publication_metadata_is_not_news_but_any_available_editorial_body_can_be_reused(body, available):
+    value = {**body, 'publication': {'etf_code': '091160', 'analysis_at': '2026-10-16T06:00:00+09:00', 'published_at': '2026-10-16T07:00:00+09:00'}}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=value))) as client:
+        assert (await agent.published_outlook(client, 'KR:091160', date(2026, 10, 16)) is not None) is available
+
+
 @pytest.mark.parametrize('value', [None, [], {'publication': ['invalid']}, {'publication': {'etf_code': '091160', 'analysis_at': 1}}])
 async def test_malformed_publication_raises_the_recoverable_error(value):
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=value))) as client:
@@ -511,3 +522,52 @@ def test_daily_deadline_rotates_waiting_recipients_and_skips_already_delivered(n
         monkeypatch.setattr(sender.time, 'monotonic', lambda: next(elapsed))
         sender.process_daily(ses, now, deadline=5)
     assert checked == ['reader1@example.test', 'reader2@example.test'], 'Slow first recipients must not monopolize every timer tick'
+
+
+def test_midnight_records_an_unfinished_edition_and_starts_fresh_instead_of_sending_old_news(newsletter_db, monkeypatch, caplog):
+    job, owner = newsletter_db
+    news.subscribe(job, owner, 'reader@example.test')
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active'")
+    now = datetime.now(agent.KST).replace(hour=23)
+    ses = SimpleNamespace(get_account=lambda: {'SendingEnabled': True, 'ProductionAccessEnabled': True},
+        get_email_identity=lambda **kw: {'VerifiedForSendingStatus': True},
+        get_contact=lambda **kw: {'TopicPreferences': [{'TopicName': sender.TOPIC, 'SubscriptionStatus': 'OPT_IN'}]})
+    monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
+    sender.tick(ses, now)
+    with store.connect() as db:
+        assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == 'waiting_content'
+    sender.tick(ses, (now + timedelta(days=1)).replace(hour=9))
+    with store.connect() as db:
+        deliveries = db.execute('SELECT state,failure FROM portfolio_newsletter_deliveries ORDER BY edition').fetchall()
+        content = db.execute('SELECT state,failure FROM portfolio_newsletter_content ORDER BY edition').fetchall()
+    assert deliveries == [{'state': 'expired', 'failure': 'EDITION_EXPIRED'}, {'state': 'waiting_content', 'failure': None}]
+    assert content == [{'state': 'expired', 'failure': 'EDITION_EXPIRED'}, {'state': 'queued', 'failure': None}]
+    assert 'newsletter_edition_expired' in caplog.text
+    ses.get_contact = lambda **kw: {'UnsubscribeAll': True}
+    sender.tick(ses, (now + timedelta(days=1)).replace(hour=10))
+    with store.connect() as db:
+        latest = db.execute('SELECT state,failure FROM portfolio_newsletter_deliveries ORDER BY edition DESC LIMIT 1').fetchone()
+    assert latest == {'state': 'cancelled', 'failure': 'UNSUBSCRIBED'}, 'An opt-out must cancel the pending edition rather than look like a research timeout'
+
+
+def test_contact_lookup_crossing_midnight_does_not_send_yesterdays_news(newsletter_db, monkeypatch):
+    job, owner = newsletter_db
+    news.subscribe(job, owner, 'reader@example.test')
+    now = datetime.now(agent.KST).replace(hour=23, minute=59, second=58, microsecond=0)
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active'")
+        db.execute("""INSERT INTO portfolio_newsletter_content(instrument_id,edition,name,state,attempts)
+            VALUES ('US:QQQ',%s,'QQQ','failed',3)""", (now.date(),))
+    elapsed = [0]
+    def contact(**kwargs):
+        elapsed[0] = 3
+        return {'TopicPreferences': [{'TopicName': sender.TOPIC, 'SubscriptionStatus': 'OPT_IN'}]}
+    ses = SimpleNamespace(get_account=lambda: {'SendingEnabled': True, 'ProductionAccessEnabled': True},
+        get_email_identity=lambda **kw: {'VerifiedForSendingStatus': True}, get_contact=contact,
+        send_email=lambda **kw: pytest.fail('Yesterday\'s edition must not be claimed after a remote call crosses midnight'))
+    monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(sender.time, 'monotonic', lambda: elapsed[0])
+    sender.tick(ses, now)
+    with store.connect() as db:
+        assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == 'waiting_content'

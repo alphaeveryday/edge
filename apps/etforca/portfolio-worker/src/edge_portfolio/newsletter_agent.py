@@ -59,6 +59,16 @@ async def published_outlook(client, instrument_id, edition):
     detail = value.get('detail') or {}
     if not isinstance(detail, dict) or not isinstance(detail.get('items', []), list):
         raise ValueError('OUTLOOK_DETAIL_INVALID')
+    paragraphs = []
+    for section, field in [('summary_card', 'summary'), ('conclusion', 'sentence')]:
+        if isinstance(value.get(section), dict):
+            paragraphs.append(value[section].get(field))
+    for item in detail.get('items', []):
+        if isinstance(item, dict) and isinstance(item.get('sentences'), list):
+            paragraphs.extend(sentence.get('sentence') for sentence in item['sentences'] if isinstance(sentence, dict))
+    if not any(isinstance(paragraph, str) and paragraph.strip() for paragraph in paragraphs):
+        log.warning('instrument=%s newsletter_outlook_empty', instrument_id)
+        return None
     links = [link['url'] for item in detail.get('items', []) if isinstance(item, dict)
              for link in (item.get('source_links') if isinstance(item.get('source_links'), list) else []) if isinstance(link, dict) and
              isinstance(link.get('url'), str) and link['url'].startswith('https://')]
