@@ -1,8 +1,8 @@
 package com.edge.app.adapter.webapi.auth;
 
-import com.edge.app.adapter.integration.auth.AppleTokenService;
-import com.edge.app.adapter.integration.auth.IdTokenVerifier;
 import com.edge.app.adapter.integration.mail.Mailer;
+import com.edge.app.application.auth.required.AppleTokenClient;
+import com.edge.app.application.auth.required.SocialIdentityVerifier;
 import com.edge.app.domain.member.MemberFixture;
 import com.edge.app.domain.member.Provider;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
@@ -39,9 +39,9 @@ import static org.mockito.Mockito.when;
  * 외부 JWKS 에 의존하는 소셜 검증기의 대체
  */
 @WebApiAdapterTest
-@MockitoBean(types = {IdTokenVerifier.class, Mailer.class, AppleTokenService.class})
+@MockitoBean(types = {SocialIdentityVerifier.class, Mailer.class, AppleTokenClient.class})
 record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTemplate jdbc,
-        IdTokenVerifier idTokenVerifier, Mailer mailer, AppleTokenService appleTokens) {
+        SocialIdentityVerifier idTokenVerifier, Mailer mailer, AppleTokenClient appleTokens) {
     @Test
     void signupThenTokensWorkAndRotate() {
         var auth = signup("a@example.com");
@@ -284,7 +284,7 @@ record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
 
     @Test
     void socialCreatesMemberOnceBySubject() {
-        when(idTokenVerifier.verify(eq(Provider.KAKAO), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("kakao-sub-1", "s@example.com")));
+        when(idTokenVerifier.verify(eq(Provider.KAKAO), any(), any())).thenReturn(Optional.of(new SocialIdentityVerifier.Identity("kakao-sub-1", "s@example.com")));
         when(idTokenVerifier.verify(eq(Provider.GOOGLE), any(), any())).thenReturn(Optional.empty());
         Map<String, Object> first = result(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t", "nonce", "n")));
         Map<String, Object> second = result(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t", "nonce", "n")));
@@ -304,14 +304,14 @@ record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
     @Test
     void sameEmailAcrossJoinMethodsAnnouncesTheOriginalMethod() {
         assertThat(signup("mail@example.com").get("newMember")).isEqualTo(true);
-        when(idTokenVerifier.verify(eq(Provider.KAKAO), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("k-mail", "mail@example.com")));
+        when(idTokenVerifier.verify(eq(Provider.KAKAO), any(), any())).thenReturn(Optional.of(new SocialIdentityVerifier.Identity("k-mail", "mail@example.com")));
         assertThat(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "kakao", "idToken", "t", "nonce", "n")))
                 .hasStatus(409)
                 .bodyJson()
                 .extractingPath("$.code").isEqualTo("MEMBER4009");
         assertThat(jdbc.queryForObject("select count(*) from member where provider = 'kakao'", Integer.class)).isEqualTo(0);
 
-        when(idTokenVerifier.verify(eq(Provider.GOOGLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("g-1", "g@example.com")));
+        when(idTokenVerifier.verify(eq(Provider.GOOGLE), any(), any())).thenReturn(Optional.of(new SocialIdentityVerifier.Identity("g-1", "g@example.com")));
         assertThat(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "google", "idToken", "t"))).hasStatusOk();
         assertThat(login("g@example.com", "pw123456")).bodyJson().extractingPath("$.code").isEqualTo("MEMBER4007");
         assertThat(call(HttpMethod.POST, "/api/v1/auth/signup/code", Map.of("email", "g@example.com")))
@@ -326,7 +326,7 @@ record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
     /** 애플 토큰은 로그인마다 최신 값 보관, 탈퇴 커밋 뒤 철회와 삭제 */
     @Test
     void appleTokenIsStoredOnLoginAndRevokedOnWithdraw() {
-        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("a-rt", null)));
+        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new SocialIdentityVerifier.Identity("a-rt", null)));
         when(appleTokens.exchange("code-1")).thenReturn("rt-1");
         when(appleTokens.exchange("code-2")).thenReturn("rt-2");
         assertThat(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t", "nonce", "n", "authorizationCode", "code-1")))
@@ -344,7 +344,7 @@ record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
     @Test
     void rejectedAppleSignupRevokesExchangedToken() {
         signup("taken@example.com");
-        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("a-taken", "taken@example.com")));
+        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new SocialIdentityVerifier.Identity("a-taken", "taken@example.com")));
         when(appleTokens.exchange("code-x")).thenReturn("rt-x");
         assertThat(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t", "nonce", "n", "authorizationCode", "code-x")))
                 .bodyJson()
@@ -356,7 +356,7 @@ record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
     /** 검증된 이메일이 없는 소셜 가입은 이메일 없이 생성 */
     @Test
     void socialWithoutVerifiedEmailStoresNoEmail() {
-        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new IdTokenVerifier.Identity("a-1", null)));
+        when(idTokenVerifier.verify(eq(Provider.APPLE), any(), any())).thenReturn(Optional.of(new SocialIdentityVerifier.Identity("a-1", null)));
         assertThat(call(HttpMethod.POST, "/api/v1/auth/social", Map.of("provider", "apple", "idToken", "t"))).hasStatusOk();
         assertThat(jdbc.queryForObject("select email from member where provider_subject = 'a-1'", String.class)).isNull();
     }

@@ -1,5 +1,6 @@
 package com.edge.app.adapter.security;
 
+import com.edge.app.application.auth.required.AccessTokenIssuer;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -20,7 +21,7 @@ import java.util.Optional;
 
 /** sub·iat·exp 클레임의 액세스 JWT 발급·검증 */
 @Component
-public class AccessTokens {
+public class AccessTokens implements AccessTokenIssuer {
     private final MACSigner signer;
     private final MACVerifier verifier;
     private final Duration ttl;
@@ -39,6 +40,7 @@ public class AccessTokens {
         this.clock = clock;
     }
 
+    @Override
     public String issue(long memberId) {
         Instant now = clock.instant();
         JWTClaimsSet claims = new JWTClaimsSet.Builder()

@@ -1,6 +1,7 @@
 package com.edge.app.application.auth;
 
 import com.edge.app.adapter.integration.mail.Mailer;
+import com.edge.app.application.auth.provided.SignupCodeVerifier;
 import com.edge.app.application.mail.MailQuota;
 import com.edge.app.application.member.required.MemberRepository;
 import com.edge.app.application.member.required.SignupCodeRepository;
@@ -19,7 +20,7 @@ import java.time.Instant;
 /** 가입 이메일 인증 코드 발송과 확인 */
 @Service
 @RequiredArgsConstructor
-public class SignupCodeService {
+public class SignupCodeService implements SignupCodeVerifier {
     private static final Duration RESEND_GAP = Duration.ofSeconds(60);
 
     private final SignupCodeRepository codeRepository;
@@ -29,6 +30,7 @@ public class SignupCodeService {
     private final ReviewAccount reviewAccount;
 
     // 60초 내 재요청에 발송 없는 같은 응답
+    @Override
     @Transactional
     public void send(String email) {
         rejectJoined(email);
@@ -59,6 +61,7 @@ public class SignupCodeService {
 
     // 틀린 시도 수의 확정 저장을 위한 가입 트랜잭션 밖 선호출
     // 코드 삭제는 가입 성공 트랜잭션 소관
+    @Override
     @Transactional(noRollbackFor = GeneralException.class)
     public void verify(String email, String code) {
         Instant now = Instant.now();

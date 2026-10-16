@@ -1,6 +1,7 @@
 package com.edge.app.adapter.integration.auth;
 
 import com.edge.app.application.auth.AuthService;
+import com.edge.app.application.auth.required.SocialIdentityVerifier;
 import com.edge.app.domain.member.Provider;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.source.JWKSource;
@@ -31,11 +32,7 @@ import java.util.Set;
  */
 @Component
 @EnableConfigurationProperties(SocialProperties.class)
-public class IdTokenVerifier {
-    /** email 은 제공자가 검증한 값만, 아니면 null */
-    public record Identity(String subject, String email) {
-    }
-
+public class IdTokenVerifier implements SocialIdentityVerifier {
     /** email_verified 클레임 판정과, 검증된 이메일만 싣는 제공자(카카오)의 email 존재 판정 */
     enum EmailTrust { CLAIM, PRESENT }
 
@@ -73,6 +70,7 @@ public class IdTokenVerifier {
         this.rules = rules;
     }
 
+    @Override
     public Optional<Identity> verify(Provider provider, String idToken, String nonce) {
         Rule rule = rules.get(provider);
         if (rule == null) {
