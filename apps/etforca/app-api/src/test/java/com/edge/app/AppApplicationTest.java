@@ -1,13 +1,13 @@
 package com.edge.app;
 
-import com.edge.app.common.auth.AccessTokens;
-import com.edge.app.community.vote.dto.VoteCountResponse;
-import com.edge.app.community.vote.entity.Vote;
-import com.edge.app.community.vote.entity.VoteChoice;
-import com.edge.app.community.vote.repository.VoteCountRepository;
-import com.edge.app.community.vote.repository.VoteCounts;
-import com.edge.app.community.vote.repository.VoteRepository;
-import com.edge.app.community.vote.service.VoteService;
+import com.edge.app.adapter.security.AccessTokens;
+import com.edge.app.application.vote.provided.VoteCountResponse;
+import com.edge.app.domain.vote.Vote;
+import com.edge.app.domain.vote.VoteChoice;
+import com.edge.app.adapter.persistence.vote.VoteCountRepository;
+import com.edge.app.domain.vote.VoteCounts;
+import com.edge.app.application.vote.required.VoteRepository;
+import com.edge.app.application.vote.VoteService;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.Test;
