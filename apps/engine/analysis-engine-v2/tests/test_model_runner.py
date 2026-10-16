@@ -20,6 +20,29 @@ SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': Fal
           'properties': {'summary': {'type': 'string'}}}
 
 
+def test_revision_wire_input_removes_only_json_formatting_and_keeps_every_original(tmp_path):
+    captured = []
+    class Client:
+        def __init__(self, *, options):
+            assert options.env['DISABLE_AUTO_COMPACT'] == '1'
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def query(self, text):
+            captured.append(text)
+        async def receive_response(self):
+            yield ResultMessage(structured_output={'summary': 'ok'})
+    initial = {'research_state': {'version': 1, 'materials': {'a': {'text': 'original\n  preserve spacing'}}, 'removed': {}, 'gaps': []},
+               'previous_analysis': {'summary': 'keep'}}
+    asyncio.run(run_model(initial=initial, prompt='system', schemas=[], call=lambda *args: None,
+        output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
+    saved = (tmp_path/'model_input.json').read_text(encoding='utf-8')
+    assert json.loads(captured[0]) == json.loads(saved)
+    assert json.loads(captured[0])['input']['research_state'] == initial['research_state']
+    assert len(captured[0]) < len(saved)
+
+
 @pytest.mark.parametrize('kind', ['movement', 'outlook'])
 @pytest.mark.parametrize('revision', [False, True])
 def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_path, kind, revision):

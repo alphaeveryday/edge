@@ -145,8 +145,9 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
     artifacts.mkdir(parents=True, exist_ok=True)
     if resume and json.loads((artifacts / 'input.json').read_text(encoding='utf-8')) != initial:
         raise ValueError('Resume requires the same original observations and cutoff')
-    def encode(value):
-        return json.dumps(value, ensure_ascii=False, indent=2, default=str).replace(key, '[redacted]')
+    def encode(value, *, compact=False):
+        return json.dumps(value, ensure_ascii=False, indent=None if compact else 2,
+                          separators=(',', ':') if compact else None, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
     repairs = 0
     server, allowed = make_server(schemas, call) if not structured_only else (None, [])
@@ -206,7 +207,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         (artifacts / 'environment.json').write_text(encode(describe_environment() | {'reasoning_effort': effort}), encoding='utf-8')
         try:
             async with asyncio.timeout(timeout_seconds), client_factory(options=options) as client:
-                await client.query(encode(query_input))
+                await client.query(encode(query_input, compact='research_state' in initial))
                 while True:
                     final = None
                     async for message in client.receive_response():
