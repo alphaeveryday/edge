@@ -83,7 +83,7 @@ docs/           # 설계·계약·데이터 모델·ADR
 
 ![시스템 아키텍처: 증권사 Cloud 환경과 EDGE Cloud 환경의 기능 단위 논리 구성](docs/assets/readme/SA.drawio.png)
 
-기능 단위의 논리 구성도입니다. 왼쪽 증권사 Cloud 환경(BYOC)은 DMZ의 Sync Agent가 EDGE Cloud를 outbound Pull로 당겨 오고, 내부망에서 점검·검수를 거쳐 MTS에 서빙합니다. 연결을 여는 쪽은 증권사이고 그 선이 두 환경 사이의 유일한 선입니다. 오른쪽 EDGE Cloud 환경에는 엔진(스케줄러·워커·Explanation Queue·Analysis Database), edgesignal 운영(슈퍼 어드민 콘솔)과 ETF Orca(앱 서비스 일곱·App Database·Vote Cache)가 한 ALB 뒤에 있고, 두 제품은 Analysis Database를 통해서만 엔진과 만납니다. Delivery Outbox는 큐가 아니라 같은 DB의 테이블입니다. 상자는 논리 단위이며 배포 모듈 대응은 [시스템 아키텍처 매핑표](docs/architecture/system-architecture.md#논리--배포-모듈-매핑)에, AWS 배치는 아래 그림에 있습니다.
+기능 단위의 논리 구성도입니다. 왼쪽 증권사 Cloud 환경(BYOC)은 DMZ의 Sync Agent가 EDGE Cloud를 outbound Pull로 당겨 오고, 내부망에서 점검·검수를 거쳐 MTS에 서빙합니다. 연결을 여는 쪽은 증권사이고 그 선이 두 환경 사이의 유일한 선입니다. 오른쪽 EDGE Cloud 환경에는 엔진(스케줄러·워커·Explanation Queue·Analysis Database), edgesignal 운영(슈퍼 어드민 콘솔)과 ETF Orca(앱 서비스 일곱·App Database·Vote Cache)가 있습니다. 그림의 ALB 하나는 진입점 셋(super-admin·sync·app)을 묶은 논리 표현이고, 분석 데이터는 Analysis Database를 통해서만 두 제품에 전달됩니다. Delivery Outbox는 큐가 아니라 같은 DB의 테이블입니다. 상자는 논리 단위이며 배포 모듈 대응은 [시스템 아키텍처 매핑표](docs/architecture/system-architecture.md#논리--배포-모듈-매핑)에, AWS 배치는 아래 그림에 있습니다.
 
 ![AWS 배치: 벤더 계정 하나에 엔진·edgesignal·etforca 세 묶음, 증권사 계정에서 들어오는 outbound Pull 하나](docs/assets/readme/CA.drawio.png)
 
