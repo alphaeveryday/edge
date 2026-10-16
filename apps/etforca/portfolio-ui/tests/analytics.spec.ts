@@ -163,3 +163,254 @@ test('local previews and administrator pages do not contact PostHog', async ({ p
   await page.waitForTimeout(500);
   expect(calls).toEqual([]);
 });
+
+async function feedbackReport(page: Page) {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'feedback-private-id'));
+  await page.route('**/api/portfolio/analyses/feedback-private-id', route => route.fulfill({ json: {
+    id: 'feedback-private-id', state: 'succeeded', result: {
+      recommendation: { title: 'private recommendation', allocations: [], actions: [], unavailable_reason: '성과 자료 없음' },
+      sections: { opinion: { paragraphs: Array(12).fill('private result text') } },
+    },
+  } }));
+  await page.goto('https://etforca.com/portfolio/');
+  await expect(page.locator('.performance')).toBeAttached();
+}
+
+for (const [label, rating] of [['좋아요', 'good'], ['그냥 그래요', 'okay'], ['개선이 필요해요', 'needs_improvement']]) {
+  test(`feedback after performance submits ${rating} once without customer data`, async ({ page, baseURL }) => {
+    const events = await instrument(page, baseURL!);
+    await feedbackReport(page);
+    const popup = page.getByRole('dialog', { name: '이번 분석은 어떠셨나요?' });
+    await expect(popup).toHaveCount(0);
+    await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+    await expect(popup).toBeVisible();
+    await expect(popup).toBeFocused();
+    if (rating === 'good') await popup.screenshot({ path: `test-results/feedback-${test.info().project.name}.png` });
+    const bounds = await popup.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+    await popup.getByRole('button', { name: label, exact: true }).click();
+    await expect(popup.getByRole('status')).toHaveText('의견 감사합니다!');
+    await expect(popup).toBeFocused();
+    await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'submitted']);
+    const response = events.find(e => e.properties.action === 'submitted')!;
+    expect(response.properties).toMatchObject({ rating, screen: 'result', section: 'feedback', $cookieless_mode: true, $host: 'etforca.com' });
+    expect(JSON.stringify(events)).not.toMatch(/feedback-private-id|private recommendation|private result text/);
+    await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
+    await page.reload();
+    await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+    await expect(popup).toHaveCount(0);
+    expect(events.filter(e => e.event === 'portfolio_feedback')).toHaveLength(2);
+  });
+}
+
+test('background report waits until visible and Escape dismisses without a rating', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.addInitScript(() => Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }));
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(page.locator('.report-feedback')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
+  expect(events.filter(e => e.event === 'portfolio_feedback').every(e => e.properties.rating === undefined)).toBe(true);
+  await page.reload();
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+});
+
+test('closing the premium modal does not dismiss unanswered feedback', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(page.locator('.report-feedback')).toBeVisible();
+  const premium = page.getByRole('button', { name: '프리미엄 투자 전략 설계 리포트 받기' });
+  await premium.focus();
+  await premium.press('Enter');
+  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).not.toBeVisible();
+  await expect(page.locator('.report-feedback')).toBeVisible();
+  await page.getByRole('button', { name: '좋아요', exact: true }).click();
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'submitted']);
+});
+
+test('feedback remains usable when PostHog and feedback storage are unavailable', async ({ page, baseURL }) => {
+  await instrument(page, baseURL!, true);
+  await page.addInitScript(() => {
+    const get = Storage.prototype.getItem, set = Storage.prototype.setItem;
+    Storage.prototype.getItem = function(key) { if (key.startsWith('edge-portfolio-feedback:')) throw new Error('blocked'); return get.call(this, key); };
+    Storage.prototype.setItem = function(key, value) { if (key.startsWith('edge-portfolio-feedback:')) throw new Error('blocked'); return set.call(this, key, value); };
+  });
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await page.getByRole('button', { name: '좋아요', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('의견 감사합니다!');
+  await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await page.getByRole('button', { name: '새 포트폴리오 분석하기' }).click();
+  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+});
+
+test('feedback stays reachable in a short viewport at high zoom', async ({ page, baseURL }) => {
+  await page.setViewportSize({ width: 320, height: 150 });
+  await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  const popup = page.locator('.report-feedback');
+  await expect(popup).toBeVisible();
+  const bounds = await popup.boundingBox();
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(150);
+  await popup.getByRole('button', { name: /./ }).last().click();
+  await expect(popup.getByRole('status')).toBeVisible();
+  await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await expect(popup).toHaveCount(0);
+});
+
+test('newsletter signup is above the independent rating choices and never enters analytics', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const submissions: unknown[] = [];
+  await page.route('**/api/portfolio/analyses/*/newsletter', route => {
+    submissions.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: 'pending', delivery_ready: true } });
+  });
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  const popup = page.locator('.report-feedback');
+  const form = await popup.locator('form').boundingBox();
+  const choices = await popup.locator('.feedback-choices').boundingBox();
+  expect(form!.y + form!.height).toBeLessThan(choices!.y);
+  await popup.getByLabel('뉴스레터 이메일').fill('newsletter-private@example.test');
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  expect(submissions).toHaveLength(0);
+  await popup.getByRole('checkbox').check();
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('status')).toContainText('확인 메일');
+  expect(submissions).toEqual([{ email: 'newsletter-private@example.test', consent: true }]);
+  await popup.getByRole('button', { name: '좋아요', exact: true }).click();
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'submitted']);
+  expect(JSON.stringify(events)).not.toMatch(/newsletter-private|example.test/);
+});
+
+test('newsletter confirmation requires a click and clears the token before any analytics', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const analyticsRequests: string[] = [];
+  page.on('request', request => { if (new URL(request.url()).hostname.endsWith('posthog.com')) analyticsRequests.push(request.url()); });
+  const token = 'private-newsletter-confirmation-token-123456789';
+  const confirmations: unknown[] = [];
+  await page.route('**/api/portfolio/newsletter/confirm', route => {
+    confirmations.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: 'confirmed', delivery_ready: false } });
+  });
+  await page.goto(`https://etforca.com/portfolio/#newsletter-confirm=${token}`);
+  await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
+  expect(page.url()).toBe('https://etforca.com/portfolio/');
+  expect(confirmations).toHaveLength(0);
+  await page.getByRole('button', { name: '이메일 확인하고 구독하기' }).click();
+  await expect(page.getByRole('heading', { name: '이메일 확인을 마쳤어요!' })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('발송 준비가 끝나면');
+  expect(confirmations).toEqual([{ token }]);
+  expect(events).toHaveLength(0);
+  expect(analyticsRequests).toHaveLength(0);
+});
+
+test('newsletter confirmation links work in an existing tab and each token still requires a click', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const confirmations: unknown[] = [];
+  await page.route('**/api/portfolio/newsletter/confirm', route => {
+    confirmations.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: 'confirmed', delivery_ready: false } });
+  });
+  await page.goto('https://etforca.com/portfolio/');
+  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  for (const [index, token] of ['private-first-confirmation-token', 'private-second-confirmation-token'].entries()) {
+    await page.evaluate(value => { location.hash = 'newsletter-confirm=' + value; }, token);
+    await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
+    expect(page.url()).toBe('https://etforca.com/portfolio/');
+    expect(confirmations).toHaveLength(index);
+    await page.getByRole('button', { name: '이메일 확인하고 구독하기' }).click();
+    await expect(page.getByRole('heading', { name: '이메일 확인을 마쳤어요!' })).toBeVisible();
+    expect(confirmations[index]).toEqual({ token });
+  }
+  expect(JSON.stringify(events)).not.toMatch(/private-first|private-second|newsletter-confirm/);
+});
+
+test('dismissed feedback keeps a newsletter retry without asking for another rating', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await page.reload();
+  const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
+  const launcherBox = await launcher.boundingBox();
+  const evaluationBox = await page.locator('.evaluation').boundingBox();
+  expect(launcherBox!.y + launcherBox!.height).toBeLessThanOrEqual(evaluationBox!.y);
+  await launcher.click();
+  const popup = page.getByRole('dialog', { name: '내 ETF 소식, 매일 메일로' });
+  await expect(popup.getByLabel('뉴스레터 이메일')).toBeVisible();
+  await expect(popup.locator('.feedback-choices')).toHaveCount(0);
+  await page.route('**/api/portfolio/analyses/*/newsletter', route => route.fulfill({ json: { status: 'active', delivery_ready: false } }));
+  await popup.getByLabel('뉴스레터 이메일').fill('reader@example.test');
+  await popup.getByRole('checkbox').check();
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('status')).toContainText('발송 준비가 끝나면');
+  await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  await expect(launcher).toBeFocused();
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(popup).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
+});
+
+test('newsletter validation explains the email field rather than portfolio holdings', async ({ page, baseURL }) => {
+  await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await page.route('**/api/portfolio/analyses/*/newsletter', route => route.fulfill({ status: 422, json: { detail: [{ loc: ['body', 'email'], type: 'string_pattern_mismatch' }] } }));
+  const popup = page.locator('.report-feedback');
+  await popup.getByLabel('뉴스레터 이메일').fill('reader@example');
+  await popup.getByRole('checkbox').check();
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('alert')).toHaveText('이메일 주소를 확인해 주세요.');
+});
+
+test('an already open newsletter launcher preserves feedback mode and Escape accounting', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
+  await launcher.focus();
+  await launcher.press('Enter');
+  await expect(page.locator('.feedback-choices')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'dismissed']);
+});
+
+for (const alreadyShown of [false, true]) test(`newsletter never covers an active followup form (already shown: ${alreadyShown})`, async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await feedbackReport(page);
+  if (alreadyShown) {
+    await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+    await expect(page.locator('.report-feedback')).toBeVisible();
+  }
+  const question = page.getByLabel('추가 질문', { exact: true });
+  await question.fill('이 추천에서 더 궁금한 내용이 있어요');
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await expect(question).toBeFocused();
+  await question.blur();
+  await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(page.locator('.report-feedback')).toHaveCount(0);
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(alreadyShown ? ['shown', 'dismissed'] : []);
+});

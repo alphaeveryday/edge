@@ -1,9 +1,17 @@
 import posthog from 'posthog-js';
 
 export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed';
-const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause']);
-const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct']);
+const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback']);
+const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'rating']);
 let initialized = false;
+
+export type FeedbackRating = 'good' | 'okay' | 'needs_improvement';
+export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', rating?: FeedbackRating) {
+  if (!initialize()) return;
+  try {
+    posthog.capture('portfolio_feedback', { screen: 'result', section: 'feedback', action, ...(rating ? { rating } : {}) }, { send_instantly: true });
+  } catch { /* Analytics must not interrupt reading the report. */ }
+}
 
 function initialize() {
   if (!['etforca.com', 'www.etforca.com'].includes(location.hostname) || location.pathname !== '/portfolio/') return false;

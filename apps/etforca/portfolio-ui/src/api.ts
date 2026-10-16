@@ -42,7 +42,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => ({}));
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
+    if (body.detail === 'NO_HOLDINGS') throw new Error('보유 ETF를 입력한 분석에서 뉴스레터를 신청해 주세요.');
+    if (body.detail === 'SUBSCRIPTION_LIMIT') throw new Error('오늘 뉴스레터 신청 횟수를 모두 사용했어요. 내일 다시 신청해 주세요.');
+    if (body.detail === 'INVALID_CONFIRMATION') throw new Error('확인 링크가 만료됐거나 이미 사용됐어요. 분석 결과에서 다시 신청해 주세요.');
     if (response.status === 422) {
+      if (path.endsWith('/newsletter')) throw new Error('이메일 주소를 확인해 주세요.');
+      if (path === '/newsletter/confirm') throw new Error('확인 링크가 올바르지 않아요. 분석 결과에서 다시 신청해 주세요.');
       const messages: Record<string, string> = {
         HOLDING_WEIGHTS_REQUIRED: '보유 종목의 금액 또는 비율을 입력해 주세요.',
         CONTRIBUTION_CHOICE_REQUIRED: '투자금을 넣는 방법을 선택해 주세요.',

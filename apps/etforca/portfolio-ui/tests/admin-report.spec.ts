@@ -31,6 +31,7 @@ test('administrator keeps rebalance amounts readable inside the isolated custome
     rows: [{ instrument_id: 'US:VT', name: 'Vanguard Total World Stock Index ETF', account: '일반 계좌',
       before_krw: '0', target_krw: '500000', buy_krw: '500000', sell_krw: '0', cash_used_krw: '0' }] };
   await openDetail(page, { ...report, recommendation: { ...report.recommendation, execution } });
+  await expect(page.locator('.feedback-anchor')).toHaveCount(0);
   const trades = page.locator('.improvements li').filter({ hasText: 'VT' });
   await expect(trades.locator('.trade-amount')).toHaveText('500,000원매수');
   await expect(trades.locator('h5')).toHaveText('VT');
