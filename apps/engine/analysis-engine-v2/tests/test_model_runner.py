@@ -34,6 +34,8 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     class Client(base):
         def __init__(self, *, options):
             super().__init__(options=options)
+            # A deterministic display name avoids a helper model reading the whole research input again.
+            assert options.extra_args.get('name') == 'ETF analysis'
             captured.append(options.system_prompt)
 
     result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
