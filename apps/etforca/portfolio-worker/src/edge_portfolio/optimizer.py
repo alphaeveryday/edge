@@ -247,10 +247,7 @@ class Optimizer:
                 if not group:
                     continue
                 try:
-                    try:
-                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of, column='Adj Close')
-                    except (KeyError, ValueError):
-                        optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of, column='Close')
+                    optimization_bounds(set(group) | set(self.market.current), self.market.records, self.market.as_of)
                 except (KeyError, ValueError) as error:
                     rejections[number] = price_failure(error)
                     group.clear()
