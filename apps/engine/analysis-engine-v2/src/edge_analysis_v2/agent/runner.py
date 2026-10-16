@@ -184,6 +184,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         sdk_model = model if model.endswith('[1m]') else model + '[1m]'
         options = ClaudeAgentOptions(
             model=sdk_model, system_prompt=prompt, **work_options, strict_mcp_config=True,
+            extra_args={'name': 'ETF analysis'},
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
             settings=json.dumps({'autoCompactEnabled': True}),
