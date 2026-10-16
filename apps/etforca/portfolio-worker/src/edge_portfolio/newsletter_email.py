@@ -10,6 +10,8 @@ FONT = "-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic',A
 
 
 def safe_url(value):
+    if UNSUBSCRIBE in value:
+        return SITE
     try:
         parsed = urlsplit(value)
         return value if parsed.scheme == 'https' and parsed.hostname and not parsed.username and not parsed.password else SITE
@@ -81,5 +83,9 @@ def daily(edition, cards):
                   *[f'출처: {safe_url(s["url"])}' for s in card.get('sources', [])]]
     footer = f'''신청하신 보유 종목을 기준으로 보내드렸어요.<br>AI가 자료를 요약한 정보이며 매매 지시가 아닙니다. 가격 기준일과 전망 시점은 본문을 확인해 주세요.<br><br>
 <a href="{SITE}" style="color:#126c54">ETF Orca에서 포트폴리오 보기</a> &nbsp;·&nbsp; <a href="{UNSUBSCRIBE}" style="color:#66756e">수신 거부</a>'''
+    # SES expands this marker after rendering. Only our footer may contain it, never external text/URLs.
+    body = body.replace(UNSUBSCRIBE, '')
+    plain = [line.replace(UNSUBSCRIBE, '') for line in plain]
+    preheader = ' · '.join(c['headline'] for c in brief).replace(UNSUBSCRIBE, '')
     plain += ['', 'ETF Orca: '+SITE, '수신 거부: '+UNSUBSCRIBE, 'AI가 자료를 요약한 정보이며 매매 지시가 아닙니다.']
-    return title, shell(title, ' · '.join(c['headline'] for c in brief), body, footer), '\n'.join(plain)
+    return title, shell(title, preheader, body, footer), '\n'.join(plain)

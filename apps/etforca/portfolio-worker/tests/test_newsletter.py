@@ -455,6 +455,17 @@ def test_email_is_readable_escaped_and_has_plain_text_and_unsubscribe():
     assert '48시간' in plain
 
 
+def test_external_card_text_and_urls_cannot_receive_the_recipients_ses_unsubscribe_token():
+    injected = 'https://external.example/article?token=' + email.UNSUBSCRIBE
+    card = {field: injected for field in ('name', 'headline', 'issue', 'why_moved', 'watch_next')}
+    card['sources'] = [{'url': injected}]
+    _, html, plain = email.daily(date(2026, 10, 16), [card])
+    assert email.safe_url(injected) == email.SITE
+    assert html.count(email.UNSUBSCRIBE) == plain.count(email.UNSUBSCRIBE) == 1
+    assert f'href="{email.UNSUBSCRIBE}"' in html
+    assert f'수신 거부: {email.UNSUBSCRIBE}' in plain
+
+
 def test_email_preserves_quote_dates_even_when_the_model_omits_them():
     card = {'name': 'QQQ', 'headline': '기술주 소식', 'issue': '확인한 소식', 'why_moved': '변동 배경',
             'watch_next': '다음 일정', 'sources': [], 'outlook_at': '2026-10-16T00:00:00+00:00',
