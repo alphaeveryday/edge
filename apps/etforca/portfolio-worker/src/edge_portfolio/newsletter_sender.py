@@ -207,6 +207,11 @@ def process_daily(ses, now, *, deadline=float('inf')):
                     WHERE portfolio_newsletter_deliveries.state IN ('queued','waiting_content') RETURNING email""", (row['email'], edition, row['id'])).fetchone()
         if not claimed:
             continue
+        if time.monotonic() >= deadline:
+            # A blocked claim/commit may outlive the edition; no send has been attempted yet.
+            with connect() as db:
+                db.execute("UPDATE portfolio_newsletter_deliveries SET state='queued',updated_at=now() WHERE email=%s AND edition=%s AND state='sending'", (row['email'], edition))
+            break
         state, message_id, failure = send(ses, row['email'], rendered, daily=True)
         with connect() as db:
             db.execute("""UPDATE portfolio_newsletter_deliveries SET state=%s,message_id=%s,failure=%s,updated_at=now()

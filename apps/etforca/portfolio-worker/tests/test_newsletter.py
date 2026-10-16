@@ -551,7 +551,8 @@ def test_midnight_records_an_unfinished_edition_and_starts_fresh_instead_of_send
     assert latest == {'state': 'cancelled', 'failure': 'UNSUBSCRIBED'}, 'An opt-out must cancel the pending edition rather than look like a research timeout'
 
 
-def test_contact_lookup_crossing_midnight_does_not_send_yesterdays_news(newsletter_db, monkeypatch):
+@pytest.mark.parametrize('late_stage', ['contact', 'claim_commit'])
+def test_contact_or_claim_crossing_midnight_does_not_send_yesterdays_news(newsletter_db, monkeypatch, late_stage):
     job, owner = newsletter_db
     news.subscribe(job, owner, 'reader@example.test')
     now = datetime.now(agent.KST).replace(hour=23, minute=59, second=58, microsecond=0)
@@ -561,13 +562,15 @@ def test_contact_lookup_crossing_midnight_does_not_send_yesterdays_news(newslett
             VALUES ('US:QQQ',%s,'QQQ','failed',3)""", (now.date(),))
     elapsed = [0]
     def contact(**kwargs):
-        elapsed[0] = 3
+        if late_stage == 'contact':
+            elapsed[0] = 3
         return {'TopicPreferences': [{'TopicName': sender.TOPIC, 'SubscriptionStatus': 'OPT_IN'}]}
     ses = SimpleNamespace(get_account=lambda: {'SendingEnabled': True, 'ProductionAccessEnabled': True},
         get_email_identity=lambda **kw: {'VerifiedForSendingStatus': True}, get_contact=contact,
         send_email=lambda **kw: pytest.fail('Yesterday\'s edition must not be claimed after a remote call crosses midnight'))
     monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
-    monkeypatch.setattr(sender.time, 'monotonic', lambda: elapsed[0])
+    claim_clock = iter([0, 0, 0, 3])  # Tick start, loop, before claim, after the blocked claim commit.
+    monkeypatch.setattr(sender.time, 'monotonic', lambda: next(claim_clock) if late_stage == 'claim_commit' else elapsed[0])
     sender.tick(ses, now)
     with store.connect() as db:
-        assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == 'waiting_content'
+        assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == ('queued' if late_stage == 'claim_commit' else 'waiting_content')
