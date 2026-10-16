@@ -2,6 +2,27 @@
 from edge_analysis_v2.agent.work_context import WorkContext
 
 
+def test_unchanged_originals_precede_clock_and_new_material_after_database_roundtrip():
+    import json
+    from edge_analysis_v2.analysis.research_state import ResearchState
+    state = ResearchState()
+    state.add('z', {'text': 'original\n  spacing', 'nested': {'z': 1, 'a': [2, 1]}})
+    state.add('m', {'text': 'second'})
+    first = {'context': {'analysis_at': '2026-10-16'}, 'research_state': state.snapshot()}
+    restored = ResearchState(json.loads(json.dumps(state.snapshot(), sort_keys=True)))
+    restored.add('a', {'text': 'new'})
+    second = {'context': {'analysis_at': '2026-10-17'}, 'research_state': restored.snapshot()}
+    projected = [WorkContext(value).initial for value in (first, second)]
+    for raw, value in zip((first, second), projected):
+        assert value['research_state'] == raw['research_state']
+        assert next(iter(value)) == 'research_state'
+        assert next(iter(value['research_state'])) == 'materials'
+    encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    prefix = encode(projected[0]['research_state']['materials'])[:-1]
+    assert encode(projected[1]['research_state']['materials']).startswith(prefix)
+    assert first['research_state']['materials']['z']['nested'] == {'z': 1, 'a': [2, 1]}
+
+
 def test_revision_body_and_current_research_are_in_first_input_without_retrieval():
     initial = {'previous_analysis': {'detail': {'original': 'unchanged'}},
                'previous_items': [{'item_id': 'kept'}],
