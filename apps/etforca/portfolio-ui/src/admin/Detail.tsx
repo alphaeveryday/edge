@@ -19,7 +19,6 @@ export function Detail({ data, onClose }: { data: Data; onClose: () => void }) {
   const [tab, setTab] = useState(result ? 'result' : 'input');
   return <section className="detail" aria-label="입력 상세">
     <header><div><span className="eyebrow">방문자 {data.visitor}</span><h2>요청 상세</h2></div><button className="quiet" onClick={onClose} aria-label="상세 닫기">닫기 ×</button></header>
-    <p className="muted">{data.state ? '분석을 요청한 시점의 입력입니다.' : '마지막으로 다음 단계에 넘어갈 때 저장된 입력입니다.'}</p>
     {data.test_label && <p className="badge test">테스트 · {data.test_label}</p>}
     {data.state && <p className="muted">{progress(data)}</p>}
     {data.failure && <p className="error">실패 사유 · {data.failure}</p>}

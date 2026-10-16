@@ -38,14 +38,28 @@ def scope_filter(scope):
     return {'all': 'TRUE', 'customers': 'test_label IS NULL', 'tests': 'test_label IS NOT NULL'}[scope]
 
 
-def overview(scope='all'):
-    selected = f'WITH selected_jobs AS (SELECT * FROM portfolio_jobs WHERE {scope_filter(scope)}) '
+def delete_test_reports():
+    """Operator-only cleanup of email requests attached to explicitly marked tests."""
+    with store.connect() as db:
+        return db.execute('''DELETE FROM portfolio_report_requests r USING portfolio_jobs j
+            WHERE r.job_id=j.id AND j.test_label IS NOT NULL''').rowcount
+
+
+# A mixed visitor retains customer activity; a test job never relabels their real jobs.
+TEST_OWNERS = """SELECT owner FROM portfolio_jobs WHERE kind='analysis'
+    GROUP BY owner HAVING bool_and(test_label IS NOT NULL)"""
+
+
+def overview():
+    selected = f'''WITH selected_jobs AS (SELECT * FROM portfolio_jobs WHERE test_label IS NULL),
+        selected_presence AS (SELECT * FROM portfolio_presence WHERE owner NOT IN ({TEST_OWNERS})),
+        selected_visits AS (SELECT * FROM portfolio_visit_days WHERE owner NOT IN ({TEST_OWNERS})) '''
     with store.connect() as db:
         db.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         result = db.execute(selected + '''SELECT now() AS as_of,
-            (SELECT count(*) FROM portfolio_presence WHERE last_seen>now()-interval '2 minutes') AS active_visitors,
-            (SELECT count(*) FROM portfolio_visit_days WHERE day=(now() AT TIME ZONE 'Asia/Seoul')::date) AS today_visitors,
-            (SELECT min(first_seen) FROM portfolio_presence) AS tracking_since,
+            (SELECT count(*) FROM selected_presence WHERE last_seen>now()-interval '2 minutes') AS active_visitors,
+            (SELECT count(*) FROM selected_visits WHERE day=(now() AT TIME ZONE 'Asia/Seoul')::date) AS today_visitors,
+            (SELECT min(first_seen) FROM selected_presence) AS tracking_since,
             (SELECT count(*) FROM selected_jobs WHERE kind='analysis' AND state='queued') AS queued,
             (SELECT count(*) FROM selected_jobs WHERE kind='analysis' AND state='running') AS running''').fetchone()
         rows = db.execute(selected + """SELECT state,count(*) AS n FROM selected_jobs WHERE kind='analysis'
@@ -54,13 +68,14 @@ def overview(scope='all'):
         result['today_jobs'].update({row['state']: row['n'] for row in rows})
         result.update(db.execute("""SELECT
             count(DISTINCT nullif(lower(btrim(email)), '')) FILTER (WHERE
-                created_at >= date_trunc('day',now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'
-                AND created_at < (date_trunc('day',now() AT TIME ZONE 'Asia/Seoul')+interval '1 day') AT TIME ZONE 'Asia/Seoul'
+                r.created_at >= date_trunc('day',now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'
+                AND r.created_at < (date_trunc('day',now() AT TIME ZONE 'Asia/Seoul')+interval '1 day') AT TIME ZONE 'Asia/Seoul'
             ) AS today_unique_emails,
             count(DISTINCT nullif(lower(btrim(email)), '')) AS total_unique_emails,
-            count(*) AS total_report_requests FROM portfolio_report_requests""").fetchone())
+            count(*) AS total_report_requests FROM portfolio_report_requests r
+            JOIN portfolio_jobs j ON j.id=r.job_id WHERE j.test_label IS NULL""").fetchone())
         result['daily'] = db.execute(selected + """SELECT g.day::date,
-            (SELECT count(*) FROM portfolio_visit_days v WHERE v.day=g.day::date) AS visitors,
+            (SELECT count(*) FROM selected_visits v WHERE v.day=g.day::date) AS visitors,
             (SELECT count(*) FROM selected_jobs j WHERE j.kind='analysis'
                 AND j.created_at >= g.day AT TIME ZONE 'Asia/Seoul'
                 AND j.created_at < (g.day+interval '1 day') AT TIME ZONE 'Asia/Seoul') AS analyses
@@ -69,7 +84,7 @@ def overview(scope='all'):
         return result
 
 
-def records(kind, days, state, page, scope='all'):
+def records(kind, days, state, page, scope='customers'):
     # SQL fragments are fixed per validated enum; filters and paging remain parameters.
     if kind == 'analyses':
         table, timestamp = 'portfolio_jobs', 'created_at'
@@ -79,7 +94,7 @@ def records(kind, days, state, page, scope='all'):
     elif kind == 'drafts':
         table, timestamp = 'portfolio_input_drafts', 'updated_at'
         fields = 'id, left(owner,12) AS visitor, updated_at AS at'
-        condition, args, order = 'TRUE', [], 'updated_at DESC,id DESC'
+        condition, args, order = f'owner NOT IN ({TEST_OWNERS})', [], 'updated_at DESC,id DESC'
     elif kind == 'reports':
         table, timestamp = '(SELECT r.*,j.test_label FROM portfolio_report_requests r JOIN portfolio_jobs j ON j.id=r.job_id) AS reports', 'created_at'
         fields = 'job_id AS id, left(owner,12) AS visitor, email, created_at AS at, test_label'

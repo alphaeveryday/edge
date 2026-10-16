@@ -23,10 +23,10 @@ export function ExecutionPlan({ plan }: { plan: Execution }) {
     {plan.reasons.map(reason => { const [code, account] = reason.split(':'); return <p className="notice" key={reason}>{account && `${account} · `}{code === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' && plan.status === 'infeasible' ? '기존 목표가 요청하신 조건에 맞지 않아 실행할 수 없어요.' : reasons[code] || '실행 조건을 더 확인해야 해요.'}</p>; })}
     {plan.required_additional_krw != null && <p>목표에 필요한 최소 추가 자금: <strong>{money(plan.required_additional_krw)}</strong></p>}
     {plan.months != null && <p>매월 {money(plan.monthly_krw!)} 납입 시 <strong>{plan.months}개월</strong> · 총 추가 자금 {money(plan.additional_krw)}</p>}
-    {actionable && <div style={{ overflowX: 'auto' }}><table style={{ minWidth: 520 }}>
-      <caption>전체 포트폴리오의 현재 금액, 목표 금액과 필요한 거래</caption>
+    {actionable && <div className="execution-scroll" role="region" aria-label="리밸런싱 금액표" tabIndex={0}><table>
+      <caption className="sr-only">현재 금액, 목표 금액과 필요한 거래</caption>
       <thead><tr><th>종목 · 계좌</th><th>현재</th><th>목표</th><th>매수</th><th>매도</th><th>현금 투입</th></tr></thead>
-      <tbody>{plan.rows.map(row => <tr key={`${row.instrument_id}:${row.account}`}><th scope="row">{row.name || row.instrument_id}<small> · {row.account}</small></th><td>{money(row.before_krw)}</td><td>{money(row.target_krw)}</td><td>{money(row.buy_krw)}</td><td>{money(row.sell_krw)}</td><td>{money(row.cash_used_krw)}</td></tr>)}</tbody>
+      <tbody>{plan.rows.map(row => <tr key={`${row.instrument_id}:${row.account}`}><th scope="row">{row.name || row.instrument_id}<small>{row.account}</small></th><td data-label="현재">{money(row.before_krw)}</td><td data-label="목표">{money(row.target_krw)}</td><td data-label="매수">{money(row.buy_krw)}</td><td data-label="매도">{money(row.sell_krw)}</td><td data-label="현금 투입">{money(row.cash_used_krw)}</td></tr>)}</tbody>
     </table></div>}
     {actionable && plan.accounts.map(account => <p key={account.account}>{account.account} · 납입 {money(account.deposit_krw)} · 인출 {money(account.withdrawal_krw)}</p>)}
     <ul className="report-bullets">{plan.assumptions.map(text => <li key={text}>{text}</li>)}</ul>

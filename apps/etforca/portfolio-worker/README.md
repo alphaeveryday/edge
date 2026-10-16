@@ -65,7 +65,7 @@ pnpm --filter portfolio-ui test:e2e
 - `GET /api/portfolio/admin/overview`: 최근 2분 활동, 한국 날짜 기준 방문·분석 집계. `today_unique_emails`·`total_unique_emails`는 공백 제거·소문자 기준 오늘/누적 이메일 고유 수, `total_report_requests`는 누적 신청 레코드 수다. 사람 수나 반복 클릭 횟수가 아니다.
 - `GET /api/portfolio/admin/records?kind=analyses|drafts|reports&days=7&page=1`: 관리자 목록, 페이지당 50건. 분석은 `state` 필터 지원.
 - `GET /api/portfolio/admin/records/{kind}/{id}`: 관리자 전용 입력·결과 상세.
-- 관리자 `/overview`와 `/records`의 `scope=all|customers|tests`는 분석 집계 및 분석·리포트 목록을 필터링한다. 방문자·이메일 지표·초안은 전체 기준이다.
+- 관리자 `/overview`는 고객 기준으로 고정한다. `/records`의 `scope=all|customers|tests` 기본값은 customers이며 테스트 분석 탭은 tests를 사용한다. 방문자·초안은 분석이 모두 명시적 테스트인 방문자를 제외하며 고객 분석이 있는 방문자는 보존한다. `admin_store.delete_test_reports()`는 운영자 전용으로 테스트 분석에 연결된 이메일 신청만 삭제한다.
 - `GET /api/portfolio/admin/verification-runs`: 검증 버전 목록. `/{run_id}`는 20개 유형과 실행 이력, `/{run_id}/{case_id}/{attempt}`는 해당 회차의 실제 입력·답변이다.
 
 배포 시 실제 Git 커밋과 20개 유형을 등록하며, 아직 실행하지 않은 유형은 미실행으로 표시한다. 모델 호출을 자동 시작하지 않는다. 해당 배포 이미지의 워커 환경에서 `python -m edge_portfolio.verification --version <40자리 배포 커밋>`으로 실제 모델 검증을 시작한다. 이미지의 버전 메타데이터와 다른 커밋은 거부한다. 고객 작업은 만들지 않으며 모델·가격·검색 공급자는 실제 연결을 사용한다. 같은 버전을 다시 실행하면 통과한 유형은 유지하고 실패·중단 유형은 새 회차에 저장한다. 외부 모델 비용이 발생하며 자동검사 통과 후에도 설명 품질은 관리자에서 직접 검토해야 한다.
