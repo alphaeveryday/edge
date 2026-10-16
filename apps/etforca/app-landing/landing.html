@@ -529,6 +529,7 @@ a[role="button"]{cursor:pointer}
 .cta .display{margin:.5rem 0 1.125rem}
 .cta .hero__ctas{margin-top:2.125rem}
 .cta__note{margin-top:1.375rem;font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:var(--t3)}
+.btn--soon{opacity:.6;pointer-events:none}
 .find{width:min(100%,32.5rem);margin:0 auto 1.875rem}
 .find label{display:block;margin-bottom:1rem}
 body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-events:none}
@@ -677,6 +678,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       <p class="lead"><span class="nw">뉴스와 공시, 수급을 매일 읽고</span> <span class="nw"><strong>전망의 근거</strong>를 문장으로 정리해요.</span></p>
       <div class="hero__ctas">
         <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+        <span class="btn btn--ghost btn--lg btn--soon" data-play-soon>Google Play 곧 출시</span>
         <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
       </div>
     </div>
@@ -994,6 +996,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     <h2 class="display">관심 ETF만 담아 두세요.<br>전망은 Orca가 챙길게요.</h2>
     <div class="hero__ctas">
       <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
+      <span class="btn btn--ghost btn--lg btn--soon" data-play-soon>Google Play 곧 출시</span>
       <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
     </div>
     <p class="cta__note">Android는 곧 출시돼요.</p>
@@ -1044,6 +1047,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   const mode = root.dataset.mode || 'lite';
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const android = /Android/i.test(navigator.userAgent); // 안드로이드 앱은 아직 없다. 스토어로 보내는 단추를 안내로 바꾼다(ALPHA-1356)
   const clamp01 = (v) => Math.min(1, Math.max(0, v));
   const seg = (p, a, b) => clamp01((p - a) / (b - a)); // 진행률 p를 [a,b] 구간의 0..1로
   const ease = (t) => 1 - Math.pow(1 - clamp01(t), 3);
@@ -1401,7 +1405,8 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
 
   // 데스크톱(마우스로 쓰는 화면)에서는 다운로드 버튼이 스토어로 가는 대신 QR 창을 띄운다. 휴대폰에서는 그대로 스토어로 간다
   const qr = $('#qr');
-  if (qr.showModal && matchMedia('(hover: hover) and (pointer: fine)').matches) {
+  // 안드로이드는 제외한다 — QR 은 iOS 기기로 찍으라는 창이고, 먼저 href 를 떼면 아래 '곧 출시' 치환이 그 단추를 못 찾는다
+  if (!android && qr.showModal && matchMedia('(hover: hover) and (pointer: fine)').matches) {
     $$('a[href*="apps.apple.com"]').forEach((a) => {
       if (qr.contains(a)) return;
       // 링크로 남겨 두면 아티팩트 뷰어가 클릭을 따로 처리해 새 탭도 함께 연다(preventDefault가 듣지 않는다). 그래서 링크를 떼고 단추로 쓴다
@@ -1425,6 +1430,13 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   const find = $('[data-find]'), fIn = $('.find__in', find), fOut = $('.find__out', find);
   const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; n.textContent = text; return n; };
   let missT, cardSeq = 0;
+  if (android) {
+    // 눌러 본 뒤에야 iOS 전용임을 알게 되는 일을 없앤다. 히어로 배지·스토어 단추 전부를 '곧 출시'로 바꾸고 마지막 CTA 의 작은 안내는 뺀다
+    $('.chip--launch').textContent = 'Android 곧 출시';
+    $$('a[href*="apps.apple.com"]').forEach((a) => a.replaceWith(el('span', a.className + ' btn--soon', 'Android 곧 출시')));
+    $('.cta__note').textContent = 'iOS 앱은 App Store에 있어요.';
+    $$('[data-play-soon]').forEach((b) => b.remove());
+  }
   // 전망은 같은 도메인의 outlook/<코드>.json 에서 읽는다. 매일 08:00에 그날 발행된 앱 화면 응답이 그대로 올라온다(infra/terraform/modules/landing-export).
   // 파일이 없으면 null. 읽다 실패하면(통신 오류, 깨진 파일) 던진다 — 어느 쪽이든 카드가 준비 중이라고 알린다
   const getOutlook = (code) => fetch(`outlook/${code}.json`).then((r) => (r.ok ? r.json() : null));
@@ -1475,7 +1487,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       if (d) report = [reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${asOf(d.publication.analysis_at)} 기준 · 투자 추천이 아니에요.`)];
     } catch { /* 깨졌거나 모양이 다른 파일은 없는 파일처럼 다룬다 — 뼈대 화면을 남기지 않는다 */ }
     if (seq !== cardSeq) return; // 기다리는 사이에 다른 것을 찾았다
-    const go = el('button', 'btn btn--point', '앱에서 매일 새 전망 보기');
+    const go = el(android ? 'span' : 'button', android ? 'btn btn--point btn--soon' : 'btn btn--point', android ? 'Android 곧 출시' : '앱에서 매일 새 전망 보기');
     go.type = 'button';
     go.onclick = () => $('.cta .btn--point').click(); // 다운로드 버튼과 같은 길: 휴대폰은 스토어, 데스크톱은 QR 창
     card.replaceChildren(head, ...(report || [el('p', 'find__meta', '오늘 전망을 준비하고 있어요. 앱에서는 바로 볼 수 있어요.')]), go);
