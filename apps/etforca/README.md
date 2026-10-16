@@ -1,99 +1,72 @@
-# ETF Orca
+[프로젝트 전체](../../README.md) · [EDGE SIGNAL](../edgesignal/README.md) · [EDGE 분석 엔진](../engine/README.md)
 
-> EDGE 엔진의 ETF 분석을 개인 투자자에게 전달하고, ETF 전망 투표를 받는 B2C 서비스
+<p><img src="../../docs/assets/readme/orca-icon.png" width="72" alt="ETF ORCA"></p>
 
----
+# ETF ORCA
 
-## 1. 프로젝트 소개
+**내 투자 목표에 맞는 ETF를 추천하고, 전망과 가격이 움직인 이유를 설명합니다.**
 
-### Background
+투자 상품을 고른 뒤에도 질문은 남습니다. 내 구성은 목표에 맞는지, 새로 나온 뉴스가 내 투자에 어떤 영향을 주는지, 가격이 움직였을 때 무엇을 확인해야 하는지입니다.
 
-EDGE 엔진은 매일 ETF의 가격 변동 원인을 분석합니다.
-ETF Orca는 이 분석을 개인 투자자용 앱으로 제공합니다.
-투자자는 분석을 읽고 ETF마다 매수·관망·매도 전망에 투표합니다.
+ETF ORCA는 이 질문을 포트폴리오 추천, ETF 전망, 가격변동 설명으로 다룹니다. 개인의 입력을 해석하는 포트폴리오 서비스와 공통 시장 분석을 읽는 모바일 앱을 함께 개발합니다.
 
-투표 집계는 화면에 실시간으로 보여야 하므로 Redis에 둡니다.
-여러 인스턴스가 같은 Redis를 쓰는 구조에서는 Redis 장애가 투표와 무관한 API까지 멈출 수 있습니다.
-Redis 일부만 장애가 나도 앱 전체가 영향을 받지 않는 구조를 직접 구현하며 검토하고자 했습니다.
+[서비스](https://etforca.com/) · [포트폴리오 분석](https://etforca.com/portfolio/)
 
-### Goal
+## 사용자가 만나는 기능
 
-* Redis 장애 시 투표와 무관한 API의 정상 응답
-* Redis 장애 중에도 투표 원본의 유실 없는 저장
-* Redis 복구 후 집계와 원본의 자동 일치
-* Redis Cluster 일부 샤드 장애 시 정상 샤드의 정상 동작
+![실제 서비스 화면: 포트폴리오, ETF 전망, 가격변동 설명](../../docs/assets/readme/orca-screens.png)
 
----
+| 기능 | 사용자의 질문 | 제공하는 경험 |
+|---|---|---|
+| 포트폴리오 추천 | 내 목표와 현재 구성이 맞나요? | 현재 구성 평가, 조건에 맞는 후보 비교, 추천 구성과 이유 |
+| 관심종목 브리핑 | 오늘 내 ETF에서 중요한 내용은 무엇인가요? | 관심 ETF의 핵심 이슈와 분석 확인 |
+| 전망 분석 | 앞으로 무엇을 기대하고 무엇을 조심해야 하나요? | 긍정·부정 요인과 조건을 함께 읽기 |
+| 가격변동 설명 | 오늘 왜 움직였나요? | 구성종목과 관련 이슈를 바탕으로 변동 요인 확인 |
+| 전망 근거 읽기 | 이 설명의 근거는 무엇인가요? | 이유별 설명과 확보된 출처 확인 |
 
-## 2. 구조
+추천은 조건을 통과한 후보가 있을 때 제공합니다. 전부 탈락하면 추천을 발행하지 않고, 자료 부족과 실제 기준 미달을 구분합니다. 금액·계좌 조건이 부족하면 해당 계산의 한계를 따로 표시합니다. [추천·계산 계약](../../docs/design/portfolio-worker.md)
 
-```mermaid
-flowchart LR
-    user([투자자]) --> app[app-ui<br/>모바일 앱]
-    user --> landing[app-landing<br/>etforca.com]
-    app -->|/api/v1| api[app-api<br/>1~N 인스턴스]
-    api -->|투표 원본| pg[(PostgreSQL<br/>앱 전용 RDS)]
-    api -->|투표 집계| redis[(Redis<br/>ElastiCache)]
-    engine[EDGE 엔진<br/>분석 결과 DB] -->|읽기 전용 동기화| api
-    api -.->|재조정| redis
-```
+## 투자 목표에서 추천 이유까지
 
-* 투표 원본은 PostgreSQL, 집계는 Redis
-* Redis 갱신은 DB 커밋과 커넥션 반납 이후
-* Redis 집계는 주기 재조정이 원본 기준으로 복구
-* 분석·ETF 데이터는 엔진 DB에서 읽기 전용 동기화
+1. **내 투자 입력** — 보유 ETF와 평가금액, 투자 기간, 질문과 조건을 입력합니다.
+2. **현재 구성 점검** — 보유 상품의 특성과 집중·분산, 고객 조건을 확인합니다.
+3. **후보 비교와 제안** — 상품 조사와 계산 결과를 비교하고, 조건에 맞는 구성을 선택합니다.
+4. **이유와 금액 확인** — 추천의 근거와 현재 정보로 계산 가능한 투자 금액을 제공합니다.
+5. **후속 확인** — 관심종목의 전망과 가격변동 설명을 읽고 새 정보를 판단에 활용합니다.
 
----
+포트폴리오의 금액 배분과 제약 검사는 코드가 수행합니다. 에이전트는 상품·시장 근거를 조사하고 후보 선택의 이유를 설명합니다. 과거 성과와 미래 전망은 구분하며, 수수료·세금·주 단위 주문 반올림을 포함한 실제 주문 실행 서비스로 표현하지 않습니다.
 
-## 3. 모듈
+## 서비스와 데이터 경계
 
-[app-api](app-api/README.md) · [app-ui](app-ui/README.md) · [app-landing](app-landing/README.md) · portfolio-ui · [portfolio-worker](portfolio-worker/README.md)
+![ORCA 모바일 앱과 독립 포트폴리오 서비스의 데이터 경계](../../docs/assets/readme/orca-architecture.png)
 
-모듈별 역할과 배포처는 [저장소 구조](../../docs/repo-structure.md#apps--배포-단위)에 있습니다.
+**모바일 앱**은 `app-api`를 통해 회원·관심종목·분석·커뮤니티·투표를 제공합니다. ETF와 분석 데이터는 엔진 DB에서 읽기 전용으로 동기화하고, 회원과 투표 원본은 앱 전용 PostgreSQL에 둡니다. Redis는 투표 집계용 파생 저장소입니다.
 
----
+**포트폴리오 서비스**는 독립 API·워커와 전용 PostgreSQL을 사용합니다. API와 워커는 별도 프로세스이며 작업·초안·결과를 공유합니다. 저장된 ETF 전망은 내부 조회 서비스를 통해 **ETF 한 종목과 명시적인 목적**으로 조회합니다. 포트폴리오 워커가 공통 엔진을 실행하거나 온톨로지에 직접 접근하는 구조는 아닙니다.
 
-## 4. 기능 목록
+조회한 전망은 기존 분석자의 의견으로 구분하고 외부 공식 자료와 대조합니다. 없거나 오래된 자료, 연결 장애를 같은 상태로 처리하지 않습니다. [실행 경계](../../docs/design/portfolio-worker.md) · [배포 경계](../../docs/design/portfolio-deployment.md) · [앱 API 인프라 결정](../../docs/adr/0056-etforca-app-api-infra.md)
 
-### 회원
+## 사용자 접점과 검증
 
-* 이메일 가입과 인증 코드 확인
-* Apple·Google·Kakao 소셜 로그인
-* 액세스 토큰과 리프레시 토큰 회전
-* 비밀번호 재설정, 프로필 수정, 회원 탈퇴
-* 예외: 비회원은 기기 식별자로 조회 기능 이용
-* 예외: 탈퇴 시 해당 회원의 투표를 집계에서 제거
+포트폴리오 분석을 무료로 공개하고 커뮤니티 반응을 관찰했습니다. 인스타그램 릴스, 유튜브 쇼츠, 네이버 프리미엄 콘텐츠, 커뮤니티 홍보를 사용자 접점으로 활용했습니다.
 
-### ETF와 분석
+서비스 반응은 **방문, 분석 요청, 분석 완료, 추가 질문, 리포트 신청**을 나눠 봅니다. 자동 테스트와 팀 내부 테스트를 식별해 제외해야 하며, 쿠키 기준 방문이나 분석 요청 수를 실제 사람 수로 바꾸지 않습니다. 사용자 인터뷰·만족도·다운로드 수는 확인된 결과가 있을 때 별도로 제시합니다.
 
-* ETF 검색과 요약, 일봉 차트, 구성 종목
-* 장중 가격 변동의 원인 설명
-* 일간 분석의 요인별 상세와 지표
-* AI가 고른 오늘의 ETF 순위
-* 예외: 분석이 아직 없는 ETF는 준비 중 응답
+리포트 신청 접수와 이메일 발송은 다른 기능입니다. 현재 포트폴리오 서비스는 신청을 저장하며 자동 이메일 발송은 구현하지 않았습니다. [관리자 집계와 접속 경계](../../docs/design/portfolio-admin.md)
 
-### 관심 ETF
+## 앱 기능
 
-* 관심 그룹 생성과 삭제
-* ETF 하나를 여러 그룹에 담기와 빼기
+| 영역 | 범위 |
+|---|---|
+| 회원 | 이메일·소셜 로그인, 토큰 회전, 프로필과 탈퇴 |
+| ETF와 분석 | 검색·요약·일봉·구성종목, 분석과 요인별 상세 |
+| 관심 ETF | 관심 그룹 생성과 ETF 담기·빼기 |
+| 전망 투표 | 매수·관망·매도 투표, 재투표·철회, 집계 조회 |
+| 커뮤니티·알림 | 글·댓글·좋아요, 신고·차단, 알림·푸시 토큰 |
 
-### 전망 투표
+분석이 아직 없는 ETF는 준비 중으로 응답합니다. Redis 장애 때도 투표 원본은 DB에 저장하고, 집계 조회는 DB 폴백 경로를 사용합니다. 상세 API는 [OpenAPI 계약](app-api/openapi.yaml)을 따릅니다.
 
-* ETF별 매수·관망·매도 투표와 재투표
-* 투표 철회와 내 투표 조회
-* 선택지별 집계 조회
-* 예외: 같은 선택의 재투표는 집계 변화 없음
-* 예외: Redis 장애 시 투표는 DB에 저장하고 집계는 DB 집계로 응답
-
-### 커뮤니티와 알림
-
-* 글과 댓글 작성, 좋아요
-* 글·댓글 신고와 회원 차단
-* 알림 목록과 읽음 처리, 푸시 토큰 등록
-
----
-
-## 5. 설계 결정
+## 원본을 보존하고 장애 영향을 제한하는 설계
 
 ### 투표 원본과 집계의 분리
 
@@ -148,7 +121,7 @@ Redis가 응답하지 않으면 커넥션 풀이 고갈되어 투표와 무관�
 
 ---
 
-## 6. Redis 장애 실험
+## Redis 장애 실험
 
 Docker Compose 환경에서 k6로 부하를 주고 Redis에 장애를 주입했습니다.
 SLO는 응답 1초 이내입니다.
@@ -181,61 +154,25 @@ SLO는 응답 1초 이내입니다.
 * 샤드 서킷 적용 시 장애 샤드 요청의 중앙값 504ms에서 3ms로 감소
 
 측정 조건과 회차별 값은 [app-api README](app-api/README.md#실측)와 [Sentinel 실측 기록](app-api/experiments/FAILOVER_RESULTS.md)에 있습니다.
-측정 코드는 [app-api/experiments](app-api/experiments/)에 있습니다.
+측정 코드는 [app-api/experiments](app-api/experiments)에 있습니다.
 
 ---
 
-## 7. 기술 스택
+이 결과는 해당 장애 주입 환경의 시스템 동작을 검증한 기록입니다. 투자 추천 정확도나 운영 전체의 가용성 지표와는 구분합니다.
 
-* Java 21, Spring Boot 4.1, Spring Data JPA, Flyway
-* PostgreSQL 16, Redis 7 (Sentinel·Cluster, AWS ElastiCache)
-* Lettuce, Resilience4j, ShedLock
-* Expo (React Native), Expo Router, TanStack Query, Zustand
-* Python, FastAPI, React (포트폴리오)
-* AWS ECS Fargate, RDS, ElastiCache, ALB, Terraform, GitHub Actions
-* k6 (부하 실험)
+## 기술 스택과 개발 안내
 
----
+| 구성 | 기술과 문서 |
+|---|---|
+| 모바일 앱 | Expo / React Native, Expo Router, TanStack Query, Zustand — [app-ui](app-ui/README.md) |
+| 앱 API | Java·Spring Boot, PostgreSQL, Flyway, Redis, Lettuce, Resilience4j — [app-api](app-api/README.md) |
+| 랜딩 | 정적 HTML — [app-landing](app-landing/README.md) |
+| 포트폴리오 | React 화면, 독립 Python·FastAPI API/워커 — [실행·검증](portfolio-worker/README.md) |
 
-## 8. 실행 방법
+모듈별 실행 명령과 환경 설정은 위 문서를 따릅니다. 실제 모델을 호출하는 포트폴리오 검증은 외부 호출 비용이 발생하며, DB 통합 테스트에는 전용 테스트 환경이 필요합니다.
 
-### app-api
+### 다음 검증
 
-PostgreSQL과 Redis Sentinel을 함께 띄웁니다.
+추천을 이해하고 자신의 판단에 활용했는지에 대한 사용자 인터뷰와 만족도 검증, 실제 이용·재방문 분석을 이어갑니다. 구독 모델은 후속 사업화 방향이며 현재 유료 결제 운영 성과로 제시하지 않습니다.
 
-```bash
-cd apps/etforca/app-api
-VOTE_ADMIN_TOKEN=local-experiment docker compose up --build -d
-```
-
-테스트는 레포 루트에서 실행합니다. Docker가 필요합니다.
-
-```bash
-./gradlew :apps:etforca:app-api:test
-```
-
-### 장애 실험
-
-```bash
-cd apps/etforca/app-api/experiments
-python3 run-failover.py S2                  # Sentinel 마스터 장애
-HOT=failed FAULT=kill python3 run-cluster.py C4   # Cluster 샤드 장애
-```
-
-### app-ui
-
-```bash
-cd apps/etforca/app-ui
-npm install
-npm start
-```
-
----
-
-## 9. 문서
-
-* [app-api 설계와 실측](app-api/README.md)
-* [API 계약](app-api/openapi.yaml)
-* [DB 설계](app-api/docs/erd.md)
-* [앱 화면 구성](app-ui/screens.md)
-* [ADR-0056 앱 API 인프라](../../docs/adr/0056-etforca-app-api-infra.md)
+[앱 화면 구성](app-ui/screens.md) · [앱 DB 설계](app-api/docs/erd.md) · [프로젝트 전체로 돌아가기](../../README.md)

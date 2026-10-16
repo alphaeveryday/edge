@@ -1,63 +1,64 @@
-# edgesignal
+[프로젝트 전체](../../README.md) · [ETF ORCA](../etforca/README.md) · [EDGE 분석 엔진](../engine/README.md)
 
-> EDGE 엔진의 변동 요인 설명을 증권사가 검수해 자기 MTS에 게시하는, 증권사가 통제 가능한 운영 인프라(B2B)
+# EDGE SIGNAL
 
----
+**기업이 ETF 분석을 검수하고 자사 서비스에 제공할 수 있는 B2B 운영 인프라입니다.**
 
-## 1. 프로젝트 소개
+EDGE 분석 엔진은 공시·뉴스·수급 같은 공개 정보를 분석해 ETF 가격변동의 요인 후보와 근거를 만듭니다. EDGE SIGNAL은 기업이 이 분석의 게시 기준을 정하고, 검수·승인·반려·회수를 관리하도록 합니다.
 
-### Background
+공통 분석의 생성은 [EDGE 엔진](../engine/README.md)이, 기업별 전달·검수·게시와 고객 접점은 EDGE SIGNAL이 담당합니다.
 
-MTS에는 내 종목이 오늘 왜 움직였는지 보여주는 화면이 없습니다.
-EDGE 엔진은 공시·뉴스·수급 같은 공개 정보를 수집·분석해 가격 변동의 요인 후보를 만듭니다.
-edgesignal은 이 설명을 증권사가 검수를 거쳐 자기 MTS에 게시하게 하는 B2B 산출물입니다.
+## 제품 경험
 
-생성한 글을 그대로 내보내는 도구가 아닙니다.
-금칙어·확신도 기준·검수 큐·감사 로그로 증권사가 노출을 통제합니다.
+![MTS 분석 화면, 테넌트 검수 콘솔, 플랫폼 운영 콘솔](../../docs/assets/readme/feature-showcase.jpg)
 
-### Goal
+[MTS 데모](https://demo-mts.edgesignal.dev) · [확대 가능한 아키텍처 포털](https://alphaeveryday.github.io/edge-pages)
 
-* 고객(투자자) 데이터는 증권사 관리 환경 밖으로 나가지 않음
-* 무엇을 어떤 기준으로 게시할지는 증권사 검수자가 결정
-* 승인·반려·회수가 전부 감사 로그에 남음
-* 벤더 환경과 증권사 환경의 연결은 증권사 쪽에서 여는 단방향 Pull 하나
+| 사용자 | 하는 일 |
+|---|---|
+| 투자자 | MTS 종목 상세에서 게시된 가격변동 설명과 원문 근거 확인 |
+| 기업 검수자 | 자동 제공·검수 대기·차단 현황 확인, 게시 기준 설정, 대기 건 승인·반려 |
+| 플랫폼 운영자 | 테넌트별 게시 현황과 무효화·회수, 데이터 수집 상태 확인 |
 
-### 납품 형태
+## 분석이 게시되는 과정
 
-BYOC(Bring Your Own Cloud)입니다.
-벤더가 수집·분석 플레인(control plane)을 운영하고, 서빙·검수 플레인(data plane)은 증권사 명의 클라우드 계정 안에서 돕니다.
-벤더는 컨테이너 이미지·IaC·마이그레이션을 제공하고 실행 주체는 증권사입니다.
-물리 DMZ·내부망 분리는 VPC 서브넷과 보안 그룹으로 대응합니다.
-결정은 [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)에 있습니다.
+1. `sync-agent`가 기업 환경에서 벤더의 `tenant-sync-api`를 Pull하고, 받은 바이트를 내부망으로 전달합니다.
+2. `intake`가 Raw Event Store에 멱등 적재합니다.
+3. `screening-worker`가 금칙어·최소 근거 수·최소 확신도 정책을 평가합니다.
+4. 정책 결과에 따라 자동 게시·검수 대기·차단으로 나뉘며, 검수자는 대기 건을 승인하거나 반려합니다.
+5. `publication-api`가 게시된 설명을 MTS에 제공합니다. 사후 조치는 무효화와 회수 경로로 처리합니다.
 
----
+앱 수준 체크섬 검증과 mTLS 클라이언트 인증서의 테넌트 바인딩은 목표 계약으로 남아 있습니다. 현재 구현과 목표 계약은 [ADR-0040](../../docs/adr/0040-sync-integrity-mvp-to-signing.md) 및 [Sync 인증 계약](../../docs/contracts/sync-auth.md)을 함께 확인합니다.
 
-## 2. 구조
+## BYOC와 데이터 경계
 
-![BYOC 배포 토폴로지. 증권사 Cloud 환경(반입·점검·서빙)과 EDGE Cloud 환경(수집·분석)](../../docs/assets/readme/byoc-topology.drawio.png)
+![기존 BYOC 배포 토폴로지: 벤더 분석 환경과 증권사 검수·서빙 환경](../../docs/assets/readme/byoc-topology.drawio.png)
 
-오른쪽 EDGE 환경이 공개 정보를 수집·분석해 설명을 만들면, 왼쪽 증권사 환경이 이를 받아 점검을 거쳐 MTS에 서빙합니다.
-두 환경을 잇는 연결은 증권사 쪽에서 여는 단방향 Pull 하나이고, 고객 데이터는 증권사 환경 밖으로 나가지 않습니다.
+납품 형태는 **BYOC(Bring Your Own Cloud)**입니다. 벤더가 수집·분석 환경을 운영하고, 검수·서빙 환경은 증권사 명의 클라우드 계정에 배치합니다. 벤더는 컨테이너 이미지·IaC·마이그레이션을 제공하고, 실행 주체는 증권사입니다.
+
+두 환경의 연결은 증권사 쪽에서 시작하는 Pull 경로입니다. 고객 데이터는 증권사 관리 환경에 두는 설계입니다. 이 B2B 데이터 경계는 개인 입력을 받는 ORCA의 데이터 구조와 구분합니다. [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)
+
 그림은 [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md)의 목표 구성입니다. 체크섬 검증과 mTLS 인증서 바인딩은 아직 구현 전입니다.
 
-![시스템 아키텍처. 논리 컴포넌트(Service·Worker·Cache·DB) 조감](../../docs/assets/readme/SA.drawio.png)
+## 상세 아키텍처
 
-전체를 Service·Worker·Cache·DB 논리 컴포넌트 단위로 나타낸 구성도입니다.
-왼쪽 증권사 통제 환경(위젯·콘솔·서빙·검수 워커)과 오른쪽 EDGE 환경(수집·분석 워커·동기화)은 동기화 경로 하나로만 이어집니다.
+### 콘솔 정보구조
 
-증권사 환경 안의 경로는 다음 순서입니다.
+![기존 Information Architecture](../../docs/assets/readme/IA.drawio.png)
 
-1. sync-agent(DMZ)가 벤더의 tenant-sync-api를 Pull해 받은 바이트를 무변형으로 내부망에 넘김. 앱 수준 체크섬 검증과 mTLS 클라이언트 인증서의 테넌트 바인딩은 목표 계약으로 남아 있음([ADR-0040](../../docs/adr/0040-sync-integrity-mvp-to-signing.md)·[sync-auth.md](../../docs/contracts/sync-auth.md))
-2. intake(내부망)가 Raw Event Store에 멱등 적재
-3. screening-worker가 금칙어·최소 근거 수·최소 확신도 정책을 평가해 자동 게시·검수 대기·차단으로 분기
-4. 검수자가 tenant-console에서 대기 건을 승인·반려
-5. publication-api가 게시된 설명만 MTS에 서빙
+왼쪽이 기업 검수자의 테넌트 콘솔, 오른쪽이 플랫폼 운영자의 슈퍼 어드민 콘솔입니다. 화면과 권한의 상세 계약은 [콘솔 정보구조](../../docs/console-ia)에 있습니다.
 
-아키텍처 다이어그램 전체(인터랙티브)는 [아키텍처 포털](https://alphaeveryday.github.io/edge-pages)에서 확대해 볼 수 있습니다.
+### UI·API·저장소 연결
 
----
+![기존 Application Architecture](../../docs/assets/readme/AA.drawio.png)
 
-## 3. 모듈
+화면 기능이 어느 API를 호출하고 어느 저장소를 읽고 쓰는지 나타냅니다. 제품별 디렉터리 이동 이후의 모듈 위치는 [저장소 구조](../../docs/repo-structure.md)를 기준으로 읽습니다.
+
+### 테넌트 데이터
+
+Raw Event Store, 정책 평가와 게시 상태의 물리 구조는 [온프렘 테넌트 DB ERD](../../docs/data-model/onprem/README.md)에 있습니다. 분석 원천과 생성 결과의 데이터 모델은 [공통 데이터 모델](../../docs/data-model/README.md)에서 확인합니다.
+
+## 모듈과 배포 위치
 
 배포 위치는 디렉터리가 아니라 이 표가 담당합니다([ADR-0061](../../docs/adr/0061-product-axis-directory-layout.md)).
 
@@ -80,89 +81,42 @@ BYOC(Bring Your Own Cloud)입니다.
 
 ---
 
-## 4. 기능 목록
+## Publication API 성능 검증
 
-데모는 [demo-mts.edgesignal.dev](https://demo-mts.edgesignal.dev)에서 로그인 없이 열립니다.
+edgesignal의 MTS 조회 표면(publication-api)에 총 75회의 부하 실험을 수행했고, 네 캐시 전략은 API 서버 4대·1,600 req/s의 공통 조건에서 비교했습니다. 이 조건에서 Caffeine만으로 3분간 DB 조회가 288,000회에서 1,062회로 줄어, 현재 규모에서는 Redis를 도입하지 않았습니다.
 
-![edgesignal 주요 기능. 투자자의 MTS AI 분석 탭, 검수자의 테넌트 콘솔, 운영자의 슈퍼 어드민 콘솔](../../docs/assets/readme/feature-showcase.jpg)
+![고정 부하에서 캐시 모드별 응답 지연 — 전 모드 1~2ms로 지연 축에서는 차이가 없다](../../docs/assets/pubcache/1-mode-latency-p95-p99.png)
 
-### 투자자 (MTS 위젯)
+네 캐시 구성의 p99는 모두 1~2ms였습니다. 응답 지연보다 DB 조회 횟수가 결정 기준이 됐습니다.
 
-* 가상 MTS 종목 상세의 AI 분석 탭
-* 종목 36종의 실시간 시세(증권사 공식 Open API 프록시)
-* 게시된 변동 요인 설명과 근거 원문 링크
+![캐시의 DB 오프로딩 — 같은 부하에서 DB 호출이 캐시 없음 대비 수백~수천 분의 일로 줄어든다](../../docs/assets/pubcache/3-db-offloading.png)
 
-### 증권사 검수자 (테넌트 콘솔)
+로컬 캐시의 임계점과 Redis 재검토 조건은 [후속 29회 실험](https://choyoungseo20.github.io/posts/measuring-the-cache-boundary)에서 따로 측정했습니다.
 
-* 자동 제공·검수 대기·점검 차단 현황 대시보드
-* 금칙어·최소 근거 수·최소 확신도로 점검 기준 설정
-* 기준에 걸린 건의 승인·반려
-* 제공 범위를 시장·종목 단위로 켜고 끄기
+![워킹셋 크기 스윕 — L1 임계점을 지나면 two-level의 L2 왕복 비용이 꼬리 지연을 키운다](../../docs/assets/pubcache/2-working-set-sweep-p99.png)
 
-### 플랫폼 운영자 (슈퍼 어드민 콘솔)
+전체 과정은 [75회 부하 실험](https://choyoungseo20.github.io/posts/the-redis-experiment-that-removed-redis)과 [결정 기록](https://choyoungseo20.github.io/posts/four-instances-caffeine-was-simpler)에서 확인할 수 있습니다.
 
-* cross-tenant 게시 현황과 무효화(회수)
-* 데이터셋별 수집 상태 확인
+위 수치는 기존 부하 실험의 조건과 결과입니다. 이번 문서 작성에서 부하 실험을 다시 수행한 값이 아닙니다.
 
----
+## 설계 결정
 
-## 5. 설계 결정
+- [ADR-0010](../../docs/adr/0010-hybrid-onprem-pivot.md): 고객 접점·검수·노출을 증권사 환경으로 옮긴 결정
+- [ADR-0036](../../docs/adr/0036-sync-agent-intake-topology.md): DMZ의 sync-agent와 내부망의 intake 분리
+- [ADR-0044](../../docs/adr/0044-correction-abolition.md): 정정 전달을 폐지하고 무효화 경로를 유지한 결정
+- [ADR-0046](../../docs/adr/0046-confidence-gate-risk-grade-abolition.md): 확신도 게이트를 단순 AND 조건으로 정리한 결정
+- [ADR-0051](../../docs/adr/0051-byoc-deployment-topology.md): BYOC 납품 형태
+- [ADR-0053](../../docs/adr/0053-widget-direct-serving-no-personalization.md): 고객 컨텍스트를 제거한 MTS 위젯 직접 호출
 
-### 콘솔 정보구조
+## 기술 스택과 개발 안내
 
-![콘솔 정보구조 화면 맵. 테넌트 콘솔·슈퍼 어드민 콘솔](../../docs/assets/readme/IA.drawio.png)
+Java·Spring Boot, JPA/JdbcTemplate, Flyway, PostgreSQL, React, 공유 [ui-kit](../../libs/ui-kit/README.md)을 사용합니다. 배포 구성은 AWS ECS·RDS·ALB·CloudFront와 Terraform으로 관리합니다.
 
-콘솔의 화면과 기능을 트리 하나로 정리한 화면 맵입니다.
-왼쪽이 증권사 검수자가 쓰는 테넌트 콘솔(대시보드·설명 관리·검수·점검 기준·설정), 오른쪽이 운영자가 쓰는 슈퍼 어드민 콘솔(테넌트 관리·분석 관측)입니다.
+- [데모 온프렘 실행 안내](../../demo/onprem/README.md)
+- [구현·배포 결정](../../docs/implementation.md)
+- [스키마 관리](../../libs/schema/README.md)
+- [Publication API 계약](../../docs/contracts/publication-api.md)
+- [Sync 프로토콜](../../docs/contracts/sync-protocol.md)
+- [아키텍처 상세 뷰](../../docs/architecture)
 
-![애플리케이션 아키텍처. UI 화면·API·저장소 단위 상세 매핑](../../docs/assets/readme/AA.drawio.png)
-
-위 화면들을 UI·API·Repository 단위까지 내려 매핑한 상세도입니다.
-화면의 기능 하나가 어느 API를 호출하고 어느 테이블을 읽고 쓰는지 확인할 수 있습니다.
-
-### 방향을 정한 결정
-
-* [ADR-0010 하이브리드 온프렘 피벗](../../docs/adr/0010-hybrid-onprem-pivot.md): 고객 접점·검수·노출을 증권사 환경으로 옮긴 결정. Cloud-only·embed widget 구조는 폐기
-* [ADR-0036 Sync 2모듈 토폴로지](../../docs/adr/0036-sync-agent-intake-topology.md): DMZ의 sync-agent와 내부망의 intake 분리
-* [ADR-0044 정정(CORRECTION) 전달 폐지](../../docs/adr/0044-correction-abolition.md): 자기 기능을 폐지한 결정
-* [ADR-0046 확신도 게이트](../../docs/adr/0046-confidence-gate-risk-grade-abolition.md): 융합 산정 설계를 폐기하고 단순 AND 게이트로 회귀
-* [ADR-0051 BYOC 배포 토폴로지](../../docs/adr/0051-byoc-deployment-topology.md): 납품 형태 확정
-* [ADR-0053 MTS 위젯 직접 호출](../../docs/adr/0053-widget-direct-serving-no-personalization.md): 고객 컨텍스트 제거
-
----
-
-## 6. 기술 스택
-
-* Java 21, Spring Boot 4.1, JPA·JdbcTemplate 병행, Flyway
-* PostgreSQL. 스키마는 [libs/schema](../../libs/schema/README.md)의 cloud·onprem 두 세트
-* React 19, 공유 디자인 시스템 [ui-kit](../../libs/ui-kit/README.md), pnpm workspace
-* AWS ECS Fargate, RDS, ALB, CloudFront, Terraform, GitHub Actions
-
----
-
-## 7. 실행 방법
-
-로컬 전체 스택은 레포 루트의 compose(cloud·onprem DB 2개와 JVM 모듈 7개, mock-broker)와 콘솔 UI 2종을 한 번에 띄웁니다.
-
-```bash
-scripts/up-all.sh             # 전체 기동. Ctrl-C 로 UI 종료
-scripts/up-all.sh down -v     # 백엔드 정리. -v 는 DB 볼륨까지
-```
-
-JVM 테스트는 레포 루트에서 실행합니다.
-
-```bash
-./gradlew :apps:edgesignal:tenant-console-api:test
-```
-
-데모 박스의 온프렘 서브셋 compose는 [demo/onprem](../../demo/onprem/README.md)에 있습니다.
-
----
-
-## 8. 문서
-
-* [프로젝트 컨텍스트](../../docs/context.md): 서비스·책임 경계의 SSOT
-* [구현 결정사항](../../docs/implementation.md): 현행이 무엇인가
-* [아키텍처 설계 뷰](../../docs/architecture/): IA·AA·SA·CA
-* [콘솔 화면·권한](../../docs/console-ia/): 테넌트 콘솔·슈퍼 어드민 콘솔·권한 매트릭스
-* [온프렘 테넌트 DB ERD](../../docs/data-model/onprem/)
+[프로젝트 전체로 돌아가기](../../README.md)
