@@ -88,6 +88,8 @@ class PublicationStore:
                 previous = cur.fetchone()
                 if not previous or previous["status"] != "completed" or previous["etf_code"] != etf_code or previous["analysis_at"] >= analysis_at or previous["data_source"] != data_source:
                     raise ValueError("Invalid previous publication")
+                if kind == 'movement' and previous['trading_date'] != analysis_at.astimezone(KST).date():
+                    raise ValueError('Previous movement must belong to the same KST day')
             columns = ["analysis_id", "etf_code", "analysis_at", "previous_analysis_id", "data_source"]
             values = [analysis_id, etf_code, analysis_at, previous_id, data_source]
             if kind == "movement":

@@ -45,9 +45,45 @@ def test_material_identity_cannot_silently_replace_original_content():
     assert state.snapshot()['materials']['a']['text'] == 'original'
 
 
-def test_invalid_state_version_is_not_silently_treated_as_first_analysis():
+@pytest.mark.parametrize('version', [1, 999])
+def test_invalid_state_version_is_not_silently_treated_as_first_analysis(version):
     with pytest.raises(ValueError):
-        ResearchState({'version': 999, 'materials': {}, 'removed': {}})
+        ResearchState({'version': version, 'materials': {}, 'removed': {}, 'gaps': []})
+
+
+def test_retirement_resolves_duplicate_reference_and_replacement_without_mutating_request():
+    state = ResearchState()
+    for identity, text in [('a', 'old'), ('a2', 'old'), ('b', 'new'), ('b2', 'new')]:
+        state.add(identity, {'text': text})
+    changes = [{'id': 'a2', 'reason': 'corrected', 'replacement_id': 'b2'}]
+    state.remove(changes)
+    assert state.snapshot()['materials'] == {'b': {'text': 'new'}}
+    assert state.snapshot()['removed']['a']['replacement_id'] == 'b'
+    assert changes[0]['id'] == 'a2'
+
+
+def test_duplicate_alias_removals_fail_atomically():
+    state = ResearchState()
+    state.add('a', {'text': 'old'})
+    state.add('alias', {'text': 'old'})
+    before = state.snapshot()
+    with pytest.raises(ValueError):
+        state.remove([{'id': 'a', 'reason': 'old'}, {'id': 'alias', 'reason': 'old'}])
+    assert state.snapshot() == before
+
+
+def test_same_original_under_a_new_tool_run_id_does_not_resurrect_retired_material():
+    def observation(run, at):
+        return {'kind': 'tool', 'definition': {'function_name': 'get_issue_evidence'},
+                'arguments': {'news_ids': ['a']}, 'context': {'analysis_at': at, 'flow_as_of_date': at},
+                'output': {'tool_run_id': run, 'result': {'news': [{'news_id': 'a', 'body': 'original'}]}}}
+    state = ResearchState()
+    state.add('run-a', observation('run-a', '2026-10-15'))
+    state.remove([{'id': 'run-a', 'reason': 'excluded'}])
+    next_state = ResearchState(state.snapshot())
+    next_state.add('run-b', observation('run-b', '2026-10-16'))
+    assert next_state.snapshot()['materials'] == {}
+    assert next_state.snapshot()['aliases']['run-b'] == 'run-a'
 
 
 @pytest.mark.parametrize('stage', ['', 'investigation', 'writing'])
