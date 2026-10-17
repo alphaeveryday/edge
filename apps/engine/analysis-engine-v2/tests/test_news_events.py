@@ -197,8 +197,17 @@ def test_rebroadcast_only_thread_keeps_one_representative_without_inventing_orig
     assert len(page['items']) == 1
     assert page['items'][0]['event_id'] == 'latest'
     assert page['items'][0]['representative_rebroadcast'] is True
-    assert page['original_unavailable'] is True
+    assert page['only_rebroadcasts'] is True
     assert page['folded_rebroadcast_count'] == 1
+
+
+@pytest.mark.parametrize('novelty', ['FIRST_IN_THREAD', 'FOLLOW_UP_STAGE', 'CORRECTION', 'UNKNOWN'])
+def test_non_rebroadcast_observation_does_not_claim_the_first_report_was_captured(novelty):
+    data = source()
+    add(data, 'observed', thread='t', novelty=novelty)
+    page = result(DatabaseTools(data), 'get_event_timeline', event_key='thread:t')
+    assert page['only_rebroadcasts'] is False
+    assert 'original_unavailable' not in page
 
 
 def test_first_observation_of_a_global_rebroadcast_is_new_to_this_analysis():

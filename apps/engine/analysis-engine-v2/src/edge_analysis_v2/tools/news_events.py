@@ -159,13 +159,13 @@ class NewsEvents:
                 folded += 1
                 continue
             rows.append({k: row.get(k) for k in fields})
-        original_unavailable = not rows
-        if original_unavailable:
+        only_rebroadcasts = not rows
+        if only_rebroadcasts:
             rows.append({k: reports[-1].get(k) for k in fields} | {'representative_rebroadcast': True})
             folded -= 1
         return self.page(rows, ['timeline', event_key], cursor, limit, event_key=event_key,
                          folded_rebroadcast_count=folded,
-                         original_unavailable=original_unavailable,
+                         only_rebroadcasts=only_rebroadcasts,
                          interpretation='Recorded rebroadcasts counted for the thread, not attributed to a particular fact. Stages are reported, not independently verified.')
 
     def search_articles(self, query, offset, unlinked_only=False):
