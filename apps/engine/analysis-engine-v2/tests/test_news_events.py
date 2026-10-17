@@ -225,3 +225,18 @@ def test_existing_novelty_revision_reports_previous_and_current_classification()
     assert row['change'] == 'link_changed'
     assert row['previous_novelty'] == 'FIRST_IN_THREAD'
     assert row['novelty'] == 'CORRECTION'
+
+
+def test_first_seen_correction_precedes_other_new_events_on_a_partial_page():
+    before = source()
+    current = source()
+    current['context']['analysis_at'] = '2026-10-17T00:00:00+00:00'
+    for index in range(30):
+        add(current, f'a-new-{index}', thread=f'new-{index}', novelty='FIRST_IN_THREAD')
+    add(current, 'z-correction', thread='new-correction', novelty='CORRECTION')
+    tools = DatabaseTools(current)
+    tools.set_previous_news_snapshot(DatabaseTools(before).news_snapshot())
+    row = result(tools, 'get_event_changes', limit=1)['items'][0]
+    assert row['event_id'] == 'z-correction'
+    assert row['change'] == 'new_event'
+    assert row['novelty'] == 'CORRECTION'

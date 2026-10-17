@@ -212,7 +212,8 @@ class NewsEvents:
                     'facts_or_evidence_changed': 3, 'document_changed': 3, 'new_fact': 4,
                     'new_event': 5, 'scope_exit_or_missing': 6, 'document_scope_exit_or_missing': 7,
                     'new_unlinked_article': 8, 'repeat_only': 9}
-        rows.sort(key=lambda r: (priority[r['change']], r.get('event_id', ''), r.get('news_id', '')))
+        rows.sort(key=lambda r: (0 if r.get('novelty') == 'CORRECTION' else priority[r['change']],
+                                 r.get('event_id', ''), r.get('news_id', '')))
         scope_keys = ('target_ids', 'issuer_ids', 'lookback_days', 'universe')
         return self.page(rows, ['changes', self.previous['snapshot_id']], cursor, limit, baseline_status='ready',
                          change_counts=dict(Counter(row['change'] for row in rows)),
