@@ -7,7 +7,7 @@
   이 가로 한 장은 ORCA 의 orca-screens.png(2800x1440) 와 짝을 맞춘다.
   스크린샷 원본은 이 폴더의 07(폰: demo-mts 의 KODEX 반도체 2026-09-21 게시분,
   `/?ticker=091160&trade_date=2026-09-21` 를 헤드리스 Chrome 700x1000·2x 로 찍어 베젤만 잘라낸 825x1743)과
-  04(검수 관리 콘솔)다. 다시 뽑는 법:
+  04-review-queue-20261016(검수 관리 콘솔, 2026-10-16 캡처)이다. 다시 뽑는 법:
 
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
       --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
@@ -31,8 +31,8 @@
   /* 폰은 ORCA 그림처럼 하단을 잘라 보인다(본문이 화면보다 길어 자연스럽게 이어진다). */
   .phone { width:300px; height:548px; overflow:hidden; border-radius:13.1% 13.1% 0 0 / 6.2% 6.2% 0 0; }
   .phone img { display:block; width:300px; height:auto; }
-  /* 콘솔은 자연 비율(1.88:1) 그대로. 폰 열과 높이를 맞추려 아래 여백을 둔다. */
-  .console { width:100%; border-radius:8px; overflow:hidden; box-shadow:0 2px 14px rgba(44,52,68,.12); background:#fff; margin-top:36px; }
+  /* 콘솔 캡처(2026-10-16, 1280x1289)는 세로가 길어 위쪽만 보인다. 높이 449 = 폭 844 x 678/1276, 옛 패널 비율. */
+  .console { width:100%; height:449px; border-radius:8px; overflow:hidden; box-shadow:0 2px 14px rgba(44,52,68,.12); background:#fff; margin-top:36px; }
   .console img { display:block; width:100%; height:auto; }
 </style>
 <div class="row">
@@ -42,6 +42,6 @@
   </div>
   <div>
     <div class="cap"><p class="role">기업 검수자 · 테넌트 콘솔</p><h2>검수 관리</h2></div>
-    <div class="console"><img src="04-review-queue.jpg" alt="테넌트 콘솔 검수 관리"></div>
+    <div class="console"><img src="04-review-queue-20261016.jpg" alt="테넌트 콘솔 검수 관리"></div>
   </div>
 </div>

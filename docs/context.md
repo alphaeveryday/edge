@@ -6,6 +6,8 @@
 
 > **작성 기준**: 제품 방향 지시 문서 + 기존 아키텍처 pptx(IA/Application/System/Cloud/Data Pipeline) 대조 + 8건의 미결 사항에 대한 PM(조영서) 확정 결정.
 
+> ⚠️ **현행 구분 (2026-10-16)**: 이 문서의 Sync 경로 서술 중 번들 체크섬 검증·mTLS 클라이언트 인증서 바인딩·PrivateLink 는 **목표 계약**이다. 현행 구현은 Sync Agent 의 무변형 릴레이와 일반 TLS 이고([ADR-0040](adr/0040-sync-integrity-mvp-to-signing.md), `apps/edgesignal/sync-agent` 의 BundleRelayService), dev sync ALB 의 trust store 는 ALPHA-447 전까지 비어 있다. 현행 배치는 [루트 README](../README.md)의 클라우드 아키텍처 그림과 설명을 본다.
+
 > **용어 — On-Prem(ise)**: 이 문서군의 On-Prem은 물리 서버가 아니라 **증권사가 통제하는 실행 환경**을 뜻한다 — 자체 IDC·내부 가상화는 물론, 증권사 명의로 운영하는 전용/금융 클라우드도 포함한다. 요건은 위치가 아니라 ① 고객 데이터 비반출(벤더 측으로 나가지 않음) ② 망분리 토폴로지 상당 구성(§3 네트워크 배치 — 클라우드 기반이면 VPC 서브넷 분리로 DMZ/내부망을 사상) ③ 증권사 통제권이다. 배제 대상은 클라우드 일반이 아니라 **벤더 통제 환경에 고객 데이터·검수·노출을 두는 구조**다. 대외 산출물에서는 "증권사 관리 환경"을 기본 표현으로 쓴다 ([writing-rules.md](writing-rules.md)).
 
 ## 1. 제품 정의 및 변경 배경
