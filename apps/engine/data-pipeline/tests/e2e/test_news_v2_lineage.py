@@ -98,10 +98,10 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
             # Execution time is later than the thread's actual evaluation timestamp.
             cutoff = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
             tools = DatabaseTools(load_source(reader, "091160", cutoff))
-            result = tools.call("search_news_threads", {})["result"]
-            assert [t["thread_id"] for t in result["threads"]] == [thread_id]
-            found = [e for t in result["threads"] for s in t["stages"] for e in s["events"]]
-            assert [(e["event_id"], e["news_id"]) for e in found] == [(event_id, document_id)]
+            result = tools.call("list_events", {})["result"]
+            assert [t["event_key"] for t in result["items"]] == ['thread:' + thread_id]
+            found = tools.call("get_event_timeline", {"event_key": 'thread:' + thread_id})["result"]["items"]
+            assert [(e["event_id"], e["news_ids"]) for e in found] == [(event_id, [document_id])]
             assert tools.call("get_issue_evidence", {"news_ids": [document_id], "include_body": False})["result"] == {
                 "news": [{"news_id": document_id, "title": title}]}
             # Assembly did not fetch a body; the tool must not invent one.
@@ -131,7 +131,9 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
             reader.read_only = True
             reader.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
             tools = DatabaseTools(load_source(reader, "091160", (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()))
-            threads = tools.call("search_news_threads", {})["result"]["threads"]
-            assert [t["thread_id"] for t in threads] == [thread_id]
-            assert {(e["event_id"], e["news_id"]) for t in threads for s in t["stages"] for e in s["events"]} == {
-                (event_id, document_id), (minute_event, minute_doc)}
+            events = tools.call("list_events", {})["result"]["items"]
+            assert [e["event_key"] for e in events] == ['thread:' + thread_id]
+            # The minute writer must join the same stored thread, including its article evidence.
+            assert events[0]['report_count'] == 2
+            assert {e['event_id'] for e in tools.news_snapshot()['events']} == {event_id, minute_event}
+            assert tools.call("get_issue_evidence", {"news_ids": [minute_doc], "include_body": False})["result"]["news"][0]['news_id'] == minute_doc
