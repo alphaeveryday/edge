@@ -36,7 +36,8 @@ NEXT = 'arn:aws:states:ap-northeast-2:1:execution:edge-dev-analysis-v2:next-'
 def cloud(tmp_path):
     dsn = os.environ['V2_TEST_DSN']
     settings = conninfo_to_dict(dsn)
-    if (settings.get('host'), settings.get('port'), settings.get('dbname')) != ('127.0.0.1', '55439', 'analysis_v2'):
+    if (settings.get('host') != '127.0.0.1' or settings.get('port') not in {'55439', '15449'}
+            or settings.get('dbname') != 'analysis_v2'):
         raise ValueError('Requires isolated local analysis_v2 database')
     tag = 'short-conn-' + uuid4().hex[:12]
     faults = {'refuse': 0, 'kill_on': None, 'pause': None, 'raise_on': None}
@@ -153,6 +154,23 @@ def test_cloud_run_holds_no_session_while_the_model_waits(cloud):
     # The dashboard path keeps its two connections (work with the analysis ID lock, and audit) for the whole run.
     cloud.execute(outlook_model([], during=lambda: seen.update(dashboard=cloud.sessions())), owner=None)
     assert seen['dashboard'] == 2
+
+
+def test_news_baseline_uses_the_writer_role_without_holding_a_session_during_research(cloud):
+    from test_event_research_service import SnapshotSource, write
+    from edge_analysis_v2.storage.news_snapshots import read_snapshot
+    identity = uuid4().hex
+    cloud.created.append(identity)
+    source = SnapshotSource(make_fixture(analysis_at=ANALYSIS_AT))
+    async def model(**kwargs):
+        assert cloud.sessions() == 0
+        assert kwargs['initial']['news_research']['mode'] == 'initial'
+        return write(kwargs, source)
+    service.execute_request(kind='outlook', source_tools=source, connection_factory=cloud.factory,
+        key='fake-key', artifacts=cloud.tmp/identity, analysis_id=identity, model_call=model,
+        owner=cloud.owned(identity), previous_analysis_id=None)
+    with cloud.factory() as connection:
+        assert read_snapshot(connection, 'outlook', identity) == source.news_snapshot()
 
 
 def test_reclaimed_slot_refuses_a_new_publication_and_leaves_no_rows(cloud):
@@ -316,7 +334,8 @@ def test_movement_published_but_interrupted_before_delivery_is_delivered_by_the_
     monkeypatch.setattr(worker, 'connect_results', lambda ca_path, **_: cloud.factory())
     monkeypatch.setattr(worker, 'load_sources', lambda *_: make_fixture(analysis_at=ANALYSIS_AT))
     monkeypatch.setattr(worker, 'load_research_observations', lambda connection, source: source)
-    monkeypatch.setattr(worker, 'execute_request', partial(service.execute_request, model_call=model))
+    # The worker explicitly supplies its effort-bound model_call; patch that boundary.
+    monkeypatch.setattr(worker, 'run_model', model)
     monkeypatch.setattr(worker, 'enqueue_movement', enqueue)
     request = {'analysis_id': identity, 'kind': 'movement', 'etf_code': '091160', 'analysis_at': ANALYSIS_AT}
     run = lambda: worker.run(request, bucket='local', ca_path=Path('.'), folder=cloud.tmp/identity, key='fake-key',

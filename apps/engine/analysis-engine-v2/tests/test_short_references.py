@@ -21,10 +21,18 @@ def test_every_listed_reference_of_a_response_is_found_wherever_it_is_nested():
     assert sorted(listed_references(response)) == ['f1', 'f12', 'f3', 'f7']
 
 
-def test_an_unchecked_reference_is_dropped_and_an_emptied_list_takes_the_fallback():
-    # WHY: after its two repairs the last check returned the answer as it was, and an unchecked number went on to publication.
-    from edge_analysis_v2.analysis.service import keep_references
+def test_unchecked_evidence_cannot_be_replaced_by_an_unrelated_topics_evidence():
+    # A plausible but unrelated citation must not turn a failed repair into a publication.
+    import pytest
+    from edge_analysis_v2.analysis.service import require_references
     fields = {'factors': [{'sentence': 's', 'tool_run_ids': ['f1', 'f9']}],
               'conclusion': {'supports': [{'label': 'x', 'tool_run_ids': ['f9']}]}}
-    assert keep_references(fields, {'f1', 'f3'}, ['f3']) == {
-        'factors': [{'sentence': 's', 'tool_run_ids': ['f1']}], 'conclusion': {'supports': [{'label': 'x', 'tool_run_ids': ['f3']}]}}
+    with pytest.raises(ValueError, match='f9'):
+        require_references(fields, {'f1', 'f3'})
+    assert fields['conclusion']['supports'][0]['tool_run_ids'] == ['f9']
+
+
+def test_checked_evidence_is_preserved_without_rewriting_the_response():
+    from edge_analysis_v2.analysis.service import require_references
+    fields = {'conclusion': {'supports': [{'label': 'x', 'tool_run_ids': ['f3']}]}}
+    assert require_references(fields, {'f1', 'f3'}) is fields

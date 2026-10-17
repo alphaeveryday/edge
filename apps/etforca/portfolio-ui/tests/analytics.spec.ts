@@ -180,7 +180,7 @@ for (const [label, rating] of [['좋아요', 'good'], ['그냥 그래요', 'okay
   test(`feedback after performance submits ${rating} once without customer data`, async ({ page, baseURL }) => {
     const events = await instrument(page, baseURL!);
     await feedbackReport(page);
-    const popup = page.getByRole('dialog', { name: '이번 분석은 어떠셨나요?' });
+    const popup = page.getByRole('dialog', { name: '포트폴리오 저장' });
     await expect(popup).toHaveCount(0);
     await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
     await expect(popup).toBeVisible();
@@ -294,9 +294,7 @@ test('newsletter signup is above the independent rating choices and never enters
   expect(form!.y + form!.height).toBeLessThan(choices!.y);
   await popup.getByLabel('뉴스레터 이메일').fill('newsletter-private@example.test');
   await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
-  expect(submissions).toHaveLength(0);
-  await popup.getByRole('checkbox').check();
-  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('checkbox')).toHaveCount(0);
   await expect(popup.getByRole('status')).toContainText('확인 메일');
   expect(submissions).toEqual([{ email: 'newsletter-private@example.test', consent: true }]);
   await popup.getByRole('button', { name: '좋아요', exact: true }).click();
@@ -363,7 +361,6 @@ test('dismissed feedback keeps a newsletter retry without asking for another rat
   await expect(popup.locator('.feedback-choices')).toHaveCount(0);
   await page.route('**/api/portfolio/analyses/*/newsletter', route => route.fulfill({ json: { status: 'active', delivery_ready: false } }));
   await popup.getByLabel('뉴스레터 이메일').fill('reader@example.test');
-  await popup.getByRole('checkbox').check();
   await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
   await expect(popup.getByRole('status')).toContainText('발송 준비가 끝나면');
   await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
@@ -380,7 +377,6 @@ test('newsletter validation explains the email field rather than portfolio holdi
   await page.route('**/api/portfolio/analyses/*/newsletter', route => route.fulfill({ status: 422, json: { detail: [{ loc: ['body', 'email'], type: 'string_pattern_mismatch' }] } }));
   const popup = page.locator('.report-feedback');
   await popup.getByLabel('뉴스레터 이메일').fill('reader@example');
-  await popup.getByRole('checkbox').check();
   await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
   await expect(popup.getByRole('alert')).toHaveText('이메일 주소를 확인해 주세요.');
 });
