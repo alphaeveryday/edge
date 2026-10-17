@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { api, ApiError, progress, type Kind, type Overview, type Records, type Detail as DetailData, type State } from './api';
 import { Detail } from './Detail';
 import { Verification } from './Verification';
+import '../design-system/fonts.css';
 import '../design-system/tokens.css';
 import './styles.css';
 import '../design-system/components.css';

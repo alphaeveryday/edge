@@ -1,13 +1,13 @@
 /* Shared interaction, type and surface contracts. Screen CSS owns layout. */
 body { color: var(--color-text); background: var(--color-canvas); font-family: var(--font); line-height: 1.5; font-variant-numeric: tabular-nums; }
 button, input, select, textarea { font: inherit; }
-h1,h2,h3 { color: var(--color-text); letter-spacing: -.035em; font-weight: 700; text-wrap: pretty; }
+h1,h2,h3 { color: var(--color-text); letter-spacing: -.025em; font-weight: 700; text-wrap: pretty; }
 h1 { font-size: var(--text-title); }
 h2 { font-size: var(--text-heading); }
 p { text-wrap: pretty; }
 :is(button,a,input,select,textarea,summary):focus-visible { outline: 3px solid var(--color-primary); outline-offset: 3px; }
 .ds-button { min-height: 44px; touch-action: manipulation; transition: background-color var(--motion-fast), transform var(--motion-fast); }
-.ds-button:not(:disabled):active { transform: scale(.98); }
+.ds-button:not(:disabled):not(.asset-row):not(.chip):active { transform: scale(.98); }
 .ds-button:disabled { cursor: not-allowed; opacity: .5; }
 .ds-button[data-variant=primary], .ds-button[data-variant=secondary], .ds-button[data-variant=danger] { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border: 0; padding: var(--space-4) var(--space-6); border-radius: var(--radius-control); height: auto; min-height: 52px; font-size: var(--text-label); font-weight: 600; line-height: 1.5; }
 .ds-button[data-variant=primary] { color: var(--color-on-primary); background: var(--color-primary); }
@@ -22,6 +22,7 @@ p { text-wrap: pretty; }
 .ds-input::placeholder, .ds-textarea::placeholder { color: var(--color-text-muted); opacity: 1; }
 .ds-input[aria-invalid=true], .ds-textarea[aria-invalid=true] { border-color: var(--color-danger); }
 .ds-input:disabled, .ds-select:disabled, .ds-textarea:disabled { opacity: .6; cursor: not-allowed; }
+.ds-button svg { flex-shrink: 0; }
 .ds-section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-6); }
 .ds-section-heading h2 { font-size: var(--text-heading); margin: 0; }
 .ds-section-heading p { font-size: var(--text-label); color: var(--color-text-secondary); margin-top: var(--space-2); }
@@ -39,6 +40,8 @@ p { text-wrap: pretty; }
 /* Portfolio patterns share the same primitives in customer and shadow-root reports. */
 .app { gap: var(--space-8); }
 .step { gap: var(--space-6); }
+.step>.eyebrow { margin-bottom: calc(-1 * var(--space-3)); }
+.step>.hint { margin-top: calc(-1 * var(--space-3)); }
 .step h2 { font-size: var(--text-title); line-height: 1.4; white-space: pre-line; }
 .hint { font-size: var(--text-body); color: var(--color-text-secondary); line-height: 1.65; }
 .eyebrow { color: var(--color-text-muted); font-size: var(--text-caption); letter-spacing: 0; }
@@ -52,6 +55,7 @@ p { text-wrap: pretty; }
 .num { border: 0; background: var(--color-surface-subtle); }
 .chips.big .chip { min-height: 64px; padding: var(--space-5) var(--space-6); border-radius: var(--radius-control); font-size: var(--text-body); box-shadow: none; background: var(--color-surface); }
 .chips.big .chip[aria-pressed=true], .chip[aria-pressed=true] { background: var(--color-primary-soft); border-color: var(--color-primary); color: var(--color-primary); }
+.chip.add { border-style: solid; background: var(--color-surface-subtle); font-weight: 500; }
 .chip { min-height: 44px; max-width: 100%; white-space: normal; font-size: var(--text-label); }
 .instrument-search .find__plus { min-width: 44px; }
 .x, .nav__back, .feedback-close, .dialog-close { min-width: 44px; min-height: 44px; color: var(--color-text-secondary); }
@@ -64,11 +68,13 @@ p { text-wrap: pretty; }
 #report .trade-amount[data-trade=buy] { color: var(--color-buy); }
 #report .trade-amount[data-trade=sell] { color: var(--color-sell); }
 #report .p, #report .why, #report .evaluation p { line-height: 1.8; }
-.dashboard-stats { border: 0; border-radius: var(--radius-card); padding-block: var(--space-8); }
+.dashboard-stats { border: 0; border-radius: var(--radius-card); padding-block: var(--space-6); }
 .dashboard-stats article:first-child strong { font-weight: 700; font-size: clamp(2rem,3vw,2.75rem); }
 .dashboard-stats article+article { border-left: 0; }
-.dashboard-stats span, .dashboard-stats small { font-size: var(--text-caption); }
-.dashboard-card { border: 0; border-radius: var(--radius-card); padding: var(--space-8); }
+.dashboard-stats span { font-size: var(--text-label); }
+.dashboard-stats small { font-size: var(--text-caption); }
+.dashboard-card { border: 0; border-radius: var(--radius-card); padding: var(--space-6) var(--space-8); }
+.dashboard-overview .card-heading { min-height: 44px; margin-bottom: var(--space-4); }
 .dashboard-nav nav button { border-radius: var(--radius-control); font-size: var(--text-label); }
 .dashboard-nav nav { min-width: 0; overflow-x: auto; }
 .dashboard-brand { display: inline-flex; align-items: center; gap: var(--space-2); }
@@ -78,6 +84,10 @@ p { text-wrap: pretty; }
 .asset-row { min-height: 88px; }
 .asset-row b { font-size: var(--text-label); }
 .asset-row small { font-size: var(--text-caption); }
+.asset-row>span:nth-child(4) { font-size: var(--text-label); font-weight: 600; }
+.asset-row>span:nth-child(4) small { font-weight: 400; }
+.dashboard :is(input,select) { font-size: var(--text-label); }
+.asset-row:active { transform: none; }
 .gain { color: var(--color-buy)!important; }.loss { color: var(--color-sell)!important; }
 .report-feedback, .asset-editor, .tax-dialog, .followup-dialog { border: 0; border-radius: var(--radius-card); background: var(--color-surface); box-shadow: 0 12px 48px var(--color-shadow); }
 .report-feedback { padding: var(--space-6); }

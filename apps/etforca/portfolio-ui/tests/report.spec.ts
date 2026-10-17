@@ -27,7 +27,8 @@ test('evaluation labels reflow without clipping when report text is enlarged', a
   })).toBe(true);
   expect(await page.locator('.report-history svg text').evaluateAll(labels => labels.every(label => {
     const box = (label as SVGGraphicsElement).getBBox();
-    return box.x >= 0 && box.x + box.width <= 320 && box.y >= 0 && box.y + box.height <= 180;
+    const view = (label as SVGGraphicsElement).ownerSVGElement!.viewBox.baseVal;
+    return box.x >= 0 && box.x + box.width <= view.width && box.y >= 0 && box.y + box.height <= view.height;
   }))).toBe(true);
   await expect(page.locator('.history-values')).toContainText('1,036,500원');
 });
@@ -66,6 +67,14 @@ test('large balances with small changes keep distinct, unclipped performance tic
     await expect(ticks).toHaveCount(3);
     expect(new Set(await ticks.allTextContents()).size).toBe(3);
     expect(await ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
+    await page.evaluate(() => document.fonts.ready);
+    await page.locator('.report-history').evaluate(el => { el.style.width = '240px'; });
+    await expect.poll(() => page.locator('.report-history svg').getAttribute('viewBox')).toBe('0 0 240 180');
+    expect(await page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
+      if (!i) return true;
+      const previous = (nodes[i - 1] as SVGGraphicsElement).getBBox(), current = (node as SVGGraphicsElement).getBBox();
+      return previous.x + previous.width + 4 <= current.x;
+    }))).toBe(true);
   }
 });
 

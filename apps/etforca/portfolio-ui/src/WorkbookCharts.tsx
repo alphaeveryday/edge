@@ -1,15 +1,15 @@
-import { chartPalette } from './design-system/components';
+import { chartPalette, SectionHeading } from './design-system/components';
 import { Button } from './design-system/components';
 import { money, performance, value, type Asset, type Month, type Dividend } from './workbook';
 
-export function DividendChart({ dividends, year, onMonth }: { dividends: Dividend[]; year: string; onMonth: (month: string) => void }) {
+export function DividendChart({ dividends, year, selectedMonth, onMonth }: { dividends: Dividend[]; year: string; selectedMonth: string; onMonth: (month: string) => void }) {
   const rows = Array.from({ length: 12 }, (_, i) => {
     const month = `${year}-${String(i + 1).padStart(2, '0')}`;
     const ds = dividends.filter(d => d.date.startsWith(month));
     return { month, actual: ds.filter(d => d.status === '실수령').reduce((s, d) => s + d.amount, 0), expected: ds.filter(d => d.status === '예상').reduce((s, d) => s + d.amount, 0) };
   });
   const max = Math.max(1, ...rows.map(r => r.actual + r.expected));
-  return <><div className="dividend-bars">{rows.map((r, i) => <Button key={r.month} aria-label={`${i + 1}월 실수령 ${money(r.actual)}, 예상 ${money(r.expected)}`} onClick={() => onMonth(r.month)}><span className="dividend-bars-track"><i style={{ height: `${r.expected / max * 100}%` }} /><b style={{ height: `${r.actual / max * 100}%` }} /></span><small>{i + 1}</small></Button>)}</div><p className="dividend-legend">{year}년 · <b>실수령</b> <span>예상</span></p></>;
+  return <><div className="dividend-bars">{rows.map((r, i) => <Button key={r.month} aria-pressed={r.month === selectedMonth} aria-label={`${i + 1}월 실수령 ${money(r.actual)}, 예상 ${money(r.expected)}`} onClick={() => onMonth(r.month)}><span className="dividend-bars-track"><i style={{ height: `${r.expected / max * 100}%` }} /><b style={{ height: `${r.actual / max * 100}%` }} /></span><small>{i + 1}</small></Button>)}</div><p className="dividend-legend">{year}년 · <b>실수령</b> <span>예상</span></p></>;
 }
 
 export function AllocationChart({ assets, fx }: { assets: Asset[]; fx: number | null }) {
@@ -19,7 +19,7 @@ export function AllocationChart({ assets, fx }: { assets: Asset[]; fx: number | 
   const total = [...groups.values()].reduce((s, n) => s + n, 0);
   if (!total) return null;
   const colors = chartPalette;
-  return <section className="dashboard-card"><h2>자산 구성</h2><div className="allocation-bar" aria-hidden="true">{[...groups].map(([name, n], i) => <span key={name} style={{ width: `${n / total * 100}%`, background: colors[i] }} />)}</div><ul className="allocation-legend">{[...groups].map(([name, n], i) => <li key={name}><i style={{ background: colors[i] }} /><b>{name}</b><span>{(n / total * 100).toFixed(1)}%</span><small>{money(n)}</small></li>)}</ul></section>;
+  return <section className="dashboard-card"><SectionHeading className="card-heading" title="자산 구성" /><div className="allocation-bar" aria-hidden="true">{[...groups].map(([name, n], i) => <span key={name} style={{ width: `${n / total * 100}%`, background: colors[i] }} />)}</div><ul className="allocation-legend">{[...groups].map(([name, n], i) => <li key={name}><i style={{ background: colors[i] }} /><b>{name}</b><span>{(n / total * 100).toFixed(1)}%</span><small>{money(n)}</small></li>)}</ul></section>;
 }
 
 export function ReturnChart({ months }: { months: Month[] }) {
