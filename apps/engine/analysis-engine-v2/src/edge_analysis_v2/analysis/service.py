@@ -24,6 +24,8 @@ from edge_analysis_v2.agent.runner import load_prompt, run_model
 from edge_analysis_v2.storage.database import retry_transient
 from edge_analysis_v2.storage.publications import PublicationStore
 from edge_analysis_v2.storage.tool_runs import ToolStore
+from edge_analysis_v2.storage.inspection import read_storage
+from edge_analysis_v2.storage.research import DEFINITION as RESEARCH_DEFINITION, load_research, collect_research
 
 LOG = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
@@ -184,7 +186,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
     cache_scope = f'{data_source}:{kind}:{context["etf_code"]}'
     store = lambda connection: PublicationStore(connection, final_tool_names=tools.final_tool_names, owner=owner)
     read = lambda connection, identity: (store(connection).get_movement if kind == 'movement' else store(connection).get_outlook)(identity)
-    definitions = list(tools.definitions)
+    definitions = [*tools.definitions, RESEARCH_DEFINITION]
     if kind == 'outlook':
         definitions += [dict(tool_id=s['function']['name']+':v2',function_name=s['function']['name'],
             version='v2',description=s['function']['description'],source_names=['직전 전망과 이번 편집 초안']) for s in EDIT_SCHEMAS]
@@ -233,10 +235,12 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             if tool_store is None:
                 for definition in definitions:  # one connection instead of one per definition
                     ToolStore(connection).register_definition(**definition)
-            return previous, items, previous_at
-        previous, previous_items, previous_at = run(load)
+            return previous, items, previous_at, load_research(connection, kind, previous_id)
+        previous, previous_items, previous_at, research = run(load)
         editor = BodyEditor(previous['detail'] if previous and kind == 'outlook' else None, cutoff)
         initial = tools.initial_input() | {'previous_analysis': previous}
+        if previous_id:
+            initial['research_state'] = research.snapshot()
         if kind == 'outlook' and hasattr(tools, 'news_snapshot') and (snapshot := tools.news_snapshot()) is not None:
             from edge_analysis_v2.storage.news_snapshots import read_snapshot, save_snapshot
             baseline = run(lambda connection: read_snapshot(connection, kind, previous_id)) if previous_id else None
@@ -287,6 +291,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         if kind == 'outlook':
             schemas += EDIT_SCHEMAS
         def calculate(name, arguments):
+            if name == 'record_research_state':
+                return {'tool_run_id': uuid4().hex, 'result': research_snapshot}
             if name == 'write_outlook_body':
                 result = editor.write(**arguments)
             elif name == 'apply_outlook_body_changes':
@@ -410,6 +416,17 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             metrics = project_factor_metrics(factor_output, context['etf_code'])
             features = {k:v for k,v in response.items() if k!='issue_detail'}
             body = editor.result()
+        research_snapshot = collect_research(research, run(lambda connection: read_storage(connection, kind, analysis_id)), artifacts, references)
+        published_references = set(listed_references(response))
+        if kind == 'outlook':
+            published_references.update(listed_references(body))
+        elif previous:
+            inherited = [item for item in previous_items if item['item_id'] in response['selected_item_ids']]
+            published_references.update(listed_references(inherited if response['selected_item_ids'] else previous))
+        active_references = {research_snapshot['aliases'].get(ref, ref) for ref in published_references}
+        if active_references & research_snapshot['removed'].keys():
+            raise ValueError('Retired research is still cited by the final publication')
+        call('record_research_state', {})
         def publish(connection):
             # A repeat after a lost commit reply reads the stored publication instead of writing again.
             if kind == 'movement':

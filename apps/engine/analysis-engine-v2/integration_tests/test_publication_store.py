@@ -115,7 +115,9 @@ def test_previous_day_items_cannot_be_selected_as_today(publication):
     store.save_movement(key, response(key))
     selected = store.connection.execute("SELECT selected_item_ids FROM movement_analyses WHERE analysis_id=%s", (key,)).fetchone()[0]
     second = key + "-tomorrow"
-    store.begin("movement", second, key, NOW + timedelta(days=1), key)
+    with pytest.raises(ValueError, match='same KST day'):
+        store.begin("movement", second, key, NOW + timedelta(days=1), key)
+    store.begin("movement", second, key, NOW + timedelta(days=1))
     with pytest.raises(ValueError, match="other-day"):
         store.save_movement(second, {"new_items":[], "selected_item_ids":selected, "summary":"요약"})
 

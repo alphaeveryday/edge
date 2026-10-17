@@ -159,7 +159,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         allowed = allowed + [SEARCH_TOOL]
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
-        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__read_tool_result', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks']
+        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__read_tool_result', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks', 'mcp__workspace__retire_research_materials']
         session = None
         if structured_only:
             query_input = {'input': initial}
@@ -186,6 +186,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         (artifacts / 'model_input.json').write_text(encode(query_input), encoding='utf-8')
         # DeepSeek's documented SDK model tag prevents the unknown-model 200K default.
         sdk_model = model if model.endswith('[1m]') else model + '[1m]'
+        # Revision originals must not be silently replaced by an SDK summary on overflow.
+        auto_compact = 'research_state' not in initial
         cache_body = ({'metadata': {'user_id': 'edge-report-v1-' + sha256(cache_scope.encode()).hexdigest()}}
                       if cache_scope else {})
         options = ClaudeAgentOptions(
@@ -193,14 +195,14 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             extra_args={'name': 'ETF analysis'},
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
-            settings=json.dumps({'autoCompactEnabled': True}),
+            settings=json.dumps({'autoCompactEnabled': auto_compact}),
             cwd=str(workspace),
             thinking={'type': 'enabled', 'budget_tokens': 8192}, effort=effort,
             env={'TINYFISH_API_KEY':'', 'CLAUDE_CONFIG_DIR':str(workspace/'config'), 'ANTHROPIC_BASE_URL': 'https://api.deepseek.com/anthropic',
                  'ANTHROPIC_AUTH_TOKEN': key, 'ANTHROPIC_API_KEY': '', 'CLAUDE_CODE_OAUTH_TOKEN': '',
                  'ANTHROPIC_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_HAIKU_MODEL': sdk_model,
                  'ANTHROPIC_DEFAULT_SONNET_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_OPUS_MODEL': sdk_model,
-                 'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0',
+                 'DISABLE_AUTO_COMPACT': '0' if auto_compact else '1', 'DISABLE_COMPACT': '0' if auto_compact else '1',
                  'CLAUDE_CODE_DISABLE_1M_CONTEXT': '0',
                  'CLAUDE_CODE_EXTRA_BODY': json.dumps(cache_body),
                  'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '1000000',
@@ -246,6 +248,11 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                         continue
                     continuation = session.continuation() if session else None
                     if continuation is None:
+                        if session:
+                            # A successful run must retain the originals it actually read, not unread source tables.
+                            session.checkpoint()
+                            (artifacts / 'consulted_sources.json').write_text(encode(source_context.consulted), encoding='utf-8')
+                            (artifacts / 'research_removals.json').write_text(encode(source_context.removals), encoding='utf-8')
                         (artifacts / 'response.json').write_text(encode(final), encoding='utf-8')
                         return final
                     await client.query(continuation)

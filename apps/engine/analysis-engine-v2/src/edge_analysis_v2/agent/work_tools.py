@@ -63,4 +63,15 @@ def make_workspace_server(context, session):
         except ValueError as error:
             return response({'error': str(error)}) | {'is_error': True}
 
-    return create_sdk_mcp_server(name='workspace', version='1.0.0', tools=[read_source, read_tool_result, create_directory, update_tasks])
+    @tool('retire_research_materials', 'Explicitly retire obsolete inherited research by material ID with a reason. Omission keeps material. Original audit records remain. Do not retire evidence still used by the final report.',
+          {'type': 'object', 'properties': {'changes': {'type': 'array', 'items': {
+              'type': 'object', 'properties': {'id': {'type': 'string'}, 'reason': {'type': 'string'},
+                  'replacement_id': {'type': 'string'}}, 'required': ['id', 'reason'], 'additionalProperties': False}}},
+           'required': ['changes'], 'additionalProperties': False})
+    async def retire_research_materials(args):
+        try:
+            return response(context.retire(args['changes']))
+        except ValueError as error:
+            return response({'error': str(error)}) | {'is_error': True}
+
+    return create_sdk_mcp_server(name='workspace', version='1.0.0', tools=[read_source, read_tool_result, create_directory, update_tasks, retire_research_materials])
