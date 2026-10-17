@@ -34,8 +34,8 @@ test('rebalance instructions show cash amounts and hide transactions when execut
   await expect(trades.locator('li').filter({ hasText: 'QQQ' })).toContainText('600,000원매수');
   await expect(trades.locator('li').filter({ hasText: 'VOO' })).toContainText('400,000원매도');
   await expect(trades.locator('li').filter({ hasText: '현금' })).toContainText('200,000원현금 투입');
-  await expect(trades.locator('[data-trade="buy"]')).toHaveCSS('color', 'rgb(255, 116, 124)');
-  await expect(trades.locator('[data-trade="sell"]')).toHaveCSS('color', 'rgb(121, 173, 255)');
+  await expect(trades.locator('[data-trade="buy"]')).toHaveCSS('color', 'rgb(187, 67, 72)');
+  await expect(trades.locator('[data-trade="sell"]')).toHaveCSS('color', 'rgb(50, 100, 174)');
   await expect(page.locator('.improvements .trade-amount')).toHaveText(['600,000원매수', '200,000원현금 투입', '400,000원매도']);
   await expect(page.getByRole('heading', { name: '내 포트폴리오에서 바꿀 것' })).toHaveCount(1);
   await expect(page.getByRole('heading', { name: '매수·매도 계획' })).toHaveCount(0);
@@ -66,7 +66,7 @@ test('saved trade amounts take priority over weight direction and monthly totals
   await page.route('**/api/portfolio/analyses/trade-priority', route => route.fulfill({ json: { id: 'trade-priority', state: 'succeeded', result } }));
   await page.goto('/portfolio/');
   await expect(page.locator('.improvements .trade-amount')).toHaveText('300,000원매수');
-  await expect(page.locator('.improvements [data-trade="buy"]')).toHaveCSS('color', 'rgb(255, 116, 124)');
+  await expect(page.locator('.improvements [data-trade="buy"]')).toHaveCSS('color', 'rgb(187, 67, 72)');
   await expect(page.locator('.improvements')).not.toContainText('줄이기');
   Object.assign(result.recommendation, { execution: { status: 'conditional', reasons: [], assumptions: [],
     monthly_krw: '50000', months: 6, additional_krw: '300000', required_additional_krw: '300000', accounts: [],
@@ -158,7 +158,7 @@ test('optional research gaps preserve a clear recommendation while unfinished qu
   } }));
   await page.goto('/portfolio/');
   await expect(page.locator('.completion-summary')).toContainText('이 질문에 답하기 위한 확인이 남아 있어요.');
-  await expect(page.locator('.headrow').first()).toContainText('최종 결론');
+  await expect(page.locator('.headrow').first()).toContainText('분석 결론');
   await expect(page.locator('.recommendation-label')).toHaveText('추천 포트폴리오');
   await page.getByText('추가로 확인할 상품 자료', { exact: true }).click();
   await expect(page.locator('.completion-summary')).toContainText('Invesco QQQ · 보유내역 · 최신 자료 필요');
@@ -340,31 +340,26 @@ test('unknown budget and unconnected history do not fabricate amounts or perform
   await expect(page.locator('.performance svg')).toHaveCount(0);
 });
 
-test('approved HTML typography, spacing and card styling match at the same viewport', async ({ page, context }) => {
+test('neutral report surfaces keep financial labels readable at both viewport sizes', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'design'));
   await page.route('**/api/portfolio/analyses/design', route => route.fulfill({ json: { id: 'design', state: 'succeeded', result: report } }));
   await page.goto('/portfolio/');
   await expect(page.locator('.portfolio-hero')).toBeVisible();
-  const reference = await context.newPage();
-  await reference.goto('/portfolio/tests/reference/report.html');
-  const selectors = ['.ans.lead', '.verdict em', '.total b', '.lead .axes b', '.portfolio-hero', '.portfolio-hero .todo', '.donut.md', '.mixviz li>b', '.recommended-rating b', '.forecast b', '.account-plan', '.account-plan h5', '.account-plan th[scope="row"]', '.account-plan td strong'];
-  const properties = ['font-family', 'font-size', 'font-weight', 'line-height', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'border-radius', 'background-image', 'background-color'];
-  for (const selector of selectors) {
-    const style = async (p: typeof page) => p.locator(selector).first().evaluate((node, props) => Object.fromEntries(props.map(prop => [prop, getComputedStyle(node).getPropertyValue(prop)])), properties);
-    const actualStyle = await style(page), referenceStyle = await style(reference);
-    if (page.viewportSize()!.width >= 1100 && selector === '.portfolio-hero') {
-      for (const side of ['top', 'right', 'bottom', 'left']) referenceStyle['padding-' + side] = '40px';
-    }
-    expect(actualStyle, selector).toEqual(referenceStyle);
+  for (const selector of ['.recommendation-label', '.forecast span', '.forecast b', '.account-plan td strong', '.recommended-axes b', '.recommended-axes em', '.rating-denominator', '.history-date', '.report-chat button']) {
+    const ratio = await page.locator(selector).first().evaluate(node => {
+      const luminance = (color: string) => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(v => Number(v) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+        return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+      };
+      let surface: Element | null = node;
+      while (surface && getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement;
+      const a = luminance(getComputedStyle(node).color), b = luminance(getComputedStyle(surface!).backgroundColor);
+      return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+    });
+    expect(ratio, selector).toBeGreaterThanOrEqual(4.5);
   }
-  for (const selector of ['.ans.lead', '.portfolio-hero', '.donut.md', '.account-plan']) {
-    const actual = await page.locator(selector).first().boundingBox();
-    const expected = await reference.locator(selector).first().boundingBox();
-    if (page.viewportSize()!.width >= 1100 && selector !== '.donut.md') expect(actual!.width, selector).toBeGreaterThan(expected!.width);
-    else expect(actual!.width, selector).toBeCloseTo(expected!.width, 0);
-  }
-  await reference.screenshot({ path: `test-results/reference-report-${test.info().project.name}.png`, fullPage: true });
-  await reference.close();
+  await expect(page.locator('.portfolio-hero')).toHaveCSS('background-image', 'none');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test('legacy index values keep their units and account transfers stay identifiable', async ({ page }) => {

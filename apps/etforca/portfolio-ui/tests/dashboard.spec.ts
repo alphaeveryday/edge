@@ -2,6 +2,36 @@ import { test, expect } from '@playwright/test';
 import { cost, performance, purchases, value, type Asset } from '../src/workbook';
 
 const asset: Asset = { id: 'a', name: 'ETF', account: 'ISA', category: '주식', currency: 'USD', quantity: 80, average: 25, price: 28, cost_fx: 1300, amount: null, weight: null, target: 100, fee: 5000, price_date: null };
+test('save popup shows the actual dashboard preview and newsletter needs only email and submit', async ({ page }) => {
+  await page.goto('/portfolio/?preview=result');
+  await page.locator('.evaluation').scrollIntoViewIfNeeded();
+  const popup = page.locator('.report-feedback');
+  const preview = popup.getByRole('img', { name: /대시보드 예시/ });
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1200);
+  await expect(popup.getByRole('checkbox')).toHaveCount(0);
+  await popup.getByLabel('뉴스레터 이메일').fill('preview@example.test');
+  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(popup.getByRole('status')).toContainText('확인 메일');
+});
+test('chart motion respects reduced motion and monthly bars open the chosen month', async ({ page }) => {
+  await page.goto('/portfolio/?preview=dashboard');
+  await expect(page.locator('.allocation-bar>span').first()).toHaveCSS('animation-name', 'none');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.reload();
+  await expect(page.locator('.allocation-bar>span').first()).toHaveCSS('animation-name', 'allocation-enter');
+  await page.getByRole('button', { name: /^10월 실수령/ }).click();
+  await expect(page.getByLabel('배당 월')).toHaveValue('2026-10');
+  await expect(page.getByLabel('배당 월')).toBeFocused();
+  await expect(page.locator('.dividend-calendar .has-dividend')).not.toHaveCount(0);
+  await page.goto('/portfolio/?preview=running');
+  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(1);
+  await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'research-flow');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'none');
+  await page.goto('/portfolio/?preview=queued');
+  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(0);
+});
 test('money calculations preserve FX, fees and unavailable cost; purchases never exceed the budget', () => {
   expect(value(asset, 1360)).toBe(3046400);
   expect(cost(asset)).toBe(2605000);

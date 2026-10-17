@@ -91,8 +91,8 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
         {subscription ? <p role="status">{subscription}</p> : <form onSubmit={subscribe}>
           <label className="sr-only" htmlFor="newsletter-email">뉴스레터 이메일</label>
           <input id="newsletter-email" type="email" autoComplete="email" placeholder="이메일 주소" maxLength={254} required value={email} onChange={e => setEmail(e.target.value)} />
-          <label className="newsletter-consent"><input type="checkbox" required />이메일·보유 종목 이용 및 뉴스레터 수신 동의</label>
           <button className="newsletter-submit" type="submit" disabled={sending}>{sending ? '신청 중…' : '매일 핵심 소식 받기'}</button>
+          <small className="newsletter-consent">신청하면 이메일·보유 종목 이용과 뉴스레터 수신에 동의합니다.</small>
           {error && <p role="alert">{error}</p>}
         </form>}
         <small>언제든 메일에서 수신 거부할 수 있어요.</small>

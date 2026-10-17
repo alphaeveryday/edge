@@ -31,6 +31,8 @@ uv run python -m edge_portfolio.worker
 ## 포트폴리오 대시보드와 화면 테스트
 
 `/portfolio/?view=dashboard`는 같은 브라우저 세션의 보유 자산·배당·월 기록을 관리한다.
+메인 화면은 자산 요약, 자산 구성·월별 배당, 보유 목록 순서다. 차트와 진행 단계 모션은 `prefers-reduced-motion`을 따른다.
+저장 팝업은 예시 데이터로 촬영한 `portfolio-ui/src/dashboard-preview.png`를 보여준다. 뉴스레터는 이메일과 신청 버튼으로 접수하며 기존 이메일 확인 절차를 유지한다.
 분석 결과의 저장 버튼은 입력했던 보유 종목을 가져오며 추천안을 실제 매매로 반영하지 않는다.
 `portfolio_workbooks`는 소유자별 문서와 버전을 전용 DB에 저장한다. `GET/POST /api/portfolio/workbook`은 기존 세션 소유권과 POST origin 검사를 사용하며 오래된 저장 버전은 409로 거절한다.
 `GET /api/portfolio/analyses/{job_id}/workbook`은 소유한 분석의 입력을 변환한다.

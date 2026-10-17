@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { request } from './api';
 import { preview } from './preview';
+import dashboardPreview from './dashboard-preview.png';
 import type { Saved, Workbook } from './workbook';
 
 export function SavePortfolio({ jobId }: { jobId: string }) {
@@ -16,5 +17,5 @@ export function SavePortfolio({ jobId }: { jobId: string }) {
       location.href = preview ? '?preview=dashboard' : '?view=dashboard';
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  return <div className="save-portfolio"><h3>이 포트폴리오, 저장해 둘까요?</h3><p>보유 자산·배당·수익을 대시보드에서 한눈에 보세요.</p><div className="save-preview" aria-hidden="true"><span>내 자산</span><div><i /><i /><i /><i /></div><small>자산 · 배당 · 수익 기록</small></div><button className="primary" disabled={busy} onClick={() => void save()}>{busy ? '저장 중…' : '저장하고 대시보드 보기'}</button>{error && <p role="alert">{error}</p>}</div>;
+  return <div className="save-portfolio"><h3>내 포트폴리오로 저장</h3><p>보유 종목과 배당, 수익을 이어서 관리하세요.</p><figure className="save-preview"><img src={dashboardPreview} alt="대시보드 예시: 총자산, 평가손익, 자산 구성과 보유 종목" width="1200" height="960" loading="lazy" /><figcaption>대시보드 예시</figcaption></figure><button className="primary" disabled={busy} onClick={() => void save()}>{busy ? '저장 중…' : '저장하고 대시보드 보기'}</button>{error && <p role="alert">{error}</p>}</div>;
 }

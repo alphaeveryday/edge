@@ -61,7 +61,7 @@ function Evidence({ section, report, hidden }: { section?: Section; report: Repo
 
 export function ReportView({ report, separateEvidence = false, allSections = false, feedbackJobId }: { report: Report; separateEvidence?: boolean; allSections?: boolean; feedbackJobId?: string }) {
   const pending = !report.recommendation && report.completion && report.completion.status !== 'complete';
-  const conclusionTitle = pending ? 'ORCA AI의 현재 분석 결과' : 'ORCA AI의 최종 결론';
+  const conclusionTitle = pending ? '현재 분석 결과' : '분석 결론';
   const fields: Record<string, string> = { structure: '상품 구조', holdings: '보유내역', fees: '보수', distributions: '분배' };
   const current = report.current_evaluation;
   const plan = report.recommendation;
@@ -98,7 +98,7 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
       <Axes evaluation={current} /><div className="why"><i>이유</i><Bullets section={current?.reason || sections.portfolio} /><Evidence section={current?.reason || sections.portfolio} report={report} hidden={separateEvidence} /></div>
       <small className="report-date">분석 기준 {report.as_of ? new Date(report.as_of).toLocaleString('ko-KR') : '저장된 시각 없음'}</small>
     </article>
-    <h3 className="sec">{plan ? 'ORCA AI의 추천 포트폴리오' : '분석한 포트폴리오'}</h3>
+    <h3 className="sec">{plan ? '추천 포트폴리오' : '분석한 포트폴리오'}</h3>
     {plan ? <article className="ans pf best" data-analytics-section="recommendation">
       <div className="portfolio-hero"><div className="recommendation-head"><span className="recommendation-label">추천 포트폴리오</span><div className="recommended-rating" aria-label="추천 포트폴리오 종합 점수">{plan.evaluation?.overall != null ? <div className="rating-line"><span className="rating-star" aria-hidden="true">★</span><b>{plan.evaluation?.overall}</b><span className="rating-denominator">/ 5</span></div> : <small>평가 보류</small>}</div></div>
         <p className="todo">{plan.title}</p>
