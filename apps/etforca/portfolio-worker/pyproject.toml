@@ -12,6 +12,7 @@ dependencies = [
     "finance-datareader>=0.9,<1",
     "exchange-calendars>=4.11,<5",
     "numpy>=2,<3",
+    "boto3>=1.40,<2",
 ]
 
 [dependency-groups]

@@ -26,7 +26,7 @@ KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
 PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_INVALID', 'PRICE_PROVIDER_UNAVAILABLE',
                   'PRICE_PROVIDER_TIMEOUT', 'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT', 'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID',
                   'MISSING_TRADING_SESSIONS', 'MISSING_FX_SESSIONS', 'NO_COMMON_PRICE_HISTORY',
-                  'UNSUPPORTED_CURRENCY', 'INSUFFICIENT_COMPARISON_SESSIONS'}
+                  'UNSUPPORTED_CURRENCY', 'INSUFFICIENT_COMPARISON_SESSIONS', 'TOTAL_RETURN_UNAVAILABLE'}
 TRANSIENT_PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_PROVIDER_UNAVAILABLE', 'PRICE_PROVIDER_TIMEOUT',
                             'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT',
                             'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID'}
@@ -325,17 +325,18 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
 
 
 def history_basis(start, end, records=None):
-    suffix = ' · 가격 수익률(분배금 제외)' if records and comparison_column(records) == 'Close' else ''
-    return f'{str(start)[:10]} ~ {str(end)[:10]} · 공통 자료 기간 · 100만 원을 넣었다면 (원){suffix}'
+    return f'{str(start)[:10]} ~ {str(end)[:10]} · 공통 자료 기간 · 분배금 전액 재투자 · 100만 원을 넣었다면 (원)'
 
 
 def comparison_column(records, ids=None):
-    return 'Close' if any(record.get('return_basis') == 'price' for key, record in records.items()
-                         if key != 'FX' and (ids is None or key in ids)) else 'Adj Close'
+    if any(record.get('return_basis') == 'price' for key, record in records.items()
+           if key != 'FX' and (ids is None or key in ids)):
+        raise ValueError('TOTAL_RETURN_UNAVAILABLE')
+    return 'Adj Close'
 
 
 def comparison_method(records):
-    basis = '가격 수익률 · 분배금 제외' if comparison_column(records) == 'Close' else '수정 종가 기준 분배금 재투자'
+    basis = '수정 종가 기준 분배금 재투자'
     return f'시작 비중으로 매수 후 유지 · {basis} · 환율 반영 · 세금·매매비용 제외 · 결측일·휴장일 직전 관측 가격 유지'
 
 

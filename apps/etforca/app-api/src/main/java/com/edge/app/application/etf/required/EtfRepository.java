@@ -1,0 +1,57 @@
+package com.edge.app.application.etf.required;
+
+import com.edge.app.domain.etf.Etf;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+
+public interface EtfRepository extends JpaRepository<Etf, String> {
+    /**
+     * etf·시세·최신 signal 의 EtfSummary 조합
+     * 값이 없을 때의 0 과 neutral 기본값
+     */
+    interface SummaryRow {
+        String getCode();
+        String getName();
+        String getThemeKey();
+        BigDecimal getPrice();
+        BigDecimal getChangePct();
+        String getSignal();
+        Boolean getHot();
+        String getSub();
+    }
+
+    String SUMMARY_SELECT = """
+            select e.code as code, e.name as name, e.theme_key as themeKey,
+                   coalesce(q.price, 0) as price, coalesce(q.change_pct, 0) as changePct,
+                   coalesce((select a.signal from etf_analysis a where a.etf_code = e.code
+                             order by a.as_of desc limit 1), 'neutral') as signal,
+                   e.hot as hot, e.sub as sub
+            from etf e left join etf_quote q on q.etf_code = e.code
+            """;
+
+    long countByCodeIn(Collection<String> codes);
+
+    @Query(value = SUMMARY_SELECT + "where e.code in (:codes)", nativeQuery = true)
+    List<SummaryRow> summaries(@Param("codes") Collection<String> codes);
+
+    /**
+     * 대소문자·공백 무시의 이름 부분 일치와 코드 앞부분 일치 검색
+     * 빈 q 의 전체 조회
+     * 인기순 우선의 이름순 정렬
+     */
+    @Query(value = SUMMARY_SELECT + """
+            where replace(lower(e.name), ' ', '') like concat('%', replace(lower(:q), ' ', ''), '%')
+               or lower(e.code) like concat(replace(lower(:q), ' ', ''), '%')
+            order by e.hot desc, e.name
+            """, nativeQuery = true)
+    List<SummaryRow> search(@Param("q") String q);
+
+    @Query("select max(q.asOf) from EtfQuote q where q.etfCode in :codes")
+    Instant latestQuoteAsOf(@Param("codes") Collection<String> codes);
+}

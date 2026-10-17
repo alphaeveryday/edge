@@ -20,6 +20,27 @@ SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': Fal
           'properties': {'summary': {'type': 'string'}}}
 
 
+def test_report_cache_identity_survives_new_sessions_but_isolates_report_scopes(tmp_path):
+    captured = []
+    class Client(client_for(ResultMessage(structured_output={'summary': 'ok'}))):
+        def __init__(self, *, options):
+            super().__init__(options=options)
+            captured.append(options)
+    scopes = ['database:movement:X', 'database:movement:X', 'database:outlook:X',
+              'database:movement:Y', 'synthetic:movement:X', None]
+    for index, scope in enumerate(scopes):
+        asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *args: None,
+            output_schema=SCHEMA, artifacts=tmp_path/str(index), key='test-secret', model='deepseek-flash',
+            client_factory=Client, cache_scope=scope))
+    bodies = [json.loads(options.env['CLAUDE_CODE_EXTRA_BODY']) for options in captured]
+    assert bodies[0] == bodies[1]
+    assert len({body['metadata']['user_id'] for body in bodies[:-1]}) == 4
+    assert bodies[-1] == {}  # Unscoped questions keep the SDK's isolated identity.
+    assert len({options.cwd for options in captured}) == len(scopes)
+    assert all('session-id' not in options.extra_args for options in captured)
+    assert all('test-secret' not in json.dumps(body) for body in bodies)
+
+
 @pytest.mark.parametrize('kind', ['movement', 'outlook'])
 def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_path, kind):
     """Keep the reviewed instructions identical to the model and audit inputs."""
@@ -34,6 +55,8 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     class Client(base):
         def __init__(self, *, options):
             super().__init__(options=options)
+            # A deterministic display name avoids a helper model reading the whole research input again.
+            assert options.extra_args.get('name') == 'ETF analysis'
             captured.append(options.system_prompt)
 
     result = asyncio.run(run_model(initial={'news': []}, prompt=prompt, schemas=[],
