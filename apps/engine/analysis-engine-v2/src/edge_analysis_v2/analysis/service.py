@@ -418,7 +418,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
                 compare_explanations=kind=='outlook' and not previous, final_check=unciteable,
-                effort='low' if previous else 'high', cache_scope=cache_scope)), references)
+                effort='low' if kind == 'movement' else 'high', cache_scope=cache_scope)), references)
             if previous_fields is not None:
                 Draft202012Validator(revision_schema).validate(response)
                 response = merge_outlook_revision(previous_fields, response)

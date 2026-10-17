@@ -103,7 +103,7 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
         assert kwargs['initial']['previous_analysis'] == before
         assert 'revision-investigation' in kwargs['skills'] and not kwargs['compare_explanations']
         assert 'analysis-report-writing' not in kwargs['skills']
-        assert kwargs['effort'] == 'low'
+        assert kwargs['effort'] == 'high'
         result = deepcopy(answer)
         result['issue_detail']['items'][0]['tool_run_ids'] = before['detail']['items'][0]['tool_run_ids']
         return result  # No body edit and no repeated news query.
@@ -125,7 +125,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         news_reference(kwargs)  # Consulted but not selected for publication: still research.
         assert 'cause-investigation' in kwargs['skills'] and 'revision-investigation' not in kwargs['skills']
         assert 'analysis-report-writing' not in kwargs['skills']
-        assert kwargs['effort'] == 'high'
+        assert kwargs['effort'] == 'low'
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
