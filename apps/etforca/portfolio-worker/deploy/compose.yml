@@ -68,6 +68,7 @@ services:
     environment:
       PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_NEWSLESTTER_API_KEY: ${DEEPSEEK_NEWSLESTTER_API_KEY:?Newsletter DeepSeek key is required for the worker}
       EXA_API_KEY: ${EXA_API_KEY:?Exa key is required for the worker}
       PORTFOLIO_OUTLOOK_URL: http://outlook:8093/outlook
       AWS_EC2_METADATA_DISABLED: "true"

@@ -46,6 +46,7 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 - GitHub는 OIDC 임시 자격증명을 쓴다. 배포 역할에는 지정 버킷·SSM 대상만 추가하고 AWS 관리 키를 저장하지 않는다. Terraform apply 역할은 기존 저장소의 dev 전용 신뢰 정책을 따른다.
 - 호스트는 인스턴스 프로파일로 런타임 비밀과 배포 파일을 읽는다. SSH 포트·키 페어는 없다. 443은 CloudFront 원본 prefix list, 80은 ACME 인증서 발급용이다. IMDSv2 필수·hop limit 1을 유지한다.
 - Exa 키는 기존 Secrets Manager `edge/portfolio/runtime` JSON의 `EXA_API_KEY` 필드로 관리한다. 배포 전에 값을 등록해야 하며, 배포 스크립트가 읽어 권한 `0600`의 `runtime.env`에 저장하고 워커에만 주입한다. 키 교체 후에는 `deploy-portfolio`를 재실행한다. 시크릿 값은 Git·Terraform state·배포 로그에 기록하지 않는다.
+- 뉴스레터 모델 키는 같은 시크릿의 `DEEPSEEK_NEWSLESTTER_API_KEY` 필드로 관리한다(변수명 철자 그대로 사용). 배포 전에 등록해야 하며 누락·빈 값이면 배포를 거부한다. `runtime.env`를 거쳐 워커에만 주입하고, 뉴스레터 에이전트는 이 키만 사용한다. 포트폴리오 분석·후속 질문은 기존 `DEEPSEEK_API_KEY`를 사용한다.
 - 관리자 대시보드는 `edge-portfolio-admin-access` 정책과 고정 포트 문서 `edge-portfolio-admin-tunnel`로만 접속한다. 기존 `edge-portfolio-ssm-operator` 셸 정책은 관리자 대시보드 사용자에게 부여하지 않는다. 사용자가 승인한 work 인증은 전용 edge-portfolio-admin-local 역할 발급에만 사용하며, SSM은 이 역할의 임시 권한으로 연결한다. 전용 역할과 정책 연결도 Terraform이 관리한다. SSM은 접속 수단이며 그 자체로 IAM 권한을 대체하지 않는다.
 - 분석 워커는 비특권 사용자·읽기 전용 파일시스템·capability 제거로 실행한다. AWS 키, Docker 소켓, 전망 DB 비밀번호를 전달하지 않는다.
 - 내부 전망 조회 서비스만 기존 읽기 전용 DB 계정을 가진다. 외부 포트가 없으며 임의 SQL·목록·배열 입력 없이 ETF 코드 하나와 목적을 받는다. 모델 도구는 확인된 코드만 허용하고 한 분석 최대 3개·중복 조회 금지·기준시각과 14일 신선도를 검사한다. DB 계정 자체는 기존 결과 API의 읽기 권한을 공유하며 단건 제한은 조회 서비스 계약에서 강제한다.
