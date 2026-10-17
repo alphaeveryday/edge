@@ -21,10 +21,10 @@ class Asset(StrictModel):
     quantity: Amount | None = None
     average: Amount | None = None
     price: Amount | None = None
-    cost_fx: Annotated[float, Field(gt=0, le=100000, allow_inf_nan=False)] | None = None
+    cost_fx: Annotated[float, Field(gt=0, le=100000, allow_inf_nan=False, strict=True)] | None = None
     amount: Amount | None = None
-    weight: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)] | None = None
-    target: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)] | None = None
+    weight: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False, strict=True)] | None = None
+    target: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False, strict=True)] | None = None
     fee: Amount = 0
     price_date: date | None = None
 
@@ -42,12 +42,12 @@ class Month(StrictModel):
     value: Amount
     deposit: Amount = 0
     withdrawal: Amount = 0
-    return_pct: Annotated[float, Field(ge=-100, le=10000, allow_inf_nan=False)] | None = None
+    return_pct: Annotated[float, Field(ge=-100, le=10000, allow_inf_nan=False, strict=True)] | None = None
 
 
 class Workbook(StrictModel):
     title: str = Field(default='내 포트폴리오', min_length=1, max_length=80, pattern=r'\S')
-    fx: float | None = Field(default=None, gt=0, le=100000, allow_inf_nan=False)
+    fx: float | None = Field(default=None, gt=0, le=100000, allow_inf_nan=False, strict=True)
     assets: list[Asset] = Field(default_factory=list, max_length=30)
     dividends: list[Dividend] = Field(default_factory=list, max_length=300)
     months: list[Month] = Field(default_factory=list, max_length=60)

@@ -39,6 +39,13 @@ def test_dividends_cannot_silently_lose_their_holding():
         Workbook(dividends=[{'id': 'd', 'asset_id': 'missing', 'date': '2026-10-17', 'status': '실수령', 'amount': 10}])
 
 
+def test_boolean_fx_is_not_one_won_per_dollar():
+    with pytest.raises(ValidationError):
+        Workbook(fx=True)
+    with pytest.raises(ValidationError):
+        Workbook(assets=[{'id': 'a', 'name': 'ETF', 'account': 'ISA', 'cost_fx': True}])
+
+
 def test_save_is_private_and_stale_tabs_cannot_destroy_newer_changes(isolated_db):
     first = save('owner', Save(version=0, workbook=Workbook(title='첫 저장')))
     assert read('other')['workbook'] is None
