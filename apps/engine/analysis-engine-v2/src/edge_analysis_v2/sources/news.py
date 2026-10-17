@@ -3,27 +3,40 @@ from datetime import timedelta
 
 
 def rows(connection, statement, parameters):
-    with connection.cursor() as cursor:
+    # Bound each network transfer, not the corpus. One FETCH ALL can exceed the
+    # statement timeout while sending a broad ETF's results over a slower link.
+    # We drain every row: the default cursor plan optimizes only the first 10%.
+    connection.execute('SET LOCAL cursor_tuple_fraction = 1.0')
+    result = []
+    with connection.cursor(name='analysis_news_source') as cursor:
         cursor.execute(statement, parameters)
-        return cursor.fetchall()
+        while batch := cursor.fetchmany(1000):
+            result.extend(batch)
+    return result
 
 
 def load_news(connection, at, targets, issuers):
     start = at - timedelta(days=180)
     # Source events, not article popularity, determine the event universe. Rejected rows
     # remain in the snapshot so a later analysis can observe their changed status.
-    events = rows(connection, """SELECT s.source_event_id AS event_id,s.event_type_code AS event_type,
+    # Aggregate matching participants once. Per-event ARRAY subqueries repeat two
+    # index scans/sorts for every event (tens of thousands for broad index ETFs).
+    events = rows(connection, """WITH participants AS (
+        SELECT a.source_event_id,
+          COALESCE(array_agg(DISTINCT a.entity_id ORDER BY a.entity_id)
+            FILTER (WHERE a.entity_id=ANY(%s)), ARRAY[]::text[]) AS issuer_ids,
+          array_agg(DISTINCT a.entity_id ORDER BY a.entity_id)
+            FILTER (WHERE a.entity_id=ANY(%s)) AS related_entity_ids
+        FROM event_argument a WHERE a.entity_id=ANY(%s)
+        GROUP BY a.source_event_id HAVING bool_or(a.entity_id=ANY(%s))
+        ) SELECT s.source_event_id AS event_id,s.event_type_code AS event_type,
         s.event_date,s.lifecycle_stage AS stage,s.event_status AS status,s.available_at,
         l.thread_id,l.novelty_status AS novelty,l.evaluated_at,l.unknown_reason,
-        ARRAY(SELECT DISTINCT a.entity_id FROM event_argument a
-              WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s) ORDER BY a.entity_id) AS issuer_ids,
-        ARRAY(SELECT DISTINCT a.entity_id FROM event_argument a
-              WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s) ORDER BY a.entity_id) AS related_entity_ids
-        FROM source_event s LEFT JOIN event_thread_link l
+        p.issuer_ids,p.related_entity_ids
+        FROM participants p JOIN source_event s USING(source_event_id) LEFT JOIN event_thread_link l
           ON l.source_event_id=s.source_event_id AND l.source_class='NEWS' AND l.evaluated_at<=%s
         WHERE s.source_class='NEWS' AND s.available_at BETWEEN %s AND %s
-          AND EXISTS(SELECT 1 FROM event_argument a WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s))
-        ORDER BY s.source_event_id""", (issuers, targets, at, start, at, targets))
+        ORDER BY s.source_event_id""", (issuers, targets, sorted(set(targets) | set(issuers)), targets, at, start, at))
     identities = [r['event_id'] for r in events]
     evidence = rows(connection, """SELECT DISTINCT e.source_event_id AS event_id,a.document_id AS news_id
         FROM event_evidence e JOIN document_assertion a USING(assertion_id)

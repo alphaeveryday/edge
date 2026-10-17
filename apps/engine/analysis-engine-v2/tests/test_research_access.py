@@ -30,8 +30,8 @@ def test_news_scope_includes_sixth_constituent_and_uses_publication_and_acquisit
     result = database.load_source(Connection(), '091160', at.isoformat())
     sql, args = queries[3]
     assert 'actor5' in args[0]
-    assert args[2] == args[4] == at
-    assert (at-args[3]).days == 180
+    assert args[4] == args[6] == at
+    assert (at-args[5]).days == 180
     sql, args = queries[5]
     assert {'id5', 'actor5'} <= set(args[1])
     assert args[3] == args[4] == args[5] == args[6] == at

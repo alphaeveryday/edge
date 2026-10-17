@@ -63,11 +63,15 @@ def test_event_corpus_has_no_article_cap_and_honors_every_evidence_clock():
             INSERT INTO event_evidence VALUES ('correction','future-assertion'),('correction','future-acquired');
             INSERT INTO source_event VALUES ('etf-event','FUND_CHANGE','2026-10-15',NULL,'ACTIVE','2026-10-15T12:00Z','NEWS');
             INSERT INTO event_argument VALUES ('etf-event','etf-instrument');
+            INSERT INTO event_argument VALUES ('first','issuer'),('first',NULL),('first','external-issuer');
+            INSERT INTO source_event VALUES ('issuer-only','CONTRACT','2026-10-15',NULL,'ACTIVE','2026-10-15T12:00Z','NEWS');
+            INSERT INTO event_argument VALUES ('issuer-only','external-issuer');
         ''')
         connection.autocommit = False
         connection.read_only = True
         connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
-        loaded = load_news(connection, at, ['issuer', 'etf-instrument'], ['issuer'])
+        loaded = load_news(connection, at, ['issuer', 'etf-instrument'], ['issuer', 'external-issuer'])
+        assert float(connection.execute('SHOW cursor_tuple_fraction').fetchone()['cursor_tuple_fraction']) == 1.0
         articles = {row['news_id']: row for row in loaded['news']}
         assert len(articles) == 1006  # 1001 repeats + first/correction/independent/rejected + loose.
         assert {'future', 'future-assertion', 'future-acquired'}.isdisjoint(articles)
@@ -78,6 +82,9 @@ def test_event_corpus_has_no_article_cap_and_honors_every_evidence_clock():
         assert events['rejected']['status'] == 'REJECTED'
         assert events['etf-event']['related_entity_ids'] == ['etf-instrument']
         assert events['etf-event']['issuer_ids'] == []
+        assert events['first']['issuer_ids'] == ['external-issuer', 'issuer']
+        assert events['first']['related_entity_ids'] == ['issuer']
+        assert 'issuer-only' not in events  # Issuer metadata alone never widens the target universe.
         assert events['correction']['news_ids'] == ['correction']
         tools = NewsEvents(loaded | {'context': {'etf_code': '091160', 'analysis_at': at.isoformat()}})
         assert tools.listing()['total_count'] == 3
