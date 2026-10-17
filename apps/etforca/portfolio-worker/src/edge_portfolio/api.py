@@ -9,6 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from . import store
 from . import admin_store
+from . import dashboard
 from .catalog import canonicalize, directory
 from starlette.middleware.gzip import GZipMiddleware
 from .contracts import AnalysisInput, DraftInput, StrictModel
@@ -44,9 +45,10 @@ async def origin_check(request, call_next):
         size = int(request.headers.get("content-length", "0"))
     except ValueError:
         return Response(status_code=400)
-    if size > 32_000:
+    limit = 128_000 if request.url.path == '/api/portfolio/workbook' else 32_000
+    if size > limit:
         return Response(status_code=413)
-    if request.method == "POST" and len(await request.body()) > 32_000:
+    if request.method == "POST" and len(await request.body()) > limit:
         return Response(status_code=413)
     response = await call_next(request)
     response.headers["Cache-Control"] = "public, max-age=3600" if request.url.path == '/api/portfolio/catalog' else "no-store"
@@ -177,3 +179,24 @@ def analysis(job_id: str, request: Request):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get('/api/portfolio/workbook')
+def workbook(request: Request):
+    return dashboard.read(owner(request))
+
+
+@app.post('/api/portfolio/workbook')
+def save_workbook(body: dashboard.Save, request: Request):
+    try:
+        return dashboard.save(owner(request), body)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+
+
+@app.get('/api/portfolio/analyses/{job_id}/workbook')
+def analysis_workbook(job_id: str, request: Request):
+    row = store.read(job_id, owner(request))
+    if not row or row['kind'] != 'analysis':
+        raise HTTPException(404, 'NOT_FOUND')
+    return dashboard.from_analysis(row)
