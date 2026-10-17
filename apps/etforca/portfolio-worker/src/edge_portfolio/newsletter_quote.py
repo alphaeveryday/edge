@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import statistics
 import subprocess
 import sys
 from datetime import date
@@ -18,9 +19,15 @@ def daily_quote(instrument_id, edition):
     if len(rows) < 2 or (edition - rows[-1][0]).days > 7:
         return None
     previous, latest = rows[-2:]
+    moves = [(b / a - 1) * 100 for (_, a), (_, b) in zip(rows, rows[1:])]
     return {'id': 'price', 'url': f'https://finance.yahoo.com/quote/{symbol}/history/',
             'excerpt': json.dumps({'trading_date': latest[0].isoformat(), 'previous_date': previous[0].isoformat(),
                                   'close': latest[1], 'change_pct': round((latest[1] / previous[1] - 1) * 100, 2),
+                                  # Context for the reader, not a cost basis: the newsletter never knows purchase prices.
+                                  'week_pct': round((latest[1] / rows[-6][1] - 1) * 100, 2) if len(rows) >= 6 else None,
+                                  'period_from': rows[0][0].isoformat(), 'period_pct': round((latest[1] / rows[0][1] - 1) * 100, 2),
+                                  # Typical daily move of the window; F (exception) compares today's move against it.
+                                  'sigma_pct': round(statistics.stdev(moves), 2) if len(moves) >= 3 else None,
                                   'currency': 'KRW' if market == 'KR' else 'USD', 'basis': 'unadjusted_close'})}
 
 

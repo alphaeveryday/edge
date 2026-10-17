@@ -14,6 +14,12 @@ from edge_portfolio import api, newsletter_agent as agent, newsletter_email as e
 from test_store import isolated_db
 
 
+B_CARD = {'headline': '반도체 실적 기대가 이어져요', 'dek': '주요 기업의 실적 발표가 다가왔어요.',
+          'factors': [{'label': '업종 강세', 'detail': '10월 15일 반도체 업종 강세가 ETF 가격에도 영향을 줬어요.', 'certainty': '추정'}],
+          'new_info': '새 공급 계약이 발표됐어요.', 'thesis_relation': '보유 이유를 바꾸는 변화는 아니에요.',
+          'watch_next': '다음 실적 발표의 수주 전망을 살펴봐요.', 'source_ids': ['outlook']}
+
+
 @pytest.fixture
 def newsletter_db(isolated_db, monkeypatch):
     monkeypatch.setattr(news, 'connect', store.connect)
@@ -273,8 +279,7 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
     sender.tick(ses, now)
     assert len(sends) == 1, 'A verified address must wait for its actual holdings content'
     claimed = news.claim_content()
-    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'headline': '기술주 소식', 'issue': '새로운 발표가 있었어요.',
-            'why_moved': '최근 거래일의 변동 배경이에요.', 'watch_next': '다음 발표를 확인해요.', 'sources': []}
+    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **B_CARD, 'headline': '기술주 소식', 'sources': []}
     news.finish_content(claimed, value=card)
     sender.tick(ses, now)
     sender.tick(ses, now)
@@ -306,7 +311,7 @@ def test_failed_holding_does_not_suppress_all_other_daily_news(newsletter_db, mo
     assert len(sends) == 1
     html = sends[0]['Content']['Simple']['Body']['Html']['Data']
     assert 'QQQ' in html and '오늘의 소식을 확인하지 못했어요' in html
-    assert '가격은 왜 움직였나요?' not in html
+    assert '변동 요인 후보' not in html, 'A missing holding must not render empty analysis sections'
     with store.connect() as db:
         row = db.execute("""SELECT d.subscription_id=s.id AS correct_subscription FROM portfolio_newsletter_deliveries d
             JOIN portfolio_newsletter_subscriptions s ON s.email=d.email WHERE s.status='active'""").fetchone()
@@ -365,8 +370,7 @@ async def test_optional_quote_process_is_killed_and_reaped_when_cancelled(monkey
 
 async def test_newsletter_harness_reuses_our_outlook_and_does_not_pass_customer_amounts():
     payloads = []
-    card = {'headline': '반도체 실적 기대가 이어져요', 'issue': '주요 기업의 실적 발표가 다가왔어요.',
-            'why_moved': '10월 15일 반도체 업종 강세가 ETF 가격에도 영향을 줬어요.', 'watch_next': '다음 실적 발표의 수주 전망을 살펴봐요.', 'source_ids': ['outlook']}
+    card = B_CARD
     async def model(payload):
         payloads.append(payload)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(card)}}]}
@@ -382,7 +386,7 @@ async def test_newsletter_harness_reuses_our_outlook_and_does_not_pass_customer_
 async def test_newsletter_requires_body_evidence_beyond_a_quote_for_its_issue_and_cause():
     calls = []
     evidence = SimpleNamespace(sources=[])
-    card = {'headline': '오늘의 소식', 'issue': '확인한 기업 발표', 'why_moved': '발표와 가격 변동의 관계', 'watch_next': '다음 실적 발표', 'source_ids': ['price']}
+    card = {**B_CARD, 'source_ids': ['price']}
     async def model(payload):
         calls.append(payload)
         if len(calls) == 2:
@@ -409,27 +413,28 @@ def test_price_basis_uses_completed_etf_dates_and_never_intraday_or_index_values
     quote = agent.daily_quote('US:QQQ', date(2026, 10, 16))
     data = json.loads(quote['excerpt'])
     assert data['trading_date'] == '2026-10-15' and data['close'] == 105 and data['change_pct'] == 5
+    assert data['week_pct'] is None and data['sigma_pct'] is None, 'Two closes are too few for weekly or volatility context'
     assert received == [{'period': '1mo', 'end': '2026-10-16', 'auto_adjust': False, 'actions': False, 'timeout': 12}]
 
 
 async def test_long_editorial_output_gets_specific_length_feedback_and_can_finish():
     calls = []
-    card = {'headline': '짧은 제목', 'issue': '확인한 소식', 'why_moved': '가격 변동의 배경', 'watch_next': '다음 일정', 'source_ids': ['outlook']}
+    card = B_CARD
     async def model(payload):
         calls.append(payload)
-        value = {**card, 'issue': '긴 설명' * 50} if len(calls) == 1 else card
+        value = {**card, 'dek': '긴 설명' * 50} if len(calls) == 1 else card
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(value)}}]}
     result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 16), 'test',
         model_call=model, evidence=SimpleNamespace(sources=[]), quote_loader=lambda *_: None,
         outlook={'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'})
-    assert result['issue'] == card['issue'] and len(calls) == 2
-    assert '120' in json.dumps(calls[-1]['messages'], ensure_ascii=False)
+    assert result['dek'] == card['dek'] and len(calls) == 2
+    assert '90' in json.dumps(calls[-1]['messages'], ensure_ascii=False)
     assert any('필드별 길이' in m['content'] for m in calls[-1]['messages'])
 
 
 async def test_structured_adapter_errors_are_repaired_without_restarting_research():
     calls = []
-    card = {'headline': '짧은 제목', 'issue': '확인한 소식', 'why_moved': '가격 변동의 배경', 'watch_next': '다음 일정', 'source_ids': ['outlook']}
+    card = B_CARD
     async def model(payload):
         calls.append(payload)
         if len(calls) <= 2:
@@ -438,28 +443,49 @@ async def test_structured_adapter_errors_are_repaired_without_restarting_researc
     result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 16), 'test',
         model_call=model, evidence=SimpleNamespace(sources=[]), quote_loader=lambda *_: None,
         outlook={'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'})
-    assert result['issue'] == card['issue'] and len(calls) == 3
+    assert result['dek'] == card['dek'] and len(calls) == 3
     assert 'submit_report' in calls[-1]['messages'][-2]['content']
 
 
-def test_email_is_readable_escaped_and_has_plain_text_and_unsubscribe():
-    cards = [{'name': '<ETF>', 'headline': '핵심 이슈', 'issue': '<script>alert(1)</script>', 'why_moved': '가격 변동 배경',
-              'watch_next': '다음 발표', 'sources': [{'url': 'javascript:alert(1)'}]}]
-    subject, html, text = email.daily(date(2026, 10, 16), cards)
-    assert '<script>' not in html and '&lt;ETF&gt;' in html and 'javascript:' not in html
-    assert 'font-size:16px' in html and 'max-width:600px' in html and 'role="presentation"' in html
+VIEW = {'state': '업황 회복 구간이에요.', 'keep_if': '수주 유지', 'change_if': '수요 둔화'}
+FORMAT_CARDS = {
+    'A': {'why_moved': '업종 강세', 'new_info': '공급 계약', 'judgment_impact': '판단 유지'},
+    'B': {k: v for k, v in B_CARD.items() if k not in {'headline', 'dek', 'source_ids'}},
+    'C': {'events': [{'title': '공급 계약', 'what': '계약 체결', 'why_it_matters': '최대 구성종목', 'price_link': '이미 반영', 'importance': '높음'}],
+          'judgment_impact': '판단 유지'},
+    'D': {'thesis': 'AI 수요가 이어진다', 'verdict': '유지', 'verdict_reason': '수요 지표 유지', 'supporting': ['수주 증가'],
+          'opposing': ['외국인 매도'], 'new_event': '실적 발표', 'change_trigger': '수주 감소'},
+    'E': {'decision_needed': False, 'decision_reason': '평소 범위', 'unknowns': ['다음 실적'],
+          'options': [{'action': a, 'rationale': '근거', 'risk': '위험'} for a in ('보유 유지', '추가 매수', '비중 축소')]},
+    'F': {'significant': False, 'signal': '중요 변화 없음', 'explanation': '업종 흐름 안', 'condition_impact': '영향 없음', 'watch_next': '실적'},
+    'G': {'long_term': VIEW, 'mid_term': {**VIEW, 'state': '중기 관점 상태'}, 'short_term': {**VIEW, 'state': '단기 관점 상태'}, 'new_info': '공급 계약'},
+}
+QUOTE = {'trading_date': '2026-10-15', 'previous_date': '2026-10-14', 'close': 105, 'change_pct': 5, 'currency': 'USD'}
+
+
+def letter_card(fmt, instrument='US:QQQ', name='QQQ', **fields):
+    content = {'headline': '기술주 소식', 'dek': '확인한 소식', **FORMAT_CARDS[fmt], 'source_ids': ['outlook']}
+    agent.FORMATS[fmt][1].model_validate(content)  # Samples must stay valid model output, or these tests prove nothing.
+    return {'instrument_id': instrument, 'name': name, 'format': fmt, **content, 'sources': [], 'quote': QUOTE, **fields}
+
+
+@pytest.mark.parametrize('fmt', list(agent.FORMATS))
+def test_every_format_is_escaped_unsubscribable_and_small_enough_for_gmail(fmt):
+    hostile = '<script>alert(1)</script>'
+    cards = [letter_card(fmt, f'US:E{i}', f'<ETF{i}>', headline=hostile, dek=hostile, sources=[{'url': 'javascript:alert(1)'}]) for i in range(10)]
+    subject, html, text = email.daily(date(2026, 10, 16), cards, fmt)
+    assert '<script>' not in html and '&lt;ETF0&gt;' in html and 'javascript:' not in html
+    assert 'max-width:600px' in html and 'role="presentation"' in html and 'font-size:17px' in html
     assert html.count(email.UNSUBSCRIBE) == text.count(email.UNSUBSCRIBE) == 1
-    assert '가격 변동 배경' in text and '2026.10.16' in subject
-    _, confirmation, plain = email.confirmation('a' * 43)
-    assert '#newsletter-confirm=' in confirmation and '?token=' not in confirmation
-    assert '48시간' in plain
+    # Gmail clips HTML over ~102KB and hides the footer, taking the unsubscribe link and disclaimer with it.
+    assert len(html.encode()) < 100_000
+    assert '매매 지시가 아닙니다' in text and '10월 16일' in subject
 
 
 def test_external_card_text_and_urls_cannot_receive_the_recipients_ses_unsubscribe_token():
     injected = 'https://external.example/article?token=' + email.UNSUBSCRIBE
-    card = {field: injected for field in ('name', 'headline', 'issue', 'why_moved', 'watch_next')}
-    card['sources'] = [{'url': injected}]
-    _, html, plain = email.daily(date(2026, 10, 16), [card])
+    card = letter_card('B', name=injected, headline=injected, dek=injected, sources=[{'url': injected}])
+    _, html, plain = email.daily(date(2026, 10, 16), [card], 'B')
     assert email.safe_url(injected) == email.SITE
     assert html.count(email.UNSUBSCRIBE) == plain.count(email.UNSUBSCRIBE) == 1
     assert f'href="{email.UNSUBSCRIBE}"' in html
@@ -467,14 +493,68 @@ def test_external_card_text_and_urls_cannot_receive_the_recipients_ses_unsubscri
 
 
 def test_email_preserves_quote_dates_even_when_the_model_omits_them():
-    card = {'name': 'QQQ', 'headline': '기술주 소식', 'issue': '확인한 소식', 'why_moved': '변동 배경',
-            'watch_next': '다음 일정', 'sources': [], 'outlook_at': '2026-10-16T00:00:00+00:00',
-            'quote': {'trading_date': '2026-10-15', 'previous_date': '2026-10-14', 'close': 105, 'change_pct': 5, 'currency': 'USD'}}
-    _, html, plain = email.daily(date(2026, 10, 16), [card])
+    card = letter_card('B', outlook_at='2026-10-16T00:00:00+00:00')
+    _, html, plain = email.daily(date(2026, 10, 16), [card], 'B')
     for rendered in (html, plain):
-        assert '2026-10-15 종가 105.00 USD' in rendered
-        assert '2026-10-14 대비 +5.00%' in rendered
-        assert '전망 기준 2026.10.16 09:00 KST' in rendered
+        assert '10월 15일 종가 105.00 USD' in rendered
+        assert '10월 14일 대비 ' in rendered and '▲ 5.00%' in rendered
+        assert 'ETF ORCA 전망 10월 16일 09:00 기준' in rendered
+
+
+def test_profit_letter_never_invents_portfolio_weights():
+    up = letter_card('A', 'KR:1', '반도체', quote={**QUOTE, 'change_pct': 3.49, 'week_pct': -20.5})
+    down = letter_card('A', 'KR:2', '2차전지', quote={**QUOTE, 'change_pct': -0.71, 'week_pct': -7.2})
+    _, html, text = email.daily(date(2026, 10, 18), [up, down], 'A')
+    assert '보유 비중을 알려주시면' in html and '포트폴리오 하루' not in text
+    _, html, text = email.daily(date(2026, 10, 18), [up, down], 'A', weights={'KR:1': .5, 'KR:2': .5})
+    assert '포트폴리오 하루 ▲ 1.39% · 최근 5거래일 ▼ 13.85%' in text
+    assert '기여도 +1.75%p' in text and '기여도 -0.35%p' in text and '매입가 기준 손익이 아니에요' in html
+
+
+def test_exception_letter_is_short_on_quiet_days_but_price_shocks_are_never_quiet():
+    calm = letter_card('F', quote={**QUOTE, 'change_pct': 1.0, 'sigma_pct': 2.0})
+    subject, html, _ = email.daily(date(2026, 10, 18), [calm], 'F')
+    assert '중요한 변화가 없어요' in subject and '무엇이 달라졌나' not in html
+    shock = letter_card('F', quote={**QUOTE, 'change_pct': -4.0, 'sigma_pct': 2.0})
+    _, html, text = email.daily(date(2026, 10, 18), [shock], 'F')
+    assert '중요 변화 1건' in text and '무엇이 달라졌나' in html and '가격 경보' in text, 'A 2-sigma move must surface even if the model calls it quiet'
+
+
+def test_purpose_letter_leads_with_the_readers_purpose():
+    _, _, text = email.daily(date(2026, 10, 18), [letter_card('G')], 'G', purpose='short_term')
+    assert '읽는 관점: 단기 매매' in text
+    assert text.index('단기 관점 상태') < text.index('중기 관점 상태')
+
+
+def test_unavailable_or_stale_format_cards_become_notices_instead_of_breaking_the_edition():
+    missing = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'unavailable': True, 'headline': '오늘의 소식을 확인하지 못했어요', 'dek': '비워뒀어요', 'sources': []}
+    legacy = {'instrument_id': 'US:SPY', 'name': 'SPY', 'headline': '예전 카드', 'issue': '예전 형식', 'sources': []}
+    _, html, _ = email.daily(date(2026, 10, 18), [missing, legacy, letter_card('D', 'US:VTI', 'VTI')], 'D')
+    assert '오늘의 소식을 확인하지 못했어요' in html and '예전 형식' in html and '보유 이유 (검증할 가설)' in html
+
+
+async def test_shared_evidence_mode_writes_every_format_from_the_same_sources_without_new_research():
+    payloads = []
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/outlook/091160.json', 'excerpt': '우리 전망'},
+                                        {'id': 'article', 'url': 'https://news.example/1', 'excerpt': '이미 읽은 기사 본문'}])
+    for fmt in agent.FORMATS:
+        async def model(payload, fmt=fmt):
+            payloads.append(payload)
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({'headline': '제목', 'dek': '요약', **FORMAT_CARDS[fmt], 'source_ids': ['outlook']})}}]}
+        result = await agent.write_card({'instrument_id': 'KR:091160', 'name': 'KODEX 반도체'}, date(2026, 10, 18), 'test', fmt=fmt,
+                                        model_call=model, evidence=evidence, outlook=evidence.sources[0], quote_loader=lambda *_: None, research=False)
+        assert result['format'] == fmt
+        assert payloads[-1]['tools'] == [], 'Formats compared in one experiment must not each search for different evidence'
+        assert '이미 읽은 기사 본문' in payloads[-1]['messages'][1]['content'], 'Without research the already-read articles are the only evidence'
+        assert f'# {fmt}.' in payloads[-1]['messages'][0]['content'], 'Each format must run under its own writing skill'
+    assert len(evidence.sources) == 2, 'Reusing evidence must not duplicate the outlook source'
+
+
+def test_action_card_compares_every_choice_instead_of_recommending_one():
+    biased = {'headline': '제목', 'dek': '요약', **FORMAT_CARDS['E'], 'source_ids': ['outlook']}
+    biased['options'] = [{'action': '추가 매수', 'rationale': '근거', 'risk': '위험'}] * 3
+    with pytest.raises(ValueError):
+        agent.ActionCard.model_validate(biased)
 
 
 async def test_shutdown_after_newsletter_claim_does_not_start_research_or_spend_attempt(newsletter_db, monkeypatch):
@@ -606,3 +686,76 @@ def test_contact_or_claim_crossing_midnight_does_not_send_yesterdays_news(newsle
     sender.tick(ses, now)
     with store.connect() as db:
         assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == ('queued' if late_stage == 'claim_commit' else 'waiting_content')
+
+
+def test_confirmation_token_stays_in_the_fragment_and_never_reaches_server_logs():
+    _, html, plain = email.confirmation('a' * 43)
+    assert '#newsletter-confirm=' in html and '?token=' not in html
+    assert '48시간' in plain
+
+
+def test_content_cached_before_a_deploy_keeps_its_story_and_cover():
+    legacy = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'headline': '예전 제목', 'issue': '예전 소식', 'why_moved': '예전 원인',
+              'watch_next': '예전 일정', 'sources': []}
+    subject, _, text = email.daily(date(2026, 10, 18), [legacy], 'B')
+    assert '예전 제목' in subject, 'Ready content must not be announced as a failed edition'
+    assert '왜 움직였나: 예전 원인' in text and '다음에 볼 것: 예전 일정' in text
+
+
+def test_exception_cover_goes_to_the_price_shock_over_a_minor_flagged_story():
+    minor = letter_card('F', 'US:A', 'A', headline='작은 소식', significant=True, quote={**QUOTE, 'change_pct': 0.5, 'sigma_pct': 2.0})
+    shock = letter_card('F', 'US:B', 'B', headline='큰 급락', quote={**QUOTE, 'change_pct': -9.0, 'sigma_pct': 2.0})
+    subject, html, _ = email.daily(date(2026, 10, 18), [minor, shock], 'F')
+    assert '큰 급락' in subject
+
+
+def test_quiet_exception_letter_has_no_empty_follow_up_box():
+    _, html, _ = email.daily(date(2026, 10, 18), [letter_card('F', quote={**QUOTE, 'change_pct': 0.1, 'sigma_pct': 2.0})], 'F')
+    assert '다음에 볼 지점' not in html
+
+
+def test_model_headline_cannot_break_the_subject_header():
+    subject, _, _ = email.daily(date(2026, 10, 18), [letter_card('B', headline='첫 줄\r\nBcc: x@example.test')], 'B')
+    assert '\r' not in subject and '\n' not in subject
+
+
+async def test_shared_evidence_mode_refuses_a_search_the_model_invents():
+    calls = []
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'}])
+    async def model(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {'choices': [{'message': {'role': 'assistant', 'tool_calls': [{'id': '1', 'function': {'name': 'search_sources', 'arguments': '{}'}}]}}]}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(B_CARD)}}]}
+    await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                           evidence=evidence, outlook=evidence.sources[0], quote_loader=lambda *_: None, research=False)
+    assert any('TOOL_NOT_ALLOWED' in (m.get('content') or '') for m in calls[-1]['messages'] if m['role'] == 'tool'),         'A format compared on fixed evidence must not fetch new sources'
+
+
+def test_nested_unsubscribe_marker_cannot_be_rebuilt_from_model_text():
+    nested = '{{amazonSESUnsub' + email.UNSUBSCRIBE + 'scribeUrl}}'
+    subject, html, plain = email.daily(date(2026, 10, 18), [letter_card('B', headline=nested, dek='https://evil.example/?t=' + nested)], 'B')
+    assert email.UNSUBSCRIBE not in subject
+    assert html.count(email.UNSUBSCRIBE) == plain.count(email.UNSUBSCRIBE) == 1
+
+
+def test_exception_letter_never_counts_a_missing_holding_as_checked():
+    missing = {'instrument_id': 'US:X', 'name': 'X', 'unavailable': True, 'headline': '확인하지 못했어요', 'dek': '', 'sources': []}
+    _, _, text = email.daily(date(2026, 10, 18), [letter_card('F', quote={**QUOTE, 'change_pct': 0.1, 'sigma_pct': 2.0}), missing], 'F')
+    assert '1종목은 오늘 자료를 확보하지 못했어요' in text and '보유 2종목 중 1종목 점검' in text
+
+
+def test_exception_lead_story_is_printed_first():
+    minor = letter_card('F', 'US:A', 'A', headline='작은 소식', significant=True, quote={**QUOTE, 'change_pct': 0.5, 'sigma_pct': 2.0})
+    shock = letter_card('F', 'US:B', 'B', headline='큰 급락', quote={**QUOTE, 'change_pct': -9.0, 'sigma_pct': 2.0})
+    _, _, text = email.daily(date(2026, 10, 18), [minor, shock], 'F')
+    assert text.index('01. B') < text.index('02. A — 작은 소식')
+
+
+def test_sender_process_does_not_import_the_research_stack():
+    import subprocess
+    import sys
+    probe = ("import sys, edge_portfolio.newsletter_sender; "
+             "print([m for m in ('edge_portfolio.newsletter_agent', 'mcp', 'yfinance', 'pandas') if m in sys.modules])")
+    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, check=True).stdout.strip()
+    assert loaded == '[]', 'The sender runs under a small memory limit; the research stack would push it toward OOM'
