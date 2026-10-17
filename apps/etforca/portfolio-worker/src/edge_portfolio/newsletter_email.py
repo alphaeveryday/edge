@@ -190,8 +190,14 @@ def story(letter, number, card, body, text, lead=False):
                *([f'출처 {" ".join(f"[{n}]" for n in refs)}'] if refs else []), '')
 
 
+LEGACY = (('issue', '무슨 일이 있었나'), ('why_moved', '왜 움직였나'), ('watch_next', '다음에 볼 것'))
+
+
 def notice(letter, number, card):
-    story(letter, number, {**card, 'dek': card.get('dek') or card.get('issue', '')}, '', [])
+    """Unavailable holdings, or content cached under another format (e.g. written before a deploy): show what exists."""
+    kept = [(name, card[key]) for key, name in LEGACY if card.get(key)]
+    story(letter, number, {**card, 'dek': card.get('dek', '')}, ''.join(section(name, text) for name, text in kept),
+          [f'{name}: {text}' for name, text in kept])
 
 
 def pull(text, caption):
@@ -284,7 +290,8 @@ def lead(cards, fmt):
     def size(card):
         return abs(quote_of(card).get('change_pct') or 0)
     if fmt == 'F':
-        flagged = [c for c in cards if c['significant']] or [c for c in cards if alert(c)]
+        # Same definition as the stamp: a 2-sigma move is news even when the model calls the day quiet.
+        flagged = [c for c in cards if c['significant'] or alert(c)]
         return max(flagged, key=size) if flagged else None
     rank = {'D': lambda c: (-LEAN[c['verdict']], size(c)), 'E': lambda c: (c['decision_needed'], size(c)),
             'C': lambda c: (-min(['높음', '보통', '낮음'].index(x['importance']) for x in c['events']), size(c))}.get(fmt, lambda c: size(c))
@@ -331,6 +338,8 @@ def daily(edition, cards, fmt='B', *, weights=None, purpose='long_term'):
         headline, dek = '오늘은 중요한 변화가 없어요', f'보유 {len(cards)}종목을 모두 점검했어요. 등락은 평소 범위 안이고 보유 이유를 흔드는 새 사건은 확인되지 않았어요.'
     elif top:
         headline, dek = top['headline'], top['dek']
+    elif other := next((c for c in cards if not c.get('unavailable')), None):
+        headline, dek = other['headline'], other.get('dek') or other.get('issue', '')
     else:
         headline, dek = '오늘의 소식을 준비하지 못했어요', '최신 자료를 확보하지 못했어요. 다음 발행에서 다시 확인할게요.'
     order = sorted(ready, key=lambda c: c is not top) + [c for c in cards if c not in ready]
@@ -379,7 +388,7 @@ def daily(edition, cards, fmt='B', *, weights=None, purpose='long_term'):
             story(letter, number, card, body, text, lead=card is top)
         else:
             notice(letter, number, card)
-    if fmt in NEXT and ready:
+    if fmt in NEXT and any(c in ready for c in order):
         title, pick = NEXT[fmt]
         lines = ''.join(f'''<tr><td width="34%" valign="top" style="padding:11px 10px 11px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:13px;font-weight:700;color:{INK};word-break:keep-all">{e(c['name'])}</td>
 <td style="padding:11px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">{e(pick(c))}</td></tr>''' for c in order if c in ready)
@@ -402,6 +411,7 @@ AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 �
     # SES expands this marker after rendering. Only our footer may contain it, never external text/URLs.
     rows = [part.replace(UNSUBSCRIBE, '') for part in letter.rows]
     plain = [line.replace(UNSUBSCRIBE, '') for line in letter.plain]
-    title, preheader = title.replace(UNSUBSCRIBE, ''), dek.replace(UNSUBSCRIBE, '')
+    # Model text reaches the Subject header now: never let a line break into it.
+    title, preheader = (' '.join(value.replace(UNSUBSCRIBE, '').split()) for value in (title, dek))
     plain += ['ETF Orca: ' + SITE, '수신 거부: ' + UNSUBSCRIBE, 'AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다.']
     return title, shell(title, preheader, rows, footer), '\n'.join(plain)

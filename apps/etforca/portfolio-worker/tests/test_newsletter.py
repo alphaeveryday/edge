@@ -685,3 +685,34 @@ def test_contact_or_claim_crossing_midnight_does_not_send_yesterdays_news(newsle
     sender.tick(ses, now)
     with store.connect() as db:
         assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == ('queued' if late_stage == 'claim_commit' else 'waiting_content')
+
+
+def test_confirmation_token_stays_in_the_fragment_and_never_reaches_server_logs():
+    _, html, plain = email.confirmation('a' * 43)
+    assert '#newsletter-confirm=' in html and '?token=' not in html
+    assert '48시간' in plain
+
+
+def test_content_cached_before_a_deploy_keeps_its_story_and_cover():
+    legacy = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'headline': '예전 제목', 'issue': '예전 소식', 'why_moved': '예전 원인',
+              'watch_next': '예전 일정', 'sources': []}
+    subject, _, text = email.daily(date(2026, 10, 18), [legacy], 'B')
+    assert '예전 제목' in subject, 'Ready content must not be announced as a failed edition'
+    assert '왜 움직였나: 예전 원인' in text and '다음에 볼 것: 예전 일정' in text
+
+
+def test_exception_cover_goes_to_the_price_shock_over_a_minor_flagged_story():
+    minor = letter_card('F', 'US:A', 'A', headline='작은 소식', significant=True, quote={**QUOTE, 'change_pct': 0.5, 'sigma_pct': 2.0})
+    shock = letter_card('F', 'US:B', 'B', headline='큰 급락', quote={**QUOTE, 'change_pct': -9.0, 'sigma_pct': 2.0})
+    subject, html, _ = email.daily(date(2026, 10, 18), [minor, shock], 'F')
+    assert '큰 급락' in subject
+
+
+def test_quiet_exception_letter_has_no_empty_follow_up_box():
+    _, html, _ = email.daily(date(2026, 10, 18), [letter_card('F', quote={**QUOTE, 'change_pct': 0.1, 'sigma_pct': 2.0})], 'F')
+    assert '다음에 볼 지점' not in html
+
+
+def test_model_headline_cannot_break_the_subject_header():
+    subject, _, _ = email.daily(date(2026, 10, 18), [letter_card('B', headline='첫 줄\r\nBcc: x@example.test')], 'B')
+    assert '\r' not in subject and '\n' not in subject
