@@ -22,7 +22,7 @@ class WorkContext:
         self.tool_results = {}
         self.consulted = []
         self.removals = []
-        self.initial = {k: deepcopy(initial[k]) for k in ('research_state', 'context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'news_discovery', 'news_research', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_items') if k in initial}
+        self.initial = {k: deepcopy(initial[k]) for k in ('research_state', 'context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'news_discovery', 'news_research', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_issue_detail', 'previous_items') if k in initial}
         if 'research_state' in self.initial:
             state = self.initial['research_state']
             # JSONB changes object key order. Keep old originals first and append new ones across revisions.
@@ -114,6 +114,6 @@ class WorkContext:
         page = {'source': source, 'subject': subject, 'columns': columns,
                 'rows': deepcopy(rows[offset:end]), 'total_rows': len(rows),
                 'next_offset': end if end < len(rows) else None}
-        if source not in ('previous_analysis', 'previous_items', 'research_state') and page not in self.consulted:
+        if source not in ('previous_analysis', 'previous_issue_detail', 'previous_items', 'research_state') and page not in self.consulted:
             self.consulted.append(deepcopy(page))
         return page

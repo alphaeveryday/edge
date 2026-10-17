@@ -12,8 +12,9 @@ import warnings
 
 from psycopg import sql
 from psycopg.rows import dict_row
+from jsonschema import Draft202012Validator
 
-from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, WRITING
+from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, OUTLOOK_REVISION, WRITING, merge_outlook_revision
 from edge_analysis_v2.analysis.current_flow import current_flow
 from edge_analysis_v2.tools.execution import AuditedExecution, ToolInputError
 from edge_analysis_v2.analysis.body_editor import BodyEditor
@@ -234,6 +235,23 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         previous, previous_items, previous_at, research = run(load)
         editor = BodyEditor(previous['detail'] if previous and kind == 'outlook' else None, cutoff)
         initial = tools.initial_input() | {'previous_analysis': previous}
+        previous_fields = None
+        revision_schema = OUTLOOK_REVISION
+        if previous and kind == 'outlook':
+            previous_fields = {key: previous[key] for key in OUTLOOK['properties'] if key != 'issue_detail'}
+            try:
+                issue = run(lambda connection: read_factor_details(connection, previous_id))['이슈']
+            except ValueError as error:
+                if str(error) != 'Incomplete factor details':
+                    raise
+                # Older completed publications could omit factor details; the missing issue must be supplied.
+                revision_schema = OUTLOOK_REVISION | {'required': ['issue_detail'], 'properties': {
+                    **OUTLOOK_REVISION['properties'], 'issue_detail': OUTLOOK['properties']['issue_detail']}}
+                initial['source_notes'] = [*initial.get('source_notes', []),
+                    '직전 이슈 상세가 저장되어 있지 않습니다. 이번 응답에는 issue_detail 완성 객체를 포함하세요.']
+            else:
+                initial['previous_issue_detail'] = {key: issue[key] for key in ('headline', 'items')}
+                previous_fields['issue_detail'] = initial['previous_issue_detail']
         if previous_id:
             initial['research_state'] = research.snapshot()
         if kind == 'outlook' and hasattr(tools, 'news_snapshot') and (snapshot := tools.news_snapshot()) is not None:
@@ -390,7 +408,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 # A cited call the store refuses was found only at publication, where it lost the whole analysis:
                 # 5 of 45 movement analyses on the first morning. Named here, it costs the agent one correction.
                 problems = []
-                for reference in sorted(set(listed_references(final)), key=str):
+                candidate = merge_outlook_revision(previous_fields, final) if previous_fields is not None else final
+                for reference in sorted(set(listed_references(candidate)), key=str):
                     actual = references.get(reference, reference)
                     try:
                         run(lambda connection: store(connection).validate_evidence(kind, analysis_id, [actual]))
@@ -398,15 +417,33 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                         problems.append(f'{reference}: ' + str(error).replace(str(actual), str(reference)))
                 message = ('이 번호들은 최종 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나 그 항목을 빼세요.\n'
                            + '\n'.join(problems) + '\n') if problems else ''
+                if previous_fields is not None:
+                    for error in Draft202012Validator(OUTLOOK).iter_errors(candidate):
+                        message += f'직전 값과 병합한 응답을 고쳐 주세요: {error.json_path}: {error.validator}={error.validator_value}\n'
                 long = movement_violations(final, previous_items) if kind == 'movement' else []
                 if long:
                     message += '글자 수 상한을 넘은 곳이 있습니다. 내용을 버리지 말고 가장 중요한 것만 남겨 줄이세요.\n' + '\n'.join(long) + '\n'
-                return message + '전체 응답을 다시 내세요.' if message else None
-            response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
-                schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
+                retry = ('이번 수정에서 의도한 변경 속성을 모두 다시 내세요. 직전 시도에서 유효했던 변경도 포함하세요. '
+                         '생략한 속성은 직전 발행본 값을 유지합니다.'
+                         if previous_fields is not None else '전체 응답을 다시 내세요.')
+                return message + retry if message else None
+            prompt = system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml'))
+            if previous_fields is not None:
+                prompt = prompt.replace('전망·요약·5요인·결론·이슈 상세는 각각 완성 객체로 보낸다.', '') + (
+                    '\n이번 실행은 전망 수정이다. 위의 완성 응답 지시보다 다음 제출 규칙을 우선한다. '
+                    '전망·요약·5요인·결론·이슈 상세는 바뀐 속성만 보낸다. 생략한 속성은 직전 값을 유지한다. '
+                    '객체 안에서도 바뀐 속성만 보내고, 배열을 바꾸면 유지할 항목까지 포함한 전체 배열을 보낸다. '
+                    '변경이 없으면 {}를 보낸다. 이전 이슈 상세가 있으면 previous_issue_detail에 있다. '
+                    '직전 이슈 상세가 없는 경우에는 응답 스키마가 요구하는 issue_detail 완성 객체를 보낸다.')
+            response = swap_references(asyncio.run(model_call(initial=initial,prompt=prompt,
+                schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
                 compare_explanations=kind=='outlook' and not previous, final_check=unciteable,
                 effort='low' if previous else 'high', cache_scope=cache_scope)), references)
+            if previous_fields is not None:
+                Draft202012Validator(revision_schema).validate(response)
+                response = merge_outlook_revision(previous_fields, response)
+                Draft202012Validator(OUTLOOK).validate(response)
         if kind == 'outlook':
             issue = response['issue_detail']
             metrics = project_factor_metrics(factor_output, context['etf_code'])

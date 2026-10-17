@@ -42,6 +42,19 @@ def test_research_records_only_pages_actually_read_not_the_unread_database():
     assert page['rows'] == list(range(50, 60))
 
 
+def test_reading_previous_analysis_does_not_reclassify_authored_text_as_source_material():
+    previous = {'previous_analysis': {'summary_card': {'summary': 'Prior judgment'}},
+                'previous_issue_detail': {'headline': 'Prior issue', 'items': []},
+                'previous_items': [{'sentence': 'Prior explanation'}],
+                'research_state': {'version': 1, 'materials': {}}}
+    context = WorkContext(previous | {'news': [{'title': 'New source'}]})
+    for source in previous:
+        assert context.read(source)['rows']
+    assert context.consulted == []
+    news = context.read('news')
+    assert context.consulted == [news]
+
+
 def test_large_tables_are_retrievable_without_being_in_first_prompt():
     raw = {'context': {'analysis_at': '2026-10-05'},
            'prices': {'A': {'columns': ['date', 'close'], 'rows': [[str(i), i] for i in range(500)]}},
