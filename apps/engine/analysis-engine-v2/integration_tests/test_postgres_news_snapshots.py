@@ -11,6 +11,8 @@ from psycopg.rows import dict_row
 import pytest
 
 from edge_analysis_v2.storage.news_snapshots import read_snapshot, save_snapshot
+from edge_analysis_v2.storage.news_snapshots import DEFINITION
+from edge_analysis_v2.storage.tool_runs import ToolStore
 from edge_analysis_v2.storage.publications import PublicationStore
 from edge_analysis_v2.tools.execution import ToolInputError
 
@@ -122,7 +124,7 @@ def test_rejected_save_releases_session_lock_and_read_rechecks_parent(database):
     foreign = context | {'etf_code': 'OTHER'}
     with pytest.raises(ValueError):
         save_snapshot(conn, 'outlook', identity, foreign, snapshot | {'etf_code': 'OTHER'})
-    key = str(uuid5(NAMESPACE_URL, f'edge:capture_news_snapshot:v1:outlook:{identity}'))
+    key = str(uuid5(NAMESPACE_URL, f'edge:capture_news_snapshot:v2:outlook:{identity}'))
     with psycopg.connect(dsn, autocommit=True) as other:
         assert other.execute('SELECT pg_try_advisory_lock(hashtextextended(%s, 0))', (key,)).fetchone()[0]
         other.execute('SELECT pg_advisory_unlock(hashtextextended(%s, 0))', (key,))
@@ -143,3 +145,40 @@ def test_internal_baseline_cannot_be_cited_as_final_news_evidence(database):
         run_id = cur.fetchone()['tool_run_id']
         with pytest.raises(ToolInputError, match='not final-eligible'):
             PublicationStore(conn, final_tool_names={'get_issue_evidence'})._evidence(cur, [run_id], parent)
+
+
+def test_stored_v2_payload_is_compressed_and_restores_original_snapshot(database):
+    conn, _, identity, context, snapshot = database
+    snapshot['documents'] = [{'title': '한글 원문', 'active': True}] * 1000
+    save_snapshot(conn, 'outlook', identity, context, snapshot)
+    tool_id, output = conn.execute('SELECT tool_id, output FROM tool_runs WHERE outlook_analysis_id=%s',
+                                  (identity,)).fetchone()
+    assert tool_id == 'capture_news_snapshot:v2'
+    assert output['result']['encoding'] == 'zlib+base64'
+    assert len(output['result']['data']) < 1000
+    complete(conn, identity)
+    assert read_snapshot(conn, 'outlook', identity) == snapshot
+    save_snapshot(conn, 'outlook', identity, context, dict(reversed(list(snapshot.items()))))
+
+
+def test_previous_v1_plain_snapshot_remains_readable(database):
+    conn, _, identity, context, snapshot = database
+    run_id = str(uuid5(NAMESPACE_URL, f'edge:capture_news_snapshot:v1:outlook:{identity}'))
+    store = ToolStore(conn)
+    store.register_definition(**(DEFINITION | {'tool_id': 'capture_news_snapshot:v1', 'version': 'v1'}))
+    now = datetime.now(timezone.utc)
+    store.save_run(tool_run_id=run_id, tool_id='capture_news_snapshot:v1',
+                   analysis_kind='outlook', analysis_id=identity, arguments={}, context=context,
+                   output={'tool_run_id': run_id, 'result': snapshot}, started_at=now, finished_at=now)
+    complete(conn, identity)
+    assert read_snapshot(conn, 'outlook', identity) == snapshot
+
+
+def test_corrupt_stored_v2_is_rejected_instead_of_returning_no_baseline(database):
+    conn, _, identity, context, snapshot = database
+    save_snapshot(conn, 'outlook', identity, context, snapshot)
+    complete(conn, identity)
+    conn.execute("""UPDATE tool_runs SET output=jsonb_set(output, '{result,sha256}', '"corrupt"'::jsonb)
+                    WHERE outlook_analysis_id=%s""", (identity,))
+    with pytest.raises(ValueError, match='compressed news snapshot'):
+        read_snapshot(conn, 'outlook', identity)
