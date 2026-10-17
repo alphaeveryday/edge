@@ -69,3 +69,12 @@ def test_source_snapshot_never_reads_another_visitors_job(monkeypatch):
     assert client.get('/api/portfolio/analyses/other-job/workbook').status_code == 404
     import hashlib
     assert calls == [('other-job', hashlib.sha256(('a' * 64).encode()).hexdigest())]
+
+
+def test_active_visitor_keeps_same_owner_with_renewed_cookie(monkeypatch):
+    monkeypatch.delenv('PORTFOLIO_ORIGIN_SECRET', raising=False)
+    client = TestClient(api.app)
+    client.cookies.set(api.COOKIE, 'a' * 64)
+    response = client.get('/api/portfolio/session')
+    assert f'{api.COOKIE}=' + 'a' * 64 in response.headers['set-cookie']
+    assert 'Max-Age=2592000' in response.headers['set-cookie']

@@ -57,9 +57,12 @@ async def origin_check(request, call_next):
 
 @app.get("/api/portfolio/session")
 def session(request: Request, response: Response):
-    if len(request.cookies.get(COOKIE, "")) != 64:
-        response.set_cookie(COOKIE, secrets.token_hex(32), httponly=True, samesite="strict",
-                            secure=os.getenv("PORTFOLIO_COOKIE_SECURE", "0") == "1", max_age=86400 * 30)
+    value = request.cookies.get(COOKIE, '')
+    if len(value) != 64:
+        value = secrets.token_hex(32)
+    # Renew the same owner so active visitors do not lose their saved workbook after 30 days.
+    response.set_cookie(COOKIE, value, httponly=True, samesite="strict",
+                        secure=os.getenv("PORTFOLIO_COOKIE_SECURE", "0") == "1", max_age=86400 * 30)
     return {"estimated_seconds": 300}
 
 
