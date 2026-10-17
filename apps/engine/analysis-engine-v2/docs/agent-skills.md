@@ -1,7 +1,7 @@
 # 분석 스킬 실행 계약
 
 분석 워커는 기존 프로세스 내부 MCP를 유지한다. 별도 MCP 서버나 포트를 만들지 않는다.
-`agent/runner.py`는 실행마다 임시 작업 디렉터리와 SDK 로컬 플러그인을 만들고 `skills/` 아래 네 스킬을 제공한다.
+`agent/runner.py`는 실행마다 임시 작업 디렉터리와 SDK 로컬 플러그인을 만들고 작업에 선언된 `skills/` 문서를 제공한다.
 어떤 문서가 언제 전달되는지는 [지시문 구조](system-prompts.md)에 있다.
 
 전망의 마지막 필드 작성은 예외다. `structured_only=True`로 완성된 조사·본문·요약·요인 값을 직접 받고,
@@ -9,7 +9,7 @@
 근거 번호 수정 요청(최대 2회), 시간 제한과 실행 기록은 유지한다. 이 모드는 조사 도구·스킬·메모 복구와 함께 켤 수 없다.
 
 - 스킬 문서의 원본은 이 패키지의 `skills/<이름>/SKILL.md`다. 직접 고치고 리뷰·배포한다.
-- 작업이 선언한 스킬(`run_model(skills=...)`)은 전문이 작업 지시와 함께 전달되므로 `Skill`·`Read` 호출 없이 적용된다. 전망과 가격변동 설명은 `cause-investigation`과 `analysis-report-writing`을 선언한다.
+- 작업이 선언한 스킬(`run_model(skills=...)`)은 전문이 작업 지시와 함께 전달되므로 `Skill`·`Read` 호출 없이 적용된다. 최초 전망은 `cause-investigation`과 `analysis-report-writing`, 최초 가격변동은 `cause-investigation`과 `focused-analysis-writing`, 수정은 `revision-investigation`과 `focused-analysis-writing`을 사용한다. 가설 추론 두 스킬은 조사 입력에 함께 제공한다. 최초 전망의 단계별 실행은 조사·작성 역할에 맞게 나누며 마지막 필드 단계에는 스킬이 없다.
 - 선언하지 않은 스킬은 에이전트가 필요할 때 `Skill`로 연다. 스킬 호출 없이 분석하거나 결과를 제출할 수 있다.
 - 실행의 `skills.json`에는 쓸 수 있던 스킬, 선언한 스킬, 실행 중 연 스킬, 문서 SHA-256이 저장되며 관측 업로드에도 포함된다. 해시는 문서 버전 기록일 뿐 실행 허용 검사에 쓰지 않는다.
 - 연구 출처·사례·개발 검수는 [분석 방법 배경](analysis-methodology.md)에 보존하며 실행 의존성으로 삼지 않는다.
