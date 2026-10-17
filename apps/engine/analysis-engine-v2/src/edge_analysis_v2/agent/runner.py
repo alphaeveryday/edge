@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -50,12 +51,13 @@ def describe_schema_error(error) -> str:
     return f'{path}: {error.message[:300]}'
 
 
-def make_server(schemas: list[dict], call):
-    """Expose registered schemas and return exactly the committed callback result.
+def make_server(schemas: list[dict], call, format_result=None):
+    """Expose registered schemas and transport the committed callback result, optionally in pages.
 
     Args:
         schemas: OpenAI-style nested function descriptors.
         call: Synchronous audited executor accepting name and arguments.
+        format_result: Optional lossless transport formatter; never changes the audited result.
 
     Returns:
         SDK MCP server and its allowed tool names.
@@ -87,7 +89,7 @@ def make_server(schemas: list[dict], call):
                         raise
                 except ToolExecutionError as error:
                     return {'is_error': True, 'content': [{'type': 'text', 'text': str(error)}]}
-            return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
+            return {'content': [{'type': 'text', 'text': json.dumps(format_result(result) if format_result else result, ensure_ascii=False)}]}
         registered.append(tool(name, function['description'], visible['function']['parameters'])(handler))
         allowed.append('mcp__analysis__' + name)
     return create_sdk_mcp_server(name='analysis', version='1.0.0', tools=registered), allowed
@@ -99,7 +101,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                     optional_skills: tuple[str, ...] = (),
                     resume: bool = False, compare_explanations: bool = False, final_check=None,
                     web_search: bool = False, events_log: Path | None = None,
-                    structured_only: bool = False, effort: str = 'high') -> dict:
+                    structured_only: bool = False, effort: str = 'high', cache_scope: str | None = None) -> dict:
     """Run one bounded conversation and validate the final JSON structure.
 
     Args:
@@ -127,6 +129,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         structured_only: Fill a schema from completed input, without research, files, skills or task tracking.
             The SDK's StructuredOutput mechanism and final validation/repair remain enabled.
         effort: Provider reasoning effort; defaults to high unless the caller selects another level.
+        cache_scope: Public report source/kind/instrument partition; omitted for isolated questions.
+            Only provider cache metadata is stable; SDK sessions and workspaces stay independent.
 
     Returns:
         Validated final response. Meaning is reviewed separately by a reviewer.
@@ -150,12 +154,13 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                           separators=(',', ':') if compact else None, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
     repairs = 0
-    server, allowed = make_server(schemas, call) if not structured_only else (None, [])
+    source_context = WorkContext(initial) if not structured_only else None
+    server, allowed = make_server(schemas, call, source_context.tool_response) if not structured_only else (None, [])
     if web_search:
         allowed = allowed + [SEARCH_TOOL]
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
         workspace = Path(directory)
-        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks', 'mcp__workspace__retire_research_materials']
+        workspace_allowed = ['mcp__workspace__read_source', 'mcp__workspace__read_tool_result', 'mcp__workspace__create_directory', 'mcp__workspace__update_tasks', 'mcp__workspace__retire_research_materials']
         session = None
         if structured_only:
             query_input = {'input': initial}
@@ -164,7 +169,6 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
             session = WorkSession(workspace, artifacts, skills, allowed + workspace_allowed, optional_skills)
             session.compare_explanations = compare_explanations
             session.wrap_up_at = monotonic() + timeout_seconds * WRAP_UP_SHARE
-            source_context = WorkContext(initial)
             prompt = session.system_prompt(prompt)
             query_input = {'workspace_instructions': {'path': 'AGENTS.md',
                            'content': (workspace / 'AGENTS.md').read_text(encoding='utf-8')},
@@ -185,8 +189,11 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         sdk_model = model if model.endswith('[1m]') else model + '[1m]'
         # Revision originals must not be silently replaced by an SDK summary on overflow.
         auto_compact = 'research_state' not in initial
+        cache_body = ({'metadata': {'user_id': 'edge-report-v1-' + sha256(cache_scope.encode()).hexdigest()}}
+                      if cache_scope else {})
         options = ClaudeAgentOptions(
             model=sdk_model, system_prompt=prompt, **work_options, strict_mcp_config=True,
+            extra_args={'name': 'ETF analysis'},
             output_format={'type': 'json_schema', 'schema': output_schema},
             permission_mode='dontAsk', setting_sources=[],
             settings=json.dumps({'autoCompactEnabled': auto_compact}),
@@ -198,6 +205,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                  'ANTHROPIC_DEFAULT_SONNET_MODEL': sdk_model, 'ANTHROPIC_DEFAULT_OPUS_MODEL': sdk_model,
                  'DISABLE_AUTO_COMPACT': '0' if auto_compact else '1', 'DISABLE_COMPACT': '0' if auto_compact else '1',
                  'CLAUDE_CODE_DISABLE_1M_CONTEXT': '0',
+                 'CLAUDE_CODE_EXTRA_BODY': json.dumps(cache_body),
                  'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '1000000',
                  'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE': '80'})
         for name, value in [('input.json', initial), ('tool_schemas.json', agent_tool_schemas(schemas)),

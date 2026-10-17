@@ -43,6 +43,8 @@ def initialize():
         admin_store.initialize(db)
         from . import verification
         verification.initialize(db)
+        from . import newsletter_store
+        newsletter_store.initialize(db)
 
 
 def save_draft(draft_id, owner, payload):

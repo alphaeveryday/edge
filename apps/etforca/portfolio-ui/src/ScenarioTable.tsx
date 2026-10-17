@@ -3,7 +3,7 @@ export type Scenarios = { status: string; reason?: string; principal_krw?: strin
 
 const money = (value: string) => `${BigInt(value).toLocaleString('ko-KR')}원`;
 export function ScenarioTable({ scenarios }: { scenarios: Scenarios }) {
-  return <section className="scenario-plan">
+  return <section className="scenario-plan" data-analytics-section="scenarios">
     <h4>수익률 가정별 금액 비교</h4>
     <p className="notice">미래 수익 예측이 아닌 조건부 계산이에요.</p>
     {scenarios.status !== 'available' ? <p>{scenarios.status === 'needs_input' ? '현재 평가금액과 확정된 납입 금액·주기를 확인해야 계산할 수 있어요.' : '계산 중 오류가 발생했어요. 다시 계산해 주세요.'}</p> : <>

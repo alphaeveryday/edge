@@ -266,6 +266,7 @@ def test_saved_prompt_snapshot_reaches_actual_model_boundary(run_context):
     request, _ = run_context
     async def model(**kwargs):
         assert kwargs['prompt'] == 'version-pinned system instruction'
+        assert kwargs['cache_scope'] == 'synthetic:movement:' + kwargs['initial']['context']['etf_code']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
     request('movement', model, system_prompt='version-pinned system instruction')
 
