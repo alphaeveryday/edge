@@ -57,7 +57,7 @@ test('administrator sees the complete customer report, separate evidence and exp
   }
   await expect(page.locator('#report .total b')).toHaveText('4');
   await expect(page.locator('#report .verdict em')).toHaveText('훌륭');
-  await expect(page.locator('#report .verdict em')).not.toHaveCSS('background-image', 'none');
+  await expect(page.locator('#report .verdict em')).toHaveCSS('background-image', 'none');
   await expect(page.getByText('합성 분산 추천', { exact: true })).toBeVisible();
   await expect(page.locator('#report .forecast b')).toHaveText(['-2%', '1%']);
   await expect(page.locator('#report .account-plan')).toContainText('ISA');
@@ -83,8 +83,8 @@ test('administrator sees the complete customer report, separate evidence and exp
   await page.getByRole('tab', { name: '고객 입력' }).click();
   await expect(page.getByText('합성 고객 질문', { exact: true })).toBeVisible();
   await page.getByRole('tab', { name: '고객 결과' }).click();
-  await expect(page.locator('body')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(page.locator('.sidebar')).toHaveCSS('background-color', 'rgb(21, 40, 34)');
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(242, 244, 246)');
+  await expect(page.locator('.sidebar')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (test.info().project.name === 'desktop') expect((await page.locator('.detail').boundingBox())!.width).toBeGreaterThan(850);
   await page.screenshot({ path: `test-results/admin-report-${test.info().project.name}.png`, fullPage: true });

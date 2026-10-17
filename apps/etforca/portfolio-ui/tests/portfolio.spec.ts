@@ -41,7 +41,7 @@ test('an unavailable saved analysis can return to input without clearing browser
   await page.goto('/portfolio/');
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByRole('button', { name: '입력 화면으로', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBeNull();
 });
 
@@ -121,7 +121,7 @@ test('cash default, live donut, ETF-only search and direct recommendation flow',
   await page.getByRole('spinbutton', { name: '현금 금액' }).fill('100');
   await page.getByRole('spinbutton', { name: 'Vanguard S&P 500 ETF 금액' }).fill('100');
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
-  await expect(page.getByRole('heading', { name: '어떻게 넣나요?' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '어떻게 투자할 계획인가요?' })).toBeVisible();
   await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요' })).toBeVisible();
   await page.getByRole('button', { name: '매달 꾸준히', exact: true }).click();
   await page.getByLabel('추가 투자금액').fill('200');
@@ -142,7 +142,7 @@ test('tax details and custom interests persist without a dividend step', async (
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
   await page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' }).click();
   await expect(page.locator('input[type=radio]:checked')).toHaveCount(0);
@@ -150,7 +150,7 @@ test('tax details and custom interests persist without a dividend step', async (
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('연간 소득 구간');
   await page.getByRole('button', { name: '계좌 정보 닫기' }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('필수 항목');
   await page.locator('.tax-trigger').click();
   await page.getByRole('group', { name: '연간 소득 구간', exact: true }).getByRole('radio', { name: '확인 필요', exact: true }).check();

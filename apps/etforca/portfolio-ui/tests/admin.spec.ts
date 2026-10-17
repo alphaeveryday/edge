@@ -10,11 +10,15 @@ test('customer requests and metrics stay separate from the test tab', async ({ p
       { id: 'customer', visitor: 'customer', at: new Date().toISOString(), state: 'succeeded' },
       { id: 'test', visitor: 'test', at: new Date().toISOString(), state: 'succeeded', test_label: '20 cases / 01' },
     ].filter(row => scope === 'customers' ? !row.test_label : scope === 'tests' ? row.test_label : true);
-    if (url.pathname.endsWith('/overview')) return route.fulfill({ json: { as_of: new Date().toISOString(), today_jobs: { succeeded: 1 }, daily: [] } });
+    if (url.pathname.endsWith('/overview')) return route.fulfill({ json: { as_of: new Date().toISOString(), queued: 0, running: 1, today_jobs: { succeeded: 1 }, daily: [{ day: '2026-10-17', visitors: 3, analyses: 1 }] } });
     return route.fulfill({ json: { total: items.length, page: 1, page_size: 50, items } });
   });
   await page.goto('/portfolio/admin.html');
   await expect(page.locator('.records tbody tr')).toHaveCount(1);
+  await expect(page.locator('.bar-pair span').first()).toHaveCSS('background-color', 'rgb(49, 130, 246)');
+  await expect(page.locator('.bar-pair span').last()).toHaveCSS('background-color', 'rgb(107, 118, 132)');
+  await expect(page.locator('.trend i').first()).toHaveCSS('background-color', 'rgb(49, 130, 246)');
+  await expect(page.locator('.trend i').last()).toHaveCSS('background-color', 'rgb(107, 118, 132)');
   await expect(page.locator('.records .badge.test')).toHaveCount(0);
   await expect(page.locator('.stat').filter({ hasText: '오늘 분석 요청' }).locator('strong')).toHaveText('1');
   expect(queries.some(q => q.endsWith('/overview'))).toBeTruthy();
@@ -26,7 +30,18 @@ test('customer requests and metrics stay separate from the test tab', async ({ p
   await expect(page.locator('.records .badge.test')).toHaveCount(0);
   await expect(page.locator('.records .visitor')).toHaveText('customer');
   await expect(page.locator('.stats small')).toHaveCount(0);
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  expect(await page.locator('.filters select').evaluateAll(fields => fields.every(field => {
+    const bounds = field.closest('.records')!.getBoundingClientRect(), box = field.getBoundingClientRect();
+    return box.left >= bounds.left && box.right <= bounds.right;
+  }))).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  if (test.info().project.name === 'desktop') {
+    await page.setViewportSize({ width: 1280, height: 500 });
+    const lastTab = page.getByRole('button', { name: /^버전별 검증/ });
+    await lastTab.scrollIntoViewIfNeeded();
+    expect(await lastTab.evaluate(el => { const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; })).toBe(true);
+  }
 });
 
 test('SSM dashboard detail, tabs, refresh and disconnected-data clearing', async ({ page }) => {

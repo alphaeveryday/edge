@@ -36,7 +36,7 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
   const events = await instrument(page, baseURL!);
   await page.clock.install();
   await page.goto('https://etforca.com/portfolio/?email=private@example.com#secret');
-  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
   await page.clock.runFor(4000);
   await expect.poll(() => events.filter(e => e.event === '$pageview').length).toBe(1);
   await page.clock.runFor(5000);
@@ -260,7 +260,7 @@ test('feedback remains usable when PostHog and feedback storage are unavailable'
   await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
   await expect(page.locator('.report-feedback')).toHaveCount(0);
   await page.getByRole('button', { name: '새 포트폴리오 분석하기' }).click();
-  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
 });
 
 test('feedback stays reachable in a short viewport at high zoom', async ({ page, baseURL }) => {
@@ -332,7 +332,7 @@ test('newsletter confirmation links work in an existing tab and each token still
     return route.fulfill({ json: { status: 'confirmed', delivery_ready: false } });
   });
   await page.goto('https://etforca.com/portfolio/');
-  await expect(page.getByRole('heading', { name: '내 ETF 포트폴리오 분석' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
   for (const [index, token] of ['private-first-confirmation-token', 'private-second-confirmation-token'].entries()) {
     await page.evaluate(value => { location.hash = 'newsletter-confirm=' + value; }, token);
     await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
@@ -385,6 +385,7 @@ test('an already open newsletter launcher preserves feedback mode and Escape acc
   const events = await instrument(page, baseURL!);
   await feedbackReport(page);
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(page.locator('.feedback-choices')).toBeVisible();
   const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
   await launcher.focus();
   await launcher.press('Enter');

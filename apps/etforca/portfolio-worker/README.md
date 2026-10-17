@@ -32,6 +32,7 @@ uv run python -m edge_portfolio.worker
 
 `/portfolio/?view=dashboard`는 같은 브라우저 세션의 보유 자산·배당·월 기록을 관리한다.
 메인 화면은 자산 요약, 자산 구성·월별 배당, 보유 목록 순서다. 차트와 진행 단계 모션은 `prefers-reduced-motion`을 따른다.
+고객·관리자는 [Orca UI](../../../docs/design/portfolio-design-system.md)의 공통 토큰과 조작부를 사용한다. `/portfolio/?preview=design-system`에서 실제 컴포넌트와 상태를 확인한다. `pnpm --filter portfolio-ui check:design`은 색상 원천·공통 조작부·대비를 검사하며 빌드에도 포함된다. 삭제와 덮어쓰기는 서비스 안의 공통 확인 팝업을 사용한다.
 저장 팝업은 예시 데이터로 촬영한 `portfolio-ui/src/dashboard-preview.png`를 보여준다. 뉴스레터는 이메일과 신청 버튼으로 접수하며 기존 이메일 확인 절차를 유지한다.
 분석 결과의 저장 버튼은 입력했던 보유 종목을 가져오며 추천안을 실제 매매로 반영하지 않는다.
 `portfolio_workbooks`는 소유자별 문서와 버전을 전용 DB에 저장한다. `GET/POST /api/portfolio/workbook`은 기존 세션 소유권과 POST origin 검사를 사용하며 오래된 저장 버전은 409로 거절한다.

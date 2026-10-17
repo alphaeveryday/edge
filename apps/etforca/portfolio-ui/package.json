@@ -5,15 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5180",
-    "build": "tsc --noEmit && vite build && vite build --mode admin",
+    "build": "node scripts/check-design.mjs && tsc --noEmit && vite build && vite build --mode admin",
     "preview": "vite preview --port 5180",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:design": "node scripts/check-design.mjs"
   },
   "dependencies": {
     "posthog-js": "^1.438.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "three": "0.128.0"
+    "three": "0.128.0",
+    "ui-kit": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",

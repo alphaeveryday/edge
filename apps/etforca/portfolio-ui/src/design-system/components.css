@@ -1,0 +1,111 @@
+/* Shared interaction, type and surface contracts. Screen CSS owns layout. */
+body { color: var(--color-text); background: var(--color-canvas); font-family: var(--font); line-height: 1.5; font-variant-numeric: tabular-nums; }
+button, input, select, textarea { font: inherit; }
+h1,h2,h3 { color: var(--color-text); letter-spacing: -.035em; font-weight: 700; text-wrap: pretty; }
+h1 { font-size: var(--text-title); }
+h2 { font-size: var(--text-heading); }
+p { text-wrap: pretty; }
+:is(button,a,input,select,textarea,summary):focus-visible { outline: 3px solid var(--color-primary); outline-offset: 3px; }
+.ds-button { min-height: 44px; touch-action: manipulation; transition: background-color var(--motion-fast), transform var(--motion-fast); }
+.ds-button:not(:disabled):active { transform: scale(.98); }
+.ds-button:disabled { cursor: not-allowed; opacity: .5; }
+.ds-button[data-variant=primary], .ds-button[data-variant=secondary], .ds-button[data-variant=danger] { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border: 0; padding: var(--space-4) var(--space-6); border-radius: var(--radius-control); height: auto; min-height: 52px; font-size: var(--text-label); font-weight: 600; line-height: 1.5; }
+.ds-button[data-variant=primary] { color: var(--color-on-primary); background: var(--color-primary); }
+.ds-button[data-variant=primary]:hover:not(:disabled) { background: var(--color-primary-hover); box-shadow: none; }
+.ds-button[data-variant=secondary] { background: var(--color-primary-soft); color: var(--color-primary); }
+.ds-button[data-variant=secondary]:hover:not(:disabled) { background: var(--color-canvas); }
+.ds-button[data-variant=danger] { color: var(--color-danger); background: var(--color-danger-soft); }
+.ds-button[data-variant=plain] { font-family: var(--font); }
+.ds-input:where(:not([type=radio]):not([type=checkbox]):not([type=range])), .ds-select, .ds-textarea { min-height: 48px; border-radius: var(--radius-control); color: var(--color-text); background: var(--color-surface-subtle); border-color: var(--color-border-strong); caret-color: var(--color-primary); }
+:is(.ds-input,.ds-select,.ds-textarea):not(:disabled) { border-color: var(--color-border-strong); }
+:is(.ds-input,.ds-select,.ds-textarea):focus-visible { outline: 3px solid var(--color-primary); outline-offset: 3px; border-color: var(--color-primary); }
+.ds-input::placeholder, .ds-textarea::placeholder { color: var(--color-text-muted); opacity: 1; }
+.ds-input[aria-invalid=true], .ds-textarea[aria-invalid=true] { border-color: var(--color-danger); }
+.ds-input:disabled, .ds-select:disabled, .ds-textarea:disabled { opacity: .6; cursor: not-allowed; }
+.ds-section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-6); }
+.ds-section-heading h2 { font-size: var(--text-heading); margin: 0; }
+.ds-section-heading p { font-size: var(--text-label); color: var(--color-text-secondary); margin-top: var(--space-2); }
+.ds-notice { padding: var(--space-4); border-radius: var(--radius-control); background: var(--color-primary-soft); color: var(--color-primary); font-size: var(--text-label); line-height: 1.6; }
+.ds-notice[data-tone=error] { background: var(--color-danger-soft); color: var(--color-danger); }
+.ds-notice[data-tone=success] { background: var(--color-success-soft); color: var(--color-success); }
+.ds-spinner { width: 18px; height: 18px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: ds-spin .8s linear infinite; }
+.ds-confirm-dialog { width: calc(100% - 32px); max-width: 440px; padding: var(--space-8); border: 0; border-radius: var(--radius-card); background: var(--color-surface); color: var(--color-text); box-shadow: 0 12px 48px var(--color-shadow); }
+.ds-confirm-dialog::backdrop { background: var(--color-overlay); }
+.ds-confirm-dialog h2 { font-size: var(--text-heading); line-height: 1.65; margin: 0; }
+.ds-confirm-actions { display: flex; gap: var(--space-3); margin-top: var(--space-8); }
+.ds-confirm-actions button { flex: 1; min-width: 0; }
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+
+/* Portfolio patterns share the same primitives in customer and shadow-root reports. */
+.app { gap: var(--space-8); }
+.step { gap: var(--space-6); }
+.step h2 { font-size: var(--text-title); line-height: 1.4; white-space: pre-line; }
+.hint { font-size: var(--text-body); color: var(--color-text-secondary); line-height: 1.65; }
+.eyebrow { color: var(--color-text-muted); font-size: var(--text-caption); letter-spacing: 0; }
+.nav__logo { font-weight: 700; color: var(--color-text); }
+.nav__pill { gap: var(--space-4); }
+.prog { background: var(--color-border); }
+.acct, .askbox, .portfolio-preview { background: var(--color-surface); border: 0; border-radius: var(--radius-card); padding: var(--space-6); }
+.acct__head { margin-bottom: var(--space-4); }
+.row { background: transparent; border: 0; border-bottom: 1px solid var(--color-border); border-radius: 0; }
+.row__name { font-size: var(--text-label); }
+.num { border: 0; background: var(--color-surface-subtle); }
+.chips.big .chip { min-height: 64px; padding: var(--space-5) var(--space-6); border-radius: var(--radius-control); font-size: var(--text-body); box-shadow: none; background: var(--color-surface); }
+.chips.big .chip[aria-pressed=true], .chip[aria-pressed=true] { background: var(--color-primary-soft); border-color: var(--color-primary); color: var(--color-primary); }
+.chip { min-height: 44px; max-width: 100%; white-space: normal; font-size: var(--text-label); }
+.instrument-search .find__plus { min-width: 44px; }
+.x, .nav__back, .feedback-close, .dialog-close { min-width: 44px; min-height: 44px; color: var(--color-text-secondary); }
+.bar__in { border: 0; background: var(--color-surface); padding: var(--space-4); border-radius: var(--radius-card); }
+.bar .btn { border-radius: var(--radius-control); min-height: 52px; }
+#report .ans.lead, #report .portfolio-hero, #report .account-plan, #report .recommend, #report .panel, #report .evaluation .action-first { border: 0; border-radius: var(--radius-card); background: var(--color-surface); padding: var(--space-8); }
+#report .portfolio-hero { border-top: 0; }
+#report .eyeline, #report .eyeline span { font-size: var(--text-caption); color: var(--color-text-secondary); letter-spacing: 0; }
+#report .verdict { font-size: var(--text-title); line-height: 1.5; }
+#report .trade-amount[data-trade=buy] { color: var(--color-buy); }
+#report .trade-amount[data-trade=sell] { color: var(--color-sell); }
+#report .p, #report .why, #report .evaluation p { line-height: 1.8; }
+.dashboard-stats { border: 0; border-radius: var(--radius-card); padding-block: var(--space-8); }
+.dashboard-stats article:first-child strong { font-weight: 700; font-size: clamp(2rem,3vw,2.75rem); }
+.dashboard-stats article+article { border-left: 0; }
+.dashboard-stats span, .dashboard-stats small { font-size: var(--text-caption); }
+.dashboard-card { border: 0; border-radius: var(--radius-card); padding: var(--space-8); }
+.dashboard-nav nav button { border-radius: var(--radius-control); font-size: var(--text-label); }
+.dashboard-nav nav { min-width: 0; overflow-x: auto; }
+.dashboard-brand { display: inline-flex; align-items: center; gap: var(--space-2); }
+.dashboard-nav nav button[aria-current] { background: var(--color-primary-soft); color: var(--color-primary); }
+.asset-list-heading { background: transparent; border-top: 0; font-size: var(--text-caption); }
+.asset-symbol { width: 44px; height: 44px; border: 0; border-radius: 16px; color: var(--color-primary); background: var(--color-primary-soft); }
+.asset-row { min-height: 88px; }
+.asset-row b { font-size: var(--text-label); }
+.asset-row small { font-size: var(--text-caption); }
+.gain { color: var(--color-buy)!important; }.loss { color: var(--color-sell)!important; }
+.report-feedback, .asset-editor, .tax-dialog, .followup-dialog { border: 0; border-radius: var(--radius-card); background: var(--color-surface); box-shadow: 0 12px 48px var(--color-shadow); }
+.report-feedback { padding: var(--space-6); }
+.report-feedback h3 { font-size: var(--text-heading); }
+.feedback-newsletter p, .save-portfolio p { font-size: var(--text-label); }
+.feedback-newsletter small, .feedback-newsletter .newsletter-consent { font-size: var(--text-caption); }
+.save-preview { border-radius: var(--radius-control); background: var(--color-canvas); }
+.feedback-choices button { border: 0; background: var(--color-canvas); border-radius: var(--radius-control); }
+.feedback-choices button:hover { background: var(--color-primary-soft); }
+.research-motion { border: 0; border-radius: var(--radius-card); padding: var(--space-8) var(--space-4); }
+.progress-steps li { min-height: 64px; font-size: var(--text-label); }
+.progress-steps small { font-size: var(--text-caption); }
+.notice { font-size: var(--text-label); line-height: 1.7; }
+.preview-bar { font-family: var(--font); background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
+@media(max-width:850px) { .dashboard-card { padding: var(--space-6) var(--space-5); } .dashboard-stats article:nth-child(2) { border-left: 0; } }
+@media(max-width:600px) { #report .ans.lead, #report .portfolio-hero, #report .account-plan, #report .recommend, #report .panel, #report .evaluation .action-first { padding: var(--space-6) var(--space-5); } .step h2 { font-size: 1.625rem; } .acct,.askbox { padding: var(--space-5); } }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation: none!important; transition: none!important; scroll-behavior: auto!important; } }
+
+/* Internal operations use the same scale, with table density retained. */
+.sidebar { background: var(--color-surface); color: var(--color-text); border-right: 1px solid var(--color-border); }
+.sidebar nav button, .sidebar-bottom, .sidebar-bottom button, .brand small { color: var(--color-text-secondary); }
+.sidebar nav button[aria-current] { color: var(--color-primary); background: var(--color-primary-soft); }
+.orca-mark { background: var(--color-primary-soft); color: var(--color-primary); }
+.stat, .records, .detail, .activity { border-color: var(--color-border); border-radius: var(--radius-card); }
+.stat.accent { background: var(--color-primary-soft); border-color: var(--color-primary-soft); }
+.stat.accent>span, .stat.accent small { color: var(--color-primary); }
+.login-page { background: var(--color-canvas); }.login-brand { color: var(--color-text); }
+.badge.succeeded { background: var(--color-success-soft); color: var(--color-success); }
+.badge.failed { background: var(--color-danger-soft); color: var(--color-danger); }
+.badge.running, .badge.test { background: var(--color-primary-soft); color: var(--color-primary); }
+.detail-tabs button[aria-selected=true] { background: var(--color-primary); color: var(--color-on-primary); }
