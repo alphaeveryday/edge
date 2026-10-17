@@ -31,7 +31,7 @@ edge/
 │       ├── app-api/          # JVM    · ETF Orca 앱 API (회원·ETF·커뮤니티·전망 투표, 자체 PostgreSQL·Redis)
 │       ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
 │       ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
-│       ├── portfolio-ui/     # Node   · 포트폴리오 화면 (etforca.com/portfolio, React 19)
+│       ├── portfolio-ui/     # Node   · 포트폴리오 분석·보유 관리 대시보드·화면 테스트 (React 19)
 │       └── portfolio-worker/ # Python · 포트폴리오 API·워커·뉴스레터 (독립 워크스페이스, 전용 PostgreSQL)
 ├── libs/                     # 가져다 쓰는 공유 코드 (제품 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
