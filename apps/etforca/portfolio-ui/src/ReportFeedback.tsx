@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { trackFeedback, type FeedbackRating } from './analytics';
 import { request } from './api';
+import { SavePortfolio } from './SavePortfolio';
 
 const finished = new Set<string>();
 const choices: [FeedbackRating, string, string][] = [['good', '😊', '좋아요'], ['okay', '😐', '그냥 그래요'], ['needs_improvement', '🛠️', '개선이 필요해요']];
@@ -79,17 +80,19 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     } catch (e) { setError((e as Error).message); } finally { setSending(false); }
   }
   return <div ref={anchor} className="feedback-anchor">
+    <SavePortfolio jobId={jobId} />
     <button className="secondary" aria-expanded={open} onClick={() => { if (open) return; setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</button>
-    {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-labelledby={newsletterOnly ? 'newsletter-title' : 'feedback-title'} aria-modal="false" data-analytics-section="feedback">
+    {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-label={newsletterOnly ? '내 ETF 소식, 매일 메일로' : '포트폴리오 저장'} aria-modal="false" data-analytics-section="feedback">
       <button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</button>
+      {!newsletterOnly && <SavePortfolio jobId={jobId} />}
       <div className="feedback-newsletter">
         <h3 id="newsletter-title">내 ETF 소식, 매일 메일로</h3>
         <p>보유 종목의 핵심 이슈와 가격이 움직인 이유를 쉽고 짧게 정리해 드려요.</p>
         {subscription ? <p role="status">{subscription}</p> : <form onSubmit={subscribe}>
           <label className="sr-only" htmlFor="newsletter-email">뉴스레터 이메일</label>
           <input id="newsletter-email" type="email" autoComplete="email" placeholder="이메일 주소" maxLength={254} required value={email} onChange={e => setEmail(e.target.value)} />
-          <label className="newsletter-consent"><input type="checkbox" required />이메일·보유 종목 이용 및 뉴스레터 수신 동의</label>
           <button className="newsletter-submit" type="submit" disabled={sending}>{sending ? '신청 중…' : '매일 핵심 소식 받기'}</button>
+          <small className="newsletter-consent">신청하면 이메일·보유 종목 이용과 뉴스레터 수신에 동의합니다.</small>
           {error && <p role="alert">{error}</p>}
         </form>}
         <small>언제든 메일에서 수신 거부할 수 있어요.</small>

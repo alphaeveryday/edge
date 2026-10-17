@@ -77,13 +77,11 @@ def listed_references(value):
             yield from listed_references(inner)
 
 
-def keep_references(value, allowed, fallback):
-    """Drop every ``tool_run_ids`` entry that is not allowed; a list left empty takes the fallback entries."""
-    if isinstance(value, dict):
-        return {k: ([i for i in v if i in allowed] or list(fallback)) if k == 'tool_run_ids' and isinstance(v, list)
-                else keep_references(v, allowed, fallback) for k, v in value.items()}
-    if isinstance(value, list):
-        return [keep_references(v, allowed, fallback) for v in value]
+def require_references(value, allowed):
+    """Refuse unchecked citations instead of substituting another topic's evidence."""
+    bad = sorted({reference for reference in listed_references(value) if reference not in allowed}, key=str)
+    if bad:
+        raise ValueError('Unverified evidence after repair: ' + ', '.join(map(str, bad)))
     return value
 
 
@@ -215,6 +213,11 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
     try:
         def load(connection):
             previous = read(connection, previous_id) if previous_id else None
+            previous_at = None
+            if previous_id and kind == 'outlook':
+                with connection.cursor() as cur:
+                    cur.execute('SELECT analysis_at FROM outlook_analyses WHERE analysis_id=%s', (previous_id,))
+                    previous_at = cur.fetchone()[0]
             items = None
             if kind == 'movement':
                 with connection.cursor(row_factory=dict_row) as cur:
@@ -232,12 +235,43 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             if tool_store is None:
                 for definition in definitions:  # one connection instead of one per definition
                     ToolStore(connection).register_definition(**definition)
-            return previous, items, load_research(connection, kind, previous_id)
-        previous, previous_items, research = run(load)
+            return previous, items, previous_at, load_research(connection, kind, previous_id)
+        previous, previous_items, previous_at, research = run(load)
         editor = BodyEditor(previous['detail'] if previous and kind == 'outlook' else None, cutoff)
         initial = tools.initial_input() | {'previous_analysis': previous}
         if previous_id:
             initial['research_state'] = research.snapshot()
+        if kind == 'outlook' and hasattr(tools, 'news_snapshot') and (snapshot := tools.news_snapshot()) is not None:
+            from edge_analysis_v2.storage.news_snapshots import read_snapshot, save_snapshot
+            baseline = run(lambda connection: read_snapshot(connection, kind, previous_id)) if previous_id else None
+            tools.set_previous_news_snapshot(baseline)
+            run(lambda connection: save_snapshot(connection, kind, analysis_id, context, snapshot))
+            def selected_news(connection):
+                with connection.cursor() as cur:
+                    cur.execute("""SELECT r.output->'result'->'news'
+                        FROM tool_runs r JOIN tool_definitions d USING(tool_id)
+                        WHERE r.tool_run_id=ANY(%s) AND r.status='completed'
+                          AND d.function_name='get_issue_evidence' AND r.arguments->>'include_body'='false'
+                        ORDER BY r.started_at,r.tool_run_id""", (sorted(set(listed_references(previous))),))
+                    return {article['news_id']: article for (articles,) in cur.fetchall() for article in articles}
+            prior_news = run(selected_news) if previous else {}
+            old_documents = {row['news_id']: row for row in baseline['documents']} if baseline else {}
+            current_news = {row['news_id'] for row in snapshot['documents']}
+            initial['news_research'] = {
+                'mode': 'revision' if previous else 'initial',
+                'baseline_status': ('ready' if baseline else 'missing') if previous else 'not_applicable',
+                'previous_analysis_id': previous_id,
+                'previous_analysis_at': previous_at.astimezone(cutoff.tzinfo).isoformat() if previous_at else None,
+                'snapshot_id': snapshot['snapshot_id'],
+                'recommended_tool': 'get_event_changes' if previous else 'list_events',
+                'previous_topics': [{'id': item['id'], 'title_keyword': item['title_keyword']}
+                                    for item in previous['detail']['items']] if previous else [],
+                'previous_news': [{'news_id': identity, 'title': article['title'],
+                                   'published_at': old_documents.get(identity, {}).get('published_at'),
+                                   'in_current_scope': identity in current_news}
+                                  for identity, article in sorted(prior_news.items())],
+                'change_condition': previous['conclusion'].get('change_condition') if previous else None,
+            }
         inherited_over = violations({'detail': previous['detail']}) if previous and kind == 'outlook' else []
         if inherited_over:
             # Otherwise the run investigates fully and then fails at publication on text it never touched.
@@ -334,10 +368,9 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             report = step('investigation', initial=initial, schemas=source_schemas, output_schema=INVESTIGATION, web_search=web,
                           skills=('cause-investigation',), optional_skills=OPTIONAL_SKILLS, timeout_seconds=600,
                           compare_explanations=True, final_check=uncitable)['report']
-            # The check gives two chances to repair and then returns the report as it is. A number it still refuses
-            # loses its mark here, so the sentence stays as the investigator's word and is not copied as a fact.
-            for reference in refused(report):
-                report = report.replace(f'[{reference}]', '')
+            # Repair exhaustion cannot silently turn an unsupported fact into an uncited assertion.
+            if problem := uncitable({'report': report}):
+                raise ValueError('Investigation evidence failed after repair: ' + problem)
             # Judgments and the explanation table stay here for review; only cited facts reach the server.
             (artifacts/'investigation.md').write_text(report, encoding='utf-8')
             encode = lambda value: json.dumps(shorten(value), ensure_ascii=False, default=str)
@@ -355,9 +388,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             fields = step('fields', initial={'investigation': report, 'body': encode(editor.result()),
                                              'summary': encode(written), 'factor_values': encode(factor_output | {'tool_run_id': 'f1'})},
                           schemas=[], output_schema=FIELDS, timeout_seconds=300, final_check=unchecked, structured_only=True)
-            # The same for the fields: an entry still unchecked after the repairs is dropped, and a list left empty
-            # takes the evidence of the body's first topic, which states the judgment those fields repeat.
-            fields = keep_references(fields, checked, shorten(editor.result())['items'][0]['tool_run_ids'])
+            fields = require_references(fields, checked)
             response = swap_references(written | fields, references)
         else:
             def unciteable(final):
