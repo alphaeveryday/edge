@@ -60,7 +60,7 @@ export function Followup({ jobId, recoveryOnly = false }: { jobId: string; recov
     catch (e) { setEmailError((e as Error).message); } finally { setSending(false); }
   }
   return <>
-    <section className="followup"><h3>AI에게 추가로 묻기</h3>
+    <section className="followup" data-analytics-section="followup"><h3>AI에게 추가로 묻기</h3>
       {!recoveryOnly && <label>요청 종류 <select aria-label="질문 종류" value={mode} disabled={busy} onChange={e => changeMode(e.target.value as 'question' | 'recovery')}><option value="question">추가 질문</option><option value="recovery">누락·오류 보완</option></select></label>}
       {answer && <div className="chat-answer">{answer.paragraphs.map((p, i) => <p key={i}>{p}</p>)}</div>}
       {revision && <details className="followup-revision"><summary>보완 분석과 계산표 보기</summary><p className="notice">원본 분석은 유지되며 아래는 이 질문에 대한 별도 분석이에요.</p><ReportView key={revisionId} report={revision} /></details>}

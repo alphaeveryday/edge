@@ -58,6 +58,7 @@
 - 이미지: `edge/pipeline:analysis-v2-{commit SHA}`. 전용 작업 family의 최신 등록 리비전으로 새 실행 시작. 이미 시작된 작업은 기존 리비전을 유지.
 - 롤백: 이전 이미지가 지정된 작업 정의를 새 리비전으로 등록. 기존 DB/S3 기록 삭제 없음.
 - DeepSeek 키는 `edge/analysis-v2/deepseek`의 `DEEPSEEK_API_KEY`, 모델은 `DEEPSEEK_MODEL`. 키 값은 Terraform state·Git에 넣지 않음.
+- 모델 세션 표시명은 코드에서 `ETF analysis`로 지정한다. CLI가 조사 입력 전체를 별도의 세션 제목 생성 모델 호출에 다시 보내는 비용을 방지한다. 세션 ID·분석 ID·분석 입력은 그대로 유지한다.
 - 배포는 기존 `feature/* → dev` PR 흐름. 인프라 변경은 Terraform plan에서 기존 자원 변경·삭제를 확인한 후 적용.
 
 ## 알려진 한계

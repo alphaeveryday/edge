@@ -12,11 +12,41 @@
 - `deploy-portfolio`는 dev 코드만 사용한다. Terraform 성공 후 또는 서비스 코드 변경 시 실행하며, SSM 파라미터 `/edge/portfolio/deployment`에서 배포 대상을 읽는다. SSM으로 API·워커를 배포하고 `/portfolio/` 파일만 업로드한다. CloudFront 작업은 캐시 무효화뿐이다.
 - 기존 `deploy-app-landing`은 루트 HTML·assets만 소유하므로 포트폴리오 배포와 파일이 충돌하지 않는다.
 
+## 고객 화면 이용 분석
+
+포트폴리오 UI는 기존 [PostHog 웹 프로젝트 658097](https://us.posthog.com/project/658097)에 수집한다. `analytics.ts`의 공개 프로젝트 키는 랜딩과 같고, 개인 API 키나 추가 서버 환경변수는 필요 없다. `etforca.com/portfolio/`와 www 도메인의 같은 경로에서만 실행한다. 로컬 미리보기·관리자 진입점에서는 수집하지 않는다. SDK의 봇 제외는 유지한다.
+
+Web analytics의 Top paths에서 `/portfolio/`를 선택하면 랜딩(`/`)과 분리한다. www 방문도 공개 주소인 `etforca.com`으로 합쳐 집계한다. 익명 방문·세션을 서버에서 생성할 수 있도록 `$cookieless_mode`를 보존하고 `$host`를 고정된 `etforca.com`으로 전송한다. 경로가 안 보이면 프로젝트·조회 기간·호스트 필터와 실제 `$pageview` 적재를 확인한다. 브라우저 전송 테스트나 수집 API의 성공 응답만으로 집계 완료를 판정하지 않는다.
+
+PostHog **Product analytics → New insight → Trends**에서 아래 이벤트와 속성을 사용한다. 모든 포트폴리오 이벤트에 `screen`이 있으므로 랜딩과 분리할 수 있다.
+
+| 확인할 내용 | 이벤트·집계 |
+|---|---|
+| 화면별 실제 방문 수 | `$pageview`의 Total count, Breakdown `screen` |
+| 화면별 총 체류 시간 | `portfolio_screen_engagement`의 Sum `visible_seconds`, Breakdown `screen` |
+| 방문 1회당 평균 체류 | 위 체류 합계 ÷ 같은 화면의 `$pageview` 수. 15초 단위 이벤트의 평균을 방문당 평균으로 사용하지 않는다 |
+| 스크롤이 멈춘 구간 | `portfolio_scroll_pause`의 Total count 또는 Sum `pause_seconds`, Breakdown `section`, 필요시 `screen = result` 필터 |
+| 분석 만족도 | `portfolio_feedback`, Filter `action = submitted`, Total count, Breakdown `rating` (`good` 좋아요 / `okay` 그냥 그래요 / `needs_improvement` 개선이 필요해요) |
+| 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
+
+`screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`, `feedback`이며 그 밖의 위치는 화면 이름으로 집계한다.
+
+만족도 팝업은 완료된 고객 보고서에서 과거 성과 다음 핵심 평가 구간에 도달하면 표시한다. 이모지 3지 선택이며 닫기·Escape를 지원한다. 같은 분석의 응답·닫기는 브라우저 로컬 저장소에 표시해 다시 묻지 않는다(저장소 차단 시 현재 페이지에서만 유지). `portfolio_feedback`의 `action`은 `shown`, `submitted`, `dismissed`이고, `rating`은 응답에만 들어간다. 관리자·중단된 보고서에는 팝업이 없다. SDK Surveys 대신 앱의 고정 선택 UI와 기존 이벤트 수집 경로를 사용한다.
+
+팝업 위쪽에는 보유 ETF 전체의 데일리 뉴스레터 이메일 신청을, 아래쪽에는 평가 3지 선택을 둔다. 이메일과 필수 동의 체크를 완료해야 신청할 수 있다. 고객이 추가 질문 입력을 시작하면 팝업을 닫고, 해당 화면에서는 다시 자동 표시하지 않는다. 팝업을 닫거나 평가한 뒤에도 ‘보유 종목 뉴스레터 받기’ 버튼으로 신청 화면을 다시 열 수 있으며 평가를 다시 요구하지 않는다. 서버의 발송 준비 상태에 따라 확인 메일 발송 안내와 준비 대기 안내를 구분한다.
+
+이메일 확인 링크의 `#newsletter-confirm=...`는 새 문서 진입과 같은 탭의 fragment 이동 모두에서 즉시 주소에서 제거하고 별도 확인 화면을 표시한다. 고객이 버튼을 누를 때만 확인 API를 호출하며 이 화면에서는 PostHog·방문 기록을 시작하지 않는다. 이미 열려 있던 입력·결과 화면에서 전환하면 이전 화면의 방문 종료 기록은 보존하며, 확인 화면의 새 방문이나 클릭은 기록하지 않는다. 이메일·확인 토큰은 분석 이벤트에 포함하지 않는다. 이전 수신 거부를 해제해야 하는 고객에게는 기존 메일의 수신 설정에서 직접 허용하도록 안내한다.
+
+체류는 탭이 보이는 시간이며 실제 독서·집중 시간을 뜻하지 않는다. 숨긴 화면은 방문으로도 세지 않는다. 스크롤·레이아웃 변화 없이 2초 이상 머문 구간을 다음 이동·숨김·종료 때 기록한다. 화면 가운데의 구간을 기준으로 하며, 펼치기 등으로 레이아웃이 바뀌면 위치를 갱신한다. 앱 전환·페이지 이탈의 마지막 이벤트는 즉시 Beacon으로 넘기지만 네트워크 차단이나 브라우저 강제 종료 시 전달을 보장하지 않는다.
+
+기존 `cookieless_mode: always` 정책을 유지한다. 자동 클릭·본문 수집, 세션 녹화, SDK 설문·기능 플래그는 끄고 이벤트·속성 허용 목록만 전송한다. 입력 내용·이메일·보유 종목·보고서 본문·분석 ID·URL 쿼리·해시는 보내지 않는다. 사용자 식별자를 연결하지 않으며 날짜를 넘긴 동일 사용자 추적은 하지 않는다. 결과별 배치가 달라지는 보고서는 구간별 이벤트로 비교한다. 프로젝트의 세션 녹화·히트맵 설정을 바꾸거나 저장된 대시보드를 자동 생성하지 않는다.
+
 ## 권한
 
 - GitHub는 OIDC 임시 자격증명을 쓴다. 배포 역할에는 지정 버킷·SSM 대상만 추가하고 AWS 관리 키를 저장하지 않는다. Terraform apply 역할은 기존 저장소의 dev 전용 신뢰 정책을 따른다.
 - 호스트는 인스턴스 프로파일로 런타임 비밀과 배포 파일을 읽는다. SSH 포트·키 페어는 없다. 443은 CloudFront 원본 prefix list, 80은 ACME 인증서 발급용이다. IMDSv2 필수·hop limit 1을 유지한다.
 - Exa 키는 기존 Secrets Manager `edge/portfolio/runtime` JSON의 `EXA_API_KEY` 필드로 관리한다. 배포 전에 값을 등록해야 하며, 배포 스크립트가 읽어 권한 `0600`의 `runtime.env`에 저장하고 워커에만 주입한다. 키 교체 후에는 `deploy-portfolio`를 재실행한다. 시크릿 값은 Git·Terraform state·배포 로그에 기록하지 않는다.
+- 뉴스레터 모델 키는 같은 시크릿의 `DEEPSEEK_NEWSLESTTER_API_KEY` 필드로 관리한다(변수명 철자 그대로 사용). 배포 전에 등록해야 하며 누락·빈 값이면 배포를 거부한다. `runtime.env`를 거쳐 워커에만 주입하고, 뉴스레터 에이전트는 이 키만 사용한다. 포트폴리오 분석·후속 질문은 기존 `DEEPSEEK_API_KEY`를 사용한다.
 - 관리자 대시보드는 `edge-portfolio-admin-access` 정책과 고정 포트 문서 `edge-portfolio-admin-tunnel`로만 접속한다. 기존 `edge-portfolio-ssm-operator` 셸 정책은 관리자 대시보드 사용자에게 부여하지 않는다. 사용자가 승인한 work 인증은 전용 edge-portfolio-admin-local 역할 발급에만 사용하며, SSM은 이 역할의 임시 권한으로 연결한다. 전용 역할과 정책 연결도 Terraform이 관리한다. SSM은 접속 수단이며 그 자체로 IAM 권한을 대체하지 않는다.
 - 분석 워커는 비특권 사용자·읽기 전용 파일시스템·capability 제거로 실행한다. AWS 키, Docker 소켓, 전망 DB 비밀번호를 전달하지 않는다.
 - 내부 전망 조회 서비스만 기존 읽기 전용 DB 계정을 가진다. 외부 포트가 없으며 임의 SQL·목록·배열 입력 없이 ETF 코드 하나와 목적을 받는다. 모델 도구는 확인된 코드만 허용하고 한 분석 최대 3개·중복 조회 금지·기준시각과 14일 신선도를 검사한다. DB 계정 자체는 기존 결과 API의 읽기 권한을 공유하며 단건 제한은 조회 서비스 계약에서 강제한다.
@@ -28,6 +58,18 @@
 ETF 목록은 KRX·Nasdaq Trader의 2026-10-12 수집 스냅샷이다. 국내 1,172개, 미국 5,771개이며 ETF와 원화 현금만 입력 가능하다. `scripts/refresh_catalog.py`로 공개 종목 메타데이터를 갱신하고 리뷰·배포한다. 전망을 일괄 조회하는 기능은 아니다. 자동 목록 갱신 스케줄은 없다.
 
 ## 검증과 운영 한계
+
+### 뉴스레터 예약 발송
+
+기존 호스트에 `portfolio-newsletter.timer`를 설치해 5분마다 SES 발송 준비 상태·이메일 확인 대기·일일 콘텐츠 준비를 확인한다. 매일 KST 08:00 이후 발행일별 종목 작업을 등록하고 결과가 준비되면 보낸다. 별도 EC2·DB·Lambda·AWS 스케줄러는 추가하지 않는다. 분석은 기존 워커, 발송은 `newsletter` Compose profile의 128MiB 일회성 프로세스가 맡는다.
+
+발송 프로세스만 host network로 인스턴스 역할을 사용한다. 분석 워커의 `AWS_EC2_METADATA_DISABLED=true`와 IMDSv2 hop limit 1은 유지한다. PostgreSQL은 추가로 호스트 루프백 `127.0.0.1:15432`에만 바인딩하며 `runtime_env.py`가 비밀번호를 인코딩해 `PORTFOLIO_NEWSLETTER_DATABASE_URL`을 만든다. 외부 DB 포트는 열지 않는다. 메일러에는 DeepSeek·Exa 키를 환경변수로 전달하지 않는다. 이는 IAM 격리를 뜻하지 않는다. 메일러는 모델·외부 도구를 실행하지 않는 신뢰된 코드이며 기존 호스트 역할을 공유하므로, 그 역할의 배포용 런타임 시크릿 읽기 권한도 갖는다.
+
+SES 도메인 인증·발송 허용·운영 액세스가 모두 준비돼야 메일을 보낸다. 최근 준비 상태는 `portfolio_newsletter_runtime`에 보관하고 API는 10분 이상 지난 상태를 준비 완료로 표시하지 않는다. sandbox 해제 전 신청은 대기하며 팝업에서 준비 후 확인 메일을 보낸다고 안내한다. 확인 링크는 발송 후 48시간 유효하다.
+
+SES 관리 수신 거부를 사용하는 일일 메일은 `ListManagementOptions`를 포함하므로, `ses:SendEmail` 권한에 발신 identity·configuration set뿐 아니라 해당 contact list ARN도 필요하다. 실제 호스트 역할로 AWS mailbox simulator에 발송해 이 권한 경로를 검증한다. 운영자 자격증명으로만 성공한 테스트는 호스트 발송 권한의 검증이 아니다.
+
+발송 장애는 `journalctl -u portfolio-newsletter.service`와 전용 DB의 발송 상태로 확인한다. `sending` 상태로 프로세스가 중단됐거나 `uncertain`이면 SES 수락 여부를 확인하기 전 재발송하지 않는다. 기존 배포 절차가 메일 타이머를 멈추고 진행 중인 발송을 최대 330초 기다린 뒤 분석 워커를 비운다. 배포 실패 시 기존에 켜져 있던 타이머를 복구하고, 성공 시 새 릴리스·DB 준비가 끝난 뒤 활성화한다. SSM 실행 제한은 1,800초, GitHub 배포 제한은 45분으로 두 대기 구간과 빌드·검증 시간을 포함한다. 실제 수신함의 Gmail·Outlook 렌더링은 로컬 브라우저 미리보기와 별도로 검증해야 한다.
 
 절세 정보 팝업은 카드형 단일 선택과 마지막 IRP·ISA·연금저축 체크박스를 사용한다. `tax_profile.recommended_accounts`는 전략 검토 대상으로 저장하며 실제 보유 계좌와 구분한다. 미확인 항목의 기본값은 ‘확인 필요’다. 금액 입력 방식을 다시 선택해도 기존 금액을 지우지 않으며, 다른 종목의 금액이 비어 있어도 이미 입력한 현금 금액은 표시한다.
 

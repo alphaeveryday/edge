@@ -21,7 +21,7 @@ def test_fallback_feed_identity_currency_and_no_fabricated_dividends(monkeypatch
     assert record['frame'].index[-1] == pd.Timestamp('2026-10-13')
     assert record['currency'] == currency
     assert 'Dividends' not in record['frame']
-    assert record['return_basis'] == 'price'
+    assert record['return_basis'] == ('total_return' if feed.startswith('NAVER:') else 'price')
 
 
 @pytest.mark.parametrize('invalid', [0., float('inf')])
@@ -102,28 +102,20 @@ async def test_two_unusable_feeds_leave_an_instrument_failure_instead_of_a_succe
         await fetch_prices('VOO', date(2026, 10, 14))
 
 
-def test_mixed_sources_compare_every_asset_on_the_same_price_basis():
+def test_unrecoverable_asset_does_not_change_other_assets_to_price_returns():
     index = pd.bdate_range('2026-10-01', '2026-10-13')
     def record(adjusted, close, basis):
         return {'frame': pd.DataFrame({'Adj Close': adjusted, 'Close': close}, index=index),
                 'currency': 'KRW', 'return_basis': basis, 'source_url': 'https://example.com/prices'}
     records = {'KR:A': record(100, 100, 'price'),
                'KR:B': record(list(range(100, 100 + len(index))), 100, 'total_return')}
-    frame, _ = normalized_prices(set(records), records, date(2026, 10, 14))
-    assert frame['KR:B'].eq(1).all()  # Cannot rank one asset with dividends and another without them.
-    result = comparison({'KR:B': 1}, {'KR:A': 1}, records, date(2026, 10, 14))
-    assert '분배금 제외' in result['method']
-    assert '분배금 제외' in result['basis']
+    with pytest.raises(ValueError, match='TOTAL_RETURN_UNAVAILABLE'):
+        normalized_prices(set(records), records, date(2026, 10, 14))
+    with pytest.raises(ValueError, match='TOTAL_RETURN_UNAVAILABLE'):
+        comparison({'KR:B': 1}, {'KR:A': 1}, records, date(2026, 10, 14))
     standalone = comparison({'KR:B': 1}, None, records, date(2026, 10, 14))
     assert '분배금 제외' not in standalone['basis']
     assert standalone['points'][-1]['recommended'] > standalone['points'][0]['recommended']
-    records['KR:B']['frame'].loc[index[:3], 'Adj Close'] = float('nan')
-    result = comparison({'KR:B': 1}, {'KR:A': 1}, records, date(2026, 10, 14))
-    assert result['start_date'] == '2026-10-01'
-    # A group must use the shared batch basis even when it has no fallback asset itself.
-    frame, _ = normalized_prices({'KR:B'}, records, date(2026, 10, 14),
-                                 (index[0], index[-1]), column='Close')
-    assert frame['KR:B'].eq(1).all()
 
 
 def test_invalid_observation_uses_previous_price_without_inventing_pre_inception_history():
