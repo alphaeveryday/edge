@@ -72,6 +72,29 @@ def test_alias_reads_original_and_retired_material_is_not_reintroduced():
         context.read('research_state', 'alias')
 
 
+def test_research_pagination_recovery_preserves_selected_original():
+    import pytest
+    from edge_analysis_v2.agent.work_context import SourceInputError
+    context = WorkContext({'research_state': {'materials': {'a': {'text': 'original'}}}})
+    for invalid in ({'limit': 0}, {'offset': -1}):
+        with pytest.raises(SourceInputError) as error:
+            context.read('research_state', 'a', **invalid)
+        assert context.read(**error.value.details['retry_arguments'])['rows'] == [{'text': 'original'}]
+
+
+def test_research_lookup_cannot_accidentally_reload_the_entire_archive():
+    import pytest
+    from edge_analysis_v2.agent.work_context import SourceInputError
+    context = WorkContext({'research_state': {'materials': {'a': {'text': 'original'}}}})
+    assert 'keys' not in context.initial['available_sources']['research_state']
+    for subject in ('', 'materials', 'unknown'):
+        with pytest.raises(SourceInputError) as error:
+            context.read('research_state', subject)
+        assert error.value.details['allowed_values'] == ['a']
+        assert 'retry_arguments' not in error.value.details
+    assert context.read('research_state', 'a')['rows'] == [{'text': 'original'}]
+
+
 def test_research_records_only_pages_actually_read_not_the_unread_database():
     context = WorkContext({'news': list(range(200))})
     page = context.read('news', offset=50, limit=10)
@@ -84,10 +107,10 @@ def test_reading_previous_analysis_does_not_reclassify_authored_text_as_source_m
     previous = {'previous_analysis': {'summary_card': {'summary': 'Prior judgment'}},
                 'previous_issue_detail': {'headline': 'Prior issue', 'items': []},
                 'previous_items': [{'sentence': 'Prior explanation'}],
-                'research_state': {'version': 1, 'materials': {}}}
+                'research_state': {'version': 1, 'materials': {'a': {'text': 'previous observation'}}}}
     context = WorkContext(previous | {'news': [{'title': 'New source'}]})
     for source in previous:
-        assert context.read(source)['rows']
+        assert context.read(source, 'a' if source == 'research_state' else '')['rows']
     assert context.consulted == []
     news = context.read('news')
     assert context.consulted == [news]

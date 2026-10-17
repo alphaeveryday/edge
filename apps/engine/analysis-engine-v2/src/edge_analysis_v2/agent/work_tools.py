@@ -13,7 +13,7 @@ def make_workspace_server(context, session):
     if context.sources:
         source_rule['enum'] = list(context.sources)
 
-    @tool('read_source', 'Read a page of initial observations from available_sources. Only source is required. Omit subject for lists; use a listed dictionary key or a research_state catalog material ID. Large research originals return result_id/next_offset for read_tool_result. On invalid_argument, use retry_arguments or allowed_values instead of guessing. Empty rows mean an empty source/page, not a tool failure. Exploration only; not a final evidence ID.',
+    @tool('read_source', 'Read a page of initial observations from available_sources. research_state requires a catalog material ID as subject. For other sources, omit subject for lists or use a listed dictionary key. Large research originals return result_id/next_offset for read_tool_result. On invalid_argument, use retry_arguments or allowed_values instead of guessing. Empty rows mean an empty source/page, not a tool failure. Exploration only; not a final evidence ID.',
           {'type':'object', 'properties':{'source':source_rule,
            'subject':{'type':'string','default':'','description':'Optional dictionary key or research_state catalog material ID; omit for list sources.'},
            'offset':{'type':'integer','minimum':0,'default':0},
