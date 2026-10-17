@@ -1,6 +1,6 @@
 """Extract intent with the model; enforce allocation constraints in code."""
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -43,6 +43,7 @@ class Funding(StrictModel):
     source: str = Field(default='', max_length=1000000)
     additional_krw: int = Field(default=0, ge=0, le=10**13)
     monthly_krw: int | None = Field(default=None, ge=0, le=10**13)
+    monthly_components_krw: list[Annotated[int, Field(strict=True, ge=0, le=10**13)]] = Field(default_factory=list, max_length=20)
     principal_krw: int | None = Field(default=None, ge=0, le=20 * 10**13)
     max_months: int | None = Field(default=None, ge=1, le=600)
     start_delay_months: int = Field(default=0, ge=0, le=600)

@@ -31,12 +31,16 @@ test('administrator keeps rebalance amounts readable inside the isolated custome
     rows: [{ instrument_id: 'US:VT', name: 'Vanguard Total World Stock Index ETF', account: '일반 계좌',
       before_krw: '0', target_krw: '500000', buy_krw: '500000', sell_krw: '0', cash_used_krw: '0' }] };
   await openDetail(page, { ...report, recommendation: { ...report.recommendation, execution } });
-  const table = page.locator('.execution-scroll');
-  await expect(table.locator('td').nth(1)).toHaveText('500,000원');
-  await expect(table.locator('th small')).toHaveCSS('display', 'block');
-  expect(await table.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
+  await expect(page.locator('.feedback-anchor')).toHaveCount(0);
+  const trades = page.locator('.improvements li').filter({ hasText: 'VT' });
+  await expect(trades.locator('.trade-amount')).toHaveText('500,000원매수');
+  await expect(trades.locator('h5')).toHaveText('VT');
+  await expect(trades.locator('.action-note')).toHaveText('일반 계좌');
+  await expect(page.locator('.execution-plan')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '내 포트폴리오에서 바꿀 것' })).toHaveCount(1);
+  expect(await trades.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await page.locator('.execution-plan').screenshot({ path: `test-results/admin-rebalance-${test.info().project.name}.png` });
+  await page.locator('.improvements').screenshot({ path: `test-results/admin-rebalance-${test.info().project.name}.png` });
 });
 
 test('administrator sees the complete customer report, separate evidence and expanded followups without changing dashboard styles', async ({ page }) => {
