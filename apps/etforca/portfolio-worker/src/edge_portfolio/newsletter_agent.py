@@ -269,7 +269,7 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
                 function = call['function']
                 log.info('instrument=%s tool=%s', holding['instrument_id'], function['name'])
                 try:
-                    if function['name'] not in {'search_sources', 'fetch_source'}:
+                    if not research or function['name'] not in {'search_sources', 'fetch_source'}:
                         raise ValueError('TOOL_NOT_ALLOWED')
                     answer = await evidence.call(function['name'], json.loads(function['arguments']))
                 except (ValueError, TypeError) as error:

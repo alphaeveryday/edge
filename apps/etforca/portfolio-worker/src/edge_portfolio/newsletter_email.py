@@ -33,6 +33,13 @@ def safe_url(value):
         return SITE
 
 
+def scrub(value):
+    """Remove the SES marker until none is left: one pass would rebuild a nested '{{amazonSESUnsub' + marker + 'scribeUrl}}'."""
+    while UNSUBSCRIBE in value:
+        value = value.replace(UNSUBSCRIBE, '')
+    return value
+
+
 def e(value):
     return escape(str(value))
 
@@ -335,7 +342,10 @@ def daily(edition, cards, fmt='B', *, weights=None, purpose='long_term'):
     ready = [card for card in cards if not card.get('unavailable') and card.get('format') == fmt]
     top = lead(ready, fmt)
     if fmt == 'F' and top is None and ready:
-        headline, dek = '오늘은 중요한 변화가 없어요', f'보유 {len(cards)}종목을 모두 점검했어요. 등락은 평소 범위 안이고 보유 이유를 흔드는 새 사건은 확인되지 않았어요.'
+        missing = len(cards) - len(ready)
+        headline = '오늘은 중요한 변화가 없어요'
+        dek = (f'자료를 확인한 {len(ready)}종목은 등락이 평소 범위 안이고 보유 이유를 흔드는 새 사건이 없었어요.'
+               + (f' {missing}종목은 오늘 자료를 확보하지 못했어요.' if missing else ''))
     elif top:
         headline, dek = top['headline'], top['dek']
     elif other := next((c for c in cards if not c.get('unavailable')), None):
@@ -352,15 +362,15 @@ def daily(edition, cards, fmt='B', *, weights=None, purpose='long_term'):
         flagged = [c for c in ready if c['significant'] or alert(c)]
         letter.add(row(f'''{rule(1, INK)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0"><tr>
 <td width="96" valign="top" style="font-family:{SERIF};font-size:58px;line-height:1;font-weight:700;color:{INK}">{len(flagged)}</td>
-<td valign="top"><p style="{P};margin:4px 0 4px;color:{INK};font-size:17px;font-weight:700">건의 중요 변화</p><p style="{P};color:{MUTED};font-size:13px;line-height:1.7">보유 {len(cards)}종목 점검 완료{' · 변화 없는 종목은 한 줄로 줄였어요' if len(flagged) < len(ready) else ''}</p></td></tr></table>''', '0 32px 34px'),
-                   f'중요 변화 {len(flagged)}건 · 보유 {len(cards)}종목 점검', '')
+<td valign="top"><p style="{P};margin:4px 0 4px;color:{INK};font-size:17px;font-weight:700">건의 중요 변화</p><p style="{P};color:{MUTED};font-size:13px;line-height:1.7">보유 {len(cards)}종목 중 {len(ready)}종목 점검{' · 변화 없는 종목은 한 줄로 줄였어요' if len(flagged) < len(ready) else ''}</p></td></tr></table>''', '0 32px 34px'),
+                   f'중요 변화 {len(flagged)}건 · 보유 {len(cards)}종목 중 {len(ready)}종목 점검', '')
         quiet = [c for c in ready if c not in flagged]
         if quiet:
             lines = ''.join(f'''<tr><td style="padding:12px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;font-weight:700;color:{INK};word-break:keep-all" width="40%">{e(c['name'])}</td>
 <td style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">{move(quote_of(c).get('change_pct'))[0]} &nbsp;{e(c['signal'])}</td></tr>''' for c in quiet)
             letter.add(row(label('변화 없음') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {HAIR}">{lines}</table>', '0 32px 38px'),
                        '변화 없음:', *[f"  {c['name']} {move(quote_of(c).get('change_pct'))[1]} — {c['signal']}" for c in quiet], '')
-        order = flagged + [c for c in cards if c not in ready]
+        order = sorted(flagged, key=lambda c: c is not top) + [c for c in cards if c not in ready]
     if fmt in 'AB':
         ledger(letter, order, weights, big=fmt == 'A')
     if fmt == 'C':
@@ -409,9 +419,9 @@ def daily(edition, cards, fmt='B', *, weights=None, purpose='long_term'):
 AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다. 투자 판단과 그 결과의 책임은 투자자 본인에게 있어요. 신청하신 보유 종목을 기준으로 보내드렸어요.<br><br>
 <a href="{SITE}" style="color:{INK}">ETF Orca에서 포트폴리오 보기</a> &nbsp;·&nbsp; <a href="{UNSUBSCRIBE}" style="color:{MUTED}">수신 거부</a>''')
     # SES expands this marker after rendering. Only our footer may contain it, never external text/URLs.
-    rows = [part.replace(UNSUBSCRIBE, '') for part in letter.rows]
-    plain = [line.replace(UNSUBSCRIBE, '') for line in letter.plain]
+    rows = [scrub(part) for part in letter.rows]
+    plain = [scrub(line) for line in letter.plain]
     # Model text reaches the Subject header now: never let a line break into it.
-    title, preheader = (' '.join(value.replace(UNSUBSCRIBE, '').split()) for value in (title, dek))
+    title, preheader = (' '.join(scrub(value).split()) for value in (title, dek))
     plain += ['ETF Orca: ' + SITE, '수신 거부: ' + UNSUBSCRIBE, 'AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다.']
     return title, shell(title, preheader, rows, footer), '\n'.join(plain)

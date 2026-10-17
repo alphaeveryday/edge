@@ -535,7 +535,8 @@ def test_unavailable_or_stale_format_cards_become_notices_instead_of_breaking_th
 
 async def test_shared_evidence_mode_writes_every_format_from_the_same_sources_without_new_research():
     payloads = []
-    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/outlook/091160.json', 'excerpt': '우리 전망'}])
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/outlook/091160.json', 'excerpt': '우리 전망'},
+                                        {'id': 'article', 'url': 'https://news.example/1', 'excerpt': '이미 읽은 기사 본문'}])
     for fmt in agent.FORMATS:
         async def model(payload, fmt=fmt):
             payloads.append(payload)
@@ -544,9 +545,9 @@ async def test_shared_evidence_mode_writes_every_format_from_the_same_sources_wi
                                         model_call=model, evidence=evidence, outlook=evidence.sources[0], quote_loader=lambda *_: None, research=False)
         assert result['format'] == fmt
         assert payloads[-1]['tools'] == [], 'Formats compared in one experiment must not each search for different evidence'
-        assert '우리 전망' in payloads[-1]['messages'][1]['content']
+        assert '이미 읽은 기사 본문' in payloads[-1]['messages'][1]['content'], 'Without research the already-read articles are the only evidence'
         assert f'# {fmt}.' in payloads[-1]['messages'][0]['content'], 'Each format must run under its own writing skill'
-    assert len(evidence.sources) == 1, 'Reusing evidence must not duplicate the outlook source'
+    assert len(evidence.sources) == 2, 'Reusing evidence must not duplicate the outlook source'
 
 
 def test_action_card_compares_every_choice_instead_of_recommending_one():
@@ -716,3 +717,36 @@ def test_quiet_exception_letter_has_no_empty_follow_up_box():
 def test_model_headline_cannot_break_the_subject_header():
     subject, _, _ = email.daily(date(2026, 10, 18), [letter_card('B', headline='첫 줄\r\nBcc: x@example.test')], 'B')
     assert '\r' not in subject and '\n' not in subject
+
+
+async def test_shared_evidence_mode_refuses_a_search_the_model_invents():
+    calls = []
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'}])
+    async def model(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {'choices': [{'message': {'role': 'assistant', 'tool_calls': [{'id': '1', 'function': {'name': 'search_sources', 'arguments': '{}'}}]}}]}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(B_CARD)}}]}
+    await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                           evidence=evidence, outlook=evidence.sources[0], quote_loader=lambda *_: None, research=False)
+    assert any('TOOL_NOT_ALLOWED' in (m.get('content') or '') for m in calls[-1]['messages'] if m['role'] == 'tool'),         'A format compared on fixed evidence must not fetch new sources'
+
+
+def test_nested_unsubscribe_marker_cannot_be_rebuilt_from_model_text():
+    nested = '{{amazonSESUnsub' + email.UNSUBSCRIBE + 'scribeUrl}}'
+    subject, html, plain = email.daily(date(2026, 10, 18), [letter_card('B', headline=nested, dek='https://evil.example/?t=' + nested)], 'B')
+    assert email.UNSUBSCRIBE not in subject
+    assert html.count(email.UNSUBSCRIBE) == plain.count(email.UNSUBSCRIBE) == 1
+
+
+def test_exception_letter_never_counts_a_missing_holding_as_checked():
+    missing = {'instrument_id': 'US:X', 'name': 'X', 'unavailable': True, 'headline': '확인하지 못했어요', 'dek': '', 'sources': []}
+    _, _, text = email.daily(date(2026, 10, 18), [letter_card('F', quote={**QUOTE, 'change_pct': 0.1, 'sigma_pct': 2.0}), missing], 'F')
+    assert '1종목은 오늘 자료를 확보하지 못했어요' in text and '보유 2종목 중 1종목 점검' in text
+
+
+def test_exception_lead_story_is_printed_first():
+    minor = letter_card('F', 'US:A', 'A', headline='작은 소식', significant=True, quote={**QUOTE, 'change_pct': 0.5, 'sigma_pct': 2.0})
+    shock = letter_card('F', 'US:B', 'B', headline='큰 급락', quote={**QUOTE, 'change_pct': -9.0, 'sigma_pct': 2.0})
+    _, _, text = email.daily(date(2026, 10, 18), [minor, shock], 'F')
+    assert text.index('01. B') < text.index('02. A — 작은 소식')
