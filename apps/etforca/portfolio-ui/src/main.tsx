@@ -10,10 +10,13 @@ import { ProgressView } from './ProgressView';
 import { startPresence } from './presence';
 import { trackScreen } from './analytics';
 import { NewsletterConfirmation } from './NewsletterConfirmation';
+import { Dashboard } from './Dashboard';
+import { preview, jobKey, pendingKey } from './preview';
+import './theme.css';
 
 function App() {
   useEffect(startPresence, []);
-  const [jobId, setJobId] = useState(() => localStorage.getItem('edge-portfolio-job'));
+  const [jobId, setJobId] = useState(() => preview ? (preview === 'input' ? null : 'preview') : localStorage.getItem(jobKey));
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -46,18 +49,18 @@ function App() {
     setBusy(true); setError('');
     const serialized = JSON.stringify(input);
     let pending: { input: string; key: string } | null = null;
-    try { pending = JSON.parse(sessionStorage.getItem('edge-portfolio-pending') || 'null'); } catch { /* Invalid local state is replaced. */ }
+    try { pending = JSON.parse(sessionStorage.getItem(pendingKey) || 'null'); } catch { /* Invalid local state is replaced. */ }
     const key = pending?.input === serialized ? pending.key : crypto.randomUUID();
-    sessionStorage.setItem('edge-portfolio-pending', JSON.stringify({ input: serialized, key }));
+    sessionStorage.setItem(pendingKey, JSON.stringify({ input: serialized, key }));
     try {
       await ensureVisitorSession();
       const next = await request<Job>('/analyses', { method: 'POST', headers: { 'Idempotency-Key': key }, body: serialized });
-      localStorage.setItem('edge-portfolio-job', next.id); sessionStorage.removeItem('edge-portfolio-pending');
+      localStorage.setItem(jobKey, next.id); sessionStorage.removeItem(pendingKey);
       setJob(next); setJobId(next.id); window.scrollTo(0, 0);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  function reset() { localStorage.removeItem('edge-portfolio-job'); setJobId(null); setJob(null); setError(''); }
-  return <main className="app">{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
+  function reset() { localStorage.removeItem(jobKey); setJobId(null); setJob(null); setError(''); }
+  return <main className="app"><a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'}>내 포트폴리오 ↗</a>{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
     {error && <p role="alert" className="error">{error}</p>}
     {!jobId ? <InputForm onSubmit={submit} busy={busy} /> : job?.state === 'succeeded' && job.result ? <><ReportView report={job.result} feedbackJobId={jobId} /><Followup jobId={jobId} /><button className="secondary" onClick={reset}>새 포트폴리오 분석하기</button></> : job?.state === 'failed' ? <><article className="ans"><h1>분석을 마치지 못했어요.</h1><p>{job.failure === 'SEARCH_RATE_LIMIT' ? '외부 검색 서비스의 요청 제한으로 자료를 모두 확인하지 못했어요. 잠시 후 다시 시도해 주세요.' : job.failure === 'TIMED_OUT' ? '분석 또는 자료 조회의 제한 시간 안에 근거 확인을 마치지 못했어요. 전체 분석은 최대 10분까지 진행해요.' : '자료 조회 또는 결과 검증 중 문제가 생겼어요.'} 중단된 분석은 최종 추천으로 사용하지 마세요.</p><button className="primary" onClick={reset}>다시 입력하기</button></article>
       {job.result?.partial_report && Object.keys(job.result.partial_report.sections || {}).length > 0 && <details><summary>중단 전 작성된 분석 보기</summary><ReportView report={{ ...job.result.partial_report, recommendation: null,
@@ -82,6 +85,7 @@ function Entry() {
     window.addEventListener('hashchange', confirmLink);
     return () => window.removeEventListener('hashchange', confirmLink);
   }, []);
-  return token ? <NewsletterConfirmation key={token} token={token} /> : <App />;
+  const dashboard = new URLSearchParams(location.search).get('view') === 'dashboard' || preview === 'dashboard' || preview === 'empty';
+  return <>{preview && <div className="preview-bar"><b>테스트 화면 · 실제 분석·메일 발송 없음 · {import.meta.env.VITE_BUILD_VERSION}</b><label>화면<select value={preview} onChange={e => { location.href = '?preview=' + e.target.value; }}>{[['input', '입력'], ['queued', '접수'], ['running', '분석 중'], ['result', '결과·저장 팝업'], ['partial', '일부 자료 없음'], ['failed', '분석 실패'], ['dashboard', '대시보드'], ['empty', '빈 대시보드'], ['newsletter', '구독 확인']].map(([v, label]) => <option key={v} value={v}>{label}</option>)}</select></label><button onClick={() => { for (const key of ['edge-preview-workbook', 'edge-preview-empty-workbook', 'edge-preview-job', 'edge-preview-input', 'edge-chat-preview', 'edge-chat-preview-recovery', 'edge-portfolio-feedback:preview']) localStorage.removeItem(key); location.reload(); }}>테스트 초기화</button></div>}{token || preview === 'newsletter' ? <NewsletterConfirmation key={token} token={token || 'preview'} /> : dashboard ? <Dashboard /> : <App />}</>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><Entry /></React.StrictMode>);
