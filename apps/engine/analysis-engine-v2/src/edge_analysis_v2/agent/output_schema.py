@@ -1,5 +1,6 @@
 """Agent response schemas; body text is submitted through editing tools."""
 from copy import deepcopy
+from edge_analysis_v2.analysis.text_replacement import replace_exact
 
 from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, MOVEMENT_LIMITS, TEXT_LIMITS, TITLE_MAX_LENGTH
 
@@ -71,15 +72,85 @@ def _optional_object(schema):
         key: _optional_object(value) for key, value in schema['properties'].items()}}
 
 
+FIELD_TEXT_PATHS = {
+    'summary_card.title': ('summary_card', 'title'),
+    'summary_card.summary': ('summary_card', 'summary'),
+    'factors.sentence': ('factors', None, 'sentence'),
+    'conclusion.title': ('conclusion', 'title'),
+    'conclusion.sentence': ('conclusion', 'sentence'),
+    'conclusion.change_condition': ('conclusion', 'change_condition'),
+    'conclusion.supports.label': ('conclusion', 'supports', None, 'label'),
+    'conclusion.burdens.label': ('conclusion', 'burdens', None, 'label'),
+    'issue_detail.headline': ('issue_detail', 'headline'),
+    'issue_detail.items.title_keyword': ('issue_detail', 'items', None, 'title_keyword'),
+    'issue_detail.items.sentence': ('issue_detail', 'items', None, 'sentence'),
+}
+REFERENCED_TEXT_FIELDS = {field for field in FIELD_TEXT_PATHS
+                          if field.startswith(('conclusion.supports.', 'conclusion.burdens.', 'issue_detail.items.'))}
 OUTLOOK_REVISION = _optional_object(OUTLOOK)
+OUTLOOK_REVISION['properties']['text_replacements'] = {'type': 'array', 'minItems': 1, 'items': obj({
+    'field': {'type': 'string', 'enum': list(FIELD_TEXT_PATHS)},
+    'item_number': {'type': 'integer', 'minimum': 1, 'description': '배열의 기존 항목 번호. 1부터 시작하며 배열 필드에만 필요합니다.'},
+    'old_text': TEXT, 'new_text': {'type': 'string'},
+    'tool_run_ids': REFS | {'description': '이슈 항목·결론 키워드 치환에 필수. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다.'},
+}, ['field', 'old_text', 'new_text'])}
 
 
 def merge_outlook_revision(previous, changes):
-    """Retain omitted properties and replace explicitly submitted arrays or scalars."""
+    """Merge partial fields and exact text edits against the same published predecessor."""
     result = deepcopy(previous)
     for key, value in changes.items():
+        if key == 'text_replacements':
+            continue
         result[key] = (merge_outlook_revision(result.get(key, {}), value)
                        if isinstance(value, dict) else deepcopy(value))
+    edits = changes.get('text_replacements', [])
+    if not isinstance(edits, list) or ('text_replacements' in changes and not edits):
+        raise ValueError('text_replacements requires a nonempty list')
+    targets, reference_updates = set(), {}
+    for edit in edits:
+        if not isinstance(edit, dict) or not isinstance(edit.get('field'), str) or edit['field'] not in FIELD_TEXT_PATHS:
+            raise ValueError('Unknown text replacement field')
+        field = edit['field']
+        path = FIELD_TEXT_PATHS[field]
+        number = edit.get('item_number')
+        if None in path:
+            if type(number) is not int or number < 1:
+                raise ValueError('Array text replacement requires a positive item_number')
+            path = tuple(number - 1 if part is None else part for part in path)
+        elif 'item_number' in edit:
+            raise ValueError('item_number is only allowed for array fields')
+        if path in targets:
+            raise ValueError('Duplicate text replacement target')
+        targets.add(path)
+        submitted = changes
+        for part in path:
+            if not isinstance(submitted, dict):
+                raise ValueError('Text replacement conflicts with submitted parent array or value')
+            if part not in submitted:
+                break
+            submitted = submitted[part]
+        else:
+            raise ValueError('Text replacement conflicts with submitted field')
+        source, destination = previous, result
+        try:
+            for part in path[:-1]:
+                source, destination = source[part], destination[part]
+            original = source[path[-1]]
+        except (KeyError, IndexError, TypeError):
+            raise ValueError('Text replacement requires an existing field') from None
+        destination[path[-1]] = replace_exact(original, edit.get('old_text'), edit.get('new_text'))
+        if field in REFERENCED_TEXT_FIELDS:
+            refs = edit.get('tool_run_ids')
+            if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref for ref in refs) or len(set(refs)) != len(refs):
+                raise ValueError('Referenced text replacement requires unique nonempty tool_run_ids')
+            parent = path[:-1]
+            if parent in reference_updates and reference_updates[parent] != refs:
+                raise ValueError('Conflicting tool_run_ids for the same item')
+            reference_updates[parent] = refs
+            destination['tool_run_ids'] = deepcopy(refs)
+        elif 'tool_run_ids' in edit:
+            raise ValueError('This text field does not have tool_run_ids')
     return result
 
 
