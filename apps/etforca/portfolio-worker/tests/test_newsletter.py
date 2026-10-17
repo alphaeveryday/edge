@@ -500,7 +500,7 @@ async def test_shutdown_after_newsletter_claim_does_not_start_research_or_spend_
 @pytest.mark.parametrize('failed', [False, True])
 async def test_discarded_late_result_is_never_logged_as_a_saved_outcome(monkeypatch, caplog, failed):
     from edge_portfolio import newsletter_work
-    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setenv('DEEPSEEK_NEWSLESTTER_API_KEY', 'test-only')
     monkeypatch.setattr(news, 'claim_content', lambda: {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'edition': date(2026, 10, 16)})
     monkeypatch.setattr(news, 'finish_content', lambda *args, **kwargs: False)
     async def write(*args, **kwargs):
@@ -512,6 +512,27 @@ async def test_discarded_late_result_is_never_logged_as_a_saved_outcome(monkeypa
     assert await newsletter_work.work_once() is True
     assert 'newsletter=discarded' in caplog.text
     assert 'newsletter=ready' not in caplog.text and 'newsletter=failed' not in caplog.text
+
+
+@pytest.mark.parametrize('dedicated_key', [True, False])
+async def test_newsletter_never_charges_the_portfolio_analysis_key(monkeypatch, dedicated_key):
+    from edge_portfolio import newsletter_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'analysis-only')
+    monkeypatch.delenv('DEEPSEEK_NEWSLESTTER_API_KEY', raising=False)
+    if dedicated_key:
+        monkeypatch.setenv('DEEPSEEK_NEWSLESTTER_API_KEY', 'newsletter-only')
+    job = {'instrument_id': 'KR:091160', 'name': 'KODEX 반도체', 'edition': date(2026, 10, 17)}
+    monkeypatch.setattr(news, 'claim_content', lambda: job)
+    outcomes = []
+    monkeypatch.setattr(news, 'finish_content', lambda job, **outcome: outcomes.append(outcome) or True)
+    used_keys = []
+    async def write(holding, edition, key):
+        used_keys.append(key)
+        return {'issue': 'newsletter'}
+    monkeypatch.setattr(newsletter_work, 'write_card', write)
+    assert await newsletter_work.work_once() is True
+    assert used_keys == (['newsletter-only'] if dedicated_key else [])
+    assert outcomes == ([{'value': {'issue': 'newsletter'}}] if dedicated_key else [{'failure': 'KeyError'}])
 
 
 def test_daily_deadline_rotates_waiting_recipients_and_skips_already_delivered(newsletter_db, monkeypatch):

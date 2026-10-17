@@ -17,7 +17,7 @@ async def work_once(stopping=None):
         return False
     try:
         result = await write_card({'instrument_id': job['instrument_id'], 'name': job['name']},
-                                  job['edition'], os.environ['DEEPSEEK_API_KEY'])
+                                  job['edition'], os.environ['DEEPSEEK_NEWSLESTTER_API_KEY'])
         saved = newsletter_store.finish_content(job, value=result)
         log.info('instrument=%s edition=%s newsletter=%s', job['instrument_id'], job['edition'], 'ready' if saved else 'discarded')
     except Exception as error:
