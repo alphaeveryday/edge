@@ -180,7 +180,7 @@ for (const [label, rating] of [['좋아요', 'good'], ['그냥 그래요', 'okay
   test(`feedback after performance submits ${rating} once without customer data`, async ({ page, baseURL }) => {
     const events = await instrument(page, baseURL!);
     await feedbackReport(page);
-    const popup = page.getByRole('dialog', { name: '이번 분석은 어떠셨나요?' });
+    const popup = page.getByRole('dialog', { name: '포트폴리오 저장' });
     await expect(popup).toHaveCount(0);
     await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
     await expect(popup).toBeVisible();
