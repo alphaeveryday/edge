@@ -12,6 +12,7 @@ import { trackScreen } from './analytics';
 import { NewsletterConfirmation } from './NewsletterConfirmation';
 import { Dashboard } from './Dashboard';
 import { preview, jobKey, pendingKey } from './preview';
+import './theme.css';
 
 function App() {
   useEffect(startPresence, []);
