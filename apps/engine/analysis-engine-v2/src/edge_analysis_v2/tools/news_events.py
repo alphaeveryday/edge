@@ -175,18 +175,21 @@ class NewsEvents:
             previous = old.get(identity)
             key = event_key(row)
             if previous is None:
-                change = {'DUPLICATE_REBROADCAST': 'repeat_only', 'CORRECTION': 'correction'}.get(row.get('novelty'),
-                          'new_fact' if key in old_keys else 'new_event')
+                change = 'new_event' if key not in old_keys else {
+                    'DUPLICATE_REBROADCAST': 'repeat_only', 'CORRECTION': 'correction'
+                }.get(row.get('novelty'), 'new_fact')
                 if row['status'] == 'REJECTED':
                     change = 'rejected'
                 rows.append({'event_id': identity, 'event_key': key, 'change': change, 'news_ids': row['news_ids'],
-                             'available_at': row['available_at'], 'event_date': row.get('event_date'),
+                             'available_at': row['available_at'], 'event_date': row.get('event_date'), 'novelty': row.get('novelty'),
                              'previously_available_but_new_to_scope': instant(row['available_at']) <= instant(self.previous['analysis_at'])})
                 continue
             if row.get('status') != previous.get('status'):
                 rows.append({'event_id': identity, 'event_key': key, 'change': 'rejected' if row['status'] == 'REJECTED' else 'status_changed'})
             if any(row.get(k) != previous.get(k) for k in ('thread_id', 'novelty', 'unknown_reason')):
-                rows.append({'event_id': identity, 'event_key': key, 'change': 'link_changed', 'previous_event_key': event_key(previous)})
+                rows.append({'event_id': identity, 'event_key': key, 'change': 'link_changed',
+                             'previous_event_key': event_key(previous), 'previous_novelty': previous.get('novelty'),
+                             'novelty': row.get('novelty'), 'news_ids': row['news_ids']})
             if any(row.get(k) != previous.get(k) for k in ('stage', 'event_type', 'event_date', 'news_ids', 'issuer_ids', 'related_entity_ids')):
                 rows.append({'event_id': identity, 'event_key': key, 'change': 'facts_or_evidence_changed', 'news_ids': row['news_ids']})
         for identity in old.keys() - self.events.keys():

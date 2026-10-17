@@ -199,3 +199,29 @@ def test_rebroadcast_only_thread_keeps_one_representative_without_inventing_orig
     assert page['items'][0]['representative_rebroadcast'] is True
     assert page['original_unavailable'] is True
     assert page['folded_rebroadcast_count'] == 1
+
+
+def test_first_observation_of_a_global_rebroadcast_is_new_to_this_analysis():
+    before = source()
+    current = source()
+    current['context']['analysis_at'] = '2026-10-17T00:00:00+00:00'
+    add(current, 'first-observed', thread='global-thread', novelty='DUPLICATE_REBROADCAST')
+    tools = DatabaseTools(current)
+    tools.set_previous_news_snapshot(DatabaseTools(before).news_snapshot())
+    row = result(tools, 'get_event_changes')['items'][0]
+    assert row['change'] == 'new_event'
+    assert row['novelty'] == 'DUPLICATE_REBROADCAST'
+    assert row['news_ids'] == ['first-observed']
+
+
+def test_existing_novelty_revision_reports_previous_and_current_classification():
+    before = source(); add(before, 'a', thread='t', novelty='FIRST_IN_THREAD')
+    current = deepcopy(before)
+    current['context']['analysis_at'] = '2026-10-17T00:00:00+00:00'
+    current['news_events'][0]['novelty'] = 'CORRECTION'
+    tools = DatabaseTools(current)
+    tools.set_previous_news_snapshot(DatabaseTools(before).news_snapshot())
+    row = result(tools, 'get_event_changes')['items'][0]
+    assert row['change'] == 'link_changed'
+    assert row['previous_novelty'] == 'FIRST_IN_THREAD'
+    assert row['novelty'] == 'CORRECTION'
