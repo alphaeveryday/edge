@@ -114,6 +114,6 @@ class WorkContext:
         page = {'source': source, 'subject': subject, 'columns': columns,
                 'rows': deepcopy(rows[offset:end]), 'total_rows': len(rows),
                 'next_offset': end if end < len(rows) else None}
-        if source not in ('previous_analysis', 'previous_items', 'research_state') and page not in self.consulted:
+        if source not in ('previous_analysis', 'previous_issue_detail', 'previous_items', 'research_state') and page not in self.consulted:
             self.consulted.append(deepcopy(page))
         return page
