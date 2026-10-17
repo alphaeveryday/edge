@@ -268,7 +268,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                         FROM tool_runs r JOIN tool_definitions d USING(tool_id)
                         WHERE r.tool_run_id=ANY(%s) AND r.status='completed'
                           AND d.function_name='get_issue_evidence' AND r.arguments->>'include_body'='false'
-                        ORDER BY r.started_at,r.tool_run_id""", (sorted(set(listed_references(previous))),))
+                        ORDER BY r.started_at,r.tool_run_id""", (sorted(set(listed_references(
+                            [previous, initial.get('previous_issue_detail')]))),))
                     return {article['news_id']: article for (articles,) in cur.fetchall() for article in articles}
             prior_news = run(selected_news) if previous else {}
             old_documents = {row['news_id']: row for row in baseline['documents']} if baseline else {}
@@ -449,7 +450,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
                 compare_explanations=kind=='outlook' and not previous, final_check=unciteable,
-                effort='low' if previous else 'high', cache_scope=cache_scope)), references)
+                effort='low' if kind == 'movement' else 'high', cache_scope=cache_scope)), references)
             if previous_fields is not None:
                 Draft202012Validator(revision_schema).validate(response)
                 response = merge_outlook_revision(previous_fields, response)

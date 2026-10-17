@@ -23,8 +23,8 @@ def database():
     params = conninfo_to_dict(dsn)
     if (params.get('host') not in ('localhost', '127.0.0.1')
             or params.get('hostaddr') not in (None, '127.0.0.1')
-            or params.get('port') != '15449' or params.get('dbname') not in {'testanalysis', 'analysis_v2'}):
-        raise ValueError('News integration tests require localhost:15449/testanalysis or analysis_v2')
+            or params.get('port') not in {'15449', '55439'} or params.get('dbname') not in {'testanalysis', 'analysis_v2'}):
+        raise ValueError('News integration tests require localhost port 15449 or 55439 and testanalysis or analysis_v2')
     identity = 'news-snapshot-test-' + uuid4().hex
     at = datetime(2026, 10, 17, tzinfo=timezone.utc)
     context = {'etf_code': '069500', 'analysis_at': at.isoformat()}

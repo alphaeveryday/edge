@@ -96,14 +96,14 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
             'conclusion': {'title': '계약 확인', 'supports': [], 'burdens': [], 'sentence': '이행을 확인해요.'},
             'issue_detail': {'headline': '계약', 'items': [dict(title_keyword='계약', sentence='공급 물량을 확보했어요.', sentiment='positive', tool_run_ids=[ref])]}})
         return deepcopy(answer)
-    before, previous_id = request('outlook', first, friday)
+    before, previous_id = request('outlook', first, friday, previous_analysis_id=None)
     saturday = deepcopy(friday)
     saturday['context']['analysis_at'] = '2026-09-26T08:30:00+09:00'
     async def revise(**kwargs):
         assert kwargs['initial']['previous_analysis'] == before
         assert 'revision-investigation' in kwargs['skills'] and not kwargs['compare_explanations']
         assert 'analysis-report-writing' not in kwargs['skills']
-        assert kwargs['effort'] == 'low'
+        assert kwargs['effort'] == 'high'
         result = deepcopy(answer)
         result['issue_detail']['items'][0]['tool_run_ids'] = before['detail']['items'][0]['tool_run_ids']
         return result  # No body edit and no repeated news query.
@@ -125,7 +125,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         news_reference(kwargs)  # Consulted but not selected for publication: still research.
         assert 'cause-investigation' in kwargs['skills'] and 'revision-investigation' not in kwargs['skills']
         assert 'analysis-report-writing' not in kwargs['skills']
-        assert kwargs['effort'] == 'high'
+        assert kwargs['effort'] == 'low'
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
@@ -269,7 +269,7 @@ def test_contract_audit_reads_committed_assembly_and_detects_stored_regression(r
 def run_context(tmp_path):
     dsn=os.environ['V2_FACTOR_TEST_DSN']
     config=conninfo_to_dict(dsn)
-    assert config.get('host')=='127.0.0.1' and config.get('port') in {'55440', '15449'} and config.get('dbname')=='analysis_v2'
+    assert config.get('host')=='127.0.0.1' and config.get('port') in {'55439', '55440', '15449'} and config.get('dbname')=='analysis_v2'
     identities=[]
     def factory():
         return psycopg.connect(dsn,autocommit=True)

@@ -18,7 +18,7 @@ def local_runs(tmp_path):
     if not dsn:
         pytest.skip('V2_NEWS_TEST_DSN is required for real PostgreSQL publication verification')
     config = conninfo_to_dict(dsn)
-    assert config.get('host') == '127.0.0.1' and config.get('port') == '15449'
+    assert config.get('host') == '127.0.0.1' and config.get('port') in {'15449', '55439'}
     assert config.get('dbname') == 'analysis_v2'
     ids = []
     def factory():
@@ -92,6 +92,11 @@ def test_revision_uses_the_completed_predecessors_snapshot_and_real_revision_pro
     async def revision(**kwargs):
         # This is the non-staged branch actually used when an outlook already exists.
         assert kwargs['initial']['previous_analysis'] == previous
+        assert kwargs['initial']['previous_issue_detail']['headline'] == '공급 일정'
+        assert 'research_state' in kwargs['initial']
+        assert all(material.get('definition', {}).get('function_name') != 'capture_news_snapshot'
+                   for material in kwargs['initial']['research_state']['materials'].values())
+        assert kwargs['effort'] == 'high'
         start = kwargs['initial']['news_research']
         assert start['mode'] == 'revision' and start['baseline_status'] == 'ready'
         assert start['previous_analysis_id'] == previous_id
@@ -103,8 +108,34 @@ def test_revision_uses_the_completed_predecessors_snapshot_and_real_revision_pro
         assert current.previous_snapshot == source.news_snapshot()
         assert 'get_event_changes' in kwargs['prompt']
         assert '새로운 중요 사건' in kwargs['prompt']
-        return write(kwargs, current)
-    execute(current, revision, previous_analysis_id=previous_id, staged=True)
+        # A valid inherited issue remains publishable without re-fetching its article.
+        assert '이슈 상세에는 이번 실행의 근거가 필요하다' not in kwargs['prompt']
+        return {}
+    result, identity = execute(current, revision, previous_analysis_id=previous_id, staged=True)
+    assert result['detail'] == previous['detail']
+    with factory() as conn:
+        refs = conn.execute('SELECT tool_run_ids FROM outlook_issue_items WHERE analysis_id=%s', (identity,)).fetchone()[0]
+        assert refs == previous['detail']['items'][0]['tool_run_ids']
+
+
+def test_prior_news_includes_an_article_cited_only_by_the_inherited_issue(local_runs):
+    execute, _, _ = local_runs
+    source = SnapshotSource(make_fixture())
+    async def first(**kwargs):
+        result = write(kwargs, source)
+        reference = kwargs['call']('get_issue_evidence', {
+            'news_ids': [source.fixture['news'][1]['news_id']], 'include_body': False})['tool_run_id']
+        result['issue_detail']['items'][0]['tool_run_ids'] = [reference]
+        return result
+    _, previous_id = execute(source, first, previous_analysis_id=None)
+    updated = deepcopy(source.fixture)
+    updated['context']['analysis_at'] = (datetime.fromisoformat(updated['context']['analysis_at']) + timedelta(hours=1)).isoformat()
+    async def revision(**kwargs):
+        selected = kwargs['initial']['news_research']['previous_news']
+        assert {row['news_id'] for row in selected} == {row['news_id'] for row in source.fixture['news'][:2]}
+        assert all(row['in_current_scope'] for row in selected)
+        return {}
+    execute(SnapshotSource(updated), revision, previous_analysis_id=previous_id)
 
 
 def test_repair_exhaustion_cannot_publish_an_investigation_with_invented_evidence(local_runs):
@@ -154,7 +185,7 @@ def test_revision_rechecks_prior_article_by_id_and_keeps_unchanged_body(local_ru
     async def revision(**kwargs):
         selected = kwargs['initial']['news_research']['previous_news']
         assert len(selected) == 1 and selected[0]['in_current_scope'] is True
-        # Retained body references stay valid, while issue detail needs current-run evidence.
+        # When a fact needs rechecking, its known article ID avoids a repeated search.
         reference = kwargs['call']('get_issue_evidence', {
             'news_ids': [selected[0]['news_id']], 'include_body': False})['tool_run_id']
         return fields(reference)

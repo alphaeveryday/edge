@@ -6,7 +6,7 @@
 
 AWS에서 실행하고 로컬에서는 S3에 저장된 입력·툴 호출·최종 화면·DB 근거를 자동으로 내려받는다. 로컬에 DeepSeek 키나 DB 터널은 필요 없다.
 
-전망 배치는 주말을 포함해 실행한다. 실제 완료된 직전 분석이 없는 최초 발행은 `high`, 직전 분석이 있는 수정은 `low`로 실행한다. 최초 전망의 조사·작성·필드 단계는 모두 `high`이며 배치·수동·주말 여부로 강도가 달라지지 않는다. 적용 강도는 실제 모델 호출 시 실행 manifest의 `job.reasoning_effort`와 모델 실행 환경에 기록한다.
+전망 배치는 주말을 포함해 실행한다. 가격변동 설명은 최초·수정 모두 `low`, 전망은 최초·수정 모두 `high`로 실행한다. 최초 전망의 조사·작성·필드 단계도 모두 `high`이며 배치·수동·주말 여부로 강도가 달라지지 않는다. 적용 강도는 실제 모델 호출 시 실행 manifest의 `job.reasoning_effort`와 모델 실행 환경에 기록한다.
 
 ```sh
 python -m edge_analysis_v2.cloud.dashboard --profile edge-v2-observer --runs-dir /path/to/cloud-runs --port 8765
@@ -89,7 +89,7 @@ node --test integration_tests/test_review_refresh.cjs integration_tests/test_pro
 
 DB 통합 테스트는 Flyway 마이그레이션이 적용된 로컬 테스트 DB가 필요하다. `V2_TEST_DSN`은 `127.0.0.1:55439/analysis_v2`, `V2_FACTOR_TEST_DSN`은 `127.0.0.1:55440/analysis_v2`, `V2_SOURCE_TEST_DSN`은 `127.0.0.1:55445/edge`(cloud 스키마)를 가리켜야 한다. 실제 분석 DB를 테스트 대상으로 허용하지 않는다.
 
-뉴스 사건 탐색·전망 갱신 검증은 독립 로컬 PostgreSQL `127.0.0.1:15449/analysis_v2`도 사용한다. `V2_NEWS_TEST_DSN`을 지정해 `test_event_research_service.py`와 `test_postgres_news_snapshots.py`를 실행한다. 같은 주소를 `V2_FACTOR_TEST_DSN`에 지정하면 뉴스 SQL·분석 서비스 테스트를, `V2_EVIDENCE_TEST_DSN`에 지정하면 선택 근거 테스트를, `V2_TEST_DSN`에 지정하면 클라우드 연결 수명 테스트를 실행할 수 있다. 다른 통합 테스트의 전용 주소 조건은 그대로다.
+뉴스 사건 탐색·전망 갱신 검증은 독립 로컬 PostgreSQL `127.0.0.1:15449/analysis_v2`도 사용한다. `V2_NEWS_TEST_DSN`을 지정해 `test_event_research_service.py`와 `test_postgres_news_snapshots.py`를 실행한다. 이 두 테스트와 분석 서비스 테스트는 별도 작업의 DB와 충돌하지 않도록 전용 포트 `55439`도 허용하며, 같은 DB를 쓰는 테스트는 직렬 실행한다. `15449` 주소를 `V2_FACTOR_TEST_DSN`에 지정하면 뉴스 SQL·분석 서비스 테스트를, `V2_EVIDENCE_TEST_DSN`에 지정하면 선택 근거 테스트를, `V2_TEST_DSN`에 지정하면 클라우드 연결 수명 테스트를 실행할 수 있다. 다른 통합 테스트의 전용 주소 조건은 그대로다.
 
 접수 통합 테스트는 `V2_ADMISSION_TEST_DSN=postgresql://v2_local:local_only@127.0.0.1:55446/analysis_v2`인 별도 로컬 PostgreSQL을 사용한다. 테스트가 임시 스키마에 새 접수 테이블을 만들고 제거하므로 전체 원천 적재는 필요 없다.
 
