@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 
-SKILLS = ('cause-investigation', 'revision-investigation', 'hypothesis-analysis-workflow', 'etf-hypothesis-analysis', 'analysis-report-writing')
+SKILLS = ('cause-investigation', 'revision-investigation', 'hypothesis-analysis-workflow', 'etf-hypothesis-analysis', 'analysis-report-writing', 'focused-analysis-writing')
 SOURCE = Path(__file__).parents[1] / 'skills'
 BASE = SOURCE.parent / 'prompts' / 'base.md'
 ABOUT_SKILLS = SOURCE.parent / 'prompts' / 'skills.md'   # added to the base rules only when a run has skills

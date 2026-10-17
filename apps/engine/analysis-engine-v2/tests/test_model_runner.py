@@ -70,8 +70,8 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     """Keep the reviewed instructions identical to the model and audit inputs."""
     import edge_analysis_v2.agent.runner as runner
     from edge_analysis_v2.agent.skill_session import SOURCE, body
-    from edge_analysis_v2.analysis.service import TASK_SKILLS, REVISION_SKILLS
-    selected_skills = REVISION_SKILLS if revision else TASK_SKILLS
+    from edge_analysis_v2.analysis.service import TASK_SKILLS, REVISION_SKILLS, MOVEMENT_SKILLS
+    selected_skills = REVISION_SKILLS if revision else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS
 
     prompt = load_prompt(Path(runner.__file__).parents[1] / 'prompts' / f'{kind}.yaml')
     captured = []
@@ -93,6 +93,13 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     assert len(captured) == 1 and captured[0].startswith(base) and '스킬은 특정한 종류의 일을 하는 방법' in captured[0]
     assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
     task = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
+    if kind == 'movement' or revision:
+        # A short explanation or update must not inherit the full outlook drafting quota.
+        assert '논점은 여섯 개 이상' not in task
+        assert '네 단락에서 여섯 단락' not in task
+        assert 'analysis-report-writing' not in selected_skills
+    else:
+        assert '논점은 여섯 개 이상' in task
     # The method comes first, then the task, then how to write the result.
     assert task.index('# 수정 조사' if revision else '# 원인 조사') < task.index(prompt) < task.index('# 분석 결과 작성')
     # The declared skills reach the task in full, once, without a Skill or Read call; the others do not.

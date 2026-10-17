@@ -243,6 +243,8 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                     documents += [(name, SOURCE/name/'SKILL.md',
                                    '최초 분석의 조사 범위' if name == 'cause-investigation' else
                                    '수정 분석의 조사 범위' if name == 'revision-investigation' else
+                                   '최초 전망의 보고서 작성' if name == 'analysis-report-writing' else
+                                   '가격변동 설명과 전망 수정의 작성' if name == 'focused-analysis-writing' else
                                    '전망·가격변동 작업에 항상 실리는 스킬' if name in TASK_SKILLS else
                                    '필요할 때 열어 읽는 스킬') for name in SKILLS]
                     return self.reply(200, {'documents':[

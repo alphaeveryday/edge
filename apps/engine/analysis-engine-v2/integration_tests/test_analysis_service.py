@@ -60,6 +60,7 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
     answer = {}
     async def first(**kwargs):
         ref = news_reference(kwargs)
+        assert 'analysis-report-writing' in kwargs['skills']
         kwargs['call']('write_outlook_body', {'title': '공급 물량', 'items': [dict(
             id='kept', title_keyword='계약', sentences=['공급 물량을 확보했어요.'], sentiment='positive', tool_run_ids=[ref])]})
         answer.update({'outlook': {'direction': '상승'}, 'summary_card': {'title': '공급 물량', 'summary': '계약을 확인해요.'},
@@ -73,6 +74,7 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
     async def revise(**kwargs):
         assert kwargs['initial']['previous_analysis'] == before
         assert 'revision-investigation' in kwargs['skills'] and not kwargs['compare_explanations']
+        assert 'analysis-report-writing' not in kwargs['skills']
         result = deepcopy(answer)
         result['issue_detail']['items'][0]['tool_run_ids'] = before['detail']['items'][0]['tool_run_ids']
         return result  # No body edit and no repeated news query.
@@ -93,6 +95,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
     async def first(**kwargs):
         news_reference(kwargs)  # Consulted but not selected for publication: still research.
         assert 'cause-investigation' in kwargs['skills'] and 'revision-investigation' not in kwargs['skills']
+        assert 'analysis-report-writing' not in kwargs['skills']
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
@@ -107,6 +110,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         assert kwargs['initial']['research_state'] == state
         assert kwargs['initial']['previous_analysis'] is not None
         assert 'revision-investigation' in kwargs['skills'] and 'cause-investigation' not in kwargs['skills']
+        assert 'analysis-report-writing' not in kwargs['skills']
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}

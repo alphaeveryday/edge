@@ -15,12 +15,16 @@
 
 스킬이 하나라도 있는 실행에는 기본 지침 뒤에 [skills.md](../src/edge_analysis_v2/prompts/skills.md) 한 단락이 붙는다. 스킬이 없는 실행은 스킬이라는 말을 듣지 않는다.
 
-| 스킬 | 담당 | 전망·가격변동 설명 |
+| 스킬 | 담당 | 적용 범위 |
 |---|---|---|
-| cause-investigation | 질문 등록, 경쟁 설명 비교, 종료 조건, 메모 | 선언(항상 실림) |
-| analysis-report-writing | 근거 연결, 수치 조건 보존, 제목·요약·상세·결론 작성 | 선언(항상 실림) |
-| hypothesis-analysis-workflow | 설명을 가르는 관측 고르기, 하위 질문과 복귀(ACH 기반) | 선택(필요할 때 연다) |
-| etf-hypothesis-analysis | 사건 → 사업 → 이익 → 기대 → 평가 → ETF → 한 달 가격 | 선택(필요할 때 연다) |
+| cause-investigation | 질문 등록, 경쟁 설명 비교, 종료 조건, 메모 | 최초 전망·최초 가격변동 조사 |
+| revision-investigation | 직전 상태의 변화와 중요한 미해결 질문 조사 | 전망·가격변동 수정 |
+| analysis-report-writing | 근거 연결, 수치 조건 보존, 제목·요약·상세·결론 작성 | 최초 전망 작성 |
+| focused-analysis-writing | 필요한 설명과 변경점 작성 | 최초 가격변동·모든 수정 |
+| hypothesis-analysis-workflow | 설명을 가르는 관측 고르기, 하위 질문과 복귀(ACH 기반) | 최초·수정 조사 입력에 선언 |
+| etf-hypothesis-analysis | 사건 → 사업 → 이익 → 기대 → 평가 → ETF → 한 달 가격 | 최초·수정 조사 입력에 선언 |
+
+최초 전망을 단계별 실행하면 조사·작성에 해당 스킬을 나눠 전달한다. 마지막 필드 단계에는 스킬을 제공하지 않는다.
 
 ## 왜 이렇게 나눴나
 
