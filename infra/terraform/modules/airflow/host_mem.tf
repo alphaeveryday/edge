@@ -3,7 +3,7 @@
 # 조회: `aws ssm list-command-invocations --details`, Comment 가 "<name>-host-mem" 인 것.
 # 표본이 비면 그 시각의 호스트 값은 없는 것이다(나중에 만들 수 없다). 매번 호스트에서 셸 하나를 잠깐 띄운다.
 locals {
-  host_mem_probe = "echo \"HOSTMEM t=$(date +%s) avail_kb=$(awk '/^MemAvailable/{print $2}' /proc/meminfo) free_kb=$(awk '/^MemFree/{print $2}' /proc/meminfo) task_cg_mib=$(cat /sys/fs/cgroup/ecstasks.slice/*/memory.current 2>/dev/null | sort -n | tail -1 | awk '{print int($1/1048576)}') cg_oom_kill=$(cat /sys/fs/cgroup/ecstasks.slice/*/memory.events 2>/dev/null | awk '/^oom_kill /{s+=$2} END{print s+0}') kmsg_oom=$(journalctl -k --no-pager 2>/dev/null | grep -ciE 'out of memory|oom-kill|oom_kill') uptime_s=$(cut -d. -f1 /proc/uptime)\""
+  host_mem_probe = "echo \"HOSTMEM t=$(date +%s) avail_kb=$(awk '/^MemAvailable/{print $2}' /proc/meminfo) free_kb=$(awk '/^MemFree/{print $2}' /proc/meminfo) task_cg_mib=$(cat /sys/fs/cgroup/ecstasks.slice/*/memory.current 2>/dev/null | sort -n | tail -1 | awk '{print int($1/1048576)}') cg_oom_kill=$(cat /sys/fs/cgroup/ecstasks.slice/*/memory.events 2>/dev/null | awk '/^oom_kill /{s+=$2} END{print s+0}') kmsg_oom=$(journalctl -k --no-pager 2>/dev/null | grep -ciE 'out of memory|oom-kill|oom_kill') uptime_s=$(cut -d. -f1 /proc/uptime) $(timeout 20 docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null | awk -v p=\"ecs-${var.name}-\" 'index($1,p)==1 && $1 !~ /pause/ {n=$1; sub(\"^\" p \"[0-9]+-\",\"\",n); sub(/-[0-9a-f]+$/,\"\",n); gsub(/-/,\"_\",n); v=$2; u=(v ~ /GiB/)?1024:(v ~ /MiB/)?1:(v ~ /KiB/)?1/1024:1/1048576; sub(/[A-Za-z]+$/,\"\",v); printf \"mem_%s_mib=%d \", n, v*u}')\""
 }
 
 resource "aws_iam_role" "host_mem" {

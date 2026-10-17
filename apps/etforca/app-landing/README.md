@@ -68,7 +68,7 @@ App Store 로 가는 단추(상단 바·히어로·마지막 CTA·하단 고정 
 
 `landing.html` 머리에 PostHog 웹 스니펫이 있다. 로더는 PostHog 저장소의 스니펫 생성 코드(`docs/onboarding/product-analytics/_snippets/js-snippet-builder.ts`)의 출력과 같다.
 
-- 프로젝트는 랜딩 전용이다(US 리전 `us.i.posthog.com`, 프로젝트 ID 658097). 앱(`app-ui`)이 쓰는 프로젝트와 다르다.
+- 웹 프로젝트(US 리전 `us.i.posthog.com`, 프로젝트 ID 658097)는 랜딩과 포트폴리오 고객 화면이 함께 쓴다. 앱(`app-ui`)이 쓰는 프로젝트와 다르다. 포트폴리오의 체류·스크롤 계측은 [배포 문서](../../../docs/design/portfolio-deployment.md#고객-화면-이용-분석)에 정리한다.
 - 스니펫의 `phc_` 키는 공개 수집용 프로젝트 키다. 비밀이 아니다. 개인 API 키(`phx_`)는 저장소에 넣지 않는다.
 - **쿠키 없는 모드**(`cookieless_mode: 'always'`)로 동작한다. 브라우저에 쿠키나 local/session storage 를 남기지 않는다. 랜딩에 개인정보 안내·동의가 없어서 지속 식별자를 두지 않기로 했다. 이 옵션을 빼려면 안내·동의부터 갖춘다.
   - 방문자는 PostHog 서버가 만든 해시로 센다(프로젝트·그날의 salt·IP·User-Agent·호스트). salt 가 매일 바뀌어 같은 사람이 다음 날 오면 새 방문자로 잡힌다.
