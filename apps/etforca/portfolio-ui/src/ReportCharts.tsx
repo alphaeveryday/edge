@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { safeReportUrl } from './reportUrl';
 import type { History } from './api';
 
-export const chartColors = ['#7089fb', '#9fd0ff', '#f2b866', '#b49ee8', '#75c6b0', '#eaa4be'];
+export const chartColors = ['#344c45', '#8b9e91', '#bf9a5f', '#a4abb4', '#b29587', '#d3cbbb'];
 
 export function PortfolioDonut({ holdings }: { holdings: { name: string; weight_pct: number; color: string }[] }) {
   let offset = 0;

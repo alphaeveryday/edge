@@ -85,3 +85,15 @@ def test_limitation_notices_stay_in_the_first_message_when_raw_rows_move_behind_
     first = WorkContext(initial).initial
     assert first['source_gaps'] == initial['source_gaps'] and first['history_preview'] == initial['history_preview']
     assert first['available_sources']['prices'] == {'keys': ['X']} and 'prices' not in first
+
+
+def test_revision_start_and_missing_baseline_are_visible_without_reading_all_previous_text():
+    initial = {'news_discovery': {'snapshot_id': 'current', 'recommended_tool': 'list_events'},
+               'news_research': {'mode': 'revision', 'baseline_status': 'missing',
+                                 'previous_analysis_id': 'prior', 'recommended_tool': 'get_event_changes'},
+               'previous_analysis': {'detail': {'items': [{'id': 'topic', 'sentences': ['long text']}]}}}
+    state = WorkContext(initial)
+    assert state.initial['news_research'] == initial['news_research']
+    assert state.initial['news_discovery'] == initial['news_discovery']
+    assert state.initial['previous_analysis'] == initial['previous_analysis']
+    assert state.read('previous_analysis')['rows']

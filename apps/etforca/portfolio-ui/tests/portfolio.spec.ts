@@ -60,12 +60,11 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.goto('/portfolio/');
   await expect(page.locator('.acct__name').first()).toHaveText('\uC77C\uBC18 \uACC4\uC88C');
   await fillForm(page);
-  await expect(page.locator('.progress')).toContainText('약 5분');
+  await expect(page.locator('.progress')).toContainText('보통 5분');
   await expect(page.locator('.progress')).toContainText('최대 10분');
-  await expect(page.locator('.agents.tree .mini')).toHaveCount(3);
-  await expect(page.locator('.agents.tree .wide')).toHaveCount(2);
-  await expect(page.locator('.agents [data-s=run]')).toHaveCount(2);
-  await expect(page.locator('.stage canvas')).toBeVisible();
+  await expect(page.locator('.progress-steps li')).toHaveCount(4);
+  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveText('보유 구성 분석진행 중');
+  await expect(page.locator('.research-motion svg')).toBeVisible();
   await page.screenshot({ path: `test-results/progress-${test.info().project.name}.png`, fullPage: true });
   ready = true;
   await page.reload();
@@ -115,7 +114,7 @@ test('cash default, live donut, ETF-only search and direct recommendation flow',
   await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
   await expect(page.locator('.acct').filter({ hasText: 'ISA' })).toContainText('Vanguard S&P 500 ETF');
   await expect(page.locator('.portfolio-preview')).toBeVisible();
-  expect(await find.evaluate(el => getComputedStyle(el).backgroundImage)).toContain('linear-gradient');
+  await expect(find).toHaveCSS('background-image', 'none');
   await find.fill('현금');
   await page.getByRole('option', { name: '현금 원화 현금' }).click();
   await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toBeVisible();
