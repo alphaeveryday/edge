@@ -240,3 +240,29 @@ def test_first_seen_correction_precedes_other_new_events_on_a_partial_page():
     assert row['event_id'] == 'z-correction'
     assert row['change'] == 'new_event'
     assert row['novelty'] == 'CORRECTION'
+
+
+def test_event_keyword_search_groups_repeats_and_preserves_later_correction():
+    data = source()
+    for index in range(60):
+        add(data, f'match-{index}', thread='tariff', novelty='DUPLICATE_REBROADCAST')
+        data['news'][-1].update(title='효성 관세', body='미국 관세율 4.32%')
+    add(data, 'z-correction', thread='tariff', novelty='CORRECTION')
+    add(data, 'independent')
+    data['news'][-1].update(title='효성', body='미국 관세 소송')
+    add(data, 'irrelevant')
+    tools = DatabaseTools(data)
+    page = result(tools, 'list_events', query='효성 관세', limit=1)
+    assert page['total_count'] == 2
+    with pytest.raises(ToolInputError):
+        result(tools, 'list_events', query='수주', cursor=page['next_cursor'])
+    page = result(tools, 'list_events', query='효성 관세')
+    thread = next(row for row in page['items'] if row['event_key'] == 'thread:tariff')
+    assert thread['matched_article_count'] == 60
+    assert set(thread['matched_news_ids']) <= {f'match-{index}' for index in range(60)}
+    assert thread['title'] == 'z-correction'
+    assert result(tools, 'get_event_timeline', event_key='thread:tariff')['items'][0]['novelty'] == 'CORRECTION'
+    assert result(tools, 'list_events', query='없는검색어')['total_count'] == 0
+    for invalid in (None, ['효성'], 'x' * 201):
+        with pytest.raises(ToolInputError):
+            result(tools, 'list_events', query=invalid)

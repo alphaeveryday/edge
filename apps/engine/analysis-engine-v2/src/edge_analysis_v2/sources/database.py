@@ -265,8 +265,9 @@ class DatabaseTools(FixtureTools):
             required=['query', 'offset'])
         if self.news_events is not None:
             page = {'cursor': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}
-            self._register('list_events', '사건 목록부터 조사합니다. 저장된 스레드만 묶고 반복 보도는 수로 표시합니다. 날짜는 새 사실의 확보시각(UTC 날짜)입니다. next_cursor로 다음 사건을 읽습니다. 필요한 사건은 get_event_timeline으로 확인하세요.',
+            self._register('list_events', '사건 목록부터 조사합니다. query로 연결 기사 제목·발췌에 검색어가 모두 있는 사건을 찾습니다. matched_news_ids는 일치 기사이며 대표 제목은 최신 사실입니다. 저장된 스레드만 묶고 반복 보도는 수로 표시합니다. 날짜는 새 사실의 확보시각(UTC 날짜)입니다. next_cursor로 다음 사건을 읽고 필요한 사건은 get_event_timeline으로 확인하세요.',
                 {'start_date': {'type': 'string'}, 'end_date': {'type': 'string'},
+                 'query': {'type': 'string', 'maxLength': 200, 'description': '예: 효성 관세, 두산 수주. 빈 문자열은 전체 사건. 단어가 한 기사의 제목·발췌에 모두 있어야 일치.'},
                  'event_types': {'type': 'array', 'items': {'type': 'string'}},
                  'instrument_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': 'ETF 또는 구성종목 티커. 생략하면 전체 관련 사건.'}, **page},
                 self.news_events.listing, '', ['source_event', 'event_thread_link'], required=[])

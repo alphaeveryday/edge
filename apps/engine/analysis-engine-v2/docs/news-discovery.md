@@ -12,13 +12,15 @@
 
 | 도구 | 입력 | 반환·용도 |
 |---|---|---|
-| `list_events` | `instrument_ids`(티커), `start_date`, `end_date`, `event_types`, `cursor`, `limit` 모두 선택 | 사건 요약과 관련 티커, `total_count`, `remaining_count`, `next_cursor`, 미연결 기사 통계 |
+| `list_events` | `query`, `instrument_ids`(티커), `start_date`, `end_date`, `event_types`, `cursor`, `limit` 모두 선택 | 사건 요약과 관련 티커, `total_count`, `remaining_count`, `next_cursor`, 미연결 기사 통계 |
 | `get_event_timeline` | `event_key`, 선택적 `cursor`, `limit` | 최초·후속·정정 관측과 기사 ID. 저장된 재보도만 접는다 |
 | `get_event_changes` | 선택적 `cursor`, `limit` | 서버가 선택한 이전 완료 분석과의 변경 목록·유형별 건수·범위 변경 여부 |
 | `search_news_articles` | `query`, `offset`, 선택적 `unlinked_only` | 현재 전체 원본 bundle에서 제목·발췌를 검색한다. 50기사씩 반환 |
 | `get_issue_evidence` | `news_ids`, `include_body` | 기존 발췌 읽기·최종 근거 저장 계약 유지. 초기 1,000기사 밖의 ID도 현재 bundle에 있으면 허용 |
 
 사건 페이지 기본 요청량은 20개, 최대 50개다. 큰 응답은 더 적은 사건을 반환할 수 있다. 커서는 해당 스냅샷과 필터에 고정되며 다른 필터·분석에 재사용하면 거절한다. 날짜 필터는 마지막 비재보도 사건의 `available_at` **UTC 날짜**다. 사건 발생일이나 기사 발행일 필터가 아니다.
+
+`query`는 기존 기사 검색처럼 한 기사의 제목·발췌에 모든 검색어가 있는지 확인하고, 일치 기사를 사건 단위로 묶는다. `matched_news_ids`는 일치 기사이며 대표 제목은 그 사건의 최신 사실이다. 과거 기사로 검색됐어도 이후 정정을 놓치지 않도록 타임라인은 사건 전체를 유지한다. 사건이 없는 기사는 별도 기사 검색에서 확인한다.
 
 도구 결과를 모델에 전달하는 기존 6,000자 페이지(`workspace.read_tool_result`)는 별개다. 에이전트가 전체 페이지를 읽도록 강제하지 않으며, 읽지 않은 범위의 부재를 주장하면 안 된다.
 

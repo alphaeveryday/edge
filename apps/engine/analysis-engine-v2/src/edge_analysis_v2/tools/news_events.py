@@ -91,7 +91,12 @@ class NewsEvents:
                 'remaining_count': len(rows) - end, 'next_cursor': next_cursor,
                 'scope': self.public_scope(), **metadata}
 
-    def listing(self, start_date=None, end_date=None, event_types=None, instrument_ids=None, cursor=None, limit=20):
+    def listing(self, start_date=None, end_date=None, event_types=None, instrument_ids=None, query='', cursor=None, limit=20):
+        if not isinstance(query, str) or len(query) > 200:
+            raise ToolInputError('query must be a string of at most 200 characters')
+        words = query.casefold().split()
+        matches = {identity for identity, article in self.articles.items()
+                   if all(word in (article['title'] + ' ' + (article.get('body') or '')).casefold() for word in words)} if words else None
         try:
             start = date.fromisoformat(start_date) if start_date else None
             end = date.fromisoformat(end_date) if end_date else None
@@ -111,6 +116,9 @@ class NewsEvents:
                 raise ToolInputError('instrument_ids must be a nonempty ticker array. Allowed: ' + ', '.join(sorted(mapped)))
         rows = []
         for key, reports in self.groups.items():
+            matched = sorted({identity for row in reports for identity in row['news_ids']} & matches) if matches is not None else None
+            if matched == []:
+                continue
             participants = {identity for row in reports for identity in row.get('related_entity_ids', row.get('issuer_ids', []))}
             symbols = sorted(symbol for symbol, identities in mapped.items() if identities & participants)
             if instrument_ids is not None and not set(instrument_ids) & set(symbols):
@@ -128,9 +136,11 @@ class NewsEvents:
                          'last_change_at': latest['available_at'], 'stage': latest.get('stage'),
                          'report_count': len(reports), 'novelty_counts': dict(Counter(r.get('novelty', 'UNKNOWN') for r in reports)),
                          'news_ids': ids[:2]})
+            if matched is not None:
+                rows[-1].update(matched_news_ids=matched[:2], matched_article_count=len(matched))
         rows.sort(key=lambda r: r['event_key'])
         rows.sort(key=lambda r: instant(r['last_change_at']), reverse=True)
-        return self.page(rows, ['events', start_date, end_date, event_types, instrument_ids], cursor, limit,
+        return self.page(rows, ['events', start_date, end_date, event_types, instrument_ids, query], cursor, limit,
                          unlinked_article_count=len(self.unlinked),
                          unlinked_by_publication_month=dict(sorted(Counter(self.articles[n]['published_at'][:7] for n in self.unlinked).items())),
                          date_filter='UTC date of latest non-rebroadcast availability; unknown novelty retained')
