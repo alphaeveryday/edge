@@ -1,5 +1,6 @@
 """Publication and observation failures are distinct operational outcomes."""
-from unittest.mock import MagicMock, Mock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -8,9 +9,10 @@ from edge_analysis_v2.cloud.contract import decode_json
 from test_cloud_observation import MemoryS3, REQUEST
 
 
-@pytest.mark.parametrize('failure', [None,'source','model','export'])
+@pytest.mark.parametrize('effort', ['low', 'high'])
+@pytest.mark.parametrize('failure', [None,'source','model','runner','export'])
 @pytest.mark.parametrize('owner', [None, 'execution-arn'])
-def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failure,owner):
+def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failure,owner,effort):
     s3=MemoryS3()
     session=Mock()
     session.client.return_value=s3
@@ -27,7 +29,13 @@ def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failur
     monkeypatch.setattr(worker,'load_prices',lambda c,s,request=None:s)
     monkeypatch.setattr(worker,'load_research_observations',lambda c,s:s)
     monkeypatch.setattr(worker,'DatabaseTools',Mock())
-    execute=Mock()
+    runner = AsyncMock()
+    if failure == 'runner':
+        runner.side_effect = ValueError('SENSITIVE')
+    monkeypatch.setattr(worker, 'run_model', runner)
+    def execute_model(**kwargs):
+        asyncio.run(kwargs['model_call'](effort=effort))
+    execute=Mock(side_effect=execute_model)
     if failure=='model':
         execute.side_effect=ValueError('SENSITIVE')
     monkeypatch.setattr(worker,'execute_request',execute)
@@ -44,13 +52,14 @@ def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failur
         worker.run(request,**args)
     raw=s3.objects['analysis-v2/runs/'+REQUEST['analysis_id']+'/manifest.json']
     job=decode_json(raw)['job']
-    assert job['reasoning_effort']=='low'
-    if failure!='source':
-        model_call=execute.call_args.kwargs['model_call']
-        assert model_call.func is worker.run_model
-        assert model_call.keywords=={'effort':'low'}
+    if failure in ('source', 'model'):
+        assert 'reasoning_effort' not in job
+        runner.assert_not_called()
+    else:
+        assert job['reasoning_effort'] == effort
+        runner.assert_awaited_once_with(effort=effort)
     assert b'SENSITIVE' not in raw
-    assert job['status']==('failed' if failure in ('source','model') else 'completed')
+    assert job['status']==('failed' if failure in ('source','model','runner') else 'completed')
     assert job['observation_status']==('incomplete' if failure=='export' else 'complete')
     # A duplicate must not start source reads or erase these terminal observations.
     load.reset_mock()

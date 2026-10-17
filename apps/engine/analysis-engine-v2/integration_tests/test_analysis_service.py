@@ -14,6 +14,33 @@ from edge_analysis_v2.tools.fixture_data import make_fixture
 from edge_analysis_v2.storage.factors import HEADLINES, read_factor_details
 
 
+def test_initial_staged_outlook_keeps_high_in_every_model_stage(run_context):
+    request, _ = run_context
+    stages, evidence = [], []
+    async def model(**kwargs):
+        stage = kwargs['artifacts'].name
+        stages.append(stage)
+        assert kwargs['effort'] == 'high'
+        if stage == 'investigation':
+            evidence.append(news_reference(kwargs))
+            return {'report': f'공급 계약을 확인했어요. [{evidence[0]}]'}
+        if stage == 'writing':
+            kwargs['call']('write_outlook_body', {'title': '공급 계약', 'items': [dict(
+                id='contract', title_keyword='계약', sentences=['공급 계약을 확인했어요.'],
+                sentiment='positive', tool_run_ids=evidence)]})
+            return {'summary_card': {'title': '공급 계약', 'summary': '계약을 확인했어요.'}}
+        assert stage == 'fields'
+        return {'outlook': {'direction': '중립'},
+            'factors': [{'type': factor, 'sticker': '중립', 'sentence': '자료를 확인해요.'}
+                        for factor in ('이슈', '차트', '매크로', '밸류', '수급')],
+            'conclusion': {'title': '계약 확인', 'supports': [], 'burdens': [], 'sentence': '이행을 확인해요.'},
+            'issue_detail': {'headline': '계약', 'items': [dict(title_keyword='계약',
+                sentence='공급 계약을 확인했어요.', sentiment='positive', tool_run_ids=evidence)]}}
+    result, _ = request('outlook', model, staged=True, previous_analysis_id=None)
+    assert stages == ['investigation', 'writing', 'fields']
+    assert result['detail']['items'][0]['id'] == 'contract'
+
+
 def test_removed_topic_audit_does_not_keep_its_research_active(run_context):
     from copy import deepcopy
     from datetime import datetime, timedelta
@@ -61,6 +88,7 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
     async def first(**kwargs):
         ref = news_reference(kwargs)
         assert 'analysis-report-writing' in kwargs['skills']
+        assert kwargs['effort'] == 'high'
         kwargs['call']('write_outlook_body', {'title': '공급 물량', 'items': [dict(
             id='kept', title_keyword='계약', sentences=['공급 물량을 확보했어요.'], sentiment='positive', tool_run_ids=[ref])]})
         answer.update({'outlook': {'direction': '상승'}, 'summary_card': {'title': '공급 물량', 'summary': '계약을 확인해요.'},
@@ -75,6 +103,7 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
         assert kwargs['initial']['previous_analysis'] == before
         assert 'revision-investigation' in kwargs['skills'] and not kwargs['compare_explanations']
         assert 'analysis-report-writing' not in kwargs['skills']
+        assert kwargs['effort'] == 'low'
         result = deepcopy(answer)
         result['issue_detail']['items'][0]['tool_run_ids'] = before['detail']['items'][0]['tool_run_ids']
         return result  # No body edit and no repeated news query.
@@ -96,6 +125,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         news_reference(kwargs)  # Consulted but not selected for publication: still research.
         assert 'cause-investigation' in kwargs['skills'] and 'revision-investigation' not in kwargs['skills']
         assert 'analysis-report-writing' not in kwargs['skills']
+        assert kwargs['effort'] == 'high'
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
@@ -111,6 +141,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         assert kwargs['initial']['previous_analysis'] is not None
         assert 'revision-investigation' in kwargs['skills'] and 'cause-investigation' not in kwargs['skills']
         assert 'analysis-report-writing' not in kwargs['skills']
+        assert kwargs['effort'] == 'low'
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
