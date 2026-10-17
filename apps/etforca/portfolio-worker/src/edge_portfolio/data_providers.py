@@ -18,7 +18,7 @@ def load_fallback_prices(symbol, as_of):
         feed, currency, url = 'FRED:DEXKOUS', 'KRW', 'https://fred.stlouisfed.org/series/DEXKOUS'
     elif re.fullmatch(r'[0-9A-Z]{6}\.KS', symbol):
         feed, currency = 'NAVER:' + symbol[:-3], 'KRW'
-        url = 'https://finance.naver.com/item/sise_day.naver?code=' + symbol[:-3]
+        url = 'https://fchart.stock.naver.com/sise.nhn?timeframe=day&count=6000&requestType=0&symbol=' + symbol[:-3]
     else:
         feed, currency = 'YAHOO:' + symbol, 'USD'
         url = 'https://finance.yahoo.com/quote/' + symbol + '/history/'
@@ -38,6 +38,9 @@ def load_fallback_prices(symbol, as_of):
         raise ValueError('PRICE_INVALID')
     if (as_of - close.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
+    if feed.startswith('NAVER:'):
+        # NAVER ETF chart Close already adjusts for distributions; never add cash again.
+        frame['Adj Close'] = frame['Close']
     basis = 'total_return' if 'Adj Close' in frame else 'price'
     if basis == 'total_return':
         adjusted = frame['Adj Close'][frame['Adj Close'].map(positive_price)]

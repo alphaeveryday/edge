@@ -1,6 +1,9 @@
 import importlib.util
 import json
 import sys
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,3 +55,45 @@ def test_release_builds_before_draining_and_keeps_dependencies_until_worker_stop
     assert ' up -d --wait' in compose[2], 'Service replacement must wait until the current analysis is saved'
     assert '--build' not in compose[2]
     assert any('edge_portfolio.verification --version ' + 'a' * 40 + ' --register-only' in command for command in compose)
+
+
+@pytest.mark.parametrize('was_active', [0, 1])
+def test_failed_release_restores_only_a_previously_active_newsletter_timer(was_active):
+    spec = importlib.util.spec_from_file_location('release_newsletter_test', Path(__file__).parents[1] / 'deploy/release.py')
+    release = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(release)
+    shell = str(Path(shutil.which('git')).parents[1] / 'bin/bash.exe') if os.name == 'nt' else '/bin/sh'
+    script = f'''set -eu
+was_active={was_active}
+systemctl() {{ printf '%s\\n' "$*"; [ "$1" != is-active ] || [ "$was_active" = 1 ]; }}
+{release.NEWSLETTER_PAUSE}
+exit 17
+'''
+    result = subprocess.run([shell, '-c', script], capture_output=True, text=True, check=False)
+    assert result.returncode == 17, 'Restoring the timer must not hide the deployment failure'
+    assert ('start portfolio-newsletter.timer' in result.stdout) is bool(was_active)
+
+
+def test_release_drains_an_active_sender_without_terminating_its_send(tmp_path):
+    spec = importlib.util.spec_from_file_location('release_newsletter_drain_test', Path(__file__).parents[1] / 'deploy/release.py')
+    release = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(release)
+    shell = str(Path(shutil.which('git')).parents[1] / 'bin/bash.exe') if os.name == 'nt' else '/bin/sh'
+    state = (tmp_path / 'state').as_posix()
+    script = f'''set -eu
+systemctl() {{
+    case "$1" in
+      show) if [ -f '{state}' ]; then echo inactive; else echo activating; fi ;;
+      *) printf '%s\\n' "$*" ;;
+    esac
+}}
+sleep() {{ echo waited; touch '{state}'; }}
+{release.NEWSLETTER_PAUSE}
+echo dependencies-can-now-stop
+trap - EXIT
+'''
+    result = subprocess.run([shell, '-c', script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.index('waited') < result.stdout.index('dependencies-can-now-stop')
+    assert 'stop portfolio-newsletter.timer' in result.stdout
+    assert 'stop portfolio-newsletter.service' not in result.stdout

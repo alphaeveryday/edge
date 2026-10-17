@@ -10,7 +10,7 @@ export type Evaluation = { scores: { leadership: number; profitability: number; 
 export type Allocation = { instrument_id: string; name: string; ticker: string; kind: 'cash' | 'etf'; account: string; weight_pct: number; amount_krw: string | null };
 export type Execution = { status: 'ready' | 'conditional' | 'needs_input' | 'infeasible'; reasons: string[]; assumptions: string[]; additional_krw: string; monthly_krw: string | null; required_additional_krw: string | null; months: number | null; rows: { instrument_id: string; name?: string; account: string; before_krw: string; target_krw: string; buy_krw: string; sell_krw: string; cash_used_krw: string }[]; accounts: { account: string; deposit_krw: string; withdrawal_krw: string }[] };
 export type History = { points: { date: string; recommended: number; current: number | null }[]; basis: string; source_url: string; baseline_kind?: 'new_cash' | 'current_holdings' | 'unknown_weights'; current_unavailable_reason?: string; interval?: '1d'; currency?: 'KRW'; initial_krw?: number; method?: string; sources?: { instrument_id: string; url: string }[] };
-export type Recommendation = { title: string; execution?: Execution; allocations: Allocation[]; evaluation: Evaluation; total_krw: string | null; actions: { instrument_id: string; name: string; ticker: string; account: string; before_pct: number | null; after_pct: number; action: string }[]; expected_return_1y: number | null; dividend_yield_1y: number | null; historical_performance: History | null; unavailable_reason: string; target_return_1y?: number; dividend_basis?: string; return_forecast?: { reason: string; method: string }; dividend_observations?: { instrument_id: string; as_of: string; trailing_yield_pct: number; source_url?: string; method?: string; evidence: { url: string; quote: string }[] }[] };
+export type Recommendation = { title: string; execution?: Execution; allocations: Allocation[]; evaluation: Evaluation; total_krw: string | null; actions: { instrument_id: string; name: string; ticker: string; account: string; before_pct: number | null; after_pct: number; action: string; buy_krw?: string; sell_krw?: string; cash_used_krw?: string }[]; expected_return_1y: number | null; dividend_yield_1y: number | null; historical_performance: History | null; unavailable_reason: string; target_return_1y?: number; dividend_basis?: string; return_forecast?: { reason: string; method: string }; dividend_observations?: { instrument_id: string; as_of: string; trailing_yield_pct: number; source_url?: string; method?: string; evidence: { url: string; quote: string }[] }[] };
 export type Report = {
   partial_report?: Report;
   completion?: { status: 'complete' | 'partial' | 'needs_input' | 'no_match'; tasks: { question: string; status: string; answer: string; missing: string[] }[]; missing_inputs: string[]; missing_research: { instrument_id: string; field: string; status: string }[] };
@@ -42,7 +42,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => ({}));
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
+    if (body.detail === 'NO_HOLDINGS') throw new Error('보유 ETF를 입력한 분석에서 뉴스레터를 신청해 주세요.');
+    if (body.detail === 'SUBSCRIPTION_LIMIT') throw new Error('오늘 뉴스레터 신청 횟수를 모두 사용했어요. 내일 다시 신청해 주세요.');
+    if (body.detail === 'INVALID_CONFIRMATION') throw new Error('확인 링크가 만료됐거나 이미 사용됐어요. 분석 결과에서 다시 신청해 주세요.');
     if (response.status === 422) {
+      if (path.endsWith('/newsletter')) throw new Error('이메일 주소를 확인해 주세요.');
+      if (path === '/newsletter/confirm') throw new Error('확인 링크가 올바르지 않아요. 분석 결과에서 다시 신청해 주세요.');
       const messages: Record<string, string> = {
         HOLDING_WEIGHTS_REQUIRED: '보유 종목의 금액 또는 비율을 입력해 주세요.',
         CONTRIBUTION_CHOICE_REQUIRED: '투자금을 넣는 방법을 선택해 주세요.',

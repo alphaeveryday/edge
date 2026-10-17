@@ -3,11 +3,13 @@ import { request, ensureVisitorSession, type Catalog, type Instrument, type Hold
 import { InstrumentSearch } from './InstrumentSearch';
 import { PortfolioPreview } from './PortfolioPreview';
 import { TaxAccounts, missingTaxAnswers, type TaxProfile } from './TaxAccounts';
+import { trackScreen } from './analytics';
 
 const accounts = ['일반 계좌', 'ISA', '연금저축', 'IRP'];
 const hints = ['월 적립 계획까지 추천', '배당 얼마를 원해', '모은 돈이 있어', '목돈 넣는 방법', '대출이 있어', '레버리지는 빼줘', '개수는 적게'];
 export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void; busy: boolean }) {
   const [step, setStep] = useState(0);
+  useEffect(() => trackScreen((['input_holdings', 'input_funding', 'input_horizon', 'input_interests', 'input_question'] as const)[step]), [step]);
   const [holdings, setHoldings] = useState<Holding[]>([{ name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌', amount_krw: '100' }]);
   const [selected, setSelected] = useState(['일반 계좌']);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
