@@ -96,7 +96,7 @@ def test_weekend_revision_preserves_body_and_reuses_issue_evidence_despite_deplo
             'conclusion': {'title': '계약 확인', 'supports': [], 'burdens': [], 'sentence': '이행을 확인해요.'},
             'issue_detail': {'headline': '계약', 'items': [dict(title_keyword='계약', sentence='공급 물량을 확보했어요.', sentiment='positive', tool_run_ids=[ref])]}})
         return deepcopy(answer)
-    before, previous_id = request('outlook', first, friday)
+    before, previous_id = request('outlook', first, friday, previous_analysis_id=None)
     saturday = deepcopy(friday)
     saturday['context']['analysis_at'] = '2026-09-26T08:30:00+09:00'
     async def revise(**kwargs):
@@ -269,7 +269,7 @@ def test_contract_audit_reads_committed_assembly_and_detects_stored_regression(r
 def run_context(tmp_path):
     dsn=os.environ['V2_FACTOR_TEST_DSN']
     config=conninfo_to_dict(dsn)
-    assert config.get('host')=='127.0.0.1' and config.get('port')=='55440' and config.get('dbname')=='analysis_v2'
+    assert config.get('host')=='127.0.0.1' and config.get('port') in {'55439', '55440', '15449'} and config.get('dbname')=='analysis_v2'
     identities=[]
     def factory():
         return psycopg.connect(dsn,autocommit=True)

@@ -10,7 +10,7 @@ from edge_analysis_v2.storage.inspection import read_storage
 DEFINITION = dict(tool_id='record_research_state:v1', function_name='record_research_state',
                   version='v1', description='Server snapshot of current research originals; not final evidence.',
                   source_names=['Completed analysis research state'])
-INTERNAL = {'record_research_state', 'write_outlook_body', 'apply_outlook_body_changes'}
+INTERNAL = {'record_research_state', 'capture_news_snapshot', 'write_outlook_body', 'apply_outlook_body_changes'}
 
 
 def add_records(state, stored):

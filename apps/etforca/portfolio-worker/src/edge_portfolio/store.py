@@ -45,6 +45,8 @@ def initialize():
         verification.initialize(db)
         from . import newsletter_store
         newsletter_store.initialize(db)
+        from . import dashboard
+        dashboard.initialize(db)
 
 
 def save_draft(draft_id, owner, payload):
