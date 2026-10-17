@@ -111,7 +111,7 @@ body:has(#report) {
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--bg-raised);
-  box-shadow: 0 18px 48px var(--color-overlay)
+  box-shadow: 0 18px 48px var(--color-shadow)
 }
 #report .kicker {
   font-size: var(--text-label);
@@ -256,7 +256,7 @@ body:has(#report) {
 }
 #report .allocation {
   display: flex;
-  gap: 22px;
+  gap: 24px;
   align-items: center;
   margin: 25px 0
 }
@@ -435,7 +435,7 @@ body:has(#report) {
   border-radius: var(--radius-card);
   padding: 20px 12px;
   font-weight: 700;
-  box-shadow: 0 12px 30px var(--color-overlay)
+  box-shadow: 0 12px 30px var(--color-shadow)
 }
 #report .premium svg {
   vertical-align: middle;
@@ -1357,7 +1357,7 @@ body:has(#report) {
 }
 #report .outlook-lead {
   font-size: var(--text-body);
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.55;
   color: var(--t1);
   margin: 0 0 16px;
@@ -1447,7 +1447,7 @@ to {
   font-size: var(--text-label);
   font-weight: 700;
   line-height: 1.6;
-  box-shadow: 0 12px 30px var(--color-overlay)
+  box-shadow: 0 12px 30px var(--color-shadow)
 }
 .report-premium svg {
   vertical-align: middle;
@@ -2491,7 +2491,7 @@ h2 em {
   border: 1px solid var(--border)
 }
 .acct:not(.plain) .row {
-  background: var(--surface);
+  background: transparent;
   border-color: var(--border)
 }
 .row {
@@ -4312,7 +4312,7 @@ from {
   padding: 30px;
   background: var(--color-canvas);
   color: var(--color-text-muted);
-  box-shadow: 0 24px 100px var(--color-overlay)
+  box-shadow: 0 24px 100px var(--color-shadow)
 }
 .followup-dialog::backdrop {
   background: var(--color-overlay);
@@ -4444,7 +4444,7 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: linear-gradient(var(--bg-raised),var(--bg-raised)) padding-box,var(--grad) border-box;
-  box-shadow: 0 24px 60px var(--color-overlay),0 0 70px var(--color-overlay)
+  box-shadow: 0 24px 60px var(--color-shadow),0 0 70px var(--color-shadow)
 }
 .rows ~ .instrument-search .find__plus {
   left: 15px;
@@ -4652,7 +4652,7 @@ button:disabled {
 }
 .feedback-newsletter {
   padding: 0 4px 22px;
-  margin-bottom: 22px;
+  margin-bottom: 24px;
   border-bottom: 1px solid var(--color-border)
 }
 .feedback-newsletter h3 {
@@ -5170,7 +5170,7 @@ body:has(#report) .followup {
 }
 .allocation-legend li {
   display: grid;
-  grid-template-columns: 10px auto auto;
+  grid-template-columns: 8px minmax(0,1fr) auto;
   gap: 8px;
   font-size: var(--text-caption);
   align-items: center
@@ -5362,7 +5362,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 h1, h2, h3 {
-  font-weight: 650;
+  font-weight: 600;
 }
 .app {
   padding-top: 24px;
@@ -5490,7 +5490,7 @@ h2 em, .verdict em {
 }
 .bar__in, .bar__in:has(.bar__msg:not([hidden])) {
   border-radius: var(--radius-control);
-  box-shadow: 0 4px 20px var(--color-overlay);
+  box-shadow: 0 4px 20px var(--color-shadow);
   backdrop-filter: none;
 }
 .btn, .primary, .secondary {
@@ -5698,7 +5698,7 @@ h2 em, .verdict em {
   border-color: var(--border-strong);
   border-radius: var(--radius-control);
   padding: 22px;
-  box-shadow: 0 16px 60px var(--color-overlay);
+  box-shadow: 0 16px 60px var(--color-shadow);
   animation: workspace-enter 220ms ease-out;
 }
 .report-feedback p, .feedback-close, .feedback-newsletter small {
@@ -5708,12 +5708,12 @@ h2 em, .verdict em {
   padding: 8px 0 20px;
 }
 .save-portfolio h3 {
-  font-size: var(--text-body)!important;
+  font-size: var(--text-heading)!important;
   letter-spacing: -.5px;
 }
 .save-portfolio p {
   color: var(--t2)!important;
-  font-size: var(--text-caption)!important;
+  font-size: var(--text-label)!important;
 }
 .save-preview, .report-feedback .save-preview {
   display: block;
@@ -5920,19 +5920,19 @@ to {
   margin: auto;
 }
 .dashboard-main header {
-  margin-bottom: 30px;
+  margin-bottom: 24px;
 }
 .dashboard h1 {
   font-size: var(--text-title);
   letter-spacing: -1px;
-  font-weight: 650;
+  font-weight: 600;
   margin: 6px 0 0;
 }
 .dashboard h2 {
-  font-size: var(--text-body);
-  letter-spacing: -.5px;
-  margin-bottom: 20px;
-  font-weight: 650;
+  font-size: var(--text-heading);
+  letter-spacing: -.025em;
+  margin-bottom: 24px;
+  font-weight: 600;
 }
 .dashboard .eyebrow {
   font-size: var(--text-caption);
@@ -5979,7 +5979,7 @@ to {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--color-surface);
-  margin-bottom: 22px;
+  margin-bottom: 24px;
   padding: 28px 0;
 }
 .dashboard-stats article, .dashboard-stats article:first-child {
@@ -5995,12 +5995,13 @@ to {
 .dashboard-stats strong {
   font-size: clamp(1.4375rem,2.3vw,2rem);
   font-weight: 600;
-  letter-spacing: -1.2px;
-  margin: 12px 0 4px;
+  letter-spacing: -.025em;
+  line-height: 1.25;
+  margin: 16px 0 4px;
 }
 .dashboard-stats article:first-child strong {
   font-size: clamp(28px,2.8vw,40px);
-  letter-spacing: -1.5px;
+  letter-spacing: -.035em;
 }
 .dashboard-stats span, .dashboard-stats small {
   color: var(--t2);
@@ -6017,8 +6018,8 @@ to {
 .dashboard-overview {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 22px;
-  margin-bottom: 22px;
+  gap: 24px;
+  margin-bottom: 24px;
 }
 .dashboard-overview>.dashboard-card {
   margin: 0;
@@ -6031,7 +6032,7 @@ to {
   border-color: var(--border);
   padding: 24px;
   border-radius: var(--radius-control);
-  margin-bottom: 22px;
+  margin-bottom: 24px;
   animation: workspace-enter 320ms ease-out;
 }
 .dashboard-stats {
@@ -6045,14 +6046,15 @@ to {
 }
 .asset-list-heading {
   display: grid;
-  grid-template-columns: minmax(0,1fr) minmax(100px,.6fr) minmax(100px,.5fr);
+  grid-template-columns: 44px minmax(0,1fr) minmax(100px,.6fr) minmax(100px,.5fr) 16px;
   gap: 15px;
-  padding: 12px 30px 12px 56px;
+  padding: 12px 0;
   font-size: var(--text-caption);
   color: var(--t3);
   background: var(--bg);
   border-block: 1px solid var(--border);
 }
+.asset-list-heading span:first-child { grid-column: 2; }
 .asset-list-heading span:not(:first-child) {
   text-align: right;
 }
@@ -6079,22 +6081,28 @@ to {
   color: var(--t3);
 }
 .allocation-bar {
-  height: 28px;
-  border-radius: 4px;
+  height: 16px;
+  border-radius: var(--radius-pill);
   gap: 3px;
-  margin-top: 30px;
+  margin-top: 16px;
 }
 .allocation-bar>span {
   transform-origin: left;
   animation: allocation-enter 650ms cubic-bezier(.2,.7,.3,1) both;
 }
 .allocation-legend {
-  gap: 18px 24px;
-  margin-top: 26px;
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 20px 24px;
+  margin-top: 24px;
 }
 .allocation-legend small {
   color: var(--t3);
+  font-size: var(--text-caption);
+  margin-top: -4px;
 }
+.allocation-legend b { font-size: var(--text-label); font-weight: 600; }
+.allocation-legend span { font-weight: 600; }
 .dividend-bars {
   margin-top: 8px;
   gap: 10px;
@@ -6136,6 +6144,9 @@ to {
 .dividend-legend b {
   color: var(--color-text);
 }
+.dividend-legend :is(b,span)::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 2px; background: var(--color-primary); }
+.dividend-legend span::before { background: var(--color-primary-soft); box-shadow: inset 0 0 0 1px var(--color-primary); }
+.dividend-bars button[aria-pressed=true] small { color: var(--color-primary); font-weight: 700; }
 .dividend-legend span {
   color: var(--t2);
 }
@@ -6167,7 +6178,7 @@ to {
   color: var(--t1);
   border-color: var(--border);
   border-radius: var(--radius-control);
-  box-shadow: 0 16px 60px var(--color-overlay);
+  box-shadow: 0 16px 60px var(--color-shadow);
   animation: workspace-enter 180ms ease-out;
 }
 .asset-editor::backdrop {
@@ -6213,8 +6224,12 @@ to {
   gap: 24px;
 }
 .holdings-layout {
-  gap: 48px;
-} }
+  gap: 32px;
+}
+.app:has(.step) { padding-bottom: 64px; }
+.app:has(.step) .bar { position: static; justify-content: flex-end; padding: 0; }
+.app:has(.step) .bar__in { max-width: 460px; padding: 0; background: transparent; box-shadow: none; }
+}
 @media(max-width:480px) {
 .report-feedback {
   padding: 20px 16px 16px;

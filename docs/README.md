@@ -108,3 +108,4 @@
 - [독립 포트폴리오 에이전트](design/portfolio-worker.md)
 - [포트폴리오 배포·입력 저장·검증](design/portfolio-deployment.md)
 - [Orca UI 디자인 시스템·반복 제작 절차](design/portfolio-design-system.md)
+- [포트폴리오 UI 디테일 조사·레퍼런스·해결 기록](design/portfolio-ui-detail-research.md)

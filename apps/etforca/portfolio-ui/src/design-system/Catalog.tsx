@@ -9,7 +9,7 @@ export function DesignCatalog() {
   const [submitted, setSubmitted] = useState(false);
   const { ask, confirmation, restoreFocus } = useConfirmation();
   return <main className="ds-catalog">
-    <header><span className="eyebrow">Orca UI · 1.0</span><h1>같은 기준으로 만드는<br />편안한 금융 경험</h1><p>운영 화면에서 사용하는 실제 컴포넌트와 상태입니다. 입력한 내용은 저장하거나 발송하지 않아요.</p></header>
+    <header><span className="eyebrow">Orca UI · 1.1</span><h1>같은 기준으로 만드는<br />편안한 금융 경험</h1><p>운영 화면에서 사용하는 실제 컴포넌트와 상태입니다. 입력한 내용은 저장하거나 발송하지 않아요.</p></header>
     <nav aria-label="디자인 시스템 목차">{[['foundation','기본 규칙'],['controls','버튼·입력'],['patterns','정보·목록'],['states','상태·팝업'],['workflow','제작 절차']].map(([id,label])=><a key={id} href={'#'+id}>{label}</a>)}</nav>
     <section id="foundation"><SectionHeading title="의미가 같은 곳에는 같은 표현" description="색상, 글자, 간격, 곡률, 움직임은 공통 토큰에서 가져옵니다." />
       <div className="ds-swatches">{['primary','text','text-secondary','text-muted','buy','sell','success','warning'].map(name=><div key={name}><i style={{ background: `var(--color-${name})` }} /><b>{name}</b></div>)}</div>

@@ -5,6 +5,7 @@ import { request, ensureVisitorSession, type Input, type Job } from './api';
 import { InputForm } from './InputForm';
 import { ReportView } from './ReportView';
 import { Followup } from './Followup';
+import './design-system/fonts.css';
 import './design-system/tokens.css';
 import './styles.css';
 import './design-system/components.css';

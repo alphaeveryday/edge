@@ -71,7 +71,10 @@ test('keyboard focus stays distinct and the final CTA grows with enlarged text',
     const text = range.getBoundingClientRect(), button = el.getBoundingClientRect();
     return text.top >= button.top && text.bottom <= button.bottom && text.left >= button.left && text.right <= button.right;
   })).toBe(true);
-  await expect.poll(() => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.app')!).paddingBottom) >= document.querySelector('.bar')!.getBoundingClientRect().height)).toBe(true);
+  await expect.poll(() => page.evaluate(() => {
+    const bar = document.querySelector('.bar')!;
+    return getComputedStyle(bar).position === 'static' || parseFloat(getComputedStyle(document.querySelector('.app')!).paddingBottom) >= bar.getBoundingClientRect().height;
+  })).toBe(true);
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   expect(await page.evaluate(() => document.querySelector('.step.in')!.getBoundingClientRect().bottom <= document.querySelector('.bar')!.getBoundingClientRect().top)).toBe(true);
 });

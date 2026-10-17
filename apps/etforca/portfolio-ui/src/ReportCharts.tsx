@@ -17,6 +17,7 @@ export function PortfolioDonut({ holdings }: { holdings: { name: string; weight_
 
 export function PerformanceChart({ history }: { history: History }) {
   const ref = useRef<HTMLElement>(null);
+  const [width, setWidth] = useState(320);
   const [visible, setVisible] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   useEffect(() => {
@@ -25,6 +26,15 @@ export function PerformanceChart({ history }: { history: History }) {
     if (ref.current) observer.observe(ref.current);
     return () => observer.disconnect();
   }, []);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => setWidth(Math.max(240, element.clientWidth));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [history]);
   const points = history.points ?? [];
   if (points.length < 2) return <p className="notice">성과를 비교할 기간의 자료가 부족해요.</p>;
   if (points.some(p => !Number.isFinite(p.recommended) || !Number.isFinite(Date.parse(p.date)))) return <p className="notice">저장된 성과 수치가 불완전해 차트를 표시하지 않았어요.</p>;
@@ -40,26 +50,32 @@ export function PerformanceChart({ history }: { history: History }) {
     labels = ticks.map(v => format.format(v));
     if (new Set(labels).size === ticks.length) break;
   }
-  const left = Math.max(42, Math.min(160, Math.max(...labels.map(label => label.length)) * 6 + 8));
-  const plotWidth = 302 - left;
+  const left = Math.max(42, Math.min(160, Math.max(...labels.map(label => label.length)) * 7.2 + 8));
+  const right = width - 18;
+  const height = Math.min(300, Math.max(180, width * .5));
+  const bottom = height - 32;
+  const plotWidth = right - left;
   const first = Date.parse(points[0].date), last = Date.parse(points.at(-1)!.date);
   const x = (i: number) => left + (Date.parse(points[i].date) - first) / (last - first || 1) * plotWidth;
-  const y = (value: number) => 148 - (value - min) / (max - min) * 128;
+  const y = (value: number) => bottom - (value - min) / (max - min) * (bottom - 20);
   const line = (key: 'recommended' | 'current') => points.map((p, i) => p[key] === null ? '' : `${x(i)},${y(p[key]!)}`).join(' ');
+  const middle = Math.floor((points.length - 1) / 2), end = points.length - 1;
+  const dateIndices = x(end) - x(0) < 120 ? [end]
+    : x(middle) - x(0) > 90 && x(end) - x(middle) > 90 ? [0, middle, end] : [0, end];
   const active = selected ?? points.length - 1;
   const isKRW = history.currency === 'KRW';
   const valueLabel = (value: number) => `${Math.round(value).toLocaleString('ko-KR')}${isKRW ? '원' : ''}`;
   return <figure ref={ref} className={'perf report-history' + (visible ? ' is-visible' : '')}>
     <figcaption>{history.basis}</figcaption><div className="history-legend"><span>● 추천 구성</span>{hasCurrent && <span>● {baselineLabel}</span>}</div>
-    <svg viewBox="0 0 320 180" role="img" aria-label={`${points[0].date}부터 ${points.at(-1)!.date}까지 ${hasCurrent ? `추천 구성과 ${baselineLabel}` : '추천 구성'}의 과거 성과`} onPointerMove={event => {
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${points[0].date}부터 ${points.at(-1)!.date}까지 ${hasCurrent ? `추천 구성과 ${baselineLabel}` : '추천 구성'}의 과거 성과`} onPointerMove={event => {
       const rect = event.currentTarget.getBoundingClientRect();
-      const time = first + Math.max(0, Math.min(1, ((event.clientX - rect.left) / rect.width * 320 - left) / plotWidth)) * (last - first);
+      const time = first + Math.max(0, Math.min(1, ((event.clientX - rect.left) / rect.width * width - left) / plotWidth)) * (last - first);
       setSelected(points.reduce((best, p, i) => Math.abs(Date.parse(p.date) - time) < Math.abs(Date.parse(points[best].date) - time) ? i : best, 0));
     }}>
-      {ticks.map((v, i) => <g key={v}><line className="base" x1={left} x2="302" y1={y(v)} y2={y(v)} /><text className="x" x={left - 5} y={y(v) + 3} style={{ textAnchor: "end" }}>{labels[i]}</text></g>)}
+      {ticks.map((v, i) => <g key={v}><line className="base" x1={left} x2={right} y1={y(v)} y2={y(v)} /><text className="x" x={left - 5} y={y(v) + 3} style={{ textAnchor: "end" }}>{labels[i]}</text></g>)}
       {hasCurrent && <polyline className="a history-line" pathLength="1" points={line('current')} />}<polyline className="b history-line" pathLength="1" points={line('recommended')} />
-      {selected !== null && <><line className="history-cursor" x1={x(active)} x2={x(active)} y1="20" y2="148" /><circle className="b" cx={x(active)} cy={y(points[active].recommended)} r="3" /></>}
-      {[0, Math.floor((points.length - 1) / 2), points.length - 1].map(i => <text key={i} className="x" x={x(i)} y="174" style={{ textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle' }}>{points[i].date.slice(2).replaceAll('-', '.')}</text>)}
+      {selected !== null && <><line className="history-cursor" x1={x(active)} x2={x(active)} y1="20" y2={bottom} /><circle className="b" cx={x(active)} cy={y(points[active].recommended)} r="3" /></>}
+      {dateIndices.map(i => <text key={i} className="x" x={x(i)} y={height - 6} style={{ textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle' }}>{points[i].date.slice(2).replaceAll('-', '.')}</text>)}
     </svg>
     <TextInput className="history-slider" type="range" min="0" max={points.length - 1} value={active} onChange={event => setSelected(Number(event.target.value))} aria-label="과거 성과 날짜 선택" aria-valuetext={points[active].date} />
     <p className="history-date">{points[active].date}</p><div className="history-values"><span>추천 구성 <b>{valueLabel(points[active].recommended)}</b></span>{hasCurrent && <span>{baselineLabel} <b>{valueLabel(points[active].current!)}</b></span>}</div>
