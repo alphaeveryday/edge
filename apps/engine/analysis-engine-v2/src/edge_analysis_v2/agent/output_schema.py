@@ -1,4 +1,6 @@
 """Agent response schemas; body text is submitted through editing tools."""
+from copy import deepcopy
+
 from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, MOVEMENT_LIMITS, TEXT_LIMITS, TITLE_MAX_LENGTH
 
 
@@ -59,6 +61,28 @@ FIELDS = obj({
                          'items': {'type': 'array', 'items': ITEM}}),
 })
 OUTLOOK = obj(WRITING['properties'] | FIELDS['properties'])
+
+
+def _optional_object(schema):
+    # Arrays replace the complete list, so their entries retain all required fields.
+    if schema.get('type') != 'object':
+        return deepcopy(schema)
+    return schema | {'required': [], 'properties': {
+        key: _optional_object(value) for key, value in schema['properties'].items()}}
+
+
+OUTLOOK_REVISION = _optional_object(OUTLOOK)
+
+
+def merge_outlook_revision(previous, changes):
+    """Retain omitted properties and replace explicitly submitted arrays or scalars."""
+    result = deepcopy(previous)
+    for key, value in changes.items():
+        result[key] = (merge_outlook_revision(result.get(key, {}), value)
+                       if isinstance(value, dict) else deepcopy(value))
+    return result
+
+
 EDIT_SCHEMAS = [
     {'type': 'function', 'function': {'name': 'write_outlook_body',
      'description': '최초 본문을 작성합니다. 기존 본문은 apply_outlook_body_changes로 바뀐 부분만 수정하는 것이 기본입니다. 전체 재작성이 꼭 필요한 경우에도 유지할 논점 ID는 보존하고 새 정보의 불릿 번호만 updated_sentence_numbers에 지정합니다. 저장 전 초안과 오늘 업데이트를 반환합니다.',

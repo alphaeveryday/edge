@@ -22,7 +22,7 @@ class WorkContext:
         self.tool_results = {}
         self.consulted = []
         self.removals = []
-        self.initial = {k: deepcopy(initial[k]) for k in ('research_state', 'context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_items') if k in initial}
+        self.initial = {k: deepcopy(initial[k]) for k in ('research_state', 'context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_issue_detail', 'previous_items') if k in initial}
         if 'research_state' in self.initial:
             state = self.initial['research_state']
             # JSONB changes object key order. Keep old originals first and append new ones across revisions.
