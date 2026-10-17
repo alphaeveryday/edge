@@ -385,6 +385,7 @@ test('an already open newsletter launcher preserves feedback mode and Escape acc
   const events = await instrument(page, baseURL!);
   await feedbackReport(page);
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
+  await expect(page.locator('.feedback-choices')).toBeVisible();
   const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
   await launcher.focus();
   await launcher.press('Enter');
