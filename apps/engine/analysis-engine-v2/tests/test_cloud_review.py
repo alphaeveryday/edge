@@ -190,7 +190,7 @@ def test_instruction_library_exposes_complete_worker_documents_only():
         for name in SKILLS:
             record = next(d for d in documents if d['id'] == name)
             assert record['content'] == (SOURCE/name/'SKILL.md').read_text(encoding='utf-8')
-            assert ('항상 실리는' in record['usage']) == (name in ('cause-investigation', 'analysis-report-writing'))
+            assert ('항상 실리는' in record['usage']) == (name in ('hypothesis-analysis-workflow', 'etf-hypothesis-analysis', 'analysis-report-writing'))
         assert request(port, '/api/instructions/../../secrets')[0] == 404
 
 

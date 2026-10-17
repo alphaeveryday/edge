@@ -240,8 +240,11 @@ def make_handler(reader, *, execution=None, screen_reader=None, storage_reader=N
                     documents = [('base.md', SOURCE.parent/'prompts/base.md', '모든 작업에 항상 전달되는 기본 지침'),
                                  ('skills.md', SOURCE.parent/'prompts/skills.md', '스킬이 있는 실행에서 기본 지침 뒤에 붙는 단락'),
                                  ('question.md', SOURCE.parent/'prompts/question.md', '질문 하나에 답하는 작업의 지시 앞부분')]
-                    documents += [(name, SOURCE/name/'SKILL.md', '전망·가격변동 작업에 항상 실리는 스킬' if name in TASK_SKILLS
-                                   else '필요할 때 열어 읽는 스킬') for name in SKILLS]
+                    documents += [(name, SOURCE/name/'SKILL.md',
+                                   '최초 분석의 조사 범위' if name == 'cause-investigation' else
+                                   '수정 분석의 조사 범위' if name == 'revision-investigation' else
+                                   '전망·가격변동 작업에 항상 실리는 스킬' if name in TASK_SKILLS else
+                                   '필요할 때 열어 읽는 스킬') for name in SKILLS]
                     return self.reply(200, {'documents':[
                         {'id':name, 'source':str(source), 'usage':usage,
                          'content':source.read_text(encoding='utf-8')}

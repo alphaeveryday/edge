@@ -8,7 +8,7 @@ from edge_analysis_v2.agent.skill_session import SkillSession
 
 CLOSURES = ('resolved', 'no_effect', 'structural_limit')
 
-INVESTIGATION = 'cause-investigation'   # the skill whose procedure the hooks below enforce
+INVESTIGATIONS = ('cause-investigation', 'revision-investigation')
 
 
 class WorkSession(SkillSession):
@@ -78,7 +78,7 @@ class WorkSession(SkillSession):
         result = await self._before_tool(data, tool_use_id, context)
         output = result['hookSpecificOutput']
         # The question list belongs to an investigation. A question answered by a lookup is the whole task.
-        if not self.todos and self.uses(INVESTIGATION) and (data['tool_name'].startswith('mcp__analysis__') or data['tool_name'] == 'StructuredOutput'):
+        if not self.todos and any(self.uses(name) for name in INVESTIGATIONS) and (data['tool_name'].startswith('mcp__analysis__') or data['tool_name'] == 'StructuredOutput'):
             output.update(permissionDecision='deny', permissionDecisionReason=self.registration_message())
         if self.recovery_context and output['permissionDecision'] == 'allow':
             if data['tool_name'] == 'StructuredOutput':
@@ -197,7 +197,7 @@ class WorkSession(SkillSession):
             message, self.recovery_context = self.recovery_context, None
             return message
         pending = [item['content'] for item in self.todos if item['status'] != 'completed']
-        if not self.todos and self.uses(INVESTIGATION):
+        if not self.todos and any(self.uses(name) for name in INVESTIGATIONS):
             pending = [self.registration_message()]
         if not pending:
             self.status = 'completed'

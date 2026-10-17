@@ -22,6 +22,9 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
     fixture = make_fixture()
     async def first(**kwargs):
         news_reference(kwargs)  # Consulted but not selected for publication: still research.
+        assert 'cause-investigation' in kwargs['skills'] and 'revision-investigation' not in kwargs['skills']
+        assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
+        assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
     _, identity = request('movement', first, fixture)
     with factory() as connection:
@@ -33,6 +36,9 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
     async def revision(**kwargs):
         assert kwargs['initial']['research_state'] == state
         assert kwargs['initial']['previous_analysis'] is not None
+        assert 'revision-investigation' in kwargs['skills'] and 'cause-investigation' not in kwargs['skills']
+        assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
+        assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
     _, revised_id = request('movement', revision, later)
     with factory() as connection:

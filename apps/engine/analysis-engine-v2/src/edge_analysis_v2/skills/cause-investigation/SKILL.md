@@ -40,4 +40,4 @@ description: "원인이나 전망을 판단해야 하는 질문을 조사하는 
 - answer에는 남은 가설, 그것을 고르게 한 증거, 다른 가설이 약한 이유, 결론을 바꿀 관측을 써.
 - notes/의 질문 파일에 가설, 찾은 것, 가설이 어떻게 바뀌었는지를 이어 적어.
 
-더 깊이 따져야 하면 hypothesis-analysis-workflow 스킬을, 사건이 이익과 ETF 가격으로 이어지는 길은 etf-hypothesis-analysis 스킬을 열어.
+기본 제공된 hypothesis-analysis-workflow로 경쟁 설명을 비교하고, etf-hypothesis-analysis로 사건이 이익과 ETF 가격에 이어지는 길을 판단해.
