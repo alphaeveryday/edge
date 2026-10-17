@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from edge_analysis_v2.sources import database
+from edge_analysis_v2.sources import database, news
 from edge_analysis_v2.tools.fixture_data.common import holdings
 from test_real_sources import source
 
@@ -19,20 +19,24 @@ def test_news_scope_includes_sixth_constituent_and_uses_publication_and_acquisit
         [{'trade_date':at.date(), 'input_row_count':6, 'valid_row_count':6, 'data_version':1, 'loaded_at':at}],
         [dict(constituent_instrument_id=f'id{i}', ticker=f'{i:06}', market_code='XKRX',
               display_name=str(i), issuer_actor_id=f'actor{i}', weight_ratio=1/6, available_at=at)
-         for i in range(6)], [], [],
+         for i in range(6)], [], [], [],
     ]
     queries = []
     def rows(connection, sql, args):
         queries.append((sql, args))
         return responses.pop(0)
     monkeypatch.setattr(database, '_rows', rows)
+    monkeypatch.setattr(news, 'rows', rows)
     result = database.load_source(Connection(), '091160', at.isoformat())
     sql, args = queries[3]
-    assert {'id5', 'actor5'} <= set(args[3])
-    assert args[1] == args[2] == at
-    assert (at-args[0]).days == 180
-    assert 'd.available_at<=%s' in sql and 'd.published_at BETWEEN %s AND %s' in sql
-    assert result['news_scope']['universe'].endswith('linked DB news excerpts only')
+    assert 'actor5' in args[0]
+    assert args[4] == args[6] == at
+    assert (at-args[5]).days == 180
+    sql, args = queries[5]
+    assert {'id5', 'actor5'} <= set(args[1])
+    assert args[3] == args[4] == args[5] == args[6] == at
+    assert 'd.available_at<=%s' in sql and 'd.published_at<=%s' in sql
+    assert result['news_scope']['max_articles'] is None
 
 
 def test_stored_observations_are_loaded_at_the_analysis_cutoff_and_gaps_survive(monkeypatch):
@@ -93,9 +97,10 @@ def _load_stored_weights(monkeypatch, stored, input_rows):
         [{'instrument_id':'etf', 'display_name':'ETF'}],
         [{'trade_date':at.date(), 'input_row_count':input_rows, 'valid_row_count':len(stored), 'data_version':1, 'loaded_at':at}],
         [dict(constituent_instrument_id=f'id{i}', ticker=f'{i:06}', market_code='XKRX', display_name=str(i),
-              issuer_actor_id=None, weight_ratio=weight, available_at=at) for i, weight in enumerate(stored)], [], [],
+              issuer_actor_id=None, weight_ratio=weight, available_at=at) for i, weight in enumerate(stored)], [], [], [],
     ]
     monkeypatch.setattr(database, '_rows', lambda connection, sql, args: responses.pop(0))
+    monkeypatch.setattr(news, 'rows', lambda connection, sql, args: responses.pop(0))
     return database.load_source(Connection(), '069500', at.isoformat())
 
 

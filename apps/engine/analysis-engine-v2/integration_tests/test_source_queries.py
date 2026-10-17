@@ -17,7 +17,7 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
     if not dsn:
         pytest.skip('local source SQL database not configured')
     target = conninfo_to_dict(dsn)
-    assert target['host'] == '127.0.0.1' and target['port'] == '55440' and target['dbname'] == 'analysis_v2'
+    assert target['host'] == '127.0.0.1' and target['port'] in {'55440', '15449'} and target['dbname'] == 'analysis_v2'
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as c:
         c.execute('''CREATE TEMP TABLE instrument(instrument_id text,ticker text,market_code text,instrument_type text);
             CREATE TEMP TABLE entity(entity_id text,display_name text);
@@ -29,8 +29,9 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
             CREATE TEMP TABLE document_entity(document_id text,entity_id text);
             CREATE TEMP TABLE document_assertion(assertion_id text,document_id text,available_at timestamptz);
             CREATE TEMP TABLE event_evidence(assertion_id text,source_event_id text);
-            CREATE TEMP TABLE source_event(source_event_id text,lifecycle_stage text,available_at timestamptz,source_class text,event_status text);
-            CREATE TEMP TABLE event_thread_link(source_event_id text,thread_id text,evaluated_at timestamptz,source_class text);
+            CREATE TEMP TABLE source_event(source_event_id text,lifecycle_stage text,available_at timestamptz,source_class text,event_status text,event_type_code text,event_date date);
+            CREATE TEMP TABLE event_thread_link(source_event_id text,thread_id text,evaluated_at timestamptz,source_class text,novelty_status text,unknown_reason text);
+            CREATE TEMP TABLE event_argument(source_event_id text,entity_id text);
             CREATE TEMP TABLE investor_flow_daily(instrument_id text,trade_date date,net_val_foreign bigint,net_val_institution_total bigint,net_val_individual bigint,available_at timestamptz);
             CREATE TEMP TABLE price_daily(instrument_id text,trade_date date,close_price numeric,volume bigint,turnover_value numeric,price_basis text,available_at timestamptz);
             CREATE TEMP TABLE minute_price_trigger(entity_id text,trigger_kind text,window_start timestamptz,close_price numeric,created_at timestamptz,generation int);
@@ -45,8 +46,9 @@ def test_source_cutoff_keeps_partial_holdings_and_excludes_future_news(extra_wei
             INSERT INTO document_entity VALUES ('known','issuer'),('future','issuer');
             INSERT INTO document_assertion VALUES ('assert','known','2026-09-30T09:02:00+09:00');
             INSERT INTO event_evidence VALUES ('assert','event');
-            INSERT INTO source_event VALUES ('event','SIGNED','2026-09-30T09:03:00+09:00','NEWS','ACTIVE');
-            INSERT INTO event_thread_link VALUES ('event','thread','2026-09-30T13:00:00+09:00','NEWS');''')
+            INSERT INTO source_event VALUES ('event','SIGNED','2026-09-30T09:03:00+09:00','NEWS','ACTIVE','CONTRACT','2026-09-30');
+            INSERT INTO event_argument VALUES ('event','issuer');
+            INSERT INTO event_thread_link VALUES ('event','thread','2026-09-30T13:00:00+09:00','NEWS','FIRST_IN_THREAD',NULL);''')
         c.execute("INSERT INTO instrument VALUES ('zero','000002','XKRX','EQUITY')")
         c.execute("INSERT INTO entity VALUES ('zero','Zero')")
         c.execute("INSERT INTO etf_holding_snapshot VALUES ('etf','zero','2026-09-30',%s,'2026-09-30T08:00:00+09:00','current')", (extra_weight,))

@@ -1,6 +1,8 @@
 import { ensureVisitorSession } from './api';
+import { preview } from './preview';
 
 export function startPresence() {
+  if (preview) return;
   let stopped = false;
   let busy = false;
   async function ping() {
