@@ -51,7 +51,8 @@ class SnapshotSource(FixtureTools):
         context = self.fixture['context']
         return {'version': 1, 'snapshot_id': context['analysis_at'],
                 'etf_code': context['etf_code'], 'analysis_at': context['analysis_at'],
-                'scope': {}, 'events': [], 'documents': []}
+                'scope': {}, 'events': [], 'documents': [
+                    {key: row[key] for key in ('news_id', 'published_at')} for row in self.fixture['news']]}
 
     def set_previous_news_snapshot(self, snapshot):
         self.previous_snapshot = deepcopy(snapshot)
@@ -96,6 +97,9 @@ def test_revision_uses_the_completed_predecessors_snapshot_and_real_revision_pro
         assert start['previous_analysis_id'] == previous_id
         assert start['previous_analysis_at'] == source.fixture['context']['analysis_at']
         assert start['recommended_tool'] == 'get_event_changes'
+        assert start['previous_news'] == [{'news_id': source.fixture['news'][0]['news_id'],
+            'title': source.fixture['news'][0]['title'], 'published_at': source.fixture['news'][0]['published_at'],
+            'in_current_scope': True}]
         assert current.previous_snapshot == source.news_snapshot()
         assert 'get_event_changes' in kwargs['prompt']
         assert '새로운 중요 사건' in kwargs['prompt']
@@ -131,10 +135,38 @@ def test_a_legacy_predecessor_requires_baseline_establishment_not_a_no_change_cl
     async def revision(**kwargs):
         start = kwargs['initial']['news_research']
         assert start['mode'] == 'revision' and start['baseline_status'] == 'missing'
+        assert start['previous_news'][0]['published_at'] is None
         assert current.previous_snapshot is None
         assert start['previous_analysis_at'] == old.fixture['context']['analysis_at']
         return write(kwargs, current)
     execute(current, revision, previous_analysis_id=previous_id)
+
+
+def test_revision_rechecks_prior_article_by_id_and_keeps_unchanged_body(local_runs):
+    execute, factory, _ = local_runs
+    source = SnapshotSource(make_fixture())
+    async def first(**kwargs):
+        return write(kwargs, source)
+    previous, previous_id = execute(source, first, previous_analysis_id=None)
+    updated = deepcopy(source.fixture)
+    updated['context']['analysis_at'] = (datetime.fromisoformat(updated['context']['analysis_at']) + timedelta(hours=1)).isoformat()
+    current = SnapshotSource(updated)
+    async def revision(**kwargs):
+        selected = kwargs['initial']['news_research']['previous_news']
+        assert len(selected) == 1 and selected[0]['in_current_scope'] is True
+        # Retained body references stay valid, while issue detail needs current-run evidence.
+        reference = kwargs['call']('get_issue_evidence', {
+            'news_ids': [selected[0]['news_id']], 'include_body': False})['tool_run_id']
+        return fields(reference)
+    result, identity = execute(current, revision, previous_analysis_id=previous_id)
+    assert result['detail'] == previous['detail']
+    with factory() as conn:
+        refs = conn.execute('SELECT tool_run_ids FROM outlook_issue_items WHERE analysis_id=%s', (identity,)).fetchone()[0]
+        assert refs != previous['detail']['items'][0]['tool_run_ids']
+        calls = conn.execute('''SELECT d.function_name FROM tool_runs r JOIN tool_definitions d USING(tool_id)
+            WHERE r.outlook_analysis_id=%s''', (identity,)).fetchall()
+        assert ('get_issue_evidence',) in calls
+        assert not any(name.startswith('search_news') for (name,) in calls)
 
 
 def test_fields_repair_exhaustion_does_not_borrow_the_first_topics_evidence(local_runs):

@@ -242,6 +242,17 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             baseline = run(lambda connection: read_snapshot(connection, kind, previous_id)) if previous_id else None
             tools.set_previous_news_snapshot(baseline)
             run(lambda connection: save_snapshot(connection, kind, analysis_id, context, snapshot))
+            def selected_news(connection):
+                with connection.cursor() as cur:
+                    cur.execute("""SELECT r.output->'result'->'news'
+                        FROM tool_runs r JOIN tool_definitions d USING(tool_id)
+                        WHERE r.tool_run_id=ANY(%s) AND r.status='completed'
+                          AND d.function_name='get_issue_evidence' AND r.arguments->>'include_body'='false'
+                        ORDER BY r.started_at,r.tool_run_id""", (sorted(set(listed_references(previous))),))
+                    return {article['news_id']: article for (articles,) in cur.fetchall() for article in articles}
+            prior_news = run(selected_news) if previous else {}
+            old_documents = {row['news_id']: row for row in baseline['documents']} if baseline else {}
+            current_news = {row['news_id'] for row in snapshot['documents']}
             initial['news_research'] = {
                 'mode': 'revision' if previous else 'initial',
                 'baseline_status': ('ready' if baseline else 'missing') if previous else 'not_applicable',
@@ -251,6 +262,10 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 'recommended_tool': 'get_event_changes' if previous else 'list_events',
                 'previous_topics': [{'id': item['id'], 'title_keyword': item['title_keyword']}
                                     for item in previous['detail']['items']] if previous else [],
+                'previous_news': [{'news_id': identity, 'title': article['title'],
+                                   'published_at': old_documents.get(identity, {}).get('published_at'),
+                                   'in_current_scope': identity in current_news}
+                                  for identity, article in sorted(prior_news.items())],
                 'change_condition': previous['conclusion'].get('change_condition') if previous else None,
             }
         inherited_over = violations({'detail': previous['detail']}) if previous and kind == 'outlook' else []
