@@ -141,13 +141,19 @@ class NewsEvents:
         reports = sorted(self.groups[event_key], key=lambda r: (instant(r['available_at']), r['event_id']))
         rows = []
         folded = 0
+        fields = ('event_id', 'event_type', 'event_date', 'stage', 'available_at', 'novelty', 'unknown_reason', 'news_ids')
         for row in reports:
             if row.get('novelty') == 'DUPLICATE_REBROADCAST':
                 folded += 1
                 continue
-            rows.append({k: row.get(k) for k in ('event_id', 'event_type', 'event_date', 'stage', 'available_at', 'novelty', 'unknown_reason', 'news_ids')})
+            rows.append({k: row.get(k) for k in fields})
+        original_unavailable = not rows
+        if original_unavailable:
+            rows.append({k: reports[-1].get(k) for k in fields} | {'representative_rebroadcast': True})
+            folded -= 1
         return self.page(rows, ['timeline', event_key], cursor, limit, event_key=event_key,
                          folded_rebroadcast_count=folded,
+                         original_unavailable=original_unavailable,
                          interpretation='Recorded rebroadcasts counted for the thread, not attributed to a particular fact. Stages are reported, not independently verified.')
 
     def search_articles(self, query, offset, unlinked_only=False):

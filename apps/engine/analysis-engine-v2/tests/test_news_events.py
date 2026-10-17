@@ -187,3 +187,15 @@ def test_company_filter_uses_captured_issuer_mapping_and_binds_cursor():
         result(tools, 'list_events', instrument_ids=['BAD'])
     with pytest.raises(ToolInputError, match='unavailable'):
         result(DatabaseTools(source()), 'list_events', instrument_ids=['000001'])
+
+
+def test_rebroadcast_only_thread_keeps_one_representative_without_inventing_original():
+    data = source()
+    add(data, 'older', thread='t', novelty='DUPLICATE_REBROADCAST', when='2026-10-15T00:00:00+00:00')
+    add(data, 'latest', thread='t', novelty='DUPLICATE_REBROADCAST')
+    page = result(DatabaseTools(data), 'get_event_timeline', event_key='thread:t')
+    assert len(page['items']) == 1
+    assert page['items'][0]['event_id'] == 'latest'
+    assert page['items'][0]['representative_rebroadcast'] is True
+    assert page['original_unavailable'] is True
+    assert page['folded_rebroadcast_count'] == 1
