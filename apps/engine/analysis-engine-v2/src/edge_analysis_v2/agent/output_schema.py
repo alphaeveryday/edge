@@ -88,9 +88,12 @@ EDIT_SCHEMAS = [
      'description': '최초 본문을 작성합니다. 기존 본문은 apply_outlook_body_changes로 바뀐 부분만 수정하는 것이 기본입니다. 전체 재작성이 꼭 필요한 경우에도 유지할 논점 ID는 보존하고 새 정보의 불릿 번호만 updated_sentence_numbers에 지정합니다. 저장 전 초안과 오늘 업데이트를 반환합니다.',
      'parameters': obj({'title': limited('detail.title'), 'items': {'type': 'array', 'maxItems': MAX_TOPICS, 'items': TOPIC}})}},
     {'type': 'function', 'function': {'name': 'apply_outlook_body_changes',
-     'description': '논점을 ID로 추가·수정·삭제합니다. 여러 변경을 한 번에 적용합니다. 수정 불릿 번호는 1부터 시작합니다. 생략한 필드는 유지합니다. 수정 후 전체 본문을 반환합니다.',
+     'description': '논점을 ID로 추가·수정·삭제합니다. 문구 정정은 text_replacements로 지정한 문장의 일부만 정확히 치환합니다. 여러 변경은 한 번에 적용하고 실패하면 모두 유지합니다. 문장 번호는 1부터 시작합니다. 생략한 필드는 유지하며 수정 후 전체 본문을 반환합니다.',
      'parameters': obj({'changes': {'type': 'array', 'items': obj(TOPIC['properties'] | {
          'action': {'enum': ['add', 'update', 'remove']},
+         'text_replacements': {'type': 'array', 'minItems': 1, 'description': 'update 전용. 문장마다 한 번만 지정하며 old_text가 해당 문장에 정확히 한 번 있어야 합니다. new_text는 다른 문자열입니다. sentences/updated_sentence_numbers와 함께 보내지 않습니다. sentiment와 전체 논점의 tool_run_ids도 보냅니다.',
+             'items': obj({'sentence_number': {'type': 'integer', 'minimum': 1}, 'old_text': TEXT,
+                           'new_text': {'type': 'string'}})},
          'updated_sentence_numbers': {'type': 'array', 'items': {'type': 'integer', 'minimum': 1}}}, ['action', 'id'])},
          'title': limited('detail.title'), 'item_order': {'type': 'array', 'items': TEXT}}, ['changes'])}},
 ]

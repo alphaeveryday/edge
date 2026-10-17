@@ -92,6 +92,7 @@ class BodyEditor:
             raise ValueError("First publication requires write")
         draft = deepcopy(self.draft)
         touched = set()
+        updated_positions = set()
         for change in changes:
             identity, action = change["id"], change["action"]
             if identity in touched:
@@ -109,6 +110,32 @@ class BodyEditor:
             elif action == "update":
                 if current is None:
                     raise ValueError("Unknown topic")
+                if "text_replacements" in change:
+                    if "sentiment" not in change:
+                        raise ToolInputError("Sentence changes require sentiment together")
+                    if set(change) & {"sentences", "updated_sentence_numbers"}:
+                        raise ToolInputError("text_replacements cannot be combined with sentences or updated_sentence_numbers")
+                    edits = change["text_replacements"]
+                    if not isinstance(edits, list) or not edits:
+                        raise ToolInputError("text_replacements requires a nonempty list")
+                    sentences = [s["sentence"] for s in current["sentences"]]
+                    numbers = []
+                    for edit in edits:
+                        if not isinstance(edit, dict) or set(edit) != {"sentence_number", "old_text", "new_text"}:
+                            raise ToolInputError("Replacement requires sentence_number, old_text and new_text")
+                        number, old, new = edit["sentence_number"], edit["old_text"], edit["new_text"]
+                        if type(number) is not int or not 1 <= number <= len(sentences) or number in numbers:
+                            raise ToolInputError("Each replacement requires a distinct existing sentence number")
+                        if not isinstance(old, str) or not old or not isinstance(new, str) or old == new:
+                            raise ToolInputError("Replacement requires nonempty old_text and different string new_text")
+                        position = sentences[number - 1].find(old)
+                        if position < 0 or sentences[number - 1].find(old, position + 1) >= 0:
+                            raise ToolInputError("old_text must match exactly once in the selected sentence")
+                        sentences[number - 1] = sentences[number - 1].replace(old, new, 1)
+                        numbers.append(number)
+                    change = {key: value for key, value in change.items() if key != "text_replacements"}
+                    change.update(sentences=sentences, updated_sentence_numbers=numbers)
+                    updated_positions.update((identity, number) for number in numbers)
                 if set(change) & {"title_keyword", "sentences"} and "tool_run_ids" not in change:
                     raise ValueError("Changed text requires tool_run_ids")
                 raw = {"id": identity, "title_keyword": current["title_keyword"],
@@ -136,9 +163,9 @@ class BodyEditor:
             if len(item_order) != len(lookup) or set(item_order) != set(lookup):
                 raise ValueError("item_order must contain all topic IDs once")
             draft["items"] = [lookup[identity] for identity in item_order]
-        return self._commit(draft, self.mode)
+        return self._commit(draft, self.mode, updated_positions=updated_positions)
 
-    def _commit(self, draft, mode):
+    def _commit(self, draft, mode, *, updated_positions=()):
         over = violations({'detail': draft})
         if over:
             hint = '; fix all over-limit fields in one edit batch; preserve unaffected topics' if mode == 'update' else ''
@@ -164,7 +191,11 @@ class BodyEditor:
             flags = {}
             for sentence in previous[identity]["sentences"]:
                 flags.setdefault(sentence["sentence"], []).append(sentence["is_updated"])
-            for sentence in current[identity]["sentences"]:
+            for number, sentence in enumerate(current[identity]["sentences"], 1):
+                if any(topic == identity for topic, _ in updated_positions):
+                    if (identity, number) not in updated_positions:
+                        sentence["is_updated"] = previous[identity]["sentences"][number - 1]["is_updated"]
+                    continue
                 if sentence["sentence"] in flags:
                     retained = flags[sentence["sentence"]]
                     sentence["is_updated"] = retained.pop(0) if retained else False
@@ -184,7 +215,7 @@ class BodyEditor:
                                          "sentence": None, "sentiment": None, "tool_run_ids": item["tool_run_ids"]}
             for identity, item in current.items():
                 added = identity not in previous
-                if added or _different(previous[identity], item):
+                if added or _different(previous[identity], item) or any(topic == identity for topic, _ in updated_positions):
                     sentences = [s["sentence"] for s in item["sentences"] if added or s["is_updated"]]
                     updates[identity] = {"id": identity, "change_type": "added" if added else "modified",
                                          "title_keyword": item["title_keyword"], "sentence": "\n".join(sentences) or None,
