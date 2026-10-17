@@ -33,8 +33,8 @@ def test_news_scope_includes_sixth_constituent_and_uses_publication_and_acquisit
     assert args[2] == args[4] == at
     assert (at-args[3]).days == 180
     sql, args = queries[5]
-    assert {'id5', 'actor5'} <= set(args[4])
-    assert args[0] == args[1] == at
+    assert {'id5', 'actor5'} <= set(args[1])
+    assert args[3] == args[4] == args[5] == args[6] == at
     assert 'd.available_at<=%s' in sql and 'd.published_at<=%s' in sql
     assert result['news_scope']['max_articles'] is None
 

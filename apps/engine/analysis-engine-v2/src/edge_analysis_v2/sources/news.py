@@ -32,12 +32,19 @@ def load_news(connection, at, targets, issuers):
           AND d.document_type='NEWS' AND d.available_at<=%s AND d.published_at<=%s
         ORDER BY e.source_event_id,a.document_id""", (identities, at, at, at))
     document_ids = sorted({r['news_id'] for r in evidence})
-    articles = rows(connection, """SELECT d.document_id,d.title,d.published_at,d.available_at,d.source_uri,
-        n.lead_text,n.lead_observed_at FROM document d JOIN news_document n USING(document_id)
+    # An OR between evidence IDs and a correlated entity lookup scans unrelated
+    # documents. Resolve the two indexed ID sets first, preserving the same union.
+    articles = rows(connection, """WITH candidates AS (
+        SELECT unnest(%s::text[]) AS document_id
+        UNION
+        SELECT d.document_id FROM document_entity de JOIN document d USING(document_id)
+        WHERE de.entity_id=ANY(%s) AND d.document_type='NEWS'
+          AND d.published_at BETWEEN %s AND %s AND d.available_at<=%s
+        ) SELECT d.document_id,d.title,d.published_at,d.available_at,d.source_uri,
+        n.lead_text,n.lead_observed_at FROM candidates c JOIN document d USING(document_id)
+        JOIN news_document n USING(document_id)
         WHERE d.document_type='NEWS' AND d.available_at<=%s AND d.published_at<=%s
-          AND (d.document_id=ANY(%s) OR (d.published_at>=%s AND EXISTS(
-            SELECT 1 FROM document_entity de WHERE de.document_id=d.document_id AND de.entity_id=ANY(%s))))
-        ORDER BY d.published_at DESC,d.document_id""", (at, at, document_ids, start, targets))
+        ORDER BY d.published_at DESC,d.document_id""", (document_ids, targets, start, at, at, at, at))
     membership = {}
     for row in evidence:
         membership.setdefault(row['event_id'], []).append(row['news_id'])
