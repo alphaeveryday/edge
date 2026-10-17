@@ -85,6 +85,33 @@ class ReportRequest(StrictModel):
     email: str = Field(max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
+class NewsletterRequest(ReportRequest):
+    consent: Literal[True]
+
+
+class NewsletterConfirmation(StrictModel):
+    token: str = Field(min_length=40, max_length=64, pattern=r'^[A-Za-z0-9_-]+$')
+
+
+@app.post('/api/portfolio/analyses/{job_id}/newsletter', status_code=202)
+def newsletter_subscribe(job_id: str, body: NewsletterRequest, request: Request):
+    from . import newsletter_store
+    try:
+        return {'status': newsletter_store.subscribe(job_id, owner(request), body.email), 'delivery_ready': newsletter_store.delivery_ready()}
+    except ValueError as error:
+        code = str(error)
+        raise HTTPException(404 if code == 'NOT_FOUND' else 429 if code == 'SUBSCRIPTION_LIMIT' else 422, code) from None
+
+
+@app.post('/api/portfolio/newsletter/confirm')
+def newsletter_confirm(body: NewsletterConfirmation):
+    from . import newsletter_store
+    try:
+        return {'status': newsletter_store.confirm(body.token), 'delivery_ready': newsletter_store.delivery_ready()}
+    except ValueError:
+        raise HTTPException(410, 'INVALID_CONFIRMATION') from None
+
+
 @app.post("/api/portfolio/analyses/{job_id}/chat", status_code=202)
 def chat(job_id: str, body: ChatInput, request: Request, idempotency_key: UUID = Header()):
     if not body.question.strip():

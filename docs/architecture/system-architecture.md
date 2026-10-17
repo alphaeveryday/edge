@@ -2,9 +2,13 @@
 
 > 원본: `EDGE_아키텍처_v0_2.pptx` — Slide 3 (System Architecture)
 >
+> 루트 README 의 `docs/assets/readme/SA.drawio.png` 는 2026-10-16 판(drawio "SA v0.4")이다. 열·기능 단위는 원본 그대로이고 ETF Orca 층(Service 7·App Database·Vote Cache·Sync Worker)과 엔진의 Intraday Worker·Explanation Queue 가 더해졌다. Customer System 상자는 증권사가 MTS 와 같은 출처에 두는 리버스 프록시(Reverse Proxy)로 바뀌었다(ADR-0053 — 구현은 증권사 몫이며 데모는 CloudFront).
+>
 > **[설계 뷰]** 논리 설계 개요다. 현행 배포·계약의 권위는 SSOT([../context.md](../context.md))에 있다. 이 문서의 Service·Worker는 **논리 단위**이며, 실제 배포 모듈로의 대응은 아래 [논리 → 배포 모듈 매핑](#논리--배포-모듈-매핑)을 따른다. 충돌 시 SSOT 우선.
 >
-> ⚠️ **Customer System 경유 서술은 [ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)으로 폐지됨** — 위젯이 증권사 엣지(프록시) 경유로 Publication Service 를 직접 호출하며 고객 식별을 받지 않는다. 다이어그램 갱신은 뷰 재작도 PR 소관.
+> ⚠️ **Customer System 경유 서술은 [ADR-0053](../adr/0053-widget-direct-serving-no-personalization.md)으로 폐지됨** — 위젯이 증권사 엣지(프록시) 경유로 Publication Service 를 직접 호출하며 고객 식별을 받지 않는다. 루트 README 그림(SA v0.4)에는 반영됐고, 아래 본문의 Customer System 서술은 옛 그림(v0.2) 기준 기록이다.
+>
+> ⚠️ **현행 구분 (2026-10-16)**: 이 문서의 Sync 경로 서술 중 번들 체크섬 검증·mTLS 클라이언트 인증서 바인딩·PrivateLink 는 **목표 계약**이다. 현행 구현은 Sync Agent 의 무변형 릴레이와 일반 TLS 이고([ADR-0040](../adr/0040-sync-integrity-mvp-to-signing.md), `apps/edgesignal/sync-agent` 의 BundleRelayService), dev sync ALB 의 trust store 는 ALPHA-447 전까지 비어 있다. 현행 배치는 [루트 README](../../README.md)의 클라우드 아키텍처 그림과 설명을 본다.
 
 ## 개요
 
@@ -138,6 +142,10 @@ Organization Console (→ DNS) → API Gateway → 각 Service
 | Tenant Sync Service | `apps/edgesignal/tenant-sync-api` | |
 | Data Ingestion·Processing Worker | `apps/engine/data-pipeline` | 독립 Worker 아님 — 단일 Step Functions 3페이즈 raw→정제→feature ([adr/0028](../adr/0028-unified-pipeline-sfn.md)) |
 | Price Analysis Worker | `apps/engine/analysis-engine-v2` | 파이프라인 SFN 페이즈가 아니라 **분봉 트리거 큐 소비자**가 분석 SFN 을 시작한다 (ALPHA-806 — 일 단위 실행은 장중에 층을 못 세워 제거. v1 `analysis-engine` 은 #1140 으로 제거) |
+| Intraday Worker · Explanation Queue | `apps/engine/data-pipeline` 장중 1분 서비스 · SQS | 시세·뉴스·공시를 1분 주기로 받아 가격 변동 사건을 큐에 넣고, analysis-engine-v2 가 소비한다 |
+| Delivery Outbox | cloud DB `tenant_delivery` 테이블 | 큐 서비스가 아니다. analysis-engine-v2 가 테넌트별 fan-out 행을 쓰고, 무효화 행은 analysis-engine-v2(가격 복귀 자동 철회)와 super-admin-api(관리자 무효화)가 쓴다. tenant-sync-api 가 cursor 순으로 읽어 번들을 만든다([contracts/sync-protocol.md](../contracts/sync-protocol.md)) |
+| ETF·Analysis·Member·Watchlist·Vote·Community·Notification Service | `apps/etforca/app-api` | ETF Orca 앱 API. 앱 기능 단위의 논리 서비스이며 배포는 모듈 하나. Analysis Service = 앱의 가격 변동 설명·전망 조회(≠ 슈퍼 어드민의 Analysis Service, ≠ 분석 엔진) |
+| Sync Worker | `apps/etforca/app-api` sync 패키지 | 파이프라인 RDS 의 ETF·분석 데이터를 읽기 전용으로 App Database 에 적재 ([adr/0056](../adr/0056-etforca-app-api-infra.md)) |
 
 > **API Gateway**는 이 문서(및 다이어그램)에서 논리적 진입 표현일 뿐 실제 모듈이 아니다 — 콘솔 내부에서 각 Service가 path로 호출되며, 공개 엣지 라우팅은 별도 ALB(호스트 1:1, [adr/0034](../adr/0034-host-per-edge-alb.md))가 담당한다. 구 `gateway` 모듈은 은퇴됨 ([adr/0032](../adr/0032-retire-gateway.md)).
 

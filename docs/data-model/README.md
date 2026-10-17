@@ -1,8 +1,8 @@
 # 데이터 모델
 
-두 Flyway 세트의 도메인 흐름은 overview로, 상세 물리 FK는 각 ERD로 구분한다.
+두 Flyway 세트와 ETF Orca 앱 DB의 흐름은 overview로, 상세 물리 FK는 각 ERD로 구분한다.
 
-## 개요 — 두 세트와 그 경계
+## 개요 — 저장소 셋과 그 경계
 
 ![데이터 모델 개요](overview.svg)
 
@@ -19,6 +19,10 @@
 - [운영 원장](domains/operations/)
 
 도메인 경계를 넘는 FK의 대상 테이블은 관계 이해에 필요한 컨텍스트로 상세 ERD에 포함한다.
+
+## ETF Orca 앱 DB
+
+ETF Orca app-api 의 자체 Flyway 세트(회원·관심종목·투표·커뮤니티 원본)는 `libs/schema` 밖에 있다 — [앱 DB ERD 초안](../../apps/etforca/app-api/docs/erd.md)(정본은 `db/etf-migration` 마이그레이션).
 
 ## On-Prem 세트
 

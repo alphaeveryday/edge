@@ -8,6 +8,7 @@ services:
       POSTGRES_USER: portfolio
       POSTGRES_PASSWORD: ${PORTFOLIO_DB_PASSWORD}
     volumes: ["portfolio-db:/var/lib/postgresql/data"]
+    ports: ["127.0.0.1:15432:5432"]
     mem_limit: 384m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
@@ -67,6 +68,7 @@ services:
     environment:
       PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_NEWSLESTTER_API_KEY: ${DEEPSEEK_NEWSLESTTER_API_KEY:?Newsletter DeepSeek key is required for the worker}
       EXA_API_KEY: ${EXA_API_KEY:?Exa key is required for the worker}
       PORTFOLIO_OUTLOOK_URL: http://outlook:8093/outlook
       AWS_EC2_METADATA_DISABLED: "true"
@@ -91,6 +93,20 @@ services:
       PORTFOLIO_OUTLOOK_DSN: ${PORTFOLIO_OUTLOOK_DSN}
       AWS_EC2_METADATA_DISABLED: "true"
     volumes: ["./rds-ca.pem:/app/rds-ca.pem:ro"]
+    mem_limit: 128m
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+  newsletter:
+    profiles: [newsletter]
+    build: ../
+    command: ["python", "-m", "edge_portfolio.newsletter_sender"]
+    network_mode: host
+    environment:
+      PORTFOLIO_DATABASE_URL: ${PORTFOLIO_NEWSLETTER_DATABASE_URL}
+      AWS_DEFAULT_REGION: ap-northeast-2
     mem_limit: 128m
     read_only: true
     tmpfs: [/tmp]

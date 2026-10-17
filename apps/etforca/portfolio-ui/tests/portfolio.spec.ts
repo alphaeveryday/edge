@@ -73,6 +73,8 @@ test('default account, real stages, result restoration, chat gate and email rece
   await expect(page.locator('.evaluation section')).toHaveCount(4);
   await expect(page.locator('.fee')).toContainText('100만 원');
   await expect(page.getByRole('heading', { name: '과거 성과' })).toBeVisible();
+  await page.locator('.evaluation').scrollIntoViewIfNeeded();
+  await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
   await page.getByLabel('추가 질문', { exact: true }).fill('다시 물어볼게요');
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await expect(page.getByRole('dialog').filter({ hasText: '아직 준비 중' })).toBeVisible();
@@ -81,8 +83,8 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.locator('.premium').click();
   await page.getByLabel('이메일 주소').fill('test@example.com');
   await page.getByRole('button', { name: '리포트 신청하기' }).click();
-  await expect(page.getByRole('dialog')).toContainText('신청을 접수했어요');
-  await expect(page.getByRole('dialog')).toContainText('1일 이내');
+  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toContainText('신청을 접수했어요');
+  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toContainText('1일 이내');
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/report-${test.info().project.name}.png`, fullPage: true });
