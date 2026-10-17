@@ -18,6 +18,8 @@ FORMATS = {'A': ('손익 리포트', '오늘 내 계좌는 어땠나'), 'B': ('�
            'C': ('새 소식', '오늘 새로 나온 일'), 'D': ('판단 점검', '보유 이유는 그대로인가'),
            'E': ('결정 노트', '지금 결정이 필요한가'), 'F': ('변화 감지', '중요한 변화만 골라'),
            'G': ('목적별 브리핑', '내 목적에서 본 오늘')}
+# Production edition. Lives here, not in newsletter_agent, so the 128 MB sender never imports the research stack.
+DEFAULT_FORMAT = 'B'
 PURPOSES = {'long_term': '장기 적립', 'mid_term': '중기 보유', 'short_term': '단기 매매'}
 LEAN = {'약화': 0, '강화': 1, '유지': 2}
 P = f'margin:0;font-family:{SANS};word-break:keep-all;overflow-wrap:anywhere'
@@ -337,7 +339,7 @@ def confirmation(token):
     return title, shell(title, '확인 버튼을 누르면 보유 종목 데일리 구독이 시작돼요.', rows, colophon('직접 신청한 이메일 주소를 확인하는 메일입니다.')), text
 
 
-def daily(edition, cards, fmt='B', *, weights=None, purpose='long_term'):
+def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_term'):
     """weights: instrument_id → portfolio share (A only, when the reader gave one). purpose: G's reading lens."""
     ready = [card for card in cards if not card.get('unavailable') and card.get('format') == fmt]
     top = lead(ready, fmt)

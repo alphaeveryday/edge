@@ -19,6 +19,7 @@ from .agent import EXA_URL, MODEL, TOOLS, ExaEvidence
 from .contracts import StrictModel
 from .exa_transport import ExaTransport
 from .structured_output import structured_call
+from .newsletter_email import DEFAULT_FORMAT
 from .newsletter_quote import daily_quote, load_quote
 
 KST = ZoneInfo('Asia/Seoul')
@@ -125,7 +126,6 @@ class PurposeCard(Card):
 # Hypothesis A-G of docs/design/portfolio-newsletter-formats.md. Each has its own writing skill.
 FORMATS = {'A': ('profit', ProfitCard), 'B': ('cause', CauseCard), 'C': ('event', EventCard), 'D': ('thesis', ThesisCard),
            'E': ('action', ActionCard), 'F': ('exception', ExceptionCard), 'G': ('purpose', PurposeCard)}
-DEFAULT_FORMAT = 'B'
 
 
 def skill(fmt):

@@ -750,3 +750,12 @@ def test_exception_lead_story_is_printed_first():
     shock = letter_card('F', 'US:B', 'B', headline='큰 급락', quote={**QUOTE, 'change_pct': -9.0, 'sigma_pct': 2.0})
     _, _, text = email.daily(date(2026, 10, 18), [minor, shock], 'F')
     assert text.index('01. B') < text.index('02. A — 작은 소식')
+
+
+def test_sender_process_does_not_import_the_research_stack():
+    import subprocess
+    import sys
+    probe = ("import sys, edge_portfolio.newsletter_sender; "
+             "print([m for m in ('edge_portfolio.newsletter_agent', 'mcp', 'yfinance', 'pandas') if m in sys.modules])")
+    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, check=True).stdout.strip()
+    assert loaded == '[]', 'The sender runs under a small memory limit; the research stack would push it toward OOM'

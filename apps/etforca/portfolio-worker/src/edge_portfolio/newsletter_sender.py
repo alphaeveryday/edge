@@ -9,7 +9,6 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from . import newsletter_email
-from .newsletter_agent import DEFAULT_FORMAT
 from .store import connect
 
 LIST = 'edge-portfolio-newsletter'
@@ -197,7 +196,7 @@ def process_daily(ses, now, *, deadline=float('inf')):
             # Keep the complete watchlist; do not silently omit an ETF or send stale content as today's news.
             log.info('subscription=%s edition=%s newsletter=waiting_content ready=%s total=%s', row['id'], edition, len(cards), len(row['holdings']))
             continue
-        rendered = newsletter_email.daily(edition, cards, DEFAULT_FORMAT)
+        rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT)
         if time.monotonic() >= deadline:
             # A contact lookup or rendering can cross midnight after the loop's initial check.
             break
