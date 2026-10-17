@@ -190,8 +190,11 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
     read = lambda connection, identity: (store(connection).get_movement if kind == 'movement' else store(connection).get_outlook)(identity)
     definitions = [*tools.definitions, RESEARCH_DEFINITION]
     if kind == 'outlook':
-        definitions += [dict(tool_id=s['function']['name']+':v3',function_name=s['function']['name'],
-            version='v3',description=s['function']['description'],source_names=['직전 전망과 이번 편집 초안']) for s in EDIT_SCHEMAS]
+        for schema in EDIT_SCHEMAS:
+            function = schema['function']
+            version = 'v4' if function['name'] == 'apply_outlook_body_changes' else 'v3'
+            definitions.append(dict(tool_id=function['name']+':'+version, function_name=function['name'],
+                version=version, description=function['description'], source_names=['직전 전망과 이번 편집 초안']))
 
     def begin(connection):
         with connection.cursor(row_factory=dict_row) as cur:
