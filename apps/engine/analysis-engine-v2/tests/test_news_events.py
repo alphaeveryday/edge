@@ -245,7 +245,8 @@ def test_first_seen_correction_precedes_other_new_events_on_a_partial_page():
 def test_event_keyword_search_groups_repeats_and_preserves_later_correction():
     data = source()
     for index in range(60):
-        add(data, f'match-{index}', thread='tariff', novelty='DUPLICATE_REBROADCAST')
+        add(data, f'match-{index}', thread='tariff', novelty='DUPLICATE_REBROADCAST',
+            when=AT if index == 3 else '2026-10-14T00:00:00+00:00')
         data['news'][-1].update(title='효성 관세', body='미국 관세율 4.32%')
     add(data, 'z-correction', thread='tariff', novelty='CORRECTION')
     add(data, 'independent')
@@ -260,6 +261,7 @@ def test_event_keyword_search_groups_repeats_and_preserves_later_correction():
     page = result(tools, 'list_events', query='효성 관세')
     thread = next(row for row in page['items'] if row['event_key'] == 'thread:tariff')
     assert thread['matched_article_count'] == 60
+    assert thread['matched_news_ids'][0] == 'match-3'
     assert set(thread['matched_news_ids']) <= {f'match-{index}' for index in range(60)}
     assert thread['title'] == 'z-correction'
     assert result(tools, 'get_event_timeline', event_key='thread:tariff')['items'][0]['novelty'] == 'CORRECTION'

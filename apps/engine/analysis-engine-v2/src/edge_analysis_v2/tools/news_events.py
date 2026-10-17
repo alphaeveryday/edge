@@ -116,7 +116,9 @@ class NewsEvents:
                 raise ToolInputError('instrument_ids must be a nonempty ticker array. Allowed: ' + ', '.join(sorted(mapped)))
         rows = []
         for key, reports in self.groups.items():
-            matched = sorted({identity for row in reports for identity in row['news_ids']} & matches) if matches is not None else None
+            matched = sorted({identity for row in reports for identity in row['news_ids']} & matches,
+                             key=lambda identity: (instant(self.articles[identity]['published_at']), identity),
+                             reverse=True) if matches is not None else None
             if matched == []:
                 continue
             participants = {identity for row in reports for identity in row.get('related_entity_ids', row.get('issuer_ids', []))}
